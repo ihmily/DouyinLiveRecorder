@@ -2,9 +2,11 @@
 
 """
 Author: Hmily
-Github:https://github.com/ihmily
+Github: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
+Update: 2023-08-03 08:06:43
 Copyright (c) 2023 by Hmily, All Rights Reserved.
+Function: Record douyin and titok live stream.
 """
 
 import random
@@ -22,7 +24,7 @@ from spider import *
 from web_rid import *
 
 # 版本号
-version = 20230714.19
+version = 202300803.08
 
 # --------------------------log日志-------------------------------------
 # 创建一个logger
@@ -54,6 +56,7 @@ firstRunOtherLine = True
 live_list = []
 not_record_list = []
 start5 = datetime.datetime.now()
+global_proxy = False
 headers = {
     'User-Agent': 'Mozilla/5.0 (Linux; Android 11; SAMSUNG SM-G973U) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/14.2 Chrome/87.0.4280.141 Mobile Safari/537.36'
 }
@@ -62,7 +65,7 @@ url_config_file = './config/URL_config.ini'
 backup_dir = './backup_config'
 encoding = 'utf-8-sig'
 rstr = r"[\/\\\:\*\?\"\<\>\|&u]"
-
+ffmpeg_path = "ffmpeg"  # ffmpeg文件路径
 
 
 # --------------------------用到的函数-------------------------------------
@@ -120,8 +123,7 @@ def display_info():
                 else:
                     start5 = datetime.datetime.now()
         except Exception as e:
-            print("错误信息644:" + str(e) + "\r\n读取的地址为: " + str(live_link) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
-            # print(live_link+' 的直播地址连接失败,请检测这个地址是否正常,可以重启本程序--requests获取失败')
+            print("错误信息644:" + str(e) + "\r\n发生错误的行数: "+str(e.__traceback__.tb_lineno))
             logger.warning("错误信息: " + str(e) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
 
 
@@ -235,7 +237,7 @@ def change_max_connect():
             print("同一时间访问网络的线程数动态改为", max_request)
 
 
-def get_stream_url2(json_data):
+def get_douyin_stream_url(json_data):
     # TODO: 获取直播源地址
     data = []  # 定义一个返回数据列表
 
@@ -255,6 +257,8 @@ def get_stream_url2(json_data):
         flv_url_list = stream_url['flv_pull_url']
         # m3u8视频流链接
         m3u8_url_list = stream_url['hls_pull_url_map']
+
+        # origin蓝光1080P、720超清hd、720高清sd、540标清ld
         if video_quality == "原画" or video_quality == "蓝光":
             m3u8_url = m3u8_url_list["FULL_HD1"]
             flv_url = flv_url_list["FULL_HD1"]
@@ -265,9 +269,45 @@ def get_stream_url2(json_data):
             m3u8_url = m3u8_url_list["SD1"]
             flv_url = flv_url_list["SD1"]
         elif video_quality == "标清":
-            m3u8_url = m3u8_url_list["SD1"]
-            flv_url = flv_url_list["SD1"]
+            m3u8_url = m3u8_url_list["SD2"]
+            flv_url = flv_url_list["SD2"]
 
+        data = [anchor_name, status, m3u8_url, flv_url]
+    return data
+
+def get_tiktok_stream_url(json_data):
+    # TODO: 获取Tiktok直播源地址
+    data = []  # 定义一个返回数据列表
+
+    LiveRoom = json_data['LiveRoom']['liveRoomUserInfo']
+    anchor_name = LiveRoom['user']['nickname']
+    data.append(anchor_name)
+    # 获取直播间状态
+    status = LiveRoom['user']["status"]  # 直播状态2是正在直播.4是未开播
+
+    if status == 4:
+        data = [anchor_name, status, '', '']
+    else:
+        # 画质从高到低：origin>uhd>sd>sd>ld
+        # {origin:'原画质或蓝光',uhd:'1080P或720P',sd:'540P或480P',ld:'360P标清'}
+        # 上面画质对应只是一般情况，具体情况有可能不一样 可以看对应画质的sdk_params参数，里面有如1080P等参数
+        stream_data = LiveRoom['liveRoom']['streamData']['pull_data']['stream_data']
+        stream_data = json.loads(stream_data)['data']
+        if video_quality == "原画" or video_quality == "蓝光":
+            m3u8_url = stream_data["origin"]['main']['hls']
+            flv_url = stream_data["origin"]['main']['flv']
+        elif video_quality == "超清":
+            m3u8_url = stream_data["uhd"]['main']['hls']
+            flv_url = stream_data["uhd"]['main']['flv']
+        elif video_quality == "高清":
+            m3u8_url = stream_data["sd"]['main']['hls']
+            flv_url = stream_data["sd"]['main']['flv']
+        elif video_quality == "标清":
+            m3u8_url = stream_data["ld"]['main']['hls']
+            flv_url = stream_data["ld"]['main']['flv']
+        # 注意，这里要将链接改为http协议，否则无法使用ffmpeg录制，原因是代理大都是http
+        m3u8_url = re.sub("https", "http", m3u8_url)
+        flv_url = re.sub("https", "http", flv_url)
         data = [anchor_name, status, m3u8_url, flv_url]
     return data
 
@@ -277,6 +317,7 @@ def start_record(line, count_variable=-1):
     global video_save_path
     global live_list
     global not_record_list
+    global need_proxy_url_list
     while True:
         try:
             record_finished = False
@@ -287,7 +328,7 @@ def start_record(line, count_variable=-1):
             url_tuple = line
             record_url = url_tuple[0]
             anchor_name = url_tuple[1]
-            print("运行新线程,传入地址 " + url_tuple[0] + " 序号" + str(count_variable))
+            print("\r运行新线程,传入地址 " + record_url)
 
             while True:
                 try:
@@ -296,8 +337,8 @@ def start_record(line, count_variable=-1):
                         # 判断如果是浏览器长链接
                         with semaphore:
                             # 使用semaphore来控制同时访问资源的线程数量
-                            json_data = get_json_data(record_url,cookies_set)  # 注意这里需要配置文件中的cookie
-                            port_info = get_stream_url2(json_data)
+                            json_data = get_douyin_stream_data(record_url,cookies_set)  # 注意这里需要配置文件中的cookie
+                            port_info = get_douyin_stream_url(json_data)
                     elif record_url.find("https://v.douyin.com/") > -1:
                         # 判断如果是app分享链接
                         is_long_url = True
@@ -308,13 +349,19 @@ def start_record(line, count_variable=-1):
                         new_record_url = "https://live.douyin.com/" + str(web_rid)
                         not_record_list.append(new_record_url)
                         with semaphore:
-                            json_data = get_json_data(new_record_url)
-                            port_info = get_stream_url2(json_data)
+                            json_data = get_douyin_stream_data(new_record_url, cookies_set)
+                            port_info = get_douyin_stream_url(json_data)
+
+                    elif record_url.find("https://www.tiktok.com/") > -1:
+                        with semaphore:
+                            if use_proxy or (global_proxy and proxy_addr !=''):
+                                json_data = get_tiktok_stream_data(record_url,proxy_addr)
+                                port_info = get_tiktok_stream_url(json_data)
 
                     # print("端口信息:" + str(port_info))
                     # port_info=['主播名','状态码','m3u8地址','flv地址']
                     if len(port_info) != 4:
-                        print(f'序号{count_variable} 网址内容获取失败,进行重试中...获取失败的地址是:{line} 主播为:{anchor_name}')
+                        print(f'序号{count_variable} 网址内容获取失败,进行重试中...获取失败的地址是:{line}')
                         warning_count += 1
                     else:
                         anchor_name = port_info[0]
@@ -334,10 +381,10 @@ def start_record(line, count_variable=-1):
 
                         # 判断状态码 如果是2则正在直播，如果是4则未在直播
                         if port_info[1] != 2:
-                            print(f"序号{count_variable} {port_info[0]} 等待直播.. ")
+                            print(f"序号{count_variable} {port_info[0]} 等待直播... ")
                             anchor_name = port_info[0]
                         else:
-                            print(f"序号{count_variable} {port_info[0]} 正在直播中")
+                            print(f"序号{count_variable} {port_info[0]} 正在直播中...")
 
                             # 是否显示直播地址
                             if video_m3u8:
@@ -347,6 +394,7 @@ def start_record(line, count_variable=-1):
                                     print(f"{port_info[0]} 直播地址为:{port_info[2]}")
 
                             real_url = port_info[2]  # 默认使用m3u8地址进行下载
+
                             if real_url == "":
                                 print('解析错误，直播间视频流未找到...')
                                 pass
@@ -370,7 +418,48 @@ def start_record(line, count_variable=-1):
                                 if not os.path.exists(video_save_path + anchor_name):
                                     print("保存路径不存在,不能生成录制.请避免把本程序放在c盘,桌面,下载文件夹,qq默认传输目录.请重新检查设置")
                                     video_save_path = ""
-                                    print("因为配置文件的路径错误,本次录制在程序目录")
+                                    default_path = os.getcwd()
+                                    print(f"因为配置文件的路径错误,本次录制在程序目录 {default_path}")
+
+
+                                ffmpeg_command = [
+                                    ffmpeg_path, "-y",
+                                    "-v", "verbose",
+                                    "-rw_timeout", "10000000",  # 10s
+                                    "-loglevel", "error",
+                                    "-hide_banner",
+                                    "-user_agent", headers["User-Agent"],
+                                    "-protocol_whitelist", "rtmp,crypto,file,http,https,tcp,tls,udp,rtp",
+                                    "-thread_queue_size", "1024",
+                                    "-analyzeduration", "2147483647",
+                                    "-probesize", "2147483647",
+                                    "-fflags", "+discardcorrupt",
+                                    "-i", real_url,
+                                    "-bufsize", "5000k",
+                                    # "-map", "0",  # 不同点
+                                    "-sn", "-dn",
+                                    # "-bsf:v","h264_mp4toannexb",
+                                    # "-c","copy",  # 直接用copy的话体积特别大.
+                                    # "-c:v","libx264",   # 后期可以用crf来控制大小
+                                    "-reconnect_delay_max", "30",
+                                    "-reconnect_streamed", "-reconnect_at_eof",
+                                    # "-c:v", "copy",  # 不同点
+                                    "-c:a", "copy",
+                                    "-max_muxing_queue_size", "64",
+                                    "-correct_ts_overflow", "1",
+                                    # "-f", "matroska",  # 不同点
+                                    # "{path}".format(path=file),  # 不同点
+                                ]
+
+                                # 添加代理参数
+                                if 'douyin' not in real_url:
+                                    if use_proxy and proxy_addr != '':
+                                        # os.environ["http_proxy"] = proxy_addr
+                                        ffmpeg_command.insert(1, "-http_proxy")
+                                        ffmpeg_command.insert(2, proxy_addr)
+
+
+                                recording.add(f'序号{count_variable} ' + anchor_name)
 
                                 if video_save_type == "FLV":
                                     filename = anchor_name + '_' + now + '.flv'
@@ -395,8 +484,6 @@ def start_record(line, count_variable=-1):
                                     try:
                                         # “port_info[3]”对应的是flv地址，使用老方法下载（直接请求下载flv）只能是下载flv流的。
                                         real_url = port_info[3]
-                                        recording.add(f'序号{count_variable} ' + anchor_name)
-
                                         _filepath, _ = urllib.request.urlretrieve(real_url,video_save_path + anchor_name + '/' + filename)
                                         record_finished = True
                                         record_finished_2 = True
@@ -418,9 +505,7 @@ def start_record(line, count_variable=-1):
                                     else:
                                         print("\r" + anchor_name + " 录制视频中: " + video_save_path + anchor_name + '/' + filename)
 
-                                    ffmpeg_path = "ffmpeg"
                                     file = video_save_path + anchor_name + '/' + filename
-
                                     filename_short = video_save_path + anchor_name + '/' + anchor_name + '_' + now
 
                                     if create_time_file:
@@ -431,35 +516,15 @@ def start_record(line, count_variable=-1):
                                         create_var[str(filename_short)].start()
 
                                     try:
-                                        recording.add(f'序号{count_variable} ' + anchor_name)
-
-                                        _output = subprocess.check_output([
-                                            ffmpeg_path, "-y",
-                                            "-v", "verbose",
-                                            "-rw_timeout", "10000000",  # 10s
-                                            "-loglevel", "error",
-                                            "-hide_banner",
-                                            "-user_agent", headers["User-Agent"],
-                                            "-protocol_whitelist", "rtmp,crypto,file,http,https,tcp,tls,udp,rtp",
-                                            "-thread_queue_size", "1024",
-                                            "-analyzeduration", "2147483647",
-                                            "-probesize", "2147483647",
-                                            "-fflags", "+discardcorrupt",
-                                            "-i", real_url,
-                                            "-bufsize", "5000k",
+                                        command=[
                                             "-map", "0",
-                                            "-sn", "-dn",
-                                            # "-bsf:v","h264_mp4toannexb",
-                                            # "-c","copy",
-                                            # "-c:v","libx264",   #后期可以用crf来控制大小
-                                            "-reconnect_delay_max", "30", "-reconnect_streamed", "-reconnect_at_eof",
                                             "-c:v", "copy",  # 直接用copy的话体积特别大.
-                                            "-c:a", "copy",
-                                            "-max_muxing_queue_size", "64",
-                                            "-correct_ts_overflow", "1",
                                             "-f", "matroska",
                                             "{path}".format(path=file),
-                                        ], stderr=subprocess.STDOUT)
+                                        ]
+                                        ffmpeg_command.extend(command)
+
+                                        _output = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT)
 
                                         record_finished = True
                                         record_finished_2 = True
@@ -483,7 +548,6 @@ def start_record(line, count_variable=-1):
                                         print(
                                             "\r" + anchor_name + " 录制视频中: " + video_save_path + anchor_name + '/' + filename)
 
-                                    ffmpeg_path = "ffmpeg"
                                     file = video_save_path + anchor_name + '/' + filename
 
                                     filename_short = video_save_path + anchor_name + '/' + anchor_name + '_' + now
@@ -496,35 +560,18 @@ def start_record(line, count_variable=-1):
                                         create_var[str(filename_short)].start()
 
                                     try:
-                                        recording.add(f'序号{count_variable} ' + anchor_name)
-
-                                        _output = subprocess.check_output([
-                                            ffmpeg_path, "-y",
-                                            "-v", "verbose",
-                                            "-rw_timeout", "10000000",  # 10s
-                                            "-loglevel", "error",
-                                            "-hide_banner",
-                                            "-user_agent", headers["User-Agent"],
-                                            "-protocol_whitelist", "rtmp,crypto,file,http,https,tcp,tls,udp,rtp",
-                                            "-thread_queue_size", "1024",
-                                            "-analyzeduration", "2147483647",
-                                            "-probesize", "2147483647",
-                                            "-fflags", "+discardcorrupt",
-                                            "-i", real_url,
-                                            "-bufsize", "5000k",
+                                        command = [
                                             "-map", "0",
-                                            "-sn", "-dn",
-                                            # "-bsf:v","h264_mp4toannexb",
-                                            # "-c","copy",
-                                            # "-c:v","libx264",   #后期可以用crf来控制大小
-                                            "-reconnect_delay_max", "30", "-reconnect_streamed", "-reconnect_at_eof",
                                             "-c:v", "copy",  # 直接用copy的话体积特别大.
-                                            "-c:a", "copy",
-                                            "-max_muxing_queue_size", "64",
-                                            "-correct_ts_overflow", "1",
                                             "-f", "mp4",
                                             "{path}".format(path=file),
-                                        ], stderr=subprocess.STDOUT)
+                                        ]
+                                        ffmpeg_command.extend(command)
+                                        _output = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT)
+
+                                        # 取消http_proxy环境变量设置
+                                        # if proxy_addr:
+                                        #     del os.environ["http_proxy"]
 
                                         record_finished = True
                                         record_finished_2 = True
@@ -549,34 +596,15 @@ def start_record(line, count_variable=-1):
                                         print(
                                             "\r" + anchor_name + " 录制MKV音频中: " + video_save_path + anchor_name + '/' + filename)
 
-                                    ffmpeg_path = "ffmpeg"
                                     file = video_save_path + anchor_name + '/' + filename
                                     try:
-                                        recording.add(f'序号{count_variable} ' + anchor_name)
-
-                                        _output = subprocess.check_output([
-                                            ffmpeg_path, "-y",
-                                            "-v", "verbose",
-                                            "-rw_timeout", "10000000",  # 10s
-                                            "-loglevel", "error",
-                                            "-hide_banner",
-                                            "-user_agent", headers["User-Agent"],
-                                            "-protocol_whitelist", "rtmp,crypto,file,http,https,tcp,tls,udp,rtp",
-                                            "-thread_queue_size", "1024",
-                                            "-analyzeduration", "2147483647",
-                                            "-probesize", "2147483647",
-                                            "-fflags", "+discardcorrupt",
-                                            "-i", real_url,
-                                            "-bufsize", "5000k",
-                                            "-map", "0:a",
-                                            "-sn", "-dn",
-                                            "-reconnect_delay_max", "30", "-reconnect_streamed", "-reconnect_at_eof",
-                                            "-c:a", "copy",
-                                            "-max_muxing_queue_size", "64",
-                                            "-correct_ts_overflow", "1",
-                                            "-f", "matroska",
+                                        command = [
+                                            "-map", "0:a", # 不同点
+                                            "-f", "matroska", # 不同点
                                             "{path}".format(path=file),
-                                        ], stderr=subprocess.STDOUT)
+                                        ]
+                                        ffmpeg_command.extend(command)
+                                        _output = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT)
 
                                         record_finished = True
                                         record_finished_2 = True
@@ -603,34 +631,15 @@ def start_record(line, count_variable=-1):
                                         print(
                                             "\r" + anchor_name + " 录制TS音频中: " + video_save_path + anchor_name + '/' + filename)
 
-                                    ffmpeg_path = "ffmpeg"
                                     file = video_save_path + anchor_name + '/' + filename
                                     try:
-                                        recording.add(f'序号{count_variable} ' + anchor_name)
-
-                                        _output = subprocess.check_output([
-                                            ffmpeg_path, "-y",
-                                            "-v", "verbose",
-                                            "-rw_timeout", "10000000",  # 10s
-                                            "-loglevel", "error",
-                                            "-hide_banner",
-                                            "-user_agent", headers["User-Agent"],
-                                            "-protocol_whitelist", "rtmp,crypto,file,http,https,tcp,tls,udp,rtp",
-                                            "-thread_queue_size", "1024",
-                                            "-analyzeduration", "2147483647",
-                                            "-probesize", "2147483647",
-                                            "-fflags", "+discardcorrupt",
-                                            "-i", real_url,
-                                            "-bufsize", "5000k",
-                                            "-map", "0:a",
-                                            "-sn", "-dn",
-                                            "-reconnect_delay_max", "30", "-reconnect_streamed", "-reconnect_at_eof",
-                                            "-c:a", "copy",
-                                            "-max_muxing_queue_size", "64",
-                                            "-correct_ts_overflow", "1",
+                                        command = [
+                                            "-map", "0:a",  # 不同点
                                             "-f", "mpegts",
                                             "{path}".format(path=file),
-                                        ], stderr=subprocess.STDOUT)
+                                        ]
+                                        ffmpeg_command.extend(command)
+                                        _output = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT)
 
                                         record_finished = True
                                         record_finished_2 = True
@@ -661,7 +670,6 @@ def start_record(line, count_variable=-1):
                                                 print(
                                                     "\r" + anchor_name + " 分段录制视频中: " + video_save_path + anchor_name + '/' + filename + " 每录满: %d M 存一个视频" % Splitsize)
 
-                                            ffmpeg_path = "ffmpeg"
                                             file = video_save_path + anchor_name + '/' + filename
                                             filename_short = video_save_path + anchor_name + '/' + anchor_name + '_' + now
 
@@ -674,37 +682,17 @@ def start_record(line, count_variable=-1):
                                                 create_var[str(filename_short)].start()
 
                                             try:
-                                                recording.add(f'序号{count_variable} ' + anchor_name)
-
-                                                _output = subprocess.check_output([
-                                                    ffmpeg_path, "-y",
-                                                    "-v", "verbose",
-                                                    "-rw_timeout", "10000000",  # 10s
-                                                    "-loglevel", "error",
-                                                    "-hide_banner",
-                                                    "-user_agent", headers["User-Agent"],
-                                                    "-protocol_whitelist",
-                                                    "rtmp,crypto,file,http,https,tcp,tls,udp,rtp",
-                                                    "-thread_queue_size", "1024",
-                                                    "-analyzeduration", "2147483647",
-                                                    "-probesize", "2147483647",
-                                                    "-fflags", "+discardcorrupt",
-                                                    "-i", real_url,
-                                                    "-bufsize", "5000k",
-                                                    "-map", "0",
-                                                    "-sn", "-dn",
-                                                    # "-bsf:v","h264_mp4toannexb",
-                                                    # "-c","copy",
-                                                    "-reconnect_delay_max", "30", "-reconnect_streamed",
-                                                    "-reconnect_at_eof",
+                                                command = [
                                                     "-c:v", "copy",
-                                                    "-c:a", "copy",
-                                                    "-max_muxing_queue_size", "64",
-                                                    "-correct_ts_overflow", "1",
-                                                    "-f", "mpegts",
-                                                    "-fs", str(Splitsizes),
+                                                    "-map", "0",  # 不同点
+                                                     "-f", "mpegts",
+                                                    "-fs", str(Splitsizes),  # 不同点
                                                     "{path}".format(path=file),
-                                                ], stderr=subprocess.STDOUT)
+                                                ]
+
+                                                ffmpeg_command.extend(command)
+                                                _output = subprocess.check_output(ffmpeg_command,
+                                                                                  stderr=subprocess.STDOUT)
 
                                                 record_finished = True  # 这里表示正常录制成功一次
                                                 record_finished_2 = True
@@ -719,9 +707,7 @@ def start_record(line, count_variable=-1):
                                                 if anchor_name in unrecording:
                                                     unrecording.add(anchor_name)
                                             except subprocess.CalledProcessError as e:
-                                                # 这是里分段 如果录制错误会跳转到这里来
                                                 # logging.warning(str(e.output))
-                                                # print(str(e.output) +" 发生错误的行数: "+str(e.__traceback__.tb_lineno)  )
                                                 # logger.warning("错误信息: "+str(e)  +" 发生错误的行数: "+str(e.__traceback__.tb_lineno))
                                                 if anchor_name in recording:
                                                     recording.remove(anchor_name)
@@ -739,7 +725,6 @@ def start_record(line, count_variable=-1):
                                             print(
                                                 "\r" + anchor_name + " 录制视频中: " + video_save_path + anchor_name + '/' + filename)
 
-                                        ffmpeg_path = "ffmpeg"
                                         file = video_save_path + anchor_name + '/' + filename
                                         filename_short = video_save_path + anchor_name + '/' + anchor_name + '_' + now
 
@@ -751,35 +736,16 @@ def start_record(line, count_variable=-1):
                                             create_var[str(filename_short)].start()
 
                                         try:
-                                            recording.add(f'序号{count_variable} ' + anchor_name)
-                                            _output = subprocess.check_output([
-                                                ffmpeg_path, "-y",
-                                                "-v", "verbose",
-                                                "-rw_timeout", "10000000",  # 10s
-                                                "-loglevel", "error",
-                                                "-hide_banner",
-                                                "-user_agent", headers["User-Agent"],
-                                                "-protocol_whitelist", "rtmp,crypto,file,http,https,tcp,tls,udp,rtp",
-                                                "-thread_queue_size", "1024",
-                                                "-analyzeduration", "2147483647",
-                                                "-probesize", "2147483647",
-                                                "-fflags", "+discardcorrupt",
-                                                "-i", real_url,
-                                                "-bufsize", "5000k",
-                                                "-map", "0",
-                                                "-sn", "-dn",
-                                                # "-bsf:v","h264_mp4toannexb",
-                                                # "-c","copy",
-                                                "-reconnect_delay_max", "30", "-reconnect_streamed",
-                                                "-reconnect_at_eof",
+                                            command = [
                                                 "-c:v", "copy",
-                                                "-c:a", "copy",
-                                                "-max_muxing_queue_size", "64",
-                                                "-correct_ts_overflow", "1",
+                                                "-map", "0",  # 不同点
                                                 "-f", "mpegts",
                                                 "{path}".format(path=file),
-                                            ], stderr=subprocess.STDOUT)
+                                            ]
 
+                                            ffmpeg_command.extend(command)
+                                            _output = subprocess.check_output(ffmpeg_command,
+                                                                              stderr=subprocess.STDOUT)
                                             record_finished = True
                                             record_finished_2 = True
                                             count_time = time.time()
@@ -810,8 +776,7 @@ def start_record(line, count_variable=-1):
 
                 except Exception as e:
                     print(
-                        "错误信息644:" + str(e) + "\r\n读取的地址为: " + str(live_link) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
-                    # print(live_link+' 的直播地址连接失败,请检测这个地址是否正常,可以重启本程序--requests获取失败')
+                        "错误信息644:" + str(e) + "\r\n读取的地址为: " + str(record_url) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
                     logger.warning("错误信息: " + str(e) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
                     warning_count += 1
 
@@ -846,8 +811,7 @@ def start_record(line, count_variable=-1):
                 if loop_time:
                     print('\r检测直播间中...', end="")
         except Exception as e:
-            print("错误信息644:" + str(e) + "\r\n读取的地址为: " + str(live_link) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
-            # print(live_link+' 的直播地址连接失败,请检测这个地址是否正常,可以重启本程序--requests获取失败')
+            print("错误信息644:" + str(e) + "\r\n发生错误的行数: " + str(e.__traceback__.tb_lineno))
             logger.warning("错误信息: " + str(e) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
             print("线程崩溃2秒后重试.错误信息: " + str(e) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
             warning_count += 1
@@ -876,9 +840,9 @@ def backup_file(file_path, backup_dir):
         # 拷贝文件到备份目录
         backup_file_path = os.path.join(backup_dir, backup_file_name)
         shutil.copy2(file_path, backup_file_path)
-        print(f'已备份配置文件 {file_path} 到 {backup_file_path}')
+        print(f'\r已备份配置文件 {file_path} 到 {backup_file_path}')
     except Exception as e:
-        print(f'备份配置文件 {file_path} 失败：{str(e)}')
+        print(f'\r备份配置文件 {file_path} 失败：{str(e)}')
 
 
 def backup_file_start():
@@ -927,6 +891,17 @@ t3 = threading.Thread(target=backup_file_start, args=(), daemon=True)
 t3.start()
 Monitoring = 0
 
+# 如果开启了电脑全局/规则代理，可以不用再在配置文件中填写代理地址
+try:
+    # 检测电脑是否开启了全局/规则代理
+    print('系统代理检测中...')
+    response_g = urllib.request.urlopen("https://www.tiktok.com/", timeout=5)
+    global_proxy = True
+    print('系统代理已开启√ 注意：配置文件中的代理设置也要开启才会生效哦！')
+
+except Exception as e:
+    print('INFO：未检测到网络代理，请检查代理是否生效（若无需录制Tiktok直播请忽略此条提示）')
+
 
 def read_config_value(config, section, option, default_value):
     try:
@@ -963,14 +938,15 @@ while True:
         with open(url_config_file, 'a+', encoding=encoding) as f:
             f.write(inurl)
 
-    live_link = read_config_value(config, '1', '直播地址', "")  # 暂时没有用到
+    video_save_path = read_config_value(config, '1', '直播保存路径（不填则默认）', "")
+    video_save_type = read_config_value(config, '1', '视频保存格式TS|MKV|FLV|MP4|TS音频|MKV音频', "MP4")
+    video_quality = read_config_value(config, '1', '原画|超清|高清|标清', "原画")
+    use_proxy = read_config_value(config, '1', '是否使用代理ip（是/否）', "否")
+    proxy_addr = read_config_value(config, '1', '代理地址', "")  # 暂时没有用到
     max_request = int(read_config_value(config, '1', '同一时间访问网络的线程数', 3))
     semaphore = threading.Semaphore(max_request)
     delay_default = int(read_config_value(config, '1', '循环时间(秒)', 60))
     local_delay_default = int(read_config_value(config, '1', '排队读取网址时间(秒)', 0))
-    video_save_path = read_config_value(config, '1', '直播保存路径', "")
-    video_save_type = read_config_value(config, '1', '视频保存格式TS|MKV|FLV|MP4|TS音频|MKV音频', "TS")
-    video_quality = read_config_value(config, '1', '原画|超清|高清|标清', "原画")
     video_m3u8 = read_config_value(config, '1', '是否显示直播地址', "否")
     loop_time = read_config_value(config, '1', '是否显示循环秒数', "否")
     Splitvideobysize = read_config_value(config, '1', 'TS格式分段录制是否开启', "否")
@@ -980,9 +956,8 @@ while True:
     delFilebeforeconversion = read_config_value(config, '1', '追加格式后删除原文件', "否")
     create_time_file = read_config_value(config, '1', '生成时间文件', "否")
     display_chrome = read_config_value(config, '1', '是否显示浏览器', "否")
-    cover_long_url = read_config_value(config, '1', '短链接自动转换为长连接', "否")
     only_browser = read_config_value(config, '1', '仅用浏览器录制', "否")
-    cookies_set = read_config_value(config, '1', 'cookies', '')
+    cookies_set = read_config_value(config, '1', 'cookies（不可为空）', '')
 
     if len(video_save_type) > 0:
         if video_save_type.upper().lower() == "FLV".lower():
@@ -1025,16 +1000,17 @@ while True:
         "是": True,
         "否": False
     }
+    use_proxy = options.get(use_proxy, False)  # 是否使用代理ip
     video_m3u8 = options.get(video_m3u8, False)  # 是否显示直播地址
     loop_time = options.get(loop_time, False)  # 是否显示循环秒数
     Splitvideobysize = options.get(Splitvideobysize, False)  # 这里是控制TS是否分段
     create_time_file = options.get(create_time_file, False)  # 这里控制是否生成时间文件
     display_chrome = options.get(display_chrome, False)  # 这里控制是否生显示浏览器
-    cover_long_url = options.get(cover_long_url, False)  # 这里是控制是否转换短链接
     only_browser = options.get(only_browser, False)  # 这里是控制采用浏览器录制
     delFilebeforeconversion = options.get(delFilebeforeconversion, False)  # 追加格式后,是否删除原文件
     tsconvert_to_m4a = options.get(tsconvert_to_m4a, False)  # 这里是控制TS是否追加m4a格式
     tsconvert_to_mp4 = options.get(tsconvert_to_mp4, False)  # 这里是控制TS是否追加mp4格式
+
 
 
     # 读取url_config.ini文件
@@ -1050,7 +1026,9 @@ while True:
                 else:
                     split_line = [line, '']
                 url = split_line[0]
-                if "https://live.douyin.com/" in url or "https://v.douyin.com/" in url:
+                url_host=url.split('/')[2]
+                host_list=['live.douyin.com','v.douyin.com','www.tiktok.com']
+                if url_host in host_list:
                     new_line = (url, split_line[1])
                     url_tuples_list.append(new_line)
                 else:
@@ -1068,8 +1046,8 @@ while True:
         if len(textNoRepeatUrl) > 0:
             for url_tuple in textNoRepeatUrl:
                 if url_tuple[0] in not_record_list:
-                    print('hhhh')
                     continue
+
                 if url_tuple[0] not in runing_list:
                     if first_start == False:
                         print("新增链接: " + url_tuple[0])
@@ -1086,7 +1064,7 @@ while True:
         first_start = False
 
     except Exception as e:
-        print("错误信息644:" + str(e) + "\r\n读取的地址为: " + str(live_link) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
+        print("错误信息644:" + str(e) + "\r\n发生错误的行数: " + str(e.__traceback__.tb_lineno))
         logger.warning("错误信息: " + str(e) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
 
     # 这个是第一次运行其他线程.因为有变量前后顺序的问题,这里等全局变量完成后再运行def函数
