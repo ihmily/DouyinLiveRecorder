@@ -4,9 +4,10 @@
 Author: Hmily
 Github:https://github.com/ihmily
 Date: 2023-07-17 23:52:05
+Update: 2023-08-05 23:47:30
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 """
-
+import json
 import urllib.parse
 # import execjs  # pip install PyExecJS
 import requests
@@ -21,7 +22,7 @@ headers = {
 # X-bogus算法
 # def get_xbogus(url) -> str:
 #     query = urllib.parse.urlparse(url).query
-#     xbogus = execjs.compile(open('./X-Bogus.js').read()).call('sign', query, headers["User-Agent"])
+#     xbogus = execjs.compile(open('./x-bogus.js').read()).call('sign', query, headers["User-Agent"])
 #     # print(xbogus)
 #     return xbogus
 
@@ -38,8 +39,9 @@ def get_xbogus2(url) -> str:
 
 # 获取房间ID和用户secID
 def get_sec_user_id(url):
-    html=requests.get(url)
-    redirect_url=html.url
+    # response=requests.get(url)
+    response = urllib.request.urlopen(url)
+    redirect_url = response.url
     sec_user_id=redirect_url.split('sec_user_id=')[1].rsplit('&ecom_share')[0]
     room_id=redirect_url.split('?')[0].rsplit('/',maxsplit=1)[1]
     return room_id,sec_user_id
@@ -50,8 +52,13 @@ def get_live_room_id(room_id,sec_user_id):
     url= f'https://webcast.amemv.com/webcast/room/reflow/info/?verifyFp=verify_lk07kv74_QZYCUApD_xhiB_405x_Ax51_GYO9bUIyZQVf&type_id=0&live_id=1&room_id={room_id}&sec_user_id={sec_user_id}&app_id=1128&msToken=wrqzbEaTlsxt52-vxyZo_mIoL0RjNi1ZdDe7gzEGMUTVh_HvmbLLkQrA_1HKVOa2C6gkxb6IiY6TY2z8enAkPEwGq--gM-me3Yudck2ailla5Q4osnYIHxd9dI4WtQ=='
     xbogus = get_xbogus2(url)  # 获取X-Bogus算法
     url = url + "&X-Bogus=" + xbogus
-    response = requests.get(url,headers=headers)
-    json_data=response.json()
+    # response = requests.get(url,headers=headers)
+    # json_data=response.json()
+    # 通通改成用urlib库，防止同时录制Tiktok直播时，代理影响requests请求出错
+    request = urllib.request.Request(url, headers=headers)
+    response = urllib.request.urlopen(request, timeout=10)
+    html_str = response.read().decode('utf-8')
+    json_data = json.loads(html_str)
     web_rid=json_data['data']['room']['owner']['web_rid']
     return web_rid
 

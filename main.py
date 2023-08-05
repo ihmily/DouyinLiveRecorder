@@ -4,7 +4,7 @@
 Author: Hmily
 Github: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2023-08-04 06:30:00
+Update: 2023-08-05 23:37:00
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -342,6 +342,48 @@ def get_kuaishou_stream_url(json_data):
         data = [anchor_name, True, flv_url, flv_url]  # 快手只有flv视频流
     return data
 
+def get_huya_stream_url(json_data):
+    # TODO: 获取虎牙直播源地址
+    data = []  # 定义一个返回数据列表
+
+    gameLiveInfo = json_data['data'][0]['gameLiveInfo']
+    gameStreamInfoList = json_data['data'][0]['gameStreamInfoList']
+    anchor_name = gameLiveInfo['nick']
+    data.append(anchor_name)
+    # 获取直播间状态
+    # 如果gameStreamInfoList 值为空，则未开直播
+    if len(gameStreamInfoList)==0:
+        data = [anchor_name, False, '', '']
+    else:
+        # gameStreamInfoList 索引从小到大 分别是'al', 'tx', 'hw', 'hs'四种cdn线路
+        # 默认使用第二种 即host链接开头为tx的cdn
+        sFlvUrl = gameStreamInfoList[1]['sFlvUrl']
+        sStreamName = gameStreamInfoList[1]['sStreamName']
+        sFlvUrlSuffix = gameStreamInfoList[1]['sFlvUrlSuffix']
+        sHlsUrl = gameStreamInfoList[1]['sHlsUrl']
+        sHlsUrlSuffix = gameStreamInfoList[1]['sHlsUrlSuffix']
+        sFlvAntiCode = gameStreamInfoList[1]['sFlvAntiCode']
+        quality_list = sFlvAntiCode.split('&exsphd=')[1]
+        pattern = r"(?<=264_)\d+"
+        quality_list = [x for x in re.findall(pattern, quality_list)][::-1]
+        while len(quality_list) < 4:
+            quality_list.append(quality_list[-1])
+        if video_quality == "原画" or video_quality == "蓝光":
+            flv_url = f'{sFlvUrl}/{sStreamName}.{sFlvUrlSuffix}?{sFlvAntiCode}&ratio={quality_list[0]}'
+            m3u8_url = f'{sHlsUrl}/{sStreamName}.{sHlsUrlSuffix}?{sFlvAntiCode}&ratio={quality_list[0]}'
+        elif video_quality == "超清":
+            flv_url = f'{sFlvUrl}/{sStreamName}.{sFlvUrlSuffix}?{sFlvAntiCode}&ratio={quality_list[1]}'
+            m3u8_url = f'{sHlsUrl}/{sStreamName}.{sHlsUrlSuffix}?{sFlvAntiCode}&ratio={quality_list[1]}'
+        elif video_quality == "高清":
+            flv_url = f'{sFlvUrl}/{sStreamName}.{sFlvUrlSuffix}?{sFlvAntiCode}&ratio={quality_list[2]}'
+            m3u8_url = f'{sHlsUrl}/{sStreamName}.{sHlsUrlSuffix}?{sFlvAntiCode}&ratio={quality_list[2]}'
+        elif video_quality == "标清":
+            flv_url = f'{sFlvUrl}/{sStreamName}.{sFlvUrlSuffix}?{sFlvAntiCode}&ratio={quality_list[3]}'
+            m3u8_url = f'{sHlsUrl}/{sStreamName}.{sHlsUrlSuffix}?{sFlvAntiCode}&ratio={quality_list[3]}'
+        data = [anchor_name, True, flv_url, m3u8_url]  # 虎牙目前只能使用flv视频流录制
+    return data
+
+
 def start_record(line, count_variable=-1):
     global warning_count
     global video_save_path
@@ -392,6 +434,11 @@ def start_record(line, count_variable=-1):
                         with semaphore:
                             json_data = get_kuaishou_stream_data(record_url)
                             port_info = get_kuaishou_stream_url(json_data)
+
+                    elif record_url.find("https://www.huya.com/") > -1:
+                        with semaphore:
+                            json_data = get_huya_stream_data(record_url)
+                            port_info = get_huya_stream_url(json_data)
 
                     # print("端口信息:" + str(port_info))
                     # port_info=['主播名','状态码','m3u8地址','flv地址']
@@ -1018,7 +1065,13 @@ while True:
                     split_line = [line, '']
                 url = split_line[0]
                 url_host=url.split('/')[2]
-                host_list=['live.douyin.com','v.douyin.com','www.tiktok.com','live.kuaishou.com']
+                host_list=[
+                    'live.douyin.com',
+                    'v.douyin.com',
+                    'www.tiktok.com',
+                    'live.kuaishou.com',
+                    'www.huya.com'
+                ]
                 if url_host in host_list:
                     new_line = (url, split_line[1])
                     url_tuples_list.append(new_line)

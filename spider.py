@@ -4,7 +4,7 @@
 Author: Hmily
 Github:https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2023-08-04 06:30:00
+Update: 2023-08-05 23:37:00
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -80,6 +80,19 @@ def get_kuaishou_stream_data(url):
     json_data = json.loads(json_str)
     return json_data
 
+def get_huya_stream_data(url):
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
+        'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
+    }
+
+    request = urllib.request.Request(url, headers=headers)
+    response = urllib.request.urlopen(request, timeout=10)
+    html_str = response.read().decode('utf-8')
+    json_str = re.findall('stream: (\{"data".*?),"iWebDefaultBitRate"', html_str)[0]
+    json_data = json.loads(json_str + '}')
+    return json_data
+
 
 if __name__ == '__main__':
     # 抖音直播间页面的cookie
@@ -87,6 +100,8 @@ if __name__ == '__main__':
     url = "https://live.douyin.com/745964462470"  # 抖音直播
     # url = "https://www.tiktok.com/@pearlgaga88/live"  # Tiktok 直播
     # url = "https://live.kuaishou.com/u/yall1102"  # 快手直播
+    url = 'https://www.huya.com/116'
     # print(get_douyin_stream_data(url,Cookie))
     # print(get_tiktok_stream_data(url,''))
     # print(get_kuaishou_stream_data(url))
+    print(get_huya_stream_data(url))
