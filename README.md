@@ -12,6 +12,7 @@
 - [x] Tiktok
 - [x] 快手
 - [x] 虎牙
+- [x] 斗鱼
 - [ ] 更多平台正在更新中
 
 </div>
@@ -66,6 +67,11 @@ https://live.kuaishou.com/u/yall1102
 
 虎牙：
 https://www.huya.com/52333
+
+斗鱼：
+https://www.douyu.com/3637778?dyshid=
+https://www.douyu.com/topic/wzDBLS6?rid=4921614&dyshid=
+
 ```
 
 </div>
@@ -74,7 +80,7 @@ https://www.huya.com/52333
 
 请求示例：https://hmily.vip/api/jx/live/?url=https://live.douyin.com/573716250978
 
-抖音地址转换：https://hmily.vip/api/jx/live/convert?url=https://v.douyin.com/iQLgKSj/
+抖音地址转换：https://hmily.vip/api/jx/live/convert.php?url=https://v.douyin.com/iQLgKSj/
 
 &emsp;
 
@@ -86,11 +92,16 @@ https://www.huya.com/52333
 
 ## ⏳提交日志
 
+- 20230807
+  - 新增了斗鱼直播录制
+  
+  - 修复显示录制完成之后会重新开始录制的问题
+  
 - 20230805
   - 新增了虎牙直播录制，其暂时只能用flv视频流进行录制
-  
+
   - Web API 新增了快手和虎牙这两个平台的直播流解析（Tiktok要代理）
-  
+
 - 20230804
   - 新增了快手直播录制，优化了部分代码
   - 上传了一个自动化获取抖音直播间页面Cookie的代码，可以用于录制

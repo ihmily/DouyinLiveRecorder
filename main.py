@@ -4,7 +4,7 @@
 Author: Hmily
 Github: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2023-08-05 23:37:00
+Update: 2023-08-07 01:46:07
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -24,11 +24,12 @@ from spider import *
 from web_rid import *
 
 # 版本号
-version = 202300803.08
+version = "v1.0.1"
+platforms = "抖音|Tiktok|快手|虎牙|斗鱼"
 
 # --------------------------log日志-------------------------------------
 # 创建一个logger
-logger = logging.getLogger('抖音直播录制%s版' % str(version))
+logger = logging.getLogger('DouyinLiveRecorder直播录制%s版' % str(version))
 logger.setLevel(logging.INFO)
 # 创建一个handler，用于写入日志文件
 if not os.path.exists("./log"):
@@ -57,10 +58,8 @@ live_list = []
 not_record_list = []
 start5_time = datetime.datetime.now()
 global_proxy = False
-recording_time_list={}
-headers = {
-    'User-Agent': 'Mozilla/5.0 (Linux; Android 11; SAMSUNG SM-G973U) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/14.2 Chrome/87.0.4280.141 Mobile Safari/537.36'
-}
+recording_time_list = {}
+user_agent = "Mozilla/5.0 (Linux; Android 11; SAMSUNG SM-G973U) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/14.2 Chrome/87.0.4280.141 Mobile Safari/537.36"
 config_file = './config/config.ini'
 url_config_file = './config/URL_config.ini'
 backup_dir = './backup_config'
@@ -90,7 +89,7 @@ def display_info():
                     os._exit(0)
 
             if use_proxy:
-                is_use_proxy='是'
+                is_use_proxy = '是'
             else:
                 is_use_proxy = '否'
             print(f"是否开启代理录制: {is_use_proxy}", end=" | ")
@@ -117,15 +116,15 @@ def display_info():
                     NoRepeatrecording = list(set(recording))
                     print(f"正在录制{len(NoRepeatrecording)}个直播: ")
                     for recording_live in NoRepeatrecording:
-                        have_record_time=now_time-recording_time_list[recording_live]
-                        print(f"{recording_live} 正在录制中 "+str(have_record_time).split('.')[0])
+                        have_record_time = now_time - recording_time_list[recording_live]
+                        print(f"{recording_live} 正在录制中 " + str(have_record_time).split('.')[0])
 
                     # print('\n本软件已运行：'+str(now_time - start5_time).split('.')[0])
                     print("x" * 60)
                 else:
                     start5_time = now_time
         except Exception as e:
-            print("错误信息644:" + str(e) + "\r\n发生错误的行数: "+str(e.__traceback__.tb_lineno))
+            print("错误信息644:" + str(e) + "\r\n发生错误的行数: " + str(e.__traceback__.tb_lineno))
             logger.warning("错误信息: " + str(e) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
 
 
@@ -205,7 +204,6 @@ def change_max_connect():
     global max_request
     global warning_count
     # 动态控制连接次数
-
     preset = max_request
     # 记录当前时间
     start_time = time.time()
@@ -243,19 +241,19 @@ def get_douyin_stream_url(json_data):
     # TODO: 获取直播源地址
     data = []  # 定义一个返回数据列表
 
-    roomStore = json_data['app']['initialState']['roomStore']
-    roomInfo = roomStore['roomInfo']
-    anchor_name = roomInfo['anchor']['nickname']
+    room_store = json_data['app']['initialState']['roomStore']
+    room_info = room_store['roomInfo']
+    anchor_name = room_info['anchor']['nickname']
     data.append(anchor_name)
-    status=4
+    status = 4
     # 获取直播间状态
-    if 'room' in roomInfo:
-        status = roomInfo["room"]["status"]  # 直播状态2是正在直播.4是未开播
+    if 'room' in room_info:
+        status = room_info["room"]["status"]  # 直播状态2是正在直播.4是未开播
 
     if status == 4:
         data = [anchor_name, False, '', '']
     else:
-        stream_url = roomInfo['room']['stream_url']
+        stream_url = room_info['room']['stream_url']
         # flv视频流链接
         flv_url_list = stream_url['flv_pull_url']
         # m3u8视频流链接
@@ -278,23 +276,23 @@ def get_douyin_stream_url(json_data):
         data = [anchor_name, True, m3u8_url, flv_url]
     return data
 
+
 def get_tiktok_stream_url(json_data):
     # TODO: 获取Tiktok直播源地址
     data = []  # 定义一个返回数据列表
 
-    LiveRoom = json_data['LiveRoom']['liveRoomUserInfo']
-    anchor_name = LiveRoom['user']['nickname']
+    live_room = json_data['LiveRoom']['liveRoomUserInfo']
+    anchor_name = live_room['user']['nickname']
     data.append(anchor_name)
-    # 获取直播间状态
-    status = LiveRoom['user']["status"]  # 直播状态2是正在直播.4是未开播
-
+    status = live_room['user']["status"]
+    # 直播状态2是正在直播.4是未开播
     if status == 4:
         data = [anchor_name, False, '', '']
     else:
         # 画质从高到低：origin>uhd>sd>sd>ld
         # {origin:'原画质或蓝光',uhd:'1080P或720P',sd:'540P或480P',ld:'360P标清'}
         # 上面画质对应只是一般情况，具体情况有可能不一样 可以看对应画质的sdk_params参数，里面有如1080P等参数
-        stream_data = LiveRoom['liveRoom']['streamData']['pull_data']['stream_data']
+        stream_data = live_room['liveRoom']['streamData']['pull_data']['stream_data']
         stream_data = json.loads(stream_data)['data']
         if video_quality == "原画" or video_quality == "蓝光":
             m3u8_url = stream_data["origin"]['main']['hls']
@@ -314,21 +312,21 @@ def get_tiktok_stream_url(json_data):
         data = [anchor_name, True, m3u8_url, flv_url]
     return data
 
+
 def get_kuaishou_stream_url(json_data):
     # TODO: 获取快手直播源地址
     data = []  # 定义一个返回数据列表
 
-
-    liveroom = json_data['liveroom']
-    anchor_name = liveroom['author']['name']
+    live_room = json_data['liveroom']
+    anchor_name = live_room['author']['name']
     data.append(anchor_name)
     # 获取直播间状态
-    status = liveroom['isLiving']  # 直播状态True是正在直播.False是未开播
-
+    status = live_room['isLiving']
+    # 直播状态True是正在直播.False是未开播
     if not status:
         data = [anchor_name, False, '', '']
     else:
-        stream_data = liveroom['liveStream']['playUrls'][0]['adaptationSet']['representation']
+        stream_data = live_room['liveStream']['playUrls'][0]['adaptationSet']['representation']
         # stream_data数组中索引从小到大分别是高清、超清、蓝光4M、蓝光8M （每个直播间不一样）
         if video_quality == "原画" or video_quality == "蓝光":
             flv_url = stream_data[-1]['url']
@@ -342,45 +340,74 @@ def get_kuaishou_stream_url(json_data):
         data = [anchor_name, True, flv_url, flv_url]  # 快手只有flv视频流
     return data
 
+
 def get_huya_stream_url(json_data):
     # TODO: 获取虎牙直播源地址
     data = []  # 定义一个返回数据列表
 
-    gameLiveInfo = json_data['data'][0]['gameLiveInfo']
-    gameStreamInfoList = json_data['data'][0]['gameStreamInfoList']
-    anchor_name = gameLiveInfo['nick']
+    game_live_info = json_data['data'][0]['gameLiveInfo']
+    stream_info_list = json_data['data'][0]['gameStreamInfoList']
+    anchor_name = game_live_info['nick']
     data.append(anchor_name)
-    # 获取直播间状态
-    # 如果gameStreamInfoList 值为空，则未开直播
-    if len(gameStreamInfoList)==0:
+    # 如果stream_info_list 值为空，则未开直播
+    if len(stream_info_list) == 0:
         data = [anchor_name, False, '', '']
     else:
-        # gameStreamInfoList 索引从小到大 分别是'al', 'tx', 'hw', 'hs'四种cdn线路
+        # stream_info_list 索引从小到大 分别是'al', 'tx', 'hw', 'hs'四种cdn线路
         # 默认使用第二种 即host链接开头为tx的cdn
-        sFlvUrl = gameStreamInfoList[1]['sFlvUrl']
-        sStreamName = gameStreamInfoList[1]['sStreamName']
-        sFlvUrlSuffix = gameStreamInfoList[1]['sFlvUrlSuffix']
-        sHlsUrl = gameStreamInfoList[1]['sHlsUrl']
-        sHlsUrlSuffix = gameStreamInfoList[1]['sHlsUrlSuffix']
-        sFlvAntiCode = gameStreamInfoList[1]['sFlvAntiCode']
-        quality_list = sFlvAntiCode.split('&exsphd=')[1]
+        s_flv_url = stream_info_list[1]['sFlvUrl']
+        s_stream_name = stream_info_list[1]['sStreamName']
+        s_flv_url_suffix = stream_info_list[1]['sFlvUrlSuffix']
+        s_hls_url = stream_info_list[1]['sHlsUrl']
+        s_hls_url_suffix = stream_info_list[1]['sHlsUrlSuffix']
+        s_flv_anti_code = stream_info_list[1]['sFlvAntiCode']
+        quality_list = s_flv_anti_code.split('&exsphd=')[1]
         pattern = r"(?<=264_)\d+"
         quality_list = [x for x in re.findall(pattern, quality_list)][::-1]
         while len(quality_list) < 4:
             quality_list.append(quality_list[-1])
         if video_quality == "原画" or video_quality == "蓝光":
-            flv_url = f'{sFlvUrl}/{sStreamName}.{sFlvUrlSuffix}?{sFlvAntiCode}&ratio={quality_list[0]}'
-            m3u8_url = f'{sHlsUrl}/{sStreamName}.{sHlsUrlSuffix}?{sFlvAntiCode}&ratio={quality_list[0]}'
+            flv_url = f'{s_flv_url}/{s_stream_name}.{s_flv_url_suffix}?{s_flv_anti_code}&ratio={quality_list[0]}'
+            m3u8_url = f'{s_hls_url}/{s_stream_name}.{s_hls_url_suffix}?{s_flv_anti_code}&ratio={quality_list[0]}'
         elif video_quality == "超清":
-            flv_url = f'{sFlvUrl}/{sStreamName}.{sFlvUrlSuffix}?{sFlvAntiCode}&ratio={quality_list[1]}'
-            m3u8_url = f'{sHlsUrl}/{sStreamName}.{sHlsUrlSuffix}?{sFlvAntiCode}&ratio={quality_list[1]}'
+            flv_url = f'{s_flv_url}/{s_stream_name}.{s_flv_url_suffix}?{s_flv_anti_code}&ratio={quality_list[1]}'
+            m3u8_url = f'{s_hls_url}/{s_stream_name}.{s_hls_url_suffix}?{s_flv_anti_code}&ratio={quality_list[1]}'
         elif video_quality == "高清":
-            flv_url = f'{sFlvUrl}/{sStreamName}.{sFlvUrlSuffix}?{sFlvAntiCode}&ratio={quality_list[2]}'
-            m3u8_url = f'{sHlsUrl}/{sStreamName}.{sHlsUrlSuffix}?{sFlvAntiCode}&ratio={quality_list[2]}'
+            flv_url = f'{s_flv_url}/{s_stream_name}.{s_flv_url_suffix}?{s_flv_anti_code}&ratio={quality_list[2]}'
+            m3u8_url = f'{s_hls_url}/{s_stream_name}.{s_hls_url_suffix}?{s_flv_anti_code}&ratio={quality_list[2]}'
         elif video_quality == "标清":
-            flv_url = f'{sFlvUrl}/{sStreamName}.{sFlvUrlSuffix}?{sFlvAntiCode}&ratio={quality_list[3]}'
-            m3u8_url = f'{sHlsUrl}/{sStreamName}.{sHlsUrlSuffix}?{sFlvAntiCode}&ratio={quality_list[3]}'
+            flv_url = f'{s_flv_url}/{s_stream_name}.{s_flv_url_suffix}?{s_flv_anti_code}&ratio={quality_list[3]}'
+            m3u8_url = f'{s_hls_url}/{s_stream_name}.{s_hls_url_suffix}?{s_flv_anti_code}&ratio={quality_list[3]}'
         data = [anchor_name, True, flv_url, m3u8_url]  # 虎牙目前只能使用flv视频流录制
+    return data
+
+
+def get_douyu_stream_url(json_data):
+    # TODO: 获取斗鱼直播源地址
+    data = []  # 定义一个返回数据列表
+
+    room_info = json_data['pageContext']['pageProps']['room']['roomInfo']['roomInfo']
+    anchor_name = room_info['nickname']
+    data.append(anchor_name)
+    status = room_info['isLive']
+
+    # 如果status值为1，则正在直播
+    # 这边有个bug，就是如果是直播回放，状态也是在直播 待修复
+    if status != 1:
+        data = [anchor_name, False, '', '']
+    else:
+        # rate: 1流畅；2高清；3超清；4蓝光4M；0蓝光8M或10M
+        rid = str(room_info['rid'])
+        if video_quality == "原画" or video_quality == "蓝光":
+            flv_url = get_douyu_stream_data(rid, rate='0')['data']['url']
+        elif video_quality == "超清":
+            flv_url = get_douyu_stream_data(rid, rate='3')['data']['url']
+        elif video_quality == "高清":
+            flv_url = get_douyu_stream_data(rid, rate='2')['data']['url']
+        elif video_quality == "标清":
+            flv_url = get_douyu_stream_data(rid, rate='1')['data']['url']
+
+        data = [anchor_name, True, flv_url, flv_url]  # 斗鱼目前只能使用flv视频流录制
     return data
 
 
@@ -409,7 +436,7 @@ def start_record(line, count_variable=-1):
                         # 判断如果是浏览器长链接
                         with semaphore:
                             # 使用semaphore来控制同时访问资源的线程数量
-                            json_data = get_douyin_stream_data(record_url,cookies_set)  # 注意这里需要配置文件中的cookie
+                            json_data = get_douyin_stream_data(record_url, cookies_set)  # 注意这里需要配置文件中的cookie
                             port_info = get_douyin_stream_url(json_data)
                     elif record_url.find("https://v.douyin.com/") > -1:
                         # 判断如果是app分享链接
@@ -426,8 +453,8 @@ def start_record(line, count_variable=-1):
 
                     elif record_url.find("https://www.tiktok.com/") > -1:
                         with semaphore:
-                            if use_proxy or (global_proxy and proxy_addr !=''):
-                                json_data = get_tiktok_stream_data(record_url,proxy_addr)
+                            if use_proxy or (global_proxy and proxy_addr != ''):
+                                json_data = get_tiktok_stream_data(record_url, proxy_addr)
                                 port_info = get_tiktok_stream_url(json_data)
 
                     elif record_url.find("https://live.kuaishou.com/") > -1:
@@ -440,6 +467,11 @@ def start_record(line, count_variable=-1):
                             json_data = get_huya_stream_data(record_url)
                             port_info = get_huya_stream_url(json_data)
 
+                    elif record_url.find("https://www.douyu.com/") > -1:
+                        with semaphore:
+                            json_data = get_douyu_info_data(record_url)
+                            port_info = get_douyu_stream_url(json_data)
+
                     # print("端口信息:" + str(port_info))
                     # port_info=['主播名','状态码','m3u8地址','flv地址']
                     if len(port_info) != 4:
@@ -448,6 +480,7 @@ def start_record(line, count_variable=-1):
                     else:
                         anchor_name = port_info[0]
                         anchor_name = re.sub(rstr, "_", anchor_name)  # 过滤不能作为文件名的字符，替换为下划线
+                        record_name = f'序号{count_variable} {anchor_name}'
 
                         if anchor_name in live_list:
                             print(f"新增的地址: {anchor_name} 已经存在,本条线程将会退出")
@@ -461,12 +494,10 @@ def start_record(line, count_variable=-1):
                                 name_list.append(f'{record_url}|{record_url},主播: {anchor_name.strip()}')
                             Runonce = True
 
-                        # 判断状态码 如果是2则正在直播，如果是4则未在直播
-                        if not port_info[1]:
-                            print(f"序号{count_variable} {port_info[0]} 等待直播... ")
-                            anchor_name = port_info[0]
+                        if port_info[1] is False:
+                            print(f"{record_name} 等待直播... ")
                         else:
-                            print(f"序号{count_variable} {port_info[0]} 正在直播中...")
+                            print(f"{record_name} 正在直播中...")
 
                             # 是否显示直播地址
                             if video_m3u8:
@@ -475,7 +506,8 @@ def start_record(line, count_variable=-1):
                                 else:
                                     print(f"{port_info[0]} 直播地址为:{port_info[2]}")
 
-                            real_url = port_info[2]  # 默认使用m3u8地址进行下载
+                            real_url = port_info[2]  # 默认使用第一种地址进行下载
+                            full_path = f'{default_path}/{anchor_name}'
 
                             if real_url == "":
                                 print('解析错误，直播间视频流未找到...')
@@ -484,7 +516,6 @@ def start_record(line, count_variable=-1):
                                 live_list.append(anchor_name)
                                 now = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime(time.time()))
                                 try:
-                                    full_path = f'{default_path}/{anchor_name}'
                                     if len(video_save_path) > 0:
                                         if video_save_path[-1] != "/":
                                             video_save_path = video_save_path + "/"
@@ -504,14 +535,13 @@ def start_record(line, count_variable=-1):
                                     video_save_path = ""
                                     print(f"因为配置文件的路径错误,本次录制在程序目录 {default_path}")
 
-
                                 ffmpeg_command = [
                                     ffmpeg_path, "-y",
                                     "-v", "verbose",
                                     "-rw_timeout", "10000000",  # 10s
                                     "-loglevel", "error",
                                     "-hide_banner",
-                                    "-user_agent", headers["User-Agent"],
+                                    "-user_agent", user_agent,
                                     "-protocol_whitelist", "rtmp,crypto,file,http,https,tcp,tls,udp,rtp",
                                     "-thread_queue_size", "1024",
                                     "-analyzeduration", "2147483647",
@@ -541,12 +571,10 @@ def start_record(line, count_variable=-1):
                                         ffmpeg_command.insert(1, "-http_proxy")
                                         ffmpeg_command.insert(2, proxy_addr)
 
-
-                                record_name=f'序号{count_variable} ' + anchor_name
                                 recording.add(record_name)
                                 start_record_time = datetime.datetime.now()
                                 recording_time_list[record_name] = start_record_time
-                                rec_info=f"\r{anchor_name} 录制视频中: {full_path}"
+                                rec_info = f"\r{anchor_name} 录制视频中: {full_path}"
                                 filename_short = full_path + '/' + anchor_name + '_' + now
 
                                 if video_save_type == "FLV":
@@ -563,7 +591,7 @@ def start_record(line, count_variable=-1):
                                     try:
                                         # “port_info[3]”对应的是flv地址，使用老方法下载（直接请求下载flv）只能是下载flv流的。
                                         real_url = port_info[3]
-                                        _filepath, _ = urllib.request.urlretrieve(real_url,full_path + '/' + filename)
+                                        _filepath, _ = urllib.request.urlretrieve(real_url, full_path + '/' + filename)
                                         record_finished = True
                                         record_finished_2 = True
                                         count_time = time.time()
@@ -571,11 +599,6 @@ def start_record(line, count_variable=-1):
                                     except:
                                         print('\r' + time.strftime('%Y-%m-%d %H:%M:%S  ') + anchor_name + ' 未开播')
 
-                                    # 注意，只有录制完后才会执行到这里
-                                    if anchor_name in recording:
-                                        recording.remove(anchor_name)
-                                    if anchor_name in unrecording:
-                                        unrecording.add(anchor_name)
 
                                 elif video_save_type == "MKV":
                                     filename = anchor_name + '_' + now + ".mkv"
@@ -589,7 +612,7 @@ def start_record(line, count_variable=-1):
                                         create_var[str(filename_short)].start()
 
                                     try:
-                                        command=[
+                                        command = [
                                             "-map", "0",
                                             "-c:v", "copy",  # 直接用copy的话体积特别大.
                                             "-f", "matroska",
@@ -607,10 +630,7 @@ def start_record(line, count_variable=-1):
                                         print(str(e.output) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
                                         logger.warning(
                                             "错误信息: " + str(e) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
-                                    if anchor_name in recording:
-                                        recording.remove(anchor_name)
-                                    if anchor_name in unrecording:
-                                        unrecording.add(anchor_name)
+
 
                                 elif video_save_type == "MP4":
 
@@ -648,10 +668,7 @@ def start_record(line, count_variable=-1):
                                         print(str(e.output) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
                                         logger.warning(
                                             "错误信息: " + str(e) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
-                                    if anchor_name in recording:
-                                        recording.remove(anchor_name)
-                                    if anchor_name in unrecording:
-                                        unrecording.add(anchor_name)
+
 
                                 elif video_save_type == "MKV音频":
                                     filename = anchor_name + '_' + now + ".mkv"
@@ -660,8 +677,8 @@ def start_record(line, count_variable=-1):
 
                                     try:
                                         command = [
-                                            "-map", "0:a", # 不同点
-                                            "-f", "matroska", # 不同点
+                                            "-map", "0:a",  # 不同点
+                                            "-f", "matroska",  # 不同点
                                             "{path}".format(path=file),
                                         ]
                                         ffmpeg_command.extend(command)
@@ -678,10 +695,7 @@ def start_record(line, count_variable=-1):
                                         print(str(e.output) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
                                         logger.warning(
                                             "错误信息: " + str(e) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
-                                    if anchor_name in recording:
-                                        recording.remove(anchor_name)
-                                    if anchor_name in unrecording:
-                                        unrecording.add(anchor_name)
+
 
                                 elif video_save_type == "TS音频":
                                     filename = anchor_name + '_' + now + ".ts"
@@ -708,10 +722,7 @@ def start_record(line, count_variable=-1):
                                         print(str(e.output) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
                                         logger.warning(
                                             "错误信息: " + str(e) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
-                                    if anchor_name in recording:
-                                        recording.remove(anchor_name)
-                                    if anchor_name in unrecording:
-                                        unrecording.add(anchor_name)
+
 
                                 else:
 
@@ -734,7 +745,7 @@ def start_record(line, count_variable=-1):
                                                 command = [
                                                     "-c:v", "copy",
                                                     "-map", "0",  # 不同点
-                                                     "-f", "mpegts",
+                                                    "-f", "mpegts",
                                                     "-fs", str(Splitsizes),  # 不同点
                                                     "{path}".format(path=file),
                                                 ]
@@ -751,17 +762,10 @@ def start_record(line, count_variable=-1):
                                                     threading.Thread(target=converts_mp4, args=(file,)).start()
                                                 if tsconvert_to_m4a:
                                                     threading.Thread(target=converts_m4a, args=(file,)).start()
-                                                if anchor_name in recording:
-                                                    recording.remove(anchor_name)
-                                                if anchor_name in unrecording:
-                                                    unrecording.add(anchor_name)
+
                                             except subprocess.CalledProcessError as e:
                                                 # logging.warning(str(e.output))
                                                 # logger.warning("错误信息: "+str(e)  +" 发生错误的行数: "+str(e.__traceback__.tb_lineno))
-                                                if anchor_name in recording:
-                                                    recording.remove(anchor_name)
-                                                if anchor_name in unrecording:
-                                                    unrecording.add(anchor_name)
                                                 break
 
 
@@ -804,14 +808,16 @@ def start_record(line, count_variable=-1):
                                             print(str(e.output) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
                                             logger.warning(
                                                 "错误信息: " + str(e) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
-                                        if anchor_name in recording:
-                                            recording.remove(anchor_name)
-                                        if anchor_name in unrecording:
-                                            unrecording.add(anchor_name)
+
+                                # 注意，只有录制完后才会执行到这里
+                                if record_name in recording:
+                                    recording.remove(record_name)
+                                if anchor_name in unrecording:
+                                    unrecording.add(anchor_name)
 
                             if record_finished_2 == True:
-                                if anchor_name in recording:
-                                    recording.remove(anchor_name)
+                                if record_name in recording:
+                                    recording.remove(record_name)
                                 if anchor_name in unrecording:
                                     unrecording.add(anchor_name)
                                 print('\n' + anchor_name + " " + time.strftime('%Y-%m-%d %H:%M:%S  ') + '直播录制完成\n')
@@ -819,7 +825,8 @@ def start_record(line, count_variable=-1):
 
                 except Exception as e:
                     print(
-                        "错误信息644:" + str(e) + "\r\n读取的地址为: " + str(record_url) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
+                        "错误信息644:" + str(e) + "\r\n读取的地址为: " + str(record_url) + " 发生错误的行数: " + str(
+                            e.__traceback__.tb_lineno))
                     logger.warning("错误信息: " + str(e) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
                     warning_count += 1
 
@@ -889,7 +896,6 @@ def backup_file(file_path, backup_dir):
 
 
 def backup_file_start():
-
     config_md5 = ''
     url_config_md5 = ''
 
@@ -921,9 +927,10 @@ else:
     print("检测到ffmpeg不存在,请将ffmpeg.exe放到同目录,或者设置为环境变量,没有ffmpeg将无法录制")
 
 # --------------------------初始化程序-------------------------------------
-print('--------------- 抖音直播录制 程序当前配置-----------------')
+print('--------------- DouyinLiveRecorder-----------------')
 print(f"版本号：{version}")
-print(f"作者：Hmily")
+print("Github：https://github.com/ihmily/DouyinLiveRecorder")
+print(f'支持平台：{platforms}')
 print('......................................................')
 
 if not os.path.exists('./config'):
@@ -977,7 +984,7 @@ while True:
         inicontent = ""
 
     if len(inicontent) == 0:
-        inurl = input('请输入要录制的抖音主播的直播间网址（尽量使用PC网页端的直播间地址）:\n')
+        inurl = input('请输入要录制的主播直播间网址（尽量使用PC网页端的直播间地址）:\n')
         with open(url_config_file, 'a+', encoding=encoding) as f:
             f.write(inurl)
 
@@ -1003,22 +1010,16 @@ while True:
     if len(video_save_type) > 0:
         if video_save_type.upper().lower() == "FLV".lower():
             video_save_type = "FLV"
-            # print("直播视频保存为FLV格式")
         elif video_save_type.upper().lower() == "MKV".lower():
             video_save_type = "MKV"
-            # print("直播视频保存为MKV格式")
         elif video_save_type.upper().lower() == "TS".lower():
             video_save_type = "TS"
-            # print("直播视频保存为TS格式")
         elif video_save_type.upper().lower() == "MP4".lower():
             video_save_type = "MP4"
-            # print("直播视频保存为MP4格式")
         elif video_save_type.upper().lower() == "TS音频".lower():
             video_save_type = "TS音频"
-            # print("直播视频保存为TS音频格式")
         elif video_save_type.upper().lower() == "MKV音频".lower():
             video_save_type = "MKV音频"
-            # print("直播视频保存为MKV音频格式")
         else:
             video_save_type = "TS"
             print("直播视频保存格式设置有问题,这次录制重置为默认的TS格式")
@@ -1037,6 +1038,7 @@ while True:
         h, m = divmod(m, 60)
         return ("%d:%02d:%02d" % (h, m, s))
 
+
     options = {
         "是": True,
         "否": False
@@ -1049,7 +1051,6 @@ while True:
     delFilebeforeconversion = options.get(delFilebeforeconversion, False)  # 追加格式后,是否删除原文件
     tsconvert_to_m4a = options.get(tsconvert_to_m4a, False)  # 这里是控制TS是否追加m4a格式
     tsconvert_to_mp4 = options.get(tsconvert_to_mp4, False)  # 这里是控制TS是否追加mp4格式
-
 
     # 读取url_config.ini文件
     try:
@@ -1064,13 +1065,17 @@ while True:
                 else:
                     split_line = [line, '']
                 url = split_line[0]
-                url_host=url.split('/')[2]
-                host_list=[
+                if ('http://' not in url) and ('https://' not in url):
+                    url = 'https://' + url
+
+                url_host = url.split('/')[2]
+                host_list = [
                     'live.douyin.com',
                     'v.douyin.com',
                     'www.tiktok.com',
                     'live.kuaishou.com',
-                    'www.huya.com'
+                    'www.huya.com',
+                    'www.douyu.com'
                 ]
                 if url_host in host_list:
                     new_line = (url, split_line[1])
@@ -1110,7 +1115,6 @@ while True:
         print("错误信息644:" + str(e) + "\r\n发生错误的行数: " + str(e.__traceback__.tb_lineno))
         logger.warning("错误信息: " + str(e) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
 
-    # 这个是第一次运行其他线程.因为有变量前后顺序的问题,这里等全局变量完成后再运行def函数
     if firstRunOtherLine:
         t = threading.Thread(target=display_info, args=(), daemon=True)
         t.start()
