@@ -4,13 +4,14 @@
 Author: Hmily
 Github: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2023-08-07 01:46:07
+Update: 2023-08-08 16:28:00
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
 
 import random
 import os
+import sys
 import urllib.parse
 import time
 import configparser
@@ -24,7 +25,7 @@ from spider import *
 from web_rid import *
 
 # 版本号
-version = "v1.0.1"
+version = "v1.0.2"
 platforms = "抖音|Tiktok|快手|虎牙|斗鱼"
 
 # --------------------------log日志-------------------------------------
@@ -86,18 +87,12 @@ def display_info():
                 if not os.path.exists(video_save_path):
                     print("配置文件里,直播保存路径并不存在,请重新输入一个正确的路径.或留空表示当前目录,按回车退出")
                     input("程序结束")
-                    os._exit(0)
+                    sys.exit(0)
 
-            if use_proxy:
-                is_use_proxy = '是'
-            else:
-                is_use_proxy = '否'
-            print(f"是否开启代理录制: {is_use_proxy}", end=" | ")
-
+            print(f"是否开启代理录制: {'是' if use_proxy else '否'}", end=" | ")
             if Splitvideobysize:
-                print("TS录制分段开启，录制分段大小为 %d M" % Splitsize, end=" | ")
-
-            print("Cookies录制", end=" | ")
+                print(f"TS录制分段开启，录制分段大小为 {Splitsize} M", end=" | ")
+            print(f"是否生成时间文件: {'是' if create_time_file else '否'}", end = " | ")
             print("录制视频质量为: " + str(video_quality), end=" | ")
             print("录制视频格式为: " + str(video_save_type), end=" | ")
             print("目前瞬时错误数为: " + str(warning_count), end=" | ")
@@ -354,30 +349,35 @@ def get_huya_stream_url(json_data):
         data = [anchor_name, False, '', '']
     else:
         # stream_info_list 索引从小到大 分别是'al', 'tx', 'hw', 'hs'四种cdn线路
-        # 默认使用第二种 即host链接开头为tx的cdn
-        s_flv_url = stream_info_list[1]['sFlvUrl']
-        s_stream_name = stream_info_list[1]['sStreamName']
-        s_flv_url_suffix = stream_info_list[1]['sFlvUrlSuffix']
-        s_hls_url = stream_info_list[1]['sHlsUrl']
-        s_hls_url_suffix = stream_info_list[1]['sHlsUrlSuffix']
-        s_flv_anti_code = stream_info_list[1]['sFlvAntiCode']
-        quality_list = s_flv_anti_code.split('&exsphd=')[1]
-        pattern = r"(?<=264_)\d+"
-        quality_list = [x for x in re.findall(pattern, quality_list)][::-1]
-        while len(quality_list) < 4:
-            quality_list.append(quality_list[-1])
-        if video_quality == "原画" or video_quality == "蓝光":
-            flv_url = f'{s_flv_url}/{s_stream_name}.{s_flv_url_suffix}?{s_flv_anti_code}&ratio={quality_list[0]}'
-            m3u8_url = f'{s_hls_url}/{s_stream_name}.{s_hls_url_suffix}?{s_flv_anti_code}&ratio={quality_list[0]}'
-        elif video_quality == "超清":
-            flv_url = f'{s_flv_url}/{s_stream_name}.{s_flv_url_suffix}?{s_flv_anti_code}&ratio={quality_list[1]}'
-            m3u8_url = f'{s_hls_url}/{s_stream_name}.{s_hls_url_suffix}?{s_flv_anti_code}&ratio={quality_list[1]}'
-        elif video_quality == "高清":
-            flv_url = f'{s_flv_url}/{s_stream_name}.{s_flv_url_suffix}?{s_flv_anti_code}&ratio={quality_list[2]}'
-            m3u8_url = f'{s_hls_url}/{s_stream_name}.{s_hls_url_suffix}?{s_flv_anti_code}&ratio={quality_list[2]}'
-        elif video_quality == "标清":
-            flv_url = f'{s_flv_url}/{s_stream_name}.{s_flv_url_suffix}?{s_flv_anti_code}&ratio={quality_list[3]}'
-            m3u8_url = f'{s_hls_url}/{s_stream_name}.{s_hls_url_suffix}?{s_flv_anti_code}&ratio={quality_list[3]}'
+        # 默认使用第一种 即host链接开头为al的cdn
+        select_cdn = stream_info_list[0]
+        s_flv_url = select_cdn['sFlvUrl']
+        s_stream_name = select_cdn['sStreamName']
+        s_flv_url_suffix = select_cdn['sFlvUrlSuffix']
+        s_hls_url = select_cdn['sHlsUrl']
+        s_hls_url_suffix = select_cdn['sHlsUrlSuffix']
+        s_flv_anti_code = select_cdn['sFlvAntiCode']
+        quality_list = s_flv_anti_code.split('&exsphd=')
+
+        flv_url = f'{s_flv_url}/{s_stream_name}.{s_flv_url_suffix}?{s_flv_anti_code}&ratio='
+        m3u8_url = f'{s_hls_url}/{s_stream_name}.{s_hls_url_suffix}?{s_flv_anti_code}&ratio='
+        if len(quality_list) != 1:
+            pattern = r"(?<=264_)\d+"
+            quality_list = [x for x in re.findall(pattern, quality_list[1])][::-1]
+            while len(quality_list) < 4:
+                quality_list.append(quality_list[-1])
+            if video_quality == "原画" or video_quality == "蓝光":
+                flv_url = flv_url + str(quality_list[0])
+                m3u8_url = m3u8_url + str(quality_list[0])
+            elif video_quality == "超清":
+                flv_url = flv_url + str(quality_list[1])
+                m3u8_url = m3u8_url + str(quality_list[1])
+            elif video_quality == "高清":
+                flv_url = flv_url + str(quality_list[2])
+                m3u8_url = m3u8_url + str(quality_list[2])
+            elif video_quality == "标清":
+                flv_url = flv_url + str(quality_list[3])
+                m3u8_url = m3u8_url + str(quality_list[3])
         data = [anchor_name, True, flv_url, m3u8_url]  # 虎牙目前只能使用flv视频流录制
     return data
 
@@ -482,10 +482,10 @@ def start_record(line, count_variable=-1):
                         anchor_name = re.sub(rstr, "_", anchor_name)  # 过滤不能作为文件名的字符，替换为下划线
                         record_name = f'序号{count_variable} {anchor_name}'
 
-                        if anchor_name in live_list:
+                        if anchor_name in recording:
                             print(f"新增的地址: {anchor_name} 已经存在,本条线程将会退出")
                             name_list.append(f'{record_url}|#{record_url}')
-                            exit(0)
+                            return
 
                         if url_tuple[1] == "" and Runonce is False:
                             if is_long_url:
@@ -924,14 +924,18 @@ if ffmepg_file_check.find("run") > -1:
     pass
 else:
     print("重要提示:")
-    print("检测到ffmpeg不存在,请将ffmpeg.exe放到同目录,或者设置为环境变量,没有ffmpeg将无法录制")
+    input("检测到ffmpeg不存在,请将ffmpeg.exe放到同目录,或者设置为环境变量,没有ffmpeg将无法录制")
+    sys.exit(0)
 
 # --------------------------初始化程序-------------------------------------
-print('--------------- DouyinLiveRecorder-----------------')
+print("-----------------------------------------------------")
+print("|                DouyinLiveRecorder                 |")
+print("-----------------------------------------------------")
+
 print(f"版本号：{version}")
 print("Github：https://github.com/ihmily/DouyinLiveRecorder")
 print(f'支持平台：{platforms}')
-print('......................................................')
+print('.....................................................')
 
 if not os.path.exists('./config'):
     os.makedirs('./config')
@@ -992,7 +996,7 @@ while True:
     video_save_type = read_config_value(config, '1', '视频保存格式TS|MKV|FLV|MP4|TS音频|MKV音频', "MP4")
     video_quality = read_config_value(config, '1', '原画|超清|高清|标清', "原画")
     use_proxy = read_config_value(config, '1', '是否使用代理ip（是/否）', "否")
-    proxy_addr = read_config_value(config, '1', '代理地址', "")  # 暂时没有用到
+    proxy_addr = read_config_value(config, '1', '代理地址', "")
     max_request = int(read_config_value(config, '1', '同一时间访问网络的线程数', 3))
     semaphore = threading.Semaphore(max_request)
     delay_default = int(read_config_value(config, '1', '循环时间(秒)', 60))
