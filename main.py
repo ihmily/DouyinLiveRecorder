@@ -4,7 +4,7 @@
 Author: Hmily
 Github: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2023-08-08 16:28:00
+Update: 2023-08-12 02:42:52
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -25,8 +25,8 @@ from spider import *
 from web_rid import *
 
 # 版本号
-version = "v1.0.2"
-platforms = "抖音|Tiktok|快手|虎牙|斗鱼"
+version = "v1.0.3"
+platforms = "抖音|Tiktok|快手|虎牙|斗鱼|YY"
 
 # --------------------------log日志-------------------------------------
 # 创建一个logger
@@ -233,13 +233,12 @@ def change_max_connect():
 
 
 def get_douyin_stream_url(json_data):
-    # TODO: 获取直播源地址
+    # TODO: 获取抖音直播源地址
     data = []  # 定义一个返回数据列表
 
     room_store = json_data['app']['initialState']['roomStore']
     room_info = room_store['roomInfo']
     anchor_name = room_info['anchor']['nickname']
-    data.append(anchor_name)
     status = 4
     # 获取直播间状态
     if 'room' in room_info:
@@ -274,11 +273,10 @@ def get_douyin_stream_url(json_data):
 
 def get_tiktok_stream_url(json_data):
     # TODO: 获取Tiktok直播源地址
-    data = []  # 定义一个返回数据列表
+    data = []
 
     live_room = json_data['LiveRoom']['liveRoomUserInfo']
     anchor_name = live_room['user']['nickname']
-    data.append(anchor_name)
     status = live_room['user']["status"]
     # 直播状态2是正在直播.4是未开播
     if status == 4:
@@ -310,11 +308,10 @@ def get_tiktok_stream_url(json_data):
 
 def get_kuaishou_stream_url(json_data):
     # TODO: 获取快手直播源地址
-    data = []  # 定义一个返回数据列表
+    data = []
 
     live_room = json_data['liveroom']
     anchor_name = live_room['author']['name']
-    data.append(anchor_name)
     # 获取直播间状态
     status = live_room['isLiving']
     # 直播状态True是正在直播.False是未开播
@@ -338,12 +335,11 @@ def get_kuaishou_stream_url(json_data):
 
 def get_huya_stream_url(json_data):
     # TODO: 获取虎牙直播源地址
-    data = []  # 定义一个返回数据列表
+    data = []
 
     game_live_info = json_data['data'][0]['gameLiveInfo']
     stream_info_list = json_data['data'][0]['gameStreamInfoList']
     anchor_name = game_live_info['nick']
-    data.append(anchor_name)
     # 如果stream_info_list 值为空，则未开直播
     if len(stream_info_list) == 0:
         data = [anchor_name, False, '', '']
@@ -388,7 +384,6 @@ def get_douyu_stream_url(json_data):
 
     room_info = json_data['pageContext']['pageProps']['room']['roomInfo']['roomInfo']
     anchor_name = room_info['nickname']
-    data.append(anchor_name)
     status = room_info['isLive']
 
     # 如果status值为1，则正在直播
@@ -409,6 +404,23 @@ def get_douyu_stream_url(json_data):
 
         data = [anchor_name, True, flv_url, flv_url]  # 斗鱼目前只能使用flv视频流录制
     return data
+
+
+def get_yy_stream_url(json_data):
+    # TODO: 获取YY直播源地址
+    data = []
+
+    anchor_name = json_data['anchor_name']
+    if 'avp_info_res' not in json_data:
+        data = [anchor_name, False, '', '']
+    else:
+        stream_line_addr = json_data['avp_info_res']['stream_line_addr']
+        # 获取最后一个键的值
+        cdn_info = list(stream_line_addr.values())[0]
+        stream_url = cdn_info['cdn_info']['url']  # 清晰度暂时默认高清
+        data = [anchor_name, True, stream_url, stream_url]  # 斗鱼目前只能使用flv视频流录制
+    return data
+
 
 
 def start_record(line, count_variable=-1):
@@ -471,6 +483,12 @@ def start_record(line, count_variable=-1):
                         with semaphore:
                             json_data = get_douyu_info_data(record_url)
                             port_info = get_douyu_stream_url(json_data)
+
+                    elif record_url.find("https://www.yy.com/") > -1:
+                        with semaphore:
+                            json_data = get_yy_stream_data(record_url)
+                            port_info = get_yy_stream_url(json_data)
+
 
                     # print("端口信息:" + str(port_info))
                     # port_info=['主播名','状态码','m3u8地址','flv地址']
@@ -1079,7 +1097,8 @@ while True:
                     'www.tiktok.com',
                     'live.kuaishou.com',
                     'www.huya.com',
-                    'www.douyu.com'
+                    'www.douyu.com',
+                    'www.yy.com'
                 ]
                 if url_host in host_list:
                     new_line = (url, split_line[1])
@@ -1129,3 +1148,6 @@ while True:
 
     # 总体循环3s
     time.sleep(3)
+
+
+
