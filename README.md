@@ -13,6 +13,7 @@
 - [x] 快手
 - [x] 虎牙
 - [x] 斗鱼
+- [x] YY
 - [ ] 更多平台正在更新中
 
 </div>
@@ -72,6 +73,8 @@ https://www.huya.com/52333
 https://www.douyu.com/3637778?dyshid=
 https://www.douyu.com/topic/wzDBLS6?rid=4921614&dyshid=
 
+YY:
+https://www.yy.com/22490906/22490906
 ```
 
 </div>
@@ -92,9 +95,12 @@ https://www.douyu.com/topic/wzDBLS6?rid=4921614&dyshid=
 
 ## ⏳提交日志
 
+- 20230812
+  - 新增YY直播录制
+  
 - 20230808
   - 修复主播重新开播无法再次录制的问题
-  
+
 - 20230807
   - 新增了斗鱼直播录制
 
