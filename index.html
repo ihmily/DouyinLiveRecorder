@@ -1,0 +1,215 @@
+<!--
+    Project: DouyinLiveRecorder
+    Author: Hmily
+    Build: 2023.08.14 - 20:24:05
+    GitHub Project URL: https://github.com/ihmily/DouyinLiveRecorder
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="referrer" content="never"> 
+    <title>M3U8 视频播放器</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&amp;display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest/dist/hls.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/flv.js@1.6.2/dist/flv.min.js"></script>
+
+    <style>
+        body {
+            font-family: 'Roboto', Arial, sans-serif;
+            background-color: #1a237e;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            padding: 0;
+            color: #ffffff;
+            background-image: linear-gradient(120deg, #1a237e 0%, #283593 50%, #4a148c 100%);
+        }
+
+
+        .container {
+            max-width: 640px;
+            width: 80%;
+            padding: 20px;
+            background-color: #ffffff;
+            border-radius: 10px;
+            box-shadow: 0px 0px 5px 0px rgba(0,0,0,0.15);
+        }
+
+        #videoPlayer {
+            width: 100%;
+            height: 0;
+            padding-bottom: 56.25%;
+            position: relative;
+            background-color: #000;
+            border-radius: 5px;
+            box-shadow: 0px 0px 10px 0px rgba(0,0,0,0.15);
+            display: none;
+        }
+
+        video {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        #videoUrlInput{
+        	display: block;
+        	width: 100%;
+        	margin: 10px 0;
+        	padding: 8px;
+        	border-radius: 5px;
+        	border: 1px solid #ccc;
+            box-sizing: border-box;
+        }
+
+        #playButton {
+            display: block;
+            width: 100%;
+            padding: 10px;
+            background-color: #283593;
+            color: white;
+            font-weight: bold;
+            border-radius: 5px;
+            border: none;
+            cursor: pointer;
+            transition: background-color 0.3s;
+            margin: 0 0 10px 0;
+            box-shadow: 0px 2px 4px 0px rgba(0,0,0,0.15);
+        }
+
+        #playButton:hover {
+            background-color: #1a237e;
+        }
+
+        .description {
+            margin-top: 20px;
+            line-height: 1.4;
+            font-size: 14px;
+            text-align: left;
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            
+            box-shadow: 0px 0px 5px 0px rgba(0,0,0,0.15);
+            display: block;
+        }
+        .footer {
+          margin-top: 30px;
+          text-align: center;
+          font-size: 14px;
+          color: white;
+        }
+
+        p{
+            color: black;
+        }
+        
+        a.no_style {
+            color: inherit;
+            text-decoration: none;
+        }
+        @media screen and (max-width: 768px) {
+            .container {
+                width: 90%;
+                border-radius: 0;
+                box-shadow: none;
+                margin-top:30px;
+            }
+            body {
+                overflow-y: scroll;
+            }
+            #videoUrlInput{
+                
+            	margin-top: 30px;
+            	margin-bottom: 10px;
+            }
+        
+        }
+
+    </style>
+</head>
+<body>
+	<div class="container">
+	    <input type="text" id="videoUrlInput" placeholder="请输入 M3U8或者FLV 视频链接">
+	    <button id="playButton">播放视频</button>
+	    <div id="videoPlayer">
+	        <video controls></video>
+	    </div>
+	    <div class="description">
+            <p><strong>说明</strong><p>
+            <p>M3U8文件格式</p>
+            <p>M3U8文件是采用UTF-8编码格式的M3U文件。M3U文件本身是一个纯文本索引文件，其核心功能是记录多媒体文件链接。当用户打开此类文件时，播放软件会根据索引查找相应的音视频文件网络地址，然后进行在线播放。</p>
+            <p>M3U最初设计用于播放音频文件，例如MP3。但随着时间推移，更多的播放器和软件开始使用M3U来播放视频文件列表，同时也支持在线流媒体音频源的指定。目前，许多播放器和软件都兼容M3U文件格式。</p>
+            <p>FLV文件格式（Flash Video Format）是Adobe公司开发的一种专门用于网页视频播放的文件格式。FLV格式的视频文件通常用于播放短视频和在线流媒体，可以嵌入到网页中供用户观看。FLV视频通常由Adobe Flash Player播放器播放，而其他第三方播放器也支持此格式。</p>
+        </div>
+        <div class="footer">
+          <p>&copy; 2023 <a href='https://github.com/ihmily/DouyinLiveRecorder' class="no_style" target="_blank">Hmily</a>. All rights reserved.</p>
+        </div>
+	    <script>
+    	    function httpToHttps(url) {
+              if (url.startsWith("http://")) {
+                return url.replace("http://", "https://");
+              }
+              return url;
+            }
+	        function playVideo() {
+            let videoUrl = document.getElementById('videoUrlInput').value;
+            const video = document.querySelector('#videoPlayer video');
+            const description = document.querySelector('.description');
+            if (videoUrl == ''){
+                alert('请输入视频链接');
+                return;
+            }
+            videoUrl = httpToHttps(videoUrl);
+            if (videoUrl.includes('.m3u8')) {
+                videoPlayer.style.display = 'block';
+                description.style.display = 'none';
+                if (Hls.isSupported()) {
+                    const hls = new Hls();
+                    hls.attachMedia(video);
+                    hls.on(Hls.Events.MEDIA_ATTACHED, () => {
+                        hls.loadSource(videoUrl);
+                    });
+                } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                    video.src = videoUrl;
+                } else {
+                    alert('M3U8 格式不受您的浏览器支持。');
+                    console.error('M3U8 格式不受您的浏览器支持。');
+                    return;
+                }
+            } else if (videoUrl.includes('.flv')) {
+                if (flvjs.isSupported()) {
+                    const flvPlayer = flvjs.createPlayer({
+                        type: 'flv',
+                        url: videoUrl
+                    });
+                    flvPlayer.attachMediaElement(video);
+                    flvPlayer.load();
+                    flvPlayer.play();
+                } else {
+                    alert('FLV 格式不受您的浏览器支持。');
+                    console.error('FLV 格式不受您的浏览器支持。');
+                    return;
+                }
+
+                videoPlayer.style.display = 'block';
+                description.style.display = 'none';
+            } else {
+                console.error('不支持播放该视频格式。');
+                alert('不支持播放该视频格式。');
+            }
+        }
+
+        document.getElementById('playButton').addEventListener('click', playVideo);
+	    </script>
+	</div>
+</body>
+</html>

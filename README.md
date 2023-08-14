@@ -34,6 +34,7 @@
     ├── cookies.py -> (get douyin cookies)
     ├── x-bogus.js -> (get douyin xbogus token)
     ├── ffmpeg.exe -> (record video)
+    ├── index.html -> (play m3u8 and flv video)
 ```
 
 </div>
@@ -101,7 +102,7 @@ GET https://hmily.vip/api/jx/live/?url=https://live.douyin.com/573716250978
 GET https://hmily.vip/api/jx/live/convert.php?url=https://v.douyin.com/iQLgKSj/
 ```
 
-
+在线播放m3u8视频地址：[https://jx.hmily.vip/play/ ](https://jx.hmily.vip/play/)
 
 &emsp;
 
@@ -115,6 +116,7 @@ GET https://hmily.vip/api/jx/live/convert.php?url=https://v.douyin.com/iQLgKSj/
 
 - 20230814
   - 新增B站直播录制
+  - 写了一个在线播放M3U8和FLV视频的网页源码，打开即可食用
   
 - 20230812
   - 新增YY直播录制
