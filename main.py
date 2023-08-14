@@ -4,7 +4,7 @@
 Author: Hmily
 Github: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2023-08-12 02:42:52
+Update: 2023-08-14 17:13:00
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -25,8 +25,8 @@ from spider import *
 from web_rid import *
 
 # 版本号
-version = "v1.0.3"
-platforms = "抖音|Tiktok|快手|虎牙|斗鱼|YY"
+version = "v1.0.4"
+platforms = "抖音|Tiktok|快手|虎牙|斗鱼|YY|B站"
 
 # --------------------------log日志-------------------------------------
 # 创建一个logger
@@ -92,7 +92,7 @@ def display_info():
             print(f"是否开启代理录制: {'是' if use_proxy else '否'}", end=" | ")
             if Splitvideobysize:
                 print(f"TS录制分段开启，录制分段大小为 {Splitsize} M", end=" | ")
-            print(f"是否生成时间文件: {'是' if create_time_file else '否'}", end = " | ")
+            print(f"是否生成时间文件: {'是' if create_time_file else '否'}", end=" | ")
             print("录制视频质量为: " + str(video_quality), end=" | ")
             print("录制视频格式为: " + str(video_save_type), end=" | ")
             print("目前瞬时错误数为: " + str(warning_count), end=" | ")
@@ -422,6 +422,50 @@ def get_yy_stream_url(json_data):
     return data
 
 
+def get_bilibili_stream_url(json_data):
+    # TODO: 获取B站直播源地址
+    data = []
+
+    anchor_name = json_data['roomInfoRes']['data']['anchor_info']['base_info']['uname']
+    playurl_info = json_data['roomInitRes']['data']['playurl_info']
+    if not playurl_info:
+        data = [anchor_name, False, '', '']
+    else:
+        def get_url(m, n):
+            format_list = ['.flv', '.m3u8']
+            # 字典中的键就是qn，其中qn=30000为杜比 20000为4K 10000为原画 400蓝光 250超清 150高清，qn=0是默认画质
+            quality_list = {'10000': 'bluray', '400': '4000', '250': '2500', '150': '1500'}
+
+            stream_data = playurl_info['playurl']['stream'][m]['format'][0]['codec'][0]
+            accept_qn_list = stream_data['accept_qn']
+            while len(accept_qn_list) < 4:
+                accept_qn_list.append(accept_qn_list[0])
+            base_url = stream_data['base_url']
+            host = stream_data['url_info'][0]['host']
+            extra = stream_data['url_info'][0]['extra']
+            format = format_list[m]
+            qn = str(accept_qn_list[n])
+            quality = quality_list[qn]
+            base_url = re.sub(r'(\d+)' + f'(?={format}\?)', quality, base_url)
+            extra = re.sub('&qn=0', f'&qn={qn}', extra)
+            url = host + base_url + extra
+            return url
+
+        if video_quality == "原画" or video_quality == "蓝光":
+            flv_url = get_url(0, 0)
+            m3u8_url = get_url(1, 0)
+        elif video_quality == "超清":
+            flv_url = get_url(0, 1)
+            m3u8_url = get_url(1, 1)
+        elif video_quality == "高清":
+            flv_url = get_url(0, 2)
+            m3u8_url = get_url(1, 2)
+        elif video_quality == "标清":
+            flv_url = get_url(0, 3)
+            m3u8_url = get_url(1, 3)
+        data = [anchor_name, True, m3u8_url, flv_url]  # B站使用m3u8链接进行录制
+    return data
+
 
 def start_record(line, count_variable=-1):
     global warning_count
@@ -489,6 +533,10 @@ def start_record(line, count_variable=-1):
                             json_data = get_yy_stream_data(record_url)
                             port_info = get_yy_stream_url(json_data)
 
+                    elif record_url.find("https://live.bilibili.com/") > -1:
+                        with semaphore:
+                            json_data = get_bilibili_stream_data(record_url)
+                            port_info = get_bilibili_stream_url(json_data)
 
                     # print("端口信息:" + str(port_info))
                     # port_info=['主播名','状态码','m3u8地址','flv地址']
@@ -1098,7 +1146,8 @@ while True:
                     'live.kuaishou.com',
                     'www.huya.com',
                     'www.douyu.com',
-                    'www.yy.com'
+                    'www.yy.com',
+                    'live.bilibili.com'
                 ]
                 if url_host in host_list:
                     new_line = (url, split_line[1])
@@ -1148,6 +1197,3 @@ while True:
 
     # 总体循环3s
     time.sleep(3)
-
-
-

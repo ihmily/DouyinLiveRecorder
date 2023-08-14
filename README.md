@@ -14,6 +14,7 @@
 - [x] 虎牙
 - [x] 斗鱼
 - [x] YY
+- [x] B站
 - [ ] 更多平台正在更新中
 
 </div>
@@ -47,11 +48,9 @@
 - 注意事项③ 如果电脑开启了`全局或者规则代理`，可不用添加proxy_addr参数值但仍需在config.ini配置文件中设置开启代理
 - 注意事项④ 可以在URL_config.ini中的链接开头加上#，此时将不会录制该条链接对应的直播
 - 注意事项⑤ 测试时有可能会出现在IDE如Pycharm中运行代码进行直播录制，录制出来的视频却无法正常播放的现象，如果遇到这个问题 最好在命令控制台DOS界面运行代码，录制出来的视频即可正常播放。
-- 可使用 `pyinstaller -F或-D` 将代码打包成exe可执行文件 ，前提是已经安装`pyinstaller`库
+- 可使用 `pyinstaller -F或-D` 将代码打包成exe可执行文件 ，前提是已经安装了`pyinstaller`库
 
 &emsp;
-
-Tiktok目前只支持PC网页端地址（没下app），其他平台 app端直播间分享地址和网页端长地址都能正常进行录制（抖音尽量用长链接，避免因短链接转换失效导致不能正常录制）。
 
 直播间链接示例：
 
@@ -75,15 +74,34 @@ https://www.douyu.com/topic/wzDBLS6?rid=4921614&dyshid=
 
 YY:
 https://www.yy.com/22490906/22490906
+
+B站：
+https://live.bilibili.com/320
 ```
+
+Tiktok目前只支持PC网页端地址（没下载app），其他平台 app端直播间分享地址和网页端长地址都能正常进行录制（抖音尽量用长链接，避免因短链接转换失效导致不能正常录制）。
 
 </div>
 
-测试API（[源码](https://github.com/ihmily/DouyinLiveRecorder/tree/main/api)）：https://hmily.vip/api/jx/live/?url=
+解析接口：
 
-请求示例：https://hmily.vip/api/jx/live/?url=https://live.douyin.com/573716250978
+```HTTP
+GET https://hmily.vip/api/jx/live/?url=
+```
 
-抖音地址转换：https://hmily.vip/api/jx/live/convert.php?url=https://v.douyin.com/iQLgKSj/
+请求示例：
+
+```HTTP
+GET https://hmily.vip/api/jx/live/?url=https://live.douyin.com/573716250978
+```
+
+若需要将抖音直播间短链接转换为长链接，使用以下接口：
+
+```HTTP
+GET https://hmily.vip/api/jx/live/convert.php?url=https://v.douyin.com/iQLgKSj/
+```
+
+
 
 &emsp;
 
@@ -95,9 +113,12 @@ https://www.yy.com/22490906/22490906
 
 ## ⏳提交日志
 
+- 20230814
+  - 新增B站直播录制
+  
 - 20230812
   - 新增YY直播录制
-  
+
 - 20230808
   - 修复主播重新开播无法再次录制的问题
 
@@ -125,6 +146,6 @@ https://www.yy.com/22490906/22490906
 
 &emsp;
 
-## 有问题可以提issue ，后续我会在这里不断更新其他直播平台的录制  欢迎给个Star
+## 有问题可以提issue ，后续我会在这里不断更新其他直播平台的录制  欢迎Star
 
 #### 
