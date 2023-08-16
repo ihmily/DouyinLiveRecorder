@@ -4,7 +4,7 @@
 Author: Hmily
 Github: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2023-08-14 17:13:00
+Update: 2023-08-16 14:54:17
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -13,19 +13,17 @@ import random
 import os
 import sys
 import urllib.parse
-import time
 import configparser
 import subprocess
 import threading
 import logging
 import datetime
 import shutil
-import hashlib
 from spider import *
 from web_rid import *
 
 # 版本号
-version = "v1.0.4"
+version = "v1.0.5"
 platforms = "抖音|Tiktok|快手|虎牙|斗鱼|YY|B站"
 
 # --------------------------log日志-------------------------------------
@@ -382,7 +380,7 @@ def get_douyu_stream_url(json_data):
     # TODO: 获取斗鱼直播源地址
     data = []  # 定义一个返回数据列表
 
-    room_info = json_data['pageContext']['pageProps']['room']['roomInfo']['roomInfo']
+    room_info = json_data.get('pageContext',json_data)['pageProps']['room']['roomInfo']['roomInfo']
     anchor_name = room_info['nickname']
     status = room_info['isLive']
 
@@ -1197,3 +1195,5 @@ while True:
 
     # 总体循环3s
     time.sleep(3)
+
+
