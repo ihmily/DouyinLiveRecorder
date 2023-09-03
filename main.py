@@ -4,7 +4,7 @@
 Author: Hmily
 Github: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2023-08-16 14:54:17
+Update: 2023-09-03 19:18:36
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -21,9 +21,10 @@ import datetime
 import shutil
 from spider import *
 from web_rid import *
+from msg_push import *
 
 # 版本号
-version = "v1.0.5"
+version = "v1.0.6"
 platforms = "抖音|Tiktok|快手|虎牙|斗鱼|YY|B站"
 
 # --------------------------log日志-------------------------------------
@@ -507,9 +508,10 @@ def start_record(line, count_variable=-1):
 
                     elif record_url.find("https://www.tiktok.com/") > -1:
                         with semaphore:
-                            if use_proxy or (global_proxy and proxy_addr != ''):
-                                json_data = get_tiktok_stream_data(record_url, proxy_addr)
-                                port_info = get_tiktok_stream_url(json_data)
+                            if use_proxy:
+                                if global_proxy or proxy_addr != '':
+                                    json_data = get_tiktok_stream_data(record_url, proxy_addr)
+                                    port_info = get_tiktok_stream_url(json_data)
 
                     elif record_url.find("https://live.kuaishou.com/") > -1:
                         with semaphore:
@@ -561,7 +563,15 @@ def start_record(line, count_variable=-1):
                         if port_info[1] is False:
                             print(f"{record_name} 等待直播... ")
                         else:
-                            print(f"{record_name} 正在直播中...")
+                            content = f"{record_name} 正在直播中..."
+                            print(content)
+                            # 推送通知
+                            if live_status_push != '':
+                                if '微信' in live_status_push:
+                                    xizhi(xizhi_api_url,content)
+                                if '钉钉' in live_status_push:
+                                    dingtalk(dingtalk_api_url, content, dingtalk_phone_num)
+
 
                             # 是否显示直播地址
                             if video_m3u8:
@@ -1013,7 +1023,7 @@ Monitoring = 0
 try:
     # 检测电脑是否开启了全局/规则代理
     print('系统代理检测中...')
-    response_g = urllib.request.urlopen("https://www.tiktok.com/", timeout=5)
+    response_g = urllib.request.urlopen("https://www.tiktok.com/", timeout=10)
     global_proxy = True
     print('系统代理已开启√ 注意：配置文件中的代理设置也要开启才会生效哦！')
 
@@ -1059,7 +1069,7 @@ while True:
     video_save_path = read_config_value(config, '1', '直播保存路径（不填则默认）', "")
     video_save_type = read_config_value(config, '1', '视频保存格式TS|MKV|FLV|MP4|TS音频|MKV音频', "MP4")
     video_quality = read_config_value(config, '1', '原画|超清|高清|标清', "原画")
-    use_proxy = read_config_value(config, '1', '是否使用代理ip（是/否）', "否")
+    use_proxy = read_config_value(config, '1', '是否使用代理ip（是/否）', "是")
     proxy_addr = read_config_value(config, '1', '代理地址', "")
     max_request = int(read_config_value(config, '1', '同一时间访问网络的线程数', 3))
     semaphore = threading.Semaphore(max_request)
@@ -1073,7 +1083,11 @@ while True:
     tsconvert_to_m4a = read_config_value(config, '1', 'TS录制完成后自动增加生成m4a格式', "否")
     delFilebeforeconversion = read_config_value(config, '1', '追加格式后删除原文件', "否")
     create_time_file = read_config_value(config, '1', '生成时间文件', "否")
-    cookies_set = read_config_value(config, '1', 'cookies（不可为空）', '')
+    live_status_push = read_config_value(config, '1', '直播状态通知(可选微信|钉钉或者两个都填)', "")
+    dingtalk_api_url = read_config_value(config, '1', '钉钉推送接口链接', "")
+    xizhi_api_url = read_config_value(config, '1', '微信推送接口链接', "")
+    dingtalk_phone_num = read_config_value(config, '1', '钉钉通知@对象(填手机号)', "")
+    cookies_set = read_config_value(config, '1', 'cookie(录制抖音必须要有)', '')
 
     if len(video_save_type) > 0:
         if video_save_type.upper().lower() == "FLV".lower():
@@ -1195,5 +1209,4 @@ while True:
 
     # 总体循环3s
     time.sleep(3)
-
 

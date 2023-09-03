@@ -4,7 +4,7 @@
 Author: Hmily
 Github:https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2023-08-16 14:07:30
+Update: 2023-09-03 19:18:36
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -62,7 +62,7 @@ def get_tiktok_stream_data(url, proxy_addr):
 
     else:
         req = urllib.request.Request(url, headers=headers)
-        response = opener.open(req, timeout=15)
+        response = urllib.request.urlopen(req, timeout=15)
         html_str = response.read().decode('utf-8')
 
     json_str = re.findall(

@@ -2,7 +2,7 @@
 
 ## 💡简介
 
-一款可循环值守的直播录制工具，基于FFmpeg实现多平台直播源录制，支持自定义配置录制参数
+一款可循环值守的直播录制工具，基于FFmpeg实现多平台直播源录制，支持自定义配置录制以及直播状态推送
 
 </div>
 
@@ -31,6 +31,7 @@
     ├── main.py -> (main file)
     ├── spider.py-> (get live url)
     ├── web_rid.py -> (get web_rid)
+    ├── msg_push.py -> (send live status update message)
     ├── cookies.py -> (get douyin cookies)
     ├── x-bogus.js -> (get douyin xbogus token)
     ├── ffmpeg.exe -> (record video)
@@ -45,12 +46,13 @@
 - 在config文件夹内的配置文件中对录制进行配置以及添加录制直播间地址
 - 抖音录制需要使用到PC网页端直播间页面的Cookie，请先在config.ini配置文件中添加后再进行抖音录制
 - 注意事项① 录制使用到了ffmpeg，如果没有则无法进行录制，请将ffmpeg.exe放置运行文件同个文件夹
-- 注意事项② 录制Tiktok时需要使用vpn代理，请先在配置文件中设置开启代理并添加proxy_addr
-- 注意事项③ 如果电脑开启了`全局或者规则代理`，可不用添加proxy_addr参数值但仍需在config.ini配置文件中设置开启代理
+- 注意事项② 录制Tiktok时需要使用vpn代理，请先在配置文件中设置开启代理并添加proxy_addr链接
+- 注意事项③ 如果电脑开启了`全局或者规则代理`，可不用添加proxy_addr参数值但仍需在config.ini配置文件中设置开启代理 (最好还是设置一下代理地址，降低出错概率)
 - 注意事项④ 可以在URL_config.ini中的链接开头加上#，此时将不会录制该条链接对应的直播
 - 注意事项⑤ 测试时有可能会出现在IDE如Pycharm中运行代码进行直播录制，录制出来的视频却无法正常播放的现象，如果遇到这个问题 最好在命令控制台DOS界面运行代码，录制出来的视频即可正常播放。
-- 可使用 `pyinstaller -F或-D` 将代码打包成exe可执行文件 ，前提是已经安装了`pyinstaller`库
+- 可使用 `pyinstaller -D或-F` 将代码打包成exe可执行文件 ，前提是已经安装了`pyinstaller`库
 - 当同时在录制多个直播时，最好线程数设置大一些，否则可能出现其中一个直播录制出错。当然设置的过大也没用，要同时考虑自身电脑的配置，如CPU内核数、网络带宽等限制。
+- 如果想直接使用打包好的录制软件，进入[Releases](https://github.com/ihmily/DouyinLiveRecorder/releases) 下载最新发布的 zip压缩包即可，可能有些电脑会报毒，直接忽略即可，这是pyinstaller打包的锅。
 
 &emsp;
 
@@ -115,9 +117,13 @@ GET https://hmily.vip/api/jx/live/convert.php?url=https://v.douyin.com/iQLgKSj/
 
 ## ⏳提交日志
 
+- 20230903
+  - 修复了Tiktok录制时报644无法录制的问题
+  - 新增直播状态推送到钉钉和微信的功能，如有需要请看 [设置推送教程](https://d04vqdiqwr3.feishu.cn/docx/XFPwdDDvfobbzlxhmMYcvouynDh?from=from_copylink)
+  - 最近比较忙，其他问题有时间再更新
+  
 - 20230816
   - 修复斗鱼直播（官方更新了字段）和快手直播录制出错的问题
-  
 - 20230814
   - 新增B站直播录制
   - 写了一个在线播放M3U8和FLV视频的网页源码，打开即可食用
