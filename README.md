@@ -24,10 +24,11 @@
 ```
 .
 └── DouyinLiveRecorder/
-	├── /api -> (get live stream api )
+    ├── /api -> (get live stream api )
     ├── /config -> (config record)
     ├── /log -> (save runing log file)
     ├── /backup_config -> (backup file)
+    ├── /libs -> (dll file)
     ├── main.py -> (main file)
     ├── spider.py-> (get live url)
     ├── web_rid.py -> (get web_rid)
@@ -36,6 +37,7 @@
     ├── x-bogus.js -> (get douyin xbogus token)
     ├── ffmpeg.exe -> (record video)
     ├── index.html -> (play m3u8 and flv video)
+    ├── requirements.txt -> (library dependencies)
 ```
 
 </div>
@@ -47,12 +49,13 @@
 - 抖音录制需要使用到PC网页端直播间页面的Cookie，请先在config.ini配置文件中添加后再进行抖音录制
 - 注意事项① 录制使用到了ffmpeg，如果没有则无法进行录制，请将ffmpeg.exe放置运行文件同个文件夹
 - 注意事项② 录制Tiktok时需要使用vpn代理，请先在配置文件中设置开启代理并添加proxy_addr链接
-- 注意事项③ 如果电脑开启了`全局或者规则代理`，可不用添加proxy_addr参数值但仍需在config.ini配置文件中设置开启代理 (最好还是设置一下代理地址，降低出错概率)
+- 注意事项③ 如果电脑开启了`全局或者规则代理`，可不用添加proxy_addr参数值但仍需在config.ini配置文件中设置开启代理 (最好还是设置一下代理地址，否则很容易请求出错)
 - 注意事项④ 可以在URL_config.ini中的链接开头加上#，此时将不会录制该条链接对应的直播
 - 注意事项⑤ 测试时有可能会出现在IDE如Pycharm中运行代码进行直播录制，录制出来的视频却无法正常播放的现象，如果遇到这个问题 最好在命令控制台DOS界面运行代码，录制出来的视频即可正常播放。
 - 可使用 `pyinstaller -D或-F` 将代码打包成exe可执行文件 ，前提是已经安装了`pyinstaller`库
 - 当同时在录制多个直播时，最好线程数设置大一些，否则可能出现其中一个直播录制出错。当然设置的过大也没用，要同时考虑自身电脑的配置，如CPU内核数、网络带宽等限制。
 - 如果想直接使用打包好的录制软件，进入[Releases](https://github.com/ihmily/DouyinLiveRecorder/releases) 下载最新发布的 zip压缩包即可，可能有些电脑会报毒，直接忽略即可，这是pyinstaller打包的锅。
+- 如果要长时间挂着软件循环监测直播，最好循环时间设置长一点，避免因请求频繁导致被官方封禁IP 。
 
 &emsp;
 
@@ -83,7 +86,7 @@ B站：
 https://live.bilibili.com/320
 ```
 
-Tiktok目前只支持PC网页端地址（没下载app），其他平台 app端直播间分享地址和网页端长地址都能正常进行录制（抖音尽量用长链接，避免因短链接转换失效导致不能正常录制）。
+Tiktok目前只支持PC网页端地址（我没下载app），其他平台 app端直播间分享地址和网页端长地址都能正常进行录制（抖音尽量用长链接，避免因短链接转换失效导致不能正常录制）。
 
 </div>
 
@@ -105,7 +108,7 @@ GET https://hmily.vip/api/jx/live/?url=https://live.douyin.com/573716250978
 GET https://hmily.vip/api/jx/live/convert.php?url=https://v.douyin.com/iQLgKSj/
 ```
 
-在线播放m3u8视频地址：[https://jx.hmily.vip/play/ ](https://jx.hmily.vip/play/)
+在线播放m3u8和flv视频网站：[M3U8 在线视频播放器 ](https://jx.hmily.vip/play/)
 
 &emsp;
 
@@ -117,11 +120,18 @@ GET https://hmily.vip/api/jx/live/convert.php?url=https://v.douyin.com/iQLgKSj/
 
 ## ⏳提交日志
 
+- 20230907
+  - 修复了因抖音官方更新了版本导致的录制出错以及短链接转换出错
+  
+  - 修复B站无法录制原画视频的bug
+  
+  - 修改了配置文件字段，新增各平台自定义设置Cookie
+  
 - 20230903
   - 修复了Tiktok录制时报644无法录制的问题
   - 新增直播状态推送到钉钉和微信的功能，如有需要请看 [设置推送教程](https://d04vqdiqwr3.feishu.cn/docx/XFPwdDDvfobbzlxhmMYcvouynDh?from=from_copylink)
   - 最近比较忙，其他问题有时间再更新
-  
+
 - 20230816
   - 修复斗鱼直播（官方更新了字段）和快手直播录制出错的问题
 - 20230814

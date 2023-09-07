@@ -4,6 +4,7 @@
  * Author: Hmily
  * Github:https://github.com/ihmily
  * Date: 2023-07-20 21:06:20
+ * Update: 2023-09-07 22:34:57
  * Copyright (c) 2023 by Hmily, All Rights Reserved.
  * Function:convert short url to long url
  * Address:https://github.com/ihmily/DouyinLiveRecorder
@@ -20,8 +21,8 @@ if(empty($_GET['url'])){
 $share_url=$_GET['url'];
 
 $get_id=get_redirect_url($share_url);
-preg_match('/reflow\/(.*?)\?u_code/', $get_id, $room_id);
-preg_match('/&sec_user_id=(.*?)&ecom_share_track_params/', $get_id, $sec_user_id);
+preg_match('/reflow\/(.*?)\?/', $get_id, $room_id);
+preg_match('/sec_user_id=([\w\d_\-]+)&/', $get_id, $sec_user_id);
 $room_data=get_live_web_rid($room_id[1],$sec_user_id[1]);
 $title=$room_data[0];
 $web_rid=$room_data[1];
@@ -44,7 +45,7 @@ $return=
 exit(json_encode($return,448));
 
 
-// 抖音X-bogus算法，这里我直接封装成接口进行调用了
+// 抖音X-bogus算法，直接调用我封装的接口
 function get_xbogus($url) {
     $query = parse_url($url, PHP_URL_QUERY);
     $url = "http://43.138.133.177:8890/xbogus";
@@ -116,3 +117,5 @@ function get_redirect_url($url) {
     preg_match("/Location: (.*?)\r\n/iU",$ret,$location);
     return $location[1];
 }
+
+

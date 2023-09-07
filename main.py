@@ -4,14 +4,17 @@
 Author: Hmily
 Github: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2023-09-03 19:18:36
+Update: 2023-09-07 10:56:25
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
 
+
+import functools
 import random
 import os
 import sys
+import traceback
 import urllib.parse
 import configparser
 import subprocess
@@ -24,7 +27,7 @@ from web_rid import *
 from msg_push import *
 
 # 版本号
-version = "v1.0.6"
+version = "v1.0.7"
 platforms = "抖音|Tiktok|快手|虎牙|斗鱼|YY|B站"
 
 # --------------------------log日志-------------------------------------
@@ -70,6 +73,19 @@ default_path = os.getcwd()
 
 
 # --------------------------用到的函数-------------------------------------
+def trace_error_decorator(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            error_line = traceback.extract_tb(e.__traceback__)[-1].lineno
+            error_info=f"错误信息: type: {type(e).__name__}, {str(e)} in function {func.__name__} at line: {error_line}"
+            print(error_info)
+            logger.warning(error_info)
+            return []
+    return wrapper
+
 
 def display_info():
     # TODO: 显示当前录制配置信息
@@ -231,12 +247,10 @@ def change_max_connect():
             print("同一时间访问网络的线程数动态改为", max_request)
 
 
+@trace_error_decorator
 def get_douyin_stream_url(json_data):
     # TODO: 获取抖音直播源地址
-    data = []  # 定义一个返回数据列表
-
-    room_store = json_data['app']['initialState']['roomStore']
-    room_info = room_store['roomInfo']
+    room_info = json_data['roomInfo']
     anchor_name = room_info['anchor']['nickname']
     status = 4
     # 获取直播间状态
@@ -270,10 +284,9 @@ def get_douyin_stream_url(json_data):
     return data
 
 
+@trace_error_decorator
 def get_tiktok_stream_url(json_data):
     # TODO: 获取Tiktok直播源地址
-    data = []
-
     live_room = json_data['LiveRoom']['liveRoomUserInfo']
     anchor_name = live_room['user']['nickname']
     status = live_room['user']["status"]
@@ -305,10 +318,9 @@ def get_tiktok_stream_url(json_data):
     return data
 
 
+@trace_error_decorator
 def get_kuaishou_stream_url(json_data):
     # TODO: 获取快手直播源地址
-    data = []
-
     live_room = json_data['liveroom']
     anchor_name = live_room['author']['name']
     # 获取直播间状态
@@ -319,23 +331,26 @@ def get_kuaishou_stream_url(json_data):
     else:
         stream_data = live_room['liveStream']['playUrls'][0]['adaptationSet']['representation']
         # stream_data数组中索引从小到大分别是高清、超清、蓝光4M、蓝光8M （每个直播间不一样）
+        quality_list = [i for i in range(len(stream_data))][::-1]
+        while len(quality_list) < 4:
+            quality_list.append(quality_list[-1])
+
         if video_quality == "原画" or video_quality == "蓝光":
-            flv_url = stream_data[-1]['url']
+            flv_url = stream_data[quality_list[0]]['url']
         elif video_quality == "超清":
-            flv_url = stream_data[-2]['url']
+            flv_url = stream_data[quality_list[1]]['url']
         elif video_quality == "高清":
-            flv_url = stream_data[1]['url']
+            flv_url = stream_data[quality_list[2]]['url']
         elif video_quality == "标清":
-            flv_url = stream_data[0]['url']
+            flv_url = stream_data[quality_list[3]]['url']
 
         data = [anchor_name, True, flv_url, flv_url]  # 快手只有flv视频流
     return data
 
 
+@trace_error_decorator
 def get_huya_stream_url(json_data):
     # TODO: 获取虎牙直播源地址
-    data = []
-
     game_live_info = json_data['data'][0]['gameLiveInfo']
     stream_info_list = json_data['data'][0]['gameStreamInfoList']
     anchor_name = game_live_info['nick']
@@ -377,9 +392,9 @@ def get_huya_stream_url(json_data):
     return data
 
 
+@trace_error_decorator
 def get_douyu_stream_url(json_data):
     # TODO: 获取斗鱼直播源地址
-    data = []  # 定义一个返回数据列表
 
     room_info = json_data.get('pageContext',json_data)['pageProps']['room']['roomInfo']['roomInfo']
     anchor_name = room_info['nickname']
@@ -405,10 +420,9 @@ def get_douyu_stream_url(json_data):
     return data
 
 
+@trace_error_decorator
 def get_yy_stream_url(json_data):
     # TODO: 获取YY直播源地址
-    data = []
-
     anchor_name = json_data['anchor_name']
     if 'avp_info_res' not in json_data:
         data = [anchor_name, False, '', '']
@@ -421,9 +435,9 @@ def get_yy_stream_url(json_data):
     return data
 
 
+@trace_error_decorator
 def get_bilibili_stream_url(json_data):
     # TODO: 获取B站直播源地址
-    data = []
 
     anchor_name = json_data['roomInfoRes']['data']['anchor_info']['base_info']['uname']
     playurl_info = json_data['roomInitRes']['data']['playurl_info']
@@ -433,19 +447,19 @@ def get_bilibili_stream_url(json_data):
         def get_url(m, n):
             format_list = ['.flv', '.m3u8']
             # 字典中的键就是qn，其中qn=30000为杜比 20000为4K 10000为原画 400蓝光 250超清 150高清，qn=0是默认画质
-            quality_list = {'10000': 'bluray', '400': '4000', '250': '2500', '150': '1500'}
+            quality_list = {'10000': '', '400': '_4000', '250': '_2500', '150': '_1500'}
 
             stream_data = playurl_info['playurl']['stream'][m]['format'][0]['codec'][0]
             accept_qn_list = stream_data['accept_qn']
             while len(accept_qn_list) < 4:
-                accept_qn_list.append(accept_qn_list[0])
+                accept_qn_list.append(accept_qn_list[-1])
             base_url = stream_data['base_url']
             host = stream_data['url_info'][0]['host']
             extra = stream_data['url_info'][0]['extra']
-            format = format_list[m]
+            url_type = format_list[m]
             qn = str(accept_qn_list[n])
             quality = quality_list[qn]
-            base_url = re.sub(r'(\d+)' + f'(?={format}\?)', quality, base_url)
+            base_url = re.sub(r'_(\d+)' + f'(?={url_type}\?)', quality, base_url)
             extra = re.sub('&qn=0', f'&qn={qn}', extra)
             url = host + base_url + extra
             return url
@@ -491,7 +505,7 @@ def start_record(line, count_variable=-1):
                         # 判断如果是浏览器长链接
                         with semaphore:
                             # 使用semaphore来控制同时访问资源的线程数量
-                            json_data = get_douyin_stream_data(record_url, cookies_set)  # 注意这里需要配置文件中的cookie
+                            json_data = get_douyin_stream_data(record_url, dy_cookie)  # 注意这里需要配置文件中的cookie
                             port_info = get_douyin_stream_url(json_data)
                     elif record_url.find("https://v.douyin.com/") > -1:
                         # 判断如果是app分享链接
@@ -503,39 +517,39 @@ def start_record(line, count_variable=-1):
                         new_record_url = "https://live.douyin.com/" + str(web_rid)
                         not_record_list.append(new_record_url)
                         with semaphore:
-                            json_data = get_douyin_stream_data(new_record_url, cookies_set)
+                            json_data = get_douyin_stream_data(new_record_url, dy_cookie)
                             port_info = get_douyin_stream_url(json_data)
 
                     elif record_url.find("https://www.tiktok.com/") > -1:
                         with semaphore:
                             if use_proxy:
                                 if global_proxy or proxy_addr != '':
-                                    json_data = get_tiktok_stream_data(record_url, proxy_addr)
+                                    json_data = get_tiktok_stream_data(record_url, proxy_addr,tiktok_cookie)
                                     port_info = get_tiktok_stream_url(json_data)
 
                     elif record_url.find("https://live.kuaishou.com/") > -1:
                         with semaphore:
-                            json_data = get_kuaishou_stream_data(record_url)
+                            json_data = get_kuaishou_stream_data(record_url, ks_cookie)
                             port_info = get_kuaishou_stream_url(json_data)
 
                     elif record_url.find("https://www.huya.com/") > -1:
                         with semaphore:
-                            json_data = get_huya_stream_data(record_url)
+                            json_data = get_huya_stream_data(record_url,hy_cookie)
                             port_info = get_huya_stream_url(json_data)
 
                     elif record_url.find("https://www.douyu.com/") > -1:
                         with semaphore:
                             json_data = get_douyu_info_data(record_url)
-                            port_info = get_douyu_stream_url(json_data)
+                            port_info = get_douyu_stream_url(json_data,douyu_cookie)
 
                     elif record_url.find("https://www.yy.com/") > -1:
                         with semaphore:
-                            json_data = get_yy_stream_data(record_url)
+                            json_data = get_yy_stream_data(record_url,yy_cookie)
                             port_info = get_yy_stream_url(json_data)
 
                     elif record_url.find("https://live.bilibili.com/") > -1:
                         with semaphore:
-                            json_data = get_bilibili_stream_data(record_url)
+                            json_data = get_bilibili_stream_data(record_url,bili_cookie)
                             port_info = get_bilibili_stream_url(json_data)
 
                     # print("端口信息:" + str(port_info))
@@ -1019,23 +1033,28 @@ t3 = threading.Thread(target=backup_file_start, args=(), daemon=True)
 t3.start()
 Monitoring = 0
 
-# 如果开启了电脑全局/规则代理，可以不用再在配置文件中填写代理地址
+# 录制tiktok时，如果开启了电脑全局/规则代理，可以不用再在配置文件中填写代理地址
+# 但强烈建议还是配置一下代理地址，否则非常不稳定
 try:
     # 检测电脑是否开启了全局/规则代理
     print('系统代理检测中...')
-    response_g = urllib.request.urlopen("https://www.tiktok.com/", timeout=10)
+    response_g = urllib.request.urlopen("https://www.tiktok.com", timeout=15)
     global_proxy = True
     print('系统代理已开启√ 注意：配置文件中的代理设置也要开启才会生效哦！')
 
 except Exception as e:
-    print('INFO：未检测到网络代理，请检查代理是否生效（若无需录制Tiktok直播请忽略此条提示）')
+    print('INFO：未检测到全局/规则网络代理，请检查代理配置（若无需录制Tiktok直播请忽略此条提示）')
 
 
 def read_config_value(config, section, option, default_value):
     try:
         config.read(config_file, encoding=encoding)
-        if '1' not in config.sections():
-            config.add_section('1')
+        if '录制设置' not in config.sections():
+            config.add_section('录制设置')
+        if '推送配置' not in config.sections():
+            config.add_section('推送配置')
+        if 'Cookie' not in config.sections():
+            config.add_section('Cookie')
         return config.get(section, option)
     except (configparser.NoSectionError, configparser.NoOptionError):
         config.set(section, option, str(default_value))
@@ -1066,28 +1085,34 @@ while True:
         with open(url_config_file, 'a+', encoding=encoding) as f:
             f.write(inurl)
 
-    video_save_path = read_config_value(config, '1', '直播保存路径（不填则默认）', "")
-    video_save_type = read_config_value(config, '1', '视频保存格式TS|MKV|FLV|MP4|TS音频|MKV音频', "MP4")
-    video_quality = read_config_value(config, '1', '原画|超清|高清|标清', "原画")
-    use_proxy = read_config_value(config, '1', '是否使用代理ip（是/否）', "是")
-    proxy_addr = read_config_value(config, '1', '代理地址', "")
-    max_request = int(read_config_value(config, '1', '同一时间访问网络的线程数', 3))
+    video_save_path = read_config_value(config, '录制设置', '直播保存路径（不填则默认）', "")
+    video_save_type = read_config_value(config, '录制设置', '视频保存格式TS|MKV|FLV|MP4|TS音频|MKV音频', "mp4")
+    video_quality = read_config_value(config, '录制设置', '原画|超清|高清|标清', "原画")
+    use_proxy = read_config_value(config, '录制设置', '是否使用代理ip（是/否）', "是")
+    proxy_addr = read_config_value(config, '录制设置', '代理地址', "")
+    max_request = int(read_config_value(config, '录制设置', '同一时间访问网络的线程数', 3))
     semaphore = threading.Semaphore(max_request)
-    delay_default = int(read_config_value(config, '1', '循环时间(秒)', 60))
-    local_delay_default = int(read_config_value(config, '1', '排队读取网址时间(秒)', 0))
-    video_m3u8 = read_config_value(config, '1', '是否显示直播地址', "否")
-    loop_time = read_config_value(config, '1', '是否显示循环秒数', "否")
-    Splitvideobysize = read_config_value(config, '1', 'TS格式分段录制是否开启', "否")
-    Splitsize = int(read_config_value(config, '1', '视频分段大小(兆)', '1000'))
-    tsconvert_to_mp4 = read_config_value(config, '1', 'TS录制完成后自动增加生成MP4格式', "否")
-    tsconvert_to_m4a = read_config_value(config, '1', 'TS录制完成后自动增加生成m4a格式', "否")
-    delFilebeforeconversion = read_config_value(config, '1', '追加格式后删除原文件', "否")
-    create_time_file = read_config_value(config, '1', '生成时间文件', "否")
-    live_status_push = read_config_value(config, '1', '直播状态通知(可选微信|钉钉或者两个都填)', "")
-    dingtalk_api_url = read_config_value(config, '1', '钉钉推送接口链接', "")
-    xizhi_api_url = read_config_value(config, '1', '微信推送接口链接', "")
-    dingtalk_phone_num = read_config_value(config, '1', '钉钉通知@对象(填手机号)', "")
-    cookies_set = read_config_value(config, '1', 'cookie(录制抖音必须要有)', '')
+    delay_default = int(read_config_value(config, '录制设置', '循环时间(秒)', 60))
+    local_delay_default = int(read_config_value(config, '录制设置', '排队读取网址时间(秒)', 0))
+    video_m3u8 = read_config_value(config, '录制设置', '是否显示直播地址', "否")
+    loop_time = read_config_value(config, '录制设置', '是否显示循环秒数', "否")
+    Splitvideobysize = read_config_value(config, '录制设置', 'TS格式分段录制是否开启', "否")
+    Splitsize = int(read_config_value(config, '录制设置', '视频分段大小(兆)', '1000'))
+    tsconvert_to_mp4 = read_config_value(config, '录制设置', 'TS录制完成后自动增加生成MP4格式', "否")
+    tsconvert_to_m4a = read_config_value(config, '录制设置', 'TS录制完成后自动增加生成m4a格式', "否")
+    delFilebeforeconversion = read_config_value(config, '录制设置', '追加格式后删除原文件', "否")
+    create_time_file = read_config_value(config, '录制设置', '生成时间文件', "否")
+    live_status_push = read_config_value(config, '推送配置', '直播状态通知(可选微信|钉钉或者两个都填)', "")
+    dingtalk_api_url = read_config_value(config, '推送配置', '钉钉推送接口链接', "")
+    xizhi_api_url = read_config_value(config, '推送配置', '微信推送接口链接', "")
+    dingtalk_phone_num = read_config_value(config, '推送配置', '钉钉通知@对象(填手机号)', "")
+    dy_cookie = read_config_value(config, 'Cookie', '抖音cookie(录制抖音必须要有)', '')
+    ks_cookie = read_config_value(config, 'Cookie', '快手cookie', '')
+    tiktok_cookie = read_config_value(config, 'Cookie', 'Tiktok_cookie', '')
+    hy_cookie = read_config_value(config, 'Cookie', '虎牙cookie', '')
+    douyu_cookie = read_config_value(config, 'Cookie', '斗鱼cookie', '')
+    yy_cookie = read_config_value(config, 'Cookie', 'YY_cookie', '')
+    bili_cookie = read_config_value(config, 'Cookie', 'B站cookie', '')
 
     if len(video_save_type) > 0:
         if video_save_type.upper().lower() == "FLV".lower():
@@ -1209,4 +1234,3 @@ while True:
 
     # 总体循环3s
     time.sleep(3)
-
