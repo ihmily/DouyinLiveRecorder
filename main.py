@@ -27,7 +27,7 @@ from web_rid import *
 from msg_push import *
 
 # 版本号
-version = "v1.0.7"
+version = "v1.0.8"
 platforms = "抖音|Tiktok|快手|虎牙|斗鱼|YY|B站"
 
 # --------------------------log日志-------------------------------------

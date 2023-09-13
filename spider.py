@@ -4,7 +4,7 @@
 Author: Hmily
 Github:https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2023-09-07 20:25:16
+Update: 2023-09-14 00:27:55
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -41,7 +41,10 @@ def get_douyin_stream_data(url, cookies=''):
     req = urllib.request.Request(url, headers=headers)
     response = opener.open(req, timeout=15)
     html_str = response.read().decode('utf-8')
-    json_str = re.findall(r'(\{\\\"state\\\"\:\{\\\"appStore\\\"\:.*?)\]\\n\"\]\)', html_str)[-1]
+    match_json_str = re.search(r'(\{\\\"state\\\"\:.*?)\]\\n\"\]\)', html_str)
+    if not match_json_str:
+        match_json_str = re.search(r'(\{\\\"common\\\"\:.*?)\]\\n\"\]\)\<\/script\>\<div hidden',html_str)
+    json_str = match_json_str.group(1)
     cleaned_string = re.sub('bdp_log=(.*?)&bdpsum=', '', json_str.replace('\\', '')).replace(r'u0026', r'&')
     cleaned_string = cleaned_string.replace('"[', '[').replace(']"', ']').replace('"{', '{').replace('}"', '}')
     room_store = re.search('"roomStore":(.*?),"linkmicStore"', cleaned_string, re.S).group(1)
@@ -261,6 +264,7 @@ if __name__ == '__main__':
     # url = 'https://www.yy.com/22490906/22490906'  # YY直播
     # url = 'https://live.bilibili.com/21593109'  # b站直播
 
+
     print(get_douyin_stream_data(url, dy_cookie))
     # print(get_tiktok_stream_data(url,'http://127.0.0.1:7890'))
     # print(get_kuaishou_stream_data(url,ks_cookie))
@@ -269,7 +273,6 @@ if __name__ == '__main__':
     # print(get_douyu_stream_data("4921614",rate='-1'))
     # print(get_yy_stream_data(url))
     # print(get_bilibili_stream_data(url))
-
 
 
 
