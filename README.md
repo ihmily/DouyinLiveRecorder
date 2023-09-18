@@ -56,6 +56,7 @@
 - 当同时在录制多个直播时，最好线程数设置大一些，否则可能出现其中一个直播录制出错。当然设置的过大也没用，要同时考虑自身电脑的配置，如CPU内核数、网络带宽等限制。
 - 如果想直接使用打包好的录制软件，进入[Releases](https://github.com/ihmily/DouyinLiveRecorder/releases) 下载最新发布的 zip压缩包即可，可能有些电脑会报毒，直接忽略即可，这是pyinstaller打包的锅。
 - 如果要长时间挂着软件循环监测直播，最好循环时间设置长一点，避免因请求频繁导致被官方封禁IP 。
+- 最好使用自己的cookie，切记！
 
 &emsp;
 
@@ -120,18 +121,20 @@ GET https://hmily.vip/api/jx/live/convert.php?url=https://v.douyin.com/iQLgKSj/
 
 ## ⏳提交日志
 
+- 20230919
+  - 修复了快手版本更新后录制出错的问题，增加了其自动获取cookie(稳定性未知)
+  - 修复了Tiktok显示正在直播但不进行录制的问题
+  
 - 20230907
   - 修复了因抖音官方更新了版本导致的录制出错以及短链接转换出错
-  
+
   - 修复B站无法录制原画视频的bug
-  
+
   - 修改了配置文件字段，新增各平台自定义设置Cookie
-  
 - 20230903
   - 修复了Tiktok录制时报644无法录制的问题
   - 新增直播状态推送到钉钉和微信的功能，如有需要请看 [设置推送教程](https://d04vqdiqwr3.feishu.cn/docx/XFPwdDDvfobbzlxhmMYcvouynDh?from=from_copylink)
   - 最近比较忙，其他问题有时间再更新
-
 - 20230816
   - 修复斗鱼直播（官方更新了字段）和快手直播录制出错的问题
 - 20230814
