@@ -4,7 +4,7 @@
 Author: Hmily
 Github: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2023-09-19 00:16:38
+Update: 2023-09-30 00:39:17
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -26,7 +26,7 @@ from web_rid import *
 from msg_push import *
 
 # 版本号
-version = "v1.0.9"
+version = "v2.0.1"
 platforms = "抖音|Tiktok|快手|虎牙|斗鱼|YY|B站"
 
 # --------------------------log日志-------------------------------------
@@ -135,8 +135,8 @@ def display_info():
                 else:
                     start5_time = now_time
         except Exception as e:
-            print("错误信息:" + str(e) + "\r\n发生错误的行数: " + str(e.__traceback__.tb_lineno))
-            logger.warning("错误信息: " + str(e) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
+            print(f"错误信息:{e}\r\n发生错误的行数: {e.__traceback__.tb_lineno}")
+            logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
 
 
 def update_file(file, old_str, new_str):
@@ -250,18 +250,17 @@ def change_max_connect():
 
 @trace_error_decorator
 def get_douyin_stream_url(json_data):
-    room_info = json_data.get('roomInfo', {})
-    anchor_name = room_info.get('anchor', {}).get('nickname', '')
+    anchor_name = json_data.get('anchor_name', None)
 
     result = {
         "anchor_name": anchor_name,
         "is_live": False,
     }
 
-    status = room_info.get('room', {}).get("status", 4)  # 直播状态 2 是正在直播、4 是未开播
+    status = json_data.get("status", 4)  # 直播状态 2 是正在直播、4 是未开播
 
     if status == 2:
-        stream_url = room_info['room']['stream_url']
+        stream_url = json_data['stream_url']
         flv_url_list = stream_url['flv_pull_url']
         m3u8_url_list = stream_url['hls_pull_url_map']
 
@@ -331,42 +330,39 @@ def get_tiktok_stream_url(json_data):
 
 @trace_error_decorator
 def get_kuaishou_stream_url(json_data):
-    live_room = json_data.get('liveroom', {}).get('playList')[0]
-    anchor_name = live_room.get('author', {}).get('name', '')
+    anchor_name = json_data.get('user', {}).get('user_name', '')
 
     result = {
         "anchor_name": anchor_name,
         "is_live": False,
     }
 
-    status = live_room.get('isLiving', False)
+    status = json_data.get('living', False)
     if status:
-        stream_data = live_room.get('liveStream', {}).get('playUrls', [{}])[0].get('adaptationSet', {}).get(
-            'representation', [])
+        m3u8_url_list = json_data.get('multiResolutionHlsPlayUrls', {})[::-1]
+        while len(m3u8_url_list) < 4:
+            m3u8_url_list.append(m3u8_url_list[-1])
+        flv_url_list = json_data.get('multiResolutionPlayUrls', {})[::-1]
+        while len(flv_url_list) < 4:
+            flv_url_list.append(flv_url_list[-1])
 
-        if stream_data:
-            quality_list = [i for i in range(len(stream_data))][::-1]
+        quality_mapping = {
+            '原画': 0,
+            '蓝光': 0,
+            '超清': 1,
+            '高清': 2,
+            '标清': 3,
+        }
 
-            while len(quality_list) < 4:
-                quality_list.append(quality_list[-1])
-
-            video_quality_options = {
-                "原画": quality_list[0],
-                "蓝光": quality_list[0],
-                "超清": quality_list[1],
-                "高清": quality_list[2],
-                "标清": quality_list[3]
-            }
-
-            if video_quality not in video_quality_options:
-                raise ValueError(
-                    f"Invalid video quality. Available options are: {', '.join(video_quality_options.keys())}")
-
-            flv_url = stream_data[video_quality_options[video_quality]]['url']
-
+        if video_quality in quality_mapping:
+            quality_index = quality_mapping[video_quality]
+            m3u8_url = m3u8_url_list[quality_index]['urls'][0]['url']
+            flv_url = flv_url_list[quality_index]['urls'][0]['url']
+            result['m3u8_url'] = m3u8_url
             result['flv_url'] = flv_url
             result['is_live'] = True
-            result['record_url'] = flv_url  # 快手只有flv视频流
+            result['record_url'] = flv_url
+
     return result
 
 
@@ -383,17 +379,17 @@ def get_huya_stream_url(json_data):
 
     if stream_info_list:
         select_cdn = stream_info_list[0]
-        s_flv_url = select_cdn.get('sFlvUrl')
-        s_stream_name = select_cdn.get('sStreamName')
-        s_flv_url_suffix = select_cdn.get('sFlvUrlSuffix')
-        s_hls_url = select_cdn.get('sHlsUrl')
-        s_hls_url_suffix = select_cdn.get('sHlsUrlSuffix')
-        s_flv_anti_code = select_cdn.get('sFlvAntiCode')
+        flv_url = select_cdn.get('sFlvUrl')
+        stream_name = select_cdn.get('sStreamName')
+        flv_url_suffix = select_cdn.get('sFlvUrlSuffix')
+        hls_url = select_cdn.get('sHlsUrl')
+        hls_url_suffix = select_cdn.get('sHlsUrlSuffix')
+        flv_anti_code = select_cdn.get('sFlvAntiCode')
 
-        flv_url = f'{s_flv_url}/{s_stream_name}.{s_flv_url_suffix}?{s_flv_anti_code}&ratio='
-        m3u8_url = f'{s_hls_url}/{s_stream_name}.{s_hls_url_suffix}?{s_flv_anti_code}&ratio='
+        flv_url = f'{flv_url}/{stream_name}.{flv_url_suffix}?{flv_anti_code}&ratio='
+        m3u8_url = f'{hls_url}/{stream_name}.{hls_url_suffix}?{flv_anti_code}&ratio='
 
-        quality_list = s_flv_anti_code.split('&exsphd=')
+        quality_list = flv_anti_code.split('&exsphd=')
         if len(quality_list) > 1:
             pattern = r"(?<=264_)\d+"
             quality_list = [x for x in re.findall(pattern, quality_list[1])][::-1]
@@ -578,7 +574,7 @@ def start_record(url_tuple, count_variable=-1):
 
                     elif record_url.find("https://live.kuaishou.com/") > -1:
                         with semaphore:
-                            json_data = get_kuaishou_stream_data(record_url, ks_cookie)
+                            json_data = get_kuaishou_stream_data2(record_url, ks_cookie)
                             port_info = get_kuaishou_stream_url(json_data)
 
                     elif record_url.find("https://www.huya.com/") > -1:
@@ -651,8 +647,8 @@ def start_record(url_tuple, count_variable=-1):
                                             os.makedirs('./' + anchor_name)
 
                                 except Exception as e:
-                                    print("路径错误信息708: " + str(e) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
-                                    logger.warning("错误信息: " + str(e) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
+                                    print(f"路径错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
+                                    logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
 
                                 if not os.path.exists(full_path):
                                     print("保存路径不存在,不能生成录制.请避免把本程序放在c盘,桌面,下载文件夹,qq默认传输目录.请重新检查设置")
@@ -712,18 +708,19 @@ def start_record(url_tuple, count_variable=-1):
                                         create_var[str(filename_short)].start()
 
                                     try:
-                                        # “port_info[3]”对应的是flv地址，使用老方法下载（直接请求下载flv）只能是下载flv流的。
-                                        real_url = port_info['flv_url']
-                                        _filepath, _ = urllib.request.urlretrieve(real_url, full_path + '/' + filename)
-                                        record_finished = True
-                                        record_finished_2 = True
-                                        count_time = time.time()
-
+                                        flv_url = port_info.get('flv_url', None)
+                                        if flv_url:
+                                            _filepath, _ = urllib.request.urlretrieve(real_url,
+                                                                                      full_path + '/' + filename)
+                                            record_finished = True
+                                            record_finished_2 = True
+                                            count_time = time.time()
+                                        else:
+                                            raise Exception('该直播无flv直播流，请切换视频保存类型')
 
                                     except Exception as e:
-                                        print('\r' + time.strftime('%Y-%m-%d %H:%M:%S  ') + anchor_name + ' 未开播')
-                                        logger.warning(
-                                            "错误信息: " + str(e) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
+                                        print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')}  {anchor_name} 未开播")
+                                        logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
 
 
                                 elif video_save_type == "MKV":
@@ -753,9 +750,8 @@ def start_record(url_tuple, count_variable=-1):
                                         count_time = time.time()
                                     except subprocess.CalledProcessError as e:
                                         # logging.warning(str(e.output))
-                                        print(str(e.output) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
-                                        logger.warning(
-                                            "错误信息: " + str(e) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
+                                        print(f"{e.output} 发生错误的行数: {e.__traceback__.tb_lineno}")
+                                        logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
 
 
                                 elif video_save_type == "MP4":
@@ -791,9 +787,8 @@ def start_record(url_tuple, count_variable=-1):
 
                                     except subprocess.CalledProcessError as e:
                                         # logging.warning(str(e.output))
-                                        print(str(e.output) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
-                                        logger.warning(
-                                            "错误信息: " + str(e) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
+                                        print(f"{e.output} 发生错误的行数: {e.__traceback__.tb_lineno}")
+                                        logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
 
 
                                 elif video_save_type == "MKV音频":
@@ -818,10 +813,8 @@ def start_record(url_tuple, count_variable=-1):
                                             threading.Thread(target=converts_m4a, args=(file,)).start()
                                     except subprocess.CalledProcessError as e:
                                         # logging.warning(str(e.output))
-                                        print(str(e.output) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
-                                        logger.warning(
-                                            "错误信息: " + str(e) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
-
+                                        print(f"{e.output} 发生错误的行数: {e.__traceback__.tb_lineno}")
+                                        logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
 
                                 elif video_save_type == "TS音频":
                                     filename = anchor_name + '_' + now + ".ts"
@@ -845,10 +838,8 @@ def start_record(url_tuple, count_variable=-1):
                                             threading.Thread(target=converts_m4a, args=(file,)).start()
                                     except subprocess.CalledProcessError as e:
                                         # logging.warning(str(e.output))
-                                        print(str(e.output) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
-                                        logger.warning(
-                                            "错误信息: " + str(e) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
-
+                                        print(f"{e.output} 发生错误的行数: {e.__traceback__.tb_lineno}")
+                                        logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
 
                                 else:
 
@@ -891,7 +882,7 @@ def start_record(url_tuple, count_variable=-1):
 
                                             except subprocess.CalledProcessError as e:
                                                 logging.warning(str(e.output))
-                                                logger.warning("错误信息: "+str(e) +" 发生错误的行数: "+str(e.__traceback__.tb_lineno))
+                                                logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                                 break
 
 
@@ -931,28 +922,19 @@ def start_record(url_tuple, count_variable=-1):
 
                                         except subprocess.CalledProcessError as e:
                                             # logging.warning(str(e.output))
-                                            print(str(e.output) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
-                                            logger.warning(
-                                                "错误信息: " + str(e) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
-
-                                # 注意，只有录制完后才会执行到这里
-                                if record_name in recording:
-                                    recording.remove(record_name)
-                                if anchor_name in unrecording:
-                                    unrecording.add(anchor_name)
+                                            print(f"{e.output} 发生错误的行数: {e.__traceback__.tb_lineno}")
+                                            logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
 
                             if record_finished_2 == True:
                                 if record_name in recording:
                                     recording.remove(record_name)
                                 if anchor_name in unrecording:
                                     unrecording.add(anchor_name)
-                                print('\n' + anchor_name + " " + time.strftime('%Y-%m-%d %H:%M:%S  ') + '直播录制完成\n')
+                                print(f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制完成\n")
                                 record_finished_2 = False
 
                 except Exception as e:
-                    print(
-                        "错误信息:" + str(e) + "\r\n读取的地址为: " + str(record_url) + " 发生错误的行数: " + str(
-                            e.__traceback__.tb_lineno))
+                    print(f"错误信息:{e}\r\n读取的地址为: {record_url} 发生错误的行数: {e.__traceback__.tb_lineno}")
                     logger.warning("错误信息: " + str(e) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
                     warning_count += 1
 
@@ -986,9 +968,9 @@ def start_record(url_tuple, count_variable=-1):
                 if loop_time:
                     print('\r检测直播间中...', end="")
         except Exception as e:
-            print("错误信息:" + str(e) + "\r\n发生错误的行数: " + str(e.__traceback__.tb_lineno))
-            logger.warning("错误信息: " + str(e) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
-            print("线程崩溃2秒后重试.错误信息: " + str(e) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
+            print(f"错误信息:{e}\r\n发生错误的行数: {e.__traceback__.tb_lineno}")
+            logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
+            print(f"线程崩溃2秒后重试.错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
             warning_count += 1
             time.sleep(2)
 
@@ -1206,6 +1188,7 @@ while True:
                 else:
                     split_line = [line, '']
                 url = split_line[0]
+
                 if ('http://' not in url) and ('https://' not in url):
                     url = 'https://' + url
 
@@ -1254,8 +1237,8 @@ while True:
         first_start = False
 
     except Exception as e:
-        print("错误信息:" + str(e) + "\r\n发生错误的行数: " + str(e.__traceback__.tb_lineno))
-        logger.warning("错误信息: " + str(e) + " 发生错误的行数: " + str(e.__traceback__.tb_lineno))
+        print(f"错误信息:{e}\r\n发生错误的行数: {e.__traceback__.tb_lineno}")
+        logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
 
     if firstRunOtherLine:
         t = threading.Thread(target=display_info, args=(), daemon=True)
@@ -1265,8 +1248,6 @@ while True:
 
         firstRunOtherLine = False
 
-    # 总体循环3s
     time.sleep(3)
-
 
 
