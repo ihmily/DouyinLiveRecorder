@@ -1091,7 +1091,6 @@ while True:
     except IOError:
         with open(config_file, 'w', encoding=encoding) as f:
             pass
-
     if os.path.isfile(url_config_file):
         with open(url_config_file, 'r', encoding=encoding) as f:
             inicontent = f.read()
