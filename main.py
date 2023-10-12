@@ -24,8 +24,6 @@ import shutil
 from push_api import PushAPI
 from spider import *
 from web_rid import *
-from msg_push import *
-from webhook_msg_api import FeiShuWebhookMsgeAPI
 
 # 版本号
 version = "v2.0.1"
