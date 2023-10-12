@@ -21,6 +21,7 @@ import threading
 import logging
 import datetime
 import shutil
+from push_api import PushAPI
 from spider import *
 from web_rid import *
 from msg_push import *
@@ -601,11 +602,11 @@ def start_record(url_tuple, count_variable=-1):
                     anchor_name = port_info.get("anchor_name", '')
 
                     if not anchor_name:
-                        print(f'序号{count_variable} 网址内容获取失败,进行重试中...获取失败的地址是:{url_tuple}')
+                        print(f'id:{count_variable} 网址内容获取失败,进行重试中...获取失败的地址是:{url_tuple}')
                         warning_count += 1
                     else:
                         anchor_name = re.sub(rstr, "_", anchor_name)  # 过滤不能作为文件名的字符，替换为下划线
-                        record_name = f'序号{count_variable} {anchor_name}'
+                        record_name = f'id:{count_variable} {anchor_name}'
 
                         if anchor_name in recording:
                             print(f"新增的地址: {anchor_name} 已经存在,本条线程将会退出")
@@ -623,17 +624,8 @@ def start_record(url_tuple, count_variable=-1):
                             print(f"{record_name} 等待直播... ")
                         else:
                             content = f"{time.strftime('%Y-%m-%d %H:%M:%S')}\n{record_name}({record_url}) 正在直播中，开始录制"
+                            push_api.notify_live_start(record_name, record_url)
                             print(content)
-                            # 推送通知
-                            if live_status_push != '':
-                                if '飞书' in live_status_push:
-                                    api = FeiShuWebhookMsgeAPI(webhook=feishu_webhook_url, secrect=feishu_webhook_secret)
-                                    api.send_text_msg(content)
-
-                                if '微信' in live_status_push:
-                                    xizhi(xizhi_api_url, content)
-                                if '钉钉' in live_status_push:
-                                    dingtalk(dingtalk_api_url, content, dingtalk_phone_num)
 
                             real_url = port_info['record_url']
                             full_path = f'{default_path}/{anchor_name}'
@@ -934,16 +926,7 @@ def start_record(url_tuple, count_variable=-1):
                                     unrecording.add(anchor_name)
 
                                 # 推送通知
-                                content = f"{time.strftime('%Y-%m-%d %H:%M:%S')}\n{anchor_name} {record_name}({record_url}) 直播录制完成"
-                                if live_status_push != '':
-                                    if '飞书' in live_status_push:
-                                        api = FeiShuWebhookMsgeAPI(webhook=feishu_webhook_url, secrect=feishu_webhook_secret)
-                                        api.send_text_msg(content)
-
-                                    if '微信' in live_status_push:
-                                        xizhi(xizhi_api_url, content)
-                                    if '钉钉' in live_status_push:
-                                        dingtalk(dingtalk_api_url, content, dingtalk_phone_num)
+                                push_api.notify_live_end(record_name, record_url)
                                 print(f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制完成\n")
                                 record_finished_2 = False
 
@@ -1134,12 +1117,15 @@ while True:
     create_time_file = read_config_value(config, '录制设置', '生成时间文件', "否")
 
     live_status_push = read_config_value(config, '推送配置', '直播状态通知(可选微信|钉钉|飞书或者都填)', "")
+
     dingtalk_api_url = read_config_value(config, '推送配置', '钉钉推送接口链接', "")
+    dingtalk_phone_num = read_config_value(config, '推送配置', '钉钉通知@对象(填手机号)', "")
+
     xizhi_api_url = read_config_value(config, '推送配置', '微信推送接口链接', "")
+
     feishu_webhook_url = read_config_value(config, '推送配置', '飞书Webhook机器人Url', "")
     feishu_webhook_secret = read_config_value(config, '推送配置', '飞书Webhook机器人Secret', "")
 
-    dingtalk_phone_num = read_config_value(config, '推送配置', '钉钉通知@对象(填手机号)', "")
     dy_cookie = read_config_value(config, 'Cookie', '抖音cookie(录制抖音必须要有)', '')
     ks_cookie = read_config_value(config, 'Cookie', '快手cookie', '')
     tiktok_cookie = read_config_value(config, 'Cookie', 'Tiktok_cookie', '')
@@ -1147,6 +1133,13 @@ while True:
     douyu_cookie = read_config_value(config, 'Cookie', '斗鱼cookie', '')
     yy_cookie = read_config_value(config, 'Cookie', 'YY_cookie', '')
     bili_cookie = read_config_value(config, 'Cookie', 'B站cookie', '')
+
+    push_api = PushAPI(live_status_push = live_status_push,
+                        dingtalk_api_url = dingtalk_api_url,
+                        dingtalk_phone_num = dingtalk_phone_num,
+                        xizhi_api_url = xizhi_api_url,
+                        feishu_webhook_url = feishu_webhook_url,
+                        feishu_webhook_secret = feishu_webhook_secret)
 
     if len(video_save_type) > 0:
         if video_save_type.upper().lower() == "FLV".lower():
@@ -1172,7 +1165,6 @@ while True:
     if Splitsize < 5:
         Splitsize = 5  # 分段大小最低不能小于5m
     Splitsizes = Splitsize * 1024 * 1024  # 分割视频大小,转换为字节
-
 
     def tranform_int_to_time(seconds):
         m, s = divmod(seconds, 60)
