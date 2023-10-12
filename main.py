@@ -934,7 +934,7 @@ def start_record(url_tuple, count_variable=-1):
                                     unrecording.add(anchor_name)
 
                                 # 推送通知
-                                content = f" {time.strftime('%Y-%m-%d %H:%M:%S')} {anchor_name} {record_name}({record_url}) 直播录制完成"
+                                content = f"{time.strftime('%Y-%m-%d %H:%M:%S')}\n{anchor_name} {record_name}({record_url}) 直播录制完成"
                                 if live_status_push != '':
                                     if '飞书' in live_status_push:
                                         api = FeiShuWebhookMsgeAPI(webhook=feishu_webhook_url, secrect=feishu_webhook_secret)
