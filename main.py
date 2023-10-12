@@ -622,7 +622,7 @@ def start_record(url_tuple, count_variable=-1):
                         if port_info['is_live'] is False:
                             print(f"{record_name} 等待直播... ")
                         else:
-                            content = f"{record_name}({record_url}) 正在直播中，开始录制"
+                            content = f"{time.strftime('%Y-%m-%d %H:%M:%S')}\n{record_name}({record_url}) 正在直播中，开始录制"
                             print(content)
                             # 推送通知
                             if live_status_push != '':
