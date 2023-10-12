@@ -24,6 +24,7 @@ import shutil
 from spider import *
 from web_rid import *
 from msg_push import *
+from webhook_msg_api import FeiShuWebhookMsgeAPI
 
 # 版本号
 version = "v2.0.1"
@@ -621,10 +622,14 @@ def start_record(url_tuple, count_variable=-1):
                         if port_info['is_live'] is False:
                             print(f"{record_name} 等待直播... ")
                         else:
-                            content = f"{record_name} 正在直播中..."
+                            content = f"{record_name} 正在直播中...({record_url})"
                             print(content)
                             # 推送通知
                             if live_status_push != '':
+                                if '飞书' in live_status_push:
+                                    api = FeiShuWebhookMsgeAPI(webhook=feishu_webhook_url, secrect=feishu_webhook_secret)
+                                    api.send_text_msg(content)
+
                                 if '微信' in live_status_push:
                                     xizhi(xizhi_api_url, content)
                                 if '钉钉' in live_status_push:
@@ -1118,9 +1123,13 @@ while True:
     tsconvert_to_m4a = read_config_value(config, '录制设置', 'TS录制完成后自动增加生成m4a格式', "否")
     delFilebeforeconversion = read_config_value(config, '录制设置', '追加格式后删除原文件', "否")
     create_time_file = read_config_value(config, '录制设置', '生成时间文件', "否")
-    live_status_push = read_config_value(config, '推送配置', '直播状态通知(可选微信|钉钉或者两个都填)', "")
+
+    live_status_push = read_config_value(config, '推送配置', '直播状态通知(可选微信|钉钉|飞书或者都填)', "")
     dingtalk_api_url = read_config_value(config, '推送配置', '钉钉推送接口链接', "")
     xizhi_api_url = read_config_value(config, '推送配置', '微信推送接口链接', "")
+    feishu_webhook_url = read_config_value(config, '推送配置', '飞书Webhook机器人Url', "")
+    feishu_webhook_secret = read_config_value(config, '推送配置', '飞书Webhook机器人Secret', "")
+
     dingtalk_phone_num = read_config_value(config, '推送配置', '钉钉通知@对象(填手机号)', "")
     dy_cookie = read_config_value(config, 'Cookie', '抖音cookie(录制抖音必须要有)', '')
     ks_cookie = read_config_value(config, 'Cookie', '快手cookie', '')
