@@ -4,8 +4,7 @@ import hashlib
 import base64
 import hmac
 import time
-import requests
-from loguru import logger
+import requests, logging
 # 个人任务
 # MQ_NOTIFICATION_SECRECT = "3b9q2xzlcGMG7BpoNTsAX"
 # MQ_NOTIFICATION_WEBHOOK = "https://open.feishu.cn/open-apis/bot/v2/hook/ccf3ed4c-c39e-457d-ba0d-b278633e7f85"
@@ -36,9 +35,9 @@ class FeiShuWebhookMsgeAPI(object):
         }
         response = requests.post(self.webhook, json=data)
         if response.status_code == 200:
-            logger.info(f"飞书消息发送成功")
+            logging.info(f"飞书消息发送成功")
         else:
-            logger.error(f"飞书消息发送失败，状态码：{response.status_code}")
+            logging.error(f"飞书消息发送失败，状态码：{response.status_code}")
 
 def main_test():
     # 小扁家 测试
