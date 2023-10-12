@@ -30,11 +30,11 @@ class PushAPI(object):
         self.headers = {'Content-Type': 'application/json'}
 
     def notify_live_start(self, live_name, live_url):
-        content = f"[开始录制]{live_name}({live_url}) 正在直播中 {time.strftime('%Y-%m-%d %H:%M:%S')}"
+        content = f"[开始录制] {live_name}({live_url}) 正在直播中 {time.strftime('%Y-%m-%d %H:%M:%S')}"
         self.nofity(content)
 
     def notify_live_end(self, live_name, live_url):
-        content = f"[录制完毕]{live_name}({live_url}) 直播结束 {time.strftime('%Y-%m-%d %H:%M:%S')}"
+        content = f"[录制完毕] {live_name}({live_url}) 直播结束 {time.strftime('%Y-%m-%d %H:%M:%S')}"
         self.nofity(content)
 
     def nofity(self, content):

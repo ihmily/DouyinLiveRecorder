@@ -604,7 +604,7 @@ def start_record(url_tuple, count_variable=-1):
                         warning_count += 1
                     else:
                         anchor_name = re.sub(rstr, "_", anchor_name)  # 过滤不能作为文件名的字符，替换为下划线
-                        record_name = f'id:{count_variable} {anchor_name}'
+                        record_name = f'{anchor_name}(id:{count_variable})'
 
                         if anchor_name in recording:
                             print(f"新增的地址: {anchor_name} 已经存在,本条线程将会退出")
