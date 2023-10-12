@@ -622,7 +622,7 @@ def start_record(url_tuple, count_variable=-1):
                         if port_info['is_live'] is False:
                             print(f"{record_name} 等待直播... ")
                         else:
-                            content = f"{record_name} 正在直播中...({record_url})"
+                            content = f"{record_name}({record_url}) 正在直播中，开始录制"
                             print(content)
                             # 推送通知
                             if live_status_push != '':
@@ -889,8 +889,6 @@ def start_record(url_tuple, count_variable=-1):
                                                 logging.warning(str(e.output))
                                                 logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                                 break
-
-
                                     else:
                                         filename = anchor_name + '_' + now + ".ts"
 
@@ -899,8 +897,7 @@ def start_record(url_tuple, count_variable=-1):
 
                                         if create_time_file:
                                             filename_gruop = [anchor_name, filename_short]
-                                            create_var[str(filename_short)] = threading.Thread(target=create_ass_file,
-                                                                                               args=(filename_gruop,))
+                                            create_var[str(filename_short)] = threading.Thread(target=create_ass_file, args=(filename_gruop,))
                                             create_var[str(filename_short)].daemon = True
                                             create_var[str(filename_short)].start()
 
@@ -935,6 +932,18 @@ def start_record(url_tuple, count_variable=-1):
                                     recording.remove(record_name)
                                 if anchor_name in unrecording:
                                     unrecording.add(anchor_name)
+
+                                # 推送通知
+                                content = f" {time.strftime('%Y-%m-%d %H:%M:%S')} {anchor_name} {record_name}({record_url}) 直播录制完成"
+                                if live_status_push != '':
+                                    if '飞书' in live_status_push:
+                                        api = FeiShuWebhookMsgeAPI(webhook=feishu_webhook_url, secrect=feishu_webhook_secret)
+                                        api.send_text_msg(content)
+
+                                    if '微信' in live_status_push:
+                                        xizhi(xizhi_api_url, content)
+                                    if '钉钉' in live_status_push:
+                                        dingtalk(dingtalk_api_url, content, dingtalk_phone_num)
                                 print(f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制完成\n")
                                 record_finished_2 = False
 
