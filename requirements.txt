@@ -1,2 +1,4 @@
 requests
 PyExecJS
+protobuf==4.21.12
+protobuf-inspector==0.2
