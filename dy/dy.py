@@ -134,7 +134,7 @@ def unPackWebcastChatMessage(data):
     content = data.get("content", "")
     print('[unPackWebcastChatMessage] [📧直播间弹幕消息] [房间Id：' + liveRoomId + '] ｜ ' + content)
     if record_save_filepath is not None:
-        log = f"[live_url:{live_url}] {time.strftime('%Y-%m-%d %H:%M:%S')} {username}({id}): {content}"
+        log = f"{time.strftime('%Y-%m-%d %H:%M:%S')} {username}({id}): {content}"
         # 打开文件以追加写入模式，如果文件不存在将创建它
         with open(f'{record_save_filepath}', 'a') as file:
             file.write(log + '\n')
