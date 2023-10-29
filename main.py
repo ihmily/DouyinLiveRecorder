@@ -2,9 +2,9 @@
 
 """
 Author: Hmily
-Github: https://github.com/ihmily
+GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2023-09-30 00:39:17
+Update: 2023-10-30 02:31:35
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -26,7 +26,7 @@ from web_rid import *
 from msg_push import *
 
 # 版本号
-version = "v2.0.1"
+version = "v2.0.2"
 platforms = "抖音|Tiktok|快手|虎牙|斗鱼|YY|B站"
 
 # --------------------------log日志-------------------------------------
@@ -264,23 +264,27 @@ def get_douyin_stream_url(json_data):
         flv_url_list = stream_url['flv_pull_url']
         m3u8_url_list = stream_url['hls_pull_url_map']
 
-        video_qualities = {
-            "原画": "FULL_HD1",
-            "蓝光": "FULL_HD1",
-            "超清": "HD1",
-            "高清": "SD1",
-            "标清": "SD2",
-        }
+        # video_qualities = {
+        #     "原画": "FULL_HD1",
+        #     "蓝光": "FULL_HD1",
+        #     "超清": "HD1",
+        #     "高清": "SD1",
+        #     "标清": "SD2",
+        # }
 
-        quality_key = video_qualities.get(video_quality)
-        if quality_key:
-            m3u8_url = m3u8_url_list.get(quality_key)
-            flv_url = flv_url_list.get(quality_key)
+        quality_list = list(m3u8_url_list.keys())
+        while len(quality_list) < 4:
+            quality_list.append(quality_list[-1])
+        video_qualities = {"原画": 0, "蓝光": 0, "超清": 1, "高清": 2, "标清": 3}
+        quality_index = video_qualities.get(video_quality)
+        quality_key = quality_list[quality_index]
+        m3u8_url = m3u8_url_list.get(quality_key)
+        flv_url = flv_url_list.get(quality_key)
 
-            result['m3u8_url'] = m3u8_url
-            result['flv_url'] = flv_url
-            result['is_live'] = True
-            result['record_url'] = m3u8_url  # 使用 m3u8 链接进行录制
+        result['m3u8_url'] = m3u8_url
+        result['flv_url'] = flv_url
+        result['is_live'] = True
+        result['record_url'] = m3u8_url  # 使用 m3u8 链接进行录制
 
     return result
 
@@ -307,24 +311,18 @@ def get_tiktok_stream_url(json_data):
         stream_data = live_room.get('liveRoom', {}).get('streamData', {}).get('pull_data', {}).get('stream_data', '{}')
         stream_data = json.loads(stream_data).get('data', {})
 
-        video_qualities = {
-            "原画": "origin",
-            "蓝光": "origin",
-            "超清": "uhd",
-            "高清": "sd",
-            "标清": "ld",
-        }
-
-        quality_key = video_qualities.get(video_quality)
-        if quality_key:
-            video_quality_urls = get_video_quality_url(stream_data,quality_key)
-            result['flv_url'] = video_quality_urls['flv']
-            result['m3u8_url'] = video_quality_urls['hls']
-            result['is_live'] = True
-            if result['m3u8_url']:
-                result['record_url'] = video_quality_urls['hls']
-            else:
-                result['record_url'] = video_quality_urls['flv']
+        quality_list = list(stream_data.keys())  # ["origin","uhd","sd","ld"]
+        while len(quality_list) < 4:
+            quality_list.append(quality_list[-1])
+        video_qualities = {"原画": 0,"蓝光": 0,"超清": 1,"高清": 2,"标清": 3}
+        quality_index = video_qualities.get(video_quality)
+        quality_key = quality_list[quality_index]
+        video_quality_urls = get_video_quality_url(stream_data, quality_key)
+        result['flv_url'] = video_quality_urls['flv']
+        result['m3u8_url'] = video_quality_urls['hls']
+        result['is_live'] = True
+        result['record_url'] = result['flv_url'] if result['flv_url'] else result['m3u8_url']
+        result['record_url'] = re.sub("only_audio=1", "only_audio=0", result['record_url'])
     return result
 
 
@@ -444,10 +442,11 @@ def get_douyu_stream_url(json_data, cookies):
         rid = str(room_info['rid'])
         rate = video_quality_options.get(video_quality, '0')  # 默认为原画
         flv_data = get_douyu_stream_data(rid, rate, cookies)
-        flv_url = flv_data['data']['url']
-        result['flv_url'] = flv_url
-        result['is_live'] = True
-        result['record_url'] = flv_url  # 斗鱼目前只能使用flv视频流录制
+        flv_url = flv_data['data'].get('url', None)
+        if flv_url:
+            result['flv_url'] = flv_url
+            result['is_live'] = True
+            result['record_url'] = flv_url  # 斗鱼目前只能使用flv视频流录制
     return result
 
 

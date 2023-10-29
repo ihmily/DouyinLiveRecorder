@@ -2,9 +2,9 @@
 
 """
 Author: Hmily
-Github:https://github.com/ihmily
+GitHub:https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2023-09-30 00:39:17
+Update: 2023-10-30 01:58:23
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -72,7 +72,7 @@ def get_tiktok_stream_data(url, proxy_addr=None, cookies=None):
     if cookies:
         headers['Cookie'] = cookies
 
-    if not proxy_addr:
+    if proxy_addr:
         proxies = {
             'http': proxy_addr,
             'https': proxy_addr
@@ -123,7 +123,7 @@ def get_kuaishou_stream_data2(url, cookies=None):
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
         'Referer': "https://www.kuaishou.com/short-video/3x224rwabjmuc9y?fid=1712760877&cc=share_copylink&followRefer=151&shareMethod=TOKEN&docId=9&kpn=KUAISHOU&subBiz=BROWSE_SLIDE_PHOTO&photoId=3x224rwabjmuc9y&shareId=17144298796566&shareToken=X-6FTMeYTsY97qYL&shareResourceType=PHOTO_OTHER&userId=3xtnuitaz2982eg&shareType=1&et=1_i/2000048330179867715_h3052&shareMode=APP&originShareId=17144298796566&appType=21&shareObjectId=5230086626478274600&shareUrlOpened=0&timestamp=1663833792288&utm_source=app_share&utm_medium=app_share&utm_campaign=app_share&location=app_share",
         'content-type': 'application/json',
-        'Cookie': 'did=web_5653f81a4c4c41b6a0bc08e99df82009; didv=1696004011000',
+        'Cookie': 'did=web_e988652e11b545469633396abe85a89f; didv=1696004001000',
     }
     if cookies:
         headers['Cookie'] = cookies
@@ -206,7 +206,8 @@ def get_douyu_info_data(url):
     response = opener.open(req, timeout=15)
 
     html_str = response.read().decode('utf-8')
-    json_str = re.search('ssr_pageContext" type="application\/json">(.*?)<\/script>', html_str).group(1)
+    json_str = re.search('\<script id\=\"vike_pageContext\" type\=\"application\/json\"\>(.*?)<\/script>',
+                         html_str).group(1)
     json_data = json.loads(json_str)
     return json_data
 
