@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub:https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2023-10-30 01:58:23
+Update: 2023-10-31 01:55:19
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -12,10 +12,10 @@ Function: Get live stream data.
 import hashlib
 import time
 import urllib.parse
+from typing import Union, Dict, Any
 import requests
 import re
 import json
-# pip install PyExecJS
 import execjs
 import urllib.request
 
@@ -23,7 +23,7 @@ no_proxy_handler = urllib.request.ProxyHandler({})
 opener = urllib.request.build_opener(no_proxy_handler)
 
 
-def get_douyin_stream_data(url, cookies=None):
+def get_douyin_stream_data(url: str, cookies: Union[str, None] = None) -> Dict[str, Any]:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
@@ -51,7 +51,7 @@ def get_douyin_stream_data(url, cookies=None):
         return json_data
 
     except Exception as e:
-        print(f'解析失败：{e} 准备切换解析方法')
+        print(f'失败地址：{url} 准备切换解析方法{e}')
         web_rid = re.match('https://live.douyin.com/(\d+)', url).group(1)
         headers['Cookie'] = 'sessionid=73d300f837f261eaa8ffc69d50162700'
         url = f'https://live.douyin.com/webcast/room/web/enter/?aid=6383&app_name=douyin_web&live_id=1&web_rid={web_rid}'
@@ -64,7 +64,8 @@ def get_douyin_stream_data(url, cookies=None):
         return room_data
 
 
-def get_tiktok_stream_data(url, proxy_addr=None, cookies=None):
+def get_tiktok_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> Dict[
+    str, Any]:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.79',
         'Cookie': 'ttwid=1%7CM-rF193sJugKuNz2RGNt-rh6pAAR9IMceUSzlDnPCNI%7C1683274418%7Cf726d4947f2fc37fecc7aeb0cdaee52892244d04efde6f8a8edd2bb168263269; tiktok_webapp_theme=light; tt_chain_token=VWkygAWDlm1cFg/k8whmOg==; passport_csrf_token=6e422c5a7991f8cec7033a8082921510; passport_csrf_token_default=6e422c5a7991f8cec7033a8082921510; d_ticket=f8c267d4af4523c97be1ccb355e9991e2ae06; odin_tt=320b5f386cdc23f347be018e588873db7f7aea4ea5d1813681c3fbc018ea025dde957b94f74146dbc0e3612426b865ccb95ec8abe4ee36cca65f15dbffec0deff7b0e69e8ea536d46e0f82a4fc37d211; cmpl_token=AgQQAPNSF-RO0rT04baWtZ0T_jUjl4fVP4PZYM2QPw; uid_tt=319b558dbba684bb1557206c92089cd113a875526a89aee30595925d804b81c7; uid_tt_ss=319b558dbba684bb1557206c92089cd113a875526a89aee30595925d804b81c7; sid_tt=ad5e736f4bedb2f6d42ccd849e706b1d; sessionid=ad5e736f4bedb2f6d42ccd849e706b1d; sessionid_ss=ad5e736f4bedb2f6d42ccd849e706b1d; store-idc=useast5; store-country-code=us; store-country-code-src=uid; tt-target-idc=useast5; tt-target-idc-sign=qXNk0bb1pDQ0FbCNF120Pl9WWMLZg9Edv5PkfyCbS4lIk5ieW5tfLP7XWROnN0mEaSlc5hg6Oji1pF-yz_3ZXnUiNMrA9wNMPvI6D9IFKKVmq555aQzwPIGHv0aQC5dNRgKo5Z5LBkgxUMWEojTKclq2_L8lBciw0IGdhFm_XyVJtbqbBKKgybGDLzK8ZyxF4Jl_cYRXaDlshZjc38JdS6wruDueRSHe7YvNbjxCnApEFUv-OwJANSPU_4rvcqpVhq3JI2VCCfw-cs_4MFIPCDOKisk5EhAo2JlHh3VF7_CLuv80FXg_7ZqQ2pJeMOog294rqxwbbQhl3ATvjQV_JsWyUsMd9zwqecpylrPvtySI2u1qfoggx1owLrrUynee1R48QlanLQnTNW_z1WpmZBgVJqgEGLwFoVOmRzJuFFNj8vIqdjM2nDSdWqX8_wX3wplohkzkPSFPfZgjzGnQX28krhgTytLt7BXYty5dpfGtsdb11WOFHM6MZ9R9uLVB; sid_guard=ad5e736f4bedb2f6d42ccd849e706b1d%7C1690990657%7C15525213%7CMon%2C+29-Jan-2024+08%3A11%3A10+GMT; sid_ucp_v1=1.0.0-KGM3YzgwYjZhODgyYWI1NjIwNTA0NjBmOWUxMGRhMjIzYTI2YjMxNDUKGAiqiJ30keKD5WQQwfCppgYYsws4AkDsBxAEGgd1c2Vhc3Q1IiBhZDVlNzM2ZjRiZWRiMmY2ZDQyY2NkODQ5ZTcwNmIxZA; ssid_ucp_v1=1.0.0-KGM3YzgwYjZhODgyYWI1NjIwNTA0NjBmOWUxMGRhMjIzYTI2YjMxNDUKGAiqiJ30keKD5WQQwfCppgYYsws4AkDsBxAEGgd1c2Vhc3Q1IiBhZDVlNzM2ZjRiZWRiMmY2ZDQyY2NkODQ5ZTcwNmIxZA; tt_csrf_token=dD0EIH8q-pe3qDQsCyyD1jLN6KizJDRjOEyk; __tea_cache_tokens_1988={%22_type_%22:%22default%22%2C%22user_unique_id%22:%227229608516049831425%22%2C%22timestamp%22:1683274422659}; ttwid=1%7CM-rF193sJugKuNz2RGNt-rh6pAAR9IMceUSzlDnPCNI%7C1694002151%7Cd89b77afc809b1a610661a9d1c2784d80ebef9efdd166f06de0d28e27f7e4efe; msToken=KfJAVZ7r9D_QVeQlYAUZzDFbc1Yx-nZz6GF33eOxgd8KlqvTg1lF9bMXW7gFV-qW4MCgUwnBIhbiwU9kdaSpgHJCk-PABsHCtTO5J3qC4oCTsrXQ1_E0XtbqiE4OVLZ_jdF1EYWgKNPT2SnwGkQ=; msToken=KfJAVZ7r9D_QVeQlYAUZzDFbc1Yx-nZz6GF33eOxgd8KlqvTg1lF9bMXW7gFV-qW4MCgUwnBIhbiwU9kdaSpgHJCk-PABsHCtTO5J3qC4oCTsrXQ1_E0XtbqiE4OVLZ_jdF1EYWgKNPT2SnwGkQ='
@@ -93,57 +94,89 @@ def get_tiktok_stream_data(url, proxy_addr=None, cookies=None):
     return json_data
 
 
-def get_kuaishou_stream_data(url, cookies=None):
+def get_kuaishou_stream_data(url: str, cookies: Union[str, None] = None) -> Dict[str, Any]:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
     }
-
-    try:
-        if not cookies:
-            url2 = 'https://live.kuaishou.com/'
-            req = urllib.request.Request(url2, headers=headers)
-            cookies = opener.open(req, timeout=15).getheader('Set-Cookie')
-        headers['Cookie'] = cookies
-    except Exception:
-        pass
 
     req = urllib.request.Request(url, headers=headers)
     response = opener.open(req, timeout=15)
     html_str = response.read().decode('utf-8')
     json_str = re.search('__INITIAL_STATE__=(.*?);\(function', html_str).group(1)
     json_data = json.loads(json_str)
-    return json_data
+    result = {
+        "type": 1,
+        "is_live": False,
+    }
+
+    live_stream = json_data.get('liveroom', None)
+    if live_stream:
+        play_list = live_stream["playList"][0]
+        if 'errorType' in play_list or 'liveStream' not in play_list:
+            error_msg = play_list['errorType']['title'] + play_list['errorType']['content']
+            print(f'失败地址：{url} 错误信息: {error_msg}')
+            print('提示信息：请打开快手直播页面正常随机进入一个直播间，即可解除频繁访问限制')
+            return result
+        anchor_name = play_list['author']['name']
+        result['anchor_name'] = anchor_name
+
+        live_status = play_list['isLiving']
+        if live_status:
+            play_url = play_list['liveStream']['playUrls'][0]['adaptationSet']['representation'][0]['url']
+            result['flv_url'] = play_url
+            result['record_url'] = play_url
+            result['is_live'] = True
+    return result
 
 
-def get_kuaishou_stream_data2(url, cookies=None):
-
+def get_kuaishou_stream_data2(url: str, cookies: Union[str, None] = None) -> Dict[str, Any]:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Linux; Android 11; SAMSUNG SM-G973U) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/14.2 Chrome/87.0.4280.141 Mobile Safari/537.36',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
         'Referer': "https://www.kuaishou.com/short-video/3x224rwabjmuc9y?fid=1712760877&cc=share_copylink&followRefer=151&shareMethod=TOKEN&docId=9&kpn=KUAISHOU&subBiz=BROWSE_SLIDE_PHOTO&photoId=3x224rwabjmuc9y&shareId=17144298796566&shareToken=X-6FTMeYTsY97qYL&shareResourceType=PHOTO_OTHER&userId=3xtnuitaz2982eg&shareType=1&et=1_i/2000048330179867715_h3052&shareMode=APP&originShareId=17144298796566&appType=21&shareObjectId=5230086626478274600&shareUrlOpened=0&timestamp=1663833792288&utm_source=app_share&utm_medium=app_share&utm_campaign=app_share&location=app_share",
         'content-type': 'application/json',
-        'Cookie': 'did=web_e988652e11b545469633396abe85a89f; didv=1696004001000',
+        'Cookie': 'did=web_e988652e11b545469633396abe85a89f; didv=1796004001000',
     }
     if cookies:
         headers['Cookie'] = cookies
-
     try:
         eid = url.split('/u/')[1].strip()
-        data = '{"source":5,"eid":"' + eid + '","shareMethod":"card","clientType":"WEB_OUTSIDE_SHARE_H5"}'
-        data_encoded = data.encode('utf-8')
-        url = 'https://livev.m.chenzhongtech.com/rest/k/live/byUser?kpn=GAME_ZONE&captchaToken='
-        req = urllib.request.Request(url, headers=headers, data=data_encoded)
+        data = {"source": 5, "eid": eid, "shareMethod": "card", "clientType": "WEB_OUTSIDE_SHARE_H5"}
+        data_encoded = json.dumps(data).encode('utf-8')
+        url2 = 'https://livev.m.chenzhongtech.com/rest/k/live/byUser?kpn=GAME_ZONE&captchaToken='
+        req = urllib.request.Request(url2, headers=headers, data=data_encoded)
         response = urllib.request.urlopen(req)
         json_str = response.read().decode('utf-8')
         json_data = json.loads(json_str)
+
         live_stream = json_data['liveStream']
-        return live_stream
-    except KeyError:
-        print('快手移动端cookie不正确或者已经失效，请在配置文件中自行修改或添加cookie')
+        anchor_name = live_stream['user']['user_name']
+        result = {
+            "type": 2,
+            "anchor_name": anchor_name,
+            "is_live": False,
+        }
+        live_status = live_stream['living']
+        if live_status:
+            result['is_live'] = True
+            backup_m3u8_url = live_stream['hlsPlayUrl']
+            backup_flv_url = live_stream['playUrls'][0]['url']
+            if 'multiResolutionHlsPlayUrls' in live_stream:
+                m3u8_url_list = live_stream['multiResolutionHlsPlayUrls'][0]['urls']
+                result['m3u8_url_list'] = m3u8_url_list
+            if 'multiResolutionPlayUrls' in live_stream:
+                flv_url_list = live_stream['multiResolutionPlayUrls'][0]['urls']
+                result['flv_url_list'] = flv_url_list
+            result['backup'] = {'m3u8_url': backup_m3u8_url, 'flv_url': backup_flv_url}
+        if result['anchor_name']:
+            return result
+    except Exception:
+        print(f'失败地址：{url} 准备切换为备用方案重新解析 ')
+    return get_kuaishou_stream_data(url, cookies=cookies)
 
 
-def get_huya_stream_data(url, cookies=None):
+def get_huya_stream_data(url: str, cookies: Union[str, None] = None) -> Dict[str, Any]:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
@@ -164,9 +197,11 @@ def md5(data):
     return hashlib.md5(data.encode('utf-8')).hexdigest()
 
 
-def get_token_js(rid, did):
+def get_token_js(rid: str, did: str) -> Union[list, Dict[str, Any]]:
     """
     通过PC网页端的接口获取完整直播源。
+    :param did:
+    :param rid:
     :param cdn: 主线路ws-h5、备用线路tct-h5
     :param rate: 1流畅；2高清；3超清；4蓝光4M；0蓝光8M或10M
     """
@@ -192,7 +227,7 @@ def get_token_js(rid, did):
     return params_list
 
 
-def get_douyu_info_data(url):
+def get_douyu_info_data(url: str) -> Dict[str, Any]:
     match_rid = re.search('rid=(.*?)&', url)
     if match_rid:
         rid = match_rid.group(1)
@@ -212,7 +247,7 @@ def get_douyu_info_data(url):
     return json_data
 
 
-def get_douyu_stream_data(rid, rate='-1', cookies=None):
+def get_douyu_stream_data(rid: str, rate: str = '-1', cookies: Union[str, None] = None) -> Dict[str, Any]:
     did = '10000000000000000000000000003306'
     params_list = get_token_js(rid, did)
 
@@ -243,7 +278,7 @@ def get_douyu_stream_data(rid, rate='-1', cookies=None):
     return json_data
 
 
-def get_yy_stream_data(url, cookies=None):
+def get_yy_stream_data(url: str, cookies: Union[str, None] = None) -> Dict[str, Any]:
     cid = re.search('yy.com/(.*?)/', url).group(1)
 
     headers = {
@@ -272,7 +307,7 @@ def get_yy_stream_data(url, cookies=None):
     return json_data
 
 
-def get_bilibili_stream_data(url, cookies=None):
+def get_bilibili_stream_data(url: str, cookies: Union[str, None] = None) -> Dict[str, Any]:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
@@ -299,14 +334,16 @@ if __name__ == '__main__':
     # url = 'https://www.douyu.com/3637778?dyshid'
     # url = 'https://www.yy.com/22490906/22490906'  # YY直播
     # url = 'https://live.bilibili.com/21593109'  # b站直播
-    # url = 'https://live.kuaishou.com/u/YUE99999'
-
 
     print(get_douyin_stream_data(url))
     # print(get_tiktok_stream_data(url,'http://127.0.0.1:7890'))
-    # print(get_kuaishou_stream_data2(url))
+    # print(get_kuaishou_stream_data(url))
     # print(get_huya_stream_data(url))
     # print(get_douyu_info_data(url))
     # print(get_douyu_stream_data("4921614",rate='-1'))
     # print(get_yy_stream_data(url))
     # print(get_bilibili_stream_data(url))
+
+
+
+

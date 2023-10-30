@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2023-10-30 02:31:35
+Update: 2023-10-31 01:56:37
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -297,9 +297,9 @@ def get_tiktok_stream_url(json_data):
             'flv': re.sub("https", "http", stream_data[quality_key]['main']['flv']),
         }
 
-    live_room = json_data.get('LiveRoom', {}).get('liveRoomUserInfo', {})
-    user = live_room.get('user', {})
-    anchor_name = user.get('nickname', '')
+    live_room = json_data['LiveRoom']['liveRoomUserInfo']
+    user = live_room['user']
+    anchor_name = user['nickname']
     status = user.get("status", 4)
 
     result = {
@@ -328,39 +328,41 @@ def get_tiktok_stream_url(json_data):
 
 @trace_error_decorator
 def get_kuaishou_stream_url(json_data):
-    anchor_name = json_data.get('user', {}).get('user_name', '')
+    if json_data['type'] == 1:
+        return json_data
+    live_status = json_data['is_live']
 
     result = {
-        "anchor_name": anchor_name,
-        "is_live": False,
+        "type": 2,
+        "anchor_name": json_data['anchor_name'],
+        "is_live": live_status,
     }
 
-    status = json_data.get('living', False)
-    if status:
-        m3u8_url_list = json_data.get('multiResolutionHlsPlayUrls', {})[::-1]
-        while len(m3u8_url_list) < 4:
-            m3u8_url_list.append(m3u8_url_list[-1])
-        flv_url_list = json_data.get('multiResolutionPlayUrls', {})[::-1]
-        while len(flv_url_list) < 4:
-            flv_url_list.append(flv_url_list[-1])
-
-        quality_mapping = {
-            '原画': 0,
-            '蓝光': 0,
-            '超清': 1,
-            '高清': 2,
-            '标清': 3,
-        }
+    if live_status:
+        quality_mapping = {'原画': 0, '蓝光': 0, '超清': 1, '高清': 2, '标清': 3, }
 
         if video_quality in quality_mapping:
-            quality_index = quality_mapping[video_quality]
-            m3u8_url = m3u8_url_list[quality_index]['urls'][0]['url']
-            flv_url = flv_url_list[quality_index]['urls'][0]['url']
-            result['m3u8_url'] = m3u8_url
-            result['flv_url'] = flv_url
-            result['is_live'] = True
-            result['record_url'] = flv_url
 
+            quality_index = quality_mapping[video_quality]
+            if 'm3u8_url_list' in json_data:
+                m3u8_url_list = json_data['m3u8_url_list'][::-1]
+                while len(m3u8_url_list) < 4:
+                    m3u8_url_list.append(m3u8_url_list[-1])
+                m3u8_url = m3u8_url_list[quality_index]['url']
+            else:
+                m3u8_url = json_data['backup']['m3u8_url']
+            if 'flv_url_list' in json_data:
+                flv_url_list = json_data['flv_url_list'][::-1]
+                while len(flv_url_list) < 4:
+                    flv_url_list.append(flv_url_list[-1])
+                flv_url = flv_url_list[quality_index]['url']
+            else:
+                flv_url = json_data['backup']['flv_url']
+
+            result['flv_url'] = flv_url
+            result['m3u8_url'] = m3u8_url
+            result['is_live'] = True
+            result['record_url'] = flv_url if flv_url else m3u8_url
     return result
 
 
