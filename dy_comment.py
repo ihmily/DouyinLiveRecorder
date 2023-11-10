@@ -13,6 +13,7 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG, format=LOG_FORMAT)
 
     # 获取命令行参数
+    # python3 /Users/ginhoor/Workspace/Server/DouyinLiveRecorder/dy_comment.py https://live.douyin.com/955520891354 小水不胖了
     arguments = sys.argv
     url = arguments[1]
     name = arguments[2]
