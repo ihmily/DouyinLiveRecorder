@@ -96,7 +96,10 @@ def display_info():
     while True:
         try:
             time.sleep(5)
-            os.system("cls")
+            if os.name == 'nt':
+                os.system("cls")
+            elif os.name=='posix':
+                os.system("clear")
             print("\r共监测" + str(Monitoring) + "个直播中", end=" | ")
             print("同一时间访问网络的线程数:", max_request, end=" | ")
             if len(video_save_path) > 0:
@@ -314,7 +317,7 @@ def get_tiktok_stream_url(json_data):
         quality_list = list(stream_data.keys())  # ["origin","uhd","sd","ld"]
         while len(quality_list) < 4:
             quality_list.append(quality_list[-1])
-        video_qualities = {"原画": 0,"蓝光": 0,"超清": 1,"高清": 2,"标清": 3}
+        video_qualities = {"原画": 0, "蓝光": 0, "超清": 1, "高清": 2, "标清": 3}
         quality_index = video_qualities.get(video_quality)
         quality_key = quality_list[quality_index]
         video_quality_urls = get_video_quality_url(stream_data, quality_key)
@@ -652,8 +655,10 @@ def start_record(url_tuple, count_variable=-1):
                                     logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
 
                                 if not os.path.exists(full_path):
-                                    print("保存路径不存在,不能生成录制.请避免把本程序放在c盘,桌面,下载文件夹,qq默认传输目录.请重新检查设置")
-                                    logger.warning("错误信息: 保存路径不存在,不能生成录制.请避免把本程序放在c盘,桌面,下载文件夹,qq默认传输目录.请重新检查设置")
+                                    print(
+                                        "保存路径不存在,不能生成录制.请避免把本程序放在c盘,桌面,下载文件夹,qq默认传输目录.请重新检查设置")
+                                    logger.warning(
+                                        "错误信息: 保存路径不存在,不能生成录制.请避免把本程序放在c盘,桌面,下载文件夹,qq默认传输目录.请重新检查设置")
 
                                 ffmpeg_command = [
                                     ffmpeg_path, "-y",
@@ -883,7 +888,8 @@ def start_record(url_tuple, count_variable=-1):
 
                                             except subprocess.CalledProcessError as e:
                                                 logging.warning(str(e.output))
-                                                logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
+                                                logger.warning(
+                                                    f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                                 break
 
 
@@ -1250,5 +1256,3 @@ while True:
         firstRunOtherLine = False
 
     time.sleep(3)
-
-
