@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub:https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2023-10-31 01:55:19
+Update: 2023-12-03 20:48:35
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -18,11 +18,13 @@ import re
 import json
 import execjs
 import urllib.request
+from utils import trace_error_decorator
 
 no_proxy_handler = urllib.request.ProxyHandler({})
 opener = urllib.request.build_opener(no_proxy_handler)
 
 
+@trace_error_decorator
 def get_douyin_stream_data(url: str, cookies: Union[str, None] = None) -> Dict[str, Any]:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
@@ -64,6 +66,7 @@ def get_douyin_stream_data(url: str, cookies: Union[str, None] = None) -> Dict[s
         return room_data
 
 
+@trace_error_decorator
 def get_tiktok_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> Dict[
     str, Any]:
     headers = {
@@ -94,6 +97,7 @@ def get_tiktok_stream_data(url: str, proxy_addr: Union[str, None] = None, cookie
     return json_data
 
 
+@trace_error_decorator
 def get_kuaishou_stream_data(url: str, cookies: Union[str, None] = None) -> Dict[str, Any]:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
@@ -130,6 +134,7 @@ def get_kuaishou_stream_data(url: str, cookies: Union[str, None] = None) -> Dict
     return result
 
 
+@trace_error_decorator
 def get_kuaishou_stream_data2(url: str, cookies: Union[str, None] = None) -> Dict[str, Any]:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Linux; Android 11; SAMSUNG SM-G973U) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/14.2 Chrome/87.0.4280.141 Mobile Safari/537.36',
@@ -176,6 +181,7 @@ def get_kuaishou_stream_data2(url: str, cookies: Union[str, None] = None) -> Dic
     return get_kuaishou_stream_data(url, cookies=cookies)
 
 
+@trace_error_decorator
 def get_huya_stream_data(url: str, cookies: Union[str, None] = None) -> Dict[str, Any]:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
@@ -227,6 +233,7 @@ def get_token_js(rid: str, did: str) -> Union[list, Dict[str, Any]]:
     return params_list
 
 
+@trace_error_decorator
 def get_douyu_info_data(url: str) -> Dict[str, Any]:
     match_rid = re.search('rid=(.*?)&', url)
     if match_rid:
@@ -247,6 +254,7 @@ def get_douyu_info_data(url: str) -> Dict[str, Any]:
     return json_data
 
 
+@trace_error_decorator
 def get_douyu_stream_data(rid: str, rate: str = '-1', cookies: Union[str, None] = None) -> Dict[str, Any]:
     did = '10000000000000000000000000003306'
     params_list = get_token_js(rid, did)
@@ -278,6 +286,7 @@ def get_douyu_stream_data(rid: str, rate: str = '-1', cookies: Union[str, None] 
     return json_data
 
 
+@trace_error_decorator
 def get_yy_stream_data(url: str, cookies: Union[str, None] = None) -> Dict[str, Any]:
     cid = re.search('yy.com/(.*?)/', url).group(1)
 
@@ -307,6 +316,7 @@ def get_yy_stream_data(url: str, cookies: Union[str, None] = None) -> Dict[str, 
     return json_data
 
 
+@trace_error_decorator
 def get_bilibili_stream_data(url: str, cookies: Union[str, None] = None) -> Dict[str, Any]:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
@@ -324,6 +334,40 @@ def get_bilibili_stream_data(url: str, cookies: Union[str, None] = None) -> Dict
     return json_data
 
 
+@trace_error_decorator
+def get_xhs_stream_url(url: str, cookies: Union[str, None] = None) -> Dict[str, Any]:
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 11; SAMSUNG SM-G973U) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/14.2 Chrome/87.0.4280.141 Mobile Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
+        'Referer': 'https://www.xiaohongshu.com/hina/livestream/568979931846654360',
+    }
+    if cookies:
+        headers['Cookie'] = cookies
+
+    room_id = url.split('?')[0].rsplit('/',maxsplit=1)[1]
+    appuid = re.search('appuid=(.*?)&', url).group(1)
+    url = f'https://www.xiaohongshu.com/api/sns/red/live/app/v1/ecology/outside/share_info?room_id={room_id}'
+    req = urllib.request.Request(url, headers=headers)
+    response = opener.open(req, timeout=15)
+    json_str = response.read().decode('utf-8')
+    json_data = json.loads(json_str)
+    anchor_name = json_data['data']['host_info']['nickname']
+    live_status = json_data['data']['room']['status']
+    result = {
+        "anchor_name": anchor_name,
+        "is_live": False,
+    }
+
+    # 这个判断不准确，无论是否在直播都为0
+    if live_status == 0:
+        flv_url = f'http://live-play.xhscdn.com/live/{room_id}.flv?uid={appuid}'
+        result['flv_url'] = flv_url
+        result['is_live'] = True
+        result['record_url'] = flv_url
+    return result
+
+
 if __name__ == '__main__':
     # 尽量用自己的cookie，以避免默认的不可用导致无法获取数据
     url = "https://live.douyin.com/745964462470"  # 抖音直播
@@ -334,6 +378,9 @@ if __name__ == '__main__':
     # url = 'https://www.douyu.com/3637778?dyshid'
     # url = 'https://www.yy.com/22490906/22490906'  # YY直播
     # url = 'https://live.bilibili.com/21593109'  # b站直播
+    # 小红书直播
+    # url = 'https://www.xiaohongshu.com/hina/livestream/568980065082002402?appuid=5f3f478a00000000010005b3&apptime='
+
 
     print(get_douyin_stream_data(url))
     # print(get_tiktok_stream_data(url,'http://127.0.0.1:7890'))
@@ -343,7 +390,5 @@ if __name__ == '__main__':
     # print(get_douyu_stream_data("4921614",rate='-1'))
     # print(get_yy_stream_data(url))
     # print(get_bilibili_stream_data(url))
-
-
-
+    # print(get_xhs_stream_url(url))
 

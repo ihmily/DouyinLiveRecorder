@@ -4,46 +4,49 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2023-10-31 01:56:37
+Update: 2023-12-03 20:46:00
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
 
-import functools
 import random
 import os
 import sys
-import traceback
 import urllib.parse
 import configparser
 import subprocess
 import threading
 import logging
 import datetime
+import time
+import json
+import re
 import shutil
-from spider import *
-from web_rid import *
-from msg_push import *
+from spider import (
+    get_douyin_stream_data,
+    get_tiktok_stream_data,
+    get_kuaishou_stream_data2,
+    get_huya_stream_data,
+    get_douyu_info_data,
+    get_douyu_stream_data,
+    get_yy_stream_data,
+    get_bilibili_stream_data,
+    get_xhs_stream_url
+)
+
+from web_rid import (
+    get_live_room_id,
+    get_sec_user_id
+)
+from utils import (
+    logger, check_md5,
+    trace_error_decorator
+)
+from msg_push import dingtalk, xizhi
 
 # 版本号
-version = "v2.0.2"
-platforms = "抖音|Tiktok|快手|虎牙|斗鱼|YY|B站"
-
-# --------------------------log日志-------------------------------------
-# 创建一个logger
-logger = logging.getLogger('DouyinLiveRecorder直播录制%s版' % str(version))
-logger.setLevel(logging.INFO)
-# 创建一个handler，用于写入日志文件
-if not os.path.exists("./log"):
-    os.makedirs("./log")
-fh = logging.FileHandler("./log/错误日志文件.log", encoding="utf-8-sig", mode="a")
-fh.setLevel(logging.WARNING)
-# 定义handler的输出格式
-formatter = logging.Formatter('%(asctime)s - %(message)s')
-fh.setFormatter(formatter)
-# 给logger添加handler
-logger.addHandler(fh)
-
+version = "v2.0.3"
+platforms = "抖音|Tiktok|快手|虎牙|斗鱼|YY|B站|小红书"
 # --------------------------全局变量-------------------------------------
 recording = set()
 unrecording = set()
@@ -73,20 +76,6 @@ default_path = os.getcwd()
 
 
 # --------------------------用到的函数-------------------------------------
-def trace_error_decorator(func):
-    @functools.wraps(func)
-    def wrapper(*args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except Exception as e:
-            error_line = traceback.extract_tb(e.__traceback__)[-1].lineno
-            error_info = f"错误信息: type: {type(e).__name__}, {str(e)} in function {func.__name__} at line: {error_line}"
-            print(error_info)
-            logger.warning(error_info)
-            return []
-
-    return wrapper
-
 
 def display_info():
     # TODO: 显示当前录制配置信息
@@ -314,7 +303,7 @@ def get_tiktok_stream_url(json_data):
         quality_list = list(stream_data.keys())  # ["origin","uhd","sd","ld"]
         while len(quality_list) < 4:
             quality_list.append(quality_list[-1])
-        video_qualities = {"原画": 0,"蓝光": 0,"超清": 1,"高清": 2,"标清": 3}
+        video_qualities = {"原画": 0, "蓝光": 0, "超清": 1, "高清": 2, "标清": 3}
         quality_index = video_qualities.get(video_quality)
         quality_key = quality_list[quality_index]
         video_quality_urls = get_video_quality_url(stream_data, quality_key)
@@ -598,7 +587,11 @@ def start_record(url_tuple, count_variable=-1):
                             json_data = get_bilibili_stream_data(record_url, bili_cookie)
                             port_info = get_bilibili_stream_url(json_data)
 
-                    anchor_name = port_info.get("anchor_name", '')
+                    elif record_url.find("https://www.xiaohongshu.com/") > -1:
+                        with semaphore:
+                            port_info = get_xhs_stream_url(record_url, xhs_cookie)
+
+                    anchor_name:str= port_info.get("anchor_name", '')
 
                     if not anchor_name:
                         print(f'序号{count_variable} 网址内容获取失败,进行重试中...获取失败的地址是:{url_tuple}')
@@ -652,8 +645,10 @@ def start_record(url_tuple, count_variable=-1):
                                     logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
 
                                 if not os.path.exists(full_path):
-                                    print("保存路径不存在,不能生成录制.请避免把本程序放在c盘,桌面,下载文件夹,qq默认传输目录.请重新检查设置")
-                                    logger.warning("错误信息: 保存路径不存在,不能生成录制.请避免把本程序放在c盘,桌面,下载文件夹,qq默认传输目录.请重新检查设置")
+                                    print(
+                                        "保存路径不存在,不能生成录制.请避免把本程序放在c盘,桌面,下载文件夹,qq默认传输目录.请重新检查设置")
+                                    logger.warning(
+                                        "错误信息: 保存路径不存在,不能生成录制.请避免把本程序放在c盘,桌面,下载文件夹,qq默认传输目录.请重新检查设置")
 
                                 ffmpeg_command = [
                                     ffmpeg_path, "-y",
@@ -883,7 +878,8 @@ def start_record(url_tuple, count_variable=-1):
 
                                             except subprocess.CalledProcessError as e:
                                                 logging.warning(str(e.output))
-                                                logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
+                                                logger.warning(
+                                                    f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                                 break
 
 
@@ -974,15 +970,6 @@ def start_record(url_tuple, count_variable=-1):
             print(f"线程崩溃2秒后重试.错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
             warning_count += 1
             time.sleep(2)
-
-
-def check_md5(file_path):
-    """
-    计算文件的md5值
-    """
-    with open(file_path, 'rb') as fp:
-        file_md5 = hashlib.md5(fp.read()).hexdigest()
-    return file_md5
 
 
 def backup_file(file_path, backup_dir):
@@ -1131,6 +1118,7 @@ while True:
     douyu_cookie = read_config_value(config, 'Cookie', '斗鱼cookie', '')
     yy_cookie = read_config_value(config, 'Cookie', 'YY_cookie', '')
     bili_cookie = read_config_value(config, 'Cookie', 'B站cookie', '')
+    xhs_cookie = read_config_value(config, 'Cookie', '小红书cookie', '')
 
     if len(video_save_type) > 0:
         if video_save_type.upper().lower() == "FLV".lower():
@@ -1202,7 +1190,8 @@ while True:
                     'www.huya.com',
                     'www.douyu.com',
                     'www.yy.com',
-                    'live.bilibili.com'
+                    'live.bilibili.com',
+                    'www.xiaohongshu.com'
                 ]
                 if url_host in host_list:
                     new_line = (url, split_line[1])
@@ -1250,5 +1239,3 @@ while True:
         firstRunOtherLine = False
 
     time.sleep(3)
-
-

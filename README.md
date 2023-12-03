@@ -18,6 +18,7 @@
 - [x] 斗鱼
 - [x] YY
 - [x] B站
+- [x] 小红书
 - [ ] 更多平台正在更新中
 
 </div>
@@ -34,6 +35,7 @@
     ├── /libs -> (dll file)
     ├── main.py -> (main file)
     ├── spider.py-> (get live url)
+    ├── utils.py -> (contains utility functions)
     ├── web_rid.py -> (get web_rid)
     ├── msg_push.py -> (send live status update message)
     ├── cookies.py -> (get douyin cookies)
@@ -51,12 +53,12 @@
 - 在 `config` 文件夹内的配置文件中对录制进行配置，并在 `URL_config.ini` 中添加录制直播间地址。
 - 抖音录制需要使用到PC网页端直播间页面的Cookie，请先在config.ini配置文件中添加后再进行抖音录制（有默认的cookie，但最好还是自己添加自己的）
 - 录制Tiktok时需要科学上网，请先在配置文件中设置开启代理并添加proxy_addr链接 如：`http://127.0.0.1:7890`
--  可以在URL_config.ini中的链接开头加上#，此时将不会录制该条链接对应的直播
+- 可以在URL_config.ini中的链接开头加上#，此时将不会录制该条链接对应的直播
 - 测试时有可能会出现在IDE如Pycharm中运行代码进行直播录制，录制出来的视频却无法正常播放的现象，如果遇到这个问题 在命令控制台DOS界面运行代码，录制出来的视频即可正常播放。
 - 当同时在录制多个直播时，最好线程数设置大一些，否则可能出现其中一个直播录制出错。当然设置的过大也没用，要同时考虑自身电脑的配置，如CPU内核数、网络带宽等限制。
 - 如果想直接使用打包好的录制软件，进入[Releases](https://github.com/ihmily/DouyinLiveRecorder/releases) 下载最新发布的 zip压缩包即可，有些电脑可能会报毒，直接忽略即可。
 - 如果要长时间挂着软件循环监测直播，最好循环时间设置长一点，避免因请求频繁导致被官方封禁IP 。
-- 最后，欢迎大家提交PR，一起维护该仓库！
+- 最后，欢迎大家提交PR
 
 &emsp;
 
@@ -85,6 +87,9 @@ https://www.yy.com/22490906/22490906
 
 B站：
 https://live.bilibili.com/320
+
+小红书：
+https://www.xiaohongshu.com/hina/livestream/568980065082002402?appuid=5f3f478a00000000010005b3&apptime=
 ```
 
 Tiktok目前只支持PC网页端地址（我没下载app），其他平台 app端直播间分享地址和网页端长地址都能正常进行录制（抖音尽量用长链接，避免因短链接转换失效导致不能正常录制）。
@@ -125,9 +130,13 @@ GET https://hmily.vip/api/jx/live/convert.php?url=https://v.douyin.com/iQLgKSj/
 
 ## ⏳提交日志
 
+- 20231203
+  - 新增小红书直播录制（全网首发），目前小红书官方没有切换清晰度功能，因此直播录制也只有默认画质
+  - 小红书录制暂时无法循环监测，每次主播开启直播，都要重新获取一次链接
+  - 获取链接的方式为 将直播间转发到微信，在微信中打开后，复制页面的链接。
 - 20231030
   - 本次更新只是进行修复，没时间新增功能。
-  - 欢迎各位大佬提pr 帮忙更新维护 ，Come on ！
+  - 欢迎各位大佬提pr 帮忙更新维护
 - 20230930
   - 新增抖音从接口获取直播流，增强稳定性
 
