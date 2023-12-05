@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub:https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2023-12-03 20:48:35
+Update: 2023-12-06 01:09:56
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -345,7 +345,7 @@ def get_xhs_stream_url(url: str, cookies: Union[str, None] = None) -> Dict[str, 
     if cookies:
         headers['Cookie'] = cookies
 
-    room_id = url.split('?')[0].rsplit('/',maxsplit=1)[1]
+    room_id = url.split('?')[0].rsplit('/', maxsplit=1)[1]
     appuid = re.search('appuid=(.*?)&', url).group(1)
     url = f'https://www.xiaohongshu.com/api/sns/red/live/app/v1/ecology/outside/share_info?room_id={room_id}'
     req = urllib.request.Request(url, headers=headers)
@@ -368,6 +368,40 @@ def get_xhs_stream_url(url: str, cookies: Union[str, None] = None) -> Dict[str, 
     return result
 
 
+@trace_error_decorator
+def get_bigo_stream_url(url: str, cookies: Union[str, None] = None) -> Dict[str, Any]:
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0',
+        'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'Referer': 'https://www.bigo.tv/',
+    }
+    if cookies:
+        headers['Cookie'] = cookies
+
+    room_id = re.search('www.bigo.tv/cn/(\d+)', url).group(1)
+    data = {'siteId': room_id}  # roomId
+    url = 'https://ta.bigo.tv/official_website/studio/getInternalStudioInfo'
+    data = urllib.parse.urlencode(data).encode('utf-8')
+    req = urllib.request.Request(url, data=data,headers=headers)
+    response = opener.open(req, timeout=15)
+    json_str = response.read().decode('utf-8')
+    json_data = json.loads(json_str)
+    anchor_name = json_data['data']['nick_name']
+    live_status = json_data['data']['alive']
+    result = {
+        "anchor_name": anchor_name,
+        "is_live": False,
+    }
+
+    if live_status == 1:
+        m3u8_url = json_data['data']['hls_src']
+        result['m3u8_url'] = m3u8_url
+        result['is_live'] = True
+        result['record_url'] = m3u8_url
+    return result
+
+
 if __name__ == '__main__':
     # 尽量用自己的cookie，以避免默认的不可用导致无法获取数据
     url = "https://live.douyin.com/745964462470"  # 抖音直播
@@ -380,7 +414,7 @@ if __name__ == '__main__':
     # url = 'https://live.bilibili.com/21593109'  # b站直播
     # 小红书直播
     # url = 'https://www.xiaohongshu.com/hina/livestream/568980065082002402?appuid=5f3f478a00000000010005b3&apptime='
-
+    # url = 'https://www.bigo.tv/cn/716418802'  # bigo直播
 
     print(get_douyin_stream_data(url))
     # print(get_tiktok_stream_data(url,'http://127.0.0.1:7890'))
@@ -391,4 +425,4 @@ if __name__ == '__main__':
     # print(get_yy_stream_data(url))
     # print(get_bilibili_stream_data(url))
     # print(get_xhs_stream_url(url))
-
+    # print(get_bigo_stream_url(url))

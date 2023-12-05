@@ -19,6 +19,7 @@
 - [x] YY
 - [x] B站
 - [x] 小红书
+- [x] bigo 
 - [ ] 更多平台正在更新中
 
 </div>
@@ -58,7 +59,7 @@
 - 当同时在录制多个直播时，最好线程数设置大一些，否则可能出现其中一个直播录制出错。当然设置的过大也没用，要同时考虑自身电脑的配置，如CPU内核数、网络带宽等限制。
 - 如果想直接使用打包好的录制软件，进入[Releases](https://github.com/ihmily/DouyinLiveRecorder/releases) 下载最新发布的 zip压缩包即可，有些电脑可能会报毒，直接忽略即可。
 - 如果要长时间挂着软件循环监测直播，最好循环时间设置长一点，避免因请求频繁导致被官方封禁IP 。
-- 最后，欢迎大家提交PR
+- 最后，欢迎大家提交fork和PR
 
 &emsp;
 
@@ -90,6 +91,9 @@ https://live.bilibili.com/320
 
 小红书：
 https://www.xiaohongshu.com/hina/livestream/568980065082002402?appuid=5f3f478a00000000010005b3&apptime=
+
+bigo：
+https://www.bigo.tv/cn/716418802
 ```
 
 Tiktok目前只支持PC网页端地址（我没下载app），其他平台 app端直播间分享地址和网页端长地址都能正常进行录制（抖音尽量用长链接，避免因短链接转换失效导致不能正常录制）。
@@ -98,7 +102,7 @@ Tiktok目前只支持PC网页端地址（我没下载app），其他平台 app�
 
 解析接口：
 
-该解析接口仅供演示，并且只包含抖音、快手、虎牙直播的解析，其他平台如有需要请自行添加，源码在这里 [DouyinLiveRecorder/api](https://github.com/ihmily/DouyinLiveRecorder/tree/main/api)
+该解析接口 ~~仅供演示~~(演示接口暂时停止)，并且只包含抖音、快手、虎牙直播的解析，其他平台如有需要请自行添加，源码在这里 [DouyinLiveRecorder/api](https://github.com/ihmily/DouyinLiveRecorder/tree/main/api)
 
 ```HTTP
 GET https://hmily.vip/api/jx/live/?url=
@@ -129,6 +133,9 @@ GET https://hmily.vip/api/jx/live/convert.php?url=https://v.douyin.com/iQLgKSj/
 </div>
 
 ## ⏳提交日志
+
+- 20231206
+  - 新增bigo直播录制
 
 - 20231203
   - 新增小红书直播录制（全网首发），目前小红书官方没有切换清晰度功能，因此直播录制也只有默认画质

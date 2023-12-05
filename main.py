@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2023-12-03 20:46:00
+Update: 2023-12-06 00:31:48
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -31,7 +31,8 @@ from spider import (
     get_douyu_stream_data,
     get_yy_stream_data,
     get_bilibili_stream_data,
-    get_xhs_stream_url
+    get_xhs_stream_url,
+    get_bigo_stream_url
 )
 
 from web_rid import (
@@ -45,8 +46,8 @@ from utils import (
 from msg_push import dingtalk, xizhi
 
 # 版本号
-version = "v2.0.3"
-platforms = "抖音|Tiktok|快手|虎牙|斗鱼|YY|B站|小红书"
+version = "v2.0.4"
+platforms = "抖音|Tiktok|快手|虎牙|斗鱼|YY|B站|小红书|bigo"
 # --------------------------全局变量-------------------------------------
 recording = set()
 unrecording = set()
@@ -591,6 +592,10 @@ def start_record(url_tuple, count_variable=-1):
                         with semaphore:
                             port_info = get_xhs_stream_url(record_url, xhs_cookie)
 
+                    elif record_url.find("https://www.bigo.tv/cn/") > -1:
+                        with semaphore:
+                            port_info = get_bigo_stream_url(record_url, bigo_cookie)
+
                     anchor_name:str= port_info.get("anchor_name", '')
 
                     if not anchor_name:
@@ -1119,6 +1124,7 @@ while True:
     yy_cookie = read_config_value(config, 'Cookie', 'YY_cookie', '')
     bili_cookie = read_config_value(config, 'Cookie', 'B站cookie', '')
     xhs_cookie = read_config_value(config, 'Cookie', '小红书cookie', '')
+    bigo_cookie = read_config_value(config, 'Cookie', 'bigo_cookie', '')
 
     if len(video_save_type) > 0:
         if video_save_type.upper().lower() == "FLV".lower():
@@ -1191,7 +1197,8 @@ while True:
                     'www.douyu.com',
                     'www.yy.com',
                     'live.bilibili.com',
-                    'www.xiaohongshu.com'
+                    'www.xiaohongshu.com',
+                    'www.bigo.tv'
                 ]
                 if url_host in host_list:
                     new_line = (url, split_line[1])
