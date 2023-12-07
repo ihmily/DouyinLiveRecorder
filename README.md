@@ -5,7 +5,7 @@
 ![GitHub issues](https://img.shields.io/github/issues/ihmily/DouyinLiveRecorder.svg)
 ![Downloads](https://img.shields.io/github/downloads/ihmily/DouyinLiveRecorder/total)
 
-一款可循环值守的直播录制工具，基于FFmpeg实现多平台直播源录制，支持自定义配置录制以及直播状态推送
+一款可循环值守的直播录制工具，基于FFmpeg实现多平台直播源录制，支持自定义配置录制以及直播状态推送。
 
 </div>
 
@@ -20,6 +20,7 @@
 - [x] B站
 - [x] 小红书
 - [x] bigo 
+- [x] blued
 - [ ] 更多平台正在更新中
 
 </div>
@@ -92,8 +93,11 @@ https://live.bilibili.com/320
 小红书：
 https://www.xiaohongshu.com/hina/livestream/568980065082002402?appuid=5f3f478a00000000010005b3&apptime=
 
-bigo：
+bigo直播：
 https://www.bigo.tv/cn/716418802
+
+buled直播：
+https://app.blued.cn/live?id=Mp6G2R
 ```
 
 Tiktok目前只支持PC网页端地址（我没下载app），其他平台 app端直播间分享地址和网页端长地址都能正常进行录制（抖音尽量用长链接，避免因短链接转换失效导致不能正常录制）。
@@ -102,7 +106,7 @@ Tiktok目前只支持PC网页端地址（我没下载app），其他平台 app�
 
 解析接口：
 
-该解析接口 ~~仅供演示~~(演示接口暂时停止)，并且只包含抖音、快手、虎牙直播的解析，其他平台如有需要请自行添加，源码在这里 [DouyinLiveRecorder/api](https://github.com/ihmily/DouyinLiveRecorder/tree/main/api)
+该解析接口 ~~仅供演示~~(演示接口暂时停止，后续再开放)，并且只包含抖音、快手、虎牙直播的解析，其他平台如有需要请自行添加，源码在这里 [DouyinLiveRecorder/api](https://github.com/ihmily/DouyinLiveRecorder/tree/main/api)
 
 ```HTTP
 GET https://hmily.vip/api/jx/live/?url=
@@ -133,6 +137,9 @@ GET https://hmily.vip/api/jx/live/convert.php?url=https://v.douyin.com/iQLgKSj/
 </div>
 
 ## ⏳提交日志
+
+- 20231207
+  - 新增blued直播录制，修复YY直播录制，新增直播结束消息推送
 
 - 20231206
   - 新增bigo直播录制

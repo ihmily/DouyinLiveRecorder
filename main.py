@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2023-12-06 00:31:48
+Update: 2023-12-07 01:33:19
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -13,6 +13,7 @@ import random
 import os
 import sys
 import urllib.parse
+import urllib.request
 import configparser
 import subprocess
 import threading
@@ -32,7 +33,8 @@ from spider import (
     get_yy_stream_data,
     get_bilibili_stream_data,
     get_xhs_stream_url,
-    get_bigo_stream_url
+    get_bigo_stream_url,
+    get_blued_stream_url
 )
 
 from web_rid import (
@@ -46,8 +48,8 @@ from utils import (
 from msg_push import dingtalk, xizhi
 
 # 版本号
-version = "v2.0.4"
-platforms = "抖音|Tiktok|快手|虎牙|斗鱼|YY|B站|小红书|bigo"
+version = "v2.0.5"
+platforms = "抖音|Tiktok|快手|虎牙|斗鱼|YY|B站|小红书|bigo直播|blued直播"
 # --------------------------全局变量-------------------------------------
 recording = set()
 unrecording = set()
@@ -301,7 +303,7 @@ def get_tiktok_stream_url(json_data):
         stream_data = live_room.get('liveRoom', {}).get('streamData', {}).get('pull_data', {}).get('stream_data', '{}')
         stream_data = json.loads(stream_data).get('data', {})
 
-        quality_list = list(stream_data.keys())  # ["origin","uhd","sd","ld"]
+        quality_list: list = list(stream_data.keys())  # ["origin","uhd","sd","ld"]
         while len(quality_list) < 4:
             quality_list.append(quality_list[-1])
         video_qualities = {"原画": 0, "蓝光": 0, "超清": 1, "高清": 2, "标清": 3}
@@ -592,11 +594,15 @@ def start_record(url_tuple, count_variable=-1):
                         with semaphore:
                             port_info = get_xhs_stream_url(record_url, xhs_cookie)
 
-                    elif record_url.find("https://www.bigo.tv/cn/") > -1:
+                    elif record_url.find("https://www.bigo.tv/") > -1:
                         with semaphore:
                             port_info = get_bigo_stream_url(record_url, bigo_cookie)
 
-                    anchor_name:str= port_info.get("anchor_name", '')
+                    elif record_url.find("https://app.blued.cn/") > -1:
+                        with semaphore:
+                            port_info = get_blued_stream_url(record_url, blued_cookie)
+
+                    anchor_name: str = port_info.get("anchor_name", '')
 
                     if not anchor_name:
                         print(f'序号{count_variable} 网址内容获取失败,进行重试中...获取失败的地址是:{url_tuple}')
@@ -622,8 +628,9 @@ def start_record(url_tuple, count_variable=-1):
                         else:
                             content = f"{record_name} 正在直播中..."
                             print(content)
+
                             # 推送通知
-                            if live_status_push != '':
+                            if live_status_push:
                                 if '微信' in live_status_push:
                                     xizhi(xizhi_api_url, content)
                                 if '钉钉' in live_status_push:
@@ -633,7 +640,7 @@ def start_record(url_tuple, count_variable=-1):
                             full_path = f'{default_path}/{anchor_name}'
                             if real_url != "":
                                 live_list.append(anchor_name)
-                                now = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime(time.time()))
+                                now = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime(time.time()))
                                 try:
                                     if len(video_save_path) > 0:
                                         if video_save_path[-1] != "/":
@@ -669,19 +676,12 @@ def start_record(url_tuple, count_variable=-1):
                                     "-fflags", "+discardcorrupt",
                                     "-i", real_url,
                                     "-bufsize", "5000k",
-                                    # "-map", "0",  # 不同点
                                     "-sn", "-dn",
-                                    # "-bsf:v","h264_mp4toannexb",
-                                    # "-c","copy",  # 直接用copy的话体积特别大.
-                                    # "-c:v","libx264",   # 后期可以用crf来控制大小
                                     "-reconnect_delay_max", "30",
                                     "-reconnect_streamed", "-reconnect_at_eof",
-                                    # "-c:v", "copy",  # 不同点
                                     "-c:a", "copy",
                                     "-max_muxing_queue_size", "64",
                                     "-correct_ts_overflow", "1",
-                                    # "-f", "matroska",  # 不同点
-                                    # "{path}".format(path=file),  # 不同点
                                 ]
 
                                 # 添加代理参数
@@ -723,7 +723,6 @@ def start_record(url_tuple, count_variable=-1):
                                         print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')}  {anchor_name} 未开播")
                                         logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
 
-
                                 elif video_save_type == "MKV":
                                     filename = anchor_name + '_' + now + ".mkv"
                                     print(f'{rec_info}/{filename}')
@@ -753,7 +752,6 @@ def start_record(url_tuple, count_variable=-1):
                                         # logging.warning(str(e.output))
                                         print(f"{e.output} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                         logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
-
 
                                 elif video_save_type == "MP4":
 
@@ -790,7 +788,6 @@ def start_record(url_tuple, count_variable=-1):
                                         # logging.warning(str(e.output))
                                         print(f"{e.output} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                         logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
-
 
                                 elif video_save_type == "MKV音频":
                                     filename = anchor_name + '_' + now + ".mkv"
@@ -846,7 +843,7 @@ def start_record(url_tuple, count_variable=-1):
 
                                     if Splitvideobysize:  # 这里默认是启用/不启用视频分割功能
                                         while True:
-                                            now = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime(time.time()))
+                                            now = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime(time.time()))
                                             filename = anchor_name + '_' + now + ".ts"
                                             print(f'{rec_info}/{filename}')
                                             file = full_path + '/' + filename
@@ -874,7 +871,7 @@ def start_record(url_tuple, count_variable=-1):
 
                                                 record_finished = True  # 这里表示正常录制成功一次
                                                 record_finished_2 = True
-                                                count_time = time.time()  # 这个记录当前时间, 用于后面 1分钟内快速2秒循环 这个值不能放到后面
+                                                count_time = time.time()
 
                                                 if tsconvert_to_mp4:
                                                     threading.Thread(target=converts_mp4, args=(file,)).start()
@@ -886,7 +883,6 @@ def start_record(url_tuple, count_variable=-1):
                                                 logger.warning(
                                                     f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                                 break
-
 
                                     else:
                                         filename = anchor_name + '_' + now + ".ts"
@@ -910,8 +906,7 @@ def start_record(url_tuple, count_variable=-1):
                                             ]
 
                                             ffmpeg_command.extend(command)
-                                            _output = subprocess.check_output(ffmpeg_command,
-                                                                              stderr=subprocess.STDOUT)
+                                            _output = subprocess.check_output(ffmpeg_command,stderr=subprocess.STDOUT)
                                             record_finished = True
                                             record_finished_2 = True
                                             count_time = time.time()
@@ -921,19 +916,26 @@ def start_record(url_tuple, count_variable=-1):
                                             if tsconvert_to_m4a:
                                                 threading.Thread(target=converts_m4a, args=(file,)).start()
 
-
                                         except subprocess.CalledProcessError as e:
                                             # logging.warning(str(e.output))
                                             print(f"{e.output} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                             logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
 
-                            if record_finished_2 == True:
+                            if record_finished_2:
                                 if record_name in recording:
                                     recording.remove(record_name)
                                 if anchor_name in unrecording:
                                     unrecording.add(anchor_name)
                                 print(f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制完成\n")
                                 record_finished_2 = False
+
+                                # 推送通知
+                                content = f"{record_name} 直播已结束"
+                                if live_status_push:
+                                    if '微信' in live_status_push:
+                                        xizhi(xizhi_api_url, content)
+                                    if '钉钉' in live_status_push:
+                                        dingtalk(dingtalk_api_url, content, dingtalk_phone_num)
 
                 except Exception as e:
                     print(f"错误信息:{e}\r\n读取的地址为: {record_url} 发生错误的行数: {e.__traceback__.tb_lineno}")
@@ -952,7 +954,7 @@ def start_record(url_tuple, count_variable=-1):
 
                 # 这里是.如果录制结束后,循环时间会暂时变成30s后检测一遍. 这样一定程度上防止主播卡顿造成少录
                 # 当30秒过后检测一遍后. 会回归正常设置的循环秒数
-                if record_finished == True:
+                if record_finished:
                     count_time_end = time.time() - count_time
                     if count_time_end < 60:
                         x = 30
@@ -985,7 +987,7 @@ def backup_file(file_path, backup_dir):
         if not os.path.exists(backup_dir):
             os.makedirs(backup_dir)
         # 拼接备份文件名，年-月-日-时-分-秒
-        timestamp = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
+        timestamp = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
         backup_file_name = os.path.basename(file_path) + '_' + timestamp
         # 拷贝文件到备份目录
         backup_file_path = os.path.join(backup_dir, backup_file_name)
@@ -1125,6 +1127,7 @@ while True:
     bili_cookie = read_config_value(config, 'Cookie', 'B站cookie', '')
     xhs_cookie = read_config_value(config, 'Cookie', '小红书cookie', '')
     bigo_cookie = read_config_value(config, 'Cookie', 'bigo_cookie', '')
+    blued_cookie = read_config_value(config, 'Cookie', 'blued_cookie', '')
 
     if len(video_save_type) > 0:
         if video_save_type.upper().lower() == "FLV".lower():
@@ -1198,7 +1201,8 @@ while True:
                     'www.yy.com',
                     'live.bilibili.com',
                     'www.xiaohongshu.com',
-                    'www.bigo.tv'
+                    'www.bigo.tv',
+                    'app.blued.cn'
                 ]
                 if url_host in host_list:
                     new_line = (url, split_line[1])

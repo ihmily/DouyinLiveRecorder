@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub:https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2023-12-06 01:09:56
+Update: 2023-12-07 23:35:47
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -288,7 +288,6 @@ def get_douyu_stream_data(rid: str, rate: str = '-1', cookies: Union[str, None] 
 
 @trace_error_decorator
 def get_yy_stream_data(url: str, cookies: Union[str, None] = None) -> Dict[str, Any]:
-    cid = re.search('yy.com/(.*?)/', url).group(1)
 
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
@@ -302,12 +301,12 @@ def get_yy_stream_data(url: str, cookies: Union[str, None] = None) -> Dict[str, 
     req = urllib.request.Request(url, headers=headers)
     response = opener.open(req, timeout=15)
     html_str = response.read().decode('utf-8')
-    live_info = re.search('<div class="w-liveplayer-head__content">(.*)<i class="follow-i">', html_str, re.S).group(1)
-    anchor_name = re.search('<h2>(.*?)</h2>', live_info).group(1)
+    anchor_name = re.search('nick: "(.*?)",\n\s+logo', html_str).group(1)
+    cid = re.search('sid : "(.*?)",\n\s+ssid', html_str, re.S).group(1)
 
-    data = '{"head":{"seq":1691766627723,"appidstr":"0","bidstr":"121","cidstr":"' + cid + '","sidstr":"' + cid + '","uid64":0,"client_type":108,"client_ver":"5.14.13","stream_sys_ver":1,"app":"yylive_web","playersdk_ver":"5.14.13","thundersdk_ver":"0","streamsdk_ver":"5.14.13"},"client_attribute":{"client":"web","model":"","cpu":"","graphics_card":"","os":"chrome","osversion":"0","vsdk_version":"","app_identify":"","app_version":"","business":"","width":"1536","height":"864","scale":"","client_type":8,"h265":0},"avp_parameter":{"version":1,"client_type":8,"service_type":0,"imsi":0,"send_time":1691766627,"line_seq":-1,"gear":4,"ssl":1,"stream_format":0}}'
+    data = '{"head":{"seq":1701869217590,"appidstr":"0","bidstr":"121","cidstr":"' + cid + '","sidstr":"' + cid + '","uid64":0,"client_type":108,"client_ver":"5.17.0","stream_sys_ver":1,"app":"yylive_web","playersdk_ver":"5.17.0","thundersdk_ver":"0","streamsdk_ver":"5.17.0"},"client_attribute":{"client":"web","model":"web0","cpu":"","graphics_card":"","os":"chrome","osversion":"0","vsdk_version":"","app_identify":"","app_version":"","business":"","width":"1920","height":"1080","scale":"","client_type":8,"h265":0},"avp_parameter":{"version":1,"client_type":8,"service_type":0,"imsi":0,"send_time":1701869217,"line_seq":-1,"gear":4,"ssl":1,"stream_format":0}}'
     data_bytes = data.encode('utf-8')
-    url2 = f'https://stream-manager.yy.com/v3/channel/streams?uid=0&cid={cid}&sid={cid}&appid=0&sequence=1691766112069&encode=json'
+    url2 = f'https://stream-manager.yy.com/v3/channel/streams?uid=0&cid={cid}&sid={cid}&appid=0&sequence=1701869217590&encode=json'
     req = urllib.request.Request(url2, data=data_bytes, headers=headers)
     response = opener.open(req, timeout=15)
     json_str = response.read().decode('utf-8')
@@ -383,7 +382,7 @@ def get_bigo_stream_url(url: str, cookies: Union[str, None] = None) -> Dict[str,
     data = {'siteId': room_id}  # roomId
     url = 'https://ta.bigo.tv/official_website/studio/getInternalStudioInfo'
     data = urllib.parse.urlencode(data).encode('utf-8')
-    req = urllib.request.Request(url, data=data,headers=headers)
+    req = urllib.request.Request(url, data=data, headers=headers)
     response = opener.open(req, timeout=15)
     json_str = response.read().decode('utf-8')
     json_data = json.loads(json_str)
@@ -402,8 +401,40 @@ def get_bigo_stream_url(url: str, cookies: Union[str, None] = None) -> Dict[str,
     return result
 
 
+@trace_error_decorator
+def get_blued_stream_url(url: str, cookies: Union[str, None] = None) -> Dict[str, Any]:
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 11; SAMSUNG SM-G973U) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/14.2 Chrome/87.0.4280.141 Mobile Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
+    }
+    if cookies:
+        headers['Cookie'] = cookies
+
+    req = urllib.request.Request(url, headers=headers)
+    response = opener.open(req, timeout=15)
+    html_str = response.read().decode('utf-8')
+    json_str = re.search('decodeURIComponent\(\"(.*?)\"\)\)\,window\.Promise', html_str, re.S).group(1)
+    json_str = urllib.parse.unquote(json_str)
+    json_data = json.loads(json_str)
+    anchor_name = json_data['userInfo']['name']
+    live_status = json_data['userInfo']['onLive']
+    result = {
+        "anchor_name": anchor_name,
+        "is_live": False,
+    }
+
+    if live_status:
+        m3u8_url = "http:" + json_data['liveInfo']['liveUrl']
+        result['m3u8_url'] = m3u8_url
+        result['is_live'] = True
+        result['record_url'] = m3u8_url
+    return result
+
+
 if __name__ == '__main__':
     # 尽量用自己的cookie，以避免默认的不可用导致无法获取数据
+    # 以下示例链接不保证时效性，请自行查看链接是否能正常访问
     url = "https://live.douyin.com/745964462470"  # 抖音直播
     # url = "https://www.tiktok.com/@pearlgaga88/live"  # Tiktok直播
     # url = "https://live.kuaishou.com/u/yall1102"  # 快手直播
@@ -415,9 +446,10 @@ if __name__ == '__main__':
     # 小红书直播
     # url = 'https://www.xiaohongshu.com/hina/livestream/568980065082002402?appuid=5f3f478a00000000010005b3&apptime='
     # url = 'https://www.bigo.tv/cn/716418802'  # bigo直播
+    # url = 'https://app.blued.cn/live?id=Mp6G2R'  # blued直播
 
     print(get_douyin_stream_data(url))
-    # print(get_tiktok_stream_data(url,'http://127.0.0.1:7890'))
+    # print(get_tiktok_stream_data(url,proxy_addr=''))
     # print(get_kuaishou_stream_data(url))
     # print(get_huya_stream_data(url))
     # print(get_douyu_info_data(url))
@@ -426,3 +458,4 @@ if __name__ == '__main__':
     # print(get_bilibili_stream_data(url))
     # print(get_xhs_stream_url(url))
     # print(get_bigo_stream_url(url))
+    # print(get_blued_stream_url(url))
