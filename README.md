@@ -21,6 +21,7 @@
 - [x] 小红书
 - [x] bigo 
 - [x] blued
+- [x] AfreecaTV
 - [ ] 更多平台正在更新中
 
 </div>
@@ -60,7 +61,7 @@
 - 当同时在录制多个直播时，最好线程数设置大一些，否则可能出现其中一个直播录制出错。当然设置的过大也没用，要同时考虑自身电脑的配置，如CPU内核数、网络带宽等限制。
 - 如果想直接使用打包好的录制软件，进入[Releases](https://github.com/ihmily/DouyinLiveRecorder/releases) 下载最新发布的 zip压缩包即可，有些电脑可能会报毒，直接忽略即可。
 - 如果要长时间挂着软件循环监测直播，最好循环时间设置长一点，避免因请求频繁导致被官方封禁IP 。
-- 最后，欢迎大家提交fork和PR
+- 最后，欢迎大家fork以及pr。
 
 &emsp;
 
@@ -98,6 +99,9 @@ https://www.bigo.tv/cn/716418802
 
 buled直播：
 https://app.blued.cn/live?id=Mp6G2R
+
+AfreecaTV：
+https://play.afreecatv.com/sw7love/249471484
 ```
 
 Tiktok目前只支持PC网页端地址（我没下载app），其他平台 app端直播间分享地址和网页端长地址都能正常进行录制（抖音尽量用长链接，避免因短链接转换失效导致不能正常录制）。
@@ -137,6 +141,9 @@ GET https://hmily.vip/api/jx/live/convert.php?url=https://v.douyin.com/iQLgKSj/
 </div>
 
 ## ⏳提交日志
+
+- 20231210
+  - 新增AfreecaTV直播录制，修复某些可能会发生的bug
 
 - 20231207
   - 新增blued直播录制，修复YY直播录制，新增直播结束消息推送

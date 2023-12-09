@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub:https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2023-12-07 23:35:47
+Update: 2023-12-10 01:01:12
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -40,9 +40,9 @@ def get_douyin_stream_data(url: str, cookies: Union[str, None] = None) -> Dict[s
         req = urllib.request.Request(url, headers=headers)
         response = opener.open(req, timeout=15)
         html_str = response.read().decode('utf-8')
-        match_json_str = re.search(r'(\{\\\"state\\\"\:.*?)\]\\n\"\]\)', html_str)
+        match_json_str = re.search(r'(\{\\"state\\":.*?)]\\n"]\)', html_str)
         if not match_json_str:
-            match_json_str = re.search(r'(\{\\\"common\\\"\:.*?)\]\\n\"\]\)\<\/script\>\<div hidden', html_str)
+            match_json_str = re.search(r'(\{\\"common\\":.*?)]\\n"]\)</script><div hidden', html_str)
         json_str = match_json_str.group(1)
         cleaned_string = json_str.replace('\\', '').replace(r'u0026', r'&')
         room_store = re.search('"roomStore":(.*?),"linkmicStore"', cleaned_string, re.S).group(1)
@@ -56,8 +56,8 @@ def get_douyin_stream_data(url: str, cookies: Union[str, None] = None) -> Dict[s
         print(f'失败地址：{url} 准备切换解析方法{e}')
         web_rid = re.match('https://live.douyin.com/(\d+)', url).group(1)
         headers['Cookie'] = 'sessionid=73d300f837f261eaa8ffc69d50162700'
-        url = f'https://live.douyin.com/webcast/room/web/enter/?aid=6383&app_name=douyin_web&live_id=1&web_rid={web_rid}'
-        req = urllib.request.Request(url, headers=headers)
+        url2 = f'https://live.douyin.com/webcast/room/web/enter/?aid=6383&app_name=douyin_web&live_id=1&web_rid={web_rid}'
+        req = urllib.request.Request(url2, headers=headers)
         response = opener.open(req, timeout=15)
         json_str = response.read().decode('utf-8')
         json_data = json.loads(json_str)['data']
@@ -68,7 +68,7 @@ def get_douyin_stream_data(url: str, cookies: Union[str, None] = None) -> Dict[s
 
 @trace_error_decorator
 def get_tiktok_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> Dict[
-    str, Any]:
+                                str, Any]:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.79',
         'Cookie': 'ttwid=1%7CM-rF193sJugKuNz2RGNt-rh6pAAR9IMceUSzlDnPCNI%7C1683274418%7Cf726d4947f2fc37fecc7aeb0cdaee52892244d04efde6f8a8edd2bb168263269; tiktok_webapp_theme=light; tt_chain_token=VWkygAWDlm1cFg/k8whmOg==; passport_csrf_token=6e422c5a7991f8cec7033a8082921510; passport_csrf_token_default=6e422c5a7991f8cec7033a8082921510; d_ticket=f8c267d4af4523c97be1ccb355e9991e2ae06; odin_tt=320b5f386cdc23f347be018e588873db7f7aea4ea5d1813681c3fbc018ea025dde957b94f74146dbc0e3612426b865ccb95ec8abe4ee36cca65f15dbffec0deff7b0e69e8ea536d46e0f82a4fc37d211; cmpl_token=AgQQAPNSF-RO0rT04baWtZ0T_jUjl4fVP4PZYM2QPw; uid_tt=319b558dbba684bb1557206c92089cd113a875526a89aee30595925d804b81c7; uid_tt_ss=319b558dbba684bb1557206c92089cd113a875526a89aee30595925d804b81c7; sid_tt=ad5e736f4bedb2f6d42ccd849e706b1d; sessionid=ad5e736f4bedb2f6d42ccd849e706b1d; sessionid_ss=ad5e736f4bedb2f6d42ccd849e706b1d; store-idc=useast5; store-country-code=us; store-country-code-src=uid; tt-target-idc=useast5; tt-target-idc-sign=qXNk0bb1pDQ0FbCNF120Pl9WWMLZg9Edv5PkfyCbS4lIk5ieW5tfLP7XWROnN0mEaSlc5hg6Oji1pF-yz_3ZXnUiNMrA9wNMPvI6D9IFKKVmq555aQzwPIGHv0aQC5dNRgKo5Z5LBkgxUMWEojTKclq2_L8lBciw0IGdhFm_XyVJtbqbBKKgybGDLzK8ZyxF4Jl_cYRXaDlshZjc38JdS6wruDueRSHe7YvNbjxCnApEFUv-OwJANSPU_4rvcqpVhq3JI2VCCfw-cs_4MFIPCDOKisk5EhAo2JlHh3VF7_CLuv80FXg_7ZqQ2pJeMOog294rqxwbbQhl3ATvjQV_JsWyUsMd9zwqecpylrPvtySI2u1qfoggx1owLrrUynee1R48QlanLQnTNW_z1WpmZBgVJqgEGLwFoVOmRzJuFFNj8vIqdjM2nDSdWqX8_wX3wplohkzkPSFPfZgjzGnQX28krhgTytLt7BXYty5dpfGtsdb11WOFHM6MZ9R9uLVB; sid_guard=ad5e736f4bedb2f6d42ccd849e706b1d%7C1690990657%7C15525213%7CMon%2C+29-Jan-2024+08%3A11%3A10+GMT; sid_ucp_v1=1.0.0-KGM3YzgwYjZhODgyYWI1NjIwNTA0NjBmOWUxMGRhMjIzYTI2YjMxNDUKGAiqiJ30keKD5WQQwfCppgYYsws4AkDsBxAEGgd1c2Vhc3Q1IiBhZDVlNzM2ZjRiZWRiMmY2ZDQyY2NkODQ5ZTcwNmIxZA; ssid_ucp_v1=1.0.0-KGM3YzgwYjZhODgyYWI1NjIwNTA0NjBmOWUxMGRhMjIzYTI2YjMxNDUKGAiqiJ30keKD5WQQwfCppgYYsws4AkDsBxAEGgd1c2Vhc3Q1IiBhZDVlNzM2ZjRiZWRiMmY2ZDQyY2NkODQ5ZTcwNmIxZA; tt_csrf_token=dD0EIH8q-pe3qDQsCyyD1jLN6KizJDRjOEyk; __tea_cache_tokens_1988={%22_type_%22:%22default%22%2C%22user_unique_id%22:%227229608516049831425%22%2C%22timestamp%22:1683274422659}; ttwid=1%7CM-rF193sJugKuNz2RGNt-rh6pAAR9IMceUSzlDnPCNI%7C1694002151%7Cd89b77afc809b1a610661a9d1c2784d80ebef9efdd166f06de0d28e27f7e4efe; msToken=KfJAVZ7r9D_QVeQlYAUZzDFbc1Yx-nZz6GF33eOxgd8KlqvTg1lF9bMXW7gFV-qW4MCgUwnBIhbiwU9kdaSpgHJCk-PABsHCtTO5J3qC4oCTsrXQ1_E0XtbqiE4OVLZ_jdF1EYWgKNPT2SnwGkQ=; msToken=KfJAVZ7r9D_QVeQlYAUZzDFbc1Yx-nZz6GF33eOxgd8KlqvTg1lF9bMXW7gFV-qW4MCgUwnBIhbiwU9kdaSpgHJCk-PABsHCtTO5J3qC4oCTsrXQ1_E0XtbqiE4OVLZ_jdF1EYWgKNPT2SnwGkQ='
@@ -77,6 +77,7 @@ def get_tiktok_stream_data(url: str, proxy_addr: Union[str, None] = None, cookie
         headers['Cookie'] = cookies
 
     if proxy_addr:
+
         proxies = {
             'http': proxy_addr,
             'https': proxy_addr
@@ -86,12 +87,12 @@ def get_tiktok_stream_data(url: str, proxy_addr: Union[str, None] = None, cookie
         html_str = html.text
 
     else:
+
         req = urllib.request.Request(url, headers=headers)
         response = urllib.request.urlopen(req, timeout=15)
         html_str = response.read().decode('utf-8')
-
     json_str = re.findall(
-        '<script id="SIGI_STATE" type="application/json">(.*?)<\/script><script id="SIGI_RETRY" type="application\/json">',
+        '<script id="SIGI_STATE" type="application/json">(.*?)</script><script id="SIGI_RETRY" type="application/json">',
         html_str)[0]
     json_data = json.loads(json_str)
     return json_data
@@ -149,8 +150,8 @@ def get_kuaishou_stream_data2(url: str, cookies: Union[str, None] = None) -> Dic
         eid = url.split('/u/')[1].strip()
         data = {"source": 5, "eid": eid, "shareMethod": "card", "clientType": "WEB_OUTSIDE_SHARE_H5"}
         data_encoded = json.dumps(data).encode('utf-8')
-        url2 = 'https://livev.m.chenzhongtech.com/rest/k/live/byUser?kpn=GAME_ZONE&captchaToken='
-        req = urllib.request.Request(url2, headers=headers, data=data_encoded)
+        app_api = 'https://livev.m.chenzhongtech.com/rest/k/live/byUser?kpn=GAME_ZONE&captchaToken='
+        req = urllib.request.Request(app_api, headers=headers, data=data_encoded)
         response = urllib.request.urlopen(req)
         json_str = response.read().decode('utf-8')
         json_data = json.loads(json_str)
@@ -243,12 +244,12 @@ def get_douyu_info_data(url: str) -> Dict[str, Any]:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
     }
-    url = f'https://m.douyu.com/{rid}'
-    req = urllib.request.Request(url, headers=headers)
+    url2 = f'https://m.douyu.com/{rid}'
+    req = urllib.request.Request(url2, headers=headers)
     response = opener.open(req, timeout=15)
 
     html_str = response.read().decode('utf-8')
-    json_str = re.search('\<script id\=\"vike_pageContext\" type\=\"application\/json\"\>(.*?)<\/script>',
+    json_str = re.search('<script id="vike_pageContext" type="application/json">(.*?)</script>',
                          html_str).group(1)
     json_data = json.loads(json_str)
     return json_data
@@ -288,7 +289,6 @@ def get_douyu_stream_data(rid: str, rate: str = '-1', cookies: Union[str, None] 
 
 @trace_error_decorator
 def get_yy_stream_data(url: str, cookies: Union[str, None] = None) -> Dict[str, Any]:
-
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
@@ -346,8 +346,8 @@ def get_xhs_stream_url(url: str, cookies: Union[str, None] = None) -> Dict[str, 
 
     room_id = url.split('?')[0].rsplit('/', maxsplit=1)[1]
     appuid = re.search('appuid=(.*?)&', url).group(1)
-    url = f'https://www.xiaohongshu.com/api/sns/red/live/app/v1/ecology/outside/share_info?room_id={room_id}'
-    req = urllib.request.Request(url, headers=headers)
+    app_api = f'https://www.xiaohongshu.com/api/sns/red/live/app/v1/ecology/outside/share_info?room_id={room_id}'
+    req = urllib.request.Request(app_api, headers=headers)
     response = opener.open(req, timeout=15)
     json_str = response.read().decode('utf-8')
     json_data = json.loads(json_str)
@@ -380,9 +380,9 @@ def get_bigo_stream_url(url: str, cookies: Union[str, None] = None) -> Dict[str,
 
     room_id = re.search('www.bigo.tv/cn/(\d+)', url).group(1)
     data = {'siteId': room_id}  # roomId
-    url = 'https://ta.bigo.tv/official_website/studio/getInternalStudioInfo'
+    url2 = 'https://ta.bigo.tv/official_website/studio/getInternalStudioInfo'
     data = urllib.parse.urlencode(data).encode('utf-8')
-    req = urllib.request.Request(url, data=data, headers=headers)
+    req = urllib.request.Request(url2, data=data, headers=headers)
     response = opener.open(req, timeout=15)
     json_str = response.read().decode('utf-8')
     json_data = json.loads(json_str)
@@ -414,7 +414,7 @@ def get_blued_stream_url(url: str, cookies: Union[str, None] = None) -> Dict[str
     req = urllib.request.Request(url, headers=headers)
     response = opener.open(req, timeout=15)
     html_str = response.read().decode('utf-8')
-    json_str = re.search('decodeURIComponent\(\"(.*?)\"\)\)\,window\.Promise', html_str, re.S).group(1)
+    json_str = re.search('decodeURIComponent\(\"(.*?)\"\)\),window\.Promise', html_str, re.S).group(1)
     json_str = urllib.parse.unquote(json_str)
     json_data = json.loads(json_str)
     anchor_name = json_data['userInfo']['name']
@@ -432,9 +432,111 @@ def get_blued_stream_url(url: str, cookies: Union[str, None] = None) -> Dict[str
     return result
 
 
+def get_afreecatv_cdn_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> Dict[
+    str, Any]:
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0',
+        'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
+        'Referer': 'https://play.afreecatv.com/oul282/249469582',
+        'Content-Type': 'application/x-www-form-urlencoded',
+    }
+    if cookies:
+        headers['Cookie'] = cookies
+
+    broad_no = url.split('/')[-1]
+
+    params = {
+        'return_type': 'gcp_cdn',
+        'use_cors': 'false',
+        'cors_origin_url': 'play.afreecatv.com',
+        'broad_key': f'{broad_no}-common-master-hls',
+        'time': '8361.086329376785',
+    }
+
+    url2 = 'http://livestream-manager.afreecatv.com/broad_stream_assign.html?' + urllib.parse.urlencode(params)
+
+    if proxy_addr:
+
+        proxies = {
+            'http': proxy_addr,
+            'https': proxy_addr
+        }
+
+        response = requests.get(url2, headers=headers, proxies=proxies, timeout=15)
+        json_data = response.json()
+
+    else:
+
+        req = urllib.request.Request(url2, headers=headers)
+        response = urllib.request.urlopen(req, timeout=15)
+        json_str = response.read().decode('utf-8')
+        json_data = json.loads(json_str)
+
+    return json_data
+
+
+@trace_error_decorator
+def get_afreecatv_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> Dict[
+    str, Any]:
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0',
+        'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
+        'Referer': 'https://m.afreecatv.com/',
+        'Content-Type': 'application/x-www-form-urlencoded',
+    }
+    if cookies:
+        headers['Cookie'] = cookies
+
+    bj_id, broad_no = url.split('/')[-2:]
+
+    data = {
+        'bj_id': bj_id,
+        'broad_no': broad_no,
+        'agent': 'web',
+        'confirm_adult': 'true',
+        'player_type': 'webm',
+        'mode': 'live',
+    }
+
+    url2 = 'http://api.m.afreecatv.com/broad/a/watch'
+
+    if proxy_addr:
+        proxies = {
+            'http': proxy_addr,
+            'https': proxy_addr
+        }
+        response = requests.post(url2, data=data, headers=headers, proxies=proxies, timeout=15)
+        json_data = response.json()
+
+    else:
+
+        data = urllib.parse.urlencode(data).encode('utf-8')
+        req = urllib.request.Request(url2, data=data, headers=headers)
+        response = urllib.request.urlopen(req, timeout=15)
+        json_str = response.read().decode('utf-8')
+        json_data = json.loads(json_str)
+
+    anchor_name = json_data['data']['user_nick']
+    result = {
+        "anchor_name": anchor_name,
+        "is_live": False,
+    }
+
+    if json_data['result'] == 1:
+        hls_authentication_key = json_data['data']['hls_authentication_key']
+        view_url = get_afreecatv_cdn_url(url, proxy_addr=proxy_addr)['view_url']
+        m3u8_url = view_url + '?aid=' + hls_authentication_key
+        result['m3u8_url'] = m3u8_url
+        result['is_live'] = True
+        result['record_url'] = m3u8_url
+    return result
+
+
 if __name__ == '__main__':
+
     # 尽量用自己的cookie，以避免默认的不可用导致无法获取数据
     # 以下示例链接不保证时效性，请自行查看链接是否能正常访问
+
     url = "https://live.douyin.com/745964462470"  # 抖音直播
     # url = "https://www.tiktok.com/@pearlgaga88/live"  # Tiktok直播
     # url = "https://live.kuaishou.com/u/yall1102"  # 快手直播
@@ -447,6 +549,8 @@ if __name__ == '__main__':
     # url = 'https://www.xiaohongshu.com/hina/livestream/568980065082002402?appuid=5f3f478a00000000010005b3&apptime='
     # url = 'https://www.bigo.tv/cn/716418802'  # bigo直播
     # url = 'https://app.blued.cn/live?id=Mp6G2R'  # blued直播
+    # url = 'https://play.afreecatv.com/sw7love/249471484'  # afreecatv直播
+    # url = 'https://m.afreecatv.com/#/player/ayoona/249489885'  # afreecatv直播
 
     print(get_douyin_stream_data(url))
     # print(get_tiktok_stream_data(url,proxy_addr=''))
@@ -459,3 +563,5 @@ if __name__ == '__main__':
     # print(get_xhs_stream_url(url))
     # print(get_bigo_stream_url(url))
     # print(get_blued_stream_url(url))
+    # print(get_afreecatv_cdn_url(url,proxy_addr=''))
+    # print(get_afreecatv_stream_url(url, proxy_addr=''))
