@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2023-12-10 04:39:32
+Update: 2023-12-10 05:13:20
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -26,6 +26,7 @@ import shutil
 from spider import (
     get_douyin_stream_data,
     get_tiktok_stream_data,
+    get_kuaishou_stream_data,
     get_kuaishou_stream_data2,
     get_huya_stream_data,
     get_douyu_info_data,
@@ -575,7 +576,7 @@ def start_record(url_tuple, count_variable=-1):
 
                     elif record_url.find("https://live.kuaishou.com/") > -1:
                         with semaphore:
-                            json_data = get_kuaishou_stream_data2(record_url, ks_cookie)
+                            json_data = get_kuaishou_stream_data(record_url, ks_cookie)
                             port_info = get_kuaishou_stream_url(json_data)
 
                     elif record_url.find("https://www.huya.com/") > -1:
