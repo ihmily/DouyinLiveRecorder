@@ -12,7 +12,7 @@
 ## 😺已支持平台
 
 - [x] 抖音
-- [x] Tiktok
+- [x] TikTok
 - [x] 快手
 - [x] 虎牙
 - [x] 斗鱼
@@ -72,7 +72,7 @@
 https://live.douyin.com/745964462470
 https://v.douyin.com/iQFeBnt/
 
-Tiktok：
+TikTok：
 https://www.tiktok.com/@pearlgaga88/live
 
 快手：
@@ -104,7 +104,7 @@ AfreecaTV：
 https://play.afreecatv.com/sw7love/249471484
 ```
 
-Tiktok目前只支持PC网页端地址（我没下载app），其他平台 app端直播间分享地址和网页端长地址都能正常进行录制（抖音尽量用长链接，避免因短链接转换失效导致不能正常录制）。
+直播间分享地址和网页端长地址都能正常进行录制（抖音尽量用长链接，避免因短链接转换失效导致不能正常录制）。
 
 </div>
 
@@ -143,9 +143,16 @@ GET https://hmily.vip/api/jx/live/convert.php?url=https://v.douyin.com/iQLgKSj/
 ## ⏳提交日志
 
 - 20231210
+  
+  - 修复录制分段bug，修复bigo录制检测bug
+  
+  - 新增自定义修改录制主播名
+  
+  
   - 新增AfreecaTV直播录制，修复某些可能会发生的bug
-
+  
 - 20231207
+
   - 新增blued直播录制，修复YY直播录制，新增直播结束消息推送
 
 - 20231206
@@ -166,7 +173,7 @@ GET https://hmily.vip/api/jx/live/convert.php?url=https://v.douyin.com/iQLgKSj/
   - 祝大家中秋节快乐！
 - 20230919
   - 修复了快手版本更新后录制出错的问题，增加了其自动获取cookie(~~稳定性未知~~)
-  - 修复了Tiktok显示正在直播但不进行录制的问题
+  - 修复了TikTok显示正在直播但不进行录制的问题
 - 20230907
   - 修复了因抖音官方更新了版本导致的录制出错以及短链接转换出错
 
@@ -174,7 +181,7 @@ GET https://hmily.vip/api/jx/live/convert.php?url=https://v.douyin.com/iQLgKSj/
 
   - 修改了配置文件字段，新增各平台自定义设置Cookie
 - 20230903
-  - 修复了Tiktok录制时报644无法录制的问题
+  - 修复了TikTok录制时报644无法录制的问题
   - 新增直播状态推送到钉钉和微信的功能，如有需要请看 [设置推送教程](https://d04vqdiqwr3.feishu.cn/docx/XFPwdDDvfobbzlxhmMYcvouynDh?from=from_copylink)
   - 最近比较忙，其他问题有时间再更新
 - 20230816
@@ -193,15 +200,15 @@ GET https://hmily.vip/api/jx/live/convert.php?url=https://v.douyin.com/iQLgKSj/
 - 20230805
   - 新增了虎牙直播录制，其暂时只能用flv视频流进行录制
 
-  - Web API 新增了快手和虎牙这两个平台的直播流解析（Tiktok要代理）
+  - Web API 新增了快手和虎牙这两个平台的直播流解析（TikTok要代理）
 - 20230804
   - 新增了快手直播录制，优化了部分代码
   - 上传了一个自动化获取抖音直播间页面Cookie的代码，可以用于录制
 - 20230803
   - 通宵更新 
-  - 新增了国际版抖音Tiktok的直播录制，去除冗余 简化了部分代码
+  - 新增了国际版抖音TikTok的直播录制，去除冗余 简化了部分代码
 - 20230724	
-  - 新增了一个通过抖音直播间地址获取直播视频流链接的API接口，使用php写的 上传即可用
+  - 新增了一个通过抖音直播间地址获取直播视频流链接的API接口，上传即可用
 
 
 &emsp;

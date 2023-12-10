@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2023-12-10 05:13:20
+Update: 2023-12-10 22:03:56
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -49,8 +49,8 @@ from utils import (
 )
 from msg_push import dingtalk, xizhi
 
-version = "v2.0.6"
-platforms = "抖音|Tiktok|快手|虎牙|斗鱼|YY|B站|小红书|bigo直播|blued直播|AfreecaTV"
+version = "v2.0.7"
+platforms = "抖音|TikTok|快手|虎牙|斗鱼|YY|B站|小红书|bigo直播|blued直播|AfreecaTV"
 # --------------------------全局变量-------------------------------------
 recording = set()
 unrecording = set()
@@ -98,8 +98,8 @@ def display_info():
                     sys.exit(0)
 
             print(f"是否开启代理录制: {'是' if use_proxy else '否'}", end=" | ")
-            if split_video_by_size:
-                print(f"TS录制分段开启，录制分段大小为 {split_size} M", end=" | ")
+            if split_video_by_time:
+                print(f"录制分段开启: {split_time}秒", end=" | ")
             print(f"是否生成时间文件: {'是' if create_time_file else '否'}", end=" | ")
             print(f"录制视频质量为: {video_quality}", end=" | ")
             print(f"录制视频格式为: {video_save_type}", end=" | ")
@@ -615,9 +615,16 @@ def start_record(url_tuple, count_variable=-1):
                         with semaphore:
                             port_info = get_afreecatv_stream_url(record_url, afreecatv_cookie)
 
-                    anchor_name: str = port_info.get("anchor_name", '')
+                    if anchor_name:
+                        anchor_split = anchor_name.split('主播:')
+                        if len(anchor_split) > 1 and anchor_split[1].strip():
+                            anchor_name = anchor_split[1].strip()
+                        else:
+                            anchor_name = port_info.get("anchor_name", '')
+                    else:
+                        anchor_name = port_info.get("anchor_name", '')
 
-                    if not anchor_name:
+                    if anchor_name == '':
                         print(f'序号{count_variable} 网址内容获取失败,进行重试中...获取失败的地址是:{url_tuple}')
                         warning_count += 1
                     else:
@@ -654,18 +661,18 @@ def start_record(url_tuple, count_variable=-1):
                             if real_url != "":
                                 live_list.append(anchor_name)
                                 now = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime(time.time()))
+
                                 try:
                                     if len(video_save_path) > 0:
                                         if video_save_path[-1] != "/":
                                             video_save_path = video_save_path + "/"
-                                        full_path = f'{video_save_path}/{anchor_name}'
-                                        if not os.path.exists(full_path):
-                                            os.makedirs(full_path)
                                     else:
-                                        full_path = './' + anchor_name
-                                        if not os.path.exists(anchor_name):
-                                            os.makedirs(full_path)
+                                        video_save_path = default_path + '/'
 
+                                    video_save_path = video_save_path.replace("\\", "/")
+                                    full_path = f'{video_save_path}{anchor_name}'
+                                    if not os.path.exists(full_path):
+                                        os.makedirs(full_path)
                                 except Exception as e:
                                     print(f"路径错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                     logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
@@ -696,13 +703,12 @@ def start_record(url_tuple, count_variable=-1):
                                     "-sn", "-dn",
                                     "-reconnect_delay_max", "30",
                                     "-reconnect_streamed", "-reconnect_at_eof",
-                                    "-c:a", "copy",
                                     "-max_muxing_queue_size", "64",
                                     "-correct_ts_overflow", "1",
                                 ]
 
                                 # 添加代理参数
-                                need_proxy_url = ['tiktok','afreecatv']
+                                need_proxy_url = ['tiktok', 'afreecatv']
                                 for i in need_proxy_url:
                                     if i in real_url:
                                         if use_proxy and proxy_addr != '':
@@ -747,20 +753,38 @@ def start_record(url_tuple, count_variable=-1):
                                     filename = anchor_name + '_' + now + ".mkv"
                                     print(f'{rec_info}/{filename}')
                                     save_file_path = full_path + '/' + filename
-                                    if create_time_file:
-                                        filename_gruop = [anchor_name, filename_short]
-                                        create_var[str(filename_short)] = threading.Thread(target=create_ass_file,
-                                                                                           args=(filename_gruop,))
-                                        create_var[str(filename_short)].daemon = True
-                                        create_var[str(filename_short)].start()
 
                                     try:
-                                        command = [
-                                            "-map", "0",
-                                            "-c:v", "copy",  # 直接用copy的话体积特别大.
-                                            "-f", "matroska",
-                                            "{path}".format(path=save_file_path),
-                                        ]
+                                        if split_video_by_time:
+                                            now = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
+                                            save_file_path = f"{full_path}/{anchor_name}_{now}_%03d.mkv"
+                                            command = [
+                                                "-c:v", "copy",
+                                                "-c:a", "aac",
+                                                "-map", "0",
+                                                "-f", "segment",
+                                                "-segment_time", split_time,
+                                                "-segment_format", "matroska",
+                                                "-reset_timestamps", "1",
+                                                save_file_path,
+                                            ]
+
+                                        else:
+                                            if create_time_file:
+                                                filename_gruop = [anchor_name, filename_short]
+                                                create_var[str(filename_short)] = threading.Thread(
+                                                    target=create_ass_file,
+                                                    args=(filename_gruop,))
+                                                create_var[str(filename_short)].daemon = True
+                                                create_var[str(filename_short)].start()
+
+                                            command = [
+                                                "-map", "0",
+                                                "-c:v", "copy",
+                                                "-c:a", "copy",
+                                                "-f", "matroska",
+                                                "{path}".format(path=save_file_path),
+                                            ]
                                         ffmpeg_command.extend(command)
 
                                         _output = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT)
@@ -777,26 +801,41 @@ def start_record(url_tuple, count_variable=-1):
                                     print(f'{rec_info}/{filename}')
                                     save_file_path = full_path + '/' + filename
 
-                                    if create_time_file:
-                                        filename_gruop = [anchor_name, filename_short]
-                                        create_var[str(filename_short)] = threading.Thread(target=create_ass_file,
-                                                                                           args=(filename_gruop,))
-                                        create_var[str(filename_short)].daemon = True
-                                        create_var[str(filename_short)].start()
-
                                     try:
-                                        command = [
-                                            "-map", "0",
-                                            "-c:v", "copy",  # 直接用copy的话体积特别大.
-                                            "-f", "mp4",
-                                            "{path}".format(path=save_file_path),
-                                        ]
+                                        if split_video_by_time:
+                                            now = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
+                                            save_file_path = f"{full_path}/{anchor_name}_{now}_%03d.mp4"
+                                            command = [
+                                                "-c:v", "copy",
+                                                "-c:a", "aac",
+                                                "-map", "0",
+                                                "-f", "segment",
+                                                "-segment_time", split_time,
+                                                "-segment_format", "mp4",
+                                                "-movflags", "+faststart",
+                                                "-reset_timestamps", "1",
+                                                save_file_path,
+                                            ]
+                                        else:
+                                            if create_time_file:
+                                                filename_gruop = [anchor_name, filename_short]
+                                                create_var[str(filename_short)] = threading.Thread(
+                                                    target=create_ass_file,
+                                                    args=(filename_gruop,))
+                                                create_var[str(filename_short)].daemon = True
+                                                create_var[str(filename_short)].start()
+
+                                            command = [
+                                                "-map", "0",
+                                                "-c:v", "copy",
+                                                "-c:a", "copy",
+                                                "-f", "mp4",
+                                                "{path}".format(path=save_file_path),
+                                            ]
+
                                         ffmpeg_command.extend(command)
                                         _output = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT)
 
-                                        # 取消http_proxy环境变量设置
-                                        # if proxy_addr:
-                                        #     del os.environ["http_proxy"]
 
                                     except subprocess.CalledProcessError as e:
                                         # logging.warning(str(e.output))
@@ -813,6 +852,7 @@ def start_record(url_tuple, count_variable=-1):
                                     try:
                                         command = [
                                             "-map", "0:a",
+                                            "-c:a", "copy",
                                             "-f", "matroska",
                                             "{path}".format(path=save_file_path),
                                         ]
@@ -836,6 +876,7 @@ def start_record(url_tuple, count_variable=-1):
                                     try:
                                         command = [
                                             "-map", "0:a",
+                                            "-c:a", "copy",
                                             "-f", "mpegts",
                                             "{path}".format(path=save_file_path),
                                         ]
@@ -851,50 +892,48 @@ def start_record(url_tuple, count_variable=-1):
                                         warning_count += 1
                                         no_error = False
 
-
-
                                 else:
+                                    if split_video_by_time:
+                                        now = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
+                                        filename = anchor_name + '_' + now + ".ts"
+                                        print(f'{rec_info}/{filename}')
 
-                                    if split_video_by_size:  # 这里默认是启用/不启用视频分割功能
-                                        while True:
-                                            now = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime(time.time()))
-                                            filename = anchor_name + '_' + now + ".ts"
-                                            print(f'{rec_info}/{filename}')
-                                            save_file_path = full_path + '/' + filename
+                                        try:
+                                            if tsconvert_to_mp4:
+                                                save_path_name = f"{full_path}/{anchor_name}_{now}_%03d.mp4"
+                                                audio_code = 'aac'
+                                                segment_format = 'mp4'
+                                            else:
+                                                save_path_name = f"{full_path}/{anchor_name}_{now}_%03d.ts"
+                                                audio_code = 'copy'
+                                                segment_format = 'mpegts'
 
-                                            if create_time_file:
-                                                filename_gruop = [anchor_name, filename_short]
-                                                create_var[str(filename_short)] = threading.Thread(
-                                                    target=create_ass_file,
-                                                    args=(filename_gruop,))
-                                                create_var[str(filename_short)].daemon = True
-                                                create_var[str(filename_short)].start()
+                                            command = [
+                                                "-c:v", "copy",
+                                                "-c:a", audio_code,
+                                                "-map", "0",
+                                                "-f", "segment",
+                                                "-segment_time", split_time,
+                                                "-segment_format", segment_format,
+                                                "-reset_timestamps", "1",
+                                                save_path_name,
+                                            ]
 
-                                            try:
-                                                command = [
-                                                    "-c:v", "copy",
-                                                    "-map", "0",
-                                                    "-f", "mpegts",
-                                                    "-fs", str(split_byte_sizes),
-                                                    "{path}".format(path=save_file_path),
-                                                ]
+                                            ffmpeg_command.extend(command)
+                                            _output = subprocess.check_output(ffmpeg_command,
+                                                                              stderr=subprocess.STDOUT)
 
-                                                ffmpeg_command.extend(command)
-                                                _output = subprocess.check_output(ffmpeg_command,
-                                                                                  stderr=subprocess.STDOUT)
+                                            if tsconvert_to_mp4:
+                                                threading.Thread(target=converts_mp4, args=(file,)).start()
+                                            if tsconvert_to_m4a:
+                                                threading.Thread(target=converts_m4a, args=(file,)).start()
 
-                                                if tsconvert_to_mp4:
-                                                    threading.Thread(target=converts_mp4, args=(file,)).start()
-                                                if tsconvert_to_m4a:
-                                                    threading.Thread(target=converts_m4a, args=(file,)).start()
-
-                                            except subprocess.CalledProcessError as e:
-                                                logging.warning(str(e.output))
-                                                logger.warning(
-                                                    f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
-                                                warning_count += 1
-                                                no_error = False
-                                                break
+                                        except subprocess.CalledProcessError as e:
+                                            logging.warning(str(e.output))
+                                            logger.warning(
+                                                f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
+                                            warning_count += 1
+                                            no_error = False
 
                                     else:
                                         filename = anchor_name + '_' + now + ".ts"
@@ -912,6 +951,7 @@ def start_record(url_tuple, count_variable=-1):
                                         try:
                                             command = [
                                                 "-c:v", "copy",
+                                                "-c:a", "copy",
                                                 "-map", "0",
                                                 "-f", "mpegts",
                                                 "{path}".format(path=save_file_path),
@@ -945,7 +985,8 @@ def start_record(url_tuple, count_variable=-1):
                                 if no_error:
                                     print(f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制完成\n")
                                 else:
-                                    print(f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制出错,请检查网络\n")
+                                    print(
+                                        f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制出错,请检查网络\n")
 
                                 record_finished_2 = False
 
@@ -1010,7 +1051,7 @@ def backup_file(file_path, backup_dir):
         timestamp = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
         backup_file_name = os.path.basename(file_path) + '_' + timestamp
 
-        backup_file_path = os.path.join(backup_dir, backup_file_name)
+        backup_file_path = os.path.join(backup_dir, backup_file_name).replace("\\", "/")
         shutil.copy2(file_path, backup_file_path)
         print(f'\r已备份配置文件 {file_path} 到 {backup_file_path}')
 
@@ -1097,7 +1138,7 @@ try:
     print('系统代理已开启√ 注意：配置文件中的代理设置也要开启才会生效哦！')
 
 except Exception as e:
-    print('INFO：未检测到全局/规则网络代理，请检查代理配置（若无需录制Tiktok直播请忽略此条提示）')
+    print('INFO：未检测到全局/规则网络代理，请检查代理配置（若无需录制TikTok直播请忽略此条提示）')
 
 
 def read_config_value(config, section, option, default_value):
@@ -1148,12 +1189,12 @@ while True:
     proxy_addr = read_config_value(config, '录制设置', '代理地址', "")
     max_request = int(read_config_value(config, '录制设置', '同一时间访问网络的线程数', 3))
     semaphore = threading.Semaphore(max_request)
-    delay_default = int(read_config_value(config, '录制设置', '循环时间(秒)', 60))
+    delay_default = int(read_config_value(config, '录制设置', '循环时间(秒)', 120))
     local_delay_default = int(read_config_value(config, '录制设置', '排队读取网址时间(秒)', 0))
     loop_time = options.get(read_config_value(config, '录制设置', '是否显示循环秒数', "否"), False)
-    split_video_by_size = options.get(read_config_value(config, '录制设置', 'TS格式分段录制是否开启', "否"), False)
-    split_size = int(read_config_value(config, '录制设置', '视频分段大小(兆)', '1000'))
-    tsconvert_to_mp4 = options.get(read_config_value(config, '录制设置', 'TS录制完成后自动增加生成MP4格式', "否"),
+    split_video_by_time = options.get(read_config_value(config, '录制设置', '分段录制是否开启', "否"), False)
+    split_time = str(read_config_value(config, '录制设置', '视频分段时间(秒)', 3600))
+    tsconvert_to_mp4 = options.get(read_config_value(config, '录制设置', 'TS录制完成后自动转为mp4格式', "否"),
                                    False)
     tsconvert_to_m4a = options.get(read_config_value(config, '录制设置', 'TS录制完成后自动增加生成m4a格式', "否"),
                                    False)
@@ -1165,10 +1206,10 @@ while True:
     dingtalk_phone_num = read_config_value(config, '推送配置', '钉钉通知@对象(填手机号)', "")
     dy_cookie = read_config_value(config, 'Cookie', '抖音cookie(录制抖音必须要有)', '')
     ks_cookie = read_config_value(config, 'Cookie', '快手cookie', '')
-    tiktok_cookie = read_config_value(config, 'Cookie', 'Tiktok_cookie', '')
+    tiktok_cookie = read_config_value(config, 'Cookie', 'tiktok_cookie', '')
     hy_cookie = read_config_value(config, 'Cookie', '虎牙cookie', '')
     douyu_cookie = read_config_value(config, 'Cookie', '斗鱼cookie', '')
-    yy_cookie = read_config_value(config, 'Cookie', 'YY_cookie', '')
+    yy_cookie = read_config_value(config, 'Cookie', 'yy_cookie', '')
     bili_cookie = read_config_value(config, 'Cookie', 'B站cookie', '')
     xhs_cookie = read_config_value(config, 'Cookie', '小红书cookie', '')
     bigo_cookie = read_config_value(config, 'Cookie', 'bigo_cookie', '')
@@ -1194,11 +1235,6 @@ while True:
     else:
         video_save_type = "TS"
         print("直播视频保存为TS格式")
-
-    # 这里是控制TS分段大小
-    if split_size < 5:
-        split_size = 5  # 分段大小最低不能小于5m
-    split_byte_sizes = split_size * 1024 * 1024  # 分割视频大小,转换为字节
 
 
     def transform_int_to_time(seconds):
