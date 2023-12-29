@@ -88,7 +88,10 @@ def display_info():
     while True:
         try:
             time.sleep(5)
-            os.system("cls")
+            if os.name == 'nt':
+                os.system("cls")
+            elif os.name == 'posix':
+                os.system("clear")
             print(f"\r共监测{monitoring}个直播中", end=" | ")
             print(f"同一时间访问网络的线程数: {max_request}", end=" | ")
             if len(video_save_path) > 0:
