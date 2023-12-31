@@ -491,7 +491,8 @@ def get_afreecatv_stream_url(url: str, proxy_addr: Union[str, None] = None, cook
     if cookies:
         headers['Cookie'] = cookies
 
-    bj_id = url.split('/')[3]
+    split_url = url.split('/')
+    bj_id = split_url[3] if len(split_url) < 6 else split_url[5]
 
     data = {
         'bj_id': bj_id,
@@ -554,8 +555,8 @@ if __name__ == '__main__':
     # url = 'https://www.xiaohongshu.com/hina/livestream/568980065082002402?appuid=5f3f478a00000000010005b3&apptime='
     # url = 'https://www.bigo.tv/cn/716418802'  # bigo直播
     # url = 'https://app.blued.cn/live?id=Mp6G2R'  # blued直播
-    # url = 'https://play.afreecatv.com/sw7love/249471484'  # afreecatv直播
-    # url = 'https://m.afreecatv.com/#/player/ayoona/249489885'  # afreecatv直播
+    # url = 'https://play.afreecatv.com/sw7love'  # afreecatv直播
+    # url = 'https://m.afreecatv.com/#/player/hl6260'  # afreecatv直播
 
     print(get_douyin_stream_data(url))
     # print(get_tiktok_stream_data(url,proxy_addr=''))
@@ -568,5 +569,4 @@ if __name__ == '__main__':
     # print(get_xhs_stream_url(url))
     # print(get_bigo_stream_url(url))
     # print(get_blued_stream_url(url))
-    # print(get_afreecatv_cdn_url(url,proxy_addr=''))
     # print(get_afreecatv_stream_url(url, proxy_addr=''))
