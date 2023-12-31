@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub:https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2023-12-10 22:31:12
+Update: 2024-01-01 05:40:36
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -438,7 +438,7 @@ def get_blued_stream_url(url: str, cookies: Union[str, None] = None) -> Dict[str
     return result
 
 
-def get_afreecatv_cdn_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> Dict[
+def get_afreecatv_cdn_url(broad_no: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> Dict[
     str, Any]:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0',
@@ -448,8 +448,6 @@ def get_afreecatv_cdn_url(url: str, proxy_addr: Union[str, None] = None, cookies
     }
     if cookies:
         headers['Cookie'] = cookies
-
-    broad_no = url.split('/')[-1]
 
     params = {
         'return_type': 'gcp_cdn',
@@ -493,11 +491,11 @@ def get_afreecatv_stream_url(url: str, proxy_addr: Union[str, None] = None, cook
     if cookies:
         headers['Cookie'] = cookies
 
-    bj_id, broad_no = url.split('/')[-2:]
+    bj_id = url.split('/')[3]
 
     data = {
         'bj_id': bj_id,
-        'broad_no': broad_no,
+        'broad_no': '',
         'agent': 'web',
         'confirm_adult': 'true',
         'player_type': 'webm',
@@ -529,8 +527,9 @@ def get_afreecatv_stream_url(url: str, proxy_addr: Union[str, None] = None, cook
     }
 
     if json_data['result'] == 1:
+        broad_no = json_data['data']['broad_no']
         hls_authentication_key = json_data['data']['hls_authentication_key']
-        view_url = get_afreecatv_cdn_url(url, proxy_addr=proxy_addr)['view_url']
+        view_url = get_afreecatv_cdn_url(broad_no, proxy_addr=proxy_addr)['view_url']
         m3u8_url = view_url + '?aid=' + hls_authentication_key
         result['m3u8_url'] = m3u8_url
         result['is_live'] = True
