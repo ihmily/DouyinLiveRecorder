@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  app:
+    image: douyin-live-recorder
+    environment:
+      - TERM=xterm-256color
+    tty: true
+    stdin_open: true
+    build: .
+    volumes:
+      - .:/app
+    restart: always

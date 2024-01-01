@@ -2,6 +2,8 @@
 
 ## 💡简介
 [![Python Version](https://img.shields.io/badge/python-3.11.6-blue.svg)](https://www.python.org/downloads/release/python-3116/)
+[![Supported Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux-blue.svg)](https://github.com/ihmily/DouyinLiveRecorder)
+[![Docker Support](https://img.shields.io/static/v1?label=Docker&message=Supported&color=blue&logo=docker)](https://hub.docker.com/r/ihmily/douyinliverecorder)
 ![GitHub issues](https://img.shields.io/github/issues/ihmily/DouyinLiveRecorder.svg)
 ![Downloads](https://img.shields.io/github/downloads/ihmily/DouyinLiveRecorder/total)
 
@@ -104,7 +106,7 @@ AfreecaTV：
 https://play.afreecatv.com/sw7love/249471484
 ```
 
-直播间分享地址和网页端长地址都能正常进行录制（抖音尽量用长链接，避免因短链接转换失效导致不能正常录制）。
+直播间分享地址和网页端长地址都能正常进行录制（抖音尽量用长链接，避免因短链接转换失效导致不能正常录制，需要有nodejs环境，否则无法转换）。
 
 </div>
 
@@ -130,7 +132,45 @@ GET https://hmily.vip/api/jx/live/convert.php?url=https://v.douyin.com/iQLgKSj/
 
 在线播放m3u8和flv视频网站：[M3U8 在线视频播放器 ](https://jx.hmily.vip/play/)
 
+&emsp;
 
+## 🐋容器运行
+
+首先确保已经安装了docker以及docker-compose，然后进入到项目文件夹，依次执行下面命令
+
+1.构建镜像
+
+```
+docker build -t douyin-live-recorder:2.0.7 .
+```
+
+或者直接使用
+
+```
+docker-compose build
+```
+
+2.运行容器实例
+
+运行之前确保URL配置文件中有直播间地址
+
+```
+docker-compose -f docker-compose.yaml up
+```
+
+可选 `-d` 在后台运行。第一次运行之后都可用 `docker-compose start`  启动已创建的容器。
+
+3.停止容器实例
+
+```
+docker-compose stop
+```
+
+4.注意事项
+
+①在docker容器内运行，请先在配置文件中添加要录制的直播间地址。②在容器内时，如果手动中断容器运行停止录制，会导致正在录制的视频文件损坏，所以一般不建议这么做。
+
+如果想避免手动中断或者异常中断导致文件损坏的情况，请使用 `ts` 格式录制 (其他系统同理)。
 
 &emsp;
 
@@ -142,15 +182,19 @@ GET https://hmily.vip/api/jx/live/convert.php?url=https://v.douyin.com/iQLgKSj/
 
 ## ⏳提交日志
 
+- 20240102
+  
+  - 修复Linux上运行，新增docker配置文件
+  
 - 20231210
-  
+
   - 修复录制分段bug，修复bigo录制检测bug
-  
+
   - 新增自定义修改录制主播名
-  
-  
+
+
   - 新增AfreecaTV直播录制，修复某些可能会发生的bug
-  
+
 - 20231207
 
   - 新增blued直播录制，修复YY直播录制，新增直播结束消息推送

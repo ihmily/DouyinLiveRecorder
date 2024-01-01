@@ -4,8 +4,8 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2023-12-10 22:03:56
-Copyright (c) 2023 by Hmily, All Rights Reserved.
+Update: 2024-01-02 05:57:10
+Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
 
@@ -23,6 +23,7 @@ import time
 import json
 import re
 import shutil
+import signal
 from spider import (
     get_douyin_stream_data,
     get_tiktok_stream_data,
@@ -79,6 +80,12 @@ default_path = os.getcwd()
 
 
 # --------------------------用到的函数-------------------------------------
+def signal_handler(signal, frame):
+    sys.exit(0)
+
+
+signal.signal(signal.SIGTERM, signal_handler)
+
 
 def display_info():
     # TODO: 显示当前录制配置信息
@@ -839,7 +846,6 @@ def start_record(url_tuple, count_variable=-1):
                                         ffmpeg_command.extend(command)
                                         _output = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT)
 
-
                                     except subprocess.CalledProcessError as e:
                                         # logging.warning(str(e.output))
                                         print(f"{e.output} 发生错误的行数: {e.__traceback__.tb_lineno}")
@@ -863,7 +869,7 @@ def start_record(url_tuple, count_variable=-1):
                                         _output = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT)
 
                                         if tsconvert_to_m4a:
-                                            threading.Thread(target=converts_m4a, args=(file,)).start()
+                                            threading.Thread(target=converts_m4a, args=(save_file_path,)).start()
                                     except subprocess.CalledProcessError as e:
                                         # logging.warning(str(e.output))
                                         print(f"{e.output} 发生错误的行数: {e.__traceback__.tb_lineno}")
@@ -887,7 +893,7 @@ def start_record(url_tuple, count_variable=-1):
                                         _output = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT)
 
                                         if tsconvert_to_m4a:
-                                            threading.Thread(target=converts_m4a, args=(file,)).start()
+                                            threading.Thread(target=converts_m4a, args=(save_file_path,)).start()
                                     except subprocess.CalledProcessError as e:
                                         # logging.warning(str(e.output))
                                         print(f"{e.output} 发生错误的行数: {e.__traceback__.tb_lineno}")
@@ -926,11 +932,6 @@ def start_record(url_tuple, count_variable=-1):
                                             _output = subprocess.check_output(ffmpeg_command,
                                                                               stderr=subprocess.STDOUT)
 
-                                            if tsconvert_to_mp4:
-                                                threading.Thread(target=converts_mp4, args=(file,)).start()
-                                            if tsconvert_to_m4a:
-                                                threading.Thread(target=converts_m4a, args=(file,)).start()
-
                                         except subprocess.CalledProcessError as e:
                                             logging.warning(str(e.output))
                                             logger.warning(
@@ -964,9 +965,9 @@ def start_record(url_tuple, count_variable=-1):
                                             _output = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT)
 
                                             if tsconvert_to_mp4:
-                                                threading.Thread(target=converts_mp4, args=(file,)).start()
+                                                threading.Thread(target=converts_mp4, args=(save_file_path,)).start()
                                             if tsconvert_to_m4a:
-                                                threading.Thread(target=converts_m4a, args=(file,)).start()
+                                                threading.Thread(target=converts_m4a, args=(save_file_path,)).start()
 
                                         except subprocess.CalledProcessError as e:
                                             # logging.warning(str(e.output))
