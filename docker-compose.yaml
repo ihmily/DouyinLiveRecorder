@@ -2,12 +2,12 @@ version: '3.8'
 
 services:
   app:
-    image: douyin-live-recorder
+    image: ihmily/douyin-live-recorder:2.0.7
     environment:
       - TERM=xterm-256color
     tty: true
     stdin_open: true
-    build: .
+    # build: .
     volumes:
       - .:/app
     restart: always
