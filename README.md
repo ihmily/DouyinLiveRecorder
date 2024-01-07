@@ -140,8 +140,9 @@ GET https://hmily.vip/api/jx/live/convert.php?url=https://v.douyin.com/iQLgKSj/
 &emsp;
 
 ## 🎃源码运行
+使用源码运行，前提要有Python环境，如果没有请先安装Python，再执行下面步骤。
 
-1.首先拉取本仓库项目代码
+1.首先拉取或手动下载本仓库项目代码
 
 ```bash
 git clone https://github.com/ihmily/DouyinLiveRecorder.git
@@ -154,19 +155,23 @@ cd DouyinLiveRecorder
 pip3 install -r requirements.txt
 ```
 
-3.安装[FFmpeg]([Download FFmpeg](https://ffmpeg.org/download.html#build-linux))，如果是Windows系统，这一步可跳过。执行以下命令安装，如果是CentOS执行
+3.安装[FFmpeg](https://ffmpeg.org/download.html#build-linux)，如果是Windows系统，这一步可跳过。对于Linux系统，执行以下命令安装
+
+CentOS执行
 
 ```bash
 yum install epel-release
 yum install ffmpeg
 ```
 
-如果是Ubuntu则执行
+Ubuntu则执行
 
 ```bash
 apt update
 apt install ffmpeg
 ```
+
+对于Mac系统，访问 https://evermeet.cx/ffmpeg/ 安装FFmpeg。
 
 4.运行程序
 
@@ -174,8 +179,9 @@ apt install ffmpeg
 python main.py
 ```
 
-&emsp;
+其中Linux系统请使用`python3 main.py` 运行。
 
+&emsp;
 ## 🐋容器运行
 
 在运行命令之前，请确保您的机器上安装了 [Docker](https://docs.docker.com/get-docker/) 和 [Docker Compose](https://docs.docker.com/compose/install/) 
