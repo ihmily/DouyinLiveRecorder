@@ -3,11 +3,11 @@
 ## 💡简介
 [![Python Version](https://img.shields.io/badge/python-3.11.6-blue.svg)](https://www.python.org/downloads/release/python-3116/)
 [![Supported Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux-blue.svg)](https://github.com/ihmily/DouyinLiveRecorder)
-[![Docker Support](https://img.shields.io/static/v1?label=Docker&message=Supported&color=blue&logo=docker)](https://hub.docker.com/repository/docker/ihmily/douyin-live-recorder/tags?page=1&ordering=last_updated)
+[![Docker Pulls](https://img.shields.io/docker/pulls/ihmily/douyin-live-recorder?label=Docker%20Pulls&color=blue&logo=docker)](https://hub.docker.com/r/ihmily/douyin-live-recorder/tags)
 ![GitHub issues](https://img.shields.io/github/issues/ihmily/DouyinLiveRecorder.svg)
 ![Downloads](https://img.shields.io/github/downloads/ihmily/DouyinLiveRecorder/total)
 
-一款可循环值守的直播录制工具，基于FFmpeg实现多平台直播源录制，支持自定义配置录制以及直播状态推送。
+一款简易的可循环值守的直播录制工具，基于FFmpeg实现多平台直播源录制，支持自定义配置录制以及直播状态推送。
 
 </div>
 
@@ -56,16 +56,19 @@
 
 ## 🌱使用说明
 
-- 运行主文件main.py启动程序
-- 在 `config` 文件夹内的配置文件中对录制进行配置，并在 `URL_config.ini` 中添加录制直播间地址。
-- 抖音录制需要使用到PC网页端直播间页面的Cookie，请先在config.ini配置文件中添加后再进行抖音录制（有默认的Cookie，但最好还是自己添加自己的）
-- 录制Tiktok时需要科学上网，请先在配置文件中设置开启代理并添加proxy_addr链接 如：`http://127.0.0.1:7890`
-- 可以在URL_config.ini中的链接开头加上#，此时将不会录制该条链接对应的直播（下次启动软件录制时才会生效）
-- 测试时有可能会出现在IDE如Pycharm中运行代码进行直播录制，录制出来的视频却无法正常播放的现象，如果遇到这个问题 在命令控制台DOS界面运行代码，录制出来的视频即可正常播放。
-- 当同时在录制多个直播时，最好线程数设置大一些，否则可能出现其中一个直播录制出错。当然设置的过大也没用，要同时考虑自身电脑的配置，如CPU内核数、网络带宽等限制。
-- 如果想直接使用打包好的录制软件，进入[Releases](https://github.com/ihmily/DouyinLiveRecorder/releases) 下载最新发布的 zip压缩包即可，有些电脑可能会报毒，直接忽略即可。
+- 对于只想使用录制软件的小白用户，进入[Releases](https://github.com/ihmily/DouyinLiveRecorder/releases) 中下载最新发布的 zip压缩包即可，里面有打包好的录制软件。（有些电脑可能会报毒，直接忽略即可，如果下载时被浏览器屏蔽，请更换浏览器下载）
+
+- 压缩包解压后，在 `config` 文件夹内的 `URL_config.ini` 中添加录制直播间地址，一行一个直播间地址。如果要自定义配置录制，可以修改`config.ini` 文件，推荐将录制格式修改为`ts`。
+- 以上步骤都做好后，就可以运行`DouyinLiveRecorder.exe` 程序进行录制了。
+
+- 另外，如果需要录制TikTok、AfreecaTV等海外平台，请在配置文件中设置开启代理并添加proxy_addr链接 如：`http://127.0.0.1:7890` （这只是示例地址，具体根据实际填写）。
+
+- 假如`URL_config.ini`文件中添加的直播间地址，有个别直播间暂时不想录制又不想移除链接，可以在对应直播间的链接开头加上`#`，那么下次启动软件录制时将跳过该直播间。
+
 - 如果要长时间挂着软件循环监测直播，最好循环时间设置长一点（咱也不差没录制到的那几分钟），避免因请求频繁导致被官方封禁IP 。
-- 最后，欢迎大家积极fork以及pr。
+
+- 要停止直播录制，使用`Ctrl+C ` 或直接关闭程序即可。
+- 最后，欢迎右上角给本项目一个star，同时也非常乐意大家提交pr。
 
 &emsp;
 
@@ -108,9 +111,9 @@ AfreecaTV：
 https://play.afreecatv.com/sw7love/249471484
 ```
 
-直播间分享地址和网页端长地址都能正常进行录制（抖音尽量用长链接，避免因短链接转换失效导致不能正常录制，需要有nodejs环境，否则无法转换）。
+直播间分享地址和网页端长地址都能正常进行录制（抖音尽量用长链接，避免因短链接转换失效导致不能正常录制，而且需要有nodejs环境，否则无法转换）。
 
-</div>
+&emsp;
 
 解析接口：
 
@@ -136,6 +139,43 @@ GET https://hmily.vip/api/jx/live/convert.php?url=https://v.douyin.com/iQLgKSj/
 
 &emsp;
 
+## 🎃源码运行
+
+1.首先拉取本仓库项目代码
+
+```bash
+git clone https://github.com/ihmily/DouyinLiveRecorder.git
+```
+
+2.进入项目文件夹，安装依赖
+
+```bash
+cd DouyinLiveRecorder
+pip3 install -r requirements.txt
+```
+
+3.安装[FFmpeg]([Download FFmpeg](https://ffmpeg.org/download.html#build-linux))，如果是Windows系统，这一步可跳过。执行以下命令安装，如果是CentOS执行
+
+```bash
+yum install epel-release
+yum install ffmpeg
+```
+
+如果是Ubuntu则执行
+
+```bash
+apt update
+apt install ffmpeg
+```
+
+4.运行程序
+
+```python
+python main.py
+```
+
+&emsp;
+
 ## 🐋容器运行
 
 在运行命令之前，请确保您的机器上安装了 [Docker](https://docs.docker.com/get-docker/) 和 [Docker Compose](https://docs.docker.com/compose/install/) 
@@ -144,7 +184,7 @@ GET https://hmily.vip/api/jx/live/convert.php?url=https://v.douyin.com/iQLgKSj/
 
 最简单方法是运行项目中的 [docker-compose.yaml](https://github.com/ihmily/DouyinLiveRecorder/blob/main/docker-compose.yaml) 文件，只需简单执行以下命令：
 
-```
+```bash
 docker-compose up
 ```
 
@@ -152,18 +192,18 @@ docker-compose up
 
 
 
-2.构建镜像
+2.构建镜像(可选)
 
-如果要自定义本地构建，可以修改 [docker-compose.yaml](https://github.com/ihmily/DouyinLiveRecorder/blob/main/docker-compose.yaml) 文件，取消 `# build: .` 注释，并修改镜像名，如 `douyin-live-recorder:2.0.7`，然后再执行
+如果你只想简单的运行程序，则不需要做这一步。要自定义本地构建，可以修改 [docker-compose.yaml](https://github.com/ihmily/DouyinLiveRecorder/blob/main/docker-compose.yaml) 文件，取消 `# build: .` 注释，并修改镜像名，如 `douyin-live-recorder:2.0.7`，然后再执行
 
-```
+```bash
 docker build -t douyin-live-recorder:2.0.7 .
 docker-compose up
 ```
 
 或者直接使用下面命令进行构建并启动
 
-```
+```bash
 docker-compose -f docker-compose.yaml up
 ```
 
@@ -171,7 +211,7 @@ docker-compose -f docker-compose.yaml up
 
 3.停止容器实例
 
-```
+```bash
 docker-compose stop
 ```
 
@@ -179,7 +219,9 @@ docker-compose stop
 
 4.注意事项
 
-①在docker容器内运行之前，请先在配置文件中添加要录制的直播间地址。②在容器内时，如果手动中断容器运行停止录制，会导致正在录制的视频文件损坏！
+①在docker容器内运行本程序之前，请先在配置文件中添加要录制的直播间地址。
+
+②在容器内时，如果手动中断容器运行停止录制，会导致正在录制的视频文件损坏！
 
 **如果想避免手动中断或者异常中断导致文件损坏的情况，请使用 `ts` 格式录制并且不要开启自动转成mp4设置**。
 
