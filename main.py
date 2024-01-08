@@ -699,21 +699,21 @@ def start_record(url_tuple, count_variable=-1):
                                 ffmpeg_command = [
                                     ffmpeg_path, "-y",
                                     "-v", "verbose",
-                                    "-rw_timeout", "15000000",  # 15s
+                                    "-rw_timeout", "30000000",  # 改为30s
                                     "-loglevel", "error",
                                     "-hide_banner",
                                     "-user_agent", user_agent,
                                     "-protocol_whitelist", "rtmp,crypto,file,http,https,tcp,tls,udp,rtp",
-                                    "-thread_queue_size", "1024",
-                                    "-analyzeduration", "2147483647",
-                                    "-probesize", "2147483647",
+                                    "-thread_queue_size", "512",
+                                    "-analyzeduration", "5000000",
+                                    "-probesize", "10000000",
                                     "-fflags", "+discardcorrupt",
                                     "-i", real_url,
-                                    "-bufsize", "5000k",
+                                    "-bufsize", "9000k",  # 适当增加输入缓冲区大小
                                     "-sn", "-dn",
-                                    "-reconnect_delay_max", "30",
+                                    "-reconnect_delay_max", "60",  # 适当增加最大重连延迟
                                     "-reconnect_streamed", "-reconnect_at_eof",
-                                    "-max_muxing_queue_size", "64",
+                                    "-max_muxing_queue_size", "128",  # 适当增加输出复用器的最大队列大小
                                     "-correct_ts_overflow", "1",
                                 ]
 
