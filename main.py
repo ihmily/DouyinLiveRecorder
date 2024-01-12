@@ -137,7 +137,6 @@ def display_info():
                 else:
                     start_display_time = now_time
         except Exception as e:
-            print(f"错误信息:{e}\r\n发生错误的行数: {e.__traceback__.tb_lineno}")
             logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
 
 
@@ -684,12 +683,9 @@ def start_record(url_tuple, count_variable=-1):
                                     if not os.path.exists(full_path):
                                         os.makedirs(full_path)
                                 except Exception as e:
-                                    print(f"路径错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                     logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
 
                                 if not os.path.exists(full_path):
-                                    print(
-                                        "保存路径不存在,不能生成录制.请避免把本程序放在c盘,桌面,下载文件夹,qq默认传输目录.请重新检查设置")
                                     logger.warning(
                                         "错误信息: 保存路径不存在,不能生成录制.请避免把本程序放在c盘,桌面,下载文件夹,qq默认传输目录.请重新检查设置")
 
@@ -754,7 +750,6 @@ def start_record(url_tuple, count_variable=-1):
                                             raise Exception('该直播无flv直播流，请切换视频保存类型')
 
                                     except Exception as e:
-                                        print(f"\r{time.strftime('%Y-%m-%d %H:%M:%S')}  {anchor_name} 未开播")
                                         logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                         warning_count += 1
                                         no_error = False
@@ -800,8 +795,6 @@ def start_record(url_tuple, count_variable=-1):
                                         _output = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT)
 
                                     except subprocess.CalledProcessError as e:
-                                        # logging.warning(str(e.output))
-                                        print(f"{e.output} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                         logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                         warning_count += 1
                                         no_error = False
@@ -847,8 +840,6 @@ def start_record(url_tuple, count_variable=-1):
                                         _output = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT)
 
                                     except subprocess.CalledProcessError as e:
-                                        # logging.warning(str(e.output))
-                                        print(f"{e.output} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                         logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                         warning_count += 1
                                         no_error = False
@@ -871,8 +862,6 @@ def start_record(url_tuple, count_variable=-1):
                                         if tsconvert_to_m4a:
                                             threading.Thread(target=converts_m4a, args=(save_file_path,)).start()
                                     except subprocess.CalledProcessError as e:
-                                        # logging.warning(str(e.output))
-                                        print(f"{e.output} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                         logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                         warning_count += 1
                                         no_error = False
@@ -895,8 +884,6 @@ def start_record(url_tuple, count_variable=-1):
                                         if tsconvert_to_m4a:
                                             threading.Thread(target=converts_m4a, args=(save_file_path,)).start()
                                     except subprocess.CalledProcessError as e:
-                                        # logging.warning(str(e.output))
-                                        print(f"{e.output} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                         logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                         warning_count += 1
                                         no_error = False
@@ -933,7 +920,6 @@ def start_record(url_tuple, count_variable=-1):
                                                                               stderr=subprocess.STDOUT)
 
                                         except subprocess.CalledProcessError as e:
-                                            logging.warning(str(e.output))
                                             logger.warning(
                                                 f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                             warning_count += 1
@@ -970,8 +956,6 @@ def start_record(url_tuple, count_variable=-1):
                                                 threading.Thread(target=converts_m4a, args=(save_file_path,)).start()
 
                                         except subprocess.CalledProcessError as e:
-                                            # logging.warning(str(e.output))
-                                            print(f"{e.output} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                             logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                             warning_count += 1
                                             no_error = False
@@ -1003,7 +987,6 @@ def start_record(url_tuple, count_variable=-1):
                                         dingtalk(dingtalk_api_url, content, dingtalk_phone_num)
 
                 except Exception as e:
-                    print(f"错误信息:{e}\r\n读取的地址为: {record_url} 发生错误的行数: {e.__traceback__.tb_lineno}")
                     logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                     warning_count += 1
 
@@ -1037,9 +1020,7 @@ def start_record(url_tuple, count_variable=-1):
                 if loop_time:
                     print('\r检测直播间中...', end="")
         except Exception as e:
-            print(f"错误信息:{e}\r\n发生错误的行数: {e.__traceback__.tb_lineno}")
             logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
-            print(f"线程崩溃2秒后重试.错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
             warning_count += 1
             time.sleep(2)
 
@@ -1314,7 +1295,6 @@ while True:
         first_start = False
 
     except Exception as e:
-        print(f"错误信息:{e}\r\n发生错误的行数: {e.__traceback__.tb_lineno}")
         logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
 
     if first_run:
