@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-01-02 05:57:10
+Update: 2024-01-14 23:07:29
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -37,7 +37,8 @@ from spider import (
     get_xhs_stream_url,
     get_bigo_stream_url,
     get_blued_stream_url,
-    get_afreecatv_stream_url
+    get_afreecatv_stream_url,
+    get_netease_stream_data
 )
 
 from web_rid import (
@@ -50,8 +51,8 @@ from utils import (
 )
 from msg_push import dingtalk, xizhi
 
-version = "v2.0.7"
-platforms = "抖音|TikTok|快手|虎牙|斗鱼|YY|B站|小红书|bigo直播|blued直播|AfreecaTV"
+version = "v2.0.8"
+platforms = "抖音|TikTok|快手|虎牙|斗鱼|YY|B站|小红书|bigo直播|blued直播|AfreecaTV|网易cc"
 # --------------------------全局变量-------------------------------------
 recording = set()
 unrecording = set()
@@ -534,6 +535,28 @@ def get_bilibili_stream_url(json_data):
     return result
 
 
+@trace_error_decorator
+def get_netease_stream_url(json_data):
+    if not json_data['is_live']:
+        return json_data
+    stream_list = json_data['stream_list']['resolution']
+    order = ['blueray', 'ultra', 'high', 'standard']
+    sorted_keys = [key for key in order if key in stream_list]
+    while len(sorted_keys) < 4:
+        sorted_keys.append(sorted_keys[-1])
+    quality_list = {'原画': 0, '蓝光': 0, '超清': 1, '高清': 2, '标清': 3}
+    selected_quality = sorted_keys[quality_list[video_quality]]
+    flv_url_list = stream_list[selected_quality]['cdn']
+    selected_cdn = list(flv_url_list.keys())[0]
+    flv_url = flv_url_list[selected_cdn]
+    return {
+        "is_live": True,
+        "anchor_name": json_data['anchor_name'],
+        "flv_url": flv_url,
+        "record_url": flv_url
+    }
+
+
 def start_record(url_tuple, count_variable=-1):
     global warning_count
     global video_save_path
@@ -623,6 +646,11 @@ def start_record(url_tuple, count_variable=-1):
                     elif record_url.find("afreecatv.com/") > -1:
                         with semaphore:
                             port_info = get_afreecatv_stream_url(record_url, afreecatv_cookie)
+
+                    elif record_url.find("cc.163.com/") > -1:
+                        with semaphore:
+                            json_data = get_netease_stream_data(record_url, yy_cookie)
+                            port_info = get_netease_stream_url(json_data)
 
                     if anchor_name:
                         anchor_split = anchor_name.split('主播:')
@@ -1259,7 +1287,8 @@ while True:
                     'www.bigo.tv',
                     'app.blued.cn',
                     'play.afreecatv.com',
-                    'm.afreecatv.com'
+                    'm.afreecatv.com',
+                    'cc.163.com'
                 ]
                 if url_host in host_list:
                     new_line = (url, split_line[1])

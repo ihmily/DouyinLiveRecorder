@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub:https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-01-01 05:40:36
+Update: 2024-01-14 22:42:18
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -68,7 +68,7 @@ def get_douyin_stream_data(url: str, cookies: Union[str, None] = None) -> Dict[s
 
 @trace_error_decorator
 def get_tiktok_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> Dict[
-                                str, Any]:
+    str, Any]:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.79',
         'Cookie': 'ttwid=1%7CM-rF193sJugKuNz2RGNt-rh6pAAR9IMceUSzlDnPCNI%7C1683274418%7Cf726d4947f2fc37fecc7aeb0cdaee52892244d04efde6f8a8edd2bb168263269; tiktok_webapp_theme=light; tt_chain_token=VWkygAWDlm1cFg/k8whmOg==; passport_csrf_token=6e422c5a7991f8cec7033a8082921510; passport_csrf_token_default=6e422c5a7991f8cec7033a8082921510; d_ticket=f8c267d4af4523c97be1ccb355e9991e2ae06; odin_tt=320b5f386cdc23f347be018e588873db7f7aea4ea5d1813681c3fbc018ea025dde957b94f74146dbc0e3612426b865ccb95ec8abe4ee36cca65f15dbffec0deff7b0e69e8ea536d46e0f82a4fc37d211; cmpl_token=AgQQAPNSF-RO0rT04baWtZ0T_jUjl4fVP4PZYM2QPw; uid_tt=319b558dbba684bb1557206c92089cd113a875526a89aee30595925d804b81c7; uid_tt_ss=319b558dbba684bb1557206c92089cd113a875526a89aee30595925d804b81c7; sid_tt=ad5e736f4bedb2f6d42ccd849e706b1d; sessionid=ad5e736f4bedb2f6d42ccd849e706b1d; sessionid_ss=ad5e736f4bedb2f6d42ccd849e706b1d; store-idc=useast5; store-country-code=us; store-country-code-src=uid; tt-target-idc=useast5; tt-target-idc-sign=qXNk0bb1pDQ0FbCNF120Pl9WWMLZg9Edv5PkfyCbS4lIk5ieW5tfLP7XWROnN0mEaSlc5hg6Oji1pF-yz_3ZXnUiNMrA9wNMPvI6D9IFKKVmq555aQzwPIGHv0aQC5dNRgKo5Z5LBkgxUMWEojTKclq2_L8lBciw0IGdhFm_XyVJtbqbBKKgybGDLzK8ZyxF4Jl_cYRXaDlshZjc38JdS6wruDueRSHe7YvNbjxCnApEFUv-OwJANSPU_4rvcqpVhq3JI2VCCfw-cs_4MFIPCDOKisk5EhAo2JlHh3VF7_CLuv80FXg_7ZqQ2pJeMOog294rqxwbbQhl3ATvjQV_JsWyUsMd9zwqecpylrPvtySI2u1qfoggx1owLrrUynee1R48QlanLQnTNW_z1WpmZBgVJqgEGLwFoVOmRzJuFFNj8vIqdjM2nDSdWqX8_wX3wplohkzkPSFPfZgjzGnQX28krhgTytLt7BXYty5dpfGtsdb11WOFHM6MZ9R9uLVB; sid_guard=ad5e736f4bedb2f6d42ccd849e706b1d%7C1690990657%7C15525213%7CMon%2C+29-Jan-2024+08%3A11%3A10+GMT; sid_ucp_v1=1.0.0-KGM3YzgwYjZhODgyYWI1NjIwNTA0NjBmOWUxMGRhMjIzYTI2YjMxNDUKGAiqiJ30keKD5WQQwfCppgYYsws4AkDsBxAEGgd1c2Vhc3Q1IiBhZDVlNzM2ZjRiZWRiMmY2ZDQyY2NkODQ5ZTcwNmIxZA; ssid_ucp_v1=1.0.0-KGM3YzgwYjZhODgyYWI1NjIwNTA0NjBmOWUxMGRhMjIzYTI2YjMxNDUKGAiqiJ30keKD5WQQwfCppgYYsws4AkDsBxAEGgd1c2Vhc3Q1IiBhZDVlNzM2ZjRiZWRiMmY2ZDQyY2NkODQ5ZTcwNmIxZA; tt_csrf_token=dD0EIH8q-pe3qDQsCyyD1jLN6KizJDRjOEyk; __tea_cache_tokens_1988={%22_type_%22:%22default%22%2C%22user_unique_id%22:%227229608516049831425%22%2C%22timestamp%22:1683274422659}; ttwid=1%7CM-rF193sJugKuNz2RGNt-rh6pAAR9IMceUSzlDnPCNI%7C1694002151%7Cd89b77afc809b1a610661a9d1c2784d80ebef9efdd166f06de0d28e27f7e4efe; msToken=KfJAVZ7r9D_QVeQlYAUZzDFbc1Yx-nZz6GF33eOxgd8KlqvTg1lF9bMXW7gFV-qW4MCgUwnBIhbiwU9kdaSpgHJCk-PABsHCtTO5J3qC4oCTsrXQ1_E0XtbqiE4OVLZ_jdF1EYWgKNPT2SnwGkQ=; msToken=KfJAVZ7r9D_QVeQlYAUZzDFbc1Yx-nZz6GF33eOxgd8KlqvTg1lF9bMXW7gFV-qW4MCgUwnBIhbiwU9kdaSpgHJCk-PABsHCtTO5J3qC4oCTsrXQ1_E0XtbqiE4OVLZ_jdF1EYWgKNPT2SnwGkQ='
@@ -108,7 +108,7 @@ def get_kuaishou_stream_data(url: str, cookies: Union[str, None] = None) -> Dict
     req = urllib.request.Request(url, headers=headers)
     response = opener.open(req, timeout=15)
     html_str = response.read().decode('utf-8')
-    json_str = re.search('__INITIAL_STATE__=(.*?);\(function', html_str).group(1)
+    json_str = re.search('<script>window.__INITIAL_STATE__=(.*?);\(function', html_str).group(1)
     json_data = json.loads(json_str)
     result = {
         "type": 1,
@@ -402,8 +402,8 @@ def get_bigo_stream_url(url: str, cookies: Union[str, None] = None) -> Dict[str,
         req = urllib.request.Request(url, headers=headers)
         response = opener.open(req, timeout=15)
         html_str = response.read().decode('utf-8')
-        result['anchor_name'] = re.search('<title>(.*?)</title>',html_str,re.S).group(1)
-        
+        result['anchor_name'] = re.search('<title>(.*?)</title>', html_str, re.S).group(1)
+
     return result
 
 
@@ -538,8 +538,36 @@ def get_afreecatv_stream_url(url: str, proxy_addr: Union[str, None] = None, cook
     return result
 
 
-if __name__ == '__main__':
+# @trace_error_decorator
+def get_netease_stream_data(url: str, cookies: Union[str, None] = None) -> Dict[str, Any]:
+    headers = {
+        'accept': 'application/json, text/plain, */*',
+        'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
+        'referer': 'https://cc.163.com/',
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.58',
+    }
+    if cookies:
+        headers['Cookie'] = cookies
 
+    req = urllib.request.Request(url, headers=headers)
+    response = opener.open(req, timeout=15)
+    html_str = response.read().decode('utf-8')
+    json_str = re.search('<script id="__NEXT_DATA__" .* crossorigin="anonymous">(.*?)</script></body>', html_str,
+                         re.S).group(1)
+    json_data = json.loads(json_str)
+    room_data = json_data['props']['pageProps']['roomInfoInitData']
+    live_data = room_data['live']
+    result = {"is_live": False}
+    if 'quickplay' not in live_data:
+        result["anchor_name"] = room_data['nickname']
+    else:
+        result["anchor_name"] = live_data['nickname']
+        result["stream_list"] = live_data['quickplay']
+        result["is_live"] = True
+    return result
+
+
+if __name__ == '__main__':
     # 尽量用自己的cookie，以避免默认的不可用导致无法获取数据
     # 以下示例链接不保证时效性，请自行查看链接是否能正常访问
 
@@ -557,6 +585,7 @@ if __name__ == '__main__':
     # url = 'https://app.blued.cn/live?id=Mp6G2R'  # blued直播
     # url = 'https://play.afreecatv.com/sw7love'  # afreecatv直播
     # url = 'https://m.afreecatv.com/#/player/hl6260'  # afreecatv直播
+    # url = 'https://cc.163.com/583946984'
 
     print(get_douyin_stream_data(url))
     # print(get_tiktok_stream_data(url,proxy_addr=''))
@@ -570,3 +599,4 @@ if __name__ == '__main__':
     # print(get_bigo_stream_url(url))
     # print(get_blued_stream_url(url))
     # print(get_afreecatv_stream_url(url, proxy_addr=''))
+    # print(get_netease_stream_data(url))

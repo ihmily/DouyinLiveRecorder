@@ -24,6 +24,7 @@
 - [x] bigo 
 - [x] blued
 - [x] AfreecaTV
+- [x] 网易cc
 - [ ] 更多平台正在更新中
 
 </div>
@@ -35,12 +36,13 @@
 └── DouyinLiveRecorder/
     ├── /api -> (get live stream api )
     ├── /config -> (config record)
-    ├── /log -> (save runing log file)
+    ├── /logs -> (save runing log file)
     ├── /backup_config -> (backup file)
     ├── /libs -> (dll file)
     ├── main.py -> (main file)
     ├── spider.py-> (get live url)
     ├── utils.py -> (contains utility functions)
+    ├── logger.py -> (logger handdle)
     ├── web_rid.py -> (get web_rid)
     ├── msg_push.py -> (send live status update message)
     ├── cookies.py -> (get douyin cookies)
@@ -108,7 +110,10 @@ buled直播：
 https://app.blued.cn/live?id=Mp6G2R
 
 AfreecaTV：
-https://play.afreecatv.com/sw7love/249471484
+https://play.afreecatv.com/sw7love
+
+网易cc：
+https://cc.163.com/583946984
 ```
 
 直播间分享地址和网页端长地址都能正常进行录制（抖音尽量用长链接，避免因短链接转换失效导致不能正常录制，而且需要有nodejs环境，否则无法转换）。
@@ -236,15 +241,21 @@ docker-compose stop
 ## ❤️贡献者
 
 &ensp;&ensp; [![Hmily](https://github.com/ihmily.png?size=50)](https://github.com/ihmily)
+[![iridescentGray](https://github.com/iridescentGray.png?size=50)](https://github.com/iridescentGray)
+[![annidy](https://github.com/annidy.png?size=50)](https://github.com/annidy)
 
 </div>
 
 ## ⏳提交日志
 
+- 20240114
+  - 新增网易cc直播录制，优化ffmpeg参数，修改AfreecaTV输入直播地址格式
+  
+  - 修改日志记录器 @[iridescentGray](https://github.com/iridescentGray)
+  
 - 20240102
-  
   - 修复Linux上运行，新增docker配置文件
-  
+
 - 20231210
 
   - 修复录制分段bug，修复bigo录制检测bug
