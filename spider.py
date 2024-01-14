@@ -585,7 +585,7 @@ if __name__ == '__main__':
     # url = 'https://app.blued.cn/live?id=Mp6G2R'  # blued直播
     # url = 'https://play.afreecatv.com/sw7love'  # afreecatv直播
     # url = 'https://m.afreecatv.com/#/player/hl6260'  # afreecatv直播
-    # url = 'https://cc.163.com/583946984'
+    # url = 'https://cc.163.com/583946984'  # 网易cc直播
 
     print(get_douyin_stream_data(url))
     # print(get_tiktok_stream_data(url,proxy_addr=''))
