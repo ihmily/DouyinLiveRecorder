@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub:https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-01-14 22:42:18
+Update: 2024-01-16 01:51:29
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -104,34 +104,43 @@ def get_kuaishou_stream_data(url: str, cookies: Union[str, None] = None) -> Dict
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
     }
+    if cookies:
+        headers['Cookie'] = cookies
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        response = urllib.request.urlopen(req, timeout=15)
+        html_str = response.read().decode('utf-8')
+    except Exception as e:
+        print(f"Failed to fetch data from {url}.{e}")
+        return {"type": 1, "is_live": False}
 
-    req = urllib.request.Request(url, headers=headers)
-    response = opener.open(req, timeout=15)
-    html_str = response.read().decode('utf-8')
-    json_str = re.search('<script>window.__INITIAL_STATE__=(.*?);\(function', html_str).group(1)
-    json_data = json.loads(json_str)
-    result = {
-        "type": 1,
-        "is_live": False,
-    }
+    try:
+        json_str = re.search('<script>window.__INITIAL_STATE__=(.*?);\(function\(\)\{var s;', html_str).group(1)
+        play_list = re.findall('(\{"liveStream".*?),"gameInfo', json_str)[0] + "}"
+        play_list = json.loads(play_list)
+    except (AttributeError, IndexError, json.JSONDecodeError) as e:
+        print(f"Failed to parse JSON data from {url}. Error: {e}")
+        return {"type": 1, "is_live": False}
 
-    live_stream = json_data.get('liveroom', None)
-    if live_stream:
-        play_list = live_stream["playList"][0]
-        if 'errorType' in play_list or 'liveStream' not in play_list:
-            error_msg = play_list['errorType']['title'] + play_list['errorType']['content']
-            print(f'失败地址：{url} 错误信息: {error_msg}')
-            print('提示信息：请打开快手直播页面正常随机进入一个直播间，即可解除频繁访问限制')
-            return result
-        anchor_name = play_list['author']['name']
-        result['anchor_name'] = anchor_name
+    result = {"type": 1, "is_live": False}
 
-        live_status = play_list['isLiving']
-        if live_status:
-            play_url = play_list['liveStream']['playUrls'][0]['adaptationSet']['representation'][0]['url']
-            result['flv_url'] = play_url
-            result['record_url'] = play_url
-            result['is_live'] = True
+    if 'errorType' in play_list or 'liveStream' not in play_list:
+        error_msg = play_list.get('errorType', {}).get('title', '') + play_list.get('errorType', {}).get('content', '')
+        print(f'失败地址：{url} 错误信息: {error_msg}')
+        print('提示信息：请打开快手直播页面正常随机进入一个直播间，即可解除频繁访问限制')
+        return result
+
+    if not play_list.get('liveStream'):
+        print("IP banned. Please change device or network.")
+        return result
+
+    anchor_name = play_list['author'].get('name', '')
+    result.update({"anchor_name": anchor_name})
+
+    if play_list['liveStream'].get("playUrls"):
+        play_url = play_list['liveStream']['playUrls'][0]['adaptationSet']['representation'][0].get('url', '')
+        result.update({"flv_url": play_url, "record_url": play_url, "is_live": True})
+
     return result
 
 
