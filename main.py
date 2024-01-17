@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-01-16 02:15:40
+Update: 2024-01-14 23:07:29
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -49,7 +49,7 @@ from utils import (
     logger, check_md5,
     trace_error_decorator
 )
-from msg_push import dingtalk, xizhi, tg_bot
+from msg_push import dingtalk, xizhi
 
 version = "v2.0.8"
 platforms = "抖音|TikTok|快手|虎牙|斗鱼|YY|B站|小红书|bigo直播|blued直播|AfreecaTV|网易cc"
@@ -119,7 +119,7 @@ def display_info():
             print(f"当前时间: {format_now_time}")
 
             if len(recording) == 0 and len(unrecording) == 0:
-                time.sleep(5)
+                time.sleep(15)
                 print(f"\r没有正在录制的直播 {format_now_time[-8:]}", end="")
                 print("")
                 continue
@@ -649,7 +649,7 @@ def start_record(url_tuple, count_variable=-1):
 
                     elif record_url.find("cc.163.com/") > -1:
                         with semaphore:
-                            json_data = get_netease_stream_data(record_url, netease_cookie)
+                            json_data = get_netease_stream_data(record_url, yy_cookie)
                             port_info = get_netease_stream_url(json_data)
 
                     if anchor_name:
@@ -680,8 +680,11 @@ def start_record(url_tuple, count_variable=-1):
                                 name_list.append(f'{record_url}|{record_url},主播: {anchor_name.strip()}')
                             run_once = True
 
-                        if port_info['is_live'] is False:
+                        while port_info['is_live'] is False:
                             print(f"{record_name} 等待直播... ")
+                            time.sleep(30)
+                            json_data = get_douyin_stream_data(record_url, dy_cookie)
+                            port_info = get_douyin_stream_url(json_data)
                         else:
                             content = f"{record_name} 正在直播中..."
                             print(content)
@@ -692,8 +695,6 @@ def start_record(url_tuple, count_variable=-1):
                                     xizhi(xizhi_api_url, content)
                                 if '钉钉' in live_status_push:
                                     dingtalk(dingtalk_api_url, content, dingtalk_phone_num)
-                                if 'TG' in live_status_push:
-                                    tg_bot(tg_chat_id, tg_token, content)
 
                             real_url = port_info['record_url']
                             full_path = f'{default_path}/{anchor_name}'
@@ -1010,13 +1011,11 @@ def start_record(url_tuple, count_variable=-1):
 
                                 # 推送通知
                                 content = f"{record_name} 直播已结束"
-                                if not live_status_push:
+                                if live_status_push:
                                     if '微信' in live_status_push:
                                         xizhi(xizhi_api_url, content)
                                     if '钉钉' in live_status_push:
                                         dingtalk(dingtalk_api_url, content, dingtalk_phone_num)
-                                    if 'TG' in live_status_push:
-                                        tg_bot(tg_chat_id, tg_token, content)
 
                 except Exception as e:
                     logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
@@ -1217,12 +1216,10 @@ while True:
                                    False)
     delete_origin_file = options.get(read_config_value(config, '录制设置', '追加格式后删除原文件', "否"), False)
     create_time_file = options.get(read_config_value(config, '录制设置', '生成时间文件', "否"), False)
-    live_status_push = read_config_value(config, '推送配置', '直播状态通知(可选微信|钉钉|TG或者都填)', "")
+    live_status_push = read_config_value(config, '推送配置', '直播状态通知(可选微信|钉钉或者两个都填)', "")
     dingtalk_api_url = read_config_value(config, '推送配置', '钉钉推送接口链接', "")
     xizhi_api_url = read_config_value(config, '推送配置', '微信推送接口链接', "")
     dingtalk_phone_num = read_config_value(config, '推送配置', '钉钉通知@对象(填手机号)', "")
-    tg_token = read_config_value(config, '推送配置', 'TGAPI令牌', "")
-    tg_chat_id = read_config_value(config, '推送配置', 'TG聊天ID(个人或者群组ID)', "")
     dy_cookie = read_config_value(config, 'Cookie', '抖音cookie(录制抖音必须要有)', '')
     ks_cookie = read_config_value(config, 'Cookie', '快手cookie', '')
     tiktok_cookie = read_config_value(config, 'Cookie', 'tiktok_cookie', '')
@@ -1234,7 +1231,6 @@ while True:
     bigo_cookie = read_config_value(config, 'Cookie', 'bigo_cookie', '')
     blued_cookie = read_config_value(config, 'Cookie', 'blued_cookie', '')
     afreecatv_cookie = read_config_value(config, 'Cookie', 'afreecatv_cookie', '')
-    netease_cookie = read_config_value(config, 'Cookie', 'netease_cookie', '')
 
     if len(video_save_type) > 0:
         if video_save_type.upper().lower() == "FLV".lower():
