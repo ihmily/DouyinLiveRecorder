@@ -119,7 +119,7 @@ def display_info():
             print(f"当前时间: {format_now_time}")
 
             if len(recording) == 0 and len(unrecording) == 0:
-                time.sleep(15)
+                time.sleep(5)
                 print(f"\r没有正在录制的直播 {format_now_time[-8:]}", end="")
                 print("")
                 continue
