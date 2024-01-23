@@ -23,5 +23,5 @@ jobs:
 
     - name: Build and push Docker image
       run: |
-        docker build -t registry.cn-beijing.aliyuncs.com/luoan-0517/douyin-live-recorder:latest .
-        docker push registry.cn-beijing.aliyuncs.com/luoan-0517/douyin-live-recorder:latest
+        docker build -t registry.cn-beijing.aliyuncs.com/luoan-0517/douyin-live-recorder:2.0.8 .
+        docker push registry.cn-beijing.aliyuncs.com/luoan-0517/douyin-live-recorder:2.0.8
