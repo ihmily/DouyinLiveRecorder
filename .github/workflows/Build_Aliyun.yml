@@ -1,0 +1,32 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Use Node.js 16
+      uses: actions/setup-node@v3
+      with:
+        node-version: 16
+
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    - name: Login to Aliyun Container Registry
+      run: echo "${{ secrets.ALIYUN_PASSWORD }}" | docker login --username "${{ secrets.ALIYUN_USERNAME }}" --password-stdin registry.cn-hangzhou.aliyuncs.com
+
+    - name: Build and push Docker image
+      run: |
+        docker build -t registry.cn-hangzhou.aliyuncs.com/your-namespace/your-repo-name:latest .
+        docker push registry.cn-hangzhou.aliyuncs.com/your-namespace/your-repo-name:latest
+
+#registry.cn-hangzhou.aliyuncs.com: 阿里云容器镜像仓库的域名。确保使用你所在地区的正确域名。
+#your-namespace: 镜像命名空间，可以在阿里云容器镜像服务中创建。
+#your-repo-name: 镜像仓库的名称。
+#同时，在GitHub仓库的设置中，添加两个密钥，分别是ALIYUN_USERNAME和ALIYUN_PASSWORD，分别存储你的阿里云用户名和镜像仓库密码。
