@@ -26,6 +26,5 @@ jobs:
         docker build -t your-dockerhub-username/your-repo-name:latest .
         docker push your-dockerhub-username/your-repo-name:latest
         
-#登录到 Docker Hub： 使用 docker login 命令，将 Docker Hub 的用户名和密码作为密钥传递给登录命令。
 #推送到 Docker Hub： 使用 docker push 将构建的 Docker 镜像推送到 Docker Hub。确保将 your-dockerhub-username/your-repo-name 替换为你在 Docker Hub 上的仓库信息。
 #在 GitHub 仓库的设置中，你还需要添加两个密钥，分别是 DOCKERHUB_USERNAME 和 DOCKERHUB_PASSWORD，用于存储你的 Docker Hub 用户名和密码。
