@@ -2,29 +2,47 @@ name: Build and Push Docker Image
 
 on:
   push:
-    branches:
-      - main
+    tags:
+      - '*'
 
 jobs:
-  build:
+  build_and_push:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Use Node.js 16
-      uses: actions/setup-node@v3
-      with:
-        node-version: 16
-
-    - name: Checkout repository
+    - name: Checkout code
       uses: actions/checkout@v2
 
-    - name: Login to Docker Hub
-      run: echo "${{ secrets.DOCKERHUB_PASSWORD }}" | docker login --username "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Cache Docker layers
+      uses: actions/cache@v2
+      with:
+        path: /tmp/.buildx-cache
+        key: ${{ runner.os }}-buildx-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-buildx-
+
+    - name: Log in to Docker Hub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_PASSWORD }}
+        registry: docker.io
 
     - name: Build and push Docker image
-      run: |
-        docker build -t your-dockerhub-username/your-repo-name:latest .
-        docker push your-dockerhub-username/your-repo-name:latest
-        
-#推送到 Docker Hub： 使用 docker push 将构建的 Docker 镜像推送到 Docker Hub。确保将 your-dockerhub-username/your-repo-name 替换为你在 Docker Hub 上的仓库信息。
-#在 GitHub 仓库的设置中，你还需要添加两个密钥，分别是 DOCKERHUB_USERNAME 和 DOCKERHUB_PASSWORD，用于存储你的 Docker Hub 用户名和密码。
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile
+        push: true
+        tags: |
+          ihmily/douyin-live-recorder:${{ replace(github.ref_name, 'v', '') }}
+          ihmily/douyin-live-recorder:latest
+        platforms: linux/amd64,linux/arm64
+        cache-from: type=local,src=/tmp/.buildx-cache
+        cache-to: type=local,dest=/tmp/.buildx-cache
