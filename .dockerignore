@@ -1,2 +1,1 @@
-.github/workflows/Build_docker.yml
-.github/workflows/Build_Aliyun.yml
+.github/workflows/build-image.yml
