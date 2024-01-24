@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub:https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-01-16 01:51:29
+Update: 2024-01-24 22:57:03
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -122,7 +122,7 @@ def get_kuaishou_stream_data(url: str, cookies: Union[str, None] = None) -> Dict
         print(f"Failed to parse JSON data from {url}. Error: {e}")
         return {"type": 1, "is_live": False}
 
-    result = {"type": 1, "is_live": False}
+    result = {"type": 2, "is_live": False}
 
     if 'errorType' in play_list or 'liveStream' not in play_list:
         error_msg = play_list.get('errorType', {}).get('title', '') + play_list.get('errorType', {}).get('content', '')
@@ -138,8 +138,8 @@ def get_kuaishou_stream_data(url: str, cookies: Union[str, None] = None) -> Dict
     result.update({"anchor_name": anchor_name})
 
     if play_list['liveStream'].get("playUrls"):
-        play_url = play_list['liveStream']['playUrls'][0]['adaptationSet']['representation'][0].get('url', '')
-        result.update({"flv_url": play_url, "record_url": play_url, "is_live": True})
+        play_url_list = play_list['liveStream']['playUrls'][0]['adaptationSet']['representation']
+        result.update({"flv_url_list": play_url_list, "is_live": True})
 
     return result
 
@@ -334,12 +334,15 @@ def get_bilibili_stream_data(url: str, cookies: Union[str, None] = None) -> Dict
     }
     if cookies:
         headers['Cookie'] = cookies
-    req = urllib.request.Request(url, headers=headers)
-    response = opener.open(req, timeout=15)
-    html_str = response.read().decode('utf-8')
-    json_str = re.search('<script>window.__NEPTUNE_IS_MY_WAIFU__=(.*?)</script><script>', html_str, re.S).group(1)
-    json_data = json.loads(json_str)
-    return json_data
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        response = opener.open(req, timeout=15)
+        html_str = response.read().decode('utf-8')
+        json_str = re.search('<script>window.__NEPTUNE_IS_MY_WAIFU__=(.*?)</script><script>', html_str, re.S).group(1)
+        json_data = json.loads(json_str)
+        return json_data
+    except Exception:
+        return {"anchor_name": '', "is_live": False}
 
 
 @trace_error_decorator
@@ -513,7 +516,6 @@ def get_afreecatv_stream_url(url: str, proxy_addr: Union[str, None] = None, cook
     }
 
     url2 = 'http://api.m.afreecatv.com/broad/a/watch'
-
     if proxy_addr:
         proxies = {
             'http': proxy_addr,
@@ -531,8 +533,13 @@ def get_afreecatv_stream_url(url: str, proxy_addr: Union[str, None] = None, cook
         json_data = json.loads(json_str)
 
     anchor_name = json_data['data']['user_nick']
+    if not anchor_name:
+        if json_data['data']['code'] == -3004:
+            print("AfreecaTV直播获取失败:", json_data['data']['message'])
+        elif json_data['data']['code'] == -3002:
+            print("AfreecaTV直播获取失败:", json_data['data']['message'])
     result = {
-        "anchor_name": anchor_name,
+        "anchor_name": '' if anchor_name is None else anchor_name,
         "is_live": False,
     }
 
@@ -557,7 +564,7 @@ def get_netease_stream_data(url: str, cookies: Union[str, None] = None) -> Dict[
     }
     if cookies:
         headers['Cookie'] = cookies
-
+    url = url+'/' if url[-1] != '/' else url
     req = urllib.request.Request(url, headers=headers)
     response = opener.open(req, timeout=15)
     html_str = response.read().decode('utf-8')
