@@ -25,6 +25,8 @@
 - [x] blued
 - [x] AfreecaTV
 - [x] 网易cc
+- [x] 千度热播
+- [x] pandaTV
 - [ ] 更多平台正在更新中
 
 </div>
@@ -67,10 +69,12 @@
 
 - 假如`URL_config.ini`文件中添加的直播间地址，有个别直播间暂时不想录制又不想移除链接，可以在对应直播间的链接开头加上`#`，那么下次启动软件录制时将跳过该直播间。
 
+- 软件默认录制清晰度为 `原画` ，如果要单独设置某个直播间的录制画质，可以在添加直播间地址时前面加上画质即可，如`超清，https://live.douyin.com/745964462470` 记得中间要有`,` 分隔。
+
 - 如果要长时间挂着软件循环监测直播，最好循环时间设置长一点（咱也不差没录制到的那几分钟），避免因请求频繁导致被官方封禁IP 。
 
 - 要停止直播录制，使用`Ctrl+C ` 或直接关闭程序即可。
-- 最后，欢迎右上角给本项目一个star，同时也非常乐意大家提交pr。
+- 最后，欢迎右上角给本项目一个star，同时也非常乐意大家提交pr（请先询问我，避免做无用功）。
 
 &emsp;
 
@@ -114,6 +118,12 @@ https://play.afreecatv.com/sw7love
 
 网易cc：
 https://cc.163.com/583946984
+
+千度热播：
+https://qiandurebo.com/web/video.php?roomnumber=33333
+
+pandaTV：
+https://www.pandalive.co.kr/live/play/bara0109
 ```
 
 直播间分享地址和网页端长地址都能正常进行录制（抖音尽量用长链接，避免因短链接转换失效导致不能正常录制，而且需要有nodejs环境，否则无法转换）。
@@ -205,10 +215,10 @@ docker-compose up
 
 2.构建镜像(可选)
 
-如果你只想简单的运行程序，则不需要做这一步。要自定义本地构建，可以修改 [docker-compose.yaml](https://github.com/ihmily/DouyinLiveRecorder/blob/main/docker-compose.yaml) 文件，取消 `# build: .` 注释，并修改镜像名，如 `douyin-live-recorder:2.0.7`，然后再执行
+如果你只想简单的运行程序，则不需要做这一步。要自定义本地构建，可以修改 [docker-compose.yaml](https://github.com/ihmily/DouyinLiveRecorder/blob/main/docker-compose.yaml) 文件，如将镜像名修改为 `douyin-live-recorder:latest`，并取消 `# build: .` 注释，然后再执行
 
 ```bash
-docker build -t douyin-live-recorder:2.0.7 .
+docker build -t douyin-live-recorder:latest .
 docker-compose up
 ```
 
@@ -243,11 +253,20 @@ docker-compose stop
 &ensp;&ensp; [![Hmily](https://github.com/ihmily.png?size=50)](https://github.com/ihmily)
 [![iridescentGray](https://github.com/iridescentGray.png?size=50)](https://github.com/iridescentGray)
 [![annidy](https://github.com/annidy.png?size=50)](https://github.com/annidy)
-
-</div>
+[![wwkk2580](https://github.com/wwkk2580.png?size=50)](https://github.com/wwkk2580)
+&emsp;
 
 ## ⏳提交日志
 
+- 20240127
+  - 新增千度热播直播录制、新增pandaTV(韩国)直播录制
+  
+  - 新增telegram直播状态消息推送
+  
+  - 新增自定义设置不同直播间的录制画质(即每个直播间录制画质可不同)
+  
+  - 修复了某些bug
+  
 - 20240114
   - 新增网易cc直播录制，优化ffmpeg参数，修改AfreecaTV输入直播地址格式
   
