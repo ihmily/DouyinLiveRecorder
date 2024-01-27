@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-01-25 12:47:12
+Update: 2024-01-27 21:45:09
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -38,7 +38,9 @@ from spider import (
     get_bigo_stream_url,
     get_blued_stream_url,
     get_afreecatv_stream_url,
-    get_netease_stream_data
+    get_netease_stream_data,
+    get_qiandurebo_stream_data,
+    get_pandatv_stream_data
 )
 
 from web_rid import (
@@ -52,7 +54,7 @@ from utils import (
 from msg_push import dingtalk, xizhi, tg_bot
 
 version = "v2.0.9"
-platforms = "抖音|TikTok|快手|虎牙|斗鱼|YY|B站|小红书|bigo直播|blued直播|AfreecaTV|网易CC"
+platforms = "抖音|TikTok|快手|虎牙|斗鱼|YY|B站|小红书|bigo直播|blued直播|AfreecaTV|网易CC|千度热播|pandaTV"
 # --------------------------全局变量-------------------------------------
 recording = set()
 unrecording = set()
@@ -606,8 +608,10 @@ def start_record(url_data: tuple, count_variable: int = -1):
                         with semaphore:
                             if use_proxy:
                                 if global_proxy or proxy_addr != '':
-                                    json_data = get_tiktok_stream_data(record_url, proxy_addr=proxy_addr,
-                                                                       cookies=tiktok_cookie)
+                                    json_data = get_tiktok_stream_data(
+                                        url=record_url,
+                                        proxy_addr=proxy_addr,
+                                        cookies=tiktok_cookie)
                                     port_info = get_tiktok_stream_url(json_data, record_quality)
 
                     elif record_url.find("https://live.kuaishou.com/") > -1:
@@ -626,8 +630,10 @@ def start_record(url_data: tuple, count_variable: int = -1):
                         platform = '斗鱼直播'
                         with semaphore:
                             json_data = get_douyu_info_data(record_url)
-                            port_info = get_douyu_stream_url(json_data, cookies=douyu_cookie,
-                                                             video_quality=record_quality)
+                            port_info = get_douyu_stream_url(
+                                json_data, cookies=douyu_cookie,
+                                video_quality=record_quality
+                            )
 
                     elif record_url.find("https://www.yy.com/") > -1:
                         platform = 'YY直播'
@@ -659,14 +665,30 @@ def start_record(url_data: tuple, count_variable: int = -1):
                     elif record_url.find("afreecatv.com/") > -1:
                         platform = 'AfreecaTv直播'
                         with semaphore:
-                            port_info = get_afreecatv_stream_url(record_url, proxy_addr=proxy_addr,
-                                                                 cookies=afreecatv_cookie)
+                            port_info = get_afreecatv_stream_url(
+                                url=record_url, proxy_addr=proxy_addr,
+                                cookies=afreecatv_cookie
+                            )
 
                     elif record_url.find("cc.163.com/") > -1:
                         platform = '网易CC直播'
                         with semaphore:
-                            json_data = get_netease_stream_data(record_url, cookies=netease_cookie)
+                            json_data = get_netease_stream_data(url=record_url, cookies=netease_cookie)
                             port_info = get_netease_stream_url(json_data, record_quality)
+
+                    elif record_url.find("qiandurebo.com/") > -1:
+                        platform = '千度热播'
+                        with semaphore:
+                            port_info = get_qiandurebo_stream_data(url=record_url, cookies=qiandurebo_cookie)
+
+                    elif record_url.find("www.pandalive.co.kr/") > -1:
+                        platform = 'pandaTV'
+                        with semaphore:
+                            port_info = get_pandatv_stream_data(
+                                url=record_url,
+                                proxy_addr=proxy_addr,
+                                cookies=pandatv_cookie
+                            )
                     else:
                         logger.warning(f'{record_url} 未知直播地址')
                         return
@@ -1254,6 +1276,8 @@ while True:
     blued_cookie = read_config_value(config, 'Cookie', 'blued_cookie', '')
     afreecatv_cookie = read_config_value(config, 'Cookie', 'afreecatv_cookie', '')
     netease_cookie = read_config_value(config, 'Cookie', 'netease_cookie', '')
+    qiandurebo_cookie = read_config_value(config, 'Cookie', '千度热播_cookie', '')
+    pandatv_cookie = read_config_value(config, 'Cookie', 'pandatv_cookie', '')
 
     if len(video_save_type) > 0:
         if video_save_type.upper().lower() == "FLV".lower():
@@ -1335,8 +1359,11 @@ while True:
                     'app.blued.cn',
                     'play.afreecatv.com',
                     'm.afreecatv.com',
-                    'cc.163.com'
+                    'cc.163.com',
+                    'qiandurebo.com',
+                    'www.pandalive.co.kr'
                 ]
+
                 if url_host in host_list:
                     new_line = (quality, url, name)
                     url_tuples_list.append(new_line)

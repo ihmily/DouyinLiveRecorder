@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub:https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-01-24 22:57:03
+Update: 2024-01-27 21:32:55
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -583,6 +583,85 @@ def get_netease_stream_data(url: str, cookies: Union[str, None] = None) -> Dict[
     return result
 
 
+@trace_error_decorator
+def get_qiandurebo_stream_data(url: str, cookies: Union[str, None] = None) -> Dict[str, Any]:
+    headers = {
+        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+        'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
+        'referer': 'https://qiandurebo.com/web/index.php',
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.58',
+    }
+    if cookies:
+        headers['Cookie'] = cookies
+
+    req = urllib.request.Request(url, headers=headers)
+    response = opener.open(req, timeout=15)
+    html_str = response.read().decode('utf-8')
+    data = re.search('var user = (.*?)\r\n\s+user\.play_url', html_str, re.S).group(1)
+    anchor_name = re.findall('"zb_nickname": "(.*?)",\r\n', data)
+
+    result = {"anchor": "", "is_live": False}
+    if len(anchor_name) > 0:
+        result['anchor_name'] = anchor_name[0]
+        play_url = re.findall('"play_url": "(.*?)",\r\n', data)
+
+        if len(play_url) > 0:
+            result['anchor_name'] = anchor_name[0]
+            result['flv_url'] = play_url[0]
+            result['is_live'] = True
+            result['record_url'] = play_url[0]
+    return result
+
+
+@trace_error_decorator
+def get_pandatv_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> Dict[str, Any]:
+    headers = {
+        'accept': 'application/json, text/plain, */*',
+        'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
+        'content-type': 'application/x-www-form-urlencoded',
+        'referer': 'https://www.pandalive.co.kr/',
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.58',
+    }
+    if cookies:
+        headers['Cookie'] = cookies
+
+    user_id = url.split('?')[0].rsplit('/', maxsplit=1)[1]
+    url2 = 'https://api.pandalive.co.kr/v1/live/play'
+    data = {
+        'action': 'watch',
+        'userId': user_id,
+        'password': '',
+        'shareLinkType': '',
+    }
+
+    if proxy_addr:
+        proxies = {
+            'http': proxy_addr,
+            'https': proxy_addr
+        }
+        response = requests.post(url2, data=data, headers=headers, proxies=proxies, timeout=15)
+        json_data = response.json()
+
+    else:
+
+        data = urllib.parse.urlencode(data).encode('utf-8')
+        req = urllib.request.Request(url2, data=data, headers=headers)
+        response = urllib.request.urlopen(req, timeout=15)
+        json_str = response.read().decode('utf-8')
+        json_data = json.loads(json_str)
+
+    anchor_name = json_data['media']['userNick']
+    result = {"anchor_name": anchor_name, "is_live": False}
+    live_status = json_data['media']['isLive']
+
+    if live_status:
+        play_url = json_data['PlayList']['hls'][0]['url']
+        result['m3u8_url'] = play_url
+        result['is_live'] = True
+        result['record_url'] = play_url
+    return result
+
+
 if __name__ == '__main__':
     # 尽量用自己的cookie，以避免默认的不可用导致无法获取数据
     # 以下示例链接不保证时效性，请自行查看链接是否能正常访问
@@ -602,6 +681,8 @@ if __name__ == '__main__':
     # url = 'https://play.afreecatv.com/sw7love'  # afreecatv直播
     # url = 'https://m.afreecatv.com/#/player/hl6260'  # afreecatv直播
     # url = 'https://cc.163.com/583946984'  # 网易cc直播
+    # url = 'https://qiandurebo.com/web/video.php?roomnumber=33333'  # 千度热播
+    # url = 'https://www.pandalive.co.kr/live/play/bara0109'  # pandaTV
 
     print(get_douyin_stream_data(url))
     # print(get_tiktok_stream_data(url,proxy_addr=''))
@@ -616,3 +697,5 @@ if __name__ == '__main__':
     # print(get_blued_stream_url(url))
     # print(get_afreecatv_stream_url(url, proxy_addr=''))
     # print(get_netease_stream_data(url))
+    # print(get_qiandurebo_stream_data(url))
+    # print(get_pandatv_stream_data(url, proxy_addr=''))
