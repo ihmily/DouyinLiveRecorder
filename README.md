@@ -63,7 +63,7 @@
 - 对于只想使用录制软件的小白用户，进入[Releases](https://github.com/ihmily/DouyinLiveRecorder/releases) 中下载最新发布的 zip压缩包即可，里面有打包好的录制软件。（有些电脑可能会报毒，直接忽略即可，如果下载时被浏览器屏蔽，请更换浏览器下载）
 
 - 压缩包解压后，在 `config` 文件夹内的 `URL_config.ini` 中添加录制直播间地址，一行一个直播间地址。如果要自定义配置录制，可以修改`config.ini` 文件，推荐将录制格式修改为`ts`。
-- 以上步骤都做好后，就可以运行`DouyinLiveRecorder.exe` 程序进行录制了。
+- 以上步骤都做好后，就可以运行`DouyinLiveRecorder.exe` 程序进行录制了。录制的视频文件保存在同目录下的 `downloads` 文件夹内。
 
 - 另外，如果需要录制TikTok、AfreecaTV等海外平台，请在配置文件中设置开启代理并添加proxy_addr链接 如：`http://127.0.0.1:7890` （这只是示例地址，具体根据实际填写）。
 
@@ -261,11 +261,11 @@ docker-compose stop
 - 20240127
   - 新增千度热播直播录制、新增pandaTV(韩国)直播录制
   
-  - 新增telegram直播状态消息推送
+  - 新增telegram直播状态消息推送，修复了某些bug
   
   - 新增自定义设置不同直播间的录制画质(即每个直播间录制画质可不同)
   
-  - 修复了某些bug
+  - 修改录制视频保存路径为 `downloads` 文件夹，并且分平台进行保存。
   
 - 20240114
   - 新增网易cc直播录制，优化ffmpeg参数，修改AfreecaTV输入直播地址格式
