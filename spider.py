@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub:https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-01-27 21:32:55
+Update: 2024-01-28 18:57:12
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -614,11 +614,9 @@ def get_qiandurebo_stream_data(url: str, cookies: Union[str, None] = None) -> Di
 
 
 @trace_error_decorator
-def get_pandatv_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> Dict[str, Any]:
+def get_pandatv_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> Dict[
+    str, Any]:
     headers = {
-        'accept': 'application/json, text/plain, */*',
-        'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
-        'content-type': 'application/x-www-form-urlencoded',
         'referer': 'https://www.pandalive.co.kr/',
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.58',
     }
@@ -628,39 +626,57 @@ def get_pandatv_stream_data(url: str, proxy_addr: Union[str, None] = None, cooki
     user_id = url.split('?')[0].rsplit('/', maxsplit=1)[1]
     url2 = 'https://api.pandalive.co.kr/v1/live/play'
     data = {
+        'userId': user_id,
+        'info': 'media fanGrade',
+    }
+    data2 = {
         'action': 'watch',
         'userId': user_id,
         'password': '',
         'shareLinkType': '',
     }
 
+    result = {"anchor_name": "", "is_live": False}
     if proxy_addr:
         proxies = {
             'http': proxy_addr,
             'https': proxy_addr
         }
-        response = requests.post(url2, data=data, headers=headers, proxies=proxies, timeout=15)
+
+        response = requests.post('https://api.pandalive.co.kr/v1/member/bj',
+                                 headers=headers, proxies=proxies, data=data)
         json_data = response.json()
+        anchor_name = json_data['bjInfo']['nick']
+        result['anchor_name'] = anchor_name
+        live_status = 'media' in json_data
+        if live_status:
+            response = requests.post(url2, data=data2, headers=headers, proxies=proxies, timeout=15)
+            json_data = response.json()
 
     else:
 
         data = urllib.parse.urlencode(data).encode('utf-8')
-        req = urllib.request.Request(url2, data=data, headers=headers)
-        response = urllib.request.urlopen(req, timeout=15)
+        req = urllib.request.Request('https://api.pandalive.co.kr/v1/member/bj', data=data, headers=headers)
+        response = urllib.request.urlopen(req, timeout=20)
         json_str = response.read().decode('utf-8')
         json_data = json.loads(json_str)
-
-    anchor_name = json_data['media']['userNick']
-    result = {"anchor_name": anchor_name, "is_live": False}
-    live_status = json_data['media']['isLive']
+        anchor_name = json_data['bjInfo']['nick']
+        result['anchor_name'] = anchor_name
+        live_status = 'media' in json_data
+        if live_status:
+            data2 = urllib.parse.urlencode(data2).encode('utf-8')
+            req = urllib.request.Request(url2, data=data2, headers=headers)
+            response = urllib.request.urlopen(req, timeout=20)
+            json_str = response.read().decode('utf-8')
+            json_data = json.loads(json_str)
 
     if live_status:
         play_url = json_data['PlayList']['hls'][0]['url']
         result['m3u8_url'] = play_url
         result['is_live'] = True
         result['record_url'] = play_url
-    return result
 
+    return result
 
 if __name__ == '__main__':
     # 尽量用自己的cookie，以避免默认的不可用导致无法获取数据
