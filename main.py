@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-01-27 21:45:09
+Update: 2024-01-29 18:45:09
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -40,7 +40,8 @@ from spider import (
     get_afreecatv_stream_url,
     get_netease_stream_data,
     get_qiandurebo_stream_data,
-    get_pandatv_stream_data
+    get_pandatv_stream_data,
+    get_maoerfm_stream_url
 )
 
 from web_rid import (
@@ -53,8 +54,8 @@ from utils import (
 )
 from msg_push import dingtalk, xizhi, tg_bot
 
-version = "v2.0.9"
-platforms = "抖音|TikTok|快手|虎牙|斗鱼|YY|B站|小红书|bigo直播|blued直播|AfreecaTV|网易CC|千度热播|pandaTV"
+version = "v3.0.1-beta"
+platforms = "抖音|TikTok|快手|虎牙|斗鱼|YY|B站|小红书|bigo直播|blued直播|AfreecaTV|网易CC|千度热播|pandaTV|猫耳FM"
 # --------------------------全局变量-------------------------------------
 recording = set()
 unrecording = set()
@@ -689,6 +690,12 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                 proxy_addr=proxy_addr,
                                 cookies=pandatv_cookie
                             )
+
+                    elif record_url.find("fm.missevan.com/") > -1:
+                        platform = '猫耳FM'
+                        with semaphore:
+                            port_info = get_maoerfm_stream_url(url=record_url, cookies=maoerfm_cookie)
+
                     else:
                         logger.warning(f'{record_url} 未知直播地址')
                         return
@@ -1278,6 +1285,7 @@ while True:
     netease_cookie = read_config_value(config, 'Cookie', 'netease_cookie', '')
     qiandurebo_cookie = read_config_value(config, 'Cookie', '千度热播_cookie', '')
     pandatv_cookie = read_config_value(config, 'Cookie', 'pandatv_cookie', '')
+    maoerfm_cookie = read_config_value(config, 'Cookie', '猫耳FM_cookie', '')
 
     if len(video_save_type) > 0:
         if video_save_type.upper().lower() == "FLV".lower():
@@ -1361,7 +1369,8 @@ while True:
                     'm.afreecatv.com',
                     'cc.163.com',
                     'qiandurebo.com',
-                    'www.pandalive.co.kr'
+                    'www.pandalive.co.kr',
+                    'fm.missevan.com'
                 ]
 
                 if url_host in host_list:

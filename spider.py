@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub:https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-01-28 18:57:12
+Update: 2024-01-29 18:57:12
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -68,7 +68,7 @@ def get_douyin_stream_data(url: str, cookies: Union[str, None] = None) -> Dict[s
 
 @trace_error_decorator
 def get_tiktok_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> Dict[
-    str, Any]:
+                        str, Any]:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.79',
         'Cookie': 'ttwid=1%7CM-rF193sJugKuNz2RGNt-rh6pAAR9IMceUSzlDnPCNI%7C1683274418%7Cf726d4947f2fc37fecc7aeb0cdaee52892244d04efde6f8a8edd2bb168263269; tiktok_webapp_theme=light; tt_chain_token=VWkygAWDlm1cFg/k8whmOg==; passport_csrf_token=6e422c5a7991f8cec7033a8082921510; passport_csrf_token_default=6e422c5a7991f8cec7033a8082921510; d_ticket=f8c267d4af4523c97be1ccb355e9991e2ae06; odin_tt=320b5f386cdc23f347be018e588873db7f7aea4ea5d1813681c3fbc018ea025dde957b94f74146dbc0e3612426b865ccb95ec8abe4ee36cca65f15dbffec0deff7b0e69e8ea536d46e0f82a4fc37d211; cmpl_token=AgQQAPNSF-RO0rT04baWtZ0T_jUjl4fVP4PZYM2QPw; uid_tt=319b558dbba684bb1557206c92089cd113a875526a89aee30595925d804b81c7; uid_tt_ss=319b558dbba684bb1557206c92089cd113a875526a89aee30595925d804b81c7; sid_tt=ad5e736f4bedb2f6d42ccd849e706b1d; sessionid=ad5e736f4bedb2f6d42ccd849e706b1d; sessionid_ss=ad5e736f4bedb2f6d42ccd849e706b1d; store-idc=useast5; store-country-code=us; store-country-code-src=uid; tt-target-idc=useast5; tt-target-idc-sign=qXNk0bb1pDQ0FbCNF120Pl9WWMLZg9Edv5PkfyCbS4lIk5ieW5tfLP7XWROnN0mEaSlc5hg6Oji1pF-yz_3ZXnUiNMrA9wNMPvI6D9IFKKVmq555aQzwPIGHv0aQC5dNRgKo5Z5LBkgxUMWEojTKclq2_L8lBciw0IGdhFm_XyVJtbqbBKKgybGDLzK8ZyxF4Jl_cYRXaDlshZjc38JdS6wruDueRSHe7YvNbjxCnApEFUv-OwJANSPU_4rvcqpVhq3JI2VCCfw-cs_4MFIPCDOKisk5EhAo2JlHh3VF7_CLuv80FXg_7ZqQ2pJeMOog294rqxwbbQhl3ATvjQV_JsWyUsMd9zwqecpylrPvtySI2u1qfoggx1owLrrUynee1R48QlanLQnTNW_z1WpmZBgVJqgEGLwFoVOmRzJuFFNj8vIqdjM2nDSdWqX8_wX3wplohkzkPSFPfZgjzGnQX28krhgTytLt7BXYty5dpfGtsdb11WOFHM6MZ9R9uLVB; sid_guard=ad5e736f4bedb2f6d42ccd849e706b1d%7C1690990657%7C15525213%7CMon%2C+29-Jan-2024+08%3A11%3A10+GMT; sid_ucp_v1=1.0.0-KGM3YzgwYjZhODgyYWI1NjIwNTA0NjBmOWUxMGRhMjIzYTI2YjMxNDUKGAiqiJ30keKD5WQQwfCppgYYsws4AkDsBxAEGgd1c2Vhc3Q1IiBhZDVlNzM2ZjRiZWRiMmY2ZDQyY2NkODQ5ZTcwNmIxZA; ssid_ucp_v1=1.0.0-KGM3YzgwYjZhODgyYWI1NjIwNTA0NjBmOWUxMGRhMjIzYTI2YjMxNDUKGAiqiJ30keKD5WQQwfCppgYYsws4AkDsBxAEGgd1c2Vhc3Q1IiBhZDVlNzM2ZjRiZWRiMmY2ZDQyY2NkODQ5ZTcwNmIxZA; tt_csrf_token=dD0EIH8q-pe3qDQsCyyD1jLN6KizJDRjOEyk; __tea_cache_tokens_1988={%22_type_%22:%22default%22%2C%22user_unique_id%22:%227229608516049831425%22%2C%22timestamp%22:1683274422659}; ttwid=1%7CM-rF193sJugKuNz2RGNt-rh6pAAR9IMceUSzlDnPCNI%7C1694002151%7Cd89b77afc809b1a610661a9d1c2784d80ebef9efdd166f06de0d28e27f7e4efe; msToken=KfJAVZ7r9D_QVeQlYAUZzDFbc1Yx-nZz6GF33eOxgd8KlqvTg1lF9bMXW7gFV-qW4MCgUwnBIhbiwU9kdaSpgHJCk-PABsHCtTO5J3qC4oCTsrXQ1_E0XtbqiE4OVLZ_jdF1EYWgKNPT2SnwGkQ=; msToken=KfJAVZ7r9D_QVeQlYAUZzDFbc1Yx-nZz6GF33eOxgd8KlqvTg1lF9bMXW7gFV-qW4MCgUwnBIhbiwU9kdaSpgHJCk-PABsHCtTO5J3qC4oCTsrXQ1_E0XtbqiE4OVLZ_jdF1EYWgKNPT2SnwGkQ='
@@ -451,7 +451,7 @@ def get_blued_stream_url(url: str, cookies: Union[str, None] = None) -> Dict[str
 
 
 def get_afreecatv_cdn_url(broad_no: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> Dict[
-    str, Any]:
+                        str, Any]:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
@@ -493,7 +493,7 @@ def get_afreecatv_cdn_url(broad_no: str, proxy_addr: Union[str, None] = None, co
 
 @trace_error_decorator
 def get_afreecatv_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> Dict[
-    str, Any]:
+                            str, Any]:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
@@ -564,7 +564,7 @@ def get_netease_stream_data(url: str, cookies: Union[str, None] = None) -> Dict[
     }
     if cookies:
         headers['Cookie'] = cookies
-    url = url+'/' if url[-1] != '/' else url
+    url = url + '/' if url[-1] != '/' else url
     req = urllib.request.Request(url, headers=headers)
     response = opener.open(req, timeout=15)
     html_str = response.read().decode('utf-8')
@@ -615,7 +615,7 @@ def get_qiandurebo_stream_data(url: str, cookies: Union[str, None] = None) -> Di
 
 @trace_error_decorator
 def get_pandatv_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> Dict[
-    str, Any]:
+                            str, Any]:
     headers = {
         'referer': 'https://www.pandalive.co.kr/',
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.58',
@@ -675,43 +675,84 @@ def get_pandatv_stream_data(url: str, proxy_addr: Union[str, None] = None, cooki
         result['m3u8_url'] = play_url
         result['is_live'] = True
         result['record_url'] = play_url
-
     return result
+
+
+@trace_error_decorator
+def get_maoerfm_stream_url(url: str, cookies: Union[str, None] = None) -> Dict[str, Any]:
+    headers = {
+        'accept': 'application/json, text/plain, */*',
+        'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
+        'referer': 'https://fm.missevan.com/live/868895007',
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
+                      'Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.58',
+    }
+    if cookies:
+        headers['Cookie'] = cookies
+
+    room_id = url.split('?')[0].rsplit('/', maxsplit=1)[1]
+    url2 = f'https://fm.missevan.com/api/v2/live/{room_id}'
+    req = urllib.request.Request(url2, headers=headers)
+    response = opener.open(req, timeout=15)
+    json_str = response.read().decode('utf-8')
+    json_data = json.loads(json_str)
+
+    anchor_name = json_data['info']['creator']['username']
+    live_status = False
+    if 'room' in json_data['info']:
+        live_status = json_data['info']['room']['status']['broadcasting']
+    result = {
+        "anchor_name": anchor_name,
+        "is_live": live_status,
+    }
+
+    if live_status:
+        stream_list = json_data['info']['room']['channel']
+        m3u8_url = stream_list['hls_pull_url']
+        flv_url = stream_list['flv_pull_url']
+        result['m3u8_url'] = m3u8_url
+        result['flv_url'] = flv_url
+        result['is_live'] = True
+        result['record_url'] = m3u8_url
+    return result
+
 
 if __name__ == '__main__':
     # 尽量用自己的cookie，以避免默认的不可用导致无法获取数据
     # 以下示例链接不保证时效性，请自行查看链接是否能正常访问
 
-    url = "https://live.douyin.com/745964462470"  # 抖音直播
-    # url = "https://www.tiktok.com/@pearlgaga88/live"  # Tiktok直播
-    # url = "https://live.kuaishou.com/u/yall1102"  # 快手直播
-    # url = 'https://www.huya.com/116'  # 虎牙直播
-    # url = 'https://www.douyu.com/topic/wzDBLS6?rid=4921614&dyshid='  # 斗鱼直播
-    # url = 'https://www.douyu.com/3637778?dyshid'
-    # url = 'https://www.yy.com/22490906/22490906'  # YY直播
-    # url = 'https://live.bilibili.com/21593109'  # b站直播
+    room_url = "https://live.douyin.com/745964462470"  # 抖音直播
+    # room_url = "https://www.tiktok.com/@pearlgaga88/live"  # Tiktok直播
+    # room_url = "https://live.kuaishou.com/u/yall1102"  # 快手直播
+    # room_url = 'https://www.huya.com/116'  # 虎牙直播
+    # room_url = 'https://www.douyu.com/topic/wzDBLS6?rid=4921614&dyshid='  # 斗鱼直播
+    # room_url = 'https://www.douyu.com/3637778?dyshid'
+    # room_url = 'https://www.yy.com/22490906/22490906'  # YY直播
+    # room_url = 'https://live.bilibili.com/21593109'  # b站直播
     # 小红书直播
-    # url = 'https://www.xiaohongshu.com/hina/livestream/568980065082002402?appuid=5f3f478a00000000010005b3&apptime='
-    # url = 'https://www.bigo.tv/cn/716418802'  # bigo直播
-    # url = 'https://app.blued.cn/live?id=Mp6G2R'  # blued直播
-    # url = 'https://play.afreecatv.com/sw7love'  # afreecatv直播
-    # url = 'https://m.afreecatv.com/#/player/hl6260'  # afreecatv直播
-    # url = 'https://cc.163.com/583946984'  # 网易cc直播
-    # url = 'https://qiandurebo.com/web/video.php?roomnumber=33333'  # 千度热播
-    # url = 'https://www.pandalive.co.kr/live/play/bara0109'  # pandaTV
+    # room_url = 'https://www.xiaohongshu.com/hina/livestream/568980065082002402?appuid=5f3f478a00000000010005b3&apptime='
+    # room_url = 'https://www.bigo.tv/cn/716418802'  # bigo直播
+    # room_url = 'https://app.blued.cn/live?id=Mp6G2R'  # blued直播
+    # room_url = 'https://play.afreecatv.com/sw7love'  # afreecatv直播
+    # room_url = 'https://m.afreecatv.com/#/player/hl6260'  # afreecatv直播
+    # room_url = 'https://cc.163.com/583946984'  # 网易cc直播
+    # room_url = 'https://qiandurebo.com/web/video.php?roomnumber=33333'  # 千度热播
+    # room_url = 'https://www.pandalive.co.kr/live/play/bara0109'  # pandaTV
+    # room_url = 'https://fm.missevan.com/live/868895007'  # 猫耳FM直播
 
-    print(get_douyin_stream_data(url))
+    print(get_douyin_stream_data(room_url))
     # print(get_tiktok_stream_data(url,proxy_addr=''))
-    # print(get_kuaishou_stream_data(url))
-    # print(get_huya_stream_data(url))
-    # print(get_douyu_info_data(url))
+    # print(get_kuaishou_stream_data(room_url))
+    # print(get_huya_stream_data(room_url))
+    # print(get_douyu_info_data(room_url))
     # print(get_douyu_stream_data("4921614",rate='-1'))
-    # print(get_yy_stream_data(url))
-    # print(get_bilibili_stream_data(url))
-    # print(get_xhs_stream_url(url))
-    # print(get_bigo_stream_url(url))
-    # print(get_blued_stream_url(url))
-    # print(get_afreecatv_stream_url(url, proxy_addr=''))
-    # print(get_netease_stream_data(url))
-    # print(get_qiandurebo_stream_data(url))
-    # print(get_pandatv_stream_data(url, proxy_addr=''))
+    # print(get_yy_stream_data(room_url))
+    # print(get_bilibili_stream_data(room_url))
+    # print(get_xhs_stream_url(room_url))
+    # print(get_bigo_stream_url(room_url))
+    # print(get_blued_stream_url(room_url))
+    # print(get_afreecatv_stream_url(room_url, proxy_addr=''))
+    # print(get_netease_stream_data(room_url))
+    # print(get_qiandurebo_stream_data(room_url))
+    # print(get_pandatv_stream_data(room_url, proxy_addr=''))
+    # print(get_maoerfm_stream_url(room_url))

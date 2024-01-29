@@ -27,6 +27,7 @@
 - [x] 网易cc
 - [x] 千度热播
 - [x] pandaTV
+- [x] 猫耳FM
 - [ ] 更多平台正在更新中
 
 </div>
@@ -124,6 +125,9 @@ https://qiandurebo.com/web/video.php?roomnumber=33333
 
 pandaTV：
 https://www.pandalive.co.kr/live/play/bara0109
+
+猫耳FM：
+https://fm.missevan.com/live/868895007
 ```
 
 直播间分享地址和网页端长地址都能正常进行录制（抖音尽量用长链接，避免因短链接转换失效导致不能正常录制，而且需要有nodejs环境，否则无法转换）。
@@ -258,20 +262,23 @@ docker-compose stop
 
 ## ⏳提交日志
 
+- 20240129
+  - 新增猫耳FM直播录制
+  
 - 20240127
   - 新增千度热播直播录制、新增pandaTV(韩国)直播录制
-  
+
   - 新增telegram直播状态消息推送，修复了某些bug
-  
+
   - 新增自定义设置不同直播间的录制画质(即每个直播间录制画质可不同)
-  
+
   - 修改录制视频保存路径为 `downloads` 文件夹，并且分平台进行保存。
-  
+
 - 20240114
   - 新增网易cc直播录制，优化ffmpeg参数，修改AfreecaTV输入直播地址格式
-  
+
   - 修改日志记录器 @[iridescentGray](https://github.com/iridescentGray)
-  
+
 - 20240102
   - 修复Linux上运行，新增docker配置文件
 
