@@ -791,7 +791,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                 ]
 
                                 # 添加代理参数
-                                need_proxy_url = ['tiktok', 'afreecatv']
+                                need_proxy_url = ['tiktok', 'afreecatv', 'pandalive']
                                 for i in need_proxy_url:
                                     if i in real_url:
                                         if use_proxy and proxy_addr != '':
