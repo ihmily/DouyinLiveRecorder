@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub:https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-01-29 18:57:12
+Update: 2024-02-09 03:33:50
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -18,7 +18,14 @@ import re
 import json
 import execjs
 import urllib.request
-from utils import trace_error_decorator
+from utils import (
+    trace_error_decorator,
+    update_config,
+    read_config_value,
+    dict_to_cookie_str
+)
+import http.cookiejar
+from urllib.request import Request
 
 no_proxy_handler = urllib.request.ProxyHandler({})
 opener = urllib.request.build_opener(no_proxy_handler)
@@ -68,7 +75,7 @@ def get_douyin_stream_data(url: str, cookies: Union[str, None] = None) -> Dict[s
 
 @trace_error_decorator
 def get_tiktok_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> Dict[
-                        str, Any]:
+    str, Any]:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.79',
         'Cookie': 'ttwid=1%7CM-rF193sJugKuNz2RGNt-rh6pAAR9IMceUSzlDnPCNI%7C1683274418%7Cf726d4947f2fc37fecc7aeb0cdaee52892244d04efde6f8a8edd2bb168263269; tiktok_webapp_theme=light; tt_chain_token=VWkygAWDlm1cFg/k8whmOg==; passport_csrf_token=6e422c5a7991f8cec7033a8082921510; passport_csrf_token_default=6e422c5a7991f8cec7033a8082921510; d_ticket=f8c267d4af4523c97be1ccb355e9991e2ae06; odin_tt=320b5f386cdc23f347be018e588873db7f7aea4ea5d1813681c3fbc018ea025dde957b94f74146dbc0e3612426b865ccb95ec8abe4ee36cca65f15dbffec0deff7b0e69e8ea536d46e0f82a4fc37d211; cmpl_token=AgQQAPNSF-RO0rT04baWtZ0T_jUjl4fVP4PZYM2QPw; uid_tt=319b558dbba684bb1557206c92089cd113a875526a89aee30595925d804b81c7; uid_tt_ss=319b558dbba684bb1557206c92089cd113a875526a89aee30595925d804b81c7; sid_tt=ad5e736f4bedb2f6d42ccd849e706b1d; sessionid=ad5e736f4bedb2f6d42ccd849e706b1d; sessionid_ss=ad5e736f4bedb2f6d42ccd849e706b1d; store-idc=useast5; store-country-code=us; store-country-code-src=uid; tt-target-idc=useast5; tt-target-idc-sign=qXNk0bb1pDQ0FbCNF120Pl9WWMLZg9Edv5PkfyCbS4lIk5ieW5tfLP7XWROnN0mEaSlc5hg6Oji1pF-yz_3ZXnUiNMrA9wNMPvI6D9IFKKVmq555aQzwPIGHv0aQC5dNRgKo5Z5LBkgxUMWEojTKclq2_L8lBciw0IGdhFm_XyVJtbqbBKKgybGDLzK8ZyxF4Jl_cYRXaDlshZjc38JdS6wruDueRSHe7YvNbjxCnApEFUv-OwJANSPU_4rvcqpVhq3JI2VCCfw-cs_4MFIPCDOKisk5EhAo2JlHh3VF7_CLuv80FXg_7ZqQ2pJeMOog294rqxwbbQhl3ATvjQV_JsWyUsMd9zwqecpylrPvtySI2u1qfoggx1owLrrUynee1R48QlanLQnTNW_z1WpmZBgVJqgEGLwFoVOmRzJuFFNj8vIqdjM2nDSdWqX8_wX3wplohkzkPSFPfZgjzGnQX28krhgTytLt7BXYty5dpfGtsdb11WOFHM6MZ9R9uLVB; sid_guard=ad5e736f4bedb2f6d42ccd849e706b1d%7C1690990657%7C15525213%7CMon%2C+29-Jan-2024+08%3A11%3A10+GMT; sid_ucp_v1=1.0.0-KGM3YzgwYjZhODgyYWI1NjIwNTA0NjBmOWUxMGRhMjIzYTI2YjMxNDUKGAiqiJ30keKD5WQQwfCppgYYsws4AkDsBxAEGgd1c2Vhc3Q1IiBhZDVlNzM2ZjRiZWRiMmY2ZDQyY2NkODQ5ZTcwNmIxZA; ssid_ucp_v1=1.0.0-KGM3YzgwYjZhODgyYWI1NjIwNTA0NjBmOWUxMGRhMjIzYTI2YjMxNDUKGAiqiJ30keKD5WQQwfCppgYYsws4AkDsBxAEGgd1c2Vhc3Q1IiBhZDVlNzM2ZjRiZWRiMmY2ZDQyY2NkODQ5ZTcwNmIxZA; tt_csrf_token=dD0EIH8q-pe3qDQsCyyD1jLN6KizJDRjOEyk; __tea_cache_tokens_1988={%22_type_%22:%22default%22%2C%22user_unique_id%22:%227229608516049831425%22%2C%22timestamp%22:1683274422659}; ttwid=1%7CM-rF193sJugKuNz2RGNt-rh6pAAR9IMceUSzlDnPCNI%7C1694002151%7Cd89b77afc809b1a610661a9d1c2784d80ebef9efdd166f06de0d28e27f7e4efe; msToken=KfJAVZ7r9D_QVeQlYAUZzDFbc1Yx-nZz6GF33eOxgd8KlqvTg1lF9bMXW7gFV-qW4MCgUwnBIhbiwU9kdaSpgHJCk-PABsHCtTO5J3qC4oCTsrXQ1_E0XtbqiE4OVLZ_jdF1EYWgKNPT2SnwGkQ=; msToken=KfJAVZ7r9D_QVeQlYAUZzDFbc1Yx-nZz6GF33eOxgd8KlqvTg1lF9bMXW7gFV-qW4MCgUwnBIhbiwU9kdaSpgHJCk-PABsHCtTO5J3qC4oCTsrXQ1_E0XtbqiE4OVLZ_jdF1EYWgKNPT2SnwGkQ='
@@ -348,17 +355,19 @@ def get_bilibili_stream_data(url: str, cookies: Union[str, None] = None) -> Dict
 @trace_error_decorator
 def get_xhs_stream_url(url: str, cookies: Union[str, None] = None) -> Dict[str, Any]:
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Linux; Android 11; SAMSUNG SM-G973U) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/14.2 Chrome/87.0.4280.141 Mobile Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0',
         'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
-        'Referer': 'https://www.xiaohongshu.com/hina/livestream/568979931846654360',
+        'Referer': 'https://www.redelight.cn/hina/livestream/569077534207413574/1707413727088?share_source=&share_source_id=null&source=share_out_of_app&host_id=58bafe4282ec39085a56ece9&xhsshare=WeixinSession&appuid=5f3f478a00000000010005b3&apptime=1707413727',
     }
     if cookies:
         headers['Cookie'] = cookies
 
-    room_id = url.split('?')[0].rsplit('/', maxsplit=1)[1]
     appuid = re.search('appuid=(.*?)&', url).group(1)
-    app_api = f'https://www.xiaohongshu.com/api/sns/red/live/app/v1/ecology/outside/share_info?room_id={room_id}'
+    room_id = url.split('?')[0].rsplit('/', maxsplit=2)[1]
+    # 原域名
+    # app_api = f'https://www.xiaohongshu.com/api/sns/red/live/app/v1/ecology/outside/share_info?room_id={room_id}'
+    app_api = f'https://www.redelight.cn/api/sns/red/live/app/v1/ecology/outside/share_info?room_id={room_id}'
     req = urllib.request.Request(app_api, headers=headers)
     response = opener.open(req, timeout=15)
     json_str = response.read().decode('utf-8')
@@ -370,7 +379,7 @@ def get_xhs_stream_url(url: str, cookies: Union[str, None] = None) -> Dict[str, 
         "is_live": False,
     }
 
-    # 这个判断不准确，无论是否在直播都为0
+    # 这个判断不准确，无论是否在直播status都为0
     if live_status == 0:
         flv_url = f'http://live-play.xhscdn.com/live/{room_id}.flv?uid={appuid}'
         result['flv_url'] = flv_url
@@ -450,8 +459,9 @@ def get_blued_stream_url(url: str, cookies: Union[str, None] = None) -> Dict[str
     return result
 
 
+@trace_error_decorator
 def get_afreecatv_cdn_url(broad_no: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> Dict[
-                        str, Any]:
+    str, Any]:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
@@ -492,8 +502,106 @@ def get_afreecatv_cdn_url(broad_no: str, proxy_addr: Union[str, None] = None, co
 
 
 @trace_error_decorator
-def get_afreecatv_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> Dict[
-                            str, Any]:
+def login_afreecatv(username: str, password: str, proxy_addr: Union[str, None] = None) -> Union[str, None]:
+    if len(username.strip()) < 6 or len(password.strip()) < 10:
+        raise RuntimeError('AfreecaTV登录失败！请在config.ini配置文件中填写正确的AfreecaTV平台的账号和密码')
+
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0',
+        'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
+        'Referer': 'https://login.afreecatv.com/afreeca/login.php?szFrom=full&request_uri=https%3A%2F%2Fwww.afreecatv.com%2F',
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+
+    }
+
+    data = {
+        'szWork': 'login',
+        'szType': 'json',
+        'szUid': str(username),
+        'szPassword': str(password),
+        'isSaveId': 'true',
+        'szScriptVar': 'oLoginRet',
+        'szAction': '',
+        'isLoginRetain': 'Y',
+    }
+
+    url = 'https://login.afreecatv.com/app/LoginAction.php?callback=jQuery17208926278503069585_1707311376418'
+    try:
+        if proxy_addr:
+            proxies = {
+                'http': proxy_addr,
+                'https': proxy_addr
+            }
+
+            response = requests.post(url, data=data, headers=headers, proxies=proxies, timeout=15)
+            cookie_dict = response.cookies.get_dict()
+        else:
+
+            data = urllib.parse.urlencode(data).encode('utf-8')
+            cookie_jar = http.cookiejar.CookieJar()
+            login_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+            req = Request(url, data=data, headers=headers)
+            _ = login_opener.open(req, timeout=15)
+            cookie_dict = {cookie.name: cookie.value for cookie in cookie_jar}
+
+        cookie = dict_to_cookie_str(cookie_dict)
+        return cookie
+    except Exception:
+        print('AfreecaTV登录失败,请检查配置文件中的账号密码是否正确')
+
+
+@trace_error_decorator
+def get_afreecatv_tk(url: str, rtype: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
+        Union[str, tuple, None]:
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0',
+        'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
+        'Referer': 'https://play.afreecatv.com/secretx/250989857',
+        'Content-Type': 'application/x-www-form-urlencoded',
+    }
+
+    if cookies:
+        headers['Cookie'] = cookies
+
+    split_url = url.split('/')
+    bj_id = split_url[3] if len(split_url) < 6 else split_url[5]
+
+    data = {
+        'bid': bj_id,
+        'bno': '',
+        'type': rtype,
+        'pwd': '',
+        'player_type': 'html5',
+        'stream_type': 'common',
+        'quality': 'master',
+        'mode': 'landing',
+        'from_api': '0',
+    }
+
+    url2 = f'https://live.afreecatv.com/afreeca/player_live_api.php?bjid={bj_id}'
+    if proxy_addr:
+        proxies = {
+            'http': proxy_addr,
+            'https': proxy_addr
+        }
+        response = requests.post(url2, data=data, headers=headers, proxies=proxies, timeout=15)
+        json_data = response.json()
+    else:
+        data_encoded = urllib.parse.urlencode(data).encode('utf-8')
+        req = urllib.request.Request(url2, data=data_encoded, headers=headers)
+        response = urllib.request.urlopen(req, timeout=15)
+        json_str = response.read().decode('utf-8')
+        json_data = json.loads(json_str)
+    if rtype == 'aid':
+        token = json_data["CHANNEL"]["AID"]
+        return token
+    else:
+        return json_data['CHANNEL']['BJNICK'], json_data['CHANNEL']['BNO']
+
+
+@trace_error_decorator
+def get_afreecatv_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
+        Dict[str, Any]:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
@@ -516,6 +624,7 @@ def get_afreecatv_stream_url(url: str, proxy_addr: Union[str, None] = None, cook
     }
 
     url2 = 'http://api.m.afreecatv.com/broad/a/watch'
+
     if proxy_addr:
         proxies = {
             'http': proxy_addr,
@@ -523,27 +632,65 @@ def get_afreecatv_stream_url(url: str, proxy_addr: Union[str, None] = None, cook
         }
         response = requests.post(url2, data=data, headers=headers, proxies=proxies, timeout=15)
         json_data = response.json()
-
     else:
-
-        data = urllib.parse.urlencode(data).encode('utf-8')
-        req = urllib.request.Request(url2, data=data, headers=headers)
+        data_encoded = urllib.parse.urlencode(data).encode('utf-8')
+        req = urllib.request.Request(url2, data=data_encoded, headers=headers)
         response = urllib.request.urlopen(req, timeout=15)
         json_str = response.read().decode('utf-8')
         json_data = json.loads(json_str)
 
-    anchor_name = json_data['data']['user_nick']
-    if not anchor_name:
-        if json_data['data']['code'] == -3004:
-            print("AfreecaTV直播获取失败:", json_data['data']['message'])
-        elif json_data['data']['code'] == -3002:
-            print("AfreecaTV直播获取失败:", json_data['data']['message'])
+    if 'user_nick' in json_data['data']:
+        anchor_name = json_data['data']['user_nick']
+    else:
+        anchor_name = ''
     result = {
         "anchor_name": '' if anchor_name is None else anchor_name,
         "is_live": False,
     }
 
-    if json_data['result'] == 1:
+    if not anchor_name:
+        def handle_login():
+            username = read_config_value('./config/config.ini', '账号密码', 'afreecatv账号')
+            password = read_config_value('./config/config.ini', '账号密码', 'afreecatv密码')
+            cookie = login_afreecatv(username, password, proxy_addr=proxy_addr)
+            if 'PdboxBbs=' in cookie:
+                print('AfreecaTV平台登录成功！开始获取直播数据...')
+                return cookie
+
+        def fetch_data(cookie):
+            aid_token = get_afreecatv_tk(url, rtype='aid', proxy_addr=proxy_addr, cookies=cookie)
+            anchor_name, broad_no = get_afreecatv_tk(url, rtype='info', proxy_addr=proxy_addr, cookies=cookie)
+            view_url = get_afreecatv_cdn_url(broad_no, proxy_addr=proxy_addr)['view_url']
+            m3u8_url = view_url + '?aid=' + aid_token
+            result['anchor_name'] = anchor_name
+            result['m3u8_url'] = m3u8_url
+            result['is_live'] = True
+            result['record_url'] = m3u8_url
+            return result
+
+        if json_data['data']['code'] == -3001:
+            print("AfreecaTV直播获取失败[直播刚结束]:", json_data['data']['message'])
+            return result
+
+        elif json_data['data']['code'] == -3002:
+            print("AfreecaTV直播获取失败[未登录]: 19+", json_data['data']['message'])
+            print("正在尝试使用您的账号和密码登录AfreecaTV直播平台，请确保已配置")
+            new_cookie = handle_login()
+            if new_cookie and len(new_cookie) > 0:
+                update_config('./config/config.ini', 'Cookie', 'afreecatv_cookie', new_cookie)
+                return fetch_data(new_cookie)
+            raise RuntimeError('AfreecaTV登录失败，请检查账号和密码是否正确')
+
+        elif json_data['data']['code'] == -3004:
+            # print("AfreecaTV直播获取失败[未认证]:", json_data['data']['message'])
+            if cookies and len(cookies) > 0:
+                return fetch_data(cookies)
+            else:
+                raise RuntimeError('AfreecaTV登录失败，请检查账号和密码是否正确')
+        elif json_data['data']['code'] == -6001:
+            print(f"错误信息：{json_data['data']['message']}请检查输入的直播间地址是否正确")
+            return result
+    if json_data['result'] == 1 and anchor_name:
         broad_no = json_data['data']['broad_no']
         hls_authentication_key = json_data['data']['hls_authentication_key']
         view_url = get_afreecatv_cdn_url(broad_no, proxy_addr=proxy_addr)['view_url']
@@ -554,7 +701,7 @@ def get_afreecatv_stream_url(url: str, proxy_addr: Union[str, None] = None, cook
     return result
 
 
-# @trace_error_decorator
+@trace_error_decorator
 def get_netease_stream_data(url: str, cookies: Union[str, None] = None) -> Dict[str, Any]:
     headers = {
         'accept': 'application/json, text/plain, */*',
@@ -615,7 +762,7 @@ def get_qiandurebo_stream_data(url: str, cookies: Union[str, None] = None) -> Di
 
 @trace_error_decorator
 def get_pandatv_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> Dict[
-                            str, Any]:
+    str, Any]:
     headers = {
         'referer': 'https://www.pandalive.co.kr/',
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.58',
@@ -730,11 +877,12 @@ if __name__ == '__main__':
     # room_url = 'https://www.yy.com/22490906/22490906'  # YY直播
     # room_url = 'https://live.bilibili.com/21593109'  # b站直播
     # 小红书直播
-    # room_url = 'https://www.xiaohongshu.com/hina/livestream/568980065082002402?appuid=5f3f478a00000000010005b3&apptime='
+    # room_url = 'https://www.redelight.cn/hina/livestream/569077534207413574/1707413727088?appuid=5f3f478a00000000010005b3&'
     # room_url = 'https://www.bigo.tv/cn/716418802'  # bigo直播
     # room_url = 'https://app.blued.cn/live?id=Mp6G2R'  # blued直播
     # room_url = 'https://play.afreecatv.com/sw7love'  # afreecatv直播
     # room_url = 'https://m.afreecatv.com/#/player/hl6260'  # afreecatv直播
+    # room_url = 'https://play.afreecatv.com/secretx'  # afreecatv直播
     # room_url = 'https://cc.163.com/583946984'  # 网易cc直播
     # room_url = 'https://qiandurebo.com/web/video.php?roomnumber=33333'  # 千度热播
     # room_url = 'https://www.pandalive.co.kr/live/play/bara0109'  # pandaTV

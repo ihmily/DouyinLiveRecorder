@@ -5,6 +5,7 @@
 [![Supported Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux-blue.svg)](https://github.com/ihmily/DouyinLiveRecorder)
 [![Docker Pulls](https://img.shields.io/docker/pulls/ihmily/douyin-live-recorder?label=Docker%20Pulls&color=blue&logo=docker)](https://hub.docker.com/r/ihmily/douyin-live-recorder/tags)
 ![GitHub issues](https://img.shields.io/github/issues/ihmily/DouyinLiveRecorder.svg)
+[![Latest Release](https://img.shields.io/github/v/release/ihmily/DouyinLiveRecorder)](https://github.com/ihmily/DouyinLiveRecorder/releases/latest)
 ![Downloads](https://img.shields.io/github/downloads/ihmily/DouyinLiveRecorder/total)
 
 一款简易的可循环值守的直播录制工具，基于FFmpeg实现多平台直播源录制，支持自定义配置录制以及直播状态推送。
@@ -106,7 +107,7 @@ B站：
 https://live.bilibili.com/320
 
 小红书：
-https://www.xiaohongshu.com/hina/livestream/568980065082002402?appuid=5f3f478a00000000010005b3&apptime=
+https://www.redelight.cn/hina/livestream/569077534207413574/1707413727088?appuid=5f3f478a00000000010005b3&
 
 bigo直播：
 https://www.bigo.tv/cn/716418802
@@ -138,23 +139,9 @@ https://fm.missevan.com/live/868895007
 
 该解析接口 ~~仅供演示~~(演示接口暂时停止，后续再开放)，并且只包含抖音、快手、虎牙直播的解析，其他平台如有需要请自行添加，源码在这里 [DouyinLiveRecorder/api](https://github.com/ihmily/DouyinLiveRecorder/tree/main/api)
 
-```HTTP
-GET https://hmily.vip/api/jx/live/?url=
-```
 
-请求示例：
 
-```HTTP
-GET https://hmily.vip/api/jx/live/?url=https://live.douyin.com/573716250978
-```
-
-若需要将抖音直播间短链接转换为长链接，使用以下接口：
-
-```HTTP
-GET https://hmily.vip/api/jx/live/convert.php?url=https://v.douyin.com/iQLgKSj/
-```
-
-在线播放m3u8和flv视频网站：[M3U8 在线视频播放器 ](https://jx.hmily.vip/play/)
+在线播放m3u8和flv视频网站：[M3U8 在线视频播放器 ](https://jx.hmily.vip/play/)，源码是 [index.html](https://github.com/ihmily/DouyinLiveRecorder/blob/main/index.html)
 
 &emsp;
 
@@ -165,6 +152,7 @@ GET https://hmily.vip/api/jx/live/convert.php?url=https://v.douyin.com/iQLgKSj/
 
 ```bash
 git clone https://github.com/ihmily/DouyinLiveRecorder.git
+
 ```
 
 2.进入项目文件夹，安装依赖
@@ -262,9 +250,13 @@ docker-compose stop
 
 ## ⏳提交日志
 
+- 20240209
+  - 优化AfreecaTV录制，新增账号密码登录获取cookie以及持久保存
+  - 修复了小红书直播因官方更新直播域名，导致无法录制直播的问题
+  - 修复了更新URL配置文件的bug
+  - 最后，祝大家新年快乐！
 - 20240129
   - 新增猫耳FM直播录制
-  
 - 20240127
   - 新增千度热播直播录制、新增pandaTV(韩国)直播录制
 
@@ -273,15 +265,12 @@ docker-compose stop
   - 新增自定义设置不同直播间的录制画质(即每个直播间录制画质可不同)
 
   - 修改录制视频保存路径为 `downloads` 文件夹，并且分平台进行保存。
-
 - 20240114
   - 新增网易cc直播录制，优化ffmpeg参数，修改AfreecaTV输入直播地址格式
 
   - 修改日志记录器 @[iridescentGray](https://github.com/iridescentGray)
-
 - 20240102
   - 修复Linux上运行，新增docker配置文件
-
 - 20231210
 
   - 修复录制分段bug，修复bigo录制检测bug

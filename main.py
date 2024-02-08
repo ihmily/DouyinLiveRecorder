@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-01-29 18:45:09
+Update: 2024-02-09 02:41:18
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -146,13 +146,16 @@ def display_info():
             logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
 
 
-def update_file(file_path: str, old_str: str, new_str: str):
+def update_file(file_path: str, old_str: str, new_str: str, start_str: str = None):
     # TODO: 更新文件操作
     file_data = ""
     with open(file_path, "r", encoding="utf-8-sig") as f:
         for text_line in f:
             if old_str in text_line:
                 text_line = text_line.replace(old_str, new_str)
+                if start_str:
+                    text_line = f'{start_str}{text_line}'
+
             file_data += text_line
     with open(file_path, "w", encoding="utf-8-sig") as f:
         f.write(file_data)
@@ -576,7 +579,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
             no_error = True
             new_record_url = ''
             count_time = time.time()
-
+            retry = 0
             record_quality, record_url, anchor_name = url_data
             print(f"\r运行新线程,传入地址 {record_url}")
 
@@ -648,10 +651,14 @@ def start_record(url_data: tuple, count_variable: int = -1):
                             json_data = get_bilibili_stream_data(record_url, cookies=bili_cookie)
                             port_info = get_bilibili_stream_url(json_data, record_quality)
 
-                    elif record_url.find("https://www.xiaohongshu.com/") > -1:
+                    elif record_url.find("https://www.redelight.cn/") > -1:
                         platform = '小红书直播'
+                        if retry > 0:
+                            time.sleep(7200)
+                            retry = 0
                         with semaphore:
                             port_info = get_xhs_stream_url(record_url, cookies=xhs_cookie)
+                            retry += 1
 
                     elif record_url.find("https://www.bigo.tv/") > -1:
                         platform = 'bigo直播'
@@ -1322,7 +1329,7 @@ while True:
 
     # 读取URL_config.ini文件
     try:
-        with open(url_config_file, "r", encoding=encoding) as file:
+        with open(url_config_file, "r", encoding=encoding, errors='ignore') as file:
             for line in file:
                 line = line.strip()
                 if line.startswith("#") or len(line) < 20:
@@ -1362,7 +1369,7 @@ while True:
                     'www.douyu.com',
                     'www.yy.com',
                     'live.bilibili.com',
-                    'www.xiaohongshu.com',
+                    'www.redelight.cn',
                     'www.bigo.tv',
                     'app.blued.cn',
                     'play.afreecatv.com',
@@ -1378,12 +1385,19 @@ while True:
                     url_tuples_list.append(new_line)
                 else:
                     print(f"{url} 未知链接.此条跳过")
+                    update_file(url_config_file, url, url, start_str='#')
 
         while len(name_list):
             a = name_list.pop()
             replace_words = a.split('|')
             if replace_words[0] != replace_words[1]:
-                update_file(url_config_file, replace_words[0], replace_words[1])
+                if replace_words[1].startswith("#"):
+                    start_with = '#'
+                    new_word = replace_words[1][1:]
+                else:
+                    start_with = None
+                    new_word = replace_words[1]
+                update_file(url_config_file, replace_words[0], new_word, start_str=start_with)
 
         if len(url_tuples_list) > 0:
             text_no_repeat_url = list(set(url_tuples_list))
