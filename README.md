@@ -178,7 +178,17 @@ apt update
 apt install ffmpeg
 ```
 
-对于Mac系统，访问 https://evermeet.cx/ffmpeg/ 安装FFmpeg。
+macOS 执行
+
+**如果已经安装 Homebrew 请跳过这一步**
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+```bash
+brew install ffmpeg
+```
 
 4.运行程序
 
