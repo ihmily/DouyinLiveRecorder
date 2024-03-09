@@ -6,9 +6,9 @@
 [![Docker Pulls](https://img.shields.io/docker/pulls/ihmily/douyin-live-recorder?label=Docker%20Pulls&color=blue&logo=docker)](https://hub.docker.com/r/ihmily/douyin-live-recorder/tags)
 ![GitHub issues](https://img.shields.io/github/issues/ihmily/DouyinLiveRecorder.svg)
 [![Latest Release](https://img.shields.io/github/v/release/ihmily/DouyinLiveRecorder)](https://github.com/ihmily/DouyinLiveRecorder/releases/latest)
-![Downloads](https://img.shields.io/github/downloads/ihmily/DouyinLiveRecorder/total)
+[![Downloads](https://img.shields.io/github/downloads/ihmily/DouyinLiveRecorder/total)](https://github.com/ihmily/DouyinLiveRecorder/releases/latest)
 
-一款简易的可循环值守的直播录制工具，基于FFmpeg实现多平台直播源录制，支持自定义配置录制以及直播状态推送。
+一款**简易**的可循环值守的直播录制工具，基于FFmpeg实现多平台直播源录制，支持自定义配置录制以及直播状态推送。
 
 </div>
 
@@ -27,8 +27,13 @@
 - [x] AfreecaTV
 - [x] 网易cc
 - [x] 千度热播
-- [x] pandaTV
+- [x] PandaTV
 - [x] 猫耳FM
+- [x] Look直播
+- [x] WinkTV
+- [x] FlexTV
+- [x] PopkonTV
+- [x] TwitCasting
 - [ ] 更多平台正在更新中
 
 </div>
@@ -38,7 +43,6 @@
 ```
 .
 └── DouyinLiveRecorder/
-    ├── /api -> (get live stream api )
     ├── /config -> (config record)
     ├── /logs -> (save runing log file)
     ├── /backup_config -> (backup file)
@@ -76,7 +80,7 @@
 - 如果要长时间挂着软件循环监测直播，最好循环时间设置长一点（咱也不差没录制到的那几分钟），避免因请求频繁导致被官方封禁IP 。
 
 - 要停止直播录制，使用`Ctrl+C ` 或直接关闭程序即可。
-- 最后，欢迎右上角给本项目一个star，同时也非常乐意大家提交pr（请先询问我，避免做无用功）。
+- 最后，欢迎右上角给本项目一个star，同时也非常乐意大家提交pr。
 
 &emsp;
 
@@ -107,7 +111,7 @@ B站：
 https://live.bilibili.com/320
 
 小红书：
-https://www.redelight.cn/hina/livestream/569077534207413574/1707413727088?appuid=5f3f478a00000000010005b3&
+https://www.xiaohongshu.com/hina/livestream/569077534207413574/1707413727088?appuid=5f3f478a00000000010005b3&
 
 bigo直播：
 https://www.bigo.tv/cn/716418802
@@ -124,11 +128,26 @@ https://cc.163.com/583946984
 千度热播：
 https://qiandurebo.com/web/video.php?roomnumber=33333
 
-pandaTV：
+PandaTV：
 https://www.pandalive.co.kr/live/play/bara0109
 
 猫耳FM：
 https://fm.missevan.com/live/868895007
+
+Look直播:
+https://look.163.com/live?id=65108820&position=3
+
+WinkTV:
+https://www.winktv.co.kr/live/play/anjer1004
+
+FlexTV:
+https://www.flextv.co.kr/channels/593127/live
+
+PopkonTV:
+https://www.popkontv.com/live/view?castId=wjfal007&partnerCode=P-00117
+
+TwitCasting:
+https://twitcasting.tv/c:uonq
 ```
 
 直播间分享地址和网页端长地址都能正常进行录制（抖音尽量用长链接，避免因短链接转换失效导致不能正常录制，而且需要有nodejs环境，否则无法转换）。
@@ -152,7 +171,6 @@ https://fm.missevan.com/live/868895007
 
 ```bash
 git clone https://github.com/ihmily/DouyinLiveRecorder.git
-
 ```
 
 2.进入项目文件夹，安装依赖
@@ -256,10 +274,20 @@ docker-compose stop
 [![iridescentGray](https://github.com/iridescentGray.png?size=50)](https://github.com/iridescentGray)
 [![annidy](https://github.com/annidy.png?size=50)](https://github.com/annidy)
 [![wwkk2580](https://github.com/wwkk2580.png?size=50)](https://github.com/wwkk2580)
+[![missuo](https://github.com/missuo.png?size=50)](https://github.com/missuo)
+
 &emsp;
 
 ## ⏳提交日志
 
+- 20240309
+  - 修复虎牙直播、小红书直播和B站直播录制
+  - 新增5个直播平台录制，包括winktv、flextv、look、popkontv、twitcasting
+  - 新增部分海外平台账号密码配置，实现自动登录并更新配置文件中的cookie
+  - 新增自定义配置需要使用代理录制的平台
+  - 新增只推送开播消息不进行录制设置
+  - 修复了一些bug
+  
 - 20240209
   - 优化AfreecaTV录制，新增账号密码登录获取cookie以及持久保存
   - 修复了小红书直播因官方更新直播域名，导致无法录制直播的问题

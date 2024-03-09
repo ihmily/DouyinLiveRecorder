@@ -4,26 +4,29 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-02-09 02:41:18
+Update: 2024-03-09 03:25:39
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
 
-import random
 import os
 import sys
-import urllib.parse
-import urllib.request
-import configparser
 import subprocess
+import signal
 import threading
-import datetime
 import time
+import datetime
 import json
 import re
 import shutil
-import signal
+import random
+import base64
+import hashlib
+import urllib.parse
+import urllib.request
+from urllib.error import URLError, HTTPError
 from typing import Any, Union
+import configparser
 
 from spider import (
     get_douyin_stream_data,
@@ -41,7 +44,12 @@ from spider import (
     get_netease_stream_data,
     get_qiandurebo_stream_data,
     get_pandatv_stream_data,
-    get_maoerfm_stream_url
+    get_maoerfm_stream_url,
+    get_winktv_stream_data,
+    get_flextv_stream_data,
+    get_looklive_stream_url,
+    get_popkontv_stream_url,
+    get_twitcasting_stream_url
 )
 
 from web_rid import (
@@ -54,8 +62,10 @@ from utils import (
 )
 from msg_push import dingtalk, xizhi, tg_bot
 
-version = "v3.0.1-beta"
-platforms = "抖音|TikTok|快手|虎牙|斗鱼|YY|B站|小红书|bigo直播|blued直播|AfreecaTV|网易CC|千度热播|pandaTV|猫耳FM"
+version = "v3.0.2"
+platforms = "\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo直播|blued直播|网易CC|千度热播|猫耳FM|Look直播|TwitCasting" \
+            "\n海外站点：TikTok|AfreecaTV|PandaTV|WinkTV|FlexTV|PopkonTV"
+
 # --------------------------全局变量-------------------------------------
 recording = set()
 unrecording = set()
@@ -78,7 +88,7 @@ config_file = './config/config.ini'
 url_config_file = './config/URL_config.ini'
 backup_dir = './backup_config'
 encoding = 'utf-8-sig'
-rstr = r"[\/\\\:\*\?\"\<\>\|&u]"
+rstr = r"[\/\\\:\*\?\"\<\>\|&.。]"
 ffmpeg_path = "ffmpeg"  # ffmpeg文件路径
 default_path = os.getcwd() + '/downloads'
 os.makedirs(default_path, exist_ok=True)
@@ -162,7 +172,7 @@ def update_file(file_path: str, old_str: str, new_str: str, start_str: str = Non
 
 
 def converts_mp4(address: str):
-    if tsconvert_to_mp4:
+    if ts_to_mp4:
         _output = subprocess.check_output([
             "ffmpeg", "-i", address,
             "-c:v", "copy",
@@ -176,7 +186,7 @@ def converts_mp4(address: str):
 
 
 def converts_m4a(address: str):
-    if tsconvert_to_m4a:
+    if ts_to_m4a:
         _output = subprocess.check_output([
             "ffmpeg", "-i", address,
             "-n", "-vn",
@@ -297,13 +307,14 @@ def get_douyin_stream_url(json_data: dict, video_quality: str) -> dict:
         result['flv_url'] = flv_url
         result['is_live'] = True
         result['record_url'] = m3u8_url  # 使用 m3u8 链接进行录制
-
     return result
 
 
 @trace_error_decorator
 def get_tiktok_stream_url(json_data: dict, video_quality: str) -> dict:
     # TODO: 获取tiktok直播源地址
+    if not json_data:
+        return {"anchor_name": None, "is_live": False}
 
     def get_video_quality_url(stream, q_key):
         return {
@@ -313,7 +324,7 @@ def get_tiktok_stream_url(json_data: dict, video_quality: str) -> dict:
 
     live_room = json_data['LiveRoom']['liveRoomUserInfo']
     user = live_room['user']
-    anchor_name = user['nickname']
+    anchor_name = f"{user['nickname']}-{user['uniqueId']}"
     status = user.get("status", 4)
 
     result = {
@@ -394,16 +405,53 @@ def get_huya_stream_url(json_data: dict, video_quality: str) -> dict:
 
     if stream_info_list:
         select_cdn = stream_info_list[0]
-        # flv_url = select_cdn.get('sFlvUrl')
-        flv_url = 'http://hw.flv.huya.com/src'  # 能播放但无法录制，待修复
+        flv_url = select_cdn.get('sFlvUrl')
         stream_name = select_cdn.get('sStreamName')
         flv_url_suffix = select_cdn.get('sFlvUrlSuffix')
         hls_url = select_cdn.get('sHlsUrl')
         hls_url_suffix = select_cdn.get('sHlsUrlSuffix')
         flv_anti_code = select_cdn.get('sFlvAntiCode')
 
-        flv_url = f'{flv_url}/{stream_name}.{flv_url_suffix}?{flv_anti_code}&ratio='
-        m3u8_url = f'{hls_url}/{stream_name}.{hls_url_suffix}?{flv_anti_code}&ratio='
+        def get_anti_code(old_anti_code):
+
+            # js地址：https://hd.huya.com/cdn_libs/mobile/hysdk-m-202402211431.js
+
+            params_t = 100
+            sdk_version = 2403051612
+
+            # sdk_id是13位数毫秒级时间戳
+            t13 = int(time.time()) * 1000
+            sdk_sid = t13
+
+            # 计算uuid和uid参数值
+            init_uuid = (int(t13 % 10**10 * 1000) + int(1000 * random.random())) % 4294967295  # 直接初始化
+            uid = random.randint(1400000000000, 1400009999999)  # 经过测试uid也可以使用init_uuid代替
+            seq_id = uid + sdk_sid  # 移动端请求的直播流地址中包含seqId参数
+
+            # 计算ws_time参数值(16进制) 可以是当前毫秒时间戳，当然也可以直接使用url_query['wsTime'][0]
+            # 原始最大误差不得慢240000毫秒
+            target_unix_time = (t13+110624) // 1000
+            ws_time = hex(target_unix_time)[2:].lower()
+
+            # fm参数值是经过url编码然后base64编码得到的，解码结果类似 DWq8BcJ3h6DJt6TY_$0_$1_$2_$3
+            # 具体细节在上面js中查看，大概在32657行代码开始，有base64混淆代码请自行替换
+            url_query = urllib.parse.parse_qs(old_anti_code)
+            ws_secret_pf = base64.b64decode(urllib.parse.unquote(url_query['fm'][0]).encode()).decode().split("_")[0]
+            ws_secret_hash = hashlib.md5(f'{seq_id}|{url_query["ctype"][0]}|{params_t}'.encode()).hexdigest()
+            ws_secret = f'{ws_secret_pf}_{uid}_{stream_name}_{ws_secret_hash}_{ws_time}'
+            ws_secret_md5 = hashlib.md5(ws_secret.encode()).hexdigest()
+
+            anti_code = (
+                f'wsSecret={ws_secret_md5}&wsTime={ws_time}&seqid={seq_id}&ctype={url_query["ctype"][0]}&ver=1'
+                f'&fs={url_query["fs"][0]}&uuid={init_uuid}&u={uid}&t={params_t}&sv={sdk_version}'
+                f'&sphdcdn={url_query["sphdcdn"][0]}&sphdDC={url_query["sphdDC"][0]}&sphd={url_query["sphd"][0]}'
+                f'&exsphd={url_query["exsphd"][0]}&sdk_sid={sdk_sid}&codec=264'
+            )
+            return anti_code
+
+        new_anti_code = get_anti_code(flv_anti_code)
+        flv_url = f'{flv_url}/{stream_name}.{flv_url_suffix}?{new_anti_code}&ratio='
+        m3u8_url = f'{hls_url}/{stream_name}.{hls_url_suffix}?{new_anti_code}&ratio='
 
         quality_list = flv_anti_code.split('&exsphd=')
         if len(quality_list) > 1:
@@ -430,12 +478,12 @@ def get_huya_stream_url(json_data: dict, video_quality: str) -> dict:
         result['flv_url'] = flv_url
         result['m3u8_url'] = m3u8_url
         result['is_live'] = True
-        result['record_url'] = flv_url  # 虎牙使用flv视频流录制
+        result['record_url'] = flv_url  # m3u8经常会出现断流
     return result
 
 
 @trace_error_decorator
-def get_douyu_stream_url(json_data: dict, cookies: str, video_quality: str) -> dict:
+def get_douyu_stream_url(json_data: dict, cookies: str, video_quality: str, proxy_address: str) -> dict:
     # TODO: 获取斗鱼直播源地址
     video_quality_options = {
         "原画": '0',
@@ -453,16 +501,16 @@ def get_douyu_stream_url(json_data: dict, cookies: str, video_quality: str) -> d
         "is_live": False,
     }
     # 如果status值为1，则正在直播
-    # 这边有个bug，就是如果是直播回放，状态也是在直播 待修复
+    # 这边有个bug，就是如果是直播回放，状态也是在直播 待优化
     if status == 1:
         rid = str(room_info['rid'])
         rate = video_quality_options.get(video_quality, '0')  # 默认为原画
-        flv_data = get_douyu_stream_data(rid, rate, cookies)
+        flv_data = get_douyu_stream_data(rid, rate, cookies=cookies, proxy_addr=proxy_address)
         flv_url = flv_data['data'].get('url', None)
         if flv_url:
             result['flv_url'] = flv_url
             result['is_live'] = True
-            result['record_url'] = flv_url  # 斗鱼目前只能使用flv视频流录制
+            result['record_url'] = flv_url
     return result
 
 
@@ -509,12 +557,16 @@ def get_bilibili_stream_url(json_data: dict, video_quality: str) -> dict:
             while len(accept_qn_list) < 4:
                 accept_qn_list.append(accept_qn_list[-1])
             base_url = stream_data['base_url']
+            current_qn = stream_data['current_qn']
             host = stream_data['url_info'][0]['host']
             extra = stream_data['url_info'][0]['extra']
             url_type = format_list[m]
             qn = str(accept_qn_list[n])
             select_quality = quality_list[qn]
-            base_url = re.sub(r'_(\d+)' + f'(?={url_type}\\?)', select_quality, base_url)
+
+            if current_qn != 10000:
+                base_url = re.sub(r'_(\d+)' + f'(?={url_type}\\?)', select_quality, base_url)
+
             extra = re.sub('&qn=0', f'&qn={qn}', extra)
             return host + base_url + extra
 
@@ -563,12 +615,50 @@ def get_netease_stream_url(json_data: dict, video_quality: str) -> dict:
     }
 
 
+@trace_error_decorator
+def get_winktv_stream_url(json_data: dict, video_quality: str) -> dict:
+    if not json_data['is_live']:
+        return json_data
+
+    quality_length = len(json_data['play_url_list'])
+    quality_list = {'原画': 'hls', '蓝光': 'hls', '超清': 'hls2', '高清': 'hls3', '标清': 'hls4'}
+    for i in json_data['play_url_list']:
+        if i in 'hls' and i not in list(quality_list.values()):
+            json_data['play_url_list'][i] = json_data['play_url_list'][quality_length - 1]
+
+    selected_quality = quality_list[video_quality]
+    flv_url = json_data['play_url_list'][selected_quality][0]['url']
+
+    return {
+        "is_live": True,
+        "anchor_name": json_data['anchor_name'],
+        "flv_url": flv_url,
+        "record_url": flv_url
+    }
+
+
+def push_message(content: str):
+    push_pts = []
+    if '微信' in live_status_push:
+        push_pts.append('微信')
+        xizhi(xizhi_api_url, content)
+    if '钉钉' in live_status_push:
+        push_pts.append('钉钉')
+        dingtalk(dingtalk_api_url, content, dingtalk_phone_num)
+    if 'TG' in live_status_push:
+        push_pts.append('TG')
+        tg_bot(tg_chat_id, tg_token, content)
+    push_pts = '、'.join(push_pts) if len(push_pts) > 0 else ''
+    return push_pts
+
+
 def start_record(url_data: tuple, count_variable: int = -1):
     global warning_count
     global video_save_path
     global live_list
     global not_record_list
     global recording_time_list
+    start_pushed = False
 
     while True:
         try:
@@ -581,8 +671,23 @@ def start_record(url_data: tuple, count_variable: int = -1):
             count_time = time.time()
             retry = 0
             record_quality, record_url, anchor_name = url_data
-            print(f"\r运行新线程,传入地址 {record_url}")
+            proxy_address = proxy_addr
 
+            if proxy_addr:
+                proxy_address = None
+                for platform in enable_proxy_platform_list:
+                    if platform and platform.strip() in url:
+                        proxy_address = proxy_addr
+                        break
+
+            if not proxy_address:
+                if extra_enable_proxy_platform_list:
+                    for pt in extra_enable_proxy_platform_list:
+                        if pt and pt.strip() in url:
+                            proxy_address = proxy_addr_bak if proxy_addr_bak else None
+
+            # print(f'\r代理地址:{proxy_address}')
+            print(f"\r运行新线程,传入地址 {record_url}")
             while True:
                 try:
                     port_info = []
@@ -590,93 +695,114 @@ def start_record(url_data: tuple, count_variable: int = -1):
                         platform = '抖音直播'
                         # 判断如果是浏览器长链接
                         with semaphore:
-                            # 使用semaphore来控制同时访问资源的线程数量
-                            json_data = get_douyin_stream_data(record_url, cookies=dy_cookie)
+                            json_data = get_douyin_stream_data(
+                                url=record_url,
+                                proxy_addr=proxy_address,
+                                cookies=dy_cookie)
                             port_info = get_douyin_stream_url(json_data, record_quality)
                     elif record_url.find("https://v.douyin.com/") > -1:
                         platform = '抖音直播'
                         # 判断如果是app分享链接
                         is_long_url = True
-                        room_id, sec_user_id = get_sec_user_id(record_url)
-                        web_rid = get_live_room_id(room_id, sec_user_id)
+                        room_id, sec_user_id = get_sec_user_id(url=record_url, proxy_addr=proxy_address)
+                        web_rid = get_live_room_id(room_id, sec_user_id, proxy_addr=proxy_address)
                         if len(web_rid) == 0:
                             print('web_rid 获取失败，若多次失败请联系作者修复或者使用浏览器打开后的长链接')
                         new_record_url = "https://live.douyin.com/" + str(web_rid)
                         not_record_list.append(new_record_url)
                         with semaphore:
-                            json_data = get_douyin_stream_data(new_record_url, cookies=dy_cookie)
+                            json_data = get_douyin_stream_data(
+                                url=new_record_url,
+                                proxy_addr=proxy_address,
+                                cookies=dy_cookie)
                             port_info = get_douyin_stream_url(json_data, record_quality)
 
                     elif record_url.find("https://www.tiktok.com/") > -1:
                         platform = 'TikTok直播'
                         with semaphore:
-                            if use_proxy:
-                                if global_proxy or proxy_addr != '':
-                                    json_data = get_tiktok_stream_data(
-                                        url=record_url,
-                                        proxy_addr=proxy_addr,
-                                        cookies=tiktok_cookie)
-                                    port_info = get_tiktok_stream_url(json_data, record_quality)
+
+                            if global_proxy or proxy_address:
+                                json_data = get_tiktok_stream_data(
+                                    url=record_url,
+                                    proxy_addr=proxy_address,
+                                    cookies=tiktok_cookie)
+                                port_info = get_tiktok_stream_url(json_data, record_quality)
+                            else:
+                                logger.warning(f"错误信息: 网络异常，请检查网络是否能正常访问TikTok平台")
 
                     elif record_url.find("https://live.kuaishou.com/") > -1:
                         platform = '快手直播'
                         with semaphore:
-                            json_data = get_kuaishou_stream_data(record_url, cookies=ks_cookie)
+                            json_data = get_kuaishou_stream_data(
+                                url=record_url,
+                                proxy_addr=proxy_address,
+                                cookies=ks_cookie)
                             port_info = get_kuaishou_stream_url(json_data, record_quality)
 
                     elif record_url.find("https://www.huya.com/") > -1:
                         platform = '虎牙直播'
                         with semaphore:
-                            json_data = get_huya_stream_data(record_url, cookies=hy_cookie)
+                            json_data = get_huya_stream_data(
+                                url=record_url,
+                                proxy_addr=proxy_address,
+                                cookies=hy_cookie)
                             port_info = get_huya_stream_url(json_data, record_quality)
 
                     elif record_url.find("https://www.douyu.com/") > -1:
                         platform = '斗鱼直播'
                         with semaphore:
-                            json_data = get_douyu_info_data(record_url)
+                            json_data = get_douyu_info_data(url=record_url, proxy_addr=proxy_address)
                             port_info = get_douyu_stream_url(
-                                json_data, cookies=douyu_cookie,
+                                json_data, proxy_address=proxy_address, cookies=douyu_cookie,
                                 video_quality=record_quality
                             )
 
                     elif record_url.find("https://www.yy.com/") > -1:
                         platform = 'YY直播'
                         with semaphore:
-                            json_data = get_yy_stream_data(record_url, cookies=yy_cookie)
+                            json_data = get_yy_stream_data(
+                                url=record_url, proxy_addr=proxy_address, cookies=yy_cookie)
                             port_info = get_yy_stream_url(json_data)
 
                     elif record_url.find("https://live.bilibili.com/") > -1:
                         platform = 'B站直播'
                         with semaphore:
-                            json_data = get_bilibili_stream_data(record_url, cookies=bili_cookie)
+                            json_data = get_bilibili_stream_data(
+                                url=record_url, proxy_addr=proxy_address, cookies=bili_cookie)
                             port_info = get_bilibili_stream_url(json_data, record_quality)
 
-                    elif record_url.find("https://www.redelight.cn/") > -1:
+                    elif record_url.find("https://www.redelight.cn/") > -1 or \
+                            record_url.find("https://www.xiaohongshu.com/") > -1:
                         platform = '小红书直播'
                         if retry > 0:
                             time.sleep(7200)
                             retry = 0
                         with semaphore:
-                            port_info = get_xhs_stream_url(record_url, cookies=xhs_cookie)
+                            port_info = get_xhs_stream_url(url=record_url, proxy_addr=proxy_address, cookies=xhs_cookie)
                             retry += 1
 
                     elif record_url.find("https://www.bigo.tv/") > -1:
-                        platform = 'bigo直播'
+                        platform = 'Bigo直播'
                         with semaphore:
-                            port_info = get_bigo_stream_url(record_url, cookies=bigo_cookie)
+                            port_info = get_bigo_stream_url(record_url, proxy_addr=proxy_address, cookies=bigo_cookie)
 
                     elif record_url.find("https://app.blued.cn/") > -1:
-                        platform = 'blued直播'
+                        platform = 'Blued直播'
                         with semaphore:
-                            port_info = get_blued_stream_url(record_url, cookies=blued_cookie)
+                            port_info = get_blued_stream_url(record_url, proxy_addr=proxy_address, cookies=blued_cookie)
 
                     elif record_url.find("afreecatv.com/") > -1:
-                        platform = 'AfreecaTv直播'
+                        platform = 'AfreecaTV'
                         with semaphore:
-                            port_info = get_afreecatv_stream_url(
-                                url=record_url, proxy_addr=proxy_addr,
-                                cookies=afreecatv_cookie
-                            )
+                            if global_proxy or proxy_address:
+                                port_info = get_afreecatv_stream_url(
+                                    url=record_url, proxy_addr=proxy_address,
+                                    cookies=afreecatv_cookie,
+                                    username=afreecatv_username,
+                                    password=afreecatv_password
+                                )
+                            else:
+                                logger.warning(f"错误信息: 网络异常，请检查本网络是否能正常访问AfreecaTV平台")
 
                     elif record_url.find("cc.163.com/") > -1:
                         platform = '网易CC直播'
@@ -687,21 +813,85 @@ def start_record(url_data: tuple, count_variable: int = -1):
                     elif record_url.find("qiandurebo.com/") > -1:
                         platform = '千度热播'
                         with semaphore:
-                            port_info = get_qiandurebo_stream_data(url=record_url, cookies=qiandurebo_cookie)
+                            port_info = get_qiandurebo_stream_data(
+                                url=record_url, proxy_addr=proxy_address, cookies=qiandurebo_cookie)
 
                     elif record_url.find("www.pandalive.co.kr/") > -1:
-                        platform = 'pandaTV'
+                        platform = 'PandaTV'
                         with semaphore:
-                            port_info = get_pandatv_stream_data(
-                                url=record_url,
-                                proxy_addr=proxy_addr,
-                                cookies=pandatv_cookie
-                            )
+                            if global_proxy or proxy_address:
+                                port_info = get_pandatv_stream_data(
+                                    url=record_url,
+                                    proxy_addr=proxy_address,
+                                    cookies=pandatv_cookie
+                                )
+                            else:
+                                logger.warning(f"错误信息: 网络异常，请检查本网络是否能正常访问PandaTV直播平台")
 
                     elif record_url.find("fm.missevan.com/") > -1:
-                        platform = '猫耳FM'
+                        platform = '猫耳FM直播'
                         with semaphore:
-                            port_info = get_maoerfm_stream_url(url=record_url, cookies=maoerfm_cookie)
+                            port_info = get_maoerfm_stream_url(
+                                url=record_url, proxy_addr=proxy_address, cookies=maoerfm_cookie)
+
+                    elif record_url.find("www.winktv.co.kr/") > -1:
+                        platform = 'WinkTV'
+                        with semaphore:
+                            if global_proxy or proxy_address:
+                                json_data = get_winktv_stream_data(
+                                    url=record_url,
+                                    proxy_addr=proxy_address,
+                                    cookies=winktv_cookie)
+                                port_info = get_winktv_stream_url(json_data, record_quality)
+                            else:
+                                logger.warning(f"错误信息: 网络异常，请检查本网络是否能正常访问WinkTV直播平台")
+
+                    elif record_url.find("www.flextv.co.kr/") > -1:
+                        platform = 'FlexTV'
+                        with semaphore:
+                            if global_proxy or proxy_address:
+                                port_info = get_flextv_stream_data(
+                                    url=record_url,
+                                    proxy_addr=proxy_address,
+                                    cookies=flextv_cookie,
+                                    username=flextv_username,
+                                    password=flextv_password
+                                )
+                            else:
+                                logger.warning(f"错误信息: 网络异常，请检查本网络是否能正常访问FlexTV直播平台")
+
+                    elif record_url.find("look.163.com/") > -1:
+                        platform = 'Look直播'
+                        with semaphore:
+                            port_info = get_looklive_stream_url(
+                                url=record_url, proxy_addr=proxy_address, cookies=look_cookie
+                            )
+
+                    elif record_url.find("www.popkontv.com/") > -1:
+                        platform = 'PopkonTV'
+                        with semaphore:
+                            if global_proxy or proxy_address:
+                                port_info = get_popkontv_stream_url(
+                                    url=record_url,
+                                    proxy_addr=proxy_address,
+                                    access_token=popkontv_access_token,
+                                    username=popkontv_username,
+                                    password=popkontv_password,
+                                    partner_code=popkontv_partner_code
+                                )
+                            else:
+                                logger.warning(f"错误信息: 网络异常，请检查本网络是否能正常访问PopkonTV直播平台")
+
+                    elif record_url.find("twitcasting.tv/") > -1:
+                        platform = 'TwitCasting'
+                        with semaphore:
+                            port_info = get_twitcasting_stream_url(
+                                url=record_url,
+                                proxy_addr=proxy_address,
+                                cookies=twitcasting_cookie,
+                                username=twitcasting_username,
+                                password=twitcasting_password
+                            )
 
                     else:
                         logger.warning(f'{record_url} 未知直播地址')
@@ -736,19 +926,28 @@ def start_record(url_data: tuple, count_variable: int = -1):
                             run_once = True
 
                         if port_info['is_live'] is False:
-                            print(f"{record_name} 等待直播... ")
+                            print(f"\r{record_name} 等待直播... ")
+
+                            if start_pushed:
+                                content = f"{record_name} 直播已结束！"
+                                push_pts = push_message(content)
+                                if push_pts:
+                                    print(f'提示信息：已经将[{record_name}]直播状态消息推送至你的{push_pts}')
+                                    start_pushed = False
                         else:
-                            content = f"{record_name} 正在直播中..."
+                            content = f"\r{record_name} 正在直播中..."
                             print(content)
 
                             # 推送通知
-                            if live_status_push:
-                                if '微信' in live_status_push:
-                                    xizhi(xizhi_api_url, content)
-                                if '钉钉' in live_status_push:
-                                    dingtalk(dingtalk_api_url, content, dingtalk_phone_num)
-                                if 'TG' in live_status_push:
-                                    tg_bot(tg_chat_id, tg_token, content)
+                            if live_status_push and not start_pushed:
+                                push_pts = push_message(f"{content.split('...')[0]}，时间：{datetime.datetime.today()}")
+                                if push_pts:
+                                    print(f'提示信息：已经将[{record_name}]直播状态消息推送至你的{push_pts}')
+                                    start_pushed = True
+
+                            if disable_record:
+                                time.sleep(push_check_seconds)
+                                continue
 
                             real_url = port_info['record_url']
                             full_path = f'{default_path}/{platform}/{anchor_name}'
@@ -776,36 +975,44 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                 user_agent = ("Mozilla/5.0 (Linux; Android 11; SAMSUNG SM-G973U) AppleWebKit/537.36 ("
                                               "KHTML, like Gecko) SamsungBrowser/14.2 Chrome/87.0.4280.141 Mobile "
                                               "Safari/537.36")
+
+                                analyzeduration = "20000000"
+                                probesize = "10000000"
+                                bufsize = "8000k"
+                                max_muxing_queue_size = "1024"
+                                for pt_host in overseas_platform_host:
+                                    if pt_host in record_url:
+                                        analyzeduration = "40000000"
+                                        probesize = "20000000"
+                                        bufsize = "15000k"
+                                        max_muxing_queue_size = "2048"
+                                        break
+
                                 ffmpeg_command = [
                                     ffmpeg_path, "-y",
                                     "-v", "verbose",
-                                    "-rw_timeout", "30000000",  # 改为30s
+                                    "-rw_timeout", "30000000",
                                     "-loglevel", "error",
                                     "-hide_banner",
                                     "-user_agent", user_agent,
                                     "-protocol_whitelist", "rtmp,crypto,file,http,https,tcp,tls,udp,rtp",
-                                    "-thread_queue_size", "512",
-                                    "-analyzeduration", "5000000",
-                                    "-probesize", "10000000",
+                                    "-thread_queue_size", "1024",
+                                    "-analyzeduration", analyzeduration,
+                                    "-probesize", probesize,
                                     "-fflags", "+discardcorrupt",
                                     "-i", real_url,
-                                    "-bufsize", "9000k",  # 适当增加输入缓冲区大小
+                                    "-bufsize", bufsize,
                                     "-sn", "-dn",
-                                    "-reconnect_delay_max", "60",  # 适当增加最大重连延迟
+                                    "-reconnect_delay_max", "60",
                                     "-reconnect_streamed", "-reconnect_at_eof",
-                                    "-max_muxing_queue_size", "128",  # 适当增加输出复用器的最大队列大小
+                                    "-max_muxing_queue_size", max_muxing_queue_size,
                                     "-correct_ts_overflow", "1",
                                 ]
 
                                 # 添加代理参数
-                                need_proxy_url = ['tiktok', 'afreecatv', 'pandalive']
-                                for i in need_proxy_url:
-                                    if i in real_url:
-                                        if use_proxy and proxy_addr != '':
-                                            # os.environ["http_proxy"] = proxy_addr
-                                            ffmpeg_command.insert(1, "-http_proxy")
-                                            ffmpeg_command.insert(2, proxy_addr)
-                                            break
+                                if proxy_address:
+                                    ffmpeg_command.insert(1, "-http_proxy")
+                                    ffmpeg_command.insert(2, proxy_address)
 
                                 recording.add(record_name)
                                 start_record_time = datetime.datetime.now()
@@ -848,6 +1055,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                             now = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
                                             save_file_path = f"{full_path}/{anchor_name}_{now}_%03d.mkv"
                                             command = [
+                                                "-flags", "global_header",
                                                 "-c:v", "copy",
                                                 "-c:a", "aac",
                                                 "-map", "0",
@@ -868,6 +1076,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                                 create_var[str(filename_short)].start()
 
                                             command = [
+                                                "-flags", "global_header",
                                                 "-map", "0",
                                                 "-c:v", "copy",
                                                 "-c:a", "copy",
@@ -899,7 +1108,6 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                                 "-f", "segment",
                                                 "-segment_time", split_time,
                                                 "-segment_format", "mp4",
-                                                "-movflags", "+faststart",
                                                 "-reset_timestamps", "1",
                                                 save_file_path,
                                             ]
@@ -943,7 +1151,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                         ffmpeg_command.extend(command)
                                         _output = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT)
 
-                                        if tsconvert_to_m4a:
+                                        if ts_to_m4a:
                                             threading.Thread(target=converts_m4a, args=(save_file_path,)).start()
                                     except subprocess.CalledProcessError as e:
                                         logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
@@ -965,7 +1173,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                         ffmpeg_command.extend(command)
                                         _output = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT)
 
-                                        if tsconvert_to_m4a:
+                                        if ts_to_m4a:
                                             threading.Thread(target=converts_m4a, args=(save_file_path,)).start()
                                     except subprocess.CalledProcessError as e:
                                         logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
@@ -979,7 +1187,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                         print(f'{rec_info}/{filename}')
 
                                         try:
-                                            if tsconvert_to_mp4:
+                                            if ts_to_mp4:
                                                 save_path_name = f"{full_path}/{anchor_name}_{now}_%03d.mp4"
                                                 audio_code = 'aac'
                                                 segment_format = 'mp4'
@@ -1034,9 +1242,9 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                             ffmpeg_command.extend(command)
                                             _output = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT)
 
-                                            if tsconvert_to_mp4:
+                                            if ts_to_mp4:
                                                 threading.Thread(target=converts_mp4, args=(save_file_path,)).start()
-                                            if tsconvert_to_m4a:
+                                            if ts_to_m4a:
                                                 threading.Thread(target=converts_m4a, args=(save_file_path,)).start()
 
                                         except subprocess.CalledProcessError as e:
@@ -1178,8 +1386,7 @@ if ffmepg_file_check.find("run") > -1:
     # print("ffmpeg存在")
     pass
 else:
-    print("重要提示:")
-    input("检测到ffmpeg不存在,请将ffmpeg.exe放到同目录,或者设置为环境变量,没有ffmpeg将无法录制")
+    input("重要提示:\n\r检测到ffmpeg不存在,请将ffmpeg.exe放到同目录,或者设置为环境变量,没有ffmpeg将无法录制")
     sys.exit(0)
 
 # --------------------------初始化程序-------------------------------------
@@ -1187,9 +1394,9 @@ print("-----------------------------------------------------")
 print("|                DouyinLiveRecorder                 |")
 print("-----------------------------------------------------")
 
-print(f"版本号：{version}")
-print("Github：https://github.com/ihmily/DouyinLiveRecorder")
-print(f'支持平台：{platforms}')
+print(f"版本号: {version}")
+print(f"GitHub: https://github.com/ihmily/DouyinLiveRecorder")
+print(f'支持平台: {platforms}')
 print('.....................................................')
 
 if not os.path.exists('./config'):
@@ -1199,16 +1406,21 @@ if not os.path.exists('./config'):
 t3 = threading.Thread(target=backup_file_start, args=(), daemon=True)
 t3.start()
 
-# 录制tiktok时，如果开启了电脑全局/规则代理，可以不用再在配置文件中填写代理地址
-# 但强烈建议还是配置一下代理地址，否则非常不稳定
+
 try:
-    # 检测电脑是否开启了全局/规则代理
+    # 录制国外平台时，如果开启了电脑全局/规则代理，可以正常录制，但强烈建议还是配置一下代理地址，否则非常不稳定
+    # 检测电脑是否开启了全局/规则代理（如果身处国外请忽略）
     print('系统代理检测中，请耐心等待...')
     response_g = urllib.request.urlopen("https://www.google.com/", timeout=15)
     global_proxy = True
-    print('全局/规则网络代理已开启√ 注意：配置文件中的代理设置也要开启才会生效哦！')
-except Exception:
-    print('INFO：未检测到全局/规则网络代理，请检查代理配置（若无需录制TikTok/AfreecaTV直播请忽略此条提示）')
+    print('\r全局/规则网络代理已开启√')
+except HTTPError as err:
+    print(f"HTTP error occurred: {err.code} - {err.reason}")
+except URLError as err:
+    # print("URLError:", err.reason)
+    print('INFO：未检测到全局/规则网络代理，请检查代理配置（若无需录制海外直播请忽略此条提示）')
+except Exception as err:
+    print("An unexpected error occurred:", err)
 
 
 def read_config_value(config_parser: configparser.RawConfigParser, section: str, option: str, default_value: Any) -> (
@@ -1222,6 +1434,10 @@ def read_config_value(config_parser: configparser.RawConfigParser, section: str,
             config_parser.add_section('推送配置')
         if 'Cookie' not in config_parser.sections():
             config_parser.add_section('Cookie')
+        if 'Authorization' not in config_parser.sections():
+            config_parser.add_section('Authorization')
+        if '账号密码' not in config_parser.sections():
+            config_parser.add_section('账号密码')
         return config_parser.get(section, option)
     except (configparser.NoSectionError, configparser.NoOptionError):
         config_parser.set(section, option, str(default_value))
@@ -1255,29 +1471,47 @@ while True:
             file.write(input_url)
 
     video_save_path = read_config_value(config, '录制设置', '直播保存路径（不填则默认）', "")
-    video_save_type = read_config_value(config, '录制设置', '视频保存格式TS|MKV|FLV|MP4|TS音频|MKV音频', "mp4")
+    video_save_type = read_config_value(config, '录制设置', '视频保存格式TS|MKV|FLV|MP4|TS音频|MKV音频', "ts")
     video_record_quality = read_config_value(config, '录制设置', '原画|超清|高清|标清', "原画")
     use_proxy = options.get(read_config_value(config, '录制设置', '是否使用代理ip（是/否）', "是"), False)
-    proxy_addr = read_config_value(config, '录制设置', '代理地址', "")
+    proxy_addr_bak = read_config_value(config, '录制设置', '代理地址', "")
+    proxy_addr = None if not use_proxy else proxy_addr_bak
     max_request = int(read_config_value(config, '录制设置', '同一时间访问网络的线程数', 3))
     semaphore = threading.Semaphore(max_request)
     delay_default = int(read_config_value(config, '录制设置', '循环时间(秒)', 120))
     local_delay_default = int(read_config_value(config, '录制设置', '排队读取网址时间(秒)', 0))
     loop_time = options.get(read_config_value(config, '录制设置', '是否显示循环秒数', "否"), False)
     split_video_by_time = options.get(read_config_value(config, '录制设置', '分段录制是否开启', "否"), False)
-    split_time = str(read_config_value(config, '录制设置', '视频分段时间(秒)', 3600))
-    tsconvert_to_mp4 = options.get(read_config_value(config, '录制设置', 'TS录制完成后自动转为mp4格式', "否"),
-                                   False)
-    tsconvert_to_m4a = options.get(read_config_value(config, '录制设置', 'TS录制完成后自动增加生成m4a格式', "否"),
-                                   False)
+    split_time = str(read_config_value(config, '录制设置', '视频分段时间(秒)', 1800))
+    ts_to_mp4 = options.get(read_config_value(config, '录制设置', 'TS录制完成后自动转为mp4格式', "否"),
+                            False)
+    ts_to_m4a = options.get(read_config_value(config, '录制设置', 'TS录制完成后自动增加生成m4a格式', "否"),
+                            False)
     delete_origin_file = options.get(read_config_value(config, '录制设置', '追加格式后删除原文件', "否"), False)
     create_time_file = options.get(read_config_value(config, '录制设置', '生成时间文件', "否"), False)
+    enable_proxy_platform = read_config_value(config, '录制设置', '使用代理录制的平台（逗号分隔）',
+                                              'tiktok, afreecatv, pandalive, winktv, flextv, popkontv')
+    enable_proxy_platform_list = enable_proxy_platform.replace('，', ',').split(',') if enable_proxy_platform else None
+    extra_enable_proxy = read_config_value(config, '录制设置', '额外使用代理录制的平台（逗号分隔）', '')
+    extra_enable_proxy_platform_list = extra_enable_proxy.replace('，', ',').split(',') if extra_enable_proxy else None
     live_status_push = read_config_value(config, '推送配置', '直播状态通知(可选微信|钉钉|TG或者都填)', "")
     dingtalk_api_url = read_config_value(config, '推送配置', '钉钉推送接口链接', "")
     xizhi_api_url = read_config_value(config, '推送配置', '微信推送接口链接', "")
     dingtalk_phone_num = read_config_value(config, '推送配置', '钉钉通知@对象(填手机号)', "")
     tg_token = read_config_value(config, '推送配置', 'TGAPI令牌', "")
     tg_chat_id = read_config_value(config, '推送配置', 'TG聊天ID(个人或者群组ID)', "")
+    disable_record = options.get(read_config_value(config, '推送配置', '只推送通知不录制（是/否）', "否"), False)
+    push_check_seconds = int(read_config_value(config, '推送配置', '直播推送检测频率（秒）', 1800))
+    afreecatv_username = read_config_value(config, '账号密码', 'afreecatv账号', '')
+    afreecatv_password = read_config_value(config, '账号密码', 'afreecatv密码', '')
+    flextv_username = read_config_value(config, '账号密码', 'flextv账号', '')
+    flextv_password = read_config_value(config, '账号密码', 'flextv密码', '')
+    popkontv_username = read_config_value(config, '账号密码', 'popkontv账号', '')
+    popkontv_partner_code = read_config_value(config, '账号密码', 'partner_code', 'P-00001')
+    popkontv_password = read_config_value(config, '账号密码', 'popkontv密码', '')
+    twitcasting_username = read_config_value(config, '账号密码', 'twitcasting账号', '')
+    twitcasting_password = read_config_value(config, '账号密码', 'twitcasting密码', '')
+    popkontv_access_token = read_config_value(config, 'Authorization', 'popkontv_token', '')
     dy_cookie = read_config_value(config, 'Cookie', '抖音cookie(录制抖音必须要有)', '')
     ks_cookie = read_config_value(config, 'Cookie', '快手cookie', '')
     tiktok_cookie = read_config_value(config, 'Cookie', 'tiktok_cookie', '')
@@ -1293,6 +1527,10 @@ while True:
     qiandurebo_cookie = read_config_value(config, 'Cookie', '千度热播_cookie', '')
     pandatv_cookie = read_config_value(config, 'Cookie', 'pandatv_cookie', '')
     maoerfm_cookie = read_config_value(config, 'Cookie', '猫耳FM_cookie', '')
+    winktv_cookie = read_config_value(config, 'Cookie', 'winktv_cookie', '')
+    flextv_cookie = read_config_value(config, 'Cookie', 'flextv_cookie', '')
+    look_cookie = read_config_value(config, 'Cookie', 'look_cookie', '')
+    twitcasting_cookie = read_config_value(config, 'Cookie', 'twitcasting_cookie', '')
 
     if len(video_save_type) > 0:
         if video_save_type.upper().lower() == "FLV".lower():
@@ -1360,31 +1598,44 @@ while True:
                     url = 'https://' + url
 
                 url_host = url.split('/')[2]
-                host_list = [
+                platform_host = [
                     'live.douyin.com',
                     'v.douyin.com',
-                    'www.tiktok.com',
                     'live.kuaishou.com',
                     'www.huya.com',
                     'www.douyu.com',
                     'www.yy.com',
                     'live.bilibili.com',
                     'www.redelight.cn',
+                    'www.xiaohongshu.com',
                     'www.bigo.tv',
                     'app.blued.cn',
-                    'play.afreecatv.com',
-                    'm.afreecatv.com',
                     'cc.163.com',
                     'qiandurebo.com',
+                    'fm.missevan.com',
+                    'look.163.com',
+                    'twitcasting.tv',
+                ]
+                overseas_platform_host = [
+                    'www.tiktok.com',
+                    'play.afreecatv.com',
+                    'm.afreecatv.com',
                     'www.pandalive.co.kr',
-                    'fm.missevan.com'
+                    'www.winktv.co.kr',
+                    'www.flextv.co.kr',
+                    'www.popkontv.com'
                 ]
 
-                if url_host in host_list:
+                platform_host.extend(overseas_platform_host)
+                if url_host in platform_host:
+                    if url_host in ['live.douyin.com', 'live.bilibili.com']:
+                        update_file(url_config_file, url, url.split('?')[0])
+                        url = url.split('?')[0]
+
                     new_line = (quality, url, name)
                     url_tuples_list.append(new_line)
                 else:
-                    print(f"{url} 未知链接.此条跳过")
+                    print(f"\r{url} 未知链接.此条跳过")
                     update_file(url_config_file, url, url, start_str='#')
 
         while len(name_list):
@@ -1409,7 +1660,7 @@ while True:
 
                 if url_tuple[1] not in runing_list:
                     if not first_start:
-                        print(f"新增链接: {url_tuple[1]}")
+                        print(f"\r新增链接: {url_tuple[1]}")
                     monitoring += 1
                     args = [url_tuple, monitoring]
                     # TODO: 执行开始录制的操作
