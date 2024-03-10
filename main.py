@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-03-09 03:25:39
+Update: 2024-03-11 00:42:11
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -40,7 +40,7 @@ from spider import (
     get_xhs_stream_url,
     get_bigo_stream_url,
     get_blued_stream_url,
-    get_afreecatv_stream_url,
+    get_afreecatv_stream_data,
     get_netease_stream_data,
     get_qiandurebo_stream_data,
     get_pandatv_stream_data,
@@ -444,8 +444,7 @@ def get_huya_stream_url(json_data: dict, video_quality: str) -> dict:
             anti_code = (
                 f'wsSecret={ws_secret_md5}&wsTime={ws_time}&seqid={seq_id}&ctype={url_query["ctype"][0]}&ver=1'
                 f'&fs={url_query["fs"][0]}&uuid={init_uuid}&u={uid}&t={params_t}&sv={sdk_version}'
-                f'&sphdcdn={url_query["sphdcdn"][0]}&sphdDC={url_query["sphdDC"][0]}&sphd={url_query["sphd"][0]}'
-                f'&exsphd={url_query["exsphd"][0]}&sdk_sid={sdk_sid}&codec=264'
+                f'&sdk_sid={sdk_sid}&codec=264'
             )
             return anti_code
 
@@ -594,6 +593,27 @@ def get_bilibili_stream_url(json_data: dict, video_quality: str) -> dict:
 
 
 @trace_error_decorator
+def get_afreecatv_stream_url(json_data: dict, video_quality: str) -> dict:
+    if not json_data['is_live']:
+        return json_data
+
+    play_url_list = json_data['play_url_list']
+    quality_list = {'原画': 0, '蓝光': 0, '超清': 1, '高清': 2, '标清': 3}
+    while len(play_url_list) < 4:
+        play_url_list.append(play_url_list[-1])
+
+    selected_quality = quality_list[video_quality]
+    m3u8_url = play_url_list[selected_quality]
+
+    return {
+        "anchor_name": json_data['anchor_name'],
+        "is_live": True,
+        "m3u8_url": json_data['m3u8_url'],
+        "record_url": m3u8_url
+    }
+
+
+@trace_error_decorator
 def get_netease_stream_url(json_data: dict, video_quality: str) -> dict:
     if not json_data['is_live']:
         return json_data
@@ -616,24 +636,65 @@ def get_netease_stream_url(json_data: dict, video_quality: str) -> dict:
 
 
 @trace_error_decorator
+def get_pandatv_stream_url(json_data: dict, video_quality: str) -> dict:
+    if not json_data['is_live']:
+        return json_data
+
+    play_url_list = json_data['play_url_list']
+    quality_list = {'原画': 0, '蓝光': 0, '超清': 1, '高清': 2, '标清': 3}
+    while len(play_url_list) < 4:
+        play_url_list.append(play_url_list[-1])
+
+    selected_quality = quality_list[video_quality]
+    m3u8_url = play_url_list[selected_quality]
+
+    return {
+        "anchor_name": json_data['anchor_name'],
+        "is_live": True,
+        "m3u8_url": json_data['m3u8_url'],
+        "record_url": m3u8_url
+    }
+
+
+@trace_error_decorator
 def get_winktv_stream_url(json_data: dict, video_quality: str) -> dict:
     if not json_data['is_live']:
         return json_data
 
-    quality_length = len(json_data['play_url_list'])
-    quality_list = {'原画': 'hls', '蓝光': 'hls', '超清': 'hls2', '高清': 'hls3', '标清': 'hls4'}
-    for i in json_data['play_url_list']:
-        if i in 'hls' and i not in list(quality_list.values()):
-            json_data['play_url_list'][i] = json_data['play_url_list'][quality_length - 1]
+    play_url_list = json_data['play_url_list']
+    quality_list = {'原画': 0, '蓝光': 0, '超清': 1, '高清': 2, '标清': 3}
+    while len(play_url_list) < 4:
+        play_url_list.append(play_url_list[-1])
 
     selected_quality = quality_list[video_quality]
-    flv_url = json_data['play_url_list'][selected_quality][0]['url']
+    m3u8_url = play_url_list[selected_quality]
 
     return {
-        "is_live": True,
         "anchor_name": json_data['anchor_name'],
-        "flv_url": flv_url,
-        "record_url": flv_url
+        "is_live": True,
+        "m3u8_url": json_data['m3u8_url'],
+        "record_url": m3u8_url
+    }
+
+
+@trace_error_decorator
+def get_flextv_stream_url(json_data: dict, video_quality: str) -> dict:
+    if not json_data['is_live']:
+        return json_data
+
+    play_url_list = json_data['play_url_list']
+    quality_list = {'原画': 0, '蓝光': 0, '超清': 1, '高清': 2, '标清': 3}
+    while len(play_url_list) < 4:
+        play_url_list.append(play_url_list[-1])
+
+    selected_quality = quality_list[video_quality]
+    m3u8_url = play_url_list[selected_quality]
+
+    return {
+        "anchor_name": json_data['anchor_name'],
+        "is_live": True,
+        "m3u8_url": json_data['m3u8_url'],
+        "record_url": m3u8_url
     }
 
 
@@ -645,7 +706,7 @@ def push_message(content: str):
     if '钉钉' in live_status_push:
         push_pts.append('钉钉')
         dingtalk(dingtalk_api_url, content, dingtalk_phone_num)
-    if 'TG' in live_status_push:
+    if 'TG' in live_status_push or 'tg' in live_status_push:
         push_pts.append('TG')
         tg_bot(tg_chat_id, tg_token, content)
     push_pts = '、'.join(push_pts) if len(push_pts) > 0 else ''
@@ -795,12 +856,13 @@ def start_record(url_data: tuple, count_variable: int = -1):
                         platform = 'AfreecaTV'
                         with semaphore:
                             if global_proxy or proxy_address:
-                                port_info = get_afreecatv_stream_url(
+                                json_data = get_afreecatv_stream_data(
                                     url=record_url, proxy_addr=proxy_address,
                                     cookies=afreecatv_cookie,
                                     username=afreecatv_username,
                                     password=afreecatv_password
                                 )
+                                port_info = get_afreecatv_stream_url(json_data, record_quality)
                             else:
                                 logger.warning(f"错误信息: 网络异常，请检查本网络是否能正常访问AfreecaTV平台")
 
@@ -820,11 +882,12 @@ def start_record(url_data: tuple, count_variable: int = -1):
                         platform = 'PandaTV'
                         with semaphore:
                             if global_proxy or proxy_address:
-                                port_info = get_pandatv_stream_data(
+                                json_data = get_pandatv_stream_data(
                                     url=record_url,
                                     proxy_addr=proxy_address,
                                     cookies=pandatv_cookie
                                 )
+                                port_info = get_pandatv_stream_url(json_data, record_quality)
                             else:
                                 logger.warning(f"错误信息: 网络异常，请检查本网络是否能正常访问PandaTV直播平台")
 
@@ -850,13 +913,14 @@ def start_record(url_data: tuple, count_variable: int = -1):
                         platform = 'FlexTV'
                         with semaphore:
                             if global_proxy or proxy_address:
-                                port_info = get_flextv_stream_data(
+                                json_data = get_flextv_stream_data(
                                     url=record_url,
                                     proxy_addr=proxy_address,
                                     cookies=flextv_cookie,
                                     username=flextv_username,
                                     password=flextv_password
                                 )
+                                port_info = get_flextv_stream_url(json_data, record_quality)
                             else:
                                 logger.warning(f"错误信息: 网络异常，请检查本网络是否能正常访问FlexTV直播平台")
 
@@ -1471,7 +1535,7 @@ while True:
             file.write(input_url)
 
     video_save_path = read_config_value(config, '录制设置', '直播保存路径（不填则默认）', "")
-    video_save_type = read_config_value(config, '录制设置', '视频保存格式TS|MKV|FLV|MP4|TS音频|MKV音频', "ts")
+    video_save_type = read_config_value(config, '录制设置', '视频保存格式ts|mkv|flv|mp4|ts音频|mkv音频', "ts")
     video_record_quality = read_config_value(config, '录制设置', '原画|超清|高清|标清', "原画")
     use_proxy = options.get(read_config_value(config, '录制设置', '是否使用代理ip（是/否）', "是"), False)
     proxy_addr_bak = read_config_value(config, '录制设置', '代理地址', "")
@@ -1483,9 +1547,9 @@ while True:
     loop_time = options.get(read_config_value(config, '录制设置', '是否显示循环秒数', "否"), False)
     split_video_by_time = options.get(read_config_value(config, '录制设置', '分段录制是否开启', "否"), False)
     split_time = str(read_config_value(config, '录制设置', '视频分段时间(秒)', 1800))
-    ts_to_mp4 = options.get(read_config_value(config, '录制设置', 'TS录制完成后自动转为mp4格式', "否"),
+    ts_to_mp4 = options.get(read_config_value(config, '录制设置', 'ts录制完成后自动转为mp4格式', "否"),
                             False)
-    ts_to_m4a = options.get(read_config_value(config, '录制设置', 'TS录制完成后自动增加生成m4a格式', "否"),
+    ts_to_m4a = options.get(read_config_value(config, '录制设置', 'ts录制完成后自动增加生成m4a格式', "否"),
                             False)
     delete_origin_file = options.get(read_config_value(config, '录制设置', '追加格式后删除原文件', "否"), False)
     create_time_file = options.get(read_config_value(config, '录制设置', '生成时间文件', "否"), False)
@@ -1494,12 +1558,12 @@ while True:
     enable_proxy_platform_list = enable_proxy_platform.replace('，', ',').split(',') if enable_proxy_platform else None
     extra_enable_proxy = read_config_value(config, '录制设置', '额外使用代理录制的平台（逗号分隔）', '')
     extra_enable_proxy_platform_list = extra_enable_proxy.replace('，', ',').split(',') if extra_enable_proxy else None
-    live_status_push = read_config_value(config, '推送配置', '直播状态通知(可选微信|钉钉|TG或者都填)', "")
+    live_status_push = read_config_value(config, '推送配置', '直播状态通知(可选微信|钉钉|tg或者都填)', "")
     dingtalk_api_url = read_config_value(config, '推送配置', '钉钉推送接口链接', "")
     xizhi_api_url = read_config_value(config, '推送配置', '微信推送接口链接', "")
     dingtalk_phone_num = read_config_value(config, '推送配置', '钉钉通知@对象(填手机号)', "")
-    tg_token = read_config_value(config, '推送配置', 'TGAPI令牌', "")
-    tg_chat_id = read_config_value(config, '推送配置', 'TG聊天ID(个人或者群组ID)', "")
+    tg_token = read_config_value(config, '推送配置', 'tgapi令牌', "")
+    tg_chat_id = read_config_value(config, '推送配置', 'tg聊天id(个人或者群组id)', "")
     disable_record = options.get(read_config_value(config, '推送配置', '只推送通知不录制（是/否）', "否"), False)
     push_check_seconds = int(read_config_value(config, '推送配置', '直播推送检测频率（秒）', 1800))
     afreecatv_username = read_config_value(config, '账号密码', 'afreecatv账号', '')
@@ -1526,7 +1590,7 @@ while True:
     netease_cookie = read_config_value(config, 'Cookie', 'netease_cookie', '')
     qiandurebo_cookie = read_config_value(config, 'Cookie', '千度热播_cookie', '')
     pandatv_cookie = read_config_value(config, 'Cookie', 'pandatv_cookie', '')
-    maoerfm_cookie = read_config_value(config, 'Cookie', '猫耳FM_cookie', '')
+    maoerfm_cookie = read_config_value(config, 'Cookie', '猫耳fm_cookie', '')
     winktv_cookie = read_config_value(config, 'Cookie', 'winktv_cookie', '')
     flextv_cookie = read_config_value(config, 'Cookie', 'flextv_cookie', '')
     look_cookie = read_config_value(config, 'Cookie', 'look_cookie', '')

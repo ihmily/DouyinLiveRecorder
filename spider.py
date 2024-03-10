@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub:https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-03-09 01:39:17
+Update: 2024-03-11 03:37:59
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -81,6 +81,19 @@ def get_partner_code(url, params):
         return query_params[params][0]
     else:
         return None
+
+
+def get_play_url_list(m3u8: str, proxy: Union[str, None] = None, header: Union[dict, None] = None) -> list:
+    resp = get_req(url=m3u8, proxy_addr=proxy, headers=header, abroad=True)
+    play_url_list = []
+    for i in resp.split('\n'):
+        if i.startswith('https://'):
+            play_url_list.append(i.strip())
+    bandwidth_pattern = re.compile(r'BANDWIDTH=(\d+)')
+    bandwidth_list = bandwidth_pattern.findall(resp)
+    url_to_bandwidth = {url: int(bandwidth) for bandwidth, url in zip(bandwidth_list, play_url_list)}
+    play_url_list = sorted(play_url_list, key=lambda url: url_to_bandwidth[url], reverse=True)
+    return play_url_list
 
 
 @trace_error_decorator
@@ -597,7 +610,7 @@ def get_afreecatv_tk(url: str, rtype: str, proxy_addr: Union[str, None] = None, 
 
 
 @trace_error_decorator
-def get_afreecatv_stream_url(
+def get_afreecatv_stream_data(
         url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None,
         username: Union[str, None] = None, password: Union[str, None] = None
 ) -> Dict[str, Any]:
@@ -638,6 +651,19 @@ def get_afreecatv_stream_url(
         "is_live": False,
     }
 
+    def get_url_list(m3u8: str) -> list:
+        resp = get_req(url=m3u8, proxy_addr=proxy_addr, headers=headers, abroad=True)
+        play_url_list = []
+        url_prefix = m3u8.rsplit('/', maxsplit=1)[0] + '/'
+        for i in resp.split('\n'):
+            if i.startswith('auth_playlist'):
+                play_url_list.append(url_prefix + i.strip())
+        bandwidth_pattern = re.compile(r'BANDWIDTH=(\d+)')
+        bandwidth_list = bandwidth_pattern.findall(resp)
+        url_to_bandwidth = {url: int(bandwidth) for bandwidth, url in zip(bandwidth_list, play_url_list)}
+        play_url_list = sorted(play_url_list, key=lambda url: url_to_bandwidth[url], reverse=True)
+        return play_url_list
+
     if not anchor_name:
         def handle_login():
             cookie = login_afreecatv(username, password, proxy_addr=proxy_addr)
@@ -653,7 +679,7 @@ def get_afreecatv_stream_url(
             result['anchor_name'] = anchor_name
             result['m3u8_url'] = m3u8_url
             result['is_live'] = True
-            result['record_url'] = m3u8_url
+            result['play_url_list'] = get_url_list(m3u8_url)
             return result
 
         if json_data['data']['code'] == -3001:
@@ -685,7 +711,7 @@ def get_afreecatv_stream_url(
         m3u8_url = view_url + '?aid=' + hls_authentication_key
         result['m3u8_url'] = m3u8_url
         result['is_live'] = True
-        result['record_url'] = m3u8_url
+        result['play_url_list'] = get_url_list(m3u8_url)
     return result
 
 
@@ -782,13 +808,14 @@ def get_pandatv_stream_data(url: str, proxy_addr: Union[str, None] = None, cooki
     anchor_name = f"{json_data['bjInfo']['nick']}-{anchor_id}"
     result['anchor_name'] = anchor_name
     live_status = 'media' in json_data
+
     if live_status:
         json_str = get_req(url2, proxy_addr=proxy_addr, headers=headers, data=data2, abroad=True)
         json_data = json.loads(json_str)
         play_url = json_data['PlayList']['hls'][0]['url']
         result['m3u8_url'] = play_url
         result['is_live'] = True
-        result['record_url'] = play_url
+        result['play_url_list'] = get_play_url_list(m3u8=play_url, proxy=proxy_addr, header=headers)
     return result
 
 
@@ -888,7 +915,9 @@ def get_winktv_stream_data(url: str, proxy_addr: Union[str, None] = None, cookie
         play_api = 'https://api.winktv.co.kr/v1/live/play'
         json_str = get_req(url=play_api, proxy_addr=proxy_addr, headers=headers, data=data, abroad=True)
         json_data = json.loads(json_str)
-        result['play_url_list'] = json_data['PlayList']
+        m3u8_url = json_data['PlayList']['hls'][0]['url']
+        result['m3u8_url'] = m3u8_url
+        result['play_url_list'] = get_play_url_list(m3u8=m3u8_url, proxy=proxy_addr, header=headers)
     return result
 
 
@@ -942,7 +971,7 @@ def login_flextv(username: str, password: str, proxy_addr: Union[str, None] = No
 def get_flextv_stream_url(
         url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None,
         username: Union[str, None] = None, password: Union[str, None] = None
-) -> Dict[str, Any]:
+) -> Union[str, Any]:
     def fetch_data(cookie):
         headers = {
             'accept': 'application/json, text/plain, */*',
@@ -1010,7 +1039,7 @@ def get_flextv_stream_data(
                 url=url, proxy_addr=proxy_addr, cookies=cookies, username=username, password=password)
             if play_url:
                 result['m3u8_url'] = play_url
-                result['record_url'] = play_url
+                result['play_url_list'] = get_play_url_list(m3u8=play_url, proxy=proxy_addr, header=headers)
     except Exception as e:
         print('FlexTV直播间数据获取失败', e)
     return result
@@ -1354,7 +1383,8 @@ def get_twitcasting_stream_url(
         html_str = get_req(url, proxy_addr=proxy_addr, headers=header)
         anchor = re.search("<title>(.*?)\(@(.*?)\) 's Live - TwitCasting</title>",html_str)
         status = re.search('data-is-onlive="(.*?)"\n\s+data-view-mode', html_str)
-        return f'{anchor.group(1).strip()}-{anchor.group(2)}', status.group(1)
+        movie_id = re.search('data-movie-id="(.*?)" data-audience-id', html_str)
+        return f'{anchor.group(1).strip()}-{anchor.group(2)}-{movie_id.group(1)}', status.group(1)
 
     result = {"anchor_name": '', "is_live": False}
 
@@ -1421,7 +1451,7 @@ if __name__ == '__main__':
     # print(get_xhs_stream_url(room_url, proxy_addr=''))
     # print(get_bigo_stream_url(room_url, proxy_addr=''))
     # print(get_blued_stream_url(room_url, proxy_addr=''))
-    # print(get_afreecatv_stream_url(room_url, proxy_addr='', username='', password=''))
+    # print(get_afreecatv_stream_data(room_url, proxy_addr='', username='', password=''))
     # print(get_netease_stream_data(room_url, proxy_addr=''))
     # print(get_qiandurebo_stream_data(room_url, proxy_addr=''))
     # print(get_pandatv_stream_data(room_url, proxy_addr=''))
