@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub:https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-03-14 12:41:37
+Update: 2024-03-14 22:02:50
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -828,6 +828,11 @@ def get_pandatv_stream_data(url: str, proxy_addr: Union[str, None] = None, cooki
     if live_status:
         json_str = get_req(url2, proxy_addr=proxy_addr, headers=headers, data=data2, abroad=True)
         json_data = json.loads(json_str)
+        if 'errorData' in json_data:
+            if json_data['errorData']['code'] == 'needAdult':
+                raise RuntimeError(f'{url} 直播间需要登录后成人才可观看，请你在配置文件中正确填写登录后的cookie')
+            else:
+                raise RuntimeError(json_data['errorData']['code'], json_data['message'])
         play_url = json_data['PlayList']['hls'][0]['url']
         result['m3u8_url'] = play_url
         result['is_live'] = True
@@ -931,6 +936,11 @@ def get_winktv_stream_data(url: str, proxy_addr: Union[str, None] = None, cookie
         play_api = 'https://api.winktv.co.kr/v1/live/play'
         json_str = get_req(url=play_api, proxy_addr=proxy_addr, headers=headers, data=data, abroad=True)
         json_data = json.loads(json_str)
+        if 'errorData' in json_data:
+            if json_data['errorData']['code'] == 'needAdult':
+                raise RuntimeError(f'{url} 直播间需要登录后成人才可观看，请你在配置文件中正确填写登录后的cookie')
+            else:
+                raise RuntimeError(json_data['errorData']['code'], json_data['message'])
         m3u8_url = json_data['PlayList']['hls'][0]['url']
         result['m3u8_url'] = m3u8_url
         result['play_url_list'] = get_play_url_list(m3u8=m3u8_url, proxy=proxy_addr, header=headers)
