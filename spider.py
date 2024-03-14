@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub:https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-03-11 03:37:59
+Update: 2024-03-14 12:41:37
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -12,6 +12,8 @@ Function: Get live stream data.
 import hashlib
 import time
 import urllib.parse
+import urllib.error
+from urllib.request import Request
 from typing import Union, Dict, Any
 import requests
 import re
@@ -24,7 +26,7 @@ from utils import (
     dict_to_cookie_str
 )
 import http.cookiejar
-from urllib.request import Request
+
 
 no_proxy_handler = urllib.request.ProxyHandler({})
 opener = urllib.request.build_opener(no_proxy_handler)
@@ -58,13 +60,27 @@ def get_req(
                 data = urllib.parse.urlencode(data).encode('utf-8')
             if json_data and isinstance(json_data, dict):
                 data = json.dumps(json_data).encode('utf-8')
+
             req = urllib.request.Request(url, data=data, headers=headers)
-            if abroad:
-                with urllib.request.urlopen(req, timeout=timeout) as response:
-                    resp_str = response.read().decode('utf-8')
-            else:
-                with opener.open(req, timeout=timeout) as response:
-                    resp_str = response.read().decode('utf-8')
+
+            try:
+                if abroad:
+                    with urllib.request.urlopen(req, timeout=timeout) as response:
+                        resp_str = response.read().decode('utf-8')
+                else:
+                    with opener.open(req, timeout=timeout) as response:
+                        resp_str = response.read().decode('utf-8')
+            except urllib.error.HTTPError as e:
+                if e.code == 400:
+                    resp_str = e.read().decode('utf-8')
+                else:
+                    raise
+            except urllib.error.URLError as e:
+                print("URL Error:", e)
+                raise
+            except Exception as e:
+                print("An error occurred:", e)
+                raise
 
     except Exception as e:
         resp_str = str(e)
@@ -922,7 +938,7 @@ def get_winktv_stream_data(url: str, proxy_addr: Union[str, None] = None, cookie
 
 
 @trace_error_decorator
-def login_flextv(username: str, password: str, proxy_addr: Union[str, None] = None) -> Union[str, None]:
+def login_flextv(username: str, password: str, proxy_addr: Union[str, None] = None) -> Union[str, int, None]:
     headers = {
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -964,8 +980,9 @@ def login_flextv(username: str, password: str, proxy_addr: Union[str, None] = No
         if "error" not in json_data:
             cookie = dict_to_cookie_str(cookie_dict)
             return cookie
+        print('请检查配置文件中的FlexTV账号和密码是否正确')
     except Exception as e:
-        print('FlexTV登录失败,请检查配置文件中的账号密码是否正确', e)
+        print('FlexTV登录请求异常', e)
 
 
 def get_flextv_stream_url(
@@ -991,17 +1008,17 @@ def get_flextv_stream_url(
     json_data = fetch_data(cookies)
     if "message" in json_data and json_data["message"] == "로그인후 이용이 가능합니다.":
         print("FlexTV直播获取失败[未登录]: 19+直播需要登录后是成人才可观看")
-        print("正在尝试登录AfreecaTV直播平台，请确保已在配置文件中填写好您的账号和密码")
+        print("正在尝试登录FlexTV直播平台，请确保已在配置文件中填写好您的账号和密码")
         if len(username) < 6 or len(password) < 8:
-            raise RuntimeError('AfreecaTV登录失败！请在config.ini配置文件中填写正确的AfreecaTV平台的账号和密码')
+            raise RuntimeError('FlexTV登录失败！请在config.ini配置文件中填写正确的FlexTV平台的账号和密码')
         print('FlexTV平台登录中...')
         new_cookie = login_flextv(username, password, proxy_addr=proxy_addr)
-        if new_cookie and len(new_cookie) > 0:
+        if new_cookie:
             print('FlexTV平台登录成功！开始获取直播数据...')
             json_data = fetch_data(new_cookie)
             update_config('./config/config.ini', 'Cookie', 'flextv_cookie', new_cookie)
         else:
-            raise RuntimeError('AfreecaTV登录失败，请检查账号和密码是否正确')
+            raise RuntimeError('FlexTV登录失败')
 
     if 'sources' in json_data and len(json_data['sources']) > 0:
         play_url = json_data['sources'][0]['url']
