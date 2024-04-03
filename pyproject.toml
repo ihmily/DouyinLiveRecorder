@@ -1,0 +1,23 @@
+[tool.poetry]
+name = "douyinliverecorder"
+version = "0.1.0"
+description = "可循环值守和多人录制的直播录制软件,支持抖音、TikTok、快手、虎牙、斗鱼、B站、小红书、pandatv、afreecatv、flextv、popkontv、twitcasting、winktv等平台直播录制,抓取多平台直播源地址,抖音无水印解析,快手无水印解析"
+authors = ["ihmily <961532183@qq.com>"]
+readme = "README.md"
+repository = "https://github.com/ihmily/DouyinLiveRecorder"
+license = "MIT"
+include = ["LICENSE"]
+
+
+[tool.poetry.dependencies]
+python = "^3.11"
+requests = "^2.31.0"
+pyexecjs = "^1.5.1"
+loguru = "0.7.2"
+pycryptodome = "3.20.0"
+tqdm = "^4.66.2"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

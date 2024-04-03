@@ -181,6 +181,14 @@ pip3 install -r requirements.txt
 python main.py
 ```
 
+（可选）poetry运行,需要poetry，不会用poetry的请跳过此步骤
+
+```bash
+cd DouyinLiveRecorder
+poetry install 
+poetry shell
+python main.py
+```
 &emsp;
 ## 🐋容器运行
 
