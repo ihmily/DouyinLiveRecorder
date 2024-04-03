@@ -178,43 +178,8 @@ git clone https://github.com/ihmily/DouyinLiveRecorder.git
 ```bash
 cd DouyinLiveRecorder
 pip3 install -r requirements.txt
-```
-
-3.安装[FFmpeg](https://ffmpeg.org/download.html#build-linux)，如果是Windows系统，这一步可跳过。对于Linux系统，执行以下命令安装
-
-CentOS执行
-
-```bash
-yum install epel-release
-yum install ffmpeg
-```
-
-Ubuntu则执行
-
-```bash
-apt update
-apt install ffmpeg
-```
-
-macOS 执行
-
-**如果已经安装 Homebrew 请跳过这一步**
-
-```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-```
-
-```bash
-brew install ffmpeg
-```
-
-4.运行程序
-
-```python
 python main.py
 ```
-
-其中Linux系统请使用`python3 main.py` 运行。
 
 &emsp;
 ## 🐋容器运行

@@ -61,6 +61,7 @@ from utils import (
     trace_error_decorator
 )
 from msg_push import dingtalk, xizhi, tg_bot
+from ffmpeg_install import ffmpeg_install
 
 version = "v3.0.2"
 platforms = "\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo直播|blued直播|网易CC|千度热播|猫耳FM|Look直播|TwitCasting" \
@@ -1444,14 +1445,8 @@ def backup_file_start():
             print(f'执行脚本异常：{str(e)}')
 
 
-# --------------------------检测是否存在ffmpeg-------------------------------------
-ffmepg_file_check = subprocess.getoutput("ffmpeg")
-if ffmepg_file_check.find("run") > -1:
-    # print("ffmpeg存在")
-    pass
-else:
-    input("重要提示:\n\r检测到ffmpeg不存在,请将ffmpeg.exe放到同目录,或者设置为环境变量,没有ffmpeg将无法录制")
-    sys.exit(0)
+# --------------------------ffmpeg相关-------------------------------------
+ffmpeg_install()
 
 # --------------------------初始化程序-------------------------------------
 print("-----------------------------------------------------")
