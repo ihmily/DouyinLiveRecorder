@@ -1,0 +1,50 @@
+name: Bug report 🐛
+description: 项目运行中遇到的Bug或问题。
+labels: ["status: issue-bug"]
+body:
+  - type: checkboxes
+    attributes:
+      label: ⚠️ 搜索issues中是否已存在类似问题
+      description: >
+        请在 [历史issue](https://github.com/ihmily/DouyinLiveRecorder/issues) 中清空输入框，搜索你的问题
+        或相关日志的关键词来查找是否存在类似问题。
+      options:
+        - label: 我已经搜索过issues和disscussions,没有跟我遇到的问题相关的issue
+          required: true
+  - type: dropdown
+    attributes:
+      label: 操作系统类型?
+      description: >
+        请选择你运行程序的操作系统类型。
+      options:
+        - Windows
+        - Linux
+        - MacOS
+        - Docker
+        - Windows Subsystem for Linux (WSL)
+        - Other (请在问题中说明)
+    validations:
+      required: true
+  - type: dropdown
+    attributes:
+      label: 运行的python版本是?
+      description: |
+        请选择你运行程序的`python`版本。
+      options:
+        - python 3.8
+        - python 3.9
+        - python 3.10
+        - python 3.11
+        - python 3.12
+        - other
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: 复现步骤 🕹
+      description: |
+        **⚠️ 不能复现将会关闭issue.**
+  - type: textarea
+    attributes:
+      label: 问题描述 😯
+      description: 详细描述出现的问题，或提供有关截图。
