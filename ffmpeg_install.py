@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 def ffmpeg_install_windows():
     try:
-        ffmpeg_url = "https://github.com/GyanD/codexffmpeg/releases/download/6.0/ffmpeg-6.0-full_build.zip"
+        ffmpeg_url = "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-6.1.1-essentials_build.zip"
         ffmpeg_zip_filename = "ffmpeg.zip"
         ffmpeg_extracted_folder = "ffmpeg"
 
@@ -40,7 +40,9 @@ def ffmpeg_install_windows():
         os.remove("ffmpeg.zip")
 
         # Rename and move files
-        os.rename(f"{ffmpeg_extracted_folder}-6.0-full_build", ffmpeg_extracted_folder)
+        os.rename(
+            f"{ffmpeg_extracted_folder}-6.1.1-essentials_build", ffmpeg_extracted_folder
+        )
         for file in os.listdir(os.path.join(ffmpeg_extracted_folder, "bin")):
             os.rename(
                 os.path.join(ffmpeg_extracted_folder, "bin", file),
@@ -89,7 +91,9 @@ def ffmpeg_install_linux():
         else:
             # rpmSystem
             subprocess.run(
-                "yum install ffmpeg&&yum install ffmpeg",
+                (
+                    "yum install epel-release -y && yum update -y && rpm --import http://li.nux.ro/download/nux/RPM-GPG-KEY-nux.ro  && rpm -Uvh http://li.nux.ro/download/nux/dextop/el7/x86_64/nux-dextop-release-0-5.el7.nux.noarch.rpm  &&  yum install ffmpeg -y"
+                ),
                 shell=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -128,9 +132,6 @@ def ffmpeg_install():
         )
         print("FFmpeg is installed!")
     except FileNotFoundError as e:
-        # Check if there's ffmpeg.exe in the current directory
-        if os.path.exists("./ffmpeg.exe"):
-            print("fmpeg.exe is installed!")
         print("FFmpeg is not installed.")
         resp = input(
             "We can try to automatically install it for you. Would you like to do that? (y/n): "
