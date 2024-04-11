@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-03-11 00:42:11
+Update: 2024-04-11 22:03:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -538,55 +538,60 @@ def get_bilibili_stream_url(json_data: dict, video_quality: str) -> dict:
     if "is_live" in json_data and not json_data['anchor_name']:
         return json_data
 
-    anchor_name = json_data.get('roomInfoRes', {}).get('data', {}).get('anchor_info', {}).get('base_info', {}).get(
-        'uname', '')
-    playurl_info = json_data['roomInitRes']['data']['playurl_info']
+    anchor_name = json_data['anchor_name']
+    playurl_info = json_data['stream_data']['playurl_info']
     result = {
         "anchor_name": anchor_name,
         "is_live": False,
     }
     if playurl_info:
-        def get_url(m, n):
-            format_list = ['.flv', '.m3u8']
-            # 字典中的键就是qn，其中qn=30000为杜比 20000为4K 10000为原画 400蓝光 250超清 150高清，qn=0是默认画质
-            quality_list = {'10000': '', '400': '_4000', '250': '_2500', '150': '_1500'}
-
-            stream_data = playurl_info['playurl']['stream'][m]['format'][0]['codec'][0]
-            accept_qn_list = stream_data['accept_qn']
-            while len(accept_qn_list) < 4:
-                accept_qn_list.append(accept_qn_list[-1])
-            base_url = stream_data['base_url']
-            current_qn = stream_data['current_qn']
-            host = stream_data['url_info'][0]['host']
-            extra = stream_data['url_info'][0]['extra']
-            url_type = format_list[m]
-            qn = str(accept_qn_list[n])
-            select_quality = quality_list[qn]
-
-            if current_qn != 10000:
-                base_url = re.sub(r'_(\d+)' + f'(?={url_type}\\?)', select_quality, base_url)
-
-            extra = re.sub('&qn=0', f'&qn={qn}', extra)
-            return host + base_url + extra
-
-        if video_quality == "原画" or video_quality == "蓝光":
-            flv_url = get_url(0, 0)
-            m3u8_url = get_url(1, 0)
-        elif video_quality == "超清":
-            flv_url = get_url(0, 1)
-            m3u8_url = get_url(1, 1)
-        elif video_quality == "高清":
-            flv_url = get_url(0, 2)
-            m3u8_url = get_url(1, 2)
-        elif video_quality == "标清":
-            flv_url = get_url(0, 3)
-            m3u8_url = get_url(1, 3)
+        # 其中qn=30000为杜比 20000为4K 10000为原画 400蓝光 250超清 150高清 80流畅
+        quality_list = {'10000': 'bluray', '400': '4000', '250': '2500', '150': '1500', '80':'800'}
+        format_list = playurl_info['playurl']['stream'][1]['format']
+        current_qn = format_list[0]['codec'][0]['current_qn']
+        if int(current_qn) != 10000:
+            stream_data = format_list[1]['codec'][0]
         else:
-            flv_url = get_url(0, 0)
-            m3u8_url = get_url(1, 0)
+            stream_data = format_list[0]['codec'][0]
+        accept_qn_list = stream_data['accept_qn']
+        qn_count = len(accept_qn_list)
+        if 10000 not in accept_qn_list:
+            new_accept_qn_list = [10000]+accept_qn_list
+        else:
+            new_accept_qn_list = [i for i in accept_qn_list]
+        while len(new_accept_qn_list) < 5:
+            new_accept_qn_list.append(new_accept_qn_list[-1])
 
-        result['flv_url'] = flv_url
-        result['m3u8_url'] = m3u8_url
+        video_quality_options = {
+            "原画": 0,
+            "蓝光": 1,
+            "超清": 2,
+            "高清": 3,
+            "标清": 4,
+            "流畅": 4
+        }
+        select_quality = new_accept_qn_list[video_quality_options[video_quality]]
+        select_quality = quality_list[str(select_quality)]
+        base_url = stream_data['base_url']
+        host = stream_data['url_info'][0]['host']
+        extra = stream_data['url_info'][0]['extra']
+
+        if int(current_qn) != 10000 and qn_count > 1:
+            if (qn_count == 2 and 10000 not in accept_qn_list) or qn_count > 2:
+                live_key = base_url.split('/')[3]
+                live_key_list = live_key.split('_')
+                if len(live_key_list) == 4:
+                    live_key_list[3] = select_quality
+                else:
+                    live_key_list.append(select_quality)
+
+                new_live_key = '_'.join(live_key_list)
+                base_url = re.sub(live_key, new_live_key, base_url)
+                extra = re.sub(live_key, new_live_key, extra)
+                time_at = int(time.time()) + 10800
+                extra = re.sub(r"expires=[0-9]+&len=", f"expires={time_at}&len=", extra)
+
+        m3u8_url = host + base_url + extra
         result['is_live'] = True
         result['record_url'] = m3u8_url  # B站使用m3u8链接进行录制
     return result
