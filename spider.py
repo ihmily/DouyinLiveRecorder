@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub:https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-04-11 22:03:00
+Update: 2024-04-12 19:14:00
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -1068,7 +1068,7 @@ def get_flextv_stream_data(
     try:
         url2 = f'https://www.flextv.co.kr/channels/{user_id}'
         html_str = get_req(url2, proxy_addr=proxy_addr, headers=headers, abroad=True)
-        json_str = re.search('<script id="__NEXT_DATA__" type=".*">(.*?)</script></body>', html_str).group(1)
+        json_str = re.search('<script id="__NEXT_DATA__" type=".*">(.*?)</script>', html_str).group(1)
         json_data = json.loads(json_str)
         channel_data = json_data['props']['pageProps']['channel']
         live_status = channel_data['isInLive']
