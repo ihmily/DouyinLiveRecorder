@@ -14,7 +14,7 @@ import time
 import urllib.parse
 import urllib.error
 from urllib.request import Request
-from typing import Union, Dict, Any
+from typing import Union, Dict, Any, Tuple
 import requests
 import re
 import json
@@ -435,7 +435,7 @@ def get_xhs_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: U
         headers['Cookie'] = cookies
 
     appuid = re.search('appuid=(.*?)(?=&|$)', url).group(1)
-    room_id = url.split('?')[0].rsplit('/', maxsplit=2)[1]
+    room_id = re.search('/livestream/(.*?)(?=/|\?)', url).group(1)
     app_api = f'https://www.xiaohongshu.com/api/sns/red/live/app/v1/ecology/outside/share_info?room_id={room_id}'
     # app_api = f'https://www.redelight.cn/api/sns/red/live/app/v1/ecology/outside/share_info?room_id={room_id}'
     json_str = get_req(url=app_api, proxy_addr=proxy_addr, headers=headers)
@@ -896,7 +896,7 @@ def get_maoerfm_stream_url(url: str, proxy_addr: Union[str, None] = None, cookie
 
 @trace_error_decorator
 def get_winktv_bj_info(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        tuple[str, Any]:
+        Tuple[str, Any]:
     headers = {
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
