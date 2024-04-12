@@ -14,7 +14,7 @@ import time
 import urllib.parse
 import urllib.error
 from urllib.request import Request
-from typing import Union, Dict, Any
+from typing import Union, Dict, Any, Tuple
 import requests
 import re
 import json
@@ -896,7 +896,7 @@ def get_maoerfm_stream_url(url: str, proxy_addr: Union[str, None] = None, cookie
 
 @trace_error_decorator
 def get_winktv_bj_info(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        tuple[str, Any]:
+        Tuple[str, Any]:
     headers = {
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
