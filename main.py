@@ -998,21 +998,23 @@ def start_record(url_data: tuple, count_variable: int = -1):
                             print(f"\r{record_name} 等待直播... ")
 
                             if start_pushed:
-                                content = f"{record_name} 直播已结束！"
-                                push_pts = push_message(content)
-                                if push_pts:
-                                    print(f'提示信息：已经将[{record_name}]直播状态消息推送至你的{push_pts}')
-                                    start_pushed = False
+                                if over_show_push:
+                                    content = f"{record_name} 直播已结束！"
+                                    push_pts = push_message(content)
+                                    if push_pts:
+                                        print(f'提示信息：已经将[{record_name}]直播状态消息推送至你的{push_pts}')
+                                start_pushed = False
                         else:
                             content = f"\r{record_name} 正在直播中..."
                             print(content)
 
                             # 推送通知
                             if live_status_push and not start_pushed:
-                                push_pts = push_message(f"{content.split('...')[0]}，时间：{datetime.datetime.today()}")
-                                if push_pts:
-                                    print(f'提示信息：已经将[{record_name}]直播状态消息推送至你的{push_pts}')
-                                    start_pushed = True
+                                if begin_show_push:
+                                    push_pts = push_message(f"{content.split('...')[0]}，时间：{datetime.datetime.today()}")
+                                    if push_pts:
+                                        print(f'提示信息：已经将[{record_name}]直播状态消息推送至你的{push_pts}')
+                                start_pushed = True
 
                             if disable_record:
                                 time.sleep(push_check_seconds)
@@ -1339,16 +1341,6 @@ def start_record(url_data: tuple, count_variable: int = -1):
 
                                 record_finished_2 = False
 
-                                # 推送通知
-                                content = f"{record_name} 直播已结束"
-                                if not live_status_push:
-                                    if '微信' in live_status_push:
-                                        xizhi(xizhi_api_url, content)
-                                    if '钉钉' in live_status_push:
-                                        dingtalk(dingtalk_api_url, content, dingtalk_phone_num)
-                                    if 'TG' in live_status_push:
-                                        tg_bot(tg_chat_id, tg_token, content)
-
                 except Exception as e:
                     logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                     warning_count += 1
@@ -1571,6 +1563,8 @@ while True:
     tg_chat_id = read_config_value(config, '推送配置', 'tg聊天id(个人或者群组id)', "")
     disable_record = options.get(read_config_value(config, '推送配置', '只推送通知不录制（是/否）', "否"), False)
     push_check_seconds = int(read_config_value(config, '推送配置', '直播推送检测频率（秒）', 1800))
+    begin_show_push = options.get(read_config_value(config, '推送配置', '开播推送开启（是/否）', "是"), True)
+    over_show_push = options.get(read_config_value(config, '推送配置', '关播推送开启（是/否）', "否"), False)
     afreecatv_username = read_config_value(config, '账号密码', 'afreecatv账号', '')
     afreecatv_password = read_config_value(config, '账号密码', 'afreecatv密码', '')
     flextv_username = read_config_value(config, '账号密码', 'flextv账号', '')
