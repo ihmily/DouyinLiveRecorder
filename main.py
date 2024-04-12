@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-04-11 22:03:00
+Update: 2024-04-12 18:54:27
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -333,7 +333,7 @@ def get_tiktok_stream_url(json_data: dict, video_quality: str) -> dict:
     }
 
     if status == 2:
-        stream_data = live_room.get('liveRoom', {}).get('streamData', {}).get('pull_data', {}).get('stream_data', '{}')
+        stream_data = live_room['liveRoom']['streamData']['pull_data']['stream_data']
         stream_data = json.loads(stream_data).get('data', {})
 
         quality_list: list = list(stream_data.keys())  # ["origin","uhd","sd","ld"]
@@ -1107,7 +1107,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                         if flv_url:
                                             _filepath, _ = urllib.request.urlretrieve(real_url,
                                                                                       full_path + '/' + filename)
-
+                                            record_finished = True
                                         else:
                                             raise Exception('该直播无flv直播流，请切换视频保存类型')
 
@@ -1157,7 +1157,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                         ffmpeg_command.extend(command)
 
                                         _output = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT)
-
+                                        record_finished = True
                                     except subprocess.CalledProcessError as e:
                                         logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                         warning_count += 1
@@ -1201,51 +1201,108 @@ def start_record(url_data: tuple, count_variable: int = -1):
 
                                         ffmpeg_command.extend(command)
                                         _output = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT)
-
+                                        record_finished = True
                                     except subprocess.CalledProcessError as e:
                                         logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                         warning_count += 1
                                         no_error = False
 
                                 elif video_save_type == "MKV音频":
-                                    filename = anchor_name + '_' + now + ".mkv"
-                                    print(f'{rec_info}/{filename}')
-                                    save_file_path = full_path + '/' + filename
-
                                     try:
-                                        command = [
-                                            "-map", "0:a",
-                                            "-c:a", "copy",
-                                            "-f", "matroska",
-                                            "{path}".format(path=save_file_path),
-                                        ]
-                                        ffmpeg_command.extend(command)
-                                        _output = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT)
+                                        if split_video_by_time:
+                                            now = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
+                                            filename = anchor_name + '_' + now + ".mkv"
+                                            print(f'{rec_info}/{filename}')
 
-                                        if ts_to_m4a:
-                                            threading.Thread(target=converts_m4a, args=(save_file_path,)).start()
+                                            if ts_to_mp3:
+                                                save_path_name = f"{full_path}/{anchor_name}_{now}_%03d.mp3"
+                                            else:
+                                                save_path_name = f"{full_path}/{anchor_name}_{now}_%03d.mkv"
+
+                                            command = [
+                                                "-map", "0:a",
+                                                "-c:a", 'copy',
+                                                "-f", "segment",
+                                                "-segment_time", split_time,
+                                                "-segment_format", 'mpegts',
+                                                "-reset_timestamps", "1",
+                                                save_path_name,
+                                            ]
+                                            ffmpeg_command.extend(command)
+                                            _output = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT)
+                                            record_finished = True
+
+                                        else:
+                                            filename = anchor_name + '_' + now + ".mkv"
+                                            print(f'{rec_info}/{filename}')
+                                            save_file_path = full_path + '/' + filename
+
+                                            command = [
+                                                "-map", "0:a",
+                                                "-c:a", "copy",
+                                                "-f", "segment",
+                                                "-segment_time", split_time,
+                                                "-segment_format", "matroska",
+                                                "-reset_timestamps", "1",
+                                                save_file_path,
+                                            ]
+
+                                            ffmpeg_command.extend(command)
+                                            _output = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT)
+                                            record_finished = True
+
+                                            if ts_to_m4a:
+                                                threading.Thread(target=converts_m4a, args=(save_file_path,)).start()
+
                                     except subprocess.CalledProcessError as e:
                                         logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                         warning_count += 1
                                         no_error = False
 
                                 elif video_save_type == "TS音频":
-                                    filename = anchor_name + '_' + now + ".ts"
-                                    print(f'{rec_info}/{filename}')
-                                    save_file_path = full_path + '/' + filename
-
                                     try:
-                                        command = [
-                                            "-map", "0:a",
-                                            "-c:a", "copy",
-                                            "-f", "mpegts",
-                                            "{path}".format(path=save_file_path),
-                                        ]
-                                        ffmpeg_command.extend(command)
-                                        _output = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT)
+                                        if split_video_by_time:
+                                            now = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
+                                            filename = anchor_name + '_' + now + ".ts"
+                                            print(f'{rec_info}/{filename}')
 
-                                        if ts_to_m4a:
-                                            threading.Thread(target=converts_m4a, args=(save_file_path,)).start()
+                                            if ts_to_mp3:
+                                                save_path_name = f"{full_path}/{anchor_name}_{now}_%03d.mp3"
+                                            else:
+                                                save_path_name = f"{full_path}/{anchor_name}_{now}_%03d.ts"
+
+                                            command = [
+                                                "-map", "0:a",
+                                                "-c:a", 'copy',
+                                                "-f", "segment",
+                                                "-segment_time", split_time,
+                                                "-segment_format", 'mpegts',
+                                                "-reset_timestamps", "1",
+                                                save_path_name,
+                                            ]
+                                            ffmpeg_command.extend(command)
+                                            _output = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT)
+                                            record_finished = True
+
+                                        else:
+                                            filename = anchor_name + '_' + now + ".ts"
+                                            print(f'{rec_info}/{filename}')
+                                            save_file_path = full_path + '/' + filename
+
+                                            command = [
+                                                "-map", "0:a",
+                                                "-c:a", "copy",
+                                                "-f", "mpegts",
+                                                "{path}".format(path=save_file_path),
+                                            ]
+
+                                            ffmpeg_command.extend(command)
+                                            _output = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT)
+                                            record_finished = True
+
+                                            if ts_to_m4a:
+                                                threading.Thread(target=converts_m4a, args=(save_file_path,)).start()
+
                                     except subprocess.CalledProcessError as e:
                                         logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                         warning_count += 1
@@ -1260,16 +1317,14 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                         try:
                                             if ts_to_mp4:
                                                 save_path_name = f"{full_path}/{anchor_name}_{now}_%03d.mp4"
-                                                audio_code = 'aac'
                                                 segment_format = 'mp4'
                                             else:
                                                 save_path_name = f"{full_path}/{anchor_name}_{now}_%03d.ts"
-                                                audio_code = 'copy'
                                                 segment_format = 'mpegts'
 
                                             command = [
                                                 "-c:v", "copy",
-                                                "-c:a", audio_code,
+                                                "-c:a", 'copy',
                                                 "-map", "0",
                                                 "-f", "segment",
                                                 "-segment_time", split_time,
@@ -1281,6 +1336,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                             ffmpeg_command.extend(command)
                                             _output = subprocess.check_output(ffmpeg_command,
                                                                               stderr=subprocess.STDOUT)
+                                            record_finished = True
 
                                         except subprocess.CalledProcessError as e:
                                             logger.warning(
@@ -1312,18 +1368,17 @@ def start_record(url_data: tuple, count_variable: int = -1):
 
                                             ffmpeg_command.extend(command)
                                             _output = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT)
+                                            record_finished = True
 
                                             if ts_to_mp4:
                                                 threading.Thread(target=converts_mp4, args=(save_file_path,)).start()
                                             if ts_to_m4a:
                                                 threading.Thread(target=converts_m4a, args=(save_file_path,)).start()
-
                                         except subprocess.CalledProcessError as e:
                                             logger.warning(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                             warning_count += 1
                                             no_error = False
 
-                                record_finished = True
                                 record_finished_2 = True
                                 count_time = time.time()
 
@@ -1351,7 +1406,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                 x = num
 
                 # 如果出错太多,就加秒数
-                if warning_count > 100:
+                if warning_count > 20:
                     x = x + 60
                     print("瞬时错误太多,延迟加60秒")
 
@@ -1547,6 +1602,8 @@ while True:
     ts_to_mp4 = options.get(read_config_value(config, '录制设置', 'ts录制完成后自动转为mp4格式', "否"),
                             False)
     ts_to_m4a = options.get(read_config_value(config, '录制设置', 'ts录制完成后自动增加生成m4a格式', "否"),
+                            False)
+    ts_to_mp3 = options.get(read_config_value(config, '录制设置', '音频录制完成后自动转为mp3格式', "否"),
                             False)
     delete_origin_file = options.get(read_config_value(config, '录制设置', '追加格式后删除原文件', "否"), False)
     create_time_file = options.get(read_config_value(config, '录制设置', '生成时间文件', "否"), False)
