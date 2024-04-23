@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-04-23 21:34:55
+Update: 2024-04-23 22:02:49
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -158,19 +158,20 @@ def display_info():
             logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
 
 
-def update_file(file_path: str, old_str: str, new_str: str, start_str: str = None):
-    # TODO: 更新文件操作
-    file_data = ""
-    with open(file_path, "r", encoding="utf-8-sig") as f:
-        for text_line in f:
-            if old_str in text_line:
-                text_line = text_line.replace(old_str, new_str)
-                if start_str:
-                    text_line = f'{start_str}{text_line}'
-
-            file_data += text_line
-    with open(file_path, "w", encoding="utf-8-sig") as f:
-        f.write(file_data)
+def update_file(file_path: str, old_str: str, new_str: str, start_str: str = None, lock: threading.Lock = None):
+    if lock is None:
+        lock = threading.Lock()
+    with lock:
+        file_data = ""
+        with open(file_path, "r", encoding="utf-8-sig") as f:
+            for text_line in f:
+                if old_str in text_line:
+                    text_line = text_line.replace(old_str, new_str)
+                    if start_str:
+                        text_line = f'{start_str}{text_line}'
+                file_data += text_line
+        with open(file_path, "w", encoding="utf-8-sig") as f:
+            f.write(file_data)
 
 
 def converts_mp4(address: str):
