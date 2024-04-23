@@ -2,5 +2,23 @@
 
 from loguru import logger
 
-# 每天日志自动分文件
-logger.add("./logs/DouyinLiveRecorder.log", rotation="12:00")
+logger.add(
+    "./logs/PlayURL.log",
+    level="INFO",
+    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {message}",
+    filter=lambda i: i["level"].name == "INFO",
+    serialize=False,
+    enqueue=True,
+    rotation="12:00",
+    retention="10 days",
+)
+
+logger.add(
+    "./logs/DouyinLiveRecorder.log",
+    level="WARNING",
+    serialize=False,
+    enqueue=True,
+    rotation="12:00",
+    retention="10 days",
+)
+

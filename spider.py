@@ -4,12 +4,13 @@
 Author: Hmily
 GitHub:https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-04-12 19:14:00
+Update: 2024-04-23 21:14:21
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
 
 import hashlib
+import random
 import time
 import urllib.parse
 import urllib.error
@@ -27,21 +28,19 @@ from utils import (
 )
 import http.cookiejar
 
-
 no_proxy_handler = urllib.request.ProxyHandler({})
 opener = urllib.request.build_opener(no_proxy_handler)
 
 
 def get_req(
-    url: str,
-    proxy_addr: Union[str, None] = None,
-    headers: Union[dict, None] = None,
-    data: Union[dict, bytes, None] = None,
-    json_data: dict = None,
-    timeout: int = 20,
-    abroad: bool = False
+        url: str,
+        proxy_addr: Union[str, None] = None,
+        headers: Union[dict, None] = None,
+        data: Union[dict, bytes, None] = None,
+        json_data: dict = None,
+        timeout: int = 20,
+        abroad: bool = False
 ) -> Union[str, Any]:
-
     if headers is None:
         headers = {}
     try:
@@ -51,7 +50,8 @@ def get_req(
                 'https': proxy_addr
             }
             if data or json_data:
-                response = requests.post(url, data=data, json=json_data, headers=headers, proxies=proxies, timeout=timeout)
+                response = requests.post(url, data=data, json=json_data, headers=headers, proxies=proxies,
+                                         timeout=timeout)
             else:
                 response = requests.get(url, headers=headers, proxies=proxies, timeout=timeout)
             resp_str = response.text
@@ -89,13 +89,25 @@ def get_req(
 
 
 def get_partner_code(url, params):
-
     parsed_url = urllib.parse.urlparse(url)
     query_params = urllib.parse.parse_qs(parsed_url.query)
 
     if params in query_params:
         return query_params[params][0]
     else:
+        return None
+
+
+def jsonp_to_json(jsonp_str):
+    pattern = r'(\w+)\((.*)\);?$'
+    match = re.search(pattern, jsonp_str)
+
+    if match:
+        _, json_str = match.groups()
+        json_obj = json.loads(json_str)
+        return json_obj
+    else:
+        print("No JSON data found in JSONP response.")
         return None
 
 
@@ -321,15 +333,21 @@ def get_douyu_info_data(url: str, proxy_addr: Union[str, None] = None) -> Dict[s
     else:
         rid = re.search('douyu.com/(.*?)(?=\?|$)', url).group(1)
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
+        'referer': 'https://www.douyu.com/7644887?dyshid=0-40f7c4a06aae9dc5bede316000031701&dyshci=181',
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0',
     }
-    url2 = f'https://m.douyu.com/{rid}'
-    html_str = get_req(url=url2, proxy_addr=proxy_addr, headers=headers)
-
-    json_str = re.search('<script id="vike_pageContext" type="application/json">(.*?)</script>',
-                         html_str).group(1)
+    url2 = f'https://www.douyu.com/betard/{rid}'
+    json_str = get_req(url=url2, proxy_addr=proxy_addr, headers=headers)
     json_data = json.loads(json_str)
-    return json_data
+    result = {
+        "anchor_name": json_data['room']['nickname'],
+        "is_live": False
+    }
+    if json_data['room']['videoLoop'] == 0 and json_data['room']['show_status'] ==1:
+        result["is_live"] = True
+        result["room_id"] = json_data['room']['room_id']
+
+    return result
 
 
 @trace_error_decorator
@@ -1329,7 +1347,8 @@ def get_popkontv_stream_url(
         status_msg = json_data["statusMsg"]
         if json_data['statusCd'] == "L000A":
             print('获取直播源失败,', status_msg)
-            raise RuntimeError('你是未认证会员。登录popkontv官方网站后，在“我的页面”>“修改我的信息”底部进行手机认证后可用')
+            raise RuntimeError(
+                '你是未认证会员。登录popkontv官方网站后，在“我的页面”>“修改我的信息”底部进行手机认证后可用')
         elif json_data['statusCd'] == "L0001":
             cast_start_date_code = int(cast_start_date_code) - 1
             json_str = fetch_data(headers, partner_code)
@@ -1350,7 +1369,6 @@ def get_popkontv_stream_url(
 def login_twitcasting(
         username: str, password: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None
 ) -> Union[str, None]:
-
     headers = {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -1408,7 +1426,6 @@ def get_twitcasting_stream_url(
         username: Union[str, None] = None,
         password: Union[str, None] = None,
 ) -> Dict[str, Any]:
-
     headers = {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -1423,7 +1440,7 @@ def get_twitcasting_stream_url(
 
     def get_data(header):
         html_str = get_req(url, proxy_addr=proxy_addr, headers=header)
-        anchor = re.search("<title>(.*?)\(@(.*?)\) 's Live - Twit",html_str)
+        anchor = re.search("<title>(.*?)\(@(.*?)\) 's Live - Twit", html_str)
         status = re.search('data-is-onlive="(.*?)"\n\s+data-view-mode', html_str)
         movie_id = re.search('data-movie-id="(.*?)" data-audience-id', html_str)
         return f'{anchor.group(1).strip()}-{anchor.group(2)}-{movie_id.group(1)}', status.group(1)
@@ -1448,6 +1465,94 @@ def get_twitcasting_stream_url(
         result['m3u8_url'] = play_url
         result['record_url'] = play_url
         result['is_live'] = True
+    return result
+
+
+@trace_error_decorator
+def get_baidu_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
+        Dict[str, Any]:
+    headers = {
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
+        'Connection': 'keep-alive',
+        'Referer': 'https://live.baidu.com/',
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 8.0.0; SM-G955U Build/R16NW) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36 Edg/121.0.0.0',
+    }
+    if cookies:
+        headers['Cookie'] = cookies
+
+    uid = random.choice([
+        'h5-683e85bdf741bf2492586f7ca39bf465',
+        'h5-c7c6dc14064a136be4215b452fab9eea',
+        'h5-4581281f80bb8968bd9a9dfba6050d3a'
+    ])
+    room_id = re.search('room_id=(.*?)&', url).group(1)
+    params = {
+        'cmd': '371',
+        'action': 'star',
+        'service': 'bdbox',
+        'osname': 'baiduboxapp',
+        'data': '{"data":{"room_id":"' + room_id + '","device_id":"h5-683e85bdf741bf2492586f7ca39bf465","source_type":0,"osname":"baiduboxapp"},"replay_slice":0,"nid":"","schemeParams":{"src_pre":"pc","src_suf":"other","bd_vid":"","share_uid":"","share_cuk":"","share_ecid":"","zb_tag":"","shareTaskInfo":"{\\"room_id\\":\\"9175031377\\"}","share_from":"","ext_params":"","nid":""}}',
+        'ua': '360_740_ANDROID_0',
+        'bd_vid': '',
+        'uid': uid,
+        '_': str(int(time.time() * 1000)),
+        'callback': '__jsonp_callback_1__',
+    }
+    app_api = f'https://mbd.baidu.com/searchbox?{urllib.parse.urlencode(params)}'
+    jsonp_str = get_req(url=app_api, proxy_addr=proxy_addr, headers=headers)
+    json_data = jsonp_to_json(jsonp_str)
+    key = list(json_data['data'].keys())[0]
+    data = json_data['data'][key]
+    anchor_name = data['host']['name']
+    result = {
+        "anchor_name": anchor_name,
+        "is_live": False,
+    }
+    live_status = data['video']['stream']
+    if live_status == 1:
+        play_url_list = data['video']['url_clarity_list']
+        url_list = []
+        prefix = 'https://hls.liveshow.bdstatic.com/live/'
+        for i in play_url_list:
+            url_list.append(prefix + i['urls']['flv'].rsplit('.', maxsplit=1)[0].rsplit('/', maxsplit=1)[1]+'.m3u8')
+        if play_url_list:
+            result['play_url_list'] = url_list
+            result['is_live'] = True
+    return result
+
+
+@trace_error_decorator
+def get_weibo_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
+        Dict[str, Any]:
+    headers = {
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
+        'Connection': 'keep-alive',
+        'Referer': 'https://live.baidu.com/',
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 8.0.0; SM-G955U Build/R16NW) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36 Edg/121.0.0.0',
+    }
+    if cookies:
+        headers['Cookie'] = cookies
+
+    room_id = url.split('?')[0].split('show/')[1]
+
+    app_api = f'https://weibo.com/l/pc/anchor/live?live_id={room_id}'
+    # app_api = f'https://weibo.com/l/!/2/wblive/room/show_pc_live.json?live_id={room_id}'
+    json_str = get_req(url=app_api, proxy_addr=proxy_addr, headers=headers)
+    json_data = json.loads(json_str)
+
+    anchor_name = json_data['data']['user_info']['name']
+    result = {
+        "anchor_name": anchor_name,
+        "is_live": False,
+    }
+    live_status = json_data['data']['item']['status']
+    if live_status == 1:
+        result["is_live"] = True
+        play_url_list = json_data['data']['item']['stream_info']['pull']
+        result['m3u8_url'] = play_url_list['live_origin_hls_url']
+        result['flv_url'] = play_url_list['live_origin_flv_url']
+        result['record_url'] = play_url_list['live_origin_hls_url']
+
     return result
 
 
@@ -1481,6 +1586,8 @@ if __name__ == '__main__':
     # room_url = 'https://look.163.com/live?id=65108820&position=3'  # Look直播
     # room_url = 'https://www.popkontv.com/live/view?castId=wjfal007&partnerCode=P-00117'  # popkontv
     # room_url = 'https://twitcasting.tv/c:uonq'  # TwitCasting
+    # room_url = 'https://live.baidu.com/m/media/pclive/pchome/live.html?room_id=9175031377&tab_category'  # 百度直播
+    # room_url = 'https://weibo.com/l/wblive/p/show/1022:2321325026370190442592'  # 微博直播
 
     print(get_douyin_stream_data(room_url, proxy_addr=''))
     # print(get_tiktok_stream_data(room_url, proxy_addr=''))
@@ -1503,3 +1610,5 @@ if __name__ == '__main__':
     # print(get_looklive_stream_url(room_url, proxy_addr=''))
     # print(get_popkontv_stream_url(room_url, proxy_addr='', username='', password=''))
     # print(get_twitcasting_stream_url(room_url, proxy_addr='', username='', password=''))
+    # print(get_baidu_stream_data(room_url, proxy_addr=''))
+    # print(get_weibo_stream_url(room_url, proxy_addr=''))
