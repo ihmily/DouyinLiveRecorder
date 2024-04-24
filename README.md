@@ -288,8 +288,7 @@ docker-compose stop
 [![annidy](https://github.com/annidy.png?size=50)](https://github.com/annidy)
 [![wwkk2580](https://github.com/wwkk2580.png?size=50)](https://github.com/wwkk2580)
 [![missuo](https://github.com/missuo.png?size=50)](https://github.com/missuo)
-<img src="https://github.com/xueli12.png?size=50" alt="xueli12" style="width:56px; height:50px;" />
-
+<a href="https://github.com/xueli12" target="_blank"><img src="https://github.com/xueli12.png?size=50" alt="xueli12" style="width:53px; height:51px;" /></a>
 &emsp;
 
 ## ⏳提交日志
