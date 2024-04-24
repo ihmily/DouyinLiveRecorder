@@ -1510,12 +1510,20 @@ def get_baidu_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies
     }
     live_status = data['video']['stream']
     if live_status == 1:
+        result["is_live"] = True
         play_url_list = data['video']['url_clarity_list']
         url_list = []
         prefix = 'https://hls.liveshow.bdstatic.com/live/'
-        for i in play_url_list:
-            url_list.append(prefix + i['urls']['flv'].rsplit('.', maxsplit=1)[0].rsplit('/', maxsplit=1)[1]+'.m3u8')
         if play_url_list:
+            for i in play_url_list:
+                url_list.append(
+                    prefix + i['urls']['flv'].rsplit('.', maxsplit=1)[0].rsplit('/', maxsplit=1)[1] + '.m3u8')
+        else:
+            play_url_list = data['video']['url_list']
+            for i in play_url_list:
+                url_list.append(prefix + i['urls'][0]['hls'].rsplit('?', maxsplit=1)[0].rsplit('/', maxsplit=1)[1])
+
+        if url_list:
             result['play_url_list'] = url_list
             result['is_live'] = True
     return result

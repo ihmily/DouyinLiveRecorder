@@ -427,13 +427,13 @@ def get_huya_stream_url(json_data: dict, video_quality: str) -> dict:
             sdk_sid = t13
 
             # 计算uuid和uid参数值
-            init_uuid = (int(t13 % 10**10 * 1000) + int(1000 * random.random())) % 4294967295  # 直接初始化
+            init_uuid = (int(t13 % 10 ** 10 * 1000) + int(1000 * random.random())) % 4294967295  # 直接初始化
             uid = random.randint(1400000000000, 1400009999999)  # 经过测试uid也可以使用init_uuid代替
             seq_id = uid + sdk_sid  # 移动端请求的直播流地址中包含seqId参数
 
             # 计算ws_time参数值(16进制) 可以是当前毫秒时间戳，当然也可以直接使用url_query['wsTime'][0]
             # 原始最大误差不得慢240000毫秒
-            target_unix_time = (t13+110624) // 1000
+            target_unix_time = (t13 + 110624) // 1000
             ws_time = hex(target_unix_time)[2:].lower()
 
             # fm参数值是经过url编码然后base64编码得到的，解码结果类似 DWq8BcJ3h6DJt6TY_$0_$1_$2_$3
@@ -542,7 +542,7 @@ def get_bilibili_stream_url(json_data: dict, video_quality: str) -> dict:
     }
     if playurl_info:
         # 其中qn=30000为杜比 20000为4K 10000为原画 400蓝光 250超清 150高清 80流畅
-        quality_list = {'10000': 'bluray', '400': '4000', '250': '2500', '150': '1500', '80':'800'}
+        quality_list = {'10000': 'bluray', '400': '4000', '250': '2500', '150': '1500', '80': '800'}
         format_list = playurl_info['playurl']['stream'][1]['format']
         current_qn = format_list[0]['codec'][0]['current_qn']
         if int(current_qn) != 10000:
@@ -552,7 +552,7 @@ def get_bilibili_stream_url(json_data: dict, video_quality: str) -> dict:
         accept_qn_list = stream_data['accept_qn']
         qn_count = len(accept_qn_list)
         if 10000 not in accept_qn_list:
-            new_accept_qn_list = [10000]+accept_qn_list
+            new_accept_qn_list = [10000] + accept_qn_list
         else:
             new_accept_qn_list = [i for i in accept_qn_list]
         while len(new_accept_qn_list) < 5:
@@ -1049,7 +1049,8 @@ def start_record(url_data: tuple, count_variable: int = -1):
                             # 推送通知
                             if live_status_push and not start_pushed:
                                 if begin_show_push:
-                                    push_pts = push_message(f"{content.split('...')[0]}，时间：{datetime.datetime.today()}")
+                                    push_pts = push_message(
+                                        f"{content.split('...')[0]}，时间：{datetime.datetime.today()}")
                                     if push_pts:
                                         print(f'提示信息：已经将[{record_name}]直播状态消息推送至你的{push_pts}')
                                 start_pushed = True
@@ -1059,7 +1060,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                 continue
 
                             real_url = port_info['record_url']
-                            full_path = f'{default_path}/{platform}/{anchor_name}'
+                            full_path = f'{default_path}/{platform}'
                             if len(real_url) > 0:
                                 live_list.append(anchor_name)
                                 now = datetime.datetime.today().strftime("%Y-%m-%d_%H-%M-%S")
@@ -1068,10 +1069,11 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                     if len(video_save_path) > 0:
                                         if video_save_path[-1] not in ["/", "\\"]:
                                             video_save_path = video_save_path + "/"
-                                        full_path = f'{video_save_path}{platform}/{anchor_name}'
+                                        full_path = f'{video_save_path}{platform}'
 
                                     full_path = full_path.replace("\\", '/')
-
+                                    if folder_by_author:
+                                        full_path = f'{full_path}/{anchor_name}'
                                     if not os.path.exists(full_path):
                                         os.makedirs(full_path)
                                 except Exception as e:
@@ -1562,7 +1564,6 @@ if not os.path.exists('./config'):
 t3 = threading.Thread(target=backup_file_start, args=(), daemon=True)
 t3.start()
 
-
 try:
     # 录制国外平台时，如果开启了电脑全局/规则代理，可以正常录制，但强烈建议还是配置一下代理地址，否则非常不稳定
     # 检测电脑是否开启了全局/规则代理（如果身处国外请忽略）
@@ -1627,6 +1628,7 @@ while True:
             file.write(input_url)
 
     video_save_path = read_config_value(config, '录制设置', '直播保存路径（不填则默认）', "")
+    folder_by_author = options.get(read_config_value(config, '录制设置', '保存文件夹是否以作者区分', "是"), False)
     video_save_type = read_config_value(config, '录制设置', '视频保存格式ts|mkv|flv|mp4|ts音频|mkv音频', "ts")
     video_record_quality = read_config_value(config, '录制设置', '原画|超清|高清|标清', "原画")
     use_proxy = options.get(read_config_value(config, '录制设置', '是否使用代理ip（是/否）', "是"), False)
