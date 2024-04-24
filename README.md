@@ -36,6 +36,7 @@
 - [x] TwitCasting
 - [x] 百度直播
 - [x] 微博直播
+- [x] 酷狗直播
 - [ ] 更多平台正在更新中
 
 </div>
@@ -287,6 +288,7 @@ docker-compose stop
 [![annidy](https://github.com/annidy.png?size=50)](https://github.com/annidy)
 [![wwkk2580](https://github.com/wwkk2580.png?size=50)](https://github.com/wwkk2580)
 [![missuo](https://github.com/missuo.png?size=50)](https://github.com/missuo)
+<img src="https://github.com/xueli12.png?size=50" alt="xueli12" style="width:56px; height:50px;" />
 
 &emsp;
 
