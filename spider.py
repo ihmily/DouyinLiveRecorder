@@ -4,13 +4,14 @@
 Author: Hmily
 GitHub:https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-04-23 21:14:21
+Update: 2024-04-23 23:10:36
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
 
 import hashlib
 import random
+import ssl
 import time
 import urllib.parse
 import urllib.error
@@ -30,6 +31,10 @@ import http.cookiejar
 
 no_proxy_handler = urllib.request.ProxyHandler({})
 opener = urllib.request.build_opener(no_proxy_handler)
+
+ssl_context = ssl.create_default_context()
+ssl_context.check_hostname = False
+ssl_context.verify_mode = ssl.CERT_NONE
 
 
 def get_req(
@@ -88,7 +93,7 @@ def get_req(
     return resp_str
 
 
-def get_partner_code(url, params):
+def get_params(url, params):
     parsed_url = urllib.parse.urlparse(url)
     query_params = urllib.parse.parse_qs(parsed_url.query)
 
@@ -630,7 +635,7 @@ def get_afreecatv_tk(url: str, rtype: str, proxy_addr: Union[str, None] = None, 
 
     split_url = url.split('/')
     bj_id = split_url[3] if len(split_url) < 6 else split_url[5]
-    room_password = get_partner_code(url, "pwd")
+    room_password = get_params(url, "pwd")
     if not room_password:
         room_password = ''
     data = {
@@ -838,7 +843,7 @@ def get_pandatv_stream_data(url: str, proxy_addr: Union[str, None] = None, cooki
         'userId': user_id,
         'info': 'media fanGrade',
     }
-    room_password = get_partner_code(url, "pwd")
+    room_password = get_params(url, "pwd")
     if not room_password:
         room_password = ''
     data2 = {
@@ -953,7 +958,7 @@ def get_winktv_stream_data(url: str, proxy_addr: Union[str, None] = None, cookie
     if cookies:
         headers['Cookie'] = cookies
     user_id = url.split('?')[0].rsplit('/', maxsplit=1)[-1]
-    room_password = get_partner_code(url, "pwd")
+    room_password = get_params(url, "pwd")
     if not room_password:
         room_password = ''
     data = {
@@ -1253,8 +1258,11 @@ def get_popkontv_stream_data(
     }
     if cookies:
         headers['Cookie'] = cookies
+    if 'mcid' in url:
+        anchor_id = re.search('mcid=(.*?)&', url).group(1)
+    else:
+        anchor_id = re.search('castId=(.*?)(?=&|$)', url).group(1)
 
-    anchor_id = re.search('castId=(.*?)(?=&|$)', url).group(1)
     data = {
         'partnerCode': code,
         'searchKeyword': anchor_id,
@@ -1264,15 +1272,41 @@ def get_popkontv_stream_data(
     api = 'https://www.popkontv.com/api/proxy/broadcast/v1/search/all'
     json_str = get_req(api, proxy_addr=proxy_addr, headers=headers, json_data=data, abroad=True)
     json_data = json.loads(json_str)
-    anchor_id = json_data['data']['broadCastList'][0]['mcSignId']
-    anchor_name = f"{json_data['data']['broadCastList'][0]['nickName']}-{anchor_id}"
-    partner_code = json_data['data']['broadCastList'][0]['mcPartnerCode']
-    live_list = json_data['data']['liveList']
-    live_status = len(live_list) > 0
 
-    cast_start_date_code = live_list[0]['castStartDateCode'] if live_status else None
-    private = live_list[0]["isPrivate"] == "1" if live_list else None
-    return anchor_name, partner_code, cast_start_date_code, private
+    partner_code = ''
+    anchor_name = 'Unknown'
+    for item in json_data['data']['broadCastList']:
+        if item['mcSignId'] == anchor_id:
+            mc_name = item['nickName']
+            anchor_name = f"{mc_name}-{anchor_id}"
+            partner_code = item['mcPartnerCode']
+            break
+
+    if not partner_code:
+        if 'mcPartnerCode' in url:
+            regex_result = re.search('mcPartnerCode=(P-\d+)', url)
+        else:
+            regex_result = re.search('partnerCode=(P-\d+)', url)
+        partner_code = regex_result.group(1) if regex_result else code
+        notices_url = f'https://www.popkontv.com/channel/notices?mcid={anchor_id}&mcPartnerCode={partner_code}'
+        notices_response = get_req(notices_url, proxy_addr=proxy_addr, headers=headers, abroad=True)
+        mc_name_match = re.search(r'"mcNickName":"([^"]+)"', notices_response)
+        mc_name = mc_name_match.group(1) if mc_name_match else 'Unknown'
+        anchor_name = f"{anchor_id}-{mc_name}"
+
+    live_url = f"https://www.popkontv.com/live/view?castId={anchor_id}&partnerCode={partner_code}"
+    html_str2 = get_req(live_url, proxy_addr=proxy_addr, headers=headers, abroad=True)
+    json_str2 = re.search('<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html_str2).group(1)
+    json_data2 = json.loads(json_str2)
+    if 'mcData' in json_data2['props']['pageProps']:
+        room_data = json_data2['props']['pageProps']['mcData']['data']
+        is_private = room_data['mc_isPrivate']
+        cast_start_date_code = room_data['mc_castStartDate']
+        mc_sign_id = room_data['mc_signId']
+        cast_type = room_data['castType']
+        return anchor_name, [cast_start_date_code, partner_code, mc_sign_id, cast_type, is_private]
+    else:
+        return anchor_name, None
 
 
 @trace_error_decorator
@@ -1296,27 +1330,27 @@ def get_popkontv_stream_url(
     if access_token:
         headers['Authorization'] = f'Bearer {access_token}'
 
-    anchor_id = re.search('castId=(.*?)(?=&|$)', url).group(1)
-    anchor_name, mc_partner_code, cast_start_date_code, is_private = get_popkontv_stream_data(
+    anchor_name, room_info = get_popkontv_stream_data(
         url, proxy_addr=proxy_addr, code=partner_code, username=username)
     result = {"anchor_name": anchor_name, "is_live": False}
 
-    if cast_start_date_code:
+    if room_info:
+        cast_start_date_code, cast_partner_code, mc_sign_id, cast_type, is_private = room_info
         result["is_live"] = True
-        room_password = get_partner_code(url, "pwd")
-        if is_private and room_password:
+        room_password = get_params(url, "pwd")
+        if int(is_private) != 0 and not room_password:
             raise RuntimeError(f"直播间数据获取失败，因为{anchor_name}直播间为私密房间，请配置房间密码后重试")
 
         def fetch_data(header: dict = None, code: str = None) -> str:
             data = {
                 'androidStore': 0,
-                'castCode': f'{anchor_id}-{cast_start_date_code}',
-                'castPartnerCode': mc_partner_code,
-                'castSignId': anchor_id,
-                'castType': '0',
+                'castCode': f'{mc_sign_id}-{cast_start_date_code}',
+                'castPartnerCode': cast_partner_code,
+                'castSignId': mc_sign_id,
+                'castType': cast_type,
                 'commandType': 0,
                 'exePath': 5,
-                'isSecret': 0,
+                'isSecret': is_private,
                 'partnerCode': code,
                 'password': room_password,
                 'signId': username,
@@ -1647,6 +1681,7 @@ if __name__ == '__main__':
     # room_url = 'https://www.flextv.co.kr/channels/593127/live'  # FlexTV
     # room_url = 'https://look.163.com/live?id=65108820&position=3'  # Look直播
     # room_url = 'https://www.popkontv.com/live/view?castId=wjfal007&partnerCode=P-00117'  # popkontv
+    # room_url = 'https://www.popkontv.com/channel/notices?mcid=wjfal007&mcPartnerCode=P-00117'  # popkontv
     # room_url = 'https://twitcasting.tv/c:uonq'  # TwitCasting
     # room_url = 'https://live.baidu.com/m/media/pclive/pchome/live.html?room_id=9175031377&tab_category'  # 百度直播
     # room_url = 'https://weibo.com/l/wblive/p/show/1022:2321325026370190442592'  # 微博直播

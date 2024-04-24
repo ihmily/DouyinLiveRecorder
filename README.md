@@ -147,6 +147,7 @@ https://www.flextv.co.kr/channels/593127/live
 
 PopkonTV:
 https://www.popkontv.com/live/view?castId=wjfal007&partnerCode=P-00117
+https://www.popkontv.com/channel/notices?mcid=wjfal007&mcPartnerCode=P-00117
 
 TwitCasting:
 https://twitcasting.tv/c:uonq
@@ -156,6 +157,9 @@ https://live.baidu.com/m/media/pclive/pchome/live.html?room_id=9175031377&tab_ca
 
 微博直播:
 https://weibo.com/l/wblive/p/show/1022:2321325026370190442592
+
+酷狗直播:
+https://fanxing2.kugou.com/50428671?refer=2177&sourceFrom=
 ```
 
 直播间分享地址和网页端长地址都能正常进行录制（抖音尽量用长链接，避免因短链接转换失效导致不能正常录制，而且需要有nodejs环境，否则无法转换）。
@@ -288,13 +292,16 @@ docker-compose stop
 
 ## ⏳提交日志
 
+- 20240424
+  - 新增酷狗直播录制、优化PopkonTV直播录制
+  
 - 20240423
   - 新增百度直播录制、微博直播录制
-  
+
   - 修复斗鱼录制直播回放的问题
-  
+
   - 新增直播源地址显示以及输出到日志文件设置
-  
+
 - 20240311
   - 修复海外平台录制bug，增加画质选择，增强录制稳定性
 
