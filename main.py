@@ -51,7 +51,8 @@ from spider import (
     get_popkontv_stream_url,
     get_twitcasting_stream_url,
     get_baidu_stream_data,
-    get_weibo_stream_url
+    get_weibo_stream_url,
+    get_kugou_stream_url
 )
 
 from web_rid import (
@@ -65,7 +66,7 @@ from utils import (
 from msg_push import dingtalk, xizhi, tg_bot
 
 version = "v3.0.3"
-platforms = "\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo直播|blued直播|网易CC|千度热播|猫耳FM|Look直播|TwitCasting|百度直播|微博直播" \
+platforms = "\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|酷狗" \
             "\n海外站点：TikTok|AfreecaTV|PandaTV|WinkTV|FlexTV|PopkonTV"
 
 # --------------------------全局变量-------------------------------------
@@ -1000,6 +1001,12 @@ def start_record(url_data: tuple, count_variable: int = -1):
                             port_info = get_weibo_stream_url(
                                 url=record_url, proxy_addr=proxy_address, cookies=weibo_cookie)
 
+                    elif record_url.find("fanxing2.kugou.com/") > -1:
+                        platform = '酷狗直播'
+                        with semaphore:
+                            port_info = get_kugou_stream_url(
+                                url=record_url, proxy_addr=proxy_address, cookies=kugou_cookie)
+
                     else:
                         logger.error(f'{record_url} 未知直播地址')
                         return
@@ -1696,6 +1703,7 @@ while True:
     twitcasting_cookie = read_config_value(config, 'Cookie', 'twitcasting_cookie', '')
     baidu_cookie = read_config_value(config, 'Cookie', 'baidu_cookie', '')
     weibo_cookie = read_config_value(config, 'Cookie', 'weibo_cookie', '')
+    kugou_cookie = read_config_value(config, 'Cookie', 'kugou_cookie', '')
 
     if len(video_save_type) > 0:
         if video_save_type.upper().lower() == "FLV".lower():
@@ -1782,6 +1790,8 @@ while True:
                     'twitcasting.tv',
                     'live.baidu.com',
                     'weibo.com',
+                    'fanxing2.kugou.com',
+                    'mfanxing.kugou.com',
                 ]
                 overseas_platform_host = [
                     'www.tiktok.com',

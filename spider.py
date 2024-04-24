@@ -1564,6 +1564,60 @@ def get_weibo_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies:
     return result
 
 
+@trace_error_decorator
+def get_kugou_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
+        Dict[str, Any]:
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0',
+        'Accept': 'application/json',
+        'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
+        'Referer': 'https://fanxing2.kugou.com/',
+    }
+    if cookies:
+        headers['Cookie'] = cookies
+
+    if 'roomId' in url:
+        room_id = re.search('roomId=(\d+)',url).group(1)
+    else:
+        room_id = url.split('?')[0].rsplit('/', maxsplit=1)[1]
+
+    app_api = f'https://service2.fanxing.kugou.com/roomcen/room/web/cdn/getEnterRoomInfo?roomId={room_id}'
+
+    json_str = get_req(url=app_api, proxy_addr=proxy_addr, headers=headers)
+    json_data = json.loads(json_str)
+
+    anchor_name = json_data['data']['normalRoomInfo']['nickName']
+    result = {
+        "anchor_name": anchor_name,
+        "is_live": False,
+    }
+    live_status = json_data['data']['liveType']
+    if live_status == 0:
+        params = {
+            'std_rid': room_id,
+            'std_plat': '7',
+            'std_kid': '0',
+            'streamType': '1-2-4-5-8',
+            'ua': 'fx-flash',
+            'targetLiveTypes': '1-5-6',
+            'version': '1000',
+            'supportEncryptMode': '1',
+            'appid': '1010',
+            '_': str(int(time.time() * 1000)),
+        }
+        stream_api = f'https://fx1.service.kugou.com/video/pc/live/pull/mutiline/streamaddr?{urllib.parse.urlencode(params)}'
+
+        json_str2 = get_req(url=stream_api, proxy_addr=proxy_addr, headers=headers)
+        json_data2 = json.loads(json_str2)
+        stream_data = json_data2['data']['lines']
+        if stream_data:
+            result["is_live"] = True
+            result['flv_url'] = stream_data[1]['streamProfiles'][0]['httpsFlv'][0]
+            result['record_url'] = result['flv_url']
+
+    return result
+
+
 if __name__ == '__main__':
     # 尽量用自己的cookie，以避免默认的不可用导致无法获取数据
     # 以下示例链接不保证时效性，请自行查看链接是否能正常访问
@@ -1596,6 +1650,7 @@ if __name__ == '__main__':
     # room_url = 'https://twitcasting.tv/c:uonq'  # TwitCasting
     # room_url = 'https://live.baidu.com/m/media/pclive/pchome/live.html?room_id=9175031377&tab_category'  # 百度直播
     # room_url = 'https://weibo.com/l/wblive/p/show/1022:2321325026370190442592'  # 微博直播
+    # room_url = 'https://fanxing2.kugou.com/50428671?refer=2177&sourceFrom='  # 酷狗直播
 
     print(get_douyin_stream_data(room_url, proxy_addr=''))
     # print(get_tiktok_stream_data(room_url, proxy_addr=''))
@@ -1620,3 +1675,4 @@ if __name__ == '__main__':
     # print(get_twitcasting_stream_url(room_url, proxy_addr='', username='', password=''))
     # print(get_baidu_stream_data(room_url, proxy_addr=''))
     # print(get_weibo_stream_url(room_url, proxy_addr=''))
+    # print(get_kugou_stream_url(room_url, proxy_addr=''))
