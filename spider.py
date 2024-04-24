@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub:https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-04-23 23:10:36
+Update: 2024-04-23 23:42:27
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -1377,12 +1377,16 @@ def get_popkontv_stream_url(
                 update_config('./config/config.ini', 'Authorization', 'popkontv_token', new_access_token)
             else:
                 raise RuntimeError('popkontv登录失败，请检查账号和密码是否正确')
+
         json_data = json.loads(json_str)
         status_msg = json_data["statusMsg"]
         if json_data['statusCd'] == "L000A":
             print('获取直播源失败,', status_msg)
-            raise RuntimeError(
-                '你是未认证会员。登录popkontv官方网站后，在“我的页面”>“修改我的信息”底部进行手机认证后可用')
+            raise RuntimeError('你是未认证会员。登录popkontv官方网站后，在“我的页面”>“修改我的信息”底部进行手机认证后可用')
+
+        elif json_data['statusCd'] == "L00A1":
+            raise RuntimeError('获取直播源失败，该直播间需要赠送礼物才可观看')
+
         elif json_data['statusCd'] == "L0001":
             cast_start_date_code = int(cast_start_date_code) - 1
             json_str = fetch_data(headers, partner_code)
@@ -1390,6 +1394,7 @@ def get_popkontv_stream_url(
             m3u8_url = json_data['data']['castHlsUrl']
             result["m3u8_url"] = m3u8_url
             result["record_url"] = m3u8_url
+
         elif json_data['statusCd'] == "L0000":
             m3u8_url = json_data['data']['castHlsUrl']
             result["m3u8_url"] = m3u8_url
