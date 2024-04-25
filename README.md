@@ -37,6 +37,7 @@
 - [x] 百度直播
 - [x] 微博直播
 - [x] 酷狗直播
+- [x] TwitchTV
 - [ ] 更多平台正在更新中
 
 </div>
@@ -161,6 +162,9 @@ https://weibo.com/l/wblive/p/show/1022:2321325026370190442592
 
 酷狗直播:
 https://fanxing2.kugou.com/50428671?refer=2177&sourceFrom=
+
+TwitchTV:
+https://www.twitch.tv/gamerbee
 ```
 
 直播间分享地址和网页端长地址都能正常进行录制（抖音尽量用长链接，避免因短链接转换失效导致不能正常录制，而且需要有nodejs环境，否则无法转换）。
@@ -293,9 +297,12 @@ docker-compose stop
 
 ## ⏳提交日志
 
+- 20240425
+  - 新增TwitchTV直播录制
+  
 - 20240424
   - 新增酷狗直播录制、优化PopkonTV直播录制
-  
+
 - 20240423
   - 新增百度直播录制、微博直播录制
 

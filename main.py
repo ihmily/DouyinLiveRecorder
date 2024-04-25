@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-04-23 22:02:49
+Update: 2024-04-25 19:07:49
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -52,7 +52,8 @@ from spider import (
     get_twitcasting_stream_url,
     get_baidu_stream_data,
     get_weibo_stream_url,
-    get_kugou_stream_url
+    get_kugou_stream_url,
+    get_twitchtv_stream_data,
 )
 
 from web_rid import (
@@ -67,7 +68,7 @@ from msg_push import dingtalk, xizhi, tg_bot
 
 version = "v3.0.3"
 platforms = "\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|酷狗" \
-            "\n海外站点：TikTok|AfreecaTV|PandaTV|WinkTV|FlexTV|PopkonTV"
+            "\n海外站点：TikTok|AfreecaTV|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV"
 
 # --------------------------全局变量-------------------------------------
 recording = set()
@@ -727,6 +728,26 @@ def get_baidu_stream_url(json_data: dict, video_quality: str) -> dict:
     }
 
 
+def get_twitchtv_stream_url(json_data: dict, video_quality: str) -> dict:
+    if not json_data['is_live']:
+        return json_data
+
+    play_url_list = json_data['play_url_list']
+    quality_list = {'原画': 0, '蓝光': 0, '超清': 1, '高清': 2, '标清': 3}
+    while len(play_url_list) < 4:
+        play_url_list.append(play_url_list[-1])
+
+    selected_quality = quality_list[video_quality]
+    m3u8_url = play_url_list[selected_quality]
+
+    return {
+        "anchor_name": json_data['anchor_name'],
+        "is_live": True,
+        "m3u8_url": json_data['m3u8_url'],
+        "record_url": m3u8_url
+    }
+
+
 def push_message(content: str):
     push_pts = []
     if '微信' in live_status_push:
@@ -1006,6 +1027,19 @@ def start_record(url_data: tuple, count_variable: int = -1):
                         with semaphore:
                             port_info = get_kugou_stream_url(
                                 url=record_url, proxy_addr=proxy_address, cookies=kugou_cookie)
+
+                    elif record_url.find("www.twitch.tv/") > -1:
+                        platform = 'TwitchTV'
+                        with semaphore:
+                            if global_proxy or proxy_address:
+                                json_data = get_twitchtv_stream_data(
+                                    url=record_url,
+                                    proxy_addr=proxy_address,
+                                    cookies=twitch_cookie
+                                )
+                                port_info = get_twitchtv_stream_url(json_data, record_quality)
+                            else:
+                                logger.error(f"错误信息: 网络异常，请检查本网络是否能正常访问TwitchTV直播平台")
 
                     else:
                         logger.error(f'{record_url} 未知直播地址')
@@ -1704,6 +1738,7 @@ while True:
     baidu_cookie = read_config_value(config, 'Cookie', 'baidu_cookie', '')
     weibo_cookie = read_config_value(config, 'Cookie', 'weibo_cookie', '')
     kugou_cookie = read_config_value(config, 'Cookie', 'kugou_cookie', '')
+    twitch_cookie = read_config_value(config, 'Cookie', 'twitch_cookie', '')
 
     if len(video_save_type) > 0:
         if video_save_type.upper().lower() == "FLV".lower():
@@ -1800,7 +1835,8 @@ while True:
                     'www.pandalive.co.kr',
                     'www.winktv.co.kr',
                     'www.flextv.co.kr',
-                    'www.popkontv.com'
+                    'www.popkontv.com',
+                    'www.twitch.tv',
                 ]
 
                 platform_host.extend(overseas_platform_host)
