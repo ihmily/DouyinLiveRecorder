@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-04-27 21:03:00
+Update: 2024-04-27 22:38:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -1024,7 +1024,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                             port_info = get_weibo_stream_url(
                                 url=record_url, proxy_addr=proxy_address, cookies=weibo_cookie)
 
-                    elif record_url.find("fanxing2.kugou.com/") > -1:
+                    elif record_url.find("kugou.com/") > -1:
                         platform = '酷狗直播'
                         with semaphore:
                             port_info = get_kugou_stream_url(
@@ -1840,6 +1840,7 @@ while True:
                     'twitcasting.tv',
                     'live.baidu.com',
                     'weibo.com',
+                    'fanxing.kugou.com',
                     'fanxing2.kugou.com',
                     'mfanxing.kugou.com',
                     'www.liveme.com',
@@ -1858,7 +1859,7 @@ while True:
 
                 platform_host.extend(overseas_platform_host)
                 if url_host in platform_host:
-                    if url_host in ['live.douyin.com', 'live.bilibili.com']:
+                    if url_host in ['live.douyin.com', 'live.bilibili.com', 'www.huajiao.com']:
                         update_file(url_config_file, url, url.split('?')[0])
                         url = url.split('?')[0]
 
