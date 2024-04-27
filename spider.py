@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub:https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-04-27 21:02:11
+Update: 2024-04-27 23:00:11
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -341,7 +341,7 @@ def get_token_js(rid: str, did: str, proxy_addr: Union[str, None] = None) -> Uni
 
 @trace_error_decorator
 def get_douyu_info_data(url: str, proxy_addr: Union[str, None] = None) -> Dict[str, Any]:
-    match_rid = re.search('rid=(.*?)&', url)
+    match_rid = re.search('rid=(.*?)(?=&|$)', url)
     if match_rid:
         rid = match_rid.group(1)
     else:
