@@ -39,6 +39,7 @@
 - [x] 酷狗直播
 - [x] TwitchTV
 - [x] LiveMe
+- [x] 花椒直播
 - [ ] 更多平台正在更新中
 
 </div>
@@ -169,6 +170,9 @@ https://www.twitch.tv/gamerbee
 
 LiveMe:
 https://www.liveme.com/zh/v/17141543493018047815/index.html
+
+花椒直播:
+https://www.huajiao.com/user/223184650
 ```
 
 直播间分享地址和网页端长地址都能正常进行录制（抖音尽量用长链接，避免因短链接转换失效导致不能正常录制，而且需要有nodejs环境，否则无法转换）。
@@ -302,7 +306,7 @@ docker-compose stop
 ## ⏳提交日志
 
 - 20240427
-  - 新增LiveMe直播录制
+  - 新增LiveMe、花椒直播录制
   
 - 20240425
   - 新增TwitchTV直播录制

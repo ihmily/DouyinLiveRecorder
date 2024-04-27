@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub:https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-04-27 15:47:59
+Update: 2024-04-27 21:02:11
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -93,7 +93,7 @@ def get_req(
     return resp_str
 
 
-def get_params(url, params):
+def get_params(url: str, params: str) -> Union[str, None]:
     parsed_url = urllib.parse.urlparse(url)
     query_params = urllib.parse.parse_qs(parsed_url.query)
 
@@ -103,7 +103,7 @@ def get_params(url, params):
         return None
 
 
-def jsonp_to_json(jsonp_str):
+def jsonp_to_json(jsonp_str: str) -> Union[dict, None]:
     pattern = r'(\w+)\((.*)\);?$'
     match = re.search(pattern, jsonp_str)
 
@@ -114,6 +114,14 @@ def jsonp_to_json(jsonp_str):
     else:
         print("No JSON data found in JSONP response.")
         return None
+
+
+def replace_url(file_path: str, old: str, new: str) -> None:
+    with open(file_path, 'r', encoding='utf-8-sig') as f:
+        content = f.read()
+    if old in content:
+        with open(file_path, 'w', encoding='utf-8-sig') as f:
+            f.write(content.replace(old, new))
 
 
 def get_play_url_list(m3u8: str, proxy: Union[str, None] = None, header: Union[dict, None] = None,
@@ -1782,6 +1790,107 @@ def get_liveme_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies
     return result
 
 
+def get_huajiao_sn(live_id: str, cookies: Union[str, None] = None, proxy_addr: Union[str, None] = None):
+    headers = {
+        'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
+        'referer': 'https://www.huajiao.com/',
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0',
+    }
+
+    if cookies:
+        headers['Cookie'] = cookies
+
+    url = f'https://www.huajiao.com/l/{live_id}'
+    try:
+        html_str = get_req(url=url, proxy_addr=proxy_addr, headers=headers)
+        json_str = re.search('var feed = (.*?});', html_str).group(1)
+        json_data = json.loads(json_str)
+        sn = json_data['feed']['sn']
+        uid = json_data['author']['uid']
+        nickname = json_data['author']['nickname']
+        live_id = url.split('?')[0].rsplit('/', maxsplit=1)[1]
+        return nickname, sn, uid, live_id
+    except Exception:
+        replace_url('./config/URL_config.ini', old=url, new='#'+url)
+        raise RuntimeError('获取直播间数据失败，花椒直播间地址非固定，请使用主播主页地址进行录制')
+
+
+def get_huajiao_user_info(url: str, cookies: Union[str, None] = None, proxy_addr: Union[str, None] = None):
+    headers = {
+        'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
+        'referer': 'https://www.huajiao.com/',
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0',
+    }
+
+    if cookies:
+        headers['Cookie'] = cookies
+
+    if 'user' in url:
+        uid = url.split('?')[0].split('user/')[1]
+        params = {
+            'uid': uid,
+            'fmt': 'json',
+            '_': str(int(time.time() * 1000)),
+        }
+
+        api = f'https://webh.huajiao.com/User/getUserFeeds?{urllib.parse.urlencode(params)}'
+        json_str = get_req(url=api, proxy_addr=proxy_addr, headers=headers)
+        json_data = json.loads(json_str)
+
+        html_str = get_req(url=f'https://www.huajiao.com/user/{uid}', proxy_addr=proxy_addr, headers=headers)
+        anchor_name = re.search('<title>(.*?)的主页.*</title>', html_str).group(1)
+        if 'rtop' in json_data['data']['feeds'][0]['feed']:
+            live_id = json_data['data']['feeds'][0]['feed']['relateid']
+            sn = json_data['data']['feeds'][0]['feed']['sn']
+            return anchor_name, [sn, uid, live_id]
+        else:
+            return anchor_name, None
+
+    else:
+        live_id = url.split('?')[0].rsplit('/',maxsplit=1)[1]
+        data = get_huajiao_sn(live_id)
+        if data:
+            profile_url = f'https://www.huajiao.com/user/{data[2].split("?")[0]}'
+            replace_url('./config/URL_config.ini', old=url, new=profile_url)
+            return data[0], data[1:]
+        else:
+            return '未知直播间', None
+
+
+@trace_error_decorator
+def get_huajiao_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
+        Dict[str, Any]:
+    headers = {
+        'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
+        'referer': 'https://www.huajiao.com/',
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0',
+    }
+    if cookies:
+        headers['Cookie'] = cookies
+
+    anchor_name, room_info = get_huajiao_user_info(url)
+    result = {"anchor_name": anchor_name, "is_live": False}
+
+    if room_info:
+        sn, uid, live_id = room_info
+        params = {
+            "time": int(time.time() * 1000),
+            "version": "1.0.0",
+            "sn": sn,
+            "uid": uid,
+            "liveid": live_id,
+            "encode": "h265"  # 可选 h264
+        }
+        api = f'https://live.huajiao.com/live/substream?{urllib.parse.urlencode(params)}'
+        json_str = get_req(url=api, proxy_addr=proxy_addr, headers=headers)
+        json_data = json.loads(json_str)
+        result["is_live"] = True
+        result['flv_url'] = json_data['data']['h264_url']
+        result['record_url'] = json_data['data']['h264_url']
+
+    return result
+
+
 if __name__ == '__main__':
     # 尽量用自己的cookie，以避免默认的不可用导致无法获取数据
     # 以下示例链接不保证时效性，请自行查看链接是否能正常访问
@@ -1818,6 +1927,7 @@ if __name__ == '__main__':
     # room_url = 'https://fanxing2.kugou.com/50428671?refer=2177&sourceFrom='  # 酷狗直播
     # room_url = 'https://www.twitch.tv/gamerbee'  # TwitchTV
     # room_url = 'https://www.liveme.com/zh/v/17141937295821012854/index.html'  # LiveMe
+    # room_url = 'https://www.huajiao.com/user/223184650'  # 花椒直播
 
     print(get_douyin_stream_data(room_url, proxy_addr=''))
     # print(get_tiktok_stream_data(room_url, proxy_addr=''))
@@ -1845,3 +1955,4 @@ if __name__ == '__main__':
     # print(get_kugou_stream_url(room_url, proxy_addr=''))
     # print(get_twitchtv_stream_data(room_url, proxy_addr=''))
     # print(get_liveme_stream_url(room_url, proxy_addr=''))
+    # print(get_huajiao_stream_url(room_url, proxy_addr=''))
