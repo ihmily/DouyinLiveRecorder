@@ -38,6 +38,7 @@
 - [x] 微博直播
 - [x] 酷狗直播
 - [x] TwitchTV
+- [x] LiveMe
 - [ ] 更多平台正在更新中
 
 </div>
@@ -165,6 +166,9 @@ https://fanxing2.kugou.com/50428671?refer=2177&sourceFrom=
 
 TwitchTV:
 https://www.twitch.tv/gamerbee
+
+LiveMe:
+https://www.liveme.com/zh/v/17141543493018047815/index.html
 ```
 
 直播间分享地址和网页端长地址都能正常进行录制（抖音尽量用长链接，避免因短链接转换失效导致不能正常录制，而且需要有nodejs环境，否则无法转换）。
@@ -297,9 +301,12 @@ docker-compose stop
 
 ## ⏳提交日志
 
+- 20240427
+  - 新增LiveMe直播录制
+  
 - 20240425
   - 新增TwitchTV直播录制
-  
+
 - 20240424
   - 新增酷狗直播录制、优化PopkonTV直播录制
 

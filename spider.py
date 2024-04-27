@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub:https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-04-25 19:05:11
+Update: 2024-04-27 15:47:59
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -116,7 +116,8 @@ def jsonp_to_json(jsonp_str):
         return None
 
 
-def get_play_url_list(m3u8: str, proxy: Union[str, None] = None, header: Union[dict, None] = None, abroad: bool = False) -> list:
+def get_play_url_list(m3u8: str, proxy: Union[str, None] = None, header: Union[dict, None] = None,
+                      abroad: bool = False) -> list:
     resp = get_req(url=m3u8, proxy_addr=proxy, headers=header, abroad=abroad)
     play_url_list = []
     for i in resp.split('\n'):
@@ -348,7 +349,7 @@ def get_douyu_info_data(url: str, proxy_addr: Union[str, None] = None) -> Dict[s
         "anchor_name": json_data['room']['nickname'],
         "is_live": False
     }
-    if json_data['room']['videoLoop'] == 0 and json_data['room']['show_status'] ==1:
+    if json_data['room']['videoLoop'] == 0 and json_data['room']['show_status'] == 1:
         result["is_live"] = True
         result["room_id"] = json_data['room']['room_id']
 
@@ -1104,7 +1105,8 @@ def get_flextv_stream_data(
                 url=url, proxy_addr=proxy_addr, cookies=cookies, username=username, password=password)
             if play_url:
                 result['m3u8_url'] = play_url
-                result['play_url_list'] = get_play_url_list(m3u8=play_url, proxy=proxy_addr, header=headers, abroad=True)
+                result['play_url_list'] = get_play_url_list(m3u8=play_url, proxy=proxy_addr, header=headers,
+                                                            abroad=True)
     except Exception as e:
         print('FlexTV直播间数据获取失败', e)
     return result
@@ -1611,7 +1613,7 @@ def get_kugou_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies:
         headers['Cookie'] = cookies
 
     if 'roomId' in url:
-        room_id = re.search('roomId=(\d+)',url).group(1)
+        room_id = re.search('roomId=(\d+)', url).group(1)
     else:
         room_id = url.split('?')[0].rsplit('/', maxsplit=1)[1]
 
@@ -1683,8 +1685,10 @@ def get_twitchtv_room_info(url: str, token: str, proxy_addr: Union[str, None] = 
 
     json_str = get_req('https://gql.twitch.tv/gql', proxy_addr=proxy_addr, headers=headers, json_data=data, abroad=True)
     json_data = json.loads(json_str)
-    nickname = json_data[0]['data']['userOrError']['displayName']
-    status = True if json_data[0]['data']['userOrError']['stream'] else False
+    user_data = json_data[0]['data']['userOrError']
+    login_name = user_data["login"]
+    nickname = f"{user_data['displayName']}-{login_name}"
+    status = True if user_data['stream'] else False
     return nickname, status
 
 
@@ -1752,6 +1756,32 @@ def get_twitchtv_stream_data(url: str, proxy_addr: Union[str, None] = None, cook
     return result
 
 
+@trace_error_decorator
+def get_liveme_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
+        Dict[str, Any]:
+    headers = {
+        'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
+        'if-none-match': '"5056-h/Mk04yXaLRQmg+4iqhJH8Sa8l0"',
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0',
+    }
+    if cookies:
+        headers['Cookie'] = cookies
+
+    html_str = get_req(url=url, proxy_addr=proxy_addr, headers=headers)
+    video_url = re.search('hlsvideosource:"(.*?)",sdkstreamid', html_str)
+    anchor_name = re.search('<title>(.*?) ', html_str).group(1)
+    result = {
+        "anchor_name": anchor_name,
+        "is_live": False,
+    }
+    if video_url:
+        play_url = video_url.group(1).replace('\\u002F', '/')
+        result["is_live"] = True
+        result['m3u8_url'] = play_url
+        result['record_url'] = play_url
+    return result
+
+
 if __name__ == '__main__':
     # 尽量用自己的cookie，以避免默认的不可用导致无法获取数据
     # 以下示例链接不保证时效性，请自行查看链接是否能正常访问
@@ -1787,6 +1817,7 @@ if __name__ == '__main__':
     # room_url = 'https://weibo.com/l/wblive/p/show/1022:2321325026370190442592'  # 微博直播
     # room_url = 'https://fanxing2.kugou.com/50428671?refer=2177&sourceFrom='  # 酷狗直播
     # room_url = 'https://www.twitch.tv/gamerbee'  # TwitchTV
+    # room_url = 'https://www.liveme.com/zh/v/17141937295821012854/index.html'  # LiveMe
 
     print(get_douyin_stream_data(room_url, proxy_addr=''))
     # print(get_tiktok_stream_data(room_url, proxy_addr=''))
@@ -1813,3 +1844,4 @@ if __name__ == '__main__':
     # print(get_weibo_stream_url(room_url, proxy_addr=''))
     # print(get_kugou_stream_url(room_url, proxy_addr=''))
     # print(get_twitchtv_stream_data(room_url, proxy_addr=''))
+    # print(get_liveme_stream_url(room_url, proxy_addr=''))
