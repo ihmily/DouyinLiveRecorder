@@ -1609,7 +1609,7 @@ with open(os.devnull, 'wb') as dev_null:
         subprocess.check_call(['ffmpeg', '--help'], stdout=dev_null, stderr=dev_null)
     except FileNotFoundError as err:
         ffmpeg_path = f"{script_path}/ffmpeg.exe"
-print(ffmpeg_path)
+# print(ffmpeg_path)
 ffmepg_file_check = subprocess.getoutput(ffmpeg_path)
 print(ffmepg_file_check)
 if ffmepg_file_check.find("run") > -1:
