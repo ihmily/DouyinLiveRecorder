@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub:https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-04-27 23:00:11
+Update: 2024-05-06 23:00:11
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -15,7 +15,7 @@ import time
 import urllib.parse
 import urllib.error
 from urllib.request import Request
-from typing import Union, Dict, Any, Tuple
+from typing import Union, Dict, Any, Tuple, List
 import requests
 import ssl
 import re
@@ -125,7 +125,7 @@ def replace_url(file_path: str, old: str, new: str) -> None:
 
 
 def get_play_url_list(m3u8: str, proxy: Union[str, None] = None, header: Union[dict, None] = None,
-                      abroad: bool = False) -> list:
+                      abroad: bool = False) -> List[str]:
     resp = get_req(url=m3u8, proxy_addr=proxy, headers=header, abroad=abroad)
     play_url_list = []
     for i in resp.split('\n'):
@@ -430,7 +430,7 @@ def get_bilibili_stream_data(url: str, proxy_addr: Union[str, None] = None, cook
     if cookies:
         headers['Cookie'] = cookies
 
-    def get_data_from_api(link: str):
+    def get_data_from_api(link: str) -> Dict[str, Any]:
         room_id = link.split('?')[0].rsplit('/', maxsplit=1)[1]
         api = f'https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id={room_id}&no_playurl=0&mask=1&qn=0&platform=web&protocol=0,1&format=0,1,2&codec=0,1,2&dolby=5&panorama=1'
         json_str = get_req(url=api, proxy_addr=proxy_addr, headers=headers)
@@ -714,7 +714,7 @@ def get_afreecatv_stream_data(
         "is_live": False,
     }
 
-    def get_url_list(m3u8: str) -> list:
+    def get_url_list(m3u8: str) -> List[str]:
         resp = get_req(url=m3u8, proxy_addr=proxy_addr, headers=headers, abroad=True)
         play_url_list = []
         url_prefix = m3u8.rsplit('/', maxsplit=1)[0] + '/'
@@ -1811,7 +1811,7 @@ def get_huajiao_sn(live_id: str, cookies: Union[str, None] = None, proxy_addr: U
         live_id = url.split('?')[0].rsplit('/', maxsplit=1)[1]
         return nickname, sn, uid, live_id
     except Exception:
-        replace_url('./config/URL_config.ini', old=url, new='#'+url)
+        replace_url('./config/URL_config.ini', old=url, new='#' + url)
         raise RuntimeError('获取直播间数据失败，花椒直播间地址非固定，请使用主播主页地址进行录制')
 
 
@@ -1847,7 +1847,7 @@ def get_huajiao_user_info(url: str, cookies: Union[str, None] = None, proxy_addr
             return anchor_name, None
 
     else:
-        live_id = url.split('?')[0].rsplit('/',maxsplit=1)[1]
+        live_id = url.split('?')[0].rsplit('/', maxsplit=1)[1]
         data = get_huajiao_sn(live_id)
         if data:
             profile_url = f'https://www.huajiao.com/user/{data[2].split("?")[0]}'
@@ -1891,6 +1891,37 @@ def get_huajiao_stream_url(url: str, proxy_addr: Union[str, None] = None, cookie
     return result
 
 
+@trace_error_decorator
+def get_liuxing_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
+        Dict[str, Any]:
+    headers = {
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
+        'Referer': 'https://wap.7u66.com/198189?promoters=0',
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 8.0.0; SM-G955U Build/R16NW) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36 Edg/121.0.0.0',
+
+    }
+    if cookies:
+        headers['Cookie'] = cookies
+
+    room_id = url.split('?')[0].rsplit('/', maxsplit=1)[1]
+    api = f'https://wap.7u66.com/api/ui/room/v1.0.0/live.ashx?promoters=0&roomidx={room_id}&currentUrl=https://www.7u66.com/{room_id}?promoters=0'
+    json_str = get_req(url=api, proxy_addr=proxy_addr, headers=headers)
+    json_data = json.loads(json_str)
+    room_info = json_data['data']['roomInfo']
+    anchor_name = room_info['nickname']
+    live_status = room_info["live_stat"]
+    result = {"anchor_name": anchor_name, "is_live": False}
+    if live_status == 1:
+        result["is_live"] = True
+        idx = room_info['idx']
+        live_id = room_info['liveId1']
+        flv_url = f'https://txpull1.5see.com/live/{idx}/{live_id}.flv'
+        result['flv_url'] = flv_url
+        result['record_url'] = flv_url
+    return result
+
+
 if __name__ == '__main__':
     # 尽量用自己的cookie，以避免默认的不可用导致无法获取数据
     # 以下示例链接不保证时效性，请自行查看链接是否能正常访问
@@ -1905,8 +1936,8 @@ if __name__ == '__main__':
     # room_url = 'https://live.bilibili.com/21593109'  # b站直播
     # room_url = 'https://live.bilibili.com/23448867'  # b站直播
     # 小红书直播
-    # room_url = 'https://www.redelight.cn/hina/livestream/569077534207413574/1707413727088?appuid=5f3f478a00000000010005b3&'
-    # room_url = 'https://www.xiaohongshu.com/hina/livestream/569098486282043893/1708661048594?appuid=5f3f478a00000000010005b3&'
+    # room_url = 'https://www.redelight.cn/hina/livestream/569077534207413574?appuid=5f3f478a00000000010005b3&'
+    # room_url = 'https://www.xiaohongshu.com/hina/livestream/569098486282043893?appuid=5f3f478a00000000010005b3&'
     # room_url = 'https://www.bigo.tv/cn/716418802'  # bigo直播
     # room_url = 'https://app.blued.cn/live?id=Mp6G2R'  # blued直播
     # room_url = 'https://play.afreecatv.com/sw7love'  # afreecatv直播
@@ -1928,6 +1959,7 @@ if __name__ == '__main__':
     # room_url = 'https://www.twitch.tv/gamerbee'  # TwitchTV
     # room_url = 'https://www.liveme.com/zh/v/17141937295821012854/index.html'  # LiveMe
     # room_url = 'https://www.huajiao.com/user/223184650'  # 花椒直播
+    # room_url = 'https://www.7u66.com/100960'  # 流星直播
 
     print(get_douyin_stream_data(room_url, proxy_addr=''))
     # print(get_tiktok_stream_data(room_url, proxy_addr=''))
@@ -1956,3 +1988,4 @@ if __name__ == '__main__':
     # print(get_twitchtv_stream_data(room_url, proxy_addr=''))
     # print(get_liveme_stream_url(room_url, proxy_addr=''))
     # print(get_huajiao_stream_url(room_url, proxy_addr=''))
+    # print(get_liuxing_stream_url(room_url, proxy_addr=''))
