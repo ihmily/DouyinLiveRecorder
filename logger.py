@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 
 from loguru import logger
-import os
+import os, sys
 
-script_path = os.path.split(os.path.realpath(__file__))[0]
+script_path = os.path.split(os.path.realpath(sys.argv[0]))[0]
 logger.add(
     f"{script_path}/logs/PlayURL.log",
     level="INFO",

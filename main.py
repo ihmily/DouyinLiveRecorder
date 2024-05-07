@@ -91,7 +91,7 @@ not_record_list = []
 start_display_time = datetime.datetime.now()
 global_proxy = False
 recording_time_list = {}
-script_path = os.path.split(os.path.realpath(__file__))[0]
+script_path = os.path.split(os.path.realpath(sys.argv[0]))[0]
 config_file = f'{script_path}/config/config.ini'
 url_config_file = f'{script_path}/config/URL_config.ini'
 backup_dir = f'{script_path}/backup_config'
@@ -1611,7 +1611,6 @@ with open(os.devnull, 'wb') as dev_null:
         ffmpeg_path = f"{script_path}/ffmpeg.exe"
 # print(ffmpeg_path)
 ffmepg_file_check = subprocess.getoutput(ffmpeg_path)
-print(ffmepg_file_check)
 if ffmepg_file_check.find("run") > -1:
     # print("ffmpeg存在")
     pass
