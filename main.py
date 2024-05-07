@@ -1607,9 +1607,11 @@ def backup_file_start():
 with open(os.devnull, 'wb') as dev_null:
     try:
         subprocess.check_call(['ffmpeg', '--help'], stdout=dev_null, stderr=dev_null)
-    except subprocess.CalledProcessError as err:
+    except FileNotFoundError as err:
         ffmpeg_path = f"{script_path}/ffmpeg.exe"
-ffmepg_file_check = subprocess.getoutput("ffmpeg")
+print(ffmpeg_path)
+ffmepg_file_check = subprocess.getoutput(ffmpeg_path)
+print(ffmepg_file_check)
 if ffmepg_file_check.find("run") > -1:
     # print("ffmpeg存在")
     pass
