@@ -86,7 +86,7 @@
 
 - 如果要长时间挂着软件循环监测直播，最好循环时间设置长一点（咱也不差没录制到的那几分钟），避免因请求频繁导致被官方封禁IP 。
 
-- 要停止直播录制，使用`Ctrl+C ` 或直接关闭程序即可。
+- 要停止直播录制，使用 `Ctrl+C ` 或直接关闭程序即可。
 - 最后，欢迎右上角给本项目一个star，同时也非常乐意大家提交pr。
 
 &emsp;
@@ -299,17 +299,23 @@ docker-compose stop
 [![wwkk2580](https://github.com/wwkk2580.png?size=50)](https://github.com/wwkk2580)
 [![missuo](https://github.com/missuo.png?size=50)](https://github.com/missuo)
 <a href="https://github.com/xueli12" target="_blank"><img src="https://github.com/xueli12.png?size=50" alt="xueli12" style="width:53px; height:51px;" /></a>
+<a href="https://github.com/kaine1973" target="_blank"><img src="https://github.com/kaine1973.png?size=50" alt="kaine1973" style="width:53px; height:51px;" /></a>
 &emsp;
 
 ## ⏳提交日志
 
+- 20240508
+  - 修复花椒直播录制
+  
+  - 更改文件路径解析方式 [@kaine1973](https://github.com/kaine1973)
+  
 - 20240506
   - 修复抖音录制画质解析bug
-  
+
   - 修复虎牙录制 60帧最高画质问题
-  
+
   - 新增流星直播录制
-  
+
 - 20240427
   - 新增LiveMe、花椒直播录制
 

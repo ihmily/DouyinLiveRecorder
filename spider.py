@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub:https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-05-06 23:00:11
+Update: 2024-05-08 12:40:18
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -24,9 +24,9 @@ import execjs
 import urllib.request
 from utils import (
     trace_error_decorator,
-    update_config,
-    dict_to_cookie_str
+    update_config, dict_to_cookie_str
 )
+from logger import script_path
 import http.cookiejar
 
 no_proxy_handler = urllib.request.ProxyHandler({})
@@ -1790,7 +1790,7 @@ def get_liveme_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies
     return result
 
 
-def get_huajiao_sn(live_id: str, cookies: Union[str, None] = None, proxy_addr: Union[str, None] = None):
+def get_huajiao_sn(url: str, cookies: Union[str, None] = None, proxy_addr: Union[str, None] = None):
     headers = {
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
         'referer': 'https://www.huajiao.com/',
@@ -1800,9 +1800,10 @@ def get_huajiao_sn(live_id: str, cookies: Union[str, None] = None, proxy_addr: U
     if cookies:
         headers['Cookie'] = cookies
 
-    url = f'https://www.huajiao.com/l/{live_id}'
+    live_id = url.split('?')[0].rsplit('/', maxsplit=1)[1]
+    api = f'https://www.huajiao.com/l/{live_id}'
     try:
-        html_str = get_req(url=url, proxy_addr=proxy_addr, headers=headers)
+        html_str = get_req(url=api, proxy_addr=proxy_addr, headers=headers)
         json_str = re.search('var feed = (.*?});', html_str).group(1)
         json_data = json.loads(json_str)
         sn = json_data['feed']['sn']
@@ -1811,7 +1812,7 @@ def get_huajiao_sn(live_id: str, cookies: Union[str, None] = None, proxy_addr: U
         live_id = url.split('?')[0].rsplit('/', maxsplit=1)[1]
         return nickname, sn, uid, live_id
     except Exception:
-        replace_url('./config/URL_config.ini', old=url, new='#' + url)
+        replace_url(f'{script_path}/config/URL_config.ini', old=url, new='#' + url)
         raise RuntimeError('获取直播间数据失败，花椒直播间地址非固定，请使用主播主页地址进行录制')
 
 
@@ -1847,11 +1848,8 @@ def get_huajiao_user_info(url: str, cookies: Union[str, None] = None, proxy_addr
             return anchor_name, None
 
     else:
-        live_id = url.split('?')[0].rsplit('/', maxsplit=1)[1]
-        data = get_huajiao_sn(live_id)
+        data = get_huajiao_sn(url)
         if data:
-            profile_url = f'https://www.huajiao.com/user/{data[2].split("?")[0]}'
-            replace_url('./config/URL_config.ini', old=url, new=profile_url)
             return data[0], data[1:]
         else:
             return '未知直播间', None
