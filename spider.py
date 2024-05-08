@@ -1484,7 +1484,7 @@ def get_twitcasting_stream_url(
 
     def get_data(header):
         html_str = get_req(url, proxy_addr=proxy_addr, headers=header)
-        anchor = re.search("<title>(.*?)\(@(.*?)\) 's Live - Twit", html_str)
+        anchor = re.search("<title>(.*?) \(@(.*?)\)  的直播 - Twit", html_str)
         status = re.search('data-is-onlive="(.*?)"\n\s+data-view-mode', html_str)
         movie_id = re.search('data-movie-id="(.*?)" data-audience-id', html_str)
         return f'{anchor.group(1).strip()}-{anchor.group(2)}-{movie_id.group(1)}', status.group(1)
