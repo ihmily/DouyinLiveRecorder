@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 
 from loguru import logger
+import os, sys
 
+script_path = os.path.split(os.path.realpath(sys.argv[0]))[0]
 logger.add(
-    "./logs/PlayURL.log",
+    f"{script_path}/logs/PlayURL.log",
     level="INFO",
     format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {message}",
     filter=lambda i: i["level"].name == "INFO",
@@ -14,7 +16,7 @@ logger.add(
 )
 
 logger.add(
-    "./logs/DouyinLiveRecorder.log",
+    f"{script_path}/logs/DouyinLiveRecorder.log",
     level="WARNING",
     serialize=False,
     enqueue=True,

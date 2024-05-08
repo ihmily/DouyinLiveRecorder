@@ -91,13 +91,14 @@ not_record_list = []
 start_display_time = datetime.datetime.now()
 global_proxy = False
 recording_time_list = {}
-config_file = './config/config.ini'
-url_config_file = './config/URL_config.ini'
-backup_dir = './backup_config'
+script_path = os.path.split(os.path.realpath(sys.argv[0]))[0]
+config_file = f'{script_path}/config/config.ini'
+url_config_file = f'{script_path}/config/URL_config.ini'
+backup_dir = f'{script_path}/backup_config'
 encoding = 'utf-8-sig'
 rstr = r"[\/\\\:\*\?\"\<\>\|&.。,，]"
 ffmpeg_path = "ffmpeg"  # ffmpeg文件路径
-default_path = os.getcwd() + '/downloads'
+default_path = f'{script_path}/downloads'
 os.makedirs(default_path, exist_ok=True)
 file_update_lock = threading.Lock()
 
@@ -1603,7 +1604,13 @@ def backup_file_start():
 
 
 # --------------------------检测是否存在ffmpeg-------------------------------------
-ffmepg_file_check = subprocess.getoutput("ffmpeg")
+with open(os.devnull, 'wb') as dev_null:
+    try:
+        subprocess.check_call(['ffmpeg', '--help'], stdout=dev_null, stderr=dev_null)
+    except FileNotFoundError as err:
+        ffmpeg_path = f"{script_path}/ffmpeg.exe"
+# print(ffmpeg_path)
+ffmepg_file_check = subprocess.getoutput(ffmpeg_path)
 if ffmepg_file_check.find("run") > -1:
     # print("ffmpeg存在")
     pass
@@ -1621,8 +1628,8 @@ print(f"GitHub: https://github.com/ihmily/DouyinLiveRecorder")
 print(f'支持平台: {platforms}')
 print('.....................................................')
 
-if not os.path.exists('./config'):
-    os.makedirs('./config')
+if not os.path.exists(f'{script_path}/config'):
+    os.makedirs(f'{script_path}/config')
 
 # 备份配置
 t3 = threading.Thread(target=backup_file_start, args=(), daemon=True)
