@@ -69,10 +69,9 @@ from utils import (
 )
 from msg_push import dingtalk, xizhi, tg_bot
 
-version = "v3.0.4"
+version = "v3.0.5"
 platforms = "\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|酷狗|LiveMe|花椒|流星" \
             "\n海外站点：TikTok|AfreecaTV|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV"
-
 
 recording = set()
 unrecording = set()
@@ -96,7 +95,7 @@ config_file = f'{script_path}/config/config.ini'
 url_config_file = f'{script_path}/config/URL_config.ini'
 backup_dir = f'{script_path}/backup_config'
 encoding = 'utf-8-sig'
-rstr = r"[\/\\\:\*\?\"\<\>\|&.。,，]"
+rstr = r"[\/\\\:\*\?\"\<\>\|&.。,， ]"
 ffmpeg_path = "ffmpeg"  # ffmpeg文件路径
 default_path = f'{script_path}/downloads'
 os.makedirs(default_path, exist_ok=True)
@@ -1084,12 +1083,13 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                 name_list.append(f'{record_url}|{record_url},主播: {anchor_name.strip()}')
                             run_once = True
 
+                        push_at = datetime.datetime.today().strftime('%Y-%m-%d %H:%M:%S')
                         if port_info['is_live'] is False:
                             print(f"\r{record_name} 等待直播... ")
 
                             if start_pushed:
                                 if over_show_push:
-                                    content = f"{record_name} 直播已结束！"
+                                    content = f"{record_name} 直播已结束！时间：{push_at}"
                                     push_pts = push_message(content)
                                     if push_pts:
                                         print(f'提示信息：已经将[{record_name}]直播状态消息推送至你的{push_pts}')
@@ -1102,7 +1102,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                             if live_status_push and not start_pushed:
                                 if begin_show_push:
                                     push_pts = push_message(
-                                        f"{content.split('...')[0]}，时间：{datetime.datetime.today()}")
+                                        f"{content.split('...')[0]}，时间：{push_at}")
                                     if push_pts:
                                         print(f'提示信息：已经将[{record_name}]直播状态消息推送至你的{push_pts}')
                                 start_pushed = True
