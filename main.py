@@ -1536,7 +1536,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
 
 def backup_file(file_path: str, backup_dir_path: str):
     """
-    备份配置文件到备份目录，分别保留最新 8 个文件
+    备份配置文件到备份目录，分别保留最新 6 个文件
     """
     try:
         if not os.path.exists(backup_dir_path):
@@ -1547,7 +1547,7 @@ def backup_file(file_path: str, backup_dir_path: str):
 
         backup_file_path = os.path.join(backup_dir_path, backup_file_name).replace("\\", "/")
         shutil.copy2(file_path, backup_file_path)
-        print(f'\r已备份配置文件 {file_path} 到 {backup_file_path}')
+        # print(f'\r已备份配置文件 {file_path} 到 {backup_file_path}')
 
         # 删除多余的备份文件
         files = os.listdir(backup_dir_path)
@@ -1557,20 +1557,18 @@ def backup_file(file_path: str, backup_dir_path: str):
         url_files.sort(key=lambda x: os.path.getmtime(os.path.join(backup_dir_path, x)))
         config_files.sort(key=lambda x: os.path.getmtime(os.path.join(backup_dir_path, x)))
 
-        while len(url_files) > 8:
+        while len(url_files) > 6:
             oldest_file = url_files[0]
             os.remove(os.path.join(backup_dir_path, oldest_file))
-            # print(f'\r已删除最旧的 URL_config.ini 备份文件 {oldest_file}')
             url_files = url_files[1:]
 
-        while len(config_files) > 8:
+        while len(config_files) > 6:
             oldest_file = config_files[0]
             os.remove(os.path.join(backup_dir_path, oldest_file))
-            # print(f'\r已删除最旧的 config.ini 备份文件 {oldest_file}')
             config_files = config_files[1:]
 
     except Exception as e:
-        print(f'\r备份配置文件 {file_path} 失败：{str(e)}')
+        logger.error(f'\r备份配置文件 {file_path} 失败：{str(e)}')
 
 
 def backup_file_start():
