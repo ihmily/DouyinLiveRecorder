@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
 
+import os
+import sys
+
 from loguru import logger
-import os, sys
 
 script_path = os.path.split(os.path.realpath(sys.argv[0]))[0]
 logger.add(
@@ -11,8 +13,8 @@ logger.add(
     filter=lambda i: i["level"].name == "INFO",
     serialize=False,
     enqueue=True,
-    rotation="12:00",
-    retention="10 days",
+    retention=1,
+    rotation="300 KB",
 )
 
 logger.add(
@@ -20,7 +22,6 @@ logger.add(
     level="WARNING",
     serialize=False,
     enqueue=True,
-    rotation="12:00",
-    retention="10 days",
+    retention=1,
+    rotation="100 KB",
 )
-
