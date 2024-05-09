@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-05-06 22:45:21
+Update: 2024-05-09 12:47:29
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -292,14 +292,6 @@ def get_douyin_stream_url(json_data: dict, video_quality: str) -> Dict[str, Any]
         flv_url_list = list(flv_url_dict.values())
         m3u8_url_dict = stream_url['hls_pull_url_map']
         m3u8_url_list = list(m3u8_url_dict.values())
-
-        top_qn = stream_url['live_core_sdk_data']['pull_data']['options']['qualities'][-1]['name']
-
-        if top_qn == '原画':
-            flv_url_head, flv_url_tail = flv_url_list[-1].split('.flv')
-            flv_url_list = [flv_url_head.rsplit('_', maxsplit=1)[0] + '.flv' + flv_url_tail] + flv_url_list
-            m3u8_url_head, m3u8_url_tail = m3u8_url_list[-1].split('.m3u8')
-            m3u8_url_list = [m3u8_url_head.rsplit('_', maxsplit=1)[0] + '/index.m3u8' + m3u8_url_tail] + m3u8_url_list
 
         while len(flv_url_list) < 5:
             flv_url_list.append(flv_url_list[-1])

@@ -2,9 +2,9 @@
 
 """
 Author: Hmily
-GitHub:https://github.com/ihmily
+GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-05-08 12:40:18
+Update: 2024-05-09 13:03:17
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -151,6 +151,7 @@ def get_douyin_stream_data(url: str, proxy_addr: Union[str, None] = None, cookie
         headers['Cookie'] = cookies
 
     try:
+        origin_url_list = None
         html_str = get_req(url=url, proxy_addr=proxy_addr, headers=headers)
         match_json_str = re.search(r'(\{\\"state\\":.*?)]\\n"]\)', html_str)
         if not match_json_str:
@@ -162,17 +163,50 @@ def get_douyin_stream_data(url: str, proxy_addr: Union[str, None] = None, cookie
         room_store = room_store.split(',"has_commerce_goods"')[0] + '}}}'
         json_data = json.loads(room_store)['roomInfo']['room']
         json_data['anchor_name'] = anchor_name
+        if 'status' in json_data and json_data['status'] == 4:
+            return json_data
+
+        match_json_str2 = re.search(r'"(\{\\"common\\":.*?)"]\)</script><script nonce=', html_str)
+        if match_json_str2:
+            json_str = match_json_str2.group(1).replace('\\', '').replace('"{', '{').replace('}"', '}').replace('u0026', '&')
+            json_data2 = json.loads(json_str)
+            if 'origin' in json_data2['data']:
+                origin_url_list = json_data2['data']['origin']['main']
+
+        else:
+            match_json_str3 = re.search('"origin":\{"main":(.*?),"dash"',html_str.replace('\\', '').replace('u0026', '&'), re.S)
+            if match_json_str3:
+                origin_url_list = json.loads(match_json_str3.group(1) + '}')
+
+        if origin_url_list:
+            origin_m3u8 = {'ORIGIN': origin_url_list["hls"]}
+            origin_flv = {'ORIGIN': origin_url_list["flv"]}
+            hls_pull_url_map = json_data['stream_url']['hls_pull_url_map']
+            flv_pull_url = json_data['stream_url']['flv_pull_url']
+            json_data['stream_url']['hls_pull_url_map'] = {**origin_m3u8, **hls_pull_url_map}
+            json_data['stream_url']['flv_pull_url'] = {**origin_flv, **flv_pull_url}
         return json_data
 
     except Exception as e:
         print(f'失败地址：{url} 准备切换解析方法{e}')
         web_rid = re.match('https://live.douyin.com/(\d+)', url).group(1)
-        headers['Cookie'] = 'sessionid=b03763e09810c59948fbd9c6ab5a667a'
-        url2 = f'https://live.douyin.com/webcast/room/web/enter/?aid=6383&app_name=douyin_web&live_id=1&web_rid={web_rid}'
+        url2 = f'https://live.douyin.com/webcast/room/web/enter/?aid=6383&app_name=douyin_web&live_id=1&device_platform=web&language=zh-CN&browser_language=zh-CN&browser_platform=Win32&browser_name=Chrome&browser_version=116.0.0.0&web_rid={web_rid}'
         json_str = get_req(url=url2, proxy_addr=proxy_addr, headers=headers)
         json_data = json.loads(json_str)['data']
         room_data = json_data['data'][0]
         room_data['anchor_name'] = json_data['user']['nickname']
+        live_core_sdk_data = room_data['stream_url']['live_core_sdk_data']
+        if live_core_sdk_data:
+            json_str = live_core_sdk_data['pull_data']['stream_data']
+            json_data = json.loads(json_str)
+            if 'origin' in json_data['data']:
+                origin_url_list = json_data['data']['origin']['main']
+                origin_m3u8 = {'ORIGIN': origin_url_list["hls"]}
+                origin_flv = {'ORIGIN': origin_url_list["flv"]}
+                hls_pull_url_map = room_data['stream_url']['hls_pull_url_map']
+                flv_pull_url = room_data['stream_url']['flv_pull_url']
+                room_data['stream_url']['hls_pull_url_map'] = {**origin_m3u8, **hls_pull_url_map}
+                room_data['stream_url']['flv_pull_url'] = {**origin_flv, **flv_pull_url}
         return room_data
 
 
