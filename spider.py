@@ -1874,7 +1874,7 @@ def get_huajiao_user_info(url: str, cookies: Union[str, None] = None, proxy_addr
 
         html_str = get_req(url=f'https://www.huajiao.com/user/{uid}', proxy_addr=proxy_addr, headers=headers)
         anchor_name = re.search('<title>(.*?)的主页.*</title>', html_str).group(1)
-        if 'rtop' in json_data['data']['feeds'][0]['feed']:
+        if json_data['data'] and 'rtop' in json_data['data']['feeds'][0]['feed']:
             live_id = json_data['data']['feeds'][0]['feed']['relateid']
             sn = json_data['data']['feeds'][0]['feed']['sn']
             return anchor_name, [sn, uid, live_id]
