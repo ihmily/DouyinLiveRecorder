@@ -252,7 +252,7 @@ python main.py
 docker-compose up
 ```
 
-可选 `-d` 在后台运行。第一次运行之后都可用 `docker-compose start`  启动已创建的容器。
+可选 `-d` 在后台运行。
 
 
 
@@ -304,11 +304,14 @@ docker-compose stop
 
 ## ⏳提交日志
 
+- 20240510
+  - 修复部分虎牙直播间录制错误
+  
 - 20240508
   - 修复花椒直播录制
-  
+
   - 更改文件路径解析方式 [@kaine1973](https://github.com/kaine1973)
-  
+
 - 20240506
   - 修复抖音录制画质解析bug
 
