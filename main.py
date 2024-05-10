@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-05-09 12:47:29
+Update: 2024-05-10 15:08:29
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -539,7 +539,7 @@ def get_bilibili_stream_url(json_data: dict, video_quality: str) -> Dict[str, An
         quality_list = {'10000': 'bluray', '400': '4000', '250': '2500', '150': '1500', '80': '800'}
         format_list = playurl_info['playurl']['stream'][1]['format']
         current_qn = format_list[0]['codec'][0]['current_qn']
-        if int(current_qn) != 10000:
+        if int(current_qn) != 10000 and len(format_list) > 1:
             stream_data = format_list[1]['codec'][0]
         else:
             stream_data = format_list[0]['codec'][0]
