@@ -1673,12 +1673,13 @@ def get_kugou_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies:
 
     json_str = get_req(url=app_api, proxy_addr=proxy_addr, headers=headers)
     json_data = json.loads(json_str)
-
     anchor_name = json_data['data']['normalRoomInfo']['nickName']
     result = {
         "anchor_name": anchor_name,
         "is_live": False,
     }
+    if not anchor_name:
+        raise RuntimeError('不支持音乐频道直播间录制，请切换直播间录制')
     live_status = json_data['data']['liveType']
     if live_status == 0:
         params = {
@@ -1700,7 +1701,7 @@ def get_kugou_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies:
         stream_data = json_data2['data']['lines']
         if stream_data:
             result["is_live"] = True
-            result['flv_url'] = stream_data[1]['streamProfiles'][0]['httpsFlv'][0]
+            result['flv_url'] = stream_data[-1]['streamProfiles'][0]['httpsFlv'][0]
             result['record_url'] = result['flv_url']
 
     return result
