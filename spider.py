@@ -235,8 +235,8 @@ def get_tiktok_stream_data(url: str, proxy_addr: Union[str, None] = None, cookie
         if 'UNEXPECTED_EOF_WHILE_READING' not in html_str:
             try:
                 json_str = re.findall(
-                    '<script id="SIGI_STATE" type="application/json">(.*?)</script><script id="SIGI_RETRY" type="application/json">',
-                    html_str)[0]
+                    '<script id="SIGI_STATE" type="application/json">(.*?)</script>',
+                    html_str, re.S)[0]
             except Exception:
                 raise ConnectionError("请检查你的网络是否可以正常访问TikTok网站")
             json_data = json.loads(json_str)
