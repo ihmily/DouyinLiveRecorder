@@ -1078,7 +1078,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                     else:
                         anchor_name = port_info.get("anchor_name", '')
 
-                    if anchor_name == '':
+                    if not port_info.get("anchor_name", ''):
                         print(f'序号{count_variable} 网址内容获取失败,进行重试中...获取失败的地址是:{url_data}')
                         warning_count += 1
                     else:
