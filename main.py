@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-05-10 15:08:29
+Update: 2024-06-10 23:20:11
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -310,14 +310,26 @@ def get_douyin_stream_url(json_data: dict, video_quality: str) -> Dict[str, Any]
 @trace_error_decorator
 def get_tiktok_stream_url(json_data: dict, video_quality: str) -> Dict[str, Any]:
     # TODO: 获取tiktok直播源地址
+
     if not json_data:
         return {"anchor_name": None, "is_live": False}
 
-    def get_video_quality_url(stream, q_key) -> Dict[str, str]:
-        return {
-            'hls': re.sub("https", "http", stream[q_key]['main']['hls']),
-            'flv': re.sub("https", "http", stream[q_key]['main']['flv']),
-        }
+    def get_video_quality_url(stream, q_key) -> list[dict[str, int | Any]]:
+        play_list = []
+        for key in stream:
+            url_info = stream[key]['main']
+            play_url = url_info[q_key]
+            sdk_params = url_info['sdk_params']
+            sdk_params = json.loads(sdk_params)
+            vbitrate = int(sdk_params['vbitrate'])
+            resolution = sdk_params['resolution']
+            if vbitrate != 0 and resolution:
+                width, height = map(int, resolution.split('x'))
+                play_list.append({'url': play_url, 'vbitrate': vbitrate, 'resolution': (width, height)})
+
+        play_list.sort(key=lambda x: x['vbitrate'], reverse=True)
+        play_list.sort(key=lambda x: (-x['vbitrate'], -x['resolution'][0], -x['resolution'][1]))
+        return play_list
 
     live_room = json_data['LiveRoom']['liveRoomUserInfo']
     user = live_room['user']
@@ -332,19 +344,21 @@ def get_tiktok_stream_url(json_data: dict, video_quality: str) -> Dict[str, Any]
     if status == 2:
         stream_data = live_room['liveRoom']['streamData']['pull_data']['stream_data']
         stream_data = json.loads(stream_data).get('data', {})
+        flv_url_list = get_video_quality_url(stream_data, 'flv')
+        m3u8_url_list = get_video_quality_url(stream_data, 'hls')
+        for item in flv_url_list:
+            print(f"FLV URL: {item['url']}, VBitrate: {item['vbitrate']} Resolution: {item['resolution']}")
 
-        quality_list: list = list(stream_data.keys())
-        while len(quality_list) < 5:
-            quality_list.append(quality_list[-1])
+        while len(flv_url_list) < 5:
+            flv_url_list.append(flv_url_list[-1])
+        while len(m3u8_url_list) < 5:
+            m3u8_url_list.append(m3u8_url_list[-1])
         video_qualities = {"原画": 0, "蓝光": 0, "超清": 1, "高清": 2, "标清": 3, '流畅': 4}
         quality_index = video_qualities.get(video_quality)
-        quality_key = quality_list[quality_index]
-        video_quality_urls = get_video_quality_url(stream_data, quality_key)
-        result['flv_url'] = video_quality_urls['flv']
-        result['m3u8_url'] = video_quality_urls['hls']
+        result['flv_url'] = flv_url_list[quality_index]['url']
+        result['m3u8_url'] = m3u8_url_list[quality_index]['url']
         result['is_live'] = True
-        result['record_url'] = result['flv_url'] if result['flv_url'] else result['m3u8_url']
-        result['record_url'] = re.sub("only_audio=1", "only_audio=0", result['record_url'])
+        result['record_url'] = flv_url_list[quality_index]['url']
     return result
 
 
