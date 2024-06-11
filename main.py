@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-06-10 23:20:11
+Update: 2024-06-11 22:21:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -346,8 +346,8 @@ def get_tiktok_stream_url(json_data: dict, video_quality: str) -> Dict[str, Any]
         stream_data = json.loads(stream_data).get('data', {})
         flv_url_list = get_video_quality_url(stream_data, 'flv')
         m3u8_url_list = get_video_quality_url(stream_data, 'hls')
-        for item in flv_url_list:
-            print(f"FLV URL: {item['url']}, VBitrate: {item['vbitrate']} Resolution: {item['resolution']}")
+        # for item in flv_url_list:
+        #     print(f"FLV URL: {item['url']}, VBitrate: {item['vbitrate']} Resolution: {item['resolution']}")
 
         while len(flv_url_list) < 5:
             flv_url_list.append(flv_url_list[-1])
