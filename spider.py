@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-06-11 22:16:51
+Update: 2024-06-12 12:35:17
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -137,6 +137,10 @@ def get_play_url_list(m3u8: str, proxy: Union[str, None] = None, header: Union[d
     for i in resp.split('\n'):
         if i.startswith('https://'):
             play_url_list.append(i.strip())
+    if not play_url_list:
+        for i in resp.split('\n'):
+            if i.strip().endswith('m3u8'):
+                play_url_list.append(i.strip())
     bandwidth_pattern = re.compile(r'BANDWIDTH=(\d+)')
     bandwidth_list = bandwidth_pattern.findall(resp)
     url_to_bandwidth = {url: int(bandwidth) for bandwidth, url in zip(bandwidth_list, play_url_list)}
@@ -1980,6 +1984,47 @@ def get_liuxing_stream_url(url: str, proxy_addr: Union[str, None] = None, cookie
     return result
 
 
+@trace_error_decorator
+def get_showroom_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
+        Dict[str, Any]:
+    headers = {
+        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+        'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0',
+    }
+    if cookies:
+        headers['Cookie'] = cookies
+
+    if '/room/profile' in url:
+        room_id = url.split('room_id=')[-1]
+    else:
+        html_str = get_req(url, proxy_addr=proxy_addr, headers=headers)
+        room_id = re.search('href="/room/profile\?room_id=(.*?)"', html_str).group(1)
+    info_api = f'https://www.showroom-live.com/api/live/live_info?room_id={room_id}'
+    json_str = get_req(info_api, proxy_addr=proxy_addr, headers=headers)
+    json_data = json.loads(json_str)
+    anchor_name = json_data['room_name']
+    result = {"anchor_name": anchor_name, "is_live": False}
+    live_status = json_data['live_status']
+    if live_status == 2:
+        result["is_live"] = True
+        web_api = f'https://www.showroom-live.com/api/live/streaming_url?room_id={room_id}&abr_available=1'
+        json_str = get_req(web_api, proxy_addr=proxy_addr, headers=headers)
+        if json_str:
+            json_data = json.loads(json_str)
+            streaming_url_list = json_data['streaming_url_list']
+
+            for i in streaming_url_list:
+                if i['type'] == 'hls_all':
+                    m3u8_url = i['url']
+                    result['m3u8_url'] = m3u8_url
+                    if m3u8_url:
+                        m3u8_url_list = get_play_url_list(m3u8_url, proxy=proxy_addr, header=headers, abroad=False)
+                        result['play_url_list'] = [f"{m3u8_url.rsplit('/', maxsplit=1)[0]}/{i}" for i in m3u8_url_list]
+                        break
+    return result
+
+
 if __name__ == '__main__':
     # 尽量用自己的cookie，以避免默认的不可用导致无法获取数据
     # 以下示例链接不保证时效性，请自行查看链接是否能正常访问
@@ -2018,6 +2063,8 @@ if __name__ == '__main__':
     # room_url = 'https://www.liveme.com/zh/v/17141937295821012854/index.html'  # LiveMe
     # room_url = 'https://www.huajiao.com/user/223184650'  # 花椒直播
     # room_url = 'https://www.7u66.com/100960'  # 流星直播
+    # room_url = 'https://www.showroom-live.com/room/profile?room_id=511033'  # showroom
+    # room_url = 'https://www.showroom-live.com/r/TPS0728'  # showroom
 
     print(get_douyin_stream_data(room_url, proxy_addr=''))
     # print(get_tiktok_stream_data(room_url, proxy_addr=''))
@@ -2047,3 +2094,4 @@ if __name__ == '__main__':
     # print(get_liveme_stream_url(room_url, proxy_addr=''))
     # print(get_huajiao_stream_url(room_url, proxy_addr=''))
     # print(get_liuxing_stream_url(room_url, proxy_addr=''))
+    # print(get_showroom_stream_data(room_url, proxy_addr=''))

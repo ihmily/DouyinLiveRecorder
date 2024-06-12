@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-06-11 22:21:00
+Update: 2024-06-12 12:41:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -56,7 +56,8 @@ from spider import (
     get_twitchtv_stream_data,
     get_liveme_stream_url,
     get_huajiao_stream_url,
-    get_liuxing_stream_url
+    get_liuxing_stream_url,
+    get_showroom_stream_data
 )
 
 from web_rid import (
@@ -70,7 +71,7 @@ from utils import (
 from msg_push import dingtalk, xizhi, tg_bot
 
 version = "v3.0.5"
-platforms = "\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|酷狗|LiveMe|花椒|流星" \
+platforms = "\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|酷狗|LiveMe|花椒|流星|ShowRoom" \
             "\n海外站点：TikTok|AfreecaTV|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV"
 
 recording = set()
@@ -1065,6 +1066,13 @@ def start_record(url_data: tuple, count_variable: int = -1):
                         with semaphore:
                             port_info = get_liuxing_stream_url(
                                 url=record_url, proxy_addr=proxy_address, cookies=liuxing_cookie)
+
+                    elif record_url.find("showroom-live.com/") > -1:
+                        platform = 'ShowRoom'
+                        with semaphore:
+                            json_data = get_showroom_stream_data(
+                                url=record_url, proxy_addr=proxy_address, cookies=showroom_cookie)
+                            port_info = get_twitchtv_stream_url(json_data, record_quality)
                     else:
                         logger.error(f'{record_url} 未知直播地址')
                         return
@@ -1776,6 +1784,7 @@ while True:
     liveme_cookie = read_config_value(config, 'Cookie', 'liveme_cookie', '')
     huajiao_cookie = read_config_value(config, 'Cookie', 'huajiao_cookie', '')
     liuxing_cookie = read_config_value(config, 'Cookie', 'liuxing_cookie', '')
+    showroom_cookie = read_config_value(config, 'Cookie', 'showroom_cookie', '')
 
     if len(video_save_type) > 0:
         if video_save_type.upper().lower() == "FLV".lower():
@@ -1869,6 +1878,7 @@ while True:
                     'www.huajiao.com',
                     'www.7u66.com',
                     'wap.7u66.com',
+                    'www.showroom-live.com',
                 ]
                 overseas_platform_host = [
                     'www.tiktok.com',
