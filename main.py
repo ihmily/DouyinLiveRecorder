@@ -359,7 +359,7 @@ def get_tiktok_stream_url(json_data: dict, video_quality: str) -> Dict[str, Any]
         result['flv_url'] = flv_url_list[quality_index]['url']
         result['m3u8_url'] = m3u8_url_list[quality_index]['url']
         result['is_live'] = True
-        result['record_url'] = flv_url_list[quality_index]['url']
+        result['record_url'] = flv_url_list[quality_index]['url'].replace("https://", "http://")
     return result
 
 
