@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-06-12 12:41:00
+Update: 2024-06-13 21:33:10
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -891,7 +891,8 @@ def start_record(url_data: tuple, count_variable: int = -1):
                             port_info = get_bilibili_stream_url(json_data, record_quality)
 
                     elif record_url.find("https://www.redelight.cn/") > -1 or \
-                            record_url.find("https://www.xiaohongshu.com/") > -1:
+                            record_url.find("https://www.xiaohongshu.com/") > -1 or \
+                            record_url.find("http://xhslink.com/") > -1:
                         platform = '小红书直播'
                         if retry > 0:
                             time.sleep(7200)
@@ -1862,6 +1863,7 @@ while True:
                     'live.bilibili.com',
                     'www.redelight.cn',
                     'www.xiaohongshu.com',
+                    'xhslink.com',
                     'www.bigo.tv',
                     'app.blued.cn',
                     'cc.163.com',

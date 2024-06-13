@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-06-12 12:35:17
+Update: 2024-06-13 21:19:48
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -45,7 +45,8 @@ def get_req(
         json_data: Union[dict, list, None] = None,
         timeout: int = 20,
         abroad: bool = False,
-        content_conding: str = 'utf-8'
+        content_conding: str = 'utf-8',
+        redirect_url: bool = False,
 ) -> Union[str, Any]:
     if headers is None:
         headers = {}
@@ -60,6 +61,8 @@ def get_req(
                                          timeout=timeout)
             else:
                 response = requests.get(url, headers=headers, proxies=proxies, timeout=timeout)
+            if redirect_url:
+                return response.url
             resp_str = response.text
         else:
             if data and not isinstance(data, bytes):
@@ -74,6 +77,8 @@ def get_req(
                     response = urllib.request.urlopen(req, timeout=timeout)
                 else:
                     response = opener.open(req, timeout=timeout)
+                if redirect_url:
+                    return response.url
                 content_encoding = response.info().get('Content-Encoding')
                 try:
                     if content_encoding == 'gzip':
@@ -514,7 +519,11 @@ def get_xhs_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: U
     if cookies:
         headers['Cookie'] = cookies
 
-    appuid = re.search('appuid=(.*?)(?=&|$)', url).group(1)
+    if 'xhslink.com' in url:
+        url = get_req(url, proxy_addr=proxy_addr, headers=headers, redirect_url=True)
+        appuid = re.search('host_id=(.*?)(?=&|$)', url).group(1)
+    else:
+        appuid = re.search('appuid=(.*?)(?=&|$)', url).group(1)
     room_id = re.search('/livestream/(.*?)(?=/|\?)', url).group(1)
     app_api = f'https://www.xiaohongshu.com/api/sns/red/live/app/v1/ecology/outside/share_info?room_id={room_id}'
     # app_api = f'https://www.redelight.cn/api/sns/red/live/app/v1/ecology/outside/share_info?room_id={room_id}'
@@ -527,7 +536,7 @@ def get_xhs_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: U
         "is_live": False,
     }
 
-    # 这个判断不准确，无论是否在直播status都为0
+    # 这个判断不准确，无论是否在直播status都为0,暂无法判断
     if live_status == 0:
         flv_url = f'http://live-play.xhscdn.com/live/{room_id}.flv?uid={appuid}'
         result['flv_url'] = flv_url
@@ -2039,6 +2048,7 @@ if __name__ == '__main__':
     # room_url = 'https://live.bilibili.com/21593109'  # b站直播
     # room_url = 'https://live.bilibili.com/23448867'  # b站直播
     # 小红书直播
+    # room_url = 'http://xhslink.com/O9f9fM'
     # room_url = 'https://www.redelight.cn/hina/livestream/569077534207413574?appuid=5f3f478a00000000010005b3&'
     # room_url = 'https://www.xiaohongshu.com/hina/livestream/569098486282043893?appuid=5f3f478a00000000010005b3&'
     # room_url = 'https://www.bigo.tv/cn/716418802'  # bigo直播
