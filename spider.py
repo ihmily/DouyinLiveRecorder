@@ -1468,7 +1468,7 @@ def get_popkontv_stream_url(
 
 @trace_error_decorator
 def login_twitcasting(
-        username: str, password: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None
+        account_type: str, username: str, password: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None
 ) -> Union[str, None]:
     headers = {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
@@ -1482,7 +1482,13 @@ def login_twitcasting(
     if cookies:
         headers['Cookie'] = cookies
 
-    login_url = 'https://twitcasting.tv/indexcaslogin.php?redir=%2F&keep=1'
+    if account_type == "normal":
+        login_url = 'https://twitcasting.tv/indexcaslogin.php?redir=%2F&keep=1'
+        login_api = 'https://twitcasting.tv/indexcaslogin.php?redir=/indexloginwindow.php?next=%2F&keep=1'
+    else:
+        login_url = 'https://twitcasting.tv/indexpasswordlogin.php'
+        login_api = 'https://twitcasting.tv/indexpasswordlogin.php?redir=/indexloginwindow.php?next=%2F&keep=1'
+
     html_str = get_req(login_url, proxy_addr=proxy_addr, headers=headers)
     cs_session_id = re.search('<input type="hidden" name="cs_session_id" value="(.*?)">', html_str).group(1)
 
@@ -1492,9 +1498,6 @@ def login_twitcasting(
         'action': 'login',
         'cs_session_id': cs_session_id,
     }
-
-    login_api = 'https://twitcasting.tv/indexcaslogin.php?redir=/indexloginwindow.php?next=%2F&keep=1'
-
     try:
         if proxy_addr:
             proxies = {
@@ -1524,6 +1527,7 @@ def get_twitcasting_stream_url(
         url: str,
         proxy_addr: Union[str, None] = None,
         cookies: Union[str, None] = None,
+        account_type: Union[str, None] = None,
         username: Union[str, None] = None,
         password: Union[str, None] = None,
 ) -> Dict[str, Any]:
@@ -1552,7 +1556,7 @@ def get_twitcasting_stream_url(
         anchor_name, live_status = get_data(headers)
     except AttributeError:
         print('获取TwitCasting数据失败，正在尝试登录...')
-        new_cookie = login_twitcasting(username=username, password=password, proxy_addr=proxy_addr, cookies=cookies)
+        new_cookie = login_twitcasting(account_type=account_type, username=username, password=password, proxy_addr=proxy_addr, cookies=cookies)
         if not new_cookie:
             raise RuntimeError('TwitCasting登录失败,请检查配置文件中的账号密码是否正确')
         print('TwitCasting 登录成功！开始获取数据...')
