@@ -488,7 +488,7 @@ def get_huya_stream_url(json_data: dict, video_quality: str) -> Dict[str, Any]:
         result['flv_url'] = flv_url
         result['m3u8_url'] = m3u8_url
         result['is_live'] = True
-        result['record_url'] = flv_url  # m3u8经常会出现断流
+        result['record_url'] = flv_url
     return result
 
 
@@ -509,10 +509,12 @@ def get_douyu_stream_url(json_data: dict, cookies: str, video_quality: str, prox
 
     rid = str(json_data["room_id"])
     json_data.pop("room_id", None)
-    rate = video_quality_options.get(video_quality, '0')  # 默认为原画，只有登录后才能获取最高画质，需要配置cookie
+    rate = video_quality_options.get(video_quality, '0')
     flv_data = get_douyu_stream_data(rid, rate, cookies=cookies, proxy_addr=proxy_address)
-    flv_url = flv_data['data'].get('url', None)
-    if flv_url:
+    rtmp_url = flv_data['data'].get('rtmp_url', None)
+    rtmp_live = flv_data['data'].get('rtmp_live', None)
+    if rtmp_live:
+        flv_url = f'{rtmp_url}/{rtmp_live}'
         json_data['flv_url'] = flv_url
         json_data['record_url'] = flv_url
     return json_data
@@ -528,9 +530,8 @@ def get_yy_stream_url(json_data: dict) -> Dict[str, Any]:
     }
     if 'avp_info_res' in json_data:
         stream_line_addr = json_data['avp_info_res']['stream_line_addr']
-        # 获取最后一个键的值
         cdn_info = list(stream_line_addr.values())[0]
-        flv_url = cdn_info['cdn_info']['url']  # 清晰度暂时默认高清
+        flv_url = cdn_info['cdn_info']['url']
         result['flv_url'] = flv_url
         result['is_live'] = True
         result['record_url'] = flv_url

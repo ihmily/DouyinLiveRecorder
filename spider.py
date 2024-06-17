@@ -440,7 +440,8 @@ def get_douyu_stream_data(rid: str, rate: str = '-1', proxy_addr: Union[str, Non
         'rate': rate,  # 0蓝光、3超清、2高清、-1默认
     }
 
-    app_api = 'https://m.douyu.com/hgapi/livenc/room/getStreamUrl'
+    # app_api = 'https://m.douyu.com/hgapi/livenc/room/getStreamUrl'
+    app_api = f'https://www.douyu.com/lapi/live/getH5Play/{rid}'
     json_str = get_req(url=app_api, proxy_addr=proxy_addr, headers=headers, data=data)
     json_data = json.loads(json_str)
     return json_data
