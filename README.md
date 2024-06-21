@@ -41,6 +41,8 @@
 - [x] LiveMe
 - [x] 花椒直播
 - [x] 流星直播
+- [x] ShowRoom
+- [x] Acfun
 - [ ] 更多平台正在更新中
 
 </div>
@@ -118,6 +120,7 @@ B站：
 https://live.bilibili.com/320
 
 小红书：
+http://xhslink.com/xpJpfM
 https://www.xiaohongshu.com/hina/livestream/569077534207413574/1707413727088?appuid=5f3f478a00000000010005b3&
 
 bigo直播：
@@ -161,6 +164,7 @@ https://twitcasting.tv/c:uonq
 https://live.baidu.com/m/media/pclive/pchome/live.html?room_id=9175031377&tab_category
 
 微博直播:
+https://weibo.com/u/7676267963
 https://weibo.com/l/wblive/p/show/1022:2321325026370190442592
 
 酷狗直播:
@@ -177,6 +181,12 @@ https://www.huajiao.com/user/223184650
 
 流星直播:
 https://www.7u66.com/100960
+
+ShowRoom:
+https://www.showroom-live.com/room/profile?room_id=480206
+
+Acfun:
+https://live.acfun.cn/live/179922
 ```
 
 直播间分享地址和网页端长地址都能正常进行录制（抖音尽量用长链接，避免因短链接转换失效导致不能正常录制，而且需要有nodejs环境，否则无法转换）。
@@ -304,42 +314,42 @@ docker-compose stop
 
 ## ⏳提交日志
 
+- 20240621
+  - 新增Acfun、ShowRoom直播录制
+  - 修复微博录制、新增直播源线路
+  - 修复斗鱼直播60帧录制
+  - 修复酷狗直播录制
+  - 修复TikTok部分无法解析直播源
+  - 修复抖音无法录制连麦直播
+  
 - 20240510
   - 修复部分虎牙直播间录制错误
-  
 - 20240508
   - 修复花椒直播录制
 
   - 更改文件路径解析方式 [@kaine1973](https://github.com/kaine1973)
-
 - 20240506
   - 修复抖音录制画质解析bug
 
   - 修复虎牙录制 60帧最高画质问题
 
   - 新增流星直播录制
-
 - 20240427
   - 新增LiveMe、花椒直播录制
-
 - 20240425
   - 新增TwitchTV直播录制
-
 - 20240424
   - 新增酷狗直播录制、优化PopkonTV直播录制
-
 - 20240423
   - 新增百度直播录制、微博直播录制
 
   - 修复斗鱼录制直播回放的问题
 
   - 新增直播源地址显示以及输出到日志文件设置
-
 - 20240311
   - 修复海外平台录制bug，增加画质选择，增强录制稳定性
 
   - 修复虎牙录制bug (虎牙`一起看`频道 有特殊限制，有时无法录制)
-
 - 20240309
   - 修复虎牙直播、小红书直播和B站直播录制
   - 新增5个直播平台录制，包括winktv、flextv、look、popkontv、twitcasting
@@ -347,7 +357,6 @@ docker-compose stop
   - 新增自定义配置需要使用代理录制的平台
   - 新增只推送开播消息不进行录制设置
   - 修复了一些bug
-
 - 20240209
   - 优化AfreecaTV录制，新增账号密码登录获取cookie以及持久保存
   - 修复了小红书直播因官方更新直播域名，导致无法录制直播的问题
