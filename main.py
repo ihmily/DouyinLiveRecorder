@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-06-18 06:18:29
+Update: 2024-06-21 20:50:30
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -69,8 +69,8 @@ from utils import (
 from msg_push import dingtalk, xizhi, tg_bot
 
 version = "v3.0.6"
-platforms = "\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|酷狗|LiveMe|花椒|流星|ShowRoom|Acfun" \
-            "\n海外站点：TikTok|AfreecaTV|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV"
+platforms = "\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|酷狗|LiveMe|花椒|流星|Acfun" \
+            "\n海外站点：TikTok|AfreecaTV|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|ShowRoom"
 
 recording = set()
 unrecording = set()
@@ -1611,7 +1611,7 @@ while True:
     delete_origin_file = options.get(read_config_value(config, '录制设置', '追加格式后删除原文件', "否"), False)
     create_time_file = options.get(read_config_value(config, '录制设置', '生成时间文件', "否"), False)
     enable_proxy_platform = read_config_value(config, '录制设置', '使用代理录制的平台（逗号分隔）',
-                                              'tiktok, afreecatv, pandalive, winktv, flextv, popkontv')
+                                              'tiktok, afreecatv, pandalive, winktv, flextv, popkontv, twitch, showroom')
     enable_proxy_platform_list = enable_proxy_platform.replace('，', ',').split(',') if enable_proxy_platform else None
     extra_enable_proxy = read_config_value(config, '录制设置', '额外使用代理录制的平台（逗号分隔）', '')
     extra_enable_proxy_platform_list = extra_enable_proxy.replace('，', ',').split(',') if extra_enable_proxy else None
@@ -1758,7 +1758,6 @@ while True:
                     'www.huajiao.com',
                     'www.7u66.com',
                     'wap.7u66.com',
-                    'www.showroom-live.com',
                     'live.acfun.cn',
                     'm.acfun.cn'
                 ]
@@ -1771,6 +1770,7 @@ while True:
                     'www.flextv.co.kr',
                     'www.popkontv.com',
                     'www.twitch.tv',
+                    'www.showroom-live.com'
                 ]
 
                 platform_host.extend(overseas_platform_host)
