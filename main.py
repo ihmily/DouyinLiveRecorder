@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-06-22 17:39:46
+Update: 2024-06-22 19:07:46
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -633,11 +633,11 @@ def get_stream_url(json_data: dict, video_quality: str, url_type: str = 'm3u8', 
     }
     if url_type == 'm3u8':
         m3u8_url = play_url_list[selected_quality][extra_key] if extra_key else play_url_list[selected_quality]
-        data["m3u8_url"] = m3u8_url
-        data["record_url"] = json_data['m3u8_url'] if spec else m3u8_url
+        data["m3u8_url"] = json_data['m3u8_url'] if spec else m3u8_url
+        data["record_url"] = m3u8_url
     else:
         flv = play_url_list[selected_quality][extra_key] if extra_key else play_url_list[selected_quality]
-        data["m3u8_url"] = flv
+        data["flv_url"] = flv
         data["record_url"] = flv
 
     return data
@@ -1092,7 +1092,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                 rec_info = f"\r{anchor_name} 录制视频中: {full_path}"
                                 filename_short = full_path + '/' + anchor_name + '_' + now
                                 if show_url:
-                                    re_plat = ['WinkTV', 'PandaTV']
+                                    re_plat = ['WinkTV', 'PandaTV', 'ShowRoom']
                                     if platform in re_plat:
                                         logger.info(f"{platform} | {anchor_name} | 直播源地址: {port_info['m3u8_url']}")
                                     else:
