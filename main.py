@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-06-21 20:50:30
+Update: 2024-06-22 17:39:46
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -82,9 +82,8 @@ url_tuples_list = []
 text_no_repeat_url = []
 create_var = locals()
 first_start = True
-name_list = []
+need_update_line_list = []
 first_run = True
-live_list = []
 not_record_list = []
 start_display_time = datetime.datetime.now()
 global_proxy = False
@@ -110,7 +109,6 @@ signal.signal(signal.SIGTERM, signal_handler)
 
 def display_info():
     global start_display_time
-    global recording_time_list
     time.sleep(5)
     while True:
         try:
@@ -175,6 +173,17 @@ def update_file(file_path: str, old_str: str, new_str: str, start_str: str = Non
             f.write(file_data)
 
 
+def delete_line(file_path: str, del_line: str):
+    with file_update_lock:
+        with open(file_path, 'r+', encoding='utf-8') as f:
+            lines = f.readlines()
+            f.seek(0)
+            f.truncate()
+            for txt_line in lines:
+                if del_line not in txt_line:
+                    f.write(txt_line)
+
+
 def converts_mp4(address: str):
     if ts_to_mp4:
         _output = subprocess.check_output([
@@ -203,9 +212,9 @@ def converts_m4a(address: str):
                 os.remove(address)
 
 
-def create_ass_file(filegruop: list):
-    anchor_name = filegruop[0]
-    ass_filename = filegruop[1]
+def create_ass_file(file_gruop: list):
+    anchor_name = file_gruop[0]
+    ass_filename = file_gruop[1]
     index_time = -1
     finish = 0
     today = datetime.datetime.now()
@@ -652,9 +661,6 @@ def push_message(content: str) -> Union[str, list]:
 def start_record(url_data: tuple, count_variable: int = -1):
     global warning_count
     global video_save_path
-    global live_list
-    global not_record_list
-    global recording_time_list
     start_pushed = False
 
     while True:
@@ -690,7 +696,6 @@ def start_record(url_data: tuple, count_variable: int = -1):
                     port_info = []
                     if record_url.find("douyin.com/") > -1:
                         platform = '抖音直播'
-                        # 判断如果是浏览器长链接
                         with semaphore:
                             if 'live.douyin.com' in record_url:
                                 json_data = get_douyin_stream_data(
@@ -762,8 +767,12 @@ def start_record(url_data: tuple, count_variable: int = -1):
                             record_url.find("http://xhslink.com/") > -1:
                         platform = '小红书直播'
                         if retry > 0:
-                            time.sleep(7200)
-                            retry = 0
+                            delete_line(url_config_file, record_url)
+                            if record_url in runing_list:
+                                runing_list.remove(record_url)
+                                not_record_list.append(record_url)
+                                logger.info(f'{record_url} 小红书直播已结束，停止录制')
+                                return
                         with semaphore:
                             port_info = get_xhs_stream_url(url=record_url, proxy_addr=proxy_address, cookies=xhs_cookie)
                             retry += 1
@@ -973,14 +982,15 @@ def start_record(url_data: tuple, count_variable: int = -1):
 
                         if anchor_name in recording:
                             print(f"新增的地址: {anchor_name} 已经存在,本条线程将会退出")
-                            name_list.append(f'{record_url}|#{record_url}')
+                            need_update_line_list.append(f'{record_url}|#{record_url}')
                             return
 
                         if url_data[-1] == "" and run_once is False:
                             if is_long_url:
-                                name_list.append(f'{record_url}|{new_record_url},主播: {anchor_name.strip()}')
+                                need_update_line_list.append(
+                                    f'{record_url}|{new_record_url},主播: {anchor_name.strip()}')
                             else:
-                                name_list.append(f'{record_url}|{record_url},主播: {anchor_name.strip()}')
+                                need_update_line_list.append(f'{record_url}|{record_url},主播: {anchor_name.strip()}')
                             run_once = True
 
                         push_at = datetime.datetime.today().strftime('%Y-%m-%d %H:%M:%S')
@@ -1014,7 +1024,6 @@ def start_record(url_data: tuple, count_variable: int = -1):
                             real_url = port_info['record_url']
                             full_path = f'{default_path}/{platform}'
                             if len(real_url) > 0:
-                                live_list.append(anchor_name)
                                 now = datetime.datetime.today().strftime("%Y-%m-%d_%H-%M-%S")
 
                                 try:
@@ -1566,7 +1575,6 @@ def read_config_value(config_parser: configparser.RawConfigParser, section: str,
 options = {"是": True, "否": False}
 
 while True:
-    # 循环读取配置
     config = configparser.RawConfigParser()
 
     try:
@@ -1610,8 +1618,9 @@ while True:
                             False)
     delete_origin_file = options.get(read_config_value(config, '录制设置', '追加格式后删除原文件', "否"), False)
     create_time_file = options.get(read_config_value(config, '录制设置', '生成时间文件', "否"), False)
-    enable_proxy_platform = read_config_value(config, '录制设置', '使用代理录制的平台（逗号分隔）',
-                                              'tiktok, afreecatv, pandalive, winktv, flextv, popkontv, twitch, showroom')
+    enable_proxy_platform = read_config_value(
+        config, '录制设置', '使用代理录制的平台（逗号分隔）',
+        'tiktok, afreecatv, pandalive, winktv, flextv, popkontv, twitch, showroom')
     enable_proxy_platform_list = enable_proxy_platform.replace('，', ',').split(',') if enable_proxy_platform else None
     extra_enable_proxy = read_config_value(config, '录制设置', '额外使用代理录制的平台（逗号分隔）', '')
     extra_enable_proxy_platform_list = extra_enable_proxy.replace('，', ',').split(',') if extra_enable_proxy else None
@@ -1791,8 +1800,8 @@ while True:
                     print(f"\r{url} 未知链接.此条跳过")
                     update_file(url_config_file, url, url, start_str='#')
 
-        while len(name_list):
-            a = name_list.pop()
+        while len(need_update_line_list):
+            a = need_update_line_list.pop()
             replace_words = a.split('|')
             if replace_words[0] != replace_words[1]:
                 if replace_words[1].startswith("#"):
@@ -1808,6 +1817,7 @@ while True:
 
         if len(text_no_repeat_url) > 0:
             for url_tuple in text_no_repeat_url:
+                monitoring = len(runing_list)
                 if url_tuple[1] in not_record_list:
                     continue
 
