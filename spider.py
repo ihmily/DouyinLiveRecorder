@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-06-21 20:50:30
+Update: 2024-06-26 12:21:00
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -2081,7 +2081,11 @@ def get_showroom_stream_data(url: str, proxy_addr: Union[str, None] = None, cook
                     result['m3u8_url'] = m3u8_url
                     if m3u8_url:
                         m3u8_url_list = get_play_url_list(m3u8_url, proxy=proxy_addr, header=headers, abroad=True)
-                        result['play_url_list'] = [f"{m3u8_url.rsplit('/', maxsplit=1)[0]}/{i}" for i in m3u8_url_list]
+                        if m3u8_url_list:
+                            result['play_url_list'] = [f"{m3u8_url.rsplit('/', maxsplit=1)[0]}/{i}" for i in m3u8_url_list]
+                        else:
+                            result['play_url_list'] = [m3u8_url]
+                        result['play_url_list'] = [i.replace('https://', 'http://') for i in result['play_url_list']]
                         break
     return result
 

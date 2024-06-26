@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-06-22 19:07:46
+Update: 2024-06-26 12:41:30
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -94,7 +94,7 @@ url_config_file = f'{script_path}/config/URL_config.ini'
 backup_dir = f'{script_path}/backup_config'
 encoding = 'utf-8-sig'
 rstr = r"[\/\\\:\*\?\"\<\>\|&.。,， ]"
-ffmpeg_path = "ffmpeg"  # ffmpeg文件路径
+ffmpeg_path = f"{script_path}/ffmpeg.exe"  # ffmpeg文件路径
 default_path = f'{script_path}/downloads'
 os.makedirs(default_path, exist_ok=True)
 file_update_lock = threading.Lock()
@@ -1061,7 +1061,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                         break
 
                                 ffmpeg_command = [
-                                    ffmpeg_path, "-y",
+                                    'ffmpeg', "-y",
                                     "-v", "verbose",
                                     "-rw_timeout", "30000000",
                                     "-loglevel", "error",
@@ -1444,9 +1444,6 @@ def start_record(url_data: tuple, count_variable: int = -1):
 
 
 def backup_file(file_path: str, backup_dir_path: str):
-    """
-    备份配置文件到备份目录，分别保留最新 6 个文件
-    """
     try:
         if not os.path.exists(backup_dir_path):
             os.makedirs(backup_dir_path)
@@ -1459,8 +1456,8 @@ def backup_file(file_path: str, backup_dir_path: str):
         # print(f'\r已备份配置文件 {file_path} 到 {backup_file_path}')
 
         files = os.listdir(backup_dir_path)
-        url_files = [f for f in files if f.startswith('URL_config.ini')]
-        config_files = [f for f in files if f.startswith('config.ini')]
+        url_files = [f for f in files if f.startswith(os.path.basename(url_config_file))]
+        config_files = [f for f in files if f.startswith(os.path.basename(config_file))]
 
         url_files.sort(key=lambda x: os.path.getmtime(os.path.join(backup_dir_path, x)))
         config_files.sort(key=lambda x: os.path.getmtime(os.path.join(backup_dir_path, x)))
@@ -1502,19 +1499,31 @@ def backup_file_start():
 
 
 # --------------------------检测是否存在ffmpeg-------------------------------------
-with open(os.devnull, 'wb') as dev_null:
+def check_ffmpeg_existence():
+    dev_null = open(os.devnull, 'wb')
     try:
-        subprocess.check_call(['ffmpeg', '--help'], stdout=dev_null, stderr=dev_null)
-    except FileNotFoundError as err:
-        ffmpeg_path = f"{script_path}/ffmpeg.exe"
-# print(ffmpeg_path)
-ffmepg_file_check = subprocess.getoutput(ffmpeg_path)
-if ffmepg_file_check.find("run") > -1:
-    # print("ffmpeg存在")
-    pass
-else:
-    input("重要提示:\n\r检测到ffmpeg不存在,请将ffmpeg.exe放到同目录,或者设置为环境变量,没有ffmpeg将无法录制")
-    sys.exit(0)
+        subprocess.run(['ffmpeg', '--help'], stdout=dev_null, stderr=dev_null, check=True)
+    except subprocess.CalledProcessError as e:
+        logger.error(e)
+        return False
+    except FileNotFoundError:
+        ffmpeg_file_check = subprocess.getoutput(ffmpeg_path)
+        if ffmpeg_file_check.find("run") > -1 and os.path.isfile(ffmpeg_path):
+            os.environ['PATH'] += os.pathsep + os.path.dirname(os.path.abspath(ffmpeg_path))
+            # print(f"已将ffmpeg路径添加到环境变量：{ffmpeg_path}")
+            return True
+        else:
+            logger.error("检测到ffmpeg不存在,请将ffmpeg.exe放到同目录,或者设置为环境变量,没有ffmpeg将无法录制")
+            sys.exit(0)
+    finally:
+        dev_null.close()
+    return True
+
+
+if not check_ffmpeg_existence():
+    logger.error("ffmpeg检查失败，程序将退出。")
+    sys.exit(1)
+
 
 # --------------------------初始化程序-------------------------------------
 print("-----------------------------------------------------")
@@ -1526,27 +1535,11 @@ print(f"GitHub: https://github.com/ihmily/DouyinLiveRecorder")
 print(f'支持平台: {platforms}')
 print('.....................................................')
 
-if not os.path.exists(f'{script_path}/config'):
-    os.makedirs(f'{script_path}/config')
+os.makedirs(os.path.dirname(config_file), exist_ok=True)
 
 # 备份配置
 t3 = threading.Thread(target=backup_file_start, args=(), daemon=True)
 t3.start()
-
-try:
-    # 录制国外平台时，如果开启了电脑全局/规则代理，可以正常录制，但强烈建议还是配置一下代理地址，否则非常不稳定
-    # 检测电脑是否开启了全局/规则代理（如果身处国外请忽略）
-    print('系统代理检测中，请耐心等待...')
-    response_g = urllib.request.urlopen("https://www.google.com/", timeout=15)
-    global_proxy = True
-    print('\r全局/规则网络代理已开启√')
-except HTTPError as err:
-    print(f"HTTP error occurred: {err.code} - {err.reason}")
-except URLError as err:
-    # print("URLError:", err.reason)
-    print('INFO：未检测到全局/规则网络代理，请检查代理配置（若无需录制海外直播请忽略此条提示）')
-except Exception as err:
-    print("An unexpected error occurred:", err)
 
 
 def read_config_value(config_parser: configparser.RawConfigParser, section: str, option: str, default_value: Any) \
@@ -1574,26 +1567,43 @@ def read_config_value(config_parser: configparser.RawConfigParser, section: str,
 
 options = {"是": True, "否": False}
 
+config = configparser.RawConfigParser()
+skip_proxy_check = options.get(read_config_value(config, '录制设置', '是否跳过代理检测（是/否）', "否"), False)
+
+try:
+    if skip_proxy_check:
+        global_proxy = True
+    else:
+        print('系统代理检测中，请耐心等待...')
+        response_g = urllib.request.urlopen("https://www.google.com/", timeout=15)
+        global_proxy = True
+        print('\r全局/规则网络代理已开启√')
+except HTTPError as err:
+    print(f"HTTP error occurred: {err.code} - {err.reason}")
+except URLError as err:
+    # print("URLError:", err.reason)
+    print('INFO：未检测到全局/规则网络代理，请检查代理配置（若无需录制海外直播请忽略此条提示）')
+except Exception as err:
+    print("An unexpected error occurred:", err)
+
 while True:
-    config = configparser.RawConfigParser()
 
     try:
-        with open(config_file, 'r', encoding=encoding) as file:
-            config.read_file(file)
-    except IOError:
-        with open(config_file, 'w', encoding=encoding) as file:
-            pass
+        if not os.path.isfile(config_file):
+            with open(config_file, 'w', encoding=encoding) as file:
+                pass
 
-    if os.path.isfile(url_config_file):
-        with open(url_config_file, 'r', encoding=encoding) as file:
-            ini_content = file.read()
-    else:
-        ini_content = ""
+        ini_URL_content = ''
+        if os.path.isfile(url_config_file):
+            with open(url_config_file, 'r', encoding=encoding) as file:
+                ini_URL_content = file.read().strip()
 
-    if len(ini_content) == 0:
-        input_url = input('请输入要录制的主播直播间网址（尽量使用PC网页端的直播间地址）:\n')
-        with open(url_config_file, 'a+', encoding=encoding) as file:
-            file.write(input_url)
+        if not ini_URL_content.strip():
+            input_url = input('请输入要录制的主播直播间网址（尽量使用PC网页端的直播间地址）:\n')
+            with open(url_config_file, 'w', encoding=encoding) as file:
+                file.write(input_url)
+    except OSError as err:
+        logger.error(f"发生 I/O 错误: {err}")
 
     video_save_path = read_config_value(config, '录制设置', '直播保存路径（不填则默认）', "")
     folder_by_author = options.get(read_config_value(config, '录制设置', '保存文件夹是否以作者区分', "是"), False)
@@ -1707,7 +1717,6 @@ while True:
         return re.search(pattern, string) is not None
 
 
-    # 读取URL_config.ini文件
     try:
         with open(url_config_file, "r", encoding=encoding, errors='ignore') as file:
             for line in file:
