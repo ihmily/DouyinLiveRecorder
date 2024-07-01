@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-06-26 12:21:00
+Update: 2024-07-01 23:04:00
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -401,6 +401,58 @@ def get_huya_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies:
     json_str = re.findall('stream: (\{"data".*?),"iWebDefaultBitRate"', html_str)[0]
     json_data = json.loads(json_str + '}')
     return json_data
+
+
+@trace_error_decorator
+def get_huya_app_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
+        Dict[str, Any]:
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.49(0x18003137) NetType/WIFI Language/zh_CN WeChat/8.0.49.33 CFNetwork/1474 Darwin/23.0.0',
+        'xweb_xhr': '1',
+        'referer': 'https://servicewechat.com/wx74767bf0b684f7d3/301/page-frame.html',
+        'accept-language': 'zh-CN,zh;q=0.9',
+    }
+
+    if cookies:
+        headers['Cookie'] = cookies
+    room_id = url.split('?')[0].rsplit('/', maxsplit=1)[-1]
+    params = {
+        'm': 'Live',
+        'do': 'profileRoom',
+        'roomid': room_id,
+        'showSecret': '1',
+    }
+    wx_app_api = f'https://mp.huya.com/cache.php?{urllib.parse.urlencode(params)}'
+    json_str = get_req(url=wx_app_api, proxy_addr=proxy_addr, headers=headers)
+    json_data = json.loads(json_str)
+    anchor_name = json_data['data']['profileInfo']['nick']
+    live_status = json_data['data']['realLiveStatus']
+    if live_status != 'ON':
+        return {'anchor_name': anchor_name, 'is_live': False}
+    else:
+        base_steam_info_list = json_data['data']['stream']['baseSteamInfoList']
+        play_url_list = []
+        for i in base_steam_info_list:
+            cdn_type = i['sCdnType']
+            stream_name = i['sStreamName']
+            s_flv_url = i['sFlvUrl']
+            flv_anti_code = i['sFlvAntiCode']
+            s_hls_url = i['sHlsUrl']
+            hls_anti_code = i['sHlsAntiCode']
+            play_url_list.append(
+                {
+                    'cdn_type': cdn_type,
+                    'm3u8_url': f'{s_hls_url}/{stream_name}.m3u8?{hls_anti_code}',
+                    'flv_url': f'{s_flv_url}/{stream_name}.flv?{flv_anti_code}',
+                }
+            )
+        return {
+            'anchor_name': anchor_name,
+            'is_live': True,
+            'm3u8_url': play_url_list[0]['m3u8_url'],
+            'flv_url': play_url_list[0]['flv_url'],
+            'record_url': play_url_list[0]['flv_url'],
+        }
 
 
 def md5(data):
@@ -2204,6 +2256,7 @@ if __name__ == '__main__':
     # print(get_tiktok_stream_data(room_url, proxy_addr=''))
     # print(get_kuaishou_stream_data2(room_url, proxy_addr=''))
     # print(get_huya_stream_data(room_url, proxy_addr=''))
+    # print(get_huya_app_stream_url(room_url, proxy_addr=''))
     # print(get_douyu_info_data(room_url, proxy_addr=''))
     # print(get_douyu_stream_data("4921614", proxy_addr=''))
     # print(get_yy_stream_data(room_url, proxy_addr=''))

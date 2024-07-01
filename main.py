@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-07-01 22:19:30
+Update: 2024-07-01 22:36:12
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -59,7 +59,8 @@ from spider import (
     get_huajiao_stream_url,
     get_liuxing_stream_url,
     get_showroom_stream_data,
-    get_acfun_stream_data
+    get_acfun_stream_data,
+    get_huya_app_stream_url
 )
 
 from utils import (
@@ -733,11 +734,18 @@ def start_record(url_data: tuple, count_variable: int = -1):
                     elif record_url.find("https://www.huya.com/") > -1:
                         platform = '虎牙直播'
                         with semaphore:
-                            json_data = get_huya_stream_data(
-                                url=record_url,
-                                proxy_addr=proxy_address,
-                                cookies=hy_cookie)
-                            port_info = get_huya_stream_url(json_data, record_quality)
+                            if record_quality not in ['原画', '蓝光', '超清']:
+                                json_data = get_huya_stream_data(
+                                    url=record_url,
+                                    proxy_addr=proxy_address,
+                                    cookies=hy_cookie)
+                                port_info = get_huya_stream_url(json_data, record_quality)
+                            else:
+                                port_info = get_huya_app_stream_url(
+                                    url=record_url,
+                                    proxy_addr=proxy_address,
+                                    cookies=hy_cookie
+                                )
 
                     elif record_url.find("https://www.douyu.com/") > -1:
                         platform = '斗鱼直播'
