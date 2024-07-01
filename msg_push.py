@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-09-03 19:18:36
-Update: 2024-01-16 02:31:36
+Update: 2024-07-01 22:16:36
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 """
 
@@ -23,7 +23,7 @@ def dingtalk(url: str, content: str, phone_number: Optional[str] = '') -> Dict[s
     json_data = {
         'msgtype': 'text',
         'text': {
-            'content': '直播间状态更新：\n' + content,
+            'content': content,
         },
         "at": {
             "atMobiles": [
@@ -77,7 +77,9 @@ if __name__ == '__main__':
     # dingtalk(webhook_api, content, phone_number)
 
     # 微信推送通知
-    xizhi_api = 'https://xizhi.qqoq.net/XZa5a4a224987c88ab828acbcc0aa4c853.send'  # 替换成自己的单点推送接口,获取地址：https://xz.qqoq.net/#/admin/one
+    # 替换成自己的单点推送接口,获取地址：https://xz.qqoq.net/#/admin/one
+    # 当然也可以使用其他平台API 如server酱 使用方法一样
+    xizhi_api = 'https://xizhi.qqoq.net/XZa5a4a224987c88ab828acbcc0aa4c853.send'
     # xizhi(xizhi_api, content)
 
     # telegram推送通知

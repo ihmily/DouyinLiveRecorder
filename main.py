@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-06-26 12:41:30
+Update: 2024-07-01 22:19:30
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -999,8 +999,12 @@ def start_record(url_data: tuple, count_variable: int = -1):
 
                             if start_pushed:
                                 if over_show_push:
-                                    content = f"{record_name} 直播已结束！时间：{push_at}"
-                                    push_pts = push_message(content)
+                                    push_content = f"直播间状态更新：[直播间名称] 直播已结束！时间：[时间]"
+                                    if over_push_message_text:
+                                        push_content = over_push_message_text
+
+                                    push_content = push_content.replace('[直播间名称]', record_name).replace('[时间]', push_at)
+                                    push_pts = push_message(push_content.replace(r'\n', '\n'))
                                     if push_pts:
                                         print(f'提示信息：已经将[{record_name}]直播状态消息推送至你的{push_pts}')
                                 start_pushed = False
@@ -1008,11 +1012,14 @@ def start_record(url_data: tuple, count_variable: int = -1):
                             content = f"\r{record_name} 正在直播中..."
                             print(content)
 
-                            # 推送通知
                             if live_status_push and not start_pushed:
                                 if begin_show_push:
-                                    push_pts = push_message(
-                                        f"{content.split('...')[0]}，时间：{push_at}")
+                                    push_content = f"直播间状态更新：[直播间名称] 正在直播中，时间：[时间]"
+                                    if begin_push_message_text:
+                                        push_content = begin_push_message_text
+
+                                    push_content = push_content.replace('[直播间名称]', record_name).replace('[时间]', push_at)
+                                    push_pts = push_message(push_content.replace(r'\n', '\n'))
                                     if push_pts:
                                         print(f'提示信息：已经将[{record_name}]直播状态消息推送至你的{push_pts}')
                                 start_pushed = True
@@ -1640,6 +1647,8 @@ while True:
     dingtalk_phone_num = read_config_value(config, '推送配置', '钉钉通知@对象(填手机号)', "")
     tg_token = read_config_value(config, '推送配置', 'tgapi令牌', "")
     tg_chat_id = read_config_value(config, '推送配置', 'tg聊天id(个人或者群组id)', "")
+    begin_push_message_text = read_config_value(config, '推送配置', '自定义开播推送内容', "")
+    over_push_message_text = read_config_value(config, '推送配置', '自定义关播推送内容', "")
     disable_record = options.get(read_config_value(config, '推送配置', '只推送通知不录制（是/否）', "否"), False)
     push_check_seconds = int(read_config_value(config, '推送配置', '直播推送检测频率（秒）', 1800))
     begin_show_push = options.get(read_config_value(config, '推送配置', '开播推送开启（是/否）', "是"), True)
