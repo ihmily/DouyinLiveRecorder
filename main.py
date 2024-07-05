@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-07-01 22:36:12
+Update: 2024-07-05 12:36:12
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -60,7 +60,8 @@ from spider import (
     get_liuxing_stream_url,
     get_showroom_stream_data,
     get_acfun_stream_data,
-    get_huya_app_stream_url
+    get_huya_app_stream_url,
+    get_shiguang_stream_url
 )
 
 from utils import (
@@ -968,6 +969,11 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                 url=record_url, proxy_addr=proxy_address, cookies=acfun_cookie)
                             port_info = get_stream_url(json_data, record_quality, url_type='flv', extra_key='url')
 
+                    elif record_url.find("rengzu.com/") > -1:
+                        platform = '时光直播'
+                        with semaphore:
+                            port_info = get_shiguang_stream_url(
+                                url=record_url, proxy_addr=proxy_address, cookies=shiguang_cookie)
                     else:
                         logger.error(f'{record_url} 未知直播地址')
                         return
@@ -1700,6 +1706,7 @@ while True:
     liuxing_cookie = read_config_value(config, 'Cookie', 'liuxing_cookie', '')
     showroom_cookie = read_config_value(config, 'Cookie', 'showroom_cookie', '')
     acfun_cookie = read_config_value(config, 'Cookie', 'acfun_cookie', '')
+    shiguang_cookie = read_config_value(config, 'Cookie', 'shiguang_cookie', '')
 
     if len(video_save_type) > 0:
         if video_save_type.upper().lower() == "FLV".lower():
@@ -1794,7 +1801,9 @@ while True:
                     'www.7u66.com',
                     'wap.7u66.com',
                     'live.acfun.cn',
-                    'm.acfun.cn'
+                    'm.acfun.cn',
+                    'www.rengzu.com',
+                    'wap.rengzu.com',
                 ]
                 overseas_platform_host = [
                     'www.tiktok.com',

@@ -43,6 +43,7 @@
 - [x] 流星直播
 - [x] ShowRoom
 - [x] Acfun
+- [x] 时光直播
 - [ ] 更多平台正在更新中
 
 </div>
@@ -99,6 +100,7 @@
 抖音：
 https://live.douyin.com/745964462470
 https://v.douyin.com/iQFeBnt/
+https://live.douyin.com/yall1102
 
 TikTok：
 https://www.tiktok.com/@pearlgaga88/live
@@ -164,7 +166,7 @@ https://twitcasting.tv/c:uonq
 https://live.baidu.com/m/media/pclive/pchome/live.html?room_id=9175031377&tab_category
 
 微博直播:
-https://weibo.com/u/7676267963
+https://weibo.com/u/7676267963 （主页地址）
 https://weibo.com/l/wblive/p/show/1022:2321325026370190442592
 
 酷狗直播:
@@ -177,16 +179,19 @@ LiveMe:
 https://www.liveme.com/zh/v/17141543493018047815/index.html
 
 花椒直播:
-https://www.huajiao.com/user/223184650
+https://www.huajiao.com/user/223184650  （主页地址）
 
 流星直播:
 https://www.7u66.com/100960
 
 ShowRoom:
-https://www.showroom-live.com/room/profile?room_id=480206
+https://www.showroom-live.com/room/profile?room_id=480206  （主页地址）
 
 Acfun:
 https://live.acfun.cn/live/179922
+
+时光直播：
+https://www.rengzu.com/180778
 ```
 
 直播间分享地址和网页端长地址都能正常进行录制（抖音尽量用长链接，避免因短链接转换失效导致不能正常录制，而且需要有nodejs环境，否则无法转换）。
@@ -314,11 +319,14 @@ docker-compose stop
 
 ## ⏳提交日志
 
+- 20240705
+  - 新增时光直播录制
+  
 - 20240701
   - 修复虎牙直播录制2分钟断流问题
-  
+
   - 新增自定义直播推送内容
-  
+
 - 20240621
   - 新增Acfun、ShowRoom直播录制
   - 修复微博录制、新增直播源线路
