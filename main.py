@@ -979,11 +979,14 @@ def start_record(url_data: tuple, count_variable: int = -1):
                         return
 
                     if anchor_name:
-                        anchor_split: list = anchor_name.split('主播:')
-                        if len(anchor_split) > 1 and anchor_split[1].strip():
-                            anchor_name = anchor_split[1].strip()
-                        else:
-                            anchor_name = port_info.get("anchor_name", '')
+                        # 第一次从config中读取，带有'主播:'，去除'主播:'
+                        # 之后的线程循环，已经是处理后的结果，不需要去处理
+                        if '主播:' in anchor_name:
+                            anchor_split: list = anchor_name.split('主播:')
+                            if len(anchor_split) > 1 and anchor_split[1].strip():
+                                anchor_name = anchor_split[1].strip()
+                            else:
+                                anchor_name = port_info.get("anchor_name", '')
                     else:
                         anchor_name = port_info.get("anchor_name", '')
 
