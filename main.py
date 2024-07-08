@@ -164,7 +164,7 @@ def display_info():
 def update_file(file_path: str, old_str: str, new_str: str, start_str: str = None):
     # 如果待更新的new_str 和 已有的 old_str 没区别，并且 不需要使用注释(start_str)，则直接返回
     if old_str == new_str and start_str is None:
-        return 
+        return
     with file_update_lock:
         file_data = ""
         with open(file_path, "r", encoding="utf-8-sig") as f:
@@ -754,7 +754,8 @@ def start_record(url_data: tuple, count_variable: int = -1):
                     elif record_url.find("https://www.douyu.com/") > -1:
                         platform = '斗鱼直播'
                         with semaphore:
-                            json_data = get_douyu_info_data(url=record_url, proxy_addr=proxy_address)
+                            json_data = get_douyu_info_data(
+                                url=record_url, proxy_addr=proxy_address, cookies=douyu_cookie)
                             port_info = get_douyu_stream_url(
                                 json_data, proxy_address=proxy_address, cookies=douyu_cookie,
                                 video_quality=record_quality
