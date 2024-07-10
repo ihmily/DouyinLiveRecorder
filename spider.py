@@ -1590,12 +1590,12 @@ def login_twitcasting(
     if cookies:
         headers['Cookie'] = cookies
 
-    if account_type == "normal":
-        login_url = 'https://twitcasting.tv/indexcaslogin.php?redir=%2F&keep=1'
-        login_api = 'https://twitcasting.tv/indexcaslogin.php?redir=/indexloginwindow.php?next=%2F&keep=1'
-    else:
+    if account_type == "twitter":
         login_url = 'https://twitcasting.tv/indexpasswordlogin.php'
         login_api = 'https://twitcasting.tv/indexpasswordlogin.php?redir=/indexloginwindow.php?next=%2F&keep=1'
+    else:
+        login_url = 'https://twitcasting.tv/indexcaslogin.php?redir=%2F&keep=1'
+        login_api = 'https://twitcasting.tv/indexcaslogin.php?redir=/indexloginwindow.php?next=%2F&keep=1'
 
     html_str = get_req(login_url, proxy_addr=proxy_addr, headers=headers)
     cs_session_id = re.search('<input type="hidden" name="cs_session_id" value="(.*?)">', html_str).group(1)
@@ -1661,6 +1661,16 @@ def get_twitcasting_stream_url(
     result = {"anchor_name": '', "is_live": False}
 
     try:
+        to_login = get_params(url, "login")
+        if to_login == 'true':
+            print('TwitCasting正在尝试登录...')
+            new_cookie = login_twitcasting(account_type=account_type, username=username, password=password,
+                                           proxy_addr=proxy_addr, cookies=cookies)
+            if not new_cookie:
+                raise RuntimeError('TwitCasting登录失败,请检查配置文件中的账号密码是否正确')
+            print('TwitCasting 登录成功！开始获取数据...')
+            headers['Cookie'] = new_cookie
+            update_config('./config/config.ini', 'Cookie', 'twitcasting_cookie', new_cookie)
         anchor_name, live_status = get_data(headers)
     except AttributeError:
         print('获取TwitCasting数据失败，正在尝试登录...')
