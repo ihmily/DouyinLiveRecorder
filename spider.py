@@ -1833,7 +1833,7 @@ def get_kugou_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies:
     if not anchor_name:
         raise RuntimeError('不支持音乐频道直播间录制，请切换直播间录制')
     live_status = json_data['data']['liveType']
-    if live_status == 0:
+    if live_status != -1:
         params = {
             'std_rid': room_id,
             'std_plat': '7',
