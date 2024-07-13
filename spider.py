@@ -2273,6 +2273,43 @@ def get_shiguang_stream_url(url: str, proxy_addr: Union[str, None] = None, cooki
     return result
 
 
+@trace_error_decorator
+def get_yingke_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
+        Dict[str, Any]:
+    headers = {
+        'Referer': 'https://www.inke.cn/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0',
+    }
+    if cookies:
+        headers['Cookie'] = cookies
+
+    parsed_url = urllib.parse.urlparse(url)
+    query_params = urllib.parse.parse_qs(parsed_url.query)
+    uid = query_params['uid'][0]
+    live_id = query_params['id'][0]
+    params = {
+        'uid': uid,
+        'id': live_id,
+        '_t': str(int(time.time())),
+    }
+
+    api = f'https://webapi.busi.inke.cn/web/live_share_pc?{urllib.parse.urlencode(params)}'
+    json_str = get_req(api, proxy_addr=proxy_addr, headers=headers)
+    json_data = json.loads(json_str)
+    anchor_name = json_data['data']['media_info']['nick']
+    live_status = json_data['data']['status']
+
+    result = {"anchor_name": anchor_name, "is_live": False}
+    if live_status == 1:
+        m3u8_url = json_data['data']['live_addr'][0]['hls_stream_addr']
+        flv_url = json_data['data']['live_addr'][0]['stream_addr']
+        result["is_live"] = True
+        result["m3u8_url"] = m3u8_url
+        result["flv_url"] = flv_url
+        result["record_url"] = m3u8_url
+    return result
+
+
 if __name__ == '__main__':
     # 尽量用自己的cookie，以避免默认的不可用导致无法获取数据
     # 以下示例链接不保证时效性，请自行查看链接是否能正常访问
@@ -2316,6 +2353,7 @@ if __name__ == '__main__':
     # room_url = 'https://www.showroom-live.com/r/TPS0728'  # showroom
     # room_url = 'https://live.acfun.cn/live/17912421'  # Acfun
     # room_url = 'https://www.rengzu.com/180778'  # 时光直播
+    # room_url = 'https://www.inke.cn/liveroom/index.html?uid=710032101&id=1720857535354099'  # 映客直播
 
     print(get_douyin_stream_data(room_url, proxy_addr=''))
     # print(get_douyin_app_stream_data(room_url, proxy_addr=''))
@@ -2350,3 +2388,4 @@ if __name__ == '__main__':
     # print(get_showroom_stream_data(room_url, proxy_addr=''))
     # print(get_acfun_stream_data(room_url, proxy_addr=''))
     # print(get_shiguang_stream_url(room_url, proxy_addr=''))
+    # print(get_yingke_stream_url(room_url, proxy_addr=''))

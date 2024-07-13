@@ -61,7 +61,8 @@ from spider import (
     get_showroom_stream_data,
     get_acfun_stream_data,
     get_huya_app_stream_url,
-    get_shiguang_stream_url
+    get_shiguang_stream_url,
+    get_yingke_stream_url
 )
 
 from utils import (
@@ -70,9 +71,10 @@ from utils import (
 )
 from msg_push import dingtalk, xizhi, tg_bot
 
-version = "v3.0.6"
-platforms = "\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|酷狗|LiveMe|花椒|流星|Acfun" \
-            "\n海外站点：TikTok|AfreecaTV|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|ShowRoom"
+version = "v3.0.7"
+platforms = ("\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|"
+             "酷狗|LiveMe|花椒|流星|Acfun|时光|映客"
+             "\n海外站点：TikTok|AfreecaTV|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|ShowRoom")
 
 recording = set()
 unrecording = set()
@@ -96,7 +98,7 @@ url_config_file = f'{script_path}/config/URL_config.ini'
 backup_dir = f'{script_path}/backup_config'
 encoding = 'utf-8-sig'
 rstr = r"[\/\\\:\*\?\"\<\>\|&.。,， ]"
-ffmpeg_path = f"{script_path}/ffmpeg.exe"  # ffmpeg文件路径
+ffmpeg_path = f"{script_path}/ffmpeg.exe"
 default_path = f'{script_path}/downloads'
 os.makedirs(default_path, exist_ok=True)
 file_update_lock = threading.Lock()
@@ -978,6 +980,12 @@ def start_record(url_data: tuple, count_variable: int = -1):
                         with semaphore:
                             port_info = get_shiguang_stream_url(
                                 url=record_url, proxy_addr=proxy_address, cookies=shiguang_cookie)
+
+                    elif record_url.find("www.inke.cn/") > -1:
+                        platform = '映客直播'
+                        with semaphore:
+                            port_info = get_yingke_stream_url(
+                                url=record_url, proxy_addr=proxy_address, cookies=yingke_cookie)
                     else:
                         logger.error(f'{record_url} 未知直播地址')
                         return
@@ -1714,6 +1722,7 @@ while True:
     showroom_cookie = read_config_value(config, 'Cookie', 'showroom_cookie', '')
     acfun_cookie = read_config_value(config, 'Cookie', 'acfun_cookie', '')
     shiguang_cookie = read_config_value(config, 'Cookie', 'shiguang_cookie', '')
+    yingke_cookie = read_config_value(config, 'Cookie', 'yingke_cookie', '')
 
     if len(video_save_type) > 0:
         if video_save_type.upper().lower() == "FLV".lower():
@@ -1811,6 +1820,7 @@ while True:
                     'm.acfun.cn',
                     'www.rengzu.com',
                     'wap.rengzu.com',
+                    'www.inke.cn'
                 ]
                 overseas_platform_host = [
                     'www.tiktok.com',

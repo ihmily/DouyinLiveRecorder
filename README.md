@@ -44,6 +44,7 @@
 - [x] ShowRoom
 - [x] Acfun
 - [x] 时光直播
+- [x] 映客直播
 - [ ] 更多平台正在更新中
 
 </div>
@@ -192,6 +193,9 @@ https://live.acfun.cn/live/179922
 
 时光直播：
 https://www.rengzu.com/180778
+
+映客直播：
+https://www.inke.cn/liveroom/index.html?uid=22954469&id=1720860391070904
 ```
 
 直播间分享地址和网页端长地址都能正常进行录制（抖音尽量用长链接，避免因短链接转换失效导致不能正常录制，而且需要有nodejs环境，否则无法转换）。
@@ -315,13 +319,17 @@ docker-compose stop
 [![missuo](https://github.com/missuo.png?size=50)](https://github.com/missuo)
 <a href="https://github.com/xueli12" target="_blank"><img src="https://github.com/xueli12.png?size=50" alt="xueli12" style="width:53px; height:51px;" /></a>
 <a href="https://github.com/kaine1973" target="_blank"><img src="https://github.com/kaine1973.png?size=50" alt="kaine1973" style="width:53px; height:51px;" /></a>
+<a href="https://github.com/Max-Tortoise" target="_blank"><img src="https://github.com/Max-Tortoise.png?size=50" alt="Max-Tortoise" style="width:53px; height:51px;" /></a>
 &emsp;
 
 ## ⏳提交日志
 
+- 20240713
+  - 新增映客直播录制
+  
 - 20240705
   - 新增时光直播录制
-  
+
 - 20240701
   - 修复虎牙直播录制2分钟断流问题
 
