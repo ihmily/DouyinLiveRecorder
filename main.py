@@ -1801,7 +1801,7 @@ while True:
                     'www.xiaohongshu.com',
                     'xhslink.com',
                     'www.bigo.tv',
-                    'link.bigovideo.tv',
+                    'slink.bigovideo.tv',
                     'app.blued.cn',
                     'cc.163.com',
                     'qiandurebo.com',

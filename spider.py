@@ -590,9 +590,8 @@ def get_bilibili_stream_data(url: str, proxy_addr: Union[str, None] = None, cook
     if cookies:
         headers['Cookie'] = cookies
 
-    def get_data_from_api(link: str) -> Dict[str, Any]:
-        room_id = link.split('?')[0].rsplit('/', maxsplit=1)[1]
-        api = f'https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id={room_id}&no_playurl=0&mask=1&qn=0&platform=web&protocol=0,1&format=0,1,2&codec=0,1,2&dolby=5&panorama=1'
+    def get_data_from_api(rid: str) -> Dict[str, Any]:
+        api = f'https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id={rid}&no_playurl=0&mask=1&qn=0&platform=web&protocol=0,1&format=0,1,2&codec=0,1,2&dolby=5&panorama=1'
         json_str = get_req(url=api, proxy_addr=proxy_addr, headers=headers)
         return json.loads(json_str)
 
@@ -605,9 +604,13 @@ def get_bilibili_stream_data(url: str, proxy_addr: Union[str, None] = None, cook
             json_data['anchor_name'] = json_data['roomInfoRes']['data']['anchor_info']['base_info']['uname']
             json_data['stream_data'] = json_data['roomInitRes']['data']
         else:
-            json_data = get_data_from_api(url)
-            json_data['anchor_name'] = f"房间号{json_data['data']['room_id']}的直播"
+            room_id = url.split('?')[0].rsplit('/', maxsplit=1)[1]
+            json_data = get_data_from_api(room_id)
             json_data['stream_data'] = json_data['data']
+            info_api = f'https://api.live.bilibili.com/live_user/v1/UserInfo/get_anchor_in_room?roomid={room_id}'
+            json_str = get_req(info_api, proxy_addr=proxy_addr, headers=headers)
+            json_data['anchor_name'] = json.loads(json_str)['data']['info']['uname']
+
         return json_data
     except Exception as e:
         print(e)
