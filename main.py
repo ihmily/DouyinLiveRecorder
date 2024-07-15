@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-07-05 12:36:12
+Update: 2024-07-15 22:55:29
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -792,7 +792,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                             port_info = get_xhs_stream_url(url=record_url, proxy_addr=proxy_address, cookies=xhs_cookie)
                             retry += 1
 
-                    elif record_url.find("https://www.bigo.tv/") > -1:
+                    elif record_url.find("https://www.bigo.tv/") > -1 or record_url.find("slink.bigovideo.tv/") > -1:
                         platform = 'Bigo直播'
                         with semaphore:
                             port_info = get_bigo_stream_url(record_url, proxy_addr=proxy_address, cookies=bigo_cookie)
@@ -1801,6 +1801,7 @@ while True:
                     'www.xiaohongshu.com',
                     'xhslink.com',
                     'www.bigo.tv',
+                    'link.bigovideo.tv',
                     'app.blued.cn',
                     'cc.163.com',
                     'qiandurebo.com',

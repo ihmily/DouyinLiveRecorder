@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-07-05 12:33:00
+Update: 2024-07-15 22:55:00
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -664,7 +664,15 @@ def get_bigo_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: 
     if cookies:
         headers['Cookie'] = cookies
 
-    room_id = re.search('www.bigo.tv/cn/(\w+)', url).group(1)
+    if 'bigo.tv' not in url:
+        html_str = get_req(url, proxy_addr=proxy_addr, headers=headers)
+        web_url = re.search(
+            '<meta data-n-head="ssr" data-hid="al:web:url" property="al:web:url" content="(.*?)">',
+            html_str).group(1)
+        room_id = re.search('&h=(\d+)(?=$|&)', web_url.replace('&amp;', '&')).group(1)
+    else:
+        room_id = re.search('www.bigo.tv/cn/(\w+)', url).group(1)
+
     data = {'siteId': room_id}  # roomId
     url2 = 'https://ta.bigo.tv/official_website/studio/getInternalStudioInfo'
     json_str = get_req(url=url2, proxy_addr=proxy_addr, headers=headers, data=data)
@@ -682,8 +690,8 @@ def get_bigo_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: 
         result['is_live'] = True
         result['record_url'] = m3u8_url
     elif result['anchor_name'] == '':
-        html_str = get_req(url=url, proxy_addr=proxy_addr, headers=headers)
-        result['anchor_name'] = re.search('<title>(.*?)</title>', html_str, re.S).group(1)
+        html_str = get_req(url=f'https://www.bigo.tv/cn/{room_id}', proxy_addr=proxy_addr, headers=headers)
+        result['anchor_name'] = re.search('<title>欢迎来到(.*?)的直播间</title>', html_str, re.S).group(1)
 
     return result
 
@@ -2328,6 +2336,7 @@ if __name__ == '__main__':
     # room_url = 'https://www.redelight.cn/hina/livestream/569077534207413574?appuid=5f3f478a00000000010005b3&'
     # room_url = 'https://www.xiaohongshu.com/hina/livestream/569098486282043893?appuid=5f3f478a00000000010005b3&'
     # room_url = 'https://www.bigo.tv/cn/716418802'  # bigo直播
+    # room_url = 'https://slink.bigovideo.tv/uPvCVq'  # bigo直播
     # room_url = 'https://app.blued.cn/live?id=Mp6G2R'  # blued直播
     # room_url = 'https://play.afreecatv.com/sw7love'  # afreecatv直播
     # room_url = 'https://m.afreecatv.com/#/player/hl6260'  # afreecatv直播
