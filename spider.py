@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-07-20 20:41:12
+Update: 2024-07-22 00:03:00
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -196,11 +196,16 @@ def get_douyin_app_stream_data(url: str, proxy_addr: Union[str, None] = None, co
 
         if 'stream_url' not in room_data:
             raise RuntimeError('该直播类型或玩法电脑端暂未支持，请使用app端分享链接进行录制')
-        live_core_sdk_data = room_data['stream_url']['live_core_sdk_data']
 
         if room_data['status'] == 2:
+            live_core_sdk_data = room_data['stream_url']['live_core_sdk_data']
+            pull_datas = room_data['stream_url']['pull_datas']
             if live_core_sdk_data:
-                json_str = live_core_sdk_data['pull_data']['stream_data']
+                if pull_datas:
+                    key = list(pull_datas.keys())[0]
+                    json_str = pull_datas[key]['stream_data']
+                else:
+                    json_str = live_core_sdk_data['pull_data']['stream_data']
                 json_data = json.loads(json_str)
                 if 'origin' in json_data['data']:
                     origin_url_list = json_data['data']['origin']['main']
@@ -244,15 +249,16 @@ def get_douyin_stream_data(url: str, proxy_addr: Union[str, None] = None, cookie
         if 'status' in json_data and json_data['status'] == 4:
             return json_data
 
-        match_json_str2 = re.search(r'"(\{\\"common\\":.*?)"]\)</script><script nonce=', html_str)
+        match_json_str2 = re.findall(r'"(\{\\"common\\":.*?)"]\)</script><script nonce=', html_str)
         if match_json_str2:
-            json_str = match_json_str2.group(1).replace('\\', '').replace('"{', '{').replace('}"', '}').replace('u0026', '&')
-            json_data2 = json.loads(json_str)
+            json_str = match_json_str2[1] if len(match_json_str2) > 1 else match_json_str2[0]
+            json_data2 = json.loads(json_str.replace('\\', '').replace('"{', '{').replace('}"', '}').replace('u0026', '&'))
             if 'origin' in json_data2['data']:
                 origin_url_list = json_data2['data']['origin']['main']
 
         else:
-            match_json_str3 = re.search('"origin":\{"main":(.*?),"dash"',html_str.replace('\\', '').replace('u0026', '&'), re.S)
+            html_str = html_str.replace('\\', '').replace('u0026', '&')
+            match_json_str3 = re.search('"origin":\{"main":(.*?),"dash"', html_str, re.S)
             if match_json_str3:
                 origin_url_list = json.loads(match_json_str3.group(1) + '}')
 
