@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-07-15 22:55:00
+Update: 2024-07-20 20:41:12
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -580,7 +580,7 @@ def get_yy_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: U
 
 
 @trace_error_decorator
-def get_bilibili_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
+def get_bilibili_room_info(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
         Dict[str, Any]:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0',
@@ -590,31 +590,48 @@ def get_bilibili_stream_data(url: str, proxy_addr: Union[str, None] = None, cook
     if cookies:
         headers['Cookie'] = cookies
 
-    def get_data_from_api(rid: str) -> Dict[str, Any]:
-        api = f'https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id={rid}&no_playurl=0&mask=1&qn=0&platform=web&protocol=0,1&format=0,1,2&codec=0,1,2&dolby=5&panorama=1'
-        json_str = get_req(url=api, proxy_addr=proxy_addr, headers=headers)
-        return json.loads(json_str)
-
     try:
-        html_str = get_req(url=url, proxy_addr=proxy_addr, headers=headers)
-        json_str = re.search('<script>window.__NEPTUNE_IS_MY_WAIFU__=(.*?)</script><script>', html_str, re.S)
-        if json_str:
-            json_str = json_str.group(1)
-            json_data = json.loads(json_str)
-            json_data['anchor_name'] = json_data['roomInfoRes']['data']['anchor_info']['base_info']['uname']
-            json_data['stream_data'] = json_data['roomInitRes']['data']
-        else:
-            room_id = url.split('?')[0].rsplit('/', maxsplit=1)[1]
-            json_data = get_data_from_api(room_id)
-            json_data['stream_data'] = json_data['data']
-            info_api = f'https://api.live.bilibili.com/live_user/v1/UserInfo/get_anchor_in_room?roomid={room_id}'
-            json_str = get_req(info_api, proxy_addr=proxy_addr, headers=headers)
-            json_data['anchor_name'] = json.loads(json_str)['data']['info']['uname']
+        room_id = url.split('?')[0].rsplit('/', maxsplit=1)[1]
+        json_str = get_req(f'https://api.live.bilibili.com/room/v1/Room/room_init?id={room_id}',
+                           proxy_addr=proxy_addr,headers=headers)
+        room_info = json.loads(json_str)
+        uid = room_info['data']['uid']
+        live_status = True if room_info['data']['live_status'] == 1 else False
 
-        return json_data
+        api = f'https://api.live.bilibili.com/live_user/v1/Master/info?uid={uid}'
+        json_str2 = get_req(url=api, proxy_addr=proxy_addr, headers=headers)
+        anchor_info = json.loads(json_str2)
+        anchor_name = anchor_info['data']['info']['uname']
+        return {"anchor_name": anchor_name, "live_status": live_status, "room_url":url}
     except Exception as e:
         print(e)
-        return {"anchor_name": '', "is_live": False}
+        return {"anchor_name": '', "live_status": False, "room_url":url}
+
+
+@trace_error_decorator
+def get_bilibili_stream_data(url: str, qn: str = '10000', platform: str = 'web', proxy_addr: Union[str, None] = None,
+                             cookies: Union[str, None] = None) -> str:
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
+    }
+    if cookies:
+        headers['Cookie'] = cookies
+
+    room_id = url.split('?')[0].rsplit('/', maxsplit=1)[1]
+    params = {
+        'cid': room_id,
+        'qn': qn,
+        'platform': platform,
+    }
+    play_api = f'https://api.live.bilibili.com/room/v1/Room/playUrl?{urllib.parse.urlencode(params)}'
+    json_str = get_req(play_api, proxy_addr=proxy_addr, headers=headers)
+    json_data = json.loads(json_str)
+    for i in json_data['data']['durl']:
+        if 'd1--cn-gotcha' in i['url']:
+            return i['url']
+    return json_data['data']['durl'][-1]['url']
 
 
 @trace_error_decorator
