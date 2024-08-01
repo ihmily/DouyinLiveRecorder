@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-07-05 12:33:00
+Update: 2024-08-02 1:11:11
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
