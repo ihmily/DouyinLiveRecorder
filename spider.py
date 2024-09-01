@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-09-01 19:02:00
+Update: 2024-09-01 21:28:33
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -1045,6 +1045,7 @@ def get_qiandurebo_stream_data(url: str, proxy_addr: Union[str, None] = None, co
 def get_pandatv_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
         Dict[str, Any]:
     headers = {
+        'origin': 'https://www.pandalive.co.kr',
         'referer': 'https://www.pandalive.co.kr/',
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36 Edg/114.0.1823.58',
     }

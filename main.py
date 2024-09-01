@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-09-01 19:02:12
+Update: 2024-09-01 21:28:33
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -1063,6 +1063,10 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                         max_muxing_queue_size = "2048"
                                         break
 
+                                if platform == 'PandaTV':
+                                    headers = 'origin:https://www.pandalive.co.kr'
+                                else:
+                                    headers = ''
                                 ffmpeg_command = [
                                     'ffmpeg', "-y",
                                     "-v", "verbose",
@@ -1070,6 +1074,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                     "-loglevel", "error",
                                     "-hide_banner",
                                     "-user_agent", user_agent,
+                                    "-headers", headers,
                                     "-protocol_whitelist", "rtmp,crypto,file,http,https,tcp,tls,udp,rtp",
                                     "-thread_queue_size", "1024",
                                     "-analyzeduration", analyzeduration,
