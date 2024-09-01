@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-07-22 00:03:00
+Update: 2024-09-01 17:04:00
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -422,6 +422,15 @@ def get_huya_app_stream_url(url: str, proxy_addr: Union[str, None] = None, cooki
     if cookies:
         headers['Cookie'] = cookies
     room_id = url.split('?')[0].rsplit('/', maxsplit=1)[-1]
+
+    if any(char.isalpha() for char in room_id):
+        html_str = get_req(url, proxy_addr=proxy_addr, headers=headers)
+        room_id = re.search('ProfileRoom":(.*?),"sPrivateHost', html_str)
+        if room_id:
+            room_id = room_id.group(1)
+        else:
+            raise Exception('请使用 “https://www.huya.com/+数字房间号” 进行录制')
+
     params = {
         'm': 'Live',
         'do': 'profileRoom',
