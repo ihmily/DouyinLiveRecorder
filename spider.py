@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-09-01 17:04:00
+Update: 2024-09-01 19:02:00
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -663,10 +663,8 @@ def get_xhs_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: U
 
     if 'xhslink.com' in url:
         url = get_req(url, proxy_addr=proxy_addr, headers=headers, redirect_url=True)
-        appuid = re.search('host_id=(.*?)(?=&|$)', url).group(1)
-    else:
-        appuid = re.search('appuid=(.*?)(?=&|$)', url).group(1)
-    room_id = re.search('/livestream/(.*?)(?=/|\?)', url).group(1)
+
+    room_id = re.search('/livestream/(.*?)(?=/|\?|$)', url).group(1)
     app_api = f'https://www.xiaohongshu.com/api/sns/red/live/app/v1/ecology/outside/share_info?room_id={room_id}'
     # app_api = f'https://www.redelight.cn/api/sns/red/live/app/v1/ecology/outside/share_info?room_id={room_id}'
     json_str = get_req(url=app_api, proxy_addr=proxy_addr, headers=headers)
@@ -680,7 +678,7 @@ def get_xhs_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: U
 
     # 这个判断不准确，无论是否在直播status都为0,暂无法判断
     if live_status == 0:
-        flv_url = f'http://live-play.xhscdn.com/live/{room_id}.flv?uid={appuid}'
+        flv_url = f'http://live-play.xhscdn.com/live/{room_id}.flv'
         result['flv_url'] = flv_url
         result['is_live'] = True
         result['record_url'] = flv_url

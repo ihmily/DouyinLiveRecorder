@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-07-20 20:41:12
+Update: 2024-09-01 19:02:12
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -1809,8 +1809,7 @@ while True:
                         url = url.split('?')[0]
                     if url_host in ['www.xiaohongshu.com', 'www.redelight.cn']:
                         if 'share_source' in url:
-                            xhs_url_h, xhs_url_t, = url.split('?')
-                            new_xhs_url = xhs_url_h + '?appuid=' + xhs_url_t.split('&appuid=')[1].split('&')[0]
+                            new_xhs_url = url.split('?')[0]
                             update_file(url_config_file, url, new_xhs_url)
                             url = new_xhs_url
 
