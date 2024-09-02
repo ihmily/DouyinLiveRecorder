@@ -2351,6 +2351,50 @@ def get_yingke_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies
         result["record_url"] = m3u8_url
     return result
 
+@trace_error_decorator
+def get_yinbo_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
+        Dict[str, Any]:
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
+        'Referer': 'https://www.ybw1666.com/800005143?promoters=0',
+    }
+    if cookies:
+        headers['Cookie'] = cookies
+
+    room_id = url.split('?')[0].rsplit('/', maxsplit=1)[-1]
+    params = {
+        'roomidx': room_id,
+        'currentUrl': f'https://wap.ybw1666.com/{room_id}',
+    }
+    play_api = f'https://wap.ybw1666.com/api/ui/room/v1.0.0/live.ashx?{urllib.parse.urlencode(params)}'
+    json_str = get_req(play_api, proxy_addr=proxy_addr, headers=headers)
+    json_data = json.loads(json_str)
+    anchor_name = json_data['data']['roomInfo']['nickname']
+    live_status = json_data['data']['roomInfo']['live_stat']
+
+    def get_live_domain(page_url):
+        html_str = get_req(page_url, proxy_addr=proxy_addr, headers=headers)
+        config_json_str = re.findall("var config = (.*?)config.webskins",
+                                     html_str, re.S)[0].rsplit(";", maxsplit=1)[0].strip()
+        config_json_data = json.loads(config_json_str)
+        stream_flv_domain = config_json_data['domainpullstream_flv']
+        stream_hls_domain = config_json_data['domainpullstream_hls']
+        return stream_flv_domain, stream_hls_domain
+
+    result = {"anchor_name": anchor_name, "is_live": False}
+    if live_status == 1:
+        flv_domain, hls_domain = get_live_domain(url)
+        live_id = json_data['data']['roomInfo']['liveID']
+        flv_url = f'{flv_domain}/{live_id}.flv'
+        m3u8_url = f'{hls_domain}/{live_id}.m3u8'
+        result["is_live"] = True
+        result["m3u8_url"] = m3u8_url
+        result["flv_url"] = flv_url
+        result["record_url"] = flv_url
+    return result
+
 
 if __name__ == '__main__':
     # 尽量用自己的cookie，以避免默认的不可用导致无法获取数据
@@ -2397,7 +2441,8 @@ if __name__ == '__main__':
     # room_url = 'https://live.acfun.cn/live/17912421'  # Acfun
     # room_url = 'https://www.rengzu.com/180778'  # 时光直播
     # room_url = 'https://www.inke.cn/liveroom/index.html?uid=710032101&id=1720857535354099'  # 映客直播
-
+    # room_url = 'https://www.ybw1666.com/800002949'   #音播直播
+    
     print(get_douyin_stream_data(room_url, proxy_addr=''))
     # print(get_douyin_app_stream_data(room_url, proxy_addr=''))
     # print(get_tiktok_stream_data(room_url, proxy_addr=''))
@@ -2432,3 +2477,4 @@ if __name__ == '__main__':
     # print(get_acfun_stream_data(room_url, proxy_addr=''))
     # print(get_shiguang_stream_url(room_url, proxy_addr=''))
     # print(get_yingke_stream_url(room_url, proxy_addr=''))
+    # print(get_yinbo_stream_url(room_url, proxy_addr=''))
