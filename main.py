@@ -75,7 +75,7 @@ from msg_push import dingtalk, xizhi, tg_bot
 
 version = "v3.0.7"
 platforms = ("\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|"
-             "酷狗|LiveMe|花椒|流星|Acfun|时光|映客"
+             "酷狗|LiveMe|花椒|流星|Acfun|时光|映客|音播"
              "\n海外站点：TikTok|AfreecaTV|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|ShowRoom")
 
 recording = set()
