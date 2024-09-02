@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-09-01 21:28:33
+Update: 2024-09-02 23:46:33
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -248,11 +248,12 @@ def get_douyin_stream_data(url: str, proxy_addr: Union[str, None] = None, cookie
         json_data['anchor_name'] = anchor_name
         if 'status' in json_data and json_data['status'] == 4:
             return json_data
-
+        stream_orientation = json_data['stream_url']['stream_orientation']
         match_json_str2 = re.findall(r'"(\{\\"common\\":.*?)"]\)</script><script nonce=', html_str)
         if match_json_str2:
-            json_str = match_json_str2[1] if len(match_json_str2) > 1 else match_json_str2[0]
-            json_data2 = json.loads(json_str.replace('\\', '').replace('"{', '{').replace('}"', '}').replace('u0026', '&'))
+            json_str = match_json_str2[0] if stream_orientation == 1 else match_json_str2[1]
+            json_data2 = json.loads(
+                json_str.replace('\\', '').replace('"{', '{').replace('}"', '}').replace('u0026', '&'))
             if 'origin' in json_data2['data']:
                 origin_url_list = json_data2['data']['origin']['main']
 
@@ -505,7 +506,8 @@ def get_token_js(rid: str, did: str, proxy_addr: Union[str, None] = None) -> Uni
 
 
 @trace_error_decorator
-def get_douyu_info_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> Dict[str, Any]:
+def get_douyu_info_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> Dict[
+    str, Any]:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Linux; Android 11; SAMSUNG SM-G973U) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/14.2 Chrome/87.0.4280.141 Mobile Safari/537.36',
         'Referer': 'https://m.douyu.com/3125893?rid=3125893&dyshid=0-96003918aa5365bc6dcb4933000316p1&dyshci=181',
@@ -524,7 +526,8 @@ def get_douyu_info_data(url: str, proxy_addr: Union[str, None] = None, cookies: 
         json_data = json.loads(json_str)
         rid = json_data['pageProps']['room']['roomInfo']['roomInfo']['rid']
 
-    headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0'
+    headers[
+        'User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0'
     url2 = f'https://www.douyu.com/betard/{rid}'
     json_str = get_req(url=url2, proxy_addr=proxy_addr, headers=headers)
     json_data = json.loads(json_str)
@@ -608,7 +611,7 @@ def get_bilibili_room_info(url: str, proxy_addr: Union[str, None] = None, cookie
     try:
         room_id = url.split('?')[0].rsplit('/', maxsplit=1)[1]
         json_str = get_req(f'https://api.live.bilibili.com/room/v1/Room/room_init?id={room_id}',
-                           proxy_addr=proxy_addr,headers=headers)
+                           proxy_addr=proxy_addr, headers=headers)
         room_info = json.loads(json_str)
         uid = room_info['data']['uid']
         live_status = True if room_info['data']['live_status'] == 1 else False
@@ -617,10 +620,10 @@ def get_bilibili_room_info(url: str, proxy_addr: Union[str, None] = None, cookie
         json_str2 = get_req(url=api, proxy_addr=proxy_addr, headers=headers)
         anchor_info = json.loads(json_str2)
         anchor_name = anchor_info['data']['info']['uname']
-        return {"anchor_name": anchor_name, "live_status": live_status, "room_url":url}
+        return {"anchor_name": anchor_name, "live_status": live_status, "room_url": url}
     except Exception as e:
         print(e)
-        return {"anchor_name": '', "live_status": False, "room_url":url}
+        return {"anchor_name": '', "live_status": False, "room_url": url}
 
 
 @trace_error_decorator
@@ -2196,7 +2199,8 @@ def get_showroom_stream_data(url: str, proxy_addr: Union[str, None] = None, cook
                     if m3u8_url:
                         m3u8_url_list = get_play_url_list(m3u8_url, proxy=proxy_addr, header=headers, abroad=True)
                         if m3u8_url_list:
-                            result['play_url_list'] = [f"{m3u8_url.rsplit('/', maxsplit=1)[0]}/{i}" for i in m3u8_url_list]
+                            result['play_url_list'] = [f"{m3u8_url.rsplit('/', maxsplit=1)[0]}/{i}" for i in
+                                                       m3u8_url_list]
                         else:
                             result['play_url_list'] = [m3u8_url]
                         result['play_url_list'] = [i.replace('https://', 'http://') for i in result['play_url_list']]
@@ -2351,6 +2355,7 @@ def get_yingke_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies
         result["record_url"] = m3u8_url
     return result
 
+
 @trace_error_decorator
 def get_yinbo_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
         Dict[str, Any]:
@@ -2442,7 +2447,7 @@ if __name__ == '__main__':
     # room_url = 'https://www.rengzu.com/180778'  # 时光直播
     # room_url = 'https://www.inke.cn/liveroom/index.html?uid=710032101&id=1720857535354099'  # 映客直播
     # room_url = 'https://www.ybw1666.com/800002949'   #音播直播
-    
+
     print(get_douyin_stream_data(room_url, proxy_addr=''))
     # print(get_douyin_app_stream_data(room_url, proxy_addr=''))
     # print(get_tiktok_stream_data(room_url, proxy_addr=''))
