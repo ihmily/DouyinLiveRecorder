@@ -705,7 +705,7 @@ def get_bigo_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: 
         web_url = re.search(
             '<meta data-n-head="ssr" data-hid="al:web:url" property="al:web:url" content="(.*?)">',
             html_str).group(1)
-        room_id = re.search('&h=(\d+)(?=$|&)', web_url.replace('&amp;', '&')).group(1)
+        room_id = web_url.split('&amp;h=')[-1]
     else:
         room_id = re.search('www.bigo.tv/cn/(\w+)', url).group(1)
 
