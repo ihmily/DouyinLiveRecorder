@@ -91,7 +91,7 @@
 
 - 如果要长时间挂着软件循环监测直播，最好循环时间设置长一点（咱也不差没录制到的那几分钟），避免因请求频繁导致被官方封禁IP 。
 
-- 要停止直播录制，使用 `Ctrl+C ` 或直接关闭程序即可。
+- 要停止直播录制，在录制界面使用 `Ctrl+C ` 组合键中断录制。
 - 最后，欢迎右上角给本项目一个star，同时也非常乐意大家提交pr。
 
 &emsp;
@@ -201,8 +201,6 @@ https://www.inke.cn/liveroom/index.html?uid=22954469&id=1720860391070904
 音播直播：
 https://www.ybw1666.com/800002949
 ```
-
-直播间分享地址和网页端长地址都能正常进行录制（抖音尽量用长链接，避免因短链接转换失效导致不能正常录制，而且需要有nodejs环境，否则无法转换）。
 
 &emsp;
 
@@ -324,21 +322,22 @@ docker-compose stop
 <a href="https://github.com/xueli12" target="_blank"><img src="https://github.com/xueli12.png?size=50" alt="xueli12" style="width:53px; height:51px;" /></a>
 <a href="https://github.com/kaine1973" target="_blank"><img src="https://github.com/kaine1973.png?size=50" alt="kaine1973" style="width:53px; height:51px;" /></a>
 <a href="https://github.com/Max-Tortoise" target="_blank"><img src="https://github.com/Max-Tortoise.png?size=50" alt="Max-Tortoise" style="width:53px; height:51px;" /></a>
+[![justdoiting](https://github.com/justdoiting.png?size=50)](https://github.com/justdoiting)
 &emsp;
 
 ## ⏳提交日志
 
+- 20240903
+  - 新增抖音双屏录制、音播直播录制
+  - 修复PandaTV、bigo直播录制
 - 20240713
   - 新增映客直播录制
-  
 - 20240705
   - 新增时光直播录制
-
 - 20240701
   - 修复虎牙直播录制2分钟断流问题
 
   - 新增自定义直播推送内容
-
 - 20240621
   - 新增Acfun、ShowRoom直播录制
   - 修复微博录制、新增直播源线路
@@ -346,7 +345,6 @@ docker-compose stop
   - 修复酷狗直播录制
   - 修复TikTok部分无法解析直播源
   - 修复抖音无法录制连麦直播
-
 - 20240510
   - 修复部分虎牙直播间录制错误
 - 20240508
