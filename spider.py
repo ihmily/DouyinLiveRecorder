@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-09-02 23:46:33
+Update: 2024-09-10 00:49:00
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -707,7 +707,10 @@ def get_bigo_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: 
             html_str).group(1)
         room_id = web_url.split('&amp;h=')[-1]
     else:
-        room_id = re.search('www.bigo.tv/cn/(\w+)', url).group(1)
+        if '&h=' in url:
+            room_id = url.split('&h=')[-1]
+        else:
+            room_id = re.search('www.bigo.tv/cn/(\w+)', url).group(1)
 
     data = {'siteId': room_id}  # roomId
     url2 = 'https://ta.bigo.tv/official_website/studio/getInternalStudioInfo'
