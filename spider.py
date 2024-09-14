@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-09-10 00:49:00
+Update: 2024-09-14 12:18:00
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -2404,6 +2404,33 @@ def get_yinbo_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies:
     return result
 
 
+@trace_error_decorator
+def get_zhihu_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
+        Dict[str, Any]:
+    headers = {
+        'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
+        'user-agent': 'Mozilla/5.0 (iPad; CPU OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1 Edg/121.0.0.0',
+    }
+    if cookies:
+        headers['Cookie'] = cookies
+
+    web_id = url.split('?')[0].rsplit('/', maxsplit=1)[-1]
+    html_str = get_req(url, proxy_addr=proxy_addr, headers=headers)
+    json_str = re.findall('<script id="js-initialData" type="text/json">(.*?)</script>', html_str)[0]
+    json_data = json.loads(json_str)
+    live_data = json_data['initialState']['theater']['theaters'][web_id]
+    anchor_name = live_data['actor']['name']
+    live_status = live_data['drama']['status']
+    result = {"anchor_name": anchor_name, "is_live": False}
+    if live_status == 1:
+        play_url = live_data['drama']['playInfo']
+        result["is_live"] = True
+        result["m3u8_url"] = play_url['hlsUrl']
+        result["flv_url"] = play_url['playUrl']
+        result["record_url"] = play_url['hlsUrl']
+    return result
+
+
 if __name__ == '__main__':
     # 尽量用自己的cookie，以避免默认的不可用导致无法获取数据
     # 以下示例链接不保证时效性，请自行查看链接是否能正常访问
@@ -2449,7 +2476,8 @@ if __name__ == '__main__':
     # room_url = 'https://live.acfun.cn/live/17912421'  # Acfun
     # room_url = 'https://www.rengzu.com/180778'  # 时光直播
     # room_url = 'https://www.inke.cn/liveroom/index.html?uid=710032101&id=1720857535354099'  # 映客直播
-    # room_url = 'https://www.ybw1666.com/800002949'   #音播直播
+    # room_url = 'https://www.ybw1666.com/800002949'   # 音播直播
+    # room_url = 'https://www.zhihu.com/theater/114453'   # 知乎直播
 
     print(get_douyin_stream_data(room_url, proxy_addr=''))
     # print(get_douyin_app_stream_data(room_url, proxy_addr=''))
@@ -2486,3 +2514,4 @@ if __name__ == '__main__':
     # print(get_shiguang_stream_url(room_url, proxy_addr=''))
     # print(get_yingke_stream_url(room_url, proxy_addr=''))
     # print(get_yinbo_stream_url(room_url, proxy_addr=''))
+    # print(get_zhihu_stream_url(room_url, proxy_addr=''))

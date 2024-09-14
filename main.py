@@ -64,7 +64,8 @@ from spider import (
     get_huya_app_stream_url,
     get_shiguang_stream_url,
     get_yinbo_stream_url,
-    get_yingke_stream_url
+    get_yingke_stream_url,
+    get_zhihu_stream_url
 )
 
 from utils import (
@@ -75,16 +76,16 @@ from msg_push import dingtalk, xizhi, tg_bot
 
 version = "v3.0.7"
 platforms = ("\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|"
-             "酷狗|LiveMe|花椒|流星|Acfun|时光|映客|音播"
+             "酷狗|LiveMe|花椒|流星|Acfun|时光|映客|音播|知乎"
              "\n海外站点：TikTok|AfreecaTV|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|ShowRoom")
 
 recording = set()
-unrecording = set()
+not_recording = set()
 warning_count = 0
 max_request = 0
 pre_max_request = 0
 monitoring = 0
-runing_list = []
+running_list = []
 url_tuples_list = []
 text_no_repeat_url = []
 create_var = locals()
@@ -99,7 +100,7 @@ script_path = os.path.split(os.path.realpath(sys.argv[0]))[0]
 config_file = f'{script_path}/config/config.ini'
 url_config_file = f'{script_path}/config/URL_config.ini'
 backup_dir = f'{script_path}/backup_config'
-encoding = 'utf-8-sig'
+text_encoding = 'utf-8-sig'
 rstr = r"[\/\\\:\*\?\"\<\>\|&.。,， ]"
 ffmpeg_path = f"{script_path}/ffmpeg.exe"
 default_path = f'{script_path}/downloads'
@@ -142,7 +143,7 @@ def display_info():
             format_now_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
             print(f"当前时间: {format_now_time}")
 
-            if len(recording) == 0 and len(unrecording) == 0:
+            if len(recording) == 0 and len(not_recording) == 0:
                 time.sleep(5)
                 print(f"\r没有正在录制的直播 {format_now_time[-8:]}", end="")
                 print("")
@@ -169,12 +170,9 @@ def display_info():
 def update_file(file_path: str, old_str: str, new_str: str, start_str: str = None):
     if old_str == new_str and start_str is None:
         return
-
-    origin_file_data = ""
     with file_update_lock:
         file_data = ""
-        with open(file_path, "r", encoding="utf-8-sig") as f:
-            origin_file_data = f.read()
+        with open(file_path, "r", encoding=text_encoding) as f:
             try:
                 for text_line in f:
                     if old_str in text_line:
@@ -184,17 +182,17 @@ def update_file(file_path: str, old_str: str, new_str: str, start_str: str = Non
                     file_data += text_line
             except RuntimeError as e:
                 logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
-                if origin_file_data:
-                    with open(file_path, "w", encoding="utf-8-sig") as f2:
-                        f2.write(origin_file_data)
+                if ini_URL_content:
+                    with open(file_path, "w", encoding=text_encoding) as f2:
+                        f2.write(ini_URL_content)
         if file_data:
-            with open(file_path, "w", encoding="utf-8-sig") as f:
+            with open(file_path, "w", encoding=text_encoding) as f:
                 f.write(file_data)
 
 
 def delete_line(file_path: str, del_line: str):
     with file_update_lock:
-        with open(file_path, 'r+', encoding='utf-8') as f:
+        with open(file_path, 'r+', encoding=text_encoding) as f:
             lines = f.readlines()
             f.seek(0)
             f.truncate()
@@ -244,7 +242,7 @@ def create_ass_file(file_gruop: list):
         txt = str(index_time) + "\n" + transform_int_to_time(index_time) + ',000 --> ' + transform_int_to_time(
             index_time + 1) + ',000' + "\n" + str(re_datatime) + "\n"
 
-        with open(ass_filename + ".ass", 'a', encoding='utf8') as f:
+        with open(ass_filename + ".ass", 'a', encoding=text_encoding) as f:
             f.write(txt)
 
         if anchor_name not in recording:
@@ -419,8 +417,8 @@ def get_kuaishou_stream_url(json_data: dict, video_quality: str) -> Dict[str, An
 
 @trace_error_decorator
 def get_huya_stream_url(json_data: dict, video_quality: str) -> Dict[str, Any]:
-    game_live_info = json_data.get('data', [])[0].get('gameLiveInfo', {})
-    stream_info_list = json_data.get('data', [])[0].get('gameStreamInfoList', [])
+    game_live_info = json_data['data'][0]['gameLiveInfo']
+    stream_info_list = json_data['data'][0]['gameStreamInfoList']
     anchor_name = game_live_info.get('nick', '')
 
     result = {
@@ -761,8 +759,8 @@ def start_record(url_data: tuple, count_variable: int = -1):
                         platform = '小红书直播'
                         if retry > 0:
                             delete_line(url_config_file, record_url)
-                            if record_url in runing_list:
-                                runing_list.remove(record_url)
+                            if record_url in running_list:
+                                running_list.remove(record_url)
                                 not_record_list.append(record_url)
                                 logger.info(f'{record_url} 小红书直播已结束，停止录制')
                                 return
@@ -970,6 +968,13 @@ def start_record(url_data: tuple, count_variable: int = -1):
                         with semaphore:
                             port_info = get_yingke_stream_url(
                                 url=record_url, proxy_addr=proxy_address, cookies=yingke_cookie)
+
+                    elif record_url.find("www.zhihu.com/") > -1:
+                        platform = '知乎直播'
+                        with semaphore:
+                            port_info = get_zhihu_stream_url(
+                                url=record_url, proxy_addr=proxy_address, cookies=zhihu_cookie)
+
                     else:
                         logger.error(f'{record_url} 未知直播地址')
                         return
@@ -1068,12 +1073,14 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                               "KHTML, like Gecko) SamsungBrowser/14.2 Chrome/87.0.4280.141 Mobile "
                                               "Safari/537.36")
 
+                                rw_timeout = "15000000"
                                 analyzeduration = "20000000"
                                 probesize = "10000000"
                                 bufsize = "8000k"
                                 max_muxing_queue_size = "1024"
                                 for pt_host in overseas_platform_host:
                                     if pt_host in record_url:
+                                        rw_timeout = "50000000"
                                         analyzeduration = "40000000"
                                         probesize = "20000000"
                                         bufsize = "15000k"
@@ -1083,7 +1090,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                 ffmpeg_command = [
                                     'ffmpeg', "-y",
                                     "-v", "verbose",
-                                    "-rw_timeout", "30000000",
+                                    "-rw_timeout", rw_timeout,
                                     "-loglevel", "error",
                                     "-hide_banner",
                                     "-user_agent", user_agent,
@@ -1422,8 +1429,8 @@ def start_record(url_data: tuple, count_variable: int = -1):
                             if record_finished_2:
                                 if record_name in recording:
                                     recording.remove(record_name)
-                                if anchor_name in unrecording:
-                                    unrecording.add(anchor_name)
+                                if anchor_name in not_recording:
+                                    not_recording.add(anchor_name)
 
                                 if no_error:
                                     print(f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制完成\n")
@@ -1571,7 +1578,7 @@ def read_config_value(config_parser: configparser.RawConfigParser, section: str,
         -> Union[str, int, bool]:
     try:
 
-        config_parser.read(config_file, encoding=encoding)
+        config_parser.read(config_file, encoding=text_encoding)
         if '录制设置' not in config_parser.sections():
             config_parser.add_section('录制设置')
         if '推送配置' not in config_parser.sections():
@@ -1585,7 +1592,7 @@ def read_config_value(config_parser: configparser.RawConfigParser, section: str,
         return config_parser.get(section, option)
     except (configparser.NoSectionError, configparser.NoOptionError):
         config_parser.set(section, option, str(default_value))
-        with open(config_file, 'w', encoding=encoding) as f:
+        with open(config_file, 'w', encoding=text_encoding) as f:
             config_parser.write(f)
         return default_value
 
@@ -1615,17 +1622,17 @@ while True:
 
     try:
         if not os.path.isfile(config_file):
-            with open(config_file, 'w', encoding=encoding) as file:
+            with open(config_file, 'w', encoding=text_encoding) as file:
                 pass
 
         ini_URL_content = ''
         if os.path.isfile(url_config_file):
-            with open(url_config_file, 'r', encoding=encoding) as file:
+            with open(url_config_file, 'r', encoding=text_encoding) as file:
                 ini_URL_content = file.read().strip()
 
         if not ini_URL_content.strip():
             input_url = input('请输入要录制的主播直播间网址（尽量使用PC网页端的直播间地址）:\n')
-            with open(url_config_file, 'w', encoding=encoding) as file:
+            with open(url_config_file, 'w', encoding=text_encoding) as file:
                 file.write(input_url)
     except OSError as err:
         logger.error(f"发生 I/O 错误: {err}")
@@ -1714,6 +1721,7 @@ while True:
     shiguang_cookie = read_config_value(config, 'Cookie', 'shiguang_cookie', '')
     yinbo_cookie = read_config_value(config, 'Cookie', 'yinbo_cookie', '')
     yingke_cookie = read_config_value(config, 'Cookie', 'yingke_cookie', '')
+    zhihu_cookie = read_config_value(config, 'Cookie', 'zhihu_cookie', '')
 
     if len(video_save_type) > 0:
         if video_save_type.upper().lower() == "FLV".lower():
@@ -1749,7 +1757,7 @@ while True:
 
 
     try:
-        with open(url_config_file, "r", encoding=encoding, errors='ignore') as file:
+        with (open(url_config_file, "r", encoding=text_encoding, errors='ignore') as file):
             for line in file:
                 line = line.strip()
                 if line.startswith("#") or len(line) < 20:
@@ -1814,7 +1822,8 @@ while True:
                     'wap.rengzu.com',
                     'www.ybw1666.com',
                     'wap.ybw1666.com',
-                    'www.inke.cn'
+                    'www.inke.cn',
+                    'www.zhihu.com'
                 ]
                 overseas_platform_host = [
                     'www.tiktok.com',
@@ -1829,15 +1838,19 @@ while True:
                 ]
 
                 platform_host.extend(overseas_platform_host)
+                clean_url_host_list = [
+                    "live.douyin.com",
+                    "live.bilibili.com",
+                    "www.huajiao.com",
+                    "www.zhihu.com",
+                    "www.xiaohongshu.com",
+                    "www.redelight.cn",
+                    "www.huya.com"
+                ]
                 if url_host in platform_host:
-                    if url_host in ['live.douyin.com', 'live.bilibili.com', 'www.huajiao.com']:
+                    if url_host in clean_url_host_list:
                         update_file(url_config_file, url, url.split('?')[0])
                         url = url.split('?')[0]
-                    if url_host in ['www.xiaohongshu.com', 'www.redelight.cn']:
-                        if 'share_source' in url:
-                            new_xhs_url = url.split('?')[0]
-                            update_file(url_config_file, url, new_xhs_url)
-                            url = new_xhs_url
 
                     new_line = (quality, url, name)
                     url_tuples_list.append(new_line)
@@ -1862,11 +1875,11 @@ while True:
 
         if len(text_no_repeat_url) > 0:
             for url_tuple in text_no_repeat_url:
-                monitoring = len(runing_list)
+                monitoring = len(running_list)
                 if url_tuple[1] in not_record_list:
                     continue
 
-                if url_tuple[1] not in runing_list:
+                if url_tuple[1] not in running_list:
                     if not first_start:
                         print(f"\r新增链接: {url_tuple[1]}")
                     monitoring += 1
@@ -1874,7 +1887,7 @@ while True:
                     create_var['thread' + str(monitoring)] = threading.Thread(target=start_record, args=args)
                     create_var['thread' + str(monitoring)].daemon = True
                     create_var['thread' + str(monitoring)].start()
-                    runing_list.append(url_tuple[1])
+                    running_list.append(url_tuple[1])
                     time.sleep(local_delay_default)
         url_tuples_list = []
         first_start = False
