@@ -455,19 +455,27 @@ def get_huya_app_stream_url(url: str, proxy_addr: Union[str, None] = None, cooki
             flv_anti_code = i['sFlvAntiCode']
             s_hls_url = i['sHlsUrl']
             hls_anti_code = i['sHlsAntiCode']
+            m3u8_url = f'{s_hls_url}/{stream_name}.m3u8?{hls_anti_code}'
+            flv_url = f'{s_flv_url}/{stream_name}.flv?{flv_anti_code}'
             play_url_list.append(
                 {
                     'cdn_type': cdn_type,
-                    'm3u8_url': f'{s_hls_url}/{stream_name}.m3u8?{hls_anti_code}',
-                    'flv_url': f'{s_flv_url}/{stream_name}.flv?{flv_anti_code}',
+                    'm3u8_url': m3u8_url,
+                    'flv_url': flv_url,
                 }
             )
+        flv_url = 'https://' + play_url_list[0]['flv_url'].split('://')[1]
+        try:
+            record_url = get_req(flv_url, proxy_addr=proxy_addr, headers=headers, redirect_url=True, timeout=15)
+        except TimeoutError:
+            record_url = flv_url
+
         return {
             'anchor_name': anchor_name,
             'is_live': True,
             'm3u8_url': play_url_list[0]['m3u8_url'],
             'flv_url': play_url_list[0]['flv_url'],
-            'record_url': play_url_list[0]['flv_url'],
+            'record_url': record_url,
         }
 
 
