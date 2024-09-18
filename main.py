@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-09-18 12:30:12
+Update: 2024-09-19 01:50:12
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -676,6 +676,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                             proxy_address = proxy_addr_bak if proxy_addr_bak else None
 
             # print(f'\r代理地址:{proxy_address}')
+            # print(f'\r全局代理:{global_proxy}')
             print(f"\r运行新线程,传入地址 {record_url}")
             while True:
                 try:
@@ -1111,10 +1112,12 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                     "-correct_ts_overflow", "1",
                                 ]
 
-                                add_headers_list = ['PandaTV', '千度热播']
+                                add_headers_list = ['PandaTV', '千度热播', 'WinkTV']
                                 if platform in add_headers_list:
                                     if platform == 'PandaTV':
                                         headers = 'origin:https://www.pandalive.co.kr'
+                                    elif platform == 'WinkTV':
+                                        headers = 'origin:https://www.winktv.co.kr'
                                     else:
                                         headers = 'referer:https://qiandurebo.com'
                                     ffmpeg_command.insert(11, "-headers")
