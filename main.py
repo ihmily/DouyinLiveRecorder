@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-09-14 12:18:00
+Update: 2024-09-18 12:30:12
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -636,7 +636,7 @@ def push_message(content: str) -> Union[str, list]:
         dingtalk(dingtalk_api_url, content, dingtalk_phone_num)
     if '邮箱' in live_status_push:
         push_pts.append('邮箱')
-        email_message(mail_host, mail_pass, from_email, to_email, "直播间状态更新", content)
+        email_message(mail_host, mail_password, from_email, to_email, "直播间状态更新通知", content)
     if 'TG' in live_status_push or 'tg' in live_status_push:
         push_pts.append('TG')
         tg_bot(tg_chat_id, tg_token, content)
@@ -1677,9 +1677,9 @@ while True:
     tg_token = read_config_value(config, '推送配置', 'tgapi令牌', "")
     tg_chat_id = read_config_value(config, '推送配置', 'tg聊天id(个人或者群组id)', "")
     mail_host = read_config_value(config, '推送配置', 'SMTP邮件服务器', "")
-    from_email = read_config_value(config, '推送配置', '发件人', "")
-    mail_pass = read_config_value(config, '推送配置', '发件人密码', "")
-    to_email = read_config_value(config, '推送配置', '收件人', "")
+    from_email = read_config_value(config, '推送配置', '发件人邮箱', "")
+    mail_password = read_config_value(config, '推送配置', '发件人密码(授权码)', "")
+    to_email = read_config_value(config, '推送配置', '收件人邮箱', "")
     begin_push_message_text = read_config_value(config, '推送配置', '自定义开播推送内容', "")
     over_push_message_text = read_config_value(config, '推送配置', '自定义关播推送内容', "")
     disable_record = options.get(read_config_value(config, '推送配置', '只推送通知不录制（是/否）', "否"), False)
