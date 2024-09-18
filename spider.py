@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-09-19 01:50:12
+Update: 2024-09-19 02:05:12
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -1203,6 +1203,8 @@ def get_winktv_stream_data(url: str, proxy_addr: Union[str, None] = None, cookie
     if live_status:
         play_api = 'https://api.winktv.co.kr/v1/live/play'
         json_str = get_req(url=play_api, proxy_addr=proxy_addr, headers=headers, data=data, abroad=True)
+        if '403: Forbidden' in json_str:
+            raise ConnectionError(f'您的网络已被禁止访问WinkTV({json_str})')
         json_data = json.loads(json_str)
         if 'errorData' in json_data:
             if json_data['errorData']['code'] == 'needAdult':
