@@ -13,6 +13,10 @@ import json
 import urllib.request
 from utils import trace_error_decorator
 
+# 发送邮件相关库
+import smtplib
+from email.mime.text import MIMEText
+
 no_proxy_handler = urllib.request.ProxyHandler({})
 opener = urllib.request.build_opener(no_proxy_handler)
 headers: Dict[str, str] = {'Content-Type': 'application/json'}
@@ -52,6 +56,28 @@ def xizhi(url: str, content: str) -> Dict[str, Any]:
     json_data = json.loads(json_str)
     return json_data
 
+@trace_error_decorator
+def email_message(mail_host: str, mail_pass: str, from_email: str, to_email:str, title: str , content: str) -> Dict[str, Any]:
+
+    receivers = [to_email]  # 接收邮件地址
+
+    # 创建一个带附件的实例
+    message = MIMEText(content, 'plain', 'utf-8')
+    message['From'] = "{}".format(from_email)
+    message['To'] = to_email
+    message['Subject'] = title
+
+    try:
+        smtpObj = smtplib.SMTP_SSL(mail_host, 465)
+        smtpObj.login(from_email, mail_pass)
+        smtpObj.sendmail(from_email, receivers, message.as_string())
+        print("邮件发送成功")
+    except smtplib.SMTPException as e:
+        print("Error: 无法发送邮件", e)
+
+    data = {'code': '200'}
+    json_data = json.dumps(data).encode('utf-8')
+    return json_data
 
 @trace_error_decorator
 def tg_bot(chat_id: int, token: str, content: str) -> Dict[str, Any]:
@@ -86,3 +112,6 @@ if __name__ == '__main__':
     token = ''  # tg搜索"BotFather"获取的token值
     chat_id = 000000  # tg搜索"userinfobot"获取的chat_id值，即可发送推送消息给你自己，如果下面的是群组id则发送到群
     # tg_bot(chat_id, token, content)
+
+    # 邮件推送通知
+    # email_message("", "","", "", "测试python发送邮件", "测试python发送邮件")
