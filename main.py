@@ -72,7 +72,7 @@ from utils import (
     logger, check_md5,
     trace_error_decorator
 )
-from msg_push import dingtalk, xizhi, tg_bot, email_message
+from msg_push import dingtalk, xizhi, tg_bot, email_message, bark
 
 version = "v3.0.7"
 platforms = ("\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|"
@@ -640,6 +640,9 @@ def push_message(content: str) -> Union[str, list]:
     if 'TG' in live_status_push or 'tg' in live_status_push:
         push_pts.append('TG')
         tg_bot(tg_chat_id, tg_token, content)
+    if 'BARK' in live_status_push or 'bark' in live_status_push:
+        push_pts.append('BARK')
+        bark(bark_api_url, content)
     push_pts = '、'.join(push_pts) if len(push_pts) > 0 else []
     return push_pts
 
@@ -1673,9 +1676,10 @@ while True:
     enable_proxy_platform_list = enable_proxy_platform.replace('，', ',').split(',') if enable_proxy_platform else None
     extra_enable_proxy = read_config_value(config, '录制设置', '额外使用代理录制的平台（逗号分隔）', '')
     extra_enable_proxy_platform_list = extra_enable_proxy.replace('，', ',').split(',') if extra_enable_proxy else None
-    live_status_push = read_config_value(config, '推送配置', '直播状态通知(可选微信|钉钉|tg|邮箱或者都填)', "")
+    live_status_push = read_config_value(config, '推送配置', '直播状态通知(可选微信|钉钉|tg|邮箱|bark或者都填)', "")
     dingtalk_api_url = read_config_value(config, '推送配置', '钉钉推送接口链接', "")
     xizhi_api_url = read_config_value(config, '推送配置', '微信推送接口链接', "")
+    bark_api_url = read_config_value(config, '推送配置', 'bark推送接口链接', "")
     dingtalk_phone_num = read_config_value(config, '推送配置', '钉钉通知@对象(填手机号)', "")
     tg_token = read_config_value(config, '推送配置', 'tgapi令牌', "")
     tg_chat_id = read_config_value(config, '推送配置', 'tg聊天id(个人或者群组id)', "")
