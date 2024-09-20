@@ -15,6 +15,8 @@ import smtplib
 from email.header import Header
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from urllib.parse import urljoin
+import urllib.parse
 
 no_proxy_handler = urllib.request.ProxyHandler({})
 opener = urllib.request.build_opener(no_proxy_handler)
@@ -94,6 +96,16 @@ def tg_bot(chat_id: int, token: str, content: str) -> Dict[str, Any]:
     json_data = json.loads(json_str)
     return json_data
 
+@trace_error_decorator
+def bark(url: str, content: str) -> Dict[str, Any]:
+    json_data = {"body": content}
+    data = json.dumps(json_data).encode('utf-8')
+    req = urllib.request.Request(url, data = data, headers=headers)
+    response = opener.open(req, timeout=10)
+    json_str = response.read().decode("utf-8")
+    json_data = json.loads(json_str)
+    return json_data
+
 
 if __name__ == '__main__':
     send_content = '张三 开播了！'  # 推送内容
@@ -115,3 +127,6 @@ if __name__ == '__main__':
     # tg_bot(tg_chat_id, tg_token, send_content)
 
     # email_message("", "", "", "", "", "")
+
+    bark_url= 'https://xxx.xxx.com/key/'
+    # bark(bark_url, send_content)
