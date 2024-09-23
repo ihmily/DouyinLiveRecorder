@@ -1979,7 +1979,6 @@ while True:
                     new_word = replace_words[1]
                 update_file(url_config_file, replace_words[0], new_word, start_str=start_with)
 
-        # if len(url_tuples_list) > 0:
         text_no_repeat_url = list(set(url_tuples_list))
 
         if len(text_no_repeat_url) > 0:
