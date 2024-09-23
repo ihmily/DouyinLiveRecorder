@@ -1985,15 +1985,11 @@ while True:
         if len(text_no_repeat_url) > 0:
             for url_tuple in text_no_repeat_url:
                 monitoring = len(running_list)
-                # print(f"monitoring {monitoring} url_tuples_list: {url_tuple}")
 
                 if url_tuple[1] in not_record_list:
                     continue
-                
-                # print(f"monitoring.a {monitoring} url_tuples_list: {url_tuple}")
 
                 if url_tuple[1] not in running_list:
-                    # print(f"monitoring.b {monitoring} url_tuples_list: {url_tuple}")
 
                     if not first_start:
                         print(f"\r新增链接: {url_tuple[1]}")
