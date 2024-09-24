@@ -4,8 +4,8 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-09-03 19:18:36
-Update: 2024-09-18 12:30:12
-Copyright (c) 2023 by Hmily, All Rights Reserved.
+Update: 2024-09-24 20:43:12
+Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 """
 from typing import Dict, Any, Optional
 import json
@@ -15,8 +15,6 @@ import smtplib
 from email.header import Header
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from urllib.parse import urljoin
-import urllib.parse
 
 no_proxy_handler = urllib.request.ProxyHandler({})
 opener = urllib.request.build_opener(no_proxy_handler)
@@ -60,8 +58,7 @@ def xizhi(url: str, content: str) -> Dict[str, Any]:
 
 @trace_error_decorator
 def email_message(mail_host: str, mail_pass: str, from_email: str, to_email: str, title: str, content: str) -> Dict[
-                str, Any]:
-
+            str, Any]:
     message = MIMEMultipart()
     message['From'] = "{}".format(from_email)
     message['Subject'] = Header(title, 'utf-8')
@@ -96,11 +93,26 @@ def tg_bot(chat_id: int, token: str, content: str) -> Dict[str, Any]:
     json_data = json.loads(json_str)
     return json_data
 
+
 @trace_error_decorator
-def bark(url: str, content: str) -> Dict[str, Any]:
-    json_data = {"body": content}
+def bark(api: str, title: str = "message", content: str = 'test', level: str = "active",
+         badge: int = 1, autoCopy: int = 1, sound: str = "", icon: str = "", group: str = "",
+         isArchive: int = 1, url: str = "") -> Dict[str, Any]:
+    json_data = {
+        "title": title,
+        "body": content,
+        "level": level,
+        "badge": badge,
+        "autoCopy": autoCopy,
+        "sound": sound,
+        "icon": icon,
+        "group": group,
+        "isArchive": isArchive,
+        "url": url
+    }
+
     data = json.dumps(json_data).encode('utf-8')
-    req = urllib.request.Request(url, data = data, headers=headers)
+    req = urllib.request.Request(api, data=data, headers=headers)
     response = opener.open(req, timeout=10)
     json_str = response.read().decode("utf-8")
     json_data = json.loads(json_str)
@@ -108,6 +120,7 @@ def bark(url: str, content: str) -> Dict[str, Any]:
 
 
 if __name__ == '__main__':
+    send_title = '直播通知'  # 标题
     send_content = '张三 开播了！'  # 推送内容
 
     # 钉钉推送通知
@@ -118,7 +131,7 @@ if __name__ == '__main__':
     # 微信推送通知
     # 替换成自己的单点推送接口,获取地址：https://xz.qqoq.net/#/admin/one
     # 当然也可以使用其他平台API 如server酱 使用方法一样
-    xizhi_api = 'https://xizhi.qqoq.net/XZa5a4a224987c88ab828acbcc0aa4c853.send'
+    xizhi_api = 'https://xizhi.qqoq.net/xxxxxxxxx.send'
     # xizhi(xizhi_api, send_content)
 
     # telegram推送通知
@@ -128,5 +141,5 @@ if __name__ == '__main__':
 
     # email_message("", "", "", "", "", "")
 
-    bark_url= 'https://xxx.xxx.com/key/'
-    # bark(bark_url, send_content)
+    bark_url = 'https://xxx.xxx.com/key/'
+    # bark(bark_url, send_title, send_content)

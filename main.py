@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-09-19 01:50:12
+Update: 2024-09-24 20:49:12
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -637,12 +637,12 @@ def push_message(content: str) -> Union[str, list]:
     if '邮箱' in live_status_push:
         push_pts.append('邮箱')
         email_message(mail_host, mail_password, from_email, to_email, "直播间状态更新通知", content)
-    if 'TG' in live_status_push or 'tg' in live_status_push:
+    if 'TG' in live_status_push.upper():
         push_pts.append('TG')
         tg_bot(tg_chat_id, tg_token, content)
-    if 'BARK' in live_status_push or 'bark' in live_status_push:
+    if 'BARK' in live_status_push.upper():
         push_pts.append('BARK')
-        bark(bark_api_url, content)
+        bark(bark_msg_api, title="直播录制通知", content=content, level=bark_msg_level, sound=bark_msg_ring)
     push_pts = '、'.join(push_pts) if len(push_pts) > 0 else []
     return push_pts
 
@@ -1679,7 +1679,9 @@ while True:
     live_status_push = read_config_value(config, '推送配置', '直播状态通知(可选微信|钉钉|tg|邮箱|bark或者都填)', "")
     dingtalk_api_url = read_config_value(config, '推送配置', '钉钉推送接口链接', "")
     xizhi_api_url = read_config_value(config, '推送配置', '微信推送接口链接', "")
-    bark_api_url = read_config_value(config, '推送配置', 'bark推送接口链接', "")
+    bark_msg_api = read_config_value(config, '推送配置', 'bark推送接口链接', "")
+    bark_msg_level = read_config_value(config, '推送配置', 'bark推送中断级别', "active")
+    bark_msg_ring = read_config_value(config, '推送配置', 'bark推送铃声', "bell")
     dingtalk_phone_num = read_config_value(config, '推送配置', '钉钉通知@对象(填手机号)', "")
     tg_token = read_config_value(config, '推送配置', 'tgapi令牌', "")
     tg_chat_id = read_config_value(config, '推送配置', 'tg聊天id(个人或者群组id)', "")
