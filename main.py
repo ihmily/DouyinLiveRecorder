@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-09-24 20:49:12
+Update: 2024-09-25 02:10:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -70,7 +70,7 @@ from spider import (
 
 from utils import (
     logger, check_md5,
-    trace_error_decorator
+    trace_error_decorator, get_file_paths
 )
 from msg_push import dingtalk, xizhi, tg_bot, email_message, bark
 
@@ -647,34 +647,39 @@ def push_message(content: str) -> Union[str, list]:
     push_pts = '、'.join(push_pts) if len(push_pts) > 0 else []
     return push_pts
 
+
 def clear_record_info(record_name, anchor_name, record_url):
     if record_name in recording:
         recording.remove(record_name)
     if anchor_name in not_recording:
         not_recording.add(anchor_name)
     if record_url in url_comments and record_url in running_list:
-        print(f"[{anchor_name}]从录制列表中清除")
+        print(f"[{record_name}]从录制列表中清除")
         running_list.remove(record_url)
 
-def check_subprocess(record_name: str, anchor_name: str, record_url: str, ffmpeg_command: []):
+
+def check_subprocess(record_name: str, anchor_name: str, record_url: str, ffmpeg_command: list):
     process = subprocess.Popen(
-        ffmpeg_command, stderr=subprocess.STDOUT
+        ffmpeg_command, stderr=subprocess.STDOUT, text=True, stdout=subprocess.PIPE, stdin=subprocess.PIPE
     )
+
     # 检查进程是否结束
-    while True:
+    while process.poll() is None:
         if record_url in url_comments:
-            print(f"[{anchor_name}]录制时已被注释,本条线程将会退出")
+            print(f"[{record_name}]录制时已被注释,本条线程将会退出")
             clear_record_info(record_name, anchor_name, record_url)
             process.terminate()
             process.wait()
             return True
-        return_code = process.poll()
-        if return_code is not None:
-            print(
-                f"{anchor_name}]录制退出,返回码: {return_code}"
-            )
-            break
-            time.sleep(1)  # 等待一段时间后再检查
+        time.sleep(1)
+
+    return_code = process.returncode
+    if return_code == 0:
+        print(f"[{record_name}]录制成功完成")
+    else:
+        print(f"[{record_name}]录制退出,返回码: {return_code}")
+    return return_code == 0
+
 
 def start_record(url_data: tuple, count_variable: int = -1):
     global warning_count
@@ -1014,7 +1019,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                     else:
                         logger.error(f'{record_url} 未知直播地址')
                         return
-                    
+
                     if anchor_name:
                         # 第一次从config中读取，带有'主播:'，去除'主播:'
                         # 之后的线程循环，已经是处理后的结果，不需要去处理
@@ -1193,11 +1198,8 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                         flv_url = port_info.get('flv_url', None)
                                         if flv_url:
                                             _filepath, _ = urllib.request.urlretrieve(real_url,
-                                                                                      full_path + '/' + filename)
+                                                                                      f'{full_path}/{filename}')
                                             record_finished = True
-                                        else:
-                                            raise Exception('该直播无flv直播流，请切换视频保存类型')
-
                                     except Exception as e:
                                         logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                         warning_count += 1
@@ -1244,14 +1246,14 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                         ffmpeg_command.extend(command)
 
                                         comment_end = check_subprocess(
-                                                record_name,
-                                                anchor_name,
-                                                record_url, 
-                                                ffmpeg_command
-                                            )
+                                            record_name,
+                                            anchor_name,
+                                            record_url,
+                                            ffmpeg_command
+                                        )
                                         if comment_end:
-                                                return
-                                        record_finished = True
+                                            return
+
                                     except subprocess.CalledProcessError as e:
                                         logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                         warning_count += 1
@@ -1274,8 +1276,10 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                                 "-segment_time", split_time,
                                                 "-segment_format", "mp4",
                                                 "-reset_timestamps", "1",
+                                                "-movflags", "+frag_keyframe+empty_moov",
                                                 save_file_path,
                                             ]
+
                                         else:
                                             if create_time_file:
                                                 filename_group = [anchor_name, filename_short]
@@ -1295,14 +1299,14 @@ def start_record(url_data: tuple, count_variable: int = -1):
 
                                         ffmpeg_command.extend(command)
                                         comment_end = check_subprocess(
-                                                record_name,
-                                                anchor_name,
-                                                record_url, 
-                                                ffmpeg_command
-                                            )
+                                            record_name,
+                                            anchor_name,
+                                            record_url,
+                                            ffmpeg_command
+                                        )
                                         if comment_end:
                                             return
-                                        record_finished = True
+
                                     except subprocess.CalledProcessError as e:
                                         logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                         warning_count += 1
@@ -1333,12 +1337,12 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                             comment_end = check_subprocess(
                                                 record_name,
                                                 anchor_name,
-                                                record_url, 
+                                                record_url,
                                                 ffmpeg_command
                                             )
                                             if comment_end:
+                                                threading.Thread(target=converts_m4a, args=(save_path_name,)).start()
                                                 return
-                                            record_finished = True
 
                                         else:
                                             filename = anchor_name + '_' + now + ".mkv"
@@ -1363,11 +1367,8 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                                 ffmpeg_command,
                                             )
                                             if comment_end:
-                                                return
-                                            record_finished = True
-
-                                            if ts_to_m4a:
                                                 threading.Thread(target=converts_m4a, args=(save_file_path,)).start()
+                                                return
 
                                     except subprocess.CalledProcessError as e:
                                         logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
@@ -1403,8 +1404,8 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                                 ffmpeg_command,
                                             )
                                             if comment_end:
+                                                threading.Thread(target=converts_m4a, args=(save_path_name,)).start()
                                                 return
-                                            record_finished = True
 
                                         else:
                                             filename = anchor_name + '_' + now + ".ts"
@@ -1426,11 +1427,8 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                                 ffmpeg_command,
                                             )
                                             if comment_end:
-                                                return
-                                            record_finished = True
-
-                                            if ts_to_m4a:
                                                 threading.Thread(target=converts_m4a, args=(save_file_path,)).start()
+                                                return
 
                                     except subprocess.CalledProcessError as e:
                                         logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
@@ -1444,20 +1442,14 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                         print(f'{rec_info}/{filename}')
 
                                         try:
-                                            if ts_to_mp4:
-                                                save_path_name = f"{full_path}/{anchor_name}_{now}_%03d.mp4"
-                                                segment_format = 'mp4'
-                                            else:
-                                                save_path_name = f"{full_path}/{anchor_name}_{now}_%03d.ts"
-                                                segment_format = 'mpegts'
-
+                                            save_path_name = f"{full_path}/{anchor_name}_{now}_%03d.ts"
                                             command = [
                                                 "-c:v", "copy",
-                                                "-c:a", 'copy',
+                                                "-c:a", "copy",
                                                 "-map", "0",
                                                 "-f", "segment",
                                                 "-segment_time", split_time,
-                                                "-segment_format", segment_format,
+                                                "-segment_format", 'mpegts',
                                                 "-reset_timestamps", "1",
                                                 save_path_name,
                                             ]
@@ -1470,8 +1462,13 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                                 ffmpeg_command,
                                             )
                                             if comment_end:
+                                                if ts_to_mp4:
+                                                    file_paths = get_file_paths(os.path.dirname(save_path_name))
+                                                    prefix = os.path.basename(save_path_name).rsplit('_', maxsplit=1)[0]
+                                                    for path in file_paths:
+                                                        if prefix in path:
+                                                            threading.Thread(target=converts_mp4, args=(path,)).start()
                                                 return
-                                            record_finished = True
 
                                         except subprocess.CalledProcessError as e:
                                             logger.error(
@@ -1481,7 +1478,6 @@ def start_record(url_data: tuple, count_variable: int = -1):
 
                                     else:
                                         filename = anchor_name + '_' + now + ".ts"
-
                                         print(f'{rec_info}/{filename}')
                                         save_file_path = full_path + '/' + filename
 
@@ -1505,17 +1501,13 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                             comment_end = check_subprocess(
                                                 record_name,
                                                 anchor_name,
-                                                record_url, 
+                                                record_url,
                                                 ffmpeg_command
                                             )
                                             if comment_end:
-                                                return
-                                            record_finished = True
-
-                                            if ts_to_mp4:
                                                 threading.Thread(target=converts_mp4, args=(save_file_path,)).start()
-                                            if ts_to_m4a:
-                                                threading.Thread(target=converts_m4a, args=(save_file_path,)).start()
+                                                return
+
                                         except subprocess.CalledProcessError as e:
                                             logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                             warning_count += 1
@@ -1825,25 +1817,11 @@ while True:
     yingke_cookie = read_config_value(config, 'Cookie', 'yingke_cookie', '')
     zhihu_cookie = read_config_value(config, 'Cookie', 'zhihu_cookie', '')
 
-    if len(video_save_type) > 0:
-        if video_save_type.upper().lower() == "FLV".lower():
-            video_save_type = "FLV"
-        elif video_save_type.upper().lower() == "MKV".lower():
-            video_save_type = "MKV"
-        elif video_save_type.upper().lower() == "TS".lower():
-            video_save_type = "TS"
-        elif video_save_type.upper().lower() == "MP4".lower():
-            video_save_type = "MP4"
-        elif video_save_type.upper().lower() == "TS音频".lower():
-            video_save_type = "TS音频"
-        elif video_save_type.upper().lower() == "MKV音频".lower():
-            video_save_type = "MKV音频"
-        else:
-            video_save_type = "TS"
-            print("直播视频保存格式设置有问题,这次录制重置为默认的TS格式")
+    video_save_type_list = ["FLV", "MKV", "TS", "MP4", "TS音频", "MKV音频"]
+    if video_save_type and video_save_type.upper() in video_save_type_list:
+        video_save_type = video_save_type.upper()
     else:
         video_save_type = "TS"
-        print("直播视频保存为TS格式")
 
 
     def transform_int_to_time(seconds: int) -> str:
@@ -1865,11 +1843,10 @@ while True:
                 line = line.strip()
                 if len(line) < 20:
                     continue
-                
+
                 is_comment_line = line.startswith("#")
                 if is_comment_line:
                     line = line[1:]
-
 
                 if re.search('[,，]', line):
                     split_line = re.split('[,，]', line)

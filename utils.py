@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+import os
 import functools
 import hashlib
 import traceback
@@ -98,3 +99,11 @@ def update_config(file_path, section, key, new_value):
         print(f"配置文件中[{section}]下的{key}的值已更新")
     except Exception as e:
         print(f"写入配置文件时出错: {e}")
+
+
+def get_file_paths(directory):
+    file_paths = []
+    for root, dirs, files in os.walk(directory):
+        for file in files:
+            file_paths.append(os.path.join(root, file))
+    return file_paths
