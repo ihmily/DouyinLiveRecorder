@@ -87,6 +87,7 @@ pre_max_request = 0
 monitoring = 0
 running_list = []
 url_tuples_list = []
+url_comments = []
 text_no_repeat_url = []
 create_var = locals()
 first_start = True
@@ -646,6 +647,34 @@ def push_message(content: str) -> Union[str, list]:
     push_pts = '、'.join(push_pts) if len(push_pts) > 0 else []
     return push_pts
 
+def clear_record_info(record_name, anchor_name, record_url):
+    if record_name in recording:
+        recording.remove(record_name)
+    if anchor_name in not_recording:
+        not_recording.add(anchor_name)
+    if record_url in url_comments and record_url in running_list:
+        print(f"[{anchor_name}]从录制列表中清除")
+        running_list.remove(record_url)
+
+def check_subprocess(record_name: str, anchor_name: str, record_url: str, ffmpeg_command: []):
+    process = subprocess.Popen(
+        ffmpeg_command, stderr=subprocess.STDOUT
+    )
+    # 检查进程是否结束
+    while True:
+        if record_url in url_comments:
+            print(f"[{anchor_name}]录制时已被注释,本条线程将会退出")
+            clear_record_info(record_name, anchor_name, record_url)
+            process.terminate()
+            process.wait()
+            return True
+        return_code = process.poll()
+        if return_code is not None:
+            print(
+                f"{anchor_name}]录制退出,返回码: {return_code}"
+            )
+            break
+            time.sleep(1)  # 等待一段时间后再检查
 
 def start_record(url_data: tuple, count_variable: int = -1):
     global warning_count
@@ -985,7 +1014,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                     else:
                         logger.error(f'{record_url} 未知直播地址')
                         return
-
+                    
                     if anchor_name:
                         # 第一次从config中读取，带有'主播:'，去除'主播:'
                         # 之后的线程循环，已经是处理后的结果，不需要去处理
@@ -1004,6 +1033,11 @@ def start_record(url_data: tuple, count_variable: int = -1):
                     else:
                         anchor_name = re.sub(rstr, "_", anchor_name)
                         record_name = f'序号{count_variable} {anchor_name}'
+
+                        # print(f"正在录制中!!!!: {anchor_name} {record_url} {url_comments}")
+                        if record_url in url_comments:
+                            print(f"[{anchor_name}]已被注释,本条线程将会退出")
+                            return
 
                         if anchor_name in recording:
                             print(f"新增的地址: {anchor_name} 已经存在,本条线程将会退出")
@@ -1209,7 +1243,14 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                             ]
                                         ffmpeg_command.extend(command)
 
-                                        _output = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT)
+                                        comment_end = check_subprocess(
+                                                record_name,
+                                                anchor_name,
+                                                record_url, 
+                                                ffmpeg_command
+                                            )
+                                        if comment_end:
+                                                return
                                         record_finished = True
                                     except subprocess.CalledProcessError as e:
                                         logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
@@ -1253,7 +1294,14 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                             ]
 
                                         ffmpeg_command.extend(command)
-                                        _output = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT)
+                                        comment_end = check_subprocess(
+                                                record_name,
+                                                anchor_name,
+                                                record_url, 
+                                                ffmpeg_command
+                                            )
+                                        if comment_end:
+                                            return
                                         record_finished = True
                                     except subprocess.CalledProcessError as e:
                                         logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
@@ -1282,7 +1330,14 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                                 save_path_name,
                                             ]
                                             ffmpeg_command.extend(command)
-                                            _output = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT)
+                                            comment_end = check_subprocess(
+                                                record_name,
+                                                anchor_name,
+                                                record_url, 
+                                                ffmpeg_command
+                                            )
+                                            if comment_end:
+                                                return
                                             record_finished = True
 
                                         else:
@@ -1301,7 +1356,14 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                             ]
 
                                             ffmpeg_command.extend(command)
-                                            _output = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT)
+                                            comment_end = check_subprocess(
+                                                record_name,
+                                                anchor_name,
+                                                record_url,
+                                                ffmpeg_command,
+                                            )
+                                            if comment_end:
+                                                return
                                             record_finished = True
 
                                             if ts_to_m4a:
@@ -1334,7 +1396,14 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                                 save_path_name,
                                             ]
                                             ffmpeg_command.extend(command)
-                                            _output = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT)
+                                            comment_end = check_subprocess(
+                                                record_name,
+                                                anchor_name,
+                                                record_url,
+                                                ffmpeg_command,
+                                            )
+                                            if comment_end:
+                                                return
                                             record_finished = True
 
                                         else:
@@ -1350,7 +1419,14 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                             ]
 
                                             ffmpeg_command.extend(command)
-                                            _output = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT)
+                                            comment_end = check_subprocess(
+                                                record_name,
+                                                anchor_name,
+                                                record_url,
+                                                ffmpeg_command,
+                                            )
+                                            if comment_end:
+                                                return
                                             record_finished = True
 
                                             if ts_to_m4a:
@@ -1387,8 +1463,14 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                             ]
 
                                             ffmpeg_command.extend(command)
-                                            _output = subprocess.check_output(ffmpeg_command,
-                                                                              stderr=subprocess.STDOUT)
+                                            comment_end = check_subprocess(
+                                                record_name,
+                                                anchor_name,
+                                                record_url,
+                                                ffmpeg_command,
+                                            )
+                                            if comment_end:
+                                                return
                                             record_finished = True
 
                                         except subprocess.CalledProcessError as e:
@@ -1420,7 +1502,14 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                             ]
 
                                             ffmpeg_command.extend(command)
-                                            _output = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT)
+                                            comment_end = check_subprocess(
+                                                record_name,
+                                                anchor_name,
+                                                record_url, 
+                                                ffmpeg_command
+                                            )
+                                            if comment_end:
+                                                return
                                             record_finished = True
 
                                             if ts_to_mp4:
@@ -1436,10 +1525,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                 count_time = time.time()
 
                             if record_finished_2:
-                                if record_name in recording:
-                                    recording.remove(record_name)
-                                if anchor_name in not_recording:
-                                    not_recording.add(anchor_name)
+                                clear_record_info(record_name, anchor_name, record_url)
 
                                 if no_error:
                                     print(f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制完成\n")
@@ -1773,11 +1859,17 @@ while True:
 
 
     try:
+        url_comments = []
         with (open(url_config_file, "r", encoding=text_encoding, errors='ignore') as file):
             for line in file:
                 line = line.strip()
-                if line.startswith("#") or len(line) < 20:
+                if len(line) < 20:
                     continue
+                
+                is_comment_line = line.startswith("#")
+                if is_comment_line:
+                    line = line[1:]
+
 
                 if re.search('[,，]', line):
                     split_line = re.split('[,，]', line)
@@ -1869,7 +1961,10 @@ while True:
                         url = url.split('?')[0]
 
                     new_line = (quality, url, name)
-                    url_tuples_list.append(new_line)
+                    if is_comment_line:
+                        url_comments.append(url)
+                    else:
+                        url_tuples_list.append(new_line)
                 else:
                     print(f"\r{url} 未知链接.此条跳过")
                     update_file(url_config_file, url, url, start_str='#')
@@ -1886,16 +1981,17 @@ while True:
                     new_word = replace_words[1]
                 update_file(url_config_file, replace_words[0], new_word, start_str=start_with)
 
-        if len(url_tuples_list) > 0:
-            text_no_repeat_url = list(set(url_tuples_list))
+        text_no_repeat_url = list(set(url_tuples_list))
 
         if len(text_no_repeat_url) > 0:
             for url_tuple in text_no_repeat_url:
                 monitoring = len(running_list)
+
                 if url_tuple[1] in not_record_list:
                     continue
 
                 if url_tuple[1] not in running_list:
+
                     if not first_start:
                         print(f"\r新增链接: {url_tuple[1]}")
                     monitoring += 1
