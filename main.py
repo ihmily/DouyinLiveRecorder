@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-09-25 02:10:00
+Update: 2024-09-25 07:14:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -102,7 +102,7 @@ config_file = f'{script_path}/config/config.ini'
 url_config_file = f'{script_path}/config/URL_config.ini'
 backup_dir = f'{script_path}/backup_config'
 text_encoding = 'utf-8-sig'
-rstr = r"[\/\\\:\*\?\"\<\>\|&.。,， ]"
+rstr = r"[\/\\\:\*\?\"\<\>\|&#.。,， ]"
 ffmpeg_path = f"{script_path}/ffmpeg.exe"
 default_path = f'{script_path}/downloads'
 os.makedirs(default_path, exist_ok=True)
@@ -146,8 +146,10 @@ def display_info():
 
             if len(recording) == 0 and len(not_recording) == 0:
                 time.sleep(5)
-                print(f"\r没有正在录制的直播 {format_now_time[-8:]}", end="")
-                print("")
+                if monitoring == 0:
+                    print("\r没有正在监测和录制的直播")
+                else:
+                    print(f"\r没有正在录制的直播 循环监测间隔时间：{delay_default}秒")
                 continue
             else:
                 now_time = datetime.datetime.now()
@@ -168,9 +170,9 @@ def display_info():
             logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
 
 
-def update_file(file_path: str, old_str: str, new_str: str, start_str: str = None):
+def update_file(file_path: str, old_str: str, new_str: str, start_str: str = None) -> Union[str, None]:
     if old_str == new_str and start_str is None:
-        return
+        return old_str
     with file_update_lock:
         file_data = ""
         with open(file_path, "r", encoding=text_encoding) as f:
@@ -186,9 +188,11 @@ def update_file(file_path: str, old_str: str, new_str: str, start_str: str = Non
                 if ini_URL_content:
                     with open(file_path, "w", encoding=text_encoding) as f2:
                         f2.write(ini_URL_content)
+                    return old_str
         if file_data:
             with open(file_path, "w", encoding=text_encoding) as f:
                 f.write(file_data)
+        return new_str
 
 
 def delete_line(file_path: str, del_line: str):
@@ -649,18 +653,20 @@ def push_message(content: str) -> Union[str, list]:
 
 
 def clear_record_info(record_name, anchor_name, record_url):
+    global monitoring
     if record_name in recording:
         recording.remove(record_name)
     if anchor_name in not_recording:
         not_recording.add(anchor_name)
     if record_url in url_comments and record_url in running_list:
-        print(f"[{record_name}]从录制列表中清除")
         running_list.remove(record_url)
+        monitoring -= 1
+        print(f"[{record_name}]已经从录制列表中移除")
 
 
 def check_subprocess(record_name: str, anchor_name: str, record_url: str, ffmpeg_command: list):
     process = subprocess.Popen(
-        ffmpeg_command, stderr=subprocess.STDOUT, text=True, stdout=subprocess.PIPE, stdin=subprocess.PIPE
+        ffmpeg_command, stderr=subprocess.STDOUT
     )
 
     # 检查进程是否结束
@@ -714,14 +720,13 @@ def start_record(url_data: tuple, count_variable: int = -1):
 
             # print(f'\r代理地址:{proxy_address}')
             # print(f'\r全局代理:{global_proxy}')
-            print(f"\r运行新线程,传入地址 {record_url}")
             while True:
                 try:
                     port_info = []
                     if record_url.find("douyin.com/") > -1:
                         platform = '抖音直播'
                         with semaphore:
-                            if 'live.douyin.com' in record_url:
+                            if 'v.douyin.com' not in record_url:
                                 json_data = get_douyin_stream_data(
                                     url=record_url,
                                     proxy_addr=proxy_address,
@@ -1039,9 +1044,9 @@ def start_record(url_data: tuple, count_variable: int = -1):
                         anchor_name = re.sub(rstr, "_", anchor_name)
                         record_name = f'序号{count_variable} {anchor_name}'
 
-                        # print(f"正在录制中!!!!: {anchor_name} {record_url} {url_comments}")
                         if record_url in url_comments:
                             print(f"[{anchor_name}]已被注释,本条线程将会退出")
+                            clear_record_info(record_name, anchor_name, record_url)
                             return
 
                         if anchor_name in recording:
@@ -1154,7 +1159,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                     "-correct_ts_overflow", "1",
                                 ]
 
-                                add_headers_list = ['PandaTV', '千度热播', 'WinkTV']
+                                add_headers_list = ('PandaTV', '千度热播', 'WinkTV')
                                 if platform in add_headers_list:
                                     if platform == 'PandaTV':
                                         headers = 'origin:https://www.pandalive.co.kr'
@@ -1173,10 +1178,10 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                 recording.add(record_name)
                                 start_record_time = datetime.datetime.now()
                                 recording_time_list[record_name] = [start_record_time, record_quality]
-                                rec_info = f"\r{anchor_name} 录制视频中: {full_path}"
+                                rec_info = f"\r{anchor_name} 准备开始录制视频: {full_path}"
                                 filename_short = full_path + '/' + anchor_name + '_' + now
                                 if show_url:
-                                    re_plat = ['WinkTV', 'PandaTV', 'ShowRoom']
+                                    re_plat = ('WinkTV', 'PandaTV', 'ShowRoom')
                                     if platform in re_plat:
                                         logger.info(f"{platform} | {anchor_name} | 直播源地址: {port_info['m3u8_url']}")
                                     else:
@@ -1617,7 +1622,7 @@ def backup_file_start():
                     url_config_md5 = new_url_config_md5
             time.sleep(600)
         except Exception as e:
-            logger.error(f'执行脚本异常：{str(e)}')
+            logger.error(f"备份配置文件失败, 错误信息: {e}")
 
 
 # --------------------------检查是否存在ffmpeg-------------------------------------
@@ -1817,7 +1822,7 @@ while True:
     yingke_cookie = read_config_value(config, 'Cookie', 'yingke_cookie', '')
     zhihu_cookie = read_config_value(config, 'Cookie', 'zhihu_cookie', '')
 
-    video_save_type_list = ["FLV", "MKV", "TS", "MP4", "TS音频", "MKV音频"]
+    video_save_type_list = ("FLV", "MKV", "TS", "MP4", "TS音频", "MKV音频")
     if video_save_type and video_save_type.upper() in video_save_type_list:
         video_save_type = video_save_type.upper()
     else:
@@ -1839,14 +1844,18 @@ while True:
     try:
         url_comments = []
         with (open(url_config_file, "r", encoding=text_encoding, errors='ignore') as file):
-            for line in file:
-                line = line.strip()
+            for origin_line in file:
+                line = origin_line.strip()
                 if len(line) < 20:
                     continue
 
+                line_spilt = line.split('主播: ')
+                if len(line_spilt) > 2:
+                    line = update_file(url_config_file, line, f'{line_spilt[0]}主播: {line_spilt[-1]}')
+
                 is_comment_line = line.startswith("#")
                 if is_comment_line:
-                    line = line[1:]
+                    line = line.lstrip('#')
 
                 if re.search('[,，]', line):
                     split_line = re.split('[,，]', line)
@@ -1866,16 +1875,16 @@ while True:
                 else:
                     quality, url, name = split_line
 
-                if quality not in ["原画", "蓝光", "超清", "高清", "标清", "流畅"]:
+                if quality not in ("原画", "蓝光", "超清", "高清", "标清", "流畅"):
                     quality = '原画'
 
-                if ('http://' not in url) and ('https://' not in url):
-                    url = 'https://' + url
+                url = 'https://' + url if '://' not in url else url
 
                 url_host = url.split('/')[2]
                 platform_host = [
                     'live.douyin.com',
                     'v.douyin.com',
+                    'www.douyin.com',
                     'live.kuaishou.com',
                     'www.huya.com',
                     'www.douyu.com',
@@ -1905,7 +1914,7 @@ while True:
                     'm.acfun.cn',
                     'www.rengzu.com',
                     'wap.rengzu.com',
-                    'www.ybw1666.com',
+                    'live.ybw1666.com',
                     'wap.ybw1666.com',
                     'www.inke.cn',
                     'www.zhihu.com'
@@ -1923,7 +1932,7 @@ while True:
                 ]
 
                 platform_host.extend(overseas_platform_host)
-                clean_url_host_list = [
+                clean_url_host_list = (
                     "live.douyin.com",
                     "live.bilibili.com",
                     "www.huajiao.com",
@@ -1931,19 +1940,20 @@ while True:
                     "www.xiaohongshu.com",
                     "www.redelight.cn",
                     "www.huya.com"
-                ]
+                )
+
                 if url_host in platform_host:
                     if url_host in clean_url_host_list:
-                        update_file(url_config_file, url, url.split('?')[0])
-                        url = url.split('?')[0]
+                        url = update_file(url_config_file, url, url.split('?')[0])
 
-                    new_line = (quality, url, name)
+                    url_comments = [i for i in url_comments if url not in i]
                     if is_comment_line:
                         url_comments.append(url)
                     else:
+                        new_line = (quality, url, name)
                         url_tuples_list.append(new_line)
                 else:
-                    print(f"\r{url} 未知链接.此条跳过")
+                    print(f"\r{origin_line} 本行包含未知链接.此条跳过")
                     update_file(url_config_file, url, url, start_str='#')
 
         while len(need_update_line_list):
@@ -1968,14 +1978,12 @@ while True:
                     continue
 
                 if url_tuple[1] not in running_list:
-
-                    if not first_start:
-                        print(f"\r新增链接: {url_tuple[1]}")
+                    print(f"\r{'新增' if not first_start else '传入'}地址: {url_tuple[1]}")
                     monitoring += 1
                     args = [url_tuple, monitoring]
-                    create_var['thread' + str(monitoring)] = threading.Thread(target=start_record, args=args)
-                    create_var['thread' + str(monitoring)].daemon = True
-                    create_var['thread' + str(monitoring)].start()
+                    create_var[f'thread_{monitoring}'] = threading.Thread(target=start_record, args=args)
+                    create_var[f'thread_{monitoring}'].daemon = True
+                    create_var[f'thread_{monitoring}'].start()
                     running_list.append(url_tuple[1])
                     time.sleep(local_delay_default)
         url_tuples_list = []
@@ -1989,7 +1997,6 @@ while True:
         t.start()
         t2 = threading.Thread(target=change_max_connect, args=(), daemon=True)
         t2.start()
-
         first_run = False
 
     time.sleep(3)
