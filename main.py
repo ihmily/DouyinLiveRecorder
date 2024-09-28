@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-09-25 07:14:00
+Update: 2024-09-25 08:32:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -65,7 +65,8 @@ from spider import (
     get_shiguang_stream_url,
     get_yinbo_stream_url,
     get_yingke_stream_url,
-    get_zhihu_stream_url
+    get_zhihu_stream_url,
+    get_chzzk_stream_data
 )
 
 from utils import (
@@ -74,10 +75,10 @@ from utils import (
 )
 from msg_push import dingtalk, xizhi, tg_bot, email_message, bark
 
-version = "v3.0.7"
+version = "v3.0.8"
 platforms = ("\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|"
              "酷狗|LiveMe|花椒|流星|Acfun|时光|映客|音播|知乎"
-             "\n海外站点：TikTok|AfreecaTV|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|ShowRoom")
+             "\n海外站点：TikTok|AfreecaTV|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|ShowRoom|CHZZK")
 
 recording = set()
 not_recording = set()
@@ -1021,6 +1022,13 @@ def start_record(url_data: tuple, count_variable: int = -1):
                             port_info = get_zhihu_stream_url(
                                 url=record_url, proxy_addr=proxy_address, cookies=zhihu_cookie)
 
+                    elif record_url.find("chzzk.naver.com/") > -1:
+                        platform = 'CHZZK'
+                        with semaphore:
+                            json_data = get_chzzk_stream_data(
+                                url=record_url, proxy_addr=proxy_address, cookies=chzzk_cookie)
+                            port_info = get_stream_url(json_data, record_quality, spec=True)
+
                     else:
                         logger.error(f'{record_url} 未知直播地址')
                         return
@@ -1181,7 +1189,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                 rec_info = f"\r{anchor_name} 准备开始录制视频: {full_path}"
                                 filename_short = full_path + '/' + anchor_name + '_' + now
                                 if show_url:
-                                    re_plat = ('WinkTV', 'PandaTV', 'ShowRoom')
+                                    re_plat = ('WinkTV', 'PandaTV', 'ShowRoom', 'CHZZK')
                                     if platform in re_plat:
                                         logger.info(f"{platform} | {anchor_name} | 直播源地址: {port_info['m3u8_url']}")
                                     else:
@@ -1755,7 +1763,7 @@ while True:
     create_time_file = options.get(read_config_value(config, '录制设置', '生成时间文件', "否"), False)
     enable_proxy_platform = read_config_value(
         config, '录制设置', '使用代理录制的平台（逗号分隔）',
-        'tiktok, afreecatv, pandalive, winktv, flextv, popkontv, twitch, showroom')
+        'tiktok, afreecatv, pandalive, winktv, flextv, popkontv, twitch, showroom, chzzk')
     enable_proxy_platform_list = enable_proxy_platform.replace('，', ',').split(',') if enable_proxy_platform else None
     extra_enable_proxy = read_config_value(config, '录制设置', '额外使用代理录制的平台（逗号分隔）', '')
     extra_enable_proxy_platform_list = extra_enable_proxy.replace('，', ',').split(',') if extra_enable_proxy else None
@@ -1821,6 +1829,7 @@ while True:
     yinbo_cookie = read_config_value(config, 'Cookie', 'yinbo_cookie', '')
     yingke_cookie = read_config_value(config, 'Cookie', 'yingke_cookie', '')
     zhihu_cookie = read_config_value(config, 'Cookie', 'zhihu_cookie', '')
+    chzzk_cookie = read_config_value(config, 'Cookie', 'chzzk_cookie', '')
 
     video_save_type_list = ("FLV", "MKV", "TS", "MP4", "TS音频", "MKV音频")
     if video_save_type and video_save_type.upper() in video_save_type_list:
@@ -1928,7 +1937,9 @@ while True:
                     'www.flextv.co.kr',
                     'www.popkontv.com',
                     'www.twitch.tv',
-                    'www.showroom-live.com'
+                    'www.showroom-live.com',
+                    'chzzk.naver.com',
+                    'm.chzzk.naver.com',
                 ]
 
                 platform_host.extend(overseas_platform_host)
@@ -1939,7 +1950,8 @@ while True:
                     "www.zhihu.com",
                     "www.xiaohongshu.com",
                     "www.redelight.cn",
-                    "www.huya.com"
+                    "www.huya.com",
+                    "chzzk.naver.com"
                 )
 
                 if url_host in platform_host:

@@ -4,8 +4,8 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-09-19 02:05:12
-Copyright (c) 2023 by Hmily, All Rights Reserved.
+Update: 2024-09-28 08:31:12
+Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
 import gzip
@@ -2378,7 +2378,7 @@ def get_yinbo_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies:
         'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1',
         'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
-        'Referer': 'https://www.ybw1666.com/800005143?promoters=0',
+        'Referer': 'https://live.ybw1666.com/800005143?promoters=0',
     }
     if cookies:
         headers['Cookie'] = cookies
@@ -2391,8 +2391,9 @@ def get_yinbo_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies:
     play_api = f'https://wap.ybw1666.com/api/ui/room/v1.0.0/live.ashx?{urllib.parse.urlencode(params)}'
     json_str = get_req(play_api, proxy_addr=proxy_addr, headers=headers)
     json_data = json.loads(json_str)
-    anchor_name = json_data['data']['roomInfo']['nickname']
-    live_status = json_data['data']['roomInfo']['live_stat']
+    room_data = json_data['data']['roomInfo']
+    anchor_name = room_data['nickname']
+    live_status = room_data['live_stat']
 
     def get_live_domain(page_url):
         html_str = get_req(page_url, proxy_addr=proxy_addr, headers=headers)
@@ -2406,7 +2407,7 @@ def get_yinbo_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies:
     result = {"anchor_name": anchor_name, "is_live": False}
     if live_status == 1:
         flv_domain, hls_domain = get_live_domain(url)
-        live_id = json_data['data']['roomInfo']['liveID']
+        live_id = room_data['liveID']
         flv_url = f'{flv_domain}/{live_id}.flv'
         m3u8_url = f'{hls_domain}/{live_id}.m3u8'
         result["is_live"] = True
@@ -2443,6 +2444,40 @@ def get_zhihu_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies:
     return result
 
 
+@trace_error_decorator
+def get_chzzk_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
+        Dict[str, Any]:
+    headers = {
+        'accept': 'application/json, text/plain, */*',
+        'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
+        'origin': 'https://chzzk.naver.com',
+        'referer': 'https://chzzk.naver.com/live/458f6ec20b034f49e0fc6d03921646d2',
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 Edg/128.0.0.0',
+    }
+    if cookies:
+        headers['Cookie'] = cookies
+
+    room_id = url.split('?')[0].rsplit('/', maxsplit=1)[-1]
+    play_api = f'https://api.chzzk.naver.com/service/v3/channels/{room_id}/live-detail'
+    json_str = get_req(play_api, proxy_addr=proxy_addr, headers=headers, abroad=True)
+    json_data = json.loads(json_str)
+    live_data = json_data['content']
+    anchor_name = live_data['channel']['channelName']
+    live_status = live_data['status']
+
+    result = {"anchor_name": anchor_name, "is_live": False}
+    if live_status == 'OPEN':
+        play_data = json.loads(live_data['livePlaybackJson'])
+        m3u8_url = play_data['media'][0]['path']
+        result["is_live"] = True
+        result["m3u8_url"] = m3u8_url
+        m3u8_url_list = get_play_url_list(m3u8_url, proxy=proxy_addr, header=headers, abroad=True)
+        prefix = m3u8_url.split('?')[0].rsplit('/', maxsplit=1)[0]
+        m3u8_url_list = [prefix + '/' + i for i in m3u8_url_list]
+        result["play_url_list"] = m3u8_url_list
+    return result
+
+
 if __name__ == '__main__':
     # 尽量用自己的cookie，以避免默认的不可用导致无法获取数据
     # 以下示例链接不保证时效性，请自行查看链接是否能正常访问
@@ -2456,10 +2491,7 @@ if __name__ == '__main__':
     # room_url = 'https://www.yy.com/22490906/22490906'  # YY直播
     # room_url = 'https://live.bilibili.com/21593109'  # b站直播
     # room_url = 'https://live.bilibili.com/23448867'  # b站直播
-    # 小红书直播
-    # room_url = 'http://xhslink.com/O9f9fM'
-    # room_url = 'https://www.redelight.cn/hina/livestream/569077534207413574?appuid=5f3f478a00000000010005b3&'
-    # room_url = 'https://www.xiaohongshu.com/hina/livestream/569098486282043893?appuid=5f3f478a00000000010005b3&'
+    # room_url = 'http://xhslink.com/O9f9fM'  # 小红书直播
     # room_url = 'https://www.bigo.tv/cn/716418802'  # bigo直播
     # room_url = 'https://slink.bigovideo.tv/uPvCVq'  # bigo直播
     # room_url = 'https://app.blued.cn/live?id=Mp6G2R'  # blued直播
@@ -2488,8 +2520,9 @@ if __name__ == '__main__':
     # room_url = 'https://live.acfun.cn/live/17912421'  # Acfun
     # room_url = 'https://www.rengzu.com/180778'  # 时光直播
     # room_url = 'https://www.inke.cn/liveroom/index.html?uid=710032101&id=1720857535354099'  # 映客直播
-    # room_url = 'https://www.ybw1666.com/800002949'   # 音播直播
+    # room_url = 'https://live.ybw1666.com/800002949'   # 音播直播
     # room_url = 'https://www.zhihu.com/theater/114453'   # 知乎直播
+    # room_url = 'https://chzzk.naver.com/live/458f6ec20b034f49e0fc6d03921646d2'   # CHZZK
 
     print(get_douyin_stream_data(room_url, proxy_addr=''))
     # print(get_douyin_app_stream_data(room_url, proxy_addr=''))
@@ -2527,3 +2560,4 @@ if __name__ == '__main__':
     # print(get_yingke_stream_url(room_url, proxy_addr=''))
     # print(get_yinbo_stream_url(room_url, proxy_addr=''))
     # print(get_zhihu_stream_url(room_url, proxy_addr=''))
+    # print(get_chzzk_stream_data(room_url, proxy_addr=''))
