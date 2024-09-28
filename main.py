@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-09-25 08:32:00
+Update: 2024-09-25 11:33:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -81,7 +81,6 @@ platforms = ("\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|big
              "\n海外站点：TikTok|AfreecaTV|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|ShowRoom|CHZZK")
 
 recording = set()
-not_recording = set()
 warning_count = 0
 max_request = 0
 pre_max_request = 0
@@ -142,31 +141,28 @@ def display_info():
             print(f"录制视频质量为: {video_record_quality}", end=" | ")
             print(f"录制视频格式为: {video_save_type}", end=" | ")
             print(f"目前瞬时错误数为: {warning_count}", end=" | ")
-            format_now_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-            print(f"当前时间: {format_now_time}")
+            now = time.strftime("%H:%M:%S", time.localtime())
+            print(f"当前时间: {now}")
 
-            if len(recording) == 0 and len(not_recording) == 0:
+            if len(recording) == 0:
                 time.sleep(5)
                 if monitoring == 0:
                     print("\r没有正在监测和录制的直播")
                 else:
                     print(f"\r没有正在录制的直播 循环监测间隔时间：{delay_default}秒")
-                continue
             else:
                 now_time = datetime.datetime.now()
-                if len(recording) > 0:
-                    print("x" * 60)
-                    no_repeat_recording = list(set(recording))
-                    print(f"正在录制{len(no_repeat_recording)}个直播: ")
-                    for recording_live in no_repeat_recording:
-                        rt, qa = recording_time_list[recording_live]
-                        have_record_time = now_time - rt
-                        print(f"{recording_live}[{qa}] 正在录制中 {str(have_record_time).split('.')[0]}")
+                print("x" * 60)
+                no_repeat_recording = list(set(recording))
+                print(f"正在录制{len(no_repeat_recording)}个直播: ")
+                for recording_live in no_repeat_recording:
+                    rt, qa = recording_time_list[recording_live]
+                    have_record_time = now_time - rt
+                    print(f"{recording_live}[{qa}] 正在录制中 {str(have_record_time).split('.')[0]}")
 
-                    # print('\n本软件已运行：'+str(now_time - start_display_time).split('.')[0])
-                    print("x" * 60)
-                else:
-                    start_display_time = now_time
+                # print('\n本软件已运行：'+str(now_time - start_display_time).split('.')[0])
+                print("x" * 60)
+                start_display_time = now_time
         except Exception as e:
             logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
 
@@ -653,19 +649,17 @@ def push_message(content: str) -> Union[str, list]:
     return push_pts
 
 
-def clear_record_info(record_name, anchor_name, record_url):
+def clear_record_info(record_name, record_url):
     global monitoring
     if record_name in recording:
         recording.remove(record_name)
-    if anchor_name in not_recording:
-        not_recording.add(anchor_name)
     if record_url in url_comments and record_url in running_list:
         running_list.remove(record_url)
         monitoring -= 1
         print(f"[{record_name}]已经从录制列表中移除")
 
 
-def check_subprocess(record_name: str, anchor_name: str, record_url: str, ffmpeg_command: list):
+def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list) -> bool:
     process = subprocess.Popen(
         ffmpeg_command, stderr=subprocess.STDOUT
     )
@@ -674,18 +668,19 @@ def check_subprocess(record_name: str, anchor_name: str, record_url: str, ffmpeg
     while process.poll() is None:
         if record_url in url_comments:
             print(f"[{record_name}]录制时已被注释,本条线程将会退出")
-            clear_record_info(record_name, anchor_name, record_url)
+            clear_record_info(record_name, record_url)
             process.terminate()
             process.wait()
             return True
         time.sleep(1)
 
     return_code = process.returncode
+    stop_time = time.strftime('%Y-%m-%d %H:%M:%S')
     if return_code == 0:
-        print(f"[{record_name}]录制成功完成")
+        print(f"\n{record_name} {stop_time} 直播录制完成\n")
     else:
-        print(f"[{record_name}]录制退出,返回码: {return_code}")
-    return return_code == 0
+        print(f"\n{record_name} {stop_time} 直播录制出错,返回码: {return_code}\n")
+    return False
 
 
 def start_record(url_data: tuple, count_variable: int = -1):
@@ -699,7 +694,6 @@ def start_record(url_data: tuple, count_variable: int = -1):
             record_finished_2 = False
             run_once = False
             is_long_url = False
-            no_error = True
             new_record_url = ''
             count_time = time.time()
             retry = 0
@@ -1054,7 +1048,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
 
                         if record_url in url_comments:
                             print(f"[{anchor_name}]已被注释,本条线程将会退出")
-                            clear_record_info(record_name, anchor_name, record_url)
+                            clear_record_info(record_name, record_url)
                             return
 
                         if anchor_name in recording:
@@ -1167,18 +1161,18 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                     "-correct_ts_overflow", "1",
                                 ]
 
-                                add_headers_list = ('PandaTV', '千度热播', 'WinkTV')
-                                if platform in add_headers_list:
-                                    if platform == 'PandaTV':
-                                        headers = 'origin:https://www.pandalive.co.kr'
-                                    elif platform == 'WinkTV':
-                                        headers = 'origin:https://www.winktv.co.kr'
-                                    else:
-                                        headers = 'referer:https://qiandurebo.com'
+                                record_headers = {
+                                    'PandaTV': 'origin:https://www.pandalive.co.kr',
+                                    'WinkTV': 'origin:https://www.winktv.co.kr',
+                                    'PopkonTV': 'origin:https://www.popkontv.com',
+                                    'FlexTV': 'origin:https://www.flextv.co.kr',
+                                    '千度热播': 'referer:https://qiandurebo.com',
+                                }
+                                headers = record_headers.get(platform, '')
+                                if headers:
                                     ffmpeg_command.insert(11, "-headers")
                                     ffmpeg_command.insert(12, headers)
 
-                                # 添加代理参数
                                 if proxy_address:
                                     ffmpeg_command.insert(1, "-http_proxy")
                                     ffmpeg_command.insert(2, proxy_address)
@@ -1213,10 +1207,12 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                             _filepath, _ = urllib.request.urlretrieve(real_url,
                                                                                       f'{full_path}/{filename}')
                                             record_finished = True
+                                            print(f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制完成\n")
+
                                     except Exception as e:
+                                        print(f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制出错,请检查网络\n")
                                         logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                         warning_count += 1
-                                        no_error = False
 
                                 elif video_save_type == "MKV":
                                     filename = anchor_name + '_' + now + ".mkv"
@@ -1260,7 +1256,6 @@ def start_record(url_data: tuple, count_variable: int = -1):
 
                                         comment_end = check_subprocess(
                                             record_name,
-                                            anchor_name,
                                             record_url,
                                             ffmpeg_command
                                         )
@@ -1270,7 +1265,6 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                     except subprocess.CalledProcessError as e:
                                         logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                         warning_count += 1
-                                        no_error = False
 
                                 elif video_save_type == "MP4":
                                     filename = anchor_name + '_' + now + ".mp4"
@@ -1313,7 +1307,6 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                         ffmpeg_command.extend(command)
                                         comment_end = check_subprocess(
                                             record_name,
-                                            anchor_name,
                                             record_url,
                                             ffmpeg_command
                                         )
@@ -1323,7 +1316,6 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                     except subprocess.CalledProcessError as e:
                                         logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                         warning_count += 1
-                                        no_error = False
 
                                 elif video_save_type == "MKV音频":
                                     try:
@@ -1349,7 +1341,6 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                             ffmpeg_command.extend(command)
                                             comment_end = check_subprocess(
                                                 record_name,
-                                                anchor_name,
                                                 record_url,
                                                 ffmpeg_command
                                             )
@@ -1375,7 +1366,6 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                             ffmpeg_command.extend(command)
                                             comment_end = check_subprocess(
                                                 record_name,
-                                                anchor_name,
                                                 record_url,
                                                 ffmpeg_command,
                                             )
@@ -1386,7 +1376,6 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                     except subprocess.CalledProcessError as e:
                                         logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                         warning_count += 1
-                                        no_error = False
 
                                 elif video_save_type == "TS音频":
                                     try:
@@ -1412,7 +1401,6 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                             ffmpeg_command.extend(command)
                                             comment_end = check_subprocess(
                                                 record_name,
-                                                anchor_name,
                                                 record_url,
                                                 ffmpeg_command,
                                             )
@@ -1435,7 +1423,6 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                             ffmpeg_command.extend(command)
                                             comment_end = check_subprocess(
                                                 record_name,
-                                                anchor_name,
                                                 record_url,
                                                 ffmpeg_command,
                                             )
@@ -1446,7 +1433,6 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                     except subprocess.CalledProcessError as e:
                                         logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                         warning_count += 1
-                                        no_error = False
 
                                 else:
                                     if split_video_by_time:
@@ -1470,7 +1456,6 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                             ffmpeg_command.extend(command)
                                             comment_end = check_subprocess(
                                                 record_name,
-                                                anchor_name,
                                                 record_url,
                                                 ffmpeg_command,
                                             )
@@ -1487,7 +1472,6 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                             logger.error(
                                                 f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                             warning_count += 1
-                                            no_error = False
 
                                     else:
                                         filename = anchor_name + '_' + now + ".ts"
@@ -1513,7 +1497,6 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                             ffmpeg_command.extend(command)
                                             comment_end = check_subprocess(
                                                 record_name,
-                                                anchor_name,
                                                 record_url,
                                                 ffmpeg_command
                                             )
@@ -1524,20 +1507,13 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                         except subprocess.CalledProcessError as e:
                                             logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                             warning_count += 1
-                                            no_error = False
 
                                 record_finished_2 = True
                                 count_time = time.time()
 
                             if record_finished_2:
-                                clear_record_info(record_name, anchor_name, record_url)
-
-                                if no_error:
-                                    print(f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制完成\n")
-                                else:
-                                    print(
-                                        f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制出错,请检查网络\n")
-
+                                if record_name in recording:
+                                    recording.remove(record_name)
                                 record_finished_2 = False
 
                 except Exception as e:
