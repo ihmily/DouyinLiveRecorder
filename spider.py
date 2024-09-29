@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-09-28 08:31:12
+Update: 2024-09-30 02:09:12
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -636,11 +636,12 @@ def get_bilibili_room_info(url: str, proxy_addr: Union[str, None] = None, cookie
 
 @trace_error_decorator
 def get_bilibili_stream_data(url: str, qn: str = '10000', platform: str = 'web', proxy_addr: Union[str, None] = None,
-                             cookies: Union[str, None] = None) -> str:
+                             cookies: Union[str, None] = None) -> Union[str, None]:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
+        'origin': 'https://live.bilibili.com',
+        'referer': 'https://live.bilibili.com/26066074',
     }
     if cookies:
         headers['Cookie'] = cookies
@@ -654,10 +655,46 @@ def get_bilibili_stream_data(url: str, qn: str = '10000', platform: str = 'web',
     play_api = f'https://api.live.bilibili.com/room/v1/Room/playUrl?{urllib.parse.urlencode(params)}'
     json_str = get_req(play_api, proxy_addr=proxy_addr, headers=headers)
     json_data = json.loads(json_str)
-    for i in json_data['data']['durl']:
-        if 'd1--cn-gotcha' in i['url']:
-            return i['url']
-    return json_data['data']['durl'][-1]['url']
+    if json_data and json_data['code'] == 0:
+        for i in json_data['data']['durl']:
+            if 'd1--cn-gotcha' in i['url']:
+                return i['url']
+        return json_data['data']['durl'][-1]['url']
+    else:
+        params = {
+            "room_id": room_id,
+            "protocol": "0,1",
+            "format": "0,1,2",
+            "codec": "0,1,2",
+            "qn": qn,
+            "platform": "web",
+            "ptype": "8",
+            "dolby": "5",
+            "panorama": "1",
+            "hdr_type": "0,1"
+        }
+
+        # 此接口因网页上有限制, 需要配置登录后的cookie才能获取最高画质
+        api = f'https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?{urllib.parse.urlencode(params)}'
+        json_str = get_req(api, proxy_addr=proxy_addr, headers=headers)
+        json_data = json.loads(json_str)
+        if json_data['data']['live_status'] == 0:
+            print('主播未开播')
+            return
+        playurl_info = json_data['data']['playurl_info']
+        format_list = playurl_info['playurl']['stream'][0]['format']
+        stream_data_list = format_list[0]['codec']
+        sorted_stream_list = sorted(stream_data_list, key=lambda x: x["current_qn"], reverse=True)
+        # qn: 30000=杜比 20000=4K 10000=原画 400=蓝光 250=超清 150=高清 80=流畅
+        video_quality_options = {'10000': 0, '400': 1, '250': 2, '150': 3, '80': 4}
+        qn_count = len(sorted_stream_list)
+        select_stream_index = video_quality_options[qn] if qn_count - 1 >= video_quality_options[qn] else qn_count - 1
+        stream_data: dict = sorted_stream_list[select_stream_index]
+        base_url = stream_data['base_url']
+        host = stream_data['url_info'][0]['host']
+        extra = stream_data['url_info'][0]['extra']
+        m3u8_url = host + base_url + extra
+        return m3u8_url
 
 
 @trace_error_decorator
