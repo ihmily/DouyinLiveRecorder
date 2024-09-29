@@ -77,8 +77,8 @@ from msg_push import dingtalk, xizhi, tg_bot, email_message, bark
 
 version = "v3.0.8"
 platforms = ("\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|"
-             "酷狗|LiveMe|花椒|流星|Acfun|时光|映客|音播|知乎"
-             "\n海外站点：TikTok|AfreecaTV|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|ShowRoom|CHZZK")
+             "酷狗|花椒|流星|Acfun|时光|映客|音播|知乎"
+             "\n海外站点：TikTok|AfreecaTV|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK")
 
 recording = set()
 warning_count = 0
@@ -961,10 +961,13 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                 logger.error(f"错误信息: 网络异常，请检查本网络是否能正常访问TwitchTV直播平台")
 
                     elif record_url.find("www.liveme.com/") > -1:
-                        platform = 'LiveMe'
-                        with semaphore:
-                            port_info = get_liveme_stream_url(
-                                url=record_url, proxy_addr=proxy_address, cookies=liveme_cookie)
+                        if global_proxy or proxy_address:
+                            platform = 'LiveMe'
+                            with semaphore:
+                                port_info = get_liveme_stream_url(
+                                    url=record_url, proxy_addr=proxy_address, cookies=liveme_cookie)
+                        else:
+                            logger.error(f"错误信息: 网络异常，请检查本网络是否能正常访问LiveMe直播平台")
 
                     elif record_url.find("www.huajiao.com/") > -1:
                         platform = '花椒直播'
@@ -1739,7 +1742,7 @@ while True:
     create_time_file = options.get(read_config_value(config, '录制设置', '生成时间文件', "否"), False)
     enable_proxy_platform = read_config_value(
         config, '录制设置', '使用代理录制的平台（逗号分隔）',
-        'tiktok, afreecatv, pandalive, winktv, flextv, popkontv, twitch, showroom, chzzk')
+        'tiktok, afreecatv, pandalive, winktv, flextv, popkontv, twitch, liveme, showroom, chzzk')
     enable_proxy_platform_list = enable_proxy_platform.replace('，', ',').split(',') if enable_proxy_platform else None
     extra_enable_proxy = read_config_value(config, '录制设置', '额外使用代理录制的平台（逗号分隔）', '')
     extra_enable_proxy_platform_list = extra_enable_proxy.replace('，', ',').split(',') if extra_enable_proxy else None
@@ -1891,7 +1894,6 @@ while True:
                     'fanxing.kugou.com',
                     'fanxing2.kugou.com',
                     'mfanxing.kugou.com',
-                    'www.liveme.com',
                     'www.huajiao.com',
                     'www.7u66.com',
                     'wap.7u66.com',
@@ -1913,6 +1915,7 @@ while True:
                     'www.flextv.co.kr',
                     'www.popkontv.com',
                     'www.twitch.tv',
+                    'www.liveme.com',
                     'www.showroom-live.com',
                     'chzzk.naver.com',
                     'm.chzzk.naver.com',

@@ -2032,7 +2032,7 @@ def get_liveme_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies
     if cookies:
         headers['Cookie'] = cookies
 
-    html_str = get_req(url=url, proxy_addr=proxy_addr, headers=headers)
+    html_str = get_req(url=url, proxy_addr=proxy_addr, headers=headers, abroad=True)
     video_url = re.search('hlsvideosource:"(.*?)",sdkstreamid', html_str)
     anchor_name = re.search('<title>(.*?) ', html_str).group(1)
     result = {
