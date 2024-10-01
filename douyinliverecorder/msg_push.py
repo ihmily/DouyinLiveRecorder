@@ -10,7 +10,7 @@ Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 from typing import Dict, Any, Optional
 import json
 import urllib.request
-from utils import trace_error_decorator
+from .utils import trace_error_decorator
 import smtplib
 from email.header import Header
 from email.mime.multipart import MIMEMultipart
@@ -43,9 +43,9 @@ def dingtalk(url: str, content: str, number: Optional[str] = '') -> Dict[str, An
 
 
 @trace_error_decorator
-def xizhi(url: str, content: str) -> Dict[str, Any]:
+def xizhi(url: str, content: str, title: str = '直播间状态更新') -> Dict[str, Any]:
     json_data = {
-        'title': '直播间状态更新',
+        'title': title,
         'content': content
     }
     data = json.dumps(json_data).encode('utf-8')
@@ -66,13 +66,13 @@ def email_message(mail_host: str, mail_pass: str, from_email: str, to_email: str
     if len(receivers) == 1:
         message['To'] = receivers[0]
 
-    tApart = MIMEText(content, 'plain', 'utf-8')
-    message.attach(tApart)
+    t_apart = MIMEText(content, 'plain', 'utf-8')
+    message.attach(t_apart)
 
     try:
-        smtpObj = smtplib.SMTP_SSL(mail_host, 465)
-        smtpObj.login(from_email, mail_pass)
-        smtpObj.sendmail(from_email, receivers, message.as_string())
+        smtp_obj = smtplib.SMTP_SSL(mail_host, 465)
+        smtp_obj.login(from_email, mail_pass)
+        smtp_obj.sendmail(from_email, receivers, message.as_string())
         data = {'code': 200, 'msg': '邮件发送成功'}
         return data
     except smtplib.SMTPException as e:
@@ -96,18 +96,18 @@ def tg_bot(chat_id: int, token: str, content: str) -> Dict[str, Any]:
 
 @trace_error_decorator
 def bark(api: str, title: str = "message", content: str = 'test', level: str = "active",
-         badge: int = 1, autoCopy: int = 1, sound: str = "", icon: str = "", group: str = "",
-         isArchive: int = 1, url: str = "") -> Dict[str, Any]:
+         badge: int = 1, auto_copy: int = 1, sound: str = "", icon: str = "", group: str = "",
+         is_archive: int = 1, url: str = "") -> Dict[str, Any]:
     json_data = {
         "title": title,
         "body": content,
         "level": level,
         "badge": badge,
-        "autoCopy": autoCopy,
+        "autoCopy": auto_copy,
         "sound": sound,
         "icon": icon,
         "group": group,
-        "isArchive": isArchive,
+        "isArchive": is_archive,
         "url": url
     }
 

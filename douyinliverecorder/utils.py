@@ -4,13 +4,15 @@ import os
 import functools
 import hashlib
 import traceback
-from logger import logger
+from typing import Union, Any
+
+from .logger import logger
 import configparser
 
 
-def trace_error_decorator(func):
+def trace_error_decorator(func: callable) -> callable:
     @functools.wraps(func)
-    def wrapper(*args, **kwargs):
+    def wrapper(*args: list, **kwargs: dict) -> Any:
         try:
             return func(*args, **kwargs)
         except Exception as e:
@@ -22,32 +24,18 @@ def trace_error_decorator(func):
     return wrapper
 
 
-def check_md5(file_path):
-    """
-    计算文件的md5值
-    """
+def check_md5(file_path: str) -> str:
     with open(file_path, 'rb') as fp:
         file_md5 = hashlib.md5(fp.read()).hexdigest()
     return file_md5
 
 
-def dict_to_cookie_str(cookies_dict):
+def dict_to_cookie_str(cookies_dict) -> str:
     cookie_str = '; '.join([f"{key}={value}" for key, value in cookies_dict.items()])
     return cookie_str
 
 
-def read_config_value(file_path, section, key):
-    """
-    从配置文件中读取指定键的值。
-
-    参数:
-    - file_path: 配置文件的路径。
-    - section: 部分名称。
-    - key: 键名称。
-
-    返回:
-    - 键的值，如果部分或键不存在则返回None。
-    """
+def read_config_value(file_path, section, key) -> Union[str, None]:
     config = configparser.ConfigParser()
 
     try:
@@ -67,16 +55,8 @@ def read_config_value(file_path, section, key):
     return None
 
 
-def update_config(file_path, section, key, new_value):
-    """
-    更新配置文件中的键值。
+def update_config(file_path, section, key, new_value) -> None:
 
-    参数:
-    - file_path: 配置文件的路径。
-    - section: 要更新的部分名称。
-    - key: 要更新的键名称。
-    - new_value: 新的键值。
-    """
     config = configparser.ConfigParser()
 
     try:
@@ -101,7 +81,7 @@ def update_config(file_path, section, key, new_value):
         print(f"写入配置文件时出错: {e}")
 
 
-def get_file_paths(directory):
+def get_file_paths(directory) -> list:
     file_paths = []
     for root, dirs, files in os.walk(directory):
         for file in files:
