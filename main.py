@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-10-03 23:01:00
+Update: 2024-10-03 23:26:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -319,9 +319,13 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
         print(f"\n{record_name} {stop_time} 直播录制完成\n")
 
         if bash_file_path:
-            bash_command = [bash_file_path, record_name.split(' ', maxsplit=1)[-1], save_path_name, save_type,
-                            split_video_by_time, ts_to_mp4]
-            run_bash(bash_command)
+            if os_type != 'nt':
+                print(f'准备执行自定义Bash脚本，请确认脚本是否有执行权限! 路径:{bash_file_path}')
+                bash_command = [bash_file_path, record_name.split(' ', maxsplit=1)[-1], save_path_name, save_type,
+                                split_video_by_time, ts_to_mp4]
+                run_bash(bash_command)
+            else:
+                print('只支持在Linux环境下执行Bash脚本')
 
     else:
         print(f"\n{record_name} {stop_time} 直播录制出错,返回码: {return_code}\n")
@@ -1356,7 +1360,7 @@ while True:
                             False)
     delete_origin_file = options.get(read_config_value(config, '录制设置', '追加格式后删除原文件', "否"), False)
     create_time_file = options.get(read_config_value(config, '录制设置', '生成时间文件', "否"), False)
-    is_run_bash = options.get(read_config_value(config, '录制设置', '是否录制完成后执行sh脚本', "否"), False)
+    is_run_bash = options.get(read_config_value(config, '录制设置', '是否录制完成后执行bash脚本', "否"), False)
     bash_path = read_config_value(config, '录制设置', 'bash脚本路径', "") if is_run_bash else None
     enable_proxy_platform = read_config_value(
         config, '录制设置', '使用代理录制的平台（逗号分隔）',
