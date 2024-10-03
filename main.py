@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-10-02 06:15:00
+Update: 2024-10-03 15:03:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -27,7 +27,8 @@ import configparser
 from douyinliverecorder import spider
 from douyinliverecorder import stream
 from douyinliverecorder.utils import (
-    logger, check_md5, update_config, get_file_paths
+    logger, check_md5, update_config,
+    get_file_paths, remove_emojis
 )
 from douyinliverecorder.msg_push import (
     dingtalk, xizhi, tg_bot, email_message, bark
@@ -65,6 +66,8 @@ ffmpeg_path = f"{script_path}/ffmpeg.exe"
 default_path = f'{script_path}/downloads'
 os.makedirs(default_path, exist_ok=True)
 file_update_lock = threading.Lock()
+os_type = os.name
+clear_command = "cls" if os_type == 'nt' else "clear"
 
 
 def signal_handler(_signal, _frame):
@@ -80,10 +83,7 @@ def display_info():
     while True:
         try:
             time.sleep(5)
-            if os.name == 'nt':
-                os.system("cls")
-            elif os.name == 'posix':
-                os.system("clear")
+            os.system(clear_command)
             print(f"\r共监测{monitoring}个直播中", end=" | ")
             print(f"同一时间访问网络的线程数: {max_request}", end=" | ")
             if len(video_save_path) > 0:
@@ -250,11 +250,6 @@ def change_max_connect():
         if pre_max_request != max_request:
             pre_max_request = max_request
             print("同一时间访问网络的线程数动态改为", max_request)
-
-
-
-
-
 
 
 def push_message(content: str) -> Union[str, list]:
@@ -634,7 +629,8 @@ def start_record(url_data: tuple, count_variable: int = -1):
                         with semaphore:
                             json_data = spider.get_acfun_stream_data(
                                 url=record_url, proxy_addr=proxy_address, cookies=acfun_cookie)
-                            port_info = stream.get_stream_url(json_data, record_quality, url_type='flv', extra_key='url')
+                            port_info = stream.get_stream_url(
+                                json_data, record_quality, url_type='flv', extra_key='url')
 
                     elif record_url.find("rengzu.com/") > -1:
                         platform = '时光直播'
@@ -688,6 +684,8 @@ def start_record(url_data: tuple, count_variable: int = -1):
                         warning_count += 1
                     else:
                         anchor_name = re.sub(rstr, "_", anchor_name)
+                        anchor_name = remove_emojis(anchor_name, '_')
+
                         record_name = f'序号{count_variable} {anchor_name}'
 
                         if record_url in url_comments:
