@@ -46,6 +46,7 @@
 - [x] 时光直播
 - [x] 映客直播
 - [x] 音播直播
+- [x] 知乎直播
 - [x] CHZZK
 - [ ] 更多平台正在更新中
 
@@ -60,19 +61,22 @@
     ├── /logs -> (save runing log file)
     ├── /backup_config -> (backup file)
     ├── /libs -> (dll file)
+    ├── /douyinliverecorder -> (package)
+    	├── spider.py-> (get live data)
+    	├── stream.py-> (get live stream address)
+    	├── utils.py -> (contains utility functions)
+    	├── logger.py -> (logger handdle)
+    	├── web_rid.py -> (get web_rid)
+    	├── msg_push.py -> (send live status update message)
+    	├── x-bogus.js -> (get douyin xbogus token)
     ├── main.py -> (main file)
-    ├── spider.py-> (get live url)
-    ├── utils.py -> (contains utility functions)
-    ├── logger.py -> (logger handdle)
-    ├── web_rid.py -> (get web_rid)
-    ├── msg_push.py -> (send live status update message)
-    ├── cookies.py -> (get douyin cookies)
-    ├── x-bogus.js -> (get douyin xbogus token)
+    ├── demo.py -> (call package test demo)
     ├── ffmpeg.exe -> (record video)
     ├── index.html -> (play m3u8 and flv video)
     ├── requirements.txt -> (library dependencies)
     ├── docker-compose.yaml -> (Container Orchestration File)
     ├── Dockerfile -> (Application Build Recipe)
+    ...
 ```
 
 </div>
@@ -202,6 +206,9 @@ https://www.inke.cn/liveroom/index.html?uid=22954469&id=1720860391070904
 音播直播：
 https://live.ybw1666.com/800002949
 
+知乎直播:
+https://www.zhihu.com/theater/114453
+
 CHZZK：
 https://chzzk.naver.com/live/458f6ec20b034f49e0fc6d03921646d2
 ```
@@ -325,17 +332,24 @@ docker-compose stop
 [![missuo](https://github.com/missuo.png?size=50)](https://github.com/missuo)
 <a href="https://github.com/xueli12" target="_blank"><img src="https://github.com/xueli12.png?size=50" alt="xueli12" style="width:53px; height:51px;" /></a>
 <a href="https://github.com/kaine1973" target="_blank"><img src="https://github.com/kaine1973.png?size=50" alt="kaine1973" style="width:53px; height:51px;" /></a>
+<a href="https://github.com/yinruiqing" target="_blank"><img src="https://github.com/yinruiqing.png?size=50" alt="yinruiqing" style="width:53px; height:51px;" /></a>
 <a href="https://github.com/Max-Tortoise" target="_blank"><img src="https://github.com/Max-Tortoise.png?size=50" alt="Max-Tortoise" style="width:53px; height:51px;" /></a>
 [![justdoiting](https://github.com/justdoiting.png?size=50)](https://github.com/justdoiting)
+[![dhbxs](https://github.com/dhbxs.png?size=50)](https://github.com/dhbxs)
 [![wujiyu115](https://github.com/wujiyu115.png?size=50)](https://github.com/wujiyu115)
 &emsp;
 
 ## ⏳提交日志
 
+- 20241005
+  - 新增邮箱和Bark推送
+  - 新增直播注释停止录制
+  - 优化分段录制
+  - 重构部分代码
+  
 - 20240928
-  - 新增CHZZK直播录制
+  - 新增知乎直播、CHZZK直播录制
   - 修复音播直播录制
-
 - 20240903
   - 新增抖音双屏录制、音播直播录制
   - 修复PandaTV、bigo直播录制
