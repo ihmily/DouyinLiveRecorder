@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-10-03 23:26:00
+Update: 2024-10-04 20:40:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -19,6 +19,7 @@ import datetime
 import re
 import shutil
 import random
+from pathlib import Path
 import urllib.parse
 import urllib.request
 from urllib.error import URLError, HTTPError
@@ -187,33 +188,29 @@ def converts_m4a(address: str, is_original_delete: bool = True):
             os.remove(address)
 
 
-def create_ass_file(file_group: list):
-    anchor_name, ass_filename = file_group
-    index_time = -1
-    finish = 0
+def generate_subtitles(record_name: str, ass_filename: str, sub_format: str = 'srt'):
+    index_time = 0
     today = datetime.datetime.now()
     re_datatime = today.strftime('%Y-%m-%d %H:%M:%S')
+
+    def transform_int_to_time(seconds: int) -> str:
+        m, s = divmod(seconds, 60)
+        h, m = divmod(m, 60)
+        return f"{h:02d}:{m:02d}:{s:02d}"
 
     while True:
         index_time += 1
         txt = str(index_time) + "\n" + transform_int_to_time(index_time) + ',000 --> ' + transform_int_to_time(
-            index_time + 1) + ',000' + "\n" + str(re_datatime) + "\n"
+            index_time + 1) + ',000' + "\n" + str(re_datatime) + "\n\n"
 
-        with open(ass_filename + ".ass", 'a', encoding=text_encoding) as f:
+        with open(f"{ass_filename}.{sub_format.lower()}", 'a', encoding=text_encoding) as f:
             f.write(txt)
 
-        if anchor_name not in recording:
-            finish += 1
-            offset = datetime.timedelta(seconds=1)
-            re_datatime = (today + offset).strftime('%Y-%m-%d %H:%M:%S')
-            today = today + offset
-        else:
-            time.sleep(1)
-            today = datetime.datetime.now()
-            re_datatime = today.strftime('%Y-%m-%d %H:%M:%S')
-
-        if finish > 15:
-            break
+        if record_name not in recording:
+            return
+        time.sleep(1)
+        today = datetime.datetime.now()
+        re_datatime = today.strftime('%Y-%m-%d %H:%M:%S')
 
 
 def change_max_connect():
@@ -290,10 +287,20 @@ def clear_record_info(record_name, record_url):
 
 def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, save_type: str,
                      bash_file_path: Union[str, None] = None) -> bool:
+
     save_path_name = ffmpeg_command[-1]
     process = subprocess.Popen(
         ffmpeg_command, stderr=subprocess.STDOUT
     )
+
+    subs_file_path = save_path_name.rsplit('.', maxsplit=1)[0]
+    subs_thread_name = f'subs_{Path(subs_file_path).name}'
+    if create_time_file and not split_video_by_time and '音频' not in save_type:
+        create_var[subs_thread_name] = threading.Thread(
+            target=generate_subtitles, args=(record_name, subs_file_path)
+        )
+        create_var[subs_thread_name].daemon = True
+        create_var[subs_thread_name].start()
 
     while process.poll() is None:
         if record_url in url_comments:
@@ -329,6 +336,8 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
 
     else:
         print(f"\n{record_name} {stop_time} 直播录制出错,返回码: {return_code}\n")
+
+    recording.discard(record_name)
     return False
 
 
@@ -339,7 +348,6 @@ def start_record(url_data: tuple, count_variable: int = -1):
     while True:
         try:
             record_finished = False
-            record_finished_2 = False
             run_once = False
             is_long_url = False
             new_record_url = ''
@@ -719,7 +727,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                             clear_record_info(record_name, record_url)
                             return
 
-                        if anchor_name in recording:
+                        if record_name in recording:
                             print(f"新增的地址: {anchor_name} 已经存在,本条线程将会退出")
                             need_update_line_list.append(f'{record_url}|#{record_url}')
                             return
@@ -849,7 +857,6 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                 start_record_time = datetime.datetime.now()
                                 recording_time_list[record_name] = [start_record_time, record_quality]
                                 rec_info = f"\r{anchor_name} 准备开始录制视频: {full_path}"
-                                filename_short = full_path + '/' + anchor_name + '_' + now
                                 if show_url:
                                     re_plat = ('WinkTV', 'PandaTV', 'ShowRoom', 'CHZZK')
                                     if platform in re_plat:
@@ -860,23 +867,25 @@ def start_record(url_data: tuple, count_variable: int = -1):
 
                                 if video_save_type == "FLV":
                                     filename = anchor_name + '_' + now + '.flv'
+                                    save_file_path = f'{full_path}/{filename}'
                                     print(f'{rec_info}/{filename}')
 
+                                    subs_file_path = save_file_path.rsplit('.', maxsplit=1)[0]
+                                    subs_thread_name = f'subs_{Path(subs_file_path).name}'
                                     if create_time_file:
-                                        filename_group = [anchor_name, filename_short]
-                                        create_var[str(filename_short)] = threading.Thread(target=create_ass_file,
-                                                                                           args=(filename_group,))
-                                        create_var[str(filename_short)].daemon = True
-                                        create_var[str(filename_short)].start()
+                                        create_var[subs_thread_name] = threading.Thread(
+                                            target=generate_subtitles, args=(record_name, subs_file_path)
+                                        )
+                                        create_var[subs_thread_name].daemon = True
+                                        create_var[subs_thread_name].start()
 
                                     try:
                                         flv_url = port_info.get('flv_url', None)
                                         if flv_url:
-                                            _filepath, _ = urllib.request.urlretrieve(real_url,
-                                                                                      f'{full_path}/{filename}')
+                                            _filepath, _ = urllib.request.urlretrieve(real_url, save_file_path)
                                             record_finished = True
+                                            recording.discard(record_name)
                                             print(f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制完成\n")
-
                                     except Exception as e:
                                         print(f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制出错,请检查网络\n")
                                         logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
@@ -904,14 +913,6 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                             ]
 
                                         else:
-                                            if create_time_file:
-                                                filename_group = [anchor_name, filename_short]
-                                                create_var[str(filename_short)] = threading.Thread(
-                                                    target=create_ass_file,
-                                                    args=(filename_group,))
-                                                create_var[str(filename_short)].daemon = True
-                                                create_var[str(filename_short)].start()
-
                                             command = [
                                                 "-flags", "global_header",
                                                 "-map", "0",
@@ -958,14 +959,6 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                             ]
 
                                         else:
-                                            if create_time_file:
-                                                filename_group = [anchor_name, filename_short]
-                                                create_var[str(filename_short)] = threading.Thread(
-                                                    target=create_ass_file,
-                                                    args=(filename_group,))
-                                                create_var[str(filename_short)].daemon = True
-                                                create_var[str(filename_short)].start()
-
                                             command = [
                                                 "-map", "0",
                                                 "-c:v", "copy",
@@ -1105,13 +1098,6 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                         print(f'{rec_info}/{filename}')
                                         save_file_path = full_path + '/' + filename
 
-                                        if create_time_file:
-                                            filename_group = [anchor_name, filename_short]
-                                            create_var[str(filename_short)] = threading.Thread(target=create_ass_file,
-                                                                                               args=(filename_group,))
-                                            create_var[str(filename_short)].daemon = True
-                                            create_var[str(filename_short)].start()
-
                                         try:
                                             command = [
                                                 "-c:v", "copy",
@@ -1136,12 +1122,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                             logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                             warning_count += 1
 
-                                record_finished_2 = True
                                 count_time = time.time()
-
-                            if record_finished_2:
-                                recording.discard(record_name)
-                                record_finished_2 = False
 
                 except Exception as e:
                     logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
@@ -1359,7 +1340,7 @@ while True:
     ts_to_mp4 = options.get(read_config_value(config, '录制设置', 'ts录制完成后自动转为mp4格式', "否"),
                             False)
     delete_origin_file = options.get(read_config_value(config, '录制设置', '追加格式后删除原文件', "否"), False)
-    create_time_file = options.get(read_config_value(config, '录制设置', '生成时间文件', "否"), False)
+    create_time_file = options.get(read_config_value(config, '录制设置', '生成时间字幕文件', "否"), False)
     is_run_bash = options.get(read_config_value(config, '录制设置', '是否录制完成后执行bash脚本', "否"), False)
     bash_path = read_config_value(config, '录制设置', 'bash脚本路径', "") if is_run_bash else None
     enable_proxy_platform = read_config_value(
@@ -1438,11 +1419,6 @@ while True:
     else:
         video_save_type = "TS"
 
-
-    def transform_int_to_time(seconds: int) -> str:
-        m, s = divmod(seconds, 60)
-        h, m = divmod(m, 60)
-        return f"{h}:{m:02d}:{s:02d}"
 
     def contains_url(string: str) -> bool:
         pattern = (r"(http:\/\/www\.|https:\/\/www\.|http:\/\/|https:\/\/)?[a-zA-Z0-9][a-zA-Z0-9\-]+(\.["
