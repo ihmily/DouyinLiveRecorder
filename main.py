@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-10-04 20:40:00
+Update: 2024-10-05 00:57:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -167,7 +167,7 @@ def converts_mp4(address: str, is_original_delete: bool = True):
         "ffmpeg", "-i", address,
         "-c:v", "copy",
         "-c:a", "copy",
-        "-f", "mp4", address.split('.')[0] + ".mp4",
+        "-f", "mp4", address.rsplit('.', maxsplit=1)[0] + ".mp4",
     ], stderr=subprocess.STDOUT)
     if is_original_delete:
         time.sleep(1)
@@ -180,7 +180,7 @@ def converts_m4a(address: str, is_original_delete: bool = True):
         "ffmpeg", "-i", address,
         "-n", "-vn",
         "-c:a", "aac", "-bsf:a", "aac_adtstoasc", "-ab", "320k",
-        address.split('.')[0] + ".m4a",
+        address.rsplit('.', maxsplit=1)[0] + ".m4a",
     ], stderr=subprocess.STDOUT)
     if is_original_delete:
         time.sleep(1)
