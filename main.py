@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-10-05 00:57:00
+Update: 2024-10-05 11:54:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -249,20 +249,26 @@ def change_max_connect():
 def push_message(content: str) -> Union[str, list]:
     push_pts = []
     if '微信' in live_status_push:
-        push_pts.append('微信')
-        xizhi(xizhi_api_url, content)
+        result = xizhi(xizhi_api_url, content)
+        if result:
+            push_pts.append('微信')
     if '钉钉' in live_status_push:
-        push_pts.append('钉钉')
-        dingtalk(dingtalk_api_url, content, dingtalk_phone_num)
+        result = dingtalk(dingtalk_api_url, content, dingtalk_phone_num)
+        if result:
+            push_pts.append('钉钉')
     if '邮箱' in live_status_push:
         push_pts.append('邮箱')
-        email_message(mail_host, mail_password, from_email, to_email, "直播间状态更新通知", content)
+        result = email_message(mail_host, mail_password, from_email, to_email, "直播间状态更新通知", content)
+        if result:
+            push_pts.append('邮箱')
     if 'TG' in live_status_push.upper():
-        push_pts.append('TG')
-        tg_bot(tg_chat_id, tg_token, content)
+        result = tg_bot(tg_chat_id, tg_token, content)
+        if result:
+            push_pts.append('TG')
     if 'BARK' in live_status_push.upper():
-        push_pts.append('BARK')
-        bark(bark_msg_api, title="直播录制通知", content=content, level=bark_msg_level, sound=bark_msg_ring)
+        result = bark(bark_msg_api, title="直播录制通知", content=content, level=bark_msg_level, sound=bark_msg_ring)
+        if result:
+            push_pts.append('BARK')
     push_pts = '、'.join(push_pts) if len(push_pts) > 0 else []
     return push_pts
 

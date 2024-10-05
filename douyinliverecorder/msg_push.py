@@ -4,10 +4,10 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-09-03 19:18:36
-Update: 2024-09-24 20:43:12
+Update: 2024-10-05 11:45:12
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 """
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Union
 import json
 import urllib.request
 from .utils import trace_error_decorator
@@ -22,7 +22,7 @@ headers: Dict[str, str] = {'Content-Type': 'application/json'}
 
 
 @trace_error_decorator
-def dingtalk(url: str, content: str, number: Optional[str] = '') -> Dict[str, Any]:
+def dingtalk(url: str, content: str, number: Optional[str] = '') -> Union[Dict[str, Any], None]:
     json_data = {
         'msgtype': 'text',
         'text': {
@@ -39,11 +39,14 @@ def dingtalk(url: str, content: str, number: Optional[str] = '') -> Dict[str, An
     response = opener.open(req, timeout=10)
     json_str = response.read().decode('utf-8')
     json_data = json.loads(json_str)
+    if json_data['errcode'] != 0:
+        print(f'钉钉推送失败, {json_data["errmsg"]}')
+        return
     return json_data
 
 
 @trace_error_decorator
-def xizhi(url: str, content: str, title: str = '直播间状态更新') -> Dict[str, Any]:
+def xizhi(url: str, content: str, title: str = '直播间状态更新') -> Union[Dict[str, Any], None]:
     json_data = {
         'title': title,
         'content': content
@@ -53,12 +56,15 @@ def xizhi(url: str, content: str, title: str = '直播间状态更新') -> Dict[
     response = opener.open(req, timeout=10)
     json_str = response.read().decode('utf-8')
     json_data = json.loads(json_str)
+    if json_data['code'] != 200:
+        print(f'微信推送失败, 失败信息：{json_data["msg"]}')
+        return
     return json_data
 
 
 @trace_error_decorator
-def email_message(mail_host: str, mail_pass: str, from_email: str, to_email: str, title: str, content: str) -> Dict[
-            str, Any]:
+def email_message(mail_host: str, mail_pass: str, from_email: str, to_email: str, title: str, content: str) -> (
+        Union)[Dict[str, Any], None]:
     message = MIMEMultipart()
     message['From'] = "{}".format(from_email)
     message['Subject'] = Header(title, 'utf-8')
@@ -97,7 +103,7 @@ def tg_bot(chat_id: int, token: str, content: str) -> Dict[str, Any]:
 @trace_error_decorator
 def bark(api: str, title: str = "message", content: str = 'test', level: str = "active",
          badge: int = 1, auto_copy: int = 1, sound: str = "", icon: str = "", group: str = "",
-         is_archive: int = 1, url: str = "") -> Dict[str, Any]:
+         is_archive: int = 1, url: str = "") -> Union[Dict[str, Any], None]:
     json_data = {
         "title": title,
         "body": content,
@@ -116,6 +122,9 @@ def bark(api: str, title: str = "message", content: str = 'test', level: str = "
     response = opener.open(req, timeout=10)
     json_str = response.read().decode("utf-8")
     json_data = json.loads(json_str)
+    if json_data['code'] != 200:
+        print(f'Bark推送失败, 失败信息：{json_data["message"]}')
+        return
     return json_data
 
 
