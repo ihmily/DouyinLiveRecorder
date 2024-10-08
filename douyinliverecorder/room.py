@@ -4,7 +4,7 @@
 Author: Hmily
 Github:https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-03-06 23:35:00
+Update: 2024-10-08 23:35:00
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 """
 import json
@@ -25,20 +25,29 @@ HEADERS = {
     'Cookie': 's_v_web_id=verify_lk07kv74_QZYCUApD_xhiB_405x_Ax51_GYO9bUIyZQVf'
 }
 
+HEADERS_PC = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.5845.97 '
+                  'Safari/537.36 Core/1.116.438.400 QQBrowser/13.0.6070.400',
+    'Cookie': 'sessionid=7494ae59ae06784454373ce25761e864; __ac_nonce=0670497840077ee4c9eb2; '
+              '__ac_signature=_02B4Z6wo00f012DZczQAAIDCJJBb3EjnINdg-XeAAL8-db;  '
+              's_v_web_id=verify_m1ztgtjj_vuHnMLZD_iwZ9_4YO4_BdN1_7wLP3pyqXsf2; ',
+    }
+
 
 # X-bogus算法
 def get_xbogus(url: str, headers: Union[dict, None] = None) -> str:
-    if not headers or "User-Agent" not in headers and "user-agent" not in headers:
+    if not headers or 'user-agent' not in (k.lower() for k in headers):
         headers = HEADERS
     query = urllib.parse.urlparse(url).query
-    xbogus = execjs.compile(open('./x-bogus.js').read()).call('sign', query, headers["User-Agent"])
+    xbogus = execjs.compile(open('./x-bogus.js').read()).call('sign', query, headers.get("User-Agent", "user-agent"))
     # print(xbogus)
     return xbogus
 
 
 # 获取房间ID和用户secID
-def get_sec_user_id(url: str, proxy_addr: Union[str, None] = None, headers: Union[dict, None] = None):
-    if not headers or "User-Agent" not in headers and "user-agent" not in headers:
+def get_sec_user_id(url: str, proxy_addr: Union[str, None] = None,
+                    headers: Union[dict, None] = None) -> Union[tuple, None]:
+    if not headers or all(k.lower() not in ['user-agent', 'cookie'] for k in headers):
         headers = HEADERS
 
     if proxy_addr:
@@ -50,15 +59,37 @@ def get_sec_user_id(url: str, proxy_addr: Union[str, None] = None, headers: Unio
     else:
         response = opener.open(url, timeout=15)
     redirect_url = response.url
-    sec_user_id = re.search(r'sec_user_id=([\w_\-]+)&', redirect_url).group(1)
-    room_id = redirect_url.split('?')[0].rsplit('/', maxsplit=1)[1]
-    return room_id, sec_user_id
+    if 'reflow/' in redirect_url:
+        sec_user_id = re.search(r'sec_user_id=([\w_\-]+)&', redirect_url).group(1)
+        room_id = redirect_url.split('?')[0].rsplit('/', maxsplit=1)[1]
+        return room_id, sec_user_id
+
+
+# 获取抖音号
+def get_unique_id(url: str, proxy_addr: Union[str, None] = None,
+                  headers: Union[dict, None] = None) -> Union[str, None]:
+    if not headers or all(k.lower() not in ['user-agent', 'cookie'] for k in headers):
+        headers = HEADERS_PC
+
+    if proxy_addr:
+        proxies = {
+            'http': proxy_addr,
+            'https': proxy_addr
+        }
+        response = requests.get(url, headers=headers, proxies=proxies, timeout=15)
+    else:
+        response = opener.open(url, timeout=15)
+    redirect_url = response.url
+    sec_user_id = redirect_url.split('?')[0].rsplit('/', maxsplit=1)[1]
+    resp = requests.get(f'https://www.douyin.com/user/{sec_user_id}', headers=headers)
+    unique_id = re.findall(r'undefined\\"},\\"uniqueId\\":\\"(.*?)\\",\\"customVerify', resp.text)[-1]
+    return unique_id
 
 
 # 获取直播间webID
 def get_live_room_id(room_id: str, sec_user_id: str, proxy_addr: Union[str, None] = None,
                      params: Union[dict, None] = None, headers: Union[dict, None] = None) -> str:
-    if not headers or "User-Agent" not in headers and "user-agent" not in headers:
+    if not headers or all(k.lower() not in ['user-agent', 'cookie'] for k in headers):
         headers = HEADERS
 
     if not params:
@@ -93,8 +124,6 @@ def get_live_room_id(room_id: str, sec_user_id: str, proxy_addr: Union[str, None
 
 if __name__ == '__main__':
     room_url = "https://v.douyin.com/iQLgKSj/"
-    # url="https://v.douyin.com/iQFeBnt/"
-    # url="https://v.douyin.com/iehvKttp/"
     _room_id, sec_uid = get_sec_user_id(room_url)
     web_rid = get_live_room_id(_room_id, sec_uid)
     print("return web_rid:", web_rid)

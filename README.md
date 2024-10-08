@@ -105,9 +105,11 @@
 
 ```
 抖音：
-https://live.douyin.com/745964462470
-https://v.douyin.com/iQFeBnt/
-https://live.douyin.com/yall1102
+https://live.douyin.com/745964462470 (PC网页端地址)
+https://v.douyin.com/iQFeBnt/ (app端分享地址)
+https://live.douyin.com/yall1102 (链接+抖音号)
+https://v.douyin.com/CeiU5cbX/ (作者主页分享地址)
+
 
 TikTok：
 https://www.tiktok.com/@pearlgaga88/live

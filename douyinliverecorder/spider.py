@@ -29,7 +29,7 @@ from .utils import (
     trace_error_decorator, dict_to_cookie_str
 )
 from .logger import script_path
-from .web_rid import get_sec_user_id
+from .room import get_sec_user_id, get_unique_id
 
 no_proxy_handler = urllib.request.ProxyHandler({})
 opener = urllib.request.build_opener(no_proxy_handler)
@@ -173,8 +173,7 @@ def get_douyin_app_stream_data(url: str, proxy_addr: Union[str, None] = None, co
     if cookies:
         headers['Cookie'] = cookies
 
-    def get_app_data():
-        room_id, sec_uid = get_sec_user_id(url=url, proxy_addr=proxy_addr)
+    def get_app_data(room_id, sec_uid):
         api2 = f'https://webcast.amemv.com/webcast/room/reflow/info/?verifyFp=verify_lxj5zv70_7szNlAB7_pxNY_48Vh_ALKF_GA1Uf3yteoOY&type_id=0&live_id=1&room_id={room_id}&sec_user_id={sec_uid}&version_code=99.99.99&app_id=1128'
         json_str2 = get_req(url=api2, proxy_addr=proxy_addr, headers=headers)
         json_data2 = json.loads(json_str2)['data']
@@ -192,12 +191,18 @@ def get_douyin_app_stream_data(url: str, proxy_addr: Union[str, None] = None, co
             room_data = json_data['data'][0]
             room_data['anchor_name'] = json_data['user']['nickname']
         else:
-            room_data = get_app_data()
+            data = get_sec_user_id(url, proxy_addr=proxy_addr)
 
-        if 'stream_url' not in room_data:
-            raise RuntimeError('该直播类型或玩法电脑端暂未支持，请使用app端分享链接进行录制')
+            if data:
+                _room_id, _sec_uid = data
+                room_data = get_app_data(_room_id, _sec_uid)
+            else:
+                unique_id = get_unique_id(url, proxy_addr=proxy_addr)
+                return get_douyin_stream_data(f'https://live.douyin.com/{unique_id}')
 
         if room_data['status'] == 2:
+            if 'stream_url' not in room_data:
+                raise RuntimeError('该直播类型或玩法电脑端暂未支持，请使用app端分享链接进行录制')
             live_core_sdk_data = room_data['stream_url']['live_core_sdk_data']
             pull_datas = room_data['stream_url']['pull_datas']
             if live_core_sdk_data:
@@ -321,7 +326,7 @@ def get_kuaishou_stream_data(url: str, proxy_addr: Union[str, None] = None, cook
 
     try:
         json_str = re.search('<script>window.__INITIAL_STATE__=(.*?);\(function\(\)\{var s;', html_str).group(1)
-        play_list = re.findall('(\{"liveStream".*?),"gameInfo', json_str)[0] + "}"
+        play_list = re.findall('(\\{"liveStream".*?),"gameInfo', json_str)[0] + "}"
         play_list = json.loads(play_list)
     except (AttributeError, IndexError, json.JSONDecodeError) as e:
         print(f"Failed to parse JSON data from {url}. Error: {e}")

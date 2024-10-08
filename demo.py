@@ -6,7 +6,7 @@ from douyinliverecorder import spider
 LIVE_STREAM_CONFIG = {
     "douyin": {
         "url": "https://live.douyin.com/745964462470",
-        "func": spider.get_douyin_stream_data,
+        "func": spider.get_douyin_app_stream_data,
     },
     "tiktok": {
         "url": "https://www.tiktok.com/@pearlgaga88/live",
