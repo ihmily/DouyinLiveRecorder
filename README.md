@@ -66,7 +66,7 @@
     	├── stream.py-> (get live stream address)
     	├── utils.py -> (contains utility functions)
     	├── logger.py -> (logger handdle)
-    	├── web_rid.py -> (get web_rid)
+    	├── room.py -> (get room info)
     	├── msg_push.py -> (send live status update message)
     	├── x-bogus.js -> (get douyin xbogus token)
     ├── main.py -> (main file)
@@ -105,11 +105,10 @@
 
 ```
 抖音：
-https://live.douyin.com/745964462470 (PC网页端地址)
-https://v.douyin.com/iQFeBnt/ (app端分享地址)
-https://live.douyin.com/yall1102 (链接+抖音号)
-https://v.douyin.com/CeiU5cbX/ (作者主页分享地址)
-
+https://live.douyin.com/745964462470
+https://v.douyin.com/iQFeBnt/
+https://live.douyin.com/yall1102  （链接+抖音号）
+https://v.douyin.com/CeiU5cbX  （作者主页地址）
 
 TikTok：
 https://www.tiktok.com/@pearlgaga88/live
