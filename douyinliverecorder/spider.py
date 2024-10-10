@@ -2041,7 +2041,7 @@ def get_twitchtv_stream_data(url: str, proxy_addr: Union[str, None] = None, cook
         play_session_id = random.choice(["bdd22331a986c7f1073628f2fc5b19da", "064bc3ff1722b6f53b0b5b8c01e46ca5"])
         params = {
             "acmb": "e30=",
-            "allow_sourc": "true",
+            "allow_source": "true",
             "browser_family": "firefox",
             "browser_version": "124.0",
             "cdm": "wv",
