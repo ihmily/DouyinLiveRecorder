@@ -14,6 +14,7 @@ from typing import Union
 import execjs
 import requests
 import urllib.request
+from . import JS_SCRIPT_PATH
 
 no_proxy_handler = urllib.request.ProxyHandler({})
 opener = urllib.request.build_opener(no_proxy_handler)
@@ -39,7 +40,7 @@ def get_xbogus(url: str, headers: Union[dict, None] = None) -> str:
     if not headers or 'user-agent' not in (k.lower() for k in headers):
         headers = HEADERS
     query = urllib.parse.urlparse(url).query
-    xbogus = execjs.compile(open('./x-bogus.js').read()).call('sign', query, headers.get("User-Agent", "user-agent"))
+    xbogus = execjs.compile(open(f'{JS_SCRIPT_PATH}/x-bogus.js').read()).call('sign', query, headers.get("User-Agent", "user-agent"))
     # print(xbogus)
     return xbogus
 

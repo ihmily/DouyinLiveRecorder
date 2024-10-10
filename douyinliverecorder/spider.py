@@ -30,6 +30,8 @@ from .utils import (
 )
 from .logger import script_path
 from .room import get_sec_user_id, get_unique_id
+from . import JS_SCRIPT_PATH
+
 
 no_proxy_handler = urllib.request.ProxyHandler({})
 opener = urllib.request.build_opener(no_proxy_handler)
@@ -2069,26 +2071,45 @@ def get_twitchtv_stream_data(url: str, proxy_addr: Union[str, None] = None, cook
 @trace_error_decorator
 def get_liveme_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
         Dict[str, Any]:
+
     headers = {
-        'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
-        'if-none-match': '"5056-h/Mk04yXaLRQmg+4iqhJH8Sa8l0"',
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0',
+        'origin': 'https://www.liveme.com',
+        'referer': 'https://www.liveme.com',
+        'user-agent': 'Mozilla/5.0 (Linux; Android 8.0.0; SM-G955U Build/R16NW) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36',
     }
     if cookies:
         headers['Cookie'] = cookies
 
-    html_str = get_req(url=url, proxy_addr=proxy_addr, headers=headers, abroad=True)
-    video_url = re.search('hlsvideosource:"(.*?)",sdkstreamid', html_str)
-    anchor_name = re.search('<title>(.*?) ', html_str).group(1)
+    room_id = url.split("/index.html")[0].rsplit('/', maxsplit=1)[-1]
+    sign_data = execjs.compile(open(f'{JS_SCRIPT_PATH}/liveme.js').read()).call('sign', room_id, f'{JS_SCRIPT_PATH}/crypto-js.min.js')
+    lm_s_sign = sign_data.pop("lm_s_sign")
+    tongdun_black_box = sign_data.pop("tongdun_black_box")
+    platform = sign_data.pop("os")
+    headers['lm-s-sign'] = lm_s_sign
+
+    params = {
+        'alias': 'liveme',
+        'tongdun_black_box': tongdun_black_box,
+        'os': platform,
+    }
+
+    api = f'https://live.liveme.com/live/queryinfosimple?{urllib.parse.urlencode(params)}'
+    json_str = get_req(api, data=sign_data, proxy_addr=proxy_addr, headers=headers, abroad=True)
+    json_data = json.loads(json_str)
+    stream_data = json_data['data']['video_info']
+    anchor_name = stream_data['uname']
+    live_status = stream_data['status']
     result = {
         "anchor_name": anchor_name,
         "is_live": False,
     }
-    if video_url:
-        play_url = video_url.group(1).replace('\\u002F', '/')
+    if live_status == "0":
         result["is_live"] = True
-        result['m3u8_url'] = play_url
-        result['record_url'] = play_url
+        m3u8_url = stream_data['hlsvideosource']
+        flv_url = stream_data['videosource']
+        result['m3u8_url'] = m3u8_url
+        result['flv_url'] = flv_url
+        result['record_url'] = m3u8_url if m3u8_url else flv_url
     return result
 
 
