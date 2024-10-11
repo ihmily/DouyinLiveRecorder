@@ -2542,3 +2542,47 @@ def get_chzzk_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies
         m3u8_url_list = [prefix + '/' + i for i in m3u8_url_list]
         result["play_url_list"] = m3u8_url_list
     return result
+
+
+@trace_error_decorator
+def get_haixiu_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
+        Dict[str, Any]:
+    headers = {
+        'origin': 'https://www.haixiutv.com',
+        'referer': 'https://www.haixiutv.com/',
+        'user-agent': 'Mozilla/5.0 (Linux; Android 8.0.0; SM-G955U Build/R16NW) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36',
+    }
+    if cookies:
+        headers['Cookie'] = cookies
+
+    room_id = url.split("?")[0].rsplit('/', maxsplit=1)[-1]
+    access_token = "pLXSC%252FXJ0asc1I21tVL5FYZhNJn2Zg6d7m94umCnpgL%252BuVm31GQvyw%253D%253D"
+    params = {
+        "accessToken": access_token,
+        "tku": "3000006",
+        "c": "10138100100000",
+        "_st1": int(time.time()*1000)
+    }
+    ajax_data = execjs.compile(open(f'{JS_SCRIPT_PATH}/haixiu.js').read()).call('sign', params, f'{JS_SCRIPT_PATH}/crypto-js.min.js')
+
+    params["accessToken"] = urllib.parse.unquote(urllib.parse.unquote(access_token))
+    params['_ajaxData1'] = ajax_data
+    params['_'] = int(time.time()*1000)
+
+    api = f'https://service.haixiutv.com/v2/room/{room_id}/media/advanceInfoRoom?{urllib.parse.urlencode(params)}'
+    json_str = get_req(api, proxy_addr=proxy_addr, headers=headers, abroad=True)
+    json_data = json.loads(json_str)
+
+    stream_data = json_data['data']
+    anchor_name = stream_data['nickname']
+    live_status = stream_data['live_status']
+    result = {
+        "anchor_name": anchor_name,
+        "is_live": False,
+    }
+    if live_status == 1:
+        result["is_live"] = True
+        flv_url = stream_data['media_url_web']
+        result['flv_url'] = flv_url
+        result['record_url'] = flv_url
+    return result

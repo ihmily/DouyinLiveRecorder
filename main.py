@@ -35,9 +35,9 @@ from douyinliverecorder.msg_push import (
     dingtalk, xizhi, tg_bot, email_message, bark
 )
 
-version = "v3.0.8"
+version = "v3.0.9"
 platforms = ("\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|"
-             "酷狗|花椒|流星|Acfun|时光|映客|音播|知乎"
+             "酷狗|花椒|流星|Acfun|时光|映客|音播|知乎|嗨秀"
              "\n海外站点：TikTok|AfreecaTV|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK")
 
 recording = set()
@@ -703,6 +703,12 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                 url=record_url, proxy_addr=proxy_address, cookies=chzzk_cookie)
                             port_info = stream.get_stream_url(json_data, record_quality, spec=True)
 
+                    elif record_url.find("www.haixiutv.com/") > -1:
+                        platform = '嗨秀直播'
+                        with semaphore:
+                            port_info = spider.get_haixiu_stream_url(
+                                url=record_url, proxy_addr=proxy_address, cookies=haixiu_cookie)
+
                     else:
                         logger.error(f'{record_url} {platform}直播地址')
                         return
@@ -731,11 +737,6 @@ def start_record(url_data: tuple, count_variable: int = -1):
                         if record_url in url_comments:
                             print(f"[{anchor_name}]已被注释,本条线程将会退出")
                             clear_record_info(record_name, record_url)
-                            return
-
-                        if record_name in recording:
-                            print(f"新增的地址: {anchor_name} 已经存在,本条线程将会退出")
-                            need_update_line_list.append(f'{record_url}|#{record_url}')
                             return
 
                         if url_data[-1] == "" and run_once is False:
@@ -1418,6 +1419,7 @@ while True:
     yingke_cookie = read_config_value(config, 'Cookie', 'yingke_cookie', '')
     zhihu_cookie = read_config_value(config, 'Cookie', 'zhihu_cookie', '')
     chzzk_cookie = read_config_value(config, 'Cookie', 'chzzk_cookie', '')
+    haixiu_cookie = read_config_value(config, 'Cookie', 'haixiu_cookie', '')
 
     video_save_type_list = ("FLV", "MKV", "TS", "MP4", "MP3音频", "M4A音频")
     if video_save_type and video_save_type.upper() in video_save_type_list:
@@ -1506,7 +1508,8 @@ while True:
                     'live.ybw1666.com',
                     'wap.ybw1666.com',
                     'www.inke.cn',
-                    'www.zhihu.com'
+                    'www.zhihu.com',
+                    'www.haixiutv.com'
                 ]
                 overseas_platform_host = [
                     'www.tiktok.com',
@@ -1532,7 +1535,9 @@ while True:
                     "www.xiaohongshu.com",
                     "www.redelight.cn",
                     "www.huya.com",
-                    "chzzk.naver.com"
+                    "chzzk.naver.com",
+                    "www.liveme.com",
+                    "www.haixiutv.com"
                 )
 
                 if url_host in platform_host:
@@ -1547,7 +1552,8 @@ while True:
                         url_tuples_list.append(new_line)
                 else:
                     print(f"\r{origin_line} 本行包含未知链接.此条跳过")
-                    update_file(url_config_file, url, url, start_str='#')
+                    if not origin_line.startswith('#'):
+                        update_file(url_config_file, url, url, start_str='#')
 
         while len(need_update_line_list):
             a = need_update_line_list.pop()

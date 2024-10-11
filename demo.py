@@ -139,6 +139,10 @@ LIVE_STREAM_CONFIG = {
     "chzzk": {
         "url": "https://chzzk.naver.com/live/458f6ec20b034f49e0fc6d03921646d2",
         "func": spider.get_chzzk_stream_data,
+    },
+    "haixiu": {
+        "url": "https://www.haixiutv.com/6095106",
+        "func": spider.get_haixiu_stream_url,
     }
 }
 
