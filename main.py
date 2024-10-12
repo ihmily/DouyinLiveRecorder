@@ -31,7 +31,7 @@ from douyinliverecorder.utils import (
     logger, check_md5, update_config,
     get_file_paths, remove_emojis
 )
-from douyinliverecorder.msg_push import (
+from msg_push import (
     dingtalk, xizhi, tg_bot, email_message, bark
 )
 
@@ -239,7 +239,7 @@ def adjust_max_request():
         error_count = 0
 
 
-def push_message(content: str) -> Union[str, list]:
+def push_message(record_name, content: str) -> None:
     push_functions = {
         '微信': lambda: xizhi(xizhi_api_url, content),
         '钉钉': lambda: dingtalk(dingtalk_api_url, content, dingtalk_phone_num),
@@ -248,18 +248,15 @@ def push_message(content: str) -> Union[str, list]:
         'BARK': lambda: bark(
             bark_msg_api, title="直播录制通知", content=content, level=bark_msg_level, sound=bark_msg_ring),
     }
-    push_pts = []
 
     for platform, func in push_functions.items():
         if platform in live_status_push.upper():
             try:
                 result = func()
-                if result:
-                    push_pts.append(platform)
+                print(f'提示信息：已经将[{record_name}]直播状态消息推送至你的{platform},'
+                      f' 成功{len(result["success"])}, 失败{len(result["error"])}')
             except Exception as e:
-                print(f"推送到{platform}失败: {e}")
-
-    return '、'.join(push_pts) if push_pts else ""
+                print(f"直播消息推送到{platform}失败: {e}")
 
 
 def run_bash(command):
@@ -750,9 +747,8 @@ def start_record(url_data: tuple, count_variable: int = -1):
 
                                     push_content = (push_content.replace('[直播间名称]', record_name).
                                                     replace('[时间]', push_at))
-                                    push_pts = push_message(push_content.replace(r'\n', '\n'))
-                                    if push_pts:
-                                        print(f'提示信息：已经将[{record_name}]直播状态消息推送至你的{push_pts}')
+                                    push_message(record_name, push_content.replace(r'\n', '\n'))
+
                                 start_pushed = False
                         else:
                             content = f"\r{record_name} 正在直播中..."
@@ -766,9 +762,8 @@ def start_record(url_data: tuple, count_variable: int = -1):
 
                                     push_content = (push_content.replace('[直播间名称]', record_name).
                                                     replace('[时间]', push_at))
-                                    push_pts = push_message(push_content.replace(r'\n', '\n'))
-                                    if push_pts:
-                                        print(f'提示信息：已经将[{record_name}]直播状态消息推送至你的{push_pts}')
+                                    push_message(record_name, push_content.replace(r'\n', '\n'))
+
                                 start_pushed = True
 
                             if disable_record:
