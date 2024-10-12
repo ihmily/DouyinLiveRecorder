@@ -4,10 +4,10 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-09-03 19:18:36
-Update: 2024-10-05 11:45:12
+Update: 2024-10-12 19:22:12
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 """
-from typing import Dict, Any, Optional, Union
+from typing import Dict, Any, Optional
 import json
 import urllib.request
 import smtplib
@@ -20,10 +20,11 @@ opener = urllib.request.build_opener(no_proxy_handler)
 headers: Dict[str, str] = {'Content-Type': 'application/json'}
 
 
-def dingtalk(url: str, content: str, number: Optional[str] = '') -> Union[Dict[str, Any], None]:
+def dingtalk(url: str, content: str, number: Optional[str] = '') -> Dict[str, Any]:
     success = []
     error = []
-    for api in url.replace('，', ',').split(','):
+    api_list = url.replace('，', ',').split(',') if url.strip() else []
+    for api in api_list:
         json_data = {
             'msgtype': 'text',
             'text': {
@@ -52,10 +53,11 @@ def dingtalk(url: str, content: str, number: Optional[str] = '') -> Union[Dict[s
     return {"success": success, "error": error}
 
 
-def xizhi(url: str, content: str, title: str = '直播间状态更新') -> Union[Dict[str, Any], None]:
+def xizhi(url: str, content: str, title: str = '直播间状态更新') -> Dict[str, Any]:
     success = []
     error = []
-    for api in url.replace('，', ',').split(','):
+    api_list = url.replace('，', ',').split(',') if url.strip() else []
+    for api in api_list:
         json_data = {
             'title': title,
             'content': content
@@ -78,9 +80,9 @@ def xizhi(url: str, content: str, title: str = '直播间状态更新') -> Union
 
 
 def email_message(mail_host: str, mail_pass: str, from_email: str, to_email: str, title: str, content: str) -> (
-        Union)[Dict[str, Any], None]:
+        Dict)[str, Any]:
 
-    receivers = to_email.replace('，', ',').split(',')
+    receivers = to_email.replace('，', ',').split(',') if to_email.strip() else []
 
     try:
         message = MIMEMultipart()
@@ -121,10 +123,11 @@ def tg_bot(chat_id: int, token: str, content: str) -> Dict[str, Any]:
 
 def bark(api: str, title: str = "message", content: str = 'test', level: str = "active",
          badge: int = 1, auto_copy: int = 1, sound: str = "", icon: str = "", group: str = "",
-         is_archive: int = 1, url: str = "") -> Union[Dict[str, Any], None]:
+         is_archive: int = 1, url: str = "") -> Dict[str, Any]:
     success = []
     error = []
-    for _api in api.replace('，', ',').split(','):
+    api_list = api.replace('，', ',').split(',') if api.strip() else []
+    for _api in api_list:
         json_data = {
             "title": title,
             "body": content,
