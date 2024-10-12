@@ -41,9 +41,12 @@ platforms = ("\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|big
              "\n海外站点：TikTok|AfreecaTV|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK")
 
 recording = set()
-warning_count = 0
-max_request = 0
-pre_max_request = 0
+error_count = 0
+pre_max_request = 10
+max_request_lock = threading.Lock()
+error_window = []
+error_window_size = 10
+error_threshold = 5
 monitoring = 0
 running_list = []
 url_tuples_list = []
@@ -87,19 +90,13 @@ def display_info():
             os.system(clear_command)
             print(f"\r共监测{monitoring}个直播中", end=" | ")
             print(f"同一时间访问网络的线程数: {max_request}", end=" | ")
-            if len(video_save_path) > 0:
-                if not os.path.exists(video_save_path):
-                    print("配置文件里,直播保存路径并不存在,请重新输入一个正确的路径.或留空表示当前目录,按回车退出")
-                    input("程序结束")
-                    sys.exit(0)
-
             print(f"是否开启代理录制: {'是' if use_proxy else '否'}", end=" | ")
             if split_video_by_time:
                 print(f"录制分段开启: {split_time}秒", end=" | ")
             print(f"是否生成时间文件: {'是' if create_time_file else '否'}", end=" | ")
             print(f"录制视频质量为: {video_record_quality}", end=" | ")
             print(f"录制视频格式为: {video_save_type}", end=" | ")
-            print(f"目前瞬时错误数为: {warning_count}", end=" | ")
+            print(f"目前瞬时错误数为: {error_count}", end=" | ")
             now = time.strftime("%H:%M:%S", time.localtime())
             print(f"当前时间: {now}")
 
@@ -213,64 +210,56 @@ def generate_subtitles(record_name: str, ass_filename: str, sub_format: str = 's
         re_datatime = today.strftime('%Y-%m-%d %H:%M:%S')
 
 
-def change_max_connect():
-    global max_request, warning_count, pre_max_request
+def adjust_max_request():
+    global max_request, error_count, pre_max_request, error_window
     preset = max_request
-    start_time = time.time()
-    pre_max_request = max_request
 
     while True:
         time.sleep(5)
-        if 10 <= warning_count <= 20:
-            if preset > 5:
-                max_request = 5
+        with max_request_lock:
+            if error_window:
+                error_rate = sum(error_window) / len(error_window)
             else:
-                max_request //= 2
-                if max_request > 0:
-                    max_request = preset
-                else:
-                    preset = 1
-            time.sleep(5)
+                error_rate = 0
 
-        elif 20 < warning_count:
-            max_request = 1
-            time.sleep(10)
+            if error_rate > error_threshold:
+                max_request = max(1, max_request - 1)
+            elif error_rate < error_threshold / 2 and max_request < preset:
+                max_request += 1
+            else:
+                pass
 
-        elif warning_count < 10 and time.time() - start_time > 60:
-            max_request = preset
-            start_time = time.time()
+            if pre_max_request != max_request:
+                pre_max_request = max_request
+                print(f"同一时间访问网络的线程数动态改为 {max_request}")
 
-        warning_count = 0
-        if pre_max_request != max_request:
-            pre_max_request = max_request
-            print("同一时间访问网络的线程数动态改为", max_request)
+        error_window.append(error_count)
+        if len(error_window) > error_window_size:
+            error_window.pop(0)
+        error_count = 0
 
 
 def push_message(content: str) -> Union[str, list]:
+    push_functions = {
+        '微信': lambda: xizhi(xizhi_api_url, content),
+        '钉钉': lambda: dingtalk(dingtalk_api_url, content, dingtalk_phone_num),
+        '邮箱': lambda: email_message(mail_host, mail_password, from_email, to_email, "直播间状态更新通知", content),
+        'TG': lambda: tg_bot(tg_chat_id, tg_token, content),
+        'BARK': lambda: bark(
+            bark_msg_api, title="直播录制通知", content=content, level=bark_msg_level, sound=bark_msg_ring),
+    }
     push_pts = []
-    if '微信' in live_status_push:
-        result = xizhi(xizhi_api_url, content)
-        if result:
-            push_pts.append('微信')
-    if '钉钉' in live_status_push:
-        result = dingtalk(dingtalk_api_url, content, dingtalk_phone_num)
-        if result:
-            push_pts.append('钉钉')
-    if '邮箱' in live_status_push:
-        push_pts.append('邮箱')
-        result = email_message(mail_host, mail_password, from_email, to_email, "直播间状态更新通知", content)
-        if result:
-            push_pts.append('邮箱')
-    if 'TG' in live_status_push.upper():
-        result = tg_bot(tg_chat_id, tg_token, content)
-        if result:
-            push_pts.append('TG')
-    if 'BARK' in live_status_push.upper():
-        result = bark(bark_msg_api, title="直播录制通知", content=content, level=bark_msg_level, sound=bark_msg_ring)
-        if result:
-            push_pts.append('BARK')
-    push_pts = '、'.join(push_pts) if len(push_pts) > 0 else []
-    return push_pts
+
+    for platform, func in push_functions.items():
+        if platform in live_status_push.upper():
+            try:
+                result = func()
+                if result:
+                    push_pts.append(platform)
+            except Exception as e:
+                print(f"推送到{platform}失败: {e}")
+
+    return '、'.join(push_pts) if push_pts else ""
 
 
 def run_bash(command):
@@ -348,14 +337,14 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
 
 
 def start_record(url_data: tuple, count_variable: int = -1):
-    global warning_count, video_save_path
-    start_pushed = False
+    global error_count
 
     while True:
         try:
             record_finished = False
             run_once = False
             is_long_url = False
+            start_pushed = False
             new_record_url = ''
             count_time = time.time()
             retry = 0
@@ -727,7 +716,9 @@ def start_record(url_data: tuple, count_variable: int = -1):
 
                     if not port_info.get("anchor_name", ''):
                         print(f'序号{count_variable} 网址内容获取失败,进行重试中...获取失败的地址是:{url_data}')
-                        warning_count += 1
+                        with max_request_lock:
+                            error_count += 1
+                            error_window.append(1)
                     else:
                         anchor_name = re.sub(rstr, "_", anchor_name)
                         anchor_name = remove_emojis(anchor_name, '_')
@@ -791,9 +782,10 @@ def start_record(url_data: tuple, count_variable: int = -1):
 
                                 try:
                                     if len(video_save_path) > 0:
-                                        if video_save_path[-1] not in ["/", "\\"]:
-                                            video_save_path = video_save_path + "/"
-                                        full_path = f'{video_save_path}{platform}'
+                                        if not video_save_path.endswith(('/', '\\')):
+                                            full_path = f'{video_save_path}/{platform}'
+                                        else:
+                                            full_path = f'{video_save_path}{platform}'
 
                                     full_path = full_path.replace("\\", '/')
                                     if folder_by_author:
@@ -896,7 +888,9 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                     except Exception as e:
                                         print(f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制出错,请检查网络\n")
                                         logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
-                                        warning_count += 1
+                                        with max_request_lock:
+                                            error_count += 1
+                                            error_window.append(1)
 
                                 elif video_save_type == "MKV":
                                     filename = anchor_name + '_' + now + ".mkv"
@@ -942,7 +936,9 @@ def start_record(url_data: tuple, count_variable: int = -1):
 
                                     except subprocess.CalledProcessError as e:
                                         logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
-                                        warning_count += 1
+                                        with max_request_lock:
+                                            error_count += 1
+                                            error_window.append(1)
 
                                 elif video_save_type == "MP4":
                                     filename = anchor_name + '_' + now + ".mp4"
@@ -987,7 +983,9 @@ def start_record(url_data: tuple, count_variable: int = -1):
 
                                     except subprocess.CalledProcessError as e:
                                         logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
-                                        warning_count += 1
+                                        with max_request_lock:
+                                            error_count += 1
+                                            error_window.append(1)
 
                                 elif "音频" in video_save_type:
                                     try:
@@ -1054,7 +1052,9 @@ def start_record(url_data: tuple, count_variable: int = -1):
 
                                     except subprocess.CalledProcessError as e:
                                         logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
-                                        warning_count += 1
+                                        with max_request_lock:
+                                            error_count += 1
+                                            error_window.append(1)
 
                                 else:
                                     if split_video_by_time:
@@ -1098,7 +1098,9 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                         except subprocess.CalledProcessError as e:
                                             logger.error(
                                                 f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
-                                            warning_count += 1
+                                            with max_request_lock:
+                                                error_count += 1
+                                                error_window.append(1)
 
                                     else:
                                         filename = anchor_name + '_' + now + ".ts"
@@ -1127,20 +1129,24 @@ def start_record(url_data: tuple, count_variable: int = -1):
 
                                         except subprocess.CalledProcessError as e:
                                             logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
-                                            warning_count += 1
+                                            with max_request_lock:
+                                                error_count += 1
+                                                error_window.append(1)
 
                                 count_time = time.time()
 
                 except Exception as e:
                     logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
-                    warning_count += 1
+                    with max_request_lock:
+                        error_count += 1
+                        error_window.append(1)
 
                 num = random.randint(-5, 5) + delay_default
                 if num < 0:
                     num = 0
                 x = num
 
-                if warning_count > 20:
+                if error_count > 20:
                     x = x + 60
                     print("瞬时错误太多,延迟加60秒")
 
@@ -1165,7 +1171,9 @@ def start_record(url_data: tuple, count_variable: int = -1):
                     print('\r检测直播间中...', end="")
         except Exception as e:
             logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
-            warning_count += 1
+            with max_request_lock:
+                error_count += 1
+                error_window.append(1)
             time.sleep(2)
 
 
@@ -1594,7 +1602,7 @@ while True:
     if first_run:
         t = threading.Thread(target=display_info, args=(), daemon=True)
         t.start()
-        t2 = threading.Thread(target=change_max_connect, args=(), daemon=True)
+        t2 = threading.Thread(target=adjust_max_request, args=(), daemon=True)
         t2.start()
         first_run = False
 
