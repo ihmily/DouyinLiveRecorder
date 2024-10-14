@@ -37,7 +37,7 @@ from msg_push import (
 
 version = "v3.0.9"
 platforms = ("\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|"
-             "酷狗|花椒|流星|Acfun|时光|映客|音播|知乎|嗨秀"
+             "酷狗|花椒|流星|Acfun|时光|映客|音播|知乎|嗨秀|VV星球"
              "\n海外站点：TikTok|AfreecaTV|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK")
 
 recording = set()
@@ -694,6 +694,12 @@ def start_record(url_data: tuple, count_variable: int = -1):
                         with semaphore:
                             port_info = spider.get_haixiu_stream_url(
                                 url=record_url, proxy_addr=proxy_address, cookies=haixiu_cookie)
+
+                    elif record_url.find("h5webcdn-pro.vvxqiu.com/") > -1:
+                        platform = 'VV星球'
+                        with semaphore:
+                            port_info = spider.get_vvxqiu_stream_url(
+                                url=record_url, proxy_addr=proxy_address, cookies=vvxqiu_cookie)
 
                     else:
                         logger.error(f'{record_url} {platform}直播地址')
@@ -1423,6 +1429,7 @@ while True:
     zhihu_cookie = read_config_value(config, 'Cookie', 'zhihu_cookie', '')
     chzzk_cookie = read_config_value(config, 'Cookie', 'chzzk_cookie', '')
     haixiu_cookie = read_config_value(config, 'Cookie', 'haixiu_cookie', '')
+    vvxqiu_cookie = read_config_value(config, 'Cookie', 'vvxqiu_cookie', '')
 
     video_save_type_list = ("FLV", "MKV", "TS", "MP4", "MP3音频", "M4A音频")
     if video_save_type and video_save_type.upper() in video_save_type_list:
@@ -1512,7 +1519,8 @@ while True:
                     'wap.ybw1666.com',
                     'www.inke.cn',
                     'www.zhihu.com',
-                    'www.haixiutv.com'
+                    'www.haixiutv.com',
+                    "h5webcdn-pro.vvxqiu.com"
                 ]
                 overseas_platform_host = [
                     'www.tiktok.com',

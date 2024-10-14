@@ -2586,3 +2586,33 @@ def get_haixiu_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies
         result['flv_url'] = flv_url
         result['record_url'] = flv_url
     return result
+
+
+@trace_error_decorator
+def get_vvxqiu_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
+        Dict[str, Any]:
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148',
+        'Access-Control-Request-Method': 'GET',
+        'Origin': 'https://h5webcdn-pro.vvxqiu.com',
+        'Referer': 'https://h5webcdn-pro.vvxqiu.com/',
+    }
+
+    if cookies:
+        headers['Cookie'] = cookies
+
+    room_id = get_params(url, "roomId")
+    api_1 = f'https://h5p.vvxqiu.com/activity-center/fanclub/activity/captain/banner?roomId={room_id}&product=vvstar'
+    json_str = get_req(api_1, proxy_addr=proxy_addr, headers=headers)
+    json_data = json.loads(json_str)
+    anchor_name = json_data['data']['anchorName']
+    result = {
+        "anchor_name": anchor_name,
+        "is_live": False,
+    }
+    if json_data['data']['anchorRank'] != 0:
+        result["is_live"] = True
+        m3u8_url = f'https://liveplay-pro.wasaixiu.com/live/1400442770_{room_id}_{room_id[2:]}_single.m3u8'
+        result['m3u8_url'] = m3u8_url
+        result['record_url'] = m3u8_url
+    return result

@@ -143,6 +143,11 @@ LIVE_STREAM_CONFIG = {
     "haixiu": {
         "url": "https://www.haixiutv.com/6095106",
         "func": spider.get_haixiu_stream_url,
+    },
+    "vvxqiu": {
+        "url": "https://h5webcdn-pro.vvxqiu.com//activity/videoShare/videoShare.html?h5Server=https://h5p.vvxqiu.com"
+               "&roomId=LP115924473&platformId=vvstar",
+        "func": spider.get_vvxqiu_stream_url,
     }
 }
 
