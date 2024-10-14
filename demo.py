@@ -120,9 +120,9 @@ LIVE_STREAM_CONFIG = {
         "url": "https://live.acfun.cn/live/17912421",
         "func": spider.get_acfun_stream_data,
     },
-    "shiguang": {
-        "url": "https://www.rengzu.com/180778",
-        "func": spider.get_shiguang_stream_url,
+    "changliao": {
+        "url": "https://www.tlclw.com/801044397",
+        "func": spider.get_changliao_stream_url,
     },
     "yingke": {
         "url": "https://www.inke.cn/liveroom/index.html?uid=710032101&id=1720857535354099",

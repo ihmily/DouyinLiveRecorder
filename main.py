@@ -658,11 +658,11 @@ def start_record(url_data: tuple, count_variable: int = -1):
                             port_info = stream.get_stream_url(
                                 json_data, record_quality, url_type='flv', extra_key='url')
 
-                    elif record_url.find("rengzu.com/") > -1:
-                        platform = '时光直播'
+                    elif record_url.find("tlclw.com/") > -1:
+                        platform = '畅聊直播'
                         with semaphore:
-                            port_info = spider.get_shiguang_stream_url(
-                                url=record_url, proxy_addr=proxy_address, cookies=shiguang_cookie)
+                            port_info = spider.get_changliao_stream_url(
+                                url=record_url, proxy_addr=proxy_address, cookies=changliao_cookie)
 
                     elif record_url.find("ybw1666.com/") > -1:
                         platform = '音播直播'
@@ -1423,7 +1423,7 @@ while True:
     liuxing_cookie = read_config_value(config, 'Cookie', 'liuxing_cookie', '')
     showroom_cookie = read_config_value(config, 'Cookie', 'showroom_cookie', '')
     acfun_cookie = read_config_value(config, 'Cookie', 'acfun_cookie', '')
-    shiguang_cookie = read_config_value(config, 'Cookie', 'shiguang_cookie', '')
+    changliao_cookie = read_config_value(config, 'Cookie', 'changliao_cookie', '')
     yinbo_cookie = read_config_value(config, 'Cookie', 'yinbo_cookie', '')
     yingke_cookie = read_config_value(config, 'Cookie', 'yingke_cookie', '')
     zhihu_cookie = read_config_value(config, 'Cookie', 'zhihu_cookie', '')
@@ -1513,8 +1513,8 @@ while True:
                     'wap.7u66.com',
                     'live.acfun.cn',
                     'm.acfun.cn',
-                    'www.rengzu.com',
-                    'wap.rengzu.com',
+                    'www.tlclw.com',
+                    'wap.tlclw.com',
                     'live.ybw1666.com',
                     'wap.ybw1666.com',
                     'www.inke.cn',

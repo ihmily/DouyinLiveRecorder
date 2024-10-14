@@ -2356,13 +2356,13 @@ def get_acfun_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies
 
 
 @trace_error_decorator
-def get_shiguang_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
+def get_changliao_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
         Dict[str, Any]:
     headers = {
         'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0.3 Mobile/15E148 Safari/604.1',
         'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
-        'Referer': 'https://wap.rengzu.com/122377?promoters=956629',
+        'Referer': 'https://wap.tlclw.com/phone/801044397?promoters=0',
     }
     if cookies:
         headers['Cookie'] = cookies
@@ -2370,9 +2370,9 @@ def get_shiguang_stream_url(url: str, proxy_addr: Union[str, None] = None, cooki
     room_id = url.split('?')[0].rsplit('/', maxsplit=1)[-1]
     params = {
         'roomidx': room_id,
-        'currentUrl': f'https://wap.rengzu.com/{room_id}',
+        'currentUrl': f'https://wap.tlclw.com/{room_id}',
     }
-    play_api = f'https://wap.rengzu.com/api/ui/room/v1.0.0/live.ashx?{urllib.parse.urlencode(params)}'
+    play_api = f'https://wap.tlclw.com/api/ui/room/v1.0.0/live.ashx?{urllib.parse.urlencode(params)}'
     json_str = get_req(play_api, proxy_addr=proxy_addr, headers=headers)
     json_data = json.loads(json_str)
     anchor_name = json_data['data']['roomInfo']['nickname']
