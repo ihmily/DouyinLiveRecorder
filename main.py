@@ -87,7 +87,8 @@ def display_info():
     while True:
         try:
             time.sleep(5)
-            os.system(clear_command)
+            if Path(sys.executable).name != 'pythonw.exe':
+                os.system(clear_command)
             print(f"\r共监测{monitoring}个直播中", end=" | ")
             print(f"同一时间访问网络的线程数: {max_request}", end=" | ")
             print(f"是否开启代理录制: {'是' if use_proxy else '否'}", end=" | ")
@@ -281,8 +282,10 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
                      bash_file_path: Union[str, None] = None) -> bool:
 
     save_path_name = ffmpeg_command[-1]
+    si = subprocess.STARTUPINFO()
+    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     process = subprocess.Popen(
-        ffmpeg_command, stderr=subprocess.STDOUT
+        ffmpeg_command, stderr=subprocess.STDOUT, startupinfo=si
     )
 
     subs_file_path = save_path_name.rsplit('.', maxsplit=1)[0]
