@@ -1,10 +1,10 @@
-'************************************************************************/
+'********************************************************************************************/
 '* File Name       : StopRecording.vbs
-'* Creation Date   : 2024-10-15 01:50:30
-'* Author          : Hmily
-'* Blog              : http://github.com/ihmily
-'* Description     : This script is designed to terminate the process of a live
-'************************************************************************/
+'* Created Date  : 2024-10-15 01:50:30
+'* Author            : Hmily
+'* GitHub            : http://github.com/ihmily
+'* Description     : This script is designed to terminate the process of live recording
+'********************************************************************************************/
 
 Dim objWMIService, colProcesses, objProcess
 Dim intResponse
