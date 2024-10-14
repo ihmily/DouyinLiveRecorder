@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-10-05 11:54:00
+Update: 2024-10-15 02:01:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -160,13 +160,22 @@ def delete_line(file_path: str, del_line: str):
                     f.write(txt_line)
 
 
+def get_startup_info(system_type):
+    if system_type == 'nt':
+        startup_info = subprocess.STARTUPINFO()
+        startup_info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    else:
+        startup_info = None
+    return startup_info
+
+
 def converts_mp4(address: str, is_original_delete: bool = True):
     _output = subprocess.check_output([
         "ffmpeg", "-i", address,
         "-c:v", "copy",
         "-c:a", "copy",
         "-f", "mp4", address.rsplit('.', maxsplit=1)[0] + ".mp4",
-    ], stderr=subprocess.STDOUT)
+    ], stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type))
     if is_original_delete:
         time.sleep(1)
         if os.path.exists(address):
@@ -179,7 +188,7 @@ def converts_m4a(address: str, is_original_delete: bool = True):
         "-n", "-vn",
         "-c:a", "aac", "-bsf:a", "aac_adtstoasc", "-ab", "320k",
         address.rsplit('.', maxsplit=1)[0] + ".m4a",
-    ], stderr=subprocess.STDOUT)
+    ], stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type))
     if is_original_delete:
         time.sleep(1)
         if os.path.exists(address):
@@ -261,7 +270,9 @@ def push_message(record_name, content: str) -> None:
 
 
 def run_bash(command):
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    process = subprocess.Popen(
+        command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=get_startup_info(os_type)
+    )
     stdout, stderr = process.communicate()
     stdout_decoded = stdout.decode('utf-8')
     stderr_decoded = stderr.decode('utf-8')
@@ -282,10 +293,8 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
                      bash_file_path: Union[str, None] = None) -> bool:
 
     save_path_name = ffmpeg_command[-1]
-    si = subprocess.STARTUPINFO()
-    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     process = subprocess.Popen(
-        ffmpeg_command, stderr=subprocess.STDOUT, startupinfo=si
+        ffmpeg_command, stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type)
     )
 
     subs_file_path = save_path_name.rsplit('.', maxsplit=1)[0]
