@@ -282,8 +282,10 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
                      bash_file_path: Union[str, None] = None) -> bool:
 
     save_path_name = ffmpeg_command[-1]
+    si = subprocess.STARTUPINFO()
+    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     process = subprocess.Popen(
-        ffmpeg_command, stderr=subprocess.STDOUT
+        ffmpeg_command, stderr=subprocess.STDOUT, startupinfo=si
     )
 
     subs_file_path = save_path_name.rsplit('.', maxsplit=1)[0]
