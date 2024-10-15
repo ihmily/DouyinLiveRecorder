@@ -459,13 +459,6 @@ def start_record(url_data: tuple, count_variable: int = -1):
                             record_url.find("https://www.xiaohongshu.com/") > -1 or \
                             record_url.find("http://xhslink.com/") > -1:
                         platform = '小红书直播'
-                        if retry > 1:
-                            delete_line(url_config_file, record_url)
-                            if record_url in running_list:
-                                running_list.remove(record_url)
-                                not_record_list.append(record_url)
-                                logger.info(f'{record_url} 小红书直播已结束，停止录制')
-                                return
                         with semaphore:
                             port_info = spider.get_xhs_stream_url(
                                 record_url, proxy_addr=proxy_address, cookies=xhs_cookie)
@@ -1555,8 +1548,6 @@ while True:
                     "live.bilibili.com",
                     "www.huajiao.com",
                     "www.zhihu.com",
-                    "www.xiaohongshu.com",
-                    "www.redelight.cn",
                     "www.huya.com",
                     "chzzk.naver.com",
                     "www.liveme.com",

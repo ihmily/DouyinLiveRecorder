@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-10-02 04:36:12
+Update: 2024-10-15 04:36:12
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -708,10 +708,9 @@ def get_bilibili_stream_data(url: str, qn: str = '10000', platform: str = 'web',
 def get_xhs_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
         Dict[str, Any]:
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0',
-        'Accept': 'application/json, text/plain, */*',
-        'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
-        'Referer': 'https://www.redelight.cn/hina/livestream/569077534207413574/1707413727088?share_source=&share_source_id=null&source=share_out_of_app&host_id=58bafe4282ec39085a56ece9&xhsshare=WeixinSession&appuid=5f3f478a00000000010005b3&apptime=1707413727',
+        'User-Agent': 'ios/7.830 (ios 17.0; ; iPhone 15 (A2846/A3089/A3090/A3092))',
+        'xy-common-params': 'platform=iOS&sid=session.1722166379345546829388',
+        'referer': 'https://app.xhs.cn/',
     }
     if cookies:
         headers['Cookie'] = cookies
@@ -719,24 +718,50 @@ def get_xhs_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: U
     if 'xhslink.com' in url:
         url = get_req(url, proxy_addr=proxy_addr, headers=headers, redirect_url=True)
 
-    room_id = re.search('/livestream/(.*?)(?=/|\?|$)', url).group(1)
-    app_api = f'https://www.xiaohongshu.com/api/sns/red/live/app/v1/ecology/outside/share_info?room_id={room_id}'
-    # app_api = f'https://www.redelight.cn/api/sns/red/live/app/v1/ecology/outside/share_info?room_id={room_id}'
-    json_str = get_req(url=app_api, proxy_addr=proxy_addr, headers=headers)
-    json_data = json.loads(json_str)
-    anchor_name = json_data['data']['host_info']['nickname']
-    live_status = json_data['data']['room']['status']
     result = {
-        "anchor_name": anchor_name,
+        "anchor_name": '',
         "is_live": False,
     }
+    room_id = re.search('/livestream/(.*?)(?=/|\?|$)', url)
+    if room_id:
+        room_id = room_id.group(1)
+        api = f'https://www.xiaohongshu.com/api/sns/red/live/app/v1/ecology/outside/share_info?room_id={room_id}'
+        # api = f'https://www.redelight.cn/api/sns/red/live/app/v1/ecology/outside/share_info?room_id={room_id}'
+        json_str = get_req(api, proxy_addr=proxy_addr, headers=headers)
+        json_data = json.loads(json_str)
+        anchor_name = json_data['data']['host_info']['nickname']
+        live_status = json_data['data']['room']['status']
+        result["anchor_name"] = anchor_name
 
-    # 这个判断不准确，无论是否在直播status都为0,暂无法判断
-    if live_status == 0:
-        flv_url = f'http://live-play.xhscdn.com/live/{room_id}.flv'
-        result['flv_url'] = flv_url
-        result['is_live'] = True
-        result['record_url'] = flv_url
+        # 这个判断不准确，无论是否在直播status都为0
+        if live_status == 0:
+            result['is_live'] = True
+            flv_url = f'http://live-play.xhscdn.com/live/{room_id}.flv'
+            result['flv_url'] = flv_url
+            result['record_url'] = flv_url
+
+    user_id = re.search('/user/profile/(.*?)(?=/|\?|$)', url)
+    user_id = user_id.group(1) if user_id else get_params(url, 'host_id')
+    if user_id:
+        params = {
+            'user_id_list': user_id,
+        }
+        # app方案
+        app_api = f'https://live-room.xiaohongshu.com/api/sns/v1/live/user_status?{urllib.parse.urlencode(params)}'
+        json_str = get_req(app_api, proxy_addr=proxy_addr, headers=headers)
+        json_data = json.loads(json_str)
+        if json_data["success"]:
+            if json_data['data']:
+                result['is_live'] = True
+                live_link = json_data['data'][0]['live_link']
+                result['anchor_name'] = get_params(live_link, "host_nickname")
+                flv_url = get_params(live_link, "flvUrl")
+                result['flv_url'] = flv_url
+                result['record_url'] = flv_url
+            else:
+                result['is_live'] = False
+        else:
+            print(f"小红书 {json_data['msg']}")
     return result
 
 
