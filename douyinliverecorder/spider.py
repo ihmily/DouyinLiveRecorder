@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-10-15 04:36:12
+Update: 2024-10-16 23:28:12
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -2641,5 +2641,73 @@ def get_vvxqiu_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies
         result["is_live"] = True
         m3u8_url = f'https://liveplay-pro.wasaixiu.com/live/1400442770_{room_id}_{room_id[2:]}_single.m3u8'
         result['m3u8_url'] = m3u8_url
+        result['record_url'] = m3u8_url
+    return result
+
+
+@trace_error_decorator
+def get_17live_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
+        Dict[str, Any]:
+    headers = {
+        'origin': 'https://17.live',
+        'referer': 'https://17.live/',
+        'user-agent': 'ios/7.830 (ios 17.0; ; iPhone 15 (A2846/A3089/A3090/A3092))',
+    }
+
+    if cookies:
+        headers['Cookie'] = cookies
+
+    room_id = url.split('?')[0].rsplit('/', maxsplit=1)[-1]
+    api_1 = f'https://wap-api.17app.co/api/v1/user/room/{room_id}'
+    json_str = get_req(api_1, proxy_addr=proxy_addr, headers=headers)
+    json_data = json.loads(json_str)
+    anchor_name = json_data["displayName"]
+    result = {
+        "anchor_name": anchor_name,
+        "is_live": False,
+    }
+    json_data = {
+        'liveStreamID': room_id,
+    }
+    api_1 = f'https://wap-api.17app.co/api/v1/lives/{room_id}/viewers/alive'
+    json_str = get_req(api_1, json_data=json_data, proxy_addr=proxy_addr, headers=headers)
+    json_data = json.loads(json_str)
+    if json_data['status'] == 2:
+        result["is_live"] = True
+        flv_url = json_data['pullURLsInfo']['rtmpURLs'][0]['urlHighQuality']
+        result['flv_url'] = flv_url
+        result['record_url'] = flv_url
+    return result
+
+
+@trace_error_decorator
+def get_langlive_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
+        Dict[str, Any]:
+    headers = {
+        'origin': 'https://www.lang.live',
+        'referer': 'https://www.lang.live/',
+        'user-agent': 'ios/7.830 (ios 17.0; ; iPhone 15 (A2846/A3089/A3090/A3092))',
+    }
+
+    if cookies:
+        headers['Cookie'] = cookies
+
+    room_id = url.split('?')[0].rsplit('/', maxsplit=1)[-1]
+    api_1 = f'https://api.lang.live/langweb/v1/room/liveinfo?room_id={room_id}'
+    json_str = get_req(api_1, proxy_addr=proxy_addr, headers=headers, abroad=True)
+    json_data = json.loads(json_str)
+    live_info = json_data['data']['live_info']
+    anchor_name = live_info['nickname']
+    live_status = live_info['live_status']
+    result = {
+        "anchor_name": anchor_name,
+        "is_live": False,
+    }
+    if live_status == 1:
+        result["is_live"] = True
+        flv_url = json_data['data']['live_info']['liveurl']
+        m3u8_url = json_data['data']['live_info']['liveurl_hls']
+        result['flv_url'] = flv_url
+        result['flv_url'] = m3u8_url
         result['record_url'] = m3u8_url
     return result

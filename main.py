@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-10-15 02:01:00
+Update: 2024-10-16 23:27:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -37,8 +37,8 @@ from msg_push import (
 
 version = "v3.0.9"
 platforms = ("\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|"
-             "酷狗|花椒|流星|Acfun|时光|映客|音播|知乎|嗨秀|VV星球"
-             "\n海外站点：TikTok|SOOP[AfreecaTV]|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK")
+             "酷狗|花椒|流星|Acfun|时光|映客|音播|知乎|嗨秀|VV星球|17Live"
+             "\n海外站点：TikTok|SOOP[AfreecaTV]|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK|浪Live")
 
 recording = set()
 error_count = 0
@@ -706,13 +706,22 @@ def start_record(url_data: tuple, count_variable: int = -1):
                             port_info = spider.get_vvxqiu_stream_url(
                                 url=record_url, proxy_addr=proxy_address, cookies=vvxqiu_cookie)
 
+                    elif record_url.find("17.live/") > -1:
+                        platform = '17Live'
+                        with semaphore:
+                            port_info = spider.get_17live_stream_url(
+                                url=record_url, proxy_addr=proxy_address, cookies=yiqilive_cookie)
+
+                    elif record_url.find("www.lang.live/") > -1:
+                        platform = '浪Live'
+                        with semaphore:
+                            port_info = spider.get_langlive_stream_url(
+                                url=record_url, proxy_addr=proxy_address, cookies=langlive_cookie)
                     else:
                         logger.error(f'{record_url} {platform}直播地址')
                         return
 
                     if anchor_name:
-                        # 第一次从config中读取，带有'主播:'，去除'主播:'
-                        # 之后的线程循环，已经是处理后的结果，不需要去处理
                         if '主播:' in anchor_name:
                             anchor_split: list = anchor_name.split('主播:')
                             if len(anchor_split) > 1 and anchor_split[1].strip():
@@ -848,6 +857,8 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                     'PopkonTV': 'origin:https://www.popkontv.com',
                                     'FlexTV': 'origin:https://www.flextv.co.kr',
                                     '千度热播': 'referer:https://qiandurebo.com',
+                                    '17Live': 'referer:https://17.live/en/live/6302408',
+                                    '浪Live': 'referer:https://www.lang.live',
                                 }
                                 headers = record_headers.get(platform, '')
                                 if headers:
@@ -1435,6 +1446,8 @@ while True:
     chzzk_cookie = read_config_value(config, 'Cookie', 'chzzk_cookie', '')
     haixiu_cookie = read_config_value(config, 'Cookie', 'haixiu_cookie', '')
     vvxqiu_cookie = read_config_value(config, 'Cookie', 'vvxqiu_cookie', '')
+    yiqilive_cookie = read_config_value(config, 'Cookie', '17live_cookie', '')
+    langlive_cookie = read_config_value(config, 'Cookie', 'langlive_cookie', '')
 
     video_save_type_list = ("FLV", "MKV", "TS", "MP4", "MP3音频", "M4A音频")
     if video_save_type and video_save_type.upper() in video_save_type_list:
@@ -1525,7 +1538,8 @@ while True:
                     'www.inke.cn',
                     'www.zhihu.com',
                     'www.haixiutv.com',
-                    "h5webcdn-pro.vvxqiu.com"
+                    "h5webcdn-pro.vvxqiu.com",
+                    "17.live"
                 ]
                 overseas_platform_host = [
                     'www.tiktok.com',
@@ -1542,6 +1556,7 @@ while True:
                     'www.showroom-live.com',
                     'chzzk.naver.com',
                     'm.chzzk.naver.com',
+                    'www.lang.live'
                 ]
 
                 platform_host.extend(overseas_platform_host)

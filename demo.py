@@ -152,6 +152,14 @@ LIVE_STREAM_CONFIG = {
         "url": "https://h5webcdn-pro.vvxqiu.com//activity/videoShare/videoShare.html?h5Server=https://h5p.vvxqiu.com"
                "&roomId=LP115924473&platformId=vvstar",
         "func": spider.get_vvxqiu_stream_url,
+    },
+    "17live": {
+        "url": "https://17.live/en/live/6302408",
+        "func": spider.get_17live_stream_url,
+    },
+    "langlive": {
+        "url": "https://www.lang.live/en-US/room/3349463",
+        "func": spider.get_langlive_stream_url,
     }
 }
 
