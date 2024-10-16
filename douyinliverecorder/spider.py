@@ -845,13 +845,13 @@ def get_blued_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies:
 @trace_error_decorator
 def login_afreecatv(username: str, password: str, proxy_addr: Union[str, None] = None) -> Union[str, None]:
     if len(username) < 6 or len(password) < 10:
-        raise RuntimeError('AfreecaTV登录失败！请在config.ini配置文件中填写正确的AfreecaTV平台的账号和密码')
+        raise RuntimeError('SOOP[AfreecaTV]登录失败！请在config.ini配置文件中填写正确的SOOP[AfreecaTV]平台的账号和密码')
 
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0',
-        'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
-        'Referer': 'https://login.afreecatv.com/afreeca/login.php?szFrom=full&request_uri=https%3A%2F%2Fwww.afreecatv.com%2F',
         'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'Origin': 'https://play.sooplive.co.kr',
+        'Referer': 'https://play.sooplive.co.kr/superbsw123/277837074',
     }
 
     data = {
@@ -860,12 +860,12 @@ def login_afreecatv(username: str, password: str, proxy_addr: Union[str, None] =
         'szUid': username,
         'szPassword': password,
         'isSaveId': 'true',
-        'szScriptVar': 'oLoginRet',
-        'szAction': '',
+        'isSavePw': 'true',
+        'isSaveJoin': 'true',
         'isLoginRetain': 'Y',
     }
 
-    url = 'https://login.afreecatv.com/app/LoginAction.php?callback=jQuery17208926278503069585_1707311376418'
+    url = 'https://login.sooplive.co.kr/app/LoginAction.php'
     try:
         if proxy_addr:
             proxies = {
@@ -887,7 +887,7 @@ def login_afreecatv(username: str, password: str, proxy_addr: Union[str, None] =
         cookie = dict_to_cookie_str(cookie_dict)
         return cookie
     except Exception:
-        raise Exception('AfreecaTV登录失败,请检查配置文件中的账号密码是否正确')
+        raise Exception('SOOP[AfreecaTV]登录失败,请检查配置文件中的账号密码是否正确')
 
 
 @trace_error_decorator
@@ -896,7 +896,8 @@ def get_afreecatv_cdn_url(broad_no: str, proxy_addr: Union[str, None] = None, co
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
-        'Referer': 'https://play.afreecatv.com/oul282/249469582',
+        'Origin': 'https://play.sooplive.co.kr',
+        'Referer': 'https://play.sooplive.co.kr/oul282/249469582',
         'Content-Type': 'application/x-www-form-urlencoded',
     }
     if cookies:
@@ -905,12 +906,12 @@ def get_afreecatv_cdn_url(broad_no: str, proxy_addr: Union[str, None] = None, co
     params = {
         'return_type': 'gcp_cdn',
         'use_cors': 'false',
-        'cors_origin_url': 'play.afreecatv.com',
+        'cors_origin_url': 'play.sooplive.co.kr',
         'broad_key': f'{broad_no}-common-master-hls',
         'time': '8361.086329376785',
     }
 
-    url2 = 'http://livestream-manager.afreecatv.com/broad_stream_assign.html?' + urllib.parse.urlencode(params)
+    url2 = 'http://livestream-manager.sooplive.co.kr/broad_stream_assign.html?' + urllib.parse.urlencode(params)
     json_str = get_req(url=url2, proxy_addr=proxy_addr, headers=headers, abroad=True)
     json_data = json.loads(json_str)
 
@@ -922,8 +923,8 @@ def get_afreecatv_tk(url: str, rtype: str, proxy_addr: Union[str, None] = None, 
         Union[str, tuple, None]:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0',
-        'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
-        'Referer': 'https://play.afreecatv.com/secretx/250989857',
+        'Origin': 'https://play.sooplive.co.kr',
+        'Referer': 'https://play.sooplive.co.kr/secretx/250989857',
         'Content-Type': 'application/x-www-form-urlencoded',
     }
 
@@ -945,9 +946,10 @@ def get_afreecatv_tk(url: str, rtype: str, proxy_addr: Union[str, None] = None, 
         'quality': 'master',
         'mode': 'landing',
         'from_api': '0',
+        'is_revive': 'false',
     }
 
-    url2 = f'https://live.afreecatv.com/afreeca/player_live_api.php?bjid={bj_id}'
+    url2 = f'https://live.sooplive.co.kr/afreeca/player_live_api.php?bjid={bj_id}'
     json_str = get_req(url=url2, proxy_addr=proxy_addr, headers=headers, data=data, abroad=True)
     json_data = json.loads(json_str)
 
@@ -968,7 +970,7 @@ def get_afreecatv_stream_data(
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
-        'Referer': 'https://m.afreecatv.com/',
+        'Referer': 'https://m.sooplive.co.kr/',
         'Content-Type': 'application/x-www-form-urlencoded',
     }
     if cookies:
@@ -986,7 +988,7 @@ def get_afreecatv_stream_data(
         'mode': 'live',
     }
 
-    url2 = 'http://api.m.afreecatv.com/broad/a/watch'
+    url2 = 'http://api.m.sooplive.co.kr/broad/a/watch'
 
     json_str = get_req(url=url2, proxy_addr=proxy_addr, headers=headers, data=data, abroad=True)
     json_data = json.loads(json_str)
@@ -1019,7 +1021,7 @@ def get_afreecatv_stream_data(
         def handle_login():
             cookie = login_afreecatv(username, password, proxy_addr=proxy_addr)
             if 'PdboxBbs=' in cookie:
-                print('AfreecaTV平台登录成功！开始获取直播数据...')
+                print('SOOP[AfreecaTV]平台登录成功！开始获取直播数据...')
                 return cookie
 
         def fetch_data(cookie):
@@ -1035,25 +1037,25 @@ def get_afreecatv_stream_data(
             return result
 
         if json_data['data']['code'] == -3001:
-            print("AfreecaTV直播获取失败[直播刚结束]:", json_data['data']['message'])
+            print("SOOP[AfreecaTV]直播获取失败[直播刚结束]:", json_data['data']['message'])
             return result
 
         elif json_data['data']['code'] == -3002:
-            print("AfreecaTV直播获取失败[未登录]: 19+", json_data['data']['message'])
-            print("正在尝试使用您的账号和密码登录AfreecaTV直播平台，请确保已配置")
+            print("SOOP[AfreecaTV]直播获取失败[未登录]: 19+", json_data['data']['message'])
+            print("正在尝试使用您的账号和密码登录SOOP[AfreecaTV]直播平台，请确保已配置")
             new_cookie = handle_login()
             if new_cookie and len(new_cookie) > 0:
                 return fetch_data(new_cookie)
-            raise RuntimeError('AfreecaTV登录失败，请检查账号和密码是否正确')
+            raise RuntimeError('SOOP[AfreecaTV]登录失败，请检查账号和密码是否正确')
 
         elif json_data['data']['code'] == -3004:
             # print("AfreecaTV直播获取失败[未认证]:", json_data['data']['message'])
             if cookies and len(cookies) > 0:
                 return fetch_data(cookies)
             else:
-                raise RuntimeError('AfreecaTV登录失败，请检查账号和密码是否正确')
+                raise RuntimeError('SOOP[AfreecaTV]登录失败，请检查账号和密码是否正确')
         elif json_data['data']['code'] == -6001:
-            print(f"错误信息：{json_data['data']['message']}请检查输入的直播间地址是否正确")
+            print(f"错误信息：{json_data['data']['message']}请检查输入的SOOP[AfreecaTV]直播间地址是否正确")
             return result
     if json_data['result'] == 1 and anchor_name:
         broad_no = json_data['data']['broad_no']

@@ -67,15 +67,16 @@
     	├── utils.py -> (contains utility functions)
     	├── logger.py -> (logger handdle)
     	├── room.py -> (get room info)
-    	├── msg_push.py -> (send live status update message)
-    	├── x-bogus.js -> (get douyin xbogus token)
+    	├── /javascript -> (some decrypt code)
     ├── main.py -> (main file)
     ├── demo.py -> (call package test demo)
+    ├── msg_push.py -> (send live status update message)
     ├── ffmpeg.exe -> (record video)
     ├── index.html -> (play m3u8 and flv video)
     ├── requirements.txt -> (library dependencies)
     ├── docker-compose.yaml -> (Container Orchestration File)
     ├── Dockerfile -> (Application Build Recipe)
+    ├── StopRecording.vbs -> (stop recording script on Windows)
     ...
 ```
 
@@ -139,7 +140,8 @@ https://www.bigo.tv/cn/716418802
 buled直播：
 https://app.blued.cn/live?id=Mp6G2R
 
-AfreecaTV：
+SOOP[AfreecaTV]：
+https://play.sooplive.co.kr/sw7love
 https://play.afreecatv.com/sw7love
 
 网易cc：
@@ -338,6 +340,8 @@ docker-compose stop
 [![justdoiting](https://github.com/justdoiting.png?size=50)](https://github.com/justdoiting)
 [![dhbxs](https://github.com/dhbxs.png?size=50)](https://github.com/dhbxs)
 [![wujiyu115](https://github.com/wujiyu115.png?size=50)](https://github.com/wujiyu115)
+[![zhanghao333](https://github.com/zhanghao333.png?size=50)](https://github.com/zhanghao333)
+<a href="https://github.com/gyc0123" target="_blank"><img src="https://github.com/gyc0123.png?size=50" alt="gyc0123" style="width:53px; height:51px;" /></a>
 &emsp;
 
 ## ⏳提交日志

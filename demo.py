@@ -48,6 +48,10 @@ LIVE_STREAM_CONFIG = {
         "url": "https://play.afreecatv.com/sw7love",
         "func": spider.get_afreecatv_stream_data,
     },
+    "soop": {
+        "url": "https://play.sooplive.co.kr/sw7love",
+        "func": spider.get_afreecatv_stream_data,
+    },
     "netease": {
         "url": "https://cc.163.com/583946984",
         "func": spider.get_netease_stream_data,

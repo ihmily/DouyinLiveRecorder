@@ -38,7 +38,7 @@ from msg_push import (
 version = "v3.0.9"
 platforms = ("\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|"
              "酷狗|花椒|流星|Acfun|时光|映客|音播|知乎|嗨秀|VV星球"
-             "\n海外站点：TikTok|AfreecaTV|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK")
+             "\n海外站点：TikTok|SOOP[AfreecaTV]|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK")
 
 recording = set()
 error_count = 0
@@ -476,8 +476,8 @@ def start_record(url_data: tuple, count_variable: int = -1):
                             port_info = spider.get_blued_stream_url(
                                 record_url, proxy_addr=proxy_address, cookies=blued_cookie)
 
-                    elif record_url.find("afreecatv.com/") > -1:
-                        platform = 'AfreecaTV'
+                    elif record_url.find("afreecatv.com/") > -1 or record_url.find("sooplive.co.kr/") > -1:
+                        platform = 'SOOP[AfreecaTV]'
                         with semaphore:
                             if global_proxy or proxy_address:
                                 json_data = spider.get_afreecatv_stream_data(
@@ -490,7 +490,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                     update_config(config_file, 'Cookie', 'afreecatv_cookie', json_data['new_cookies'])
                                 port_info = stream.get_stream_url(json_data, record_quality, spec=True)
                             else:
-                                logger.error("错误信息: 网络异常，请检查本网络是否能正常访问AfreecaTV平台")
+                                logger.error("错误信息: 网络异常，请检查本网络是否能正常访问SOOP[AfreecaTV]平台")
 
                     elif record_url.find("cc.163.com/") > -1:
                         platform = '网易CC直播'
@@ -828,7 +828,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                     "-loglevel", "error",
                                     "-hide_banner",
                                     "-user_agent", user_agent,
-                                    "-protocol_whitelist", "rtmp,crypto,file,http,https,tcp,tls,udp,rtp",
+                                    "-protocol_whitelist", "rtmp,crypto,file,http,https,tcp,tls,udp,rtp,httpproxy",
                                     "-thread_queue_size", "1024",
                                     "-analyzeduration", analyzeduration,
                                     "-probesize", probesize,
@@ -1366,7 +1366,7 @@ while True:
     bash_path = read_config_value(config, '录制设置', 'bash脚本路径', "") if is_run_bash else None
     enable_proxy_platform = read_config_value(
         config, '录制设置', '使用代理录制的平台（逗号分隔）',
-        'tiktok, afreecatv, pandalive, winktv, flextv, popkontv, twitch, liveme, showroom, chzzk')
+        'tiktok, afreecatv, soop, pandalive, winktv, flextv, popkontv, twitch, liveme, showroom, chzzk')
     enable_proxy_platform_list = enable_proxy_platform.replace('，', ',').split(',') if enable_proxy_platform else None
     extra_enable_proxy = read_config_value(config, '录制设置', '额外使用代理录制的平台（逗号分隔）', '')
     extra_enable_proxy_platform_list = extra_enable_proxy.replace('，', ',').split(',') if extra_enable_proxy else None
@@ -1531,6 +1531,8 @@ while True:
                     'www.tiktok.com',
                     'play.afreecatv.com',
                     'm.afreecatv.com',
+                    'play.sooplive.co.kr',
+                    'm.sooplive.co.kr',
                     'www.pandalive.co.kr',
                     'www.winktv.co.kr',
                     'www.flextv.co.kr',
@@ -1565,8 +1567,8 @@ while True:
                         new_line = (quality, url, name)
                         url_tuples_list.append(new_line)
                 else:
-                    print(f"\r{origin_line} 本行包含未知链接.此条跳过")
                     if not origin_line.startswith('#'):
+                        print(f"\r{origin_line} 本行包含未知链接.此条跳过")
                         update_file(url_config_file, url, url, start_str='#')
 
         while len(need_update_line_list):
