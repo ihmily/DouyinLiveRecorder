@@ -160,15 +160,19 @@ LIVE_STREAM_CONFIG = {
     "langlive": {
         "url": "https://www.lang.live/en-US/room/3349463",
         "func": spider.get_langlive_stream_url,
+    },
+    "pplive": {
+        "url": "https://m.pp.weimipopo.com/live/preview.html?uid=91648673&anchorUid=91625862&app=plpl",
+        "func": spider.get_pplive_stream_url,
     }
 }
 
 
-def test_live_stream(platform_name: str) -> None:
+def test_live_stream(platform_name: str, proxy_addr=None) -> None:
     if platform_name in LIVE_STREAM_CONFIG:
         config = LIVE_STREAM_CONFIG[platform_name]
         try:
-            stream_data = config['func'](config['url'], proxy_addr='')
+            stream_data = config['func'](config['url'], proxy_addr=proxy_addr)
             logger.debug(f"Stream data for {platform_name}: {stream_data}")
         except Exception as e:
             logger.error(f"Error fetching stream data for {platform_name}: {e}")

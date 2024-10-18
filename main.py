@@ -37,7 +37,7 @@ from msg_push import (
 
 version = "v3.0.9"
 platforms = ("\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|"
-             "酷狗|花椒|流星|Acfun|时光|映客|音播|知乎|嗨秀|VV星球|17Live"
+             "酷狗|花椒|流星|Acfun|时光|映客|音播|知乎|嗨秀|VV星球|17Live|漂漂"
              "\n海外站点：TikTok|SOOP[AfreecaTV]|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK|浪Live")
 
 recording = set()
@@ -717,6 +717,13 @@ def start_record(url_data: tuple, count_variable: int = -1):
                         with semaphore:
                             port_info = spider.get_langlive_stream_url(
                                 url=record_url, proxy_addr=proxy_address, cookies=langlive_cookie)
+
+                    elif record_url.find("m.pp.weimipopo.com/") > -1:
+                        platform = '漂漂直播'
+                        with semaphore:
+                            port_info = spider.get_pplive_stream_url(
+                                url=record_url, proxy_addr=proxy_address, cookies=pplive_cookie)
+
                     else:
                         logger.error(f'{record_url} {platform}直播地址')
                         return
@@ -1264,7 +1271,7 @@ def check_ffmpeg_existence():
             # print(f"已将ffmpeg路径添加到环境变量：{ffmpeg_path}")
             return True
         else:
-            logger.error("检测到ffmpeg不存在,请将ffmpeg.exe放到同目录,或者设置为环境变量,没有ffmpeg将无法录制")
+            logger.error("未检测到ffmpeg。请确保ffmpeg位于系统路径中，或将其路径添加到环境变量。缺少ffmpeg将导致无法进行录制。")
             sys.exit(0)
     finally:
         dev_null.close()
@@ -1448,6 +1455,7 @@ while True:
     vvxqiu_cookie = read_config_value(config, 'Cookie', 'vvxqiu_cookie', '')
     yiqilive_cookie = read_config_value(config, 'Cookie', '17live_cookie', '')
     langlive_cookie = read_config_value(config, 'Cookie', 'langlive_cookie', '')
+    pplive_cookie = read_config_value(config, 'Cookie', 'pplive_cookie', '')
 
     video_save_type_list = ("FLV", "MKV", "TS", "MP4", "MP3音频", "M4A音频")
     if video_save_type and video_save_type.upper() in video_save_type_list:
@@ -1539,7 +1547,8 @@ while True:
                     'www.zhihu.com',
                     'www.haixiutv.com',
                     "h5webcdn-pro.vvxqiu.com",
-                    "17.live"
+                    "17.live",
+                    "m.pp.weimipopo.com"
                 ]
                 overseas_platform_host = [
                     'www.tiktok.com',

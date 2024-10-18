@@ -2708,6 +2708,41 @@ def get_langlive_stream_url(url: str, proxy_addr: Union[str, None] = None, cooki
         flv_url = json_data['data']['live_info']['liveurl']
         m3u8_url = json_data['data']['live_info']['liveurl_hls']
         result['flv_url'] = flv_url
-        result['flv_url'] = m3u8_url
+        result['m3u8_url'] = m3u8_url
         result['record_url'] = m3u8_url
+    return result
+
+
+@trace_error_decorator
+def get_pplive_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
+        Dict[str, Any]:
+    headers = {
+        'Content-Type': 'application/json',
+        'Origin': 'https://m.pp.weimipopo.com',
+        'Referer': 'https://m.pp.weimipopo.com/',
+        'User-Agent': 'ios/7.830 (ios 17.0; ; iPhone 15 (A2846/A3089/A3090/A3092))',
+    }
+
+    if cookies:
+        headers['Cookie'] = cookies
+
+    room_id = get_params(url, 'anchorUid')
+    json_data = {
+        'inviteUuid': '',
+        'anchorUuid': room_id,
+    }
+    api = 'https://api.pp.weimipopo.com/live/preview'
+    json_str = get_req(api, json_data=json_data, proxy_addr=proxy_addr, headers=headers)
+    json_data = json.loads(json_str)
+    live_info = json_data['data']
+    anchor_name = live_info['name']
+    live_status = live_info['living']
+    result = {
+        "anchor_name": anchor_name,
+        "is_live": False,
+    }
+    if live_status:
+        result["is_live"] = True
+        result['m3u8_url'] = live_info['pullUrl']
+        result['record_url'] = live_info['pullUrl']
     return result
