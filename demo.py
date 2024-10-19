@@ -164,6 +164,10 @@ LIVE_STREAM_CONFIG = {
     "pplive": {
         "url": "https://m.pp.weimipopo.com/live/preview.html?uid=91648673&anchorUid=91625862&app=plpl",
         "func": spider.get_pplive_stream_url,
+    },
+    "6room": {
+        "url": "https://v.6.cn/634435",
+        "func": spider.get_6room_stream_url,
     }
 }
 

@@ -37,7 +37,7 @@ from msg_push import (
 
 version = "v3.0.9"
 platforms = ("\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|"
-             "酷狗|花椒|流星|Acfun|时光|映客|音播|知乎|嗨秀|VV星球|17Live|漂漂"
+             "酷狗|花椒|流星|Acfun|时光|映客|音播|知乎|嗨秀|VV星球|17Live|漂漂|六间房"
              "\n海外站点：TikTok|SOOP[AfreecaTV]|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK|浪Live")
 
 recording = set()
@@ -65,7 +65,7 @@ config_file = f'{script_path}/config/config.ini'
 url_config_file = f'{script_path}/config/URL_config.ini'
 backup_dir = f'{script_path}/backup_config'
 text_encoding = 'utf-8-sig'
-rstr = r"[\/\\\:\*\?\"\<\>\|&#.。,， ]"
+rstr = r"[\/\\\:\*\?\"\<\>\|&#.。,， ~]"
 ffmpeg_path = f"{script_path}/ffmpeg.exe"
 default_path = f'{script_path}/downloads'
 os.makedirs(default_path, exist_ok=True)
@@ -723,6 +723,12 @@ def start_record(url_data: tuple, count_variable: int = -1):
                         with semaphore:
                             port_info = spider.get_pplive_stream_url(
                                 url=record_url, proxy_addr=proxy_address, cookies=pplive_cookie)
+
+                    elif record_url.find(".6.cn/") > -1:
+                        platform = '六间房直播'
+                        with semaphore:
+                            port_info = spider.get_6room_stream_url(
+                                url=record_url, proxy_addr=proxy_address, cookies=six_room_cookie)
 
                     else:
                         logger.error(f'{record_url} {platform}直播地址')
@@ -1456,6 +1462,7 @@ while True:
     yiqilive_cookie = read_config_value(config, 'Cookie', '17live_cookie', '')
     langlive_cookie = read_config_value(config, 'Cookie', 'langlive_cookie', '')
     pplive_cookie = read_config_value(config, 'Cookie', 'pplive_cookie', '')
+    six_room_cookie = read_config_value(config, 'Cookie', '6room_cookie', '')
 
     video_save_type_list = ("FLV", "MKV", "TS", "MP4", "MP3音频", "M4A音频")
     if video_save_type and video_save_type.upper() in video_save_type_list:
@@ -1463,10 +1470,8 @@ while True:
     else:
         video_save_type = "TS"
 
-
     def contains_url(string: str) -> bool:
-        pattern = (r"(http:\/\/www\.|https:\/\/www\.|http:\/\/|https:\/\/)?[a-zA-Z0-9][a-zA-Z0-9\-]+(\.["
-                   r"a-zA-Z0-9\-]+)*\.[a-zA-Z]{2,10}(:[0-9]{1,5})?(\/.*)?$")
+        pattern = r"(https?://)?(www\.)?[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)+(:\d+)?(/.*)?"
         return re.search(pattern, string) is not None
 
     try:
@@ -1507,8 +1512,8 @@ while True:
                     quality = '原画'
 
                 url = 'https://' + url if '://' not in url else url
-
                 url_host = url.split('/')[2]
+
                 platform_host = [
                     'live.douyin.com',
                     'v.douyin.com',
@@ -1548,7 +1553,9 @@ while True:
                     'www.haixiutv.com',
                     "h5webcdn-pro.vvxqiu.com",
                     "17.live",
-                    "m.pp.weimipopo.com"
+                    "m.pp.weimipopo.com",
+                    "v.6.cn",
+                    "m.6.cn"
                 ]
                 overseas_platform_host = [
                     'www.tiktok.com',
@@ -1577,7 +1584,9 @@ while True:
                     "www.huya.com",
                     "chzzk.naver.com",
                     "www.liveme.com",
-                    "www.haixiutv.com"
+                    "www.haixiutv.com",
+                    "v.6.cn",
+                    "m.6.cn"
                 )
 
                 if url_host in platform_host:
@@ -1593,7 +1602,7 @@ while True:
                 else:
                     if not origin_line.startswith('#'):
                         print(f"\r{origin_line} 本行包含未知链接.此条跳过")
-                        update_file(url_config_file, url, url, start_str='#')
+                        update_file(url_config_file, origin_line, origin_line, start_str='#')
 
         while len(need_update_line_list):
             a = need_update_line_list.pop()
