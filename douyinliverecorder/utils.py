@@ -4,11 +4,14 @@ import os
 import functools
 import hashlib
 import re
+import time
 import traceback
 from typing import Union, Any
-
+import execjs
 from .logger import logger
 import configparser
+
+is_install_node = False
 
 
 def trace_error_decorator(func: callable) -> callable:
@@ -16,6 +19,16 @@ def trace_error_decorator(func: callable) -> callable:
     def wrapper(*args: list, **kwargs: dict) -> Any:
         try:
             return func(*args, **kwargs)
+        except execjs.ProgramError:
+            global is_install_node
+            if not is_install_node:
+                is_install_node = True
+                logger.warning('Failed to execute JS code. Please check if the Node.js environment')
+                from .initializer import check_node
+                is_install_node = check_node()
+                if is_install_node:
+                    time.sleep(3)
+                    os._exit(0)
         except Exception as e:
             error_line = traceback.extract_tb(e.__traceback__)[-1].lineno
             error_info = f"错误信息: type: {type(e).__name__}, {str(e)} in function {func.__name__} at line: {error_line}"
@@ -57,7 +70,6 @@ def read_config_value(file_path, section, key) -> Union[str, None]:
 
 
 def update_config(file_path, section, key, new_value) -> None:
-
     config = configparser.ConfigParser()
 
     try:

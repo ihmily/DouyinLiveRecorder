@@ -2,7 +2,7 @@
 
 """
 Author: Hmily
-Github:https://github.com/ihmily
+GitHub:https://github.com/ihmily
 Date: 2023-07-17 23:52:05
 Update: 2024-10-08 23:35:00
 Copyright (c) 2023 by Hmily, All Rights Reserved.

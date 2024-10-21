@@ -241,7 +241,7 @@ def adjust_max_request():
 
             if pre_max_request != max_request:
                 pre_max_request = max_request
-                print(f"同一时间访问网络的线程数动态改为 {max_request}")
+                print(f"\r同一时间访问网络的线程数动态改为 {max_request}")
 
         error_window.append(error_count)
         if len(error_window) > error_window_size:

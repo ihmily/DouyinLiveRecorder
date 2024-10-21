@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='douyinliverecorder',
-    version='3.0.8',
+    version='3.0.9',
     author='Hmily',
     description='An easy tool for recording live streams',
     long_description=open('README.md', encoding='utf-8').read(),
@@ -14,15 +14,15 @@ setup(
         'requests',
         'PyExecJS',
         'loguru',
-        'pycryptodome'
+        'pycryptodome',
+        'distro',
+        'tqdm'
     ],
     classifiers=[
         'Development Status :: 3 - Alpha',
         'Intended Audience :: Developers',
         'Programming Language :: Python :: 3',
         'Programming Language :: Python :: 3 :: Only',
-        'Programming Language :: Python :: 3.8',
-        'Programming Language :: Python :: 3.9',
         'Programming Language :: Python :: 3.10',
         'Programming Language :: Python :: 3.11',
         'Programming Language :: Python :: 3.12',
