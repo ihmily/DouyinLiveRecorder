@@ -266,7 +266,7 @@ def get_douyin_stream_data(url: str, proxy_addr: Union[str, None] = None, cookie
 
         else:
             html_str = html_str.replace('\\', '').replace('u0026', '&')
-            match_json_str3 = re.search('"origin":\{"main":(.*?),"dash"', html_str, re.DOTALL)
+            match_json_str3 = re.search('"origin":\\{"main":(.*?),"dash"', html_str, re.DOTALL)
             if match_json_str3:
                 origin_url_list = json.loads(match_json_str3.group(1) + '}')
 
@@ -297,7 +297,7 @@ def get_tiktok_stream_data(url: str, proxy_addr: Union[str, None] = None, cookie
         html_str = get_req(url=url, proxy_addr=proxy_addr, headers=headers, abroad=True)
         time.sleep(1)
         if 'We regret to inform you that we have discontinued operating TikTok' in html_str:
-            msg = re.search('<p>\n\s+(We regret to inform you that we have discontinu.*?)\.\n\s+</p>', html_str)
+            msg = re.search('<p>\n\\s+(We regret to inform you that we have discontinu.*?)\\.\n\\s+</p>', html_str)
             raise ConnectionError(
                 f'你的代理节点地区网络被禁止访问TikTok，请切换其他地区的节点访问 {msg.group(1) if msg else ""}')
         if 'UNEXPECTED_EOF_WHILE_READING' not in html_str:
@@ -327,7 +327,7 @@ def get_kuaishou_stream_data(url: str, proxy_addr: Union[str, None] = None, cook
         return {"type": 1, "is_live": False}
 
     try:
-        json_str = re.search('<script>window.__INITIAL_STATE__=(.*?);\(function\(\)\{var s;', html_str).group(1)
+        json_str = re.search('<script>window.__INITIAL_STATE__=(.*?);\\(function\\(\\)\\{var s;', html_str).group(1)
         play_list = re.findall('(\\{"liveStream".*?),"gameInfo', json_str)[0] + "}"
         play_list = json.loads(play_list)
     except (AttributeError, IndexError, json.JSONDecodeError) as e:
@@ -412,7 +412,7 @@ def get_huya_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies:
         headers['Cookie'] = cookies
 
     html_str = get_req(url=url, proxy_addr=proxy_addr, headers=headers)
-    json_str = re.findall('stream: (\{"data".*?),"iWebDefaultBitRate"', html_str)[0]
+    json_str = re.findall('stream: (\\{"data".*?),"iWebDefaultBitRate"', html_str)[0]
     json_data = json.loads(json_str + '}')
     return json_data
 
@@ -535,7 +535,7 @@ def get_douyu_info_data(url: str, proxy_addr: Union[str, None] = None, cookies: 
     if match_rid:
         rid = match_rid.group(1)
     else:
-        rid = re.search('douyu.com/(.*?)(?=\?|$)', url).group(1)
+        rid = re.search('douyu.com/(.*?)(?=\\?|$)', url).group(1)
         html_str = get_req(url=f'https://m.douyu.com/{rid}', proxy_addr=proxy_addr, headers=headers)
         json_str = re.findall('<script id="vike_pageContext" type="application/json">(.*?)</script>', html_str)[0]
         json_data = json.loads(json_str)
@@ -600,8 +600,8 @@ def get_yy_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: U
         headers['Cookie'] = cookies
 
     html_str = get_req(url=url, proxy_addr=proxy_addr, headers=headers)
-    anchor_name = re.search('nick: "(.*?)",\n\s+logo', html_str).group(1)
-    cid = re.search('sid : "(.*?)",\n\s+ssid', html_str, re.DOTALL).group(1)
+    anchor_name = re.search('nick: "(.*?)",\n\\s+logo', html_str).group(1)
+    cid = re.search('sid : "(.*?)",\n\\s+ssid', html_str, re.DOTALL).group(1)
 
     data = '{"head":{"seq":1701869217590,"appidstr":"0","bidstr":"121","cidstr":"' + cid + '","sidstr":"' + cid + '","uid64":0,"client_type":108,"client_ver":"5.17.0","stream_sys_ver":1,"app":"yylive_web","playersdk_ver":"5.17.0","thundersdk_ver":"0","streamsdk_ver":"5.17.0"},"client_attribute":{"client":"web","model":"web0","cpu":"","graphics_card":"","os":"chrome","osversion":"0","vsdk_version":"","app_identify":"","app_version":"","business":"","width":"1920","height":"1080","scale":"","client_type":8,"h265":0},"avp_parameter":{"version":1,"client_type":8,"service_type":0,"imsi":0,"send_time":1701869217,"line_seq":-1,"gear":4,"ssl":1,"stream_format":0}}'
     data_bytes = data.encode('utf-8')
@@ -722,7 +722,7 @@ def get_xhs_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: U
         "anchor_name": '',
         "is_live": False,
     }
-    room_id = re.search('/livestream/(.*?)(?=/|\?|$)', url)
+    room_id = re.search('/livestream/(.*?)(?=/|\\?|$)', url)
     if room_id:
         room_id = room_id.group(1)
         api = f'https://www.xiaohongshu.com/api/sns/red/live/app/v1/ecology/outside/share_info?room_id={room_id}'
@@ -740,7 +740,7 @@ def get_xhs_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: U
             result['flv_url'] = flv_url
             result['record_url'] = flv_url
 
-    user_id = re.search('/user/profile/(.*?)(?=/|\?|$)', url)
+    user_id = re.search('/user/profile/(.*?)(?=/|\\?|$)', url)
     user_id = user_id.group(1) if user_id else get_params(url, 'host_id')
     if user_id:
         params = {
@@ -787,7 +787,7 @@ def get_bigo_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: 
         if '&h=' in url:
             room_id = url.split('&h=')[-1]
         else:
-            room_id = re.search('www.bigo.tv/cn/(\w+)', url).group(1)
+            room_id = re.search('www.bigo.tv/cn/(\\w+)', url).group(1)
 
     data = {'siteId': room_id}  # roomId
     url2 = 'https://ta.bigo.tv/official_website/studio/getInternalStudioInfo'
@@ -824,7 +824,7 @@ def get_blued_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies:
         headers['Cookie'] = cookies
 
     html_str = get_req(url=url, proxy_addr=proxy_addr, headers=headers)
-    json_str = re.search('decodeURIComponent\(\"(.*?)\"\)\),window\.Promise', html_str, re.DOTALL).group(1)
+    json_str = re.search('decodeURIComponent\\(\"(.*?)\"\\)\\),window\\.Promise', html_str, re.DOTALL).group(1)
     json_str = urllib.parse.unquote(json_str)
     json_data = json.loads(json_str)
     anchor_name = json_data['userInfo']['name']
@@ -1111,7 +1111,7 @@ def get_qiandurebo_stream_data(url: str, proxy_addr: Union[str, None] = None, co
         headers['Cookie'] = cookies
 
     html_str = get_req(url=url, proxy_addr=proxy_addr, headers=headers)
-    data = re.search('var user = (.*?)\r\n\s+user\.play_url', html_str, re.DOTALL).group(1)
+    data = re.search('var user = (.*?)\r\n\\s+user\\.play_url', html_str, re.DOTALL).group(1)
     anchor_name = re.findall('"zb_nickname": "(.*?)",\r\n', data)
 
     result = {"anchor_name": "", "is_live": False}
@@ -1483,7 +1483,7 @@ def get_looklive_stream_url(
     if cookies:
         headers['Cookie'] = cookies
 
-    room_id = re.search('live\?id=(.*?)&', url).group(1)
+    room_id = re.search('live\\?id=(.*?)&', url).group(1)
     params, secretkey = get_looklive_secret_data({"liveRoomNo": room_id})
     request_data = {'params': params, 'encSecKey': secretkey}
     api = 'https://api.look.163.com/weapi/livestream/room/get/v3'
@@ -1592,9 +1592,9 @@ def get_popkontv_stream_data(
 
     if not partner_code:
         if 'mcPartnerCode' in url:
-            regex_result = re.search('mcPartnerCode=(P-\d+)', url)
+            regex_result = re.search('mcPartnerCode=(P-\\d+)', url)
         else:
-            regex_result = re.search('partnerCode=(P-\d+)', url)
+            regex_result = re.search('partnerCode=(P-\\d+)', url)
         partner_code = regex_result.group(1) if regex_result else code
         notices_url = f'https://www.popkontv.com/channel/notices?mcid={anchor_id}&mcPartnerCode={partner_code}'
         notices_response = get_req(notices_url, proxy_addr=proxy_addr, headers=headers, abroad=True)
@@ -1788,8 +1788,8 @@ def get_twitcasting_stream_url(
 
     def get_data(header):
         html_str = get_req(url, proxy_addr=proxy_addr, headers=header)
-        anchor = re.search("<title>(.*?) \(@(.*?)\)  的直播 - Twit", html_str)
-        status = re.search('data-is-onlive="(.*?)"\n\s+data-view-mode', html_str)
+        anchor = re.search("<title>(.*?) \\(@(.*?)\\)  的直播 - Twit", html_str)
+        status = re.search('data-is-onlive="(.*?)"\n\\s+data-view-mode', html_str)
         movie_id = re.search('data-movie-id="(.*?)" data-audience-id', html_str)
         return f'{anchor.group(1).strip()}-{anchor.group(2)}-{movie_id.group(1)}', status.group(1)
 
@@ -1951,7 +1951,7 @@ def get_kugou_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies:
         headers['Cookie'] = cookies
 
     if 'roomId' in url:
-        room_id = re.search('roomId=(\d+)', url).group(1)
+        room_id = re.search('roomId=(\\d+)', url).group(1)
     else:
         room_id = url.split('?')[0].rsplit('/', maxsplit=1)[1]
 
@@ -2285,7 +2285,7 @@ def get_showroom_stream_data(url: str, proxy_addr: Union[str, None] = None, cook
         room_id = url.split('room_id=')[-1]
     else:
         html_str = get_req(url, proxy_addr=proxy_addr, headers=headers, abroad=True)
-        room_id = re.search('href="/room/profile\?room_id=(.*?)"', html_str).group(1)
+        room_id = re.search('href="/room/profile\\?room_id=(.*?)"', html_str).group(1)
     info_api = f'https://www.showroom-live.com/api/live/live_info?room_id={room_id}'
     json_str = get_req(info_api, proxy_addr=proxy_addr, headers=headers, abroad=True)
     json_data = json.loads(json_str)
@@ -2762,7 +2762,7 @@ def get_6room_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies:
 
     room_id = url.split('?')[0].rsplit('/', maxsplit=1)[1]
     html_str = get_req(f'https://v.6.cn/{room_id}', proxy_addr=proxy_addr, headers=headers)
-    room_id = re.search('rid: \'(.*?)\',\n\s+roomid', html_str).group(1)
+    room_id = re.search('rid: \'(.*?)\',\n\\s+roomid', html_str).group(1)
     data = {
         'av': '3.1',
         'encpass': '',
