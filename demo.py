@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from loguru import logger
+from douyinliverecorder.logger import logger
 from douyinliverecorder import spider
 
 # 以下示例直播间链接不保证时效性，请自行查看链接是否能正常访问
@@ -168,6 +168,14 @@ LIVE_STREAM_CONFIG = {
     "6room": {
         "url": "https://v.6.cn/634435",
         "func": spider.get_6room_stream_url,
+    },
+    "lehai": {
+        "url": "https://www.lehaitv.com/8059096",
+        "func": spider.get_haixiu_stream_url,
+    },
+    "huamao": {
+        "url": "https://h.catshow168.com/live/preview.html?uid=19066357&anchorUid=18895331",
+        "func": spider.get_pplive_stream_url,
     }
 }
 
@@ -185,5 +193,5 @@ def test_live_stream(platform_name: str, proxy_addr=None) -> None:
 
 
 if __name__ == "__main__":
-    platform = "douyin"
+    platform = "huamao"
     test_live_stream(platform)

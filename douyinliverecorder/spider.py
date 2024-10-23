@@ -2583,7 +2583,11 @@ def get_haixiu_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies
         headers['Cookie'] = cookies
 
     room_id = url.split("?")[0].rsplit('/', maxsplit=1)[-1]
-    access_token = "pLXSC%252FXJ0asc1I21tVL5FYZhNJn2Zg6d7m94umCnpgL%252BuVm31GQvyw%253D%253D"
+    if 'haixiutv' in url:
+        access_token = "pLXSC%252FXJ0asc1I21tVL5FYZhNJn2Zg6d7m94umCnpgL%252BuVm31GQvyw%253D%253D"
+    else:
+        access_token = "s7FUbTJ%252BjILrR7kicJUg8qr025ZVjd07DAnUQd8c7g%252Fo4OH9pdSX6w%253D%253D"
+
     params = {
         "accessToken": access_token,
         "tku": "3000006",
@@ -2596,7 +2600,13 @@ def get_haixiu_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies
     params['_ajaxData1'] = ajax_data
     params['_'] = int(time.time()*1000)
 
-    api = f'https://service.haixiutv.com/v2/room/{room_id}/media/advanceInfoRoom?{urllib.parse.urlencode(params)}'
+    if 'haixiutv' in url:
+        api = f'https://service.haixiutv.com/v2/room/{room_id}/media/advanceInfoRoom?{urllib.parse.urlencode(params)}'
+    else:
+        headers['origin'] = 'https://www.lehaitv.com'
+        headers['referer'] = 'https://www.lehaitv.com'
+        api = f'https://service.lehaitv.com/v2/room/{room_id}/media/advanceInfoRoom?{urllib.parse.urlencode(params)}'
+
     json_str = get_req(api, proxy_addr=proxy_addr, headers=headers, abroad=True)
     json_data = json.loads(json_str)
 
@@ -2731,7 +2741,13 @@ def get_pplive_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies
         'inviteUuid': '',
         'anchorUuid': room_id,
     }
-    api = 'https://api.pp.weimipopo.com/live/preview'
+
+    if 'catshow' in url:
+        api = 'https://api.catshow168.com/live/preview'
+        headers['Origin'] = 'https://h.catshow168.com'
+        headers['Referer'] = 'https://h.catshow168.com'
+    else:
+        api = 'https://api.pp.weimipopo.com/live/preview'
     json_str = get_req(api, json_data=json_data, proxy_addr=proxy_addr, headers=headers)
     json_data = json.loads(json_str)
     live_info = json_data['data']

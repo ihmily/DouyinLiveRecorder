@@ -37,7 +37,7 @@ from msg_push import (
 
 version = "v3.0.9"
 platforms = ("\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|"
-             "酷狗|花椒|流星|Acfun|时光|映客|音播|知乎|嗨秀|VV星球|17Live|漂漂|六间房"
+             "酷狗|花椒|流星|Acfun|时光|映客|音播|知乎|嗨秀|VV星球|17Live|漂漂|六间房|乐嗨|花猫"
              "\n海外站点：TikTok|SOOP[AfreecaTV]|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK|浪Live")
 
 recording = set()
@@ -729,6 +729,18 @@ def start_record(url_data: tuple, count_variable: int = -1):
                         with semaphore:
                             port_info = spider.get_6room_stream_url(
                                 url=record_url, proxy_addr=proxy_address, cookies=six_room_cookie)
+
+                    elif record_url.find("lehaitv.com/") > -1:
+                        platform = '乐嗨直播'
+                        with semaphore:
+                            port_info = spider.get_haixiu_stream_url(
+                                url=record_url, proxy_addr=proxy_address, cookies=lehaitv_cookie)
+
+                    elif record_url.find("h.catshow168.com/") > -1:
+                        platform = '花猫直播'
+                        with semaphore:
+                            port_info = spider.get_pplive_stream_url(
+                                url=record_url, proxy_addr=proxy_address, cookies=huamao_cookie)
 
                     else:
                         logger.error(f'{record_url} {platform}直播地址')
@@ -1463,6 +1475,8 @@ while True:
     langlive_cookie = read_config_value(config, 'Cookie', 'langlive_cookie', '')
     pplive_cookie = read_config_value(config, 'Cookie', 'pplive_cookie', '')
     six_room_cookie = read_config_value(config, 'Cookie', '6room_cookie', '')
+    lehaitv_cookie = read_config_value(config, 'Cookie', 'lehaitv_cookie', '')
+    huamao_cookie = read_config_value(config, 'Cookie', 'huamao_cookie', '')
 
     video_save_type_list = ("FLV", "MKV", "TS", "MP4", "MP3音频", "M4A音频")
     if video_save_type and video_save_type.upper() in video_save_type_list:
@@ -1555,7 +1569,9 @@ while True:
                     "17.live",
                     "m.pp.weimipopo.com",
                     "v.6.cn",
-                    "m.6.cn"
+                    "m.6.cn",
+                    'www.lehaitv.com',
+                    'h.catshow168.com'
                 ]
                 overseas_platform_host = [
                     'www.tiktok.com',
@@ -1586,7 +1602,8 @@ while True:
                     "www.liveme.com",
                     "www.haixiutv.com",
                     "v.6.cn",
-                    "m.6.cn"
+                    "m.6.cn",
+                    'www.lehaitv.com'
                 )
 
                 if url_host in platform_host:
