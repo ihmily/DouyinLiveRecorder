@@ -4,11 +4,12 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-09-03 19:18:36
-Update: 2024-10-12 19:22:12
+Update: 2024-10-23 23:18:12
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 """
 from typing import Dict, Any, Optional
 import json
+import base64
 import urllib.request
 import smtplib
 from email.header import Header
@@ -79,14 +80,14 @@ def xizhi(url: str, content: str, title: str = '直播间状态更新') -> Dict[
     return {"success": success, "error": error}
 
 
-def email_message(mail_host: str, mail_pass: str, from_email: str, to_email: str, title: str, content: str) -> (
-        Dict)[str, Any]:
-
+def email_message(email_host: str, sender_email: str, email_pass: str, sender_name: str, to_email: str, title: str,
+                  content: str) -> Dict[str, Any]:
     receivers = to_email.replace('，', ',').split(',') if to_email.strip() else []
 
     try:
         message = MIMEMultipart()
-        message['From'] = "{}".format(from_email)
+        send_name = base64.b64encode(sender_name.encode("utf-8")).decode()
+        message['From'] = f'=?UTF-8?B?{send_name}?= <{sender_email}>'
         message['Subject'] = Header(title, 'utf-8')
         if len(receivers) == 1:
             message['To'] = receivers[0]
@@ -94,9 +95,9 @@ def email_message(mail_host: str, mail_pass: str, from_email: str, to_email: str
         t_apart = MIMEText(content, 'plain', 'utf-8')
         message.attach(t_apart)
 
-        smtp_obj = smtplib.SMTP_SSL(mail_host, 465)
-        smtp_obj.login(from_email, mail_pass)
-        smtp_obj.sendmail(from_email, receivers, message.as_string())
+        smtp_obj = smtplib.SMTP_SSL(email_host, 465)
+        smtp_obj.login(sender_email, email_pass)
+        smtp_obj.sendmail(sender_email, receivers, message.as_string())
         return {"success": receivers, "error": []}
     except smtplib.SMTPException as e:
         print(f'邮件推送失败, 推送邮箱：{to_email}, 错误信息:{e}')
@@ -177,7 +178,15 @@ if __name__ == '__main__':
     tg_chat_id = 000000  # tg搜索"userinfobot"获取的chat_id值，即可发送推送消息给你自己，如果下面的是群组id则发送到群
     # tg_bot(tg_chat_id, tg_token, send_content)
 
-    # email_message("", "", "", "", "", "")
+    email_message(
+        email_host="smtp.qq.com",
+        sender_email="",
+        email_pass="",
+        sender_name="邮箱昵称示例",
+        to_email="",
+        title="邮箱标题",
+        content="123456"
+    )
 
     bark_url = 'https://xxx.xxx.com/key/'
-    # bark(bark_url, send_title, send_content)
+# bark(bark_url, send_title, send_content)

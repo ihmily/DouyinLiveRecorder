@@ -253,7 +253,9 @@ def push_message(record_name, content: str) -> None:
     push_functions = {
         '微信': lambda: xizhi(xizhi_api_url, content),
         '钉钉': lambda: dingtalk(dingtalk_api_url, content, dingtalk_phone_num),
-        '邮箱': lambda: email_message(mail_host, mail_password, from_email, to_email, "直播间状态更新通知", content),
+        '邮箱': lambda: email_message(
+            email_host, sender_email, email_password, sender_name, to_email, "直播间状态更新通知", content
+        ),
         'TG': lambda: tg_bot(tg_chat_id, tg_token, content),
         'BARK': lambda: bark(
             bark_msg_api, title="直播录制通知", content=content, level=bark_msg_level, sound=bark_msg_ring),
@@ -291,7 +293,6 @@ def clear_record_info(record_name, record_url):
 
 def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, save_type: str,
                      bash_file_path: Union[str, None] = None) -> bool:
-
     save_path_name = ffmpeg_command[-1]
     process = subprocess.Popen(
         ffmpeg_command, stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type)
@@ -926,9 +927,11 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                             _filepath, _ = urllib.request.urlretrieve(real_url, save_file_path)
                                             record_finished = True
                                             recording.discard(record_name)
-                                            print(f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制完成\n")
+                                            print(
+                                                f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制完成\n")
                                     except Exception as e:
-                                        print(f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制出错,请检查网络\n")
+                                        print(
+                                            f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制出错,请检查网络\n")
                                         logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                         with max_request_lock:
                                             error_count += 1
@@ -1289,7 +1292,8 @@ def check_ffmpeg_existence():
             # print(f"已将ffmpeg路径添加到环境变量：{ffmpeg_path}")
             return True
         else:
-            logger.error("未检测到ffmpeg。请确保ffmpeg位于系统路径中，或将其路径添加到环境变量。缺少ffmpeg将导致无法进行录制。")
+            logger.error(
+                "未检测到ffmpeg。请确保ffmpeg位于系统路径中，或将其路径添加到环境变量。缺少ffmpeg将导致无法进行录制。")
             sys.exit(0)
     finally:
         dev_null.close()
@@ -1415,9 +1419,10 @@ while True:
     dingtalk_phone_num = read_config_value(config, '推送配置', '钉钉通知@对象(填手机号)', "")
     tg_token = read_config_value(config, '推送配置', 'tgapi令牌', "")
     tg_chat_id = read_config_value(config, '推送配置', 'tg聊天id(个人或者群组id)', "")
-    mail_host = read_config_value(config, '推送配置', 'SMTP邮件服务器', "")
-    from_email = read_config_value(config, '推送配置', '发件人邮箱', "")
-    mail_password = read_config_value(config, '推送配置', '发件人密码(授权码)', "")
+    email_host = read_config_value(config, '推送配置', 'SMTP邮件服务器', "")
+    sender_email = read_config_value(config, '推送配置', '发件人邮箱', "")
+    email_password = read_config_value(config, '推送配置', '发件人密码(授权码)', "")
+    sender_name = read_config_value(config, '推送配置', '发件人显示昵称', "")
     to_email = read_config_value(config, '推送配置', '收件人邮箱', "")
     begin_push_message_text = read_config_value(config, '推送配置', '自定义开播推送内容', "")
     over_push_message_text = read_config_value(config, '推送配置', '自定义关播推送内容', "")
@@ -1484,9 +1489,11 @@ while True:
     else:
         video_save_type = "TS"
 
+
     def contains_url(string: str) -> bool:
         pattern = r"(https?://)?(www\.)?[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)+(:\d+)?(/.*)?"
         return re.search(pattern, string) is not None
+
 
     try:
         url_comments = []
