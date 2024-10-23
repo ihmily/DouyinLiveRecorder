@@ -14,11 +14,11 @@ LIVE_STREAM_CONFIG = {
     },
     "kuaishou": {
         "url": "https://live.kuaishou.com/u/yall1102",
-        "func": spider.get_kuaishou_stream_data2,
+        "func": spider.get_kuaishou_stream_data,
     },
     "huya": {
         "url": "https://www.huya.com/116",
-        "func": spider.get_huya_stream_data,
+        "func": spider.get_huya_app_stream_url,
     },
     "douyu": {
         "url": "https://www.douyu.com/topic/wzDBLS6?rid=4921614&dyshid=",
@@ -193,5 +193,5 @@ def test_live_stream(platform_name: str, proxy_addr=None) -> None:
 
 
 if __name__ == "__main__":
-    platform = "huamao"
+    platform = "douyin"
     test_live_stream(platform)
