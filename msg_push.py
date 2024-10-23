@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-09-03 19:18:36
-Update: 2024-10-23 23:18:12
+Update: 2024-10-23 23:37:12
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 """
 from typing import Dict, Any, Optional
@@ -33,7 +33,7 @@ def dingtalk(url: str, content: str, number: Optional[str] = '') -> Dict[str, An
             },
             "at": {
                 "atMobiles": [
-                    number  # 添加这个手机号，可以被@通知（必须要在群里）
+                    number
                 ],
             },
         }
@@ -54,10 +54,11 @@ def dingtalk(url: str, content: str, number: Optional[str] = '') -> Dict[str, An
     return {"success": success, "error": error}
 
 
-def xizhi(url: str, content: str, title: str = '直播间状态更新') -> Dict[str, Any]:
+def xizhi(url: str, content: str, title: str = None) -> Dict[str, Any]:
     success = []
     error = []
     api_list = url.replace('，', ',').split(',') if url.strip() else []
+    title = title if title else '直播间状态更新'
     for api in api_list:
         json_data = {
             'title': title,
@@ -178,15 +179,15 @@ if __name__ == '__main__':
     tg_chat_id = 000000  # tg搜索"userinfobot"获取的chat_id值，即可发送推送消息给你自己，如果下面的是群组id则发送到群
     # tg_bot(tg_chat_id, tg_token, send_content)
 
-    email_message(
-        email_host="smtp.qq.com",
-        sender_email="",
-        email_pass="",
-        sender_name="邮箱昵称示例",
-        to_email="",
-        title="邮箱标题",
-        content="123456"
-    )
+    # email_message(
+    #     email_host="smtp.qq.com",
+    #     sender_email="",
+    #     email_pass="",
+    #     sender_name="邮箱昵称示例",
+    #     to_email="",
+    #     title="邮箱标题",
+    #     content="123456"
+    # )
 
     bark_url = 'https://xxx.xxx.com/key/'
-# bark(bark_url, send_title, send_content)
+    # bark(bark_url, send_title, send_content)
