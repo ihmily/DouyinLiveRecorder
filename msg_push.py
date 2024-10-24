@@ -81,8 +81,8 @@ def xizhi(url: str, content: str, title: str = None) -> Dict[str, Any]:
     return {"success": success, "error": error}
 
 
-def email_message(email_host: str, sender_email: str, email_pass: str, sender_name: str, to_email: str, title: str,
-                  content: str) -> Dict[str, Any]:
+def email_message(email_host: str, login_email: str, email_pass: str, sender_email: str, sender_name: str,
+                  to_email: str, title: str, content: str) -> Dict[str, Any]:
     receivers = to_email.replace('，', ',').split(',') if to_email.strip() else []
 
     try:
@@ -97,7 +97,7 @@ def email_message(email_host: str, sender_email: str, email_pass: str, sender_na
         message.attach(t_apart)
 
         smtp_obj = smtplib.SMTP_SSL(email_host, 465)
-        smtp_obj.login(sender_email, email_pass)
+        smtp_obj.login(login_email, email_pass)
         smtp_obj.sendmail(sender_email, receivers, message.as_string())
         return {"success": receivers, "error": []}
     except smtplib.SMTPException as e:
@@ -181,12 +181,13 @@ if __name__ == '__main__':
 
     # email_message(
     #     email_host="smtp.qq.com",
-    #     sender_email="",
+    #     login_email="",
     #     email_pass="",
-    #     sender_name="邮箱昵称示例",
+    #     sender_email="",
+    #     sender_name="",
     #     to_email="",
-    #     title="邮箱标题",
-    #     content="123456"
+    #     title="",
+    #     content=""
     # )
 
     bark_url = 'https://xxx.xxx.com/key/'

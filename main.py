@@ -254,7 +254,8 @@ def push_message(record_name, content: str) -> None:
         '微信': lambda: xizhi(xizhi_api_url, content),
         '钉钉': lambda: dingtalk(dingtalk_api_url, content, dingtalk_phone_num),
         '邮箱': lambda: email_message(
-            email_host, sender_email, email_password, sender_name, to_email, "直播间状态更新通知", content
+            email_host, login_email, email_password, sender_email, sender_name,
+            to_email, "直播间状态更新通知", content
         ),
         'TG': lambda: tg_bot(tg_chat_id, tg_token, content),
         'BARK': lambda: bark(
@@ -1420,8 +1421,9 @@ while True:
     tg_token = read_config_value(config, '推送配置', 'tgapi令牌', "")
     tg_chat_id = read_config_value(config, '推送配置', 'tg聊天id(个人或者群组id)', "")
     email_host = read_config_value(config, '推送配置', 'SMTP邮件服务器', "")
-    sender_email = read_config_value(config, '推送配置', '发件人邮箱', "")
+    login_email = read_config_value(config, '推送配置', '邮箱登录账号', "")
     email_password = read_config_value(config, '推送配置', '发件人密码(授权码)', "")
+    sender_email = read_config_value(config, '推送配置', '发件人邮箱', "")
     sender_name = read_config_value(config, '推送配置', '发件人显示昵称', "")
     to_email = read_config_value(config, '推送配置', '收件人邮箱', "")
     begin_push_message_text = read_config_value(config, '推送配置', '自定义开播推送内容', "")
