@@ -7,10 +7,11 @@ Date: 2023-09-03 19:18:36
 Update: 2024-10-23 23:37:12
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 """
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 import json
 import base64
 import urllib.request
+import urllib.error
 import smtplib
 from email.header import Header
 from email.mime.multipart import MIMEMultipart
@@ -21,7 +22,7 @@ opener = urllib.request.build_opener(no_proxy_handler)
 headers: Dict[str, str] = {'Content-Type': 'application/json'}
 
 
-def dingtalk(url: str, content: str, number: Optional[str] = '') -> Dict[str, Any]:
+def dingtalk(url: str, content: str, number: str = None) -> Dict[str, Any]:
     success = []
     error = []
     api_list = url.replace('，', ',').split(',') if url.strip() else []
@@ -54,11 +55,10 @@ def dingtalk(url: str, content: str, number: Optional[str] = '') -> Dict[str, An
     return {"success": success, "error": error}
 
 
-def xizhi(url: str, content: str, title: str = None) -> Dict[str, Any]:
+def xizhi(url: str, title: str, content: str) -> Dict[str, Any]:
     success = []
     error = []
     api_list = url.replace('，', ',').split(',') if url.strip() else []
-    title = title if title else '直播间状态更新'
     for api in api_list:
         json_data = {
             'title': title,
@@ -81,8 +81,8 @@ def xizhi(url: str, content: str, title: str = None) -> Dict[str, Any]:
     return {"success": success, "error": error}
 
 
-def email_message(email_host: str, login_email: str, email_pass: str, sender_email: str, sender_name: str,
-                  to_email: str, title: str, content: str) -> Dict[str, Any]:
+def send_email(email_host: str, login_email: str, email_pass: str, sender_email: str, sender_name: str,
+               to_email: str, title: str, content: str) -> Dict[str, Any]:
     receivers = to_email.replace('，', ',').split(',') if to_email.strip() else []
 
     try:
@@ -159,6 +159,54 @@ def bark(api: str, title: str = "message", content: str = 'test', level: str = "
     return {"success": success, "error": error}
 
 
+def ntfy(api: str, title: str = "message", content: str = 'test', tags: str = 'tada', priority: int = 3,
+         action_url: str = "", attach: str = "", filename: str = "", click: str = "", icon: str = "",
+         delay: str = "", email: str = "", call: str = "") -> Dict[str, Any]:
+    success = []
+    error = []
+    api_list = api.replace('，', ',').split(',') if api.strip() else []
+    tags = tags.replace('，', ',').split(',') if tags else ['partying_face']
+    actions = [{"action": "view", "label": "view live", "url": action_url}] if action_url else []
+    for _api in api_list:
+        server, topic = _api.rsplit('/', maxsplit=1)
+        json_data = {
+            "topic": topic,
+            "title": title,
+            "message": content,
+            "tags": tags,
+            "priority": priority,
+            "attach": attach,
+            "filename": filename,
+            "click": click,
+            "actions": actions,
+            "markdown": False,
+            "icon": icon,
+            "delay": delay,
+            "email": email,
+            "call": call
+        }
+
+        try:
+            data = json.dumps(json_data, ensure_ascii=False).encode('utf-8')
+            req = urllib.request.Request(server, data=data, headers=headers)
+            response = opener.open(req, timeout=10)
+            json_str = response.read().decode("utf-8")
+            json_data = json.loads(json_str)
+            if "error" not in json_data:
+                success.append(_api)
+            else:
+                error.append(_api)
+                print(f'ntfy推送失败, 推送地址：{_api}, 失败信息：{json_data["error"]}')
+        except urllib.error.HTTPError as e:
+            error.append(_api)
+            error_msg = e.read().decode("utf-8")
+            print(f'ntfy推送失败, 推送地址：{_api}, 错误信息:{json.loads(error_msg)["error"]}')
+        except Exception as e:
+            error.append(api)
+            print(f'ntfy推送失败, 推送地址：{_api}, 错误信息:{e}')
+    return {"success": success, "error": error}
+
+
 if __name__ == '__main__':
     send_title = '直播通知'  # 标题
     send_content = '张三 开播了！'  # 推送内容
@@ -192,3 +240,9 @@ if __name__ == '__main__':
 
     bark_url = 'https://xxx.xxx.com/key/'
     # bark(bark_url, send_title, send_content)
+
+    ntfy(
+        api="https://ntfy.sh/xxxxx",
+        title="直播推送",
+        content="xxx已开播",
+    )

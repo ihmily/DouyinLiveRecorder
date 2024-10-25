@@ -32,7 +32,7 @@ from douyinliverecorder.utils import (
     get_file_paths, remove_emojis
 )
 from msg_push import (
-    dingtalk, xizhi, tg_bot, email_message, bark
+    dingtalk, xizhi, tg_bot, send_email, bark, ntfy
 )
 
 version = "v3.0.9"
@@ -160,7 +160,7 @@ def delete_line(file_path: str, del_line: str):
                     f.write(txt_line)
 
 
-def get_startup_info(system_type):
+def get_startup_info(system_type: str):
     if system_type == 'nt':
         startup_info = subprocess.STARTUPINFO()
         startup_info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -249,17 +249,22 @@ def adjust_max_request():
         error_count = 0
 
 
-def push_message(record_name, content: str) -> None:
+def push_message(record_name: str, live_url: str, content: str) -> None:
+    msg_title = push_message_title.strip() or "直播间状态更新通知"
     push_functions = {
-        '微信': lambda: xizhi(xizhi_api_url, content),
+        '微信': lambda: xizhi(xizhi_api_url, msg_title, content),
         '钉钉': lambda: dingtalk(dingtalk_api_url, content, dingtalk_phone_num),
-        '邮箱': lambda: email_message(
+        '邮箱': lambda: send_email(
             email_host, login_email, email_password, sender_email, sender_name,
-            to_email, "直播间状态更新通知", content
+            to_email, msg_title, content
         ),
         'TG': lambda: tg_bot(tg_chat_id, tg_token, content),
         'BARK': lambda: bark(
-            bark_msg_api, title="直播录制通知", content=content, level=bark_msg_level, sound=bark_msg_ring),
+            bark_msg_api, title=msg_title, content=content, level=bark_msg_level, sound=bark_msg_ring
+        ),
+        'NTFY': lambda: ntfy(
+            ntfy_api, title=msg_title, content=content, tags=ntfy_tags, action_url=live_url, email=ntfy_email
+        ),
     }
 
     for platform, func in push_functions.items():
@@ -272,7 +277,7 @@ def push_message(record_name, content: str) -> None:
                 print(f"直播消息推送到{platform}失败: {e}")
 
 
-def run_bash(command):
+def run_bash(command: list):
     process = subprocess.Popen(
         command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=get_startup_info(os_type)
     )
@@ -283,7 +288,7 @@ def run_bash(command):
     print(stderr_decoded)
 
 
-def clear_record_info(record_name, record_url):
+def clear_record_info(record_name: str, record_url: str):
     global monitoring
     recording.discard(record_name)
     if record_url in url_comments and record_url in running_list:
@@ -794,9 +799,13 @@ def start_record(url_data: tuple, count_variable: int = -1):
 
                                     push_content = (push_content.replace('[直播间名称]', record_name).
                                                     replace('[时间]', push_at))
-                                    push_message(record_name, push_content.replace(r'\n', '\n'))
-
+                                    threading.Thread(
+                                        target=push_message,
+                                        args=(record_name, record_url, push_content.replace(r'\n', '\n')),
+                                        daemon=True
+                                    ).start()
                                 start_pushed = False
+
                         else:
                             content = f"\r{record_name} 正在直播中..."
                             print(content)
@@ -809,8 +818,11 @@ def start_record(url_data: tuple, count_variable: int = -1):
 
                                     push_content = (push_content.replace('[直播间名称]', record_name).
                                                     replace('[时间]', push_at))
-                                    push_message(record_name, push_content.replace(r'\n', '\n'))
-
+                                    threading.Thread(
+                                        target=push_message,
+                                        args=(record_name, record_url, push_content.replace(r'\n', '\n')),
+                                        daemon=True
+                                    ).start()
                                 start_pushed = True
 
                             if disable_record:
@@ -1293,8 +1305,7 @@ def check_ffmpeg_existence():
             # print(f"已将ffmpeg路径添加到环境变量：{ffmpeg_path}")
             return True
         else:
-            logger.error(
-                "未检测到ffmpeg。请确保ffmpeg位于系统路径中，或将其路径添加到环境变量。缺少ffmpeg将导致无法进行录制。")
+            logger.error("未检测到ffmpeg，请确保ffmpeg位于系统路径中，或将其路径添加到环境变量。")
             sys.exit(0)
     finally:
         dev_null.close()
@@ -1302,7 +1313,7 @@ def check_ffmpeg_existence():
 
 
 if not check_ffmpeg_existence():
-    logger.error("ffmpeg检查失败，程序将退出。")
+    logger.error("缺少ffmpeg无法进行录制，程序退出")
     sys.exit(1)
 
 # --------------------------初始化程序-------------------------------------
@@ -1411,7 +1422,7 @@ while True:
     enable_proxy_platform_list = enable_proxy_platform.replace('，', ',').split(',') if enable_proxy_platform else None
     extra_enable_proxy = read_config_value(config, '录制设置', '额外使用代理录制的平台（逗号分隔）', '')
     extra_enable_proxy_platform_list = extra_enable_proxy.replace('，', ',').split(',') if extra_enable_proxy else None
-    live_status_push = read_config_value(config, '推送配置', '直播状态通知(可选微信|钉钉|tg|邮箱|bark或者都填)', "")
+    live_status_push = read_config_value(config, '推送配置', '直播状态推送渠道', "")
     dingtalk_api_url = read_config_value(config, '推送配置', '钉钉推送接口链接', "")
     xizhi_api_url = read_config_value(config, '推送配置', '微信推送接口链接', "")
     bark_msg_api = read_config_value(config, '推送配置', 'bark推送接口链接', "")
@@ -1426,6 +1437,10 @@ while True:
     sender_email = read_config_value(config, '推送配置', '发件人邮箱', "")
     sender_name = read_config_value(config, '推送配置', '发件人显示昵称', "")
     to_email = read_config_value(config, '推送配置', '收件人邮箱', "")
+    ntfy_api = read_config_value(config, '推送配置', 'ntfy推送地址', "")
+    ntfy_tags = read_config_value(config, '推送配置', 'ntfy推送标签', "tada")
+    ntfy_email = read_config_value(config, '推送配置', 'ntfy推送邮箱', "")
+    push_message_title = read_config_value(config, '推送配置', '自定义推送标题', "直播间状态更新通知")
     begin_push_message_text = read_config_value(config, '推送配置', '自定义开播推送内容', "")
     over_push_message_text = read_config_value(config, '推送配置', '自定义关播推送内容', "")
     disable_record = options.get(read_config_value(config, '推送配置', '只推送通知不录制（是/否）', "否"), False)
@@ -1443,7 +1458,7 @@ while True:
     twitcasting_username = read_config_value(config, '账号密码', 'twitcasting账号', '')
     twitcasting_password = read_config_value(config, '账号密码', 'twitcasting密码', '')
     popkontv_access_token = read_config_value(config, 'Authorization', 'popkontv_token', '')
-    dy_cookie = read_config_value(config, 'Cookie', '抖音cookie(录制抖音必须要有)', '')
+    dy_cookie = read_config_value(config, 'Cookie', '抖音cookie', '')
     ks_cookie = read_config_value(config, 'Cookie', '快手cookie', '')
     tiktok_cookie = read_config_value(config, 'Cookie', 'tiktok_cookie', '')
     hy_cookie = read_config_value(config, 'Cookie', '虎牙cookie', '')
