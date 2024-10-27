@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-10-02 04:36:12
+Update: 2024-10-27 17:15:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -26,7 +26,7 @@ from .spider import (
 
 @trace_error_decorator
 def get_douyin_stream_url(json_data: dict, video_quality: str) -> Dict[str, Any]:
-    anchor_name = json_data.get('anchor_name', None)
+    anchor_name = json_data.get('anchor_name')
 
     result = {
         "anchor_name": anchor_name,
@@ -50,6 +50,7 @@ def get_douyin_stream_url(json_data: dict, video_quality: str) -> Dict[str, Any]
         quality_index = video_qualities.get(video_quality)
         m3u8_url = m3u8_url_list[quality_index]
         flv_url = flv_url_list[quality_index]
+        result['title'] = json_data['title']
         result['m3u8_url'] = m3u8_url
         result['flv_url'] = flv_url
         result['is_live'] = True
@@ -101,6 +102,7 @@ def get_tiktok_stream_url(json_data: dict, video_quality: str) -> Dict[str, Any]
             m3u8_url_list.append(m3u8_url_list[-1])
         video_qualities = {"原画": 0, "蓝光": 0, "超清": 1, "高清": 2, "标清": 3, '流畅': 4}
         quality_index = video_qualities.get(video_quality)
+        result['title'] = live_room['liveRoom']['title']
         result['flv_url'] = flv_url_list[quality_index]['url']
         result['m3u8_url'] = m3u8_url_list[quality_index]['url']
         result['is_live'] = True
@@ -226,6 +228,7 @@ def get_huya_stream_url(json_data: dict, video_quality: str) -> Dict[str, Any]:
             flv_url = flv_url + str(video_quality_options[video_quality])
             m3u8_url = m3u8_url + str(video_quality_options[video_quality])
 
+        result['title'] = game_live_info['introduction']
         result['flv_url'] = flv_url
         result['m3u8_url'] = m3u8_url
         result['is_live'] = True
@@ -248,11 +251,11 @@ def get_douyu_stream_url(json_data: dict, video_quality: str, cookies: str, prox
     }
 
     rid = str(json_data["room_id"])
-    json_data.pop("room_id", None)
+    json_data.pop("room_id")
     rate = video_quality_options.get(video_quality, '0')
     flv_data = get_douyu_stream_data(rid, rate, cookies=cookies, proxy_addr=proxy_addr)
-    rtmp_url = flv_data['data'].get('rtmp_url', None)
-    rtmp_live = flv_data['data'].get('rtmp_live', None)
+    rtmp_url = flv_data['data'].get('rtmp_url')
+    rtmp_live = flv_data['data'].get('rtmp_live')
     if rtmp_live:
         flv_url = f'{rtmp_url}/{rtmp_live}'
         json_data['flv_url'] = flv_url
@@ -271,6 +274,7 @@ def get_yy_stream_url(json_data: dict) -> Dict[str, Any]:
         stream_line_addr = json_data['avp_info_res']['stream_line_addr']
         cdn_info = list(stream_line_addr.values())[0]
         flv_url = cdn_info['cdn_info']['url']
+        result['title'] = json_data['title']
         result['flv_url'] = flv_url
         result['is_live'] = True
         result['record_url'] = flv_url
@@ -303,6 +307,7 @@ def get_bilibili_stream_url(json_data: dict, video_quality: str, proxy_addr: str
     return {
         'anchor_name': json_data['anchor_name'],
         'is_live': True,
+        'title': json_data['title'],
         'record_url': play_url
     }
 
@@ -324,6 +329,7 @@ def get_netease_stream_url(json_data: dict, video_quality: str) -> Dict[str, Any
     return {
         "is_live": True,
         "anchor_name": json_data['anchor_name'],
+        "title": json_data['title'],
         "flv_url": flv_url,
         "record_url": flv_url
     }
@@ -352,4 +358,5 @@ def get_stream_url(json_data: dict, video_quality: str, url_type: str = 'm3u8', 
         flv = play_url_list[selected_quality][extra_key] if extra_key else play_url_list[selected_quality]
         data["flv_url"] = flv
         data["record_url"] = flv
+    data['title'] = json_data.get('title')
     return data

@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-10-16 23:27:00
+Update: 2024-10-28 00:21:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -37,8 +37,8 @@ from msg_push import (
 
 version = "v3.0.9"
 platforms = ("\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|"
-             "酷狗|花椒|流星|Acfun|时光|映客|音播|知乎|嗨秀|VV星球|17Live|漂漂|六间房|乐嗨|花猫"
-             "\n海外站点：TikTok|SOOP[AfreecaTV]|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK|浪Live")
+             "酷狗|花椒|流星|Acfun|畅聊|映客|音播|知乎|嗨秀|VV星球|17Live|浪Live|漂漂|六间房|乐嗨|花猫"
+             "\n海外站点：TikTok|SOOP[AfreecaTV]|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK")
 
 recording = set()
 error_count = 0
@@ -65,7 +65,7 @@ config_file = f'{script_path}/config/config.ini'
 url_config_file = f'{script_path}/config/URL_config.ini'
 backup_dir = f'{script_path}/backup_config'
 text_encoding = 'utf-8-sig'
-rstr = r"[\/\\\:\*\?\"\<\>\|&#.。,， ~]"
+rstr = r"[\/\\\:\*\？\"\<\>\|&#.。,， ~！·]"
 ffmpeg_path = f"{script_path}/ffmpeg.exe"
 default_path = f'{script_path}/downloads'
 os.makedirs(default_path, exist_ok=True)
@@ -299,12 +299,12 @@ def clear_record_info(record_name: str, record_url: str):
 
 def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, save_type: str,
                      bash_file_path: Union[str, None] = None) -> bool:
-    save_path_name = ffmpeg_command[-1]
+    save_file_path = ffmpeg_command[-1]
     process = subprocess.Popen(
         ffmpeg_command, stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type)
     )
 
-    subs_file_path = save_path_name.rsplit('.', maxsplit=1)[0]
+    subs_file_path = save_file_path.rsplit('.', maxsplit=1)[0]
     subs_thread_name = f'subs_{Path(subs_file_path).name}'
     if create_time_file and not split_video_by_time and '音频' not in save_type:
         create_var[subs_thread_name] = threading.Thread(
@@ -327,19 +327,19 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
     if return_code == 0:
         if ts_to_mp4 and save_type == 'TS':
             if split_video_by_time:
-                file_paths = get_file_paths(os.path.dirname(save_path_name))
-                prefix = os.path.basename(save_path_name).rsplit('_', maxsplit=1)[0]
+                file_paths = get_file_paths(os.path.dirname(save_file_path))
+                prefix = os.path.basename(save_file_path).rsplit('_', maxsplit=1)[0]
                 for path in file_paths:
                     if prefix in path:
                         threading.Thread(target=converts_mp4, args=(path, delete_origin_file)).start()
             else:
-                threading.Thread(target=converts_mp4, args=(save_path_name, delete_origin_file)).start()
+                threading.Thread(target=converts_mp4, args=(save_file_path, delete_origin_file)).start()
         print(f"\n{record_name} {stop_time} 直播录制完成\n")
 
         if bash_file_path:
             if os_type != 'nt':
                 print(f'准备执行自定义Bash脚本，请确认脚本是否有执行权限! 路径:{bash_file_path}')
-                bash_command = [bash_file_path, record_name.split(' ', maxsplit=1)[-1], save_path_name, save_type,
+                bash_command = [bash_file_path, record_name.split(' ', maxsplit=1)[-1], save_file_path, save_type,
                                 split_video_by_time, ts_to_mp4]
                 run_bash(bash_command)
             else:
@@ -371,14 +371,14 @@ def start_record(url_data: tuple, count_variable: int = -1):
             if proxy_addr:
                 proxy_address = None
                 for platform in enable_proxy_platform_list:
-                    if platform and platform.strip() in url:
+                    if platform and platform.strip() in record_url:
                         proxy_address = proxy_addr
                         break
 
             if not proxy_address:
                 if extra_enable_proxy_platform_list:
                     for pt in extra_enable_proxy_platform_list:
-                        if pt and pt.strip() in url:
+                        if pt and pt.strip() in record_url:
                             proxy_address = proxy_addr_bak or None
 
             # print(f'\r代理地址:{proxy_address}')
@@ -493,7 +493,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                     username=afreecatv_username,
                                     password=afreecatv_password
                                 )
-                                if json_data and json_data.get('new_cookies', None):
+                                if json_data and json_data.get('new_cookies'):
                                     update_config(config_file, 'Cookie', 'afreecatv_cookie', json_data['new_cookies'])
                                 port_info = stream.get_stream_url(json_data, record_quality, spec=True)
                             else:
@@ -553,7 +553,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                     username=flextv_username,
                                     password=flextv_password
                                 )
-                                if json_data and json_data.get('new_cookies', None):
+                                if json_data and json_data.get('new_cookies'):
                                     update_config(config_file, 'Cookie', 'flextv_cookie', json_data['new_cookies'])
                                 port_info = stream.get_stream_url(json_data, record_quality, spec=True)
                             else:
@@ -770,8 +770,8 @@ def start_record(url_data: tuple, count_variable: int = -1):
                             error_window.append(1)
                     else:
                         anchor_name = re.sub(rstr, "_", anchor_name)
-                        anchor_name = remove_emojis(anchor_name, '_')
-
+                        anchor_name = anchor_name.replace("（", "(").replace("）", ")")
+                        anchor_name = remove_emojis(anchor_name, '_').strip('_')
                         record_name = f'序号{count_variable} {anchor_name}'
 
                         if record_url in url_comments:
@@ -829,10 +829,17 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                 time.sleep(push_check_seconds)
                                 continue
 
-                            real_url = port_info.get('record_url', None)
+                            real_url = port_info.get('record_url')
                             full_path = f'{default_path}/{platform}'
-                            if len(real_url) > 0:
+                            if real_url:
                                 now = datetime.datetime.today().strftime("%Y-%m-%d_%H-%M-%S")
+                                live_title = port_info.get('title')
+                                title_in_name = ''
+                                if live_title:
+                                    live_title = re.sub(rstr, "_", live_title).strip()
+                                    live_title = live_title.replace("（", "(").replace("）", ")")
+                                    live_title = remove_emojis(live_title, '_').strip('_')
+                                    title_in_name = live_title + '_' if filename_by_title else ''
 
                                 try:
                                     if len(video_save_path) > 0:
@@ -846,6 +853,11 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                         full_path = f'{full_path}/{anchor_name}'
                                     if folder_by_time:
                                         full_path = f'{full_path}/{now[:10]}'
+                                    if folder_by_title and port_info.get('title'):
+                                        if folder_by_time:
+                                            full_path = f'{full_path}/{live_title}_{anchor_name}'
+                                        else:
+                                            full_path = f'{full_path}/{now[:10]}_{live_title}'
                                     if not os.path.exists(full_path):
                                         os.makedirs(full_path)
                                 except Exception as e:
@@ -899,7 +911,8 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                     '17Live': 'referer:https://17.live/en/live/6302408',
                                     '浪Live': 'referer:https://www.lang.live',
                                 }
-                                headers = record_headers.get(platform, '')
+
+                                headers = record_headers.get(platform)
                                 if headers:
                                     ffmpeg_command.insert(11, "-headers")
                                     ffmpeg_command.insert(12, headers)
@@ -921,7 +934,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                             f"{platform} | {anchor_name} | 直播源地址: {port_info['record_url']}")
 
                                 if video_save_type == "FLV":
-                                    filename = anchor_name + '_' + now + '.flv'
+                                    filename = anchor_name + f'_{title_in_name}' + now + '.flv'
                                     save_file_path = f'{full_path}/{filename}'
                                     print(f'{rec_info}/{filename}')
 
@@ -935,7 +948,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                         create_var[subs_thread_name].start()
 
                                     try:
-                                        flv_url = port_info.get('flv_url', None)
+                                        flv_url = port_info.get('flv_url')
                                         if flv_url:
                                             _filepath, _ = urllib.request.urlretrieve(real_url, save_file_path)
                                             record_finished = True
@@ -951,14 +964,14 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                             error_window.append(1)
 
                                 elif video_save_type == "MKV":
-                                    filename = anchor_name + '_' + now + ".mkv"
+                                    filename = anchor_name + f'_{title_in_name}' + now + ".mkv"
                                     print(f'{rec_info}/{filename}')
                                     save_file_path = full_path + '/' + filename
 
                                     try:
                                         if split_video_by_time:
                                             now = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
-                                            save_file_path = f"{full_path}/{anchor_name}_{now}_%03d.mkv"
+                                            save_file_path = f"{full_path}/{anchor_name}_{title_in_name}{now}_%03d.mkv"
                                             command = [
                                                 "-flags", "global_header",
                                                 "-c:v", "copy",
@@ -999,14 +1012,14 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                             error_window.append(1)
 
                                 elif video_save_type == "MP4":
-                                    filename = anchor_name + '_' + now + ".mp4"
+                                    filename = anchor_name + f'_{title_in_name}' + now + ".mp4"
                                     print(f'{rec_info}/{filename}')
                                     save_file_path = full_path + '/' + filename
 
                                     try:
                                         if split_video_by_time:
                                             now = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
-                                            save_file_path = f"{full_path}/{anchor_name}_{now}_%03d.mp4"
+                                            save_file_path = f"{full_path}/{anchor_name}_{title_in_name}{now}_%03d.mp4"
                                             command = [
                                                 "-c:v", "copy",
                                                 "-c:a", "aac",
@@ -1025,7 +1038,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                                 "-c:v", "copy",
                                                 "-c:a", "copy",
                                                 "-f", "mp4",
-                                                "{path}".format(path=save_file_path),
+                                                save_file_path,
                                             ]
 
                                         ffmpeg_command.extend(command)
@@ -1050,10 +1063,11 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                         now = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
                                         extension = "mp3" if "MP3" in video_save_type else "m4a"
                                         name_format = "_%03d" if split_video_by_time else ""
-                                        save_path_name = f"{full_path}/{anchor_name}_{now}{name_format}.{extension}"
+                                        save_file_path = (f"{full_path}/{anchor_name}_{title_in_name}{now}"
+                                                          f"{name_format}.{extension}")
 
                                         if split_video_by_time:
-                                            print(f'\r{anchor_name} 准备开始录制音频: {save_path_name}')
+                                            print(f'\r{anchor_name} 准备开始录制音频: {save_file_path}')
 
                                             if "MP3" in video_save_type:
                                                 command = [
@@ -1063,7 +1077,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                                     "-f", "segment",
                                                     "-segment_time", split_time,
                                                     "-reset_timestamps", "1",
-                                                    save_path_name,
+                                                    save_file_path,
                                                 ]
                                             else:
                                                 command = [
@@ -1075,7 +1089,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                                     "-segment_time", split_time,
                                                     "-segment_format", 'mpegts',
                                                     "-reset_timestamps", "1",
-                                                    save_path_name,
+                                                    save_file_path,
                                                 ]
 
                                         else:
@@ -1084,7 +1098,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                                     "-map", "0:a",
                                                     "-c:a", "libmp3lame",
                                                     "-ab", "320k",
-                                                    save_path_name,
+                                                    save_file_path,
                                                 ]
 
                                             else:
@@ -1094,7 +1108,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                                     "-bsf:a", "aac_adtstoasc",
                                                     "-ab", "320k",
                                                     "-movflags", "+faststart",
-                                                    save_path_name,
+                                                    save_file_path,
                                                 ]
 
                                         ffmpeg_command.extend(command)
@@ -1117,11 +1131,11 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                 else:
                                     if split_video_by_time:
                                         now = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
-                                        filename = anchor_name + '_' + now + ".ts"
+                                        filename = anchor_name + f'_{title_in_name}' + now + ".ts"
                                         print(f'{rec_info}/{filename}')
 
                                         try:
-                                            save_path_name = f"{full_path}/{anchor_name}_{now}_%03d.ts"
+                                            save_file_path = f"{full_path}/{anchor_name}_{title_in_name}{now}_%03d.ts"
                                             command = [
                                                 "-c:v", "copy",
                                                 "-c:a", "copy",
@@ -1130,7 +1144,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                                 "-segment_time", split_time,
                                                 "-segment_format", 'mpegts',
                                                 "-reset_timestamps", "1",
-                                                save_path_name,
+                                                save_file_path,
                                             ]
 
                                             ffmpeg_command.extend(command)
@@ -1143,8 +1157,8 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                             )
                                             if comment_end:
                                                 if ts_to_mp4:
-                                                    file_paths = get_file_paths(os.path.dirname(save_path_name))
-                                                    prefix = os.path.basename(save_path_name).rsplit('_', maxsplit=1)[0]
+                                                    file_paths = get_file_paths(os.path.dirname(save_file_path))
+                                                    prefix = os.path.basename(save_file_path).rsplit('_', maxsplit=1)[0]
                                                     for path in file_paths:
                                                         if prefix in path:
                                                             threading.Thread(
@@ -1161,7 +1175,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                                 error_window.append(1)
 
                                     else:
-                                        filename = anchor_name + '_' + now + ".ts"
+                                        filename = anchor_name + f'_{title_in_name}' + now + ".ts"
                                         print(f'{rec_info}/{filename}')
                                         save_file_path = full_path + '/' + filename
 
@@ -1171,7 +1185,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
                                                 "-c:a", "copy",
                                                 "-map", "0",
                                                 "-f", "mpegts",
-                                                "{path}".format(path=save_file_path),
+                                                save_file_path,
                                             ]
 
                                             ffmpeg_command.extend(command)
@@ -1397,6 +1411,8 @@ while True:
     video_save_path = read_config_value(config, '录制设置', '直播保存路径（不填则默认）', "")
     folder_by_author = options.get(read_config_value(config, '录制设置', '保存文件夹是否以作者区分', "是"), False)
     folder_by_time = options.get(read_config_value(config, '录制设置', '保存文件夹是否以时间区分', "否"), False)
+    folder_by_title = options.get(read_config_value(config, '录制设置', '保存文件夹是否以标题区分', "否"), False)
+    filename_by_title = options.get(read_config_value(config, '录制设置', '保存文件名是否包含标题', "否"), False)
     video_save_type = read_config_value(config, '录制设置', '视频保存格式ts|mkv|flv|mp4|mp3音频|m4a音频', "ts")
     video_record_quality = read_config_value(config, '录制设置', '原画|超清|高清|标清|流畅', "原画")
     use_proxy = options.get(read_config_value(config, '录制设置', '是否使用代理ip（是/否）', "是"), False)
@@ -1591,6 +1607,7 @@ while True:
                     'www.haixiutv.com',
                     "h5webcdn-pro.vvxqiu.com",
                     "17.live",
+                    'www.lang.live',
                     "m.pp.weimipopo.com",
                     "v.6.cn",
                     "m.6.cn",
@@ -1611,8 +1628,7 @@ while True:
                     'www.liveme.com',
                     'www.showroom-live.com',
                     'chzzk.naver.com',
-                    'm.chzzk.naver.com',
-                    'www.lang.live'
+                    'm.chzzk.naver.com'
                 ]
 
                 platform_host.extend(overseas_platform_host)
