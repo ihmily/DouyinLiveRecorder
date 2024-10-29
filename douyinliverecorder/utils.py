@@ -6,6 +6,7 @@ import hashlib
 import re
 import traceback
 from typing import Any
+from collections import OrderedDict
 import execjs
 from .logger import logger
 import configparser
@@ -109,3 +110,14 @@ def remove_emojis(text: str, replace_text=r''):
         flags=re.UNICODE
     )
     return emoji_pattern.sub(replace_text, text)
+
+
+def remove_duplicate_lines(file_path):
+    unique_lines = OrderedDict()
+    text_encoding = 'utf-8-sig'
+    with open(file_path, 'r', encoding=text_encoding) as input_file:
+        for line in input_file:
+            unique_lines[line.strip()] = None
+    with open(file_path, 'w', encoding=text_encoding) as output_file:
+        for line in unique_lines:
+            output_file.write(line + '\n')

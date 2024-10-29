@@ -27,10 +27,8 @@ from typing import Any
 import configparser
 from douyinliverecorder import spider
 from douyinliverecorder import stream
-from douyinliverecorder.utils import (
-    logger, check_md5, update_config,
-    get_file_paths, remove_emojis
-)
+from douyinliverecorder.utils import logger
+from douyinliverecorder import utils
 from msg_push import (
     dingtalk, xizhi, tg_bot, send_email, bark, ntfy
 )
@@ -128,7 +126,7 @@ def update_file(file_path: str, old_str: str, new_str: str, start_str: str = Non
     if old_str == new_str and start_str is None:
         return old_str
     with file_update_lock:
-        file_data = ""
+        file_data = []
         with open(file_path, "r", encoding=text_encoding) as f:
             try:
                 for text_line in f:
@@ -136,7 +134,8 @@ def update_file(file_path: str, old_str: str, new_str: str, start_str: str = Non
                         text_line = text_line.replace(old_str, new_str)
                         if start_str:
                             text_line = f'{start_str}{text_line}'
-                    file_data += text_line
+                    if text_line not in file_data:
+                        file_data.append(text_line)
             except RuntimeError as e:
                 logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                 if ini_URL_content:
@@ -145,19 +144,25 @@ def update_file(file_path: str, old_str: str, new_str: str, start_str: str = Non
                     return old_str
         if file_data:
             with open(file_path, "w", encoding=text_encoding) as f:
-                f.write(file_data)
+                f.write(''.join(file_data))
         return new_str
 
 
-def delete_line(file_path: str, del_line: str) -> None:
+def delete_line(file_path: str, del_line: str, delete_all: bool = False) -> None:
     with file_update_lock:
         with open(file_path, 'r+', encoding=text_encoding) as f:
             lines = f.readlines()
             f.seek(0)
             f.truncate()
+            skip_line = False
             for txt_line in lines:
-                if del_line not in txt_line:
-                    f.write(txt_line)
+                if del_line in txt_line:
+                    if delete_all or not skip_line:
+                        skip_line = True
+                        continue
+                else:
+                    skip_line = False
+                f.write(txt_line)
 
 
 def get_startup_info(system_type: str):
@@ -327,7 +332,7 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
     if return_code == 0:
         if ts_to_mp4 and save_type == 'TS':
             if split_video_by_time:
-                file_paths = get_file_paths(os.path.dirname(save_file_path))
+                file_paths = utils.get_file_paths(os.path.dirname(save_file_path))
                 prefix = os.path.basename(save_file_path).rsplit('_', maxsplit=1)[0]
                 for path in file_paths:
                     if prefix in path:
@@ -494,7 +499,9 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                     password=afreecatv_password
                                 )
                                 if json_data and json_data.get('new_cookies'):
-                                    update_config(config_file, 'Cookie', 'afreecatv_cookie', json_data['new_cookies'])
+                                    utils.update_config(
+                                        config_file, 'Cookie', 'afreecatv_cookie', json_data['new_cookies']
+                                    )
                                 port_info = stream.get_stream_url(json_data, record_quality, spec=True)
                             else:
                                 logger.error("错误信息: 网络异常，请检查本网络是否能正常访问SOOP[AfreecaTV]平台")
@@ -554,7 +561,9 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                     password=flextv_password
                                 )
                                 if json_data and json_data.get('new_cookies'):
-                                    update_config(config_file, 'Cookie', 'flextv_cookie', json_data['new_cookies'])
+                                    utils.update_config(
+                                        config_file, 'Cookie', 'flextv_cookie', json_data['new_cookies']
+                                    )
                                 port_info = stream.get_stream_url(json_data, record_quality, spec=True)
                             else:
                                 logger.error("错误信息: 网络异常，请检查本网络是否能正常访问FlexTV直播平台")
@@ -579,8 +588,10 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                     partner_code=popkontv_partner_code
                                 )
                                 if port_info and port_info.get('new_token'):
-                                    update_config(config_file, 'Authorization',
-                                                  'popkontv_token', port_info['new_token'])
+                                    utils.update_config(
+                                        file_path=config_file, section='Authorization', key='popkontv_token',
+                                        new_value=port_info['new_token']
+                                    )
 
                             else:
                                 logger.error("错误信息: 网络异常，请检查本网络是否能正常访问PopkonTV直播平台")
@@ -597,7 +608,10 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                 password=twitcasting_password
                             )
                             if port_info and port_info.get('new_cookies'):
-                                update_config(config_file, 'Cookie', 'twitcasting_cookie', port_info['new_cookies'])
+                                utils.update_config(
+                                    file_path=config_file, section='Cookie', key='twitcasting_cookie',
+                                    new_value=port_info['new_cookies']
+                                )
 
                     elif record_url.find("live.baidu.com/") > -1:
                         platform = '百度直播'
@@ -771,7 +785,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                     else:
                         anchor_name = re.sub(rstr, "_", anchor_name)
                         anchor_name = anchor_name.replace("（", "(").replace("）", ")")
-                        anchor_name = remove_emojis(anchor_name, '_').strip('_')
+                        anchor_name = utils.remove_emojis(anchor_name, '_').strip('_')
                         record_name = f'序号{count_variable} {anchor_name}'
 
                         if record_url in url_comments:
@@ -779,7 +793,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                             clear_record_info(record_name, record_url)
                             return
 
-                        if url_data[-1] == "" and run_once is False:
+                        if not url_data[-1] and run_once is False:
                             if is_long_url:
                                 need_update_line_list.append(
                                     f'{record_url}|{new_record_url},主播: {anchor_name.strip()}')
@@ -838,7 +852,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                 if live_title:
                                     live_title = re.sub(rstr, "_", live_title).strip()
                                     live_title = live_title.replace("（", "(").replace("）", ")")
-                                    live_title = remove_emojis(live_title, '_').strip('_')
+                                    live_title = utils.remove_emojis(live_title, '_').strip('_')
                                     title_in_name = live_title + '_' if filename_by_title else ''
 
                                 try:
@@ -1157,7 +1171,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                             )
                                             if comment_end:
                                                 if ts_to_mp4:
-                                                    file_paths = get_file_paths(os.path.dirname(save_file_path))
+                                                    file_paths = utils.get_file_paths(os.path.dirname(save_file_path))
                                                     prefix = os.path.basename(save_file_path).rsplit('_', maxsplit=1)[0]
                                                     for path in file_paths:
                                                         if prefix in path:
@@ -1289,13 +1303,13 @@ def backup_file_start() -> None:
     while True:
         try:
             if os.path.exists(config_file):
-                new_config_md5 = check_md5(config_file)
+                new_config_md5 = utils.check_md5(config_file)
                 if new_config_md5 != config_md5:
                     backup_file(config_file, backup_dir)
                     config_md5 = new_config_md5
 
             if os.path.exists(url_config_file):
-                new_url_config_md5 = check_md5(url_config_file)
+                new_url_config_md5 = utils.check_md5(url_config_file)
                 if new_url_config_md5 != url_config_md5:
                     backup_file(url_config_file, backup_dir)
                     url_config_md5 = new_url_config_md5
@@ -1343,6 +1357,7 @@ print('.....................................................')
 os.makedirs(os.path.dirname(config_file), exist_ok=True)
 t3 = threading.Thread(target=backup_file_start, args=(), daemon=True)
 t3.start()
+utils.remove_duplicate_lines(url_config_file)
 
 
 def read_config_value(config_parser: configparser.RawConfigParser, section: str, option: str, default_value: Any) \
@@ -1531,7 +1546,11 @@ while True:
     try:
         url_comments = []
         with (open(url_config_file, "r", encoding=text_encoding, errors='ignore') as file):
+            line_list = []
             for origin_line in file:
+                if origin_line in line_list:
+                    delete_line(url_config_file, origin_line)
+                line_list.append(origin_line)
                 line = origin_line.strip()
                 if len(line) < 20:
                     continue
@@ -1648,7 +1667,13 @@ while True:
 
                 if url_host in platform_host:
                     if url_host in clean_url_host_list:
-                        url = update_file(url_config_file, url, url.split('?')[0])
+                        url = update_file(url_config_file, old_str=url, new_str=url.split('?')[0])
+
+                    if 'xiaohongshu' in url:
+                        host_id = re.search('&host_id=(.*?)(?=&|$)', url)
+                        if host_id:
+                            new_url = url.split('?')[0] + f'?host_id={host_id.group(1)}'
+                            url = update_file(url_config_file, old_str=url, new_str=new_url)
 
                     url_comments = [i for i in url_comments if url not in i]
                     if is_comment_line:
@@ -1659,7 +1684,7 @@ while True:
                 else:
                     if not origin_line.startswith('#'):
                         print(f"\r{origin_line} 本行包含未知链接.此条跳过")
-                        update_file(url_config_file, origin_line, origin_line, start_str='#')
+                        update_file(url_config_file, old_str=origin_line, new_str=origin_line, start_str='#')
 
         while len(need_update_line_list):
             a = need_update_line_list.pop()
@@ -1671,7 +1696,7 @@ while True:
                 else:
                     start_with = None
                     new_word = replace_words[1]
-                update_file(url_config_file, replace_words[0], new_word, start_str=start_with)
+                update_file(url_config_file, old_str=replace_words[0], new_str=new_word, start_str=start_with)
 
         text_no_repeat_url = list(set(url_tuples_list))
 
