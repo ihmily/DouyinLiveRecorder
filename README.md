@@ -24,7 +24,7 @@
 - [x] 小红书
 - [x] bigo 
 - [x] blued
-- [x] AfreecaTV
+- [x] SOOP(原AfreecaTV)
 - [x] 网易cc
 - [x] 千度热播
 - [x] PandaTV
@@ -47,6 +47,15 @@
 - [x] 音播直播
 - [x] 知乎直播
 - [x] CHZZK
+- [x] 嗨秀直播
+- [x] vv星球直播
+- [x] 17Live
+- [x] 浪Live
+- [x] 畅聊直播
+- [x] 飘飘直播
+- [x] 六间房直播
+- [x] 乐嗨直播
+- [x] 花猫直播
 - [ ] 更多平台正在更新中
 
 </div>
@@ -207,13 +216,36 @@ https://live.ybw1666.com/800002949
 知乎直播:
 https://www.zhihu.com/people/ac3a467005c5d20381a82230101308e9 (主播主页地址)
 
-CHZZK：
+CHZZK:
 https://chzzk.naver.com/live/458f6ec20b034f49e0fc6d03921646d2
+
+嗨秀直播:
+https://www.haixiutv.com/6095106
+
+VV星球直播:
+https://h5webcdn-pro.vvxqiu.com//activity/videoShare/videoShare.html?h5Server=https://h5p.vvxqiu.com&roomId=LP115924473&platformId=vvstar
+
+17Live:
+https://17.live/en/live/6302408
+
+浪Live:
+https://www.lang.live/en-US/room/3349463
+
+畅聊直播:
+https://www.tlclw.com/801044397
+
+飘飘直播:
+https://m.pp.weimipopo.com/live/preview.html?uid=91648673&anchorUid=91625862&app=plpl
+
+六间房直播:
+https://v.6.cn/634435
+
+乐嗨直播:
+https://www.lehaitv.com/8059096
+
+花猫直播:
+https://h.catshow168.com/live/preview.html?uid=19066357&anchorUid=18895331
 ```
-
-&emsp;
-
-在线播放m3u8和flv视频网站：[M3U8 在线视频播放器 ](https://jx.hmily.vip/play/)
 
 &emsp;
 
@@ -341,12 +373,23 @@ docker-compose stop
 
 ## ⏳提交日志
 
+- 20241030
+  - 新增嗨秀直播、vv星球直播、17Live、浪Live、SOOP、畅聊直播(原时光直播)、飘飘直播、六间房直播、乐嗨直播、花猫直播等10个平台直播录制
+  
+  - 修复小红书直播录制，支持小红书作者主页地址录制直播
+  
+  - 新增支持ntfy消息推送，以及新增支持批量推送多个地址（逗号分隔多个推送地址)
+  
+  - 修复Liveme直播录制、twitch直播录制
+  
+  - 新增Windows平台一键停止录制VB脚本程序
+  
 - 20241005
   - 新增邮箱和Bark推送
   - 新增直播注释停止录制
   - 优化分段录制
   - 重构部分代码
-  
+
 - 20240928
   - 新增知乎直播、CHZZK直播录制
   - 修复音播直播录制
