@@ -23,7 +23,7 @@ execute_dir = os.path.split(os.path.realpath(sys.argv[0]))[0]
 current_env_path = os.environ.get('PATH')
 
 
-def unzip_file(zip_path, extract_to):
+def unzip_file(zip_path: str | Path, extract_to: str | Path) -> None:
     if not os.path.exists(extract_to):
         os.makedirs(extract_to)
 
@@ -148,7 +148,7 @@ def install_nodejs_mac():
         logger.error(f"An unexpected error occurred: {e}")
 
 
-def install_nodejs():
+def install_nodejs() -> bool:
     if current_platform == "Windows":
         return install_nodejs_windows()
     elif current_platform == "Linux":
@@ -162,6 +162,7 @@ def install_nodejs():
     else:
         logger.debug(f"Node.js auto installation is not supported on this platform: {current_platform}. "
                      f"Please install Node.js manually.")
+        return False
 
 
 def ensure_nodejs_installed(func):
@@ -192,7 +193,7 @@ def ensure_nodejs_installed(func):
     return wrapped_func
 
 
-def check_nodejs_installed():
+def check_nodejs_installed() -> bool:
     try:
         result = subprocess.run(['node', '-v'], capture_output=True)
         version = result.stdout.strip()
@@ -203,6 +204,6 @@ def check_nodejs_installed():
     return False
 
 
-def check_node():
+def check_node() -> bool:
     if not check_nodejs_installed():
         return install_nodejs()

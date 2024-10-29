@@ -5,7 +5,7 @@ import functools
 import hashlib
 import re
 import traceback
-from typing import Union, Any
+from typing import Any
 import execjs
 from .logger import logger
 import configparser
@@ -33,12 +33,12 @@ def check_md5(file_path: str) -> str:
     return file_md5
 
 
-def dict_to_cookie_str(cookies_dict) -> str:
+def dict_to_cookie_str(cookies_dict: dict) -> str:
     cookie_str = '; '.join([f"{key}={value}" for key, value in cookies_dict.items()])
     return cookie_str
 
 
-def read_config_value(file_path, section, key) -> Union[str, None]:
+def read_config_value(file_path: str, section: str, key: str) -> str | None:
     config = configparser.ConfigParser()
 
     try:
@@ -58,7 +58,7 @@ def read_config_value(file_path, section, key) -> Union[str, None]:
     return None
 
 
-def update_config(file_path, section, key, new_value) -> None:
+def update_config(file_path: str, section: str, key: str, new_value: str) -> None:
     config = configparser.ConfigParser()
 
     try:
@@ -83,7 +83,7 @@ def update_config(file_path, section, key, new_value) -> None:
         print(f"写入配置文件时出错: {e}")
 
 
-def get_file_paths(directory) -> list:
+def get_file_paths(directory: str) -> list:
     file_paths = []
     for root, dirs, files in os.walk(directory):
         for file in files:
@@ -91,7 +91,7 @@ def get_file_paths(directory) -> list:
     return file_paths
 
 
-def remove_emojis(text, replace_text=r''):
+def remove_emojis(text: str, replace_text=r''):
     emoji_pattern = re.compile(
         "["
         "\U0001F1E0-\U0001F1FF"  # flags (iOS)

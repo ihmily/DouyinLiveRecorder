@@ -17,7 +17,7 @@ from operator import itemgetter
 import urllib.parse
 import urllib.error
 from urllib.request import Request
-from typing import Union, Dict, Any, Tuple, List
+from typing import List
 import requests
 import ssl
 import re
@@ -38,19 +38,21 @@ opener = urllib.request.build_opener(no_proxy_handler)
 ssl_context = ssl.create_default_context()
 ssl_context.check_hostname = False
 ssl_context.verify_mode = ssl.CERT_NONE
+OptionalStr = str | None
+OptionalDict = dict | None
 
 
 def get_req(
         url: str,
-        proxy_addr: Union[str, None] = None,
-        headers: Union[dict, None] = None,
-        data: Union[dict, bytes, None] = None,
-        json_data: Union[dict, list, None] = None,
+        proxy_addr: OptionalStr = None,
+        headers: OptionalDict = None,
+        data: dict | bytes | None = None,
+        json_data: dict | list | None = None,
         timeout: int = 20,
         abroad: bool = False,
         content_conding: str = 'utf-8',
         redirect_url: bool = False,
-) -> Union[str, Any]:
+) -> str:
     if headers is None:
         headers = {}
     try:
@@ -60,8 +62,9 @@ def get_req(
                 'https': proxy_addr
             }
             if data or json_data:
-                response = requests.post(url, data=data, json=json_data, headers=headers, proxies=proxies,
-                                         timeout=timeout)
+                response = requests.post(
+                    url, data=data, json=json_data, headers=headers, proxies=proxies, timeout=timeout
+                )
             else:
                 response = requests.get(url, headers=headers, proxies=proxies, timeout=timeout)
             if redirect_url:
@@ -110,7 +113,7 @@ def get_req(
     return resp_str
 
 
-def get_params(url: str, params: str) -> Union[str, None]:
+def get_params(url: str, params: str) -> OptionalStr:
     parsed_url = urllib.parse.urlparse(url)
     query_params = urllib.parse.parse_qs(parsed_url.query)
 
@@ -118,13 +121,13 @@ def get_params(url: str, params: str) -> Union[str, None]:
         return query_params[params][0]
 
 
-def generate_random_string(length):
+def generate_random_string(length: int) -> str:
     characters = string.ascii_uppercase + string.digits
     random_string = ''.join(random.choices(characters, k=length))
     return random_string
 
 
-def jsonp_to_json(jsonp_str: str) -> Union[dict, None]:
+def jsonp_to_json(jsonp_str: str) -> OptionalDict:
     pattern = r'(\w+)\((.*)\);?$'
     match = re.search(pattern, jsonp_str)
 
@@ -144,7 +147,7 @@ def replace_url(file_path: str, old: str, new: str) -> None:
             f.write(content.replace(old, new))
 
 
-def get_play_url_list(m3u8: str, proxy: Union[str, None] = None, header: Union[dict, None] = None,
+def get_play_url_list(m3u8: str, proxy: OptionalStr = None, header: OptionalDict = None,
                       abroad: bool = False) -> List[str]:
     resp = get_req(url=m3u8, proxy_addr=proxy, headers=header, abroad=abroad)
     play_url_list = []
@@ -163,8 +166,7 @@ def get_play_url_list(m3u8: str, proxy: Union[str, None] = None, header: Union[d
 
 
 @trace_error_decorator
-def get_douyin_app_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_douyin_app_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
@@ -174,7 +176,7 @@ def get_douyin_app_stream_data(url: str, proxy_addr: Union[str, None] = None, co
     if cookies:
         headers['Cookie'] = cookies
 
-    def get_app_data(room_id, sec_uid):
+    def get_app_data(room_id: str, sec_uid: str) -> dict:
         app_params = {
             "verifyFp": "verify_lxj5zv70_7szNlAB7_pxNY_48Vh_ALKF_GA1Uf3yteoOY",
             "type_id": "0",
@@ -250,8 +252,7 @@ def get_douyin_app_stream_data(url: str, proxy_addr: Union[str, None] = None, co
 
 
 @trace_error_decorator
-def get_douyin_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_douyin_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
@@ -306,8 +307,7 @@ def get_douyin_stream_data(url: str, proxy_addr: Union[str, None] = None, cookie
 
 
 @trace_error_decorator
-def get_tiktok_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_tiktok_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict | None:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0',
         'Cookie': 'ttwid=1%7CM-rF193sJugKuNz2RGNt-rh6pAAR9IMceUSzlDnPCNI%7C1683274418%7Cf726d4947f2fc37fecc7aeb0cdaee52892244d04efde6f8a8edd2bb168263269; tiktok_webapp_theme=light; tt_chain_token=VWkygAWDlm1cFg/k8whmOg==; passport_csrf_token=6e422c5a7991f8cec7033a8082921510; passport_csrf_token_default=6e422c5a7991f8cec7033a8082921510; d_ticket=f8c267d4af4523c97be1ccb355e9991e2ae06; odin_tt=320b5f386cdc23f347be018e588873db7f7aea4ea5d1813681c3fbc018ea025dde957b94f74146dbc0e3612426b865ccb95ec8abe4ee36cca65f15dbffec0deff7b0e69e8ea536d46e0f82a4fc37d211; cmpl_token=AgQQAPNSF-RO0rT04baWtZ0T_jUjl4fVP4PZYM2QPw; uid_tt=319b558dbba684bb1557206c92089cd113a875526a89aee30595925d804b81c7; uid_tt_ss=319b558dbba684bb1557206c92089cd113a875526a89aee30595925d804b81c7; sid_tt=ad5e736f4bedb2f6d42ccd849e706b1d; sessionid=ad5e736f4bedb2f6d42ccd849e706b1d; sessionid_ss=ad5e736f4bedb2f6d42ccd849e706b1d; store-idc=useast5; store-country-code=us; store-country-code-src=uid; tt-target-idc=useast5; tt-target-idc-sign=qXNk0bb1pDQ0FbCNF120Pl9WWMLZg9Edv5PkfyCbS4lIk5ieW5tfLP7XWROnN0mEaSlc5hg6Oji1pF-yz_3ZXnUiNMrA9wNMPvI6D9IFKKVmq555aQzwPIGHv0aQC5dNRgKo5Z5LBkgxUMWEojTKclq2_L8lBciw0IGdhFm_XyVJtbqbBKKgybGDLzK8ZyxF4Jl_cYRXaDlshZjc38JdS6wruDueRSHe7YvNbjxCnApEFUv-OwJANSPU_4rvcqpVhq3JI2VCCfw-cs_4MFIPCDOKisk5EhAo2JlHh3VF7_CLuv80FXg_7ZqQ2pJeMOog294rqxwbbQhl3ATvjQV_JsWyUsMd9zwqecpylrPvtySI2u1qfoggx1owLrrUynee1R48QlanLQnTNW_z1WpmZBgVJqgEGLwFoVOmRzJuFFNj8vIqdjM2nDSdWqX8_wX3wplohkzkPSFPfZgjzGnQX28krhgTytLt7BXYty5dpfGtsdb11WOFHM6MZ9R9uLVB; sid_guard=ad5e736f4bedb2f6d42ccd849e706b1d%7C1690990657%7C15525213%7CMon%2C+29-Jan-2024+08%3A11%3A10+GMT; sid_ucp_v1=1.0.0-KGM3YzgwYjZhODgyYWI1NjIwNTA0NjBmOWUxMGRhMjIzYTI2YjMxNDUKGAiqiJ30keKD5WQQwfCppgYYsws4AkDsBxAEGgd1c2Vhc3Q1IiBhZDVlNzM2ZjRiZWRiMmY2ZDQyY2NkODQ5ZTcwNmIxZA; ssid_ucp_v1=1.0.0-KGM3YzgwYjZhODgyYWI1NjIwNTA0NjBmOWUxMGRhMjIzYTI2YjMxNDUKGAiqiJ30keKD5WQQwfCppgYYsws4AkDsBxAEGgd1c2Vhc3Q1IiBhZDVlNzM2ZjRiZWRiMmY2ZDQyY2NkODQ5ZTcwNmIxZA; tt_csrf_token=dD0EIH8q-pe3qDQsCyyD1jLN6KizJDRjOEyk; __tea_cache_tokens_1988={%22_type_%22:%22default%22%2C%22user_unique_id%22:%227229608516049831425%22%2C%22timestamp%22:1683274422659}; ttwid=1%7CM-rF193sJugKuNz2RGNt-rh6pAAR9IMceUSzlDnPCNI%7C1694002151%7Cd89b77afc809b1a610661a9d1c2784d80ebef9efdd166f06de0d28e27f7e4efe; msToken=KfJAVZ7r9D_QVeQlYAUZzDFbc1Yx-nZz6GF33eOxgd8KlqvTg1lF9bMXW7gFV-qW4MCgUwnBIhbiwU9kdaSpgHJCk-PABsHCtTO5J3qC4oCTsrXQ1_E0XtbqiE4OVLZ_jdF1EYWgKNPT2SnwGkQ=; msToken=KfJAVZ7r9D_QVeQlYAUZzDFbc1Yx-nZz6GF33eOxgd8KlqvTg1lF9bMXW7gFV-qW4MCgUwnBIhbiwU9kdaSpgHJCk-PABsHCtTO5J3qC4oCTsrXQ1_E0XtbqiE4OVLZ_jdF1EYWgKNPT2SnwGkQ='
@@ -333,8 +333,7 @@ def get_tiktok_stream_data(url: str, proxy_addr: Union[str, None] = None, cookie
 
 
 @trace_error_decorator
-def get_kuaishou_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_kuaishou_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
@@ -377,8 +376,7 @@ def get_kuaishou_stream_data(url: str, proxy_addr: Union[str, None] = None, cook
 
 
 @trace_error_decorator
-def get_kuaishou_stream_data2(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_kuaishou_stream_data2(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict | None:
     headers = {
         'User-Agent': 'ios/7.830 (ios 17.0; ; iPhone 15 (A2846/A3089/A3090/A3092))',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
@@ -421,8 +419,7 @@ def get_kuaishou_stream_data2(url: str, proxy_addr: Union[str, None] = None, coo
 
 
 @trace_error_decorator
-def get_huya_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_huya_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
@@ -439,8 +436,7 @@ def get_huya_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies:
 
 
 @trace_error_decorator
-def get_huya_app_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_huya_app_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'User-Agent': 'ios/7.830 (ios 17.0; ; iPhone 15 (A2846/A3089/A3090/A3092))',
         'xweb_xhr': '1',
@@ -509,11 +505,11 @@ def get_huya_app_stream_url(url: str, proxy_addr: Union[str, None] = None, cooki
         }
 
 
-def md5(data):
+def md5(data) -> str:
     return hashlib.md5(data.encode('utf-8')).hexdigest()
 
 
-def get_token_js(rid: str, did: str, proxy_addr: Union[str, None] = None) -> Union[list, Dict[str, Any]]:
+def get_token_js(rid: str, did: str, proxy_addr: OptionalStr = None) -> List[str]:
 
     url = f'https://www.douyu.com/{rid}'
     html_str = get_req(url=url, proxy_addr=proxy_addr)
@@ -537,8 +533,7 @@ def get_token_js(rid: str, did: str, proxy_addr: Union[str, None] = None) -> Uni
 
 
 @trace_error_decorator
-def get_douyu_info_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> Dict[
-    str, Any]:
+def get_douyu_info_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'User-Agent': 'ios/7.830 (ios 17.0; ; iPhone 15 (A2846/A3089/A3090/A3092))',
         'Referer': 'https://m.douyu.com/3125893?rid=3125893&dyshid=0-96003918aa5365bc6dcb4933000316p1&dyshci=181',
@@ -574,8 +569,8 @@ def get_douyu_info_data(url: str, proxy_addr: Union[str, None] = None, cookies: 
 
 
 @trace_error_decorator
-def get_douyu_stream_data(rid: str, rate: str = '-1', proxy_addr: Union[str, None] = None,
-                          cookies: Union[str, None] = None) -> Dict[str, Any]:
+def get_douyu_stream_data(rid: str, rate: str = '-1', proxy_addr: OptionalStr = None,
+                          cookies: OptionalStr = None) -> dict:
     did = '10000000000000000000000000003306'
     params_list = get_token_js(rid, did, proxy_addr=proxy_addr)
     headers = {
@@ -604,8 +599,7 @@ def get_douyu_stream_data(rid: str, rate: str = '-1', proxy_addr: Union[str, Non
 
 
 @trace_error_decorator
-def get_yy_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_yy_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
@@ -648,8 +642,7 @@ def get_yy_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: U
 
 
 @trace_error_decorator
-def get_bilibili_room_info_h5(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        str:
+def get_bilibili_room_info_h5(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> str:
     headers = {
         'origin': 'https://live.bilibili.com',
         'referer': 'https://live.bilibili.com/',
@@ -667,8 +660,7 @@ def get_bilibili_room_info_h5(url: str, proxy_addr: Union[str, None] = None, coo
 
 
 @trace_error_decorator
-def get_bilibili_room_info(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_bilibili_room_info(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
@@ -698,8 +690,8 @@ def get_bilibili_room_info(url: str, proxy_addr: Union[str, None] = None, cookie
 
 
 @trace_error_decorator
-def get_bilibili_stream_data(url: str, qn: str = '10000', platform: str = 'web', proxy_addr: Union[str, None] = None,
-                             cookies: Union[str, None] = None) -> Union[str, None]:
+def get_bilibili_stream_data(url: str, qn: str = '10000', platform: str = 'web', proxy_addr: OptionalStr = None,
+                             cookies: OptionalStr = None) -> OptionalStr:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
@@ -761,8 +753,7 @@ def get_bilibili_stream_data(url: str, qn: str = '10000', platform: str = 'web',
 
 
 @trace_error_decorator
-def get_xhs_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_xhs_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'User-Agent': 'ios/7.830 (ios 17.0; ; iPhone 15 (A2846/A3089/A3090/A3092))',
         'xy-common-params': 'platform=iOS&sid=session.1722166379345546829388',
@@ -824,8 +815,7 @@ def get_xhs_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: U
 
 
 @trace_error_decorator
-def get_bigo_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_bigo_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
@@ -873,8 +863,7 @@ def get_bigo_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: 
 
 
 @trace_error_decorator
-def get_blued_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_blued_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'User-Agent': 'ios/7.830 (ios 17.0; ; iPhone 15 (A2846/A3089/A3090/A3092))',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
@@ -903,7 +892,7 @@ def get_blued_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies:
 
 
 @trace_error_decorator
-def login_afreecatv(username: str, password: str, proxy_addr: Union[str, None] = None) -> Union[str, None]:
+def login_afreecatv(username: str, password: str, proxy_addr: OptionalStr = None) -> OptionalStr:
     if len(username) < 6 or len(password) < 10:
         raise RuntimeError('SOOP[AfreecaTV]登录失败！请在config.ini配置文件中填写正确的SOOP[AfreecaTV]平台的账号和密码')
 
@@ -951,8 +940,7 @@ def login_afreecatv(username: str, password: str, proxy_addr: Union[str, None] =
 
 
 @trace_error_decorator
-def get_afreecatv_cdn_url(broad_no: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_afreecatv_cdn_url(broad_no: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
@@ -979,8 +967,7 @@ def get_afreecatv_cdn_url(broad_no: str, proxy_addr: Union[str, None] = None, co
 
 
 @trace_error_decorator
-def get_afreecatv_tk(url: str, rtype: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Union[str, tuple, None]:
+def get_afreecatv_tk(url: str, rtype: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> str | tuple:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0',
         'Origin': 'https://play.sooplive.co.kr',
@@ -1024,9 +1011,9 @@ def get_afreecatv_tk(url: str, rtype: str, proxy_addr: Union[str, None] = None, 
 
 @trace_error_decorator
 def get_afreecatv_stream_data(
-        url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None,
-        username: Union[str, None] = None, password: Union[str, None] = None
-) -> Dict[str, Any]:
+        url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None,
+        username: OptionalStr = None, password: OptionalStr = None
+) -> dict:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
@@ -1078,13 +1065,13 @@ def get_afreecatv_stream_data(
         return play_url_list
 
     if not anchor_name:
-        def handle_login():
+        def handle_login() -> OptionalStr:
             cookie = login_afreecatv(username, password, proxy_addr=proxy_addr)
             if 'AuthTicket=' in cookie:
                 print('SOOP[AfreecaTV]平台登录成功！开始获取直播数据...')
                 return cookie
 
-        def fetch_data(cookie):
+        def fetch_data(cookie) -> dict:
             aid_token = get_afreecatv_tk(url, rtype='aid', proxy_addr=proxy_addr, cookies=cookie)
             _anchor_name, _broad_no = get_afreecatv_tk(url, rtype='info', proxy_addr=proxy_addr, cookies=cookie)
             _view_url = get_afreecatv_cdn_url(_broad_no, proxy_addr=proxy_addr)['view_url']
@@ -1130,8 +1117,7 @@ def get_afreecatv_stream_data(
 
 
 @trace_error_decorator
-def get_netease_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_netease_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -1160,8 +1146,7 @@ def get_netease_stream_data(url: str, proxy_addr: Union[str, None] = None, cooki
 
 
 @trace_error_decorator
-def get_qiandurebo_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_qiandurebo_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,'
                   'application/signed-exchange;v=b3;q=0.7',
@@ -1190,8 +1175,7 @@ def get_qiandurebo_stream_data(url: str, proxy_addr: Union[str, None] = None, co
 
 
 @trace_error_decorator
-def get_pandatv_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_pandatv_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'origin': 'https://www.pandalive.co.kr',
         'referer': 'https://www.pandalive.co.kr/',
@@ -1242,8 +1226,7 @@ def get_pandatv_stream_data(url: str, proxy_addr: Union[str, None] = None, cooki
 
 
 @trace_error_decorator
-def get_maoerfm_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_maoerfm_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -1281,8 +1264,7 @@ def get_maoerfm_stream_url(url: str, proxy_addr: Union[str, None] = None, cookie
 
 
 @trace_error_decorator
-def get_winktv_bj_info(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Tuple[str, Any]:
+def get_winktv_bj_info(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> tuple:
     headers = {
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -1308,8 +1290,7 @@ def get_winktv_bj_info(url: str, proxy_addr: Union[str, None] = None, cookies: U
 
 
 @trace_error_decorator
-def get_winktv_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_winktv_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -1353,7 +1334,7 @@ def get_winktv_stream_data(url: str, proxy_addr: Union[str, None] = None, cookie
 
 
 @trace_error_decorator
-def login_flextv(username: str, password: str, proxy_addr: Union[str, None] = None) -> Union[str, int, None]:
+def login_flextv(username: str, password: str, proxy_addr: OptionalStr = None) -> OptionalStr:
     headers = {
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -1401,10 +1382,10 @@ def login_flextv(username: str, password: str, proxy_addr: Union[str, None] = No
 
 
 def get_flextv_stream_url(
-        url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None,
-        username: Union[str, None] = None, password: Union[str, None] = None
-) -> Any:
-    def fetch_data(cookie):
+        url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None,
+        username: OptionalStr = None, password: OptionalStr = None
+) -> tuple | None:
+    def fetch_data(cookie) -> dict:
         headers = {
             'accept': 'application/json, text/plain, */*',
             'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -1442,9 +1423,9 @@ def get_flextv_stream_url(
 
 @trace_error_decorator
 def get_flextv_stream_data(
-        url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None,
-        username: Union[str, None] = None, password: Union[str, None] = None
-) -> Dict[str, Any]:
+        url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None,
+        username: OptionalStr = None, password: OptionalStr = None
+) -> dict:
     headers = {
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -1480,7 +1461,7 @@ def get_flextv_stream_data(
     return result
 
 
-def get_looklive_secret_data(text):
+def get_looklive_secret_data(text) -> tuple:
     # 本算法参考项目：https://github.com/785415581/MusicBox/blob/b8f716d43d/doc/analysis/analyze_captured_data.md
 
     modulus = '00e0b509f6259df8642dbc35662901477df22677ec152b5ff68ace615bb7b725152b3ab17a876aea8a5aa76d2e417629ec4ee' \
@@ -1498,7 +1479,7 @@ def get_looklive_secret_data(text):
         charset = '1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!@#$%^&*()_+-=[]{}|;:,.<>?'
         return ''.join(secrets.choice(charset) for _ in range(size)).encode('utf-8')
 
-    def aes_encrypt(_text: Union[str, bytes], _sec_key: Union[str, bytes]) -> bytes:
+    def aes_encrypt(_text: str | bytes, _sec_key: str | bytes) -> bytes:
         if isinstance(_text, str):
             _text = _text.encode('utf-8')
         if isinstance(_sec_key, str):
@@ -1511,7 +1492,7 @@ def get_looklive_secret_data(text):
         encoded_ciphertext = base64.b64encode(ciphertext)
         return encoded_ciphertext
 
-    def rsa_encrypt(_text: Union[str, bytes], pub_key: str, mod: str) -> str:
+    def rsa_encrypt(_text: str | bytes, pub_key: str, mod: str) -> str:
         if isinstance(_text, str):
             _text = _text.encode('utf-8')
         text_reversed = _text[::-1]
@@ -1525,9 +1506,7 @@ def get_looklive_secret_data(text):
     return enc_text.decode(), enc_sec_key
 
 
-def get_looklive_stream_url(
-        url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None
-) -> Dict[str, Any]:
+def get_looklive_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     """
     通过PC网页端的接口获取完整直播源，只有params和encSecKey这两个加密请求参数。
     params: 由两次AES加密完成
@@ -1570,8 +1549,8 @@ def get_looklive_stream_url(
 
 @trace_error_decorator
 def login_popkontv(
-        username: str, password: str, proxy_addr: Union[str, None] = None, code: Union[str, None] = 'P-00001'
-) -> Union[tuple, None]:
+        username: str, password: str, proxy_addr: OptionalStr = None, code: OptionalStr = 'P-00001'
+) -> tuple:
     headers = {
         'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -1618,9 +1597,9 @@ def login_popkontv(
 
 @trace_error_decorator
 def get_popkontv_stream_data(
-        url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None,
-        username: Union[str, None] = None, code: Union[str, None] = 'P-00001'
-) -> Union[tuple, Any]:
+        url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None,
+        username: OptionalStr = None, code: OptionalStr = 'P-00001'
+) -> tuple:
     headers = {
         'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -1684,12 +1663,12 @@ def get_popkontv_stream_data(
 @trace_error_decorator
 def get_popkontv_stream_url(
         url: str,
-        proxy_addr: Union[str, None] = None,
-        access_token: Union[str, None] = None,
-        username: Union[str, None] = None,
-        password: Union[str, None] = None,
-        partner_code: Union[str, None] = 'P-00001'
-) -> Dict[str, Any]:
+        proxy_addr: OptionalStr = None,
+        access_token: OptionalStr = None,
+        username: OptionalStr = None,
+        password: OptionalStr = None,
+        partner_code: OptionalStr = 'P-00001'
+) -> dict:
     headers = {
         'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -1774,9 +1753,9 @@ def get_popkontv_stream_url(
 
 @trace_error_decorator
 def login_twitcasting(
-        account_type: str, username: str, password: str, proxy_addr: Union[str, None] = None,
-        cookies: Union[str, None] = None
-) -> Union[str, None]:
+        account_type: str, username: str, password: str, proxy_addr: OptionalStr = None,
+        cookies: OptionalStr = None
+) -> OptionalStr:
     headers = {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -1832,12 +1811,12 @@ def login_twitcasting(
 @trace_error_decorator
 def get_twitcasting_stream_url(
         url: str,
-        proxy_addr: Union[str, None] = None,
-        cookies: Union[str, None] = None,
-        account_type: Union[str, None] = None,
-        username: Union[str, None] = None,
-        password: Union[str, None] = None,
-) -> Dict[str, Any]:
+        proxy_addr: OptionalStr = None,
+        cookies: OptionalStr = None,
+        account_type: OptionalStr = None,
+        username: OptionalStr = None,
+        password: OptionalStr = None,
+) -> dict:
     headers = {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -1850,7 +1829,7 @@ def get_twitcasting_stream_url(
     if cookies:
         headers['Cookie'] = cookies
 
-    def get_data(header):
+    def get_data(header) -> tuple:
         html_str = get_req(url, proxy_addr=proxy_addr, headers=header)
         anchor = re.search("<title>(.*?) \\(@(.*?)\\)  的直播 - Twit", html_str)
         title = re.search('<meta name="twitter:title" content="(.*?)">\n\\s+<meta', html_str)
@@ -1893,8 +1872,7 @@ def get_twitcasting_stream_url(
 
 
 @trace_error_decorator
-def get_baidu_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_baidu_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
         'Connection': 'keep-alive',
@@ -1959,8 +1937,7 @@ def get_baidu_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies
 
 
 @trace_error_decorator
-def get_weibo_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_weibo_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
         'Cookie': 'XSRF-TOKEN=qAP-pIY5V4tO6blNOhA4IIOD; SUB=_2AkMRNMCwf8NxqwFRmfwWymPrbI9-zgzEieKnaDFrJRMxHRl-yT9kqmkhtRB6OrTuX5z9N_7qk9C3xxEmNR-8WLcyo2PM; SUBP=0033WrSXqPxfM72-Ws9jqgMF55529P9D9WWemwcqkukCduUO11o9sBqA; WBPSESS=Wk6CxkYDejV3DDBcnx2LOXN9V1LjdSTNQPMbBDWe4lO2HbPmXG_coMffJ30T-Avn_ccQWtEYFcq9fab1p5RR6PEI6w661JcW7-56BszujMlaiAhLX-9vT4Zjboy1yf2l',
@@ -2012,8 +1989,7 @@ def get_weibo_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies
 
 
 @trace_error_decorator
-def get_kugou_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_kugou_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0',
         'Accept': 'application/json',
@@ -2066,8 +2042,7 @@ def get_kugou_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies:
     return result
 
 
-def get_twitchtv_room_info(url: str, token: str, proxy_addr: Union[str, None] = None,
-                           cookies: Union[str, None] = None):
+def get_twitchtv_room_info(url: str, token: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> tuple:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0',
         'Accept-Language': 'zh-CN',
@@ -2105,8 +2080,7 @@ def get_twitchtv_room_info(url: str, token: str, proxy_addr: Union[str, None] = 
 
 
 @trace_error_decorator
-def get_twitchtv_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_twitchtv_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
         'Accept-Language': 'en-US',
@@ -2174,8 +2148,7 @@ def get_twitchtv_stream_data(url: str, proxy_addr: Union[str, None] = None, cook
 
 
 @trace_error_decorator
-def get_liveme_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_liveme_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'origin': 'https://www.liveme.com',
         'referer': 'https://www.liveme.com',
@@ -2218,7 +2191,7 @@ def get_liveme_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies
     return result
 
 
-def get_huajiao_sn(url: str, cookies: Union[str, None] = None, proxy_addr: Union[str, None] = None):
+def get_huajiao_sn(url: str, cookies: OptionalStr = None, proxy_addr: OptionalStr = None) -> tuple | None:
     headers = {
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
         'referer': 'https://www.huajiao.com/',
@@ -2244,7 +2217,7 @@ def get_huajiao_sn(url: str, cookies: Union[str, None] = None, proxy_addr: Union
         raise RuntimeError('获取直播间数据失败，花椒直播间地址非固定，请使用主播主页地址进行录制')
 
 
-def get_huajiao_user_info(url: str, cookies: Union[str, None] = None, proxy_addr: Union[str, None] = None):
+def get_huajiao_user_info(url: str, cookies: OptionalStr = None, proxy_addr: OptionalStr = None) -> tuple:
     headers = {
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
         'referer': 'https://www.huajiao.com/',
@@ -2283,8 +2256,7 @@ def get_huajiao_user_info(url: str, cookies: Union[str, None] = None, proxy_addr
             return '未知直播间', None
 
 
-def get_huajiao_stream_url_app(url: str, proxy_addr: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_huajiao_stream_url_app(url: str, proxy_addr: OptionalStr = None) -> dict:
     headers = {
         'User-Agent': 'living/9.4.0 (com.huajiao.seeding; build:2410231746; iOS 17.0.0) Alamofire/9.4.0',
         'accept-language': 'zh-Hans-US;q=1.0',
@@ -2308,8 +2280,7 @@ def get_huajiao_stream_url_app(url: str, proxy_addr: Union[str, None] = None) ->
 
 
 @trace_error_decorator
-def get_huajiao_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_huajiao_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
         'referer': 'https://www.huajiao.com/',
@@ -2344,8 +2315,7 @@ def get_huajiao_stream_url(url: str, proxy_addr: Union[str, None] = None, cookie
 
 
 @trace_error_decorator
-def get_liuxing_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_liuxing_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -2380,8 +2350,7 @@ def get_liuxing_stream_url(url: str, proxy_addr: Union[str, None] = None, cookie
 
 
 @trace_error_decorator
-def get_showroom_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_showroom_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -2426,8 +2395,7 @@ def get_showroom_stream_data(url: str, proxy_addr: Union[str, None] = None, cook
 
 
 @trace_error_decorator
-def get_acfun_sign_params(proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Tuple[Any, str, Any]:
+def get_acfun_sign_params(proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> tuple:
     did = f'web_{generate_random_string(16)}'
     headers = {
         'referer': 'https://live.acfun.cn/',
@@ -2448,8 +2416,7 @@ def get_acfun_sign_params(proxy_addr: Union[str, None] = None, cookies: Union[st
 
 
 @trace_error_decorator
-def get_acfun_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_acfun_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'referer': 'https://live.acfun.cn/live/17912421',
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
@@ -2494,8 +2461,7 @@ def get_acfun_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies
 
 
 @trace_error_decorator
-def get_changliao_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_changliao_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'User-Agent': 'ios/7.830 (ios 17.0; ; iPhone 15 (A2846/A3089/A3090/A3092))',
         'Accept': 'application/json, text/plain, */*',
@@ -2539,8 +2505,7 @@ def get_changliao_stream_url(url: str, proxy_addr: Union[str, None] = None, cook
 
 
 @trace_error_decorator
-def get_yingke_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_yingke_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'Referer': 'https://www.inke.cn/',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
@@ -2576,8 +2541,7 @@ def get_yingke_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies
 
 
 @trace_error_decorator
-def get_yinbo_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_yinbo_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'User-Agent': 'ios/7.830 (ios 17.0; ; iPhone 15 (A2846/A3089/A3090/A3092))',
         'Accept': 'application/json, text/plain, */*',
@@ -2622,8 +2586,7 @@ def get_yinbo_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies:
 
 
 @trace_error_decorator
-def get_zhihu_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_zhihu_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
@@ -2631,11 +2594,20 @@ def get_zhihu_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies:
     if cookies:
         headers['Cookie'] = cookies
 
-    web_id = url.split('?')[0].rsplit('/', maxsplit=1)[-1]
-    html_str = get_req(url, proxy_addr=proxy_addr, headers=headers)
-    json_str = re.findall('<script id="js-initialData" type="text/json">(.*?)</script>', html_str)[0]
-    json_data = json.loads(json_str)
-    live_data = json_data['initialState']['theater']['theaters'][web_id]
+    if 'people/' in url:
+        user_id = url.split('people/')[1]
+        api = f'https://api.zhihu.com/people/{user_id}/profile?profile_new_version='
+        json_str = get_req(api, proxy_addr=proxy_addr, headers=headers)
+        json_data = json.loads(json_str)
+        live_page_url = json_data['drama']['living_theater']['theater_url']
+    else:
+        live_page_url = url
+
+    web_id = live_page_url.split('?')[0].rsplit('/', maxsplit=1)[-1]
+    html_str = get_req(live_page_url, proxy_addr=proxy_addr, headers=headers)
+    json_str2 = re.findall('<script id="js-initialData" type="text/json">(.*?)</script>', html_str)[0]
+    json_data2 = json.loads(json_str2)
+    live_data = json_data2['initialState']['theater']['theaters'][web_id]
     anchor_name = live_data['actor']['name']
     live_status = live_data['drama']['status']
     result = {"anchor_name": anchor_name, "is_live": False}
@@ -2651,8 +2623,7 @@ def get_zhihu_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies:
 
 
 @trace_error_decorator
-def get_chzzk_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_chzzk_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -2685,8 +2656,7 @@ def get_chzzk_stream_data(url: str, proxy_addr: Union[str, None] = None, cookies
 
 
 @trace_error_decorator
-def get_haixiu_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_haixiu_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'origin': 'https://www.haixiutv.com',
         'referer': 'https://www.haixiutv.com/',
@@ -2740,8 +2710,7 @@ def get_haixiu_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies
 
 
 @trace_error_decorator
-def get_vvxqiu_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_vvxqiu_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'User-Agent': 'ios/7.830 (ios 17.0; ; iPhone 15 (A2846/A3089/A3090/A3092))',
         'Access-Control-Request-Method': 'GET',
@@ -2772,8 +2741,7 @@ def get_vvxqiu_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies
 
 
 @trace_error_decorator
-def get_17live_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_17live_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'origin': 'https://17.live',
         'referer': 'https://17.live/',
@@ -2808,8 +2776,7 @@ def get_17live_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies
 
 
 @trace_error_decorator
-def get_langlive_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_langlive_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'origin': 'https://www.lang.live',
         'referer': 'https://www.lang.live/',
@@ -2841,8 +2808,7 @@ def get_langlive_stream_url(url: str, proxy_addr: Union[str, None] = None, cooki
 
 
 @trace_error_decorator
-def get_pplive_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_pplive_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'Content-Type': 'application/json',
         'Origin': 'https://m.pp.weimipopo.com',
@@ -2882,8 +2848,7 @@ def get_pplive_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies
 
 
 @trace_error_decorator
-def get_6room_stream_url(url: str, proxy_addr: Union[str, None] = None, cookies: Union[str, None] = None) -> \
-        Dict[str, Any]:
+def get_6room_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
         'referer': 'https://ios.6.cn/?ver=8.0.3&build=4',

@@ -10,7 +10,6 @@ Copyright (c) 2023 by Hmily, All Rights Reserved.
 import json
 import re
 import urllib.parse
-from typing import Union
 import execjs
 import requests
 import urllib.request
@@ -36,18 +35,16 @@ HEADERS_PC = {
 
 
 # X-bogus算法
-def get_xbogus(url: str, headers: Union[dict, None] = None) -> str:
+def get_xbogus(url: str, headers: dict | None = None) -> str:
     if not headers or 'user-agent' not in (k.lower() for k in headers):
         headers = HEADERS
     query = urllib.parse.urlparse(url).query
     xbogus = execjs.compile(open(f'{JS_SCRIPT_PATH}/x-bogus.js').read()).call('sign', query, headers.get("User-Agent", "user-agent"))
-    # print(xbogus)
     return xbogus
 
 
 # 获取房间ID和用户secID
-def get_sec_user_id(url: str, proxy_addr: Union[str, None] = None,
-                    headers: Union[dict, None] = None) -> Union[tuple, None]:
+def get_sec_user_id(url: str, proxy_addr: str | None = None, headers: dict | None = None) -> tuple | None:
     if not headers or all(k.lower() not in ['user-agent', 'cookie'] for k in headers):
         headers = HEADERS
 
@@ -67,8 +64,7 @@ def get_sec_user_id(url: str, proxy_addr: Union[str, None] = None,
 
 
 # 获取抖音号
-def get_unique_id(url: str, proxy_addr: Union[str, None] = None,
-                  headers: Union[dict, None] = None) -> Union[str, None]:
+def get_unique_id(url: str, proxy_addr: str | None = None, headers: dict | None = None) -> str:
     if not headers or all(k.lower() not in ['user-agent', 'cookie'] for k in headers):
         headers = HEADERS_PC
 
@@ -88,8 +84,8 @@ def get_unique_id(url: str, proxy_addr: Union[str, None] = None,
 
 
 # 获取直播间webID
-def get_live_room_id(room_id: str, sec_user_id: str, proxy_addr: Union[str, None] = None,
-                     params: Union[dict, None] = None, headers: Union[dict, None] = None) -> str:
+def get_live_room_id(room_id: str, sec_user_id: str, proxy_addr: str | None = None,
+                     params: dict | None = None, headers: dict | None = None) -> str:
     if not headers or all(k.lower() not in ['user-agent', 'cookie'] for k in headers):
         headers = HEADERS
 

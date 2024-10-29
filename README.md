@@ -43,7 +43,6 @@
 - [x] 流星直播
 - [x] ShowRoom
 - [x] Acfun
-- [x] 时光直播
 - [x] 映客直播
 - [x] 音播直播
 - [x] 知乎直播
@@ -60,8 +59,8 @@
     ├── /config -> (config record)
     ├── /logs -> (save runing log file)
     ├── /backup_config -> (backup file)
-    ├── /libs -> (dll file)
     ├── /douyinliverecorder -> (package)
+        ├── initializer.py-> (check and install nodejs)
     	├── spider.py-> (get live data)
     	├── stream.py-> (get live stream address)
     	├── utils.py -> (contains utility functions)
@@ -109,7 +108,7 @@
 https://live.douyin.com/745964462470
 https://v.douyin.com/iQFeBnt/
 https://live.douyin.com/yall1102  （链接+抖音号）
-https://v.douyin.com/CeiU5cbX  （作者主页地址）
+https://v.douyin.com/CeiU5cbX  （主播主页地址）
 
 TikTok：
 https://www.tiktok.com/@pearlgaga88/live
@@ -176,7 +175,6 @@ https://twitcasting.tv/c:uonq
 https://live.baidu.com/m/media/pclive/pchome/live.html?room_id=9175031377&tab_category
 
 微博直播:
-https://weibo.com/u/7676267963 （主页地址）
 https://weibo.com/l/wblive/p/show/1022:2321325026370190442592
 
 酷狗直播:
@@ -189,19 +187,16 @@ LiveMe:
 https://www.liveme.com/zh/v/17141543493018047815/index.html
 
 花椒直播:
-https://www.huajiao.com/user/223184650  （主页地址）
+https://www.huajiao.com/l/345096174
 
 流星直播:
 https://www.7u66.com/100960
 
 ShowRoom:
-https://www.showroom-live.com/room/profile?room_id=480206  （主页地址）
+https://www.showroom-live.com/room/profile?room_id=480206  （主播主页地址）
 
 Acfun:
 https://live.acfun.cn/live/179922
-
-时光直播：
-https://www.rengzu.com/180778
 
 映客直播：
 https://www.inke.cn/liveroom/index.html?uid=22954469&id=1720860391070904
@@ -210,7 +205,7 @@ https://www.inke.cn/liveroom/index.html?uid=22954469&id=1720860391070904
 https://live.ybw1666.com/800002949
 
 知乎直播:
-https://www.zhihu.com/theater/114453
+https://www.zhihu.com/people/ac3a467005c5d20381a82230101308e9 (主播主页地址)
 
 CHZZK：
 https://chzzk.naver.com/live/458f6ec20b034f49e0fc6d03921646d2
@@ -223,7 +218,7 @@ https://chzzk.naver.com/live/458f6ec20b034f49e0fc6d03921646d2
 &emsp;
 
 ## 🎃源码运行
-使用源码运行，前提要有Python环境，如果没有请先安装Python，再执行下面步骤。
+使用源码运行，前提要有**Python>=3.10**环境，如果没有请先自行安装Python，再执行下面步骤。
 
 1.首先拉取或手动下载本仓库项目代码
 

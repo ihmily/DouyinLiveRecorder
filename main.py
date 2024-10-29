@@ -23,7 +23,7 @@ from pathlib import Path
 import urllib.parse
 import urllib.request
 from urllib.error import URLError, HTTPError
-from typing import Any, Union
+from typing import Any
 import configparser
 from douyinliverecorder import spider
 from douyinliverecorder import stream
@@ -81,7 +81,7 @@ def signal_handler(_signal, _frame):
 signal.signal(signal.SIGTERM, signal_handler)
 
 
-def display_info():
+def display_info() -> None:
     global start_display_time
     time.sleep(5)
     while True:
@@ -124,7 +124,7 @@ def display_info():
             logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
 
 
-def update_file(file_path: str, old_str: str, new_str: str, start_str: str = None) -> Union[str, None]:
+def update_file(file_path: str, old_str: str, new_str: str, start_str: str = None) -> str | None:
     if old_str == new_str and start_str is None:
         return old_str
     with file_update_lock:
@@ -149,7 +149,7 @@ def update_file(file_path: str, old_str: str, new_str: str, start_str: str = Non
         return new_str
 
 
-def delete_line(file_path: str, del_line: str):
+def delete_line(file_path: str, del_line: str) -> None:
     with file_update_lock:
         with open(file_path, 'r+', encoding=text_encoding) as f:
             lines = f.readlines()
@@ -169,7 +169,7 @@ def get_startup_info(system_type: str):
     return startup_info
 
 
-def converts_mp4(address: str, is_original_delete: bool = True):
+def converts_mp4(address: str, is_original_delete: bool = True) -> None:
     _output = subprocess.check_output([
         "ffmpeg", "-i", address,
         "-c:v", "copy",
@@ -182,7 +182,7 @@ def converts_mp4(address: str, is_original_delete: bool = True):
             os.remove(address)
 
 
-def converts_m4a(address: str, is_original_delete: bool = True):
+def converts_m4a(address: str, is_original_delete: bool = True) -> None:
     _output = subprocess.check_output([
         "ffmpeg", "-i", address,
         "-n", "-vn",
@@ -195,7 +195,7 @@ def converts_m4a(address: str, is_original_delete: bool = True):
             os.remove(address)
 
 
-def generate_subtitles(record_name: str, ass_filename: str, sub_format: str = 'srt'):
+def generate_subtitles(record_name: str, ass_filename: str, sub_format: str = 'srt') -> None:
     index_time = 0
     today = datetime.datetime.now()
     re_datatime = today.strftime('%Y-%m-%d %H:%M:%S')
@@ -220,7 +220,7 @@ def generate_subtitles(record_name: str, ass_filename: str, sub_format: str = 's
         re_datatime = today.strftime('%Y-%m-%d %H:%M:%S')
 
 
-def adjust_max_request():
+def adjust_max_request() -> None:
     global max_request, error_count, pre_max_request, error_window
     preset = max_request
 
@@ -277,7 +277,7 @@ def push_message(record_name: str, live_url: str, content: str) -> None:
                 print(f"直播消息推送到{platform}失败: {e}")
 
 
-def run_bash(command: list):
+def run_bash(command: list) -> None:
     process = subprocess.Popen(
         command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=get_startup_info(os_type)
     )
@@ -288,7 +288,7 @@ def run_bash(command: list):
     print(stderr_decoded)
 
 
-def clear_record_info(record_name: str, record_url: str):
+def clear_record_info(record_name: str, record_url: str) -> None:
     global monitoring
     recording.discard(record_name)
     if record_url in url_comments and record_url in running_list:
@@ -298,7 +298,7 @@ def clear_record_info(record_name: str, record_url: str):
 
 
 def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, save_type: str,
-                     bash_file_path: Union[str, None] = None) -> bool:
+                     bash_file_path: str | None = None) -> bool:
     save_file_path = ffmpeg_command[-1]
     process = subprocess.Popen(
         ffmpeg_command, stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type)
@@ -352,7 +352,7 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
     return False
 
 
-def start_record(url_data: tuple, count_variable: int = -1):
+def start_record(url_data: tuple, count_variable: int = -1) -> None:
     global error_count
 
     while True:
@@ -1249,7 +1249,7 @@ def start_record(url_data: tuple, count_variable: int = -1):
             time.sleep(2)
 
 
-def backup_file(file_path: str, backup_dir_path: str):
+def backup_file(file_path: str, backup_dir_path: str) -> None:
     try:
         if not os.path.exists(backup_dir_path):
             os.makedirs(backup_dir_path)
@@ -1282,7 +1282,7 @@ def backup_file(file_path: str, backup_dir_path: str):
         logger.error(f'\r备份配置文件 {file_path} 失败：{str(e)}')
 
 
-def backup_file_start():
+def backup_file_start() -> None:
     config_md5 = ''
     url_config_md5 = ''
 
@@ -1305,7 +1305,7 @@ def backup_file_start():
 
 
 # --------------------------检查是否存在ffmpeg-------------------------------------
-def check_ffmpeg_existence():
+def check_ffmpeg_existence() -> bool:
     dev_null = open(os.devnull, 'wb')
     try:
         subprocess.run(['ffmpeg', '--help'], stdout=dev_null, stderr=dev_null, check=True)
@@ -1346,7 +1346,7 @@ t3.start()
 
 
 def read_config_value(config_parser: configparser.RawConfigParser, section: str, option: str, default_value: Any) \
-        -> Union[str, int, bool]:
+        -> Any:
     try:
 
         config_parser.read(config_file, encoding=text_encoding)

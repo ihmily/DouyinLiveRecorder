@@ -8,7 +8,6 @@ Update: 2024-10-27 17:15:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
-from typing import Dict, Any, Union
 import base64
 import hashlib
 import json
@@ -25,7 +24,7 @@ from .spider import (
 
 
 @trace_error_decorator
-def get_douyin_stream_url(json_data: dict, video_quality: str) -> Dict[str, Any]:
+def get_douyin_stream_url(json_data: dict, video_quality: str) -> dict:
     anchor_name = json_data.get('anchor_name')
 
     result = {
@@ -38,9 +37,9 @@ def get_douyin_stream_url(json_data: dict, video_quality: str) -> Dict[str, Any]
     if status == 2:
         stream_url = json_data['stream_url']
         flv_url_dict = stream_url['flv_pull_url']
-        flv_url_list = list(flv_url_dict.values())
+        flv_url_list: list = list(flv_url_dict.values())
         m3u8_url_dict = stream_url['hls_pull_url_map']
-        m3u8_url_list = list(m3u8_url_dict.values())
+        m3u8_url_list: list = list(m3u8_url_dict.values())
 
         while len(flv_url_list) < 5:
             flv_url_list.append(flv_url_list[-1])
@@ -59,11 +58,11 @@ def get_douyin_stream_url(json_data: dict, video_quality: str) -> Dict[str, Any]
 
 
 @trace_error_decorator
-def get_tiktok_stream_url(json_data: dict, video_quality: str) -> Dict[str, Any]:
+def get_tiktok_stream_url(json_data: dict, video_quality: str) -> dict:
     if not json_data:
         return {"anchor_name": None, "is_live": False}
 
-    def get_video_quality_url(stream, q_key) -> list[dict[str, int | Any]]:
+    def get_video_quality_url(stream, q_key) -> list:
         play_list = []
         for key in stream:
             url_info = stream[key]['main']
@@ -111,7 +110,7 @@ def get_tiktok_stream_url(json_data: dict, video_quality: str) -> Dict[str, Any]
 
 
 @trace_error_decorator
-def get_kuaishou_stream_url(json_data: dict, video_quality: str) -> Dict[str, Any]:
+def get_kuaishou_stream_url(json_data: dict, video_quality: str) -> dict:
     if json_data['type'] == 1 and not json_data["is_live"]:
         return json_data
     live_status = json_data['is_live']
@@ -148,7 +147,7 @@ def get_kuaishou_stream_url(json_data: dict, video_quality: str) -> Dict[str, An
 
 
 @trace_error_decorator
-def get_huya_stream_url(json_data: dict, video_quality: str) -> Dict[str, Any]:
+def get_huya_stream_url(json_data: dict, video_quality: str) -> dict:
     game_live_info = json_data['data'][0]['gameLiveInfo']
     stream_info_list = json_data['data'][0]['gameStreamInfoList']
     anchor_name = game_live_info.get('nick', '')
@@ -237,7 +236,7 @@ def get_huya_stream_url(json_data: dict, video_quality: str) -> Dict[str, Any]:
 
 
 @trace_error_decorator
-def get_douyu_stream_url(json_data: dict, video_quality: str, cookies: str, proxy_addr: str) -> Dict[str, Any]:
+def get_douyu_stream_url(json_data: dict, video_quality: str, cookies: str, proxy_addr: str) -> dict:
     if not json_data["is_live"]:
         return json_data
 
@@ -264,7 +263,7 @@ def get_douyu_stream_url(json_data: dict, video_quality: str, cookies: str, prox
 
 
 @trace_error_decorator
-def get_yy_stream_url(json_data: dict) -> Dict[str, Any]:
+def get_yy_stream_url(json_data: dict) -> dict:
     anchor_name = json_data.get('anchor_name', '')
     result = {
         "anchor_name": anchor_name,
@@ -282,7 +281,7 @@ def get_yy_stream_url(json_data: dict) -> Dict[str, Any]:
 
 
 @trace_error_decorator
-def get_bilibili_stream_url(json_data: dict, video_quality: str, proxy_addr: str, cookies: str) -> Dict[str, Any]:
+def get_bilibili_stream_url(json_data: dict, video_quality: str, proxy_addr: str, cookies: str) -> dict:
     anchor_name = json_data["anchor_name"]
     if not json_data["live_status"]:
         return {
@@ -313,7 +312,7 @@ def get_bilibili_stream_url(json_data: dict, video_quality: str, proxy_addr: str
 
 
 @trace_error_decorator
-def get_netease_stream_url(json_data: dict, video_quality: str) -> Dict[str, Any]:
+def get_netease_stream_url(json_data: dict, video_quality: str) -> dict:
     if not json_data['is_live']:
         return json_data
     stream_list = json_data['stream_list']['resolution']
@@ -336,7 +335,7 @@ def get_netease_stream_url(json_data: dict, video_quality: str) -> Dict[str, Any
 
 
 def get_stream_url(json_data: dict, video_quality: str, url_type: str = 'm3u8', spec: bool = False,
-                   extra_key: Union[str, int] = None) -> Dict[str, Any]:
+                   extra_key: str | int = None) -> dict:
     if not json_data['is_live']:
         return json_data
 

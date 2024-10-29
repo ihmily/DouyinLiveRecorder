@@ -133,7 +133,7 @@ LIVE_STREAM_CONFIG = {
         "func": spider.get_yinbo_stream_url,
     },
     "zhihu": {
-        "url": "https://www.zhihu.com/theater/114453",
+        "url": "https://www.zhihu.com/people/ac3a467005c5d20381a82230101308e9",
         "func": spider.get_zhihu_stream_url,
     },
     "chzzk": {
