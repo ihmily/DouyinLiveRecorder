@@ -357,6 +357,13 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
     return False
 
 
+def clean_name(input_text):
+    cleaned_name = re.sub(rstr, "_", input_text.strip())
+    cleaned_name = cleaned_name.replace("（", "(").replace("）", ")")
+    cleaned_name = utils.remove_emojis(cleaned_name, '_').strip('_')
+    return cleaned_name or '空白昵称'
+
+
 def start_record(url_data: tuple, count_variable: int = -1) -> None:
     global error_count
 
@@ -783,9 +790,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                             error_count += 1
                             error_window.append(1)
                     else:
-                        anchor_name = re.sub(rstr, "_", anchor_name)
-                        anchor_name = anchor_name.replace("（", "(").replace("）", ")")
-                        anchor_name = utils.remove_emojis(anchor_name, '_').strip('_')
+                        anchor_name = clean_name(anchor_name)
                         record_name = f'序号{count_variable} {anchor_name}'
 
                         if record_url in url_comments:
@@ -850,9 +855,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                 live_title = port_info.get('title')
                                 title_in_name = ''
                                 if live_title:
-                                    live_title = re.sub(rstr, "_", live_title).strip()
-                                    live_title = live_title.replace("（", "(").replace("）", ")")
-                                    live_title = utils.remove_emojis(live_title, '_').strip('_')
+                                    live_title = clean_name(live_title)
                                     title_in_name = live_title + '_' if filename_by_title else ''
 
                                 try:
