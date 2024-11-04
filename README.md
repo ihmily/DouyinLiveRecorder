@@ -320,7 +320,7 @@ docker-compose up
 
 2.构建镜像(可选)
 
-如果你只想简单的运行程序，则不需要做这一步。要自定义本地构建，可以修改 [docker-compose.yaml](https://github.com/ihmily/DouyinLiveRecorder/blob/main/docker-compose.yaml) 文件，如将镜像名修改为 `douyin-live-recorder:latest`，并取消 `# build: .` 注释，然后再执行
+如果你只想简单的运行程序，则不需要做这一步。Docker镜像仓库中代码版本可能不是最新的，如果要运行本仓库主分支最新代码，可以本地自定义构建，通过修改 [docker-compose.yaml](https://github.com/ihmily/DouyinLiveRecorder/blob/main/docker-compose.yaml) 文件，如将镜像名修改为 `douyin-live-recorder:latest`，并取消 `# build: .` 注释，然后再执行
 
 ```bash
 docker build -t douyin-live-recorder:latest .
