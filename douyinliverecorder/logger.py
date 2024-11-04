@@ -13,11 +13,11 @@ logger.add(
     f"{script_path}/logs/DouyinLiveRecorder.log",
     level="DEBUG",
     format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
-    filter=lambda i: i["level"].name == "DEBUG",
+    filter=lambda i: i["level"].name != "INFO",
     serialize=False,
     enqueue=True,
     retention=1,
-    rotation="100 KB",
+    rotation="300 KB",
     encoding='utf-8'
 )
 
@@ -30,16 +30,5 @@ logger.add(
     enqueue=True,
     retention=1,
     rotation="300 KB",
-    encoding='utf-8'
-)
-
-logger.add(
-    f"{script_path}/logs/DouyinLiveRecorder.log",
-    level="WARNING",
-    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
-    serialize=False,
-    enqueue=True,
-    retention=1,
-    rotation="100 KB",
     encoding='utf-8'
 )
