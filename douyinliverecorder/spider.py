@@ -2726,6 +2726,21 @@ def get_vvxqiu_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: Opt
     json_str = get_req(api_1, proxy_addr=proxy_addr, headers=headers)
     json_data = json.loads(json_str)
     anchor_name = json_data['data']['anchorName']
+    if not anchor_name:
+        params = {
+            'sessionId': '',
+            'userId': '',
+            'product': 'vvstar',
+            'tickToken': '',
+            'roomId': room_id,
+        }
+        json_str = get_req(
+            f'https://h5p.vvxqiu.com/activity-center/halloween2023/banner?{urllib.parse.urlencode(params)}',
+            proxy_addr=proxy_addr, headers=headers
+        )
+        json_data = json.loads(json_str)
+        anchor_name = json_data['data']['memberVO']['memberName']
+
     result = {
         "anchor_name": anchor_name,
         "is_live": False,
