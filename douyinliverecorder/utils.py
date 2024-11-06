@@ -30,7 +30,7 @@ def trace_error_decorator(func: callable) -> callable:
     return wrapper
 
 
-def check_md5(file_path: str) -> str:
+def check_md5(file_path: str | Path) -> str:
     with open(file_path, 'rb') as fp:
         file_md5 = hashlib.md5(fp.read()).hexdigest()
     return file_md5
@@ -41,7 +41,7 @@ def dict_to_cookie_str(cookies_dict: dict) -> str:
     return cookie_str
 
 
-def read_config_value(file_path: str, section: str, key: str) -> str | None:
+def read_config_value(file_path: str | Path, section: str, key: str) -> str | None:
     config = configparser.ConfigParser()
 
     try:
@@ -61,7 +61,7 @@ def read_config_value(file_path: str, section: str, key: str) -> str | None:
     return None
 
 
-def update_config(file_path: str, section: str, key: str, new_value: str) -> None:
+def update_config(file_path: str | Path, section: str, key: str, new_value: str) -> None:
     config = configparser.ConfigParser()
 
     try:
@@ -94,7 +94,7 @@ def get_file_paths(directory: str) -> list:
     return file_paths
 
 
-def remove_emojis(text: str, replace_text=r''):
+def remove_emojis(text: str, replace_text: str = '') -> str:
     emoji_pattern = re.compile(
         "["
         "\U0001F1E0-\U0001F1FF"  # flags (iOS)
@@ -114,7 +114,7 @@ def remove_emojis(text: str, replace_text=r''):
     return emoji_pattern.sub(replace_text, text)
 
 
-def remove_duplicate_lines(file_path):
+def remove_duplicate_lines(file_path: str | Path) -> None:
     unique_lines = OrderedDict()
     text_encoding = 'utf-8-sig'
     with open(file_path, 'r', encoding=text_encoding) as input_file:
@@ -125,7 +125,7 @@ def remove_duplicate_lines(file_path):
             output_file.write(line + '\n')
 
 
-def check_disk_capacity(file_path, show=False):
+def check_disk_capacity(file_path: str | Path, show: bool = False) -> float:
     absolute_path = os.path.abspath(file_path)
     directory = os.path.dirname(absolute_path)
     disk_usage = shutil.disk_usage(directory)
