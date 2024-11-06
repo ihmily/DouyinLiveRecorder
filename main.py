@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-10-28 00:21:00
+Update: 2024-11-06 23:00:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -19,6 +19,7 @@ import datetime
 import re
 import shutil
 import random
+import uuid
 from pathlib import Path
 import urllib.parse
 import urllib.request
@@ -343,7 +344,7 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
 
         if bash_file_path:
             if os_type != 'nt':
-                print(f'准备执行自定义Bash脚本，请确认脚本是否有执行权限! 路径:{bash_file_path}')
+                print(f'准备执行自定义Bash脚本，请确认脚本是否有执行权限! 路径:{bash_file_path}, 授予权限:chmod +x your_script.sh')
                 bash_command = [bash_file_path, record_name.split(' ', maxsplit=1)[-1], save_file_path, save_type,
                                 split_video_by_time, ts_to_mp4]
                 run_bash(bash_command)
@@ -770,6 +771,18 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                             port_info = spider.get_pplive_stream_url(
                                 url=record_url, proxy_addr=proxy_address, cookies=huamao_cookie)
 
+                    elif record_url.find(".m3u8") > -1 or record_url.find(".flv") > -1:
+                        platform = '自定义录制直播'
+                        port_info = {
+                            "anchor_name": platform + '_' + str(uuid.uuid4())[:8],
+                            "is_live": True,
+                            "record_url": record_url,
+                        }
+                        if '.flv' in record_url:
+                            port_info['flv_url'] = record_url
+                        else:
+                            port_info['m3u8_url'] = record_url
+
                     else:
                         logger.error(f'{record_url} {platform}直播地址')
                         return
@@ -879,6 +892,9 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                         os.makedirs(full_path)
                                 except Exception as e:
                                     logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
+
+                                if enable_https_recording and real_url.startswith("http://"):
+                                    real_url = real_url.replace("http://", "https://")
 
                                 user_agent = ("Mozilla/5.0 (Linux; Android 11; SAMSUNG SM-G973U) AppleWebKit/537.36 ("
                                               "KHTML, like Gecko) SamsungBrowser/14.2 Chrome/87.0.4280.141 Mobile "
@@ -1443,6 +1459,7 @@ while True:
     loop_time = options.get(read_config_value(config, '录制设置', '是否显示循环秒数', "否"), False)
     show_url = options.get(read_config_value(config, '录制设置', '是否显示直播源地址', "否"), False)
     split_video_by_time = options.get(read_config_value(config, '录制设置', '分段录制是否开启', "否"), False)
+    enable_https_recording = options.get(read_config_value(config, '录制设置', '强制启用HTTPS录制', "否"), False)
     split_time = str(read_config_value(config, '录制设置', '视频分段时间(秒)', 1800))
     ts_to_mp4 = options.get(read_config_value(config, '录制设置', 'ts录制完成后自动转为mp4格式', "否"),
                             False)
@@ -1668,7 +1685,7 @@ while True:
                     'www.lehaitv.com'
                 )
 
-                if url_host in platform_host:
+                if url_host in platform_host or any(ext in url for ext in (".flv", ".m3u8")):
                     if url_host in clean_url_host_list:
                         url = update_file(url_config_file, old_str=url, new_str=url.split('?')[0])
 
