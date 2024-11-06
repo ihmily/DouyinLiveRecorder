@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 
 import os
+import shutil
+from pathlib import Path
 import functools
 import hashlib
 import re
@@ -121,3 +123,16 @@ def remove_duplicate_lines(file_path):
     with open(file_path, 'w', encoding=text_encoding) as output_file:
         for line in unique_lines:
             output_file.write(line + '\n')
+
+
+def check_disk_capacity(file_path, show=False):
+    absolute_path = os.path.abspath(file_path)
+    directory = os.path.dirname(absolute_path)
+    disk_usage = shutil.disk_usage(directory)
+    disk_root = Path(directory).anchor
+    free_space_gb = disk_usage.free / (1024 ** 3)
+    if show:
+        print(f"{disk_root} Total: {disk_usage.total / (1024 ** 3):.2f} GB "
+              f"Used: {disk_usage.used / (1024 ** 3):.2f} GB "
+              f"Free: {free_space_gb:.2f} GB")
+    return free_space_gb

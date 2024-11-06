@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-11-06 23:00:00
+Update: 2024-11-07 01:00:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -53,6 +53,7 @@ url_comments = []
 text_no_repeat_url = []
 create_var = locals()
 first_start = True
+exit_recording = False
 need_update_line_list = []
 first_run = True
 not_record_list = []
@@ -320,7 +321,7 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
         create_var[subs_thread_name].start()
 
     while process.poll() is None:
-        if record_url in url_comments:
+        if record_url in url_comments or exit_recording:
             print(f"[{record_name}]录制时已被注释,本条线程将会退出")
             clear_record_info(record_name, record_url)
             process.terminate()
@@ -1460,6 +1461,7 @@ while True:
     show_url = options.get(read_config_value(config, '录制设置', '是否显示直播源地址', "否"), False)
     split_video_by_time = options.get(read_config_value(config, '录制设置', '分段录制是否开启', "否"), False)
     enable_https_recording = options.get(read_config_value(config, '录制设置', '强制启用HTTPS录制', "否"), False)
+    disk_space_limit = float(read_config_value(config, '录制设置', '录制空间剩余阈值(gb)', 1.0))
     split_time = str(read_config_value(config, '录制设置', '视频分段时间(秒)', 1800))
     ts_to_mp4 = options.get(read_config_value(config, '录制设置', 'ts录制完成后自动转为mp4格式', "否"),
                             False)
@@ -1557,6 +1559,13 @@ while True:
     else:
         video_save_type = "TS"
 
+    check_path = video_save_path or default_path
+    if utils.check_disk_capacity(check_path, show=first_run) < disk_space_limit:
+        exit_recording = True
+        if not recording:
+            logger.warning(f"Disk space remaining is below {disk_space_limit} GB. "
+                           f"Exiting program due to the disk space limit being reached.")
+            sys.exit(-1)
 
     def contains_url(string: str) -> bool:
         pattern = r"(https?://)?(www\.)?[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)+(:\d+)?(/.*)?"
