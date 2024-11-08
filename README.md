@@ -140,7 +140,7 @@ https://live.bilibili.com/320
 
 小红书：
 http://xhslink.com/xpJpfM
-https://www.xiaohongshu.com/hina/livestream/569077534207413574/1707413727088?appuid=5f3f478a00000000010005b3&
+https://www.xiaohongshu.com/user/profile/6330049c000000002303c7ed?appuid=5f3f478a00000000010005b3
 
 bigo直播：
 https://www.bigo.tv/cn/716418802
@@ -148,9 +148,8 @@ https://www.bigo.tv/cn/716418802
 buled直播：
 https://app.blued.cn/live?id=Mp6G2R
 
-SOOP[AfreecaTV]：
+SOOP：
 https://play.sooplive.co.kr/sw7love
-https://play.afreecatv.com/sw7love
 
 网易cc：
 https://cc.163.com/583946984
@@ -441,7 +440,7 @@ docker-compose stop
   - 最后，祝大家新年快乐！
 
 <details><summary>点击展开更多提交日志</summary>
-    
+
 - 20240129
   - 新增猫耳FM直播录制
 - 20240127
@@ -507,8 +506,8 @@ docker-compose stop
   - 新增了国际版抖音TikTok的直播录制，去除冗余 简化了部分代码
 - 20230724	
   - 新增了一个通过抖音直播间地址获取直播视频流链接的API接口，上传即可用
-</details>
-&emsp;
+  </details>
+  &emsp;
 
 ## 有问题可以提issue, 我会在这里持续添加更多直播平台的录制 欢迎Star
 #### 
