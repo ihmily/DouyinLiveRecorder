@@ -1283,34 +1283,24 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
             time.sleep(2)
 
 
-def backup_file(file_path: str, backup_dir_path: str) -> None:
+def backup_file(file_path: str, backup_dir_path: str, limit_counts: int = 6) -> None:
     try:
         if not os.path.exists(backup_dir_path):
             os.makedirs(backup_dir_path)
 
         timestamp = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
         backup_file_name = os.path.basename(file_path) + '_' + timestamp
-
         backup_file_path = os.path.join(backup_dir_path, backup_file_name).replace("\\", "/")
         shutil.copy2(file_path, backup_file_path)
-        # print(f'\r已备份配置文件 {file_path} 到 {backup_file_path}')
 
         files = os.listdir(backup_dir_path)
-        url_files = [f for f in files if f.startswith(os.path.basename(url_config_file))]
-        config_files = [f for f in files if f.startswith(os.path.basename(config_file))]
+        _files = [f for f in files if f.startswith(os.path.basename(file_path))]
+        _files.sort(key=lambda x: os.path.getmtime(os.path.join(backup_dir_path, x)))
 
-        url_files.sort(key=lambda x: os.path.getmtime(os.path.join(backup_dir_path, x)))
-        config_files.sort(key=lambda x: os.path.getmtime(os.path.join(backup_dir_path, x)))
-
-        while len(url_files) > 6:
-            oldest_file = url_files[0]
+        while len(_files) > limit_counts:
+            oldest_file = _files[0]
             os.remove(os.path.join(backup_dir_path, oldest_file))
-            url_files = url_files[1:]
-
-        while len(config_files) > 6:
-            oldest_file = config_files[0]
-            os.remove(os.path.join(backup_dir_path, oldest_file))
-            config_files = config_files[1:]
+            _files = _files[1:]
 
     except Exception as e:
         logger.error(f'\r备份配置文件 {file_path} 失败：{str(e)}')
