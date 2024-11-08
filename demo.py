@@ -169,6 +169,10 @@ LIVE_STREAM_CONFIG = {
     "huamao": {
         "url": "https://h.catshow168.com/live/preview.html?uid=19066357&anchorUid=18895331",
         "func": spider.get_pplive_stream_url,
+    },
+    "shopee": {
+        "url": "https://sg.shp.ee/GmpXeuf?uid=1006401066&session=802458",
+        "func": spider.get_shopee_stream_url,
     }
 }
 

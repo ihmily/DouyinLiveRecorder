@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-11-07 01:00:00
+Update: 2024-11-09 03:05:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -37,7 +37,7 @@ from msg_push import (
 
 version = "v4.0.1"
 platforms = ("\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|"
-             "酷狗|花椒|流星|Acfun|畅聊|映客|音播|知乎|嗨秀|VV星球|17Live|浪Live|漂漂|六间房|乐嗨|花猫"
+             "酷狗|花椒|流星|Acfun|畅聊|映客|音播|知乎|嗨秀|VV星球|17Live|浪Live|漂漂|六间房|乐嗨|花猫|shopee"
              "\n海外站点：TikTok|SOOP|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK")
 
 recording = set()
@@ -374,7 +374,6 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
         try:
             record_finished = False
             run_once = False
-            is_long_url = False
             start_pushed = False
             new_record_url = ''
             count_time = time.time()
@@ -773,6 +772,14 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                             port_info = spider.get_pplive_stream_url(
                                 url=record_url, proxy_addr=proxy_address, cookies=huamao_cookie)
 
+                    elif record_url.find("live.shopee") > -1 or record_url.find("shp.ee/") > -1:
+                        platform = 'shopee'
+                        with semaphore:
+                            port_info = spider.get_shopee_stream_url(
+                                url=record_url, proxy_addr=proxy_address, cookies=shopee_cookie)
+                            if port_info.get('uid'):
+                                new_record_url = record_url.split('?')[0] + '?' + str(port_info['uid'])
+
                     elif record_url.find(".m3u8") > -1 or record_url.find(".flv") > -1:
                         platform = '自定义录制直播'
                         port_info = {
@@ -814,9 +821,10 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                             return
 
                         if not url_data[-1] and run_once is False:
-                            if is_long_url:
+                            if new_record_url:
                                 need_update_line_list.append(
                                     f'{record_url}|{new_record_url},主播: {anchor_name.strip()}')
+                                not_record_list.append(new_record_url)
                             else:
                                 need_update_line_list.append(f'{record_url}|{record_url},主播: {anchor_name.strip()}')
                             run_once = True
@@ -1396,8 +1404,8 @@ def read_config_value(config_parser: configparser.RawConfigParser, section: str,
 
 options = {"是": True, "否": False}
 config = configparser.RawConfigParser()
-skip_proxy_check = options.get(read_config_value(config, '录制设置', '是否跳过代理检测(是/否)', "否"), False)
 language = read_config_value(config, '录制设置', 'language(zh_cn/en)', "zh_cn")
+skip_proxy_check = options.get(read_config_value(config, '录制设置', '是否跳过代理检测(是/否)', "否"), False)
 if language and 'en' not in language.lower():
     from i18n import translated_print
     builtins.print = translated_print
@@ -1545,6 +1553,7 @@ while True:
     six_room_cookie = read_config_value(config, 'Cookie', '6room_cookie', '')
     lehaitv_cookie = read_config_value(config, 'Cookie', 'lehaitv_cookie', '')
     huamao_cookie = read_config_value(config, 'Cookie', 'huamao_cookie', '')
+    shopee_cookie = read_config_value(config, 'Cookie', 'shopee_cookie', '')
 
     video_save_type_list = ("FLV", "MKV", "TS", "MP4", "MP3音频", "M4A音频")
     if video_save_type and video_save_type.upper() in video_save_type_list:
@@ -1653,7 +1662,9 @@ while True:
                     "v.6.cn",
                     "m.6.cn",
                     'www.lehaitv.com',
-                    'h.catshow168.com'
+                    'h.catshow168.com',
+                    'live.shopee.*',
+                    '*.shp.ee',
                 ]
                 overseas_platform_host = [
                     'www.tiktok.com',
@@ -1685,6 +1696,7 @@ while True:
                     'www.lehaitv.com'
                 )
 
+                url_host = '*.shp.ee' if '*.shp.ee' in url_host else 'live.shopee.*'
                 if url_host in platform_host or any(ext in url for ext in (".flv", ".m3u8")):
                     if url_host in clean_url_host_list:
                         url = update_file(url_config_file, old_str=url, new_str=url.split('?')[0])

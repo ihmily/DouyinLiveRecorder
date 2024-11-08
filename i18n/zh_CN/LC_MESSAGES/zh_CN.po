@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: 4.0.1\n"
 "POT-Creation-Date: 2024-10-20 00:00+0800\n"
-"PO-Revision-Date: 2024-11-08 19:10+0800\n"
+"PO-Revision-Date: 2024-11-09 03:05+0800\n"
 "Last-Translator: Hmily <EMAIL@ADDRESS>\n"
 "Language-Team: Chinese\n"
 "Content-Type: text/plain; charset=UTF-8\n"
@@ -79,3 +79,7 @@ msgstr "获取TwitCasting数据失败，正在尝试登录..."
 
 msgid "Failed to retrieve live room data, the Huajiao live room address is not fixed, please manually change the address for recording."
 msgstr "获取直播间数据失败，花椒直播间地址是非固定的，请手动更换地址进行录制"
+
+msgid "Fetch shopee live data failed, please update the address of the live broadcast room and try again."
+msgstr "获取shopee直播间数据失败，请手动更换直播录制地址后重试"
+

@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-10-28 00:32:16
+Update: 2024-11-09 03:20:16
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -2925,4 +2925,56 @@ def get_6room_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: Opti
         flv_url = f'https://wlive.6rooms.com/httpflv/{flv_title}.flv'
         result['flv_url'] = flv_url
         result['record_url'] = get_req(flv_url, proxy_addr=proxy_addr, headers=headers, redirect_url=True)
+    return result
+
+
+@trace_error_decorator
+def get_shopee_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    headers = {
+        'accept': 'application/json, text/plain, */*',
+        'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
+        'referer': 'https://live.shopee.sg/share?from=live&session=802458&share_user_id=',
+        'user-agent': 'ios/7.830 (ios 17.0; ; iPhone 15 (A2846/A3089/A3090/A3092))',
+    }
+
+    if cookies:
+        headers['Cookie'] = cookies
+
+    result = {"anchor_name": "", "is_live": False}
+    if 'live.shopee' not in url:
+        url = get_req(url, proxy_addr=proxy_addr, headers=headers, redirect_url=True)
+    uid = get_params(url, 'uid')
+    if uid:
+        json_str = get_req(f'https://live.shopee.sg/api/v1/shop_page/live/ongoing?uid={uid}',
+                           proxy_addr=proxy_addr, headers=headers)
+        json_data = json.loads(json_str)
+        if not json_data['data']['ongoing_live']:
+            json_str = get_req(
+                f'https://live.shopee.sg/api/v1/shop_page/live/replay_list?offset=0&limit=1&uid={uid}',
+                proxy_addr=proxy_addr, headers=headers)
+            json_data = json.loads(json_str)
+            result['anchor_name'] = json_data['data']['replay'][0]['nick_name']
+            return result
+        else:
+            session_id = json_data['data']['ongoing_live']['session_id']
+    else:
+        session_id = get_params(url, 'session')
+
+    json_str = get_req(f'https://live.shopee.sg/api/v1/session/{session_id}',
+                       proxy_addr=proxy_addr, headers=headers)
+    json_data = json.loads(json_str)
+    if not json_data.get('data'):
+        print("Fetch shopee live data failed, please update the address of the live broadcast room and try again.")
+        return result
+    uid = json_data['data']['session']['uid']
+    anchor_name = json_data['data']['session']['nickname']
+    live_status = json_data['data']['session']['status']
+    result["anchor_name"] = anchor_name
+    result['uid'] = f'uid={uid}&session={session_id}'
+    if live_status == 1:
+        result["is_live"] = True
+        flv_url = json_data['data']['session']['play_url']
+        result['title'] = json_data['data']['session']['title']
+        result['flv_url'] = flv_url
+        result['record_url'] = flv_url
     return result
