@@ -23,7 +23,7 @@ def trace_error_decorator(func: callable) -> callable:
             logger.warning('Failed to execute JS code. Please check if the Node.js environment')
         except Exception as e:
             error_line = traceback.extract_tb(e.__traceback__)[-1].lineno
-            error_info = f"错误信息: type: {type(e).__name__}, {str(e)} in function {func.__name__} at line: {error_line}"
+            error_info = f"message: type: {type(e).__name__}, {str(e)} in function {func.__name__} at line: {error_line}"
             logger.error(error_info)
             return []
 
@@ -47,16 +47,16 @@ def read_config_value(file_path: str | Path, section: str, key: str) -> str | No
     try:
         config.read(file_path, encoding='utf-8-sig')
     except Exception as e:
-        print(f"读取配置文件时出错: {e}")
+        print(f"Error occurred while reading the configuration file: {e}")
         return None
 
     if section in config:
         if key in config[section]:
             return config[section][key]
         else:
-            print(f"键[{key}]不存在于部分[{section}]中。")
+            print(f"Key [{key}] does not exist in section [{section}].")
     else:
-        print(f"部分[{section}]不存在于文件中。")
+        print(f"Section [{section}] does not exist in the file.")
 
     return None
 
@@ -67,11 +67,11 @@ def update_config(file_path: str | Path, section: str, key: str, new_value: str)
     try:
         config.read(file_path, encoding='utf-8-sig')
     except Exception as e:
-        print(f"读取配置文件时出错: {e}")
+        print(f"An error occurred while reading the configuration file: {e}")
         return
 
     if section not in config:
-        print(f"部分[{section}]不存在于文件中。")
+        print(f"Section [{section}] does not exist in the file.")
         return
 
     # 转义%字符
@@ -81,9 +81,9 @@ def update_config(file_path: str | Path, section: str, key: str, new_value: str)
     try:
         with open(file_path, 'w', encoding='utf-8-sig') as configfile:
             config.write(configfile)
-        print(f"配置文件中[{section}]下的{key}的值已更新")
+        print(f"The value of {key} under [{section}] in the configuration file has been updated.")
     except Exception as e:
-        print(f"写入配置文件时出错: {e}")
+        print(f"Error occurred while writing to the configuration file: {e}")
 
 
 def get_file_paths(directory: str) -> list:

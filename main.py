@@ -11,6 +11,7 @@ Function: Record live stream video.
 
 import os
 import sys
+import builtins
 import subprocess
 import signal
 import threading
@@ -34,10 +35,10 @@ from msg_push import (
     dingtalk, xizhi, tg_bot, send_email, bark, ntfy
 )
 
-version = "v3.0.9"
+version = "v4.0.1"
 platforms = ("\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|"
              "酷狗|花椒|流星|Acfun|畅聊|映客|音播|知乎|嗨秀|VV星球|17Live|浪Live|漂漂|六间房|乐嗨|花猫"
-             "\n海外站点：TikTok|SOOP[AfreecaTV]|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK")
+             "\n海外站点：TikTok|SOOP|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK")
 
 recording = set()
 error_count = 0
@@ -497,23 +498,23 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                             port_info = spider.get_blued_stream_url(
                                 record_url, proxy_addr=proxy_address, cookies=blued_cookie)
 
-                    elif record_url.find("afreecatv.com/") > -1 or record_url.find("sooplive.co.kr/") > -1:
-                        platform = 'SOOP[AfreecaTV]'
+                    elif record_url.find("sooplive.co.kr/") > -1:
+                        platform = 'SOOP'
                         with semaphore:
                             if global_proxy or proxy_address:
-                                json_data = spider.get_afreecatv_stream_data(
+                                json_data = spider.get_sooplive_stream_data(
                                     url=record_url, proxy_addr=proxy_address,
-                                    cookies=afreecatv_cookie,
-                                    username=afreecatv_username,
-                                    password=afreecatv_password
+                                    cookies=sooplive_cookie,
+                                    username=sooplive_username,
+                                    password=sooplive_password
                                 )
                                 if json_data and json_data.get('new_cookies'):
                                     utils.update_config(
-                                        config_file, 'Cookie', 'afreecatv_cookie', json_data['new_cookies']
+                                        config_file, 'Cookie', 'sooplive_cookie', json_data['new_cookies']
                                     )
                                 port_info = stream.get_stream_url(json_data, record_quality, spec=True)
                             else:
-                                logger.error("错误信息: 网络异常，请检查本网络是否能正常访问SOOP[AfreecaTV]平台")
+                                logger.error("错误信息: 网络异常，请检查本网络是否能正常访问SOOP平台")
 
                     elif record_url.find("cc.163.com/") > -1:
                         platform = '网易CC直播'
@@ -1394,9 +1395,12 @@ def read_config_value(config_parser: configparser.RawConfigParser, section: str,
 
 
 options = {"是": True, "否": False}
-
 config = configparser.RawConfigParser()
-skip_proxy_check = options.get(read_config_value(config, '录制设置', '是否跳过代理检测（是/否）', "否"), False)
+skip_proxy_check = options.get(read_config_value(config, '录制设置', '是否跳过代理检测(是/否)', "否"), False)
+language = read_config_value(config, '录制设置', 'language(zh_cn/en)', "zh_cn")
+if language and 'en' not in language.lower():
+    from i18n import translated_print
+    builtins.print = translated_print
 
 try:
     if skip_proxy_check:
@@ -1409,7 +1413,6 @@ try:
 except HTTPError as err:
     print(f"HTTP error occurred: {err.code} - {err.reason}")
 except URLError as err:
-    # print("URLError:", err.reason)
     print('INFO：未检测到全局/规则网络代理，请检查代理配置（若无需录制海外直播请忽略此条提示）')
 except Exception as err:
     print("An unexpected error occurred:", err)
@@ -1433,14 +1436,14 @@ while True:
     except OSError as err:
         logger.error(f"发生 I/O 错误: {err}")
 
-    video_save_path = read_config_value(config, '录制设置', '直播保存路径（不填则默认）', "")
+    video_save_path = read_config_value(config, '录制设置', '直播保存路径(不填则默认)', "")
     folder_by_author = options.get(read_config_value(config, '录制设置', '保存文件夹是否以作者区分', "是"), False)
     folder_by_time = options.get(read_config_value(config, '录制设置', '保存文件夹是否以时间区分', "否"), False)
     folder_by_title = options.get(read_config_value(config, '录制设置', '保存文件夹是否以标题区分', "否"), False)
     filename_by_title = options.get(read_config_value(config, '录制设置', '保存文件名是否包含标题', "否"), False)
     video_save_type = read_config_value(config, '录制设置', '视频保存格式ts|mkv|flv|mp4|mp3音频|m4a音频', "ts")
     video_record_quality = read_config_value(config, '录制设置', '原画|超清|高清|标清|流畅', "原画")
-    use_proxy = options.get(read_config_value(config, '录制设置', '是否使用代理ip（是/否）', "是"), False)
+    use_proxy = options.get(read_config_value(config, '录制设置', '是否使用代理ip(是/否)', "是"), False)
     proxy_addr_bak = read_config_value(config, '录制设置', '代理地址', "")
     proxy_addr = None if not use_proxy else proxy_addr_bak
     max_request = int(read_config_value(config, '录制设置', '同一时间访问网络的线程数', 3))
@@ -1460,10 +1463,10 @@ while True:
     is_run_bash = options.get(read_config_value(config, '录制设置', '是否录制完成后执行bash脚本', "否"), False)
     bash_path = read_config_value(config, '录制设置', 'bash脚本路径', "") if is_run_bash else None
     enable_proxy_platform = read_config_value(
-        config, '录制设置', '使用代理录制的平台（逗号分隔）',
-        'tiktok, afreecatv, soop, pandalive, winktv, flextv, popkontv, twitch, liveme, showroom, chzzk')
+        config, '录制设置', '使用代理录制的平台(逗号分隔)',
+        'tiktok, soop, pandalive, winktv, flextv, popkontv, twitch, liveme, showroom, chzzk')
     enable_proxy_platform_list = enable_proxy_platform.replace('，', ',').split(',') if enable_proxy_platform else None
-    extra_enable_proxy = read_config_value(config, '录制设置', '额外使用代理录制的平台（逗号分隔）', '')
+    extra_enable_proxy = read_config_value(config, '录制设置', '额外使用代理录制的平台(逗号分隔)', '')
     extra_enable_proxy_platform_list = extra_enable_proxy.replace('，', ',').split(',') if extra_enable_proxy else None
     live_status_push = read_config_value(config, '推送配置', '直播状态推送渠道', "")
     dingtalk_api_url = read_config_value(config, '推送配置', '钉钉推送接口链接', "")
@@ -1486,12 +1489,12 @@ while True:
     push_message_title = read_config_value(config, '推送配置', '自定义推送标题', "直播间状态更新通知")
     begin_push_message_text = read_config_value(config, '推送配置', '自定义开播推送内容', "")
     over_push_message_text = read_config_value(config, '推送配置', '自定义关播推送内容', "")
-    disable_record = options.get(read_config_value(config, '推送配置', '只推送通知不录制（是/否）', "否"), False)
-    push_check_seconds = int(read_config_value(config, '推送配置', '直播推送检测频率（秒）', 1800))
-    begin_show_push = options.get(read_config_value(config, '推送配置', '开播推送开启（是/否）', "是"), True)
-    over_show_push = options.get(read_config_value(config, '推送配置', '关播推送开启（是/否）', "否"), False)
-    afreecatv_username = read_config_value(config, '账号密码', 'afreecatv账号', '')
-    afreecatv_password = read_config_value(config, '账号密码', 'afreecatv密码', '')
+    disable_record = options.get(read_config_value(config, '推送配置', '只推送通知不录制(是/否)', "否"), False)
+    push_check_seconds = int(read_config_value(config, '推送配置', '直播推送检测频率(秒)', 1800))
+    begin_show_push = options.get(read_config_value(config, '推送配置', '开播推送开启(是/否)', "是"), True)
+    over_show_push = options.get(read_config_value(config, '推送配置', '关播推送开启(是/否)', "否"), False)
+    sooplive_username = read_config_value(config, '账号密码', 'sooplive账号', '')
+    sooplive_password = read_config_value(config, '账号密码', 'sooplive密码', '')
     flextv_username = read_config_value(config, '账号密码', 'flextv账号', '')
     flextv_password = read_config_value(config, '账号密码', 'flextv密码', '')
     popkontv_username = read_config_value(config, '账号密码', 'popkontv账号', '')
@@ -1511,7 +1514,7 @@ while True:
     xhs_cookie = read_config_value(config, 'Cookie', '小红书cookie', '')
     bigo_cookie = read_config_value(config, 'Cookie', 'bigo_cookie', '')
     blued_cookie = read_config_value(config, 'Cookie', 'blued_cookie', '')
-    afreecatv_cookie = read_config_value(config, 'Cookie', 'afreecatv_cookie', '')
+    sooplive_cookie = read_config_value(config, 'Cookie', 'sooplive_cookie', '')
     netease_cookie = read_config_value(config, 'Cookie', 'netease_cookie', '')
     qiandurebo_cookie = read_config_value(config, 'Cookie', '千度热播_cookie', '')
     pandatv_cookie = read_config_value(config, 'Cookie', 'pandatv_cookie', '')
@@ -1654,8 +1657,6 @@ while True:
                 ]
                 overseas_platform_host = [
                     'www.tiktok.com',
-                    'play.afreecatv.com',
-                    'm.afreecatv.com',
                     'play.sooplive.co.kr',
                     'm.sooplive.co.kr',
                     'www.pandalive.co.kr',

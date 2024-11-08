@@ -1,0 +1,81 @@
+# DouyinLiveRecorder.
+# Copyright (C) 2024 Hmily
+# This file is distributed under the same license as the DouyinLiveRecorder package.
+#
+#, fuzzy
+
+msgid ""
+msgstr ""
+"Project-Id-Version: 4.0.1\n"
+"POT-Creation-Date: 2024-10-20 00:00+0800\n"
+"PO-Revision-Date: 2024-11-08 19:10+0800\n"
+"Last-Translator: Hmily <EMAIL@ADDRESS>\n"
+"Language-Team: Chinese\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Language: zh_CN\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+#: douyinliverecorder/spider.py
+msgid "IP banned. Please change device or network."
+msgstr "IP被禁止 请更换设备或网络"
+
+msgid "The anchor did not start broadcasting."
+msgstr "主播并未开播"
+
+msgid "sooplive platform login successful! Starting to fetch live streaming data..."
+msgstr "sooplive平台登录成功！开始获取直播数据..."
+
+msgid "sooplive live stream failed to retrieve, the live stream just ended."
+msgstr "sooplive直播获取失败,该直播间刚结束直播"
+
+msgid "sooplive live stream retrieval failed, the live needs 19+, you are not logged in."
+msgstr "soop直播获取失败，该直播间需要年龄19+观看，您尚未登录"
+
+msgid "Attempting to log in to the sooplive live streaming platform with your account and password, please ensure it is configured."
+msgstr "正在尝试使用您的账号和密码登录soop直播平台，请确保已在config配置文件中配置"
+
+msgid "error message：Please check if the input sooplive live room address is correct."
+msgstr "错误信息：请检查输入的sooplive直播间地址是否正确"
+
+msgid "Please check if the FlexTV account and password in the configuration file are correct."
+msgstr "请检查配置文件中的FlexTV账号和密码是否正确"
+
+msgid "FlexTV live stream retrieval failed [not logged in]: 19+ live streams are only available for logged-in adults."
+msgstr "FlexTV直播获取失败[未登录]: 19+直播需要登录后是成人才可观看"
+
+msgid "Attempting to log in to the FlexTV live streaming platform, please ensure your account and password are correctly filled in the configuration file."
+msgstr "正在尝试登录FlexTV直播平台，请确保已在配置文件中填写好您的账号和密码"
+
+msgid "Logging into FlexTV platform..."
+msgstr "FlexTV平台登录中..."
+
+msgid "Logged into FlexTV platform successfully! Starting to fetch live streaming data..."
+msgstr "FlexTV平台登录成功！开始获取直播数据..."
+
+msgid "Look live currently only supports audio live streaming, not video live streaming!"
+msgstr "Look直播暂时只支持音频直播，不支持Look视频直播!"
+
+msgid "Failed to retrieve popkontv live stream [token does not exist or has expired]: Please log in to watch."
+msgstr "popkontv直播获取失败[token不存在或者已过期]: 请登录后观看"
+
+msgid "Attempting to log in to the popkontv live streaming platform, please ensure your account and password are correctly filled in the configuration file."
+msgstr "正在尝试登录popkontv直播平台，请确保已在配置文件中填写好您的账号和密码"
+
+msgid "Logging into popkontv platform..."
+msgstr "popkontv平台登录中..."
+
+msgid "Logged into popkontv platform successfully! Starting to fetch live streaming data..."
+msgstr "popkontv平台登录成功！开始获取直播数据..."
+
+msgid "Attempting to log in to TwitCasting..."
+msgstr "TwitCasting正在尝试登录..."
+
+msgid "TwitCasting login successful! Starting to fetch data..."
+msgstr "TwitCasting 登录成功！开始获取数据..."
+
+msgid "Failed to retrieve TwitCasting data, attempting to log in..."
+msgstr "获取TwitCasting数据失败，正在尝试登录..."
+
+msgid "Failed to retrieve live room data, the Huajiao live room address is not fixed, please manually change the address for recording."
+msgstr "获取直播间数据失败，花椒直播间地址是非固定的，请手动更换地址进行录制"

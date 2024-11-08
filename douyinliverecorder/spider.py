@@ -227,7 +227,10 @@ def get_douyin_app_stream_data(url: str, proxy_addr: OptionalStr = None, cookies
 
         if room_data['status'] == 2:
             if 'stream_url' not in room_data:
-                raise RuntimeError('该直播类型或玩法电脑端暂未支持，请使用app端分享链接进行录制')
+                raise RuntimeError(
+                    "The live streaming type or gameplay is not supported on the computer side yet, please use the "
+                    "app to share the link for recording."
+                )
             live_core_sdk_data = room_data['stream_url']['live_core_sdk_data']
             pull_datas = room_data['stream_url']['pull_datas']
             if live_core_sdk_data:
@@ -246,7 +249,7 @@ def get_douyin_app_stream_data(url: str, proxy_addr: OptionalStr = None, cookies
                     room_data['stream_url']['hls_pull_url_map'] = {**origin_m3u8, **hls_pull_url_map}
                     room_data['stream_url']['flv_pull_url'] = {**origin_flv, **flv_pull_url}
     except Exception as e:
-        print(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
+        print(f"Error message: {e} Error line: {e.__traceback__.tb_lineno}")
         room_data = {'anchor_name': ""}
     return room_data
 
@@ -302,7 +305,7 @@ def get_douyin_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: Op
         return json_data
 
     except Exception as e:
-        print(f'第一次获取数据失败：{url} 准备切换解析方法{e}')
+        print(f"First data retrieval failed: {url} Preparing to switch parsing methods due to {e}")
         return get_douyin_app_stream_data(url=url, proxy_addr=proxy_addr, cookies=cookies)
 
 
@@ -317,17 +320,19 @@ def get_tiktok_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: Op
     for i in range(3):
         html_str = get_req(url=url, proxy_addr=proxy_addr, headers=headers, abroad=True)
         time.sleep(1)
-        if 'We regret to inform you that we have discontinued operating TikTok' in html_str:
+        if "We regret to inform you that we have discontinued operating TikTok" in html_str:
             msg = re.search('<p>\n\\s+(We regret to inform you that we have discontinu.*?)\\.\n\\s+</p>', html_str)
             raise ConnectionError(
-                f'你的代理节点地区网络被禁止访问TikTok，请切换其他地区的节点访问 {msg.group(1) if msg else ""}')
+                f"Your proxy node's regional network is blocked from accessing TikTok; please switch to a node in "
+                f"another region to access. {msg.group(1) if msg else ''}"
+            )
         if 'UNEXPECTED_EOF_WHILE_READING' not in html_str:
             try:
                 json_str = re.findall(
                     '<script id="SIGI_STATE" type="application/json">(.*?)</script>',
                     html_str, re.DOTALL)[0]
             except Exception:
-                raise ConnectionError("请检查你的网络是否可以正常访问TikTok网站")
+                raise ConnectionError("Please check if your network can access the TikTok website normally")
             json_data = json.loads(json_str)
             return json_data
 
@@ -358,7 +363,7 @@ def get_kuaishou_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: 
 
     if 'errorType' in play_list or 'liveStream' not in play_list:
         error_msg = play_list['errorType']['title'] + play_list['errorType']['content']
-        print(f'失败地址：{url} 错误信息: {error_msg}')
+        print(f"Failed URL: {url} Error message: {error_msg}")
         return result
 
     if not play_list.get('liveStream'):
@@ -414,7 +419,7 @@ def get_kuaishou_stream_data2(url: str, proxy_addr: OptionalStr = None, cookies:
         if result['anchor_name']:
             return result
     except Exception as e:
-        print(f'{e},失败地址：{url} 准备切换为备用方案重新解析 ')
+        print(f"{e}, Failed URL: {url}, preparing to switch to a backup plan for re-parsing.")
     return get_kuaishou_stream_data(url, cookies=cookies, proxy_addr=proxy_addr)
 
 
@@ -454,7 +459,7 @@ def get_huya_app_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: O
         if room_id:
             room_id = room_id.group(1)
         else:
-            raise Exception('请使用 “https://www.huya.com/+数字房间号” 进行录制')
+            raise Exception('Please use "https://www.huya.com/+room_number" for recording')
 
     params = {
         'm': 'Live',
@@ -552,8 +557,7 @@ def get_douyu_info_data(url: str, proxy_addr: OptionalStr = None, cookies: Optio
         json_data = json.loads(json_str)
         rid = json_data['pageProps']['room']['roomInfo']['roomInfo']['rid']
 
-    headers[
-        'User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0'
+    headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0'
     url2 = f'https://www.douyu.com/betard/{rid}'
     json_str = get_req(url=url2, proxy_addr=proxy_addr, headers=headers)
     json_data = json.loads(json_str)
@@ -734,7 +738,7 @@ def get_bilibili_stream_data(url: str, qn: str = '10000', platform: str = 'web',
         json_str = get_req(api, proxy_addr=proxy_addr, headers=headers)
         json_data = json.loads(json_str)
         if json_data['data']['live_status'] == 0:
-            print('主播未开播')
+            print("The anchor did not start broadcasting.")
             return
         playurl_info = json_data['data']['playurl_info']
         format_list = playurl_info['playurl']['stream'][0]['format']
@@ -810,7 +814,7 @@ def get_xhs_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: Option
             else:
                 result['is_live'] = False
         else:
-            print(f"小红书 {json_data['msg']}")
+            print(f"xhs {json_data['msg']}")
     return result
 
 
@@ -892,9 +896,10 @@ def get_blued_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: Opti
 
 
 @trace_error_decorator
-def login_afreecatv(username: str, password: str, proxy_addr: OptionalStr = None) -> OptionalStr:
+def login_sooplive(username: str, password: str, proxy_addr: OptionalStr = None) -> OptionalStr:
     if len(username) < 6 or len(password) < 10:
-        raise RuntimeError('SOOP[AfreecaTV]登录失败！请在config.ini配置文件中填写正确的SOOP[AfreecaTV]平台的账号和密码')
+        raise RuntimeError("sooplive login failed! Please enter the correct account and password for the sooplive "
+                           "platform in the config.ini file.")
 
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0',
@@ -936,11 +941,13 @@ def login_afreecatv(username: str, password: str, proxy_addr: OptionalStr = None
         cookie = dict_to_cookie_str(cookie_dict)
         return cookie
     except Exception:
-        raise Exception('SOOP[AfreecaTV]登录失败,请检查配置文件中的账号密码是否正确')
+        raise Exception(
+            "sooplive login failed, please check if the account password in the configuration file is correct."
+        )
 
 
 @trace_error_decorator
-def get_afreecatv_cdn_url(broad_no: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+def get_sooplive_cdn_url(broad_no: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
@@ -967,7 +974,7 @@ def get_afreecatv_cdn_url(broad_no: str, proxy_addr: OptionalStr = None, cookies
 
 
 @trace_error_decorator
-def get_afreecatv_tk(url: str, rtype: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> str | tuple:
+def get_sooplive_tk(url: str, rtype: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> str | tuple:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0',
         'Origin': 'https://play.sooplive.co.kr',
@@ -1010,7 +1017,7 @@ def get_afreecatv_tk(url: str, rtype: str, proxy_addr: OptionalStr = None, cooki
 
 
 @trace_error_decorator
-def get_afreecatv_stream_data(
+def get_sooplive_stream_data(
         url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None,
         username: OptionalStr = None, password: OptionalStr = None
 ) -> dict:
@@ -1066,15 +1073,15 @@ def get_afreecatv_stream_data(
 
     if not anchor_name:
         def handle_login() -> OptionalStr:
-            cookie = login_afreecatv(username, password, proxy_addr=proxy_addr)
+            cookie = login_sooplive(username, password, proxy_addr=proxy_addr)
             if 'AuthTicket=' in cookie:
-                print('SOOP[AfreecaTV]平台登录成功！开始获取直播数据...')
+                print("sooplive platform login successful! Starting to fetch live streaming data...")
                 return cookie
 
         def fetch_data(cookie) -> dict:
-            aid_token = get_afreecatv_tk(url, rtype='aid', proxy_addr=proxy_addr, cookies=cookie)
-            _anchor_name, _broad_no = get_afreecatv_tk(url, rtype='info', proxy_addr=proxy_addr, cookies=cookie)
-            _view_url = get_afreecatv_cdn_url(_broad_no, proxy_addr=proxy_addr)['view_url']
+            aid_token = get_sooplive_tk(url, rtype='aid', proxy_addr=proxy_addr, cookies=cookie)
+            _anchor_name, _broad_no = get_sooplive_tk(url, rtype='info', proxy_addr=proxy_addr, cookies=cookie)
+            _view_url = get_sooplive_cdn_url(_broad_no, proxy_addr=proxy_addr)['view_url']
             _m3u8_url = _view_url + '?aid=' + aid_token
             result['anchor_name'] = _anchor_name
             result['m3u8_url'] = _m3u8_url
@@ -1084,30 +1091,31 @@ def get_afreecatv_stream_data(
             return result
 
         if json_data['data']['code'] == -3001:
-            print("SOOP[AfreecaTV]直播获取失败[直播刚结束]:", json_data['data']['message'])
+            print("sooplive live stream failed to retrieve, the live stream just ended.")
             return result
 
         elif json_data['data']['code'] == -3002:
-            print("SOOP[AfreecaTV]直播获取失败[未登录]: 19+", json_data['data']['message'])
-            print("正在尝试使用您的账号和密码登录SOOP[AfreecaTV]直播平台，请确保已配置")
+            print("sooplive live stream retrieval failed, the live needs 19+, you are not logged in.")
+            print("Attempting to log in to the sooplive live streaming platform with your account and password, "
+                  "please ensure it is configured.")
             new_cookie = handle_login()
             if new_cookie and len(new_cookie) > 0:
                 return fetch_data(new_cookie)
-            raise RuntimeError('SOOP[AfreecaTV]登录失败，请检查账号和密码是否正确')
+            raise RuntimeError("sooplive login failed, please check if the account and password are correct")
 
         elif json_data['data']['code'] == -3004:
-            # print("AfreecaTV直播获取失败[未认证]:", json_data['data']['message'])
             if cookies and len(cookies) > 0:
                 return fetch_data(cookies)
             else:
-                raise RuntimeError('SOOP[AfreecaTV]登录失败，请检查账号和密码是否正确')
+                raise RuntimeError("sooplive login failed, please check if the account and password are correct")
         elif json_data['data']['code'] == -6001:
-            print(f"错误信息：{json_data['data']['message']}请检查输入的SOOP[AfreecaTV]直播间地址是否正确")
+            print(f"error message：Please check if the input sooplive live room address "
+                  f"is correct.")
             return result
     if json_data['result'] == 1 and anchor_name:
         broad_no = json_data['data']['broad_no']
         hls_authentication_key = json_data['data']['hls_authentication_key']
-        view_url = get_afreecatv_cdn_url(broad_no, proxy_addr=proxy_addr)['view_url']
+        view_url = get_sooplive_cdn_url(broad_no, proxy_addr=proxy_addr)['view_url']
         m3u8_url = view_url + '?aid=' + hls_authentication_key
         result['m3u8_url'] = m3u8_url
         result['is_live'] = True
@@ -1215,7 +1223,8 @@ def get_pandatv_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: O
         json_data = json.loads(json_str)
         if 'errorData' in json_data:
             if json_data['errorData']['code'] == 'needAdult':
-                raise RuntimeError(f'{url} 直播间需要登录后成人才可观看，请你在配置文件中正确填写登录后的cookie')
+                raise RuntimeError(f"{url} The live room requires login and is only accessible to adults. Please "
+                                   f"correctly fill in the login cookie in the configuration file.")
             else:
                 raise RuntimeError(json_data['errorData']['code'], json_data['message'])
         play_url = json_data['PlayList']['hls'][0]['url']
@@ -1319,11 +1328,12 @@ def get_winktv_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: Op
         play_api = 'https://api.winktv.co.kr/v1/live/play'
         json_str = get_req(url=play_api, proxy_addr=proxy_addr, headers=headers, data=data, abroad=True)
         if '403: Forbidden' in json_str:
-            raise ConnectionError(f'您的网络已被禁止访问WinkTV({json_str})')
+            raise ConnectionError(f"Your network has been banned from accessing WinkTV ({json_str})")
         json_data = json.loads(json_str)
         if 'errorData' in json_data:
             if json_data['errorData']['code'] == 'needAdult':
-                raise RuntimeError(f'{url} 直播间需要登录后成人才可观看，请你在配置文件中正确填写登录后的cookie')
+                raise RuntimeError(f"{url} The live stream is only accessible to logged-in adults. Please ensure that "
+                                   f"the cookie is correctly filled in the configuration file after logging in.")
             else:
                 raise RuntimeError(json_data['errorData']['code'], json_data['message'])
         m3u8_url = json_data['PlayList']['hls'][0]['url']
@@ -1376,9 +1386,9 @@ def login_flextv(username: str, password: str, proxy_addr: OptionalStr = None) -
         if "error" not in json_data:
             cookie = dict_to_cookie_str(cookie_dict)
             return cookie
-        print('请检查配置文件中的FlexTV账号和密码是否正确')
+        print("Please check if the FlexTV account and password in the configuration file are correct.")
     except Exception as e:
-        print('FlexTV登录请求异常', e)
+        print("FlexTV login request exception", e)
 
 
 def get_flextv_stream_url(
@@ -1398,23 +1408,27 @@ def get_flextv_stream_url(
         play_api = f'https://api.flextv.co.kr/api/channels/{user_id}/stream?option=all'
         json_str = get_req(play_api, proxy_addr=proxy_addr, headers=headers, abroad=True)
         if 'HTTP Error 400: Bad Request' in json_str:
-            raise ConnectionError('获取FlexTV直播数据失败，请切换代理重试')
+            raise ConnectionError(
+                "Failed to retrieve FlexTV live streaming data, please switch to a different proxy and try again."
+            )
         return json.loads(json_str)
 
     new_cookie = None
     json_data = fetch_data(cookies)
     if "message" in json_data and json_data["message"] == "로그인후 이용이 가능합니다.":
-        print("FlexTV直播获取失败[未登录]: 19+直播需要登录后是成人才可观看")
-        print("正在尝试登录FlexTV直播平台，请确保已在配置文件中填写好您的账号和密码")
+        print("FlexTV live stream retrieval failed [not logged in]: 19+ live streams are only available for logged-in "
+              "adults.")
+        print("Attempting to log in to the FlexTV live streaming platform, please ensure your account and "
+              "password are correctly filled in the configuration file.")
         if len(username) < 6 or len(password) < 8:
-            raise RuntimeError('FlexTV登录失败！请在config.ini配置文件中填写正确的FlexTV平台的账号和密码')
-        print('FlexTV平台登录中...')
+            raise RuntimeError("FlexTV登录失败！请在config.ini配置文件中填写正确的FlexTV平台的账号和密码")
+        print("Logging into FlexTV platform...")
         new_cookie = login_flextv(username, password, proxy_addr=proxy_addr)
         if new_cookie:
-            print('FlexTV平台登录成功！开始获取直播数据...')
+            print("Logged into FlexTV platform successfully! Starting to fetch live streaming data...")
             json_data = fetch_data(new_cookie)
         else:
-            raise RuntimeError('FlexTV登录失败')
+            raise RuntimeError("FlexTV login failed")
 
     if 'sources' in json_data and len(json_data['sources']) > 0:
         play_url = json_data['sources'][0]['url']
@@ -1456,7 +1470,7 @@ def get_flextv_stream_data(
                 result['play_url_list'] = get_play_url_list(m3u8=play_url, proxy=proxy_addr, header=headers,
                                                             abroad=True)
     except Exception as e:
-        print('FlexTV直播间数据获取失败', e)
+        print("Failed to retrieve data from FlexTV live room", e)
     result['new_cookies'] = new_cookies
     return result
 
@@ -1536,7 +1550,7 @@ def get_looklive_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: O
     if live_status == 1:
         result["is_live"] = True
         if json_data['data']['roomInfo']['liveType'] == 1:
-            print('Look直播暂时只支持音频直播，不支持Look视频直播!')
+            print("Look live currently only supports audio live streaming, not video live streaming!")
         else:
             play_url_list = json_data['data']['roomInfo']['liveUrl']
             live_title = json_data['data']['roomInfo']['title']
@@ -1586,13 +1600,13 @@ def login_popkontv(
 
     login_status_code = json_data["statusCd"]
     if login_status_code == 'E4010':
-        raise Exception('popkontv登录失败，请重新配置正确的登录账号或者密码！')
+        raise Exception("popkontv login failed, please reconfigure the correct login account or password!")
     elif json_data["statusCd"] == 'S2000':
         token = json_data['data']["token"]
         partner_code = json_data['data']["partnerCode"]
         return token, partner_code
     else:
-        raise Exception(f'popkontv登录失败，{json_data["statusMsg"]}')
+        raise Exception(f"popkontv login failed, {json_data['statusMsg']}")
 
 
 @trace_error_decorator
@@ -1690,7 +1704,8 @@ def get_popkontv_stream_url(
         result["is_live"] = True
         room_password = get_params(url, "pwd")
         if int(is_private) != 0 and not room_password:
-            raise RuntimeError(f"直播间数据获取失败，因为{anchor_name}直播间为私密房间，请配置房间密码后重试")
+            raise RuntimeError(f"Failed to retrieve live room data because {anchor_name}'s room is a private room. "
+                               f"Please configure the room password and try again.")
 
         def fetch_data(header: dict = None, code: str = None) -> str:
             data = {
@@ -1713,27 +1728,31 @@ def get_popkontv_stream_url(
         json_str = fetch_data(headers, partner_code)
 
         if 'HTTP Error 400' in json_str or 'statusCd":"E5000' in json_str:
-            print("popkontv直播获取失败[token不存在或者已过期]: 请登录后观看")
-            print("正在尝试登录popkontv直播平台，请确保已在配置文件中填写好您的账号和密码")
+            print("Failed to retrieve popkontv live stream [token does not exist or has expired]: Please log in to "
+                  "watch.")
+            print("Attempting to log in to the popkontv live streaming platform, please ensure your account "
+                  "and password are correctly filled in the configuration file.")
             if len(username) < 4 or len(password) < 10:
-                raise RuntimeError('popkontv登录失败！请在config.ini配置文件中填写正确的popkontv平台的账号和密码')
-            print('popkontv平台登录中...')
+                raise RuntimeError("popkontv login failed! Please enter the correct account and password for the "
+                                   "popkontv platform in the config.ini file.")
+            print("Logging into popkontv platform...")
             new_access_token, new_partner_code = login_popkontv(
                 username=username, password=password, proxy_addr=proxy_addr, code=partner_code
             )
             if new_access_token and len(new_access_token) == 640:
-                print('popkontv平台登录成功！开始获取直播数据...')
+                print("Logged into popkontv platform successfully! Starting to fetch live streaming data...")
                 headers['Authorization'] = f'Bearer {new_access_token}'
                 new_token = f'Bearer {new_access_token}'
                 json_str = fetch_data(headers, new_partner_code)
             else:
-                raise RuntimeError('popkontv登录失败，请检查账号和密码是否正确')
+                raise RuntimeError("popkontv login failed, please check if the account and password are correct")
         json_data = json.loads(json_str)
         status_msg = json_data["statusMsg"]
         if json_data['statusCd'] == "L000A":
-            print('获取直播源失败,', status_msg)
-            raise RuntimeError(
-                '你是未认证会员。登录popkontv官方网站后，在“我的页面”>“修改我的信息”底部进行手机认证后可用')
+            print("Failed to retrieve live stream source,", status_msg)
+            raise RuntimeError("You are an unverified member. After logging into the popkontv official website, "
+                               "please verify your mobile phone at the bottom of the 'My Page' > 'Edit My "
+                               "Information' to use the service.")
         elif json_data['statusCd'] == "L0001":
             cast_start_date_code = int(cast_start_date_code) - 1
             json_str = fetch_data(headers, partner_code)
@@ -1746,7 +1765,7 @@ def get_popkontv_stream_url(
             result["m3u8_url"] = m3u8_url
             result["record_url"] = m3u8_url
         else:
-            raise RuntimeError('获取直播源失败,', status_msg)
+            raise RuntimeError("Failed to retrieve live stream source,", status_msg)
     result['new_token'] = new_token
     return result
 
@@ -1805,7 +1824,7 @@ def login_twitcasting(
             cookie = dict_to_cookie_str(cookie_dict)
             return cookie
     except Exception as e:
-        print('TwitCasting登录出错,', e)
+        print("TwitCasting login error,", e)
 
 
 @trace_error_decorator
@@ -1842,21 +1861,23 @@ def get_twitcasting_stream_url(
     try:
         to_login = get_params(url, "login")
         if to_login == 'true':
-            print('TwitCasting正在尝试登录...')
+            print("Attempting to log in to TwitCasting...")
             new_cookie = login_twitcasting(account_type=account_type, username=username, password=password,
                                            proxy_addr=proxy_addr, cookies=cookies)
             if not new_cookie:
-                raise RuntimeError('TwitCasting登录失败,请检查配置文件中的账号密码是否正确')
-            print('TwitCasting 登录成功！开始获取数据...')
+                raise RuntimeError("TwitCasting login failed, please check if the account password in the "
+                                   "configuration file is correct")
+            print("TwitCasting login successful! Starting to fetch data...")
             headers['Cookie'] = new_cookie
         anchor_name, live_status, live_title = get_data(headers)
     except AttributeError:
-        print('获取TwitCasting数据失败，正在尝试登录...')
+        print("Failed to retrieve TwitCasting data, attempting to log in...")
         new_cookie = login_twitcasting(account_type=account_type, username=username, password=password,
                                        proxy_addr=proxy_addr, cookies=cookies)
         if not new_cookie:
-            raise RuntimeError('TwitCasting登录失败,请检查配置文件中的账号密码是否正确')
-        print('TwitCasting 登录成功！开始获取数据...')
+            raise RuntimeError("TwitCasting login failed, please check if the account and password in the "
+                               "configuration file are correct")
+        print("TwitCasting login successful! Starting to fetch data...")
         headers['Cookie'] = new_cookie
         anchor_name, live_status, live_title = get_data(headers)
 
@@ -2014,7 +2035,9 @@ def get_kugou_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: Opti
         "is_live": False,
     }
     if not anchor_name:
-        raise RuntimeError('不支持音乐频道直播间录制，请切换直播间录制')
+        raise RuntimeError(
+            "Music channel live rooms are not supported for recording, please switch to a different live room."
+        )
     live_status = json_data['data']['liveType']
     if live_status != -1:
         params = {
@@ -2214,7 +2237,8 @@ def get_huajiao_sn(url: str, cookies: OptionalStr = None, proxy_addr: OptionalSt
         return nickname, sn, uid, live_id
     except Exception:
         replace_url(f'{script_path}/config/URL_config.ini', old=url, new='#' + url)
-        raise RuntimeError('获取直播间数据失败，花椒直播间地址非固定，请使用主播主页地址进行录制')
+        raise RuntimeError("Failed to retrieve live room data, the Huajiao live room address is not fixed, please use "
+                           "the anchor's homepage address for recording.")
 
 
 def get_huajiao_user_info(url: str, cookies: OptionalStr = None, proxy_addr: OptionalStr = None) -> tuple:
@@ -2269,7 +2293,8 @@ def get_huajiao_stream_url_app(url: str, proxy_addr: OptionalStr = None) -> dict
 
     result = {"anchor_name": "", "is_live": False}
     if not json_data.get('data'):
-        print('获取直播间数据失败，花椒直播间地址是非固定的，请手动更换地址进行录制')
+        print("Failed to retrieve live room data, the Huajiao live room address is not fixed, please manually change "
+              "the address for recording.")
         return result
     result["is_live"] = True
     result['anchor_name'] = json_data['data']['feed']['title']

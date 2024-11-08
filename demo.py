@@ -3,6 +3,7 @@ from douyinliverecorder.logger import logger
 from douyinliverecorder import spider
 
 # 以下示例直播间链接不保证时效性，请自行查看链接是否能正常访问
+# Please note that the following example live room links may not be up-to-date;
 LIVE_STREAM_CONFIG = {
     "douyin": {
         "url": "https://live.douyin.com/745964462470",
@@ -33,7 +34,7 @@ LIVE_STREAM_CONFIG = {
         "func": spider.get_bilibili_stream_data,
     },
     "xhs": {
-        "url": "http://xhslink.com/O9f9fM",
+        "url": "https://www.xiaohongshu.com/user/profile/6330049c000000002303c7ed?appuid=5f3f478a00000000010005b3",
         "func": spider.get_xhs_stream_url,
     },
     "bigo": {
@@ -44,13 +45,9 @@ LIVE_STREAM_CONFIG = {
         "url": "https://app.blued.cn/live?id=Mp6G2R",
         "func": spider.get_blued_stream_url,
     },
-    "afreecatv": {
-        "url": "https://play.afreecatv.com/sw7love",
-        "func": spider.get_afreecatv_stream_data,
-    },
-    "soop": {
+    "sooplive": {
         "url": "https://play.sooplive.co.kr/sw7love",
-        "func": spider.get_afreecatv_stream_data,
+        "func": spider.get_sooplive_stream_data,
     },
     "netease": {
         "url": "https://cc.163.com/583946984",
