@@ -650,7 +650,7 @@ def get_bilibili_room_info_h5(url: str, proxy_addr: OptionalStr = None, cookies:
     headers = {
         'origin': 'https://live.bilibili.com',
         'referer': 'https://live.bilibili.com/',
-        'user-agent': 'ios/7.830 (ios 17.0; ; iPhone 15 (A2846/A3089/A3090/A3092))',
+        'user-agent': 'Mozilla/5.0 (Linux; Android 8.0.0; SM-G955U Build/R16NW) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36 Edg/121.0.0.0',
     }
     if cookies:
         headers['Cookie'] = cookies
