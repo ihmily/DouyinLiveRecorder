@@ -4,11 +4,11 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-11-09 03:05:00
+Update: 2024-11-14 00:45:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
-import json
+
 import os
 import sys
 import builtins
@@ -285,10 +285,10 @@ def push_message(record_name: str, live_url: str, content: str) -> None:
                 print(f"直播消息推送到{platform}失败: {e}")
 
 
-def run_bash(command: list) -> None:
+def run_script(command: str) -> None:
     try:
         process = subprocess.Popen(
-            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=get_startup_info(os_type)
+            command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=get_startup_info(os_type)
         )
         stdout, stderr = process.communicate()
         stdout_decoded = stdout.decode('utf-8')
@@ -299,7 +299,7 @@ def run_bash(command: list) -> None:
             print(stderr_decoded)
     except PermissionError as e:
         logger.error(e)
-        logger.error(f'bash脚本无执行权限!, 请先执行:chmod +x your_script.sh 授予可执行权限')
+        logger.error(f'脚本无执行权限!, 若是Linux环境, 请先执行:chmod +x your_script.sh 授予脚本可执行权限')
     except OSError as e:
         logger.error(e)
         logger.error('Please add `#!/bin/bash` at the beginning of your bash script file.')
@@ -315,7 +315,7 @@ def clear_record_info(record_name: str, record_url: str) -> None:
 
 
 def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, save_type: str,
-                     bash_file_path: str | None = None) -> bool:
+                     script_command: str | None = None) -> bool:
     save_file_path = ffmpeg_command[-1]
     process = subprocess.Popen(
         ffmpeg_command, stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type)
@@ -353,13 +353,27 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
                 threading.Thread(target=converts_mp4, args=(save_file_path, delete_origin_file)).start()
         print(f"\n{record_name} {stop_time} 直播录制完成\n")
 
-        if bash_file_path:
-            if os_type != 'nt':
-                logger.debug("开始执行bash脚本!")
-                bash_command = [bash_file_path, record_name.split(' ', maxsplit=1)[-1], save_file_path, save_type,
-                                f'split_video_by_time:{split_video_by_time}', f'ts_to_mp4:{ts_to_mp4}']
-                run_bash(bash_command)
-                logger.debug("bash脚本执行结束!")
+        if script_command:
+            logger.debug("开始执行脚本命令!")
+            if "python" in script_command:
+                params = [
+                    f'--record_name "{record_name}"',
+                    f'--save_file_path "{save_file_path}"',
+                    f'--save_type {save_type}'
+                    f'--split_video_by_time {split_video_by_time}',
+                    f'--ts_to_mp4 {ts_to_mp4}',
+                ]
+            else:
+                params = [
+                    f'"{record_name.split(" ", maxsplit=1)[-1]}"',
+                    f'"{save_file_path}"',
+                    save_type,
+                    f'split_video_by_time:{split_video_by_time}',
+                    f'ts_to_mp4:{ts_to_mp4}'
+                ]
+            script_command = script_command.strip() + ' ' + ' '.join(params)
+            run_script(script_command)
+            logger.debug("脚本命令执行结束!")
 
     else:
         print(f"\n{record_name} {stop_time} 直播录制出错,返回码: {return_code}\n")
@@ -1051,7 +1065,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                             record_url,
                                             ffmpeg_command,
                                             video_save_type,
-                                            bash_path
+                                            custom_script
                                         )
                                         if comment_end:
                                             return
@@ -1098,7 +1112,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                             record_url,
                                             ffmpeg_command,
                                             video_save_type,
-                                            bash_path
+                                            custom_script
                                         )
                                         if comment_end:
                                             return
@@ -1168,7 +1182,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                             record_url,
                                             ffmpeg_command,
                                             video_save_type,
-                                            bash_path
+                                            custom_script
                                         )
                                         if comment_end:
                                             return
@@ -1204,7 +1218,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                                 record_url,
                                                 ffmpeg_command,
                                                 video_save_type,
-                                                bash_path
+                                                custom_script
                                             )
                                             if comment_end:
                                                 if ts_to_mp4:
@@ -1245,7 +1259,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                                 record_url,
                                                 ffmpeg_command,
                                                 video_save_type,
-                                                bash_path
+                                                custom_script
                                             )
                                             if comment_end:
                                                 return
@@ -1416,6 +1430,7 @@ language = read_config_value(config, '录制设置', 'language(zh_cn/en)', "zh_c
 skip_proxy_check = options.get(read_config_value(config, '录制设置', '是否跳过代理检测(是/否)', "否"), False)
 if language and 'en' not in language.lower():
     from i18n import translated_print
+
     builtins.print = translated_print
 
 try:
@@ -1472,14 +1487,13 @@ while True:
     enable_https_recording = options.get(read_config_value(config, '录制设置', '强制启用HTTPS录制', "否"), False)
     disk_space_limit = float(read_config_value(config, '录制设置', '录制空间剩余阈值(gb)', 1.0))
     split_time = str(read_config_value(config, '录制设置', '视频分段时间(秒)', 1800))
-    ts_to_mp4 = options.get(read_config_value(config, '录制设置', 'ts录制完成后自动转为mp4格式', "否"),
-                            False)
+    ts_to_mp4 = options.get(read_config_value(config, '录制设置', 'ts录制完成后自动转为mp4格式', "否"),False)
     delete_origin_file = options.get(read_config_value(config, '录制设置', '追加格式后删除原文件', "否"), False)
     create_time_file = options.get(read_config_value(config, '录制设置', '生成时间字幕文件', "否"), False)
-    is_run_bash = options.get(read_config_value(config, '录制设置', '是否录制完成后执行bash脚本', "否"), False)
-    bash_path = read_config_value(config, '录制设置', 'bash脚本路径', "") if is_run_bash else None
+    is_run_script = options.get(read_config_value(config, '录制设置', '是否录制完成后执行自定义脚本', "否"), False)
+    custom_script = read_config_value(config, '录制设置', '自定义脚本执行命令', "") if is_run_script else None
     enable_proxy_platform = read_config_value(
-        config, '录制设置', '使用代理录制的平台(逗号分隔)',
+        config, '录制设置', '使用代理录制的平台(逗号分隔)', 
         'tiktok, soop, pandalive, winktv, flextv, popkontv, twitch, liveme, showroom, chzzk')
     enable_proxy_platform_list = enable_proxy_platform.replace('，', ',').split(',') if enable_proxy_platform else None
     extra_enable_proxy = read_config_value(config, '录制设置', '额外使用代理录制的平台(逗号分隔)', '')
@@ -1576,6 +1590,7 @@ while True:
             logger.warning(f"Disk space remaining is below {disk_space_limit} GB. "
                            f"Exiting program due to the disk space limit being reached.")
             sys.exit(-1)
+
 
     def contains_url(string: str) -> bool:
         pattern = r"(https?://)?(www\.)?[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)+(:\d+)?(/.*)?"
