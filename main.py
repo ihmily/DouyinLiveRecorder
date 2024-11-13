@@ -8,7 +8,7 @@ Update: 2024-11-09 03:05:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
-
+import json
 import os
 import sys
 import builtins
@@ -286,14 +286,23 @@ def push_message(record_name: str, live_url: str, content: str) -> None:
 
 
 def run_bash(command: list) -> None:
-    process = subprocess.Popen(
-        command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=get_startup_info(os_type)
-    )
-    stdout, stderr = process.communicate()
-    stdout_decoded = stdout.decode('utf-8')
-    stderr_decoded = stderr.decode('utf-8')
-    print(stdout_decoded)
-    print(stderr_decoded)
+    try:
+        process = subprocess.Popen(
+            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=get_startup_info(os_type)
+        )
+        stdout, stderr = process.communicate()
+        stdout_decoded = stdout.decode('utf-8')
+        stderr_decoded = stderr.decode('utf-8')
+        if stdout_decoded.strip():
+            print(stdout_decoded)
+        if stderr_decoded.strip():
+            print(stderr_decoded)
+    except PermissionError as e:
+        logger.error(e)
+        logger.error(f'bash脚本无执行权限!, 请先执行:chmod +x your_script.sh 授予可执行权限')
+    except OSError as e:
+        logger.error(e)
+        logger.error('Please add `#!/bin/bash` at the beginning of your bash script file.')
 
 
 def clear_record_info(record_name: str, record_url: str) -> None:
@@ -346,12 +355,11 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
 
         if bash_file_path:
             if os_type != 'nt':
-                print(f'准备执行自定义Bash脚本，请确认脚本是否有执行权限! 路径:{bash_file_path}, 授予权限:chmod +x your_script.sh')
+                logger.debug("开始执行bash脚本!")
                 bash_command = [bash_file_path, record_name.split(' ', maxsplit=1)[-1], save_file_path, save_type,
-                                split_video_by_time, ts_to_mp4]
+                                f'split_video_by_time:{split_video_by_time}', f'ts_to_mp4:{ts_to_mp4}']
                 run_bash(bash_command)
-            else:
-                print('只支持在Linux环境下执行Bash脚本')
+                logger.debug("bash脚本执行结束!")
 
     else:
         print(f"\n{record_name} {stop_time} 直播录制出错,返回码: {return_code}\n")
