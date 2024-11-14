@@ -1599,8 +1599,10 @@ while True:
 
     try:
         url_comments = []
+        line_list = []
+        url_line_list = []
+
         with (open(url_config_file, "r", encoding=text_encoding, errors='ignore') as file):
-            line_list = []
             for origin_line in file:
                 if origin_line in line_list:
                     delete_line(url_config_file, origin_line)
@@ -1637,6 +1639,11 @@ while True:
 
                 if quality not in ("原画", "蓝光", "超清", "高清", "标清", "流畅"):
                     quality = '原画'
+
+                if url not in url_line_list:
+                    url_line_list.append(url)
+                else:
+                    delete_line(url_config_file, origin_line)
 
                 url = 'https://' + url if '://' not in url else url
                 url_host = url.split('/')[2]
