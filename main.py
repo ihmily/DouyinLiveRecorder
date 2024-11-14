@@ -1493,7 +1493,7 @@ while True:
     is_run_script = options.get(read_config_value(config, '录制设置', '是否录制完成后执行自定义脚本', "否"), False)
     custom_script = read_config_value(config, '录制设置', '自定义脚本执行命令', "") if is_run_script else None
     enable_proxy_platform = read_config_value(
-        config, '录制设置', '使用代理录制的平台(逗号分隔)', 
+        config, '录制设置', '使用代理录制的平台(逗号分隔)',
         'tiktok, soop, pandalive, winktv, flextv, popkontv, twitch, liveme, showroom, chzzk')
     enable_proxy_platform_list = enable_proxy_platform.replace('，', ',').split(',') if enable_proxy_platform else None
     extra_enable_proxy = read_config_value(config, '录制设置', '额外使用代理录制的平台(逗号分隔)', '')
@@ -1686,8 +1686,8 @@ while True:
                     "m.6.cn",
                     'www.lehaitv.com',
                     'h.catshow168.com',
-                    'live.shopee.*',
-                    '*.shp.ee',
+                    'live.shopee.',
+                    '.shp.ee',
                 ]
                 overseas_platform_host = [
                     'www.tiktok.com',
@@ -1719,7 +1719,9 @@ while True:
                     'www.lehaitv.com'
                 )
 
-                url_host = '*.shp.ee' if '*.shp.ee' in url_host else 'live.shopee.*'
+                if 'live.shopee.' in url_host or '.shp.ee' in url_host:
+                    url_host = 'live.shopee.' if 'live.shopee.' in url_host else '.shp.ee'
+
                 if url_host in platform_host or any(ext in url for ext in (".flv", ".m3u8")):
                     if url_host in clean_url_host_list:
                         url = update_file(url_config_file, old_str=url, new_str=url.split('?')[0])
@@ -1738,7 +1740,7 @@ while True:
                         url_tuples_list.append(new_line)
                 else:
                     if not origin_line.startswith('#'):
-                        print(f"\r{origin_line} 本行包含未知链接.此条跳过")
+                        print(f"\r{origin_line.strip()} 本行包含未知链接.此条跳过")
                         update_file(url_config_file, old_str=origin_line, new_str=origin_line, start_str='#')
 
         while len(need_update_line_list):
