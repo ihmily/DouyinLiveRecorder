@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-11-09 03:20:16
+Update: 2024-11-16 04:07:16
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -111,6 +111,46 @@ def get_req(
         resp_str = str(e)
 
     return resp_str
+
+
+def get_response_status(url: str, proxy_addr: OptionalStr = None, headers: OptionalDict = None, timeout: int = 10,
+                        abroad: bool = False) -> bool:
+    if headers is None:
+        headers = {}
+    if proxy_addr:
+        try:
+            proxies = {
+                'http': proxy_addr,
+                'https': proxy_addr
+            }
+            response = requests.head(url, proxies=proxies, headers=headers, allow_redirects=True, timeout=timeout)
+            if response.status_code == 200:
+                return True
+        except requests.exceptions.Timeout:
+            print("Request timed out, the requested address may be inaccessible or the server is unresponsive.")
+        except requests.exceptions.TooManyRedirects:
+            print("Too many redirects, the requested address may be inaccessible.")
+        except requests.exceptions.RequestException as e:
+            print(f"Request error occurred: {e}")
+
+    else:
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            if abroad:
+                response = urllib.request.urlopen(req, timeout=timeout)
+            else:
+                response = opener.open(req, timeout=timeout)
+            http_code = response.getcode()
+            if http_code == 200:
+                return True
+        except urllib.error.URLError as e:
+            if hasattr(e, 'reason'):
+                print(f"Request failed, reason: {e.reason}")
+            elif hasattr(e, 'code'):
+                print(f"Request failed, HTTP status code: {e.code}")
+        except Exception as e:
+            print(f"Request error occurred: {e}")
+    return False
 
 
 def get_params(url: str, params: str) -> OptionalStr:
@@ -792,6 +832,8 @@ def get_xhs_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: Option
             flv_url = f'http://live-play.xhscdn.com/live/{room_id}.flv'
             result['flv_url'] = flv_url
             result['record_url'] = flv_url
+            if get_response_status(flv_url, proxy_addr=proxy_addr, headers=headers):
+                return result
 
     user_id = re.search('/user/profile/(.*?)(?=/|\\?|$)', url)
     user_id = user_id.group(1) if user_id else get_params(url, 'host_id')
@@ -2941,26 +2983,27 @@ def get_shopee_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: Opt
         headers['Cookie'] = cookies
 
     result = {"anchor_name": "", "is_live": False}
+    is_living = False
 
     if 'live.shopee' not in url and 'uid' not in url:
         url = get_req(url, proxy_addr=proxy_addr, headers=headers, redirect_url=True, abroad=True)
 
     if 'live.shopee' in url:
         host_suffix = url.split('/')[2].rsplit('.', maxsplit=1)[1]
+        is_living = get_params(url, 'uid') is None
     else:
         host_suffix = url.split('/')[2].split('.', maxsplit=1)[0]
 
     uid = get_params(url, 'uid')
     api_host = f'https://live.shopee.{host_suffix}'
     session_id = get_params(url, 'session')
-    is_live = False
     if uid:
         json_str = get_req(f'{api_host}/api/v1/shop_page/live/ongoing?uid={uid}',
                            proxy_addr=proxy_addr, headers=headers, abroad=True)
         json_data = json.loads(json_str)
         if json_data['data']['ongoing_live']:
             session_id = json_data['data']['ongoing_live']['session_id']
-            is_live = True
+            is_living = True
         else:
             json_str = get_req(f'{api_host}/api/v1/shop_page/live/replay_list?offset=0&limit=1&uid={uid}',
                                proxy_addr=proxy_addr, headers=headers, abroad=True)
@@ -2979,7 +3022,7 @@ def get_shopee_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: Opt
     live_status = json_data['data']['session']['status']
     result["anchor_name"] = anchor_name
     result['uid'] = f'uid={uid}&session={session_id}'
-    if live_status == 1 and is_live:
+    if live_status == 1 and is_living:
         result["is_live"] = True
         flv_url = json_data['data']['session']['play_url']
         result['title'] = json_data['data']['session']['title']
