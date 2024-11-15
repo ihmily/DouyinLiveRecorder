@@ -2942,26 +2942,32 @@ def get_shopee_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: Opt
 
     result = {"anchor_name": "", "is_live": False}
 
-    if 'live.shopee' not in url:
+    if 'live.shopee' not in url and 'uid' not in url:
         url = get_req(url, proxy_addr=proxy_addr, headers=headers, redirect_url=True, abroad=True)
 
+    if 'live.shopee' in url:
+        host_suffix = url.split('/')[2].rsplit('.', maxsplit=1)[1]
+    else:
+        host_suffix = url.split('/')[2].split('.', maxsplit=1)[0]
+
     uid = get_params(url, 'uid')
-    host_suffix = url.split('/')[2].rsplit('.', maxsplit=1)[1]
     api_host = f'https://live.shopee.{host_suffix}'
+    session_id = get_params(url, 'session')
+    is_live = False
     if uid:
         json_str = get_req(f'{api_host}/api/v1/shop_page/live/ongoing?uid={uid}',
                            proxy_addr=proxy_addr, headers=headers, abroad=True)
         json_data = json.loads(json_str)
-        if not json_data['data']['ongoing_live']:
+        if json_data['data']['ongoing_live']:
+            session_id = json_data['data']['ongoing_live']['session_id']
+            is_live = True
+        else:
             json_str = get_req(f'{api_host}/api/v1/shop_page/live/replay_list?offset=0&limit=1&uid={uid}',
                                proxy_addr=proxy_addr, headers=headers, abroad=True)
             json_data = json.loads(json_str)
-            result['anchor_name'] = json_data['data']['replay'][0]['nick_name']
-            return result
-        else:
-            session_id = json_data['data']['ongoing_live']['session_id']
-    else:
-        session_id = get_params(url, 'session')
+            if json_data['data']['replay']:
+                result['anchor_name'] = json_data['data']['replay'][0]['nick_name']
+                return result
 
     json_str = get_req(f'{api_host}/api/v1/session/{session_id}', proxy_addr=proxy_addr, headers=headers, abroad=True)
     json_data = json.loads(json_str)
@@ -2973,7 +2979,7 @@ def get_shopee_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: Opt
     live_status = json_data['data']['session']['status']
     result["anchor_name"] = anchor_name
     result['uid'] = f'uid={uid}&session={session_id}'
-    if live_status == 1:
+    if live_status == 1 and is_live:
         result["is_live"] = True
         flv_url = json_data['data']['session']['play_url']
         result['title'] = json_data['data']['session']['title']

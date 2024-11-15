@@ -929,7 +929,8 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                 if enable_https_recording and real_url.startswith("http://"):
                                     real_url = real_url.replace("http://", "https://")
 
-                                if platform == 'shopee':
+                                http_record_list = ['shopee']
+                                if platform in http_record_list:
                                     real_url = real_url.replace("https://", "http://")
 
                                 user_agent = ("Mozilla/5.0 (Linux; Android 11; SAMSUNG SM-G973U) AppleWebKit/537.36 ("
@@ -962,13 +963,14 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                     "-analyzeduration", analyzeduration,
                                     "-probesize", probesize,
                                     "-fflags", "+discardcorrupt",
-                                    "-i", real_url,
+                                    "-re", "-i", real_url,
                                     "-bufsize", bufsize,
                                     "-sn", "-dn",
                                     "-reconnect_delay_max", "60",
                                     "-reconnect_streamed", "-reconnect_at_eof",
                                     "-max_muxing_queue_size", max_muxing_queue_size,
                                     "-correct_ts_overflow", "1",
+                                    "-avoid_negative_ts", "1"
                                 ]
 
                                 record_headers = {
