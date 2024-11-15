@@ -37,8 +37,8 @@ from msg_push import (
 
 version = "v4.0.1"
 platforms = ("\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|"
-             "酷狗|花椒|流星|Acfun|畅聊|映客|音播|知乎|嗨秀|VV星球|17Live|浪Live|漂漂|六间房|乐嗨|花猫|shopee"
-             "\n海外站点：TikTok|SOOP|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK")
+             "酷狗|花椒|流星|Acfun|畅聊|映客|音播|知乎|嗨秀|VV星球|17Live|浪Live|漂漂|六间房|乐嗨|花猫"
+             "\n海外站点：TikTok|SOOP|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK|shopee")
 
 recording = set()
 error_count = 0
@@ -403,6 +403,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
             record_quality, record_url, anchor_name = url_data
             proxy_address = proxy_addr
             platform = '未知平台'
+            live_domain = '/'.join(record_url.split('/')[0:3])
 
             if proxy_addr:
                 proxy_address = None
@@ -928,6 +929,9 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                 if enable_https_recording and real_url.startswith("http://"):
                                     real_url = real_url.replace("http://", "https://")
 
+                                if platform == 'shopee':
+                                    real_url = real_url.replace("https://", "http://")
+
                                 user_agent = ("Mozilla/5.0 (Linux; Android 11; SAMSUNG SM-G973U) AppleWebKit/537.36 ("
                                               "KHTML, like Gecko) SamsungBrowser/14.2 Chrome/87.0.4280.141 Mobile "
                                               "Safari/537.36")
@@ -975,6 +979,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                     '千度热播': 'referer:https://qiandurebo.com',
                                     '17Live': 'referer:https://17.live/en/live/6302408',
                                     '浪Live': 'referer:https://www.lang.live',
+                                    'shopee': f'origin:{live_domain}',
                                 }
 
                                 headers = record_headers.get(platform)
@@ -1015,11 +1020,13 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                     try:
                                         flv_url = port_info.get('flv_url')
                                         if flv_url:
-                                            _filepath, _ = urllib.request.urlretrieve(real_url, save_file_path)
+                                            _filepath, _ = urllib.request.urlretrieve(flv_url, save_file_path)
                                             record_finished = True
                                             recording.discard(record_name)
                                             print(
                                                 f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制完成\n")
+                                        else:
+                                            logger.debug("未找到FLV直播流，跳过录制")
                                     except Exception as e:
                                         print(
                                             f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制出错,请检查网络\n")
@@ -1494,7 +1501,7 @@ while True:
     custom_script = read_config_value(config, '录制设置', '自定义脚本执行命令', "") if is_run_script else None
     enable_proxy_platform = read_config_value(
         config, '录制设置', '使用代理录制的平台(逗号分隔)',
-        'tiktok, soop, pandalive, winktv, flextv, popkontv, twitch, liveme, showroom, chzzk')
+        'tiktok, soop, pandalive, winktv, flextv, popkontv, twitch, liveme, showroom, chzzk, shopee, shp')
     enable_proxy_platform_list = enable_proxy_platform.replace('，', ',').split(',') if enable_proxy_platform else None
     extra_enable_proxy = read_config_value(config, '录制设置', '额外使用代理录制的平台(逗号分隔)', '')
     extra_enable_proxy_platform_list = extra_enable_proxy.replace('，', ',').split(',') if extra_enable_proxy else None
@@ -1693,8 +1700,6 @@ while True:
                     "m.6.cn",
                     'www.lehaitv.com',
                     'h.catshow168.com',
-                    'live.shopee.',
-                    '.shp.ee',
                 ]
                 overseas_platform_host = [
                     'www.tiktok.com',
@@ -1708,7 +1713,9 @@ while True:
                     'www.liveme.com',
                     'www.showroom-live.com',
                     'chzzk.naver.com',
-                    'm.chzzk.naver.com'
+                    'm.chzzk.naver.com',
+                    'live.shopee.',
+                    '.shp.ee',
                 ]
 
                 platform_host.extend(overseas_platform_host)

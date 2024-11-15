@@ -2941,17 +2941,20 @@ def get_shopee_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: Opt
         headers['Cookie'] = cookies
 
     result = {"anchor_name": "", "is_live": False}
+
     if 'live.shopee' not in url:
-        url = get_req(url, proxy_addr=proxy_addr, headers=headers, redirect_url=True)
+        url = get_req(url, proxy_addr=proxy_addr, headers=headers, redirect_url=True, abroad=True)
+
     uid = get_params(url, 'uid')
+    host_suffix = url.split('/')[2].rsplit('.', maxsplit=1)[1]
+    api_host = f'https://live.shopee.{host_suffix}'
     if uid:
-        json_str = get_req(f'https://live.shopee.sg/api/v1/shop_page/live/ongoing?uid={uid}',
-                           proxy_addr=proxy_addr, headers=headers)
+        json_str = get_req(f'{api_host}/api/v1/shop_page/live/ongoing?uid={uid}',
+                           proxy_addr=proxy_addr, headers=headers, abroad=True)
         json_data = json.loads(json_str)
         if not json_data['data']['ongoing_live']:
-            json_str = get_req(
-                f'https://live.shopee.sg/api/v1/shop_page/live/replay_list?offset=0&limit=1&uid={uid}',
-                proxy_addr=proxy_addr, headers=headers)
+            json_str = get_req(f'{api_host}/api/v1/shop_page/live/replay_list?offset=0&limit=1&uid={uid}',
+                               proxy_addr=proxy_addr, headers=headers, abroad=True)
             json_data = json.loads(json_str)
             result['anchor_name'] = json_data['data']['replay'][0]['nick_name']
             return result
@@ -2960,8 +2963,7 @@ def get_shopee_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: Opt
     else:
         session_id = get_params(url, 'session')
 
-    json_str = get_req(f'https://live.shopee.sg/api/v1/session/{session_id}',
-                       proxy_addr=proxy_addr, headers=headers)
+    json_str = get_req(f'{api_host}/api/v1/session/{session_id}', proxy_addr=proxy_addr, headers=headers, abroad=True)
     json_data = json.loads(json_str)
     if not json_data.get('data'):
         print("Fetch shopee live data failed, please update the address of the live broadcast room and try again.")
