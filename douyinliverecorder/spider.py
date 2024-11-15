@@ -813,6 +813,7 @@ def get_xhs_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: Option
         "anchor_name": '',
         "is_live": False,
     }
+    flv_url = ''
     room_id = re.search('/livestream/(.*?)(?=/|\\?|$)', url)
     if room_id:
         room_id = room_id.group(1)
@@ -822,18 +823,11 @@ def get_xhs_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: Option
         json_data = json.loads(json_str)
         anchor_name = json_data['data']['host_info']['nickname']
         live_title = json_data['data']['room']['name']
-        live_status = json_data['data']['room']['status']
         result["anchor_name"] = anchor_name
-
-        # 这个判断不准确，无论是否在直播status都为0
-        if live_status == 0:
-            result['is_live'] = True
-            result['title'] = live_title
-            flv_url = f'http://live-play.xhscdn.com/live/{room_id}.flv'
-            result['flv_url'] = flv_url
-            result['record_url'] = flv_url
-            if get_response_status(flv_url, proxy_addr=proxy_addr, headers=headers):
-                return result
+        result['title'] = live_title
+        flv_url = f'http://live-play.xhscdn.com/live/{room_id}.flv'
+        result['flv_url'] = flv_url
+        result['record_url'] = flv_url
 
     user_id = re.search('/user/profile/(.*?)(?=/|\\?|$)', url)
     user_id = user_id.group(1) if user_id else get_params(url, 'host_id')
@@ -850,6 +844,8 @@ def get_xhs_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: Option
                 result['is_live'] = True
                 live_link = json_data['data'][0]['live_link']
                 result['anchor_name'] = get_params(live_link, "host_nickname")
+                if get_response_status(flv_url, proxy_addr=proxy_addr, headers=headers):
+                    return result
                 flv_url = get_params(live_link, "flvUrl")
                 result['flv_url'] = flv_url
                 result['record_url'] = flv_url

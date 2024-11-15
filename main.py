@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-11-14 00:45:00
+Update: 2024-11-16 04:28:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -1005,7 +1005,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                         logger.info(
                                             f"{platform} | {anchor_name} | 直播源地址: {port_info['record_url']}")
 
-                                if video_save_type == "FLV":
+                                if video_save_type == "FLV" or 'live.xhscdn.com' in real_url:
                                     filename = anchor_name + f'_{title_in_name}' + now + '.flv'
                                     save_file_path = f'{full_path}/{filename}'
                                     print(f'{rec_info}/{filename}')
@@ -1496,7 +1496,7 @@ while True:
     enable_https_recording = options.get(read_config_value(config, '录制设置', '强制启用HTTPS录制', "否"), False)
     disk_space_limit = float(read_config_value(config, '录制设置', '录制空间剩余阈值(gb)', 1.0))
     split_time = str(read_config_value(config, '录制设置', '视频分段时间(秒)', 1800))
-    ts_to_mp4 = options.get(read_config_value(config, '录制设置', 'ts录制完成后自动转为mp4格式', "否"),False)
+    ts_to_mp4 = options.get(read_config_value(config, '录制设置', 'ts录制完成后自动转为mp4格式', "否"), False)
     delete_origin_file = options.get(read_config_value(config, '录制设置', '追加格式后删除原文件', "否"), False)
     create_time_file = options.get(read_config_value(config, '录制设置', '生成时间字幕文件', "否"), False)
     is_run_script = options.get(read_config_value(config, '录制设置', '是否录制完成后执行自定义脚本', "否"), False)
