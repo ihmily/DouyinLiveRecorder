@@ -101,10 +101,10 @@ def get_req(
                 else:
                     raise
             except urllib.error.URLError as e:
-                print("URL Error:", e)
+                print(f"URL Error: {e}")
                 raise
             except Exception as e:
-                print("An error occurred:", e)
+                print(f"An error occurred: {e}")
                 raise
 
     except Exception as e:
@@ -844,7 +844,7 @@ def get_xhs_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: Option
                 result['is_live'] = True
                 live_link = json_data['data'][0]['live_link']
                 result['anchor_name'] = get_params(live_link, "host_nickname")
-                if get_response_status(flv_url, proxy_addr=proxy_addr, headers=headers):
+                if flv_url and get_response_status(flv_url, proxy_addr=proxy_addr, headers=headers):
                     return result
                 flv_url = get_params(live_link, "flvUrl")
                 result['flv_url'] = flv_url

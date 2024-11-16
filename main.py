@@ -177,30 +177,58 @@ def get_startup_info(system_type: str):
     return startup_info
 
 
-def converts_mp4(address: str, is_original_delete: bool = True) -> None:
-    _output = subprocess.check_output([
-        "ffmpeg", "-i", address,
-        "-c:v", "copy",
-        "-c:a", "copy",
-        "-f", "mp4", address.rsplit('.', maxsplit=1)[0] + ".mp4",
-    ], stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type))
-    if is_original_delete:
-        time.sleep(1)
-        if os.path.exists(address):
-            os.remove(address)
+def segment_video(converts_file_path: str, segment_save_file_path: str, segment_format: str, segment_time: str,
+                  is_original_delete: bool = True) -> None:
+
+    if os.path.exists(converts_file_path) and os.path.getsize(converts_file_path) > 0:
+        ffmpeg_command = [
+            "ffmpeg",
+            "-i", converts_file_path,
+            "-c:v", "copy",
+            "-c:a", "copy",
+            "-map", "0",
+            "-f", "segment",
+            "-segment_time", segment_time,
+            "-segment_format", segment_format,
+            "-reset_timestamps", "1",
+            "-movflags", "+frag_keyframe+empty_moov",
+            segment_save_file_path,
+        ]
+        _output = subprocess.check_output(
+            ffmpeg_command, stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type)
+        )
+        if is_original_delete:
+            time.sleep(1)
+            if os.path.exists(converts_file_path):
+                os.remove(converts_file_path)
 
 
-def converts_m4a(address: str, is_original_delete: bool = True) -> None:
-    _output = subprocess.check_output([
-        "ffmpeg", "-i", address,
-        "-n", "-vn",
-        "-c:a", "aac", "-bsf:a", "aac_adtstoasc", "-ab", "320k",
-        address.rsplit('.', maxsplit=1)[0] + ".m4a",
-    ], stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type))
-    if is_original_delete:
-        time.sleep(1)
-        if os.path.exists(address):
-            os.remove(address)
+def converts_mp4(converts_file_path: str, is_original_delete: bool = True) -> None:
+    if os.path.exists(converts_file_path) and os.path.getsize(converts_file_path) > 0:
+        _output = subprocess.check_output([
+            "ffmpeg", "-i", converts_file_path,
+            "-c:v", "copy",
+            "-c:a", "copy",
+            "-f", "mp4", converts_file_path.rsplit('.', maxsplit=1)[0] + ".mp4",
+        ], stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type))
+        if is_original_delete:
+            time.sleep(1)
+            if os.path.exists(converts_file_path):
+                os.remove(converts_file_path)
+
+
+def converts_m4a(converts_file_path: str, is_original_delete: bool = True) -> None:
+    if os.path.exists(converts_file_path) and os.path.getsize(converts_file_path) > 0:
+        _output = subprocess.check_output([
+            "ffmpeg", "-i", converts_file_path,
+            "-n", "-vn",
+            "-c:a", "aac", "-bsf:a", "aac_adtstoasc", "-ab", "320k",
+            converts_file_path.rsplit('.', maxsplit=1)[0] + ".m4a",
+        ], stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type))
+        if is_original_delete:
+            time.sleep(1)
+            if os.path.exists(converts_file_path):
+                os.remove(converts_file_path)
 
 
 def generate_subtitles(record_name: str, ass_filename: str, sub_format: str = 'srt') -> None:
@@ -342,7 +370,7 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
     return_code = process.returncode
     stop_time = time.strftime('%Y-%m-%d %H:%M:%S')
     if return_code == 0:
-        if ts_to_mp4 and save_type == 'TS':
+        if converts_to_mp4 and save_type == 'TS':
             if split_video_by_time:
                 file_paths = utils.get_file_paths(os.path.dirname(save_file_path))
                 prefix = os.path.basename(save_file_path).rsplit('_', maxsplit=1)[0]
@@ -361,7 +389,7 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
                     f'--save_file_path "{save_file_path}"',
                     f'--save_type {save_type}'
                     f'--split_video_by_time {split_video_by_time}',
-                    f'--ts_to_mp4 {ts_to_mp4}',
+                    f'--converts_to_mp4 {converts_to_mp4}',
                 ]
             else:
                 params = [
@@ -369,7 +397,7 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
                     f'"{save_file_path}"',
                     save_type,
                     f'split_video_by_time:{split_video_by_time}',
-                    f'ts_to_mp4:{ts_to_mp4}'
+                    f'converts_to_mp4:{converts_to_mp4}'
                 ]
             script_command = script_command.strip() + ' ' + ' '.join(params)
             run_script(script_command)
@@ -1005,7 +1033,13 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                         logger.info(
                                             f"{platform} | {anchor_name} | 直播源地址: {port_info['record_url']}")
 
-                                if video_save_type == "FLV" or 'live.xhscdn.com' in real_url:
+                                only_flv_record = False
+                                only_flv_platform_list = ['shopee', '花椒直播']
+                                if 'live.xhscdn.com' in real_url or platform in only_flv_platform_list:
+                                    logger.debug(f"提示: {platform} 强制使用FLV格式录制 {record_url}")
+                                    only_flv_record = True
+
+                                if video_save_type == "FLV" or only_flv_record:
                                     filename = anchor_name + f'_{title_in_name}' + now + '.flv'
                                     save_file_path = f'{full_path}/{filename}'
                                     print(f'{rec_info}/{filename}')
@@ -1036,6 +1070,32 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                         with max_request_lock:
                                             error_count += 1
                                             error_window.append(1)
+
+                                    try:
+                                        if converts_to_mp4:
+                                            seg_file_path = f"{full_path}/{anchor_name}_{title_in_name}{now}_%03d.mp4"
+                                            if split_video_by_time:
+                                                segment_video(
+                                                    save_file_path, seg_file_path,
+                                                    segment_format='mp4', segment_time=split_time,
+                                                    is_original_delete=delete_origin_file
+                                                )
+                                            else:
+                                                threading.Thread(
+                                                    target=converts_mp4,
+                                                    args=(save_file_path, delete_origin_file)
+                                                ).start()
+
+                                        else:
+                                            seg_file_path = f"{full_path}/{anchor_name}_{title_in_name}{now}_%03d.flv"
+                                            if split_video_by_time:
+                                                segment_video(
+                                                    save_file_path, seg_file_path,
+                                                    segment_format='flv', segment_time=split_time,
+                                                    is_original_delete=delete_origin_file
+                                                )
+                                    except Exception as e:
+                                        logger.error(f"转码失败: {e} ")
 
                                 elif video_save_type == "MKV":
                                     filename = anchor_name + f'_{title_in_name}' + now + ".mkv"
@@ -1230,15 +1290,18 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                                 custom_script
                                             )
                                             if comment_end:
-                                                if ts_to_mp4:
+                                                if converts_to_mp4:
                                                     file_paths = utils.get_file_paths(os.path.dirname(save_file_path))
                                                     prefix = os.path.basename(save_file_path).rsplit('_', maxsplit=1)[0]
                                                     for path in file_paths:
                                                         if prefix in path:
-                                                            threading.Thread(
-                                                                target=converts_mp4,
-                                                                args=(path, delete_origin_file)
-                                                            ).start()
+                                                            try:
+                                                                threading.Thread(
+                                                                    target=converts_mp4,
+                                                                    args=(path, delete_origin_file)
+                                                                ).start()
+                                                            except subprocess.CalledProcessError as e:
+                                                                logger.error(f"转码失败: {e} ")
                                                 return
 
                                         except subprocess.CalledProcessError as e:
@@ -1496,7 +1559,7 @@ while True:
     enable_https_recording = options.get(read_config_value(config, '录制设置', '强制启用HTTPS录制', "否"), False)
     disk_space_limit = float(read_config_value(config, '录制设置', '录制空间剩余阈值(gb)', 1.0))
     split_time = str(read_config_value(config, '录制设置', '视频分段时间(秒)', 1800))
-    ts_to_mp4 = options.get(read_config_value(config, '录制设置', 'ts录制完成后自动转为mp4格式', "否"), False)
+    converts_to_mp4 = options.get(read_config_value(config, '录制设置', '录制完成后自动转为mp4格式', "否"), False)
     delete_origin_file = options.get(read_config_value(config, '录制设置', '追加格式后删除原文件', "否"), False)
     create_time_file = options.get(read_config_value(config, '录制设置', '生成时间字幕文件', "否"), False)
     is_run_script = options.get(read_config_value(config, '录制设置', '是否录制完成后执行自定义脚本', "否"), False)
