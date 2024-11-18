@@ -411,9 +411,10 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
 
 
 def clean_name(input_text):
-    cleaned_name = re.sub(rstr, "_", input_text.strip())
+    cleaned_name = re.sub(rstr, "_", input_text.strip()).strip('_')
     cleaned_name = cleaned_name.replace("（", "(").replace("）", ")")
-    cleaned_name = utils.remove_emojis(cleaned_name, '_').strip('_')
+    if clean_emoji:
+        cleaned_name = utils.remove_emojis(cleaned_name, '_').strip('_')
     return cleaned_name or '空白昵称'
 
 
@@ -1544,6 +1545,7 @@ while True:
     folder_by_time = options.get(read_config_value(config, '录制设置', '保存文件夹是否以时间区分', "否"), False)
     folder_by_title = options.get(read_config_value(config, '录制设置', '保存文件夹是否以标题区分', "否"), False)
     filename_by_title = options.get(read_config_value(config, '录制设置', '保存文件名是否包含标题', "否"), False)
+    clean_emoji = options.get(read_config_value(config, '录制设置', '是否去除名称中的表情符号', "是"), True)
     video_save_type = read_config_value(config, '录制设置', '视频保存格式ts|mkv|flv|mp4|mp3音频|m4a音频', "ts")
     video_record_quality = read_config_value(config, '录制设置', '原画|超清|高清|标清|流畅', "原画")
     use_proxy = options.get(read_config_value(config, '录制设置', '是否使用代理ip(是/否)', "是"), False)

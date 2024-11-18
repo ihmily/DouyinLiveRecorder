@@ -53,7 +53,7 @@ def get_douyin_stream_url(json_data: dict, video_quality: str) -> dict:
         result['m3u8_url'] = m3u8_url
         result['flv_url'] = flv_url
         result['is_live'] = True
-        result['record_url'] = m3u8_url
+        result['record_url'] = m3u8_url or flv_url
     return result
 
 
@@ -101,11 +101,13 @@ def get_tiktok_stream_url(json_data: dict, video_quality: str) -> dict:
             m3u8_url_list.append(m3u8_url_list[-1])
         video_qualities = {"原画": 0, "蓝光": 0, "超清": 1, "高清": 2, "标清": 3, '流畅': 4}
         quality_index = video_qualities.get(video_quality)
+        flv_url = flv_url_list[quality_index]['url'].replace("https://", "http://")
+        m3u8_url = m3u8_url_list[quality_index]['url'].replace("https://", "http://")
         result['title'] = live_room['liveRoom']['title']
-        result['flv_url'] = flv_url_list[quality_index]['url']
-        result['m3u8_url'] = m3u8_url_list[quality_index]['url']
+        result['flv_url'] = flv_url
+        result['m3u8_url'] = m3u8_url
         result['is_live'] = True
-        result['record_url'] = flv_url_list[quality_index]['url'].replace("https://", "http://")
+        result['record_url'] = m3u8_url or flv_url
     return result
 
 
@@ -231,7 +233,7 @@ def get_huya_stream_url(json_data: dict, video_quality: str) -> dict:
         result['flv_url'] = flv_url
         result['m3u8_url'] = m3u8_url
         result['is_live'] = True
-        result['record_url'] = flv_url
+        result['record_url'] = flv_url or m3u8_url
     return result
 
 
