@@ -2279,7 +2279,7 @@ def get_huajiao_sn(url: str, cookies: OptionalStr = None, proxy_addr: OptionalSt
                            "the anchor's homepage address for recording.")
 
 
-def get_huajiao_user_info(url: str, cookies: OptionalStr = None, proxy_addr: OptionalStr = None) -> tuple:
+def get_huajiao_user_info(url: str, cookies: OptionalStr = None, proxy_addr: OptionalStr = None) -> OptionalDict:
     headers = {
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
         'referer': 'https://www.huajiao.com/',
@@ -2303,43 +2303,46 @@ def get_huajiao_user_info(url: str, cookies: OptionalStr = None, proxy_addr: Opt
 
         html_str = get_req(url=f'https://www.huajiao.com/user/{uid}', proxy_addr=proxy_addr, headers=headers)
         anchor_name = re.search('<title>(.*?)的主页.*</title>', html_str).group(1)
-        if json_data['data'] and 'rtop' in json_data['data']['feeds'][0]['feed']:
-            live_id = json_data['data']['feeds'][0]['feed']['relateid']
-            sn = json_data['data']['feeds'][0]['feed']['sn']
-            return anchor_name, [sn, uid, live_id]
+        if json_data['data'] and 'sn' in json_data['data']['feeds'][0]['feed']:
+            feed = json_data['data']['feeds'][0]['feed']
+            return {
+                "anchor_name": anchor_name,
+                "title": feed['title'],
+                "is_live": True,
+                "sn": feed['sn'],
+                "liveid": feed['relateid'],
+                "uid": uid
+            }
         else:
-            return anchor_name, None
-
-    else:
-        data = get_huajiao_sn(url)
-        if data:
-            return data[0], data[1:]
-        else:
-            return '未知直播间', None
+            return {"anchor_name": anchor_name, "is_live": False}
 
 
-def get_huajiao_stream_url_app(url: str, proxy_addr: OptionalStr = None) -> dict:
+def get_huajiao_stream_url_app(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> OptionalDict:
     headers = {
         'User-Agent': 'living/9.4.0 (com.huajiao.seeding; build:2410231746; iOS 17.0.0) Alamofire/9.4.0',
         'accept-language': 'zh-Hans-US;q=1.0',
         'sdk_version': '1',
     }
+    if cookies:
+        headers['Cookie'] = cookies
     room_id = url.rsplit('/', maxsplit=1)[1]
     api = f'https://live.huajiao.com/feed/getFeedInfo?relateid={room_id}'
     json_str = get_req(api, proxy_addr=proxy_addr, headers=headers)
     json_data = json.loads(json_str)
 
-    result = {"anchor_name": "", "is_live": False}
-    if not json_data.get('data'):
+    if json_data['errmsg'] or not json_data['data'].get('creatime'):
         print("Failed to retrieve live room data, the Huajiao live room address is not fixed, please manually change "
               "the address for recording.")
-        return result
-    result["is_live"] = True
-    result['anchor_name'] = json_data['data']['feed']['title']
-    play_url = f'https://al2-flv.live.huajiao.com/live_huajiao_h265/{json_data["data"]["feed"]["sn"]}.flv'
-    result['flv_url'] = play_url
-    result['record_url'] = play_url
-    return result
+        return
+    data = json_data['data']
+    return {
+        "anchor_name": data['author']['nickname'],
+        "title": data['feed']['title'],
+        "is_live": True,
+        "sn": data['feed']['sn'],
+        "liveid": data['feed']['relateid'],
+        "uid": data['author']['uid']
+    }
 
 
 @trace_error_decorator
@@ -2352,28 +2355,40 @@ def get_huajiao_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: Op
     if cookies:
         headers['Cookie'] = cookies
 
-    if '/user' not in url:
-        return get_huajiao_stream_url_app(url, proxy_addr)
-    anchor_name, room_info = get_huajiao_user_info(url)
-    result = {"anchor_name": anchor_name, "is_live": False}
+    result = {"anchor_name": "", "is_live": False}
 
-    if room_info:
-        sn, uid, live_id = room_info
-        params = {
-            "time": int(time.time() * 1000),
-            "version": "1.0.0",
-            "sn": sn,
-            "uid": uid,
-            "liveid": live_id,
-            "encode": "h265"  # 可选 h264
-        }
-        api = f'https://live.huajiao.com/live/substream?{urllib.parse.urlencode(params)}'
-        json_str = get_req(url=api, proxy_addr=proxy_addr, headers=headers)
-        json_data = json.loads(json_str)
-        result["is_live"] = True
-        result['flv_url'] = json_data['data']['h264_url']
-        result['record_url'] = json_data['data']['h264_url']
+    if 'user/' in url:
+        if not cookies:
+            return result
+        room_data = get_huajiao_user_info(url, cookies, proxy_addr)
+    else:
+        url = get_req(url, proxy_addr=proxy_addr, headers=headers, redirect_url=True)
+        if url.rstrip('/') == 'https://www.huajiao.com':
+            print(
+                "Failed to retrieve live room data, the Huajiao live room address is not fixed, please manually change "
+                "the address for recording.")
+            return result
+        room_data = get_huajiao_stream_url_app(url, proxy_addr)
 
+    if room_data:
+        result["anchor_name"] = room_data.pop("anchor_name")
+        live_status = room_data.pop("is_live")
+
+        if live_status:
+            result["title"] = room_data.pop("title")
+            params = {
+                "time": int(time.time() * 1000),
+                "version": "1.0.0",
+                **room_data,
+                "encode": "h265"
+            }
+
+            api = f'https://live.huajiao.com/live/substream?{urllib.parse.urlencode(params)}'
+            json_str = get_req(url=api, proxy_addr=proxy_addr, headers=headers)
+            json_data = json.loads(json_str)
+            result["is_live"] = True
+            result['flv_url'] = json_data['data']['h264_url']
+            result['record_url'] = json_data['data']['h264_url']
     return result
 
 
