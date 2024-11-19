@@ -27,8 +27,8 @@ import urllib.request
 from urllib.error import URLError, HTTPError
 from typing import Any
 import configparser
-from douyinliverecorder import spider
-from douyinliverecorder import stream
+from douyinliverecorder import spider, stream
+from douyinliverecorder.proxy import ProxyDetector
 from douyinliverecorder.utils import logger
 from douyinliverecorder import utils
 from msg_push import (
@@ -95,7 +95,10 @@ def display_info() -> None:
             print(f"是否开启代理录制: {'是' if use_proxy else '否'}", end=" | ")
             if split_video_by_time:
                 print(f"录制分段开启: {split_time}秒", end=" | ")
-            print(f"是否生成时间文件: {'是' if create_time_file else '否'}", end=" | ")
+            else:
+                print(f"录制分段开启: 否", end=" | ")
+            if create_time_file:
+                print(f"是否生成时间文件: 是", end=" | ")
             print(f"录制视频质量为: {video_record_quality}", end=" | ")
             print(f"录制视频格式为: {video_save_type}", end=" | ")
             print(f"目前瞬时错误数为: {error_count}", end=" | ")
@@ -1514,6 +1517,10 @@ try:
         response_g = urllib.request.urlopen("https://www.google.com/", timeout=15)
         global_proxy = True
         print('\r全局/规则网络代理已开启√')
+        pd = ProxyDetector()
+        if pd.is_proxy_enabled():
+            proxy_info = pd.get_proxy_info()
+            print("System Proxy: http://{}:{}".format(proxy_info.ip, proxy_info.port))
 except HTTPError as err:
     print(f"HTTP error occurred: {err.code} - {err.reason}")
 except URLError as err:
@@ -1664,7 +1671,7 @@ while True:
             logger.warning(f"Disk space remaining is below {disk_space_limit} GB. "
                            f"Exiting program due to the disk space limit being reached.")
             sys.exit(-1)
-
+    print("")
 
     def contains_url(string: str) -> bool:
         pattern = r"(https?://)?(www\.)?[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)+(:\d+)?(/.*)?"
@@ -1672,10 +1679,7 @@ while True:
 
 
     try:
-        url_comments = []
-        line_list = []
-        url_line_list = []
-
+        url_comments, line_list, url_line_list = [[] for _ in range(3)]
         with (open(url_config_file, "r", encoding=text_encoding, errors='ignore') as file):
             for origin_line in file:
                 if origin_line in line_list:
@@ -1868,3 +1872,4 @@ while True:
         first_run = False
 
     time.sleep(3)
+    
