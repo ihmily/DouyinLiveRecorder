@@ -292,7 +292,7 @@ def push_message(record_name: str, live_url: str, content: str) -> None:
     msg_title = push_message_title.strip() or "直播间状态更新通知"
     push_functions = {
         '微信': lambda: xizhi(xizhi_api_url, msg_title, content),
-        '钉钉': lambda: dingtalk(dingtalk_api_url, content, dingtalk_phone_num),
+        '钉钉': lambda: dingtalk(dingtalk_api_url, content, dingtalk_phone_num, dingtalk_is_atall),
         '邮箱': lambda: send_email(
             email_host, login_email, email_password, sender_email, sender_name,
             to_email, msg_title, content
@@ -1586,6 +1586,7 @@ while True:
     bark_msg_level = read_config_value(config, '推送配置', 'bark推送中断级别', "active")
     bark_msg_ring = read_config_value(config, '推送配置', 'bark推送铃声', "bell")
     dingtalk_phone_num = read_config_value(config, '推送配置', '钉钉通知@对象(填手机号)', "")
+    dingtalk_is_atall = options.get(read_config_value(config, '推送配置', '钉钉通知@全体(是/否)', "否"), False)
     tg_token = read_config_value(config, '推送配置', 'tgapi令牌', "")
     tg_chat_id = read_config_value(config, '推送配置', 'tg聊天id(个人或者群组id)', "")
     email_host = read_config_value(config, '推送配置', 'SMTP邮件服务器', "")
