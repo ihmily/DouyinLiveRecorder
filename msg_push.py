@@ -22,7 +22,7 @@ opener = urllib.request.build_opener(no_proxy_handler)
 headers: Dict[str, str] = {'Content-Type': 'application/json'}
 
 
-def dingtalk(url: str, content: str, number: str = None) -> Dict[str, Any]:
+def dingtalk(url: str, content: str, number: str = None, is_atall: bool = False) -> Dict[str, Any]:
     success = []
     error = []
     api_list = url.replace('，', ',').split(',') if url.strip() else []
@@ -36,6 +36,7 @@ def dingtalk(url: str, content: str, number: str = None) -> Dict[str, Any]:
                 "atMobiles": [
                     number
                 ],
+                "isAtAll": is_atall
             },
         }
         try:
@@ -214,6 +215,7 @@ if __name__ == '__main__':
     # 钉钉推送通知
     webhook_api = ''  # 替换成自己Webhook链接,参考文档：https://open.dingtalk.com/document/robots/custom-robot-access
     phone_number = ''  # 被@用户的手机号码
+    is_atall = ''  # 是否@全体
     # dingtalk(webhook_api, send_content, phone_number)
 
     # 微信推送通知
