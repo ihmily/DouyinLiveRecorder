@@ -159,3 +159,4 @@ cython_debug/
 #.idea/
 
 backup_config/
+/node
