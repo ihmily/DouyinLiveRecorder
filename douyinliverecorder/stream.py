@@ -125,7 +125,7 @@ def get_kuaishou_stream_url(json_data: dict, video_quality: str) -> dict:
 
     if live_status:
         quality_mapping = {'原画': 0, '蓝光': 0, '超清': 1, '高清': 2, '标清': 3, '流畅': 4}
-
+        quality_mapping_bitrate = {'原画': 99999, '蓝光': 4000, '超清': 2000, '高清': 1000, '标清': 800, '流畅': 600}
         if video_quality in quality_mapping:
 
             quality_index = quality_mapping[video_quality]
@@ -137,12 +137,28 @@ def get_kuaishou_stream_url(json_data: dict, video_quality: str) -> dict:
                 result['m3u8_url'] = m3u8_url
 
             if 'flv_url_list' in json_data:
-                flv_url_list = json_data['flv_url_list'][::-1]
-                while len(flv_url_list) < 5:
-                    flv_url_list.append(flv_url_list[-1])
-                flv_url = flv_url_list[quality_index]['url']
-                result['flv_url'] = flv_url
-                result['record_url'] = flv_url
+                # checks if bitrate in flv_url_list
+                if 'bitrate' in json_data['flv_url_list'][0]:
+                    flv_url_list = json_data['flv_url_list']
+                    flv_url_list = sorted(flv_url_list, key=lambda x: x['bitrate'], reverse=True)
+                    # uses quality_mapping_bitrate to get the index of the quality
+                    quality_index_bitrate_value = quality_mapping_bitrate[video_quality]
+                    # finds the value which less than the quality_index_bitrate_value, if not then uses the previous value
+                    quality_index = next((i for i, x in enumerate(flv_url_list) if x['bitrate'] <= quality_index_bitrate_value), None)
+                    if quality_index is None:
+                        # latest quality
+                        quality_index = len(flv_url_list) - 1
+                    flv_url = flv_url_list[quality_index]['url']
+                    result['flv_url'] = flv_url
+                    result['record_url'] = flv_url
+                else:
+                    # TODO: Old version which not working at 20241128, could be removed if not working confirmed, pls also clean the quality_mapping mapping
+                    flv_url_list = json_data['flv_url_list'][::-1]
+                    while len(flv_url_list) < 5:
+                        flv_url_list.append(flv_url_list[-1])
+                    flv_url = flv_url_list[quality_index]['url']
+                    result['flv_url'] = flv_url
+                    result['record_url'] = flv_url
 
             result['is_live'] = True
     return result
