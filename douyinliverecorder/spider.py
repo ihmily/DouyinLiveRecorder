@@ -415,6 +415,8 @@ def get_kuaishou_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: 
 
     if play_list['liveStream'].get("playUrls"):
         if 'h264' in play_list['liveStream']['playUrls']:
+            if 'adaptationSet' not in play_list['liveStream']['playUrls']['h264']:
+                return result
             play_url_list = play_list['liveStream']['playUrls']['h264']['adaptationSet']['representation']
         else:
             # TODO: Old version which not working at 20241128, could be removed if not working confirmed
