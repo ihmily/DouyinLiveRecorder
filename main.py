@@ -73,6 +73,7 @@ os.makedirs(default_path, exist_ok=True)
 file_update_lock = threading.Lock()
 os_type = os.name
 clear_command = "cls" if os_type == 'nt' else "clear"
+color_obj = utils.Color()
 
 
 def signal_handler(_signal, _frame):
@@ -182,7 +183,6 @@ def get_startup_info(system_type: str):
 
 def segment_video(converts_file_path: str, segment_save_file_path: str, segment_format: str, segment_time: str,
                   is_original_delete: bool = True) -> None:
-
     if os.path.exists(converts_file_path) and os.path.getsize(converts_file_path) > 0:
         ffmpeg_command = [
             "ffmpeg",
@@ -313,7 +313,7 @@ def push_message(record_name: str, live_url: str, content: str) -> None:
                 print(f'提示信息：已经将[{record_name}]直播状态消息推送至你的{platform},'
                       f' 成功{len(result["success"])}, 失败{len(result["error"])}')
             except Exception as e:
-                print(f"直播消息推送到{platform}失败: {e}")
+                color_obj.print_colored(f"直播消息推送到{platform}失败: {e}", color_obj.RED)
 
 
 def run_script(command: str) -> None:
@@ -342,7 +342,7 @@ def clear_record_info(record_name: str, record_url: str) -> None:
     if record_url in url_comments and record_url in running_list:
         running_list.remove(record_url)
         monitoring -= 1
-        print(f"[{record_name}]已经从录制列表中移除")
+        color_obj.print_colored(f"[{record_name}]已经从录制列表中移除\n", color_obj.YELLOW)
 
 
 def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, save_type: str,
@@ -363,7 +363,7 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
 
     while process.poll() is None:
         if record_url in url_comments or exit_recording:
-            print(f"[{record_name}]录制时已被注释,本条线程将会退出")
+            color_obj.print_colored(f"[{record_name}]录制时已被注释,本条线程将会退出", color_obj.YELLOW)
             clear_record_info(record_name, record_url)
             process.terminate()
             process.wait()
@@ -407,7 +407,7 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
             logger.debug("脚本命令执行结束!")
 
     else:
-        print(f"\n{record_name} {stop_time} 直播录制出错,返回码: {return_code}\n")
+        color_obj.print_colored(f"\n{record_name} {stop_time} 直播录制出错,返回码: {return_code}\n", color_obj.RED)
 
     recording.discard(record_name)
     return False
@@ -1063,13 +1063,13 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                             _filepath, _ = urllib.request.urlretrieve(flv_url, save_file_path)
                                             record_finished = True
                                             recording.discard(record_name)
-                                            print(
-                                                f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制完成\n")
+                                            print(f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制完成\n")
                                         else:
                                             logger.debug("未找到FLV直播流，跳过录制")
                                     except Exception as e:
-                                        print(
-                                            f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制出错,请检查网络\n")
+                                        color_obj.print_colored(
+                                            f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制出错,请检查网络\n",
+                                            color_obj.RED)
                                         logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
                                         with max_request_lock:
                                             error_count += 1
@@ -1361,7 +1361,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
 
                 if error_count > 20:
                     x = x + 60
-                    print("瞬时错误太多,延迟加60秒")
+                    color_obj.print_colored("\r瞬时错误太多,延迟加60秒", color_obj.YELLOW)
 
                 # 这里是.如果录制结束后,循环时间会暂时变成30s后检测一遍. 这样一定程度上防止主播卡顿造成少录
                 # 当30秒过后检测一遍后. 会回归正常设置的循环秒数
@@ -1524,7 +1524,7 @@ try:
 except HTTPError as err:
     print(f"HTTP error occurred: {err.code} - {err.reason}")
 except URLError as err:
-    print('INFO：未检测到全局/规则网络代理，请检查代理配置（若无需录制海外直播请忽略此条提示）')
+    color_obj.print_colored(f"INFO：未检测到全局/规则网络代理，请检查代理配置（若无需录制海外直播请忽略此条提示）", color_obj.YELLOW)
 except Exception as err:
     print("An unexpected error occurred:", err)
 
@@ -1672,7 +1672,7 @@ while True:
             logger.warning(f"Disk space remaining is below {disk_space_limit} GB. "
                            f"Exiting program due to the disk space limit being reached.")
             sys.exit(-1)
-    print("")
+
 
     def contains_url(string: str) -> bool:
         pattern = r"(https?://)?(www\.)?[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)+(:\d+)?(/.*)?"
@@ -1826,7 +1826,7 @@ while True:
                         url_tuples_list.append(new_line)
                 else:
                     if not origin_line.startswith('#'):
-                        print(f"\r{origin_line.strip()} 本行包含未知链接.此条跳过")
+                        color_obj.print_colored(f"\r{origin_line.strip()} 本行包含未知链接.此条跳过", color_obj.YELLOW)
                         update_file(url_config_file, old_str=origin_line, new_str=origin_line, start_str='#')
 
         while len(need_update_line_list):
@@ -1874,3 +1874,4 @@ while True:
 
     time.sleep(3)
     
+

@@ -14,6 +14,21 @@ from .logger import logger
 import configparser
 
 
+class Color:
+    RED = "\033[31m"
+    GREEN = "\033[32m"
+    YELLOW = "\033[33m"
+    BLUE = "\033[34m"
+    MAGENTA = "\033[35m"
+    CYAN = "\033[36m"
+    WHITE = "\033[37m"
+    RESET = "\033[0m"
+
+    @staticmethod
+    def print_colored(text, color):
+        print(f"{color}{text}{Color.RESET}")
+
+
 def trace_error_decorator(func: callable) -> callable:
     @functools.wraps(func)
     def wrapper(*args: list, **kwargs: dict) -> Any:
@@ -134,5 +149,5 @@ def check_disk_capacity(file_path: str | Path, show: bool = False) -> float:
     if show:
         print(f"{disk_root} Total: {disk_usage.total / (1024 ** 3):.2f} GB "
               f"Used: {disk_usage.used / (1024 ** 3):.2f} GB "
-              f"Free: {free_space_gb:.2f} GB")
+              f"Free: {free_space_gb:.2f} GB\n")
     return free_space_gb
