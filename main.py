@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-11-16 04:28:00
+Update: 2024-11-29 19:53:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -27,6 +27,7 @@ import urllib.request
 from urllib.error import URLError, HTTPError
 from typing import Any
 import configparser
+from ffmpeg_install import check_ffmpeg
 from douyinliverecorder import spider, stream
 from douyinliverecorder.proxy import ProxyDetector
 from douyinliverecorder.utils import logger
@@ -1063,7 +1064,8 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                             _filepath, _ = urllib.request.urlretrieve(flv_url, save_file_path)
                                             record_finished = True
                                             recording.discard(record_name)
-                                            print(f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制完成\n")
+                                            print(
+                                                f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制完成\n")
                                         else:
                                             logger.debug("未找到FLV直播流，跳过录制")
                                     except Exception as e:
@@ -1435,33 +1437,29 @@ def backup_file_start() -> None:
             logger.error(f"备份配置文件失败, 错误信息: {e}")
 
 
-# --------------------------检查是否存在ffmpeg-------------------------------------
 def check_ffmpeg_existence() -> bool:
     dev_null = open(os.devnull, 'wb')
     try:
         subprocess.run(['ffmpeg', '--help'], stdout=dev_null, stderr=dev_null, check=True)
     except subprocess.CalledProcessError as e:
         logger.error(e)
-        return False
     except FileNotFoundError:
         ffmpeg_file_check = subprocess.getoutput(ffmpeg_path)
         if ffmpeg_file_check.find("run") > -1 and os.path.isfile(ffmpeg_path):
             os.environ['PATH'] += os.pathsep + os.path.dirname(os.path.abspath(ffmpeg_path))
-            # print(f"已将ffmpeg路径添加到环境变量：{ffmpeg_path}")
             return True
-        else:
-            logger.error("未检测到ffmpeg，请确保ffmpeg位于系统路径中，或将其路径添加到环境变量。")
-            sys.exit(0)
     finally:
         dev_null.close()
-    return True
+        if check_ffmpeg():
+            time.sleep(1)
+            return True
+    return False
 
 
+# --------------------------初始化程序-------------------------------------
 if not check_ffmpeg_existence():
     logger.error("缺少ffmpeg无法进行录制，程序退出")
     sys.exit(1)
-
-# --------------------------初始化程序-------------------------------------
 print("-----------------------------------------------------")
 print("|                DouyinLiveRecorder                 |")
 print("-----------------------------------------------------")
@@ -1524,7 +1522,8 @@ try:
 except HTTPError as err:
     print(f"HTTP error occurred: {err.code} - {err.reason}")
 except URLError as err:
-    color_obj.print_colored(f"INFO：未检测到全局/规则网络代理，请检查代理配置（若无需录制海外直播请忽略此条提示）", color_obj.YELLOW)
+    color_obj.print_colored(f"INFO：未检测到全局/规则网络代理，请检查代理配置（若无需录制海外直播请忽略此条提示）",
+                            color_obj.YELLOW)
 except Exception as err:
     print("An unexpected error occurred:", err)
 
@@ -1873,5 +1872,3 @@ while True:
         first_run = False
 
     time.sleep(3)
-    
-

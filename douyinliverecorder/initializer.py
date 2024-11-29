@@ -23,12 +23,15 @@ execute_dir = os.path.split(os.path.realpath(sys.argv[0]))[0]
 current_env_path = os.environ.get('PATH')
 
 
-def unzip_file(zip_path: str | Path, extract_to: str | Path) -> None:
+def unzip_file(zip_path: str | Path, extract_to: str | Path, delete: bool = True) -> None:
     if not os.path.exists(extract_to):
         os.makedirs(extract_to)
 
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
         zip_ref.extractall(extract_to)
+
+    if delete and os.path.exists(zip_path):
+        os.remove(zip_path)
 
 
 def install_nodejs_windows():
@@ -148,14 +151,22 @@ def install_nodejs_mac():
         logger.error(f"An unexpected error occurred: {e}")
 
 
+def get_package_manager():
+    dist_id = distro.id()
+    if dist_id in ["centos", "fedora", "rhel", "amzn", "oracle", "scientific", "opencloudos", "alinux"]:
+        return "RHS"
+    else:
+        return "DBS"
+
+
 def install_nodejs() -> bool:
     if current_platform == "Windows":
         return install_nodejs_windows()
     elif current_platform == "Linux":
-        dist = distro.id()
-        if dist.lower() == "centos":
+        os_type = get_package_manager()
+        if os_type == "RHS":
             return install_nodejs_centos()
-        elif dist.lower() == "ubuntu":
+        else:
             return install_nodejs_ubuntu()
     elif current_platform == "Darwin":
         return install_nodejs_mac()
