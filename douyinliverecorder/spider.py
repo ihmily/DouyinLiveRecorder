@@ -414,7 +414,13 @@ def get_kuaishou_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: 
     result.update({"anchor_name": anchor_name})
 
     if play_list['liveStream'].get("playUrls"):
-        play_url_list = play_list['liveStream']['playUrls'][0]['adaptationSet']['representation']
+        if 'h264' in play_list['liveStream']['playUrls']:
+            if 'adaptationSet' not in play_list['liveStream']['playUrls']['h264']:
+                return result
+            play_url_list = play_list['liveStream']['playUrls']['h264']['adaptationSet']['representation']
+        else:
+            # TODO: Old version which not working at 20241128, could be removed if not working confirmed
+            play_url_list = play_list['liveStream']['playUrls'][0]['adaptationSet']['representation']
         result.update({"flv_url_list": play_url_list, "is_live": True})
 
     return result
