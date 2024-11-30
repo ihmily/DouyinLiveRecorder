@@ -66,7 +66,7 @@ def install_ffmpeg_windows():
         ffmpeg_url = get_lanzou_download_link('https://wweb.lanzouv.com/in54b2gmj24b', 'e3ut')
         if ffmpeg_url:
             full_file_name = 'ffmpeg-7.1.zip'
-            version = '7.1'
+            version = 'v7.1'
             zip_file_path = Path(execute_dir) / full_file_name
             if Path(zip_file_path).exists():
                 logger.debug("ffmpeg installation file already exists, start install...")
