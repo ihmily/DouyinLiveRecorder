@@ -844,6 +844,7 @@ def get_xhs_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: Option
                 live_link = json_data['data'][0]['live_link']
                 anchor_name = get_params(live_link, "host_nickname")
                 if flv_url and get_response_status(flv_url, proxy_addr=proxy_addr, headers=headers):
+                    result['is_live'] = True
                     return result
                 flv_url = get_params(live_link, "flvUrl")
                 result |= {"anchor_name": anchor_name, "is_live": True, "flv_url": flv_url, 'record_url': flv_url}

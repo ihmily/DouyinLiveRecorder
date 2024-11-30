@@ -14,7 +14,11 @@ def init_gettext(locale_dir, locale_name):
 
 
 execute_dir = os.path.split(os.path.realpath(sys.argv[0]))[0]
-_tr = init_gettext(Path(execute_dir) / 'i18n', 'zh_CN')
+if os.path.exists(Path(execute_dir) / '_internal/i18n'):
+    locale_path = Path(execute_dir) / '_internal/i18n'
+else:
+    locale_path = Path(execute_dir) / 'i18n'
+_tr = init_gettext(locale_path, 'zh_CN')
 original_print = builtins.print
 package_name = 'douyinliverecorder'
 
@@ -26,6 +30,3 @@ def translated_print(*args, **kwargs):
         else:
             translated_arg = str(arg)
         original_print(translated_arg, **kwargs)
-
-
-

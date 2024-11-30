@@ -141,9 +141,9 @@ https://www.yy.com/22490906/22490906
 B站：
 https://live.bilibili.com/320
 
-小红书：
-http://xhslink.com/xpJpfM
+小红书（推荐使用主页地址)：
 https://www.xiaohongshu.com/user/profile/6330049c000000002303c7ed?appuid=5f3f478a00000000010005b3
+http://xhslink.com/xpJpfM
 
 bigo直播：
 https://www.bigo.tv/cn/716418802
@@ -388,7 +388,7 @@ docker-compose stop
   - 新增shopee、youtube直播录制
   - 新增支持自定义m3u8、flv地址录制
   - 新增自定义执行脚本，支持python、bat、bash等
-  - 修复花椒直播、小红书直播录制
+  - 修复YY直播、花椒直播和小红书直播录制
   - 修复b站标题获取错误
   - 修复log日志错误
 - 20241030
