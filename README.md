@@ -56,6 +56,8 @@
 - [x] 六间房直播
 - [x] 乐嗨直播
 - [x] 花猫直播
+- [x] Shopee
+- [x] Youtube
 - [ ] 更多平台正在更新中
 
 </div>
@@ -77,6 +79,7 @@
     	├── room.py -> (get room info)
     	├── /javascript -> (some decrypt code)
     ├── main.py -> (main file)
+    ├── ffmpeg_install.py -> (ffmpeg install script)
     ├── demo.py -> (call package test demo)
     ├── msg_push.py -> (send live status update message)
     ├── ffmpeg.exe -> (record video)
@@ -244,6 +247,12 @@ https://www.lehaitv.com/8059096
 
 花猫直播:
 https://h.catshow168.com/live/preview.html?uid=19066357&anchorUid=18895331
+
+Shopee:
+https://sg.shp.ee/GmpXeuf?uid=1006401066&session=802458
+
+Youtube:
+https://www.youtube.com/watch?v=cS6zS5hi1w0
 ```
 
 &emsp;
@@ -368,11 +377,19 @@ docker-compose stop
 [![wujiyu115](https://github.com/wujiyu115.png?size=50)](https://github.com/wujiyu115)
 [![zhanghao333](https://github.com/zhanghao333.png?size=50)](https://github.com/zhanghao333)
 <a href="https://github.com/gyc0123" target="_blank"><img src="https://github.com/gyc0123.png?size=50" alt="gyc0123" style="width:53px; height:51px;" /></a>
-
+[![HoratioShaw](https://github.com/HoratioShaw.png?size=50)](https://github.com/HoratioShaw)
+[![nov30th](https://github.com/nov30th.png?size=50)](https://github.com/nov30th)
 &emsp;
 
 ## ⏳提交日志
 
+- 20241130
+  - 新增shopee、youtube直播录制
+  - 新增支持自定义m3u8、flv地址录制
+  - 新增自定义执行脚本，支持python、bat、bash等
+  - 修复花椒直播、小红书直播录制
+  - 修复b站标题获取错误
+  - 修复log日志错误
 - 20241030
   - 新增嗨秀直播、vv星球直播、17Live、浪Live、SOOP、畅聊直播(原时光直播)、飘飘直播、六间房直播、乐嗨直播、花猫直播等10个平台直播录制
   - 修复小红书直播录制，支持小红书作者主页地址录制直播

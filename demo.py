@@ -173,6 +173,10 @@ LIVE_STREAM_CONFIG = {
     "shopee": {
         "url": "https://sg.shp.ee/GmpXeuf?uid=1006401066&session=802458",
         "func": spider.get_shopee_stream_url,
+    },
+    "youtube": {
+        "url": "https://www.youtube.com/watch?v=cS6zS5hi1w0",
+        "func": spider.get_youtube_stream_url,
     }
 }
 

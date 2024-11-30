@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-11-29 19:53:00
+Update: 2024-11-30 18:46:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -836,6 +836,13 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                             if port_info.get('uid'):
                                 new_record_url = record_url.split('?')[0] + '?' + str(port_info['uid'])
 
+                    elif record_url.find("www.youtube.com/") > -1 or record_url.find("youtu.be/") > -1:
+                        platform = 'Youtube'
+                        with semaphore:
+                            json_data = spider.get_youtube_stream_url(
+                                url=record_url, proxy_addr=proxy_address, cookies=youtube_cookie)
+                            port_info = stream.get_stream_url(json_data, record_quality, spec=True)
+
                     elif record_url.find(".m3u8") > -1 or record_url.find(".flv") > -1:
                         platform = '自定义录制直播'
                         port_info = {
@@ -1031,7 +1038,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                 recording_time_list[record_name] = [start_record_time, record_quality]
                                 rec_info = f"\r{anchor_name} 准备开始录制视频: {full_path}"
                                 if show_url:
-                                    re_plat = ('WinkTV', 'PandaTV', 'ShowRoom', 'CHZZK')
+                                    re_plat = ('WinkTV', 'PandaTV', 'ShowRoom', 'CHZZK', 'Youtube')
                                     if platform in re_plat:
                                         logger.info(f"{platform} | {anchor_name} | 直播源地址: {port_info['m3u8_url']}")
                                     else:
@@ -1574,7 +1581,7 @@ while True:
     custom_script = read_config_value(config, '录制设置', '自定义脚本执行命令', "") if is_run_script else None
     enable_proxy_platform = read_config_value(
         config, '录制设置', '使用代理录制的平台(逗号分隔)',
-        'tiktok, soop, pandalive, winktv, flextv, popkontv, twitch, liveme, showroom, chzzk, shopee, shp')
+        'tiktok, soop, pandalive, winktv, flextv, popkontv, twitch, liveme, showroom, chzzk, shopee, shp, youtu')
     enable_proxy_platform_list = enable_proxy_platform.replace('，', ',').split(',') if enable_proxy_platform else None
     extra_enable_proxy = read_config_value(config, '录制设置', '额外使用代理录制的平台(逗号分隔)', '')
     extra_enable_proxy_platform_list = extra_enable_proxy.replace('，', ',').split(',') if extra_enable_proxy else None
@@ -1657,6 +1664,7 @@ while True:
     lehaitv_cookie = read_config_value(config, 'Cookie', 'lehaitv_cookie', '')
     huamao_cookie = read_config_value(config, 'Cookie', 'huamao_cookie', '')
     shopee_cookie = read_config_value(config, 'Cookie', 'shopee_cookie', '')
+    youtube_cookie = read_config_value(config, 'Cookie', 'youtube_cookie', '')
 
     video_save_type_list = ("FLV", "MKV", "TS", "MP4", "MP3音频", "M4A音频")
     if video_save_type and video_save_type.upper() in video_save_type_list:
@@ -1787,6 +1795,8 @@ while True:
                     'm.chzzk.naver.com',
                     'live.shopee.',
                     '.shp.ee',
+                    'www.youtube.com',
+                    'youtu.be',
                 ]
 
                 platform_host.extend(overseas_platform_host)

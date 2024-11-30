@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-11-16 04:07:16
+Update: 2024-11-30 18:46:16
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -2951,4 +2951,31 @@ def get_shopee_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: Opt
         flv_url = json_data['data']['session']['play_url']
         title = json_data['data']['session']['title']
         result |= {'is_live': True, 'title': title, 'flv_url': flv_url, 'record_url': flv_url}
+    return result
+
+
+@trace_error_decorator
+def get_youtube_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    headers = {
+        'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
+    }
+
+    if cookies:
+        headers['Cookie'] = cookies
+
+    html_str = get_req(url, proxy_addr=proxy_addr, headers=headers, abroad=True)
+    json_str = re.search('var ytInitialPlayerResponse = (.*?);var meta = document\\.createElement', html_str).group(1)
+    json_data = json.loads(json_str)
+    result = {"anchor_name": "", "is_live": False}
+    if 'videoDetails' not in json_data:
+        print("Please log in to YouTube on your device's webpage and configure cookies in the config.ini")
+        return result
+    result['anchor_name'] = json_data['videoDetails']['author']
+    live_status = json_data['videoDetails'].get('isLive')
+    if live_status:
+        live_title = json_data['videoDetails']['title']
+        m3u8_url = json_data['streamingData']["hlsManifestUrl"]
+        play_url_list = get_play_url_list(m3u8_url, proxy=proxy_addr, header=headers, abroad=True)
+        result |= {"is_live": True, "title": live_title, "m3u8_url": m3u8_url, "play_url_list": play_url_list}
     return result
