@@ -377,7 +377,8 @@ docker-compose stop
 [![wujiyu115](https://github.com/wujiyu115.png?size=50)](https://github.com/wujiyu115)
 [![zhanghao333](https://github.com/zhanghao333.png?size=50)](https://github.com/zhanghao333)
 <a href="https://github.com/gyc0123" target="_blank"><img src="https://github.com/gyc0123.png?size=50" alt="gyc0123" style="width:53px; height:51px;" /></a>
-[![HoratioShaw](https://github.com/HoratioShaw.png?size=50)](https://github.com/HoratioShaw)
+
+&ensp;&ensp; [![HoratioShaw](https://github.com/HoratioShaw.png?size=50)](https://github.com/HoratioShaw)
 [![nov30th](https://github.com/nov30th.png?size=50)](https://github.com/nov30th)
 &emsp;
 
