@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-11-30 18:46:00
+Update: 2024-11-30 23:35:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -39,7 +39,7 @@ from msg_push import (
 version = "v4.0.1"
 platforms = ("\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|"
              "酷狗|花椒|流星|Acfun|畅聊|映客|音播|知乎|嗨秀|VV星球|17Live|浪Live|漂漂|六间房|乐嗨|花猫"
-             "\n海外站点：TikTok|SOOP|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK|shopee")
+             "\n海外站点：TikTok|SOOP|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK|Shopee|Youtube")
 
 recording = set()
 error_count = 0
