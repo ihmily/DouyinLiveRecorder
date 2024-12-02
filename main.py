@@ -184,55 +184,70 @@ def get_startup_info(system_type: str):
 
 def segment_video(converts_file_path: str, segment_save_file_path: str, segment_format: str, segment_time: str,
                   is_original_delete: bool = True) -> None:
-    if os.path.exists(converts_file_path) and os.path.getsize(converts_file_path) > 0:
-        ffmpeg_command = [
-            "ffmpeg",
-            "-i", converts_file_path,
-            "-c:v", "copy",
-            "-c:a", "copy",
-            "-map", "0",
-            "-f", "segment",
-            "-segment_time", segment_time,
-            "-segment_format", segment_format,
-            "-reset_timestamps", "1",
-            "-movflags", "+frag_keyframe+empty_moov",
-            segment_save_file_path,
-        ]
-        _output = subprocess.check_output(
-            ffmpeg_command, stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type)
-        )
-        if is_original_delete:
-            time.sleep(1)
-            if os.path.exists(converts_file_path):
-                os.remove(converts_file_path)
+    try:
+        if os.path.exists(converts_file_path) and os.path.getsize(converts_file_path) > 0:
+            ffmpeg_command = [
+                "ffmpeg",
+                "-i", converts_file_path,
+                "-c:v", "copy",
+                "-c:a", "copy",
+                "-map", "0",
+                "-f", "segment",
+                "-segment_time", segment_time,
+                "-segment_format", segment_format,
+                "-reset_timestamps", "1",
+                "-movflags", "+frag_keyframe+empty_moov",
+                segment_save_file_path,
+            ]
+            _output = subprocess.check_output(
+                ffmpeg_command, stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type)
+            )
+            if is_original_delete:
+                time.sleep(1)
+                if os.path.exists(converts_file_path):
+                    os.remove(converts_file_path)
+    except subprocess.CalledProcessError as e:
+        logger.error(f'Error occurred during conversion: {e}')
+    except Exception as e:
+        logger.error(f'An unknown error occurred: {e}')
 
 
 def converts_mp4(converts_file_path: str, is_original_delete: bool = True) -> None:
-    if os.path.exists(converts_file_path) and os.path.getsize(converts_file_path) > 0:
-        _output = subprocess.check_output([
-            "ffmpeg", "-i", converts_file_path,
-            "-c:v", "copy",
-            "-c:a", "copy",
-            "-f", "mp4", converts_file_path.rsplit('.', maxsplit=1)[0] + ".mp4",
-        ], stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type))
-        if is_original_delete:
-            time.sleep(1)
-            if os.path.exists(converts_file_path):
-                os.remove(converts_file_path)
+    try:
+        if os.path.exists(converts_file_path) and os.path.getsize(converts_file_path) > 0:
+            _output = subprocess.check_output([
+                "ffmpeg", "-i", converts_file_path,
+                "-c:v", "copy",
+                "-c:a", "copy",
+                "-f", "mp4", converts_file_path.rsplit('.', maxsplit=1)[0] + ".mp4",
+            ], stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type))
+            if is_original_delete:
+                time.sleep(1)
+                if os.path.exists(converts_file_path):
+                    os.remove(converts_file_path)
+    except subprocess.CalledProcessError as e:
+        logger.error(f'Error occurred during conversion: {e}')
+    except Exception as e:
+        logger.error(f'An unknown error occurred: {e}')
 
 
 def converts_m4a(converts_file_path: str, is_original_delete: bool = True) -> None:
-    if os.path.exists(converts_file_path) and os.path.getsize(converts_file_path) > 0:
-        _output = subprocess.check_output([
-            "ffmpeg", "-i", converts_file_path,
-            "-n", "-vn",
-            "-c:a", "aac", "-bsf:a", "aac_adtstoasc", "-ab", "320k",
-            converts_file_path.rsplit('.', maxsplit=1)[0] + ".m4a",
-        ], stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type))
-        if is_original_delete:
-            time.sleep(1)
-            if os.path.exists(converts_file_path):
-                os.remove(converts_file_path)
+    try:
+        if os.path.exists(converts_file_path) and os.path.getsize(converts_file_path) > 0:
+            _output = subprocess.check_output([
+                "ffmpeg", "-i", converts_file_path,
+                "-n", "-vn",
+                "-c:a", "aac", "-bsf:a", "aac_adtstoasc", "-ab", "320k",
+                converts_file_path.rsplit('.', maxsplit=1)[0] + ".m4a",
+            ], stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type))
+            if is_original_delete:
+                time.sleep(1)
+                if os.path.exists(converts_file_path):
+                    os.remove(converts_file_path)
+    except subprocess.CalledProcessError as e:
+        logger.error(f'Error occurred during conversion: {e}')
+    except Exception as e:
+        logger.error(f'An unknown error occurred: {e}')
 
 
 def generate_subtitles(record_name: str, ass_filename: str, sub_format: str = 'srt') -> None:
@@ -1058,7 +1073,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                 only_flv_record = False
                                 only_flv_platform_list = ['shopee', '花椒直播']
                                 if 'live.xhscdn.com' in real_url or platform in only_flv_platform_list:
-                                    logger.debug(f"提示: {platform} 强制使用FLV格式录制 {record_url}")
+                                    logger.debug(f"提示: {platform} 将强制使用FLV格式录制")
                                     only_flv_record = True
 
                                 if video_save_type == "FLV" or only_flv_record:
@@ -1086,6 +1101,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                         else:
                                             logger.debug("未找到FLV直播流，跳过录制")
                                     except Exception as e:
+                                        clear_record_info(record_name, record_url)
                                         color_obj.print_colored(
                                             f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制出错,请检查网络\n",
                                             color_obj.RED)
@@ -1095,7 +1111,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                             error_window.append(1)
 
                                     try:
-                                        if converts_to_mp4:
+                                        if converts_to_mp4 and 'live.xhscdn.com' not in real_url:
                                             seg_file_path = f"{full_path}/{anchor_name}_{title_in_name}{now}_%03d.mp4"
                                             if split_video_by_time:
                                                 segment_video(
@@ -1791,6 +1807,7 @@ while True:
                     'www.lehaitv.com',
                     'h.catshow168.com',
                     'e.tb.cn',
+                    'huodong.m.taobao.com',
                 ]
                 overseas_platform_host = [
                     'www.tiktok.com',
