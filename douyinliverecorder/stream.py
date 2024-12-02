@@ -361,7 +361,7 @@ def get_netease_stream_url(json_data: dict, video_quality: str) -> dict:
 
 
 def get_stream_url(json_data: dict, video_quality: str, url_type: str = 'm3u8', spec: bool = False,
-                   extra_key: str | int = None) -> dict:
+                   hls_extra_key: str | int = None, flv_extra_key: str | int = None) -> dict:
     if not json_data['is_live']:
         return json_data
 
@@ -375,11 +375,24 @@ def get_stream_url(json_data: dict, video_quality: str, url_type: str = 'm3u8', 
         "anchor_name": json_data['anchor_name'],
         "is_live": True
     }
-    if url_type == 'm3u8':
-        m3u8_url = play_url_list[selected_quality][extra_key] if extra_key else play_url_list[selected_quality]
+
+    def get_url(key):
+        play_url = play_url_list[selected_quality]
+        return play_url[key] if key else play_url
+
+    if url_type == 'all':
+        m3u8_url = get_url(hls_extra_key)
+        flv_url = get_url(flv_extra_key)
+        data |= {
+            "m3u8_url": json_data['m3u8_url'] if spec else m3u8_url,
+            "flv_url": json_data['flv_url'] if spec else flv_url,
+            "record_url": m3u8_url
+        }
+    elif url_type == 'm3u8':
+        m3u8_url = get_url(hls_extra_key)
         data |= {"m3u8_url": json_data['m3u8_url'] if spec else m3u8_url, "record_url": m3u8_url}
     else:
-        flv_url = play_url_list[selected_quality][extra_key] if extra_key else play_url_list[selected_quality]
+        flv_url = get_url(flv_extra_key)
         data |= {"flv_url": flv_url, "record_url": flv_url}
     data['title'] = json_data.get('title')
     return data
