@@ -38,7 +38,7 @@ from msg_push import (
 
 version = "v4.0.2"
 platforms = ("\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|"
-             "酷狗|花椒|流星|Acfun|畅聊|映客|音播|知乎|嗨秀|VV星球|17Live|浪Live|漂漂|六间房|乐嗨|花猫|淘宝"
+             "酷狗|花椒|流星|Acfun|畅聊|映客|音播|知乎|嗨秀|VV星球|17Live|浪Live|漂漂|六间房|乐嗨|花猫|淘宝|京东"
              "\n海外站点：TikTok|SOOP|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK|Shopee|Youtube")
 
 recording = set()
@@ -67,7 +67,7 @@ config_file = f'{script_path}/config/config.ini'
 url_config_file = f'{script_path}/config/URL_config.ini'
 backup_dir = f'{script_path}/backup_config'
 text_encoding = 'utf-8-sig'
-rstr = r"[\/\\\:\*\？\"\<\>\|&#.。,， ~！· ]"
+rstr = r"[\/\\\:\*\？?\"\<\>\|&#.。,， ~！· ]"
 ffmpeg_path = f"{script_path}/ffmpeg.exe"
 default_path = f'{script_path}/downloads'
 os.makedirs(default_path, exist_ok=True)
@@ -867,6 +867,12 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                 json_data, record_quality,
                                 url_type='all', hls_extra_key='hlsUrl', flv_extra_key='flvUrl'
                             )
+
+                    elif record_url.find("3.cn") > -1 or record_url.find("m.jd.com") > -1:
+                        platform = '京东直播'
+                        with semaphore:
+                            port_info = spider.get_jd_stream_url(
+                                url=record_url, proxy_addr=proxy_address, cookies=jd_cookie)
 
                     elif record_url.find(".m3u8") > -1 or record_url.find(".flv") > -1:
                         platform = '自定义录制直播'
@@ -1692,6 +1698,7 @@ while True:
     shopee_cookie = read_config_value(config, 'Cookie', 'shopee_cookie', '')
     youtube_cookie = read_config_value(config, 'Cookie', 'youtube_cookie', '')
     taobao_cookie = read_config_value(config, 'Cookie', 'taobao_cookie', '')
+    jd_cookie = read_config_value(config, 'Cookie', 'jd_cookie', '')
 
     video_save_type_list = ("FLV", "MKV", "TS", "MP4", "MP3音频", "M4A音频")
     if video_save_type and video_save_type.upper() in video_save_type_list:
@@ -1808,6 +1815,8 @@ while True:
                     'h.catshow168.com',
                     'e.tb.cn',
                     'huodong.m.taobao.com',
+                    '3.cn',
+                    'eco.m.jd.com'
                 ]
                 overseas_platform_host = [
                     'www.tiktok.com',

@@ -177,15 +177,23 @@ LIVE_STREAM_CONFIG = {
     "youtube": {
         "url": "https://www.youtube.com/watch?v=cS6zS5hi1w0",
         "func": spider.get_youtube_stream_url,
+    },
+    "taobao": {
+        "url": "https://m.tb.cn/h.TWp0HTd",
+        "func": spider.get_taobao_stream_url,
+    },
+    "jd": {
+        "url": "https://3.cn/28MLBy-E",
+        "func": spider.get_jd_stream_url,
     }
 }
 
 
-def test_live_stream(platform_name: str, proxy_addr=None) -> None:
+def test_live_stream(platform_name: str, proxy_addr=None, cookies=None) -> None:
     if platform_name in LIVE_STREAM_CONFIG:
         config = LIVE_STREAM_CONFIG[platform_name]
         try:
-            stream_data = config['func'](config['url'], proxy_addr=proxy_addr)
+            stream_data = config['func'](config['url'], proxy_addr=proxy_addr, cookies=cookies)
             logger.debug(f"Stream data for {platform_name}: {stream_data}")
         except Exception as e:
             logger.error(f"Error fetching stream data for {platform_name}: {e}")
