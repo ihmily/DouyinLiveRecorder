@@ -382,6 +382,9 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
             color_obj.print_colored(f"[{record_name}]录制时已被注释,本条线程将会退出", color_obj.YELLOW)
             clear_record_info(record_name, record_url)
             process.terminate()
+            stop_time = time.strftime('%Y-%m-%d %H:%M:%S')
+            print("因注释开启转码")
+            after_do(record_name, save_file_path, save_type, script_command, stop_time)
             process.wait()
             return True
         time.sleep(1)
@@ -389,45 +392,45 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
     return_code = process.returncode
     stop_time = time.strftime('%Y-%m-%d %H:%M:%S')
     if return_code == 0:
-        if converts_to_mp4 and save_type == 'TS':
-            if split_video_by_time:
-                file_paths = utils.get_file_paths(os.path.dirname(save_file_path))
-                prefix = os.path.basename(save_file_path).rsplit('_', maxsplit=1)[0]
-                for path in file_paths:
-                    if prefix in path:
-                        threading.Thread(target=converts_mp4, args=(path, delete_origin_file)).start()
-            else:
-                threading.Thread(target=converts_mp4, args=(save_file_path, delete_origin_file)).start()
-        print(f"\n{record_name} {stop_time} 直播录制完成\n")
-
-        if script_command:
-            logger.debug("开始执行脚本命令!")
-            if "python" in script_command:
-                params = [
-                    f'--record_name "{record_name}"',
-                    f'--save_file_path "{save_file_path}"',
-                    f'--save_type {save_type}'
-                    f'--split_video_by_time {split_video_by_time}',
-                    f'--converts_to_mp4 {converts_to_mp4}',
-                ]
-            else:
-                params = [
-                    f'"{record_name.split(" ", maxsplit=1)[-1]}"',
-                    f'"{save_file_path}"',
-                    save_type,
-                    f'split_video_by_time:{split_video_by_time}',
-                    f'converts_to_mp4:{converts_to_mp4}'
-                ]
-            script_command = script_command.strip() + ' ' + ' '.join(params)
-            run_script(script_command)
-            logger.debug("脚本命令执行结束!")
-
+        after_do(record_name, save_file_path, save_type, script_command, stop_time)
     else:
         color_obj.print_colored(f"\n{record_name} {stop_time} 直播录制出错,返回码: {return_code}\n", color_obj.RED)
 
     recording.discard(record_name)
     return False
 
+def after_do(record_name, save_file_path, save_type, script_command, stop_time):
+    if converts_to_mp4 and save_type == 'TS':
+        if split_video_by_time:
+            file_paths = utils.get_file_paths(os.path.dirname(save_file_path))
+            prefix = os.path.basename(save_file_path).rsplit('_', maxsplit=1)[0]
+            for path in file_paths:
+                if prefix in path:
+                    threading.Thread(target=converts_mp4, args=(path, delete_origin_file)).start()
+        else:
+            threading.Thread(target=converts_mp4, args=(save_file_path, delete_origin_file)).start()
+    print(f"\n{record_name} {stop_time} 直播录制完成\n")
+    if script_command:
+        logger.debug("开始执行脚本命令!")
+        if "python" in script_command:
+            params = [
+                f'--record_name "{record_name}"',
+                f'--save_file_path "{save_file_path}"',
+                f'--save_type {save_type}'
+                f'--split_video_by_time {split_video_by_time}',
+                f'--converts_to_mp4 {converts_to_mp4}',
+            ]
+        else:
+            params = [
+                f'"{record_name.split(" ", maxsplit=1)[-1]}"',
+                f'"{save_file_path}"',
+                save_type,
+                f'split_video_by_time:{split_video_by_time}',
+                f'converts_to_mp4:{converts_to_mp4}'
+            ]
+        script_command = script_command.strip() + ' ' + ' '.join(params)
+        run_script(script_command)
+        logger.debug("脚本命令执行结束!")
 
 def clean_name(input_text):
     cleaned_name = re.sub(rstr, "_", input_text.strip()).strip('_')
