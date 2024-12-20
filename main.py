@@ -215,12 +215,29 @@ def segment_video(converts_file_path: str, segment_save_file_path: str, segment_
 def converts_mp4(converts_file_path: str, is_original_delete: bool = True) -> None:
     try:
         if os.path.exists(converts_file_path) and os.path.getsize(converts_file_path) > 0:
+            file_path=converts_file_path.rsplit('.', maxsplit=1)[0] + ".mp4"
             _output = subprocess.check_output([
                 "ffmpeg", "-i", converts_file_path,
                 "-c:v", "copy",
                 "-c:a", "copy",
-                "-f", "mp4", converts_file_path.rsplit('.', maxsplit=1)[0] + ".mp4",
+                "-f", "mp4", file_path,
             ], stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type))
+            if after_converts_to_mp4_move:
+                if os.path.exists(file_path):
+                    # 获取当前文件的上一级目录
+                    parent_dir = os.path.dirname(os.path.dirname(converts_file_path))
+                    # 定义目标路径，即上一级目录下的"完成"文件夹
+                    completed_folder = os.path.join(parent_dir, '完成')
+                    # 如果"完成"文件夹不存在，则创建它
+                    if not os.path.exists(completed_folder):
+                        os.makedirs(completed_folder)
+                    # 移动文件到目标路径
+                    try:
+                        shutil.move(file_path, completed_folder)
+                        print(f'成功将 {file_path} 移动至 {completed_folder}')
+                    except Exception as e:
+                        print(f'移动失败: {e}')
+
             if is_original_delete:
                 time.sleep(1)
                 if os.path.exists(converts_file_path):
@@ -1610,6 +1627,7 @@ while True:
     disk_space_limit = float(read_config_value(config, '录制设置', '录制空间剩余阈值(gb)', 1.0))
     split_time = str(read_config_value(config, '录制设置', '视频分段时间(秒)', 1800))
     converts_to_mp4 = options.get(read_config_value(config, '录制设置', '录制完成后自动转为mp4格式', "否"), False)
+    after_converts_to_mp4_move = options.get(read_config_value(config, '录制设置', '录制完成后是否转移到指定目录(主播目录下增加转码完成目录)', "否"), False)
     delete_origin_file = options.get(read_config_value(config, '录制设置', '追加格式后删除原文件', "否"), False)
     create_time_file = options.get(read_config_value(config, '录制设置', '生成时间字幕文件', "否"), False)
     is_run_script = options.get(read_config_value(config, '录制设置', '是否录制完成后执行自定义脚本', "否"), False)
