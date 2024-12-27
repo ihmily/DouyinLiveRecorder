@@ -764,7 +764,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                             port_info = stream.get_stream_url(
                                 json_data, record_quality, url_type='flv', flv_extra_key='url')
 
-                    elif record_url.find("tlclw.com/") > -1:
+                    elif record_url.find("live.tlclw.com/") > -1:
                         platform = '畅聊直播'
                         with semaphore:
                             port_info = spider.get_changliao_stream_url(
@@ -1798,7 +1798,7 @@ while True:
                     'wap.7u66.com',
                     'live.acfun.cn',
                     'm.acfun.cn',
-                    'www.tlclw.com',
+                    'live.tlclw.com',
                     'wap.tlclw.com',
                     'live.ybw1666.com',
                     'wap.ybw1666.com',
