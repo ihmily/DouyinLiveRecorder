@@ -501,10 +501,16 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                     elif record_url.find("https://live.kuaishou.com/") > -1:
                         platform = '快手直播'
                         with semaphore:
-                            json_data = spider.get_kuaishou_stream_data(
-                                url=record_url,
-                                proxy_addr=proxy_address,
-                                cookies=ks_cookie)
+                            if not kuaishou_rec_following_only:
+                                json_data = spider.get_kuaishou_stream_data(
+                                    url=record_url,
+                                    proxy_addr=proxy_address,
+                                    cookies=ks_cookie)
+                            else:
+                                json_data = spider.get_kuaishou_stream_data_from_following(
+                                    url=record_url,
+                                    proxy_addr=proxy_address,
+                                    cookies=ks_cookie)
                             port_info = stream.get_kuaishou_stream_url(json_data, record_quality)
 
                     elif record_url.find("https://www.huya.com/") > -1:
@@ -1617,6 +1623,8 @@ while True:
     enable_proxy_platform_list = enable_proxy_platform.replace('，', ',').split(',') if enable_proxy_platform else None
     extra_enable_proxy = read_config_value(config, '录制设置', '额外使用代理录制的平台(逗号分隔)', '')
     extra_enable_proxy_platform_list = extra_enable_proxy.replace('，', ',').split(',') if extra_enable_proxy else None
+    kuaishou_rec_following_only = options.get(
+        read_config_value(config, '录制设置', '快手仅关注录制(是/否)', "否"), False)
     live_status_push = read_config_value(config, '推送配置', '直播状态推送渠道', "")
     dingtalk_api_url = read_config_value(config, '推送配置', '钉钉推送接口链接', "")
     xizhi_api_url = read_config_value(config, '推送配置', '微信推送接口链接', "")

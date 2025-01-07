@@ -17,7 +17,7 @@ from operator import itemgetter
 import urllib.parse
 import urllib.error
 from urllib.request import Request
-from typing import List
+from typing import List, MutableMapping
 import requests
 import ssl
 import re
@@ -40,6 +40,7 @@ ssl_context.check_hostname = False
 ssl_context.verify_mode = ssl.CERT_NONE
 OptionalStr = str | None
 OptionalDict = dict | None
+kuaishou_cookies_cache = {}
 
 
 def get_req(
@@ -53,6 +54,31 @@ def get_req(
         content_conding: str = 'utf-8',
         redirect_url: bool = False,
 ) -> str:
+    response, _ = get_req_with_headers(
+        url=url,
+        proxy_addr=proxy_addr,
+        headers=headers,
+        data=data,
+        json_data=json_data,
+        timeout=timeout,
+        abroad=abroad,
+        content_conding=content_conding,
+        redirect_url=redirect_url
+    )
+    return response
+
+
+def get_req_with_headers(
+        url: str,
+        proxy_addr: OptionalStr = None,
+        headers: OptionalDict = None,
+        data: dict | bytes | None = None,
+        json_data: dict | list | None = None,
+        timeout: int = 20,
+        abroad: bool = False,
+        content_conding: str = 'utf-8',
+        redirect_url: bool = False,
+) -> (str, MutableMapping[str, str]):
     if headers is None:
         headers = {}
     try:
@@ -70,6 +96,7 @@ def get_req(
             if redirect_url:
                 return response.url
             resp_str = response.text
+            resp_headers = response.headers
         else:
             if data and not isinstance(data, bytes):
                 data = urllib.parse.urlencode(data).encode(content_conding)
@@ -90,14 +117,17 @@ def get_req(
                     if content_encoding == 'gzip':
                         with gzip.open(response, 'rt', encoding=content_conding) as gzipped:
                             resp_str = gzipped.read()
+                            resp_headers = response.headers
                     else:
                         resp_str = response.read().decode(content_conding)
+                        resp_headers = response.headers
                 finally:
                     response.close()
 
             except urllib.error.HTTPError as e:
                 if e.code == 400:
                     resp_str = e.read().decode(content_conding)
+                    resp_headers = e.headers
                 else:
                     raise
             except urllib.error.URLError as e:
@@ -109,8 +139,9 @@ def get_req(
 
     except Exception as e:
         resp_str = str(e)
+        resp_headers = {}
 
-    return resp_str
+    return resp_str, resp_headers
 
 
 def get_response_status(url: str, proxy_addr: OptionalStr = None, headers: OptionalDict = None, timeout: int = 10,
@@ -378,6 +409,88 @@ def get_tiktok_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: Op
 
 
 @trace_error_decorator
+def get_kuaishou_stream_data_from_following(url: str, proxy_addr: OptionalStr = None,
+                                            cookies: OptionalStr = None) -> dict:
+    if cookies is None or cookies.strip() == '':
+        # cookies 必须设置在主页监测中， 否则返回错误
+        raise ValueError("快手Cookies必须设置如果开启了主页监测。")
+
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
+        'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
+    }
+    if 'kuaishou_cookies' in kuaishou_cookies_cache:
+        cookies = kuaishou_cookies_cache['kuaishou_cookies']
+
+    cookies_dict = {i.split('=')[0]: i.split('=')[1] for i in cookies.split('; ')}
+    # anti block by updating tokens
+    if 'kuaishou_updated' not in kuaishou_cookies_cache \
+            or kuaishou_cookies_cache['kuaishou_updated'] < time.time() - 60 * 10:
+        kuaishou_cookies_cache['kuaishou_updated'] = time.time()
+
+        # request user login https://live.kuaishou.com/live_api/baseuser/userLogin with payload {"userLoginInfo":{"authToken":"{token}","sid":"kuaishou.live.web"}} which token is kuaishou.live.web_st in cookies
+        # get the response json and update the cookies
+        user_login_url = 'https://live.kuaishou.com/live_api/baseuser/userLogin'
+        web_st = cookies_dict.get('kuaishou.live.web_st', '')
+        user_login_data = {"userLoginInfo": {
+            "authToken": web_st,
+            "sid": "kuaishou.live.web"}}
+        headers_login = headers.copy() | {'content-type': 'application/json'}
+        login_response, response_cookie = get_req_with_headers(url=user_login_url, headers=headers_login,
+                                                               json_data=user_login_data)
+        # using the response json to update the cookies, split response_cookie with \n then finds the Set-Cookie and update the cookies
+        if login_response and response_cookie:
+            # finds starts with Set-Cookie in str(response_cookie).split('\n')
+            for i in str(response_cookie).split('\n'):
+                # 'Set-Cookie: clientid=3; path=/; expires=Tue, 06 Jan 2026 14:25:12 GMT; domain=kuaishou.com; httponly', 'Set-Cookie: did=123123; path=/; expires=Tue, 06 Jan 2026 14:25:12 GMT; domain=kuaishou.com; httponly'
+                if i.startswith('Set-Cookie'):
+                    # updates the cookies, key is clientid and value is 3
+                    value = i.split(' ')[1].split('=')[1]
+                    # remove ends with ; in value
+                    if value.endswith(';'):
+                        value = value[:-1]
+                    cookies_dict[i.split(' ')[1].split('=')[0]] = value
+            cookies = '; '.join([f"{k}={v}" for k, v in cookies_dict.items()])
+            kuaishou_cookies_cache['kuaishou_cookies'] = cookies
+        else:
+            print(f"更新Cookie失败。无响应。")
+
+    if cookies:
+        headers['Cookie'] = cookies
+    try:
+        html_str = get_req(url="https://live.kuaishou.com/live_api/follow/living", proxy_addr=proxy_addr,
+                           headers=headers)
+    except Exception as e:
+        print(f"Failed to fetch data from {url}.{e}")
+        return {"type": 1, "is_live": False}
+
+    try:
+        play_list = json.loads(html_str)['data']['list']
+        latest_path_or_url = url.split('/')[-1]
+        # finds the id equ to the latest_path_or_url
+        play_list_item = None
+        for i in play_list:
+            if i['author']['id'].lower() == latest_path_or_url.lower():
+                play_list_item = i
+                break
+
+    except (AttributeError, IndexError, json.JSONDecodeError) as e:
+        print(f"失败解析JSON数据。错误: {e}")
+        return {"type": 1, "is_live": False}
+
+    if not play_list_item:
+        # print(f"没有直播数据。{url}")
+        return {"type": 2, "is_live": False}
+    play_url_list = play_list_item['playUrls'][0]['adaptationSet']['representation']
+    return {
+        "type": 2,
+        "anchor_name": play_list_item['author']['name'],
+        "flv_url_list": play_url_list,
+        "is_live": True
+    }
+
+
+@trace_error_decorator
 def get_kuaishou_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
@@ -561,7 +674,6 @@ def md5(data) -> str:
 
 
 def get_token_js(rid: str, did: str, proxy_addr: OptionalStr = None) -> List[str]:
-
     url = f'https://www.douyu.com/{rid}'
     html_str = get_req(url=url, proxy_addr=proxy_addr)
     result = re.search(r'(vdwdae325w_64we[\s\S]*function ub98484234[\s\S]*?)function', html_str).group(1)
@@ -1080,7 +1192,7 @@ def get_sooplive_stream_data(
     else:
         anchor_name = ''
 
-    result = {"anchor_name": anchor_name or '' ,"is_live": False}
+    result = {"anchor_name": anchor_name or '', "is_live": False}
 
     def get_url_list(m3u8: str) -> List[str]:
         resp = get_req(url=m3u8, proxy_addr=proxy_addr, headers=headers, abroad=True)
