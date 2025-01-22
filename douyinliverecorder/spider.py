@@ -820,14 +820,16 @@ def get_xhs_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: Option
     room_id = re.search('/livestream/(.*?)(?=/|\\?|$)', url)
     if room_id:
         room_id = room_id.group(1)
-        api = f'https://www.xiaohongshu.com/api/sns/red/live/app/v1/ecology/outside/share_info?room_id={room_id}'
+        # 这个API已经失效
+        # anchor_name(主播名字)看起来可以正常解析到，所以直接跳过解析
+        # api = f'https://www.xiaohongshu.com/api/sns/red/live/app/v1/ecology/outside/share_info?room_id={room_id}'
         # api = f'https://www.redelight.cn/api/sns/red/live/app/v1/ecology/outside/share_info?room_id={room_id}'
-        json_str = get_req(api, proxy_addr=proxy_addr, headers=headers)
-        json_data = json.loads(json_str)
-        anchor_name = json_data['data']['host_info']['nickname']
-        live_title = json_data['data']['room']['name']
+        # json_str = get_req(api, proxy_addr=proxy_addr, headers=headers)
+        # json_data = json.loads(json_str)
+        # anchor_name = json_data['data']['host_info']['nickname']
+        # live_title = json_data['data']['room']['name']
         flv_url = f'http://live-play.xhscdn.com/live/{room_id}.flv'
-        result |= {"anchor_name": anchor_name, "title": live_title, "flv_url": flv_url, 'record_url': flv_url}
+        result |= {"flv_url": flv_url, 'record_url': flv_url}
 
     user_id = re.search('/user/profile/(.*?)(?=/|\\?|$)', url)
     user_id = user_id.group(1) if user_id else get_params(url, 'host_id')
