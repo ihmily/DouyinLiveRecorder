@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-11-30 18:46:16
+Update: 2025-01-23 15:48:16
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -818,19 +818,34 @@ def get_xhs_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: Option
     result = {"anchor_name": '', "is_live": False}
     flv_url = ''
     room_id = re.search('/livestream/(.*?)(?=/|\\?|$)', url)
+    host_id = get_params(url, 'host_id')
     if room_id:
-        room_id = room_id.group(1)
-        api = f'https://www.xiaohongshu.com/api/sns/red/live/app/v1/ecology/outside/share_info?room_id={room_id}'
-        # api = f'https://www.redelight.cn/api/sns/red/live/app/v1/ecology/outside/share_info?room_id={room_id}'
-        json_str = get_req(api, proxy_addr=proxy_addr, headers=headers)
+        html_str = get_req(url, proxy_addr=proxy_addr, headers=headers)
+        json_str = re.search('window.__INITIAL_STATE__=(.*?)</script>', html_str, re.S).group(1)
         json_data = json.loads(json_str)
-        anchor_name = json_data['data']['host_info']['nickname']
-        live_title = json_data['data']['room']['name']
-        flv_url = f'http://live-play.xhscdn.com/live/{room_id}.flv'
-        result |= {"anchor_name": anchor_name, "title": live_title, "flv_url": flv_url, 'record_url': flv_url}
+        live_title = json_data['liveStream']['roomData']['roomInfo']['roomTitle']
+        anchor_name = json_data['liveStream']['roomData']['hostInfo']['nickName']
+        play_data = json.loads(json_data['liveStream']['roomData']['roomInfo']['pullConfig'])
+        m3u8_url_list = []
+        flv_url_list = []
+        for i in play_data['h264']:
+            play_url = i['master_url']
+            if play_url.endswith('.m3u8'):
+                m3u8_url_list.append(play_url)
+            else:
+                flv_url_list.append(play_url)
+        flv_url = flv_url_list[0]
+        m3u8_url = m3u8_url_list[0]
+        result |= {
+            "anchor_name": anchor_name,
+            "title": live_title,
+            "flv_url": flv_url,
+            "m3u8_url": m3u8_url,
+            'record_url': m3u8_url if m3u8_url else flv_url
+        }
 
     user_id = re.search('/user/profile/(.*?)(?=/|\\?|$)', url)
-    user_id = user_id.group(1) if user_id else get_params(url, 'host_id')
+    user_id = user_id.group(1) if user_id else host_id
     if user_id:
         params = {
             'user_id_list': user_id,
@@ -843,11 +858,27 @@ def get_xhs_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: Option
             if json_data['data']:
                 live_link = json_data['data'][0]['live_link']
                 anchor_name = get_params(live_link, "host_nickname")
-                if flv_url and get_response_status(flv_url, proxy_addr=proxy_addr, headers=headers):
+
+                if flv_url and get_response_status(flv_url, proxy_addr=proxy_addr, headers=headers, timeout=5):
                     result['is_live'] = True
                     return result
                 flv_url = get_params(live_link, "flvUrl")
-                result |= {"anchor_name": anchor_name, "is_live": True, "flv_url": flv_url, 'record_url': flv_url}
+                room_id = flv_url.split('live/')[1].split('.')[0]
+                flv_url = f'http://live-source-play.xhscdn.com/live/{room_id}.flv'
+                m3u8_url = flv_url.replace('.flv', '.m3u8')
+                result |= {
+                    "anchor_name": anchor_name,
+                    "is_live": True,
+                    "flv_url": flv_url,
+                    "m3u8_url": m3u8_url,
+                    'record_url': flv_url
+                }
+            else:
+                html_str = get_req(url, proxy_addr=proxy_addr, headers=headers)
+                json_str = re.search('window.__INITIAL_STATE__=(.*?)</script>', html_str, re.S).group(1)
+                json_data = json.loads(json_str)
+                anchor_name = json_data['profile']['userInfo']['nickname']
+                result['anchor_name'] = anchor_name
         else:
             print(f"xhs {json_data['msg']}")
     return result

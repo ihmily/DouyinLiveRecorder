@@ -4,11 +4,10 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-11-30 23:35:00
+Update: 2025-01-23 17:09:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
-
 import os
 import sys
 import builtins
@@ -365,7 +364,7 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
                      script_command: str | None = None) -> bool:
     save_file_path = ffmpeg_command[-1]
     process = subprocess.Popen(
-        ffmpeg_command, stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type)
+        ffmpeg_command, stdin=subprocess.PIPE, stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type)
     )
 
     subs_file_path = save_file_path.rsplit('.', maxsplit=1)[0]
@@ -381,7 +380,13 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
         if record_url in url_comments or exit_recording:
             color_obj.print_colored(f"[{record_name}]录制时已被注释,本条线程将会退出", color_obj.YELLOW)
             clear_record_info(record_name, record_url)
-            process.terminate()
+            # process.terminate()
+            if os.name == 'nt':
+                if process.stdin:
+                    process.stdin.write(b'q')
+                    process.stdin.close()
+            else:
+                process.send_signal(signal.SIGINT)
             process.wait()
             return True
         time.sleep(1)
@@ -1078,7 +1083,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
 
                                 only_flv_record = False
                                 only_flv_platform_list = ['shopee', '花椒直播']
-                                if 'live.xhscdn.com' in real_url or platform in only_flv_platform_list:
+                                if platform in only_flv_platform_list:
                                     logger.debug(f"提示: {platform} 将强制使用FLV格式录制")
                                     only_flv_record = True
 
@@ -1117,7 +1122,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                             error_window.append(1)
 
                                     try:
-                                        if converts_to_mp4 and 'live.xhscdn.com' not in real_url:
+                                        if converts_to_mp4:
                                             seg_file_path = f"{full_path}/{anchor_name}_{title_in_name}{now}_%03d.mp4"
                                             if split_video_by_time:
                                                 segment_video(
@@ -1379,6 +1384,9 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                                 custom_script
                                             )
                                             if comment_end:
+                                                threading.Thread(
+                                                    target=converts_mp4, args=(save_file_path, delete_origin_file)
+                                                ).start()
                                                 return
 
                                         except subprocess.CalledProcessError as e:
