@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2025-01-23 22:25:16
+Update: 2025-01-23 23:19:16
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -59,7 +59,6 @@ async def async_req(
         if proxy_addr:
             if not proxy_addr.startswith('http'):
                 proxy_addr = 'http://' + proxy_addr
-            print(f'使用代理: {proxy_addr}')
 
         if data or json_data:
             async with httpx.AsyncClient(proxies=proxy_addr, timeout=timeout) as client:
@@ -1509,23 +1508,28 @@ async def get_flextv_stream_data(
     result = {"anchor_name": '', "is_live": False}
     new_cookies = None
     try:
-        url2 = f'https://www.flextv.co.kr/channels/{user_id}'
+        url2 = f'https://www.flextv.co.kr/channels/{user_id}/live'
         html_str = await async_req(url2, proxy_addr=proxy_addr, headers=headers, abroad=True)
         json_str = re.search('<script id="__NEXT_DATA__" type=".*">(.*?)</script>', html_str).group(1)
         json_data = json.loads(json_str)
         channel_data = json_data['props']['pageProps']['channel']
-        live_status = channel_data['isInLive']
-        anchor_id = channel_data['owner']['loginId']
-        anchor_name = f"{channel_data['owner']['nickname']}-{anchor_id}"
-        result["anchor_name"] = anchor_name
+        live_status = channel_data.get('stream') and channel_data['stream']['isRecording'] == 1
         if live_status:
             result['is_live'] = True
+            anchor_id = channel_data['owner']['loginId']
+            anchor_name = f"{channel_data['owner']['nickname']}-{anchor_id}"
+            result["anchor_name"] = anchor_name
             play_url, new_cookies = await get_flextv_stream_url(
                 url=url, proxy_addr=proxy_addr, cookies=cookies, username=username, password=password)
             if play_url:
                 result['m3u8_url'] = play_url
                 result['play_url_list'] = await get_play_url_list(m3u8=play_url, proxy=proxy_addr, header=headers,
                                                             abroad=True)
+        else:
+            url2 = f'https://www.flextv.co.kr/channels/{user_id}'
+            html_str = await async_req(url2, proxy_addr=proxy_addr, headers=headers, abroad=True)
+            anchor_name = re.search('<meta name="twitter:title" content="(.*?)의', html_str).group(1)
+            result["anchor_name"] = anchor_name
     except Exception as e:
         print("Failed to retrieve data from FlexTV live room", e)
     result['new_cookies'] = new_cookies
