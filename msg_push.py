@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-09-03 19:18:36
-Update: 2024-10-23 23:37:12
+Update: 2025-01-23 17:16:12
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 """
 from typing import Dict, Any
@@ -67,7 +67,7 @@ def xizhi(url: str, title: str, content: str) -> Dict[str, Any]:
         }
         try:
             data = json.dumps(json_data).encode('utf-8')
-            req = urllib.request.Request(url, data=data, headers=headers)
+            req = urllib.request.Request(api, data=data, headers=headers)
             response = opener.open(req, timeout=10)
             json_str = response.read().decode('utf-8')
             json_data = json.loads(json_str)
