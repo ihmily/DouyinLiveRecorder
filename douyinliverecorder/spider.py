@@ -2498,7 +2498,7 @@ def get_changliao_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: 
         'User-Agent': 'ios/7.830 (ios 17.0; ; iPhone 15 (A2846/A3089/A3090/A3092))',
         'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
-        'Referer': 'https://wap.tlclw.com/phone/801044397?promoters=0',
+        'Referer': 'https://wap.tlclw.com/phone/15777?promoters=0',
     }
     if cookies:
         headers['Cookie'] = cookies
