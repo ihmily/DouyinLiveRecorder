@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import asyncio
 from douyinliverecorder.logger import logger
 from douyinliverecorder import spider
 
@@ -193,7 +194,7 @@ def test_live_stream(platform_name: str, proxy_addr=None, cookies=None) -> None:
     if platform_name in LIVE_STREAM_CONFIG:
         config = LIVE_STREAM_CONFIG[platform_name]
         try:
-            stream_data = config['func'](config['url'], proxy_addr=proxy_addr, cookies=cookies)
+            stream_data = asyncio.run(config['func'](config['url'], proxy_addr=proxy_addr, cookies=cookies))
             logger.debug(f"Stream data for {platform_name}: {stream_data}")
         except Exception as e:
             logger.error(f"Error fetching stream data for {platform_name}: {e}")

@@ -261,7 +261,7 @@ def get_huya_stream_url(json_data: dict, video_quality: str) -> dict:
 
 
 @trace_error_decorator
-def get_douyu_stream_url(json_data: dict, video_quality: str, cookies: str, proxy_addr: str) -> dict:
+async def get_douyu_stream_url(json_data: dict, video_quality: str, cookies: str, proxy_addr: str) -> dict:
     if not json_data["is_live"]:
         return json_data
 
@@ -277,7 +277,7 @@ def get_douyu_stream_url(json_data: dict, video_quality: str, cookies: str, prox
     rid = str(json_data["room_id"])
     json_data.pop("room_id")
     rate = video_quality_options.get(video_quality, '0')
-    flv_data = get_douyu_stream_data(rid, rate, cookies=cookies, proxy_addr=proxy_addr)
+    flv_data = await get_douyu_stream_data(rid, rate, cookies=cookies, proxy_addr=proxy_addr)
     rtmp_url = flv_data['data'].get('rtmp_url')
     rtmp_live = flv_data['data'].get('rtmp_live')
     if rtmp_live:
@@ -307,7 +307,7 @@ def get_yy_stream_url(json_data: dict) -> dict:
 
 
 @trace_error_decorator
-def get_bilibili_stream_url(json_data: dict, video_quality: str, proxy_addr: str, cookies: str) -> dict:
+async def get_bilibili_stream_url(json_data: dict, video_quality: str, proxy_addr: str, cookies: str) -> dict:
     anchor_name = json_data["anchor_name"]
     if not json_data["live_status"]:
         return {
@@ -327,7 +327,7 @@ def get_bilibili_stream_url(json_data: dict, video_quality: str, proxy_addr: str
     }
 
     select_quality = video_quality_options[video_quality]
-    play_url = get_bilibili_stream_data(
+    play_url = await get_bilibili_stream_data(
         room_url, qn=select_quality, platform='web', proxy_addr=proxy_addr, cookies=cookies)
     return {
         'anchor_name': json_data['anchor_name'],

@@ -11,6 +11,7 @@ import json
 import re
 import urllib.parse
 import execjs
+import httpx
 import requests
 import urllib.request
 from . import JS_SCRIPT_PATH
@@ -44,51 +45,69 @@ def get_xbogus(url: str, headers: dict | None = None) -> str:
 
 
 # 获取房间ID和用户secID
-def get_sec_user_id(url: str, proxy_addr: str | None = None, headers: dict | None = None) -> tuple | None:
+async def get_sec_user_id(url: str, proxy_addr: str | None = None, headers: dict | None = None) -> tuple | None:
+    # 如果没有提供headers或者headers中不包含user-agent和cookie，则使用默认headers
     if not headers or all(k.lower() not in ['user-agent', 'cookie'] for k in headers):
         headers = HEADERS
 
-    if proxy_addr:
-        proxies = {
-            'http': proxy_addr,
-            'https': proxy_addr
-        }
-        response = requests.get(url, headers=headers, proxies=proxies, timeout=15)
-    else:
-        response = opener.open(url, timeout=15)
-    redirect_url = response.url
-    if 'reflow/' in redirect_url:
-        sec_user_id = re.search(r'sec_user_id=([\w_\-]+)&', redirect_url).group(1)
-        room_id = redirect_url.split('?')[0].rsplit('/', maxsplit=1)[1]
-        return room_id, sec_user_id
+    try:
+        async with httpx.AsyncClient(proxies=proxy_addr, timeout=15) as client:
+            response = await client.get(url, headers=headers, follow_redirects=True)
+
+            redirect_url = response.url
+            if 'reflow/' in str(redirect_url):
+                match = re.search(r'sec_user_id=([\w_\-]+)&', str(redirect_url))
+                if match:
+                    sec_user_id = match.group(1)
+                    room_id = str(redirect_url).split('?')[0].rsplit('/', maxsplit=1)[1]
+                    return room_id, sec_user_id
+                else:
+                    print("Could not find sec_user_id in the URL.")
+            else:
+                print("The redirect URL does not contain 'reflow/'.")
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+    return None
 
 
 # 获取抖音号
-def get_unique_id(url: str, proxy_addr: str | None = None, headers: dict | None = None) -> str:
+async def get_unique_id(url: str, proxy_addr: str | None = None, headers: dict | None = None) -> str | None:
+    # 如果没有提供headers或者headers中不包含user-agent和cookie，则使用默认headers
     if not headers or all(k.lower() not in ['user-agent', 'cookie'] for k in headers):
         headers = HEADERS_PC
 
-    if proxy_addr:
-        proxies = {
-            'http': proxy_addr,
-            'https': proxy_addr
-        }
-        response = requests.get(url, headers=headers, proxies=proxies, timeout=15)
-    else:
-        response = opener.open(url, timeout=15)
-    redirect_url = response.url
-    sec_user_id = redirect_url.split('?')[0].rsplit('/', maxsplit=1)[1]
-    resp = requests.get(f'https://www.douyin.com/user/{sec_user_id}', headers=headers)
-    unique_id = re.findall(r'undefined\\"},\\"uniqueId\\":\\"(.*?)\\",\\"customVerify', resp.text)[-1]
-    return unique_id
+    try:
+        async with httpx.AsyncClient(proxies=proxy_addr, timeout=15) as client:
+            # 第一次请求，获取重定向后的URL以提取sec_user_id
+            response = await client.get(url, headers=headers, follow_redirects=True)
+            redirect_url = str(response.url)
+            sec_user_id = redirect_url.split('?')[0].rsplit('/', maxsplit=1)[1]
+
+            # 第二次请求，获取用户页面内容来提取unique_id
+            user_page_response = await client.get(f'https://www.douyin.com/user/{sec_user_id}', headers=headers)
+
+            # 使用正则表达式查找unique_id
+            matches = re.findall(r'undefined\\"},\\"uniqueId\\":\\"(.*?)\\",\\"customVerify', user_page_response.text)
+            if matches:
+                unique_id = matches[-1]
+                return unique_id
+            else:
+                print("Could not find unique_id in the response.")
+                return None
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return None
 
 
 # 获取直播间webID
-def get_live_room_id(room_id: str, sec_user_id: str, proxy_addr: str | None = None,
+async def get_live_room_id(room_id: str, sec_user_id: str, proxy_addr: str | None = None,
                      params: dict | None = None, headers: dict | None = None) -> str:
+    # 如果没有提供headers或者headers中不包含user-agent和cookie，则使用默认headers
     if not headers or all(k.lower() not in ['user-agent', 'cookie'] for k in headers):
         headers = HEADERS
 
+    # 设置默认参数
     if not params:
         params = {
             "verifyFp": "verify_lk07kv74_QZYCUApD_xhiB_405x_Ax51_GYO9bUIyZQVf",
@@ -100,23 +119,27 @@ def get_live_room_id(room_id: str, sec_user_id: str, proxy_addr: str | None = No
             "msToken": "wrqzbEaTlsxt52-vxyZo_mIoL0RjNi1ZdDe7gzEGMUTVh_HvmbLLkQrA_1HKVOa2C6gkxb6IiY6TY2z8enAkPEwGq--gM"
                        "-me3Yudck2ailla5Q4osnYIHxd9dI4WtQ==",
         }
+
+    # 构建API URL并添加X-Bogus签名
     api = f'https://webcast.amemv.com/webcast/room/reflow/info/?{urllib.parse.urlencode(params)}'
     xbogus = get_xbogus(api)
     api = api + "&X-Bogus=" + xbogus
 
-    if proxy_addr:
-        proxies = {
-            'http': proxy_addr,
-            'https': proxy_addr
-        }
-        response = requests.get(api, headers=headers, proxies=proxies, timeout=15)
-        json_str = response.text
-    else:
-        req = urllib.request.Request(api, headers=headers)
-        response = opener.open(req, timeout=15)
-        json_str = response.read().decode('utf-8')
-    json_data = json.loads(json_str)
-    return json_data['data']['room']['owner']['web_rid']
+    try:
+        async with httpx.AsyncClient(proxies={"http://": proxy_addr, "https://": proxy_addr} if proxy_addr else None,
+                                     timeout=15) as client:
+            response = await client.get(api, headers=headers)
+            response.raise_for_status()  # 检查HTTP响应状态码是否表示成功
+
+            json_data = response.json()
+            web_rid = json_data['data']['room']['owner']['web_rid']
+            return web_rid
+    except httpx.HTTPStatusError as e:
+        print(f"HTTP status error occurred: {e.response.status_code}")
+        raise
+    except Exception as e:
+        print(f"An exception occurred during get_live_room_id: {e}")
+        raise
 
 
 if __name__ == '__main__':
