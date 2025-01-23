@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2025-01-23 18:57:16
+Update: 2025-01-23 22:25:16
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -18,7 +18,6 @@ import urllib.parse
 import urllib.error
 from urllib.request import Request
 from typing import List
-
 import httpx
 import requests
 import ssl
@@ -26,7 +25,6 @@ import re
 import json
 import execjs
 import urllib.request
-import http.cookiejar
 from .utils import (
     trace_error_decorator, dict_to_cookie_str
 )
@@ -68,7 +66,7 @@ async def async_req(
                 response = await client.post(url, data=data, json=json_data, headers=headers)
         else:
             async with httpx.AsyncClient(proxies=proxy_addr, timeout=timeout) as client:
-                response = await client.get(url, headers=headers)
+                response = await client.get(url, headers=headers, follow_redirects=True)
 
         if redirect_url:
             return str(response.url)
@@ -817,6 +815,51 @@ async def get_bilibili_stream_data(url: str, qn: str = '10000', platform: str = 
 
 
 @trace_error_decorator
+async def get_xhs_stream_url_profile(
+        url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None, author: OptionalStr = None
+) -> dict:
+    headers = {
+        'User-Agent': 'ios/7.830 (ios 17.0; ; iPhone 15 (A2846/A3089/A3090/A3092))',
+        'xy-common-params': 'platform=iOS&sid=session.1722166379345546829388',
+        'referer': 'https://app.xhs.cn/',
+    }
+    if cookies:
+        headers['Cookie'] = cookies
+    host_id = get_params(url, 'host_id')
+    user_id = re.search('/user/profile/(.*?)(?=/|\\?|$)', url)
+    user_id = user_id.group(1) if user_id else host_id
+    result = {"anchor_name": '', "is_live": False}
+    if user_id:
+        params = {'user_id_list': user_id}
+        app_api = f'https://live-room.xiaohongshu.com/api/sns/v1/live/user_status?{urllib.parse.urlencode(params)}'
+        json_str = await async_req(app_api, proxy_addr=proxy_addr, headers=headers)
+        json_data = json.loads(json_str)
+        if json_data.get('data'):
+            live_link = json_data['data'][0]['live_link']
+            anchor_name = get_params(live_link, "host_nickname")
+            flv_url = get_params(live_link, "flvUrl")
+            room_id = flv_url.split('live/')[1].split('.')[0]
+            flv_url = f'http://live-source-play.xhscdn.com/live/{room_id}.flv'
+            m3u8_url = flv_url.replace('.flv', '.m3u8')
+            result |= {
+                "anchor_name": anchor_name,
+                "is_live": True,
+                "flv_url": flv_url,
+                "m3u8_url": m3u8_url,
+                'record_url': flv_url
+            }
+        if not result["anchor_name"] and author:
+            result['anchor_name'] = author
+        else:
+            html_str = await async_req(url, proxy_addr=proxy_addr, headers=headers)
+            json_str = re.search('window.__INITIAL_STATE__=(.*?)</script>', html_str, re.S).group(1)
+            json_data = json.loads(json_str)
+            anchor_name = json_data['profile']['userInfo']['nickname']
+            result['anchor_name'] = anchor_name
+    return result
+
+
+@trace_error_decorator
 async def get_xhs_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
         'User-Agent': 'ios/7.830 (ios 17.0; ; iPhone 15 (A2846/A3089/A3090/A3092))',
@@ -830,73 +873,34 @@ async def get_xhs_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: 
         url = await async_req(url, proxy_addr=proxy_addr, headers=headers, redirect_url=True)
 
     result = {"anchor_name": '', "is_live": False}
-    flv_url = ''
     room_id = re.search('/livestream/(.*?)(?=/|\\?|$)', url)
-    host_id = get_params(url, 'host_id')
     if room_id:
         html_str = await async_req(url, proxy_addr=proxy_addr, headers=headers)
         json_str = re.search('window.__INITIAL_STATE__=(.*?)</script>', html_str, re.S).group(1)
         json_data = json.loads(json_str)
-        live_title = json_data['liveStream']['roomData']['roomInfo']['roomTitle']
-        anchor_name = json_data['liveStream']['roomData']['hostInfo']['nickName']
-        play_data = json.loads(json_data['liveStream']['roomData']['roomInfo']['pullConfig'])
+        room_data = json_data['liveStream']['roomData']
+        anchor_name = room_data['hostInfo']['nickName']
+        live_status = json_data['liveStream']['liveStatus']
+        result['anchor_name'] = anchor_name
+        if live_status == 'end':
+            return await get_xhs_stream_url_profile(url, proxy_addr, cookies, anchor_name)
+        title = room_data['roomInfo']['roomTitle']
+        play_data = json.loads(room_data['roomInfo']['pullConfig'])
         m3u8_url_list = []
         flv_url_list = []
-        for i in play_data['h264']:
-            play_url = i['master_url']
+        for item in play_data['h264']:
+            play_url = item['master_url']
             if play_url.endswith('.m3u8'):
                 m3u8_url_list.append(play_url)
             else:
                 flv_url_list.append(play_url)
         flv_url = flv_url_list[0]
         m3u8_url = m3u8_url_list[0]
-        result |= {
-            "anchor_name": anchor_name,
-            "title": live_title,
-            "flv_url": flv_url,
-            "m3u8_url": m3u8_url,
-            'record_url': m3u8_url if m3u8_url else flv_url
-        }
-
-    user_id = re.search('/user/profile/(.*?)(?=/|\\?|$)', url)
-    user_id = user_id.group(1) if user_id else host_id
-    if user_id:
-        params = {
-            'user_id_list': user_id,
-        }
-        # app方案
-        app_api = f'https://live-room.xiaohongshu.com/api/sns/v1/live/user_status?{urllib.parse.urlencode(params)}'
-        json_str = await async_req(app_api, proxy_addr=proxy_addr, headers=headers)
-        json_data = json.loads(json_str)
-        if json_data["success"]:
-            if json_data['data']:
-                live_link = json_data['data'][0]['live_link']
-                anchor_name = get_params(live_link, "host_nickname")
-                status = await get_response_status(
-                    result['record_url'], proxy_addr=proxy_addr, headers=headers, timeout=5
-                )
-                if flv_url and status:
-                    result['is_live'] = True
-                    return result
-                flv_url = get_params(live_link, "flvUrl")
-                room_id = flv_url.split('live/')[1].split('.')[0]
-                flv_url = f'http://live-source-play.xhscdn.com/live/{room_id}.flv'
-                m3u8_url = flv_url.replace('.flv', '.m3u8')
-                result |= {
-                    "anchor_name": anchor_name,
-                    "is_live": True,
-                    "flv_url": flv_url,
-                    "m3u8_url": m3u8_url,
-                    'record_url': flv_url
-                }
-            else:
-                html_str = await async_req(url, proxy_addr=proxy_addr, headers=headers)
-                json_str = re.search('window.__INITIAL_STATE__=(.*?)</script>', html_str, re.S).group(1)
-                json_data = json.loads(json_str)
-                anchor_name = json_data['profile']['userInfo']['nickname']
-                result['anchor_name'] = anchor_name
-
-    return result
+        record_url = m3u8_url if m3u8_url else flv_url
+        result |= {'is_live': True, "title": title, "flv_url": flv_url, "m3u8_url": m3u8_url, 'record_url': record_url}
+        return result
+    else:
+        return await get_xhs_stream_url_profile(url, proxy_addr, cookies)
 
 
 @trace_error_decorator
