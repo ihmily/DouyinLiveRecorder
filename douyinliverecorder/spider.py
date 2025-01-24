@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2025-01-23 23:19:16
+Update: 2025-01-24 12:21:16
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -847,14 +847,15 @@ async def get_xhs_stream_url_profile(
                 "m3u8_url": m3u8_url,
                 'record_url': flv_url
             }
-        if not result["anchor_name"] and author:
-            result['anchor_name'] = author
-        else:
-            html_str = await async_req(url, proxy_addr=proxy_addr, headers=headers)
-            json_str = re.search('window.__INITIAL_STATE__=(.*?)</script>', html_str, re.S).group(1)
-            json_data = json.loads(json_str)
-            anchor_name = json_data['profile']['userInfo']['nickname']
-            result['anchor_name'] = anchor_name
+        if not result["anchor_name"]:
+            if author:
+                result['anchor_name'] = author
+            else:
+                html_str = await async_req(url, proxy_addr=proxy_addr, headers=headers)
+                json_str = re.search('window.__INITIAL_STATE__=(.*?)</script>', html_str, re.S).group(1)
+                json_data = json.loads(json_str)
+                anchor_name = json_data['profile']['userInfo']['nickname']
+                result['anchor_name'] = anchor_name
     return result
 
 
