@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2025-01-24 12:21:16
+Update: 2025-01-24 15:35:16
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -61,10 +61,10 @@ async def async_req(
                 proxy_addr = 'http://' + proxy_addr
 
         if data or json_data:
-            async with httpx.AsyncClient(proxies=proxy_addr, timeout=timeout) as client:
+            async with httpx.AsyncClient(proxy=proxy_addr, timeout=timeout) as client:
                 response = await client.post(url, data=data, json=json_data, headers=headers)
         else:
-            async with httpx.AsyncClient(proxies=proxy_addr, timeout=timeout) as client:
+            async with httpx.AsyncClient(proxy=proxy_addr, timeout=timeout) as client:
                 response = await client.get(url, headers=headers, follow_redirects=True)
 
         if redirect_url:

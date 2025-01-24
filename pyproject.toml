@@ -1,26 +1,24 @@
 [project]
-requires-python = ">=3.10"
+name = "douyinliverecorder"
+version = "4.0.2"
+description = "An easy tool for recording live streams"
+authors = [{ name = "Hmily" }]
+license = {text = "MIT"}
+readme = "README.md"
+urls = {Repository = "https://github.com/ihmily/DouyinLiveRecorder"}
+keywords = ["douyin", "live", "recorder"]
+requires-python = ">=3.10,<4.0"
+
+dependencies = [
+    "requests>=2.31.0",
+    "loguru>=0.7.3",
+    "pycryptodome>=3.20.0",
+    "distro>=1.9.0",
+    "tqdm>=4.67.1",
+    "httpx==0.28.1",
+    "PyExecJS>=1.5.1"
+]
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
-
-[tool.poetry]
-name = "douyinliverecorder"
-version = "3.0.9"
-description = "An easy tool for recording live streams"
-authors = ["Hmily"]
-license = "MIT"
-readme = "README.md"
-homepage = "https://github.com/ihmily/DouyinLiveRecorder"
-repository = "https://github.com/ihmily/DouyinLiveRecorder"
-keywords = ["douyin", "live", "recorder"]
-
-[tool.poetry.dependencies]
-python = "^3.10"
-requests = "^2.25.1"
-PyExecJS = "^1.5.1"
-loguru = "^0.5.3"
-pycryptodome = "^3.10.1"
-distro = "^1.9.0"
-tqdm = "^4.66.5"
