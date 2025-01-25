@@ -2497,7 +2497,7 @@ async def get_acfun_stream_data(url: str, proxy_addr: OptionalStr = None, cookie
     result = {"anchor_name": anchor_name, "is_live": False}
     if status:
         result["is_live"] = True
-        user_id, did, visitor_st = get_acfun_sign_params(proxy_addr=proxy_addr, cookies=cookies)
+        user_id, did, visitor_st = await get_acfun_sign_params(proxy_addr=proxy_addr, cookies=cookies)
         params = {
             'subBiz': 'mainApp',
             'kpn': 'ACFUN_APP',
