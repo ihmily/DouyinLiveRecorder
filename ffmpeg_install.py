@@ -20,6 +20,7 @@ from douyinliverecorder.logger import logger
 current_platform = platform.system()
 execute_dir = os.path.split(os.path.realpath(sys.argv[0]))[0]
 current_env_path = os.environ.get('PATH')
+ffmpeg_path = os.path.join(execute_dir, 'ffmpeg')
 
 
 def unzip_file(zip_path: str | Path, extract_to: str | Path, delete: bool = True) -> None:
@@ -83,8 +84,7 @@ def install_ffmpeg_windows():
                             f.write(data)
 
             unzip_file(zip_file_path, execute_dir)
-            extract_dir_path = str(zip_file_path).rsplit('.', maxsplit=1)[0]
-            os.environ['PATH'] = execute_dir + '/' + extract_dir_path + os.pathsep + current_env_path
+            os.environ['PATH'] = ffmpeg_path + os.pathsep + current_env_path
             result = subprocess.run(["ffmpeg", "-version"], capture_output=True)
             if result.returncode == 0:
                 logger.debug('ffmpeg installation was successful')

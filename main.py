@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2025-01-25 19:51:00
+Update: 2025-01-26 00:05:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -27,7 +27,6 @@ import urllib.request
 from urllib.error import URLError, HTTPError
 from typing import Any
 import configparser
-from ffmpeg_install import check_ffmpeg
 from douyinliverecorder import spider, stream
 from douyinliverecorder.proxy import ProxyDetector
 from douyinliverecorder.utils import logger
@@ -35,12 +34,15 @@ from douyinliverecorder import utils
 from msg_push import (
     dingtalk, xizhi, tg_bot, send_email, bark, ntfy
 )
+from ffmpeg_install import (
+    check_ffmpeg, ffmpeg_path, current_env_path
+)
 
 version = "v4.0.2"
 platforms = ("\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|"
              "酷狗|花椒|流星|Acfun|畅聊|映客|音播|知乎|嗨秀|VV星球|17Live|浪Live|漂漂|六间房|乐嗨|花猫|淘宝|京东"
              "\n海外站点：TikTok|SOOP|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK|Shopee|"
-             "Youtube|faceit")
+             "Youtube|Faceit")
 
 recording = set()
 error_count = 0
@@ -69,14 +71,13 @@ url_config_file = f'{script_path}/config/URL_config.ini'
 backup_dir = f'{script_path}/backup_config'
 text_encoding = 'utf-8-sig'
 rstr = r"[\/\\\:\*\？?\"\<\>\|&#.。,， ~！· ]"
-ffmpeg_path = f"{script_path}/ffmpeg"
-os.environ['PATH'] = ffmpeg_path + ';'+os.environ['PATH']
 default_path = f'{script_path}/downloads'
 os.makedirs(default_path, exist_ok=True)
 file_update_lock = threading.Lock()
 os_type = os.name
 clear_command = "cls" if os_type == 'nt' else "clear"
 color_obj = utils.Color()
+os.environ['PATH'] = ffmpeg_path + os.pathsep + current_env_path
 
 
 def signal_handler(_signal, _frame):
@@ -613,7 +614,8 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                     elif record_url.find("cc.163.com/") > -1:
                         platform = '网易CC直播'
                         with semaphore:
-                            json_data = asyncio.run(spider.get_netease_stream_data(url=record_url, cookies=netease_cookie))
+                            json_data = asyncio.run(spider.get_netease_stream_data(
+                                url=record_url, cookies=netease_cookie))
                             port_info = stream.get_netease_stream_url(json_data, record_quality)
 
                     elif record_url.find("qiandurebo.com/") > -1:
