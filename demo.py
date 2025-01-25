@@ -143,8 +143,8 @@ LIVE_STREAM_CONFIG = {
         "func": spider.get_haixiu_stream_url,
     },
     "vvxqiu": {
-        "url": "https://h5webcdn-pro.vvxqiu.com//activity/videoShare/videoShare.html?h5Server=https://h5p.vvxqiu.com"
-               "&roomId=LP115924473&platformId=vvstar",
+        "url": "https://h5webcdnp.vvxqiu.com//activity/videoShare/videoShare.html?h5Server=https://h5p.vvxqiu.com&"
+               "roomId=LP115664695&platformId=vvstar",
         "func": spider.get_vvxqiu_stream_url,
     },
     "17live": {
@@ -186,6 +186,10 @@ LIVE_STREAM_CONFIG = {
     "jd": {
         "url": "https://3.cn/28MLBy-E",
         "func": spider.get_jd_stream_url,
+    },
+    "faceit": {
+        "url": "https://www.faceit.com/zh/players/Compl1/stream",
+        "func": spider.get_faceit_stream_data,
     }
 }
 

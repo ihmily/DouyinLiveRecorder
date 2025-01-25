@@ -808,7 +808,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                             port_info = asyncio.run(spider.get_haixiu_stream_url(
                                 url=record_url, proxy_addr=proxy_address, cookies=haixiu_cookie))
 
-                    elif record_url.find("h5webcdn-pro.vvxqiu.com/") > -1:
+                    elif record_url.find("vvxqiu.com/") > -1:
                         platform = 'VV星球'
                         with semaphore:
                             port_info = asyncio.run(spider.get_vvxqiu_stream_url(
@@ -1828,7 +1828,7 @@ while True:
                     'www.inke.cn',
                     'www.zhihu.com',
                     'www.haixiutv.com',
-                    "h5webcdn-pro.vvxqiu.com",
+                    "h5webcdnp.vvxqiu.com",
                     "17.live",
                     'www.lang.live',
                     "m.pp.weimipopo.com",
