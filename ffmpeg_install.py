@@ -62,11 +62,11 @@ def get_lanzou_download_link(url: str, password: str | None = None) -> str | Non
 def install_ffmpeg_windows():
     try:
         logger.warning("ffmpeg is not installed.")
-        logger.debug("Installing the stable version of ffmpeg for Windows...")
-        ffmpeg_url = get_lanzou_download_link('https://wweb.lanzouv.com/in54b2gmj24b', 'e3ut')
+        logger.debug("Installing the latest version of ffmpeg for Windows...")
+        ffmpeg_url = get_lanzou_download_link('https://wweb.lanzouv.com/iHAc22ly3r3g', 'eots')
         if ffmpeg_url:
-            full_file_name = 'ffmpeg-7.1.zip'
-            version = 'v7.1'
+            full_file_name = 'ffmpeg_latest_build_20250124.zip'
+            version = 'v20250124'
             zip_file_path = Path(execute_dir) / full_file_name
             if Path(zip_file_path).exists():
                 logger.debug("ffmpeg installation file already exists, start install...")

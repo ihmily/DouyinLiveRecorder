@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2025-01-25 13:39:00
+Update: 2025-01-25 19:22:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -69,7 +69,8 @@ url_config_file = f'{script_path}/config/URL_config.ini'
 backup_dir = f'{script_path}/backup_config'
 text_encoding = 'utf-8-sig'
 rstr = r"[\/\\\:\*\？?\"\<\>\|&#.。,， ~！· ]"
-ffmpeg_path = f"{script_path}/ffmpeg.exe"
+ffmpeg_path = f"{script_path}/ffmpeg"
+os.environ['PATH'] = ffmpeg_path + ';'+os.environ['PATH']
 default_path = f'{script_path}/downloads'
 os.makedirs(default_path, exist_ok=True)
 file_update_lock = threading.Lock()
@@ -216,12 +217,28 @@ def segment_video(converts_file_path: str, segment_save_file_path: str, segment_
 def converts_mp4(converts_file_path: str, is_original_delete: bool = True) -> None:
     try:
         if os.path.exists(converts_file_path) and os.path.getsize(converts_file_path) > 0:
-            _output = subprocess.check_output([
-                "ffmpeg", "-i", converts_file_path,
-                "-c:v", "copy",
-                "-c:a", "copy",
-                "-f", "mp4", converts_file_path.rsplit('.', maxsplit=1)[0] + ".mp4",
-            ], stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type))
+            if converts_to_h264:
+                color_obj.print_colored(f"正在转码为MP4格式并重新编码为h264\n", color_obj.YELLOW)
+                ffmpeg_command = [
+                    "ffmpeg", "-i", converts_file_path,
+                    "-c:v", "libx264",
+                    "-preset", "veryfast",
+                    "-crf", "23",
+                    "-vf", "format=yuv420p",
+                    "-c:a", "copy",
+                    "-f", "mp4", converts_file_path.rsplit('.', maxsplit=1)[0] + ".mp4",
+                ]
+            else:
+                color_obj.print_colored(f"正在转码为MP4格式\n", color_obj.YELLOW)
+                ffmpeg_command = [
+                    "ffmpeg", "-i", converts_file_path,
+                    "-c:v", "copy",
+                    "-c:a", "copy",
+                    "-f", "mp4", converts_file_path.rsplit('.', maxsplit=1)[0] + ".mp4",
+                ]
+            _output = subprocess.check_output(
+                ffmpeg_command, stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type)
+            )
             if is_original_delete:
                 time.sleep(1)
                 if os.path.exists(converts_file_path):
@@ -1095,7 +1112,8 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                             f"{platform} | {anchor_name} | 直播源地址: {port_info['record_url']}")
 
                                 only_flv_record = False
-                                only_flv_platform_list = ['shopee', '花椒直播']
+                                only_flv_platform_list = ['shopee']
+                                # only_flv_platform_list = ['shopee', '花椒直播']
                                 if platform in only_flv_platform_list:
                                     logger.debug(f"提示: {platform} 将强制使用FLV格式录制")
                                     only_flv_record = True
@@ -1498,18 +1516,19 @@ def backup_file_start() -> None:
 
 
 def check_ffmpeg_existence() -> bool:
-    dev_null = open(os.devnull, 'wb')
     try:
-        subprocess.run(['ffmpeg', '--help'], stdout=dev_null, stderr=dev_null, check=True)
+        result = subprocess.run(['ffmpeg', '-version'], check=True, capture_output=True, text=True)
+        if result.returncode == 0:
+            lines = result.stdout.splitlines()
+            version_line = lines[0]
+            built_line = lines[1]
+            print(version_line)
+            print(built_line)
     except subprocess.CalledProcessError as e:
         logger.error(e)
     except FileNotFoundError:
-        ffmpeg_file_check = subprocess.getoutput(ffmpeg_path)
-        if ffmpeg_file_check.find("run") > -1 and os.path.isfile(ffmpeg_path):
-            os.environ['PATH'] += os.pathsep + os.path.dirname(os.path.abspath(ffmpeg_path))
-            return True
+        pass
     finally:
-        dev_null.close()
         if check_ffmpeg():
             time.sleep(1)
             return True
@@ -1517,9 +1536,6 @@ def check_ffmpeg_existence() -> bool:
 
 
 # --------------------------初始化程序-------------------------------------
-if not check_ffmpeg_existence():
-    logger.error("缺少ffmpeg无法进行录制，程序退出")
-    sys.exit(1)
 print("-----------------------------------------------------")
 print("|                DouyinLiveRecorder                 |")
 print("-----------------------------------------------------")
@@ -1528,7 +1544,9 @@ print(f"版本号: {version}")
 print("GitHub: https://github.com/ihmily/DouyinLiveRecorder")
 print(f'支持平台: {platforms}')
 print('.....................................................')
-
+if not check_ffmpeg_existence():
+    logger.error("缺少ffmpeg无法进行录制，程序退出")
+    sys.exit(1)
 os.makedirs(os.path.dirname(config_file), exist_ok=True)
 t3 = threading.Thread(target=backup_file_start, args=(), daemon=True)
 t3.start()
@@ -1628,6 +1646,7 @@ while True:
     disk_space_limit = float(read_config_value(config, '录制设置', '录制空间剩余阈值(gb)', 1.0))
     split_time = str(read_config_value(config, '录制设置', '视频分段时间(秒)', 1800))
     converts_to_mp4 = options.get(read_config_value(config, '录制设置', '录制完成后自动转为mp4格式', "否"), False)
+    converts_to_h264 = options.get(read_config_value(config, '录制设置', 'mp4格式重新编码为h264', "否"), False)
     delete_origin_file = options.get(read_config_value(config, '录制设置', '追加格式后删除原文件', "否"), False)
     create_time_file = options.get(read_config_value(config, '录制设置', '生成时间字幕文件', "否"), False)
     is_run_script = options.get(read_config_value(config, '录制设置', '是否录制完成后执行自定义脚本', "否"), False)
