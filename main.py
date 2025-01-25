@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2025-01-25 19:22:00
+Update: 2025-01-25 19:51:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -1112,8 +1112,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                             f"{platform} | {anchor_name} | 直播源地址: {port_info['record_url']}")
 
                                 only_flv_record = False
-                                only_flv_platform_list = ['shopee']
-                                # only_flv_platform_list = ['shopee', '花椒直播']
+                                only_flv_platform_list = ['shopee'] if os.name == 'nt' else ['shopee', '花椒直播']
                                 if platform in only_flv_platform_list:
                                     logger.debug(f"提示: {platform} 将强制使用FLV格式录制")
                                     only_flv_record = True
