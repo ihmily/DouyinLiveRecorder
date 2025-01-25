@@ -312,7 +312,7 @@ def push_message(record_name: str, live_url: str, content: str) -> None:
         '钉钉': lambda: dingtalk(dingtalk_api_url, content, dingtalk_phone_num, dingtalk_is_atall),
         '邮箱': lambda: send_email(
             email_host, login_email, email_password, sender_email, sender_name,
-            to_email, msg_title, content
+            to_email, msg_title, content, smtp_port, open_smtp_ssl
         ),
         'TG': lambda: tg_bot(tg_chat_id, tg_token, content),
         'BARK': lambda: bark(
@@ -1650,6 +1650,8 @@ while True:
     tg_token = read_config_value(config, '推送配置', 'tgapi令牌', "")
     tg_chat_id = read_config_value(config, '推送配置', 'tg聊天id(个人或者群组id)', "")
     email_host = read_config_value(config, '推送配置', 'SMTP邮件服务器', "")
+    open_smtp_ssl = options.get(read_config_value(config, '推送配置', '是否使用SMTP服务SSL加密(是/否)', "是"), True)
+    smtp_port = read_config_value(config, '推送配置', 'SMTP邮件服务器端口', "")
     login_email = read_config_value(config, '推送配置', '邮箱登录账号', "")
     email_password = read_config_value(config, '推送配置', '发件人密码(授权码)', "")
     sender_email = read_config_value(config, '推送配置', '发件人邮箱', "")

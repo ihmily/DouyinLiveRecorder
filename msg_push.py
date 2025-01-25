@@ -83,7 +83,7 @@ def xizhi(url: str, title: str, content: str) -> Dict[str, Any]:
 
 
 def send_email(email_host: str, login_email: str, email_pass: str, sender_email: str, sender_name: str,
-               to_email: str, title: str, content: str) -> Dict[str, Any]:
+               to_email: str, title: str, content: str, smtp_port: str = None, open_ssl: bool = True) -> Dict[str, Any]:
     receivers = to_email.replace('，', ',').split(',') if to_email.strip() else []
 
     try:
@@ -97,7 +97,12 @@ def send_email(email_host: str, login_email: str, email_pass: str, sender_email:
         t_apart = MIMEText(content, 'plain', 'utf-8')
         message.attach(t_apart)
 
-        smtp_obj = smtplib.SMTP_SSL(email_host, 465)
+        if open_ssl:
+            smtp_port = int(smtp_port) or 465
+            smtp_obj = smtplib.SMTP_SSL(email_host, smtp_port)
+        else:
+            smtp_port = int(smtp_port) or 25
+            smtp_obj = smtplib.SMTP(email_host, smtp_port)
         smtp_obj.login(login_email, email_pass)
         smtp_obj.sendmail(sender_email, receivers, message.as_string())
         return {"success": receivers, "error": []}
@@ -237,7 +242,7 @@ if __name__ == '__main__':
     #     sender_name="",
     #     to_email="",
     #     title="",
-    #     content=""
+    #     content="",
     # )
 
     bark_url = 'https://xxx.xxx.com/key/'
