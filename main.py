@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2025-01-23 20:36:00
+Update: 2025-01-25 13:39:00
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -39,7 +39,8 @@ from msg_push import (
 version = "v4.0.2"
 platforms = ("\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|"
              "酷狗|花椒|流星|Acfun|畅聊|映客|音播|知乎|嗨秀|VV星球|17Live|浪Live|漂漂|六间房|乐嗨|花猫|淘宝|京东"
-             "\n海外站点：TikTok|SOOP|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK|Shopee|Youtube")
+             "\n海外站点：TikTok|SOOP|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK|Shopee|"
+             "Youtube|faceit")
 
 recording = set()
 error_count = 0
@@ -880,6 +881,17 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                             port_info = asyncio.run(spider.get_jd_stream_url(
                                 url=record_url, proxy_addr=proxy_address, cookies=jd_cookie))
 
+                    elif record_url.find("faceit.com/") > -1:
+                        platform = 'faceit'
+                        with semaphore:
+                            if global_proxy or proxy_address:
+                                with semaphore:
+                                    json_data = asyncio.run(spider.get_faceit_stream_data(
+                                        url=record_url, proxy_addr=proxy_address, cookies=faceit_cookie))
+                                    port_info = stream.get_stream_url(json_data, record_quality, spec=True)
+                            else:
+                                logger.error("错误信息: 网络异常，请检查本网络是否能正常访问faceit直播平台")
+
                     elif record_url.find(".m3u8") > -1 or record_url.find(".flv") > -1:
                         platform = '自定义录制直播'
                         port_info = {
@@ -1622,7 +1634,8 @@ while True:
     custom_script = read_config_value(config, '录制设置', '自定义脚本执行命令', "") if is_run_script else None
     enable_proxy_platform = read_config_value(
         config, '录制设置', '使用代理录制的平台(逗号分隔)',
-        'tiktok, soop, pandalive, winktv, flextv, popkontv, twitch, liveme, showroom, chzzk, shopee, shp, youtu')
+        'tiktok, soop, pandalive, winktv, flextv, popkontv, twitch, liveme, showroom, chzzk, shopee, shp, youtu, faceit'
+    )
     enable_proxy_platform_list = enable_proxy_platform.replace('，', ',').split(',') if enable_proxy_platform else None
     extra_enable_proxy = read_config_value(config, '录制设置', '额外使用代理录制的平台(逗号分隔)', '')
     extra_enable_proxy_platform_list = extra_enable_proxy.replace('，', ',').split(',') if extra_enable_proxy else None
@@ -1708,6 +1721,7 @@ while True:
     youtube_cookie = read_config_value(config, 'Cookie', 'youtube_cookie', '')
     taobao_cookie = read_config_value(config, 'Cookie', 'taobao_cookie', '')
     jd_cookie = read_config_value(config, 'Cookie', 'jd_cookie', '')
+    faceit_cookie = read_config_value(config, 'Cookie', 'faceit_cookie', '')
 
     video_save_type_list = ("FLV", "MKV", "TS", "MP4", "MP3音频", "M4A音频")
     if video_save_type and video_save_type.upper() in video_save_type_list:
@@ -1844,6 +1858,7 @@ while True:
                     '.shp.ee',
                     'www.youtube.com',
                     'youtu.be',
+                    'www.faceit.com'
                 ]
 
                 platform_host.extend(overseas_platform_host)
