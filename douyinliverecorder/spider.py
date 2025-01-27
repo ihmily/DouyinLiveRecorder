@@ -554,10 +554,7 @@ async def get_huya_app_stream_url(url: str, proxy_addr: OptionalStr = None, cook
                 }
             )
         flv_url = 'https://' + play_url_list[0]['flv_url'].split('://')[1]
-        try:
-            record_url = await async_req(flv_url, proxy_addr=proxy_addr, headers=headers, redirect_url=True, timeout=15)
-        except TimeoutError:
-            record_url = flv_url
+        record_url = flv_url
 
         return {
             'anchor_name': anchor_name,
