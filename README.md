@@ -58,6 +58,9 @@
 - [x] 花猫直播
 - [x] Shopee
 - [x] Youtube
+- [x] 淘宝
+- [x] 京东
+- [x] Faceit
 - [ ] 更多平台正在更新中
 
 </div>
@@ -116,54 +119,54 @@
 直播间链接示例：
 
 ```
-抖音：
+抖音:
 https://live.douyin.com/745964462470
 https://v.douyin.com/iQFeBnt/
 https://live.douyin.com/yall1102  （链接+抖音号）
 https://v.douyin.com/CeiU5cbX  （主播主页地址）
 
-TikTok：
+TikTok:
 https://www.tiktok.com/@pearlgaga88/live
 
-快手：
+快手:
 https://live.kuaishou.com/u/yall1102
 
-虎牙：
+虎牙:
 https://www.huya.com/52333
 
-斗鱼：
+斗鱼:
 https://www.douyu.com/3637778?dyshid=
 https://www.douyu.com/topic/wzDBLS6?rid=4921614&dyshid=
 
 YY:
 https://www.yy.com/22490906/22490906
 
-B站：
+B站:
 https://live.bilibili.com/320
 
-小红书（推荐使用主页地址)：
+小红书（推荐使用主页地址):
 https://www.xiaohongshu.com/user/profile/6330049c000000002303c7ed?appuid=5f3f478a00000000010005b3
 http://xhslink.com/xpJpfM
 
-bigo直播：
+bigo直播:
 https://www.bigo.tv/cn/716418802
 
-buled直播：
+buled直播:
 https://app.blued.cn/live?id=Mp6G2R
 
-SOOP：
+SOOP:
 https://play.sooplive.co.kr/sw7love
 
-网易cc：
+网易cc:
 https://cc.163.com/583946984
 
-千度热播：
+千度热播:
 https://qiandurebo.com/web/video.php?roomnumber=33333
 
-PandaTV：
+PandaTV:
 https://www.pandalive.co.kr/live/play/bara0109
 
-猫耳FM：
+猫耳FM:
 https://fm.missevan.com/live/868895007
 
 Look直播:
@@ -209,10 +212,10 @@ https://www.showroom-live.com/room/profile?room_id=480206  （主播主页地址
 Acfun:
 https://live.acfun.cn/live/179922
 
-映客直播：
+映客直播:
 https://www.inke.cn/liveroom/index.html?uid=22954469&id=1720860391070904
 
-音播直播：
+音播直播:
 https://live.ybw1666.com/800002949
 
 知乎直播:
@@ -253,6 +256,15 @@ https://sg.shp.ee/GmpXeuf?uid=1006401066&session=802458
 
 Youtube:
 https://www.youtube.com/watch?v=cS6zS5hi1w0
+
+淘宝(需cookie):
+https://m.tb.cn/h.TWp0HTd
+
+京东:
+https://3.cn/28MLBy-E
+
+Faceit:
+https://www.faceit.com/zh/players/Compl1/stream
 ```
 
 &emsp;
@@ -383,6 +395,16 @@ docker-compose stop
 &emsp;
 
 ## ⏳提交日志
+
+- 20250127
+  - 新增淘宝、京东、faceit直播录制
+  - 修复小红书直播流录制以及转码问题
+  - 修复畅聊、VV星球、flexTV直播录制
+  - 修复批量微信直播推送
+  - 新增email发送ssl和port配置
+  - 新增强制转h264配置
+  - 更新ffmpeg版本
+  - 重构包为异步函数！
 
 - 20241130
   - 新增shopee、youtube直播录制
