@@ -151,3 +151,12 @@ def check_disk_capacity(file_path: str | Path, show: bool = False) -> float:
               f"Used: {disk_usage.used / (1024 ** 3):.2f} GB "
               f"Free: {free_space_gb:.2f} GB\n")
     return free_space_gb
+
+
+def handle_proxy_addr(proxy_addr):
+    if proxy_addr:
+        if not proxy_addr.startswith('http'):
+            proxy_addr = 'http://' + proxy_addr
+    else:
+        proxy_addr = None
+    return proxy_addr

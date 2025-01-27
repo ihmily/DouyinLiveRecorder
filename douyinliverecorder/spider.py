@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2025-01-27 13:17:16
+Update: 2025-01-27 22:08:16
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -26,7 +26,7 @@ import json
 import execjs
 import urllib.request
 from .utils import (
-    trace_error_decorator, dict_to_cookie_str
+    trace_error_decorator, dict_to_cookie_str, handle_proxy_addr
 )
 from .logger import script_path
 from .room import get_sec_user_id, get_unique_id
@@ -57,10 +57,7 @@ async def async_req(
     if headers is None:
         headers = {}
     try:
-        if proxy_addr:
-            if not proxy_addr.startswith('http'):
-                proxy_addr = 'http://' + proxy_addr
-
+        proxy_addr = handle_proxy_addr(proxy_addr)
         if data or json_data:
             async with httpx.AsyncClient(proxy=proxy_addr, timeout=timeout) as client:
                 response = await client.post(url, data=data, json=json_data, headers=headers)
@@ -156,6 +153,7 @@ async def get_response_status(url: str, proxy_addr: OptionalStr = None, headers:
                         abroad: bool = False) -> bool:
 
     try:
+        proxy_addr = handle_proxy_addr(proxy_addr)
         async with httpx.AsyncClient(proxy=proxy_addr, timeout=timeout) as client:
             response = await client.head(url, headers=headers, follow_redirects=True)
             return response.status_code == 200
@@ -1638,6 +1636,7 @@ async def login_popkontv(
     url = 'https://www.popkontv.com/api/proxy/member/v1/login'
 
     try:
+        proxy_addr = handle_proxy_addr(proxy_addr)
         async with httpx.AsyncClient(proxy=proxy_addr, timeout=20) as client:
             response = await client.post(url, json=data, headers=headers)
             response.raise_for_status()

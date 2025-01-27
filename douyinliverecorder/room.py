@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub:https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2024-10-08 23:35:00
+Update: 2025-01-27 22:08:00
 Copyright (c) 2023 by Hmily, All Rights Reserved.
 """
 import json
@@ -12,9 +12,9 @@ import re
 import urllib.parse
 import execjs
 import httpx
-import requests
 import urllib.request
 from . import JS_SCRIPT_PATH
+from .utils import handle_proxy_addr
 
 no_proxy_handler = urllib.request.ProxyHandler({})
 opener = urllib.request.build_opener(no_proxy_handler)
@@ -51,7 +51,8 @@ async def get_sec_user_id(url: str, proxy_addr: str | None = None, headers: dict
         headers = HEADERS
 
     try:
-        async with httpx.AsyncClient(proxies=proxy_addr, timeout=15) as client:
+        proxy_addr = handle_proxy_addr(proxy_addr)
+        async with httpx.AsyncClient(proxy=proxy_addr, timeout=15) as client:
             response = await client.get(url, headers=headers, follow_redirects=True)
 
             redirect_url = response.url
@@ -78,7 +79,8 @@ async def get_unique_id(url: str, proxy_addr: str | None = None, headers: dict |
         headers = HEADERS_PC
 
     try:
-        async with httpx.AsyncClient(proxies=proxy_addr, timeout=15) as client:
+        proxy_addr = handle_proxy_addr(proxy_addr)
+        async with httpx.AsyncClient(proxy=proxy_addr, timeout=15) as client:
             # 第一次请求，获取重定向后的URL以提取sec_user_id
             response = await client.get(url, headers=headers, follow_redirects=True)
             redirect_url = str(response.url)
@@ -126,7 +128,8 @@ async def get_live_room_id(room_id: str, sec_user_id: str, proxy_addr: str | Non
     api = api + "&X-Bogus=" + xbogus
 
     try:
-        async with httpx.AsyncClient(proxies={"http://": proxy_addr, "https://": proxy_addr} if proxy_addr else None,
+        proxy_addr = handle_proxy_addr(proxy_addr)
+        async with httpx.AsyncClient(proxy=proxy_addr,
                                      timeout=15) as client:
             response = await client.get(api, headers=headers)
             response.raise_for_status()  # 检查HTTP响应状态码是否表示成功
