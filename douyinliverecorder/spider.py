@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2025-01-25 13:38:16
+Update: 2025-01-27 13:17:16
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -50,9 +50,10 @@ async def async_req(
         json_data: dict | list | None = None,
         timeout: int = 20,
         redirect_url: bool = False,
+        return_cookies: bool = False,
         abroad: bool = False,
-        content_conding: str = 'utf-8',
-) -> str:
+        content_conding: str = 'utf-8'
+) -> OptionalDict | OptionalStr:
     if headers is None:
         headers = {}
     try:
@@ -69,7 +70,10 @@ async def async_req(
 
         if redirect_url:
             return str(response.url)
-        resp_str = response.text
+        elif return_cookies:
+            return {name: value for name, value in response.cookies.items()}
+        else:
+            resp_str = response.text
     except Exception as e:
         resp_str = str(e)
 
@@ -84,8 +88,9 @@ def sync_req(
         json_data: dict | list | None = None,
         timeout: int = 20,
         redirect_url: bool = False,
+        return_cookies: bool = False,
         abroad: bool = False,
-        content_conding: str = 'utf-8',
+        content_conding: str = 'utf-8'
 ) -> str:
     if headers is None:
         headers = {}
@@ -151,11 +156,8 @@ async def get_response_status(url: str, proxy_addr: OptionalStr = None, headers:
                         abroad: bool = False) -> bool:
 
     try:
-        # 创建一个异步客户端，可以在这里设置代理和超时
-        async with httpx.AsyncClient(proxies=proxy_addr, timeout=timeout) as client:
-            # 发送HEAD请求，允许重定向
+        async with httpx.AsyncClient(proxy=proxy_addr, timeout=timeout) as client:
             response = await client.head(url, headers=headers, follow_redirects=True)
-            # 检查状态码是否为200
             return response.status_code == 200
     except requests.exceptions.Timeout:
         print("Request timed out, the requested address may be inaccessible or the server is unresponsive.")
@@ -998,15 +1000,10 @@ async def login_sooplive(username: str, password: str, proxy_addr: OptionalStr =
     url = 'https://login.sooplive.co.kr/app/LoginAction.php'
 
     try:
-        async with httpx.AsyncClient(proxies={"http://": proxy_addr, "https://": proxy_addr} if proxy_addr else None,
-                                     timeout=20) as client:
-            response = await client.post(url, data=data, headers=headers)
-            response.raise_for_status()  # 检查HTTP响应状态码是否表示成功
-
-            # 构建cookie字典
-            cookie_dict = {name: value for name, value in response.cookies.items()}
-            cookie_str = '; '.join([f"{k}={v}" for k, v in cookie_dict.items()])
-            return cookie_str
+        cookie_dict = await async_req(url, proxy_addr=proxy_addr, headers=headers,
+                                      data=data, return_cookies=True, timeout=20)
+        cookie_str = '; '.join([f"{k}={v}" for k, v in cookie_dict.items()])
+        return cookie_str
     except Exception as e:
         print(f"An error occurred during login: {e}")
         raise Exception(
@@ -1428,19 +1425,16 @@ async def login_flextv(username: str, password: str, proxy_addr: OptionalStr = N
     url = 'https://api.flextv.co.kr/v2/api/auth/signin'
 
     try:
-        async with httpx.AsyncClient(proxies=proxy_addr, timeout=20) as client:
-            response = await client.post(url, json=data, headers=headers)
-            response.raise_for_status()  # 检查HTTP响应状态码是否表示成功
+        cookie_dict = await async_req(url, proxy_addr=proxy_addr, headers=headers, json_data=data,
+                                      return_cookies=True, timeout=20)
 
-            json_data = response.json()
-            cookie_dict = {name: value for name, value in response.cookies.items()}  # 构建cookie字典
+        if cookie_dict:
+            cookie_str = '; '.join([f"{k}={v}" for k, v in cookie_dict.items()])
+            return cookie_str
+        else:
+            print("Please check if the FlexTV account and password in the configuration file are correct.")
+            return None
 
-            if "error" not in json_data:
-                cookie_str = '; '.join([f"{k}={v}" for k, v in cookie_dict.items()])
-                return cookie_str
-            else:
-                print("Please check if the FlexTV account and password in the configuration file are correct.")
-                return None
     except Exception as e:
         print(f"FlexTV login request exception: {e}")
         raise Exception(
@@ -1647,9 +1641,9 @@ async def login_popkontv(
     url = 'https://www.popkontv.com/api/proxy/member/v1/login'
 
     try:
-        async with httpx.AsyncClient(proxies=proxy_addr, timeout=20) as client:
+        async with httpx.AsyncClient(proxy=proxy_addr, timeout=20) as client:
             response = await client.post(url, json=data, headers=headers)
-            response.raise_for_status()  # 检查HTTP响应状态码是否表示成功
+            response.raise_for_status()
 
             json_data = response.json()
             login_status_code = json_data.get("statusCd")
@@ -1863,14 +1857,11 @@ async def login_twitcasting(
         'cs_session_id': cs_session_id,
     }
     try:
-        async with httpx.AsyncClient(proxies=proxy_addr, timeout=20) as client:
-            response = await client.post(login_api, json=data, headers=headers)
-            response.raise_for_status()  # 检查HTTP响应状态码是否表示成功
-            cookie_dict = {name: value for name, value in response.cookies.items()}  # 构建cookie字典
-
-            if 'tc_ss' in cookie_dict:
-                cookie = dict_to_cookie_str(cookie_dict)
-                return cookie
+        cookie_dict = await async_req(login_api, proxy_addr=proxy_addr, headers=headers,
+                                      json_data=data, return_cookies=True, timeout=20)
+        if 'tc_ss' in cookie_dict:
+            cookie = dict_to_cookie_str(cookie_dict)
+            return cookie
     except Exception as e:
         print("TwitCasting login error,", e)
 
@@ -3056,10 +3047,8 @@ async def get_taobao_stream_url(url: str, proxy_addr: OptionalStr = None, cookie
         sign = execjs.compile(open(f'{JS_SCRIPT_PATH}/taobao-sign.js').read()).call('sign', pre_sign_str)
         params |= {'sign': sign, 't': t13}
         api = f'https://h5api.m.taobao.com/h5/mtop.mediaplatform.live.livedetail/4.0/?{urllib.parse.urlencode(params)}'
-        async with httpx.AsyncClient(proxies=proxy_addr, timeout=20) as client:
-            response = await client.get(api, headers=headers)
-            response.raise_for_status()  # 检查HTTP响应状态码是否表示成功
-            json_data = jsonp_to_json(response.text)
+        jsonp_str = await async_req(api, proxy_addr=proxy_addr, headers=headers, timeout=20)
+        json_data = jsonp_to_json(jsonp_str)
 
         ret_msg = json_data['ret']
         if ret_msg == ['SUCCESS::调用成功']:
