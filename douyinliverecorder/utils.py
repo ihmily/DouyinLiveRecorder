@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
-
+import json
 import os
+import random
 import shutil
+import string
 from pathlib import Path
 import functools
 import hashlib
@@ -12,6 +14,9 @@ from collections import OrderedDict
 import execjs
 from .logger import logger
 import configparser
+
+OptionalStr = str | None
+OptionalDict = dict | None
 
 
 class Color:
@@ -160,3 +165,29 @@ def handle_proxy_addr(proxy_addr):
     else:
         proxy_addr = None
     return proxy_addr
+
+
+def generate_random_string(length: int) -> str:
+    characters = string.ascii_uppercase + string.digits
+    random_string = ''.join(random.choices(characters, k=length))
+    return random_string
+
+
+def jsonp_to_json(jsonp_str: str) -> OptionalDict:
+    pattern = r'(\w+)\((.*)\);?$'
+    match = re.search(pattern, jsonp_str)
+
+    if match:
+        _, json_str = match.groups()
+        json_obj = json.loads(json_str)
+        return json_obj
+    else:
+        raise Exception("No JSON data found in JSONP response.")
+
+
+def replace_url(file_path: str | Path, old: str, new: str) -> None:
+    with open(file_path, 'r', encoding='utf-8-sig') as f:
+        content = f.read()
+    if old in content:
+        with open(file_path, 'w', encoding='utf-8-sig') as f:
+            f.write(content.replace(old, new))

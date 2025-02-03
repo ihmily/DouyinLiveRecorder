@@ -4,36 +4,30 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2025-01-27 22:08:16
+Update: 2025-02-04 04:58:16
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
-import gzip
+
 import hashlib
 import random
-import string
 import time
 from operator import itemgetter
 import urllib.parse
 import urllib.error
-from urllib.request import Request
 from typing import List
 import httpx
-import requests
 import ssl
 import re
 import json
 import execjs
 import urllib.request
-from .utils import (
-    trace_error_decorator, dict_to_cookie_str, handle_proxy_addr
-)
+from . import JS_SCRIPT_PATH, utils
+from .utils import trace_error_decorator
 from .logger import script_path
 from .room import get_sec_user_id, get_unique_id
-from . import JS_SCRIPT_PATH
+from .http_clients.async_http import async_req
 
-no_proxy_handler = urllib.request.ProxyHandler({})
-opener = urllib.request.build_opener(no_proxy_handler)
 
 ssl_context = ssl.create_default_context()
 ssl_context.check_hostname = False
@@ -41,128 +35,6 @@ ssl_context.verify_mode = ssl.CERT_NONE
 OptionalStr = str | None
 OptionalDict = dict | None
 
-
-async def async_req(
-        url: str,
-        proxy_addr: OptionalStr = None,
-        headers: OptionalDict = None,
-        data: dict | bytes | None = None,
-        json_data: dict | list | None = None,
-        timeout: int = 20,
-        redirect_url: bool = False,
-        return_cookies: bool = False,
-        abroad: bool = False,
-        content_conding: str = 'utf-8'
-) -> OptionalDict | OptionalStr:
-    if headers is None:
-        headers = {}
-    try:
-        proxy_addr = handle_proxy_addr(proxy_addr)
-        if data or json_data:
-            async with httpx.AsyncClient(proxy=proxy_addr, timeout=timeout) as client:
-                response = await client.post(url, data=data, json=json_data, headers=headers)
-        else:
-            async with httpx.AsyncClient(proxy=proxy_addr, timeout=timeout) as client:
-                response = await client.get(url, headers=headers, follow_redirects=True)
-
-        if redirect_url:
-            return str(response.url)
-        elif return_cookies:
-            return {name: value for name, value in response.cookies.items()}
-        else:
-            resp_str = response.text
-    except Exception as e:
-        resp_str = str(e)
-
-    return resp_str
-
-
-def sync_req(
-        url: str,
-        proxy_addr: OptionalStr = None,
-        headers: OptionalDict = None,
-        data: dict | bytes | None = None,
-        json_data: dict | list | None = None,
-        timeout: int = 20,
-        redirect_url: bool = False,
-        return_cookies: bool = False,
-        abroad: bool = False,
-        content_conding: str = 'utf-8'
-) -> str:
-    if headers is None:
-        headers = {}
-    try:
-        if proxy_addr:
-            proxies = {
-                'http': proxy_addr,
-                'https': proxy_addr
-            }
-            if data or json_data:
-                response = requests.post(
-                    url, data=data, json=json_data, headers=headers, proxies=proxies, timeout=timeout
-                )
-            else:
-                response = requests.get(url, headers=headers, proxies=proxies, timeout=timeout)
-            if redirect_url:
-                return response.url
-            resp_str = response.text
-        else:
-            if data and not isinstance(data, bytes):
-                data = urllib.parse.urlencode(data).encode(content_conding)
-            if json_data and isinstance(json_data, (dict, list)):
-                data = json.dumps(json_data).encode(content_conding)
-
-            req = urllib.request.Request(url, data=data, headers=headers)
-
-            try:
-                if abroad:
-                    response = urllib.request.urlopen(req, timeout=timeout)
-                else:
-                    response = opener.open(req, timeout=timeout)
-                if redirect_url:
-                    return response.url
-                content_encoding = response.info().get('Content-Encoding')
-                try:
-                    if content_encoding == 'gzip':
-                        with gzip.open(response, 'rt', encoding=content_conding) as gzipped:
-                            resp_str = gzipped.read()
-                    else:
-                        resp_str = response.read().decode(content_conding)
-                finally:
-                    response.close()
-
-            except urllib.error.HTTPError as e:
-                if e.code == 400:
-                    resp_str = e.read().decode(content_conding)
-                else:
-                    raise
-            except urllib.error.URLError as e:
-                print(f"URL Error: {e}")
-                raise
-            except Exception as e:
-                print(f"An error occurred: {e}")
-                raise
-
-    except Exception as e:
-        resp_str = str(e)
-
-    return resp_str
-
-
-async def get_response_status(url: str, proxy_addr: OptionalStr = None, headers: OptionalDict = None, timeout: int = 10,
-                        abroad: bool = False) -> bool:
-
-    try:
-        proxy_addr = handle_proxy_addr(proxy_addr)
-        async with httpx.AsyncClient(proxy=proxy_addr, timeout=timeout) as client:
-            response = await client.head(url, headers=headers, follow_redirects=True)
-            return response.status_code == 200
-    except requests.exceptions.Timeout:
-        print("Request timed out, the requested address may be inaccessible or the server is unresponsive.")
-    except requests.exceptions.TooManyRedirects:
-        print("Too many redirects, the requested address may be inaccessible.")
-    except requests.exceptions.RequestException as e:
-        print(f"Request error occurred: {e}")
 
 def get_params(url: str, params: str) -> OptionalStr:
     parsed_url = urllib.parse.urlparse(url)
@@ -172,34 +44,8 @@ def get_params(url: str, params: str) -> OptionalStr:
         return query_params[params][0]
 
 
-def generate_random_string(length: int) -> str:
-    characters = string.ascii_uppercase + string.digits
-    random_string = ''.join(random.choices(characters, k=length))
-    return random_string
-
-
-def jsonp_to_json(jsonp_str: str) -> OptionalDict:
-    pattern = r'(\w+)\((.*)\);?$'
-    match = re.search(pattern, jsonp_str)
-
-    if match:
-        _, json_str = match.groups()
-        json_obj = json.loads(json_str)
-        return json_obj
-    else:
-        raise Exception("No JSON data found in JSONP response.")
-
-
-def replace_url(file_path: str, old: str, new: str) -> None:
-    with open(file_path, 'r', encoding='utf-8-sig') as f:
-        content = f.read()
-    if old in content:
-        with open(file_path, 'w', encoding='utf-8-sig') as f:
-            f.write(content.replace(old, new))
-
-
 async def get_play_url_list(m3u8: str, proxy: OptionalStr = None, header: OptionalDict = None,
-                      abroad: bool = False) -> List[str]:
+                            abroad: bool = False) -> List[str]:
     resp = await async_req(url=m3u8, proxy_addr=proxy, headers=header, abroad=abroad)
     play_url_list = []
     for i in resp.split('\n'):
@@ -1636,8 +1482,8 @@ async def login_popkontv(
     url = 'https://www.popkontv.com/api/proxy/member/v1/login'
 
     try:
-        proxy_addr = handle_proxy_addr(proxy_addr)
-        async with httpx.AsyncClient(proxy=proxy_addr, timeout=20) as client:
+        proxy_addr = utils.handle_proxy_addr(proxy_addr)
+        async with httpx.AsyncClient(proxy=proxy_addr, timeout=20, verify=False) as client:
             response = await client.post(url, json=data, headers=headers)
             response.raise_for_status()
 
@@ -1856,7 +1702,7 @@ async def login_twitcasting(
         cookie_dict = await async_req(login_api, proxy_addr=proxy_addr, headers=headers,
                                       json_data=data, return_cookies=True, timeout=20)
         if 'tc_ss' in cookie_dict:
-            cookie = dict_to_cookie_str(cookie_dict)
+            cookie = utils.dict_to_cookie_str(cookie_dict)
             return cookie
     except Exception as e:
         print("TwitCasting login error,", e)
@@ -2248,7 +2094,7 @@ async def get_huajiao_sn(url: str, cookies: OptionalStr = None, proxy_addr: Opti
         live_id = url.split('?')[0].rsplit('/', maxsplit=1)[1]
         return nickname, sn, uid, live_id
     except Exception:
-        replace_url(f'{script_path}/config/URL_config.ini', old=url, new='#' + url)
+        utils.replace_url(f'{script_path}/config/URL_config.ini', old=url, new='#' + url)
         raise RuntimeError("Failed to retrieve live room data, the Huajiao live room address is not fixed, please use "
                            "the anchor's homepage address for recording.")
 
@@ -2447,7 +2293,7 @@ async def get_showroom_stream_data(url: str, proxy_addr: OptionalStr = None, coo
 
 @trace_error_decorator
 async def get_acfun_sign_params(proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> tuple:
-    did = f'web_{generate_random_string(16)}'
+    did = f'web_{utils.generate_random_string(16)}'
     headers = {
         'referer': 'https://live.acfun.cn/',
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
@@ -3043,8 +2889,9 @@ async def get_taobao_stream_url(url: str, proxy_addr: OptionalStr = None, cookie
         sign = execjs.compile(open(f'{JS_SCRIPT_PATH}/taobao-sign.js').read()).call('sign', pre_sign_str)
         params |= {'sign': sign, 't': t13}
         api = f'https://h5api.m.taobao.com/h5/mtop.mediaplatform.live.livedetail/4.0/?{urllib.parse.urlencode(params)}'
-        jsonp_str = await async_req(api, proxy_addr=proxy_addr, headers=headers, timeout=20)
-        json_data = jsonp_to_json(jsonp_str)
+        jsonp_str, new_cookie = await async_req(url=api, proxy_addr=proxy_addr, headers=headers, timeout=20,
+                                                include_cookies=True)
+        json_data = utils.jsonp_to_json(jsonp_str)
 
         ret_msg = json_data['ret']
         if ret_msg == ['SUCCESS::调用成功']:
@@ -3060,7 +2907,6 @@ async def get_taobao_stream_url(url: str, proxy_addr: OptionalStr = None, cookie
         else:
             print(f'Error: Taobao live data fetch failed, {ret_msg[0]}')
 
-        new_cookie = {name: value for name, value in response.cookies.items()}
         if '_m_h5_tk' in new_cookie and '_m_h5_tk_enc' in new_cookie:
             headers['Cookie'] = re.sub('_m_h5_tk=(.*?);', new_cookie['_m_h5_tk'], headers['Cookie'])
             headers['Cookie'] = re.sub('_m_h5_tk_enc=(.*?);', new_cookie['_m_h5_tk_enc'], headers['Cookie'])
