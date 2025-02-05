@@ -159,7 +159,11 @@ def get_kuaishou_stream_url(json_data: dict, video_quality: str) -> dict:
                     flv_url_list = json_data['flv_url_list']
                     flv_url_list = sorted(flv_url_list, key=lambda x: x['bitrate'], reverse=True)
                     # uses quality_mapping_bitrate to get the index of the quality
-                    quality_index_bitrate_value = quality_mapping_bitrate[video_quality]
+                    quality_str = str(video_quality).upper()
+                    if quality_str.isdigit():
+                        quality_index_bitrate_value = list(quality_mapping_bitrate.values())[int(quality_str)]
+                    else:
+                        quality_index_bitrate_value = quality_mapping_bitrate.get(quality_str, 99999)
                     # find the value below `quality_index_bitrate_value`, or else use the previous one.
                     quality_index = next(
                         (i for i, x in enumerate(flv_url_list) if x['bitrate'] <= quality_index_bitrate_value), None)
