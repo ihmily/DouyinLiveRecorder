@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 import asyncio
-from douyinliverecorder.logger import logger
-from douyinliverecorder import spider
+from streamget.logger import logger
+from streamget import spider
 
 # 以下示例直播间链接不保证时效性，请自行查看链接是否能正常访问
-# Please note that the following example live room links may not be up-to-date;
+# Please note that the following example live room links may not be up-to-date
 LIVE_STREAM_CONFIG = {
     "douyin": {
         "url": "https://live.douyin.com/745964462470",

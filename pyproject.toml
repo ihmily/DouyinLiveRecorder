@@ -1,7 +1,7 @@
 [project]
-name = "douyinliverecorder"
+name = "streamget"
 version = "4.0.2"
-description = "An easy tool for recording live streams"
+description = "A simple and efficient tool to fetch live stream URLs from various platforms. Supports multiple platforms and easy integration."
 authors = [{ name = "Hmily" }]
 license = {text = "MIT"}
 readme = "README.md"

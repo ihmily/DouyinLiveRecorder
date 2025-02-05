@@ -2,10 +2,11 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='douyinliverecorder',
+    name='streamget',
     version='4.0.2',
     author='Hmily',
-    description='An easy tool for recording live streams',
+    description='A simple and efficient tool to fetch live stream URLs from various platforms. Supports multiple '
+                'platforms and easy integration.',
     long_description=open('README.md', encoding='utf-8').read(),
     long_description_content_type='text/markdown',
     url='https://github.com/ihmily/DouyinLiveRecorder',

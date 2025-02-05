@@ -27,10 +27,10 @@ import urllib.request
 from urllib.error import URLError, HTTPError
 from typing import Any
 import configparser
-from douyinliverecorder import spider, stream
-from douyinliverecorder.proxy import ProxyDetector
-from douyinliverecorder.utils import logger
-from douyinliverecorder import utils
+from streamget import spider, stream
+from streamget.proxy import ProxyDetector
+from streamget.utils import logger
+from streamget import utils
 from msg_push import (
     dingtalk, xizhi, tg_bot, send_email, bark, ntfy
 )

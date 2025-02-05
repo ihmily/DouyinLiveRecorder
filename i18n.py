@@ -20,7 +20,7 @@ else:
     locale_path = Path(execute_dir) / 'i18n'
 _tr = init_gettext(locale_path, 'zh_CN')
 original_print = builtins.print
-package_name = 'douyinliverecorder'
+package_name = 'streamget'
 
 
 def translated_print(*args, **kwargs):
