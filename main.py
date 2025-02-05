@@ -462,6 +462,18 @@ def clean_name(input_text):
     return cleaned_name or '空白昵称'
 
 
+def get_quality_code(qn):
+    QUALITY_MAPPING = {
+        "原画": "OD",
+        "蓝光": "BD",
+        "超清": "UHD",
+        "高清": "HD",
+        "标清": "SD",
+        "流畅": "LD"
+    }
+    return QUALITY_MAPPING.get(qn)
+
+
 def start_record(url_data: tuple, count_variable: int = -1) -> None:
     global error_count
 
@@ -473,7 +485,8 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
             new_record_url = ''
             count_time = time.time()
             retry = 0
-            record_quality, record_url, anchor_name = url_data
+            record_quality_zh, record_url, anchor_name = url_data
+            record_quality = get_quality_code(record_quality_zh)
             proxy_address = proxy_addr
             platform = '未知平台'
             live_domain = '/'.join(record_url.split('/')[0:3])
@@ -1103,7 +1116,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
 
                                 recording.add(record_name)
                                 start_record_time = datetime.datetime.now()
-                                recording_time_list[record_name] = [start_record_time, record_quality]
+                                recording_time_list[record_name] = [start_record_time, record_quality_zh]
                                 rec_info = f"\r{anchor_name} 准备开始录制视频: {full_path}"
                                 if show_url:
                                     re_plat = ('WinkTV', 'PandaTV', 'ShowRoom', 'CHZZK', 'Youtube')
