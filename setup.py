@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='streamget',
-    version='4.0.2',
+    version='4.0.3',
     author='Hmily',
     description='A simple and efficient tool to fetch live stream URLs from various platforms. Supports multiple '
                 'platforms and easy integration.',

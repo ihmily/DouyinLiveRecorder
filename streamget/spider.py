@@ -4,8 +4,8 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2025-02-04 04:58:16
-Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
+Update: 2025-02-06 02:29:16
+Copyright (c) 2023-2025 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
 
@@ -1049,14 +1049,14 @@ async def get_netease_stream_data(url: str, proxy_addr: OptionalStr = None, cook
     room_data = json_data['props']['pageProps']['roomInfoInitData']
     live_data = room_data['live']
     result = {"is_live": False}
-    if 'quickplay' not in live_data:
-        result["anchor_name"] = room_data['nickname']
-    else:
+    live_status = live_data.get('status') == 1
+    result["anchor_name"] = live_data.get('nickname', room_data.get('nickname'))
+    if live_status:
         result |= {
-            'anchor_name': live_data['nickname'],
             'is_live': True,
             'title': live_data['title'],
-            'stream_list': live_data['quickplay']
+            'stream_list': live_data.get('quickplay'),
+            'm3u8_url': live_data.get('sharefile')
         }
     return result
 

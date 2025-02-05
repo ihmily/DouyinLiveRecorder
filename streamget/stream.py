@@ -4,8 +4,8 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2024-10-27 17:15:00
-Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
+Update: 2025-02-06 02:28:00
+Copyright (c) 2023-2025 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
 import base64
@@ -357,23 +357,29 @@ async def get_bilibili_stream_url(json_data: dict, video_quality: str, proxy_add
 async def get_netease_stream_url(json_data: dict, video_quality: str) -> dict:
     if not json_data['is_live']:
         return json_data
-    stream_list = json_data['stream_list']['resolution']
-    order = ['blueray', 'ultra', 'high', 'standard']
-    sorted_keys = [key for key in order if key in stream_list]
-    while len(sorted_keys) < 5:
-        sorted_keys.append(sorted_keys[-1])
-    video_quality, quality_index = get_quality_index(video_quality)
-    selected_quality = sorted_keys[quality_index]
-    flv_url_list = stream_list[selected_quality]['cdn']
-    selected_cdn = list(flv_url_list.keys())[0]
-    flv_url = flv_url_list[selected_cdn]
+
+    m3u8_url = json_data['m3u8_url']
+    flv_url = None
+    if json_data.get('stream_list'):
+        stream_list = json_data['stream_list']['resolution']
+        order = ['blueray', 'ultra', 'high', 'standard']
+        sorted_keys = [key for key in order if key in stream_list]
+        while len(sorted_keys) < 5:
+            sorted_keys.append(sorted_keys[-1])
+        video_quality, quality_index = get_quality_index(video_quality)
+        selected_quality = sorted_keys[quality_index]
+        flv_url_list = stream_list[selected_quality]['cdn']
+        selected_cdn = list(flv_url_list.keys())[0]
+        flv_url = flv_url_list[selected_cdn]
+
     return {
         "is_live": True,
         "anchor_name": json_data['anchor_name'],
         "title": json_data['title'],
         'quality': video_quality,
+        "m3u8_url": m3u8_url,
         "flv_url": flv_url,
-        "record_url": flv_url
+        "record_url": flv_url or m3u8_url
     }
 
 
