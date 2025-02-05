@@ -522,7 +522,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                     url=record_url,
                                     proxy_addr=proxy_address,
                                     cookies=dy_cookie))
-                            port_info = stream.get_douyin_stream_url(json_data, record_quality)
+                            port_info = asyncio.run(stream.get_douyin_stream_url(json_data, record_quality))
 
                     elif record_url.find("https://www.tiktok.com/") > -1:
                         platform = 'TikTok直播'
@@ -532,7 +532,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                     url=record_url,
                                     proxy_addr=proxy_address,
                                     cookies=tiktok_cookie))
-                                port_info = stream.get_tiktok_stream_url(json_data, record_quality)
+                                port_info = asyncio.run(stream.get_tiktok_stream_url(json_data, record_quality))
                             else:
                                 logger.error("错误信息: 网络异常，请检查网络是否能正常访问TikTok平台")
 
@@ -543,7 +543,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                 url=record_url,
                                 proxy_addr=proxy_address,
                                 cookies=ks_cookie))
-                            port_info = stream.get_kuaishou_stream_url(json_data, record_quality)
+                            port_info = asyncio.run(stream.get_kuaishou_stream_url(json_data, record_quality))
 
                     elif record_url.find("https://www.huya.com/") > -1:
                         platform = '虎牙直播'
@@ -553,7 +553,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                     url=record_url,
                                     proxy_addr=proxy_address,
                                     cookies=hy_cookie))
-                                port_info = stream.get_huya_stream_url(json_data, record_quality)
+                                port_info = asyncio.run(stream.get_huya_stream_url(json_data, record_quality))
                             else:
                                 port_info = asyncio.run(spider.get_huya_app_stream_url(
                                     url=record_url,
@@ -575,7 +575,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                         with semaphore:
                             json_data = asyncio.run(spider.get_yy_stream_data(
                                 url=record_url, proxy_addr=proxy_address, cookies=yy_cookie))
-                            port_info = stream.get_yy_stream_url(json_data)
+                            port_info = asyncio.run(stream.get_yy_stream_url(json_data))
 
                     elif record_url.find("https://live.bilibili.com/") > -1:
                         platform = 'B站直播'
@@ -620,7 +620,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                     utils.update_config(
                                         config_file, 'Cookie', 'sooplive_cookie', json_data['new_cookies']
                                     )
-                                port_info = stream.get_stream_url(json_data, record_quality, spec=True)
+                                port_info = asyncio.run(stream.get_stream_url(json_data, record_quality, spec=True))
                             else:
                                 logger.error("错误信息: 网络异常，请检查本网络是否能正常访问SOOP平台")
 
@@ -629,7 +629,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                         with semaphore:
                             json_data = asyncio.run(spider.get_netease_stream_data(
                                 url=record_url, cookies=netease_cookie))
-                            port_info = stream.get_netease_stream_url(json_data, record_quality)
+                            port_info = asyncio.run(stream.get_netease_stream_url(json_data, record_quality))
 
                     elif record_url.find("qiandurebo.com/") > -1:
                         platform = '千度热播'
@@ -646,7 +646,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                     proxy_addr=proxy_address,
                                     cookies=pandatv_cookie
                                 ))
-                                port_info = stream.get_stream_url(json_data, record_quality, spec=True)
+                                port_info = asyncio.run(stream.get_stream_url(json_data, record_quality, spec=True))
                             else:
                                 logger.error("错误信息: 网络异常，请检查本网络是否能正常访问PandaTV直播平台")
 
@@ -664,7 +664,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                     url=record_url,
                                     proxy_addr=proxy_address,
                                     cookies=winktv_cookie))
-                                port_info = stream.get_stream_url(json_data, record_quality, spec=True)
+                                port_info = asyncio.run(stream.get_stream_url(json_data, record_quality, spec=True))
                             else:
                                 logger.error("错误信息: 网络异常，请检查本网络是否能正常访问WinkTV直播平台")
 
@@ -683,7 +683,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                     utils.update_config(
                                         config_file, 'Cookie', 'flextv_cookie', json_data['new_cookies']
                                     )
-                                port_info = stream.get_stream_url(json_data, record_quality, spec=True)
+                                port_info = asyncio.run(stream.get_stream_url(json_data, record_quality, spec=True))
                             else:
                                 logger.error("错误信息: 网络异常，请检查本网络是否能正常访问FlexTV直播平台")
 
@@ -739,14 +739,15 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                 url=record_url,
                                 proxy_addr=proxy_address,
                                 cookies=baidu_cookie))
-                            port_info = stream.get_stream_url(json_data, record_quality)
+                            port_info = asyncio.run(stream.get_stream_url(json_data, record_quality))
 
                     elif record_url.find("weibo.com/") > -1:
                         platform = '微博直播'
                         with semaphore:
                             json_data = asyncio.run(spider.get_weibo_stream_data(
                                 url=record_url, proxy_addr=proxy_address, cookies=weibo_cookie))
-                            port_info = stream.get_stream_url(json_data, record_quality, hls_extra_key='m3u8_url')
+                            port_info = asyncio.run(stream.get_stream_url(
+                                json_data, record_quality, hls_extra_key='m3u8_url'))
 
                     elif record_url.find("kugou.com/") > -1:
                         platform = '酷狗直播'
@@ -763,7 +764,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                     proxy_addr=proxy_address,
                                     cookies=twitch_cookie
                                 ))
-                                port_info = stream.get_stream_url(json_data, record_quality, spec=True)
+                                port_info = asyncio.run(stream.get_stream_url(json_data, record_quality, spec=True))
                             else:
                                 logger.error("错误信息: 网络异常，请检查本网络是否能正常访问TwitchTV直播平台")
 
@@ -793,15 +794,15 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                         with semaphore:
                             json_data = asyncio.run(spider.get_showroom_stream_data(
                                 url=record_url, proxy_addr=proxy_address, cookies=showroom_cookie))
-                            port_info = stream.get_stream_url(json_data, record_quality, spec=True)
+                            port_info = asyncio.run(stream.get_stream_url(json_data, record_quality, spec=True))
 
                     elif record_url.find("live.acfun.cn/") > -1 or record_url.find("m.acfun.cn/") > -1:
                         platform = 'Acfun'
                         with semaphore:
                             json_data = asyncio.run(spider.get_acfun_stream_data(
                                 url=record_url, proxy_addr=proxy_address, cookies=acfun_cookie))
-                            port_info = stream.get_stream_url(
-                                json_data, record_quality, url_type='flv', flv_extra_key='url')
+                            port_info = asyncio.run(stream.get_stream_url(
+                                json_data, record_quality, url_type='flv', flv_extra_key='url'))
 
                     elif record_url.find("live.tlclw.com/") > -1:
                         platform = '畅聊直播'
@@ -832,7 +833,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                         with semaphore:
                             json_data = asyncio.run(spider.get_chzzk_stream_data(
                                 url=record_url, proxy_addr=proxy_address, cookies=chzzk_cookie))
-                            port_info = stream.get_stream_url(json_data, record_quality, spec=True)
+                            port_info = asyncio.run(stream.get_stream_url(json_data, record_quality, spec=True))
 
                     elif record_url.find("www.haixiutv.com/") > -1:
                         platform = '嗨秀直播'
@@ -895,17 +896,17 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                         with semaphore:
                             json_data = asyncio.run(spider.get_youtube_stream_url(
                                 url=record_url, proxy_addr=proxy_address, cookies=youtube_cookie))
-                            port_info = stream.get_stream_url(json_data, record_quality, spec=True)
+                            port_info = asyncio.run(stream.get_stream_url(json_data, record_quality, spec=True))
 
                     elif record_url.find("tb.cn") > -1:
                         platform = '淘宝直播'
                         with semaphore:
                             json_data = asyncio.run(spider.get_taobao_stream_url(
                                 url=record_url, proxy_addr=proxy_address, cookies=taobao_cookie))
-                            port_info = stream.get_stream_url(
+                            port_info = asyncio.run(stream.get_stream_url(
                                 json_data, record_quality,
                                 url_type='all', hls_extra_key='hlsUrl', flv_extra_key='flvUrl'
-                            )
+                            ))
 
                     elif record_url.find("3.cn") > -1 or record_url.find("m.jd.com") > -1:
                         platform = '京东直播'
@@ -920,7 +921,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                 with semaphore:
                                     json_data = asyncio.run(spider.get_faceit_stream_data(
                                         url=record_url, proxy_addr=proxy_address, cookies=faceit_cookie))
-                                    port_info = stream.get_stream_url(json_data, record_quality, spec=True)
+                                    port_info = asyncio.run(stream.get_stream_url(json_data, record_quality, spec=True))
                             else:
                                 logger.error("错误信息: 网络异常，请检查本网络是否能正常访问faceit直播平台")
 

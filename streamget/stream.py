@@ -37,7 +37,7 @@ def get_quality_index(quality) -> tuple:
 
 
 @trace_error_decorator
-def get_douyin_stream_url(json_data: dict, video_quality: str) -> dict:
+async def get_douyin_stream_url(json_data: dict, video_quality: str) -> dict:
     anchor_name = json_data.get('anchor_name')
 
     result = {
@@ -45,7 +45,7 @@ def get_douyin_stream_url(json_data: dict, video_quality: str) -> dict:
         "is_live": False,
     }
 
-    status = json_data.get("status", 4)  # 直播状态 2 是正在直播、4 是未开播
+    status = json_data.get("status", 4)
 
     if status == 2:
         stream_url = json_data['stream_url']
@@ -73,7 +73,7 @@ def get_douyin_stream_url(json_data: dict, video_quality: str) -> dict:
 
 
 @trace_error_decorator
-def get_tiktok_stream_url(json_data: dict, video_quality: str) -> dict:
+async def get_tiktok_stream_url(json_data: dict, video_quality: str) -> dict:
     if not json_data:
         return {"anchor_name": None, "is_live": False}
 
@@ -129,7 +129,7 @@ def get_tiktok_stream_url(json_data: dict, video_quality: str) -> dict:
 
 
 @trace_error_decorator
-def get_kuaishou_stream_url(json_data: dict, video_quality: str) -> dict:
+async def get_kuaishou_stream_url(json_data: dict, video_quality: str) -> dict:
     if json_data['type'] == 1 and not json_data["is_live"]:
         return json_data
     live_status = json_data['is_live']
@@ -153,31 +153,24 @@ def get_kuaishou_stream_url(json_data: dict, video_quality: str) -> dict:
                 result['m3u8_url'] = m3u8_url
 
             if 'flv_url_list' in json_data:
-                # checks if bitrate in flv_url_list
                 if 'bitrate' in json_data['flv_url_list'][0]:
                     flv_url_list = json_data['flv_url_list']
                     flv_url_list = sorted(flv_url_list, key=lambda x: x['bitrate'], reverse=True)
-                    # uses quality_mapping_bitrate to get the index of the quality
                     quality_str = str(video_quality).upper()
                     if quality_str.isdigit():
-                        quality_index_bitrate_value = list(quality_mapping_bit.values())[int(quality_str)]
                         video_quality, quality_index_bitrate_value = list(quality_mapping_bit.items())[int(quality_str)]
                     else:
                         quality_index_bitrate_value = quality_mapping_bit.get(quality_str, 99999)
                         video_quality = quality_str
-                    # find the value below `quality_index_bitrate_value`, or else use the previous one.
                     quality_index = next(
                         (i for i, x in enumerate(flv_url_list) if x['bitrate'] <= quality_index_bitrate_value), None)
                     if quality_index is None:
-                        # latest quality
                         quality_index = len(flv_url_list) - 1
                     flv_url = flv_url_list[quality_index]['url']
 
                     result['flv_url'] = flv_url
                     result['record_url'] = flv_url
                 else:
-                    # TODO: Old version which not working at 20241128, could be removed if not working confirmed,
-                    #  please also clean the quality_mapping mapping
                     flv_url_list = json_data['flv_url_list'][::-1]
                     while len(flv_url_list) < 5:
                         flv_url_list.append(flv_url_list[-1])
@@ -189,7 +182,7 @@ def get_kuaishou_stream_url(json_data: dict, video_quality: str) -> dict:
 
 
 @trace_error_decorator
-def get_huya_stream_url(json_data: dict, video_quality: str) -> dict:
+async def get_huya_stream_url(json_data: dict, video_quality: str) -> dict:
     game_live_info = json_data['data'][0]['gameLiveInfo']
     live_title = game_live_info['introduction']
     stream_info_list = json_data['data'][0]['gameStreamInfoList']
@@ -308,7 +301,7 @@ async def get_douyu_stream_url(json_data: dict, video_quality: str, cookies: str
 
 
 @trace_error_decorator
-def get_yy_stream_url(json_data: dict) -> dict:
+async def get_yy_stream_url(json_data: dict) -> dict:
     anchor_name = json_data.get('anchor_name', '')
     result = {
         "anchor_name": anchor_name,
@@ -361,7 +354,7 @@ async def get_bilibili_stream_url(json_data: dict, video_quality: str, proxy_add
 
 
 @trace_error_decorator
-def get_netease_stream_url(json_data: dict, video_quality: str) -> dict:
+async def get_netease_stream_url(json_data: dict, video_quality: str) -> dict:
     if not json_data['is_live']:
         return json_data
     stream_list = json_data['stream_list']['resolution']
@@ -384,8 +377,8 @@ def get_netease_stream_url(json_data: dict, video_quality: str) -> dict:
     }
 
 
-def get_stream_url(json_data: dict, video_quality: str, url_type: str = 'm3u8', spec: bool = False,
-                   hls_extra_key: str | int = None, flv_extra_key: str | int = None) -> dict:
+async def get_stream_url(json_data: dict, video_quality: str, url_type: str = 'm3u8', spec: bool = False,
+                         hls_extra_key: str | int = None, flv_extra_key: str | int = None) -> dict:
     if not json_data['is_live']:
         return json_data
 

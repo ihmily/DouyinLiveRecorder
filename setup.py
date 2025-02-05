@@ -7,7 +7,7 @@ setup(
     author='Hmily',
     description='A simple and efficient tool to fetch live stream URLs from various platforms. Supports multiple '
                 'platforms and easy integration.',
-    long_description=open('README.md', encoding='utf-8').read(),
+    long_description=open('README_PYPI.md', encoding='utf-8').read(),
     long_description_content_type='text/markdown',
     url='https://github.com/ihmily/DouyinLiveRecorder',
     packages=find_packages(),

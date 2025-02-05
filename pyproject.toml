@@ -4,9 +4,9 @@ version = "4.0.2"
 description = "A simple and efficient tool to fetch live stream URLs from various platforms. Supports multiple platforms and easy integration."
 authors = [{ name = "Hmily" }]
 license = {text = "MIT"}
-readme = "README.md"
+readme = "README_PYPI.md"
 urls = {Repository = "https://github.com/ihmily/DouyinLiveRecorder"}
-keywords = ["douyin", "live", "recorder"]
+keywords = ["douyin", "youtube", "tiktok", "twitch", "live", "recorder"]
 requires-python = ">=3.10,<4.0"
 
 dependencies = [
