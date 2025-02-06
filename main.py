@@ -1048,12 +1048,13 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                 except Exception as e:
                                     logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
 
-                                if enable_https_recording and real_url.startswith("http://"):
-                                    real_url = real_url.replace("http://", "https://")
+                                if platform != '自定义录制直播':
+                                    if enable_https_recording and real_url.startswith("http://"):
+                                        real_url = real_url.replace("http://", "https://")
 
-                                http_record_list = ['shopee']
-                                if platform in http_record_list:
-                                    real_url = real_url.replace("https://", "http://")
+                                    http_record_list = ['shopee']
+                                    if platform in http_record_list:
+                                        real_url = real_url.replace("https://", "http://")
 
                                 user_agent = ("Mozilla/5.0 (Linux; Android 11; SAMSUNG SM-G973U) AppleWebKit/537.36 ("
                                               "KHTML, like Gecko) SamsungBrowser/14.2 Chrome/87.0.4280.141 Mobile "
@@ -1125,7 +1126,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                         logger.info(f"{platform} | {anchor_name} | 直播源地址: {port_info['m3u8_url']}")
                                     else:
                                         logger.info(
-                                            f"{platform} | {anchor_name} | 直播源地址: {port_info['record_url']}")
+                                            f"{platform} | {anchor_name} | 直播源地址: {real_url}")
 
                                 only_flv_record = False
                                 only_flv_platform_list = ['shopee'] if os.name == 'nt' else ['shopee', '花椒直播']
@@ -1657,7 +1658,7 @@ while True:
     loop_time = options.get(read_config_value(config, '录制设置', '是否显示循环秒数', "否"), False)
     show_url = options.get(read_config_value(config, '录制设置', '是否显示直播源地址', "否"), False)
     split_video_by_time = options.get(read_config_value(config, '录制设置', '分段录制是否开启', "否"), False)
-    enable_https_recording = options.get(read_config_value(config, '录制设置', '强制启用HTTPS录制', "否"), False)
+    enable_https_recording = options.get(read_config_value(config, '录制设置', '是否强制启用https录制', "否"), False)
     disk_space_limit = float(read_config_value(config, '录制设置', '录制空间剩余阈值(gb)', 1.0))
     split_time = str(read_config_value(config, '录制设置', '视频分段时间(秒)', 1800))
     converts_to_mp4 = options.get(read_config_value(config, '录制设置', '录制完成后自动转为mp4格式', "否"), False)
