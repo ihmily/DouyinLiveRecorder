@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2025-02-06 02:05:00
+Update: 2025-02-08 19:19:00
 Copyright (c) 2023-2025 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -548,7 +548,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                     elif record_url.find("https://www.huya.com/") > -1:
                         platform = '虎牙直播'
                         with semaphore:
-                            if record_quality not in ['原画', '蓝光', '超清']:
+                            if record_quality not in ['OD', 'BD', 'UHD']:
                                 json_data = asyncio.run(spider.get_huya_stream_data(
                                     url=record_url,
                                     proxy_addr=proxy_address,
