@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2025-02-06 02:29:16
+Update: 2025-02-08 17:59:16
 Copyright (c) 2023-2025 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -1266,10 +1266,11 @@ async def login_flextv(username: str, password: str, proxy_addr: OptionalStr = N
     url = 'https://api.flextv.co.kr/v2/api/auth/signin'
 
     try:
+        print("Logging into FlexTV platform...")
         cookie_dict = await async_req(url, proxy_addr=proxy_addr, headers=headers, json_data=data,
                                       return_cookies=True, timeout=20)
 
-        if cookie_dict:
+        if cookie_dict and 'flx_oauth_access' in cookie_dict:
             cookie_str = '; '.join([f"{k}={v}" for k, v in cookie_dict.items()])
             return cookie_str
         else:
@@ -1284,9 +1285,8 @@ async def login_flextv(username: str, password: str, proxy_addr: OptionalStr = N
 
 
 async def get_flextv_stream_url(
-        url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None,
-        username: OptionalStr = None, password: OptionalStr = None
-) -> tuple | None:
+        url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None
+) -> str:
     async def fetch_data(cookie) -> dict:
         headers = {
             'accept': 'application/json, text/plain, */*',
@@ -1305,26 +1305,10 @@ async def get_flextv_stream_url(
             )
         return json.loads(json_str)
 
-    new_cookie = None
     json_data = await fetch_data(cookies)
-    if "message" in json_data and json_data["message"] == "로그인후 이용이 가능합니다.":
-        print("FlexTV live stream retrieval failed [not logged in]: 19+ live streams are only available for logged-in "
-              "adults.")
-        print("Attempting to log in to the FlexTV live streaming platform, please ensure your account and "
-              "password are correctly filled in the configuration file.")
-        if len(username) < 6 or len(password) < 8:
-            raise RuntimeError("FlexTV登录失败！请在config.ini配置文件中填写正确的FlexTV平台的账号和密码")
-        print("Logging into FlexTV platform...")
-        new_cookie = await login_flextv(username, password, proxy_addr=proxy_addr)
-        if new_cookie:
-            print("Logged into FlexTV platform successfully! Starting to fetch live streaming data...")
-            json_data = await fetch_data(new_cookie)
-        else:
-            raise RuntimeError("FlexTV login failed")
-
     if 'sources' in json_data and len(json_data['sources']) > 0:
         play_url = json_data['sources'][0]['url']
-        return play_url, new_cookie
+        return play_url
 
 
 @trace_error_decorator
@@ -1349,18 +1333,38 @@ async def get_flextv_stream_data(
         json_str = re.search('<script id="__NEXT_DATA__" type=".*">(.*?)</script>', html_str).group(1)
         json_data = json.loads(json_str)
         channel_data = json_data['props']['pageProps']['channel']
-        live_status = channel_data.get('stream') and channel_data['stream']['isRecording'] == 1
+        login_need = 'message' in channel_data and '로그인후 이용이 가능합니다.' in channel_data.get('message')
+        if login_need:
+            print("FlexTV live stream retrieval failed [not logged in]: 19+ live streams are only available for "
+                  "logged-in adults.")
+            print("Attempting to log in to the FlexTV live streaming platform, please ensure your account and "
+                  "password are correctly filled in the configuration file.")
+            if len(username) < 6 or len(password) < 8:
+                raise RuntimeError("FlexTV登录失败！请在config.ini配置文件中填写正确的FlexTV平台的账号和密码")
+            new_cookies = await login_flextv(username, password, proxy_addr=proxy_addr)
+            if new_cookies:
+                print("Logged into FlexTV platform successfully! Starting to fetch live streaming data...")
+            else:
+                raise RuntimeError("FlexTV login failed")
+            cookies = new_cookies if new_cookies else cookies
+            headers['Cookie'] = cookies
+            html_str = await async_req(url2, proxy_addr=proxy_addr, headers=headers, abroad=True)
+            json_str = re.search('<script id="__NEXT_DATA__" type=".*">(.*?)</script>', html_str).group(1)
+            json_data = json.loads(json_str)
+            channel_data = json_data['props']['pageProps']['channel']
+
+        live_status = 'message' not in channel_data
         if live_status:
-            result['is_live'] = True
             anchor_id = channel_data['owner']['loginId']
             anchor_name = f"{channel_data['owner']['nickname']}-{anchor_id}"
             result["anchor_name"] = anchor_name
-            play_url, new_cookies = await get_flextv_stream_url(
-                url=url, proxy_addr=proxy_addr, cookies=cookies, username=username, password=password)
+            play_url = await get_flextv_stream_url(url=url, proxy_addr=proxy_addr, cookies=cookies)
             if play_url:
-                result['m3u8_url'] = play_url
-                result['play_url_list'] = await get_play_url_list(m3u8=play_url, proxy=proxy_addr, header=headers,
-                                                            abroad=True)
+                play_url_list = await get_play_url_list(m3u8=play_url, proxy=proxy_addr, header=headers, abroad=True)
+                if play_url_list:
+                    result['m3u8_url'] = play_url
+                    result['play_url_list'] = play_url_list
+                    result['is_live'] = True
         else:
             url2 = f'https://www.flextv.co.kr/channels/{user_id}'
             html_str = await async_req(url2, proxy_addr=proxy_addr, headers=headers, abroad=True)
