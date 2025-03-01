@@ -92,6 +92,7 @@ def display_info() -> None:
     time.sleep(5)
     while True:
         try:
+            sys.stdout.flush()  # 强制刷新输出缓冲区
             time.sleep(5)
             if Path(sys.executable).name != 'pythonw.exe':
                 os.system(clear_command)
