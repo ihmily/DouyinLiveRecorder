@@ -218,13 +218,28 @@ def segment_video(converts_file_path: str, segment_save_file_path: str, segment_
 def converts_mp4(converts_file_path: str, is_original_delete: bool = True) -> None:
     try:
         if os.path.exists(converts_file_path) and os.path.getsize(converts_file_path) > 0:
+            # 检查是否支持NVIDIA GPU加速
+            try:
+                gpu_check = subprocess.check_output(
+                    ["ffmpeg", "-hide_banner", "-encoders"], 
+                    stderr=subprocess.STDOUT,
+                    startupinfo=get_startup_info(os_type)
+                ).decode()
+                has_gpu = 'h264_nvenc' in gpu_check
+            except:
+                has_gpu = False
+                
             if converts_to_h264:
-                color_obj.print_colored(f"正在转码为MP4格式并重新编码为h264\n", color_obj.YELLOW)
+                color_obj.print_colored(
+                    f"正在使用{'GPU' if has_gpu else 'CPU'}转码为MP4格式并重新编码为h264\n", 
+                    color_obj.YELLOW
+                )
                 ffmpeg_command = [
                     "ffmpeg", "-i", converts_file_path,
-                    "-c:v", "libx264",
-                    "-preset", "veryfast",
-                    "-crf", "23",
+                    "-c:v", "h264_nvenc" if has_gpu else "libx264",
+                    "-preset", "default" if has_gpu else "veryfast", # GPU和CPU使用不同的preset
+                    "-crf", "23" if not has_gpu else "23", # GPU模式下不使用crf
+                    #"-b:v", "5M" if has_gpu else "0", # GPU模式下使用固定码率
                     "-vf", "format=yuv420p",
                     "-c:a", "copy",
                     "-f", "mp4", converts_file_path.rsplit('.', maxsplit=1)[0] + ".mp4",
