@@ -95,39 +95,39 @@ def display_info() -> None:
             time.sleep(5)
             if Path(sys.executable).name != 'pythonw.exe':
                 os.system(clear_command)
-            print(f"\r共监测{monitoring}个直播中", end=" | ")
-            print(f"同一时间访问网络的线程数: {max_request}", end=" | ")
-            print(f"是否开启代理录制: {'是' if use_proxy else '否'}", end=" | ")
+            logger.info(f"共监测{monitoring}个直播中", end=" | ")
+            logger.info(f"同一时间访问网络的线程数: {max_request}", end=" | ")
+            logger.info(f"是否开启代理录制: {'是' if use_proxy else '否'}", end=" | ")
             if split_video_by_time:
-                print(f"录制分段开启: {split_time}秒", end=" | ")
+                logger.info(f"录制分段开启: {split_time}秒", end=" | ")
             else:
-                print(f"录制分段开启: 否", end=" | ")
+                logger.info(f"录制分段开启: 否", end=" | ")
             if create_time_file:
-                print(f"是否生成时间文件: 是", end=" | ")
-            print(f"录制视频质量为: {video_record_quality}", end=" | ")
-            print(f"录制视频格式为: {video_save_type}", end=" | ")
-            print(f"目前瞬时错误数为: {error_count}", end=" | ")
+                logger.info(f"是否生成时间文件: 是", end=" | ")
+            logger.info(f"录制视频质量为: {video_record_quality}", end=" | ")
+            logger.info(f"录制视频格式为: {video_save_type}", end=" | ")
+            logger.info(f"目前瞬时错误数为: {error_count}", end=" | ")
             now = time.strftime("%H:%M:%S", time.localtime())
             print(f"当前时间: {now}")
 
             if len(recording) == 0:
                 time.sleep(5)
                 if monitoring == 0:
-                    print("\r没有正在监测和录制的直播")
+                    logger.info("没有正在监测和录制的直播")
                 else:
-                    print(f"\r没有正在录制的直播 循环监测间隔时间：{delay_default}秒")
+                    logger.info(f"没有正在录制的直播 循环监测间隔时间：{delay_default}秒")
             else:
                 now_time = datetime.datetime.now()
                 print("x" * 60)
                 no_repeat_recording = list(set(recording))
-                print(f"正在录制{len(no_repeat_recording)}个直播: ")
+                logger.info(f"正在录制{len(no_repeat_recording)}个直播: ")
                 for recording_live in no_repeat_recording:
                     rt, qa = recording_time_list[recording_live]
                     have_record_time = now_time - rt
-                    print(f"{recording_live}[{qa}] 正在录制中 {str(have_record_time).split('.')[0]}")
+                    logger.info(f"{recording_live}[{qa}] 正在录制中 {str(have_record_time).split('.')[0]}")
 
                 # print('\n本软件已运行：'+str(now_time - start_display_time).split('.')[0])
-                print("x" * 60)
+                logger.info("x" * 60)
                 start_display_time = now_time
         except Exception as e:
             logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
@@ -230,20 +230,33 @@ def converts_mp4(converts_file_path: str, is_original_delete: bool = True) -> No
                 has_gpu = False
                 
             if converts_to_h264:
-                color_obj.print_colored(
-                    f"正在使用{'GPU' if has_gpu else 'CPU'}转码为MP4格式并重新编码为h264\n", 
-                    color_obj.YELLOW
-                )
-                ffmpeg_command = [
-                    "ffmpeg", "-i", converts_file_path,
-                    "-c:v", "h264_nvenc" if has_gpu else "libx264",
-                    "-preset", "default" if has_gpu else "veryfast", # GPU和CPU使用不同的preset
-                    "-crf", "23" if not has_gpu else "23", # GPU模式下不使用crf
-                    #"-b:v", "5M" if has_gpu else "0", # GPU模式下使用固定码率
-                    "-vf", "format=yuv420p",
-                    "-c:a", "copy",
-                    "-f", "mp4", converts_file_path.rsplit('.', maxsplit=1)[0] + ".mp4",
-                ]
+                if has_gpu:
+                    color_obj.print_colored(
+                        f"正在使用GPU转码为MP4格式并重新编码为h264\n", 
+                        color_obj.YELLOW)
+                    ffmpeg_command = [
+                        "ffmpeg", "-hwaccel","cuda","-i", converts_file_path,
+                        "-c:v", "h264_nvenc",
+                        "-preset", "default", # GPU和CPU使用不同的preset
+                        "-crf", "23", # GPU模式下不使用crf
+                        "-pixel_format", "cuda", # GPU模式下使用固定码率
+                        "-vf", "format=yuv420p",
+                        "-c:a", "copy",
+                        "-f", "mp4", converts_file_path.rsplit('.', maxsplit=1)[0] + ".mp4",
+                    ]
+                else:
+                    color_obj.print_colored(
+                        f"使用CPU转码为MP4格式并重新编码为h264\n", 
+                        color_obj.YELLOW)
+                    ffmpeg_command = [
+                        "ffmpeg", "-i", converts_file_path,
+                        "-c:v", "libx264",
+                        "-preset", "veryfast",
+                        "-crf", "23",
+                        "-vf", "format=yuv420p",
+                        "-c:a", "copy",
+                        "-f", "mp4", converts_file_path.rsplit('.', maxsplit=1)[0] + ".mp4",
+                    ]
             else:
                 color_obj.print_colored(f"正在转码为MP4格式\n", color_obj.YELLOW)
                 ffmpeg_command = [
@@ -330,7 +343,7 @@ def adjust_max_request() -> None:
 
             if pre_max_request != max_request:
                 pre_max_request = max_request
-                print(f"\r同一时间访问网络的线程数动态改为 {max_request}")
+                logger.info(f"同一时间访问网络的线程数动态改为 {max_request}")
 
         error_window.append(error_count)
         if len(error_window) > error_window_size:
@@ -360,7 +373,7 @@ def push_message(record_name: str, live_url: str, content: str) -> None:
         if platform in live_status_push.upper():
             try:
                 result = func()
-                print(f'提示信息：已经将[{record_name}]直播状态消息推送至你的{platform},'
+                logger.info(f'提示信息：已经将[{record_name}]直播状态消息推送至你的{platform},'
                       f' 成功{len(result["success"])}, 失败{len(result["error"])}')
             except Exception as e:
                 color_obj.print_colored(f"直播消息推送到{platform}失败: {e}", color_obj.RED)
@@ -375,9 +388,9 @@ def run_script(command: str) -> None:
         stdout_decoded = stdout.decode('utf-8')
         stderr_decoded = stderr.decode('utf-8')
         if stdout_decoded.strip():
-            print(stdout_decoded)
+            logger.info(stdout_decoded)
         if stderr_decoded.strip():
-            print(stderr_decoded)
+            logger.info(stderr_decoded)
     except PermissionError as e:
         logger.error(e)
         logger.error(f'脚本无执行权限!, 若是Linux环境, 请先执行:chmod +x your_script.sh 授予脚本可执行权限')
@@ -438,7 +451,7 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
                         threading.Thread(target=converts_mp4, args=(path, delete_origin_file)).start()
             else:
                 threading.Thread(target=converts_mp4, args=(save_file_path, delete_origin_file)).start()
-        print(f"\n{record_name} {stop_time} 直播录制完成\n")
+        logger.info(f"\n{record_name} {stop_time} 直播录制完成\n")
 
         if script_command:
             logger.debug("开始执行脚本命令!")
@@ -967,7 +980,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                         anchor_name = port_info.get("anchor_name", '')
 
                     if not port_info.get("anchor_name", ''):
-                        print(f'序号{count_variable} 网址内容获取失败,进行重试中...获取失败的地址是:{url_data}')
+                        logger.info(f'序号{count_variable} 网址内容获取失败,进行重试中...获取失败的地址是:{url_data}')
                         with max_request_lock:
                             error_count += 1
                             error_window.append(1)
@@ -976,7 +989,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                         record_name = f'序号{count_variable} {anchor_name}'
 
                         if record_url in url_comments:
-                            print(f"[{anchor_name}]已被注释,本条线程将会退出")
+                            logger.info(f"[{anchor_name}]已被注释,本条线程将会退出")
                             clear_record_info(record_name, record_url)
                             return
 
@@ -991,7 +1004,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
 
                         push_at = datetime.datetime.today().strftime('%Y-%m-%d %H:%M:%S')
                         if port_info['is_live'] is False:
-                            print(f"\r{record_name} 等待直播... ")
+                            logger.info(f"{record_name} 等待直播... ")
 
                             if start_pushed:
                                 if over_show_push:
@@ -1009,8 +1022,8 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                 start_pushed = False
 
                         else:
-                            content = f"\r{record_name} 正在直播中..."
-                            print(content)
+                            content = f"{record_name} 正在直播中..."
+                            logger.info(content)
 
                             if live_status_push and not start_pushed:
                                 if begin_show_push:
@@ -1134,7 +1147,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                 recording.add(record_name)
                                 start_record_time = datetime.datetime.now()
                                 recording_time_list[record_name] = [start_record_time, record_quality_zh]
-                                rec_info = f"\r{anchor_name} 准备开始录制视频: {full_path}"
+                                rec_info = f"{anchor_name} 准备开始录制视频: {full_path}"
                                 if show_url:
                                     re_plat = ('WinkTV', 'PandaTV', 'ShowRoom', 'CHZZK', 'Youtube')
                                     if platform in re_plat:
@@ -1152,7 +1165,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                 if video_save_type == "FLV" or only_flv_record:
                                     filename = anchor_name + f'_{title_in_name}' + now + '.flv'
                                     save_file_path = f'{full_path}/{filename}'
-                                    print(f'{rec_info}/{filename}')
+                                    logger.info(f'{rec_info}/{filename}')
 
                                     subs_file_path = save_file_path.rsplit('.', maxsplit=1)[0]
                                     subs_thread_name = f'subs_{Path(subs_file_path).name}'
@@ -1169,7 +1182,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                             _filepath, _ = urllib.request.urlretrieve(flv_url, save_file_path)
                                             record_finished = True
                                             recording.discard(record_name)
-                                            print(
+                                            logger.info(
                                                 f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制完成\n")
                                         else:
                                             logger.debug("未找到FLV直播流，跳过录制")
@@ -1211,7 +1224,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
 
                                 elif video_save_type == "MKV":
                                     filename = anchor_name + f'_{title_in_name}' + now + ".mkv"
-                                    print(f'{rec_info}/{filename}')
+                                    logger.info(f'{rec_info}/{filename}')
                                     save_file_path = full_path + '/' + filename
 
                                     try:
@@ -1259,7 +1272,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
 
                                 elif video_save_type == "MP4":
                                     filename = anchor_name + f'_{title_in_name}' + now + ".mp4"
-                                    print(f'{rec_info}/{filename}')
+                                    logger.info(f'{rec_info}/{filename}')
                                     save_file_path = full_path + '/' + filename
 
                                     try:
@@ -1313,7 +1326,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                                           f"{name_format}.{extension}")
 
                                         if split_video_by_time:
-                                            print(f'\r{anchor_name} 准备开始录制音频: {save_file_path}')
+                                            logger.info(f'{anchor_name} 准备开始录制音频: {save_file_path}')
 
                                             if "MP3" in video_save_type:
                                                 command = [
@@ -1378,7 +1391,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                     if split_video_by_time:
                                         now = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
                                         filename = anchor_name + f'_{title_in_name}' + now + ".ts"
-                                        print(f'{rec_info}/{filename}')
+                                        logger.info(f'{rec_info}/{filename}')
 
                                         try:
                                             save_file_path = f"{full_path}/{anchor_name}_{title_in_name}{now}_%03d.ts"
@@ -1425,7 +1438,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
 
                                     else:
                                         filename = anchor_name + f'_{title_in_name}' + now + ".ts"
-                                        print(f'{rec_info}/{filename}')
+                                        logger.info(f'{rec_info}/{filename}')
                                         save_file_path = full_path + '/' + filename
 
                                         try:
@@ -1489,10 +1502,10 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                 while x:
                     x = x - 1
                     if loop_time:
-                        print(f'\r{anchor_name}循环等待{x}秒 ', end="")
+                        logger.info(f'{anchor_name}循环等待{x}秒 ', end="")
                     time.sleep(1)
                 if loop_time:
-                    print('\r检测直播间中...', end="")
+                    logger.info('检测直播间中...', end="")
         except Exception as e:
             logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
             with max_request_lock:
@@ -1553,8 +1566,8 @@ def check_ffmpeg_existence() -> bool:
             lines = result.stdout.splitlines()
             version_line = lines[0]
             built_line = lines[1]
-            print(version_line)
-            print(built_line)
+            logger.info(version_line)
+            logger.info(built_line)
     except subprocess.CalledProcessError as e:
         logger.error(e)
     except FileNotFoundError:
@@ -1573,8 +1586,9 @@ print("-----------------------------------------------------")
 
 print(f"版本号: {version}")
 print("GitHub: https://github.com/ihmily/DouyinLiveRecorder")
-print(f'支持平台: {platforms}')
+# print(f'支持平台: {platforms}')
 print('.....................................................')
+logger.info(f"开始录制{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 if not check_ffmpeg_existence():
     logger.error("缺少ffmpeg无法进行录制，程序退出")
     sys.exit(1)
@@ -1949,7 +1963,7 @@ while True:
                         url_tuples_list.append(new_line)
                 else:
                     if not origin_line.startswith('#'):
-                        color_obj.print_colored(f"\r{origin_line.strip()} 本行包含未知链接.此条跳过", color_obj.YELLOW)
+                        color_obj.print_colored(f"{origin_line.strip()} 本行包含未知链接.此条跳过", color_obj.YELLOW)
                         update_file(url_config_file, old_str=origin_line, new_str=origin_line, start_str='#')
 
         while len(need_update_line_list):
@@ -1974,7 +1988,7 @@ while True:
                     continue
 
                 if url_tuple[1] not in running_list:
-                    print(f"\r{'新增' if not first_start else '传入'}地址: {url_tuple[1]}")
+                    logger.info(f"{'新增' if not first_start else '传入'}地址: {url_tuple[1]}")
                     monitoring += 1
                     args = [url_tuple, monitoring]
                     create_var[f'thread_{monitoring}'] = threading.Thread(target=start_record, args=args)

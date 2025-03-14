@@ -32,6 +32,7 @@ class Color:
     @staticmethod
     def print_colored(text, color):
         print(f"{color}{text}{Color.RESET}")
+        logger.info(f"{text}")
 
 
 def trace_error_decorator(func: callable) -> callable:
