@@ -13,22 +13,22 @@ logger.add(
     f"{script_path}/logs/streamget.log",
     level="DEBUG",
     format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
-    filter=lambda i: i["level"].name != "INFO",
+    # filter=False, #lambda i: i["level"].name != "DEBUG",
     serialize=False,
     enqueue=True,
-    retention=1,
-    rotation="300 KB",
+    retention=3,
+    rotation="50000 KB",
     encoding='utf-8'
 )
 
 logger.add(
     f"{script_path}/logs/PlayURL.log",
-    level="INFO",
+    level="DEBUG",
     format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {message}",
-    filter=lambda i: i["level"].name == "INFO",
+    filter=lambda i: i["level"].name == "ERROR",
     serialize=False,
     enqueue=True,
-    retention=1,
-    rotation="300 KB",
+    retention=3,
+    rotation="10000 KB",
     encoding='utf-8'
 )
