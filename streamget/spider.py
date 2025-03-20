@@ -397,8 +397,37 @@ async def get_huya_app_stream_url(url: str, proxy_addr: OptionalStr = None, cook
                     'flv_url': flv_url,
                 }
             )
-        flv_url = 'https://' + play_url_list[0]['flv_url'].split('://')[1]
-        record_url = flv_url
+        #print(json.dumps(play_url_list, indent=4, ensure_ascii=False))
+        # flv_url = 'https://' + play_url_list[0]['flv_url'].split('://')[1]
+        # record_url = flv_url
+
+        # 设定优先级，优先选择 TX,2025/03/14时AL不可用
+        priority_order = ["TX", "HW", "HS", "AL"]
+
+        # 查找优先的 flv_url
+        selected_flv_url = None
+        selected_cdn_type = None
+
+        for cdn in priority_order:
+            for item in play_url_list:
+                if item["cdn_type"] == cdn:
+                    selected_flv_url = item["flv_url"]
+                    selected_cdn_type = cdn
+                    break
+            if selected_flv_url:
+                break
+
+        # 处理 flv_url，确保使用 https
+        if selected_flv_url:
+            flv_url = 'https://' + selected_flv_url.split('://')[1]
+
+            # 如果选择的是 TX，执行额外的字符串替换
+            if selected_cdn_type == "TX":
+                flv_url = flv_url.replace("&ctype=tars_mp", "&ctype=huya_webh5").replace("&fs=bhct", "&fs=bgct")
+
+            record_url = flv_url
+        else:
+            record_url = None
 
         return {
             'anchor_name': anchor_name,
