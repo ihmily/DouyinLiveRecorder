@@ -17,6 +17,8 @@ from email.header import Header
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
+import requests
+
 no_proxy_handler = urllib.request.ProxyHandler({})
 opener = urllib.request.build_opener(no_proxy_handler)
 headers: Dict[str, str] = {'Content-Type': 'application/json'}
@@ -109,6 +111,27 @@ def send_email(email_host: str, login_email: str, email_pass: str, sender_email:
     except smtplib.SMTPException as e:
         print(f'邮件推送失败, 推送邮箱：{to_email}, 错误信息:{e}')
         return {"success": [], "error": receivers}
+
+
+def feishu(api: str, title: str, content: str):
+    try:
+        requests.post(api, json={
+            "msg_type": "post",
+            "content": {
+                "post": {
+                    "zh_cn": {
+                        "title": title,
+                        "content": [
+                            [
+                                {"tag": "text", "un_escape": True, "text": content}
+                            ]
+                        ]
+                    }
+                }
+            }
+        })
+    except Exception as e:
+        raise {"success": [], "error": [api]}
 
 
 def tg_bot(chat_id: int, token: str, content: str) -> Dict[str, Any]:

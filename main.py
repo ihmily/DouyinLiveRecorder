@@ -32,7 +32,7 @@ from streamget.proxy import ProxyDetector
 from streamget.utils import logger
 from streamget import utils
 from msg_push import (
-    dingtalk, xizhi, tg_bot, send_email, bark, ntfy
+    dingtalk, xizhi, tg_bot, send_email, bark, ntfy, feishu
 )
 from ffmpeg_install import (
     check_ffmpeg, ffmpeg_path, current_env_path
@@ -336,6 +336,9 @@ def push_message(record_name: str, live_url: str, content: str) -> None:
         'TG': lambda: tg_bot(tg_chat_id, tg_token, content),
         'BARK': lambda: bark(
             bark_msg_api, title=msg_title, content=content, level=bark_msg_level, sound=bark_msg_ring
+        ),
+        '飞书': lambda: feishu(
+            feishu_api, title=msg_title, content=content,
         ),
         'NTFY': lambda: ntfy(
             ntfy_api, title=msg_title, content=content, tags=ntfy_tags, action_url=live_url, email=ntfy_email
@@ -1693,6 +1696,7 @@ while True:
     sender_email = read_config_value(config, '推送配置', '发件人邮箱', "")
     sender_name = read_config_value(config, '推送配置', '发件人显示昵称', "")
     to_email = read_config_value(config, '推送配置', '收件人邮箱', "")
+    feishu_api = read_config_value(config, '推送配置', '飞书推送地址', "")
     ntfy_api = read_config_value(config, '推送配置', 'ntfy推送地址', "")
     ntfy_tags = read_config_value(config, '推送配置', 'ntfy推送标签', "tada")
     ntfy_email = read_config_value(config, '推送配置', 'ntfy推送邮箱', "")
