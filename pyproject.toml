@@ -18,6 +18,7 @@ dependencies = [
     "httpx[http2]>=0.28.1",
     "PyExecJS>=1.5.1",
     "sqlalchemy>=2.0.40",
+    "pymysql>=1.1.1",
 ]
 
 [build-system]

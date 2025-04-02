@@ -293,6 +293,15 @@ dependencies = [
 sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/ba/8e/aedef81641c8dca6fd0fb7294de5bed9c45f3397d67fddf755c1042c2642/PyExecJS-1.5.1.tar.gz", hash = "sha256:34cc1d070976918183ff7bdc0ad71f8157a891c92708c00c5fbbff7a769f505c", size = 13344 }
 
 [[package]]
+name = "pymysql"
+version = "1.1.1"
+source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
+sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/b3/8f/ce59b5e5ed4ce8512f879ff1fa5ab699d211ae2495f1adaa5fbba2a1eada/pymysql-1.1.1.tar.gz", hash = "sha256:e127611aaf2b417403c60bf4dc570124aeb4a57f5f37b8e95ae399a42f904cd0", size = 47678 }
+wheels = [
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/0c/94/e4181a1f6286f545507528c78016e00065ea913276888db2262507693ce5/PyMySQL-1.1.1-py3-none-any.whl", hash = "sha256:4de15da4c61dc132f4fb9ab763063e693d521a80fd0e87943b9a453dd4c19d6c", size = 44972 },
+]
+
+[[package]]
 name = "requests"
 version = "2.32.3"
 source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
@@ -380,6 +389,7 @@ dependencies = [
     { name = "loguru" },
     { name = "pycryptodome" },
     { name = "pyexecjs" },
+    { name = "pymysql" },
     { name = "requests" },
     { name = "sqlalchemy" },
     { name = "tqdm" },
@@ -392,6 +402,7 @@ requires-dist = [
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "pycryptodome", specifier = ">=3.20.0" },
     { name = "pyexecjs", specifier = ">=1.5.1" },
+    { name = "pymysql", specifier = ">=1.1.1" },
     { name = "requests", specifier = ">=2.31.0" },
     { name = "sqlalchemy", specifier = ">=2.0.40" },
     { name = "tqdm", specifier = ">=4.67.1" },

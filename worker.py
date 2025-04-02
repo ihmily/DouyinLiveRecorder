@@ -21,6 +21,7 @@ import re
 import shutil
 import random
 import signal
+import argparse
 import uuid
 from pathlib import Path
 import urllib.parse
@@ -47,27 +48,17 @@ from sqlalchemy import String, BigInteger, Integer, DateTime, ForeignKey, Unique
 from sqlalchemy.orm import DeclarativeBase, mapped_column
 
 
+arg_parser = argparse.ArgumentParser(description='这是一个简单的命令行参数示例')
+
+# 添加命令行参数
+arg_parser.add_argument('--device', type=str, help='输入device_id的文件的相对路径, 默认: .device_id.txt')
+
+# 解析命令行参数
+arg_parser_args = arg_parser.parse_args()
+
+
 class Base(DeclarativeBase):
     pass
-
-
-class MillisecondTimestamp(TypeDecorator):
-    impl = BigInteger
-    cache_ok = True
-
-    def process_bind_param(self, value, dialect):
-        if value is None:
-            return None
-        if isinstance(value, datetime.datetime):
-            return int(value.timestamp() * 1000)
-        raise ValueError("value must be a datetime object")
-
-    def process_result_value(self, value, dialect):
-        if value is None:
-            return None
-        if isinstance(value, int):
-            return datetime.datetime.fromtimestamp(value / 1000, datetime.timezone.utc)
-        raise ValueError("value must be an integer (milliseconds since epoch)")
 
 
 class Project(Base):
@@ -76,8 +67,8 @@ class Project(Base):
     id = mapped_column(String, primary_key=True, nullable=False)
     name = mapped_column(String, nullable=False)
     description = mapped_column(String, nullable=True)
-    createdAt = mapped_column(MillisecondTimestamp, nullable=False, default=datetime.datetime.now)
-    updatedAt = mapped_column(MillisecondTimestamp, nullable=False, default=datetime.datetime.now,
+    createdAt = mapped_column(DateTime, nullable=False, default=datetime.datetime.now)
+    updatedAt = mapped_column(DateTime, nullable=False, default=datetime.datetime.now,
                               onupdate=datetime.datetime.now)
 
 
@@ -90,8 +81,8 @@ class Platform(Base):
     apiKey = mapped_column(String, nullable=True)
     apiSecret = mapped_column(String, nullable=True)
     enabled = mapped_column(Boolean, nullable=False, default=True)
-    createdAt = mapped_column(MillisecondTimestamp, nullable=False, default=datetime.datetime.now)
-    updatedAt = mapped_column(MillisecondTimestamp, nullable=False, default=datetime.datetime.now,
+    createdAt = mapped_column(DateTime, nullable=False, default=datetime.datetime.now)
+    updatedAt = mapped_column(DateTime, nullable=False, default=datetime.datetime.now,
                               onupdate=datetime.datetime.now)
 
     __table_args__ = (
@@ -107,7 +98,7 @@ class WorkerNode(Base):
     status = mapped_column(String, nullable=False, default="STOPPED")
     maxRecordings = mapped_column(Integer, nullable=False, default=5)
     currentRecordings = mapped_column(Integer, nullable=False, default=0)
-    lastSeenAt = mapped_column(MillisecondTimestamp, nullable=True, default=datetime.datetime.now)
+    lastSeenAt = mapped_column(DateTime, nullable=True, default=datetime.datetime.now)
     platformId = mapped_column(
         String,
         ForeignKey("platforms.id", onupdate="CASCADE", ondelete="CASCADE"),
@@ -118,8 +109,8 @@ class WorkerNode(Base):
         ForeignKey("projects.id", onupdate="CASCADE", ondelete="SET NULL"),
         nullable=True
     )
-    createdAt = mapped_column(MillisecondTimestamp, nullable=True, default=datetime.datetime.now)
-    updatedAt = mapped_column(MillisecondTimestamp, nullable=True, default=datetime.datetime.now,
+    createdAt = mapped_column(DateTime, nullable=True, default=datetime.datetime.now)
+    updatedAt = mapped_column(DateTime, nullable=True, default=datetime.datetime.now,
                               onupdate=datetime.datetime.now)
 
     __table_args__ = (
@@ -143,8 +134,8 @@ class LivestreamWorkerAssignment(Base):
     )
     referenceCount = mapped_column(Integer, nullable=False, default=1)
     status = mapped_column(String, nullable=False, default="PENDING")
-    createdAt = mapped_column(MillisecondTimestamp, nullable=False, default=datetime.datetime.now)
-    updatedAt = mapped_column(MillisecondTimestamp, nullable=False, default=datetime.datetime.now,
+    createdAt = mapped_column(DateTime, nullable=False, default=datetime.datetime.now)
+    updatedAt = mapped_column(DateTime, nullable=False, default=datetime.datetime.now,
                               onupdate=datetime.datetime.now)
 
     __table_args__ = (
@@ -163,8 +154,8 @@ class LiveStream(Base):
         ForeignKey("platforms.id", onupdate="CASCADE", ondelete="CASCADE"),
         nullable=False
     )
-    createdAt = mapped_column(MillisecondTimestamp, nullable=False, default=datetime.datetime.now)
-    updatedAt = mapped_column(MillisecondTimestamp, nullable=False, default=datetime.datetime.now,
+    createdAt = mapped_column(DateTime, nullable=False, default=datetime.datetime.now)
+    updatedAt = mapped_column(DateTime, nullable=False, default=datetime.datetime.now,
                               onupdate=datetime.datetime.now)
 
     __table_args__ = (
@@ -204,7 +195,7 @@ script_path = os.path.split(os.path.realpath(sys.argv[0]))[0]
 config_file = f'{script_path}/config/config.ini'
 url_config_file = f'{script_path}/config/URL_config.ini'
 backup_dir = f'{script_path}/backup_config'
-device_id_path = f'{script_path}/.device_id.txt'
+device_node_id_path = f'{script_path}/{arg_parser_args.device}' if arg_parser_args.device else f'{script_path}/.device_id.txt'
 text_encoding = 'utf-8-sig'
 rstr = r"[\/\\\:\*\？?\"\<\>\|&#.。,， ~！· ]"
 default_path = f'{script_path}/downloads'
@@ -215,13 +206,15 @@ clear_command = "cls" if os_type == 'nt' else "clear"
 color_obj = utils.Color()
 os.environ['PATH'] = ffmpeg_path + os.pathsep + current_env_path
 
-if not os.path.exists(device_id_path):
+if not os.path.exists(device_node_id_path):
     device_id = str(uuid.uuid4())
-    with open(device_id_path, 'w', encoding=text_encoding) as f:
+    with open(device_node_id_path, 'w', encoding=text_encoding) as f:
         f.write(device_id)
 else:
-    with open(device_id_path, 'r', encoding=text_encoding) as f:
+    with open(device_node_id_path, 'r', encoding=text_encoding) as f:
         device_id = f.read().strip()
+
+print(f"当前设备节点ID：{device_id}")
 
 
 def signal_handler(_signal, _frame):
@@ -1852,7 +1845,7 @@ with Session() as session:
     db_project_name = read_config_value(config, '工作节点设置', 'project_name', "")
     db_project_id = None
     if db_project_name:
-        db_project = session.execute(select(Project).where(Project.name == db_project_name)).first()
+        db_project = session.execute(select(Project).where(Project.name == db_project_name)).scalars().first()
         if db_project:
             db_project_id = db_project.id
     db_platforms = session.execute(select(Platform).where(Platform.name.in_(allow_platforms))).scalars().all()
@@ -2248,6 +2241,7 @@ while True:
 
     except KeyboardInterrupt:
         sys_quit()
+        break
     except Exception as err:
         logger.error(f"错误信息: {err} 发生错误的行数: {err.__traceback__.tb_lineno}")
 
