@@ -166,3 +166,4 @@ cython_debug/
 
 backup_config/
 .idea/
+.device_id.txt

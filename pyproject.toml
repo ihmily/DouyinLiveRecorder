@@ -16,9 +16,14 @@ dependencies = [
     "distro>=1.9.0",
     "tqdm>=4.67.1",
     "httpx[http2]>=0.28.1",
-    "PyExecJS>=1.5.1"
+    "PyExecJS>=1.5.1",
+    "sqlalchemy>=2.0.40",
 ]
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
+
+[[tool.uv.index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true

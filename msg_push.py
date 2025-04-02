@@ -130,6 +130,7 @@ def feishu(api: str, title: str, content: str):
                 }
             }
         })
+        return {"success": [api], "error": []}
     except Exception as e:
         raise {"success": [], "error": [api]}
 
