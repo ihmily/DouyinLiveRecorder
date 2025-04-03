@@ -1,5 +1,23 @@
 ![video_spider](https://socialify.git.ci/ihmily/DouyinLiveRecorder/image?font=Inter&forks=1&language=1&owner=1&pattern=Circuit%20Board&stargazers=1&theme=Light)
 
+## 接入 webui
+接入 [https://github.com/dragons96/DouyinLiveRecorder-webui](https://github.com/dragons96/DouyinLiveRecorder-webui) 方式如下：
+1. `cofnig/config.ini` 文件中配置`工作节点设置`相关信息
+```ini
+...
+[工作节点设置]
+# sqlalchemy 数据库地址, 例如: sqlite:///dev.db
+db_url = 
+# 是否独享项目, 填写项目名称, 并且能够通过项目名称检索到则为独享, 否则为通用节点
+project_name =
+# 心跳间隔时间, 单位秒
+heartbeat_interval = 60
+```
+2. 安装依赖, `pip install -r requirements.txt` 或者使用uv `uv pip install -r requirements.txt`
+3. 运行`worker.py`文件, `python worker.py`
+
+
+
 ## 💡简介
 [![Python Version](https://img.shields.io/badge/python-3.11.6-blue.svg)](https://www.python.org/downloads/release/python-3116/)
 [![Supported Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux-blue.svg)](https://github.com/ihmily/DouyinLiveRecorder)
