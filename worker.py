@@ -96,14 +96,9 @@ class WorkerNode(Base):
     id = mapped_column(String, primary_key=True, nullable=False)
     nodeId = mapped_column(String, nullable=False, unique=True)
     status = mapped_column(String, nullable=False, default="STOPPED")
-    maxRecordings = mapped_column(Integer, nullable=False, default=5)
-    currentRecordings = mapped_column(Integer, nullable=False, default=0)
+    maxRecordings = mapped_column(Integer, nullable=True, default=5)
+    currentRecordings = mapped_column(Integer, nullable=True, default=0)
     lastSeenAt = mapped_column(DateTime, nullable=True, default=datetime.datetime.now)
-    platformId = mapped_column(
-        String,
-        ForeignKey("platforms.id", onupdate="CASCADE", ondelete="CASCADE"),
-        nullable=False
-    )
     projectId = mapped_column(
         String,
         ForeignKey("projects.id", onupdate="CASCADE", ondelete="SET NULL"),
@@ -161,6 +156,32 @@ class LiveStream(Base):
     __table_args__ = (
         UniqueConstraint("url", name="live_streams_url_key"),
     )
+
+
+class WorkerNodePlatformCapacities(Base):
+    __tablename__ = "worker_node_platform_capacities"
+
+    id = mapped_column(String(191), primary_key=True)
+    workerNodeId = mapped_column(
+        String(191),
+        ForeignKey("worker_nodes.id", ondelete="CASCADE", onupdate="CASCADE"),
+        nullable=False
+    )
+    platformId = mapped_column(
+        String(191),
+        ForeignKey("platforms.id", ondelete="CASCADE", onupdate="CASCADE"),
+        nullable=False
+    )
+    maxRecordings = mapped_column(Integer, nullable=False, default=5)
+    currentRecordings = mapped_column(Integer, nullable=False, default=0)
+    createdAt = mapped_column(DateTime(3), nullable=True, default=datetime.datetime.now)
+    updatedAt = mapped_column(DateTime(3), nullable=True, default=datetime.datetime.now, onupdate=datetime.datetime.now)
+
+    # 定义唯一约束
+    __table_args__ = (
+        UniqueConstraint("workerNodeId", "platformId", name="worker_node_platform_capacities_workerNodeId_platformId_key"),
+    )
+
 
 
 version = "v4.0.3"
@@ -1838,42 +1859,45 @@ def sys_quit(signum = None, frame = None):
             session.commit()
             logger.info("节点状态改为[已停止]")
 
+
 # 检查设备注册情况, 并更新相关信息
 with Session() as session:
     # 获取处理的平台
-    allow_platforms = ['抖音']
     db_project_name = read_config_value(config, '工作节点设置', 'project_name', "")
     db_project_id = None
     if db_project_name:
         db_project = session.execute(select(Project).where(Project.name == db_project_name)).scalars().first()
         if db_project:
             db_project_id = db_project.id
-    db_platforms = session.execute(select(Platform).where(Platform.name.in_(allow_platforms))).scalars().all()
-    for db_platform in db_platforms:
-        # 获取当前节点ID
-        db_node = session.execute(select(WorkerNode).where(
-            WorkerNode.nodeId == device_id,
-            WorkerNode.platformId == db_platform.id)
-        ).scalars().first()
-        # 节点不存在，则创建新节点
-        if not db_node:
-            db_node = WorkerNode(id=device_id, nodeId=device_id, status='RUNNING',
-                                 maxRecordings=int(
-                                     read_config_value(config, '录制设置', '同一时间访问网络的线程数', 3)),
-                                 currentRecordings=0,
-                                 platformId=db_platform.id,
-                                 projectId=db_project_id,
-                                 createdAt=datetime.datetime.now(),
-                                 updatedAt=datetime.datetime.now())
-            session.add(db_node)
-        # 节点已存在则更新节点信息
-        else:
-            db_node.status = 'RUNNING'
-            db_node.maxRecordings = int(read_config_value(config, '录制设置', '同一时间访问网络的线程数', 3))
-            db_node.projectId = db_project_id
-            db_node.updatedAt = datetime.datetime.now()
-        session.commit()
+    db_platforms = session.execute(select(Platform)).scalars().all()
+    # 获取当前节点ID
+    db_node = session.execute(select(WorkerNode).where(
+        WorkerNode.nodeId == device_id)
+    ).scalars().first()
+    # 节点不存在，则创建新节点
+    if not db_node:
+        db_node = WorkerNode(id=device_id, nodeId=device_id, status='RUNNING',
+                             projectId=db_project_id,
+                             createdAt=datetime.datetime.now(),
+                             updatedAt=datetime.datetime.now())
+        session.add(db_node)
+        # 创建节点各平台配额
+        for db_platform in db_platforms:
+            session.add(WorkerNodePlatformCapacities(
+                id=str(uuid.uuid4()),
+                workerNodeId=device_id,
+                platformId=db_platform.id,
+                maxRecordings=int(read_config_value(config, '录制设置', '同一时间访问网络的线程数', 3)),
+                currentRecordings=0,
 
+            ))
+
+    # 节点已存在则更新节点信息
+    else:
+        db_node.status = 'RUNNING'
+        db_node.projectId = db_project_id
+        db_node.updatedAt = datetime.datetime.now()
+    session.commit()
 
 # 注册信号处理函数
 signal.signal(signal.SIGINT, sys_quit)  # 捕获 Ctrl+C
