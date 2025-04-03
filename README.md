@@ -6,7 +6,7 @@
 ```ini
 ...
 [工作节点设置]
-# sqlalchemy 数据库地址, 例如: sqlite:///dev.db
+# sqlalchemy 数据库地址, 例如: sqlite:///dev.db，配置与webui一致的数据库，推荐使用mysql+pymysql
 db_url = 
 # 是否独享项目, 填写项目名称, 并且能够通过项目名称检索到则为独享, 否则为通用节点
 project_name =
