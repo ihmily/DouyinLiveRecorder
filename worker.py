@@ -44,7 +44,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 import uuid
 from sqlalchemy import String, BigInteger, Integer, DateTime, ForeignKey, UniqueConstraint, select, Boolean, \
-    TypeDecorator
+    TypeDecorator, update
 from sqlalchemy.orm import DeclarativeBase, mapped_column
 
 
@@ -201,7 +201,6 @@ monitoring = 0
 running_list = []
 url_tuples_list = []
 url_comments = []
-url_removes = []
 text_no_repeat_url = []
 create_var = locals()
 first_start = True
@@ -251,7 +250,7 @@ def display_info() -> None:
     while True:
         try:
             sys.stdout.flush()  # 强制刷新输出缓冲区
-            time.sleep(5)
+            time.sleep(10)
             if Path(sys.executable).name != 'pythonw.exe':
                 os.system(clear_command)
             print(f"\r共监测{monitoring}个直播中", end=" | ")
@@ -536,7 +535,7 @@ def run_script(command: str) -> None:
 def clear_record_info(record_name: str, record_url: str) -> None:
     global monitoring
     recording.discard(record_name)
-    if (record_url in url_comments or record_url in url_removes) and record_url in running_list:
+    if (record_url in url_comments) and record_url in running_list:
         running_list.remove(record_url)
         monitoring -= 1
         color_obj.print_colored(f"[{record_name}]已经从录制列表中移除\n", color_obj.YELLOW)
@@ -559,7 +558,7 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
         create_var[subs_thread_name].start()
 
     while process.poll() is None:
-        if record_url in url_comments or record_url in url_removes or exit_recording:
+        if record_url in url_comments or exit_recording:
             color_obj.print_colored(f"[{record_name}]录制时已被注释,本条线程将会退出", color_obj.YELLOW)
             clear_record_info(record_name, record_url)
             # process.terminate()
@@ -1122,7 +1121,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                         anchor_name = clean_name(anchor_name)
                         record_name = f'序号{count_variable} {anchor_name}'
 
-                        if record_url in url_comments or record_url in url_removes:
+                        if record_url in url_comments:
                             print(f"[{anchor_name}]已被注释,本条线程将会退出")
                             clear_record_info(record_name, record_url)
                             return
@@ -1713,6 +1712,24 @@ def check_ffmpeg_existence() -> bool:
     return False
 
 
+def refresh_worker_heartbeat():
+    while True:
+        time.sleep(float(read_config_value(config, '工作节点设置', 'heartbeat_interval', "60")))
+        try:
+            # 更新节点心跳
+            with Session() as s:
+                s.execute(update(WorkerNode).values(
+                    lastSeenAt=datetime.datetime.now(),
+                    updatedAt=datetime.datetime.now(),
+                    status="RUNNING",
+                ).where(WorkerNode.nodeId == device_id))
+                s.commit()
+            print(f"更新节点[{device_id}]心跳成功")
+        except Exception as e:
+            print(f"更新节点[{device_id}]异常, 异常信息: {str(e)}")
+
+
+
 # --------------------------初始化程序-------------------------------------
 print("-----------------------------------------------------")
 print("|                DouyinLiveRecorder                 |")
@@ -1852,13 +1869,15 @@ def sys_quit(signum = None, frame = None):
     with Session() as session:
         db_node = session.execute(select(WorkerNode).where(
             WorkerNode.nodeId == device_id,
-        ))
+        )).scalars().first()
         if db_node:
             db_node.status = 'STOPPED'
             db_node.updatedAt = datetime.datetime.now()
             session.commit()
             logger.info("节点状态改为[已停止]")
-
+        else:
+            logger.error("节点信息不存在")
+    exit(0)
 
 # 检查设备注册情况, 并更新相关信息
 with Session() as session:
@@ -1929,7 +1948,7 @@ while True:
                 )).scalars().first()
                 if db_live_stream:
                     db_urls.append(db_live_stream.url)
-            url_removes = sync_urls(ini_URL_content, db_urls, url_config_file)
+            sync_urls(ini_URL_content, db_urls, url_config_file)
 
         # if not ini_URL_content.strip():
         #     input_url = input('请输入要录制的主播直播间网址（尽量使用PC网页端的直播间地址）:\n')
@@ -2274,6 +2293,8 @@ while True:
         t.start()
         t2 = threading.Thread(target=adjust_max_request, args=(), daemon=True)
         t2.start()
+        heartbeat_t = threading.Thread(target=refresh_worker_heartbeat, args=(), daemon=True)
+        heartbeat_t.start()
         first_run = False
 
     time.sleep(3)
