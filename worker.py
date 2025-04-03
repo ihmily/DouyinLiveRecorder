@@ -132,6 +132,7 @@ class LivestreamWorkerAssignment(Base):
     createdAt = mapped_column(DateTime, nullable=False, default=datetime.datetime.now)
     updatedAt = mapped_column(DateTime, nullable=False, default=datetime.datetime.now,
                               onupdate=datetime.datetime.now)
+    streamingStatus = mapped_column(String(191), nullable=False, default="UNKNOWN")
 
     __table_args__ = (
         UniqueConstraint("livestreamId", "workerNodeId",
@@ -201,6 +202,7 @@ monitoring = 0
 running_list = []
 url_tuples_list = []
 url_comments = []
+url_delete_list = []
 text_no_repeat_url = []
 create_var = locals()
 first_start = True
@@ -535,7 +537,7 @@ def run_script(command: str) -> None:
 def clear_record_info(record_name: str, record_url: str) -> None:
     global monitoring
     recording.discard(record_name)
-    if (record_url in url_comments) and record_url in running_list:
+    if (record_url in url_comments or record_url in url_delete_list) and record_url in running_list:
         running_list.remove(record_url)
         monitoring -= 1
         color_obj.print_colored(f"[{record_name}]已经从录制列表中移除\n", color_obj.YELLOW)
@@ -558,7 +560,7 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
         create_var[subs_thread_name].start()
 
     while process.poll() is None:
-        if record_url in url_comments or exit_recording:
+        if record_url in url_comments or record_url in url_delete_list or exit_recording:
             color_obj.print_colored(f"[{record_name}]录制时已被注释,本条线程将会退出", color_obj.YELLOW)
             clear_record_info(record_name, record_url)
             # process.terminate()
@@ -1121,7 +1123,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                         anchor_name = clean_name(anchor_name)
                         record_name = f'序号{count_variable} {anchor_name}'
 
-                        if record_url in url_comments:
+                        if record_url in url_comments or record_url in url_delete_list:
                             print(f"[{anchor_name}]已被注释,本条线程将会退出")
                             clear_record_info(record_name, record_url)
                             return
@@ -1138,6 +1140,24 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                         push_at = datetime.datetime.today().strftime('%Y-%m-%d %H:%M:%S')
                         if port_info['is_live'] is False:
                             print(f"\r{record_name} 等待直播... ")
+
+                            try:
+                                # 更新上播状态为待上播
+                                with Session() as s:
+                                    db_live_1 = s.execute(select(LiveStream).where(LiveStream.url == record_url)).scalars().first()
+                                    # 存在记录则更新
+                                    if db_live_1:
+                                        # 更新当前节点负责的该直播的状态
+                                        s.execute(update(LivestreamWorkerAssignment).values(
+                                            streamingStatus='WAITING',
+                                        ).where(
+                                            LivestreamWorkerAssignment.livestreamId == db_live_1.id,
+                                            LivestreamWorkerAssignment.workerNodeId == device_id,
+                                        ))
+                                        s.commit()
+                                        logger.info(f"直播间同步数据库更新：[{record_name}] 直播状态改为 [待上播]")
+                            except Exception as e:
+                                logger.error(f"直播间同步数据库更新：[{record_name}] 失败！, 异常信息: {str(e)}")
 
                             if start_pushed:
                                 if over_show_push:
@@ -1157,6 +1177,24 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                         else:
                             content = f"\r{record_name} 正在直播中..."
                             print(content)
+
+                            try:
+                                # 更新上播状态为录制中
+                                with Session() as s:
+                                    db_live_1 = s.execute(select(LiveStream).where(LiveStream.url == record_url)).scalars().first()
+                                    # 存在记录则更新
+                                    if db_live_1:
+                                        # 更新当前节点负责的该直播的状态
+                                        s.execute(update(LivestreamWorkerAssignment).values(
+                                            streamingStatus='STREAMING',
+                                        ).where(
+                                            LivestreamWorkerAssignment.livestreamId == db_live_1.id,
+                                            LivestreamWorkerAssignment.workerNodeId == device_id,
+                                        ))
+                                        s.commit()
+                                        logger.info(f"直播间同步数据库更新：[{record_name}] 直播状态改为 [录制中]")
+                            except Exception as e:
+                                logger.error(f"直播间同步数据库更新：[{record_name}] 失败！, 异常信息: {str(e)}")
 
                             if live_status_push and not start_pushed:
                                 if begin_show_push:
@@ -1865,6 +1903,8 @@ Session = sessionmaker(bind=engine)
 
 
 def sys_quit(signum = None, frame = None):
+    # 退出安全释放资源
+    exit_recording = True
     # 节点退出, 更新节点状态
     with Session() as session:
         db_node = session.execute(select(WorkerNode).where(
@@ -1877,6 +1917,12 @@ def sys_quit(signum = None, frame = None):
             logger.info("节点状态改为[已停止]")
         else:
             logger.error("节点信息不存在")
+    now = datetime.datetime.now()
+    # 等待释放资源, 记录完全释放就退出, 30分钟防止系统异常
+    while len(recording) and datetime.datetime.now() - now < datetime.timedelta(minutes=30):
+        time.sleep(5)
+    # 等待10分钟释放其他资源
+    time.sleep(60)
     exit(0)
 
 # 检查设备注册情况, 并更新相关信息
@@ -1925,6 +1971,8 @@ signal.signal(signal.SIGTERM, sys_quit)  # 捕获 kill 命令
 while True:
 
     try:
+        url_delete_list = []
+
         if not os.path.isfile(config_file):
             with open(config_file, 'w', encoding=text_encoding) as file:
                 pass
@@ -1948,7 +1996,10 @@ while True:
                 )).scalars().first()
                 if db_live_stream:
                     db_urls.append(db_live_stream.url)
-            sync_urls(ini_URL_content, db_urls, url_config_file)
+            url_delete_list = sync_urls(ini_URL_content, db_urls, url_config_file)
+
+            with open(url_config_file, 'r', encoding=text_encoding) as file:
+                ini_URL_content = file.read().strip()
 
         # if not ini_URL_content.strip():
         #     input_url = input('请输入要录制的主播直播间网址（尽量使用PC网页端的直播间地址）:\n')
