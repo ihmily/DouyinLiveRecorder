@@ -12,10 +12,18 @@ db_url =
 project_name =
 # 心跳间隔时间, 单位秒
 heartbeat_interval = 60
+# 服务器地址
+server_url = http://localhost:3000
+# 服务器API KEY, 暂未使用, 开发中
+api_key = your_api_key_here
+# 上传失败重试次数
+retry_times = 3
+# 上传失败重试间隔
+retry_interval = 5
 ```
 2. 安装依赖, `pip install -r requirements.txt` 或者使用uv `uv pip install -r requirements.txt`
-3. 运行`worker.py`文件, `python worker.py`
-
+3. 运行`worker.py`文件, `python worker.py`启动工作节点
+4. 运行`video_monitor_upload.py`文件, `python video_monitor_upload.py`启动视频上传脚本 (基于服务端接口上传, 使用该脚本不建议视频单个块过大, 单个块过单会导致上传时间过长从而影响到服务后台, 如果需要保持单个视频块的一定大小, 建议额外部署一个server来单独处理文件上传, 从而防止影响后台程序正常使用)
 
 
 ## 💡简介
