@@ -1782,7 +1782,7 @@ async def get_twitcasting_stream_url(
                                    "configuration file is correct")
             print("TwitCasting login successful! Starting to fetch data...")
             headers['Cookie'] = new_cookie
-        anchor_name, live_status, live_title = get_data(headers)
+        anchor_name, live_status, live_title = await get_data(headers)
     except AttributeError:
         print("Failed to retrieve TwitCasting data, attempting to log in...")
         new_cookie = await login_twitcasting(
