@@ -144,8 +144,7 @@ https://www.yy.com/22490906/22490906
 B站:
 https://live.bilibili.com/320
 
-小红书（推荐使用主页地址):
-https://www.xiaohongshu.com/user/profile/6330049c000000002303c7ed?appuid=5f3f478a00000000010005b3
+小红书（直播间分享地址):
 http://xhslink.com/xpJpfM
 
 bigo直播:

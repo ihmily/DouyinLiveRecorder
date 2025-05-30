@@ -683,54 +683,7 @@ async def get_bilibili_stream_data(url: str, qn: str = '10000', platform: str = 
         extra = stream_data['url_info'][0]['extra']
         m3u8_url = host + base_url + extra
         return m3u8_url
-
-
-@trace_error_decorator
-async def get_xhs_stream_url_profile(
-        url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None, author: OptionalStr = None
-) -> dict:
-    headers = {
-        'User-Agent': 'ios/7.830 (ios 17.0; ; iPhone 15 (A2846/A3089/A3090/A3092))',
-        'xy-common-params': 'platform=iOS&sid=session.1722166379345546829388',
-        'referer': 'https://app.xhs.cn/',
-    }
-    if cookies:
-        headers['Cookie'] = cookies
-    host_id = get_params(url, 'host_id')
-    user_id = re.search('/user/profile/(.*?)(?=/|\\?|$)', url)
-    user_id = user_id.group(1) if user_id else host_id
-    result = {"anchor_name": '', "is_live": False}
-    if user_id:
-        params = {'user_id_list': user_id}
-        app_api = f'https://live-room.xiaohongshu.com/api/sns/v1/live/user_status?{urllib.parse.urlencode(params)}'
-        json_str = await async_req(app_api, proxy_addr=proxy_addr, headers=headers)
-        json_data = json.loads(json_str)
-        if json_data.get('data'):
-            live_link = json_data['data'][0]['live_link']
-            anchor_name = get_params(live_link, "host_nickname")
-            flv_url = get_params(live_link, "flvUrl")
-            room_id = flv_url.split('live/')[1].split('.')[0]
-            flv_url = f'http://live-source-play.xhscdn.com/live/{room_id}.flv'
-            m3u8_url = flv_url.replace('.flv', '.m3u8')
-            result |= {
-                "anchor_name": anchor_name,
-                "is_live": True,
-                "flv_url": flv_url,
-                "m3u8_url": m3u8_url,
-                'record_url': flv_url
-            }
-        if not result["anchor_name"]:
-            if author:
-                result['anchor_name'] = author
-            else:
-                html_str = await async_req(url, proxy_addr=proxy_addr, headers=headers)
-                json_str = re.search('window.__INITIAL_STATE__=(.*?)</script>', html_str, re.S).group(1)
-                json_data = json.loads(json_str)
-                anchor_name = json_data['profile']['userInfo']['nickname']
-                result['anchor_name'] = anchor_name
-    return result
-
-
+    
 @trace_error_decorator
 async def get_xhs_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
@@ -741,38 +694,49 @@ async def get_xhs_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: 
     if cookies:
         headers['Cookie'] = cookies
 
-    if 'xhslink.com' in url:
+    if "xhslink.com" in url:
         url = await async_req(url, proxy_addr=proxy_addr, headers=headers, redirect_url=True)
 
+    host_id = get_params(url, "host_id")
+    user_id = re.search("/user/profile/(.*?)(?=/|\\?|$)", url)
+    user_id = user_id.group(1) if user_id else host_id
     result = {"anchor_name": '', "is_live": False}
-    room_id = re.search('/livestream/(.*?)(?=/|\\?|$)', url)
-    if room_id:
-        html_str = await async_req(url, proxy_addr=proxy_addr, headers=headers)
-        json_str = re.search('window.__INITIAL_STATE__=(.*?)</script>', html_str, re.S).group(1)
+    html_str = await async_req(url, proxy_addr=proxy_addr, headers=headers)
+    match_data = re.search("<script>window.__INITIAL_STATE__=(.*?)</script>", html_str)
+
+    if match_data:
+        json_str = match_data.group(1).replace("undefined", "null")
         json_data = json.loads(json_str)
-        room_data = json_data['liveStream']['roomData']
-        anchor_name = room_data['hostInfo']['nickName']
-        live_status = json_data['liveStream']['liveStatus']
-        result['anchor_name'] = anchor_name
-        if live_status == 'end':
-            return await get_xhs_stream_url_profile(url, proxy_addr, cookies, anchor_name)
-        title = room_data['roomInfo']['roomTitle']
-        play_data = json.loads(room_data['roomInfo']['pullConfig'])
-        m3u8_url_list = []
-        flv_url_list = []
-        for item in play_data['h264']:
-            play_url = item['master_url']
-            if play_url.endswith('.m3u8'):
-                m3u8_url_list.append(play_url)
-            else:
-                flv_url_list.append(play_url)
-        flv_url = flv_url_list[0]
-        m3u8_url = m3u8_url_list[0]
-        record_url = m3u8_url if m3u8_url else flv_url
-        result |= {'is_live': True, "title": title, "flv_url": flv_url, "m3u8_url": m3u8_url, 'record_url': record_url}
-        return result
-    else:
-        return await get_xhs_stream_url_profile(url, proxy_addr, cookies)
+
+        if json_data.get("liveStream"):
+            stream_data = json_data["liveStream"]
+            if stream_data.get("liveStatus") == "success":
+                room_info = stream_data["roomData"]["roomInfo"]
+                title = room_info.get("roomTitle")
+                if title and "回放" not in title:
+                    live_link = room_info["deeplink"]
+                    anchor_name = get_params(live_link, "host_nickname")
+                    flv_url = get_params(live_link, "flvUrl")
+                    room_id = flv_url.split('live/')[1].split('.')[0]
+                    flv_url = f"http://live-source-play.xhscdn.com/live/{room_id}.flv"
+                    m3u8_url = flv_url.replace('.flv', '.m3u8')
+                    result |= {
+                        "anchor_name": anchor_name,
+                        "is_live": True,
+                        "title": title,
+                        "flv_url": flv_url,
+                        "m3u8_url": m3u8_url,
+                        'record_url': flv_url
+                    }
+                    return result
+
+    profile_url = f"https://www.xiaohongshu.com/user/profile/{user_id}"
+    html_str = await async_req(profile_url, proxy_addr=proxy_addr, headers=headers)
+    anchor_name = re.search("<title>@(.*?) 的个人主页</title>", html_str)
+    if anchor_name:
+        result["anchor_name"] = anchor_name.group(1)
+
+    return result
 
 
 @trace_error_decorator
