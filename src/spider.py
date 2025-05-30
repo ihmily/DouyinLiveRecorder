@@ -683,7 +683,7 @@ async def get_bilibili_stream_data(url: str, qn: str = '10000', platform: str = 
         extra = stream_data['url_info'][0]['extra']
         m3u8_url = host + base_url + extra
         return m3u8_url
-    
+
 @trace_error_decorator
 async def get_xhs_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
     headers = {
@@ -1616,7 +1616,7 @@ async def get_popkontv_stream_url(
                 'signId': username,
                 'version': '4.6.2',
             }
-            play_api = 'https://www.popkontv.com/api/proxy/broadcast/v1/castwatchonoff'
+            play_api = 'https://www.popkontv.com/api/proxy/broadcast/v1/castwatchonoffguest'
             return await async_req(play_api, proxy_addr=proxy_addr, json_data=data, headers=header, abroad=True)
 
         json_str = await fetch_data(headers, partner_code)
