@@ -15,7 +15,7 @@ import zipfile
 from pathlib import Path
 import requests
 from tqdm import tqdm
-from streamget.logger import logger
+from src.logger import logger
 
 current_platform = platform.system()
 execute_dir = os.path.split(os.path.realpath(sys.argv[0]))[0]

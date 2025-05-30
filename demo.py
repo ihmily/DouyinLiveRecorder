@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import asyncio
-from streamget.logger import logger
-from streamget import spider
+from src.logger import logger
+from src import spider
 
 # 以下示例直播间链接不保证时效性，请自行查看链接是否能正常访问
 # Please note that the following example live room links may not be up-to-date
