@@ -25,7 +25,7 @@ import urllib.request
 from . import JS_SCRIPT_PATH, utils
 from .utils import trace_error_decorator
 from .logger import script_path
-from .room import get_sec_user_id, get_unique_id
+from .room import get_sec_user_id, get_unique_id, UnsupportedUrlError
 from .http_clients.async_http import async_req
 
 
@@ -113,12 +113,11 @@ async def get_douyin_app_stream_data(url: str, proxy_addr: OptionalStr = None, c
             room_data = json_data['data'][0]
             room_data['anchor_name'] = json_data['user']['nickname']
         else:
-            data = await get_sec_user_id(url, proxy_addr=proxy_addr)
-
-            if data:
+            try:
+                data = await get_sec_user_id(url, proxy_addr=proxy_addr)
                 _room_id, _sec_uid = data
                 room_data = await get_app_data(_room_id, _sec_uid)
-            else:
+            except UnsupportedUrlError:
                 unique_id = await get_unique_id(url, proxy_addr=proxy_addr)
                 return await get_douyin_stream_data(f'https://live.douyin.com/{unique_id}')
 
