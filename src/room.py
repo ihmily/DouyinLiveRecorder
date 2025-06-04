@@ -30,9 +30,11 @@ HEADERS = {
 }
 
 HEADERS_PC = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.5845.97 '
-                  'Safari/537.36 Core/1.116.438.400 QQBrowser/13.0.6070.400',
-    'Cookie': '',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
+                      'Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0',
+        'Cookie': 'sessionid=7494ae59ae06784454373ce25761e864; __ac_nonce=0670497840077ee4c9eb2; '
+                  '__ac_signature=_02B4Z6wo00f012DZczQAAIDCJJBb3EjnINdg-XeAAL8-db;  '
+                  's_v_web_id=verify_m1ztgtjj_vuHnMLZD_iwZ9_4YO4_BdN1_7wLP3pyqXsf2; '
     }
 
 
