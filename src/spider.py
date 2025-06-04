@@ -2886,7 +2886,7 @@ async def get_taobao_stream_url(url: str, proxy_addr: OptionalStr = None, cookie
         params |= {'sign': sign, 't': t13}
         api = f'https://h5api.m.taobao.com/h5/mtop.mediaplatform.live.livedetail/4.0/?{urllib.parse.urlencode(params)}'
         jsonp_str, new_cookie = await async_req(url=api, proxy_addr=proxy_addr, headers=headers, timeout=20,
-                                                include_cookies=True)
+                                                return_cookies=True, include_cookies=True)
         json_data = utils.jsonp_to_json(jsonp_str)
 
         ret_msg = json_data['ret']
@@ -2897,8 +2897,18 @@ async def get_taobao_stream_url(url: str, proxy_addr: OptionalStr = None, cookie
             if live_status == '1':
                 live_title = json_data['data']['title']
                 play_url_list = json_data['data']['liveUrlList']
-                play_url_list = sorted(play_url_list, key=lambda x: int(x['codeLevel']), reverse=True)
+
+                def get_sort_key(item):
+                    definition_priority = {
+                        "lld": 0, "ld": 1, "md": 2, "hd": 3, "ud": 4
+                    }
+                    def_value = item.get('definition') or item.get('newDefinition')
+                    priority = definition_priority.get(def_value, -1)
+                    return priority
+
+                play_url_list = sorted(play_url_list, key=get_sort_key, reverse=True)
                 result |= {"is_live": True, "title": live_title, "play_url_list": play_url_list, 'live_id': live_id}
+
             return result
         else:
             print(f'Error: Taobao live data fetch failed, {ret_msg[0]}')
