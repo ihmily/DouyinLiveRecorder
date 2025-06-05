@@ -26,7 +26,7 @@ from . import JS_SCRIPT_PATH, utils
 from .utils import trace_error_decorator
 from .logger import script_path
 from .room import get_sec_user_id, get_unique_id, UnsupportedUrlError
-from .http_clients.async_http import async_req
+from .http_clients.async_http import async_req, get_response_status
 
 
 ssl_context = ssl.create_default_context()
@@ -2746,7 +2746,6 @@ async def get_6room_stream_url(url: str, proxy_addr: OptionalStr = None, cookies
         'rid': '',
         'ruid': room_id,
     }
-
     api = 'https://v.6.cn/coop/mobile/index.php?padapi=coop-mobile-inroom.php'
     json_str = await async_req(api, data=data, proxy_addr=proxy_addr, headers=headers)
     json_data = json.loads(json_str)
@@ -2755,8 +2754,7 @@ async def get_6room_stream_url(url: str, proxy_addr: OptionalStr = None, cookies
     result = {"anchor_name": anchor_name, "is_live": False}
     if flv_title:
         flv_url = f'https://wlive.6rooms.com/httpflv/{flv_title}.flv'
-        record_url = await async_req(flv_url, proxy_addr=proxy_addr, headers=headers, redirect_url=True)
-        result |= {'is_live': True, 'flv_url': flv_url, 'record_url': record_url}
+        result |= {'is_live': True, 'flv_url': flv_url, 'record_url': flv_url}
     return result
 
 

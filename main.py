@@ -655,7 +655,6 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                         with semaphore:
                             port_info = asyncio.run(spider.get_maoerfm_stream_url(
                                 url=record_url, proxy_addr=proxy_address, cookies=maoerfm_cookie))
-                            video_save_type = 'mp3音频'
 
                     elif record_url.find("www.winktv.co.kr/") > -1:
                         platform = 'WinkTV'
@@ -1131,10 +1130,85 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                             f"{platform} | {anchor_name} | 直播源地址: {real_url}")
 
                                 only_flv_record = False
-                                only_flv_platform_list = ['shopee'] if os.name == 'nt' else ['shopee', '花椒直播']
+                                only_flv_platform_list = ['shopee', '花椒直播']
                                 if platform in only_flv_platform_list:
                                     logger.debug(f"提示: {platform} 将强制使用FLV格式录制")
                                     only_flv_record = True
+
+                                only_audio_record = False
+                                only_audio_platform_list = ['猫耳FM直播', 'Look直播']
+                                if platform in only_audio_platform_list:
+                                    only_audio_record = True
+
+                                if only_audio_record:
+                                    try:
+                                        now = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
+                                        extension = "mp3" if "m4a" not in video_save_type.lower () else "m4a"
+                                        name_format = "_%03d" if split_video_by_time else ""
+                                        save_file_path = (f"{full_path}/{anchor_name}_{title_in_name}{now}"
+                                                          f"{name_format}.{extension}")
+
+                                        if split_video_by_time:
+                                            print(f'\r{anchor_name} 准备开始录制音频: {save_file_path}')
+
+                                            if "MP3" in video_save_type:
+                                                command = [
+                                                    "-map", "0:a",
+                                                    "-c:a", "libmp3lame",
+                                                    "-ab", "320k",
+                                                    "-f", "segment",
+                                                    "-segment_time", split_time,
+                                                    "-reset_timestamps", "1",
+                                                    save_file_path,
+                                                ]
+                                            else:
+                                                command = [
+                                                    "-map", "0:a",
+                                                    "-c:a", "aac",
+                                                    "-bsf:a", "aac_adtstoasc",
+                                                    "-ab", "320k",
+                                                    "-f", "segment",
+                                                    "-segment_time", split_time,
+                                                    "-segment_format", 'mpegts',
+                                                    "-reset_timestamps", "1",
+                                                    save_file_path,
+                                                ]
+
+                                        else:
+                                            if "MP3" in video_save_type:
+                                                command = [
+                                                    "-map", "0:a",
+                                                    "-c:a", "libmp3lame",
+                                                    "-ab", "320k",
+                                                    save_file_path,
+                                                ]
+
+                                            else:
+                                                command = [
+                                                    "-map", "0:a",
+                                                    "-c:a", "aac",
+                                                    "-bsf:a", "aac_adtstoasc",
+                                                    "-ab", "320k",
+                                                    "-movflags", "+faststart",
+                                                    save_file_path,
+                                                ]
+
+                                        ffmpeg_command.extend(command)
+                                        comment_end = check_subprocess(
+                                            record_name,
+                                            record_url,
+                                            ffmpeg_command,
+                                            video_save_type,
+                                            custom_script
+                                        )
+                                        if comment_end:
+                                            return
+
+                                    except subprocess.CalledProcessError as e:
+                                        logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
+                                        with max_request_lock:
+                                            error_count += 1
+                                            error_window.append(1)
 
                                 if video_save_type == "FLV" or only_flv_record:
                                     filename = anchor_name + f'_{title_in_name}' + now + '.flv'
@@ -1273,76 +1347,6 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                                 "-f", "mp4",
                                                 save_file_path,
                                             ]
-
-                                        ffmpeg_command.extend(command)
-                                        comment_end = check_subprocess(
-                                            record_name,
-                                            record_url,
-                                            ffmpeg_command,
-                                            video_save_type,
-                                            custom_script
-                                        )
-                                        if comment_end:
-                                            return
-
-                                    except subprocess.CalledProcessError as e:
-                                        logger.error(f"错误信息: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
-                                        with max_request_lock:
-                                            error_count += 1
-                                            error_window.append(1)
-
-                                elif "音频" in video_save_type:
-                                    try:
-                                        now = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
-                                        extension = "mp3" if "MP3" in video_save_type.upper() else "m4a"
-                                        name_format = "_%03d" if split_video_by_time else ""
-                                        save_file_path = (f"{full_path}/{anchor_name}_{title_in_name}{now}"
-                                                          f"{name_format}.{extension}")
-
-                                        if split_video_by_time:
-                                            print(f'\r{anchor_name} 准备开始录制音频: {save_file_path}')
-
-                                            if "MP3" in video_save_type:
-                                                command = [
-                                                    "-map", "0:a",
-                                                    "-c:a", "libmp3lame",
-                                                    "-ab", "320k",
-                                                    "-f", "segment",
-                                                    "-segment_time", split_time,
-                                                    "-reset_timestamps", "1",
-                                                    save_file_path,
-                                                ]
-                                            else:
-                                                command = [
-                                                    "-map", "0:a",
-                                                    "-c:a", "aac",
-                                                    "-bsf:a", "aac_adtstoasc",
-                                                    "-ab", "320k",
-                                                    "-f", "segment",
-                                                    "-segment_time", split_time,
-                                                    "-segment_format", 'mpegts',
-                                                    "-reset_timestamps", "1",
-                                                    save_file_path,
-                                                ]
-
-                                        else:
-                                            if "MP3" in video_save_type:
-                                                command = [
-                                                    "-map", "0:a",
-                                                    "-c:a", "libmp3lame",
-                                                    "-ab", "320k",
-                                                    save_file_path,
-                                                ]
-
-                                            else:
-                                                command = [
-                                                    "-map", "0:a",
-                                                    "-c:a", "aac",
-                                                    "-bsf:a", "aac_adtstoasc",
-                                                    "-ab", "320k",
-                                                    "-movflags", "+faststart",
-                                                    save_file_path,
-                                                ]
 
                                         ffmpeg_command.extend(command)
                                         comment_end = check_subprocess(
