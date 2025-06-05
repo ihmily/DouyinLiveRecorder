@@ -586,9 +586,8 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                             port_info = asyncio.run(stream.get_bilibili_stream_url(
                                 json_data, video_quality=record_quality, cookies=bili_cookie, proxy_addr=proxy_address))
 
-                    elif record_url.find("https://www.redelight.cn/") > -1 or \
-                            record_url.find("https://www.xiaohongshu.com/") > -1 or \
-                            record_url.find("http://xhslink.com/") > -1:
+                    elif record_url.find("http://xhslink.com/") > -1 or \
+                            record_url.find("https://www.xiaohongshu.com/") > -1:
                         platform = '小红书直播'
                         with semaphore:
                             port_info = asyncio.run(spider.get_xhs_stream_url(
@@ -1106,6 +1105,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                     '17Live': 'referer:https://17.live/en/live/6302408',
                                     '浪Live': 'referer:https://www.lang.live',
                                     'shopee': f'origin:{live_domain}',
+                                    'Blued直播': 'referer:https://app.blued.cn'
                                 }
 
                                 headers = record_headers.get(platform)

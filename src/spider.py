@@ -804,7 +804,7 @@ async def get_blued_stream_url(url: str, proxy_addr: OptionalStr = None, cookies
     result = {"anchor_name": anchor_name, "is_live": False}
 
     if live_status:
-        m3u8_url = "http:" + json_data['liveInfo']['liveUrl']
+        m3u8_url = json_data['liveInfo']['liveUrl']
         result |= {"is_live": True, "m3u8_url": m3u8_url, 'record_url': m3u8_url}
     return result
 
