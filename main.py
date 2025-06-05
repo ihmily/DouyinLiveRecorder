@@ -513,7 +513,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                     if record_url.find("douyin.com/") > -1:
                         platform = '抖音直播'
                         with semaphore:
-                            if 'v.douyin.com' not in record_url:
+                            if 'v.douyin.com' not in record_url and '/user/' not in record_url:
                                 json_data = asyncio.run(spider.get_douyin_stream_data(
                                     url=record_url,
                                     proxy_addr=proxy_address,

@@ -576,12 +576,15 @@ async def get_yy_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: 
 @trace_error_decorator
 async def get_bilibili_room_info_h5(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> str:
     headers = {
+        'user-agent': 'Mozilla/5.0 (Linux; Android 11; SAMSUNG SM-G973U) AppleWebKit/537.36 (KHTML, like Gecko) '
+                      'SamsungBrowser/14.2 Chrome/87.0.4280.141 Mobile Safari/537.36',
+        'accept-language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
+        'cookie': '',
         'origin': 'https://live.bilibili.com',
-        'referer': 'https://live.bilibili.com/',
-        'user-agent': 'Mozilla/5.0 (Linux; Android 8.0.0; SM-G955U Build/R16NW) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36 Edg/121.0.0.0',
+        'referer': 'https://live.bilibili.com/26066074',
     }
     if cookies:
-        headers['Cookie'] = cookies
+        headers['cookie'] = cookies
 
     room_id = url.split('?')[0].rsplit('/', maxsplit=1)[1]
     api = f'https://api.live.bilibili.com/xlive/web-room/v1/index/getH5InfoByRoom?room_id={room_id}'
