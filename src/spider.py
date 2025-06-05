@@ -1117,6 +1117,8 @@ async def get_pandatv_stream_data(url: str, proxy_addr: OptionalStr = None, cook
     json_str = await async_req('https://api.pandalive.co.kr/v1/member/bj',
                        proxy_addr=proxy_addr, headers=headers, data=data, abroad=True)
     json_data = json.loads(json_str)
+    if "bjInfo" not in json_data:
+        raise RuntimeError(json_data.get("message", 'Unknown error'))
     anchor_id = json_data['bjInfo']['id']
     anchor_name = f"{json_data['bjInfo']['nick']}-{anchor_id}"
     result['anchor_name'] = anchor_name
@@ -1165,7 +1167,7 @@ async def get_maoerfm_stream_url(url: str, proxy_addr: OptionalStr = None, cooki
         m3u8_url = stream_list['hls_pull_url']
         flv_url = stream_list['flv_pull_url']
         title = json_data['info']['room']['name']
-        result |= {'is_live': True, 'title': title, 'm3u8_url': m3u8_url, 'flv_url': flv_url, 'record_url': m3u8_url}
+        result |= {'is_live': True, 'title': title, 'm3u8_url': m3u8_url, 'flv_url': flv_url, 'record_url': flv_url}
     return result
 
 

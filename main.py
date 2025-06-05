@@ -655,6 +655,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                         with semaphore:
                             port_info = asyncio.run(spider.get_maoerfm_stream_url(
                                 url=record_url, proxy_addr=proxy_address, cookies=maoerfm_cookie))
+                            video_save_type = 'mp3音频'
 
                     elif record_url.find("www.winktv.co.kr/") > -1:
                         platform = 'WinkTV'
@@ -1293,7 +1294,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                 elif "音频" in video_save_type:
                                     try:
                                         now = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
-                                        extension = "mp3" if "MP3" in video_save_type else "m4a"
+                                        extension = "mp3" if "MP3" in video_save_type.upper() else "m4a"
                                         name_format = "_%03d" if split_video_by_time else ""
                                         save_file_path = (f"{full_path}/{anchor_name}_{title_in_name}{now}"
                                                           f"{name_format}.{extension}")
