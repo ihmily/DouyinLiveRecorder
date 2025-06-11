@@ -1794,7 +1794,7 @@ while True:
                     delete_line(url_config_file, origin_line)
                 line_list.append(origin_line)
                 line = origin_line.strip()
-                if len(line) < 20:
+                if len(line) < 18:
                     continue
 
                 line_spilt = line.split('主播: ')
