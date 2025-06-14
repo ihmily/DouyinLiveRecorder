@@ -2,7 +2,6 @@
 import gzip
 import urllib.parse
 import urllib.error
-from urllib.request import Request
 import requests
 import ssl
 import json

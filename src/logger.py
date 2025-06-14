@@ -2,10 +2,19 @@
 
 import os
 import sys
+from loguru import logger
+
+logger.remove()
 
 custom_format = "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> - <level>{message}</level>"
-os.environ["LOGURU_FORMAT"] = custom_format
-from loguru import logger
+
+logger.add(
+    sink=sys.stderr,
+    format=custom_format,
+    level="DEBUG",
+    colorize=True,
+    enqueue=True
+)
 
 script_path = os.path.split(os.path.realpath(sys.argv[0]))[0]
 

@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2025-02-08 19:19:00
+Update: 2025-06-14 12:19:00
 Copyright (c) 2023-2025 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -102,9 +102,9 @@ def display_info() -> None:
             if split_video_by_time:
                 print(f"录制分段开启: {split_time}秒", end=" | ")
             else:
-                print(f"录制分段开启: 否", end=" | ")
+                print("录制分段开启: 否", end=" | ")
             if create_time_file:
-                print(f"是否生成时间文件: 是", end=" | ")
+                print("是否生成时间文件: 是", end=" | ")
             print(f"录制视频质量为: {video_record_quality}", end=" | ")
             print(f"录制视频格式为: {video_save_type}", end=" | ")
             print(f"目前瞬时错误数为: {error_count}", end=" | ")
@@ -220,7 +220,7 @@ def converts_mp4(converts_file_path: str, is_original_delete: bool = True) -> No
     try:
         if os.path.exists(converts_file_path) and os.path.getsize(converts_file_path) > 0:
             if converts_to_h264:
-                color_obj.print_colored(f"正在转码为MP4格式并重新编码为h264\n", color_obj.YELLOW)
+                color_obj.print_colored("正在转码为MP4格式并重新编码为h264\n", color_obj.YELLOW)
                 ffmpeg_command = [
                     "ffmpeg", "-i", converts_file_path,
                     "-c:v", "libx264",
@@ -231,7 +231,7 @@ def converts_mp4(converts_file_path: str, is_original_delete: bool = True) -> No
                     "-f", "mp4", converts_file_path.rsplit('.', maxsplit=1)[0] + ".mp4",
                 ]
             else:
-                color_obj.print_colored(f"正在转码为MP4格式\n", color_obj.YELLOW)
+                color_obj.print_colored("正在转码为MP4格式\n", color_obj.YELLOW)
                 ffmpeg_command = [
                     "ffmpeg", "-i", converts_file_path,
                     "-c:v", "copy",
@@ -366,7 +366,7 @@ def run_script(command: str) -> None:
             print(stderr_decoded)
     except PermissionError as e:
         logger.error(e)
-        logger.error(f'脚本无执行权限!, 若是Linux环境, 请先执行:chmod +x your_script.sh 授予脚本可执行权限')
+        logger.error('脚本无执行权限!, 若是Linux环境, 请先执行:chmod +x your_script.sh 授予脚本可执行权限')
     except OSError as e:
         logger.error(e)
         logger.error('Please add `#!/bin/bash` at the beginning of your bash script file.')
@@ -1621,8 +1621,8 @@ try:
             print("System Proxy: http://{}:{}".format(proxy_info.ip, proxy_info.port))
 except HTTPError as err:
     print(f"HTTP error occurred: {err.code} - {err.reason}")
-except URLError as err:
-    color_obj.print_colored(f"INFO：未检测到全局/规则网络代理，请检查代理配置（若无需录制海外直播请忽略此条提示）",
+except URLError:
+    color_obj.print_colored("INFO：未检测到全局/规则网络代理，请检查代理配置（若无需录制海外直播请忽略此条提示）",
                             color_obj.YELLOW)
 except Exception as err:
     print("An unexpected error occurred:", err)

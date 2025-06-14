@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2025-02-08 17:59:16
+Update: 2025-06-14 12:19:00
 Copyright (c) 2023-2025 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -26,7 +26,7 @@ from . import JS_SCRIPT_PATH, utils
 from .utils import trace_error_decorator
 from .logger import script_path
 from .room import get_sec_user_id, get_unique_id, UnsupportedUrlError
-from .http_clients.async_http import async_req, get_response_status
+from .http_clients.async_http import async_req
 
 
 ssl_context = ssl.create_default_context()
@@ -1011,8 +1011,8 @@ async def get_sooplive_stream_data(
             else:
                 raise RuntimeError("sooplive login failed, please check if the account and password are correct")
         elif json_data['data']['code'] == -6001:
-            print(f"error message：Please check if the input sooplive live room address "
-                  f"is correct.")
+            print("error message：Please check if the input sooplive live room address "
+                  "is correct.")
             return result
     if json_data['result'] == 1 and anchor_name:
         broad_no = json_data['data']['broad_no']
@@ -2998,7 +2998,7 @@ async def get_faceit_stream_data(url: str, proxy_addr: OptionalStr = None, cooki
 
     if cookies:
         headers['Cookie'] = cookies
-    nickname = re.findall(f'/players/(.*?)/stream', url)[0]
+    nickname = re.findall('/players/(.*?)/stream', url)[0]
     api = f'https://www.faceit.com/api/users/v1/nicknames/{nickname}'
     json_str = await async_req(api, proxy_addr=proxy_addr, headers=headers)
     json_data = json.loads(json_str)
