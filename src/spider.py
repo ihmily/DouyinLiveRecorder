@@ -23,7 +23,7 @@ import json
 import execjs
 import urllib.request
 from . import JS_SCRIPT_PATH, utils
-from .utils import trace_error_decorator
+from .utils import trace_error_decorator, generate_random_string
 from .logger import script_path
 from .room import get_sec_user_id, get_unique_id, UnsupportedUrlError
 from .http_clients.async_http import async_req
@@ -1970,6 +1970,7 @@ async def get_twitchtv_stream_data(url: str, proxy_addr: OptionalStr = None, coo
         'Accept-Language': 'en-US',
         'Referer': 'https://www.twitch.tv/',
         'Client-ID': 'kimne78kx3ncx6brgo4mv6wki5h1ko',
+        'device-id': generate_random_string(16).lower(),
     }
 
     if cookies:
