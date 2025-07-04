@@ -190,6 +190,10 @@ LIVE_STREAM_CONFIG = {
     "faceit": {
         "url": "https://www.faceit.com/zh/players/Compl1/stream",
         "func": spider.get_faceit_stream_data,
+    },
+    "migu": {
+        "url": "https://www.miguvideo.com/p/live/120000541321",
+        "func": spider.get_migu_stream_url,
     }
 }
 
@@ -209,3 +213,4 @@ def test_live_stream(platform_name: str, proxy_addr=None, cookies=None) -> None:
 if __name__ == "__main__":
     platform = "douyin"
     test_live_stream(platform)
+    
