@@ -194,8 +194,9 @@ async def get_douyin_stream_data(url: str, proxy_addr: OptionalStr = None, cooki
                 origin_url_list = json.loads(match_json_str3.group(1) + '}')
 
         if origin_url_list:
-            origin_m3u8 = {'ORIGIN': origin_url_list["hls"]}
-            origin_flv = {'ORIGIN': origin_url_list["flv"]}
+            origin_hls_codec = origin_url_list['sdk_params'].get('VCodec') or ''
+            origin_m3u8 = {'ORIGIN': origin_url_list["hls"] + '&codec=' + origin_hls_codec}
+            origin_flv = {'ORIGIN': origin_url_list["flv"] + '&codec=' + origin_hls_codec}
             hls_pull_url_map = json_data['stream_url']['hls_pull_url_map']
             flv_pull_url = json_data['stream_url']['flv_pull_url']
             json_data['stream_url']['hls_pull_url_map'] = {**origin_m3u8, **hls_pull_url_map}
@@ -216,7 +217,7 @@ async def get_tiktok_stream_data(url: str, proxy_addr: OptionalStr = None, cooki
     if cookies:
         headers['Cookie'] = cookies
     for i in range(3):
-        html_str = await async_req(url=url, proxy_addr=proxy_addr, headers=headers, abroad=True)
+        html_str = await async_req(url=url, proxy_addr=proxy_addr, headers=headers, abroad=True, http2=False)
         time.sleep(1)
         if "We regret to inform you that we have discontinued operating TikTok" in html_str:
             msg = re.search('<p>\n\\s+(We regret to inform you that we have discontinu.*?)\\.\n\\s+</p>', html_str)

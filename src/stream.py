@@ -21,6 +21,7 @@ from .utils import trace_error_decorator
 from .spider import (
     get_douyu_stream_data, get_bilibili_stream_data
 )
+from .http_clients.async_http import get_response_status
 
 QUALITY_MAPPING = {"OD": 0, "BD": 0, "UHD": 1, "HD": 2, "SD": 3, "LD": 4}
 
@@ -37,7 +38,7 @@ def get_quality_index(quality) -> tuple:
 
 
 @trace_error_decorator
-async def get_douyin_stream_url(json_data: dict, video_quality: str) -> dict:
+async def get_douyin_stream_url(json_data: dict, video_quality: str, proxy_addr: str) -> dict:
     anchor_name = json_data.get('anchor_name')
 
     result = {
@@ -61,6 +62,11 @@ async def get_douyin_stream_url(json_data: dict, video_quality: str) -> dict:
         video_quality, quality_index = get_quality_index(video_quality)
         m3u8_url = m3u8_url_list[quality_index]
         flv_url = flv_url_list[quality_index]
+        ok = await get_response_status(url=m3u8_url, proxy_addr=proxy_addr)
+        if not ok:
+            index = quality_index + 1 if quality_index < 4 else quality_index - 1
+            m3u8_url = m3u8_url_list[index]
+            flv_url = flv_url_list[index]
         result |= {
             'is_live': True,
             'title': json_data['title'],
@@ -73,7 +79,7 @@ async def get_douyin_stream_url(json_data: dict, video_quality: str) -> dict:
 
 
 @trace_error_decorator
-async def get_tiktok_stream_url(json_data: dict, video_quality: str) -> dict:
+async def get_tiktok_stream_url(json_data: dict, video_quality: str, proxy_addr: str) -> dict:
     if not json_data:
         return {"anchor_name": None, "is_live": False}
 
@@ -81,10 +87,18 @@ async def get_tiktok_stream_url(json_data: dict, video_quality: str) -> dict:
         play_list = []
         for key in stream:
             url_info = stream[key]['main']
-            play_url = url_info[q_key]
             sdk_params = url_info['sdk_params']
             sdk_params = json.loads(sdk_params)
             vbitrate = int(sdk_params['vbitrate'])
+            v_codec = sdk_params.get('VCodec', '')
+
+            play_url = ''
+            if url_info.get(q_key):
+                if url_info[q_key].endswith(".flv") or url_info[q_key].endswith(".m3u8"):
+                    play_url = url_info[q_key] + '?codec=' + v_codec
+                else:
+                    play_url = url_info[q_key] + '&codec=' + v_codec
+
             resolution = sdk_params['resolution']
             if vbitrate != 0 and resolution:
                 width, height = map(int, resolution.split('x'))
@@ -115,8 +129,19 @@ async def get_tiktok_stream_url(json_data: dict, video_quality: str) -> dict:
         while len(m3u8_url_list) < 5:
             m3u8_url_list.append(m3u8_url_list[-1])
         video_quality, quality_index = get_quality_index(video_quality)
-        flv_url = flv_url_list[quality_index]['url'].replace("https://", "http://")
-        m3u8_url = m3u8_url_list[quality_index]['url'].replace("https://", "http://")
+        flv_dict: dict = flv_url_list[quality_index]
+        m3u8_dict: dict = m3u8_url_list[quality_index]
+
+        check_url = m3u8_dict.get('url') or flv_dict.get('url')
+        ok = await get_response_status(url=check_url, proxy_addr=proxy_addr, http2=False)
+
+        if not ok:
+            index = quality_index + 1 if quality_index < 4 else quality_index - 1
+            flv_dict: dict = flv_url_list[index]
+            m3u8_dict: dict = m3u8_url_list[index]
+
+        flv_url = flv_dict['url']
+        m3u8_url = m3u8_dict['url']
         result |= {
             'is_live': True,
             'title': live_room['liveRoom']['title'],

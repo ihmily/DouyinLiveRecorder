@@ -523,7 +523,8 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                     url=record_url,
                                     proxy_addr=proxy_address,
                                     cookies=dy_cookie))
-                            port_info = asyncio.run(stream.get_douyin_stream_url(json_data, record_quality))
+                            port_info = asyncio.run(
+                                stream.get_douyin_stream_url(json_data, record_quality, proxy_address))
 
                     elif record_url.find("https://www.tiktok.com/") > -1:
                         platform = 'TikTok直播'
@@ -533,7 +534,8 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                     url=record_url,
                                     proxy_addr=proxy_address,
                                     cookies=tiktok_cookie))
-                                port_info = asyncio.run(stream.get_tiktok_stream_url(json_data, record_quality))
+                                port_info = asyncio.run(
+                                    stream.get_tiktok_stream_url(json_data, record_quality, proxy_address))
                             else:
                                 logger.error("错误信息: 网络异常，请检查网络是否能正常访问TikTok平台")
 
