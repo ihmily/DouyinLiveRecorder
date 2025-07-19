@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2025-07-04 17:23:00
+Update: 2025-07-19 17:43:00
 Copyright (c) 2023-2025 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -38,9 +38,9 @@ from ffmpeg_install import (
     check_ffmpeg, ffmpeg_path, current_env_path
 )
 
-version = "v4.0.5"
+version = "v4.0.6"
 platforms = ("\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|"
-             "酷狗|花椒|流星|Acfun|畅聊|映客|音播|知乎|嗨秀|VV星球|17Live|浪Live|漂漂|六间房|乐嗨|花猫|淘宝|京东|咪咕"
+             "酷狗|花椒|流星|Acfun|畅聊|映客|音播|知乎|嗨秀|VV星球|17Live|浪Live|漂漂|六间房|乐嗨|花猫|淘宝|京东|咪咕|连接|来秀"
              "\n海外站点：TikTok|SOOP|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK|Shopee|"
              "Youtube|Faceit")
 
@@ -931,6 +931,18 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                             port_info = asyncio.run(spider.get_migu_stream_url(
                                 url=record_url, proxy_addr=proxy_address, cookies=migu_cookie))
 
+                    elif record_url.find("show.lailianjie.com") > -1:
+                        platform = '连接直播'
+                        with semaphore:
+                            port_info = asyncio.run(spider.get_lianjie_stream_url(
+                                url=record_url, proxy_addr=proxy_address, cookies=lianjie_cookie))
+
+                    elif record_url.find("www.imkktv.com") > -1:
+                        platform = '来秀直播'
+                        with semaphore:
+                            port_info = asyncio.run(spider.get_laixiu_stream_url(
+                                url=record_url, proxy_addr=proxy_address, cookies=laixiu_cookie))
+
                     elif record_url.find(".m3u8") > -1 or record_url.find(".flv") > -1:
                         platform = '自定义录制直播'
                         port_info = {
@@ -1772,6 +1784,8 @@ while True:
     jd_cookie = read_config_value(config, 'Cookie', 'jd_cookie', '')
     faceit_cookie = read_config_value(config, 'Cookie', 'faceit_cookie', '')
     migu_cookie = read_config_value(config, 'Cookie', 'migu_cookie', '')
+    lianjie_cookie = read_config_value(config, 'Cookie', 'lianjie_cookie', '')
+    laixiu_cookie = read_config_value(config, 'Cookie', 'laixiu_cookie', '')
 
     video_save_type_list = ("FLV", "MKV", "TS", "MP4", "MP3音频", "M4A音频")
     if video_save_type and video_save_type.upper() in video_save_type_list:
@@ -1891,7 +1905,9 @@ while True:
                     '3.cn',
                     'eco.m.jd.com',
                     'www.miguvideo.com',
-                    'm.miguvideo.com'
+                    'm.miguvideo.com',
+                    'show.lailianjie.com',
+                    'www.imkktv.com'
                 ]
                 overseas_platform_host = [
                     'www.tiktok.com',

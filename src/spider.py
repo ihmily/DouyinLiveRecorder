@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2025-07-04 17:23:00
+Update: 2025-07-19 17:43:00
 Copyright (c) 2023-2025 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -3091,4 +3091,97 @@ async def get_migu_stream_url(url: str, proxy_addr: OptionalStr = None, cookies:
             result['flv_url'] = real_source_url
             result['record_url'] = real_source_url
         result['is_live'] = True
+    return result
+
+
+@trace_error_decorator
+async def get_lianjie_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    headers = {
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
+                          'Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0',
+            'accept-language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
+        }
+
+    if cookies:
+        headers['cookie'] = cookies
+
+    room_id = url.split('?')[0].rsplit('lailianjie.com/', maxsplit=1)[-1]
+    play_api = f'https://api.lailianjie.com/ApiServices/service/live/getRoomInfo?&_$t=&_sign=&roomNumber={room_id}'
+    json_str = await async_req(play_api, proxy_addr=proxy_addr, headers=headers)
+    json_data = json.loads(json_str)
+
+    room_data = json_data['data']
+    anchor_name = room_data['nickname']
+    live_status = room_data['isonline']
+
+    result = {"anchor_name": anchor_name, "is_live": False}
+    if live_status == 1:
+        title = room_data['defaultRoomTitle']
+        webrtc_url = room_data['videoUrl']
+        https_url = "https://" + webrtc_url.split('webrtc://')[1]
+        flv_url = https_url.replace('?', '.flv?')
+        m3u8_url = https_url.replace('?', '.m3u8?')
+        result |= {'is_live': True, 'title': title, 'm3u8_url': m3u8_url, 'flv_url': flv_url, 'record_url': flv_url}
+    return result
+
+
+@trace_error_decorator
+async def get_laixiu_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    def generate_uuid(ua_type: str):
+        if ua_type == "mobile":
+            return str(uuid.uuid4())
+        return str(uuid.uuid4()).replace('-', '')
+
+    def calculate_sign(ua_type: str = 'pc'):
+        a = int(time.time() * 1000)
+        s = generate_uuid(ua_type)
+        u = 'kk792f28d6ff1f34ec702c08626d454b39pro'
+
+        input_str = f"web{s}{a}{u}"
+        md5_hash = hashlib.md5(input_str.encode('utf-8')).hexdigest()
+
+        return {
+            'timestamp': a,
+            'imei': s,
+            'requestId': md5_hash,
+            'inputString': input_str
+        }
+
+    sign_data = calculate_sign(ua_type='pc')
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
+                      'Chrome/138.0.0.0 Safari/537.36 Edg/138.0.0.0',
+        'mobileModel': 'web',
+        'timestamp': str(sign_data['timestamp']),
+        'loginType': '2',
+        'versionCode': '10003',
+        'imei': sign_data['imei'],
+        'requestId': sign_data['requestId'],
+        'channel': '9',
+        'version': '1.0.0',
+        'os': 'web',
+        'platform': 'WEB',
+        'Origin': 'https://www.imkktv.com',
+        'Referer': 'https://www.imkktv.com/',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
+    }
+
+    if cookies:
+        headers['cookie'] = cookies
+
+    pattern = r"(?:roomId|anchorId)=(.*?)(?=&|$)"
+    match = re.search(pattern, url)
+    room_id = match.group(1) if match else ''
+    play_api = f'https://api.imkktv.com/liveroom/getShareLiveVideo?roomId={room_id}'
+    json_str = await async_req(play_api, proxy_addr=proxy_addr, headers=headers)
+    json_data = json.loads(json_str)
+
+    room_data = json_data['data']
+    anchor_name = room_data['nickname']
+    live_status = room_data['playStatus'] == 0
+
+    result = {"anchor_name": anchor_name, "is_live": False}
+    if live_status:
+        flv_url = room_data['playUrl']
+        result |= {'is_live': True, 'flv_url': flv_url, 'record_url': flv_url}
     return result
