@@ -202,6 +202,10 @@ LIVE_STREAM_CONFIG = {
     "laixiu": {
         "url": "https://www.imkktv.com/h5/share/video.html?uid=1845195&roomId=1710496",
         "func": spider.get_laixiu_stream_url,
+    },
+    "picarto": {
+        "url": "https://www.picarto.tv/cuteavalanche",
+        "func": spider.get_picarto_stream_url,
     }
 }
 

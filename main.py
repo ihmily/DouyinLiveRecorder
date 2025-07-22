@@ -42,7 +42,7 @@ version = "v4.0.6"
 platforms = ("\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|"
              "酷狗|花椒|流星|Acfun|畅聊|映客|音播|知乎|嗨秀|VV星球|17Live|浪Live|漂漂|六间房|乐嗨|花猫|淘宝|京东|咪咕|连接|来秀"
              "\n海外站点：TikTok|SOOP|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK|Shopee|"
-             "Youtube|Faceit")
+             "Youtube|Faceit|Picarto")
 
 recording = set()
 error_count = 0
@@ -945,6 +945,12 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                             port_info = asyncio.run(spider.get_laixiu_stream_url(
                                 url=record_url, proxy_addr=proxy_address, cookies=laixiu_cookie))
 
+                    elif record_url.find("www.picarto.tv") > -1:
+                        platform = 'Picarto'
+                        with semaphore:
+                            port_info = asyncio.run(spider.get_picarto_stream_url(
+                                url=record_url, proxy_addr=proxy_address, cookies=picarto_cookie))
+
                     elif record_url.find(".m3u8") > -1 or record_url.find(".flv") > -1:
                         platform = '自定义录制直播'
                         port_info = {
@@ -1788,6 +1794,7 @@ while True:
     migu_cookie = read_config_value(config, 'Cookie', 'migu_cookie', '')
     lianjie_cookie = read_config_value(config, 'Cookie', 'lianjie_cookie', '')
     laixiu_cookie = read_config_value(config, 'Cookie', 'laixiu_cookie', '')
+    picarto_cookie = read_config_value(config, 'Cookie', 'picarto_cookie', '')
 
     video_save_type_list = ("FLV", "MKV", "TS", "MP4", "MP3音频", "M4A音频")
     if video_save_type and video_save_type.upper() in video_save_type_list:
@@ -1909,7 +1916,8 @@ while True:
                     'www.miguvideo.com',
                     'm.miguvideo.com',
                     'show.lailianjie.com',
-                    'www.imkktv.com'
+                    'www.imkktv.com',
+                    'www.picarto.tv'
                 ]
                 overseas_platform_host = [
                     'www.tiktok.com',
