@@ -139,9 +139,14 @@ async def get_douyin_app_stream_data(url: str, proxy_addr: OptionalStr = None, c
                     json_str = live_core_sdk_data['pull_data']['stream_data']
                 json_data = json.loads(json_str)
                 if 'origin' in json_data['data']:
+                    stream_data = live_core_sdk_data['pull_data']['stream_data']
+                    origin_data = json.loads(stream_data)['data']['origin']['main']
+                    sdk_params = json.loads(origin_data['sdk_params'])
+                    origin_hls_codec = sdk_params.get('VCodec') or ''
+
                     origin_url_list = json_data['data']['origin']['main']
-                    origin_m3u8 = {'ORIGIN': origin_url_list["hls"]}
-                    origin_flv = {'ORIGIN': origin_url_list["flv"]}
+                    origin_m3u8 = {'ORIGIN': origin_url_list["hls"] + '&codec=' + origin_hls_codec}
+                    origin_flv = {'ORIGIN': origin_url_list["flv"] + '&codec=' + origin_hls_codec}
                     hls_pull_url_map = room_data['stream_url']['hls_pull_url_map']
                     flv_pull_url = room_data['stream_url']['flv_pull_url']
                     room_data['stream_url']['hls_pull_url_map'] = {**origin_m3u8, **hls_pull_url_map}
