@@ -32,7 +32,7 @@ from src.proxy import ProxyDetector
 from src.utils import logger
 from src import utils
 from msg_push import (
-    dingtalk, xizhi, tg_bot, send_email, bark, ntfy
+    dingtalk, xizhi, tg_bot, send_email, bark, ntfy, pushplus
 )
 from ffmpeg_install import (
     check_ffmpeg, ffmpeg_path, current_env_path
@@ -340,6 +340,7 @@ def push_message(record_name: str, live_url: str, content: str) -> None:
         'NTFY': lambda: ntfy(
             ntfy_api, title=msg_title, content=content, tags=ntfy_tags, action_url=live_url, email=ntfy_email
         ),
+        'PUSHPLUS': lambda: pushplus(pushplus_token, msg_title, content),
     }
 
     for platform, func in push_functions.items():
@@ -1727,6 +1728,7 @@ while True:
     ntfy_api = read_config_value(config, '推送配置', 'ntfy推送地址', "")
     ntfy_tags = read_config_value(config, '推送配置', 'ntfy推送标签', "tada")
     ntfy_email = read_config_value(config, '推送配置', 'ntfy推送邮箱', "")
+    pushplus_token = read_config_value(config, '推送配置', 'pushplus推送token', "")
     push_message_title = read_config_value(config, '推送配置', '自定义推送标题', "直播间状态更新通知")
     begin_push_message_text = read_config_value(config, '推送配置', '自定义开播推送内容', "")
     over_push_message_text = read_config_value(config, '推送配置', '自定义关播推送内容', "")
