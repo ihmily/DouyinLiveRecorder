@@ -213,6 +213,42 @@ def ntfy(api: str, title: str = "message", content: str = 'test', tags: str = 't
     return {"success": success, "error": error}
 
 
+def pushplus(token: str, title: str, content: str) -> Dict[str, Any]:
+    """
+    PushPlus推送通知
+    API文档: https://www.pushplus.plus/doc/
+    """
+    success = []
+    error = []
+    token_list = token.replace('，', ',').split(',') if token.strip() else []
+    
+    for _token in token_list:
+        json_data = {
+            'token': _token,
+            'title': title,
+            'content': content
+        }
+        
+        try:
+            url = 'https://www.pushplus.plus/send'
+            data = json.dumps(json_data).encode('utf-8')
+            req = urllib.request.Request(url, data=data, headers=headers)
+            response = opener.open(req, timeout=10)
+            json_str = response.read().decode('utf-8')
+            json_data = json.loads(json_str)
+            
+            if json_data.get('code') == 200:
+                success.append(_token)
+            else:
+                error.append(_token)
+                print(f'PushPlus推送失败, Token：{_token}, 失败信息：{json_data.get("msg", "未知错误")}')
+        except Exception as e:
+            error.append(_token)
+            print(f'PushPlus推送失败, Token：{_token}, 错误信息:{e}')
+    
+    return {"success": success, "error": error}
+
+
 if __name__ == '__main__':
     send_title = '直播通知'  # 标题
     send_content = '张三 开播了！'  # 推送内容
@@ -253,3 +289,7 @@ if __name__ == '__main__':
         title="直播推送",
         content="xxx已开播",
     )
+
+    # PushPlus推送通知
+    pushplus_token = ''  # 替换成自己的PushPlus Token，获取地址：https://www.pushplus.plus/
+    # pushplus(pushplus_token, send_title, send_content)
