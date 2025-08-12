@@ -721,7 +721,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                     elif record_url.find("twitcasting.tv/") > -1:
                         platform = 'TwitCasting'
                         with semaphore:
-                            port_info = asyncio.run(spider.get_twitcasting_stream_url(
+                            json_data = asyncio.run(spider.get_twitcasting_stream_url(
                                 url=record_url,
                                 proxy_addr=proxy_address,
                                 cookies=twitcasting_cookie,
@@ -729,6 +729,8 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                 username=twitcasting_username,
                                 password=twitcasting_password
                             ))
+                            port_info = asyncio.run(stream.get_stream_url(json_data, record_quality, spec=False))
+
                             if port_info and port_info.get('new_cookies'):
                                 utils.update_config(
                                     file_path=config_file, section='Cookie', key='twitcasting_cookie',

@@ -1758,7 +1758,7 @@ async def get_twitcasting_stream_url(
                                    "configuration file is correct")
             print("TwitCasting login successful! Starting to fetch data...")
             headers['Cookie'] = new_cookie
-        anchor_name, live_status, live_title = get_data(headers)
+        anchor_name, live_status, live_title = await get_data(headers)
     except AttributeError:
         print("Failed to retrieve TwitCasting data, attempting to log in...")
         new_cookie = await login_twitcasting(
@@ -1772,8 +1772,17 @@ async def get_twitcasting_stream_url(
 
     result["anchor_name"] = anchor_name
     if live_status == 'true':
-        play_url = f'https://twitcasting.tv/{anchor_id}/metastream.m3u8/?video=1&mode=source'
-        result |= {'title': live_title, 'is_live': True, "m3u8_url": play_url, "record_url": play_url}
+        url_streamserver = f"https://twitcasting.tv/streamserver.php?target={anchor_id}&mode=client&player=pc_web"
+        stream_data = await async_req(url_streamserver, proxy_addr=proxy_addr, headers=headers)
+        json_data = json.loads(stream_data)
+        if not json_data.get('tc-hls') or not json_data['tc-hls'].get("streams"):
+            raise RuntimeError("No m3u8_url,please check the url")
+
+        stream_dict = json_data['tc-hls']["streams"]
+        quality_order = {"high": 0, "medium": 1, "low": 2}
+        sorted_streams = sorted(stream_dict.items(), key=lambda item: quality_order[item[0]])
+        play_url_list = [url for quality, url in sorted_streams]
+        result |= {'title': live_title, 'is_live': True, "play_url_list": play_url_list}
     result['new_cookies'] = new_cookie
     return result
 
