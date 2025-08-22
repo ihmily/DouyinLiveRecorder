@@ -71,7 +71,7 @@ LIVE_STREAM_CONFIG = {
         "func": spider.get_winktv_stream_data,
     },
     "flextv": {
-        "url": "https://www.flextv.co.kr/channels/593127/live",
+        "url": "https://www.ttinglive.com/channels/685479/live",
         "func": spider.get_flextv_stream_data,
     },
     "looklive": {

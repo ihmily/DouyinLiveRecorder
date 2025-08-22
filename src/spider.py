@@ -1256,7 +1256,7 @@ async def login_flextv(username: str, password: str, proxy_addr: OptionalStr = N
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
         'content-type': 'application/json;charset=UTF-8',
-        'referer': 'https://www.flextv.co.kr/',
+        'referer': 'https://www.ttinglive.com/',
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0',
     }
 
@@ -1268,7 +1268,7 @@ async def login_flextv(username: str, password: str, proxy_addr: OptionalStr = N
         'device': 'PCWEB',
     }
 
-    url = 'https://api.flextv.co.kr/v2/api/auth/signin'
+    url = 'https://www.ttinglive.com/v2/api/auth/signin'
 
     try:
         print("Logging into FlexTV platform...")
@@ -1296,13 +1296,13 @@ async def get_flextv_stream_url(
         headers = {
             'accept': 'application/json, text/plain, */*',
             'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
-            'referer': 'https://www.flextv.co.kr/',
+            'referer': 'https://www.ttinglive.com/',
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0',
         }
         user_id = url.split('/live')[0].rsplit('/', maxsplit=1)[-1]
         if cookie:
             headers['Cookie'] = cookie
-        play_api = f'https://api.flextv.co.kr/api/channels/{user_id}/stream?option=all'
+        play_api = f'https://www.ttinglive.com/api/channels/{user_id}/stream?option=all'
         json_str = await async_req(play_api, proxy_addr=proxy_addr, headers=headers, abroad=True)
         if 'HTTP Error 400: Bad Request' in json_str:
             raise ConnectionError(
@@ -1324,7 +1324,7 @@ async def get_flextv_stream_data(
     headers = {
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
-        'referer': 'https://www.flextv.co.kr/',
+        'referer': 'https://www.ttinglive.com/',
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0',
     }
     if cookies:
@@ -1333,7 +1333,7 @@ async def get_flextv_stream_data(
     result = {"anchor_name": '', "is_live": False}
     new_cookies = None
     try:
-        url2 = f'https://www.flextv.co.kr/channels/{user_id}/live'
+        url2 = f'https://www.ttinglive.com/channels/{user_id}/live'
         html_str = await async_req(url2, proxy_addr=proxy_addr, headers=headers, abroad=True)
         json_str = re.search('<script id="__NEXT_DATA__" type=".*">(.*?)</script>', html_str).group(1)
         json_data = json.loads(json_str)
@@ -1371,7 +1371,7 @@ async def get_flextv_stream_data(
                     result['play_url_list'] = play_url_list
                     result['is_live'] = True
         else:
-            url2 = f'https://www.flextv.co.kr/channels/{user_id}'
+            url2 = f'https://www.ttinglive.com/channels/{user_id}'
             html_str = await async_req(url2, proxy_addr=proxy_addr, headers=headers, abroad=True)
             anchor_name = re.search('<meta name="twitter:title" content="(.*?)의', html_str).group(1)
             result["anchor_name"] = anchor_name
