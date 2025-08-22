@@ -671,7 +671,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                             else:
                                 logger.error("错误信息: 网络异常，请检查本网络是否能正常访问WinkTV直播平台")
 
-                    elif record_url.find("www.flextv.co.kr/") > -1:
+                    elif record_url.find("www.flextv.co.kr/") > -1 or record_url.find("www.ttinglive.com/") > -1:
                         platform = 'FlexTV'
                         with semaphore:
                             if global_proxy or proxy_address:
@@ -1930,6 +1930,7 @@ while True:
                     'www.pandalive.co.kr',
                     'www.winktv.co.kr',
                     'www.flextv.co.kr',
+                    'www.ttinglive.com',
                     'www.popkontv.com',
                     'www.twitch.tv',
                     'www.liveme.com',
