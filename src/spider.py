@@ -106,7 +106,9 @@ async def get_douyin_app_stream_data(url: str, proxy_addr: OptionalStr = None, c
                 "browser_platform": "Win32",
                 "browser_name": "Chrome",
                 "browser_version": "116.0.0.0",
-                "web_rid": web_rid
+                "web_rid": web_rid,
+                'msToken': '',
+                'a_bogus': ''
 
             }
             api = f'https://live.douyin.com/webcast/room/web/enter/?{urllib.parse.urlencode(params)}'
