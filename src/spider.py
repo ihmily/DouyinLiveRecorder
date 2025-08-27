@@ -2061,8 +2061,8 @@ async def get_liveme_stream_url(url: str, proxy_addr: OptionalStr = None, cookie
     if cookies:
         headers['Cookie'] = cookies
 
-    html_str = await async_req(url, proxy_addr=proxy_addr, headers=headers, abroad=True)
     if 'index.html' not in url:
+        html_str = await async_req(url, proxy_addr=proxy_addr, headers=headers, abroad=True)
         match_url = re.search('<meta property="og:url" content="(.*?)">', html_str)
         if match_url:
             url = match_url.group(1)
