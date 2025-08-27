@@ -2061,6 +2061,12 @@ async def get_liveme_stream_url(url: str, proxy_addr: OptionalStr = None, cookie
     if cookies:
         headers['Cookie'] = cookies
 
+    html_str = await async_req(url, proxy_addr=proxy_addr, headers=headers, abroad=True)
+    if 'index.html' not in url:
+        match_url = re.search('<meta property="og:url" content="(.*?)">', html_str)
+        if match_url:
+            url = match_url.group(1)
+
     room_id = url.split("/index.html")[0].rsplit('/', maxsplit=1)[-1]
     sign_data = execjs.compile(open(f'{JS_SCRIPT_PATH}/liveme.js').read()).call('sign', room_id,
                                                                                 f'{JS_SCRIPT_PATH}/crypto-js.min.js')
