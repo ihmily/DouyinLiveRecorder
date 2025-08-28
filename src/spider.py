@@ -772,7 +772,7 @@ async def get_bigo_stream_url(url: str, proxy_addr: OptionalStr = None, cookies:
         if '&h=' in url:
             room_id = url.split('&h=')[-1]
         else:
-            room_id = re.search('www.bigo.tv/cn/(\\w+)', url).group(1)
+            room_id = url.split("?")[0].rsplit("/", maxsplit=1)[-1]
 
     data = {'siteId': room_id}  # roomId
     url2 = 'https://ta.bigo.tv/official_website/studio/getInternalStudioInfo'
@@ -789,8 +789,16 @@ async def get_bigo_stream_url(url: str, proxy_addr: OptionalStr = None, cookies:
         result['record_url'] = m3u8_url
         result |= {"title": live_title, "is_live": True, "m3u8_url": m3u8_url, 'record_url': m3u8_url}
     elif result['anchor_name'] == '':
-        html_str = await async_req(url=f'https://www.bigo.tv/cn/{room_id}', proxy_addr=proxy_addr, headers=headers)
-        result['anchor_name'] = re.search('<title>欢迎来到(.*?)的直播间</title>', html_str, re.DOTALL).group(1)
+        html_str = await async_req(url=f'https://www.bigo.tv/{url.split("/")[3]}/{room_id}',
+                                   proxy_addr=proxy_addr, headers=headers)
+        match_anchor_name = re.search('<title>欢迎来到(.*?)的直播间</title>', html_str, re.DOTALL)
+        if match_anchor_name:
+            anchor_name = match_anchor_name.group(1)
+        else:
+            match_anchor_name = re.search('<meta data-n-head="ssr" data-hid="og:title" property="og:title" '
+                                          'content="(.*?) - BIGO LIVE">', html_str, re.DOTALL)
+            anchor_name = match_anchor_name.group(1)
+        result['anchor_name'] = anchor_name
 
     return result
 
@@ -1711,7 +1719,7 @@ async def login_twitcasting(
     }
     try:
         cookie_dict = await async_req(login_api, proxy_addr=proxy_addr, headers=headers,
-                                      json_data=data, return_cookies=True, timeout=20)
+                                      data=data, return_cookies=True, timeout=20)
         if 'tc_ss' in cookie_dict:
             cookie = utils.dict_to_cookie_str(cookie_dict)
             return cookie
