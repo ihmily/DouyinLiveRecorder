@@ -1169,10 +1169,10 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                 if platform in only_audio_platform_list:
                                     only_audio_record = True
 
-                                if only_audio_record:
+                                if only_audio_record or any(i in video_save_type for i in ['MP3', 'M4A']):
                                     try:
                                         now = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
-                                        extension = "mp3" if "m4a" not in video_save_type.lower () else "m4a"
+                                        extension = "mp3" if "m4a" not in video_save_type.lower() else "m4a"
                                         name_format = "_%03d" if split_video_by_time else ""
                                         save_file_path = (f"{full_path}/{anchor_name}_{title_in_name}{now}"
                                                           f"{name_format}.{extension}")
@@ -1800,7 +1800,7 @@ while True:
     laixiu_cookie = read_config_value(config, 'Cookie', 'laixiu_cookie', '')
     picarto_cookie = read_config_value(config, 'Cookie', 'picarto_cookie', '')
 
-    video_save_type_list = ("FLV", "MKV", "TS", "MP4", "MP3音频", "M4A音频")
+    video_save_type_list = ("FLV", "MKV", "TS", "MP4", "MP3音频", "M4A音频", "MP3", "M4A")
     if video_save_type and video_save_type.upper() in video_save_type_list:
         video_save_type = video_save_type.upper()
     else:
@@ -2027,3 +2027,4 @@ while True:
         first_run = False
 
     time.sleep(3)
+
