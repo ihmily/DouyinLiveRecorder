@@ -10,6 +10,7 @@ import hashlib
 import re
 import traceback
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 from collections import OrderedDict
 import execjs
 from .logger import logger
@@ -191,3 +192,15 @@ def replace_url(file_path: str | Path, old: str, new: str) -> None:
     if old in content:
         with open(file_path, 'w', encoding='utf-8-sig') as f:
             f.write(content.replace(old, new))
+
+
+def get_query_params(url: str, param_name: OptionalStr) -> dict | list[str]:
+    parsed_url = urlparse(url)
+    query_params = parse_qs(parsed_url.query)
+
+    if param_name is None:
+        return query_params
+    else:
+        values = query_params.get(param_name, [])
+        return values
+    
