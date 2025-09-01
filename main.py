@@ -752,7 +752,10 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                     utils.update_config(
                                         config_file, 'Cookie', 'flextv_cookie', json_data['new_cookies']
                                     )
-                                port_info = asyncio.run(stream.get_stream_url(json_data, record_quality, spec=True))
+                                if 'play_url_list' in json_data:
+                                    port_info = asyncio.run(stream.get_stream_url(json_data, record_quality, spec=True))
+                                else:
+                                    port_info = json_data
                             else:
                                 logger.error("错误信息: 网络异常，请检查本网络是否能正常访问FlexTV直播平台")
 
@@ -1207,7 +1210,8 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                 if show_url:
                                     re_plat = ('WinkTV', 'PandaTV', 'ShowRoom', 'CHZZK', 'Youtube')
                                     if platform in re_plat:
-                                        logger.info(f"{platform} | {anchor_name} | 直播源地址: {port_info['m3u8_url']}")
+                                        logger.info(
+                                            f"{platform} | {anchor_name} | 直播源地址: {port_info.get('m3u8_url')}")
                                     else:
                                         logger.info(
                                             f"{platform} | {anchor_name} | 直播源地址: {real_url}")
