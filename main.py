@@ -382,12 +382,19 @@ def clear_record_info(record_name: str, record_url: str) -> None:
         color_obj.print_colored(f"[{record_name}]已经从录制列表中移除\n", color_obj.YELLOW)
 
 
-def direct_download_stream(source_url: str, save_path: str, record_name: str, live_url: str) -> bool:
+def direct_download_stream(source_url: str, save_path: str, record_name: str, live_url: str, platform: str) -> bool:
 
     try:
         with open(save_path, 'wb') as f:
             client = httpx.Client(timeout=None)
-            with client.stream('GET', source_url, headers={}, follow_redirects=True) as response:
+
+            headers = {}
+            header_params = get_record_headers(platform, live_url)
+            if header_params:
+                key, value = header_params.split(":", 1)
+                headers[key] = value
+
+            with client.stream('GET', source_url, headers=headers, follow_redirects=True) as response:
                 if response.status_code != 200:
                     logger.error(f"请求直播流失败，状态码: {response.status_code}")
                     return False
@@ -503,6 +510,21 @@ def get_quality_code(qn):
         "流畅": "LD"
     }
     return QUALITY_MAPPING.get(qn)
+
+def get_record_headers(platform, live_url):
+    live_domain = '/'.join(live_url.split('/')[0:3])
+    record_headers = {
+        'PandaTV': 'origin:https://www.pandalive.co.kr',
+        'WinkTV': 'origin:https://www.winktv.co.kr',
+        'PopkonTV': 'origin:https://www.popkontv.com',
+        'FlexTV': 'origin:https://www.flextv.co.kr',
+        '千度热播': 'referer:https://qiandurebo.com',
+        '17Live': 'referer:https://17.live/en/live/6302408',
+        '浪Live': 'referer:https://www.lang.live',
+        'shopee': f'origin:{live_domain}',
+        'Blued直播': 'referer:https://app.blued.cn'
+    }
+    return record_headers.get(platform)
 
 
 def is_flv_preferred_platform(link):
@@ -1169,19 +1191,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                     "-avoid_negative_ts", "1"
                                 ]
 
-                                record_headers = {
-                                    'PandaTV': 'origin:https://www.pandalive.co.kr',
-                                    'WinkTV': 'origin:https://www.winktv.co.kr',
-                                    'PopkonTV': 'origin:https://www.popkontv.com',
-                                    'FlexTV': 'origin:https://www.flextv.co.kr',
-                                    '千度热播': 'referer:https://qiandurebo.com',
-                                    '17Live': 'referer:https://17.live/en/live/6302408',
-                                    '浪Live': 'referer:https://www.lang.live',
-                                    'shopee': f'origin:{live_domain}',
-                                    'Blued直播': 'referer:https://app.blued.cn'
-                                }
-
-                                headers = record_headers.get(platform)
+                                headers = get_record_headers(platform, record_url)
                                 if headers:
                                     ffmpeg_command.insert(11, "-headers")
                                     ffmpeg_command.insert(12, headers)
@@ -1314,7 +1324,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                             recording_time_list[record_name] = [start_record_time, record_quality_zh]
                                             
                                             download_success = direct_download_stream(
-                                                flv_url, save_file_path, record_name, record_url
+                                                flv_url, save_file_path, record_name, record_url, platform
                                             )
                                             
                                             if download_success:
@@ -1333,32 +1343,6 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                         with max_request_lock:
                                             error_count += 1
                                             error_window.append(1)
-
-                                    try:
-                                        if converts_to_mp4:
-                                            seg_file_path = f"{full_path}/{anchor_name}_{title_in_name}{now}_%03d.mp4"
-                                            if split_video_by_time:
-                                                segment_video(
-                                                    save_file_path, seg_file_path,
-                                                    segment_format='mp4', segment_time=split_time,
-                                                    is_original_delete=delete_origin_file
-                                                )
-                                            else:
-                                                threading.Thread(
-                                                    target=converts_mp4,
-                                                    args=(save_file_path, delete_origin_file)
-                                                ).start()
-
-                                        else:
-                                            seg_file_path = f"{full_path}/{anchor_name}_{title_in_name}{now}_%03d.flv"
-                                            if split_video_by_time:
-                                                segment_video(
-                                                    save_file_path, seg_file_path,
-                                                    segment_format='flv', segment_time=split_time,
-                                                    is_original_delete=delete_origin_file
-                                                )
-                                    except Exception as e:
-                                        logger.error(f"转码失败: {e} ")
 
                                 elif record_save_type == "FLV":
                                     filename = anchor_name + f'_{title_in_name}' + now + ".flv"
