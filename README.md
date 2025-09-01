@@ -31,7 +31,7 @@
 - [x] 猫耳FM
 - [x] Look直播
 - [x] WinkTV
-- [x] FlexTV
+- [x] TTingLive(原Flextv)
 - [x] PopkonTV
 - [x] TwitCasting
 - [x] 百度直播
@@ -61,6 +61,10 @@
 - [x] 淘宝
 - [x] 京东
 - [x] Faceit
+- [x] 咪咕
+- [x] 连接直播
+- [x] 来秀直播
+- [x] Picarto
 - [ ] 更多平台正在更新中
 
 </div>
@@ -174,7 +178,7 @@ https://look.163.com/live?id=65108820&position=3
 WinkTV:
 https://www.winktv.co.kr/live/play/anjer1004
 
-FlexTV:
+FlexTV(TTinglive)::
 https://www.flextv.co.kr/channels/593127/live
 
 PopkonTV:
@@ -264,6 +268,18 @@ https://3.cn/28MLBy-E
 
 Faceit:
 https://www.faceit.com/zh/players/Compl1/stream
+
+连接直播:
+https://show.lailianjie.com/10000258
+
+咪咕直播:
+https://www.miguvideo.com/p/live/120000541321
+
+来秀直播:
+https://www.imkktv.com/h5/share/video.html?uid=1845195&roomId=1710496
+
+Picarto:
+https://www.picarto.tv/cuteavalanche
 ```
 
 &emsp;
