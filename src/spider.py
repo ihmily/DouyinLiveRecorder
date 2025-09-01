@@ -600,7 +600,7 @@ async def get_bilibili_room_info_h5(url: str, proxy_addr: OptionalStr = None, co
     api = f'https://api.live.bilibili.com/xlive/web-room/v1/index/getH5InfoByRoom?room_id={room_id}'
     json_str = await async_req(api, proxy_addr=proxy_addr, headers=headers)
     room_info = json.loads(json_str)
-    title = room_info['data']['room_info']['title'] if room_info.get('data') else ''
+    title = room_info['data']['room_info'].get('title') if room_info.get('data') else ''
     return title
 
 
