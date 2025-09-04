@@ -566,3 +566,13 @@ docker-compose stop
 
 ## 有问题可以提issue, 我会在这里持续添加更多直播平台的录制 欢迎Star
 #### 
+
+## Star History
+
+<a href="https://www.star-history.com/#ihmily/DouyinLiveRecorder&Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=ihmily/DouyinLiveRecorder&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=ihmily/DouyinLiveRecorder&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=ihmily/DouyinLiveRecorder&type=Date" />
+ </picture>
+</a>
