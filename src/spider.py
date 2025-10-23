@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-15 23:15:00
-Update: 2025-07-19 17:43:00
+Update: 2025-10-23 18:28:00
 Copyright (c) 2023-2025 by Hmily, All Rights Reserved.
 Function: Get live stream data.
 """
@@ -29,6 +29,7 @@ from .utils import trace_error_decorator, generate_random_string
 from .logger import script_path
 from .room import get_sec_user_id, get_unique_id, UnsupportedUrlError
 from .http_clients.async_http import async_req
+from .ab_sign import ab_sign
 
 
 ssl_context = ssl.create_default_context()
@@ -124,6 +125,75 @@ async def get_douyin_app_stream_data(url: str, proxy_addr: OptionalStr = None, c
             except UnsupportedUrlError:
                 unique_id = await get_unique_id(url, proxy_addr=proxy_addr)
                 return await get_douyin_stream_data(f'https://live.douyin.com/{unique_id}')
+
+        if room_data['status'] == 2:
+            if 'stream_url' not in room_data:
+                raise RuntimeError(
+                    "The live streaming type or gameplay is not supported on the computer side yet, please use the "
+                    "app to share the link for recording."
+                )
+            live_core_sdk_data = room_data['stream_url']['live_core_sdk_data']
+            pull_datas = room_data['stream_url']['pull_datas']
+            if live_core_sdk_data:
+                if pull_datas:
+                    key = list(pull_datas.keys())[0]
+                    json_str = pull_datas[key]['stream_data']
+                else:
+                    json_str = live_core_sdk_data['pull_data']['stream_data']
+                json_data = json.loads(json_str)
+                if 'origin' in json_data['data']:
+                    stream_data = live_core_sdk_data['pull_data']['stream_data']
+                    origin_data = json.loads(stream_data)['data']['origin']['main']
+                    sdk_params = json.loads(origin_data['sdk_params'])
+                    origin_hls_codec = sdk_params.get('VCodec') or ''
+
+                    origin_url_list = json_data['data']['origin']['main']
+                    origin_m3u8 = {'ORIGIN': origin_url_list["hls"] + '&codec=' + origin_hls_codec}
+                    origin_flv = {'ORIGIN': origin_url_list["flv"] + '&codec=' + origin_hls_codec}
+                    hls_pull_url_map = room_data['stream_url']['hls_pull_url_map']
+                    flv_pull_url = room_data['stream_url']['flv_pull_url']
+                    room_data['stream_url']['hls_pull_url_map'] = {**origin_m3u8, **hls_pull_url_map}
+                    room_data['stream_url']['flv_pull_url'] = {**origin_flv, **flv_pull_url}
+    except Exception as e:
+        print(f"Error message: {e} Error line: {e.__traceback__.tb_lineno}")
+        room_data = {'anchor_name': ""}
+    return room_data
+
+
+async def get_douyin_web_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None):
+    headers = {
+        'cookie': 'ttwid=1%7C2iDIYVmjzMcpZ20fcaFde0VghXAA3NaNXE_SLR68IyE%7C1761045455'
+                  '%7Cab35197d5cfb21df6cbb2fa7ef1c9262206b062c315b9d04da746d0b37dfbc7d',
+        'referer': 'https://live.douyin.com/335354047186',
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) '
+                      'Chrome/116.0.5845.97 Safari/537.36 Core/1.116.567.400 QQBrowser/19.7.6764.400',
+    }
+    if cookies:
+        headers['cookie'] = cookies
+
+    try:
+        web_rid = url.split('?')[0].split('live.douyin.com/')[-1]
+        params = {
+            "aid": "6383",
+            "app_name": "douyin_web",
+            "live_id": "1",
+            "device_platform": "web",
+            "language": "zh-CN",
+            "browser_language": "zh-CN",
+            "browser_platform": "Win32",
+            "browser_name": "Chrome",
+            "browser_version": "116.0.0.0",
+            "web_rid": web_rid,
+            'msToken': '',
+        }
+
+        api = f'https://live.douyin.com/webcast/room/web/enter/?{urllib.parse.urlencode(params)}'
+        a_bogus = ab_sign(urllib.parse.urlparse(api).query, headers['user-agent'])
+        api += "&a_bogus=" + a_bogus
+        json_str = await async_req(url=api, proxy_addr=proxy_addr, headers=headers)
+        json_data = json.loads(json_str)['data']
+        room_data = json_data['data'][0]
+        room_data['anchor_name'] = json_data['user']['nickname']
 
         if room_data['status'] == 2:
             if 'stream_url' not in room_data:

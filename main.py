@@ -4,7 +4,7 @@
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
-Update: 2025-07-19 17:43:00
+Update: 2025-10-23 19:48:05
 Copyright (c) 2023-2025 by Hmily, All Rights Reserved.
 Function: Record live stream video.
 """
@@ -38,7 +38,7 @@ from ffmpeg_install import (
     check_ffmpeg, ffmpeg_path, current_env_path
 )
 
-version = "v4.0.6"
+version = "v4.0.7"
 platforms = ("\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|"
              "酷狗|花椒|流星|Acfun|畅聊|映客|音播|知乎|嗨秀|VV星球|17Live|浪Live|漂漂|六间房|乐嗨|花猫|淘宝|京东|咪咕|连接|来秀"
              "\n海外站点：TikTok|SOOP|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK|Shopee|"
@@ -383,7 +383,6 @@ def clear_record_info(record_name: str, record_url: str) -> None:
 
 
 def direct_download_stream(source_url: str, save_path: str, record_name: str, live_url: str, platform: str) -> bool:
-
     try:
         with open(save_path, 'wb') as f:
             client = httpx.Client(timeout=None)
@@ -398,16 +397,16 @@ def direct_download_stream(source_url: str, save_path: str, record_name: str, li
                 if response.status_code != 200:
                     logger.error(f"请求直播流失败，状态码: {response.status_code}")
                     return False
-                    
+
                 downloaded = 0
                 chunk_size = 1024 * 16
-                
+
                 for chunk in response.iter_bytes(chunk_size):
                     if live_url in url_comments or exit_recording:
                         color_obj.print_colored(f"[{record_name}]录制时已被注释或请求停止,下载中断", color_obj.YELLOW)
                         clear_record_info(record_name, live_url)
                         return False
-                    
+
                     if chunk:
                         f.write(chunk)
                         downloaded += len(chunk)
@@ -416,8 +415,8 @@ def direct_download_stream(source_url: str, save_path: str, record_name: str, li
     except Exception as e:
         logger.error(f"FLV下载错误: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
         return False
-    
-    
+
+
 def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, save_type: str,
                      script_command: str | None = None) -> bool:
     save_file_path = ffmpeg_command[-1]
@@ -511,6 +510,7 @@ def get_quality_code(qn):
     }
     return QUALITY_MAPPING.get(qn)
 
+
 def get_record_headers(platform, live_url):
     live_domain = '/'.join(live_url.split('/')[0:3])
     record_headers = {
@@ -581,7 +581,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                         platform = '抖音直播'
                         with semaphore:
                             if 'v.douyin.com' not in record_url and '/user/' not in record_url:
-                                json_data = asyncio.run(spider.get_douyin_stream_data(
+                                json_data = asyncio.run(spider.get_douyin_web_stream_data(
                                     url=record_url,
                                     proxy_addr=proxy_address,
                                     cookies=dy_cookie))
@@ -1326,15 +1326,16 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                             recording.add(record_name)
                                             start_record_time = datetime.datetime.now()
                                             recording_time_list[record_name] = [start_record_time, record_quality_zh]
-                                            
+
                                             download_success = direct_download_stream(
                                                 flv_url, save_file_path, record_name, record_url, platform
                                             )
-                                            
+
                                             if download_success:
                                                 record_finished = True
-                                                print(f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制完成\n")
-                                            
+                                                print(
+                                                    f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制完成\n")
+
                                             recording.discard(record_name)
                                         else:
                                             logger.debug("未找到FLV直播流，跳过录制")
@@ -1932,10 +1933,10 @@ while True:
     check_path = video_save_path or default_path
     if utils.check_disk_capacity(check_path, show=first_run) < disk_space_limit:
         exit_recording = True
-    if exit_recording and not recording:
-        logger.warning(f"Disk space remaining is below {disk_space_limit} GB. "
-                        f"Exiting program due to the disk space limit being reached.")
-        sys.exit(-1)
+        if not recording:
+            logger.warning(f"Disk space remaining is below {disk_space_limit} GB. "
+                           f"Exiting program due to the disk space limit being reached.")
+            sys.exit(-1)
 
 
     def contains_url(string: str) -> bool:
@@ -2150,4 +2151,3 @@ while True:
         first_run = False
 
     time.sleep(3)
-
