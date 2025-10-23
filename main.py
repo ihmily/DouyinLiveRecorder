@@ -1932,10 +1932,10 @@ while True:
     check_path = video_save_path or default_path
     if utils.check_disk_capacity(check_path, show=first_run) < disk_space_limit:
         exit_recording = True
-        if not recording:
-            logger.warning(f"Disk space remaining is below {disk_space_limit} GB. "
-                           f"Exiting program due to the disk space limit being reached.")
-            sys.exit(-1)
+    if exit_recording and not recording:
+        logger.warning(f"Disk space remaining is below {disk_space_limit} GB. "
+                        f"Exiting program due to the disk space limit being reached.")
+        sys.exit(-1)
 
 
     def contains_url(string: str) -> bool:
