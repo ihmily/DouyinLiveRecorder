@@ -84,6 +84,7 @@
     	├── utils.py -> (contains utility functions)
     	├── logger.py -> (logger handdle)
     	├── room.py -> (get room info)
+    	├── ab_sign.py-> (generate dy token)
     	├── /javascript -> (some decrypt code)
     ├── main.py -> (main file)
     ├── ffmpeg_install.py -> (ffmpeg install script)
@@ -261,6 +262,7 @@ Youtube:
 https://www.youtube.com/watch?v=cS6zS5hi1w0
 
 淘宝(需cookie):
+https://tbzb.taobao.com/live?liveId=532359023188
 https://m.tb.cn/h.TWp0HTd
 
 京东:
@@ -388,6 +390,13 @@ docker-compose stop
 
 &emsp;
 
+## 🤖相关项目
+
+- StreamCap: https://github.com/ihmily/StreamCap
+- streamget: https://github.com/ihmily/streamget
+
+&emsp;
+
 ## ❤️贡献者
 
 &ensp;&ensp; [![Hmily](https://github.com/ihmily.png?size=50)](https://github.com/ihmily)
@@ -407,10 +416,21 @@ docker-compose stop
 
 &ensp;&ensp; [![HoratioShaw](https://github.com/HoratioShaw.png?size=50)](https://github.com/HoratioShaw)
 [![nov30th](https://github.com/nov30th.png?size=50)](https://github.com/nov30th)
+[![727155455](https://github.com/727155455.png?size=50)](https://github.com/727155455)
+[![nixingshiguang](https://github.com/nixingshiguang.png?size=50)](https://github.com/nixingshiguang)
+[![1411430556](https://github.com/1411430556.png?size=50)](https://github.com/1411430556)
+[![Ovear](https://github.com/Ovear.png?size=50)](https://github.com/Ovear)
 &emsp;
 
 ## ⏳提交日志
 
+- 20251024
+  - 修复抖音风控无法获取数据问题
+  
+  - 新增soop.com录制支持
+  
+  - 修复bigo录制
+  
 - 20250127
   - 新增淘宝、京东、faceit直播录制
   - 修复小红书直播流录制以及转码问题
