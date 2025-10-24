@@ -663,7 +663,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                 record_url, proxy_addr=proxy_address, cookies=xhs_cookie))
                             retry += 1
 
-                    elif record_url.find("https://www.bigo.tv/") > -1 or record_url.find("slink.bigovideo.tv/") > -1:
+                    elif record_url.find("www.bigo.tv/") > -1 or record_url.find("slink.bigovideo.tv/") > -1:
                         platform = 'Bigo直播'
                         with semaphore:
                             port_info = asyncio.run(spider.get_bigo_stream_url(
