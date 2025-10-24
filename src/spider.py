@@ -1005,6 +1005,76 @@ async def get_sooplive_tk(url: str, rtype: str, proxy_addr: OptionalStr = None, 
         return f"{bj_name}-{bj_id}", json_data['CHANNEL']['BNO']
 
 
+def get_soop_headers(cookies):
+    headers = {
+        'client-id': str(uuid.uuid4()),
+        'user-agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, '
+                      'like Gecko) Version/18.5 Mobile/15E148 Safari/604.1 Edg/141.0.0.0',
+    }
+    if cookies:
+        headers['cookie'] = cookies
+    return headers
+
+
+async def _get_soop_channel_info_global(bj_id, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> str:
+    headers = get_soop_headers(cookies)
+    api = 'https://api.sooplive.com/v2/channel/info/' + str(bj_id)
+    json_str = await async_req(api, proxy_addr=proxy_addr, headers=headers)
+    json_data = json.loads(json_str)
+    nickname = json_data['data']['streamerChannelInfo']['nickname']
+    channelId = json_data['data']['streamerChannelInfo']['channelId']
+    anchor_name = f"{nickname}-{channelId}"
+    return anchor_name
+
+
+async def _get_soop_stream_info_global(bj_id, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> tuple:
+    headers = get_soop_headers(cookies)
+    api = 'https://api.sooplive.com/v2/stream/info/' + str(bj_id)
+    json_str = await async_req(api, proxy_addr=proxy_addr, headers=headers)
+    json_data = json.loads(json_str)
+    status = json_data['data']['isStream']
+    title = json_data['data']['title']
+    return status, title
+
+
+async def _fetch_web_stream_data_global(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    split_url = url.split('/')
+    bj_id = split_url[3] if len(split_url) < 6 else split_url[5]
+    anchor_name = await _get_soop_channel_info_global(bj_id)
+    result = {"anchor_name": anchor_name or '', "is_live": False, "live_url": url}
+    status, title = await _get_soop_stream_info_global(bj_id)
+    if not status:
+        return result
+    else:
+        async def _get_url_list(m3u8: str) -> list[str]:
+            headers = {
+                'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
+                              'Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0',
+            }
+            if cookies:
+                headers['cookie'] = cookies
+            resp = await async_req(url=m3u8, proxy_addr=proxy_addr, headers=headers)
+            play_url_list = []
+            url_prefix = '/'.join(m3u8.split('/')[0:3])
+            for i in resp.split('\n'):
+                if not i.startswith('#') and i.strip():
+                    play_url_list.append(url_prefix + i.strip())
+            bandwidth_pattern = re.compile(r'BANDWIDTH=(\d+)')
+            bandwidth_list = bandwidth_pattern.findall(resp)
+            url_to_bandwidth = {purl: int(bandwidth) for bandwidth, purl in zip(bandwidth_list, play_url_list)}
+            play_url_list = sorted(play_url_list, key=lambda purl: url_to_bandwidth[purl], reverse=True)
+            return play_url_list
+
+        m3u8_url = 'https://global-media.sooplive.com/live/' + str(bj_id) + '/master.m3u8'
+        result |= {
+            'is_live': True,
+            'title': title,
+            'm3u8_url': m3u8_url,
+            'play_url_list': await _get_url_list(m3u8_url)
+        }
+    return result
+
+
 @trace_error_decorator
 async def get_sooplive_stream_data(
         url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None,
@@ -1018,6 +1088,9 @@ async def get_sooplive_stream_data(
     }
     if cookies:
         headers['Cookie'] = cookies
+
+    if "sooplive.com" in url:
+        return await _fetch_web_stream_data_global(url, proxy_addr, cookies)
 
     split_url = url.split('/')
     bj_id = split_url[3] if len(split_url) < 6 else split_url[5]

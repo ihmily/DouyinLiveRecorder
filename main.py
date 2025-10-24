@@ -675,7 +675,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                             port_info = asyncio.run(spider.get_blued_stream_url(
                                 record_url, proxy_addr=proxy_address, cookies=blued_cookie))
 
-                    elif record_url.find("sooplive.co.kr/") > -1:
+                    elif record_url.find("sooplive.co.kr/") > -1 or record_url.find("sooplive.com/") > -1:
                         platform = 'SOOP'
                         with semaphore:
                             if global_proxy or proxy_address:
@@ -2051,6 +2051,8 @@ while True:
                     'www.tiktok.com',
                     'play.sooplive.co.kr',
                     'm.sooplive.co.kr',
+                    'www.sooplive.com',
+                    'm.sooplive.com',
                     'www.pandalive.co.kr',
                     'www.winktv.co.kr',
                     'www.flextv.co.kr',
