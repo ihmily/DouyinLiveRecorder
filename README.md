@@ -358,22 +358,22 @@ cd DouyinLiveRecorder
 
   1. 安装 `uv`
    
-    ```bash
-    # 在 macOS 和 Linux 上安装
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    ```
+  ```bash
+  # 在 macOS 和 Linux 上安装
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  ```
 
-    ```powershell
-    # 在 Windows 上安装
-    powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-    ```
+  ```powershell
+  # 在 Windows 上安装
+  powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+  ```
 
   2. 安装依赖
    
-    ```bash
-    # uv 将使用最新python发行版自动创建并使用虚拟环境, 可使用 --python 选项指定 python 版本, 参见 https://docs.astral.sh/uv/reference/cli/#uv-sync--python
-    uv sync
-    ```
+  ```bash
+  # uv 将使用 3.10 以上的最新 python 发行版自动创建并使用虚拟环境, 可使用 --python 选项指定 python 版本, 参见 https://docs.astral.sh/uv/reference/cli/#uv-sync--python
+  uv sync
+  ```
 
 </details>
 
