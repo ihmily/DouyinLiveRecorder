@@ -6,9 +6,6 @@ readme = "README.md"
 authors = [{name = "Hmily"}]
 license = { text = "MIT" }
 requires-python = ">=3.10"
-classifiers = [
-
-]
 dependencies = [
     "requests>=2.31.0",
     "loguru>=0.7.3",
