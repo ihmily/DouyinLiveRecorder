@@ -335,27 +335,22 @@ cd DouyinLiveRecorder
          ```bash
          uv venv
          ```
+    
+    2. 在终端激活虚拟环境 (在未安装 uv 或你想要手动激活虚拟环境时执行, 若已安装 uv, 可以跳过这一步, uv 会自动激活并使用虚拟环境)
+       **Bash** 中
+       ```bash
+       source .venv/Scripts/activate
+       ```
 
-    2. 在终端激活虚拟环境
-
-       > [!NOTE]
-       > 在未安装 uv 或你想要手动激活虚拟环境时执行<br />
-       > 若已安装 uv, 可以跳过这一步, uv 会自动激活并使用虚拟环境
-       >
-       >  **Bash** 中
-       >  ```bash
-       >  source .venv/Scripts/activate
-       >  ```
-       >
-       >  **Powershell** 中
-       >  ```powershell
-       >  .venv\Scripts\activate.ps1
-       >  ```
-       >
-       >  **Windows CMD** 中
-       >  ```bat
-       >  .venv\Scripts\activate.bat
-       >  ```
+       **Powershell** 中
+       ```powershell
+       .venv\Scripts\activate.ps1
+       ```
+       
+       **Windows CMD** 中
+       ```bat
+       .venv\Scripts\activate.bat
+       ```
 
     3. 安装依赖
    
