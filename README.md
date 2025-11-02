@@ -330,13 +330,14 @@ cd DouyinLiveRecorder
          python -m venv .venv
          ```
 
-       - 使用 uv, 默认使用系统 Python, 你可以添加 `--python` 选项指定 Python 版本而不使用系统 Python [官方文档](https://docs.astral.sh/uv/concepts/python-versions/)
+       - 使用 uv, 默认使用系统 Python, 你可以添加 `--python` 选项指定 Python 版本而不使用系统 Python [uv官方文档](https://docs.astral.sh/uv/concepts/python-versions/)
        
          ```bash
          uv venv
          ```
     
     2. 在终端激活虚拟环境 (在未安装 uv 或你想要手动激活虚拟环境时执行, 若已安装 uv, 可以跳过这一步, uv 会自动激活并使用虚拟环境)
+   
        **Bash** 中
        ```bash
        source .venv/Scripts/activate
@@ -355,10 +356,12 @@ cd DouyinLiveRecorder
     3. 安装依赖
    
        ```bash
-       # 使用 pip
+       # 使用 pip (若安装太慢或失败, 可使用 `-i` 指定镜像源)
        pip3 install -U pip && pip3 install -r requirements.txt
-       # 或者使用 uv
-       uv sync # 或者 uv pip sync requirements.txt
+       # 或者使用 uv (可使用 `--index` 指定镜像源)
+       uv sync
+       # 或者
+       uv pip sync requirements.txt
        ```
 
   - :x: 在系统 Python 环境中安装 (不推荐)
