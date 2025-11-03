@@ -1,0 +1,23 @@
+[project]
+name = "DouyinLiveRecorder"
+version = "4.0.7"
+description = "可循环值守和多人录制的直播录制软件, 支持抖音、TikTok、Youtube、快手、虎牙、斗鱼、B站、小红书、pandatv、sooplive、flextv、popkontv、twitcasting、winktv、百度、微博、酷狗、17Live、Twitch、Acfun、CHZZK、shopee等40+平台直播录制"
+readme = "README.md"
+authors = [{name = "Hmily"}]
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.31.0",
+    "loguru>=0.7.3",
+    "pycryptodome>=3.20.0",
+    "distro>=1.9.0",
+    "tqdm>=4.67.1",
+    "httpx[http2]>=0.28.1",
+    "PyExecJS>=1.5.1"
+]
+
+[project.urls]
+"Homepage" = "https://github.com/ihmily/DouyinLiveRecorder"
+"Documentation" = "https://github.com/ihmily/DouyinLiveRecorder"
+"Repository" = "https://github.com/ihmily/DouyinLiveRecorder"
+"Issues" = "https://github.com/ihmily/DouyinLiveRecorder/issues"
