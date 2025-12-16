@@ -8,6 +8,7 @@ Triggers callbacks when new segments are detected, enabling real-time processing
 Author: DouyinLiveRecorder
 Date: 2025-12-16
 """
+import datetime
 import os
 import re
 import threading
@@ -107,7 +108,8 @@ class SegmentWatcher:
             daemon=True
         )
         self._watcher_thread.start()
-        logger.debug(f"SegmentWatcher started: {self.watch_dir}/{self.filename_prefix}*{self.file_extension}")
+        start_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        logger.info(f"分段监控启动: {self.filename_prefix}*{self.file_extension} | 目录: {self.watch_dir} | 时间: {start_time}")
 
     def stop(self, timeout: float = 5.0) -> None:
         """
@@ -123,7 +125,8 @@ class SegmentWatcher:
 
         # Final scan to catch any remaining segments
         self._scan_directory(final=True)
-        logger.debug(f"SegmentWatcher stopped: found {len(self._segments)} segments")
+        stop_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        logger.info(f"分段监控停止: {self.filename_prefix} | 检测到分段数: {len(self._segments)} | 时间: {stop_time}")
 
     def get_all_segments(self) -> list[SegmentInfo]:
         """Get all detected segments sorted by index."""
@@ -235,7 +238,8 @@ class SegmentWatcher:
         with self._lock:
             self._segments[filepath] = segment_info
 
-        logger.debug(f"Segment detected: {filename} (index={index}, size={size/1024/1024:.1f}MB)")
+        detect_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        logger.info(f"分段文件检测到: {filename} | 序号: {index} | 大小: {size/1024/1024:.2f}MB | 时间: {detect_time}")
 
         # Trigger callback
         if self.on_segment_created:

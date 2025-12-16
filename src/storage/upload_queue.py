@@ -5,6 +5,7 @@ Background upload queue with worker thread.
 Author: DouyinLiveRecorder
 Date: 2025-12-16
 """
+import datetime
 import os
 import queue
 import threading
@@ -119,7 +120,7 @@ class UploadWorker:
     def enqueue(self, task: UploadTask) -> None:
         """Add task to upload queue."""
         self.task_queue.put(task)
-        self.logger.debug(f"Task enqueued: segment_id={task.segment_id}, file={task.filename}")
+        self.logger.debug(f"上传任务入队: segment_id={task.segment_id}, 文件={task.filename}, 队列大小={self.task_queue.qsize()}")
 
     @property
     def queue_size(self) -> int:
@@ -171,7 +172,8 @@ class UploadWorker:
 
             # Check if file exists
             if not os.path.exists(task.local_path):
-                self.logger.warning(f"Local file not found: {task.local_path}")
+                skip_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                self.logger.warning(f"分段文件不存在,跳过上传: {task.filename} | 路径: {task.local_path} | 时间: {skip_time}")
                 repo.update_upload_status(
                     task.segment_id,
                     UploadStatus.SKIPPED,
@@ -180,6 +182,9 @@ class UploadWorker:
                 return
 
             # Mark as uploading
+            upload_start_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            file_size = os.path.getsize(task.local_path)
+            self.logger.info(f"分段上传开始: {task.filename} | 大小: {file_size/1024/1024:.2f}MB | 时间: {upload_start_time}")
             repo.update_upload_status(task.segment_id, UploadStatus.UPLOADING)
             session.commit()
 
@@ -202,22 +207,24 @@ class UploadWorker:
             segment = repo.get_segment_by_id(task.segment_id)
 
             if success:
+                upload_end_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 repo.update_upload_status(
                     task.segment_id,
                     UploadStatus.COMPLETED,
                     oss_path=result,
                     oss_bucket=self.tos_uploader.bucket
                 )
-                self.logger.info(f"Upload completed: {task.filename} -> {result}")
+                self.logger.info(f"分段上传成功: {task.filename} | OSS路径: {result} | 时间: {upload_end_time}")
 
                 # Delete local file if configured
                 if self.delete_after_upload:
                     try:
                         os.remove(task.local_path)
                         repo.mark_local_deleted(task.segment_id)
-                        self.logger.debug(f"Local file deleted: {task.local_path}")
+                        delete_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        self.logger.info(f"分段本地文件已删除: {task.filename} | 路径: {task.local_path} | 时间: {delete_time}")
                     except OSError as e:
-                        self.logger.warning(f"Failed to delete local file: {e}")
+                        self.logger.warning(f"分段本地文件删除失败: {task.filename} | 错误: {e}")
 
                 # Callback
                 if self.on_upload_complete and segment:
@@ -227,6 +234,7 @@ class UploadWorker:
                         self.logger.error(f"Upload complete callback error: {e}")
             else:
                 # Check retry count
+                fail_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 current_retries = segment.upload_retry_count if segment else 0
                 if current_retries >= self.max_retries - 1:
                     repo.update_upload_status(
@@ -235,7 +243,7 @@ class UploadWorker:
                         error_message=result
                     )
                     self.logger.error(
-                        f"Upload permanently failed after {self.max_retries} retries: {task.filename}"
+                        f"分段上传最终失败: {task.filename} | 重试次数: {self.max_retries} | 错误: {result} | 时间: {fail_time}"
                     )
 
                     if self.on_upload_failed and segment:
@@ -250,7 +258,7 @@ class UploadWorker:
                         error_message=result
                     )
                     self.logger.warning(
-                        f"Upload failed (retry {current_retries + 1}/{self.max_retries}): {task.filename}"
+                        f"分段上传失败,将重试: {task.filename} | 已重试: {current_retries + 1}/{self.max_retries} | 错误: {result} | 时间: {fail_time}"
                     )
 
     def _retry_failed_tasks(self) -> None:
@@ -277,4 +285,5 @@ class UploadWorker:
                     segment.upload_status = UploadStatus.PENDING
 
             if failed_segments:
-                self.logger.debug(f"Re-queued {len(failed_segments)} failed tasks for retry")
+                retry_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                self.logger.info(f"重新入队 {len(failed_segments)} 个失败任务进行重试 | 时间: {retry_time}")

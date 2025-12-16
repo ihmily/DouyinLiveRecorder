@@ -541,6 +541,10 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
             logger.error(f"[{record_name}] 创建录制会话失败: {e}")
 
     # === Phase 2: Start FFmpeg process ===
+    start_time = time.strftime('%Y-%m-%d %H:%M:%S')
+    logger.info(f"[{record_name}] {start_time} FFmpeg录制开始, 格式: {save_type}, 分段: {'是' if split_video_by_time else '否'}")
+    logger.debug(f"[{record_name}] FFmpeg命令: {' '.join(ffmpeg_command)}")
+
     process = subprocess.Popen(
         ffmpeg_command, stdin=subprocess.PIPE, stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type)
     )
@@ -629,7 +633,10 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
     if segment_watcher:
         segment_watcher.stop()
         segment_count = segment_watcher.get_segment_count()
-        logger.debug(f"[{record_name}] SegmentWatcher 已停止, 共 {segment_count} 个分段")
+        if segment_count == 0:
+            logger.warning(f"[{record_name}] {stop_time} 录制结束但未检测到任何分段文件")
+        else:
+            logger.info(f"[{record_name}] {stop_time} 分段监控结束, 共检测到 {segment_count} 个分段")
 
     # Remove from active recordings
     with active_recordings_lock:
@@ -646,6 +653,8 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
         try:
             # For non-split, register the single file
             if os.path.exists(save_file_path):
+                file_size = os.path.getsize(save_file_path)
+                logger.info(f"[{record_name}] {stop_time} 录制文件生成: {os.path.basename(save_file_path)} | 大小: {file_size/1024/1024:.2f}MB")
                 recording_manager.on_segment_created(
                     session_id=session_id,
                     segment_path=save_file_path,
@@ -654,6 +663,8 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
                     anchor_name=anchor,
                     save_type=save_type
                 )
+            else:
+                logger.warning(f"[{record_name}] {stop_time} 录制完成但文件不存在: {save_file_path}")
         except Exception as e:
             logger.error(f"[{record_name}] 记录录制文件失败: {e}")
 

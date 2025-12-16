@@ -6,6 +6,7 @@ This is the main interface for integration with main.py.
 Author: DouyinLiveRecorder
 Date: 2025-12-16
 """
+import datetime
 import os
 import configparser
 from .database import DatabaseManager
@@ -266,7 +267,9 @@ class RecordingManager:
             # Update session segment count
             repo.update_session_segment_count(session_id, segment_index + 1)
 
-        self.logger.debug(f"Segment created: {file_name} (session={session_id}, index={segment_index})")
+        create_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        size_mb = f"{file_size/1024/1024:.2f}MB" if file_size else "未知"
+        self.logger.info(f"分段已写入数据库: {file_name} | 会话: {session_id} | 序号: {segment_index} | 大小: {size_mb} | 时间: {create_time}")
 
         # Queue for upload if enabled
         if self.enable_upload and self._upload_worker:
@@ -280,6 +283,9 @@ class RecordingManager:
                 filename=file_name
             )
             self._upload_worker.enqueue(task)
+            self.logger.info(f"分段已加入上传队列: {file_name} | segment_id: {segment_id}")
+        else:
+            self.logger.debug(f"分段未加入上传队列 (上传未启用): {file_name}")
 
         return segment_id
 
