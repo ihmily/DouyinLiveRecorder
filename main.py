@@ -31,6 +31,7 @@ from src import spider, stream
 from src.proxy import ProxyDetector
 from src.utils import logger
 from src import utils
+from src.storage import RecordingManager
 from msg_push import (
     dingtalk, xizhi, tg_bot, send_email, bark, ntfy, pushplus
 )
@@ -68,7 +69,9 @@ recording_time_list = {}
 script_path = os.path.split(os.path.realpath(sys.argv[0]))[0]
 config_file = f'{script_path}/config/config.ini'
 url_config_file = f'{script_path}/config/URL_config.ini'
+tos_config_file = f'{script_path}/config/tos_credentials.ini'
 backup_dir = f'{script_path}/backup_config'
+recording_manager: RecordingManager | None = None
 text_encoding = 'utf-8-sig'
 rstr = r"[\/\\\:\*\？?\"\<\>\|&#.。,， ~！· ]"
 default_path = f'{script_path}/downloads'
@@ -418,7 +421,9 @@ def direct_download_stream(source_url: str, save_path: str, record_name: str, li
 
 
 def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, save_type: str,
-                     script_command: str | None = None) -> bool:
+                     script_command: str | None = None, platform: str = "未知平台",
+                     anchor_name: str = "", live_room_url: str = "") -> bool:
+    global recording_manager
     save_file_path = ffmpeg_command[-1]
     process = subprocess.Popen(
         ffmpeg_command, stdin=subprocess.PIPE, stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type)
@@ -461,6 +466,20 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
             else:
                 threading.Thread(target=converts_mp4, args=(save_file_path, delete_origin_file)).start()
         print(f"\n{record_name} {stop_time} 直播录制完成\n")
+
+        # Record to database and queue for OSS upload
+        if recording_manager:
+            try:
+                recording_manager.on_recording_complete(
+                    record_name=record_name,
+                    save_file_path=save_file_path,
+                    save_type=save_type,
+                    platform=platform,
+                    anchor_name=anchor_name or record_name.split(" ", maxsplit=1)[-1],
+                    live_room_url=live_room_url or record_url
+                )
+            except Exception as e:
+                logger.error(f"Failed to record to database: {e}")
 
         if script_command:
             logger.debug("开始执行脚本命令!")
@@ -1199,9 +1218,10 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                     ffmpeg_command.insert(11, "-headers")
                                     ffmpeg_command.insert(12, headers)
 
-                                if proxy_address:
-                                    ffmpeg_command.insert(1, "-http_proxy")
-                                    ffmpeg_command.insert(2, proxy_address)
+                                # Always set -http_proxy to prevent FFmpeg from reading
+                                # proxy settings from environment variables (http_proxy/https_proxy)
+                                ffmpeg_command.insert(1, "-http_proxy")
+                                ffmpeg_command.insert(2, proxy_address if proxy_address else "")
 
                                 recording.add(record_name)
                                 start_record_time = datetime.datetime.now()
@@ -1726,6 +1746,18 @@ os.makedirs(os.path.dirname(config_file), exist_ok=True)
 t3 = threading.Thread(target=backup_file_start, args=(), daemon=True)
 t3.start()
 utils.remove_duplicate_lines(url_config_file)
+
+# Initialize recording manager for database and OSS upload
+try:
+    recording_manager = RecordingManager.from_config(config_file, tos_config_file)
+    recording_manager.start()
+    if recording_manager.is_upload_enabled:
+        print("OSS上传功能已启用")
+    else:
+        print("OSS上传功能未启用（仅记录到数据库）")
+except Exception as e:
+    logger.warning(f"Recording manager initialization failed: {e}")
+    recording_manager = None
 
 
 def read_config_value(config_parser: configparser.RawConfigParser, section: str, option: str, default_value: Any) \
