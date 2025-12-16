@@ -215,6 +215,74 @@ class RecordingManager:
         self.logger.debug(f"Recording session created: {anchor_name} -> session_id={session_id}")
         return session_id
 
+    def on_segment_created(
+        self,
+        session_id: int,
+        segment_path: str,
+        segment_index: int,
+        platform: str,
+        anchor_name: str,
+        save_type: str = "ts"
+    ) -> int | None:
+        """
+        Called when a new segment file is detected during recording.
+
+        This enables real-time processing of segments instead of waiting
+        for the entire recording to complete.
+
+        Args:
+            session_id: Recording session ID
+            segment_path: Full path to the segment file
+            segment_index: Index of this segment (0, 1, 2, ...)
+            platform: Platform name
+            anchor_name: Anchor name
+            save_type: Recording format (ts/mp4/flv/mkv)
+
+        Returns:
+            segment_id if successful, None otherwise
+        """
+        # Get file info
+        file_name = os.path.basename(segment_path)
+        file_size = None
+        if os.path.exists(segment_path):
+            try:
+                file_size = os.path.getsize(segment_path)
+            except OSError:
+                pass
+
+        # Add segment to database
+        with self.db_manager.get_session() as session:
+            repo = RecordingRepository(session)
+            segment = repo.add_segment(
+                session_id=session_id,
+                local_file_path=segment_path,
+                file_name=file_name,
+                file_format=save_type.lower(),
+                file_size=file_size,
+                segment_index=segment_index
+            )
+            segment_id = segment.id
+
+            # Update session segment count
+            repo.update_session_segment_count(session_id, segment_index + 1)
+
+        self.logger.debug(f"Segment created: {file_name} (session={session_id}, index={segment_index})")
+
+        # Queue for upload if enabled
+        if self.enable_upload and self._upload_worker:
+            from .upload_queue import UploadTask
+            task = UploadTask(
+                priority=0,
+                segment_id=segment_id,
+                local_path=segment_path,
+                platform=platform,
+                anchor_name=anchor_name,
+                filename=file_name
+            )
+            self._upload_worker.enqueue(task)
+
+        return segment_id
+
     def on_recording_complete(
         self,
         record_name: str,

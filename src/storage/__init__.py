@@ -35,6 +35,7 @@ from .repository import RecordingRepository
 from .tos_uploader import TOSUploader
 from .upload_queue import UploadWorker, UploadTask
 from .manager import RecordingManager
+from .segment_watcher import SegmentWatcher, SegmentInfo
 
 __all__ = [
     # Models
@@ -53,4 +54,7 @@ __all__ = [
     "UploadTask",
     # Manager (main interface)
     "RecordingManager",
+    # Segment Watcher
+    "SegmentWatcher",
+    "SegmentInfo",
 ]

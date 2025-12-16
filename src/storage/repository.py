@@ -54,6 +54,13 @@ class RecordingRepository:
         """Get session by ID."""
         return self.session.query(RecordingSession).filter_by(id=session_id).first()
 
+    def update_session_segment_count(self, session_id: int, segment_count: int) -> None:
+        """Update the segment count for a session."""
+        rec_session = self.session.query(RecordingSession).filter_by(id=session_id).first()
+        if rec_session:
+            rec_session.segment_count = segment_count
+            rec_session.is_split = segment_count > 1
+
     def get_recent_sessions(
         self,
         anchor_name: str | None = None,
