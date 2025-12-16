@@ -2,6 +2,7 @@ import os
 import sys
 from enum import Enum, auto
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 from .utils import logger
 
 
@@ -54,7 +55,14 @@ class ProxyDetector:
             try:
                 ip_port = self.winreg.QueryValueEx(self.__INTERNET_SETTINGS, "ProxyServer")[0]
                 if ip_port:
-                    ip, port = ip_port.split(":")
+                    if '://' in ip_port:
+                        parsed = urlparse(ip_port)
+                        ip = parsed.hostname or ""
+                        port = str(parsed.port) if parsed.port else ""
+                    else:
+                        parts = ip_port.split(":")
+                        if len(parts) == 2:
+                            ip, port = parts
             except FileNotFoundError as err:
                 logger.warning("No proxy information found: " + str(err))
             except Exception as err:
@@ -83,8 +91,11 @@ class ProxyDetector:
         ip = port = ""
         for proto, proxy in proxies.items():
             if proxy:
-                ip, port = proxy.split(':')
-                break
+                parsed = urlparse(proxy)
+                if parsed.hostname:
+                    ip = parsed.hostname
+                    port = str(parsed.port) if parsed.port else ""
+                    break
         return ip, port
 
     def _is_proxy_enabled_linux(self) -> bool:
