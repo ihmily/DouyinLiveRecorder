@@ -470,14 +470,34 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
         # Record to database and queue for OSS upload
         if recording_manager:
             try:
-                recording_manager.on_recording_complete(
-                    record_name=record_name,
-                    save_file_path=save_file_path,
-                    save_type=save_type,
-                    platform=platform,
-                    anchor_name=anchor_name or record_name.split(" ", maxsplit=1)[-1],
-                    live_room_url=live_room_url or record_url
-                )
+                anchor = anchor_name or record_name.split(" ", maxsplit=1)[-1]
+                room_url = live_room_url or record_url
+                if split_video_by_time:
+                    # Handle split segments - find all actual files matching the pattern
+                    file_paths = utils.get_file_paths(os.path.dirname(save_file_path))
+                    prefix = os.path.basename(save_file_path).rsplit('_', maxsplit=1)[0]
+                    segment_index = 0
+                    for path in sorted(file_paths):
+                        if prefix in path and path.endswith(f'.{save_type.lower()}'):
+                            recording_manager.on_recording_complete(
+                                record_name=record_name,
+                                save_file_path=path,
+                                save_type=save_type,
+                                platform=platform,
+                                anchor_name=anchor,
+                                live_room_url=room_url,
+                                segment_index=segment_index
+                            )
+                            segment_index += 1
+                else:
+                    recording_manager.on_recording_complete(
+                        record_name=record_name,
+                        save_file_path=save_file_path,
+                        save_type=save_type,
+                        platform=platform,
+                        anchor_name=anchor,
+                        live_room_url=room_url
+                    )
             except Exception as e:
                 logger.error(f"Failed to record to database: {e}")
 
@@ -505,6 +525,39 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
 
     else:
         color_obj.print_colored(f"\n{record_name} {stop_time} 直播录制出错,返回码: {return_code}\n", color_obj.RED)
+        # Still record to database - FFmpeg non-zero exit is normal for live streams (no clean EOF)
+        if recording_manager:
+            try:
+                anchor = anchor_name or record_name.split(" ", maxsplit=1)[-1]
+                room_url = live_room_url or record_url
+                if split_video_by_time:
+                    # Handle split segments - find all actual files matching the pattern
+                    file_paths = utils.get_file_paths(os.path.dirname(save_file_path))
+                    prefix = os.path.basename(save_file_path).rsplit('_', maxsplit=1)[0]
+                    segment_index = 0
+                    for path in sorted(file_paths):
+                        if prefix in path and path.endswith(f'.{save_type.lower()}'):
+                            recording_manager.on_recording_complete(
+                                record_name=record_name,
+                                save_file_path=path,
+                                save_type=save_type,
+                                platform=platform,
+                                anchor_name=anchor,
+                                live_room_url=room_url,
+                                segment_index=segment_index
+                            )
+                            segment_index += 1
+                else:
+                    recording_manager.on_recording_complete(
+                        record_name=record_name,
+                        save_file_path=save_file_path,
+                        save_type=save_type,
+                        platform=platform,
+                        anchor_name=anchor,
+                        live_room_url=room_url
+                    )
+            except Exception as e:
+                logger.error(f"Failed to record to database: {e}")
 
     recording.discard(record_name)
     return False
