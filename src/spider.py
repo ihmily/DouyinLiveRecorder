@@ -1648,7 +1648,9 @@ async def login_popkontv(
 
     try:
         proxy_addr = utils.handle_proxy_addr(proxy_addr)
-        async with httpx.AsyncClient(proxy=proxy_addr, timeout=20, verify=False) as client:
+        # PopkonTV is an overseas platform, allow env proxy
+        trust_env = True
+        async with httpx.AsyncClient(proxy=proxy_addr, timeout=20, verify=False, trust_env=trust_env) as client:
             response = await client.post(url, json=data, headers=headers)
             response.raise_for_status()
 

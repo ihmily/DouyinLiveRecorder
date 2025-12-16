@@ -55,7 +55,8 @@ async def get_sec_user_id(url: str, proxy_addr: str | None = None, headers: dict
 
     try:
         proxy_addr = utils.handle_proxy_addr(proxy_addr)
-        async with httpx.AsyncClient(proxy=proxy_addr, timeout=15) as client:
+        trust_env = proxy_addr is not None
+        async with httpx.AsyncClient(proxy=proxy_addr, timeout=15, trust_env=trust_env) as client:
             response = await client.get(url, headers=headers, follow_redirects=True)
             redirect_url = response.url
             if 'reflow/' in str(redirect_url):
@@ -81,7 +82,8 @@ async def get_unique_id(url: str, proxy_addr: str | None = None, headers: dict |
 
     try:
         proxy_addr = utils.handle_proxy_addr(proxy_addr)
-        async with httpx.AsyncClient(proxy=proxy_addr, timeout=15) as client:
+        trust_env = proxy_addr is not None
+        async with httpx.AsyncClient(proxy=proxy_addr, timeout=15, trust_env=trust_env) as client:
             response = await client.get(url, headers=headers, follow_redirects=True)
             redirect_url = str(response.url)
             if 'reflow/' in str(redirect_url):
@@ -129,8 +131,8 @@ async def get_live_room_id(room_id: str, sec_user_id: str, proxy_addr: str | Non
 
     try:
         proxy_addr = utils.handle_proxy_addr(proxy_addr)
-        async with httpx.AsyncClient(proxy=proxy_addr,
-                                     timeout=15) as client:
+        trust_env = proxy_addr is not None
+        async with httpx.AsyncClient(proxy=proxy_addr, timeout=15, trust_env=trust_env) as client:
             response = await client.get(api, headers=headers)
             response.raise_for_status()
             json_data = response.json()
