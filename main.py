@@ -1367,7 +1367,10 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                             record_url,
                                             ffmpeg_command,
                                             record_save_type,
-                                            custom_script
+                                            custom_script,
+                                            platform=platform,
+                                            anchor_name=anchor_name,
+                                            live_room_url=record_url
                                         )
                                         if comment_end:
                                             return
@@ -1459,7 +1462,10 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                             record_url,
                                             ffmpeg_command,
                                             record_save_type,
-                                            custom_script
+                                            custom_script,
+                                            platform=platform,
+                                            anchor_name=anchor_name,
+                                            live_room_url=record_url
                                         )
                                         if comment_end:
                                             return
@@ -1533,7 +1539,10 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                             record_url,
                                             ffmpeg_command,
                                             record_save_type,
-                                            custom_script
+                                            custom_script,
+                                            platform=platform,
+                                            anchor_name=anchor_name,
+                                            live_room_url=record_url
                                         )
                                         if comment_end:
                                             return
@@ -1580,7 +1589,10 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                             record_url,
                                             ffmpeg_command,
                                             record_save_type,
-                                            custom_script
+                                            custom_script,
+                                            platform=platform,
+                                            anchor_name=anchor_name,
+                                            live_room_url=record_url
                                         )
                                         if comment_end:
                                             return
@@ -1616,7 +1628,10 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                                 record_url,
                                                 ffmpeg_command,
                                                 record_save_type,
-                                                custom_script
+                                                custom_script,
+                                                platform=platform,
+                                                anchor_name=anchor_name,
+                                                live_room_url=record_url
                                             )
                                             if comment_end:
                                                 if converts_to_mp4:
@@ -1660,7 +1675,10 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                                 record_url,
                                                 ffmpeg_command,
                                                 record_save_type,
-                                                custom_script
+                                                custom_script,
+                                                platform=platform,
+                                                anchor_name=anchor_name,
+                                                live_room_url=record_url
                                             )
                                             if comment_end:
                                                 threading.Thread(
