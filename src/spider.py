@@ -521,8 +521,37 @@ def md5(data) -> str:
     return hashlib.md5(data.encode('utf-8')).hexdigest()
 
 
-async def get_token_js(rid: str, did: str, proxy_addr: OptionalStr = None) -> List[str]:
-    return []
+async def get_token_js(rid: str, did: str, proxy_addr: OptionalStr = None) -> dict:
+    try:
+        key_url = f'https://www.douyu.com/wgapi/livenc/liveweb/websec/getEncryption?did={did}'
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
+                          'Chrome/120.0.0.0 Safari/537.36',
+            'Referer': f'https://www.douyu.com/{rid}'
+        }
+        json_str = await async_req(url=key_url, proxy_addr=proxy_addr, headers=headers)
+        key_data = json.loads(json_str)
+        if key_data.get('error') != 0:
+            return {}
+        enc_key = key_data['data']
+        ts = int(time.time())
+        rand_str = enc_key['rand_str']
+        key = enc_key['key']
+        enc_time = enc_key['enc_time']
+        sign_str = '' if enc_key.get('is_special') == 1 else f'{rid}{ts}'
+        auth = rand_str
+        for _ in range(enc_time):
+            auth = md5(auth + key)
+        auth = md5(auth + key + sign_str)
+        return {
+            'enc_data': enc_key['enc_data'],
+            'did': did,
+            'ts': ts,
+            'auth': auth
+        }
+    except Exception as e:
+        print(f"Get douyu sign params error: {e}")
+        return {}
 
 
 @trace_error_decorator
@@ -535,23 +564,15 @@ async def get_douyu_info_data(url: str, proxy_addr: OptionalStr = None, cookies:
     if cookies:
         headers['Cookie'] = cookies
 
-    match_rid = re.search(r'[?&]rid=(\d+)', url)
+    match_rid = re.search('rid=(.*?)(?=&|$)', url)
     if match_rid:
         rid = match_rid.group(1)
     else:
-        match_room = re.search(r'douyu\.com/(\d+)', url)
-        if match_room:
-            rid = match_room.group(1)
-        else:
-            match_path = re.search(r'douyu\.com/([^/?]+)', url)
-            if not match_path:
-                raise ValueError(f"无法从URL中提取斗鱼房间ID: {url}")
-            rid = match_path.group(1)
-            if not rid.isdigit():
-                html_str = await async_req(url=f'https://m.douyu.com/{rid}', proxy_addr=proxy_addr, headers=headers)
-                json_str = re.findall('<script id="vike_pageContext" type="application/json">(.*?)</script>', html_str)[0]
-                json_data = json.loads(json_str)
-                rid = str(json_data['pageProps']['room']['roomInfo']['roomInfo']['rid'])
+        rid = re.search('douyu.com/(.*?)(?=\\?|$)', url).group(1)
+        html_str = await async_req(url=f'https://m.douyu.com/{rid}', proxy_addr=proxy_addr, headers=headers)
+        json_str = re.findall('<script id="vike_pageContext" type="application/json">(.*?)</script>', html_str)[0]
+        json_data = json.loads(json_str)
+        rid = json_data['pageProps']['room']['roomInfo']['roomInfo']['rid']
 
     headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0'
     url2 = f'https://www.douyu.com/betard/{rid}'
@@ -570,40 +591,30 @@ async def get_douyu_info_data(url: str, proxy_addr: OptionalStr = None, cookies:
 
 @trace_error_decorator
 async def get_douyu_stream_data(rid: str, rate: str = '-1', proxy_addr: OptionalStr = None,
-                          cookies: OptionalStr = None) -> dict:
+                                cookies: OptionalStr = None) -> dict:
     did = '10000000000000000000000000003306'
-    t13 = str(int(time.time() * 1000))
-    
-    try:
-        url = f'https://playweb.douyucdn.cn/lapi/live/hlsH5Preview/{rid}'
-        auth = md5(rid + t13)
-        
-        headers = {
-            'rid': rid,
-            'time': t13,
-            'auth': auth,
-            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15',
-        }
-        if cookies:
-            headers['Cookie'] = cookies
-        
-        data = {
-            'rid': rid,
-            'did': did
-        }
-        
-        json_str = await async_req(url=url, proxy_addr=proxy_addr, headers=headers, data=data)
-        
-        if not json_str or not json_str.strip():
-            return {"error": -1, "msg": "API返回空数据", "data": {}}
-        
-        json_data = json.loads(json_str)
-        return json_data
-        
-    except json.JSONDecodeError as e:
-        return {"error": -1, "msg": f"JSON解析失败: {e}", "data": {}}
-    except Exception as e:
-        return {"error": -1, "msg": f"获取失败: {str(e)}", "data": {}}
+    sign_params = await get_token_js(rid, did, proxy_addr=proxy_addr)
+    if not sign_params:
+        return {"error": -1, "msg": "Failed to get sign params", "data": {}}
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
+                      'Chrome/120.0.0.0 Safari/537.36',
+        'Referer': f'https://www.douyu.com/{rid}',
+        'Content-Type': 'application/x-www-form-urlencoded'
+    }
+    if cookies:
+        headers['Cookie'] = cookies
+    post_data = (
+        f"enc_data={sign_params['enc_data']}"
+        f"&tt={sign_params['ts']}"
+        f"&did={sign_params['did']}"
+        f"&auth={sign_params['auth']}"
+        f"&cdn=&rate={rate}&hevc=0&fa=0&ive=0"
+    )
+    app_api = f'https://www.douyu.com/lapi/live/getH5PlayV1/{rid}'
+    json_str = await async_req(url=app_api, proxy_addr=proxy_addr, headers=headers, data=post_data)
+    json_data = json.loads(json_str)
+    return json_data
 
 
 @trace_error_decorator
