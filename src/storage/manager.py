@@ -284,19 +284,32 @@ class RecordingManager:
         size_mb = f"{file_size/1024/1024:.2f}MB" if file_size else "未知"
         self.logger.info(f"分段已写入数据库: {file_name} | 会话: {session_id} | 序号: {segment_index} | 大小: {size_mb} | 时间: {create_time}")
 
-        # Queue for upload if enabled
-        if self.enable_upload and self._upload_worker:
-            from .upload_queue import UploadTask
-            task = UploadTask(
-                priority=0,
-                segment_id=segment_id,
-                local_path=segment_path,
-                platform=platform,
-                anchor_name=anchor_name,
-                filename=file_name
-            )
-            self._upload_worker.enqueue(task)
-            self.logger.info(f"分段已加入上传队列: {file_name} | segment_id: {segment_id}")
+        # Process segment: either via pipeline (TS→MP4→Upload) or direct upload
+        if self.enable_upload:
+            # Use pipeline for TS files to convert to MP4 first (for VOD seek support)
+            if self.enable_pipeline and self._pipeline and save_type.lower() == 'ts':
+                # Queue for pipeline processing in background thread
+                import threading
+                thread = threading.Thread(
+                    target=self.process_segment_with_pipeline_sync,
+                    args=(segment_id, segment_path, save_type.lower(), session_id, anchor_name),
+                    daemon=True
+                )
+                thread.start()
+                self.logger.info(f"分段已加入Pipeline队列 (TS→MP4→Upload): {file_name} | segment_id: {segment_id}")
+            elif self._upload_worker:
+                # Direct upload for non-TS formats or when pipeline is disabled
+                from .upload_queue import UploadTask
+                task = UploadTask(
+                    priority=0,
+                    segment_id=segment_id,
+                    local_path=segment_path,
+                    platform=platform,
+                    anchor_name=anchor_name,
+                    filename=file_name
+                )
+                self._upload_worker.enqueue(task)
+                self.logger.info(f"分段已加入上传队列: {file_name} | segment_id: {segment_id}")
         else:
             self.logger.debug(f"分段未加入上传队列 (上传未启用): {file_name}")
 
