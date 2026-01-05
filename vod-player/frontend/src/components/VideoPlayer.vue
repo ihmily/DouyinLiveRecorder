@@ -3,7 +3,7 @@
     <div ref="videoContainer" class="video-wrapper">
       <video
         ref="videoElement"
-        class="video-js vjs-big-play-centered vjs-fluid"
+        class="video-js vjs-big-play-centered"
       ></video>
     </div>
     <div v-if="error" class="error-overlay">
@@ -52,7 +52,9 @@ function initPlayer() {
     controls: true,
     autoplay: false,
     preload: 'metadata',
-    fluid: true,
+    fluid: false,
+    fill: true,
+    responsive: true,
     playbackRates: [0.5, 1, 1.5, 2],
     html5: {
       nativeVideoTracks: true,
@@ -171,11 +173,16 @@ defineExpose({
 .video-player-container {
   position: relative;
   width: 100%;
+  height: 100%;
   background-color: #000;
+  display: flex;
+  justify-content: center;
+  align-items: center;
 }
 
 .video-wrapper {
   width: 100%;
+  height: 100%;
 }
 
 .error-overlay,
@@ -200,6 +207,11 @@ defineExpose({
 
 :deep(.video-js) {
   width: 100%;
+  height: 100%;
+}
+
+:deep(.video-js video) {
+  object-fit: contain;
 }
 
 :deep(.vjs-big-play-button) {

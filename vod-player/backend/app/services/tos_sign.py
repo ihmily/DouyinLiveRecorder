@@ -77,16 +77,16 @@ def generate_presigned_url(
     client = get_tos_client()
 
     # Generate presigned URL with query parameters
-    params = {}
+    query = {}
     if content_disposition:
-        params["response-content-disposition"] = content_disposition
+        query["response-content-disposition"] = content_disposition
 
     url = client.pre_signed_url(
         HttpMethodType.Http_Method_Get,
         bucket,
         key,
         expires=expires,
-        params=params if params else None
+        query=query if query else None
     ).signed_url
 
     return url

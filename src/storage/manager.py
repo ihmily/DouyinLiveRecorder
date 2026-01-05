@@ -291,8 +291,8 @@ class RecordingManager:
                 # Queue for pipeline processing in background thread
                 import threading
                 thread = threading.Thread(
-                    target=self.process_segment_with_pipeline_sync,
-                    args=(segment_id, segment_path, save_type.lower(), session_id, anchor_name),
+                    target=self.process_segment_sync,
+                    args=(segment_id, segment_path, save_type.lower(), session_id, anchor_name, platform),
                     daemon=True
                 )
                 thread.start()
