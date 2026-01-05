@@ -26,11 +26,11 @@ Based on plan.md structure:
 
 **Purpose**: Project initialization and basic structure for both backend and frontend
 
-- [ ] T001 Create VOD application directory structure per plan.md at vod-player/
-- [ ] T002 [P] Initialize Python backend with FastAPI dependencies in vod-player/backend/
-- [ ] T003 [P] Initialize Vue 3 frontend with Vite in vod-player/frontend/
-- [ ] T004 [P] Create docker-compose.yml for development environment in vod-player/
-- [ ] T005 [P] Add VOD configuration section to config/config.ini
+- [x] T001 Create VOD application directory structure per plan.md at vod-player/
+- [x] T002 [P] Initialize Python backend with FastAPI dependencies in vod-player/backend/
+- [x] T003 [P] Initialize Vue 3 frontend with Vite in vod-player/frontend/
+- [x] T004 [P] Create docker-compose.yml for development environment in vod-player/
+- [x] T005 [P] Add VOD configuration section to config/config.ini
 
 ---
 
@@ -40,14 +40,14 @@ Based on plan.md structure:
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T006 Add mp4_oss_path, mp4_status, duration fields to RecordingSegment model in src/storage/models.py
-- [ ] T007 Create Alembic migration for new VOD fields in alembic/versions/
-- [ ] T008 Create database configuration module for VOD backend in vod-player/backend/config.py
-- [ ] T009 [P] Setup FastAPI application with CORS and routing in vod-player/backend/main.py
-- [ ] T010 [P] Create base Pydantic schemas for API responses in vod-player/backend/schemas.py
-- [ ] T011 [P] Setup Vue 3 project with Element Plus and Video.js in vod-player/frontend/package.json
-- [ ] T012 [P] Configure Vite with proxy for backend API in vod-player/frontend/vite.config.ts
-- [ ] T013 Create API client module with axios in vod-player/frontend/src/api/index.ts
+- [x] T006 Add mp4_oss_path, mp4_status, duration fields to RecordingSegment model in src/storage/models.py
+- [x] T007 Create Alembic migration for new VOD fields in alembic/versions/
+- [x] T008 Create database configuration module for VOD backend in vod-player/backend/config.py
+- [x] T009 [P] Setup FastAPI application with CORS and routing in vod-player/backend/main.py
+- [x] T010 [P] Create base Pydantic schemas for API responses in vod-player/backend/schemas.py
+- [x] T011 [P] Setup Vue 3 project with Element Plus and Video.js in vod-player/frontend/package.json
+- [x] T012 [P] Configure Vite with proxy for backend API in vod-player/frontend/vite.config.ts
+- [x] T013 Create API client module with axios in vod-player/frontend/src/api/index.ts
 
 **Checkpoint**: Foundation ready - user story implementation can now begin
 
@@ -63,27 +63,27 @@ Based on plan.md structure:
 
 #### Backend - Navigation API
 
-- [ ] T014 [P] [US1] Implement GET /api/platforms endpoint in vod-player/backend/routers/api.py
-- [ ] T015 [P] [US1] Implement GET /api/platforms/{platform}/anchors endpoint in vod-player/backend/routers/api.py
-- [ ] T016 [P] [US1] Implement GET /api/anchors/{anchor_name}/sessions endpoint with pagination in vod-player/backend/routers/api.py
-- [ ] T017 [US1] Implement GET /api/sessions/{session_id} endpoint for session details in vod-player/backend/routers/api.py
+- [x] T014 [P] [US1] Implement GET /api/platforms endpoint in vod-player/backend/routers/api.py
+- [x] T015 [P] [US1] Implement GET /api/platforms/{platform}/anchors endpoint in vod-player/backend/routers/api.py
+- [x] T016 [P] [US1] Implement GET /api/anchors/{anchor_name}/sessions endpoint with pagination in vod-player/backend/routers/api.py
+- [x] T017 [US1] Implement GET /api/sessions/{session_id} endpoint for session details in vod-player/backend/routers/api.py
 
 #### Backend - Playback URL Generation
 
-- [ ] T018 [US1] Create TOS presigned URL service in vod-player/backend/services/tos_sign.py
-- [ ] T019 [US1] Implement GET /api/segments/{segment_id}/play endpoint in vod-player/backend/routers/api.py
+- [x] T018 [US1] Create TOS presigned URL service in vod-player/backend/services/tos_sign.py
+- [x] T019 [US1] Implement GET /api/segments/{segment_id}/play endpoint in vod-player/backend/routers/api.py
 
 #### Frontend - Navigation
 
-- [ ] T020 [US1] Create Vue router configuration in vod-player/frontend/src/router/index.ts
-- [ ] T021 [US1] Create SessionTree component for platform/anchor/session navigation in vod-player/frontend/src/components/SessionTree.vue
-- [ ] T022 [US1] Create Home view with tree navigation in vod-player/frontend/src/views/Home.vue
+- [x] T020 [US1] Create Vue router configuration in vod-player/frontend/src/router/index.ts
+- [x] T021 [US1] Create SessionTree component for platform/anchor/session navigation in vod-player/frontend/src/components/SessionTree.vue
+- [x] T022 [US1] Create Home view with tree navigation in vod-player/frontend/src/views/Home.vue
 
 #### Frontend - Video Player
 
-- [ ] T023 [US1] Create VideoPlayer component with Video.js in vod-player/frontend/src/components/VideoPlayer.vue
-- [ ] T024 [US1] Create Player view page with segment selection in vod-player/frontend/src/views/Player.vue
-- [ ] T025 [US1] Implement seek functionality and progress bar handling in VideoPlayer component
+- [x] T023 [US1] Create VideoPlayer component with Video.js in vod-player/frontend/src/components/VideoPlayer.vue
+- [x] T024 [US1] Create Player view page with segment selection in vod-player/frontend/src/views/Player.vue
+- [x] T025 [US1] Implement seek functionality and progress bar handling in VideoPlayer component
 
 **Checkpoint**: User Story 1 complete - browse and play with seek should be fully functional
 
@@ -97,10 +97,10 @@ Based on plan.md structure:
 
 ### Implementation for User Story 2
 
-- [ ] T026 [US2] Add configurable URL expiration to TOS presigned URL service in vod-player/backend/services/tos_sign.py
-- [ ] T027 [US2] Add expires_at field to playback URL response in vod-player/backend/routers/api.py
-- [ ] T028 [US2] Implement URL expiration handling in VideoPlayer component in vod-player/frontend/src/components/VideoPlayer.vue
-- [ ] T029 [US2] Add "Refresh URL" button for expired URL recovery in vod-player/frontend/src/views/Player.vue
+- [x] T026 [US2] Add configurable URL expiration to TOS presigned URL service in vod-player/backend/services/tos_sign.py
+- [x] T027 [US2] Add expires_at field to playback URL response in vod-player/backend/routers/api.py
+- [x] T028 [US2] Implement URL expiration handling in VideoPlayer component in vod-player/frontend/src/components/VideoPlayer.vue
+- [x] T029 [US2] Add "Refresh URL" button for expired URL recovery in vod-player/frontend/src/views/Player.vue
 
 **Checkpoint**: User Story 2 complete - secure time-limited URLs functional
 
@@ -114,10 +114,10 @@ Based on plan.md structure:
 
 ### Implementation for User Story 3
 
-- [ ] T030 [US3] Display segment list with duration and status in Player view in vod-player/frontend/src/views/Player.vue
-- [ ] T031 [US3] Implement segment switching without page reload in vod-player/frontend/src/views/Player.vue
-- [ ] T032 [US3] Show "Processing" status for segments with mp4_status != completed in vod-player/frontend/src/views/Player.vue
-- [ ] T033 [US3] Add visual indicator for current segment in segment list in vod-player/frontend/src/views/Player.vue
+- [x] T030 [US3] Display segment list with duration and status in Player view in vod-player/frontend/src/views/Player.vue
+- [x] T031 [US3] Implement segment switching without page reload in vod-player/frontend/src/views/Player.vue
+- [x] T032 [US3] Show "Processing" status for segments with mp4_status != completed in vod-player/frontend/src/views/Player.vue
+- [x] T033 [US3] Add visual indicator for current segment in segment list in vod-player/frontend/src/views/Player.vue
 
 **Checkpoint**: User Story 3 complete - multi-segment navigation functional
 
@@ -133,28 +133,28 @@ Based on plan.md structure:
 
 #### Pipeline Infrastructure
 
-- [ ] T034 [US4] Create pipeline orchestration module with Stage protocol in src/storage/pipeline.py
-- [ ] T035 [US4] Create stages package with __init__.py in src/storage/stages/__init__.py
+- [x] T034 [US4] Create pipeline orchestration module with Stage protocol in src/storage/pipeline.py
+- [x] T035 [US4] Create stages package with __init__.py in src/storage/stages/__init__.py
 
 #### Conversion Stage
 
-- [ ] T036 [US4] Implement TS to MP4 conversion stage with FFmpeg faststart in src/storage/stages/convert.py
-- [ ] T037 [US4] Add duration extraction using FFprobe in src/storage/stages/convert.py
+- [x] T036 [US4] Implement TS to MP4 conversion stage with FFmpeg faststart in src/storage/stages/convert.py
+- [x] T037 [US4] Add duration extraction using FFprobe in src/storage/stages/convert.py
 
 #### Upload Stage Refactor
 
-- [ ] T038 [US4] Refactor existing upload logic into upload stage in src/storage/stages/upload.py
-- [ ] T039 [US4] Update upload stage to handle MP4 path and update mp4_oss_path field in src/storage/stages/upload.py
+- [x] T038 [US4] Refactor existing upload logic into upload stage in src/storage/stages/upload.py
+- [x] T039 [US4] Update upload stage to handle MP4 path and update mp4_oss_path field in src/storage/stages/upload.py
 
 #### Pipeline Integration
 
-- [ ] T040 [US4] Integrate pipeline into storage manager in src/storage/manager.py
-- [ ] T041 [US4] Update mp4_status transitions (pending → processing → completed/failed) in pipeline stages
+- [x] T040 [US4] Integrate pipeline into storage manager in src/storage/manager.py
+- [x] T041 [US4] Update mp4_status transitions (pending → processing → completed/failed) in pipeline stages
 
 #### Fallback Handling
 
-- [ ] T042 [US4] Implement TS upload fallback when MP4 conversion fails in src/storage/stages/convert.py
-- [ ] T043 [US4] Add error logging and status tracking for conversion failures
+- [x] T042 [US4] Implement TS upload fallback when MP4 conversion fails in src/storage/stages/convert.py
+- [x] T043 [US4] Add error logging and status tracking for conversion failures
 
 **Checkpoint**: User Story 4 complete - automated MP4 conversion pipeline functional
 
@@ -164,11 +164,11 @@ Based on plan.md structure:
 
 **Purpose**: Improvements that affect multiple user stories
 
-- [ ] T044 [P] Add error handling for TOS unavailability in VideoPlayer component
-- [ ] T045 [P] Add loading states and buffering indicator to VideoPlayer component
-- [ ] T046 [P] Handle edge case: seek beyond video duration (clamp to end)
-- [ ] T047 [P] Handle edge case: empty sessions with zero segments
-- [ ] T048 [P] Add pagination UI for sessions list in Home view
+- [x] T044 [P] Add error handling for TOS unavailability in VideoPlayer component
+- [x] T045 [P] Add loading states and buffering indicator to VideoPlayer component
+- [x] T046 [P] Handle edge case: seek beyond video duration (clamp to end)
+- [x] T047 [P] Handle edge case: empty sessions with zero segments
+- [x] T048 [P] Add pagination UI for sessions list in Home view
 - [ ] T049 Run quickstart.md validation to verify end-to-end flow
 
 ---
