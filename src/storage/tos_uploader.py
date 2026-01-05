@@ -63,7 +63,7 @@ class TOSUploader:
         self.region = region
 
         # Clear proxy environment for internal network access
-        for key in ['http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY']:
+        for key in ['http_proxy', 'https_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'all_proxy', 'ALL_PROXY']:
             os.environ.pop(key, None)
 
         self.client = tos.TosClientV2(
@@ -83,12 +83,14 @@ class TOSUploader:
         config = configparser.ConfigParser()
         config.read(config_path, encoding='utf-8-sig')
 
+        # Try both uppercase and lowercase section names for compatibility
+        section = 'TOS' if config.has_section('TOS') else 'tos'
         return {
-            'endpoint': config.get('tos', 'endpoint'),
-            'region': config.get('tos', 'region'),
-            'bucket': config.get('tos', 'bucket'),
-            'access_key': config.get('tos', 'access_key'),
-            'secret_key': config.get('tos', 'secret_key'),
+            'endpoint': config.get(section, 'endpoint'),
+            'region': config.get(section, 'region'),
+            'bucket': config.get(section, 'bucket'),
+            'access_key': config.get(section, 'access_key'),
+            'secret_key': config.get(section, 'secret_key'),
         }
 
     def generate_oss_key(
