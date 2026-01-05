@@ -5,23 +5,63 @@
 
 ## Prerequisites
 
+- **uv** (Python package manager) - `curl -LsSf https://astral.sh/uv/install.sh | sh`
 - Python 3.10+
 - Node.js 18+
 - FFmpeg installed and in PATH
 - Existing DouyinLiveRecorder setup with recordings
 - TOS bucket with uploaded recordings
 
-## Quick Start (Development)
+## Quick Start (One Command)
+
+```bash
+cd vod-player
+
+# Check prerequisites
+make check
+
+# Install all dependencies
+make install
+
+# Run database migration
+make migrate
+
+# Start both backend and frontend
+make dev
+```
+
+**That's it!** Open http://localhost:5173 in your browser.
+
+- Frontend: http://localhost:5173
+- Backend API: http://localhost:8000
+- API Docs: http://localhost:8000/docs
+
+## Available Make Commands
+
+```bash
+make help            # Show all available commands
+make install         # Install all dependencies (backend + frontend)
+make dev             # Start both servers in parallel
+make dev-backend     # Start backend only
+make dev-frontend    # Start frontend only
+make build           # Build frontend for production
+make docker-up       # Start with Docker Compose
+make health          # Check if services are running
+```
+
+## Manual Setup (Alternative)
+
+If you prefer not to use the Makefile:
 
 ### 1. Apply Database Migration
 
 ```bash
 cd /path/to/DouyinLiveRecorder
 
-# If using alembic
-alembic upgrade head
+# Run migration script
+python migrations/001_add_vod_fields.py
 
-# Or run migration manually (if not using alembic)
+# Or create tables directly
 python -c "
 from src.storage.database import DatabaseManager
 from src.storage.models import Base
@@ -35,15 +75,12 @@ Base.metadata.create_all(db.engine)
 ```bash
 cd vod-player/backend
 
-# Install dependencies
-pip install fastapi uvicorn
+# Install dependencies with uv
+uv sync
 
 # Start development server
-uvicorn main:app --reload --port 8000
+uv run uvicorn main:app --reload --port 8000
 ```
-
-API available at: http://localhost:8000
-OpenAPI docs at: http://localhost:8000/docs
 
 ### 3. Start VOD Frontend
 
@@ -56,8 +93,6 @@ npm install
 # Start development server
 npm run dev
 ```
-
-Frontend available at: http://localhost:5173
 
 ## Configuration
 
@@ -72,6 +107,9 @@ The VOD backend reads from existing `config/config.ini`:
 
 # 是否启用VOD功能
 启用VOD=是
+
+# VOD后端服务端口
+服务端口=8000
 ```
 
 TOS credentials from existing `config/tos_credentials.ini`.
@@ -92,34 +130,57 @@ TOS_BUCKET=your-bucket
 
 ## Verify Installation
 
-### 1. Check API
+### Quick Health Check
 
 ```bash
+make health
+```
+
+### Manual Verification
+
+```bash
+# 1. Check API
 curl http://localhost:8000/api/platforms
-```
 
-Expected: List of platforms with recordings.
-
-### 2. Check Playback URL
-
-```bash
-# Get a segment ID from the API first
+# 2. Check Playback URL (replace 1 with actual segment ID)
 curl http://localhost:8000/api/segments/1/play
+
+# 3. Test Video Seek
+# Open frontend, navigate to a recording, play video, drag progress bar
 ```
-
-Expected: JSON with presigned URL.
-
-### 3. Test Video Seek
-
-Open frontend, navigate to a recording, play video, drag progress bar - should seek instantly.
 
 ## Production Deployment
 
-### Docker Compose
+### Option 1: Docker Compose (Recommended)
 
 ```bash
 cd vod-player
+
+# Build and start
+make docker-build
+make docker-up
+
+# Or directly
 docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop
+make docker-down
+```
+
+### Option 2: Manual Deployment
+
+```bash
+# Build frontend
+make build
+
+# Start backend with production settings
+cd backend
+uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
+
+# Serve frontend/dist with Nginx
 ```
 
 ### Reverse Proxy (Nginx)
@@ -165,10 +226,20 @@ MP4 missing faststart flag. Re-convert with:
 ffmpeg -i input.ts -c copy -movflags faststart output.mp4
 ```
 
-## Next Steps
+### Backend won't start
 
-1. Run `/speckit.tasks` to generate implementation tasks
-2. Start with Phase 1: Database migration
-3. Implement pipeline stages
-4. Build VOD API
-5. Build frontend
+Check dependencies:
+```bash
+cd vod-player/backend
+uv sync
+```
+
+### Frontend won't start
+
+Check Node.js version and dependencies:
+```bash
+node --version  # Should be 18+
+cd vod-player/frontend
+rm -rf node_modules
+npm install
+```

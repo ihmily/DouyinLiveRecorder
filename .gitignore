@@ -171,3 +171,7 @@ data/
 # VOD Player Frontend
 vod-player/frontend/node_modules/
 vod-player/frontend/dist/
+
+# VOD Player Backend (uv managed)
+vod-player/backend/.venv/
+vod-player/backend/uv.lock

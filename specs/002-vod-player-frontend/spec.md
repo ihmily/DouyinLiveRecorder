@@ -140,7 +140,7 @@ As a system operator, I want recorded TS files to be automatically converted to 
 
 - **SC-001**: Users can seek to any position in a video and playback resumes within 1 second
 - **SC-002**: Video playback begins within 3 seconds of clicking play
-- **SC-003**: 95% of TS-to-MP4 conversions complete successfully
+- **SC-003**: 95% of TS-to-MP4 conversions complete successfully (measured per 100 consecutive conversions; failures logged with FFmpeg exit code)
 - **SC-004**: Signed URLs expire correctly after the configured validity period
 - **SC-005**: Video streaming does not consume application server bandwidth (0 bytes proxied)
 - **SC-006**: Navigation tree loads within 2 seconds for libraries with 1000+ sessions

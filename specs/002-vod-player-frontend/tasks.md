@@ -42,9 +42,9 @@ Based on plan.md structure:
 
 - [x] T006 Add mp4_oss_path, mp4_status, duration fields to RecordingSegment model in src/storage/models.py
 - [x] T007 Create Alembic migration for new VOD fields in alembic/versions/
-- [x] T008 Create database configuration module for VOD backend in vod-player/backend/config.py
-- [x] T009 [P] Setup FastAPI application with CORS and routing in vod-player/backend/main.py
-- [x] T010 [P] Create base Pydantic schemas for API responses in vod-player/backend/schemas.py
+- [x] T008 Create database configuration module for VOD backend in vod-player/backend/app/config.py
+- [x] T009 [P] Setup FastAPI application with CORS and routing in vod-player/backend/app/main.py
+- [x] T010 [P] Create base Pydantic schemas for API responses in vod-player/backend/app/schemas.py
 - [x] T011 [P] Setup Vue 3 project with Element Plus and Video.js in vod-player/frontend/package.json
 - [x] T012 [P] Configure Vite with proxy for backend API in vod-player/frontend/vite.config.ts
 - [x] T013 Create API client module with axios in vod-player/frontend/src/api/index.ts
@@ -63,15 +63,15 @@ Based on plan.md structure:
 
 #### Backend - Navigation API
 
-- [x] T014 [P] [US1] Implement GET /api/platforms endpoint in vod-player/backend/routers/api.py
-- [x] T015 [P] [US1] Implement GET /api/platforms/{platform}/anchors endpoint in vod-player/backend/routers/api.py
-- [x] T016 [P] [US1] Implement GET /api/anchors/{anchor_name}/sessions endpoint with pagination in vod-player/backend/routers/api.py
-- [x] T017 [US1] Implement GET /api/sessions/{session_id} endpoint for session details in vod-player/backend/routers/api.py
+- [x] T014 [P] [US1] Implement GET /api/platforms endpoint in vod-player/backend/app/routers/api.py
+- [x] T015 [P] [US1] Implement GET /api/platforms/{platform}/anchors endpoint in vod-player/backend/app/routers/api.py
+- [x] T016 [P] [US1] Implement GET /api/anchors/{anchor_name}/sessions endpoint with pagination in vod-player/backend/app/routers/api.py
+- [x] T017 [US1] Implement GET /api/sessions/{session_id} endpoint for session details in vod-player/backend/app/routers/api.py
 
 #### Backend - Playback URL Generation
 
-- [x] T018 [US1] Create TOS presigned URL service in vod-player/backend/services/tos_sign.py
-- [x] T019 [US1] Implement GET /api/segments/{segment_id}/play endpoint in vod-player/backend/routers/api.py
+- [x] T018 [US1] Create TOS presigned URL service in vod-player/backend/app/services/tos_sign.py
+- [x] T019 [US1] Implement GET /api/segments/{segment_id}/play endpoint in vod-player/backend/app/routers/api.py
 
 #### Frontend - Navigation
 
@@ -97,8 +97,8 @@ Based on plan.md structure:
 
 ### Implementation for User Story 2
 
-- [x] T026 [US2] Add configurable URL expiration to TOS presigned URL service in vod-player/backend/services/tos_sign.py
-- [x] T027 [US2] Add expires_at field to playback URL response in vod-player/backend/routers/api.py
+- [x] T026 [US2] Add configurable URL expiration to TOS presigned URL service in vod-player/backend/app/services/tos_sign.py
+- [x] T027 [US2] Add expires_at field to playback URL response in vod-player/backend/app/routers/api.py
 - [x] T028 [US2] Implement URL expiration handling in VideoPlayer component in vod-player/frontend/src/components/VideoPlayer.vue
 - [x] T029 [US2] Add "Refresh URL" button for expired URL recovery in vod-player/frontend/src/views/Player.vue
 

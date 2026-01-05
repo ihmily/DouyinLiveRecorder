@@ -16,7 +16,7 @@ Implement a VOD playback system with two main components:
 **Primary Dependencies**:
 - Backend: FastAPI, SQLAlchemy (existing), TOS SDK (existing), FFmpeg
 - Frontend: Vue 3, Video.js, Element Plus
-**Storage**: SQLite/PostgreSQL (existing DB), TOS (existing bucket)
+**Storage**: SQLite/PostgreSQL (existing DB), TOS/Volcano Engine Object Storage (existing bucket)
 **Testing**: pytest (backend), Vitest (frontend)
 **Target Platform**: Linux server (backend), Modern browsers (frontend)
 **Project Type**: Web application (backend + frontend)
@@ -75,9 +75,15 @@ src/
 
 # VOD application (new separate directory)
 vod-player/
+├── Makefile                 # One-command dev/build/deploy workflows
+├── docker-compose.yml       # Container orchestration
+├── nginx.conf               # Production reverse proxy config
 ├── backend/
 │   ├── main.py              # FastAPI application
 │   ├── config.py            # Configuration (reads existing config.ini)
+│   ├── schemas.py           # Pydantic response schemas
+│   ├── requirements.txt     # Python dependencies
+│   ├── Dockerfile           # Backend container
 │   ├── routers/
 │   │   └── api.py           # REST API endpoints
 │   ├── services/
@@ -92,14 +98,53 @@ vod-player/
 │   │   ├── components/
 │   │   │   ├── SessionTree.vue
 │   │   │   └── VideoPlayer.vue
-│   │   └── api/
-│   │       └── index.ts     # API client
+│   │   ├── api/
+│   │   │   └── index.ts     # API client
+│   │   └── router/
+│   │       └── index.ts     # Vue router
 │   ├── package.json
-│   └── vite.config.ts
-└── docker-compose.yml
+│   ├── vite.config.ts
+│   └── Dockerfile           # Frontend container
 ```
 
 **Structure Decision**: Web application pattern with separate backend/frontend. Recording pipeline changes integrate into existing `src/storage/` module to minimize disruption.
+
+## Development Workflow
+
+### Prerequisites
+
+- **uv** - Python package manager (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
+- **Node.js 18+** - For frontend development
+- **FFmpeg** - For video conversion
+
+### Quick Start (via Makefile)
+
+```bash
+cd vod-player
+
+make check      # Verify prerequisites (uv, Node, FFmpeg)
+make install    # Install dependencies (uv sync + npm install)
+make migrate    # Run database migration
+make dev        # Start backend + frontend
+```
+
+### Available Commands
+
+| Command | Description |
+|---------|-------------|
+| `make install` | Install all dependencies |
+| `make dev` | Start both backend and frontend |
+| `make dev-backend` | Start backend only (port 8000) |
+| `make dev-frontend` | Start frontend only (port 5173) |
+| `make build` | Build frontend for production |
+| `make docker-up` | Start with Docker Compose |
+| `make health` | Check service health |
+
+### URLs
+
+- **Frontend**: http://localhost:5173
+- **Backend API**: http://localhost:8000
+- **API Documentation**: http://localhost:8000/docs
 
 ## Complexity Tracking
 
