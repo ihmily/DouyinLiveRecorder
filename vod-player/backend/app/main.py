@@ -7,15 +7,15 @@ Provides REST API for browsing recordings and generating presigned playback URLs
 import os
 import sys
 
-# Add project root to Python path for importing src modules
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add project root to Python path for importing src modules (vod-player/backend/app/main.py -> 4 levels up)
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 sys.path.insert(0, project_root)
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from config import get_settings
-from routers.api import router as api_router
+from app.config import get_settings
+from app.routers.api import router as api_router
 
 settings = get_settings()
 

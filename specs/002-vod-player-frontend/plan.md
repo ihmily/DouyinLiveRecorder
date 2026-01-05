@@ -7,8 +7,8 @@
 
 Implement a VOD playback system with two main components:
 
-1. **Recording Pipeline Enhancement**: Modify existing upload workflow to convert TS → Fast Start MP4 locally before OSS upload, using composable pipeline stages (CSP/DAG pattern)
-2. **VOD Frontend Application**: Web-based UI for browsing recordings (Platform → Anchor → Session → Segments) and playing videos with instant seek via presigned URLs
+1. **Recording Pipeline Enhancement** (in `main.py` / `src/storage/`): Modify existing upload workflow to convert TS → Fast Start MP4 locally before OSS upload, using composable pipeline stages (CSP/DAG pattern). Handles all database writes (recording, conversion status, upload paths).
+2. **VOD Frontend Application** (in `vod-player/`): **Read-only** web application for browsing recordings (Platform → Anchor → Session → Segments) and playing videos with instant seek via presigned URLs. Reads from shared database; does not write recording data.
 
 ## Technical Context
 
@@ -107,7 +107,7 @@ vod-player/
 │   └── Dockerfile           # Frontend container
 ```
 
-**Structure Decision**: Web application pattern with separate backend/frontend. Recording pipeline changes integrate into existing `src/storage/` module to minimize disruption.
+**Structure Decision**: Web application pattern with separate backend/frontend. Recording pipeline changes integrate into existing `src/storage/` module to minimize disruption. VOD backend is read-only (queries only); all writes happen in `main.py` recording workflow.
 
 ## Development Workflow
 

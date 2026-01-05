@@ -15,6 +15,10 @@ This feature implements a complete VOD (Video on Demand) playback system that en
 
 - Q: When should TS-to-MP4 conversion be triggered? → A: Conversion happens locally BEFORE OSS upload. Workflow: Recording complete → MP4 conversion → OSS upload (MP4 only). Use CSP or DAG pattern for elegant pipeline orchestration, avoiding hard-coded logic.
 
+### Session 2026-01-06
+
+- Q: Is VOD decoupled from main.py? Does VOD only read DB? → A: Yes. VOD is read-only (reads DB + generates presigned URLs); main.py handles recording, conversion, upload, and all DB writes.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Browse and Play Recordings (Priority: P1)
@@ -152,6 +156,7 @@ As a system operator, I want recorded TS files to be automatically converted to 
 - TOS (Volcano Engine Object Storage) is used as the storage backend with presigned URL support
 - FFmpeg is available locally for TS-to-MP4 conversion (conversion runs on recording machine before upload)
 - Recordings are already being stored with the existing RecordingSession/RecordingSegment data model
+- **Architecture decoupling**: VOD player is a read-only consumer of the shared database; the main recording system (`main.py`) handles all writes (recording, conversion status, upload paths)
 - The storage bucket is configured as private (no public access)
 - Users access the system via modern web browsers (Chrome, Firefox, Safari, Edge - last 2 versions)
 - Initial release does not require user authentication (single-user/internal deployment)

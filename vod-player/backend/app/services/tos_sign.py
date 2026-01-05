@@ -7,11 +7,11 @@ Generates time-limited signed URLs for video playback.
 import os
 import sys
 
-# Add project root to path
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+# Add project root to path (vod-player/backend/app/services/tos_sign.py -> 5 levels up)
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 sys.path.insert(0, project_root)
 
-from config import get_settings
+from app.config import get_settings
 
 # TOS SDK import with fallback
 try:

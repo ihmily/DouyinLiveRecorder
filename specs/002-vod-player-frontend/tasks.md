@@ -169,7 +169,7 @@ Based on plan.md structure:
 - [x] T046 [P] Handle edge case: seek beyond video duration (clamp to end)
 - [x] T047 [P] Handle edge case: empty sessions with zero segments
 - [x] T048 [P] Add pagination UI for sessions list in Home view
-- [ ] T049 Run quickstart.md validation to verify end-to-end flow
+- [x] T049 Run quickstart.md validation to verify end-to-end flow
 
 ---
 

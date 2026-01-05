@@ -13,18 +13,40 @@ from fastapi import APIRouter, HTTPException, Query, Depends
 from sqlalchemy import func, distinct
 from sqlalchemy.orm import Session
 
-# Add project root to path
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+# Add project root to path (vod-player/backend/app/routers/api.py -> 5 levels up to DouyinLiveRecorder)
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 sys.path.insert(0, project_root)
 
-from src.storage.database import DatabaseManager
-from src.storage.models import RecordingSession, RecordingSegment, Mp4Status
-from schemas import (
+# Import storage modules directly to avoid src/__init__.py initialization (requires distro, node check, etc.)
+import importlib.util
+def _import_module_direct(module_path: str, module_name: str):
+    """Import a module directly by path, bypassing package __init__.py"""
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+# Load storage modules without triggering src/__init__.py
+_storage_models = _import_module_direct(
+    os.path.join(project_root, "src", "storage", "models.py"),
+    "src.storage.models"
+)
+_storage_database = _import_module_direct(
+    os.path.join(project_root, "src", "storage", "database.py"),
+    "src.storage.database"
+)
+
+DatabaseManager = _storage_database.DatabaseManager
+RecordingSession = _storage_models.RecordingSession
+RecordingSegment = _storage_models.RecordingSegment
+Mp4Status = _storage_models.Mp4Status
+from app.schemas import (
     Platform, Anchor, SessionSummary, SessionListResponse,
     SessionDetail, SegmentInfo, PlaybackUrl, ErrorResponse
 )
-from config import get_settings
-from services.tos_sign import generate_presigned_url
+from app.config import get_settings
+from app.services.tos_sign import generate_presigned_url
 
 router = APIRouter()
 

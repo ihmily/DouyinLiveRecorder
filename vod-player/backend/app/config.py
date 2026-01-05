@@ -40,8 +40,8 @@ class Settings(BaseSettings):
 
 def get_project_root() -> str:
     """Get the project root directory."""
-    # vod-player/backend/config.py -> project root is 2 levels up
-    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    # vod-player/backend/app/config.py -> project root is 3 levels up
+    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 
 def load_config_ini(config_path: Optional[str] = None) -> configparser.ConfigParser:
@@ -51,7 +51,8 @@ def load_config_ini(config_path: Optional[str] = None) -> configparser.ConfigPar
 
     config = configparser.ConfigParser()
     if os.path.exists(config_path):
-        config.read(config_path, encoding="utf-8")
+        # Use utf-8-sig to handle BOM (Byte Order Mark) in config files
+        config.read(config_path, encoding="utf-8-sig")
     return config
 
 
