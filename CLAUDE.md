@@ -79,3 +79,10 @@ Adding a new platform requires:
 3. Add URL pattern matching in `main.py`
 4. Add cookie field in `config/config.ini` (if needed)
 5. Add test entry in `demo.py`
+
+## Active Technologies
+- Python 3.10+ (backend), TypeScript (frontend) (002-vod-player-frontend)
+- SQLite/PostgreSQL (existing DB), TOS (existing bucket) (002-vod-player-frontend)
+
+## Recent Changes
+- 002-vod-player-frontend: Added Python 3.10+ (backend), TypeScript (frontend)
