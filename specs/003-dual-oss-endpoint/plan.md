@@ -127,8 +127,13 @@ s3_endpoint = tos-cn-beijing.volces.com     # ✅ 公网端点 - 用于VOD URL (
 - [x] data-model.md - Configuration model changes
 - [x] contracts/config-interface.md - Interface contracts
 - [x] quickstart.md - Verification guide
-- [ ] tasks.md - (Generate with `/speckit.tasks`)
+- [x] tasks.md - Implementation tasks (completed)
 
 ## Next Steps
 
-运行 `/speckit.tasks` 生成具体实施任务列表。
+**Implementation Complete** - All tasks executed successfully.
+
+Manual verification steps (per quickstart.md):
+1. Update `config/tos_credentials.ini` with correct endpoint values
+2. Test upload via `uv run main.py`
+3. Test VOD URL generation via `/api/segments/{id}/play`

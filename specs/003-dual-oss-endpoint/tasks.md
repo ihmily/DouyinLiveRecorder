@@ -27,8 +27,8 @@ This feature modifies the VOD player backend:
 
 This is a minimal change feature (~30 lines). No new project structure or dependencies needed.
 
-- [ ] T001 Verify existing file structure in vod-player/backend/app/config.py
-- [ ] T002 Verify existing file structure in vod-player/backend/app/services/tos_sign.py
+- [x] T001 Verify existing file structure in vod-player/backend/app/config.py
+- [x] T002 Verify existing file structure in vod-player/backend/app/services/tos_sign.py
 
 ---
 
@@ -52,9 +52,9 @@ This feature extends existing Settings class and TOS client - no blocking prereq
 
 > **NOTE**: 代码逻辑已正确实现（使用 `endpoint` 配置项上传）。此用户故事主要是验证和文档说明。
 
-- [ ] T003 [US1] Verify upload code uses endpoint config in src/storage/tos_uploader.py:69-74
-- [ ] T004 [US1] Verify proxy clearing logic in src/storage/tos_uploader.py:65-67
-- [ ] T005 [US1] Document correct endpoint configuration values (内网 = *.ivolces.com) in quickstart.md
+- [x] T003 [US1] Verify upload code uses endpoint config in src/storage/tos_uploader.py:69-74
+- [x] T004 [US1] Verify proxy clearing logic in src/storage/tos_uploader.py:65-67
+- [x] T005 [US1] Document correct endpoint configuration values (内网 = *.ivolces.com) in quickstart.md
 
 **Checkpoint**: 上传功能验证完成，配置说明已更新
 
@@ -68,11 +68,11 @@ This feature extends existing Settings class and TOS client - no blocking prereq
 
 ### Implementation for User Story 2
 
-- [ ] T006 [P] [US2] Add tos_s3_endpoint field to Settings class in vod-player/backend/app/config.py
-- [ ] T007 [P] [US2] Update load_tos_credentials() to read s3_endpoint in vod-player/backend/app/config.py
-- [ ] T008 [US2] Update get_settings() with s3_endpoint population and fallback logic in vod-player/backend/app/config.py
-- [ ] T009 [US2] Modify get_tos_client() to use tos_s3_endpoint in vod-player/backend/app/services/tos_sign.py
-- [ ] T010 [US2] Add warning log when s3_endpoint fallback is used in vod-player/backend/app/services/tos_sign.py
+- [x] T006 [P] [US2] Add tos_s3_endpoint field to Settings class in vod-player/backend/app/config.py
+- [x] T007 [P] [US2] Update load_tos_credentials() to read s3_endpoint in vod-player/backend/app/config.py
+- [x] T008 [US2] Update get_settings() with s3_endpoint population and fallback logic in vod-player/backend/app/config.py
+- [x] T009 [US2] Modify get_tos_client() to use tos_s3_endpoint in vod-player/backend/app/services/tos_sign.py
+- [x] T010 [US2] Add warning log when s3_endpoint fallback is used in vod-player/backend/app/services/tos_sign.py
 
 **Checkpoint**: VOD服务可生成公网URL，可独立测试
 
@@ -86,8 +86,8 @@ This feature extends existing Settings class and TOS client - no blocking prereq
 
 ### Implementation for User Story 3
 
-- [ ] T011 [US3] Add endpoint configuration validation and logging on startup in vod-player/backend/app/config.py
-- [ ] T012 [US3] Document configuration options and backward compatibility in specs/003-dual-oss-endpoint/quickstart.md
+- [x] T011 [US3] Add endpoint configuration validation and logging on startup in vod-player/backend/app/config.py
+- [x] T012 [US3] Document configuration options and backward compatibility in specs/003-dual-oss-endpoint/quickstart.md
 
 **Checkpoint**: 配置管理完成，文档更新
 
@@ -97,9 +97,9 @@ This feature extends existing Settings class and TOS client - no blocking prereq
 
 **Purpose**: Final validation and documentation
 
-- [ ] T013 Run quickstart.md manual verification (upload via 内网, URL via 公网)
-- [ ] T014 Verify backward compatibility with s3_endpoint not configured
-- [ ] T015 Update plan.md to mark tasks.md as generated
+- [x] T013 Run quickstart.md manual verification (upload via 内网, URL via 公网)
+- [x] T014 Verify backward compatibility with s3_endpoint not configured
+- [x] T015 Update plan.md to mark tasks.md as generated
 
 ---
 
