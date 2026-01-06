@@ -28,17 +28,22 @@ import { Monitor, User, VideoPlay } from '@element-plus/icons-vue'
 import { getPlatforms, getAnchors, getSessions } from '@/api'
 import type { Platform, Anchor, SessionSummary } from '@/api'
 
+// T038: Extended session data with anchor name for URL navigation
+interface SessionWithAnchor extends SessionSummary {
+  anchorName: string
+}
+
 interface TreeNode {
   id: string
   label: string
   type: 'platform' | 'anchor' | 'session'
   count?: number
   isLeaf?: boolean
-  data?: Platform | Anchor | SessionSummary
+  data?: Platform | Anchor | SessionWithAnchor
 }
 
 const emit = defineEmits<{
-  (e: 'session-selected', session: SessionSummary): void
+  (e: 'session-selected', session: SessionWithAnchor): void
 }>()
 
 const treeData = ref<TreeNode[]>([])
@@ -117,14 +122,16 @@ async function loadNode(node: any, resolve: (data: TreeNode[]) => void) {
     try {
       // Extract platform from parent
       const platformName = node.parent?.data?.label || ''
-      const response = await getSessions(data.label, { platform: platformName, limit: 50 })
+      const anchorName = data.label
+      const response = await getSessions(anchorName, { platform: platformName, limit: 50 })
+      // T038: Include anchor name in session data for URL navigation
       const nodes: TreeNode[] = response.items.map((s) => ({
         id: `session-${s.id}`,
         label: `${formatDate(s.started_at)} ${formatDuration(s.duration)}`,
         type: 'session',
         count: s.segment_count,
         isLeaf: true,
-        data: s,
+        data: { ...s, anchorName } as SessionWithAnchor,
       }))
       resolve(nodes)
     } catch (error) {
@@ -139,7 +146,7 @@ async function loadNode(node: any, resolve: (data: TreeNode[]) => void) {
 
 function handleNodeClick(data: TreeNode) {
   if (data.type === 'session' && data.data) {
-    emit('session-selected', data.data as SessionSummary)
+    emit('session-selected', data.data as SessionWithAnchor)
   }
 }
 </script>

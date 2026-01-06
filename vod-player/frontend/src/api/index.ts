@@ -75,6 +75,35 @@ export interface PlaybackUrl {
   title: string
 }
 
+// === Video Segment Aggregation Types (004-video-segment-aggregation) ===
+
+export interface AggregatedSegment {
+  segment_id: number
+  segment_index: number
+  duration: number
+  start_offset: number
+  end_offset: number
+}
+
+export interface AggregatedSession {
+  session_id: number
+  anchor_name: string
+  platform: string
+  live_title: string | null
+  session_timestamp: string
+  started_at: string
+  ended_at: string | null
+  total_duration: number
+  converted_segment_count: number
+  total_segment_count: number
+  segments: AggregatedSegment[]
+}
+
+export interface BatchPlaybackUrls {
+  urls: Record<string, PlaybackUrl>
+  failed: number[]
+}
+
 // API functions
 export async function getPlatforms(): Promise<Platform[]> {
   const response = await api.get<Platform[]>('/platforms')
@@ -108,6 +137,27 @@ export async function getSession(sessionId: number): Promise<SessionDetail> {
 
 export async function getPlayUrl(segmentId: number): Promise<PlaybackUrl> {
   const response = await api.get<PlaybackUrl>(`/segments/${segmentId}/play`)
+  return response.data
+}
+
+// === Video Segment Aggregation API Functions (004-video-segment-aggregation) ===
+
+export async function getAggregatedSession(sessionId: number): Promise<AggregatedSession> {
+  const response = await api.get<AggregatedSession>(`/sessions/${sessionId}/aggregated`)
+  return response.data
+}
+
+export async function getSessionByPath(anchorName: string, sessionTimestamp: string): Promise<AggregatedSession> {
+  const response = await api.get<AggregatedSession>(
+    `/sessions/by-path/${encodeURIComponent(anchorName)}/${encodeURIComponent(sessionTimestamp)}`
+  )
+  return response.data
+}
+
+export async function batchGetPlayUrls(segmentIds: number[]): Promise<BatchPlaybackUrls> {
+  const response = await api.post<BatchPlaybackUrls>('/segments/batch-urls', {
+    segment_ids: segmentIds,
+  })
   return response.data
 }
 

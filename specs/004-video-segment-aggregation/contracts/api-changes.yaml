@@ -1,0 +1,297 @@
+openapi: 3.1.0
+info:
+  title: VOD Player API - Video Segment Aggregation
+  version: 2.0.0
+  description: |
+    API changes for the Video Segment Aggregation feature.
+    Adds new endpoints for aggregated session data and human-readable URL lookup.
+
+servers:
+  - url: http://localhost:8000/api
+    description: Development server
+
+paths:
+  # NEW: Get session by human-readable path
+  /sessions/by-path/{anchor_name}/{session_timestamp}:
+    get:
+      operationId: getSessionByPath
+      summary: Get aggregated session by anchor name and timestamp
+      description: |
+        Lookup session using human-readable URL components.
+        Returns aggregated session with computed timeline offsets.
+      tags:
+        - Sessions
+      parameters:
+        - name: anchor_name
+          in: path
+          required: true
+          description: URL-encoded anchor/streamer name
+          schema:
+            type: string
+          example: "Seven(国服老虎)"
+        - name: session_timestamp
+          in: path
+          required: true
+          description: Session start timestamp in YYYY-MM-DD_HH-MM-SS format
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$'
+          example: "2026-01-06_14-01-37"
+      responses:
+        '200':
+          description: Aggregated session details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AggregatedSession'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # NEW: Get aggregated session by ID
+  /sessions/{session_id}/aggregated:
+    get:
+      operationId: getAggregatedSession
+      summary: Get aggregated session with timeline data
+      description: |
+        Returns session with computed timeline offsets for all converted segments.
+        Only segments with mp4_status=COMPLETED are included.
+      tags:
+        - Sessions
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: integer
+          example: 13
+      responses:
+        '200':
+          description: Aggregated session details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AggregatedSession'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # NEW: Batch pre-fetch segment URLs
+  /segments/batch-urls:
+    post:
+      operationId: batchGetPlayUrls
+      summary: Get presigned URLs for multiple segments
+      description: |
+        Batch fetch presigned playback URLs for pre-fetching.
+        Returns URLs for all requested segments that are ready.
+      tags:
+        - Segments
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - segment_ids
+              properties:
+                segment_ids:
+                  type: array
+                  items:
+                    type: integer
+                  maxItems: 5
+                  description: List of segment IDs (max 5)
+                  example: [101, 102, 103]
+      responses:
+        '200':
+          description: Map of segment IDs to playback URLs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchPlaybackUrls'
+
+  # MODIFIED: Existing endpoint remains unchanged
+  /segments/{segment_id}/play:
+    get:
+      operationId: getPlayUrl
+      summary: Get presigned playback URL for a segment
+      description: Existing endpoint - no changes
+      tags:
+        - Segments
+      parameters:
+        - name: segment_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Playback URL
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlaybackUrl'
+
+components:
+  schemas:
+    AggregatedSession:
+      type: object
+      required:
+        - session_id
+        - anchor_name
+        - platform
+        - session_timestamp
+        - total_duration
+        - converted_segment_count
+        - total_segment_count
+        - segments
+      properties:
+        session_id:
+          type: integer
+          description: Database session ID
+          example: 13
+        anchor_name:
+          type: string
+          description: Streamer/anchor name
+          example: "Seven(国服老虎)"
+        platform:
+          type: string
+          description: Platform name
+          example: "抖音直播"
+        live_title:
+          type: string
+          nullable: true
+          description: Original stream title
+          example: "王者荣耀直播"
+        session_timestamp:
+          type: string
+          description: Session start time formatted for URL
+          pattern: '^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$'
+          example: "2026-01-06_14-01-37"
+        started_at:
+          type: string
+          format: date-time
+          description: ISO format start time
+          example: "2026-01-06T14:01:37Z"
+        ended_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: ISO format end time
+        total_duration:
+          type: number
+          format: float
+          description: Total playable duration in seconds (converted segments only)
+          example: 3600.5
+        converted_segment_count:
+          type: integer
+          description: Number of segments with mp4_status=COMPLETED
+          example: 6
+        total_segment_count:
+          type: integer
+          description: Total segment count (for progress display)
+          example: 7
+        segments:
+          type: array
+          items:
+            $ref: '#/components/schemas/AggregatedSegment'
+
+    AggregatedSegment:
+      type: object
+      required:
+        - segment_id
+        - segment_index
+        - duration
+        - start_offset
+        - end_offset
+      properties:
+        segment_id:
+          type: integer
+          description: Database segment ID
+          example: 101
+        segment_index:
+          type: integer
+          description: Original segment index (0-based)
+          example: 0
+        duration:
+          type: number
+          format: float
+          description: Segment duration in seconds
+          example: 600.0
+        start_offset:
+          type: number
+          format: float
+          description: Cumulative start position in session timeline
+          example: 0.0
+        end_offset:
+          type: number
+          format: float
+          description: Cumulative end position (start_offset + duration)
+          example: 600.0
+
+    BatchPlaybackUrls:
+      type: object
+      required:
+        - urls
+      properties:
+        urls:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/PlaybackUrl'
+          description: Map of segment_id to PlaybackUrl
+          example:
+            "101":
+              url: "https://tos.example.com/segment_000.mp4?sign=..."
+              expires_at: "2026-01-06T15:01:37Z"
+              duration: 600.0
+        failed:
+          type: array
+          items:
+            type: integer
+          description: Segment IDs that could not be fetched (not ready)
+          example: [103]
+
+    PlaybackUrl:
+      type: object
+      required:
+        - url
+        - expires_at
+      properties:
+        url:
+          type: string
+          format: uri
+          description: Presigned TOS URL
+        expires_at:
+          type: string
+          format: date-time
+          description: URL expiration time
+        duration:
+          type: number
+          format: float
+          nullable: true
+          description: Video duration in seconds
+        title:
+          type: string
+          description: Display title
+
+    ErrorResponse:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
+          description: Error message
+          example: "Session not found"
+
+tags:
+  - name: Sessions
+    description: Session management and lookup
+  - name: Segments
+    description: Segment playback URLs

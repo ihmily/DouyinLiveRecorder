@@ -55,16 +55,45 @@ import { VideoPlay } from '@element-plus/icons-vue'
 import SessionTree from '@/components/SessionTree.vue'
 import type { SessionSummary } from '@/api'
 
-const router = useRouter()
-const selectedSession = ref<SessionSummary | null>(null)
+// T038: Extended session type with anchor name from SessionTree
+interface SessionWithAnchor extends SessionSummary {
+  anchorName: string
+}
 
-function handleSessionSelected(session: SessionSummary) {
+const router = useRouter()
+const selectedSession = ref<SessionWithAnchor | null>(null)
+
+function handleSessionSelected(session: SessionWithAnchor) {
   selectedSession.value = session
+}
+
+// T038: Helper to format timestamp for URL
+// Uses the raw date string parsing to avoid timezone conversion issues
+function formatSessionTimestamp(dateStr: string): string {
+  // Parse ISO format: "2026-01-06T14:01:37" or "2026-01-06 14:01:37"
+  // Extract components directly from string to avoid timezone conversion
+  const match = dateStr.match(/(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})/)
+  if (match) {
+    const [, year, month, day, hour, minute, second] = match
+    return `${year}-${month}-${day}_${hour}-${minute}-${second}`
+  }
+  // Fallback to Date parsing if format doesn't match
+  const date = new Date(dateStr)
+  const pad = (n: number) => n.toString().padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}_${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}`
 }
 
 function goToPlayer() {
   if (selectedSession.value) {
-    router.push({ name: 'Player', params: { sessionId: selectedSession.value.id } })
+    // T038: Use human-readable URL format
+    const sessionTimestamp = formatSessionTimestamp(selectedSession.value.started_at)
+    router.push({
+      name: 'Player',
+      params: {
+        anchorName: selectedSession.value.anchorName,
+        sessionTimestamp,
+      }
+    })
   }
 }
 

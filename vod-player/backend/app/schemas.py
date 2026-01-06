@@ -73,3 +73,40 @@ class PlaybackUrl(BaseModel):
 class ErrorResponse(BaseModel):
     """Error response."""
     detail: str = Field(..., example="Segment MP4 not ready, status: processing")
+
+
+# === Video Segment Aggregation Schemas (004-video-segment-aggregation) ===
+
+class AggregatedSegment(BaseModel):
+    """Segment with computed timeline offsets for aggregated playback."""
+    segment_id: int = Field(..., description="Database segment ID", example=101)
+    segment_index: int = Field(..., description="Original segment index (0-based)", example=0)
+    duration: float = Field(..., description="Segment duration in seconds", example=600.0)
+    start_offset: float = Field(..., description="Cumulative start position in session timeline", example=0.0)
+    end_offset: float = Field(..., description="Cumulative end position (start_offset + duration)", example=600.0)
+
+
+class AggregatedSession(BaseModel):
+    """Session with computed timeline data for seamless multi-segment playback."""
+    session_id: int = Field(..., description="Database session ID", example=13)
+    anchor_name: str = Field(..., description="Streamer/anchor name", example="Seven(国服老虎)")
+    platform: str = Field(..., description="Platform name", example="抖音直播")
+    live_title: Optional[str] = Field(None, description="Original stream title", example="王者荣耀直播")
+    session_timestamp: str = Field(..., description="Session start time formatted for URL", example="2026-01-06_14-01-37")
+    started_at: datetime = Field(..., description="ISO format start time")
+    ended_at: Optional[datetime] = Field(None, description="ISO format end time")
+    total_duration: float = Field(..., description="Total playable duration in seconds (converted segments only)", example=3600.5)
+    converted_segment_count: int = Field(..., description="Number of segments with mp4_status=COMPLETED", example=6)
+    total_segment_count: int = Field(..., description="Total segment count (for progress display)", example=7)
+    segments: List[AggregatedSegment] = Field(..., description="Ordered list of playable segments with offsets")
+
+
+class BatchPlaybackUrlsRequest(BaseModel):
+    """Request for batch fetching playback URLs."""
+    segment_ids: List[int] = Field(..., max_length=5, description="List of segment IDs (max 5)", example=[101, 102, 103])
+
+
+class BatchPlaybackUrls(BaseModel):
+    """Response with multiple presigned playback URLs."""
+    urls: dict[str, PlaybackUrl] = Field(..., description="Map of segment_id to PlaybackUrl")
+    failed: List[int] = Field(default_factory=list, description="Segment IDs that could not be fetched (not ready)")
