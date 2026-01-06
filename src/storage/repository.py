@@ -187,12 +187,16 @@ class RecordingRepository:
         Get total OSS storage usage from completed uploads.
 
         Returns:
-            Total bytes of uploaded segments with oss_path
+            Total bytes of uploaded segments with oss_path or mp4_oss_path
         """
+        from sqlalchemy import or_
         result = self.session.query(func.sum(RecordingSegment.file_size)).filter(
             and_(
                 RecordingSegment.upload_status == UploadStatus.COMPLETED,
-                RecordingSegment.oss_path.isnot(None)
+                or_(
+                    RecordingSegment.oss_path.isnot(None),
+                    RecordingSegment.mp4_oss_path.isnot(None)
+                )
             )
         ).scalar()
         return result or 0
@@ -207,6 +211,7 @@ class RecordingRepository:
         Returns:
             List of (RecordingSession, total_size_bytes) tuples ordered by started_at ASC
         """
+        from sqlalchemy import or_
         # Subquery to get session sizes
         results = self.session.query(
             RecordingSession,
@@ -218,7 +223,10 @@ class RecordingRepository:
             and_(
                 RecordingSession.ended_at.isnot(None),  # Only completed sessions
                 RecordingSegment.upload_status == UploadStatus.COMPLETED,
-                RecordingSegment.oss_path.isnot(None)
+                or_(
+                    RecordingSegment.oss_path.isnot(None),
+                    RecordingSegment.mp4_oss_path.isnot(None)
+                )
             )
         ).group_by(
             RecordingSession.id
@@ -236,12 +244,16 @@ class RecordingRepository:
             session_id: Session ID
 
         Returns:
-            List of segments with oss_path
+            List of segments with oss_path or mp4_oss_path
         """
+        from sqlalchemy import or_
         return self.session.query(RecordingSegment).filter(
             and_(
                 RecordingSegment.session_id == session_id,
-                RecordingSegment.oss_path.isnot(None)
+                or_(
+                    RecordingSegment.oss_path.isnot(None),
+                    RecordingSegment.mp4_oss_path.isnot(None)
+                )
             )
         ).all()
 
@@ -269,12 +281,16 @@ class RecordingRepository:
 
     def get_completed_sessions_count(self) -> int:
         """Get count of completed sessions with OSS files."""
+        from sqlalchemy import or_
         return self.session.query(RecordingSession).join(
             RecordingSegment,
             RecordingSegment.session_id == RecordingSession.id
         ).filter(
             and_(
                 RecordingSession.ended_at.isnot(None),
-                RecordingSegment.oss_path.isnot(None)
+                or_(
+                    RecordingSegment.oss_path.isnot(None),
+                    RecordingSegment.mp4_oss_path.isnot(None)
+                )
             )
         ).distinct().count()
