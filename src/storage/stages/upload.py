@@ -23,16 +23,18 @@ class UploadStage(BaseStage):
     - Uploading converted MP4 files
     - Fallback to TS upload if conversion failed
     - Updating segment records with OSS paths
+    - Cleaning up local files after successful upload
     """
 
     @property
     def name(self) -> str:
         return "upload"
 
-    def __init__(self, config_path: Optional[str] = None):
+    def __init__(self, config_path: Optional[str] = None, delete_after_upload: bool = True):
         super().__init__()
         self._config_path = config_path
         self._uploader = None
+        self.delete_after_upload = delete_after_upload
 
     def _get_uploader(self):
         """Lazy-load TOS uploader."""
@@ -153,6 +155,34 @@ class UploadStage(BaseStage):
             results["mp4_status"] = "completed"
         elif results.get("ts_uploaded"):
             results["mp4_status"] = "failed"  # Conversion failed, fell back to TS
+
+        # Clean up local files after successful upload
+        if self.delete_after_upload:
+            files_deleted = []
+
+            # Delete MP4 file if it was uploaded
+            if results.get("mp4_uploaded") and mp4_path:
+                mp4_file = Path(mp4_path)
+                if mp4_file.exists():
+                    try:
+                        os.remove(mp4_file)
+                        files_deleted.append(str(mp4_file))
+                        self.logger.info(f"MP4 file deleted after upload: {mp4_file}")
+                    except OSError as e:
+                        self.logger.warning(f"Failed to delete MP4 file: {mp4_file} - {e}")
+
+            # Delete original TS file after successful upload (MP4 or TS fallback)
+            original_ts = Path(input_data.local_file_path)
+            if original_ts.exists() and (results.get("mp4_uploaded") or results.get("ts_uploaded")):
+                try:
+                    os.remove(original_ts)
+                    files_deleted.append(str(original_ts))
+                    self.logger.info(f"Original TS file deleted after upload: {original_ts}")
+                except OSError as e:
+                    self.logger.warning(f"Failed to delete original TS file: {original_ts} - {e}")
+
+            results["files_deleted"] = files_deleted
+            results["local_file_deleted"] = len(files_deleted) > 0
 
         return StageResult(
             status=StageStatus.COMPLETED,

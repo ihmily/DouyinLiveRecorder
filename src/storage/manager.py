@@ -177,8 +177,8 @@ class RecordingManager:
 
         # Initialize pipeline for VOD conversion
         if self.enable_pipeline and self.enable_upload:
-            self._pipeline = create_default_pipeline()
-            self.logger.info("VOD pipeline initialized (TS→MP4→Upload)")
+            self._pipeline = create_default_pipeline(delete_after_upload=self.delete_after_upload)
+            self.logger.info(f"VOD pipeline initialized (TS→MP4→Upload, delete_after_upload={self.delete_after_upload})")
 
         RecordingManager._instance = self
 
@@ -507,6 +507,12 @@ class RecordingManager:
                         # Update duration from conversion
                         if output.get("duration"):
                             segment.duration = output["duration"]
+
+                        # Mark local file deleted if cleanup was performed
+                        if output.get("local_file_deleted"):
+                            segment.local_file_deleted = True
+                            files_deleted = output.get("files_deleted", [])
+                            self.logger.info(f"Segment {segment_id}: Local files deleted: {files_deleted}")
 
                         # Mark upload complete
                         segment.upload_status = UploadStatus.COMPLETED
