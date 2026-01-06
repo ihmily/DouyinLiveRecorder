@@ -106,9 +106,14 @@ def graceful_shutdown(signum, frame):
 
     This handler:
     1. Sets exit_recording flag to stop new recordings
-    2. Sends SIGINT to all active FFmpeg processes
-    3. Waits for recordings to finish processing segments
-    4. Stops the recording manager (flushes upload queue)
+    2. Stops SegmentWatchers (final segments queued for upload)
+    3. Sends SIGINT to all active FFmpeg processes and waits for exit
+    4. Stops the recording manager which:
+       - Drains upload queue (completes all pending uploads, 120s timeout)
+       - Waits for cleanup completion (60s timeout)
+
+    FFmpeg processes are INTERRUPTED, but upload-cleanup workflows COMPLETE.
+    Total graceful shutdown time: ~3 minutes max.
     """
     global exit_recording
     signal_name = "SIGINT" if signum == signal.SIGINT else "SIGTERM"
@@ -156,10 +161,9 @@ def graceful_shutdown(signum, frame):
                     ctx.process.kill()
                     logger.warning(f"[{record_name}] FFmpeg 进程强制终止")
 
-    # Stop recording manager (flush upload queue)
+    # Stop recording manager (graceful: drain upload queue + wait for cleanup)
     if recording_manager:
-        logger.info("正在等待上传队列完成...")
-        recording_manager.stop()
+        recording_manager.stop(graceful=True)
 
     logger.info("优雅退出完成")
     sys.exit(0)

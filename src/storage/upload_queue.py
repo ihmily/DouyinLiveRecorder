@@ -81,6 +81,7 @@ class UploadWorker:
         self._worker_thread: threading.Thread | None = None
         self._retry_thread: threading.Thread | None = None
         self._is_running = False
+        self._draining = False  # Flag to reject new tasks during graceful shutdown
 
     def start(self) -> None:
         """Start the background worker thread."""
@@ -110,7 +111,7 @@ class UploadWorker:
         self.logger.debug("Upload worker started")
 
     def stop(self, wait: bool = True, timeout: float = 30.0) -> None:
-        """Stop the worker thread."""
+        """Stop the worker thread immediately."""
         self._stop_event.set()
         if wait:
             if self._worker_thread and self._worker_thread.is_alive():
@@ -118,12 +119,72 @@ class UploadWorker:
             if self._retry_thread and self._retry_thread.is_alive():
                 self._retry_thread.join(timeout=timeout)
         self._is_running = False
+        self._draining = False
         self.logger.debug("Upload worker stopped")
 
-    def enqueue(self, task: UploadTask) -> None:
-        """Add task to upload queue."""
+    def drain_and_stop(self, timeout: float = 120.0) -> bool:
+        """
+        Stop accepting new tasks and wait for queue to drain.
+
+        This method is used during graceful shutdown to ensure all pending
+        uploads complete before stopping the worker.
+
+        Args:
+            timeout: Maximum seconds to wait for queue drain (default 120.0)
+
+        Returns:
+            True if queue drained successfully, False if timeout expired
+        """
+        # Signal no new tasks should be added
+        self._draining = True
+        self.logger.info(f"开始排空上传队列，当前队列大小: {self.queue_size}")
+
+        # Wait for queue to empty with timeout
+        start = time.time()
+        last_log_time = start
+        while self.queue_size > 0 and (time.time() - start) < timeout:
+            time.sleep(1)
+            # Log progress every 10 seconds
+            if time.time() - last_log_time >= 10:
+                self.logger.info(f"上传队列排空中，剩余: {self.queue_size}")
+                last_log_time = time.time()
+
+        drained = self.queue_size == 0
+        if drained:
+            self.logger.info("上传队列已排空")
+        else:
+            self.logger.warning(f"上传队列排空超时，剩余 {self.queue_size} 个任务")
+
+        # Now stop the worker
+        self._stop_event.set()
+        if self._worker_thread and self._worker_thread.is_alive():
+            self._worker_thread.join(timeout=10.0)
+        if self._retry_thread and self._retry_thread.is_alive():
+            self._retry_thread.join(timeout=10.0)
+
+        self._is_running = False
+        self._draining = False
+        self.logger.debug("Upload worker stopped after drain")
+        return drained
+
+    def enqueue(self, task: UploadTask) -> bool:
+        """
+        Add task to upload queue.
+
+        Args:
+            task: Upload task to enqueue
+
+        Returns:
+            True if enqueued, False if worker is draining/stopped
+        """
+        if self._draining or not self._is_running:
+            self.logger.warning(
+                f"拒绝入队: worker正在关闭, segment_id={task.segment_id}, file={task.filename}"
+            )
+            return False
         self.task_queue.put(task)
         self.logger.debug(f"上传任务入队: segment_id={task.segment_id}, 文件={task.filename}, 队列大小={self.task_queue.qsize()}")
+        return True
 
     @property
     def queue_size(self) -> int:

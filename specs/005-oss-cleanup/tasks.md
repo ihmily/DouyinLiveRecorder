@@ -133,6 +133,23 @@
 
 ---
 
+## Phase 8: Graceful Shutdown Enhancement
+
+**Purpose**: Wait for upload-cleanup workflows to complete before exit (user request)
+
+**Goal**: FFmpeg recordings are INTERRUPTED, but pending uploads and cleanup tasks COMPLETE
+
+- [x] T035 Add `_draining` flag to UploadWorker to reject new tasks during shutdown in src/storage/upload_queue.py
+- [x] T036 Implement `drain_and_stop(timeout)` method in UploadWorker to wait for queue drain in src/storage/upload_queue.py
+- [x] T037 Modify `enqueue()` to return bool and check draining flag in src/storage/upload_queue.py
+- [x] T038 Implement `wait_for_completion(timeout)` method in StorageCleanup in src/storage/cleanup.py
+- [x] T039 Update `RecordingManager.stop(graceful=True)` to drain uploads then wait for cleanup in src/storage/manager.py
+- [x] T040 Update `graceful_shutdown()` docstring to reflect new behavior in main.py
+
+**Checkpoint**: Graceful shutdown waits for upload-cleanup workflow completion (max ~3 minutes)
+
+---
+
 ## Dependencies & Execution Order
 
 ### Phase Dependencies
@@ -239,12 +256,13 @@ WHERE session.ended_at IS NOT NULL
 
 | Metric | Value |
 |--------|-------|
-| **Total Tasks** | 34 |
+| **Total Tasks** | 40 |
 | **Setup + Foundation** | 2 |
 | **US1 (Core Trigger)** | 11 |
 | **US2 (Session Delete)** | 7 |
 | **US3 (Config)** | 4 |
 | **US4 (Logging)** | 6 |
 | **Polish** | 4 |
+| **Graceful Shutdown** | 6 |
 | **Parallel Opportunities** | 5 groups |
 | **Database Migration** | None needed |

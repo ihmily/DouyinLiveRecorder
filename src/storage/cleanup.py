@@ -80,6 +80,26 @@ class StorageCleanup:
         # Mutex for thread safety - blocks concurrent cleanup calls
         self._cleanup_lock = threading.Lock()
 
+    def wait_for_completion(self, timeout: float = 60.0) -> bool:
+        """
+        Wait for any in-progress cleanup to complete.
+
+        This method is used during graceful shutdown to ensure cleanup
+        operations finish before the application exits.
+
+        Args:
+            timeout: Maximum seconds to wait (default 60.0)
+
+        Returns:
+            True if cleanup completed (or wasn't running), False if timeout expired
+        """
+        acquired = self._cleanup_lock.acquire(timeout=timeout)
+        if acquired:
+            self._cleanup_lock.release()
+            return True
+        self.logger.warning(f"Cleanup wait timeout after {timeout}s")
+        return False
+
     def get_storage_stats(self) -> StorageStats:
         """
         Get current storage statistics without triggering cleanup.
@@ -170,17 +190,30 @@ class StorageCleanup:
         )
 
         # Get oldest sessions to delete
+        # Extract data within session context to avoid detached instance errors
+        sessions_to_delete = []
         with self.db_manager.get_session() as session:
             repo = RecordingRepository(session)
             oldest_sessions = repo.get_oldest_completed_sessions(limit=50)
+            # Extract needed attributes while session is open
+            for rec_session, session_size in oldest_sessions:
+                sessions_to_delete.append({
+                    'id': rec_session.id,
+                    'anchor_name': rec_session.anchor_name,
+                    'started_at': rec_session.started_at,
+                    'size': session_size
+                })
 
         # Delete sessions until we're under threshold
-        for rec_session, session_size in oldest_sessions:
+        for session_info in sessions_to_delete:
             if current_bytes <= target_bytes:
                 break
 
             # Delete this session
-            freed, errors = self._delete_session(rec_session.id, rec_session)
+            freed, errors = self._delete_session(
+                session_info['id'],
+                session_info  # Pass dict instead of ORM object
+            )
             result.sessions_deleted += 1
             result.bytes_freed += freed
             result.errors.extend(errors)
@@ -188,13 +221,14 @@ class StorageCleanup:
 
         return result
 
-    def _delete_session(self, session_id: int, rec_session=None) -> tuple[int, list[str]]:
+    def _delete_session(self, session_id: int, session_info: dict | None = None) -> tuple[int, list[str]]:
         """
         Delete a single session: OSS files first, then DB records.
 
         Args:
             session_id: Session ID to delete
-            rec_session: Optional session object for logging
+            session_info: Optional dict with session info for logging
+                          (keys: 'anchor_name', 'started_at')
 
         Returns:
             (bytes_freed, errors_list)
@@ -205,10 +239,10 @@ class StorageCleanup:
         bytes_freed = 0
 
         # Log session deletion start
-        if rec_session:
+        if session_info:
             self.logger.info(
-                f"Deleting session {session_id} ({rec_session.anchor_name}, "
-                f"started {rec_session.started_at})"
+                f"Deleting session {session_id} ({session_info.get('anchor_name', 'unknown')}, "
+                f"started {session_info.get('started_at', 'unknown')})"
             )
 
         # Get segments to delete

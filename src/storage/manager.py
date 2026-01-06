@@ -226,10 +226,31 @@ class RecordingManager:
 
         RecordingManager._instance = self
 
-    def stop(self) -> None:
-        """Stop background services."""
+    def stop(self, graceful: bool = True) -> None:
+        """
+        Stop background services.
+
+        Args:
+            graceful: If True, drain upload queue and wait for cleanup before stopping.
+                      If False, stop immediately (may lose pending uploads).
+        """
         if self._upload_worker:
-            self._upload_worker.stop()
+            if graceful:
+                # Phase 1: Drain queue first (uploads will trigger cleanup)
+                self.logger.info("正在等待上传队列完成...")
+                self._upload_worker.drain_and_stop(timeout=120.0)
+            else:
+                # Immediate stop
+                self._upload_worker.stop()
+
+        # Phase 2: Wait for any final cleanup to complete
+        if self._cleanup:
+            self.logger.info("等待清理任务完成...")
+            if self._cleanup.wait_for_completion(timeout=60.0):
+                self.logger.info("清理任务已完成")
+            else:
+                self.logger.warning("清理任务超时，继续退出流程")
+
         self.logger.info("Recording manager stopped")
 
     def start_recording(

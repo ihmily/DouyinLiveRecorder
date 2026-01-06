@@ -341,6 +341,163 @@ INFO  | ✓ OSS delete API test passed!
 
 ---
 
+### 9. Graceful Shutdown: Wait for Upload-Cleanup Workflow
+
+**Question**: 优雅退出的逻辑，能不能是等待这些任务处理结束了再退出？(Can graceful shutdown wait for upload-cleanup workflows to complete before exiting?)
+
+**Decision**: Yes. Implement graceful shutdown that:
+1. **Interrupts** FFmpeg recording processes (existing behavior)
+2. **Drains** upload queue - processes all pending uploads to completion
+3. **Waits** for any in-progress cleanup to finish
+
+**Rationale**:
+
+1. **Current Implementation Gap**:
+   - `graceful_shutdown()` in `main.py:103-165` handles signal-based shutdown
+   - It stops recordings, waits for FFmpeg processes (10s timeout)
+   - `upload_worker.stop()` sets `_stop_event` which **immediately exits** the worker loop
+   - **Problem**: Pending uploads in queue are abandoned, cleanup may be interrupted
+
+2. **Why Waiting for Full Workflow is Important**:
+   - Segments detected by SegmentWatcher are queued for upload
+   - Interrupting uploads loses recorded data (local files may be deleted later)
+   - Cleanup triggered by upload completion must finish to maintain data integrity
+   - The "upload → cleanup" chain is a single logical workflow
+
+3. **Proposed Solution - Two-Phase Stop**:
+
+   **Phase 1: Drain Queue** (new `drain_and_stop` method)
+   ```python
+   class UploadWorker:
+       def drain_and_stop(self, timeout: float = 120.0) -> bool:
+           """
+           Stop accepting new tasks and wait for queue to drain.
+
+           Returns True if queue drained successfully, False if timeout.
+           """
+           # Signal no new tasks should be added
+           self._draining = True
+           self.logger.info(f"开始排空上传队列，当前队列大小: {self.queue_size}")
+
+           # Wait for queue to empty with timeout
+           start = time.time()
+           while self.queue_size > 0 and (time.time() - start) < timeout:
+               time.sleep(1)
+               self.logger.debug(f"队列剩余: {self.queue_size}")
+
+           drained = self.queue_size == 0
+           if drained:
+               self.logger.info("上传队列已排空")
+           else:
+               self.logger.warning(f"上传队列排空超时，剩余 {self.queue_size} 个任务")
+
+           # Now stop the worker
+           self._stop_event.set()
+           if self._worker_thread and self._worker_thread.is_alive():
+               self._worker_thread.join(timeout=10.0)
+           if self._retry_thread and self._retry_thread.is_alive():
+               self._retry_thread.join(timeout=10.0)
+
+           self._is_running = False
+           return drained
+   ```
+
+   **Phase 2: Wait for Cleanup** (existing proposal)
+   ```python
+   class StorageCleanup:
+       def wait_for_completion(self, timeout: float = 60.0) -> bool:
+           """Wait for any in-progress cleanup to complete."""
+           acquired = self._cleanup_lock.acquire(timeout=timeout)
+           if acquired:
+               self._cleanup_lock.release()
+               return True
+           return False
+   ```
+
+4. **Updated RecordingManager.stop()**:
+   ```python
+   def stop(self, graceful: bool = True) -> None:
+       """
+       Stop background services.
+
+       Args:
+           graceful: If True, drain upload queue before stopping
+       """
+       if self._upload_worker:
+           if graceful:
+               # Drain queue first (uploads will trigger cleanup)
+               self.logger.info("正在等待上传队列完成...")
+               self._upload_worker.drain_and_stop(timeout=120.0)
+           else:
+               # Immediate stop
+               self._upload_worker.stop()
+
+       # Wait for any final cleanup to complete
+       if self._cleanup:
+           self.logger.info("等待清理任务完成...")
+           if self._cleanup.wait_for_completion(timeout=60.0):
+               self.logger.info("清理任务已完成")
+           else:
+               self.logger.warning("清理任务超时，继续退出流程")
+
+       self.logger.info("Recording manager stopped")
+   ```
+
+5. **Graceful Shutdown Sequence** (Complete):
+   ```
+   SIGINT/SIGTERM received
+   └── graceful_shutdown() called
+       │
+       ├── Phase 1: Stop Recordings
+       │   ├── Set exit_recording = True (prevent new recordings)
+       │   ├── For each active recording:
+       │   │   ├── Stop SegmentWatcher (final segments queued)
+       │   │   ├── Send SIGINT to FFmpeg process
+       │   │   └── Call recording_manager.end_recording()
+       │   └── Wait for FFmpeg processes to exit (10s timeout)
+       │
+       └── Phase 2: Complete Pending Work
+           └── recording_manager.stop(graceful=True)
+               ├── Drain upload queue (120s timeout)     ← NEW
+               │   └── Each upload triggers cleanup check
+               ├── Wait for cleanup completion (60s timeout) ← NEW
+               └── Exit
+   ```
+
+6. **Timeout Values**:
+   | Operation | Timeout | Rationale |
+   |-----------|---------|-----------|
+   | FFmpeg exit | 10s | Process should exit quickly after SIGINT |
+   | Upload queue drain | 120s | Large files may take time; allows ~20 uploads at 6s each |
+   | Cleanup wait | 60s | Allows multi-session cleanup to complete |
+   | Thread join | 10s | Quick cleanup after drain |
+
+7. **What Gets Interrupted vs Completed**:
+   | Component | Behavior | Reason |
+   |-----------|----------|--------|
+   | FFmpeg recording | **INTERRUPTED** | Can't wait indefinitely; segments already written |
+   | Pending uploads | **COMPLETED** | Data loss if abandoned |
+   | In-progress upload | **COMPLETED** | Part of drain process |
+   | Cleanup (triggered by upload) | **COMPLETED** | Data integrity |
+   | New recordings | **BLOCKED** | `exit_recording = True` |
+
+**Alternatives Considered**:
+
+| Alternative | Rejected Because |
+|-------------|-----------------|
+| Kill uploads immediately | Data loss - queued segments never uploaded |
+| Wait for FFmpeg indefinitely | Stream could be infinite; must interrupt |
+| Skip cleanup wait | Data integrity risk - partial deletion |
+| Persist queue to disk | Over-engineering; in-memory drain is sufficient |
+
+**Implementation Notes**:
+- Add `_draining` flag to prevent new enqueue during drain
+- Use `queue.qsize()` to monitor progress (approximately accurate)
+- Log progress every few seconds for visibility
+- Total graceful shutdown: ~3 minutes max (10s FFmpeg + 120s upload + 60s cleanup)
+
+---
+
 ## Summary of Decisions
 
 | Decision Area | Choice | Key Reason |
@@ -353,3 +510,5 @@ INFO  | ✓ OSS delete API test passed!
 | Configuration | `[OSS设置]` section, GB unit | Follows existing patterns |
 | Integration Point | UploadWorker callback | Synchronous, blocking per spec |
 | Delete API Testing | `scripts/test_tos_delete.py` | Validates TOS delete before production use |
+| Graceful Shutdown | Drain uploads (120s) + wait cleanup (60s) | Complete upload-cleanup workflow before exit |
+| FFmpeg Handling | Interrupt with SIGINT (10s timeout) | Streams are infinite; can't wait forever |

@@ -125,6 +125,71 @@ If this test fails, check:
 2. Observe logs - cleanup should only run once at a time
 3. Other upload threads should block and wait
 
+## Graceful Shutdown
+
+### Behavior on SIGINT/SIGTERM
+
+When the application receives a shutdown signal (Ctrl+C or SIGTERM):
+
+**Phase 1: Stop Recordings** (FFmpeg interrupted)
+1. Set `exit_recording = True` to prevent new recordings
+2. Stop all SegmentWatchers (final segments queued for upload)
+3. Send SIGINT to FFmpeg processes
+4. Wait for FFmpeg to exit (10s timeout, then force kill)
+
+**Phase 2: Complete Pending Work** (uploads and cleanup completed)
+5. **Drain upload queue** (120s timeout) - all queued segments are uploaded
+6. **Wait for cleanup** (60s timeout) - final cleanup after last upload completes
+7. Application exits
+
+### What Gets Interrupted vs Completed
+
+| Component | Behavior | Reason |
+|-----------|----------|--------|
+| FFmpeg recording | **INTERRUPTED** | Can't wait indefinitely; segments already written to disk |
+| Pending uploads | **COMPLETED** | Data loss if abandoned; segments need to reach OSS |
+| In-progress cleanup | **COMPLETED** | Data integrity; partial deletion causes orphaned files |
+| New recordings | **BLOCKED** | `exit_recording = True` prevents new starts |
+
+### Why This Design?
+
+1. **FFmpeg must be interrupted**: Live streams are infinite; we can't wait forever
+2. **Uploads must complete**: Segments on disk would be lost if not uploaded
+3. **Cleanup must complete**: Partial deletion leaves OSS/DB inconsistent
+
+### Timeout Values
+
+| Operation | Timeout | Rationale |
+|-----------|---------|-----------|
+| FFmpeg exit | 10s | Process should exit quickly after SIGINT |
+| Upload queue drain | 120s | ~20 uploads at 6s each |
+| Cleanup wait | 60s | Multi-session cleanup |
+| **Total max** | **~3 minutes** | Acceptable for graceful shutdown |
+
+### Logs During Shutdown
+
+```
+INFO  | 收到 SIGINT 信号，正在优雅退出...
+INFO  | [主播名] SegmentWatcher 已停止
+INFO  | [主播名] 已发送停止信号到 FFmpeg
+INFO  | [主播名] FFmpeg 进程已退出
+INFO  | 正在等待上传队列完成...
+INFO  | 开始排空上传队列，当前队列大小: 5
+INFO  | 队列剩余: 3
+INFO  | 队列剩余: 1
+INFO  | 上传队列已排空
+INFO  | 等待清理任务完成...
+INFO  | 清理任务已完成
+INFO  | Recording manager stopped
+INFO  | 优雅退出完成
+```
+
+If timeouts occur:
+```
+WARNING | 上传队列排空超时，剩余 2 个任务
+WARNING | 清理任务超时，继续退出流程
+```
+
 ## Troubleshooting
 
 ### Cleanup Not Triggering
