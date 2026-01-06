@@ -176,3 +176,87 @@ SegmentWatcher detects file → on_segment_created() → Pipeline.execute([Conve
 | Frontend | Vue 3 + Element Plus | Design doc alignment |
 | Backend | FastAPI | Python, async, OpenAPI |
 | DB Changes | Add 3 fields | Minimal migration |
+
+---
+
+## 9. Bug Fix Analysis: Pipeline Integration Error (2026-01-06)
+
+### Issue Report
+```
+2026-01-06 01:56:59.408 | ERROR - [序号8 王者荣耀易辞(混的暃)] 处理分段失败:
+'RecordingManager' object has no attribute 'process_segment_with_pipeline_sync'
+```
+
+### Root Cause
+
+The code at `src/storage/manager.py:294` references a method that doesn't exist:
+
+```python
+# Line 294 - CALL (INCORRECT)
+thread = threading.Thread(
+    target=self.process_segment_with_pipeline_sync,  # ❌ Method doesn't exist
+    args=(segment_id, segment_path, save_type.lower(), session_id, anchor_name),
+    ...
+)
+```
+
+The actual method is defined at line 541 with a different name:
+
+```python
+# Line 541 - DEFINITION (CORRECT)
+def process_segment_sync(  # ✅ Actual method name
+    self,
+    segment_id: int,
+    local_path: str,
+    file_format: str,
+    session_id: int,
+    anchor_name: str,
+    platform: str
+) -> bool:
+```
+
+### Additional Issue: Missing Parameter
+
+The call passes 5 positional arguments, but the method expects 6:
+
+| Position | Passed | Expected |
+|----------|--------|----------|
+| 1 | `segment_id` | `segment_id` |
+| 2 | `segment_path` | `local_path` |
+| 3 | `save_type.lower()` | `file_format` |
+| 4 | `session_id` | `session_id` |
+| 5 | `anchor_name` | `anchor_name` |
+| 6 | ❌ **MISSING** | `platform` |
+
+The `platform` parameter is available in the caller's scope but not passed.
+
+### Decision: Fix the call site
+
+**Fix Strategy**: Update the call at line 293-298 to use the correct method name AND pass all required parameters.
+
+**Rationale**:
+1. The method name `process_segment_sync` is more concise and follows existing naming patterns
+2. Adding the missing `platform` parameter ensures the pipeline has all required context for OSS path construction
+3. Minimal change - single file edit at one location
+
+### Resolution
+
+Edit `src/storage/manager.py` lines 293-298:
+
+**Before**:
+```python
+thread = threading.Thread(
+    target=self.process_segment_with_pipeline_sync,
+    args=(segment_id, segment_path, save_type.lower(), session_id, anchor_name),
+    daemon=True
+)
+```
+
+**After**:
+```python
+thread = threading.Thread(
+    target=self.process_segment_sync,
+    args=(segment_id, segment_path, save_type.lower(), session_id, anchor_name, platform),
+    daemon=True
+)
+```
