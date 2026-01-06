@@ -58,6 +58,8 @@ src/
 │   ├── upload_queue.py     # Modify - add cleanup hook after upload
 │   ├── manager.py          # Modify - add cleanup orchestration
 │   └── cleanup.py          # NEW - cleanup logic with mutex
+scripts/
+└── test_tos_delete.py      # NEW - test script for OSS delete API
 config/
 └── config.ini              # Add cleanup threshold to [OSS设置]
 ```

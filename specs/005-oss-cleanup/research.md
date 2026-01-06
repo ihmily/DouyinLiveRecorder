@@ -229,6 +229,110 @@ def _process_task(self, task: UploadTask) -> bool:
 
 ---
 
+### 8. OSS Delete API Testing
+
+**Question**: How to verify that the OSS delete API works correctly before relying on it for cleanup?
+
+**Decision**: Create a dedicated test script `scripts/test_tos_delete.py` that uploads a test file and immediately deletes it.
+
+**Rationale**:
+- Validates TOS credentials and permissions for DELETE operations
+- Follows existing testing pattern (`scripts/test_tos.py` for upload)
+- Quick verification without affecting production data
+- Can be run as part of deployment validation
+
+**Test Script Design**:
+```python
+# scripts/test_tos_delete.py
+"""
+Test TOS delete API by uploading and deleting a test file.
+Usage: python scripts/test_tos_delete.py
+"""
+import os
+import sys
+import configparser
+from datetime import datetime
+
+# Add project root to path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from src.storage.tos_uploader import TOSUploader
+from loguru import logger
+
+def test_upload_and_delete():
+    """Test file upload followed by deletion."""
+    # Load TOS credentials
+    config = configparser.ConfigParser()
+    config_path = 'config/tos_credentials.ini'
+    config.read(config_path, encoding='utf-8-sig')
+
+    # Initialize uploader
+    uploader = TOSUploader(
+        access_key=config.get('tos', 'access_key_id'),
+        secret_key=config.get('tos', 'secret_access_key'),
+        endpoint=config.get('tos', 'endpoint'),
+        region=config.get('tos', 'region'),
+        bucket=config.get('tos', 'bucket')
+    )
+
+    # Generate unique test key
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    test_key = f"_test_delete/{timestamp}_test.txt"
+    test_content = f"Test file created at {timestamp}"
+
+    logger.info(f"Step 1: Uploading test file to {test_key}")
+
+    # Upload test file
+    upload_success = uploader.put_object(test_key, test_content.encode('utf-8'))
+    if not upload_success:
+        logger.error("Upload failed!")
+        return False
+    logger.info("Upload successful")
+
+    logger.info(f"Step 2: Deleting test file {test_key}")
+
+    # Delete test file
+    delete_success = uploader.delete_object(test_key)
+    if not delete_success:
+        logger.error("Delete failed!")
+        return False
+    logger.info("Delete successful")
+
+    logger.info("✓ OSS delete API test passed!")
+    return True
+
+if __name__ == '__main__':
+    success = test_upload_and_delete()
+    sys.exit(0 if success else 1)
+```
+
+**Test Execution**:
+```bash
+python scripts/test_tos_delete.py
+```
+
+**Expected Output**:
+```
+INFO  | Step 1: Uploading test file to _test_delete/20260106_120000_test.txt
+INFO  | Upload successful
+INFO  | Step 2: Deleting test file _test_delete/20260106_120000_test.txt
+INFO  | Delete successful
+INFO  | ✓ OSS delete API test passed!
+```
+
+**Error Cases to Validate**:
+1. **Missing credentials**: Script fails with clear error message
+2. **Invalid bucket**: Script fails with TOS authentication error
+3. **No delete permission**: Script fails at delete step (upload works)
+4. **Network error**: Script handles and reports gracefully
+
+**Alternatives Considered**:
+- Unit test with mocking: Doesn't validate real TOS connectivity
+- Integration into existing test_tos.py: Keeps delete testing separate for clarity
+- pytest framework: Project doesn't use formal test framework yet
+
+---
+
 ## Summary of Decisions
 
 | Decision Area | Choice | Key Reason |
@@ -240,3 +344,4 @@ def _process_task(self, task: UploadTask) -> bool:
 | DB Record Update | Add oss_deleted boolean | Preserves audit trail |
 | Configuration | `[OSS设置]` section, GB unit | Follows existing patterns |
 | Integration Point | UploadWorker callback | Synchronous, blocking per spec |
+| Delete API Testing | `scripts/test_tos_delete.py` | Validates TOS delete before production use |

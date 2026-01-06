@@ -95,7 +95,34 @@ INFO  | OSS cleanup complete: 3 sessions, 8.5GB freed in 12.3s
 
 ## Testing
 
-### Manual Test
+### Test OSS Delete API
+
+Before enabling cleanup, verify that the OSS delete API works correctly:
+
+```bash
+python scripts/test_tos_delete.py
+```
+
+This test script:
+1. Uploads a small test file to `_test_delete/` folder
+2. Immediately deletes the test file
+3. Reports success or failure
+
+**Expected Output**:
+```
+INFO  | Step 1: Uploading test file to _test_delete/20260106_120000_test.txt
+INFO  | Upload successful
+INFO  | Step 2: Deleting test file _test_delete/20260106_120000_test.txt
+INFO  | Delete successful
+INFO  | ✓ OSS delete API test passed!
+```
+
+If this test fails, check:
+- TOS credentials in `config/tos_credentials.ini`
+- Bucket permissions allow DELETE operations
+- Network connectivity to TOS endpoint
+
+### Manual Cleanup Test
 
 1. Set a low threshold (e.g., 100MB)
 2. Upload several recordings
