@@ -5,29 +5,35 @@
 
 ## Entity Changes
 
-### Modified Entity: RecordingSegment
+### No Schema Changes Required
 
-**Current State**: Tracks individual video segments with upload status and file paths.
+**Approach**: Hard delete records after OSS cleanup (no new fields needed)
 
-**Change**: Add `oss_deleted` field to track OSS deletion status.
+When a session is cleaned up:
+1. Delete OSS files (TS and MP4)
+2. Delete all `RecordingSegment` records for the session
+3. Delete the `RecordingSession` record
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `oss_deleted` | Boolean | False | Whether segment files have been deleted from OSS |
+**Rationale**:
+- Simpler implementation - no database migration required
+- Database stays clean - only contains active/valid data
+- Storage calculation remains simple (sum all existing records)
 
-**Rationale**: Preserves audit trail while excluding deleted segments from storage calculations.
+### Existing Entities (No Modifications)
 
-**Migration Required**: Yes - add column with default False
-
-```sql
-ALTER TABLE recording_segments ADD COLUMN oss_deleted BOOLEAN DEFAULT FALSE;
-```
-
-### No Changes: RecordingSession
+#### RecordingSession
 
 The `RecordingSession` entity already has all required fields:
 - `started_at`: Used for FIFO ordering
 - `ended_at`: Used to identify completed (deletable) vs active (protected) sessions
+
+#### RecordingSegment
+
+The `RecordingSegment` entity already has all required fields:
+- `file_size`: Used for storage calculation
+- `oss_path`: Used to identify files to delete
+- `mp4_oss_path`: Used to identify MP4 files to delete
+- `upload_status`: Used to filter completed uploads
 
 ### Query Views (Logical)
 
@@ -39,10 +45,11 @@ Aggregate view for calculating total storage used in OSS.
 ```
 SUM(file_size) WHERE upload_status = 'COMPLETED'
                  AND oss_path IS NOT NULL
-                 AND oss_deleted = FALSE
 ```
 
 **Returns**: Integer (bytes)
+
+**Note**: Since we hard delete records, no need to filter by deletion status.
 
 #### OldestCompletedSessions
 
@@ -56,7 +63,6 @@ JOIN recording_segments segment ON segment.session_id = session.id
 WHERE session.ended_at IS NOT NULL
   AND segment.upload_status = 'COMPLETED'
   AND segment.oss_path IS NOT NULL
-  AND segment.oss_deleted = FALSE
 GROUP BY session.id
 ORDER BY session.started_at ASC
 ```
@@ -65,29 +71,25 @@ ORDER BY session.started_at ASC
 
 ## State Transitions
 
-### Segment Lifecycle (Updated)
+### Segment Lifecycle
 
 ```
-                                    ┌─────────────────┐
-                                    │                 │
-                                    ▼                 │
 ┌─────────┐    ┌───────────┐    ┌───────────┐    ┌───────────┐
-│ PENDING │───▶│ UPLOADING │───▶│ COMPLETED │───▶│  DELETED  │
+│ PENDING │───▶│ UPLOADING │───▶│ COMPLETED │───▶│ [DELETED] │
 └─────────┘    └───────────┘    └───────────┘    └───────────┘
-                    │                                   │
                     │                                   │
                     ▼                                   │
                ┌────────┐                               │
-               │ FAILED │◀──────────────────────────────┘
-               └────────┘        (OSS delete failure)
+               │ FAILED │                               │
+               └────────┘                               │
 ```
 
-**New State**: `DELETED` (represented by `oss_deleted = True`)
+**Note**: `[DELETED]` means the record is removed from the database entirely.
 
-**Transition: COMPLETED → DELETED**
+**Transition: COMPLETED → [DELETED]**
 - Trigger: Storage cleanup selects session for deletion
-- Action: Delete files from OSS, set `oss_deleted = True`
-- Reversible: No (files are permanently deleted from OSS)
+- Action: Delete OSS files, then delete database records
+- Result: No record remains in database
 
 ### Session Cleanup Eligibility
 
@@ -111,7 +113,7 @@ ORDER BY session.started_at ASC
                              │ Storage exceeds threshold
                              ▼
                     ┌────────────────┐
-                    │    CLEANED     │◄──── All segments oss_deleted=True
+                    │   [REMOVED]    │◄──── Record deleted from DB
                     │                │
                     └────────────────┘
 ```
@@ -132,23 +134,31 @@ ORDER BY session.started_at ASC
 |------|-----------|
 | Session must be completed | `ended_at IS NOT NULL` |
 | Session must have uploaded segments | At least one segment with `upload_status = COMPLETED` |
-| Segments not already deleted | `oss_deleted = FALSE` |
+| Session must have OSS files | At least one segment with `oss_path IS NOT NULL` |
 
 ## Data Integrity Constraints
 
 ### Cascade Behavior
 
-When a session's segments are cleaned up:
-- Session record remains (for audit trail)
-- All segment records remain with `oss_deleted = True`
+When a session is cleaned up:
+- All segment records are deleted from database
+- Session record is deleted from database
 - OSS files are permanently deleted
+
+### Deletion Order
+
+To maintain referential integrity:
+1. Delete OSS files first (can be retried if failed)
+2. Delete segment records
+3. Delete session record
+4. Commit transaction
 
 ### Atomicity
 
 Cleanup of a single session should be atomic:
-- Either all segments are marked `oss_deleted = True`, or none
-- On partial OSS deletion failure: log error, mark successful deletions, continue with next session
-- Database transaction commits only after all OSS deletions for a session complete
+- OSS deletion: Best effort, log errors, continue
+- Database deletion: All records deleted in single transaction
+- On partial OSS failure: Still delete records (files may be orphaned, but that's acceptable)
 
 ## Configuration Schema
 

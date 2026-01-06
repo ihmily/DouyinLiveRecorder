@@ -1,132 +1,135 @@
 # Tasks: OSS Storage Cleanup
 
 **Input**: Design documents from `/specs/005-oss-cleanup/`
-**Prerequisites**: plan.md (required), spec.md (required), research.md, data-model.md, contracts/
+**Prerequisites**: plan.md, spec.md, research.md, data-model.md, contracts/
 
-**Tests**: Manual testing via scripts (no formal test framework in this project)
+**Tests**: Manual testing via scripts (no formal test framework)
 
-**Organization**: Tasks are grouped by user story to enable independent implementation and testing of each story.
+**Organization**: Tasks grouped by user story for independent implementation and testing
+
+**Key Design Decision**: **Hard Delete** - After deleting OSS files, database records (segments + session) are also deleted. No new database fields needed.
 
 ## Format: `[ID] [P?] [Story] Description`
 
 - **[P]**: Can run in parallel (different files, no dependencies)
-- **[Story]**: Which user story this task belongs to (e.g., US1, US2, US3, US4)
-- Include exact file paths in descriptions
+- **[Story]**: Maps to user story (US1, US2, US3, US4)
+- All tasks include exact file paths
 
 ## Path Conventions
 
-- **Single project**: `src/storage/` for storage module, `scripts/` for test scripts, `config/` for configuration
-- **Migrations**: `migrations/` at repository root
+- `src/storage/` - Storage module
+- `scripts/` - Test scripts
+- `config/` - Configuration files
+- **No migrations needed** - Hard delete approach requires no schema changes
 
 ---
 
 ## Phase 1: Setup
 
-**Purpose**: Create test script for OSS delete API and database migration
+**Purpose**: Create test script for OSS delete API validation
 
-- [ ] T001 [P] Create TOS delete API test script in scripts/test_tos_delete.py
-- [ ] T002 [P] Create database migration for oss_deleted field in migrations/002_add_oss_deleted.py
+- [ ] T001 Create TOS delete API test script (upload + delete test file) in scripts/test_tos_delete.py
 
 ---
 
 ## Phase 2: Foundational (Blocking Prerequisites)
 
-**Purpose**: Core infrastructure that MUST be complete before ANY user story can be implemented
+**Purpose**: Configuration that MUST be complete before user story implementation
 
-**⚠️ CRITICAL**: No user story work can begin until this phase is complete
+- [ ] T002 Add cleanup configuration fields (`启用OSS存储清理(是/否)`, `OSS存储清理阈值(GB)`) to config/config.ini under [OSS设置] section
 
-- [ ] T003 Add oss_deleted field to RecordingSegment model in src/storage/models.py
-- [ ] T004 Run migration to add oss_deleted column to database
-- [ ] T005 Add cleanup configuration fields to config/config.ini ([OSS设置] section)
-
-**Checkpoint**: Foundation ready - model updated, migration applied, config ready
+**Checkpoint**: Config ready, no database changes needed
 
 ---
 
 ## Phase 3: User Story 1 - Automatic Storage Cleanup on Upload (Priority: P1) 🎯 MVP
 
-**Goal**: System automatically checks and cleans up old recordings from OSS when storage exceeds threshold after each upload
+**Goal**: Trigger cleanup check after each upload, with mutex protection for thread safety
 
-**Independent Test**: Configure low threshold (100MB), upload several recordings, verify oldest sessions deleted when threshold exceeded
+**Independent Test**: Configure 100MB threshold, upload recordings, verify cleanup triggers when exceeded
 
 ### Implementation for User Story 1
 
-- [ ] T006 [P] [US1] Add get_total_oss_storage() method to RecordingRepository in src/storage/repository.py
-- [ ] T007 [P] [US1] Create CleanupResult and StorageStats dataclasses in src/storage/cleanup.py
-- [ ] T008 [US1] Create StorageCleanup class skeleton with constructor and threading.Lock in src/storage/cleanup.py
-- [ ] T009 [US1] Implement get_storage_stats() method in StorageCleanup class in src/storage/cleanup.py
-- [ ] T010 [US1] Implement trigger_cleanup() method with mutex locking in src/storage/cleanup.py
-- [ ] T011 [US1] Add cleanup callback hook to UploadWorker._process_task() in src/storage/upload_queue.py
-- [ ] T012 [US1] Integrate StorageCleanup into RecordingManager.from_config() in src/storage/manager.py
-- [ ] T013 [US1] Add cleanup property to RecordingManager in src/storage/manager.py
-- [ ] T014 [US1] Wire up cleanup trigger in manager's upload completion handler in src/storage/manager.py
+- [ ] T003 [P] [US1] Add get_total_oss_storage() method (SUM file_size WHERE upload_status=COMPLETED AND oss_path IS NOT NULL) in src/storage/repository.py
+- [ ] T004 [P] [US1] Create CleanupResult dataclass (triggered, sessions_deleted, bytes_freed, errors, duration_seconds) in src/storage/cleanup.py
+- [ ] T005 [P] [US1] Create StorageStats dataclass (total_bytes, threshold_bytes, over_threshold, sessions_count) in src/storage/cleanup.py
+- [ ] T006 [US1] Create StorageCleanup class with constructor (repository, tos_uploader, threshold_bytes, enabled) and threading.Lock in src/storage/cleanup.py
+- [ ] T007 [US1] Implement get_storage_stats() method in StorageCleanup class in src/storage/cleanup.py
+- [ ] T008 [US1] Implement trigger_cleanup() method with mutex lock (acquire, check threshold, cleanup if needed, release) in src/storage/cleanup.py
+- [ ] T009 [US1] Add cleanup callback hook (_cleanup_callback) to UploadWorker after successful upload in src/storage/upload_queue.py
+- [ ] T010 [US1] Parse cleanup config (enabled, threshold_gb) in RecordingManager.from_config() in src/storage/manager.py
+- [ ] T011 [US1] Create StorageCleanup instance in RecordingManager.__init__() when enabled in src/storage/manager.py
+- [ ] T012 [US1] Add cleanup property to RecordingManager in src/storage/manager.py
+- [ ] T013 [US1] Wire cleanup.trigger_cleanup() to upload completion handler in src/storage/manager.py
 
-**Checkpoint**: At this point, automatic cleanup triggers on each upload with mutex protection
+**Checkpoint**: Cleanup triggers on upload with mutex protection
 
 ---
 
-## Phase 4: User Story 2 - Session-Based Cleanup Granularity (Priority: P1)
+## Phase 4: User Story 2 - Session-Based Cleanup with Hard Delete (Priority: P1)
 
-**Goal**: Cleanup deletes entire recording sessions (all segments) rather than individual segments, in FIFO order
+**Goal**: Delete entire sessions (OSS files + DB records) in FIFO order, protect active sessions
 
-**Independent Test**: Create multiple sessions with multiple segments, trigger cleanup, verify all segments of deleted sessions removed while other sessions remain complete
+**Independent Test**: Create multi-segment sessions, trigger cleanup, verify OSS files AND database records deleted for oldest sessions
 
 ### Implementation for User Story 2
 
-- [ ] T015 [P] [US2] Add get_oldest_completed_sessions() method to RecordingRepository in src/storage/repository.py
-- [ ] T016 [P] [US2] Add get_session_segments_for_cleanup() method to RecordingRepository in src/storage/repository.py
-- [ ] T017 [P] [US2] Add mark_segments_oss_deleted() method to RecordingRepository in src/storage/repository.py
-- [ ] T018 [US2] Implement _delete_session() private method in StorageCleanup class in src/storage/cleanup.py
-- [ ] T019 [US2] Implement _perform_cleanup() method with FIFO session selection in src/storage/cleanup.py
-- [ ] T020 [US2] Handle active session protection (ended_at IS NULL) in cleanup logic in src/storage/cleanup.py
+- [ ] T014 [P] [US2] Add get_oldest_completed_sessions(limit) method (ORDER BY started_at ASC, ended_at IS NOT NULL) in src/storage/repository.py
+- [ ] T015 [P] [US2] Add get_session_segments_for_cleanup(session_id) method (oss_path IS NOT NULL) in src/storage/repository.py
+- [ ] T016 [P] [US2] Add delete_session_with_segments(session_id) method (DELETE segments then DELETE session) in src/storage/repository.py
+- [ ] T017 [US2] Implement _delete_oss_files_for_segment() helper (delete oss_path, delete mp4_oss_path if exists) in src/storage/cleanup.py
+- [ ] T018 [US2] Implement _delete_session() method: 1) get segments, 2) delete OSS files, 3) delete DB records via repository in src/storage/cleanup.py
+- [ ] T019 [US2] Implement _perform_cleanup() method: loop oldest sessions until storage < threshold in src/storage/cleanup.py
+- [ ] T020 [US2] Add active session protection filter (ended_at IS NOT NULL) to get_oldest_completed_sessions() in src/storage/repository.py
 
-**Checkpoint**: At this point, cleanup deletes entire sessions in FIFO order, protects active recordings
+**Checkpoint**: Sessions deleted with OSS files AND database records in FIFO order
 
 ---
 
 ## Phase 5: User Story 3 - Cleanup Configuration (Priority: P2)
 
-**Goal**: Configurable storage threshold for cleanup, with enable/disable flag
+**Goal**: Configurable threshold with enable/disable flag, sensible defaults
 
-**Independent Test**: Modify config values, verify cleanup respects new threshold settings and enable/disable flag
+**Independent Test**: Change config values, verify cleanup behavior respects settings
 
 ### Implementation for User Story 3
 
-- [ ] T021 [US3] Parse cleanup_enabled from config in RecordingManager.from_config() in src/storage/manager.py
-- [ ] T022 [US3] Parse cleanup_threshold_gb from config and convert to bytes in src/storage/manager.py
-- [ ] T023 [US3] Handle threshold=0 as disabled in StorageCleanup.trigger_cleanup() in src/storage/cleanup.py
-- [ ] T024 [US3] Add default values (disabled, 0GB) for missing config settings in src/storage/manager.py
+- [ ] T021 [US3] Add default value handling for missing cleanup config (disabled by default, 0GB threshold) in src/storage/manager.py
+- [ ] T022 [US3] Handle threshold=0 as cleanup disabled in StorageCleanup.trigger_cleanup() in src/storage/cleanup.py
+- [ ] T023 [US3] Convert threshold_gb to threshold_bytes (GB * 1024^3) in RecordingManager.from_config() in src/storage/manager.py
+- [ ] T024 [US3] Skip cleanup instantiation when disabled in RecordingManager in src/storage/manager.py
 
-**Checkpoint**: At this point, cleanup is fully configurable via config.ini
+**Checkpoint**: Cleanup fully configurable via config.ini
 
 ---
 
 ## Phase 6: User Story 4 - Cleanup Logging and Visibility (Priority: P3)
 
-**Goal**: Comprehensive logging of cleanup activities for audit and troubleshooting
+**Goal**: Comprehensive logging for audit trail and troubleshooting
 
-**Independent Test**: Trigger cleanup, verify log entries show sessions deleted, space freed, current storage, and any errors
+**Independent Test**: Trigger cleanup, verify logs show sessions deleted, bytes freed, errors
 
 ### Implementation for User Story 4
 
-- [ ] T025 [P] [US4] Add cleanup trigger logging (current storage, threshold) in src/storage/cleanup.py
-- [ ] T026 [P] [US4] Add session deletion logging (session_id, anchor_name, started_at) in src/storage/cleanup.py
-- [ ] T027 [P] [US4] Add segment deletion logging (segment_id, oss_path, mp4_oss_path) in src/storage/cleanup.py
-- [ ] T028 [P] [US4] Add error logging for OSS deletion failures in src/storage/cleanup.py
-- [ ] T029 [US4] Add cleanup summary logging (sessions deleted, bytes freed, duration) in src/storage/cleanup.py
+- [ ] T025 [P] [US4] Add cleanup trigger log (current storage, threshold) at start of trigger_cleanup() in src/storage/cleanup.py
+- [ ] T026 [P] [US4] Add session deletion log (session_id, anchor_name, started_at) in _delete_session() in src/storage/cleanup.py
+- [ ] T027 [P] [US4] Add segment file deletion log (segment_id, oss_path, mp4_oss_path) in _delete_oss_files_for_segment() in src/storage/cleanup.py
+- [ ] T028 [P] [US4] Add OSS deletion error log (file path, error message) with error collection in src/storage/cleanup.py
+- [ ] T029 [P] [US4] Add database record deletion log (session_id, segment_count deleted) in _delete_session() in src/storage/cleanup.py
+- [ ] T030 [US4] Add cleanup summary log (sessions deleted, bytes freed, duration) at end of trigger_cleanup() in src/storage/cleanup.py
 
-**Checkpoint**: All cleanup operations have complete audit trail in logs
+**Checkpoint**: Complete audit trail in logs for all cleanup operations
 
 ---
 
 ## Phase 7: Polish & Cross-Cutting Concerns
 
-**Purpose**: Final verification and edge case handling
+**Purpose**: Final integration, error handling, and verification
 
-- [ ] T030 Handle orphaned records (OSS files already deleted) gracefully in src/storage/cleanup.py
-- [ ] T031 Export StorageCleanup, CleanupResult, StorageStats from src/storage/__init__.py
-- [ ] T032 Run test_tos_delete.py to verify OSS delete API works
-- [ ] T033 Manual end-to-end test: configure low threshold, trigger uploads, verify cleanup behavior
+- [ ] T031 Handle orphaned records gracefully (OSS files already deleted) - treat as success, still delete DB records in src/storage/cleanup.py
+- [ ] T032 Export StorageCleanup, CleanupResult, StorageStats from src/storage/__init__.py
+- [ ] T033 Run scripts/test_tos_delete.py to verify OSS delete API works
+- [ ] T034 Manual end-to-end test: low threshold → uploads → verify oldest sessions deleted (OSS + DB)
 
 ---
 
@@ -134,102 +137,114 @@
 
 ### Phase Dependencies
 
-- **Setup (Phase 1)**: No dependencies - can start immediately
-- **Foundational (Phase 2)**: Depends on T001, T002 completion - BLOCKS all user stories
-- **User Story 1 (Phase 3)**: Depends on Foundational phase completion
-- **User Story 2 (Phase 4)**: Depends on User Story 1 core (T008-T010)
-- **User Story 3 (Phase 5)**: Depends on Foundational phase completion (can parallel with US1/US2)
-- **User Story 4 (Phase 6)**: Can be done in parallel with US1/US2 after Foundational
-- **Polish (Phase 7)**: Depends on all user stories being complete
+```
+Phase 1 (Setup)      ──┐
+                       ├──► Phase 3 (US1) ──► Phase 4 (US2) ──┐
+Phase 2 (Foundation) ──┘                                      │
+                       ├──► Phase 5 (US3) ────────────────────┼──► Phase 7 (Polish)
+                       └──► Phase 6 (US4) ────────────────────┘
+```
 
 ### User Story Dependencies
 
-- **User Story 1 (P1)**: Core cleanup mechanism - foundational for US2
-- **User Story 2 (P1)**: Session-based deletion - builds on US1's trigger mechanism
-- **User Story 3 (P2)**: Configuration - can parallel with US1/US2, integrates at manager level
-- **User Story 4 (P3)**: Logging - can be added incrementally to cleanup methods
-
-### Within Each User Story
-
-- Repository methods before cleanup class methods
-- Core mechanism before edge case handling
-- Integration last (manager, upload_queue)
+| Story | Depends On | Can Parallel With |
+|-------|------------|-------------------|
+| US1 (Core Trigger) | Foundation | - |
+| US2 (Session Delete) | US1 (T006-T008) | US3, US4 |
+| US3 (Config) | Foundation | US1, US2, US4 |
+| US4 (Logging) | Foundation | US1, US2, US3 |
 
 ### Parallel Opportunities
 
-**Setup Phase**:
-- T001, T002 can run in parallel (different files)
+**Phase 1+2**: T001, T002 (different files)
 
-**Foundational Phase**:
-- T003, T005 can run in parallel (different files)
-- T004 depends on T003 (migration needs model update)
+**User Story 1**: T003, T004, T005 (repository.py vs cleanup.py)
 
-**User Story 1**:
-- T006, T007 can run in parallel (repository.py vs cleanup.py)
-- T011, T012-T014 sequential (upload_queue.py then manager.py)
+**User Story 2**: T014, T015, T016 (all repository methods)
 
-**User Story 2**:
-- T015, T016, T017 can run in parallel (all repository methods)
-- T018-T020 sequential (cleanup.py methods)
-
-**User Story 3**:
-- T021-T024 sequential (all in manager.py)
-
-**User Story 4**:
-- T025, T026, T027, T028 can run in parallel (different logging points)
-- T029 depends on others (summary at end)
-
----
-
-## Parallel Example: User Story 2
-
-```bash
-# Launch all repository methods for User Story 2 together:
-Task: "Add get_oldest_completed_sessions() method in src/storage/repository.py"
-Task: "Add get_session_segments_for_cleanup() method in src/storage/repository.py"
-Task: "Add mark_segments_oss_deleted() method in src/storage/repository.py"
-```
+**User Story 4**: T025, T026, T027, T028, T029 (different logging points)
 
 ---
 
 ## Implementation Strategy
 
-### MVP First (User Story 1 Only)
+### MVP First (US1 Only)
 
-1. Complete Phase 1: Setup (test script + migration)
-2. Complete Phase 2: Foundational (model + config)
-3. Complete Phase 3: User Story 1 (basic cleanup trigger)
-4. **STOP and VALIDATE**: Test automatic cleanup triggers on upload
-5. Can operate in production with hard-coded session selection
+1. T001, T002 (parallel) - Setup + Config
+2. T003-T013 - Core cleanup trigger with mutex
+3. **VALIDATE**: Verify cleanup triggers on upload
 
 ### Incremental Delivery
 
-1. Complete Setup + Foundational → Foundation ready
-2. Add User Story 1 → Basic cleanup works → Deploy MVP
-3. Add User Story 2 → FIFO session deletion → Deploy
-4. Add User Story 3 → Configurable threshold → Deploy
-5. Add User Story 4 → Full logging → Deploy final version
+| Increment | Tasks | Deliverable |
+|-----------|-------|-------------|
+| MVP | T001-T013 | Cleanup triggers on upload |
+| +US2 | T014-T020 | Session hard delete (OSS + DB) |
+| +US3 | T021-T024 | Configurable threshold |
+| +US4 | T025-T030 | Full logging |
+| Polish | T031-T034 | Production ready |
 
 ### Recommended Execution Order
 
-1. T001, T002 (parallel) - Setup
-2. T003, T005 (parallel) - Foundational
-3. T004 - Run migration
-4. T006, T007 (parallel) - US1 foundations
-5. T008-T014 (sequential) - US1 core
-6. T015-T017 (parallel) - US2 repository
-7. T018-T020 (sequential) - US2 cleanup
-8. T021-T024 (sequential) - US3 config
-9. T025-T029 (mostly parallel) - US4 logging
-10. T030-T033 (sequential) - Polish
+```
+1. T001, T002 (parallel)     - Setup + Foundation
+2. T003, T004, T005 (parallel) - US1 dataclasses + repository
+3. T006-T013 (sequential)    - US1 cleanup class + integration
+4. T014, T015, T016 (parallel) - US2 repository methods
+5. T017-T020 (sequential)    - US2 session deletion logic
+6. T021-T024 (sequential)    - US3 config handling
+7. T025-T030 (mostly parallel) - US4 logging
+8. T031-T034 (sequential)    - Polish + verification
+```
 
 ---
 
-## Notes
+## Key Implementation Notes
 
-- [P] tasks = different files, no dependencies
-- [Story] label maps task to specific user story for traceability
-- Manual testing via scripts - no pytest framework
-- Verify TOS delete API works before relying on cleanup (T032)
-- Commit after each task or logical group
-- Stop at any checkpoint to validate independently
+### Hard Delete Flow (US2 Core)
+
+```
+For each session to delete:
+  1. Get segments with oss_path != NULL
+  2. For each segment:
+     - Delete oss_path from OSS (log errors, continue)
+     - Delete mp4_oss_path from OSS if exists (log errors, continue)
+  3. Delete all segment records from DB
+  4. Delete session record from DB
+  5. Commit transaction
+```
+
+### Thread Safety (US1 Core)
+
+```python
+def trigger_cleanup(self) -> CleanupResult:
+    with self._cleanup_lock:  # Blocks other cleanup calls
+        # Re-check storage after acquiring lock (FR-011)
+        stats = self.get_storage_stats()
+        if not stats.over_threshold:
+            return CleanupResult(triggered=False, ...)
+        return self._perform_cleanup()
+```
+
+### Active Session Protection
+
+```sql
+-- Only select completed sessions for cleanup
+WHERE session.ended_at IS NOT NULL
+```
+
+---
+
+## Summary
+
+| Metric | Value |
+|--------|-------|
+| **Total Tasks** | 34 |
+| **Setup + Foundation** | 2 |
+| **US1 (Core Trigger)** | 11 |
+| **US2 (Session Delete)** | 7 |
+| **US3 (Config)** | 4 |
+| **US4 (Logging)** | 6 |
+| **Polish** | 4 |
+| **Parallel Opportunities** | 5 groups |
+| **Database Migration** | None needed |

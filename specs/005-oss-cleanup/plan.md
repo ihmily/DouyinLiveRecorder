@@ -52,8 +52,8 @@ specs/005-oss-cleanup/
 ```text
 src/
 ├── storage/
-│   ├── models.py           # Existing - may need oss_deleted field
-│   ├── repository.py       # Existing - add cleanup queries
+│   ├── models.py           # Existing - no changes needed
+│   ├── repository.py       # Existing - add cleanup queries and hard delete method
 │   ├── tos_uploader.py     # Existing - delete_object() already exists
 │   ├── upload_queue.py     # Modify - add cleanup hook after upload
 │   ├── manager.py          # Modify - add cleanup orchestration

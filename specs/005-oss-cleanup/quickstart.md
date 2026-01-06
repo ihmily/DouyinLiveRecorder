@@ -41,7 +41,8 @@ Cleanup check is triggered **after each successful segment upload**.
 4. While over threshold:
    - Select oldest completed session (by `started_at`)
    - Delete all its segment files from OSS (both TS and MP4)
-   - Mark segments as `oss_deleted = True` in database
+   - Delete segment records from database
+   - Delete session record from database
 5. Release lock
 
 ### Protected Content
@@ -49,21 +50,10 @@ Cleanup check is triggered **after each successful segment upload**.
 The following are **never deleted** by automatic cleanup:
 - **Active sessions**: Recording in progress (`ended_at` is NULL)
 - **Failed uploads**: Segments that haven't successfully uploaded to OSS
-- **Already deleted**: Segments with `oss_deleted = True`
 
 ## Database Migration
 
-A migration is required to add the `oss_deleted` column:
-
-```bash
-python migrations/002_add_oss_deleted.py
-```
-
-Or manually:
-
-```sql
-ALTER TABLE recording_segments ADD COLUMN oss_deleted BOOLEAN DEFAULT FALSE;
-```
+**No migration required.** This feature uses hard delete - records are removed from the database after OSS cleanup. No new database fields are added.
 
 ## Verification
 

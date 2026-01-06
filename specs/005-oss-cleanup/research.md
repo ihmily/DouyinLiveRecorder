@@ -142,25 +142,33 @@ def get_oldest_completed_sessions_with_size(self, session, limit: int = 10):
 
 **Question**: After OSS deletion, how to update database records?
 
-**Decision**: Add `oss_deleted` boolean field to `RecordingSegment` model; set to True after successful OSS deletion
+**Decision**: Hard delete segment records from database after successful OSS deletion. Delete session record when all its segments are deleted.
 
 **Rationale**:
-- Preserves audit trail of what was recorded and when
-- Allows future analysis of recording history
-- Segments excluded from storage calculation once `oss_deleted = True`
-- Existing `local_file_deleted` pattern provides precedent
+- Simpler implementation - no schema migration needed
+- Database stays clean - only contains active/valid data
+- Storage calculation remains simple (sum all records)
+- User preference: no need to preserve deleted recording history
+- Cascade delete: when all segments of a session are deleted, delete the session too
 
-**Model Change**:
+**Deletion Flow**:
 ```python
-class RecordingSegment(Base):
-    # ... existing fields ...
-    oss_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
+def delete_session_completely(self, session_id: int) -> None:
+    # Delete all segments for this session
+    session.query(RecordingSegment).filter(
+        RecordingSegment.session_id == session_id
+    ).delete()
+    # Delete the session itself
+    session.query(RecordingSession).filter(
+        RecordingSession.id == session_id
+    ).delete()
+    session.commit()
 ```
 
 **Alternatives Considered**:
-- Hard delete records: Loses history, can't answer "what was recorded last month?"
+- Soft delete with `oss_deleted` boolean: Preserves history but adds complexity, user doesn't need it
 - Separate cleanup history table: Over-engineering for current requirements
-- Only update `oss_path` to NULL: Less explicit than dedicated boolean flag
+- Only update `oss_path` to NULL: Leaves orphaned records in database
 
 ---
 
@@ -341,7 +349,7 @@ INFO  | ✓ OSS delete API test passed!
 | Storage Calculation | SQL SUM on file_size | Efficient, DB is source of truth |
 | Session Selection | Order by started_at ASC | True FIFO, protects active sessions |
 | OSS Deletion | Per-segment delete_object() | Exists in codebase, idempotent |
-| DB Record Update | Add oss_deleted boolean | Preserves audit trail |
+| DB Record Update | Hard delete records | Simpler, no migration needed |
 | Configuration | `[OSS设置]` section, GB unit | Follows existing patterns |
 | Integration Point | UploadWorker callback | Synchronous, blocking per spec |
 | Delete API Testing | `scripts/test_tos_delete.py` | Validates TOS delete before production use |

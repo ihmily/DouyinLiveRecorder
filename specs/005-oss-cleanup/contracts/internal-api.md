@@ -104,7 +104,6 @@ def get_total_oss_storage(self) -> int
 **Query Logic**:
 - Sum `file_size` where `upload_status = COMPLETED`
 - And `oss_path IS NOT NULL`
-- And `oss_deleted = FALSE`
 
 #### get_oldest_completed_sessions
 
@@ -119,7 +118,7 @@ def get_oldest_completed_sessions(self, limit: int = 10) -> list[tuple[Recording
 
 **Query Logic**:
 - Filter: `ended_at IS NOT NULL` (completed only)
-- Filter: Has at least one segment with `oss_path` and not `oss_deleted`
+- Filter: Has at least one segment with `oss_path IS NOT NULL`
 - Group by session, sum segment file sizes
 - Order by `started_at` ascending
 
@@ -131,18 +130,20 @@ def get_session_segments_for_cleanup(self, session_id: int) -> list[RecordingSeg
 
 **Returns**: All segments for a session that have files to delete from OSS
 
-**Filter**: `oss_path IS NOT NULL` and `oss_deleted = FALSE`
+**Filter**: `oss_path IS NOT NULL`
 
-#### mark_segments_oss_deleted
+#### delete_session_with_segments
 
 ```python
-def mark_segments_oss_deleted(self, segment_ids: list[int]) -> None
+def delete_session_with_segments(self, session_id: int) -> None
 ```
 
 **Parameters**:
-- `segment_ids`: List of segment IDs to mark as deleted
+- `session_id`: ID of the session to delete
 
-**Action**: Set `oss_deleted = TRUE` for all specified segments
+**Action**: Delete all segment records for the session, then delete the session record itself
+
+**Note**: This is a hard delete - records are permanently removed from the database
 
 ---
 
