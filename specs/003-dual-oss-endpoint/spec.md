@@ -11,6 +11,7 @@
 
 - Q: 公网端点应该使用现有的 `s3_endpoint` 配置项还是新增一个 `public_endpoint` 配置项？ → A: 复用现有 `s3_endpoint` 作为公网端点（零配置变更）
 - Q: 当 `s3_endpoint` 未配置时，VOD服务是否应该回退使用 `endpoint`（内网），还是拒绝启动？ → A: 回退使用 `endpoint`，记录警告日志（渐进式迁移友好）
+- Q: 火山引擎TOS端点命名规则是什么？ → A: **公网**端点为 `tos-cn-beijing.volces.com`，**内网**端点为 `tos-cn-beijing.ivolces.com`（带i的是内网）
 
 ## Problem Statement
 
@@ -93,7 +94,7 @@
 
 ### Key Entities
 
-- **OSS端点配置**: 包含内网端点 `endpoint`（用于上传）和公网端点 `s3_endpoint`（用于URL生成）两个配置项，复用现有配置结构
+- **OSS端点配置**: 包含内网端点 `endpoint`（用于上传，应配置为 `*.ivolces.com`）和公网端点 `s3_endpoint`（用于URL生成，应配置为 `*.volces.com`）。火山引擎TOS端点命名规则：带 `i` 的是内网，不带 `i` 的是公网
 - **签名URL**: 包含公网端点域名、bucket、object key、签名参数、过期时间的完整URL
 - **配置加载器**: 负责从配置文件读取双端点配置并提供给不同服务组件
 
@@ -114,6 +115,7 @@
 3. 使用的OSS服务（火山引擎TOS）支持内网和公网两种访问方式
 4. 内网和公网端点访问的是同一个bucket中的相同文件
 5. 签名算法与端点无关，只需替换URL中的域名部分
+6. 火山引擎TOS端点命名规则：`*.volces.com` 为公网，`*.ivolces.com`（带i）为内网
 
 ## Out of Scope
 

@@ -83,6 +83,8 @@ Adding a new platform requires:
 ## Active Technologies
 - Python 3.10+ (backend), TypeScript (frontend) (002-vod-player-frontend)
 - SQLite/PostgreSQL (existing DB), TOS (existing bucket) (002-vod-player-frontend)
+- Python 3.10+ + FastAPI, TOS SDK (`tos` package), Pydantic (003-dual-oss-endpoint)
+- SQLite (existing, no changes) (003-dual-oss-endpoint)
 
 ## Recent Changes
 - 002-vod-player-frontend: Added Python 3.10+ (backend), TypeScript (frontend)
