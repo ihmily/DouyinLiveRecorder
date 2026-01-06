@@ -24,10 +24,10 @@
 
 **Purpose**: Project structure verification and new file scaffolding
 
-- [ ] T001 Verify existing project structure matches plan.md layout
-- [ ] T002 [P] Create backend services directory if not exists at vod-player/backend/app/services/
-- [ ] T003 [P] Create frontend stores directory at vod-player/frontend/src/stores/
-- [ ] T004 [P] Create frontend services directory at vod-player/frontend/src/services/
+- [x] T001 Verify existing project structure matches plan.md layout
+- [x] T002 [P] Create backend services directory if not exists at vod-player/backend/app/services/
+- [x] T003 [P] Create frontend stores directory at vod-player/frontend/src/stores/
+- [x] T004 [P] Create frontend services directory at vod-player/frontend/src/services/
 
 ---
 
@@ -37,12 +37,12 @@
 
 **⚠️ CRITICAL**: No frontend work can begin until this phase is complete
 
-- [ ] T005 Add AggregatedSession and AggregatedSegment schemas in vod-player/backend/app/schemas.py
-- [ ] T006 Add BatchPlaybackUrls schema in vod-player/backend/app/schemas.py
-- [ ] T007 Create aggregation service with compute_aggregated_session() in vod-player/backend/app/services/aggregation.py
-- [ ] T008 Add GET /sessions/{session_id}/aggregated endpoint in vod-player/backend/app/routers/api.py
-- [ ] T009 Add GET /sessions/by-path/{anchor_name}/{session_timestamp} endpoint in vod-player/backend/app/routers/api.py
-- [ ] T010 Add POST /segments/batch-urls endpoint for pre-fetching in vod-player/backend/app/routers/api.py
+- [x] T005 Add AggregatedSession and AggregatedSegment schemas in vod-player/backend/app/schemas.py
+- [x] T006 Add BatchPlaybackUrls schema in vod-player/backend/app/schemas.py
+- [x] T007 Create aggregation service with compute_aggregated_session() in vod-player/backend/app/services/aggregation.py
+- [x] T008 Add GET /sessions/{session_id}/aggregated endpoint in vod-player/backend/app/routers/api.py
+- [x] T009 Add GET /sessions/by-path/{anchor_name}/{session_timestamp} endpoint in vod-player/backend/app/routers/api.py
+- [x] T010 Add POST /segments/batch-urls endpoint for pre-fetching in vod-player/backend/app/routers/api.py
 
 **Checkpoint**: Backend API ready - frontend implementation can now begin
 
@@ -56,14 +56,14 @@
 
 ### Implementation for User Story 1
 
-- [ ] T011 [US1] Create timeline.ts service with SegmentTimeline interface and buildTimeline() function in vod-player/frontend/src/services/timeline.ts
-- [ ] T012 [US1] Add findSegmentForPosition() function to calculate segment + offset from unified position in vod-player/frontend/src/services/timeline.ts
-- [ ] T013 [US1] Create api.ts additions for getAggregatedSession() and batchGetPlayUrls() in vod-player/frontend/src/api/index.ts
-- [ ] T014 [US1] Create AggregatedPlayer.vue component with canvas overlay for seamless transitions in vod-player/frontend/src/components/AggregatedPlayer.vue
-- [ ] T015 [US1] Implement segment pre-fetching logic (5-second threshold) in AggregatedPlayer.vue
-- [ ] T016 [US1] Implement automatic segment advancement on 'ended' event in AggregatedPlayer.vue
-- [ ] T017 [US1] Add unified progress bar showing total duration in AggregatedPlayer.vue
-- [ ] T018 [US1] Integrate AggregatedPlayer into Player.vue replacing single-segment player in vod-player/frontend/src/views/Player.vue
+- [x] T011 [US1] Create timeline.ts service with SegmentTimeline interface and buildTimeline() function in vod-player/frontend/src/services/timeline.ts
+- [x] T012 [US1] Add findSegmentForPosition() function to calculate segment + offset from unified position in vod-player/frontend/src/services/timeline.ts
+- [x] T013 [US1] Create api.ts additions for getAggregatedSession() and batchGetPlayUrls() in vod-player/frontend/src/api/index.ts
+- [x] T014 [US1] Create AggregatedPlayer.vue component with canvas overlay for seamless transitions in vod-player/frontend/src/components/AggregatedPlayer.vue
+- [x] T015 [US1] Implement segment pre-fetching logic (5-second threshold) in AggregatedPlayer.vue
+- [x] T016 [US1] Implement automatic segment advancement on 'ended' event in AggregatedPlayer.vue
+- [x] T017 [US1] Add unified progress bar showing total duration in AggregatedPlayer.vue
+- [x] T018 [US1] Integrate AggregatedPlayer into Player.vue replacing single-segment player in vod-player/frontend/src/views/Player.vue
 
 **Checkpoint**: User Story 1 complete - continuous playback works without seeking
 
@@ -77,10 +77,10 @@
 
 ### Implementation for User Story 2
 
-- [ ] T019 [US2] Add handleUnifiedSeek() method to AggregatedPlayer.vue that maps position to segment in vod-player/frontend/src/components/AggregatedPlayer.vue
-- [ ] T020 [US2] Implement segment switching on seek (load new segment if different from current) in AggregatedPlayer.vue
-- [ ] T021 [US2] Add progress bar click handler for seeking in AggregatedPlayer.vue
-- [ ] T022 [US2] Update time display to show unified position (not segment position) in AggregatedPlayer.vue
+- [x] T019 [US2] Add handleUnifiedSeek() method to AggregatedPlayer.vue that maps position to segment in vod-player/frontend/src/components/AggregatedPlayer.vue
+- [x] T020 [US2] Implement segment switching on seek (load new segment if different from current) in AggregatedPlayer.vue
+- [x] T021 [US2] Add progress bar click handler for seeking in AggregatedPlayer.vue
+- [x] T022 [US2] Update time display to show unified position (not segment position) in AggregatedPlayer.vue
 
 **Checkpoint**: User Story 2 complete - seeking works across entire session
 
@@ -94,9 +94,9 @@
 
 ### Implementation for User Story 3
 
-- [ ] T023 [US3] Update SessionTree.vue to display total_duration from aggregated endpoint in vod-player/frontend/src/components/SessionTree.vue
-- [ ] T024 [US3] Add formatDuration() utility for HH:MM:SS display in vod-player/frontend/src/services/timeline.ts
-- [ ] T025 [US3] Update Home.vue session preview to show aggregated duration in vod-player/frontend/src/views/Home.vue
+- [x] T023 [US3] Update SessionTree.vue to display total_duration from aggregated endpoint in vod-player/frontend/src/components/SessionTree.vue
+- [x] T024 [US3] Add formatDuration() utility for HH:MM:SS display in vod-player/frontend/src/services/timeline.ts
+- [x] T025 [US3] Update Home.vue session preview to show aggregated duration in vod-player/frontend/src/views/Home.vue
 
 **Checkpoint**: User Story 3 complete - durations display correctly
 
@@ -110,9 +110,9 @@
 
 ### Implementation for User Story 4
 
-- [ ] T026 [US4] Add segment markers to progress bar (thin vertical lines at boundaries) in AggregatedPlayer.vue
-- [ ] T027 [US4] Add collapsible segment list sidebar showing segment index and duration in AggregatedPlayer.vue
-- [ ] T028 [US4] Implement click-to-jump on segment list items in AggregatedPlayer.vue
+- [x] T026 [US4] Add segment markers to progress bar (thin vertical lines at boundaries) in AggregatedPlayer.vue
+- [x] T027 [US4] Add collapsible segment list sidebar showing segment index and duration in AggregatedPlayer.vue
+- [x] T028 [US4] Implement click-to-jump on segment list items in AggregatedPlayer.vue
 
 **Checkpoint**: User Story 4 complete - segment navigation available
 
@@ -126,12 +126,12 @@
 
 ### Implementation for User Story 5
 
-- [ ] T029 [US5] Create playback.ts store with PlaybackState interface in vod-player/frontend/src/stores/playback.ts
-- [ ] T030 [US5] Implement savePosition() with 5-second throttle in vod-player/frontend/src/stores/playback.ts
-- [ ] T031 [US5] Implement loadPosition() with validation (position <= duration, 30-day expiry) in vod-player/frontend/src/stores/playback.ts
-- [ ] T032 [US5] Implement clearPosition() for completed videos in vod-player/frontend/src/stores/playback.ts
-- [ ] T033 [US5] Integrate playback store with AggregatedPlayer - save on timeupdate, load on mount in AggregatedPlayer.vue
-- [ ] T034 [US5] Handle edge case: saved position exceeds available duration (reset to 0) in AggregatedPlayer.vue
+- [x] T029 [US5] Create playback.ts store with PlaybackState interface in vod-player/frontend/src/stores/playback.ts
+- [x] T030 [US5] Implement savePosition() with 5-second throttle in vod-player/frontend/src/stores/playback.ts
+- [x] T031 [US5] Implement loadPosition() with validation (position <= duration, 30-day expiry) in vod-player/frontend/src/stores/playback.ts
+- [x] T032 [US5] Implement clearPosition() for completed videos in vod-player/frontend/src/stores/playback.ts
+- [x] T033 [US5] Integrate playback store with AggregatedPlayer - save on timeupdate, load on mount in AggregatedPlayer.vue
+- [x] T034 [US5] Handle edge case: saved position exceeds available duration (reset to 0) in AggregatedPlayer.vue
 
 **Checkpoint**: User Story 5 complete - playback position persists
 
@@ -145,11 +145,11 @@
 
 ### Implementation for User Story 6
 
-- [ ] T035 [US6] Add new route /:anchorName/:sessionTimestamp in vod-player/frontend/src/router/index.ts
-- [ ] T036 [US6] Update Player.vue to accept route params and call getSessionByPath() in vod-player/frontend/src/views/Player.vue
-- [ ] T037 [US6] Add getSessionByPath() API call in vod-player/frontend/src/api/index.ts
-- [ ] T038 [US6] Update SessionTree navigation to use new URL format in vod-player/frontend/src/components/SessionTree.vue
-- [ ] T039 [US6] Handle URL encoding/decoding for Chinese anchor names in router in vod-player/frontend/src/router/index.ts
+- [x] T035 [US6] Add new route /:anchorName/:sessionTimestamp in vod-player/frontend/src/router/index.ts
+- [x] T036 [US6] Update Player.vue to accept route params and call getSessionByPath() in vod-player/frontend/src/views/Player.vue
+- [x] T037 [US6] Add getSessionByPath() API call in vod-player/frontend/src/api/index.ts
+- [x] T038 [US6] Update SessionTree navigation to use new URL format in vod-player/frontend/src/components/SessionTree.vue
+- [x] T039 [US6] Handle URL encoding/decoding for Chinese anchor names in router in vod-player/frontend/src/router/index.ts
 
 **Checkpoint**: User Story 6 complete - human-readable URLs work
 
@@ -159,12 +159,12 @@
 
 **Purpose**: Edge cases, error handling, and final integration
 
-- [ ] T040 [P] Add error handling for missing/corrupted segments (skip and notify) in AggregatedPlayer.vue
-- [ ] T041 [P] Add loading states during segment transitions in AggregatedPlayer.vue
-- [ ] T042 Handle single-segment sessions (bypass aggregation logic) in AggregatedPlayer.vue
-- [ ] T043 Add auto-update when new segments finish converting (poll or websocket) in AggregatedPlayer.vue
-- [ ] T044 Update existing /player/:sessionId route to redirect to new URL format in vod-player/frontend/src/router/index.ts
-- [ ] T045 Run quickstart.md validation scenarios
+- [x] T040 [P] Add error handling for missing/corrupted segments (skip and notify) in AggregatedPlayer.vue
+- [x] T041 [P] Add loading states during segment transitions in AggregatedPlayer.vue
+- [x] T042 Handle single-segment sessions (bypass aggregation logic) in AggregatedPlayer.vue
+- [ ] T043 Add auto-update when new segments finish converting (poll or websocket) in AggregatedPlayer.vue (DEFERRED - future enhancement)
+- [x] T044 Update existing /player/:sessionId route to redirect to new URL format in vod-player/frontend/src/router/index.ts
+- [ ] T045 Run quickstart.md validation scenarios (manual testing)
 
 ---
 

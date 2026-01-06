@@ -43,10 +43,12 @@ RecordingSegment = _storage_models.RecordingSegment
 Mp4Status = _storage_models.Mp4Status
 from app.schemas import (
     Platform, Anchor, SessionSummary, SessionListResponse,
-    SessionDetail, SegmentInfo, PlaybackUrl, ErrorResponse
+    SessionDetail, SegmentInfo, PlaybackUrl, ErrorResponse,
+    AggregatedSession, BatchPlaybackUrls, BatchPlaybackUrlsRequest
 )
 from app.config import get_settings
 from app.services.tos_sign import generate_presigned_url
+from app.services.aggregation import compute_aggregated_session
 
 router = APIRouter()
 
@@ -261,3 +263,140 @@ async def get_play_url(segment_id: int, db: Session = Depends(get_db)):
         duration=segment.duration,
         title=title
     )
+
+
+# === Video Segment Aggregation Endpoints (004-video-segment-aggregation) ===
+
+# T008: GET /sessions/{session_id}/aggregated - Get aggregated session with timeline
+@router.get(
+    "/sessions/{session_id}/aggregated",
+    response_model=AggregatedSession,
+    responses={404: {"model": ErrorResponse}},
+    tags=["Sessions"]
+)
+async def get_aggregated_session(session_id: int, db: Session = Depends(get_db)):
+    """
+    Get aggregated session with computed timeline offsets for all converted segments.
+
+    Only segments with mp4_status=COMPLETED are included in the timeline.
+    """
+    session = db.query(RecordingSession).filter(
+        RecordingSession.id == session_id
+    ).first()
+
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    return compute_aggregated_session(session)
+
+
+# T009: GET /sessions/by-path/{anchor_name}/{session_timestamp} - Lookup by human-readable path
+@router.get(
+    "/sessions/by-path/{anchor_name}/{session_timestamp}",
+    response_model=AggregatedSession,
+    responses={404: {"model": ErrorResponse}},
+    tags=["Sessions"]
+)
+async def get_session_by_path(
+    anchor_name: str,
+    session_timestamp: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Get aggregated session by anchor name and timestamp.
+
+    Lookup session using human-readable URL components.
+    The session_timestamp should be in format: YYYY-MM-DD_HH-MM-SS
+    """
+    # Parse the timestamp format from URL (YYYY-MM-DD_HH-MM-SS) to datetime
+    try:
+        from datetime import datetime as dt
+        parsed_time = dt.strptime(session_timestamp, '%Y-%m-%d_%H-%M-%S')
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid timestamp format. Expected: YYYY-MM-DD_HH-MM-SS, got: {session_timestamp}"
+        )
+
+    # Find session matching anchor name and start time
+    # Use time range to handle microseconds and minor timestamp differences
+    time_window_start = parsed_time
+    time_window_end = parsed_time + timedelta(seconds=1)
+
+    session = db.query(RecordingSession).filter(
+        RecordingSession.anchor_name == anchor_name,
+        RecordingSession.started_at >= time_window_start,
+        RecordingSession.started_at < time_window_end
+    ).first()
+
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    return compute_aggregated_session(session)
+
+
+# T010: POST /segments/batch-urls - Batch fetch presigned URLs
+@router.post(
+    "/segments/batch-urls",
+    response_model=BatchPlaybackUrls,
+    tags=["Playback"]
+)
+async def batch_get_play_urls(
+    request: BatchPlaybackUrlsRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Batch fetch presigned playback URLs for multiple segments.
+
+    Useful for pre-fetching next segment URLs during playback.
+    Maximum 5 segment IDs per request.
+    """
+    settings = get_settings()
+
+    urls = {}
+    failed = []
+
+    # Fetch all requested segments in one query
+    segments = db.query(RecordingSegment).filter(
+        RecordingSegment.id.in_(request.segment_ids)
+    ).all()
+
+    # Create a lookup map
+    segment_map = {seg.id: seg for seg in segments}
+
+    for segment_id in request.segment_ids:
+        segment = segment_map.get(segment_id)
+
+        if not segment:
+            failed.append(segment_id)
+            continue
+
+        # Check if MP4 is ready
+        if segment.mp4_status != Mp4Status.COMPLETED or not segment.mp4_oss_path:
+            failed.append(segment_id)
+            continue
+
+        # Generate presigned URL
+        try:
+            url = generate_presigned_url(
+                bucket=segment.oss_bucket or settings.tos_bucket,
+                key=segment.mp4_oss_path,
+                expires=settings.url_expiration_seconds
+            )
+
+            expires_at = datetime.utcnow() + timedelta(seconds=settings.url_expiration_seconds)
+
+            # Build title
+            session = segment.session
+            title = f"{session.anchor_name} - {session.started_at.strftime('%Y-%m-%d %H:%M')} - 分段{segment.segment_index + 1}"
+
+            urls[str(segment_id)] = PlaybackUrl(
+                url=url,
+                expires_at=expires_at,
+                duration=segment.duration,
+                title=title
+            )
+        except Exception:
+            failed.append(segment_id)
+
+    return BatchPlaybackUrls(urls=urls, failed=failed)
