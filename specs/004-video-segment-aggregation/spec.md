@@ -75,13 +75,47 @@ As a user watching a long session, I want to optionally see segment boundaries a
 
 ---
 
+### User Story 5 - Resume Playback Position (Priority: P3)
+
+As a user returning to a previously watched session, I want playback to automatically resume from where I left off, so that I don't have to manually seek to my last position.
+
+**Why this priority**: Same priority as duration display (P3) - improves user experience but not critical for core playback functionality.
+
+**Independent Test**: Can be tested by playing a session, closing the browser, returning, and verifying playback resumes at the correct position.
+
+**Acceptance Scenarios**:
+
+1. **Given** I watched a session up to the 25-minute mark and closed the browser, **When** I return to the same session later, **Then** playback automatically starts from the 25-minute mark.
+
+2. **Given** I finished watching a session completely, **When** I return to the same session, **Then** playback starts from the beginning (position is reset).
+
+3. **Given** I have watched multiple sessions from different anchors, **When** I return to any of them, **Then** each session remembers its own playback position independently.
+
+---
+
+### User Story 6 - Shareable Human-Readable URLs (Priority: P3)
+
+As a user sharing a recording link with others, I want the URL to be human-readable with the anchor name visible, so that recipients can understand what they're clicking before opening.
+
+**Why this priority**: Improves shareability and user trust, but not critical for playback functionality.
+
+**Independent Test**: Can be tested by copying a player URL and verifying it contains anchor name and session identifier rather than opaque IDs.
+
+**Acceptance Scenarios**:
+
+1. **Given** I am watching a session for anchor "Seven(国服老虎)", **When** I copy the URL, **Then** the URL contains the anchor name (e.g., `/Seven(国服老虎)/2026-01-06_14-01-37`).
+
+2. **Given** I share a URL like `/主播名/session标识`, **When** the recipient opens it, **Then** they are taken directly to that specific session.
+
+---
+
 ### Edge Cases
 
 - What happens when a segment in the middle of a session is missing or corrupted?
   - The player should skip the corrupted segment and continue to the next available segment, displaying a brief notification to the user.
 
 - What happens when a segment is still being converted (mp4_status = processing)?
-  - Playback should proceed up to the last completed segment. If the user reaches an unconverted segment, show a "Processing..." indicator and auto-resume when ready.
+  - Unconverted segments are excluded from the aggregated view entirely. The timeline only includes converted segments, so users will not encounter unconverted segments during playback.
 
 - What happens when seeking to a position in a segment that hasn't been uploaded yet?
   - Display a loading indicator and wait for the segment to become available, or show an error if the segment is not expected to be available.
@@ -92,29 +126,41 @@ As a user watching a long session, I want to optionally see segment boundaries a
 - What happens if segment durations in the database are inaccurate or missing?
   - Fall back to estimating positions based on segment count and average segment duration, or fetch duration on-demand during playback.
 
+- What happens if the saved playback position is beyond the current available duration (e.g., segments were removed)?
+  - Reset to the beginning of the session if the saved position exceeds available content.
+
+- What happens if anchor name contains special URL characters?
+  - URL-encode special characters while preserving readability; decode for display.
+
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
 - **FR-001**: System MUST provide continuous playback across all segments in a recording session without user intervention between segments.
 
-- **FR-002**: System MUST display a unified progress bar/timeline representing the total duration of all segments combined.
+- **FR-002**: System MUST display a unified progress bar/timeline representing the total duration of all converted segments combined (continuous, no gaps).
 
 - **FR-003**: System MUST support seeking to any timestamp within the aggregated session, automatically determining and loading the correct segment.
 
-- **FR-004**: System MUST display the total session duration (sum of all segment durations) in the session list and player interface.
+- **FR-004**: System MUST display the total session duration (sum of converted segment durations only) in the session list and player interface.
 
 - **FR-005**: System MUST automatically advance to the next segment when the current segment finishes playing.
 
 - **FR-006**: System MUST handle missing or corrupted segments gracefully by skipping to the next available segment and notifying the user.
 
-- **FR-007**: System MUST handle in-progress segments (still being converted) by showing appropriate status and resuming playback when ready.
+- **FR-007**: System MUST exclude unconverted segments (mp4_status != COMPLETED) from the aggregated view; only fully converted segments are included in the unified timeline and playback.
 
 - **FR-008**: System SHOULD provide optional segment-level navigation to allow users to jump directly to specific segments.
 
 - **FR-009**: System MUST maintain accurate time display showing current position within the entire session (not just current segment).
 
 - **FR-010**: System MUST preserve the ability to view and play individual segments separately for users who prefer segment-by-segment navigation.
+
+- **FR-011**: System MUST automatically update the aggregated timeline when new segments finish converting, extending the playable duration without requiring page refresh.
+
+- **FR-012**: System MUST use human-readable URL format `/{anchor_name}/{session_timestamp}` (e.g., `/Seven(国服老虎)/2026-01-06_14-01-37`) for player pages instead of opaque numeric IDs.
+
+- **FR-013**: System MUST persist the user's last playback position per session in browser storage and automatically resume from that position when returning to the session.
 
 ### Key Entities
 
@@ -134,11 +180,26 @@ As a user watching a long session, I want to optionally see segment boundaries a
 
 - **SC-003**: Seeking to any point in a session loads the correct segment and position within 3 seconds.
 
-- **SC-004**: Total session duration displayed is accurate to within 1 second of the sum of individual segment durations.
+- **SC-004**: Total session duration displayed is accurate to within 1 second of the sum of converted segment durations.
 
 - **SC-005**: 95% of segment transitions are seamless (no visible loading indicator or playback interruption).
 
 - **SC-006**: Users can navigate a 2-hour recording (12+ segments) as easily as a single-segment recording.
+
+- **SC-007**: Playback position is accurately restored within 2 seconds of the saved position when returning to a session.
+
+- **SC-008**: Player URLs are human-readable and contain anchor name and session identifier.
+
+## Clarifications
+
+### Session 2026-01-06
+
+- Q: Should unconverted segments (mp4_status != COMPLETED) be included in the aggregated view? → A: No, only fully converted segments are included in the unified view. Unconverted segments are excluded from the aggregated timeline and playback.
+- Q: How should timeline gaps from excluded unconverted segments be displayed? → A: Continuous timeline - only converted segments contribute to total duration; gaps are invisible to the user.
+- Q: Should the aggregated timeline update when new segments finish converting? → A: Yes, auto-update - timeline extends automatically when new segments become available.
+- Q: What URL structure should player pages use? → A: Human-readable format `/{anchor_name}/{session_identifier}` instead of `/player/{session_id}`.
+- Q: Should the browser remember playback position? → A: Yes, use browser storage (localStorage/cookie) to persist last playback position per session.
+- Q: What format should session identifier use in URLs? → A: Timestamp-based format matching existing file naming (e.g., `2026-01-06_14-01-37`).
 
 ## Assumptions
 

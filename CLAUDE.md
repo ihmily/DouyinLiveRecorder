@@ -85,6 +85,8 @@ Adding a new platform requires:
 - SQLite/PostgreSQL (existing DB), TOS (existing bucket) (002-vod-player-frontend)
 - Python 3.10+ + FastAPI, TOS SDK (`tos` package), Pydantic (003-dual-oss-endpoint)
 - SQLite (existing, no changes) (003-dual-oss-endpoint)
+- Python 3.10+ (backend), TypeScript 5.3+ (frontend) (004-video-segment-aggregation)
+- SQLite (existing recordings.db), localStorage (playback position) (004-video-segment-aggregation)
 
 ## Recent Changes
 - 002-vod-player-frontend: Added Python 3.10+ (backend), TypeScript (frontend)
