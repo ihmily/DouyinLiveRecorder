@@ -218,7 +218,10 @@ class RecordingManager:
 
         # Initialize pipeline for VOD conversion
         if self.enable_pipeline and self.enable_upload:
-            self._pipeline = create_default_pipeline(delete_after_upload=self.delete_after_upload)
+            self._pipeline = create_default_pipeline(
+                delete_after_upload=self.delete_after_upload,
+                cleanup_callback=cleanup_callback  # Same callback as UploadWorker
+            )
             self.logger.info(f"VOD pipeline initialized (TS→MP4→Upload, delete_after_upload={self.delete_after_upload})")
 
         RecordingManager._instance = self
