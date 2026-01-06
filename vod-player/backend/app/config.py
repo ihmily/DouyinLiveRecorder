@@ -5,10 +5,13 @@ Configuration module for VOD Player backend.
 Reads settings from existing config.ini and tos_credentials.ini files.
 """
 import os
+import logging
 import configparser
 from functools import lru_cache
 from pydantic_settings import BaseSettings
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -18,9 +21,11 @@ class Settings(BaseSettings):
     database_url: str = ""
 
     # TOS (Volcano Engine Object Storage)
+    # Endpoint naming: *.volces.com=公网, *.ivolces.com=内网(带i)
     tos_access_key: str = ""
     tos_secret_key: str = ""
-    tos_endpoint: str = ""
+    tos_endpoint: str = ""           # 内网端点 (上传用) - 应为 *.ivolces.com
+    tos_s3_endpoint: str = ""        # 公网端点 (签名URL用) - 应为 *.volces.com
     tos_region: str = ""
     tos_bucket: str = ""
 
@@ -70,6 +75,7 @@ def load_tos_credentials(credentials_path: Optional[str] = None) -> dict:
             credentials["access_key"] = config.get("TOS", "access_key", fallback="")
             credentials["secret_key"] = config.get("TOS", "secret_key", fallback="")
             credentials["endpoint"] = config.get("TOS", "endpoint", fallback="")
+            credentials["s3_endpoint"] = config.get("TOS", "s3_endpoint", fallback="")
             credentials["region"] = config.get("TOS", "region", fallback="")
             credentials["bucket"] = config.get("TOS", "bucket", fallback="")
 
@@ -111,11 +117,32 @@ def get_settings() -> Settings:
             os.makedirs(data_dir, exist_ok=True)
             database_url = f"sqlite:///{os.path.join(data_dir, 'recordings.db')}"
 
+    # Handle s3_endpoint with fallback to endpoint
+    tos_endpoint = tos_creds.get("endpoint", "")
+    tos_s3_endpoint = tos_creds.get("s3_endpoint", "")
+
+    # Validate and log endpoint configuration
+    if tos_endpoint and tos_s3_endpoint:
+        logger.info(
+            f"TOS dual-endpoint configured: "
+            f"upload={tos_endpoint}, url_sign={tos_s3_endpoint}"
+        )
+    elif tos_endpoint and not tos_s3_endpoint:
+        logger.warning(
+            "s3_endpoint not configured in tos_credentials.ini, "
+            "using endpoint for URL generation. "
+            "For optimal performance, configure s3_endpoint with public endpoint (*.volces.com)"
+        )
+        tos_s3_endpoint = tos_endpoint
+    elif not tos_endpoint:
+        logger.warning("TOS endpoint not configured - TOS features will be unavailable")
+
     return Settings(
         database_url=database_url,
         tos_access_key=tos_creds.get("access_key", ""),
         tos_secret_key=tos_creds.get("secret_key", ""),
-        tos_endpoint=tos_creds.get("endpoint", ""),
+        tos_endpoint=tos_endpoint,
+        tos_s3_endpoint=tos_s3_endpoint,
         tos_region=tos_creds.get("region", ""),
         tos_bucket=tos_creds.get("bucket", ""),
         vod_enabled=vod_enabled,

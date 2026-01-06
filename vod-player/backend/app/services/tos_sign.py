@@ -24,19 +24,26 @@ except ImportError:
 
 
 def get_tos_client():
-    """Get TOS client instance."""
+    """
+    Get TOS client instance for presigned URL generation.
+
+    Uses tos_s3_endpoint (public endpoint) for URL generation.
+    This ensures generated URLs are accessible from public networks.
+    """
     if not TOS_AVAILABLE:
         raise RuntimeError("TOS SDK not available. Install with: pip install tos")
 
     settings = get_settings()
 
-    if not all([settings.tos_access_key, settings.tos_secret_key, settings.tos_endpoint]):
+    # Use s3_endpoint for URL generation (public endpoint)
+    endpoint = settings.tos_s3_endpoint or settings.tos_endpoint
+    if not all([settings.tos_access_key, settings.tos_secret_key, endpoint]):
         raise RuntimeError("TOS credentials not configured. Check config/tos_credentials.ini")
 
     return TosClientV2(
         ak=settings.tos_access_key,
         sk=settings.tos_secret_key,
-        endpoint=settings.tos_endpoint,
+        endpoint=endpoint,
         region=settings.tos_region,
     )
 
@@ -104,7 +111,8 @@ def check_tos_connection() -> bool:
 
     try:
         settings = get_settings()
-        if not all([settings.tos_access_key, settings.tos_secret_key, settings.tos_endpoint]):
+        endpoint = settings.tos_s3_endpoint or settings.tos_endpoint
+        if not all([settings.tos_access_key, settings.tos_secret_key, endpoint]):
             return False
 
         client = get_tos_client()
