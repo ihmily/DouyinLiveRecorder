@@ -16,6 +16,7 @@ from .models import RecordingSession, RecordingSegment, UploadStatus, Mp4Status
 from .tos_uploader import TOSUploader
 from .upload_queue import UploadWorker, UploadTask
 from .pipeline import Pipeline, StageInput, StageStatus, create_default_pipeline
+from .cleanup import StorageCleanup, CleanupResult, StorageStats
 
 
 class RecordingManager:
@@ -49,7 +50,9 @@ class RecordingManager:
         enable_upload: bool = True,
         delete_after_upload: bool = True,
         max_retries: int = 3,
-        enable_pipeline: bool = True
+        enable_pipeline: bool = True,
+        cleanup_enabled: bool = False,
+        cleanup_threshold_bytes: int = 0
     ):
         """
         Initialize recording manager.
@@ -61,6 +64,8 @@ class RecordingManager:
             delete_after_upload: Delete local file after upload
             max_retries: Maximum upload retry attempts
             enable_pipeline: Whether to use the new pipeline (TS→MP4→Upload)
+            cleanup_enabled: Whether to enable OSS storage cleanup
+            cleanup_threshold_bytes: Storage threshold in bytes (0 disables cleanup)
         """
         # Import logger
         try:
@@ -77,6 +82,10 @@ class RecordingManager:
         self.max_retries = max_retries
         self.enable_pipeline = enable_pipeline
 
+        # Cleanup settings
+        self.cleanup_enabled = cleanup_enabled
+        self.cleanup_threshold_bytes = cleanup_threshold_bytes
+
         # Track active recording sessions
         self._active_sessions: dict[str, int] = {}  # record_name -> session_id
 
@@ -85,6 +94,9 @@ class RecordingManager:
 
         # Pipeline for TS→MP4 conversion and upload
         self._pipeline: Pipeline | None = None
+
+        # Storage cleanup (created when enabled)
+        self._cleanup: StorageCleanup | None = None
 
     @classmethod
     def from_config(
@@ -122,6 +134,10 @@ class RecordingManager:
         max_retries = 3
         db_url = database_url
 
+        # Cleanup settings (defaults: disabled, 0GB threshold)
+        cleanup_enabled = False
+        cleanup_threshold_gb = 0
+
         if config.has_section('OSS设置'):
             enable_upload = config.get('OSS设置', '启用OSS上传(是/否)', fallback='否') == '是'
             delete_after_upload = config.get('OSS设置', '上传后删除本地文件(是/否)', fallback='是') == '是'
@@ -130,6 +146,13 @@ class RecordingManager:
                 db_url = config.get('OSS设置', '数据库URL', fallback='')
                 if not db_url.strip():
                     db_url = None
+
+            # T010: Parse cleanup config
+            cleanup_enabled = config.get('OSS设置', '启用OSS存储清理(是/否)', fallback='否') == '是'
+            cleanup_threshold_gb = float(config.get('OSS设置', 'OSS存储清理阈值(GB)', fallback='0'))
+
+        # Convert threshold from GB to bytes (GB * 1024^3)
+        cleanup_threshold_bytes = int(cleanup_threshold_gb * 1024 * 1024 * 1024)
 
         # Initialize database
         db_manager = DatabaseManager.get_instance(db_url)
@@ -153,7 +176,9 @@ class RecordingManager:
             tos_uploader=tos_uploader,
             enable_upload=enable_upload,
             delete_after_upload=delete_after_upload,
-            max_retries=max_retries
+            max_retries=max_retries,
+            cleanup_enabled=cleanup_enabled,
+            cleanup_threshold_bytes=cleanup_threshold_bytes
         )
 
     @classmethod
@@ -163,12 +188,28 @@ class RecordingManager:
 
     def start(self) -> None:
         """Start background services (upload worker and pipeline)."""
+        # T011: Create StorageCleanup instance when enabled
+        cleanup_callback = None
+        if self.cleanup_enabled and self.cleanup_threshold_bytes > 0 and self.tos_uploader:
+            self._cleanup = StorageCleanup(
+                db_manager=self.db_manager,
+                tos_uploader=self.tos_uploader,
+                threshold_bytes=self.cleanup_threshold_bytes,
+                enabled=True
+            )
+            # T013: Create cleanup callback for upload worker
+            cleanup_callback = self._cleanup.trigger_cleanup
+            self.logger.info(
+                f"OSS cleanup enabled: threshold={self.cleanup_threshold_bytes / 1024**3:.1f}GB"
+            )
+
         if self.enable_upload and self.tos_uploader:
             self._upload_worker = UploadWorker(
                 db_manager=self.db_manager,
                 tos_uploader=self.tos_uploader,
                 max_retries=self.max_retries,
-                delete_after_upload=self.delete_after_upload
+                delete_after_upload=self.delete_after_upload,
+                cleanup_callback=cleanup_callback  # T013: Wire cleanup trigger
             )
             self._upload_worker.start()
             self.logger.info("Recording manager started with OSS upload enabled")
@@ -177,15 +218,39 @@ class RecordingManager:
 
         # Initialize pipeline for VOD conversion
         if self.enable_pipeline and self.enable_upload:
-            self._pipeline = create_default_pipeline(delete_after_upload=self.delete_after_upload)
+            self._pipeline = create_default_pipeline(
+                delete_after_upload=self.delete_after_upload,
+                cleanup_callback=cleanup_callback  # Same callback as UploadWorker
+            )
             self.logger.info(f"VOD pipeline initialized (TS→MP4→Upload, delete_after_upload={self.delete_after_upload})")
 
         RecordingManager._instance = self
 
-    def stop(self) -> None:
-        """Stop background services."""
+    def stop(self, graceful: bool = True) -> None:
+        """
+        Stop background services.
+
+        Args:
+            graceful: If True, drain upload queue and wait for cleanup before stopping.
+                      If False, stop immediately (may lose pending uploads).
+        """
         if self._upload_worker:
-            self._upload_worker.stop()
+            if graceful:
+                # Phase 1: Drain queue first (uploads will trigger cleanup)
+                self.logger.info("正在等待上传队列完成...")
+                self._upload_worker.drain_and_stop(timeout=120.0)
+            else:
+                # Immediate stop
+                self._upload_worker.stop()
+
+        # Phase 2: Wait for any final cleanup to complete
+        if self._cleanup:
+            self.logger.info("等待清理任务完成...")
+            if self._cleanup.wait_for_completion(timeout=60.0):
+                self.logger.info("清理任务已完成")
+            else:
+                self.logger.warning("清理任务超时，继续退出流程")
+
         self.logger.info("Recording manager stopped")
 
     def start_recording(
@@ -426,6 +491,11 @@ class RecordingManager:
         if self._upload_worker:
             return self._upload_worker.queue_size
         return 0
+
+    @property
+    def cleanup(self) -> StorageCleanup | None:
+        """Get cleanup manager if enabled."""
+        return self._cleanup
 
     async def process_segment_with_pipeline(
         self,

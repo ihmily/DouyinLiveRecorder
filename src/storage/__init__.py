@@ -36,6 +36,7 @@ from .tos_uploader import TOSUploader
 from .upload_queue import UploadWorker, UploadTask
 from .manager import RecordingManager
 from .segment_watcher import SegmentWatcher, SegmentInfo
+from .cleanup import StorageCleanup, CleanupResult, StorageStats
 
 __all__ = [
     # Models
@@ -57,4 +58,8 @@ __all__ = [
     # Segment Watcher
     "SegmentWatcher",
     "SegmentInfo",
+    # Cleanup
+    "StorageCleanup",
+    "CleanupResult",
+    "StorageStats",
 ]

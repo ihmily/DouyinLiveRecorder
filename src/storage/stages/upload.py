@@ -24,17 +24,24 @@ class UploadStage(BaseStage):
     - Fallback to TS upload if conversion failed
     - Updating segment records with OSS paths
     - Cleaning up local files after successful upload
+    - Triggering storage cleanup callback after upload
     """
 
     @property
     def name(self) -> str:
         return "upload"
 
-    def __init__(self, config_path: Optional[str] = None, delete_after_upload: bool = True):
+    def __init__(
+        self,
+        config_path: Optional[str] = None,
+        delete_after_upload: bool = True,
+        cleanup_callback=None
+    ):
         super().__init__()
         self._config_path = config_path
         self._uploader = None
         self.delete_after_upload = delete_after_upload
+        self.cleanup_callback = cleanup_callback
 
     def _get_uploader(self):
         """Lazy-load TOS uploader."""
@@ -183,6 +190,13 @@ class UploadStage(BaseStage):
 
             results["files_deleted"] = files_deleted
             results["local_file_deleted"] = len(files_deleted) > 0
+
+        # Trigger cleanup check after successful upload
+        if self.cleanup_callback:
+            try:
+                self.cleanup_callback()
+            except Exception as e:
+                self.logger.error(f"Cleanup callback error: {e}")
 
         return StageResult(
             status=StageStatus.COMPLETED,

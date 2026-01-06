@@ -87,6 +87,9 @@ Adding a new platform requires:
 - SQLite (existing, no changes) (003-dual-oss-endpoint)
 - Python 3.10+ (backend), TypeScript 5.3+ (frontend) (004-video-segment-aggregation)
 - SQLite (existing recordings.db), localStorage (playback position) (004-video-segment-aggregation)
+- Python >= 3.10 + SQLAlchemy 2.0+, tos (Volcano Engine TOS SDK), loguru, threading (005-oss-cleanup)
+- SQLite (default, data/recordings.db), also supports PostgreSQL/MySQL via SQLAlchemy (005-oss-cleanup)
+- Python >= 3.10 (existing project requirement) + SQLAlchemy 2.0+, `tos` (Volcano Engine TOS SDK), loguru, threading (005-oss-cleanup)
 
 ## Recent Changes
 - 002-vod-player-frontend: Added Python 3.10+ (backend), TypeScript (frontend)

@@ -243,12 +243,16 @@ class Pipeline:
         return results
 
 
-def create_default_pipeline(delete_after_upload: bool = True) -> Pipeline:
+def create_default_pipeline(
+    delete_after_upload: bool = True,
+    cleanup_callback=None
+) -> Pipeline:
     """
     Create the default recording pipeline with conversion and upload stages.
 
     Args:
         delete_after_upload: Whether to delete local files after successful upload
+        cleanup_callback: Callback to trigger storage cleanup after upload
 
     Returns:
         Configured Pipeline instance
@@ -258,6 +262,12 @@ def create_default_pipeline(delete_after_upload: bool = True) -> Pipeline:
 
     pipeline = Pipeline()
     pipeline.add_stage(ConvertStage())
-    pipeline.add_stage(UploadStage(delete_after_upload=delete_after_upload), depends_on=["convert"])
+    pipeline.add_stage(
+        UploadStage(
+            delete_after_upload=delete_after_upload,
+            cleanup_callback=cleanup_callback
+        ),
+        depends_on=["convert"]
+    )
 
     return pipeline
