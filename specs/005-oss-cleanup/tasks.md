@@ -28,7 +28,7 @@
 
 **Purpose**: Create test script for OSS delete API validation
 
-- [ ] T001 Create TOS delete API test script (upload + delete test file) in scripts/test_tos_delete.py
+- [x] T001 Create TOS delete API test script (upload + delete test file) in scripts/test_tos_delete.py
 
 ---
 
@@ -36,7 +36,7 @@
 
 **Purpose**: Configuration that MUST be complete before user story implementation
 
-- [ ] T002 Add cleanup configuration fields (`启用OSS存储清理(是/否)`, `OSS存储清理阈值(GB)`) to config/config.ini under [OSS设置] section
+- [x] T002 Add cleanup configuration fields (`启用OSS存储清理(是/否)`, `OSS存储清理阈值(GB)`) to config/config.ini under [OSS设置] section
 
 **Checkpoint**: Config ready, no database changes needed
 
@@ -50,17 +50,17 @@
 
 ### Implementation for User Story 1
 
-- [ ] T003 [P] [US1] Add get_total_oss_storage() method (SUM file_size WHERE upload_status=COMPLETED AND oss_path IS NOT NULL) in src/storage/repository.py
-- [ ] T004 [P] [US1] Create CleanupResult dataclass (triggered, sessions_deleted, bytes_freed, errors, duration_seconds) in src/storage/cleanup.py
-- [ ] T005 [P] [US1] Create StorageStats dataclass (total_bytes, threshold_bytes, over_threshold, sessions_count) in src/storage/cleanup.py
-- [ ] T006 [US1] Create StorageCleanup class with constructor (repository, tos_uploader, threshold_bytes, enabled) and threading.Lock in src/storage/cleanup.py
-- [ ] T007 [US1] Implement get_storage_stats() method in StorageCleanup class in src/storage/cleanup.py
-- [ ] T008 [US1] Implement trigger_cleanup() method with mutex lock (acquire, check threshold, cleanup if needed, release) in src/storage/cleanup.py
-- [ ] T009 [US1] Add cleanup callback hook (_cleanup_callback) to UploadWorker after successful upload in src/storage/upload_queue.py
-- [ ] T010 [US1] Parse cleanup config (enabled, threshold_gb) in RecordingManager.from_config() in src/storage/manager.py
-- [ ] T011 [US1] Create StorageCleanup instance in RecordingManager.__init__() when enabled in src/storage/manager.py
-- [ ] T012 [US1] Add cleanup property to RecordingManager in src/storage/manager.py
-- [ ] T013 [US1] Wire cleanup.trigger_cleanup() to upload completion handler in src/storage/manager.py
+- [x] T003 [P] [US1] Add get_total_oss_storage() method (SUM file_size WHERE upload_status=COMPLETED AND oss_path IS NOT NULL) in src/storage/repository.py
+- [x] T004 [P] [US1] Create CleanupResult dataclass (triggered, sessions_deleted, bytes_freed, errors, duration_seconds) in src/storage/cleanup.py
+- [x] T005 [P] [US1] Create StorageStats dataclass (total_bytes, threshold_bytes, over_threshold, sessions_count) in src/storage/cleanup.py
+- [x] T006 [US1] Create StorageCleanup class with constructor (repository, tos_uploader, threshold_bytes, enabled) and threading.Lock in src/storage/cleanup.py
+- [x] T007 [US1] Implement get_storage_stats() method in StorageCleanup class in src/storage/cleanup.py
+- [x] T008 [US1] Implement trigger_cleanup() method with mutex lock (acquire, check threshold, cleanup if needed, release) in src/storage/cleanup.py
+- [x] T009 [US1] Add cleanup callback hook (_cleanup_callback) to UploadWorker after successful upload in src/storage/upload_queue.py
+- [x] T010 [US1] Parse cleanup config (enabled, threshold_gb) in RecordingManager.from_config() in src/storage/manager.py
+- [x] T011 [US1] Create StorageCleanup instance in RecordingManager.__init__() when enabled in src/storage/manager.py
+- [x] T012 [US1] Add cleanup property to RecordingManager in src/storage/manager.py
+- [x] T013 [US1] Wire cleanup.trigger_cleanup() to upload completion handler in src/storage/manager.py
 
 **Checkpoint**: Cleanup triggers on upload with mutex protection
 
@@ -74,13 +74,13 @@
 
 ### Implementation for User Story 2
 
-- [ ] T014 [P] [US2] Add get_oldest_completed_sessions(limit) method (ORDER BY started_at ASC, ended_at IS NOT NULL) in src/storage/repository.py
-- [ ] T015 [P] [US2] Add get_session_segments_for_cleanup(session_id) method (oss_path IS NOT NULL) in src/storage/repository.py
-- [ ] T016 [P] [US2] Add delete_session_with_segments(session_id) method (DELETE segments then DELETE session) in src/storage/repository.py
-- [ ] T017 [US2] Implement _delete_oss_files_for_segment() helper (delete oss_path, delete mp4_oss_path if exists) in src/storage/cleanup.py
-- [ ] T018 [US2] Implement _delete_session() method: 1) get segments, 2) delete OSS files, 3) delete DB records via repository in src/storage/cleanup.py
-- [ ] T019 [US2] Implement _perform_cleanup() method: loop oldest sessions until storage < threshold in src/storage/cleanup.py
-- [ ] T020 [US2] Add active session protection filter (ended_at IS NOT NULL) to get_oldest_completed_sessions() in src/storage/repository.py
+- [x] T014 [P] [US2] Add get_oldest_completed_sessions(limit) method (ORDER BY started_at ASC, ended_at IS NOT NULL) in src/storage/repository.py
+- [x] T015 [P] [US2] Add get_session_segments_for_cleanup(session_id) method (oss_path IS NOT NULL) in src/storage/repository.py
+- [x] T016 [P] [US2] Add delete_session_with_segments(session_id) method (DELETE segments then DELETE session) in src/storage/repository.py
+- [x] T017 [US2] Implement _delete_oss_files_for_segment() helper (delete oss_path, delete mp4_oss_path if exists) in src/storage/cleanup.py
+- [x] T018 [US2] Implement _delete_session() method: 1) get segments, 2) delete OSS files, 3) delete DB records via repository in src/storage/cleanup.py
+- [x] T019 [US2] Implement _perform_cleanup() method: loop oldest sessions until storage < threshold in src/storage/cleanup.py
+- [x] T020 [US2] Add active session protection filter (ended_at IS NOT NULL) to get_oldest_completed_sessions() in src/storage/repository.py
 
 **Checkpoint**: Sessions deleted with OSS files AND database records in FIFO order
 
@@ -94,10 +94,10 @@
 
 ### Implementation for User Story 3
 
-- [ ] T021 [US3] Add default value handling for missing cleanup config (disabled by default, 0GB threshold) in src/storage/manager.py
-- [ ] T022 [US3] Handle threshold=0 as cleanup disabled in StorageCleanup.trigger_cleanup() in src/storage/cleanup.py
-- [ ] T023 [US3] Convert threshold_gb to threshold_bytes (GB * 1024^3) in RecordingManager.from_config() in src/storage/manager.py
-- [ ] T024 [US3] Skip cleanup instantiation when disabled in RecordingManager in src/storage/manager.py
+- [x] T021 [US3] Add default value handling for missing cleanup config (disabled by default, 0GB threshold) in src/storage/manager.py
+- [x] T022 [US3] Handle threshold=0 as cleanup disabled in StorageCleanup.trigger_cleanup() in src/storage/cleanup.py
+- [x] T023 [US3] Convert threshold_gb to threshold_bytes (GB * 1024^3) in RecordingManager.from_config() in src/storage/manager.py
+- [x] T024 [US3] Skip cleanup instantiation when disabled in RecordingManager in src/storage/manager.py
 
 **Checkpoint**: Cleanup fully configurable via config.ini
 
@@ -111,12 +111,12 @@
 
 ### Implementation for User Story 4
 
-- [ ] T025 [P] [US4] Add cleanup trigger log (current storage, threshold) at start of trigger_cleanup() in src/storage/cleanup.py
-- [ ] T026 [P] [US4] Add session deletion log (session_id, anchor_name, started_at) in _delete_session() in src/storage/cleanup.py
-- [ ] T027 [P] [US4] Add segment file deletion log (segment_id, oss_path, mp4_oss_path) in _delete_oss_files_for_segment() in src/storage/cleanup.py
-- [ ] T028 [P] [US4] Add OSS deletion error log (file path, error message) with error collection in src/storage/cleanup.py
-- [ ] T029 [P] [US4] Add database record deletion log (session_id, segment_count deleted) in _delete_session() in src/storage/cleanup.py
-- [ ] T030 [US4] Add cleanup summary log (sessions deleted, bytes freed, duration) at end of trigger_cleanup() in src/storage/cleanup.py
+- [x] T025 [P] [US4] Add cleanup trigger log (current storage, threshold) at start of trigger_cleanup() in src/storage/cleanup.py
+- [x] T026 [P] [US4] Add session deletion log (session_id, anchor_name, started_at) in _delete_session() in src/storage/cleanup.py
+- [x] T027 [P] [US4] Add segment file deletion log (segment_id, oss_path, mp4_oss_path) in _delete_oss_files_for_segment() in src/storage/cleanup.py
+- [x] T028 [P] [US4] Add OSS deletion error log (file path, error message) with error collection in src/storage/cleanup.py
+- [x] T029 [P] [US4] Add database record deletion log (session_id, segment_count deleted) in _delete_session() in src/storage/cleanup.py
+- [x] T030 [US4] Add cleanup summary log (sessions deleted, bytes freed, duration) at end of trigger_cleanup() in src/storage/cleanup.py
 
 **Checkpoint**: Complete audit trail in logs for all cleanup operations
 
@@ -126,10 +126,10 @@
 
 **Purpose**: Final integration, error handling, and verification
 
-- [ ] T031 Handle orphaned records gracefully (OSS files already deleted) - treat as success, still delete DB records in src/storage/cleanup.py
-- [ ] T032 Export StorageCleanup, CleanupResult, StorageStats from src/storage/__init__.py
-- [ ] T033 Run scripts/test_tos_delete.py to verify OSS delete API works
-- [ ] T034 Manual end-to-end test: low threshold → uploads → verify oldest sessions deleted (OSS + DB)
+- [x] T031 Handle orphaned records gracefully (OSS files already deleted) - treat as success, still delete DB records in src/storage/cleanup.py
+- [x] T032 Export StorageCleanup, CleanupResult, StorageStats from src/storage/__init__.py
+- [ ] T033 Run scripts/test_tos_delete.py to verify OSS delete API works (MANUAL: requires TOS credentials)
+- [ ] T034 Manual end-to-end test: low threshold → uploads → verify oldest sessions deleted (OSS + DB) (MANUAL: requires running system)
 
 ---
 

@@ -43,7 +43,8 @@ class UploadWorker:
         retry_delay: int = 60,
         delete_after_upload: bool = True,
         on_upload_complete: Callable[[RecordingSegment, str], None] | None = None,
-        on_upload_failed: Callable[[RecordingSegment, str], None] | None = None
+        on_upload_failed: Callable[[RecordingSegment, str], None] | None = None,
+        cleanup_callback: Callable[[], None] | None = None
     ):
         """
         Initialize upload worker.
@@ -56,6 +57,7 @@ class UploadWorker:
             delete_after_upload: Delete local file after successful upload
             on_upload_complete: Callback when upload completes
             on_upload_failed: Callback when upload fails permanently
+            cleanup_callback: Callback to trigger cleanup after successful upload
         """
         # Import logger
         try:
@@ -72,6 +74,7 @@ class UploadWorker:
         self.delete_after_upload = delete_after_upload
         self.on_upload_complete = on_upload_complete
         self.on_upload_failed = on_upload_failed
+        self.cleanup_callback = cleanup_callback
 
         self.task_queue: queue.PriorityQueue[UploadTask] = queue.PriorityQueue()
         self._stop_event = threading.Event()
@@ -232,6 +235,13 @@ class UploadWorker:
                         self.on_upload_complete(segment, result)
                     except Exception as e:
                         self.logger.error(f"Upload complete callback error: {e}")
+
+                # Trigger cleanup check after successful upload
+                if self.cleanup_callback:
+                    try:
+                        self.cleanup_callback()
+                    except Exception as e:
+                        self.logger.error(f"Cleanup callback error: {e}")
             else:
                 # Check retry count
                 fail_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')

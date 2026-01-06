@@ -8,7 +8,7 @@ Date: 2025-12-16
 from datetime import datetime
 from typing import List
 from sqlalchemy.orm import Session
-from sqlalchemy import and_
+from sqlalchemy import and_, func
 from .models import RecordingSession, RecordingSegment, UploadStatus
 
 
@@ -179,3 +179,102 @@ class RecordingRepository:
             "completed": completed,
             "failed": failed
         }
+
+    # ============ Cleanup Operations ============
+
+    def get_total_oss_storage(self) -> int:
+        """
+        Get total OSS storage usage from completed uploads.
+
+        Returns:
+            Total bytes of uploaded segments with oss_path
+        """
+        result = self.session.query(func.sum(RecordingSegment.file_size)).filter(
+            and_(
+                RecordingSegment.upload_status == UploadStatus.COMPLETED,
+                RecordingSegment.oss_path.isnot(None)
+            )
+        ).scalar()
+        return result or 0
+
+    def get_oldest_completed_sessions(self, limit: int = 10) -> List[tuple]:
+        """
+        Get oldest completed sessions eligible for cleanup.
+
+        Args:
+            limit: Maximum sessions to return
+
+        Returns:
+            List of (RecordingSession, total_size_bytes) tuples ordered by started_at ASC
+        """
+        # Subquery to get session sizes
+        results = self.session.query(
+            RecordingSession,
+            func.sum(RecordingSegment.file_size).label('total_size')
+        ).join(
+            RecordingSegment,
+            RecordingSegment.session_id == RecordingSession.id
+        ).filter(
+            and_(
+                RecordingSession.ended_at.isnot(None),  # Only completed sessions
+                RecordingSegment.upload_status == UploadStatus.COMPLETED,
+                RecordingSegment.oss_path.isnot(None)
+            )
+        ).group_by(
+            RecordingSession.id
+        ).order_by(
+            RecordingSession.started_at.asc()
+        ).limit(limit).all()
+
+        return [(session, int(size or 0)) for session, size in results]
+
+    def get_session_segments_for_cleanup(self, session_id: int) -> List[RecordingSegment]:
+        """
+        Get segments for a session that have OSS files to delete.
+
+        Args:
+            session_id: Session ID
+
+        Returns:
+            List of segments with oss_path
+        """
+        return self.session.query(RecordingSegment).filter(
+            and_(
+                RecordingSegment.session_id == session_id,
+                RecordingSegment.oss_path.isnot(None)
+            )
+        ).all()
+
+    def delete_session_with_segments(self, session_id: int) -> int:
+        """
+        Hard delete a session and all its segments.
+
+        Args:
+            session_id: Session ID to delete
+
+        Returns:
+            Number of segments deleted
+        """
+        # Delete segments first (due to foreign key)
+        segment_count = self.session.query(RecordingSegment).filter(
+            RecordingSegment.session_id == session_id
+        ).delete()
+
+        # Delete session
+        self.session.query(RecordingSession).filter(
+            RecordingSession.id == session_id
+        ).delete()
+
+        return segment_count
+
+    def get_completed_sessions_count(self) -> int:
+        """Get count of completed sessions with OSS files."""
+        return self.session.query(RecordingSession).join(
+            RecordingSegment,
+            RecordingSegment.session_id == RecordingSession.id
+        ).filter(
+            and_(
+                RecordingSession.ended_at.isnot(None),
+                RecordingSegment.oss_path.isnot(None)
+            )
+        ).distinct().count()
