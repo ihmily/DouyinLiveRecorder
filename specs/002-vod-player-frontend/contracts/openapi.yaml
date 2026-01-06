@@ -1,0 +1,298 @@
+openapi: 3.1.0
+info:
+  title: VOD Player API
+  version: 1.0.0
+  description: API for browsing and playing recorded live streams
+
+servers:
+  - url: http://localhost:8000
+    description: Development server
+
+paths:
+  /api/platforms:
+    get:
+      summary: List all platforms
+      operationId: listPlatforms
+      tags: [Navigation]
+      responses:
+        '200':
+          description: List of platforms with statistics
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Platform'
+
+  /api/platforms/{platform}/anchors:
+    get:
+      summary: List anchors for a platform
+      operationId: listAnchors
+      tags: [Navigation]
+      parameters:
+        - name: platform
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "抖音直播"
+      responses:
+        '200':
+          description: List of anchors
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Anchor'
+
+  /api/anchors/{anchor_name}/sessions:
+    get:
+      summary: List recording sessions for an anchor
+      operationId: listSessions
+      tags: [Navigation]
+      parameters:
+        - name: anchor_name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: platform
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter by platform
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+      responses:
+        '200':
+          description: Paginated list of sessions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionListResponse'
+
+  /api/sessions/{session_id}:
+    get:
+      summary: Get session details with segments
+      operationId: getSession
+      tags: [Sessions]
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Session with all segments
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionDetail'
+        '404':
+          description: Session not found
+
+  /api/segments/{segment_id}/play:
+    get:
+      summary: Get presigned playback URL for a segment
+      operationId: getPlayUrl
+      tags: [Playback]
+      parameters:
+        - name: segment_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Playback URL with metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlaybackUrl'
+        '400':
+          description: Segment not ready (conversion in progress)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Segment not found
+
+components:
+  schemas:
+    Platform:
+      type: object
+      required: [name, anchor_count, session_count]
+      properties:
+        name:
+          type: string
+          example: "抖音直播"
+        anchor_count:
+          type: integer
+          example: 15
+        session_count:
+          type: integer
+          example: 120
+
+    Anchor:
+      type: object
+      required: [name, session_count]
+      properties:
+        name:
+          type: string
+          example: "主播A"
+        session_count:
+          type: integer
+          example: 25
+        last_live:
+          type: string
+          format: date-time
+          example: "2026-01-05T20:30:00Z"
+
+    SessionSummary:
+      type: object
+      required: [id, started_at, segment_count]
+      properties:
+        id:
+          type: integer
+          example: 123
+        started_at:
+          type: string
+          format: date-time
+        ended_at:
+          type: string
+          format: date-time
+          nullable: true
+        duration:
+          type: number
+          description: Total duration in seconds
+          example: 9000
+        segment_count:
+          type: integer
+          example: 5
+        total_size:
+          type: integer
+          description: Total size in bytes
+          example: 5368709120
+
+    SessionListResponse:
+      type: object
+      required: [total, items]
+      properties:
+        total:
+          type: integer
+          example: 50
+        page:
+          type: integer
+          example: 1
+        limit:
+          type: integer
+          example: 20
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SessionSummary'
+
+    SegmentInfo:
+      type: object
+      required: [id, index, mp4_status]
+      properties:
+        id:
+          type: integer
+          example: 456
+        index:
+          type: integer
+          description: Segment number (0-based)
+          example: 0
+        duration:
+          type: number
+          description: Duration in seconds
+          example: 1800.5
+          nullable: true
+        size:
+          type: integer
+          description: File size in bytes
+          example: 1073741824
+        mp4_status:
+          type: string
+          enum: [pending, processing, completed, failed]
+          example: completed
+
+    SessionDetail:
+      type: object
+      required: [id, platform, anchor_name, started_at, segments]
+      properties:
+        id:
+          type: integer
+        platform:
+          type: string
+        anchor_name:
+          type: string
+        live_title:
+          type: string
+          nullable: true
+        started_at:
+          type: string
+          format: date-time
+        ended_at:
+          type: string
+          format: date-time
+          nullable: true
+        total_duration:
+          type: number
+          description: Sum of all segment durations
+        segments:
+          type: array
+          items:
+            $ref: '#/components/schemas/SegmentInfo'
+
+    PlaybackUrl:
+      type: object
+      required: [url, expires_at]
+      properties:
+        url:
+          type: string
+          format: uri
+          description: Presigned TOS URL
+          example: "https://bucket.tos-cn-beijing.volces.com/xxx.mp4?X-Tos-..."
+        expires_at:
+          type: string
+          format: date-time
+          description: URL expiration time
+        duration:
+          type: number
+          description: Video duration in seconds
+        title:
+          type: string
+          description: Display title for player
+          example: "主播A - 2026-01-05 14:00 - 分段1"
+
+    Error:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: string
+          example: "Segment MP4 not ready, status: processing"
+
+tags:
+  - name: Navigation
+    description: Browse recordings hierarchy
+  - name: Sessions
+    description: Recording session details
+  - name: Playback
+    description: Video playback URLs

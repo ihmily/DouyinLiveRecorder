@@ -6,14 +6,16 @@ This is the main interface for integration with main.py.
 Author: DouyinLiveRecorder
 Date: 2025-12-16
 """
+import asyncio
 import datetime
 import os
 import configparser
 from .database import DatabaseManager
 from .repository import RecordingRepository
-from .models import RecordingSession, RecordingSegment, UploadStatus
+from .models import RecordingSession, RecordingSegment, UploadStatus, Mp4Status
 from .tos_uploader import TOSUploader
 from .upload_queue import UploadWorker, UploadTask
+from .pipeline import Pipeline, StageInput, StageStatus, create_default_pipeline
 
 
 class RecordingManager:
@@ -46,7 +48,8 @@ class RecordingManager:
         tos_uploader: TOSUploader | None = None,
         enable_upload: bool = True,
         delete_after_upload: bool = True,
-        max_retries: int = 3
+        max_retries: int = 3,
+        enable_pipeline: bool = True
     ):
         """
         Initialize recording manager.
@@ -57,6 +60,7 @@ class RecordingManager:
             enable_upload: Whether to enable OSS upload
             delete_after_upload: Delete local file after upload
             max_retries: Maximum upload retry attempts
+            enable_pipeline: Whether to use the new pipeline (TS→MP4→Upload)
         """
         # Import logger
         try:
@@ -71,12 +75,16 @@ class RecordingManager:
         self.enable_upload = enable_upload and tos_uploader is not None
         self.delete_after_upload = delete_after_upload
         self.max_retries = max_retries
+        self.enable_pipeline = enable_pipeline
 
         # Track active recording sessions
         self._active_sessions: dict[str, int] = {}  # record_name -> session_id
 
         # Upload worker (lazy initialized)
         self._upload_worker: UploadWorker | None = None
+
+        # Pipeline for TS→MP4 conversion and upload
+        self._pipeline: Pipeline | None = None
 
     @classmethod
     def from_config(
@@ -154,7 +162,7 @@ class RecordingManager:
         return cls._instance
 
     def start(self) -> None:
-        """Start background services (upload worker)."""
+        """Start background services (upload worker and pipeline)."""
         if self.enable_upload and self.tos_uploader:
             self._upload_worker = UploadWorker(
                 db_manager=self.db_manager,
@@ -166,6 +174,11 @@ class RecordingManager:
             self.logger.info("Recording manager started with OSS upload enabled")
         else:
             self.logger.info("Recording manager started (OSS upload disabled)")
+
+        # Initialize pipeline for VOD conversion
+        if self.enable_pipeline and self.enable_upload:
+            self._pipeline = create_default_pipeline(delete_after_upload=self.delete_after_upload)
+            self.logger.info(f"VOD pipeline initialized (TS→MP4→Upload, delete_after_upload={self.delete_after_upload})")
 
         RecordingManager._instance = self
 
@@ -271,19 +284,32 @@ class RecordingManager:
         size_mb = f"{file_size/1024/1024:.2f}MB" if file_size else "未知"
         self.logger.info(f"分段已写入数据库: {file_name} | 会话: {session_id} | 序号: {segment_index} | 大小: {size_mb} | 时间: {create_time}")
 
-        # Queue for upload if enabled
-        if self.enable_upload and self._upload_worker:
-            from .upload_queue import UploadTask
-            task = UploadTask(
-                priority=0,
-                segment_id=segment_id,
-                local_path=segment_path,
-                platform=platform,
-                anchor_name=anchor_name,
-                filename=file_name
-            )
-            self._upload_worker.enqueue(task)
-            self.logger.info(f"分段已加入上传队列: {file_name} | segment_id: {segment_id}")
+        # Process segment: either via pipeline (TS→MP4→Upload) or direct upload
+        if self.enable_upload:
+            # Use pipeline for TS files to convert to MP4 first (for VOD seek support)
+            if self.enable_pipeline and self._pipeline and save_type.lower() == 'ts':
+                # Queue for pipeline processing in background thread
+                import threading
+                thread = threading.Thread(
+                    target=self.process_segment_sync,
+                    args=(segment_id, segment_path, save_type.lower(), session_id, anchor_name, platform),
+                    daemon=True
+                )
+                thread.start()
+                self.logger.info(f"分段已加入Pipeline队列 (TS→MP4→Upload): {file_name} | segment_id: {segment_id}")
+            elif self._upload_worker:
+                # Direct upload for non-TS formats or when pipeline is disabled
+                from .upload_queue import UploadTask
+                task = UploadTask(
+                    priority=0,
+                    segment_id=segment_id,
+                    local_path=segment_path,
+                    platform=platform,
+                    anchor_name=anchor_name,
+                    filename=file_name
+                )
+                self._upload_worker.enqueue(task)
+                self.logger.info(f"分段已加入上传队列: {file_name} | segment_id: {segment_id}")
         else:
             self.logger.debug(f"分段未加入上传队列 (上传未启用): {file_name}")
 
@@ -400,3 +426,151 @@ class RecordingManager:
         if self._upload_worker:
             return self._upload_worker.queue_size
         return 0
+
+    async def process_segment_with_pipeline(
+        self,
+        segment_id: int,
+        local_path: str,
+        file_format: str,
+        session_id: int,
+        anchor_name: str,
+        platform: str
+    ) -> bool:
+        """
+        Process a segment through the VOD pipeline (TS→MP4→Upload).
+
+        T040: Integrates pipeline into storage manager.
+        T041: Updates mp4_status transitions during processing.
+
+        Args:
+            segment_id: Database segment ID
+            local_path: Path to the local file
+            file_format: File format (ts, mp4, etc.)
+            session_id: Recording session ID
+            anchor_name: Anchor name
+            platform: Platform name
+
+        Returns:
+            True if pipeline completed successfully
+        """
+        if not self._pipeline:
+            self.logger.warning("Pipeline not initialized, falling back to direct upload")
+            return False
+
+        # T041: Update status to processing
+        with self.db_manager.get_session() as session:
+            repo = RecordingRepository(session)
+            segment = session.query(RecordingSegment).filter(
+                RecordingSegment.id == segment_id
+            ).first()
+            if segment:
+                segment.mp4_status = Mp4Status.PROCESSING
+                session.commit()
+
+        # Create pipeline input
+        stage_input = StageInput(
+            segment_id=segment_id,
+            local_file_path=local_path,
+            file_format=file_format,
+            session_id=session_id,
+            anchor_name=anchor_name,
+            platform=platform
+        )
+
+        try:
+            # Execute pipeline
+            results = await self._pipeline.execute(stage_input)
+
+            # T041, T043: Update database with results
+            with self.db_manager.get_session() as session:
+                segment = session.query(RecordingSegment).filter(
+                    RecordingSegment.id == segment_id
+                ).first()
+
+                if segment:
+                    upload_result = results.get("upload")
+                    convert_result = results.get("convert")
+
+                    if upload_result and upload_result.status == StageStatus.COMPLETED:
+                        output = upload_result.output
+
+                        # Update MP4 path if conversion succeeded
+                        if output.get("mp4_oss_path"):
+                            segment.mp4_oss_path = output["mp4_oss_path"]
+                            segment.mp4_status = Mp4Status.COMPLETED
+                            self.logger.info(f"Segment {segment_id}: MP4 uploaded to {output['mp4_oss_path']}")
+
+                        # Update TS path if fallback
+                        if output.get("oss_path"):
+                            segment.oss_path = output["oss_path"]
+
+                        # Update duration from conversion
+                        if output.get("duration"):
+                            segment.duration = output["duration"]
+
+                        # Mark local file deleted if cleanup was performed
+                        if output.get("local_file_deleted"):
+                            segment.local_file_deleted = True
+                            files_deleted = output.get("files_deleted", [])
+                            self.logger.info(f"Segment {segment_id}: Local files deleted: {files_deleted}")
+
+                        # Mark upload complete
+                        segment.upload_status = UploadStatus.COMPLETED
+                        segment.upload_completed_at = datetime.datetime.now()
+
+                    elif upload_result and upload_result.status == StageStatus.FAILED:
+                        # T043: Log and track conversion failures
+                        segment.mp4_status = Mp4Status.FAILED
+                        segment.upload_status = UploadStatus.FAILED
+                        segment.upload_error_message = upload_result.error
+                        self.logger.error(f"Segment {segment_id}: Pipeline failed - {upload_result.error}")
+
+                    session.commit()
+
+            return True
+
+        except Exception as e:
+            # T043: Error logging for pipeline failures
+            self.logger.error(f"Pipeline execution error for segment {segment_id}: {e}")
+
+            with self.db_manager.get_session() as session:
+                segment = session.query(RecordingSegment).filter(
+                    RecordingSegment.id == segment_id
+                ).first()
+                if segment:
+                    segment.mp4_status = Mp4Status.FAILED
+                    segment.upload_error_message = str(e)
+                    session.commit()
+
+            return False
+
+    def process_segment_sync(
+        self,
+        segment_id: int,
+        local_path: str,
+        file_format: str,
+        session_id: int,
+        anchor_name: str,
+        platform: str
+    ) -> bool:
+        """
+        Synchronous wrapper for pipeline processing.
+
+        Use this when calling from non-async code.
+        """
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        return loop.run_until_complete(
+            self.process_segment_with_pipeline(
+                segment_id=segment_id,
+                local_path=local_path,
+                file_format=file_format,
+                session_id=session_id,
+                anchor_name=anchor_name,
+                platform=platform
+            )
+        )

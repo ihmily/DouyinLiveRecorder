@@ -9,7 +9,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional, List
 from sqlalchemy import (
-    Column, Integer, String, DateTime, BigInteger,
+    Column, Integer, String, DateTime, BigInteger, Float,
     ForeignKey, Enum as SQLEnum, Text, Boolean
 )
 from sqlalchemy.orm import declarative_base, relationship, Mapped, mapped_column
@@ -24,6 +24,14 @@ class UploadStatus(str, Enum):
     COMPLETED = "completed"       # Upload successful
     FAILED = "failed"             # Upload failed (after retries)
     SKIPPED = "skipped"           # Skipped (e.g., file not found)
+
+
+class Mp4Status(str, Enum):
+    """MP4 conversion status enumeration for VOD playback."""
+    PENDING = "pending"           # Waiting to convert
+    PROCESSING = "processing"     # Currently converting
+    COMPLETED = "completed"       # Conversion successful, MP4 uploaded
+    FAILED = "failed"             # Conversion failed
 
 
 class RecordingSession(Base):
@@ -105,6 +113,15 @@ class RecordingSegment(Base):
 
     # Local file status
     local_file_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # VOD playback fields (for MP4 conversion)
+    mp4_oss_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    mp4_status: Mapped[Mp4Status] = mapped_column(
+        SQLEnum(Mp4Status),
+        default=Mp4Status.PENDING,
+        index=True
+    )
+    duration: Mapped[Optional[float]] = mapped_column(nullable=True)
 
     # Timestamps
     recorded_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.now)
