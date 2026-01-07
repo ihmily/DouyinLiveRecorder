@@ -6,6 +6,9 @@
 # Default target
 .DEFAULT_GOAL := help
 
+# Auto-detect docker compose command (V2 plugin vs standalone)
+DOCKER_COMPOSE := $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
+
 # Colors for output
 BLUE := \033[34m
 GREEN := \033[32m
@@ -26,32 +29,32 @@ help: ## Show this help message
 # =============================================================================
 
 up: ## Start all services (development mode)
-	docker compose up -d
+	$(DOCKER_COMPOSE) up -d
 
 down: ## Stop all services
-	docker compose down
+	$(DOCKER_COMPOSE) down
 
 restart: ## Restart all services
-	docker compose restart
+	$(DOCKER_COMPOSE) restart
 
 build: ## Build all Docker images
-	docker compose build
+	$(DOCKER_COMPOSE) build
 
 clean: ## Stop services and remove volumes
-	docker compose down -v --remove-orphans
+	$(DOCKER_COMPOSE) down -v --remove-orphans
 
 # =============================================================================
 # Monitoring
 # =============================================================================
 
 logs: ## View all service logs
-	docker compose logs
+	$(DOCKER_COMPOSE) logs
 
 logs-tail: ## Follow logs in real-time
-	docker compose logs -f
+	$(DOCKER_COMPOSE) logs -f
 
 ps: ## Show running services status
-	docker compose ps
+	$(DOCKER_COMPOSE) ps
 
 # =============================================================================
 # Configuration
@@ -76,7 +79,7 @@ config-init: ## Initialize default configuration files
 
 check-tos: ## Validate TOS/OSS connectivity
 	@echo "$(BLUE)Validating TOS connectivity...$(NC)"
-	@docker compose exec recorder python -c "from src.tos_validator import validate_and_log; validate_and_log()" 2>/dev/null || \
+	@$(DOCKER_COMPOSE) exec recorder python -c "from src.tos_validator import validate_and_log; validate_and_log()" 2>/dev/null || \
 		python -c "from src.tos_validator import validate_and_log; validate_and_log()" 2>/dev/null || \
 		echo "$(YELLOW)TOS validation requires running containers or local Python environment$(NC)"
 
@@ -85,12 +88,12 @@ check-tos: ## Validate TOS/OSS connectivity
 # =============================================================================
 
 up-dev: ## Start in development mode (hot-reload frontend)
-	docker compose --profile dev up -d
+	$(DOCKER_COMPOSE) --profile dev up -d
 
 up-prod: ## Start in production mode (nginx + static frontend)
 	@echo "$(BLUE)Building frontend for production...$(NC)"
 	$(MAKE) build-frontend
-	docker compose --profile production up -d
+	$(DOCKER_COMPOSE) --profile production up -d
 
 build-frontend: ## Build frontend static files for production
 	@echo "$(BLUE)Building frontend...$(NC)"
@@ -102,16 +105,16 @@ build-frontend: ## Build frontend static files for production
 # =============================================================================
 
 recorder-logs: ## View recorder service logs only
-	docker compose logs -f recorder
+	$(DOCKER_COMPOSE) logs -f recorder
 
 backend-logs: ## View backend service logs only
-	docker compose logs -f backend
+	$(DOCKER_COMPOSE) logs -f backend
 
 frontend-logs: ## View frontend service logs only
-	docker compose logs -f frontend
+	$(DOCKER_COMPOSE) logs -f frontend
 
 shell-recorder: ## Open shell in recorder container
-	docker compose exec recorder bash
+	$(DOCKER_COMPOSE) exec recorder bash
 
 shell-backend: ## Open shell in backend container
-	docker compose exec backend bash
+	$(DOCKER_COMPOSE) exec backend bash

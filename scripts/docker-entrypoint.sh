@@ -64,7 +64,7 @@ echo -e "${GREEN}[Entrypoint] Validating TOS connectivity...${NC}"
 
 # Run TOS validation with 10-second timeout
 # Continue even if validation fails (graceful degradation)
-timeout 10 python -c "
+timeout 10 uv run python -c "
 try:
     from src.tos_validator import validate_and_log
     validate_and_log()

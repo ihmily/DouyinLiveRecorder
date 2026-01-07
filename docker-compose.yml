@@ -19,8 +19,6 @@
 #
 # ============================================================================
 
-version: '3.8'
-
 services:
   # ===========================================================================
   # Recorder Service - Live stream monitoring and recording
@@ -37,7 +35,7 @@ services:
     tty: true
     stdin_open: true
     volumes:
-      - ./config:/app/config:ro           # Config files (read-only)
+      - ./config:/app/config:rw           # Config files (needs write for URL dedup)
       - ./data:/app/data:rw               # SQLite database (shared with backend)
       - ./downloads:/app/downloads:rw     # Recorded video files
       - ./logs/recorder:/app/logs:rw      # Recorder logs (loguru output)
@@ -72,6 +70,7 @@ services:
       - ./config:/config:ro             # Config files (read-only)
       - ./data:/data:rw                 # SQLite database (shared with recorder)
       - ./logs/backend:/app/logs:rw     # Backend logs
+      - ./src:/src:ro                   # Storage models (shared with recorder)
     networks:
       - app-network
     depends_on:
@@ -79,7 +78,7 @@ services:
         condition: service_healthy      # Wait for recorder to be healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -94,7 +93,7 @@ services:
       dockerfile: Dockerfile
     container_name: frontend
     environment:
-      - VITE_API_URL=http://backend:8000
+      - VITE_API_URL=${VITE_API_URL:-http://localhost:8000}
     ports:
       - "${FRONTEND_DEV_PORT:-5173}:5173"
     volumes:
