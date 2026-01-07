@@ -1,6 +1,47 @@
-.github/workflows/build-image.yml
+# Git
 .git
 .gitignore
+.github/
+
+# Docker
 .dockerignore
+Dockerfile*
+
+# Documentation
 README.md
 LICENSE
+docs/
+*.md
+
+# Logs and data (mounted as volumes)
+logs/
+data/
+downloads/
+backup_config/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Node
+node_modules/
+*.log
+
+# Environment
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+
+# Specs (development only)
+specs/
+.specify/
+
+# Tests
+tests/
+coverage/

@@ -1,0 +1,138 @@
+# DouyinLiveRecorder - Unified Docker Compose Configuration
+# ============================================================================
+#
+# Quick Start:
+#   Development:  docker compose up -d  (or: make up)
+#   Production:   docker compose --profile production up -d  (or: make up-prod)
+#
+# Services:
+#   - recorder:     Live stream monitoring and recording (FFmpeg-based)
+#   - backend:      FastAPI VOD API (metadata, signed URLs)
+#   - frontend-dev: Vite dev server with hot-reload (dev profile)
+#   - nginx:        Production reverse proxy (production profile)
+#
+# Volume Mounts (host -> container):
+#   ./config     -> /app/config (read-only)   - Configuration files
+#   ./data       -> /app/data   (read-write)  - SQLite database
+#   ./downloads  -> /app/downloads (rw)       - Recorded video files
+#   ./logs       -> /app/logs   (read-write)  - Runtime logs
+#
+# ============================================================================
+
+version: '3.8'
+
+services:
+  # ===========================================================================
+  # Recorder Service - Live stream monitoring and recording
+  # Monitors URLs from config/URL_config.ini and records streams via FFmpeg
+  # ===========================================================================
+  recorder:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: recorder
+    environment:
+      - TZ=${TZ:-Asia/Shanghai}          # Timezone for log timestamps
+      - TERM=xterm-256color               # Terminal colors for loguru
+    tty: true
+    stdin_open: true
+    volumes:
+      - ./config:/app/config:ro           # Config files (read-only)
+      - ./data:/app/data:rw               # SQLite database (shared with backend)
+      - ./downloads:/app/downloads:rw     # Recorded video files
+      - ./logs/recorder:/app/logs:rw      # Recorder logs (loguru output)
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      # Health check: database file exists (created after first recording)
+      test: ["CMD", "test", "-f", "/app/data/recordings.db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s                   # Allow time for initial startup
+
+  # ===========================================================================
+  # Backend Service - FastAPI VOD API
+  # Provides recording metadata and TOS-signed playback URLs
+  # ===========================================================================
+  backend:
+    build:
+      context: ./vod-player/backend
+      dockerfile: Dockerfile
+    container_name: backend
+    environment:
+      - TZ=${TZ:-Asia/Shanghai}
+      - DATABASE_URL=sqlite:///data/recordings.db       # Shared with recorder
+      - CONFIG_PATH=/config/config.ini
+      - TOS_CREDENTIALS_PATH=/config/tos_credentials.ini
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"   # API port (customize via .env)
+    volumes:
+      - ./config:/config:ro             # Config files (read-only)
+      - ./data:/data:rw                 # SQLite database (shared with recorder)
+      - ./logs/backend:/app/logs:rw     # Backend logs
+    networks:
+      - app-network
+    depends_on:
+      recorder:
+        condition: service_healthy      # Wait for recorder to be healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ===========================================================================
+  # Frontend Development Service - Vite dev server with hot-reload
+  # ===========================================================================
+  frontend-dev:
+    build:
+      context: ./vod-player/frontend
+      dockerfile: Dockerfile
+    container_name: frontend
+    environment:
+      - VITE_API_URL=http://backend:8000
+    ports:
+      - "${FRONTEND_DEV_PORT:-5173}:5173"
+    volumes:
+      - ./vod-player/frontend:/app
+      - /app/node_modules
+      - ./logs/frontend:/app/logs:rw
+    networks:
+      - app-network
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles:
+      - dev
+    command: npm run dev -- --host 0.0.0.0
+
+  # ===========================================================================
+  # Nginx Service - Production reverse proxy
+  # ===========================================================================
+  nginx:
+    image: nginx:alpine
+    container_name: nginx
+    ports:
+      - "${NGINX_PORT:-80}:80"
+    volumes:
+      - ./vod-player/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./vod-player/frontend/dist:/usr/share/nginx/html:ro
+      - ./logs/nginx:/var/log/nginx:rw
+    networks:
+      - app-network
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles:
+      - production
+
+networks:
+  app-network:
+    driver: bridge
+    name: douyinliverecorder-network
