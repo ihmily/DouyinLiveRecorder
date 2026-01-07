@@ -102,6 +102,23 @@ As a developer or administrator, I want the option to run in development mode (w
 
 ---
 
+### User Story 7 - Runtime Prerequisite Validation (Priority: P1)
+
+As a system administrator, I want the system to validate required credentials and connectivity on startup so that I can identify configuration issues before recording begins and avoid silent failures.
+
+**Why this priority**: Critical for reliability - without validation, the system may start but fail to upload recordings, leading to data loss or confusion about why OSS uploads are not working.
+
+**Independent Test**: Can be fully tested by starting the system with valid/invalid/missing TOS credentials and verifying appropriate startup behavior.
+
+**Acceptance Scenarios**:
+
+1. **Given** the TOS access_key and secret_key are present and valid in tos_credentials.ini, **When** the recorder service starts, **Then** it performs a test API call (list bucket or write/read small test object) and logs "TOS connectivity verified"
+2. **Given** the TOS credentials are missing or empty, **When** the recorder service starts, **Then** it logs a clear warning "TOS credentials not configured - OSS upload disabled" and continues without OSS functionality
+3. **Given** the TOS credentials are present but invalid (wrong key), **When** the recorder service starts, **Then** it logs an error "TOS authentication failed: [error details]" and either exits or continues with OSS disabled (based on config)
+4. **Given** the TOS endpoint is unreachable (network issue), **When** the recorder service starts, **Then** it logs a warning "TOS endpoint unreachable - will retry" and retries periodically
+
+---
+
 ### Edge Cases
 
 - What happens when the host config directory is empty on first startup? (System should create default configuration files)
@@ -109,6 +126,8 @@ As a developer or administrator, I want the option to run in development mode (w
 - What happens when disk space runs out on the host? (Recording should pause gracefully with logged warnings)
 - How does the system behave when one service fails but others are healthy? (Dependent services should handle the failure gracefully)
 - What happens when the user upgrades to a new version with schema changes? (Database migrations should run automatically)
+- What happens when TOS credentials become invalid during runtime? (System should log the error and disable OSS uploads until next restart)
+- What happens when TOS bucket doesn't exist? (System should log a clear error with bucket name and region)
 
 ## Requirements *(mandatory)*
 
@@ -127,6 +146,10 @@ As a developer or administrator, I want the option to run in development mode (w
 - **FR-011**: System MUST support both development and production deployment profiles
 - **FR-012**: System MUST include health checks for backend service to ensure API availability
 - **FR-013**: System MUST pass environment variables for database path, config paths, and credential paths to services
+- **FR-014**: System MUST validate TOS credentials on startup by checking if access_key and secret_key are present in tos_credentials.ini
+- **FR-015**: System MUST perform a basic TOS API connectivity test (e.g., HeadBucket or PutObject/GetObject/DeleteObject with test file) on startup when credentials are present
+- **FR-016**: System MUST log clear status messages for TOS validation: success, missing credentials, authentication failure, or network unreachable
+- **FR-017**: System MUST continue operating without OSS functionality if TOS credentials are missing or invalid, rather than failing completely
 
 ### Key Entities
 
@@ -149,6 +172,8 @@ As a developer or administrator, I want the option to run in development mode (w
 - **SC-005**: System recovers from service crashes within 30 seconds via automatic restart
 - **SC-006**: New users can have the system running with default configuration in under 5 minutes (excluding Docker installation)
 - **SC-007**: Configuration changes take effect without rebuilding Docker images
+- **SC-008**: TOS credential validation completes within 10 seconds of service startup
+- **SC-009**: System starts successfully and operates in local-only mode when TOS credentials are not configured
 
 ## Assumptions
 

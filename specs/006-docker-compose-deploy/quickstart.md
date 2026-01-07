@@ -69,6 +69,18 @@ endpoint = https://tos-cn-beijing.volces.com
 bucket = your-bucket-name
 ```
 
+**Note**: On startup, the system automatically validates TOS credentials and performs a connectivity test. Check the logs for validation status:
+
+```bash
+# Check TOS validation status
+docker compose logs recorder | grep -i "TOS:"
+```
+
+Expected messages:
+- `TOS: connectivity verified - OSS upload enabled` - Credentials are valid
+- `TOS: credentials not configured - OSS upload disabled` - No credentials (local-only mode)
+- `TOS: authentication failed` - Invalid credentials (check access_key/secret_key)
+
 ### 3. Adjust Recording Settings
 
 Edit `config/config.ini` to change:
@@ -187,6 +199,37 @@ NGINX_PORT=8080
 3. Restart services after major config changes:
    ```bash
    docker compose restart
+   ```
+
+### TOS/OSS Upload Issues
+
+1. Check TOS validation status in logs:
+   ```bash
+   docker compose logs recorder | grep -i "TOS:"
+   ```
+
+2. Common TOS errors and solutions:
+
+   | Error Message | Solution |
+   |---------------|----------|
+   | `credentials not configured` | Add access_key and secret_key to `config/tos_credentials.ini` |
+   | `authentication failed` | Verify access_key and secret_key are correct |
+   | `bucket not found` | Check bucket name and region match your TOS console |
+   | `endpoint unreachable` | Check network connectivity and endpoint URL |
+
+3. Test TOS credentials manually:
+   ```bash
+   # Enter the recorder container
+   docker compose exec recorder bash
+
+   # Run the validation script
+   python -c "from src.tos_validator import validate_and_log; validate_and_log()"
+   ```
+
+4. Verify OSS is enabled in config:
+   ```bash
+   grep -i "启用OSS" config/config.ini
+   # Should show: 启用OSS上传(是/否) = 是
    ```
 
 ## Next Steps
