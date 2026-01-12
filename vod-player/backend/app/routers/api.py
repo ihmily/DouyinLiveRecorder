@@ -13,8 +13,15 @@ from fastapi import APIRouter, HTTPException, Query, Depends
 from sqlalchemy import func, distinct
 from sqlalchemy.orm import Session
 
-# Add project root to path (vod-player/backend/app/routers/api.py -> 5 levels up to DouyinLiveRecorder)
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+# Add project root to path
+# In Docker: /src is mounted directly, so project_root = "/"
+# In local dev: vod-player/backend/app/routers/api.py -> 5 levels up to DouyinLiveRecorder
+if os.path.exists("/src/storage/models.py"):
+    # Docker environment - src is mounted at /src
+    project_root = "/"
+else:
+    # Local development
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 sys.path.insert(0, project_root)
 
 # Import storage modules directly to avoid src/__init__.py initialization (requires distro, node check, etc.)

@@ -432,52 +432,86 @@ uv run main.py
 &emsp;
 ## 🐋容器运行
 
-在运行命令之前，请确保您的机器上安装了 [Docker](https://docs.docker.com/get-docker/) 和 [Docker Compose](https://docs.docker.com/compose/install/) 
+在运行命令之前，请确保您的机器上安装了 [Docker](https://docs.docker.com/get-docker/) 和 [Docker Compose](https://docs.docker.com/compose/install/)
 
-1.快速启动
+### 一键启动（推荐）
 
-最简单方法是运行项目中的 [docker-compose.yaml](https://github.com/ihmily/DouyinLiveRecorder/blob/main/docker-compose.yaml) 文件，只需简单执行以下命令：
-
-```bash
-docker-compose up
-```
-
-可选 `-d` 在后台运行。
-
-
-
-2.构建镜像(可选)
-
-如果你只想简单的运行程序，则不需要做这一步。Docker镜像仓库中代码版本可能不是最新的，如果要运行本仓库主分支最新代码，可以本地自定义构建，通过修改 [docker-compose.yaml](https://github.com/ihmily/DouyinLiveRecorder/blob/main/docker-compose.yaml) 文件，如将镜像名修改为 `douyin-live-recorder:latest`，并取消 `# build: .` 注释，然后再执行
+使用 Makefile 统一管理 Docker 命令：
 
 ```bash
-docker build -t douyin-live-recorder:latest .
-docker-compose up
+# 初始化配置文件（首次运行）
+make config-init
+
+# 启动所有服务（录制器 + 后端API + 前端播放器）
+make up
+
+# 查看服务状态
+make ps
+
+# 查看日志
+make logs-tail
 ```
 
-或者直接使用下面命令进行构建并启动
+### 常用命令
+
+| 命令 | 说明 |
+|------|------|
+| `make up` | 启动所有服务 |
+| `make down` | 停止所有服务 |
+| `make restart` | 重启所有服务 |
+| `make logs` | 查看服务日志 |
+| `make logs-tail` | 实时查看日志 |
+| `make ps` | 查看运行状态 |
+| `make config-init` | 初始化配置文件 |
+| `make check-tos` | 验证TOS/OSS连接 |
+
+### 开发/生产模式
 
 ```bash
-docker-compose -f docker-compose.yaml up
+# 开发模式（前端热重载）
+make up-dev
+
+# 生产模式（nginx反向代理）
+make up-prod
 ```
 
+### 目录结构
 
+启动后，以下目录会挂载到主机：
 
-3.停止容器实例
+```
+./config/         # 配置文件（可直接编辑）
+./data/           # SQLite数据库
+./downloads/      # 录制的视频文件
+./logs/           # 服务运行日志
+```
+
+### 传统启动方式
+
+如果不使用 Makefile，也可以直接运行：
 
 ```bash
-docker-compose stop
+docker compose up -d
 ```
 
+### 构建镜像（可选）
 
+如果需要使用本地最新代码：
 
-4.注意事项
+```bash
+make build
+make up
+```
 
-①在docker容器内运行本程序之前，请先在配置文件中添加要录制的直播间地址。
+### 注意事项
 
-②在容器内时，如果手动中断容器运行停止录制，会导致正在录制的视频文件损坏！
+①在容器内运行之前，请先在 `config/URL_config.ini` 中添加要录制的直播间地址。
 
-**无论哪种运行方式，为避免手动中断或者异常中断导致录制的视频文件损坏的情况，推荐使用 `ts` 格式保存**。
+②配置文件修改后，录制器会在下次循环检测时自动读取新配置。
+
+③TOS/OSS 配置会在启动时自动验证，验证失败会禁用云存储但不影响本地录制。
+
+**为避免手动中断导致视频文件损坏，推荐使用 `ts` 格式保存**。
 
 &emsp;
 

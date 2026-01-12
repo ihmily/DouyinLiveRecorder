@@ -90,6 +90,10 @@ Adding a new platform requires:
 - Python >= 3.10 + SQLAlchemy 2.0+, tos (Volcano Engine TOS SDK), loguru, threading (005-oss-cleanup)
 - SQLite (default, data/recordings.db), also supports PostgreSQL/MySQL via SQLAlchemy (005-oss-cleanup)
 - Python >= 3.10 (existing project requirement) + SQLAlchemy 2.0+, `tos` (Volcano Engine TOS SDK), loguru, threading (005-oss-cleanup)
+- Python 3.11 (recorder, backend), TypeScript 5.x (frontend), Docker Compose 3.8+ + Docker, Docker Compose, nginx (production profile) (006-docker-compose-deploy)
+- SQLite (data/recordings.db), host filesystem (config, downloads, logs) (006-docker-compose-deploy)
+- Python 3.11 (recorder, backend), TypeScript 5.x (frontend), Docker Compose 3.8+ + Docker, Docker Compose, nginx (production profile), `tos` SDK (TOS validation) (006-docker-compose-deploy)
+- SQLite (data/recordings.db), host filesystem (config, downloads, logs), TOS (cloud upload) (006-docker-compose-deploy)
 
 ## Recent Changes
 - 002-vod-player-frontend: Added Python 3.10+ (backend), TypeScript (frontend)

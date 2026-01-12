@@ -2,18 +2,34 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# Install system dependencies
+RUN apt-get update && \
+    apt-get install -y curl gnupg ffmpeg tzdata && \
+    curl -sL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs && \
+    ln -fs /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
+    dpkg-reconfigure -f noninteractive tzdata && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install uv
+RUN pip install uv
+
+# Copy dependency files first for better caching
+COPY pyproject.toml uv.lock ./
+
+# Install dependencies with uv
+RUN uv sync --frozen --no-dev --no-install-project
+
+# Copy application code
 COPY . /app
 
-RUN apt-get update && \
-    apt-get install -y curl gnupg && \
-    curl -sL https://deb.nodesource.com/setup_20.x  | bash - && \
-    apt-get install -y nodejs
+# Copy and set entrypoint script
+COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
-RUN pip install --no-cache-dir -r requirements.txt
+# Create directories for volume mounts
+RUN mkdir -p /app/config /app/data /app/downloads /app/logs
 
-RUN apt-get update && \
-    apt-get install -y ffmpeg tzdata && \
-    ln -fs /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
-    dpkg-reconfigure -f noninteractive tzdata
-
-CMD ["python", "main.py"]
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["uv", "run", "python", "main.py"]
