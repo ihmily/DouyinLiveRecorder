@@ -71,6 +71,107 @@ python demo.py
 - Node.js (for JavaScript-based signature algorithms, auto-checked on startup)
 - Key packages: httpx, loguru, pycryptodome, PyExecJS
 
+## Runtime Configuration (Git-ignored)
+
+The following files and directories are **not tracked by git** but required at runtime:
+
+### Required Configuration Files
+
+1. **TOS Credentials** (required only if using OSS upload feature):
+   ```bash
+   cp config/tos_credentials.ini.example config/tos_credentials.ini
+   # Edit with your Volcano Engine TOS credentials:
+   # - endpoint, s3_endpoint, region
+   # - bucket name
+   # - access_key, secret_key
+   ```
+
+### Optional Configuration Files
+
+1. **Environment Variables** (optional, for customizing Docker deployment):
+   ```bash
+   cp .env.example .env
+   ```
+   Docker Compose auto-reads `.env` and uses these variables (all have defaults):
+   | Variable | Default | Purpose |
+   |----------|---------|---------|
+   | `BACKEND_PORT` | 8000 | Backend API port |
+   | `FRONTEND_DEV_PORT` | 5173 | Vite dev server port |
+   | `NGINX_PORT` | 80 | Production nginx port |
+   | `TZ` | Asia/Shanghai | Container timezone |
+
+   **Note**: If you're fine with defaults, you don't need to create `.env` at all.
+
+### Runtime Directories (auto-created)
+
+| Directory | Purpose |
+|-----------|---------|
+| `data/` | SQLite database (`recordings.db`) |
+| `logs/` | Application logs (recorder, backend, frontend, nginx) |
+| `downloads/` | Recorded video files |
+| `backup_config/` | Configuration backups |
+
+### Configuration Files (tracked)
+
+| File | Purpose |
+|------|---------|
+| `config/config.ini` | Main settings: quality, proxy, save paths, cookies, OSS/VOD settings |
+| `config/URL_config.ini` | Live room URLs to monitor (one per line, format: `URL,主播: name`) |
+
+## Docker Deployment
+
+### Quick Start
+```bash
+# Development mode (with Vite hot-reload)
+docker compose --profile dev up -d
+
+# Production mode (with nginx)
+docker compose --profile production up -d
+
+# Or use Makefile shortcuts
+make up        # Development
+make up-prod   # Production
+```
+
+### Services
+| Service | Description | Port |
+|---------|-------------|------|
+| `recorder` | Live stream monitoring & FFmpeg recording | - |
+| `backend` | FastAPI VOD API (metadata, signed URLs) | 8000 |
+| `frontend-dev` | Vite dev server (dev profile only) | 5173 |
+| `nginx` | Production reverse proxy (production profile only) | 80 |
+
+### Volume Mounts
+```
+./config     -> /app/config    (recorder config)
+./data       -> /app/data      (shared SQLite database)
+./downloads  -> /app/downloads (recorded files)
+./logs       -> /app/logs      (service logs)
+```
+
+## Database
+
+- **Default**: SQLite at `data/recordings.db` (auto-created on first recording)
+- **Alternative**: PostgreSQL/MySQL via `数据库URL` setting in `config/config.ini`
+  - Example: `postgresql://user:pass@localhost/dbname`
+  - Example: `mysql+pymysql://user:pass@localhost/dbname`
+- Managed by SQLAlchemy 2.0+
+
+## VOD Player
+
+The `vod-player/` directory contains a web-based video player for recorded streams:
+
+- **Backend** (`vod-player/backend/`): FastAPI service providing recording metadata and TOS-signed playback URLs
+- **Frontend** (`vod-player/frontend/`): Vue 3 + TypeScript SPA with Video.js player
+
+Configuration in `config/config.ini`:
+```ini
+[VOD设置]
+启用VOD(是/否) = 是
+签名有效期 = 3600
+服务端口 = 8000
+```
+
 ## Platform Support
 
 Adding a new platform requires:
@@ -80,20 +181,13 @@ Adding a new platform requires:
 4. Add cookie field in `config/config.ini` (if needed)
 5. Add test entry in `demo.py`
 
-## Active Technologies
-- Python 3.10+ (backend), TypeScript (frontend) (002-vod-player-frontend)
-- SQLite/PostgreSQL (existing DB), TOS (existing bucket) (002-vod-player-frontend)
-- Python 3.10+ + FastAPI, TOS SDK (`tos` package), Pydantic (003-dual-oss-endpoint)
-- SQLite (existing, no changes) (003-dual-oss-endpoint)
-- Python 3.10+ (backend), TypeScript 5.3+ (frontend) (004-video-segment-aggregation)
-- SQLite (existing recordings.db), localStorage (playback position) (004-video-segment-aggregation)
-- Python >= 3.10 + SQLAlchemy 2.0+, tos (Volcano Engine TOS SDK), loguru, threading (005-oss-cleanup)
-- SQLite (default, data/recordings.db), also supports PostgreSQL/MySQL via SQLAlchemy (005-oss-cleanup)
-- Python >= 3.10 (existing project requirement) + SQLAlchemy 2.0+, `tos` (Volcano Engine TOS SDK), loguru, threading (005-oss-cleanup)
-- Python 3.11 (recorder, backend), TypeScript 5.x (frontend), Docker Compose 3.8+ + Docker, Docker Compose, nginx (production profile) (006-docker-compose-deploy)
-- SQLite (data/recordings.db), host filesystem (config, downloads, logs) (006-docker-compose-deploy)
-- Python 3.11 (recorder, backend), TypeScript 5.x (frontend), Docker Compose 3.8+ + Docker, Docker Compose, nginx (production profile), `tos` SDK (TOS validation) (006-docker-compose-deploy)
-- SQLite (data/recordings.db), host filesystem (config, downloads, logs), TOS (cloud upload) (006-docker-compose-deploy)
+## Technology Stack
 
-## Recent Changes
-- 002-vod-player-frontend: Added Python 3.10+ (backend), TypeScript (frontend)
+| Component | Technology |
+|-----------|------------|
+| Recorder | Python 3.11, FFmpeg, httpx, loguru |
+| Backend API | FastAPI, SQLAlchemy 2.0+, Pydantic |
+| Frontend | Vue 3, TypeScript 5.x, Video.js |
+| Cloud Storage | Volcano Engine TOS (`tos` SDK) |
+| Database | SQLite (default), PostgreSQL/MySQL (optional) |
+| Deployment | Docker Compose, nginx |
