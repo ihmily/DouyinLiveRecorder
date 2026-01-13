@@ -58,7 +58,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
+import { useRouter } from 'vue-router'
 import { ArrowLeft, Loading } from '@element-plus/icons-vue'
 import AggregatedPlayer from '@/components/AggregatedPlayer.vue'
 import { getSessionByPath } from '@/api'
@@ -73,7 +73,6 @@ const props = defineProps<{
 }>()
 
 const router = useRouter()
-const route = useRoute()
 
 const aggregatedSession = ref<AggregatedSession | null>(null)
 const aggregatedPlayer = ref<InstanceType<typeof AggregatedPlayer> | null>(null)

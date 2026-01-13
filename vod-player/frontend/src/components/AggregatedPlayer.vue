@@ -104,7 +104,6 @@ const isPrefetching = ref(false)
 
 // Playback position persistence
 let throttledSaver: ((position: number, segmentId: number) => void) | null = null
-let hasSeekedToSavedPosition = false
 
 // Playback position tracking
 const localPosition = ref(0) // Position within current segment
@@ -362,7 +361,6 @@ async function loadSession() {
   loading.value = true
   loadingMessage.value = '加载会话...'
   error.value = null
-  hasSeekedToSavedPosition = false
 
   try {
     aggregatedSession.value = await getAggregatedSession(props.sessionId)
@@ -393,7 +391,6 @@ async function loadSession() {
 
     if (savedState && savedState.position > 0) {
       // Resume from saved position
-      hasSeekedToSavedPosition = true
       await seekToPosition(savedState.position)
     } else {
       // Auto-play first segment
