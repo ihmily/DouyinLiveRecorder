@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DouyinLiveRecorder</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: #fff;
+        }
+        .container {
+            text-align: center;
+            padding: 2rem;
+        }
+        h1 {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            background: linear-gradient(90deg, #e94560, #ff6b6b);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .subtitle {
+            font-size: 1.2rem;
+            color: #a0a0a0;
+            margin-bottom: 3rem;
+        }
+        .links {
+            display: flex;
+            gap: 1.5rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        .link-card {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 1.5rem 2rem;
+            text-decoration: none;
+            color: #fff;
+            transition: all 0.3s ease;
+            min-width: 200px;
+        }
+        .link-card:hover {
+            background: rgba(233, 69, 96, 0.2);
+            border-color: #e94560;
+            transform: translateY(-4px);
+        }
+        .link-card h2 {
+            font-size: 1.2rem;
+            margin-bottom: 0.5rem;
+        }
+        .link-card p {
+            font-size: 0.9rem;
+            color: #a0a0a0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>DouyinLiveRecorder</h1>
+        <p class="subtitle">Multi-platform Live Stream Recording Tool</p>
+        <div class="links">
+            <a href="/live/" class="link-card">
+                <h2>VOD Player</h2>
+                <p>Browse and watch recorded streams</p>
+            </a>
+            <a href="/api/docs" class="link-card">
+                <h2>API Docs</h2>
+                <p>Interactive API documentation</p>
+            </a>
+        </div>
+    </div>
+</body>
+</html>

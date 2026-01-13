@@ -120,7 +120,8 @@ services:
       - "${NGINX_PORT:-80}:80"
     volumes:
       - ./vod-player/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./vod-player/frontend/dist:/usr/share/nginx/html:ro
+      - ./vod-player/frontend/dist:/usr/share/nginx/html/app:ro
+      - ./vod-player/landing:/usr/share/nginx/html/landing:ro
       - ./logs/nginx:/var/log/nginx:rw
     networks:
       - app-network
