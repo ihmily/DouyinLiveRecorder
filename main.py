@@ -350,46 +350,68 @@ def telegram_manage_live_urls(token: str, chat_id: str):
                 if not text or msg_chat_id != str(chat_id):
                     continue
 
-                lower_text = text.lower()
-                if lower_text in {'/start', '/help'}:
+                # 规范化命令：取第一个 token，并去掉 @BotName 后缀
+                if text.startswith('/'):
+                    command_token = text.split(maxsplit=1)[0]
+                    command = command_token.split('@', 1)[0].lower()
+                    args = text[len(command_token):].lstrip()
+                else:
+                    command = ''
+                    args = text
+
+                if command in {'/start', '/help'}:
                     tg_bot(chat_id, token, help_text)
                     continue
 
-                if lower_text == '/list':
+                if command == '/list':
                     tg_bot(chat_id, token, list_live_urls())
                     continue
 
-                if lower_text == '/status':
+                if command == '/status':
                     tg_bot(chat_id, token, get_recording_status())
                     continue
 
-                if lower_text.startswith('/del ') or lower_text.startswith('/delete '):
-                    target_url = extract_live_url(text.split(' ', maxsplit=1)[1])
-                    if target_url:
-                        tg_bot(chat_id, token, delete_live_url(target_url))
+                if command in {'/del', '/delete'}:
+                    if args:
+                        target_url = extract_live_url(args)
+                        if target_url:
+                            tg_bot(chat_id, token, delete_live_url(target_url))
+                        else:
+                            tg_bot(chat_id, token, "❌ 未识别到有效链接，请使用 /del 链接")
                     else:
                         tg_bot(chat_id, token, "❌ 未识别到有效链接，请使用 /del 链接")
                     continue
 
-                if lower_text.startswith('/update '):
-                    update_text = text.split(' ', maxsplit=1)[1]
-                    old_and_new = update_text.split('|', maxsplit=1)
-                    if len(old_and_new) == 2:
-                        old_url = extract_live_url(old_and_new[0])
-                        new_url = extract_live_url(old_and_new[1])
-                        if old_url and new_url:
-                            tg_bot(chat_id, token, update_live_url(old_url, new_url))
+                if command == '/update':
+                    if args:
+                        old_and_new = args.split('|', maxsplit=1)
+                        if len(old_and_new) == 2:
+                            old_url = extract_live_url(old_and_new[0])
+                            new_url = extract_live_url(old_and_new[1])
+                            if old_url and new_url:
+                                tg_bot(chat_id, token, update_live_url(old_url, new_url))
+                            else:
+                                tg_bot(chat_id, token, "❌ 请提供有效旧链接和新链接")
                         else:
-                            tg_bot(chat_id, token, "❌ 请提供有效旧链接和新链接")
+                            tg_bot(chat_id, token, "❌ 格式错误，请使用 /update 旧链接|新链接")
                     else:
-                        tg_bot(chat_id, token, "❌ 格式错误，请使用 /update 旧链接|新链接")
+                        tg_bot(chat_id, token, "❌ 未提供参数，请使用 /update 旧链接|新链接")
                     continue
 
-                url = extract_live_url(text[4:] if lower_text.startswith('/add') else text)
+                if command == '/add':
+                    if args:
+                        url = extract_live_url(args)
+                        if url:
+                            tg_bot(chat_id, token, append_live_url(url))
+                        else:
+                            tg_bot(chat_id, token, "❌ 未识别到有效直播链接，请使用 /add 链接")
+                    else:
+                        tg_bot(chat_id, token, "❌ 未识别到有效直播链接，请使用 /add 链接")
+                    continue
+
+                url = extract_live_url(text)
                 if url:
                     tg_bot(chat_id, token, append_live_url(url))
-                elif lower_text.startswith('/add'):
-                    tg_bot(chat_id, token, "❌ 未识别到有效直播链接，请使用 /add 链接")
         except Exception as e:
             logger.error(f"Telegram链接管理错误: {e}")
             time.sleep(10)
