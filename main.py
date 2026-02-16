@@ -49,6 +49,7 @@ recording = set()
 error_count = 0
 pre_max_request = 10
 max_request_lock = threading.Lock()
+recording_state_lock = threading.Lock()
 error_window = []
 error_window_size = 10
 error_threshold = 5
@@ -114,7 +115,11 @@ def display_info() -> None:
             now = time.strftime("%H:%M:%S", time.localtime())
             print(f"当前时间: {now}")
 
-            if len(recording) == 0:
+            with recording_state_lock:
+                no_repeat_recording = list(recording)
+                recording_status_map = dict(recording_time_list)
+
+            if not no_repeat_recording:
                 time.sleep(5)
                 if monitoring == 0:
                     print("\r没有正在监测和录制的直播")
@@ -123,10 +128,9 @@ def display_info() -> None:
             else:
                 now_time = datetime.datetime.now()
                 print("x" * 60)
-                no_repeat_recording = list(set(recording))
                 print(f"正在录制{len(no_repeat_recording)}个直播: ")
                 for recording_live in no_repeat_recording:
-                    rt, qa = recording_time_list[recording_live]
+                    rt, qa = recording_status_map[recording_live]
                     have_record_time = now_time - rt
                     print(f"{recording_live}[{qa}] 正在录制中 {str(have_record_time).split('.')[0]}")
 
@@ -253,7 +257,10 @@ def list_live_urls() -> str:
 
 
 def get_recording_status() -> str:
-    no_repeat_recording = list(set(recording))
+    with recording_state_lock:
+        no_repeat_recording = list(recording)
+        recording_status_map = dict(recording_time_list)
+
     msg = [f"📡 当前监测{monitoring}个直播"]
     if not no_repeat_recording:
         msg.append("🎬 当前无正在录制")
@@ -261,7 +268,7 @@ def get_recording_status() -> str:
     msg.append(f"🎬 正在录制{len(no_repeat_recording)}个直播")
     now_time = datetime.datetime.now()
     for recording_live in no_repeat_recording[:20]:
-        record_info = recording_time_list.get(recording_live)
+        record_info = recording_status_map.get(recording_live)
         if not record_info:
             msg.append(f"✅ {recording_live}")
             continue
@@ -528,8 +535,9 @@ def generate_subtitles(record_name: str, ass_filename: str, sub_format: str = 's
         with open(f"{ass_filename}.{sub_format.lower()}", 'a', encoding=text_encoding) as f:
             f.write(txt)
 
-        if record_name not in recording:
-            return
+        with recording_state_lock:
+            if record_name not in recording:
+                return
         time.sleep(1)
         today = datetime.datetime.now()
         re_datatime = today.strftime('%Y-%m-%d %H:%M:%S')
@@ -615,7 +623,8 @@ def run_script(command: str) -> None:
 
 def clear_record_info(record_name: str, record_url: str) -> None:
     global monitoring
-    recording.discard(record_name)
+    with recording_state_lock:
+        recording.discard(record_name)
     if record_url in url_comments and record_url in running_list:
         running_list.remove(record_url)
         monitoring -= 1
@@ -727,7 +736,8 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
     else:
         color_obj.print_colored(f"\n{record_name} {stop_time} 直播录制出错,返回码: {return_code}\n", color_obj.RED)
 
-    recording.discard(record_name)
+    with recording_state_lock:
+        recording.discard(record_name)
     return False
 
 
@@ -1443,9 +1453,10 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                     ffmpeg_command.insert(1, "-http_proxy")
                                     ffmpeg_command.insert(2, proxy_address)
 
-                                recording.add(record_name)
-                                start_record_time = datetime.datetime.now()
-                                recording_time_list[record_name] = [start_record_time, record_quality_zh]
+                                with recording_state_lock:
+                                    recording.add(record_name)
+                                    start_record_time = datetime.datetime.now()
+                                    recording_time_list[record_name] = [start_record_time, record_quality_zh]
                                 rec_info = f"\r{anchor_name} 准备开始录制视频: {full_path}"
                                 if show_url:
                                     re_plat = ('WinkTV', 'PandaTV', 'ShowRoom', 'CHZZK', 'Youtube')
@@ -1563,9 +1574,10 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                     try:
                                         flv_url = port_info.get('flv_url')
                                         if flv_url:
-                                            recording.add(record_name)
-                                            start_record_time = datetime.datetime.now()
-                                            recording_time_list[record_name] = [start_record_time, record_quality_zh]
+                                            with recording_state_lock:
+                                                recording.add(record_name)
+                                                start_record_time = datetime.datetime.now()
+                                                recording_time_list[record_name] = [start_record_time, record_quality_zh]
 
                                             download_success = direct_download_stream(
                                                 flv_url, save_file_path, record_name, record_url, platform
@@ -1576,7 +1588,8 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                                 print(
                                                     f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制完成\n")
 
-                                            recording.discard(record_name)
+                                            with recording_state_lock:
+                                                recording.discard(record_name)
                                         else:
                                             logger.debug("未找到FLV直播流，跳过录制")
                                     except Exception as e:
@@ -2174,7 +2187,9 @@ while True:
     check_path = video_save_path or default_path
     if utils.check_disk_capacity(check_path, show=first_run) < disk_space_limit:
         exit_recording = True
-        if not recording:
+        with recording_state_lock:
+            no_active_recording = not recording
+        if no_active_recording:
             logger.warning(f"Disk space remaining is below {disk_space_limit} GB. "
                            f"Exiting program due to the disk space limit being reached.")
             sys.exit(-1)
