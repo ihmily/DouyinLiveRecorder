@@ -116,10 +116,10 @@ def display_info() -> None:
             print(f"当前时间: {now}")
 
             with recording_state_lock:
-                no_repeat_recording = list(recording)
+                recording_snapshot = list(recording)
                 recording_status_map = dict(recording_time_list)
 
-            if not no_repeat_recording:
+            if not recording_snapshot:
                 time.sleep(5)
                 if monitoring == 0:
                     print("\r没有正在监测和录制的直播")
@@ -128,8 +128,8 @@ def display_info() -> None:
             else:
                 now_time = datetime.datetime.now()
                 print("x" * 60)
-                print(f"正在录制{len(no_repeat_recording)}个直播: ")
-                for recording_live in no_repeat_recording:
+                print(f"正在录制{len(recording_snapshot)}个直播: ")
+                for recording_live in recording_snapshot:
                     rt, qa = recording_status_map[recording_live]
                     have_record_time = now_time - rt
                     print(f"{recording_live}[{qa}] 正在录制中 {str(have_record_time).split('.')[0]}")
@@ -258,16 +258,16 @@ def list_live_urls() -> str:
 
 def get_recording_status() -> str:
     with recording_state_lock:
-        no_repeat_recording = list(recording)
+        recording_snapshot = list(recording)
         recording_status_map = dict(recording_time_list)
 
     msg = [f"📡 当前监测{monitoring}个直播"]
-    if not no_repeat_recording:
+    if not recording_snapshot:
         msg.append("🎬 当前无正在录制")
         return '\n'.join(msg)
-    msg.append(f"🎬 正在录制{len(no_repeat_recording)}个直播")
+    msg.append(f"🎬 正在录制{len(recording_snapshot)}个直播")
     now_time = datetime.datetime.now()
-    for recording_live in no_repeat_recording[:20]:
+    for recording_live in recording_snapshot[:20]:
         record_info = recording_status_map.get(recording_live)
         if not record_info:
             msg.append(f"✅ {recording_live}")
@@ -278,7 +278,7 @@ def get_recording_status() -> str:
             msg.append(f"✅ {recording_live}[{qa}] {str(have_record_time).split('.', 1)[0]}")
         except (ValueError, TypeError):
             msg.append(f"✅ {recording_live}")
-    if len(no_repeat_recording) > 20:
+    if len(recording_snapshot) > 20:
         msg.append("...（结果过长已截断）")
     return '\n'.join(msg)
 
