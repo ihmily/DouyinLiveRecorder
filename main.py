@@ -313,6 +313,8 @@ def delete_live_url(url: str) -> str:
             return f'❌ 未找到链接: {url}'
         with open(url_config_file, 'w', encoding=text_encoding) as file:
             file.writelines(new_lines)
+        if url not in url_comments:
+            url_comments.append(url)
     return f'✅ 删除成功: {url}'
 
 
