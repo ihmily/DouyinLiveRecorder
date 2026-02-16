@@ -67,6 +67,7 @@ not_record_list = []
 start_display_time = datetime.datetime.now()
 global_proxy = False
 recording_time_list = {}
+recording_url_map = {}
 script_path = os.path.split(os.path.realpath(sys.argv[0]))[0]
 config_file = f'{script_path}/config/config.ini'
 url_config_file = f'{script_path}/config/URL_config.ini'
@@ -260,6 +261,7 @@ def get_recording_status() -> str:
     with recording_state_lock:
         recording_snapshot = list(recording)
         recording_status_map = dict(recording_time_list)
+        recording_url_snapshot = dict(recording_url_map)
 
     msg = [f"📡 当前监测{monitoring}个直播"]
     if not recording_snapshot:
@@ -268,16 +270,26 @@ def get_recording_status() -> str:
     msg.append(f"🎬 正在录制{len(recording_snapshot)}个直播")
     now_time = datetime.datetime.now()
     for recording_live in recording_snapshot[:20]:
+        record_url = recording_url_snapshot.get(recording_live)
         record_info = recording_status_map.get(recording_live)
         if not record_info:
-            msg.append(f"✅ {recording_live}")
+            if record_url:
+                msg.append(f"✅ {recording_live}\n🔗 {record_url}")
+            else:
+                msg.append(f"✅ {recording_live}")
             continue
         try:
             rt, qa = record_info
             have_record_time = now_time - rt
-            msg.append(f"✅ {recording_live}[{qa}] {str(have_record_time).split('.', 1)[0]}")
+            if record_url:
+                msg.append(f"✅ {recording_live}[{qa}] {str(have_record_time).split('.', 1)[0]}\n🔗 {record_url}")
+            else:
+                msg.append(f"✅ {recording_live}[{qa}] {str(have_record_time).split('.', 1)[0]}")
         except (ValueError, TypeError):
-            msg.append(f"✅ {recording_live}")
+            if record_url:
+                msg.append(f"✅ {recording_live}\n🔗 {record_url}")
+            else:
+                msg.append(f"✅ {recording_live}")
     if len(recording_snapshot) > 20:
         msg.append("...（结果过长已截断）")
     return '\n'.join(msg)
@@ -625,6 +637,7 @@ def clear_record_info(record_name: str, record_url: str) -> None:
     global monitoring
     with recording_state_lock:
         recording.discard(record_name)
+        recording_url_map.pop(record_name, None)
     if record_url in url_comments and record_url in running_list:
         running_list.remove(record_url)
         monitoring -= 1
@@ -738,6 +751,7 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
 
     with recording_state_lock:
         recording.discard(record_name)
+        recording_url_map.pop(record_name, None)
     return False
 
 
@@ -1457,6 +1471,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                     recording.add(record_name)
                                     start_record_time = datetime.datetime.now()
                                     recording_time_list[record_name] = [start_record_time, record_quality_zh]
+                                    recording_url_map[record_name] = record_url
                                 rec_info = f"\r{anchor_name} 准备开始录制视频: {full_path}"
                                 if show_url:
                                     re_plat = ('WinkTV', 'PandaTV', 'ShowRoom', 'CHZZK', 'Youtube')
@@ -1578,6 +1593,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                                 recording.add(record_name)
                                                 start_record_time = datetime.datetime.now()
                                                 recording_time_list[record_name] = [start_record_time, record_quality_zh]
+                                                recording_url_map[record_name] = record_url
 
                                             download_success = direct_download_stream(
                                                 flv_url, save_file_path, record_name, record_url, platform
@@ -1590,6 +1606,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
 
                                             with recording_state_lock:
                                                 recording.discard(record_name)
+                                                recording_url_map.pop(record_name, None)
                                         else:
                                             logger.debug("未找到FLV直播流，跳过录制")
                                     except Exception as e:
