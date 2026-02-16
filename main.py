@@ -57,6 +57,7 @@ monitoring = 0
 running_list = []
 url_tuples_list = []
 url_comments = []
+manual_stop_urls = set()
 text_no_repeat_url = []
 create_var = locals()
 first_start = True
@@ -77,6 +78,7 @@ rstr = r"[\/\\\:\*\？?\"\<\>\|&#.。,， ~！· ]"
 default_path = f'{script_path}/downloads'
 os.makedirs(default_path, exist_ok=True)
 file_update_lock = threading.Lock()
+url_comments_lock = threading.Lock()
 telegram_bot_manage_lock = threading.Lock()
 telegram_bot_manage_started = False
 os_type = os.name
@@ -224,6 +226,8 @@ def append_live_url(url: str) -> str:
             if lines and not lines[-1].endswith('\n'):
                 file.write('\n')
             file.write(f'{url}\n')
+        with url_comments_lock:
+            manual_stop_urls.discard(url)
         return f'✅ 新增成功: {url}'
 
 
@@ -313,8 +317,10 @@ def delete_live_url(url: str) -> str:
             return f'❌ 未找到链接: {url}'
         with open(url_config_file, 'w', encoding=text_encoding) as file:
             file.writelines(new_lines)
-        if url not in url_comments:
-            url_comments.append(url)
+        with url_comments_lock:
+            manual_stop_urls.add(url)
+            if url not in url_comments:
+                url_comments.append(url)
     return f'✅ 删除成功: {url}'
 
 
@@ -640,7 +646,9 @@ def clear_record_info(record_name: str, record_url: str) -> None:
     with recording_state_lock:
         recording.discard(record_name)
         recording_url_map.pop(record_name, None)
-    if record_url in url_comments and record_url in running_list:
+    with url_comments_lock:
+        is_stopped_url = record_url in url_comments or record_url in manual_stop_urls
+    if is_stopped_url and record_url in running_list:
         running_list.remove(record_url)
         monitoring -= 1
         color_obj.print_colored(f"[{record_name}]已经从录制列表中移除\n", color_obj.YELLOW)
@@ -666,7 +674,9 @@ def direct_download_stream(source_url: str, save_path: str, record_name: str, li
                 chunk_size = 1024 * 16
 
                 for chunk in response.iter_bytes(chunk_size):
-                    if live_url in url_comments or exit_recording:
+                    with url_comments_lock:
+                        should_stop = live_url in url_comments or live_url in manual_stop_urls
+                    if should_stop or exit_recording:
                         color_obj.print_colored(f"[{record_name}]录制时已被注释或请求停止,下载中断", color_obj.YELLOW)
                         clear_record_info(record_name, live_url)
                         return False
@@ -698,7 +708,9 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
         create_var[subs_thread_name].start()
 
     while process.poll() is None:
-        if record_url in url_comments or exit_recording:
+        with url_comments_lock:
+            should_stop = record_url in url_comments or record_url in manual_stop_urls
+        if should_stop or exit_recording:
             color_obj.print_colored(f"[{record_name}]录制时已被注释,本条线程将会退出", color_obj.YELLOW)
             clear_record_info(record_name, record_url)
             # process.terminate()
@@ -1324,7 +1336,9 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                         anchor_name = clean_name(anchor_name)
                         record_name = f'序号{count_variable} {anchor_name}'
 
-                        if record_url in url_comments:
+                        with url_comments_lock:
+                            should_stop = record_url in url_comments or record_url in manual_stop_urls
+                        if should_stop:
                             print(f"[{anchor_name}]已被注释,本条线程将会退出")
                             clear_record_info(record_name, record_url)
                             return
@@ -2228,7 +2242,9 @@ while True:
 
 
     try:
-        url_comments, line_list, url_line_list = [[] for _ in range(3)]
+        with url_comments_lock:
+            url_comments = []
+        line_list, url_line_list = [[] for _ in range(2)]
         with (open(url_config_file, "r", encoding=text_encoding, errors='ignore') as file):
             for origin_line in file:
                 if origin_line in line_list:
@@ -2381,12 +2397,13 @@ while True:
                             new_url = url.split('?')[0] + f'?host_id={host_id.group(1)}'
                             url = update_file(url_config_file, old_str=url, new_str=new_url)
 
-                    url_comments = [i for i in url_comments if url not in i]
-                    if is_comment_line:
-                        url_comments.append(url)
-                    else:
-                        new_line = (quality, url, name)
-                        url_tuples_list.append(new_line)
+                    with url_comments_lock:
+                        url_comments = [i for i in url_comments if url not in i]
+                        if is_comment_line:
+                            url_comments.append(url)
+                        else:
+                            new_line = (quality, url, name)
+                            url_tuples_list.append(new_line)
                 else:
                     if not origin_line.startswith('#'):
                         color_obj.print_colored(f"\r{origin_line.strip()} 本行包含未知链接.此条跳过", color_obj.YELLOW)
