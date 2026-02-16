@@ -189,6 +189,16 @@ async def get_douyin_app_stream_data(url: str, proxy_addr: OptionalStr = None, c
                 _room_id, _sec_uid = data
                 room_data = await get_app_data(_room_id, _sec_uid)
             except UnsupportedUrlError:
+                redirect_url = None
+                try:
+                    proxy = utils.handle_proxy_addr(proxy_addr)
+                    async with httpx.AsyncClient(proxy=proxy, timeout=15) as client:
+                        response = await client.get(url, headers=headers, follow_redirects=True)
+                        redirect_url = str(response.url)
+                except httpx.HTTPError as e:
+                    print(f"Douyin short URL redirect failed: {e}")
+                if redirect_url and urllib.parse.urlparse(redirect_url).hostname == 'live.douyin.com':
+                    return await get_douyin_web_stream_data(redirect_url, proxy_addr, cookies)
                 unique_id = await get_unique_id(url, proxy_addr=proxy_addr)
                 return await get_douyin_stream_data(f'https://live.douyin.com/{unique_id}')
 
