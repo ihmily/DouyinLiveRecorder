@@ -319,8 +319,6 @@ def delete_live_url(url: str) -> str:
             file.writelines(new_lines)
         with url_comments_lock:
             manual_stop_urls.add(url)
-            if url not in url_comments:
-                url_comments.append(url)
     return f'✅ 删除成功: {url}'
 
 
@@ -2401,9 +2399,9 @@ while True:
                         url_comments = [i for i in url_comments if url not in i]
                         if is_comment_line:
                             url_comments.append(url)
-                        else:
-                            new_line = (quality, url, name)
-                            url_tuples_list.append(new_line)
+                    if not is_comment_line:
+                        new_line = (quality, url, name)
+                        url_tuples_list.append(new_line)
                 else:
                     if not origin_line.startswith('#'):
                         color_obj.print_colored(f"\r{origin_line.strip()} 本行包含未知链接.此条跳过", color_obj.YELLOW)
