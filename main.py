@@ -349,7 +349,7 @@ def update_live_url(old_url: str, new_url: str) -> str:
 
 def telegram_manage_live_urls(token: str, chat_id: str):
     offset = 0
-    allowed_chat_ids = {item.strip() for item in str(chat_id).replace('，', ',').split(',') if item.strip()}
+    authorized_ids = {item.strip() for item in str(chat_id).replace('，', ',').split(',') if item.strip()}
     help_text = (
         "Telegram录制链接管理命令：\n"
         "/add 链接 - 新增\n"
@@ -376,7 +376,7 @@ def telegram_manage_live_urls(token: str, chat_id: str):
                 text = (message.get('text') or '').strip()
                 if not text:
                     continue
-                if msg_chat_id not in allowed_chat_ids and msg_from_id not in allowed_chat_ids:
+                if msg_chat_id not in authorized_ids and msg_from_id not in authorized_ids:
                     if text.startswith('/'):
                         logger.info(f"忽略未授权Telegram命令 chat_id={msg_chat_id} from_id={msg_from_id}")
                     continue
