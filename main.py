@@ -437,6 +437,8 @@ def telegram_manage_live_urls(token: str, chat_id: str):
                 url = extract_live_url(text)
                 if url:
                     tg_bot(chat_id, token, append_live_url(url))
+                else:
+                    tg_bot(chat_id, token, "❌ 未识别命令或链接，发送 /help 查看可用命令。")
         except Exception as e:
             logger.error(f"Telegram链接管理错误: {e}")
             time.sleep(10)
