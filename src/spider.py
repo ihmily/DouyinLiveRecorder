@@ -845,8 +845,10 @@ async def get_bigo_stream_url(url: str, proxy_addr: OptionalStr = None, cookies:
         html_str = await async_req(url, proxy_addr=proxy_addr, headers=headers)
         web_url = re.search(
             '<meta data-n-head="ssr" data-hid="al:web:url" property="al:web:url" content="(.*?)">',
-            html_str).group(1)
-        room_id = web_url.split('&amp;h=')[-1]
+            html_str)
+        if not web_url:
+            return {"anchor_name": "", "is_live": False}
+        room_id = web_url.group(1).split('&amp;h=')[-1]
     else:
         if '&h=' in url:
             room_id = url.split('&h=')[-1]
@@ -876,7 +878,7 @@ async def get_bigo_stream_url(url: str, proxy_addr: OptionalStr = None, cookies:
         else:
             match_anchor_name = re.search('<meta data-n-head="ssr" data-hid="og:title" property="og:title" '
                                           'content="(.*?) - BIGO LIVE">', html_str, re.DOTALL)
-            anchor_name = match_anchor_name.group(1)
+            anchor_name = match_anchor_name.group(1) if match_anchor_name else ''
         result['anchor_name'] = anchor_name
 
     return result
