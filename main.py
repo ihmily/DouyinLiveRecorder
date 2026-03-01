@@ -18,6 +18,7 @@ import threading
 import time
 import datetime
 import re
+import json
 import shutil
 import random
 import uuid
@@ -48,6 +49,7 @@ recording = set()
 error_count = 0
 pre_max_request = 10
 max_request_lock = threading.Lock()
+recording_state_lock = threading.Lock()
 error_window = []
 error_window_size = 10
 error_threshold = 5
@@ -55,6 +57,7 @@ monitoring = 0
 running_list = []
 url_tuples_list = []
 url_comments = []
+manual_stop_urls = set()
 text_no_repeat_url = []
 create_var = locals()
 first_start = True
@@ -65,6 +68,7 @@ not_record_list = []
 start_display_time = datetime.datetime.now()
 global_proxy = False
 recording_time_list = {}
+recording_url_map = {}
 script_path = os.path.split(os.path.realpath(sys.argv[0]))[0]
 config_file = f'{script_path}/config/config.ini'
 url_config_file = f'{script_path}/config/URL_config.ini'
@@ -74,6 +78,9 @@ rstr = r"[\/\\\:\*\？?\"\<\>\|&#.。,， ~！· ]"
 default_path = f'{script_path}/downloads'
 os.makedirs(default_path, exist_ok=True)
 file_update_lock = threading.Lock()
+url_comments_lock = threading.Lock()
+telegram_bot_manage_lock = threading.Lock()
+telegram_bot_manage_started = False
 os_type = os.name
 clear_command = "cls" if os_type == 'nt' else "clear"
 color_obj = utils.Color()
@@ -111,7 +118,11 @@ def display_info() -> None:
             now = time.strftime("%H:%M:%S", time.localtime())
             print(f"当前时间: {now}")
 
-            if len(recording) == 0:
+            with recording_state_lock:
+                recording_snapshot = list(recording)
+                recording_status_map = dict(recording_time_list)
+
+            if not recording_snapshot:
                 time.sleep(5)
                 if monitoring == 0:
                     print("\r没有正在监测和录制的直播")
@@ -120,10 +131,9 @@ def display_info() -> None:
             else:
                 now_time = datetime.datetime.now()
                 print("x" * 60)
-                no_repeat_recording = list(set(recording))
-                print(f"正在录制{len(no_repeat_recording)}个直播: ")
-                for recording_live in no_repeat_recording:
-                    rt, qa = recording_time_list[recording_live]
+                print(f"正在录制{len(recording_snapshot)}个直播: ")
+                for recording_live in recording_snapshot:
+                    rt, qa = recording_status_map[recording_live]
                     have_record_time = now_time - rt
                     print(f"{recording_live}[{qa}] 正在录制中 {str(have_record_time).split('.')[0]}")
 
@@ -175,6 +185,269 @@ def delete_line(file_path: str, del_line: str, delete_all: bool = False) -> None
                 else:
                     skip_line = False
                 f.write(txt_line)
+
+
+def extract_live_url(text: str) -> str | None:
+    if not text:
+        return None
+    matched = re.search(r'https?://[^\s,，]+', text.replace('\n', ' '))
+    if matched:
+        return matched.group(0).rstrip('),，。')
+    return None
+
+
+def parse_config_line_live_url(text_line: str) -> str:
+    split_line = re.split('[,，]', text_line.strip().lstrip('#'))
+    return next((item.strip() for item in split_line if item.strip().startswith(('http://', 'https://'))), '')
+
+
+def append_live_url(url: str) -> str:
+    with file_update_lock:
+        if not os.path.isfile(url_config_file):
+            with open(url_config_file, 'w', encoding=text_encoding):
+                pass
+        with open(url_config_file, 'r', encoding=text_encoding, errors='ignore') as file:
+            lines = file.readlines()
+
+        for i, line in enumerate(lines):
+            text_line = line.strip().lstrip('#')
+            if not text_line:
+                continue
+            live_url = parse_config_line_live_url(text_line)
+            if live_url == url:
+                if line.strip().startswith('#'):
+                    lines[i] = re.sub(r'^(\s*)#', r'\1', line, count=1)
+                    with open(url_config_file, 'w', encoding=text_encoding) as file:
+                        file.writelines(lines)
+                    return f'✅ 已恢复监测: {url}'
+                return f'ℹ️ 链接已存在: {url}'
+
+        with open(url_config_file, 'a', encoding=text_encoding) as file:
+            if lines and not lines[-1].endswith('\n'):
+                file.write('\n')
+            file.write(f'{url}\n')
+        with url_comments_lock:
+            manual_stop_urls.discard(url)
+        return f'✅ 新增成功: {url}'
+
+
+def list_live_urls() -> str:
+    with file_update_lock:
+        if not os.path.isfile(url_config_file):
+            return "📭 暂无录制链接"
+        with open(url_config_file, 'r', encoding=text_encoding, errors='ignore') as file:
+            lines = file.readlines()
+    enable_urls, disable_urls = [], []
+    for line in lines:
+        text_line = line.strip()
+        if not text_line:
+            continue
+        live_url = parse_config_line_live_url(text_line)
+        if not live_url:
+            continue
+        if text_line.startswith('#'):
+            disable_urls.append(live_url)
+        else:
+            enable_urls.append(live_url)
+    if not enable_urls and not disable_urls:
+        return "📭 暂无录制链接"
+    msg = [f"📋 录制链接（启用{len(enable_urls)}个 停用{len(disable_urls)}个）"]
+    if enable_urls:
+        msg.extend([f"✅ {url}" for url in enable_urls[:40]])
+    if disable_urls:
+        msg.extend([f"⏸ {url}" for url in disable_urls[:20]])
+    if len(enable_urls) > 40 or len(disable_urls) > 20:
+        msg.append("...（结果过长已截断）")
+    return '\n'.join(msg)
+
+
+def get_recording_status() -> str:
+    with recording_state_lock:
+        recording_snapshot = list(recording)
+        recording_status_map = dict(recording_time_list)
+        recording_url_snapshot = dict(recording_url_map)
+
+    msg = [f"📡 当前监测{monitoring}个直播"]
+    if not recording_snapshot:
+        msg.append("🎬 当前无正在录制")
+        return '\n'.join(msg)
+    msg.append(f"🎬 正在录制{len(recording_snapshot)}个直播")
+    now_time = datetime.datetime.now()
+    for recording_live in recording_snapshot[:20]:
+        record_url = recording_url_snapshot.get(recording_live)
+        record_info = recording_status_map.get(recording_live)
+        if not record_info:
+            if record_url:
+                msg.append(f"✅ {recording_live}\n🔗 {record_url}")
+            else:
+                msg.append(f"✅ {recording_live}")
+            continue
+        try:
+            rt, qa = record_info
+            have_record_time = now_time - rt
+            if record_url:
+                msg.append(f"✅ {recording_live}[{qa}] {str(have_record_time).split('.', 1)[0]}\n🔗 {record_url}")
+            else:
+                msg.append(f"✅ {recording_live}[{qa}] {str(have_record_time).split('.', 1)[0]}")
+        except (ValueError, TypeError):
+            if record_url:
+                msg.append(f"✅ {recording_live}\n🔗 {record_url}")
+            else:
+                msg.append(f"✅ {recording_live}")
+    if len(recording_snapshot) > 20:
+        msg.append("...（结果过长已截断）")
+    return '\n'.join(msg)
+
+
+def delete_live_url(url: str) -> str:
+    with file_update_lock:
+        if not os.path.isfile(url_config_file):
+            return "📭 暂无录制链接"
+        with open(url_config_file, 'r', encoding=text_encoding, errors='ignore') as file:
+            lines = file.readlines()
+        new_lines = []
+        deleted = False
+        for line in lines:
+            live_url = parse_config_line_live_url(line)
+            if live_url == url:
+                deleted = True
+                continue
+            new_lines.append(line)
+        if not deleted:
+            return f'❌ 未找到链接: {url}'
+        with open(url_config_file, 'w', encoding=text_encoding) as file:
+            file.writelines(new_lines)
+        with url_comments_lock:
+            manual_stop_urls.add(url)
+    return f'✅ 删除成功: {url}'
+
+
+def update_live_url(old_url: str, new_url: str) -> str:
+    with file_update_lock:
+        if not os.path.isfile(url_config_file):
+            return "📭 暂无录制链接"
+        with open(url_config_file, 'r', encoding=text_encoding, errors='ignore') as file:
+            lines = file.readlines()
+        for line in lines:
+            if parse_config_line_live_url(line) == new_url:
+                return f'ℹ️ 链接已存在: {new_url}'
+        updated = False
+        for i, line in enumerate(lines):
+            if parse_config_line_live_url(line) == old_url:
+                for matched in re.finditer(r'https?://[^\s,，]+', line):
+                    if matched.group(0) == old_url:
+                        lines[i] = f"{line[:matched.start()]}{new_url}{line[matched.end():]}"
+                        break
+                updated = True
+                break
+        if not updated:
+            return f'❌ 未找到旧链接: {old_url}'
+        with open(url_config_file, 'w', encoding=text_encoding) as file:
+            file.writelines(lines)
+    return f'✅ 修改成功:\n{old_url}\n➡️ {new_url}'
+
+
+def telegram_manage_live_urls(token: str, chat_id: str):
+    offset = 0
+    authorized_ids = {item.strip() for item in str(chat_id).replace('，', ',').split(',') if item.strip()}
+    help_text = (
+        "Telegram录制链接管理命令：\n"
+        "/add 链接 - 新增\n"
+        "/list - 查询\n"
+        "/status - 录制状态\n"
+        "/del 链接 - 删除\n"
+        "/update 旧链接|新链接 - 修改\n"
+        "也支持直接发送直播间链接进行新增。"
+    )
+    while True:
+        try:
+            api = f'https://api.telegram.org/bot{token}/getUpdates?timeout=20&offset={offset}'
+            with urllib.request.urlopen(api, timeout=35) as response:
+                response_data = json.loads(response.read().decode('utf-8'))
+            if not response_data.get('ok'):
+                time.sleep(5)
+                continue
+
+            for result in response_data.get('result', []):
+                offset = result.get('update_id', 0) + 1
+                message = result.get('message') or result.get('edited_message') or {}
+                msg_chat_id = str(message.get('chat', {}).get('id', ''))
+                msg_from_id = str(message.get('from', {}).get('id', ''))
+                text = (message.get('text') or '').strip()
+                if not text:
+                    continue
+                if msg_chat_id not in authorized_ids and msg_from_id not in authorized_ids:
+                    if text.startswith('/'):
+                        logger.info(f"忽略未授权Telegram命令 chat_id={msg_chat_id} from_id={msg_from_id}")
+                    continue
+
+                # 规范化命令：取第一个 token，并去掉 @BotName 后缀
+                if text.startswith('/'):
+                    command_token = text.split(maxsplit=1)[0]
+                    command = command_token.split('@', 1)[0].lower()
+                    args = text[len(command_token):].lstrip()
+                else:
+                    command = ''
+                    args = text
+
+                if command in {'/start', '/help'}:
+                    tg_bot(msg_chat_id, token, help_text)
+                    continue
+
+                if command == '/list':
+                    tg_bot(msg_chat_id, token, list_live_urls())
+                    continue
+
+                if command == '/status':
+                    tg_bot(msg_chat_id, token, get_recording_status())
+                    continue
+
+                if command in {'/del', '/delete'}:
+                    if args:
+                        target_url = extract_live_url(args)
+                        if target_url:
+                            tg_bot(msg_chat_id, token, delete_live_url(target_url))
+                        else:
+                            tg_bot(msg_chat_id, token, "❌ 未识别到有效链接，请使用 /del 链接")
+                    else:
+                        tg_bot(msg_chat_id, token, "❌ 未识别到有效链接，请使用 /del 链接")
+                    continue
+
+                if command == '/update':
+                    if args:
+                        old_and_new = args.split('|', maxsplit=1)
+                        if len(old_and_new) == 2:
+                            old_url = extract_live_url(old_and_new[0])
+                            new_url = extract_live_url(old_and_new[1])
+                            if old_url and new_url:
+                                tg_bot(msg_chat_id, token, update_live_url(old_url, new_url))
+                            else:
+                                tg_bot(msg_chat_id, token, "❌ 请提供有效旧链接和新链接")
+                        else:
+                            tg_bot(msg_chat_id, token, "❌ 格式错误，请使用 /update 旧链接|新链接")
+                    else:
+                        tg_bot(msg_chat_id, token, "❌ 未提供参数，请使用 /update 旧链接|新链接")
+                    continue
+
+                if command == '/add':
+                    if args:
+                        url = extract_live_url(args)
+                        if url:
+                            tg_bot(msg_chat_id, token, append_live_url(url))
+                        else:
+                            tg_bot(msg_chat_id, token, "❌ 未识别到有效直播链接，请使用 /add 链接")
+                    else:
+                        tg_bot(msg_chat_id, token, "❌ 未识别到有效直播链接，请使用 /add 链接")
+                    continue
+
+                url = extract_live_url(text)
+                if url:
+                    tg_bot(msg_chat_id, token, append_live_url(url))
+                else:
+                    tg_bot(msg_chat_id, token, "❌ 未识别命令或链接，发送 /help 查看可用命令。")
+        except Exception as e:
+            logger.error(f"Telegram链接管理错误: {e}")
+            time.sleep(10)
 
 
 def get_startup_info(system_type: str):
@@ -288,8 +561,9 @@ def generate_subtitles(record_name: str, ass_filename: str, sub_format: str = 's
         with open(f"{ass_filename}.{sub_format.lower()}", 'a', encoding=text_encoding) as f:
             f.write(txt)
 
-        if record_name not in recording:
-            return
+        with recording_state_lock:
+            if record_name not in recording:
+                return
         time.sleep(1)
         today = datetime.datetime.now()
         re_datatime = today.strftime('%Y-%m-%d %H:%M:%S')
@@ -375,8 +649,12 @@ def run_script(command: str) -> None:
 
 def clear_record_info(record_name: str, record_url: str) -> None:
     global monitoring
-    recording.discard(record_name)
-    if record_url in url_comments and record_url in running_list:
+    with recording_state_lock:
+        recording.discard(record_name)
+        recording_url_map.pop(record_name, None)
+    with url_comments_lock:
+        is_stopped_url = record_url in url_comments or record_url in manual_stop_urls
+    if is_stopped_url and record_url in running_list:
         running_list.remove(record_url)
         monitoring -= 1
         color_obj.print_colored(f"[{record_name}]已经从录制列表中移除\n", color_obj.YELLOW)
@@ -402,7 +680,9 @@ def direct_download_stream(source_url: str, save_path: str, record_name: str, li
                 chunk_size = 1024 * 16
 
                 for chunk in response.iter_bytes(chunk_size):
-                    if live_url in url_comments or exit_recording:
+                    with url_comments_lock:
+                        should_stop = live_url in url_comments or live_url in manual_stop_urls
+                    if should_stop or exit_recording:
                         color_obj.print_colored(f"[{record_name}]录制时已被注释或请求停止,下载中断", color_obj.YELLOW)
                         clear_record_info(record_name, live_url)
                         return False
@@ -434,7 +714,9 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
         create_var[subs_thread_name].start()
 
     while process.poll() is None:
-        if record_url in url_comments or exit_recording:
+        with url_comments_lock:
+            should_stop = record_url in url_comments or record_url in manual_stop_urls
+        if should_stop or exit_recording:
             color_obj.print_colored(f"[{record_name}]录制时已被注释,本条线程将会退出", color_obj.YELLOW)
             clear_record_info(record_name, record_url)
             # process.terminate()
@@ -487,7 +769,9 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
     else:
         color_obj.print_colored(f"\n{record_name} {stop_time} 直播录制出错,返回码: {return_code}\n", color_obj.RED)
 
-    recording.discard(record_name)
+    with recording_state_lock:
+        recording.discard(record_name)
+        recording_url_map.pop(record_name, None)
     return False
 
 
@@ -1058,7 +1342,9 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                         anchor_name = clean_name(anchor_name)
                         record_name = f'序号{count_variable} {anchor_name}'
 
-                        if record_url in url_comments:
+                        with url_comments_lock:
+                            should_stop = record_url in url_comments or record_url in manual_stop_urls
+                        if should_stop:
                             print(f"[{anchor_name}]已被注释,本条线程将会退出")
                             clear_record_info(record_name, record_url)
                             return
@@ -1203,9 +1489,11 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                     ffmpeg_command.insert(1, "-http_proxy")
                                     ffmpeg_command.insert(2, proxy_address)
 
-                                recording.add(record_name)
-                                start_record_time = datetime.datetime.now()
-                                recording_time_list[record_name] = [start_record_time, record_quality_zh]
+                                with recording_state_lock:
+                                    recording.add(record_name)
+                                    start_record_time = datetime.datetime.now()
+                                    recording_time_list[record_name] = [start_record_time, record_quality_zh]
+                                    recording_url_map[record_name] = record_url
                                 rec_info = f"\r{anchor_name} 准备开始录制视频: {full_path}"
                                 if show_url:
                                     re_plat = ('WinkTV', 'PandaTV', 'ShowRoom', 'CHZZK', 'Youtube')
@@ -1323,9 +1611,11 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                     try:
                                         flv_url = port_info.get('flv_url')
                                         if flv_url:
-                                            recording.add(record_name)
-                                            start_record_time = datetime.datetime.now()
-                                            recording_time_list[record_name] = [start_record_time, record_quality_zh]
+                                            with recording_state_lock:
+                                                recording.add(record_name)
+                                                start_record_time = datetime.datetime.now()
+                                                recording_time_list[record_name] = [start_record_time, record_quality_zh]
+                                                recording_url_map[record_name] = record_url
 
                                             download_success = direct_download_stream(
                                                 flv_url, save_file_path, record_name, record_url, platform
@@ -1336,7 +1626,9 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                                 print(
                                                     f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制完成\n")
 
-                                            recording.discard(record_name)
+                                            with recording_state_lock:
+                                                recording.discard(record_name)
+                                                recording_url_map.pop(record_name, None)
                                         else:
                                             logger.debug("未找到FLV直播流，跳过录制")
                                     except Exception as e:
@@ -1842,7 +2134,8 @@ while True:
     dingtalk_phone_num = read_config_value(config, '推送配置', '钉钉通知@对象(填手机号)', "")
     dingtalk_is_atall = options.get(read_config_value(config, '推送配置', '钉钉通知@全体(是/否)', "否"), False)
     tg_token = read_config_value(config, '推送配置', 'tgapi令牌', "")
-    tg_chat_id = read_config_value(config, '推送配置', 'tg聊天id(个人或者群组id)', "")
+    tg_chat_id = read_config_value(config, '推送配置', 'tg管理员id(个人或者群组id)', "")
+    tg_manage_urls = options.get(read_config_value(config, '推送配置', 'tg快捷管理录制地址(是/否)', "否"), False)
     email_host = read_config_value(config, '推送配置', 'SMTP邮件服务器', "")
     open_smtp_ssl = options.get(read_config_value(config, '推送配置', '是否使用SMTP服务SSL加密(是/否)', "是"), True)
     smtp_port = read_config_value(config, '推送配置', 'SMTP邮件服务器端口', "")
@@ -1933,10 +2226,20 @@ while True:
     check_path = video_save_path or default_path
     if utils.check_disk_capacity(check_path, show=first_run) < disk_space_limit:
         exit_recording = True
-        if not recording:
+        with recording_state_lock:
+            no_active_recording = not recording
+        if no_active_recording:
             logger.warning(f"Disk space remaining is below {disk_space_limit} GB. "
                            f"Exiting program due to the disk space limit being reached.")
             sys.exit(-1)
+
+    if tg_manage_urls and tg_token and tg_chat_id:
+        with telegram_bot_manage_lock:
+            if not telegram_bot_manage_started:
+                telegram_bot_manage_started = True
+                t4 = threading.Thread(target=telegram_manage_live_urls, args=(tg_token, str(tg_chat_id)), daemon=True)
+                t4.start()
+                print("Telegram bot 链接管理已开启，发送 /help 查看命令")
 
 
     def contains_url(string: str) -> bool:
@@ -1945,7 +2248,9 @@ while True:
 
 
     try:
-        url_comments, line_list, url_line_list = [[] for _ in range(3)]
+        with url_comments_lock:
+            url_comments = []
+        line_list, url_line_list = [[] for _ in range(2)]
         with (open(url_config_file, "r", encoding=text_encoding, errors='ignore') as file):
             for origin_line in file:
                 if origin_line in line_list:
@@ -2098,10 +2403,11 @@ while True:
                             new_url = url.split('?')[0] + f'?host_id={host_id.group(1)}'
                             url = update_file(url_config_file, old_str=url, new_str=new_url)
 
-                    url_comments = [i for i in url_comments if url not in i]
-                    if is_comment_line:
-                        url_comments.append(url)
-                    else:
+                    with url_comments_lock:
+                        url_comments = [i for i in url_comments if url not in i]
+                        if is_comment_line:
+                            url_comments.append(url)
+                    if not is_comment_line:
                         new_line = (quality, url, name)
                         url_tuples_list.append(new_line)
                 else:

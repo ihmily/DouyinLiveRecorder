@@ -189,6 +189,16 @@ async def get_douyin_app_stream_data(url: str, proxy_addr: OptionalStr = None, c
                 _room_id, _sec_uid = data
                 room_data = await get_app_data(_room_id, _sec_uid)
             except UnsupportedUrlError:
+                redirect_url = None
+                try:
+                    proxy = utils.handle_proxy_addr(proxy_addr)
+                    async with httpx.AsyncClient(proxy=proxy, timeout=15) as client:
+                        response = await client.get(url, headers=headers, follow_redirects=True)
+                        redirect_url = str(response.url)
+                except httpx.HTTPError as e:
+                    print(f"Douyin short URL redirect failed: {e}")
+                if redirect_url and urllib.parse.urlparse(redirect_url).hostname == 'live.douyin.com':
+                    return await get_douyin_web_stream_data(redirect_url, proxy_addr, cookies)
                 unique_id = await get_unique_id(url, proxy_addr=proxy_addr)
                 return await get_douyin_stream_data(f'https://live.douyin.com/{unique_id}')
 
@@ -835,8 +845,10 @@ async def get_bigo_stream_url(url: str, proxy_addr: OptionalStr = None, cookies:
         html_str = await async_req(url, proxy_addr=proxy_addr, headers=headers)
         web_url = re.search(
             '<meta data-n-head="ssr" data-hid="al:web:url" property="al:web:url" content="(.*?)">',
-            html_str).group(1)
-        room_id = web_url.split('&amp;h=')[-1]
+            html_str)
+        if not web_url:
+            return {"anchor_name": "", "is_live": False}
+        room_id = web_url.group(1).split('&amp;h=')[-1]
     else:
         if '&h=' in url:
             room_id = url.split('&h=')[-1]
@@ -866,7 +878,7 @@ async def get_bigo_stream_url(url: str, proxy_addr: OptionalStr = None, cookies:
         else:
             match_anchor_name = re.search('<meta data-n-head="ssr" data-hid="og:title" property="og:title" '
                                           'content="(.*?) - BIGO LIVE">', html_str, re.DOTALL)
-            anchor_name = match_anchor_name.group(1)
+            anchor_name = match_anchor_name.group(1) if match_anchor_name else ''
         result['anchor_name'] = anchor_name
 
     return result
