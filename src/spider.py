@@ -30,6 +30,7 @@ from .logger import script_path
 from .room import get_sec_user_id, get_unique_id, UnsupportedUrlError
 from .http_clients.async_http import async_req
 from .ab_sign import ab_sign
+from .taobao_utils import build_taobao_sign, get_cookie_value, get_taobao_live_id, merge_cookie_header
 
 
 ssl_context = ssl.create_default_context()
@@ -3032,18 +3033,29 @@ async def get_taobao_stream_url(url: str, proxy_addr: OptionalStr = None, cookie
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
         'Cookie': '',
     }
+    result = {'anchor_name': '', 'is_live': False}
 
     if cookies:
         headers['Cookie'] = cookies
 
     if '_m_h5_tk' not in headers['Cookie']:
         print('Error: Cookies is empty! please input correct cookies')
+        return result
 
-    live_id = get_params(url, 'id')
+    live_id = get_taobao_live_id(url)
+    if not live_id:
+        redirect_url = await async_req(url, proxy_addr=proxy_addr, headers=headers, redirect_url=True)
+        live_id = get_taobao_live_id(redirect_url)
+
     if not live_id:
         html_str = await async_req(url, proxy_addr=proxy_addr, headers=headers)
-        redirect_url = re.findall("var url = '(.*?)';", html_str)[0]
-        live_id = get_params(redirect_url, 'id')
+        redirect_urls = re.findall("var url = '(.*?)';", html_str)
+        if redirect_urls:
+            live_id = get_taobao_live_id(redirect_urls[0])
+
+    if not live_id:
+        print(f'Error: Unable to extract Taobao liveId from url: {url}')
+        return result
 
     params = {
         'jsv': '2.7.0',
@@ -3062,25 +3074,27 @@ async def get_taobao_stream_url(url: str, proxy_addr: OptionalStr = None, cookie
     }
 
     for i in range(2):
-        app_key = '12574478'
-        _m_h5_tk = re.findall('_m_h5_tk=(.*?);', headers['Cookie'])[0]
+        _m_h5_tk = get_cookie_value(headers['Cookie'], '_m_h5_tk')
+        if not _m_h5_tk:
+            print('Error: Unable to read _m_h5_tk from cookies')
+            return result
         t13 = int(time.time() * 1000)
-        pre_sign_str = f'{_m_h5_tk.split("_")[0]}&{t13}&{app_key}&' + params['data']
-        sign = execjs.compile(open(f'{JS_SCRIPT_PATH}/taobao-sign.js').read()).call('sign', pre_sign_str)
+        sign = build_taobao_sign(_m_h5_tk, t13, params['data'])
         params |= {'sign': sign, 't': t13}
         api = f'https://h5api.m.taobao.com/h5/mtop.mediaplatform.live.livedetail/4.0/?{urllib.parse.urlencode(params)}'
         jsonp_str, new_cookie = await async_req(url=api, proxy_addr=proxy_addr, headers=headers, timeout=20,
                                                 return_cookies=True, include_cookies=True)
         json_data = utils.jsonp_to_json(jsonp_str)
+        headers['Cookie'] = merge_cookie_header(headers['Cookie'], new_cookie)
 
         ret_msg = json_data['ret']
         if ret_msg == ['SUCCESS::调用成功']:
             anchor_name = json_data['data']['broadCaster']['accountName']
             result = {"anchor_name": anchor_name, "is_live": False}
             live_status = json_data['data']['streamStatus']
-            if live_status == '1':
+            play_url_list = json_data['data'].get('liveUrlList') or []
+            if str(live_status) in {'0', '1'} or play_url_list:
                 live_title = json_data['data']['title']
-                play_url_list = json_data['data']['liveUrlList']
 
                 def get_sort_key(item):
                     definition_priority = {
@@ -3094,13 +3108,8 @@ async def get_taobao_stream_url(url: str, proxy_addr: OptionalStr = None, cookie
                 result |= {"is_live": True, "title": live_title, "play_url_list": play_url_list, 'live_id': live_id}
 
             return result
-        else:
-            print(f'Error: Taobao live data fetch failed, {ret_msg[0]}')
 
-        if '_m_h5_tk' in new_cookie and '_m_h5_tk_enc' in new_cookie:
-            headers['Cookie'] = re.sub('_m_h5_tk=(.*?);', new_cookie['_m_h5_tk'], headers['Cookie'])
-            headers['Cookie'] = re.sub('_m_h5_tk_enc=(.*?);', new_cookie['_m_h5_tk_enc'], headers['Cookie'])
-        else:
+        if '_m_h5_tk' not in new_cookie or '_m_h5_tk_enc' not in new_cookie:
             print('Error: Try to update cookie failed, please update the cookies in the configuration file')
 
 

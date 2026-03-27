@@ -31,6 +31,7 @@ from src import spider, stream
 from src.proxy import ProxyDetector
 from src.utils import logger
 from src import utils
+from src.taobao_utils import is_taobao_live_url
 from msg_push import (
     dingtalk, xizhi, tg_bot, send_email, bark, ntfy, pushplus
 )
@@ -972,7 +973,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                 url=record_url, proxy_addr=proxy_address, cookies=youtube_cookie))
                             port_info = asyncio.run(stream.get_stream_url(json_data, record_quality, spec=True))
 
-                    elif record_url.find("tb.cn") > -1:
+                    elif is_taobao_live_url(record_url):
                         platform = '淘宝直播'
                         with semaphore:
                             json_data = asyncio.run(spider.get_taobao_stream_url(
@@ -2037,8 +2038,10 @@ while True:
                     "m.6.cn",
                     'www.lehaitv.com',
                     'h.catshow168.com',
+                    'm.tb.cn',
                     'e.tb.cn',
                     'huodong.m.taobao.com',
+                    'tbzb.taobao.com',
                     '3.cn',
                     'eco.m.jd.com',
                     'www.miguvideo.com',
