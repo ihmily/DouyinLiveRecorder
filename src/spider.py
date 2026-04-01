@@ -3036,10 +3036,8 @@ async def get_taobao_stream_url(url: str, proxy_addr: OptionalStr = None, cookie
     if cookies:
         headers['Cookie'] = cookies
 
-    if '_m_h5_tk' not in headers['Cookie']:
-        print('Error: Cookies is empty! please input correct cookies')
+    live_id = get_params(url, 'liveId')
 
-    live_id = get_params(url, 'id')
     if not live_id:
         html_str = await async_req(url, proxy_addr=proxy_addr, headers=headers)
         redirect_url = re.findall("var url = '(.*?)';", html_str)[0]
@@ -3062,16 +3060,23 @@ async def get_taobao_stream_url(url: str, proxy_addr: OptionalStr = None, cookie
     }
 
     for i in range(2):
-        app_key = '12574478'
-        _m_h5_tk = re.findall('_m_h5_tk=(.*?);', headers['Cookie'])[0]
+
         t13 = int(time.time() * 1000)
-        pre_sign_str = f'{_m_h5_tk.split("_")[0]}&{t13}&{app_key}&' + params['data']
-        sign = execjs.compile(open(f'{JS_SCRIPT_PATH}/taobao-sign.js').read()).call('sign', pre_sign_str)
-        params |= {'sign': sign, 't': t13}
+        params['t'] = t13
+
+        if '_m_h5_tk' in headers['Cookie']:
+            app_key = '12574478'
+            _m_h5_tk = re.findall('_m_h5_tk=(.*?);', headers['Cookie'])[0]
+            pre_sign_str = f'{_m_h5_tk.split("_")[0]}&{t13}&{app_key}&' + params['data']
+            sign = hashlib.md5(pre_sign_str.encode("utf-8")).hexdigest()
+            params['sign'] = sign
+
         api = f'https://h5api.m.taobao.com/h5/mtop.mediaplatform.live.livedetail/4.0/?{urllib.parse.urlencode(params)}'
         jsonp_str, new_cookie = await async_req(url=api, proxy_addr=proxy_addr, headers=headers, timeout=20,
                                                 return_cookies=True, include_cookies=True)
         json_data = utils.jsonp_to_json(jsonp_str)
+        if '哎哟喂,被挤爆啦,请稍后重试' in json_data['ret'][0]:
+            raise RuntimeError(f"Please change your taobao cookie: {json_data['ret']}")
 
         ret_msg = json_data['ret']
         if ret_msg == ['SUCCESS::调用成功']:
@@ -3092,16 +3097,14 @@ async def get_taobao_stream_url(url: str, proxy_addr: OptionalStr = None, cookie
 
                 play_url_list = sorted(play_url_list, key=get_sort_key, reverse=True)
                 result |= {"is_live": True, "title": live_title, "play_url_list": play_url_list, 'live_id': live_id}
-
             return result
-        else:
-            print(f'Error: Taobao live data fetch failed, {ret_msg[0]}')
 
-        if '_m_h5_tk' in new_cookie and '_m_h5_tk_enc' in new_cookie:
-            headers['Cookie'] = re.sub('_m_h5_tk=(.*?);', new_cookie['_m_h5_tk'], headers['Cookie'])
-            headers['Cookie'] = re.sub('_m_h5_tk_enc=(.*?);', new_cookie['_m_h5_tk_enc'], headers['Cookie'])
         else:
-            print('Error: Try to update cookie failed, please update the cookies in the configuration file')
+            if '_m_h5_tk' not in new_cookie or '_m_h5_tk_enc' not in new_cookie:
+                raise RuntimeError('Try to update cookie failed, please update the cookies in the configuration file')
+            new_cookie_str = utils.dict_to_cookie_str(new_cookie)
+            headers['Cookie'] = new_cookie_str
+            utils.update_config(f'{script_path}/config/config.ini', 'Cookie', 'taobao_cookie', new_cookie_str)
 
 
 @trace_error_decorator

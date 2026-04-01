@@ -972,7 +972,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                 url=record_url, proxy_addr=proxy_address, cookies=youtube_cookie))
                             port_info = asyncio.run(stream.get_stream_url(json_data, record_quality, spec=True))
 
-                    elif record_url.find("tb.cn") > -1:
+                    elif record_url.find("tb.cn") > -1 or record_url.find("tbzb.taobao.com") > -1:
                         platform = '淘宝直播'
                         with semaphore:
                             json_data = asyncio.run(spider.get_taobao_stream_url(
@@ -2038,6 +2038,8 @@ while True:
                     'www.lehaitv.com',
                     'h.catshow168.com',
                     'e.tb.cn',
+                    'm.tb.cn',
+                    'tbzb.taobao.com',
                     'huodong.m.taobao.com',
                     '3.cn',
                     'eco.m.jd.com',
@@ -2153,3 +2155,4 @@ while True:
         first_run = False
 
     time.sleep(3)
+    
