@@ -91,12 +91,6 @@ def install_nodejs_centos():
     try:
         logger.warning("Node.js is not installed.")
         logger.debug("Installing the latest version of Node.js for CentOS...")
-        result = subprocess.run('curl -fsSL https://mirrors.tuna.tsinghua.edu.cn/nodesource/rpm/setup_lts.x | '
-                                'bash -', shell=True, capture_output=True)
-        if result.returncode != 0:
-            logger.error("Failed to run NodeSource installation script")
-            return
-
         result = subprocess.run(['yum', 'install', '-y', 'epel-release'], capture_output=True)
         if result.returncode != 0:
             logger.error("Failed to install EPEL repository")
@@ -117,12 +111,6 @@ def install_nodejs_ubuntu():
     try:
         logger.warning("Node.js is not installed.")
         logger.debug("Installing the latest version of Node.js for Ubuntu...")
-        install_script = 'curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -'
-        result = subprocess.run(install_script, shell=True, capture_output=True)
-        if result.returncode != 0:
-            logger.error("Failed to run NodeSource installation script")
-            return
-
         install_command = ['apt', 'install', '-y', 'nodejs']
         result = subprocess.run(install_command, capture_output=True)
         if result.returncode == 0:
