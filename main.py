@@ -168,7 +168,7 @@ def delete_line(file_path: str, del_line: str, delete_all: bool = False) -> None
             f.truncate()
             skip_line = False
             for txt_line in lines:
-                if del_line in txt_line:
+                if del_line == txt_line:
                     if delete_all or not skip_line:
                         skip_line = True
                         continue
