@@ -1946,6 +1946,7 @@ while True:
 
     try:
         url_comments, line_list, url_line_list = [[] for _ in range(3)]
+        seen_urls = set()
         with (open(url_config_file, "r", encoding=text_encoding, errors='ignore') as file):
             for origin_line in file:
                 if origin_line in line_list:
@@ -2098,6 +2099,7 @@ while True:
                             new_url = url.split('?')[0] + f'?host_id={host_id.group(1)}'
                             url = update_file(url_config_file, old_str=url, new_str=new_url)
 
+                    seen_urls.add(url)
                     url_comments = [i for i in url_comments if url not in i]
                     if is_comment_line:
                         url_comments.append(url)
@@ -2120,6 +2122,11 @@ while True:
                     start_with = None
                     new_word = replace_words[1]
                 update_file(url_config_file, old_str=replace_words[0], new_str=new_word, start_str=start_with)
+
+        running_snapshot = list(running_list)
+        for running_url in running_snapshot:
+            if running_url not in seen_urls and running_url not in url_comments:
+                url_comments.append(running_url)
 
         text_no_repeat_url = list(set(url_tuples_list))
 
