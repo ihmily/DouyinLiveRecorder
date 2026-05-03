@@ -5,7 +5,7 @@ import builtins
 from pathlib import Path
 
 
-def init_gettext(locale_dir, locale_name):
+def init_gettext(locale_dir: str | Path, locale_name: str):
     gettext.bindtextdomain(locale_name, locale_dir)
     gettext.textdomain(locale_name)
     os.environ['LANG'] = f'{locale_name}.utf8'

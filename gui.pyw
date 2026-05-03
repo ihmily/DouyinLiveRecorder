@@ -10,14 +10,14 @@ import tkinter as tk
 from tkinter import scrolledtext, messagebox, ttk
 from datetime import datetime
 
-import pystray
+import pystray  # type: ignore[import-not-found]
 from PIL import Image, ImageDraw
 
 
 class SystemTray:
     """系统托盘管理器"""
 
-    def __init__(self, gui_app):
+    def __init__(self, gui_app: 'LiveRecorderGUI'):
         self.gui = gui_app
         self.icon = None
         self.running = False
@@ -181,6 +181,7 @@ class LiveRecorderGUI:
 
         self._last_url_config_mtime = 0.0
         self._url_config_dirty = False
+        self._loading_config = False
         self._refresh_job_id: str | None = None
         self._anchor_refresh_counter = 0
         self._anchor_refreshing = False
@@ -285,14 +286,15 @@ class LiveRecorderGUI:
 
     def _load_config(self):
         """加载 URL 配置文件"""
-        config_dir = os.path.dirname(self.url_config_file)
-        os.makedirs(config_dir, exist_ok=True)
-
-        if not os.path.exists(self.url_config_file):
-            with open(self.url_config_file, 'w', encoding='utf-8-sig') as f:
-                f.write("")
-
+        self._loading_config = True
         try:
+            config_dir = os.path.dirname(self.url_config_file)
+            os.makedirs(config_dir, exist_ok=True)
+
+            if not os.path.exists(self.url_config_file):
+                with open(self.url_config_file, 'w', encoding='utf-8-sig') as f:
+                    f.write("")
+
             with open(self.url_config_file, 'r', encoding='utf-8-sig') as f:
                 content = f.read()
 
@@ -311,6 +313,8 @@ class LiveRecorderGUI:
             self._log("配置文件已加载")
         except Exception as e:
             self._log(f"加载配置文件失败: {e}", "error")
+        finally:
+            self._loading_config = False
 
     def _get_dynamic_status_info(self):
         check_interval = "120秒"
@@ -408,18 +412,17 @@ class LiveRecorderGUI:
             # --- 修改开始 ---
             # 1. 定义启动参数
             startupinfo = None
+            env = os.environ.copy()
+            env['PYTHONIOENCODING'] = 'utf-8'  # 设置环境变量，确保子进程使用 utf-8 编码
             if sys.platform == 'win32':
                 # 2. 关键设置：告诉 Windows 不要为这个子进程创建控制台窗口
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 startupinfo.wShowWindow = subprocess.SW_HIDE
-                env = os.environ.copy()
-                env['PYTHONIOENCODING'] = 'utf-8'  # <--- 新增：设置环境变量，确保子进程使用 utf-8 编码
 
-            # 设置创建标志，Windows 上使用 CREATE_NEW_PROCESS_GROUP 以便正确处理 CTRL+C
+            # 设置创建标志，隐藏窗口并创建独立进程组，便于 taskkill /T 清理子进程树
             creation_flags = 0
             if sys.platform == 'win32':
-                # CREATE_NEW_PROCESS_GROUP 允许我们向整个进程组发送 CTRL+C 信号
                 creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
 
             self.process = subprocess.Popen(
@@ -468,64 +471,45 @@ class LiveRecorderGUI:
             self._log("=" * 50)
             self._log(f"[{self._get_timestamp()}] 正在停止录制...")
 
-            # 多阶段进程终止策略，给子进程清理 ffmpeg 的机会
             terminated = False
-            
-            # 阶段 1：尝试发送信号让子进程优雅退出（Windows 使用 CTRL+C，Unix 使用 SIGINT）
+
+            if sys.platform == 'win32':
+                self._log("正在发送终止信号...")
+                self.process.terminate()
+            else:
+                self._log("正在发送 SIGINT 信号...")
+                import signal
+                os.kill(self.process.pid, signal.SIGINT)
+
             try:
-                if sys.platform == 'win32':
-                    # Windows: 发送 CTRL_C_EVENT 到进程组
-                    self._log("正在发送停止信号 (CTRL+C)...")
-                    import signal
-                    try:
-                        # 使用进程组 ID（与 PID 相同）发送 CTRL_C_EVENT
-                        os.kill(self.process.pid, signal.CTRL_C_EVENT)
-                    except Exception as e:
-                        self._log(f"CTRL+C 发送失败: {e}，尝试发送终止信号...")
-                        self.process.terminate()
-                else:
-                    # Unix/Linux: 发送 SIGINT
-                    self._log("正在发送 SIGINT 信号...")
-                    import signal
-                    os.kill(self.process.pid, signal.SIGINT)
-                
-                # 等待较长时间，让子进程有机会清理 ffmpeg
-                try:
-                    self.process.wait(timeout=10)
-                    terminated = True
-                    self._log("进程已优雅退出")
-                except subprocess.TimeoutExpired:
-                    self._log("优雅退出超时，进入下一阶段...")
-            except Exception as e:
-                self._log(f"阶段 1 失败: {e}")
-            
-            # 阶段 2：如果还没终止，尝试 terminate()
-            if not terminated and self.process.poll() is None:
-                try:
-                    self._log("正在发送终止信号...")
-                    self.process.terminate()
-                    try:
-                        self.process.wait(timeout=5)
-                        terminated = True
-                        self._log("进程已终止")
-                    except subprocess.TimeoutExpired:
-                        self._log("终止超时...")
-                except Exception as e:
-                    self._log(f"阶段 2 失败: {e}")
-            
-            # 阶段 3：最后的手段，强制 kill()
+                self.process.wait(timeout=10)
+                terminated = True
+                self._log("进程已优雅退出")
+            except subprocess.TimeoutExpired:
+                self._log("进程未能及时退出，尝试强制终止...")
+
             if not terminated and self.process.poll() is None:
                 try:
                     self._log("正在强制终止进程...")
                     self.process.kill()
                     try:
-                        self.process.wait(timeout=3)
+                        self.process.wait(timeout=5)
                         terminated = True
                         self._log("进程已强制终止")
                     except subprocess.TimeoutExpired:
                         self._log("警告：进程可能仍在运行！")
                 except Exception as e:
-                    self._log(f"阶段 3 失败: {e}")
+                    self._log(f"强制终止失败: {e}")
+
+            if sys.platform == 'win32' and self.process_pid:
+                self._log("正在清理子进程树 (ffmpeg)...")
+                try:
+                    subprocess.run(
+                        ['taskkill', '/F', '/T', '/PID', str(self.process_pid)],
+                        capture_output=True, text=True, timeout=10
+                    )
+                except Exception as e:
+                    self._log(f"子进程树清理失败: {e}")
 
             self.running = False
             self.process = None
@@ -623,6 +607,8 @@ class LiveRecorderGUI:
 
     def _on_config_text_modified(self, event=None):
         """当用户在编辑器中修改内容时置脏标志"""
+        if self._loading_config:
+            return
         self._url_config_dirty = True
 
     def _watch_url_config(self):
