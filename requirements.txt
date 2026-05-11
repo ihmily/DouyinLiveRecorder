@@ -8,3 +8,7 @@ PyExecJS
 pystray
 Pillow
 weverse
+
+# ====== Chrome 渲染录制功能 (新增) ======
+playwright>=1.40.0
+asyncio-pool>=0.6.0

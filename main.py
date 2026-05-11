@@ -1387,6 +1387,71 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                 time.sleep(push_check_seconds)
                                 continue
 
+                            if chrome_record_mode in ['chrome_render', 'both']:
+                                try:
+                                    from src.chrome_recorder import ChromeLiveRecorder, ChromeRecorderConfig
+                                    import asyncio
+
+                                    chrome_config = ChromeRecorderConfig(
+                                        output_dir=full_path,
+                                        output_format=chrome_output_format,
+                                        fps=chrome_fps,
+                                        window_size=chrome_window_size,
+                                        hardware_acceleration=chrome_hardware_acceleration,
+                                        auto_record_on_live=chrome_auto_record_on_live,
+                                        headless=chrome_headless
+                                    )
+
+                                    chrome_rec = ChromeLiveRecorder(chrome_config)
+
+                                    def on_chrome_error(e):
+                                        logger.error(f"Chrome录制错误: {e}")
+
+                                    def on_chrome_live_detected():
+                                        logger.info(f"[Chrome] {anchor_name} 检测到直播开始")
+
+                                    def on_chrome_recording_started(path):
+                                        logger.info(f"[Chrome] {anchor_name} 录制开始: {path}")
+
+                                    def on_chrome_recording_stopped(path):
+                                        logger.info(f"[Chrome] {anchor_name} 录制结束: {path}")
+                                        recording.discard(record_name)
+
+                                    chrome_rec.on_error = on_chrome_error
+                                    chrome_rec.on_live_detected = on_chrome_live_detected
+                                    chrome_rec.on_recording_started = on_chrome_recording_started
+                                    chrome_rec.on_recording_stopped = on_chrome_recording_stopped
+
+                                    loop = asyncio.new_event_loop()
+                                    asyncio.set_event_loop(loop)
+
+                                    success = loop.run_until_complete(chrome_rec.start_browser(record_url))
+                                    if success:
+                                        logger.info(f"[Chrome] {anchor_name} 浏览器已启动")
+                                        if chrome_auto_record_on_live:
+                                            time.sleep(3)
+                                            loop.run_until_complete(chrome_rec.start_recording_async(anchor_name))
+
+                                        if chrome_record_mode == 'chrome_render':
+                                            try:
+                                                while chrome_rec.is_running and not exit_recording:
+                                                    if record_url in url_comments or exit_recording:
+                                                        clear_record_info(record_name, record_url)
+                                                        break
+                                                    time.sleep(5)
+                                            finally:
+                                                if chrome_rec.is_recording:
+                                                    loop.run_until_complete(chrome_rec.stop_recording_async())
+                                                chrome_rec.stop_browser()
+                                            continue
+                                    else:
+                                        logger.warning(f"[Chrome] {anchor_name} 浏览器启动失败，回退到传统模式")
+
+                                except ImportError as ie:
+                                    logger.warning(f"Chrome模块未安装: {ie}，使用传统录制模式")
+                                except Exception as ce:
+                                    logger.error(f"Chrome录制初始化失败: {ce}，使用传统录制模式")
+
                             real_url = select_source_url(record_url, port_info)
                             full_path = f'{default_path}/{platform}'
                             if real_url:
@@ -2196,6 +2261,15 @@ while True:
     lianjie_cookie = read_config_value(config, 'Cookie', 'lianjie_cookie', '')
     laixiu_cookie = read_config_value(config, 'Cookie', 'laixiu_cookie', '')
     picarto_cookie = read_config_value(config, 'Cookie', 'picarto_cookie', '')
+
+    chrome_record_mode = read_config_value(config, '录制设置', 'chrome录制模式(stream_only/chrome_render/both)', "stream_only")
+    chrome_output_format = read_config_value(config, '录制设置', 'chrome录制输出格式(mp4/webm/mkv)', "mp4")
+    chrome_fps = int(read_config_value(config, '录制设置', 'chrome录制帧率(15-60)', "30"))
+    chrome_window_size_str = read_config_value(config, '录制设置', 'chrome窗口分辨率(宽x高)', "1280,720")
+    chrome_window_size = tuple(map(int, chrome_window_size_str.split(',')))
+    chrome_hardware_acceleration = options.get(read_config_value(config, '录制设置', 'chrome硬件加速(是/否)', "是"), True)
+    chrome_auto_record_on_live = options.get(read_config_value(config, '录制设置', 'chrome自动检测直播并录制(是/否)', "是"), False)
+    chrome_headless = options.get(read_config_value(config, '录制设置', 'chrome无头模式(是/否)', "否"), False)
 
     video_save_type_list = ("FLV", "MKV", "TS", "MP4", "MP3音频", "M4A音频", "MP3", "M4A")
     if video_save_type and video_save_type.upper() in video_save_type_list:

@@ -155,6 +155,181 @@ class AdvancedSettingsWindow:
             messagebox.showerror("错误", f"保存配置文件失败: {e}")
 
 
+class ChromeRenderPanel(ttk.Frame):
+    """Chrome 直播画面渲染面板"""
+
+    def __init__(self, parent, main_gui):
+        super().__init__(parent)
+        self.main_gui = main_gui
+        self.recorder = None
+        self.browser_thread = None
+        self._setup_ui()
+
+    def _setup_ui(self):
+        control_frame = ttk.LabelFrame(self, text="Chrome 渲染控制", padding=5)
+        control_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        btn_row = ttk.Frame(control_frame)
+        btn_row.pack(fill=tk.X)
+
+        self.preview_btn = ttk.Button(btn_row, text="🔴 启动预览", command=self.toggle_preview, width=15)
+        self.preview_btn.pack(side=tk.LEFT, padx=3)
+
+        self.record_btn = ttk.Button(btn_row, text="⏺️ 开始录制", command=self.toggle_record, width=15, state=tk.DISABLED)
+        self.record_btn.pack(side=tk.LEFT, padx=3)
+
+        self.snapshot_btn = ttk.Button(btn_row, text="📸 截图", command=self.take_snapshot, width=10, state=tk.DISABLED)
+        self.snapshot_btn.pack(side=tk.LEFT, padx=3)
+
+        status_row = ttk.Frame(control_frame)
+        status_row.pack(fill=tk.X, pady=(5, 0))
+
+        self.chrome_status_label = tk.Label(status_row, text="状态: 未启动", fg="gray")
+        self.chrome_status_label.pack(side=tk.LEFT)
+
+        self.fps_label = tk.Label(status_row, text="", fg="gray")
+        self.fps_label.pack(side=tk.RIGHT)
+
+        browser_frame = ttk.LabelFrame(self, text="直播画面预览 (Chrome内核)", padding=5)
+        browser_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        self.browser_canvas = tk.Canvas(browser_frame, bg='#1a1a1a', highlightthickness=1, highlightbackground='#333')
+        self.browser_canvas.pack(fill=tk.BOTH, expand=True)
+
+        hint = tk.Label(browser_frame,
+                        text="💡 点击「启动预览」加载直播间 | 完整渲染弹幕/礼物/互动特效 | 支持自动检测直播状态",
+                        fg="gray", font=("Arial", 9))
+        hint.pack(pady=5)
+
+    def toggle_preview(self):
+        if self.browser_thread and self.browser_thread.is_alive():
+            self.stop_preview()
+        else:
+            self.start_preview()
+
+    def start_preview(self):
+        from src.chrome_recorder import ChromeLiveRecorder, ChromeRecorderConfig
+
+        url = self._get_selected_url()
+        if not url:
+            messagebox.showwarning("提示", "请先在「传统录制」标签页的URL列表中选择一个直播间地址")
+            return
+
+        try:
+            config = ChromeRecorderConfig(
+                output_dir=self.main_gui.downloads_dir,
+                output_format='mp4',
+                fps=30,
+                window_size=(960, 540),
+                hardware_acceleration=True,
+                auto_record_on_live=False
+            )
+
+            self.recorder = ChromeLiveRecorder(config)
+            self.recorder.on_live_detected = lambda: self.root.after(0, lambda: self.chrome_status_label.config(text="状态: 🟢 直播中", fg="green"))
+            self.recorder.on_live_ended = lambda: self.root.after(0, lambda: self.chrome_status_label.config(text="状态: ⚪ 未直播", fg="orange"))
+            self.recorder.on_error = lambda e: self.main_gui._log(f"[Chrome] 错误: {e}", "error")
+            self.recorder.on_recording_started = lambda p: self.main_gui._log(f"[Chrome] 录制开始: {p}")
+            self.recorder.on_recording_stopped = lambda p: self.main_gui._log(f"[Chrome] 录制结束: {p}")
+            self.recorder.on_status_update = lambda s: self.root.after(0, lambda: self.chrome_status_label.config(text=f"状态: {s}"))
+
+            self.browser_thread = threading.Thread(target=self._run_browser, args=(url,), daemon=True)
+            self.browser_thread.start()
+
+            self.preview_btn.config(text="⏹️ 停止预览")
+            self.record_btn.config(state=tk.NORMAL)
+            self.snapshot_btn.config(state=tk.NORMAL)
+            self.main_gui._log(f"[Chrome] 正在加载直播间: {url}")
+
+        except Exception as e:
+            messagebox.showerror("错误", f"启动 Chrome 预览失败:\n{e}\n\n请确保已安装:\npip install playwright && playwright install chromium")
+
+    def _run_browser(self, url):
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            success = loop.run_until_complete(self.recorder.start_browser(url))
+            if not success:
+                self.root.after(0, lambda: messagebox.showerror("错误", "浏览器加载失败"))
+        except Exception as e:
+            self.root.after(0, lambda e=e: messagebox.showerror("错误", str(e)))
+        loop.close()
+
+    def stop_preview(self):
+        if self.recorder:
+            if self.recorder.is_recording:
+                import asyncio
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(self.recorder.stop_recording_async())
+                except:
+                    pass
+                loop.close()
+            self.recorder.stop_browser()
+            self.recorder = None
+
+        self.browser_thread = None
+        self.preview_btn.config(text="🔴 启动预览")
+        self.record_btn.config(text="⏺️ 开始录制", state=tk.DISABLED)
+        self.snapshot_btn.config(state=tk.DISABLED)
+        self.chrome_status_label.config(text="状态: 未启动", fg="gray")
+        self.main_gui._log("[Chrome] 预览已停止")
+
+    def toggle_record(self):
+        if not self.recorder:
+            return
+
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        if self.recorder.is_recording:
+            try:
+                loop.run_until_complete(self.recorder.stop_recording_async())
+                self.record_btn.config(text="⏺️ 开始录制")
+            except Exception as e:
+                self.main_gui._log(f"[Chrome] 停止录制失败: {e}", "error")
+        else:
+            anchor_name = self._get_anchor_name()
+            try:
+                loop.run_until_complete(self.recorder.start_recording_async(anchor_name))
+                self.record_btn.config(text="⏹️ 停止录制")
+            except Exception as e:
+                self.main_gui._log(f"[Chrome] 开始录制失败: {e}", "error")
+        loop.close()
+
+    def take_snapshot(self):
+        if self.recorder:
+            path = self.recorder.take_screenshot_sync()
+            if path:
+                messagebox.showinfo("成功", f"截图已保存到:\n{path}")
+            else:
+                messagebox.showerror("失败", "截图失败，请确保预览已启动")
+
+    def _get_selected_url(self) -> str:
+        try:
+            selected_text = self.main_gui.config_text.get(tk.SEL_FIRST, tk.SEL_LAST).strip()
+            if selected_text and ('http' in selected_text or 'live' in selected_text):
+                for line in selected_text.split('\n'):
+                    line = line.strip().lstrip('#')
+                    if 'http' in line:
+                        return line.split(',')[0].split('，')[0].strip()
+        except:
+            pass
+        return ""
+
+    def _get_anchor_name(self) -> str:
+        try:
+            selected_text = self.main_gui.config_text.get(tk.SEL_FIRST, tk.SEL_LAST).strip()
+            if '主播:' in selected_text:
+                return selected_text.split('主播:')[-1].strip()[:50]
+        except:
+            pass
+        return ""
+
+
 class LiveRecorderGUI:
     """直播录制 GUI 主类"""
 
@@ -162,8 +337,8 @@ class LiveRecorderGUI:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("直播录制控制台")
-        self.root.geometry("900x700")
+        self.root.title("直播录制控制台 - 增强版 (支持Chrome渲染)")
+        self.root.geometry("1000,750")
         self.root.resizable(False, False)
 
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -190,9 +365,12 @@ class LiveRecorderGUI:
         self._status_cache: tuple[str, str, str] | None = None
 
         self._nickname_pattern = re.compile(r'"nickname":"(.*?)","avatar_thumb')
+        
+        self.notebook = None
+        self.chrome_panel = None
 
         self._setup_style()
-        self._setup_ui()
+        self._setup_ui_with_notebook()
         self._load_config()
         self._schedule_status_refresh()
 
@@ -211,9 +389,25 @@ class LiveRecorderGUI:
         self.style.configure('Exit.TButton', foreground='white', background='#d32f2f', font=('Arial', 9))
         self.style.map('Exit.TButton', background=[('active', '#b71c1c')])
 
-    def _setup_ui(self):
-        """设置主窗口界面"""
-        top_frame = ttk.Frame(self.root, padding=10)
+    def _setup_ui_with_notebook(self):
+        """设置主窗口界面（带选项卡）"""
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        traditional_tab = ttk.Frame(self.notebook)
+        chrome_tab = ttk.Frame(self.notebook)
+
+        self.notebook.add(traditional_tab, text="📹 传统录制")
+        self.notebook.add(chrome_tab, text="🎬 Chrome渲染")
+
+        self._setup_traditional_tab(traditional_tab)
+
+        self.chrome_panel = ChromeRenderPanel(chrome_tab, self)
+        self.chrome_panel.pack(fill=tk.BOTH, expand=True)
+
+    def _setup_traditional_tab(self, parent):
+        """设置传统录制标签页内容"""
+        top_frame = ttk.Frame(parent, padding=10)
         top_frame.pack(fill=tk.X)
 
         left_btn_frame = ttk.Frame(top_frame)
@@ -243,7 +437,7 @@ class LiveRecorderGUI:
         ttk.Button(right_btn_frame, text="⚙️ 高级设置", command=self.open_advanced_settings,
                    style='Action.TButton', width=15).grid(row=0, column=1, padx=3, pady=3)
 
-        status_frame = ttk.Frame(self.root)
+        status_frame = ttk.Frame(parent)
         status_frame.pack(fill=tk.X, padx=10, pady=(0, 5))
 
         ttk.Label(status_frame, text="运行状态:").pack(side=tk.LEFT, padx=(0, 5))
@@ -251,19 +445,19 @@ class LiveRecorderGUI:
         self.status_label = tk.Label(status_frame, text="🔴 未运行", fg="#d32f2f", font=("Arial", 10, "bold"))
         self.status_label.pack(side=tk.LEFT)
 
-        config_frame = ttk.LabelFrame(self.root, text="URL 配置编辑区 (config/URL_config.ini)", padding=5)
+        config_frame = ttk.LabelFrame(parent, text="URL 配置编辑区 (config/URL_config.ini)", padding=5)
         config_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
-        self.config_text = scrolledtext.ScrolledText(config_frame, wrap=tk.WORD, font=("Consolas", 10), height=10)
+        self.config_text = scrolledtext.ScrolledText(config_frame, wrap=tk.WORD, font=("Consolas", 10), height=8)
         self.config_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         self.config_text.bind('<<Modified>>', self._on_config_text_modified)
 
         hint_label = tk.Label(config_frame,
-                              text="💡 格式说明: 每行一个直播链接，支持 # 开头的注释行 | 点击窗口关闭按钮（X）将最小化到系统托盘",
+                              text="💡 格式说明: 每行一个直播链接，支持 # 开头的注释行 | 选中URL后切换到「Chrome渲染」标签页可预览",
                               fg="gray", font=("Arial", 9))
         hint_label.pack(anchor=tk.W, padx=5)
 
-        save_frame = ttk.Frame(self.root)
+        save_frame = ttk.Frame(parent)
         save_frame.pack(fill=tk.X, padx=10, pady=5)
 
         self.save_btn = ttk.Button(save_frame, text="💾 保存 URL 配置", command=self.save_config, width=20)
@@ -272,16 +466,16 @@ class LiveRecorderGUI:
         self.reload_btn = ttk.Button(save_frame, text="📂 重新读取配置", command=self._manual_reload_config, width=20)
         self.reload_btn.pack(side=tk.LEFT, padx=5)
 
-        log_frame = ttk.LabelFrame(self.root, text="运行日志 (main.py 输出)", padding=5)
+        log_frame = ttk.LabelFrame(parent, text="运行日志 (main.py 输出)", padding=5)
         log_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
         self.log_text = scrolledtext.ScrolledText(log_frame, wrap=tk.WORD, font=("Consolas", 9),
-                                                   bg="#1e1e1e", fg="#00ff00", height=10)
+                                                   bg="#1e1e1e", fg="#00ff00", height=8)
         self.log_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
         self.status_var = tk.StringVar()
         self._update_status_bar()
-        status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, padding=(5, 2))
+        status_bar = ttk.Label(parent, textvariable=self.status_var, relief=tk.SUNKEN, padding=(5, 2))
         status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
     def _load_config(self):
