@@ -178,17 +178,6 @@ def install_ffmpeg() -> bool:
     return False
 
 
-def ensure_ffmpeg_installed(func):
-    def wrapper(*args, **kwargs):
-        if not check_ffmpeg_installed():
-            install_ffmpeg()
-        if not check_ffmpeg_installed():
-            raise RuntimeError("ffmpeg is not installed.")
-        return func(*args, **kwargs)
-
-    return wrapper
-
-
 def check_ffmpeg_installed() -> bool:
     try:
         result = subprocess.run(['ffmpeg', '-version'], capture_output=True)

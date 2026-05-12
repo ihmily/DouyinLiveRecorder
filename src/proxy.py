@@ -1,14 +1,7 @@
 import os
 import sys
-from enum import Enum, auto
 from dataclasses import dataclass, field
 from .utils import logger
-
-
-class ProxyType(Enum):
-    HTTP = auto()
-    HTTPS = auto()
-    SOCKS = auto()
 
 
 @dataclass(frozen=True)

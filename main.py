@@ -75,6 +75,94 @@ default_path = f'{script_path}/downloads'
 os.makedirs(default_path, exist_ok=True)
 file_update_lock = threading.Lock()
 
+# 全局跟踪所有 ffmpeg 进程
+_ffmpeg_processes = []
+_processes_lock = threading.Lock()
+
+def register_ffmpeg_process(process):
+    """注册新启动的 ffmpeg 进程"""
+    with _processes_lock:
+        _ffmpeg_processes.append(process)
+
+def unregister_ffmpeg_process(process):
+    """取消注册已结束的 ffmpeg 进程"""
+    with _processes_lock:
+        if process in _ffmpeg_processes:
+            _ffmpeg_processes.remove(process)
+
+def cleanup_all_ffmpeg_processes():
+    """清理所有注册的 ffmpeg 进程"""
+    logger.info("正在清理所有 ffmpeg 进程...")
+    with _processes_lock:
+        processes_to_clean = list(_ffmpeg_processes)
+    
+    for proc in processes_to_clean:
+        try:
+            if proc.poll() is None:
+                logger.info(f"尝试终止 ffmpeg 进程 (PID: {proc.pid})")
+                if os.name == 'nt':
+                    if proc.stdin:
+                        try:
+                            proc.stdin.write(b'q')
+                            proc.stdin.flush()
+                            proc.stdin.close()
+                        except:
+                            pass
+                else:
+                    try:
+                        proc.send_signal(signal.SIGINT)
+                    except:
+                        pass
+                
+                # 多级终止策略
+                try:
+                    proc.wait(timeout=10)
+                except:
+                    pass
+                
+                try:
+                    if proc.poll() is None:
+                        proc.terminate()
+                        proc.wait(timeout=5)
+                except:
+                    pass
+                
+                try:
+                    if proc.poll() is None:
+                        proc.kill()
+                        proc.wait(timeout=5)
+                except:
+                    pass
+                
+                # 清理资源
+                try:
+                    if proc.stdout:
+                        proc.stdout.close()
+                except:
+                    pass
+                
+                logger.info(f"ffmpeg 进程 (PID: {proc.pid}) 已清理")
+        except Exception as e:
+            logger.error(f"清理 ffmpeg 进程时出错: {e}")
+    
+    with _processes_lock:
+        _ffmpeg_processes.clear()
+    logger.info("所有 ffmpeg 进程清理完成")
+
+def safe_exit(signum, frame):
+    """安全的退出处理函数"""
+    global exit_recording
+    exit_recording = True
+    color_obj.print_colored("\n正在安全退出...", color_obj.YELLOW)
+    cleanup_all_ffmpeg_processes()
+    sys.exit(0)
+
+# 注册信号处理器
+signal.signal(signal.SIGINT, safe_exit)
+signal.signal(signal.SIGTERM, safe_exit)
+if hasattr(signal, 'SIGBREAK'):
+    signal.signal(signal.SIGBREAK, safe_exit)
+
 
 def _get_error_line(e: BaseException) -> str:
     tb = e.__traceback__
@@ -207,11 +295,7 @@ def contains_url(string: str) -> bool:
     return re.search(pattern, string) is not None
 
 
-def signal_handler(_signal, _frame):
-    sys.exit(0)
-
-
-signal.signal(signal.SIGTERM, signal_handler)
+# 移除旧的信号处理器，因为我们已经添加了新的安全退出机制
 
 
 def display_info() -> None:
@@ -550,6 +634,9 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
     process = subprocess.Popen(
         ffmpeg_command, stdin=subprocess.PIPE, stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type)
     )
+    
+    # 注册 ffmpeg 进程
+    register_ffmpeg_process(process)
 
     subs_file_path = save_file_path.rsplit('.', maxsplit=1)[0]
     subs_thread_name = f'subs_{Path(subs_file_path).name}'
@@ -560,18 +647,76 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
         create_var[subs_thread_name].daemon = True
         create_var[subs_thread_name].start()
 
+    def terminate_ffmpeg_process(proc, timeout=30):
+        """安全地终止 ffmpeg 进程，包含多层级 fallback 机制"""
+        if proc.poll() is not None:
+            return True
+            
+        try:
+            # 第一步：尝试正常退出（发送 q 命令或 SIGINT）
+            if os.name == 'nt':
+                if proc.stdin:
+                    try:
+                        proc.stdin.write(b'q')
+                        proc.stdin.flush()
+                        proc.stdin.close()
+                    except:
+                        pass
+            else:
+                try:
+                    proc.send_signal(signal.SIGINT)
+                except:
+                    pass
+            
+            # 等待进程正常退出
+            try:
+                proc.wait(timeout=timeout // 3)
+                if proc.poll() is not None:
+                    return True
+            except:
+                pass
+            
+            # 第二步：尝试终止进程
+            try:
+                proc.terminate()
+                proc.wait(timeout=timeout // 3)
+                if proc.poll() is not None:
+                    return True
+            except:
+                pass
+            
+            # 第三步：强制杀死进程
+            try:
+                proc.kill()
+                proc.wait(timeout=timeout // 3)
+                if proc.poll() is not None:
+                    return True
+            except:
+                pass
+                
+            # 最后手段：尝试清理资源
+            try:
+                if proc.stdout:
+                    proc.stdout.close()
+            except:
+                pass
+                
+            return proc.poll() is not None
+            
+        except Exception as e:
+            logger.error(f"终止 ffmpeg 进程时出错: {e}")
+            return False
+
     while process.poll() is None:
         if record_url in url_comments or exit_recording:
             color_obj.print_colored(f"[{record_name}]录制时已被注释,本条线程将会退出", color_obj.YELLOW)
             clear_record_info(record_name, record_url)
-            # process.terminate()
-            if os.name == 'nt':
-                if process.stdin:
-                    process.stdin.write(b'q')
-                    process.stdin.close()
-            else:
-                process.send_signal(signal.SIGINT)
-            process.wait()
+            
+            # 使用更可靠的进程终止机制
+            success = terminate_ffmpeg_process(process)
+            if not success:
+                logger.warning(f"[{record_name}] ffmpeg 进程可能没有完全终止，请检查系统进程")
+            
             return True
         time.sleep(1)
 
@@ -615,6 +760,8 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
         color_obj.print_colored(f"\n{record_name} {stop_time} 直播录制出错,返回码: {return_code}\n", color_obj.RED)
 
     recording.discard(record_name)
+    # 取消注册 ffmpeg 进程
+    unregister_ffmpeg_process(process)
     return False
 
 
@@ -1454,7 +1601,8 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                             recording_time_list[record_name] = [start_record_time, record_quality_zh]
 
                                             download_success = direct_download_stream(
-                                                flv_url, save_file_path, record_name, record_url, platform
+                                                flv_url,  # pyright: ignore[reportArgumentType]
+                                                save_file_path, record_name, record_url, platform
                                             )
 
                                             if download_success:

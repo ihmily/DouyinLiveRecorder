@@ -20,7 +20,7 @@ from .logger import logger
 
 current_platform = platform.system()
 execute_dir = os.path.split(os.path.realpath(sys.argv[0]))[0]
-current_env_path = os.environ.get('PATH')
+current_env_path = os.environ.get('PATH', '')
 
 
 def unzip_file(zip_path: str | Path, extract_to: str | Path, delete: bool = True) -> None:
@@ -34,7 +34,7 @@ def unzip_file(zip_path: str | Path, extract_to: str | Path, delete: bool = True
         os.remove(zip_path)
 
 
-def install_nodejs_windows():
+def install_nodejs_windows() -> bool:
     try:
         logger.warning("Node.js is not installed.")
         logger.debug("Installing the stable version of Node.js for Windows...")
@@ -48,7 +48,7 @@ def install_nodejs_windows():
                 url = f'https://npmmirror.com/mirrors/node/{version}/node-{version}-win-{system_bit}.zip'
             else:
                 logger.error("Failed to retrieve the download URL for the latest version of Node.js...")
-                return
+                return False
 
             full_file_name = url.rsplit('/', maxsplit=1)[-1]
             zip_file_path = Path(execute_dir) / full_file_name
@@ -73,28 +73,32 @@ def install_nodejs_windows():
             new_extract_dir_path = Path(f_path).parent / 'node'
             if Path(extract_dir_path).exists() and not Path(new_extract_dir_path).exists():
                 os.rename(extract_dir_path, new_extract_dir_path)
-                os.environ['PATH'] = execute_dir + '/node' + os.pathsep + current_env_path
+                os.environ['PATH'] = os.path.join(execute_dir, 'node') + os.pathsep + current_env_path
                 result = subprocess.run(["node", "-v"], capture_output=True)
                 if result.returncode == 0:
                     logger.debug('Node.js installation was successful. Restart for changes to take effect')
+                    return True
                 else:
                     logger.debug('Node.js installation failed')
-                return True
+                    return False
+            return False
         else:
             logger.error("Failed to retrieve the Node.js version page")
+            return False
 
     except Exception as e:
         logger.error(f"type: {type(e).__name__}, Node.js installation failed {e}")
+        return False
 
 
-def install_nodejs_centos():
+def install_nodejs_centos() -> bool:
     try:
         logger.warning("Node.js is not installed.")
         logger.debug("Installing the latest version of Node.js for CentOS...")
         result = subprocess.run(['yum', 'install', '-y', 'epel-release'], capture_output=True)
         if result.returncode != 0:
             logger.error("Failed to install EPEL repository")
-            return
+            return False
 
         result = subprocess.run(['yum', 'install', '-y', 'nodejs'], capture_output=True)
         if result.returncode == 0:
@@ -102,12 +106,14 @@ def install_nodejs_centos():
             return True
         else:
             logger.error("Node.js installation failed")
+            return False
 
     except Exception as e:
         logger.error(f"type: {type(e).__name__}, Node.js installation failed {e}")
+        return False
 
 
-def install_nodejs_ubuntu():
+def install_nodejs_ubuntu() -> bool:
     try:
         logger.warning("Node.js is not installed.")
         logger.debug("Installing the latest version of Node.js for Ubuntu...")
@@ -118,11 +124,13 @@ def install_nodejs_ubuntu():
             return True
         else:
             logger.error("Node.js installation failed")
+            return False
     except Exception as e:
         logger.error(f"type: {type(e).__name__}, Node.js installation failed, {e}")
+        return False
 
 
-def install_nodejs_mac():
+def install_nodejs_mac() -> bool:
     logger.warning("Node.js is not installed.")
     logger.debug("Installing the latest version of Node.js for macOS...")
     try:
@@ -132,11 +140,14 @@ def install_nodejs_mac():
             return True
         else:
             logger.error("Node.js installation failed")
+            return False
     except subprocess.CalledProcessError as e:
         logger.error(f"Failed to install Node.js using Homebrew. {e}")
         logger.error("Please install Node.js manually or check your Homebrew installation.")
+        return False
     except Exception as e:
         logger.error(f"An unexpected error occurred: {e}")
+        return False
 
 
 def get_package_manager():
@@ -164,34 +175,6 @@ def install_nodejs() -> bool:
         return False
 
 
-def ensure_nodejs_installed(func):
-    def wrapper(*args, **kwargs):
-        try:
-            result = subprocess.run(['node', '-v'], capture_output=True)
-            version = result.stdout.strip()
-            if result.returncode == 0 and version:
-                return func(*args, **kwargs)
-        except FileNotFoundError:
-            pass
-        return False
-
-    def wrapped_func(*args, **kwargs):
-        if sys.version_info >= (3, 7):
-            res = wrapper(*args, **kwargs)
-        else:
-            res = wrapper(*args, **kwargs)
-        if not res:
-            install_nodejs()
-            res = wrapper(*args, **kwargs)
-
-        if not res:
-            raise RuntimeError("Node.js is not installed.")
-
-        return func(*args, **kwargs)
-
-    return wrapped_func
-
-
 def check_nodejs_installed() -> bool:
     try:
         result = subprocess.run(['node', '-v'], capture_output=True)
@@ -206,3 +189,4 @@ def check_nodejs_installed() -> bool:
 def check_node() -> bool:
     if not check_nodejs_installed():
         return install_nodejs()
+    return True

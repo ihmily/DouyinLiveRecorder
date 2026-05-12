@@ -7,23 +7,24 @@ Date: 2023-09-03 19:18:36
 Update: 2025-01-23 17:16:12
 Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
 """
-from typing import Dict, Any
 import json
 import base64
+import http.client
 import urllib.request
 import urllib.error
 import smtplib
 from email.header import Header
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from src.logger import logger
+import src.logger  # pyright: ignore[reportUnusedImport]  # trigger loguru config side effects
+from loguru import logger
 
 no_proxy_handler = urllib.request.ProxyHandler({})
 opener = urllib.request.build_opener(no_proxy_handler)
-headers: Dict[str, str] = {'Content-Type': 'application/json'}
+headers: dict[str, str] = {'Content-Type': 'application/json'}
 
 
-def dingtalk(url: str, content: str, number: str | None = None, is_atall: bool = False) -> Dict[str, Any]:
+def dingtalk(url: str, content: str, number: str | None = None, is_atall: bool = False) -> dict[str, list[str | int]]:
     success = []
     error = []
     api_list = url.replace('，', ',').split(',') if url.strip() else []
@@ -43,7 +44,7 @@ def dingtalk(url: str, content: str, number: str | None = None, is_atall: bool =
         try:
             data = json.dumps(json_data).encode('utf-8')
             req = urllib.request.Request(api, data=data, headers=headers)
-            response = opener.open(req, timeout=10)
+            response: http.client.HTTPResponse = opener.open(req, timeout=10)
             json_str = response.read().decode('utf-8')
             json_data = json.loads(json_str)
             if json_data['errcode'] == 0:
@@ -57,7 +58,7 @@ def dingtalk(url: str, content: str, number: str | None = None, is_atall: bool =
     return {"success": success, "error": error}
 
 
-def xizhi(url: str, title: str, content: str) -> Dict[str, Any]:
+def xizhi(url: str, title: str, content: str) -> dict[str, list[str | int]]:
     success = []
     error = []
     api_list = url.replace('，', ',').split(',') if url.strip() else []
@@ -85,7 +86,7 @@ def xizhi(url: str, title: str, content: str) -> Dict[str, Any]:
 
 def send_email(email_host: str, login_email: str, email_pass: str, sender_email: str, sender_name: str,
                to_email: str, title: str, content: str, smtp_port: str | None = None,
-               open_ssl: bool = True) -> Dict[str, Any]:
+               open_ssl: bool = True) -> dict[str, list[str]]:
     receivers = to_email.replace('，', ',').split(',') if to_email.strip() else []
     smtp_obj = None
 
@@ -123,7 +124,7 @@ def send_email(email_host: str, login_email: str, email_pass: str, sender_email:
                 pass
 
 
-def tg_bot(chat_id: int, token: str, content: str) -> Dict[str, Any]:
+def tg_bot(chat_id: int, token: str, content: str) -> dict[str, list[str | int]]:
     try:
         json_data = {
             "chat_id": chat_id,
@@ -143,7 +144,7 @@ def tg_bot(chat_id: int, token: str, content: str) -> Dict[str, Any]:
 
 def bark(api: str, title: str = "message", content: str = 'test', level: str = "active",
          badge: int = 1, auto_copy: int = 1, sound: str = "", icon: str = "", group: str = "",
-         is_archive: int = 1, url: str = "") -> Dict[str, Any]:
+         is_archive: int = 1, url: str = "") -> dict[str, list[str | int]]:
     success = []
     error = []
     api_list = api.replace('，', ',').split(',') if api.strip() else []
@@ -179,7 +180,7 @@ def bark(api: str, title: str = "message", content: str = 'test', level: str = "
 
 def ntfy(api: str, title: str = "message", content: str = 'test', tags: str | list[str] = 'tada', priority: int = 3,
          action_url: str = "", attach: str = "", filename: str = "", click: str = "", icon: str = "",
-         delay: str = "", email: str = "", call: str = "") -> Dict[str, Any]:
+         delay: str = "", email: str = "", call: str = "") -> dict[str, list[str | int]]:
     success = []
     error = []
     api_list = api.replace('，', ',').split(',') if api.strip() else []
@@ -232,7 +233,7 @@ def ntfy(api: str, title: str = "message", content: str = 'test', tags: str | li
     return {"success": success, "error": error}
 
 
-def pushplus(token: str, title: str, content: str) -> Dict[str, Any]:
+def pushplus(token: str, title: str, content: str) -> dict[str, list[str | int]]:
     success = []
     error = []
     token_list = token.replace('，', ',').split(',') if token.strip() else []

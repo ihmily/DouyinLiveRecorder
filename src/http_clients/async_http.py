@@ -14,7 +14,7 @@ async def async_req(
         url: str,
         proxy_addr: OptionalStr = None,
         headers: OptionalDict = None,
-        data: dict | bytes | None = None,
+        data: dict | str | bytes | None = None,
         json_data: dict | list | None = None,
         timeout: int = 20,
         redirect_url: bool = False,
@@ -24,30 +24,29 @@ async def async_req(
         content_encoding: str = 'utf-8',
         verify: bool = False,
         http2: bool = True
-) -> OptionalDict | OptionalStr | tuple:
+) -> str | dict | tuple:
     if headers is None:
         headers = {}
     try:
         proxy_addr = utils.handle_proxy_addr(proxy_addr)
-        if data or json_data:
-            # async with httpx.AsyncClient(proxy=proxy_addr, timeout=timeout, verify=verify, http2=http2) as client:
-            async with httpx.AsyncClient(
-                proxy=proxy_addr,
-                timeout=timeout,
-                verify=verify,
-                http2=http2,
-                limits=_httpx_limits
-            ) as client:
-                response = await client.post(url, data=data, json=json_data, headers=headers)
-        else:
-            # async with httpx.AsyncClient(proxy=proxy_addr, timeout=timeout, verify=verify, http2=http2) as client:
-            async with httpx.AsyncClient(
-                proxy=proxy_addr,
-                timeout=timeout,
-                verify=verify,
-                http2=http2,
-                limits=_httpx_limits
-            ) as client:
+        async with httpx.AsyncClient(
+            proxy=proxy_addr,
+            timeout=timeout,
+            verify=verify,
+            http2=http2,
+            limits=_httpx_limits
+        ) as client:
+            if data or json_data:
+                if isinstance(data, (bytes, bytearray, memoryview)):
+                    # 将 memoryview 转换为 bytes
+                    content_data = bytes(data)
+                    response = await client.post(url, content=content_data, json=json_data, headers=headers)
+                elif isinstance(data, str):
+                    response = await client.post(url, content=data, json=json_data, headers=headers)
+                else:
+                    # data 是 dict 或 None
+                    response = await client.post(url, data=data, json=json_data, headers=headers)
+            else:
                 response = await client.get(url, headers=headers, follow_redirects=True)
 
         if redirect_url:
@@ -68,11 +67,11 @@ async def get_response_status(url: str, proxy_addr: OptionalStr = None, headers:
 
     try:
         proxy_addr = utils.handle_proxy_addr(proxy_addr)
-        #async with httpx.AsyncClient(proxy=proxy_addr, timeout=timeout, verify=verify) as client:
         async with httpx.AsyncClient(
             proxy=proxy_addr,
             timeout=timeout,
             verify=verify,
+            http2=http2,
             limits=_httpx_limits
         ) as client:
             response = await client.head(url, headers=headers, follow_redirects=True)

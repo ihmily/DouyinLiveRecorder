@@ -6,7 +6,7 @@ import requests
 import ssl
 import json
 import urllib.request
-from .logger import logger
+from ..logger import logger
 
 no_proxy_handler = urllib.request.ProxyHandler({})
 ssl_context = ssl.create_default_context()
@@ -49,7 +49,10 @@ def sync_req(
             resp_str = response.text
         else:
             if data and not isinstance(data, bytes):
-                data = urllib.parse.urlencode(data).encode(content_encoding)
+                if isinstance(data, dict):
+                    data = urllib.parse.urlencode(data).encode(content_encoding)
+                else:
+                    data = str(data).encode(content_encoding)
             if json_data and isinstance(json_data, (dict, list)):
                 data = json.dumps(json_data).encode(content_encoding)
 

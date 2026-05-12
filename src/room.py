@@ -11,11 +11,7 @@ import re
 import urllib.parse
 import execjs
 import httpx
-import urllib.request
 from . import JS_SCRIPT_PATH, utils
-
-no_proxy_handler = urllib.request.ProxyHandler({})
-opener = urllib.request.build_opener(no_proxy_handler)
 
 
 class UnsupportedUrlError(Exception):
@@ -28,15 +24,6 @@ HEADERS = {
     'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
     'Cookie': 's_v_web_id=verify_lk07kv74_QZYCUApD_xhiB_405x_Ax51_GYO9bUIyZQVf'
 }
-
-HEADERS_PC = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
-                      'Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0',
-        'Cookie': 'sessionid=7494ae59ae06784454373ce25761e864; __ac_nonce=0670497840077ee4c9eb2; '
-                  '__ac_signature=_02B4Z6wo00f012DZczQAAIDCJJBb3EjnINdg-XeAAL8-db;  '
-                  's_v_web_id=verify_m1ztgtjj_vuHnMLZD_iwZ9_4YO4_BdN1_7wLP3pyqXsf2; '
-    }
-
 
 # X-bogus算法
 async def get_xbogus(url: str, headers: dict | None = None) -> str:
@@ -144,7 +131,10 @@ async def get_live_room_id(room_id: str, sec_user_id: str, proxy_addr: str | Non
 
 
 if __name__ == '__main__':
+    import asyncio
     room_url = "https://v.douyin.com/iQLgKSj/"
-    _room_id, sec_uid = get_sec_user_id(room_url)
-    web_rid = get_live_room_id(_room_id, sec_uid)
-    print("return web_rid:", web_rid)
+    result = asyncio.run(get_sec_user_id(room_url))
+    if result is not None:
+        _room_id, sec_uid = result
+        web_rid = asyncio.run(get_live_room_id(_room_id, sec_uid))
+        print("return web_rid:", web_rid)

@@ -142,7 +142,10 @@ async def get_tiktok_stream_url(json_data: dict | None, video_quality: str | Non
         m3u8_dict: dict = m3u8_url_list[quality_index]
 
         check_url = m3u8_dict.get('url') or flv_dict.get('url')
-        ok = await get_response_status(url=check_url, proxy_addr=proxy_addr, http2=False)
+        if not check_url:
+            ok = False
+        else:
+            ok = await get_response_status(url=check_url, proxy_addr=proxy_addr, http2=False)
 
         if not ok:
             index = quality_index + 1 if quality_index < 4 else quality_index - 1
@@ -320,7 +323,7 @@ async def get_douyu_stream_url(json_data: dict, video_quality: str | None = None
     }
 
     rid = str(json_data["room_id"])
-    rate = video_quality_options.get(video_quality, '0')
+    rate = video_quality_options.get(video_quality or '', '0')
     flv_data = await get_douyu_stream_data(rid, rate, cookies=cookies, proxy_addr=proxy_addr)
     rtmp_url = flv_data['data'].get('rtmp_url')
     rtmp_live = flv_data['data'].get('rtmp_live')
@@ -378,7 +381,7 @@ async def get_bilibili_stream_url(json_data: dict, video_quality: str | None = N
         "LD": '80'
     }
 
-    select_quality = video_quality_options.get(video_quality, '0')
+    select_quality = video_quality_options.get(video_quality or '', '0')
     play_url = await get_bilibili_stream_data(
         room_url, qn=select_quality, platform='web', proxy_addr=proxy_addr, cookies=cookies)
     return {
@@ -420,7 +423,7 @@ async def get_netease_stream_url(json_data: dict, video_quality: str | None = No
 
 
 async def get_stream_url(json_data: dict, video_quality: str | None = None, url_type: str = 'm3u8', spec: bool = False,
-                         hls_extra_key: str | int = None, flv_extra_key: str | int = None) -> dict:
+                         hls_extra_key: str | int | None = None, flv_extra_key: str | int | None = None) -> dict:
     if not json_data['is_live']:
         return json_data
 

@@ -209,7 +209,7 @@ class SM3:
         return result
 
 
-def result_encrypt(long_str: str, num: str | None = None) -> str:
+def result_encrypt(long_str: str, num: str = "s4") -> str:
     # 魔改base64编码表
     encoding_tables = {
         "s0": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=",
