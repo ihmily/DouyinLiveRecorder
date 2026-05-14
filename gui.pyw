@@ -491,7 +491,7 @@ class LiveRecorderGUI:
             messagebox.showerror("错误", f"启动录制失败: {e}")
 
     def stop_recording(self) -> None:
-        """停止录制 —— 先优雅终止，超时后强制 kill"""
+        """停止录制 —— 发送终止信号后，在后台线程等待进程退出"""
         proc = self.process
         pid = self.process_pid
 
@@ -499,22 +499,21 @@ class LiveRecorderGUI:
             messagebox.showwarning("警告", "没有正在运行的录制进程！")
             return
 
-        try:
-            self._log("=" * 50)
-            self._log(f"[{self._get_timestamp()}] 正在停止录制...")
+        self._log("=" * 50)
+        self._log(f"[{self._get_timestamp()}] 正在停止录制...")
 
+        if sys.platform == 'win32':
+            self._log("正在发送终止信号...")
+            proc.terminate()
+        else:
+            self._log("正在发送 SIGINT 信号...")
+            import signal
+            os.kill(proc.pid, signal.SIGINT)
+
+        def _wait_and_update_ui() -> None:
             terminated = False
-
-            if sys.platform == 'win32':
-                self._log("正在发送终止信号...")
-                proc.terminate()
-            else:
-                self._log("正在发送 SIGINT 信号...")
-                import signal
-                os.kill(proc.pid, signal.SIGINT)
-
             try:
-                proc.wait(timeout=10)
+                proc.wait(timeout=3)
                 terminated = True
                 self._log("进程已优雅退出")
             except subprocess.TimeoutExpired:
@@ -524,7 +523,7 @@ class LiveRecorderGUI:
                 try:
                     self._log("正在强制终止进程...")
                     proc.kill()
-                    proc.wait(timeout=5)
+                    proc.wait(timeout=2)
                     self._log("进程已强制终止")
                 except subprocess.TimeoutExpired:
                     self._log("警告：进程可能仍在运行！")
@@ -535,19 +534,19 @@ class LiveRecorderGUI:
             self.process = None
             self.process_pid = None
 
-            self.start_btn.state(['!disabled'])
-            self.stop_btn.state(['disabled'])
+            self.root.after(0, self._on_recording_stopped)
 
-            self.status_label.config(text="🔴 未运行", fg="#d32f2f")
-            self._update_status_bar()
+        threading.Thread(target=_wait_and_update_ui, daemon=True).start()
 
-            self._log(f"[{self._get_timestamp()}] 录制进程已停止")
-            self._log("=" * 50)
-            self._flush_log_queue()
-
-        except Exception as e:
-            self._log(f"停止录制失败: {e}", "error")
-            messagebox.showerror("错误", f"停止录制失败: {e}")
+    def _on_recording_stopped(self) -> None:
+        """进程终止后的 UI 更新回调（在 UI 线程中执行）"""
+        self.start_btn.state(['!disabled'])
+        self.stop_btn.state(['disabled'])
+        self.status_label.config(text="🔴 未运行", fg="#d32f2f")
+        self._update_status_bar()
+        self._log(f"[{self._get_timestamp()}] 录制进程已停止")
+        self._log("=" * 50)
+        self._flush_log_queue()
 
     def _read_output(self) -> None:
         """读取子进程输出 — 批量写入队列，减少 UI 线程调度次数"""
@@ -737,11 +736,8 @@ class LiveRecorderGUI:
             else:
                 return
 
-        try:
-            self._log("正在检查并清理可能残留的 ffmpeg 进程...")
-            self._cleanup_zombie_ffmpeg()
-        except Exception as e:
-            self._log(f"清理 ffmpeg 进程时出错: {e}")
+        self._log("正在后台清理可能残留的 ffmpeg 进程...")
+        threading.Thread(target=self._cleanup_zombie_ffmpeg, daemon=True).start()
 
         if self._log_flush_job_id:
             self.root.after_cancel(self._log_flush_job_id)
@@ -770,7 +766,7 @@ class LiveRecorderGUI:
                         ['taskkill', '/F', '/FI', f'IMAGENAME eq ffmpeg.exe', '/FI', f'PARENTPID eq {current_pid}'],
                         capture_output=True,
                         text=True,
-                        timeout=10
+                        timeout=3
                     )
                     found = True
                     self._log("已通过 taskkill 清理本进程树的 ffmpeg 进程")
@@ -783,7 +779,7 @@ class LiveRecorderGUI:
                         ['pkill', '-P', str(current_pid), '-x', 'ffmpeg'],
                         capture_output=True,
                         text=True,
-                        timeout=10
+                        timeout=3
                     )
                     found = True
                     self._log("已通过 pkill 清理本进程树的 ffmpeg 进程")
