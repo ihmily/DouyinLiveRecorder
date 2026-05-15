@@ -1,0 +1,9 @@
+- [x] main.py 启动：`check_ffmpeg_existence()` 中的 `time.sleep(1)` 冗余延迟已被定位并量化 → L1982，最坏 1.0 秒
+- [x] main.py 启动：代理检测 `urlopen(timeout=15)` 的阻塞已被定位并量化 → L2042，最坏 15.0 秒
+- [x] main.py 启动：`read_config_value()` 重复读取配置文件的 I/O 开销已被定位并量化 → L2009，119 次调用/循环，约 0.3 秒
+- [x] main.py 退出：`cleanup_all_ffmpeg_processes()` 串行等待累积超时已被定位并量化 → L119/L126/L133，N × 20 秒
+- [x] main.py 退出：`safe_exit()` 无超时保护的问题已被定位并量化 → L152-L158，缺少整体超时机制
+- [x] gui.pyw 退出：`stop_recording()` 中 `proc.wait(timeout=10+5)` 阻塞 UI 线程已被定位并量化 → L517/L527，最坏 15 秒
+- [x] gui.pyw 退出：`_cleanup_zombie_ffmpeg()` 中 `subprocess.run(timeout=10)` 阻塞 UI 线程已被定位并量化 → L769，最坏 10 秒
+- [x] gui.pyw 退出：`quit_application()` 总计阻塞 25 秒的问题已被定位并量化 → L732-L758，15s + 10s = 25s
+- [x] 最终分析报告已生成，包含每个瓶颈的代码位置、原因、影响和修复建议 → analysis-report.md

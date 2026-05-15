@@ -27,6 +27,7 @@ from urllib.error import URLError, HTTPError
 from typing import Any
 import configparser
 import httpx
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from src import spider, stream
 from src.proxy import ProxyDetector
 from src.utils import logger
@@ -90,61 +91,70 @@ def unregister_ffmpeg_process(process):
         if process in _ffmpeg_processes:
             _ffmpeg_processes.remove(process)
 
+def _cleanup_single_ffmpeg_process(proc):
+    """清理单个 ffmpeg 进程（在并行线程中调用）"""
+    try:
+        if proc.poll() is None:
+            logger.info(f"尝试终止 ffmpeg 进程 (PID: {proc.pid})")
+            if os.name == 'nt':
+                if proc.stdin:
+                    try:
+                        proc.stdin.write(b'q')
+                        proc.stdin.flush()
+                        proc.stdin.close()
+                    except:
+                        pass
+            else:
+                try:
+                    proc.send_signal(signal.SIGINT)
+                except:
+                    pass
+
+            try:
+                proc.wait(timeout=3)
+            except:
+                pass
+
+            try:
+                if proc.poll() is None:
+                    proc.terminate()
+                    proc.wait(timeout=2)
+            except:
+                pass
+
+            try:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait(timeout=2)
+            except:
+                pass
+
+            try:
+                if proc.stdout:
+                    proc.stdout.close()
+            except:
+                pass
+
+            logger.info(f"ffmpeg 进程 (PID: {proc.pid}) 已清理")
+    except Exception as e:
+        logger.error(f"清理 ffmpeg 进程时出错: {e}")
+
+
 def cleanup_all_ffmpeg_processes():
-    """清理所有注册的 ffmpeg 进程"""
+    """清理所有注册的 ffmpeg 进程（并行执行）"""
     logger.info("正在清理所有 ffmpeg 进程...")
     with _processes_lock:
         processes_to_clean = list(_ffmpeg_processes)
-    
-    for proc in processes_to_clean:
-        try:
-            if proc.poll() is None:
-                logger.info(f"尝试终止 ffmpeg 进程 (PID: {proc.pid})")
-                if os.name == 'nt':
-                    if proc.stdin:
-                        try:
-                            proc.stdin.write(b'q')
-                            proc.stdin.flush()
-                            proc.stdin.close()
-                        except:
-                            pass
-                else:
-                    try:
-                        proc.send_signal(signal.SIGINT)
-                    except:
-                        pass
-                
-                # 多级终止策略
+
+    if processes_to_clean:
+        with ThreadPoolExecutor(max_workers=min(len(processes_to_clean), 8)) as executor:
+            futures = [executor.submit(_cleanup_single_ffmpeg_process, proc) for proc in processes_to_clean]
+            for f in as_completed(futures):
                 try:
-                    proc.wait(timeout=10)
+                    f.result(timeout=10)
                 except:
                     pass
-                
-                try:
-                    if proc.poll() is None:
-                        proc.terminate()
-                        proc.wait(timeout=5)
-                except:
-                    pass
-                
-                try:
-                    if proc.poll() is None:
-                        proc.kill()
-                        proc.wait(timeout=5)
-                except:
-                    pass
-                
-                # 清理资源
-                try:
-                    if proc.stdout:
-                        proc.stdout.close()
-                except:
-                    pass
-                
-                logger.info(f"ffmpeg 进程 (PID: {proc.pid}) 已清理")
-        except Exception as e:
-            logger.error(f"清理 ffmpeg 进程时出错: {e}")
-    
+
     with _processes_lock:
         _ffmpeg_processes.clear()
     logger.info("所有 ffmpeg 进程清理完成")
@@ -1979,7 +1989,6 @@ def check_ffmpeg_existence() -> bool:
     except FileNotFoundError:
         pass
     if check_ffmpeg():
-        time.sleep(1)
         ffmpeg_exists = True
     return ffmpeg_exists
 
@@ -2005,8 +2014,6 @@ utils.remove_duplicate_lines(url_config_file)
 def read_config_value(config_parser: configparser.RawConfigParser, section: str, option: str, default_value: Any) \
         -> Any:
     try:
-
-        config_parser.read(config_file, encoding=text_encoding)
         if '录制设置' not in config_parser.sections():
             config_parser.add_section('录制设置')
         if '推送配置' not in config_parser.sections():
@@ -2027,6 +2034,7 @@ def read_config_value(config_parser: configparser.RawConfigParser, section: str,
 
 options = {"是": True, "否": False}
 config = configparser.RawConfigParser()
+config.read(config_file, encoding=text_encoding)
 language = read_config_value(config, '录制设置', 'language(zh_cn/en)', "zh_cn")
 skip_proxy_check = options.get(read_config_value(config, '录制设置', '是否跳过代理检测(是/否)', "否"), False)
 if language and 'en' not in language.lower():
@@ -2039,7 +2047,7 @@ try:
         global_proxy = True
     else:
         print('系统代理检测中，请耐心等待...')
-        response_g = urllib.request.urlopen("https://www.google.com/", timeout=15)
+        response_g = urllib.request.urlopen("https://www.google.com/", timeout=3)
         global_proxy = True
         print('\r全局/规则网络代理已开启√')
         pd = ProxyDetector()

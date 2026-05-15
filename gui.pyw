@@ -22,10 +22,10 @@ class SystemTray:
 
     def __init__(self, gui_app: 'LiveRecorderGUI'):
         self.gui = gui_app
-        self.icon = None
+        self.icon: pystray.Icon | None = None
         self.running = False
 
-    def create_icon_image(self):
+    def create_icon_image(self) -> Image.Image:
         """动态创建托盘图标"""
         width = 64
         height = 64
@@ -45,22 +45,22 @@ class SystemTray:
 
         return image
 
-    def on_show(self, _icon: Any | None = None) -> None:  # pyright: ignore[reportExplicitAny]
+    def on_show(self, _icon: pystray.Icon | None = None) -> None:
         """显示主窗口"""
         if self.gui.root:
             self.gui.root.deiconify()
             self.gui.root.lift()
 
-    def on_exit(self, _icon: Any | None = None) -> None:  # pyright: ignore[reportExplicitAny]
+    def on_exit(self, _icon: pystray.Icon | None = None) -> None:
         """退出程序"""
         self.gui.quit_application()
 
-    def on_minimize(self, _icon: Any | None = None) -> None:  # pyright: ignore[reportExplicitAny]
+    def on_minimize(self, _icon: pystray.Icon | None = None) -> None:
         """最小化到托盘"""
         if self.gui.root:
             self.gui.root.withdraw()
 
-    def run(self):
+    def run(self) -> None:
         """启动托盘图标事件循环"""
         menu = pystray.Menu(
             pystray.MenuItem('显示主界面', self.on_show, default=True),
@@ -77,7 +77,7 @@ class SystemTray:
         self.running = True
         self.icon.run()
 
-    def stop(self):
+    def stop(self) -> None:
         """停止托盘图标"""
         if self.icon and self.running:
             self.icon.stop()
@@ -95,7 +95,7 @@ class SystemTray:
 class AdvancedSettingsWindow:
     """高级设置窗口：编辑 config/config.ini"""
 
-    def __init__(self, parent, config_file, log_callback=None):
+    def __init__(self, parent: tk.Toplevel | tk.Tk, config_file: str, log_callback: Any = None):
         self.config_file = config_file
         self.log_callback = log_callback
 
@@ -108,7 +108,7 @@ class AdvancedSettingsWindow:
         self._setup_ui()
         self._load_config()
 
-    def _setup_ui(self):
+    def _setup_ui(self) -> None:
         """设置界面布局"""
         config_frame = ttk.LabelFrame(self.window, text="配置文件内容 (config/config.ini)", padding=5)
         config_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -127,7 +127,7 @@ class AdvancedSettingsWindow:
         self.cancel_btn = ttk.Button(btn_frame, text="取消", command=self.window.destroy, width=15)
         self.cancel_btn.pack(side=tk.LEFT, padx=5)
 
-    def _load_config(self):
+    def _load_config(self) -> None:
         """加载配置文件"""
         try:
             with open(self.config_file, 'r', encoding='utf-8-sig') as f:
@@ -140,22 +140,25 @@ class AdvancedSettingsWindow:
         except Exception as e:
             messagebox.showerror("错误", f"加载配置文件失败: {e}")
 
-    def save_config(self):
+    def save_config(self) -> None:
         """保存配置文件"""
         try:
-            content = self.config_text.get(1.0, tk.END).rstrip('\n')
-            if content and not content.endswith('\n'):
-                content += '\n'
-
-            with open(self.config_file, 'w', encoding='utf-8-sig') as f:
-                f.write(content)
-
+            _save_text_widget_to_file(self.config_text, self.config_file)
             messagebox.showinfo("成功", "配置文件已保存！")
             if self.log_callback:
                 self.log_callback("高级设置配置已保存")
             self.window.destroy()
         except Exception as e:
             messagebox.showerror("错误", f"保存配置文件失败: {e}")
+
+
+def _save_text_widget_to_file(text_widget: tk.Text | scrolledtext.ScrolledText, file_path: str) -> None:
+    """从 Text 控件读取内容并写入文件（公共提取方法）"""
+    content = text_widget.get(1.0, tk.END).rstrip('\n')
+    if content and not content.endswith('\n'):
+        content += '\n'
+    with open(file_path, 'w', encoding='utf-8-sig') as f:
+        f.write(content)
 
 
 class LiveRecorderGUI:
@@ -167,7 +170,7 @@ class LiveRecorderGUI:
     _LOG_FLUSH_INTERVAL = 200
     _STATUS_REFRESH_INTERVAL = 10000
 
-    def __init__(self, root):
+    def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("直播录制控制台")
         self.root.geometry("900x700")
@@ -178,10 +181,13 @@ class LiveRecorderGUI:
         self.main_config_file = os.path.join(self.script_dir, "config", "config.ini")
         self.downloads_dir = os.path.join(self.script_dir, "downloads")
 
-        self.process = None
-        self.process_pid = None
-        self.output_thread = None
-        self.running = False
+        # 进程状态 —— 通过 _process_lock 保护跨线程访问
+        self._process_lock = threading.Lock()
+        self._process: subprocess.Popen[str] | None = None
+        self._process_pid: int | None = None
+        self._running = False
+
+        self.output_thread: threading.Thread | None = None
 
         self.system_tray: SystemTray | None = None
         self.tray_thread: threading.Thread | None = None
@@ -190,11 +196,11 @@ class LiveRecorderGUI:
         self._refresh_job_id: str | None = None
 
         self._status_cache_mtime = 0.0
-        self._status_cache: tuple[str, str, str] | None = None
+        self._status_cache: tuple[str, str] | None = None  # (check_interval, output_format)
 
         self._log_queue: queue.Queue[list[tuple[str, str]] | None] = queue.Queue()
         self._log_flush_job_id: str | None = None
-        self._log_line_count = 0
+        self._log_queue_has_data = False
 
         self._setup_style()
         self._setup_ui()
@@ -202,7 +208,41 @@ class LiveRecorderGUI:
         self._schedule_log_flush()
         self._schedule_status_refresh()
 
-    def _setup_style(self):
+    # ─── 进程状态线程安全访问 ───────────────────────────────
+
+    @property
+    def process(self) -> subprocess.Popen[str] | None:
+        with self._process_lock:
+            return self._process
+
+    @process.setter
+    def process(self, value: subprocess.Popen[str] | None) -> None:
+        with self._process_lock:
+            self._process = value
+
+    @property
+    def process_pid(self) -> int | None:
+        with self._process_lock:
+            return self._process_pid
+
+    @process_pid.setter
+    def process_pid(self, value: int | None) -> None:
+        with self._process_lock:
+            self._process_pid = value
+
+    @property
+    def running(self) -> bool:
+        with self._process_lock:
+            return self._running
+
+    @running.setter
+    def running(self, value: bool) -> None:
+        with self._process_lock:
+            self._running = value
+
+    # ─── UI 初始化 ─────────────────────────────────────────
+
+    def _setup_style(self) -> None:
         """设置 ttk 样式"""
         self.style = ttk.Style()
         self.style.theme_use('clam')
@@ -217,7 +257,7 @@ class LiveRecorderGUI:
         self.style.configure('Exit.TButton', foreground='white', background='#d32f2f', font=('Arial', 9))
         self.style.map('Exit.TButton', background=[('active', '#b71c1c')])
 
-    def _setup_ui(self):
+    def _setup_ui(self) -> None:
         """设置主窗口界面"""
         top_frame = ttk.Frame(self.root, padding=10)
         top_frame.pack(fill=tk.X)
@@ -274,7 +314,7 @@ class LiveRecorderGUI:
         self.save_btn = ttk.Button(save_frame, text="💾 保存 URL 配置", command=self.save_config, width=20)
         self.save_btn.pack(side=tk.LEFT, padx=5)
 
-        self.reload_btn = ttk.Button(save_frame, text="📂 重新读取配置", command=self._manual_reload_config, width=20)
+        self.reload_btn = ttk.Button(save_frame, text="📂 重新读取配置", command=self._load_config, width=20)
         self.reload_btn.pack(side=tk.LEFT, padx=5)
 
         log_frame = ttk.LabelFrame(self.root, text="运行日志 (main.py 输出)", padding=5)
@@ -290,7 +330,9 @@ class LiveRecorderGUI:
         status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, padding=(5, 2))
         status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
-    def _load_config(self):
+    # ─── 配置读写 ──────────────────────────────────────────
+
+    def _load_config(self) -> None:
         """加载 URL 配置文件"""
         config_dir = os.path.dirname(self.url_config_file)
         os.makedirs(config_dir, exist_ok=True)
@@ -314,20 +356,32 @@ class LiveRecorderGUI:
         except Exception as e:
             self._log(f"加载配置文件失败: {e}", "error")
 
-    def _get_dynamic_status_info(self):
+    def save_config(self) -> None:
+        """保存 URL 配置文件"""
+        try:
+            _save_text_widget_to_file(self.config_text, self.url_config_file)
+            self._last_url_config_mtime = os.path.getmtime(self.url_config_file)
+            self._log("URL 配置已保存")
+            messagebox.showinfo("成功", "URL 配置已保存成功！")
+        except Exception as e:
+            self._log(f"保存配置文件失败: {e}", "error")
+            messagebox.showerror("错误", f"保存配置文件失败: {e}")
+
+    # ─── 状态信息 ──────────────────────────────────────────
+
+    def _get_dynamic_status_info(self) -> tuple[str, str, str]:
+        """获取动态状态信息，返回 (check_interval, output_format, tray_status)"""
         check_interval = "120秒"
         output_format = "ts → mp4"
-        tray_status = "启用" if self.system_tray and self.system_tray.running else "未启动"
 
         if not os.path.exists(self.main_config_file):
-            return check_interval, output_format, tray_status
+            return check_interval, output_format, self._tray_status_str()
 
         try:
             file_mtime = os.path.getmtime(self.main_config_file)
             if self._status_cache is not None and file_mtime == self._status_cache_mtime:
-                ci, ofmt, ts = self._status_cache
-                ts = "启用" if self.system_tray and self.system_tray.running else "未启动"
-                return ci, ofmt, ts
+                ci, ofmt = self._status_cache
+                return ci, ofmt, self._tray_status_str()
 
             config = configparser.ConfigParser()
             config.optionxform = lambda optionstr: optionstr
@@ -344,31 +398,21 @@ class LiveRecorderGUI:
                     save_fmt = config['录制设置'].get('视频保存格式ts|mkv|flv|mp4|mp3音频|m4a音频', 'ts')
                     output_format = f"ts → {save_fmt}"
 
-            self._status_cache = (check_interval, output_format, tray_status)
+            self._status_cache = (check_interval, output_format)
             self._status_cache_mtime = file_mtime
 
         except Exception:
             pass
 
-        return check_interval, output_format, tray_status
+        return check_interval, output_format, self._tray_status_str()
 
-    def save_config(self):
-        """保存 URL 配置文件"""
-        try:
-            content = self.config_text.get(1.0, tk.END).rstrip('\n')
-            if content and not content.endswith('\n'):
-                content += '\n'
+    def _tray_status_str(self) -> str:
+        """返回托盘状态的字符串描述"""
+        return "启用" if self.system_tray and self.system_tray.running else "未启动"
 
-            with open(self.url_config_file, 'w', encoding='utf-8-sig') as f:
-                f.write(content)
-            self._last_url_config_mtime = os.path.getmtime(self.url_config_file)
-            self._log("URL 配置已保存")
-            messagebox.showinfo("成功", "URL 配置已保存成功！")
-        except Exception as e:
-            self._log(f"保存配置文件失败: {e}", "error")
-            messagebox.showerror("错误", f"保存配置文件失败: {e}")
+    # ─── 子进程管理 ────────────────────────────────────────
 
-    def open_downloads_folder(self):
+    def open_downloads_folder(self) -> None:
         """打开下载目录"""
         downloads_path = self.downloads_dir
         if not os.path.exists(downloads_path):
@@ -385,24 +429,17 @@ class LiveRecorderGUI:
         except Exception as e:
             self._log(f"打开目录失败: {e}", "error")
 
-    def open_advanced_settings(self):
+    def open_advanced_settings(self) -> None:
         """打开高级设置窗口"""
         AdvancedSettingsWindow(self.root, self.main_config_file, self._log)
 
-    def start_recording(self):
+    def start_recording(self) -> None:
         """开始录制"""
         if self.process is not None:
             messagebox.showwarning("警告", "录制已在运行中！")
             return
 
         try:
-            if sys.platform == 'win32':
-                python_exe = os.path.join(self.script_dir, "venv", "Scripts", "python.exe")
-                if not os.path.exists(python_exe):
-                    python_exe = sys.executable
-            else:
-                python_exe = sys.executable
-
             main_py = os.path.join(self.script_dir, "main.py")
 
             startupinfo = None
@@ -417,8 +454,8 @@ class LiveRecorderGUI:
             if sys.platform == 'win32':
                 creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
 
-            self.process = subprocess.Popen(
-                [python_exe, main_py],
+            proc = subprocess.Popen(
+                [sys.executable, main_py],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -431,7 +468,8 @@ class LiveRecorderGUI:
                 creationflags=creation_flags
             )
 
-            self.process_pid = self.process.pid
+            self.process = proc
+            self.process_pid = proc.pid
             self.running = True
             self.start_btn.state(['disabled'])
             self.stop_btn.state(['!disabled'])
@@ -443,8 +481,8 @@ class LiveRecorderGUI:
             self.output_thread.start()
 
             self._log("=" * 50)
-            self._log(f"[{self._get_timestamp()}] 录制进程已启动")
-            self._log(f"Python: {python_exe}")
+            self._log(f"[{self._get_timestamp()}] 录制进程已启动 (PID: {proc.pid})")
+            self._log(f"Python: {sys.executable}")
             self._log(f"工作目录: {self.script_dir}")
             self._log("=" * 50)
 
@@ -452,95 +490,94 @@ class LiveRecorderGUI:
             self._log(f"启动录制失败: {e}", "error")
             messagebox.showerror("错误", f"启动录制失败: {e}")
 
-    def stop_recording(self):
-        """停止录制 - 增强版，支持优雅退出"""
-        if self.process is None:
+    def stop_recording(self) -> None:
+        """停止录制 —— 发送终止信号后，在后台线程等待进程退出"""
+        proc = self.process
+        pid = self.process_pid
+
+        if proc is None:
             messagebox.showwarning("警告", "没有正在运行的录制进程！")
             return
 
-        try:
-            self._log("=" * 50)
-            self._log(f"[{self._get_timestamp()}] 正在停止录制...")
+        self._log("=" * 50)
+        self._log(f"[{self._get_timestamp()}] 正在停止录制...")
 
+        if sys.platform == 'win32':
+            self._log("正在发送终止信号...")
+            proc.terminate()
+        else:
+            self._log("正在发送 SIGINT 信号...")
+            import signal
+            os.kill(proc.pid, signal.SIGINT)
+
+        def _wait_and_update_ui() -> None:
             terminated = False
-
-            if sys.platform == 'win32':
-                self._log("正在发送终止信号...")
-                self.process.terminate()
-            else:
-                self._log("正在发送 SIGINT 信号...")
-                import signal
-                os.kill(self.process.pid, signal.SIGINT)
-
             try:
-                self.process.wait(timeout=10)
+                proc.wait(timeout=3)
                 terminated = True
                 self._log("进程已优雅退出")
             except subprocess.TimeoutExpired:
                 self._log("进程未能及时退出，尝试强制终止...")
 
-            if not terminated and self.process.poll() is None:
+            if not terminated and proc.poll() is None:
                 try:
                     self._log("正在强制终止进程...")
-                    self.process.kill()
-                    try:
-                        self.process.wait(timeout=5)
-                        terminated = True
-                        self._log("进程已强制终止")
-                    except subprocess.TimeoutExpired:
-                        self._log("警告：进程可能仍在运行！")
+                    proc.kill()
+                    proc.wait(timeout=2)
+                    self._log("进程已强制终止")
+                except subprocess.TimeoutExpired:
+                    self._log("警告：进程可能仍在运行！")
                 except Exception as e:
                     self._log(f"强制终止失败: {e}")
-
-            if sys.platform == 'win32' and self.process_pid:
-                self._log("正在清理子进程树 (ffmpeg)...")
-                try:
-                    subprocess.run(
-                        ['taskkill', '/F', '/T', '/PID', str(self.process_pid)],
-                        capture_output=True, text=True, timeout=10
-                    )
-                except Exception as e:
-                    self._log(f"子进程树清理失败: {e}")
 
             self.running = False
             self.process = None
             self.process_pid = None
 
-            self.start_btn.state(['!disabled'])
-            self.stop_btn.state(['disabled'])
+            self.root.after(0, self._on_recording_stopped)
 
-            self.status_label.config(text="🔴 未运行", fg="#d32f2f")
-            self._update_status_bar()
+        threading.Thread(target=_wait_and_update_ui, daemon=True).start()
 
-            self._log(f"[{self._get_timestamp()}] 录制进程已停止")
-            self._log("=" * 50)
-            self._flush_log_queue()
+    def _on_recording_stopped(self) -> None:
+        """进程终止后的 UI 更新回调（在 UI 线程中执行）"""
+        self.start_btn.state(['!disabled'])
+        self.stop_btn.state(['disabled'])
+        self.status_label.config(text="🔴 未运行", fg="#d32f2f")
+        self._update_status_bar()
+        self._log(f"[{self._get_timestamp()}] 录制进程已停止")
+        self._log("=" * 50)
+        self._flush_log_queue()
 
-        except Exception as e:
-            self._log(f"停止录制失败: {e}", "error")
-            messagebox.showerror("错误", f"停止录制失败: {e}")
-
-    def _read_output(self):
+    def _read_output(self) -> None:
         """读取子进程输出 — 批量写入队列，减少 UI 线程调度次数"""
         batch: list[tuple[str, str]] = []
         batch_size = 10
 
-        def flush_batch():
+        def flush_batch() -> None:
             nonlocal batch
             if batch:
                 self._log_queue.put(batch)
+                self._log_queue_has_data = True
+                if self._log_flush_job_id is None:
+                    self._log_flush_job_id = self.root.after(self._LOG_FLUSH_INTERVAL, self._schedule_log_flush)
                 batch = []
 
-        while self.running and self.process:
+        while True:
+            proc = self.process
+            if proc is None or proc.stdout is None:
+                flush_batch()
+                self._log_queue.put(None)
+                self._log_queue_has_data = True
+                break
+
             try:
-                if not self.process.stdout:
-                    break
-                line = self.process.stdout.readline()
+                line = proc.stdout.readline()
                 if not line:
-                    if self.process.poll() is not None:
+                    if proc.poll() is not None:
                         flush_batch()
                         self.running = False
                         self._log_queue.put(None)
+                        self._log_queue_has_data = True
                         break
                     continue
 
@@ -550,16 +587,28 @@ class LiveRecorderGUI:
                 if len(batch) >= batch_size:
                     flush_batch()
 
+            except (ValueError, OSError) as e:
+                # I/O 已关闭或管道已断开
+                error_msg = str(e)
+                flush_batch()
+                self._log_queue.put([(f"输出流已关闭: {error_msg}", "error")])
+                self._log_queue.put(None)
+                self._log_queue_has_data = True
+                self.running = False
+                break
             except Exception as e:
                 error_msg = str(e)
                 flush_batch()
                 self._log_queue.put([(f"读取输出错误: {error_msg}", "error")])
+                self._log_queue.put(None)
+                self._log_queue_has_data = True
+                self.running = False
                 break
 
         flush_batch()
 
-    def _schedule_log_flush(self):
-        """定时从队列批量刷新日志到 UI，减少频繁 UI 更新导致的卡顿"""
+    def _schedule_log_flush(self) -> None:
+        """定时从队列批量刷新日志到 UI（按需调度：有数据才继续，无数据则等待下次 _log 触发）"""
         messages: list[tuple[str, str]] = []
         process_ended = False
         while True:
@@ -586,23 +635,28 @@ class LiveRecorderGUI:
                     tag = "normal"
 
                 self.log_text.insert(tk.END, display_text, tag)
-                self._log_line_count += 1
 
-            if self._log_line_count > self._MAX_LOG_LINES:
-                trim_count = self._log_line_count - self._LOG_TRIM_TO
-                self.log_text.delete('1.0', f'{trim_count}.0')
-                self._log_line_count = self._LOG_TRIM_TO
+            # 使用实际 Text 控件行数判断是否需要 trim
+            total_lines = int(self.log_text.index('end-1c').split('.')[0])
+            if total_lines > self._MAX_LOG_LINES:
+                trim_count = total_lines - self._LOG_TRIM_TO
+                self.log_text.delete('1.0', f'{trim_count + 1}.0')
 
             self.log_text.see(tk.END)
             self.log_text.config(state=tk.DISABLED)
+            self._log_queue_has_data = False
 
         if process_ended:
             self._process_ended()
 
-        self._log_flush_job_id = self.root.after(self._LOG_FLUSH_INTERVAL, self._schedule_log_flush)
+        # 按需调度：只有仍有未处理数据时才继续调度，否则等待 _log() 重新激活
+        if self._log_queue_has_data or not self._log_queue.empty():
+            self._log_flush_job_id = self.root.after(self._LOG_FLUSH_INTERVAL, self._schedule_log_flush)
+        else:
+            self._log_flush_job_id = None
 
-    def _process_ended(self):
-        """子进程结束回调"""
+    def _process_ended(self) -> None:
+        """子进程结束回调（仅在 UI 线程中调用）"""
         self.running = False
         self.process = None
         self.process_pid = None
@@ -616,40 +670,48 @@ class LiveRecorderGUI:
         self._log(f"[{self._get_timestamp()}] 录制进程已结束")
         self._log("=" * 50)
 
-    def _log(self, message, level="info"):
-        """添加日志到队列（线程安全），由 _schedule_log_flush 批量刷新到 UI"""
+    def _log(self, message: str, level: str = "info") -> None:
+        """添加日志到队列（线程安全），按需激活 _schedule_log_flush"""
         self._log_queue.put([(message, level)])
+        self._log_queue_has_data = True
+        if self._log_flush_job_id is None:
+            self._log_flush_job_id = self.root.after(self._LOG_FLUSH_INTERVAL, self._schedule_log_flush)
 
-    def _flush_log_queue(self):
+    def _flush_log_queue(self) -> None:
         """立即刷新日志队列到 UI（仅在 UI 线程中调用）"""
-        self._schedule_log_flush()
         if self._log_flush_job_id:
             self.root.after_cancel(self._log_flush_job_id)
             self._log_flush_job_id = None
-        self._log_flush_job_id = self.root.after(self._LOG_FLUSH_INTERVAL, self._schedule_log_flush)
+        self._schedule_log_flush()
+        if self._log_queue_has_data or not self._log_queue.empty():
+            self._log_flush_job_id = self.root.after(self._LOG_FLUSH_INTERVAL, self._schedule_log_flush)
 
-    def _get_timestamp(self):
+    # ─── 时间与状态栏 ──────────────────────────────────────
+
+    @staticmethod
+    def _get_timestamp() -> str:
         """获取当前时间戳"""
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    def _update_status_bar(self):
+    def _update_status_bar(self) -> None:
         """更新状态栏（动态读取配置）"""
         check_interval, output_format, tray_status = self._get_dynamic_status_info()
 
-        if self.process_pid is not None:
-            status_text = f"状态：运行中 (PID: {self.process_pid}) | 循环检测: {check_interval} | 格式: {output_format} | 托盘: {tray_status}"
+        pid = self.process_pid
+        if pid is not None:
+            status_text = f"状态：运行中 (PID: {pid}) | 循环检测: {check_interval} | 格式: {output_format} | 托盘: {tray_status}"
         else:
             status_text = f"状态：未运行 | 循环检测: {check_interval} | 格式: {output_format} | 托盘: {tray_status}"
 
         self.status_var.set(status_text)
 
-    def _schedule_status_refresh(self):
+    def _schedule_status_refresh(self) -> None:
         """每10秒自动刷新状态栏和监控 URL 配置文件变化"""
         self._update_status_bar()
         self._watch_url_config()
         self._refresh_job_id = self.root.after(self._STATUS_REFRESH_INTERVAL, self._schedule_status_refresh)
 
-    def _watch_url_config(self):
+    def _watch_url_config(self) -> None:
         """监控 URL_config.ini 文件变化，外部修改时自动重新加载"""
         if not os.path.exists(self.url_config_file):
             return
@@ -660,17 +722,15 @@ class LiveRecorderGUI:
         except OSError:
             pass
 
-    def _manual_reload_config(self):
-        """手动从磁盘重新读取 URL_config.ini 到编辑器"""
-        self._load_config()
+    # ─── 托盘与退出 ────────────────────────────────────────
 
-    def minimize_to_tray(self):
+    def minimize_to_tray(self) -> None:
         """最小化到托盘"""
         self.root.withdraw()
         if self.system_tray:
             self.system_tray.notify('程序已最小化到系统托盘，双击托盘图标可恢复窗口')
 
-    def quit_application(self):
+    def quit_application(self) -> None:
         """退出程序"""
         if self.process is not None:
             if messagebox.askokcancel("退出确认", "录制正在后台进行，确定要退出吗？"):
@@ -678,11 +738,8 @@ class LiveRecorderGUI:
             else:
                 return
 
-        try:
-            self._log("正在检查并清理可能残留的 ffmpeg 进程...")
-            self._cleanup_zombie_ffmpeg()
-        except Exception as e:
-            self._log(f"清理 ffmpeg 进程时出错: {e}")
+        self._log("正在后台清理可能残留的 ffmpeg 进程...")
+        threading.Thread(target=self._cleanup_zombie_ffmpeg, daemon=True).start()
 
         if self._log_flush_job_id:
             self.root.after_cancel(self._log_flush_job_id)
@@ -698,35 +755,36 @@ class LiveRecorderGUI:
         self.root.quit()
         self.root.destroy()
 
-    def _cleanup_zombie_ffmpeg(self):
-        """清理可能残留的 ffmpeg 进程（最后的安全网）"""
+    def _cleanup_zombie_ffmpeg(self) -> None:
+        """清理当前 Python 进程的子 ffmpeg 进程（仅清理自己进程树下的，避免误杀系统 ffmpeg）"""
+        current_pid = os.getpid()
         found = False
 
         try:
             if sys.platform == 'win32':
+                # 只清理父 PID 为当前进程的 ffmpeg.exe
                 try:
-                    result = subprocess.run(
-                        ['taskkill', '/F', '/IM', 'ffmpeg.exe'],
+                    subprocess.run(
+                        ['taskkill', '/F', '/FI', f'IMAGENAME eq ffmpeg.exe', '/FI', f'PARENTPID eq {current_pid}'],
                         capture_output=True,
                         text=True,
-                        timeout=10
+                        timeout=3
                     )
-                    if result.returncode == 0:
-                        found = True
-                        self._log("已通过 taskkill 清理 ffmpeg 进程")
+                    found = True
+                    self._log("已通过 taskkill 清理本进程树的 ffmpeg 进程")
                 except Exception as e:
                     self._log(f"taskkill 执行失败: {e}")
             else:
+                # 只清理父 PID 为当前进程的 ffmpeg
                 try:
-                    result = subprocess.run(
-                        ['pkill', '-9', 'ffmpeg'],
+                    subprocess.run(
+                        ['pkill', '-P', str(current_pid), '-x', 'ffmpeg'],
                         capture_output=True,
                         text=True,
-                        timeout=10
+                        timeout=3
                     )
-                    if result.returncode == 0:
-                        found = True
-                        self._log("已通过 pkill 清理 ffmpeg 进程")
+                    found = True
+                    self._log("已通过 pkill 清理本进程树的 ffmpeg 进程")
                 except Exception as e:
                     self._log(f"pkill 执行失败: {e}")
 
@@ -735,7 +793,7 @@ class LiveRecorderGUI:
         except Exception as e:
             self._log(f"清理 ffmpeg 进程时出错: {e}")
 
-    def on_closing(self):
+    def on_closing(self) -> None:
         """窗口关闭事件处理"""
         dialog = tk.Toplevel(self.root)
         dialog.title("关闭选项")
@@ -754,11 +812,11 @@ class LiveRecorderGUI:
         btn_frame = tk.Frame(dialog)
         btn_frame.pack(pady=10)
 
-        def minimize_to_tray_and_close():
+        def minimize_to_tray_and_close() -> None:
             self.minimize_to_tray()
             dialog.destroy()
 
-        def quit_and_close():
+        def quit_and_close() -> None:
             self.quit_application()
             dialog.destroy()
 
@@ -769,7 +827,7 @@ class LiveRecorderGUI:
                   width=15, bg="#d32f2f", fg="white", font=("Arial", 10)).grid(row=0, column=1, padx=5)
 
 
-def main():
+def main() -> None:
     """主函数"""
     root = tk.Tk()
     app = LiveRecorderGUI(root)
