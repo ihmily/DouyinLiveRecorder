@@ -180,7 +180,6 @@ def _get_error_line(e: BaseException) -> str:
 
 
 os_type = os.name
-clear_command = "cls" if os_type == 'nt' else "clear"
 color_obj = utils.Color()
 os.environ['PATH'] = ffmpeg_path + os.pathsep + (current_env_path or '')
 
@@ -305,9 +304,6 @@ def contains_url(string: str) -> bool:
     return re.search(pattern, string) is not None
 
 
-# 移除旧的信号处理器，因为我们已经添加了新的安全退出机制
-
-
 def display_info() -> None:
     global start_display_time
     time.sleep(5)
@@ -316,7 +312,8 @@ def display_info() -> None:
             sys.stdout.flush()
             time.sleep(5)
             if Path(sys.executable).name != 'pythonw.exe':
-                subprocess.run(clear_command, shell=True)
+                sys.stdout.write("\033[2J\033[H")
+                sys.stdout.flush()
             print(f"\r共监测{monitoring}个直播中", end=" | ")
             print(f"同一时间访问网络的线程数: {max_request}", end=" | ")
             print(f"是否开启代理录制: {'是' if use_proxy else '否'}", end=" | ")
