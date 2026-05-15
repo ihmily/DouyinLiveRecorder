@@ -558,6 +558,8 @@ class LiveRecorderGUI:
             if batch:
                 self._log_queue.put(batch)
                 self._log_queue_has_data = True
+                if self._log_flush_job_id is None:
+                    self._log_flush_job_id = self.root.after(self._LOG_FLUSH_INTERVAL, self._schedule_log_flush)
                 batch = []
 
         while True:
