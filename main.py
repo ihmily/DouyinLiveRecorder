@@ -1,12 +1,28 @@
+#!/usr/bin/env python3
 # -*- encoding: utf-8 -*-
 
 """
+DouyinLiveRecorder 主程序入口 - 命令行版
+
+这是直播录制工具的核心模块，负责：
+- 配置文件的读取和解析
+- 多平台直播流的获取和解析
+- FFmpeg 录制进程的管理
+- 多线程并发录制控制
+- 错误处理和自动重试
+- 直播状态通知推送
+
+支持平台：60+ 国内外直播平台（详见下文）
+
+架构流程：
+    URL配置 → 平台识别 → 获取直播数据 → 解析流地址 → FFmpeg录制 → 状态监控
+
 Author: Hmily
 GitHub: https://github.com/ihmily
 Date: 2023-07-17 23:52:05
 Update: 2025-10-23 19:48:05
+Version: v4.0.7
 Copyright (c) 2023-2025 by Hmily, All Rights Reserved.
-Function: Record live stream video.
 """
 import asyncio
 import os
@@ -39,44 +55,58 @@ from ffmpeg_install import (
     check_ffmpeg, ffmpeg_path, current_env_path
 )
 
+# 版本信息和支持的平台列表
 version = "v4.0.7"
 platforms = ("\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|"
              "酷狗|花椒|流星|Acfun|畅聊|映客|音播|知乎|嗨秀|VV星球|17Live|浪Live|漂漂|六间房|乐嗨|花猫|淘宝|京东|咪咕|连接|来秀"
              "\n海外站点：TikTok|SOOP|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK|Shopee|"
              "Youtube|Faceit|Picarto")
 
-recording = set()
-error_count = 0
-pre_max_request = 10
-max_request_lock = threading.Lock()
-error_window = []
-error_window_size = 10
-error_threshold = 5
-monitoring = 0
-running_list = []
-url_tuples_list = []
-url_comments = []
-text_no_repeat_url = []
-create_var = locals()
-first_start = True
-exit_recording = False
-need_update_line_list = []
-first_run = True
-not_record_list = []
-start_display_time = datetime.datetime.now()
-global_proxy = False
-recording_time_list = {}
-script_path = os.path.split(os.path.realpath(sys.argv[0]))[0]
-config_file = f'{script_path}/config/config.ini'
-url_config_file = f'{script_path}/config/URL_config.ini'
-backup_dir = f'{script_path}/backup_config'
-text_encoding = 'utf-8-sig'
-rstr = r"[\/\\\:\*\？?\"\<\>\|&#.。,， ~！· ]"
-default_path = f'{script_path}/downloads'
-os.makedirs(default_path, exist_ok=True)
-file_update_lock = threading.Lock()
+# ==================== 全局状态变量 ====================
 
-# 全局跟踪所有 ffmpeg 进程
+# 录制状态管理
+recording = set()  # 正在录制的直播间集合
+monitoring = 0  # 正在监控的直播间数量
+running_list = []  # 正在运行的 URL 列表
+recording_time_list = {}  # 记录每个直播间的开始录制时间
+exit_recording = False  # 退出标志
+
+# 错误控制和动态调优
+error_count = 0  # 当前错误计数
+pre_max_request = 10  # 之前的最大请求数
+max_request_lock = threading.Lock()  # 最大请求数的线程锁
+error_window = []  # 错误窗口（用于动态调整并发数
+error_window_size = 10  # 错误窗口大小
+error_threshold = 5  # 错误阈值，超过后降低并发
+
+# URL 和配置管理
+url_tuples_list = []  # 解析后的 URL 配置列表（格式：(画质, URL, 主播名)
+url_comments = []  # 被注释掉的 URL 列表
+text_no_repeat_url = []  # 去重后的 URL 文本
+need_update_line_list = []  # 需要更新的配置行
+not_record_list = []  # 不录制的直播间列表
+
+# 标志变量
+first_start = True  # 首次启动标志
+first_run = True  # 首次运行标志
+global_proxy = False  # 全局代理启用标志
+create_var = locals()  # 动态变量创建（用于字幕线程
+
+# ==================== 路径和配置 ====================
+
+script_path = os.path.split(os.path.realpath(sys.argv[0]))[0]  # 脚本所在目录
+config_file = f'{script_path}/config/config.ini'  # 主配置文件路径
+url_config_file = f'{script_path}/config/URL_config.ini'  # URL 配置文件路径
+backup_dir = f'{script_path}/backup_config'  # 配置备份目录
+text_encoding = 'utf-8-sig'  # 文本文件编码（支持 BOM
+rstr = r"[\/\\\:\*\？?\"\<\>\|&#.。,， ~！· ]"  # 文件名字符过滤正则
+default_path = f'{script_path}/downloads'  # 默认下载目录
+os.makedirs(default_path, exist_ok=True)  # 确保下载目录存在
+file_update_lock = threading.Lock()  # 文件更新锁（防止多线程写入冲突
+
+# ==================== FFmpeg 进程管理 ====================
+
+# 全局跟踪所有 ffmpeg 进程（用于安全退出时清理
 _ffmpeg_processes = []
 _processes_lock = threading.Lock()
 

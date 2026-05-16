@@ -1,4 +1,9 @@
+#!/usr/bin/env python3
 # -*- encoding: utf-8 -*-
+"""
+直播流地址获取模块
+从各平台解析获取直播流地址，支持多种画质选择
+"""
 
 """
 Author: Hmily
@@ -27,6 +32,7 @@ QUALITY_MAPPING_BIT = {'OD': 99999, 'BD': 4000, 'UHD': 2000, 'HD': 1000, 'SD': 8
 
 
 def _pad_list(url_list: list, min_length: int = 5) -> list:
+    """将列表填充到指定最小长度（重复最后一个元素）"""
     if not url_list:
         return url_list
     while len(url_list) < min_length:
@@ -35,6 +41,9 @@ def _pad_list(url_list: list, min_length: int = 5) -> list:
 
 
 def get_quality_index(quality) -> tuple:
+    """解析画质参数，返回画质名称和索引
+    支持字符串（OD/BD/UHD/HD/SD/LD）或数字（0-5）
+    """
     if not quality:
         return list(QUALITY_MAPPING.items())[0]
 

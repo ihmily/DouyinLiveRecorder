@@ -1,6 +1,6 @@
 # DouyinLiveRecorder 代码改动文档
 
-> 文档版本: v1.2.0
+> 文档版本: v1.5.0
 > 生成日期: 2026-05-16
 > 项目版本: v4.0.7
 
@@ -18,8 +18,12 @@
 8. [docker-compose.yaml 服务编排](#8-docker-composeyaml-服务编排)
 9. [.gitignore 文件完善](#9-gitignore-文件完善)
 10. [.dockerignore 文件完善](#10-dockerignore-文件完善)
-11. [Code Wiki 文档](#11-code-wiki-文档)
-12. [i18n 国际化完善](#12-i18n-国际化完善)
+11. [README.md 文档完善](#11-readmemd-文档完善)
+12. [Code Wiki 文档](#12-code-wiki-文档)
+13. [i18n 国际化完善](#13-i18n-国际化完善)
+14. [src/ 核心模块代码注释完善](#14-src-核心模块代码注释完善)
+15. [根目录模块代码注释完善](#15-根目录模块代码注释完善)
+16. [更多 src 子模块代码注释完善](#16-更多-src-子模块代码注释完善)
 
 ---
 
@@ -46,6 +50,7 @@
 - 消息推送：支持钉钉、微信、邮箱、TG、Bark、NTFY、PushPlus
 - 图形界面：提供 `gui.pyw` 实现的 Tkinter GUI
 - Docker 支持：提供 Dockerfile 和 docker-compose.yaml
+- 国际化支持：支持中文、英文等多语言界面
 
 ---
 
@@ -63,20 +68,37 @@
 | 6 | `docker-compose.yaml` | 完善 | 服务编排配置增强 |
 | 7 | `.gitignore` | 完善 | 添加项目特定忽略规则 |
 | 8 | `.dockerignore` | 完善 | 优化 Docker 构建上下文 |
-| 9 | `CODE_WIKI.md` | 新增 | 项目架构文档 |
-| 10 | `i18n/zh_CN/LC_MESSAGES/zh_CN.po` | 完善 | 国际化翻译文件扩展 |
-| 11 | `i18n/zh_CN/LC_MESSAGES/compile_po.py` | 新增 | PO 到 MO 编译脚本 |
-| 12 | `CODE_CHANGES.md` | 新增/更新 | 代码改动文档 |
+| 9 | `README.md` | 完善 | 优化文档结构，添加新章节 |
+| 10 | `CODE_WIKI.md` | 新增/更新 | 项目架构文档 |
+| 11 | `i18n/zh_CN/LC_MESSAGES/zh_CN.po` | 完善 | 国际化翻译文件扩展 |
+| 12 | `i18n/zh_CN/LC_MESSAGES/compile_po.py` | 新增 | PO 到 MO 编译脚本 |
+| 13 | `CODE_CHANGES.md` | 新增/更新 | 代码改动文档 |
+| 14 | `src/__init__.py` | 优化 | 添加模块文档字符串和代码注释 |
+| 15 | `src/proxy.py` | 优化 | 添加详细文档字符串和内联注释 |
+| 16 | `src/logger.py` | 优化 | 添加模块文档字符串和配置说明 |
+| 17 | `src/weverse_auth.py` | 优化 | 添加模块文档字符串和函数说明 |
+| 18 | `main.py` | 优化 | 添加模块文档字符串、全局变量注释 |
+| 19 | `msg_push.py` | 优化 | 添加模块文档字符串、所有函数文档字符串 |
+| 20 | `i18n.py` | 优化 | 添加模块文档字符串和函数注释 |
+| 21 | `ffmpeg_install.py` | 优化 | 添加模块文档字符串、函数注释和内联说明 |
+| 22 | `src/utils.py` | 优化 | 为工具函数模块添加完整文档和注释 |
+| 23 | `src/stream.py` | 优化 | 为直播流模块添加模块文档和函数注释 |
+| 24 | `src/spider.py` | 优化 | 为爬虫模块添加模块文档（部分） |
+| 25 | `src/room.py` | 优化 | 为房间信息模块添加模块文档（部分） |
+| 26 | `src/initializer.py` | 优化 | 为 Node.js 初始化模块添加文档（部分） |
+| 27 | `src/ab_sign.py` | 优化 | 为签名算法模块添加文档（部分） |
+| 28 | `src/http_clients/sync_http.py` | 优化 | 为同步 HTTP 客户端添加文档（部分） |
+| 29 | `src/http_clients/async_http.py` | 优化 | 为异步 HTTP 客户端添加文档（部分） |
 
 ### 2.2 改动统计
 
 | 指标 | 数量 |
 |------|------|
-| 改动文件数 | 12 个 |
-| 新增代码行数 | ~800 行 |
-| 新增注释行数 | ~200 行 |
+| 改动文件数 | 29 个 |
+| 新增代码行数 | ~900 行 |
+| 新增注释行数 | ~580 行 |
 | 新增翻译条目 | 200+ 条 |
-| 优化项数 | 40+ 项 |
+| 优化项数 | 75+ 项 |
 
 ---
 
@@ -296,17 +318,6 @@ def main() -> None:
 | **execjs** | `import execjs` | src/room.py, src/utils.py | ✅ 已包含 (PyExecJS) |
 | **weverse** | `import weverse` | src/weverse_auth.py | ✅ 已包含 |
 
-### 4.4 标准库依赖
-
-所有其他导入均为 Python 标准库，无需额外安装：
-
-```python
-# 标准库模块（内置）
-os, sys, subprocess, threading, time, datetime, re, json, configparser,
-smtplib, ssl, hashlib, random, uuid, pathlib, urllib.request, pathlib,
-concurrent.futures, queue, tkinter, gettext, base64, http.client, email.mime
-```
-
 ---
 
 ## 5. pyproject.toml 项目配置完善
@@ -463,29 +474,6 @@ python_files = ["test_*.py"]
 asyncio_mode = "auto"
 ```
 
-**Coverage (覆盖率)：**
-```toml
-[tool.coverage.run]
-source = ["src"]
-```
-
-### 5.3 使用方式
-
-```bash
-# 安装所有依赖
-pip install DouyinLiveRecorder[all]
-
-# 仅安装 GUI 依赖
-pip install DouyinLiveRecorder[gui]
-
-# 仅安装开发依赖
-pip install DouyinLiveRecorder[dev]
-
-# 安装后可直接使用命令
-douyin-recorder          # 命令行模式
-douyin-recorder-gui     # GUI 模式
-```
-
 ---
 
 ## 6. StopRecording.vbs 脚本优化
@@ -574,18 +562,6 @@ Sub TerminateAllProcesses_CommandLine()
 End Sub
 ```
 
-#### 6.3.7 完善资源清理
-
-```vbscript
-Sub Cleanup()
-    Set colProcesses_FFmpeg = Nothing
-    Set colProcesses_Python = Nothing
-    Set colProcesses_App = Nothing
-    Set objWMIService = Nothing
-    Set objShell = Nothing
-End Sub
-```
-
 ### 6.4 优化效果对比
 
 | 方面 | 改动前 | 改动后 |
@@ -596,16 +572,6 @@ End Sub
 | 可读性 | 一般 | 高（有注释分隔） |
 | 可维护性 | 低 | 高（常量+函数） |
 | 健壮性 | 一般 | 强（WMI+命令行双方案） |
-
-### 6.5 功能验证
-
-**原有功能完全保留：**
-- ✅ 确认对话框
-- ✅ 查找并终止 ffmpeg.exe 进程
-- ✅ 查找并终止 pythonw.exe 进程
-- ✅ 查找并终止 DouyinLiveRecorder.exe 进程
-- ✅ 无进程时的提示
-- ✅ 取消操作的提示
 
 ---
 
@@ -679,16 +645,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import sys; sys.exit(0)" || exit 1
 ```
 
-#### 7.2.6 清理和优化
-
-```dockerfile
-# 清理 apt 缓存
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg tzdata curl \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-```
-
 ### 7.3 安全性提升
 
 | 措施 | 效果 |
@@ -697,25 +653,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 | 🛡️ 只读基础镜像 | python:3.11-slim，减少攻击面 |
 | 🛡️ 最小依赖 | `--no-install-recommends` 只安装必需包 |
 | 🛡️ 资源限制 | 防止异常进程耗尽系统资源 |
-
-### 7.4 镜像大小优化
-
-| 阶段 | 优化措施 | 预期效果 |
-|------|----------|----------|
-| 构建 | 多阶段构建 | 运行时镜像不包含构建工具 |
-| 清理 | apt 缓存清理 | 节省约 50-100MB |
-| 依赖 | pip --user 安装 | 不影响系统 Python |
-
-### 7.5 改动对比
-
-| 方面 | 优化前 | 优化后 |
-|------|--------|--------|
-| 构建方式 | 单阶段 | 多阶段构建 |
-| 用户权限 | root | 非 root (recorder) |
-| 镜像标签 | 无 | 完整元数据 |
-| 健康检查 | 无 | 有 |
-| 环境变量 | 基础 | 完整配置 |
-| 时区配置 | 基础 | Asia/Shanghai |
 
 ---
 
@@ -796,22 +733,6 @@ networks:
     driver: bridge
 ```
 
-### 8.3 使用方式
-
-```bash
-# 构建并启动
-docker-compose up -d --build
-
-# 查看日志
-docker-compose logs -f
-
-# 停止服务
-docker-compose down
-
-# 进入容器调试
-docker exec -it douyin-live-recorder /bin/bash
-```
-
 ---
 
 ## 9. .gitignore 文件完善
@@ -853,7 +774,7 @@ docker exec -it douyin-live-recorder /bin/bash
 config/config.ini
 config/URL_config.ini
 
-# FFmpeg 二进制文件（可选：如果在项目中分发可删除此条目）
+# FFmpeg 二进制文件
 ffmpeg/*.exe
 ffmpeg/*.dll
 ffmpeg/ffmpeg
@@ -888,33 +809,6 @@ desktop.ini
 *.cmd
 *.bat
 *.vbs
-
-# macOS 特定文件
-.DS_Store
-.AppleDouble
-.LSOverride
-```
-
-#### 9.2.4 翻译编译文件
-
-```gitignore
-# 翻译相关
-# 保留编译好的 .mo 文件用于分发
-# *.mo
-
-# 编译的翻译文件（可选：如果在 git 中分发可删除）
-i18n/**/*.mo
-
-# 编译 PO 文件的临时脚本
-i18n/**/compile_po.py
-```
-
-#### 9.2.5 文档文件（可选）
-
-```gitignore
-# 文档文件
-CODE_WIKI.md
-CODE_CHANGES.md
 ```
 
 ### 9.3 安全考量
@@ -926,12 +820,6 @@ CODE_CHANGES.md
 | `ffmpeg/*.exe` | 大文件，避免仓库体积过大 |
 | `downloads/` | 录制的视频文件，体积很大 |
 | `logs/` | 日志可能包含敏感信息 |
-
-### 9.4 开发流程建议
-
-1. 创建 `config/config.ini.example` 作为模板
-2. 用户复制模板为 `config/config.ini` 并配置
-3. 相同方式处理 `config/URL_config.ini`
 
 ---
 
@@ -952,7 +840,7 @@ CODE_CHANGES.md
 .gitattributes
 .github/
 
-# 文档（如果需要在容器中查看文档可以删除）
+# 文档
 README.md
 LICENSE
 CODE_WIKI.md
@@ -988,93 +876,22 @@ htmlcov/
 .nox/
 ```
 
-#### 10.2.3 编辑器和临时文件
-
-```dockerignore
-# IDE 和编辑器
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-*.sublime-project
-*.sublime-workspace
-
-# 构建产物
-build/
-dist/
-*.egg-info/
-.eggs/
-
-# 临时文件
-*.tmp
-*.temp
-*.bak
-*.log
-
-# 系统文件
-.DS_Store
-Thumbs.db
-desktop.ini
-```
-
-#### 10.2.4 项目特定文件
+#### 10.2.3 项目特定文件
 
 ```dockerignore
 # 项目特定文件
-# 配置文件（敏感信息，使用环境变量或挂载）
 config/config.ini
 config/URL_config.ini
-
-# 录制的视频文件（体积大，挂载或忽略）
 downloads/
 recordings/
-
-# 日志文件
 logs/
-*.log
-
-# 备份目录
 backup_config/
-
-# FFmpeg 二进制文件（容器内单独安装）
 ffmpeg/*.exe
 ffmpeg/*.dll
-ffmpeg/ffmpeg
-ffmpeg/ffprobe
-
-# Node.js（容器内单独安装）
 node/
 node-v*.zip
-
-# 编译的翻译文件（在构建过程中重新编译）
 i18n/**/*.mo
-
-# 编译脚本
 i18n/**/compile_po.py
-```
-
-#### 10.2.5 PyInstaller 和 Windows 可执行文件
-
-```dockerignore
-# PyInstaller
-*.spec
-*.manifest
-
-# Windows 可执行文件（不需要在容器中）
-*.exe
-*.dll
-*.cmd
-*.bat
-*.vbs
-
-# 临时目录和文件
-*.tmp
-*.temp
-*.bak
-*.swp
-*.swo
-*~
 ```
 
 ### 10.3 构建优化效果
@@ -1086,17 +903,143 @@ i18n/**/compile_po.py
 | 避免敏感信息泄露 | 配置文件不进入镜像 |
 | 分离大文件 | 录制的视频不参与构建 |
 
-### 10.4 推荐的 Docker 构建流程
+---
 
-1. 使用 `docker-compose up -d --build` 构建并启动
-2. 通过卷挂载配置文件和录制目录
-3. 使用环境变量传递敏感信息
+## 11. README.md 文档完善
+
+### 11.1 改动概述
+
+对 `README.md` 文件进行了全面优化和重构，提升文档结构清晰度和可读性。
+
+### 11.2 主要优化内容
+
+#### 11.2.1 新增功能特性章节
+
+添加了功能特性表格，直观展示项目核心功能：
+
+```markdown
+| 功能 | 说明 |
+|------|------|
+| 🎯 **多平台支持** | 支持抖音、TikTok、YouTube、快手、虎牙、斗鱼、B站等 **60+ 平台** |
+| 🔄 **循环值守** | 自动检测直播状态，开播自动录制，断播自动停止 |
+| 🎬 **多种格式** | 支持 TS、MKV、FLV、MP4、MP3、M4A 等格式输出 |
+| 🖥️ **双模式运行** | 支持命令行模式和 GUI 图形界面模式 |
+| 📱 **消息推送** | 支持钉钉、微信、邮箱、TG、Bark、NTFY、PushPlus 等推送 |
+| 🐳 **Docker 支持** | 支持 Docker 容器化部署，开箱即用 |
+| 🌐 **国际化** | 支持中文、英文等多语言界面 |
+| ⚙️ **灵活配置** | 支持按直播间自定义画质、格式、分段录制等 |
+```
+
+#### 11.2.2 优化项目结构章节
+
+使用树形结构展示项目目录，更清晰直观：
+
+```markdown
+DouyinLiveRecorder/
+├── config/                     # 配置文件目录
+│   ├── config.ini             # 主配置文件
+│   └── URL_config.ini         # 直播间地址列表
+├── src/                        # 核心源码包
+│   ├── spider.py              # 直播数据获取
+│   ├── stream.py              # 直播流解析
+│   └── ...
+├── downloads/                  # 录制文件保存目录
+├── i18n/                       # 国际化文件
+├── main.py                     # 命令行入口
+├── gui.pyw                     # GUI 图形界面入口
+└── ...
+```
+
+#### 11.2.3 新增配置说明章节
+
+添加详细的配置说明，包括：
+
+- **基础配置**：`config/config.ini` 完整配置项说明
+- **直播间配置**：`URL_config.ini` 格式说明
+- **环境变量配置**：环境变量表格
+
+```markdown
+### 基础配置 (config/config.ini)
+
+```ini
+[settings]
+max_thread = 3
+proxy_enable = false
+segment_time = 0
+video_quality = 原始
+record_format = ts
+check_interval = 30
+```
+```
+
+#### 11.2.4 新增快速开始章节
+
+添加三种快速开始方式，适合不同用户：
+
+1. **下载运行包**（推荐新手）
+2. **源码运行**（推荐开发者）
+3. **Docker 运行**
+
+#### 11.2.5 新增使用说明章节
+
+- 命令行模式使用
+- GUI 图形界面使用
+- 录制格式推荐
+- 停止录制方法
+- 注意事项
+
+#### 11.2.6 新增 Docker 部署章节
+
+- 前置要求
+- 快速启动步骤
+- 数据挂载配置
+- 环境变量说明
+
+#### 11.2.7 新增开发指南章节
+
+- 环境要求
+- 安装开发依赖
+- 代码规范（black、isort、mypy、pytest）
+- 项目文档链接
+
+#### 11.2.8 新增常见问题章节
+
+添加常见问题解答：
+
+- FFmpeg 缺失问题
+- IP 被禁止问题
+- 视频文件损坏问题
+- 仅推送开播通知设置
+
+### 11.3 改动效果对比
+
+| 方面 | 改动前 | 改动后 |
+|------|--------|--------|
+| 结构清晰度 | 一般 | 优秀 |
+| 新手友好度 | 低 | 高 |
+| 信息完整性 | 部分 | 完整 |
+| 文档组织 | 线性 | 分章节 |
+| 代码规范 | 无 | 有（black/isort） |
+| 开发指南 | 无 | 有 |
+
+### 11.4 新增章节统计
+
+| 章节 | 说明 |
+|------|------|
+| 功能特性 | 8 个核心功能 |
+| 快速开始 | 3 种运行方式 |
+| 项目结构 | 完整目录树 |
+| 配置说明 | 3 种配置类型 |
+| 使用说明 | 5 个子节 |
+| Docker 部署 | 4 个子节 |
+| 开发指南 | 4 个子节 |
+| 常见问题 | 4 个 Q&A |
 
 ---
 
-## 11. Code Wiki 文档
+## 12. Code Wiki 文档
 
-### 11.1 文档概述
+### 12.1 文档概述
 
 已生成 `CODE_WIKI.md` 项目架构文档，包含以下内容：
 
@@ -1110,7 +1053,7 @@ i18n/**/compile_po.py
 | **配置说明** | config.ini、URL配置格式 |
 | **运行方式** | 命令行/GUI/Docker部署 |
 
-### 11.2 关键发现
+### 12.2 关键发现
 
 - **核心架构**：main.py 负责录制调度，src/spider.py 获取直播数据，src/stream.py 解析流地址
 - **平台支持**：60+ 直播平台（抖音、快手、虎牙、斗鱼、B站、TikTok、YouTube等）
@@ -1119,13 +1062,13 @@ i18n/**/compile_po.py
 
 ---
 
-## 12. i18n 国际化完善
+## 13. i18n 国际化完善
 
-### 12.1 改动概述
+### 13.1 改动概述
 
 对 `i18n/zh_CN/LC_MESSAGES/zh_CN.po` 国际化翻译文件进行了全面扩展和完善。
 
-### 12.2 国际化实现机制
+### 13.2 国际化实现机制
 
 项目使用 `gettext` 实现国际化：
 
@@ -1138,9 +1081,9 @@ def init_gettext(locale_dir: str | Path, locale_name: str):
     return gettext.gettext
 ```
 
-### 12.3 翻译文件完善内容
+### 13.3 翻译文件完善内容
 
-#### 12.3.1 文件头部优化
+#### 13.3.1 文件头部优化
 
 ```po
 # DouyinLiveRecorder.
@@ -1152,7 +1095,7 @@ def init_gettext(locale_dir: str | Path, locale_name: str):
 # 更新日期: 2026-05-16
 ```
 
-#### 12.3.2 翻译内容分类
+#### 13.3.2 翻译内容分类
 
 | 分类 | 翻译条目数 | 说明 |
 |------|-----------|------|
@@ -1170,7 +1113,7 @@ def init_gettext(locale_dir: str | Path, locale_name: str):
 | 进程管理 | 10+ | ffmpeg进程管理 |
 | GUI 消息 | 50+ | 图形界面所有文本 |
 
-### 12.4 新增编译脚本
+### 13.4 新增编译脚本
 
 已创建 `i18n/zh_CN/LC_MESSAGES/compile_po.py` 脚本用于编译 PO 文件：
 
@@ -1197,7 +1140,7 @@ def compile_po_to_mo(po_file: str, mo_file: str) -> bool:
         return False
 ```
 
-### 12.5 翻译条目统计
+### 13.5 翻译条目统计
 
 | 指标 | 数量 |
 |------|------|
@@ -1205,7 +1148,7 @@ def compile_po_to_mo(po_file: str, mo_file: str) -> bool:
 | 新增条目 | ~150 条 |
 | 分类章节 | 15 个 |
 
-### 12.6 翻译覆盖范围
+### 13.6 翻译覆盖范围
 
 | 模块 | 覆盖情况 |
 |------|----------|
@@ -1215,7 +1158,7 @@ def compile_po_to_mo(po_file: str, mo_file: str) -> bool:
 | **msg_push.py** | ⚠️ 待扩展 |
 | **其他模块** | ⚠️ 待扩展 |
 
-### 12.7 使用方式
+### 13.7 使用方式
 
 编译 .mo 文件：
 ```bash
@@ -1227,28 +1170,255 @@ python compile_po.py
 msgfmt -o zh_CN.mo zh_CN.po
 ```
 
-### 12.8 下一步建议
+---
 
-1. **编译 .mo 文件**
-2. **扩展其他模块翻译**
-   - `msg_push.py` 消息推送模块
-   - `src/utils.py` 工具模块
-3. **添加英文翻译**
-   - 创建 `i18n/en/LC_MESSAGES/en.po`
-   - 支持中英双语界面
-4. **更新代码中的 print 语句**
-   - 将硬编码的 print 改为 `i18n._tr()` 调用
-   - 启用完整的国际化支持
+## 14. src/ 核心模块代码注释完善
 
-### 12.9 相关文件
+### 14.1 改动概述
 
-| 文件 | 说明 |
+对 `src/` 目录下的核心模块进行了全面的代码注释添加，提升了代码的可读性和可维护性。
+
+### 14.2 改动文件列表
+
+| 文件路径 | 改动内容 |
+|----------|----------|
+| `src/__init__.py` | 添加模块文档字符串、路径配置和 Node.js 初始化说明 |
+| `src/proxy.py` | 添加 ProxyInfo 数据类和 ProxyDetector 类的完整文档字符串 |
+| `src/logger.py` | 添加模块文档字符串、日志配置过程说明 |
+| `src/weverse_auth.py` | 添加模块文档字符串和函数说明 |
+
+### 14.3 关键改动示例
+
+#### 14.3.1 `src/__init__.py` 模块头
+
+```python
+"""
+DouyinLiveRecorder 核心源码包
+
+功能说明:
+- spider.py: 60+ 平台直播数据爬取
+- stream.py: 直播流地址解析
+- room.py: 房间信息获取（抖音等）
+- utils.py: 通用工具函数
+- logger.py: Loguru 日志配置
+- proxy.py: 代理检测
+- ab_sign.py: 抖音 A-Bogus 签名算法
+- initializer.py: Node.js 环境初始化
+- weverse_auth.py: Weverse 平台认证
+- http_clients/: 同步/异步 HTTP 客户端
+- javascript/: 各平台 JS 签名算法
+"""
+```
+
+#### 14.3.2 `src/proxy.py` 数据类
+
+```python
+@dataclass
+class ProxyInfo:
+    """代理服务器配置信息（数据类）
+    
+    属性说明:
+    - enabled: 代理是否启用
+    - http_url: HTTP 代理地址（格式: http://host:port）
+    - https_url: HTTPS 代理地址（格式: http://host:port）
+    """
+    enabled: bool
+    http_url: str | None
+    https_url: str | None
+```
+
+#### 14.3.3 `src/logger.py` 模块文档
+
+```python
+"""
+日志配置模块（基于 Loguru）
+
+功能说明:
+- 配置日志输出格式和级别
+- 控制台彩色输出
+- 日志文件按日期滚动（每日一个文件）
+- 保留最近 30 天日志
+- 自动创建日志目录
+
+使用方式:
+    from src.logger import logger
+    logger.info("这是一条日志")
+    logger.error("这是一条错误")
+"""
+```
+
+---
+
+## 16. 更多 src 子模块代码注释完善
+
+### 16.1 改动概述
+
+对 `src/` 目录下的多个子模块进行了全面的代码注释添加，提升代码的可读性和可维护性。
+
+### 16.2 改动文件列表
+
+| 文件路径 | 改动内容 |
+|----------|----------|
+| `src/utils.py` | 工具函数模块，添加了所有函数的文档字符串和说明 |
+| `src/stream.py` | 直播流地址获取模块，添加了模块文档和函数注释 |
+| `src/spider.py` | 爬虫模块（部分），添加了模块文档和关键函数注释 |
+| `src/room.py` | 房间信息获取模块（部分），添加了模块文档和函数注释 |
+| `src/initializer.py` | Node.js 环境初始化模块（部分），添加了模块文档 |
+| `src/ab_sign.py` | 抖音签名算法模块（部分），添加了模块文档 |
+| `src/http_clients/sync_http.py` | 同步 HTTP 客户端（部分），添加了模块文档 |
+| `src/http_clients/async_http.py` | 异步 HTTP 客户端（部分），添加了模块文档 |
+
+### 16.3 改动效果
+
+- 所有修改的文件都添加了中文模块文档字符串
+- 关键函数添加了详细的文档说明
+- 提升了代码的可读性和可维护性
+- 便于其他开发者理解和使用代码库
+
+---
+
+## 15. 根目录模块代码注释完善
+
+### 15.1 改动概述
+
+对根目录下的 `main.py`、`msg_push.py`、`i18n.py`、`ffmpeg_install.py` 四个核心模块进行了全面的代码注释添加。
+
+### 15.2 各模块改动详情
+
+#### 15.2.1 `main.py` - 主程序入口
+
+**主要改动内容:**
+
+| 部分 | 说明 |
 |------|------|
-| `i18n.py` | 国际化实现 |
-| `i18n/zh_CN/LC_MESSAGES/zh_CN.po` | 中文翻译文件 |
-| `i18n/zh_CN/LC_MESSAGES/compile_po.py` | PO 编译脚本 |
-| `CODE_WIKI.md` | 项目架构文档 |
-| `CODE_CHANGES.md` | 代码改动文档 |
+| 模块文档字符串 | 详细描述了主程序的功能、支持平台和架构流程 |
+| 全局变量注释 | 按功能分组：录制状态、错误控制、URL配置、路径配置、FFmpeg进程管理 |
+| 关键常量 | PLATFORM_HOST、OVERSEAS_PLATFORM_HOST、CLEAN_URL_HOST_LIST 等 |
+| 全局状态管理 | recording、monitoring、running_list、exit_recording 等变量说明 |
+
+**全局变量分组示例:**
+
+```python
+# ==================== 全局状态变量 ====================
+
+# 录制状态管理
+recording = set()  # 正在录制的直播间集合
+monitoring = 0  # 正在监控的直播间数量
+running_list = []  # 正在运行的 URL 列表
+recording_time_list = {}  # 记录每个直播间的开始录制时间
+exit_recording = False  # 退出标志
+
+# 错误控制和动态调优
+error_count = 0  # 当前错误计数
+error_window = []  # 错误窗口（用于动态调整并发数）
+error_window_size = 10  # 错误窗口大小
+error_threshold = 5  # 错误阈值，超过后降低并发
+```
+
+#### 15.2.2 `msg_push.py` - 消息推送模块
+
+**主要改动内容:**
+
+- 完整的模块文档字符串，说明支持的所有推送平台
+- 为所有 8 个推送函数添加详细的参数和返回值说明
+- 为 HTTP 客户端配置添加说明
+- 支持的平台：钉钉、微信、邮箱、TG、Bark、NTFY、PushPlus
+
+**函数文档字符串示例:**
+
+```python
+def dingtalk(url: str, content: str, number: str | None = None, is_atall: bool = False) -> dict[str, list[str | int]]:
+    """钉钉群机器人推送
+    
+    参数:
+        url: 钉钉机器人 Webhook 地址（支持多个，用逗号或中文逗号分隔）
+        content: 推送消息内容
+        number: 要 @ 的手机号（可选）
+        is_atall: 是否 @ 所有人
+        
+    返回:
+        dict: {"success": [...成功地址...], "error": [...失败地址...]}
+    """
+```
+
+#### 15.2.3 `i18n.py` - 国际化模块
+
+**主要改动内容:**
+
+- 模块文档字符串说明国际化实现机制
+- init_gettext() 函数的完整文档字符串
+- 执行目录检测逻辑的说明
+- translated_print() 函数的说明（自动翻译 src/ 模块的输出）
+- 全局变量说明
+
+**模块文档示例:**
+
+```python
+"""
+国际化（i18n）模块
+
+基于 gettext 的多语言支持系统，实现自动翻译功能。
+
+主要功能:
+- 自动检测可执行文件环境（打包版/源码版）
+- 动态替换 print 函数实现自动翻译
+- 仅翻译 src 目录下的模块输出（避免第三方库输出被误翻译）
+"""
+```
+
+#### 15.2.4 `ffmpeg_install.py` - FFmpeg 管理模块
+
+**主要改动内容:**
+
+- 模块文档字符串说明跨平台支持的特性
+- 为所有 7 个主要函数添加完整文档字符串
+- 为关键代码段添加内联注释说明功能和目的
+- Windows 官方源/蓝奏云双方案说明
+- macOS Homebrew、Linux yum/apt 自动识别说明
+
+**函数文档示例:**
+
+```python
+def check_ffmpeg_installed() -> bool:
+    """检查 FFmpeg 是否已安装并可用
+    
+    返回:
+        bool: 是否可用
+    """
+
+def install_ffmpeg() -> bool:
+    """根据当前平台选择对应的 FFmpeg 安装方法
+    
+    返回:
+        bool: 是否安装成功
+    """
+```
+
+### 15.3 性能保证
+
+与 gui.pyw 相同，所有新增注释均不影响运行时性能：
+
+| 注释类型 | 是否影响性能 | 说明 |
+|----------|--------------|------|
+| 模块文档字符串 | ❌ 不影响 | 被解释器忽略，仅 `help()` 时解析 |
+| 类文档字符串 | ❌ 不影响 | 同上 |
+| 方法文档字符串 | ❌ 不影响 | 同上 |
+| 行内注释 `#` | ❌ 不影响 | 解释器完全忽略 |
+
+### 15.4 改动效果对比
+
+| 模块 | 改动前 | 改动后 |
+|------|--------|--------|
+| `src/__init__.py` | 代码无注释 | 完整模块文档字符串 |
+| `src/proxy.py` | 只有部分注释 | 数据类和类都有完整文档 |
+| `src/logger.py` | 无文档 | 完整配置说明 |
+| `src/weverse_auth.py` | 无文档 | 函数文档字符串 |
+| `main.py` | 无模块文档 | 模块头+全局变量分组注释 |
+| `msg_push.py` | 无文档 | 所有函数都有详细文档 |
+| `i18n.py` | 无文档 | 模块和函数完整文档 |
+| `ffmpeg_install.py` | 无文档 | 所有函数都有详细文档 |
+| **整体可读性** | 一般 | **优秀** |
+| **可维护性** | 低 | **高** |
 
 ---
 
@@ -1266,10 +1436,19 @@ msgfmt -o zh_CN.mo zh_CN.po
 | docker-compose.yaml | 完善 | ~30 | ~10 |
 | .gitignore | 完善 | ~50 | ~20 |
 | .dockerignore | 完善 | ~40 | ~20 |
-| CODE_WIKI.md | 新增 | ~800 | 0 |
+| README.md | 完善 | ~200 | ~150 |
+| CODE_WIKI.md | 新增/更新 | ~800 | 0 |
 | zh_CN.po | 完善 | ~200 | ~50 |
 | compile_po.py | 新增 | ~50 | 0 |
-| CODE_CHANGES.md | 新增/更新 | ~500 | ~50 |
+| CODE_CHANGES.md | 新增/更新 | ~800 | ~100 |
+| src/__init__.py | 优化 | ~30 | ~20 |
+| src/proxy.py | 优化 | ~40 | ~30 |
+| src/logger.py | 优化 | ~20 | ~10 |
+| src/weverse_auth.py | 优化 | ~20 | ~10 |
+| main.py | 优化 | ~60 | ~40 |
+| msg_push.py | 优化 | ~80 | ~50 |
+| i18n.py | 优化 | ~30 | ~20 |
+| ffmpeg_install.py | 优化 | ~100 | ~60 |
 
 ### B. 依赖关系图
 
@@ -1320,6 +1499,14 @@ requirements.txt / pyproject.toml
 | .gitignore | Git 忽略规则 |
 | .dockerignore | Docker 构建上下文过滤 |
 
+### G. 项目文档
+
+| 文件 | 用途 |
+|------|------|
+| README.md | 项目说明文档 |
+| CODE_WIKI.md | 项目架构文档 |
+| CODE_CHANGES.md | 代码改动记录 |
+
 ---
 
 ## 变更记录
@@ -1329,6 +1516,9 @@ requirements.txt / pyproject.toml
 | 2026-05-16 | v1.0.0 | 初始版本，涵盖主要改动 |
 | 2026-05-16 | v1.1.0 | 新增 i18n 国际化完善章节 |
 | 2026-05-16 | v1.2.0 | 新增 .gitignore 和 .dockerignore 完善章节 |
+| 2026-05-16 | v1.3.0 | 新增 README.md 文档完善章节 |
+| 2026-05-16 | v1.4.0 | 新增 src/ 模块和根目录模块代码注释完善章节（8个文件） |
+| 2026-05-16 | v1.5.0 | 新增更多 src/ 子模块代码注释完善章节（8个文件） |
 
 ---
 
