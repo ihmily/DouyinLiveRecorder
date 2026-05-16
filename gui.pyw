@@ -1,4 +1,10 @@
 # -*- encoding: utf-8 -*-
+"""
+直播录制器 GUI 界面
+作者: Hmily
+项目: DouyinLiveRecorder
+功能: 提供图形化界面管理直播录制
+"""
 from __future__ import annotations
 
 import os
@@ -21,24 +27,24 @@ class SystemTray:
     """系统托盘管理器"""
 
     def __init__(self, gui_app: 'LiveRecorderGUI'):
-        self.gui = gui_app
-        self.icon: pystray.Icon | None = None
-        self.running = False
+        self.gui = gui_app  # 关联的主界面实例
+        self.icon: pystray.Icon | None = None  # 托盘图标对象
+        self.running = False  # 运行状态标志
 
     def create_icon_image(self) -> Image.Image:
-        """动态创建托盘图标"""
+        """创建64x64的托盘图标"""
         width = 64
         height = 64
-        image = Image.new('RGB', (width, height), (70, 130, 180))
+        image = Image.new('RGB', (width, height), (70, 130, 180))  # 深蓝色背景
         dc = ImageDraw.Draw(image)
 
         padding = 4
-        dc.ellipse(
+        dc.ellipse(  # 绘制外层圆形
             (padding, padding, width - padding, height - padding),
             fill=(135, 206, 250)
         )
 
-        dc.ellipse(
+        dc.ellipse(  # 绘制中心红点
             (width // 2 - 6, height // 2 - 6, width // 2 + 6, height // 2 + 6),
             fill=(220, 20, 60)
         )
@@ -162,42 +168,54 @@ def _save_text_widget_to_file(text_widget: tk.Text | scrolledtext.ScrolledText, 
 
 
 class LiveRecorderGUI:
-    """直播录制 GUI 主类"""
+    """直播录制 GUI 主类
+    
+    核心功能:
+    - 管理主界面和用户交互
+    - 启动/停止 main.py 录制进程
+    - 显示运行日志和状态
+    - 管理系统托盘
+    """
 
-    ANSI_ESCAPE_PATTERN = re.compile(r'\x1b\[[0-9;]*m')
-    _MAX_LOG_LINES = 1000
-    _LOG_TRIM_TO = 800
-    _LOG_FLUSH_INTERVAL = 200
-    _STATUS_REFRESH_INTERVAL = 10000
+    # 常量定义
+    ANSI_ESCAPE_PATTERN = re.compile(r'\x1b\[[0-9;]*m')  # 用于移除ANSI颜色代码
+    _MAX_LOG_LINES = 1000  # 日志最大行数
+    _LOG_TRIM_TO = 800  # 裁剪后保留行数
+    _LOG_FLUSH_INTERVAL = 200  # 日志刷新间隔(ms)
+    _STATUS_REFRESH_INTERVAL = 10000  # 状态刷新间隔(ms)
 
     def __init__(self, root: tk.Tk):
-        self.root = root
+        self.root = root  # 主窗口对象
         self.root.title("直播录制控制台")
         self.root.geometry("900x700")
         self.root.minsize(700, 500)
 
+        # 路径配置
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
         self.url_config_file = os.path.join(self.script_dir, "config", "URL_config.ini")
         self.main_config_file = os.path.join(self.script_dir, "config", "config.ini")
         self.downloads_dir = os.path.join(self.script_dir, "downloads")
 
-        # 进程状态 —— 通过 _process_lock 保护跨线程访问
+        # 进程状态（线程安全访问）
         self._process_lock = threading.Lock()
         self._process: subprocess.Popen[str] | None = None
         self._process_pid: int | None = None
         self._running = False
 
-        self.output_thread: threading.Thread | None = None
+        self.output_thread: threading.Thread | None = None  # 读取子进程输出的线程
 
         self.system_tray: SystemTray | None = None
         self.tray_thread: threading.Thread | None = None
 
+        # 配置文件监控
         self._last_url_config_mtime = 0.0
         self._refresh_job_id: str | None = None
 
+        # 状态缓存（避免频繁读取配置）
         self._status_cache_mtime = 0.0
         self._status_cache: tuple[str, str] | None = None  # (check_interval, output_format)
 
+        # 日志队列（用于线程间通信）
         self._log_queue: queue.Queue[list[tuple[str, str]] | None] = queue.Queue()
         self._log_flush_job_id: str | None = None
         self._log_queue_has_data = False
@@ -434,7 +452,11 @@ class LiveRecorderGUI:
         AdvancedSettingsWindow(self.root, self.main_config_file, self._log)
 
     def start_recording(self) -> None:
-        """开始录制"""
+        """开始录制
+        
+        启动 main.py 子进程，创建独立的进程组，
+        并启动线程读取子进程输出。
+        """
         if self.process is not None:
             messagebox.showwarning("警告", "录制已在运行中！")
             return
@@ -444,30 +466,34 @@ class LiveRecorderGUI:
 
             startupinfo = None
             env = os.environ.copy()
-            env['PYTHONIOENCODING'] = 'utf-8'
+            env['PYTHONIOENCODING'] = 'utf-8'  # 确保输出编码正确
             if sys.platform == 'win32':
+                # Windows 平台：隐藏控制台窗口
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 startupinfo.wShowWindow = subprocess.SW_HIDE
 
             creation_flags = 0
             if sys.platform == 'win32':
+                # 创建独立进程组，方便后续终止
                 creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
 
+            # 启动子进程
             proc = subprocess.Popen(
                 [sys.executable, main_py],
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
+                stderr=subprocess.STDOUT,  # 合并标准输出和错误
                 text=True,
                 encoding='utf-8',
                 errors='replace',
-                bufsize=1,
+                bufsize=1,  # 行缓冲
                 cwd=self.script_dir,
                 env=env,
                 startupinfo=startupinfo,
                 creationflags=creation_flags
             )
 
+            # 更新界面状态
             self.process = proc
             self.process_pid = proc.pid
             self.running = True
@@ -477,9 +503,11 @@ class LiveRecorderGUI:
             self.status_label.config(text="🟢 运行中", fg="#2e7d32")
             self._update_status_bar()
 
+            # 启动输出读取线程
             self.output_thread = threading.Thread(target=self._read_output, daemon=True)
             self.output_thread.start()
 
+            # 记录启动信息
             self._log("=" * 50)
             self._log(f"[{self._get_timestamp()}] 录制进程已启动 (PID: {proc.pid})")
             self._log(f"Python: {sys.executable}")
@@ -549,11 +577,18 @@ class LiveRecorderGUI:
         self._flush_log_queue()
 
     def _read_output(self) -> None:
-        """读取子进程输出 — 批量写入队列，减少 UI 线程调度次数"""
+        """读取子进程输出 — 批量写入队列，减少 UI 线程调度次数
+        
+        优化说明:
+        - 使用批处理：每10行输出为一个批次
+        - 移除 ANSI 颜色代码，保持界面显示
+        - 通过队列实现线程安全通信
+        """
         batch: list[tuple[str, str]] = []
         batch_size = 10
 
         def flush_batch() -> None:
+            """内部函数：将批次写入队列"""
             nonlocal batch
             if batch:
                 self._log_queue.put(batch)
@@ -566,14 +601,14 @@ class LiveRecorderGUI:
             proc = self.process
             if proc is None or proc.stdout is None:
                 flush_batch()
-                self._log_queue.put(None)
+                self._log_queue.put(None)  # None表示进程结束
                 self._log_queue_has_data = True
                 break
 
             try:
                 line = proc.stdout.readline()
                 if not line:
-                    if proc.poll() is not None:
+                    if proc.poll() is not None:  # 检测进程是否结束
                         flush_batch()
                         self.running = False
                         self._log_queue.put(None)
@@ -581,7 +616,7 @@ class LiveRecorderGUI:
                         break
                     continue
 
-                clean_line = self.ANSI_ESCAPE_PATTERN.sub('', line.rstrip())
+                clean_line = self.ANSI_ESCAPE_PATTERN.sub('', line.rstrip())  # 移除ANSI颜色代码
                 batch.append((clean_line, "info"))
 
                 if len(batch) >= batch_size:
@@ -608,7 +643,13 @@ class LiveRecorderGUI:
         flush_batch()
 
     def _schedule_log_flush(self) -> None:
-        """定时从队列批量刷新日志到 UI（按需调度：有数据才继续，无数据则等待下次 _log 触发）"""
+        """定时从队列批量刷新日志到 UI（按需调度：有数据才继续，无数据则等待下次 _log 触发）
+        
+        优化说明:
+        - 批量处理队列中的消息，减少UI重绘
+        - 按需调度定时器，空闲时不消耗资源
+        - 自动裁剪日志，避免内存泄漏
+        """
         messages: list[tuple[str, str]] = []
         process_ended = False
         while True:
@@ -636,13 +677,13 @@ class LiveRecorderGUI:
 
                 self.log_text.insert(tk.END, display_text, tag)
 
-            # 使用实际 Text 控件行数判断是否需要 trim
+            # 使用实际 Text 控件行数判断是否需要 trim（防止内存溢出）
             total_lines = int(self.log_text.index('end-1c').split('.')[0])
             if total_lines > self._MAX_LOG_LINES:
                 trim_count = total_lines - self._LOG_TRIM_TO
                 self.log_text.delete('1.0', f'{trim_count + 1}.0')
 
-            self.log_text.see(tk.END)
+            self.log_text.see(tk.END)  # 自动滚动到底部
             self.log_text.config(state=tk.DISABLED)
             self._log_queue_has_data = False
 
@@ -756,13 +797,18 @@ class LiveRecorderGUI:
         self.root.destroy()
 
     def _cleanup_zombie_ffmpeg(self) -> None:
-        """清理当前 Python 进程的子 ffmpeg 进程（仅清理自己进程树下的，避免误杀系统 ffmpeg）"""
+        """清理当前 Python 进程的子 ffmpeg 进程（仅清理自己进程树下的，避免误杀系统 ffmpeg）
+        
+        安全设计:
+        - 只清理父进程为当前进程的 ffmpeg
+        - 避免误杀其他程序正在使用的 ffmpeg
+        """
         current_pid = os.getpid()
         found = False
 
         try:
             if sys.platform == 'win32':
-                # 只清理父 PID 为当前进程的 ffmpeg.exe
+                # Windows 平台：使用 taskkill 命令按父进程ID筛选
                 try:
                     subprocess.run(
                         ['taskkill', '/F', '/FI', f'IMAGENAME eq ffmpeg.exe', '/FI', f'PARENTPID eq {current_pid}'],
@@ -775,7 +821,7 @@ class LiveRecorderGUI:
                 except Exception as e:
                     self._log(f"taskkill 执行失败: {e}")
             else:
-                # 只清理父 PID 为当前进程的 ffmpeg
+                # Linux/Mac 平台：使用 pkill 命令
                 try:
                     subprocess.run(
                         ['pkill', '-P', str(current_pid), '-x', 'ffmpeg'],
@@ -794,7 +840,12 @@ class LiveRecorderGUI:
             self._log(f"清理 ffmpeg 进程时出错: {e}")
 
     def on_closing(self) -> None:
-        """窗口关闭事件处理"""
+        """窗口关闭事件处理
+        
+        显示关闭选项对话框：
+        - 最小化到托盘
+        - 彻底退出程序
+        """
         dialog = tk.Toplevel(self.root)
         dialog.title("关闭选项")
         dialog.geometry("300x120")
@@ -802,6 +853,7 @@ class LiveRecorderGUI:
         dialog.transient(self.root)
         dialog.grab_set()
 
+        # 居中显示对话框
         dialog.update_idletasks()
         x = self.root.winfo_x() + (self.root.winfo_width() - dialog.winfo_width()) // 2
         y = self.root.winfo_y() + (self.root.winfo_height() - dialog.winfo_height()) // 2
@@ -828,7 +880,15 @@ class LiveRecorderGUI:
 
 
 def main() -> None:
-    """主函数"""
+    """主函数
+    
+    程序执行流程:
+    1. 创建主窗口
+    2. 初始化 GUI 应用
+    3. 启动系统托盘线程
+    4. 绑定窗口关闭事件
+    5. 进入主事件循环
+    """
     root = tk.Tk()
     app = LiveRecorderGUI(root)
 

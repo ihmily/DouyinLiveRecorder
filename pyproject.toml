@@ -1,26 +1,159 @@
 [project]
 name = "DouyinLiveRecorder"
 version = "4.0.7"
-description = "可循环值守和多人录制的直播录制软件, 支持抖音、TikTok、Youtube、快手、虎牙、斗鱼、B站、小红书、pandatv、sooplive、flextv、popkontv、twitcasting、winktv、百度、微博、酷狗、17Live、Twitch、Acfun、CHZZK、shopee等40+平台直播录制"
+description = "支持抖音、TikTok、YouTube、快手等60+平台的直播录制工具，支持循环录制、多人录制、消息推送"
 readme = "README.md"
-authors = [{name = "Hmily"}]
-license = { text = "MIT" }
 requires-python = ">=3.10"
-dependencies = [
-    "requests",
-    "loguru",
-    "pycryptodome",
-    "distro",
-    "tqdm",
-    "httpx[http2]",
-    "PyExecJS",
-    "pystray",
-    "Pillow",
-    "weverse"
+license = { text = "MIT" }
+authors = [
+    { name = "Hmily", email = "ihmily@github" }
+]
+keywords = [
+    "live-streaming",
+    "recorder",
+    "douyin",
+    "tiktok",
+    "bilibili",
+    "twitch",
+    "youtube",
+    "直播录制",
+    "抖音",
+    "虎牙",
+    "斗鱼"
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Environment :: GUI",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Video :: Capture",
+    "Topic :: Communications :: Chat",
 ]
 
+dependencies = [
+    "requests>=2.28.0",
+    "loguru>=0.7.0",
+    "pycryptodome>=3.15.0",
+    "distro>=1.8.0",
+    "tqdm>=4.65.0",
+    "httpx[http2]>=0.25.0",
+    "PyExecJS>=1.5.1",
+    "pystray>=0.19.4",
+    "Pillow>=10.0.0",
+    "weverse>=0.9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "mypy>=1.5.0",
+]
+gui = [
+    "pystray>=0.19.4",
+    "Pillow>=10.0.0",
+]
+all = [
+    "pystray>=0.19.4",
+    "Pillow>=10.0.0",
+]
+
+[project.scripts]
+douyin-recorder = "main:main"
+douyin-recorder-gui = "gui:main"
+
 [project.urls]
-"Homepage" = "https://github.com/ihmily/DouyinLiveRecorder"
-"Documentation" = "https://github.com/ihmily/DouyinLiveRecorder"
-"Repository" = "https://github.com/ihmily/DouyinLiveRecorder"
-"Issues" = "https://github.com/ihmily/DouyinLiveRecorder/issues"
+Homepage = "https://github.com/ihmily/DouyinLiveRecorder"
+Documentation = "https://github.com/ihmily/DouyinLiveRecorder"
+Repository = "https://github.com/ihmily/DouyinLiveRecorder"
+Issues = "https://github.com/ihmily/DouyinLiveRecorder/issues"
+Changelog = "https://github.com/ihmily/DouyinLiveRecorder/releases"
+Sponsor = "https://github.com/sponsors/ihmily"
+
+[project.entry-points]
+"douyin_live_recorder" = {}
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["src", "src.http_clients"]
+
+[tool.setuptools.package-data]
+src = ["javascript/*.js"]
+i18n = ["**/*.mo", "**/*.po"]
+
+[tool.black]
+line-length = 120
+target-version = ['py310', 'py311', 'py312']
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+    | \.venv
+    | build
+    | dist
+    | __pycache__
+    | \.pyc
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 120
+known_first_party = ["src", "i18n"]
+exclude = [
+    ".git",
+    "node",
+    "ffmpeg",
+    "downloads",
+    "__pycache__",
+    "*.pyc",
+]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+exclude = [
+    "node",
+    "ffmpeg",
+    "downloads",
+    "__pycache__",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["src"]
+omit = [
+    "*/tests/*",
+    "*/__pycache__/*",
+    "*/node/*",
+    "*/ffmpeg/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
