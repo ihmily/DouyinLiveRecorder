@@ -1,6 +1,113 @@
-.github/workflows/build-image.yml
+# Git 相关
 .git
 .gitignore
-.dockerignore
+.gitattributes
+.github/
+
+# 文档（如果需要在容器中查看文档可以删除）
 README.md
 LICENSE
+CODE_WIKI.md
+CODE_CHANGES.md
+
+# Docker 相关
+.dockerignore
+Dockerfile
+docker-compose*.yaml
+docker-compose*.yml
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 虚拟环境
+.venv/
+venv/
+env/
+.env/
+ENV/
+
+# 测试和覆盖率
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# IDE 和编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# 构建产物
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# 临时文件
+*.tmp
+*.temp
+*.bak
+*.log
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 项目特定文件
+# 配置文件（敏感信息，使用环境变量或挂载）
+config/config.ini
+config/URL_config.ini
+
+# 录制的视频文件（体积大，挂载或忽略）
+downloads/
+recordings/
+
+# 日志文件
+logs/
+*.log
+
+# 备份目录
+backup_config/
+
+# FFmpeg 二进制文件（容器内单独安装）
+ffmpeg/*.exe
+ffmpeg/*.dll
+ffmpeg/ffmpeg
+ffmpeg/ffprobe
+
+# Node.js（容器内单独安装）
+node/
+node-v*.zip
+
+# 编译的翻译文件（在构建过程中重新编译）
+i18n/**/*.mo
+
+# 编译脚本
+i18n/**/compile_po.py
+
+# PyInstaller
+*.spec
+*.manifest
+
+# Windows 可执行文件（不需要在容器中）
+*.exe
+*.dll
+*.cmd
+*.bat
+*.vbs
+
+# 临时目录和文件
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
