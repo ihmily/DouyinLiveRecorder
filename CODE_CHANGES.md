@@ -1,6 +1,6 @@
 # DouyinLiveRecorder 代码改动文档
 
-> 文档版本: v1.1.0
+> 文档版本: v1.2.0
 > 生成日期: 2026-05-16
 > 项目版本: v4.0.7
 
@@ -16,8 +16,10 @@
 6. [StopRecording.vbs 脚本优化](#6-stoprecordingvbs-脚本优化)
 7. [Dockerfile 容器化配置](#7-dockerfile-容器化配置)
 8. [docker-compose.yaml 服务编排](#8-docker-composeyaml-服务编排)
-9. [Code Wiki 文档](#9-code-wiki-文档)
-10. [i18n 国际化完善](#10-i18n-国际化完善)
+9. [.gitignore 文件完善](#9-gitignore-文件完善)
+10. [.dockerignore 文件完善](#10-dockerignore-文件完善)
+11. [Code Wiki 文档](#11-code-wiki-文档)
+12. [i18n 国际化完善](#12-i18n-国际化完善)
 
 ---
 
@@ -59,19 +61,22 @@
 | 4 | `StopRecording.vbs` | 优化 | 模块化重构、错误处理增强 |
 | 5 | `Dockerfile` | 完善 | 多阶段构建、安全性提升 |
 | 6 | `docker-compose.yaml` | 完善 | 服务编排配置增强 |
-| 7 | `CODE_WIKI.md` | 新增 | 项目架构文档 |
-| 8 | `i18n/zh_CN/LC_MESSAGES/zh_CN.po` | 完善 | 国际化翻译文件扩展 |
-| 9 | `CODE_CHANGES.md` | 新增 | 代码改动文档 |
+| 7 | `.gitignore` | 完善 | 添加项目特定忽略规则 |
+| 8 | `.dockerignore` | 完善 | 优化 Docker 构建上下文 |
+| 9 | `CODE_WIKI.md` | 新增 | 项目架构文档 |
+| 10 | `i18n/zh_CN/LC_MESSAGES/zh_CN.po` | 完善 | 国际化翻译文件扩展 |
+| 11 | `i18n/zh_CN/LC_MESSAGES/compile_po.py` | 新增 | PO 到 MO 编译脚本 |
+| 12 | `CODE_CHANGES.md` | 新增/更新 | 代码改动文档 |
 
 ### 2.2 改动统计
 
 | 指标 | 数量 |
 |------|------|
-| 改动文件数 | 9 个 |
-| 新增代码行数 | ~600 行 |
+| 改动文件数 | 12 个 |
+| 新增代码行数 | ~800 行 |
 | 新增注释行数 | ~200 行 |
 | 新增翻译条目 | 200+ 条 |
-| 优化项数 | 30+ 项 |
+| 优化项数 | 40+ 项 |
 
 ---
 
@@ -809,9 +814,289 @@ docker exec -it douyin-live-recorder /bin/bash
 
 ---
 
-## 9. Code Wiki 文档
+## 9. .gitignore 文件完善
 
-### 9.1 文档概述
+### 9.1 改动概述
+
+对 `.gitignore` 文件进行了全面完善，添加了项目特定的忽略规则，保护敏感信息和减少仓库体积。
+
+### 9.2 主要新增内容
+
+#### 9.2.1 编辑器和 IDE 配置
+
+```gitignore
+# PyCharm
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+```
+
+#### 9.2.2 项目敏感配置
+
+```gitignore
+# DouyinLiveRecorder 项目专用配置
+# 配置文件（包含敏感信息）
+config/config.ini
+config/URL_config.ini
+
+# FFmpeg 二进制文件（可选：如果在项目中分发可删除此条目）
+ffmpeg/*.exe
+ffmpeg/*.dll
+ffmpeg/ffmpeg
+ffmpeg/ffprobe
+
+# 录制的视频文件
+downloads/
+recordings/
+
+# 备份目录
+backup_config/
+```
+
+#### 9.2.3 日志和临时文件
+
+```gitignore
+# 日志文件
+logs/
+*.log
+*.log.*
+
+# 临时文件
+*.tmp
+*.temp
+*.bak
+
+# Windows 特定文件
+Thumbs.db
+desktop.ini
+*.exe
+*.dll
+*.cmd
+*.bat
+*.vbs
+
+# macOS 特定文件
+.DS_Store
+.AppleDouble
+.LSOverride
+```
+
+#### 9.2.4 翻译编译文件
+
+```gitignore
+# 翻译相关
+# 保留编译好的 .mo 文件用于分发
+# *.mo
+
+# 编译的翻译文件（可选：如果在 git 中分发可删除）
+i18n/**/*.mo
+
+# 编译 PO 文件的临时脚本
+i18n/**/compile_po.py
+```
+
+#### 9.2.5 文档文件（可选）
+
+```gitignore
+# 文档文件
+CODE_WIKI.md
+CODE_CHANGES.md
+```
+
+### 9.3 安全考量
+
+| 忽略项 | 原因 |
+|--------|------|
+| `config/config.ini` | 可能包含账号密码等敏感信息 |
+| `config/URL_config.ini` | 包含直播地址，可能暴露隐私 |
+| `ffmpeg/*.exe` | 大文件，避免仓库体积过大 |
+| `downloads/` | 录制的视频文件，体积很大 |
+| `logs/` | 日志可能包含敏感信息 |
+
+### 9.4 开发流程建议
+
+1. 创建 `config/config.ini.example` 作为模板
+2. 用户复制模板为 `config/config.ini` 并配置
+3. 相同方式处理 `config/URL_config.ini`
+
+---
+
+## 10. .dockerignore 文件完善
+
+### 10.1 改动概述
+
+对 `.dockerignore` 文件进行了全面完善，优化 Docker 构建上下文，提高构建速度和减小镜像体积。
+
+### 10.2 主要新增内容
+
+#### 10.2.1 Git 和文档相关
+
+```dockerignore
+# Git 相关
+.git
+.gitignore
+.gitattributes
+.github/
+
+# 文档（如果需要在容器中查看文档可以删除）
+README.md
+LICENSE
+CODE_WIKI.md
+CODE_CHANGES.md
+
+# Docker 相关
+.dockerignore
+Dockerfile
+docker-compose*.yaml
+docker-compose*.yml
+```
+
+#### 10.2.2 Python 缓存和虚拟环境
+
+```dockerignore
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 虚拟环境
+.venv/
+venv/
+env/
+.env/
+ENV/
+
+# 测试和覆盖率
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+```
+
+#### 10.2.3 编辑器和临时文件
+
+```dockerignore
+# IDE 和编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# 构建产物
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# 临时文件
+*.tmp
+*.temp
+*.bak
+*.log
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+```
+
+#### 10.2.4 项目特定文件
+
+```dockerignore
+# 项目特定文件
+# 配置文件（敏感信息，使用环境变量或挂载）
+config/config.ini
+config/URL_config.ini
+
+# 录制的视频文件（体积大，挂载或忽略）
+downloads/
+recordings/
+
+# 日志文件
+logs/
+*.log
+
+# 备份目录
+backup_config/
+
+# FFmpeg 二进制文件（容器内单独安装）
+ffmpeg/*.exe
+ffmpeg/*.dll
+ffmpeg/ffmpeg
+ffmpeg/ffprobe
+
+# Node.js（容器内单独安装）
+node/
+node-v*.zip
+
+# 编译的翻译文件（在构建过程中重新编译）
+i18n/**/*.mo
+
+# 编译脚本
+i18n/**/compile_po.py
+```
+
+#### 10.2.5 PyInstaller 和 Windows 可执行文件
+
+```dockerignore
+# PyInstaller
+*.spec
+*.manifest
+
+# Windows 可执行文件（不需要在容器中）
+*.exe
+*.dll
+*.cmd
+*.bat
+*.vbs
+
+# 临时目录和文件
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
+```
+
+### 10.3 构建优化效果
+
+| 优化项 | 效果 |
+|--------|------|
+| 减少构建上下文 | 加速 Docker 构建过程 |
+| 减小镜像体积 | 减少传输和存储成本 |
+| 避免敏感信息泄露 | 配置文件不进入镜像 |
+| 分离大文件 | 录制的视频不参与构建 |
+
+### 10.4 推荐的 Docker 构建流程
+
+1. 使用 `docker-compose up -d --build` 构建并启动
+2. 通过卷挂载配置文件和录制目录
+3. 使用环境变量传递敏感信息
+
+---
+
+## 11. Code Wiki 文档
+
+### 11.1 文档概述
 
 已生成 `CODE_WIKI.md` 项目架构文档，包含以下内容：
 
@@ -825,7 +1110,7 @@ docker exec -it douyin-live-recorder /bin/bash
 | **配置说明** | config.ini、URL配置格式 |
 | **运行方式** | 命令行/GUI/Docker部署 |
 
-### 9.2 关键发现
+### 11.2 关键发现
 
 - **核心架构**：main.py 负责录制调度，src/spider.py 获取直播数据，src/stream.py 解析流地址
 - **平台支持**：60+ 直播平台（抖音、快手、虎牙、斗鱼、B站、TikTok、YouTube等）
@@ -834,13 +1119,13 @@ docker exec -it douyin-live-recorder /bin/bash
 
 ---
 
-## 10. i18n 国际化完善
+## 12. i18n 国际化完善
 
-### 10.1 改动概述
+### 12.1 改动概述
 
 对 `i18n/zh_CN/LC_MESSAGES/zh_CN.po` 国际化翻译文件进行了全面扩展和完善。
 
-### 10.2 国际化实现机制
+### 12.2 国际化实现机制
 
 项目使用 `gettext` 实现国际化：
 
@@ -853,9 +1138,9 @@ def init_gettext(locale_dir: str | Path, locale_name: str):
     return gettext.gettext
 ```
 
-### 10.3 翻译文件完善内容
+### 12.3 翻译文件完善内容
 
-#### 10.3.1 文件头部优化
+#### 12.3.1 文件头部优化
 
 ```po
 # DouyinLiveRecorder.
@@ -867,7 +1152,7 @@ def init_gettext(locale_dir: str | Path, locale_name: str):
 # 更新日期: 2026-05-16
 ```
 
-#### 10.3.2 翻译内容分类
+#### 12.3.2 翻译内容分类
 
 | 分类 | 翻译条目数 | 说明 |
 |------|-----------|------|
@@ -885,7 +1170,34 @@ def init_gettext(locale_dir: str | Path, locale_name: str):
 | 进程管理 | 10+ | ffmpeg进程管理 |
 | GUI 消息 | 50+ | 图形界面所有文本 |
 
-### 10.4 翻译条目统计
+### 12.4 新增编译脚本
+
+已创建 `i18n/zh_CN/LC_MESSAGES/compile_po.py` 脚本用于编译 PO 文件：
+
+```python
+#!/usr/bin/env python3
+"""
+PO to MO 编译脚本
+将 zh_CN.po 文件编译为 zh_CN.mo 文件
+"""
+import gettext
+import os
+import sys
+from pathlib import Path
+
+def compile_po_to_mo(po_file: str, mo_file: str) -> bool:
+    """将 PO 文件编译为 MO 文件"""
+    try:
+        # 使用 gettext.msgfmt 编译 PO 文件
+        from gettext import msgfmt
+        result = msgfmt.make(po_file, mo_file)
+        return True
+    except Exception as e:
+        print(f"编译失败: {e}")
+        return False
+```
+
+### 12.5 翻译条目统计
 
 | 指标 | 数量 |
 |------|------|
@@ -893,7 +1205,7 @@ def init_gettext(locale_dir: str | Path, locale_name: str):
 | 新增条目 | ~150 条 |
 | 分类章节 | 15 个 |
 
-### 10.5 翻译覆盖范围
+### 12.6 翻译覆盖范围
 
 | 模块 | 覆盖情况 |
 |------|----------|
@@ -903,31 +1215,38 @@ def init_gettext(locale_dir: str | Path, locale_name: str):
 | **msg_push.py** | ⚠️ 待扩展 |
 | **其他模块** | ⚠️ 待扩展 |
 
-### 10.6 下一步建议
+### 12.7 使用方式
+
+编译 .mo 文件：
+```bash
+# 方式1：使用脚本
+cd i18n/zh_CN/LC_MESSAGES
+python compile_po.py
+
+# 方式2：使用 msgfmt 工具
+msgfmt -o zh_CN.mo zh_CN.po
+```
+
+### 12.8 下一步建议
 
 1. **编译 .mo 文件**
-   ```bash
-   msgfmt -o zh_CN.mo zh_CN.po
-   ```
-
 2. **扩展其他模块翻译**
    - `msg_push.py` 消息推送模块
    - `src/utils.py` 工具模块
-
 3. **添加英文翻译**
    - 创建 `i18n/en/LC_MESSAGES/en.po`
    - 支持中英双语界面
-
 4. **更新代码中的 print 语句**
    - 将硬编码的 print 改为 `i18n._tr()` 调用
    - 启用完整的国际化支持
 
-### 10.7 相关文件
+### 12.9 相关文件
 
 | 文件 | 说明 |
 |------|------|
 | `i18n.py` | 国际化实现 |
 | `i18n/zh_CN/LC_MESSAGES/zh_CN.po` | 中文翻译文件 |
+| `i18n/zh_CN/LC_MESSAGES/compile_po.py` | PO 编译脚本 |
 | `CODE_WIKI.md` | 项目架构文档 |
 | `CODE_CHANGES.md` | 代码改动文档 |
 
@@ -945,9 +1264,12 @@ def init_gettext(locale_dir: str | Path, locale_name: str):
 | StopRecording.vbs | 优化 | ~80 | ~50 |
 | Dockerfile | 完善 | ~40 | ~10 |
 | docker-compose.yaml | 完善 | ~30 | ~10 |
+| .gitignore | 完善 | ~50 | ~20 |
+| .dockerignore | 完善 | ~40 | ~20 |
 | CODE_WIKI.md | 新增 | ~800 | 0 |
 | zh_CN.po | 完善 | ~200 | ~50 |
-| CODE_CHANGES.md | 新增/更新 | ~300 | ~50 |
+| compile_po.py | 新增 | ~50 | 0 |
+| CODE_CHANGES.md | 新增/更新 | ~500 | ~50 |
 
 ### B. 依赖关系图
 
@@ -991,6 +1313,13 @@ requirements.txt / pyproject.toml
 | i18n/zh_CN/LC_MESSAGES/zh_CN.po | 中文翻译 |
 | i18n/en/LC_MESSAGES/*.po | 英文翻译（待创建） |
 
+### F. Git 和 Docker 配置
+
+| 文件 | 用途 |
+|------|------|
+| .gitignore | Git 忽略规则 |
+| .dockerignore | Docker 构建上下文过滤 |
+
 ---
 
 ## 变更记录
@@ -999,6 +1328,7 @@ requirements.txt / pyproject.toml
 |------|------|----------|
 | 2026-05-16 | v1.0.0 | 初始版本，涵盖主要改动 |
 | 2026-05-16 | v1.1.0 | 新增 i18n 国际化完善章节 |
+| 2026-05-16 | v1.2.0 | 新增 .gitignore 和 .dockerignore 完善章节 |
 
 ---
 
