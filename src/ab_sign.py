@@ -209,21 +209,22 @@ class SM3:
         return result
 
 
+# 魔改base64编码表
+ENCODING_TABLES = {
+    "s0": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=",
+    "s1": "Dkdpgh4ZKsQB80/Mfvw36XI1R25+WUAlEi7NLboqYTOPuzmFjJnryx9HVGcaStCe=",
+    "s2": "Dkdpgh4ZKsQB80/Mfvw36XI1R25-WUAlEi7NLboqYTOPuzmFjJnryx9HVGcaStCe=",
+    "s3": "ckdp1h4ZKsUB80/Mfvw36XIgR25+WQAlEi7NLboqYTOPuzmFjJnryx9HVGDaStCe",
+    "s4": "Dkdpgh2ZmsQB80/MfvV36XI1R45-WUAlEixNLwoqYTOPuzKFjJnry79HbGcaStCe"
+}
+
+# 位移常量
+MASKS = [16515072, 258048, 4032, 63]  # 对应 0, 1, 2 的掩码，添加63作为第四个掩码
+SHIFTS = [18, 12, 6, 0]  # 对应的位移量
+
+
 def result_encrypt(long_str: str, num: str | None = None) -> str:
-    # 魔改base64编码表
-    encoding_tables = {
-        "s0": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=",
-        "s1": "Dkdpgh4ZKsQB80/Mfvw36XI1R25+WUAlEi7NLboqYTOPuzmFjJnryx9HVGcaStCe=",
-        "s2": "Dkdpgh4ZKsQB80/Mfvw36XI1R25-WUAlEi7NLboqYTOPuzmFjJnryx9HVGcaStCe=",
-        "s3": "ckdp1h4ZKsUB80/Mfvw36XIgR25+WQAlEi7NLboqYTOPuzmFjJnryx9HVGDaStCe",
-        "s4": "Dkdpgh2ZmsQB80/MfvV36XI1R45-WUAlEixNLwoqYTOPuzKFjJnry79HbGcaStCe"
-    }
-
-    # 位移常量
-    masks = [16515072, 258048, 4032, 63]  # 对应 0, 1, 2 的掩码，添加63作为第四个掩码
-    shifts = [18, 12, 6, 0]  # 对应的位移量
-
-    encoding_table = encoding_tables[num]
+    encoding_table = ENCODING_TABLES[num]
 
     result = ""
     round_num = 0
@@ -241,7 +242,7 @@ def result_encrypt(long_str: str, num: str | None = None) -> str:
         index = i % 4
 
         # 使用掩码和位移提取6位值
-        char_index = (long_int & masks[index]) >> shifts[index]
+        char_index = (long_int & MASKS[index]) >> SHIFTS[index]
 
         result += encoding_table[char_index]
 
