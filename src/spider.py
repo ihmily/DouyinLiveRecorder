@@ -47,6 +47,17 @@ def get_params(url: str, params: str) -> OptionalStr:
         return query_params[params][0]
 
 
+def extract_douyin_hevc_flv_url(html: str) -> OptionalStr:
+    pattern = re.compile(r'(https?://[^\s"\']*stream-\d{10,}(?!_[a-z0-9]+)\.flv(?:[^"\']|\\u0026)+)')
+    for match in pattern.findall(html):
+        clean_url = match.replace('\\u0026', '&').rstrip('\\').strip()
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(clean_url).query)
+        if query.get('only_audio', ['0'])[0] == '1':
+            continue
+        return clean_url
+    return None
+
+
 async def get_play_url_list(m3u8: str, proxy: OptionalStr = None, header: OptionalDict = None,
                             abroad: bool = False) -> List[str]:
     resp = await async_req(url=m3u8, proxy_addr=proxy, headers=header, abroad=abroad)
@@ -113,6 +124,8 @@ async def get_douyin_web_stream_data(url: str, proxy_addr: OptionalStr = None, c
                     "The live streaming type or gameplay is not supported on the computer side yet, please use the "
                     "app to share the link for recording."
                 )
+            html_str = await async_req(url=url, proxy_addr=proxy_addr, headers=headers)
+            hevc_flv_url = extract_douyin_hevc_flv_url(html_str)
             live_core_sdk_data = room_data['stream_url']['live_core_sdk_data']
             pull_datas = room_data['stream_url']['pull_datas']
             if live_core_sdk_data:
@@ -135,6 +148,8 @@ async def get_douyin_web_stream_data(url: str, proxy_addr: OptionalStr = None, c
                     flv_pull_url = room_data['stream_url']['flv_pull_url']
                     room_data['stream_url']['hls_pull_url_map'] = {**origin_m3u8, **hls_pull_url_map}
                     room_data['stream_url']['flv_pull_url'] = {**origin_flv, **flv_pull_url}
+            if hevc_flv_url:
+                room_data['stream_url']['hevc_flv_url'] = hevc_flv_url
     except Exception as e:
         print(f"Error message: {e} Error line: {e.__traceback__.tb_lineno}")
         room_data = {'anchor_name': ""}
@@ -240,6 +255,7 @@ async def get_douyin_stream_data(url: str, proxy_addr: OptionalStr = None, cooki
     try:
         origin_url_list = None
         html_str = await async_req(url=url, proxy_addr=proxy_addr, headers=headers)
+        hevc_flv_url = extract_douyin_hevc_flv_url(html_str)
         match_json_str = re.search(r'(\{\\"state\\":.*?)]\\n"]\)', html_str)
         if not match_json_str:
             match_json_str = re.search(r'(\{\\"common\\":.*?)]\\n"]\)</script><div hidden', html_str)
@@ -275,6 +291,8 @@ async def get_douyin_stream_data(url: str, proxy_addr: OptionalStr = None, cooki
             flv_pull_url = json_data['stream_url']['flv_pull_url']
             json_data['stream_url']['hls_pull_url_map'] = {**origin_m3u8, **hls_pull_url_map}
             json_data['stream_url']['flv_pull_url'] = {**origin_flv, **flv_pull_url}
+        if hevc_flv_url:
+            json_data['stream_url']['hevc_flv_url'] = hevc_flv_url
         return json_data
 
     except Exception as e:
