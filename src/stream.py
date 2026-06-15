@@ -67,6 +67,9 @@ async def get_douyin_stream_url(json_data: dict, video_quality: str, proxy_addr:
             index = quality_index + 1 if quality_index < 4 else quality_index - 1
             m3u8_url = m3u8_url_list[index]
             flv_url = flv_url_list[index]
+        hevc_flv_url = stream_url.get('hevc_flv_url')
+        if hevc_flv_url and quality_index == 0:
+            flv_url = hevc_flv_url
         result |= {
             'is_live': True,
             'title': json_data['title'],
