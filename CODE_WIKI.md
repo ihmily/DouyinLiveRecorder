@@ -1,582 +1,727 @@
-# DouyinLiveRecorder 代码文档
-
-> 版本: v4.0.7 | 项目地址: https://github.com/ihmily/DouyinLiveRecorder
-
----
+# DouyinLiveRecorder 项目架构文档
 
 ## 目录
-
 - [项目概述](#项目概述)
-- [项目架构](#项目架构)
-- [模块详解](#模块详解)
-- [核心类与函数](#核心类与函数)
+- [系统架构](#系统架构)
+- [目录结构](#目录结构)
+- [核心模块详解](#核心模块详解)
+- [关键类与函数](#关键类与函数)
 - [依赖关系](#依赖关系)
-- [配置说明](#配置说明)
+- [配置文件说明](#配置文件说明)
 - [运行方式](#运行方式)
+- [设计模式](#设计模式)
 
 ---
 
 ## 项目概述
 
-**DouyinLiveRecorder** 是一个开源的直播录制工具，支持国内外60+直播平台的实时录制。该项目使用 Python 开发，核心功能通过 `ffmpeg` 实现直播流下载与格式转换。
+### 项目基本信息
+- **项目名称**: DouyinLiveRecorder (抖音直播录制器)
+- **版本**: 4.0.8-dev
+- **作者**: Hmily
+- **开源协议**: MIT
+- **项目地址**: [GitHub](https://github.com/ihmily/DouyinLiveRecorder)
 
-### 主要特性
+### 功能特性
+- ✅ 支持 60+ 个直播平台（抖音、TikTok、YouTube、快手、虎牙、斗鱼、B站、小红书等）
+- ✅ 循环值守直播状态，开播自动录制，断播自动停止
+- ✅ 多种视频格式输出：TS、MKV、FLV、MP4、MP3、M4A
+- ✅ 命令行 + GUI 双模式运行
+- ✅ 多平台消息推送：钉钉、微信、邮箱、TG、Bark、NTFY、PushPlus
+- ✅ Docker 容器化部署
+- ✅ 国际化支持（中文/英文）
+- ✅ 灵活配置：画质选择、分段录制、自定义保存路径等
 
-- 多平台支持：抖音、快手、虎牙、斗鱼、B站、TikTok、YouTube 等
-- 异步HTTP请求：使用 `httpx` 实现高效的并发录制
-- 智能重试机制：自动检测直播状态，断线重连
-- 多种输出格式：TS、MKV、FLV、MP4、MP3、M4A
-- 消息推送：支持钉钉、微信、邮箱、TG、Bark、NTFY、PushPlus
-- 图形界面：提供 `gui.pyw` 实现的 Tkinter GUI
-- Docker 支持：提供 Dockerfile 和 docker-compose.yaml
+### 技术栈
+| 技术 | 用途 |
+|------|------|
+| Python 3.10+ | 核心编程语言 |
+| asyncio + httpx | 异步网络请求 |
+| asyncio | 异步装饰器支持 |
+| FFmpeg | 视频录制与转码 |
+| Node.js + PyExecJS | 运行 JavaScript 签名算法 |
+| Loguru | 结构化日志 |
+| tkinter + pystray + Pillow | GUI 图形界面与系统托盘 |
+| Docker | 容器化部署 |
+| gettext (msgfmt) | 国际化翻译编译 |
+| pyflakes | 静态代码检查 |
 
 ---
 
-## 项目架构
+## 系统架构
+
+### 整体架构图
 
 ```
-DouyinLiveRecorder-code/
-├── main.py                 # 命令行主入口，核心录制逻辑
-├── gui.pyw                # 图形界面主入口
-├── msg_push.py            # 消息推送模块
-├── i18n.py                # 国际化支持
-├── ffmpeg_install.py      # ffmpeg 安装与检测
-├── demo.py                # 示例文件
-├── requirements.txt        # Python 依赖
-├── pyproject.toml         # 项目配置
-├── Dockerfile             # Docker 构建文件
-├── docker-compose.yaml    # Docker Compose 配置
-├── StopRecording.vbs      # Windows 停止录制脚本
-├── config/
-│   ├── config.ini         # 主配置文件
-│   └── URL_config.ini     # 直播URL列表
-├── src/
-│   ├── __init__.py        # 包初始化
-│   ├── spider.py          # 直播数据爬取（核心）
-│   ├── stream.py          # 直播流URL解析
-│   ├── room.py            # 抖音房间信息获取
-│   ├── utils.py           # 工具函数
-│   ├── logger.py          # 日志配置
-│   ├── proxy.py           # 代理检测
-│   ├── ab_sign.py         # 抖音 A-Bogus 签名
-│   ├── initializer.py     # 初始化器
-│   ├── weverse_auth.py    # Wevers 认证
-│   └── http_clients/
-│       ├── async_http.py  # 异步 HTTP 客户端
-│       └── sync_http.py   # 同步 HTTP 客户端
-├── ffmpeg/
-│   └── ffmpeg.exe         # Windows ffmpeg 二进制
-├── downloads/              # 录制文件输出目录
-└── i18n/                  # 国际化文件
+┌─────────────────────────────────────────────────────────────────┐
+│                         用户交互层                                │
+├─────────────────────────────┬───────────────────────────────────┤
+│      命令行模式 (main.py)   │      GUI 图形界面 (gui.py)        │
+└─────────────────────────────┴───────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                        核心业务层                                │
+├──────────────────────┬─────────────────────┬────────────────────┤
+│  直播间管理 (room.py)│  数据爬虫 (spider.py)│  流解析 (stream.py)│
+├──────────────────────┴─────────────────────┴────────────────────┤
+│                    FFmpeg 录制进程管理                           │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                        基础设施层                                │
+├──────────────────────┬─────────────────────┬────────────────────┤
+│  日志 (logger.py)  │  工具 (utils.py)  │  代理 (proxy.py) │
+├──────────────────────┴─────────────────────┴────────────────────┤
+│                    配置管理 + 消息推送 (msg_push.py)             │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 工作流程
+
+1. **配置解析阶段**
+   - 读取 `config/config.ini` 主配置
+   - 读取 `config/URL_config.ini` 直播间列表
+   - 初始化 Node.js 环境和 FFmpeg 路径
+
+2. **直播检测阶段**
+   - 使用异步任务并发检测多个直播间
+   - 各平台独立的 API 调用与签名算法
+   - 动态调整并发数以避免限流
+
+3. **流地址获取阶段**
+   - 调用各平台的直播流 API
+   - 根据配置选择不同画质（原画/超清/高清/标清/流畅）
+   - 验证流地址可用性
+
+4. **录制执行阶段**
+   - 启动 FFmpeg 子进程
+   - 实时监控录制状态
+   - 支持分段录制
+   - 支持转码为 MP4
+
+5. **状态通知阶段**
+   - 开播/关播事件触发
+   - 调用配置的消息推送渠道
+   - 记录日志
+
+---
+
+## 目录结构
+
+```
+DouyinLiveRecorder/
+├── config/                              # 配置文件目录
+│   ├── config.ini                      # 主配置文件
+│   └── URL_config.ini                  # 直播间地址列表
+├── src/                                 # 核心源码包
+│   ├── __init__.py                     # 包初始化 + Node.js 环境配置
+│   ├── spider.py                       # 直播数据爬虫（60+ 平台）
+│   ├── stream.py                       # 直播流地址解析
+│   ├── room.py                         # 直播间信息解析
+│   ├── utils.py                        # 工具函数库
+│   ├── logger.py                       # Loguru 日志配置
+│   ├── proxy.py                        # 代理检测
+│   ├── ab_sign.py                      # 抖音签名算法 (A-Bogus)
+│   ├── initializer.py                  # Node.js 自动初始化
+│   ├── weverse_auth.py                 # Weverse 平台认证
+│   ├── debug_douyin_streams.py         # 抖音流数据调试工具
+│   ├── http_clients/                   # HTTP 客户端
+│   │   ├── __init__.py
+│   │   ├── async_http.py               # 异步 HTTP 客户端 (httpx)
+│   │   └── sync_http.py                # 同步 HTTP 客户端
+│   └── javascript/                     # JavaScript 签名脚本
+│       ├── crypto-js.min.js            # 加密库
+│       ├── x-bogus.js                  # 抖音 X-Bogus 签名
+│       ├── haixiu.js                   # 嗨秀签名
+│       ├── laixiu.js                   # 来秀签名
+│       ├── liveme.js                   # LiveMe 签名
+│       ├── migu.js                     # 咪咕签名
+│       └── taobao-sign.js              # 淘宝签名
+├── i18n/                                # 国际化文件
+│   ├── zh_CN/LC_MESSAGES/
+│   │   ├── zh_CN.po                   # 中文翻译源
+│   │   └── zh_CN.mo                   # 编译后的翻译
+│   └── en/LC_MESSAGES/
+├── main.py                              # 命令行入口
+├── gui.py                               # GUI 图形界面入口
+├── msg_push.py                          # 消息推送模块
+├── ffmpeg_install.py                    # FFmpeg 安装脚本
+├── demo.py                              # 调用示例
+├── requirements.txt                     # Python 依赖列表
+├── pyproject.toml                      # Python 项目配置
+├── Dockerfile                          # Docker 构建文件
+├── .dockerignore                       # Docker 排除文件
+├── .gitignore                          # Git 排除文件
+├── README.md                           # 项目说明
+└── CODE_WIKI.md                        # 本架构文档
 ```
 
 ---
 
-## 模块详解
+## 核心模块详解
 
-### 1. main.py（命令行入口）
+### 1. 主程序模块 (`main.py`)
 
-**职责**：核心录制逻辑，处理配置读取、线程调度、录制控制。
+**职责**: 整个录制器的指挥中心，负责流程调度
 
-**关键全局变量**：
+**核心功能**:
+- 配置文件读取与解析
+- 直播间 URL 列表解析
+- 并发控制与任务调度
+- FFmpeg 进程管理
+- 错误重试与动态调优
+- 消息推送触发
+- 退出信号处理
 
-| 变量 | 类型 | 说明 |
-|------|------|------|
-| `recording` | `set` | 当前正在录制的直播间集合 |
-| `monitoring` | `int` | 监测中的直播间数量 |
-| `running_list` | `list` | 运行中的URL列表 |
-| `error_count` | `int` | 错误计数器 |
-| `max_request` | `int` | 最大并发线程数 |
-| `exit_recording` | `bool` | 退出标志 |
-| `global_proxy` | `bool` | 全局代理状态 |
-
-**关键常量**：
-
-| 常量 | 说明 |
-|------|------|
-| `PLATFORM_HOST` | 支持的平台域名列表 |
-| `OVERSEAS_PLATFORM_HOST` | 海外平台域名列表 |
-| `CLEAN_URL_HOST_LIST` | 需要清理参数的URL域名 |
-
-**关键函数**：
-
-| 函数 | 说明 |
-|------|------|
-| `start_record(url_data, count_variable)` | 录制线程主函数，处理单个直播间的录制逻辑 |
-| `check_subprocess(record_name, record_url, ffmpeg_command, ...)` | 执行 ffmpeg 录制命令并监控 |
-| `direct_download_stream(...)` | 直接下载 FLV 流 |
-| `display_info()` | 显示录制状态信息 |
-| `adjust_max_request()` | 动态调整并发数 |
-| `converts_mp4(path)` | 转换视频为 MP4 |
-| `converts_m4a(path)` | 提取音频为 M4A |
-| `segment_video(...)` | 视频分段 |
-| `cleanup_all_ffmpeg_processes()` | 清理所有 ffmpeg 进程 |
-| `safe_exit(signum, frame)` | 安全退出处理 |
-
-**录制流程**：
-
-1. 读取 `URL_config.ini` 获取直播URL列表
-2. 为每个URL创建 `threading.Thread` 线程
-3. 根据URL匹配平台，调用对应的 `spider.get_xxx_stream_data()` 获取直播数据
-4. 调用 `stream.get_xxx_stream_url()` 解析流地址
-5. 构建 ffmpeg 命令执行录制
-6. 循环检测直播状态，断线自动重连
-
-### 2. src/spider.py（数据爬取）
-
-**职责**：从各平台API获取直播间状态和流信息。
-
-**核心函数**：
-
-| 函数 | 平台 | 说明 |
-|------|------|------|
-| `get_douyin_web_stream_data()` | 抖音-Web | 获取抖音网页端直播数据 |
-| `get_douyin_app_stream_data()` | 抖音-App | 获取抖音App端直播数据 |
-| `get_douyin_stream_data()` | 抖音-旧版 | 兼容旧版抖音解析 |
-| `get_tiktok_stream_data()` | TikTok | 获取TikTok直播数据 |
-| `get_kuaishou_stream_data()` | 快手 | 获取快手直播数据 |
-| `get_huya_stream_data()` | 虎牙-Web | 获取虎牙网页端数据 |
-| `get_huya_app_stream_url()` | 虎牙-App | 获取虎牙App端流地址 |
-| `get_douyu_info_data()` | 斗鱼 | 获取斗鱼房间信息 |
-| `get_yy_stream_data()` | YY | 获取YY直播数据 |
-| `get_bilibili_room_info()` | B站 | 获取B站直播信息 |
-| `get_netease_stream_data()` | 网易CC | 获取网易CC直播数据 |
-| `get_sooplive_stream_data()` | SOOP | 获取SOOP直播数据 |
-| `get_pandatv_stream_data()` | PandaTV | 获取PandaTV数据 |
-| `get_winktv_stream_data()` | WinkTV | 获取WinkTV数据 |
-| `get_flextv_stream_data()` | FlexTV | 获取FlexTV数据 |
-| `get_twitchtv_stream_data()` | Twitch | 获取Twitch数据 |
-| `get_showroom_stream_data()` | ShowRoom | 获取ShowRoom数据 |
-| `get_chzzk_stream_data()` | CHZZK | 获取CHZZK数据 |
-| `get_faceit_stream_data()` | Faceit | 获取Faceit数据 |
-| `get_youtube_stream_url()` | YouTube | 获取YouTube直播数据 |
-| `get_taobao_stream_url()` | 淘宝 | 获取淘宝直播数据 |
-| `get_xhs_stream_url()` | 小红书 | 获取小红书直播数据 |
-| `get_bigo_stream_url()` | Bigo | 获取Bigo直播数据 |
-| `get_blued_stream_url()` | Blued | 获取Blued直播数据 |
-| `get_maoerfm_stream_url()` | 猫耳FM | 获取猫耳FM数据 |
-| `get_looklive_stream_url()` | Look | 获取Look直播数据 |
-| `get_twitcasting_stream_url()` | TwitCasting | 获取TwitCasting数据 |
-| `get_baidu_stream_data()` | 百度直播 | 获取百度直播数据 |
-| `get_weibo_stream_data()` | 微博 | 获取微博直播数据 |
-| `get_kugou_stream_url()` | 酷狗 | 获取酷狗直播数据 |
-| `get_liveme_stream_url()` | LiveMe | 获取LiveMe数据 |
-| `get_huajiao_stream_url()` | 花椒 | 获取花椒直播数据 |
-| `get_liuxing_stream_url()` | 流星 | 获取流星直播数据 |
-| `get_acfun_stream_data()` | Acfun | 获取Acfun数据 |
-| `get_changliao_stream_url()` | 畅聊 | 获取畅聊直播数据 |
-| `get_yinbo_stream_url()` | 音播 | 获取音播直播数据 |
-| `get_yingke_stream_url()` | 映客 | 获取映客直播数据 |
-| `get_zhihu_stream_url()` | 知乎 | 获取知乎直播数据 |
-| `get_haixiu_stream_url()` | 嗨秀 | 获取嗨秀直播数据 |
-| `get_vvxqiu_stream_url()` | VV星球 | 获取VV星球数据 |
-| `get_17live_stream_url()` | 17Live | 获取17Live数据 |
-| `get_langlive_stream_url()` | 浪Live | 获取浪Live数据 |
-| `get_pplive_stream_url()` | 漂漂 | 获取漂漂直播数据 |
-| `get_6room_stream_url()` | 六间房 | 获取六间房数据 |
-| `get_shopee_stream_url()` | Shopee | 获取Shopee直播数据 |
-| `get_jd_stream_url()` | 京东 | 获取京东直播数据 |
-| `get_migu_stream_url()` | 咪咕 | 获取咪咕直播数据 |
-| `get_lianjie_stream_url()` | 连接 | 获取连接直播数据 |
-| `get_laixiu_stream_url()` | 来秀 | 获取来秀直播数据 |
-| `get_picarto_stream_url()` | Picarto | 获取Picarto数据 |
-| `get_qiandurebo_stream_data()` | 千度热播 | 获取千度热播数据 |
-| `get_popkontv_stream_url()` | PopkonTV | 获取PopkonTV数据 |
-
-### 3. src/stream.py（流URL解析）
-
-**职责**：解析各平台的直播流URL，支持质量选择。
-
-**常量**：
-
+**关键状态变量**:
 ```python
-QUALITY_MAPPING = {"OD": 0, "BD": 0, "UHD": 1, "HD": 2, "SD": 3, "LD": 4}
-QUALITY_MAPPING_BIT = {'OD': 99999, 'BD': 4000, 'UHD': 2000, 'HD': 1000, 'SD': 800, 'LD': 600}
+recording: set              # 正在录制的直播间集合
+monitoring: int             # 正在监控的直播间数
+running_list: list          # 正在运行的 URL 列表
+error_count: int            # 当前错误计数
+error_window: list          # 错误时间窗口（用于动态调优）
+url_tuples_list: list       # 解析后的 URL 配置列表 [(quality, url, anchor_name)...]
 ```
 
-**核心函数**：
+**主流程函数**:
+- `main()` - 入口函数
+- `read_config()` - 读取配置
+- `check_url_config()` - 检查 URL 配置
+- `start_recording()` - 启动录制
+- `stop_recording()` - 停止录制
+- `check_live_status()` - 检测直播状态
 
-| 函数 | 说明 |
-|------|------|
-| `get_douyin_stream_url(json_data, quality, proxy)` | 解析抖音流地址 |
-| `get_tiktok_stream_url(json_data, quality, proxy)` | 解析TikTok流地址 |
-| `get_kuaishou_stream_url(json_data, quality)` | 解析快手流地址 |
-| `get_huya_stream_url(json_data, quality)` | 解析虎牙流地址 |
-| `get_douyu_stream_url(json_data, quality, cookies)` | 解析斗鱼流地址 |
-| `get_yy_stream_url(json_data)` | 解析YY流地址 |
-| `get_bilibili_stream_url(json_data, quality, cookies)` | 解析B站流地址 |
-| `get_netease_stream_url(json_data, quality)` | 解析网易CC流地址 |
-| `get_stream_url(json_data, quality, ...)` | 通用流地址解析 |
+---
 
-**返回数据结构**：
+### 2. 爬虫模块 (`src/spider.py`)
 
+**职责**: 负责从各大直播平台获取直播间数据
+
+**支持平台**:
+国内：抖音、快手、虎牙、斗鱼、YY、B站、小红书、Bigo、Blued、网易CC、千度热播、猫耳FM、Look、TwitCasting、百度、微博、酷狗、花椒、流星、Acfun、畅聊、映客、音播、知乎、嗨秀、VV星球、17Live、浪Live、飘飘、六间房、乐嗨、花猫、淘宝、京东、咪咕、连接、来秀
+海外：TikTok、SOOP、PandaTV、WinkTV、FlexTV、PopkonTV、Twitch、LiveMe、ShowRoom、CHZZK、Shopee、YouTube、Faceit、Picarto
+
+**关键函数**:
+- `get_douyin_web_stream_data()` - 获取抖音 Web 端直播数据
+- `get_tiktok_stream_data()` - 获取 TikTok 直播数据
+- `get_youtube_stream_data()` - 获取 YouTube 直播数据
+- `get_play_url_list()` - 获取 M3U8 播放列表中的清晰度选项
+- `get_params()` - 从 URL 提取参数
+
+**实现特点**:
+- 使用异步 HTTP 客户端 (`httpx`)
+- 各平台独立的签名算法
+- 代理支持
+- Cookie 支持
+- 错误重试机制
+
+---
+
+### 3. 直播流解析模块 (`src/stream.py`)
+
+**职责**: 解析直播流地址，支持多种画质选择
+
+**画质映射**:
 ```python
-{
-    "anchor_name": str,      # 主播名称
-    "is_live": bool,         # 是否正在直播
-    "title": str,            # 直播标题
-    "quality": str,          # 画质代码
-    "m3u8_url": str,         # HLS流地址
-    "flv_url": str,          # FLV流地址
-    "record_url": str        # 实际录制地址
+QUALITY_MAPPING = {
+    "OD": 0,    # 原画 (Original Definition)
+    "BD": 0,    # 蓝光 (Blu-ray)
+    "UHD": 1,   # 超清 (Ultra HD)
+    "HD": 2,    # 高清 (High Definition)
+    "SD": 3,    # 标清 (Standard Definition)
+    "LD": 4     # 流畅 (Low Definition)
 }
 ```
 
-### 4. src/utils.py（工具模块）
+**关键函数**:
+- `get_quality_index()` - 解析画质参数，返回索引
+- `get_douyin_stream_url()` - 获取抖音直播流地址
+- `get_tiktok_stream_url()` - 获取 TikTok 直播流地址
+- `get_bilibili_stream_url()` - 获取 B站 直播流地址
+- `_pad_list()` - 填充列表到指定最小长度
 
-**职责**：提供通用工具函数。
-
-**核心函数**：
-
-| 函数 | 说明 |
-|------|------|
-| `trace_error_decorator(func)` | 错误追踪装饰器 |
-| `check_md5(file_path)` | 计算文件MD5 |
-| `dict_to_cookie_str(cookies)` | 字典转Cookie字符串 |
-| `read_config_value(path, section, key)` | 读取配置项 |
-| `update_config(path, section, key, value)` | 更新配置项 |
-| `get_file_paths(directory)` | 获取目录下所有文件 |
-| `remove_emojis(text, replace)` | 移除表情符号 |
-| `remove_duplicate_lines(path)` | 去除重复行 |
-| `check_disk_capacity(path)` | 检查磁盘空间 |
-| `handle_proxy_addr(addr)` | 处理代理地址格式 |
-| `generate_random_string(length)` | 生成随机字符串 |
-| `jsonp_to_json(jsonp_str)` | JSONP转JSON |
-| `get_query_params(url, name)` | 解析URL参数 |
-
-**Color 类**：
-
-```python
-class Color:
-    RED = "\033[31m"
-    GREEN = "\033[32m"
-    YELLOW = "\033[33m"
-    BLUE = "\033[34m"
-    # ...
-    @staticmethod
-    def print_colored(text, color): ...
-```
-
-### 5. src/room.py（房间信息）
-
-**职责**：获取抖音直播间特定信息。
-
-**核心函数**：
-
-| 函数 | 说明 |
-|------|------|
-| `get_xbogus(url, headers)` | 计算X-Bogus签名 |
-| `get_sec_user_id(url, proxy, headers)` | 获取sec_user_id |
-| `get_unique_id(url, proxy, headers)` | 获取抖音号 |
-| `get_live_room_id(room_id, sec_uid, ...)` | 获取直播间webID |
-
-### 6. src/http_clients/（HTTP客户端）
-
-**async_http.py**：
-
-| 函数 | 说明 |
-|------|------|
-| `async_req(url, proxy, headers, ...)` | 异步GET/POST请求 |
-| `get_response_status(url, ...)` | HEAD请求检查URL状态 |
-
-**sync_http.py**：同步HTTP请求实现（备用）
-
-### 7. src/ab_sign.py（签名模块）
-
-**职责**：实现抖音 A-Bogus 签名算法，用于绕过反爬机制。
-
-### 8. src/proxy.py（代理检测）
-
-**职责**：检测系统代理配置。
-
-**ProxyDetector 类**：
-
-```python
-class ProxyDetector:
-    def is_proxy_enabled() -> bool
-    def get_proxy_info() -> ProxyInfo
-```
-
-### 9. src/logger.py（日志模块）
-
-**职责**：使用 Loguru 配置日志系统。
-
-### 10. gui.pyw（图形界面）
-
-**职责**：提供 Tkinter GUI 界面。
-
-**核心类**：
-
-| 类 | 说明 |
-|------|------|
-| `SystemTray` | 系统托盘管理 |
-| `AdvancedSettingsWindow` | 高级设置窗口 |
-| `LiveRecorderGUI` | 主GUI类 |
-
-**GUI 功能**：
-
-- 开始/停止录制按钮
-- URL配置编辑区
-- 实时日志显示
-- 系统托盘支持
-- 配置文件热重载
-
-### 11. msg_push.py（消息推送）
-
-**职责**：实现多平台消息推送。
-
-**支持平台**：
-
-| 平台 | 函数 | 说明 |
-|------|------|------|
-| 钉钉 | `dingtalk(url, content, phone, is_atall)` | 钉钉群机器人 |
-| 微信 | `xizhi(url, title, content)` | 微信推送 |
-| 邮箱 | `send_email(host, login, pass, ...)` | SMTP邮件 |
-| TG | `tg_bot(chat_id, token, content)` | Telegram Bot |
-| Bark | `bark(api, title, content, ...)` | iOS推送 |
-| NTFY | `ntfy(api, title, content, ...)` | NTFY通知 |
-| PushPlus | `pushplus(token, title, content)` | 微信推送+ |
-
-### 12. ffmpeg_install.py（FFmpeg管理）
-
-**职责**：检测和管理ffmpeg安装。
-
-**核心函数**：
-
-| 函数 | 说明 |
-|------|------|
-| `check_ffmpeg()` | 检查ffmpeg是否存在 |
-| `get_ffmpeg_path()` | 获取ffmpeg路径 |
+**实现特点**:
+- 按带宽排序的清晰度选择
+- 自动降级策略（首选画质不可用时自动降级）
+- FLV 与 M3U8 双协议支持
+- 状态码验证
 
 ---
 
-## 核心类与函数
+### 4. 直播间信息模块 (`src/room.py`)
 
-### 录制线程执行流程
+**职责**: 解析直播间 URL，提取房间 ID、主播信息等
+
+**关键函数**:
+- `get_sec_user_id()` - 获取房间 ID 和用户 sec_user_id
+- `get_unique_id()` - 获取抖音号
+- `get_live_room_id()` - 获取直播间 web ID
+- `get_xbogus()` - 生成 X-Bogus 签名
+
+**异常处理**:
+- `UnsupportedUrlError` - 不支持的 URL 格式异常
+
+---
+
+### 5. 工具模块 (`src/utils.py`)
+
+**职责**: 提供通用工具函数
+
+**主要工具**:
+
+| 工具函数 | 功能描述 |
+|---------|---------|
+| `Color` 类 | 终端彩色输出常量 |
+| `trace_error_decorator()` | 错误追踪装饰器 |
+| `check_md5()` | 计算文件 MD5 |
+| `dict_to_cookie_str()` | cookie 字典转字符串 |
+| `read_config_value()` | 读取配置文件值 |
+| `update_config()` | 更新配置文件 |
+| `remove_emojis()` | 移除文本中的表情符号 |
+| `remove_duplicate_lines()` | 移除文件重复行 |
+| `handle_proxy_addr()` | 处理代理地址格式 |
+| `generate_random_string()` | 生成随机字符串 |
+
+---
+
+### 6. 日志模块 (`src/logger.py`)
+
+**职责**: 基于 Loguru 配置结构化日志
+
+**日志输出**:
+- **控制台**: 彩色日志输出
+- **`logs/streamget.log`**: DEBUG 级别（排除 INFO）
+- **`logs/PlayURL.log`**: INFO 级别（仅直播流地址）
+
+**日志轮转**: 300 KB 自动轮转，保留 1 份
+
+---
+
+### 7. 消息推送模块 (`msg_push.py`)
+
+**职责**: 支持多种消息推送渠道
+
+**支持渠道**:
+
+| 渠道 | 函数名 | 说明 |
+|------|--------|------|
+| 钉钉 | `dingtalk()` | 群机器人推送 |
+| 微信 | `xizhi()` | Server酱 / WeChat |
+| Telegram | `tg_bot()` | Bot 消息 |
+| 邮件 | `send_email()` | SMTP 协议 |
+| Bark | `bark()` | iOS 通知 |
+| NTFY | `ntfy()` | 开源推送服务 |
+| PushPlus | `pushplus()` | 微信推送平台 |
+
+---
+
+### 8. 国际化模块 (`i18n.py`)
+
+**职责**: 基于 gettext 的多语言支持系统，自动翻译 `src/` 目录下的 print 输出。
+
+**实现机制**:
+- `translated_print` 包装 `builtins.print`，自动翻译调用者来自 `src/` 包的输出
+- 支持源码运行和 PyInstaller 打包两种路径检测（`_internal/i18n` vs `i18n/`）
+- 默认语言：简体中文（zh_CN）
+
+**翻译文件**:
+| 文件 | 说明 | 条目数 |
+|------|------|--------|
+| `i18n/zh_CN/LC_MESSAGES/zh_CN.po` | 中文翻译源文件（可编辑） | 200 |
+| `i18n/zh_CN/LC_MESSAGES/zh_CN.mo` | 编译后的二进制翻译文件 | 200 |
+| `i18n/en/LC_MESSAGES/` | 英文翻译目录（预留） | — |
+
+**翻译覆盖范围**:
+- `src/spider.py` — 各平台直播数据获取消息（37 条）
+- `src/room.py` — 直播间信息解析异常消息（2 条）
+- `src/utils.py` — 配置文件读写、磁盘空间消息（7 条）
+- `main.py` — 主程序通用消息（83 条，预留）
+- `gui.py` — GUI 界面消息（70 条，预留）
+
+---
+
+### 9. GUI 模块 (`gui.py`)
+
+**职责**: 提供现代化图形用户界面
+
+**设计特点**:
+- **高对比度色彩系统**: 满足 WCAG AA 无障碍标准
+- **DPI 感知字体**: 自适应分辨率缩放
+- **系统托盘**: 最小化到托盘运行
+- **现代组件**: 卡片式设计、渐变横幅、状态指示器
+
+**主要组件**:
+- `Colors` - 色彩常量类
+- `DpiFont` - DPI 感知字体系统
+- `SystemTray` - 系统托盘管理
+- `CardFrame` - 卡片容器
+- `GradientBanner` - 渐变横幅
+- `StatusIndicator` - 状态指示器
+- `ModernTextWidget` - 现代文本控件
+
+---
+
+### 10. 异步 HTTP 客户端 (`src/http_clients/async_http.py`)
+
+**职责**: 封装 httpx，提供统一的异步 HTTP 接口
+
+**功能**:
+- 代理支持
+- 超时设置
+- 自动重试
+- 状态码检查
+- HTTP/2 支持
+
+**被以下模块导入**:
+- `src/spider.py` - `async_req()`
+- `src/stream.py` - `get_response_status()`
+- `src/debug_douyin_streams.py` - `async_req()`
+
+---
+
+## 关键类与函数
+
+### 签名算法 (`src/ab_sign.py`)
+
+抖音平台的 A-Bogus 签名算法，包含：
+- SM3 哈希
+- RC4 加密
+- 复杂的参数混淆
+
+### 配置文件管理 (`src/utils.py`)
 
 ```python
-def start_record(url_data: tuple, count_variable: int = -1) -> None:
-    """
-    录制线程主函数
-    
-    url_data: (画质, URL, 主播名) 元组
-    count_variable: 序号
-    """
-    while True:
-        # 1. URL路由到对应平台解析器
-        if 'douyin.com' in url:
-            json_data = spider.get_douyin_web_stream_data(url, proxy, cookies)
-            port_info = stream.get_douyin_stream_url(json_data, quality, proxy)
-        # ... 其他平台
-        
-        # 2. 检查直播状态
-        if not port_info['is_live']:
-            print("等待直播...")
-            time.sleep(delay)
-            continue
-        
-        # 3. 获取流地址
-        real_url = select_source_url(url, port_info)
-        
-        # 4. 构建ffmpeg命令
-        ffmpeg_command = build_ffmpeg_command(real_url, save_path)
-        
-        # 5. 执行录制
-        check_subprocess(record_name, url, ffmpeg_command, save_type)
+def read_config_value(file_path: Path, section: str, key: str) -> str | None
+def update_config(file_path: Path, section: str, key: str, new_value: str) -> None
 ```
 
-### FFmpeg命令构建
+### 错误处理装饰器
 
 ```python
-ffmpeg_command = [
-    'ffmpeg', "-y",
-    "-v", "verbose",
-    "-rw_timeout", "15000000",
-    "-loglevel", "error",
-    "-user_agent", user_agent,
-    "-protocol_whitelist", "rtmp,crypto,file,http,https,tcp,tls,udp,rtp,httpproxy",
-    "-re", "-i", real_url,
-    "-reconnect_delay_max", "60",
-    "-reconnect_streamed", "-reconnect_at_eof",
-    # 视频编码参数...
-    "-c:v", "copy", "-c:a", "copy",
-    "-f", "mpegts",  # 或 flv/mp4/mkv
-    save_file_path
-]
+@trace_error_decorator
+async def some_function():
+    # 自动捕获并记录异常（支持同步和异步函数）
+    pass
 ```
 
-### 消息推送机制
+**实现特点**:
+- 使用 `asyncio.iscoroutinefunction()` 检测函数类型
+- 异步函数使用 `async wrapper` 正确 `await` 并捕获异常
+- 统一返回 `{}` 空字典，与调用方 `.get()` 用法兼容
+- `execjs.ProgramError` 单独处理（Node.js 环境问题）
 
-```python
-def push_message(record_name, live_url, content) -> None:
-    """根据配置推送直播状态通知"""
-    push_functions = {
-        '微信': lambda: xizhi(xizhi_api_url, msg_title, content),
-        '钉钉': lambda: dingtalk(dingtalk_api_url, content, ...),
-        '邮箱': lambda: send_email(...),
-        'TG': lambda: tg_bot(tg_chat_id, tg_token, content),
-        'BARK': lambda: bark(bark_msg_api, title, content, ...),
-        'NTFY': lambda: ntfy(ntfy_api, title, content, ...),
-        'PUSHPLUS': lambda: pushplus(pushplus_token, title, content),
-    }
-    
-    for platform, func in push_functions.items():
-        if platform in live_status_push.upper():
-            threading.Thread(target=func).start()
-```
+### 动态并发调整
+
+`main.py` 中实现的基于错误率的动态并发数调整机制，避免被平台限流。
 
 ---
 
 ## 依赖关系
 
-```
-requirements.txt
-├── requests              # HTTP请求库
-├── loguru                # 日志库
-├── pycryptodome          # 加密算法
-├── distro                # 系统信息
-├── tqdm                  # 进度条
-├── httpx[http2]          # 异步HTTP客户端
-├── PyExecJS              # JavaScript执行
-├── pystray               # 系统托盘
-├── Pillow                # 图像处理
-└── weverse               # Wevers SDK
-```
+### Python 依赖 (`requirements.txt`)
 
-### 模块依赖图
+| 包名 | 版本要求 | 用途 |
+|------|---------|------|
+| requests | >=2.28.0 | 同步 HTTP 请求 |
+| httpx | >=0.25.0 | 异步 HTTP 客户端 |
+| loguru | >=0.7.0 | 结构化日志 |
+| pycryptodome | >=3.15.0 | 加密算法（SM3、RC4） |
+| distro | >=1.8.0 | Linux 发行版检测 |
+| tqdm | >=4.65.0 | 进度条 |
+| PyExecJS | >=1.5.1 | JavaScript 执行引擎 |
+| pystray | >=0.19.4 | 系统托盘（GUI） |
+| Pillow | >=10.0.0 | 图像处理（GUI 图标） |
+| weverse | >=0.9.0 | Weverse 平台 SDK |
+
+### 外部依赖
+
+| 依赖 | 用途 | 安装方式 |
+|------|------|---------|
+| FFmpeg | 视频录制与转码 | Windows 内置，Linux/macOS 需手动安装 |
+| Node.js | 运行 JavaScript 签名算法 | Windows 自动安装，Linux 需包管理器安装 |
+
+### 模块依赖关系图
 
 ```
 main.py
-├── src/spider.py ──────> src/http_clients/async_http.py
-│                       ├── src/room.py
-│                       ├── src/ab_sign.py
-│                       └── src/utils.py
-├── src/stream.py ──────> src/spider.py
-│                       └── src/http_clients/async_http.py
+├── src/spider.py
+│   ├── src/room.py
+│   ├── src/ab_sign.py
+│   ├── src/http_clients/async_http.py
+│   └── src/utils.py
+├── src/stream.py
+│   ├── src/spider.py
+│   └── src/http_clients/async_http.py
 ├── src/utils.py
-├── src/proxy.py
-├── msg_push.py ─────────> src/logger.py
-├── ffmpeg_install.py
-└── i18n.py
-
-gui.pyw ────────────────> main.py (子进程)
-                      └── tkinter (系统库)
+│   └── src/logger.py
+├── msg_push.py
+└── ffmpeg_install.py
 ```
 
 ---
 
-## 配置说明
+## 配置文件说明
 
-### config/config.ini
+### 主配置文件 (`config/config.ini`)
 
-**录制设置**：
+#### [录制设置] 节
 
-| 配置项 | 默认值 | 说明 |
-|--------|--------|------|
-| `language(zh_cn/en)` | zh_cn | 语言 |
-| `直播保存路径(不填则默认)` | - | 保存路径 |
-| `保存文件夹是否以作者区分` | 是 | 按主播名建目录 |
-| `保存文件夹是否以时间区分` | 否 | 按日期建目录 |
-| `保存文件夹是否以标题区分` | 否 | 按标题建目录 |
-| `保存文件名是否包含标题` | 否 | 文件名含标题 |
-| `是否去除名称中的表情符号` | 是 | 清理Emoji |
-| `视频保存格式` | ts | ts/mkv/flv/mp4/mp3/m4a |
-| `原画\|超清\|高清\|标清\|流畅` | 原画 | 录制画质 |
-| `是否使用代理ip` | 否 | 启用代理 |
-| `同一时间访问网络的线程数` | 3 | 并发录制数 |
-| `循环时间(秒)` | 120 | 检测间隔 |
-| `分段录制是否开启` | 否 | 分段录制 |
-| `视频分段时间(秒)` | 1800 | 30分钟一段 |
-| `录制完成后自动转为mp4格式` | 否 | 自动转码 |
-| `mp4格式重新编码为h264` | 否 | H.264编码 |
+| 配置项 | 说明 | 默认值 |
+|--------|------|--------|
+| language | 界面语言 | zh_cn |
+| 是否跳过代理检测 | 是否跳过代理检测 | 是 |
+| 直播保存路径 | 录制文件保存路径 | (空，默认当前目录) |
+| 保存文件夹是否以作者区分 | 是否按主播名分类 | 是 |
+| 视频保存格式 | ts/mkv/flv/mp4/mp3/m4a | ts |
+| 原画\|超清\|高清\|标清\|流畅 | 默认画质 | 原画 |
+| 是否使用代理ip | 是否启用代理 | 否 |
+| 代理地址 | 代理服务器地址 | (空) |
+| 同一时间访问网络的线程数 | 并发数 | 3 |
+| 循环时间(秒) | 直播状态检测间隔 | 300 |
+| 分段录制是否开启 | 是否分段 | 是 |
+| 视频分段时间(秒) | 分段时长 | 3600 |
+| 使用代理录制的平台 | 需要代理的平台列表 | tiktok, sooplive... |
 
-**Cookie配置**：
-
-各平台需要登录后获取Cookie才能录制，配置在 `[Cookie]` 节：
-
-- 抖音cookie、B站cookie、快手cookie 等
-- 部分平台需要填写Cookie才能获取直播流
-
-**推送配置**：
+#### [推送配置] 节
 
 | 配置项 | 说明 |
 |--------|------|
-| `直播状态推送渠道` | 微信\|钉钉\|tg\|邮箱\|bark\|ntfy\|pushplus |
-| `开播推送开启` | 开播时推送通知 |
-| `关播推送开启` | 关播时推送通知 |
-| `只推送通知不录制` | 仅监控不录制 |
+| 直播状态推送渠道 | 微信\|钉钉\|tg\|邮箱\|bark\|ntfy\|pushplus |
+| 钉钉推送接口链接 | 钉钉 Webhook |
+| 微信推送接口链接 | Server酱 URL |
+| bark推送接口链接 | Bark API |
+| tgapi令牌 | Telegram Bot Token |
+| tg聊天id | 聊天 ID |
+| smtp邮件服务器 | SMTP 服务器 |
+| ntfy推送地址 | NTFY 服务地址 |
+| pushplus推送token | PushPlus Token |
+| 只推送通知不录制 | 是否仅通知不录制 |
 
-### URL配置格式 (URL_config.ini)
+#### [Cookie] 节
 
-```
-# 格式: 画质,URL,主播名
-原画,https://live.douyin.com/xxxxx,主播昵称
-# 抖音分享链接
-原画,https://v.douyin.com/xxxxx,张三
-# 注释行
-#超清,https://...
+各平台的 Cookie 配置（录制部分平台必填）
+
+#### [Authorization] 节
+
+特殊平台的 Token 配置
+
+#### [账号密码] 节
+
+部分平台的账号密码配置
+
+### 直播间配置文件 (`config/URL_config.ini`)
+
+**格式**:
+```ini
+# 基础格式
+https://live.douyin.com/745964462470
+
+# 指定画质（画质,直播间地址）
+超清，https://live.douyin.com/745964462470
+
+# 指定画质和主播名（画质,直播间地址,主播:名称）
+高清，https://live.bilibili.com/123456，主播: B站主播
+
+# 注释直播间（在地址前加 #）
+# https://live.douyin.com/123456789
 ```
 
 ---
 
 ## 运行方式
 
-### 1. 命令行模式
+### 方式 1: 源码运行
 
+#### 前置要求
+- Python 3.10+
+- FFmpeg
+- Node.js
+
+#### 安装依赖
 ```bash
-# 安装依赖
-pip install -r requirements.txt
+# 使用 uv（推荐）
+uv sync
 
-# 运行录制
+# 或使用 pip
+pip install -r requirements.txt
+```
+
+#### 命令行模式
+```bash
 python main.py
 ```
 
-### 2. 图形界面模式
-
+#### GUI 图形界面模式
 ```bash
-python gui.pyw
+python gui.py
 ```
 
-### 3. Docker部署
+---
 
-```bash
-# 构建镜像
-docker build -t douyin-live-recorder .
+### 方式 2: Docker 运行
 
-# 运行容器
-docker run -d \
-  -v ./config:/app/config \
-  -v ./downloads:/app/downloads \
-  douyin-live-recorder
+#### Dockerfile 多阶段构建说明
+
+```dockerfile
+# 阶段 1: builder
+# - 安装 Node.js
+# - 创建 Python 虚拟环境（venv）
+# - 安装 Python 依赖到 venv
+
+# 阶段 2: runtime
+# - 精简基础镜像
+# - 安装 Node.js + ffmpeg + procps 等运行时依赖
+# - 从 builder 复制 Python 虚拟环境
+# - 使用非 root 用户运行
 ```
 
-或使用 docker-compose：
+#### 使用 docker-compose (推荐)
 
+**创建 `docker-compose.yml`**:
+```yaml
+services:
+  douyin-live-recorder:
+    build: .
+    container_name: douyin-live-recorder
+    restart: unless-stopped
+    volumes:
+      - ./config:/app/config
+      - ./downloads:/app/downloads
+      - ./logs:/app/logs
+      - ./backup_config:/app/backup_config
+    environment:
+      - TZ=Asia/Shanghai
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'python main.py' || exit 1"]
+      interval: 30s
+      start_period: 15s
+```
+
+**运行**:
 ```bash
 docker-compose up -d
 ```
 
-### 4. 环境要求
+---
 
-- Python 3.8+
-- ffmpeg（程序会自动检测，Windows内置）
-- 网络连接（访问直播平台）
+## 设计模式
 
-### 5. 常见问题
+### 1. 适配器模式 (Adapter Pattern)
 
-**Q: 录制失败提示"请检查网络"**
-A: 检查是否需要代理，部分海外平台需要全局代理
+各直播平台的 API 接口被统一适配为相同的调用接口，`spider.py` 和 `stream.py` 中实现。
 
-**Q: 抖音无法录制**
-A: 需要在 config.ini 中配置有效的抖音 Cookie
+### 2. 装饰器模式 (Decorator Pattern)
 
-**Q: ffmpeg 未找到**
-A: 确保 ffmpeg 已安装并加入 PATH，或使用程序内置的 ffmpeg
+`trace_error_decorator` 用于错误追踪，`utils.py` 中实现。
+
+### 3. 策略模式 (Strategy Pattern)
+
+不同的消息推送渠道（钉钉、微信、TG 等）实现为独立函数，运行时根据配置选择。
+
+### 4. 单例模式 (Singleton Pattern)
+
+日志配置通过模块导入副作用实现单例，`src/logger.py` 中实现。
+
+### 5. 模板方法模式 (Template Method Pattern)
+
+各平台的录制流程遵循相同的模板：检测 → 获取流 → 录制 → 推送。
 
 ---
 
-## 贡献者
+## 常见问题排查
 
-- 作者: Hmily
-- GitHub: https://github.com/ihmily
-- 许可证: MIT License
+### 问题 1: 提示缺少 FFmpeg
+
+**解决**:
+```bash
+# Ubuntu/Debian
+sudo apt install ffmpeg
+
+# macOS
+brew install ffmpeg
+
+# Windows
+程序已内置，无需安装
+```
+
+### 问题 2: 提示缺少 Node.js
+
+**解决**:
+```bash
+# Ubuntu/Debian
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+sudo apt-get install -y nodejs
+
+# macOS
+brew install node
+
+# Windows
+程序会自动下载安装
+```
+
+### 问题 3: 抖音风控无法获取数据
+
+**解决**:
+- 更新 Cookie
+- 降低循环监测频率
+- 更换 IP
+
+---
+
+## 贡献指南
+
+### 代码规范
+
+- 格式化: `black .`
+- 导入排序: `isort .`
+- 类型检查: `mypy .`
+
+### 添加新平台支持
+
+1. 在 `src/spider.py` 中添加平台数据获取函数
+2. 在 `src/stream.py` 中添加流地址解析函数
+3. 在 `main.py` 中添加平台识别逻辑
+4. 更新 `README.md` 和本文档
+
+---
+
+## 更新日志
+
+### v4.0.8-dev (2026-06-27)
+- 修复 `trace_error_decorator` 严重 Bug：原同步装饰器应用于 71 个异步函数导致错误捕获完全失效，现使用 `asyncio.iscoroutinefunction()` 支持同步/异步双模式
+- 修复返回值类型不一致 Bug：`execjs.ProgramError` 分支返回 `None` → `{}`
+- 修复 B站画质默认值 `'0'` 不在字典键中导致 KeyError
+- 修复虎牙 `flv_anti_code` 为 None 导致 `parse_qs(None)` 崩溃
+- 修复 TikTok/快手/网易CC 流地址列表为空时 IndexError
+- 修复 `get_stream_url` 空列表索引崩溃（该函数未被装饰器保护）
+
+### v4.0.8-dev (2026-06-20)
+- 修复 spider.py 5 个运行时 Bug（KeyError、响应类型转换、循环静默返回）
+- 修复 stream.py 2 个运行时 Bug（B站 None 检查、快手 quality 条件）
+- 修复 gui.py 死代码（未使用变量、f-string 无占位符）
+- 清理 src/weverse_auth.py 未使用导入
+- i18n 翻译文件更新：新增 20 条翻译条目（异常错误消息、配置文件、磁盘空间等），总条目 200 条
+- 通过 pyflakes 静态检查验证
+
+### v4.0.8-dev (2025-05-17)
+- 全新现代化 GUI 界面（WCAG AA 高对比度、DPI 感知字体）
+- Docker 多阶段构建关键修复（运行时 Node.js、HEALTHCHECK）
+- 配置文件重构（pyproject.toml、requirements.txt、.gitignore、.dockerignore）
+- 新增抖音流数据调试工具 `debug_douyin_streams.py`
+- 完善国际化翻译（YouTube/FlexTV/PopkonTV/TwitCasting）
+
+### v4.0.7 (2025-10-24)
+- 修复抖音风控问题
+- 新增 SOOP 平台支持
+- 修复 Bigo 录制
+
+### v4.0.6 (2025-01-27)
+- 新增淘宝、京东、Faceit 直播
+- 重构为异步架构
+- 新增强制 H264 编码选项
+
+---
+
+*本文档最后更新: 2026-06-27*

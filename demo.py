@@ -211,6 +211,7 @@ LIVE_STREAM_CONFIG = {
 
 
 def test_live_stream(platform_name: str, proxy_addr=None, cookies=None) -> None:
+    # 测试直播流获取与录制流程
     if platform_name in LIVE_STREAM_CONFIG:
         config = LIVE_STREAM_CONFIG[platform_name]
         try:

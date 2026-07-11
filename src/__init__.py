@@ -1,22 +1,11 @@
 #!/usr/bin/env python3
 # -*- encoding: utf-8 -*-
-"""
-DouyinLiveRecorder 核心包初始化
+# DouyinLiveRecorder 核心包初始化 - 负责直播录制的核心功能
 
-该包负责直播录制的核心功能，包括：
-- 直播数据获取 (spider)
-- 直播流解析 (stream)
-- 房间信息解析 (room)
-- 签名算法 (ab_sign)
-- 代理检测 (proxy)
-- 工具函数 (utils)
-- 日志配置 (logger)
-- 初始化 (initializer)
+# Author: Hmily
+# GitHub: https://github.com/ihmily
+# Date: 2023-2025
 
-Author: Hmily
-GitHub: https://github.com/ihmily
-Date: 2023-2025
-"""
 import os
 import sys
 from pathlib import Path

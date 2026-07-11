@@ -1,41 +1,18 @@
 #!/usr/bin/env python3
 # -*- encoding: utf-8 -*-
-"""
-Weverse 平台认证模块
+# Weverse 平台认证模块 - 负责 Token 刷新功能
 
-负责 Weverse 平台的 Token 刷新功能
-
-Weverse 是一个韩国偶像社区平台，该模块用于：
-- 使用刷新令牌获取新的访问令牌
-- 维护认证请求头配置
-
-Author: Hmily
-GitHub: https://github.com/ihmily
-Date: 2023-2025
-"""
-import json
 import requests
 import uuid
 
 
 def refresh_weverse_token(refresh_token):
-    """刷新 Weverse 访问令牌
-    
-    使用刷新令牌获取新的访问令牌和刷新令牌
-    
-    参数:
-        refresh_token: 刷新令牌
-        
-    返回:
-        tuple: (新访问令牌, 新刷新令牌)，失败返回 (None, None)
-    """
+    # 刷新 Weverse 访问令牌
     if not refresh_token:
         return None, None
 
-    # Weverse Token 刷新 API 端点
     refresh_url = "https://accountapi.weverse.io/api/v1/token/refresh"
     
-    # 请求头配置（模拟浏览器
     headers = {
         "Content-Type": "application/json",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -46,10 +23,7 @@ def refresh_weverse_token(refresh_token):
         "X-ACC-TRACE-ID": str(uuid.uuid4())
     }
 
-    # 请求体：发送刷新令牌
-    payload = {
-        "refreshToken": refresh_token
-    }
+    payload = {"refreshToken": refresh_token}
 
     try:
         response = requests.post(refresh_url, json=payload, headers=headers)

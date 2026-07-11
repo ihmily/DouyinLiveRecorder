@@ -3,55 +3,72 @@
 # 支持抖音、TikTok、YouTube等60+平台直播录制工具
 # =============================================================================
 
+# 可以在此文件同目录下创建 .env 文件来覆盖默认环境变量，
+# docker compose 会自动加载 .env 文件。
+# 例如：TZ=America/New_York 可修改时区。
+
 services:
-  # 直播录制服务
-  recorder:
+  # ---------------------------------------------------------------
+  # 主录制服务 - 持续监测并录制直播
+  # ---------------------------------------------------------------
+  recorder: &recorder
+    image: ihmily/douyin-live-recorder:latest
+    container_name: douyin-live-recorder
+
     build:
       context: .
       dockerfile: Dockerfile
-    image: ihmily/douyin-live-recorder:latest
 
-    container_name: douyin-live-recorder
+    # 运行参数（可覆盖，例如传入 -c 指定配置文件路径）
+    # command: ["python", "main.py"]
 
-    # 环境变量配置
+    # 环境变量
     environment:
+      # Python 运行时
       - PYTHONUNBUFFERED=1
       - PYTHONDONTWRITEBYTECODE=1
       - PYTHONIOENCODING=utf-8
+      # 时区
       - TZ=Asia/Shanghai
+      # 终端
       - TERM=xterm-256color
 
-    # 交互式终端支持
+    # 从 .env 文件加载环境变量（如果存在）
+    env_file:
+      - path: .env
+        required: false
+
+    # 交互式终端支持（可在容器内使用 Ctrl+C 停止录制）
     tty: true
     stdin_open: true
 
-    # 卷挂载配置
+    # 卷挂载
     volumes:
-      # 配置文件（必需）
+      # 配置文件目录（必需）- 包含 config.ini 和 URL_config.ini
       - ./config:/app/config:rw
-      # 下载目录（必需）
+      # 录制文件下载目录（必需）
       - ./downloads:/app/downloads:rw
-      # 日志目录
+      # 运行日志目录
       - ./logs:/app/logs:rw
       # 配置备份目录
       - ./backup_config:/app/backup_config:rw
 
-    # 端口映射（用于 Web UI 或调试）
+    # 端口映射（Web UI / API / 调试）
     ports:
       - "8000:8000"
 
-    # 重启策略
+    # 重启策略：除非手动停止，否则自动重启
     restart: unless-stopped
 
-    # 健康检查
+    # 健康检查：检测 main.py 主进程是否存活
     healthcheck:
-      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      test: ["CMD-SHELL", "pgrep -f 'python main.py' || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 15s
 
-    # 资源限制（可选）
+    # 资源限制
     deploy:
       resources:
         limits:
@@ -61,18 +78,27 @@ services:
           cpus: '0.5'
           memory: 512M
 
-    # 日志配置
+    # 日志限制
     logging:
       driver: "json-file"
       options:
         max-size: "50m"
         max-file: "3"
 
-    # 网络模式
-    network_mode: bridge
-
-# 网络配置
-networks:
-  default:
-    name: douyin-recorder-network
-    driver: bridge
+  # ---------------------------------------------------------------
+  # GUI 模式服务（需要 X11 或 Wayland 显示环境）
+  # 启动：docker compose --profile gui up -d
+  # 前置条件：
+  #   1. 宿主机运行：xhost +local:
+  #   2. 取消下方 DISPLAY 和 X11 socket 的注释
+  # ---------------------------------------------------------------
+  gui:
+    <<: *recorder
+    container_name: douyin-live-recorder-gui
+    profiles:
+      - gui
+    entrypoint: ["python", "gui.py"]
+    # environment:
+    #   - DISPLAY=${DISPLAY}
+    # volumes:
+    #   - /tmp/.X11-unix:/tmp/.X11-unix:rw

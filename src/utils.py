@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-工具函数模块
-提供通用工具函数，包括配置文件读写、文件操作、字符串处理等
-"""
+# 工具函数模块 - 提供通用工具函数，包括配置文件读写、文件操作、字符串处理等
+
 import json
 import os
 import random
 import re
 import shutil
 import string
+import inspect
 from pathlib import Path
 import functools
 import hashlib
@@ -26,7 +25,7 @@ OptionalDict = dict | None
 
 
 class Color:
-    """终端彩色输出常量类"""
+    # 终端彩色输出常量类
     RED = "\033[31m"
     GREEN = "\033[32m"
     YELLOW = "\033[33m"
@@ -38,44 +37,59 @@ class Color:
 
     @staticmethod
     def print_colored(text, color):
-        """打印彩色文本"""
+        # 打印彩色文本
         print(f"{color}{text}{Color.RESET}")
 
 
 def trace_error_decorator(func: Callable) -> Callable:
-    """错误追踪装饰器
-    捕获函数异常并记录日志
-    """
+    # 错误追踪装饰器（支持同步和异步函数）
+    if inspect.iscoroutinefunction(func):
+        @functools.wraps(func)
+        async def async_wrapper(*args: list, **kwargs: dict) -> Any:
+            # 异步函数包装器：捕获并记录异常，返回空字典
+            try:
+                return await func(*args, **kwargs)
+            except execjs.ProgramError:
+                logger.warning('Failed to execute JS code. Please check if the Node.js environment')
+                return {}
+            except Exception as e:
+                error_line = traceback.extract_tb(e.__traceback__)[-1].lineno
+                error_info = f"message: type: {type(e).__name__}, {str(e)} in function {func.__name__} at line: {error_line}"
+                logger.error(error_info)
+                return {}
+        return async_wrapper
+
     @functools.wraps(func)
     def wrapper(*args: list, **kwargs: dict) -> Any:
+        # 同步函数包装器：捕获并记录异常，返回空字典
         try:
             return func(*args, **kwargs)
         except execjs.ProgramError:
             logger.warning('Failed to execute JS code. Please check if the Node.js environment')
+            return {}
         except Exception as e:
             error_line = traceback.extract_tb(e.__traceback__)[-1].lineno
             error_info = f"message: type: {type(e).__name__}, {str(e)} in function {func.__name__} at line: {error_line}"
             logger.error(error_info)
-            return []
-
+            return {}
     return wrapper
 
 
 def check_md5(file_path: str | Path) -> str:
-    """计算文件的 MD5 值"""
+    # 计算文件的 MD5 值
     with open(file_path, 'rb') as fp:
         file_md5 = hashlib.md5(fp.read()).hexdigest()
     return file_md5
 
 
 def dict_to_cookie_str(cookies_dict: dict) -> str:
-    """将 cookie 字典转换为字符串格式"""
+    # 将 cookie 字典转换为字符串格式
     cookie_str = '; '.join([f"{key}={value}" for key, value in cookies_dict.items()])
     return cookie_str
 
 
 def read_config_value(file_path: str | Path, section: str, key: str) -> str | None:
-    """从配置文件读取指定配置项的值"""
+    # 从配置文件读取指定配置项的值
     config = configparser.ConfigParser()
 
     try:
@@ -96,7 +110,7 @@ def read_config_value(file_path: str | Path, section: str, key: str) -> str | No
 
 
 def update_config(file_path: str | Path, section: str, key: str, new_value: str) -> None:
-    """更新配置文件中指定配置项的值"""
+    # 更新配置文件中指定配置项的值
     config = configparser.ConfigParser()
 
     try:
@@ -109,7 +123,6 @@ def update_config(file_path: str | Path, section: str, key: str, new_value: str)
         print(f"Section [{section}] does not exist in the file.")
         return
 
-    # 转义%字符，避免 configparser 解析错误
     escaped_value = new_value.replace('%', '%%')
     config[section][key] = escaped_value
 
@@ -122,7 +135,7 @@ def update_config(file_path: str | Path, section: str, key: str, new_value: str)
 
 
 def get_file_paths(directory: str) -> list:
-    """递归获取指定目录下所有文件的绝对路径"""
+    # 递归获取指定目录下所有文件的绝对路径
     file_paths = []
     for root, _, files in os.walk(directory):
         for file in files:
@@ -131,7 +144,7 @@ def get_file_paths(directory: str) -> list:
 
 
 def remove_emojis(text: str, replace_text: str = '') -> str:
-    """从文本中移除表情符号"""
+    # 从文本中移除表情符号
     emoji_pattern = re.compile(
         "["
         "\U0001F1E0-\U0001F1FF"  # flags (iOS)
@@ -152,7 +165,7 @@ def remove_emojis(text: str, replace_text: str = '') -> str:
 
 
 def remove_duplicate_lines(file_path: str | Path) -> None:
-    """移除文件中的重复行"""
+    # 移除文件中的重复行
     unique_lines = OrderedDict()
     text_encoding = 'utf-8-sig'
     with open(file_path, 'r', encoding=text_encoding) as input_file:
@@ -164,7 +177,7 @@ def remove_duplicate_lines(file_path: str | Path) -> None:
 
 
 def check_disk_capacity(file_path: str | Path, show: bool = False) -> float:
-    """检查指定文件所在磁盘的剩余空间（GB）"""
+    # 检查指定文件所在磁盘的剩余空间（GB）
     absolute_path = os.path.abspath(file_path)
     directory = os.path.dirname(absolute_path)
     disk_usage = shutil.disk_usage(directory)
@@ -178,7 +191,7 @@ def check_disk_capacity(file_path: str | Path, show: bool = False) -> float:
 
 
 def handle_proxy_addr(proxy_addr):
-    """处理代理地址，自动添加 http 前缀"""
+    # 处理代理地址，自动添加 http 前缀
     if proxy_addr:
         if not proxy_addr.startswith('http'):
             proxy_addr = 'http://' + proxy_addr
@@ -188,14 +201,14 @@ def handle_proxy_addr(proxy_addr):
 
 
 def generate_random_string(length: int) -> str:
-    """生成指定长度的随机字符串（大写字母 + 数字）"""
+    # 生成指定长度的随机字符串（大写字母 + 数字）
     characters = string.ascii_uppercase + string.digits
     random_string = ''.join(random.choices(characters, k=length))
     return random_string
 
 
 def jsonp_to_json(jsonp_str: str) -> OptionalDict:
-    """将 JSONP 格式字符串转换为 JSON 对象"""
+    # 将 JSONP 格式字符串转换为 JSON 对象
     pattern = r'(\w+)\((.*)\);?$'
     match = re.search(pattern, jsonp_str)
 
@@ -208,7 +221,7 @@ def jsonp_to_json(jsonp_str: str) -> OptionalDict:
 
 
 def replace_url(file_path: str | Path, old: str, new: str) -> None:
-    """替换文件中的 URL"""
+    # 替换文件中的 URL
     with open(file_path, 'r', encoding='utf-8-sig') as f:
         content = f.read()
     if old in content:
@@ -217,9 +230,7 @@ def replace_url(file_path: str | Path, old: str, new: str) -> None:
 
 
 def get_query_params(url: str, param_name: OptionalStr) -> dict | list[str]:
-    """从 URL 中获取查询参数
-    如果 param_name 为 None，返回所有查询参数；否则返回指定参数的值列表
-    """
+    # 从 URL 中获取查询参数
     parsed_url = urlparse(url)
     query_params = parse_qs(parsed_url.query)
 
@@ -228,4 +239,3 @@ def get_query_params(url: str, param_name: OptionalStr) -> dict | list[str]:
     else:
         values = query_params.get(param_name, [])
         return values
-    

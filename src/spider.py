@@ -1,13 +1,6 @@
 # -*- encoding: utf-8 -*-
 
-"""
-Author: Hmily
-GitHub: https://github.com/ihmily
-Date: 2023-07-15 23:15:00
-Update: 2025-10-23 18:28:00
-Copyright (c) 2023-2025 by Hmily, All Rights Reserved.
-Function: Get live stream data.
-"""
+# 抖音直播录制工具 - 爬虫模块
 
 import hashlib
 import random
@@ -16,14 +9,12 @@ import time
 import uuid
 from operator import itemgetter
 import urllib.parse
-import urllib.error
 from typing import List
 import httpx
 import ssl
 import re
 import json
 import execjs
-import urllib.request
 from . import JS_SCRIPT_PATH, utils
 from .utils import trace_error_decorator, generate_random_string
 from .logger import script_path
@@ -40,7 +31,7 @@ OptionalDict = dict | None
 
 
 def _get_str_response(resp):
-    """安全地将 async_req 的响应转换为 str"""
+    # 安全地将 async_req 的响应转换为字符串格式
     if isinstance(resp, str):
         return resp
     elif isinstance(resp, tuple) and len(resp) > 0 and isinstance(resp[0], str):
@@ -49,6 +40,7 @@ def _get_str_response(resp):
 
 
 def get_params(url: str, params: str) -> OptionalStr:
+    # 从URL中提取指定参数的值
     parsed_url = urllib.parse.urlparse(url)
     query_params = urllib.parse.parse_qs(parsed_url.query)
 
@@ -56,8 +48,21 @@ def get_params(url: str, params: str) -> OptionalStr:
         return query_params[params][0]
 
 
+def extract_douyin_hevc_flv_url(html: str) -> OptionalStr:
+    # 从抖音页面 HTML 中提取 HEVC/H265 FLV 流地址
+    pattern = re.compile(r'(https?://[^\s"\']*stream-\d{10,}(?!_[a-z0-9]+)\.flv(?:[^"\']|\\u0026)+)')
+    for match in pattern.findall(html):
+        clean_url = match.replace('\\u0026', '&').rstrip('\\').strip()
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(clean_url).query)
+        if query.get('only_audio', ['0'])[0] == '1':
+            continue
+        return clean_url
+    return None
+
+
 async def get_play_url_list(m3u8: str, proxy: OptionalStr = None, header: OptionalDict = None,
                             abroad: bool = False) -> List[str]:
+    # 获取M3U8播放列表中的所有清晰度URL并按带宽排序
     resp = await async_req(url=m3u8, proxy_addr=proxy, headers=header, abroad=abroad)
     if not isinstance(resp, str):
         return []
@@ -71,12 +76,14 @@ async def get_play_url_list(m3u8: str, proxy: OptionalStr = None, header: Option
                 play_url_list.append(i.strip())
     bandwidth_pattern = re.compile(r'BANDWIDTH=(\d+)')
     bandwidth_list = bandwidth_pattern.findall(resp)
-    url_to_bandwidth = {url: int(bandwidth) for bandwidth, url in zip(bandwidth_list, play_url_list)}
-    play_url_list = sorted(play_url_list, key=lambda url: url_to_bandwidth[url], reverse=True)
+    if bandwidth_list and len(bandwidth_list) == len(play_url_list):
+        url_to_bandwidth = {url: int(bandwidth) for bandwidth, url in zip(bandwidth_list, play_url_list)}
+        play_url_list = sorted(play_url_list, key=lambda url: url_to_bandwidth[url], reverse=True)
     return play_url_list
 
 
-async def get_douyin_web_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None):
+async def get_douyin_web_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 通过抖音网页端API获取直播数据
     headers = {
         'cookie': 'ttwid=1%7C2iDIYVmjzMcpZ20fcaFde0VghXAA3NaNXE_SLR68IyE%7C1761045455'
                   '%7Cab35197d5cfb21df6cbb2fa7ef1c9262206b062c315b9d04da746d0b37dfbc7d',
@@ -111,7 +118,7 @@ async def get_douyin_web_stream_data(url: str, proxy_addr: OptionalStr = None, c
             json_str = _get_str_response(json_str)
             if not json_str:
                 raise Exception("it triggered risk control")
-            json_data = json.loads(json_str)['data']
+            json_data: dict = json.loads(json_str)['data']
             if not json_data['data']:
                 raise Exception(f"{url} VR live is not supported")
             room_data = json_data['data'][0]
@@ -125,29 +132,56 @@ async def get_douyin_web_stream_data(url: str, proxy_addr: OptionalStr = None, c
                     "The live streaming type or gameplay is not supported on the computer side yet, please use the "
                     "app to share the link for recording."
                 )
+            html_str = await async_req(url=url, proxy_addr=proxy_addr, headers=headers)
+            html_str = _get_str_response(html_str)
+            hevc_flv_url = extract_douyin_hevc_flv_url(html_str)
             live_core_sdk_data = room_data['stream_url']['live_core_sdk_data']
             pull_datas = room_data['stream_url']['pull_datas']
             if live_core_sdk_data:
+                json_str = ""
                 if pull_datas:
-                    key = list(pull_datas.keys())[0] if pull_datas else None
-                    json_str = pull_datas[key]['stream_data'] if key else ""
-                else:
-                    json_str = live_core_sdk_data['pull_data']['stream_data'] if 'pull_data' in live_core_sdk_data else ""
+                    # 遍历 pull_datas 选取包含 origin 的条目，优先 HEVC
+                    hevc_candidate = ""
+                    first_candidate = ""
+                    for value in pull_datas.values():
+                        candidate = value.get('stream_data') or ""
+                        if not candidate:
+                            continue
+                        try:
+                            cand_data = json.loads(candidate).get('data', {})
+                        except (json.JSONDecodeError, TypeError):
+                            continue
+                        if 'origin' not in cand_data:
+                            continue
+                        if not first_candidate:
+                            first_candidate = candidate
+                        try:
+                            codec = json.loads(
+                                cand_data['origin']['main'].get('sdk_params', '{}')
+                            ).get('VCodec', '')
+                        except (json.JSONDecodeError, KeyError, TypeError):
+                            codec = ''
+                        if 'h265' in codec.lower() or 'hevc' in codec.lower():
+                            hevc_candidate = candidate
+                            break
+                    json_str = hevc_candidate or first_candidate
+                elif 'pull_data' in live_core_sdk_data:
+                    json_str = live_core_sdk_data['pull_data'].get('stream_data', '')
                 if json_str:
-                    json_data = json.loads(json_str)
+                    json_data: dict = json.loads(json_str)
                     if 'origin' in json_data.get('data', {}):
-                        stream_data = live_core_sdk_data['pull_data']['stream_data']
-                        origin_data = json.loads(stream_data)['data']['origin']['main']
-                        sdk_params = json.loads(origin_data['sdk_params'])
+                        origin_url_list = json_data['data']['origin']['main']
+                        sdk_params = json.loads(origin_url_list['sdk_params'])
                         origin_hls_codec = sdk_params.get('VCodec') or ''
 
-                        origin_url_list = json_data['data']['origin']['main']
                         origin_m3u8 = {'ORIGIN': origin_url_list["hls"] + '&codec=' + origin_hls_codec}
                         origin_flv = {'ORIGIN': origin_url_list["flv"] + '&codec=' + origin_hls_codec}
                         hls_pull_url_map = room_data['stream_url']['hls_pull_url_map']
                         flv_pull_url = room_data['stream_url']['flv_pull_url']
                         room_data['stream_url']['hls_pull_url_map'] = {**origin_m3u8, **hls_pull_url_map}
                         room_data['stream_url']['flv_pull_url'] = {**origin_flv, **flv_pull_url}
+                    if hevc_flv_url:
+                        room_data['stream_url']['hevc_flv_url'] = hevc_flv_url
     except Exception as e:
         tb_lineno = e.__traceback__.tb_lineno if e.__traceback__ else 0
         print(f"Error message: {e} Error line: {tb_lineno}")
@@ -157,6 +191,7 @@ async def get_douyin_web_stream_data(url: str, proxy_addr: OptionalStr = None, c
 
 @trace_error_decorator
 async def get_douyin_app_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 通过抖音APP端接口获取直播数据（备用方案）
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
                       'Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0',
@@ -168,6 +203,7 @@ async def get_douyin_app_stream_data(url: str, proxy_addr: OptionalStr = None, c
         headers['Cookie'] = cookies
 
     async def get_app_data(room_id: str, sec_uid: str) -> dict:
+        # 获取抖音 App 端直播数据（含 A-Bogus 签名）
         app_params = {
             "verifyFp": "verify_hwj52020_7szNlAB7_pxNY_48Vh_ALKF_GA1Uf3yteoOY",
             "type_id": "0",
@@ -246,6 +282,7 @@ async def get_douyin_app_stream_data(url: str, proxy_addr: OptionalStr = None, c
 
 @trace_error_decorator
 async def get_douyin_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取抖音直播数据（主函数）
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
@@ -259,6 +296,7 @@ async def get_douyin_stream_data(url: str, proxy_addr: OptionalStr = None, cooki
         origin_url_list = None
         html_str = await async_req(url=url, proxy_addr=proxy_addr, headers=headers)
         html_str = _get_str_response(html_str)
+        hevc_flv_url = extract_douyin_hevc_flv_url(html_str)
         match_json_str = re.search(r'(\{\\"state\\":.*?)]\\n"]\)', html_str)
         if not match_json_str:
             match_json_str = re.search(r'(\{\\"common\\":.*?)]\\n"]\)</script><div hidden', html_str)
@@ -302,6 +340,8 @@ async def get_douyin_stream_data(url: str, proxy_addr: OptionalStr = None, cooki
             flv_pull_url = json_data['stream_url']['flv_pull_url']
             json_data['stream_url']['hls_pull_url_map'] = {**origin_m3u8, **hls_pull_url_map}
             json_data['stream_url']['flv_pull_url'] = {**origin_flv, **flv_pull_url}
+            if hevc_flv_url:
+                json_data['stream_url']['hevc_flv_url'] = hevc_flv_url
         return json_data
 
     except Exception as e:
@@ -311,6 +351,7 @@ async def get_douyin_stream_data(url: str, proxy_addr: OptionalStr = None, cooki
 
 @trace_error_decorator
 async def get_tiktok_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict | None:
+    # 获取TikTok直播数据
     headers = {
         'referer': 'https://www.tiktok.com/',
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
@@ -319,7 +360,7 @@ async def get_tiktok_stream_data(url: str, proxy_addr: OptionalStr = None, cooki
                              '5177d5d53bbd822e1bf66128887d942c9c3e2f'
     }
 
-    for i in range(3):
+    for _ in range(3):
         html_str = await async_req(url=url, proxy_addr=proxy_addr, headers=headers, abroad=True, http2=False)
         html_str = _get_str_response(html_str)
         time.sleep(1)
@@ -342,9 +383,15 @@ async def get_tiktok_stream_data(url: str, proxy_addr: OptionalStr = None, cooki
             json_data = json.loads(json_str)
             return json_data
 
+    raise ConnectionError(
+        "Failed to retrieve TikTok data after 3 retries, please check if your network can access "
+        "the TikTok website normally"
+    )
+
 
 @trace_error_decorator
 async def get_kuaishou_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取快手直播数据
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
@@ -401,6 +448,7 @@ async def get_kuaishou_stream_data(url: str, proxy_addr: OptionalStr = None, coo
 
 @trace_error_decorator
 async def get_kuaishou_stream_data2(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict | None:
+    # 获取快手直播流数据（备用接口）
     headers = {
         'User-Agent': 'ios/7.830 (ios 17.0; ; iPhone 15 (A2846/A3089/A3090/A3092))',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
@@ -445,6 +493,7 @@ async def get_kuaishou_stream_data2(url: str, proxy_addr: OptionalStr = None, co
 
 @trace_error_decorator
 async def get_huya_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取虎牙直播数据
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
@@ -466,6 +515,7 @@ async def get_huya_stream_data(url: str, proxy_addr: OptionalStr = None, cookies
 
 @trace_error_decorator
 async def get_huya_app_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 通过虎牙微信小程序API获取直播流地址
     headers = {
         'User-Agent': 'ios/7.830 (ios 17.0; ; iPhone 15 (A2846/A3089/A3090/A3092))',
         'xweb_xhr': '1',
@@ -563,10 +613,12 @@ async def get_huya_app_stream_url(url: str, proxy_addr: OptionalStr = None, cook
 
 
 def md5(data) -> str:
+    # 计算字符串的MD5哈希值
     return hashlib.md5(data.encode('utf-8')).hexdigest()
 
 
 async def get_token_js(rid: str, did: str, proxy_addr: OptionalStr = None) -> dict:
+    # 获取斗鱼API请求签名参数
     try:
         key_url = f'https://www.douyu.com/wgapi/livenc/liveweb/websec/getEncryption?did={did}'
         headers = {
@@ -602,6 +654,7 @@ async def get_token_js(rid: str, did: str, proxy_addr: OptionalStr = None) -> di
 
 @trace_error_decorator
 async def get_douyu_info_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取斗鱼直播间基本信息
     headers = {
         'User-Agent': 'ios/7.830 (ios 17.0; ; iPhone 15 (A2846/A3089/A3090/A3092))',
         'Referer': 'https://m.douyu.com/3125893?rid=3125893&dyshid=0-96003918aa5365bc6dcb4933000316p1&dyshci=181',
@@ -646,6 +699,7 @@ async def get_douyu_info_data(url: str, proxy_addr: OptionalStr = None, cookies:
 @trace_error_decorator
 async def get_douyu_stream_data(rid: str, rate: str = '-1', proxy_addr: OptionalStr = None,
                                 cookies: OptionalStr = None) -> dict:
+    # 获取斗鱼直播间流地址
     did = '10000000000000000000000000003306'
     sign_params = await get_token_js(rid, did, proxy_addr=proxy_addr)
     if not sign_params:
@@ -675,6 +729,7 @@ async def get_douyu_stream_data(rid: str, rate: str = '-1', proxy_addr: Optional
 
 @trace_error_decorator
 async def get_yy_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取 YY 直播流数据
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
@@ -727,6 +782,7 @@ async def get_yy_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: 
 
 @trace_error_decorator
 async def get_bilibili_room_info_h5(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> str:
+    # 获取 B站直播间 H5 接口信息
     headers = {
         'user-agent': 'Mozilla/5.0 (Linux; Android 11; SAMSUNG SM-G973U) AppleWebKit/537.36 (KHTML, like Gecko) '
                       'SamsungBrowser/14.2 Chrome/87.0.4280.141 Mobile Safari/537.36',
@@ -749,6 +805,7 @@ async def get_bilibili_room_info_h5(url: str, proxy_addr: OptionalStr = None, co
 
 @trace_error_decorator
 async def get_bilibili_room_info(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取 B站直播间信息（含主播名）
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
@@ -782,6 +839,7 @@ async def get_bilibili_room_info(url: str, proxy_addr: OptionalStr = None, cooki
 @trace_error_decorator
 async def get_bilibili_stream_data(url: str, qn: str = '10000', platform: str = 'web', proxy_addr: OptionalStr = None,
                              cookies: OptionalStr = None) -> OptionalStr:
+    # 获取 B站直播流数据（多清晰度）
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
@@ -835,8 +893,8 @@ async def get_bilibili_stream_data(url: str, qn: str = '10000', platform: str = 
         # qn: 30000=杜比 20000=4K 10000=原画 400=蓝光 250=超清 150=高清 80=流畅
         video_quality_options = {'10000': 0, '400': 1, '250': 2, '150': 3, '80': 4}
         qn_count = len(sorted_stream_list)
-        select_stream_index = min(video_quality_options[qn], qn_count - 1)
-        stream_data: dict = sorted_stream_list[select_stream_index]
+        select_stream_index = min(video_quality_options.get(qn, 0), qn_count - 1)
+        stream_data = sorted_stream_list[select_stream_index]
         base_url = stream_data['base_url']
         host = stream_data['url_info'][0]['host']
         extra = stream_data['url_info'][0]['extra']
@@ -845,6 +903,7 @@ async def get_bilibili_stream_data(url: str, qn: str = '10000', platform: str = 
 
 @trace_error_decorator
 async def get_xhs_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取小红书直播流地址
     headers = {
         'User-Agent': 'ios/7.830 (ios 17.0; ; iPhone 15 (A2846/A3089/A3090/A3092))',
         'xy-common-params': 'platform=iOS&sid=session.1722166379345546829388',
@@ -861,7 +920,7 @@ async def get_xhs_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: 
     host_id = get_params(url, "host_id")
     user_id = re.search("/user/profile/(.*?)(?=/|\\?|$)", url)
     user_id = user_id.group(1) if user_id else host_id
-    result = {"anchor_name": '', "is_live": False}
+    result: dict = {"anchor_name": '', "is_live": False}
     html_str = await async_req(url, proxy_addr=proxy_addr, headers=headers)
     html_str = _get_str_response(html_str)
     match_data = re.search("<script>window.__INITIAL_STATE__=(.*?)</script>", html_str)
@@ -906,6 +965,7 @@ async def get_xhs_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: 
 
 @trace_error_decorator
 async def get_bigo_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取 Bigo 直播流地址
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
@@ -964,6 +1024,7 @@ async def get_bigo_stream_url(url: str, proxy_addr: OptionalStr = None, cookies:
 
 @trace_error_decorator
 async def get_blued_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取 Blued 直播流地址
     headers = {
         'User-Agent': 'ios/7.830 (ios 17.0; ; iPhone 15 (A2846/A3089/A3090/A3092))',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
@@ -992,6 +1053,7 @@ async def get_blued_stream_url(url: str, proxy_addr: OptionalStr = None, cookies
 
 @trace_error_decorator
 async def login_sooplive(username: str, password: str, proxy_addr: OptionalStr = None) -> OptionalStr:
+    # SOOP 平台登录获取认证 Cookie
     if len(username) < 6 or len(password) < 10:
         raise RuntimeError("sooplive login failed! Please enter the correct account and password for the sooplive "
                            "platform in the config.ini file.")
@@ -1036,6 +1098,7 @@ async def login_sooplive(username: str, password: str, proxy_addr: OptionalStr =
 
 @trace_error_decorator
 async def get_sooplive_cdn_url(broad_no: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取 SOOP 平台 CDN 流地址
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
@@ -1064,6 +1127,7 @@ async def get_sooplive_cdn_url(broad_no: str, proxy_addr: OptionalStr = None, co
 
 @trace_error_decorator
 async def get_sooplive_tk(url: str, rtype: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> str | tuple:
+    # 获取 SOOP 平台临时访问 token
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0',
         'Origin': 'https://play.sooplive.co.kr',
@@ -1107,6 +1171,7 @@ async def get_sooplive_tk(url: str, rtype: str, proxy_addr: OptionalStr = None, 
 
 
 def get_soop_headers(cookies):
+    # 构造 SOOP 平台请求头
     headers = {
         'client-id': str(uuid.uuid4()),
         'user-agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, '
@@ -1118,6 +1183,7 @@ def get_soop_headers(cookies):
 
 
 async def _get_soop_channel_info_global(bj_id, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> str:
+    # 获取 SOOP 频道信息（内部通用方法）
     headers = get_soop_headers(cookies)
     api = 'https://api.sooplive.com/v2/channel/info/' + str(bj_id)
     json_str = await async_req(api, proxy_addr=proxy_addr, headers=headers)
@@ -1130,6 +1196,7 @@ async def _get_soop_channel_info_global(bj_id, proxy_addr: OptionalStr = None, c
 
 
 async def _get_soop_stream_info_global(bj_id, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> tuple:
+    # 获取 SOOP 直播流信息（内部通用方法）
     headers = get_soop_headers(cookies)
     api = 'https://api.sooplive.com/v2/stream/info/' + str(bj_id)
     json_str = await async_req(api, proxy_addr=proxy_addr, headers=headers)
@@ -1141,6 +1208,7 @@ async def _get_soop_stream_info_global(bj_id, proxy_addr: OptionalStr = None, co
 
 
 async def _fetch_web_stream_data_global(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 抓取 Web 端直播流数据（内部通用方法）
     split_url = url.split('/')
     bj_id = split_url[3] if len(split_url) < 6 else split_url[5]
     anchor_name = await _get_soop_channel_info_global(bj_id)
@@ -1150,6 +1218,7 @@ async def _fetch_web_stream_data_global(url: str, proxy_addr: OptionalStr = None
         return result
     else:
         async def _get_url_list(m3u8: str) -> list[str]:
+            # 从直播流数据中提取 URL 列表（内部方法）
             headers = {
                 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
                               'Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0',
@@ -1169,7 +1238,7 @@ async def _fetch_web_stream_data_global(url: str, proxy_addr: OptionalStr = None
             play_url_list = sorted(play_url_list, key=lambda purl: url_to_bandwidth[purl], reverse=True)
             return play_url_list
 
-        m3u8_url = 'https://global-media.sooplive.com/live/' + str(bj_id) + '/master.m3u8'
+        m3u8_url = 'https://global-media.sooplive.com/live/' + bj_id + '/master.m3u8'
         result |= {
             'is_live': True,
             'title': title,
@@ -1184,6 +1253,7 @@ async def get_sooplive_stream_data(
         url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None,
         username: OptionalStr = None, password: OptionalStr = None
 ) -> dict:
+    # 获取 SOOP 平台直播流数据
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
@@ -1224,6 +1294,7 @@ async def get_sooplive_stream_data(
     result = {"anchor_name": anchor_name or '' ,"is_live": False}
 
     async def get_url_list(m3u8: str) -> List[str]:
+        # 解析直播流响应并返回 URL 列表
         resp = await async_req(url=m3u8, proxy_addr=proxy_addr, headers=headers, abroad=True)
         resp = _get_str_response(resp)
         play_url_list = []
@@ -1239,12 +1310,14 @@ async def get_sooplive_stream_data(
 
     if not anchor_name:
         async def handle_login() -> OptionalStr:
+            # 处理平台登录认证
             cookie = await login_sooplive(username, password, proxy_addr=proxy_addr)
             if 'AuthTicket=' in cookie:
                 print("sooplive platform login successful! Starting to fetch live streaming data...")
                 return cookie
 
         async def fetch_data(cookie, _result) -> dict:
+            # 抓取直播数据
             aid_token = await get_sooplive_tk(url, rtype='aid', proxy_addr=proxy_addr, cookies=cookie)
             _anchor_name, _broad_no = await get_sooplive_tk(url, rtype='info', proxy_addr=proxy_addr, cookies=cookie)
             _view_url_data = await get_sooplive_cdn_url(_broad_no, proxy_addr=proxy_addr)
@@ -1294,6 +1367,7 @@ async def get_sooplive_stream_data(
 
 @trace_error_decorator
 async def get_netease_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取网易 CC 直播流数据
     headers = {
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -1329,6 +1403,7 @@ async def get_netease_stream_data(url: str, proxy_addr: OptionalStr = None, cook
 
 @trace_error_decorator
 async def get_qiandurebo_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取千度热播直播流数据
     headers = {
         'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,'
                   'application/signed-exchange;v=b3;q=0.7',
@@ -1364,6 +1439,7 @@ async def get_qiandurebo_stream_data(url: str, proxy_addr: OptionalStr = None, c
 
 @trace_error_decorator
 async def get_pandatv_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取 PandaTV 直播流数据
     headers = {
         'origin': 'https://www.pandalive.co.kr',
         'referer': 'https://www.pandalive.co.kr/',
@@ -1418,6 +1494,7 @@ async def get_pandatv_stream_data(url: str, proxy_addr: OptionalStr = None, cook
 
 @trace_error_decorator
 async def get_maoerfm_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取猫耳 FM 直播流地址
     headers = {
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -1451,6 +1528,7 @@ async def get_maoerfm_stream_url(url: str, proxy_addr: OptionalStr = None, cooki
 
 @trace_error_decorator
 async def get_winktv_bj_info(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> tuple:
+    # 获取 WinkTV 主播信息
     headers = {
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -1478,6 +1556,7 @@ async def get_winktv_bj_info(url: str, proxy_addr: OptionalStr = None, cookies: 
 
 @trace_error_decorator
 async def get_winktv_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取 WinkTV 直播流数据
     headers = {
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -1524,6 +1603,7 @@ async def get_winktv_stream_data(url: str, proxy_addr: OptionalStr = None, cooki
 
 @trace_error_decorator
 async def login_flextv(username: str, password: str, proxy_addr: OptionalStr = None) -> OptionalStr:
+    # FlexTV 平台登录认证
     headers = {
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -1571,7 +1651,9 @@ async def login_flextv(username: str, password: str, proxy_addr: OptionalStr = N
 async def get_flextv_stream_url(
         url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None
 ) -> str | None:
+    # 获取 FlexTV 直播流地址
     async def fetch_data(cookie) -> dict:
+        # 抓取 FlexTV 直播数据
         headers = {
             'accept': 'application/json, text/plain, */*',
             'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -1602,6 +1684,7 @@ async def get_flextv_stream_data(
         url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None,
         username: OptionalStr = None, password: OptionalStr = None
 ) -> dict:
+    # 获取 FlexTV 直播流数据
     headers = {
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -1611,7 +1694,7 @@ async def get_flextv_stream_data(
     if cookies:
         headers['Cookie'] = cookies
     user_id = url.split('/live')[0].rsplit('/', maxsplit=1)[-1]
-    result = {"anchor_name": '', "is_live": False}
+    result: dict = {"anchor_name": '', "is_live": False}
     new_cookies = None
     try:
         url2 = f'https://www.ttinglive.com/channels/{user_id}/live'
@@ -1693,15 +1776,18 @@ def get_looklive_secret_data(text) -> tuple:
     import secrets
 
     def create_secret_key(size: int) -> bytes:
+        # 生成 PopkonTV 加密密钥
         charset = '1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!@#$%^&*()_+-=[]{}|;:,.<>?'
         return ''.join(secrets.choice(charset) for _ in range(size)).encode('utf-8')
 
     def aes_encrypt(_text: str | bytes, _sec_key: str | bytes) -> bytes:
+        # AES 加密数据
         if isinstance(_text, str):
             _text = _text.encode('utf-8')
         if isinstance(_sec_key, str):
             _sec_key = _sec_key.encode('utf-8')
-        _sec_key = _sec_key[:16]  # 16 (AES-128), 24 (AES-192), or 32 (AES-256) bytes
+        _sec_key = _sec_key[:
+        16]  # 16 (AES-128), 24 (AES-192), or 32 (AES-256) bytes
         iv = bytes('0102030405060708', 'utf-8')
         encryptor = AES.new(_sec_key, AES.MODE_CBC, iv)
         padded_text = pad(_text, AES.block_size)
@@ -1710,6 +1796,7 @@ def get_looklive_secret_data(text) -> tuple:
         return encoded_ciphertext
 
     def rsa_encrypt(_text: str | bytes, pub_key: str, mod: str) -> str:
+        # RSA 加密数据（公钥加密）
         if isinstance(_text, str):
             _text = _text.encode('utf-8')
         text_reversed = _text[::-1]
@@ -1724,11 +1811,7 @@ def get_looklive_secret_data(text) -> tuple:
 
 
 async def get_looklive_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
-    """
-    通过PC网页端的接口获取完整直播源，只有params和encSecKey这两个加密请求参数。
-    params: 由两次AES加密完成
-    ncSecKey: 由一次自写的加密函数完成，值可固定
-    """
+    # 通过PC网页端的接口获取完整直播源，只有params和encSecKey这两个加密请求参数。
 
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0',
@@ -1774,6 +1857,7 @@ async def get_looklive_stream_url(url: str, proxy_addr: OptionalStr = None, cook
 async def login_popkontv(
         username: str, password: str, proxy_addr: OptionalStr = None, code: OptionalStr = 'P-00001'
 ) -> tuple:
+    # PopkonTV 平台登录认证
     headers = {
         'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -1821,6 +1905,7 @@ async def get_popkontv_stream_data(
         url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None,
         username: OptionalStr = None, code: OptionalStr = 'P-00001'
 ) -> tuple:
+    # 获取 PopkonTV 直播流数据
     headers = {
         'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -1899,6 +1984,7 @@ async def get_popkontv_stream_url(
         password: OptionalStr = None,
         partner_code: OptionalStr = 'P-00001'
 ) -> dict:
+    # 获取 PopkonTV 直播流地址
     headers = {
         'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -1924,6 +2010,7 @@ async def get_popkontv_stream_url(
                                f"Please configure the room password and try again.")
 
         async def fetch_data(header: dict | None = None, code: OptionalStr = None) -> str:
+            # 抓取 PopkonTV 直播数据
             data = {
                 'androidStore': 0,
                 'castCode': f'{mc_sign_id}-{cast_start_date_code}',
@@ -1993,6 +2080,7 @@ async def login_twitcasting(
         account_type: str, username: str, password: str, proxy_addr: OptionalStr = None,
         cookies: OptionalStr = None
 ) -> OptionalStr:
+    # TwitCasting 平台登录认证
     headers = {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -2051,6 +2139,7 @@ async def get_twitcasting_stream_url(
         username: OptionalStr = None,
         password: OptionalStr = None,
 ) -> dict:
+    # 获取 TwitCasting 直播流地址
     headers = {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -2063,6 +2152,7 @@ async def get_twitcasting_stream_url(
         headers['Cookie'] = cookies
 
     async def get_data(header) -> tuple:
+        # 获取 TwitCasting 直播数据
         html_str = await async_req(url, proxy_addr=proxy_addr, headers=header)
         html_str = _get_str_response(html_str)
         anchor = re.search("<title>(.*?) \\(@(.*?)\\)  的直播 - Twit", html_str)
@@ -2073,7 +2163,7 @@ async def get_twitcasting_stream_url(
             raise ValueError("Failed to parse page data")
         return f'{anchor.group(1).strip()}-{anchor.group(2)}-{movie_id.group(1)}', status.group(1), title.group(1)
 
-    result = {"anchor_name": '', "is_live": False}
+    result: dict = {"anchor_name": '', "is_live": False}
     new_cookie = None
     try:
         to_login = get_params(url, "login")
@@ -2110,7 +2200,7 @@ async def get_twitcasting_stream_url(
         stream_dict = json_data['tc-hls']["streams"]
         quality_order = {"high": 0, "medium": 1, "low": 2}
         sorted_streams = sorted(stream_dict.items(), key=lambda item: quality_order[item[0]])
-        play_url_list = [url for quality, url in sorted_streams]
+        play_url_list = [url for _, url in sorted_streams]
         result |= {'title': live_title, 'is_live': True, "play_url_list": play_url_list}
     result['new_cookies'] = new_cookie
     return result
@@ -2118,6 +2208,7 @@ async def get_twitcasting_stream_url(
 
 @trace_error_decorator
 async def get_baidu_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取百度直播流数据
     headers = {
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
         'Connection': 'keep-alive',
@@ -2182,6 +2273,7 @@ async def get_baidu_stream_data(url: str, proxy_addr: OptionalStr = None, cookie
 
 @trace_error_decorator
 async def get_weibo_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取微博直播流数据
     headers = {
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
         'Cookie': 'XSRF-TOKEN=qAP-pIY5V4tO6blNOhA4IIOD; SUB=_2AkMRNMCwf8NxqwFRmfwWymPrbI9-zgzEieKnaDFrJRMxHRl-yT9kqmkhtRB6OrTuX5z9N_7qk9C3xxEmNR-8WLcyo2PM; SUBP=0033WrSXqPxfM72-Ws9jqgMF55529P9D9WWemwcqkukCduUO11o9sBqA; WBPSESS=Wk6CxkYDejV3DDBcnx2LOXN9V1LjdSTNQPMbBDWe4lO2HbPmXG_coMffJ30T-Avn_ccQWtEYFcq9fab1p5RR6PEI6w661JcW7-56BszujMlaiAhLX-9vT4Zjboy1yf2l',
@@ -2205,7 +2297,7 @@ async def get_weibo_stream_data(url: str, proxy_addr: OptionalStr = None, cookie
                 room_id = i['page_info']['object_id']
                 break
 
-    result = {"anchor_name": '', "is_live": False}
+    result: dict = {"anchor_name": '', "is_live": False}
     if room_id:
         app_api = f'https://weibo.com/l/pc/anchor/live?live_id={room_id}'
         # app_api = f'https://weibo.com/l/!/2/wblive/room/show_pc_live.json?live_id={room_id}'
@@ -2231,6 +2323,7 @@ async def get_weibo_stream_data(url: str, proxy_addr: OptionalStr = None, cookie
 
 @trace_error_decorator
 async def get_kugou_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取酷狗繁星直播流地址
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0',
         'Accept': 'application/json',
@@ -2284,6 +2377,7 @@ async def get_kugou_stream_url(url: str, proxy_addr: OptionalStr = None, cookies
 
 
 async def get_twitchtv_room_info(url: str, token: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> tuple:
+    # 获取 Twitch 直播间信息
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0',
         'Accept-Language': 'zh-CN',
@@ -2324,6 +2418,7 @@ async def get_twitchtv_room_info(url: str, token: str, proxy_addr: OptionalStr =
 
 @trace_error_decorator
 async def get_twitchtv_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取 Twitch 直播流数据
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
         'Accept-Language': 'en-US',
@@ -2393,6 +2488,7 @@ async def get_twitchtv_stream_data(url: str, proxy_addr: OptionalStr = None, coo
 
 @trace_error_decorator
 async def get_liveme_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取 LiveMe 直播流地址
     headers = {
         'origin': 'https://www.liveme.com',
         'referer': 'https://www.liveme.com',
@@ -2443,6 +2539,7 @@ async def get_liveme_stream_url(url: str, proxy_addr: OptionalStr = None, cookie
 
 
 async def get_huajiao_sn(url: str, cookies: OptionalStr = None, proxy_addr: OptionalStr = None) -> tuple | None:
+    # 获取花椒直播流 SN 参数
     headers = {
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
         'referer': 'https://www.huajiao.com/',
@@ -2474,6 +2571,7 @@ async def get_huajiao_sn(url: str, cookies: OptionalStr = None, proxy_addr: Opti
 
 
 async def get_huajiao_user_info(url: str, cookies: OptionalStr = None, proxy_addr: OptionalStr = None) -> OptionalDict:
+    # 获取花椒主播用户信息
     headers = {
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
         'referer': 'https://www.huajiao.com/',
@@ -2515,6 +2613,7 @@ async def get_huajiao_user_info(url: str, cookies: OptionalStr = None, proxy_add
 
 
 async def get_huajiao_stream_url_app(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> OptionalDict:
+    # 获取花椒 App 端直播流地址
     headers = {
         'User-Agent': 'living/9.4.0 (com.huajiao.seeding; build:2410231746; iOS 17.0.0) Alamofire/9.4.0',
         'accept-language': 'zh-Hans-US;q=1.0',
@@ -2545,6 +2644,7 @@ async def get_huajiao_stream_url_app(url: str, proxy_addr: OptionalStr = None, c
 
 @trace_error_decorator
 async def get_huajiao_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取花椒直播流地址
     headers = {
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
         'referer': 'https://www.huajiao.com/',
@@ -2600,6 +2700,7 @@ async def get_huajiao_stream_url(url: str, proxy_addr: OptionalStr = None, cooki
 
 @trace_error_decorator
 async def get_liuxing_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取流星直播流地址
     headers = {
         'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -2634,6 +2735,7 @@ async def get_liuxing_stream_url(url: str, proxy_addr: OptionalStr = None, cooki
 
 @trace_error_decorator
 async def get_showroom_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取 ShowRoom 直播流数据
     headers = {
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
@@ -2684,6 +2786,7 @@ async def get_showroom_stream_data(url: str, proxy_addr: OptionalStr = None, coo
 
 @trace_error_decorator
 async def get_acfun_sign_params(proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> tuple:
+    # 计算 Acfun 请求签名参数
     did = f'web_{utils.generate_random_string(16)}'
     headers = {
         'referer': 'https://live.acfun.cn/',
@@ -2706,6 +2809,7 @@ async def get_acfun_sign_params(proxy_addr: OptionalStr = None, cookies: Optiona
 
 @trace_error_decorator
 async def get_acfun_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取 Acfun 直播流数据
     headers = {
         'referer': 'https://live.acfun.cn/live/17912421',
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
@@ -2751,6 +2855,7 @@ async def get_acfun_stream_data(url: str, proxy_addr: OptionalStr = None, cookie
 
 @trace_error_decorator
 async def get_changliao_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取畅聊直播流地址
     headers = {
         'User-Agent': 'ios/7.830 (ios 17.0; ; iPhone 15 (A2846/A3089/A3090/A3092))',
         'Accept': 'application/json, text/plain, */*',
@@ -2773,6 +2878,7 @@ async def get_changliao_stream_url(url: str, proxy_addr: OptionalStr = None, coo
     live_status = json_data['data']['roomInfo']['live_stat']
 
     async def get_live_domain(page_url):
+        # 获取映客直播域名
         html_str = await async_req(page_url, proxy_addr=proxy_addr, headers=headers)
         html_str = _get_str_response(html_str)
         config_json_match = re.findall("var config = (.*?)config.webskins",
@@ -2797,6 +2903,7 @@ async def get_changliao_stream_url(url: str, proxy_addr: OptionalStr = None, coo
 
 @trace_error_decorator
 async def get_yingke_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取映客直播流地址
     headers = {
         'Referer': 'https://www.inke.cn/',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
@@ -2831,6 +2938,7 @@ async def get_yingke_stream_url(url: str, proxy_addr: OptionalStr = None, cookie
 
 @trace_error_decorator
 async def get_yinbo_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取音播直播流地址
     headers = {
         'User-Agent': 'ios/7.830 (ios 17.0; ; iPhone 15 (A2846/A3089/A3090/A3092))',
         'Accept': 'application/json, text/plain, */*',
@@ -2854,6 +2962,7 @@ async def get_yinbo_stream_url(url: str, proxy_addr: OptionalStr = None, cookies
     live_status = room_data['live_stat']
 
     async def get_live_domain(page_url):
+        # 获取知乎直播域名
         html_str = await async_req(page_url, proxy_addr=proxy_addr, headers=headers)
         html_str = _get_str_response(html_str)
         config_json_match = re.findall("var config = (.*?)config.webskins",
@@ -2878,6 +2987,7 @@ async def get_yinbo_stream_url(url: str, proxy_addr: OptionalStr = None, cookies
 
 @trace_error_decorator
 async def get_zhihu_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取知乎直播流地址
     headers = {
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
@@ -2922,6 +3032,7 @@ async def get_zhihu_stream_url(url: str, proxy_addr: OptionalStr = None, cookies
 
 @trace_error_decorator
 async def get_chzzk_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取 CHZZK 直播流数据
     headers = {
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -2954,6 +3065,7 @@ async def get_chzzk_stream_data(url: str, proxy_addr: OptionalStr = None, cookie
 
 @trace_error_decorator
 async def get_haixiu_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取嗨秀直播流地址（含签名）
     headers = {
         'origin': 'https://www.haixiutv.com',
         'referer': 'https://www.haixiutv.com/',
@@ -3004,6 +3116,7 @@ async def get_haixiu_stream_url(url: str, proxy_addr: OptionalStr = None, cookie
 
 @trace_error_decorator
 async def get_vvxqiu_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取 VV 星球直播流地址
     headers = {
         'User-Agent': 'ios/7.830 (ios 17.0; ; iPhone 15 (A2846/A3089/A3090/A3092))',
         'Access-Control-Request-Method': 'GET',
@@ -3050,6 +3163,7 @@ async def get_vvxqiu_stream_url(url: str, proxy_addr: OptionalStr = None, cookie
 
 @trace_error_decorator
 async def get_17live_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取 17Live 直播流地址
     headers = {
         'origin': 'https://17.live',
         'referer': 'https://17.live/',
@@ -3082,6 +3196,7 @@ async def get_17live_stream_url(url: str, proxy_addr: OptionalStr = None, cookie
 
 @trace_error_decorator
 async def get_langlive_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取浪 Live 直播流地址
     headers = {
         'origin': 'https://www.lang.live',
         'referer': 'https://www.lang.live/',
@@ -3109,6 +3224,7 @@ async def get_langlive_stream_url(url: str, proxy_addr: OptionalStr = None, cook
 
 @trace_error_decorator
 async def get_pplive_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取飘飘直播流地址
     headers = {
         'Content-Type': 'application/json',
         'Origin': 'https://m.pp.weimipopo.com',
@@ -3146,6 +3262,7 @@ async def get_pplive_stream_url(url: str, proxy_addr: OptionalStr = None, cookie
 
 @trace_error_decorator
 async def get_6room_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取六间房直播流地址
     headers = {
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
         'referer': 'https://ios.6.cn/?ver=8.0.3&build=4',
@@ -3186,6 +3303,7 @@ async def get_6room_stream_url(url: str, proxy_addr: OptionalStr = None, cookies
 
 @trace_error_decorator
 async def get_shopee_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取 Shopee 直播流地址
     headers = {
         'accept': 'application/json, text/plain, */*',
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
@@ -3250,6 +3368,7 @@ async def get_shopee_stream_url(url: str, proxy_addr: OptionalStr = None, cookie
 
 @trace_error_decorator
 async def get_youtube_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取 YouTube 直播流地址
     headers = {
         'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
@@ -3281,6 +3400,7 @@ async def get_youtube_stream_url(url: str, proxy_addr: OptionalStr = None, cooki
 
 @trace_error_decorator
 async def get_taobao_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取淘宝直播流地址
     headers = {
         'Referer': 'https://huodong.m.taobao.com/',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
@@ -3319,7 +3439,7 @@ async def get_taobao_stream_url(url: str, proxy_addr: OptionalStr = None, cookie
         'data': '{"liveId":"' + live_id + '","creatorId":null}',
     }
 
-    for i in range(2):
+    for _ in range(2):
         t13 = int(time.time() * 1000)
         params['t'] = str(t13)
 
@@ -3355,6 +3475,7 @@ async def get_taobao_stream_url(url: str, proxy_addr: OptionalStr = None, cookie
                     play_url_list = json_data['data']['liveUrlList']
 
                     def get_sort_key(item):
+                        # 京东直播流排序键函数
                         definition_priority = {
                             "lld": 0, "ld": 1, "md": 2, "hd": 3, "ud": 4
                         }
@@ -3395,7 +3516,7 @@ async def get_jd_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: O
         redirect_url = url
         
     author_id = get_params(redirect_url, 'authorId')
-    result = {"anchor_name": '', "is_live": False}
+    result: dict = {"anchor_name": '', "is_live": False}
     if not author_id:
         live_id = re.search('#/(.*?)\\?origin', redirect_url)
         if not live_id:
@@ -3451,6 +3572,7 @@ async def get_jd_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: O
 
 @trace_error_decorator
 async def get_faceit_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取 Faceit 直播流数据
     headers = {
         'Referer': 'https://www.faceit.com/zh/players/qpjzz/stream',
         'faceit-referer': 'web-next',
@@ -3483,6 +3605,7 @@ async def get_faceit_stream_data(url: str, proxy_addr: OptionalStr = None, cooki
 
 @trace_error_decorator
 async def get_migu_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取咪咕直播流地址
     headers = {
             'origin': 'https://www.miguvideo.com',
             'referer': 'https://www.miguvideo.com/',
@@ -3533,6 +3656,7 @@ async def get_migu_stream_url(url: str, proxy_addr: OptionalStr = None, cookies:
         source_url = json_data['body']['urlInfo']['url']
 
         async def _get_dd_calcu(url):
+            # 来秀签名算法（内部方法）
             try:
                 result = subprocess.run(
                     ["node", f"{JS_SCRIPT_PATH}/migu.js", url],
@@ -3560,6 +3684,7 @@ async def get_migu_stream_url(url: str, proxy_addr: OptionalStr = None, cookies:
 
 @trace_error_decorator
 async def get_lianjie_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取连接直播流地址
     headers = {
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
                           'Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0',
@@ -3592,12 +3717,15 @@ async def get_lianjie_stream_url(url: str, proxy_addr: OptionalStr = None, cooki
 
 @trace_error_decorator
 async def get_laixiu_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取来秀直播流地址
     def generate_uuid(ua_type: str):
+        # 生成 UUID（来秀签名用）
         if ua_type == "mobile":
             return str(uuid.uuid4())
         return str(uuid.uuid4()).replace('-', '')
 
     def calculate_sign(ua_type: str = 'pc'):
+        # 计算来秀请求签名
         a = int(time.time() * 1000)
         s = generate_uuid(ua_type)
         u = 'kk792f28d6ff1f34ec702c08626d454b39pro'
@@ -3655,6 +3783,7 @@ async def get_laixiu_stream_url(url: str, proxy_addr: OptionalStr = None, cookie
 
 @trace_error_decorator
 async def get_picarto_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict:
+    # 获取 Picarto 直播流地址
     headers = {
             'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
                           'Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0',

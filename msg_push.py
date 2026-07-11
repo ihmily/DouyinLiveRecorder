@@ -1,26 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# 消息推送模块 - 支持多种消息推送渠道用于直播状态通知
 
-"""
-消息推送模块
-
-支持多种消息推送渠道，用于直播状态通知：
-- 钉钉群机器人
-- 微信（Server酱/WeChat）
-- 邮件 (SMTP)
-- Telegram Bot
-- Bark (iOS)
-- NTFY (通知服务)
-- PushPlus (推送加)
-
-每个推送函数返回格式：{"success": [...], "error": [...]}
-
-Author: Hmily
-GitHub: https://github.com/ihmily
-Date: 2023-09-03 19:18:36
-Update: 2025-01-23 17:16:12
-Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
-"""
 import json
 import base64
 import http.client
@@ -30,42 +11,25 @@ import smtplib
 from email.header import Header
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-import src.logger  # pyright: ignore[reportUnusedImport]  # trigger loguru config side effects
+import src.logger  # trigger loguru config side effects
 from loguru import logger
 
-# 配置 HTTP 客户端（不使用代理，防止本地推送被代理干扰
-no_proxy_handler = urllib.request.ProxyHandler({})
-opener = urllib.request.build_opener(no_proxy_handler)
+# 配置 HTTP 客户端（不使用代理，防止本地推送被代理干扰）
+no_proxy_handler: urllib.request.ProxyHandler = urllib.request.ProxyHandler({})
+opener: urllib.request.OpenerDirector = urllib.request.build_opener(no_proxy_handler)
 headers: dict[str, str] = {'Content-Type': 'application/json'}
 
 
 def dingtalk(url: str, content: str, number: str | None = None, is_atall: bool = False) -> dict[str, list[str | int]]:
-    """钉钉群机器人推送
-    
-    参数:
-        url: 钉钉机器人 Webhook 地址（支持多个，用逗号或中文逗号分隔
-        content: 推送消息内容
-        number: 要 @ 的手机号（可选
-        is_atall: 是否 @ 所有人
-        
-    返回:
-        dict: {"success": [...成功地址...], "error": [...失败地址...]}
-    """
+    # 钉钉群机器人推送
     success = []
     error = []
     api_list = url.replace('，', ',').split(',') if url.strip() else []
     for api in api_list:
         json_data = {
             'msgtype': 'text',
-            'text': {
-                'content': content,
-            },
-            "at": {
-                "atMobiles": [
-                    number
-                ],
-                "isAtAll": is_atall
-            },
+            'text': {'content': content},
+            "at": {"atMobiles": [number], "isAtAll": is_atall},
         }
         try:
             data = json.dumps(json_data).encode('utf-8')
@@ -85,24 +49,12 @@ def dingtalk(url: str, content: str, number: str | None = None, is_atall: bool =
 
 
 def xizhi(url: str, title: str, content: str) -> dict[str, list[str | int]]:
-    """微信推送（Server酱/WeChat）
-    
-    参数:
-        url: Server酱 API 地址（支持多个
-        title: 消息标题
-        content: 消息内容
-        
-    返回:
-        dict: {"success": [...成功地址...], "error": [...失败地址...]}
-    """
+    # 微信推送（Server酱/WeChat）
     success = []
     error = []
     api_list = url.replace('，', ',').split(',') if url.strip() else []
     for api in api_list:
-        json_data = {
-            'title': title,
-            'content': content
-        }
+        json_data = {'title': title, 'content': content}
         try:
             data = json.dumps(json_data).encode('utf-8')
             req = urllib.request.Request(api, data=data, headers=headers)
@@ -123,23 +75,7 @@ def xizhi(url: str, title: str, content: str) -> dict[str, list[str | int]]:
 def send_email(email_host: str, login_email: str, email_pass: str, sender_email: str, sender_name: str,
                to_email: str, title: str, content: str, smtp_port: str | None = None,
                open_ssl: bool = True) -> dict[str, list[str]]:
-    """邮件推送（SMTP协议）
-    
-    参数:
-        email_host: SMTP 服务器地址
-        login_email: 登录邮箱
-        email_pass: 邮箱密码/授权码
-        sender_email: 发件人邮箱
-        sender_name: 发件人名称
-        to_email: 收件人邮箱（支持多个
-        title: 邮件标题
-        content: 邮件内容
-        smtp_port: SMTP 端口（可选，SSL默认465，非SSL默认25
-        open_ssl: 是否使用 SSL/TLS
-        
-    返回:
-        dict: {"success": [...成功邮箱...], "error": [...失败邮箱...]}
-    """
+    # 邮件推送（SMTP协议）
     receivers = to_email.replace('，', ',').split(',') if to_email.strip() else []
     smtp_obj = None
 
@@ -178,21 +114,9 @@ def send_email(email_host: str, login_email: str, email_pass: str, sender_email:
 
 
 def tg_bot(chat_id: int, token: str, content: str) -> dict[str, list[str | int]]:
-    """Telegram Bot 推送
-    
-    参数:
-        chat_id: Telegram 聊天/群组 ID
-        token: Bot Token
-        content: 推送内容
-        
-    返回:
-        dict: {"success": [1] 或 [], "error": [] 或 [1]}
-    """
+    # Telegram Bot 推送
     try:
-        json_data = {
-            "chat_id": chat_id,
-            'text': content
-        }
+        json_data = {"chat_id": chat_id, 'text': content}
         url = f'https://api.telegram.org/bot{token}/sendMessage'
         data = json.dumps(json_data).encode('utf-8')
         req = urllib.request.Request(url, data=data, headers=headers)
@@ -208,39 +132,14 @@ def tg_bot(chat_id: int, token: str, content: str) -> dict[str, list[str | int]]
 def bark(api: str, title: str = "message", content: str = 'test', level: str = "active",
          badge: int = 1, auto_copy: int = 1, sound: str = "", icon: str = "", group: str = "",
          is_archive: int = 1, url: str = "") -> dict[str, list[str | int]]:
-    """Bark 推送（iOS 通知
-    
-    参数:
-        api: Bark API 地址（格式：https://your.bark.server/key/
-        title: 消息标题
-        content: 消息内容
-        level: 通知级别（active/timeout/passive
-        badge: 应用角标数字
-        auto_copy: 是否自动复制内容
-        sound: 通知声音
-        icon: 图标 URL
-        group: 消息分组
-        is_archive: 是否自动归档
-        url: 点击通知跳转的 URL
-        
-    返回:
-        dict: {"success": [...成功地址...], "error": [...失败地址...]}
-    """
+    # Bark 推送（iOS 通知）
     success = []
     error = []
     api_list = api.replace('，', ',').split(',') if api.strip() else []
     for _api in api_list:
         json_data = {
-            "title": title,
-            "body": content,
-            "level": level,
-            "badge": badge,
-            "autoCopy": auto_copy,
-            "sound": sound,
-            "icon": icon,
-            "group": group,
-            "isArchive": is_archive,
-            "url": url
+            "title": title, "body": content, "level": level, "badge": badge, "autoCopy": auto_copy,
+            "sound": sound, "icon": icon, "group": group, "isArchive": is_archive, "url": url
         }
         try:
             data = json.dumps(json_data).encode('utf-8')
@@ -262,26 +161,7 @@ def bark(api: str, title: str = "message", content: str = 'test', level: str = "
 def ntfy(api: str, title: str = "message", content: str = 'test', tags: str | list[str] = 'tada', priority: int = 3,
          action_url: str = "", attach: str = "", filename: str = "", click: str = "", icon: str = "",
          delay: str = "", email: str = "", call: str = "") -> dict[str, list[str | int]]:
-    """NTFY 推送（跨平台通知服务
-    
-    参数:
-        api: NTFY API 地址（格式：https://ntfy.sh/your-topic
-        title: 消息标题
-        content: 消息内容
-        tags: 标签/表情（支持多个
-        priority: 优先级（1-5，5最高
-        action_url: 点击通知跳转的 URL
-        attach: 附件 URL
-        filename: 附件文件名
-        click: 点击 URL
-        icon: 图标 URL
-        delay: 延迟发送（如 30s, 10m
-        email: 邮件通知
-        call: 电话通知
-        
-    返回:
-        dict: {"success": [...成功地址...], "error": [...失败地址...]}
-    """
+    # NTFY 推送（跨平台通知服务）
     success = []
     error = []
     api_list = api.replace('，', ',').split(',') if api.strip() else []
@@ -293,20 +173,9 @@ def ntfy(api: str, title: str = "message", content: str = 'test', tags: str | li
     for _api in api_list:
         server, topic = _api.rsplit('/', maxsplit=1)
         json_data = {
-            "topic": topic,
-            "title": title,
-            "message": content,
-            "tags": tags,
-            "priority": priority,
-            "attach": attach,
-            "filename": filename,
-            "click": click,
-            "actions": actions,
-            "markdown": False,
-            "icon": icon,
-            "delay": delay,
-            "email": email,
-            "call": call
+            "topic": topic, "title": title, "message": content, "tags": tags, "priority": priority,
+            "attach": attach, "filename": filename, "click": click, "actions": actions,
+            "markdown": False, "icon": icon, "delay": delay, "email": email, "call": call
         }
 
         try:
@@ -335,26 +204,13 @@ def ntfy(api: str, title: str = "message", content: str = 'test', tags: str | li
 
 
 def pushplus(token: str, title: str, content: str) -> dict[str, list[str | int]]:
-    """PushPlus 推送（推送加
-    
-    参数:
-        token: PushPlus Token（支持多个
-        title: 消息标题
-        content: 消息内容
-        
-    返回:
-        dict: {"success": [...成功Token...], "error": [...失败Token...]}
-    """
+    # PushPlus 推送
     success = []
     error = []
     token_list = token.replace('，', ',').split(',') if token.strip() else []
 
     for _token in token_list:
-        json_data = {
-            'token': _token,
-            'title': title,
-            'content': content
-        }
+        json_data = {'token': _token, 'title': title, 'content': content}
 
         try:
             url = 'https://www.pushplus.plus/send'

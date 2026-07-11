@@ -28,10 +28,14 @@ classifiers = [
     "Intended Audience :: End Users/Desktop",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
+    "Operating System :: MacOS X",
+    "Operating System :: Microsoft :: Windows :: Win32",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Multimedia :: Video :: Capture",
     "Topic :: Communications :: Chat",
 ]
@@ -46,7 +50,6 @@ dependencies = [
     "PyExecJS>=1.5.1",
     "pystray>=0.19.4",
     "Pillow>=10.0.0",
-    "weverse>=0.9.0",
 ]
 
 [project.optional-dependencies]
@@ -58,10 +61,6 @@ dev = [
     "mypy>=1.5.0",
 ]
 gui = [
-    "pystray>=0.19.4",
-    "Pillow>=10.0.0",
-]
-all = [
     "pystray>=0.19.4",
     "Pillow>=10.0.0",
 ]
@@ -78,9 +77,6 @@ Issues = "https://github.com/ihmily/DouyinLiveRecorder/issues"
 Changelog = "https://github.com/ihmily/DouyinLiveRecorder/releases"
 Sponsor = "https://github.com/sponsors/ihmily"
 
-[project.entry-points]
-"douyin_live_recorder" = {}
-
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
@@ -94,7 +90,7 @@ i18n = ["**/*.mo", "**/*.po"]
 
 [tool.black]
 line-length = 120
-target-version = ['py310', 'py311', 'py312']
+target-version = ['py310', 'py311', 'py312', 'py313']
 include = '\.pyi?$'
 exclude = '''
 /(
@@ -104,6 +100,10 @@ exclude = '''
     | dist
     | __pycache__
     | \.pyc
+    | node
+    | ffmpeg
+    | downloads
+    | logs
 )/
 '''
 

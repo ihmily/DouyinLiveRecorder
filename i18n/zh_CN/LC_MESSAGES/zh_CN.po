@@ -3,14 +3,14 @@
 # This file is distributed under the same license as the DouyinLiveRecorder package.
 #
 # DouyinLiveRecorder 简体中文翻译文件
-# 版本: 4.0.7
-# 更新日期: 2026-05-16
+# 版本: 4.0.8-dev
+# 更新日期: 2026-06-20
 
 msgid ""
 msgstr ""
-"Project-Id-Version: DouyinLiveRecorder 4.0.7\n"
+"Project-Id-Version: DouyinLiveRecorder 4.0.8-dev\n"
 "POT-Creation-Date: 2024-10-20 00:00+0800\n"
-"PO-Revision-Date: 2026-05-16 12:00+0800\n"
+"PO-Revision-Date: 2026-06-20 12:00+0800\n"
 "Last-Translator: Hmily <ihmily@github>\n"
 "Language-Team: Chinese\n"
 "Content-Type: text/plain; charset=UTF-8\n"
@@ -797,3 +797,127 @@ msgstr "启用"
 #: gui.pyw
 msgid "未启动"
 msgstr "未启动"
+
+# =============================================================================
+# YouTube 平台消息
+# =============================================================================
+
+#: src/spider.py
+msgid "Error: Please log in to YouTube on your device's webpage and configure cookies in the config.ini"
+msgstr "错误：请先在设备网页上登录YouTube，并在config.ini中配置cookies"
+
+# =============================================================================
+# FlexTV 额外错误消息
+# =============================================================================
+
+#: src/spider.py
+msgid "Failed to retrieve data from FlexTV live room"
+msgstr "从FlexTV直播间获取数据失败"
+
+# =============================================================================
+# PopkonTV 额外错误消息
+# =============================================================================
+
+#: src/spider.py
+msgid "Failed to retrieve live stream source,"
+msgstr "获取直播流源失败，"
+
+# =============================================================================
+# TwitCasting 额外错误消息
+# =============================================================================
+
+#: src/spider.py
+msgid "TwitCasting login error,"
+msgstr "TwitCasting登录错误，"
+
+# =============================================================================
+# spider.py 异常与错误消息（f-string 模板）
+# =============================================================================
+
+#: src/spider.py
+msgid "Error message: {e} Error line: {tb_lineno}"
+msgstr "错误信息: {e} 错误行号: {tb_lineno}"
+
+#: src/spider.py
+msgid "First data retrieval failed: {url} Preparing to switch parsing methods due to {e}"
+msgstr "首次数据获取失败: {url} 由于 {e} 正在准备切换解析方法"
+
+#: src/spider.py
+msgid "Failed to fetch data from {url}.{e}"
+msgstr "从 {url} 获取数据失败。{e}"
+
+#: src/spider.py
+msgid "Failed to parse JSON data from {url}. Error: {e}"
+msgstr "从 {url} 解析JSON数据失败。错误: {e}"
+
+#: src/spider.py
+msgid "Failed URL: {url} Error message: {error_msg}"
+msgstr "失败的URL: {url} 错误信息: {error_msg}"
+
+#: src/spider.py
+msgid "{e}, Failed URL: {url}, preparing to switch to a backup plan for re-parsing."
+msgstr "{e}，失败的URL: {url}，正在准备切换到备用方案重新解析。"
+
+#: src/spider.py
+msgid "Get douyu sign params error: {e}"
+msgstr "获取斗鱼签名参数错误: {e}"
+
+#: src/spider.py
+msgid "An error occurred during login: {e}"
+msgstr "登录过程中发生错误: {e}"
+
+#: src/spider.py
+msgid "FlexTV login request exception: {e}"
+msgstr "FlexTV登录请求异常: {e}"
+
+#: src/spider.py
+msgid "HTTP status error occurred during login: {e.response.status_code}"
+msgstr "登录时发生HTTP状态错误: {e.response.status_code}"
+
+#: src/spider.py
+msgid "An exception occurred during popkontv login: {e}"
+msgstr "popkontv登录过程中发生异常: {e}"
+
+# =============================================================================
+# room.py 异常消息（f-string 模板）
+# =============================================================================
+
+#: src/room.py
+msgid "HTTP status error occurred: {e.response.status_code}"
+msgstr "发生HTTP状态错误: {e.response.status_code}"
+
+#: src/room.py
+msgid "An exception occurred during get_live_room_id: {e}"
+msgstr "获取直播间ID时发生异常: {e}"
+
+# =============================================================================
+# utils.py 配置文件与磁盘空间消息（f-string 模板）
+# =============================================================================
+
+#: src/utils.py
+msgid "Error occurred while reading the configuration file: {e}"
+msgstr "读取配置文件时发生错误: {e}"
+
+#: src/utils.py
+msgid "Key [{key}] does not exist in section [{section}]."
+msgstr "键 [{key}] 在节 [{section}] 中不存在。"
+
+#: src/utils.py
+msgid "Section [{section}] does not exist in the file."
+msgstr "节 [{section}] 在文件中不存在。"
+
+#: src/utils.py
+msgid "An error occurred while reading the configuration file: {e}"
+msgstr "读取配置文件时发生错误: {e}"
+
+#: src/utils.py
+msgid "The value of {key} under [{section}] in the configuration file has been updated."
+msgstr "配置文件中 [{section}] 节下的 {key} 的值已更新。"
+
+#: src/utils.py
+msgid "Error occurred while writing to the configuration file: {e}"
+msgstr "写入配置文件时发生错误: {e}"
+
+#: src/utils.py
+msgid "{disk_root} Total: {disk_usage.total / (1024 ** 3):.2f} GB Used: {disk_usage.used / (1024 ** 3):.2f} GB Free: {free_space_gb:.2f} GB\n"
+msgstr "{disk_root} 总计: {disk_usage.total / (1024 ** 3):.2f} GB 已用: {disk_usage.used / (1024 ** 3):.2f} GB 可用: {free_space_gb:.2f} GB\n"

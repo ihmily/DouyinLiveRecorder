@@ -1,35 +1,34 @@
 #!/usr/bin/env python3
 # -*- encoding: utf-8 -*-
 
-"""
-DouyinLiveRecorder 主程序入口 - 命令行版
-
-这是直播录制工具的核心模块，负责：
-- 配置文件的读取和解析
-- 多平台直播流的获取和解析
-- FFmpeg 录制进程的管理
-- 多线程并发录制控制
-- 错误处理和自动重试
-- 直播状态通知推送
-
-支持平台：60+ 国内外直播平台（详见下文）
-
-架构流程：
-    URL配置 → 平台识别 → 获取直播数据 → 解析流地址 → FFmpeg录制 → 状态监控
-
-Author: Hmily
-GitHub: https://github.com/ihmily
-Date: 2023-07-17 23:52:05
-Update: 2025-10-23 19:48:05
-Version: v4.0.7
-Copyright (c) 2023-2025 by Hmily, All Rights Reserved.
-"""
+# DouyinLiveRecorder 主程序入口 - 命令行版
+#
+# 这是直播录制工具的核心模块，负责：
+# - 配置文件的读取和解析
+# - 多平台直播流的获取和解析
+# - FFmpeg 录制进程的管理
+# - 多线程并发录制控制
+# - 错误处理和自动重试
+# - 直播状态通知推送
+#
+# 支持平台：60+ 国内外直播平台（详见下文）
+#
+# 架构流程：
+#     URL配置 → 平台识别 → 获取直播数据 → 解析流地址 → FFmpeg录制 → 状态监控
+#
+# Author: Hmily
+# GitHub: https://github.com/ihmily
+# Date: 2023-07-17 23:52:05
+# Update: 2025-10-23 19:48:05
+# Version: v4.0.7
+# Copyright (c) 2023-2025 by Hmily, All Rights Reserved.
 import asyncio
 import os
 import sys
 import builtins
 import subprocess
 import signal
+import atexit
 import threading
 import time
 import datetime
@@ -56,73 +55,74 @@ from ffmpeg_install import (
 )
 
 # 版本信息和支持的平台列表
-version = "v4.0.7"
-platforms = ("\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|"
-             "酷狗|花椒|流星|Acfun|畅聊|映客|音播|知乎|嗨秀|VV星球|17Live|浪Live|漂漂|六间房|乐嗨|花猫|淘宝|京东|咪咕|连接|来秀"
-             "\n海外站点：TikTok|SOOP|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK|Shopee|"
-             "Youtube|Faceit|Picarto")
+version: str = "v4.0.7"
+platforms: str = ("\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|"
+                   "酷狗|花椒|流星|Acfun|畅聊|映客|音播|知乎|嗨秀|VV星球|17Live|浪Live|漂漂|六间房|乐嗨|花猫|淘宝|京东|咪咕|连接|来秀"
+                   "\n海外站点：TikTok|SOOP|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK|Shopee|"
+                   "Youtube|Faceit|Picarto")
 
 # ==================== 全局状态变量 ====================
 
 # 录制状态管理
-recording = set()  # 正在录制的直播间集合
-monitoring = 0  # 正在监控的直播间数量
-running_list = []  # 正在运行的 URL 列表
-recording_time_list = {}  # 记录每个直播间的开始录制时间
-exit_recording = False  # 退出标志
+recording: set = set()  # 正在录制的直播间集合
+monitoring: int = 0  # 正在监控的直播间数量
+running_list: list = []  # 正在运行的 URL 列表
+recording_time_list: dict = {}  # 记录每个直播间的开始录制时间
+exit_recording: bool = False  # 退出标志
 
 # 错误控制和动态调优
-error_count = 0  # 当前错误计数
-pre_max_request = 10  # 之前的最大请求数
-max_request_lock = threading.Lock()  # 最大请求数的线程锁
-error_window = []  # 错误窗口（用于动态调整并发数
-error_window_size = 10  # 错误窗口大小
-error_threshold = 5  # 错误阈值，超过后降低并发
+error_count: int = 0  # 当前错误计数
+pre_max_request: int = 10  # 之前的最大请求数
+max_request_lock: threading.Lock = threading.Lock()  # 最大请求数的线程锁
+error_window: list = []  # 错误窗口（用于动态调整并发数
+error_window_size: int = 10  # 错误窗口大小
+error_threshold: int = 5  # 错误阈值，超过后降低并发
 
 # URL 和配置管理
-url_tuples_list = []  # 解析后的 URL 配置列表（格式：(画质, URL, 主播名)
-url_comments = []  # 被注释掉的 URL 列表
-text_no_repeat_url = []  # 去重后的 URL 文本
-need_update_line_list = []  # 需要更新的配置行
-not_record_list = []  # 不录制的直播间列表
+url_tuples_list: list = []  # 解析后的 URL 配置列表（格式：(画质, URL, 主播名)
+url_comments: list = []  # 被注释掉的 URL 列表
+text_no_repeat_url: list = []  # 去重后的 URL 文本
+need_update_line_list: list = []  # 需要更新的配置行
+not_record_list: list = []  # 不录制的直播间列表
 
 # 标志变量
-first_start = True  # 首次启动标志
-first_run = True  # 首次运行标志
-global_proxy = False  # 全局代理启用标志
-create_var = locals()  # 动态变量创建（用于字幕线程
+first_start: bool = True  # 首次启动标志
+first_run: bool = True  # 首次运行标志
+global_proxy: bool = False  # 全局代理启用标志
+create_var: dict[str, Any] = locals()  # 动态变量创建（用于字幕线程
+start_display_time: "datetime.datetime" = datetime.datetime.now()  # 显示信息开始时间
 
 # ==================== 路径和配置 ====================
 
-script_path = os.path.split(os.path.realpath(sys.argv[0]))[0]  # 脚本所在目录
-config_file = f'{script_path}/config/config.ini'  # 主配置文件路径
-url_config_file = f'{script_path}/config/URL_config.ini'  # URL 配置文件路径
-backup_dir = f'{script_path}/backup_config'  # 配置备份目录
-text_encoding = 'utf-8-sig'  # 文本文件编码（支持 BOM
-rstr = r"[\/\\\:\*\？?\"\<\>\|&#.。,， ~！· ]"  # 文件名字符过滤正则
-default_path = f'{script_path}/downloads'  # 默认下载目录
+script_path: str = os.path.split(os.path.realpath(sys.argv[0]))[0]  # 脚本所在目录
+config_file: str = f'{script_path}/config/config.ini'  # 主配置文件路径
+url_config_file: str = f'{script_path}/config/URL_config.ini'  # URL 配置文件路径
+backup_dir: str = f'{script_path}/backup_config'  # 配置备份目录
+text_encoding: str = 'utf-8-sig'  # 文本文件编码（支持 BOM
+rstr: str = r"[\/\\\:\*\？?\"\<\>\|&#.。,， ~！· ]"  # 文件名字符过滤正则
+default_path: str = f'{script_path}/downloads'  # 默认下载目录
 os.makedirs(default_path, exist_ok=True)  # 确保下载目录存在
-file_update_lock = threading.Lock()  # 文件更新锁（防止多线程写入冲突
+file_update_lock: threading.Lock = threading.Lock()  # 文件更新锁（防止多线程写入冲突
 
 # ==================== FFmpeg 进程管理 ====================
 
 # 全局跟踪所有 ffmpeg 进程（用于安全退出时清理
-_ffmpeg_processes = []
-_processes_lock = threading.Lock()
+_ffmpeg_processes: list = []
+_processes_lock: threading.Lock = threading.Lock()
 
-def register_ffmpeg_process(process):
-    """注册新启动的 ffmpeg 进程"""
+def register_ffmpeg_process(process: subprocess.Popen) -> None:
+    # 注册新启动的 ffmpeg 进程
     with _processes_lock:
         _ffmpeg_processes.append(process)
 
-def unregister_ffmpeg_process(process):
-    """取消注册已结束的 ffmpeg 进程"""
+def unregister_ffmpeg_process(process: subprocess.Popen) -> None:
+    # 取消注册已结束的 ffmpeg 进程
     with _processes_lock:
         if process in _ffmpeg_processes:
             _ffmpeg_processes.remove(process)
 
-def _cleanup_single_ffmpeg_process(proc):
-    """清理单个 ffmpeg 进程（在并行线程中调用）"""
+def _cleanup_single_ffmpeg_process(proc: subprocess.Popen) -> None:
+    # 清理单个 ffmpeg 进程（在并行线程中调用）
     try:
         if proc.poll() is None:
             logger.info(f"尝试终止 ffmpeg 进程 (PID: {proc.pid})")
@@ -170,8 +170,8 @@ def _cleanup_single_ffmpeg_process(proc):
         logger.error(f"清理 ffmpeg 进程时出错: {e}")
 
 
-def cleanup_all_ffmpeg_processes():
-    """清理所有注册的 ffmpeg 进程（并行执行）"""
+def cleanup_all_ffmpeg_processes() -> None:
+    # 清理所有注册的 ffmpeg 进程（并行执行）
     logger.info("正在清理所有 ffmpeg 进程...")
     with _processes_lock:
         processes_to_clean = list(_ffmpeg_processes)
@@ -189,8 +189,8 @@ def cleanup_all_ffmpeg_processes():
         _ffmpeg_processes.clear()
     logger.info("所有 ffmpeg 进程清理完成")
 
-def safe_exit(signum, frame):
-    """安全的退出处理函数"""
+def safe_exit(signum: int, frame: Any) -> None:
+    # 安全的退出处理函数
     global exit_recording
     exit_recording = True
     color_obj.print_colored("\n正在安全退出...", color_obj.YELLOW)
@@ -203,14 +203,18 @@ signal.signal(signal.SIGTERM, safe_exit)
 if hasattr(signal, 'SIGBREAK'):
     signal.signal(signal.SIGBREAK, safe_exit)
 
+# 进程异常退出时兜底清理 ffmpeg（覆盖硬杀 / 未捕获异常等非优雅退出路径）
+atexit.register(cleanup_all_ffmpeg_processes)
+
 
 def _get_error_line(e: BaseException) -> str:
+    # 从异常对象获取触发的行号
     tb = e.__traceback__
     return str(tb.tb_lineno) if tb else "unknown"
 
 
-os_type = os.name
-color_obj = utils.Color()
+os_type: str = os.name
+color_obj: "utils.Color" = utils.Color()
 os.environ['PATH'] = ffmpeg_path + os.pathsep + (current_env_path or '')
 
 PLATFORM_HOST = [
@@ -330,11 +334,13 @@ CLEAN_URL_HOST_LIST = (
 
 
 def contains_url(string: str) -> bool:
+    # 检查字符串是否包含 URL
     pattern = r"(https?://)?(www\.)?[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)+(:\d+)?(/.*)?"
     return re.search(pattern, string) is not None
 
 
 def display_info() -> None:
+    # 后台线程：刷新控制台状态显示
     global start_display_time
     time.sleep(5)
     while True:
@@ -383,6 +389,7 @@ def display_info() -> None:
 
 
 def update_file(file_path: str, old_str: str, new_str: str, start_str: str | None = None) -> str | None:
+    # 安全更新文件内容（加锁防止并发写入）
     if old_str == new_str and start_str is None:
         return old_str
     with file_update_lock:
@@ -409,6 +416,7 @@ def update_file(file_path: str, old_str: str, new_str: str, start_str: str | Non
 
 
 def delete_line(file_path: str, del_line: str, delete_all: bool = False) -> None:
+    # 从文件中删除指定行
     with file_update_lock:
         with open(file_path, 'r+', encoding=text_encoding) as f:
             lines = f.readlines()
@@ -425,7 +433,8 @@ def delete_line(file_path: str, del_line: str, delete_all: bool = False) -> None
                 f.write(txt_line)
 
 
-def get_startup_info(system_type: str):
+def get_startup_info(system_type: str) -> Any:
+    # 获取平台启动信息（Windows 隐藏控制台窗口）
     if system_type == 'nt':
         startup_info = subprocess.STARTUPINFO()
         startup_info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -436,6 +445,7 @@ def get_startup_info(system_type: str):
 
 def segment_video(converts_file_path: str, segment_save_file_path: str, segment_format: str, segment_time: str,
                   is_original_delete: bool = True) -> None:
+    # 使用 FFmpeg 对视频进行分段录制
     try:
         if os.path.exists(converts_file_path) and os.path.getsize(converts_file_path) > 0:
             ffmpeg_command = [
@@ -451,7 +461,7 @@ def segment_video(converts_file_path: str, segment_save_file_path: str, segment_
                 "-movflags", "+frag_keyframe+empty_moov",
                 segment_save_file_path,
             ]
-            _output = subprocess.check_output(
+            subprocess.check_output(
                 ffmpeg_command, stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type)
             )
             if is_original_delete:
@@ -465,6 +475,7 @@ def segment_video(converts_file_path: str, segment_save_file_path: str, segment_
 
 
 def converts_mp4(converts_file_path: str, is_original_delete: bool = True) -> None:
+    # 将录制文件转换为 MP4 格式
     try:
         if os.path.exists(converts_file_path) and os.path.getsize(converts_file_path) > 0:
             if converts_to_h264:
@@ -486,7 +497,7 @@ def converts_mp4(converts_file_path: str, is_original_delete: bool = True) -> No
                     "-c:a", "copy",
                     "-f", "mp4", converts_file_path.rsplit('.', maxsplit=1)[0] + ".mp4",
                 ]
-            _output = subprocess.check_output(
+            subprocess.check_output(
                 ffmpeg_command, stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type)
             )
             if is_original_delete:
@@ -500,9 +511,10 @@ def converts_mp4(converts_file_path: str, is_original_delete: bool = True) -> No
 
 
 def converts_m4a(converts_file_path: str, is_original_delete: bool = True) -> None:
+    # 将录制文件转换为 M4A 音频格式
     try:
         if os.path.exists(converts_file_path) and os.path.getsize(converts_file_path) > 0:
-            _output = subprocess.check_output([
+            subprocess.check_output([
                 "ffmpeg", "-i", converts_file_path,
                 "-n", "-vn",
                 "-c:a", "aac", "-bsf:a", "aac_adtstoasc", "-ab", "320k",
@@ -519,11 +531,13 @@ def converts_m4a(converts_file_path: str, is_original_delete: bool = True) -> No
 
 
 def generate_subtitles(record_name: str, ass_filename: str, sub_format: str = 'srt') -> None:
+    # 生成字幕文件（SRT/ASS/VTT 格式）
     index_time = 0
     today = datetime.datetime.now()
     re_datatime = today.strftime('%Y-%m-%d %H:%M:%S')
 
     def transform_int_to_time(seconds: int) -> str:
+        # 将整数秒数转为时间戳字符串
         m, s = divmod(seconds, 60)
         h, m = divmod(m, 60)
         return f"{h:02d}:{m:02d}:{s:02d}"
@@ -531,7 +545,7 @@ def generate_subtitles(record_name: str, ass_filename: str, sub_format: str = 's
     while True:
         index_time += 1
         txt = str(index_time) + "\n" + transform_int_to_time(index_time) + ',000 --> ' + transform_int_to_time(
-            index_time + 1) + ',000' + "\n" + str(re_datatime) + "\n\n"
+            index_time + 1) + ',000' + "\n" + re_datatime + "\n\n"
 
         with open(f"{ass_filename}.{sub_format.lower()}", 'a', encoding=text_encoding) as f:
             f.write(txt)
@@ -544,7 +558,8 @@ def generate_subtitles(record_name: str, ass_filename: str, sub_format: str = 's
 
 
 def adjust_max_request() -> None:
-    global max_request, error_count, pre_max_request, error_window
+    # 根据错误率动态调整并发线程数
+    global max_request, error_count, pre_max_request
     preset = max_request
 
     while True:
@@ -573,6 +588,7 @@ def adjust_max_request() -> None:
 
 
 def push_message(record_name: str, live_url: str, content: str) -> None:
+    # 触发消息推送（多渠道分发）
     msg_title = push_message_title.strip() or "直播间状态更新通知"
     push_functions = {
         '微信': lambda: xizhi(xizhi_api_url, msg_title, content),
@@ -594,7 +610,7 @@ def push_message(record_name: str, live_url: str, content: str) -> None:
     for platform, func in push_functions.items():
         if platform in live_status_push.upper():
             try:
-                result = func()
+                result: dict[str, list] = func()
                 logger.info(f'提示信息：已经将[{record_name}]直播状态消息推送至你的{platform},'
                             f' 成功{len(result["success"])}, 失败{len(result["error"])}')
             except Exception as e:
@@ -602,6 +618,7 @@ def push_message(record_name: str, live_url: str, content: str) -> None:
 
 
 def run_script(command: str) -> None:
+    # 执行自定义脚本命令
     try:
         process = subprocess.Popen(
             command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=get_startup_info(os_type)
@@ -622,6 +639,7 @@ def run_script(command: str) -> None:
 
 
 def clear_record_info(record_name: str, record_url: str) -> None:
+    # 清理录制状态信息
     global monitoring
     recording.discard(record_name)
     if record_url in url_comments and record_url in running_list:
@@ -631,6 +649,7 @@ def clear_record_info(record_name: str, record_url: str) -> None:
 
 
 def direct_download_stream(source_url: str, save_path: str, record_name: str, live_url: str, platform: str) -> bool:
+    # 直接下载直播流（不走 FFmpeg）
     try:
         with open(save_path, 'wb') as f:
             client = httpx.Client(timeout=None)
@@ -667,6 +686,7 @@ def direct_download_stream(source_url: str, save_path: str, record_name: str, li
 
 def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, save_type: str,
                      script_command: str | None = None) -> bool:
+    # 检查 FFmpeg 子进程状态并处理异常
     save_file_path = ffmpeg_command[-1]
     process = subprocess.Popen(
         ffmpeg_command, stdin=subprocess.PIPE, stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type)
@@ -685,7 +705,7 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
         create_var[subs_thread_name].start()
 
     def terminate_ffmpeg_process(proc, timeout=30):
-        """安全地终止 ffmpeg 进程，包含多层级 fallback 机制"""
+        # 安全地终止 ffmpeg 进程，包含多层级 fallback 机制
         if proc.poll() is not None:
             return True
             
@@ -803,6 +823,7 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
 
 
 def clean_name(input_text):
+    # 清理文件名中的非法字符
     cleaned_name = re.sub(rstr, "_", input_text.strip()).strip('_')
     cleaned_name = cleaned_name.replace("（", "(").replace("）", ")")
     if clean_emoji:
@@ -811,6 +832,7 @@ def clean_name(input_text):
 
 
 def get_quality_code(qn):
+    # 将画质描述转为代码（原画/超清/高清等）
     quality_zh_to_en = {
         "原画": "OD",
         "蓝光": "BD",
@@ -823,6 +845,7 @@ def get_quality_code(qn):
 
 
 def get_record_headers(platform, live_url):
+    # 获取录制请求的 HTTP 头
     live_domain = '/'.join(live_url.split('/')[0:3])
     record_headers = {
         'PandaTV': 'origin:https://www.pandalive.co.kr',
@@ -839,10 +862,12 @@ def get_record_headers(platform, live_url):
 
 
 def is_flv_preferred_platform(link):
+    # 判断平台是否优先使用 FLV 流
     return any(i in link for i in ["douyin", "tiktok"])
 
 
 def select_source_url(link, stream_info):
+    # 根据画质偏好选择流地址
     if is_flv_preferred_platform(link):
         codec = utils.get_query_params(stream_info.get('flv_url'), "codec")
         if codec and codec[0] == 'h265':
@@ -854,6 +879,7 @@ def select_source_url(link, stream_info):
 
 
 def start_record(url_data: tuple, count_variable: int = -1) -> None:
+    # 录制主循环：检测→获取流→启动 FFmpeg
     global error_count
 
     while True:
@@ -1373,7 +1399,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                             clear_record_info(record_name, record_url)
                             return
 
-                        if not url_data[-1] and run_once is False:
+                        if not url_data[-1] and not run_once:
                             if new_record_url:
                                 need_update_line_list.append(
                                     f'{record_url}|{new_record_url},主播: {anchor_name.strip()}')
@@ -1384,7 +1410,8 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
 
                         push_at = datetime.datetime.today().strftime('%Y-%m-%d %H:%M:%S')
                         if port_info['is_live'] is False:
-                            print(f"\r{record_name} 等待直播... ")
+                            if len(recording) == 0:
+                                print(f"\r{record_name} 等待直播... ")
 
                             if start_pushed:
                                 if over_show_push:
@@ -1632,13 +1659,13 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
 
                                     try:
                                         flv_url = port_info.get('flv_url')
-                                        if flv_url:
+                                        if isinstance(flv_url, str) and flv_url:
                                             recording.add(record_name)
                                             start_record_time = datetime.datetime.now()
                                             recording_time_list[record_name] = [start_record_time, record_quality_zh]
 
                                             download_success = direct_download_stream(
-                                                flv_url,  # pyright: ignore[reportArgumentType]
+                                                flv_url,
                                                 save_file_path, record_name, record_url, platform
                                             )
 
@@ -1957,6 +1984,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
 
 
 def backup_file(file_path: str, backup_dir_path: str, limit_counts: int = 6) -> None:
+    # 备份配置文件到 backup_config 目录
     try:
         if not os.path.exists(backup_dir_path):
             os.makedirs(backup_dir_path)
@@ -1980,6 +2008,7 @@ def backup_file(file_path: str, backup_dir_path: str, limit_counts: int = 6) -> 
 
 
 def backup_file_start() -> None:
+    # 启动时备份文件（首次运行触发）
     config_md5 = ''
     url_config_md5 = ''
 
@@ -2002,6 +2031,7 @@ def backup_file_start() -> None:
 
 
 def check_ffmpeg_existence() -> bool:
+    # 检查 FFmpeg 是否可用，不可用则触发安装
     ffmpeg_exists = False
     try:
         result = subprocess.run(['ffmpeg', '-version'], check=True, capture_output=True, text=True)
@@ -2040,6 +2070,7 @@ utils.remove_duplicate_lines(url_config_file)
 
 def read_config_value(config_parser: configparser.RawConfigParser, section: str, option: str, default_value: Any) \
         -> Any:
+    # 读取配置文件指定节键值
     try:
         if '录制设置' not in config_parser.sections():
             config_parser.add_section('录制设置')
@@ -2059,8 +2090,8 @@ def read_config_value(config_parser: configparser.RawConfigParser, section: str,
         return default_value
 
 
-options = {"是": True, "否": False}
-config = configparser.RawConfigParser()
+options: dict[str, bool] = {"是": True, "否": False}
+config: configparser.RawConfigParser = configparser.RawConfigParser()
 config.read(config_file, encoding=text_encoding)
 language = read_config_value(config, '录制设置', 'language(zh_cn/en)', "zh_cn")
 skip_proxy_check = options.get(read_config_value(config, '录制设置', '是否跳过代理检测(是/否)', "否"), False)
@@ -2249,8 +2280,10 @@ while True:
 
 
     try:
-        url_comments, line_list, url_line_list = [[] for _ in range(3)]
-        seen_urls = set()
+        url_comments = []
+        line_list: list[str] = []
+        url_line_list: list[str] = []
+        seen_urls: set[str] = set()
         with (open(url_config_file, "r", encoding=text_encoding, errors='ignore') as file):
             for origin_line in file:
                 if origin_line in line_list:
@@ -2325,6 +2358,7 @@ while True:
             a = need_update_line_list.pop()
             replace_words = a.split('|')
             if replace_words[0] != replace_words[1]:
+                start_with: str | None
                 if replace_words[1].startswith("#"):
                     start_with = '#'
                     new_word = replace_words[1][1:]

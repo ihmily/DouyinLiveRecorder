@@ -15,6 +15,7 @@ from . import JS_SCRIPT_PATH, utils
 
 
 class UnsupportedUrlError(Exception):
+    # 不支持的 URL 格式异常
     pass
 
 
@@ -71,7 +72,7 @@ async def get_unique_id(url: str, proxy_addr: str | None = None, headers: dict |
         async with httpx.AsyncClient(proxy=proxy_addr, timeout=15) as client:
             response = await client.get(url, headers=headers, follow_redirects=True)
             redirect_url = str(response.url)
-            if 'reflow/' in str(redirect_url):
+            if 'reflow/' in redirect_url:
                 raise UnsupportedUrlError("Unsupported URL")
             sec_user_id = redirect_url.split('?')[0].rsplit('/', maxsplit=1)[1]
             headers['Cookie'] = ('ttwid=1%7C4ejCkU2bKY76IySQENJwvGhg1IQZrgGEupSyTKKfuyk%7C1740470403%7Cbc9a'
