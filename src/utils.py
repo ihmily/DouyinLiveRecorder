@@ -53,7 +53,8 @@ def trace_error_decorator(func: Callable) -> Callable:
                 logger.warning('Failed to execute JS code. Please check if the Node.js environment')
                 return {}
             except Exception as e:
-                error_line = traceback.extract_tb(e.__traceback__)[-1].lineno
+                tb = traceback.extract_tb(e.__traceback__) if e.__traceback__ else None
+                error_line = tb[-1].lineno if tb else 'unknown'
                 error_info = f"message: type: {type(e).__name__}, {str(e)} in function {func.__name__} at line: {error_line}"
                 logger.error(error_info)
                 return {}
@@ -68,7 +69,8 @@ def trace_error_decorator(func: Callable) -> Callable:
             logger.warning('Failed to execute JS code. Please check if the Node.js environment')
             return {}
         except Exception as e:
-            error_line = traceback.extract_tb(e.__traceback__)[-1].lineno
+            tb = traceback.extract_tb(e.__traceback__) if e.__traceback__ else None
+            error_line = tb[-1].lineno if tb else 'unknown'
             error_info = f"message: type: {type(e).__name__}, {str(e)} in function {func.__name__} at line: {error_line}"
             logger.error(error_info)
             return {}
@@ -111,7 +113,8 @@ def read_config_value(file_path: str | Path, section: str, key: str) -> str | No
 
 def update_config(file_path: str | Path, section: str, key: str, new_value: str) -> None:
     # 更新配置文件中指定配置项的值
-    config = configparser.ConfigParser()
+    # 关闭插值以避免 cookie 等含 % 的值被 BasicInterpolation 转义/反解析
+    config = configparser.ConfigParser(interpolation=None)
 
     try:
         config.read(file_path, encoding='utf-8-sig')
@@ -123,8 +126,7 @@ def update_config(file_path: str | Path, section: str, key: str, new_value: str)
         print(f"Section [{section}] does not exist in the file.")
         return
 
-    escaped_value = new_value.replace('%', '%%')
-    config[section][key] = escaped_value
+    config[section][key] = new_value
 
     try:
         with open(file_path, 'w', encoding='utf-8-sig') as configfile:
@@ -168,9 +170,15 @@ def remove_duplicate_lines(file_path: str | Path) -> None:
     # 移除文件中的重复行
     unique_lines = OrderedDict()
     text_encoding = 'utf-8-sig'
-    with open(file_path, 'r', encoding=text_encoding) as input_file:
-        for line in input_file:
-            unique_lines[line.strip()] = None
+    try:
+        with open(file_path, 'r', encoding=text_encoding) as input_file:
+            for line in input_file:
+                unique_lines[line.strip()] = None
+    except UnicodeDecodeError:
+        # 非 UTF-8 编码（如 GBK/UTF-16）时回退到系统默认编码读取
+        with open(file_path, 'r', encoding=None) as input_file:
+            for line in input_file:
+                unique_lines[line.strip()] = None
     with open(file_path, 'w', encoding=text_encoding) as output_file:
         for line in unique_lines:
             output_file.write(line + '\n')
@@ -192,8 +200,9 @@ def check_disk_capacity(file_path: str | Path, show: bool = False) -> float:
 
 def handle_proxy_addr(proxy_addr):
     # 处理代理地址，自动添加 http 前缀
+    # 已有协议前缀（http/https/socks 等）的地址不再二次添加
     if proxy_addr:
-        if not proxy_addr.startswith('http'):
+        if '://' not in proxy_addr:
             proxy_addr = 'http://' + proxy_addr
     else:
         proxy_addr = None
@@ -209,8 +218,9 @@ def generate_random_string(length: int) -> str:
 
 def jsonp_to_json(jsonp_str: str) -> OptionalDict:
     # 将 JSONP 格式字符串转换为 JSON 对象
-    pattern = r'(\w+)\((.*)\);?$'
-    match = re.search(pattern, jsonp_str)
+    # re.DOTALL 支持跨行内容；回调名允许含点号（如 a.b(...)）
+    pattern = r'([\w.]+)\((.*)\);?\s*$'
+    match = re.search(pattern, jsonp_str, re.DOTALL)
 
     if match:
         _, json_str = match.groups()
@@ -222,11 +232,20 @@ def jsonp_to_json(jsonp_str: str) -> OptionalDict:
 
 def replace_url(file_path: str | Path, old: str, new: str) -> None:
     # 替换文件中的 URL
+    # 逐行匹配整行内容，避免子串替换误伤包含相同 URL 片段的其他行
     with open(file_path, 'r', encoding='utf-8-sig') as f:
-        content = f.read()
-    if old in content:
-        with open(file_path, 'w', encoding='utf-8-sig') as f:
-            f.write(content.replace(old, new))
+        lines = f.readlines()
+    changed = False
+    with open(file_path, 'w', encoding='utf-8-sig') as f:
+        for line in lines:
+            if line.strip() == old:
+                f.write(new + '\n')
+                changed = True
+            elif old in line:
+                f.write(line.replace(old, new))
+                changed = True
+            else:
+                f.write(line)
 
 
 def get_query_params(url: str, param_name: OptionalStr) -> dict | list[str]:

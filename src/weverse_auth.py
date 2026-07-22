@@ -26,7 +26,7 @@ def refresh_weverse_token(refresh_token):
     payload = {"refreshToken": refresh_token}
 
     try:
-        response = requests.post(refresh_url, json=payload, headers=headers)
+        response = requests.post(refresh_url, json=payload, headers=headers, timeout=10)
         if response.status_code == 200:
             data = response.json()
             new_access_token = data.get("accessToken")

@@ -4,6 +4,7 @@
 
 import os
 import sys
+from pathlib import Path
 from loguru import logger
 
 # 移除默认处理器
@@ -21,7 +22,8 @@ logger.add(
     enqueue=True
 )
 
-script_path = os.path.split(os.path.realpath(sys.argv[0]))[0]
+# 使用模块文件所在目录而非 sys.argv[0]，避免被导入时定位错误
+script_path = str(Path(__file__).resolve().parent.parent)
 
 # DEBUG 级别日志文件（排除 INFO）
 logger.add(
@@ -31,7 +33,7 @@ logger.add(
     filter=lambda i: i["level"].name != "INFO",
     serialize=False,
     enqueue=True,
-    retention=1,
+    retention=3,
     rotation="300 KB",
     encoding='utf-8'
 )
@@ -44,7 +46,7 @@ logger.add(
     filter=lambda i: i["level"].name == "INFO",
     serialize=False,
     enqueue=True,
-    retention=1,
+    retention=3,
     rotation="300 KB",
     encoding='utf-8'
 )

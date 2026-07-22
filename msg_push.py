@@ -34,14 +34,14 @@ def dingtalk(url: str, content: str, number: str | None = None, is_atall: bool =
         try:
             data = json.dumps(json_data).encode('utf-8')
             req = urllib.request.Request(api, data=data, headers=headers)
-            response: http.client.HTTPResponse = opener.open(req, timeout=10)
-            json_str = response.read().decode('utf-8')
+            with opener.open(req, timeout=10) as response:
+                json_str = response.read().decode('utf-8')
             json_data = json.loads(json_str)
-            if json_data['errcode'] == 0:
+            if json_data.get('errcode') == 0:
                 success.append(api)
             else:
                 error.append(api)
-                logger.warning(f'钉钉推送失败, 推送地址：{api}, {json_data["errmsg"]}')
+                logger.warning(f'钉钉推送失败, 推送地址：{api}, {json_data.get("errmsg", "未知错误")}')
         except Exception as e:
             error.append(api)
             logger.warning(f'钉钉推送失败, 推送地址：{api}, 错误信息:{e}')
@@ -58,14 +58,14 @@ def xizhi(url: str, title: str, content: str) -> dict[str, list[str | int]]:
         try:
             data = json.dumps(json_data).encode('utf-8')
             req = urllib.request.Request(api, data=data, headers=headers)
-            response = opener.open(req, timeout=10)
-            json_str = response.read().decode('utf-8')
+            with opener.open(req, timeout=10) as response:
+                json_str = response.read().decode('utf-8')
             json_data = json.loads(json_str)
-            if json_data['code'] == 200:
+            if json_data.get('code') == 200:
                 success.append(api)
             else:
                 error.append(api)
-                logger.warning(f'微信推送失败, 推送地址：{api}, 失败信息：{json_data["msg"]}')
+                logger.warning(f'微信推送失败, 推送地址：{api}, 失败信息：{json_data.get("msg", "未知错误")}')
         except Exception as e:
             error.append(api)
             logger.warning(f'微信推送失败, 推送地址：{api}, 错误信息:{e}')
@@ -91,11 +91,17 @@ def send_email(email_host: str, login_email: str, email_pass: str, sender_email:
         message.attach(t_apart)
 
         if open_ssl:
-            port = int(smtp_port) if smtp_port else 465
-            smtp_obj = smtplib.SMTP_SSL(email_host, port)
+            try:
+                port = int(smtp_port) if smtp_port else 465
+            except ValueError:
+                port = 465
+            smtp_obj = smtplib.SMTP_SSL(email_host, port, timeout=10)
         else:
-            port = int(smtp_port) if smtp_port else 25
-            smtp_obj = smtplib.SMTP(email_host, port)
+            try:
+                port = int(smtp_port) if smtp_port else 25
+            except ValueError:
+                port = 25
+            smtp_obj = smtplib.SMTP(email_host, port, timeout=10)
         smtp_obj.login(login_email, email_pass)
         smtp_obj.sendmail(sender_email, receivers, message.as_string())
         return {"success": receivers, "error": []}
@@ -120,8 +126,8 @@ def tg_bot(chat_id: int, token: str, content: str) -> dict[str, list[str | int]]
         url = f'https://api.telegram.org/bot{token}/sendMessage'
         data = json.dumps(json_data).encode('utf-8')
         req = urllib.request.Request(url, data=data, headers=headers)
-        response = opener.open(req, timeout=15)
-        json_str = response.read().decode('utf-8')
+        with opener.open(req, timeout=15) as response:
+            json_str = response.read().decode('utf-8')
         json.loads(json_str)
         return {"success": [1], "error": []}
     except Exception as e:
@@ -144,14 +150,14 @@ def bark(api: str, title: str = "message", content: str = 'test', level: str = "
         try:
             data = json.dumps(json_data).encode('utf-8')
             req = urllib.request.Request(_api, data=data, headers=headers)
-            response = opener.open(req, timeout=10)
-            json_str = response.read().decode("utf-8")
+            with opener.open(req, timeout=10) as response:
+                json_str = response.read().decode("utf-8")
             json_data = json.loads(json_str)
-            if json_data['code'] == 200:
+            if json_data.get('code') == 200:
                 success.append(_api)
             else:
                 error.append(_api)
-                logger.warning(f'Bark推送失败, 推送地址：{_api}, 失败信息：{json_data["message"]}')
+                logger.warning(f'Bark推送失败, 推送地址：{_api}, 失败信息：{json_data.get("message", "未知错误")}')
         except Exception as e:
             error.append(_api)
             logger.warning(f'Bark推送失败, 推送地址：{_api}, 错误信息:{e}')
@@ -171,18 +177,19 @@ def ntfy(api: str, title: str = "message", content: str = 'test', tags: str | li
         tags = ['partying_face']
     actions = [{"action": "view", "label": "view live", "url": action_url}] if action_url else []
     for _api in api_list:
-        server, topic = _api.rsplit('/', maxsplit=1)
-        json_data = {
-            "topic": topic, "title": title, "message": content, "tags": tags, "priority": priority,
-            "attach": attach, "filename": filename, "click": click, "actions": actions,
-            "markdown": False, "icon": icon, "delay": delay, "email": email, "call": call
-        }
-
+        # rsplit 在地址不含 '/' 时会抛 ValueError，需放入 try 块内优雅降级
         try:
+            server, topic = _api.rsplit('/', maxsplit=1)
+            json_data = {
+                "topic": topic, "title": title, "message": content, "tags": tags, "priority": priority,
+                "attach": attach, "filename": filename, "click": click, "actions": actions,
+                "markdown": False, "icon": icon, "delay": delay, "email": email, "call": call
+            }
+
             data = json.dumps(json_data, ensure_ascii=False).encode('utf-8')
             req = urllib.request.Request(server, data=data, headers=headers)
-            response = opener.open(req, timeout=10)
-            json_str = response.read().decode("utf-8")
+            with opener.open(req, timeout=10) as response:
+                json_str = response.read().decode("utf-8")
             json_data = json.loads(json_str)
             if "error" not in json_data:
                 success.append(_api)
@@ -196,6 +203,8 @@ def ntfy(api: str, title: str = "message", content: str = 'test', tags: str | li
                 error_detail = json.loads(error_msg).get("error", str(e))
             except Exception:
                 error_detail = str(e)
+            finally:
+                e.close()
             logger.warning(f'ntfy推送失败, 推送地址：{_api}, 错误信息:{error_detail}')
         except Exception as e:
             error.append(_api)
@@ -216,8 +225,8 @@ def pushplus(token: str, title: str, content: str) -> dict[str, list[str | int]]
             url = 'https://www.pushplus.plus/send'
             data = json.dumps(json_data).encode('utf-8')
             req = urllib.request.Request(url, data=data, headers=headers)
-            response = opener.open(req, timeout=10)
-            json_str = response.read().decode('utf-8')
+            with opener.open(req, timeout=10) as response:
+                json_str = response.read().decode('utf-8')
             json_data = json.loads(json_str)
 
             if json_data.get('code') == 200:

@@ -35,7 +35,7 @@ def install_nodejs_windows() -> bool:
     try:
         logger.warning("Node.js is not installed.")
         logger.debug("Installing the stable version of Node.js for Windows...")
-        response = requests.get('https://nodejs.cn/download/')
+        response = requests.get('https://nodejs.cn/download/', timeout=30)
         if response.status_code == 200:
             match = re.search('https://npmmirror.com/mirrors/node/(v.*?)/node-(v.*?)-x64.msi',
                               response.text)
@@ -53,7 +53,8 @@ def install_nodejs_windows() -> bool:
             if Path(zip_file_path).exists():
                 logger.debug("Node.js installation file already exists, start install...")
             else:
-                response = requests.get(url, stream=True)
+                response = requests.get(url, stream=True, timeout=30)
+                response.raise_for_status()
                 total_size = int(response.headers.get('Content-Length', 0))
                 block_size = 1024
 
@@ -66,8 +67,7 @@ def install_nodejs_windows() -> bool:
 
             unzip_file(zip_file_path, execute_dir)
             extract_dir_path = str(zip_file_path).rsplit('.', maxsplit=1)[0]
-            f_path, f_name = os.path.splitext(zip_file_path)
-            new_extract_dir_path = Path(f_path).parent / 'node'
+            new_extract_dir_path = Path(execute_dir) / 'node'
             if Path(extract_dir_path).exists() and not Path(new_extract_dir_path).exists():
                 os.rename(extract_dir_path, new_extract_dir_path)
                 os.environ['PATH'] = os.path.join(execute_dir, 'node') + os.pathsep + current_env_path
@@ -78,6 +78,13 @@ def install_nodejs_windows() -> bool:
                 else:
                     logger.debug('Node.js installation failed')
                     return False
+            elif Path(new_extract_dir_path).exists():
+                # 已有安装目录，验证可用性
+                result = subprocess.run(["node", "-v"], capture_output=True)
+                if result.returncode == 0:
+                    return True
+                logger.debug('Node.js directory exists but not working')
+                return False
             return False
         else:
             logger.error("Failed to retrieve the Node.js version page")

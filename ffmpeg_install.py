@@ -27,7 +27,13 @@ def unzip_file(zip_path: str | Path, extract_to: str | Path, delete: bool = True
     if not os.path.exists(extract_to):
         os.makedirs(extract_to)
 
+    extract_root = os.path.realpath(extract_to)
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        for member in zip_ref.namelist():
+            # 防止 Zip Slip 目录穿越攻击：校验每个成员解压后的真实路径
+            member_path = os.path.realpath(os.path.join(extract_root, member))
+            if not member_path.startswith(extract_root + os.sep) and member_path != extract_root:
+                raise ValueError(f"Unsafe path in zip file: {member}")
         zip_ref.extractall(extract_to)
 
     if delete and os.path.exists(zip_path):
@@ -40,16 +46,16 @@ def download_ffmpeg_official(url: str, dest_dir: str) -> bool:
         zip_file_path = Path(dest_dir) / 'ffmpeg_official_temp.zip'
 
         # 下载文件（带进度条）
-        response = requests.get(url, stream=True, timeout=30)
-        response.raise_for_status()
-        total_size = int(response.headers.get('Content-Length', 0))
+        with requests.get(url, stream=True, timeout=30) as response:
+            response.raise_for_status()
+            total_size = int(response.headers.get('Content-Length', 0))
 
-        with tqdm(total=total_size, unit="B", unit_scale=True,
-                  ncols=100, desc='Downloading ffmpeg (official)') as t:
-            with open(zip_file_path, 'wb') as f:
-                for data in response.iter_content(chunk_size=1024):
-                    t.update(len(data))
-                    f.write(data)
+            with tqdm(total=total_size, unit="B", unit_scale=True,
+                      ncols=100, desc='Downloading ffmpeg (official)') as t:
+                with open(zip_file_path, 'wb') as f:
+                    for data in response.iter_content(chunk_size=1024):
+                        t.update(len(data))
+                        f.write(data)
 
         # 解压并提取 bin 目录
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -81,7 +87,7 @@ def download_ffmpeg_official(url: str, dest_dir: str) -> bool:
 
         # 更新 PATH 并验证安装
         os.environ['PATH'] = ffmpeg_path + os.pathsep + (current_env_path or "")
-        result = subprocess.run(["ffmpeg", "-version"], capture_output=True)
+        result = subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=30)
         if result.returncode == 0:
             logger.debug('ffmpeg (official) installation was successful')
             return True
@@ -114,8 +120,8 @@ def get_lanzou_download_link(url: str, password: str | None = None) -> str | Non
                           'Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0',
         }
         # 获取页面 sign 签名
-        response = requests.get(url, headers=headers)
-        sign_match = re.search("var skdklds = '(.*?)';", response.text)
+        with requests.get(url, headers=headers, timeout=30) as response:
+            sign_match = re.search("var skdklds = '(.*?)';", response.text)
         if not sign_match:
             logger.error("Failed to extract sign from lanzou page")
             return None
@@ -128,13 +134,16 @@ def get_lanzou_download_link(url: str, password: str | None = None) -> str | Non
             'p': password,
             'kd': '1',
         }
-        response = requests.post('https://wweb.lanzouv.com/ajaxm.php', headers=headers, data=data)
-        json_data = response.json()
-        download_url = json_data['dom'] + "/file/" + json_data['url']
+        with requests.post('https://wweb.lanzouv.com/ajaxm.php', headers=headers, data=data, timeout=30) as response:
+            json_data = response.json()
+        download_url = json_data.get('dom', '') + "/file/" + json_data.get('url', '')
+        if not download_url or download_url == '/file/':
+            logger.error("Failed to build download URL from lanzou response")
+            return None
 
         # 获取最终重定向地址
-        response = requests.get(download_url, headers=headers)
-        return response.url
+        with requests.get(download_url, headers=headers, timeout=30) as response:
+            return response.url
     except Exception as e:
         logger.error(f"Failed to obtain ffmpeg download address. {e}")
 
@@ -157,21 +166,22 @@ def _install_ffmpeg_lanzou() -> bool:
             logger.debug("ffmpeg installation file already exists, start install...")
         else:
             # 下载文件
-            response = requests.get(ffmpeg_url, stream=True)
-            total_size = int(response.headers.get('Content-Length', 0))
-            block_size = 1024
+            with requests.get(ffmpeg_url, stream=True, timeout=60) as response:
+                response.raise_for_status()
+                total_size = int(response.headers.get('Content-Length', 0))
+                block_size = 1024
 
-            with tqdm(total=total_size, unit="B", unit_scale=True,
-                      ncols=100, desc=f'Downloading ffmpeg ({version})') as t:
-                with open(zip_file_path, 'wb') as f:
-                    for data in response.iter_content(block_size):
-                        t.update(len(data))
-                        f.write(data)
+                with tqdm(total=total_size, unit="B", unit_scale=True,
+                          ncols=100, desc=f'Downloading ffmpeg ({version})') as t:
+                    with open(zip_file_path, 'wb') as f:
+                        for data in response.iter_content(block_size):
+                            t.update(len(data))
+                            f.write(data)
 
         # 解压并验证
         unzip_file(zip_file_path, execute_dir)
         os.environ['PATH'] = ffmpeg_path + os.pathsep + (current_env_path or "")
-        result = subprocess.run(["ffmpeg", "-version"], capture_output=True)
+        result = subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=30)
         if result.returncode == 0:
             logger.debug('ffmpeg (lanzou) installation was successful')
             return True
@@ -204,7 +214,7 @@ def install_ffmpeg_mac():
     logger.warning("ffmpeg is not installed.")
     logger.debug("Installing the stable version of ffmpeg for macOS...")
     try:
-        result = subprocess.run(["brew", "install", "ffmpeg"], capture_output=True)
+        result = subprocess.run(["brew", "install", "ffmpeg"], capture_output=True, timeout=600)
         if result.returncode == 0:
             logger.debug('ffmpeg installation was successful. Restart for changes to take effect.')
             return True
@@ -226,16 +236,16 @@ def install_ffmpeg_linux():
     try:
         logger.warning("ffmpeg is not installed.")
         logger.debug("Trying to install the stable version of ffmpeg")
-        result = subprocess.run(['yum', '-y', 'update'], capture_output=True)
+        result = subprocess.run(['yum', '-y', 'update'], capture_output=True, timeout=300)
         if result.returncode != 0:
             logger.error("Failed to update package lists using yum.")
             return False
 
-        result = subprocess.run(['yum', 'install', '-y', 'ffmpeg'], capture_output=True)
+        result = subprocess.run(['yum', 'install', '-y', 'ffmpeg'], capture_output=True, timeout=300)
         if result.returncode == 0:
             logger.debug("ffmpeg installation was successful using yum. Restart for changes to take effect.")
             return True
-        logger.error(result.stderr.decode('utf-8').strip())
+        logger.error(result.stderr.decode('utf-8', errors='replace').strip())
     except FileNotFoundError:
         logger.debug("yum command not found, trying to install using apt...")
         is_RHS = False
@@ -246,17 +256,17 @@ def install_ffmpeg_linux():
     if not is_RHS:
         try:
             logger.debug("Trying to install the stable version of ffmpeg for Linux using apt...")
-            result = subprocess.run(['apt', 'update'], capture_output=True)
+            result = subprocess.run(['apt', 'update'], capture_output=True, timeout=300)
             if result.returncode != 0:
                 logger.error("Failed to update package lists using apt")
                 return False
 
-            result = subprocess.run(['apt', 'install', '-y', 'ffmpeg'], capture_output=True)
+            result = subprocess.run(['apt', 'install', '-y', 'ffmpeg'], capture_output=True, timeout=300)
             if result.returncode == 0:
                 logger.debug("ffmpeg installation was successful using apt. Restart for changes to take effect.")
                 return True
             else:
-                logger.error(result.stderr.decode('utf-8').strip())
+                logger.error(result.stderr.decode('utf-8', errors='replace').strip())
         except FileNotFoundError:
             logger.error("apt command not found, unable to install ffmpeg. Please manually install ffmpeg by yourself")
         except Exception as e:
@@ -282,7 +292,7 @@ def install_ffmpeg() -> bool:
 def check_ffmpeg_installed() -> bool:
     # 检查 FFmpeg 是否已安装并可用
     try:
-        result = subprocess.run(['ffmpeg', '-version'], capture_output=True)
+        result = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True)
         version = result.stdout.strip()
         if result.returncode == 0 and version:
             return True

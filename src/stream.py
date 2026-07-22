@@ -28,8 +28,9 @@ QUALITY_MAPPING_BIT = {'OD': 99999, 'BD': 4000, 'UHD': 2000, 'HD': 1000, 'SD': 8
 
 def _pad_list(url_list: list, min_length: int = 5) -> list:
     # 将列表填充到指定最小长度
+    # 空列表无法以"最后一个元素"填充，返回 None 列表避免调用方索引越界
     if not url_list:
-        return url_list
+        return [None] * min_length
     while len(url_list) < min_length:
         url_list.append(url_list[-1])
     return url_list
@@ -60,11 +61,15 @@ async def get_douyin_stream_url(json_data: dict, video_quality: str | None = Non
     status = json_data.get("status", 4)
 
     if status == 2:
-        stream_url = json_data['stream_url']
-        flv_url_dict = stream_url['flv_pull_url']
+        stream_url = json_data.get('stream_url', {})
+        flv_url_dict = stream_url.get('flv_pull_url', {})
         flv_url_list: list = list(flv_url_dict.values())
-        m3u8_url_dict = stream_url['hls_pull_url_map']
+        m3u8_url_dict = stream_url.get('hls_pull_url_map', {})
         m3u8_url_list: list = list(m3u8_url_dict.values())
+
+        # 直播流数据不完整时视为未开播，避免后续空列表索引或 urlparse(None) 崩溃
+        if not flv_url_list or not m3u8_url_list:
+            return result
 
         _pad_list(flv_url_list)
         _pad_list(m3u8_url_list)
@@ -87,7 +92,7 @@ async def get_douyin_stream_url(json_data: dict, video_quality: str | None = Non
                 flv_url = flv_url_list[index]
         result |= {
             'is_live': True,
-            'title': json_data['title'],
+            'title': json_data.get('title', ''),
             'quality': video_quality,
             'm3u8_url': m3u8_url,
             'flv_url': flv_url,
@@ -127,16 +132,16 @@ async def get_tiktok_stream_url(json_data: dict | None, video_quality: str | Non
         play_list.sort(key=lambda x: (-x['vbitrate'], -x['resolution'][0], -x['resolution'][1]))
         return play_list
 
-    live_room = json_data['LiveRoom']['liveRoomUserInfo']
-    user = live_room['user']
-    anchor_name = f"{user['nickname']}-{user['uniqueId']}"
+    live_room = json_data.get('LiveRoom', {}).get('liveRoomUserInfo', {})
+    user = live_room.get('user', {})
+    anchor_name = f"{user.get('nickname', '')}-{user.get('uniqueId', '')}"
     status = user.get("status", 4)
 
     result = {"anchor_name": anchor_name, "is_live": False}
 
     if status == 2:
-        stream_data = live_room['liveRoom']['streamData']['pull_data']['stream_data']
-        stream_data = json.loads(stream_data).get('data', {})
+        stream_data_raw = live_room.get('liveRoom', {}).get('streamData', {}).get('pull_data', {}).get('stream_data', '')
+        stream_data = json.loads(stream_data_raw).get('data', {}) if stream_data_raw else {}
         flv_url_list = get_video_quality_url(stream_data, 'flv')
         m3u8_url_list = get_video_quality_url(stream_data, 'hls')
 
@@ -182,11 +187,11 @@ async def get_tiktok_stream_url(json_data: dict | None, video_quality: str | Non
 @trace_error_decorator
 async def get_kuaishou_stream_url(json_data: dict, video_quality: str | None = None) -> dict:
     # 获取快手直播流URL
-    if json_data['type'] == 1 and not json_data["is_live"]:
+    if json_data.get('type') == 1 and not json_data.get("is_live"):
         return json_data
-    live_status = json_data['is_live']
+    live_status = json_data.get('is_live', False)
 
-    result = {"type": 2, "anchor_name": json_data['anchor_name'], "is_live": live_status}
+    result = {"type": 2, "anchor_name": json_data.get('anchor_name', ''), "is_live": live_status}
 
     if live_status:
         quality, quality_index = get_quality_index(video_quality)
@@ -228,9 +233,12 @@ async def get_kuaishou_stream_url(json_data: dict, video_quality: str | None = N
 @trace_error_decorator
 async def get_huya_stream_url(json_data: dict, video_quality: str | None = None) -> dict:
     # 获取虎牙直播流URL
-    game_live_info = json_data['data'][0]['gameLiveInfo']
-    live_title = game_live_info['introduction']
-    stream_info_list = json_data['data'][0]['gameStreamInfoList']
+    data_list = json_data.get('data', [])
+    if not data_list:
+        return {"anchor_name": '', "is_live": False}
+    game_live_info = data_list[0].get('gameLiveInfo', {})
+    live_title = game_live_info.get('introduction', '')
+    stream_info_list = data_list[0].get('gameStreamInfoList', [])
     anchor_name = game_live_info.get('nick', '')
 
     result = {"anchor_name": anchor_name, "is_live": False}
@@ -259,7 +267,10 @@ async def get_huya_stream_url(json_data: dict, video_quality: str | None = None)
             target_unix_time = (t13 + 110624) // 1000
             ws_time = f"{target_unix_time:x}".lower()
             url_query = urllib.parse.parse_qs(old_anti_code)
-            ws_secret_pf = base64.b64decode(urllib.parse.unquote(url_query['fm'][0]).encode()).decode().split("_")[0]
+            fm_value = url_query.get('fm', [''])[0]
+            if not fm_value:
+                return old_anti_code
+            ws_secret_pf = base64.b64decode(urllib.parse.unquote(fm_value).encode()).decode().split("_")[0]
             ws_secret_hash = hashlib.md5(f'{seq_id}|{url_query["ctype"][0]}|{params_t}'.encode()).hexdigest()
             ws_secret = f'{ws_secret_pf}_{uid}_{stream_name}_{ws_secret_hash}_{ws_time}'
             ws_secret_md5 = hashlib.md5(ws_secret.encode()).hexdigest()
@@ -279,21 +290,23 @@ async def get_huya_stream_url(json_data: dict, video_quality: str | None = None)
         if len(quality_list) > 1 and video_quality not in ["OD", "BD"]:
             pattern = r"(?<=264_)\d+"
             quality_list = list(re.findall(pattern, quality_list[1]))[::-1]
-            _pad_list(quality_list)
+            # 无可用画质时跳过，避免索引越界
+            if quality_list:
+                _pad_list(quality_list)
 
-            video_quality_options = {
-                "UHD": quality_list[0],
-                "HD": quality_list[1],
-                "SD": quality_list[2],
-                "LD": quality_list[3]
-            }
+                video_quality_options = {
+                    "UHD": quality_list[0],
+                    "HD": quality_list[1],
+                    "SD": quality_list[2],
+                    "LD": quality_list[3]
+                }
 
-            if video_quality not in video_quality_options:
-                raise ValueError(
-                    f"Invalid video quality. Available options are: {', '.join(video_quality_options.keys())}")
+                if video_quality not in video_quality_options:
+                    raise ValueError(
+                        f"Invalid video quality. Available options are: {', '.join(video_quality_options.keys())}")
 
-            flv_url = flv_url + str(video_quality_options[video_quality])
-            m3u8_url = m3u8_url + str(video_quality_options[video_quality])
+                flv_url = flv_url + str(video_quality_options[video_quality])
+                m3u8_url = m3u8_url + str(video_quality_options[video_quality])
 
         result |= {
             'is_live': True,
@@ -318,8 +331,10 @@ async def get_douyu_stream_url(json_data: dict, video_quality: str | None = None
     rid = str(json_data["room_id"])
     rate = video_quality_options.get(video_quality or '', '0')
     flv_data = await get_douyu_stream_data(rid, rate, cookies=cookies, proxy_addr=proxy_addr)
-    rtmp_url = flv_data['data'].get('rtmp_url')
-    rtmp_live = flv_data['data'].get('rtmp_live')
+    # get_douyu_stream_data 被 trace_error_decorator 包装，失败时返回 {}，需防护 KeyError
+    flv_data_inner = flv_data.get('data') or {}
+    rtmp_url = flv_data_inner.get('rtmp_url')
+    rtmp_live = flv_data_inner.get('rtmp_live')
 
     result = {"anchor_name": json_data.get('anchor_name'), "is_live": True, "quality": video_quality}
     if rtmp_live:
@@ -334,7 +349,9 @@ async def get_yy_stream_url(json_data: dict) -> dict:
     anchor_name = json_data.get('anchor_name', '')
     result = {"anchor_name": anchor_name, "is_live": False}
     if 'avp_info_res' in json_data:
-        stream_line_addr = json_data['avp_info_res']['stream_line_addr']
+        stream_line_addr = json_data['avp_info_res'].get('stream_line_addr', {})
+        if not stream_line_addr:
+            return result
         cdn_info = list(stream_line_addr.values())[0]
         flv_url = cdn_info['cdn_info']['url']
         result |= {'is_live': True, 'title': json_data['title'], 'quality': 'OD', 'flv_url': flv_url, 'record_url': flv_url}

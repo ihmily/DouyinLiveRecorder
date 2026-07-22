@@ -55,17 +55,17 @@ async def async_req(
                 # GET 请求
                 response = await client.get(url, headers=headers, follow_redirects=True)
 
-        # 根据参数返回不同结果
-        if redirect_url:
-            # 返回重定向后的 URL
-            return str(response.url)
-        elif return_cookies:
-            # 返回 Cookie
-            cookies_dict = {name: value for name, value in response.cookies.items()}
-            return (response.text, cookies_dict) if include_cookies else cookies_dict
-        else:
-            # 返回响应文本
-            resp_str = response.text
+            # 根据参数返回不同结果（必须在 try 块内访问 response，异常时 response 未定义）
+            if redirect_url:
+                # 返回重定向后的 URL
+                return str(response.url)
+            elif return_cookies:
+                # 返回 Cookie
+                cookies_dict = {name: value for name, value in response.cookies.items()}
+                return (response.text, cookies_dict) if include_cookies else cookies_dict
+            else:
+                # 返回响应文本
+                resp_str = response.text
     except Exception as e:
         resp_str = str(e)
 

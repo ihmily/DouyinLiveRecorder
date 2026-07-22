@@ -82,12 +82,12 @@ def sync_req(
                 else:
                     # 本地请求（使用自定义 opener）
                     response = opener.open(req, timeout=timeout)
-                if redirect_url:
-                    return response.url
-                
-                # 处理响应编码和 gzip 解压
-                resp_encoding = response.info().get('Content-Encoding')
                 try:
+                    if redirect_url:
+                        return response.url
+
+                    # 处理响应编码和 gzip 解压
+                    resp_encoding = response.info().get('Content-Encoding')
                     if resp_encoding == 'gzip':
                         # gzip 解压
                         resp_bytes = gzip.decompress(response.read())
@@ -100,10 +100,13 @@ def sync_req(
 
             except urllib.error.HTTPError as e:
                 # HTTP 错误处理
-                if e.code == 400:
-                    resp_str = e.read().decode(content_encoding)
-                else:
-                    raise
+                try:
+                    if e.code == 400:
+                        resp_str = e.read().decode(content_encoding)
+                    else:
+                        raise
+                finally:
+                    e.close()
             except urllib.error.URLError as e:
                 # URL 错误记录日志
                 logger.warning(f"URL Error: {e}")

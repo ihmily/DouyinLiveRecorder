@@ -17,11 +17,12 @@ def init_gettext(locale_dir: str | Path, locale_name: str):
 
 
 # 检测执行目录，支持打包后 (_internal) 和源码两种运行方式
-execute_dir = os.path.split(os.path.realpath(sys.argv[0]))[0]
-if os.path.exists(Path(execute_dir) / '_internal/i18n'):
-    locale_path = Path(execute_dir) / '_internal/i18n'  # PyInstaller 打包版位置
+# 优先基于本模块文件所在目录定位，避免 sys.argv[0] 在打包/-m 运行时被误解析
+module_dir = Path(__file__).resolve().parent
+if os.path.exists(module_dir / '_internal/i18n'):
+    locale_path = module_dir / '_internal/i18n'  # PyInstaller 打包版位置
 else:
-    locale_path = Path(execute_dir) / 'i18n'  # 源码运行位置
+    locale_path = module_dir / 'i18n'  # 源码运行位置
 _tr = init_gettext(locale_path, 'zh_CN')  # 默认中文
 original_print = builtins.print  # 保存原始 print 函数
 package_name = 'src'  # 仅翻译 src 包下的代码输出
