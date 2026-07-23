@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import secrets
 import time
+from collections import deque
 from pathlib import Path
-from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -20,7 +21,6 @@ from src.web_config import (
     parse_url_config,
     format_url_line,
     normalize_url,
-    SENSITIVE_MASK,
 )
 
 # web/ 静态资源目录（项目根/web）
@@ -133,7 +133,6 @@ def create_app(
             while True:
                 try:
                     import main
-                    import json
                     status = main.get_status()
                     yield f"data: {json.dumps(status, ensure_ascii=False)}\n\n"
                 except Exception as e:
@@ -148,13 +147,12 @@ def create_app(
         try:
             import main
             with main.record_state_lock:
-                recording_set = set(main.recording)
                 running = list(main.running_list)
         except Exception:
-            recording_set, running = set(), []
+            running = []
         for r in rooms:
-            r["recording"] = any(r["url"] == u or u in r["url"] for u in running) or \
-                any(r["url"] in name or name in r["url"] for name in recording_set)
+            # running_list 存放正在录制的 URL；recording 集合存的是 "序号N 主播名" 而非 URL，故仅按 running_list 判定
+            r["recording"] = any(r["url"] == u or u in r["url"] for u in running)
         return rooms
 
     @app.post("/api/rooms")
@@ -180,10 +178,11 @@ def create_app(
             if r["url"] == old_url:
                 old_raw = r["raw_line"].rstrip("\n").rstrip("\r")
                 prefix = "# " if not r["enabled"] else ""
+                new_raw = (prefix + new_line) if prefix else new_line
                 _main.update_file(
                     app.state.url_config_file,
-                    old_str=old_raw.lstrip("#").strip(),
-                    new_str=(prefix + new_line).strip() if prefix else new_line,
+                    old_str=old_raw,
+                    new_str=new_raw,
                 )
                 replaced = True
                 break
@@ -271,8 +270,8 @@ def create_app(
             return {"lines": []}
         try:
             with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
-                all_lines = f.readlines()
-            return {"lines": all_lines[-lines:]}
+                tail = deque(f, maxlen=lines)
+            return {"lines": list(tail)}
         except Exception as e:
             raise HTTPException(500, str(e))
 
