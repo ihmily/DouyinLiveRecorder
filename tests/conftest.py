@@ -1,6 +1,4 @@
 # tests/conftest.py
-import os
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -14,7 +12,8 @@ def tmp_url_config(tmp_path: Path) -> Path:
         "https://live.douyin.com/123\n"
         "超清,https://live.bilibili.com/456\n"
         "# https://www.huya.com/789\n"
-        "高清,https://www.douyu.com/012,主播: 测试主播\n",
+        "高清,https://www.douyu.com/012,主播: 测试主播\n"
+        "超清，https://www.huya.com/001，主播：全角测试\n",
         encoding="utf-8",
     )
     return p

@@ -5,21 +5,27 @@ from src.web_config import (
     parse_url_config,
     format_url_line,
     normalize_url,
+    read_web_config,
+    read_config_safe,
+    SENSITIVE_SECTIONS,
+    SENSITIVE_MASK,
 )
 
 
 def test_parse_url_config_basic(tmp_url_config: Path):
     rooms = parse_url_config(tmp_url_config)
-    assert len(rooms) == 4
+    assert len(rooms) == 5
     enabled = [r for r in rooms if r["enabled"]]
     disabled = [r for r in rooms if not r["enabled"]]
-    assert len(enabled) == 3
+    assert len(enabled) == 4
     assert len(disabled) == 1
     by_url = {r["url"]: r for r in enabled}
     assert by_url["https://live.douyin.com/123"]["quality"] == "原画"
     assert by_url["https://live.bilibili.com/456"]["quality"] == "超清"
     assert by_url["https://www.douyu.com/012"]["quality"] == "高清"
     assert by_url["https://www.douyu.com/012"]["name"] == "测试主播"
+    assert by_url["https://www.huya.com/001"]["quality"] == "超清"
+    assert by_url["https://www.huya.com/001"]["name"] == "全角测试"
     assert disabled[0]["url"] == "https://www.huya.com/789"
     assert disabled[0]["enabled"] is False
 
@@ -52,7 +58,11 @@ def test_format_url_line_normalizes_missing_scheme():
     assert format_url_line("live.douyin.com/9") == "https://live.douyin.com/9"
 
 
-from src.web_config import read_web_config
+def test_normalize_url_strips_query_for_clean_host():
+    # clean host 的 query 应被去除
+    assert normalize_url("https://live.douyin.com/123?foo=bar") == "https://live.douyin.com/123"
+    # 非 clean host 的 query 应保留
+    assert normalize_url("https://www.douyu.com/012?a=1") == "https://www.douyu.com/012?a=1"
 
 
 def test_read_web_config_defaults(tmp_config_ini):
@@ -72,14 +82,8 @@ def test_read_web_config_missing_section(tmp_path):
     assert cfg["web_auth_enable"] is False
 
 
-from src.web_config import read_config_safe
-
-SENSITIVE_SECTIONS = {"Cookie", "账号密码", "Authorization"}
-MASK = "***"
-
-
 def test_read_config_safe_masks_sensitive(tmp_config_ini):
     sections = read_config_safe(tmp_config_ini)
     assert sections["录制设置"]["循环时间(秒)"] == "300"
-    assert sections["Cookie"]["抖音cookie"] == MASK
+    assert sections["Cookie"]["抖音cookie"] == SENSITIVE_MASK
     assert sections["账号密码"]["sooplive账号"] == ""
