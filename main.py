@@ -2131,24 +2131,34 @@ except Exception as err:
     print("An unexpected error occurred:", err)
 
 def get_status() -> dict:
-    """返回录制引擎状态快照（线程安全），供 Web API 调用。"""
-    import datetime as _dt
-    now = _dt.datetime.now()
-    with record_state_lock:
-        recording_snapshot = list(recording)
-        recording_times = {}
-        for _name, _info in recording_time_list.items():
-            if _info:
-                recording_times[_name] = {
-                    "start_time": _info[0].strftime("%Y-%m-%d %H:%M:%S"),
-                    "quality": _info[1],
-                    "duration": str(now - _info[0]).split(".")[0],
-                }
-            else:
-                recording_times[_name] = {"start_time": "", "quality": "", "duration": "0:00:00"}
-        monitoring_val = monitoring
-        running_val = list(running_list)
-        error_val = error_count
+    """返回录制引擎状态快照（线程安全），供 Web API 调用。
+
+    注意：部分录制路径在未持有 record_state_lock 的情况下修改 recording /
+    recording_time_list（既有行为），因此即便持锁迭代仍可能触发
+    "Set changed size during iteration"。此处用有限次重试兜底。
+    """
+    now = datetime.datetime.now()
+    # 既有代码存在未加锁的并发写，持锁迭代可能抛 RuntimeError，重试兜底
+    for _attempt in range(5):
+        try:
+            with record_state_lock:
+                recording_snapshot = list(recording)
+                recording_times = {}
+                for _name, _info in recording_time_list.items():
+                    if _info:
+                        recording_times[_name] = {
+                            "start_time": _info[0].strftime("%Y-%m-%d %H:%M:%S"),
+                            "quality": _info[1],
+                            "duration": str(now - _info[0]).split(".")[0],
+                        }
+                    else:
+                        recording_times[_name] = {"start_time": "", "quality": "", "duration": "0:00:00"}
+                monitoring_val = monitoring
+                running_val = list(running_list)
+                error_val = error_count
+            break
+        except RuntimeError:
+            continue
     try:
         disk_free_gb = utils.check_disk_capacity(default_path)
     except Exception:
@@ -2159,7 +2169,12 @@ def get_status() -> dict:
         "monitoring": monitoring_val,
         "recording_count": len(recording_snapshot),
         "recording": [
-            {"name": _n, **recording_times.get(_n, {})}
+            {
+                "name": _n,
+                "start_time": recording_times.get(_n, {}).get("start_time", ""),
+                "quality": recording_times.get(_n, {}).get("quality", ""),
+                "duration": recording_times.get(_n, {}).get("duration", "0:00:00"),
+            }
             for _n in recording_snapshot
         ],
         "running_list": running_val,
@@ -2169,11 +2184,12 @@ def get_status() -> dict:
         "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
-def main() -> None:
+def main(non_interactive: bool = False) -> None:
     """录制主循环：读取配置 → 调度录制线程 → 热加载配置。
 
     被 main.py 直接运行时调用，也被 web.py 在守护线程中调用。
     global 声明由重构脚本依据原模块级赋值自动生成，保持语义不变。
+    若 non_interactive=True（如 web.py 守护线程），URL_config 为空时跳过 input() 阻塞。
     """
     global a, acfun_cookie, args, baidu_cookie, bark_msg_api, bark_msg_level, bark_msg_ring, begin_push_message_text, begin_show_push, bigo_cookie, bili_cookie, blued_cookie
     global changliao_cookie, check_path, chzzk_cookie, clean_emoji, converts_to_h264, converts_to_mp4, create_time_file, create_var, custom_script, delay_default, delete_origin_file, dingtalk_api_url
@@ -2205,14 +2221,13 @@ def main() -> None:
                     ini_URL_content = file.read().strip()
 
             if not ini_URL_content.strip():
-                if sys.stdin.isatty():
-                    input_url = input('请输入要录制的主播直播间网址（尽量使用PC网页端的直播间地址）:\n')
-                    with open(url_config_file, 'w', encoding=text_encoding) as file:
-                        file.write(input_url)
-                else:
+                if non_interactive:
                     # 非交互模式（如 web.py 守护线程）：跳过阻塞，等待 Web API 写入 URL
                     time.sleep(5)
                     continue
+                input_url = input('请输入要录制的主播直播间网址（尽量使用PC网页端的直播间地址）:\n')
+                with open(url_config_file, 'w', encoding=text_encoding) as file:
+                    file.write(input_url)
         except OSError as err:
             logger.error(f"发生 I/O 错误: {err}")
 
