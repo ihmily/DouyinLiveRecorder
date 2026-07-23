@@ -27,7 +27,13 @@ def main() -> None:
     import uvicorn
 
     # 在守护线程启动录制引擎
-    recorder_thread = threading.Thread(target=main.main, name="recorder-engine", daemon=True)
+    recorder_thread = threading.Thread(
+        target=main.main,
+        name="recorder-engine",
+        daemon=True,
+        # non_interactive=True：URL_config 为空时跳过 input() 阻塞，避免守护线程在非交互环境下 EOFError 崩溃
+        kwargs={"non_interactive": True},
+    )
     recorder_thread.start()
     print(f"[web] 录制引擎已在守护线程启动 (tid={recorder_thread.ident})")
 
