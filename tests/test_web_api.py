@@ -442,3 +442,46 @@ def test_config_change_non_password_does_not_revoke(web_app, tmp_config_ini: Pat
     with mock.patch("main.get_status", return_value={"version": "v"}):
         r = client.get("/api/status", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200
+
+
+def test_password_change_clears_tokens_safely(web_app, tmp_config_ini: Path):
+    """密码变更清空 token 时不引发并发错误（锁正确性冒烟）。"""
+    import configparser
+    import threading
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.read(tmp_config_ini, encoding="utf-8")
+    parser.set("Web", "web_auth_enable", "true")
+    parser.set("Web", "web_password", "pass1")
+    with tmp_config_ini.open("w", encoding="utf-8") as f:
+        parser.write(f)
+
+    app, _ = web_app
+    client = TestClient(app)
+    # 登录拿几个 token
+    tokens = []
+    for _ in range(5):
+        r = client.post("/api/login", json={"password": "pass1"})
+        tokens.append(r.json()["token"])
+    # 并发：一边轮询 /api/status（触发 middleware 读 _tokens），一边改密码（clear _tokens）
+    errors = []
+    def poll_status():
+        try:
+            for _ in range(20):
+                client.get("/api/status", headers={"Authorization": f"Bearer {tokens[0]}"})
+        except Exception as e:
+            errors.append(e)
+    def change_password():
+        try:
+            for i in range(5):
+                client.put("/api/config", json={
+                    "section": "Web", "key": "web_password", "value": f"pass{i+2}"
+                }, headers={"Authorization": f"Bearer {tokens[0]}"})
+        except Exception as e:
+            errors.append(e)
+    t1 = threading.Thread(target=poll_status)
+    t2 = threading.Thread(target=change_password)
+    t1.start(); t2.start()
+    t1.join(); t2.join()
+    # 不应有 RuntimeError: dictionary changed size during iteration
+    runtime_errors = [e for e in errors if "changed size" in str(e)]
+    assert not runtime_errors, f"并发访问 _tokens 触发 RuntimeError: {runtime_errors}"

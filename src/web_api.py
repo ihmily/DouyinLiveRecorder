@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import secrets
+import threading
 import time
 from collections import deque
 from pathlib import Path
@@ -28,6 +29,8 @@ _WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
 # token 存储：{token: expiry_timestamp}
 _tokens: dict[str, float] = {}
+# 保护 _tokens 并发访问的锁（login 写入、middleware 查询、密码变更时 clear 均需持锁）
+_tokens_lock = threading.Lock()
 
 
 class LoginRequest(BaseModel):
@@ -95,8 +98,10 @@ def create_app(
         auth = request.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
             token = auth[7:]
-            exp = _tokens.get(token)
-            if exp and exp > time.time():
+            with _tokens_lock:
+                exp = _tokens.get(token)
+                valid = exp is not None and exp > time.time()
+            if valid:
                 return await call_next(request)
         return JSONResponse(status_code=401, content={"detail": "unauthorized"})
 
@@ -108,14 +113,16 @@ def create_app(
         cfg = read_web_config(app.state.config_file)
         if not cfg["web_auth_enable"]:
             return {"token": "", "expires_in": 0, "auth_required": False}
-        _purge_expired_tokens()
+        with _tokens_lock:
+            _purge_expired_tokens()
         if not cfg["web_password"]:
             raise HTTPException(500, "web_password 未配置但认证已开启")
         if not secrets.compare_digest(req.password, cfg["web_password"]):
             raise HTTPException(401, "密码错误")
         token = secrets.token_urlsafe(32)
         expiry = time.time() + cfg["web_token_expiry"]
-        _tokens[token] = expiry
+        with _tokens_lock:
+            _tokens[token] = expiry
         return {"token": token, "expires_in": cfg["web_token_expiry"]}
 
     @app.get("/api/status")
@@ -236,7 +243,8 @@ def create_app(
             raise HTTPException(404, "未找到对应的配置项")
         # 密码变更后吊销所有现有 token，强制重新登录
         if req.section == "Web" and req.key == "web_password" and req.value.strip():
-            _tokens.clear()
+            with _tokens_lock:
+                _tokens.clear()
         return {"ok": True}
 
     @app.get("/api/files")
@@ -297,6 +305,7 @@ def create_app(
 
 
 def _purge_expired_tokens() -> None:
+    """清除过期 token。调用方须持有 _tokens_lock。"""
     now = time.time()
     expired = [t for t, exp in _tokens.items() if exp <= now]
     for t in expired:

@@ -196,6 +196,19 @@ def test_update_config_line_preserves_inline_comment(tmp_path: Path):
     assert "web_port = 8000" in content
 
 
+def test_update_config_line_preserves_hash_inline_comment(tmp_path):
+    p = tmp_path / "config.ini"
+    p.write_text(
+        "[Web]\nweb_host = 0.0.0.0 # 监听所有接口\nweb_port = 8000\n",
+        encoding="utf-8",
+    )
+    ok = update_config_line(p, "Web", "web_host", "127.0.0.1")
+    assert ok is True
+    content = p.read_text(encoding="utf-8")
+    assert "web_host = 127.0.0.1 # 监听所有接口" in content
+    assert "web_port = 8000" in content
+
+
 def test_update_config_line_value_without_comment_unchanged_behavior(tmp_path: Path):
     p = tmp_path / "config.ini"
     p.write_text("[录制设置]\n循环时间(秒) = 300\n", encoding="utf-8")
