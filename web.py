@@ -57,6 +57,11 @@ def main() -> None:
 
     print(f"[web] Web 管理面板启动中: http://{host}:{port}")
     print(f"[web] 认证: {'开启' if web_cfg['web_auth_enable'] else '关闭'}")
+    # 不安全默认值告警（C1）：监听 0.0.0.0 且未启用认证时，局域网内任何人均可访问。
+    if not web_cfg["web_auth_enable"] and str(host) == "0.0.0.0":
+        print("[web] ⚠️ 警告: Web 面板监听 0.0.0.0 且未启用认证，局域网内任何人均可访问。")
+        print("      建议在 config.ini [Web] 节设置 web_auth_enable = true 并配置 web_password，")
+        print("      或将 web_host 改为 127.0.0.1 仅限本机访问。")
     uvicorn.run(app, host=host, port=port, log_level="info")
 
 

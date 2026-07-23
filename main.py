@@ -2073,8 +2073,7 @@ print("GitHub: https://github.com/ihmily/DouyinLiveRecorder")
 print(f'支持平台: {platforms}')
 print('.....................................................')
 if not check_ffmpeg_existence():
-    logger.error("缺少ffmpeg无法进行录制，程序退出")
-    sys.exit(1)
+    logger.error("缺少ffmpeg，录制主循环将不会启动（Web 面板仍可运行）")
 os.makedirs(os.path.dirname(config_file), exist_ok=True)
 t3 = threading.Thread(target=backup_file_start, args=(), daemon=True)
 t3.start()
@@ -2205,6 +2204,14 @@ def main(non_interactive: bool = False) -> None:
     global twitcasting_account_type, twitcasting_cookie, twitcasting_password, twitcasting_username, twitch_cookie, url, url_comments, url_host, url_line_list, url_tuple, url_tuples_list, use_proxy
     global video_record_quality, video_save_path, video_save_type, video_save_type_list, vvxqiu_cookie, weibo_cookie, winktv_cookie, xhs_cookie, xizhi_api_url, yinbo_cookie, yingke_cookie, yiqilive_cookie
     global youtube_cookie, yy_cookie, zhihu_cookie
+
+    # FFmpeg 网关：原模块级 sys.exit(1) 会在 import main 时杀死 uvicorn（I7），
+    # 故移到 main() 入口；缺失时打印警告并 return，守护线程干净退出，Web 面板继续服务。
+    # 直接运行 `python main.py` 时同样从这里退出而非 sys.exit，避免硬退出。
+    if not check_ffmpeg_existence():
+        logger.error("缺少ffmpeg无法进行录制，程序退出")
+        return
+
     while True:
 
         try:

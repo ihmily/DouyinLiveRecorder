@@ -276,6 +276,44 @@ def test_config_update_sensitive_unmasks(client, tmp_config_ini):
     assert parser["Cookie"]["抖音cookie"] == "newcookie"
 
 
+def test_config_update_preserves_comments(client, tmp_config_ini):
+    # I4: 注释保留式更新——写入前后注释行都应存在
+    text_before = tmp_config_ini.read_text(encoding="utf-8-sig")
+    # fixture 无注释，先手工加一条注释到录制设置节
+    text_before = text_before.replace(
+        "[录制设置]\n", "[录制设置]\n# 这是注释\n"
+    )
+    tmp_config_ini.write_text(text_before, encoding="utf-8")
+    r = client.put("/api/config", json={
+        "section": "录制设置",
+        "key": "循环时间(秒)",
+        "value": "120"
+    })
+    assert r.status_code == 200
+    text_after = tmp_config_ini.read_text(encoding="utf-8-sig")
+    assert "# 这是注释" in text_after  # 注释保留
+    assert "循环时间(秒) = 120" in text_after  # 值已更新
+
+
+def test_config_update_missing_key_returns_404(client, tmp_config_ini):
+    # I5: 未找到对应配置项时返回 404 而非 {ok:true}
+    r = client.put("/api/config", json={
+        "section": "录制设置",
+        "key": "不存在的键",
+        "value": "1"
+    })
+    assert r.status_code == 404
+
+
+def test_config_update_missing_section_returns_404(client, tmp_config_ini):
+    r = client.put("/api/config", json={
+        "section": "不存在的节",
+        "key": "循环时间(秒)",
+        "value": "1"
+    })
+    assert r.status_code == 404
+
+
 def test_files_list_root(client):
     r = client.get("/api/files")
     assert r.status_code == 200

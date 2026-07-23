@@ -372,7 +372,7 @@
                     var enterCall = 'loadFiles(' + JSON.stringify(it.path) + ')';
                     action = '<button class="small" onclick="' + esc(enterCall) + '">进入</button>';
                 } else {
-                    action = '<a href="/api/files/download?path=' + encodeURIComponent(it.path) + '" download>下载</a>';
+                    action = '<button class="small" onclick="downloadFile(' + JSON.stringify(it.path) + ')">下载</button>';
                 }
                 html += '<tr>'
                     + '<td>' + icon + ' ' + esc(it.name) + '</td>'
@@ -388,6 +388,30 @@
         }
     }
     window.loadFiles = loadFiles;
+
+    // 19b. downloadFile — 走认证头拉取二进制并触发下载（I1）
+    // 直接 fetch + .blob()，不经过 api() 包装（api() 返回 res.text() 会破坏二进制）。
+    window.downloadFile = function (path) {
+        var headers = {};
+        var token = getToken();
+        if (token) headers['Authorization'] = 'Bearer ' + token;
+        fetch('/api/files/download?path=' + encodeURIComponent(path), { headers: headers })
+            .then(function (res) {
+                if (!res.ok) throw new Error(res.statusText);
+                return res.blob();
+            })
+            .then(function (blob) {
+                var a = document.createElement('a');
+                var url = URL.createObjectURL(blob);
+                a.href = url;
+                a.download = path.split('/').pop() || 'download';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            })
+            .catch(function (e) { toast('下载失败: ' + e.message, 'error'); });
+    };
 
     // 20. addRoom（room-add-form submit 处理）
     async function addRoom() {

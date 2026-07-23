@@ -152,7 +152,8 @@ def create_app(
             running = []
         for r in rooms:
             # running_list 存放正在录制的 URL；recording 集合存的是 "序号N 主播名" 而非 URL，故仅按 running_list 判定
-            r["recording"] = any(r["url"] == u or u in r["url"] for u in running)
+            # 精确匹配：前缀子串匹配会把短 URL 的录制状态错误地套到长 URL 上（I3）
+            r["recording"] = any(r["url"] == u for u in running)
         return rooms
 
     @app.post("/api/rooms")
@@ -162,8 +163,12 @@ def create_app(
         if any(r["url"] == url for r in existing):
             raise HTTPException(409, "直播间已存在")
         line = format_url_line(url, req.quality, req.name)
-        with open(app.state.url_config_file, "a", encoding="utf-8-sig") as f:
-            f.write(line + "\n")
+        # 持有 file_update_lock 与录制主循环的 update_file/delete_line 互斥，
+        # 避免热重载的 read→rewrite 窗口内追加行丢失（I2）。
+        import main as _main
+        with _main.file_update_lock:
+            with open(app.state.url_config_file, "a", encoding="utf-8-sig") as f:
+                f.write(line + "\n")
         return {"ok": True}
 
     @app.put("/api/rooms")
@@ -225,8 +230,10 @@ def create_app(
 
     @app.put("/api/config")
     async def update_config(req: ConfigUpdate):
-        from src.utils import update_config
-        update_config(app.state.config_file, req.section, req.key, req.value)
+        from src.web_config import update_config_line
+        ok = update_config_line(app.state.config_file, req.section, req.key, req.value)
+        if not ok:
+            raise HTTPException(404, "未找到对应的配置项")
         return {"ok": True}
 
     @app.get("/api/files")

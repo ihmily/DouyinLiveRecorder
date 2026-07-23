@@ -178,6 +178,7 @@ def read_config_safe(config_file: str | Path) -> dict[str, dict[str, str]]:
     """读取 config.ini 全部节键值，敏感节非空值脱敏为 '***'。
 
     用于 API 返回前端展示；写入仍用 utils.update_config。
+    Web 节单独对 web_password 脱敏（其他 Web 键需可编辑，故不整节脱敏）。
     """
     parser = configparser.ConfigParser(interpolation=None)
     parser.read(config_file, encoding=TEXT_ENCODING)
@@ -187,7 +188,51 @@ def read_config_safe(config_file: str | Path) -> dict[str, dict[str, str]]:
         for key, value in parser.items(section):
             if section in SENSITIVE_SECTIONS and value.strip():
                 items[key] = SENSITIVE_MASK
+            elif section == "Web" and key == "web_password" and value.strip():
+                items[key] = SENSITIVE_MASK
             else:
                 items[key] = value
         result[section] = items
     return result
+
+
+def update_config_line(
+    config_file: str | Path, section: str, key: str, value: str
+) -> bool:
+    """注释保留的行级配置更新。
+
+    逐行扫描：进入目标 section 后，匹配 `^\\s*key\\s*[=：:]\\s*` 的行并替换其值；
+    未找到 section 或 key 时返回 False（不写入）。
+    保留所有注释、空行、节顺序与原分隔符风格。
+    """
+    path = Path(config_file)
+    if not path.exists():
+        return False
+    lines = path.read_text(encoding=TEXT_ENCODING).splitlines(keepends=True)
+    cur_section: str | None = None
+    in_target = False
+    replaced = False
+    # 匹配 key 行：允许 = 或 ：或 : 分隔，key 前后空白
+    key_pattern = re.compile(r'^(\s*' + re.escape(key) + r'\s*[=:：]\s*)(.*)$')
+    new_lines = []
+    for line in lines:
+        stripped = line.strip()
+        # section header: [name]
+        if stripped.startswith('[') and stripped.endswith(']'):
+            cur_section = stripped[1:-1].strip()
+            in_target = (cur_section == section)
+            new_lines.append(line)
+            continue
+        if in_target and not replaced:
+            m = key_pattern.match(line.rstrip('\n').rstrip('\r'))
+            if m:
+                # 保留原行尾换行符
+                eol = '\n' if line.endswith('\n') else ('\r\n' if line.endswith('\r\n') else '')
+                new_lines.append(f"{m.group(1)}{value}{eol}")
+                replaced = True
+                continue
+        new_lines.append(line)
+    if not replaced:
+        return False
+    path.write_text(''.join(new_lines), encoding=TEXT_ENCODING)
+    return True
