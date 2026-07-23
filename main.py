@@ -2130,291 +2130,358 @@ try:
 except Exception as err:
     print("An unexpected error occurred:", err)
 
-while True:
-
+def get_status() -> dict:
+    """返回录制引擎状态快照（线程安全），供 Web API 调用。"""
+    import datetime as _dt
+    now = _dt.datetime.now()
+    with record_state_lock:
+        recording_snapshot = list(recording)
+        recording_times = {}
+        for _name, _info in recording_time_list.items():
+            if _info:
+                recording_times[_name] = {
+                    "start_time": _info[0].strftime("%Y-%m-%d %H:%M:%S"),
+                    "quality": _info[1],
+                    "duration": str(now - _info[0]).split(".")[0],
+                }
+            else:
+                recording_times[_name] = {"start_time": "", "quality": "", "duration": "0:00:00"}
+        monitoring_val = monitoring
+        running_val = list(running_list)
+        error_val = error_count
     try:
-        if not os.path.isfile(config_file):
-            with open(config_file, 'w', encoding=text_encoding) as file:
-                pass
+        disk_free_gb = utils.check_disk_capacity(default_path)
+    except Exception:
+        disk_free_gb = -1.0
+    uptime = str(now - start_display_time).split(".")[0] if start_display_time else "0:00:00"
+    return {
+        "version": version,
+        "monitoring": monitoring_val,
+        "recording_count": len(recording_snapshot),
+        "recording": [
+            {"name": _n, **recording_times.get(_n, {})}
+            for _n in recording_snapshot
+        ],
+        "running_list": running_val,
+        "error_count": error_val,
+        "disk_free_gb": round(disk_free_gb, 2),
+        "uptime": uptime,
+        "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
+    }
 
-        # 每轮重新读取配置文件，支持运行期间热更新
-        config.read(config_file, encoding=text_encoding)
+def main() -> None:
+    """录制主循环：读取配置 → 调度录制线程 → 热加载配置。
 
-        ini_URL_content = ''
-        if os.path.isfile(url_config_file):
-            with open(url_config_file, 'r', encoding=text_encoding) as file:
-                ini_URL_content = file.read().strip()
+    被 main.py 直接运行时调用，也被 web.py 在守护线程中调用。
+    global 声明由重构脚本依据原模块级赋值自动生成，保持语义不变。
+    """
+    global a, acfun_cookie, args, baidu_cookie, bark_msg_api, bark_msg_level, bark_msg_ring, begin_push_message_text, begin_show_push, bigo_cookie, bili_cookie, blued_cookie
+    global changliao_cookie, check_path, chzzk_cookie, clean_emoji, converts_to_h264, converts_to_mp4, create_time_file, create_var, custom_script, delay_default, delete_origin_file, dingtalk_api_url
+    global dingtalk_is_atall, dingtalk_phone_num, disable_record, disk_space_limit, douyu_cookie, dy_cookie, email_host, email_password, enable_https_recording, enable_proxy_platform, enable_proxy_platform_list, exit_recording
+    global extra_enable_proxy, extra_enable_proxy_platform_list, faceit_cookie, filename_by_title, first_run, first_start, flextv_cookie, flextv_password, flextv_username, folder_by_author, folder_by_time, folder_by_title
+    global haixiu_cookie, host_id, huajiao_cookie, huamao_cookie, hy_cookie, ini_URL_content, input_url, is_comment_line, is_run_script, jd_cookie, ks_cookie, kugou_cookie
+    global laixiu_cookie, langlive_cookie, lehaitv_cookie, lianjie_cookie, line, line_list, line_spilt, liuxing_cookie, live_status_push, liveme_cookie, local_delay_default, login_email
+    global look_cookie, loop_time, maoerfm_cookie, max_request, middle, migu_cookie, monitoring, name, netease_cookie, new_line, new_url, new_word
+    global ntfy_api, ntfy_email, ntfy_tags, open_smtp_ssl, origin_line, over_push_message_text, over_show_push, pandatv_cookie, picarto_cookie, popkontv_access_token, popkontv_partner_code, popkontv_password
+    global popkontv_username, pplive_cookie, proxy_addr, proxy_addr_bak, push_check_seconds, push_message_title, pushplus_token, qiandurebo_cookie, quality, replace_words, running_snapshot, running_url
+    global seen_urls, semaphore, sender_email, sender_name, shopee_cookie, show_url, showroom_cookie, six_room_cookie, smtp_port, sooplive_cookie, sooplive_password, sooplive_username
+    global split_line, split_time, split_video_by_time, start_with, t, t2, taobao_cookie, text_no_repeat_url, tg_chat_id, tg_token, tiktok_cookie, to_email
+    global twitcasting_account_type, twitcasting_cookie, twitcasting_password, twitcasting_username, twitch_cookie, url, url_comments, url_host, url_line_list, url_tuple, url_tuples_list, use_proxy
+    global video_record_quality, video_save_path, video_save_type, video_save_type_list, vvxqiu_cookie, weibo_cookie, winktv_cookie, xhs_cookie, xizhi_api_url, yinbo_cookie, yingke_cookie, yiqilive_cookie
+    global youtube_cookie, yy_cookie, zhihu_cookie
+    while True:
 
-        if not ini_URL_content.strip():
-            input_url = input('请输入要录制的主播直播间网址（尽量使用PC网页端的直播间地址）:\n')
-            with open(url_config_file, 'w', encoding=text_encoding) as file:
-                file.write(input_url)
-    except OSError as err:
-        logger.error(f"发生 I/O 错误: {err}")
+        try:
+            if not os.path.isfile(config_file):
+                with open(config_file, 'w', encoding=text_encoding) as file:
+                    pass
 
-    video_save_path = read_config_value(config, '录制设置', '直播保存路径(不填则默认)', "")
-    folder_by_author = options.get(read_config_value(config, '录制设置', '保存文件夹是否以作者区分', "是"), False)
-    folder_by_time = options.get(read_config_value(config, '录制设置', '保存文件夹是否以时间区分', "否"), False)
-    folder_by_title = options.get(read_config_value(config, '录制设置', '保存文件夹是否以标题区分', "否"), False)
-    filename_by_title = options.get(read_config_value(config, '录制设置', '保存文件名是否包含标题', "否"), False)
-    clean_emoji = options.get(read_config_value(config, '录制设置', '是否去除名称中的表情符号', "是"), True)
-    video_save_type = read_config_value(config, '录制设置', '视频保存格式ts|mkv|flv|mp4|mp3音频|m4a音频', "ts")
-    video_record_quality = read_config_value(config, '录制设置', '原画|超清|高清|标清|流畅', "原画")
-    use_proxy = options.get(read_config_value(config, '录制设置', '是否使用代理ip(是/否)', "是"), False)
-    proxy_addr_bak = read_config_value(config, '录制设置', '代理地址', "")
-    proxy_addr = None if not use_proxy else proxy_addr_bak
-    max_request = int(read_config_value(config, '录制设置', '同一时间访问网络的线程数', 3))
-    semaphore = threading.Semaphore(max_request)
-    delay_default = int(read_config_value(config, '录制设置', '循环时间(秒)', 120))
-    local_delay_default = int(read_config_value(config, '录制设置', '排队读取网址时间(秒)', 0))
-    loop_time = options.get(read_config_value(config, '录制设置', '是否显示循环秒数', "否"), False)
-    show_url = options.get(read_config_value(config, '录制设置', '是否显示直播源地址', "否"), False)
-    split_video_by_time = options.get(read_config_value(config, '录制设置', '分段录制是否开启', "否"), False)
-    enable_https_recording = options.get(read_config_value(config, '录制设置', '是否强制启用https录制', "否"), False)
-    disk_space_limit = float(read_config_value(config, '录制设置', '录制空间剩余阈值(gb)', 1.0))
-    split_time = str(read_config_value(config, '录制设置', '视频分段时间(秒)', 1800))
-    converts_to_mp4 = options.get(read_config_value(config, '录制设置', '录制完成后自动转为mp4格式', "否"), False)
-    converts_to_h264 = options.get(read_config_value(config, '录制设置', 'mp4格式重新编码为h264', "否"), False)
-    delete_origin_file = options.get(read_config_value(config, '录制设置', '追加格式后删除原文件', "否"), False)
-    create_time_file = options.get(read_config_value(config, '录制设置', '生成时间字幕文件', "否"), False)
-    is_run_script = options.get(read_config_value(config, '录制设置', '是否录制完成后执行自定义脚本', "否"), False)
-    custom_script = read_config_value(config, '录制设置', '自定义脚本执行命令', "") if is_run_script else None
-    enable_proxy_platform = read_config_value(
-        config, '录制设置', '使用代理录制的平台(逗号分隔)',
-        'tiktok, soop, pandalive, winktv, flextv, popkontv, twitch, liveme, showroom, chzzk, shopee, shp, youtu, faceit'
-    )
-    enable_proxy_platform_list = enable_proxy_platform.replace('，', ',').split(',') if enable_proxy_platform else None
-    extra_enable_proxy = read_config_value(config, '录制设置', '额外使用代理录制的平台(逗号分隔)', '')
-    extra_enable_proxy_platform_list = extra_enable_proxy.replace('，', ',').split(',') if extra_enable_proxy else None
-    live_status_push = read_config_value(config, '推送配置', '直播状态推送渠道', "")
-    dingtalk_api_url = read_config_value(config, '推送配置', '钉钉推送接口链接', "")
-    xizhi_api_url = read_config_value(config, '推送配置', '微信推送接口链接', "")
-    bark_msg_api = read_config_value(config, '推送配置', 'bark推送接口链接', "")
-    bark_msg_level = read_config_value(config, '推送配置', 'bark推送中断级别', "active")
-    bark_msg_ring = read_config_value(config, '推送配置', 'bark推送铃声', "bell")
-    dingtalk_phone_num = read_config_value(config, '推送配置', '钉钉通知@对象(填手机号)', "")
-    dingtalk_is_atall = options.get(read_config_value(config, '推送配置', '钉钉通知@全体(是/否)', "否"), False)
-    tg_token = read_config_value(config, '推送配置', 'tgapi令牌', "")
-    tg_chat_id = read_config_value(config, '推送配置', 'tg聊天id(个人或者群组id)', "")
-    email_host = read_config_value(config, '推送配置', 'SMTP邮件服务器', "")
-    open_smtp_ssl = options.get(read_config_value(config, '推送配置', '是否使用SMTP服务SSL加密(是/否)', "是"), True)
-    smtp_port = read_config_value(config, '推送配置', 'SMTP邮件服务器端口', "")
-    login_email = read_config_value(config, '推送配置', '邮箱登录账号', "")
-    email_password = read_config_value(config, '推送配置', '发件人密码(授权码)', "")
-    sender_email = read_config_value(config, '推送配置', '发件人邮箱', "")
-    sender_name = read_config_value(config, '推送配置', '发件人显示昵称', "")
-    to_email = read_config_value(config, '推送配置', '收件人邮箱', "")
-    ntfy_api = read_config_value(config, '推送配置', 'ntfy推送地址', "")
-    ntfy_tags = read_config_value(config, '推送配置', 'ntfy推送标签', "tada")
-    ntfy_email = read_config_value(config, '推送配置', 'ntfy推送邮箱', "")
-    pushplus_token = read_config_value(config, '推送配置', 'pushplus推送token', "")
-    push_message_title = read_config_value(config, '推送配置', '自定义推送标题', "直播间状态更新通知")
-    begin_push_message_text = read_config_value(config, '推送配置', '自定义开播推送内容', "")
-    over_push_message_text = read_config_value(config, '推送配置', '自定义关播推送内容', "")
-    disable_record = options.get(read_config_value(config, '推送配置', '只推送通知不录制(是/否)', "否"), False)
-    push_check_seconds = int(read_config_value(config, '推送配置', '直播推送检测频率(秒)', 1800))
-    begin_show_push = options.get(read_config_value(config, '推送配置', '开播推送开启(是/否)', "是"), True)
-    over_show_push = options.get(read_config_value(config, '推送配置', '关播推送开启(是/否)', "否"), False)
-    sooplive_username = read_config_value(config, '账号密码', 'sooplive账号', '')
-    sooplive_password = read_config_value(config, '账号密码', 'sooplive密码', '')
-    flextv_username = read_config_value(config, '账号密码', 'flextv账号', '')
-    flextv_password = read_config_value(config, '账号密码', 'flextv密码', '')
-    popkontv_username = read_config_value(config, '账号密码', 'popkontv账号', '')
-    popkontv_partner_code = read_config_value(config, '账号密码', 'partner_code', 'P-00001')
-    popkontv_password = read_config_value(config, '账号密码', 'popkontv密码', '')
-    twitcasting_account_type = read_config_value(config, '账号密码', 'twitcasting账号类型', 'normal')
-    twitcasting_username = read_config_value(config, '账号密码', 'twitcasting账号', '')
-    twitcasting_password = read_config_value(config, '账号密码', 'twitcasting密码', '')
-    popkontv_access_token = read_config_value(config, 'Authorization', 'popkontv_token', '')
-    dy_cookie = read_config_value(config, 'Cookie', '抖音cookie', '')
-    ks_cookie = read_config_value(config, 'Cookie', '快手cookie', '')
-    tiktok_cookie = read_config_value(config, 'Cookie', 'tiktok_cookie', '')
-    hy_cookie = read_config_value(config, 'Cookie', '虎牙cookie', '')
-    douyu_cookie = read_config_value(config, 'Cookie', '斗鱼cookie', '')
-    yy_cookie = read_config_value(config, 'Cookie', 'yy_cookie', '')
-    bili_cookie = read_config_value(config, 'Cookie', 'B站cookie', '')
-    xhs_cookie = read_config_value(config, 'Cookie', '小红书cookie', '')
-    bigo_cookie = read_config_value(config, 'Cookie', 'bigo_cookie', '')
-    blued_cookie = read_config_value(config, 'Cookie', 'blued_cookie', '')
-    sooplive_cookie = read_config_value(config, 'Cookie', 'sooplive_cookie', '')
-    netease_cookie = read_config_value(config, 'Cookie', 'netease_cookie', '')
-    qiandurebo_cookie = read_config_value(config, 'Cookie', '千度热播_cookie', '')
-    pandatv_cookie = read_config_value(config, 'Cookie', 'pandatv_cookie', '')
-    maoerfm_cookie = read_config_value(config, 'Cookie', '猫耳fm_cookie', '')
-    winktv_cookie = read_config_value(config, 'Cookie', 'winktv_cookie', '')
-    flextv_cookie = read_config_value(config, 'Cookie', 'flextv_cookie', '')
-    look_cookie = read_config_value(config, 'Cookie', 'look_cookie', '')
-    twitcasting_cookie = read_config_value(config, 'Cookie', 'twitcasting_cookie', '')
-    baidu_cookie = read_config_value(config, 'Cookie', 'baidu_cookie', '')
-    weibo_cookie = read_config_value(config, 'Cookie', 'weibo_cookie', '')
-    kugou_cookie = read_config_value(config, 'Cookie', 'kugou_cookie', '')
-    twitch_cookie = read_config_value(config, 'Cookie', 'twitch_cookie', '')
-    liveme_cookie = read_config_value(config, 'Cookie', 'liveme_cookie', '')
-    huajiao_cookie = read_config_value(config, 'Cookie', 'huajiao_cookie', '')
-    liuxing_cookie = read_config_value(config, 'Cookie', 'liuxing_cookie', '')
-    showroom_cookie = read_config_value(config, 'Cookie', 'showroom_cookie', '')
-    acfun_cookie = read_config_value(config, 'Cookie', 'acfun_cookie', '')
-    changliao_cookie = read_config_value(config, 'Cookie', 'changliao_cookie', '')
-    yinbo_cookie = read_config_value(config, 'Cookie', 'yinbo_cookie', '')
-    yingke_cookie = read_config_value(config, 'Cookie', 'yingke_cookie', '')
-    zhihu_cookie = read_config_value(config, 'Cookie', 'zhihu_cookie', '')
-    chzzk_cookie = read_config_value(config, 'Cookie', 'chzzk_cookie', '')
-    haixiu_cookie = read_config_value(config, 'Cookie', 'haixiu_cookie', '')
-    vvxqiu_cookie = read_config_value(config, 'Cookie', 'vvxqiu_cookie', '')
-    yiqilive_cookie = read_config_value(config, 'Cookie', '17live_cookie', '')
-    langlive_cookie = read_config_value(config, 'Cookie', 'langlive_cookie', '')
-    pplive_cookie = read_config_value(config, 'Cookie', 'pplive_cookie', '')
-    six_room_cookie = read_config_value(config, 'Cookie', '6room_cookie', '')
-    lehaitv_cookie = read_config_value(config, 'Cookie', 'lehaitv_cookie', '')
-    huamao_cookie = read_config_value(config, 'Cookie', 'huamao_cookie', '')
-    shopee_cookie = read_config_value(config, 'Cookie', 'shopee_cookie', '')
-    youtube_cookie = read_config_value(config, 'Cookie', 'youtube_cookie', '')
-    taobao_cookie = read_config_value(config, 'Cookie', 'taobao_cookie', '')
-    jd_cookie = read_config_value(config, 'Cookie', 'jd_cookie', '')
-    faceit_cookie = read_config_value(config, 'Cookie', 'faceit_cookie', '')
-    migu_cookie = read_config_value(config, 'Cookie', 'migu_cookie', '')
-    lianjie_cookie = read_config_value(config, 'Cookie', 'lianjie_cookie', '')
-    laixiu_cookie = read_config_value(config, 'Cookie', 'laixiu_cookie', '')
-    picarto_cookie = read_config_value(config, 'Cookie', 'picarto_cookie', '')
+            # 每轮重新读取配置文件，支持运行期间热更新
+            config.read(config_file, encoding=text_encoding)
 
-    video_save_type_list = ("FLV", "MKV", "TS", "MP4", "MP3音频", "M4A音频", "MP3", "M4A")
-    if video_save_type and video_save_type.upper() in video_save_type_list:
-        video_save_type = video_save_type.upper()
-    else:
-        video_save_type = "TS"
+            ini_URL_content = ''
+            if os.path.isfile(url_config_file):
+                with open(url_config_file, 'r', encoding=text_encoding) as file:
+                    ini_URL_content = file.read().strip()
 
-    check_path = video_save_path or default_path
-    if utils.check_disk_capacity(check_path, show=first_run) < disk_space_limit:
-        exit_recording = True
-        if not recording:
-            logger.warning(f"Disk space remaining is below {disk_space_limit} GB. "
-                           f"Exiting program due to the disk space limit being reached.")
-            sys.exit(-1)
-
-
-    try:
-        url_comments = []
-        line_list: list[str] = []
-        url_line_list: list[str] = []
-        seen_urls: set[str] = set()
-        with (open(url_config_file, "r", encoding=text_encoding, errors='ignore') as file):
-            for origin_line in file:
-                if origin_line in line_list:
-                    delete_line(url_config_file, origin_line)
-                line_list.append(origin_line)
-                line = origin_line.strip()
-                if len(line) < 18:
+            if not ini_URL_content.strip():
+                if sys.stdin.isatty():
+                    input_url = input('请输入要录制的主播直播间网址（尽量使用PC网页端的直播间地址）:\n')
+                    with open(url_config_file, 'w', encoding=text_encoding) as file:
+                        file.write(input_url)
+                else:
+                    # 非交互模式（如 web.py 守护线程）：跳过阻塞，等待 Web API 写入 URL
+                    time.sleep(5)
                     continue
+        except OSError as err:
+            logger.error(f"发生 I/O 错误: {err}")
 
-                line_spilt = line.split('主播: ')
-                if len(line_spilt) > 2:
-                    # 多段 "主播:" 时保留首尾，中间用空格连接，避免静默丢弃数据
-                    middle = ' '.join(line_spilt[1:-1])
-                    line = update_file(url_config_file, line, f'{line_spilt[0]}主播: {middle} {line_spilt[-1]}') or line
+        video_save_path = read_config_value(config, '录制设置', '直播保存路径(不填则默认)', "")
+        folder_by_author = options.get(read_config_value(config, '录制设置', '保存文件夹是否以作者区分', "是"), False)
+        folder_by_time = options.get(read_config_value(config, '录制设置', '保存文件夹是否以时间区分', "否"), False)
+        folder_by_title = options.get(read_config_value(config, '录制设置', '保存文件夹是否以标题区分', "否"), False)
+        filename_by_title = options.get(read_config_value(config, '录制设置', '保存文件名是否包含标题', "否"), False)
+        clean_emoji = options.get(read_config_value(config, '录制设置', '是否去除名称中的表情符号', "是"), True)
+        video_save_type = read_config_value(config, '录制设置', '视频保存格式ts|mkv|flv|mp4|mp3音频|m4a音频', "ts")
+        video_record_quality = read_config_value(config, '录制设置', '原画|超清|高清|标清|流畅', "原画")
+        use_proxy = options.get(read_config_value(config, '录制设置', '是否使用代理ip(是/否)', "是"), False)
+        proxy_addr_bak = read_config_value(config, '录制设置', '代理地址', "")
+        proxy_addr = None if not use_proxy else proxy_addr_bak
+        max_request = int(read_config_value(config, '录制设置', '同一时间访问网络的线程数', 3))
+        semaphore = threading.Semaphore(max_request)
+        delay_default = int(read_config_value(config, '录制设置', '循环时间(秒)', 120))
+        local_delay_default = int(read_config_value(config, '录制设置', '排队读取网址时间(秒)', 0))
+        loop_time = options.get(read_config_value(config, '录制设置', '是否显示循环秒数', "否"), False)
+        show_url = options.get(read_config_value(config, '录制设置', '是否显示直播源地址', "否"), False)
+        split_video_by_time = options.get(read_config_value(config, '录制设置', '分段录制是否开启', "否"), False)
+        enable_https_recording = options.get(read_config_value(config, '录制设置', '是否强制启用https录制', "否"), False)
+        disk_space_limit = float(read_config_value(config, '录制设置', '录制空间剩余阈值(gb)', 1.0))
+        split_time = str(read_config_value(config, '录制设置', '视频分段时间(秒)', 1800))
+        converts_to_mp4 = options.get(read_config_value(config, '录制设置', '录制完成后自动转为mp4格式', "否"), False)
+        converts_to_h264 = options.get(read_config_value(config, '录制设置', 'mp4格式重新编码为h264', "否"), False)
+        delete_origin_file = options.get(read_config_value(config, '录制设置', '追加格式后删除原文件', "否"), False)
+        create_time_file = options.get(read_config_value(config, '录制设置', '生成时间字幕文件', "否"), False)
+        is_run_script = options.get(read_config_value(config, '录制设置', '是否录制完成后执行自定义脚本', "否"), False)
+        custom_script = read_config_value(config, '录制设置', '自定义脚本执行命令', "") if is_run_script else None
+        enable_proxy_platform = read_config_value(
+            config, '录制设置', '使用代理录制的平台(逗号分隔)',
+            'tiktok, soop, pandalive, winktv, flextv, popkontv, twitch, liveme, showroom, chzzk, shopee, shp, youtu, faceit'
+        )
+        enable_proxy_platform_list = enable_proxy_platform.replace('，', ',').split(',') if enable_proxy_platform else None
+        extra_enable_proxy = read_config_value(config, '录制设置', '额外使用代理录制的平台(逗号分隔)', '')
+        extra_enable_proxy_platform_list = extra_enable_proxy.replace('，', ',').split(',') if extra_enable_proxy else None
+        live_status_push = read_config_value(config, '推送配置', '直播状态推送渠道', "")
+        dingtalk_api_url = read_config_value(config, '推送配置', '钉钉推送接口链接', "")
+        xizhi_api_url = read_config_value(config, '推送配置', '微信推送接口链接', "")
+        bark_msg_api = read_config_value(config, '推送配置', 'bark推送接口链接', "")
+        bark_msg_level = read_config_value(config, '推送配置', 'bark推送中断级别', "active")
+        bark_msg_ring = read_config_value(config, '推送配置', 'bark推送铃声', "bell")
+        dingtalk_phone_num = read_config_value(config, '推送配置', '钉钉通知@对象(填手机号)', "")
+        dingtalk_is_atall = options.get(read_config_value(config, '推送配置', '钉钉通知@全体(是/否)', "否"), False)
+        tg_token = read_config_value(config, '推送配置', 'tgapi令牌', "")
+        tg_chat_id = read_config_value(config, '推送配置', 'tg聊天id(个人或者群组id)', "")
+        email_host = read_config_value(config, '推送配置', 'SMTP邮件服务器', "")
+        open_smtp_ssl = options.get(read_config_value(config, '推送配置', '是否使用SMTP服务SSL加密(是/否)', "是"), True)
+        smtp_port = read_config_value(config, '推送配置', 'SMTP邮件服务器端口', "")
+        login_email = read_config_value(config, '推送配置', '邮箱登录账号', "")
+        email_password = read_config_value(config, '推送配置', '发件人密码(授权码)', "")
+        sender_email = read_config_value(config, '推送配置', '发件人邮箱', "")
+        sender_name = read_config_value(config, '推送配置', '发件人显示昵称', "")
+        to_email = read_config_value(config, '推送配置', '收件人邮箱', "")
+        ntfy_api = read_config_value(config, '推送配置', 'ntfy推送地址', "")
+        ntfy_tags = read_config_value(config, '推送配置', 'ntfy推送标签', "tada")
+        ntfy_email = read_config_value(config, '推送配置', 'ntfy推送邮箱', "")
+        pushplus_token = read_config_value(config, '推送配置', 'pushplus推送token', "")
+        push_message_title = read_config_value(config, '推送配置', '自定义推送标题', "直播间状态更新通知")
+        begin_push_message_text = read_config_value(config, '推送配置', '自定义开播推送内容', "")
+        over_push_message_text = read_config_value(config, '推送配置', '自定义关播推送内容', "")
+        disable_record = options.get(read_config_value(config, '推送配置', '只推送通知不录制(是/否)', "否"), False)
+        push_check_seconds = int(read_config_value(config, '推送配置', '直播推送检测频率(秒)', 1800))
+        begin_show_push = options.get(read_config_value(config, '推送配置', '开播推送开启(是/否)', "是"), True)
+        over_show_push = options.get(read_config_value(config, '推送配置', '关播推送开启(是/否)', "否"), False)
+        sooplive_username = read_config_value(config, '账号密码', 'sooplive账号', '')
+        sooplive_password = read_config_value(config, '账号密码', 'sooplive密码', '')
+        flextv_username = read_config_value(config, '账号密码', 'flextv账号', '')
+        flextv_password = read_config_value(config, '账号密码', 'flextv密码', '')
+        popkontv_username = read_config_value(config, '账号密码', 'popkontv账号', '')
+        popkontv_partner_code = read_config_value(config, '账号密码', 'partner_code', 'P-00001')
+        popkontv_password = read_config_value(config, '账号密码', 'popkontv密码', '')
+        twitcasting_account_type = read_config_value(config, '账号密码', 'twitcasting账号类型', 'normal')
+        twitcasting_username = read_config_value(config, '账号密码', 'twitcasting账号', '')
+        twitcasting_password = read_config_value(config, '账号密码', 'twitcasting密码', '')
+        popkontv_access_token = read_config_value(config, 'Authorization', 'popkontv_token', '')
+        dy_cookie = read_config_value(config, 'Cookie', '抖音cookie', '')
+        ks_cookie = read_config_value(config, 'Cookie', '快手cookie', '')
+        tiktok_cookie = read_config_value(config, 'Cookie', 'tiktok_cookie', '')
+        hy_cookie = read_config_value(config, 'Cookie', '虎牙cookie', '')
+        douyu_cookie = read_config_value(config, 'Cookie', '斗鱼cookie', '')
+        yy_cookie = read_config_value(config, 'Cookie', 'yy_cookie', '')
+        bili_cookie = read_config_value(config, 'Cookie', 'B站cookie', '')
+        xhs_cookie = read_config_value(config, 'Cookie', '小红书cookie', '')
+        bigo_cookie = read_config_value(config, 'Cookie', 'bigo_cookie', '')
+        blued_cookie = read_config_value(config, 'Cookie', 'blued_cookie', '')
+        sooplive_cookie = read_config_value(config, 'Cookie', 'sooplive_cookie', '')
+        netease_cookie = read_config_value(config, 'Cookie', 'netease_cookie', '')
+        qiandurebo_cookie = read_config_value(config, 'Cookie', '千度热播_cookie', '')
+        pandatv_cookie = read_config_value(config, 'Cookie', 'pandatv_cookie', '')
+        maoerfm_cookie = read_config_value(config, 'Cookie', '猫耳fm_cookie', '')
+        winktv_cookie = read_config_value(config, 'Cookie', 'winktv_cookie', '')
+        flextv_cookie = read_config_value(config, 'Cookie', 'flextv_cookie', '')
+        look_cookie = read_config_value(config, 'Cookie', 'look_cookie', '')
+        twitcasting_cookie = read_config_value(config, 'Cookie', 'twitcasting_cookie', '')
+        baidu_cookie = read_config_value(config, 'Cookie', 'baidu_cookie', '')
+        weibo_cookie = read_config_value(config, 'Cookie', 'weibo_cookie', '')
+        kugou_cookie = read_config_value(config, 'Cookie', 'kugou_cookie', '')
+        twitch_cookie = read_config_value(config, 'Cookie', 'twitch_cookie', '')
+        liveme_cookie = read_config_value(config, 'Cookie', 'liveme_cookie', '')
+        huajiao_cookie = read_config_value(config, 'Cookie', 'huajiao_cookie', '')
+        liuxing_cookie = read_config_value(config, 'Cookie', 'liuxing_cookie', '')
+        showroom_cookie = read_config_value(config, 'Cookie', 'showroom_cookie', '')
+        acfun_cookie = read_config_value(config, 'Cookie', 'acfun_cookie', '')
+        changliao_cookie = read_config_value(config, 'Cookie', 'changliao_cookie', '')
+        yinbo_cookie = read_config_value(config, 'Cookie', 'yinbo_cookie', '')
+        yingke_cookie = read_config_value(config, 'Cookie', 'yingke_cookie', '')
+        zhihu_cookie = read_config_value(config, 'Cookie', 'zhihu_cookie', '')
+        chzzk_cookie = read_config_value(config, 'Cookie', 'chzzk_cookie', '')
+        haixiu_cookie = read_config_value(config, 'Cookie', 'haixiu_cookie', '')
+        vvxqiu_cookie = read_config_value(config, 'Cookie', 'vvxqiu_cookie', '')
+        yiqilive_cookie = read_config_value(config, 'Cookie', '17live_cookie', '')
+        langlive_cookie = read_config_value(config, 'Cookie', 'langlive_cookie', '')
+        pplive_cookie = read_config_value(config, 'Cookie', 'pplive_cookie', '')
+        six_room_cookie = read_config_value(config, 'Cookie', '6room_cookie', '')
+        lehaitv_cookie = read_config_value(config, 'Cookie', 'lehaitv_cookie', '')
+        huamao_cookie = read_config_value(config, 'Cookie', 'huamao_cookie', '')
+        shopee_cookie = read_config_value(config, 'Cookie', 'shopee_cookie', '')
+        youtube_cookie = read_config_value(config, 'Cookie', 'youtube_cookie', '')
+        taobao_cookie = read_config_value(config, 'Cookie', 'taobao_cookie', '')
+        jd_cookie = read_config_value(config, 'Cookie', 'jd_cookie', '')
+        faceit_cookie = read_config_value(config, 'Cookie', 'faceit_cookie', '')
+        migu_cookie = read_config_value(config, 'Cookie', 'migu_cookie', '')
+        lianjie_cookie = read_config_value(config, 'Cookie', 'lianjie_cookie', '')
+        laixiu_cookie = read_config_value(config, 'Cookie', 'laixiu_cookie', '')
+        picarto_cookie = read_config_value(config, 'Cookie', 'picarto_cookie', '')
 
-                is_comment_line = line.startswith("#")
-                if is_comment_line:
-                    line = line.lstrip('#')
+        video_save_type_list = ("FLV", "MKV", "TS", "MP4", "MP3音频", "M4A音频", "MP3", "M4A")
+        if video_save_type and video_save_type.upper() in video_save_type_list:
+            video_save_type = video_save_type.upper()
+        else:
+            video_save_type = "TS"
 
-                if re.search('[,，]', line):
-                    split_line = re.split('[,，]', line)
-                else:
-                    split_line = [line, '']
+        check_path = video_save_path or default_path
+        if utils.check_disk_capacity(check_path, show=first_run) < disk_space_limit:
+            exit_recording = True
+            if not recording:
+                logger.warning(f"Disk space remaining is below {disk_space_limit} GB. "
+                               f"Exiting program due to the disk space limit being reached.")
+                sys.exit(-1)
 
-                if len(split_line) == 1:
-                    url = split_line[0]
-                    quality, name = [video_record_quality, '']
-                elif len(split_line) == 2:
-                    if contains_url(split_line[0]):
-                        quality = video_record_quality
-                        url, name = split_line
-                    else:
-                        quality, url = split_line
-                        name = ''
-                else:
-                    quality, url, name = split_line
 
-                if quality not in ("原画", "蓝光", "超清", "高清", "标清", "流畅"):
-                    quality = '原画'
+        try:
+            url_comments = []
+            line_list = []
+            url_line_list = []
+            seen_urls = set()
+            with (open(url_config_file, "r", encoding=text_encoding, errors='ignore') as file):
+                for origin_line in file:
+                    if origin_line in line_list:
+                        delete_line(url_config_file, origin_line)
+                    line_list.append(origin_line)
+                    line = origin_line.strip()
+                    if len(line) < 18:
+                        continue
 
-                if url not in url_line_list:
-                    url_line_list.append(url)
-                else:
-                    delete_line(url_config_file, origin_line)
+                    line_spilt = line.split('主播: ')
+                    if len(line_spilt) > 2:
+                        # 多段 "主播:" 时保留首尾，中间用空格连接，避免静默丢弃数据
+                        middle = ' '.join(line_spilt[1:-1])
+                        line = update_file(url_config_file, line, f'{line_spilt[0]}主播: {middle} {line_spilt[-1]}') or line
 
-                url = 'https://' + url if '://' not in url else url
-                url_host = url.split('/')[2]
-
-                if 'live.shopee.' in url_host or '.shp.ee' in url_host:
-                    url_host = 'live.shopee.' if 'live.shopee.' in url_host else '.shp.ee'
-
-                if url_host in PLATFORM_HOST or any(ext in url for ext in (".flv", ".m3u8")):
-                    if url_host in CLEAN_URL_HOST_LIST:
-                        url = update_file(url_config_file, old_str=url, new_str=url.split('?')[0]) or url
-
-                    if 'xiaohongshu' in url:
-                        host_id = re.search('&host_id=(.*?)(?=&|$)', url)
-                        if host_id:
-                            new_url = url.split('?')[0] + f'?host_id={host_id.group(1)}'
-                            url = update_file(url_config_file, old_str=url, new_str=new_url) or url
-                    seen_urls.add(url)
-                    url_comments = [i for i in url_comments if url not in i]
+                    is_comment_line = line.startswith("#")
                     if is_comment_line:
-                        url_comments.append(url)
+                        line = line.lstrip('#')
+
+                    if re.search('[,，]', line):
+                        split_line = re.split('[,，]', line)
                     else:
-                        new_line = (quality, url, name)
-                        url_tuples_list.append(new_line)
-                else:
-                    if not origin_line.startswith('#'):
-                        color_obj.print_colored(f"\r{origin_line.strip()} 本行包含未知链接.此条跳过", color_obj.YELLOW)
-                        update_file(url_config_file, old_str=origin_line, new_str=origin_line, start_str='#')
+                        split_line = [line, '']
 
-        while len(need_update_line_list):
-            a = need_update_line_list.pop()
-            replace_words = a.split('|')
-            if replace_words[0] != replace_words[1]:
-                start_with: str | None
-                if replace_words[1].startswith("#"):
-                    start_with = '#'
-                    new_word = replace_words[1][1:]
-                else:
-                    start_with = None
-                    new_word = replace_words[1]
-                update_file(url_config_file, old_str=replace_words[0], new_str=new_word, start_str=start_with)
-        running_snapshot = list(running_list)
-        for running_url in running_snapshot:
-            if running_url not in seen_urls and running_url not in url_comments:
-                url_comments.append(running_url)
+                    if len(split_line) == 1:
+                        url = split_line[0]
+                        quality, name = [video_record_quality, '']
+                    elif len(split_line) == 2:
+                        if contains_url(split_line[0]):
+                            quality = video_record_quality
+                            url, name = split_line
+                        else:
+                            quality, url = split_line
+                            name = ''
+                    else:
+                        quality, url, name = split_line
 
-        text_no_repeat_url = list(set(url_tuples_list))
+                    if quality not in ("原画", "蓝光", "超清", "高清", "标清", "流畅"):
+                        quality = '原画'
 
-        if len(text_no_repeat_url) > 0:
-            for url_tuple in text_no_repeat_url:
-                monitoring = len(running_list)
+                    if url not in url_line_list:
+                        url_line_list.append(url)
+                    else:
+                        delete_line(url_config_file, origin_line)
 
-                if url_tuple[1] in not_record_list:
-                    continue
+                    url = 'https://' + url if '://' not in url else url
+                    url_host = url.split('/')[2]
 
-                if url_tuple[1] not in running_list:
-                    print(f"\r{'新增' if not first_start else '传入'}地址: {url_tuple[1]}")
-                    monitoring += 1
-                    args = [url_tuple, monitoring]
-                    create_var[f'thread_{monitoring}'] = threading.Thread(target=start_record, args=args)
-                    create_var[f'thread_{monitoring}'].daemon = True
-                    create_var[f'thread_{monitoring}'].start()
-                    running_list.append(url_tuple[1])
-                    time.sleep(local_delay_default)
-        url_tuples_list = []
-        first_start = False
+                    if 'live.shopee.' in url_host or '.shp.ee' in url_host:
+                        url_host = 'live.shopee.' if 'live.shopee.' in url_host else '.shp.ee'
 
-    except Exception as err:
-        logger.error(f"错误信息: {err} 发生错误的行数: {_get_error_line(err)}")
+                    if url_host in PLATFORM_HOST or any(ext in url for ext in (".flv", ".m3u8")):
+                        if url_host in CLEAN_URL_HOST_LIST:
+                            url = update_file(url_config_file, old_str=url, new_str=url.split('?')[0]) or url
 
-    if first_run:
-        t = threading.Thread(target=display_info, args=(), daemon=True)
-        t.start()
-        t2 = threading.Thread(target=adjust_max_request, args=(), daemon=True)
-        t2.start()
-        first_run = False
+                        if 'xiaohongshu' in url:
+                            host_id = re.search('&host_id=(.*?)(?=&|$)', url)
+                            if host_id:
+                                new_url = url.split('?')[0] + f'?host_id={host_id.group(1)}'
+                                url = update_file(url_config_file, old_str=url, new_str=new_url) or url
+                        seen_urls.add(url)
+                        url_comments = [i for i in url_comments if url not in i]
+                        if is_comment_line:
+                            url_comments.append(url)
+                        else:
+                            new_line = (quality, url, name)
+                            url_tuples_list.append(new_line)
+                    else:
+                        if not origin_line.startswith('#'):
+                            color_obj.print_colored(f"\r{origin_line.strip()} 本行包含未知链接.此条跳过", color_obj.YELLOW)
+                            update_file(url_config_file, old_str=origin_line, new_str=origin_line, start_str='#')
 
-    time.sleep(3)
+            while len(need_update_line_list):
+                a = need_update_line_list.pop()
+                replace_words = a.split('|')
+                if replace_words[0] != replace_words[1]:
+                    if replace_words[1].startswith("#"):
+                        start_with = '#'
+                        new_word = replace_words[1][1:]
+                    else:
+                        start_with = None
+                        new_word = replace_words[1]
+                    update_file(url_config_file, old_str=replace_words[0], new_str=new_word, start_str=start_with)
+            running_snapshot = list(running_list)
+            for running_url in running_snapshot:
+                if running_url not in seen_urls and running_url not in url_comments:
+                    url_comments.append(running_url)
+
+            text_no_repeat_url = list(set(url_tuples_list))
+
+            if len(text_no_repeat_url) > 0:
+                for url_tuple in text_no_repeat_url:
+                    monitoring = len(running_list)
+
+                    if url_tuple[1] in not_record_list:
+                        continue
+
+                    if url_tuple[1] not in running_list:
+                        print(f"\r{'新增' if not first_start else '传入'}地址: {url_tuple[1]}")
+                        monitoring += 1
+                        args = [url_tuple, monitoring]
+                        create_var[f'thread_{monitoring}'] = threading.Thread(target=start_record, args=args)
+                        create_var[f'thread_{monitoring}'].daemon = True
+                        create_var[f'thread_{monitoring}'].start()
+                        running_list.append(url_tuple[1])
+                        time.sleep(local_delay_default)
+            url_tuples_list = []
+            first_start = False
+
+        except Exception as err:
+            logger.error(f"错误信息: {err} 发生错误的行数: {_get_error_line(err)}")
+
+        if first_run:
+            t = threading.Thread(target=display_info, args=(), daemon=True)
+            t.start()
+            t2 = threading.Thread(target=adjust_max_request, args=(), daemon=True)
+            t2.start()
+            first_run = False
+
+        time.sleep(3)
+
+
+if __name__ == "__main__":
+    main()
