@@ -187,6 +187,14 @@
     // 12. renderStatus
     function renderStatus(s) {
         if (!s) s = {};
+        var warnEl = $('engine-warning');
+        if (warnEl) {
+            if (s.engine_alive === false) {
+                warnEl.classList.remove('hidden');
+            } else {
+                warnEl.classList.add('hidden');
+            }
+        }
         $('stat-monitoring').textContent = (s.monitoring != null ? s.monitoring : '-');
         $('stat-recording').textContent = (s.recording_count != null ? s.recording_count : '-');
         $('stat-errors').textContent = (s.error_count != null ? s.error_count : '-');

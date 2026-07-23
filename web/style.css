@@ -216,6 +216,16 @@ button.small { background: var(--primary-soft); color: var(--primary); border: n
 .toast.error { background: var(--danger); }
 .toast.info { background: var(--primary); }
 
+.engine-warning {
+    background: var(--danger);
+    color: #fff;
+    padding: 10px 16px;
+    border-radius: 6px;
+    margin-bottom: 16px;
+    font-size: 14px;
+    font-weight: 600;
+}
+
 @media (max-width: 768px) {
     .stat-cards { grid-template-columns: repeat(2, 1fr); }
     .config-row { grid-template-columns: 1fr; }

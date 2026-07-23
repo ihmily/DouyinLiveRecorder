@@ -108,6 +108,8 @@ file_update_lock: threading.Lock = threading.Lock()  # 文件更新锁（防止�
 # 录制状态全局锁（保护 recording/running_list/monitoring/recording_time_list）
 record_state_lock: threading.Lock = threading.Lock()
 
+_recorder_thread = None  # 由 web.py 设置，用于 get_status() 检测存活
+
 # ==================== FFmpeg 进程管理 ====================
 
 # 全局跟踪所有 ffmpeg 进程（用于安全退出时清理
@@ -2162,6 +2164,11 @@ def get_status() -> dict:
         disk_free_gb = utils.check_disk_capacity(default_path)
     except Exception:
         disk_free_gb = -1.0
+    # engine_alive: 录制引擎守护线程是否存活。None 表示未运行于 Web 模式（CLI 直跑，视作存活）。
+    if _recorder_thread is None:
+        engine_alive = True
+    else:
+        engine_alive = _recorder_thread.is_alive()
     uptime = str(now - start_display_time).split(".")[0] if start_display_time else "0:00:00"
     return {
         "version": version,
@@ -2181,6 +2188,7 @@ def get_status() -> dict:
         "disk_free_gb": round(disk_free_gb, 2),
         "uptime": uptime,
         "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "engine_alive": engine_alive,
     }
 
 def main(non_interactive: bool = False) -> None:

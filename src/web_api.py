@@ -234,6 +234,9 @@ def create_app(
         ok = update_config_line(app.state.config_file, req.section, req.key, req.value)
         if not ok:
             raise HTTPException(404, "未找到对应的配置项")
+        # 密码变更后吊销所有现有 token，强制重新登录
+        if req.section == "Web" and req.key == "web_password" and req.value.strip():
+            _tokens.clear()
         return {"ok": True}
 
     @app.get("/api/files")

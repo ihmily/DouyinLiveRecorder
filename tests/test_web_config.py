@@ -177,3 +177,28 @@ def test_update_config_line_missing_key_returns_false(tmp_path: Path):
 def test_update_config_line_missing_file_returns_false(tmp_path: Path):
     p = tmp_path / "nope.ini"
     assert update_config_line(str(p), "录制设置", "循环时间(秒)", "777") is False
+
+
+def test_update_config_line_preserves_inline_comment(tmp_path: Path):
+    p = tmp_path / "config.ini"
+    p.write_text(
+        "[Web]\nweb_password = oldpass ; 这是一个注释\nweb_port = 8000\n",
+        encoding="utf-8",
+    )
+    ok = update_config_line(p, "Web", "web_password", "newpass")
+    assert ok is True
+    content = p.read_text(encoding="utf-8")
+    # 值已更新
+    assert "web_password = newpass" in content
+    # 行内注释保留
+    assert "; 这是一个注释" in content
+    # 其他行不动
+    assert "web_port = 8000" in content
+
+
+def test_update_config_line_value_without_comment_unchanged_behavior(tmp_path: Path):
+    p = tmp_path / "config.ini"
+    p.write_text("[录制设置]\n循环时间(秒) = 300\n", encoding="utf-8")
+    ok = update_config_line(p, "录制设置", "循环时间(秒)", "60")
+    assert ok is True
+    assert "循环时间(秒) = 60\n" == p.read_text(encoding="utf-8").splitlines(keepends=True)[1]

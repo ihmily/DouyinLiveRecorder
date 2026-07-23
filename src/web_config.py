@@ -226,9 +226,20 @@ def update_config_line(
         if in_target and not replaced:
             m = key_pattern.match(line.rstrip('\n').rstrip('\r'))
             if m:
+                prefix = m.group(1)          # "key = " 部分
+                old_tail = m.group(2)        # 原值（可能含行内注释）
+                # 检测行内注释：首个 " #" 或 " ;"（前置空白），保留注释部分
+                inline_comment = ''
+                value_part = old_tail
+                for marker in (' #', ' ;'):
+                    idx = old_tail.find(marker)
+                    if idx > 0:  # >0 表示前面有非空内容（不是行首注释）
+                        inline_comment = old_tail[idx:]
+                        value_part = old_tail[:idx]
+                        break
                 # 保留原行尾换行符
                 eol = '\n' if line.endswith('\n') else ('\r\n' if line.endswith('\r\n') else '')
-                new_lines.append(f"{m.group(1)}{value}{eol}")
+                new_lines.append(f"{prefix}{value}{inline_comment}{eol}")
                 replaced = True
                 continue
         new_lines.append(line)

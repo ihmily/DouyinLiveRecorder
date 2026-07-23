@@ -35,6 +35,7 @@ def main() -> None:
         kwargs={"non_interactive": True},
     )
     recorder_thread.start()
+    main._recorder_thread = recorder_thread  # 供 get_status() 检测存活（I6）
     print(f"[web] 录制引擎已在守护线程启动 (tid={recorder_thread.ident})")
 
     # 读取 Web 配置

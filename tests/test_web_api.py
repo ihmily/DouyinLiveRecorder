@@ -352,3 +352,93 @@ def test_logs_get(client):
     data = r.json()
     assert len(data["lines"]) == 2
     assert data["lines"][0].strip() == "line2"
+
+
+def test_get_status_engine_alive_field_present():
+    """get_status() 返回 engine_alive 字段。"""
+    import main
+    # 默认 _recorder_thread 为 None（CLI 模式），视作存活
+    old = main._recorder_thread
+    main._recorder_thread = None
+    try:
+        s = main.get_status()
+        assert "engine_alive" in s
+        assert s["engine_alive"] is True
+    finally:
+        main._recorder_thread = old
+
+
+def test_get_status_engine_dead_when_thread_not_alive():
+    """守护线程已结束时 engine_alive 为 False。"""
+    import main
+    import threading
+    t = threading.Thread(target=lambda: None, daemon=True)
+    t.start()
+    t.join()  # 等线程结束 → is_alive() False
+    old = main._recorder_thread
+    main._recorder_thread = t
+    try:
+        s = main.get_status()
+        assert s["engine_alive"] is False
+    finally:
+        main._recorder_thread = old
+
+
+def test_config_change_password_revokes_tokens(web_app, tmp_config_ini: Path):
+    """修改 web_password 后，旧 token 立即失效。"""
+    import configparser
+    # 先开启认证并设置密码
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.read(tmp_config_ini, encoding="utf-8")
+    parser.set("Web", "web_auth_enable", "true")
+    parser.set("Web", "web_password", "oldpass")
+    with tmp_config_ini.open("w", encoding="utf-8") as f:
+        parser.write(f)
+
+    app, _ = web_app
+    client = TestClient(app)
+    # 登录拿 token
+    r = client.post("/api/login", json={"password": "oldpass"})
+    assert r.status_code == 200
+    token = r.json()["token"]
+    # token 可用
+    with mock.patch("main.get_status", return_value={"version": "v"}):
+        r = client.get("/api/status", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    # 修改密码（请求本身需携带有效 token）
+    r = client.put("/api/config", json={
+        "section": "Web", "key": "web_password", "value": "newpass"
+    }, headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    # 旧 token 应失效
+    with mock.patch("main.get_status", return_value={"version": "v"}):
+        r = client.get("/api/status", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 401
+    # 新密码登录可用
+    r = client.post("/api/login", json={"password": "newpass"})
+    assert r.status_code == 200
+
+
+def test_config_change_non_password_does_not_revoke(web_app, tmp_config_ini: Path):
+    """修改非密码项不吊销 token。"""
+    import configparser
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.read(tmp_config_ini, encoding="utf-8")
+    parser.set("Web", "web_auth_enable", "true")
+    parser.set("Web", "web_password", "pass1")
+    with tmp_config_ini.open("w", encoding="utf-8") as f:
+        parser.write(f)
+
+    app, _ = web_app
+    client = TestClient(app)
+    r = client.post("/api/login", json={"password": "pass1"})
+    token = r.json()["token"]
+    # 修改 web_port（非密码，请求需携带有效 token）
+    r = client.put("/api/config", json={
+        "section": "Web", "key": "web_port", "value": "9000"
+    }, headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    # token 仍有效
+    with mock.patch("main.get_status", return_value={"version": "v"}):
+        r = client.get("/api/status", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
