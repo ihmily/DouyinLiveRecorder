@@ -51,6 +51,9 @@ dependencies = [
     "customtkinter>=5.2.0",
     "pystray>=0.19.4",
     "Pillow>=11.3.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
@@ -70,6 +73,7 @@ gui = [
 [project.scripts]
 douyin-recorder = "main:main"
 douyin-recorder-gui = "gui:main"
+douyin-recorder-web = "web:main"
 
 [project.urls]
 Homepage = "https://github.com/ihmily/DouyinLiveRecorder"
