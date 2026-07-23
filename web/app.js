@@ -8,8 +8,8 @@
     var SENSITIVE_SECTIONS = { 'Cookie': true, '账号密码': true, 'Authorization': true };
 
     var sseSource = null;
+    var sseStopped = true;
     var configBackup = null;
-    var currentFileDir = '';
     var toastTimer = null;
 
     function $(id) { return document.getElementById(id); }
@@ -160,25 +160,26 @@
             $('login-error').textContent = '';
             showView('dashboard');
         } catch (e) {
-            $('login-error').textContent = '密码错误';
+            $('login-error').textContent = e.message || '登录失败';
         }
     }
 
     // 11. startSSE / stopSSE（轮询实现，非真实 SSE）
     function startSSE() {
         stopSSE();
-        sseSource = setInterval(async function () {
-            try {
-                var s = await api('/api/status');
-                renderStatus(s);
-            } catch (e) {
-                /* 轮询错误忽略，下轮重试 */
-            }
-        }, 2000);
+        sseStopped = false;
+        sseSource = setTimeout(function poll() {
+            api('/api/status').then(renderStatus).catch(function () {}).then(function () {
+                if (!sseStopped) {
+                    sseSource = setTimeout(poll, 2000);
+                }
+            });
+        }, 0);
     }
     function stopSSE() {
+        sseStopped = true;
         if (sseSource) {
-            clearInterval(sseSource);
+            clearTimeout(sseSource);
             sseSource = null;
         }
     }
@@ -339,7 +340,6 @@
     // 19. loadFiles
     async function loadFiles(path) {
         path = path || '';
-        currentFileDir = path;
         var tbody = $('files-tbody');
         var crumb = $('file-breadcrumb');
         try {
@@ -468,8 +468,6 @@
                 var s = await api('/api/status');
                 renderStatus(s);
                 showView('dashboard');
-                startSSE();
-                loadLogs();
             } catch (e) {
                 showLogin();
             }
