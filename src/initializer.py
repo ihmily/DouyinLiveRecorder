@@ -1,10 +1,5 @@
 # -*- coding: utf-8 -*-
-
-"""
-Author: Hmily
-GitHub:https://github.com/ihmily
-Copyright (c) 2024 by Hmily, All Rights Reserved.
-"""
+# Node.js 环境自动安装模块 - 跨平台的 Node.js 自动检测和安装功能
 
 import os
 import subprocess
@@ -24,6 +19,7 @@ current_env_path = os.environ.get('PATH', '')
 
 
 def unzip_file(zip_path: str | Path, extract_to: str | Path, delete: bool = True) -> None:
+    # 解压 ZIP 文件到指定目录
     if not os.path.exists(extract_to):
         os.makedirs(extract_to)
 
@@ -35,10 +31,11 @@ def unzip_file(zip_path: str | Path, extract_to: str | Path, delete: bool = True
 
 
 def install_nodejs_windows() -> bool:
+    # 在 Windows 系统上安装 Node.js，从 npmmirror 下载最新稳定版
     try:
         logger.warning("Node.js is not installed.")
         logger.debug("Installing the stable version of Node.js for Windows...")
-        response = requests.get('https://nodejs.cn/download/')
+        response = requests.get('https://nodejs.cn/download/', timeout=30)
         if response.status_code == 200:
             match = re.search('https://npmmirror.com/mirrors/node/(v.*?)/node-(v.*?)-x64.msi',
                               response.text)
@@ -56,7 +53,8 @@ def install_nodejs_windows() -> bool:
             if Path(zip_file_path).exists():
                 logger.debug("Node.js installation file already exists, start install...")
             else:
-                response = requests.get(url, stream=True)
+                response = requests.get(url, stream=True, timeout=30)
+                response.raise_for_status()
                 total_size = int(response.headers.get('Content-Length', 0))
                 block_size = 1024
 
@@ -69,8 +67,7 @@ def install_nodejs_windows() -> bool:
 
             unzip_file(zip_file_path, execute_dir)
             extract_dir_path = str(zip_file_path).rsplit('.', maxsplit=1)[0]
-            f_path, f_name = os.path.splitext(zip_file_path)
-            new_extract_dir_path = Path(f_path).parent / 'node'
+            new_extract_dir_path = Path(execute_dir) / 'node'
             if Path(extract_dir_path).exists() and not Path(new_extract_dir_path).exists():
                 os.rename(extract_dir_path, new_extract_dir_path)
                 os.environ['PATH'] = os.path.join(execute_dir, 'node') + os.pathsep + current_env_path
@@ -81,6 +78,13 @@ def install_nodejs_windows() -> bool:
                 else:
                     logger.debug('Node.js installation failed')
                     return False
+            elif Path(new_extract_dir_path).exists():
+                # 已有安装目录，验证可用性
+                result = subprocess.run(["node", "-v"], capture_output=True)
+                if result.returncode == 0:
+                    return True
+                logger.debug('Node.js directory exists but not working')
+                return False
             return False
         else:
             logger.error("Failed to retrieve the Node.js version page")
@@ -92,6 +96,7 @@ def install_nodejs_windows() -> bool:
 
 
 def install_nodejs_centos() -> bool:
+    # 在 CentOS/RHEL 系统上通过 yum 安装 Node.js
     try:
         logger.warning("Node.js is not installed.")
         logger.debug("Installing the latest version of Node.js for CentOS...")
@@ -114,6 +119,7 @@ def install_nodejs_centos() -> bool:
 
 
 def install_nodejs_ubuntu() -> bool:
+    # 在 Ubuntu/Debian 系统上通过 apt 安装 Node.js
     try:
         logger.warning("Node.js is not installed.")
         logger.debug("Installing the latest version of Node.js for Ubuntu...")
@@ -131,6 +137,7 @@ def install_nodejs_ubuntu() -> bool:
 
 
 def install_nodejs_mac() -> bool:
+    # 在 macOS 系统上通过 Homebrew 安装 Node.js
     logger.warning("Node.js is not installed.")
     logger.debug("Installing the latest version of Node.js for macOS...")
     try:
@@ -150,7 +157,8 @@ def install_nodejs_mac() -> bool:
         return False
 
 
-def get_package_manager():
+def get_package_manager() -> str:
+    # 检测 Linux 发行版类型，返回包管理器标识
     dist_id = distro.id()
     if dist_id in ["centos", "fedora", "rhel", "amzn", "oracle", "scientific", "opencloudos", "alinux"]:
         return "RHS"
@@ -159,6 +167,7 @@ def get_package_manager():
 
 
 def install_nodejs() -> bool:
+    # 跨平台安装 Node.js 的主入口函数
     if current_platform == "Windows":
         return install_nodejs_windows()
     elif current_platform == "Linux":
@@ -176,6 +185,7 @@ def install_nodejs() -> bool:
 
 
 def check_nodejs_installed() -> bool:
+    # 检查系统是否已安装 Node.js
     try:
         result = subprocess.run(['node', '-v'], capture_output=True)
         version = result.stdout.strip()
@@ -187,6 +197,7 @@ def check_nodejs_installed() -> bool:
 
 
 def check_node() -> bool:
+    # 检查并确保 Node.js 已安装，未安装则自动安装
     if not check_nodejs_installed():
         return install_nodejs()
     return True

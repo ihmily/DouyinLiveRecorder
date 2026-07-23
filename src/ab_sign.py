@@ -1,6 +1,7 @@
 # -*- encoding: utf-8 -*-
 import math
 import time
+from typing import Any
 
 
 def rc4_encrypt(plaintext: str, key: str) -> str:
@@ -27,11 +28,13 @@ def rc4_encrypt(plaintext: str, key: str) -> str:
 
 
 def left_rotate(x: int, n: int) -> int:
+    # 32 位整数循环左移
     n %= 32
     return ((x << n) | (x >> (32 - n))) & 0xFFFFFFFF
 
 
 def get_t_j(j: int) -> int:
+    # 计算 A-Bogus 算法的 t_j 参数
     if 0 <= j < 16:
         return 2043430169  # 0x79CC4519
     elif 16 <= j < 64:
@@ -41,6 +44,7 @@ def get_t_j(j: int) -> int:
 
 
 def ff_j(j: int, x: int, y: int, z: int) -> int:
+    # 计算 A-Bogus 算法的 ff_j 参数
     if 0 <= j < 16:
         return (x ^ y ^ z) & 0xFFFFFFFF
     elif 16 <= j < 64:
@@ -50,16 +54,19 @@ def ff_j(j: int, x: int, y: int, z: int) -> int:
 
 
 def gg_j(j: int, x: int, y: int, z: int) -> int:
+    # 计算 A-Bogus 算法的 gg_j 参数
     if 0 <= j < 16:
         return (x ^ y ^ z) & 0xFFFFFFFF
     elif 16 <= j < 64:
-        return ((x & y) | (~x & z)) & 0xFFFFFFFF
+        return ((x & y) | (x & z) | (y & z)) & 0xFFFFFFFF
     else:
         raise ValueError("invalid j for bool function GG")
 
 
 class SM3:
+    # SM3 密码哈希算法实现
     def __init__(self):
+        # 初始化 SM3 算法常量与初始值
         self.reg = []
         self.chunk = []
         self.size = 0
@@ -128,6 +135,7 @@ class SM3:
             self.chunk.append((bit_length >> (8 * (3 - i))) & 0xFF)
 
     def _compress(self, data):
+        # SM3 压缩函数（单块处理）
         if len(data) < 64:
             raise ValueError("compress error: not enough data")
         else:
@@ -249,6 +257,7 @@ def result_encrypt(long_str: str, num: str = "s4") -> str:
 
 
 def get_long_int(round_num: int, long_str: str) -> int:
+    # 将字节序列转为长整型
     round_num = round_num * 3
 
     # 获取字符串中的字符，如果超出范围则使用0
@@ -260,6 +269,7 @@ def get_long_int(round_num: int, long_str: str) -> int:
 
 
 def gener_random(random_num: int, option: list[int]) -> list[int]:
+    # 生成随机字节序列（用于 A-Bogus 参数）
     byte1 = random_num & 255
     byte2 = (random_num >> 8) & 255
 
@@ -292,6 +302,7 @@ def generate_random_str() -> str:
 
 def generate_rc4_bb_str(url_search_params: str, user_agent: str, window_env_str: str,
                         suffix: str = "cus", arguments: list[int] | None = None) -> str:
+    # 生成 RC4 加密所需的 bb 字符串
     if arguments is None:
         arguments = [0, 1, 14]
 
@@ -313,7 +324,7 @@ def generate_rc4_bb_str(url_search_params: str, user_agent: str, window_env_str:
     end_time = start_time + 100
 
     # 构建配置对象
-    b = {
+    b: dict[int, Any] = {
         8: 3,
         10: end_time,
         15: {
@@ -339,6 +350,7 @@ def generate_rc4_bb_str(url_search_params: str, user_agent: str, window_env_str:
     }
 
     def split_to_bytes(num: int) -> list[int]:
+        # 将长整型按字节切分
         return [
             (num >> 24) & 255,
             (num >> 16) & 255,
@@ -442,6 +454,7 @@ def generate_rc4_bb_str(url_search_params: str, user_agent: str, window_env_str:
 
 
 def ab_sign(url_search_params: str, user_agent: str) -> str:
+    # A-Bogus 签名算法主入口
     window_env_str = "1920|1080|1920|1040|0|30|0|0|1872|92|1920|1040|1857|92|1|24|Win32"
 
     # 1. 生成随机字符串前缀

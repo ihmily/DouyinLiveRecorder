@@ -1,12 +1,7 @@
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# 消息推送模块 - 支持多种消息推送渠道用于直播状态通知
 
-"""
-Author: Hmily
-GitHub: https://github.com/ihmily
-Date: 2023-09-03 19:18:36
-Update: 2025-01-23 17:16:12
-Copyright (c) 2023-2024 by Hmily, All Rights Reserved.
-"""
 import json
 import base64
 import http.client
@@ -16,42 +11,37 @@ import smtplib
 from email.header import Header
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-import src.logger  # pyright: ignore[reportUnusedImport]  # trigger loguru config side effects
+import src.logger  # trigger loguru config side effects
 from loguru import logger
 
-no_proxy_handler = urllib.request.ProxyHandler({})
-opener = urllib.request.build_opener(no_proxy_handler)
+# 配置 HTTP 客户端（不使用代理，防止本地推送被代理干扰）
+no_proxy_handler: urllib.request.ProxyHandler = urllib.request.ProxyHandler({})
+opener: urllib.request.OpenerDirector = urllib.request.build_opener(no_proxy_handler)
 headers: dict[str, str] = {'Content-Type': 'application/json'}
 
 
 def dingtalk(url: str, content: str, number: str | None = None, is_atall: bool = False) -> dict[str, list[str | int]]:
+    # 钉钉群机器人推送
     success = []
     error = []
     api_list = url.replace('，', ',').split(',') if url.strip() else []
     for api in api_list:
         json_data = {
             'msgtype': 'text',
-            'text': {
-                'content': content,
-            },
-            "at": {
-                "atMobiles": [
-                    number
-                ],
-                "isAtAll": is_atall
-            },
+            'text': {'content': content},
+            "at": {"atMobiles": [number], "isAtAll": is_atall},
         }
         try:
             data = json.dumps(json_data).encode('utf-8')
             req = urllib.request.Request(api, data=data, headers=headers)
-            response: http.client.HTTPResponse = opener.open(req, timeout=10)
-            json_str = response.read().decode('utf-8')
+            with opener.open(req, timeout=10) as response:
+                json_str = response.read().decode('utf-8')
             json_data = json.loads(json_str)
-            if json_data['errcode'] == 0:
+            if json_data.get('errcode') == 0:
                 success.append(api)
             else:
                 error.append(api)
-                logger.warning(f'钉钉推送失败, 推送地址：{api}, {json_data["errmsg"]}')
+                logger.warning(f'钉钉推送失败, 推送地址：{api}, {json_data.get("errmsg", "未知错误")}')
         except Exception as e:
             error.append(api)
             logger.warning(f'钉钉推送失败, 推送地址：{api}, 错误信息:{e}')
@@ -59,25 +49,23 @@ def dingtalk(url: str, content: str, number: str | None = None, is_atall: bool =
 
 
 def xizhi(url: str, title: str, content: str) -> dict[str, list[str | int]]:
+    # 微信推送（Server酱/WeChat）
     success = []
     error = []
     api_list = url.replace('，', ',').split(',') if url.strip() else []
     for api in api_list:
-        json_data = {
-            'title': title,
-            'content': content
-        }
+        json_data = {'title': title, 'content': content}
         try:
             data = json.dumps(json_data).encode('utf-8')
             req = urllib.request.Request(api, data=data, headers=headers)
-            response = opener.open(req, timeout=10)
-            json_str = response.read().decode('utf-8')
+            with opener.open(req, timeout=10) as response:
+                json_str = response.read().decode('utf-8')
             json_data = json.loads(json_str)
-            if json_data['code'] == 200:
+            if json_data.get('code') == 200:
                 success.append(api)
             else:
                 error.append(api)
-                logger.warning(f'微信推送失败, 推送地址：{api}, 失败信息：{json_data["msg"]}')
+                logger.warning(f'微信推送失败, 推送地址：{api}, 失败信息：{json_data.get("msg", "未知错误")}')
         except Exception as e:
             error.append(api)
             logger.warning(f'微信推送失败, 推送地址：{api}, 错误信息:{e}')
@@ -87,6 +75,7 @@ def xizhi(url: str, title: str, content: str) -> dict[str, list[str | int]]:
 def send_email(email_host: str, login_email: str, email_pass: str, sender_email: str, sender_name: str,
                to_email: str, title: str, content: str, smtp_port: str | None = None,
                open_ssl: bool = True) -> dict[str, list[str]]:
+    # 邮件推送（SMTP协议）
     receivers = to_email.replace('，', ',').split(',') if to_email.strip() else []
     smtp_obj = None
 
@@ -102,11 +91,17 @@ def send_email(email_host: str, login_email: str, email_pass: str, sender_email:
         message.attach(t_apart)
 
         if open_ssl:
-            port = int(smtp_port) if smtp_port else 465
-            smtp_obj = smtplib.SMTP_SSL(email_host, port)
+            try:
+                port = int(smtp_port) if smtp_port else 465
+            except ValueError:
+                port = 465
+            smtp_obj = smtplib.SMTP_SSL(email_host, port, timeout=10)
         else:
-            port = int(smtp_port) if smtp_port else 25
-            smtp_obj = smtplib.SMTP(email_host, port)
+            try:
+                port = int(smtp_port) if smtp_port else 25
+            except ValueError:
+                port = 25
+            smtp_obj = smtplib.SMTP(email_host, port, timeout=10)
         smtp_obj.login(login_email, email_pass)
         smtp_obj.sendmail(sender_email, receivers, message.as_string())
         return {"success": receivers, "error": []}
@@ -125,16 +120,14 @@ def send_email(email_host: str, login_email: str, email_pass: str, sender_email:
 
 
 def tg_bot(chat_id: int, token: str, content: str) -> dict[str, list[str | int]]:
+    # Telegram Bot 推送
     try:
-        json_data = {
-            "chat_id": chat_id,
-            'text': content
-        }
+        json_data = {"chat_id": chat_id, 'text': content}
         url = f'https://api.telegram.org/bot{token}/sendMessage'
         data = json.dumps(json_data).encode('utf-8')
         req = urllib.request.Request(url, data=data, headers=headers)
-        response = opener.open(req, timeout=15)
-        json_str = response.read().decode('utf-8')
+        with opener.open(req, timeout=15) as response:
+            json_str = response.read().decode('utf-8')
         json.loads(json_str)
         return {"success": [1], "error": []}
     except Exception as e:
@@ -145,33 +138,26 @@ def tg_bot(chat_id: int, token: str, content: str) -> dict[str, list[str | int]]
 def bark(api: str, title: str = "message", content: str = 'test', level: str = "active",
          badge: int = 1, auto_copy: int = 1, sound: str = "", icon: str = "", group: str = "",
          is_archive: int = 1, url: str = "") -> dict[str, list[str | int]]:
+    # Bark 推送（iOS 通知）
     success = []
     error = []
     api_list = api.replace('，', ',').split(',') if api.strip() else []
     for _api in api_list:
         json_data = {
-            "title": title,
-            "body": content,
-            "level": level,
-            "badge": badge,
-            "autoCopy": auto_copy,
-            "sound": sound,
-            "icon": icon,
-            "group": group,
-            "isArchive": is_archive,
-            "url": url
+            "title": title, "body": content, "level": level, "badge": badge, "autoCopy": auto_copy,
+            "sound": sound, "icon": icon, "group": group, "isArchive": is_archive, "url": url
         }
         try:
             data = json.dumps(json_data).encode('utf-8')
             req = urllib.request.Request(_api, data=data, headers=headers)
-            response = opener.open(req, timeout=10)
-            json_str = response.read().decode("utf-8")
+            with opener.open(req, timeout=10) as response:
+                json_str = response.read().decode("utf-8")
             json_data = json.loads(json_str)
-            if json_data['code'] == 200:
+            if json_data.get('code') == 200:
                 success.append(_api)
             else:
                 error.append(_api)
-                logger.warning(f'Bark推送失败, 推送地址：{_api}, 失败信息：{json_data["message"]}')
+                logger.warning(f'Bark推送失败, 推送地址：{_api}, 失败信息：{json_data.get("message", "未知错误")}')
         except Exception as e:
             error.append(_api)
             logger.warning(f'Bark推送失败, 推送地址：{_api}, 错误信息:{e}')
@@ -181,6 +167,7 @@ def bark(api: str, title: str = "message", content: str = 'test', level: str = "
 def ntfy(api: str, title: str = "message", content: str = 'test', tags: str | list[str] = 'tada', priority: int = 3,
          action_url: str = "", attach: str = "", filename: str = "", click: str = "", icon: str = "",
          delay: str = "", email: str = "", call: str = "") -> dict[str, list[str | int]]:
+    # NTFY 推送（跨平台通知服务）
     success = []
     error = []
     api_list = api.replace('，', ',').split(',') if api.strip() else []
@@ -190,29 +177,19 @@ def ntfy(api: str, title: str = "message", content: str = 'test', tags: str | li
         tags = ['partying_face']
     actions = [{"action": "view", "label": "view live", "url": action_url}] if action_url else []
     for _api in api_list:
-        server, topic = _api.rsplit('/', maxsplit=1)
-        json_data = {
-            "topic": topic,
-            "title": title,
-            "message": content,
-            "tags": tags,
-            "priority": priority,
-            "attach": attach,
-            "filename": filename,
-            "click": click,
-            "actions": actions,
-            "markdown": False,
-            "icon": icon,
-            "delay": delay,
-            "email": email,
-            "call": call
-        }
-
+        # rsplit 在地址不含 '/' 时会抛 ValueError，需放入 try 块内优雅降级
         try:
+            server, topic = _api.rsplit('/', maxsplit=1)
+            json_data = {
+                "topic": topic, "title": title, "message": content, "tags": tags, "priority": priority,
+                "attach": attach, "filename": filename, "click": click, "actions": actions,
+                "markdown": False, "icon": icon, "delay": delay, "email": email, "call": call
+            }
+
             data = json.dumps(json_data, ensure_ascii=False).encode('utf-8')
             req = urllib.request.Request(server, data=data, headers=headers)
-            response = opener.open(req, timeout=10)
-            json_str = response.read().decode("utf-8")
+            with opener.open(req, timeout=10) as response:
+                json_str = response.read().decode("utf-8")
             json_data = json.loads(json_str)
             if "error" not in json_data:
                 success.append(_api)
@@ -226,6 +203,8 @@ def ntfy(api: str, title: str = "message", content: str = 'test', tags: str | li
                 error_detail = json.loads(error_msg).get("error", str(e))
             except Exception:
                 error_detail = str(e)
+            finally:
+                e.close()
             logger.warning(f'ntfy推送失败, 推送地址：{_api}, 错误信息:{error_detail}')
         except Exception as e:
             error.append(_api)
@@ -234,23 +213,20 @@ def ntfy(api: str, title: str = "message", content: str = 'test', tags: str | li
 
 
 def pushplus(token: str, title: str, content: str) -> dict[str, list[str | int]]:
+    # PushPlus 推送
     success = []
     error = []
     token_list = token.replace('，', ',').split(',') if token.strip() else []
 
     for _token in token_list:
-        json_data = {
-            'token': _token,
-            'title': title,
-            'content': content
-        }
+        json_data = {'token': _token, 'title': title, 'content': content}
 
         try:
             url = 'https://www.pushplus.plus/send'
             data = json.dumps(json_data).encode('utf-8')
             req = urllib.request.Request(url, data=data, headers=headers)
-            response = opener.open(req, timeout=10)
-            json_str = response.read().decode('utf-8')
+            with opener.open(req, timeout=10) as response:
+                json_str = response.read().decode('utf-8')
             json_data = json.loads(json_str)
 
             if json_data.get('code') == 200:

@@ -1,85 +1,923 @@
 # DouyinLiveRecorder.
-# Copyright (C) 2024 Hmily
+# Copyright (C) 2024-2025 Hmily
 # This file is distributed under the same license as the DouyinLiveRecorder package.
 #
-#, fuzzy
+# DouyinLiveRecorder 简体中文翻译文件
+# 版本: 4.0.8-dev
+# 更新日期: 2026-06-20
 
 msgid ""
 msgstr ""
-"Project-Id-Version: 4.0.1\n"
+"Project-Id-Version: DouyinLiveRecorder 4.0.8-dev\n"
 "POT-Creation-Date: 2024-10-20 00:00+0800\n"
-"PO-Revision-Date: 2024-11-09 03:05+0800\n"
-"Last-Translator: Hmily <EMAIL@ADDRESS>\n"
+"PO-Revision-Date: 2026-06-20 12:00+0800\n"
+"Last-Translator: Hmily <ihmily@github>\n"
 "Language-Team: Chinese\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Language: zh_CN\n"
 "Plural-Forms: nplurals=1; plural=0;\n"
 
-#: douyinliverecorder/spider.py
+# =============================================================================
+# 通用消息
+# =============================================================================
+
+#: src/spider.py
 msgid "IP banned. Please change device or network."
 msgstr "IP被禁止 请更换设备或网络"
 
+#: src/spider.py
 msgid "The anchor did not start broadcasting."
 msgstr "主播并未开播"
 
+# =============================================================================
+# SOOPLive 平台消息
+# =============================================================================
+
+#: src/spider.py
 msgid "sooplive platform login successful! Starting to fetch live streaming data..."
 msgstr "sooplive平台登录成功！开始获取直播数据..."
 
+#: src/spider.py
 msgid "sooplive live stream failed to retrieve, the live stream just ended."
 msgstr "sooplive直播获取失败,该直播间刚结束直播"
 
+#: src/spider.py
 msgid "sooplive live stream retrieval failed, the live needs 19+, you are not logged in."
 msgstr "soop直播获取失败，该直播间需要年龄19+观看，您尚未登录"
 
+#: src/spider.py
 msgid "Attempting to log in to the sooplive live streaming platform with your account and password, please ensure it is configured."
 msgstr "正在尝试使用您的账号和密码登录soop直播平台，请确保已在config配置文件中配置"
 
+#: src/spider.py
 msgid "error message：Please check if the input sooplive live room address is correct."
 msgstr "错误信息：请检查输入的sooplive直播间地址是否正确"
 
+# =============================================================================
+# FlexTV 平台消息
+# =============================================================================
+
+#: src/spider.py
 msgid "Please check if the FlexTV account and password in the configuration file are correct."
 msgstr "请检查配置文件中的FlexTV账号和密码是否正确"
 
+#: src/spider.py
 msgid "FlexTV live stream retrieval failed [not logged in]: 19+ live streams are only available for logged-in adults."
 msgstr "FlexTV直播获取失败[未登录]: 19+直播需要登录后是成人才可观看"
 
+#: src/spider.py
 msgid "Attempting to log in to the FlexTV live streaming platform, please ensure your account and password are correctly filled in the configuration file."
 msgstr "正在尝试登录FlexTV直播平台，请确保已在配置文件中填写好您的账号和密码"
 
+#: src/spider.py
 msgid "Logging into FlexTV platform..."
 msgstr "FlexTV平台登录中..."
 
+#: src/spider.py
 msgid "Logged into FlexTV platform successfully! Starting to fetch live streaming data..."
 msgstr "FlexTV平台登录成功！开始获取直播数据..."
 
+# =============================================================================
+# Look 平台消息
+# =============================================================================
+
+#: src/spider.py
 msgid "Look live currently only supports audio live streaming, not video live streaming!"
 msgstr "Look直播暂时只支持音频直播，不支持Look视频直播!"
 
+# =============================================================================
+# PopkonTV 平台消息
+# =============================================================================
+
+#: src/spider.py
 msgid "Failed to retrieve popkontv live stream [token does not exist or has expired]: Please log in to watch."
 msgstr "popkontv直播获取失败[token不存在或者已过期]: 请登录后观看"
 
+#: src/spider.py
 msgid "Attempting to log in to the popkontv live streaming platform, please ensure your account and password are correctly filled in the configuration file."
 msgstr "正在尝试登录popkontv直播平台，请确保已在配置文件中填写好您的账号和密码"
 
+#: src/spider.py
 msgid "Logging into popkontv platform..."
 msgstr "popkontv平台登录中..."
 
+#: src/spider.py
 msgid "Logged into popkontv platform successfully! Starting to fetch live streaming data..."
 msgstr "popkontv平台登录成功！开始获取直播数据..."
 
+# =============================================================================
+# TwitCasting 平台消息
+# =============================================================================
+
+#: src/spider.py
 msgid "Attempting to log in to TwitCasting..."
 msgstr "TwitCasting正在尝试登录..."
 
+#: src/spider.py
 msgid "TwitCasting login successful! Starting to fetch data..."
 msgstr "TwitCasting 登录成功！开始获取数据..."
 
+#: src/spider.py
 msgid "Failed to retrieve TwitCasting data, attempting to log in..."
 msgstr "获取TwitCasting数据失败，正在尝试登录..."
 
+# =============================================================================
+# 花椒直播消息
+# =============================================================================
+
+#: src/spider.py
 msgid "Failed to retrieve live room data, the Huajiao live room address is not fixed, please manually change the address for recording."
 msgstr "获取直播间数据失败，花椒直播间地址是非固定的，请手动更换地址进行录制"
 
+# =============================================================================
+# Shopee 直播消息
+# =============================================================================
+
+#: src/spider.py
 msgid "Fetch shopee live data failed, please update the address of the live broadcast room and try again."
 msgstr "获取shopee直播间数据失败，请手动更换直播录制地址后重试"
 
+# =============================================================================
+# 主程序通用消息
+# =============================================================================
+
+#: main.py
+msgid "共监测"
+msgstr "共监测"
+
+#: main.py
+msgid "个直播中"
+msgstr "个直播中"
+
+#: main.py
+msgid "同一时间访问网络的线程数"
+msgstr "同一时间访问网络的线程数"
+
+#: main.py
+msgid "是否开启代理录制"
+msgstr "是否开启代理录制"
+
+#: main.py
+msgid "是"
+msgstr "是"
+
+#: main.py
+msgid "否"
+msgstr "否"
+
+#: main.py
+msgid "录制分段开启"
+msgstr "录制分段开启"
+
+#: main.py
+msgid "秒"
+msgstr "秒"
+
+#: main.py
+msgid "是否生成时间文件"
+msgstr "是否生成时间文件"
+
+#: main.py
+msgid "录制视频质量为"
+msgstr "录制视频质量为"
+
+#: main.py
+msgid "录制视频格式为"
+msgstr "录制视频格式为"
+
+#: main.py
+msgid "目前瞬时错误数为"
+msgstr "目前瞬时错误数为"
+
+#: main.py
+msgid "当前时间"
+msgstr "当前时间"
+
+#: main.py
+msgid "没有正在监测和录制的直播"
+msgstr "没有正在监测和录制的直播"
+
+#: main.py
+msgid "没有正在录制的直播 循环监测间隔时间"
+msgstr "没有正在录制的直播 循环监测间隔时间"
+
+#: main.py
+msgid "正在录制"
+msgstr "正在录制"
+
+#: main.py
+msgid "个直播"
+msgstr "个直播"
+
+#: main.py
+msgid "正在录制中"
+msgstr "正在录制中"
+
+#: main.py
+msgid "直播录制完成"
+msgstr "直播录制完成"
+
+#: main.py
+msgid "序号"
+msgstr "序号"
+
+#: main.py
+msgid "网址内容获取失败,进行重试中...获取失败的地址是"
+msgstr "网址内容获取失败,进行重试中...获取失败的地址是"
+
+#: main.py
+msgid "已被注释,本条线程将会退出"
+msgstr "已被注释,本条线程将会退出"
+
+#: main.py
+msgid "等待直播..."
+msgstr "等待直播..."
+
+#: main.py
+msgid "准备开始录制音频"
+msgstr "准备开始录制音频"
+
+#: main.py
+msgid "准备开始录制"
+msgstr "准备开始录制"
+
+#: main.py
+msgid "循环等待"
+msgstr "循环等待"
+
+#: main.py
+msgid "检测直播间中..."
+msgstr "检测直播间中..."
+
+#: main.py
+msgid "版本号"
+msgstr "版本号"
+
+#: main.py
+msgid "支持平台"
+msgstr "支持平台"
+
+#: main.py
+msgid "系统代理检测中，请耐心等待..."
+msgstr "系统代理检测中，请耐心等待..."
+
+#: main.py
+msgid "全局/规则网络代理已开启"
+msgstr "全局/规则网络代理已开启"
+
+#: main.py
+msgid "HTTP error occurred"
+msgstr "HTTP错误发生"
+
+#: main.py
+msgid "An unexpected error occurred"
+msgstr "发生意外错误"
+
+#: main.py
+msgid "新增地址"
+msgstr "新增地址"
+
+#: main.py
+msgid "传入地址"
+msgstr "传入地址"
+
+# =============================================================================
+# 错误消息
+# =============================================================================
+
+#: main.py
+msgid "错误信息"
+msgstr "错误信息"
+
+#: main.py
+msgid "发生错误的行数"
+msgstr "发生错误的行数"
+
+#: main.py
+msgid "网络异常，请检查网络是否能正常访问"
+msgstr "网络异常，请检查网络是否能正常访问"
+
+#: main.py
+msgid "平台"
+msgstr "平台"
+
+# =============================================================================
+# 录制相关消息
+# =============================================================================
+
+#: main.py
+msgid "提示"
+msgstr "提示"
+
+#: main.py
+msgid "将强制使用FLV格式录制"
+msgstr "将强制使用FLV格式录制"
+
+#: main.py
+msgid "Use Direct Downloader to Download FLV Stream"
+msgstr "使用直接下载器下载FLV流"
+
+#: main.py
+msgid "未找到FLV直播流，跳过录制"
+msgstr "未找到FLV直播流，跳过录制"
+
+#: main.py
+msgid "转码失败"
+msgstr "转码失败"
+
+#: main.py
+msgid "备份配置文件"
+msgstr "备份配置文件"
+
+#: main.py
+msgid "失败"
+msgstr "失败"
+
+#: main.py
+msgid "缺少ffmpeg无法进行录制，程序退出"
+msgstr "缺少ffmpeg无法进行录制，程序退出"
+
+#: main.py
+msgid "发生 I/O 错误"
+msgstr "发生 I/O 错误"
+
+#: main.py
+msgid "Disk space remaining is below"
+msgstr "剩余磁盘空间低于"
+
+#: main.py
+msgid "请清理磁盘空间或调整保存路径"
+msgstr "请清理磁盘空间或调整保存路径"
+
+# =============================================================================
+# 进程管理消息
+# =============================================================================
+
+#: main.py
+msgid "尝试终止 ffmpeg 进程"
+msgstr "尝试终止 ffmpeg 进程"
+
+#: main.py
+msgid "ffmpeg 进程"
+msgstr "ffmpeg 进程"
+
+#: main.py
+msgid "已清理"
+msgstr "已清理"
+
+#: main.py
+msgid "清理 ffmpeg 进程时出错"
+msgstr "清理 ffmpeg 进程时出错"
+
+#: main.py
+msgid "正在清理所有 ffmpeg 进程..."
+msgstr "正在清理所有 ffmpeg 进程..."
+
+#: main.py
+msgid "所有 ffmpeg 进程清理完成"
+msgstr "所有 ffmpeg 进程清理完成"
+
+#: main.py
+msgid "终止 ffmpeg 进程时出错"
+msgstr "终止 ffmpeg 进程时出错"
+
+#: main.py
+msgid "ffmpeg 进程可能没有完全终止，请检查系统进程"
+msgstr "ffmpeg 进程可能没有完全终止，请检查系统进程"
+
+# =============================================================================
+# 脚本执行消息
+# =============================================================================
+
+#: main.py
+msgid "开始执行脚本命令!"
+msgstr "开始执行脚本命令!"
+
+#: main.py
+msgid "脚本命令执行结束!"
+msgstr "脚本命令执行结束!"
+
+#: main.py
+msgid "脚本无执行权限!"
+msgstr "脚本无执行权限!"
+
+#: main.py
+msgid "若是Linux环境, 请先执行"
+msgstr "若是Linux环境, 请先执行"
+
+#: main.py
+msgid "授予脚本可执行权限"
+msgstr "授予脚本可执行权限"
+
+#: main.py
+msgid "Please add"
+msgstr "请在脚本文件开头添加"
+
+#: main.py
+msgid "at the beginning of your bash script file."
+msgstr "作为 bash 脚本文件的开头。"
+
+# =============================================================================
+# 流媒体相关消息
+# =============================================================================
+
+#: main.py
+msgid "FLV is not supported for h265 codec, use HLS source instead"
+msgstr "FLV不支持h265编码，改用HLS源"
+
+#: main.py
+msgid "请求直播流失败，状态码"
+msgstr "请求直播流失败，状态码"
+
+#: main.py
+msgid "FLV下载错误"
+msgstr "FLV下载错误"
+
+# =============================================================================
+# 消息推送相关
+# =============================================================================
+
+#: main.py
+msgid "提示信息"
+msgstr "提示信息"
+
+#: main.py
+msgid "已经将"
+msgstr "已经将"
+
+#: main.py
+msgid "直播状态消息推送至你的"
+msgstr "直播状态消息推送至你的"
+
+# =============================================================================
+# 转换相关消息
+# =============================================================================
+
+#: main.py
+msgid "Error occurred during conversion"
+msgstr "转换过程中发生错误"
+
+#: main.py
+msgid "An unknown error occurred"
+msgstr "发生未知错误"
+
+# =============================================================================
+# 平台特定错误消息
+# =============================================================================
+
+#: main.py
+msgid "TikTok平台"
+msgstr "TikTok平台"
+
+#: main.py
+msgid "SOOP平台"
+msgstr "SOOP平台"
+
+#: main.py
+msgid "PandaTV直播平台"
+msgstr "PandaTV直播平台"
+
+#: main.py
+msgid "WinkTV直播平台"
+msgstr "WinkTV直播平台"
+
+#: main.py
+msgid "FlexTV直播平台"
+msgstr "FlexTV直播平台"
+
+#: main.py
+msgid "PopkonTV直播平台"
+msgstr "PopkonTV直播平台"
+
+#: main.py
+msgid "TwitchTV直播平台"
+msgstr "TwitchTV直播平台"
+
+#: main.py
+msgid "LiveMe直播平台"
+msgstr "LiveMe直播平台"
+
+#: main.py
+msgid "faceit直播平台"
+msgstr "faceit直播平台"
+
+# =============================================================================
+# 备份配置相关消息
+# =============================================================================
+
+#: main.py
+msgid "备份配置文件失败, 错误信息"
+msgstr "备份配置文件失败, 错误信息"
+
+# =============================================================================
+# GUI 相关消息（如果使用 GUI 模式）
+# =============================================================================
+
+#: gui.pyw
+msgid "直播录制控制台"
+msgstr "直播录制控制台"
+
+#: gui.pyw
+msgid "开始录制"
+msgstr "开始录制"
+
+#: gui.pyw
+msgid "停止录制"
+msgstr "停止录制"
+
+#: gui.pyw
+msgid "运行中"
+msgstr "运行中"
+
+#: gui.pyw
+msgid "未运行"
+msgstr "未运行"
+
+#: gui.pyw
+msgid "最小化到托盘"
+msgstr "最小化到托盘"
+
+#: gui.pyw
+msgid "彻底退出"
+msgstr "彻底退出"
+
+#: gui.pyw
+msgid "打开下载目录"
+msgstr "打开下载目录"
+
+#: gui.pyw
+msgid "高级设置"
+msgstr "高级设置"
+
+#: gui.pyw
+msgid "URL 配置编辑区"
+msgstr "URL 配置编辑区"
+
+#: gui.pyw
+msgid "保存 URL 配置"
+msgstr "保存 URL 配置"
+
+#: gui.pyw
+msgid "重新读取配置"
+msgstr "重新读取配置"
+
+#: gui.pyw
+msgid "运行日志"
+msgstr "运行日志"
+
+#: gui.pyw
+msgid "格式说明"
+msgstr "格式说明"
+
+#: gui.pyw
+msgid "每行一个直播链接，支持 # 开头的注释行"
+msgstr "每行一个直播链接，支持 # 开头的注释行"
+
+#: gui.pyw
+msgid "点击窗口关闭按钮（X）将最小化到系统托盘"
+msgstr "点击窗口关闭按钮（X）将最小化到系统托盘"
+
+#: gui.pyw
+msgid "成功"
+msgstr "成功"
+
+#: gui.pyw
+msgid "URL 配置已保存成功"
+msgstr "URL 配置已保存成功"
+
+#: gui.pyw
+msgid "错误"
+msgstr "错误"
+
+#: gui.pyw
+msgid "保存配置文件失败"
+msgstr "保存配置文件失败"
+
+#: gui.pyw
+msgid "警告"
+msgstr "警告"
+
+#: gui.pyw
+msgid "录制已在运行中"
+msgstr "录制已在运行中"
+
+#: gui.pyw
+msgid "没有正在运行的录制进程"
+msgstr "没有正在运行的录制进程"
+
+#: gui.pyw
+msgid "启动录制失败"
+msgstr "启动录制失败"
+
+#: gui.pyw
+msgid "正在停止录制"
+msgstr "正在停止录制"
+
+#: gui.pyw
+msgid "正在发送终止信号"
+msgstr "正在发送终止信号"
+
+#: gui.pyw
+msgid "正在发送 SIGINT 信号"
+msgstr "正在发送 SIGINT 信号"
+
+#: gui.pyw
+msgid "进程已优雅退出"
+msgstr "进程已优雅退出"
+
+#: gui.pyw
+msgid "进程未能及时退出，尝试强制终止"
+msgstr "进程未能及时退出，尝试强制终止"
+
+#: gui.pyw
+msgid "正在强制终止进程"
+msgstr "正在强制终止进程"
+
+#: gui.pyw
+msgid "进程已强制终止"
+msgstr "进程已强制终止"
+
+#: gui.pyw
+msgid "警告：进程可能仍在运行"
+msgstr "警告：进程可能仍在运行"
+
+#: gui.pyw
+msgid "强制终止失败"
+msgstr "强制终止失败"
+
+#: gui.pyw
+msgid "录制进程已停止"
+msgstr "录制进程已停止"
+
+#: gui.pyw
+msgid "录制进程已启动"
+msgstr "录制进程已启动"
+
+#: gui.pyw
+msgid "Python"
+msgstr "Python"
+
+#: gui.pyw
+msgid "工作目录"
+msgstr "工作目录"
+
+#: gui.pyw
+msgid "录制进程已结束"
+msgstr "录制进程已结束"
+
+#: gui.pyw
+msgid "加载配置文件失败"
+msgstr "加载配置文件失败"
+
+#: gui.pyw
+msgid "打开目录失败"
+msgstr "打开目录失败"
+
+#: gui.pyw
+msgid "已打开下载目录"
+msgstr "已打开下载目录"
+
+#: gui.pyw
+msgid "输出流已关闭"
+msgstr "输出流已关闭"
+
+#: gui.pyw
+msgid "读取输出错误"
+msgstr "读取输出错误"
+
+#: gui.pyw
+msgid "加载配置文件不存在，请新建"
+msgstr "配置文件不存在，请新建"
+
+#: gui.pyw
+msgid "高级设置配置已保存"
+msgstr "高级设置配置已保存"
+
+#: gui.pyw
+msgid "退出确认"
+msgstr "退出确认"
+
+#: gui.pyw
+msgid "录制正在后台进行，确定要退出吗"
+msgstr "录制正在后台进行，确定要退出吗"
+
+#: gui.pyw
+msgid "正在后台清理可能残留的 ffmpeg 进程"
+msgstr "正在后台清理可能残留的 ffmpeg 进程"
+
+#: gui.pyw
+msgid "已通过 taskkill 清理本进程树的 ffmpeg 进程"
+msgstr "已通过 taskkill 清理本进程树的 ffmpeg 进程"
+
+#: gui.pyw
+msgid "已通过 pkill 清理本进程树的 ffmpeg 进程"
+msgstr "已通过 pkill 清理本进程树的 ffmpeg 进程"
+
+#: gui.pyw
+msgid "taskkill 执行失败"
+msgstr "taskkill 执行失败"
+
+#: gui.pyw
+msgid "pkill 执行失败"
+msgstr "pkill 执行失败"
+
+#: gui.pyw
+msgid "未发现需要清理的 ffmpeg 进程"
+msgstr "未发现需要清理的 ffmpeg 进程"
+
+#: gui.pyw
+msgid "程序已最小化到系统托盘，双击托盘图标可恢复窗口"
+msgstr "程序已最小化到系统托盘，双击托盘图标可恢复窗口"
+
+#: gui.pyw
+msgid "关闭选项"
+msgstr "关闭选项"
+
+#: gui.pyw
+msgid "请选择关闭方式"
+msgstr "请选择关闭方式"
+
+#: gui.pyw
+msgid "显示主界面"
+msgstr "显示主界面"
+
+#: gui.pyw
+msgid "退出程序"
+msgstr "退出程序"
+
+#: gui.pyw
+msgid "直播录制器"
+msgstr "直播录制器"
+
+#: gui.pyw
+msgid "没有找到录制程序的进程"
+msgstr "没有找到录制程序的进程"
+
+#: gui.pyw
+msgid "已成功结束正在录制直播的进程"
+msgstr "已成功结束正在录制直播的进程"
+
+#: gui.pyw
+msgid "录制程序将在后台自动关闭"
+msgstr "录制程序将在后台自动关闭"
+
+#: gui.pyw
+msgid "已取消结束录制操作"
+msgstr "已取消结束录制操作"
+
+#: gui.pyw
+msgid "已使用命令行方式结束录制进程"
+msgstr "已使用命令行方式结束录制进程"
+
+# =============================================================================
+# 状态相关消息
+# =============================================================================
+
+#: gui.pyw
+msgid "状态"
+msgstr "状态"
+
+#: gui.pyw
+msgid "循环检测"
+msgstr "循环检测"
+
+#: gui.pyw
+msgid "格式"
+msgstr "格式"
+
+#: gui.pyw
+msgid "托盘"
+msgstr "托盘"
+
+#: gui.pyw
+msgid "启用"
+msgstr "启用"
+
+#: gui.pyw
+msgid "未启动"
+msgstr "未启动"
+
+# =============================================================================
+# YouTube 平台消息
+# =============================================================================
+
+#: src/spider.py
+msgid "Error: Please log in to YouTube on your device's webpage and configure cookies in the config.ini"
+msgstr "错误：请先在设备网页上登录YouTube，并在config.ini中配置cookies"
+
+# =============================================================================
+# FlexTV 额外错误消息
+# =============================================================================
+
+#: src/spider.py
+msgid "Failed to retrieve data from FlexTV live room"
+msgstr "从FlexTV直播间获取数据失败"
+
+# =============================================================================
+# PopkonTV 额外错误消息
+# =============================================================================
+
+#: src/spider.py
+msgid "Failed to retrieve live stream source,"
+msgstr "获取直播流源失败，"
+
+# =============================================================================
+# TwitCasting 额外错误消息
+# =============================================================================
+
+#: src/spider.py
+msgid "TwitCasting login error,"
+msgstr "TwitCasting登录错误，"
+
+# =============================================================================
+# spider.py 异常与错误消息（f-string 模板）
+# =============================================================================
+
+#: src/spider.py
+msgid "Error message: {e} Error line: {tb_lineno}"
+msgstr "错误信息: {e} 错误行号: {tb_lineno}"
+
+#: src/spider.py
+msgid "First data retrieval failed: {url} Preparing to switch parsing methods due to {e}"
+msgstr "首次数据获取失败: {url} 由于 {e} 正在准备切换解析方法"
+
+#: src/spider.py
+msgid "Failed to fetch data from {url}.{e}"
+msgstr "从 {url} 获取数据失败。{e}"
+
+#: src/spider.py
+msgid "Failed to parse JSON data from {url}. Error: {e}"
+msgstr "从 {url} 解析JSON数据失败。错误: {e}"
+
+#: src/spider.py
+msgid "Failed URL: {url} Error message: {error_msg}"
+msgstr "失败的URL: {url} 错误信息: {error_msg}"
+
+#: src/spider.py
+msgid "{e}, Failed URL: {url}, preparing to switch to a backup plan for re-parsing."
+msgstr "{e}，失败的URL: {url}，正在准备切换到备用方案重新解析。"
+
+#: src/spider.py
+msgid "Get douyu sign params error: {e}"
+msgstr "获取斗鱼签名参数错误: {e}"
+
+#: src/spider.py
+msgid "An error occurred during login: {e}"
+msgstr "登录过程中发生错误: {e}"
+
+#: src/spider.py
+msgid "FlexTV login request exception: {e}"
+msgstr "FlexTV登录请求异常: {e}"
+
+#: src/spider.py
+msgid "HTTP status error occurred during login: {e.response.status_code}"
+msgstr "登录时发生HTTP状态错误: {e.response.status_code}"
+
+#: src/spider.py
+msgid "An exception occurred during popkontv login: {e}"
+msgstr "popkontv登录过程中发生异常: {e}"
+
+# =============================================================================
+# room.py 异常消息（f-string 模板）
+# =============================================================================
+
+#: src/room.py
+msgid "HTTP status error occurred: {e.response.status_code}"
+msgstr "发生HTTP状态错误: {e.response.status_code}"
+
+#: src/room.py
+msgid "An exception occurred during get_live_room_id: {e}"
+msgstr "获取直播间ID时发生异常: {e}"
+
+# =============================================================================
+# utils.py 配置文件与磁盘空间消息（f-string 模板）
+# =============================================================================
+
+#: src/utils.py
+msgid "Error occurred while reading the configuration file: {e}"
+msgstr "读取配置文件时发生错误: {e}"
+
+#: src/utils.py
+msgid "Key [{key}] does not exist in section [{section}]."
+msgstr "键 [{key}] 在节 [{section}] 中不存在。"
+
+#: src/utils.py
+msgid "Section [{section}] does not exist in the file."
+msgstr "节 [{section}] 在文件中不存在。"
+
+#: src/utils.py
+msgid "An error occurred while reading the configuration file: {e}"
+msgstr "读取配置文件时发生错误: {e}"
+
+#: src/utils.py
+msgid "The value of {key} under [{section}] in the configuration file has been updated."
+msgstr "配置文件中 [{section}] 节下的 {key} 的值已更新。"
+
+#: src/utils.py
+msgid "Error occurred while writing to the configuration file: {e}"
+msgstr "写入配置文件时发生错误: {e}"
+
+#: src/utils.py
+msgid "{disk_root} Total: {disk_usage.total / (1024 ** 3):.2f} GB Used: {disk_usage.used / (1024 ** 3):.2f} GB Free: {free_space_gb:.2f} GB\n"
+msgstr "{disk_root} 总计: {disk_usage.total / (1024 ** 3):.2f} GB 已用: {disk_usage.used / (1024 ** 3):.2f} GB 可用: {free_space_gb:.2f} GB\n"
