@@ -21,6 +21,7 @@ from .utils import trace_error_decorator, generate_random_string
 from .logger import script_path, logger
 from .room import get_sec_user_id, get_unique_id, UnsupportedUrlError
 from .http_clients.async_http import async_req
+from .http_clients import config as http_config
 from .ab_sign import ab_sign
 
 
@@ -2036,7 +2037,7 @@ async def login_popkontv(
 
     try:
         proxy_addr = utils.handle_proxy_addr(proxy_addr)
-        async with httpx.AsyncClient(proxy=proxy_addr, timeout=20, verify=False) as client:
+        async with httpx.AsyncClient(proxy=proxy_addr, timeout=20, verify=http_config.ssl_verify) as client:
             response = await client.post(url, json=data, headers=headers)
             response.raise_for_status()
 

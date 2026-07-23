@@ -39,8 +39,6 @@ import uuid
 import shlex
 from collections import deque
 from pathlib import Path
-import urllib.request
-from urllib.error import URLError, HTTPError
 from typing import Any
 import configparser
 import httpx
@@ -201,6 +199,8 @@ def safe_exit(signum: int, frame: Any) -> None:
     exit_recording = True
     color_obj.print_colored("\n正在安全退出...", color_obj.YELLOW)
     cleanup_all_ffmpeg_processes()
+    from src.http_clients.async_http import close_all_clients_sync
+    close_all_clients_sync()
     sys.exit(0)
 
 # 注册信号处理器
@@ -209,8 +209,9 @@ signal.signal(signal.SIGTERM, safe_exit)
 if hasattr(signal, 'SIGBREAK'):
     signal.signal(signal.SIGBREAK, safe_exit)
 
-# 进程异常退出时兜底清理 ffmpeg（覆盖硬杀 / 未捕获异常等非优雅退出路径）
+# 进程异常退出时兜底清理 ffmpeg 与 HTTP 连接池（覆盖硬杀 / 未捕获异常等非优雅退出路径）
 atexit.register(cleanup_all_ffmpeg_processes)
+atexit.register(lambda: __import__('src.http_clients.async_http', fromlist=['close_all_clients_sync']).close_all_clients_sync())
 
 
 def _get_error_line(e: BaseException) -> str:
@@ -2107,6 +2108,10 @@ config: configparser.RawConfigParser = configparser.RawConfigParser()
 config.read(config_file, encoding=text_encoding)
 language = read_config_value(config, '录制设置', 'language(zh_cn/en)', "zh_cn")
 skip_proxy_check = options.get(read_config_value(config, '录制设置', '是否跳过代理检测(是/否)', "否"), False)
+# SSL 证书验证全局开关：默认禁用以兼容历史行为，统一控制所有 HTTP 客户端
+disable_ssl_verify = options.get(read_config_value(config, '录制设置', '是否禁用SSL证书验证(是/否)', "是"), True)
+from src.http_clients import config as _http_config
+_http_config.set_ssl_verify(not disable_ssl_verify)
 if language and 'en' not in language.lower():
     from i18n import translated_print
 
@@ -2116,20 +2121,12 @@ try:
     if skip_proxy_check:
         global_proxy = True
     else:
-        print('系统代理检测中，请耐心等待...')
-        with urllib.request.urlopen("https://www.google.com/", timeout=3) as response_g:
-            pass
-        global_proxy = True
-        print('\r全局/规则网络代理已开启√')
+        # 通过本地系统代理配置检测（读取注册表/环境变量），避免联网探测导致的卡顿
         pd = ProxyDetector()
-        if pd.is_proxy_enabled():
+        global_proxy = pd.is_proxy_enabled()
+        if global_proxy:
             proxy_info = pd.get_proxy_info()
             print("System Proxy: http://{}:{}".format(proxy_info.ip, proxy_info.port))
-except HTTPError as err:
-    print(f"HTTP error occurred: {err.code} - {err.reason}")
-except URLError:
-    color_obj.print_colored("INFO：未检测到全局/规则网络代理，请检查代理配置（若无需录制海外直播请忽略此条提示）",
-                            color_obj.YELLOW)
 except Exception as err:
     print("An unexpected error occurred:", err)
 

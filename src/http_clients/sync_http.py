@@ -8,6 +8,7 @@ import requests
 import ssl
 import json
 import urllib.request
+from . import config
 from ..logger import logger
 
 # 禁用代理的处理器（本地请求不使用代理）
@@ -18,8 +19,15 @@ ssl_context = ssl.create_default_context()
 ssl_context.check_hostname = False
 ssl_context.verify_mode = ssl.CERT_NONE
 
-# 构建自定义 URL  opener（使用禁用代理和 SSL 上下文）
-opener = urllib.request.build_opener(no_proxy_handler, urllib.request.HTTPSHandler(context=ssl_context))
+# 预构建 opener：禁用代理 + 禁用证书验证（ssl_verify=False 时使用）
+_opener_insecure = urllib.request.build_opener(no_proxy_handler, urllib.request.HTTPSHandler(context=ssl_context))
+# 预构建 opener：仅禁用代理，保留默认证书验证（ssl_verify=True 时使用）
+_opener_secure = urllib.request.build_opener(no_proxy_handler)
+
+
+def _get_opener() -> urllib.request.OpenerDirector:
+    # 按全局 SSL 验证开关选择本地请求 opener
+    return _opener_secure if config.ssl_verify else _opener_insecure
 
 OptionalStr = str | None
 OptionalDict = dict | None
@@ -50,11 +58,11 @@ def sync_req(
                 # POST 请求（带代理）
                 response = requests.post(
                     url, data=data, json=json_data, headers=headers, proxies=proxies, timeout=timeout,
-                    verify=False
+                    verify=config.ssl_verify
                 )
             else:
                 # GET 请求（带代理）
-                response = requests.get(url, headers=headers, proxies=proxies, timeout=timeout, verify=False)
+                response = requests.get(url, headers=headers, proxies=proxies, timeout=timeout, verify=config.ssl_verify)
             if redirect_url:
                 return response.url
             resp_str = response.text
@@ -77,11 +85,12 @@ def sync_req(
 
             try:
                 if abroad:
-                    # 海外请求（使用 SSL 上下文）
-                    response = urllib.request.urlopen(req, timeout=timeout, context=ssl_context)
+                    # 海外请求：仅在全局禁用证书验证时使用 CERT_NONE 上下文
+                    response = urllib.request.urlopen(
+                        req, timeout=timeout, context=None if config.ssl_verify else ssl_context)
                 else:
-                    # 本地请求（使用自定义 opener）
-                    response = opener.open(req, timeout=timeout)
+                    # 本地请求（使用按全局配置选择的 opener）
+                    response = _get_opener().open(req, timeout=timeout)
                 try:
                     if redirect_url:
                         return response.url

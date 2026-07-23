@@ -129,6 +129,7 @@ DouyinLiveRecorder/
 │   ├── debug_douyin_streams.py         # 抖音流数据调试工具
 │   ├── http_clients/                   # HTTP 客户端
 │   │   ├── __init__.py
+│   │   ├── config.py                  # HTTP 客户端共享运行时配置（SSL 验证开关）
 │   │   ├── async_http.py               # 异步 HTTP 客户端 (httpx)
 │   │   └── sync_http.py                # 同步 HTTP 客户端
 │   └── javascript/                     # JavaScript 签名脚本
@@ -295,6 +296,11 @@ QUALITY_MAPPING = {
 - **`logs/streamget.log`**: DEBUG 级别（排除 INFO）
 - **`logs/PlayURL.log`**: INFO 级别（仅直播流地址）
 
+**日志文件开关**:
+- 通过 `config/config.ini` 的 `是否启用日志文件(是/否)` 控制
+- 默认启用，保持向后兼容
+- logger.py 在初始化时直接读取配置（不依赖 main.py 执行顺序）
+
 **日志轮转**: 300 KB 自动轮转，保留 1 份
 
 ---
@@ -373,11 +379,39 @@ QUALITY_MAPPING = {
 - 自动重试
 - 状态码检查
 - HTTP/2 支持
+- **连接池复用**: 按 (代理, verify, http2) 维度复用 AsyncClient，发挥 keepalive 连接池作用
+- **SSL 验证**: 由全局配置 `src/http_clients/config.py` 统一控制，默认禁用
+- **连接池清理**: 进程退出时通过 atexit / 信号处理器释放所有复用的 AsyncClient
 
 **被以下模块导入**:
 - `src/spider.py` - `async_req()`
 - `src/stream.py` - `get_response_status()`
 - `src/debug_douyin_streams.py` - `async_req()`
+
+---
+
+### 11. HTTP 客户端配置 (`src/http_clients/config.py`)
+
+**职责**: 提供 HTTP 客户端共享运行时配置
+
+**功能**:
+- SSL 证书验证全局开关（`ssl_verify`），默认禁用（False）以兼容历史行为
+- 提供 `set_ssl_verify()` 函数，由主配置在启动时统一设置
+- 异步 / 同步 HTTP 客户端在发起请求时读取此配置
+
+---
+
+### 12. 同步 HTTP 客户端 (`src/http_clients/sync_http.py`)
+
+**职责**: 封装 requests 和 urllib，提供同步 HTTP 接口
+
+**功能**:
+- 代理支持
+- 超时设置
+- Cookie 支持
+- 重定向跟踪
+- **SSL 验证**: 由全局配置 `src/http_clients/config.py` 统一控制
+- **Opener 预构建**: 按 SSL 验证开关预构建 insecure / secure 两个 opener，避免运行时重复构建
 
 ---
 
@@ -450,10 +484,14 @@ main.py
 │   ├── src/room.py
 │   ├── src/ab_sign.py
 │   ├── src/http_clients/async_http.py
+│   │   └── src/http_clients/config.py
+│   ├── src/http_clients/config.py
 │   └── src/utils.py
 ├── src/stream.py
 │   ├── src/spider.py
 │   └── src/http_clients/async_http.py
+├── src/http_clients/config.py
+├── src/http_clients/async_http.py
 ├── src/utils.py
 │   └── src/logger.py
 ├── msg_push.py
@@ -472,6 +510,8 @@ main.py
 |--------|------|--------|
 | language | 界面语言 | zh_cn |
 | 是否跳过代理检测 | 是否跳过代理检测 | 是 |
+| 是否禁用SSL证书验证 | 是否禁用 SSL 证书验证 | 是 |
+| 是否启用日志文件 | 是否将日志写入文件 | 是 |
 | 直播保存路径 | 录制文件保存路径 | (空，默认当前目录) |
 | 保存文件夹是否以作者区分 | 是否按主播名分类 | 是 |
 | 视频保存格式 | ts/mkv/flv/mp4/mp3/m4a | ts |
@@ -689,6 +729,15 @@ brew install node
 
 ## 更新日志
 
+### v4.0.8-dev (2026-07-23)
+- 新增 HTTP 客户端连接池复用机制，按 (代理, verify, http2) 维度复用 AsyncClient，提升请求性能
+- 新增 SSL 证书验证全局开关（`src/http_clients/config.py`），通过 config.ini 统一控制异步/同步 HTTP 客户端
+- 新增日志文件开关配置项，可通过 config.ini 控制是否输出日志文件
+- 重构代理检测逻辑，从联网探测 Google 改为读取本地系统代理配置，避免启动时卡顿
+- 优化异步 HTTP 请求异常处理，按返回契约提供类型安全的回退值
+- 优化进程退出清理，新增 HTTP 客户端连接池的 atexit / 信号处理器兜底释放
+- Dockerfile 新增 ca-certificates 依赖，支持启用 SSL 证书验证时的证书校验
+
 ### v4.0.8-dev (2026-06-27)
 - 修复 `trace_error_decorator` 严重 Bug：原同步装饰器应用于 71 个异步函数导致错误捕获完全失效，现使用 `asyncio.iscoroutinefunction()` 支持同步/异步双模式
 - 修复返回值类型不一致 Bug：`execjs.ProgramError` 分支返回 `None` → `{}`
@@ -724,4 +773,4 @@ brew install node
 
 ---
 
-*本文档最后更新: 2026-06-27*
+*本文档最后更新: 2026-07-23*

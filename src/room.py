@@ -1,12 +1,10 @@
 # -*- encoding: utf-8 -*-
 
-"""
-Author: Hmily
-GitHub:https://github.com/ihmily
-Date: 2023-07-17 23:52:05
-Update: 2025-02-04 04:57:00
-Copyright (c) 2023 by Hmily, All Rights Reserved.
-"""
+# Author: Hmily
+# GitHub:https://github.com/ihmily
+# Date: 2023-07-17 23:52:05
+# Update: 2025-02-04 04:57:00
+# Copyright (c) 2023 by Hmily, All Rights Reserved.
 import re
 import urllib.parse
 import execjs
