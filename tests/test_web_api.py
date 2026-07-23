@@ -160,3 +160,157 @@ def test_rooms_update_not_found_404(client):
         "url": "https://example.com/x",
     })
     assert r.status_code == 404
+
+
+def test_rooms_list(client, tmp_url_config):
+    r = client.get("/api/rooms")
+    assert r.status_code == 200
+    rooms = r.json()
+    assert len(rooms) == 5
+    urls = [room["url"] for room in rooms]
+    assert "https://live.douyin.com/123" in urls
+
+
+def test_rooms_add(client, tmp_url_config):
+    r = client.post("/api/rooms", json={"url": "https://live.douyin.com/new"})
+    assert r.status_code == 200
+    from src.web_config import parse_url_config
+    rooms = parse_url_config(tmp_url_config)
+    assert any(r2["url"] == "https://live.douyin.com/new" for r2 in rooms)
+
+
+def test_rooms_add_duplicate_409(client, tmp_url_config):
+    r = client.post("/api/rooms", json={"url": "https://live.douyin.com/123"})
+    assert r.status_code == 409
+
+
+def test_rooms_add_with_quality_and_name(client, tmp_url_config):
+    r = client.post("/api/rooms", json={
+        "url": "https://live.bilibili.com/999",
+        "quality": "超清",
+        "name": "测试"
+    })
+    assert r.status_code == 200
+    from src.web_config import parse_url_config
+    rooms = parse_url_config(tmp_url_config)
+    added = next(r2 for r2 in rooms if r2["url"] == "https://live.bilibili.com/999")
+    assert added["quality"] == "超清"
+    assert added["name"] == "测试"
+
+
+def test_rooms_delete(client, tmp_url_config):
+    r = client.delete("/api/rooms?url=https://live.douyin.com/123")
+    assert r.status_code == 200
+    from src.web_config import parse_url_config
+    rooms = parse_url_config(tmp_url_config)
+    assert not any(r2["url"] == "https://live.douyin.com/123" for r2 in rooms)
+
+
+def test_rooms_delete_not_found_404(client):
+    r = client.delete("/api/rooms?url=https://example.com/nope")
+    assert r.status_code == 404
+
+
+def test_rooms_toggle_disable(client, tmp_url_config):
+    r = client.post("/api/rooms/toggle", json={
+        "url": "https://live.douyin.com/123",
+        "enable": False
+    })
+    assert r.status_code == 200
+    from src.web_config import parse_url_config
+    rooms = parse_url_config(tmp_url_config)
+    target = next(r2 for r2 in rooms if r2["url"] == "https://live.douyin.com/123")
+    assert target["enabled"] is False
+
+
+def test_rooms_toggle_enable(client, tmp_url_config):
+    # huya 原本是注释（禁用）
+    r = client.post("/api/rooms/toggle", json={
+        "url": "https://www.huya.com/789",
+        "enable": True
+    })
+    assert r.status_code == 200
+    from src.web_config import parse_url_config
+    rooms = parse_url_config(tmp_url_config)
+    target = next(r2 for r2 in rooms if r2["url"] == "https://www.huya.com/789")
+    assert target["enabled"] is True
+
+
+def test_config_get(client, tmp_config_ini):
+    r = client.get("/api/config")
+    assert r.status_code == 200
+    sections = r.json()
+    assert "录制设置" in sections
+    assert sections["录制设置"]["循环时间(秒)"] == "300"
+    # Cookie 非空值脱敏
+    assert sections["Cookie"]["抖音cookie"] == "***"
+    # 空值不脱敏
+    assert sections["账号密码"]["sooplive账号"] == ""
+
+
+def test_config_update(client, tmp_config_ini):
+    r = client.put("/api/config", json={
+        "section": "录制设置",
+        "key": "循环时间(秒)",
+        "value": "60"
+    })
+    assert r.status_code == 200
+    # 回读验证
+    r = client.get("/api/config")
+    assert r.json()["录制设置"]["循环时间(秒)"] == "60"
+
+
+def test_config_update_sensitive_unmasks(client, tmp_config_ini):
+    # 写入敏感字段后回读应显示新值（非 ***），因为脱敏仅在前端展示层
+    # 但 GET 始终脱敏非空值，所以这里验证写入成功即可
+    r = client.put("/api/config", json={
+        "section": "Cookie",
+        "key": "抖音cookie",
+        "value": "newcookie"
+    })
+    assert r.status_code == 200
+    # 直接读文件验证（update_config 以 utf-8-sig 写入，故以 utf-8-sig 读回）
+    import configparser
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.read(tmp_config_ini, encoding="utf-8-sig")
+    assert parser["Cookie"]["抖音cookie"] == "newcookie"
+
+
+def test_files_list_root(client):
+    r = client.get("/api/files")
+    assert r.status_code == 200
+    items = r.json()
+    names = [i["name"] for i in items]
+    assert "sub" in names
+    assert "root.mp4" in names
+
+
+def test_files_list_subdir(client):
+    r = client.get("/api/files?path=sub")
+    assert r.status_code == 200
+    items = r.json()
+    assert any(i["name"] == "a.ts" for i in items)
+
+
+def test_files_traversal_blocked_400(client):
+    r = client.get("/api/files?path=../../etc")
+    assert r.status_code == 400
+
+
+def test_files_download_traversal_blocked_400(client):
+    r = client.get("/api/files/download?path=../../etc/passwd")
+    assert r.status_code == 400
+
+
+def test_files_download_ok(client):
+    r = client.get("/api/files/download?path=root.mp4")
+    assert r.status_code == 200
+    assert r.content == b"\x00" * 200
+
+
+def test_logs_get(client):
+    r = client.get("/api/logs?lines=2")
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data["lines"]) == 2
+    assert data["lines"][0].strip() == "line2"
