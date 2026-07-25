@@ -390,7 +390,6 @@ pytest
 ### 项目文档
 
 - [CODE_WIKI.md](CODE_WIKI.md) - 项目架构文档
-- [CODE_CHANGES.md](CODE_CHANGES.md) - 代码改动记录
 
 </div>
 
