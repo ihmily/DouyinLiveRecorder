@@ -4,7 +4,6 @@
 
 import json
 import base64
-import http.client
 import urllib.request
 import urllib.error
 import smtplib
@@ -119,7 +118,7 @@ def send_email(email_host: str, login_email: str, email_pass: str, sender_email:
                 pass
 
 
-def tg_bot(chat_id: int, token: str, content: str) -> dict[str, list[str | int]]:
+def tg_bot(chat_id: str | int, token: str, content: str) -> dict[str, list[str | int]]:
     # Telegram Bot 推送
     try:
         json_data = {"chat_id": chat_id, 'text': content}

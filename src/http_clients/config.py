@@ -10,4 +10,4 @@ ssl_verify: bool = False
 def set_ssl_verify(value: bool) -> None:
     # 由主配置统一设置 SSL 证书验证开关
     global ssl_verify
-    ssl_verify = bool(value)
+    ssl_verify = value

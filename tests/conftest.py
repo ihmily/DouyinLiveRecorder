@@ -40,7 +40,8 @@ def tmp_config_ini(tmp_path: Path) -> Path:
         "web_port = 8000\n"
         "web_auth_enable = false\n"
         "web_password = \n"
-        "web_token_expiry = 86400\n",
+        "web_token_expiry = 86400\n"
+        "web_show_console = true\n",
         encoding="utf-8",
     )
     return p

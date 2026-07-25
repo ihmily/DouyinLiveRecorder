@@ -235,15 +235,12 @@ def replace_url(file_path: str | Path, old: str, new: str) -> None:
     # 逐行匹配整行内容，避免子串替换误伤包含相同 URL 片段的其他行
     with open(file_path, 'r', encoding='utf-8-sig') as f:
         lines = f.readlines()
-    changed = False
     with open(file_path, 'w', encoding='utf-8-sig') as f:
         for line in lines:
             if line.strip() == old:
                 f.write(new + '\n')
-                changed = True
             elif old in line:
                 f.write(line.replace(old, new))
-                changed = True
             else:
                 f.write(line)
 

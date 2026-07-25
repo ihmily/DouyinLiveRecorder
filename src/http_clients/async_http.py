@@ -16,7 +16,8 @@ _httpx_limits = httpx.Limits(max_connections=100, max_keepalive_connections=20)
 
 # 复用 Client 以真正发挥 keepalive 连接池作用
 # AsyncClient 必须在事件循环内创建并使用，进程退出时需 aclose() 释放连接池
-_client_cache: Dict[Tuple[str, bool, bool], httpx.AsyncClient] = {}
+# 值为 (client, 创建时的事件循环)，用于检测 asyncio.run() 导致的循环变更
+_client_cache: Dict[Tuple[str, bool, bool], Tuple[httpx.AsyncClient, asyncio.AbstractEventLoop]] = {}
 
 
 async def _get_client(
@@ -28,22 +29,27 @@ async def _get_client(
     # 按 (代理, verify, http2) 维度复用 AsyncClient
     # timeout 在每次请求时单独传入，避免不同调用方覆盖彼此的超时
     key = (proxy_addr or "", verify, http2)
-    client = _client_cache.get(key)
-    if client is None or client.is_closed:
-        client = httpx.AsyncClient(
-            proxy=proxy_addr,
-            timeout=timeout,
-            verify=verify,
-            http2=http2,
-            limits=_httpx_limits,
-        )
-        _client_cache[key] = client
+    current_loop = asyncio.get_event_loop()
+    cached = _client_cache.get(key)
+    if cached is not None:
+        client, client_loop = cached
+        # client 未关闭且事件循环未变更时直接复用
+        if not client.is_closed and client_loop is current_loop:
+            return client
+    client = httpx.AsyncClient(
+        proxy=proxy_addr,
+        timeout=timeout,
+        verify=verify,
+        http2=http2,
+        limits=_httpx_limits,
+    )
+    _client_cache[key] = (client, current_loop)
     return client
 
 
 async def _close_all_clients() -> None:
     # 进程退出时释放所有复用的 AsyncClient，避免连接池泄漏
-    for client in list(_client_cache.values()):
+    for client, _ in list(_client_cache.values()):
         try:
             if not client.is_closed:
                 await client.aclose()

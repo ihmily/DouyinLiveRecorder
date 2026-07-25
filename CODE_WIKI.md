@@ -26,11 +26,12 @@
 - ✅ 支持 60+ 个直播平台（抖音、TikTok、YouTube、快手、虎牙、斗鱼、B站、小红书等）
 - ✅ 循环值守直播状态，开播自动录制，断播自动停止
 - ✅ 多种视频格式输出：TS、MKV、FLV、MP4、MP3、M4A
-- ✅ 命令行 + GUI 双模式运行
+- ✅ 命令行 + GUI + Web 管理面板三模式运行
 - ✅ 多平台消息推送：钉钉、微信、邮箱、TG、Bark、NTFY、PushPlus
 - ✅ Docker 容器化部署
 - ✅ 国际化支持（中文/英文）
 - ✅ 灵活配置：画质选择、分段录制、自定义保存路径等
+- ✅ 实际画质回采与降级告警（支持抖音、TikTok、快手、虎牙、斗鱼、B站、网易CC）
 
 ### 技术栈
 | 技术 | 用途 |
@@ -42,6 +43,8 @@
 | Node.js + PyExecJS | 运行 JavaScript 签名算法 |
 | Loguru | 结构化日志 |
 | tkinter + pystray + Pillow | GUI 图形界面与系统托盘 |
+| FastAPI + uvicorn | Web 管理面板后端 |
+| HTML + CSS + JavaScript | Web 管理面板前端 |
 | Docker | 容器化部署 |
 | gettext (msgfmt) | 国际化翻译编译 |
 | pyflakes | 静态代码检查 |
@@ -55,9 +58,11 @@
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                         用户交互层                                │
-├─────────────────────────────┬───────────────────────────────────┤
-│      命令行模式 (main.py)   │      GUI 图形界面 (gui.py)        │
-└─────────────────────────────┴───────────────────────────────────┘
+├──────────────────┬──────────────────────┬───────────────────────┤
+│ 命令行 (main.py) │ GUI 图形界面 (gui.py)│ Web 面板 (web.py)     │
+│                  │                      │ └ src/web_api.py      │
+│                  │                      │ └ web/ (前端静态资源)  │
+└──────────────────┴──────────────────────┴───────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
@@ -93,11 +98,13 @@
 3. **流地址获取阶段**
    - 调用各平台的直播流 API
    - 根据配置选择不同画质（原画/超清/高清/标清/流畅）
+   - 回采平台实际下发的画质（`actual_quality`）与可用档位（`available_qualities`）
    - 验证流地址可用性
 
 4. **录制执行阶段**
    - 启动 FFmpeg 子进程
    - 实时监控录制状态
+   - 记录实际画质，画质降级时输出告警日志
    - 支持分段录制
    - 支持转码为 MP4
 
@@ -118,7 +125,7 @@ DouyinLiveRecorder/
 ├── src/                                 # 核心源码包
 │   ├── __init__.py                     # 包初始化 + Node.js 环境配置
 │   ├── spider.py                       # 直播数据爬虫（60+ 平台）
-│   ├── stream.py                       # 直播流地址解析
+│   ├── stream.py                       # 直播流地址解析（含画质回采）
 │   ├── room.py                         # 直播间信息解析
 │   ├── utils.py                        # 工具函数库
 │   ├── logger.py                       # Loguru 日志配置
@@ -127,6 +134,8 @@ DouyinLiveRecorder/
 │   ├── initializer.py                  # Node.js 自动初始化
 │   ├── weverse_auth.py                 # Weverse 平台认证
 │   ├── debug_douyin_streams.py         # 抖音流数据调试工具
+│   ├── web_api.py                      # Web 管理面板 FastAPI 应用
+│   ├── web_config.py                   # Web 面板配置读写（不依赖 FastAPI）
 │   ├── http_clients/                   # HTTP 客户端
 │   │   ├── __init__.py
 │   │   ├── config.py                  # HTTP 客户端共享运行时配置（SSL 验证开关）
@@ -140,6 +149,10 @@ DouyinLiveRecorder/
 │       ├── liveme.js                   # LiveMe 签名
 │       ├── migu.js                     # 咪咕签名
 │       └── taobao-sign.js              # 淘宝签名
+├── web/                                 # Web 管理面板前端
+│   ├── index.html                      # 单页应用入口
+│   ├── app.js                          # 前端逻辑（API 调用、SSE、渲染）
+│   └── style.css                       # 样式表（主题、响应式）
 ├── i18n/                                # 国际化文件
 │   ├── zh_CN/LC_MESSAGES/
 │   │   ├── zh_CN.po                   # 中文翻译源
@@ -147,6 +160,7 @@ DouyinLiveRecorder/
 │   └── en/LC_MESSAGES/
 ├── main.py                              # 命令行入口
 ├── gui.py                               # GUI 图形界面入口
+├── web.py                               # Web 管理面板入口
 ├── msg_push.py                          # 消息推送模块
 ├── ffmpeg_install.py                    # FFmpeg 安装脚本
 ├── demo.py                              # 调用示例
@@ -184,15 +198,18 @@ running_list: list          # 正在运行的 URL 列表
 error_count: int            # 当前错误计数
 error_window: list          # 错误时间窗口（用于动态调优）
 url_tuples_list: list       # 解析后的 URL 配置列表 [(quality, url, anchor_name)...]
+recording_time_list: dict   # 录制时间与画质记录 {name: [start_time, quality_zh, actual_quality_zh]}
 ```
 
 **主流程函数**:
 - `main()` - 入口函数
 - `read_config()` - 读取配置
 - `check_url_config()` - 检查 URL 配置
-- `start_recording()` - 启动录制
+- `start_recording()` - 启动录制（解析 actual_quality，降级时输出告警）
 - `stop_recording()` - 停止录制
 - `check_live_status()` - 检测直播状态
+- `display_info()` - 终端状态展示（兼容新旧 recording_time_list 格式）
+- `get_status()` - 返回录制状态 dict（含 actual_quality 字段，供 Web API 使用）
 
 ---
 
@@ -208,6 +225,7 @@ url_tuples_list: list       # 解析后的 URL 配置列表 [(quality, url, anch
 - `get_douyin_web_stream_data()` - 获取抖音 Web 端直播数据
 - `get_tiktok_stream_data()` - 获取 TikTok 直播数据
 - `get_youtube_stream_data()` - 获取 YouTube 直播数据
+- `get_bilibili_stream_data()` - 获取 B站直播流数据（返回 dict，含 url/current_qn/accept_qn）
 - `get_play_url_list()` - 获取 M3U8 播放列表中的清晰度选项
 - `get_params()` - 从 URL 提取参数
 
@@ -217,12 +235,13 @@ url_tuples_list: list       # 解析后的 URL 配置列表 [(quality, url, anch
 - 代理支持
 - Cookie 支持
 - 错误重试机制
+- B站 spider 返回 dict 结构（含 `current_qn`/`accept_qn` 元信息），供 stream 模块回采实际画质
 
 ---
 
 ### 3. 直播流解析模块 (`src/stream.py`)
 
-**职责**: 解析直播流地址，支持多种画质选择
+**职责**: 解析直播流地址，支持多种画质选择，回采平台实际下发的画质
 
 **画质映射**:
 ```python
@@ -234,20 +253,55 @@ QUALITY_MAPPING = {
     "SD": 3,    # 标清 (Standard Definition)
     "LD": 4     # 流畅 (Low Definition)
 }
+QUALITY_MAPPING_BIT = {
+    'OD': 99999, 'BD': 4000, 'UHD': 2000, 'HD': 1000, 'SD': 800, 'LD': 600
+}
+QUALITY_LEVEL = {"OD": 0, "BD": 0, "UHD": 1, "HD": 2, "SD": 3, "LD": 4}  # 等级值越大画质越低
+QUALITY_CODE_TO_ZH = {"OD": "原画", "BD": "蓝光", "UHD": "超清", "HD": "高清", "SD": "标清", "LD": "流畅"}
+NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard": "SD"}
 ```
 
-**关键函数**:
+**画质工具函数**:
+- `bitrate_to_quality(bitrate)` - 根据码率反查画质代码（0/未知回退 OD）
+- `code_to_zh(code)` - 画质代码转中文名
+- `is_downgrade(requested, actual)` - 判定是否降级（actual 等级值 > requested）
 - `get_quality_index()` - 解析画质参数，返回索引
-- `get_douyin_stream_url()` - 获取抖音直播流地址
-- `get_tiktok_stream_url()` - 获取 TikTok 直播流地址
-- `get_bilibili_stream_url()` - 获取 B站 直播流地址
-- `_pad_list()` - 填充列表到指定最小长度
+- `_pad_list()` - 填充列表到指定最小长度（部分平台已改用显式截断替代）
+
+**各平台流地址解析函数**:
+
+| 函数 | 平台 | 实际画质回采方式 |
+|------|------|-----------------|
+| `get_douyin_stream_url()` | 抖音 | 从 `flv_pull_url` / `hls_pull_url_map` 的 key 提取画质标签 |
+| `get_tiktok_stream_url()` | TikTok | 从 `vbitrate` 字段通过 `bitrate_to_quality()` 反查 |
+| `get_kuaishou_stream_url()` | 快手 | 从 `flv_url_list` 的 `bitrate` 字段反查 |
+| `get_huya_stream_url()` | 虎牙 | 从 `exsphd` ratio 值映射，处理降级选择 |
+| `get_douyu_stream_url()` | 斗鱼 | 从平台下发的 `rate` 字段反向映射 |
+| `get_bilibili_stream_url()` | B站 | 从 spider 返回的 `current_qn` 反向映射为画质代码 |
+| `get_netease_stream_url()` | 网易CC | 从画质名（blueray/ultra/high）通过 `NETEASE_QUALITY_MAP` 映射 |
+
+**返回值结构**（各平台统一）:
+```python
+{
+    "is_live": True,
+    "anchor_name": "主播名",
+    "title": "直播标题",
+    "quality": "UHD",              # 用户设置的画质
+    "actual_quality": "UHD",       # 平台实际下发的画质
+    "available_qualities": ["OD", "UHD", "HD"],  # 平台可用的画质档位
+    "m3u8_url": "http://...",
+    "flv_url": "http://...",
+    "record_url": "http://...",
+}
+```
 
 **实现特点**:
 - 按带宽排序的清晰度选择
 - 自动降级策略（首选画质不可用时自动降级）
 - FLV 与 M3U8 双协议支持
 - 状态码验证
+- 显式截断替代 `_pad_list` 静默填充，避免越界
+- 画质降级检测（`is_downgrade`），供 main.py 告警使用
 
 ---
 
@@ -367,6 +421,22 @@ QUALITY_MAPPING = {
 - `StatusIndicator` - 状态指示器
 - `ModernTextWidget` - 现代文本控件
 
+**导航页面**:
+- 📊 控制台 - 录制状态总览、启停控制
+- 🎯 画质监控 - 实时检测各直播间实际画质是否与设置一致
+- 📝 URL 配置 - 直播间地址管理
+- 📋 运行日志 - 子进程日志查看
+
+**画质监控页面** (`_build_quality_page`):
+- 通过解析 main.py 子进程 stdout 日志获取画质信息
+- 解析 loguru 日志前缀（` | ` + ` - ` 分隔），提取 message 内容
+- 降级告警匹配：`{name} 画质降级：设置 {zh}({code}) 实际 {zh}({code})`
+- 录制状态匹配：`{name}[{quality}] 正在录制中 {duration}`
+- 统计卡片：录制中 / 画质正常 / 画质降级 计数
+- 降级行以红色背景高亮，正常行显示"✓ 同等"
+- 线程安全：`_quality_lock` 保护共享数据，UI 更新仅在主线程执行
+- 超时清理：30 秒未更新的录制标记自动清除
+
 ---
 
 ### 10. 异步 HTTP 客户端 (`src/http_clients/async_http.py`)
@@ -380,6 +450,7 @@ QUALITY_MAPPING = {
 - 状态码检查
 - HTTP/2 支持
 - **连接池复用**: 按 (代理, verify, http2) 维度复用 AsyncClient，发挥 keepalive 连接池作用
+- **事件循环检测**: 缓存记录每个 client 创建时的事件循环引用，检测到 `asyncio.run()` 导致循环变更时自动重建客户端，避免 `'NoneType' object has no attribute 'send'` 错误
 - **SSL 验证**: 由全局配置 `src/http_clients/config.py` 统一控制，默认禁用
 - **连接池清理**: 进程退出时通过 atexit / 信号处理器释放所有复用的 AsyncClient
 
@@ -412,6 +483,52 @@ QUALITY_MAPPING = {
 - 重定向跟踪
 - **SSL 验证**: 由全局配置 `src/http_clients/config.py` 统一控制
 - **Opener 预构建**: 按 SSL 验证开关预构建 insecure / secure 两个 opener，避免运行时重复构建
+
+---
+
+### 13. Web 管理面板 (`web.py` + `src/web_api.py` + `src/web_config.py` + `web/`)
+
+**职责**: 提供 Web 界面远程管理录制器，包括仪表盘、直播间管理、配置编辑、日志查看
+
+**架构**:
+- `web.py` - 入口：守护线程运行 `main.main()`，主线程运行 uvicorn；支持后台隐藏运行模式
+- `src/web_api.py` - FastAPI 应用：认证（Token）、REST API 路由、SSE 推送、静态资源挂载
+- `src/web_config.py` - 配置读写（不依赖 FastAPI，便于单测）
+- `web/` - 前端静态资源（单页应用）
+
+**后台运行模式** (`web_show_console = false`):
+- `_enter_background_mode()` 在启动录制引擎前调用
+- Windows 下通过 `ctypes` 调用 `GetConsoleWindow()` + `ShowWindow(hwnd, SW_HIDE)` 隐藏控制台窗口
+- stdout/stderr 重定向到 `logs/web_console.log`（行缓冲，实时写入）
+- 程序完全后台运行，通过 Web 面板管理
+- 恢复控制台：设置 `web_show_console = true` 后重启
+
+**API 路由**:
+
+| 路由 | 方法 | 功能 |
+|------|------|------|
+| `/api/login` | POST | 密码登录，返回 Token |
+| `/api/status` | GET | 获取录制状态（含 actual_quality） |
+| `/api/rooms` | GET/POST | 直播间列表查询 / 新增 |
+| `/api/rooms/{url}` | PUT/DELETE | 编辑 / 删除直播间 |
+| `/api/rooms/toggle` | POST | 启用 / 禁用直播间 |
+| `/api/config` | GET/PUT | 读取 / 修改配置 |
+| `/api/logs/stream` | GET | SSE 实时日志推送 |
+
+**前端功能** (`web/`):
+- `index.html` - 单页应用入口（仪表盘 / 直播间 / 配置 三个视图）
+- `app.js` - 前端逻辑（Token 认证、API 调用、SSE 日志流、状态渲染）
+- `style.css` - 样式表（明暗主题、响应式布局、降级高亮）
+
+**录制表格展示**:
+- 名称 / 设置画质 / 实际画质 / 开始时间 / 已录时长
+- 实际画质与设置画质不一致时标红显示（`.quality-down` 样式）
+
+**安全机制**:
+- 密码变更后自动吊销所有现有 Token，强制重新登录
+- 监听 `0.0.0.0` 且未启用认证时输出安全告警
+- 文件下载路径校验（`_is_within` 防目录穿越）
+- 敏感配置项（Cookie / 账号密码 / web_password）API 返回时脱敏为 `***`
 
 ---
 
@@ -468,6 +585,9 @@ async def some_function():
 | pystray | >=0.19.4 | 系统托盘（GUI） |
 | Pillow | >=10.0.0 | 图像处理（GUI 图标） |
 | weverse | >=0.9.0 | Weverse 平台 SDK |
+| fastapi | >=0.100.0 | Web 管理面板后端框架 |
+| uvicorn | >=0.23.0 | ASGI 服务器 |
+| pydantic | >=2.0.0 | 请求模型校验 |
 
 ### 外部依赖
 
@@ -496,6 +616,12 @@ main.py
 │   └── src/logger.py
 ├── msg_push.py
 └── ffmpeg_install.py
+
+web.py
+├── src/web_api.py
+│   ├── src/web_config.py
+│   └── main.py (get_status 等函数)
+└── web/ (静态资源)
 ```
 
 ---
@@ -551,6 +677,19 @@ main.py
 
 部分平台的账号密码配置
 
+#### [Web] 节
+
+Web 管理面板配置（`web.py` 模式专用）
+
+| 配置项 | 说明 | 默认值 |
+|--------|------|--------|
+| web_host | 监听地址 | 0.0.0.0 |
+| web_port | 监听端口 | 8000 |
+| web_auth_enable | 是否启用密码认证 | false |
+| web_password | 登录密码（认证开启时必填） | (空) |
+| web_token_expiry | Token 有效期（秒） | 86400 |
+| web_show_console | 是否显示控制台窗口（false 时后台隐藏运行） | true |
+
 ### 直播间配置文件 (`config/URL_config.ini`)
 
 **格式**:
@@ -596,6 +735,12 @@ python main.py
 #### GUI 图形界面模式
 ```bash
 python gui.py
+```
+
+#### Web 管理面板模式
+```bash
+python web.py
+# 默认监听 http://localhost:8000
 ```
 
 ---
@@ -721,13 +866,100 @@ brew install node
 ### 添加新平台支持
 
 1. 在 `src/spider.py` 中添加平台数据获取函数
-2. 在 `src/stream.py` 中添加流地址解析函数
+2. 在 `src/stream.py` 中添加流地址解析函数，返回值包含 `actual_quality` 和 `available_qualities` 字段
 3. 在 `main.py` 中添加平台识别逻辑
-4. 更新 `README.md` 和本文档
+4. 在 `tests/test_stream_quality.py` 中添加画质回采测试
+5. 更新 `README.md` 和本文档
 
 ---
 
 ## 更新日志
+
+### v4.0.8-dev (2026-07-25) — 全项目类型错误修复与代码清理
+
+**类型错误修复（Pyright / Pyrefly / basedpyright）：**
+
+- `src/proxy.py`：修复跨平台类型错误——在平台判断前声明 `self.winreg: Any = None` 和 `self.__INTERNET_SETTINGS: Optional[Any] = None`，简化 `__del__` 析构函数用 `try/except` 包裹直接访问，配合 `is not None` 类型收窄
+- `gui.py`：`Fonts.get()` 的 `weight` 参数从 `str` 收窄为 `Literal["normal", "bold"]`，匹配 `CTkFont` 签名
+- `main.py`：补全模块级变量声明（约 160 个），按功能分组（代理/录制/推送/邮件/Cookie/循环临时变量等），消除 `push_message()`、`start_record()` 等函数中数百个 "Could not find name" 错误
+- `main.py`：`get_status()` 重试循环前为 5 个快照变量（`recording_snapshot`、`recording_times`、`monitoring_val`、`running_val`、`error_val`）添加默认值，消除 "possibly unbound" 错误
+- `main.py`：补漏 `twitcasting_cookie: str = ""` 模块级声明
+- `msg_push.py`：`tg_bot()` 的 `chat_id` 参数从 `int` 放宽为 `str | int`，Telegram API 同时接受数字和字符串 chat ID
+- `src/web_config.py`：移除 `str(raw)` 冗余调用（`parser.get()` 返回值始终为 `str`）
+- `src/spider.py`：为 `sorted_stream_list` 和 `stream_data` 添加 `list[dict]` / `dict` 显式类型标注，修复 Pyrefly 推断为 `SupportsGetItem` 导致的 3 处 `.get()` 调用错误
+- `src/spider.py`：删除 `get_bilibili_stream_data()` 末尾不可达的 `return None`（if/else 双分支均已 return）
+- `src/http_clients/config.py`：移除 `bool(value)` 冗余调用（参数已标注为 `bool`）
+- `src/http_clients/async_http.py`：`_get_client()` 重构为 early-return 模式，消除 `client` 可能未绑定错误
+- `src/stream.py`：`QUALITY_LEVEL.get(video_quality, 4)` 改为 `QUALITY_LEVEL.get(video_quality or "", 4)`，处理 `str | None` 键类型
+- `src/stream.py`：`quality, quality_index = ...` 改为 `_, quality_index = ...`，消除未使用变量提示
+
+**代码清理（pyflakes / 未使用导入与变量）：**
+
+- `src/spider.py`：修复 `get_baidu_stream_data()` 中 `result` 未赋值即引用的 `NameError`（`data_dict` 为空时触发）
+- `src/spider.py`：移除未使用导入 `import ssl` 和 `from .ab_sign import ab_sign`
+- `src/logger.py`：移除未使用导入 `import os`
+- `gui.py`：为 `pystray` 类型标注添加 `TYPE_CHECKING` 守卫（`pystray` 在 `run()` 内延迟导入）
+- `main.py`：移除 `start_record()` 中未使用的 `global error_count` 声明
+- `main.py`：移除未使用的 `create_var` global 声明
+- `main.py`：移除未使用的局部变量 `changed`
+
+**验证：** 所有文件通过 `py_compile` 编译验证，`GetDiagnostics` 全项目返回空数组。
+
+---
+
+### v4.0.8-dev (2026-07-25) — 依赖扫描与 Docker 配置更新
+
+**依赖扫描与 pyproject.toml 更新：**
+
+- `pyproject.toml`：项目版本 `4.0.7` → `4.0.8-dev`，与 CODE_WIKI 更新日志一致
+- `pyproject.toml` / `requirements.txt`：新增 `pydantic>=2.0.0` 依赖（`src/web_api.py` 直接 `from pydantic import BaseModel`，之前未声明）
+- 全项目依赖扫描完成：14 个第三方包均已核对使用位置并确认声明状态（详见下表）
+
+| 包名 | 声明状态 | 使用位置 |
+|------|---------|---------|
+| requests | 已声明 | ffmpeg_install.py, src/initializer.py, src/http_clients/sync_http.py, src/weverse_auth.py |
+| httpx[http2] | 已声明 | main.py, src/room.py, src/spider.py, src/http_clients/async_http.py |
+| loguru | 已声明 | src/logger.py, msg_push.py |
+| pycryptodome | 已声明 | src/spider.py (Crypto.Cipher.AES) |
+| distro | 已声明 | src/initializer.py |
+| tqdm | 已声明 | ffmpeg_install.py, src/initializer.py |
+| PyExecJS | 已声明 | src/room.py, src/spider.py, src/utils.py |
+| customtkinter | 已声明 | gui.py |
+| pystray | 已声明 | gui.py, gui_legacy.py (延迟导入) |
+| Pillow | 已声明 | gui.py, gui_legacy.py |
+| fastapi | 已声明 | src/web_api.py |
+| uvicorn[standard] | 已声明 | web.py (延迟导入) |
+| python-multipart | 已声明 | FastAPI 表单处理隐式依赖 |
+| **pydantic** | **缺失→已补** | src/web_api.py (BaseModel) |
+
+**Dockerfile 更新：**
+
+- Python 基础镜像 `python:3.13.0-slim-bookworm` → `python:3.13-slim-bookworm`（两阶段）— 3.13.0 是 2024 年 10 月初始版本，缺少后续安全补丁；去掉 patch 号自动获取最新
+- Node.js `setup_20.x` → `setup_22.x`（两阶段）— Node 20 LTS 于 2026 年 4 月 EOL，Node 22 是当前活跃 LTS
+- 安全升级（`apt-get upgrade`）从 builder 阶段移至 runtime 阶段 — builder 是临时阶段，升级无意义；runtime 才是最终镜像，安全升级应在此
+- LABEL version `4.0.7` → `4.0.8-dev`
+
+**docker-compose.yaml：** 无需更新，结构已完整（卷挂载、端口映射、环境变量、健康检查、资源限制、日志轮转、GUI profile 均正确）。
+
+---
+
+### v4.0.8-dev (2026-07-24)
+- 新增 GUI 画质监控页面（`gui.py` `_build_quality_page`），通过解析子进程日志实时检测各直播间实际画质是否与设置一致
+- 新增 Web 控制台开关配置 `web_show_console`（默认 true），设为 false 时程序后台隐藏运行
+- 新增 `_enter_background_mode()`：Windows 下隐藏控制台窗口（SW_HIDE），日志重定向到 `logs/web_console.log`
+- 新增 `[Web]` 配置节文档，含 web_host / web_port / web_auth_enable / web_password / web_token_expiry / web_show_console 六项
+- 新增 Web 安全机制说明：密码变更吊销 Token、监听告警、路径穿越防护、敏感配置脱敏
+- 统一代码注释风格：将 `web.py`、`src/web_config.py`、`src/web_api.py`、`src/stream.py` 中所有函数 docstring 转换为 `#` 行注释
+- 新增实际画质回采与降级告警功能，覆盖抖音、TikTok、快手、虎牙、斗鱼、B站、网易CC 七个平台
+- 新增 `bitrate_to_quality()`、`code_to_zh()`、`is_downgrade()` 画质工具函数（`src/stream.py`）
+- 新增 `actual_quality` / `available_qualities` 返回字段，各平台 stream 函数统一返回实际下发画质
+- 改造 `get_bilibili_stream_data()` 返回 dict（含 url/current_qn/accept_qn），stream 模块反向映射 qn 为画质代码
+- 新增 Web 管理面板（`web.py` + `src/web_api.py` + `src/web_config.py` + `web/`），支持仪表盘、直播间管理、配置编辑、SSE 日志推送
+- 新增前端"实际画质"列展示，降级时标红高亮（`.quality-down` 样式）
+- 新增 `tests/test_stream_quality.py` 测试文件（347 行，17 个测试用例）
+- 修复 `display_info` 中 `recording_time_list` 解包错误（2 元素改为 3 元素后兼容性修复）
+- 修复 `asyncio.run()` 导致的 httpx 客户端跨事件循环复用问题（`'NoneType' object has no attribute 'send'`）
+- 优化各平台流地址选择，用显式截断替代 `_pad_list` 静默填充，避免越界
 
 ### v4.0.8-dev (2026-07-23)
 - 新增 HTTP 客户端连接池复用机制，按 (代理, verify, http2) 维度复用 AsyncClient，提升请求性能
@@ -773,4 +1005,4 @@ brew install node
 
 ---
 
-*本文档最后更新: 2026-07-23*
+*本文档最后更新: 2026-07-25（全项目类型错误修复与代码清理）*

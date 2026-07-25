@@ -146,6 +146,7 @@ body {
 }
 .data-table th { color: var(--muted); font-weight: 600; }
 .data-table .empty { text-align: center; color: var(--muted); padding: 24px; }
+.data-table td.quality-down { color: var(--danger); font-weight: 600; }
 
 .inline-form { display: flex; gap: 8px; flex-wrap: wrap; }
 .inline-form input, .inline-form select {

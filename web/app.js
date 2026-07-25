@@ -202,15 +202,22 @@
         var tbody = $('recording-tbody');
         var rec = s.recording || [];
         if (!rec.length) {
-            tbody.innerHTML = '<tr><td colspan="4" class="empty">暂无录制</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="5" class="empty">暂无录制</td></tr>';
             return;
         }
         var html = '';
         for (var i = 0; i < rec.length; i++) {
             var r = rec[i];
+            // 降级判定：实际画质非空且与设置不同 → 标红（actual 为空表示无法回采，不标红）
+            var downClass = '';
+            if (r.actual_quality && r.quality && r.actual_quality !== r.quality) {
+                downClass = ' class="quality-down"';
+            }
+            var actualDisplay = r.actual_quality ? esc(r.actual_quality) : '-';
             html += '<tr>'
                 + '<td>' + esc(r.name) + '</td>'
                 + '<td>' + esc(r.quality) + '</td>'
+                + '<td' + downClass + '>' + actualDisplay + '</td>'
                 + '<td>' + esc(r.start_time) + '</td>'
                 + '<td>' + esc(r.duration) + '</td>'
                 + '</tr>';

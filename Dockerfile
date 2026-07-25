@@ -6,7 +6,7 @@
 # -----------------------------------------------------------------------------
 # 阶段1：构建阶段 - 安装 Python 依赖和 Node.js
 # -----------------------------------------------------------------------------
-FROM python:3.14-slim AS builder
+FROM python:3.13-slim-bookworm AS builder
 
 # 设置环境变量
 ENV PYTHONUNBUFFERED=1 \
@@ -14,13 +14,13 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# 安装构建依赖和 Node.js (用于 JS 签名脚本)
+# 安装构建依赖和 Node.js 22 LTS (用于 JS 签名脚本)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     gnupg \
     build-essential \
     ca-certificates \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
@@ -40,11 +40,11 @@ RUN /opt/venv/bin/pip install --upgrade pip \
 # -----------------------------------------------------------------------------
 # 阶段2：运行阶段 - 最小化运行镜像
 # -----------------------------------------------------------------------------
-FROM python:3.14-slim
+FROM python:3.13-slim-bookworm
 
 # 标签
 LABEL maintainer="Hmily <ihmily@github>" \
-      version="4.0.7" \
+      version="4.0.8-dev" \
       description="支持抖音、TikTok、YouTube等60+平台直播录制工具" \
       url="https://github.com/ihmily/DouyinLiveRecorder"
 
@@ -59,15 +59,17 @@ ENV PYTHONUNBUFFERED=1 \
     TERM=xterm-256color \
     PATH="/opt/venv/bin:$PATH"
 
-# 安装运行时依赖（含 Node.js — PyExecJS 运行签名脚本必需）
+# 安装运行时依赖（含 Node.js 22 LTS — PyExecJS 运行签名脚本必需）
+# 同时升级所有已安装软件包到最新安全版本
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     tzdata \
     curl \
     procps \
     ca-certificates \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
+    && apt-get upgrade -y \
     && ln -fs /usr/share/zoneinfo/${TZ} /etc/localtime \
     && dpkg-reconfigure -f noninteractive tzdata \
     && apt-get clean \

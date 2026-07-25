@@ -33,3 +33,4 @@ Pillow>=11.3.0            # 图像处理（托盘图标生成）
 fastapi>=0.115.0           # Web 框架
 uvicorn[standard]>=0.30.0  # ASGI 服务器
 python-multipart>=0.0.9    # 表单/文件兼容
+pydantic>=2.0.0            # 请求模型校验（FastAPI 依赖，代码直接引用 BaseModel）

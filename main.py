@@ -73,6 +73,7 @@ exit_recording: bool = False  # 退出标志
 # 错误控制和动态调优
 error_count: int = 0  # 当前错误计数
 pre_max_request: int = 10  # 之前的最大请求数
+max_request: int = 3  # 同一时间访问网络的线程数（由 main() 读取配置后覆盖）
 max_request_lock: threading.Lock = threading.Lock()  # 最大请求数的线程锁
 error_window_size: int = 10  # 错误窗口大小
 error_window: deque = deque(maxlen=error_window_size)  # 错误窗口（deque maxlen 自动裁剪，避免无界增长）
@@ -90,8 +91,17 @@ ini_URL_content: str = ""  # URL 配置文件初始内容（用于 update_file �
 first_start: bool = True  # 首次启动标志
 first_run: bool = True  # 首次运行标志
 global_proxy: bool = False  # 全局代理启用标志
+use_proxy: bool = False  # 是否使用代理 IP（由 main() 读取配置后覆盖）
 create_var: dict[str, Any] = {}  # 动态变量创建（用于字幕线程
 start_display_time: "datetime.datetime" = datetime.datetime.now()  # 显示信息开始时间
+
+# 录制配置（由 main() 读取 config.ini 后覆盖，此处给默认值供 display_info 等函数引用）
+delay_default: int = 120  # 循环监测间隔时间（秒）
+video_record_quality: str = "原画"  # 录制视频画质
+video_save_type: str = "ts"  # 录制视频格式
+split_video_by_time: bool = False  # 是否开启分段录制
+split_time: str = "1800"  # 视频分段时间（秒）
+create_time_file: bool = False  # 是否生成时间字幕文件
 
 # ==================== 路径和配置 ====================
 
@@ -107,6 +117,170 @@ file_update_lock: threading.Lock = threading.Lock()  # 文件更新锁（防止�
 
 # 录制状态全局锁（保护 recording/running_list/monitoring/recording_time_list）
 record_state_lock: threading.Lock = threading.Lock()
+
+# ==================== 配置变量（由 main() 读取 config.ini 后覆盖） ====================
+# 以下声明供 main() 之外的函数（push_message, start_record 等）引用，
+# 避免类型检查器在未追踪 global 声明时报告 "Could not find name"。
+
+# 代理与网络
+proxy_addr: str | None = None
+proxy_addr_bak: str = ""
+enable_proxy_platform: str = ""
+enable_proxy_platform_list: list | None = None
+extra_enable_proxy: str = ""
+extra_enable_proxy_platform_list: list | None = None
+semaphore: threading.Semaphore = threading.Semaphore(1)
+local_delay_default: int = 0
+loop_time: bool = False
+show_url: bool = False
+enable_https_recording: bool = False
+disk_space_limit: float = 1.0
+
+# 录制与文件
+video_save_path: str = ""
+check_path: str = ""
+clean_emoji: bool = True
+filename_by_title: bool = False
+folder_by_author: bool = False
+folder_by_time: bool = False
+folder_by_title: bool = False
+converts_to_h264: bool = False
+converts_to_mp4: bool = False
+delete_origin_file: bool = False
+is_run_script: bool = False
+custom_script: str | None = None
+video_save_type_list: tuple = ("FLV", "MKV", "TS", "MP4", "MP3音频", "M4A音频", "MP3", "M4A")
+
+# 推送配置
+live_status_push: str = ""
+push_message_title: str = ""
+begin_show_push: bool = True
+begin_push_message_text: str = ""
+over_show_push: bool = False
+over_push_message_text: str = ""
+disable_record: bool = False
+push_check_seconds: int = 1800
+
+# 钉钉 / 微信 / Bark
+dingtalk_api_url: str = ""
+dingtalk_phone_num: str = ""
+dingtalk_is_atall: bool = False
+xizhi_api_url: str = ""
+bark_msg_api: str = ""
+bark_msg_level: str = "active"
+bark_msg_ring: str = "bell"
+
+# 邮件
+email_host: str = ""
+email_password: str = ""
+login_email: str = ""
+sender_email: str = ""
+sender_name: str = ""
+to_email: str = ""
+smtp_port: str = ""
+open_smtp_ssl: bool = True
+
+# Telegram / NTFY / PushPlus
+tg_chat_id: str = ""
+tg_token: str = ""
+ntfy_api: str = ""
+ntfy_tags: str = "tada"
+ntfy_email: str = ""
+pushplus_token: str = ""
+
+# 账号密码
+sooplive_username: str = ""
+sooplive_password: str = ""
+flextv_username: str = ""
+flextv_password: str = ""
+popkontv_username: str = ""
+popkontv_partner_code: str = "P-00001"
+popkontv_password: str = ""
+popkontv_access_token: str = ""
+twitcasting_account_type: str = "normal"
+twitcasting_username: str = ""
+twitcasting_password: str = ""
+
+# Cookie 变量
+dy_cookie: str = ""
+ks_cookie: str = ""
+tiktok_cookie: str = ""
+hy_cookie: str = ""
+douyu_cookie: str = ""
+yy_cookie: str = ""
+bili_cookie: str = ""
+xhs_cookie: str = ""
+bigo_cookie: str = ""
+blued_cookie: str = ""
+sooplive_cookie: str = ""
+netease_cookie: str = ""
+qiandurebo_cookie: str = ""
+pandatv_cookie: str = ""
+maoerfm_cookie: str = ""
+winktv_cookie: str = ""
+flextv_cookie: str = ""
+look_cookie: str = ""
+liveme_cookie: str = ""
+huajiao_cookie: str = ""
+liuxing_cookie: str = ""
+showroom_cookie: str = ""
+acfun_cookie: str = ""
+changliao_cookie: str = ""
+yinbo_cookie: str = ""
+yingke_cookie: str = ""
+zhihu_cookie: str = ""
+chzzk_cookie: str = ""
+haixiu_cookie: str = ""
+vvxqiu_cookie: str = ""
+yiqilive_cookie: str = ""
+langlive_cookie: str = ""
+pplive_cookie: str = ""
+six_room_cookie: str = ""
+lehaitv_cookie: str = ""
+huamao_cookie: str = ""
+shopee_cookie: str = ""
+youtube_cookie: str = ""
+taobao_cookie: str = ""
+jd_cookie: str = ""
+faceit_cookie: str = ""
+migu_cookie: str = ""
+lianjie_cookie: str = ""
+laixiu_cookie: str = ""
+picarto_cookie: str = ""
+baidu_cookie: str = ""
+weibo_cookie: str = ""
+kugou_cookie: str = ""
+twitch_cookie: str = ""
+twitcasting_cookie: str = ""
+
+# main() 循环临时变量（global 声明引用，避免类型检查报错）
+a: Any = None
+args: Any = None
+host_id: Any = None
+input_url: str = ""
+is_comment_line: bool = False
+line: str = ""
+line_list: list = []
+line_spilt: list = []
+middle: str = ""
+name: str = ""
+new_line: tuple = ()
+new_url: str = ""
+new_word: str = ""
+origin_line: str = ""
+quality: str = "原画"
+replace_words: list = []
+running_snapshot: list = []
+running_url: str = ""
+seen_urls: set = set()
+split_line: list = []
+start_with: str | None = None
+t: Any = None
+t2: Any = None
+url: str = ""
+url_host: str = ""
+url_line_list: list = []
+url_tuple: tuple = ()
 
 _recorder_thread = None  # 由 web.py 设置，用于 get_status() 检测存活
 
@@ -393,7 +567,9 @@ def display_info() -> None:
                 print(f"正在录制{len(no_repeat_recording)}个直播: ")
                 for recording_live in no_repeat_recording:
                     with record_state_lock:
-                        rt, qa = recording_time_list.get(recording_live, [now_time, ''])
+                        _rt_info = recording_time_list.get(recording_live, [now_time, ''])
+                        rt = _rt_info[0] if _rt_info else now_time
+                        qa = _rt_info[1] if len(_rt_info) > 1 else ''
                     have_record_time = now_time - rt
                     print(f"{recording_live}[{qa}] 正在录制中 {str(have_record_time).split('.')[0]}")
 
@@ -915,8 +1091,6 @@ def select_source_url(link, stream_info):
 
 def start_record(url_data: tuple, count_variable: int = -1) -> None:
     # 录制主循环：检测→获取流→启动 FFmpeg
-    global error_count
-
     while True:
         try:
             record_finished = False
@@ -926,6 +1100,8 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
             count_time = time.time()
             record_quality_zh, record_url, anchor_name = url_data
             record_quality = get_quality_code(record_quality_zh)
+            # 真实下发的画质代码（由 stream 模块回采，可能为 None）
+            from src.stream import code_to_zh, is_downgrade as _is_downgrade
             proxy_address = proxy_addr
             platform = '未知平台'
 
@@ -1574,7 +1750,14 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                 with record_state_lock:
                                     recording.add(record_name)
                                     start_record_time = datetime.datetime.now()
-                                    recording_time_list[record_name] = [start_record_time, record_quality_zh]
+                                    actual_quality_code = port_info.get('actual_quality')
+                                    actual_quality_zh = code_to_zh(actual_quality_code) if actual_quality_code else ''
+                                    # 降级告警：实际画质低于设置时记录日志
+                                    if actual_quality_code and _is_downgrade(record_quality, actual_quality_code):
+                                        logger.warning(
+                                            f"{record_name} 画质降级：设置 {record_quality_zh}({record_quality}) "
+                                            f"实际 {actual_quality_zh}({actual_quality_code})")
+                                    recording_time_list[record_name] = [start_record_time, record_quality_zh, actual_quality_zh]
                                 rec_info = f"\r{anchor_name} 准备开始录制视频: {full_path}"
                                 if show_url:
                                     re_plat = ('WinkTV', 'PandaTV', 'ShowRoom', 'CHZZK', 'Youtube')
@@ -1692,7 +1875,13 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                         if isinstance(flv_url, str) and flv_url:
                                             recording.add(record_name)
                                             start_record_time = datetime.datetime.now()
-                                            recording_time_list[record_name] = [start_record_time, record_quality_zh]
+                                            actual_quality_code = port_info.get('actual_quality')
+                                            actual_quality_zh = code_to_zh(actual_quality_code) if actual_quality_code else ''
+                                            if actual_quality_code and _is_downgrade(record_quality, actual_quality_code):
+                                                logger.warning(
+                                                    f"{record_name} 画质降级：设置 {record_quality_zh}({record_quality}) "
+                                                    f"实际 {actual_quality_zh}({actual_quality_code})")
+                                            recording_time_list[record_name] = [start_record_time, record_quality_zh, actual_quality_zh]
 
                                             download_success = direct_download_stream(
                                                 flv_url,
@@ -2140,6 +2329,11 @@ def get_status() -> dict:
     """
     now = datetime.datetime.now()
     # 既有代码存在未加锁的并发写，持锁迭代可能抛 RuntimeError，重试兜底
+    recording_snapshot: list = []
+    recording_times: dict = {}
+    monitoring_val: int = monitoring
+    running_val: list = []
+    error_val: int = error_count
     for _attempt in range(5):
         try:
             with record_state_lock:
@@ -2147,13 +2341,16 @@ def get_status() -> dict:
                 recording_times = {}
                 for _name, _info in recording_time_list.items():
                     if _info:
+                        # 兼容旧格式 [start, quality] 和新格式 [start, quality, actual_quality]
+                        actual_q = _info[2] if len(_info) > 2 else ''
                         recording_times[_name] = {
                             "start_time": _info[0].strftime("%Y-%m-%d %H:%M:%S"),
                             "quality": _info[1],
+                            "actual_quality": actual_q,
                             "duration": str(now - _info[0]).split(".")[0],
                         }
                     else:
-                        recording_times[_name] = {"start_time": "", "quality": "", "duration": "0:00:00"}
+                        recording_times[_name] = {"start_time": "", "quality": "", "actual_quality": "", "duration": "0:00:00"}
                 monitoring_val = monitoring
                 running_val = list(running_list)
                 error_val = error_count
@@ -2179,6 +2376,7 @@ def get_status() -> dict:
                 "name": _n,
                 "start_time": recording_times.get(_n, {}).get("start_time", ""),
                 "quality": recording_times.get(_n, {}).get("quality", ""),
+                "actual_quality": recording_times.get(_n, {}).get("actual_quality", ""),
                 "duration": recording_times.get(_n, {}).get("duration", "0:00:00"),
             }
             for _n in recording_snapshot
@@ -2199,7 +2397,7 @@ def main(non_interactive: bool = False) -> None:
     若 non_interactive=True（如 web.py 守护线程），URL_config 为空时跳过 input() 阻塞。
     """
     global a, acfun_cookie, args, baidu_cookie, bark_msg_api, bark_msg_level, bark_msg_ring, begin_push_message_text, begin_show_push, bigo_cookie, bili_cookie, blued_cookie
-    global changliao_cookie, check_path, chzzk_cookie, clean_emoji, converts_to_h264, converts_to_mp4, create_time_file, create_var, custom_script, delay_default, delete_origin_file, dingtalk_api_url
+    global changliao_cookie, check_path, chzzk_cookie, clean_emoji, converts_to_h264, converts_to_mp4, create_time_file, custom_script, delay_default, delete_origin_file, dingtalk_api_url
     global dingtalk_is_atall, dingtalk_phone_num, disable_record, disk_space_limit, douyu_cookie, dy_cookie, email_host, email_password, enable_https_recording, enable_proxy_platform, enable_proxy_platform_list, exit_recording
     global extra_enable_proxy, extra_enable_proxy_platform_list, faceit_cookie, filename_by_title, first_run, first_start, flextv_cookie, flextv_password, flextv_username, folder_by_author, folder_by_time, folder_by_title
     global haixiu_cookie, host_id, huajiao_cookie, huamao_cookie, hy_cookie, ini_URL_content, input_url, is_comment_line, is_run_script, jd_cookie, ks_cookie, kugou_cookie

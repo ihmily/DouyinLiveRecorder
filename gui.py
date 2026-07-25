@@ -14,11 +14,14 @@ import configparser
 import tkinter as tk
 from tkinter import messagebox
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal, TYPE_CHECKING
 
 import customtkinter as ctk
 from PIL import Image, ImageDraw
 # pystray 延迟导入至 SystemTray.run() 内部，避免 headless 环境顶层导入失败
+
+if TYPE_CHECKING:
+    import pystray
 
 
 # ─── 现代化色彩系统（浅色 / 深色双主题） ──────────────────
@@ -67,7 +70,7 @@ class Fonts:
     _cache: dict[str, ctk.CTkFont] = {}
 
     @classmethod
-    def get(cls, size: int, weight: str = "normal", family: str = _FONT_FAMILY) -> ctk.CTkFont:
+    def get(cls, size: int, weight: Literal["normal", "bold"] = "normal", family: str = _FONT_FAMILY) -> ctk.CTkFont:
         key = f"{family}_{size}_{weight}"
         if key not in cls._cache:
             cls._cache[key] = ctk.CTkFont(family=family, size=size, weight=weight)
@@ -350,6 +353,10 @@ class LiveRecorderGUI:
 
     # 常量定义
     ANSI_ESCAPE_PATTERN = re.compile(r'\x1b\[[0-9;]*m')
+    # 画质降级告警："{name} 画质降级：设置 {zh}({code}) 实际 {zh}({code})"
+    QUALITY_DOWNGRADE_PATTERN = re.compile(r'(.+?) 画质降级：设置 (.+?)\((.+?)\) 实际 (.+?)\((.+?)\)')
+    # 录制中行："{name}[{quality}] 正在录制中 {duration}"
+    RECORDING_LINE_PATTERN = re.compile(r'^(.+?)\[(.+?)\] 正在录制中')
     _MAX_LOG_LINES = 1000
     _LOG_TRIM_TO = 800
     _LOG_FLUSH_INTERVAL = 200
@@ -396,6 +403,12 @@ class LiveRecorderGUI:
         self._log_flush_job_id: str | None = None
         self._log_queue_has_data = False
         self._log_queue_lock = threading.Lock()  # 保护 _log_queue_has_data 跨线程访问
+
+        # 画质监控数据（线程安全：_quality_lock 保护 _quality_data）
+        # {name: {set_quality, actual_quality, downgraded, alert_time, alert_message, recording, last_seen}}
+        self._quality_lock = threading.Lock()
+        self._quality_data: dict[str, dict] = {}
+        self._quality_last_displayed: dict[str, dict] = {}
 
         # UI 线程事件队列：后台线程一律通过 post_ui 投递回调，
         # 由 _pump_ui_events 在 UI 线程执行。tkinter 不是线程安全的，
@@ -559,6 +572,7 @@ class LiveRecorderGUI:
         nav.pack(fill=tk.X, padx=12, pady=(18, 0))
 
         self._add_nav_button(nav, "dashboard", "📊   控制台")
+        self._add_nav_button(nav, "quality", "🎯   画质监控")
         self._add_nav_button(nav, "config", "📝   URL 配置")
         self._add_nav_button(nav, "logs", "📋   运行日志")
 
@@ -665,6 +679,7 @@ class LiveRecorderGUI:
         container.grid_rowconfigure(0, weight=1)
 
         self._pages["dashboard"] = self._build_dashboard_page(container)
+        self._pages["quality"] = self._build_quality_page(container)
         self._pages["config"] = self._build_config_page(container)
         self._pages["logs"] = self._build_logs_page(container)
 
@@ -928,6 +943,117 @@ class LiveRecorderGUI:
 
         return page
 
+    # ─── 页面：画质监控 ─────────────────────────────────────
+
+    def _build_quality_page(self, parent: ctk.CTkFrame) -> ctk.CTkFrame:
+        # 画质监控页面：检测各直播间实际画质是否与设置一致
+        page = ctk.CTkFrame(parent, fg_color="transparent")
+        page.grid_columnconfigure(0, weight=1)
+        page.grid_rowconfigure(1, weight=1)
+
+        # 统计卡片
+        summary_card = self._create_card(page)
+        summary_card.grid(row=0, column=0, sticky="ew", pady=(0, 14))
+
+        summary_body = ctk.CTkFrame(summary_card, fg_color="transparent")
+        summary_body.pack(fill=tk.X, padx=18, pady=16)
+        summary_body.grid_columnconfigure((0, 1, 2), weight=1)
+
+        self._q_stat_total = self._add_quality_stat_item(summary_body, "录制中", "0", 0, Colors.PRIMARY)
+        self._q_stat_ok = self._add_quality_stat_item(summary_body, "画质正常", "0", 1, Colors.SUCCESS)
+        self._q_stat_down = self._add_quality_stat_item(summary_body, "画质降级", "0", 2, Colors.DANGER)
+
+        # 详情卡片
+        detail_card = self._create_card(page, "🎯  画质监控（实时检测实际画质是否与设置一致）")
+        detail_card.grid(row=1, column=0, sticky="nsew")
+
+        inner = ctk.CTkFrame(detail_card, fg_color="transparent")
+        inner.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 14))
+
+        self._quality_scroll = ctk.CTkScrollableFrame(inner, fg_color="transparent")
+        self._quality_scroll.pack(fill=tk.BOTH, expand=True)
+
+        # 初始空状态
+        ctk.CTkLabel(
+            self._quality_scroll,
+            text="暂无录制中的直播间\n\n启动录制后，将自动检测各直播间的实际画质是否与设置一致",
+            font=Fonts.body(),
+            text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
+            justify=tk.CENTER
+        ).pack(pady=60)
+
+        return page
+
+    def _add_quality_stat_item(self, parent: ctk.CTkFrame, label: str, value: str,
+                               col: int, color: str) -> ctk.CTkLabel:
+        # 在统计卡片中添加一个统计项，返回值标签便于后续更新
+        box = ctk.CTkFrame(parent, fg_color="transparent")
+        box.grid(row=0, column=col, padx=10, pady=4, sticky="ew")
+        box.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(box, text=label, font=Fonts.small(),
+                     text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK)).pack(anchor=tk.CENTER)
+        val = ctk.CTkLabel(box, text=value, font=Fonts.title(), text_color=color)
+        val.pack(anchor=tk.CENTER, pady=(2, 0))
+        return val
+
+    def _add_quality_header_row(self) -> None:
+        # 添加画质监控表头行
+        header = ctk.CTkFrame(self._quality_scroll, fg_color="transparent", height=28)
+        header.pack(fill=tk.X, pady=(0, 2))
+        header.pack_propagate(False)
+        header.grid_columnconfigure(0, weight=3)
+        header.grid_columnconfigure(1, weight=1)
+        header.grid_columnconfigure(2, weight=1)
+        header.grid_columnconfigure(3, weight=1)
+        header.grid_columnconfigure(4, weight=2)
+        for col, text in enumerate(["主播名称", "设置画质", "实际画质", "状态", "告警时间"]):
+            ctk.CTkLabel(header, text=text, font=Fonts.small(bold=True),
+                         text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
+                         anchor=tk.W).grid(row=0, column=col, sticky=tk.W, padx=6, pady=4)
+
+    def _add_quality_data_row(self, name: str, info: dict) -> None:
+        # 添加一行画质监控数据
+        downgraded = info.get("downgraded", False)
+        set_q = info.get("set_quality", "—")
+        actual_q = info.get("actual_quality", "")
+        alert_time = info.get("alert_time", "")
+
+        if downgraded:
+            actual_display = actual_q or "—"
+            status_text = "⚠ 降级"
+            status_color = Colors.DANGER
+            actual_color = Colors.DANGER
+            row_fg = ("#FEF2F2", "#2A1518")
+        else:
+            actual_display = "✓ 同等"
+            status_text = "✓ 正常"
+            status_color = Colors.SUCCESS
+            actual_color = Colors.SUCCESS
+            row_fg = "transparent"
+
+        row = ctk.CTkFrame(self._quality_scroll, fg_color=row_fg, corner_radius=6, height=34)
+        row.pack(fill=tk.X, pady=1)
+        row.pack_propagate(False)
+        row.grid_columnconfigure(0, weight=3)
+        row.grid_columnconfigure(1, weight=1)
+        row.grid_columnconfigure(2, weight=1)
+        row.grid_columnconfigure(3, weight=1)
+        row.grid_columnconfigure(4, weight=2)
+
+        ctk.CTkLabel(row, text=name, font=Fonts.body(),
+                     text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
+                     anchor=tk.W).grid(row=0, column=0, sticky=tk.W, padx=6, pady=5)
+        ctk.CTkLabel(row, text=set_q, font=Fonts.body(),
+                     text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
+                     anchor=tk.W).grid(row=0, column=1, sticky=tk.W, padx=4, pady=5)
+        ctk.CTkLabel(row, text=actual_display, font=Fonts.body(bold=downgraded),
+                     text_color=actual_color, anchor=tk.W).grid(row=0, column=2, sticky=tk.W, padx=4, pady=5)
+        ctk.CTkLabel(row, text=status_text, font=Fonts.body(bold=True),
+                     text_color=status_color, anchor=tk.W).grid(row=0, column=3, sticky=tk.W, padx=4, pady=5)
+        ctk.CTkLabel(row, text=alert_time if downgraded else "—", font=Fonts.small(),
+                     text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
+                     anchor=tk.W).grid(row=0, column=4, sticky=tk.W, padx=4, pady=5)
+
     def _clear_log(self) -> None:
         # 清空日志显示
         self.log_text.config(state=tk.NORMAL)
@@ -1141,6 +1267,11 @@ class LiveRecorderGUI:
             self.start_btn.configure(state=tk.DISABLED)
             self.stop_btn.configure(state=tk.NORMAL)
 
+            # 清空上一轮的画质监控数据，避免旧的降级告警残留到本次会话
+            with self._quality_lock:
+                self._quality_data.clear()
+            self._quality_last_displayed = {}
+
             self._set_status(Colors.SUCCESS, True)
             self._update_status_bar()
 
@@ -1162,7 +1293,7 @@ class LiveRecorderGUI:
             self.running = False
             self.start_btn.configure(state=tk.NORMAL)
             self.stop_btn.configure(state=tk.DISABLED)
-            self._set_status(Colors.ERROR, False)
+            self._set_status(Colors.DANGER, False)
             self._update_status_bar()
 
     def stop_recording(self) -> None:
@@ -1284,6 +1415,7 @@ class LiveRecorderGUI:
                     continue
 
                 clean_line = self.ANSI_ESCAPE_PATTERN.sub('', line.rstrip())
+                self._parse_quality_log(clean_line)
                 batch.append((clean_line, "info"))
 
                 if len(batch) >= batch_size:
@@ -1398,6 +1530,112 @@ class LiveRecorderGUI:
         if has_data or not self._log_queue.empty():
             self._log_flush_job_id = self.root.after(self._LOG_FLUSH_INTERVAL, self._schedule_log_flush)
 
+    # ─── 画质监控 ──────────────────────────────────────────
+
+    def _parse_quality_log(self, line: str) -> None:
+        # 解析子进程日志行，提取画质降级告警和录制状态信息。
+        # 可在输出线程中调用（仅操作 _quality_data，不触碰 Tk 对象）。
+        line = line.lstrip('\r')
+
+        # 剥离 loguru 前缀（控制台格式 "{time} | {level} - {message}"，
+        # 文件格式 "{time} | {level} | {module}:{func}:{line} - {message}"）。
+        # 找到最后一个 " | " 后的 " - "，取其后内容作为 message。
+        msg = line
+        if ' | ' in line:
+            pipe_idx = line.rfind(' | ')
+            dash_idx = line.find(' - ', pipe_idx)
+            if dash_idx > 0:
+                msg = line[dash_idx + 3:]
+
+        # 画质降级告警："{name} 画质降级：设置 {zh}({code}) 实际 {zh}({code})"
+        m = self.QUALITY_DOWNGRADE_PATTERN.search(msg)
+        if m:
+            name = m.group(1).strip()
+            set_zh, set_code = m.group(2), m.group(3)
+            actual_zh, actual_code = m.group(4), m.group(5)
+            with self._quality_lock:
+                info = self._quality_data.setdefault(name, {})
+                info.update({
+                    "set_quality": set_zh,
+                    "actual_quality": actual_zh,
+                    "downgraded": True,
+                    "alert_time": self._get_timestamp(),
+                    "alert_message": f"设置 {set_zh}({set_code}) 实际 {actual_zh}({actual_code})",
+                    "recording": True,
+                    "last_seen": time.time(),
+                })
+            return
+
+        # 录制中行："{name}[{quality}] 正在录制中 {duration}"
+        m = self.RECORDING_LINE_PATTERN.match(msg)
+        if m:
+            name = m.group(1).strip()
+            quality = m.group(2).strip()
+            with self._quality_lock:
+                info = self._quality_data.setdefault(name, {})
+                info["recording"] = True
+                info["set_quality"] = quality
+                info["last_seen"] = time.time()
+                # 未检测到降级告警时，认为实际画质与设置一致
+                if not info.get("downgraded"):
+                    info["actual_quality"] = quality
+            return
+
+        # "没有正在录制" → 清除所有录制标记
+        if "没有正在录制" in msg or "没有正在监测和录制的直播" in msg:
+            with self._quality_lock:
+                for info in self._quality_data.values():
+                    info["recording"] = False
+
+    def _update_quality_display(self) -> None:
+        # 更新画质监控页面显示（仅在 UI 线程中调用）
+        if not hasattr(self, '_quality_scroll'):
+            return
+
+        now = time.time()
+        with self._quality_lock:
+            # 清除超过 30 秒未更新的录制标记（直播已停止但未输出"没有正在录制"）
+            for info in self._quality_data.values():
+                if info.get("recording") and now - info.get("last_seen", 0) > 30:
+                    info["recording"] = False
+
+            data = {name: dict(info) for name, info in self._quality_data.items()
+                    if info.get("recording")}
+
+        # 数据未变化时跳过重建，避免闪烁
+        if data == self._quality_last_displayed:
+            return
+        self._quality_last_displayed = data
+
+        # 清除旧行
+        for widget in self._quality_scroll.winfo_children():
+            widget.destroy()
+
+        if not data:
+            ctk.CTkLabel(
+                self._quality_scroll,
+                text="暂无录制中的直播间\n\n启动录制后，将自动检测各直播间的实际画质是否与设置一致",
+                font=Fonts.body(),
+                text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
+                justify=tk.CENTER
+            ).pack(pady=60)
+        else:
+            # 表头 + 数据行
+            self._add_quality_header_row()
+            for name, info in sorted(data.items()):
+                self._add_quality_data_row(name, info)
+
+        # 更新统计
+        total = len(data)
+        down_count = sum(1 for info in data.values() if info.get("downgraded"))
+        ok_count = total - down_count
+        try:
+            self._q_stat_total.configure(text=str(total))
+            self._q_stat_ok.configure(text=str(ok_count))
+            self._q_stat_down.configure(text=str(down_count))
+        except Exception:
+            pass
+
     # ─── 时间与状态栏 ──────────────────────────────────────
 
     @staticmethod
@@ -1431,6 +1669,7 @@ class LiveRecorderGUI:
     def _schedule_status_refresh(self) -> None:
         # 动态刷新状态：有录制时每3秒刷新，否则每10秒
         self._update_status_bar()
+        self._update_quality_display()
         self._watch_url_config()
         interval = self._STATUS_REFRESH_INTERVAL_ACTIVE if self.running else self._STATUS_REFRESH_INTERVAL
         self._refresh_job_id = self.root.after(interval, self._schedule_status_refresh)

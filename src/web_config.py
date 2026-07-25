@@ -39,11 +39,12 @@ WEB_DEFAULTS: dict[str, Any] = {
     "web_auth_enable": False,
     "web_password": "",
     "web_token_expiry": 86400,
+    "web_show_console": True,
 }
 
 
 def normalize_url(url: str) -> str:
-    """规范化 URL：补 https://，并对 CLEAN_URL_HOST_LIST 的 host 去除 query。"""
+    # 规范化 URL：补 https://，并对 CLEAN_URL_HOST_LIST 的 host 去除 query。
     url = url.strip()
     if "://" not in url:
         url = "https://" + url
@@ -57,11 +58,9 @@ def normalize_url(url: str) -> str:
 
 
 def parse_url_config(file_path: str | Path) -> list[dict[str, Any]]:
-    """解析 URL_config.ini，返回直播间列表。
-
-    每项: {url, quality, name, enabled, raw_line}
-    行格式: [画质,]URL[,主播: 名称]，# 前缀表示注释（禁用）。
-    """
+    # 解析 URL_config.ini，返回直播间列表。
+    # 每项: {url, quality, name, enabled, raw_line}
+    # 行格式: [画质,]URL[,主播: 名称]，# 前缀表示注释（禁用）。
     rooms: list[dict[str, Any]] = []
     path = Path(file_path)
     if not path.exists():
@@ -129,13 +128,11 @@ def _normalize_quality(q: str) -> str:
 
 
 def format_url_line(url: str, quality: str | None = None, name: str | None = None) -> str:
-    """格式化一行 URL_config.ini 内容（不含换行）。
-
-    - 仅 URL：返回 url
-    - 画质+URL：返回 "画质,url"
-    - 全部：返回 "画质,url,主播: 名称"
-    quality 为空或默认"原画"时省略画质段（与 main.py 风格一致）。
-    """
+    # 格式化一行 URL_config.ini 内容（不含换行）。
+    # - 仅 URL：返回 url
+    # - 画质+URL：返回 "画质,url"
+    # - 全部：返回 "画质,url,主播: 名称"
+    # quality 为空或默认"原画"时省略画质段（与 main.py 风格一致）。
     url = normalize_url(url)
     parts: list[str] = []
     q = (quality or "").strip()
@@ -149,7 +146,7 @@ def format_url_line(url: str, quality: str | None = None, name: str | None = Non
 
 
 def read_web_config(config_file: str | Path) -> dict[str, Any]:
-    """读取 [Web] 节配置，缺失项用默认值填充。"""
+    # 读取 [Web] 节配置，缺失项用默认值填充。
     parser = configparser.ConfigParser(interpolation=None)
     parser.read(config_file, encoding=TEXT_ENCODING)
     result: dict[str, Any] = {}
@@ -159,14 +156,14 @@ def read_web_config(config_file: str | Path) -> dict[str, Any]:
             continue
         raw = parser.get("Web", key, fallback=str(default))
         if isinstance(default, bool):
-            result[key] = str(raw).strip().lower() in ("true", "1", "yes", "是")
+            result[key] = raw.strip().lower() in ("true", "1", "yes", "是")
         elif isinstance(default, int):
             try:
                 result[key] = int(raw)
             except (ValueError, TypeError):
                 result[key] = default
         else:
-            result[key] = str(raw)
+            result[key] = raw
     return result
 
 
@@ -175,11 +172,9 @@ SENSITIVE_MASK = "***"
 
 
 def read_config_safe(config_file: str | Path) -> dict[str, dict[str, str]]:
-    """读取 config.ini 全部节键值，敏感节非空值脱敏为 '***'。
-
-    用于 API 返回前端展示；写入仍用 utils.update_config。
-    Web 节单独对 web_password 脱敏（其他 Web 键需可编辑，故不整节脱敏）。
-    """
+    # 读取 config.ini 全部节键值，敏感节非空值脱敏为 '***'。
+    # 用于 API 返回前端展示；写入仍用 utils.update_config。
+    # Web 节单独对 web_password 脱敏（其他 Web 键需可编辑，故不整节脱敏）。
     parser = configparser.ConfigParser(interpolation=None)
     parser.read(config_file, encoding=TEXT_ENCODING)
     result: dict[str, dict[str, str]] = {}
@@ -199,12 +194,10 @@ def read_config_safe(config_file: str | Path) -> dict[str, dict[str, str]]:
 def update_config_line(
     config_file: str | Path, section: str, key: str, value: str
 ) -> bool:
-    """注释保留的行级配置更新。
-
-    逐行扫描：进入目标 section 后，匹配 `^\\s*key\\s*[=：:]\\s*` 的行并替换其值；
-    未找到 section 或 key 时返回 False（不写入）。
-    保留所有注释、空行、节顺序与原分隔符风格。
-    """
+    # 注释保留的行级配置更新。
+    # 逐行扫描：进入目标 section 后，匹配 `^\\s*key\\s*[=：:]\\s*` 的行并替换其值；
+    # 未找到 section 或 key 时返回 False（不写入）。
+    # 保留所有注释、空行、节顺序与原分隔符风格。
     path = Path(config_file)
     if not path.exists():
         return False

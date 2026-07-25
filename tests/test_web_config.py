@@ -73,6 +73,17 @@ def test_read_web_config_defaults(tmp_config_ini):
     assert cfg["web_auth_enable"] is False
     assert cfg["web_password"] == ""
     assert cfg["web_token_expiry"] == 86400
+    assert cfg["web_show_console"] is True
+
+
+def test_read_web_config_show_console_false(tmp_path):
+    p = tmp_path / "config.ini"
+    p.write_text(
+        "[Web]\nweb_show_console = false\n",
+        encoding="utf-8",
+    )
+    cfg = read_web_config(p)
+    assert cfg["web_show_console"] is False
 
 
 def test_read_web_config_missing_section(tmp_path):

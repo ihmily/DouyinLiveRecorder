@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 # 日志配置模块 - 基于 Loguru，控制台彩色输出 + 日志文件轮转存储
 
-import os
 import sys
 import configparser
 from pathlib import Path

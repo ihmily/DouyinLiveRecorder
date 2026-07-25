@@ -67,10 +67,8 @@ def create_app(
     downloads_root: str,
     logs_dir: str,
 ) -> FastAPI:
-    """创建 FastAPI 应用。
-
-    参数显式传入（而非读全局），便于测试时指向临时文件。
-    """
+    # 创建 FastAPI 应用。
+    # 参数显式传入（而非读全局），便于测试时指向临时文件。
     app = FastAPI(title="DouyinLiveRecorder Web Panel", version="1.0.0")
 
     # 将路径与配置存入 app.state，路由通过 request.app.state 访问
@@ -305,7 +303,7 @@ def create_app(
 
 
 def _purge_expired_tokens() -> None:
-    """清除过期 token。调用方须持有 _tokens_lock。"""
+    # 清除过期 token。调用方须持有 _tokens_lock。
     now = time.time()
     expired = [t for t, exp in _tokens.items() if exp <= now]
     for t in expired:
@@ -313,7 +311,7 @@ def _purge_expired_tokens() -> None:
 
 
 def _is_within(child: str, parent: str) -> bool:
-    """校验 child 路径在 parent 目录内（防穿越）。"""
+    # 校验 child 路径在 parent 目录内（防穿越）。
     try:
         return os.path.commonpath([child, parent]) == parent
     except ValueError:
