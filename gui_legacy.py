@@ -14,10 +14,13 @@ import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import scrolledtext, messagebox, ttk
 from datetime import datetime
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from PIL import Image, ImageDraw
 # pystray 延迟导入至 SystemTray.run() 内部，避免 headless 环境顶层导入失败
+
+if TYPE_CHECKING:
+    import pystray
 
 
 # ─── 高对比度色彩系统（满足 WCAG AA 标准） ──────────────

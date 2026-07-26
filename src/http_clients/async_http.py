@@ -3,20 +3,22 @@
 
 import asyncio
 import httpx
-from typing import Dict, Any, Tuple
+from collections.abc import Mapping, Sequence
+from typing import cast
 from . import config
 from .. import utils
 from ..logger import logger
 
 OptionalStr = str | None
-OptionalDict = Dict[str, Any] | None
+OptionalDict = dict[str, str] | None
 
 # 全局连接池配置，提高 HTTP 请求性能
 _httpx_limits = httpx.Limits(max_connections=100, max_keepalive_connections=20)
 
 # 复用 Client 以真正发挥 keepalive 连接池作用
 # AsyncClient 必须在事件循环内创建并使用，进程退出时需 aclose() 释放连接池
-_client_cache: Dict[Tuple[str, bool, bool], httpx.AsyncClient] = {}
+# 值为 (client, 创建时的事件循环)，用于检测 asyncio.run() 导致的循环变更
+_client_cache: dict[tuple[str, bool, bool], tuple[httpx.AsyncClient, asyncio.AbstractEventLoop]] = {}
 
 
 async def _get_client(
@@ -28,22 +30,40 @@ async def _get_client(
     # 按 (代理, verify, http2) 维度复用 AsyncClient
     # timeout 在每次请求时单独传入，避免不同调用方覆盖彼此的超时
     key = (proxy_addr or "", verify, http2)
-    client = _client_cache.get(key)
-    if client is None or client.is_closed:
-        client = httpx.AsyncClient(
-            proxy=proxy_addr,
-            timeout=timeout,
-            verify=verify,
-            http2=http2,
-            limits=_httpx_limits,
-        )
-        _client_cache[key] = client
+    current_loop = asyncio.get_running_loop()
+    cached = _client_cache.get(key)
+    if cached is not None:
+        client, client_loop = cached
+        # client 未关闭且事件循环未变更时直接复用
+        if not client.is_closed and client_loop is current_loop:
+            return client
+        # 缓存的 client 已失效（已关闭或事件循环变更）：先释放旧连接池，避免泄漏
+        if not client.is_closed:
+            if client_loop is current_loop:
+                try:
+                    await client.aclose()
+                except Exception as e:
+                    logger.debug(f"关闭失效 AsyncClient 失败: {e}")
+            elif not client_loop.is_closed():
+                # 跨事件循环：在其创建循环上安排 aclose，避免在其创建循环外操作 transport
+                try:
+                    _ = asyncio.run_coroutine_threadsafe(client.aclose(), client_loop)
+                except Exception as e:
+                    logger.debug(f"跨循环关闭 AsyncClient 失败: {e}")
+    client = httpx.AsyncClient(
+        proxy=proxy_addr,
+        timeout=timeout,
+        verify=verify,
+        http2=http2,
+        limits=_httpx_limits,
+    )
+    _client_cache[key] = (client, current_loop)
     return client
 
 
 async def _close_all_clients() -> None:
     # 进程退出时释放所有复用的 AsyncClient，避免连接池泄漏
-    for client in list(_client_cache.values()):
+    for client, _ in list(_client_cache.values()):
         try:
             if not client.is_closed:
                 await client.aclose()
@@ -77,8 +97,8 @@ async def async_req(
         url: str,
         proxy_addr: OptionalStr = None,
         headers: OptionalDict = None,
-        data: dict | str | bytes | None = None,
-        json_data: dict | list | None = None,
+        data: Mapping[str, object] | str | bytes | bytearray | memoryview | None = None,
+        json_data: Mapping[str, object] | Sequence[object] | None = None,
         timeout: int = 20,
         redirect_url: bool = False,
         return_cookies: bool = False,
@@ -87,8 +107,10 @@ async def async_req(
         content_encoding: str = 'utf-8',
         verify: bool | None = None,
         http2: bool = True
-) -> str | dict | tuple:
+) -> str | dict[str, str] | tuple[str, dict[str, str]]:
     # 异步 HTTP 请求函数，支持 GET/POST、代理、Cookie 等功能
+    # abroad / content_encoding 仅为与 sync_req 保持签名兼容，异步实现无需显式使用
+    _ = (abroad, content_encoding)
     if headers is None:
         headers = {}
     # 未显式指定时使用全局 SSL 验证开关
@@ -132,7 +154,7 @@ async def async_req(
         if redirect_url:
             resp_str = ""
         elif return_cookies:
-            resp_str = ("", {}) if include_cookies else {}
+            resp_str = ("", cast(dict[str, str], {})) if include_cookies else cast(dict[str, str], {})
         else:
             resp_str = ""
 
@@ -140,9 +162,10 @@ async def async_req(
 
 
 async def get_response_status(url: str, proxy_addr: OptionalStr = None, headers: OptionalDict = None,
-                              timeout: int = 10, abroad: bool = False, verify: bool | None = None, http2=False) -> bool:
+                              timeout: int = 10, abroad: bool = False, verify: bool | None = None, http2: bool = False) -> bool:
     # 检查 URL 响应状态，确认是否可访问
     # 未显式指定时使用全局 SSL 验证开关
+    _ = abroad
     if verify is None:
         verify = config.ssl_verify
     try:

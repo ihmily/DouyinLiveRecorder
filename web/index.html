@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DouyinLiveRecorder 管理面板</title>
+    <link rel="stylesheet" href="/web/style.css">
+</head>
+<body data-theme="light">
+    <header class="topbar">
+        <div class="brand">直播录制管理面板</div>
+        <nav class="tabs">
+            <button class="tab active" data-view="dashboard">仪表盘</button>
+            <button class="tab" data-view="rooms">直播间</button>
+            <button class="tab" data-view="config">配置</button>
+            <button class="tab" data-view="files">文件</button>
+        </nav>
+        <div class="topbar-right">
+            <button id="theme-toggle" title="切换主题">🌙</button>
+            <button id="logout-btn" class="hidden">退出</button>
+        </div>
+    </header>
+
+    <!-- 登录页 -->
+    <main id="login-view" class="view hidden">
+        <div class="login-card">
+            <h2>登录</h2>
+            <input type="password" id="login-password" placeholder="访问密码">
+            <button id="login-submit">登录</button>
+            <div id="login-error" class="error-msg"></div>
+        </div>
+    </main>
+
+    <!-- 仪表盘 -->
+    <main id="dashboard-view" class="view">
+        <div id="engine-warning" class="engine-warning hidden">⚠️ 录制引擎已停止运行，请检查日志或重启服务</div>
+        <div class="stat-cards">
+            <div class="stat-card"><div class="stat-label">监测中</div><div class="stat-value" id="stat-monitoring">-</div></div>
+            <div class="stat-card"><div class="stat-label">录制中</div><div class="stat-value" id="stat-recording">-</div></div>
+            <div class="stat-card"><div class="stat-label">错误数</div><div class="stat-value" id="stat-errors">-</div></div>
+            <div class="stat-card"><div class="stat-label">磁盘剩余(GB)</div><div class="stat-value" id="stat-disk">-</div></div>
+        </div>
+        <section class="panel">
+            <h3>正在录制</h3>
+            <table class="data-table">
+                <thead><tr><th>名称</th><th>设置画质</th><th>实际画质</th><th>开始时间</th><th>已录时长</th></tr></thead>
+                <tbody id="recording-tbody"><tr><td colspan="5" class="empty">暂无录制</td></tr></tbody>
+            </table>
+        </section>
+        <section class="panel">
+            <h3>实时日志</h3>
+            <div id="log-stream" class="terminal"></div>
+        </section>
+    </main>
+
+    <!-- 直播间管理 -->
+    <main id="rooms-view" class="view hidden">
+        <section class="panel">
+            <h3>添加直播间</h3>
+            <form id="room-add-form" class="inline-form">
+                <input type="text" id="room-url" placeholder="直播间地址" required>
+                <select id="room-quality">
+                    <option value="">默认画质</option>
+                    <option value="原画">原画</option>
+                    <option value="蓝光">蓝光</option>
+                    <option value="超清">超清</option>
+                    <option value="高清">高清</option>
+                    <option value="标清">标清</option>
+                    <option value="流畅">流畅</option>
+                </select>
+                <input type="text" id="room-name" placeholder="主播名称（可选）">
+                <button type="submit">添加</button>
+            </form>
+        </section>
+        <section class="panel">
+            <h3>直播间列表</h3>
+            <table class="data-table">
+                <thead><tr><th>地址</th><th>画质</th><th>名称</th><th>启用</th><th>录制中</th><th>操作</th></tr></thead>
+                <tbody id="rooms-tbody"><tr><td colspan="6" class="empty">加载中...</td></tr></tbody>
+            </table>
+        </section>
+    </main>
+
+    <!-- 配置 -->
+    <main id="config-view" class="view hidden">
+        <section class="panel">
+            <h3>录制与推送配置</h3>
+            <div id="config-container">加载中...</div>
+            <button id="config-save-btn" class="primary">保存配置</button>
+        </section>
+    </main>
+
+    <!-- 文件浏览 -->
+    <main id="files-view" class="view hidden">
+        <section class="panel">
+            <div class="file-header">
+                <h3>录制文件</h3>
+                <div id="file-breadcrumb" class="breadcrumb"></div>
+            </div>
+            <table class="data-table">
+                <thead><tr><th>名称</th><th>类型</th><th>大小</th><th>修改时间</th><th>操作</th></tr></thead>
+                <tbody id="files-tbody"><tr><td colspan="5" class="empty">加载中...</td></tr></tbody>
+            </table>
+        </section>
+    </main>
+
+    <div id="toast" class="toast hidden"></div>
+    <script src="/web/app.js"></script>
+</body>
+</html>

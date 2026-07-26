@@ -19,7 +19,9 @@ services:
       context: .
       dockerfile: Dockerfile
 
-    # 运行参数（可覆盖，例如传入 -c 指定配置文件路径）
+    # 运行参数（可覆盖）
+    # 命令行录制模式（默认）: command: ["python", "main.py"]
+    # Web 管理面板模式:       command: ["python", "web.py"]
     # command: ["python", "main.py"]
 
     # 环境变量
@@ -60,9 +62,9 @@ services:
     # 重启策略：除非手动停止，否则自动重启
     restart: unless-stopped
 
-    # 健康检查：检测 main.py 主进程是否存活
+    # 健康检查：同时兼容 main.py 与 web.py 两种模式
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f 'python main.py' || exit 1"]
+      test: ["CMD-SHELL", "pgrep -f 'python (main|web).py' || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

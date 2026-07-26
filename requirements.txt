@@ -28,3 +28,9 @@ Pillow>=11.3.0            # 图像处理（托盘图标生成）
 # 注：Weverse 平台认证由 src/weverse_auth.py 自行通过 requests 直接调用 API 实现，
 # 不依赖 pip 上的 weverse 包；该包会拉入已废弃的 pycrypto==2.6.1，
 # 在 Python 3.10+ 上因缺失 longintrepr.h 头文件无法编译，故不再列入依赖。
+
+# Web 管理面板
+fastapi>=0.115.0           # Web 框架
+uvicorn[standard]>=0.30.0  # ASGI 服务器
+python-multipart>=0.0.9    # 表单/文件兼容
+pydantic>=2.0.0            # 请求模型校验（FastAPI 依赖，代码直接引用 BaseModel）

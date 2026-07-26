@@ -22,11 +22,13 @@
 | 🎯 **多平台支持** | 支持抖音、TikTok、YouTube、快手、虎牙、斗鱼、B站等 **60+ 平台** |
 | 🔄 **循环值守** | 自动检测直播状态，开播自动录制，断播自动停止 |
 | 🎬 **多种格式** | 支持 TS、MKV、FLV、MP4、MP3、M4A 等格式输出 |
-| 🖥️ **双模式运行** | 支持命令行模式和 GUI 图形界面模式 |
+| 🖥️ **三模式运行** | 命令行模式、GUI 图形界面模式、Web 管理面板模式 |
+| 📊 **画质监控** | 实时检测各直播间实际画质，画质降级时自动告警 |
 | 📱 **消息推送** | 支持钉钉、微信、邮箱、TG、Bark、NTFY、PushPlus 等推送 |
 | 🐳 **Docker 支持** | 支持 Docker 容器化部署，开箱即用 |
 | 🌐 **国际化** | 支持中文、英文等多语言界面 |
 | ⚙️ **灵活配置** | 支持按直播间自定义画质、格式、分段录制等 |
+| 🔐 **Web 安全** | Token 认证、路径穿越防护、敏感配置脱敏 |
 
 </div>
 
@@ -53,13 +55,14 @@ pip install -r requirements.txt
 
 # 运行程序
 python main.py        # 命令行模式
-python gui.pyw        # GUI 模式
+python gui.py         # GUI 图形界面模式
+python web.py         # Web 管理面板模式
 ```
 
 ### 方式三：Docker 运行
 
 ```bash
-# 快速启动
+# 快速启动（默认命令行录制模式）
 docker-compose up -d
 
 # 或本地构建并启动
@@ -70,6 +73,10 @@ docker run -d douyin-live-recorder
 </div>
 
 ## 🎈 已支持平台
+
+**国内站点（37 个）**：抖音 | 快手 | 虎牙 | 斗鱼 | YY | B站 | 小红书 | bigo | blued | 网易CC | 千度热播 | 猫耳FM | Look直播 | TwitCasting | 百度 | 微博 | 酷狗 | 花椒 | 流星 | Acfun | 畅聊 | 映客 | 音播 | 知乎 | 嗨秀 | VV星球 | 17Live | 浪Live | 漂漂 | 六间房 | 乐嗨 | 花猫 | 淘宝 | 京东 | 咪咕 | 连接 | 来秀
+
+**海外站点（14 个）**：TikTok | SOOP(原AfreecaTV) | PandaTV | WinkTV | TTingLive(原Flextv) | PopkonTV | TwitchTV | LiveMe | ShowRoom | CHZZK | Shopee | Youtube | Faceit | Picarto
 
 - [x] 抖音
 - [x] TikTok
@@ -134,37 +141,56 @@ DouyinLiveRecorder/
 │   ├── config.ini             # 主配置文件
 │   └── URL_config.ini         # 直播间地址列表
 ├── src/                        # 核心源码包
-│   ├── __init__.py
-│   ├── spider.py              # 直播数据获取
-│   ├── stream.py              # 直播流解析
-│   ├── room.py                # 直播间信息
-│   ├── utils.py               # 工具函数
-│   ├── logger.py              # 日志处理
-│   ├── proxy.py               # 代理处理
-│   ├── ab_sign.py             # 抖音签名
-│   ├── initializer.py          # 环境初始化
-│   ├── weverse_auth.py        # Wevers认证
+│   ├── __init__.py             # 包初始化 + Node.js 环境配置
+│   ├── spider.py              # 直播数据爬虫（60+ 平台）
+│   ├── stream.py              # 直播流解析（含画质回采）
+│   ├── room.py                # 直播间信息解析
+│   ├── utils.py               # 工具函数库
+│   ├── logger.py              # Loguru 日志配置
+│   ├── proxy.py               # 代理检测
+│   ├── ab_sign.py             # 抖音 A-Bogus 签名
+│   ├── node_install.py        # Node.js 自动安装/初始化
+│   ├── weverse_auth.py        # Weverse 平台认证
+│   ├── web_api.py             # Web 管理面板 FastAPI 应用
+│   ├── web_config.py          # Web 面板配置读写
 │   ├── http_clients/          # HTTP 客户端
 │   │   ├── __init__.py
-│   │   ├── async_http.py      # 异步HTTP客户端
-│   │   └── sync_http.py      # 同步HTTP客户端
-│   └── javascript/             # JavaScript 签名脚本
-│       ├── crypto-js.min.js
-│       ├── x-bogus.js
-│       └── ...
+│   │   ├── config.py          # HTTP 客户端共享配置（SSL 验证开关）
+│   │   ├── async_http.py      # 异步 HTTP 客户端 (httpx)
+│   │   └── sync_http.py       # 同步 HTTP 客户端
+│   ├── javascript/            # JavaScript 签名脚本
+│   │   ├── crypto-js.min.js
+│   │   ├── x-bogus.js
+│   │   ├── haixiu.js
+│   │   ├── laixiu.js
+│   │   ├── liveme.js
+│   │   ├── migu.js
+│   │   └── taobao-sign.js
+│   └── ffmpeg_install.py     # FFmpeg 安装脚本
+├── web/                        # Web 管理面板前端
+│   ├── index.html              # 单页应用入口
+│   ├── app.js                  # 前端逻辑（API、SSE、渲染）
+│   └── style.css               # 样式表（主题、响应式）
+├── tests/                      # 单元测试
+│   ├── conftest.py
+│   ├── test_stream_quality.py
+│   ├── test_web_api.py
+│   └── test_web_config.py
 ├── downloads/                  # 录制文件保存目录
 ├── logs/                       # 日志文件目录
 ├── i18n/                       # 国际化文件
 │   ├── zh_CN/LC_MESSAGES/
-│   │   ├── zh_CN.po          # 中文翻译
-│   │   └── zh_CN.mo          # 编译后翻译
+│   │   ├── zh_CN.po           # 中文翻译源
+│   │   └── zh_CN.mo           # 编译后翻译
 │   └── en/LC_MESSAGES/
 ├── ffmpeg/                     # FFmpeg 目录（Windows）
 ├── node/                       # Node.js 目录（Windows）
 ├── main.py                     # 命令行入口
-├── gui.pyw                     # GUI 图形界面入口
+├── gui.py                      # GUI 图形界面入口
+├── gui_legacy.py               # 旧版 GUI（兼容保留）
+├── web.py                      # Web 管理面板入口
+├── index.html                  # M3U8 视频播放器
 ├── msg_push.py                 # 消息推送模块
-├── ffmpeg_install.py           # FFmpeg 安装脚本
 ├── demo.py                     # 调用示例
 ├── i18n.py                     # 国际化实现
 ├── requirements.txt            # Python 依赖
@@ -173,7 +199,6 @@ DouyinLiveRecorder/
 ├── docker-compose.yaml         # Docker Compose 配置
 ├── StopRecording.vbs          # Windows 停止录制脚本
 ├── CODE_WIKI.md               # 项目架构文档
-├── CODE_CHANGES.md            # 代码改动文档
 └── README.md                   # 项目说明文档
 ```
 
@@ -184,42 +209,160 @@ DouyinLiveRecorder/
 ### 基础配置 (config/config.ini)
 
 ```ini
-[settings]
-# 同时检测直播的线程数
-max_thread = 3
+[录制设置]
+# 界面语言 (zh_cn/en)
+language(zh_cn/en) = zh_cn
+# 是否跳过代理检测(是/否)
+是否跳过代理检测(是/否) = 是
+# 是否禁用SSL证书验证(是/否)
+是否禁用SSL证书验证(是/否) = 是
+# 是否启用日志文件(是/否)
+是否启用日志文件(是/否) = 是
+# 直播保存路径(不填则默认 downloads/)
+直播保存路径(不填则默认) =
+# 保存文件夹是否以作者区分
+保存文件夹是否以作者区分 = 是
+# 保存文件夹是否以时间区分
+保存文件夹是否以时间区分 = 否
+# 保存文件夹是否以标题区分
+保存文件夹是否以标题区分 = 否
+# 保存文件名是否包含标题
+保存文件名是否包含标题 = 否
+# 是否去除名称中的表情符号
+是否去除名称中的表情符号 = 是
+# 视频保存格式 ts|mkv|flv|mp4|mp3音频|m4a音频
+视频保存格式ts|mkv|flv|mp4|mp3音频|m4a音频 = ts
+# 录制画质 原画|超清|高清|标清|流畅
+原画|超清|高清|标清|流畅 = 原画
+# 是否使用代理ip(是/否)
+是否使用代理ip(是/否) = 否
+# 代理地址
+代理地址 =
+# 同一时间访问网络的线程数
+同一时间访问网络的线程数 = 3
+# 循环时间(秒) - 直播状态检测间隔
+循环时间(秒) = 300
+# 排队读取网址时间(秒)
+排队读取网址时间(秒) = 0
+# 是否显示循环秒数
+是否显示循环秒数 = 否
+# 是否显示直播源地址
+是否显示直播源地址 = 否
+# 分段录制是否开启
+分段录制是否开启 = 是
+# 是否强制启用https录制
+是否强制启用https录制 = 否
+# 录制空间剩余阈值(gb)
+录制空间剩余阈值(gb) = 1.0
+# 视频分段时间(秒)
+视频分段时间(秒) = 3600
+# 录制完成后自动转为mp4格式
+录制完成后自动转为mp4格式 = 否
+# mp4格式重新编码为h264
+mp4格式重新编码为h264 = 否
+# 追加格式后删除原文件
+追加格式后删除原文件 = 是
+# 生成时间字幕文件
+生成时间字幕文件 = 否
+# 是否录制完成后执行自定义脚本
+是否录制完成后执行自定义脚本 = 否
+# 自定义脚本执行命令
+自定义脚本执行命令 =
+# 使用代理录制的平台(逗号分隔)
+使用代理录制的平台(逗号分隔) = tiktok, sooplive, pandalive, winktv, flextv, popkontv, twitch, liveme, showroom, chzzk, shopee, shp, youtu
+# 额外使用代理录制的平台(逗号分隔)
+额外使用代理录制的平台(逗号分隔) =
+```
 
-# 是否开启代理录制（true/false）
-proxy_enable = false
-proxy_addr = 127.0.0.1:7890
+### 推送配置 (config/config.ini)
 
-# 录制分段时长（秒），0 为不分段
-segment_time = 0
+```ini
+[推送配置]
+# 可选微信|钉钉|tg|邮箱|bark|ntfy|pushplus 可填多个
+直播状态推送渠道 =
+钉钉推送接口链接 =
+微信推送接口链接 =
+bark推送接口链接 =
+bark推送中断级别 = active
+bark推送铃声 =
+钉钉通知@对象(填手机号) =
+钉钉通知@全体(是/否) = 否
+tgapi令牌 =
+tg聊天id(个人或者群组id) =
+smtp邮件服务器 =
+是否使用SMTP服务SSL加密(是/否) =
+SMTP邮件服务器端口 =
+邮箱登录账号 =
+发件人密码(授权码) =
+发件人邮箱 =
+发件人显示昵称 =
+收件人邮箱 =
+ntfy推送地址 = https://ntfy.sh/xxxx
+ntfy推送标签 = tada
+ntfy推送邮箱 =
+pushplus推送token =
+自定义推送标题 =
+自定义开播推送内容 =
+自定义关播推送内容 =
+只推送通知不录制(是/否) = 否
+直播推送检测频率(秒) = 1800
+开播推送开启(是/否) = 是
+关播推送开启(是/否) = 否
+```
 
-# 是否生成时间文件
-time_file = true
+### Cookie 配置 (config/config.ini)
 
-# 录制视频质量
-# 可选值：原始/超清/高清/标清/流畅
-video_quality = 原始
+```ini
+[Cookie]
+# 录制抖音必填：请填入从浏览器 live.douyin.com 复制的有效 cookie（至少包含 ttwid）
+# 留空将自动尝试获取访客 ttwid（可能触发风控，建议填写）
+抖音cookie =
+快手cookie =
+tiktok_cookie =
+虎牙cookie =
+斗鱼cookie =
+yy_cookie =
+b站cookie =
+小红书cookie =
+bigo_cookie =
+# ... 其余平台 cookie 详见 config.ini
+```
 
-# 录制视频格式
-# 可选值：flv/ts/mp4/mkv/mp3/m4a
-record_format = ts
+### 账号密码配置 (config/config.ini)
 
-# 下载保存路径
-save_path = downloads
+```ini
+[账号密码]
+sooplive账号 =
+sooplive密码 =
+flextv账号 =
+flextv密码 =
+popkontv账号 =
+partner_code = P-00001
+popkontv密码 =
+twitcasting账号类型 = normal
+twitcasting账号 =
+twitcasting密码 =
+```
 
-# 循环监测间隔（秒）
-check_interval = 30
+### Web 管理面板配置 (config/config.ini)
 
-# 推流中断多少秒后重新连接
-reconnect_time = 60
-
-# 最大瞬时错误数
-max_errors = 10
-
-# 是否仅推送开播通知
-just_push = false
+```ini
+[Web]
+# Web 管理面板监听地址
+web_host = 0.0.0.0
+# Web 管理面板端口
+web_port = 8000
+# 是否启用密码登录（true/false）
+web_auth_enable = false
+# 访问密码（启用认证时必填）
+web_password =
+# token 有效期（秒）
+web_token_expiry = 86400
+# 是否显示控制台窗口（false 时后台运行，日志写入 logs/web_console.log）
+web_show_console = true
+# 控制台最小化到系统托盘（而非任务栏），仅 Windows 生效；
+# 关闭按钮会被禁用，退出请使用托盘图标的「退出程序」
+web_minimize_to_tray = true
 ```
 
 ### 直播间配置 (config/URL_config.ini)
@@ -230,6 +373,9 @@ https://live.douyin.com/745964462470
 
 # 指定画质（画质,直播间地址）
 超清，https://live.douyin.com/745964462470
+
+# 指定画质和主播名（画质,直播间地址,主播:名称）
+高清，https://live.bilibili.com/123456，主播: B站主播
 
 # 注释直播间（在地址前加 #）
 # https://live.douyin.com/123456789
@@ -243,6 +389,7 @@ https://live.douyin.com/745964462470
 | `PYTHONDONTWRITEBYTECODE` | 不生成 .pyc 文件 | `1` |
 | `PYTHONIOENCODING` | Python 输出编码 | `utf-8` |
 | `TZ` | 时区设置 | `Asia/Shanghai` |
+| `TERM` | 终端类型 | `xterm-256color` |
 
 </div>
 
@@ -257,14 +404,57 @@ python main.py
 ### GUI 图形界面模式
 
 ```bash
-python gui.pyw
+python gui.py
 ```
+
+GUI 功能：
+- 📊 控制台 - 录制状态总览、启停控制
+- 🎯 画质监控 - 实时检测各直播间实际画质是否与设置一致
+- 📝 URL 配置 - 直播间地址管理
+- 📋 运行日志 - 子进程日志查看
+- 系统托盘图标 - 最小化到托盘运行
+
+### Web 管理面板模式
+
+```bash
+python web.py
+```
+
+启动后浏览器访问 `http://localhost:8000`。
+
+功能：
+- **仪表盘**：实时查看监测/录制数、错误数、磁盘剩余、录制中列表、日志流（SSE 推送）
+- **直播间管理**：在线增删改查直播间地址、启用/禁用（自动热加载到录制主循环）
+- **配置编辑**：在线编辑 config.ini 各项（录制设置/推送/Cookie 等），敏感配置项脱敏
+- **文件浏览**：浏览 downloads 目录并下载录制文件
+- **实际画质展示**：录制表格显示"设置画质/实际画质"，降级时标红高亮
+
+Web 模式与命令行模式共用同一录制引擎与配置文件，直播间地址的增删改会自动被录制主循环热加载。
+
+后台运行模式：将 `web_show_console` 设为 `false`，Windows 下会隐藏控制台窗口，日志写入 `logs/web_console.log`，程序完全后台运行。
+
+Windows 下控制台默认「最小化到系统托盘」（`web_minimize_to_tray = true`）：点击最小化后窗口不在任务栏显示，而是收起到系统托盘，双击托盘图标即可恢复；标题栏关闭按钮已禁用，需从托盘图标菜单的「退出程序」退出。
+
+> ⚠️ **安全提示**：默认监听 0.0.0.0 且未启用认证，公网/局域网部署请务必开启 `web_auth_enable` 并设置强密码，或将 `web_host` 改为 `127.0.0.1`。
 
 ### 录制格式推荐
 
 - **长时间录制**：推荐使用 `ts` 格式，实时写入，断电不易损坏
 - **短时间录制**：推荐使用 `mp4` 或 `mkv` 格式，录制完成后直接可用
 - **仅音频录制**：推荐使用 `mp3` 或 `m4a` 格式
+
+### 画质说明
+
+| 画质代码 | 中文名 | 说明 |
+|---------|--------|------|
+| OD | 原画 | Original Definition，最高画质 |
+| BD | 蓝光 | Blu-ray，超高清 |
+| UHD | 超清 | Ultra HD |
+| HD | 高清 | High Definition |
+| SD | 标清 | Standard Definition |
+| LD | 流畅 | Low Definition，最低画质 |
+
+支持平台：抖音、TikTok、快手、虎牙、斗鱼、B站、网易CC。当平台实际下发画质低于设置画质时，会自动告警并标记。
 
 ### 停止录制
 
@@ -274,10 +464,12 @@ python gui.pyw
 
 ### 注意事项
 
-1. 如需录制 TikTok、AfreecaTV 等海外平台，请在配置中开启代理
+1. 如需录制 TikTok、SOOP 等海外平台，请在配置中开启代理
 2. 长时间挂机建议将循环时间设置长一些（如 60 秒），避免请求频繁被封 IP
 3. 直播结束后会自动保存文件，无需手动停止
 4. 如遇录制的视频文件损坏，建议使用 `ts` 格式录制
+5. 录制抖音需要填写有效的 cookie（至少包含 ttwid），否则可能触发风控
+6. 部分平台需要 Node.js 环境运行 JavaScript 签名脚本，Windows 下会自动安装
 
 </div>
 
@@ -298,22 +490,45 @@ cd DouyinLiveRecorder
 # 2. 编辑配置文件
 # 在 config/URL_config.ini 中添加直播间地址
 
-# 3. 启动容器
+# 3. 启动容器（默认命令行录制模式）
 docker-compose up -d
 
 # 4. 查看日志
 docker-compose logs -f
 ```
 
-### 数据挂载
+### 切换运行模式
 
-建议将配置和下载目录挂载到宿主机：
+`docker-compose.yaml` 默认运行命令行录制模式。如需切换到 Web 管理面板模式：
+
+```yaml
+services:
+  recorder:
+    command: ["python", "web.py"]
+```
+
+GUI 模式（需 X11 显示环境）：
+
+```bash
+# 启动 GUI 模式（需在宿主机执行 xhost +local:）
+docker compose --profile gui up -d
+```
+
+### 数据挂载
 
 ```yaml
 volumes:
-  - ./config:/app/config
-  - ./downloads:/app/downloads
-  - ./logs:/app/logs
+  - ./config:/app/config:rw          # 配置文件目录（必需）
+  - ./downloads:/app/downloads:rw    # 录制文件下载目录（必需）
+  - ./logs:/app/logs:rw              # 运行日志目录
+  - ./backup_config:/app/backup_config:rw  # 配置备份目录
+```
+
+### 端口映射
+
+```yaml
+ports:
+  - "8000:8000"   # Web 管理面板端口（仅 web.py 模式需要）
 ```
 
 ### 环境变量
@@ -322,6 +537,18 @@ volumes:
 |------|------|--------|
 | `TZ` | 时区 | `Asia/Shanghai` |
 | `PYTHONUNBUFFERED` | 实时输出 | `1` |
+| `PYTHONDONTWRITEBYTECODE` | 不生成 .pyc 文件 | `1` |
+| `PYTHONIOENCODING` | Python 输出编码 | `utf-8` |
+| `TERM` | 终端类型 | `xterm-256color` |
+
+### Docker 镜像特性
+
+- **多阶段构建**：builder 阶段安装依赖到虚拟环境，runtime 阶段精简镜像
+- **非 root 用户**：使用 `recorder` 用户运行，提升安全性
+- **健康检查**：自动检测 `main.py` 或 `web.py` 进程是否存活
+- **资源限制**：默认限制 2 CPU / 2G 内存（可在 docker-compose.yaml 调整）
+- **日志轮转**：单文件 50MB，最多保留 3 份
+- **内置 Node.js 22 LTS**：用于运行 JavaScript 签名脚本
 
 </div>
 
@@ -331,6 +558,7 @@ volumes:
 
 - Python >= 3.10
 - FFmpeg (Linux/macOS 需要手动安装)
+- Node.js (Windows 下自动安装，Linux/macOS 需手动安装)
 
 ### 安装开发依赖
 
@@ -340,13 +568,13 @@ uv sync --dev
 
 # 或使用 pip
 pip install -r requirements.txt
-pip install pytest black isort mypy
+pip install pytest pytest-asyncio black isort mypy
 ```
 
 ### 代码规范
 
 ```bash
-# 格式化代码
+# 格式化代码（line-length = 120）
 black .
 
 # 排序导入
@@ -361,8 +589,16 @@ pytest
 
 ### 项目文档
 
-- [CODE_WIKI.md](CODE_WIKI.md) - 项目架构文档
-- [CODE_CHANGES.md](CODE_CHANGES.md) - 代码改动记录
+- [CODE_WIKI.md](CODE_WIKI.md) - 项目架构文档（详细的模块说明、依赖关系、设计模式）
+- [demo.py](demo.py) - 各平台调用示例
+
+### 添加新平台支持
+
+1. 在 `src/spider.py` 中添加平台数据获取函数（参考现有平台实现）
+2. 在 `src/stream.py` 中添加流地址解析函数，返回值包含 `actual_quality` 和 `available_qualities` 字段
+3. 在 `main.py` 中添加平台识别逻辑（`PLATFORM_HOST` 列表和录制分支）
+4. 在 `tests/test_stream_quality.py` 中添加画质回采测试
+5. 更新 `README.md` 和 `CODE_WIKI.md`
 
 </div>
 
@@ -381,11 +617,31 @@ brew install ffmpeg
 # 程序已自带 ffmpeg，无需安装
 ```
 
+**Q: 提示 "缺少 Node.js" 或 "execjs" 相关错误**
+
+```bash
+# Ubuntu/Debian
+curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+sudo apt-get install -y nodejs
+
+# macOS
+brew install node
+
+# Windows
+# 程序会自动下载安装到 node/ 目录
+```
+
 **Q: 提示 "IP 被禁止，请更换设备或网络"**
 
 - 检查是否开启了代理
 - 降低循环监测频率
 - 等待一段时间后再尝试
+
+**Q: 抖音风控无法获取数据**
+
+- 在 `config.ini` 的 `[Cookie]` 节填入从浏览器 `live.douyin.com` 复制的有效 cookie（至少包含 `ttwid`）
+- 降低循环监测频率
+- 更换 IP 或使用代理
 
 **Q: 录制的视频文件损坏**
 
@@ -395,7 +651,11 @@ brew install ffmpeg
 
 **Q: 如何只推送开播通知不录制？**
 
-在 `config.ini` 中设置 `just_push = true`
+在 `config.ini` 的 `[推送配置]` 节设置 `只推送通知不录制(是/否) = 是`
+
+**Q: Web 面板忘记密码怎么办？**
+
+直接编辑 `config/config.ini` 中的 `web_password` 项，修改后重启 `web.py` 即可。密码变更后所有现有 Token 会自动失效，需重新登录。
 
 </div>
 
@@ -438,6 +698,24 @@ brew install ffmpeg
 </div>
 
 ## ⏳ 更新日志
+
+### v4.0.8-dev (2026-07-25)
+
+- 新增 Web 管理面板（`web.py` + `src/web_api.py` + `src/web_config.py` + `web/`），支持仪表盘、直播间管理、配置编辑、SSE 日志推送
+- 新增 GUI 画质监控页面，实时检测各直播间实际画质是否与设置一致
+- 新增实际画质回采与降级告警功能，覆盖抖音、TikTok、快手、虎牙、斗鱼、B站、网易CC 七个平台
+- 新增 Web 控制台开关配置 `web_show_console`，支持后台隐藏运行模式
+- 新增 HTTP 客户端连接池复用机制，按 (代理, verify, http2) 维度复用 AsyncClient
+- 新增 SSL 证书验证全局开关，通过 config.ini 统一控制
+- 新增日志文件开关配置项
+- 重构代理检测逻辑，从联网探测改为读取本地系统代理配置
+- 修复 `trace_error_decorator` 严重 Bug（原同步装饰器应用于 71 个异步函数导致错误捕获失效）
+- 修复 `asyncio.run()` 导致的 httpx 客户端跨事件循环复用问题
+- 修复多个 IndexError / KeyError / 类型错误运行时 Bug
+- 全项目类型错误修复与代码清理（Pyright / Pyrefly / basedpyright）
+- 清理硬编码过期凭据，改为自动获取（抖音 ttwid、快手 did、Twitch Client-Id 等）
+- Dockerfile 升级 Node.js 22 LTS，使用非 root 用户运行
+- 依赖扫描完成，新增 `pydantic>=2.0.0` 依赖声明
 
 ### v4.0.7 (2025-10-24)
 

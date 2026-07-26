@@ -1,6 +1,6 @@
 [project]
 name = "DouyinLiveRecorder"
-version = "4.0.7"
+version = "4.0.8-dev"
 description = "支持抖音、TikTok、YouTube、快手等60+平台的直播录制工具，支持循环录制、多人录制、消息推送"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -51,6 +51,10 @@ dependencies = [
     "customtkinter>=5.2.0",
     "pystray>=0.19.4",
     "Pillow>=11.3.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "python-multipart>=0.0.9",
+    "pydantic>=2.0.0",
 ]
 
 [project.optional-dependencies]
@@ -70,6 +74,7 @@ gui = [
 [project.scripts]
 douyin-recorder = "main:main"
 douyin-recorder-gui = "gui:main"
+douyin-recorder-web = "web:main"
 
 [project.urls]
 Homepage = "https://github.com/ihmily/DouyinLiveRecorder"

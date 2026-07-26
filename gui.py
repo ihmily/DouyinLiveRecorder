@@ -2,6 +2,7 @@
 # 直播录制器 GUI 界面（基于 CustomTkinter 的现代化重构）
 from __future__ import annotations
 
+import io
 import os
 import sys
 import time
@@ -13,16 +14,65 @@ import re
 import configparser
 import tkinter as tk
 from tkinter import messagebox
+from collections.abc import Callable
 from datetime import datetime
-from typing import Any
+from typing import Literal, TYPE_CHECKING, cast, final
 
 import customtkinter as ctk
 from PIL import Image, ImageDraw
+
+# tkinter 的 pack/grid/configure/after 等副作用方法在 typeshed 中被类型化为返回
+# 非 None（如配置字典、网格信息或计时器 id），实际调用仅为产生副作用。本文件统一
+# 关闭 reportUnusedCallResult，避免对大量纯副作用调用误报「结果未使用」。
+# pyright: reportUnusedCallResult=none
+# LiveRecorderGUI 的若干实例组件仅在 _build_* 方法中初始化，而 _build_* 均在 __init__
+# 经 self._setup_ui() 调用、运行期必然已赋值；类型检查器无法跨方法调用证明，故关闭
+# reportUninitializedInstanceVariable（类体已做非可选类型声明，确保 .configure 等方法可类型检查）。
+# pyright: reportUninitializedInstanceVariable=none
+
+# 强制标准流以 UTF-8 输出（窗口化 exe 的 stdout/stderr 可能为 None，已做保护）。
+# 保证本进程自身及被它启动/读取的子进程日志在中文 Windows 下不乱码。
+def _fix_encoding() -> None:
+    _streams: list[io.TextIOWrapper | None] = [
+        cast("io.TextIOWrapper | None", getattr(sys, "stdout", None)),
+        cast("io.TextIOWrapper | None", getattr(sys, "stderr", None)),
+    ]
+    if sys.platform == "win32":
+        for _s in _streams:
+            if _s is not None and hasattr(_s, "reconfigure"):
+                try:
+                    _s.reconfigure(encoding="utf-8", errors="replace")
+                except Exception:
+                    pass
+        try:
+            import ctypes
+            _k32 = ctypes.windll.kernel32
+            _k32.SetConsoleOutputCP(65001)
+            _k32.SetConsoleCP(65001)
+        except Exception:
+            pass
+    else:
+        for _s in _streams:
+            if _s is not None and hasattr(_s, "reconfigure"):
+                try:
+                    _s.reconfigure(encoding="utf-8", errors="replace")
+                except Exception:
+                    pass
+
+
+_fix_encoding()
 # pystray 延迟导入至 SystemTray.run() 内部，避免 headless 环境顶层导入失败
+
+if TYPE_CHECKING:
+    import pystray
+    # pystray 无类型存根，Icon 推断为 Any。用别名避免在类型表达式里直接写
+    # 模块属性 `pystray.Icon`（会触发 reportInvalidTypeForm）。
+    PystrayIcon = pystray.Icon
 
 
 # ─── 现代化色彩系统（浅色 / 深色双主题） ──────────────────
 
+@final
 class Colors:
     # 品牌主色
     PRIMARY = "#4F6DF5"
@@ -62,12 +112,13 @@ _FONT_FAMILY = "Microsoft YaHei UI"
 _MONO_FAMILY = "Cascadia Code"
 
 
+@final
 class Fonts:
     # 常用字体配置（惰性创建，避免在 Tk 初始化前调用失败）
     _cache: dict[str, ctk.CTkFont] = {}
 
     @classmethod
-    def get(cls, size: int, weight: str = "normal", family: str = _FONT_FAMILY) -> ctk.CTkFont:
+    def get(cls, size: int, weight: Literal["normal", "bold"] = "normal", family: str = _FONT_FAMILY) -> ctk.CTkFont:
         key = f"{family}_{size}_{weight}"
         if key not in cls._cache:
             cls._cache[key] = ctk.CTkFont(family=family, size=size, weight=weight)
@@ -101,7 +152,7 @@ class Fonts:
 def _hex_to_rgb(color: str) -> tuple[int, int, int]:
     # 将 #RRGGBB 转为 RGB 元组
     color = color.lstrip('#')
-    return tuple(int(color[i:i + 2], 16) for i in (0, 2, 4))  # type: ignore[return-value]
+    return (int(color[0:2], 16), int(color[2:4], 16), int(color[4:6], 16))
 
 
 def _mix(color_a: str, color_b: str, ratio: float) -> str:
@@ -114,13 +165,14 @@ def _mix(color_a: str, color_b: str, ratio: float) -> str:
     return f"#{r:02X}{g:02X}{b:02X}"
 
 
+@final
 class SystemTray:
     # 系统托盘管理器
 
     def __init__(self, gui_app: 'LiveRecorderGUI'):
         # 初始化系统托盘管理器
         self.gui = gui_app
-        self.icon: "pystray.Icon | None" = None  # type: ignore[type-arg]
+        self.icon: "PystrayIcon | None" = None
         self.running = False
 
     def create_icon_image(self) -> Image.Image:
@@ -154,7 +206,7 @@ class SystemTray:
 
         return image
 
-    def on_show(self, _icon: "pystray.Icon | None" = None) -> None:  # type: ignore[type-arg]
+    def on_show(self, _icon: "PystrayIcon | None" = None) -> None:
         # 托盘菜单：显示主窗口（pystray 回调运行在托盘线程，Tk 操作必须路由回 UI 线程）
         self.gui.post_ui(self._do_show)
 
@@ -163,11 +215,11 @@ class SystemTray:
         self.gui.root.deiconify()
         self.gui.root.lift()
 
-    def on_exit(self, _icon: "pystray.Icon | None" = None) -> None:  # type: ignore[type-arg]
+    def on_exit(self, _icon: "PystrayIcon | None" = None) -> None:
         # 托盘菜单：退出程序（路由回 UI 线程，避免跨线程弹窗/操作 Tk）
         self.gui.post_ui(self.gui.quit_application)
 
-    def on_minimize(self, _icon: "pystray.Icon | None" = None) -> None:  # type: ignore[type-arg]
+    def on_minimize(self, _icon: "PystrayIcon | None" = None) -> None:
         # 托盘菜单：最小化到托盘（路由回 UI 线程）
         self.gui.post_ui(self.gui.root.withdraw)
 
@@ -205,10 +257,11 @@ class SystemTray:
                 pass
 
 
+@final
 class AdvancedSettingsWindow:
     # 高级设置窗口：编辑 config/config.ini
 
-    def __init__(self, parent: ctk.CTk, config_file: str, log_callback: Any = None):
+    def __init__(self, parent: ctk.CTk, config_file: str, log_callback: Callable[[str], None] | None = None):
         # 初始化高级设置窗口
         self.config_file = config_file
         self.log_callback = log_callback
@@ -297,7 +350,7 @@ class AdvancedSettingsWindow:
             messagebox.showerror("错误", f"保存配置文件失败: {e}")
 
 
-def _save_text_widget_to_file(text_widget: Any, file_path: str) -> None:
+def _save_text_widget_to_file(text_widget: tk.Text, file_path: str) -> None:
     # 从文本控件读取内容并写入文件
     content = text_widget.get("1.0", tk.END).rstrip('\n')
     if content and not content.endswith('\n'):
@@ -320,7 +373,7 @@ def _send_ctrl_break_to_child(pid: int) -> bool:
         return False
     import ctypes
     k32 = ctypes.windll.kernel32
-    had_console = bool(k32.GetConsoleWindow())
+    had_console = bool(cast(int, k32.GetConsoleWindow()))
     handler_routine = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_ulong)
 
     def _ignore(_ctrl_type: int) -> bool:
@@ -328,7 +381,7 @@ def _send_ctrl_break_to_child(pid: int) -> bool:
 
     cb = handler_routine(_ignore)
     k32.FreeConsole()
-    if not k32.AttachConsole(pid):
+    if not cast(bool, k32.AttachConsole(pid)):
         if had_console:
             k32.AttachConsole(0xFFFFFFFF)  # ATTACH_PARENT_PROCESS 恢复
         return False
@@ -345,16 +398,51 @@ def _send_ctrl_break_to_child(pid: int) -> bool:
             k32.AttachConsole(0xFFFFFFFF)
 
 
+@final
 class LiveRecorderGUI:
     # 直播录制 GUI 主类
 
     # 常量定义
     ANSI_ESCAPE_PATTERN = re.compile(r'\x1b\[[0-9;]*m')
+    # 画质降级告警："{name} 画质降级：设置 {zh}({code}) 实际 {zh}({code})"
+    QUALITY_DOWNGRADE_PATTERN = re.compile(r'(.+?) 画质降级：设置 (.+?)\((.+?)\) 实际 (.+?)\((.+?)\)')
+    # 录制中行："{name}[{quality}] 正在录制中 {duration}"
+    RECORDING_LINE_PATTERN = re.compile(r'^(.+?)\[(.+?)\] 正在录制中')
     _MAX_LOG_LINES = 1000
     _LOG_TRIM_TO = 800
     _LOG_FLUSH_INTERVAL = 200
     _STATUS_REFRESH_INTERVAL = 10000          # 未录制时的刷新间隔（毫秒）
     _STATUS_REFRESH_INTERVAL_ACTIVE = 3000   # 有录制直播间时的刷新间隔（毫秒）
+
+    # 由构建方法（_build_*）初始化的实例组件声明，供类型检查器识别。
+    # customtkinter 无类型存根，CTkFrame 推断为 Unknown；改用有 typeshed 存根的
+    # tkinter.Frame 作为具体声明类型（运行时 CTkFrame 同样可赋值）。
+    sidebar: "tk.Frame"
+
+    # 以下实例组件仅在 _build_* 方法中初始化，而 _build_* 均在 __init__ 中被
+    # self._setup_ui() 调用，运行期必然已初始化。此处仅做类型声明（供 .configure
+    # 等方法类型检查），其「未初始化」告警由文件顶部 reportUninitializedInstanceVariable=none 关闭。
+    _sidebar_dot_item: int
+    _big_dot: tk.Canvas
+    _big_dot_item: int
+    sidebar_status_label: ctk.CTkLabel
+    appearance_menu: ctk.CTkOptionMenu
+    big_status_label: ctk.CTkLabel
+    big_status_sub: ctk.CTkLabel
+    info_interval: ctk.CTkLabel
+    info_format: ctk.CTkLabel
+    info_tray: ctk.CTkLabel
+    info_time: ctk.CTkLabel
+    start_btn: ctk.CTkButton
+    stop_btn: ctk.CTkButton
+    config_text: ctk.CTkTextbox
+    reload_btn: ctk.CTkButton
+    save_btn: ctk.CTkButton
+    log_text: tk.Text
+    _q_stat_total: ctk.CTkLabel
+    _q_stat_ok: ctk.CTkLabel
+    _q_stat_down: ctk.CTkLabel
+    _quality_scroll: ctk.CTkScrollableFrame
 
     def __init__(self, root: ctk.CTk):
         # 初始化 GUI 主窗口及所有组件
@@ -366,17 +454,31 @@ class LiveRecorderGUI:
         # 外观模式：跟随系统
         ctk.set_appearance_mode("system")
 
+        # status_pill 由 _build_header 重建并布局；此处先以有类型的占位实例初始化，
+        # 消除 reportUninitializedInstanceVariable（未打包的 Frame 不会渲染）。
+        self.status_pill: tk.Frame = tk.Frame(self.root)
+        # _sidebar_dot 等同理：构建方法重建并打包，此处以有类型占位实例初始化。
+        self._sidebar_dot: tk.Canvas = tk.Canvas(self.status_pill)
+
         # 路径配置
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
-        self.url_config_file = os.path.join(self.script_dir, "config", "URL_config.ini")
-        self.main_config_file = os.path.join(self.script_dir, "config", "config.ini")
-        self.downloads_dir = os.path.join(self.script_dir, "downloads")
+        # 冻结后 GUI 模块位于 exe 同级的 _internal/，而 config/ ffmpeg/ node/ downloads/
+        # 等运行时资源保持在 exe 同级目录（_internal 的父目录）。源码运行时
+        # self.script_dir 即项目根，无需回退。
+        if os.path.basename(os.path.normpath(self.script_dir)) == '_internal':
+            self.app_root = os.path.dirname(self.script_dir)
+        else:
+            self.app_root = self.script_dir
+        self.url_config_file = os.path.join(self.app_root, "config", "URL_config.ini")
+        self.main_config_file = os.path.join(self.app_root, "config", "config.ini")
+        self.downloads_dir = os.path.join(self.app_root, "downloads")
 
         # 进程状态（线程安全访问）
         self._process_lock = threading.Lock()
         self._process: subprocess.Popen[str] | None = None
         self._process_pid: int | None = None
         self._running = False
+        self._stopping = False  # 停止进行中标志：阻塞启动/重复停止，消除停止竞态窗口
 
         self.output_thread: threading.Thread | None = None
 
@@ -397,11 +499,17 @@ class LiveRecorderGUI:
         self._log_queue_has_data = False
         self._log_queue_lock = threading.Lock()  # 保护 _log_queue_has_data 跨线程访问
 
+        # 画质监控数据（线程安全：_quality_lock 保护 _quality_data）
+        # {name: {set_quality, actual_quality, downgraded, alert_time, alert_message, recording, last_seen}}
+        self._quality_lock = threading.Lock()
+        self._quality_data: dict[str, dict[str, str | bool | float]] = {}
+        self._quality_last_displayed: dict[str, dict[str, str | bool | float]] = {}
+
         # UI 线程事件队列：后台线程一律通过 post_ui 投递回调，
         # 由 _pump_ui_events 在 UI 线程执行。tkinter 不是线程安全的，
         # 后台线程直接调 root.after/createcommand 会随机崩溃
         # （RuntimeError: main thread is not in main loop）。
-        self._ui_event_queue: queue.Queue[tuple[Any, tuple[Any, ...]]] = queue.Queue()
+        self._ui_event_queue: queue.Queue[tuple[Callable[..., None], tuple[object, ...]]] = queue.Queue()
         self._pump_active = True
         self._ui_pump_job_id: str | None = None
 
@@ -419,6 +527,7 @@ class LiveRecorderGUI:
         self._quitting = False
         self._close_dialog: ctk.CTkToplevel | None = None
 
+        self.sidebar = self._build_sidebar()
         self._setup_ui()
         self._load_config()
         self._schedule_log_flush()
@@ -427,7 +536,7 @@ class LiveRecorderGUI:
 
     # ─── UI 线程事件泵（线程安全调度） ──────────────────────
 
-    def post_ui(self, callback: Any, *args: Any) -> None:
+    def post_ui(self, callback: Callable[..., None], *args: object) -> None:
         # 从任意线程安全地调度回调到 UI 线程执行（只写队列，不触碰 Tk）
         self._ui_event_queue.put((callback, args))
 
@@ -502,11 +611,10 @@ class LiveRecorderGUI:
         self.root.grid_columnconfigure(1, weight=1)
         self.root.grid_rowconfigure(0, weight=1)
 
-        self._build_sidebar()
         self._build_content()
         self._show_page("dashboard")
 
-    def _build_sidebar(self) -> None:
+    def _build_sidebar(self) -> "tk.Frame":
         # 构建左侧导航栏
         sidebar = ctk.CTkFrame(
             self.root, corner_radius=0,
@@ -515,7 +623,6 @@ class LiveRecorderGUI:
         )
         sidebar.grid(row=0, column=0, sticky="nsew")
         sidebar.grid_propagate(False)
-        self.sidebar = sidebar
 
         # 品牌区
         brand = ctk.CTkFrame(sidebar, fg_color="transparent")
@@ -559,6 +666,7 @@ class LiveRecorderGUI:
         nav.pack(fill=tk.X, padx=12, pady=(18, 0))
 
         self._add_nav_button(nav, "dashboard", "📊   控制台")
+        self._add_nav_button(nav, "quality", "🎯   画质监控")
         self._add_nav_button(nav, "config", "📝   URL 配置")
         self._add_nav_button(nav, "logs", "📋   运行日志")
 
@@ -602,6 +710,8 @@ class LiveRecorderGUI:
             fg_color=Colors.DANGER, hover_color=Colors.DANGER_HOVER,
             text_color="#FFFFFF", anchor=tk.W
         ).pack(fill=tk.X)
+
+        return sidebar
 
     def _add_nav_button(self, parent: ctk.CTkFrame, page_id: str, text: str) -> None:
         # 添加侧边栏导航按钮
@@ -665,6 +775,7 @@ class LiveRecorderGUI:
         container.grid_rowconfigure(0, weight=1)
 
         self._pages["dashboard"] = self._build_dashboard_page(container)
+        self._pages["quality"] = self._build_quality_page(container)
         self._pages["config"] = self._build_config_page(container)
         self._pages["logs"] = self._build_logs_page(container)
 
@@ -895,7 +1006,7 @@ class LiveRecorderGUI:
             state=tk.DISABLED,
             selectbackground=Colors.TERMINAL_SELECT, selectforeground="#FFFFFF"
         )
-        scrollbar = ctk.CTkScrollbar(term_wrap, command=self.log_text.yview,
+        scrollbar = ctk.CTkScrollbar(term_wrap, command=cast("Callable[..., None]", self.log_text.yview),
                                      fg_color=Colors.TERMINAL_BG,
                                      button_color="#30363D",
                                      button_hover_color="#484F58")
@@ -927,6 +1038,117 @@ class LiveRecorderGUI:
         ).pack(side=tk.LEFT, padx=6)
 
         return page
+
+    # ─── 页面：画质监控 ─────────────────────────────────────
+
+    def _build_quality_page(self, parent: ctk.CTkFrame) -> ctk.CTkFrame:
+        # 画质监控页面：检测各直播间实际画质是否与设置一致
+        page = ctk.CTkFrame(parent, fg_color="transparent")
+        page.grid_columnconfigure(0, weight=1)
+        page.grid_rowconfigure(1, weight=1)
+
+        # 统计卡片
+        summary_card = self._create_card(page)
+        summary_card.grid(row=0, column=0, sticky="ew", pady=(0, 14))
+
+        summary_body = ctk.CTkFrame(summary_card, fg_color="transparent")
+        summary_body.pack(fill=tk.X, padx=18, pady=16)
+        summary_body.grid_columnconfigure((0, 1, 2), weight=1)
+
+        self._q_stat_total = self._add_quality_stat_item(summary_body, "录制中", "0", 0, Colors.PRIMARY)
+        self._q_stat_ok = self._add_quality_stat_item(summary_body, "画质正常", "0", 1, Colors.SUCCESS)
+        self._q_stat_down = self._add_quality_stat_item(summary_body, "画质降级", "0", 2, Colors.DANGER)
+
+        # 详情卡片
+        detail_card = self._create_card(page, "🎯  画质监控（实时检测实际画质是否与设置一致）")
+        detail_card.grid(row=1, column=0, sticky="nsew")
+
+        inner = ctk.CTkFrame(detail_card, fg_color="transparent")
+        inner.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 14))
+
+        self._quality_scroll = ctk.CTkScrollableFrame(inner, fg_color="transparent")
+        self._quality_scroll.pack(fill=tk.BOTH, expand=True)
+
+        # 初始空状态
+        ctk.CTkLabel(
+            self._quality_scroll,
+            text="暂无录制中的直播间\n\n启动录制后，将自动检测各直播间的实际画质是否与设置一致",
+            font=Fonts.body(),
+            text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
+            justify=tk.CENTER
+        ).pack(pady=60)
+
+        return page
+
+    def _add_quality_stat_item(self, parent: ctk.CTkFrame, label: str, value: str,
+                               col: int, color: str) -> ctk.CTkLabel:
+        # 在统计卡片中添加一个统计项，返回值标签便于后续更新
+        box = ctk.CTkFrame(parent, fg_color="transparent")
+        box.grid(row=0, column=col, padx=10, pady=4, sticky="ew")
+        box.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(box, text=label, font=Fonts.small(),
+                     text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK)).pack(anchor=tk.CENTER)
+        val = ctk.CTkLabel(box, text=value, font=Fonts.title(), text_color=color)
+        val.pack(anchor=tk.CENTER, pady=(2, 0))
+        return val
+
+    def _add_quality_header_row(self) -> None:
+        # 添加画质监控表头行
+        header = ctk.CTkFrame(self._quality_scroll, fg_color="transparent", height=28)
+        header.pack(fill=tk.X, pady=(0, 2))
+        header.pack_propagate(False)
+        header.grid_columnconfigure(0, weight=3)
+        header.grid_columnconfigure(1, weight=1)
+        header.grid_columnconfigure(2, weight=1)
+        header.grid_columnconfigure(3, weight=1)
+        header.grid_columnconfigure(4, weight=2)
+        for col, text in enumerate(["主播名称", "设置画质", "实际画质", "状态", "告警时间"]):
+            ctk.CTkLabel(header, text=text, font=Fonts.small(bold=True),
+                         text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
+                         anchor=tk.W).grid(row=0, column=col, sticky=tk.W, padx=6, pady=4)
+
+    def _add_quality_data_row(self, name: str, info: dict[str, str | bool | float]) -> None:
+        # 添加一行画质监控数据
+        downgraded = bool(info.get("downgraded", False))
+        set_q = info.get("set_quality", "—")
+        actual_q = info.get("actual_quality", "")
+        alert_time = info.get("alert_time", "")
+
+        if downgraded:
+            actual_display = actual_q or "—"
+            status_text = "⚠ 降级"
+            status_color = Colors.DANGER
+            actual_color = Colors.DANGER
+            row_fg = ("#FEF2F2", "#2A1518")
+        else:
+            actual_display = "✓ 同等"
+            status_text = "✓ 正常"
+            status_color = Colors.SUCCESS
+            actual_color = Colors.SUCCESS
+            row_fg = "transparent"
+
+        row = ctk.CTkFrame(self._quality_scroll, fg_color=row_fg, corner_radius=6, height=34)
+        row.pack(fill=tk.X, pady=1)
+        row.pack_propagate(False)
+        row.grid_columnconfigure(0, weight=3)
+        row.grid_columnconfigure(1, weight=1)
+        row.grid_columnconfigure(2, weight=1)
+        row.grid_columnconfigure(3, weight=1)
+        row.grid_columnconfigure(4, weight=2)
+
+        ctk.CTkLabel(row, text=name, font=Fonts.body(),
+                     text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
+                     anchor=tk.W).grid(row=0, column=0, sticky=tk.W, padx=6, pady=5)
+        ctk.CTkLabel(row, text=set_q, font=Fonts.body(),
+                     text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
+                     anchor=tk.W).grid(row=0, column=1, sticky=tk.W, padx=4, pady=5)
+        ctk.CTkLabel(row, text=actual_display, font=Fonts.body(bold=downgraded),
+                     text_color=actual_color, anchor=tk.W).grid(row=0, column=2, sticky=tk.W, padx=4, pady=5)
+        ctk.CTkLabel(row, text=status_text, font=Fonts.body(bold=True),
+                     text_color=status_color, anchor=tk.W).grid(row=0, column=3, sticky=tk.W, padx=4, pady=5)
+        ctk.CTkLabel(row, text=alert_time if downgraded else "—", font=Fonts.small(),
+                     text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
+                     anchor=tk.W).grid(row=0, column=4, sticky=tk.W, padx=4, pady=5)
 
     def _clear_log(self) -> None:
         # 清空日志显示
@@ -1097,12 +1319,33 @@ class LiveRecorderGUI:
 
     def start_recording(self) -> None:
         # 开始录制
+        if self._stopping:
+            # 停止流程尚未完成，禁止在此期间启动新录制，避免竞态（双击停止/停止中误点启动）
+            self._log("停止流程进行中，暂不可启动新录制", "warn")
+            return
         if self.process is not None:
             messagebox.showwarning("警告", "录制已在运行中！")
             return
 
         try:
-            main_py = os.path.join(self.script_dir, "main.py")
+            # 冻结（PyInstaller 打包）模式下 sys.executable 指向 GUI exe 自身，
+            # 若继续用 [sys.executable, main.py] 会递归拉起 GUI；
+            # 改为直接调用同目录下的 CLI 可执行文件 DouyinLiveRecorder(.exe)。
+            # 源码运行模式保持原行为不变。
+            if getattr(sys, 'frozen', False):
+                cli_name = "DouyinLiveRecorder.exe" if sys.platform == 'win32' else "DouyinLiveRecorder"
+                # 冻结布局：GUI 自身位于 _internal/，CLI exe 与 GUI exe 同目录（_internal 的父目录）。
+                # 平铺布局下 self.script_dir 即根目录，故向上回退一层仅在处于 _internal 时生效。
+                base_dir = self.script_dir
+                if os.path.basename(os.path.normpath(base_dir)) == '_internal':
+                    base_dir = os.path.dirname(base_dir)
+                cli_exe = os.path.join(base_dir, cli_name)
+                if not os.path.isfile(cli_exe):
+                    raise FileNotFoundError(f"未找到录制核心程序: {cli_exe}")
+                record_cmd = [cli_exe]
+            else:
+                main_py = os.path.join(self.script_dir, "main.py")
+                record_cmd = [sys.executable, main_py]
 
             startupinfo = None
             env = os.environ.copy()
@@ -1122,7 +1365,7 @@ class LiveRecorderGUI:
                 creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NEW_CONSOLE
 
             proc = subprocess.Popen(
-                [sys.executable, main_py],
+                record_cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -1141,6 +1384,11 @@ class LiveRecorderGUI:
             self.start_btn.configure(state=tk.DISABLED)
             self.stop_btn.configure(state=tk.NORMAL)
 
+            # 清空上一轮的画质监控数据，避免旧的降级告警残留到本次会话
+            with self._quality_lock:
+                self._quality_data.clear()
+            self._quality_last_displayed = {}
+
             self._set_status(Colors.SUCCESS, True)
             self._update_status_bar()
 
@@ -1149,7 +1397,7 @@ class LiveRecorderGUI:
 
             self._log("━" * 40)
             self._log(f"录制进程已启动 (PID: {proc.pid})")
-            self._log(f"Python: {sys.executable}")
+            self._log(f"执行程序: {record_cmd[0]}")
             self._log(f"工作目录: {self.script_dir}")
             self._log("━" * 40)
 
@@ -1162,7 +1410,7 @@ class LiveRecorderGUI:
             self.running = False
             self.start_btn.configure(state=tk.NORMAL)
             self.stop_btn.configure(state=tk.DISABLED)
-            self._set_status(Colors.ERROR, False)
+            self._set_status(Colors.DANGER, False)
             self._update_status_bar()
 
     def stop_recording(self) -> None:
@@ -1173,11 +1421,13 @@ class LiveRecorderGUI:
             messagebox.showwarning("警告", "没有正在运行的录制进程！")
             return
 
+        # 进入停止流程：置位标志并禁用启动按钮，避免停止窗口内被重复触发或误启动
+        self._stopping = True
+        self.stop_btn.configure(state=tk.DISABLED)
+        self.start_btn.configure(state=tk.DISABLED)
+
         self._log("━" * 40)
         self._log("正在停止录制...")
-
-        # 防止等待线程完成前用户重复点击停止按钮
-        self.stop_btn.configure(state=tk.DISABLED)
 
         # 优雅退出：让 main.py 的信号处理器自行清理其下的 ffmpeg（孙子进程）。
         # 子进程启动时使用 CREATE_NEW_CONSOLE 隐藏控制台 + 独立进程组，
@@ -1231,6 +1481,7 @@ class LiveRecorderGUI:
             self.running = False
             self.process = None
             self.process_pid = None
+            self._stopping = False
 
             # 通过事件泵路由回 UI 线程（禁止直接跨线程调用 root.after）
             self.post_ui(self._on_recording_stopped)
@@ -1270,7 +1521,7 @@ class LiveRecorderGUI:
 
         while True:
             try:
-                line = proc.stdout.readline()
+                line = cast(str, proc.stdout.readline())
                 if not line:
                     if proc.poll() is not None:
                         flush_batch()
@@ -1284,6 +1535,7 @@ class LiveRecorderGUI:
                     continue
 
                 clean_line = self.ANSI_ESCAPE_PATTERN.sub('', line.rstrip())
+                self._parse_quality_log(clean_line)
                 batch.append((clean_line, "info"))
 
                 if len(batch) >= batch_size:
@@ -1365,6 +1617,9 @@ class LiveRecorderGUI:
     def _process_ended(self) -> None:
         # 子进程结束回调（仅在 UI 线程中调用）
         # 等待输出线程收尾，确保所有日志都被读取到 UI 后再重置状态
+        if self._stopping:
+            # 手动停止流程进行中，生命周期由其（_on_recording_stopped）统一收尾，避免重复重置 UI
+            return
         if self.output_thread and self.output_thread.is_alive():
             self.output_thread.join(timeout=5)
         self.running = False
@@ -1397,6 +1652,112 @@ class LiveRecorderGUI:
             has_data = self._log_queue_has_data
         if has_data or not self._log_queue.empty():
             self._log_flush_job_id = self.root.after(self._LOG_FLUSH_INTERVAL, self._schedule_log_flush)
+
+    # ─── 画质监控 ──────────────────────────────────────────
+
+    def _parse_quality_log(self, line: str) -> None:
+        # 解析子进程日志行，提取画质降级告警和录制状态信息。
+        # 可在输出线程中调用（仅操作 _quality_data，不触碰 Tk 对象）。
+        line = line.lstrip('\r')
+
+        # 剥离 loguru 前缀（控制台格式 "{time} | {level} - {message}"，
+        # 文件格式 "{time} | {level} | {module}:{func}:{line} - {message}"）。
+        # 找到最后一个 " | " 后的 " - "，取其后内容作为 message。
+        msg = line
+        if ' | ' in line:
+            pipe_idx = line.rfind(' | ')
+            dash_idx = line.find(' - ', pipe_idx)
+            if dash_idx > 0:
+                msg = line[dash_idx + 3:]
+
+        # 画质降级告警："{name} 画质降级：设置 {zh}({code}) 实际 {zh}({code})"
+        m = self.QUALITY_DOWNGRADE_PATTERN.search(msg)
+        if m:
+            name = m.group(1).strip()
+            set_zh, set_code = m.group(2), m.group(3)
+            actual_zh, actual_code = m.group(4), m.group(5)
+            with self._quality_lock:
+                info = self._quality_data.setdefault(name, {})
+                info.update({
+                    "set_quality": set_zh,
+                    "actual_quality": actual_zh,
+                    "downgraded": True,
+                    "alert_time": self._get_timestamp(),
+                    "alert_message": f"设置 {set_zh}({set_code}) 实际 {actual_zh}({actual_code})",
+                    "recording": True,
+                    "last_seen": time.time(),
+                })
+            return
+
+        # 录制中行："{name}[{quality}] 正在录制中 {duration}"
+        m = self.RECORDING_LINE_PATTERN.match(msg)
+        if m:
+            name = m.group(1).strip()
+            quality = m.group(2).strip()
+            with self._quality_lock:
+                info = self._quality_data.setdefault(name, {})
+                info["recording"] = True
+                info["set_quality"] = quality
+                info["last_seen"] = time.time()
+                # 未检测到降级告警时，认为实际画质与设置一致
+                if not info.get("downgraded"):
+                    info["actual_quality"] = quality
+            return
+
+        # "没有正在录制" → 清除所有录制标记
+        if "没有正在录制" in msg or "没有正在监测和录制的直播" in msg:
+            with self._quality_lock:
+                for info in self._quality_data.values():
+                    info["recording"] = False
+
+    def _update_quality_display(self) -> None:
+        # 更新画质监控页面显示（仅在 UI 线程中调用）
+        if not hasattr(self, '_quality_scroll'):
+            return
+
+        now = time.time()
+        with self._quality_lock:
+            # 清除超过 30 秒未更新的录制标记（直播已停止但未输出"没有正在录制"）
+            for info in self._quality_data.values():
+                if info.get("recording") and now - cast(float, info.get("last_seen", 0)) > 30:
+                    info["recording"] = False
+
+            data = {name: dict(info) for name, info in self._quality_data.items()
+                    if info.get("recording")}
+
+        # 数据未变化时跳过重建，避免闪烁
+        if data == self._quality_last_displayed:
+            return
+        self._quality_last_displayed = data
+
+        # 清除旧行
+        for widget in self._quality_scroll.winfo_children():
+            widget.destroy()
+
+        if not data:
+            ctk.CTkLabel(
+                self._quality_scroll,
+                text="暂无录制中的直播间\n\n启动录制后，将自动检测各直播间的实际画质是否与设置一致",
+                font=Fonts.body(),
+                text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
+                justify=tk.CENTER
+            ).pack(pady=60)
+        else:
+            # 表头 + 数据行
+            self._add_quality_header_row()
+            for name, info in sorted(data.items()):
+                self._add_quality_data_row(name, info)
+
+        # 更新统计
+        total = len(data)
+        down_count = sum(1 for info in data.values() if info.get("downgraded"))
+        ok_count = total - down_count
+        try:
+            self._q_stat_total.configure(text=str(total))
+            self._q_stat_ok.configure(text=str(ok_count))
+            self._q_stat_down.configure(text=str(down_count))
+        except Exception:
+            pass
 
     # ─── 时间与状态栏 ──────────────────────────────────────
 
@@ -1431,6 +1792,7 @@ class LiveRecorderGUI:
     def _schedule_status_refresh(self) -> None:
         # 动态刷新状态：有录制时每3秒刷新，否则每10秒
         self._update_status_bar()
+        self._update_quality_display()
         self._watch_url_config()
         interval = self._STATUS_REFRESH_INTERVAL_ACTIVE if self.running else self._STATUS_REFRESH_INTERVAL
         self._refresh_job_id = self.root.after(interval, self._schedule_status_refresh)
@@ -1653,7 +2015,9 @@ class LiveRecorderGUI:
                       font=Fonts.body(bold=True)).pack(side=tk.LEFT)
 
         # 键盘快捷键
-        dialog.bind("<Escape>", lambda e: dialog.destroy())
+        def _on_escape(_event: object = None) -> None:
+            dialog.destroy()
+        dialog.bind("<Escape>", _on_escape)
 
         # 延迟 grab，等待窗口可见
         dialog.after(100, lambda: self._safe_dialog_grab(dialog))

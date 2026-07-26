@@ -6,7 +6,7 @@
 # -----------------------------------------------------------------------------
 # 阶段1：构建阶段 - 安装 Python 依赖和 Node.js
 # -----------------------------------------------------------------------------
-FROM python:3.14-slim AS builder
+FROM python:3.13-slim-bookworm AS builder
 
 # 设置环境变量
 ENV PYTHONUNBUFFERED=1 \
@@ -14,13 +14,13 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# 安装构建依赖和 Node.js (用于 JS 签名脚本)
+# 安装构建依赖和 Node.js 22 LTS (用于 JS 签名脚本)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     gnupg \
     build-essential \
     ca-certificates \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
@@ -40,11 +40,11 @@ RUN /opt/venv/bin/pip install --upgrade pip \
 # -----------------------------------------------------------------------------
 # 阶段2：运行阶段 - 最小化运行镜像
 # -----------------------------------------------------------------------------
-FROM python:3.14-slim
+FROM python:3.13-slim-bookworm
 
 # 标签
 LABEL maintainer="Hmily <ihmily@github>" \
-      version="4.0.7" \
+      version="4.0.8-dev" \
       description="支持抖音、TikTok、YouTube等60+平台直播录制工具" \
       url="https://github.com/ihmily/DouyinLiveRecorder"
 
@@ -59,15 +59,17 @@ ENV PYTHONUNBUFFERED=1 \
     TERM=xterm-256color \
     PATH="/opt/venv/bin:$PATH"
 
-# 安装运行时依赖（含 Node.js — PyExecJS 运行签名脚本必需）
+# 安装运行时依赖（含 Node.js 22 LTS — PyExecJS 运行签名脚本必需）
+# 同时升级所有已安装软件包到最新安全版本
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     tzdata \
     curl \
     procps \
     ca-certificates \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
+    && apt-get upgrade -y \
     && ln -fs /usr/share/zoneinfo/${TZ} /etc/localtime \
     && dpkg-reconfigure -f noninteractive tzdata \
     && apt-get clean \
@@ -93,12 +95,13 @@ RUN mkdir -p logs downloads backup_config \
 # 切换到非 root 用户
 USER recorder
 
-# 健康检查：检测 main.py 主进程是否存活
+# 健康检查：同时兼容 main.py（命令行模式）与 web.py（Web 管理面板模式）
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-    CMD pgrep -f 'python main.py' || exit 1
+    CMD pgrep -f 'python (main|web).py' || exit 1
 
 # 暴露端口（用于可能的 Web UI）
 EXPOSE 8000
 
-# 默认运行命令
+# 默认运行命令：命令行录制模式
+# 如需 Web 管理面板模式，启动时改 command 为: python web.py
 ENTRYPOINT ["python", "main.py"]
