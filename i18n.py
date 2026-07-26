@@ -2,16 +2,17 @@
 # 国际化（i18n）模块 - 基于 gettext 的多语言支持系统
 
 import os
-import sys
+import inspect
 import gettext
 import builtins
+from typing import TextIO
 from pathlib import Path
 
 
 def init_gettext(locale_dir: str | Path, locale_name: str):
     # 初始化 gettext 翻译环境
-    gettext.bindtextdomain(locale_name, locale_dir)
-    gettext.textdomain(locale_name)
+    _ = gettext.bindtextdomain(locale_name, locale_dir)
+    _ = gettext.textdomain(locale_name)
     os.environ['LANG'] = f'{locale_name}.utf8'
     return gettext.gettext
 
@@ -25,23 +26,38 @@ else:
     locale_path = module_dir / 'i18n'  # 源码运行位置
 _tr = init_gettext(locale_path, 'zh_CN')  # 默认中文
 original_print = builtins.print  # 保存原始 print 函数
-package_name = 'src'  # 仅翻译 src 包下的代码输出
+
+# 需要翻译的源码目录：src/ 包以及项目根（main.py 等顶层脚本）
+# 统一规范化路径分隔符，兼容 Windows 下 sys._getframe 返回 / 而 os.path.realpath 返回 \ 的情况
+_project_root = os.path.normpath(str(module_dir))
+
+def _should_translate(caller_file: str) -> bool:
+    # 判断调用者文件是否来自需要翻译的源码目录
+    caller_norm = os.path.normpath(caller_file)
+    # 在项目根目录下即为项目源码（含 src/ 及 main.py/web.py/gui.py 等）
+    return caller_norm.startswith(_project_root)
 
 
-def translated_print(*args, **kwargs):
-    # 包装后的 print 函数，自动翻译 src 目录下的输出
+def translated_print(
+    *args: object,
+    sep: str = " ",
+    end: str = "\n",
+    file: TextIO | None = None,
+    flush: bool = False,
+) -> None:
+    # 包装后的 print 函数，自动翻译 src/ 和项目根目录下的输出
     try:
-        caller_file = sys._getframe(1).f_code.co_filename  # 获取上一层调用者的文件
-        should_translate = package_name in caller_file  # 检查是否来自 src 目录
+        frame = inspect.currentframe()
+        caller_file = frame.f_back.f_code.co_filename if frame and frame.f_back else ""
+        should_translate = _should_translate(caller_file)
     except (ValueError, AttributeError):
         should_translate = False
 
-    sep = kwargs.get('sep', ' ')
-    translated_args = []
+    translated_args: list[str] = []
     for arg in args:
         text = str(arg)
         if should_translate:
             text = _tr(text)  # 翻译文本
         translated_args.append(text)
 
-    original_print(sep.join(translated_args), **kwargs)  # 调用原始 print
+    original_print(sep.join(translated_args), sep=sep, end=end, file=file, flush=flush)  # 调用原始 print

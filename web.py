@@ -10,12 +10,45 @@
 import os
 import sys
 import threading
+import asyncio
 from datetime import datetime
+from typing import cast
 
 # 确保项目根在 sys.path
 _script_dir = os.path.dirname(os.path.realpath(__file__))
 if _script_dir not in sys.path:
     sys.path.insert(0, _script_dir)
+
+# 中文 Windows 控制台（尤其 PyInstaller 冻结后）stdout 默认 GBK 编码，
+# 打印中文/emoji 会出现乱码，emoji（如警告符 ⚠）还会抛 UnicodeEncodeError 崩溃。
+# 统一改为 UTF-8 输出，并把控制台代码页切到 65001，保证冻结后中文正常显示。
+def _reconfigure_stream(stream: object) -> None:
+    # 用 getattr 探测 reconfigure 是否存在（避免 isinstance 依赖具体类型、
+    # 也避免将 Any 传入 hasattr），仅当为可调用时才执行。
+    reconfigure = getattr(stream, "reconfigure", None)
+    if callable(reconfigure):
+        try:
+            _ = reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
+def _fix_encoding():
+    _streams: list[object] = [getattr(sys, "stdout", None), getattr(sys, "stderr", None)]
+    for _s in _streams:
+        if _s is not None:
+            _reconfigure_stream(_s)
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            _k32 = ctypes.windll.kernel32
+            _k32.SetConsoleOutputCP(65001)
+            _k32.SetConsoleCP(65001)
+        except Exception:
+            pass
+
+
+_fix_encoding()
 
 
 def _enter_background_mode(logs_dir: str, host: str, port: int) -> None:
@@ -28,7 +61,9 @@ def _enter_background_mode(logs_dir: str, host: str, port: int) -> None:
     print("[web] 进入后台运行模式，控制台窗口将隐藏")
     print(f"[web] 日志文件: {log_path}")
     print(f"[web] 访问地址: http://{host}:{port}")
-    sys.stdout.flush()
+    _flush = getattr(sys.stdout, "flush", None)
+    if callable(_flush):
+        _ = _flush()
 
     # 重定向输出到日志文件（buffering=1 行缓冲，确保日志实时写入）
     log_stream = open(log_path, 'a', encoding='utf-8', buffering=1)
@@ -47,7 +82,7 @@ def _enter_background_mode(logs_dir: str, host: str, port: int) -> None:
     if sys.platform == 'win32':
         try:
             import ctypes
-            hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+            hwnd: int = cast(int, ctypes.windll.kernel32.GetConsoleWindow())
             if hwnd:
                 ctypes.windll.user32.ShowWindow(hwnd, 0)
         except Exception:
@@ -71,8 +106,8 @@ def main() -> None:
 
     # 读取 Web 配置（提前读取以便决定是否隐藏控制台）
     web_cfg = read_web_config(config_file)
-    host = web_cfg["web_host"]
-    port = web_cfg["web_port"]
+    host: str = cast(str, web_cfg["web_host"])
+    port: int = cast(int, web_cfg["web_port"])
 
     # 后台模式：隐藏控制台窗口并重定向日志到文件
     if not web_cfg["web_show_console"]:
@@ -87,7 +122,7 @@ def main() -> None:
         kwargs={"non_interactive": True},
     )
     recorder_thread.start()
-    main._recorder_thread = recorder_thread  # 供 get_status() 检测存活（I6）
+    setattr(main, "_recorder_thread", recorder_thread)  # 供 get_status() 检测存活（I6）
     print(f"[web] 录制引擎已在守护线程启动 (tid={recorder_thread.ident})")
 
     app = create_app(
@@ -97,6 +132,17 @@ def main() -> None:
         logs_dir=logs_dir,
     )
 
+    # uvicorn Server 实例（而非 uvicorn.run）：便于托盘「退出程序」通过设置
+    # server.should_exit 触发优雅关闭，而非强制结束进程（避免 ffmpeg 残留）。
+    server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="info"))
+
+    # 系统托盘：Windows 下将控制台窗口改为「最小化到托盘」而非任务栏。
+    tray = None
+    if web_cfg.get("web_minimize_to_tray", True):
+        from src.web_tray import WebConsoleTray
+        tray = WebConsoleTray(host=host, port=port, server=server)
+        tray.start()
+
     print(f"[web] Web 管理面板启动中: http://{host}:{port}")
     print(f"[web] 认证: {'开启' if web_cfg['web_auth_enable'] else '关闭'}")
     # 不安全默认值告警（C1）：监听 0.0.0.0 且未启用认证时，局域网内任何人均可访问。
@@ -104,7 +150,27 @@ def main() -> None:
         print("[web] ⚠️ 警告: Web 面板监听 0.0.0.0 且未启用认证，局域网内任何人均可访问。")
         print("      建议在 config.ini [Web] 节设置 web_auth_enable = true 并配置 web_password，")
         print("      或将 web_host 改为 127.0.0.1 仅限本机访问。")
-    uvicorn.run(app, host=host, port=port, log_level="info")
+
+    # 阻塞运行；托盘「退出程序」或 Ctrl+C 会将 should_exit 置真，serve() 优雅返回。
+    # server.serve() 为 async 协程，必须用 asyncio.run 驱动事件循环真正运行，
+    # 否则仅生成一个被丢弃的协程对象，Web 服务不会启动。
+    asyncio.run(server.serve())
+
+    # 优雅关闭：serve() 返回后趁解释器尚存活主动清理，避免依赖 atexit 在模块部分卸载后才清理。
+    # 主动终止 ffmpeg 子进程，杜绝退出后残留孤儿进程。
+    try:
+        main.cleanup_all_ffmpeg_processes()
+    except Exception as e:
+        print(f"[web] 清理 ffmpeg 进程失败: {e}")
+    try:
+        from src.http_clients.async_http import close_all_clients_sync
+        close_all_clients_sync()
+    except Exception as e:
+        print(f"[web] 清理 HTTP 连接池失败: {e}")
+
+    # serve() 已返回（优雅关闭），收起托盘图标，进程随后正常退出。
+    if tray is not None:
+        tray.stop()
 
 
 if __name__ == "__main__":

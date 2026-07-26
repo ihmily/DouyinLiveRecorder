@@ -149,7 +149,7 @@ DouyinLiveRecorder/
 │   ├── logger.py              # Loguru 日志配置
 │   ├── proxy.py               # 代理检测
 │   ├── ab_sign.py             # 抖音 A-Bogus 签名
-│   ├── initializer.py         # Node.js 自动初始化
+│   ├── node_install.py        # Node.js 自动安装/初始化
 │   ├── weverse_auth.py        # Weverse 平台认证
 │   ├── web_api.py             # Web 管理面板 FastAPI 应用
 │   ├── web_config.py          # Web 面板配置读写
@@ -158,14 +158,15 @@ DouyinLiveRecorder/
 │   │   ├── config.py          # HTTP 客户端共享配置（SSL 验证开关）
 │   │   ├── async_http.py      # 异步 HTTP 客户端 (httpx)
 │   │   └── sync_http.py       # 同步 HTTP 客户端
-│   └── javascript/            # JavaScript 签名脚本
-│       ├── crypto-js.min.js
-│       ├── x-bogus.js
-│       ├── haixiu.js
-│       ├── laixiu.js
-│       ├── liveme.js
-│       ├── migu.js
-│       └── taobao-sign.js
+│   ├── javascript/            # JavaScript 签名脚本
+│   │   ├── crypto-js.min.js
+│   │   ├── x-bogus.js
+│   │   ├── haixiu.js
+│   │   ├── laixiu.js
+│   │   ├── liveme.js
+│   │   ├── migu.js
+│   │   └── taobao-sign.js
+│   └── ffmpeg_install.py     # FFmpeg 安装脚本
 ├── web/                        # Web 管理面板前端
 │   ├── index.html              # 单页应用入口
 │   ├── app.js                  # 前端逻辑（API、SSE、渲染）
@@ -190,7 +191,6 @@ DouyinLiveRecorder/
 ├── web.py                      # Web 管理面板入口
 ├── index.html                  # M3U8 视频播放器
 ├── msg_push.py                 # 消息推送模块
-├── ffmpeg_install.py           # FFmpeg 安装脚本
 ├── demo.py                     # 调用示例
 ├── i18n.py                     # 国际化实现
 ├── requirements.txt            # Python 依赖
@@ -360,6 +360,9 @@ web_password =
 web_token_expiry = 86400
 # 是否显示控制台窗口（false 时后台运行，日志写入 logs/web_console.log）
 web_show_console = true
+# 控制台最小化到系统托盘（而非任务栏），仅 Windows 生效；
+# 关闭按钮会被禁用，退出请使用托盘图标的「退出程序」
+web_minimize_to_tray = true
 ```
 
 ### 直播间配置 (config/URL_config.ini)
@@ -429,6 +432,8 @@ python web.py
 Web 模式与命令行模式共用同一录制引擎与配置文件，直播间地址的增删改会自动被录制主循环热加载。
 
 后台运行模式：将 `web_show_console` 设为 `false`，Windows 下会隐藏控制台窗口，日志写入 `logs/web_console.log`，程序完全后台运行。
+
+Windows 下控制台默认「最小化到系统托盘」（`web_minimize_to_tray = true`）：点击最小化后窗口不在任务栏显示，而是收起到系统托盘，双击托盘图标即可恢复；标题栏关闭按钮已禁用，需从托盘图标菜单的「退出程序」退出。
 
 > ⚠️ **安全提示**：默认监听 0.0.0.0 且未启用认证，公网/局域网部署请务必开启 `web_auth_enable` 并设置强密码，或将 `web_host` 改为 `127.0.0.1`。
 

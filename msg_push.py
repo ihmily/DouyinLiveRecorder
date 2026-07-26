@@ -4,13 +4,14 @@
 
 import json
 import base64
+import http.client
 import urllib.request
 import urllib.error
 import smtplib
 from email.header import Header
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-import src.logger  # trigger loguru config side effects
+from typing import cast
 from loguru import logger
 
 # 配置 HTTP 客户端（不使用代理，防止本地推送被代理干扰）
@@ -19,10 +20,19 @@ opener: urllib.request.OpenerDirector = urllib.request.build_opener(no_proxy_han
 headers: dict[str, str] = {'Content-Type': 'application/json'}
 
 
+def _mask_secret(secret: str) -> str:
+    # 脱敏：仅保留前后各 2 位用于排查，其余以 * 遮挡，避免凭证泄露到日志。
+    if not secret:
+        return ""
+    if len(secret) <= 4:
+        return "****"
+    return f"{secret[:2]}{'*' * (len(secret) - 4)}{secret[-2:]}"
+
+
 def dingtalk(url: str, content: str, number: str | None = None, is_atall: bool = False) -> dict[str, list[str | int]]:
     # 钉钉群机器人推送
-    success = []
-    error = []
+    success: list[str | int] = []
+    error: list[str | int] = []
     api_list = url.replace('，', ',').split(',') if url.strip() else []
     for api in api_list:
         json_data = {
@@ -33,9 +43,9 @@ def dingtalk(url: str, content: str, number: str | None = None, is_atall: bool =
         try:
             data = json.dumps(json_data).encode('utf-8')
             req = urllib.request.Request(api, data=data, headers=headers)
-            with opener.open(req, timeout=10) as response:
+            with cast(http.client.HTTPResponse, opener.open(req, timeout=10)) as response:
                 json_str = response.read().decode('utf-8')
-            json_data = json.loads(json_str)
+            json_data: dict[str, object] = cast(dict[str, object], json.loads(json_str))
             if json_data.get('errcode') == 0:
                 success.append(api)
             else:
@@ -49,17 +59,17 @@ def dingtalk(url: str, content: str, number: str | None = None, is_atall: bool =
 
 def xizhi(url: str, title: str, content: str) -> dict[str, list[str | int]]:
     # 微信推送（Server酱/WeChat）
-    success = []
-    error = []
+    success: list[str | int] = []
+    error: list[str | int] = []
     api_list = url.replace('，', ',').split(',') if url.strip() else []
     for api in api_list:
         json_data = {'title': title, 'content': content}
         try:
             data = json.dumps(json_data).encode('utf-8')
             req = urllib.request.Request(api, data=data, headers=headers)
-            with opener.open(req, timeout=10) as response:
+            with cast(http.client.HTTPResponse, opener.open(req, timeout=10)) as response:
                 json_str = response.read().decode('utf-8')
-            json_data = json.loads(json_str)
+            json_data: dict[str, object] = cast(dict[str, object], json.loads(json_str))
             if json_data.get('code') == 200:
                 success.append(api)
             else:
@@ -101,8 +111,8 @@ def send_email(email_host: str, login_email: str, email_pass: str, sender_email:
             except ValueError:
                 port = 25
             smtp_obj = smtplib.SMTP(email_host, port, timeout=10)
-        smtp_obj.login(login_email, email_pass)
-        smtp_obj.sendmail(sender_email, receivers, message.as_string())
+        _ = smtp_obj.login(login_email, email_pass)
+        _ = smtp_obj.sendmail(sender_email, receivers, message.as_string())
         return {"success": receivers, "error": []}
     except smtplib.SMTPException as e:
         logger.warning(f'邮件推送失败, 推送邮箱：{to_email}, 错误信息:{e}')
@@ -113,7 +123,7 @@ def send_email(email_host: str, login_email: str, email_pass: str, sender_email:
     finally:
         if smtp_obj:
             try:
-                smtp_obj.quit()
+                _ = smtp_obj.quit()
             except smtplib.SMTPException:
                 pass
 
@@ -125,7 +135,7 @@ def tg_bot(chat_id: str | int, token: str, content: str) -> dict[str, list[str |
         url = f'https://api.telegram.org/bot{token}/sendMessage'
         data = json.dumps(json_data).encode('utf-8')
         req = urllib.request.Request(url, data=data, headers=headers)
-        with opener.open(req, timeout=15) as response:
+        with cast(http.client.HTTPResponse, opener.open(req, timeout=15)) as response:
             json_str = response.read().decode('utf-8')
         json.loads(json_str)
         return {"success": [1], "error": []}
@@ -138,8 +148,8 @@ def bark(api: str, title: str = "message", content: str = 'test', level: str = "
          badge: int = 1, auto_copy: int = 1, sound: str = "", icon: str = "", group: str = "",
          is_archive: int = 1, url: str = "") -> dict[str, list[str | int]]:
     # Bark 推送（iOS 通知）
-    success = []
-    error = []
+    success: list[str | int] = []
+    error: list[str | int] = []
     api_list = api.replace('，', ',').split(',') if api.strip() else []
     for _api in api_list:
         json_data = {
@@ -149,9 +159,9 @@ def bark(api: str, title: str = "message", content: str = 'test', level: str = "
         try:
             data = json.dumps(json_data).encode('utf-8')
             req = urllib.request.Request(_api, data=data, headers=headers)
-            with opener.open(req, timeout=10) as response:
+            with cast(http.client.HTTPResponse, opener.open(req, timeout=10)) as response:
                 json_str = response.read().decode("utf-8")
-            json_data = json.loads(json_str)
+            json_data: dict[str, object] = cast(dict[str, object], json.loads(json_str))
             if json_data.get('code') == 200:
                 success.append(_api)
             else:
@@ -167,8 +177,8 @@ def ntfy(api: str, title: str = "message", content: str = 'test', tags: str | li
          action_url: str = "", attach: str = "", filename: str = "", click: str = "", icon: str = "",
          delay: str = "", email: str = "", call: str = "") -> dict[str, list[str | int]]:
     # NTFY 推送（跨平台通知服务）
-    success = []
-    error = []
+    success: list[str | int] = []
+    error: list[str | int] = []
     api_list = api.replace('，', ',').split(',') if api.strip() else []
     if isinstance(tags, str):
         tags = tags.replace('，', ',').split(',') if tags else ['partying_face']
@@ -187,9 +197,9 @@ def ntfy(api: str, title: str = "message", content: str = 'test', tags: str | li
 
             data = json.dumps(json_data, ensure_ascii=False).encode('utf-8')
             req = urllib.request.Request(server, data=data, headers=headers)
-            with opener.open(req, timeout=10) as response:
+            with cast(http.client.HTTPResponse, opener.open(req, timeout=10)) as response:
                 json_str = response.read().decode("utf-8")
-            json_data = json.loads(json_str)
+            json_data: dict[str, object] = cast(dict[str, object], json.loads(json_str))
             if "error" not in json_data:
                 success.append(_api)
             else:
@@ -199,7 +209,7 @@ def ntfy(api: str, title: str = "message", content: str = 'test', tags: str | li
             error.append(_api)
             try:
                 error_msg = e.read().decode("utf-8")
-                error_detail = json.loads(error_msg).get("error", str(e))
+                error_detail = cast(dict[str, object], json.loads(error_msg)).get("error", str(e))
             except Exception:
                 error_detail = str(e)
             finally:
@@ -213,8 +223,8 @@ def ntfy(api: str, title: str = "message", content: str = 'test', tags: str | li
 
 def pushplus(token: str, title: str, content: str) -> dict[str, list[str | int]]:
     # PushPlus 推送
-    success = []
-    error = []
+    success: list[str | int] = []
+    error: list[str | int] = []
     token_list = token.replace('，', ',').split(',') if token.strip() else []
 
     for _token in token_list:
@@ -224,18 +234,18 @@ def pushplus(token: str, title: str, content: str) -> dict[str, list[str | int]]
             url = 'https://www.pushplus.plus/send'
             data = json.dumps(json_data).encode('utf-8')
             req = urllib.request.Request(url, data=data, headers=headers)
-            with opener.open(req, timeout=10) as response:
+            with cast(http.client.HTTPResponse, opener.open(req, timeout=10)) as response:
                 json_str = response.read().decode('utf-8')
-            json_data = json.loads(json_str)
+            json_data: dict[str, object] = cast(dict[str, object], json.loads(json_str))
 
             if json_data.get('code') == 200:
                 success.append(_token)
             else:
                 error.append(_token)
-                logger.warning(f'PushPlus推送失败, Token：{_token}, 失败信息：{json_data.get("msg", "未知错误")}')
+                logger.warning(f'PushPlus推送失败, Token：{_mask_secret(_token)}, 失败信息：{json_data.get("msg", "未知错误")}')
         except Exception as e:
             error.append(_token)
-            logger.warning(f'PushPlus推送失败, Token：{_token}, 错误信息:{e}')
+            logger.warning(f'PushPlus推送失败, Token：{_mask_secret(_token)}, 错误信息:{e}')
 
     return {"success": success, "error": error}
 
@@ -270,7 +280,7 @@ if __name__ == '__main__':
     bark_url = 'https://xxx.xxx.com/key/'
     # bark(bark_url, send_title, send_content)
 
-    ntfy(
+    _ = ntfy(
         api="https://ntfy.sh/xxxxx",
         title="直播推送",
         content="xxx已开播",

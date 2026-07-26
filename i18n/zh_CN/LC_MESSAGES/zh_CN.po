@@ -9,8 +9,9 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: DouyinLiveRecorder 4.0.8-dev\n"
+"MIME-Version: 1.0\n"
 "POT-Creation-Date: 2024-10-20 00:00+0800\n"
-"PO-Revision-Date: 2026-06-20 12:00+0800\n"
+"PO-Revision-Date: 2026-07-26 02:10+0800\n"
 "Last-Translator: Hmily <ihmily@github>\n"
 "Language-Team: Chinese\n"
 "Content-Type: text/plain; charset=UTF-8\n"
@@ -921,3 +922,23 @@ msgstr "写入配置文件时发生错误: {e}"
 #: src/utils.py
 msgid "{disk_root} Total: {disk_usage.total / (1024 ** 3):.2f} GB Used: {disk_usage.used / (1024 ** 3):.2f} GB Free: {free_space_gb:.2f} GB\n"
 msgstr "{disk_root} 总计: {disk_usage.total / (1024 ** 3):.2f} GB 已用: {disk_usage.used / (1024 ** 3):.2f} GB 可用: {free_space_gb:.2f} GB\n"
+
+# =============================================================================
+# main.py / room.py 顶层脚本（i18n 覆盖范围扩展后新增，2026-07-26）
+# =============================================================================
+#: main.py
+msgid "|                DouyinLiveRecorder                 |"
+msgstr "|                DouyinLiveRecorder                 |"
+
+#: main.py
+msgid "GitHub: https://github.com/ihmily/DouyinLiveRecorder"
+msgstr "GitHub: https://github.com/ihmily/DouyinLiveRecorder"
+
+#: main.py
+msgid "An unexpected error occurred:"
+msgstr "发生未知错误："
+
+#: src/room.py
+msgid "return web_rid:"
+msgstr "返回 web_rid："
+

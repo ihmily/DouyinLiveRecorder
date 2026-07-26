@@ -5,8 +5,10 @@
 import os
 import sys
 from dataclasses import dataclass, field
-from typing import Any, Optional
-from .utils import logger
+from typing import cast
+# loguru 的 logger 为模块级单例，src.logger 对其做过的配置在此同样生效；
+# 直接从此处导入可避免基于 basedpyright 的 "未从 src.utils 导出" 告警。
+from loguru import logger
 
 
 @dataclass(frozen=True)
@@ -41,17 +43,15 @@ class ProxyDetector:
 
     def __init__(self):
         # 初始化代理检测器
-        self.winreg: Any = None
-        self.__INTERNET_SETTINGS: Optional[Any] = None
+        self.__internet_settings = None
         if sys.platform.startswith('win'):
             import winreg
-            self.winreg = winreg
             self.__path = r'Software\Microsoft\Windows\CurrentVersion\Internet Settings'
             try:
                 # 仅需读取权限，避免非管理员用户因 KEY_ALL_ACCESS 而失败
                 key_user = winreg.ConnectRegistry(None, winreg.HKEY_CURRENT_USER)
                 try:
-                    self.__INTERNET_SETTINGS = winreg.OpenKeyEx(key_user, self.__path, 0, winreg.KEY_READ)
+                    self.__internet_settings = winreg.OpenKeyEx(key_user, self.__path, 0, winreg.KEY_READ)
                 finally:
                     key_user.Close()
             except OSError as err:
@@ -60,8 +60,8 @@ class ProxyDetector:
     def __del__(self):
         # 析构时关闭注册表句柄，避免资源泄漏
         try:
-            if self.__INTERNET_SETTINGS is not None:
-                self.__INTERNET_SETTINGS.Close()
+            if self.__internet_settings is not None:
+                self.__internet_settings.Close()
         except Exception:
             pass
 
@@ -83,15 +83,21 @@ class ProxyDetector:
         # Windows 系统获取代理信息（内部方法）
         ip, port = "", ""
         if self._is_proxy_enabled_windows():
+            if self.__internet_settings is None:
+                return "", ""
+            import winreg
             try:
-                ip_port = self.winreg.QueryValueEx(self.__INTERNET_SETTINGS, "ProxyServer")[0]
+                ip_port = cast(str, winreg.QueryValueEx(self.__internet_settings, "ProxyServer")[0])
                 if ip_port:
-                    # 兼容 "ip:port" 及多段代理配置（如 "http=ip:port;https=ip:port"），取第一段
-                    parts = ip_port.split(";")[0].split(":", 1)
-                    if len(parts) == 2:
-                        ip, port = parts
+                    # 兼容 "ip:port" 及多段代理配置（如 "http=ip:port;https=ip:port"）
+                    first = ip_port.split(";")[0]
+                    # 去掉多段代理的协议前缀（http=/https=/socks=），避免 "http=ip" 被误判为非法 IP
+                    if '=' in first:
+                        first = first.split('=', 1)[1]
+                    if ':' in first:
+                        ip, port = first.split(':', 1)
                     else:
-                        ip = parts[0]
+                        ip = first
             except FileNotFoundError as err:
                 logger.warning("No proxy information found: " + str(err))
             except Exception as err:
@@ -102,10 +108,11 @@ class ProxyDetector:
 
     def _is_proxy_enabled_windows(self) -> bool:
         # Windows 系统检查代理是否启用（内部方法）
-        if self.__INTERNET_SETTINGS is None:
+        if self.__internet_settings is None:
             return False
+        import winreg
         try:
-            if self.winreg.QueryValueEx(self.__INTERNET_SETTINGS, "ProxyEnable")[0] == 1:
+            if cast(int, winreg.QueryValueEx(self.__internet_settings, "ProxyEnable")[0]) == 1:
                 return True
         except FileNotFoundError as err:
             logger.warning("No proxy information found: " + str(err))
@@ -122,7 +129,7 @@ class ProxyDetector:
             'ftp': os.getenv('ftp_proxy')
         }
         ip = port = ""
-        for proto, proxy in proxies.items():
+        for _proto, proxy in proxies.items():
             if proxy:
                 # 去掉末尾斜杠，避免 path 被误解析为端口
                 proxy = proxy.rstrip('/')

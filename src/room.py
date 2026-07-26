@@ -9,6 +9,7 @@ import re
 import urllib.parse
 import execjs
 import httpx
+from typing import cast
 from . import JS_SCRIPT_PATH, utils
 
 
@@ -18,7 +19,7 @@ class UnsupportedUrlError(Exception):
 
 
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Linux; Android 11; SAMSUNG SM-G973U) AppleWebKit/537.36 (KHTML, like Gecko) '
+    'User-Agent': 'Mozilla/5.0 (Linux; Android 11; SAMSUNG SM-G973U) AppleWebKit/537.36 (KHTML, like Gecko) ' +
                   'SamsungBrowser/14.2 Chrome/87.0.4280.141 Mobile Safari/537.36',
     'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
     # 移除原硬编码的 s_v_web_id 访客校验 Cookie
@@ -41,7 +42,7 @@ async def _ensure_douyin_ttwid(proxy_addr: str | None = None) -> str:
         async with httpx.AsyncClient(proxy=proxy_addr, timeout=10) as client:
             response = await client.get(
                 'https://live.douyin.com/',
-                headers={'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                headers={'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
                                        '(KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36'},
                 follow_redirects=True
             )
@@ -55,7 +56,7 @@ async def _ensure_douyin_ttwid(proxy_addr: str | None = None) -> str:
 
 
 # X-bogus算法
-async def get_xbogus(url: str, headers: dict | None = None) -> str:
+async def get_xbogus(url: str, headers: dict[str, str] | None = None) -> str:
     if not headers or 'user-agent' not in (k.lower() for k in headers):
         headers = HEADERS
     query = urllib.parse.urlparse(url).query
@@ -63,12 +64,12 @@ async def get_xbogus(url: str, headers: dict | None = None) -> str:
     user_agent = next((v for k, v in headers.items() if k.lower() == 'user-agent'), HEADERS['User-Agent'])
     with open(f'{JS_SCRIPT_PATH}/x-bogus.js', encoding='utf-8') as f:
         xbogus_js = f.read()
-    xbogus = execjs.compile(xbogus_js).call('sign', query, user_agent)
+    xbogus = cast(str, execjs.compile(xbogus_js).call('sign', query, user_agent))
     return xbogus
 
 
 # 获取房间ID和用户secID
-async def get_sec_user_id(url: str, proxy_addr: str | None = None, headers: dict | None = None) -> tuple | None:
+async def get_sec_user_id(url: str, proxy_addr: str | None = None, headers: dict[str, str] | None = None) -> tuple[str, str] | None:
     if not headers or all(k.lower() not in ['user-agent', 'cookie'] for k in headers):
         headers = HEADERS
 
@@ -94,7 +95,7 @@ async def get_sec_user_id(url: str, proxy_addr: str | None = None, headers: dict
 
 
 # 获取抖音号
-async def get_unique_id(url: str, proxy_addr: str | None = None, headers: dict | None = None) -> str | None:
+async def get_unique_id(url: str, proxy_addr: str | None = None, headers: dict[str, str] | None = None) -> str | None:
     if not headers or all(k.lower() not in ['user-agent', 'cookie'] for k in headers):
         headers = HEADERS
 
@@ -114,7 +115,7 @@ async def get_unique_id(url: str, proxy_addr: str | None = None, headers: dict |
                                                 headers=headers, follow_redirects=True)
             matches = re.findall(r'unique_id":"(.*?)","verification_type', user_page_response.text)
             if matches:
-                unique_id = matches[-1]
+                unique_id = cast(str, matches[-1])
                 return unique_id
             else:
                 raise RuntimeError("Could not find unique_id in the response.")
@@ -125,8 +126,8 @@ async def get_unique_id(url: str, proxy_addr: str | None = None, headers: dict |
 
 
 # 获取直播间webID
-async def get_live_room_id(room_id: str, sec_user_id: str, proxy_addr: str | None = None, params: dict | None = None,
-                           headers: dict | None = None) -> str:
+async def get_live_room_id(room_id: str, sec_user_id: str, proxy_addr: str | None = None, params: dict[str, str] | None = None,
+                           headers: dict[str, str] | None = None) -> str:
     if not headers or all(k.lower() not in ['user-agent', 'cookie'] for k in headers):
         headers = HEADERS
 
@@ -153,9 +154,12 @@ async def get_live_room_id(room_id: str, sec_user_id: str, proxy_addr: str | Non
         async with httpx.AsyncClient(proxy=proxy_addr,
                                      timeout=15) as client:
             response = await client.get(api, headers=headers)
-            response.raise_for_status()
-            json_data = response.json()
-            return json_data['data']['room']['owner']['web_rid']
+            _ = response.raise_for_status()
+            json_data = cast(dict[str, object], response.json())
+            data = cast(dict[str, object], json_data.get('data', {}))
+            room = cast(dict[str, object], data.get('room', {}))
+            owner = cast(dict[str, object], room.get('owner', {}))
+            return cast(str, owner.get('web_rid'))
     except httpx.HTTPStatusError as e:
         print(f"HTTP status error occurred: {e.response.status_code}")
         raise

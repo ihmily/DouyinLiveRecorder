@@ -251,16 +251,14 @@
             for (var i = 0; i < rooms.length; i++) {
                 var r = rooms[i];
                 var checked = r.enabled ? ' checked' : '';
-                var toggleCall = 'toggleRoom(' + JSON.stringify(r.url) + ', this.checked)';
-                var deleteCall = 'deleteRoom(' + JSON.stringify(r.url) + ')';
                 html += '<tr>'
                     + '<td title="' + esc(r.url) + '">' + esc(r.url) + '</td>'
                     + '<td>' + esc(r.quality) + '</td>'
                     + '<td>' + esc(r.name) + '</td>'
                     + '<td><label class="switch"><input type="checkbox"' + checked
-                        + ' onchange="' + esc(toggleCall) + '"><span class="slider"></span></label></td>'
+                        + ' data-action="toggle" data-url="' + esc(r.url) + '"><span class="slider"></span></label></td>'
                     + '<td>' + (r.recording ? '是' : '否') + '</td>'
-                    + '<td><button class="danger" onclick="' + esc(deleteCall) + '">删除</button></td>'
+                    + '<td><button class="danger" data-action="delete" data-url="' + esc(r.url) + '">删除</button></td>'
                     + '</tr>';
             }
             tbody.innerHTML = html;
@@ -361,16 +359,14 @@
             var items = await api('/api/files?path=' + encodeURIComponent(path));
             // 面包屑：根目录 + 逐级路径
             var crumbHtml = '';
-            var rootCall = 'loadFiles(' + JSON.stringify('') + ')';
-            crumbHtml += '<a onclick="' + esc(rootCall) + '">根目录</a>';
+            crumbHtml += '<a data-path="">根目录</a>';
             var parts = path ? path.split('/') : [];
             var cumul = '';
             for (var i = 0; i < parts.length; i++) {
                 var p = parts[i];
                 if (!p) continue;
                 cumul = cumul ? cumul + '/' + p : p;
-                var call = 'loadFiles(' + JSON.stringify(cumul) + ')';
-                crumbHtml += ' / <a onclick="' + esc(call) + '">' + esc(p) + '</a>';
+                crumbHtml += ' / <a data-path="' + esc(cumul) + '">' + esc(p) + '</a>';
             }
             crumb.innerHTML = crumbHtml;
             // 文件列表
@@ -384,10 +380,9 @@
                 var icon = it.type === 'dir' ? '📁' : '📄';
                 var action;
                 if (it.type === 'dir') {
-                    var enterCall = 'loadFiles(' + JSON.stringify(it.path) + ')';
-                    action = '<button class="small" onclick="' + esc(enterCall) + '">进入</button>';
+                    action = '<button class="small" data-action="enter" data-path="' + esc(it.path) + '">进入</button>';
                 } else {
-                    action = '<button class="small" onclick="downloadFile(' + JSON.stringify(it.path) + ')">下载</button>';
+                    action = '<button class="small" data-action="download" data-path="' + esc(it.path) + '">下载</button>';
                 }
                 html += '<tr>'
                     + '<td>' + icon + ' ' + esc(it.name) + '</td>'
@@ -500,6 +495,38 @@
             addRoom();
         });
         $('config-save-btn').addEventListener('click', saveConfig);
+
+        // 事件委托：替换内联 onclick/onchange 拼接，避免每次渲染重新解析 JS 字符串，更稳健
+        $('rooms-tbody').addEventListener('change', function (e) {
+            var t = e.target;
+            if (t && t.matches && t.matches('input[type="checkbox"][data-action="toggle"]')) {
+                toggleRoom(t.getAttribute('data-url'), t.checked);
+            }
+        });
+        $('rooms-tbody').addEventListener('click', function (e) {
+            var t = e.target.closest && e.target.closest('button[data-action="delete"]');
+            if (t) {
+                deleteRoom(t.getAttribute('data-url'));
+            }
+        });
+        $('file-breadcrumb').addEventListener('click', function (e) {
+            var t = e.target.closest && e.target.closest('a[data-path]');
+            if (t) {
+                e.preventDefault();
+                loadFiles(t.getAttribute('data-path'));
+            }
+        });
+        $('files-tbody').addEventListener('click', function (e) {
+            var t = e.target.closest && e.target.closest('button[data-action]');
+            if (!t) return;
+            var action = t.getAttribute('data-action');
+            var p = t.getAttribute('data-path');
+            if (action === 'enter') {
+                loadFiles(p);
+            } else if (action === 'download') {
+                downloadFile(p);
+            }
+        });
 
         // 启动引导：尝试拉取状态，成功则进入仪表盘，否则显示登录
         (async function () {

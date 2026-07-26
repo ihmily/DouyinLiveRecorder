@@ -9,6 +9,7 @@
 - [依赖关系](#依赖关系)
 - [配置文件说明](#配置文件说明)
 - [运行方式](#运行方式)
+- [打包与发布](#打包与发布)
 - [设计模式](#设计模式)
 
 ---
@@ -131,7 +132,7 @@ DouyinLiveRecorder/
 │   ├── logger.py                       # Loguru 日志配置
 │   ├── proxy.py                        # 代理检测
 │   ├── ab_sign.py                      # 抖音签名算法 (A-Bogus)
-│   ├── initializer.py                  # Node.js 自动初始化
+│   ├── node_install.py                # Node.js 自动安装/初始化
 │   ├── weverse_auth.py                 # Weverse 平台认证
 │   ├── debug_douyin_streams.py         # 抖音流数据调试工具
 │   ├── web_api.py                      # Web 管理面板 FastAPI 应用
@@ -141,14 +142,15 @@ DouyinLiveRecorder/
 │   │   ├── config.py                  # HTTP 客户端共享运行时配置（SSL 验证开关）
 │   │   ├── async_http.py               # 异步 HTTP 客户端 (httpx)
 │   │   └── sync_http.py                # 同步 HTTP 客户端
-│   └── javascript/                     # JavaScript 签名脚本
-│       ├── crypto-js.min.js            # 加密库
-│       ├── x-bogus.js                  # 抖音 X-Bogus 签名
-│       ├── haixiu.js                   # 嗨秀签名
-│       ├── laixiu.js                   # 来秀签名
-│       ├── liveme.js                   # LiveMe 签名
-│       ├── migu.js                     # 咪咕签名
-│       └── taobao-sign.js              # 淘宝签名
+│   ├── javascript/                     # JavaScript 签名脚本
+│   │   ├── crypto-js.min.js            # 加密库
+│   │   ├── x-bogus.js                  # 抖音 X-Bogus 签名
+│   │   ├── haixiu.js                   # 嗨秀签名
+│   │   ├── laixiu.js                   # 来秀签名
+│   │   ├── liveme.js                   # LiveMe 签名
+│   │   ├── migu.js                     # 咪咕签名
+│   │   └── taobao-sign.js              # 淘宝签名
+│   └── ffmpeg_install.py                # FFmpeg 安装脚本
 ├── web/                                 # Web 管理面板前端
 │   ├── index.html                      # 单页应用入口
 │   ├── app.js                          # 前端逻辑（API 调用、SSE、渲染）
@@ -162,14 +164,18 @@ DouyinLiveRecorder/
 ├── gui.py                               # GUI 图形界面入口
 ├── web.py                               # Web 管理面板入口
 ├── msg_push.py                          # 消息推送模块
-├── ffmpeg_install.py                    # FFmpeg 安装脚本
 ├── demo.py                              # 调用示例
+├── build_exe.py                         # PyInstaller 打包脚本（CLI/GUI/Web 三入口）
+├── DouyinLiveRecorder.spec              # 由 build_exe.py 自动生成（.gitignore 已忽略）
 ├── requirements.txt                     # Python 依赖列表
 ├── pyproject.toml                      # Python 项目配置
 ├── Dockerfile                          # Docker 构建文件
 ├── .dockerignore                       # Docker 排除文件
 ├── .gitignore                          # Git 排除文件
 ├── README.md                           # 项目说明
+├── .github/                             # GitHub Actions 工作流目录
+│   └── workflows/
+│       └── build-release.yml           # 三平台构建 + 自动发布 Release
 └── CODE_WIKI.md                        # 本架构文档
 ```
 
@@ -615,7 +621,7 @@ main.py
 ├── src/utils.py
 │   └── src/logger.py
 ├── msg_push.py
-└── ffmpeg_install.py
+└── src/ffmpeg_install.py
 
 web.py
 ├── src/web_api.py
@@ -647,6 +653,7 @@ web.py
 | 同一时间访问网络的线程数 | 并发数 | 3 |
 | 循环时间(秒) | 直播状态检测间隔 | 300 |
 | 分段录制是否开启 | 是否分段 | 是 |
+| 是否启用HLS采集(是/否) | 是否优先使用 HLS(m3u8) 源采集；关闭或源不可用时回退 FLV | 是 |
 | 视频分段时间(秒) | 分段时长 | 3600 |
 | 使用代理录制的平台 | 需要代理的平台列表 | tiktok, sooplive... |
 
@@ -791,6 +798,126 @@ docker-compose up -d
 
 ---
 
+## 打包与发布
+
+本项目提供一键式可执行文件打包（`build_exe.py`）与跨平台自动构建发布（`GitHub Actions`），将 **CLI / GUI / Web 三个入口**统一构建为可分发的发布目录。
+
+### 1. 打包脚本 `build_exe.py`
+
+PyInstaller `onedir` 模式 + `contents_directory='_internal'`，动态生成 `.spec` 文件后调用 PyInstaller 完成**三入口共享依赖**构建：
+
+| 产物（exe 同级） | 入口 | 模式 |
+|------------------|------|------|
+| `DouyinLiveRecorder(.exe)` | `main.py` | 控制台（CLI 录制核心） |
+| `DouyinLiveRecorder-GUI(.exe)` | `gui.py` | 无控制台窗口（GUI） |
+| `DouyinLiveRecorder-Web(.exe)` | `web.py` | 控制台（Web 管理面板，监听 `0.0.0.0:8000`） |
+
+三个入口共用一个 `COLLECT`，依赖去重后体积约为独立打包的 1/3。
+
+**用法**：
+```bash
+python build_exe.py            # 打包并生成 zip 产物
+python build_exe.py --smoke    # 打包后额外运行冒烟测试（CI 推荐）
+python build_exe.py --no-zip   # 仅打包不压缩
+```
+
+**数据文件与隐藏导入**：
+- `datas`：`src/javascript`（JS 签名脚本）、`i18n`（翻译）、`web`（前端静态资源），均经 `__file__` 定位，PyInstaller 自动收进 `_internal/`；`collect_data_files('customtkinter')`（主题 JSON）。
+- `config/` 不进 `_internal`，由 `copy_external_binaries()` 复制到 exe 同级（见目录规范）。
+- `hiddenimports`：`i18n`、`src.http_clients.async_http`（main.py 经 `__import__` 动态导入）、`h2`（httpx[http2] 懒加载）；`a_web` 额外 `collect_submodules('uvicorn')`（协议模块按字符串导入）。
+- `excludes`：CLI 排除 GUI/Web 库（tkinter/customtkinter/pystray/PIL/fastapi/uvicorn/starlette）；GUI 排除 Web 库；Web 排除 GUI 库。
+
+**版本号**：从 `main.py` 的 `version` 变量解析（如 `v4.0.7`），用于 zip 命名，解析失败回退 `0.0.0`。
+
+### 2. 目录结构规范（打包产物）
+
+采用 `onedir + contents_directory='_internal'` 后，PyInstaller 把依赖与经 `__file__` 定位的资源收进 exe 同级的 `_internal/`；而经 `sys.argv[0]`/`sys.executable` 定位的运行时资源由打包脚本在 `COLLECT` 之后复制到 exe 同级。最终产物结构：
+
+```
+dist/DouyinLiveRecorder/
+├── DouyinLiveRecorder.exe          # CLI 录制核心
+├── DouyinLiveRecorder-GUI.exe      # 图形界面
+├── DouyinLiveRecorder-Web.exe      # Web 管理面板
+├── config/                          # 配置目录（exe 同级，运行时直接读写）
+├── ffmpeg/                          # FFmpeg 运行时（exe 同级，Windows 内置）
+├── node/                            # Node.js 运行时（exe 同级，Windows 内置）
+├── logs/                            # 日志目录（运行时默认创建于 exe 同级）
+├── downloads/                       # 默认下载目录（config.ini 未指定时位于 exe 同级）
+├── backup_config/                   # 配置备份目录（exe 同级）
+└── _internal/                       # 依赖包 + src/ 及打包资源统一管理
+    ├── (Crypto/ PIL/ certifi/ h2/ pydantic/ customtkinter/ watchfiles/ websockets/ yaml/ + 运行库 .dll)
+    ├── src/            src/javascript/
+    ├── i18n/
+    └── web/
+```
+
+**关键约定（硬性）**：
+- `node/`、`ffmpeg/`、`config/` 与 exe 保持**同级**（而非 `_internal/`）。
+- `src/` 及全部 Python 依赖包统一收进 `_internal/`。
+- 运行时可写目录 `logs/`、`downloads/`（未通过 `config.ini` 的 `直播保存路径(不填则默认)` 指定时）、`backup_config/` 均默认创建在 **exe 同级目录**。
+
+### 3. 路径收敛机制 `_app_root()`
+
+项目存在"双轨路径"：`main.py`/`src/ffmpeg_install.py`/`src/__init__.py` 等用 `sys.argv[0]`/`sys.executable` 定位运行时资源；`src/logger.py`、`i18n.py`、`src/web_api.py` 等用 `__file__` 定位打包资源。冻结后前者指向 exe 同级（发布根），后者指向 `_internal/`。
+
+为统一收敛，新增 `src/logger._app_root()`（与 `main.py` 内联同名函数）：
+```python
+def _app_root() -> str:
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(os.path.realpath(sys.executable))  # = exe 同级
+    return os.path.split(os.path.realpath(sys.argv[0]))[0]
+```
+- `main.py` 的 `script_path`、`src/__init__.py`、`src/node_install.py`、`src/ffmpeg_install.py` 的 `execute_dir` 均收敛到 exe 同级，使 `config/ffmpeg/node` 正确定位。
+- `src/logger.py` 的 `script_path` 改为 `_app_root()`，使 `logs/`、`backup_config/` 落在 exe 同级。
+- `gui.py` 新增 `self.app_root`：冻结时若 `script_dir` 为 `_internal` 则回退一层到发布根，config/downloads 据此定位；CLI 子进程经同目录 `DouyinLiveRecorder.exe` 拉起（见下）。
+- `i18n.py` 支持 `_internal/i18n` 与 `i18n/` 双路径检测。
+
+### 4. 冻结版适配要点
+
+- **GUI 子进程拉起（关键修复）**：`gui.py` 冻结后 `sys.executable` 指向 GUI 自身，原 `[sys.executable, main.py]` 会无限递归拉起 GUI。改为冻结时直接调用同目录的 `DouyinLiveRecorder.exe`，源码运行保持原样。
+- **中文 UTF-8 编码（关键修复）**：冻结后子进程 stdout 为管道，Python 回退到 GBK 写输出，而 GUI 以 UTF-8 读取管道 → 中文乱码（如 `自动获取 Cookie ttwid 成功` 变成乱码）。在 `main.py`/`gui.py`/`web.py` 顶部加入 `_fix_encoding()`：Windows 下 `sys.stdout/stderr.reconfigure(encoding='utf-8', errors='replace')` + `ctypes.windll.kernel32.SetConsoleOutputCP(65001)/SetConsoleCP(65001)`；非 Windows 仅 reconfigure。stream 加 `None`/`hasattr` 保护（windowed exe 的 stdout 可能为 `None`）。`web.py` 原有 `reconfigure(errors='replace')` 升级为同时设 `encoding='utf-8'`。
+
+### 5. 冒烟测试
+
+`build_exe.py --smoke` 在打包后自动运行三项验证（CI 推荐开启）：
+- **CLI**：启动数秒，确认进入监控循环且输出无 `Traceback`/`ImportError`/`ModuleNotFoundError`。
+- **Web**：HTTP 探活 `http://127.0.0.1:8000/`，返回 200 视为面板可用；同时验证内置 ffmpeg 被命中（不触发下载）。
+- **GUI**：启动 8 秒确认进程存活无崩溃（无显示环境 `DISPLAY` 未设置时自动跳过）。
+
+冒烟前会向 exe 级 `config/URL_config.ini` 写入一条注释 URL，避免 CLI 因 URL 列表为空而阻塞在 `input()`。
+
+### 6. GitHub Actions 自动构建与发布
+
+工作流文件：`.github/workflows/build-release.yml`（任务名 `Build Executables`）。
+
+**触发方式**：
+- 手动触发（`workflow_dispatch`）：三平台构建并上传 artifact。
+- 推送 `v*` 标签（如 `v4.0.8`）：构建 + 自动创建 GitHub Release 并附三平台 zip。
+
+**构建矩阵**：`windows-latest` / `ubuntu-latest` / `macos-latest`，Python 3.12。
+
+**流程**：
+1. Checkout → Setup Python 3.12（pip 缓存）。
+2. 安装 ffmpeg（Linux/macOS 用系统包；Windows 用仓库内置）；Linux 额外装 `xvfb`（GUI 冒烟需虚拟显示）。
+3. `pip install -r requirements.txt pyinstaller`。
+4. `python build_exe.py --smoke`（Linux 用 `xvfb-run -a` 包裹）。
+5. 上传 `dist/*.zip` artifact。
+6. `release` job（仅 tag 触发）：下载全部 artifact，用 `softprops/action-gh-release@v2` 创建 Release 并附 zip，`generate_release_notes: true`。
+
+**产物命名**：`DouyinLiveRecorder-v{version}-{os}-{arch}.zip`（如 `DouyinLiveRecorder-v4.0.7-windows-amd64.zip`，约 118 MB）。
+
+### 7. 本地打包步骤
+
+```bash
+pip install pyinstaller          # 安装打包器
+python build_exe.py --smoke      # 打包 + 冒烟测试
+# 产物：dist/DouyinLiveRecorder/ 发布目录 + dist/DouyinLiveRecorder-vX.Y.Z-*.zip
+```
+
+注意：本仓库为本地副本，工作流需推送至 GitHub 仓库后才可运行。CI Linux/macOS 产物不含 `ffmpeg`/`node`，首次运行会自动下载。
+
+---
+
 ## 设计模式
 
 ### 1. 适配器模式 (Adapter Pattern)
@@ -875,6 +1002,16 @@ brew install node
 
 ## 更新日志
 
+### v4.0.8-dev (2026-07-25) — 新增 PyInstaller 可执行文件打包与 GitHub Actions 发布
+
+- 新增 `build_exe.py`：PyInstaller `onedir` + `contents_directory='_internal'`，动态生成 `.spec`，将 `main.py`/`gui.py`/`web.py` 三入口共享依赖构建为 `DouyinLiveRecorder(.exe)` / `-GUI(.exe)` / `-Web(.exe)`，并统一压缩为 `DouyinLiveRecorder-v{version}-{os}-{arch}.zip`（约 118 MB）
+- 目录规范：`node/`、`ffmpeg/`、`config/` 与 exe 保持同级；`src/` 及全部 Python 依赖包统一收进 `_internal/`；运行时 `logs/`、`downloads/`（未通过 config.ini 指定时）、`backup_config/` 默认创建在 exe 同级
+- 新增路径收敛函数 `src/logger._app_root()`（与 `main.py` 内联同名），冻结时返回 `dirname(sys.executable)`（exe 同级），使 `main.py`/`src/__init__.py`/`src/node_install.py`/`src/ffmpeg_install.py` 的运行时资源与 `src/logger.py` 的 logs 正确收敛
+- `gui.py` 冻结适配：冻结时直接调用同目录 `DouyinLiveRecorder.exe` 拉起录制核心（避免 `sys.executable` 指向自身导致无限递归）；新增 `self.app_root` 定位 exe 级 config/downloads
+- 中文 UTF-8 编码修复：在 `main.py`/`gui.py`/`web.py` 顶部加入 `_fix_encoding()`（Windows 切换控制台代码页 65001 + reconfigure UTF-8），修复冻结后子进程管道 GBK 输出被 GUI 按 UTF-8 读取导致的乱码
+- `build_exe.py --smoke` 三项冒烟测试：CLI 存活、Web HTTP 探活 200（并验证内置 ffmpeg 命中）、GUI 存活 8 秒（无 DISPLAY 自动跳过）
+- 新增 `.github/workflows/build-release.yml`：三平台 matrix（win/linux/mac，Python 3.12）+ 依赖安装 + 冒烟测试 + artifact 上传；推送 `v*` 标签自动创建 GitHub Release 并附三平台 zip
+
 ### v4.0.8-dev (2026-07-25) — 全项目类型错误修复与代码清理
 
 **类型错误修复（Pyright / Pyrefly / basedpyright）：**
@@ -917,12 +1054,12 @@ brew install node
 
 | 包名 | 声明状态 | 使用位置 |
 |------|---------|---------|
-| requests | 已声明 | ffmpeg_install.py, src/initializer.py, src/http_clients/sync_http.py, src/weverse_auth.py |
+| requests | 已声明 | src/ffmpeg_install.py, src/node_install.py, src/http_clients/sync_http.py, src/weverse_auth.py |
 | httpx[http2] | 已声明 | main.py, src/room.py, src/spider.py, src/http_clients/async_http.py |
 | loguru | 已声明 | src/logger.py, msg_push.py |
 | pycryptodome | 已声明 | src/spider.py (Crypto.Cipher.AES) |
-| distro | 已声明 | src/initializer.py |
-| tqdm | 已声明 | ffmpeg_install.py, src/initializer.py |
+| distro | 已声明 | src/node_install.py |
+| tqdm | 已声明 | src/ffmpeg_install.py, src/node_install.py |
 | PyExecJS | 已声明 | src/room.py, src/spider.py, src/utils.py |
 | customtkinter | 已声明 | gui.py |
 | pystray | 已声明 | gui.py, gui_legacy.py (延迟导入) |
@@ -1005,4 +1142,4 @@ brew install node
 
 ---
 
-*本文档最后更新: 2026-07-25（全项目类型错误修复与代码清理）*
+*本文档最后更新: 2026-07-25（新增 PyInstaller 打包与 GitHub Actions 发布体系）*

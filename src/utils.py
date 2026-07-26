@@ -13,7 +13,8 @@ from pathlib import Path
 import functools
 import hashlib
 import traceback
-from typing import Any, Callable
+from typing import Callable, TypeVar, ParamSpec, cast
+from collections.abc import Mapping
 from urllib.parse import parse_qs, urlparse
 from collections import OrderedDict
 import execjs
@@ -21,59 +22,63 @@ from .logger import logger
 import configparser
 
 OptionalStr = str | None
-OptionalDict = dict | None
+OptionalDict = dict[str, object] | None
 
 
 class Color:
     # 终端彩色输出常量类
-    RED = "\033[31m"
-    GREEN = "\033[32m"
-    YELLOW = "\033[33m"
-    BLUE = "\033[34m"
-    MAGENTA = "\033[35m"
-    CYAN = "\033[36m"
-    WHITE = "\033[37m"
-    RESET = "\033[0m"
+    RED: str = "\033[31m"
+    GREEN: str = "\033[32m"
+    YELLOW: str = "\033[33m"
+    BLUE: str = "\033[34m"
+    MAGENTA: str = "\033[35m"
+    CYAN: str = "\033[36m"
+    WHITE: str = "\033[37m"
+    RESET: str = "\033[0m"
 
     @staticmethod
-    def print_colored(text, color):
+    def print_colored(text: str, color: str) -> None:
         # 打印彩色文本
         print(f"{color}{text}{Color.RESET}")
 
 
-def trace_error_decorator(func: Callable) -> Callable:
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+def trace_error_decorator(func: Callable[P, R]) -> Callable[P, R]:
     # 错误追踪装饰器（支持同步和异步函数）
     if inspect.iscoroutinefunction(func):
         @functools.wraps(func)
-        async def async_wrapper(*args: list, **kwargs: dict) -> Any:
+        async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
             # 异步函数包装器：捕获并记录异常，返回空字典
             try:
-                return await func(*args, **kwargs)
+                return cast(R, await func(*args, **kwargs))
             except execjs.ProgramError:
                 logger.warning('Failed to execute JS code. Please check if the Node.js environment')
-                return {}
+                return cast(R, {"is_live": False})
             except Exception as e:
                 tb = traceback.extract_tb(e.__traceback__) if e.__traceback__ else None
                 error_line = tb[-1].lineno if tb else 'unknown'
                 error_info = f"message: type: {type(e).__name__}, {str(e)} in function {func.__name__} at line: {error_line}"
                 logger.error(error_info)
-                return {}
-        return async_wrapper
+                return cast(R, {"is_live": False})
+        return cast(Callable[P, R], async_wrapper)
 
     @functools.wraps(func)
-    def wrapper(*args: list, **kwargs: dict) -> Any:
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
         # 同步函数包装器：捕获并记录异常，返回空字典
         try:
             return func(*args, **kwargs)
         except execjs.ProgramError:
             logger.warning('Failed to execute JS code. Please check if the Node.js environment')
-            return {}
+            return cast(R, {"is_live": False})
         except Exception as e:
             tb = traceback.extract_tb(e.__traceback__) if e.__traceback__ else None
             error_line = tb[-1].lineno if tb else 'unknown'
             error_info = f"message: type: {type(e).__name__}, {str(e)} in function {func.__name__} at line: {error_line}"
             logger.error(error_info)
-            return {}
+            return cast(R, {"is_live": False})
     return wrapper
 
 
@@ -84,7 +89,7 @@ def check_md5(file_path: str | Path) -> str:
     return file_md5
 
 
-def dict_to_cookie_str(cookies_dict: dict) -> str:
+def dict_to_cookie_str(cookies_dict: Mapping[str, object]) -> str:
     # 将 cookie 字典转换为字符串格式
     cookie_str = '; '.join([f"{key}={value}" for key, value in cookies_dict.items()])
     return cookie_str
@@ -95,7 +100,7 @@ def read_config_value(file_path: str | Path, section: str, key: str) -> str | No
     config = configparser.ConfigParser()
 
     try:
-        config.read(file_path, encoding='utf-8-sig')
+        _ = config.read(file_path, encoding='utf-8-sig')
     except Exception as e:
         print(f"Error occurred while reading the configuration file: {e}")
         return None
@@ -117,7 +122,7 @@ def update_config(file_path: str | Path, section: str, key: str, new_value: str)
     config = configparser.ConfigParser(interpolation=None)
 
     try:
-        config.read(file_path, encoding='utf-8-sig')
+        _ = config.read(file_path, encoding='utf-8-sig')
     except Exception as e:
         print(f"An error occurred while reading the configuration file: {e}")
         return
@@ -136,9 +141,9 @@ def update_config(file_path: str | Path, section: str, key: str, new_value: str)
         print(f"Error occurred while writing to the configuration file: {e}")
 
 
-def get_file_paths(directory: str) -> list:
+def get_file_paths(directory: str) -> list[str]:
     # 递归获取指定目录下所有文件的绝对路径
-    file_paths = []
+    file_paths: list[str] = []
     for root, _, files in os.walk(directory):
         for file in files:
             file_paths.append(os.path.join(root, file))
@@ -149,18 +154,18 @@ def remove_emojis(text: str, replace_text: str = '') -> str:
     # 从文本中移除表情符号
     emoji_pattern = re.compile(
         "["
-        "\U0001F1E0-\U0001F1FF"  # flags (iOS)
-        "\U0001F300-\U0001F5FF"  # symbols & pictographs
-        "\U0001F600-\U0001F64F"  # emoticons
-        "\U0001F680-\U0001F6FF"  # transport & map symbols
-        "\U0001F700-\U0001F77F"  # alchemical symbols
-        "\U0001F780-\U0001F7FF"  # Geometric Shapes Extended
-        "\U0001F800-\U0001F8FF"  # Supplemental Arrows-C
-        "\U0001F900-\U0001F9FF"  # Supplemental Symbols and Pictographs
-        "\U0001FA00-\U0001FA6F"  # Chess Symbols
-        "\U0001FA70-\U0001FAFF"  # Symbols and Pictographs Extended-A
-        "\U00002702-\U000027B0"  # Dingbats
-        "]+",
+        + "\U0001F1E0-\U0001F1FF"  # flags (iOS)
+        + "\U0001F300-\U0001F5FF"  # symbols & pictographs
+        + "\U0001F600-\U0001F64F"  # emoticons
+        + "\U0001F680-\U0001F6FF"  # transport & map symbols
+        + "\U0001F700-\U0001F77F"  # alchemical symbols
+        + "\U0001F780-\U0001F7FF"  # Geometric Shapes Extended
+        + "\U0001F800-\U0001F8FF"  # Supplemental Arrows-C
+        + "\U0001F900-\U0001F9FF"  # Supplemental Symbols and Pictographs
+        + "\U0001FA00-\U0001FA6F"  # Chess Symbols
+        + "\U0001FA70-\U0001FAFF"  # Symbols and Pictographs Extended-A
+        + "\U00002702-\U000027B0"  # Dingbats
+        + "]+",
         flags=re.UNICODE
     )
     return emoji_pattern.sub(replace_text, text)
@@ -168,7 +173,7 @@ def remove_emojis(text: str, replace_text: str = '') -> str:
 
 def remove_duplicate_lines(file_path: str | Path) -> None:
     # 移除文件中的重复行
-    unique_lines = OrderedDict()
+    unique_lines: OrderedDict[str, None] = OrderedDict()
     text_encoding = 'utf-8-sig'
     try:
         with open(file_path, 'r', encoding=text_encoding) as input_file:
@@ -181,7 +186,7 @@ def remove_duplicate_lines(file_path: str | Path) -> None:
                 unique_lines[line.strip()] = None
     with open(file_path, 'w', encoding=text_encoding) as output_file:
         for line in unique_lines:
-            output_file.write(line + '\n')
+            _ = output_file.write(line + '\n')
 
 
 def check_disk_capacity(file_path: str | Path, show: bool = False) -> float:
@@ -193,12 +198,12 @@ def check_disk_capacity(file_path: str | Path, show: bool = False) -> float:
     free_space_gb = disk_usage.free / (1024 ** 3)
     if show:
         print(f"{disk_root} Total: {disk_usage.total / (1024 ** 3):.2f} GB "
-              f"Used: {disk_usage.used / (1024 ** 3):.2f} GB "
-              f"Free: {free_space_gb:.2f} GB\n")
+              + f"Used: {disk_usage.used / (1024 ** 3):.2f} GB "
+              + f"Free: {free_space_gb:.2f} GB\n")
     return free_space_gb
 
 
-def handle_proxy_addr(proxy_addr):
+def handle_proxy_addr(proxy_addr: str | None) -> str | None:
     # 处理代理地址，自动添加 http 前缀
     # 已有协议前缀（http/https/socks 等）的地址不再二次添加
     if proxy_addr:
@@ -224,7 +229,7 @@ def jsonp_to_json(jsonp_str: str) -> OptionalDict:
 
     if match:
         _, json_str = match.groups()
-        json_obj = json.loads(json_str)
+        json_obj: dict[str, object] = cast(dict[str, object], json.loads(json_str))
         return json_obj
     else:
         raise Exception("No JSON data found in JSONP response.")
@@ -238,14 +243,14 @@ def replace_url(file_path: str | Path, old: str, new: str) -> None:
     with open(file_path, 'w', encoding='utf-8-sig') as f:
         for line in lines:
             if line.strip() == old:
-                f.write(new + '\n')
+                _ = f.write(new + '\n')
             elif old in line:
-                f.write(line.replace(old, new))
+                _ = f.write(line.replace(old, new))
             else:
-                f.write(line)
+                _ = f.write(line)
 
 
-def get_query_params(url: str, param_name: OptionalStr) -> dict | list[str]:
+def get_query_params(url: str, param_name: OptionalStr) -> dict[str, list[str]] | list[str]:
     # 从 URL 中获取查询参数
     parsed_url = urlparse(url)
     query_params = parse_qs(parsed_url.query)

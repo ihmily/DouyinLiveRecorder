@@ -3,10 +3,15 @@
 # 不依赖 FastAPI / 网络，便于单测。
 from __future__ import annotations
 
+import base64
 import configparser
+import hashlib
+import hmac
+import binascii
 import re
+import secrets
 from pathlib import Path
-from typing import Any
+from typing import cast
 
 # 与 main.py 保持一致的文本编码
 TEXT_ENCODING = "utf-8-sig"
@@ -33,13 +38,14 @@ CLEAN_URL_HOST_LIST = (
 DEFAULT_QUALITY = "原画"
 
 # Web 配置默认值
-WEB_DEFAULTS: dict[str, Any] = {
-    "web_host": "0.0.0.0",
+WEB_DEFAULTS: dict[str, str | int | bool] = {
+    "web_host": "127.0.0.1",
     "web_port": 8000,
     "web_auth_enable": False,
     "web_password": "",
     "web_token_expiry": 86400,
     "web_show_console": True,
+    "web_minimize_to_tray": True,
 }
 
 
@@ -57,11 +63,11 @@ def normalize_url(url: str) -> str:
     return url
 
 
-def parse_url_config(file_path: str | Path) -> list[dict[str, Any]]:
+def parse_url_config(file_path: str | Path) -> list[dict[str, str | bool]]:
     # 解析 URL_config.ini，返回直播间列表。
     # 每项: {url, quality, name, enabled, raw_line}
     # 行格式: [画质,]URL[,主播: 名称]，# 前缀表示注释（禁用）。
-    rooms: list[dict[str, Any]] = []
+    rooms: list[dict[str, str | bool]] = []
     path = Path(file_path)
     if not path.exists():
         return rooms
@@ -145,11 +151,11 @@ def format_url_line(url: str, quality: str | None = None, name: str | None = Non
     return ",".join(parts)
 
 
-def read_web_config(config_file: str | Path) -> dict[str, Any]:
+def read_web_config(config_file: str | Path) -> dict[str, str | int | bool]:
     # 读取 [Web] 节配置，缺失项用默认值填充。
     parser = configparser.ConfigParser(interpolation=None)
-    parser.read(config_file, encoding=TEXT_ENCODING)
-    result: dict[str, Any] = {}
+    _ = parser.read(config_file, encoding=TEXT_ENCODING)
+    result: dict[str, str | int | bool] = {}
     for key, default in WEB_DEFAULTS.items():
         if not parser.has_section("Web"):
             result[key] = default
@@ -176,9 +182,9 @@ def read_config_safe(config_file: str | Path) -> dict[str, dict[str, str]]:
     # 用于 API 返回前端展示；写入仍用 utils.update_config。
     # Web 节单独对 web_password 脱敏（其他 Web 键需可编辑，故不整节脱敏）。
     parser = configparser.ConfigParser(interpolation=None)
-    parser.read(config_file, encoding=TEXT_ENCODING)
+    _ = parser.read(config_file, encoding=TEXT_ENCODING)
     result: dict[str, dict[str, str]] = {}
-    for section in parser.sections():
+    for section in cast("list[str]", parser.sections()):
         items: dict[str, str] = {}
         for key, value in parser.items(section):
             if section in SENSITIVE_SECTIONS and value.strip():
@@ -201,13 +207,13 @@ def update_config_line(
     path = Path(config_file)
     if not path.exists():
         return False
-    lines = path.read_text(encoding=TEXT_ENCODING).splitlines(keepends=True)
+    lines: list[str] = path.read_text(encoding=TEXT_ENCODING).splitlines(keepends=True)
     cur_section: str | None = None
     in_target = False
     replaced = False
     # 匹配 key 行：允许 = 或 ：或 : 分隔，key 前后空白
     key_pattern = re.compile(r'^(\s*' + re.escape(key) + r'\s*[=:：]\s*)(.*)$')
-    new_lines = []
+    new_lines: list[str] = []
     for line in lines:
         stripped = line.strip()
         # section header: [name]
@@ -236,5 +242,41 @@ def update_config_line(
         new_lines.append(line)
     if not replaced:
         return False
-    path.write_text(''.join(new_lines), encoding=TEXT_ENCODING)
+    _ = path.write_text(''.join(new_lines), encoding=TEXT_ENCODING)
     return True
+
+
+# === Web 登录密码哈希（PBKDF2-HMAC-SHA256）===
+# 存储格式：pbkdf2_sha256$<iterations>$<salt_b64>$<hash_b64>
+# 落地配置只保存哈希，不保存明文；历史明文配置在首次登录时自动升级。
+_PBKDF2_ALGO = "pbkdf2_sha256"
+_PBKDF2_ITERATIONS = 200_000
+
+
+def hash_web_password(plaintext: str) -> str:
+    # 将明文密码派生为带随机盐的哈希串，用于安全存储（避免明文落盘）。
+    salt = secrets.token_bytes(16)
+    dk = hashlib.pbkdf2_hmac("sha256", plaintext.encode("utf-8"), salt, _PBKDF2_ITERATIONS)
+    return f"{_PBKDF2_ALGO}${_PBKDF2_ITERATIONS}${base64.b64encode(salt).decode()}${base64.b64encode(dk).decode()}"
+
+
+def is_hashed_web_password(value: str) -> bool:
+    # 判断存储值是否已是哈希格式（而非历史明文）。
+    return bool(value) and value.startswith(f"{_PBKDF2_ALGO}$")
+
+
+def verify_web_password(plaintext: str, stored: str) -> bool:
+    # 校验密码：stored 为哈希串时按 PBKDF2 校验；历史明文也允许直接比较以兼容升级前配置。
+    if not stored:
+        return False
+    if is_hashed_web_password(stored):
+        try:
+            _, iters_s, salt_b64, hash_b64 = stored.split("$")
+            salt = base64.b64decode(salt_b64)
+            expected = base64.b64decode(hash_b64)
+        except (ValueError, binascii.Error):
+            return False
+        dk = hashlib.pbkdf2_hmac("sha256", plaintext.encode("utf-8"), salt, int(iters_s))
+        return hmac.compare_digest(dk, expected)
+    # 兼容历史明文存储
+    return hmac.compare_digest(plaintext, stored)

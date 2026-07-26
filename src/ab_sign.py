@@ -1,7 +1,7 @@
 # -*- encoding: utf-8 -*-
 import math
 import time
-from typing import Any
+from typing import cast
 
 
 def rc4_encrypt(plaintext: str, key: str) -> str:
@@ -16,7 +16,7 @@ def rc4_encrypt(plaintext: str, key: str) -> str:
 
     # 生成密钥流并加密
     i = j = 0
-    result = []
+    result: list[str] = []
     for char in plaintext:
         i = (i + 1) % 256
         j = (j + s[i]) % 256
@@ -55,10 +55,11 @@ def ff_j(j: int, x: int, y: int, z: int) -> int:
 
 def gg_j(j: int, x: int, y: int, z: int) -> int:
     # 计算 A-Bogus 算法的 gg_j 参数
+    # SM3 标准：j<16 → x^y^z；j>=16 → (x&y)|(~x&z)
     if 0 <= j < 16:
         return (x ^ y ^ z) & 0xFFFFFFFF
     elif 16 <= j < 64:
-        return ((x & y) | (x & z) | (y & z)) & 0xFFFFFFFF
+        return ((x & y) | ((~x & 0xFFFFFFFF) & z)) & 0xFFFFFFFF
     else:
         raise ValueError("invalid j for bool function GG")
 
@@ -67,12 +68,12 @@ class SM3:
     # SM3 密码哈希算法实现
     def __init__(self):
         # 初始化 SM3 算法常量与初始值
-        self.reg = []
-        self.chunk = []
-        self.size = 0
+        self.reg: list[int] = []
+        self.chunk: list[int] = []
+        self.size: int = 0
         self.reset()
 
-    def reset(self):
+    def reset(self) -> None:
         # 初始化寄存器值 - 修正为与JS版本相同的值
         self.reg = [
             1937774191, 1226093241, 388252375, 3666478592,
@@ -81,11 +82,11 @@ class SM3:
         self.chunk = []
         self.size = 0
 
-    def write(self, data):
+    def write(self, data: str | list[int]) -> None:
         # 将输入转换为字节数组
         if isinstance(data, str):
             # 直接转换为UTF-8字节列表
-            a = list(data.encode('utf-8'))
+            a: list[int] = list(data.encode('utf-8'))
         else:
             a = data
 
@@ -134,7 +135,7 @@ class SM3:
         for i in range(4):
             self.chunk.append((bit_length >> (8 * (3 - i))) & 0xFF)
 
-    def _compress(self, data):
+    def _compress(self, data: list[int]) -> None:
         # SM3 压缩函数（单块处理）
         if len(data) < 64:
             raise ValueError("compress error: not enough data")
@@ -185,10 +186,10 @@ class SM3:
             self.reg[6] ^= g
             self.reg[7] ^= h
 
-    def sum(self, data=None, output_format=None):
-        """
-        计算哈希值
-        """
+    def sum(self, data: str | list[int] | None = None, output_format: str | None = None) -> str | list[int]:
+        #
+        #         计算哈希值
+        #
         # 如果提供了输入，则重置并写入
         if data is not None:
             self.reset()
@@ -200,6 +201,7 @@ class SM3:
         for f in range(0, len(self.chunk), 64):
             self._compress(self.chunk[f:f + 64])
 
+        result: str | list[int]
         if output_format == 'hex':
             # 十六进制输出
             result = ''.join(f'{val:08x}' for val in self.reg)
@@ -282,17 +284,17 @@ def gener_random(random_num: int, option: list[int]) -> list[int]:
 
 
 def generate_random_str() -> str:
-    """
-    生成随机字符串
-
-    Returns:
-        随机字符串
-    """
+    #
+    #     生成随机字符串
+    #
+    #     Returns:
+    #         随机字符串
+    #
     # 使用与JS版本相同的固定随机值
     random_values = [0.123456789, 0.987654321, 0.555555555]
 
     # 生成三组随机字节并合并
-    random_bytes = []
+    random_bytes: list[int] = []
     random_bytes.extend(gener_random(int(random_values[0] * 10000), [3, 45]))
     random_bytes.extend(gener_random(int(random_values[1] * 10000), [1, 0]))
     random_bytes.extend(gener_random(int(random_values[2] * 10000), [1, 5]))
@@ -311,42 +313,43 @@ def generate_rc4_bb_str(url_search_params: str, user_agent: str, window_env_str:
 
     # 三次加密处理
     # 1: url_search_params两次sm3之的结果
-    url_search_params_list = sm3.sum(sm3.sum(url_search_params + suffix))
+    url_search_params_list = cast(list[int], sm3.sum(sm3.sum(url_search_params + suffix)))
     # 2: 对后缀两次sm3之的结果
-    cus = sm3.sum(sm3.sum(suffix))
+    cus = cast(list[int], sm3.sum(sm3.sum(suffix)))
     # 3: 对ua处理之后的结果
     ua_key = chr(0) + chr(1) + chr(14)  # [1/256, 1, 14]
-    ua = sm3.sum(result_encrypt(
+    ua = cast(list[int], sm3.sum(result_encrypt(
         rc4_encrypt(user_agent, ua_key),
         "s3"
-    ))
+    )))
 
     end_time = start_time + 100
 
     # 构建配置对象
-    b: dict[int, Any] = {
+    # b15 为嵌套配置 dict（含 aid/pageId 等字段），单独存放；
+    # b 仅存 int 值，使所有 b[k] 读取处类型为 int，无需 cast。
+    b15: dict[str, object] = {
+        "aid": 6383,
+        "pageId": 110624,
+        "boe": False,
+        "ddrt": 7,
+        "paths": {
+            "include": [{} for _ in range(7)],
+            "exclude": []
+        },
+        "track": {
+            "mode": 0,
+            "delay": 300,
+            "paths": []
+        },
+        "dump": True,
+        "rpU": "hwj"
+    }
+    b: dict[int, int] = {
         8: 3,
         10: end_time,
-        15: {
-            "aid": 6383,
-            "pageId": 110624,
-            "boe": False,
-            "ddrt": 7,
-            "paths": {
-                "include": [{} for _ in range(7)],
-                "exclude": []
-            },
-            "track": {
-                "mode": 0,
-                "delay": 300,
-                "paths": []
-            },
-            "dump": True,
-            "rpU": "hwj"
-        },
         16: start_time,
         18: 44,
-        19: [1, 0, 1, 5],
     }
 
     def split_to_bytes(num: int) -> list[int]:
@@ -406,19 +409,19 @@ def generate_rc4_bb_str(url_search_params: str, user_agent: str, window_env_str:
     b[50] = int(b[10] / 256 / 256 / 256 / 256 / 256) & 255
 
     # 处理配置项
-    b[51] = b[15]['pageId']
+    b[51] = cast(int, b15['pageId'])
 
-    page_id_bytes = split_to_bytes(b[15]['pageId'])
+    page_id_bytes = split_to_bytes(cast(int, b15['pageId']))
     b[52] = page_id_bytes[0]
     b[53] = page_id_bytes[1]
     b[54] = page_id_bytes[2]
     b[55] = page_id_bytes[3]
 
-    b[56] = b[15]['aid']
-    b[57] = b[15]['aid'] & 255
-    b[58] = (b[15]['aid'] >> 8) & 255
-    b[59] = (b[15]['aid'] >> 16) & 255
-    b[60] = (b[15]['aid'] >> 24) & 255
+    b[56] = cast(int, b15['aid'])
+    b[57] = cast(int, b15['aid']) & 255
+    b[58] = (cast(int, b15['aid']) >> 8) & 255
+    b[59] = (cast(int, b15['aid']) >> 16) & 255
+    b[60] = (cast(int, b15['aid']) >> 24) & 255
 
     # 处理环境信息
     window_env_list = [ord(char) for char in window_env_str]
@@ -438,7 +441,7 @@ def generate_rc4_bb_str(url_search_params: str, user_agent: str, window_env_str:
             b[66] ^ b[70] ^ b[71]
 
     # 构建最终字节数组
-    bb = [
+    bb: list[int] = [
         b[18], b[20], b[52], b[26], b[30], b[34], b[58], b[38], b[40], b[53], b[42], b[21],
         b[27], b[54], b[55], b[31], b[35], b[57], b[39], b[41], b[43], b[22], b[28], b[32],
         b[60], b[36], b[23], b[29], b[33], b[37], b[44], b[45], b[59], b[46], b[47], b[48],

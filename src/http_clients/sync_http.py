@@ -2,12 +2,16 @@
 # 同步 HTTP 客户端模块 - 提供同步 HTTP 请求功能
 
 import gzip
+import http.client
 import urllib.parse
 import urllib.error
 import requests
 import ssl
 import json
 import urllib.request
+from collections.abc import Mapping
+from requests._types import JsonType
+from typing import cast
 from . import config
 from ..logger import logger
 
@@ -30,15 +34,15 @@ def _get_opener() -> urllib.request.OpenerDirector:
     return _opener_secure if config.ssl_verify else _opener_insecure
 
 OptionalStr = str | None
-OptionalDict = dict | None
+OptionalDict = dict[str, str] | None
 
 
 def sync_req(
         url: str,
         proxy_addr: OptionalStr = None,
         headers: OptionalDict = None,
-        data: dict | bytes | None = None,
-        json_data: dict | list | None = None,
+        data: Mapping[str, object] | str | bytes | None = None,
+        json_data: JsonType = None,
         timeout: int = 20,
         redirect_url: bool = False,
         abroad: bool = False,
@@ -81,22 +85,26 @@ def sync_req(
                 data = json.dumps(json_data).encode(content_encoding)
 
             # 创建请求对象
-            req = urllib.request.Request(url, data=data, headers=headers)
+            req = urllib.request.Request(url, data=cast("bytes | None", data), headers=headers)
 
             try:
                 if abroad:
                     # 海外请求：仅在全局禁用证书验证时使用 CERT_NONE 上下文
-                    response = urllib.request.urlopen(
-                        req, timeout=timeout, context=None if config.ssl_verify else ssl_context)
+                    response = cast(
+                        http.client.HTTPResponse,
+                        urllib.request.urlopen(
+                            req, timeout=timeout, context=None if config.ssl_verify else ssl_context
+                        ),
+                    )
                 else:
                     # 本地请求（使用按全局配置选择的 opener）
-                    response = _get_opener().open(req, timeout=timeout)
+                    response = cast(http.client.HTTPResponse, _get_opener().open(req, timeout=timeout))
                 try:
                     if redirect_url:
                         return response.url
 
                     # 处理响应编码和 gzip 解压
-                    resp_encoding = response.info().get('Content-Encoding')
+                    resp_encoding = response.headers.get('Content-Encoding')
                     if resp_encoding == 'gzip':
                         # gzip 解压
                         resp_bytes = gzip.decompress(response.read())
