@@ -78,11 +78,53 @@ jobs:
         if: matrix.platform != 'linux'
         run: python build_exe.py --smoke --dual
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v7   # v7 原生使用 Node.js 24 运行时（v5 仍为 Node.js 20，2026-09-16 后将被移除）
+      - name: Upload lite artifact
+        uses: actions/upload-artifact@v7   # v7 原生 Node.js 24，且相比 v5 改进了上传重试逻辑
         with:
-          name: DouyinLiveRecorder-${{ matrix.platform }}
-          path: dist/*.zip
+          name: DouyinLiveRecorder-${{ matrix.platform }}-lite
+          path: dist/*-lite.zip
+          compression-level: 0             # zip 已压缩，跳过重复压缩以加速上传
+          if-no-files-found: error
+
+      # full 版本含 ffmpeg + node（~300MB），即使 v7 内置重试仍可能因瞬时网络
+      # 故障（如 EHOSTUNREACH）失败。此处叠加工作流级别的显式重试（最多 3 次，
+      # 退避 30s → 60s），且最后一次失败才会让 job 失败。
+      - name: Upload full artifact (attempt 1/3)
+        id: upload_full_1
+        uses: actions/upload-artifact@v7
+        continue-on-error: true
+        with:
+          name: DouyinLiveRecorder-${{ matrix.platform }}-full
+          path: dist/*-full.zip
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Wait before retry (30s)
+        if: steps.upload_full_1.outcome == 'failure'
+        run: sleep 30
+
+      - name: Upload full artifact (attempt 2/3)
+        id: upload_full_2
+        if: steps.upload_full_1.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        continue-on-error: true
+        with:
+          name: DouyinLiveRecorder-${{ matrix.platform }}-full
+          path: dist/*-full.zip
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Wait before retry (60s)
+        if: steps.upload_full_1.outcome == 'failure' && steps.upload_full_2.outcome == 'failure'
+        run: sleep 60
+
+      - name: Upload full artifact (attempt 3/3)
+        if: steps.upload_full_1.outcome == 'failure' && steps.upload_full_2.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: DouyinLiveRecorder-${{ matrix.platform }}-full
+          path: dist/*-full.zip
+          compression-level: 0
           if-no-files-found: error
 
   release:
