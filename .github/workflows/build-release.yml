@@ -43,8 +43,13 @@ jobs:
           cache: pip
 
       # 冒烟测试需要 ffmpeg（main.py 启动即检查）。
-      # Windows 产物自带仓库内 ffmpeg.exe；Linux/macOS 用系统包管理器安装。
+      # 三平台均用系统包管理器安装 ffmpeg 供冒烟测试使用（冒烟测试跑在 lite 版本上）；
+      # full 版本由 build_exe.py --dual 在构建时下载预构建二进制并打包。
       # Linux 额外安装 xvfb：GUI（tkinter/pystray）冒烟测试需要虚拟显示。
+      - name: Install ffmpeg (Windows)
+        if: matrix.platform == 'windows'
+        run: choco install ffmpeg -y
+
       - name: Install ffmpeg + xvfb (Linux)
         if: matrix.platform == 'linux'
         run: sudo apt-get update && sudo apt-get install -y ffmpeg xvfb
@@ -67,14 +72,14 @@ jobs:
 
       - name: Build executables + smoke test (Linux, xvfb)
         if: matrix.platform == 'linux'
-        run: xvfb-run -a python build_exe.py --smoke
+        run: xvfb-run -a python build_exe.py --smoke --dual
 
       - name: Build executables + smoke test
         if: matrix.platform != 'linux'
-        run: python build_exe.py --smoke
+        run: python build_exe.py --smoke --dual
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7   # v7 原生使用 Node.js 24 运行时（v5 仍为 Node.js 20，2026-09-16 后将被移除）
         with:
           name: DouyinLiveRecorder-${{ matrix.platform }}
           path: dist/*.zip
@@ -87,7 +92,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7   # 同步升级至 Node.js 24 运行时
         with:
           path: artifacts
           merge-multiple: true
