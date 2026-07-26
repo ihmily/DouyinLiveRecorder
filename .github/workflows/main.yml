@@ -51,7 +51,13 @@ jobs:
 
       - name: Install ffmpeg (macOS)
         if: matrix.platform == 'macos'
-        run: brew install ffmpeg
+        env:
+          HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
+        run: |
+          # GitHub 的 macOS runner预置了未受信的 aws/tap，
+          # Homebrew 新的 tap 信任机制会因此报错。先信任该 tap 作为兜底关闭校验。
+          brew trust aws/tap || true
+          brew install ffmpeg
 
       - name: Install dependencies
         run: |
