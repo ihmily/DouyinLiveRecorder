@@ -710,8 +710,10 @@ def delete_line(file_path: str, del_line: str, delete_all: bool = False) -> None
                 _ = f.write(txt_line)
 
 
-def get_startup_info(system_type: str) -> subprocess.STARTUPINFO | None:
+def get_startup_info(system_type: str) -> "subprocess.STARTUPINFO | None":
     # 获取平台启动信息（Windows 隐藏控制台窗口）
+    # 返回类型用字符串注解：subprocess.STARTUPINFO 仅 Windows 存在，
+    # 作为注解在 Linux/macOS 导入时会抛 AttributeError（PEP 563 惰性求值规避）。
     if system_type == 'nt':
         startup_info = subprocess.STARTUPINFO()
         startup_info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
