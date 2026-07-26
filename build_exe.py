@@ -224,27 +224,40 @@ def smoke_cli(timeout: int = 25) -> None:
     _finish(proc, "cli", expect_alive=True)
 
 
-def smoke_web(timeout: int = 40, port: int = 8000) -> None:
-    # Web：启动后 HTTP 探活首页，能返回即视为面板可用
+def smoke_web(timeout: int = 90, port: int = 8000) -> None:
+    # Web：启动后 HTTP 探活首页，能返回即视为面板可用。
+    # 探测地址同时覆盖 IPv4(127.0.0.1) 与主机名(localhost)：
+    #   - config 默认 web_host=0.0.0.0 时两者均可达；
+    #   - 若 web_host 改为 localhost，macOS 会优先解析为 IPv6(::1)，
+    #     仅探 IPv4 会误判失败，故两地址都试。
+    # timeout 取较大值：macOS arm64 冷启动加载 fastapi/uvicorn/httpx 较重，
+    # 40s 易超时（与平台性能相关，非应用缺陷）。
     exe = RELEASE_DIR / f"{APP_NAME}-Web{EXE_SUFFIX}"
-    print(f"[smoke:web] 启动 {exe}，探活 http://127.0.0.1:{port}/ ...")
+    hosts = ("127.0.0.1", "localhost")
+    print(f"[smoke:web] 启动 {exe}，探活 http://127.0.0.1:{port}/（最长 {timeout}s）...")
     proc = _launch(exe)
     ok = False
     start = time.time()
     try:
         while time.time() - start < timeout and proc.poll() is None:
-            try:
-                with cast(http.client.HTTPResponse,
-                          urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=3)) as resp:
-                    if resp.status == 200:
-                        ok = True
-                        break
-            except Exception:
-                time.sleep(1)
+            for host in hosts:
+                try:
+                    with cast(http.client.HTTPResponse,
+                              urllib.request.urlopen(f"http://{host}:{port}/", timeout=3)) as resp:
+                        if resp.status == 200:
+                            ok = True
+                            break
+                except Exception:
+                    continue
+            if ok:
+                break
+            time.sleep(1)
     finally:
         _finish(proc, "web", expect_alive=True)
     if not ok:
-        raise RuntimeError(f"[smoke:web] {timeout}s 内 HTTP 探活失败（端口 {port} 被占用也会导致此错误）")
+        raise RuntimeError(
+            f"[smoke:web] {timeout}s 内 HTTP 探活失败（端口 {port} 被占用或启动过慢也会导致此错误）"
+        )
     print("[smoke:web] HTTP 探活成功 ✅")
 
 
@@ -271,7 +284,21 @@ def smoke_test() -> None:
     print("[smoke] 全部冒烟测试通过 ✅")
 
 
+def _ensure_utf8_streams() -> None:
+    # Windows CI 的 stdout/stderr 默认编码为 cp1252，无法输出中文日志会抛
+    # UnicodeEncodeError。重新配置为 UTF-8，并让后续派生的 Python 子进程也用 UTF-8。
+    os.environ["PYTHONUTF8"] = "1"
+    for s in (sys.stdout, sys.stderr):
+        reconfigure = getattr(s, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                _ = reconfigure(encoding="utf-8")
+            except (ValueError, OSError):
+                pass
+
+
 def main() -> None:
+    _ensure_utf8_streams()
     parser = argparse.ArgumentParser(description=f"{APP_NAME} 打包脚本")
     _ = parser.add_argument("--smoke", action="store_true", help="打包后运行冒烟测试")
     _ = parser.add_argument("--no-zip", action="store_true", help="跳过 zip 压缩")
