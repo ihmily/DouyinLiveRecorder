@@ -232,18 +232,22 @@ def smoke_web(timeout: int = 90, port: int = 8000) -> None:
     #     仅探 IPv4 会误判失败，故两地址都试。
     # timeout 取较大值：macOS arm64 冷启动加载 fastapi/uvicorn/httpx 较重，
     # 40s 易超时（与平台性能相关，非应用缺陷）。
+    # 关键：用 ProxyHandler({}) 构造「无代理」opener。macOS 上 urllib 默认会读取
+    # 系统代理配置（SystemConfiguration），CI runner 的 localhost 请求可能被路由到
+    # 不存在的代理而挂起超时——即便服务已正常监听。禁用代理后探测直连本机端口。
     exe = RELEASE_DIR / f"{APP_NAME}-Web{EXE_SUFFIX}"
     hosts = ("127.0.0.1", "localhost")
     print(f"[smoke:web] 启动 {exe}，探活 http://127.0.0.1:{port}/（最长 {timeout}s）...")
     proc = _launch(exe)
     ok = False
     start = time.time()
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
         while time.time() - start < timeout and proc.poll() is None:
             for host in hosts:
                 try:
                     with cast(http.client.HTTPResponse,
-                              urllib.request.urlopen(f"http://{host}:{port}/", timeout=3)) as resp:
+                              opener.open(f"http://{host}:{port}/", timeout=3)) as resp:
                         if resp.status == 200:
                             ok = True
                             break
