@@ -44,7 +44,7 @@ FROM python:3.13-slim-bookworm
 
 # 标签
 LABEL maintainer="Hmily <ihmily@github>" \
-      version="4.0.8-dev" \
+      version="4.0.8" \
       description="支持抖音、TikTok、YouTube等60+平台直播录制工具" \
       url="https://github.com/ihmily/DouyinLiveRecorder"
 

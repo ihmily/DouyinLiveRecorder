@@ -12,6 +12,8 @@
 #     python build_exe.py             # 打包并生成 zip 产物
 #     python build_exe.py --smoke     # 打包后额外运行冒烟测试（CI 推荐）
 #     python build_exe.py --no-zip    # 只打包不压缩
+#     python build_exe.py --no-runtime # 跳过 ffmpeg/node 打包（交由用户运行时自动下载，减小分发体积）
+#     python build_exe.py --dual      # 同时生成 lite（无运行时）与 full（下载并打包 ffmpeg+node）两个 zip
 #
 # 打包策略（onedir + contents_directory='_internal'）：
 #     目录组织规范（最终产物结构）：
@@ -38,14 +40,17 @@
 #     dist/DouyinLiveRecorder-{ver}-{os}-{arch}.zip     压缩包
 #
 import argparse
+import json
 import os
 import platform
 import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import time
 import urllib.request
+import zipfile
 from pathlib import Path
 from typing import cast
 
@@ -83,6 +88,7 @@ hidden_common = [
     'i18n',                          # main.py 内部延迟导入
     'src.http_clients.async_http',   # main.py 经 __import__ 动态导入
     'h2',                            # httpx[http2] 懒加载依赖
+    'exejs',                         # PyExecJS 继任者，try/except 条件导入需显式收集
 ]
 # uvicorn 的协议/事件循环模块均为运行时按字符串导入，必须全量收集
 hidden_web = hidden_common + collect_submodules('uvicorn')
@@ -133,24 +139,29 @@ def run_pyinstaller() -> None:
     _ = subprocess.run(cmd, check=True, cwd=PROJECT_ROOT)
 
 
-def copy_external_binaries() -> None:
+def copy_external_binaries(include_runtime: bool = True) -> None:
     # 将仓库内已有的 ffmpeg / node / config 目录复制到发布根目录（exe 同级）。
     #
     #     这三者是运行时资源，必须与最终生成的 exe 保持同级（而非收进 _internal/），
     #     以便程序在运行时直接读写配置、调用 FFmpeg / Node.js。
     #     缺失时不报错：程序运行时会自动下载对应平台的 ffmpeg / node。
+    #     当 include_runtime=False（--no-runtime）时跳过 ffmpeg/node，
+    #     交由用户首次运行时自动下载，可减小分发体积。
     #
-    for name in ("ffmpeg", "node"):
-        src = PROJECT_ROOT / name
-        if not src.is_dir():
-            continue
-        has_exe = any(p.suffix == ".exe" for p in src.iterdir())
-        if has_exe and not IS_WIN:
-            print(f"[build] 跳过 {name}/（Windows 二进制，与当前平台不符）")
-            continue
-        dst = RELEASE_DIR / name  # exe 同级目录
-        _ = shutil.copytree(src, dst, dirs_exist_ok=True)
-        print(f"[build] 已复制 {name}/ -> {dst}")
+    if include_runtime:
+        for name in ("ffmpeg", "node"):
+            src = PROJECT_ROOT / name
+            if not src.is_dir():
+                continue
+            has_exe = any(p.suffix == ".exe" for p in src.iterdir())
+            if has_exe and not IS_WIN:
+                print(f"[build] 跳过 {name}/（Windows 二进制，与当前平台不符）")
+                continue
+            dst = RELEASE_DIR / name  # exe 同级目录
+            _ = shutil.copytree(src, dst, dirs_exist_ok=True)
+            print(f"[build] 已复制 {name}/ -> {dst}")
+    else:
+        print("[build] --no-runtime：跳过 ffmpeg/ 与 node/（用户首次运行时自动下载）")
 
     # config 配置目录：保持在 exe 同级，供程序运行时读取
     cfg_src = PROJECT_ROOT / "config"
@@ -160,11 +171,154 @@ def copy_external_binaries() -> None:
         print(f"[build] 已复制 config/ -> {cfg_dst}")
 
 
-def make_zip(version: str) -> Path:
-    # 把发布目录压缩为带平台与架构标识的 zip
+# ==================== 运行时二进制下载（--dual full 版本） ====================
+
+def _download_file(url: str, dest: Path, desc: str) -> None:
+    # 下载文件到 dest（带简单进度输出）。urllib 默认跟随重定向。
+    print(f"[build] 下载 {desc}：{url}")
+    with urllib.request.urlopen(url, timeout=180) as resp:
+        total = int(resp.headers.get('Content-Length', 0))
+        downloaded = 0
+        with open(dest, 'wb') as f:
+            while True:
+                chunk = resp.read(65536)
+                if not chunk:
+                    break
+                f.write(chunk)
+                downloaded += len(chunk)
+                if total:
+                    pct = downloaded * 100 // total
+                    print(f"\r[build] {desc}: {downloaded // 1024}KB / {total // 1024}KB ({pct}%)",
+                          end='', flush=True)
+        print()
+
+
+def _download_nodejs(target_dir: Path) -> bool:
+    # 下载并解压 Node.js 预构建二进制到 target_dir/node/。
+    # 使用官方 dist 源（https://nodejs.org/dist/），自动选取最新 LTS 与当前平台/架构匹配的包。
+    try:
+        with urllib.request.urlopen("https://nodejs.org/dist/index.json", timeout=30) as resp:
+            versions = json.loads(resp.read())
+        lts = [v for v in versions if v.get("lts")]
+        if not lts:
+            print("[build] 未找到 Node.js LTS 版本，跳过 node 下载")
+            return False
+        version = lts[0]["version"]  # 如 "v22.5.1"
+
+        plat_map = {"win32": "win", "darwin": "darwin", "linux": "linux"}
+        arch_map = {"x86_64": "x64", "amd64": "x64", "arm64": "arm64", "aarch64": "arm64"}
+        node_plat = plat_map.get(sys.platform)
+        node_arch = arch_map.get(platform.machine().lower(), "x64")
+        if not node_plat:
+            print(f"[build] 不支持的平台：{sys.platform}，跳过 node 下载")
+            return False
+
+        ext = "zip" if IS_WIN else "tar.gz"
+        filename = f"node-{version}-{node_plat}-{node_arch}.{ext}"
+        url = f"https://nodejs.org/dist/{version}/{filename}"
+        archive = target_dir / filename
+        _download_file(url, archive, f"Node.js {version}")
+
+        extract_tmp = target_dir / "_node_extract"
+        if extract_tmp.exists():
+            shutil.rmtree(extract_tmp)
+        extract_tmp.mkdir()
+        if IS_WIN:
+            with zipfile.ZipFile(archive) as zf:
+                zf.extractall(extract_tmp)
+        else:
+            with tarfile.open(archive, "r:gz") as tf:
+                tf.extractall(extract_tmp)
+
+        extracted = extract_tmp / f"node-{version}-{node_plat}-{node_arch}"
+        node_dir = target_dir / "node"
+        if node_dir.exists():
+            shutil.rmtree(node_dir)
+        shutil.move(str(extracted), str(node_dir))
+
+        archive.unlink(missing_ok=True)
+        shutil.rmtree(extract_tmp, ignore_errors=True)
+        print(f"[build] Node.js {version} 已安装到 {node_dir}")
+        return True
+    except Exception as e:
+        print(f"[build] Node.js 下载失败：{type(e).__name__}: {e}")
+        return False
+
+
+def _download_ffmpeg(target_dir: Path) -> bool:
+    # 下载并解压 ffmpeg 二进制到 target_dir/ffmpeg/。
+    #   Windows: gyan.dev release-essentials（提取 bin/）
+    #   macOS:   evermeet.ca（arm64 / x64 分别提供）
+    #   Linux:   johnvansickle.com 静态构建（含 ffmpeg + ffprobe）
+    import tempfile
+
+    ffmpeg_dir = target_dir / "ffmpeg"
+    if ffmpeg_dir.exists():
+        shutil.rmtree(ffmpeg_dir)
+    ffmpeg_dir.mkdir(parents=True)
+    machine = platform.machine().lower()
+
+    try:
+        if IS_WIN:
+            url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+            archive = target_dir / "_ffmpeg_temp.zip"
+            _download_file(url, archive, "ffmpeg")
+            # gyan.dev zip 内结构：ffmpeg-release-essentials/bin/{ffmpeg,ffprobe}.exe
+            with zipfile.ZipFile(archive) as zf:
+                for member in zf.namelist():
+                    if '/bin/' in member and not member.endswith('/'):
+                        name = member.split('/bin/')[-1]
+                        if name:
+                            with zf.open(member) as src, open(ffmpeg_dir / name, 'wb') as dst:
+                                shutil.copyfileobj(src, dst)
+
+        elif sys.platform == "darwin":
+            url = ("https://evermeet.ca/ffmpeg/getrelease-arm64/zip" if machine == "arm64"
+                   else "https://evermeet.ca/ffmpeg/getrelease/zip")
+            archive = target_dir / "_ffmpeg_temp.zip"
+            _download_file(url, archive, "ffmpeg")
+            with zipfile.ZipFile(archive) as zf:
+                zf.extractall(ffmpeg_dir)
+
+        else:  # Linux
+            url = ("https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz"
+                   if machine in ("arm64", "aarch64")
+                   else "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz")
+            archive = target_dir / "_ffmpeg_temp.tar.xz"
+            _download_file(url, archive, "ffmpeg")
+            with tempfile.TemporaryDirectory(dir=target_dir) as tmp:
+                with tarfile.open(archive, "r:xz") as tf:
+                    tf.extractall(tmp)
+                for item in Path(tmp).iterdir():
+                    if item.is_dir() and item.name.startswith("ffmpeg-"):
+                        for binary in ("ffmpeg", "ffprobe"):
+                            src = item / binary
+                            if src.exists():
+                                shutil.copy2(str(src), str(ffmpeg_dir / binary))
+                        break
+
+        archive.unlink(missing_ok=True)
+        print(f"[build] ffmpeg 已安装到 {ffmpeg_dir}")
+        return True
+    except Exception as e:
+        print(f"[build] ffmpeg 下载失败：{type(e).__name__}: {e}")
+        return False
+
+
+def download_runtime_binaries(target_dir: Path) -> None:
+    # 下载 ffmpeg + node 到 target_dir（用于 --dual 的 full 版本）。
+    # 单个组件失败不中断，仅打印警告（full zip 仍可生成，只是缺该组件）。
+    print("[build] 开始下载运行时二进制（ffmpeg + Node.js）...")
+    _ = _download_ffmpeg(target_dir)
+    _ = _download_nodejs(target_dir)
+
+
+def make_zip(version: str, suffix: str = "") -> Path:
+    # 把发布目录压缩为带平台与架构标识的 zip。
+    # suffix 用于 --dual 模式区分 lite / full（如 "-lite"、"-full"）。
     os_tag = {"win32": "windows", "darwin": "macos"}.get(sys.platform, "linux")
     arch = platform.machine().lower()
-    zip_base = DIST_DIR / f"{APP_NAME}-v{version}-{os_tag}-{arch}"
+    zip_base = DIST_DIR / f"{APP_NAME}-v{version}-{os_tag}-{arch}{suffix}"
     zip_path = Path(shutil.make_archive(str(zip_base), "zip", DIST_DIR, APP_NAME))
     print(f"[build] 压缩包已生成：{zip_path}（{zip_path.stat().st_size / 1024 / 1024:.1f} MB）")
     return zip_path
@@ -317,15 +471,36 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=f"{APP_NAME} 打包脚本")
     _ = parser.add_argument("--smoke", action="store_true", help="打包后运行冒烟测试")
     _ = parser.add_argument("--no-zip", action="store_true", help="跳过 zip 压缩")
+    _ = parser.add_argument("--no-runtime", action="store_true",
+                            help="跳过 ffmpeg/node 打包（用户运行时自动下载）")
+    _ = parser.add_argument("--dual", action="store_true",
+                            help="同时生成 lite（无运行时）与 full（下载并打包 ffmpeg+node）两个 zip")
     args = parser.parse_args()
     smoke = cast(bool, args.smoke)
     no_zip = cast(bool, args.no_zip)
+    no_runtime = cast(bool, args.no_runtime)
+    dual = cast(bool, args.dual)
 
     version = read_version()
     print(f"[build] 项目版本：v{version}，平台：{sys.platform}/{platform.machine()}")
 
+    if dual:
+        # --dual：PyInstaller 只跑一次，先产 lite 再产 full，避免重复打包
+        run_pyinstaller()
+        # 1) lite 版本：仅 config，不含运行时
+        copy_external_binaries(include_runtime=False)
+        _prepare_url_config()  # 确保配置就绪（冒烟测试也需要）
+        _ = make_zip(version, suffix="-lite")
+        if smoke:
+            smoke_test()
+        # 2) full 版本：下载并打包 ffmpeg + node
+        download_runtime_binaries(RELEASE_DIR)
+        _ = make_zip(version, suffix="-full")
+        print(f"[build] 完成。发布目录：{RELEASE_DIR}（已生成 lite + full 两个 zip）")
+        return
+
     run_pyinstaller()
-    copy_external_binaries()
+    copy_external_binaries(include_runtime=not no_runtime)
 
     if smoke:
         smoke_test()

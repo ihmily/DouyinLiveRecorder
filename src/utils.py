@@ -17,7 +17,13 @@ from typing import Callable, TypeVar, ParamSpec, cast
 from collections.abc import Mapping
 from urllib.parse import parse_qs, urlparse
 from collections import OrderedDict
-import execjs
+# 优先使用 exejs（PyExecJS 的活跃维护继任者），未安装时回退到 PyExecJS
+try:
+    import exejs as execjs
+    ProgramError = execjs.ExejsProgramError
+except ImportError:
+    import execjs
+    from execjs import ProgramError
 from .logger import logger
 import configparser
 
@@ -54,7 +60,7 @@ def trace_error_decorator(func: Callable[P, R]) -> Callable[P, R]:
             # 异步函数包装器：捕获并记录异常，返回空字典
             try:
                 return cast(R, await func(*args, **kwargs))
-            except execjs.ProgramError:
+            except ProgramError:
                 logger.warning('Failed to execute JS code. Please check if the Node.js environment')
                 return cast(R, {"is_live": False})
             except Exception as e:
@@ -70,7 +76,7 @@ def trace_error_decorator(func: Callable[P, R]) -> Callable[P, R]:
         # 同步函数包装器：捕获并记录异常，返回空字典
         try:
             return func(*args, **kwargs)
-        except execjs.ProgramError:
+        except ProgramError:
             logger.warning('Failed to execute JS code. Please check if the Node.js environment')
             return cast(R, {"is_live": False})
         except Exception as e:

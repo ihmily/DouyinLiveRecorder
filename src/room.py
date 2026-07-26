@@ -7,7 +7,11 @@
 # Copyright (c) 2023 by Hmily, All Rights Reserved.
 import re
 import urllib.parse
-import execjs
+# 优先使用 exejs（PyExecJS 的活跃维护继任者），未安装时回退到 PyExecJS
+try:
+    import exejs as execjs
+except ImportError:
+    import execjs
 import httpx
 from typing import cast
 from . import JS_SCRIPT_PATH, utils
