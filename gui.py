@@ -204,6 +204,8 @@ class SystemTray:
             fill=(220, 38, 38, 255)
         )
 
+        # 提前加载像素数据，避免 ImageDraw 惰性图像在 pystray 保存时触发重入加载崩溃
+        image.load()
         return image
 
     def on_show(self, _icon: "PystrayIcon | None" = None) -> None:
@@ -231,13 +233,33 @@ class SystemTray:
         #  把本方法放到主线程执行；其余平台则在后台线程执行。
         import pystray  # 延迟导入：避免 headless 环境在模块顶层即失败
         try:
+            if sys.platform == "darwin":
+                # macOS 上 pystray 默认以 TIFF 序列化托盘图标，会触发 Pillow/libtiff 原生崩溃
+                # （_imaging → Image.save('TIFF')，见 CI 报错 _assert_image）。
+                # 改用 PNG 序列化（NSImage 同样支持 initWithData:），规避该崩溃。
+                # self 显式标注为 PystrayIcon（Any 别名），以便访问 pystray 内部属性而不触发类型告警。
+                class _TrayIcon(pystray.Icon):
+                    def save_image_data(self) -> bytes:
+                        data = io.BytesIO()
+                        # pystray 内部把原始 PIL 图像存于 _image；用 getattr 读取以规避 stub 缺失该属性的类型告警
+                        img = cast("Image.Image", getattr(self, "_image"))
+                        try:
+                            img.save(data, "PNG")
+                        except Exception:
+                            img.save(data, "TIFF")
+                        return data.getvalue()
+
+                icon_cls = _TrayIcon
+            else:
+                icon_cls = pystray.Icon
+
             menu = pystray.Menu(
                 pystray.MenuItem('显示主界面', self.on_show, default=True),
                 pystray.MenuItem('最小化到托盘', self.on_minimize),
                 pystray.MenuItem('退出程序', self.on_exit)
             )
 
-            icon = pystray.Icon(
+            icon = icon_cls(
                 'LiveRecorder',
                 self.create_icon_image(),
                 'LiveRecorder - click to show',
@@ -252,7 +274,7 @@ class SystemTray:
             self.running = False
             self.icon = None
             try:
-                self.gui._log(f"系统托盘启动失败，已忽略：{exc}", "warn")
+                print(f"[tray] 系统托盘启动失败，已忽略：{exc}", file=sys.stderr)
             except Exception:
                 pass
 
