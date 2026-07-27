@@ -1,6 +1,6 @@
 [project]
 name = "DouyinLiveRecorder"
-version = "4.0.8-dev"
+version = "4.0.8"
 description = "支持抖音、TikTok、YouTube、快手等60+平台的直播录制工具，支持循环录制、多人录制、消息推送"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -41,20 +41,21 @@ classifiers = [
 ]
 
 dependencies = [
-    "requests>=2.32.4",
-    "loguru>=0.7.0",
-    "pycryptodome>=3.19.1",
-    "distro>=1.8.0",
-    "tqdm>=4.66.3",
-    "httpx[http2]>=0.25.0",
+    "requests>=2.34.2",
+    "loguru>=0.7.3",
+    "pycryptodome>=3.23.0",
+    "distro>=1.9.0",
+    "tqdm>=4.69.0",
+    "httpx[http2]>=0.28.1",
+    "exejs>=1.0.1",
     "PyExecJS>=1.5.1",
-    "customtkinter>=5.2.0",
-    "pystray>=0.19.4",
-    "Pillow>=11.3.0",
-    "fastapi>=0.115.0",
-    "uvicorn[standard]>=0.30.0",
-    "python-multipart>=0.0.9",
-    "pydantic>=2.0.0",
+    "customtkinter>=6.0.0",
+    "pystray>=0.19.5",
+    "Pillow>=12.3.0",
+    "fastapi>=0.140.0",
+    "uvicorn[standard]>=0.51.0",
+    "python-multipart>=0.0.32",
+    "pydantic>=2.13.4",
 ]
 
 [project.optional-dependencies]
@@ -66,9 +67,9 @@ dev = [
     "mypy>=1.5.0",
 ]
 gui = [
-    "customtkinter>=5.2.0",
-    "pystray>=0.19.4",
-    "Pillow>=11.3.0",
+    "customtkinter>=6.0.0",
+    "pystray>=0.19.5",
+    "Pillow>=12.3.0",
 ]
 
 [project.scripts]

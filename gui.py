@@ -1,4 +1,4 @@
-# -*- encoding: utf-8 -*-
+ -*- encoding: utf-8 -*-
 # 直播录制器 GUI 界面（基于 CustomTkinter 的现代化重构）
 from __future__ import annotations
 
@@ -204,6 +204,27 @@ class SystemTray:
             fill=(220, 38, 38, 255)
         )
 
+        # 提前加载像素数据，避免 ImageDraw 惰性图像在 pystray 保存时触发重入加载崩溃
+        image.load()
+
+        # 强制在当前线程（主线程）完成 PIL 插件/编码器的初始化，并预热 pystray 的
+        # darwin 后端实际会走的「缩放 + LANCZOS + PNG 序列化」代码路径。
+        # 背景：pystray 的 darwin 后端在 icon.run() 内部 spawn 的后台线程里对图标
+        # 做 resize(状态栏尺寸) + PNG 序列化（_assert_image -> Image.save('png') ->
+        # PIL/_encode_tile）。PIL 的惰性插件/编码器初始化在 PyInstaller 冻结环境下
+        # 并非线程安全，从非主线程首次触发会触发原生崩溃（见 CI faulthandler 堆栈），
+        # 且该原生崩溃无法被 Python try/except 捕获，直接导致 GUI 进程退出、冒烟失败。
+        # 这里把 pystray 实际会走的缩放+PNG 路径提前在主线程跑一遍，确保后台线程复用
+        # 已加载的编码器，不再触发首次初始化的竞态。
+        try:
+            Image.preinit()
+            Image.init()
+            # 模拟 pystray._assert_image 的 resize(状态栏约 22x22) + PNG 保存
+            thumb = image.resize((22, 22), Image.LANCZOS)
+            _buf = io.BytesIO()
+            thumb.save(_buf, "PNG")
+        except Exception:
+            pass
         return image
 
     def on_show(self, _icon: "PystrayIcon | None" = None) -> None:
@@ -224,28 +245,59 @@ class SystemTray:
         self.gui.post_ui(self.gui.root.withdraw)
 
     def run(self) -> None:
-        # 启动系统托盘图标（阻塞运行）
+        # 启动系统托盘图标（阻塞运行）。
+        # 注意：macOS 上 pystray 的 Icon 必须在「主线程」构造与运行
+        # （NSWindow / NSStatusItem 受 AppKit 主线程限制，否则抛
+        #  NSInternalInconsistencyException）。调用方 main() 已据此在 macOS 上
+        #  把本方法放到主线程执行；其余平台则在后台线程执行。
         import pystray  # 延迟导入：避免 headless 环境在模块顶层即失败
-        menu = pystray.Menu(
-            pystray.MenuItem('显示主界面', self.on_show, default=True),
-            pystray.MenuItem('最小化到托盘', self.on_minimize),
-            pystray.MenuItem('退出程序', self.on_exit)
-        )
+        try:
+            menu = pystray.Menu(
+                pystray.MenuItem('显示主界面', self.on_show, default=True),
+                pystray.MenuItem('最小化到托盘', self.on_minimize),
+                pystray.MenuItem('退出程序', self.on_exit)
+            )
 
-        icon = pystray.Icon(
-            'LiveRecorder',
-            self.create_icon_image(),
-            'LiveRecorder - click to show',
-            menu
-        )
-        self.icon = icon
-        self.running = True
-        icon.run()
+            icon = pystray.Icon(
+                'LiveRecorder',
+                self.create_icon_image(),
+                'LiveRecorder - click to show',
+                menu
+            )
+            self.icon = icon
+            self.running = True
+            # 在主线程预先渲染并缓存 NSImage（pystray 内部 _icon_image）：
+            # pystray 的 darwin 后端会在 icon.run() 的后台线程调用 _assert_image 对图标
+            # 做 resize + PNG 序列化（PIL/_encode_tile），该原生编码在 PyInstaller 冻结
+            # 环境从非主线程首次触发会崩溃，且原生崩溃无法被 Python 异常捕获。
+            # 此处先在主线程执行一次 _assert_image，把 _icon_image 缓存下来，后台线程的
+            # _assert_image 命中缓存直接返回，不再触碰 PNG 编码，从根本上消除后台线程崩溃。
+            # 若环境无系统托盘（headless），_assert_image 可能抛 ObjC 异常，则跳过
+            # icon.run()（不再触发后台线程的 PNG 序列化），托盘优雅降级、GUI 进程继续存活。
+            try:
+                icon._assert_image()
+            except Exception:
+                self.running = False
+                self.icon = None
+                return
+            icon.run()
+        except Exception as exc:
+            # 无系统托盘（headless / 无显示 / 库缺失）时优雅降级，
+            # 避免崩溃堆栈导致整个 GUI 进程退出（冒烟测试会据此判定失败）。
+            self.running = False
+            self.icon = None
+            try:
+                print(f"[tray] 系统托盘启动失败，已忽略：{exc}", file=sys.stderr)
+            except Exception:
+                pass
 
     def stop(self) -> None:
-        # 停止系统托盘
+        # 停止系统托盘（macOS 上托盘运行在主线程，stop() 可能由 UI 线程调用，故容错）
         if self.icon and self.running:
-            self.icon.stop()
+            try:
+                self.icon.stop()
+            except Exception:
+                pass
             self.running = False
 
     def notify(self, message: str, title: str = '直播录制器') -> None:
@@ -2041,11 +2093,20 @@ def main() -> None:
 
     tray = SystemTray(app)
     app.system_tray = tray
-    app.tray_thread = threading.Thread(target=tray.run, daemon=True)
-    app.tray_thread.start()
 
     root.protocol("WM_DELETE_WINDOW", app.on_closing)
-    root.mainloop()
+
+    if sys.platform == "darwin":
+        # macOS 要求 pystray 的 Icon 在主线程构造与运行（NSWindow/NSStatusItem 的
+        # AppKit 主线程限制）。因此把 Tkinter 主事件循环放到后台线程，主线程留给托盘。
+        app.tray_thread = None
+        ui_thread = threading.Thread(target=root.mainloop, daemon=True)
+        ui_thread.start()
+        tray.run()  # 阻塞主线程：Icon 在主线程构造，run loop 亦在主线程
+    else:
+        app.tray_thread = threading.Thread(target=tray.run, daemon=True)
+        app.tray_thread.start()
+        root.mainloop()
 
 
 if __name__ == "__main__":

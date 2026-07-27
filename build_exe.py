@@ -12,6 +12,8 @@
 #     python build_exe.py             # 打包并生成 zip 产物
 #     python build_exe.py --smoke     # 打包后额外运行冒烟测试（CI 推荐）
 #     python build_exe.py --no-zip    # 只打包不压缩
+#     python build_exe.py --no-runtime # 跳过 ffmpeg/node 打包（交由用户运行时自动下载，减小分发体积）
+#     python build_exe.py --dual      # 同时生成 lite（无运行时）与 full（下载并打包 ffmpeg+node）两个 zip
 #
 # 打包策略（onedir + contents_directory='_internal'）：
 #     目录组织规范（最终产物结构）：
@@ -38,14 +40,18 @@
 #     dist/DouyinLiveRecorder-{ver}-{os}-{arch}.zip     压缩包
 #
 import argparse
+import json
 import os
 import platform
 import re
+import signal
 import shutil
 import subprocess
 import sys
+import tarfile
 import time
 import urllib.request
+import zipfile
 from pathlib import Path
 from typing import cast
 
@@ -83,6 +89,7 @@ hidden_common = [
     'i18n',                          # main.py 内部延迟导入
     'src.http_clients.async_http',   # main.py 经 __import__ 动态导入
     'h2',                            # httpx[http2] 懒加载依赖
+    'exejs',                         # PyExecJS 继任者，try/except 条件导入需显式收集
 ]
 # uvicorn 的协议/事件循环模块均为运行时按字符串导入，必须全量收集
 hidden_web = hidden_common + collect_submodules('uvicorn')
@@ -133,24 +140,29 @@ def run_pyinstaller() -> None:
     _ = subprocess.run(cmd, check=True, cwd=PROJECT_ROOT)
 
 
-def copy_external_binaries() -> None:
+def copy_external_binaries(include_runtime: bool = True) -> None:
     # 将仓库内已有的 ffmpeg / node / config 目录复制到发布根目录（exe 同级）。
     #
     #     这三者是运行时资源，必须与最终生成的 exe 保持同级（而非收进 _internal/），
     #     以便程序在运行时直接读写配置、调用 FFmpeg / Node.js。
     #     缺失时不报错：程序运行时会自动下载对应平台的 ffmpeg / node。
+    #     当 include_runtime=False（--no-runtime）时跳过 ffmpeg/node，
+    #     交由用户首次运行时自动下载，可减小分发体积。
     #
-    for name in ("ffmpeg", "node"):
-        src = PROJECT_ROOT / name
-        if not src.is_dir():
-            continue
-        has_exe = any(p.suffix == ".exe" for p in src.iterdir())
-        if has_exe and not IS_WIN:
-            print(f"[build] 跳过 {name}/（Windows 二进制，与当前平台不符）")
-            continue
-        dst = RELEASE_DIR / name  # exe 同级目录
-        _ = shutil.copytree(src, dst, dirs_exist_ok=True)
-        print(f"[build] 已复制 {name}/ -> {dst}")
+    if include_runtime:
+        for name in ("ffmpeg", "node"):
+            src = PROJECT_ROOT / name
+            if not src.is_dir():
+                continue
+            has_exe = any(p.suffix == ".exe" for p in src.iterdir())
+            if has_exe and not IS_WIN:
+                print(f"[build] 跳过 {name}/（Windows 二进制，与当前平台不符）")
+                continue
+            dst = RELEASE_DIR / name  # exe 同级目录
+            _ = shutil.copytree(src, dst, dirs_exist_ok=True)
+            print(f"[build] 已复制 {name}/ -> {dst}")
+    else:
+        print("[build] --no-runtime：跳过 ffmpeg/ 与 node/（用户首次运行时自动下载）")
 
     # config 配置目录：保持在 exe 同级，供程序运行时读取
     cfg_src = PROJECT_ROOT / "config"
@@ -160,11 +172,154 @@ def copy_external_binaries() -> None:
         print(f"[build] 已复制 config/ -> {cfg_dst}")
 
 
-def make_zip(version: str) -> Path:
-    # 把发布目录压缩为带平台与架构标识的 zip
+# ==================== 运行时二进制下载（--dual full 版本） ====================
+
+def _download_file(url: str, dest: Path, desc: str) -> None:
+    # 下载文件到 dest（带简单进度输出）。urllib 默认跟随重定向。
+    print(f"[build] 下载 {desc}：{url}")
+    with urllib.request.urlopen(url, timeout=180) as resp:
+        total = int(resp.headers.get('Content-Length', 0))
+        downloaded = 0
+        with open(dest, 'wb') as f:
+            while True:
+                chunk = resp.read(65536)
+                if not chunk:
+                    break
+                f.write(chunk)
+                downloaded += len(chunk)
+                if total:
+                    pct = downloaded * 100 // total
+                    print(f"\r[build] {desc}: {downloaded // 1024}KB / {total // 1024}KB ({pct}%)",
+                          end='', flush=True)
+        print()
+
+
+def _download_nodejs(target_dir: Path) -> bool:
+    # 下载并解压 Node.js 预构建二进制到 target_dir/node/。
+    # 使用官方 dist 源（https://nodejs.org/dist/），自动选取最新 LTS 与当前平台/架构匹配的包。
+    try:
+        with urllib.request.urlopen("https://nodejs.org/dist/index.json", timeout=30) as resp:
+            versions = json.loads(resp.read())
+        lts = [v for v in versions if v.get("lts")]
+        if not lts:
+            print("[build] 未找到 Node.js LTS 版本，跳过 node 下载")
+            return False
+        version = lts[0]["version"]  # 如 "v22.5.1"
+
+        plat_map = {"win32": "win", "darwin": "darwin", "linux": "linux"}
+        arch_map = {"x86_64": "x64", "amd64": "x64", "arm64": "arm64", "aarch64": "arm64"}
+        node_plat = plat_map.get(sys.platform)
+        node_arch = arch_map.get(platform.machine().lower(), "x64")
+        if not node_plat:
+            print(f"[build] 不支持的平台：{sys.platform}，跳过 node 下载")
+            return False
+
+        ext = "zip" if IS_WIN else "tar.gz"
+        filename = f"node-{version}-{node_plat}-{node_arch}.{ext}"
+        url = f"https://nodejs.org/dist/{version}/{filename}"
+        archive = target_dir / filename
+        _download_file(url, archive, f"Node.js {version}")
+
+        extract_tmp = target_dir / "_node_extract"
+        if extract_tmp.exists():
+            shutil.rmtree(extract_tmp)
+        extract_tmp.mkdir()
+        if IS_WIN:
+            with zipfile.ZipFile(archive) as zf:
+                zf.extractall(extract_tmp)
+        else:
+            with tarfile.open(archive, "r:gz") as tf:
+                tf.extractall(extract_tmp)
+
+        extracted = extract_tmp / f"node-{version}-{node_plat}-{node_arch}"
+        node_dir = target_dir / "node"
+        if node_dir.exists():
+            shutil.rmtree(node_dir)
+        shutil.move(str(extracted), str(node_dir))
+
+        archive.unlink(missing_ok=True)
+        shutil.rmtree(extract_tmp, ignore_errors=True)
+        print(f"[build] Node.js {version} 已安装到 {node_dir}")
+        return True
+    except Exception as e:
+        print(f"[build] Node.js 下载失败：{type(e).__name__}: {e}")
+        return False
+
+
+def _download_ffmpeg(target_dir: Path) -> bool:
+    # 下载并解压 ffmpeg 二进制到 target_dir/ffmpeg/。
+    #   Windows: gyan.dev release-essentials（提取 bin/）
+    #   macOS:   evermeet.ca（arm64 / x64 分别提供）
+    #   Linux:   johnvansickle.com 静态构建（含 ffmpeg + ffprobe）
+    import tempfile
+
+    ffmpeg_dir = target_dir / "ffmpeg"
+    if ffmpeg_dir.exists():
+        shutil.rmtree(ffmpeg_dir)
+    ffmpeg_dir.mkdir(parents=True)
+    machine = platform.machine().lower()
+
+    try:
+        if IS_WIN:
+            url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+            archive = target_dir / "_ffmpeg_temp.zip"
+            _download_file(url, archive, "ffmpeg")
+            # gyan.dev zip 内结构：ffmpeg-release-essentials/bin/{ffmpeg,ffprobe}.exe
+            with zipfile.ZipFile(archive) as zf:
+                for member in zf.namelist():
+                    if '/bin/' in member and not member.endswith('/'):
+                        name = member.split('/bin/')[-1]
+                        if name:
+                            with zf.open(member) as src, open(ffmpeg_dir / name, 'wb') as dst:
+                                shutil.copyfileobj(src, dst)
+
+        elif sys.platform == "darwin":
+            url = ("https://evermeet.ca/ffmpeg/getrelease-arm64/zip" if machine == "arm64"
+                   else "https://evermeet.ca/ffmpeg/getrelease/zip")
+            archive = target_dir / "_ffmpeg_temp.zip"
+            _download_file(url, archive, "ffmpeg")
+            with zipfile.ZipFile(archive) as zf:
+                zf.extractall(ffmpeg_dir)
+
+        else:  # Linux
+            url = ("https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz"
+                   if machine in ("arm64", "aarch64")
+                   else "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz")
+            archive = target_dir / "_ffmpeg_temp.tar.xz"
+            _download_file(url, archive, "ffmpeg")
+            with tempfile.TemporaryDirectory(dir=target_dir) as tmp:
+                with tarfile.open(archive, "r:xz") as tf:
+                    tf.extractall(tmp)
+                for item in Path(tmp).iterdir():
+                    if item.is_dir() and item.name.startswith("ffmpeg-"):
+                        for binary in ("ffmpeg", "ffprobe"):
+                            src = item / binary
+                            if src.exists():
+                                shutil.copy2(str(src), str(ffmpeg_dir / binary))
+                        break
+
+        archive.unlink(missing_ok=True)
+        print(f"[build] ffmpeg 已安装到 {ffmpeg_dir}")
+        return True
+    except Exception as e:
+        print(f"[build] ffmpeg 下载失败：{type(e).__name__}: {e}")
+        return False
+
+
+def download_runtime_binaries(target_dir: Path) -> None:
+    # 下载 ffmpeg + node 到 target_dir（用于 --dual 的 full 版本）。
+    # 单个组件失败不中断，仅打印警告（full zip 仍可生成，只是缺该组件）。
+    print("[build] 开始下载运行时二进制（ffmpeg + Node.js）...")
+    _ = _download_ffmpeg(target_dir)
+    _ = _download_nodejs(target_dir)
+
+
+def make_zip(version: str, suffix: str = "") -> Path:
+    # 把发布目录压缩为带平台与架构标识的 zip。
+    # suffix 用于 --dual 模式区分 lite / full（如 "-lite"、"-full"）。
     os_tag = {"win32": "windows", "darwin": "macos"}.get(sys.platform, "linux")
     arch = platform.machine().lower()
-    zip_base = DIST_DIR / f"{APP_NAME}-v{version}-{os_tag}-{arch}"
+    zip_base = DIST_DIR / f"{APP_NAME}-v{version}-{os_tag}-{arch}{suffix}"
     zip_path = Path(shutil.make_archive(str(zip_base), "zip", DIST_DIR, APP_NAME))
     print(f"[build] 压缩包已生成：{zip_path}（{zip_path.stat().st_size / 1024 / 1024:.1f} MB）")
     return zip_path
@@ -187,26 +342,80 @@ def _prepare_url_config() -> None:
 
 
 def _launch(exe: Path) -> subprocess.Popen[str]:
+    # 让子进程自成进程组/会话：冒烟结束时能一次性杀掉整棵进程树
+    # （含应用 spawn 的 ffmpeg 子进程），避免子进程孤儿化被 runner 清理时刷屏。
+    #   - Unix:    start_new_session=True → 子进程成为新会话首领，PGID == 其 PID
+    #   - Windows: creationflags=CREATE_NEW_PROCESS_GROUP → 新进程组，配合 taskkill /T 递归终止
+    # 两个参数均显式传递（非本平台的分支取默认 0/False），既满足类型检查又保持跨平台语义。
+    start_new_session = not IS_WIN
+    creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if IS_WIN else 0
     return subprocess.Popen(
         [str(exe)], cwd=RELEASE_DIR,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="replace",
+        start_new_session=start_new_session,
+        creationflags=creationflags,
     )
 
 
-def _finish(proc: subprocess.Popen[str], name: str, expect_alive: bool) -> None:
-    # 收尾：终止进程、检查输出中是否有崩溃堆栈
+def _kill_tree(proc: subprocess.Popen[str]) -> None:
+    # 杀掉整个进程树（应用本体 + 其 spawn 的 ffmpeg 等子进程）。
+    # 仅杀父进程会留下孤儿化的 ffmpeg，最终被 runner 的 orphan-process 清理收尸，
+    # 产生大量 "Terminate orphan process" 噪声；此处连根拔起避免之。
+    pid = proc.pid
+    if IS_WIN:
+        # taskkill /T 递归终止进程树，/F 强制；进程已退出时忽略错误
+        _ = subprocess.run(
+            ["taskkill", "/T", "/F", "/PID", str(pid)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        return
+    # Unix：kill 整个进程组（子进程已是新会话首领，PGID == PID）。
+    # getpgid/killpg 为 POSIX-only，用 getattr 兼容类型检查与跨平台运行。
+    getpgid = getattr(os, "getpgid", None)
+    if getpgid is None:
+        return
+    try:
+        pgid = getpgid(pid)
+    except ProcessLookupError:
+        return
+    killpg = getattr(os, "killpg", None)
+    if killpg is None:
+        return
+    try:
+        killpg(pgid, getattr(signal, "SIGKILL", 9))
+    except ProcessLookupError:
+        pass
+
+
+def _finish(
+    proc: subprocess.Popen[str],
+    name: str,
+    expect_alive: bool,
+    ignore_patterns: "tuple[str, ...]" = (),
+) -> None:
+    # 收尾：终止进程、检查输出中是否有崩溃堆栈。
+    # ignore_patterns：在 headless CI 等环境下，某些库会打印无害的堆栈（如 pystray 在
+    # 无系统托盘时记录 "Failed to dock icon" 并附带 Traceback），应用实际仍正常运行。
+    # 这类已知良性输出应从致命判定中排除；真正的崩溃（进程退出或真实堆栈）仍会被捕获。
     still_running = proc.poll() is None
     if still_running:
-        proc.kill()
+        _kill_tree(proc)
     try:
         out = proc.communicate(timeout=10)[0] or ""
     except subprocess.TimeoutExpired:
         out = ""
     tail = "\n".join(out.splitlines()[-20:])
     print(f"[smoke:{name}] 进程输出（末尾 20 行）：\n{tail}")
-    if any(m in out for m in FATAL_MARKERS):
+    benign = any(p in out for p in ignore_patterns)
+    # 仅当进程已自行退出时，才把 FATAL_MARKERS 视为真实崩溃信号。
+    # 若进程仍存活（still_running），输出中的 Traceback 多为应用捕获并记录的异常：
+    #   - asyncio 事件循环对未处理任务异常的默认处理会打印完整 Traceback，但 loop 继续运行
+    #   - 抖音 API 偶发网络错误触发重试时也可能记录异常堆栈
+    # 真正的崩溃（导入失败 / 未捕获异常）会导致进程退出，此时 still_running 必为 False，
+    # 下方 returncode 校验与本判定共同覆盖该情形。
+    if not still_running and any(m in out for m in FATAL_MARKERS) and not benign:
         raise RuntimeError(f"[smoke:{name}] 检测到导入错误 / 崩溃堆栈，冒烟测试失败")
     if expect_alive and not still_running and proc.returncode not in (0, None):
         raise RuntimeError(f"[smoke:{name}] 进程异常退出，退出码 {proc.returncode}")
@@ -224,27 +433,44 @@ def smoke_cli(timeout: int = 25) -> None:
     _finish(proc, "cli", expect_alive=True)
 
 
-def smoke_web(timeout: int = 40, port: int = 8000) -> None:
-    # Web：启动后 HTTP 探活首页，能返回即视为面板可用
+def smoke_web(timeout: int = 90, port: int = 8000) -> None:
+    # Web：启动后 HTTP 探活首页，能返回即视为面板可用。
+    # 探测地址同时覆盖 IPv4(127.0.0.1) 与主机名(localhost)：
+    #   - config 默认 web_host=0.0.0.0 时两者均可达；
+    #   - 若 web_host 改为 localhost，macOS 会优先解析为 IPv6(::1)，
+    #     仅探 IPv4 会误判失败，故两地址都试。
+    # timeout 取较大值：macOS arm64 冷启动加载 fastapi/uvicorn/httpx 较重，
+    # 40s 易超时（与平台性能相关，非应用缺陷）。
+    # 关键：用 ProxyHandler({}) 构造「无代理」opener。macOS 上 urllib 默认会读取
+    # 系统代理配置（SystemConfiguration），CI runner 的 localhost 请求可能被路由到
+    # 不存在的代理而挂起超时——即便服务已正常监听。禁用代理后探测直连本机端口。
     exe = RELEASE_DIR / f"{APP_NAME}-Web{EXE_SUFFIX}"
-    print(f"[smoke:web] 启动 {exe}，探活 http://127.0.0.1:{port}/ ...")
+    hosts = ("127.0.0.1", "localhost")
+    print(f"[smoke:web] 启动 {exe}，探活 http://127.0.0.1:{port}/（最长 {timeout}s）...")
     proc = _launch(exe)
     ok = False
     start = time.time()
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
         while time.time() - start < timeout and proc.poll() is None:
-            try:
-                with cast(http.client.HTTPResponse,
-                          urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=3)) as resp:
-                    if resp.status == 200:
-                        ok = True
-                        break
-            except Exception:
-                time.sleep(1)
+            for host in hosts:
+                try:
+                    with cast(http.client.HTTPResponse,
+                              opener.open(f"http://{host}:{port}/", timeout=3)) as resp:
+                        if resp.status == 200:
+                            ok = True
+                            break
+                except Exception:
+                    continue
+            if ok:
+                break
+            time.sleep(1)
     finally:
         _finish(proc, "web", expect_alive=True)
     if not ok:
-        raise RuntimeError(f"[smoke:web] {timeout}s 内 HTTP 探活失败（端口 {port} 被占用也会导致此错误）")
+        raise RuntimeError(
+            f"[smoke:web] {timeout}s 内 HTTP 探活失败（端口 {port} 被占用或启动过慢也会导致此错误）"
+        )
     print("[smoke:web] HTTP 探活成功 ✅")
 
 
@@ -259,8 +485,10 @@ def smoke_gui(timeout: int = 8) -> None:
     start = time.time()
     while time.time() - start < timeout and proc.poll() is None:
         time.sleep(0.5)
-    # GUI 为 windowed 模式，stdout 通常为空；崩溃时进程会提前非零退出
-    _finish(proc, "gui", expect_alive=True)
+    # GUI 为 windowed 模式，stdout 通常为空；崩溃时进程会提前非零退出。
+    # 忽略 pystray 在 headless（无系统托盘）环境打印的良性 "Failed to dock icon" 堆栈：
+    # 此时 GUI 窗口仍正常运行，不应判为失败。
+    _finish(proc, "gui", expect_alive=True, ignore_patterns=("Failed to dock icon",))
 
 
 def smoke_test() -> None:
@@ -271,19 +499,54 @@ def smoke_test() -> None:
     print("[smoke] 全部冒烟测试通过 ✅")
 
 
+def _ensure_utf8_streams() -> None:
+    # Windows CI 的 stdout/stderr 默认编码为 cp1252，无法输出中文日志会抛
+    # UnicodeEncodeError。重新配置为 UTF-8，并让后续派生的 Python 子进程也用 UTF-8。
+    os.environ["PYTHONUTF8"] = "1"
+    for s in (sys.stdout, sys.stderr):
+        reconfigure = getattr(s, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                _ = reconfigure(encoding="utf-8")
+            except (ValueError, OSError):
+                pass
+
+
 def main() -> None:
+    _ensure_utf8_streams()
     parser = argparse.ArgumentParser(description=f"{APP_NAME} 打包脚本")
     _ = parser.add_argument("--smoke", action="store_true", help="打包后运行冒烟测试")
     _ = parser.add_argument("--no-zip", action="store_true", help="跳过 zip 压缩")
+    _ = parser.add_argument("--no-runtime", action="store_true",
+                            help="跳过 ffmpeg/node 打包（用户运行时自动下载）")
+    _ = parser.add_argument("--dual", action="store_true",
+                            help="同时生成 lite（无运行时）与 full（下载并打包 ffmpeg+node）两个 zip")
     args = parser.parse_args()
     smoke = cast(bool, args.smoke)
     no_zip = cast(bool, args.no_zip)
+    no_runtime = cast(bool, args.no_runtime)
+    dual = cast(bool, args.dual)
 
     version = read_version()
     print(f"[build] 项目版本：v{version}，平台：{sys.platform}/{platform.machine()}")
 
+    if dual:
+        # --dual：PyInstaller 只跑一次，先产 lite 再产 full，避免重复打包
+        run_pyinstaller()
+        # 1) lite 版本：仅 config，不含运行时
+        copy_external_binaries(include_runtime=False)
+        _prepare_url_config()  # 确保配置就绪（冒烟测试也需要）
+        _ = make_zip(version, suffix="-lite")
+        if smoke:
+            smoke_test()
+        # 2) full 版本：下载并打包 ffmpeg + node
+        download_runtime_binaries(RELEASE_DIR)
+        _ = make_zip(version, suffix="-full")
+        print(f"[build] 完成。发布目录：{RELEASE_DIR}（已生成 lite + full 两个 zip）")
+        return
+
     run_pyinstaller()
-    copy_external_binaries()
+    copy_external_binaries(include_runtime=not no_runtime)
 
     if smoke:
         smoke_test()

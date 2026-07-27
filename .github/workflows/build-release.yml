@@ -1,0 +1,147 @@
+# DouyinLiveRecorder 可执行文件构建与发布工作流
+#
+# 触发方式：
+#   1. 手动触发（workflow_dispatch）：构建三平台产物并上传 artifact
+#   2. 推送 v* 标签（如 v4.0.8）：构建 + 自动创建 GitHub Release 并附上产物
+#
+# 构建逻辑统一由仓库根目录的 build_exe.py 承担（本地与 CI 行为一致）。
+
+name: Build Executables
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write   # 创建 Release 需要
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+          - os: ubuntu-latest
+            platform: linux
+          - os: macos-latest
+            platform: macos
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # 冒烟测试需要 ffmpeg（main.py 启动即检查）。
+      # 三平台均用系统包管理器安装 ffmpeg 供冒烟测试使用（冒烟测试跑在 lite 版本上）；
+      # full 版本由 build_exe.py --dual 在构建时下载预构建二进制并打包。
+      # Linux 额外安装 xvfb：GUI（tkinter/pystray）冒烟测试需要虚拟显示。
+      - name: Install ffmpeg (Windows)
+        if: matrix.platform == 'windows'
+        run: choco install ffmpeg -y
+
+      - name: Install ffmpeg + xvfb (Linux)
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg xvfb
+
+      - name: Install ffmpeg (macOS)
+        if: matrix.platform == 'macos'
+        env:
+          HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
+        run: |
+          # GitHub 的 macOS runner预置了未受信的 aws/tap，
+          # Homebrew 新的 tap 信任机制会因此报错。先信任该 tap 作为兜底关闭校验。
+          brew trust aws/tap || true
+          brew install ffmpeg
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build executables + smoke test (Linux, xvfb)
+        if: matrix.platform == 'linux'
+        run: xvfb-run -a python build_exe.py --smoke --dual
+
+      - name: Build executables + smoke test
+        if: matrix.platform != 'linux'
+        run: python build_exe.py --smoke --dual
+
+      - name: Upload lite artifact
+        uses: actions/upload-artifact@v7   # v7 原生 Node.js 24，且相比 v5 改进了上传重试逻辑
+        with:
+          name: DouyinLiveRecorder-${{ matrix.platform }}-lite
+          path: dist/*-lite.zip
+          compression-level: 0             # zip 已压缩，跳过重复压缩以加速上传
+          if-no-files-found: error
+
+      # full 版本含 ffmpeg + node（~300MB），即使 v7 内置重试仍可能因瞬时网络
+      # 故障（如 EHOSTUNREACH）失败。此处叠加工作流级别的显式重试（最多 3 次，
+      # 退避 30s → 60s），且最后一次失败才会让 job 失败。
+      - name: Upload full artifact (attempt 1/3)
+        id: upload_full_1
+        uses: actions/upload-artifact@v7
+        continue-on-error: true
+        with:
+          name: DouyinLiveRecorder-${{ matrix.platform }}-full
+          path: dist/*-full.zip
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Wait before retry (30s)
+        if: steps.upload_full_1.outcome == 'failure'
+        run: sleep 30
+
+      - name: Upload full artifact (attempt 2/3)
+        id: upload_full_2
+        if: steps.upload_full_1.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        continue-on-error: true
+        with:
+          name: DouyinLiveRecorder-${{ matrix.platform }}-full
+          path: dist/*-full.zip
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Wait before retry (60s)
+        if: steps.upload_full_1.outcome == 'failure' && steps.upload_full_2.outcome == 'failure'
+        run: sleep 60
+
+      - name: Upload full artifact (attempt 3/3)
+        if: steps.upload_full_1.outcome == 'failure' && steps.upload_full_2.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: DouyinLiveRecorder-${{ matrix.platform }}-full
+          path: dist/*-full.zip
+          compression-level: 0
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v7   # 同步升级至 Node.js 24 运行时
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: artifacts/*.zip
+          generate_release_notes: true
+          draft: false

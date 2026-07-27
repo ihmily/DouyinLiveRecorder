@@ -20,7 +20,7 @@
 # GitHub: https://github.com/ihmily
 # Date: 2023-07-17 23:52:05
 # Update: 2025-10-23 19:48:05
-# Version: v4.0.7
+# Version: v4.0.8
 # Copyright (c) 2023-2025 by Hmily, All Rights Reserved.
 
 # 强制标准流以 UTF-8 输出。
@@ -99,7 +99,7 @@ from src.ffmpeg_install import (
 )
 
 # 版本信息和支持的平台列表
-version: str = "v4.0.7"
+version: str = "v4.0.8"
 platforms: str = ("\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|"
                    "酷狗|花椒|流星|Acfun|畅聊|映客|音播|知乎|嗨秀|VV星球|17Live|浪Live|漂漂|六间房|乐嗨|花猫|淘宝|京东|咪咕|连接|来秀"
                    "\n海外站点：TikTok|SOOP|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK|Shopee|"
@@ -710,8 +710,10 @@ def delete_line(file_path: str, del_line: str, delete_all: bool = False) -> None
                 _ = f.write(txt_line)
 
 
-def get_startup_info(system_type: str) -> subprocess.STARTUPINFO | None:
+def get_startup_info(system_type: str) -> "subprocess.STARTUPINFO | None":
     # 获取平台启动信息（Windows 隐藏控制台窗口）
+    # 返回类型用字符串注解：subprocess.STARTUPINFO 仅 Windows 存在，
+    # 作为注解在 Linux/macOS 导入时会抛 AttributeError（PEP 563 惰性求值规避）。
     if system_type == 'nt':
         startup_info = subprocess.STARTUPINFO()
         startup_info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -2253,7 +2255,7 @@ def backup_file(file_path: str, backup_dir_path: str, limit_counts: int = 6) -> 
             _files = _files[1:]
 
     except Exception as e:
-        logger.error(f'\r备份配置文件 {file_path} 失败：{str(e)}')
+        logger.error(f'\r备份配置文件 {file_path} 失败：{e}')
 
 
 def backup_file_start() -> None:

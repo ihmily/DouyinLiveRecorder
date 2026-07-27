@@ -2,35 +2,36 @@
 # 版本约束与 pyproject.toml [project.dependencies] 保持一致
 
 # HTTP 请求
-requests>=2.32.4          # 同步 HTTP 请求
-httpx[http2]>=0.25.0      # 异步 HTTP 客户端（含 HTTP/2 支持）
+requests>=2.34.2          # 同步 HTTP 请求
+httpx[http2]>=0.28.1      # 异步 HTTP 客户端（含 HTTP/2 支持）
 
 # 日志
-loguru>=0.7.0             # 结构化日志库
+loguru>=0.7.3             # 结构化日志库
 
 # 加密 / 签名
-pycryptodome>=3.19.1      # 加密算法（SM3、RC4 等）
+pycryptodome>=3.23.0      # 加密算法（SM3、RC4 等）
 
 # 系统检测
-distro>=1.8.0             # Linux 发行版识别
+distro>=1.9.0             # Linux 发行版识别
 
 # CLI 进度条
-tqdm>=4.66.3              # 下载进度条显示
+tqdm>=4.69.0              # 下载进度条显示
 
 # JavaScript 执行引擎
-PyExecJS>=1.5.1           # 运行各平台 JS 签名脚本（需 Node.js）
+exejs>=1.0.1              # PyExecJS 的活跃维护继任者（运行各平台 JS 签名脚本，需 Node.js）
+PyExecJS>=1.5.1           # 回退兼容（exejs 未安装时使用，已停止维护）
 
 # GUI 图形界面
-customtkinter>=5.2.0      # 现代化 GUI 框架（圆角控件、深浅色主题、DPI 自适应）
-pystray>=0.19.4           # 系统托盘图标（GUI 模式专用，headless 需 X11）
-Pillow>=11.3.0            # 图像处理（托盘图标生成）
+customtkinter>=6.0.0      # 现代化 GUI 框架（圆角控件、深浅色主题、DPI 自适应）
+pystray>=0.19.5           # 系统托盘图标（GUI 模式专用，headless 需 X11；0.19.5 起 macOS 用 PNG 替代 TIFF）
+Pillow>=12.3.0            # 图像处理（托盘图标生成）
 
 # 注：Weverse 平台认证由 src/weverse_auth.py 自行通过 requests 直接调用 API 实现，
 # 不依赖 pip 上的 weverse 包；该包会拉入已废弃的 pycrypto==2.6.1，
 # 在 Python 3.10+ 上因缺失 longintrepr.h 头文件无法编译，故不再列入依赖。
 
 # Web 管理面板
-fastapi>=0.115.0           # Web 框架
-uvicorn[standard]>=0.30.0  # ASGI 服务器
-python-multipart>=0.0.9    # 表单/文件兼容
-pydantic>=2.0.0            # 请求模型校验（FastAPI 依赖，代码直接引用 BaseModel）
+fastapi>=0.140.0           # Web 框架
+uvicorn[standard]>=0.51.0  # ASGI 服务器
+python-multipart>=0.0.32   # 表单/文件兼容
+pydantic>=2.13.4           # 请求模型校验（FastAPI 依赖，代码直接引用 BaseModel）

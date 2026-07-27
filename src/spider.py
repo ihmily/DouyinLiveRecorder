@@ -3,9 +3,9 @@
 # 抖音直播录制工具 - 爬虫模块
 
 # 爬虫模块大量解析动态 JSON（json.loads 返回 Any、嵌套异构结构），
-# 严格模式下的 reportAny / reportUnknown* 等规则在此类代码上只会产生噪声，
+# 严格模式下的 reportUnknown* 等规则在此类代码上只会产生噪声，
 # 故对本文件放宽相关检查，仅保留其余基础类型检查。
-# pyright: reportAny=none, reportExplicitAny=none, reportUnknownVariableType=none, reportUnknownParameterType=none, reportUnknownArgumentType=none, reportUnknownMemberType=none, reportUnknownLambdaType=none, reportMissingTypeArgument=none, reportMissingParameterType=none, reportIndexIssue=none, reportOperatorIssue=none, reportImplicitStringConcatenation=none, reportUnnecessaryIsInstance=none, reportUnusedCallResult=none, reportArgumentType=none, reportReturnType=none
+# pyright: reportUnknownVariableType=none, reportUnknownParameterType=none, reportUnknownArgumentType=none, reportUnknownMemberType=none, reportUnknownLambdaType=none, reportMissingTypeArgument=none, reportMissingParameterType=none, reportIndexIssue=none, reportOperatorIssue=none, reportImplicitStringConcatenation=none, reportUnnecessaryIsInstance=none, reportUnusedCallResult=none, reportArgumentType=none, reportReturnType=none
 
 import asyncio
 import hashlib
@@ -19,7 +19,13 @@ from typing import cast
 import httpx
 import re
 import json
-import execjs
+# 优先使用 exejs（PyExecJS 的活跃维护继任者），未安装时回退到 PyExecJS
+try:
+    import exejs as execjs
+    ProgramError = execjs.ExejsProgramError
+except ImportError:
+    import execjs
+    from execjs import ProgramError
 from . import JS_SCRIPT_PATH, utils
 from .utils import trace_error_decorator, generate_random_string
 from .logger import script_path, logger
@@ -3897,8 +3903,8 @@ async def get_migu_stream_url(url: str, proxy_addr: OptionalStr = None, cookies:
                     check=True
                 )
                 return result.stdout.strip()
-            except execjs.ProgramError:
-                raise execjs.ProgramError('Failed to execute JS code. Please check if the Node.js environment')
+            except ProgramError:
+                raise ProgramError('Failed to execute JS code. Please check if the Node.js environment')
 
         ddCalcu = await _get_dd_calcu(source_url)
         real_source_url = f'{source_url}&ddCalcu={ddCalcu}&sv=10010'
