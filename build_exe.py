@@ -289,6 +289,15 @@ def _download_ffmpeg(target_dir: Path) -> bool:
             _download_file(url, archive, "ffmpeg")
             with tempfile.TemporaryDirectory(dir=target_dir) as tmp:
                 with tarfile.open(archive, "r:xz") as tf:
+                    extract_root = Path(tmp).resolve()
+                    for member in tf.getmembers():
+                        member_path = Path(member.name)
+                        if member_path.is_absolute() or ".." in member_path.parts:
+                            raise ValueError(f"Illegal tar archive entry: {member.name}")
+                        if member.issym() or member.islnk():
+                            raise ValueError(f"Unsupported tar link entry: {member.name}")
+                        resolved_target = (extract_root / member.name).resolve()
+                        resolved_target.relative_to(extract_root)
                     tf.extractall(tmp)
                 for item in Path(tmp).iterdir():
                     if item.is_dir() and item.name.startswith("ffmpeg-"):
