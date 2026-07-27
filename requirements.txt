@@ -23,7 +23,7 @@ PyExecJS>=1.5.1           # 回退兼容（exejs 未安装时使用，已停止�
 
 # GUI 图形界面
 customtkinter>=6.0.0      # 现代化 GUI 框架（圆角控件、深浅色主题、DPI 自适应）
-pystray>=0.19.4           # 系统托盘图标（GUI 模式专用，headless 需 X11）
+pystray>=0.19.5           # 系统托盘图标（GUI 模式专用，headless 需 X11；0.19.5 起 macOS 用 PNG 替代 TIFF）
 Pillow>=12.3.0            # 图像处理（托盘图标生成）
 
 # 注：Weverse 平台认证由 src/weverse_auth.py 自行通过 requests 直接调用 API 实现，
