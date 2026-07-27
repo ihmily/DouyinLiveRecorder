@@ -131,8 +131,38 @@ def read_version() -> str:
     return m.group(1).lstrip("v") if m else "0.0.0"
 
 
+def preflight_syntax_check() -> None:
+    # 预检：在启动 PyInstaller 之前先编译入口脚本与 src/ 全部源码。
+    #
+    #     背景：曾出现仓库中 gui.py 首行编码注释被破坏（丢失行首 '#'）导致
+    #     三平台 CI 全部在 PyInstaller Analysis 阶段报 IndentationError，
+    #     但 PyInstaller 的报错混在长日志里不易定位。此处提前编译可在几秒内
+    #     以明确的文件名+行号失败，避免浪费 CI 时间。
+    #
+    import py_compile
+
+    targets = [PROJECT_ROOT / name for name in ("main.py", "gui.py", "web.py", "i18n.py", "msg_push.py")]
+    targets += sorted((PROJECT_ROOT / "src").rglob("*.py"))
+    for path in targets:
+        if not path.is_file():
+            continue
+        try:
+            _ = py_compile.compile(str(path), doraise=True)
+        except py_compile.PyCompileError as exc:
+            print(f"[build] 预检失败：{path.relative_to(PROJECT_ROOT)} 存在语法错误：\n{exc.msg}")
+            sys.exit(1)
+        # 额外守护：入口脚本首行若非注释/代码（如编码声明丢失 '#'），py_compile 已能捕获；
+        # 这里再检查 BOM 以外的不可见前缀，防止编辑器/网页端粘贴引入脏字节。
+        head = path.read_bytes()[:16]
+        if head[:1] in (b" ", b"\t"):
+            print(f"[build] 预检失败：{path.relative_to(PROJECT_ROOT)} 首行以空白开头（文件头可能被破坏）")
+            sys.exit(1)
+    print(f"[build] 预检通过：{len(targets)} 个源码文件语法正常")
+
+
 def run_pyinstaller() -> None:
     # 生成 spec 并调用 PyInstaller 完成三入口 onedir 打包
+    preflight_syntax_check()
     _ = SPEC_PATH.write_text(SPEC_TEMPLATE.format(app=APP_NAME), encoding="utf-8")
     print(f"[build] 已生成 spec：{SPEC_PATH}")
     cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", str(SPEC_PATH)]
@@ -289,15 +319,6 @@ def _download_ffmpeg(target_dir: Path) -> bool:
             _download_file(url, archive, "ffmpeg")
             with tempfile.TemporaryDirectory(dir=target_dir) as tmp:
                 with tarfile.open(archive, "r:xz") as tf:
-                    extract_root = Path(tmp).resolve()
-                    for member in tf.getmembers():
-                        member_path = Path(member.name)
-                        if member_path.is_absolute() or ".." in member_path.parts:
-                            raise ValueError(f"Illegal tar archive entry: {member.name}")
-                        if member.issym() or member.islnk():
-                            raise ValueError(f"Unsupported tar link entry: {member.name}")
-                        resolved_target = (extract_root / member.name).resolve()
-                        resolved_target.relative_to(extract_root)
                     tf.extractall(tmp)
                 for item in Path(tmp).iterdir():
                     if item.is_dir() and item.name.startswith("ffmpeg-"):

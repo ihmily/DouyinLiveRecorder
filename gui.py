@@ -1,4 +1,4 @@
- -*- encoding: utf-8 -*-
+# -*- encoding: utf-8 -*-
 # 直播录制器 GUI 界面（基于 CustomTkinter 的现代化重构）
 from __future__ import annotations
 
