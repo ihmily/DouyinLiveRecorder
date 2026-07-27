@@ -44,6 +44,7 @@ import json
 import os
 import platform
 import re
+import signal
 import shutil
 import subprocess
 import sys
@@ -341,12 +342,51 @@ def _prepare_url_config() -> None:
 
 
 def _launch(exe: Path) -> subprocess.Popen[str]:
+    # 让子进程自成进程组/会话：冒烟结束时能一次性杀掉整棵进程树
+    # （含应用 spawn 的 ffmpeg 子进程），避免子进程孤儿化被 runner 清理时刷屏。
+    #   - Unix:    start_new_session=True → 子进程成为新会话首领，PGID == 其 PID
+    #   - Windows: creationflags=CREATE_NEW_PROCESS_GROUP → 新进程组，配合 taskkill /T 递归终止
+    # 两个参数均显式传递（非本平台的分支取默认 0/False），既满足类型检查又保持跨平台语义。
+    start_new_session = not IS_WIN
+    creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if IS_WIN else 0
     return subprocess.Popen(
         [str(exe)], cwd=RELEASE_DIR,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="replace",
+        start_new_session=start_new_session,
+        creationflags=creationflags,
     )
+
+
+def _kill_tree(proc: subprocess.Popen[str]) -> None:
+    # 杀掉整个进程树（应用本体 + 其 spawn 的 ffmpeg 等子进程）。
+    # 仅杀父进程会留下孤儿化的 ffmpeg，最终被 runner 的 orphan-process 清理收尸，
+    # 产生大量 "Terminate orphan process" 噪声；此处连根拔起避免之。
+    pid = proc.pid
+    if IS_WIN:
+        # taskkill /T 递归终止进程树，/F 强制；进程已退出时忽略错误
+        _ = subprocess.run(
+            ["taskkill", "/T", "/F", "/PID", str(pid)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        return
+    # Unix：kill 整个进程组（子进程已是新会话首领，PGID == PID）。
+    # getpgid/killpg 为 POSIX-only，用 getattr 兼容类型检查与跨平台运行。
+    getpgid = getattr(os, "getpgid", None)
+    if getpgid is None:
+        return
+    try:
+        pgid = getpgid(pid)
+    except ProcessLookupError:
+        return
+    killpg = getattr(os, "killpg", None)
+    if killpg is None:
+        return
+    try:
+        killpg(pgid, getattr(signal, "SIGKILL", 9))
+    except ProcessLookupError:
+        pass
 
 
 def _finish(
@@ -361,7 +401,7 @@ def _finish(
     # 这类已知良性输出应从致命判定中排除；真正的崩溃（进程退出或真实堆栈）仍会被捕获。
     still_running = proc.poll() is None
     if still_running:
-        proc.kill()
+        _kill_tree(proc)
     try:
         out = proc.communicate(timeout=10)[0] or ""
     except subprocess.TimeoutExpired:
