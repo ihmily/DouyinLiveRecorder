@@ -1,4 +1,4 @@
-# -*- encoding: utf-8 -*-
+ -*- encoding: utf-8 -*-
 # 直播录制器 GUI 界面（基于 CustomTkinter 的现代化重构）
 from __future__ import annotations
 
@@ -207,13 +207,22 @@ class SystemTray:
         # 提前加载像素数据，避免 ImageDraw 惰性图像在 pystray 保存时触发重入加载崩溃
         image.load()
 
-        # 强制在当前线程（主线程）完成 PIL PNG 插件的初始化。pystray 内部的
-        # setup 线程随后会通过 _assert_image → Image.save('png') 序列化图标，
-        # 而 PIL 的惰性插件加载（preinit）在 PyInstaller 冻结环境下并非线程安全，
-        # 从非主线程触发 preinit 会触发原生崩溃（见 CI faulthandler 堆栈）。
-        _buf = io.BytesIO()
+        # 强制在当前线程（主线程）完成 PIL 插件/编码器的初始化，并预热 pystray 的
+        # darwin 后端实际会走的「缩放 + LANCZOS + PNG 序列化」代码路径。
+        # 背景：pystray 的 darwin 后端在 icon.run() 内部 spawn 的后台线程里对图标
+        # 做 resize(状态栏尺寸) + PNG 序列化（_assert_image -> Image.save('png') ->
+        # PIL/_encode_tile）。PIL 的惰性插件/编码器初始化在 PyInstaller 冻结环境下
+        # 并非线程安全，从非主线程首次触发会触发原生崩溃（见 CI faulthandler 堆栈），
+        # 且该原生崩溃无法被 Python try/except 捕获，直接导致 GUI 进程退出、冒烟失败。
+        # 这里把 pystray 实际会走的缩放+PNG 路径提前在主线程跑一遍，确保后台线程复用
+        # 已加载的编码器，不再触发首次初始化的竞态。
         try:
-            image.save(_buf, "PNG")
+            Image.preinit()
+            Image.init()
+            # 模拟 pystray._assert_image 的 resize(状态栏约 22x22) + PNG 保存
+            thumb = image.resize((22, 22), Image.LANCZOS)
+            _buf = io.BytesIO()
+            thumb.save(_buf, "PNG")
         except Exception:
             pass
         return image
@@ -257,6 +266,20 @@ class SystemTray:
             )
             self.icon = icon
             self.running = True
+            # 在主线程预先渲染并缓存 NSImage（pystray 内部 _icon_image）：
+            # pystray 的 darwin 后端会在 icon.run() 的后台线程调用 _assert_image 对图标
+            # 做 resize + PNG 序列化（PIL/_encode_tile），该原生编码在 PyInstaller 冻结
+            # 环境从非主线程首次触发会崩溃，且原生崩溃无法被 Python 异常捕获。
+            # 此处先在主线程执行一次 _assert_image，把 _icon_image 缓存下来，后台线程的
+            # _assert_image 命中缓存直接返回，不再触碰 PNG 编码，从根本上消除后台线程崩溃。
+            # 若环境无系统托盘（headless），_assert_image 可能抛 ObjC 异常，则跳过
+            # icon.run()（不再触发后台线程的 PNG 序列化），托盘优雅降级、GUI 进程继续存活。
+            try:
+                icon._assert_image()
+            except Exception:
+                self.running = False
+                self.icon = None
+                return
             icon.run()
         except Exception as exc:
             # 无系统托盘（headless / 无显示 / 库缺失）时优雅降级，
