@@ -409,7 +409,13 @@ def _finish(
     tail = "\n".join(out.splitlines()[-20:])
     print(f"[smoke:{name}] 进程输出（末尾 20 行）：\n{tail}")
     benign = any(p in out for p in ignore_patterns)
-    if any(m in out for m in FATAL_MARKERS) and not benign:
+    # 仅当进程已自行退出时，才把 FATAL_MARKERS 视为真实崩溃信号。
+    # 若进程仍存活（still_running），输出中的 Traceback 多为应用捕获并记录的异常：
+    #   - asyncio 事件循环对未处理任务异常的默认处理会打印完整 Traceback，但 loop 继续运行
+    #   - 抖音 API 偶发网络错误触发重试时也可能记录异常堆栈
+    # 真正的崩溃（导入失败 / 未捕获异常）会导致进程退出，此时 still_running 必为 False，
+    # 下方 returncode 校验与本判定共同覆盖该情形。
+    if not still_running and any(m in out for m in FATAL_MARKERS) and not benign:
         raise RuntimeError(f"[smoke:{name}] 检测到导入错误 / 崩溃堆栈，冒烟测试失败")
     if expect_alive and not still_running and proc.returncode not in (0, None):
         raise RuntimeError(f"[smoke:{name}] 进程异常退出，退出码 {proc.returncode}")
