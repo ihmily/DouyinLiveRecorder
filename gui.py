@@ -244,56 +244,83 @@ class SystemTray:
         # 托盘菜单：最小化到托盘（路由回 UI 线程）
         self.gui.post_ui(self.gui.root.withdraw)
 
-    def run(self) -> None:
-        # 启动系统托盘图标（阻塞运行）。
-        # 注意：macOS 上 pystray 的 Icon 必须在「主线程」构造与运行
-        # （NSWindow / NSStatusItem 受 AppKit 主线程限制，否则抛
-        #  NSInternalInconsistencyException）。调用方 main() 已据此在 macOS 上
-        #  把本方法放到主线程执行；其余平台则在后台线程执行。
+    def _build_icon(self) -> "PystrayIcon":
+        # 构造 pystray Icon（菜单 + 图标位图）。
         import pystray  # 延迟导入：避免 headless 环境在模块顶层即失败
-        try:
-            menu = pystray.Menu(
-                pystray.MenuItem('显示主界面', self.on_show, default=True),
-                pystray.MenuItem('最小化到托盘', self.on_minimize),
-                pystray.MenuItem('退出程序', self.on_exit)
-            )
+        menu = pystray.Menu(
+            pystray.MenuItem('显示主界面', self.on_show, default=True),
+            pystray.MenuItem('最小化到托盘', self.on_minimize),
+            pystray.MenuItem('退出程序', self.on_exit)
+        )
+        return pystray.Icon(
+            'LiveRecorder',
+            self.create_icon_image(),
+            'LiveRecorder - click to show',
+            menu
+        )
 
-            icon = pystray.Icon(
-                'LiveRecorder',
-                self.create_icon_image(),
-                'LiveRecorder - click to show',
-                menu
-            )
+    def _degrade(self, exc: BaseException) -> None:
+        # 无系统托盘（headless / 无显示 / 库缺失）时优雅降级，
+        # 避免崩溃堆栈导致整个 GUI 进程退出（冒烟测试会据此判定失败）。
+        self.running = False
+        self.icon = None
+        try:
+            print(f"[tray] 系统托盘启动失败，已忽略：{exc}", file=sys.stderr)
+        except Exception:
+            pass
+
+    def run(self) -> None:
+        # 启动系统托盘图标（阻塞运行；Windows / Linux 专用，由后台线程调用）。
+        # 注意：macOS 禁止走本方法 —— pystray darwin 后端的 icon.run() 会以
+        # NSApplication.run() 接管「主线程」事件循环，与 Tk mainloop 互斥
+        # （Tcl/Tk 在 macOS 只能运行于主线程，否则抛
+        #  "RuntimeError: Calling Tcl from different apartment"）。
+        # macOS 请使用 run_detached()。
+        try:
+            icon = self._build_icon()
             self.icon = icon
             self.running = True
-            # 在主线程预先渲染并缓存 NSImage（pystray 内部 _icon_image）：
-            # pystray 的 darwin 后端会在 icon.run() 的后台线程调用 _assert_image 对图标
-            # 做 resize + PNG 序列化（PIL/_encode_tile），该原生编码在 PyInstaller 冻结
-            # 环境从非主线程首次触发会崩溃，且原生崩溃无法被 Python 异常捕获。
-            # 此处先在主线程执行一次 _assert_image，把 _icon_image 缓存下来，后台线程的
-            # _assert_image 命中缓存直接返回，不再触碰 PNG 编码，从根本上消除后台线程崩溃。
-            # 若环境无系统托盘（headless），_assert_image 可能抛 ObjC 异常，则跳过
-            # icon.run()（不再触发后台线程的 PNG 序列化），托盘优雅降级、GUI 进程继续存活。
-            try:
-                icon._assert_image()
-            except Exception:
-                self.running = False
-                self.icon = None
-                return
             icon.run()
         except Exception as exc:
-            # 无系统托盘（headless / 无显示 / 库缺失）时优雅降级，
-            # 避免崩溃堆栈导致整个 GUI 进程退出（冒烟测试会据此判定失败）。
-            self.running = False
-            self.icon = None
-            try:
-                print(f"[tray] 系统托盘启动失败，已忽略：{exc}", file=sys.stderr)
-            except Exception:
-                pass
+            self._degrade(exc)
+
+    def run_detached(self) -> None:
+        # macOS 专用：在「主线程」调用（进入 Tk mainloop 之前），非阻塞。
+        # pystray darwin 后端的 run_detached() 只做 _mark_ready()（注册状态栏图标），
+        # 不启动 NSApplication.run()；状态栏点击/菜单事件由 Tk 的 Cocoa 事件循环
+        # 代为分发（两者共享 NSApplication.sharedApplication()）。这样主线程留给
+        # Tk mainloop，同时满足 macOS 上 Tcl/Tk 与 AppKit 都必须在主线程的双重约束。
+        try:
+            icon = self._build_icon()
+            # 在主线程预先渲染并缓存 NSImage（pystray 内部 _icon_image）：
+            # run_detached() 触发的 setup 线程会调用 _show() -> _assert_image()
+            # 对图标做 resize + PNG 序列化（PIL/_encode_tile）。该原生编码在
+            # PyInstaller 冻结环境从非主线程首次触发会原生崩溃，且无法被 Python
+            # 异常捕获。此处先在主线程执行一次 _assert_image 把图像缓存下来，
+            # setup 线程命中缓存直接返回，从根本上消除后台线程崩溃。
+            # 若环境无系统托盘（headless），_assert_image 抛 ObjC 异常，
+            # 则跳过 run_detached()，托盘优雅降级、GUI 进程继续存活。
+            icon._assert_image()  # darwin 后端专有方法
+            # 标记图标已有效：阻止 setup 线程里 visible=True 触发 _update_icon()
+            # 把刚缓存的 _icon_image 清空后在后台线程重新 PNG 编码（否则上面的
+            # 主线程预热就会被绕过，冻结环境的原生崩溃风险回归）。
+            icon._icon_valid = True
+            self.icon = icon
+            self.running = True
+            icon.run_detached()
+        except Exception as exc:
+            self._degrade(exc)
 
     def stop(self) -> None:
-        # 停止系统托盘（macOS 上托盘运行在主线程，stop() 可能由 UI 线程调用，故容错）
+        # 停止系统托盘（stop() 可能由 UI 线程调用，全程容错）。
+        # macOS detached 模式下 pystray _run() 的 finally（移除状态栏项）不会执行，
+        # 需先主动隐藏图标再 stop。
         if self.icon and self.running:
+            if sys.platform == "darwin":
+                try:
+                    self.icon.visible = False
+                except Exception:
+                    pass
             try:
                 self.icon.stop()
             except Exception:
@@ -2097,12 +2124,16 @@ def main() -> None:
     root.protocol("WM_DELETE_WINDOW", app.on_closing)
 
     if sys.platform == "darwin":
-        # macOS 要求 pystray 的 Icon 在主线程构造与运行（NSWindow/NSStatusItem 的
-        # AppKit 主线程限制）。因此把 Tkinter 主事件循环放到后台线程，主线程留给托盘。
+        # macOS 双重主线程约束：
+        #  1) Tcl/Tk 只能在主线程运行，否则抛
+        #     "RuntimeError: Calling Tcl from different apartment"；
+        #  2) pystray 的 NSStatusItem 受 AppKit 主线程限制，且 icon.run() 会以
+        #     NSApplication.run() 接管主线程事件循环，与 Tk mainloop 互斥。
+        # 解法：托盘用 run_detached()（仅在主线程注册状态栏图标，不启动独立
+        # 事件循环，事件由 Tk 的 Cocoa 循环分发），随后主线程进入 Tk mainloop。
         app.tray_thread = None
-        ui_thread = threading.Thread(target=root.mainloop, daemon=True)
-        ui_thread.start()
-        tray.run()  # 阻塞主线程：Icon 在主线程构造，run loop 亦在主线程
+        tray.run_detached()  # 非阻塞；headless 时内部优雅降级
+        root.mainloop()
     else:
         app.tray_thread = threading.Thread(target=tray.run, daemon=True)
         app.tray_thread.start()
