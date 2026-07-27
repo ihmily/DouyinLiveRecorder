@@ -224,28 +224,45 @@ class SystemTray:
         self.gui.post_ui(self.gui.root.withdraw)
 
     def run(self) -> None:
-        # 启动系统托盘图标（阻塞运行）
+        # 启动系统托盘图标（阻塞运行）。
+        # 注意：macOS 上 pystray 的 Icon 必须在「主线程」构造与运行
+        # （NSWindow / NSStatusItem 受 AppKit 主线程限制，否则抛
+        #  NSInternalInconsistencyException）。调用方 main() 已据此在 macOS 上
+        #  把本方法放到主线程执行；其余平台则在后台线程执行。
         import pystray  # 延迟导入：避免 headless 环境在模块顶层即失败
-        menu = pystray.Menu(
-            pystray.MenuItem('显示主界面', self.on_show, default=True),
-            pystray.MenuItem('最小化到托盘', self.on_minimize),
-            pystray.MenuItem('退出程序', self.on_exit)
-        )
+        try:
+            menu = pystray.Menu(
+                pystray.MenuItem('显示主界面', self.on_show, default=True),
+                pystray.MenuItem('最小化到托盘', self.on_minimize),
+                pystray.MenuItem('退出程序', self.on_exit)
+            )
 
-        icon = pystray.Icon(
-            'LiveRecorder',
-            self.create_icon_image(),
-            'LiveRecorder - click to show',
-            menu
-        )
-        self.icon = icon
-        self.running = True
-        icon.run()
+            icon = pystray.Icon(
+                'LiveRecorder',
+                self.create_icon_image(),
+                'LiveRecorder - click to show',
+                menu
+            )
+            self.icon = icon
+            self.running = True
+            icon.run()
+        except Exception as exc:
+            # 无系统托盘（headless / 无显示 / 库缺失）时优雅降级，
+            # 避免崩溃堆栈导致整个 GUI 进程退出（冒烟测试会据此判定失败）。
+            self.running = False
+            self.icon = None
+            try:
+                self.gui._log(f"系统托盘启动失败，已忽略：{exc}", "warn")
+            except Exception:
+                pass
 
     def stop(self) -> None:
-        # 停止系统托盘
+        # 停止系统托盘（macOS 上托盘运行在主线程，stop() 可能由 UI 线程调用，故容错）
         if self.icon and self.running:
-            self.icon.stop()
+            try:
+                self.icon.stop()
+            except Exception:
+                pass
             self.running = False
 
     def notify(self, message: str, title: str = '直播录制器') -> None:
@@ -2041,11 +2058,20 @@ def main() -> None:
 
     tray = SystemTray(app)
     app.system_tray = tray
-    app.tray_thread = threading.Thread(target=tray.run, daemon=True)
-    app.tray_thread.start()
 
     root.protocol("WM_DELETE_WINDOW", app.on_closing)
-    root.mainloop()
+
+    if sys.platform == "darwin":
+        # macOS 要求 pystray 的 Icon 在主线程构造与运行（NSWindow/NSStatusItem 的
+        # AppKit 主线程限制）。因此把 Tkinter 主事件循环放到后台线程，主线程留给托盘。
+        app.tray_thread = None
+        ui_thread = threading.Thread(target=root.mainloop, daemon=True)
+        ui_thread.start()
+        tray.run()  # 阻塞主线程：Icon 在主线程构造，run loop 亦在主线程
+    else:
+        app.tray_thread = threading.Thread(target=tray.run, daemon=True)
+        app.tray_thread.start()
+        root.mainloop()
 
 
 if __name__ == "__main__":
