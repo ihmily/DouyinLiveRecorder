@@ -32,6 +32,7 @@ from .logger import script_path, logger
 from .room import get_sec_user_id, get_unique_id, UnsupportedUrlError
 from .http_clients.async_http import async_req
 from .http_clients import config as http_config
+from .ttwid import get_ttwid as _shared_get_ttwid
 
 
 OptionalStr = str | None
@@ -39,7 +40,7 @@ OptionalDict = dict[str, str] | None
 # 花椒接口返回的异构 dict（含 is_live 布尔值），值类型需覆盖 str | bool
 OptionalStreamDict = dict[str, str | bool] | None
 
-# 缓存自动获取的 ttwid，避免重复请求主页
+# 缓存自动获取的 ttwid，避免重复请求主页（已委托给共享 ttwid.py 模块，保留变量兼容旧引用）
 _cached_ttwid: str = ""
 
 
@@ -51,26 +52,12 @@ def _safe_extract_id(url: str, default: str = "") -> str:
 
 
 async def _ensure_ttwid(proxy_addr: OptionalStr = None) -> str:
-    # 未配置 cookie 时自动访问抖音主页获取 ttwid，避免空 cookie 直接触发风控
-    # 抖音服务器会在首次访问时通过 Set-Cookie 下发有效的 ttwid（有效期约 2 年）
+    # 委托给共享 ttwid.py 模块（带 threading.Lock 跨线程去重），
+    # 解决多线程并发时重复拉取 ttwid 触发风控的问题
     global _cached_ttwid
-    if _cached_ttwid:
-        return _cached_ttwid
-    try:
-        cookies_dict = await async_req(
-            url='https://live.douyin.com/',
-            proxy_addr=proxy_addr,
-            headers={'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-                                   '(KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36'},
-            return_cookies=True,
-            timeout=10
-        )
-        if isinstance(cookies_dict, dict) and cookies_dict.get('ttwid'):
-            _cached_ttwid = f"ttwid={cookies_dict['ttwid']}"
-            logger.debug("自动获取抖音 ttwid 成功")
-    except Exception as e:
-        logger.warning(f"自动获取抖音 ttwid 失败: {e}")
-    return _cached_ttwid
+    result = await _shared_get_ttwid(proxy_addr)
+    _cached_ttwid = result  # 同步本地缓存，兼容可能的外部引用
+    return result
 
 
 # 各平台自动获取凭据的缓存，避免每次请求都重新获取
@@ -196,19 +183,92 @@ async def get_play_url_list(m3u8: str, proxy: OptionalStr = None, header: Option
     return play_url_list
 
 
+def _extract_room_data_from_html(html_str: str) -> dict[str, object]:
+    # 从抖音直播间HTML页面提取房间数据（作为API失败时的回退方案）
+    if not html_str:
+        return {}
+    try:
+        match_json_str = re.search(r'(\{\\"state\\":.*?)]\\n"]\)', html_str)
+        if not match_json_str:
+            match_json_str = re.search(r'(\{\\"common\\":.*?)]\\n"]\)</script><div hidden', html_str)
+        if not match_json_str:
+            return {}
+        json_str = match_json_str.group(1)
+        cleaned_string = json_str.replace('\\', '').replace(r'u0026', r'&')
+        room_store_match = re.search('"roomStore":(.*?),"linkmicStore"', cleaned_string, re.DOTALL)
+        if not room_store_match:
+            return {}
+        room_store = room_store_match.group(1)
+        anchor_name_match = re.search('"nickname":"(.*?)","avatar_thumb', room_store, re.DOTALL)
+        anchor_name = anchor_name_match.group(1) if anchor_name_match else ''
+        room_store = room_store.split(',"has_commerce_goods"')[0] + '}}}'
+        room_info = cast(dict[str, object], _loads_dict(room_store).get('roomInfo') or {})
+        json_data = cast(dict[str, object], room_info.get('room') or {})
+        json_data['anchor_name'] = anchor_name
+        if json_data.get('status') == 4:
+            return json_data
+        stream_url_field = cast(dict[str, object], json_data.get('stream_url') or {})
+        stream_orientation = stream_url_field.get('stream_orientation')
+        origin_url_list: dict[str, object] | None = None
+        match_json_str2 = cast(list[str], re.findall(r'"(\{\\"common\\":.*?)"]\)</script><script nonce=', html_str))
+        if match_json_str2:
+            if stream_orientation == 1:
+                json_str2 = match_json_str2[0]
+            else:
+                json_str2 = match_json_str2[1] if len(match_json_str2) > 1 else match_json_str2[0]
+            json_data2 = _loads_dict(
+                json_str2.replace('\\', '').replace('"{', '{').replace('}"', '}').replace('u0026', '&'))
+            data2 = cast(dict[str, object], json_data2.get('data') or {})
+            if 'origin' in data2:
+                origin_url_list = cast(dict[str, object], cast(dict[str, object], data2['origin']).get('main') or {})
+        else:
+            html_str_clean = html_str.replace('\\', '').replace('u0026', '&')
+            match_json_str3 = re.search('"origin":\\{"main":(.*?),"dash"', html_str_clean, re.DOTALL)
+            if match_json_str3:
+                origin_url_list = _loads_dict(match_json_str3.group(1) + '}')
+        if origin_url_list:
+            sdk_params_field = cast(dict[str, object], origin_url_list.get('sdk_params') or {})
+            vcodec = sdk_params_field.get('VCodec')
+            origin_hls_codec = vcodec if isinstance(vcodec, str) else ''
+            hls_v = origin_url_list.get("hls", '')
+            flv_v = origin_url_list.get("flv", '')
+            hls_s = hls_v if isinstance(hls_v, str) else ''
+            flv_s = flv_v if isinstance(flv_v, str) else ''
+            origin_m3u8 = {'ORIGIN': hls_s + '&codec=' + origin_hls_codec}
+            origin_flv = {'ORIGIN': flv_s + '&codec=' + origin_hls_codec}
+            hls_pull_url_map = cast(dict[str, object], stream_url_field.get('hls_pull_url_map') or {})
+            flv_pull_url = cast(dict[str, object], stream_url_field.get('flv_pull_url') or {})
+            stream_url_field['hls_pull_url_map'] = {**origin_m3u8, **hls_pull_url_map}
+            stream_url_field['flv_pull_url'] = {**origin_flv, **flv_pull_url}
+            hevc_flv_url = extract_douyin_hevc_flv_url(html_str)
+            if hevc_flv_url:
+                stream_url_field['hevc_flv_url'] = hevc_flv_url
+        return json_data
+    except Exception:
+        return {}
+
+
 async def get_douyin_web_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict[str, object]:
     # 通过抖音网页端API获取直播数据
     # 注意：cookie 需由调用方通过 cookies 参数传入有效值，硬编码的过期 cookie 必然触发风控
+    chrome_ua = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                 '(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36')
     headers = {
         'cookie': '',
-        'referer': 'https://live.douyin.com/335354047186',
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) '
-                      'Chrome/116.0.5845.97 Safari/537.36 Core/1.116.567.400 QQBrowser/19.7.6764.400',
+        'referer': url,
+        'user-agent': chrome_ua,
+        'accept': 'application/json, text/plain, */*',
+        'accept-language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
+        'sec-ch-ua': '"Google Chrome";v="141", "Chromium";v="141", "Not_A Brand";v="8"',
+        'sec-ch-ua-platform': '"Windows"',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'same-origin',
+        'x-requested-with': 'XMLHttpRequest',
     }
     if cookies:
         headers['cookie'] = cookies
     else:
-        # 未配置 cookie 时自动获取 ttwid，避免空 cookie 直接触发风控
         headers['cookie'] = await _ensure_ttwid(proxy_addr)
 
     try:
@@ -222,26 +282,38 @@ async def get_douyin_web_stream_data(url: str, proxy_addr: OptionalStr = None, c
             "browser_language": "zh-CN",
             "browser_platform": "Win32",
             "browser_name": "Chrome",
-            "browser_version": "116.0.0.0",
+            "browser_version": "141.0.0.0",
             "web_rid": web_rid,
             'msToken': '',
         }
 
         api = f'https://live.douyin.com/webcast/room/web/enter/?{urllib.parse.urlencode(params)}'
-        # 注意：A-Bogus 签名算法已失效，携带无效签名反而触发风控，当前跳过签名
         try:
             json_str = _get_str_response(await async_req(url=api, proxy_addr=proxy_addr, headers=headers))
             if not json_str:
-                raise Exception("it triggered risk control")
-            json_data = cast(dict[str, object], _loads_dict(json_str).get('data') or {})
+                raise Exception("empty response from API (possible risk control)")
+            parsed = _loads_dict(json_str)
+            status_code = parsed.get('status_code')
+            if status_code is not None and int(status_code) != 0:
+                status_msg = parsed.get('status_msg', 'unknown error')
+                raise Exception(f"API returned status_code={status_code}, msg={status_msg}")
+            json_data = cast(dict[str, object], parsed.get('data') or {})
             inner_list = json_data.get('data')
             if not inner_list:
-                raise Exception(f"{url} VR live is not supported")
+                raise Exception(f"{url} VR live is not supported or room not found")
             room_data = cast(dict[str, object], cast(list[object], inner_list)[0])
             user_info = cast(dict[str, object], json_data.get('user') or {})
             room_data['anchor_name'] = user_info.get('nickname')
         except Exception as e:
-            raise Exception(f"Douyin web data fetch error, because {e}.")
+            logger.warning(f"Douyin web API failed: {e}, falling back to HTML scraping")
+            try:
+                html_str = _get_str_response(await async_req(url=url, proxy_addr=proxy_addr, headers=headers))
+                room_data = _extract_room_data_from_html(html_str)
+                if not room_data:
+                    raise Exception(f"HTML scraping also failed after API error: {e}")
+                logger.debug("HTML scraping fallback succeeded")
+            except Exception as e2:
+                raise Exception(f"Douyin web data fetch error (API: {e}) (HTML fallback: {e2}).")
 
         if room_data.get('status') == 2:
             if 'stream_url' not in room_data:
@@ -327,37 +399,40 @@ async def get_douyin_app_stream_data(url: str, proxy_addr: OptionalStr = None, c
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
                       + 'Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0',
+        'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
-        'Referer': 'https://live.douyin.com/',
+        'Referer': url,
         'Cookie': ''
     }
     if cookies:
         headers['Cookie'] = cookies
     else:
-        # 未配置 cookie 时自动获取 ttwid，避免空 cookie 直接触发风控
         headers['Cookie'] = await _ensure_ttwid(proxy_addr)
 
     async def get_app_data(room_id: str, sec_uid: str) -> dict[str, object]:
-        # 获取抖音 App 端直播数据（含 A-Bogus 签名）
         app_params = {
-            "verifyFp": "verify_hwj52020_7szNlAB7_pxNY_48Vh_ALKF_GA1Uf3yteoOY",
+            "verifyFp": "",
             "type_id": "0",
             "live_id": "1",
             "room_id": room_id,
             "sec_user_id": sec_uid,
-            "version_code": "99.99.99",
+            "version_code": "141.0.0.0",
             "app_id": "1128"
         }
         api2 = f'https://webcast.amemv.com/webcast/room/reflow/info/?{urllib.parse.urlencode(app_params)}'
-        # 注意：A-Bogus 签名算法已失效，携带无效签名反而触发风控，当前跳过签名
         try:
             json_str2 = _get_str_response(await async_req(url=api2, proxy_addr=proxy_addr, headers=headers))
             if not json_str2:
-                raise Exception("it triggered risk control")
-            json_data2 = cast(dict[str, object], _loads_dict(json_str2).get('data') or {})
+                raise Exception("empty response from API (possible risk control)")
+            parsed2 = _loads_dict(json_str2)
+            status_code2 = parsed2.get('status_code')
+            if status_code2 is not None and int(status_code2) != 0:
+                status_msg2 = parsed2.get('status_msg', 'unknown error')
+                raise Exception(f"API returned status_code={status_code2}, msg={status_msg2}")
+            json_data2 = cast(dict[str, object], parsed2.get('data') or {})
             room_field = json_data2.get('room')
             if not room_field:
-                raise Exception(f"{url} VR live is not supported")
+                raise Exception(f"{url} VR live is not supported or room not found")
             room_data2 = cast(dict[str, object], room_field)
             owner = cast(dict[str, object], room_data2.get('owner') or {})
             room_data2['anchor_name'] = owner.get('nickname')
@@ -443,11 +518,19 @@ async def get_douyin_app_stream_data(url: str, proxy_addr: OptionalStr = None, c
 async def get_douyin_stream_data(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> dict[str, object]:
     # 获取抖音直播数据（主函数）
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                      '(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,'
+                  'image/webp,image/apng,*/*;q=0.8',
         'Accept-Language': 'zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2',
         'Referer': 'https://live.douyin.com/',
-        # 移除原硬编码的长串过期 Cookie（含 ttwid/passport_csrf_token/d_ticket 等登录态字段）
-        # 未配置 cookie 时自动获取 ttwid，避免空 cookie 直接触发风控
+        'Sec-Ch-Ua': '"Google Chrome";v="141", "Chromium";v="141", "Not_A Brand";v="8"',
+        'Sec-Ch-Ua-Platform': '"Windows"',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+        'Upgrade-Insecure-Requests': '1',
     }
     if cookies:
         headers['Cookie'] = cookies

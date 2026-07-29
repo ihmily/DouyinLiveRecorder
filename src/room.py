@@ -15,6 +15,7 @@ except ImportError:
 import httpx
 from typing import cast
 from . import JS_SCRIPT_PATH, utils
+from .ttwid import get_ttwid as _shared_get_ttwid
 
 
 class UnsupportedUrlError(Exception):
@@ -31,32 +32,17 @@ HEADERS = {
     'Cookie': ''
 }
 
-# 缓存自动获取的抖音 ttwid，避免每次请求都重新获取
+# 缓存自动获取的抖音 ttwid（已委托给共享 ttwid.py 模块，保留变量兼容旧引用）
 _cached_ttwid: str = ""
 
 
 async def _ensure_douyin_ttwid(proxy_addr: str | None = None) -> str:
-    # 自动访问抖音主页获取 ttwid，替代硬编码过期凭据
-    # 注意：room.py 被 spider.py 导入，此处不能反向导入 spider._ensure_ttwid，需本地实现
+    # 委托给共享 ttwid.py 模块（带 threading.Lock 跨线程去重），
+    # 解决多线程并发时重复拉取 ttwid 触发风控的问题
     global _cached_ttwid
-    if _cached_ttwid:
-        return _cached_ttwid
-    try:
-        proxy_addr = utils.handle_proxy_addr(proxy_addr)
-        async with httpx.AsyncClient(proxy=proxy_addr, timeout=10) as client:
-            response = await client.get(
-                'https://live.douyin.com/',
-                headers={'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-                                       '(KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36'},
-                follow_redirects=True
-            )
-            cookies = response.cookies
-            ttwid = cookies.get('ttwid', '')
-            if ttwid:
-                _cached_ttwid = f"ttwid={ttwid}"
-    except Exception:
-        pass
-    return _cached_ttwid
+    result = await _shared_get_ttwid(proxy_addr)
+    _cached_ttwid = result  # 同步本地缓存
+    return result
 
 
 # X-bogus算法

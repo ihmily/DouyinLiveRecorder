@@ -220,7 +220,7 @@ class SystemTray:
             Image.preinit()
             Image.init()
             # 模拟 pystray._assert_image 的 resize(状态栏约 22x22) + PNG 保存
-            thumb = image.resize((22, 22), Image.LANCZOS)
+            thumb = image.resize((22, 22), Image.Resampling.LANCZOS)
             _buf = io.BytesIO()
             thumb.save(_buf, "PNG")
         except Exception:
@@ -300,14 +300,14 @@ class SystemTray:
             # setup 线程命中缓存直接返回，从根本上消除后台线程崩溃。
             # 若环境无系统托盘（headless），_assert_image 抛 ObjC 异常，
             # 则跳过 run_detached()，托盘优雅降级、GUI 进程继续存活。
-            icon._assert_image()  # darwin 后端专有方法
+            icon._assert_image()  # type: ignore[attr-defined]  # darwin 后端专有方法
             # 标记图标已有效：阻止 setup 线程里 visible=True 触发 _update_icon()
             # 把刚缓存的 _icon_image 清空后在后台线程重新 PNG 编码（否则上面的
             # 主线程预热就会被绕过，冻结环境的原生崩溃风险回归）。
-            icon._icon_valid = True
+            icon._icon_valid = True  # type: ignore[attr-defined]
             self.icon = icon
             self.running = True
-            icon.run_detached()
+            icon.run_detached()  # type: ignore[attr-defined]
         except Exception as exc:
             self._degrade(exc)
 

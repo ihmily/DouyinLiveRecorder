@@ -193,6 +193,12 @@ show_url: bool = False
 enable_https_recording: bool = False
 disk_space_limit: float = 1.0
 
+# 抖音请求速率限制器：防止多线程并发请求触发抖音风控
+# 保证同一时刻只有一个抖音 API 请求在执行，且两次请求之间至少间隔 N 秒
+douyin_rate_lock: threading.Lock = threading.Lock()
+douyin_last_request_time: float = 0.0
+douyin_min_interval: float = 3.0  # 两次抖音请求的最小间隔（秒）
+
 # 录制与文件
 video_save_path: str = ""
 check_path: str = ""
@@ -1106,6 +1112,20 @@ def get_record_headers(platform: str, live_url: str) -> str | None:
     return record_headers.get(platform)
 
 
+def _validate_stream_url(url: str, proxy_addr: str | None = None, timeout: int = 5) -> bool:
+    try:
+        with httpx.Client(timeout=timeout, proxy=proxy_addr) as client:
+            response = client.head(url, follow_redirects=True)
+            content_type = response.headers.get('content-type', '')
+            if 'video' in content_type or 'octet-stream' in content_type or 'flash' in content_type:
+                return True
+            if 'text/html' in content_type or 'application/json' in content_type:
+                return False
+            return response.status_code == 200
+    except Exception:
+        return False
+
+
 def select_source_url(_link: str, stream_info: Mapping[str, object]) -> str | None:
     # HLS(m3u8) 优先采集：当存在 HLS 源且配置启用 HLS 采集时优先使用；
     # 仅当无 HLS 源 或 配置关闭 HLS 采集时，才回退使用 FLV 源。
@@ -1114,18 +1134,41 @@ def select_source_url(_link: str, stream_info: Mapping[str, object]) -> str | No
     hls_available = isinstance(m3u8_url, str) and bool(m3u8_url)
 
     if hls_available and hls_collection_enabled:
-        return cast(str | None, m3u8_url)
+        if _validate_stream_url(cast(str, m3u8_url)):
+            return cast(str | None, m3u8_url)
+        logger.warning("HLS URL validation failed, falling back to FLV")
 
-    # 无 HLS 源（或已关闭 HLS 采集）→ 使用 FLV
     if isinstance(flv_url, str) and flv_url:
         codec = utils.get_query_params(flv_url, "codec")
         if isinstance(codec, list) and codec and codec[0] == 'h265':
-            # FLV 不支持 h265 编码，退而使用 HLS 或兜底地址
             logger.warning("FLV is not supported for h265 codec, use HLS source instead")
-        else:
+            if hls_available:
+                return cast(str | None, m3u8_url)
+        if _validate_stream_url(flv_url):
             return flv_url
+        logger.warning("FLV URL validation failed, trying record_url fallback")
 
-    return cast(str | None, stream_info.get('record_url'))
+    record_url = stream_info.get('record_url')
+    if isinstance(record_url, str) and record_url:
+        codec = utils.get_query_params(record_url, "codec")
+        if isinstance(codec, list) and codec and codec[0] == 'h265':
+            logger.warning("record_url has h265 codec, but no HLS or FLV fallback available")
+        if _validate_stream_url(record_url):
+            return record_url
+    return None
+
+
+def _douyin_rate_limit() -> None:
+    # 抖音请求速率限制：保证两次抖音 API 请求之间有最小间隔，
+    # 避免多线程并发监控多个直播间时触发抖音风控（返回空响应）。
+    # 在 semaphore 内部调用，确保串行化 + 间隔双重保护。
+    global douyin_last_request_time
+    with douyin_rate_lock:
+        now = time.time()
+        elapsed = now - douyin_last_request_time
+        if elapsed < douyin_min_interval:
+            time.sleep(douyin_min_interval - elapsed)
+        douyin_last_request_time = time.time()
 
 
 def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> None:
@@ -1166,6 +1209,7 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                     if record_url.find("douyin.com/") > -1:
                         platform = '抖音直播'
                         with semaphore:
+                            _douyin_rate_limit()  # 速率限制：防止并发请求触发抖音风控
                             if 'v.douyin.com' not in record_url and '/user/' not in record_url:
                                 json_data = asyncio.run(spider.get_douyin_web_stream_data(
                                     url=record_url,

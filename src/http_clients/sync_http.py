@@ -51,6 +51,7 @@ def sync_req(
     # 同步 HTTP 请求函数，支持 GET/POST、代理、重定向、gzip 解压等功能
     if headers is None:
         headers = {}
+    resp_str = ''
     try:
         if proxy_addr:
             # 使用代理的请求
