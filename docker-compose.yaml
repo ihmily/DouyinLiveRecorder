@@ -1,15 +1,19 @@
 # =============================================================================
 # DouyinLiveRecorder Docker Compose 配置
 # 支持抖音、TikTok、YouTube等60+平台直播录制工具
-# =============================================================================
-
-# 可以在此文件同目录下创建 .env 文件来覆盖默认环境变量，
-# docker compose 会自动加载 .env 文件。
+#
+# 三种运行模式（服务）：
+#   recorder（默认）  命令行录制模式         docker compose up -d
+#   web（profile）    Web 管理面板模式       docker compose --profile web up -d
+#   gui（profile）    GUI 模式（需 X11）     docker compose --profile gui up -d
+#
+# 可在此文件同目录下创建 .env 文件覆盖默认环境变量（compose 自动加载），
 # 例如：TZ=America/New_York 可修改时区。
+# =============================================================================
 
 services:
   # ---------------------------------------------------------------
-  # 主录制服务 - 持续监测并录制直播
+  # 主录制服务 - 持续监测并录制直播（main.py，纯命令行，不监听端口）
   # ---------------------------------------------------------------
   recorder: &recorder
     image: ihmily/douyin-live-recorder:latest
@@ -18,11 +22,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-
-    # 运行参数（可覆盖）
-    # 命令行录制模式（默认）: command: ["python", "main.py"]
-    # Web 管理面板模式:       command: ["python", "web.py"]
-    # command: ["python", "main.py"]
 
     # 环境变量
     environment:
@@ -55,10 +54,6 @@ services:
       # 配置备份目录
       - ./backup_config:/app/backup_config:rw
 
-    # 端口映射（Web UI / API / 调试）
-    ports:
-      - "8000:8000"
-
     # 重启策略：除非手动停止，否则自动重启
     restart: unless-stopped
 
@@ -86,6 +81,24 @@ services:
       options:
         max-size: "50m"
         max-file: "3"
+
+  # ---------------------------------------------------------------
+  # Web 管理面板模式（web.py = 录制引擎守护线程 + FastAPI/uvicorn）
+  # 启动：docker compose --profile web up -d
+  # 重要：web.py 默认监听 127.0.0.1:8000，容器内必须在
+  #   config/config.ini 的 [Web] 节设置 web_host = 0.0.0.0，
+  #   宿主机才能通过 http://localhost:8000 访问面板。
+  #   若监听 0.0.0.0，强烈建议同时设置 web_auth_enable = true 并配置密码。
+  # ---------------------------------------------------------------
+  web:
+    <<: *recorder
+    container_name: douyin-live-recorder-web
+    profiles:
+      - web
+    entrypoint: ["python", "web.py"]
+    # 端口映射仅 Web 模式需要（宿主机:容器）
+    ports:
+      - "8000:8000"
 
   # ---------------------------------------------------------------
   # GUI 模式服务（需要 X11 或 Wayland 显示环境）

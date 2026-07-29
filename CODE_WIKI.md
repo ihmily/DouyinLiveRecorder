@@ -41,9 +41,9 @@
 | asyncio + httpx | 异步网络请求 |
 | asyncio | 异步装饰器支持 |
 | FFmpeg | 视频录制与转码 |
-| Node.js + PyExecJS | 运行 JavaScript 签名算法 |
+| Node.js + exejs/PyExecJS | 运行 JavaScript 签名算法（exejs 优先，PyExecJS 回退） |
 | Loguru | 结构化日志 |
-| tkinter + pystray + Pillow | GUI 图形界面与系统托盘 |
+| CustomTkinter + pystray + Pillow | GUI 图形界面与系统托盘 |
 | FastAPI + uvicorn | Web 管理面板后端 |
 | HTML + CSS + JavaScript | Web 管理面板前端 |
 | Docker | 容器化部署 |
@@ -134,9 +134,10 @@ DouyinLiveRecorder/
 │   ├── ab_sign.py                      # 抖音签名算法 (A-Bogus)
 │   ├── node_install.py                # Node.js 自动安装/初始化
 │   ├── weverse_auth.py                 # Weverse 平台认证
-│   ├── debug_douyin_streams.py         # 抖音流数据调试工具
+│   ├── ttwid.py                        # 抖音访客 ttwid 获取
 │   ├── web_api.py                      # Web 管理面板 FastAPI 应用
 │   ├── web_config.py                   # Web 面板配置读写（不依赖 FastAPI）
+│   ├── web_tray.py                     # Web 模式系统托盘（Windows 最小化到托盘）
 │   ├── http_clients/                   # HTTP 客户端
 │   │   ├── __init__.py
 │   │   ├── config.py                  # HTTP 客户端共享运行时配置（SSL 验证开关）
@@ -155,22 +156,29 @@ DouyinLiveRecorder/
 │   ├── index.html                      # 单页应用入口
 │   ├── app.js                          # 前端逻辑（API 调用、SSE、渲染）
 │   └── style.css                       # 样式表（主题、响应式）
-├── i18n/                                # 国际化文件
+├── i18n/                                # 国际化文件（gettext）
 │   ├── zh_CN/LC_MESSAGES/
 │   │   ├── zh_CN.po                   # 中文翻译源
-│   │   └── zh_CN.mo                   # 编译后的翻译
-│   └── en/LC_MESSAGES/
+│   │   └── zh_CN.mo                   # 编译后的翻译（运行时必需，随仓库/镜像分发）
+│   └── en/LC_MESSAGES/                 # 英文（预留，当前为空）
+├── typings/                             # 第三方库类型存根（仅静态检查用）
+├── ffmpeg/                              # FFmpeg 二进制目录（Windows，git 忽略 exe）
+├── node/                                # Node.js 二进制目录（Windows，git 忽略）
 ├── main.py                              # 命令行入口
-├── gui.py                               # GUI 图形界面入口
+├── gui.py                               # GUI 图形界面入口（CustomTkinter）
+├── gui_legacy.py                        # 旧版 GUI（兼容保留）
 ├── web.py                               # Web 管理面板入口
+├── i18n.py                              # 国际化实现（print 翻译包装）
 ├── msg_push.py                          # 消息推送模块
-├── demo.py                              # 调用示例
+├── index.html                           # 独立 M3U8/FLV 播放器页面
+├── StopRecording.vbs                    # Windows 停止录制脚本
 ├── build_exe.py                         # PyInstaller 打包脚本（CLI/GUI/Web 三入口）
 ├── DouyinLiveRecorder.spec              # 由 build_exe.py 自动生成（.gitignore 已忽略）
 ├── requirements.txt                     # Python 依赖列表
 ├── pyproject.toml                      # Python 项目配置
-├── Dockerfile                          # Docker 构建文件
-├── .dockerignore                       # Docker 排除文件
+├── Dockerfile                          # Docker 构建文件（多阶段）
+├── docker-compose.yaml                 # Docker Compose（recorder/web/gui 三服务）
+├── .dockerignore                       # Docker 构建上下文排除文件
 ├── .gitignore                          # Git 排除文件
 ├── README.md                           # 项目说明
 ├── .github/                             # GitHub Actions 工作流目录
@@ -463,7 +471,6 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 **被以下模块导入**:
 - `src/spider.py` - `async_req()`
 - `src/stream.py` - `get_response_status()`
-- `src/debug_douyin_streams.py` - `async_req()`
 
 ---
 
@@ -577,30 +584,39 @@ async def some_function():
 
 ## 依赖关系
 
-### Python 依赖 (`requirements.txt`)
+### Python 依赖 (`requirements.txt`，与 `pyproject.toml [project.dependencies]` 保持一致)
 
 | 包名 | 版本要求 | 用途 |
 |------|---------|------|
-| requests | >=2.28.0 | 同步 HTTP 请求 |
-| httpx | >=0.25.0 | 异步 HTTP 客户端 |
-| loguru | >=0.7.0 | 结构化日志 |
-| pycryptodome | >=3.15.0 | 加密算法（SM3、RC4） |
-| distro | >=1.8.0 | Linux 发行版检测 |
-| tqdm | >=4.65.0 | 进度条 |
-| PyExecJS | >=1.5.1 | JavaScript 执行引擎 |
-| pystray | >=0.19.4 | 系统托盘（GUI） |
-| Pillow | >=10.0.0 | 图像处理（GUI 图标） |
-| weverse | >=0.9.0 | Weverse 平台 SDK |
-| fastapi | >=0.100.0 | Web 管理面板后端框架 |
-| uvicorn | >=0.23.0 | ASGI 服务器 |
-| pydantic | >=2.0.0 | 请求模型校验 |
+| requests | >=2.34.2 | 同步 HTTP 请求 |
+| httpx[http2] | >=0.28.1 | 异步 HTTP 客户端（含 HTTP/2） |
+| loguru | >=0.7.3 | 结构化日志 |
+| pycryptodome | >=3.23.0 | 加密算法（SM3、RC4、AES） |
+| distro | >=1.9.0 | Linux 发行版检测 |
+| tqdm | >=4.69.0 | 进度条 |
+| exejs | >=1.0.1 | JavaScript 执行引擎（PyExecJS 的活跃维护继任者，优先使用） |
+| PyExecJS | >=1.5.1 | JS 执行引擎回退兼容（exejs 未安装时使用） |
+| customtkinter | >=6.0.0 | 现代化 GUI 框架 |
+| pystray | >=0.19.5 | 系统托盘（GUI / Web 托盘模式） |
+| Pillow | >=12.3.0 | 图像处理（托盘图标生成） |
+| fastapi | >=0.140.0 | Web 管理面板后端框架 |
+| starlette | >=0.49.1 | ASGI 工具集（fastapi 传递依赖，`src/web_api.py` 直接导入故显式声明） |
+| uvicorn[standard] | >=0.51.0 | ASGI 服务器 |
+| python-multipart | >=0.0.32 | 表单/文件上传解析 |
+| pydantic | >=2.13.4 | 请求模型校验 |
+
+> 注 1：Weverse 平台认证由 `src/weverse_auth.py` 通过 requests 直接调用 API 实现，
+> **不再依赖** pip 上的 `weverse` 包（该包拉入已废弃的 pycrypto，Python 3.10+ 无法编译）。
+>
+> 注 2：可执行文件打包需 PyInstaller，属于构建期可选依赖：`pip install .[build]`
+> （对应 `pyproject.toml` 的 `[project.optional-dependencies] build`）。
 
 ### 外部依赖
 
 | 依赖 | 用途 | 安装方式 |
 |------|------|---------|
-| FFmpeg | 视频录制与转码 | Windows 内置，Linux/macOS 需手动安装 |
-| Node.js | 运行 JavaScript 签名算法 | Windows 自动安装，Linux 需包管理器安装 |
+| FFmpeg | 视频录制与转码 | Windows 内置（`ffmpeg/`），Linux/macOS 手动安装；Docker 内 apt 安装 |
+| Node.js | 运行 JavaScript 签名算法 | Windows 自动安装（`node/`），Linux 需包管理器安装；Docker 内 apt 安装 Node 22 |
 
 ### 模块依赖关系图
 
@@ -754,47 +770,43 @@ python web.py
 
 ### 方式 2: Docker 运行
 
-#### Dockerfile 多阶段构建说明
+#### Dockerfile 多阶段构建说明（基础镜像 `python:3.13-slim-bookworm`）
 
 ```dockerfile
 # 阶段 1: builder
-# - 安装 Node.js
-# - 创建 Python 虚拟环境（venv）
-# - 安装 Python 依赖到 venv
+# - 仅安装 build-essential（编译无二进制轮子的依赖）
+# - 创建 Python 虚拟环境 /opt/venv 并安装 requirements.txt
+#   （Node.js 只在运行时需要，builder 阶段不安装）
 
 # 阶段 2: runtime
-# - 精简基础镜像
-# - 安装 Node.js + ffmpeg + procps 等运行时依赖
-# - 从 builder 复制 Python 虚拟环境
-# - 使用非 root 用户运行
+# - 精简基础镜像 + apt 安装 ffmpeg / nodejs(22 LTS) / tzdata / procps
+# - 从 builder 复制 /opt/venv 虚拟环境
+# - 非 root 用户 recorder(uid=1000) 运行
+# - HEALTHCHECK 兼容 main.py 与 web.py 两种模式（pgrep）
+# - ENTRYPOINT ["python", "main.py"]，EXPOSE 8000（Web 模式用）
 ```
 
-#### 使用 docker-compose (推荐)
+**`.dockerignore` 要点**：
+- 排除平台二进制（`ffmpeg/`、`node/`，容器内 apt 安装）、`config/*.ini`（运行时挂载）、
+  `typings/`、`build_exe.py`、`gui_legacy.py` 等桌面/构建专用文件；
+- **保留 `i18n/**/*.mo`** 编译翻译文件 —— gettext 运行时必需且 Dockerfile 不会重新编译，
+  仅排除 `.po` 源文件与编译脚本。
 
-**创建 `docker-compose.yml`**:
-```yaml
-services:
-  douyin-live-recorder:
-    build: .
-    container_name: douyin-live-recorder
-    restart: unless-stopped
-    volumes:
-      - ./config:/app/config
-      - ./downloads:/app/downloads
-      - ./logs:/app/logs
-      - ./backup_config:/app/backup_config
-    environment:
-      - TZ=Asia/Shanghai
-    healthcheck:
-      test: ["CMD-SHELL", "pgrep -f 'python main.py' || exit 1"]
-      interval: 30s
-      start_period: 15s
-```
+#### 使用 docker compose (推荐)
 
-**运行**:
-```bash
-docker-compose up -d
-```
+仓库根目录的 `docker-compose.yaml` 已定义三个服务（共享同一镜像，通过 YAML 锚点复用配置）：
+
+| 服务 | 入口 | 启动命令 | 端口 |
+|------|------|---------|------|
+| `recorder`（默认） | `python main.py` | `docker compose up -d` | 无（纯 CLI） |
+| `web`（profile） | `python web.py` | `docker compose --profile web up -d` | `8000:8000` |
+| `gui`（profile） | `python gui.py` | `docker compose --profile gui up -d` | 无（需 X11） |
+
+统一挂载卷：`./config`、`./downloads`、`./logs`、`./backup_config`。
+
+> ⚠️ **Web 模式必读**：`web.py` 默认监听 `127.0.0.1:8000`，容器内必须在
+> `config/config.ini` 的 `[Web]` 节设置 `web_host = 0.0.0.0`，宿主机端口映射才能访问；
+> 同时强烈建议开启 `web_auth_enable = true` 并配置密码。
 
 ---
 

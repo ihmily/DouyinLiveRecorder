@@ -32,6 +32,10 @@ Pillow>=12.3.0            # 图像处理（托盘图标生成）
 
 # Web 管理面板
 fastapi>=0.140.0           # Web 框架
+starlette>=0.49.1          # ASGI 工具集（fastapi 传递依赖，但 src/web_api.py 直接导入，故显式声明）
 uvicorn[standard]>=0.51.0  # ASGI 服务器
 python-multipart>=0.0.32   # 表单/文件兼容
 pydantic>=2.13.4           # 请求模型校验（FastAPI 依赖，代码直接引用 BaseModel）
+
+# 注：可执行文件打包需 PyInstaller（仅构建期使用，非运行时依赖）：
+#   pip install .[build]   或   pip install pyinstaller>=6.10.0

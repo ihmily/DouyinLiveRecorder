@@ -13,8 +13,6 @@
 
 一款**简易**的可循环值守的直播录制工具，基于 FFmpeg 实现多平台直播源录制，支持自定义配置录制以及直播状态推送。
 
-</div>
-
 ## ✨ 功能特性
 
 | 功能 | 说明 |
@@ -29,8 +27,6 @@
 | 🌐 **国际化** | 支持中文、英文等多语言界面 |
 | ⚙️ **灵活配置** | 支持按直播间自定义画质、格式、分段录制等 |
 | 🔐 **Web 安全** | Token 认证、路径穿越防护、敏感配置脱敏 |
-
-</div>
 
 ## 🚀 快速开始
 
@@ -62,15 +58,21 @@ python web.py         # Web 管理面板模式
 ### 方式三：Docker 运行
 
 ```bash
-# 快速启动（默认命令行录制模式）
-docker-compose up -d
+# 命令行录制模式（默认，不占用端口）
+docker compose up -d
+
+# Web 管理面板模式（浏览器访问 http://localhost:8000）
+# 注意：需先在 config/config.ini 的 [Web] 节设置 web_host = 0.0.0.0，
+#       并建议开启 web_auth_enable = true 配置访问密码
+docker compose --profile web up -d
 
 # 或本地构建并启动
 docker build -t douyin-live-recorder .
-docker run -d douyin-live-recorder
+docker run -d -v ./config:/app/config -v ./downloads:/app/downloads douyin-live-recorder
 ```
 
-</div>
+> 容器内 FFmpeg 与 Node.js 由镜像自带（apt 安装），无需挂载本地 `ffmpeg/`、`node/` 目录；
+> `config/`、`downloads/`、`logs/`、`backup_config/` 通过卷挂载持久化。
 
 ## 🎈 已支持平台
 
@@ -131,8 +133,6 @@ docker run -d douyin-live-recorder
 - [x] Picarto
 - [ ] 更多平台正在更新中
 
-</div>
-
 ## 📁 项目结构
 
 ```
@@ -151,8 +151,10 @@ DouyinLiveRecorder/
 │   ├── ab_sign.py             # 抖音 A-Bogus 签名
 │   ├── node_install.py        # Node.js 自动安装/初始化
 │   ├── weverse_auth.py        # Weverse 平台认证
+│   ├── ttwid.py               # 抖音访客 ttwid 获取
 │   ├── web_api.py             # Web 管理面板 FastAPI 应用
 │   ├── web_config.py          # Web 面板配置读写
+│   ├── web_tray.py            # Web 模式系统托盘（最小化到托盘）
 │   ├── http_clients/          # HTTP 客户端
 │   │   ├── __init__.py
 │   │   ├── config.py          # HTTP 客户端共享配置（SSL 验证开关）
@@ -171,38 +173,34 @@ DouyinLiveRecorder/
 │   ├── index.html              # 单页应用入口
 │   ├── app.js                  # 前端逻辑（API、SSE、渲染）
 │   └── style.css               # 样式表（主题、响应式）
-├── tests/                      # 单元测试
-│   ├── conftest.py
-│   ├── test_stream_quality.py
-│   ├── test_web_api.py
-│   └── test_web_config.py
-├── downloads/                  # 录制文件保存目录
-├── logs/                       # 日志文件目录
-├── i18n/                       # 国际化文件
+├── typings/                    # 第三方库类型存根（静态检查用）
+├── downloads/                  # 录制文件保存目录（运行时生成）
+├── logs/                       # 日志文件目录（运行时生成）
+├── i18n/                       # 国际化文件（gettext）
 │   ├── zh_CN/LC_MESSAGES/
 │   │   ├── zh_CN.po           # 中文翻译源
-│   │   └── zh_CN.mo           # 编译后翻译
-│   └── en/LC_MESSAGES/
+│   │   └── zh_CN.mo           # 编译后翻译（运行时必需）
+│   └── en/LC_MESSAGES/         # 英文（预留）
 ├── ffmpeg/                     # FFmpeg 目录（Windows）
 ├── node/                       # Node.js 目录（Windows）
 ├── main.py                     # 命令行入口
 ├── gui.py                      # GUI 图形界面入口
 ├── gui_legacy.py               # 旧版 GUI（兼容保留）
 ├── web.py                      # Web 管理面板入口
-├── index.html                  # M3U8 视频播放器
+├── index.html                  # M3U8 视频播放器（独立工具页）
 ├── msg_push.py                 # 消息推送模块
-├── demo.py                     # 调用示例
 ├── i18n.py                     # 国际化实现
+├── build_exe.py                # PyInstaller 打包脚本（CLI/GUI/Web 三入口）
 ├── requirements.txt            # Python 依赖
 ├── pyproject.toml             # Python 项目配置
-├── Dockerfile                  # Docker 构建文件
-├── docker-compose.yaml         # Docker Compose 配置
+├── Dockerfile                  # Docker 构建文件（多阶段）
+├── docker-compose.yaml         # Docker Compose（recorder/web/gui 三服务）
+├── .dockerignore               # Docker 构建上下文排除
+├── .gitignore                  # Git 排除
 ├── StopRecording.vbs          # Windows 停止录制脚本
 ├── CODE_WIKI.md               # 项目架构文档
 └── README.md                   # 项目说明文档
 ```
-
-</div>
 
 ## ⚙️ 配置说明
 
@@ -391,7 +389,6 @@ https://live.douyin.com/745964462470
 | `TZ` | 时区设置 | `Asia/Shanghai` |
 | `TERM` | 终端类型 | `xterm-256color` |
 
-</div>
 
 ## 🎬 使用说明
 
@@ -471,8 +468,6 @@ Windows 下控制台默认「最小化到系统托盘」（`web_minimize_to_tray
 5. 录制抖音需要填写有效的 cookie（至少包含 ttwid），否则可能触发风控
 6. 部分平台需要 Node.js 环境运行 JavaScript 签名脚本，Windows 下会自动安装
 
-</div>
-
 ## 🐋 Docker 部署
 
 ### 前置要求
@@ -491,28 +486,30 @@ cd DouyinLiveRecorder
 # 在 config/URL_config.ini 中添加直播间地址
 
 # 3. 启动容器（默认命令行录制模式）
-docker-compose up -d
+docker compose up -d
 
 # 4. 查看日志
-docker-compose logs -f
+docker compose logs -f
 ```
 
 ### 切换运行模式
 
-`docker-compose.yaml` 默认运行命令行录制模式。如需切换到 Web 管理面板模式：
-
-```yaml
-services:
-  recorder:
-    command: ["python", "web.py"]
-```
-
-GUI 模式（需 X11 显示环境）：
+`docker-compose.yaml` 已内置三个服务（recorder / web / gui），通过 profile 切换，无需修改文件：
 
 ```bash
-# 启动 GUI 模式（需在宿主机执行 xhost +local:）
+# 命令行录制模式（默认，不占用端口）
+docker compose up -d
+
+# Web 管理面板模式（映射 8000 端口，浏览器访问 http://localhost:8000）
+docker compose --profile web up -d
+
+# GUI 模式（需 X11 显示环境，先在宿主机执行 xhost +local:）
 docker compose --profile gui up -d
 ```
+
+> ⚠️ Web 模式注意：`web.py` 默认监听 `127.0.0.1`，容器内必须在 `config/config.ini`
+> 的 `[Web]` 节设置 `web_host = 0.0.0.0` 才能从宿主机访问；同时建议开启
+> `web_auth_enable = true` 并配置 `web_password`。
 
 ### 数据挂载
 
@@ -526,9 +523,11 @@ volumes:
 
 ### 端口映射
 
+仅 `web` 服务（Web 管理面板模式）映射端口，`recorder` / `gui` 服务不监听任何端口：
+
 ```yaml
 ports:
-  - "8000:8000"   # Web 管理面板端口（仅 web.py 模式需要）
+  - "8000:8000"   # Web 管理面板端口（仅 --profile web 时生效）
 ```
 
 ### 环境变量
@@ -549,8 +548,6 @@ ports:
 - **资源限制**：默认限制 2 CPU / 2G 内存（可在 docker-compose.yaml 调整）
 - **日志轮转**：单文件 50MB，最多保留 3 份
 - **内置 Node.js 22 LTS**：用于运行 JavaScript 签名脚本
-
-</div>
 
 ## 🛠️ 开发指南
 
@@ -590,7 +587,6 @@ pytest
 ### 项目文档
 
 - [CODE_WIKI.md](CODE_WIKI.md) - 项目架构文档（详细的模块说明、依赖关系、设计模式）
-- [demo.py](demo.py) - 各平台调用示例
 
 ### 添加新平台支持
 
@@ -599,8 +595,6 @@ pytest
 3. 在 `main.py` 中添加平台识别逻辑（`PLATFORM_HOST` 列表和录制分支）
 4. 在 `tests/test_stream_quality.py` 中添加画质回采测试
 5. 更新 `README.md` 和 `CODE_WIKI.md`
-
-</div>
 
 ## ❓ 常见问题
 
@@ -657,45 +651,38 @@ brew install node
 
 直接编辑 `config/config.ini` 中的 `web_password` 项，修改后重启 `web.py` 即可。密码变更后所有现有 Token 会自动失效，需重新登录。
 
-</div>
-
 ## 🤖 相关项目
 
 - [StreamCap](https://github.com/ihmily/StreamCap) - 直播录制工具
 - [streamget](https://github.com/ihmily/streamget) - 流媒体获取工具
 
-</div>
-
 ## ❤️ 贡献者
 
-&ensp;&ensp; [![Hmily](https://github.com/ihmily.png?size=50)](https://github.com/ihmily)
+[![Hmily](https://github.com/ihmily.png?size=50)](https://github.com/ihmily)
 [![iridescentGray](https://github.com/iridescentGray.png?size=50)](https://github.com/iridescentGray)
 [![annidy](https://github.com/annidy.png?size=50)](https://github.com/annidy)
 [![wwkk2580](https://github.com/wwkk2580.png?size=50)](https://github.com/wwkk2580)
 [![missuo](https://github.com/missuo.png?size=50)](https://github.com/missuo)
-<a href="https://github.com/xueli12" target="_blank"><img src="https://github.com/xueli12.png?size=50" alt="xueli12" style="width:53px; height:51px;" /></a>
-<a href="https://github.com/kaine1973" target="_blank"><img src="https://github.com/kaine1973.png?size=50" alt="kaine1973" style="width:53px; height:51px;" /></a>
-<a href="https://github.com/yinruiqing" target="_blank"><img src="https://github.com/yinruiqing.png?size=50" alt="yinruiqing" style="width:53px; height:51px;" /></a>
-<a href="https://github.com/Max-Tortoise" target="_blank"><img src="https://github.com/Max-Tortoise.png?size=50" alt="Max-Tortoise" style="width:53px; height:51px;" /></a>
+[![xueli12](https://github.com/xueli12.png?size=50)](https://github.com/xueli12)
+[![kaine1973](https://github.com/kaine1973.png?size=50)](https://github.com/kaine1973)
+[![yinruiqing](https://github.com/yinruiqing.png?size=50)](https://github.com/yinruiqing)
+[![Max-Tortoise](https://github.com/Max-Tortoise.png?size=50)](https://github.com/Max-Tortoise)
 [![justdoiting](https://github.com/justdoiting.png?size=50)](https://github.com/justdoiting)
 [![dhbxs](https://github.com/dhbxs.png?size=50)](https://github.com/dhbxs)
 [![wujiyu115](https://github.com/wujiyu115.png?size=50)](https://github.com/wujiyu115)
 [![zhanghao333](https://github.com/zhanghao333.png?size=50)](https://github.com/zhanghao333)
-<a href="https://github.com/gyc0123" target="_blank"><img src="https://github.com/gyc0123.png?size=50" alt="gyc0123" style="width:53px; height:51px;" /></a>
+[![gyc0123](https://github.com/gyc0123.png?size=50)](https://github.com/gyc0123)
 
-&ensp;&ensp; [![HoratioShaw](https://github.com/HoratioShaw.png?size=50)](https://github.com/HoratioShaw)
+[![HoratioShaw](https://github.com/HoratioShaw.png?size=50)](https://github.com/HoratioShaw)
 [![nov30th](https://github.com/nov30th.png?size=50)](https://github.com/nov30th)
 [![727155455](https://github.com/727155455.png?size=50)](https://github.com/727155455)
 [![nixingshiguang](https://github.com/nixingshiguang.png?size=50)](https://github.com/nixingshiguang)
 [![1411430556](https://github.com/1411430556.png?size=50)](https://github.com/1411430556)
 [![Ovear](https://github.com/Ovear.png?size=50)](https://github.com/Ovear)
-&emsp;
 
 ## 📄 许可证
 
 本项目基于 [MIT License](LICENSE) 开源，欢迎 Star 和 Fork！
-
-</div>
 
 ## ⏳ 更新日志
 
@@ -778,10 +765,6 @@ brew install node
 
 </details>
 
-&emsp;
-
-## 有问题可以提 Issue，我会在这里持续添加更多直播平台的录制 欢迎 Star
+## 💬 有问题可以提 Issue，我会在这里持续添加更多直播平台的录制 欢迎 Star
 
 [![Star History Chart](https://api.star-history.com/svg?repos=ihmily/DouyinLiveRecorder&type=Timeline)](https://star-history.com/#ihmily/DouyinLiveRecorder&Timeline)
-
-</div>

@@ -1,11 +1,9 @@
-"""
-最小类型存根：pystray 官方未发布类型信息，本项目为静态检查补一份最小声明。
-仅覆盖 web_tray.py 实际用到的 API。
-"""
+# 最小类型存根：pystray 官方未发布类型信息，本项目为静态检查补一份最小声明。
+# 仅覆盖 web_tray.py 实际用到的 API。
 
 # 第三方无类型包（pystray）的最小存根；icon 可为多种图像类型、回调返回动态值，
-# 此处有意使用 Any，故放宽本文件的 reportAny / reportExplicitAny 检查。
-# pyright: reportAny=none, reportExplicitAny=none
+# 此处有意使用 Any，故放宽本文件的类型检查。
+# pyright: reportGeneralTypeIssues=none
 
 from typing import Any, Callable
 
