@@ -1,13 +1,11 @@
-"""
-最小类型存根：customtkinter 官方未发布类型信息，本项目为静态检查补一份最小声明。
-仅覆盖 gui.py 实际用到的 API。
-
-CTk* 控件在运行时继承自对应 tkinter 控件，故这里直接继承 tkinter 类以复用 typeshed
-自带的方法。但 tkinter 的部分方法（pack/grid/configure…）存在返回非 None（如 _GridIndexInfo
-或 config dict）的重载，导致调用结果未使用时触发 reportUnusedCallResult。为消除此类告警，
-这里用 _CTkWidget 混入类在 MRO 中优先覆盖这些「副作用型」方法，统一返回 None；仅保留
-get/index/create_*/winfo_children 等确实需要返回值的少数方法签名。
-"""
+# 最小类型存根：customtkinter 官方未发布类型信息，本项目为静态检查补一份最小声明。
+# 仅覆盖 gui.py 实际用到的 API。
+#
+# CTk* 控件在运行时继承自对应 tkinter 控件，故这里直接继承 tkinter 类以复用 typeshed
+# 自带的方法。但 tkinter 的部分方法（pack/grid/configure…）存在返回非 None（如 _GridIndexInfo
+# 或 config dict）的重载，导致调用结果未使用时触发 reportUnusedCallResult。为消除此类告警，
+# 这里用 _CTkWidget 混入类在 MRO 中优先覆盖这些「副作用型」方法，统一返回 None；仅保留
+# get/index/create_*/winfo_children 等确实需要返回值的少数方法签名。
 import tkinter
 from typing import Any
 

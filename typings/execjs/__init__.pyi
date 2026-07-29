@@ -1,19 +1,18 @@
-"""Minimal type stub for PyExecJS (execjs).
-
-The upstream package ships no type information; basedpyright's default
-auto-generated stub leaves ``compile``/``call`` untyped (``Unknown``), which
-cascades ``reportUnknownMemberType`` warnings at every call site (e.g.
-``execjs.compile(...)`` reads an ``Unknown`` member). This stub gives
-``compile`` a concrete ``ExternalRuntime`` return type and lets ``call`` return
-``Any`` (JS values are dynamically typed), which callers narrow with
-``cast(...)``.
-
-This is a *type-only* stub; it intentionally does not shadow runtime behaviour.
-"""
+# Minimal type stub for PyExecJS (execjs).
+#
+# The upstream package ships no type information; basedpyright's default
+# auto-generated stub leaves ``compile``/``call`` untyped (``Unknown``), which
+# cascades ``reportUnknownMemberType`` warnings at every call site (e.g.
+# ``execjs.compile(...)`` reads an ``Unknown`` member). This stub gives
+# ``compile`` a concrete ``ExternalRuntime`` return type and lets ``call`` return
+# ``Any`` (JS values are dynamically typed), which callers narrow with
+# ``cast(...)``.
+#
+# This is a *type-only* stub; it intentionally does not shadow runtime behaviour.
 
 # 第三方无类型包（PyExecJS）的最小存根；JS 运行期返回值本身即为动态类型，
-# 故此处有意使用 Any，并放宽本文件的 reportAny / reportExplicitAny 检查。
-# pyright: reportAny=none, reportExplicitAny=none
+# 故此处有意使用 Any，并放宽本文件的类型检查。
+# pyright: reportGeneralTypeIssues=none
 
 from typing import Any
 

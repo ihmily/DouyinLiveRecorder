@@ -4,7 +4,8 @@
 # =============================================================================
 
 # -----------------------------------------------------------------------------
-# 阶段1：构建阶段 - 安装 Python 依赖和 Node.js
+# 阶段1：构建阶段 - 仅安装 Python 依赖到虚拟环境
+# （Node.js 只在运行时需要，由阶段2安装，构建阶段无需引入）
 # -----------------------------------------------------------------------------
 FROM python:3.13-slim-bookworm AS builder
 
@@ -14,14 +15,10 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# 安装构建依赖和 Node.js 22 LTS (用于 JS 签名脚本)
+# 安装构建依赖（build-essential 用于编译无二进制轮子的依赖）
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    gnupg \
     build-essential \
     ca-certificates \
-    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # 创建 Python 虚拟环境（中立路径，对所有用户可读）
@@ -99,9 +96,12 @@ USER recorder
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD pgrep -f 'python (main|web).py' || exit 1
 
-# 暴露端口（用于可能的 Web UI）
+# 暴露端口（Web 管理面板模式使用）
+# 注意：web.py 默认监听 127.0.0.1，容器内需在 config/config.ini 的 [Web] 节
+# 将 web_host 设为 0.0.0.0，宿主机端口映射才能访问到面板。
 EXPOSE 8000
 
 # 默认运行命令：命令行录制模式
 # 如需 Web 管理面板模式，启动时改 command 为: python web.py
+# （docker-compose.yaml 已提供 web / gui 两个 profile 服务）
 ENTRYPOINT ["python", "main.py"]
