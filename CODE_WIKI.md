@@ -1002,6 +1002,25 @@ brew install node
 
 ## 更新日志
 
+### v4.0.8-dev (2026-07-28) — 多直播间并发监控风控修复与静态检查清零
+
+**抖音多直播间并发监控触发风控修复：**
+
+- `src/spider.py`：`_ensure_ttwid()` 委托给共享 `src/ttwid.py` 模块（带 `threading.Lock` 跨线程去重），解决多线程并发时重复拉取 ttwid 触发风控的问题
+- `src/room.py`：`_ensure_douyin_ttwid()` 同样委托给共享 `ttwid.py` 模块，统一 ttwid 获取入口
+- `main.py`：新增 `_douyin_rate_limit()` 速率限制器，保证两次抖音 API 请求之间至少间隔 3 秒（`douyin_min_interval`），避免多线程背靠背连续请求触发抖音风控（返回空响应）
+- `main.py`：新增全局变量 `douyin_rate_lock`、`douyin_last_request_time`、`douyin_min_interval` 用于速率控制
+
+**静态检查清零（Pyright 0 errors, 0 warnings）：**
+
+- `gui.py`：`Image.LANCZOS` → `Image.Resampling.LANCZOS`（Pillow 10+ 现代 API，修复 `reportAttributeAccessIssue`）
+- `gui.py`：为 pystray 私有属性访问添加 `# type: ignore[attr-defined]`（`_assert_image()`、`_icon_valid`、`run_detached()`）
+- `main.py`：`select_source_url()` 中 `_validate_stream_url(m3u8_url)` 添加 `cast(str, m3u8_url)`，修复 `reportArgumentType` 类型收窄问题
+
+**验证：** `python -m pyright main.py web.py msg_push.py gui.py build_exe.py` 输出 `0 errors, 0 warnings, 0 informations`。
+
+---
+
 ### v4.0.8-dev (2026-07-25) — 新增 PyInstaller 可执行文件打包与 GitHub Actions 发布
 
 - 新增 `build_exe.py`：PyInstaller `onedir` + `contents_directory='_internal'`，动态生成 `.spec`，将 `main.py`/`gui.py`/`web.py` 三入口共享依赖构建为 `DouyinLiveRecorder(.exe)` / `-GUI(.exe)` / `-Web(.exe)`，并统一压缩为 `DouyinLiveRecorder-v{version}-{os}-{arch}.zip`（约 118 MB）
@@ -1142,4 +1161,4 @@ brew install node
 
 ---
 
-*本文档最后更新: 2026-07-25（新增 PyInstaller 打包与 GitHub Actions 发布体系）*
+*本文档最后更新: 2026-07-28（多直播间并发监控风控修复与静态检查清零）*
