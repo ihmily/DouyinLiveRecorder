@@ -9,4 +9,3 @@ def encode_unicode_codepoints(s: str) -> str:
     # >>> encode_unicode_codepoints('\u4e16\u754c') == '\\u4e16\\u754c'
     # True
     ...
-

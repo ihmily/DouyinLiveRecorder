@@ -19,7 +19,7 @@ import os
 import sys
 import threading
 
-from .http_clients.async_http import async_req
+from .async_http import async_req
 from .logger import logger
 
 OptionalStr = str | None
@@ -29,7 +29,7 @@ def _app_root() -> str:
     # 返回应用程序根目录（exe 同级目录），与 logger.py 保持一致，用于独立定位 config.ini
     #     - 源码运行：主脚本所在目录（项目根）。
     #     - 冻结运行（PyInstaller）：exe 同级目录（_internal 的父目录），供定位 config/ffmpeg/node。
-    if getattr(sys, 'frozen', False):
+    if getattr(sys, "frozen", False):
         return os.path.dirname(os.path.realpath(sys.executable))
     return os.path.split(os.path.realpath(sys.argv[0]))[0]
 
@@ -40,8 +40,8 @@ _cached_ttwid: str = ""
 _ttwid_lock = threading.Lock()
 
 # 配置文件中的 ttwid 键名（位于 [Cookie] 段），用户手动填写时优先于自动获取
-_CONFIG_TTWID_KEY = 'ttwid'
-_CONFIG_SECTION = 'Cookie'
+_CONFIG_TTWID_KEY = "ttwid"
+_CONFIG_SECTION = "Cookie"
 
 
 def _read_config_ttwid() -> str:
@@ -49,7 +49,7 @@ def _read_config_ttwid() -> str:
     # 与 logger.py 一致：用 RawConfigParser + utf-8-sig 独立读取，避免依赖 main.py 的执行顺序
     try:
         parser = configparser.RawConfigParser()
-        _ = parser.read(f'{_app_root()}/config/config.ini', encoding='utf-8-sig')
+        _ = parser.read(f"{_app_root()}/config/config.ini", encoding="utf-8-sig")
         raw = parser.get(_CONFIG_SECTION, _CONFIG_TTWID_KEY).strip()
     except (configparser.NoSectionError, configparser.NoOptionError, configparser.Error):
         return ""
@@ -58,7 +58,7 @@ def _read_config_ttwid() -> str:
     if not raw:
         return ""
     # 归一化：确保形如 ttwid=<value>
-    return raw if raw.lower().startswith('ttwid=') else f'ttwid={raw}'
+    return raw if raw.lower().startswith("ttwid=") else f"ttwid={raw}"
 
 
 async def _fetch_ttwid(proxy_addr: OptionalStr = None) -> str:
@@ -66,15 +66,17 @@ async def _fetch_ttwid(proxy_addr: OptionalStr = None) -> str:
     global _cached_ttwid
     try:
         cookies_dict = await async_req(
-            url='https://live.douyin.com/',
+            url="https://live.douyin.com/",
             proxy_addr=proxy_addr,
-            headers={'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-                                   '(KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36'},
+            headers={
+                "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
+            },
             return_cookies=True,
             timeout=10,
             http2=False,  # 抖音对 HTTP/2 支持不稳定，常触发 ReadError('')，降级到 HTTP/1.1
         )
-        if isinstance(cookies_dict, dict) and cookies_dict.get('ttwid'):
+        if isinstance(cookies_dict, dict) and cookies_dict.get("ttwid"):
             _cached_ttwid = f"ttwid={cookies_dict['ttwid']}"
             logger.debug("自动获取抖音 ttwid 成功")
     except Exception as e:

@@ -2,23 +2,26 @@
 # Node.js 环境自动安装模块 - 跨平台的 Node.js 自动检测和安装功能
 
 import os
-import subprocess
 import platform
+import re
+import subprocess
 import zipfile
 from pathlib import Path
-import requests
-import re
+
 import distro
-from tqdm import tqdm
+import requests
+
 # loguru 的 logger 为模块级单例，src.logger 对其做过的配置在此同样生效；
 # 直接从此处导入可避免基于 basedpyright 的 "未从 src.logger 导出" 告警。
 from loguru import logger
+from tqdm import tqdm
+
 # 应用根目录复用 src.logger 公开导出的 script_path（等价原私有 _app_root() 的返回值）
 from .logger import script_path
 
 current_platform = platform.system()
 execute_dir = script_path  # 冻结后指向 _internal/，与 __file__ 定位的资源收敛到同一处
-current_env_path = os.environ.get('PATH', '')
+current_env_path = os.environ.get("PATH", "")
 
 
 def unzip_file(zip_path: str | Path, extract_to: str | Path, delete: bool = True) -> None:
@@ -27,7 +30,7 @@ def unzip_file(zip_path: str | Path, extract_to: str | Path, delete: bool = True
         os.makedirs(extract_to)
 
     extract_root = os.path.realpath(extract_to)
-    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+    with zipfile.ZipFile(zip_path, "r") as zip_ref:
         # 防止 Zip Slip 目录穿越攻击：校验每个成员解压后的真实路径
         for member in zip_ref.namelist():
             member_path = os.path.realpath(os.path.join(extract_root, member))
@@ -44,19 +47,18 @@ def install_nodejs_windows() -> bool:
     try:
         logger.warning("Node.js is not installed.")
         logger.debug("Installing the stable version of Node.js for Windows...")
-        response = requests.get('https://nodejs.cn/download/', timeout=30)
+        response = requests.get("https://nodejs.cn/download/", timeout=30)
         if response.status_code == 200:
-            match = re.search('https://npmmirror.com/mirrors/node/(v.*?)/node-(v.*?)-x64.msi',
-                              response.text)
+            match = re.search("https://npmmirror.com/mirrors/node/(v.*?)/node-(v.*?)-x64.msi", response.text)
             if match:
                 version = match.group(1)
-                system_bit = 'x64' if '32' not in platform.machine() else 'x86'
-                url = f'https://npmmirror.com/mirrors/node/{version}/node-{version}-win-{system_bit}.zip'
+                system_bit = "x64" if "32" not in platform.machine() else "x86"
+                url = f"https://npmmirror.com/mirrors/node/{version}/node-{version}-win-{system_bit}.zip"
             else:
                 logger.error("Failed to retrieve the download URL for the latest version of Node.js...")
                 return False
 
-            full_file_name = url.rsplit('/', maxsplit=1)[-1]
+            full_file_name = url.rsplit("/", maxsplit=1)[-1]
             zip_file_path = Path(execute_dir) / full_file_name
 
             if Path(zip_file_path).exists():
@@ -64,35 +66,36 @@ def install_nodejs_windows() -> bool:
             else:
                 response = requests.get(url, stream=True, timeout=30)
                 response.raise_for_status()
-                total_size = int(response.headers.get('Content-Length', 0))
+                total_size = int(response.headers.get("Content-Length", 0))
                 block_size = 1024
 
-                with tqdm(total=total_size, unit="B", unit_scale=True,
-                          ncols=100, desc=f'Downloading Node.js ({version})') as t:
-                    with open(zip_file_path, 'wb') as f:
+                with tqdm(
+                    total=total_size, unit="B", unit_scale=True, ncols=100, desc=f"Downloading Node.js ({version})"
+                ) as t:
+                    with open(zip_file_path, "wb") as f:
                         for data in response.iter_content(block_size):
                             _ = t.update(len(data))
                             _ = f.write(data)
 
             unzip_file(zip_file_path, execute_dir)
-            extract_dir_path = str(zip_file_path).rsplit('.', maxsplit=1)[0]
-            new_extract_dir_path = Path(execute_dir) / 'node'
+            extract_dir_path = str(zip_file_path).rsplit(".", maxsplit=1)[0]
+            new_extract_dir_path = Path(execute_dir) / "node"
             if Path(extract_dir_path).exists() and not Path(new_extract_dir_path).exists():
                 os.rename(extract_dir_path, new_extract_dir_path)
-                os.environ['PATH'] = os.path.join(execute_dir, 'node') + os.pathsep + current_env_path
+                os.environ["PATH"] = os.path.join(execute_dir, "node") + os.pathsep + current_env_path
                 result = subprocess.run(["node", "-v"], capture_output=True)
                 if result.returncode == 0:
-                    logger.debug('Node.js installation was successful. Restart for changes to take effect')
+                    logger.debug("Node.js installation was successful. Restart for changes to take effect")
                     return True
                 else:
-                    logger.debug('Node.js installation failed')
+                    logger.debug("Node.js installation failed")
                     return False
             elif Path(new_extract_dir_path).exists():
                 # 已有安装目录，验证可用性
                 result = subprocess.run(["node", "-v"], capture_output=True)
                 if result.returncode == 0:
                     return True
-                logger.debug('Node.js directory exists but not working')
+                logger.debug("Node.js directory exists but not working")
                 return False
             return False
         else:
@@ -109,14 +112,14 @@ def install_nodejs_centos() -> bool:
     try:
         logger.warning("Node.js is not installed.")
         logger.debug("Installing the latest version of Node.js for CentOS...")
-        result = subprocess.run(['yum', 'install', '-y', 'epel-release'], capture_output=True)
+        result = subprocess.run(["yum", "install", "-y", "epel-release"], capture_output=True)
         if result.returncode != 0:
             logger.error("Failed to install EPEL repository")
             return False
 
-        result = subprocess.run(['yum', 'install', '-y', 'nodejs'], capture_output=True)
+        result = subprocess.run(["yum", "install", "-y", "nodejs"], capture_output=True)
         if result.returncode == 0:
-            logger.debug('Node.js installation was successful. Restart for changes to take effect.')
+            logger.debug("Node.js installation was successful. Restart for changes to take effect.")
             return True
         else:
             logger.error("Node.js installation failed")
@@ -132,10 +135,10 @@ def install_nodejs_ubuntu() -> bool:
     try:
         logger.warning("Node.js is not installed.")
         logger.debug("Installing the latest version of Node.js for Ubuntu...")
-        install_command = ['apt', 'install', '-y', 'nodejs']
+        install_command = ["apt", "install", "-y", "nodejs"]
         result = subprocess.run(install_command, capture_output=True)
         if result.returncode == 0:
-            logger.debug('Node.js installation was successful. Restart for changes to take effect.')
+            logger.debug("Node.js installation was successful. Restart for changes to take effect.")
             return True
         else:
             logger.error("Node.js installation failed")
@@ -152,7 +155,7 @@ def install_nodejs_mac() -> bool:
     try:
         result = subprocess.run(["brew", "install", "node"], capture_output=True)
         if result.returncode == 0:
-            logger.debug('Node.js installation was successful. Restart for changes to take effect.')
+            logger.debug("Node.js installation was successful. Restart for changes to take effect.")
             return True
         else:
             logger.error("Node.js installation failed")
@@ -189,14 +192,15 @@ def install_nodejs() -> bool:
         return install_nodejs_mac()
     else:
         logger.debug(
-            f"Node.js auto installation is not supported on this platform: {current_platform}. Please install Node.js manually.")
+            f"Node.js auto installation is not supported on this platform: {current_platform}. Please install Node.js manually."
+        )
         return False
 
 
 def check_nodejs_installed() -> bool:
     # 检查系统是否已安装 Node.js
     try:
-        result = subprocess.run(['node', '-v'], capture_output=True)
+        result = subprocess.run(["node", "-v"], capture_output=True)
         version = result.stdout.strip()
         if result.returncode == 0 and version:
             return True

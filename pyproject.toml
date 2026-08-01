@@ -1,6 +1,6 @@
 [project]
 name = "DouyinLiveRecorder"
-version = "4.0.8"
+version = "4.0.8.1"
 description = "支持抖音、TikTok、YouTube、快手等60+平台的直播录制工具，支持循环录制、多人录制、消息推送"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -63,6 +63,7 @@ dependencies = [
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
     "black>=23.0.0",
     "isort>=5.12.0",
     "mypy>=1.5.0",
@@ -95,7 +96,7 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["src", "src.http_clients"]
+packages = ["src"]
 # 顶层单文件模块：保证 [project.scripts] 三个入口（main/gui/web）安装后可用
 py-modules = ["main", "web", "gui", "gui_legacy", "i18n", "msg_push"]
 
@@ -127,20 +128,14 @@ exclude = '''
 profile = "black"
 line_length = 120
 known_first_party = ["src", "i18n"]
-exclude = [
-    ".git",
-    "node",
-    "ffmpeg",
-    "downloads",
-    "__pycache__",
-    "*.pyc",
-]
+extend_skip = ["node", "ffmpeg", "downloads"]
+extend_skip_glob = ["*.pyc"]
 
 [tool.mypy]
 python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
-disallow_untyped_defs = false
+disallow_untyped_defs = true
 ignore_missing_imports = true
 exclude = [
     "node",
@@ -166,6 +161,7 @@ omit = [
 ]
 
 [tool.coverage.report]
+fail_under = 20
 exclude_lines = [
     "pragma: no cover",
     "def __repr__",

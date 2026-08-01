@@ -10,26 +10,26 @@ import secrets
 import threading
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from pathlib import Path
 from typing import cast
 
-from fastapi import FastAPI, HTTPException, Request, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from starlette.responses import Response
 from pydantic import BaseModel
+from starlette.responses import Response
 
 from src.web_config import (
-    read_web_config,
-    read_config_safe,
-    parse_url_config,
     format_url_line,
-    normalize_url,
     hash_web_password,
     is_hashed_web_password,
-    verify_web_password,
+    normalize_url,
+    parse_url_config,
+    read_config_safe,
+    read_web_config,
     update_config_line,
+    verify_web_password,
 )
 
 # web/ 静态资源目录（项目根/web）
@@ -99,11 +99,13 @@ def create_app(
         cfg = read_web_config(cast(str, cast(FastAPI, request.app).state.config_file))
         # 健康检查与登录端点与静态资源放行
         path = request.url.path
-        if (not cast(bool, cfg["web_auth_enable"])
-                or path == "/api/login"
-                or path == "/"
-                or path.startswith("/web/")
-                or path == "/favicon.ico"):
+        if (
+            not cast(bool, cfg["web_auth_enable"])
+            or path == "/api/login"
+            or path == "/"
+            or path.startswith("/web/")
+            or path == "/favicon.ico"
+        ):
             return await call_next(request)
 
         auth = request.headers.get("Authorization", "")
@@ -119,7 +121,7 @@ def create_app(
     # ===== 路由 =====
 
     @app.post("/api/login")
-    async def login(req: LoginRequest):
+    async def login(req: LoginRequest) -> dict[str, object]:
         # 每次登录重新读取配置，保证面板内修改密码即时生效。
         cfg = read_web_config(cast(str, app.state.config_file))
         if not cast(bool, cfg["web_auth_enable"]):
@@ -145,30 +147,34 @@ def create_app(
     async def get_status() -> dict[str, object]:
         try:
             import main
+
             status = main.get_status()
         except Exception as e:
             status = cast("dict[str, object]", {"error": str(e)})
         return status
 
     @app.get("/api/status/stream")
-    async def status_stream():
-        async def event_gen():
+    async def status_stream() -> StreamingResponse:
+        async def event_gen() -> AsyncGenerator[str, None]:
             while True:
                 try:
                     import main
+
                     status = main.get_status()
                     yield f"data: {json.dumps(status, ensure_ascii=False)}\n\n"
                 except Exception as e:
                     yield f"data: {json.dumps({'error': str(e)})}\n\n"
                 await asyncio.sleep(2)
+
         return StreamingResponse(event_gen(), media_type="text/event-stream")
 
     @app.get("/api/rooms")
-    async def list_rooms():
+    async def list_rooms() -> list[dict[str, str | bool]]:
         rooms = parse_url_config(cast(str, app.state.url_config_file))
         # 标记是否正在录制
         try:
             import main
+
             with main.record_state_lock:
                 running = list(main.running_list)
         except Exception:
@@ -180,7 +186,7 @@ def create_app(
         return rooms
 
     @app.post("/api/rooms")
-    async def add_room(req: RoomCreate):
+    async def add_room(req: RoomCreate) -> dict[str, object]:
         url = normalize_url(req.url)
         existing = parse_url_config(cast(str, app.state.url_config_file))
         if any(r["url"] == url for r in existing):
@@ -189,18 +195,20 @@ def create_app(
         # 持有 file_update_lock 与录制主循环的 update_file/delete_line 互斥，
         # 避免热重载的 read→rewrite 窗口内追加行丢失（I2）。
         import main as _main
+
         with _main.file_update_lock:
             with open(cast(str, app.state.url_config_file), "a", encoding="utf-8-sig") as f:
                 _ = f.write(line + "\n")
         return {"ok": True}
 
     @app.put("/api/rooms")
-    async def update_room(req: RoomUpdate):
+    async def update_room(req: RoomUpdate) -> dict[str, object]:
         old_url = normalize_url(req.old_url)
         new_line = format_url_line(req.url, req.quality, req.name)
         old_rooms = parse_url_config(cast(str, app.state.url_config_file))
         # 找到匹配行（含注释状态）
         import main as _main
+
         replaced = False
         for r in old_rooms:
             if r["url"] == old_url:
@@ -219,9 +227,10 @@ def create_app(
         return {"ok": True}
 
     @app.delete("/api/rooms")
-    async def delete_room(url: str = Query(...)):
+    async def delete_room(url: str = Query(...)) -> dict[str, object]:
         url = normalize_url(url)
         import main as _main
+
         rooms = parse_url_config(cast(str, app.state.url_config_file))
         for r in rooms:
             if r["url"] == url:
@@ -230,9 +239,10 @@ def create_app(
         raise HTTPException(404, "未找到直播间")
 
     @app.post("/api/rooms/toggle")
-    async def toggle_room(req: RoomToggle):
+    async def toggle_room(req: RoomToggle) -> dict[str, object]:
         url = normalize_url(req.url)
         import main as _main
+
         rooms = parse_url_config(cast(str, app.state.url_config_file))
         for r in rooms:
             if r["url"] == url:
@@ -248,11 +258,11 @@ def create_app(
         raise HTTPException(404, "未找到直播间")
 
     @app.get("/api/config")
-    async def get_config():
+    async def get_config() -> dict[str, dict[str, str]]:
         return read_config_safe(cast(str, app.state.config_file))
 
     @app.put("/api/config")
-    async def update_config(req: ConfigUpdate):
+    async def update_config(req: ConfigUpdate) -> dict[str, object]:
         value = req.value
         # 密码统一以 PBKDF2 哈希存储，避免明文落盘
         if req.section == "Web" and req.key == "web_password" and value.strip():
@@ -277,24 +287,33 @@ def create_app(
             raise HTTPException(404, "路径不存在")
         if os.path.isfile(target):
             st = os.stat(target)
-            return [{"name": os.path.basename(target), "type": "file",
-                     "size": st.st_size, "mtime": st.st_mtime, "path": path}]
+            return [
+                {
+                    "name": os.path.basename(target),
+                    "type": "file",
+                    "size": st.st_size,
+                    "mtime": st.st_mtime,
+                    "path": path,
+                }
+            ]
         items: list[dict[str, str | int | float]] = []
         for name in sorted(os.listdir(target)):
             full = os.path.join(target, name)
             st = os.stat(full)
             rel = os.path.relpath(full, root).replace("\\", "/")
-            items.append({
-                "name": name,
-                "type": "dir" if os.path.isdir(full) else "file",
-                "size": st.st_size if os.path.isfile(full) else 0,
-                "mtime": st.st_mtime,
-                "path": rel,
-            })
+            items.append(
+                {
+                    "name": name,
+                    "type": "dir" if os.path.isdir(full) else "file",
+                    "size": st.st_size if os.path.isfile(full) else 0,
+                    "mtime": st.st_mtime,
+                    "path": rel,
+                }
+            )
         return items
 
     @app.get("/api/files/download")
-    async def download_file(path: str = Query(...)):
+    async def download_file(path: str = Query(...)) -> FileResponse:
         root = cast(str, app.state.downloads_root)
         target = os.path.realpath(os.path.join(root, path))
         if not _is_within(target, root) or not os.path.isfile(target):
@@ -318,7 +337,7 @@ def create_app(
         app.mount("/web", StaticFiles(directory=str(_WEB_DIR), html=True), name="web")
 
         @app.get("/")
-        async def index():
+        async def index() -> FileResponse:
             return FileResponse(str(_WEB_DIR / "index.html"))
 
     return app

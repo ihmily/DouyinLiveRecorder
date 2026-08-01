@@ -4,10 +4,10 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import configparser
 import hashlib
 import hmac
-import binascii
 import re
 import secrets
 from pathlib import Path
@@ -106,21 +106,23 @@ def parse_url_config(file_path: str | Path) -> list[dict[str, str | bool]]:
                 name = " ".join(p.strip() for p in parts[2:])
 
             if name.startswith("主播:"):
-                name = name[len("主播:"):].strip()
+                name = name[len("主播:") :].strip()
             elif name.startswith("主播："):
-                name = name[len("主播："):].strip()
+                name = name[len("主播：") :].strip()
 
             if not url:
                 continue
 
             url = normalize_url(url)
-            rooms.append({
-                "url": url,
-                "quality": quality,
-                "name": name,
-                "enabled": enabled,
-                "raw_line": raw_line,
-            })
+            rooms.append(
+                {
+                    "url": url,
+                    "quality": quality,
+                    "name": name,
+                    "enabled": enabled,
+                    "raw_line": raw_line,
+                }
+            )
     return rooms
 
 
@@ -184,7 +186,7 @@ def read_config_safe(config_file: str | Path) -> dict[str, dict[str, str]]:
     parser = configparser.ConfigParser(interpolation=None)
     _ = parser.read(config_file, encoding=TEXT_ENCODING)
     result: dict[str, dict[str, str]] = {}
-    for section in cast("list[str]", parser.sections()):
+    for section in parser.sections():
         items: dict[str, str] = {}
         for key, value in parser.items(section):
             if section in SENSITIVE_SECTIONS and value.strip():
@@ -197,9 +199,7 @@ def read_config_safe(config_file: str | Path) -> dict[str, dict[str, str]]:
     return result
 
 
-def update_config_line(
-    config_file: str | Path, section: str, key: str, value: str
-) -> bool:
+def update_config_line(config_file: str | Path, section: str, key: str, value: str) -> bool:
     # 注释保留的行级配置更新。
     # 逐行扫描：进入目标 section 后，匹配 `^\\s*key\\s*[=：:]\\s*` 的行并替换其值；
     # 未找到 section 或 key 时返回 False（不写入）。
@@ -212,37 +212,37 @@ def update_config_line(
     in_target = False
     replaced = False
     # 匹配 key 行：允许 = 或 ：或 : 分隔，key 前后空白
-    key_pattern = re.compile(r'^(\s*' + re.escape(key) + r'\s*[=:：]\s*)(.*)$')
+    key_pattern = re.compile(r"^(\s*" + re.escape(key) + r"\s*[=:：]\s*)(.*)$")
     new_lines: list[str] = []
     for line in lines:
         stripped = line.strip()
         # section header: [name]
-        if stripped.startswith('[') and stripped.endswith(']'):
+        if stripped.startswith("[") and stripped.endswith("]"):
             cur_section = stripped[1:-1].strip()
-            in_target = (cur_section == section)
+            in_target = cur_section == section
             new_lines.append(line)
             continue
         if in_target and not replaced:
-            m = key_pattern.match(line.rstrip('\n').rstrip('\r'))
+            m = key_pattern.match(line.rstrip("\n").rstrip("\r"))
             if m:
-                prefix = m.group(1)          # "key = " 部分
-                old_tail = m.group(2)        # 原值（可能含行内注释）
+                prefix = m.group(1)  # "key = " 部分
+                old_tail = m.group(2)  # 原值（可能含行内注释）
                 # 检测行内注释：首个 " #" 或 " ;"（前置空白），保留注释部分
-                inline_comment = ''
-                for marker in (' #', ' ;'):
+                inline_comment = ""
+                for marker in (" #", " ;"):
                     idx = old_tail.find(marker)
                     if idx > 0:  # >0 表示前面有非空内容（不是行首注释）
                         inline_comment = old_tail[idx:]
                         break
                 # 保留原行尾换行符
-                eol = '\n' if line.endswith('\n') else ('\r\n' if line.endswith('\r\n') else '')
+                eol = "\n" if line.endswith("\n") else ("\r\n" if line.endswith("\r\n") else "")
                 new_lines.append(f"{prefix}{value}{inline_comment}{eol}")
                 replaced = True
                 continue
         new_lines.append(line)
     if not replaced:
         return False
-    _ = path.write_text(''.join(new_lines), encoding=TEXT_ENCODING)
+    _ = path.write_text("".join(new_lines), encoding=TEXT_ENCODING)
     return True
 
 

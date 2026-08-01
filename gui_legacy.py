@@ -2,21 +2,22 @@
 # 直播录制器 GUI 界面
 from __future__ import annotations
 
+import configparser
 import os
-import sys
-import signal
-import subprocess
-import threading
 import queue
 import re
-import configparser
+import signal
+import subprocess
+import sys
+import threading
 import tkinter as tk
 import tkinter.font as tkfont
-from tkinter import scrolledtext, messagebox, ttk
 from datetime import datetime
-from typing import Any, TYPE_CHECKING
+from tkinter import messagebox, scrolledtext, ttk
+from typing import TYPE_CHECKING, Any
 
 from PIL import Image, ImageDraw
+
 # pystray 延迟导入至 SystemTray.run() 内部，避免 headless 环境顶层导入失败
 
 if TYPE_CHECKING:
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
 
 
 # ─── 高对比度色彩系统（满足 WCAG AA 标准） ──────────────
+
 
 class Colors:
     # 主色调（#1D4ED8 在白色背景上对比度 7.2:1，远超 AA 等级 4.5:1）
@@ -63,6 +65,7 @@ class Colors:
 
 # ─── DPI 感知字体系统 ────────────────────────────────────
 
+
 class DpiFont:
     # 字体缓存（避免重复创建对象，降低 GC 压力）
     _cache: dict[str, tuple[str, int, str]] = {}
@@ -84,7 +87,7 @@ class DpiFont:
             temp = tk.Tk()
             temp.withdraw()
             try:
-                cls._scale = float(temp.tk.call('tk', 'scaling'))
+                cls._scale = float(temp.tk.call("tk", "scaling"))
             finally:
                 temp.destroy()
         except Exception:
@@ -97,9 +100,12 @@ class DpiFont:
         if cls._family is None:
             # 仅在首次调用时检测系统可用字体，结果缓存
             families = (
-                "Microsoft YaHei UI", "Segoe UI",
-                "PingFang SC", "Noto Sans SC",
-                "Microsoft YaHei", "TkDefaultFont"
+                "Microsoft YaHei UI",
+                "Segoe UI",
+                "PingFang SC",
+                "Noto Sans SC",
+                "Microsoft YaHei",
+                "TkDefaultFont",
             )
             cls._family = next((f for f in families if f in tkfont.families()), "TkDefaultFont")
         return cls._family
@@ -146,7 +152,7 @@ class DpiFont:
 class SystemTray:
     # 系统托盘管理器
 
-    def __init__(self, gui_app: 'LiveRecorderGUI'):
+    def __init__(self, gui_app: "LiveRecorderGUI"):
         # 初始化系统托盘管理器
         self.gui = gui_app
         self.icon: "pystray.Icon | None" = None  # type: ignore[type-arg]
@@ -155,31 +161,24 @@ class SystemTray:
     def create_icon_image(self) -> Image.Image:
         # 创建现代化托盘图标
         size = 64
-        image = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+        image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
         dc = ImageDraw.Draw(image)
 
         # 圆角矩形背景
         margin = 2
-        dc.rounded_rectangle(
-            (margin, margin, size - margin, size - margin),
-            radius=16, fill=(37, 99, 235, 255)
-        )
+        dc.rounded_rectangle((margin, margin, size - margin, size - margin), radius=16, fill=(37, 99, 235, 255))
 
         # 白色圆环
         ring_margin = 10
         dc.ellipse(
-            (ring_margin, ring_margin, size - ring_margin, size - ring_margin),
-            outline=(255, 255, 255, 230), width=3
+            (ring_margin, ring_margin, size - ring_margin, size - ring_margin), outline=(255, 255, 255, 230), width=3
         )
 
         # 中心录制圆点
         dot_size = 9
         cx = size // 2
         cy = size // 2
-        dc.ellipse(
-            (cx - dot_size, cy - dot_size, cx + dot_size, cy + dot_size),
-            fill=(220, 38, 38, 255)
-        )
+        dc.ellipse((cx - dot_size, cy - dot_size, cx + dot_size, cy + dot_size), fill=(220, 38, 38, 255))
 
         return image
 
@@ -201,18 +200,14 @@ class SystemTray:
     def run(self) -> None:
         # 启动系统托盘图标（阻塞运行）
         import pystray  # 延迟导入：避免 headless 环境在模块顶层即失败
+
         menu = pystray.Menu(
-            pystray.MenuItem('显示主界面', self.on_show, default=True),
-            pystray.MenuItem('最小化到托盘', self.on_minimize),
-            pystray.MenuItem('退出程序', self.on_exit)
+            pystray.MenuItem("显示主界面", self.on_show, default=True),
+            pystray.MenuItem("最小化到托盘", self.on_minimize),
+            pystray.MenuItem("退出程序", self.on_exit),
         )
 
-        icon = pystray.Icon(
-            'LiveRecorder',
-            self.create_icon_image(),
-            'LiveRecorder - click to show',
-            menu
-        )
+        icon = pystray.Icon("LiveRecorder", self.create_icon_image(), "LiveRecorder - click to show", menu)
         self.icon = icon
         self.running = True
         icon.run()
@@ -223,7 +218,7 @@ class SystemTray:
             self.icon.stop()
             self.running = False
 
-    def notify(self, message: str, title: str = '直播录制器') -> None:
+    def notify(self, message: str, title: str = "直播录制器") -> None:
         # 显示系统通知
         if self.icon:
             try:
@@ -255,8 +250,9 @@ class AdvancedSettingsWindow:
         header = tk.Frame(self.window, bg=Colors.PRIMARY, height=48)
         header.pack(fill=tk.X)
         header.pack_propagate(False)
-        tk.Label(header, text="⚙  高级设置", fg=Colors.WHITE, bg=Colors.PRIMARY,
-                 font=DpiFont.heading(bold=True)).pack(side=tk.LEFT, padx=20, pady=10)
+        tk.Label(header, text="⚙  高级设置", fg=Colors.WHITE, bg=Colors.PRIMARY, font=DpiFont.heading(bold=True)).pack(
+            side=tk.LEFT, padx=20, pady=10
+        )
 
         # 内容区域
         content = tk.Frame(self.window, bg=Colors.GRAY_50)
@@ -265,20 +261,33 @@ class AdvancedSettingsWindow:
         # 配置文件标签
         lbl_frame = tk.Frame(content, bg=Colors.GRAY_50)
         lbl_frame.pack(fill=tk.X, pady=(0, 8))
-        tk.Label(lbl_frame, text="📄 配置文件内容 (config/config.ini)",
-                 fg=Colors.GRAY_700, bg=Colors.GRAY_50,
-                 font=DpiFont.body()).pack(side=tk.LEFT)
+        tk.Label(
+            lbl_frame,
+            text="📄 配置文件内容 (config/config.ini)",
+            fg=Colors.GRAY_700,
+            bg=Colors.GRAY_50,
+            font=DpiFont.body(),
+        ).pack(side=tk.LEFT)
 
         # 编辑器
-        editor_frame = tk.Frame(content, bg=Colors.WHITE, highlightbackground=Colors.GRAY_200,
-                                highlightthickness=1, bd=0)
+        editor_frame = tk.Frame(
+            content, bg=Colors.WHITE, highlightbackground=Colors.GRAY_200, highlightthickness=1, bd=0
+        )
         editor_frame.pack(fill=tk.BOTH, expand=True)
 
         self.config_text = scrolledtext.ScrolledText(
-            editor_frame, wrap=tk.WORD, font=DpiFont.mono(),
-            bg=Colors.WHITE, fg=Colors.DARK, insertbackground=Colors.PRIMARY,
-            relief=tk.FLAT, bd=0, padx=12, pady=12,
-            selectbackground=Colors.PRIMARY_LIGHT, selectforeground=Colors.DARK
+            editor_frame,
+            wrap=tk.WORD,
+            font=DpiFont.mono(),
+            bg=Colors.WHITE,
+            fg=Colors.DARK,
+            insertbackground=Colors.PRIMARY,
+            relief=tk.FLAT,
+            bd=0,
+            padx=12,
+            pady=12,
+            selectbackground=Colors.PRIMARY_LIGHT,
+            selectforeground=Colors.DARK,
         )
         self.config_text.pack(fill=tk.BOTH, expand=True)
 
@@ -286,19 +295,40 @@ class AdvancedSettingsWindow:
         btn_frame = tk.Frame(self.window, bg=Colors.GRAY_50)
         btn_frame.pack(fill=tk.X, padx=16, pady=16)
 
-        cancel_btn = tk.Button(btn_frame, text="取消", command=self.window.destroy,
-                               bg=Colors.WHITE, fg=Colors.GRAY_700,
-                               activebackground=Colors.GRAY_100, activeforeground=Colors.DARK,
-                               font=DpiFont.body(), relief=tk.FLAT, bd=0,
-                               padx=24, pady=8, cursor="hand2",
-                               highlightbackground=Colors.GRAY_200, highlightthickness=1)
+        cancel_btn = tk.Button(
+            btn_frame,
+            text="取消",
+            command=self.window.destroy,
+            bg=Colors.WHITE,
+            fg=Colors.GRAY_700,
+            activebackground=Colors.GRAY_100,
+            activeforeground=Colors.DARK,
+            font=DpiFont.body(),
+            relief=tk.FLAT,
+            bd=0,
+            padx=24,
+            pady=8,
+            cursor="hand2",
+            highlightbackground=Colors.GRAY_200,
+            highlightthickness=1,
+        )
         cancel_btn.pack(side=tk.RIGHT, padx=(8, 0))
 
-        self.save_btn = tk.Button(btn_frame, text="💾 保存配置", command=self.save_config,
-                                  bg=Colors.PRIMARY, fg=Colors.WHITE,
-                                  activebackground=Colors.PRIMARY_DARK, activeforeground=Colors.WHITE,
-                                  font=DpiFont.body(bold=True), relief=tk.FLAT, bd=0,
-                                  padx=24, pady=8, cursor="hand2")
+        self.save_btn = tk.Button(
+            btn_frame,
+            text="💾 保存配置",
+            command=self.save_config,
+            bg=Colors.PRIMARY,
+            fg=Colors.WHITE,
+            activebackground=Colors.PRIMARY_DARK,
+            activeforeground=Colors.WHITE,
+            font=DpiFont.body(bold=True),
+            relief=tk.FLAT,
+            bd=0,
+            padx=24,
+            pady=8,
+            cursor="hand2",
+        )
         self.save_btn.pack(side=tk.RIGHT)
 
         # 按钮悬停效果
@@ -309,7 +339,7 @@ class AdvancedSettingsWindow:
     def _load_config(self) -> None:
         # 加载 config.ini 到编辑器
         try:
-            with open(self.config_file, 'r', encoding='utf-8-sig') as f:
+            with open(self.config_file, "r", encoding="utf-8-sig") as f:
                 content = f.read()
             self.config_text.delete(1.0, tk.END)
             self.config_text.insert(1.0, content)
@@ -333,10 +363,10 @@ class AdvancedSettingsWindow:
 
 def _save_text_widget_to_file(text_widget: tk.Text | scrolledtext.ScrolledText, file_path: str) -> None:
     # 从 Text 控件读取内容并写入文件
-    content = text_widget.get(1.0, tk.END).rstrip('\n')
-    if content and not content.endswith('\n'):
-        content += '\n'
-    with open(file_path, 'w', encoding='utf-8-sig') as f:
+    content = text_widget.get(1.0, tk.END).rstrip("\n")
+    if content and not content.endswith("\n"):
+        content += "\n"
+    with open(file_path, "w", encoding="utf-8-sig") as f:
         f.write(content)
 
 
@@ -344,12 +374,12 @@ class LiveRecorderGUI:
     # 直播录制 GUI 主类
 
     # 常量定义
-    ANSI_ESCAPE_PATTERN = re.compile(r'\x1b\[[0-9;]*m')
+    ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
     _MAX_LOG_LINES = 1000
     _LOG_TRIM_TO = 800
     _LOG_FLUSH_INTERVAL = 200
-    _STATUS_REFRESH_INTERVAL = 10000          # 未录制时的刷新间隔（毫秒）
-    _STATUS_REFRESH_INTERVAL_ACTIVE = 3000   # 有录制直播间时的刷新间隔（毫秒）
+    _STATUS_REFRESH_INTERVAL = 10000  # 未录制时的刷新间隔（毫秒）
+    _STATUS_REFRESH_INTERVAL_ACTIVE = 3000  # 有录制直播间时的刷新间隔（毫秒）
 
     def __init__(self, root: tk.Tk):
         # 初始化 GUI 主窗口及所有组件
@@ -403,7 +433,7 @@ class LiveRecorderGUI:
         self._schedule_log_flush()
         self._schedule_status_refresh()
 
-        self.root.bind('<Configure>', lambda e: self._on_window_resize(e))
+        self.root.bind("<Configure>", lambda e: self._on_window_resize(e))
 
     # ─── 响应式布局 ────────────────────────────────────────
 
@@ -468,7 +498,7 @@ class LiveRecorderGUI:
     def _setup_style(self) -> None:
         # 设置 ttk 样式（DPI 感知 + 高对比度）
         self.style = ttk.Style()
-        self.style.theme_use('clam')
+        self.style.theme_use("clam")
 
         # DPI 感知字体
         body_font = DpiFont.body()
@@ -476,67 +506,104 @@ class LiveRecorderGUI:
         heading_font = DpiFont.heading(bold=True)
 
         # 通用样式
-        self.style.configure('.', font=body_font, background=Colors.GRAY_50)
-        self.style.configure('TFrame', background=Colors.GRAY_50)
-        self.style.configure('TLabel', background=Colors.GRAY_50, foreground=Colors.GRAY_700)
-        self.style.configure('TLabelframe', background=Colors.GRAY_50, foreground=Colors.GRAY_700,
-                             font=heading_font, relief=tk.FLAT, borderwidth=0)
-        self.style.configure('TLabelframe.Label', background=Colors.GRAY_50, foreground=Colors.GRAY_700,
-                             font=heading_font)
+        self.style.configure(".", font=body_font, background=Colors.GRAY_50)
+        self.style.configure("TFrame", background=Colors.GRAY_50)
+        self.style.configure("TLabel", background=Colors.GRAY_50, foreground=Colors.GRAY_700)
+        self.style.configure(
+            "TLabelframe",
+            background=Colors.GRAY_50,
+            foreground=Colors.GRAY_700,
+            font=heading_font,
+            relief=tk.FLAT,
+            borderwidth=0,
+        )
+        self.style.configure(
+            "TLabelframe.Label", background=Colors.GRAY_50, foreground=Colors.GRAY_700, font=heading_font
+        )
 
         # 主按钮 - 开始录制（绿底白字，对比度 ≥5.1:1）
-        self.style.configure('Start.TButton',
-                             background=Colors.SUCCESS, foreground=Colors.WHITE,
-                             font=body_bold,
-                             relief=tk.FLAT, borderwidth=0, padding=(14, 9))
-        self.style.map('Start.TButton',
-                       background=[('active', Colors.SUCCESS_DARK), ('disabled', Colors.GRAY_300)],
-                       foreground=[('disabled', Colors.GRAY_500)])
+        self.style.configure(
+            "Start.TButton",
+            background=Colors.SUCCESS,
+            foreground=Colors.WHITE,
+            font=body_bold,
+            relief=tk.FLAT,
+            borderwidth=0,
+            padding=(14, 9),
+        )
+        self.style.map(
+            "Start.TButton",
+            background=[("active", Colors.SUCCESS_DARK), ("disabled", Colors.GRAY_300)],
+            foreground=[("disabled", Colors.GRAY_500)],
+        )
 
         # 主按钮 - 停止录制（红底白字，对比度 ≥6.6:1）
-        self.style.configure('Stop.TButton',
-                             background=Colors.DANGER, foreground=Colors.WHITE,
-                             font=body_bold,
-                             relief=tk.FLAT, borderwidth=0, padding=(14, 9))
-        self.style.map('Stop.TButton',
-                       background=[('active', Colors.DANGER_DARK), ('disabled', Colors.GRAY_300)],
-                       foreground=[('disabled', Colors.GRAY_500)])
+        self.style.configure(
+            "Stop.TButton",
+            background=Colors.DANGER,
+            foreground=Colors.WHITE,
+            font=body_bold,
+            relief=tk.FLAT,
+            borderwidth=0,
+            padding=(14, 9),
+        )
+        self.style.map(
+            "Stop.TButton",
+            background=[("active", Colors.DANGER_DARK), ("disabled", Colors.GRAY_300)],
+            foreground=[("disabled", Colors.GRAY_500)],
+        )
 
         # 操作按钮（浅灰底深色字，对比度 ≥10.8:1）
-        self.style.configure('Action.TButton',
-                             background=Colors.GRAY_100, foreground=Colors.GRAY_700,
-                             font=body_font,
-                             relief=tk.FLAT, borderwidth=0, padding=(14, 9))
-        self.style.map('Action.TButton',
-                       background=[('active', Colors.GRAY_200)],
-                       foreground=[('active', Colors.DARK)])
+        self.style.configure(
+            "Action.TButton",
+            background=Colors.GRAY_100,
+            foreground=Colors.GRAY_700,
+            font=body_font,
+            relief=tk.FLAT,
+            borderwidth=0,
+            padding=(14, 9),
+        )
+        self.style.map("Action.TButton", background=[("active", Colors.GRAY_200)], foreground=[("active", Colors.DARK)])
 
         # 托盘按钮（蓝底白字，对比度 ≥7.2:1）
-        self.style.configure('Tray.TButton',
-                             background=Colors.PRIMARY, foreground=Colors.WHITE,
-                             font=body_font,
-                             relief=tk.FLAT, borderwidth=0, padding=(14, 9))
-        self.style.map('Tray.TButton',
-                       background=[('active', Colors.PRIMARY_DARK)])
+        self.style.configure(
+            "Tray.TButton",
+            background=Colors.PRIMARY,
+            foreground=Colors.WHITE,
+            font=body_font,
+            relief=tk.FLAT,
+            borderwidth=0,
+            padding=(14, 9),
+        )
+        self.style.map("Tray.TButton", background=[("active", Colors.PRIMARY_DARK)])
 
         # 退出按钮（红底白字，对比度 ≥6.6:1）
-        self.style.configure('Exit.TButton',
-                             background=Colors.DANGER, foreground=Colors.WHITE,
-                             font=body_font,
-                             relief=tk.FLAT, borderwidth=0, padding=(14, 9))
-        self.style.map('Exit.TButton',
-                       background=[('active', Colors.DANGER_DARK)])
+        self.style.configure(
+            "Exit.TButton",
+            background=Colors.DANGER,
+            foreground=Colors.WHITE,
+            font=body_font,
+            relief=tk.FLAT,
+            borderwidth=0,
+            padding=(14, 9),
+        )
+        self.style.map("Exit.TButton", background=[("active", Colors.DANGER_DARK)])
 
         # 滚动条
-        self.style.configure('TScrollbar', background=Colors.GRAY_200, troughcolor=Colors.GRAY_50,
-                             arrowcolor=Colors.GRAY_500, relief=tk.FLAT, borderwidth=0)
-        self.style.map('TScrollbar', background=[('active', Colors.GRAY_300)])
+        self.style.configure(
+            "TScrollbar",
+            background=Colors.GRAY_200,
+            troughcolor=Colors.GRAY_50,
+            arrowcolor=Colors.GRAY_500,
+            relief=tk.FLAT,
+            borderwidth=0,
+        )
+        self.style.map("TScrollbar", background=[("active", Colors.GRAY_300)])
 
     def _create_card(self, parent: tk.Widget, title: str) -> tuple[tk.Frame, tk.Frame]:
         # 创建圆角卡片容器
         outer = tk.Frame(parent, bg=Colors.GRAY_50)
-        inner = tk.Frame(outer, bg=Colors.WHITE, highlightbackground=Colors.GRAY_200,
-                         highlightthickness=1, bd=0)
+        inner = tk.Frame(outer, bg=Colors.WHITE, highlightbackground=Colors.GRAY_200, highlightthickness=1, bd=0)
         inner.pack(fill=tk.BOTH, expand=True)
 
         if title:
@@ -544,8 +611,9 @@ class LiveRecorderGUI:
             title_bar = tk.Frame(inner, bg=Colors.GRAY_50, height=36)
             title_bar.pack(fill=tk.X)
             title_bar.pack_propagate(False)
-            tk.Label(title_bar, text=title, fg=Colors.GRAY_700, bg=Colors.GRAY_50,
-                     font=DpiFont.body(bold=True)).pack(side=tk.LEFT, padx=16, pady=8)
+            tk.Label(title_bar, text=title, fg=Colors.GRAY_700, bg=Colors.GRAY_50, font=DpiFont.body(bold=True)).pack(
+                side=tk.LEFT, padx=16, pady=8
+            )
             # 标题栏分隔线
             sep = tk.Frame(inner, bg=Colors.GRAY_200, height=1)
             sep.pack(fill=tk.X)
@@ -556,8 +624,7 @@ class LiveRecorderGUI:
 
         return outer, inner_content
 
-    def _create_modern_button(self, parent: tk.Widget, text: str, command, style: str,
-                               width: int = 14) -> ttk.Button:
+    def _create_modern_button(self, parent: tk.Widget, text: str, command, style: str, width: int = 14) -> ttk.Button:
         # 创建统一风格的按钮
         btn = ttk.Button(parent, text=text, command=command, style=style, width=width)
         return btn
@@ -575,25 +642,29 @@ class LiveRecorderGUI:
         header_top = tk.Frame(header, bg=header_bg)
         header_top.pack(fill=tk.X)
 
-        tk.Label(header_top, text="🎬  直播录制控制台", fg=Colors.WHITE, bg=header_bg,
-                 font=DpiFont.title(bold=True)).pack(side=tk.LEFT, padx=20, pady=(8, 2))
+        tk.Label(
+            header_top, text="🎬  直播录制控制台", fg=Colors.WHITE, bg=header_bg, font=DpiFont.title(bold=True)
+        ).pack(side=tk.LEFT, padx=20, pady=(8, 2))
 
-        self.status_canvas = tk.Canvas(header_top, width=12, height=12,
-                                        bg=header_bg, highlightthickness=0)
+        self.status_canvas = tk.Canvas(header_top, width=12, height=12, bg=header_bg, highlightthickness=0)
         self.status_canvas.pack(side=tk.RIGHT, padx=20, pady=(8, 2))
-        self._status_dot = self.status_canvas.create_oval(1, 1, 11, 11,
-                                                           fill=Colors.DANGER, outline="")
+        self._status_dot = self.status_canvas.create_oval(1, 1, 11, 11, fill=Colors.DANGER, outline="")
 
         # 下排：状态栏信息（可换行）
         self.status_var = tk.StringVar()
         self._update_status_bar()
 
         wraplength = self.root.winfo_reqwidth() - 40 if self.root.winfo_reqwidth() > 40 else 920
-        self.status_text_label = tk.Label(header, textvariable=self.status_var,
-                                           fg=Colors.GRAY_300, bg=header_bg,
-                                           font=DpiFont.small(),
-                                           anchor=tk.W, justify=tk.LEFT,
-                                           wraplength=wraplength)
+        self.status_text_label = tk.Label(
+            header,
+            textvariable=self.status_var,
+            fg=Colors.GRAY_300,
+            bg=header_bg,
+            font=DpiFont.small(),
+            anchor=tk.W,
+            justify=tk.LEFT,
+            wraplength=wraplength,
+        )
         self.status_text_label.pack(fill=tk.X, padx=20, pady=(0, 4))
 
         header.bind("<Configure>", self._on_header_resize)
@@ -614,38 +685,43 @@ class LiveRecorderGUI:
         ctrl_group = tk.Frame(toolbar_left, bg=Colors.WHITE)
         ctrl_group.pack(side=tk.LEFT, padx=(0, 20))
 
-        tk.Label(ctrl_group, text="录制控制", fg=Colors.GRAY_600, bg=Colors.WHITE,
-                 font=DpiFont.small()).pack(anchor=tk.W, pady=(10, 4))
+        tk.Label(ctrl_group, text="录制控制", fg=Colors.GRAY_600, bg=Colors.WHITE, font=DpiFont.small()).pack(
+            anchor=tk.W, pady=(10, 4)
+        )
 
         btn_row = tk.Frame(ctrl_group, bg=Colors.WHITE)
         btn_row.pack()
 
-        self.start_btn = ttk.Button(btn_row, text="▶  开始录制", command=self.start_recording,
-                                    style='Start.TButton', width=18)
+        self.start_btn = ttk.Button(
+            btn_row, text="▶  开始录制", command=self.start_recording, style="Start.TButton", width=18
+        )
         self.start_btn.pack(side=tk.LEFT, padx=(0, 10))
 
-        self.stop_btn = ttk.Button(btn_row, text="⏹  停止录制", command=self.stop_recording,
-                                   style='Stop.TButton', width=18, state=tk.DISABLED)
+        self.stop_btn = ttk.Button(
+            btn_row, text="⏹  停止录制", command=self.stop_recording, style="Stop.TButton", width=18, state=tk.DISABLED
+        )
         self.stop_btn.pack(side=tk.LEFT)
 
         # 分隔线
-        tk.Frame(toolbar_left, bg=Colors.GRAY_200, width=1).pack(side=tk.LEFT,
-                                                                   fill=tk.Y, padx=20, pady=12)
+        tk.Frame(toolbar_left, bg=Colors.GRAY_200, width=1).pack(side=tk.LEFT, fill=tk.Y, padx=20, pady=12)
 
         # 窗口控制组
         win_group = tk.Frame(toolbar_left, bg=Colors.WHITE)
         win_group.pack(side=tk.LEFT, padx=(0, 20))
 
-        tk.Label(win_group, text="窗口控制", fg=Colors.GRAY_600, bg=Colors.WHITE,
-                 font=DpiFont.small()).pack(anchor=tk.W, pady=(10, 4))
+        tk.Label(win_group, text="窗口控制", fg=Colors.GRAY_600, bg=Colors.WHITE, font=DpiFont.small()).pack(
+            anchor=tk.W, pady=(10, 4)
+        )
 
         win_btn_row = tk.Frame(win_group, bg=Colors.WHITE)
         win_btn_row.pack()
 
-        ttk.Button(win_btn_row, text="📥  最小化到托盘", command=self.minimize_to_tray,
-                   style='Tray.TButton', width=18).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(win_btn_row, text="❌  彻底退出", command=self.quit_application,
-                   style='Exit.TButton', width=18).pack(side=tk.LEFT)
+        ttk.Button(
+            win_btn_row, text="📥  最小化到托盘", command=self.minimize_to_tray, style="Tray.TButton", width=18
+        ).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(
+            win_btn_row, text="❌  彻底退出", command=self.quit_application, style="Exit.TButton", width=18
+        ).pack(side=tk.LEFT)
 
         # 行间分隔线
         tk.Frame(toolbar, bg=Colors.GRAY_200, height=1).pack(fill=tk.X, padx=0, pady=(6, 4))
@@ -658,13 +734,16 @@ class LiveRecorderGUI:
         quick_group = tk.Frame(toolbar_bottom, bg=Colors.WHITE)
         quick_group.pack(side=tk.LEFT, padx=(12, 0))
 
-        tk.Label(quick_group, text="快捷操作", fg=Colors.GRAY_600, bg=Colors.WHITE,
-                 font=DpiFont.small()).pack(side=tk.LEFT, padx=(0, 8), pady=(6, 4))
+        tk.Label(quick_group, text="快捷操作", fg=Colors.GRAY_600, bg=Colors.WHITE, font=DpiFont.small()).pack(
+            side=tk.LEFT, padx=(0, 8), pady=(6, 4)
+        )
 
-        ttk.Button(quick_group, text="📂  打开下载目录", command=self.open_downloads_folder,
-                   style='Action.TButton', width=18).pack(side=tk.LEFT, padx=(0, 10))
-        ttk.Button(quick_group, text="⚙  高级设置", command=self.open_advanced_settings,
-                   style='Action.TButton', width=18).pack(side=tk.LEFT)
+        ttk.Button(
+            quick_group, text="📂  打开下载目录", command=self.open_downloads_folder, style="Action.TButton", width=18
+        ).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(
+            quick_group, text="⚙  高级设置", command=self.open_advanced_settings, style="Action.TButton", width=18
+        ).pack(side=tk.LEFT)
 
         # ── 内容区域 ───────────────────────────────────
         content = tk.Frame(self.root, bg=Colors.GRAY_50)
@@ -675,10 +754,19 @@ class LiveRecorderGUI:
         config_outer.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
 
         self.config_text = scrolledtext.ScrolledText(
-            config_inner, wrap=tk.WORD, font=DpiFont.mono(), height=8,
-            bg=Colors.WHITE, fg=Colors.DARK, insertbackground=Colors.PRIMARY,
-            relief=tk.FLAT, bd=0, padx=12, pady=8,
-            selectbackground=Colors.PRIMARY_LIGHT, selectforeground=Colors.DARK
+            config_inner,
+            wrap=tk.WORD,
+            font=DpiFont.mono(),
+            height=8,
+            bg=Colors.WHITE,
+            fg=Colors.DARK,
+            insertbackground=Colors.PRIMARY,
+            relief=tk.FLAT,
+            bd=0,
+            padx=12,
+            pady=8,
+            selectbackground=Colors.PRIMARY_LIGHT,
+            selectforeground=Colors.DARK,
         )
         self.config_text.pack(fill=tk.BOTH, expand=True)
 
@@ -686,21 +774,26 @@ class LiveRecorderGUI:
         config_actions = tk.Frame(config_outer, bg=Colors.WHITE)
         config_actions.pack(fill=tk.X)
 
-        hint_label = tk.Label(config_actions,
-                              text="每行一个直播链接，支持 # 开头的注释行  |  点击窗口关闭按钮将最小化到系统托盘",
-                              fg=Colors.GRAY_400, bg=Colors.WHITE,
-                              font=DpiFont.small())
+        hint_label = tk.Label(
+            config_actions,
+            text="每行一个直播链接，支持 # 开头的注释行  |  点击窗口关闭按钮将最小化到系统托盘",
+            fg=Colors.GRAY_400,
+            bg=Colors.WHITE,
+            font=DpiFont.small(),
+        )
         hint_label.pack(fill=tk.X, padx=16, pady=(6, 2))
 
         btn_row = tk.Frame(config_actions, bg=Colors.WHITE)
         btn_row.pack(fill=tk.X, padx=12, pady=(0, 6))
 
-        self.reload_btn = ttk.Button(btn_row, text="🔄  重新读取", command=self._load_config,
-                                     style='Action.TButton', width=16)
+        self.reload_btn = ttk.Button(
+            btn_row, text="🔄  重新读取", command=self._load_config, style="Action.TButton", width=16
+        )
         self.reload_btn.pack(side=tk.RIGHT, padx=4)
 
-        self.save_btn = ttk.Button(btn_row, text="💾  保存 URL 配置", command=self.save_config,
-                                   style='Action.TButton', width=18)
+        self.save_btn = ttk.Button(
+            btn_row, text="💾  保存 URL 配置", command=self.save_config, style="Action.TButton", width=18
+        )
         self.save_btn.pack(side=tk.RIGHT, padx=(4, 4))
 
         # 日志卡片
@@ -708,11 +801,20 @@ class LiveRecorderGUI:
         log_outer.pack(fill=tk.BOTH, expand=True, pady=(0, 4))
 
         self.log_text = scrolledtext.ScrolledText(
-            log_inner, wrap=tk.WORD,
+            log_inner,
+            wrap=tk.WORD,
             font=DpiFont.mono(),
-            bg=Colors.TERMINAL_BG, fg=Colors.TERMINAL_FG, insertbackground=Colors.WHITE,
-            relief=tk.FLAT, bd=0, padx=12, pady=8, height=10, state=tk.DISABLED,
-            selectbackground="#1F3A5F", selectforeground=Colors.WHITE
+            bg=Colors.TERMINAL_BG,
+            fg=Colors.TERMINAL_FG,
+            insertbackground=Colors.WHITE,
+            relief=tk.FLAT,
+            bd=0,
+            padx=12,
+            pady=8,
+            height=10,
+            state=tk.DISABLED,
+            selectbackground="#1F3A5F",
+            selectforeground=Colors.WHITE,
         )
         self.log_text.pack(fill=tk.BOTH, expand=True)
         self.log_text.tag_config("error", foreground=Colors.TERMINAL_ERROR)
@@ -765,14 +867,14 @@ class LiveRecorderGUI:
         os.makedirs(config_dir, exist_ok=True)
 
         if not os.path.exists(self.url_config_file):
-            with open(self.url_config_file, 'w', encoding='utf-8-sig') as f:
+            with open(self.url_config_file, "w", encoding="utf-8-sig") as f:
                 f.write("")
 
         try:
-            with open(self.url_config_file, 'r', encoding='utf-8-sig') as f:
+            with open(self.url_config_file, "r", encoding="utf-8-sig") as f:
                 content = f.read()
 
-            current_content = self.config_text.get(1.0, tk.END).rstrip('\n')
+            current_content = self.config_text.get(1.0, tk.END).rstrip("\n")
             if content == current_content:
                 self._last_url_config_mtime = os.path.getmtime(self.url_config_file)
                 return
@@ -812,17 +914,17 @@ class LiveRecorderGUI:
 
             config = configparser.ConfigParser()
             config.optionxform = lambda optionstr: optionstr
-            config.read(self.main_config_file, encoding='utf-8-sig')
+            config.read(self.main_config_file, encoding="utf-8-sig")
 
-            if '录制设置' in config:
-                interval = config['录制设置'].get('循环时间(秒)', '120')
+            if "录制设置" in config:
+                interval = config["录制设置"].get("循环时间(秒)", "120")
                 check_interval = f"{interval}秒"
 
-                fmt = config['录制设置'].get('录制完成后自动转为mp4格式', '否')
-                if fmt == '是':
+                fmt = config["录制设置"].get("录制完成后自动转为mp4格式", "否")
+                if fmt == "是":
                     output_format = "ts → mp4"
                 else:
-                    save_fmt = config['录制设置'].get('视频保存格式ts|mkv|flv|mp4|mp3音频|m4a音频', 'ts')
+                    save_fmt = config["录制设置"].get("视频保存格式ts|mkv|flv|mp4|mp3音频|m4a音频", "ts")
                     output_format = f"ts → {save_fmt}"
 
             self._status_cache = (check_interval, output_format)
@@ -846,12 +948,12 @@ class LiveRecorderGUI:
             os.makedirs(downloads_path, exist_ok=True)
 
         try:
-            if sys.platform == 'win32':
+            if sys.platform == "win32":
                 os.startfile(downloads_path)
-            elif sys.platform == 'darwin':
-                subprocess.Popen(['open', downloads_path])
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", downloads_path])
             else:
-                subprocess.Popen(['xdg-open', downloads_path])
+                subprocess.Popen(["xdg-open", downloads_path])
             self._log(f"已打开下载目录: {downloads_path}")
         except Exception as e:
             self._log(f"打开目录失败: {e}", "error")
@@ -871,14 +973,14 @@ class LiveRecorderGUI:
 
             startupinfo = None
             env = os.environ.copy()
-            env['PYTHONIOENCODING'] = 'utf-8'
-            if sys.platform == 'win32':
+            env["PYTHONIOENCODING"] = "utf-8"
+            if sys.platform == "win32":
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 startupinfo.wShowWindow = subprocess.SW_HIDE
 
             creation_flags = 0
-            if sys.platform == 'win32':
+            if sys.platform == "win32":
                 creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
 
             proc = subprocess.Popen(
@@ -886,20 +988,20 @@ class LiveRecorderGUI:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                encoding='utf-8',
-                errors='replace',
+                encoding="utf-8",
+                errors="replace",
                 bufsize=1,
                 cwd=self.script_dir,
                 env=env,
                 startupinfo=startupinfo,
-                creationflags=creation_flags
+                creationflags=creation_flags,
             )
 
             self.process = proc
             self.process_pid = proc.pid
             self.running = True
-            self.start_btn.state(['disabled'])
-            self.stop_btn.state(['!disabled'])
+            self.start_btn.state(["disabled"])
+            self.stop_btn.state(["!disabled"])
 
             self._set_status(Colors.SUCCESS, True)
             self._update_status_bar()
@@ -932,7 +1034,7 @@ class LiveRecorderGUI:
         # 注意：proc.terminate() 在 Windows 上是 TerminateProcess，会硬杀 main.py
         # 并把 ffmpeg 孤儿化（它们仍会继续录制）。这里改用 CTRL_BREAK_EVENT 触发
         # main.py 的 safe_exit → cleanup_all_ffmpeg_processes，由其负责清理 ffmpeg。
-        if sys.platform == 'win32':
+        if sys.platform == "win32":
             self._log("正在发送 CTRL_BREAK 信号（触发子进程优雅清理 ffmpeg）...")
             try:
                 proc.send_signal(signal.CTRL_BREAK_EVENT)
@@ -959,17 +1061,15 @@ class LiveRecorderGUI:
 
             if not terminated and proc.poll() is None:
                 try:
-                    if sys.platform == 'win32':
+                    if sys.platform == "win32":
                         # /T 递归杀掉 main.py 及其所有 ffmpeg 子进程，避免孤儿
                         subprocess.run(
-                            ['taskkill', '/F', '/T', '/PID', str(proc.pid)],
-                            capture_output=True, text=True, timeout=5
+                            ["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, text=True, timeout=5
                         )
                     else:
                         proc.kill()
                         subprocess.run(
-                            ['pkill', '-P', str(proc.pid), '-x', 'ffmpeg'],
-                            capture_output=True, text=True, timeout=5
+                            ["pkill", "-P", str(proc.pid), "-x", "ffmpeg"], capture_output=True, text=True, timeout=5
                         )
                     proc.wait(timeout=5)
                     self._log("进程已强制终止")
@@ -988,8 +1088,8 @@ class LiveRecorderGUI:
 
     def _on_recording_stopped(self) -> None:
         # 进程终止后的 UI 更新回调（在 UI 线程中执行）
-        self.start_btn.state(['!disabled'])
-        self.stop_btn.state(['disabled'])
+        self.start_btn.state(["!disabled"])
+        self.stop_btn.state(["disabled"])
         self._set_status(Colors.DANGER, False)
         self._update_status_bar()
         self._log(f"[{self._get_timestamp()}] 录制进程已停止")
@@ -1030,7 +1130,7 @@ class LiveRecorderGUI:
                         break
                     continue
 
-                clean_line = self.ANSI_ESCAPE_PATTERN.sub('', line.rstrip())
+                clean_line = self.ANSI_ESCAPE_PATTERN.sub("", line.rstrip())
                 batch.append((clean_line, "info"))
 
                 if len(batch) >= batch_size:
@@ -1087,10 +1187,10 @@ class LiveRecorderGUI:
 
                 self.log_text.insert(tk.END, display_text, tag)
 
-            total_lines = int(self.log_text.index('end-1c').split('.')[0])
+            total_lines = int(self.log_text.index("end-1c").split(".")[0])
             if total_lines > self._MAX_LOG_LINES:
                 trim_count = total_lines - self._LOG_TRIM_TO
-                self.log_text.delete('1.0', f'{trim_count + 1}.0')
+                self.log_text.delete("1.0", f"{trim_count + 1}.0")
 
             self.log_text.see(tk.END)
             self.log_text.config(state=tk.DISABLED)
@@ -1109,8 +1209,8 @@ class LiveRecorderGUI:
         self.running = False
         self.process = None
         self.process_pid = None
-        self.start_btn.state(['!disabled'])
-        self.stop_btn.state(['disabled'])
+        self.start_btn.state(["!disabled"])
+        self.stop_btn.state(["disabled"])
 
         self._set_status(Colors.DANGER, False)
         self._update_status_bar()
@@ -1155,11 +1255,15 @@ class LiveRecorderGUI:
 
             pid = self.process_pid
             if pid is not None:
-                status_text = (f"状态：运行中 (PID: {pid}) │ 循环检测: {check_interval} "
-                              f"│ 格式: {output_format} │ 托盘: {tray_status} │ {timestamp}")
+                status_text = (
+                    f"状态：运行中 (PID: {pid}) │ 循环检测: {check_interval} "
+                    f"│ 格式: {output_format} │ 托盘: {tray_status} │ {timestamp}"
+                )
             else:
-                status_text = (f"状态：未运行 │ 循环检测: {check_interval} "
-                              f"│ 格式: {output_format} │ 托盘: {tray_status} │ {timestamp}")
+                status_text = (
+                    f"状态：未运行 │ 循环检测: {check_interval} "
+                    f"│ 格式: {output_format} │ 托盘: {tray_status} │ {timestamp}"
+                )
         except Exception:
             status_text = "状态栏更新失败，将在下次刷新重试"
 
@@ -1189,7 +1293,7 @@ class LiveRecorderGUI:
         # 最小化到托盘
         self.root.withdraw()
         if self.system_tray:
-            self.system_tray.notify('程序已最小化到系统托盘，双击托盘图标可恢复窗口')
+            self.system_tray.notify("程序已最小化到系统托盘，双击托盘图标可恢复窗口")
 
     def quit_application(self) -> None:
         # 退出程序
@@ -1206,7 +1310,7 @@ class LiveRecorderGUI:
         # 后台执行：优雅停止录制子进程（由其清理 ffmpeg）→ 超时整树强杀 → 兜底清理
         proc = self.process
         if proc is not None:
-            if sys.platform == 'win32':
+            if sys.platform == "win32":
                 try:
                     proc.send_signal(signal.CTRL_BREAK_EVENT)
                 except Exception:
@@ -1222,16 +1326,14 @@ class LiveRecorderGUI:
             except subprocess.TimeoutExpired:
                 # main.py 未能自行退出，整树强杀（含其下所有 ffmpeg，避免孤儿）
                 try:
-                    if sys.platform == 'win32':
+                    if sys.platform == "win32":
                         subprocess.run(
-                            ['taskkill', '/F', '/T', '/PID', str(proc.pid)],
-                            capture_output=True, text=True, timeout=5
+                            ["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, text=True, timeout=5
                         )
                     else:
                         proc.kill()
                         subprocess.run(
-                            ['pkill', '-P', str(proc.pid), '-x', 'ffmpeg'],
-                            capture_output=True, text=True, timeout=5
+                            ["pkill", "-P", str(proc.pid), "-x", "ffmpeg"], capture_output=True, text=True, timeout=5
                         )
                     proc.wait(timeout=5)
                 except Exception:
@@ -1273,12 +1375,11 @@ class LiveRecorderGUI:
         found = False
 
         try:
-            if sys.platform == 'win32':
+            if sys.platform == "win32":
                 if target_pid is not None:
                     try:
                         subprocess.run(
-                            ['taskkill', '/F', '/T', '/PID', str(target_pid)],
-                            capture_output=True, text=True, timeout=5
+                            ["taskkill", "/F", "/T", "/PID", str(target_pid)], capture_output=True, text=True, timeout=5
                         )
                         found = True
                         self._log(f"已通过 taskkill 清理 PID {target_pid} 的进程树（含 ffmpeg）")
@@ -1287,9 +1388,10 @@ class LiveRecorderGUI:
                 # 兜底：按镜像名清理 GUI 直接派生的 ffmpeg（极少出现）
                 try:
                     subprocess.run(
-                        ['taskkill', '/F', '/FI', 'IMAGENAME eq ffmpeg.exe',
-                         '/FI', f'PARENTPID eq {os.getpid()}'],
-                        capture_output=True, text=True, timeout=3
+                        ["taskkill", "/F", "/FI", "IMAGENAME eq ffmpeg.exe", "/FI", f"PARENTPID eq {os.getpid()}"],
+                        capture_output=True,
+                        text=True,
+                        timeout=3,
                     )
                 except Exception:
                     pass
@@ -1297,8 +1399,7 @@ class LiveRecorderGUI:
                 if target_pid is not None:
                     try:
                         subprocess.run(
-                            ['pkill', '-P', str(target_pid), '-x', 'ffmpeg'],
-                            capture_output=True, text=True, timeout=3
+                            ["pkill", "-P", str(target_pid), "-x", "ffmpeg"], capture_output=True, text=True, timeout=3
                         )
                         found = True
                         self._log(f"已通过 pkill 清理 PID {target_pid} 下的 ffmpeg 进程")
@@ -1306,8 +1407,7 @@ class LiveRecorderGUI:
                         self._log(f"pkill 执行失败: {e}")
                 try:
                     subprocess.run(
-                        ['pkill', '-P', str(os.getpid()), '-x', 'ffmpeg'],
-                        capture_output=True, text=True, timeout=3
+                        ["pkill", "-P", str(os.getpid()), "-x", "ffmpeg"], capture_output=True, text=True, timeout=3
                     )
                 except Exception:
                     pass
@@ -1339,12 +1439,15 @@ class LiveRecorderGUI:
         tk.Label(icon_frame, text="🎬", font=(DpiFont.family(), 24), bg=Colors.WHITE).pack()
 
         # 提示文字
-        tk.Label(dialog, text="请选择关闭方式", fg=Colors.DARK,
-                 bg=Colors.WHITE, font=DpiFont.heading(bold=True)).pack()
+        tk.Label(dialog, text="请选择关闭方式", fg=Colors.DARK, bg=Colors.WHITE, font=DpiFont.heading(bold=True)).pack()
 
-        tk.Label(dialog, text="您可以选择最小化到托盘或完全退出程序",
-                 fg=Colors.GRAY_500, bg=Colors.WHITE,
-                 font=DpiFont.small()).pack(pady=(4, 16))
+        tk.Label(
+            dialog,
+            text="您可以选择最小化到托盘或完全退出程序",
+            fg=Colors.GRAY_500,
+            bg=Colors.WHITE,
+            font=DpiFont.small(),
+        ).pack(pady=(4, 16))
 
         # 按钮
         btn_frame = tk.Frame(dialog, bg=Colors.WHITE)
@@ -1360,17 +1463,39 @@ class LiveRecorderGUI:
             self.quit_application()
             dialog.destroy()
 
-        tk.Button(btn_frame, text="📥  最小化到托盘", command=minimize_to_tray_and_close,
-                  width=16, bg=Colors.PRIMARY, fg=Colors.WHITE,
-                  activebackground=Colors.PRIMARY_DARK, activeforeground=Colors.WHITE,
-                  font=DpiFont.body(bold=True), relief=tk.FLAT, bd=0,
-                  padx=16, pady=8, cursor="hand2").pack(side=tk.LEFT, padx=(0, 8))
+        tk.Button(
+            btn_frame,
+            text="📥  最小化到托盘",
+            command=minimize_to_tray_and_close,
+            width=16,
+            bg=Colors.PRIMARY,
+            fg=Colors.WHITE,
+            activebackground=Colors.PRIMARY_DARK,
+            activeforeground=Colors.WHITE,
+            font=DpiFont.body(bold=True),
+            relief=tk.FLAT,
+            bd=0,
+            padx=16,
+            pady=8,
+            cursor="hand2",
+        ).pack(side=tk.LEFT, padx=(0, 8))
 
-        tk.Button(btn_frame, text="❌  完全退出", command=quit_and_close,
-                  width=16, bg=Colors.DANGER, fg=Colors.WHITE,
-                  activebackground=Colors.DANGER_DARK, activeforeground=Colors.WHITE,
-                  font=DpiFont.body(bold=True), relief=tk.FLAT, bd=0,
-                  padx=16, pady=8, cursor="hand2").pack(side=tk.LEFT)
+        tk.Button(
+            btn_frame,
+            text="❌  完全退出",
+            command=quit_and_close,
+            width=16,
+            bg=Colors.DANGER,
+            fg=Colors.WHITE,
+            activebackground=Colors.DANGER_DARK,
+            activeforeground=Colors.WHITE,
+            font=DpiFont.body(bold=True),
+            relief=tk.FLAT,
+            bd=0,
+            padx=16,
+            pady=8,
+            cursor="hand2",
+        ).pack(side=tk.LEFT)
 
         # 键盘快捷键
         dialog.bind("<Escape>", lambda e: dialog.destroy())

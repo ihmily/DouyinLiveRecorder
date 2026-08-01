@@ -4,8 +4,9 @@
 # 且以 @six.add_metaclass(ABCMeta) 声明抽象类（非继承 ABC），故放宽本文件相关严格检查。
 # pyright: reportGeneralTypeIssues=none, reportMissingParameterType=none, reportUnknownParameterType=none
 
-import six
 from abc import ABCMeta, abstractmethod
+
+import six
 
 @six.add_metaclass(ABCMeta)
 class AbstractRuntime:
@@ -16,24 +17,20 @@ class AbstractRuntime:
         # source -- JavaScript code to execute.
         # cwd -- Directory where call JavaScript runtime. It may be ignored in some derived class.
         ...
-    
+
     def eval(self, source, cwd=...):
         # Evaluate source in JavaScript runtime.
         #
         # source -- JavaScript code to evaluate.
         # cwd -- Directory where call JavaScript runtime. It may be ignored in some derived class.
         ...
-    
+
     def compile(self, source, cwd=...):
         # Bulk source as a context object. The source can be used to execute another code.
         #
         # source -- JavaScript code to bulk.
         # cwd -- Directory where call JavaScript runtime. It may be ignored in some derived class.
         ...
-    
+
     @abstractmethod
-    def is_available(self):
-        ...
-    
-
-
+    def is_available(self): ...

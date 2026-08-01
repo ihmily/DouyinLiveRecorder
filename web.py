@@ -7,10 +7,10 @@
 #
 # 与 main.py 共用同一录制引擎（通过 import main 触发初始化），
 # 在守护线程运行 main.main()，主线程运行 uvicorn。
+import asyncio
 import os
 import sys
 import threading
-import asyncio
 from datetime import datetime
 from typing import cast
 
@@ -18,6 +18,7 @@ from typing import cast
 _script_dir = os.path.dirname(os.path.realpath(__file__))
 if _script_dir not in sys.path:
     sys.path.insert(0, _script_dir)
+
 
 # 中文 Windows 控制台（尤其 PyInstaller 冻结后）stdout 默认 GBK 编码，
 # 打印中文/emoji 会出现乱码，emoji（如警告符 ⚠）还会抛 UnicodeEncodeError 崩溃。
@@ -41,6 +42,7 @@ def _fix_encoding():
     if sys.platform == "win32":
         try:
             import ctypes
+
             _k32 = ctypes.windll.kernel32
             _k32.SetConsoleOutputCP(65001)
             _k32.SetConsoleCP(65001)
@@ -66,11 +68,11 @@ def _enter_background_mode(logs_dir: str, host: str, port: int) -> None:
         _ = _flush()
 
     # 重定向输出到日志文件（buffering=1 行缓冲，确保日志实时写入）
-    log_stream = open(log_path, 'a', encoding='utf-8', buffering=1)
+    log_stream = open(log_path, "a", encoding="utf-8", buffering=1)
     sys.stdout = log_stream
     sys.stderr = log_stream
 
-    ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"\n{'=' * 60}")
     print(f"[{ts}] Web 管理面板进入后台运行模式")
     print(f"控制台窗口已隐藏，访问地址: http://{host}:{port}")
@@ -79,9 +81,10 @@ def _enter_background_mode(logs_dir: str, host: str, port: int) -> None:
     print(f"{'=' * 60}\n")
 
     # Windows: 隐藏控制台窗口（SW_HIDE = 0）
-    if sys.platform == 'win32':
+    if sys.platform == "win32":
         try:
             import ctypes
+
             hwnd: int = cast(int, ctypes.windll.kernel32.GetConsoleWindow())
             if hwnd:
                 ctypes.windll.user32.ShowWindow(hwnd, 0)
@@ -93,10 +96,11 @@ def main() -> None:
     # 启动 Web 管理面板：录制引擎（守护线程）+ uvicorn HTTP 服务。
     # 导入 main 模块：触发模块级初始化（FFmpeg 检查、配置读取、备份线程等），
     # 但不进入主循环（因 main() 已被包装为函数）。
+    import uvicorn
+
     import main
     from src.web_api import create_app
     from src.web_config import read_web_config
-    import uvicorn
 
     config_file = main.config_file
     url_config_file = main.url_config_file
@@ -140,6 +144,7 @@ def main() -> None:
     tray = None
     if web_cfg.get("web_minimize_to_tray", True):
         from src.web_tray import WebConsoleTray
+
         tray = WebConsoleTray(host=host, port=port, server=server)
         tray.start()
 
@@ -163,7 +168,8 @@ def main() -> None:
     except Exception as e:
         print(f"[web] 清理 ffmpeg 进程失败: {e}")
     try:
-        from src.http_clients.async_http import close_all_clients_sync
+        from src.async_http import close_all_clients_sync
+
         close_all_clients_sync()
     except Exception as e:
         print(f"[web] 清理 HTTP 连接池失败: {e}")
