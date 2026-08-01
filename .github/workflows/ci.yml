@@ -1,0 +1,154 @@
+# CI 静态验证工作流
+#
+# 在 push 到主分支 / PR 时自动运行代码格式检查（black / isort）、
+# 静态类型检查（mypy）与单元测试（pytest），
+# 确保代码风格、类型安全与功能正确性在合入前通过验证。
+
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  lint:
+    name: Lint (black --check)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install black
+        run: pip install black
+
+      - name: Run black --check
+        run: black --check .
+
+  typecheck:
+    name: Type Check (mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install mypy
+
+      - name: Run mypy
+        run: mypy src/
+
+  isort:
+    name: Import Sort (isort --check)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install isort
+        run: pip install isort
+
+      - name: Run isort --check
+        run: isort --check .
+
+  version-check:
+    name: Version Consistency Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Check version consistency
+        run: python scripts/check_version.py
+
+  test:
+    name: Test (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-cov
+
+      - name: Run pytest
+        run: pytest --cov=src --cov-report=term-missing
+
+  integration-verify:
+    name: Integration Verify (ffmpeg & node)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Install ffmpeg via apt
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+
+      - name: Verify ffmpeg binary
+        run: |
+          ffmpeg -version
+          echo "ffmpeg binary is discoverable and version readable"
+
+      - name: Verify node binary
+        run: |
+          node --version
+          echo "node binary is discoverable and version readable"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Verify src/ffmpeg_install.py detection
+        run: |
+          python -c "from src.ffmpeg_install import check_ffmpeg_installed; assert check_ffmpeg_installed(), 'ffmpeg not detected'; print('check_ffmpeg_installed() passed')"
+
+      - name: Verify src/node_install.py detection
+        run: |
+          python -c "from src.node_install import check_nodejs_installed; assert check_nodejs_installed(), 'node not detected'; print('check_nodejs_installed() passed')"
