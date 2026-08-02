@@ -76,9 +76,9 @@ docker run -d -v ./config:/app/config -v ./downloads:/app/downloads douyin-live-
 
 ## 🎈 已支持平台
 
-**国内站点（37 个）**：抖音 | 快手 | 虎牙 | 斗鱼 | YY | B站 | 小红书 | bigo | blued | 网易CC | 千度热播 | 猫耳FM | Look直播 | TwitCasting | 百度 | 微博 | 酷狗 | 花椒 | 流星 | Acfun | 畅聊 | 映客 | 音播 | 知乎 | 嗨秀 | VV星球 | 17Live | 浪Live | 漂漂 | 六间房 | 乐嗨 | 花猫 | 淘宝 | 京东 | 咪咕 | 连接 | 来秀
+**国内站点（37 个）**：抖音 | 快手 | 虎牙 | 斗鱼 | YY | B站 | 小红书 | bigo | blued | 网易CC | 千度热播 | 猫耳FM | Look直播 | TwitCasting | 百度 | 微博 | 酷狗 | 花椒 | 流星 | Acfun | 畅聊 | 映客 | 音播 | 知乎 | 嗨秀 | VV星球 | 17Live | 浪Live | 飘飘 | 六间房 | 乐嗨 | 花猫 | 淘宝 | 京东 | 咪咕 | 连接 | 来秀
 
-**海外站点（14 个）**：TikTok | SOOP(原AfreecaTV) | PandaTV | WinkTV | TTingLive(原Flextv) | PopkonTV | TwitchTV | LiveMe | ShowRoom | CHZZK | Shopee | Youtube | Faceit | Picarto
+**海外站点（14 个）**：TikTok | SOOP(原AfreecaTV) | PandaTV | WinkTV | TTingLive(原Flextv) | PopkonTV | TwitchTV | LiveMe | ShowRoom | CHZZK | Shopee | YouTube | Faceit | Picarto
 
 > 更多平台持续添加中。
 
@@ -429,7 +429,7 @@ Windows 下控制台默认「最小化到系统托盘」（`web_minimize_to_tray
 
 ### 注意事项
 
-1. 如需录制 TikTok、SOOP 等海外平台，请在配置中开启代理
+1. 如需录制 TikTok、SOOP(原AfreecaTV) 等海外平台，请在配置中开启代理
 2. 长时间挂机建议将循环时间设置长一些（如 60 秒），避免请求频繁被封 IP
 3. 直播结束后会自动保存文件，无需手动停止
 4. 如遇录制的视频文件损坏，建议使用 `ts` 格式录制

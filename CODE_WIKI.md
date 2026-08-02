@@ -1,6 +1,7 @@
 # DouyinLiveRecorder 项目架构文档
 
 ## 目录
+
 - [项目概述](#项目概述)
 - [系统架构](#系统架构)
 - [目录结构](#目录结构)
@@ -11,12 +12,16 @@
 - [运行方式](#运行方式)
 - [打包与发布](#打包与发布)
 - [设计模式](#设计模式)
+- [常见问题排查](#常见问题排查)
+- [贡献指南](#贡献指南)
+- [更新日志](#更新日志)
 
 ---
 
 ## 项目概述
 
 ### 项目基本信息
+
 - **项目名称**: DouyinLiveRecorder (抖音直播录制器)
 - **版本**: 4.0.8.1
 - **作者**: Hmily
@@ -24,6 +29,7 @@
 - **项目地址**: [GitHub](https://github.com/ihmily/DouyinLiveRecorder)
 
 ### 功能特性
+
 - ✅ 支持 60+ 个直播平台（抖音、TikTok、YouTube、快手、虎牙、斗鱼、B站、小红书等）
 - ✅ 循环值守直播状态，开播自动录制，断播自动停止
 - ✅ 多种视频格式输出：TS、MKV、FLV、MP4、MP3、M4A
@@ -35,21 +41,22 @@
 - ✅ 实际画质回采与降级告警（支持抖音、TikTok、快手、虎牙、斗鱼、B站、网易CC）
 
 ### 技术栈
-| 技术 | 用途 |
-|------|------|
-| Python 3.10+ | 核心编程语言 |
-| asyncio + httpx | 异步网络请求 |
-| asyncio | 异步装饰器支持 |
-| FFmpeg | 视频录制与转码 |
-| Node.js + exejs/PyExecJS | 运行 JavaScript 签名算法（exejs 优先，PyExecJS 回退） |
-| Loguru | 结构化日志 |
-| CustomTkinter + pystray + Pillow | GUI 图形界面与系统托盘 |
-| FastAPI + uvicorn | Web 管理面板后端 |
-| HTML + CSS + JavaScript | Web 管理面板前端 |
-| Docker | 容器化部署 |
-| gettext (msgfmt) | 国际化翻译编译 |
-| mypy | 静态类型检查（`--strict` 模式，`disallow_untyped_defs = true`） |
-| pyflakes | 静态代码检查 |
+
+| 技术                               | 用途                                                   |
+| -------------------------------- | ---------------------------------------------------- |
+| Python 3.10+                     | 核心编程语言                                               |
+| asyncio + httpx                  | 异步网络请求                                               |
+| asyncio                          | 异步装饰器支持                                              |
+| FFmpeg                           | 视频录制与转码                                              |
+| Node.js + exejs/PyExecJS         | 运行 JavaScript 签名算法（exejs 优先，PyExecJS 回退）             |
+| Loguru                           | 结构化日志                                                |
+| CustomTkinter + pystray + Pillow | GUI 图形界面与系统托盘                                        |
+| FastAPI + uvicorn                | Web 管理面板后端                                           |
+| HTML + CSS + JavaScript          | Web 管理面板前端                                           |
+| Docker                           | 容器化部署                                                |
+| gettext (msgfmt)                 | 国际化翻译编译                                              |
+| mypy                             | 静态类型检查（`--strict` 模式，`disallow_untyped_defs = true`） |
+| pyflakes                         | 静态代码检查                                               |
 
 ---
 
@@ -91,25 +98,21 @@
    - 读取 `config/config.ini` 主配置
    - 读取 `config/URL_config.ini` 直播间列表
    - 初始化 Node.js 环境和 FFmpeg 路径
-
 2. **直播检测阶段**
    - 使用异步任务并发检测多个直播间
    - 各平台独立的 API 调用与签名算法
    - 动态调整并发数以避免限流
-
 3. **流地址获取阶段**
    - 调用各平台的直播流 API
    - 根据配置选择不同画质（原画/超清/高清/标清/流畅）
    - 回采平台实际下发的画质（`actual_quality`）与可用档位（`available_qualities`）
    - 验证流地址可用性
-
 4. **录制执行阶段**
    - 启动 FFmpeg 子进程
    - 实时监控录制状态
    - 记录实际画质，画质降级时输出告警日志
    - 支持分段录制
    - 支持转码为 MP4
-
 5. **状态通知阶段**
    - 开播/关播事件触发
    - 调用配置的消息推送渠道
@@ -203,6 +206,7 @@ DouyinLiveRecorder/
 **职责**: 整个录制器的指挥中心，负责流程调度
 
 **核心功能**:
+
 - 配置文件读取与解析
 - 直播间 URL 列表解析
 - 并发控制与任务调度
@@ -212,6 +216,7 @@ DouyinLiveRecorder/
 - 退出信号处理
 
 **关键状态变量**:
+
 ```python
 recording: set              # 正在录制的直播间集合
 monitoring: int             # 正在监控的直播间数
@@ -223,6 +228,7 @@ recording_time_list: dict   # 录制时间与画质记录 {name: [start_time, qu
 ```
 
 **主流程函数**:
+
 - `main()` - 入口函数
 - `read_config()` - 读取配置
 - `check_url_config()` - 检查 URL 配置
@@ -241,10 +247,13 @@ recording_time_list: dict   # 录制时间与画质记录 {name: [start_time, qu
 **职责**: 负责从各大直播平台获取直播间数据
 
 **支持平台**:
-国内：抖音、快手、虎牙、斗鱼、YY、B站、小红书、Bigo、Blued、网易CC、千度热播、猫耳FM、Look、TwitCasting、百度、微博、酷狗、花椒、流星、Acfun、畅聊、映客、音播、知乎、嗨秀、VV星球、17Live、浪Live、飘飘、六间房、乐嗨、花猫、淘宝、京东、咪咕、连接、来秀
-海外：TikTok、SOOP、PandaTV、WinkTV、FlexTV、PopkonTV、Twitch、LiveMe、ShowRoom、CHZZK、Shopee、YouTube、Faceit、Picarto
+
+国内：抖音、快手、虎牙、斗鱼、YY、B站、小红书、bigo、blued、网易CC、千度热播、猫耳FM、Look直播、TwitCasting、百度、微博、酷狗、花椒、流星、Acfun、畅聊、映客、音播、知乎、嗨秀、VV星球、17Live、浪Live、飘飘、六间房、乐嗨、花猫、淘宝、京东、咪咕、连接、来秀
+
+海外：TikTok、SOOP(原AfreecaTV)、PandaTV、WinkTV、TTingLive(原Flextv)、PopkonTV、TwitchTV、LiveMe、ShowRoom、CHZZK、Shopee、YouTube、Faceit、Picarto
 
 **关键函数**:
+
 - `get_douyin_web_stream_data()` - 获取抖音 Web 端直播数据（`web/enter` API 优先，失败静默重试 1 次，再回退 HTML 抓取）
 - `get_douyin_app_stream_data()` - 获取抖音 App 端直播数据（备用方案，内置 URL 分发逻辑，见下方「抖音 URL 分发」）
 - `get_tiktok_stream_data()` - 获取 TikTok 直播数据
@@ -255,16 +264,17 @@ recording_time_list: dict   # 录制时间与画质记录 {name: [start_time, qu
 
 **抖音 URL 分发逻辑**（`get_douyin_app_stream_data`，2026-08-01 优化后）：
 
-| URL 形态 | 处理路径 |
-|---|---|
-| `live.douyin.com/<房间号或抖音号>` | 直调 `get_douyin_web_stream_data`（`web/enter` API 接受抖音号，无需重定向解析） |
+| URL 形态                                 | 处理路径                                                                                                                  |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `live.douyin.com/<房间号或抖音号>`            | 直调 `get_douyin_web_stream_data`（`web/enter` API 接受抖音号，无需重定向解析）                                                        |
 | `www.douyin.com/user/<sec_uid>`（网页端主页） | 跳过必然失败的 `get_sec_user_id` 探测，走 `resolve_from_homepage()`：`get_unique_id()` 解析抖音号 → 拼接 `live.douyin.com/<抖音号>` → 直调网页端 |
-| `v.douyin.com/<短链>`（App 短链，可能指向直播间或主页） | 先 `get_sec_user_id()` 跟随重定向；抛 `UnsupportedUrlError` 时回退 `resolve_from_homepage()` |
+| `v.douyin.com/<短链>`（App 短链，可能指向直播间或主页） | 先 `get_sec_user_id()` 跟随重定向；抛 `UnsupportedUrlError` 时回退 `resolve_from_homepage()`                                     |
 
 - `resolve_from_homepage()` 直调 `get_douyin_web_stream_data`（网页端 API 优先、内置 HTML 兜底），不再绕经旧版 HTML 优先抓取路径（约 1MB 页面），并**显式透传 proxy_addr / cookies**（旧实现未透传，导致代理与 Cookie 配置在主页路径静默失效）
 - `web/enter` API 调用封装为 `_try_web_api()` + `for attempt in range(2)`：首次失败（如瞬时风控 `status_code=10002`）→ `await asyncio.sleep(0.5)` 缓冲 → 静默重试；重试成功直接返回、跳过 HTML 兜底；两次都失败才记 WARNING 并回退 HTML（取 HEVC 原画的 HTML 抓取是各网页端路径通用行为，保持不变）
 
 **实现特点**:
+
 - 使用异步 HTTP 客户端 (`httpx`)
 - 各平台独立的签名算法
 - 代理支持
@@ -279,6 +289,7 @@ recording_time_list: dict   # 录制时间与画质记录 {name: [start_time, qu
 **职责**: 解析直播流地址，支持多种画质选择，回采平台实际下发的画质
 
 **画质映射**:
+
 ```python
 QUALITY_MAPPING = {"OD": 0, "BD": 1, "UHD": 2, "HD": 3, "SD": 4, "LD": 5}
 QUALITY_MAPPING_BIT = {
@@ -290,6 +301,7 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 ```
 
 **画质工具函数**:
+
 - `bitrate_to_quality(bitrate)` - 根据码率反查画质代码（0/未知回退 OD）
 - `code_to_zh(code)` - 画质代码转中文名
 - `is_downgrade(requested, actual)` - 判定是否降级（actual 等级值 > requested）
@@ -298,17 +310,18 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 
 **各平台流地址解析函数**:
 
-| 函数 | 平台 | 实际画质回采方式 |
-|------|------|-----------------|
-| `get_douyin_stream_url()` | 抖音 | 从 `flv_pull_url` / `hls_pull_url_map` 的 key 提取画质标签 |
-| `get_tiktok_stream_url()` | TikTok | 从 `vbitrate` 字段通过 `bitrate_to_quality()` 反查 |
-| `get_kuaishou_stream_url()` | 快手 | 从 `flv_url_list` 的 `bitrate` 字段反查 |
-| `get_huya_stream_url()` | 虎牙 | 从 `exsphd` ratio 值映射，处理降级选择 |
-| `get_douyu_stream_url()` | 斗鱼 | 从平台下发的 `rate` 字段反向映射 |
-| `get_bilibili_stream_url()` | B站 | 从 spider 返回的 `current_qn` 反向映射为画质代码 |
-| `get_netease_stream_url()` | 网易CC | 从画质名（blueray/ultra/high）通过 `NETEASE_QUALITY_MAP` 映射 |
+| 函数                          | 平台     | 实际画质回采方式                                            |
+| --------------------------- | ------ | --------------------------------------------------- |
+| `get_douyin_stream_url()`   | 抖音     | 从 `flv_pull_url` / `hls_pull_url_map` 的 key 提取画质标签  |
+| `get_tiktok_stream_url()`   | TikTok | 从 `vbitrate` 字段通过 `bitrate_to_quality()` 反查         |
+| `get_kuaishou_stream_url()` | 快手     | 从 `flv_url_list` 的 `bitrate` 字段反查                   |
+| `get_huya_stream_url()`     | 虎牙     | 从 `exsphd` ratio 值映射，处理降级选择                         |
+| `get_douyu_stream_url()`    | 斗鱼     | 从平台下发的 `rate` 字段反向映射                                |
+| `get_bilibili_stream_url()` | B站     | 从 spider 返回的 `current_qn` 反向映射为画质代码                 |
+| `get_netease_stream_url()`  | 网易CC   | 从画质名（blueray/ultra/high）通过 `NETEASE_QUALITY_MAP` 映射 |
 
 **返回值结构**（各平台统一）:
+
 ```python
 {
     "is_live": True,
@@ -324,6 +337,7 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 ```
 
 **实现特点**:
+
 - 按带宽排序的清晰度选择
 - 自动降级策略（首选画质不可用时自动降级）
 - FLV 与 M3U8 双协议支持
@@ -338,6 +352,7 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 **职责**: 解析直播间 URL，提取房间 ID、主播信息、抖音号等
 
 **关键函数**:
+
 - `get_sec_user_id()` - 获取房间 ID 和用户 sec_user_id
 - `get_unique_id()` - 获取抖音号（含 30 分钟 TTL 的 sec_uid→抖音号进程级缓存，对齐 `ttwid.py` 的 `threading.Lock` 跨线程/跨 asyncio 循环去重模式）
 - `is_user_homepage_url()` - 判断 URL 是否为「网页端主播主页」形态（`douyin.com/user/<sec_uid>`，v.douyin.com 短链不属于此类）；用于零请求快速路径——sec_user_id 直接在路径中，无需发请求跟随重定向
@@ -346,9 +361,11 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 - `get_xbogus()` - 生成 X-Bogus 签名
 
 **异常处理**:
+
 - `UnsupportedUrlError` - 不支持的 URL 格式异常
 
 **关键常量与接口**:
+
 - `DESKTOP_UA` - 桌面 Chrome UA。`iesdouyin.com/web/api/v2/user/info/` 等接口用旧移动端 UA 会被静默限流（HTTP 200 + 空 body），必须使用桌面 UA
 - 主页解析走 `https://www.iesdouyin.com/web/api/v2/user/info/?sec_uid=<sec_uid>` JSON 接口（取 `unique_id`，空则退 `short_id`）——旧 `iesdouyin.com/share/user/<sec_uid>` 页面已是 JS 反爬壳页，HTML 正则不可靠
 
@@ -360,18 +377,18 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 
 **主要工具**:
 
-| 工具函数 | 功能描述 |
-|---------|---------|
-| `Color` 类 | 终端彩色输出常量 |
-| `trace_error_decorator()` | 错误追踪装饰器 |
-| `check_md5()` | 计算文件 MD5 |
-| `dict_to_cookie_str()` | cookie 字典转字符串 |
-| `read_config_value()` | 读取配置文件值 |
-| `update_config()` | 更新配置文件 |
-| `remove_emojis()` | 移除文本中的表情符号 |
-| `remove_duplicate_lines()` | 移除文件重复行 |
-| `handle_proxy_addr()` | 处理代理地址格式 |
-| `generate_random_string()` | 生成随机字符串 |
+| 工具函数                       | 功能描述          |
+| -------------------------- | ------------- |
+| `Color` 类                  | 终端彩色输出常量      |
+| `trace_error_decorator()`  | 错误追踪装饰器       |
+| `check_md5()`              | 计算文件 MD5      |
+| `dict_to_cookie_str()`     | cookie 字典转字符串 |
+| `read_config_value()`      | 读取配置文件值       |
+| `update_config()`          | 更新配置文件        |
+| `remove_emojis()`          | 移除文本中的表情符号    |
+| `remove_duplicate_lines()` | 移除文件重复行       |
+| `handle_proxy_addr()`      | 处理代理地址格式      |
+| `generate_random_string()` | 生成随机字符串       |
 
 ---
 
@@ -380,11 +397,13 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 **职责**: 基于 Loguru 配置结构化日志
 
 **日志输出**:
+
 - **控制台**: 彩色日志输出
 - **`logs/streamget.log`**: DEBUG 级别（排除 INFO）
 - **`logs/PlayURL.log`**: INFO 级别（仅直播流地址）
 
 **日志文件开关**:
+
 - 通过 `config/config.ini` 的 `是否启用日志文件(是/否)` 控制
 - 默认启用，保持向后兼容
 - logger.py 在初始化时直接读取配置（不依赖 main.py 执行顺序）
@@ -399,15 +418,15 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 
 **支持渠道**:
 
-| 渠道 | 函数名 | 说明 |
-|------|--------|------|
-| 钉钉 | `dingtalk()` | 群机器人推送 |
-| 微信 | `xizhi()` | Server酱 / WeChat |
-| Telegram | `tg_bot()` | Bot 消息 |
-| 邮件 | `send_email()` | SMTP 协议 |
-| Bark | `bark()` | iOS 通知 |
-| NTFY | `ntfy()` | 开源推送服务 |
-| PushPlus | `pushplus()` | 微信推送平台 |
+| 渠道       | 函数名            | 说明               |
+| -------- | -------------- | ---------------- |
+| 钉钉       | `dingtalk()`   | 群机器人推送           |
+| 微信       | `xizhi()`      | Server酱 / WeChat |
+| Telegram | `tg_bot()`     | Bot 消息           |
+| 邮件       | `send_email()` | SMTP 协议          |
+| Bark     | `bark()`       | iOS 通知           |
+| NTFY     | `ntfy()`       | 开源推送服务           |
+| PushPlus | `pushplus()`   | 微信推送平台           |
 
 ---
 
@@ -416,18 +435,21 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 **职责**: 基于 gettext 的多语言支持系统，自动翻译 `src/` 目录下的 print 输出。
 
 **实现机制**:
+
 - `translated_print` 包装 `builtins.print`，自动翻译调用者来自 `src/` 包的输出
 - 支持源码运行和 PyInstaller 打包两种路径检测（`_internal/i18n` vs `i18n/`）
 - 默认语言：简体中文（zh_CN）
 
 **翻译文件**:
-| 文件 | 说明 | 条目数 |
-|------|------|--------|
+
+| 文件                                | 说明           | 条目数 |
+| --------------------------------- | ------------ | --- |
 | `i18n/zh_CN/LC_MESSAGES/zh_CN.po` | 中文翻译源文件（可编辑） | 200 |
-| `i18n/zh_CN/LC_MESSAGES/zh_CN.mo` | 编译后的二进制翻译文件 | 200 |
-| `i18n/en/LC_MESSAGES/` | 英文翻译目录（预留） | — |
+| `i18n/zh_CN/LC_MESSAGES/zh_CN.mo` | 编译后的二进制翻译文件  | 200 |
+| `i18n/en/LC_MESSAGES/`            | 英文翻译目录（预留）   | —   |
 
 **翻译覆盖范围**:
+
 - `src/spider.py` — 各平台直播数据获取消息（37 条）
 - `src/room.py` — 直播间信息解析异常消息（2 条）
 - `src/utils.py` — 配置文件读写、磁盘空间消息（7 条）
@@ -441,12 +463,14 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 **职责**: 提供现代化图形用户界面
 
 **设计特点**:
+
 - **高对比度色彩系统**: 满足 WCAG AA 无障碍标准
 - **DPI 感知字体**: 自适应分辨率缩放
 - **系统托盘**: 最小化到托盘运行
 - **现代组件**: 卡片式设计、渐变横幅、状态指示器
 
 **主要组件**:
+
 - `Colors` - 色彩常量类
 - `DpiFont` - DPI 感知字体系统
 - `SystemTray` - 系统托盘管理
@@ -456,14 +480,16 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 - `ModernTextWidget` - 现代文本控件
 
 **导航页面**:
+
 - 📊 控制台 - 录制状态总览、启停控制
 - 🎯 画质监控 - 实时检测各直播间实际画质是否与设置一致
 - 📝 URL 配置 - 直播间地址管理
 - 📋 运行日志 - 子进程日志查看
 
 **画质监控页面** (`_build_quality_page`):
+
 - 通过解析 main.py 子进程 stdout 日志获取画质信息
-- 解析 loguru 日志前缀（` | ` + ` - ` 分隔），提取 message 内容
+- 解析 loguru 日志前缀（`|` + `-` 分隔），提取 message 内容
 - 降级告警匹配：`{name} 画质降级：设置 {zh}({code}) 实际 {zh}({code})`
 - 录制状态匹配：`{name}[{quality}] 正在录制中 {duration}`
 - 统计卡片：录制中 / 画质正常 / 画质降级 计数
@@ -478,6 +504,7 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 **职责**: 封装 httpx，提供统一的异步 HTTP 接口
 
 **功能**:
+
 - 代理支持
 - 超时设置
 - 自动重试
@@ -490,6 +517,7 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 - **`get_response_status()` m3u8 容错**（2026-08-01）: HEAD 校验失败时，若 URL 以 `.m3u8` 结尾则补一次 `Range: bytes=0-0` GET 轻量探测（返回 200/206 即判可达）；非 m3u8 源（FLV/record_url）行为不变。异常日志带上下文描述，避免 `str(e)` 为空时只输出空消息
 
 **被以下模块导入**:
+
 - `src/spider.py` - `async_req()`
 - `src/stream.py` - `get_response_status()`
 
@@ -500,6 +528,7 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 **职责**: 提供 HTTP 客户端共享运行时配置
 
 **功能**:
+
 - SSL 证书验证全局开关（`ssl_verify`），默认启用（True，安全优先）
 - 提供 `set_ssl_verify()` 函数，由主配置在启动时统一设置
 - 异步 / 同步 HTTP 客户端在发起请求时读取此配置
@@ -511,6 +540,7 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 **职责**: 封装 requests 和 urllib，提供同步 HTTP 接口
 
 **功能**:
+
 - 代理支持
 - 超时设置
 - Cookie 支持
@@ -525,12 +555,14 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 **职责**: 提供 Web 界面远程管理录制器，包括仪表盘、直播间管理、配置编辑、日志查看
 
 **架构**:
+
 - `web.py` - 入口：守护线程运行 `main.main()`，主线程运行 uvicorn；支持后台隐藏运行模式
 - `src/web_api.py` - FastAPI 应用：认证（Token）、REST API 路由、SSE 推送、静态资源挂载
 - `src/web_config.py` - 配置读写（不依赖 FastAPI，便于单测）
 - `web/` - 前端静态资源（单页应用）
 
 **后台运行模式** (`web_show_console = false`):
+
 - `_enter_background_mode()` 在启动录制引擎前调用
 - Windows 下通过 `ctypes` 调用 `GetConsoleWindow()` + `ShowWindow(hwnd, SW_HIDE)` 隐藏控制台窗口
 - stdout/stderr 重定向到 `logs/web_console.log`（行缓冲，实时写入）
@@ -539,26 +571,29 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 
 **API 路由**:
 
-| 路由 | 方法 | 功能 |
-|------|------|------|
-| `/api/login` | POST | 密码登录，返回 Token |
-| `/api/status` | GET | 获取录制状态（含 actual_quality） |
-| `/api/rooms` | GET/POST | 直播间列表查询 / 新增 |
-| `/api/rooms/{url}` | PUT/DELETE | 编辑 / 删除直播间 |
-| `/api/rooms/toggle` | POST | 启用 / 禁用直播间 |
-| `/api/config` | GET/PUT | 读取 / 修改配置 |
-| `/api/logs/stream` | GET | SSE 实时日志推送 |
+| 路由                  | 方法         | 功能                       |
+| ------------------- | ---------- | ------------------------ |
+| `/api/login`        | POST       | 密码登录，返回 Token            |
+| `/api/status`       | GET        | 获取录制状态（含 actual_quality） |
+| `/api/rooms`        | GET/POST   | 直播间列表查询 / 新增             |
+| `/api/rooms/{url}`  | PUT/DELETE | 编辑 / 删除直播间               |
+| `/api/rooms/toggle` | POST       | 启用 / 禁用直播间               |
+| `/api/config`       | GET/PUT    | 读取 / 修改配置                |
+| `/api/logs/stream`  | GET        | SSE 实时日志推送               |
 
 **前端功能** (`web/`):
+
 - `index.html` - 单页应用入口（仪表盘 / 直播间 / 配置 三个视图）
 - `app.js` - 前端逻辑（Token 认证、API 调用、SSE 日志流、状态渲染）
 - `style.css` - 样式表（明暗主题、响应式布局、降级高亮）
 
 **录制表格展示**:
+
 - 名称 / 设置画质 / 实际画质 / 开始时间 / 已录时长
 - 实际画质与设置画质不一致时标红显示（`.quality-down` 样式）
 
 **安全机制**:
+
 - 密码变更后自动吊销所有现有 Token，强制重新登录
 - 监听 `0.0.0.0` 且未启用认证时输出安全告警
 - 文件下载路径校验（`_is_within` 防目录穿越）
@@ -571,6 +606,7 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 ### 签名算法 (`src/ab_sign.py`)
 
 抖音平台的 A-Bogus 签名算法，包含：
+
 - SM3 哈希
 - RC4 加密
 - 复杂的参数混淆
@@ -592,6 +628,7 @@ async def some_function():
 ```
 
 **实现特点**:
+
 - 使用 `asyncio.iscoroutinefunction()` 检测函数类型
 - 异步函数使用 `async wrapper` 正确 `await` 并捕获异常
 - 统一返回 `{}` 空字典，与调用方 `.get()` 用法兼容
@@ -607,36 +644,38 @@ async def some_function():
 
 ### Python 依赖 (`requirements.txt`，与 `pyproject.toml [project.dependencies]` 保持一致)
 
-| 包名 | 版本要求 | 用途 |
-|------|---------|------|
-| requests | >=2.34.2 | 同步 HTTP 请求 |
-| httpx[http2] | >=0.28.1 | 异步 HTTP 客户端（含 HTTP/2） |
-| loguru | >=0.7.3 | 结构化日志 |
-| pycryptodome | >=3.23.0 | 加密算法（SM3、RC4、AES） |
-| distro | >=1.9.0 | Linux 发行版检测 |
-| tqdm | >=4.69.0 | 进度条 |
-| exejs | >=1.0.1 | JavaScript 执行引擎（PyExecJS 的活跃维护继任者，优先使用） |
-| PyExecJS | >=1.5.1 | JS 执行引擎回退兼容（exejs 未安装时使用） |
-| customtkinter | >=6.0.0 | 现代化 GUI 框架 |
-| pystray | >=0.19.5 | 系统托盘（GUI / Web 托盘模式） |
-| Pillow | >=12.3.0 | 图像处理（托盘图标生成） |
-| fastapi | >=0.140.0 | Web 管理面板后端框架 |
-| starlette | >=0.49.1 | ASGI 工具集（fastapi 传递依赖，`src/web_api.py` 直接导入故显式声明） |
-| uvicorn[standard] | >=0.51.0 | ASGI 服务器 |
-| python-multipart | >=0.0.32 | 表单/文件上传解析 |
-| pydantic | >=2.13.4 | 请求模型校验 |
+| 包名                | 版本要求      | 用途                                                |
+| ----------------- | --------- | ------------------------------------------------- |
+| requests          | >=2.34.2  | 同步 HTTP 请求                                        |
+| httpx[http2]      | >=0.28.1  | 异步 HTTP 客户端（含 HTTP/2）                             |
+| loguru            | >=0.7.3   | 结构化日志                                             |
+| pycryptodome      | >=3.23.0  | 加密算法（SM3、RC4、AES）                                 |
+| distro            | >=1.9.0   | Linux 发行版检测                                       |
+| tqdm              | >=4.69.0  | 进度条                                               |
+| exejs             | >=1.0.1   | JavaScript 执行引擎（PyExecJS 的活跃维护继任者，优先使用）           |
+| PyExecJS          | >=1.5.1   | JS 执行引擎回退兼容（exejs 未安装时使用）                         |
+| customtkinter     | >=6.0.0   | 现代化 GUI 框架                                        |
+| pystray           | >=0.19.5  | 系统托盘（GUI / Web 托盘模式）                              |
+| Pillow            | >=12.3.0  | 图像处理（托盘图标生成）                                      |
+| fastapi           | >=0.140.0 | Web 管理面板后端框架                                      |
+| starlette         | >=0.49.1  | ASGI 工具集（fastapi 传递依赖，`src/web_api.py` 直接导入故显式声明） |
+| uvicorn[standard] | >=0.51.0  | ASGI 服务器                                          |
+| python-multipart  | >=0.0.32  | 表单/文件上传解析                                         |
+| pydantic          | >=2.13.4  | 请求模型校验                                            |
 
 > 注 1：Weverse 平台认证由 `src/weverse_auth.py` 通过 requests 直接调用 API 实现，
+>
 > **不再依赖** pip 上的 `weverse` 包（该包拉入已废弃的 pycrypto，Python 3.10+ 无法编译）。
 >
 > 注 2：可执行文件打包需 PyInstaller，属于构建期可选依赖：`pip install .[build]`
+>
 > （对应 `pyproject.toml` 的 `[project.optional-dependencies] build`）。
 
 ### 外部依赖
 
-| 依赖 | 用途 | 安装方式 |
-|------|------|---------|
-| FFmpeg | 视频录制与转码 | Windows 内置（`ffmpeg/`），Linux/macOS 手动安装；Docker 内 apt 安装 |
+| 依赖      | 用途                 | 安装方式                                                        |
+| ------- | ------------------ | ----------------------------------------------------------- |
+| FFmpeg  | 视频录制与转码            | Windows 内置（`ffmpeg/`），Linux/macOS 手动安装；Docker 内 apt 安装      |
 | Node.js | 运行 JavaScript 签名算法 | Windows 自动安装（`node/`），Linux 需包管理器安装；Docker 内 apt 安装 Node 22 |
 
 ### 模块依赖关系图
@@ -675,39 +714,39 @@ web.py
 
 #### [录制设置] 节
 
-| 配置项 | 说明 | 默认值 |
-|--------|------|--------|
-| language | 界面语言 | zh_cn |
-| 是否跳过代理检测 | 是否跳过代理检测 | 是 |
-| 是否禁用SSL证书验证 | 是否禁用 SSL 证书验证 | 否 |
-| 是否启用日志文件 | 是否将日志写入文件 | 是 |
-| 直播保存路径 | 录制文件保存路径 | (空，默认当前目录) |
-| 保存文件夹是否以作者区分 | 是否按主播名分类 | 是 |
-| 视频保存格式 | ts/mkv/flv/mp4/mp3/m4a | ts |
-| 原画\|超清\|高清\|标清\|流畅 | 默认画质 | 原画 |
-| 是否使用代理ip | 是否启用代理 | 否 |
-| 代理地址 | 代理服务器地址 | (空) |
-| 同一时间访问网络的线程数 | 并发数 | 3 |
-| 循环时间(秒) | 直播状态检测间隔 | 300 |
-| 分段录制是否开启 | 是否分段 | 是 |
-| 是否启用HLS采集(是/否) | 是否优先使用 HLS(m3u8) 源采集；关闭或源不可用时回退 FLV | 是 |
-| 视频分段时间(秒) | 分段时长 | 3600 |
-| 使用代理录制的平台 | 需要代理的平台列表 | tiktok, sooplive... |
+| 配置项            | 说明                                  | 默认值                 |    |    |      |    |
+| -------------- | ----------------------------------- | ------------------- | -- | -- | ---- | -- |
+| language       | 界面语言                                | zh_cn               |    |    |      |    |
+| 是否跳过代理检测       | 是否跳过代理检测                            | 是                   |    |    |      |    |
+| 是否禁用SSL证书验证    | 是否禁用 SSL 证书验证                       | 否                   |    |    |      |    |
+| 是否启用日志文件       | 是否将日志写入文件                           | 是                   |    |    |      |    |
+| 直播保存路径         | 录制文件保存路径                            | (空，默认当前目录)          |    |    |      |    |
+| 保存文件夹是否以作者区分   | 是否按主播名分类                            | 是                   |    |    |      |    |
+| 视频保存格式         | ts/mkv/flv/mp4/mp3/m4a              | ts                  |    |    |      |    |
+| 原画             | 超清                                  | 高清                  | 标清 | 流畅 | 默认画质 | 原画 |
+| 是否使用代理ip       | 是否启用代理                              | 否                   |    |    |      |    |
+| 代理地址           | 代理服务器地址                             | (空)                 |    |    |      |    |
+| 同一时间访问网络的线程数   | 并发数                                 | 3                   |    |    |      |    |
+| 循环时间(秒)        | 直播状态检测间隔                            | 300                 |    |    |      |    |
+| 分段录制是否开启       | 是否分段                                | 是                   |    |    |      |    |
+| 是否启用HLS采集(是/否) | 是否优先使用 HLS(m3u8) 源采集；关闭或源不可用时回退 FLV | 是                   |    |    |      |    |
+| 视频分段时间(秒)      | 分段时长                                | 3600                |    |    |      |    |
+| 使用代理录制的平台      | 需要代理的平台列表                           | tiktok, sooplive... |    |    |      |    |
 
 #### [推送配置] 节
 
-| 配置项 | 说明 |
-|--------|------|
-| 直播状态推送渠道 | 微信\|钉钉\|tg\|邮箱\|bark\|ntfy\|pushplus |
-| 钉钉推送接口链接 | 钉钉 Webhook |
-| 微信推送接口链接 | Server酱 URL |
-| bark推送接口链接 | Bark API |
-| tgapi令牌 | Telegram Bot Token |
-| tg聊天id | 聊天 ID |
-| smtp邮件服务器 | SMTP 服务器 |
-| ntfy推送地址 | NTFY 服务地址 |
-| pushplus推送token | PushPlus Token |
-| 只推送通知不录制 | 是否仅通知不录制 |
+| 配置项             | 说明                 |    |    |    |      |      |          |
+| --------------- | ------------------ | -- | -- | -- | ---- | ---- | -------- |
+| 直播状态推送渠道        | 微信                 | 钉钉 | tg | 邮箱 | bark | ntfy | pushplus |
+| 钉钉推送接口链接        | 钉钉 Webhook         |    |    |    |      |      |          |
+| 微信推送接口链接        | Server酱 URL        |    |    |    |      |      |          |
+| bark推送接口链接      | Bark API           |    |    |    |      |      |          |
+| tgapi令牌         | Telegram Bot Token |    |    |    |      |      |          |
+| tg聊天id          | 聊天 ID              |    |    |    |      |      |          |
+| smtp邮件服务器       | SMTP 服务器           |    |    |    |      |      |          |
+| ntfy推送地址        | NTFY 服务地址          |    |    |    |      |      |          |
+| pushplus推送token | PushPlus Token     |    |    |    |      |      |          |
+| 只推送通知不录制        | 是否仅通知不录制           |    |    |    |      |      |          |
 
 #### [Cookie] 节
 
@@ -725,18 +764,19 @@ web.py
 
 Web 管理面板配置（`web.py` 模式专用）
 
-| 配置项 | 说明 | 默认值 |
-|--------|------|--------|
-| web_host | 监听地址（Docker 内需设为 0.0.0.0） | 127.0.0.1 |
-| web_port | 监听端口 | 8000 |
-| web_auth_enable | 是否启用密码认证 | false |
-| web_password | 登录密码（认证开启时必填，PBKDF2-HMAC-SHA256 哈希存储） | (空) |
-| web_token_expiry | Token 有效期（秒） | 86400 |
-| web_show_console | 是否显示控制台窗口（false 时后台隐藏运行） | true |
+| 配置项              | 说明                                    | 默认值       |
+| ---------------- | ------------------------------------- | --------- |
+| web_host         | 监听地址（Docker 内需设为 0.0.0.0）             | 127.0.0.1 |
+| web_port         | 监听端口                                  | 8000      |
+| web_auth_enable  | 是否启用密码认证                              | false     |
+| web_password     | 登录密码（认证开启时必填，PBKDF2-HMAC-SHA256 哈希存储） | (空)       |
+| web_token_expiry | Token 有效期（秒）                          | 86400     |
+| web_show_console | 是否显示控制台窗口（false 时后台隐藏运行）              | true      |
 
 ### 直播间配置文件 (`config/URL_config.ini`)
 
 **格式**:
+
 ```ini
 # 基础格式
 https://live.douyin.com/745964462470
@@ -758,11 +798,13 @@ https://live.douyin.com/745964462470
 ### 方式 1: 源码运行
 
 #### 前置要求
+
 - Python 3.10+
 - FFmpeg
 - Node.js
 
 #### 安装依赖
+
 ```bash
 # 使用 uv（推荐）
 uv sync
@@ -772,16 +814,19 @@ pip install -r requirements.txt
 ```
 
 #### 命令行模式
+
 ```bash
 python main.py
 ```
 
 #### GUI 图形界面模式
+
 ```bash
 python gui.py
 ```
 
 #### Web 管理面板模式
+
 ```bash
 python web.py
 # 默认监听 http://localhost:8000
@@ -808,25 +853,30 @@ python web.py
 ```
 
 **`.dockerignore` 要点**：
+
 - 排除平台二进制（`ffmpeg/`、`node/`，容器内 apt 安装）、`config/*.ini`（运行时挂载）、
+
   `typings/`、`build_exe.py`、`gui_legacy.py` 等桌面/构建专用文件；
 - **保留 `i18n/**/*.mo`** 编译翻译文件 —— gettext 运行时必需且 Dockerfile 不会重新编译，
+
   仅排除 `.po` 源文件与编译脚本。
 
 #### 使用 docker compose (推荐)
 
 仓库根目录的 `docker-compose.yaml` 已定义三个服务（共享同一镜像，通过 YAML 锚点复用配置）：
 
-| 服务 | 入口 | 启动命令 | 端口 |
-|------|------|---------|------|
-| `recorder`（默认） | `python main.py` | `docker compose up -d` | 无（纯 CLI） |
-| `web`（profile） | `python web.py` | `docker compose --profile web up -d` | `8000:8000` |
-| `gui`（profile） | `python gui.py` | `docker compose --profile gui up -d` | 无（需 X11） |
+| 服务             | 入口               | 启动命令                                 | 端口          |
+| -------------- | ---------------- | ------------------------------------ | ----------- |
+| `recorder`（默认） | `python main.py` | `docker compose up -d`               | 无（纯 CLI）    |
+| `web`（profile） | `python web.py`  | `docker compose --profile web up -d` | `8000:8000` |
+| `gui`（profile） | `python gui.py`  | `docker compose --profile gui up -d` | 无（需 X11）    |
 
 统一挂载卷：`./config`、`./downloads`、`./logs`、`./backup_config`。
 
 > ⚠️ **Web 模式必读**：`web.py` 默认监听 `127.0.0.1:8000`，容器内必须在
+>
 > `config/config.ini` 的 `[Web]` 节设置 `web_host = 0.0.0.0`，宿主机端口映射才能访问；
+>
 > 同时强烈建议开启 `web_auth_enable = true` 并配置密码。
 
 ---
@@ -839,15 +889,16 @@ python web.py
 
 PyInstaller `onedir` 模式 + `contents_directory='_internal'`，动态生成 `.spec` 文件后调用 PyInstaller 完成**三入口共享依赖**构建：
 
-| 产物（exe 同级） | 入口 | 模式 |
-|------------------|------|------|
-| `DouyinLiveRecorder(.exe)` | `main.py` | 控制台（CLI 录制核心） |
-| `DouyinLiveRecorder-GUI(.exe)` | `gui.py` | 无控制台窗口（GUI） |
-| `DouyinLiveRecorder-Web(.exe)` | `web.py` | 控制台（Web 管理面板，监听 `0.0.0.0:8000`） |
+| 产物（exe 同级）                     | 入口        | 模式                              |
+| ------------------------------ | --------- | ------------------------------- |
+| `DouyinLiveRecorder(.exe)`     | `main.py` | 控制台（CLI 录制核心）                   |
+| `DouyinLiveRecorder-GUI(.exe)` | `gui.py`  | 无控制台窗口（GUI）                     |
+| `DouyinLiveRecorder-Web(.exe)` | `web.py`  | 控制台（Web 管理面板，监听 `0.0.0.0:8000`） |
 
 三个入口共用一个 `COLLECT`，依赖去重后体积约为独立打包的 1/3。
 
 **用法**：
+
 ```bash
 python build_exe.py            # 打包并生成 zip 产物
 python build_exe.py --smoke    # 打包后额外运行冒烟测试（CI 推荐）
@@ -855,6 +906,7 @@ python build_exe.py --no-zip   # 仅打包不压缩
 ```
 
 **数据文件与隐藏导入**：
+
 - `datas`：`src/javascript`（JS 签名脚本）、`i18n`（翻译）、`web`（前端静态资源），均经 `__file__` 定位，PyInstaller 自动收进 `_internal/`；`collect_data_files('customtkinter')`（主题 JSON）。
 - `config/` 不进 `_internal`，由 `copy_external_binaries()` 复制到 exe 同级（见目录规范）。
 - `hiddenimports`：`i18n`、`src.async_http`（main.py 经 `__import__` 动态导入）、`h2`（httpx[http2] 懒加载）；`a_web` 额外 `collect_submodules('uvicorn')`（协议模块按字符串导入）。
@@ -885,6 +937,7 @@ dist/DouyinLiveRecorder/
 ```
 
 **关键约定（硬性）**：
+
 - `node/`、`ffmpeg/`、`config/` 与 exe 保持**同级**（而非 `_internal/`）。
 - `src/` 及全部 Python 依赖包统一收进 `_internal/`。
 - 运行时可写目录 `logs/`、`downloads/`（未通过 `config.ini` 的 `直播保存路径(不填则默认)` 指定时）、`backup_config/` 均默认创建在 **exe 同级目录**。
@@ -894,12 +947,14 @@ dist/DouyinLiveRecorder/
 项目存在"双轨路径"：`main.py`/`src/ffmpeg_install.py`/`src/__init__.py` 等用 `sys.argv[0]`/`sys.executable` 定位运行时资源；`src/logger.py`、`i18n.py`、`src/web_api.py` 等用 `__file__` 定位打包资源。冻结后前者指向 exe 同级（发布根），后者指向 `_internal/`。
 
 为统一收敛，新增 `src/logger._app_root()`（与 `main.py` 内联同名函数）：
+
 ```python
 def _app_root() -> str:
     if getattr(sys, 'frozen', False):
         return os.path.dirname(os.path.realpath(sys.executable))  # = exe 同级
     return os.path.split(os.path.realpath(sys.argv[0]))[0]
 ```
+
 - `main.py` 的 `script_path`、`src/__init__.py`、`src/node_install.py`、`src/ffmpeg_install.py` 的 `execute_dir` 均收敛到 exe 同级，使 `config/ffmpeg/node` 正确定位。
 - `src/logger.py` 的 `script_path` 改为 `_app_root()`，使 `logs/`、`backup_config/` 落在 exe 同级。
 - `gui.py` 新增 `self.app_root`：冻结时若 `script_dir` 为 `_internal` 则回退一层到发布根，config/downloads 据此定位；CLI 子进程经同目录 `DouyinLiveRecorder.exe` 拉起（见下）。
@@ -913,6 +968,7 @@ def _app_root() -> str:
 ### 5. 冒烟测试
 
 `build_exe.py --smoke` 在打包后自动运行三项验证（CI 推荐开启）：
+
 - **CLI**：启动数秒，确认进入监控循环且输出无 `Traceback`/`ImportError`/`ModuleNotFoundError`。
 - **Web**：HTTP 探活 `http://127.0.0.1:8000/`，返回 200 视为面板可用；同时验证内置 ffmpeg 被命中（不触发下载）。
 - **GUI**：启动 8 秒确认进程存活无崩溃（无显示环境 `DISPLAY` 未设置时自动跳过）。
@@ -924,12 +980,14 @@ def _app_root() -> str:
 工作流文件：`.github/workflows/build-release.yml`（任务名 `Build Executables`）。
 
 **触发方式**：
+
 - 手动触发（`workflow_dispatch`）：三平台构建并上传 artifact。
 - 推送 `v*` 标签（如 `v4.0.8`）：构建 + 自动创建 GitHub Release 并附三平台 zip。
 
 **构建矩阵**：`windows-latest` / `ubuntu-latest` / `macos-latest`，Python 3.12。
 
 **流程**：
+
 1. Checkout → Setup Python 3.12（pip 缓存）。
 2. 安装 ffmpeg（Linux/macOS 用系统包；Windows 用仓库内置）；Linux 额外装 `xvfb`（GUI 冒烟需虚拟显示）。
 3. `pip install -r requirements.txt pyinstaller`。
@@ -980,6 +1038,7 @@ python build_exe.py --smoke      # 打包 + 冒烟测试
 ### 问题 1: 提示缺少 FFmpeg
 
 **解决**:
+
 ```bash
 # Ubuntu/Debian
 sudo apt install ffmpeg
@@ -994,6 +1053,7 @@ brew install ffmpeg
 ### 问题 2: 提示缺少 Node.js
 
 **解决**:
+
 ```bash
 # Ubuntu/Debian
 curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
@@ -1009,12 +1069,14 @@ brew install node
 ### 问题 3: 抖音风控无法获取数据
 
 **风控特征（实测）**:
+
 - 风控信号是 **HTTP 200 + 空响应体**，不是 4xx。排查解析失败时先看 `len(response.text)`，为 0 基本就是 UA/Cookie 被拒
 - 旧移动端 UA 会被静默限流（`iesdouyin.com` 接口必现），需使用桌面 Chrome UA（`room.DESKTOP_UA`）
 - `iesdouyin.com/share/user/<sec_uid>` 已是 JS 反爬壳页，页面内无 `unique_id`，任何 HTML 正则都不可靠
 - `web/enter` 接口偶发 `status_code=10002 unknown error` 属瞬时软拒绝（风控/缺 msToken/限流），代码已做静默重试 1 次，属正常容错，不代表房间不可用
 
 **解决**:
+
 - 更新 Cookie
 - 降低循环监测频率
 - 更换 IP
@@ -1092,11 +1154,11 @@ brew install node
 
 **覆盖率变化：**
 
-| 模块 | 修改前 | 修改后 |
-|------|--------|--------|
-| `src/stream.py` | 0% | 70% |
-| `src/async_http.py` | 35% | 83% |
-| 总覆盖率 | 15.29% | 22.35% |
+| 模块                  | 修改前    | 修改后    |
+| ------------------- | ------ | ------ |
+| `src/stream.py`     | 0%     | 70%    |
+| `src/async_http.py` | 35%    | 83%    |
+| 总覆盖率                | 15.29% | 22.35% |
 
 **覆盖率门槛调整：**
 
@@ -1297,22 +1359,22 @@ brew install node
 - `pyproject.toml` / `requirements.txt`：新增 `pydantic>=2.0.0` 依赖（`src/web_api.py` 直接 `from pydantic import BaseModel`，之前未声明）
 - 全项目依赖扫描完成：14 个第三方包均已核对使用位置并确认声明状态（详见下表）
 
-| 包名 | 声明状态 | 使用位置 |
-|------|---------|---------|
-| requests | 已声明 | src/ffmpeg_install.py, src/node_install.py, src/sync_http.py, src/weverse_auth.py |
-| httpx[http2] | 已声明 | main.py, src/room.py, src/spider.py, src/async_http.py |
-| loguru | 已声明 | src/logger.py, msg_push.py |
-| pycryptodome | 已声明 | src/spider.py (Crypto.Cipher.AES) |
-| distro | 已声明 | src/node_install.py |
-| tqdm | 已声明 | src/ffmpeg_install.py, src/node_install.py |
-| PyExecJS | 已声明 | src/room.py, src/spider.py, src/utils.py |
-| customtkinter | 已声明 | gui.py |
-| pystray | 已声明 | gui.py, gui_legacy.py (延迟导入) |
-| Pillow | 已声明 | gui.py, gui_legacy.py |
-| fastapi | 已声明 | src/web_api.py |
-| uvicorn[standard] | 已声明 | web.py (延迟导入) |
-| python-multipart | 已声明 | FastAPI 表单处理隐式依赖 |
-| **pydantic** | **缺失→已补** | src/web_api.py (BaseModel) |
+| 包名                | 声明状态      | 使用位置                                                                              |
+| ----------------- | --------- | --------------------------------------------------------------------------------- |
+| requests          | 已声明       | src/ffmpeg_install.py, src/node_install.py, src/sync_http.py, src/weverse_auth.py |
+| httpx[http2]      | 已声明       | main.py, src/room.py, src/spider.py, src/async_http.py                            |
+| loguru            | 已声明       | src/logger.py, msg_push.py                                                        |
+| pycryptodome      | 已声明       | src/spider.py (Crypto.Cipher.AES)                                                 |
+| distro            | 已声明       | src/node_install.py                                                               |
+| tqdm              | 已声明       | src/ffmpeg_install.py, src/node_install.py                                        |
+| PyExecJS          | 已声明       | src/room.py, src/spider.py, src/utils.py                                          |
+| customtkinter     | 已声明       | gui.py                                                                            |
+| pystray           | 已声明       | gui.py, gui_legacy.py (延迟导入)                                                      |
+| Pillow            | 已声明       | gui.py, gui_legacy.py                                                             |
+| fastapi           | 已声明       | src/web_api.py                                                                    |
+| uvicorn[standard] | 已声明       | web.py (延迟导入)                                                                     |
+| python-multipart  | 已声明       | FastAPI 表单处理隐式依赖                                                                  |
+| **pydantic**      | **缺失→已补** | src/web_api.py (BaseModel)                                                        |
 
 **Dockerfile 更新：**
 
@@ -1326,6 +1388,7 @@ brew install node
 ---
 
 ### v4.0.8-dev (2026-07-24)
+
 - 新增 GUI 画质监控页面（`gui.py` `_build_quality_page`），通过解析子进程日志实时检测各直播间实际画质是否与设置一致
 - 新增 Web 控制台开关配置 `web_show_console`（默认 true），设为 false 时程序后台隐藏运行
 - 新增 `_enter_background_mode()`：Windows 下隐藏控制台窗口（SW_HIDE），日志重定向到 `logs/web_console.log`
@@ -1344,6 +1407,7 @@ brew install node
 - 优化各平台流地址选择，用显式截断替代 `_pad_list` 静默填充，避免越界
 
 ### v4.0.8-dev (2026-07-23)
+
 - 新增 HTTP 客户端连接池复用机制，按 (代理, verify, http2) 维度复用 AsyncClient，提升请求性能
 - 新增 SSL 证书验证全局开关（`src/http_config.py`），通过 config.ini 统一控制异步/同步 HTTP 客户端
 - 新增日志文件开关配置项，可通过 config.ini 控制是否输出日志文件
@@ -1353,6 +1417,7 @@ brew install node
 - Dockerfile 新增 ca-certificates 依赖，支持启用 SSL 证书验证时的证书校验
 
 ### v4.0.8-dev (2026-06-27)
+
 - 修复 `trace_error_decorator` 严重 Bug：原同步装饰器应用于 71 个异步函数导致错误捕获完全失效，现使用 `asyncio.iscoroutinefunction()` 支持同步/异步双模式
 - 修复返回值类型不一致 Bug：`execjs.ProgramError` 分支返回 `None` → `{}`
 - 修复 B站画质默认值 `'0'` 不在字典键中导致 KeyError
@@ -1361,6 +1426,7 @@ brew install node
 - 修复 `get_stream_url` 空列表索引崩溃（该函数未被装饰器保护）
 
 ### v4.0.8-dev (2026-06-20)
+
 - 修复 spider.py 5 个运行时 Bug（KeyError、响应类型转换、循环静默返回）
 - 修复 stream.py 2 个运行时 Bug（B站 None 检查、快手 quality 条件）
 - 修复 gui.py 死代码（未使用变量、f-string 无占位符）
@@ -1369,6 +1435,7 @@ brew install node
 - 通过 pyflakes 静态检查验证
 
 ### v4.0.8-dev (2025-05-17)
+
 - 全新现代化 GUI 界面（WCAG AA 高对比度、DPI 感知字体）
 - Docker 多阶段构建关键修复（运行时 Node.js、HEALTHCHECK）
 - 配置文件重构（pyproject.toml、requirements.txt、.gitignore、.dockerignore）
@@ -1376,11 +1443,13 @@ brew install node
 - 完善国际化翻译（YouTube/FlexTV/PopkonTV/TwitCasting）
 
 ### v4.0.7 (2025-10-24)
+
 - 修复抖音风控问题
 - 新增 SOOP 平台支持
 - 修复 Bigo 录制
 
 ### v4.0.6 (2025-01-27)
+
 - 新增淘宝、京东、Faceit 直播
 - 重构为异步架构
 - 新增强制 H264 编码选项
