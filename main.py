@@ -123,10 +123,10 @@ def _read_version_from_pyproject() -> str:
 # 版本信息和支持的平台列表（从 pyproject.toml 读取）
 version: str = _read_version_from_pyproject()
 platforms: str = (
-    "\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|"
-    "酷狗|花椒|流星|Acfun|畅聊|映客|音播|知乎|嗨秀|VV星球|17Live|浪Live|漂漂|六间房|乐嗨|花猫|淘宝|京东|咪咕|连接|来秀"
-    "\n海外站点：TikTok|SOOP|PandaTV|WinkTV|FlexTV|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK|Shopee|"
-    "Youtube|Faceit|Picarto"
+    "\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look直播|TwitCasting|百度|微博|"
+    "酷狗|花椒|流星|Acfun|畅聊|映客|音播|知乎|嗨秀|VV星球|17Live|浪Live|飘飘|六间房|乐嗨|花猫|淘宝|京东|咪咕|连接|来秀"
+    "\n海外站点：TikTok|SOOP(原AfreecaTV)|PandaTV|WinkTV|TTingLive(原Flextv)|PopkonTV|TwitchTV|LiveMe|ShowRoom|CHZZK|Shopee|"
+    "YouTube|Faceit|Picarto"
 )
 
 # ==================== 全局状态变量 ====================
@@ -1182,12 +1182,12 @@ def get_record_headers(platform: str, live_url: str) -> str | None:
         "PandaTV": "origin:https://www.pandalive.co.kr",
         "WinkTV": "origin:https://www.winktv.co.kr",
         "PopkonTV": "origin:https://www.popkontv.com",
-        "FlexTV": "origin:https://www.flextv.co.kr",
+        "TTingLive(原Flextv)": "origin:https://www.flextv.co.kr",
         "千度热播": "referer:https://qiandurebo.com",
         "17Live": "referer:https://17.live/en/live/6302408",
         "浪Live": "referer:https://www.lang.live",
         "shopee": f"origin:{live_domain}",
-        "Blued直播": "referer:https://app.blued.cn",
+        "blued": "referer:https://app.blued.cn",
     }
     return record_headers.get(platform)
 
@@ -1411,21 +1411,21 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                             )
 
                     elif record_url.find("www.bigo.tv/") > -1 or record_url.find("slink.bigovideo.tv/") > -1:
-                        platform = "Bigo直播"
+                        platform = "bigo"
                         with semaphore:
                             port_info = asyncio.run(
                                 spider.get_bigo_stream_url(record_url, proxy_addr=proxy_address, cookies=bigo_cookie)
                             )
 
                     elif record_url.find("https://app.blued.cn/") > -1:
-                        platform = "Blued直播"
+                        platform = "blued"
                         with semaphore:
                             port_info = asyncio.run(
                                 spider.get_blued_stream_url(record_url, proxy_addr=proxy_address, cookies=blued_cookie)
                             )
 
                     elif record_url.find("sooplive.co.kr/") > -1 or record_url.find("sooplive.com/") > -1:
-                        platform = "SOOP"
+                        platform = "SOOP(原AfreecaTV)"
                         with semaphore:
                             if global_proxy or proxy_address:
                                 json_data = asyncio.run(
@@ -1443,7 +1443,7 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                                     )
                                 port_info = asyncio.run(stream.get_stream_url(json_data, record_quality, spec=True))
                             else:
-                                logger.error("错误信息: 网络异常，请检查本网络是否能正常访问SOOP平台")
+                                logger.error("错误信息: 网络异常，请检查本网络是否能正常访问SOOP(原AfreecaTV)平台")
 
                     elif record_url.find("cc.163.com/") > -1:
                         platform = "网易CC直播"
@@ -1498,7 +1498,7 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                                 logger.error("错误信息: 网络异常，请检查本网络是否能正常访问WinkTV直播平台")
 
                     elif record_url.find("www.flextv.co.kr/") > -1 or record_url.find("www.ttinglive.com/") > -1:
-                        platform = "FlexTV"
+                        platform = "TTingLive(原Flextv)"
                         with semaphore:
                             if global_proxy or proxy_address:
                                 json_data = asyncio.run(
@@ -1519,7 +1519,7 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                                 else:
                                     port_info = json_data
                             else:
-                                logger.error("错误信息: 网络异常，请检查本网络是否能正常访问FlexTV直播平台")
+                                logger.error("错误信息: 网络异常，请检查本网络是否能正常访问TTingLive(原Flextv)直播平台")
 
                     elif record_url.find("look.163.com/") > -1:
                         platform = "Look直播"
@@ -1757,7 +1757,7 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                             )
 
                     elif record_url.find("m.pp.weimipopo.com/") > -1:
-                        platform = "漂漂直播"
+                        platform = "飘飘直播"
                         with semaphore:
                             port_info = asyncio.run(
                                 spider.get_pplive_stream_url(
@@ -1804,7 +1804,7 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                                 new_record_url = record_url.split("?")[0] + "?" + str(port_info["uid"])
 
                     elif record_url.find("www.youtube.com/") > -1 or record_url.find("youtu.be/") > -1:
-                        platform = "Youtube"
+                        platform = "YouTube"
                         with semaphore:
                             json_data = asyncio.run(
                                 spider.get_youtube_stream_url(
@@ -2111,7 +2111,7 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                                     ]
                                 rec_info = f"\r{anchor_name} 准备开始录制视频: {full_path}"
                                 if show_url:
-                                    re_plat = ("WinkTV", "PandaTV", "ShowRoom", "CHZZK", "Youtube")
+                                    re_plat = ("WinkTV", "PandaTV", "ShowRoom", "CHZZK", "YouTube")
                                     if platform in re_plat:
                                         logger.info(
                                             f"{platform} | {anchor_name} | 直播源地址: {port_info.get('m3u8_url')}"

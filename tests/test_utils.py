@@ -1,6 +1,7 @@
 """Tests for src/utils.py module."""
 
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pytest
 
@@ -303,7 +304,10 @@ class TestReplaceUrl:
         test_file.write_text("https://old.com\nother line\n", encoding="utf-8-sig")
         replace_url(test_file, "https://old.com", "https://new.com")
         content = test_file.read_text(encoding="utf-8-sig")
-        assert "https://new.com" in content
+        assert any(
+            (parsed.scheme, parsed.netloc) == ("https", "new.com")
+            for parsed in (urlparse(line) for line in content.splitlines())
+        )
 
     def test_replace_partial_line(self, tmp_path):
         """Test replacing partial line match."""

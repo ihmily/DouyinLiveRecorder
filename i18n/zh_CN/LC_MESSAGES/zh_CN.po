@@ -32,55 +32,55 @@ msgid "The anchor did not start broadcasting."
 msgstr "主播并未开播"
 
 # =============================================================================
-# SOOPLive 平台消息
+# SOOP(原AfreecaTV) 平台消息
 # =============================================================================
 
 #: src/spider.py
 msgid "sooplive platform login successful! Starting to fetch live streaming data..."
-msgstr "sooplive平台登录成功！开始获取直播数据..."
+msgstr "SOOP(原AfreecaTV)平台登录成功！开始获取直播数据..."
 
 #: src/spider.py
 msgid "sooplive live stream failed to retrieve, the live stream just ended."
-msgstr "sooplive直播获取失败,该直播间刚结束直播"
+msgstr "SOOP(原AfreecaTV)直播获取失败,该直播间刚结束直播"
 
 #: src/spider.py
 msgid "sooplive live stream retrieval failed, the live needs 19+, you are not logged in."
-msgstr "soop直播获取失败，该直播间需要年龄19+观看，您尚未登录"
+msgstr "SOOP(原AfreecaTV)直播获取失败，该直播间需要年龄19+观看，您尚未登录"
 
 #: src/spider.py
 msgid "Attempting to log in to the sooplive live streaming platform with your account and password, please ensure it is configured."
-msgstr "正在尝试使用您的账号和密码登录soop直播平台，请确保已在config配置文件中配置"
+msgstr "正在尝试使用您的账号和密码登录SOOP(原AfreecaTV)直播平台，请确保已在config配置文件中配置"
 
 #: src/spider.py
 msgid "error message：Please check if the input sooplive live room address is correct."
-msgstr "错误信息：请检查输入的sooplive直播间地址是否正确"
+msgstr "错误信息：请检查输入的SOOP(原AfreecaTV)直播间地址是否正确"
 
 # =============================================================================
-# FlexTV 平台消息
+# TTingLive(原Flextv) 平台消息
 # =============================================================================
 
 #: src/spider.py
 msgid "Please check if the FlexTV account and password in the configuration file are correct."
-msgstr "请检查配置文件中的FlexTV账号和密码是否正确"
+msgstr "请检查配置文件中的TTingLive(原Flextv)账号和密码是否正确"
 
 #: src/spider.py
 msgid "FlexTV live stream retrieval failed [not logged in]: 19+ live streams are only available for logged-in adults."
-msgstr "FlexTV直播获取失败[未登录]: 19+直播需要登录后是成人才可观看"
+msgstr "TTingLive(原Flextv)直播获取失败[未登录]: 19+直播需要登录后是成人才可观看"
 
 #: src/spider.py
 msgid "Attempting to log in to the FlexTV live streaming platform, please ensure your account and password are correctly filled in the configuration file."
-msgstr "正在尝试登录FlexTV直播平台，请确保已在配置文件中填写好您的账号和密码"
+msgstr "正在尝试登录TTingLive(原Flextv)直播平台，请确保已在配置文件中填写好您的账号和密码"
 
 #: src/spider.py
 msgid "Logging into FlexTV platform..."
-msgstr "FlexTV平台登录中..."
+msgstr "TTingLive(原Flextv)平台登录中..."
 
 #: src/spider.py
 msgid "Logged into FlexTV platform successfully! Starting to fetch live streaming data..."
-msgstr "FlexTV平台登录成功！开始获取直播数据..."
+msgstr "TTingLive(原Flextv)平台登录成功！开始获取直播数据..."
 
 # =============================================================================
-# Look 平台消息
+# Look直播 平台消息
 # =============================================================================
 
 #: src/spider.py
@@ -473,7 +473,7 @@ msgstr "TikTok平台"
 
 #: main.py
 msgid "SOOP平台"
-msgstr "SOOP平台"
+msgstr "SOOP(原AfreecaTV)平台"
 
 #: main.py
 msgid "PandaTV直播平台"
@@ -485,7 +485,7 @@ msgstr "WinkTV直播平台"
 
 #: main.py
 msgid "FlexTV直播平台"
-msgstr "FlexTV直播平台"
+msgstr "TTingLive(原Flextv)直播平台"
 
 #: main.py
 msgid "PopkonTV直播平台"
@@ -808,12 +808,12 @@ msgid "Error: Please log in to YouTube on your device's webpage and configure co
 msgstr "错误：请先在设备网页上登录YouTube，并在config.ini中配置cookies"
 
 # =============================================================================
-# FlexTV 额外错误消息
+# TTingLive(原Flextv) 额外错误消息
 # =============================================================================
 
 #: src/spider.py
 msgid "Failed to retrieve data from FlexTV live room"
-msgstr "从FlexTV直播间获取数据失败"
+msgstr "从TTingLive(原Flextv)直播间获取数据失败"
 
 # =============================================================================
 # PopkonTV 额外错误消息
@@ -869,7 +869,7 @@ msgstr "登录过程中发生错误: {e}"
 
 #: src/spider.py
 msgid "FlexTV login request exception: {e}"
-msgstr "FlexTV登录请求异常: {e}"
+msgstr "TTingLive(原Flextv)登录请求异常: {e}"
 
 #: src/spider.py
 msgid "HTTP status error occurred during login: {e.response.status_code}"

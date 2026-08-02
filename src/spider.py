@@ -1245,7 +1245,7 @@ async def get_xhs_stream_url(
 async def get_bigo_stream_url(
     url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None
 ) -> dict[str, object]:
-    # 获取 Bigo 直播流地址
+    # 获取 bigo 直播流地址
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0",
         "Accept-Language": "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2",
@@ -1310,7 +1310,7 @@ async def get_bigo_stream_url(
 async def get_blued_stream_url(
     url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None
 ) -> dict[str, object]:
-    # 获取 Blued 直播流地址
+    # 获取 blued 直播流地址
     headers = {
         "User-Agent": "ios/7.830 (ios 17.0; ; iPhone 15 (A2846/A3089/A3090/A3092))",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -1339,7 +1339,7 @@ async def get_blued_stream_url(
 
 @trace_error_decorator
 async def login_sooplive(username: str, password: str, proxy_addr: OptionalStr = None) -> OptionalStr:
-    # SOOP 平台登录获取认证 Cookie
+    # SOOP(原AfreecaTV) 平台登录获取认证 Cookie
     if len(username) < 6 or len(password) < 10:
         raise RuntimeError(
             "sooplive login failed! Please enter the correct account and password for the sooplive "
@@ -1389,7 +1389,7 @@ async def login_sooplive(username: str, password: str, proxy_addr: OptionalStr =
 async def get_sooplive_cdn_url(
     broad_no: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None
 ) -> dict[str, object]:
-    # 获取 SOOP 平台 CDN 流地址
+    # 获取 SOOP(原AfreecaTV) 平台 CDN 流地址
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0",
         "Accept-Language": "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2",
@@ -1420,7 +1420,7 @@ async def get_sooplive_cdn_url(
 async def get_sooplive_tk(
     url: str, rtype: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None
 ) -> str | tuple[str, str]:
-    # 获取 SOOP 平台临时访问 token
+    # 获取 SOOP(原AfreecaTV) 平台临时访问 token
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
         "Origin": "https://play.sooplive.co.kr",
@@ -1464,7 +1464,7 @@ async def get_sooplive_tk(
 
 
 def get_soop_headers(cookies: OptionalStr = None) -> dict[str, str]:
-    # 构造 SOOP 平台请求头
+    # 构造 SOOP(原AfreecaTV) 平台请求头
     headers = {
         "client-id": str(uuid.uuid4()),
         "user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, "
@@ -1476,7 +1476,7 @@ def get_soop_headers(cookies: OptionalStr = None) -> dict[str, str]:
 
 
 async def _get_soop_channel_info_global(bj_id: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> str:
-    # 获取 SOOP 频道信息（内部通用方法）
+    # 获取 SOOP(原AfreecaTV) 频道信息（内部通用方法）
     headers = get_soop_headers(cookies)
     api = "https://api.sooplive.com/v2/channel/info/" + str(bj_id)
     json_str = await async_req(api, proxy_addr=proxy_addr, headers=headers)
@@ -1491,7 +1491,7 @@ async def _get_soop_channel_info_global(bj_id: str, proxy_addr: OptionalStr = No
 async def _get_soop_stream_info_global(
     bj_id: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None
 ) -> tuple[bool, str]:
-    # 获取 SOOP 直播流信息（内部通用方法）
+    # 获取 SOOP(原AfreecaTV) 直播流信息（内部通用方法）
     headers = get_soop_headers(cookies)
     api = "https://api.sooplive.com/v2/stream/info/" + str(bj_id)
     json_str = await async_req(api, proxy_addr=proxy_addr, headers=headers)
@@ -1555,7 +1555,7 @@ async def get_sooplive_stream_data(
     username: OptionalStr = None,
     password: OptionalStr = None,
 ) -> dict[str, object]:
-    # 获取 SOOP 平台直播流数据
+    # 获取 SOOP(原AfreecaTV) 平台直播流数据
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0",
         "Accept-Language": "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2",
@@ -1930,7 +1930,7 @@ async def get_winktv_stream_data(
 
 @trace_error_decorator
 async def login_flextv(username: str, password: str, proxy_addr: OptionalStr = None) -> OptionalStr:
-    # FlexTV 平台登录认证
+    # TTingLive(原Flextv) 平台登录认证
     headers = {
         "accept": "application/json, text/plain, */*",
         "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
@@ -1977,9 +1977,9 @@ async def login_flextv(username: str, password: str, proxy_addr: OptionalStr = N
 
 
 async def get_flextv_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> str | None:
-    # 获取 FlexTV 直播流地址
+    # 获取 TTingLive(原Flextv) 直播流地址
     async def fetch_data(cookie: OptionalStr = None) -> dict[str, object]:
-        # 抓取 FlexTV 直播数据
+        # 抓取 TTingLive(原Flextv) 直播数据
         headers = {
             "accept": "application/json, text/plain, */*",
             "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
@@ -2016,7 +2016,7 @@ async def get_flextv_stream_data(
     username: OptionalStr = None,
     password: OptionalStr = None,
 ) -> dict[str, object]:
-    # 获取 FlexTV 直播流数据
+    # 获取 TTingLive(原Flextv) 直播流数据
     headers = {
         "accept": "application/json, text/plain, */*",
         "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
@@ -2049,12 +2049,12 @@ async def get_flextv_stream_data(
                 "password are correctly filled in the configuration file."
             )
             if not username or not password or len(username) < 6 or len(password) < 8:
-                raise RuntimeError("FlexTV登录失败！请在config.ini配置文件中填写正确的FlexTV平台的账号和密码")
+                raise RuntimeError("TTingLive(原Flextv)登录失败！请在config.ini配置文件中填写正确的TTingLive(原Flextv)平台的账号和密码")
             new_cookies = await login_flextv(username, password, proxy_addr=proxy_addr)
             if new_cookies:
                 print("Logged into FlexTV platform successfully! Starting to fetch live streaming data...")
             else:
-                raise RuntimeError("FlexTV login failed")
+                raise RuntimeError("TTingLive(原Flextv) login failed")
             cookies = new_cookies if new_cookies else cookies
             if cookies:
                 headers["Cookie"] = cookies
