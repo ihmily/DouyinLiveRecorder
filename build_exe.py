@@ -40,12 +40,13 @@
 #     dist/DouyinLiveRecorder-{ver}-{os}-{arch}.zip     压缩包
 #
 import argparse
+import http.client
 import json
 import os
 import platform
 import re
-import signal
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -54,8 +55,6 @@ import urllib.request
 import zipfile
 from pathlib import Path
 from typing import cast
-
-import http.client
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 APP_NAME = "DouyinLiveRecorder"
@@ -87,7 +86,7 @@ datas += collect_data_files('customtkinter')
 
 hidden_common = [
     'i18n',                          # main.py 内部延迟导入
-    'src.http_clients.async_http',   # main.py 经 __import__ 动态导入
+    'src.async_http',              # main.py 经 __import__ 动态导入
     'h2',                            # httpx[http2] 懒加载依赖
     'exejs',                         # PyExecJS 继任者，try/except 条件导入需显式收集
 ]
@@ -97,12 +96,12 @@ hidden_web = hidden_common + collect_submodules('uvicorn')
 # 注意：PyInstaller 6.x 已移除 cipher / zipped_data / zipfiles，spec 语法为 v6 风格
 a_cli = Analysis(['main.py'], pathex=[], datas=datas, hiddenimports=hidden_common,
                  excludes=['tkinter', 'customtkinter', 'pystray', 'PIL',
-                           'fastapi', 'uvicorn', 'starlette'],
+                           'fastapi', 'uvicorn', 'starlette', 'brotlicffi'],
                  noarchive=False)
 a_gui = Analysis(['gui.py'], pathex=[], datas=[], hiddenimports=hidden_common,
-                 excludes=['fastapi', 'uvicorn', 'starlette'], noarchive=False)
+                 excludes=['fastapi', 'uvicorn', 'starlette', 'brotlicffi'], noarchive=False)
 a_web = Analysis(['web.py'], pathex=[], datas=[], hiddenimports=hidden_web,
-                 excludes=['tkinter', 'customtkinter', 'pystray'], noarchive=False)
+                 excludes=['tkinter', 'customtkinter', 'pystray', 'brotlicffi'], noarchive=False)
 
 pyz_cli = PYZ(a_cli.pure)
 pyz_gui = PYZ(a_gui.pure)
@@ -125,10 +124,10 @@ coll = COLLECT(
 
 
 def read_version() -> str:
-    # 从 main.py 中解析版本号，解析失败时回退到 0.0.0
-    text = (PROJECT_ROOT / "main.py").read_text(encoding="utf-8")
-    m = re.search(r'^version:\s*str\s*=\s*["\'](v?[\w.\-]+)["\']', text, re.M)
-    return m.group(1).lstrip("v") if m else "0.0.0"
+    # 从 pyproject.toml 中解析版本号（单一事实源），解析失败时回退到 0.0.0
+    text = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    m = re.search(r'^version\s*=\s*["\'](.+?)["\']', text, re.M)
+    return m.group(1) if m else "0.0.0"
 
 
 def preflight_syntax_check() -> None:
@@ -204,13 +203,14 @@ def copy_external_binaries(include_runtime: bool = True) -> None:
 
 # ==================== 运行时二进制下载（--dual full 版本） ====================
 
+
 def _download_file(url: str, dest: Path, desc: str) -> None:
     # 下载文件到 dest（带简单进度输出）。urllib 默认跟随重定向。
     print(f"[build] 下载 {desc}：{url}")
     with urllib.request.urlopen(url, timeout=180) as resp:
-        total = int(resp.headers.get('Content-Length', 0))
+        total = int(resp.headers.get("Content-Length", 0))
         downloaded = 0
-        with open(dest, 'wb') as f:
+        with open(dest, "wb") as f:
             while True:
                 chunk = resp.read(65536)
                 if not chunk:
@@ -219,8 +219,7 @@ def _download_file(url: str, dest: Path, desc: str) -> None:
                 downloaded += len(chunk)
                 if total:
                     pct = downloaded * 100 // total
-                    print(f"\r[build] {desc}: {downloaded // 1024}KB / {total // 1024}KB ({pct}%)",
-                          end='', flush=True)
+                    print(f"\r[build] {desc}: {downloaded // 1024}KB / {total // 1024}KB ({pct}%)", end="", flush=True)
         print()
 
 
@@ -297,24 +296,29 @@ def _download_ffmpeg(target_dir: Path) -> bool:
             # gyan.dev zip 内结构：ffmpeg-release-essentials/bin/{ffmpeg,ffprobe}.exe
             with zipfile.ZipFile(archive) as zf:
                 for member in zf.namelist():
-                    if '/bin/' in member and not member.endswith('/'):
-                        name = member.split('/bin/')[-1]
+                    if "/bin/" in member and not member.endswith("/"):
+                        name = member.split("/bin/")[-1]
                         if name:
-                            with zf.open(member) as src, open(ffmpeg_dir / name, 'wb') as dst:
+                            with zf.open(member) as src, open(ffmpeg_dir / name, "wb") as dst:
                                 shutil.copyfileobj(src, dst)
 
         elif sys.platform == "darwin":
-            url = ("https://evermeet.ca/ffmpeg/getrelease-arm64/zip" if machine == "arm64"
-                   else "https://evermeet.ca/ffmpeg/getrelease/zip")
+            url = (
+                "https://evermeet.ca/ffmpeg/getrelease-arm64/zip"
+                if machine == "arm64"
+                else "https://evermeet.ca/ffmpeg/getrelease/zip"
+            )
             archive = target_dir / "_ffmpeg_temp.zip"
             _download_file(url, archive, "ffmpeg")
             with zipfile.ZipFile(archive) as zf:
                 zf.extractall(ffmpeg_dir)
 
         else:  # Linux
-            url = ("https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz"
-                   if machine in ("arm64", "aarch64")
-                   else "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz")
+            url = (
+                "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz"
+                if machine in ("arm64", "aarch64")
+                else "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
+            )
             archive = target_dir / "_ffmpeg_temp.tar.xz"
             _download_file(url, archive, "ffmpeg")
             with tempfile.TemporaryDirectory(dir=target_dir) as tmp:
@@ -380,16 +384,20 @@ def _launch(exe: Path) -> subprocess.Popen[str]:
     start_new_session = not IS_WIN
     creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if IS_WIN else 0
     return subprocess.Popen(
-        [str(exe)], cwd=RELEASE_DIR,
+        [str(exe)],
+        cwd=RELEASE_DIR,
         stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, encoding="utf-8", errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
         start_new_session=start_new_session,
         creationflags=creationflags,
     )
 
 
-def _kill_tree(proc: subprocess.Popen[str]) -> None:
+def _kill_tree(proc: subprocess.Popen[str]) -> None:  # pylint: disable=not-callable,no-member
     # 杀掉整个进程树（应用本体 + 其 spawn 的 ffmpeg 等子进程）。
     # 仅杀父进程会留下孤儿化的 ffmpeg，最终被 runner 的 orphan-process 清理收尸，
     # 产生大量 "Terminate orphan process" 噪声；此处连根拔起避免之。
@@ -398,7 +406,8 @@ def _kill_tree(proc: subprocess.Popen[str]) -> None:
         # taskkill /T 递归终止进程树，/F 强制；进程已退出时忽略错误
         _ = subprocess.run(
             ["taskkill", "/T", "/F", "/PID", str(pid)],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
         return
     # Unix：kill 整个进程组（子进程已是新会话首领，PGID == PID）。
@@ -407,14 +416,14 @@ def _kill_tree(proc: subprocess.Popen[str]) -> None:
     if getpgid is None:
         return
     try:
-        pgid = getpgid(pid)
+        pgid = getpgid(pid)  # type: ignore[misc]  # pylint: disable=not-callable
     except ProcessLookupError:
         return
     killpg = getattr(os, "killpg", None)
     if killpg is None:
         return
     try:
-        killpg(pgid, getattr(signal, "SIGKILL", 9))
+        killpg(pgid, getattr(signal, "SIGKILL", 9))  # type: ignore[misc]  # pylint: disable=not-callable
     except ProcessLookupError:
         pass
 
@@ -485,8 +494,7 @@ def smoke_web(timeout: int = 90, port: int = 8000) -> None:
         while time.time() - start < timeout and proc.poll() is None:
             for host in hosts:
                 try:
-                    with cast(http.client.HTTPResponse,
-                              opener.open(f"http://{host}:{port}/", timeout=3)) as resp:
+                    with cast(http.client.HTTPResponse, opener.open(f"http://{host}:{port}/", timeout=3)) as resp:
                         if resp.status == 200:
                             ok = True
                             break
@@ -498,9 +506,7 @@ def smoke_web(timeout: int = 90, port: int = 8000) -> None:
     finally:
         _finish(proc, "web", expect_alive=True)
     if not ok:
-        raise RuntimeError(
-            f"[smoke:web] {timeout}s 内 HTTP 探活失败（端口 {port} 被占用或启动过慢也会导致此错误）"
-        )
+        raise RuntimeError(f"[smoke:web] {timeout}s 内 HTTP 探活失败（端口 {port} 被占用或启动过慢也会导致此错误）")
     print("[smoke:web] HTTP 探活成功 ✅")
 
 
@@ -547,10 +553,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=f"{APP_NAME} 打包脚本")
     _ = parser.add_argument("--smoke", action="store_true", help="打包后运行冒烟测试")
     _ = parser.add_argument("--no-zip", action="store_true", help="跳过 zip 压缩")
-    _ = parser.add_argument("--no-runtime", action="store_true",
-                            help="跳过 ffmpeg/node 打包（用户运行时自动下载）")
-    _ = parser.add_argument("--dual", action="store_true",
-                            help="同时生成 lite（无运行时）与 full（下载并打包 ffmpeg+node）两个 zip")
+    _ = parser.add_argument("--no-runtime", action="store_true", help="跳过 ffmpeg/node 打包（用户运行时自动下载）")
+    _ = parser.add_argument(
+        "--dual", action="store_true", help="同时生成 lite（无运行时）与 full（下载并打包 ffmpeg+node）两个 zip"
+    )
     args = parser.parse_args()
     smoke = cast(bool, args.smoke)
     no_zip = cast(bool, args.no_zip)

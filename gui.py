@@ -2,21 +2,21 @@
 # 直播录制器 GUI 界面（基于 CustomTkinter 的现代化重构）
 from __future__ import annotations
 
+import configparser
 import io
 import os
-import sys
-import time
-import signal
-import subprocess
-import threading
 import queue
 import re
-import configparser
+import signal
+import subprocess
+import sys
+import threading
+import time
 import tkinter as tk
-from tkinter import messagebox
 from collections.abc import Callable
 from datetime import datetime
-from typing import Literal, TYPE_CHECKING, cast, final
+from tkinter import messagebox
+from typing import TYPE_CHECKING, Literal, cast, final
 
 import customtkinter as ctk
 from PIL import Image, ImageDraw
@@ -29,6 +29,7 @@ from PIL import Image, ImageDraw
 # 经 self._setup_ui() 调用、运行期必然已赋值；类型检查器无法跨方法调用证明，故关闭
 # reportUninitializedInstanceVariable（类体已做非可选类型声明，确保 .configure 等方法可类型检查）。
 # pyright: reportUninitializedInstanceVariable=none
+
 
 # 强制标准流以 UTF-8 输出（窗口化 exe 的 stdout/stderr 可能为 None，已做保护）。
 # 保证本进程自身及被它启动/读取的子进程日志在中文 Windows 下不乱码。
@@ -46,6 +47,7 @@ def _fix_encoding() -> None:
                     pass
         try:
             import ctypes
+
             _k32 = ctypes.windll.kernel32
             _k32.SetConsoleOutputCP(65001)
             _k32.SetConsoleCP(65001)
@@ -65,12 +67,14 @@ _fix_encoding()
 
 if TYPE_CHECKING:
     import pystray
+
     # pystray 无类型存根，Icon 推断为 Any。用别名避免在类型表达式里直接写
     # 模块属性 `pystray.Icon`（会触发 reportInvalidTypeForm）。
     PystrayIcon = pystray.Icon
 
 
 # ─── 现代化色彩系统（浅色 / 深色双主题） ──────────────────
+
 
 @final
 class Colors:
@@ -151,7 +155,7 @@ class Fonts:
 
 def _hex_to_rgb(color: str) -> tuple[int, int, int]:
     # 将 #RRGGBB 转为 RGB 元组
-    color = color.lstrip('#')
+    color = color.lstrip("#")
     return (int(color[0:2], 16), int(color[2:4], 16), int(color[4:6], 16))
 
 
@@ -169,7 +173,7 @@ def _mix(color_a: str, color_b: str, ratio: float) -> str:
 class SystemTray:
     # 系统托盘管理器
 
-    def __init__(self, gui_app: 'LiveRecorderGUI'):
+    def __init__(self, gui_app: "LiveRecorderGUI"):
         # 初始化系统托盘管理器
         self.gui = gui_app
         self.icon: "PystrayIcon | None" = None
@@ -178,31 +182,24 @@ class SystemTray:
     def create_icon_image(self) -> Image.Image:
         # 创建现代化托盘图标
         size = 64
-        image = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+        image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
         dc = ImageDraw.Draw(image)
 
         # 圆角矩形背景
         margin = 2
-        dc.rounded_rectangle(
-            (margin, margin, size - margin, size - margin),
-            radius=16, fill=(79, 109, 245, 255)
-        )
+        dc.rounded_rectangle((margin, margin, size - margin, size - margin), radius=16, fill=(79, 109, 245, 255))
 
         # 白色圆环
         ring_margin = 10
         dc.ellipse(
-            (ring_margin, ring_margin, size - ring_margin, size - ring_margin),
-            outline=(255, 255, 255, 230), width=3
+            (ring_margin, ring_margin, size - ring_margin, size - ring_margin), outline=(255, 255, 255, 230), width=3
         )
 
         # 中心录制圆点
         dot_size = 9
         cx = size // 2
         cy = size // 2
-        dc.ellipse(
-            (cx - dot_size, cy - dot_size, cx + dot_size, cy + dot_size),
-            fill=(220, 38, 38, 255)
-        )
+        dc.ellipse((cx - dot_size, cy - dot_size, cx + dot_size, cy + dot_size), fill=(220, 38, 38, 255))
 
         # 提前加载像素数据，避免 ImageDraw 惰性图像在 pystray 保存时触发重入加载崩溃
         image.load()
@@ -247,17 +244,13 @@ class SystemTray:
     def _build_icon(self) -> "PystrayIcon":
         # 构造 pystray Icon（菜单 + 图标位图）。
         import pystray  # 延迟导入：避免 headless 环境在模块顶层即失败
+
         menu = pystray.Menu(
-            pystray.MenuItem('显示主界面', self.on_show, default=True),
-            pystray.MenuItem('最小化到托盘', self.on_minimize),
-            pystray.MenuItem('退出程序', self.on_exit)
+            pystray.MenuItem("显示主界面", self.on_show, default=True),
+            pystray.MenuItem("最小化到托盘", self.on_minimize),
+            pystray.MenuItem("退出程序", self.on_exit),
         )
-        return pystray.Icon(
-            'LiveRecorder',
-            self.create_icon_image(),
-            'LiveRecorder - click to show',
-            menu
-        )
+        return pystray.Icon("LiveRecorder", self.create_icon_image(), "LiveRecorder - click to show", menu)
 
     def _degrade(self, exc: BaseException) -> None:
         # 无系统托盘（headless / 无显示 / 库缺失）时优雅降级，
@@ -327,7 +320,7 @@ class SystemTray:
                 pass
             self.running = False
 
-    def notify(self, message: str, title: str = '直播录制器') -> None:
+    def notify(self, message: str, title: str = "直播录制器") -> None:
         # 显示系统通知
         if self.icon:
             try:
@@ -369,21 +362,21 @@ class AdvancedSettingsWindow:
         header = ctk.CTkFrame(self.window, fg_color=Colors.PRIMARY, corner_radius=0, height=52)
         header.pack(fill=tk.X)
         header.pack_propagate(False)
-        ctk.CTkLabel(header, text="⚙  高级设置", text_color="#FFFFFF",
-                     font=Fonts.heading()).pack(side=tk.LEFT, padx=20, pady=12)
+        ctk.CTkLabel(header, text="⚙  高级设置", text_color="#FFFFFF", font=Fonts.heading()).pack(
+            side=tk.LEFT, padx=20, pady=12
+        )
 
         # 内容区域
         content = ctk.CTkFrame(self.window, fg_color="transparent")
         content.pack(fill=tk.BOTH, expand=True, padx=16, pady=(16, 0))
 
-        ctk.CTkLabel(content, text="📄 配置文件内容 (config/config.ini)",
-                     font=Fonts.body(), anchor=tk.W).pack(fill=tk.X, pady=(0, 8))
+        ctk.CTkLabel(content, text="📄 配置文件内容 (config/config.ini)", font=Fonts.body(), anchor=tk.W).pack(
+            fill=tk.X, pady=(0, 8)
+        )
 
         # 编辑器（等宽字体）
         self.config_text = ctk.CTkTextbox(
-            content, wrap="none", font=Fonts.mono(),
-            corner_radius=10, border_width=1,
-            activate_scrollbars=True
+            content, wrap="none", font=Fonts.mono(), corner_radius=10, border_width=1, activate_scrollbars=True
         )
         self.config_text.pack(fill=tk.BOTH, expand=True)
 
@@ -391,23 +384,38 @@ class AdvancedSettingsWindow:
         btn_frame = ctk.CTkFrame(self.window, fg_color="transparent")
         btn_frame.pack(fill=tk.X, padx=16, pady=16)
 
-        ctk.CTkButton(btn_frame, text="取消", command=self.window.destroy,
-                      fg_color="transparent", border_width=1,
-                      text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
-                      border_color=(Colors.BORDER_LIGHT, Colors.BORDER_DARK),
-                      hover_color=(Colors.BG_LIGHT, Colors.BG_DARK),
-                      font=Fonts.body(), width=110, height=36,
-                      corner_radius=8).pack(side=tk.RIGHT, padx=(8, 0))
+        ctk.CTkButton(
+            btn_frame,
+            text="取消",
+            command=self.window.destroy,
+            fg_color="transparent",
+            border_width=1,
+            text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
+            border_color=(Colors.BORDER_LIGHT, Colors.BORDER_DARK),
+            hover_color=(Colors.BG_LIGHT, Colors.BG_DARK),
+            font=Fonts.body(),
+            width=110,
+            height=36,
+            corner_radius=8,
+        ).pack(side=tk.RIGHT, padx=(8, 0))
 
-        ctk.CTkButton(btn_frame, text="💾  保存配置", command=self.save_config,
-                      fg_color=Colors.PRIMARY, hover_color=Colors.PRIMARY_HOVER,
-                      text_color="#FFFFFF", font=Fonts.body(bold=True),
-                      width=130, height=36, corner_radius=8).pack(side=tk.RIGHT)
+        ctk.CTkButton(
+            btn_frame,
+            text="💾  保存配置",
+            command=self.save_config,
+            fg_color=Colors.PRIMARY,
+            hover_color=Colors.PRIMARY_HOVER,
+            text_color="#FFFFFF",
+            font=Fonts.body(bold=True),
+            width=130,
+            height=36,
+            corner_radius=8,
+        ).pack(side=tk.RIGHT)
 
     def _load_config(self) -> None:
         # 加载 config.ini 到编辑器
         try:
-            with open(self.config_file, 'r', encoding='utf-8-sig') as f:
+            with open(self.config_file, "r", encoding="utf-8-sig") as f:
                 content = f.read()
             self.config_text.delete("1.0", tk.END)
             self.config_text.insert("1.0", content)
@@ -431,10 +439,10 @@ class AdvancedSettingsWindow:
 
 def _save_text_widget_to_file(text_widget: tk.Text, file_path: str) -> None:
     # 从文本控件读取内容并写入文件
-    content = text_widget.get("1.0", tk.END).rstrip('\n')
-    if content and not content.endswith('\n'):
-        content += '\n'
-    with open(file_path, 'w', encoding='utf-8-sig') as f:
+    content = text_widget.get("1.0", tk.END).rstrip("\n")
+    if content and not content.endswith("\n"):
+        content += "\n"
+    with open(file_path, "w", encoding="utf-8-sig") as f:
         f.write(content)
 
 
@@ -448,9 +456,10 @@ def _send_ctrl_break_to_child(pid: int) -> bool:
     # 回调保护自身，再向该控制台所有进程广播 CTRL_BREAK，最后还原。
     # 子进程需以 CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP 启动
     # （CREATE_NEW_PROCESS_GROUP 会屏蔽 CTRL_C，所以必须发 CTRL_BREAK）。
-    if sys.platform != 'win32':
+    if sys.platform != "win32":
         return False
     import ctypes
+
     k32 = ctypes.windll.kernel32
     had_console = bool(cast(int, k32.GetConsoleWindow()))
     handler_routine = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_ulong)
@@ -482,16 +491,16 @@ class LiveRecorderGUI:
     # 直播录制 GUI 主类
 
     # 常量定义
-    ANSI_ESCAPE_PATTERN = re.compile(r'\x1b\[[0-9;]*m')
+    ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-9;]*m")
     # 画质降级告警："{name} 画质降级：设置 {zh}({code}) 实际 {zh}({code})"
-    QUALITY_DOWNGRADE_PATTERN = re.compile(r'(.+?) 画质降级：设置 (.+?)\((.+?)\) 实际 (.+?)\((.+?)\)')
+    QUALITY_DOWNGRADE_PATTERN = re.compile(r"(.+?) 画质降级：设置 (.+?)\((.+?)\) 实际 (.+?)\((.+?)\)")
     # 录制中行："{name}[{quality}] 正在录制中 {duration}"
-    RECORDING_LINE_PATTERN = re.compile(r'^(.+?)\[(.+?)\] 正在录制中')
+    RECORDING_LINE_PATTERN = re.compile(r"^(.+?)\[(.+?)\] 正在录制中")
     _MAX_LOG_LINES = 1000
     _LOG_TRIM_TO = 800
     _LOG_FLUSH_INTERVAL = 200
-    _STATUS_REFRESH_INTERVAL = 10000          # 未录制时的刷新间隔（毫秒）
-    _STATUS_REFRESH_INTERVAL_ACTIVE = 3000   # 有录制直播间时的刷新间隔（毫秒）
+    _STATUS_REFRESH_INTERVAL = 10000  # 未录制时的刷新间隔（毫秒）
+    _STATUS_REFRESH_INTERVAL_ACTIVE = 3000  # 有录制直播间时的刷新间隔（毫秒）
 
     # 由构建方法（_build_*）初始化的实例组件声明，供类型检查器识别。
     # customtkinter 无类型存根，CTkFrame 推断为 Unknown；改用有 typeshed 存根的
@@ -544,7 +553,7 @@ class LiveRecorderGUI:
         # 冻结后 GUI 模块位于 exe 同级的 _internal/，而 config/ ffmpeg/ node/ downloads/
         # 等运行时资源保持在 exe 同级目录（_internal 的父目录）。源码运行时
         # self.script_dir 即项目根，无需回退。
-        if os.path.basename(os.path.normpath(self.script_dir)) == '_internal':
+        if os.path.basename(os.path.normpath(self.script_dir)) == "_internal":
             self.app_root = os.path.dirname(self.script_dir)
         else:
             self.app_root = self.script_dir
@@ -696,9 +705,7 @@ class LiveRecorderGUI:
     def _build_sidebar(self) -> "tk.Frame":
         # 构建左侧导航栏
         sidebar = ctk.CTkFrame(
-            self.root, corner_radius=0,
-            fg_color=(Colors.SIDEBAR_LIGHT, Colors.SIDEBAR_DARK),
-            border_width=0
+            self.root, corner_radius=0, fg_color=(Colors.SIDEBAR_LIGHT, Colors.SIDEBAR_DARK), border_width=0
         )
         sidebar.grid(row=0, column=0, sticky="nsew")
         sidebar.grid_propagate(False)
@@ -709,34 +716,38 @@ class LiveRecorderGUI:
         ctk.CTkLabel(brand, text="🎬", font=ctk.CTkFont(size=30)).pack(side=tk.LEFT)
         brand_text = ctk.CTkFrame(brand, fg_color="transparent")
         brand_text.pack(side=tk.LEFT, padx=(10, 0))
-        ctk.CTkLabel(brand_text, text="直播录制", font=Fonts.title(),
-                     text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK)).pack(anchor=tk.W)
-        ctk.CTkLabel(brand_text, text="DouyinLiveRecorder", font=Fonts.small(),
-                     text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK)).pack(anchor=tk.W)
+        ctk.CTkLabel(
+            brand_text, text="直播录制", font=Fonts.title(), text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK)
+        ).pack(anchor=tk.W)
+        ctk.CTkLabel(
+            brand_text,
+            text="DouyinLiveRecorder",
+            font=Fonts.small(),
+            text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
+        ).pack(anchor=tk.W)
 
         # 状态胶囊
         self.status_pill = ctk.CTkFrame(
-            sidebar, corner_radius=20, height=38,
+            sidebar,
+            corner_radius=20,
+            height=38,
             fg_color=(Colors.BG_LIGHT, Colors.BG_DARK),
             border_width=1,
-            border_color=(Colors.BORDER_LIGHT, Colors.BORDER_DARK)
+            border_color=(Colors.BORDER_LIGHT, Colors.BORDER_DARK),
         )
         self.status_pill.pack(fill=tk.X, padx=16, pady=(14, 6))
         self.status_pill.pack_propagate(False)
 
-        self._sidebar_dot = tk.Canvas(
-            self.status_pill, width=12, height=12,
-            highlightthickness=0, bd=0
-        )
+        self._sidebar_dot = tk.Canvas(self.status_pill, width=12, height=12, highlightthickness=0, bd=0)
         self._sidebar_dot.pack(side=tk.LEFT, padx=(14, 8))
-        self._sidebar_dot_item = self._sidebar_dot.create_oval(
-            1, 1, 11, 11, fill=Colors.DANGER, outline=""
-        )
+        self._sidebar_dot_item = self._sidebar_dot.create_oval(1, 1, 11, 11, fill=Colors.DANGER, outline="")
         self._sync_dot_bg()
 
         self.sidebar_status_label = ctk.CTkLabel(
-            self.status_pill, text="未运行", font=Fonts.body(bold=True),
-            text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK)
+            self.status_pill,
+            text="未运行",
+            font=Fonts.body(bold=True),
+            text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
         )
         self.sidebar_status_label.pack(side=tk.LEFT)
 
@@ -754,40 +765,53 @@ class LiveRecorderGUI:
         bottom.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=16)
 
         # 外观切换
-        ctk.CTkLabel(bottom, text="外观模式", font=Fonts.small(),
-                     text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
-                     anchor=tk.W).pack(fill=tk.X, padx=6, pady=(0, 4))
+        ctk.CTkLabel(
+            bottom, text="外观模式", font=Fonts.small(), text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK), anchor=tk.W
+        ).pack(fill=tk.X, padx=6, pady=(0, 4))
         self.appearance_menu = ctk.CTkOptionMenu(
-            bottom, values=["跟随系统", "浅色", "深色"],
+            bottom,
+            values=["跟随系统", "浅色", "深色"],
             command=self._on_appearance_change,
-            font=Fonts.body(), corner_radius=8, height=34,
+            font=Fonts.body(),
+            corner_radius=8,
+            height=34,
             fg_color=(Colors.BG_LIGHT, Colors.BG_DARK),
             button_color=("#D6DAE5", "#2A3040"),
             button_hover_color=("#C3C9D8", "#343B4E"),
             text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
             dropdown_fg_color=(Colors.CARD_LIGHT, Colors.CARD_DARK),
             dropdown_text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
-            dropdown_hover_color=(Colors.PRIMARY_SOFT_LIGHT, Colors.PRIMARY_SOFT_DARK)
+            dropdown_hover_color=(Colors.PRIMARY_SOFT_LIGHT, Colors.PRIMARY_SOFT_DARK),
         )
         self.appearance_menu.pack(fill=tk.X, padx=2, pady=(0, 12))
         self.appearance_menu.set("跟随系统")
 
         ctk.CTkButton(
-            bottom, text="📥   最小化到托盘", command=self.minimize_to_tray,
-            font=Fonts.body(), height=38, corner_radius=8,
+            bottom,
+            text="📥   最小化到托盘",
+            command=self.minimize_to_tray,
+            font=Fonts.body(),
+            height=38,
+            corner_radius=8,
             fg_color="transparent",
             text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
             border_width=1,
             border_color=(Colors.BORDER_LIGHT, Colors.BORDER_DARK),
             hover_color=(Colors.BG_LIGHT, Colors.BG_DARK),
-            anchor=tk.W
+            anchor=tk.W,
         ).pack(fill=tk.X, pady=(0, 8))
 
         ctk.CTkButton(
-            bottom, text="❌   彻底退出", command=self.quit_application,
-            font=Fonts.body(bold=True), height=38, corner_radius=8,
-            fg_color=Colors.DANGER, hover_color=Colors.DANGER_HOVER,
-            text_color="#FFFFFF", anchor=tk.W
+            bottom,
+            text="❌   彻底退出",
+            command=self.quit_application,
+            font=Fonts.body(bold=True),
+            height=38,
+            corner_radius=8,
+            fg_color=Colors.DANGER,
+            hover_color=Colors.DANGER_HOVER,
+            text_color="#FFFFFF",
+            anchor=tk.W,
         ).pack(fill=tk.X)
 
         return sidebar
@@ -795,12 +819,16 @@ class LiveRecorderGUI:
     def _add_nav_button(self, parent: ctk.CTkFrame, page_id: str, text: str) -> None:
         # 添加侧边栏导航按钮
         btn = ctk.CTkButton(
-            parent, text=text, command=lambda: self._show_page(page_id),
-            font=Fonts.body(), height=42, corner_radius=8,
+            parent,
+            text=text,
+            command=lambda: self._show_page(page_id),
+            font=Fonts.body(),
+            height=42,
+            corner_radius=8,
             fg_color="transparent",
             text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
             hover_color=(Colors.BG_LIGHT, Colors.BG_DARK),
-            anchor=tk.W
+            anchor=tk.W,
         )
         btn.pack(fill=tk.X, pady=2)
         self._nav_buttons[page_id] = btn
@@ -816,13 +844,11 @@ class LiveRecorderGUI:
                 btn.configure(
                     fg_color=(Colors.PRIMARY_SOFT_LIGHT, Colors.PRIMARY_SOFT_DARK),
                     text_color=(Colors.PRIMARY, "#9DB1FF"),
-                    font=Fonts.body(bold=True)
+                    font=Fonts.body(bold=True),
                 )
             else:
                 btn.configure(
-                    fg_color="transparent",
-                    text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
-                    font=Fonts.body()
+                    fg_color="transparent", text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK), font=Fonts.body()
                 )
 
     def _on_appearance_change(self, choice: str) -> None:
@@ -864,18 +890,19 @@ class LiveRecorderGUI:
     def _create_card(self, parent: ctk.CTkFrame, title: str = "") -> ctk.CTkFrame:
         # 创建圆角卡片容器
         card = ctk.CTkFrame(
-            parent, corner_radius=12,
+            parent,
+            corner_radius=12,
             fg_color=(Colors.CARD_LIGHT, Colors.CARD_DARK),
             border_width=1,
-            border_color=(Colors.BORDER_LIGHT, Colors.BORDER_DARK)
+            border_color=(Colors.BORDER_LIGHT, Colors.BORDER_DARK),
         )
         if title:
             header = ctk.CTkFrame(card, fg_color="transparent", height=46)
             header.pack(fill=tk.X)
             header.pack_propagate(False)
-            ctk.CTkLabel(header, text=title, font=Fonts.body(bold=True),
-                         text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK)
-                         ).pack(side=tk.LEFT, padx=18, pady=12)
+            ctk.CTkLabel(
+                header, text=title, font=Fonts.body(bold=True), text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK)
+            ).pack(side=tk.LEFT, padx=18, pady=12)
         return card
 
     # ─── 页面：控制台 ───────────────────────────────────────
@@ -897,22 +924,21 @@ class LiveRecorderGUI:
         dot_wrap = ctk.CTkFrame(status_card, fg_color="transparent", width=90, height=90)
         dot_wrap.grid(row=0, column=0, padx=(20, 6), pady=22)
         dot_wrap.grid_propagate(False)
-        self._big_dot = tk.Canvas(dot_wrap, width=64, height=64,
-                                  highlightthickness=0, bd=0)
+        self._big_dot = tk.Canvas(dot_wrap, width=64, height=64, highlightthickness=0, bd=0)
         self._big_dot.place(relx=0.5, rely=0.5, anchor=tk.CENTER)
-        self._big_dot_item = self._big_dot.create_oval(8, 8, 56, 56,
-                                                       fill=Colors.DANGER, outline="")
+        self._big_dot_item = self._big_dot.create_oval(8, 8, 56, 56, fill=Colors.DANGER, outline="")
         self._sync_big_dot_bg()
 
         # 中间：状态文字
         mid = ctk.CTkFrame(status_card, fg_color="transparent")
         mid.grid(row=0, column=1, sticky="w", pady=18)
-        self.big_status_label = ctk.CTkLabel(mid, text="待 机", font=Fonts.big_status(),
-                                             text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK))
+        self.big_status_label = ctk.CTkLabel(
+            mid, text="待 机", font=Fonts.big_status(), text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK)
+        )
         self.big_status_label.pack(anchor=tk.W)
-        self.big_status_sub = ctk.CTkLabel(mid, text="录制进程未运行",
-                                           font=Fonts.body(),
-                                           text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK))
+        self.big_status_sub = ctk.CTkLabel(
+            mid, text="录制进程未运行", font=Fonts.body(), text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK)
+        )
         self.big_status_sub.pack(anchor=tk.W, pady=(2, 0))
 
         # 右侧：信息网格（2 列 x 2 行）
@@ -932,18 +958,31 @@ class LiveRecorderGUI:
         ctrl_body.pack(fill=tk.X, padx=18, pady=(0, 16))
 
         self.start_btn = ctk.CTkButton(
-            ctrl_body, text="▶   开始录制", command=self.start_recording,
-            font=Fonts.heading(), height=48, corner_radius=10,
-            fg_color=Colors.SUCCESS, hover_color=Colors.SUCCESS_HOVER,
-            text_color="#FFFFFF", width=200
+            ctrl_body,
+            text="▶   开始录制",
+            command=self.start_recording,
+            font=Fonts.heading(),
+            height=48,
+            corner_radius=10,
+            fg_color=Colors.SUCCESS,
+            hover_color=Colors.SUCCESS_HOVER,
+            text_color="#FFFFFF",
+            width=200,
         )
         self.start_btn.pack(side=tk.LEFT, padx=(0, 12))
 
         self.stop_btn = ctk.CTkButton(
-            ctrl_body, text="⏹   停止录制", command=self.stop_recording,
-            font=Fonts.heading(), height=48, corner_radius=10,
-            fg_color=Colors.DANGER, hover_color=Colors.DANGER_HOVER,
-            text_color="#FFFFFF", width=200, state=tk.DISABLED
+            ctrl_body,
+            text="⏹   停止录制",
+            command=self.stop_recording,
+            font=Fonts.heading(),
+            height=48,
+            corner_radius=10,
+            fg_color=Colors.DANGER,
+            hover_color=Colors.DANGER_HOVER,
+            text_color="#FFFFFF",
+            width=200,
+            state=tk.DISABLED,
         )
         self.stop_btn.pack(side=tk.LEFT)
 
@@ -951,7 +990,7 @@ class LiveRecorderGUI:
             ctrl_body,
             text="启动后将调用 main.py 循环监测 URL 配置中的直播间并自动录制",
             font=Fonts.small(),
-            text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK)
+            text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
         ).pack(side=tk.LEFT, padx=20)
 
         # ── 快捷操作卡片 ──
@@ -962,36 +1001,47 @@ class LiveRecorderGUI:
         quick_body.pack(fill=tk.X, padx=18, pady=(0, 16))
 
         ctk.CTkButton(
-            quick_body, text="📂   打开下载目录", command=self.open_downloads_folder,
-            font=Fonts.body(), height=40, corner_radius=8, width=170,
+            quick_body,
+            text="📂   打开下载目录",
+            command=self.open_downloads_folder,
+            font=Fonts.body(),
+            height=40,
+            corner_radius=8,
+            width=170,
             fg_color=(Colors.BG_LIGHT, Colors.BG_DARK),
             text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
             border_width=1,
             border_color=(Colors.BORDER_LIGHT, Colors.BORDER_DARK),
-            hover_color=(Colors.BORDER_LIGHT, Colors.BORDER_DARK)
+            hover_color=(Colors.BORDER_LIGHT, Colors.BORDER_DARK),
         ).pack(side=tk.LEFT, padx=(0, 10))
 
         ctk.CTkButton(
-            quick_body, text="⚙   高级设置", command=self.open_advanced_settings,
-            font=Fonts.body(), height=40, corner_radius=8, width=150,
+            quick_body,
+            text="⚙   高级设置",
+            command=self.open_advanced_settings,
+            font=Fonts.body(),
+            height=40,
+            corner_radius=8,
+            width=150,
             fg_color=(Colors.BG_LIGHT, Colors.BG_DARK),
             text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
             border_width=1,
             border_color=(Colors.BORDER_LIGHT, Colors.BORDER_DARK),
-            hover_color=(Colors.BORDER_LIGHT, Colors.BORDER_DARK)
+            hover_color=(Colors.BORDER_LIGHT, Colors.BORDER_DARK),
         ).pack(side=tk.LEFT)
 
         return page
 
-    def _add_info_item(self, parent: ctk.CTkFrame, label: str, value: str,
-                       row: int, col: int) -> ctk.CTkLabel:
+    def _add_info_item(self, parent: ctk.CTkFrame, label: str, value: str, row: int, col: int) -> ctk.CTkLabel:
         # 在状态卡片中添加一个信息项，返回值标签便于后续更新
         box = ctk.CTkFrame(parent, fg_color="transparent")
         box.grid(row=row, column=col, padx=16, pady=6, sticky="w")
-        ctk.CTkLabel(box, text=label, font=Fonts.small(),
-                     text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK)).pack(anchor=tk.W)
-        val = ctk.CTkLabel(box, text=value, font=Fonts.body(bold=True),
-                           text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK))
+        ctk.CTkLabel(box, text=label, font=Fonts.small(), text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK)).pack(
+            anchor=tk.W
+        )
+        val = ctk.CTkLabel(
+            box, text=value, font=Fonts.body(bold=True), text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK)
+        )
         val.pack(anchor=tk.W)
         return val
 
@@ -1020,10 +1070,13 @@ class LiveRecorderGUI:
         editor_wrap.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 6))
 
         self.config_text = ctk.CTkTextbox(
-            editor_wrap, wrap="none", font=Fonts.mono(),
-            corner_radius=10, border_width=1,
+            editor_wrap,
+            wrap="none",
+            font=Fonts.mono(),
+            corner_radius=10,
+            border_width=1,
             border_color=(Colors.BORDER_LIGHT, Colors.BORDER_DARK),
-            activate_scrollbars=True
+            activate_scrollbars=True,
         )
         self.config_text.pack(fill=tk.BOTH, expand=True)
 
@@ -1033,7 +1086,7 @@ class LiveRecorderGUI:
             text="每行一个直播链接，支持 # 开头的注释行  │  外部修改文件后将自动重新加载  │  点击窗口关闭按钮将最小化到系统托盘",
             font=Fonts.small(),
             text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
-            anchor=tk.W
+            anchor=tk.W,
         ).pack(fill=tk.X, padx=18, pady=(4, 4))
 
         # 操作按钮
@@ -1041,21 +1094,32 @@ class LiveRecorderGUI:
         btn_row.pack(fill=tk.X, padx=14, pady=(4, 14))
 
         self.reload_btn = ctk.CTkButton(
-            btn_row, text="🔄   重新读取", command=self._load_config,
-            font=Fonts.body(), height=38, corner_radius=8, width=140,
+            btn_row,
+            text="🔄   重新读取",
+            command=self._load_config,
+            font=Fonts.body(),
+            height=38,
+            corner_radius=8,
+            width=140,
             fg_color="transparent",
             text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
             border_width=1,
             border_color=(Colors.BORDER_LIGHT, Colors.BORDER_DARK),
-            hover_color=(Colors.BG_LIGHT, Colors.BG_DARK)
+            hover_color=(Colors.BG_LIGHT, Colors.BG_DARK),
         )
         self.reload_btn.pack(side=tk.RIGHT, padx=(8, 0))
 
         self.save_btn = ctk.CTkButton(
-            btn_row, text="💾   保存 URL 配置", command=self.save_config,
-            font=Fonts.body(bold=True), height=38, corner_radius=8, width=160,
-            fg_color=Colors.PRIMARY, hover_color=Colors.PRIMARY_HOVER,
-            text_color="#FFFFFF"
+            btn_row,
+            text="💾   保存 URL 配置",
+            command=self.save_config,
+            font=Fonts.body(bold=True),
+            height=38,
+            corner_radius=8,
+            width=160,
+            fg_color=Colors.PRIMARY,
+            hover_color=Colors.PRIMARY_HOVER,
+            text_color="#FFFFFF",
         )
         self.save_btn.pack(side=tk.RIGHT)
 
@@ -1077,18 +1141,27 @@ class LiveRecorderGUI:
         term_wrap.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 6))
 
         self.log_text = tk.Text(
-            term_wrap, wrap=tk.WORD,
+            term_wrap,
+            wrap=tk.WORD,
             font=Fonts.mono(),
-            bg=Colors.TERMINAL_BG, fg=Colors.TERMINAL_FG,
+            bg=Colors.TERMINAL_BG,
+            fg=Colors.TERMINAL_FG,
             insertbackground="#FFFFFF",
-            relief=tk.FLAT, bd=0, padx=12, pady=10,
+            relief=tk.FLAT,
+            bd=0,
+            padx=12,
+            pady=10,
             state=tk.DISABLED,
-            selectbackground=Colors.TERMINAL_SELECT, selectforeground="#FFFFFF"
+            selectbackground=Colors.TERMINAL_SELECT,
+            selectforeground="#FFFFFF",
         )
-        scrollbar = ctk.CTkScrollbar(term_wrap, command=cast("Callable[..., None]", self.log_text.yview),
-                                     fg_color=Colors.TERMINAL_BG,
-                                     button_color="#30363D",
-                                     button_hover_color="#484F58")
+        scrollbar = ctk.CTkScrollbar(
+            term_wrap,
+            command=cast("Callable[..., None]", self.log_text.yview),
+            fg_color=Colors.TERMINAL_BG,
+            button_color="#30363D",
+            button_hover_color="#484F58",
+        )
         self.log_text.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 4), pady=4)
         self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -1101,19 +1174,25 @@ class LiveRecorderGUI:
         btn_row.pack(fill=tk.X, padx=14, pady=(4, 14))
 
         ctk.CTkButton(
-            btn_row, text="🗑   清空日志", command=self._clear_log,
-            font=Fonts.body(), height=36, corner_radius=8, width=130,
+            btn_row,
+            text="🗑   清空日志",
+            command=self._clear_log,
+            font=Fonts.body(),
+            height=36,
+            corner_radius=8,
+            width=130,
             fg_color="transparent",
             text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
             border_width=1,
             border_color=(Colors.BORDER_LIGHT, Colors.BORDER_DARK),
-            hover_color=(Colors.BG_LIGHT, Colors.BG_DARK)
+            hover_color=(Colors.BG_LIGHT, Colors.BG_DARK),
         ).pack(side=tk.RIGHT)
 
         ctk.CTkLabel(
-            btn_row, text="日志超过 1000 行将自动截断",
+            btn_row,
+            text="日志超过 1000 行将自动截断",
             font=Fonts.small(),
-            text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK)
+            text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
         ).pack(side=tk.LEFT, padx=6)
 
         return page
@@ -1154,19 +1233,21 @@ class LiveRecorderGUI:
             text="暂无录制中的直播间\n\n启动录制后，将自动检测各直播间的实际画质是否与设置一致",
             font=Fonts.body(),
             text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
-            justify=tk.CENTER
+            justify=tk.CENTER,
         ).pack(pady=60)
 
         return page
 
-    def _add_quality_stat_item(self, parent: ctk.CTkFrame, label: str, value: str,
-                               col: int, color: str) -> ctk.CTkLabel:
+    def _add_quality_stat_item(
+        self, parent: ctk.CTkFrame, label: str, value: str, col: int, color: str
+    ) -> ctk.CTkLabel:
         # 在统计卡片中添加一个统计项，返回值标签便于后续更新
         box = ctk.CTkFrame(parent, fg_color="transparent")
         box.grid(row=0, column=col, padx=10, pady=4, sticky="ew")
         box.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(box, text=label, font=Fonts.small(),
-                     text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK)).pack(anchor=tk.CENTER)
+        ctk.CTkLabel(box, text=label, font=Fonts.small(), text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK)).pack(
+            anchor=tk.CENTER
+        )
         val = ctk.CTkLabel(box, text=value, font=Fonts.title(), text_color=color)
         val.pack(anchor=tk.CENTER, pady=(2, 0))
         return val
@@ -1182,9 +1263,13 @@ class LiveRecorderGUI:
         header.grid_columnconfigure(3, weight=1)
         header.grid_columnconfigure(4, weight=2)
         for col, text in enumerate(["主播名称", "设置画质", "实际画质", "状态", "告警时间"]):
-            ctk.CTkLabel(header, text=text, font=Fonts.small(bold=True),
-                         text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
-                         anchor=tk.W).grid(row=0, column=col, sticky=tk.W, padx=6, pady=4)
+            ctk.CTkLabel(
+                header,
+                text=text,
+                font=Fonts.small(bold=True),
+                text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
+                anchor=tk.W,
+            ).grid(row=0, column=col, sticky=tk.W, padx=6, pady=4)
 
     def _add_quality_data_row(self, name: str, info: dict[str, str | bool | float]) -> None:
         # 添加一行画质监控数据
@@ -1215,19 +1300,25 @@ class LiveRecorderGUI:
         row.grid_columnconfigure(3, weight=1)
         row.grid_columnconfigure(4, weight=2)
 
-        ctk.CTkLabel(row, text=name, font=Fonts.body(),
-                     text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
-                     anchor=tk.W).grid(row=0, column=0, sticky=tk.W, padx=6, pady=5)
-        ctk.CTkLabel(row, text=set_q, font=Fonts.body(),
-                     text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
-                     anchor=tk.W).grid(row=0, column=1, sticky=tk.W, padx=4, pady=5)
-        ctk.CTkLabel(row, text=actual_display, font=Fonts.body(bold=downgraded),
-                     text_color=actual_color, anchor=tk.W).grid(row=0, column=2, sticky=tk.W, padx=4, pady=5)
-        ctk.CTkLabel(row, text=status_text, font=Fonts.body(bold=True),
-                     text_color=status_color, anchor=tk.W).grid(row=0, column=3, sticky=tk.W, padx=4, pady=5)
-        ctk.CTkLabel(row, text=alert_time if downgraded else "—", font=Fonts.small(),
-                     text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
-                     anchor=tk.W).grid(row=0, column=4, sticky=tk.W, padx=4, pady=5)
+        ctk.CTkLabel(
+            row, text=name, font=Fonts.body(), text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK), anchor=tk.W
+        ).grid(row=0, column=0, sticky=tk.W, padx=6, pady=5)
+        ctk.CTkLabel(
+            row, text=set_q, font=Fonts.body(), text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK), anchor=tk.W
+        ).grid(row=0, column=1, sticky=tk.W, padx=4, pady=5)
+        ctk.CTkLabel(
+            row, text=actual_display, font=Fonts.body(bold=downgraded), text_color=actual_color, anchor=tk.W
+        ).grid(row=0, column=2, sticky=tk.W, padx=4, pady=5)
+        ctk.CTkLabel(row, text=status_text, font=Fonts.body(bold=True), text_color=status_color, anchor=tk.W).grid(
+            row=0, column=3, sticky=tk.W, padx=4, pady=5
+        )
+        ctk.CTkLabel(
+            row,
+            text=alert_time if downgraded else "—",
+            font=Fonts.small(),
+            text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
+            anchor=tk.W,
+        ).grid(row=0, column=4, sticky=tk.W, padx=4, pady=5)
 
     def _clear_log(self) -> None:
         # 清空日志显示
@@ -1300,16 +1391,16 @@ class LiveRecorderGUI:
         os.makedirs(config_dir, exist_ok=True)
 
         if not os.path.exists(self.url_config_file):
-            with open(self.url_config_file, 'w', encoding='utf-8-sig') as f:
+            with open(self.url_config_file, "w", encoding="utf-8-sig") as f:
                 f.write("")
 
         try:
-            with open(self.url_config_file, 'r', encoding='utf-8-sig') as f:
+            with open(self.url_config_file, "r", encoding="utf-8-sig") as f:
                 content = f.read()
 
-            current_content = self.config_text.get("1.0", tk.END).rstrip('\n')
+            current_content = self.config_text.get("1.0", tk.END).rstrip("\n")
             # 两侧统一去掉尾部换行再比较，否则文件末尾换行会导致比较永远失败
-            if content.rstrip('\n') == current_content:
+            if content.rstrip("\n") == current_content:
                 self._last_url_config_mtime = os.path.getmtime(self.url_config_file)
                 return
 
@@ -1348,17 +1439,17 @@ class LiveRecorderGUI:
 
             config = configparser.ConfigParser()
             config.optionxform = lambda optionstr: optionstr
-            config.read(self.main_config_file, encoding='utf-8-sig')
+            config.read(self.main_config_file, encoding="utf-8-sig")
 
-            if '录制设置' in config:
-                interval = config['录制设置'].get('循环时间(秒)', '120')
+            if "录制设置" in config:
+                interval = config["录制设置"].get("循环时间(秒)", "120")
                 check_interval = f"{interval}秒"
 
-                fmt = config['录制设置'].get('录制完成后自动转为mp4格式', '否')
-                if fmt == '是':
+                fmt = config["录制设置"].get("录制完成后自动转为mp4格式", "否")
+                if fmt == "是":
                     output_format = "ts → mp4"
                 else:
-                    save_fmt = config['录制设置'].get('视频保存格式ts|mkv|flv|mp4|mp3音频|m4a音频', 'ts')
+                    save_fmt = config["录制设置"].get("视频保存格式ts|mkv|flv|mp4|mp3音频|m4a音频", "ts")
                     output_format = f"ts → {save_fmt}"
 
             self._status_cache = (check_interval, output_format)
@@ -1382,12 +1473,12 @@ class LiveRecorderGUI:
             os.makedirs(downloads_path, exist_ok=True)
 
         try:
-            if sys.platform == 'win32':
+            if sys.platform == "win32":
                 os.startfile(downloads_path)
-            elif sys.platform == 'darwin':
-                subprocess.Popen(['open', downloads_path])
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", downloads_path])
             else:
-                subprocess.Popen(['xdg-open', downloads_path])
+                subprocess.Popen(["xdg-open", downloads_path])
             self._log(f"已打开下载目录: {downloads_path}")
         except Exception as e:
             self._log(f"打开目录失败: {e}", "error")
@@ -1411,12 +1502,12 @@ class LiveRecorderGUI:
             # 若继续用 [sys.executable, main.py] 会递归拉起 GUI；
             # 改为直接调用同目录下的 CLI 可执行文件 DouyinLiveRecorder(.exe)。
             # 源码运行模式保持原行为不变。
-            if getattr(sys, 'frozen', False):
-                cli_name = "DouyinLiveRecorder.exe" if sys.platform == 'win32' else "DouyinLiveRecorder"
+            if getattr(sys, "frozen", False):
+                cli_name = "DouyinLiveRecorder.exe" if sys.platform == "win32" else "DouyinLiveRecorder"
                 # 冻结布局：GUI 自身位于 _internal/，CLI exe 与 GUI exe 同目录（_internal 的父目录）。
                 # 平铺布局下 self.script_dir 即根目录，故向上回退一层仅在处于 _internal 时生效。
                 base_dir = self.script_dir
-                if os.path.basename(os.path.normpath(base_dir)) == '_internal':
+                if os.path.basename(os.path.normpath(base_dir)) == "_internal":
                     base_dir = os.path.dirname(base_dir)
                 cli_exe = os.path.join(base_dir, cli_name)
                 if not os.path.isfile(cli_exe):
@@ -1428,14 +1519,14 @@ class LiveRecorderGUI:
 
             startupinfo = None
             env = os.environ.copy()
-            env['PYTHONIOENCODING'] = 'utf-8'
-            if sys.platform == 'win32':
+            env["PYTHONIOENCODING"] = "utf-8"
+            if sys.platform == "win32":
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
                 startupinfo.wShowWindow = subprocess.SW_HIDE
 
             creation_flags = 0
-            if sys.platform == 'win32':
+            if sys.platform == "win32":
                 # CREATE_NEW_CONSOLE + SW_HIDE：给子进程一个隐藏控制台。
                 # 若用 CREATE_NO_WINDOW，子进程没有控制台，CTRL_BREAK_EVENT
                 # 永远送达不了，main.py 的 safe_exit 无法触发，停止录制只能
@@ -1448,13 +1539,13 @@ class LiveRecorderGUI:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                encoding='utf-8',
-                errors='replace',
+                encoding="utf-8",
+                errors="replace",
                 bufsize=1,
                 cwd=self.script_dir,
                 env=env,
                 startupinfo=startupinfo,
-                creationflags=creation_flags
+                creationflags=creation_flags,
             )
 
             self.process = proc
@@ -1513,7 +1604,7 @@ class LiveRecorderGUI:
         # 因此 CTRL_BREAK_EVENT 能送达 main.py → SIGBREAK → safe_exit →
         # cleanup_all_ffmpeg_processes。proc.terminate() 在 Windows 上是
         # TerminateProcess 硬杀，会把 ffmpeg 孤儿化，仅作兜底。
-        if sys.platform == 'win32':
+        if sys.platform == "win32":
             self._log("正在发送 CTRL_BREAK 信号（触发子进程 safe_exit 清理 ffmpeg）...")
             if not _send_ctrl_break_to_child(proc.pid):
                 self._log("发送 CTRL_BREAK 失败，回退 terminate", "warn")
@@ -1538,18 +1629,12 @@ class LiveRecorderGUI:
 
             if not terminated and proc.poll() is None:
                 try:
-                    if sys.platform == 'win32':
+                    if sys.platform == "win32":
                         # /T 递归杀掉 main.py 及其所有 ffmpeg 子进程，避免孤儿
-                        subprocess.run(
-                            ['taskkill', '/F', '/T', '/PID', str(proc.pid)],
-                            capture_output=True, timeout=5
-                        )
+                        subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, timeout=5)
                     else:
                         proc.kill()
-                        subprocess.run(
-                            ['pkill', '-P', str(proc.pid), '-x', 'ffmpeg'],
-                            capture_output=True, timeout=5
-                        )
+                        subprocess.run(["pkill", "-P", str(proc.pid), "-x", "ffmpeg"], capture_output=True, timeout=5)
                     proc.wait(timeout=5)
                     self._log("进程已强制终止")
                 except subprocess.TimeoutExpired:
@@ -1613,7 +1698,7 @@ class LiveRecorderGUI:
                     time.sleep(0.05)
                     continue
 
-                clean_line = self.ANSI_ESCAPE_PATTERN.sub('', line.rstrip())
+                clean_line = self.ANSI_ESCAPE_PATTERN.sub("", line.rstrip())
                 self._parse_quality_log(clean_line)
                 batch.append((clean_line, "info"))
 
@@ -1673,10 +1758,10 @@ class LiveRecorderGUI:
 
                 self.log_text.insert(tk.END, display_text, tag)
 
-            total_lines = int(self.log_text.index('end-1c').split('.')[0])
+            total_lines = int(self.log_text.index("end-1c").split(".")[0])
             if total_lines > self._MAX_LOG_LINES:
                 trim_count = total_lines - self._LOG_TRIM_TO
-                self.log_text.delete('1.0', f'{trim_count + 1}.0')
+                self.log_text.delete("1.0", f"{trim_count + 1}.0")
 
             self.log_text.see(tk.END)
             self.log_text.config(state=tk.DISABLED)
@@ -1737,17 +1822,17 @@ class LiveRecorderGUI:
     def _parse_quality_log(self, line: str) -> None:
         # 解析子进程日志行，提取画质降级告警和录制状态信息。
         # 可在输出线程中调用（仅操作 _quality_data，不触碰 Tk 对象）。
-        line = line.lstrip('\r')
+        line = line.lstrip("\r")
 
         # 剥离 loguru 前缀（控制台格式 "{time} | {level} - {message}"，
         # 文件格式 "{time} | {level} | {module}:{func}:{line} - {message}"）。
         # 找到最后一个 " | " 后的 " - "，取其后内容作为 message。
         msg = line
-        if ' | ' in line:
-            pipe_idx = line.rfind(' | ')
-            dash_idx = line.find(' - ', pipe_idx)
+        if " | " in line:
+            pipe_idx = line.rfind(" | ")
+            dash_idx = line.find(" - ", pipe_idx)
             if dash_idx > 0:
-                msg = line[dash_idx + 3:]
+                msg = line[dash_idx + 3 :]
 
         # 画质降级告警："{name} 画质降级：设置 {zh}({code}) 实际 {zh}({code})"
         m = self.QUALITY_DOWNGRADE_PATTERN.search(msg)
@@ -1757,15 +1842,17 @@ class LiveRecorderGUI:
             actual_zh, actual_code = m.group(4), m.group(5)
             with self._quality_lock:
                 info = self._quality_data.setdefault(name, {})
-                info.update({
-                    "set_quality": set_zh,
-                    "actual_quality": actual_zh,
-                    "downgraded": True,
-                    "alert_time": self._get_timestamp(),
-                    "alert_message": f"设置 {set_zh}({set_code}) 实际 {actual_zh}({actual_code})",
-                    "recording": True,
-                    "last_seen": time.time(),
-                })
+                info.update(
+                    {
+                        "set_quality": set_zh,
+                        "actual_quality": actual_zh,
+                        "downgraded": True,
+                        "alert_time": self._get_timestamp(),
+                        "alert_message": f"设置 {set_zh}({set_code}) 实际 {actual_zh}({actual_code})",
+                        "recording": True,
+                        "last_seen": time.time(),
+                    }
+                )
             return
 
         # 录制中行："{name}[{quality}] 正在录制中 {duration}"
@@ -1791,7 +1878,7 @@ class LiveRecorderGUI:
 
     def _update_quality_display(self) -> None:
         # 更新画质监控页面显示（仅在 UI 线程中调用）
-        if not hasattr(self, '_quality_scroll'):
+        if not hasattr(self, "_quality_scroll"):
             return
 
         now = time.time()
@@ -1801,8 +1888,7 @@ class LiveRecorderGUI:
                 if info.get("recording") and now - cast(float, info.get("last_seen", 0)) > 30:
                     info["recording"] = False
 
-            data = {name: dict(info) for name, info in self._quality_data.items()
-                    if info.get("recording")}
+            data = {name: dict(info) for name, info in self._quality_data.items() if info.get("recording")}
 
         # 数据未变化时跳过重建，避免闪烁
         if data == self._quality_last_displayed:
@@ -1819,7 +1905,7 @@ class LiveRecorderGUI:
                 text="暂无录制中的直播间\n\n启动录制后，将自动检测各直播间的实际画质是否与设置一致",
                 font=Fonts.body(),
                 text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
-                justify=tk.CENTER
+                justify=tk.CENTER,
             ).pack(pady=60)
         else:
             # 表头 + 数据行
@@ -1893,7 +1979,7 @@ class LiveRecorderGUI:
         # 最小化到托盘；托盘不可用（如 Linux 无 X11）时降级为普通最小化，避免窗口无法恢复
         if self.system_tray and self.system_tray.running:
             self.root.withdraw()
-            self.system_tray.notify('程序已最小化到系统托盘，双击托盘图标可恢复窗口')
+            self.system_tray.notify("程序已最小化到系统托盘，双击托盘图标可恢复窗口")
         else:
             self.root.iconify()
             self._log("系统托盘不可用，已改为最小化到任务栏", "warn")
@@ -1918,7 +2004,7 @@ class LiveRecorderGUI:
         proc = self.process
         child_pid = proc.pid if proc is not None else None
         if proc is not None:
-            if sys.platform == 'win32':
+            if sys.platform == "win32":
                 if not _send_ctrl_break_to_child(proc.pid):
                     proc.terminate()
             else:
@@ -1932,17 +2018,11 @@ class LiveRecorderGUI:
             except subprocess.TimeoutExpired:
                 # main.py 未能自行退出，整树强杀（含其下所有 ffmpeg，避免孤儿）
                 try:
-                    if sys.platform == 'win32':
-                        subprocess.run(
-                            ['taskkill', '/F', '/T', '/PID', str(proc.pid)],
-                            capture_output=True, timeout=5
-                        )
+                    if sys.platform == "win32":
+                        subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, timeout=5)
                     else:
                         proc.kill()
-                        subprocess.run(
-                            ['pkill', '-P', str(proc.pid), '-x', 'ffmpeg'],
-                            capture_output=True, timeout=5
-                        )
+                        subprocess.run(["pkill", "-P", str(proc.pid), "-x", "ffmpeg"], capture_output=True, timeout=5)
                     proc.wait(timeout=5)
                 except Exception:
                     pass
@@ -1993,12 +2073,11 @@ class LiveRecorderGUI:
         found = False
 
         try:
-            if sys.platform == 'win32':
+            if sys.platform == "win32":
                 if target_pid is not None:
                     try:
                         subprocess.run(
-                            ['taskkill', '/F', '/T', '/PID', str(target_pid)],
-                            capture_output=True, timeout=5
+                            ["taskkill", "/F", "/T", "/PID", str(target_pid)], capture_output=True, timeout=5
                         )
                         found = True
                         self._log(f"已通过 taskkill 清理 PID {target_pid} 的进程树（含 ffmpeg）")
@@ -2007,28 +2086,22 @@ class LiveRecorderGUI:
                 # 兜底：按镜像名清理 GUI 直接派生的 ffmpeg（极少出现）
                 try:
                     subprocess.run(
-                        ['taskkill', '/F', '/FI', 'IMAGENAME eq ffmpeg.exe',
-                         '/FI', f'PARENTPID eq {os.getpid()}'],
-                        capture_output=True, timeout=3
+                        ["taskkill", "/F", "/FI", "IMAGENAME eq ffmpeg.exe", "/FI", f"PARENTPID eq {os.getpid()}"],
+                        capture_output=True,
+                        timeout=3,
                     )
                 except Exception:
                     pass
             else:
                 if target_pid is not None:
                     try:
-                        subprocess.run(
-                            ['pkill', '-P', str(target_pid), '-x', 'ffmpeg'],
-                            capture_output=True, timeout=3
-                        )
+                        subprocess.run(["pkill", "-P", str(target_pid), "-x", "ffmpeg"], capture_output=True, timeout=3)
                         found = True
                         self._log(f"已通过 pkill 清理 PID {target_pid} 下的 ffmpeg 进程")
                     except Exception as e:
                         self._log(f"pkill 执行失败: {e}")
                 try:
-                    subprocess.run(
-                        ['pkill', '-P', str(os.getpid()), '-x', 'ffmpeg'],
-                        capture_output=True, timeout=3
-                    )
+                    subprocess.run(["pkill", "-P", str(os.getpid()), "-x", "ffmpeg"], capture_output=True, timeout=3)
                 except Exception:
                     pass
 
@@ -2062,11 +2135,13 @@ class LiveRecorderGUI:
         dialog.geometry(f"+{x}+{y}")
 
         ctk.CTkLabel(dialog, text="🎬", font=ctk.CTkFont(size=32)).pack(pady=(24, 8))
-        ctk.CTkLabel(dialog, text="请选择关闭方式",
-                     font=Fonts.heading()).pack()
-        ctk.CTkLabel(dialog, text="您可以最小化到系统托盘，或完全退出程序",
-                     font=Fonts.small(),
-                     text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK)).pack(pady=(4, 18))
+        ctk.CTkLabel(dialog, text="请选择关闭方式", font=Fonts.heading()).pack()
+        ctk.CTkLabel(
+            dialog,
+            text="您可以最小化到系统托盘，或完全退出程序",
+            font=Fonts.small(),
+            text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
+        ).pack(pady=(4, 18))
 
         btn_frame = ctk.CTkFrame(dialog, fg_color="transparent")
         btn_frame.pack(padx=16, pady=(0, 16))
@@ -2081,21 +2156,36 @@ class LiveRecorderGUI:
             self.quit_application()
             dialog.destroy()
 
-        ctk.CTkButton(btn_frame, text="📥   最小化到托盘", command=minimize_to_tray_and_close,
-                      width=160, height=40, corner_radius=8,
-                      fg_color=Colors.PRIMARY, hover_color=Colors.PRIMARY_HOVER,
-                      text_color="#FFFFFF",
-                      font=Fonts.body(bold=True)).pack(side=tk.LEFT, padx=(0, 10))
+        ctk.CTkButton(
+            btn_frame,
+            text="📥   最小化到托盘",
+            command=minimize_to_tray_and_close,
+            width=160,
+            height=40,
+            corner_radius=8,
+            fg_color=Colors.PRIMARY,
+            hover_color=Colors.PRIMARY_HOVER,
+            text_color="#FFFFFF",
+            font=Fonts.body(bold=True),
+        ).pack(side=tk.LEFT, padx=(0, 10))
 
-        ctk.CTkButton(btn_frame, text="❌   完全退出", command=quit_and_close,
-                      width=140, height=40, corner_radius=8,
-                      fg_color=Colors.DANGER, hover_color=Colors.DANGER_HOVER,
-                      text_color="#FFFFFF",
-                      font=Fonts.body(bold=True)).pack(side=tk.LEFT)
+        ctk.CTkButton(
+            btn_frame,
+            text="❌   完全退出",
+            command=quit_and_close,
+            width=140,
+            height=40,
+            corner_radius=8,
+            fg_color=Colors.DANGER,
+            hover_color=Colors.DANGER_HOVER,
+            text_color="#FFFFFF",
+            font=Fonts.body(bold=True),
+        ).pack(side=tk.LEFT)
 
         # 键盘快捷键
         def _on_escape(_event: object = None) -> None:
             dialog.destroy()
+
         dialog.bind("<Escape>", _on_escape)
 
         # 延迟 grab，等待窗口可见

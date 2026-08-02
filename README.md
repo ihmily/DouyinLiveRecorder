@@ -155,11 +155,9 @@ DouyinLiveRecorder/
 │   ├── web_api.py             # Web 管理面板 FastAPI 应用
 │   ├── web_config.py          # Web 面板配置读写
 │   ├── web_tray.py            # Web 模式系统托盘（最小化到托盘）
-│   ├── http_clients/          # HTTP 客户端
-│   │   ├── __init__.py
-│   │   ├── config.py          # HTTP 客户端共享配置（SSL 验证开关）
-│   │   ├── async_http.py      # 异步 HTTP 客户端 (httpx)
-│   │   └── sync_http.py       # 同步 HTTP 客户端
+│   ├── http_config.py          # HTTP 客户端共享配置（SSL 验证开关）
+│   ├── async_http.py          # 异步 HTTP 客户端 (httpx)
+│   ├── sync_http.py           # 同步 HTTP 客户端
 │   ├── javascript/            # JavaScript 签名脚本
 │   │   ├── crypto-js.min.js
 │   │   ├── x-bogus.js
@@ -365,9 +363,29 @@ web_minimize_to_tray = true
 
 ### 直播间配置 (config/URL_config.ini)
 
+抖音支持以下 5 种直播间/主页地址格式（其余平台格式见下方各平台示例）：
+
 ```
-# 基础格式
+# 1) 网页端主播直播间（数字房间号）
 https://live.douyin.com/745964462470
+
+# 2) app端主播直播间（分享短链）
+https://v.douyin.com/iQFeBnt/
+
+# 3) 抖音号拼接（https://live.douyin.com/ + 抖音号，支持 VR 直播录制）
+https://live.douyin.com/yall1102
+
+# 4) app端主播主页（分享短链）
+https://v.douyin.com/CeiU5cbX
+
+# 5) 网页端主播主页（用户页地址）
+https://www.douyin.com/user/MS4wLjABAAAA3kr2yA4aRD-sjf9cx8xkOH8Di3RjktpKcAvqIetpsF0
+```
+
+> 说明：
+> - 格式 1/3/5 走网页端接口（支持 VR 直播）；格式 2/4 走 app 端接口
+> - 格式 5（网页端主播主页 `www.douyin.com/user/<sec_uid>`）会直接从地址提取 `sec_user_id` 并解析出抖音号，按直播间地址走网页端接口录制，无需经过 app 端探测
+> - 格式 4（app 端主页）等短链形态会先探测直播间地址，失败则自动回退到抖音号解析、再走网页端接口录制
 
 # 指定画质（画质,直播间地址）
 超清，https://live.douyin.com/745964462470
@@ -593,8 +611,7 @@ pytest
 1. 在 `src/spider.py` 中添加平台数据获取函数（参考现有平台实现）
 2. 在 `src/stream.py` 中添加流地址解析函数，返回值包含 `actual_quality` 和 `available_qualities` 字段
 3. 在 `main.py` 中添加平台识别逻辑（`PLATFORM_HOST` 列表和录制分支）
-4. 在 `tests/test_stream_quality.py` 中添加画质回采测试
-5. 更新 `README.md` 和 `CODE_WIKI.md`
+4. 更新 `README.md` 和 `CODE_WIKI.md`
 
 ## ❓ 常见问题
 
@@ -634,8 +651,12 @@ brew install node
 **Q: 抖音风控无法获取数据**
 
 - 在 `config.ini` 的 `[Cookie]` 节填入从浏览器 `live.douyin.com` 复制的有效 cookie（至少包含 `ttwid`）
-- 降低循环监测频率
+- 降低循环监测频率（默认循环时间 120 秒已较保守，可酌情调大）
 - 更换 IP 或使用代理
+- 排查要点（实测结论）：
+  - 抖音风控的典型信号是 **HTTP 200 + 空响应体**，而非 4xx 错误码；日志里看到 `web/enter` 返回 `status_code=10002 / unknown error` 后自动回退 HTML 抓取是**正常的容错链路**，不代表录制失败
+  - 请求抖音接口必须使用**桌面端 User-Agent**，旧版移动端 UA 会被静默限流（返回空 body）
+  - 主页类链接（格式 4/5）请直接填写完整地址；`iesdouyin.com/share/user/` 旧路径已变为反爬壳页，请勿使用
 
 **Q: 录制的视频文件损坏**
 
@@ -686,7 +707,19 @@ brew install node
 
 ## ⏳ 更新日志
 
-### v4.0.8-dev (2026-07-25)
+### v4.0.8.1-dev (2026-08-01)
+
+- 抖音录制支持 5 种 URL 格式：网页端直播间、app 端直播间、抖音号拼接（支持 VR 直播）、app 端主页、网页端主播主页
+- 优化网页端主播主页（格式 5）解析链路：直接从地址提取 sec_user_id 跳过重复下载，请求数由 4 降至 3、消除两次重复的 71KB 主页 HTML 抓取
+- 修复主页类链接在解析路径中**代理与 Cookie 配置静默丢失**的问题（现已正确透传 `proxy_addr` / `cookies`）
+- 新增 sec_user_id → 抖音号 进程级缓存（30 分钟 TTL），消除轮询场景下的重复接口请求
+- 修复抖音 HLS/m3u8 校验误判：CDN 对 HEAD 请求返回 4xx 时，对 m3u8 源补 `Range: bytes=0-0` GET 探测，避免可用的 HLS 源被错误回退到 FLV
+- 修复 `get_response_status` 异常日志为空（仅显示 `- `）的问题，现输出带上下文的诊断信息
+- 优化抖音 `web/enter` 接口偶发 `status_code=10002` 的容错：首次失败后静默重试一次，成功即跳过约 1MB 的 HTML 兜底抓取，消除告警刷屏
+- 删除重构后已无调用点的死代码 `get_douyin_stream_data`
+- 代码质量：全量测试 **78 passed**；`black` / `isort` / `mypy` / `ruff` 静态检查通过
+
+### v4.0.8.1 (2026-07-30)
 
 - 新增 Web 管理面板（`web.py` + `src/web_api.py` + `src/web_config.py` + `web/`），支持仪表盘、直播间管理、配置编辑、SSE 日志推送
 - 新增 GUI 画质监控页面，实时检测各直播间实际画质是否与设置一致

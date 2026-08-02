@@ -2,9 +2,10 @@
 # -*- encoding: utf-8 -*-
 # Weverse 平台认证模块 - 负责 Token 刷新功能
 
-import requests
 import uuid
 from typing import cast
+
+import requests
 
 
 def refresh_weverse_token(refresh_token: str | None) -> tuple[str | None, str | None]:

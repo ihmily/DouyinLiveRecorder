@@ -21,8 +21,8 @@ from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     import uvicorn
-    from pystray import Icon
     from PIL import Image
+    from pystray import Icon
 
 # 仅 Windows 下启用托盘（其他平台缺少 conhost 窗口与托盘 API）
 ENABLED = sys.platform == "win32"
@@ -52,8 +52,7 @@ class WebConsoleTray:
     _thread: "threading.Thread | None"
     _hwnd: "int | None"
 
-    def __init__(self, host: str, port: int,
-                 server: "uvicorn.Server | None" = None) -> None:
+    def __init__(self, host: str, port: int, server: "uvicorn.Server | None" = None) -> None:
         # host/port 用于托盘提示文本；server 用于在「退出程序」时优雅关闭 uvicorn
         self.host = host
         self.port = port
@@ -123,7 +122,12 @@ class WebConsoleTray:
             user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new_exstyle)
             # 触发 WM_STYLECHANGED，让任务栏重新评估是否创建按钮
             user32.SetWindowPos(
-                hwnd, 0, 0, 0, 0, 0,
+                hwnd,
+                0,
+                0,
+                0,
+                0,
+                0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
             )
 
@@ -140,18 +144,21 @@ class WebConsoleTray:
     def _create_icon_image() -> "Image.Image":
         # 生成与 GUI 风格一致的托盘图标（蓝底白环红点）
         from PIL import Image, ImageDraw
+
         size = 64
         image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
         dc = ImageDraw.Draw(image)
         margin = 2
         dc.rounded_rectangle(
             (margin, margin, size - margin, size - margin),
-            radius=16, fill=(79, 109, 245, 255),
+            radius=16,
+            fill=(79, 109, 245, 255),
         )
         ring_margin = 10
         dc.ellipse(
             (ring_margin, ring_margin, size - ring_margin, size - ring_margin),
-            outline=(255, 255, 255, 230), width=3,
+            outline=(255, 255, 255, 230),
+            width=3,
         )
         dot = 9
         cx = size // 2
@@ -167,6 +174,7 @@ class WebConsoleTray:
         if not hwnd:
             return
         import ctypes
+
         user32 = ctypes.windll.user32
         user32.ShowWindow(hwnd, SW_RESTORE)
         try:
@@ -180,6 +188,7 @@ class WebConsoleTray:
             self.server.should_exit = True
         else:
             import os
+
             os._exit(0)
         # 停止托盘图标（在本回调中调用是 pystray 的常规用法）
         if self.icon is not None:

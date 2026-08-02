@@ -2,9 +2,10 @@
 # -*- coding: utf-8 -*-
 # 日志配置模块 - 基于 Loguru，控制台彩色输出 + 日志文件轮转存储
 
-import sys
-import os
 import configparser
+import os
+import sys
+
 from loguru import logger
 
 __all__ = ["logger"]
@@ -20,7 +21,7 @@ def _app_root() -> str:
     #       故这里返回 exe 同级目录（_internal 的父目录），供定位 config/ffmpeg/node
     #       等运行时资源，使其在打包后保持与 exe 同级、可被直接读写。
     #
-    if getattr(sys, 'frozen', False):
+    if getattr(sys, "frozen", False):
         return os.path.dirname(os.path.realpath(sys.executable))
     return os.path.split(os.path.realpath(sys.argv[0]))[0]
 
@@ -32,13 +33,7 @@ logger.remove()
 custom_format = "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> - <level>{message}</level>"
 
 # 添加控制台输出（无论是否启用日志文件，控制台输出始终保留）
-_ = logger.add(
-    sink=sys.stderr,
-    format=custom_format,
-    level="DEBUG",
-    colorize=True,
-    enqueue=True
-)
+_ = logger.add(sink=sys.stderr, format=custom_format, level="DEBUG", colorize=True, enqueue=True)
 
 # 运行时资源根目录（exe 同级：config/ logs/ downloads/ 等），
 # 与 _app_root() 保持一致；冻结后指向 exe 父目录而非 _internal。
@@ -51,8 +46,8 @@ script_path = _app_root()
 _log_to_file: bool = True
 try:
     _cfg_parser = configparser.RawConfigParser()
-    _ = _cfg_parser.read(f'{script_path}/config/config.ini', encoding='utf-8-sig')
-    _log_to_file = _cfg_parser.get('录制设置', '是否启用日志文件(是/否)').strip() != '否'
+    _files_read = _cfg_parser.read(f"{script_path}/config/config.ini", encoding="utf-8-sig")
+    _log_to_file = _cfg_parser.get("录制设置", "是否启用日志文件(是/否)").strip() != "否"
 except (configparser.NoSectionError, configparser.NoOptionError):
     # 配置项缺失时保持默认启用（向后兼容）
     pass
@@ -71,7 +66,7 @@ if _log_to_file:
         enqueue=True,
         retention=3,
         rotation="300 KB",
-        encoding='utf-8'
+        encoding="utf-8",
     )
 
     # INFO 级别日志文件（直播流 URL 等）
@@ -84,5 +79,5 @@ if _log_to_file:
         enqueue=True,
         retention=3,
         rotation="300 KB",
-        encoding='utf-8'
+        encoding="utf-8",
     )

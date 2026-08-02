@@ -3,27 +3,30 @@
 # FFmpeg 自动安装模块 - 跨平台 FFmpeg 自动检测与安装
 
 import os
+import platform
 import re
 import shutil
 import subprocess
-import platform
 import tempfile
 import zipfile
 from pathlib import Path
 from typing import cast
+
 import requests
-from tqdm import tqdm
+
 # loguru 的 logger 为模块级单例，src.logger 对其做过的配置在此同样生效；
 # 直接从此处导入可避免基于 basedpyright 的 "未从 src.logger 导出" 告警。
 from loguru import logger
+from tqdm import tqdm
+
 # 应用根目录复用 src.logger 公开导出的 script_path（等价原私有 _app_root() 的返回值）
 from src.logger import script_path
 
 # 全局路径和环境变量
 current_platform = platform.system()
 execute_dir = script_path  # 冻结后指向 _internal/，与 __file__ 定位的资源收敛到同一处
-current_env_path = os.environ.get('PATH')
-ffmpeg_path = os.path.join(execute_dir, 'ffmpeg')
+current_env_path = os.environ.get("PATH")
+ffmpeg_path = os.path.join(execute_dir, "ffmpeg")
 
 
 def unzip_file(zip_path: str | Path, extract_to: str | Path, delete: bool = True) -> None:
@@ -32,7 +35,7 @@ def unzip_file(zip_path: str | Path, extract_to: str | Path, delete: bool = True
         os.makedirs(extract_to)
 
     extract_root = os.path.realpath(extract_to)
-    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+    with zipfile.ZipFile(zip_path, "r") as zip_ref:
         for member in zip_ref.namelist():
             # 防止 Zip Slip 目录穿越攻击：校验每个成员解压后的真实路径
             member_path = os.path.realpath(os.path.join(extract_root, member))
@@ -47,30 +50,31 @@ def unzip_file(zip_path: str | Path, extract_to: str | Path, delete: bool = True
 def download_ffmpeg_official(url: str, dest_dir: str) -> bool:
     # 从官方源下载并安装 FFmpeg (Windows)
     try:
-        zip_file_path = Path(dest_dir) / 'ffmpeg_official_temp.zip'
+        zip_file_path = Path(dest_dir) / "ffmpeg_official_temp.zip"
 
         # 下载文件（带进度条）
         with requests.get(url, stream=True, timeout=30) as response:
             response.raise_for_status()
-            total_size = int(response.headers.get('Content-Length', 0))
+            total_size = int(response.headers.get("Content-Length", 0))
 
-            with tqdm(total=total_size, unit="B", unit_scale=True,
-                      ncols=100, desc='Downloading ffmpeg (official)') as t:
-                with open(zip_file_path, 'wb') as f:
+            with tqdm(
+                total=total_size, unit="B", unit_scale=True, ncols=100, desc="Downloading ffmpeg (official)"
+            ) as t:
+                with open(zip_file_path, "wb") as f:
                     for data in response.iter_content(chunk_size=1024):
                         _ = t.update(len(data))
                         _ = f.write(data)
 
         # 解压并提取 bin 目录
         with tempfile.TemporaryDirectory() as tmp_dir:
-            with zipfile.ZipFile(zip_file_path, 'r') as zf:
+            with zipfile.ZipFile(zip_file_path, "r") as zf:
                 zf.extractall(tmp_dir)
 
             # 查找 bin 目录（含 ffmpeg.exe）
             bin_dir = None
             for root, _dirs, files in os.walk(tmp_dir):
-                if os.path.basename(root) == 'bin':
-                    if 'ffmpeg.exe' in files:
+                if os.path.basename(root) == "bin":
+                    if "ffmpeg.exe" in files:
                         bin_dir = root
                         break
 
@@ -79,7 +83,7 @@ def download_ffmpeg_official(url: str, dest_dir: str) -> bool:
                 return False
 
             # 复制到目标位置
-            ffmpeg_target = os.path.join(dest_dir, 'ffmpeg')
+            ffmpeg_target = os.path.join(dest_dir, "ffmpeg")
             if os.path.exists(ffmpeg_target):
                 shutil.rmtree(ffmpeg_target)
 
@@ -90,13 +94,13 @@ def download_ffmpeg_official(url: str, dest_dir: str) -> bool:
             zip_file_path.unlink()
 
         # 更新 PATH 并验证安装
-        os.environ['PATH'] = ffmpeg_path + os.pathsep + (current_env_path or "")
+        os.environ["PATH"] = ffmpeg_path + os.pathsep + (current_env_path or "")
         result = subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=30)
         if result.returncode == 0:
-            logger.debug('ffmpeg (official) installation was successful')
+            logger.debug("ffmpeg (official) installation was successful")
             return True
         else:
-            logger.error('ffmpeg official installation verification failed')
+            logger.error("ffmpeg official installation verification failed")
             return False
 
     except requests.RequestException as e:
@@ -109,7 +113,7 @@ def download_ffmpeg_official(url: str, dest_dir: str) -> bool:
 
 def install_ffmpeg_official_windows() -> bool:
     # Windows: 从官方源 gyan.dev 安装 FFmpeg
-    official_url = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip'
+    official_url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
     return download_ffmpeg_official(official_url, execute_dir)
 
 
@@ -117,10 +121,10 @@ def get_lanzou_download_link(url: str, password: str | None = None) -> str | Non
     # 从蓝奏云获取 FFmpeg 真实下载链接
     try:
         headers = {
-            'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
-            'Origin': 'https://wweb.lanzouv.com',
-            'Referer': 'https://wweb.lanzouv.com/iXncv0dly6mh',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0',
+            "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+            "Origin": "https://wweb.lanzouv.com",
+            "Referer": "https://wweb.lanzouv.com/iXncv0dly6mh",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0",
         }
         # 获取页面 sign 签名
         with requests.get(url, headers=headers, timeout=30) as response:
@@ -132,15 +136,15 @@ def get_lanzou_download_link(url: str, password: str | None = None) -> str | Non
 
         # 请求下载地址
         data = {
-            'action': 'downprocess',
-            'sign': sign,
-            'p': password,
-            'kd': '1',
+            "action": "downprocess",
+            "sign": sign,
+            "p": password,
+            "kd": "1",
         }
-        with requests.post('https://wweb.lanzouv.com/ajaxm.php', headers=headers, data=data, timeout=30) as response:
+        with requests.post("https://wweb.lanzouv.com/ajaxm.php", headers=headers, data=data, timeout=30) as response:
             json_data = cast(dict[str, str], response.json())
-        download_url = json_data.get('dom', '') + "/file/" + json_data.get('url', '')
-        if not download_url or download_url == '/file/':
+        download_url = json_data.get("dom", "") + "/file/" + json_data.get("url", "")
+        if not download_url or download_url == "/file/":
             logger.error("Failed to build download URL from lanzou response")
             return None
 
@@ -149,19 +153,20 @@ def get_lanzou_download_link(url: str, password: str | None = None) -> str | Non
             return response.url
     except Exception as e:
         logger.error(f"Failed to obtain ffmpeg download address. {e}")
+    return None
 
 
 def _install_ffmpeg_lanzou() -> bool:
     # Windows: 从蓝奏云备用源安装 FFmpeg
     try:
         logger.debug("Installing the latest version of ffmpeg from lanzou for Windows...")
-        ffmpeg_url = get_lanzou_download_link('https://wweb.lanzouv.com/iHAc22ly3r3g', 'eots')
+        ffmpeg_url = get_lanzou_download_link("https://wweb.lanzouv.com/iHAc22ly3r3g", "eots")
         if not ffmpeg_url:
             logger.error("Failed to obtain ffmpeg download address from lanzou")
             return False
 
-        full_file_name = 'ffmpeg_latest_build_20250124.zip'
-        version = 'v20250124'
+        full_file_name = "ffmpeg_latest_build_20250124.zip"
+        version = "v20250124"
         zip_file_path = Path(execute_dir) / full_file_name
 
         # 如果已下载则直接安装
@@ -171,25 +176,26 @@ def _install_ffmpeg_lanzou() -> bool:
             # 下载文件
             with requests.get(ffmpeg_url, stream=True, timeout=60) as response:
                 response.raise_for_status()
-                total_size = int(response.headers.get('Content-Length', 0))
+                total_size = int(response.headers.get("Content-Length", 0))
                 block_size = 1024
 
-                with tqdm(total=total_size, unit="B", unit_scale=True,
-                          ncols=100, desc=f'Downloading ffmpeg ({version})') as t:
-                    with open(zip_file_path, 'wb') as f:
+                with tqdm(
+                    total=total_size, unit="B", unit_scale=True, ncols=100, desc=f"Downloading ffmpeg ({version})"
+                ) as t:
+                    with open(zip_file_path, "wb") as f:
                         for data in response.iter_content(block_size):
                             _ = t.update(len(data))
                             _ = f.write(data)
 
         # 解压并验证
         unzip_file(zip_file_path, execute_dir)
-        os.environ['PATH'] = ffmpeg_path + os.pathsep + (current_env_path or "")
+        os.environ["PATH"] = ffmpeg_path + os.pathsep + (current_env_path or "")
         result = subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=30)
         if result.returncode == 0:
-            logger.debug('ffmpeg (lanzou) installation was successful')
+            logger.debug("ffmpeg (lanzou) installation was successful")
             return True
         else:
-            logger.error('ffmpeg lanzou installation verification failed')
+            logger.error("ffmpeg lanzou installation verification failed")
             return False
     except Exception as e:
         logger.error(f"ffmpeg lanzou installation failed: {type(e).__name__} - {e}")
@@ -212,14 +218,14 @@ def install_ffmpeg_windows() -> bool:
     return False
 
 
-def install_ffmpeg_mac():
+def install_ffmpeg_mac() -> bool:
     # macOS: 使用 Homebrew 安装 FFmpeg
     logger.warning("ffmpeg is not installed.")
     logger.debug("Installing the stable version of ffmpeg for macOS...")
     try:
         result = subprocess.run(["brew", "install", "ffmpeg"], capture_output=True, timeout=600)
         if result.returncode == 0:
-            logger.debug('ffmpeg installation was successful. Restart for changes to take effect.')
+            logger.debug("ffmpeg installation was successful. Restart for changes to take effect.")
             return True
         else:
             logger.error("ffmpeg installation failed")
@@ -231,7 +237,7 @@ def install_ffmpeg_mac():
     return False
 
 
-def install_ffmpeg_linux():
+def install_ffmpeg_linux() -> bool:
     # Linux: 自动选择 yum/apt 安装 FFmpeg
     is_RHS = True
 
@@ -239,16 +245,16 @@ def install_ffmpeg_linux():
     try:
         logger.warning("ffmpeg is not installed.")
         logger.debug("Trying to install the stable version of ffmpeg")
-        result = subprocess.run(['yum', '-y', 'update'], capture_output=True, timeout=300)
+        result = subprocess.run(["yum", "-y", "update"], capture_output=True, timeout=300)
         if result.returncode != 0:
             logger.error("Failed to update package lists using yum.")
             return False
 
-        result = subprocess.run(['yum', 'install', '-y', 'ffmpeg'], capture_output=True, timeout=300)
+        result = subprocess.run(["yum", "install", "-y", "ffmpeg"], capture_output=True, timeout=300)
         if result.returncode == 0:
             logger.debug("ffmpeg installation was successful using yum. Restart for changes to take effect.")
             return True
-        logger.error(result.stderr.decode('utf-8', errors='replace').strip())
+        logger.error(result.stderr.decode("utf-8", errors="replace").strip())
     except FileNotFoundError:
         logger.debug("yum command not found, trying to install using apt...")
         is_RHS = False
@@ -259,17 +265,17 @@ def install_ffmpeg_linux():
     if not is_RHS:
         try:
             logger.debug("Trying to install the stable version of ffmpeg for Linux using apt...")
-            result = subprocess.run(['apt', 'update'], capture_output=True, timeout=300)
+            result = subprocess.run(["apt", "update"], capture_output=True, timeout=300)
             if result.returncode != 0:
                 logger.error("Failed to update package lists using apt")
                 return False
 
-            result = subprocess.run(['apt', 'install', '-y', 'ffmpeg'], capture_output=True, timeout=300)
+            result = subprocess.run(["apt", "install", "-y", "ffmpeg"], capture_output=True, timeout=300)
             if result.returncode == 0:
                 logger.debug("ffmpeg installation was successful using apt. Restart for changes to take effect.")
                 return True
             else:
-                logger.error(result.stderr.decode('utf-8', errors='replace').strip())
+                logger.error(result.stderr.decode("utf-8", errors="replace").strip())
         except FileNotFoundError:
             logger.error("apt command not found, unable to install ffmpeg. Please manually install ffmpeg by yourself")
         except Exception as e:
@@ -288,21 +294,24 @@ def install_ffmpeg() -> bool:
         return install_ffmpeg_mac()
     else:
         logger.debug(
-            f"ffmpeg auto installation is not supported on this platform: {current_platform}. Please install ffmpeg manually.")
+            f"ffmpeg auto installation is not supported on this platform: {current_platform}. Please install ffmpeg manually."
+        )
     return False
 
 
 def check_ffmpeg_installed() -> bool:
     # 检查 FFmpeg 是否已安装并可用
     try:
-        result = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True)
+        result = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True)
         version = result.stdout.strip()
         if result.returncode == 0 and version:
             return True
     except FileNotFoundError:
         pass
     except OSError as e:
-        logger.warning(f"OSError occurred: {e}. ffmpeg may not be installed correctly or is not available in the system PATH.")
+        logger.warning(
+            f"OSError occurred: {e}. ffmpeg may not be installed correctly or is not available in the system PATH."
+        )
         logger.warning("Please delete the ffmpeg and try to download and install again.")
     except Exception as e:
         logger.error(f"An unexpected error occurred: {e}")

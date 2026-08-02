@@ -3,12 +3,12 @@
 # This file is distributed under the same license as the DouyinLiveRecorder package.
 #
 # DouyinLiveRecorder 简体中文翻译文件
-# 版本: 4.0.8-dev
+# 版本: 4.0.8.1
 # 更新日期: 2026-06-20
 
 msgid ""
 msgstr ""
-"Project-Id-Version: DouyinLiveRecorder 4.0.8-dev\n"
+"Project-Id-Version: DouyinLiveRecorder 4.0.8.1\n"
 "MIME-Version: 1.0\n"
 "POT-Creation-Date: 2024-10-20 00:00+0800\n"
 "PO-Revision-Date: 2026-07-26 02:10+0800\n"

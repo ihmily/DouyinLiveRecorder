@@ -9,7 +9,6 @@
 import tkinter
 from typing import Any
 
-
 class _CTkWidget:
     # 副作用型方法：统一返回 None，消除 reportUnusedCallResult / reportUnknownMemberType
     def pack(self, *args: Any, **kwargs: Any) -> None: ...
@@ -99,44 +98,34 @@ class _CTkWidget:
     def create_rectangle(self, *args: Any, **kwargs: Any) -> int: ...
     def create_line(self, *args: Any, **kwargs: Any) -> int: ...
 
-
 class CTk(_CTkWidget, tkinter.Tk):
     def __init__(self, *args: Any, **kwargs: Any) -> None: ...
-
 
 class CTkToplevel(_CTkWidget, tkinter.Toplevel):
     def __init__(self, *args: Any, **kwargs: Any) -> None: ...
 
-
 class CTkFrame(_CTkWidget, tkinter.Frame):
     def __init__(self, *args: Any, **kwargs: Any) -> None: ...
-
 
 class CTkLabel(_CTkWidget, tkinter.Label):
     def __init__(self, *args: Any, **kwargs: Any) -> None: ...
 
-
 class CTkButton(_CTkWidget, tkinter.Button):
     def __init__(self, *args: Any, **kwargs: Any) -> None: ...
-
 
 class CTkTextbox(_CTkWidget, tkinter.Text):
     def __init__(self, *args: Any, **kwargs: Any) -> None: ...
 
-
 class CTkScrollbar(_CTkWidget, tkinter.Scrollbar):
     def __init__(self, *args: Any, **kwargs: Any) -> None: ...
 
-
 class CTkScrollableFrame(_CTkWidget, tkinter.Frame):
     def __init__(self, *args: Any, **kwargs: Any) -> None: ...
-
 
 class CTkOptionMenu(_CTkWidget, tkinter.Frame):
     def __init__(self, *args: Any, **kwargs: Any) -> None: ...
     def set(self, value: str) -> None: ...
     def get(self) -> str: ...
-
 
 class CTkFont:
     def __init__(
@@ -148,7 +137,6 @@ class CTkFont:
         *args: Any,
         **kwargs: Any,
     ) -> None: ...
-
 
 def set_appearance_mode(mode: str) -> None: ...
 def get_appearance_mode() -> str: ...

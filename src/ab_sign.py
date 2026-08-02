@@ -24,7 +24,7 @@ def rc4_encrypt(plaintext: str, key: str) -> str:
         t = (s[i] + s[j]) % 256
         result.append(chr(s[t] ^ ord(char)))
 
-    return ''.join(result)
+    return "".join(result)
 
 
 def left_rotate(x: int, n: int) -> int:
@@ -66,7 +66,7 @@ def gg_j(j: int, x: int, y: int, z: int) -> int:
 
 class SM3:
     # SM3 密码哈希算法实现
-    def __init__(self):
+    def __init__(self) -> None:
         # 初始化 SM3 算法常量与初始值
         self.reg: list[int] = []
         self.chunk: list[int] = []
@@ -75,10 +75,7 @@ class SM3:
 
     def reset(self) -> None:
         # 初始化寄存器值 - 修正为与JS版本相同的值
-        self.reg = [
-            1937774191, 1226093241, 388252375, 3666478592,
-            2842636476, 372324522, 3817729613, 2969243214
-        ]
+        self.reg = [1937774191, 1226093241, 388252375, 3666478592, 2842636476, 372324522, 3817729613, 2969243214]
         self.chunk = []
         self.size = 0
 
@@ -86,7 +83,7 @@ class SM3:
         # 将输入转换为字节数组
         if isinstance(data, str):
             # 直接转换为UTF-8字节列表
-            a: list[int] = list(data.encode('utf-8'))
+            a: list[int] = list(data.encode("utf-8"))
         else:
             a = data
 
@@ -103,12 +100,12 @@ class SM3:
             while len(self.chunk) >= 64:
                 self._compress(self.chunk)
                 if f < len(a):
-                    self.chunk = a[f:min(f + 64, len(a))]
+                    self.chunk = a[f : min(f + 64, len(a))]
                 else:
                     self.chunk = []
                 f += 64
 
-    def _fill(self):
+    def _fill(self) -> None:
         # 计算比特长度
         bit_length = 8 * self.size
 
@@ -199,12 +196,12 @@ class SM3:
 
         # 分块压缩
         for f in range(0, len(self.chunk), 64):
-            self._compress(self.chunk[f:f + 64])
+            self._compress(self.chunk[f : f + 64])
 
         result: str | list[int]
-        if output_format == 'hex':
+        if output_format == "hex":
             # 十六进制输出
-            result = ''.join(f'{val:08x}' for val in self.reg)
+            result = "".join(f"{val:08x}" for val in self.reg)
         else:
             # 字节数组输出
             result = []
@@ -226,7 +223,7 @@ def result_encrypt(long_str: str, num: str = "s4") -> str:
         "s1": "Dkdpgh4ZKsQB80/Mfvw36XI1R25+WUAlEi7NLboqYTOPuzmFjJnryx9HVGcaStCe=",
         "s2": "Dkdpgh4ZKsQB80/Mfvw36XI1R25-WUAlEi7NLboqYTOPuzmFjJnryx9HVGcaStCe=",
         "s3": "ckdp1h4ZKsUB80/Mfvw36XIgR25+WQAlEi7NLboqYTOPuzmFjJnryx9HVGDaStCe",
-        "s4": "Dkdpgh2ZmsQB80/MfvV36XI1R45-WUAlEixNLwoqYTOPuzKFjJnry79HbGcaStCe"
+        "s4": "Dkdpgh2ZmsQB80/MfvV36XI1R45-WUAlEixNLwoqYTOPuzKFjJnry79HbGcaStCe",
     }
 
     # 位移常量
@@ -299,11 +296,16 @@ def generate_random_str() -> str:
     random_bytes.extend(gener_random(int(random_values[1] * 10000), [1, 0]))
     random_bytes.extend(gener_random(int(random_values[2] * 10000), [1, 5]))
 
-    return ''.join(chr(b) for b in random_bytes)
+    return "".join(chr(b) for b in random_bytes)
 
 
-def generate_rc4_bb_str(url_search_params: str, user_agent: str, window_env_str: str,
-                        suffix: str = "cus", arguments: list[int] | None = None) -> str:
+def generate_rc4_bb_str(
+    url_search_params: str,
+    user_agent: str,
+    window_env_str: str,
+    suffix: str = "cus",
+    arguments: list[int] | None = None,
+) -> str:
     # 生成 RC4 加密所需的 bb 字符串
     if arguments is None:
         arguments = [0, 1, 14]
@@ -318,10 +320,7 @@ def generate_rc4_bb_str(url_search_params: str, user_agent: str, window_env_str:
     cus = cast(list[int], sm3.sum(sm3.sum(suffix)))
     # 3: 对ua处理之后的结果
     ua_key = chr(0) + chr(1) + chr(14)  # [1/256, 1, 14]
-    ua = cast(list[int], sm3.sum(result_encrypt(
-        rc4_encrypt(user_agent, ua_key),
-        "s3"
-    )))
+    ua = cast(list[int], sm3.sum(result_encrypt(rc4_encrypt(user_agent, ua_key), "s3")))
 
     end_time = start_time + 100
 
@@ -333,17 +332,10 @@ def generate_rc4_bb_str(url_search_params: str, user_agent: str, window_env_str:
         "pageId": 110624,
         "boe": False,
         "ddrt": 7,
-        "paths": {
-            "include": [{} for _ in range(7)],
-            "exclude": []
-        },
-        "track": {
-            "mode": 0,
-            "delay": 300,
-            "paths": []
-        },
+        "paths": {"include": [{} for _ in range(7)], "exclude": []},
+        "track": {"mode": 0, "delay": 300, "paths": []},
         "dump": True,
-        "rpU": "hwj"
+        "rpU": "hwj",
     }
     b: dict[int, int] = {
         8: 3,
@@ -354,12 +346,7 @@ def generate_rc4_bb_str(url_search_params: str, user_agent: str, window_env_str:
 
     def split_to_bytes(num: int) -> list[int]:
         # 将长整型按字节切分
-        return [
-            (num >> 24) & 255,
-            (num >> 16) & 255,
-            (num >> 8) & 255,
-            num & 255
-        ]
+        return [(num >> 24) & 255, (num >> 16) & 255, (num >> 8) & 255, num & 255]
 
     # 处理时间戳
     start_time_bytes = split_to_bytes(b[16])
@@ -409,19 +396,19 @@ def generate_rc4_bb_str(url_search_params: str, user_agent: str, window_env_str:
     b[50] = int(b[10] / 256 / 256 / 256 / 256 / 256) & 255
 
     # 处理配置项
-    b[51] = cast(int, b15['pageId'])
+    b[51] = cast(int, b15["pageId"])
 
-    page_id_bytes = split_to_bytes(cast(int, b15['pageId']))
+    page_id_bytes = split_to_bytes(cast(int, b15["pageId"]))
     b[52] = page_id_bytes[0]
     b[53] = page_id_bytes[1]
     b[54] = page_id_bytes[2]
     b[55] = page_id_bytes[3]
 
-    b[56] = cast(int, b15['aid'])
-    b[57] = cast(int, b15['aid']) & 255
-    b[58] = (cast(int, b15['aid']) >> 8) & 255
-    b[59] = (cast(int, b15['aid']) >> 16) & 255
-    b[60] = (cast(int, b15['aid']) >> 24) & 255
+    b[56] = cast(int, b15["aid"])
+    b[57] = cast(int, b15["aid"]) & 255
+    b[58] = (cast(int, b15["aid"]) >> 8) & 255
+    b[59] = (cast(int, b15["aid"]) >> 16) & 255
+    b[60] = (cast(int, b15["aid"]) >> 24) & 255
 
     # 处理环境信息
     window_env_list = [ord(char) for char in window_env_str]
@@ -434,26 +421,103 @@ def generate_rc4_bb_str(url_search_params: str, user_agent: str, window_env_str:
     b[71] = 0
 
     # 计算校验和
-    b[72] = b[18] ^ b[20] ^ b[26] ^ b[30] ^ b[38] ^ b[40] ^ b[42] ^ b[21] ^ b[27] ^ b[31] ^ \
-            b[35] ^ b[39] ^ b[41] ^ b[43] ^ b[22] ^ b[28] ^ b[32] ^ b[36] ^ b[23] ^ b[29] ^ \
-            b[33] ^ b[37] ^ b[44] ^ b[45] ^ b[46] ^ b[47] ^ b[48] ^ b[49] ^ b[50] ^ b[24] ^ \
-            b[25] ^ b[52] ^ b[53] ^ b[54] ^ b[55] ^ b[57] ^ b[58] ^ b[59] ^ b[60] ^ b[65] ^ \
-            b[66] ^ b[70] ^ b[71]
+    b[72] = (
+        b[18]
+        ^ b[20]
+        ^ b[26]
+        ^ b[30]
+        ^ b[38]
+        ^ b[40]
+        ^ b[42]
+        ^ b[21]
+        ^ b[27]
+        ^ b[31]
+        ^ b[35]
+        ^ b[39]
+        ^ b[41]
+        ^ b[43]
+        ^ b[22]
+        ^ b[28]
+        ^ b[32]
+        ^ b[36]
+        ^ b[23]
+        ^ b[29]
+        ^ b[33]
+        ^ b[37]
+        ^ b[44]
+        ^ b[45]
+        ^ b[46]
+        ^ b[47]
+        ^ b[48]
+        ^ b[49]
+        ^ b[50]
+        ^ b[24]
+        ^ b[25]
+        ^ b[52]
+        ^ b[53]
+        ^ b[54]
+        ^ b[55]
+        ^ b[57]
+        ^ b[58]
+        ^ b[59]
+        ^ b[60]
+        ^ b[65]
+        ^ b[66]
+        ^ b[70]
+        ^ b[71]
+    )
 
     # 构建最终字节数组
     bb: list[int] = [
-        b[18], b[20], b[52], b[26], b[30], b[34], b[58], b[38], b[40], b[53], b[42], b[21],
-        b[27], b[54], b[55], b[31], b[35], b[57], b[39], b[41], b[43], b[22], b[28], b[32],
-        b[60], b[36], b[23], b[29], b[33], b[37], b[44], b[45], b[59], b[46], b[47], b[48],
-        b[49], b[50], b[24], b[25], b[65], b[66], b[70], b[71]
+        b[18],
+        b[20],
+        b[52],
+        b[26],
+        b[30],
+        b[34],
+        b[58],
+        b[38],
+        b[40],
+        b[53],
+        b[42],
+        b[21],
+        b[27],
+        b[54],
+        b[55],
+        b[31],
+        b[35],
+        b[57],
+        b[39],
+        b[41],
+        b[43],
+        b[22],
+        b[28],
+        b[32],
+        b[60],
+        b[36],
+        b[23],
+        b[29],
+        b[33],
+        b[37],
+        b[44],
+        b[45],
+        b[59],
+        b[46],
+        b[47],
+        b[48],
+        b[49],
+        b[50],
+        b[24],
+        b[25],
+        b[65],
+        b[66],
+        b[70],
+        b[71],
     ]
     bb.extend(window_env_list)
     bb.append(b[72])
 
-    return rc4_encrypt(
-        ''.join(chr(byte) for byte in bb),
-        chr(121)
-    )
+    return rc4_encrypt("".join(chr(byte) for byte in bb), chr(121))
 
 
 def ab_sign(url_search_params: str, user_agent: str) -> str:
@@ -463,8 +527,7 @@ def ab_sign(url_search_params: str, user_agent: str) -> str:
     # 1. 生成随机字符串前缀
     # 2. 生成RC4加密的主体部分
     # 3. 对结果进行最终加密并添加等号后缀
-    return result_encrypt(
-        generate_random_str() +
-        generate_rc4_bb_str(url_search_params, user_agent, window_env_str),
-        "s4"
-    ) + "="
+    return (
+        result_encrypt(generate_random_str() + generate_rc4_bb_str(url_search_params, user_agent, window_env_str), "s4")
+        + "="
+    )
