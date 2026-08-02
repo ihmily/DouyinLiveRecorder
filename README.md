@@ -80,58 +80,7 @@ docker run -d -v ./config:/app/config -v ./downloads:/app/downloads douyin-live-
 
 **海外站点（14 个）**：TikTok | SOOP(原AfreecaTV) | PandaTV | WinkTV | TTingLive(原Flextv) | PopkonTV | TwitchTV | LiveMe | ShowRoom | CHZZK | Shopee | Youtube | Faceit | Picarto
 
-- [x] 抖音
-- [x] TikTok
-- [x] 快手
-- [x] 虎牙
-- [x] 斗鱼
-- [x] YY
-- [x] B站
-- [x] 小红书
-- [x] bigo
-- [x] blued
-- [x] SOOP(原AfreecaTV)
-- [x] 网易cc
-- [x] 千度热播
-- [x] PandaTV
-- [x] 猫耳FM
-- [x] Look直播
-- [x] WinkTV
-- [x] TTingLive(原Flextv)
-- [x] PopkonTV
-- [x] TwitCasting
-- [x] 百度直播
-- [x] 微博直播
-- [x] 酷狗直播
-- [x] TwitchTV
-- [x] LiveMe
-- [x] 花椒直播
-- [x] 流星直播
-- [x] ShowRoom
-- [x] Acfun
-- [x] 映客直播
-- [x] 音播直播
-- [x] 知乎直播
-- [x] CHZZK
-- [x] 嗨秀直播
-- [x] vv星球直播
-- [x] 17Live
-- [x] 浪Live
-- [x] 畅聊直播
-- [x] 飘飘直播
-- [x] 六间房直播
-- [x] 乐嗨直播
-- [x] 花猫直播
-- [x] Shopee
-- [x] YouTube
-- [x] 淘宝
-- [x] 京东
-- [x] Faceit
-- [x] 咪咕
-- [x] 连接直播
-- [x] 来秀直播
-- [x] Picarto
-- [ ] 更多平台正在更新中
+> 更多平台持续添加中。
 
 ## 📁 项目结构
 
@@ -387,6 +336,7 @@ https://www.douyin.com/user/MS4wLjABAAAA3kr2yA4aRD-sjf9cx8xkOH8Di3RjktpKcAvqIetp
 > - 格式 5（网页端主播主页 `www.douyin.com/user/<sec_uid>`）会直接从地址提取 `sec_user_id` 并解析出抖音号，按直播间地址走网页端接口录制，无需经过 app 端探测
 > - 格式 4（app 端主页）等短链形态会先探测直播间地址，失败则自动回退到抖音号解析、再走网页端接口录制
 
+```ini
 # 指定画质（画质,直播间地址）
 超清，https://live.douyin.com/745964462470
 
