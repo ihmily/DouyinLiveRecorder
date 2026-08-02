@@ -303,7 +303,7 @@ class TestReplaceUrl:
         test_file.write_text("https://old.com\nother line\n", encoding="utf-8-sig")
         replace_url(test_file, "https://old.com", "https://new.com")
         content = test_file.read_text(encoding="utf-8-sig")
-        assert "https://new.com" in content
+        assert "https://new.com" in content.splitlines()
 
     def test_replace_partial_line(self, tmp_path):
         """Test replacing partial line match."""
