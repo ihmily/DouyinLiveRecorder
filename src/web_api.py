@@ -279,33 +279,40 @@ def create_app(
 
     @app.get("/api/files")
     async def list_files(path: str = Query("")) -> list[dict[str, str | int | float]]:
-        root = cast(str, app.state.downloads_root)
-        target = os.path.realpath(os.path.join(root, path))
-        if not _is_within(target, root):
+        root_path = Path(cast(str, app.state.downloads_root)).resolve()
+        target_path = (root_path / path).resolve()
+        try:
+            target_path.relative_to(root_path)
+        except ValueError:
             raise HTTPException(400, "非法路径")
-        if not os.path.exists(target):
+        if not target_path.exists():
             raise HTTPException(404, "路径不存在")
-        if os.path.isfile(target):
-            st = os.stat(target)
+        if target_path.is_file():
+            st = target_path.stat()
+            rel = str(target_path.relative_to(root_path)).replace("\\", "/")
             return [
                 {
-                    "name": os.path.basename(target),
+                    "name": target_path.name,
                     "type": "file",
                     "size": st.st_size,
                     "mtime": st.st_mtime,
-                    "path": path,
+                    "path": rel,
                 }
             ]
         items: list[dict[str, str | int | float]] = []
-        for name in sorted(os.listdir(target)):
-            full = os.path.join(target, name)
-            st = os.stat(full)
-            rel = os.path.relpath(full, root).replace("\\", "/")
+        for name in sorted(os.listdir(str(target_path))):
+            full_path = (target_path / name).resolve()
+            try:
+                full_path.relative_to(root_path)
+            except ValueError:
+                continue
+            st = full_path.stat()
+            rel = str(full_path.relative_to(root_path)).replace("\\", "/")
             items.append(
                 {
                     "name": name,
-                    "type": "dir" if os.path.isdir(full) else "file",
-                    "size": st.st_size if os.path.isfile(full) else 0,
+                    "type": "dir" if full_path.is_dir() else "file",
+                    "size": st.st_size if full_path.is_file() else 0,
                     "mtime": st.st_mtime,
                     "path": rel,
                 }
@@ -314,11 +321,15 @@ def create_app(
 
     @app.get("/api/files/download")
     async def download_file(path: str = Query(...)) -> FileResponse:
-        root = cast(str, app.state.downloads_root)
-        target = os.path.realpath(os.path.join(root, path))
-        if not _is_within(target, root) or not os.path.isfile(target):
+        root_path = Path(cast(str, app.state.downloads_root)).resolve()
+        target_path = (root_path / path).resolve()
+        try:
+            target_path.relative_to(root_path)
+        except ValueError:
             raise HTTPException(400, "非法路径或文件不存在")
-        return FileResponse(target, filename=os.path.basename(target))
+        if not target_path.is_file():
+            raise HTTPException(400, "非法路径或文件不存在")
+        return FileResponse(str(target_path), filename=target_path.name)
 
     @app.get("/api/logs")
     async def get_logs(lines: int = Query(200, ge=1, le=5000)) -> dict[str, list[str]]:
