@@ -1,0 +1,368 @@
+name: "Codex Exec Action"
+description: "Run `codex exec` with a prompt."
+author: "OpenAI"
+inputs:
+  prompt:
+    description: "Prompt to pass to Codex. `prompt` or `prompt-file` must be provided."
+    required: false
+    default: ""
+  prompt-file:
+    description: "Path to file that contains the prompt to pass to Codex. `prompt` or `prompt-file` must be provided."
+    required: false
+    default: ""
+  output-file:
+    description: "File where the final Codex message is written. Leave empty to skip writing a file."
+    required: false
+    default: ""
+  openai-api-key:
+    description: "OpenAI API key used by Codex."
+    required: false
+    default: ""
+  responses-api-endpoint:
+    description: "Optional Responses API endpoint override, e.g. https://example.openai.azure.com/openai/v1/responses. Defaults to the proxy's built-in endpoint when empty."
+    required: false
+    default: ""
+  working-directory:
+    description: "Working directory that Codex should use. Defaults to the repository root."
+    required: false
+    default: ""
+  sandbox:
+    description: |
+      Legacy sandbox mode for Codex. One of `workspace-write`, `read-only` or `danger-full-access`.
+      Prefer `permission-profile: ":workspace"` for new workflows. Leave empty to use the legacy
+      `workspace-write` fallback unless `permission-profile` is set.
+    required: false
+    default: ""
+  permission-profile:
+    description: |
+      Codex permission profile to select through `default_permissions`, such as `:read-only`,
+      `:workspace`, or a named profile defined in `codex-home/config.toml`. Mutually exclusive
+      with `sandbox`. See https://developers.openai.com/codex/permissions.
+    required: false
+    default: ""
+  codex-version:
+    description: "Version of `@openai/codex` to install."
+    required: false
+    default: ""
+  codex-args:
+    description: "Additional args to pass through to `codex exec`. If this value starts with `[`, it will be parsed as a JSON array; otherwise, it will be parsed as a shell-like string."
+    required: false
+    default: ""
+  output-schema:
+    description: "Inline schema contents to use with `codex exec --output-schema`."
+    required: false
+    default: ""
+  output-schema-file:
+    description: "File path to the schema that should be passed to `codex exec --output-schema`."
+    required: false
+    default: ""
+  model:
+    description: "Model the agent should use."
+    required: false
+    default: ""
+  effort:
+    description: "Reasoning effort the agent should use."
+    required: false
+    default: ""
+  codex-home:
+    description: "Directory to use as the Codex home directory. If empty, the default Codex home directory will be used."
+    required: false
+    default: ""
+  safety-strategy:
+    description: |
+      Specify one of the following options (on Windows, the only supported option is `unsafe`):
+
+      * `drop-sudo` (default, IRREVERSIBLE) Drop sudo privileges (if any) from
+        the default user before running Codex, and run Codex as that user. This
+        is only supported on Linux and macOS runners. This option is
+        irreversible: if the default user has sudo privileges, they will be
+        removed permanently for the duration of the job.
+      * `unprivileged-user` Run Codex as the specified user specified by the
+        `codex-user` option (the user must already exist). Note the caller is
+        responsible for ensuring the specified user has the privileges it needs
+        to perform the requested actions. For example, the copy of the repo
+        created by `actions/checkout` is not world-readable by default.
+      * `read-only` Run Codex in a sandbox that can read any file on disk,
+        but cannot write to disk or access the network. Note Codex will still
+        run as the default user for this Action, which likely has sudo
+        privileges, so it could read `openai-api-key` from memory and reveal it
+        by printing it to the output of the GitHub Action.
+      * `unsafe` (NOT RECOMMENDED) Do not try to restrict Codex's privileges at all.
+        This is extremely dangerous, as the default user for this Action likely
+        has sudo privileges, which means it can read secrets stored in memory
+        (such as the value of `openai-api-key`) and print them to the output
+        of the GitHub Action or exfiltrate them in other ways.
+    required: false
+    default: "drop-sudo"
+  codex-user:
+    description: "If `safety-strategy` is set to `unprivileged-user`, this specifies the UNIX username to run Codex as."
+    required: false
+    default: ""
+  allow-users:
+    description: "Comma-separated list of GitHub usernames who can run this action, or '*' to allow all users. Note users who have write access to the GitHub repo have access by default and do not need to be listed here."
+    required: false
+    default: ""
+  allow-bots:
+    description: "Allow runs triggered by trusted GitHub bot accounts (github-actions[bot]) to bypass the write-access check."
+    required: false
+    default: "false"
+  allow-bot-users:
+    description: "Comma-separated list of GitHub bot usernames that can bypass the write-access check. '*' is not supported; list trusted bots explicitly. Entries may include or omit the trailing [bot] suffix."
+    required: false
+    default: ""
+outputs:
+  final-message:
+    description: "Raw output emitted by `codex exec`."
+    value: ${{ steps.run_codex.outputs['final-message'] }}
+runs:
+  using: "composite"
+  steps:
+    - name: Validate Windows safety strategy
+      if: ${{ runner.os == 'Windows' }}
+      shell: bash
+      env:
+        SAFETY_STRATEGY: ${{ inputs['safety-strategy'] }}
+      run: |
+        if [ "$SAFETY_STRATEGY" != "unsafe" ]; then
+          echo "On Windows, inputs['safety-strategy'] must be 'unsafe'" >&2
+          echo "because no viable sandboxing options are available at this time." >&2
+          exit 1
+        fi
+
+    - name: Ensure Node.js available
+      # Pin to a commit hash because some repositories require it:
+      # https://github.com/openai/codex-action/issues/43
+      uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+      with:
+        node-version: "24"
+
+    - name: Check repository write access
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        GITHUB_TOKEN: ${{ github.token }}
+        ALLOW_BOTS: ${{ inputs['allow-bots'] }}
+        ALLOW_BOT_USERS: ${{ inputs['allow-bot-users'] }}
+        ALLOW_USERS: ${{ inputs['allow-users'] }}
+      shell: bash
+      run: |
+        node "$ACTION_PATH/dist/main.js" check-write-access \
+          --allow-bots "$ALLOW_BOTS" \
+          --allow-bot-users "$ALLOW_BOT_USERS" \
+          --allow-users "$ALLOW_USERS"
+
+    - name: Install Codex CLI
+      shell: bash
+      env:
+        CODEX_VERSION: ${{ inputs['codex-version'] }}
+      run: npm install -g "@openai/codex@${CODEX_VERSION}"
+
+    - name: Install Codex Responses API proxy
+      shell: bash
+      env:
+        CODEX_VERSION: ${{ inputs['codex-version'] }}
+      run: npm install -g "@openai/codex-responses-api-proxy@${CODEX_VERSION}"
+
+    - name: Resolve Codex home
+      id: resolve_home
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        CODEX_HOME_OVERRIDE: ${{ inputs['codex-home'] }}
+        SAFETY_STRATEGY: ${{ inputs['safety-strategy'] }}
+        CODEX_USER: ${{ inputs['codex-user'] }}
+        CODEX_RUN_ID: ${{ github.run_id }}
+      run: |
+        node "$ACTION_PATH/dist/main.js" resolve-codex-home \
+          --codex-home-override "$CODEX_HOME_OVERRIDE" \
+          --safety-strategy "$SAFETY_STRATEGY" \
+          --codex-user "$CODEX_USER" \
+          --github-run-id "$CODEX_RUN_ID"
+
+    - name: Determine server info path
+      id: derive_server_info
+      shell: bash
+      env:
+        CODEX_HOME: ${{ steps.resolve_home.outputs.codex-home }}
+        CODEX_RUN_ID: ${{ github.run_id }}
+      run: |
+        server_info_file="$CODEX_HOME/$CODEX_RUN_ID.json"
+        echo "server_info_file=$server_info_file" >> "$GITHUB_OUTPUT"
+
+    - name: Check Responses API proxy status
+      id: start_proxy
+      if: ${{ inputs['openai-api-key'] != '' }}
+      shell: bash
+      env:
+        SERVER_INFO_FILE: ${{ steps.derive_server_info.outputs.server_info_file }}
+      run: |
+        if [ -s "$SERVER_INFO_FILE" ]; then
+          echo "Responses API proxy already appears to be running (found $SERVER_INFO_FILE)."
+          echo "server_info_file_exists=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "server_info_file_exists=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    # This is its own step to minimize the runtime logic that has access to the
+    # API key. Note we use `env -u PROXY_API_KEY` to ensure extra copies of the
+    # key do not end up in the memory of the `codex-responses-api-proxy`
+    # process where environment variables are stored.
+    - name: Start Responses API proxy
+      if: ${{ inputs['openai-api-key'] != '' && steps.start_proxy.outputs.server_info_file_exists == 'false' }}
+      env:
+        SERVER_INFO_FILE: ${{ steps.derive_server_info.outputs.server_info_file }}
+        PROXY_API_KEY: ${{ inputs['openai-api-key'] }}
+        UPSTREAM_URL: ${{ inputs['responses-api-endpoint'] }}
+      shell: bash
+      run: |
+        args=(
+          codex-responses-api-proxy
+          --http-shutdown
+          --server-info "$SERVER_INFO_FILE"
+        )
+
+        if [ -n "$UPSTREAM_URL" ]; then
+          args+=(--upstream-url "$UPSTREAM_URL")
+        fi
+
+        (
+          printenv PROXY_API_KEY | env -u PROXY_API_KEY "${args[@]}"
+        ) &
+
+    - name: Wait for Responses API proxy
+      if: ${{ inputs['openai-api-key'] != '' && steps.start_proxy.outputs.server_info_file_exists == 'false' }}
+      shell: bash
+      env:
+        SERVER_INFO_FILE: ${{ steps.derive_server_info.outputs.server_info_file }}
+      run: |
+        for _ in {1..10}; do
+          if [ -s "$SERVER_INFO_FILE" ]; then
+            break
+          fi
+          sleep 1
+        done
+        if [ ! -s "$SERVER_INFO_FILE" ]; then
+          echo "responses-api-proxy did not write server info" >&2
+          exit 1
+        fi
+
+        if [ "${RUNNER_OS}" != "Windows" ]; then
+          sudo chmod 444 "$SERVER_INFO_FILE"
+          sudo chown root "$SERVER_INFO_FILE"
+        fi
+
+    # This step has an output named `port`.
+    - name: Read server info
+      id: read_server_info
+      if: ${{ inputs['openai-api-key'] != '' || inputs.prompt != '' || inputs['prompt-file'] != '' }}
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        SERVER_INFO_FILE: ${{ steps.derive_server_info.outputs.server_info_file }}
+      run: node "$ACTION_PATH/dist/main.js" read-server-info "$SERVER_INFO_FILE"
+
+    - name: Write Codex proxy config
+      if: ${{ inputs['openai-api-key'] != '' }}
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        CODEX_HOME: ${{ steps.resolve_home.outputs.codex-home }}
+        PROXY_PORT: ${{ steps.read_server_info.outputs.port }}
+        SAFETY_STRATEGY: ${{ inputs['safety-strategy'] }}
+      run: |
+        node "$ACTION_PATH/dist/main.js" write-proxy-config \
+          --codex-home "$CODEX_HOME" \
+          --port "$PROXY_PORT" \
+          --safety-strategy "$SAFETY_STRATEGY"
+
+    - name: Enable Linux user namespaces for bubblewrap
+      if: ${{ runner.os == 'Linux' && runner.environment == 'github-hosted' && (inputs['openai-api-key'] != '' || inputs.prompt != '' || inputs['prompt-file'] != '') }}
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        # Bubblewrap needs unprivileged user namespaces on GitHub-hosted Linux
+        # runners. This step runs before drop-sudo, then becomes a no-op on
+        # later codex-action invocations in the same job because the sysctls
+        # already have the desired values. See issue #75 for the failure mode
+        # this is working around on newer Ubuntu images.
+        current_userns="$(sysctl -n kernel.unprivileged_userns_clone 2>/dev/null || true)"
+        if [ -n "$current_userns" ] && [ "$current_userns" != "1" ]; then
+          echo "Enabling kernel.unprivileged_userns_clone for bubblewrap."
+          sudo sysctl -w kernel.unprivileged_userns_clone=1
+        fi
+
+        # Ubuntu 24.04+ can additionally block unprivileged user namespaces via
+        # AppArmor, which causes bubblewrap to fail with
+        # `loopback: Failed RTM_NEWADDR: Operation not permitted`.
+        current_apparmor="$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || true)"
+        if [ -n "$current_apparmor" ] && [ "$current_apparmor" != "0" ]; then
+          echo "Disabling kernel.apparmor_restrict_unprivileged_userns for bubblewrap."
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        fi
+
+    - name: Drop sudo privilege, if appropriate
+      if: ${{ inputs['safety-strategy'] == 'drop-sudo' && inputs['openai-api-key'] != '' }}
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        case "${RUNNER_OS}" in
+          Linux)
+            node "$ACTION_PATH/dist/main.js" drop-sudo --user runner --group sudo
+            ;;
+          macOS)
+            node "$ACTION_PATH/dist/main.js" drop-sudo --user runner --group admin
+            ;;
+          *)
+            echo "Unsupported OS for drop-sudo: ${RUNNER_OS}" >&2
+            exit 1
+            ;;
+        esac
+
+    - name: Verify sudo privilege removed
+      if: ${{ inputs['safety-strategy'] == 'drop-sudo' && inputs['openai-api-key'] != '' }}
+      shell: bash
+      run: |
+        if sudo -n true 2>/dev/null; then
+          echo "Expected sudo to be disabled, but sudo succeeded." >&2
+          exit 1
+        fi
+        echo "Confirmed sudo privilege is disabled."
+
+    - name: Run codex exec
+      id: run_codex
+      if: ${{ inputs.prompt != '' || inputs['prompt-file'] != '' }}
+      env:
+        CODEX_PROMPT: ${{ inputs.prompt }}
+        CODEX_PROMPT_FILE: ${{ inputs['prompt-file'] }}
+        CODEX_OUTPUT_FILE: ${{ inputs['output-file'] }}
+        CODEX_HOME: ${{ steps.resolve_home.outputs.codex-home }}
+        CODEX_WORKING_DIRECTORY: ${{ inputs['working-directory'] || github.workspace }}
+        CODEX_SANDBOX: ${{ inputs.sandbox }}
+        CODEX_PERMISSION_PROFILE: ${{ inputs['permission-profile'] }}
+        CODEX_ARGS: ${{ inputs['codex-args'] }}
+        CODEX_OUTPUT_SCHEMA: ${{ inputs['output-schema'] }}
+        CODEX_OUTPUT_SCHEMA_FILE: ${{ inputs['output-schema-file'] }}
+        CODEX_MODEL: ${{ inputs.model }}
+        CODEX_EFFORT: ${{ inputs.effort }}
+        CODEX_SAFETY_STRATEGY: ${{ inputs['safety-strategy'] }}
+        CODEX_USER: ${{ inputs['codex-user'] }}
+        ACTION_PATH: ${{ github.action_path }}
+        FORCE_COLOR: 1
+      shell: bash
+      run: |
+        node "$ACTION_PATH/dist/main.js" run-codex-exec \
+            --prompt "${CODEX_PROMPT}" \
+            --prompt-file "${CODEX_PROMPT_FILE}" \
+            --output-file "$CODEX_OUTPUT_FILE" \
+            --codex-home "$CODEX_HOME" \
+            --cd "$CODEX_WORKING_DIRECTORY" \
+            --extra-args "$CODEX_ARGS" \
+            --output-schema "$CODEX_OUTPUT_SCHEMA" \
+            --output-schema-file "$CODEX_OUTPUT_SCHEMA_FILE" \
+            --sandbox "$CODEX_SANDBOX" \
+            --permission-profile "$CODEX_PERMISSION_PROFILE" \
+            --model "$CODEX_MODEL" \
+            --effort "$CODEX_EFFORT" \
+            --safety-strategy "$CODEX_SAFETY_STRATEGY" \
+            --codex-user "$CODEX_USER"
