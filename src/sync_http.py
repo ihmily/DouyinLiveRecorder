@@ -12,7 +12,11 @@ from collections.abc import Mapping
 from typing import cast
 
 import requests
-from requests._types import JsonType
+
+try:
+    from requests._types import JsonType
+except ImportError:
+    from typing import Any as JsonType  # type: ignore[assignment,misc]
 
 from . import http_config as config
 from .logger import logger

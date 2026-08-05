@@ -1,4 +1,4 @@
-"""Tests for src/room.py module."""
+# Tests for src/room.py module.
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,20 +9,20 @@ from src.room import HEADERS, UnsupportedUrlError
 
 
 class TestUnsupportedUrlError:
-    """Test UnsupportedUrlError exception."""
+    # Test UnsupportedUrlError exception.
 
     def test_exception_creation(self):
-        """Test exception can be created and raised."""
+        # Test exception can be created and raised.
         with pytest.raises(UnsupportedUrlError) as exc_info:
             raise UnsupportedUrlError("Test error message")
         assert "Test error message" in str(exc_info.value)
 
     def test_exception_is_exception(self):
-        """Test UnsupportedUrlError is an Exception subclass."""
+        # Test UnsupportedUrlError is an Exception subclass.
         assert issubclass(UnsupportedUrlError, Exception)
 
     def test_exception_can_be_caught_as_exception(self):
-        """Test exception can be caught as Exception."""
+        # Test exception can be caught as Exception.
         try:
             raise UnsupportedUrlError("test")
         except Exception as e:
@@ -30,40 +30,40 @@ class TestUnsupportedUrlError:
 
 
 class TestHeaders:
-    """Test HEADERS constant."""
+    # Test HEADERS constant.
 
     def test_headers_is_dict(self):
-        """Test HEADERS is a dictionary."""
+        # Test HEADERS is a dictionary.
         assert isinstance(HEADERS, dict)
 
     def test_headers_has_user_agent(self):
-        """Test HEADERS contains User-Agent."""
+        # Test HEADERS contains User-Agent.
         assert "User-Agent" in HEADERS
         assert len(HEADERS["User-Agent"]) > 0
 
     def test_headers_has_accept_language(self):
-        """Test HEADERS contains Accept-Language."""
+        # Test HEADERS contains Accept-Language.
         assert "Accept-Language" in HEADERS
         assert "zh-CN" in HEADERS["Accept-Language"]
 
     def test_headers_has_cookie(self):
-        """Test HEADERS contains Cookie key."""
+        # Test HEADERS contains Cookie key.
         assert "Cookie" in HEADERS
 
 
 class TestGetSecUserId:
-    """Test get_sec_user_id function."""
+    # Test get_sec_user_id function.
 
     @pytest.mark.asyncio
     async def test_function_exists(self):
-        """Test function is importable."""
+        # Test function is importable.
         from src.room import get_sec_user_id
 
         assert callable(get_sec_user_id)
 
     @pytest.mark.asyncio
     async def test_function_is_async(self):
-        """Test function is async."""
+        # Test function is async.
         import inspect
 
         from src.room import get_sec_user_id
@@ -72,7 +72,7 @@ class TestGetSecUserId:
 
     @pytest.mark.asyncio
     async def test_normal_extraction(self):
-        """正常路径：重定向 URL 包含 reflow/ 和 sec_user_id 参数，正确提取 room_id 和 sec_user_id。"""
+        # 正常路径：重定向 URL 包含 reflow/ 和 sec_user_id 参数，正确提取 room_id 和 sec_user_id。
         from src.room import get_sec_user_id
 
         redirect_url = "https://live.douyin.com/reflow/7318293442?sec_user_id=MS4wLjABAAAA_test_sec&aid=6383"
@@ -94,7 +94,7 @@ class TestGetSecUserId:
 
     @pytest.mark.asyncio
     async def test_unsupported_url_raises(self):
-        """异常路径：重定向 URL 不包含 reflow/，抛出 UnsupportedUrlError。"""
+        # 异常路径：重定向 URL 不包含 reflow/，抛出 UnsupportedUrlError。
         from src.room import get_sec_user_id
 
         mock_response = MagicMock()
@@ -111,18 +111,18 @@ class TestGetSecUserId:
 
 
 class TestGetUniqueId:
-    """Test get_unique_id function."""
+    # Test get_unique_id function.
 
     @pytest.mark.asyncio
     async def test_function_exists(self):
-        """Test function is importable."""
+        # Test function is importable.
         from src.room import get_unique_id
 
         assert callable(get_unique_id)
 
     @pytest.mark.asyncio
     async def test_function_is_async(self):
-        """Test function is async."""
+        # Test function is async.
         import inspect
 
         from src.room import get_unique_id
@@ -131,7 +131,7 @@ class TestGetUniqueId:
 
     @pytest.mark.asyncio
     async def test_normal_extraction(self):
-        """兜底路径：JSON 接口不可用时，仍能从用户分享页 HTML 中提取 unique_id。"""
+        # 兜底路径：JSON 接口不可用时，仍能从用户分享页 HTML 中提取 unique_id。
         from src.room import get_unique_id
 
         # 第一次请求：重定向到用户主页（不含 reflow/）
@@ -161,7 +161,7 @@ class TestGetUniqueId:
 
     @pytest.mark.asyncio
     async def test_reflow_url_raises_unsupported(self):
-        """异常路径：重定向 URL 包含 reflow/，抛出 UnsupportedUrlError。"""
+        # 异常路径：重定向 URL 包含 reflow/，抛出 UnsupportedUrlError。
         from src.room import get_unique_id
 
         mock_response = MagicMock()
@@ -178,18 +178,18 @@ class TestGetUniqueId:
 
 
 class TestGetLiveRoomId:
-    """Test get_live_room_id function."""
+    # Test get_live_room_id function.
 
     @pytest.mark.asyncio
     async def test_function_exists(self):
-        """Test function is importable."""
+        # Test function is importable.
         from src.room import get_live_room_id
 
         assert callable(get_live_room_id)
 
     @pytest.mark.asyncio
     async def test_function_is_async(self):
-        """Test function is async."""
+        # Test function is async.
         import inspect
 
         from src.room import get_live_room_id
@@ -198,7 +198,7 @@ class TestGetLiveRoomId:
 
     @pytest.mark.asyncio
     async def test_normal_extraction(self):
-        """正常路径：API 返回 JSON，正确提取 web_rid。"""
+        # 正常路径：API 返回 JSON，正确提取 web_rid。
         from src.room import get_live_room_id
 
         mock_response = MagicMock()
@@ -220,7 +220,7 @@ class TestGetLiveRoomId:
 
     @pytest.mark.asyncio
     async def test_http_error_raises(self):
-        """异常路径：API 返回 HTTP 错误状态码，抛出 HTTPStatusError。"""
+        # 异常路径：API 返回 HTTP 错误状态码，抛出 HTTPStatusError。
         from src.room import get_live_room_id
 
         mock_request = httpx.Request("GET", "https://webcast.amemv.com/webcast/room/reflow/info/")
@@ -245,18 +245,18 @@ class TestGetLiveRoomId:
 
 
 class TestGetXbogus:
-    """Test get_xbogus function."""
+    # Test get_xbogus function.
 
     @pytest.mark.asyncio
     async def test_function_exists(self):
-        """Test function is importable."""
+        # Test function is importable.
         from src.room import get_xbogus
 
         assert callable(get_xbogus)
 
     @pytest.mark.asyncio
     async def test_function_is_async(self):
-        """Test function is async."""
+        # Test function is async.
         import inspect
 
         from src.room import get_xbogus

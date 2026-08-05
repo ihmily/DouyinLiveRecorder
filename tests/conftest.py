@@ -1,1 +1,1 @@
-"""Pytest configuration and fixtures."""
+# Pytest configuration and fixtures.

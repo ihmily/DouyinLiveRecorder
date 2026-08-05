@@ -185,14 +185,28 @@ async def get_response_status(
         response = await client.head(url, headers=headers, follow_redirects=True, timeout=timeout)
         if response.status_code == 200:
             return True
-        # 部分 CDN（如抖音 m3u8）对 HEAD 返回非 200，但 GET 可正常拉流。
+        # 部分 CDN（如抖音 m3u8）对 HEAD 返回非 200（含 403/404），但 GET 可正常拉流。
         # 对 m3u8 源额外做一次 Range GET 轻量可达性探测，避免误判不可达而降级画质。
-        if ".m3u8" in url and response.status_code in (400, 401, 403, 405):
+        # 注意：仅覆盖 400/401/403/405 会漏掉 404（部分 CDN 对 HEAD 一律回 404），
+        # 因此 HEAD 非 2xx 的 m3u8 源一律进入探测。
+        if ".m3u8" in url and response.status_code != 200:
             probe = await client.get(
                 url, headers={**(headers or {}), "Range": "bytes=0-0"}, follow_redirects=True, timeout=timeout
             )
-            return probe.status_code in (200, 206)
+            if probe.status_code in (200, 206):
+                return True
+            logger.debug(
+                f"get_response_status 校验未通过: {url} - HEAD={response.status_code}, "
+                f"Range-GET={probe.status_code}, content-type={probe.headers.get('content-type', '')}"
+            )
+            return False
+        logger.debug(
+            f"get_response_status 校验未通过: {url} - status_code={response.status_code}, "
+            f"content-type={response.headers.get('content-type', '')}"
+        )
         return False
     except Exception as e:
-        logger.debug(f"get_response_status 校验失败（判定为不可达）: {e}")
+        # 注意：Windows 下 socket.timeout 的 str() 为空，仅打印 {e} 会得到空白日志，
+        # 必须带上 URL 与异常类型，否则无法定位是超时、连接被拒还是证书问题。
+        logger.debug(f"get_response_status 校验失败（判定为不可达）: {url} - {type(e).__name__}: {e}")
     return False

@@ -43,7 +43,7 @@ known_first_party = ["src", "i18n"]
 python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
-disallow_untyped_defs = false
+disallow_untyped_defs = true
 ignore_missing_imports = true
 ```
 
@@ -132,6 +132,7 @@ asyncio_mode = "auto"
 - 运行测试: `pytest`
 - 覆盖率源码: `src/`
 - 覆盖率排除: `tests/`, `__pycache__/`, `node/`, `ffmpeg/`
+- 创建/更新测试: 使用 [test-creator Skill](.qoder/skills/test-creator/SKILL.md) 标准化流程（源码分析 → Mock 配置 → 验证执行）
 
 ## 构建命令
 

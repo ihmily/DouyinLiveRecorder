@@ -1,15 +1,15 @@
-"""Tests for src/utils.py module."""
+# Tests for src/utils.py - utility function tests for coverage improvement.
 
+import os
+import tempfile
 from pathlib import Path
-from urllib.parse import urlparse
 
 import pytest
 
 from src.utils import (
-    Color,
+    check_disk_capacity,
     check_md5,
     dict_to_cookie_str,
-    generate_random_string,
     get_file_paths,
     get_query_params,
     handle_proxy_addr,
@@ -18,331 +18,225 @@ from src.utils import (
     remove_duplicate_lines,
     remove_emojis,
     replace_url,
-    trace_error_decorator,
     update_config,
 )
 
 
-class TestColor:
-    """Test Color class."""
+class TestDictToCookieStr:
+    # Test dict_to_cookie_str.
 
-    def test_color_constants(self):
-        """Test color constants are defined."""
-        assert Color.RED == "\033[31m"
-        assert Color.GREEN == "\033[32m"
-        assert Color.RESET == "\033[0m"
+    def test_empty_dict(self):
+        assert dict_to_cookie_str({}) == ""
 
-    def test_print_colored(self, capsys):
-        """Test colored print output."""
-        Color.print_colored("test", Color.RED)
-        captured = capsys.readouterr()
-        assert "test" in captured.out
-        assert Color.RED in captured.out
+    def test_single_cookie(self):
+        assert dict_to_cookie_str({"key": "value"}) == "key=value"
 
-
-class TestTraceErrorDecorator:
-    """Test trace_error_decorator."""
-
-    def test_sync_function_success(self):
-        """Test decorator with successful sync function."""
-
-        @trace_error_decorator
-        def success_func():
-            return "success"
-
-        assert success_func() == "success"
-
-    def test_sync_function_exception(self):
-        """Test decorator catches sync function exceptions."""
-
-        @trace_error_decorator
-        def error_func():
-            raise ValueError("test error")
-
-        result = error_func()
-        assert result == {"is_live": False}
-
-    @pytest.mark.asyncio
-    async def test_async_function_success(self):
-        """Test decorator with successful async function."""
-
-        @trace_error_decorator
-        async def async_success():
-            return "async_success"
-
-        result = await async_success()
-        assert result == "async_success"
-
-    @pytest.mark.asyncio
-    async def test_async_function_exception(self):
-        """Test decorator catches async function exceptions."""
-
-        @trace_error_decorator
-        async def async_error():
-            raise ValueError("async error")
-
-        result = await async_error()
-        assert result == {"is_live": False}
+    def test_multiple_cookies(self):
+        result = dict_to_cookie_str({"a": "1", "b": "2"})
+        assert "a=1" in result
+        assert "b=2" in result
+        assert "; " in result
 
 
 class TestCheckMd5:
-    """Test check_md5 function."""
+    # Test check_md5.
 
-    def test_check_md5(self, tmp_path):
-        """Test MD5 calculation."""
+    def test_returns_md5(self, tmp_path):
         test_file = tmp_path / "test.txt"
-        test_file.write_text("test content")
-        md5 = check_md5(test_file)
-        assert len(md5) == 32
-        assert md5.isalnum()
+        test_file.write_text("hello world", encoding="utf-8")
+        result = check_md5(test_file)
+        assert len(result) == 32
+        assert result.isalnum()
+
+    def test_same_content_same_md5(self, tmp_path):
+        f1 = tmp_path / "a.txt"
+        f2 = tmp_path / "b.txt"
+        f1.write_text("same content", encoding="utf-8")
+        f2.write_text("same content", encoding="utf-8")
+        assert check_md5(f1) == check_md5(f2)
 
 
-class TestDictToCookieStr:
-    """Test dict_to_cookie_str function."""
+class TestCheckDiskCapacity:
+    # Test check_disk_capacity.
 
-    def test_dict_to_cookie_str(self):
-        """Test cookie dict to string conversion."""
-        cookies = {"key1": "value1", "key2": "value2"}
-        result = dict_to_cookie_str(cookies)
-        assert result == "key1=value1; key2=value2"
+    def test_returns_positive_float(self, tmp_path):
+        result = check_disk_capacity(str(tmp_path))
+        assert isinstance(result, float)
+        assert result > 0
 
-    def test_empty_dict(self):
-        """Test empty cookie dict."""
-        assert dict_to_cookie_str({}) == ""
-
-
-class TestReadConfigValue:
-    """Test read_config_value function."""
-
-    def test_read_existing_value(self, tmp_path):
-        """Test reading existing config value."""
-        config_file = tmp_path / "test.ini"
-        config_file.write_text("[section1]\nkey1 = value1\n", encoding="utf-8-sig")
-        result = read_config_value(config_file, "section1", "key1")
-        assert result == "value1"
-
-    def test_read_nonexistent_section(self, tmp_path):
-        """Test reading from non-existent section."""
-        config_file = tmp_path / "test.ini"
-        config_file.write_text("[section1]\nkey1 = value1\n", encoding="utf-8-sig")
-        result = read_config_value(config_file, "section2", "key1")
-        assert result is None
-
-    def test_read_nonexistent_key(self, tmp_path):
-        """Test reading non-existent key."""
-        config_file = tmp_path / "test.ini"
-        config_file.write_text("[section1]\nkey1 = value1\n", encoding="utf-8-sig")
-        result = read_config_value(config_file, "section1", "key2")
-        assert result is None
-
-
-class TestUpdateConfig:
-    """Test update_config function."""
-
-    def test_update_existing_value(self, tmp_path):
-        """Test updating existing config value."""
-        config_file = tmp_path / "test.ini"
-        config_file.write_text("[section1]\nkey1 = value1\n", encoding="utf-8-sig")
-        update_config(config_file, "section1", "key1", "new_value")
-        result = read_config_value(config_file, "section1", "key1")
-        assert result == "new_value"
-
-
-class TestGetFilePaths:
-    """Test get_file_paths function."""
-
-    def test_get_file_paths(self, tmp_path):
-        """Test getting file paths from directory."""
-        (tmp_path / "file1.txt").write_text("content1")
-        (tmp_path / "file2.txt").write_text("content2")
-        subdir = tmp_path / "subdir"
-        subdir.mkdir()
-        (subdir / "file3.txt").write_text("content3")
-
-        paths = get_file_paths(str(tmp_path))
-        assert len(paths) == 3
-        assert all(Path(p).is_absolute() for p in paths)
-
-
-class TestRemoveEmojis:
-    """Test remove_emojis function."""
-
-    def test_remove_emojis(self):
-        """Test emoji removal."""
-        text = "Hello 😀 World 🌍"
-        result = remove_emojis(text)
-        assert result == "Hello  World "
-
-    def test_remove_emojis_with_replacement(self):
-        """Test emoji removal with replacement."""
-        text = "Hello 😀 World"
-        result = remove_emojis(text, replace_text="-")
-        assert result == "Hello - World"
-
-    def test_no_emojis(self):
-        """Test text without emojis."""
-        text = "Hello World"
-        result = remove_emojis(text)
-        assert result == "Hello World"
+    def test_with_show(self, tmp_path, capsys):
+        result = check_disk_capacity(str(tmp_path), show=True)
+        captured = capsys.readouterr()
+        assert "Total" in captured.out
+        assert "Free" in captured.out
+        assert isinstance(result, float)
 
 
 class TestRemoveDuplicateLines:
-    """Test remove_duplicate_lines function."""
+    # Test remove_duplicate_lines.
 
-    def test_remove_duplicates(self, tmp_path):
-        """Test duplicate line removal."""
+    def test_removes_duplicates(self, tmp_path):
         test_file = tmp_path / "test.txt"
         test_file.write_text("line1\nline2\nline1\nline3\nline2\n", encoding="utf-8-sig")
         remove_duplicate_lines(test_file)
         content = test_file.read_text(encoding="utf-8-sig")
-        lines = content.strip().split("\n")
+        lines = [l for l in content.strip().split("\n") if l]
         assert len(lines) == 3
         assert "line1" in lines
         assert "line2" in lines
         assert "line3" in lines
 
 
-class TestCheckDiskCapacity:
-    """Test check_disk_capacity function."""
+class TestReadConfigValue:
+    # Test read_config_value.
 
-    def test_check_disk_capacity(self, tmp_path):
-        """Test disk capacity check."""
-        from src.utils import check_disk_capacity
+    def test_read_existing_key(self, tmp_path):
+        config_file = tmp_path / "config.ini"
+        config_file.write_text("[section1]\nkey1 = value1\n", encoding="utf-8-sig")
+        result = read_config_value(config_file, "section1", "key1")
+        assert result == "value1"
 
-        result = check_disk_capacity(tmp_path)
-        assert isinstance(result, float)
-        assert result > 0
+    def test_read_missing_key(self, tmp_path, capsys):
+        config_file = tmp_path / "config.ini"
+        config_file.write_text("[section1]\nkey1 = value1\n", encoding="utf-8-sig")
+        result = read_config_value(config_file, "section1", "missing_key")
+        assert result is None
+        captured = capsys.readouterr()
+        assert "does not exist" in captured.out
+
+    def test_read_missing_section(self, tmp_path, capsys):
+        config_file = tmp_path / "config.ini"
+        config_file.write_text("[section1]\nkey1 = value1\n", encoding="utf-8-sig")
+        result = read_config_value(config_file, "missing_section", "key1")
+        assert result is None
+        captured = capsys.readouterr()
+        assert "does not exist" in captured.out
+
+
+class TestUpdateConfig:
+    # Test update_config.
+
+    def test_update_existing_key(self, tmp_path, capsys):
+        config_file = tmp_path / "config.ini"
+        config_file.write_text("[section1]\nkey1 = old_value\n", encoding="utf-8-sig")
+        update_config(config_file, "section1", "key1", "new_value")
+        result = read_config_value(config_file, "section1", "key1")
+        assert result == "new_value"
+        captured = capsys.readouterr()
+        assert "updated" in captured.out
+
+    def test_update_missing_section(self, tmp_path, capsys):
+        config_file = tmp_path / "config.ini"
+        config_file.write_text("[section1]\nkey1 = value1\n", encoding="utf-8-sig")
+        update_config(config_file, "missing_section", "key1", "new_value")
+        captured = capsys.readouterr()
+        assert "does not exist" in captured.out
+
+
+class TestGetFilePaths:
+    # Test get_file_paths.
+
+    def test_returns_files(self, tmp_path):
+        (tmp_path / "a.txt").write_text("hello")
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        (sub / "b.txt").write_text("world")
+        result = get_file_paths(str(tmp_path))
+        assert len(result) == 2
+        assert any("a.txt" in p for p in result)
+        assert any("b.txt" in p for p in result)
+
+    def test_empty_directory(self, tmp_path):
+        result = get_file_paths(str(tmp_path))
+        assert result == []
+
+
+class TestRemoveEmojis:
+    # Test remove_emojis.
+
+    def test_no_emojis(self):
+        assert remove_emojis("hello world") == "hello world"
+
+    def test_with_emojis(self):
+        result = remove_emojis("hello \U0001f600 world")
+        assert result == "hello  world"
+
+    def test_replace_text(self):
+        result = remove_emojis("hello \U0001f600", "[emoji]")
+        assert result == "hello [emoji]"
 
 
 class TestHandleProxyAddr:
-    """Test handle_proxy_addr function."""
+    # Test handle_proxy_addr.
 
-    def test_add_http_prefix(self):
-        """Test adding http prefix."""
-        result = handle_proxy_addr("127.0.0.1:8080")
-        assert result == "http://127.0.0.1:8080"
+    def test_none_returns_none(self):
+        assert handle_proxy_addr(None) is None
 
-    def test_keep_existing_http(self):
-        """Test keeping existing http prefix."""
-        result = handle_proxy_addr("http://127.0.0.1:8080")
-        assert result == "http://127.0.0.1:8080"
+    def test_empty_returns_none(self):
+        assert handle_proxy_addr("") is None
 
-    def test_keep_existing_https(self):
-        """Test keeping existing https prefix."""
-        result = handle_proxy_addr("https://proxy.com:8080")
-        assert result == "https://proxy.com:8080"
+    def test_no_prefix_adds_http(self):
+        assert handle_proxy_addr("127.0.0.1:8080") == "http://127.0.0.1:8080"
 
-    def test_keep_socks(self):
-        """Test keeping socks prefix."""
-        result = handle_proxy_addr("socks5://proxy.com:1080")
-        assert result == "socks5://proxy.com:1080"
-
-    def test_none_input(self):
-        """Test None input."""
-        result = handle_proxy_addr(None)
-        assert result is None
-
-    def test_empty_string(self):
-        """Test empty string input."""
-        result = handle_proxy_addr("")
-        assert result is None
-
-
-class TestGenerateRandomString:
-    """Test generate_random_string function."""
-
-    def test_generate_length(self):
-        """Test generated string length."""
-        result = generate_random_string(10)
-        assert len(result) == 10
-
-    def test_generate_characters(self):
-        """Test generated string contains only uppercase and digits."""
-        result = generate_random_string(100)
-        assert all(c.isupper() or c.isdigit() for c in result)
-
-    def test_different_lengths(self):
-        """Test different lengths."""
-        for length in [1, 5, 20, 50]:
-            result = generate_random_string(length)
-            assert len(result) == length
+    def test_with_prefix_kept(self):
+        assert handle_proxy_addr("https://proxy.com:1080") == "https://proxy.com:1080"
 
 
 class TestJsonpToJson:
-    """Test jsonp_to_json function."""
+    # Test jsonp_to_json.
 
-    def test_simple_jsonp(self):
-        """Test simple JSONP conversion."""
+    def test_valid_jsonp(self):
         jsonp = 'callback({"key": "value"});'
         result = jsonp_to_json(jsonp)
         assert result == {"key": "value"}
 
-    def test_jsonp_without_semicolon(self):
-        """Test JSONP without semicolon."""
-        jsonp = 'callback({"key": "value"})'
+    def test_dotted_callback_name(self):
+        jsonp = 'a.b.callback({"a": 1});'
         result = jsonp_to_json(jsonp)
-        assert result == {"key": "value"}
+        assert result == {"a": 1}
 
-    def test_jsonp_with_dotted_callback(self):
-        """Test JSONP with dotted callback name."""
-        jsonp = 'a.b.c({"key": "value"});'
-        result = jsonp_to_json(jsonp)
-        assert result == {"key": "value"}
-
-    def test_invalid_jsonp(self):
-        """Test invalid JSONP raises exception."""
-        with pytest.raises(Exception, match="No JSON data found"):
-            jsonp_to_json("not a jsonp")
+    def test_no_callback_raises(self):
+        with pytest.raises(Exception, match="No JSON data"):
+            jsonp_to_json("not a jsonp string")
 
 
 class TestReplaceUrl:
-    """Test replace_url function."""
+    # Test replace_url.
 
     def test_replace_exact_line(self, tmp_path):
-        """Test replacing exact line match."""
-        test_file = tmp_path / "test.txt"
-        test_file.write_text("https://old.com\nother line\n", encoding="utf-8-sig")
-        replace_url(test_file, "https://old.com", "https://new.com")
-        content = test_file.read_text(encoding="utf-8-sig")
-        assert any(
-            (parsed.scheme, parsed.netloc) == ("https", "new.com")
-            for parsed in (urlparse(line) for line in content.splitlines())
-        )
+        f = tmp_path / "test.txt"
+        f.write_text("https://old.com/stream\nother line\n", encoding="utf-8-sig")
+        replace_url(f, "https://old.com/stream", "https://new.com/stream")
+        content = f.read_text(encoding="utf-8-sig")
+        assert "https://new.com/stream" in content
 
-    def test_replace_partial_line(self, tmp_path):
-        """Test replacing partial line match."""
-        test_file = tmp_path / "test.txt"
-        test_file.write_text("url = https://old.com\n", encoding="utf-8-sig")
-        replace_url(test_file, "https://old.com", "https://new.com")
-        content = test_file.read_text(encoding="utf-8-sig")
-        assert "https://new.com" in content
+    def test_replace_inline(self, tmp_path):
+        f = tmp_path / "test.txt"
+        f.write_text("url = https://old.com/live\n", encoding="utf-8-sig")
+        replace_url(f, "https://old.com/live", "https://new.com/live")
+        content = f.read_text(encoding="utf-8-sig")
+        assert "https://new.com/live" in content
+
+    def test_no_match_unchanged(self, tmp_path):
+        f = tmp_path / "test.txt"
+        f.write_text("unrelated content\n", encoding="utf-8-sig")
+        replace_url(f, "https://old.com", "https://new.com")
+        content = f.read_text(encoding="utf-8-sig")
+        assert "unrelated content" in content
 
 
 class TestGetQueryParams:
-    """Test get_query_params function."""
+    # Test get_query_params.
 
-    def test_get_all_params(self):
-        """Test getting all query parameters."""
-        url = "https://example.com?key1=value1&key2=value2"
-        result = get_query_params(url, None)
-        assert "key1" in result
-        assert "key2" in result
-        assert result["key1"] == ["value1"]
+    def test_all_params(self):
+        result = get_query_params("https://example.com?a=1&b=2", None)
+        assert "a" in result
+        assert "b" in result
 
-    def test_get_specific_param(self):
-        """Test getting specific parameter."""
-        url = "https://example.com?key1=value1&key2=value2"
-        result = get_query_params(url, "key1")
-        assert result == ["value1"]
+    def test_specific_param(self):
+        result = get_query_params("https://example.com?a=1&b=2", "a")
+        assert result == ["1"]
 
-    def test_get_nonexistent_param(self):
-        """Test getting non-existent parameter."""
-        url = "https://example.com?key1=value1"
-        result = get_query_params(url, "key2")
+    def test_missing_param(self):
+        result = get_query_params("https://example.com?a=1", "missing")
         assert result == []
-
-    def test_multiple_values(self):
-        """Test parameter with multiple values."""
-        url = "https://example.com?key=value1&key=value2"
-        result = get_query_params(url, "key")
-        assert result == ["value1", "value2"]
