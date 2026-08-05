@@ -3,11 +3,11 @@
 # 在 push 到主分支 / PR 时自动运行代码格式检查（black / isort）、
 # 静态类型检查（mypy）与单元测试（pytest），
 # 确保代码风格、类型安全与功能正确性在合入前通过验证。
+#
+# 路径过滤：仅当 Python 源码、测试或项目配置变更时才运行完整检查；
+# 纯前端（web/）、文档（*.md）、国际化（i18n/）变更不会触发 Python 相关 job。
 
 name: CI
-
- permissions:
-   contents: read
 
 on:
   push:
@@ -18,8 +18,43 @@ on:
       - main
 
 jobs:
+  # ── 路径过滤 ─────────────────────────────────────────────
+  # 使用 dorny/paths-filter 检测本次推送涉及的文件类别，
+  # 下游 job 通过 outputs.filters 决定是否跳过。
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      filters: ${{ steps.filter.outputs.changes }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Detect path changes
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            python:
+              - 'src/**'
+              - 'tests/**'
+              - 'scripts/**'
+              - 'build_exe.py'
+              - 'main.py'
+              - 'gui.py'
+              - 'gui_legacy.py'
+              - 'web.py'
+              - 'i18n.py'
+              - 'msg_push.py'
+              - 'requirements.txt'
+              - 'pyproject.toml'
+              - '.github/workflows/**'
+
+  # ── Lint ─────────────────────────────────────────────────
   lint:
     name: Lint (black --check)
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.filters), 'python')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -38,6 +73,8 @@ jobs:
 
   typecheck:
     name: Type Check (mypy)
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.filters), 'python')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -59,6 +96,8 @@ jobs:
 
   isort:
     name: Import Sort (isort --check)
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.filters), 'python')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -77,6 +116,8 @@ jobs:
 
   version-check:
     name: Version Consistency Check
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.filters), 'python')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -92,6 +133,8 @@ jobs:
 
   test:
     name: Test (pytest)
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.filters), 'python')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -111,8 +154,37 @@ jobs:
       - name: Run pytest
         run: pytest --cov=src --cov-report=term-missing
 
+  concurrency-test:
+    name: Concurrency Test (thread safety & rate limit)
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.filters), 'python')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-cov
+
+      - name: Run concurrency tests
+        # 通过 COVERAGE_RCFILE 使用并发测试专用覆盖率配置（不设全局 fail_under 阈值，
+        # 全局 20% 阈值由完整 test job 保证），确保仅并发测试场景下覆盖率检查合理通过
+        env:
+          COVERAGE_RCFILE: .coveragerc-concurrency
+        run: python -m pytest tests/test_concurrency_rate_limit.py tests/test_concurrency.py --cov=src --cov-report=term-missing:skip-covered
+
   integration-verify:
     name: Integration Verify (ffmpeg & node)
+    needs: changes
+    if: contains(fromJSON(needs.changes.outputs.filters), 'python')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

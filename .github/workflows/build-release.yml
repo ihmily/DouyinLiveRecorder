@@ -10,11 +10,6 @@ name: Build Executables
 
 on:
   workflow_dispatch:
-    inputs:
-      release_tag:
-        description: 'Release 版本号（如 v4.0.8）'
-        required: false
-        default: ''
   push:
     tags:
       - "v*"
@@ -135,27 +130,14 @@ jobs:
   release:
     name: Create GitHub Release
     needs: build
-    # 条件：推送标签 或 手动触发且提供了 release_tag
-    if: >
-      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != '')
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v7   # 同步升级至 Node.js 24 运行时
         with:
           path: artifacts
           merge-multiple: true
-
-      - name: Determine tag name
-        id: get_tag
-        run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            TAG="${{ github.ref_name }}"
-          else
-            TAG="${{ github.event.inputs.release_tag }}"
-          fi
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
 
       - name: Create Release
         uses: softprops/action-gh-release@v3
@@ -163,5 +145,3 @@ jobs:
           files: artifacts/*.zip
           generate_release_notes: true
           draft: false
-          tag_name: ${{ steps.get_tag.outputs.tag }}
-          # 如果手动触发时该标签不存在，Release 会自动创建它（需确保权限）
