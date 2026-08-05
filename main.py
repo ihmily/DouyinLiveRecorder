@@ -99,11 +99,11 @@ from src.proxy import ProxyDetector
 
 
 def _read_version_from_pyproject() -> str:
-    """从 pyproject.toml 读取版本号（单一事实源）。
-
-    优先使用 importlib.metadata（已安装时），
-    回退到直接解析 pyproject.toml 文件。
-    """
+    # 从 pyproject.toml 读取版本号（单一事实源）。
+    #
+    # 优先使用 importlib.metadata（已安装时），
+    # 回退到直接解析 pyproject.toml 文件。
+    #
     try:
         from importlib.metadata import version as get_version
 
@@ -1192,36 +1192,66 @@ def get_record_headers(platform: str, live_url: str) -> str | None:
     return record_headers.get(platform)
 
 
-def _validate_stream_url(url: str, proxy_addr: str | None = None, timeout: int = 5) -> bool:
+def _validate_stream_url(
+    url: str,
+    proxy_addr: str | None = None,
+    timeout: int = 5,
+    verify: bool | None = None,
+) -> bool:
+    # 校验流地址可达性（与 async_http.get_response_status 语义保持一致）：
+    # 1) 未显式指定时沿用全局 SSL 验证开关，避免与解析阶段的校验行为不一致
+    #    （用户关闭证书验证后，同步校验仍验证证书会导致误判不可达）；
+    # 2) m3u8 源 HEAD 非 2xx（含 403/404）时再做 Range GET 探测——抖音等 CDN 常
+    #    对 HEAD 返回 4xx 而 GET 可正常拉流，仅覆盖 400/401/403/405 会漏掉 404；
+    # 3) 失败必须记录原因（异常类型/状态码/content-type），禁止静默吞掉异常，
+    #    否则回退 FLV 时无法定位真实原因（如超时、被拒、内容类型不符）。
+    if verify is None:
+        verify = _http_config.ssl_verify
     try:
-        with httpx.Client(timeout=timeout, proxy=proxy_addr) as client:
+        with httpx.Client(timeout=timeout, proxy=proxy_addr, verify=verify) as client:
             response = client.head(url, follow_redirects=True)
             content_type = response.headers.get("content-type", "").lower()
             if any(k in content_type for k in ("video", "octet-stream", "flash", "mpegurl")):
                 return True
             if "text/html" in content_type or "application/json" in content_type:
+                logger.warning(
+                    f"流地址校验失败（返回非流媒体内容）: {url} - status_code={response.status_code}, content-type={content_type}"
+                )
                 return False
             if response.status_code == 200:
                 return True
-            # 抖音 m3u8 等 CDN 常对 HEAD 返回 4xx，但 GET 可正常拉流；
-            # 对 m3u8 源额外做一次 Range GET 可达性探测，避免误判而回退 FLV。
-            if ".m3u8" in url and response.status_code in (400, 401, 403, 405):
+            if ".m3u8" in url:
                 probe = client.get(url, headers={"Range": "bytes=0-0"}, follow_redirects=True)
-                return probe.status_code in (200, 206)
+                if probe.status_code in (200, 206):
+                    return True
+                logger.warning(
+                    f"流地址校验失败: {url} - HEAD={response.status_code}, Range-GET={probe.status_code}, "
+                    f"content-type={probe.headers.get('content-type', '')}"
+                )
+                return False
+            logger.warning(
+                f"流地址校验失败: {url} - status_code={response.status_code}, content-type={content_type}"
+            )
             return False
-    except Exception:
+    except Exception as e:
+        # Windows 下 socket.timeout 的 str() 为空，必须带上异常类型与 URL
+        logger.warning(f"流地址校验异常（判定为不可达）: {url} - {type(e).__name__}: {e}")
         return False
 
 
-def select_source_url(_link: str, stream_info: Mapping[str, object]) -> str | None:
+def select_source_url(
+    _link: str, stream_info: Mapping[str, object], proxy_addr: str | None = None
+) -> str | None:
     # HLS(m3u8) 优先采集：当存在 HLS 源且配置启用 HLS 采集时优先使用；
     # 仅当无 HLS 源 或 配置关闭 HLS 采集时，才回退使用 FLV 源。
+    # proxy_addr 必须透传给校验器：TikTok 等境外平台的流地址若不走与解析阶段
+    # 相同的代理路径，直连校验会超时被误判为不可达，导致错误回退甚至放弃录制。
     m3u8_url = stream_info.get("m3u8_url")
     flv_url = stream_info.get("flv_url")
     hls_available = isinstance(m3u8_url, str) and bool(m3u8_url)
 
     if hls_available and hls_collection_enabled:
-        if _validate_stream_url(cast(str, m3u8_url)):
+        if _validate_stream_url(cast(str, m3u8_url), proxy_addr=proxy_addr):
             return cast(str | None, m3u8_url)
         logger.warning("HLS URL validation failed, falling back to FLV")
 
@@ -1231,7 +1261,7 @@ def select_source_url(_link: str, stream_info: Mapping[str, object]) -> str | No
             logger.warning("FLV is not supported for h265 codec, use HLS source instead")
             if hls_available:
                 return cast(str | None, m3u8_url)
-        if _validate_stream_url(flv_url):
+        if _validate_stream_url(flv_url, proxy_addr=proxy_addr):
             return flv_url
         logger.warning("FLV URL validation failed, trying record_url fallback")
 
@@ -1240,7 +1270,7 @@ def select_source_url(_link: str, stream_info: Mapping[str, object]) -> str | No
         codec = utils.get_query_params(record_url, "codec")
         if isinstance(codec, list) and codec and codec[0] == "h265":
             logger.warning("record_url has h265 codec, but no HLS or FLV fallback available")
-        if _validate_stream_url(record_url):
+        if _validate_stream_url(record_url, proxy_addr=proxy_addr):
             return record_url
     return None
 
@@ -1324,7 +1354,13 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                                         url=record_url, proxy_addr=proxy_address, cookies=tiktok_cookie
                                     )
                                 )
-                                json_data = tiktok_data if tiktok_data is not None else {"is_live": False}
+                                # dict 值类型参数是不变的：回退字面量 {"is_live": False} 会被推断为
+                                # dict[str, bool]，与形参 dict[str, object] 不兼容，故 cast 收敛
+                                json_data = (
+                                    tiktok_data
+                                    if tiktok_data is not None
+                                    else cast(dict[str, object], {"is_live": False})
+                                )
                                 port_info = asyncio.run(
                                     stream.get_tiktok_stream_url(json_data, record_quality, proxy_address)
                                 )
@@ -1519,7 +1555,9 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                                 else:
                                     port_info = json_data
                             else:
-                                logger.error("错误信息: 网络异常，请检查本网络是否能正常访问TTingLive(原Flextv)直播平台")
+                                logger.error(
+                                    "错误信息: 网络异常，请检查本网络是否能正常访问TTingLive(原Flextv)直播平台"
+                                )
 
                     elif record_url.find("look.163.com/") > -1:
                         platform = "Look直播"
@@ -1980,7 +2018,7 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                                 time.sleep(push_check_seconds)
                                 continue
 
-                            real_url = select_source_url(record_url, port_info)
+                            real_url = select_source_url(record_url, port_info, proxy_address)
                             full_path = f"{default_path}/{platform}"
                             if real_url:
                                 now = datetime.datetime.today().strftime("%Y-%m-%d_%H-%M-%S")

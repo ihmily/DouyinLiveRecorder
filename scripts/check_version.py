@@ -1,9 +1,9 @@
-"""版本一致性检查脚本。
-
-以 pyproject.toml 中的 version 字段作为单一事实源（Single Source of Truth），
-与 main.py、Dockerfile、README.md、CODE_WIKI.md、i18n/zh_CN.po 中的版本号比对。
-任何不一致将以非零退出码报告，适用于 CI 流水线。
-"""
+# 版本一致性检查脚本。
+#
+# 以 pyproject.toml 中的 version 字段作为单一事实源（Single Source of Truth），
+# 与 main.py、Dockerfile、README.md、CODE_WIKI.md、i18n/zh_CN.po 中的版本号比对。
+# 任何不一致将以非零退出码报告，适用于 CI 流水线。
+#
 
 import re
 import sys
@@ -14,12 +14,12 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def strip_v(version: str) -> str:
-    """去除版本号前缀 v。"""
+    # 去除版本号前缀 v。
     return version.lstrip("v")
 
 
 def extract_pyproject_version() -> str:
-    """从 pyproject.toml 提取 version 字段（单一事实源）。"""
+    # 从 pyproject.toml 提取 version 字段（单一事实源）。
     text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     m = re.search(r'^version\s*=\s*["\'](.+?)["\']', text, re.MULTILINE)
     if not m:
@@ -29,14 +29,14 @@ def extract_pyproject_version() -> str:
 
 
 def extract_main_version() -> str | None:
-    """从 main.py 提取 version 变量值。
-
-    main.py 现在从 pyproject.toml 动态读取版本号，
-    此函数用于验证 main.py 中的 _read_version_from_pyproject 回退逻辑
-    所解析出的版本是否与 pyproject.toml 一致。
-    由于 main.py 使用 importlib.metadata 或正则解析，
-    这里直接检查 main.py 是否已移除硬编码版本。
-    """
+    # 从 main.py 提取 version 变量值。
+    #
+    # main.py 现在从 pyproject.toml 动态读取版本号，
+    # 此函数用于验证 main.py 中的 _read_version_from_pyproject 回退逻辑
+    # 所解析出的版本是否与 pyproject.toml 一致。
+    # 由于 main.py 使用 importlib.metadata 或正则解析，
+    # 这里直接检查 main.py 是否已移除硬编码版本。
+    #
     text = (ROOT / "main.py").read_text(encoding="utf-8")
     # 检查是否还存在硬编码版本号（旧模式：version: str = "vX.Y.Z"）
     if re.search(r'^version:\s*str\s*=\s*["\']v?\d', text, re.MULTILINE):
@@ -46,28 +46,28 @@ def extract_main_version() -> str | None:
 
 
 def extract_dockerfile_version() -> str | None:
-    """从 Dockerfile LABEL 中提取 version。"""
+    # 从 Dockerfile LABEL 中提取 version。
     text = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     m = re.search(r'version="(.+?)"', text)
     return strip_v(m.group(1)) if m else None
 
 
 def extract_readme_version() -> str | None:
-    """从 README.md 变更日志标题提取最新版本号。"""
+    # 从 README.md 变更日志标题提取最新版本号。
     text = (ROOT / "README.md").read_text(encoding="utf-8")
     m = re.search(r"^###\s+v?(\d+\.\d+\.\d+(?:\.\d+)?)", text, re.MULTILINE)
     return strip_v(m.group(1)) if m else None
 
 
 def extract_codewiki_version() -> str | None:
-    """从 CODE_WIKI.md 项目概览中提取版本号。"""
+    # 从 CODE_WIKI.md 项目概览中提取版本号。
     text = (ROOT / "CODE_WIKI.md").read_text(encoding="utf-8")
     m = re.search(r"\*\*版本\*\*:\s*(\d+\.\d+\.\d+(?:\.\d+)?)", text)
     return strip_v(m.group(1)) if m else None
 
 
 def extract_po_version() -> str | None:
-    """从 i18n/zh_CN.po 注释或 Project-Id-Version 中提取版本号。"""
+    # 从 i18n/zh_CN.po 注释或 Project-Id-Version 中提取版本号。
     po_path = ROOT / "i18n" / "zh_CN" / "LC_MESSAGES" / "zh_CN.po"
     if not po_path.exists():
         return None

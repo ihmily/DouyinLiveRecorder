@@ -2049,7 +2049,9 @@ async def get_flextv_stream_data(
                 "password are correctly filled in the configuration file."
             )
             if not username or not password or len(username) < 6 or len(password) < 8:
-                raise RuntimeError("TTingLive(原Flextv)登录失败！请在config.ini配置文件中填写正确的TTingLive(原Flextv)平台的账号和密码")
+                raise RuntimeError(
+                    "TTingLive(原Flextv)登录失败！请在config.ini配置文件中填写正确的TTingLive(原Flextv)平台的账号和密码"
+                )
             new_cookies = await login_flextv(username, password, proxy_addr=proxy_addr)
             if new_cookies:
                 print("Logged into FlexTV platform successfully! Starting to fetch live streaming data...")
@@ -3941,7 +3943,8 @@ async def get_taobao_stream_url(
                             "live_id": live_id,
                         }
 
-                return result
+                    # 仅在成功分支返回 result；否则落入循环重试（ret 非空但非 SUCCESS）
+                    return result
             else:
                 if "_m_h5_tk" not in new_cookie or "_m_h5_tk_enc" not in new_cookie:
                     raise RuntimeError(

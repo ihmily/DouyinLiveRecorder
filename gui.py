@@ -178,6 +178,9 @@ class SystemTray:
         self.gui = gui_app
         self.icon: "PystrayIcon | None" = None
         self.running = False
+        # 是否以 macOS run_detached()（非阻塞、仅注册状态栏图标）模式运行；
+        # 该模式下 stop() 前需先主动隐藏图标（详见 stop() 注释）。
+        self.detached = False
 
     def create_icon_image(self) -> Image.Image:
         # 创建现代化托盘图标
@@ -216,8 +219,12 @@ class SystemTray:
         try:
             Image.preinit()
             Image.init()
-            # 模拟 pystray._assert_image 的 resize(状态栏约 22x22) + PNG 保存
-            thumb = image.resize((22, 22), Image.Resampling.LANCZOS)
+            # 模拟 pystray._assert_image 的 resize(状态栏约 22x22) + PNG 保存。
+            # 用 thumbnail（内部同样走 resize + LANCZOS）代替 resize：Pillow 存根的
+            # resize.size 形参为 tuple|list|NumpyArray，未装 numpy 时 NumpyArray 无法
+            # 解析为 Unknown 会触发 reportUnknownMemberType，thumbnail 签名则完全可解析。
+            thumb = image.copy()
+            thumb.thumbnail((22, 22), Image.Resampling.LANCZOS)
             _buf = io.BytesIO()
             thumb.save(_buf, "PNG")
         except Exception:
@@ -293,14 +300,15 @@ class SystemTray:
             # setup 线程命中缓存直接返回，从根本上消除后台线程崩溃。
             # 若环境无系统托盘（headless），_assert_image 抛 ObjC 异常，
             # 则跳过 run_detached()，托盘优雅降级、GUI 进程继续存活。
-            icon._assert_image()  # type: ignore[attr-defined]  # darwin 后端专有方法
+            icon._assert_image()
             # 标记图标已有效：阻止 setup 线程里 visible=True 触发 _update_icon()
             # 把刚缓存的 _icon_image 清空后在后台线程重新 PNG 编码（否则上面的
             # 主线程预热就会被绕过，冻结环境的原生崩溃风险回归）。
-            icon._icon_valid = True  # type: ignore[attr-defined]
+            icon._icon_valid = True
             self.icon = icon
+            self.detached = True
             self.running = True
-            icon.run_detached()  # type: ignore[attr-defined]
+            icon.run_detached()
         except Exception as exc:
             self._degrade(exc)
 
@@ -309,7 +317,7 @@ class SystemTray:
         # macOS detached 模式下 pystray _run() 的 finally（移除状态栏项）不会执行，
         # 需先主动隐藏图标再 stop。
         if self.icon and self.running:
-            if sys.platform == "darwin":
+            if self.detached:
                 try:
                     self.icon.visible = False
                 except Exception:
@@ -428,6 +436,7 @@ class AdvancedSettingsWindow:
     def save_config(self) -> None:
         # 保存编辑器内容到 config.ini
         try:
+            # pyrefly: ignore [bad-argument-type]
             _save_text_widget_to_file(self.config_text, self.config_file)
             messagebox.showinfo("成功", "配置文件已保存！")
             if self.log_callback:
@@ -437,7 +446,7 @@ class AdvancedSettingsWindow:
             messagebox.showerror("错误", f"保存配置文件失败: {e}")
 
 
-def _save_text_widget_to_file(text_widget: tk.Text, file_path: str) -> None:
+def _save_text_widget_to_file(text_widget: ctk.CTkTextbox, file_path: str) -> None:
     # 从文本控件读取内容并写入文件
     content = text_widget.get("1.0", tk.END).rstrip("\n")
     if content and not content.endswith("\n"):
@@ -1274,9 +1283,10 @@ class LiveRecorderGUI:
     def _add_quality_data_row(self, name: str, info: dict[str, str | bool | float]) -> None:
         # 添加一行画质监控数据
         downgraded = bool(info.get("downgraded", False))
-        set_q = info.get("set_quality", "—")
-        actual_q = info.get("actual_quality", "")
-        alert_time = info.get("alert_time", "")
+        # info 值为 str | bool | float 联合，而 CTkLabel.text 仅接受 str，统一转字符串展示
+        set_q = str(info.get("set_quality", "—"))
+        actual_q = str(info.get("actual_quality", ""))
+        alert_time = str(info.get("alert_time", ""))
 
         if downgraded:
             actual_display = actual_q or "—"

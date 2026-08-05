@@ -205,9 +205,7 @@ logs/
 *.log
 *.log.*
 
-# 编译的翻译文件（可选：如果在 git 中分发可删除）
-i18n/**/*.mo
-
+# 编译的翻译文件 .mo 随仓库分发（gettext 运行时必需，不忽略）
 # 编译 PO 文件的临时脚本
 i18n/**/compile_po.py
 
@@ -220,6 +218,8 @@ desktop.ini
 *.cmd
 *.bat
 *.vbs
+# StopRecording.vbs 是项目自带的停止录制脚本，需要随仓库分发
+!StopRecording.vbs
 
 # macOS 特定文件
 .DS_Store
@@ -239,6 +239,11 @@ desktop.ini
 # 系统托盘图标缓存
 *.icon
 
-# 文档文件
-CODE_WIKI.md
+# AI 助手工作目录
+.workbuddy/
+.codebuddy/
+.trae/
+
+# 临时/过程性文档（CODE_WIKI.md 是正式架构文档，随仓库分发，不忽略）
 CODE_CHANGES.md
+TRAE_AGENT_CODE_WIKI.md

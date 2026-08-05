@@ -177,23 +177,36 @@ DouyinLiveRecorder/
 ├── build_exe.py                         # PyInstaller 打包脚本（CLI/GUI/Web 三入口）
 ├── DouyinLiveRecorder.spec              # 由 build_exe.py 自动生成（.gitignore 已忽略）
 ├── requirements.txt                     # Python 依赖列表
-├── pyproject.toml                      # Python 项目配置
+├── pyproject.toml                      # Python 项目配置（版本号/工具配置/覆盖率门禁单一事实源）
+├── .coveragerc-concurrency             # 并发测试专用覆盖率配置（CI concurrency-test job 使用，不设全局阈值）
+├── scripts/                             # 辅助脚本
+│   ├── check_version.py                # 版本号一致性校验（CI version-check job 调用）
+│   └── sync_version.py                 # 版本号同步脚本（pyproject → 各文档）
 ├── Dockerfile                          # Docker 构建文件（多阶段）
 ├── docker-compose.yaml                 # Docker Compose（recorder/web/gui 三服务）
 ├── .dockerignore                       # Docker 构建上下文排除文件
 ├── .gitignore                          # Git 排除文件
 ├── README.md                           # 项目说明
-├── tests/                               # 单元测试目录
+├── tests/                               # 单元测试目录（asyncio_mode=auto，覆盖率 source=src）
 │   ├── conftest.py                     # Pytest 配置与 fixtures
 │   ├── test_stream.py                  # stream.py 核心路径测试（工具函数 + 平台流解析）
 │   ├── test_async_http.py              # async_http.py 核心路径测试（客户端管理 + 请求）
+│   ├── test_sync_http.py               # sync_http.py 同步客户端测试
 │   ├── test_room.py                    # room.py 直播间解析测试
 │   ├── test_spider.py                  # spider.py 爬虫测试
+│   ├── test_spider_platform.py         # spider.py 多平台分发测试
 │   ├── test_utils.py                   # utils.py 工具函数测试
-│   └── test_douyin_url_resolution.py   # 抖音 URL 分发逻辑测试
+│   ├── test_douyin_url_resolution.py   # 抖音 URL 分发逻辑测试
+│   ├── test_ttwid.py                   # 抖音 ttwid 共享缓存测试
+│   ├── test_ab_sign.py                 # A-Bogus 签名算法测试
+│   ├── test_proxy.py                   # 代理检测测试
+│   ├── test_weverse_auth.py            # Weverse 认证测试
+│   ├── test_concurrency.py             # 线程安全并发测试
+│   └── test_concurrency_rate_limit.py  # 抖音速率限制并发测试
 ├── .github/                             # GitHub Actions 工作流目录
 │   └── workflows/
-│       └── build-release.yml           # 三平台构建 + 自动发布 Release
+│       ├── ci.yml                      # CI 静态验证（lint/typecheck/isort/version-check/test/concurrency/integration）
+│       └── build-release.yml           # 三平台构建（lite + full 双产物）+ 自动发布 Release
 └── CODE_WIKI.md                        # 本架构文档
 ```
 
@@ -237,8 +250,8 @@ recording_time_list: dict   # 录制时间与画质记录 {name: [start_time, qu
 - `check_live_status()` - 检测直播状态
 - `display_info()` - 终端状态展示（兼容新旧 recording_time_list 格式）
 - `get_status()` - 返回录制状态 dict（含 actual_quality 字段，供 Web API 使用）
-- `select_source_url()` - 在 m3u8/FLV 源间选择，HLS 源校验失败时回退 FLV（`delay_default=120s` 轮询）
-- `_validate_stream_url()` - 流地址校验（2026-08-01 增强）：content-type 判定补充 `mpegurl`；HEAD 被拒时对 `.m3u8` 源补 `Range: bytes=0-0` GET 探测——抖音 CDN 的 m3u8 常对 HEAD 返回 4xx，此前会被误判不可达而总回退 FLV
+- `select_source_url()` - 在 m3u8/FLV 源间选择，HLS 源校验失败时回退 FLV（`delay_default=120s` 轮询）；新增 `proxy_addr` 参数透传给三处校验调用，避免 TikTok 等需代理平台直连校验误判不可达
+- `_validate_stream_url()` - 流地址校验：content-type 判定补充 `mpegurl`；HEAD 被拒时对 `.m3u8` 源（**含 404**）补 `Range: bytes=0-0` GET 探测——抖音 CDN 的 m3u8 常对 HEAD 返回 4xx，此前会被误判不可达而总回退 FLV；新增 `verify` 参数沿用全局 SSL 开关（与异步校验一致）；所有失败路径记录 warning（URL + 异常类型/状态码/content-type），不再静默吞异常
 
 ---
 
@@ -444,8 +457,8 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 
 | 文件                                | 说明           | 条目数 |
 | --------------------------------- | ------------ | --- |
-| `i18n/zh_CN/LC_MESSAGES/zh_CN.po` | 中文翻译源文件（可编辑） | 200 |
-| `i18n/zh_CN/LC_MESSAGES/zh_CN.mo` | 编译后的二进制翻译文件  | 200 |
+| `i18n/zh_CN/LC_MESSAGES/zh_CN.po` | 中文翻译源文件（可编辑） | 203 |
+| `i18n/zh_CN/LC_MESSAGES/zh_CN.mo` | 编译后的二进制翻译文件  | 203 |
 | `i18n/en/LC_MESSAGES/`            | 英文翻译目录（预留）   | —   |
 
 **翻译覆盖范围**:
@@ -514,7 +527,7 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 - **事件循环检测**: 缓存记录每个 client 创建时的事件循环引用，检测到 `asyncio.run()` 导致循环变更时自动重建客户端，避免 `'NoneType' object has no attribute 'send'` 错误
 - **SSL 验证**: 由全局配置 `src/http_config.py` 统一控制，默认启用
 - **连接池清理**: 进程退出时通过 atexit / 信号处理器释放所有复用的 AsyncClient
-- **`get_response_status()` m3u8 容错**（2026-08-01）: HEAD 校验失败时，若 URL 以 `.m3u8` 结尾则补一次 `Range: bytes=0-0` GET 轻量探测（返回 200/206 即判可达）；非 m3u8 源（FLV/record_url）行为不变。异常日志带上下文描述，避免 `str(e)` 为空时只输出空消息
+- **`get_response_status()` m3u8 容错**（2026-08-05 增强）: HEAD 校验失败时，若 URL 以 `.m3u8` 结尾则补一次 `Range: bytes=0-0` GET 轻量探测（**含 404 在内的所有非 2xx 均触发探测**，返回 200/206 即判可达）；非 m3u8 源（FLV/record_url）行为不变。异常日志带 URL + `type(e).__name__`（如 `ConnectTimeout` / `TimeoutError`），避免 Windows 下 `socket.timeout` 的 `str()` 为空时只输出空白消息；探测失败记录 `status_code` / `content-type` 便于排障
 
 **被以下模块导入**:
 
@@ -900,9 +913,11 @@ PyInstaller `onedir` 模式 + `contents_directory='_internal'`，动态生成 `.
 **用法**：
 
 ```bash
-python build_exe.py            # 打包并生成 zip 产物
-python build_exe.py --smoke    # 打包后额外运行冒烟测试（CI 推荐）
-python build_exe.py --no-zip   # 仅打包不压缩
+python build_exe.py              # 打包并生成 zip 产物
+python build_exe.py --smoke      # 打包后额外运行冒烟测试（CI 推荐）
+python build_exe.py --no-zip     # 仅打包不压缩
+python build_exe.py --no-runtime # 跳过 ffmpeg/node 打包（交由用户运行时自动下载，减小体积）
+python build_exe.py --dual       # 同时生成 lite（无运行时）与 full（下载并打包 ffmpeg+node）两个 zip
 ```
 
 **数据文件与隐藏导入**：
@@ -910,7 +925,7 @@ python build_exe.py --no-zip   # 仅打包不压缩
 - `datas`：`src/javascript`（JS 签名脚本）、`i18n`（翻译）、`web`（前端静态资源），均经 `__file__` 定位，PyInstaller 自动收进 `_internal/`；`collect_data_files('customtkinter')`（主题 JSON）。
 - `config/` 不进 `_internal`，由 `copy_external_binaries()` 复制到 exe 同级（见目录规范）。
 - `hiddenimports`：`i18n`、`src.async_http`（main.py 经 `__import__` 动态导入）、`h2`（httpx[http2] 懒加载）；`a_web` 额外 `collect_submodules('uvicorn')`（协议模块按字符串导入）。
-- `excludes`：CLI 排除 GUI/Web 库（tkinter/customtkinter/pystray/PIL/fastapi/uvicorn/starlette）；GUI 排除 Web 库；Web 排除 GUI 库。
+- `excludes`：CLI 排除 GUI/Web 库（tkinter/customtkinter/pystray/PIL/fastapi/uvicorn/starlette）；GUI 排除 Web 库；Web 排除 GUI 库；三个入口均额外排除 `brotlicffi`（修复打包后 brotlicffi 模块缺失 `error` 属性的报错，httpx 无 brotli 时自动回退）。
 
 **版本号**：从 `pyproject.toml` 的 `version` 字段解析（单一事实源），用于 zip 命名，解析失败回退 `0.0.0`。`main.py` 运行时同样从 `pyproject.toml` 动态读取版本号（优先 `importlib.metadata`，回退直接解析文件）。
 
@@ -975,37 +990,56 @@ def _app_root() -> str:
 
 冒烟前会向 exe 级 `config/URL_config.ini` 写入一条注释 URL，避免 CLI 因 URL 列表为空而阻塞在 `input()`。
 
-### 6. GitHub Actions 自动构建与发布
+### 6. GitHub Actions CI 静态验证（`ci.yml`）
 
-工作流文件：`.github/workflows/build-release.yml`（任务名 `Build Executables`）。
+工作流文件：`.github/workflows/ci.yml`，在 push 到 main / PR 时运行，确保代码风格、类型安全与功能正确性在合入前通过验证。
+
+**路径过滤**：`changes` job 使用 `dorny/paths-filter@v3` 检测变更文件类别，仅当 Python 源码（src/、根目录入口）、测试、`scripts/`、依赖清单或工作流自身变更时才运行下游 job；纯前端（web/）、文档（*.md）、国际化（i18n/）变更不会触发。
+
+**并行 jobs**（均 `needs: changes` 条件门控）：
+
+| Job               | 运行环境        | 内容                                                                       |
+| ----------------- | ----------- | ------------------------------------------------------------------------ |
+| `lint`            | py3.12      | `black --check .`                                                        |
+| `typecheck`       | py3.10      | 安装 requirements + mypy 后运行 `mypy src/`                                   |
+| `isort`           | py3.12      | `isort --check .`                                                        |
+| `version-check`   | py3.12      | `python scripts/check_version.py`（版本号单一事实源一致性校验）                       |
+| `test`            | py3.10      | `pytest --cov=src --cov-report=term-missing`（全局 `fail_under=50` 门禁）    |
+| `concurrency-test` | py3.10     | 并发专项：`COVERAGE_RCFILE=.coveragerc-concurrency` 下跑 `test_concurrency_rate_limit.py` + `test_concurrency.py`（专用配置不设全局阈值，避免与完整 test job 冲突） |
+| `integration-verify` | py3.10 + Node 24 | apt 安装 ffmpeg；验证 ffmpeg/node 二进制可发现、版本可读，并调用 `check_ffmpeg_installed()` / `check_nodejs_installed()` 验证检测逻辑 |
+
+### 7. GitHub Actions 自动构建与发布（`build-release.yml`）
+
+工作流文件：`.github/workflows/build-release.yml`（任务名 `Build (${{ matrix.os }})`）。
 
 **触发方式**：
 
 - 手动触发（`workflow_dispatch`）：三平台构建并上传 artifact。
-- 推送 `v*` 标签（如 `v4.0.8`）：构建 + 自动创建 GitHub Release 并附三平台 zip。
+- 推送 `v*` 标签（如 `v4.0.8`）：构建 + 自动创建 GitHub Release 并附产物（`permissions: contents: write`）。
 
-**构建矩阵**：`windows-latest` / `ubuntu-latest` / `macos-latest`，Python 3.12。
+**构建矩阵**：`windows-latest` / `ubuntu-latest` / `macos-latest`，Python 3.12（`fail-fast: false`）。
 
 **流程**：
 
 1. Checkout → Setup Python 3.12（pip 缓存）。
-2. 安装 ffmpeg（Linux/macOS 用系统包；Windows 用仓库内置）；Linux 额外装 `xvfb`（GUI 冒烟需虚拟显示）。
+2. 各平台用系统包管理器安装 ffmpeg 供冒烟测试：Windows `choco install ffmpeg`、Linux `apt`（额外装 `xvfb`，GUI 冒烟需虚拟显示）、macOS `brew install ffmpeg`（先 `brew trust aws/tap` 兜底 runner 预置未受信 tap）。
 3. `pip install -r requirements.txt pyinstaller`。
-4. `python build_exe.py --smoke`（Linux 用 `xvfb-run -a` 包裹）。
-5. 上传 `dist/*.zip` artifact。
-6. `release` job（仅 tag 触发）：下载全部 artifact，用 `softprops/action-gh-release@v2` 创建 Release 并附 zip，`generate_release_notes: true`。
+4. `python build_exe.py --smoke --dual`（Linux 用 `xvfb-run -a` 包裹）：PyInstaller 只跑一次，先产 **lite** zip（不含 ffmpeg/node，运行时自动下载）再下载预构建二进制产 **full** zip（内置运行时）；冒烟测试跑在 lite 版本上。
+5. 上传 artifact（`actions/upload-artifact@v7`，`compression-level: 0` 跳过重复压缩）：lite 直接上传；full（约 300MB）叠加工作流级显式重试（最多 3 次，退避 30s → 60s），应对瞬时网络故障，最后一次失败才令 job 失败。
+6. `release` job（仅 tag 触发）：`actions/download-artifact@v7`（`merge-multiple`）下载全部产物，用 `softprops/action-gh-release@v3` 创建 Release 并附全部 zip，`generate_release_notes: true`。
 
-**产物命名**：`DouyinLiveRecorder-v{version}-{os}-{arch}.zip`（如 `DouyinLiveRecorder-v4.0.7-windows-amd64.zip`，约 118 MB）。
+**产物命名**：`DouyinLiveRecorder-v{version}-{os}-{arch}-{lite|full}.zip`（如 `DouyinLiveRecorder-v4.0.8.1-windows-amd64-full.zip`）。
 
-### 7. 本地打包步骤
+### 8. 本地打包步骤
 
 ```bash
 pip install pyinstaller          # 安装打包器
 python build_exe.py --smoke      # 打包 + 冒烟测试
+python build_exe.py --smoke --dual  # 与 CI 一致：lite + full 双产物
 # 产物：dist/DouyinLiveRecorder/ 发布目录 + dist/DouyinLiveRecorder-vX.Y.Z-*.zip
 ```
 
-注意：本仓库为本地副本，工作流需推送至 GitHub 仓库后才可运行。CI Linux/macOS 产物不含 `ffmpeg`/`node`，首次运行会自动下载。
+注意：本仓库为本地副本，工作流需推送至 GitHub 仓库后才可运行。lite 产物（及 CI Linux/macOS 产物）不含 `ffmpeg`/`node`，首次运行会自动下载。
 
 ---
 
@@ -1083,6 +1117,23 @@ brew install node
 - 更新 UA（使用 `room.DESKTOP_UA` 桌面 Chrome UA）
 - 若日志出现 `10002` 后 HTML 兜底成功，属正常链路，无需处理
 
+### 问题 4: HLS 校验失败日志空白 / 总回退 FLV
+
+**现象**（日志连续出现，且无任何可排障信息）：
+
+```
+get_response_status 校验失败（判定为不可达）:      ← 消息是空的
+HLS URL validation failed, falling back to FLV    ← 原因完全不可见
+```
+
+**根因**（三层，均已修复于 2026-08-05）：
+
+- 异常日志只打印 `{e}`，而 Windows 下 `socket.timeout` / `TimeoutError` 的 `str()` 返回**空字符串**，导致超时异常打出来是空白
+- `main.py::_validate_stream_url` 用 `except Exception: return False` 把失败原因全部吞掉，回退时无任何线索
+- m3u8 源 HEAD 探测只覆盖 `400/401/403/405`，**404 直接判不可达**；且 `select_source_url` → 校验调用**不透传代理**，TikTok 等境外平台直连校验必超时误判
+
+**修复后**：异常日志带 URL + 异常类型；所有失败路径记录 warning（含 status_code / content-type）；m3u8 HEAD 非 2xx（含 404）一律补 Range GET 探测；`select_source_url` 透传 `proxy_addr`。重新运行后日志会直接给出真实原因（如 `ConnectTimeout`、`HEAD=404, Range-GET=403`）；若仍不可达则是 CDN 域名被墙或主播流地址已失效等环境问题，而非代码误判。
+
 ---
 
 ## 贡献指南
@@ -1092,6 +1143,23 @@ brew install node
 - 格式化: `black .`
 - 导入排序: `isort .`
 - 类型检查: `mypy src/`（已启用 `disallow_untyped_defs = true`，`--strict` 模式全通过）
+
+### 测试与覆盖率
+
+- 运行测试: `pytest`（`asyncio_mode = "auto"`，异步用例无需显式标记）；当前 417 passed，总覆盖率 50.34%
+- 覆盖率配置集中在 `pyproject.toml`：`source = ["src"]`，全局门禁 `fail_under = 50`
+- 高频变更核心模块设独立覆盖率门禁（记录于 `pyproject.toml` 注释，CI 中通过 `--cov-fail-under` 或脚本检查）：
+
+| 模块           | 门禁    | 当前覆盖 |
+| ------------ | ----- | ---- |
+| `spider.py`  | ≥50%  | 50%  |
+| `stream.py`  | ≥70%  | 70%  |
+| `utils.py`   | ≥80%  | 82%  |
+| `ttwid.py`   | ≥85%  | 85%  |
+| `ab_sign.py` | ≥95%  | 99%  |
+| `proxy.py`   | ≥50%  | 51%  |
+
+- 并发专项测试（`test_concurrency.py` / `test_concurrency_rate_limit.py`）使用专用配置 `.coveragerc-concurrency`（不设全局阈值），验证 `threading.Lock` 去重与抖音速率限制在多线程环境下的正确性
 
 ### 添加新平台支持
 
@@ -1103,6 +1171,61 @@ brew install node
 ---
 
 ## 更新日志
+
+### v4.0.8.1-dev (2026-08-05) — CI 静态验证工作流、并发测试集成与覆盖率门禁提升
+
+**新增 `.github/workflows/ci.yml` 静态验证工作流：**
+
+- push 到 main / PR 触发；`dorny/paths-filter@v3` 路径过滤，纯前端/文档/i18n 变更不触发 Python 检查
+- 7 个并行 job：lint（black --check）、typecheck（mypy src/，py3.10）、isort（--check）、version-check（`scripts/check_version.py`）、test（pytest + 覆盖率）、concurrency-test、integration-verify（ffmpeg/node 二进制可发现性 + `check_ffmpeg_installed()` / `check_nodejs_installed()` 检测函数验证）
+- concurrency-test 通过 `COVERAGE_RCFILE=.coveragerc-concurrency` 使用专用覆盖率配置（不设全局阈值，全局门禁由完整 test job 保证），运行 `test_concurrency_rate_limit.py` + `test_concurrency.py`
+
+**覆盖率门禁与测试扩充：**
+
+- `pyproject.toml` `fail_under`：20 → 50（当前总覆盖率 50.34%）
+- 高频变更核心模块独立门禁（记录于 pyproject.toml 注释）：spider.py ≥50%、stream.py ≥70%、utils.py ≥80%、ttwid.py ≥85%、ab_sign.py ≥95%、proxy.py ≥50%
+- 新增测试文件：test_ab_sign / test_concurrency / test_concurrency_rate_limit / test_proxy / test_spider_platform / test_sync_http / test_ttwid / test_weverse_auth；当前 417 passed
+
+**build-release.yml 升级为 lite/full 双产物：**
+
+- CI 构建命令改为 `python build_exe.py --smoke --dual`：PyInstaller 只跑一次，同时产出 lite（无 ffmpeg/node，运行时自动下载）与 full（构建时下载并打包预构建二进制）两个 zip，冒烟测试跑在 lite 版本上
+- `build_exe.py` 新增 `--no-runtime` / `--dual` 参数；产物命名 `DouyinLiveRecorder-v{version}-{os}-{arch}-{lite|full}.zip`
+- full zip（约 300MB）上传叠加工作流级显式重试（最多 3 次，退避 30s → 60s）；上传/下载 action 升级至 v7（Node.js 24 运行时），`compression-level: 0` 跳过重复压缩
+- 三平台冒烟用 ffmpeg 改用系统包管理器安装：Windows choco / Linux apt(+xvfb) / macOS brew（`brew trust aws/tap` 兜底）
+- Release 创建改用 `softprops/action-gh-release@v3`；打包三入口均排除 `brotlicffi`（修复打包后该模块缺失 `error` 属性的报错）
+
+---
+
+### v4.0.8.1-dev (2026-08-05) — HLS 校验误判与空白日志修复
+
+**问题背景**：运行日志出现 `get_response_status 校验失败（判定为不可达）: `（消息空白）+ `HLS URL validation failed, falling back to FLV`，且 8-01 与 8-05 日志为同一种模式。根因有三层：Windows 下 `socket.timeout` / `TimeoutError` 的 `str()` 为空导致异常日志空白；`_validate_stream_url` 静默吞异常；m3u8 HEAD 探测未覆盖 404 且 `select_source_url` 未透传代理。
+
+**改动（3 处）**：
+
+- `src/async_http.py` `get_response_status()`：异常日志带 URL + `type(e).__name__`；m3u8 HEAD 非 2xx（**含 404**）一律补 `Range: bytes=0-0` GET 探测；探测失败记录 status_code / content-type
+- `main.py` `_validate_stream_url()`：新增 `verify` 参数（沿用全局 SSL 开关，与异步校验一致）；m3u8 404 也探测；所有失败路径记录 warning（URL + 异常类型/状态码/content-type），不再静默
+- `main.py` `select_source_url()`：新增 `proxy_addr` 参数并透传给三处校验调用；调用处 `main.py:1991` 传入 `proxy_address`，修复 TikTok 等需代理平台直连校验误判不可达
+
+**验证**：`py_compile` 通过；mock httpx 跑 5 个用例全 PASS（含修复前误判的 HEAD404+GET206→可达、TimeoutError→不可达且日志带类型与 URL 场景）
+
+---
+
+### v4.0.8.1-dev (2026-08-02 ~ 2026-08-04) — 平台命名规范落地与类型/逻辑修复
+
+**平台命名规范产品级落地（2026-08-02）：**
+
+- `main.py`：CLI 帮助串、`logger.error` 字面量与内部 platform slug 全部改为规范显示名（bigo、blued、Look直播、TTingLive(原Flextv)、SOOP(原AfreecaTV)、YouTube、飘飘）；同步成对耦合改动：录制请求头 dict 键（`FlexTV`→`TTingLive(原Flextv)`、`Blued直播`→`blued`）与 `re_plat` 正则元组
+- `src/spider.py`：注释与中文异常消息同步规范名；英文 gettext msgid 保留不动（避免断翻译）；重新编译 `zh_CN.mo`（203 条）
+- 内部配置/API slug（sooplive/flextv/tiktok）与代码解析配对，故意不改
+
+**类型与逻辑修复（2026-08-03 ~ 08-04）：**
+
+- `gui.py` 达 basedpyright/pyright 0/0/0：`typings/pystray/__init__.pyi` 补齐 darwin 专有成员（`run_detached`/`_assert_image`/`_icon_valid`/`visible`）；`SystemTray` 新增 `self.detached` 标志替代 `sys.platform == "darwin"` 判断（消除 win32 平台分支不可达 hint）；PIL 图标预热改用 `thumbnail()` 规避 `resize` 的 NumpyArray 签名 Unknown 推断
+- 发现 basedpyright 1.39.9 默认 `enableTypeIgnoreComments=false`：项目内历史 `# type: ignore` 注释当前均无效，告警消除一律改用类型存根补全/拓宽类型/改实现
+- `main.py`：TikTok 回退字面量 `{"is_live": False}` 用 `cast(dict[str, object], ...)` 收窄，修复联合类型不匹配
+- `src/spider.py` `get_taobao_stream_url()` 修复缩进缺陷：`return result` 原位于 SUCCESS 分支之外，淘宝接口返回非 SUCCESS 非空 ret 时运行期 `UnboundLocalError`；现移入成功分支，非 SUCCESS 落入循环重试并以 `{"anchor_name": "", "is_live": False}` 兜底
+
+---
 
 ### v4.0.8.1-dev (2026-08-01) — mypy 严格模式全通过与类型注解收紧
 
@@ -1456,4 +1579,4 @@ brew install node
 
 ---
 
-*本文档最后更新: 2026-08-01（mypy 严格模式全通过与类型注解收紧）*
+*本文档最后更新: 2026-08-05（全量同步：CI 双工作流、并发测试与覆盖率门禁 50%、lite/full 双产物打包、平台命名规范；HLS 校验误判与空白日志修复）*

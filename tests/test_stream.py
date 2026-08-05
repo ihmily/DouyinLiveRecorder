@@ -1,4 +1,4 @@
-"""Tests for src/stream.py module — 纯工具函数 + 核心平台流地址解析路径。"""
+# Tests for src/stream.py module — 纯工具函数 + 核心平台流地址解析路径。
 
 from unittest.mock import AsyncMock, patch
 
@@ -9,13 +9,12 @@ from src.stream import (
     QUALITY_LEVEL,
     QUALITY_MAPPING,
     QUALITY_MAPPING_BIT,
+    _pad_list,
     bitrate_to_quality,
     code_to_zh,
     get_quality_index,
     is_downgrade,
-    _pad_list,
 )
-
 
 # ────────────────────────────────────────────────────────────
 # 纯工具函数
@@ -23,7 +22,7 @@ from src.stream import (
 
 
 class TestBitrateToQuality:
-    """bitrate_to_quality: 码率 → 画质代码映射。"""
+    # bitrate_to_quality: 码率 → 画质代码映射。
 
     def test_zero_bitrate_returns_od(self):
         assert bitrate_to_quality(0) == "OD"
@@ -58,7 +57,7 @@ class TestBitrateToQuality:
 
 
 class TestCodeToZh:
-    """code_to_zh: 画质代码 → 中文名。"""
+    # code_to_zh: 画质代码 → 中文名。
 
     def test_known_codes(self):
         for code, zh in QUALITY_CODE_TO_ZH.items():
@@ -75,7 +74,7 @@ class TestCodeToZh:
 
 
 class TestIsDowngrade:
-    """is_downgrade: 判定实际画质是否低于请求画质。"""
+    # is_downgrade: 判定实际画质是否低于请求画质。
 
     def test_same_quality_not_downgrade(self):
         assert is_downgrade("HD", "HD") is False
@@ -99,7 +98,7 @@ class TestIsDowngrade:
 
 
 class TestPadList:
-    """_pad_list: 列表填充到最小长度。"""
+    # _pad_list: 列表填充到最小长度。
 
     def test_empty_list_returns_nones(self):
         result = _pad_list([], min_length=3)
@@ -125,7 +124,7 @@ class TestPadList:
 
 
 class TestGetQualityIndex:
-    """get_quality_index: 解析画质参数。"""
+    # get_quality_index: 解析画质参数。
 
     def test_none_returns_first(self):
         name, idx = get_quality_index(None)
@@ -172,7 +171,7 @@ class TestGetQualityIndex:
 
 
 class TestConstants:
-    """确保画质相关常量映射保持一致。"""
+    # 确保画质相关常量映射保持一致。
 
     def test_quality_mapping_keys_match_level_keys(self):
         assert set(QUALITY_MAPPING.keys()) == set(QUALITY_LEVEL.keys())
@@ -190,11 +189,11 @@ class TestConstants:
 
 
 class TestGetDouyinStreamUrl:
-    """get_douyin_stream_url: 抖音直播流解析核心路径。"""
+    # get_douyin_stream_url: 抖音直播流解析核心路径。
 
     @pytest.mark.asyncio
     async def test_offline_status_returns_not_live(self):
-        """status != 2 → is_live=False。"""
+        # status != 2 → is_live=False。
         from src.stream import get_douyin_stream_url
 
         json_data = {"anchor_name": "test_anchor", "status": 4}
@@ -204,7 +203,7 @@ class TestGetDouyinStreamUrl:
 
     @pytest.mark.asyncio
     async def test_live_with_flv_and_m3u8(self):
-        """status=2 + flv/m3u8 数据 → 正确选中画质并返回流地址。"""
+        # status=2 + flv/m3u8 数据 → 正确选中画质并返回流地址。
         from src.stream import get_douyin_stream_url
 
         json_data = {
@@ -226,7 +225,7 @@ class TestGetDouyinStreamUrl:
 
     @pytest.mark.asyncio
     async def test_live_only_flv_no_m3u8(self):
-        """仅有 FLV 无 m3u8 → 跳过可用性校验，不降级。"""
+        # 仅有 FLV 无 m3u8 → 跳过可用性校验，不降级。
         from src.stream import get_douyin_stream_url
 
         json_data = {
@@ -247,7 +246,7 @@ class TestGetDouyinStreamUrl:
 
     @pytest.mark.asyncio
     async def test_m3u8_unreachable_triggers_fallback(self):
-        """m3u8 不可达 → 降级到相邻画质。"""
+        # m3u8 不可达 → 降级到相邻画质。
         from src.stream import get_douyin_stream_url
 
         json_data = {
@@ -255,7 +254,10 @@ class TestGetDouyinStreamUrl:
             "status": 2,
             "stream_url": {
                 "flv_pull_url": {"HD": "https://flv.example.com/hd.flv", "SD": "https://flv.example.com/sd.flv"},
-                "hls_pull_url_map": {"HD": "https://m3u8.example.com/hd.m3u8", "SD": "https://m3u8.example.com/sd.m3u8"},
+                "hls_pull_url_map": {
+                    "HD": "https://m3u8.example.com/hd.m3u8",
+                    "SD": "https://m3u8.example.com/sd.m3u8",
+                },
                 "hevc_flv_url": None,
             },
         }
@@ -268,7 +270,7 @@ class TestGetDouyinStreamUrl:
 
 
 class TestGetTiktokStreamUrl:
-    """get_tiktok_stream_url: TikTok 直播流解析。"""
+    # get_tiktok_stream_url: TikTok 直播流解析。
 
     @pytest.mark.asyncio
     async def test_none_json_returns_not_live(self):
@@ -329,7 +331,7 @@ class TestGetTiktokStreamUrl:
 
 
 class TestGetKuaishouStreamUrl:
-    """get_kuaishou_stream_url: 快手直播流解析。"""
+    # get_kuaishou_stream_url: 快手直播流解析。
 
     @pytest.mark.asyncio
     async def test_not_live(self):
@@ -368,7 +370,7 @@ class TestGetKuaishouStreamUrl:
 
 
 class TestGetYyStreamUrl:
-    """get_yy_stream_url: YY 直播流解析。"""
+    # get_yy_stream_url: YY 直播流解析。
 
     @pytest.mark.asyncio
     async def test_no_avp_info(self):
@@ -385,11 +387,7 @@ class TestGetYyStreamUrl:
         json_data = {
             "anchor_name": "yy_live",
             "title": "YY Live",
-            "avp_info_res": {
-                "stream_line_addr": {
-                    "line1": {"cdn_info": {"url": "https://yy.example.com/live.flv"}}
-                }
-            },
+            "avp_info_res": {"stream_line_addr": {"line1": {"cdn_info": {"url": "https://yy.example.com/live.flv"}}}},
         }
         result = await get_yy_stream_url(json_data)
         assert result["is_live"] is True
@@ -398,7 +396,7 @@ class TestGetYyStreamUrl:
 
 
 class TestGetNeteaseStreamUrl:
-    """get_netease_stream_url: 网易 CC 直播流解析。"""
+    # get_netease_stream_url: 网易 CC 直播流解析。
 
     @pytest.mark.asyncio
     async def test_not_live_returns_directly(self):
@@ -431,7 +429,7 @@ class TestGetNeteaseStreamUrl:
 
 
 class TestGetStreamUrl:
-    """get_stream_url: 通用直播流解析入口。"""
+    # get_stream_url: 通用直播流解析入口。
 
     @pytest.mark.asyncio
     async def test_not_live_returns_directly(self):

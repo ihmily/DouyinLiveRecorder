@@ -608,6 +608,15 @@ brew install node
   - 请求抖音接口必须使用**桌面端 User-Agent**，旧版移动端 UA 会被静默限流（返回空 body）
   - 主页类链接（格式 4/5）请直接填写完整地址；`iesdouyin.com/share/user/` 旧路径已变为反爬壳页，请勿使用
 
+**Q: HLS 校验失败日志空白，总是回退到 FLV**
+
+- 现象：日志出现 `get_response_status 校验失败（判定为不可达）: `（消息空白）后紧跟 `HLS URL validation failed, falling back to FLV`，且反复出现
+- 原因（已修复于 2026-08-05）：
+  - Windows 下 `socket.timeout` / `TimeoutError` 的 `str()` 为空，导致异常日志显示为空白，无法判断是超时、连接被拒还是证书问题
+  - 流地址校验函数原先静默吞掉所有异常（`except Exception: return False`），回退 FLV 时无任何原因可查
+  - m3u8 源 HEAD 探测原先未覆盖 404（抖音等 CDN 常对 HEAD 返回 404 而 GET 可正常拉流），且从 HLS 源选择到校验调用**未透传代理**，导致 TikTok 等需代理平台直连校验超时误判不可达
+- 修复后表现：异常日志会带 URL 与异常类型；所有失败路径记录详细警告（含状态码 / content-type）；m3u8 HEAD 非 2xx（**含 404**）一律补 `Range: bytes=0-0` GET 探测；HLS 源选择正确透传代理。重新运行后若仍回退，日志会直接给出真实原因（如 `ConnectTimeout`、`HEAD=404, Range-GET=403`），此时多为 CDN 域名被墙或主播流地址失效等环境问题，而非代码误判
+
 **Q: 录制的视频文件损坏**
 
 - 推荐使用 `ts` 格式录制
@@ -656,6 +665,14 @@ brew install node
 本项目基于 [MIT License](LICENSE) 开源，欢迎 Star 和 Fork！
 
 ## ⏳ 更新日志
+
+### v4.0.8.1-dev (2026-08-05) — HLS 校验误判与空白日志修复
+
+- 修复流地址校验失败日志空白：`get_response_status` 异常日志现带 URL 与异常类型（如 `ConnectTimeout` / `TimeoutError`），避免 Windows 下 `socket.timeout` 的 `str()` 为空时只输出空白消息
+- 修复 m3u8 校验误判：HEAD 探测触发范围从 `400/401/403/405` 扩展到**含 404 在内的所有非 2xx**，对 `.m3u8` 源一律补 `Range: bytes=0-0` GET 探测（返回 200/206 即判可达）
+- 修复 `_validate_stream_url` 静默吞异常：新增 `verify` 参数沿用全局 SSL 开关（与异步校验一致）；所有失败路径记录 warning（URL + 异常类型/状态码/content-type）
+- 修复 `select_source_url` 代理不传递：新增 `proxy_addr` 参数并透传给三处校验调用，修复 TikTok 等需代理平台流地址直连校验超时误判不可达
+- 验证：`py_compile` 通过；mock httpx 跑 5 个用例全 PASS（含修复前误判的 HEAD404+GET206→可达、TimeoutError→不可达且日志带类型与 URL 场景）
 
 ### v4.0.8.1-dev (2026-08-01)
 

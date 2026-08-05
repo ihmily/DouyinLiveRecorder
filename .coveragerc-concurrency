@@ -1,0 +1,21 @@
+# 并发测试专用覆盖率配置
+#
+# concurrency-test job 只运行并发相关测试（threading.Lock + 速率限制 + 凭证共享），
+# 其覆盖率天然远低于全局 fail_under=20 阈值；全局阈值由完整 test job 保证，
+# 此处不设置全局下限，仅输出覆盖率明细供人工审阅。
+[run]
+source = src
+omit =
+    */tests/*
+    */__pycache__/*
+    */node/*
+    */ffmpeg/*
+
+[report]
+fail_under = 0
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:

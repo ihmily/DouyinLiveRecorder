@@ -161,7 +161,7 @@ omit = [
 ]
 
 [tool.coverage.report]
-fail_under = 20
+fail_under = 50
 exclude_lines = [
     "pragma: no cover",
     "def __repr__",
@@ -169,3 +169,11 @@ exclude_lines = [
     "if __name__ == .__main__.:",
     "if TYPE_CHECKING:",
 ]
+
+# 高频变更模块覆盖率门禁（CI 中通过 --cov-fail-under 或脚本检查）
+# spider.py  >= 50%  (核心爬虫，2539 stmts)
+# stream.py  >= 70%  (直播流解析，410 stmts)
+# utils.py   >= 80%  (工具函数，173 stmts)
+# ttwid.py   >= 85%  (认证模块，61 stmts)
+# ab_sign.py >= 95%  (签名模块，242 stmts)
+# proxy.py   >= 50%  (代理管理，102 stmts)
