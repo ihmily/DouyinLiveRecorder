@@ -1,20 +1,33 @@
-# Git 相关
+# =============================================================================
+# DouyinLiveRecorder .dockerignore
+# 原则：只把容器运行所需内容送入构建上下文（main.py / web.py / gui.py + src/ + web/ + i18n/）
+# 注意：i18n/**/*.mo 编译翻译文件是 gettext 运行时必需，Dockerfile 不会重新编译，不可排除
+# =============================================================================
+
+# Git / CI
 .git
 .gitignore
 .gitattributes
 .github/
 
-# 文档（如果需要在容器中查看文档可以删除）
+# AI 助手工作目录
+.workbuddy/
+.codebuddy/
+.trae/
+
+# 文档（容器内无需）
 README.md
 LICENSE
 CODE_WIKI.md
 CODE_CHANGES.md
+TRAE_AGENT_CODE_WIKI.md
 
-# Docker 相关
+# Docker 相关（避免自嵌套；.env 由 compose 在运行时加载，不打入镜像）
 .dockerignore
 Dockerfile
 docker-compose*.yaml
 docker-compose*.yml
+.env
 
 # Python 缓存
 __pycache__/
@@ -29,11 +42,15 @@ env/
 ENV/
 
 # 测试和覆盖率
+tests/
 .pytest_cache/
 .coverage
 htmlcov/
 .tox/
 .nox/
+
+# 类型存根（仅供 IDE / mypy 静态检查，运行时无用）
+typings/
 
 # IDE 和编辑器
 .vscode/
@@ -50,6 +67,43 @@ dist/
 *.egg-info/
 .eggs/
 
+# 打包与桌面平台专用文件（容器内不使用）
+build_exe.py
+gui_legacy.py
+StopRecording.vbs
+# 根目录 index.html 是独立的 M3U8 播放器页面；Web 面板使用 web/ 目录，不受影响
+index.html
+
+# PyInstaller
+*.spec
+*.manifest
+
+# 配置文件（含敏感信息，运行时通过卷挂载 ./config 提供）
+config/config.ini
+config/URL_config.ini
+
+# 录制产物 / 日志 / 备份（运行时通过卷挂载提供）
+downloads/
+recordings/
+logs/
+backup_config/
+
+# 平台二进制（容器内改用 apt 安装 ffmpeg 与 nodejs）
+ffmpeg/
+node/
+node-v*.zip
+
+# 翻译：仅排除 .po 源文件与编译脚本，编译好的 .mo 必须保留
+i18n/**/*.po
+i18n/**/compile_po.py
+
+# Windows 专用二进制与脚本
+*.exe
+*.dll
+*.cmd
+*.bat
+*.vbs
+
 # 临时文件
 *.tmp
 *.temp
@@ -60,54 +114,3 @@ dist/
 .DS_Store
 Thumbs.db
 desktop.ini
-
-# 项目特定文件
-# 配置文件（敏感信息，使用环境变量或挂载）
-config/config.ini
-config/URL_config.ini
-
-# 录制的视频文件（体积大，挂载或忽略）
-downloads/
-recordings/
-
-# 日志文件
-logs/
-*.log
-
-# 备份目录
-backup_config/
-
-# FFmpeg 二进制文件（容器内单独安装）
-ffmpeg/*.exe
-ffmpeg/*.dll
-ffmpeg/ffmpeg
-ffmpeg/ffprobe
-
-# Node.js（容器内单独安装）
-node/
-node-v*.zip
-
-# 编译的翻译文件（在构建过程中重新编译）
-i18n/**/*.mo
-
-# 编译脚本
-i18n/**/compile_po.py
-
-# PyInstaller
-*.spec
-*.manifest
-
-# Windows 可执行文件（不需要在容器中）
-*.exe
-*.dll
-*.cmd
-*.bat
-*.vbs
-
-# 临时目录和文件
-*.tmp
-*.temp
-*.bak
-*.swp
-*.swo
-*~
