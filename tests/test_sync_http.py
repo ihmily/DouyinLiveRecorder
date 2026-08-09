@@ -1,6 +1,7 @@
 # Tests for src/sync_http.py module - 同步 HTTP 客户端.
 
 import gzip
+import http.client
 import json
 from io import BytesIO
 from unittest.mock import MagicMock, patch
@@ -202,7 +203,7 @@ class TestSyncReq:
 
         mock_opener = MagicMock()
         mock_opener.open.side_effect = urllib.error.HTTPError(
-            "http://example.com", 400, "Bad Request", {}, BytesIO(b"bad request")
+            "http://example.com", 400, "Bad Request", http.client.HTTPMessage(), BytesIO(b"bad request")
         )
         mock_opener_fn.return_value = mock_opener
 

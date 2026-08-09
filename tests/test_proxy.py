@@ -80,10 +80,11 @@ class TestProxyInfo:
         assert info.port == "65535"
 
     def test_frozen_dataclass(self):
-        # 不可变数据类.
+        # 不可变数据类：对冻结实例赋值应抛 AttributeError（FrozenInstanceError 的基类）.
         info = ProxyInfo("10.0.0.1", "8080")
         with pytest.raises(AttributeError):
-            info.ip = "other"  # type: ignore[misc]
+            # 用 setattr 触发冻结保护，避免直接赋值依赖失效的 # type: ignore 抑制符
+            setattr(info, "ip", "other")
 
 
 class TestProxyDetectorLinux:

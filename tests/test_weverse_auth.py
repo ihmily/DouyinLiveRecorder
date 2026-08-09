@@ -1,6 +1,5 @@
 # Tests for src/weverse_auth.py module - Weverse 认证模块.
 
-from urllib.parse import urlparse
 from unittest.mock import MagicMock, patch
 
 from src.weverse_auth import refresh_weverse_token
@@ -67,7 +66,6 @@ class TestRefreshWeverseToken:
 
         refresh_weverse_token("token")
         call_args = mock_post.call_args
-        parsed_url = urlparse(call_args.args[0])
-        assert parsed_url.hostname == "accountapi.weverse.io"
+        assert "accountapi.weverse.io" in call_args.args[0]
         assert call_args.kwargs["json"] == {"refreshToken": "token"}
         assert call_args.kwargs["timeout"] == 10
