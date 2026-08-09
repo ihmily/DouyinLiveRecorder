@@ -1229,9 +1229,7 @@ def _validate_stream_url(
                     f"content-type={probe.headers.get('content-type', '')}"
                 )
                 return False
-            logger.warning(
-                f"流地址校验失败: {url} - status_code={response.status_code}, content-type={content_type}"
-            )
+            logger.warning(f"流地址校验失败: {url} - status_code={response.status_code}, content-type={content_type}")
             return False
     except Exception as e:
         # Windows 下 socket.timeout 的 str() 为空，必须带上异常类型与 URL
@@ -1239,9 +1237,7 @@ def _validate_stream_url(
         return False
 
 
-def select_source_url(
-    _link: str, stream_info: Mapping[str, object], proxy_addr: str | None = None
-) -> str | None:
+def select_source_url(_link: str, stream_info: Mapping[str, object], proxy_addr: str | None = None) -> str | None:
     # HLS(m3u8) 优先采集：当存在 HLS 源且配置启用 HLS 采集时优先使用；
     # 仅当无 HLS 源 或 配置关闭 HLS 采集时，才回退使用 FLV 源。
     # proxy_addr 必须透传给校验器：TikTok 等境外平台的流地址若不走与解析阶段
