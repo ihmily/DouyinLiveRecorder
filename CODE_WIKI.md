@@ -2,7 +2,13 @@
 
 ## 目录
 
+- [文档统计与索引](#文档统计与索引)
 - [项目概述](#项目概述)
+  - [项目基本信息](#项目基本信息)
+  - [功能特性](#功能特性)
+  - [已支持平台](#已支持平台)
+  - [画质代码对照](#画质代码对照)
+  - [技术栈](#技术栈)
 - [系统架构](#系统架构)
 - [目录结构](#目录结构)
 - [核心模块详解](#核心模块详解)
@@ -15,6 +21,36 @@
 - [常见问题排查](#常见问题排查)
 - [贡献指南](#贡献指南)
 - [更新日志](#更新日志)
+
+---
+
+## 文档统计与索引
+
+> 本节由对**工作空间内所有 `*.md` 文件**的统计分析归纳而来（生成于 2026-08-09）。
+
+### 统计概览
+
+排除 `.git/` 后，工作空间共 **324** 个 Markdown 文件，按来源与维护方式分为四类：
+
+| 分类       | 路径                     | 数量  | 性质                                             | 是否手工维护 |
+| -------- | ---------------------- | --- | ---------------------------------------------- | ------ |
+| 项目根文档    | `*.md`（仓库根目录）          | 3   | 事实来源（source of truth）                          | ✅ 是    |
+| 自动生成仓库文档 | `.qoder/repowiki/**`   | 302 | AI 基于代码生成的英文架构/知识库（content 72 + knowledge 230） | ❌ 自动生成 |
+| 工作区记忆    | `.workbuddy/memory/**` | 12  | 本机 agent 每日工作日志                                | ❌ 缓存   |
+| 历史记忆     | `.codebuddy/memory/**` | 7   | 旧版 agent 记忆（遗留）                                | ❌ 缓存   |
+
+**结论**：真正由人工维护、应作为改动来源的文档仅为仓库根目录的 **3 个**；其余 321 个为 AI 生成的衍生文档或本地缓存，不应合并进本文档，以免引入与代码不同步的冗余内容。
+
+### 根文档索引
+
+| 文件             | 角色          | 主要内容                                                                       |
+| -------------- | ----------- | -------------------------------------------------------------------------- |
+| `AGENTS.md`    | 编码代理约定      | 版本号单一事实源（`pyproject.toml`）、代码风格（black / isort / mypy）、项目结构、依赖/测试/构建命令、关键约定 |
+| `README.md`    | 用户/开发者说明    | 功能特性、已支持平台（51 个）、快速开始、配置说明、使用说明、Docker 部署、开发指南、FAQ、更新日志                    |
+| `CODE_WIKI.md` | 项目架构文档（本文档） | 模块详解、依赖关系、设计模式、常见问题排查、贡献指南、更新日志                                            |
+|                |             |                                                                            |
+
+> 三份文档职责互补：改动平台支持/配置项时须同步更新 `README.md` 与本文档；工程约定以 `AGENTS.md` 为准。
 
 ---
 
@@ -39,6 +75,34 @@
 - ✅ 国际化支持（中文/英文）
 - ✅ 灵活配置：画质选择、分段录制、自定义保存路径等
 - ✅ 实际画质回采与降级告警（支持抖音、TikTok、快手、虎牙、斗鱼、B站、网易CC）
+- ✅ Web 安全：Token 认证、路径穿越防护、敏感配置脱敏
+
+### 已支持平台
+
+归纳自 `README.md`，当前已列出 **51** 个平台（README 对外标称 60+，含持续添加中的平台）：
+
+**国内站点（37 个）**：抖音 | 快手 | 虎牙 | 斗鱼 | YY | B站 | 小红书 | bigo | blued | 网易CC | 千度热播 | 猫耳FM | Look直播 | TwitCasting | 百度 | 微博 | 酷狗 | 花椒 | 流星 | Acfun | 畅聊 | 映客 | 音播 | 知乎 | 嗨秀 | VV星球 | 17Live | 浪Live | 飘飘 | 六间房 | 乐嗨 | 花猫 | 淘宝 | 京东 | 咪咕 | 连接 | 来秀
+
+**海外站点（14 个）**：TikTok | SOOP(原AfreecaTV) | PandaTV | WinkTV | TTingLive(原Flextv) | PopkonTV | TwitchTV | LiveMe | ShowRoom | CHZZK | Shopee | YouTube | Faceit | Picarto
+
+> 各平台流解析函数位于 `src/stream.py`、数据获取函数位于 `src/spider.py`；新增平台见「贡献指南 → 添加新平台支持」。
+
+### 画质代码对照
+
+录制画质以代码表示，对应中文名与说明如下（配置项 `原画|超清|高清|标清|流畅` 即映射到该表）：
+
+
+
+| 画质代码 | 中文名 | 说明                       |
+| ---- | --- | ------------------------ |
+| OD   | 原画  | Original Definition，最高画质 |
+| BD   | 蓝光  | Blu-ray，超高清              |
+| UHD  | 超清  | Ultra HD                 |
+| HD   | 高清  | High Definition          |
+| SD   | 标清  | Standard Definition      |
+| LD   | 流畅  | Low Definition，最低画质      |
+
+支持实际画质回采与降级告警的平台：抖音、TikTok、快手、虎牙、斗鱼、B站、网易CC。当平台实际下发画质低于设置画质时，自动告警并标记。
 
 ### 技术栈
 
@@ -978,6 +1042,8 @@ def _app_root() -> str:
 ### 4. 冻结版适配要点
 
 - **GUI 子进程拉起（关键修复）**：`gui.py` 冻结后 `sys.executable` 指向 GUI 自身，原 `[sys.executable, main.py]` 会无限递归拉起 GUI。改为冻结时直接调用同目录的 `DouyinLiveRecorder.exe`，源码运行保持原样。
+- **GUI 子进程 pythonw 兼容（2026-08-09）**：源码模式下若 GUI 经 `pythonw.exe` 启动，`sys.executable` 指向 pythonw（GUI 子系统、无控制台），原 `[sys.executable, main.py]` 会让录制核心也以 pythonw 运行——`CREATE_NEW_CONSOLE` 对其无效，`AttachConsole(pid)` 必失败、CTRL_BREAK 永远送不到、停止只能硬杀（ffmpeg 孤儿化）。现检测解释器 basename 以 `pythonw` 开头时改用同目录 `python.exe`（console 子系统）拉起录制核心；打包版（CLI exe `console=True`）不受影响。
+- **GUI 停止录制优雅退出（2026-08-09）**：`_send_ctrl_break_to_child` 失败时不再只 `proc.terminate()`（`TerminateProcess` 硬杀、ffmpeg 孤儿化且 `wait()` 立即成功绕过整树清理），改为 `taskkill /F /T /PID` 整树终止；日志按路径区分"优雅退出"与"硬杀路径"，不再谎报 ffmpeg 已清理。
 - **中文 UTF-8 编码（关键修复）**：冻结后子进程 stdout 为管道，Python 回退到 GBK 写输出，而 GUI 以 UTF-8 读取管道 → 中文乱码（如 `自动获取 Cookie ttwid 成功` 变成乱码）。在 `main.py`/`gui.py`/`web.py` 顶部加入 `_fix_encoding()`：Windows 下 `sys.stdout/stderr.reconfigure(encoding='utf-8', errors='replace')` + `ctypes.windll.kernel32.SetConsoleOutputCP(65001)/SetConsoleCP(65001)`；非 Windows 仅 reconfigure。stream 加 `None`/`hasattr` 保护（windowed exe 的 stdout 可能为 `None`）。`web.py` 原有 `reconfigure(errors='replace')` 升级为同时设 `encoding='utf-8'`。
 
 ### 5. 冒烟测试
@@ -998,15 +1064,15 @@ def _app_root() -> str:
 
 **并行 jobs**（均 `needs: changes` 条件门控）：
 
-| Job               | 运行环境        | 内容                                                                       |
-| ----------------- | ----------- | ------------------------------------------------------------------------ |
-| `lint`            | py3.12      | `black --check .`                                                        |
-| `typecheck`       | py3.10      | 安装 requirements + mypy 后运行 `mypy src/`                                   |
-| `isort`           | py3.12      | `isort --check .`                                                        |
-| `version-check`   | py3.12      | `python scripts/check_version.py`（版本号单一事实源一致性校验）                       |
-| `test`            | py3.10      | `pytest --cov=src --cov-report=term-missing`（全局 `fail_under=50` 门禁）    |
-| `concurrency-test` | py3.10     | 并发专项：`COVERAGE_RCFILE=.coveragerc-concurrency` 下跑 `test_concurrency_rate_limit.py` + `test_concurrency.py`（专用配置不设全局阈值，避免与完整 test job 冲突） |
-| `integration-verify` | py3.10 + Node 24 | apt 安装 ffmpeg；验证 ffmpeg/node 二进制可发现、版本可读，并调用 `check_ffmpeg_installed()` / `check_nodejs_installed()` 验证检测逻辑 |
+| Job                  | 运行环境             | 内容                                                                                                                                       |
+| -------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `lint`               | py3.12           | `black --check .`                                                                                                                        |
+| `typecheck`          | py3.10           | 安装 requirements + mypy 后运行 `mypy src/`                                                                                                   |
+| `isort`              | py3.12           | `isort --check .`                                                                                                                        |
+| `version-check`      | py3.12           | `python scripts/check_version.py`（版本号单一事实源一致性校验）                                                                                         |
+| `test`               | py3.10           | `pytest --cov=src --cov-report=term-missing`（全局 `fail_under=50` 门禁）                                                                      |
+| `concurrency-test`   | py3.10           | 并发专项：`COVERAGE_RCFILE=.coveragerc-concurrency` 下跑 `test_concurrency_rate_limit.py` + `test_concurrency.py`（专用配置不设全局阈值，避免与完整 test job 冲突） |
+| `integration-verify` | py3.10 + Node 24 | apt 安装 ffmpeg；验证 ffmpeg/node 二进制可发现、版本可读，并调用 `check_ffmpeg_installed()` / `check_nodejs_installed()` 验证检测逻辑                              |
 
 ### 7. GitHub Actions 自动构建与发布（`build-release.yml`）
 
@@ -1090,7 +1156,7 @@ brew install ffmpeg
 
 ```bash
 # Ubuntu/Debian
-curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
 sudo apt-get install -y nodejs
 
 # macOS
@@ -1143,6 +1209,7 @@ HLS URL validation failed, falling back to FLV    ← 原因完全不可见
 - 格式化: `black .`
 - 导入排序: `isort .`
 - 类型检查: `mypy src/`（已启用 `disallow_untyped_defs = true`，`--strict` 模式全通过）
+- 注释规范: 模块/函数说明统一使用 `#` 行注释，**不使用三引号 `"""` 文档字符串**；多行说明每行以 `#` 开头（功能性多行字符串字面量除外，如模板/SQL，应改用单引号 + 换行拼接而非 `"""`）
 
 ### 测试与覆盖率
 
@@ -1150,16 +1217,37 @@ HLS URL validation failed, falling back to FLV    ← 原因完全不可见
 - 覆盖率配置集中在 `pyproject.toml`：`source = ["src"]`，全局门禁 `fail_under = 50`
 - 高频变更核心模块设独立覆盖率门禁（记录于 `pyproject.toml` 注释，CI 中通过 `--cov-fail-under` 或脚本检查）：
 
-| 模块           | 门禁    | 当前覆盖 |
-| ------------ | ----- | ---- |
-| `spider.py`  | ≥50%  | 50%  |
-| `stream.py`  | ≥70%  | 70%  |
-| `utils.py`   | ≥80%  | 82%  |
-| `ttwid.py`   | ≥85%  | 85%  |
-| `ab_sign.py` | ≥95%  | 99%  |
-| `proxy.py`   | ≥50%  | 51%  |
+| 模块           | 门禁   | 当前覆盖 |
+| ------------ | ---- | ---- |
+| `spider.py`  | ≥50% | 50%  |
+| `stream.py`  | ≥70% | 70%  |
+| `utils.py`   | ≥80% | 82%  |
+| `ttwid.py`   | ≥85% | 85%  |
+| `ab_sign.py` | ≥95% | 99%  |
+| `proxy.py`   | ≥50% | 51%  |
 
 - 并发专项测试（`test_concurrency.py` / `test_concurrency_rate_limit.py`）使用专用配置 `.coveragerc-concurrency`（不设全局阈值），验证 `threading.Lock` 去重与抖音速率限制在多线程环境下的正确性
+
+#### Web/接口冒烟测试工具（`scripts/smoke_test.py`）
+
+通用、零依赖（纯标准库）的 Web/接口冒烟测试工具，用于快速验证 Web 管理面板等**运行中 HTTP 接口**的可达性与核心响应。
+
+- 配置驱动：JSON 描述检查项（`url` / `method` / `expected_status` / `timeout` / `headers` / `body` / `expect_contains` / `expect_json`）
+- `base_url` 前缀拼接，无需每个接口写完整地址
+- 三种输出：控制台（带颜色）、JSON 报告、HTML 报告
+- 任一检查失败退出码非 0，便于接入 CI
+
+用法：
+
+```bash
+# 检查本机 Web 管理面板（默认 127.0.0.1:8000，示例见 scripts/smoke_web.json）
+python scripts/smoke_test.py -c scripts/smoke_web.json
+
+# 生成 HTML 报告
+python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f html
+```
+
+> 与 `build_exe.py --smoke`（打包产物冒烟，见上文第 5 节）不同，本工具针对**运行中的 HTTP 接口**做轻量探活，两者互补。
 
 ### 添加新平台支持
 
@@ -1171,6 +1259,46 @@ HLS URL validation failed, falling back to FLV    ← 原因完全不可见
 ---
 
 ## 更新日志
+
+### v4.0.8.1-dev (2026-08-09) — 注释规范与 Web/接口冒烟测试工具
+
+- **注释规范（代码规范新增）**：模块/函数说明统一使用 `#` 行注释，不再使用三引号 `"""` 文档字符串；功能性多行字符串字面量（模板/SQL）改用单引号 + 换行拼接
+- **新增 Web/接口冒烟测试工具**（`scripts/smoke_test.py`）：零依赖（纯标准库）、配置驱动（JSON），支持 GET/POST、期望状态码、`expect_contains` 文本校验、`expect_json` 字段校验、`base_url` 前缀拼接，输出控制台/JSON/HTML 报告，失败时退出码非 0（CI 友好）；示例配置见 `scripts/smoke_web.json`（默认探活 Web 管理面板 `http://127.0.0.1:8000`）
+- 与既有 `build_exe.py --smoke`（打包产物冒烟）形成互补：前者针对运行中 HTTP 接口探活，后者验证打包后 exe 启动可用性
+
+### v4.0.8.1-dev (2026-08-09) — 文档统计归纳（CODE_WIKI 更新）
+
+- **新增「文档统计与索引」章节**：统计分析工作空间全部 `*.md` 文件（共 324 个），按来源分为项目根文档（3，事实来源）、自动生成仓库文档（.qoder/repowiki，302）、工作区记忆（.workbuddy/memory，12）、历史记忆（.codebuddy/memory，7）；明确仅根目录 3 份人工文档应作为改动来源，并给出三者角色索引
+- **新增「已支持平台」小节**：从 `README.md` 归纳出 51 个已列出平台（国内 37 + 海外 14），补全此前仅以「60+」概括的缺失
+- **新增「画质代码对照」小节**：补齐 OD/BD/UHD/HD/SD/LD 画质代码与中文名/说明映射，及支持实际画质回采告警的 7 个平台清单
+- **功能特性补齐「Web 安全」**：与 `README.md` 功能特性表对齐（Token 认证、路径穿越防护、敏感配置脱敏）
+- **修复 Node.js 版本一致性**：「常见问题 2」安装命令由 `setup_20.x` 更正为 `setup_22.x`，与 `README.md` 及 Dockerfile（Node.js 22 LTS）保持一致
+- 同步更新目录（TOC）以反映新增章节
+
+### v4.0.8.1-dev (2026-08-08 ~ 2026-08-09) — 全量代码审查、构建修复与 GUI 优雅停止加固
+
+**全量代码审查（2026-08-08）：**
+
+- 四档检查全部跑通：`compileall` 全部 `.py` 通过；`black`（line-length 120）、`isort` 通过；`mypy src/` 0 errors；`pytest` **417 passed**（无回归）
+- **修复 `pyproject.toml` 非法作者邮箱**：`authors[0].email = "ihmily@github"` 不是合法 IDN 邮箱，新版 setuptools 直接拒绝构建，导致 `pip install .` / `pip install .[dev]` **必失败**（本地实测复现）。改为 `ihmily@users.noreply.github.com`。CI 因只装裸工具（`pip install mypy` 等）从未触发，本地开发会踩
+- **black 格式违规 2 处**（`main.py` 一处超长日志/函数签名、`tests/test_stream.py` 一条超长 assert）→ 用 `black` 格式化修复（CI 的 `black --check .` 原会失败）
+- 版本号 `4.0.8.1` 在 pyproject/Dockerfile/README/CODE_WIKI/zh_CN.po 全同步；`src/spider.py:669` 有一条 2024 年快手旧回退分支 TODO 注释，属保守保留项未动
+
+**GUI 停止录制优雅退出加固（2026-08-09）：**
+
+- `gui.py` `stop_recording()`：原 `_send_ctrl_break_to_child` 失败仅回退 `proc.terminate()`（Windows 即 `TerminateProcess` 硬杀），不会触发 main.py 的 `safe_exit`/`atexit` 兜底 → ffmpeg 孙进程**孤儿化**继续后台录制；且 `wait()` 立即成功 → 打印"进程已优雅退出（ffmpeg 已由子进程清理）"——**日志与实际不符**，并绕过真正的整树清理兜底分支
+- 现失败路径改为 `taskkill /F /T /PID` **整树终止**（连 ffmpeg 一起杀），taskkill 异常才回退 terminate；日志按路径区分：优雅退出才打印原文案，硬杀路径改为"进程已终止（硬杀路径，ffmpeg 已随进程树终止）"，不再谎称已清理
+
+**GUI 子进程 pythonw 兼容性修复（2026-08-09，根因定位）：**
+
+- 用 `pythonw gui.py` 启动 GUI 时，`sys.executable` 指向 **pythonw.exe**，源码模式 `[sys.executable, main.py]` 让录制核心也以 pythonw 启动
+- pythonw 是 **GUI 子系统进程、不创建控制台**，`CREATE_NEW_PROCESS_GROUP | CREATE_NEW_CONSOLE` 启动标志对其无效 → 停止时 `AttachConsole(pid)` 必然失败 → CTRL_BREAK **结构性不可达** → 回退硬杀（即上一条的孤儿化风险）
+- 现检测解释器 basename 以 `pythonw` 开头时，改用同目录 **python.exe**（console 子系统）拉起录制核心；打包版（CLI exe `console=True`）不受影响
+- **实测验证**（pythonw 当父进程 + python.exe 起带 SIGBREAK 处理器子进程）：修复后 `AttachConsole` 成功、`GenerateConsoleCtrlEvent` 返回 True、事件真正送达子进程（无处理器时被默认终止，退出码 `0xC000013A`=STATUS_CONTROL_C_EXIT；注册处理器场景收到 `signum=21`）。过程中发现 CPython 行为：Python 3.13 的 `time.sleep()` **不被 CTRL_BREAK 唤醒**（事件走 pending-call 机制，主线程在 C 层 sleep 中不检查信号），但 main.py 录制主循环无长 sleep，收到事件后 `safe_exit` 会在 GUI 15 秒等待窗口内执行
+
+> **gui_legacy.py 已知遗留问题（未改）**：旧版 GUI 用 `CREATE_NO_WINDOW` 启动子进程，该方式下 `send_signal(CTRL_BREAK_EVENT)` 永远静默无效，其"优雅停止"实际从未生效（每次等 15 秒超时后强杀）。根治需改启动参数 + AttachConsole 方案，改动较大，建议迁往 `gui.py`。
+
+---
 
 ### v4.0.8.1-dev (2026-08-05) — CI 静态验证工作流、并发测试集成与覆盖率门禁提升
 
@@ -1579,4 +1707,4 @@ HLS URL validation failed, falling back to FLV    ← 原因完全不可见
 
 ---
 
-*本文档最后更新: 2026-08-05（全量同步：CI 双工作流、并发测试与覆盖率门禁 50%、lite/full 双产物打包、平台命名规范；HLS 校验误判与空白日志修复）*
+*本文档最后更新: 2026-08-09（新增：全量代码审查与 pyproject 非法邮箱构建修复、GUI 停止录制优雅退出加固、pythonw 子进程兼容性修复、gui_legacy 遗留问题说明）*
