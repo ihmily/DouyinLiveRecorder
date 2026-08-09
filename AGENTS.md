@@ -132,6 +132,7 @@ asyncio_mode = "auto"
 - 运行测试: `pytest`
 - 覆盖率源码: `src/`
 - 覆盖率排除: `tests/`, `__pycache__/`, `node/`, `ffmpeg/`
+- 逐模块覆盖率门禁: `python scripts/check_coverage.py`（CI 自动执行，阈值定义见脚本 `MODULE_THRESHOLDS`）
 - 创建/更新测试: 使用 [test-creator Skill](.qoder/skills/test-creator/SKILL.md) 标准化流程（源码分析 → Mock 配置 → 验证执行）
 
 ## 构建命令
