@@ -1525,7 +1525,18 @@ class LiveRecorderGUI:
                 record_cmd = [cli_exe]
             else:
                 main_py = os.path.join(self.script_dir, "main.py")
-                record_cmd = [sys.executable, main_py]
+                exe = sys.executable
+                if sys.platform == "win32" and os.path.basename(exe).lower().startswith("pythonw"):
+                    # pythonw.exe 是 GUI 子系统进程、没有控制台：CREATE_NEW_CONSOLE
+                    # 对其无效，子进程将永远收不到 CTRL_BREAK（SIGBREAK），
+                    # 优雅停止（safe_exit 清理 ffmpeg）结构性失效，只能整树强杀。
+                    # 必须改用同目录的 python.exe（console 子系统）启动录制核心。
+                    console_exe = os.path.join(os.path.dirname(exe), "python.exe")
+                    if os.path.isfile(console_exe):
+                        exe = console_exe
+                    else:
+                        self._log(f"未找到 console 解释器 {console_exe}，优雅停止将不可用", "warn")
+                record_cmd = [exe, main_py]
 
             startupinfo = None
             env = os.environ.copy()
@@ -1613,12 +1624,22 @@ class LiveRecorderGUI:
         # 子进程启动时使用 CREATE_NEW_CONSOLE 隐藏控制台 + 独立进程组，
         # 因此 CTRL_BREAK_EVENT 能送达 main.py → SIGBREAK → safe_exit →
         # cleanup_all_ffmpeg_processes。proc.terminate() 在 Windows 上是
-        # TerminateProcess 硬杀，会把 ffmpeg 孤儿化，仅作兜底。
+        # TerminateProcess 硬杀，会把 ffmpeg 孤儿化，仅作最后兜底。
+        graceful_signal_sent = False
         if sys.platform == "win32":
             self._log("正在发送 CTRL_BREAK 信号（触发子进程 safe_exit 清理 ffmpeg）...")
-            if not _send_ctrl_break_to_child(proc.pid):
-                self._log("发送 CTRL_BREAK 失败，回退 terminate", "warn")
-                proc.terminate()
+            graceful_signal_sent = _send_ctrl_break_to_child(proc.pid)
+            if not graceful_signal_sent:
+                # 不能只 proc.terminate()：TerminateProcess 硬杀不会触发 main.py 的
+                # safe_exit / atexit 兜底，其下 ffmpeg（孙进程）会孤儿化继续录制，
+                # 且 wait() 会立即成功、绕过后面的 taskkill /T 兜底分支。
+                # 必须用 taskkill /T 递归终止整棵进程树。
+                self._log("发送 CTRL_BREAK 失败，整树强制终止（避免 ffmpeg 孤儿化）", "warn")
+                try:
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, timeout=5)
+                except Exception as e:
+                    self._log(f"taskkill 整树终止失败，回退 terminate: {e}")
+                    proc.terminate()
         else:
             self._log("正在发送 SIGINT 信号...")
             try:
@@ -1633,7 +1654,12 @@ class LiveRecorderGUI:
             try:
                 proc.wait(timeout=15)
                 terminated = True
-                self._log("进程已优雅退出（ffmpeg 已由子进程清理）")
+                if graceful_signal_sent:
+                    self._log("进程已优雅退出（ffmpeg 已由子进程清理）")
+                else:
+                    # 硬杀路径（taskkill /T 或 terminate 兜底）：main.py 的 safe_exit
+                    # 没有机会运行，不能宣称"ffmpeg 已由子进程清理"
+                    self._log("进程已终止（硬杀路径，ffmpeg 已随进程树终止）")
             except subprocess.TimeoutExpired:
                 self._log("进程未能及时退出，整树强制终止...")
 
