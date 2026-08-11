@@ -747,16 +747,25 @@ def delete_line(file_path: str, del_line: str, delete_all: bool = False) -> None
                 _ = f.write(txt_line)
 
 
-def get_startup_info(system_type: str) -> "subprocess.STARTUPINFO | None":
-    # 获取平台启动信息（Windows 隐藏控制台窗口）
-    # 返回类型用字符串注解：subprocess.STARTUPINFO 仅 Windows 存在，
-    # 作为注解在 Linux/macOS 导入时会抛 AttributeError（PEP 563 惰性求值规避）。
-    if system_type == "nt":
+# Windows 下 subprocess.STARTUPINFO 仅存在于 Windows typeshed，Linux/macOS 上 mypy 无法解析该名字；
+# 非 Windows 平台 get_startup_info 恒返回 None，用 object 占位仅用于满足类型检查，不影响运行。
+if sys.platform == "win32":
+    _StartupInfoType = subprocess.STARTUPINFO
+else:
+    _StartupInfoType = object
+
+
+def get_startup_info(system_type: str) -> _StartupInfoType | None:
+    # 获取平台启动信息（Windows 隐藏控制台窗口）。
+    # 运行时只在 Windows（os.name == "nt"）构造 STARTUPINFO，其他平台恒返回 None；
+    # mypy 依据 sys.platform 字面量分支跳过非当前平台代码，从而通过跨平台类型检查。
+    if system_type != "nt":
+        return None
+    if sys.platform == "win32":
         startup_info = subprocess.STARTUPINFO()
         startup_info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-    else:
-        startup_info = None
-    return startup_info
+        return startup_info
+    return None
 
 
 def segment_video(

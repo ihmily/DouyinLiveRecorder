@@ -103,6 +103,8 @@ class WebConsoleTray:
     def _patch_console_window(self) -> None:
         # 把控制台窗口改为工具窗口（无任务栏按钮），并禁用关闭按钮。
         # 失败则静默跳过，不影响 Web 服务运行。
+        if sys.platform != "win32":
+            return
         try:
             import ctypes
         except Exception:
@@ -173,14 +175,15 @@ class WebConsoleTray:
         hwnd = self._hwnd
         if not hwnd:
             return
-        import ctypes
+        if sys.platform == "win32":
+            import ctypes
 
-        user32 = ctypes.windll.user32
-        user32.ShowWindow(hwnd, SW_RESTORE)
-        try:
-            user32.SetForegroundWindow(hwnd)
-        except Exception:
-            pass
+            user32 = ctypes.windll.user32
+            user32.ShowWindow(hwnd, SW_RESTORE)
+            try:
+                user32.SetForegroundWindow(hwnd)
+            except Exception:
+                pass
 
     def _on_exit(self, _icon: "object | None" = None, _item: "object | None" = None) -> None:
         # 退出程序：触发 uvicorn 优雅关闭；无 server 时直接退出进程。

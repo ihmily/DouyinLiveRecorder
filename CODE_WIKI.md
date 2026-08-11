@@ -1264,6 +1264,15 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 
 ## 更新日志
 
+### v4.0.8.1-dev (2026-08-11) — 修复 Linux/macOS 下 mypy 跨平台类型错误
+
+- **背景**：CI（ubuntu-latest）跑 `mypy src/` 报 6 个错误 —— `src/web_tray.py` 三处 `ctypes.windll`（attr-defined）、`main.py` 的 `subprocess.STARTUPINFO` / `STARTF_USESHOWWINDOW`（name-defined / attr-defined）。根因：这些符号只存在于 Windows typeshed，而这两处代码缺少 `sys.platform` 字面量分支保护；项目其他 `ctypes.windll` 用法（web.py / main.py / gui.py）都包在 `if sys.platform == "win32":` 内，mypy 平台感知会跳过非当前平台分支
+- **修复**：
+  - `src/web_tray.py`：`_patch_console_window()` 开头加 `if sys.platform != "win32": return`；`_on_show()` 的 `ctypes.windll.user32` 访问包进 `if sys.platform == "win32":` 分支
+  - `main.py`：`get_startup_info()` 改为模块级平台条件类型别名 `_StartupInfoType`（Windows 为 `subprocess.STARTUPINFO`，其余平台 `object` 占位）+ 函数体内 `sys.platform == "win32"` 分支，移除原 `"subprocess.STARTUPINFO | None"` 字符串注解（mypy 会解析字符串注解并报 name-defined）
+- **验证**：本地用 mypy 2.3.0 分别以 `--platform linux`（模拟 CI）与默认 win32 平台跑 `mypy src/`，均 0 errors；`py_compile` 通过；`get_startup_info` 运行时行为不变（posix→None，nt→dwFlags=1）
+- **约定沉淀**：Windows 专属 API（`ctypes.windll`、`subprocess.STARTUPINFO` 等）必须放在 `sys.platform == "win32"`（或 `!= "win32"` 提前返回）字面量分支内，否则 Linux/macOS 上 mypy 会误报
+
 ### v4.0.8.1-dev (2026-08-09) — 注释规范与 Web/接口冒烟测试工具
 
 - **注释规范（代码规范新增）**：模块/函数说明统一使用 `#` 行注释，不再使用三引号 `"""` 文档字符串；功能性多行字符串字面量（模板/SQL）改用单引号 + 换行拼接
