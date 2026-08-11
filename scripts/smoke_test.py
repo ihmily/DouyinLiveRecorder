@@ -1,0 +1,283 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# 可复用的 Web / 接口冒烟测试工具（纯标准库，无第三方依赖）
+#
+# 功能：
+#   - 配置驱动：用 JSON 描述要检查的接口（url / method / 期望状态码 / 超时 /
+#     请求头 / 请求体 / 响应应包含的文本 / 期望的 JSON 字段）
+#   - 基础 URL 前缀：config 里的 url 若不是完整 http(s) 地址，则拼接 base_url
+#   - 多种输出：控制台（带颜色）、JSON 报告、HTML 报告
+#   - 退出码：任一检查失败时返回非 0，方便接入 CI
+#
+# 用法：
+#   python smoke_test.py --config smoke_targets.json
+#   python smoke_test.py --config smoke_targets.json --base-url https://api.example.com
+#   python smoke_test.py --config smoke_targets.json --report report.html --format html
+#   python smoke_test.py --config smoke_targets.json --report result.json --format json
+import argparse
+import json
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime
+
+DEFAULT_TIMEOUT = 5
+DEFAULT_METHOD = "GET"
+
+
+# ---------- 颜色（仅控制台） ----------
+_USE_COLOR = sys.stdout.isatty()
+_RESET = "\033[0m"
+_RED = "\033[31m"
+_GREEN = "\033[32m"
+_YELLOW = "\033[33m"
+_DIM = "\033[2m"
+
+
+def _c(text, code):
+    return f"{code}{text}{_RESET}" if _USE_COLOR else text
+
+
+def _ok(s):
+    return _c(s, _GREEN)
+
+
+def _fail(s):
+    return _c(s, _RED)
+
+
+def _warn(s):
+    return _c(s, _YELLOW)
+
+
+# ---------- 配置加载 ----------
+def load_config(path):
+    with open(path, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+    if isinstance(cfg, dict):
+        # 允许顶层写成 {"base_url": "...", "checks": [...]}
+        return cfg.get("checks", []), cfg.get("base_url")
+    return cfg, None
+
+
+def _resolve_url(check, base_url):
+    raw = check.get("url") or check.get("path") or "/"
+    if raw.startswith("http://") or raw.startswith("https://"):
+        return raw
+    if base_url:
+        return base_url.rstrip("/") + "/" + raw.lstrip("/")
+    return raw
+
+
+# ---------- 单个检查 ----------
+def run_check(check, base_url, default_timeout):
+    method = (check.get("method") or DEFAULT_METHOD).upper()
+    url = _resolve_url(check, base_url)
+    timeout = check.get("timeout", default_timeout)
+    headers = dict(check.get("headers", {}))
+    body = check.get("body")
+    if isinstance(body, (dict, list)):
+        body = json.dumps(body).encode("utf-8")
+        headers.setdefault("Content-Type", "application/json")
+    elif isinstance(body, str):
+        body = body.encode("utf-8")
+
+    expected_status = check.get("expected_status", 200)
+    expect_contains = check.get("expect_contains", []) or []
+    expect_json = check.get("expect_json")  # dict: 顶层字段 -> 期望值
+
+    name = check.get("name") or f"{method} {url}"
+    result = {
+        "name": name,
+        "method": method,
+        "url": url,
+        "expected_status": expected_status,
+        "status": None,
+        "time_ms": None,
+        "matched_contains": [],
+        "errors": [],
+        "passed": False,
+    }
+
+    req = urllib.request.Request(url, data=body, method=method, headers=headers)
+    start = time.time()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            status = resp.status
+            content = resp.read().decode("utf-8", errors="replace")
+        result["status"] = status
+        result["time_ms"] = round((time.time() - start) * 1000, 1)
+        if status != expected_status:
+            result["errors"].append(f"状态码 {status} != 期望 {expected_status}")
+    except urllib.error.HTTPError as e:
+        result["status"] = e.code
+        result["time_ms"] = round((time.time() - start) * 1000, 1)
+        if e.code != expected_status:
+            result["errors"].append(f"状态码 {e.code} != 期望 {expected_status}")
+        try:
+            content = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            content = ""
+    except Exception as e:  # 连接失败、超时、DNS 等
+        result["time_ms"] = round((time.time() - start) * 1000, 1)
+        result["errors"].append(f"{type(e).__name__}: {e}")
+        content = ""
+
+    # 文本包含校验
+    for token in expect_contains:
+        if token in content:
+            result["matched_contains"].append(token)
+        else:
+            result["errors"].append(f"响应中未找到文本: {token!r}")
+
+    # JSON 字段校验
+    if expect_json:
+        try:
+            data = json.loads(content)
+        except Exception as e:
+            result["errors"].append(f"响应不是合法 JSON: {e}")
+            data = None
+        if isinstance(data, dict):
+            for key, val in expect_json.items():
+                actual = data.get(key)
+                if actual != val:
+                    result["errors"].append(f"JSON 字段 {key}={actual!r} != 期望 {val!r}")
+
+    result["passed"] = len(result["errors"]) == 0
+    return result
+
+
+# ---------- 报告 ----------
+def print_console(results, elapsed_ms):
+    total = len(results)
+    passed = sum(1 for r in results if r["passed"])
+    print()
+    print("=" * 70)
+    print(f"冒烟测试报告   {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("=" * 70)
+    for r in results:
+        mark = _ok("PASS") if r["passed"] else _fail("FAIL")
+        t = f"{r['time_ms']}ms" if r["time_ms"] is not None else "-"
+        print(f"[{mark}] {r['name']}  ->  {r['status']}  ({t})")
+        if r["matched_contains"]:
+            print(f"        {_DIM}命中文本: {r['matched_contains']}{_RESET}")
+        for err in r["errors"]:
+            print(f"        {_fail('✗')} {err}")
+    print("-" * 70)
+    summary = _ok(f"{passed}/{total} 通过") if passed == total else _fail(f"{passed}/{total} 通过")
+    print(f"总计: {summary}   耗时 {elapsed_ms:.0f}ms")
+    print("=" * 70)
+
+
+def build_summary(results, elapsed_ms):
+    passed = sum(1 for r in results if r["passed"])
+    return {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "total": len(results),
+        "passed": passed,
+        "failed": len(results) - passed,
+        "elapsed_ms": round(elapsed_ms, 1),
+    }
+
+
+def write_json_report(results, summary, path):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"summary": summary, "results": results}, f, ensure_ascii=False, indent=2)
+
+
+def write_html_report(results, summary, path):
+    rows = []
+    for r in results:
+        status_cls = "ok" if r["passed"] else "bad"
+        detail = ""
+        if r["matched_contains"]:
+            detail += "<div class='match'>命中: " + ", ".join(r["matched_contains"]) + "</div>"
+        for err in r["errors"]:
+            detail += f"<div class='err'>✗ {err}</div>"
+        rows.append(
+            f"<tr class='{status_cls}'>"
+            f"<td>{'✅' if r['passed'] else '❌'}</td>"
+            f"<td>{r['name']}</td>"
+            f"<td>{r['method']}</td>"
+            f"<td>{r['status']}</td>"
+            f"<td>{r['time_ms']}ms</td>"
+            f"<td>{detail}</td>"
+            f"</tr>"
+        )
+    html = (
+        f"<!DOCTYPE html>\n"
+        f'<html lang="zh-CN"><head><meta charset="utf-8">\n'
+        f"<title>冒烟测试报告</title>\n"
+        f"<style>\n"
+        f"body{{font-family:-apple-system,Segoe UI,Roboto,sans-serif;margin:24px;color:#222;}}\n"
+        f"h1{{font-size:20px;}}\n"
+        f".meta{{color:#666;font-size:13px;margin-bottom:16px;}}\n"
+        f"table{{border-collapse:collapse;width:100%;font-size:13px;}}\n"
+        f"th,td{{border:1px solid #ddd;padding:8px 10px;text-align:left;vertical-align:top;}}\n"
+        f"th{{background:#f5f5f5;}}\n"
+        f"tr.ok td{{background:#f0fff4;}}\n"
+        f"tr.bad td{{background:#fff5f5;}}\n"
+        f".err{{color:#c0392b;}}\n"
+        f".match{{color:#27ae60;}}\n"
+        f".badge{{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px;}}\n"
+        f".badge.ok{{background:#27ae60;color:#fff;}}\n"
+        f".badge.bad{{background:#e74c3c;color:#fff;}}\n"
+        f"</style></head><body>\n"
+        f"<h1>冒烟测试报告</h1>\n"
+        f'<div class="meta">生成时间: {summary["timestamp"]} ｜ 耗时 {summary["elapsed_ms"]}ms</div>\n'
+        f'<div style="margin-bottom:12px;">\n'
+        f'<span class="badge ok">通过 {summary["passed"]}</span>\n'
+        f'<span class="badge bad">失败 {summary["failed"]}</span>\n'
+        f'<span class="badge" style="background:#888;color:#fff;">共 {summary["total"]}</span>\n'
+        f"</div>\n"
+        f"<table>\n"
+        f"<tr><th>结果</th><th>名称</th><th>方法</th><th>状态码</th><th>耗时</th><th>详情</th></tr>\n"
+        f"{''.join(rows)}\n"
+        f"</table>\n"
+        f"</body></html>"
+    )
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(html)
+
+
+# ---------- 入口 ----------
+def main():
+    p = argparse.ArgumentParser(description="可复用的 Web/接口冒烟测试工具")
+    p.add_argument("--config", "-c", required=True, help="检查项配置文件 (JSON)")
+    p.add_argument("--base-url", "-b", default=None, help="基础 URL 前缀，拼接配置里非完整地址的 url")
+    p.add_argument("--timeout", "-t", type=float, default=DEFAULT_TIMEOUT, help="默认超时(秒)")
+    p.add_argument("--report", "-r", default=None, help="输出报告文件路径")
+    p.add_argument("--format", "-f", choices=["json", "html"], default=None, help="报告格式 (json/html)，默认仅控制台")
+    p.add_argument("--no-color", action="store_true", help="禁用控制台颜色")
+    args = p.parse_args()
+
+    global _USE_COLOR
+    if args.no_color:
+        _USE_COLOR = False
+
+    checks, cfg_base = load_config(args.config)
+    base_url = args.base_url or cfg_base
+
+    t0 = time.time()
+    results = [run_check(c, base_url, args.timeout) for c in checks]
+    elapsed = (time.time() - t0) * 1000
+
+    print_console(results, elapsed)
+
+    summary = build_summary(results, elapsed)
+    if args.report:
+        fmt = args.format or ("html" if args.report.endswith(".html") else "json")
+        if fmt == "html":
+            write_html_report(results, summary, args.report)
+        else:
+            write_json_report(results, summary, args.report)
+        print(f"\n报告已写出: {args.report}")
+
+    failed = summary["failed"]
+    sys.exit(1 if failed else 0)
+
+
+if __name__ == "__main__":
+    main()

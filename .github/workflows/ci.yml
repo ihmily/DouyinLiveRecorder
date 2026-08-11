@@ -154,6 +154,9 @@ jobs:
       - name: Run pytest
         run: pytest --cov=src --cov-report=term-missing
 
+      - name: Per-module coverage gate
+        run: python scripts/check_coverage.py
+
   concurrency-test:
     name: Concurrency Test (thread safety & rate limit)
     needs: changes

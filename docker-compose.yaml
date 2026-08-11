@@ -113,6 +113,14 @@ services:
     profiles:
       - gui
     entrypoint: ["python", "gui.py"]
+    # GUI 模式实际运行 python gui.py，健康检查需匹配 gui.py 而非 main|web.py
+    # （继承的 recorder 健康检查以 'python (main|web).py' 为判定，对 gui 模式永远失败）
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'python gui.py' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
     # environment:
     #   - DISPLAY=${DISPLAY}
     # volumes:

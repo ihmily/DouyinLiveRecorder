@@ -193,13 +193,23 @@ class TestGetDouyinStreamUrl:
 
     @pytest.mark.asyncio
     async def test_offline_status_returns_not_live(self):
-        # status != 2 → is_live=False。
+        # status != 2 → is_live=False，且离线分支必须短路、不得触发网络可用性校验。
         from src.stream import get_douyin_stream_url
 
         json_data = {"anchor_name": "test_anchor", "status": 4}
-        result = await get_douyin_stream_url(json_data)
+        # 离线分支不应调用 get_response_status；mock 并断言未调用，防止回归。
+        with patch("src.stream.get_response_status", new_callable=AsyncMock) as mock_status:
+            result = await get_douyin_stream_url(json_data)
+            # 边界覆盖：status 键缺失时，d.get("status", 4) 默认判为离线，同样短路。
+            result_default = await get_douyin_stream_url({"anchor_name": "test_anchor"})
         assert result["is_live"] is False
         assert result["anchor_name"] == "test_anchor"
+        # 离线结果不含流地址相关键，锁定离线契约。
+        assert "flv_url" not in result and "m3u8_url" not in result
+        # 缺省离线边界：无 status 键也应判离线且不触发网络校验。
+        assert result_default["is_live"] is False
+        assert "flv_url" not in result_default and "m3u8_url" not in result_default
+        mock_status.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_live_with_flv_and_m3u8(self):
@@ -220,8 +230,13 @@ class TestGetDouyinStreamUrl:
 
         assert result["is_live"] is True
         assert result["quality"] == "HD"
-        assert result["m3u8_url"] or result["flv_url"]
-        assert "available_qualities" in result
+        # 固化选中结果契约（弱断言仅检查真值/键存在，会漏检选错画质或空 URL 回归）。
+        # HD 请求的 flv 索引被截断到 SD，m3u8 索引截断到 HD，故实际质量回落为 SD。
+        assert result["flv_url"] == "https://flv.example.com/sd.flv"
+        assert result["m3u8_url"] == "https://m3u8.example.com/hd.m3u8"
+        assert result["actual_quality"] == "SD"
+        assert result["available_qualities"] == ["HD", "SD"]
+        assert result["record_url"] == result["m3u8_url"]
 
     @pytest.mark.asyncio
     async def test_live_only_flv_no_m3u8(self):
@@ -243,6 +258,13 @@ class TestGetDouyinStreamUrl:
         assert result["is_live"] is True
         # 无 m3u8 时不应调用 get_response_status
         mock_status.assert_not_called()
+        # 不降级：请求的 OD 画质应被原样保留，且正确选中 OD 的 FLV 地址
+        assert result["quality"] == "OD"
+        assert result["actual_quality"] == "OD"
+        assert result["flv_url"] == "https://flv.example.com/od.flv"
+        # FLV-only 路径无 m3u8，record_url 应回退为选中的 FLV 地址（与有 m3u8 用例的 record_url 契约一致）。
+        assert result["record_url"] == "https://flv.example.com/od.flv"
+        assert result["available_qualities"] == ["OD"]
 
     @pytest.mark.asyncio
     async def test_m3u8_unreachable_triggers_fallback(self):
@@ -292,6 +314,13 @@ class TestGetTiktokStreamUrl:
         result = await get_tiktok_stream_url(json_data)
         assert result["is_live"] is False
         assert result["anchor_name"] == "Test-test_id"
+        # 离线不应携带直播相关字段，防止误判为直播（与抖音离线用例契约一致）。
+        assert (
+            "flv_url" not in result
+            and "m3u8_url" not in result
+            and "record_url" not in result
+            and "quality" not in result
+        )
 
     @pytest.mark.asyncio
     async def test_live_with_stream_data(self):
@@ -327,7 +356,13 @@ class TestGetTiktokStreamUrl:
 
         assert result["is_live"] is True
         assert result["anchor_name"] == "Streamer-streamer1"
-        assert result.get("flv_url") or result.get("m3u8_url")
+        assert result["title"] == "Live Now"
+        # 固化选中结果契约（弱断言仅检查真值，会漏检选错画质或空 URL 回归）。
+        # OD 请求索引截断到末档 → 选中最高码率 origin（BD），flv_url 回退为 m3u8。
+        assert result["m3u8_url"] == "https://tiktok.example.com/origin.m3u8?codec=h264"
+        assert result["flv_url"] == "https://tiktok.example.com/origin.m3u8?codec=h264"
+        assert result["actual_quality"] == "BD"
+        assert result["record_url"] == result["m3u8_url"]
 
 
 class TestGetKuaishouStreamUrl:
@@ -404,7 +439,9 @@ class TestGetNeteaseStreamUrl:
 
         json_data = {"is_live": False, "anchor_name": "netease_off"}
         result = await get_netease_stream_url(json_data)
-        assert result == json_data
+        # 非直播时函数短路直接返回原始 dict（同一对象），不构造新结果。
+        # 用同一性断言锁定「原样返回」契约，杜绝返回被篡改副本或注入空字段的回归。
+        assert result is json_data
 
     @pytest.mark.asyncio
     async def test_live_with_stream_list(self):
@@ -424,8 +461,13 @@ class TestGetNeteaseStreamUrl:
         }
         result = await get_netease_stream_url(json_data, video_quality="HD")
         assert result["is_live"] is True
-        assert result.get("flv_url")
-        assert result.get("actual_quality") == "HD"
+        # 固化选中结果契约（弱断言仅检查真值/键存在，会漏检选错画质或空 URL 回归）。
+        # HD 请求映射到 high 分辨率 CDN，flv_url 锁定为 high.flv；record_url 与 flv_url 一致。
+        assert result["flv_url"] == "https://ali.example.com/high.flv"
+        assert result["record_url"] == result["flv_url"]
+        assert result["m3u8_url"] == "https://cc.example.com/live.m3u8"
+        assert result["actual_quality"] == "HD"
+        assert result["available_qualities"] == ["UHD", "HD"]
 
 
 class TestGetStreamUrl:
@@ -437,7 +479,9 @@ class TestGetStreamUrl:
 
         json_data = {"is_live": False, "anchor_name": "test"}
         result = await get_stream_url(json_data)
-        assert result == json_data
+        # 非直播时函数短路直接返回原始 dict（同一对象），不构造新结果。
+        # 用同一性断言锁定「原样返回」契约，杜绝返回被篡改副本或注入空字段的回归。
+        assert result is json_data
 
     @pytest.mark.asyncio
     async def test_empty_play_url_list(self):
@@ -445,7 +489,9 @@ class TestGetStreamUrl:
 
         json_data = {"is_live": True, "anchor_name": "test", "play_url_list": []}
         result = await get_stream_url(json_data)
-        assert result == json_data
+        # 空 play_url_list 时函数短路直接返回原始 dict（同一对象），不构造新结果。
+        # 用同一性断言锁定「原样返回」契约，杜绝返回被篡改副本或注入空字段的回归。
+        assert result is json_data
 
     @pytest.mark.asyncio
     async def test_m3u8_type(self):
@@ -462,7 +508,10 @@ class TestGetStreamUrl:
         }
         result = await get_stream_url(json_data, video_quality="OD", url_type="m3u8")
         assert result["is_live"] is True
-        assert result.get("m3u8_url")
+        # url_type="m3u8" 且未传 hls_extra_key 时，m3u8_url 取整个 play_url_list[0] 字典（OD 选中索引 0）。
+        # 精确锁定选中值与 record_url 契约，杜绝「真值/键存在」的假绿断言漏检空值/错选回归。
+        assert result["m3u8_url"] == {"m3u8": "https://example.com/od.m3u8", "flv": "https://example.com/od.flv"}
+        assert result["record_url"] == result["m3u8_url"]
         assert result["quality"] == "OD"
 
     @pytest.mark.asyncio
@@ -477,7 +526,10 @@ class TestGetStreamUrl:
         }
         result = await get_stream_url(json_data, url_type="flv")
         assert result["is_live"] is True
-        assert result.get("flv_url")
+        # url_type="flv" 且未传 flv_extra_key 时，flv_url 取整个 play_url_list[0] 字典。
+        # 精确锁定选中值与 record_url 契约，杜绝「真值/键存在」的假绿断言漏检空值/错选回归。
+        assert result["flv_url"] == {"flv": "https://example.com/od.flv"}
+        assert result["record_url"] == result["flv_url"]
 
     @pytest.mark.asyncio
     async def test_all_type(self):
@@ -491,5 +543,8 @@ class TestGetStreamUrl:
         }
         result = await get_stream_url(json_data, url_type="all")
         assert result["is_live"] is True
-        assert "m3u8_url" in result
-        assert "flv_url" in result
+        # url_type="all" 且未传 hls_extra_key/flv_extra_key 时，m3u8_url/flv_url 取整个 play_url_list[0] 字典。
+        # 精确锁定选中值与 record_url 契约，杜绝「键存在即可」的假绿断言漏检空值/错选回归。
+        assert result["m3u8_url"] == {"m3u8": "https://example.com/a.m3u8", "flv": "https://example.com/a.flv"}
+        assert result["flv_url"] == {"m3u8": "https://example.com/a.m3u8", "flv": "https://example.com/a.flv"}
+        assert result["record_url"] == result["m3u8_url"]

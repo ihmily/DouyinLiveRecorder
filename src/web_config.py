@@ -48,6 +48,34 @@ WEB_DEFAULTS: dict[str, str | int | bool] = {
     "web_minimize_to_tray": True,
 }
 
+# 危险配置键集合：写入这些键等同于在录制完成后执行任意命令（RCE）。
+# 当 Web 认证关闭时，拒绝通过 API 改写，避免未授权远程命令执行。
+DANGEROUS_CONFIG_KEYS: set[tuple[str, str]] = {
+    ("录制设置", "是否录制完成后执行自定义脚本"),
+    ("录制设置", "自定义脚本执行命令"),
+}
+
+# section/key 允许的字符范围（不含换行与 INI 分隔符），用于校验写入目标。
+_SAFE_KEY_PATTERN = re.compile(r"^[\w\u4e00-\u9fff\-\. ]+$")
+
+
+def validate_config_target(section: str, key: str, value: str) -> None:
+    # 校验配置写入目标，防止 INI 注入（换行注入新行/新节）与非法字符。
+    if not section or not key:
+        raise ValueError("section 与 key 不能为空")
+    if not _SAFE_KEY_PATTERN.match(section) or not _SAFE_KEY_PATTERN.match(key):
+        raise ValueError("section 或 key 包含非法字符")
+    if any(c in value for c in ("\n", "\r")) or "\x00" in value:
+        raise ValueError("配置值包含非法换行或控制字符")
+
+
+def validate_room_target(url: str, name: str | None) -> None:
+    # 校验直播间写入目标，防止 URL_config.ini 换行注入新行。
+    if any(c in url for c in ("\n", "\r")):
+        raise ValueError("URL 包含非法换行符")
+    if name and any(c in name for c in ("\n", "\r")):
+        raise ValueError("主播名包含非法换行符")
+
 
 def normalize_url(url: str) -> str:
     # 规范化 URL：补 https://，并对 CLEAN_URL_HOST_LIST 的 host 去除 query。

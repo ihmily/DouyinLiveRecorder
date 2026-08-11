@@ -552,9 +552,27 @@ mypy .
 pytest
 ```
 
+> **注释规范**：模块/函数说明统一使用 `#` 行注释，不使用三引号 `"""` 文档字符串；功能性多行字符串字面量（模板/SQL）改用单引号 + 换行拼接而非 `"""`。
+
 ### 项目文档
 
 - [CODE_WIKI.md](CODE_WIKI.md) - 项目架构文档（详细的模块说明、依赖关系、设计模式）
+
+### Web/接口冒烟测试
+
+项目内置通用、零依赖的 Web/接口冒烟测试工具 `scripts/smoke_test.py`（纯标准库，无需安装第三方包），可对 Web 管理面板等**运行中 HTTP 接口**做轻量探活。
+
+```bash
+# 检查本机 Web 管理面板（默认 127.0.0.1:8000，示例配置见 scripts/smoke_web.json）
+python scripts/smoke_test.py -c scripts/smoke_web.json
+
+# 生成 HTML 报告
+python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f html
+```
+
+- 配置驱动（JSON）：`url` / `method` / `expected_status` / `timeout` / 请求头 / 请求体 / 响应应包含文本 / 期望 JSON 字段
+- 支持 `base_url` 前缀拼接；控制台 / JSON / HTML 三种报告；失败时退出码非 0（可接入 CI）
+- 与 `build_exe.py --smoke`（打包产物冒烟）不同，本工具针对**运行中的 HTTP 接口**做探活，两者互补
 
 ### 添加新平台支持
 
@@ -665,6 +683,21 @@ brew install node
 本项目基于 [MIT License](LICENSE) 开源，欢迎 Star 和 Fork！
 
 ## ⏳ 更新日志
+
+### v4.0.8.1-dev (2026-08-09) — 注释规范与 Web/接口冒烟测试工具
+
+- **注释规范**：模块/函数说明统一使用 `#` 行注释，不再使用三引号 `"""` 文档字符串
+- **新增 Web/接口冒烟测试工具**（`scripts/smoke_test.py`，零依赖、配置驱动）：支持 GET/POST、期望状态码、文本/JSON 断言、`base_url` 拼接，输出控制台/JSON/HTML 报告，失败时退出码非 0；示例 `scripts/smoke_web.json` 默认探活 Web 管理面板 `http://127.0.0.1:8000`
+
+### v4.0.8.1-dev (2026-08-08 ~ 2026-08-09) — 全量代码审查、构建修复与 GUI 优雅停止加固
+
+- **全量代码审查**：`compileall` 语法编译、`black`（line-length 120）、`isort`、`mypy`（src/）、`pytest` 全部通过（**417 passed**，无回归）
+- **修复 `pyproject.toml` 非法作者邮箱**（真实构建 Bug）：`email = "ihmily@github"` 非合法 IDN 邮箱，新版 setuptools 会拒绝构建，导致 `pip install .` / `pip install .[dev]` 必失败；已改为 `ihmily@users.noreply.github.com`（CI 因只装裸工具从未触发，本地开发必踩）
+- **修复 black 格式违规 2 处**（`tests/test_stream.py` 超长断言、`main.py` 函数签名与一行日志），CI 的 `black --check .` 此前会失败
+- **GUI 停止录制优雅退出加固**（`gui.py`）：原回退 `proc.terminate()` 硬杀会把 ffmpeg 孙进程孤儿化且 `proc.wait()` 立即成功导致日志谎称已清理；现 CTRL_BREAK 失败时改为 `taskkill /F /T /PID` 整树终止（连 ffmpeg 一起清理），日志按路径如实区分「优雅退出」与「硬杀路径」
+- **GUI 子进程 pythonw 兼容性修复（根因）**（`gui.py`）：用 `pythonw.exe` 启动 GUI 时，`sys.executable` 指向 pythonw（GUI 子系统、无控制台），导致其拉起的录制核心子进程也无控制台，`AttachConsole` 必然失败、CTRL_BREAK 结构性不可达；现检测到解释器为 pythonw 时改用同目录 `python.exe`（console 子系统）启动录制核心。打包版（CLI exe 为 `console=True`）不受影响
+- **实测验证**：用 pythonw 当父进程复现，确认修复后 `AttachConsole` 成功、`GenerateConsoleCtrlEvent` 送达、子进程 SIGBREAK 处理器正常触发（`signum=21`）；另发现 Python 3.13 的 `time.sleep()` 不会被 CTRL_BREAK 唤醒（CTRL_BREAK 走 pending-call 机制），已排查 `main.py` 录制主循环无长 sleep（≤5s），保证 15 秒等待窗口内 `safe_exit` 必然执行清理
+- **gui_legacy.py 已知遗留问题（未改，建议迁移到 gui.py）**：旧版 GUI 用 `CREATE_NO_WINDOW` 启动子进程，其 `send_signal(CTRL_BREAK_EVENT)` 在该启动方式下永远静默无效，优雅停止实际从未生效（每次等 15 秒超时后强杀）
 
 ### v4.0.8.1-dev (2026-08-05) — HLS 校验误判与空白日志修复
 

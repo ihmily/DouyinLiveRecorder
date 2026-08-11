@@ -4118,10 +4118,14 @@ async def get_migu_stream_url(
         source_url = json_data["body"]["urlInfo"]["url"]
 
         async def _get_dd_calcu(url: str) -> str:
-            # 来秀签名算法（内部方法）
+            # 来秀签名算法（内部方法）。subprocess 同步阻塞，交由线程池执行避免卡住事件循环。
             try:
-                result = subprocess.run(
-                    ["node", f"{JS_SCRIPT_PATH}/migu.js", url], capture_output=True, text=True, check=True
+                result = await asyncio.to_thread(
+                    subprocess.run,
+                    ["node", f"{JS_SCRIPT_PATH}/migu.js", url],
+                    capture_output=True,
+                    text=True,
+                    check=True,
                 )
                 return result.stdout.strip()
             except ProgramError:

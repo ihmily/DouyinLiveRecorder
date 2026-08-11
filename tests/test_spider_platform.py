@@ -342,7 +342,9 @@ class Test6roomStreamUrl:
             result = await get_6room_stream_url("https://v.6.cn/12345")
             assert result["anchor_name"] == "六间房主播"
             assert result["is_live"] is True
-            assert "live_12345" in result["flv_url"]
+            # 固化 6room 流地址完整契约，防止 host/路径/扩展名回归（弱子串断言会漏检）。
+            assert result["flv_url"] == "https://wlive.6rooms.com/httpflv/live_12345.flv"
+            assert result["record_url"] == result["flv_url"]
 
     @pytest.mark.asyncio
     async def test_no_room_id_raises(self):
@@ -652,6 +654,10 @@ class TestHuajiaoUserInfo:
         with patch("src.spider.async_req", new_callable=AsyncMock, side_effect=[feeds_response, html]):
             result = await get_huajiao_user_info("https://www.huajiao.com/user/12345")
             assert result["is_live"] is False
+            # 离线仍需从主页 <title> 解析出主播名，锁死 HTML 标题解析契约。
+            assert result["anchor_name"] == "主播"
+            # 离线不应携带直播相关字段（sn/liveid/title），防止误判为直播。
+            assert "sn" not in result and "liveid" not in result and "title" not in result
 
 
 class TestAcfunStreamData:
@@ -859,7 +865,7 @@ class TestSoopliveTk:
     @pytest.mark.asyncio
     async def test_error_returns_false(self):
         with patch("src.spider.async_req", new_callable=AsyncMock, side_effect=Exception("net")):
-            result = await get_sooplive_tk("https://play.sooplive.co.kr/testbj/123")
+            result = await get_sooplive_tk("https://play.sooplive.co.kr/testbj/123", rtype="live")
             assert result == {"is_live": False}
 
 
@@ -1139,7 +1145,8 @@ class TestBilibiliStreamData:
             assert result is not None
             assert "url" in result
             assert result["current_qn"] == "10000"
-            assert len(result["accept_qn"]) == 2
+            # 固化清晰度集合与降序契约（弱长度断言会漏检质量值映射回归）。
+            assert result["accept_qn"] == ["10000", "400"]
 
 
 class TestNeteaseStreamDataLive:
@@ -1223,15 +1230,16 @@ class TestLoginFlexTv:
         cookie_dict = {"flx_oauth_access": "abc123", "other": "val"}
         with patch("src.spider.async_req", new_callable=AsyncMock, return_value=cookie_dict):
             result = await login_flextv("user123", "pass123")
-            assert "flx_oauth_access=abc123" in result
-            assert "other=val" in result
+            # 固化 cookie 串完整格式：分隔符 "; " + 全部条目（弱子串断言会漏检分隔符/漏项回归）。
+            assert result == "flx_oauth_access=abc123; other=val"
 
     @pytest.mark.asyncio
     async def test_success_tuple_format(self):
         cookie_dict = {"flx_oauth_access": "tok", "x": "y"}
         with patch("src.spider.async_req", new_callable=AsyncMock, return_value=("ignored", cookie_dict)):
             result = await login_flextv("user", "pass")
-            assert "flx_oauth_access=tok" in result
+            # 固化 cookie 串完整格式：分隔符 "; " + 全部条目（弱子串断言会漏检分隔符/漏项回归）。
+            assert result == "flx_oauth_access=tok; x=y"
 
     @pytest.mark.asyncio
     async def test_no_access_token_returns_none(self):

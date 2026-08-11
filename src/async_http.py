@@ -21,6 +21,16 @@ _httpx_limits = httpx.Limits(max_connections=100, max_keepalive_connections=20)
 # AsyncClient 必须在事件循环内创建并使用，进程退出时需 aclose() 释放连接池
 # 值为 (client, 创建时的事件循环)，用于检测 asyncio.run() 导致的循环变更
 _client_cache: dict[tuple[str, bool, bool], tuple[httpx.AsyncClient, asyncio.AbstractEventLoop]] = {}
+# 保护 _client_cache 的并发读写：替换失效 client 中存在 await 点，需加锁避免重复创建导致连接池泄漏。
+_client_lock: asyncio.Lock | None = None
+
+
+def _get_client_lock() -> asyncio.Lock:
+    # 延迟创建锁，避免在导入时（无运行循环）初始化 asyncio.Lock 报错。
+    global _client_lock
+    if _client_lock is None:
+        _client_lock = asyncio.Lock()
+    return _client_lock
 
 
 async def _get_client(
@@ -39,28 +49,34 @@ async def _get_client(
         # client 未关闭且事件循环未变更时直接复用
         if not client.is_closed and client_loop is current_loop:
             return client
+    async with _get_client_lock():
+        # 持锁后重新检查：等待期间可能已有其他协程创建/复用
+        cached = _client_cache.get(key)
+        if cached is not None and not cached[0].is_closed and cached[1] is current_loop:
+            return cached[0]
         # 缓存的 client 已失效（已关闭或事件循环变更）：先释放旧连接池，避免泄漏
-        if not client.is_closed:
-            if client_loop is current_loop:
+        if cached is not None and not cached[0].is_closed:
+            old_client, old_loop = cached
+            if old_loop is current_loop:
                 try:
-                    await client.aclose()
+                    await old_client.aclose()
                 except Exception as e:
                     logger.debug(f"关闭失效 AsyncClient 失败: {e}")
-            elif not client_loop.is_closed():
+            elif not old_loop.is_closed():
                 # 跨事件循环：在其创建循环上安排 aclose，避免在其创建循环外操作 transport
                 try:
-                    _ = asyncio.run_coroutine_threadsafe(client.aclose(), client_loop)
+                    _ = asyncio.run_coroutine_threadsafe(old_client.aclose(), old_loop)
                 except Exception as e:
                     logger.debug(f"跨循环关闭 AsyncClient 失败: {e}")
-    client = httpx.AsyncClient(
-        proxy=proxy_addr,
-        timeout=timeout,
-        verify=verify,
-        http2=http2,
-        limits=_httpx_limits,
-    )
-    _client_cache[key] = (client, current_loop)
-    return client
+        client = httpx.AsyncClient(
+            proxy=proxy_addr,
+            timeout=timeout,
+            verify=verify,
+            http2=http2,
+            limits=_httpx_limits,
+        )
+        _client_cache[key] = (client, current_loop)
+        return client
 
 
 async def _close_all_clients() -> None:

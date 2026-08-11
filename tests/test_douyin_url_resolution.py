@@ -52,7 +52,7 @@ class _FakeClient:
 
     def __init__(self, handler):
         self._handler = handler
-        self.requests: list[tuple[str, dict]] = []
+        self.requests: list[tuple[str, dict[str, str]]] = []
 
     async def __aenter__(self):
         return self

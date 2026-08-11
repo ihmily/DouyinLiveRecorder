@@ -100,10 +100,12 @@ def trace_error_decorator(func: Callable[P, R]) -> Callable[P, R]:
 
 
 def check_md5(file_path: str | Path) -> str:
-    # 计算文件的 MD5 值
+    # 计算文件的 MD5 值（分块读取，避免大文件一次性载入内存）
+    md5_hash = hashlib.md5()
     with open(file_path, "rb") as fp:
-        file_md5 = hashlib.md5(fp.read()).hexdigest()
-    return file_md5
+        for chunk in iter(lambda: fp.read(8192), b""):
+            md5_hash.update(chunk)
+    return md5_hash.hexdigest()
 
 
 def dict_to_cookie_str(cookies_dict: Mapping[str, object]) -> str:

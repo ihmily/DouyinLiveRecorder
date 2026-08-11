@@ -1120,9 +1120,9 @@ def check_subprocess(
                 prefix = os.path.basename(save_file_path).rsplit("_", maxsplit=1)[0]
                 for path in file_paths:
                     if prefix in path:
-                        threading.Thread(target=converts_mp4, args=(path, delete_origin_file)).start()
+                        threading.Thread(target=converts_mp4, args=(path, delete_origin_file), daemon=True).start()
             else:
-                threading.Thread(target=converts_mp4, args=(save_file_path, delete_origin_file)).start()
+                threading.Thread(target=converts_mp4, args=(save_file_path, delete_origin_file), daemon=True).start()
         print(f"\n{record_name} {stop_time} 直播录制完成\n")
 
         if script_command:
@@ -1229,9 +1229,7 @@ def _validate_stream_url(
                     f"content-type={probe.headers.get('content-type', '')}"
                 )
                 return False
-            logger.warning(
-                f"流地址校验失败: {url} - status_code={response.status_code}, content-type={content_type}"
-            )
+            logger.warning(f"流地址校验失败: {url} - status_code={response.status_code}, content-type={content_type}")
             return False
     except Exception as e:
         # Windows 下 socket.timeout 的 str() 为空，必须带上异常类型与 URL
@@ -1239,9 +1237,7 @@ def _validate_stream_url(
         return False
 
 
-def select_source_url(
-    _link: str, stream_info: Mapping[str, object], proxy_addr: str | None = None
-) -> str | None:
+def select_source_url(_link: str, stream_info: Mapping[str, object], proxy_addr: str | None = None) -> str | None:
     # HLS(m3u8) 优先采集：当存在 HLS 源且配置启用 HLS 采集时优先使用；
     # 仅当无 HLS 源 或 配置关闭 HLS 采集时，才回退使用 FLV 源。
     # proxy_addr 必须透传给校验器：TikTok 等境外平台的流地址若不走与解析阶段
@@ -2045,8 +2041,7 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                                             full_path = f"{full_path}/{live_title}_{anchor_name}"
                                         else:
                                             full_path = f"{full_path}/{now[:10]}_{live_title}"
-                                    if not os.path.exists(full_path):
-                                        os.makedirs(full_path)
+                                    os.makedirs(full_path, exist_ok=True)
                                 except Exception as e:
                                     logger.error(f"错误信息: {e} 发生错误的行数: {_get_error_line(e)}")
 

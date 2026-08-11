@@ -574,7 +574,8 @@ class TestBilibiliStreamData:
         with patch("src.spider.async_req", new_callable=AsyncMock, return_value=resp):
             result = await get_bilibili_stream_data("https://live.bilibili.com/26066074")
             assert result is not None
-            assert "gotcha" in result["url"]
+            # 精确钉死返回的 gotcha CDN 地址，验证优先选择逻辑而非含糊子串匹配。
+            assert result["url"] == "https://d1--cn-gotcha01.bilivideo.com/live/test.flv"
 
     @pytest.mark.asyncio
     async def test_play_url_empty_durl_fallback(self):
