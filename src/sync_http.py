@@ -146,6 +146,9 @@ def sync_req(
                 raise
 
     except Exception as e:
-        resp_str = str(e)
+        # 异常不再伪装成正常响应体返回：记录错误日志并返回空串，
+        # 避免调用方将错误文本误当业务数据解析。
+        logger.error(f"sync_req 请求失败: {e}")
+        resp_str = ""
 
     return resp_str

@@ -17,10 +17,11 @@ from typing import cast
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from starlette.responses import Response
 
 from src.web_config import (
+    DANGEROUS_CONFIG_KEYS,
     format_url_line,
     hash_web_password,
     is_hashed_web_password,
@@ -29,6 +30,8 @@ from src.web_config import (
     read_config_safe,
     read_web_config,
     update_config_line,
+    validate_config_target,
+    validate_room_target,
     verify_web_password,
 )
 
@@ -39,6 +42,12 @@ _WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 _tokens: dict[str, float] = {}
 # 保护 _tokens 并发访问的锁（login 写入、middleware 查询、密码变更时 clear 均需持锁）
 _tokens_lock = threading.Lock()
+
+# 登录失败限流：按客户端 IP 记录失败时间戳，防止在线爆破密码。
+_FAILED_LOGINS: dict[str, deque] = {}
+_FAILED_LOGINS_LOCK = threading.Lock()
+_LOGIN_MAX_ATTEMPTS = 5
+_LOGIN_WINDOW_SECONDS = 60
 
 
 # app.state 上的自定义属性由 Starlette 动态承载（类型化为 Any），读取处统一用 cast 收敛类型。
@@ -51,12 +60,26 @@ class RoomCreate(BaseModel):
     quality: str | None = None
     name: str | None = None
 
+    @field_validator("url", "name")
+    @classmethod
+    def _no_newline(cls, v: str | None) -> str | None:
+        if v and any(c in v for c in ("\n", "\r")):
+            raise ValueError("不能包含换行符")
+        return v
+
 
 class RoomUpdate(BaseModel):
     old_url: str
     url: str
     quality: str | None = None
     name: str | None = None
+
+    @field_validator("old_url", "url", "name")
+    @classmethod
+    def _no_newline(cls, v: str | None) -> str | None:
+        if v and any(c in v for c in ("\n", "\r")):
+            raise ValueError("不能包含换行符")
+        return v
 
 
 class RoomToggle(BaseModel):
@@ -121,11 +144,15 @@ def create_app(
     # ===== 路由 =====
 
     @app.post("/api/login")
-    async def login(req: LoginRequest) -> dict[str, object]:
+    async def login(req: LoginRequest, request: Request) -> dict[str, object]:
         # 每次登录重新读取配置，保证面板内修改密码即时生效。
         cfg = read_web_config(cast(str, app.state.config_file))
         if not cast(bool, cfg["web_auth_enable"]):
             return {"token": "", "expires_in": 0, "auth_required": False}
+        client_ip = _client_ip(request)
+        # 登录失败限流：同一 IP 在窗口内失败次数过多则拒绝，防止在线爆破。
+        if _login_blocked(client_ip):
+            raise HTTPException(429, "尝试次数过多，请稍后再试")
         with _tokens_lock:
             _purge_expired_tokens()
         if not cast(str, cfg["web_password"]):
@@ -136,7 +163,9 @@ def create_app(
             _ = update_config_line(cast(str, app.state.config_file), "Web", "web_password", hashed)
             cfg["web_password"] = hashed
         if not verify_web_password(req.password, cast(str, cfg["web_password"])):
+            _record_failed_login(client_ip)
             raise HTTPException(401, "密码错误")
+        _clear_failed_logins(client_ip)
         token = secrets.token_urlsafe(32)
         expiry = time.time() + cast(float, cfg["web_token_expiry"])
         with _tokens_lock:
@@ -263,6 +292,15 @@ def create_app(
 
     @app.put("/api/config")
     async def update_config(req: ConfigUpdate) -> dict[str, object]:
+        # 校验写入目标，防止 INI 注入（换行注入新行/新节）
+        try:
+            validate_config_target(req.section, req.key, req.value)
+        except ValueError as e:
+            raise HTTPException(400, f"非法配置项: {e}")
+        # 认证关闭时拒绝改写可触发命令执行的危险配置键，避免未授权 RCE
+        if not cast(bool, read_web_config(cast(str, app.state.config_file))["web_auth_enable"]):
+            if (req.section, req.key) in DANGEROUS_CONFIG_KEYS:
+                raise HTTPException(403, "未开启 Web 认证，禁止通过 API 修改可触发命令执行的配置项；请先在面板开启认证")
         value = req.value
         # 密码统一以 PBKDF2 哈希存储，避免明文落盘
         if req.section == "Web" and req.key == "web_password" and value.strip():
@@ -349,6 +387,42 @@ def _purge_expired_tokens() -> None:
     expired = [t for t, exp in _tokens.items() if exp <= now]
     for t in expired:
         _ = _tokens.pop(t, None)
+
+
+def _client_ip(request: Request) -> str:
+    # 取客户端 IP（经反向代理时优先取 X-Forwarded-For 首个地址）。
+    fwd = request.headers.get("X-Forwarded-For")
+    if fwd:
+        return fwd.split(",")[0].strip()
+    if request.client is not None:
+        return request.client.host
+    return "unknown"
+
+
+def _login_blocked(ip: str) -> bool:
+    # 判断该 IP 是否在限流窗口内已达最大失败次数。调用方无需持锁。
+    now = time.time()
+    with _FAILED_LOGINS_LOCK:
+        dq = _FAILED_LOGINS.get(ip)
+        if dq is None:
+            return False
+        while dq and now - dq[0] > _LOGIN_WINDOW_SECONDS:
+            dq.popleft()
+        return len(dq) >= _LOGIN_MAX_ATTEMPTS
+
+
+def _record_failed_login(ip: str) -> None:
+    # 记录一次登录失败时间戳。调用方无需持锁。
+    now = time.time()
+    with _FAILED_LOGINS_LOCK:
+        dq = _FAILED_LOGINS.setdefault(ip, deque())
+        dq.append(now)
+
+
+def _clear_failed_logins(ip: str) -> None:
+    # 登录成功后清空该 IP 的失败记录。调用方无需持锁。
+    with _FAILED_LOGINS_LOCK:
+        _ = _FAILED_LOGINS.pop(ip, None)
 
 
 def _is_within(child: str, parent: str) -> bool:

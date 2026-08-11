@@ -1120,9 +1120,9 @@ def check_subprocess(
                 prefix = os.path.basename(save_file_path).rsplit("_", maxsplit=1)[0]
                 for path in file_paths:
                     if prefix in path:
-                        threading.Thread(target=converts_mp4, args=(path, delete_origin_file)).start()
+                        threading.Thread(target=converts_mp4, args=(path, delete_origin_file), daemon=True).start()
             else:
-                threading.Thread(target=converts_mp4, args=(save_file_path, delete_origin_file)).start()
+                threading.Thread(target=converts_mp4, args=(save_file_path, delete_origin_file), daemon=True).start()
         print(f"\n{record_name} {stop_time} 直播录制完成\n")
 
         if script_command:
@@ -2041,8 +2041,7 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                                             full_path = f"{full_path}/{live_title}_{anchor_name}"
                                         else:
                                             full_path = f"{full_path}/{now[:10]}_{live_title}"
-                                    if not os.path.exists(full_path):
-                                        os.makedirs(full_path)
+                                    os.makedirs(full_path, exist_ok=True)
                                 except Exception as e:
                                     logger.error(f"错误信息: {e} 发生错误的行数: {_get_error_line(e)}")
 

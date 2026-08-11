@@ -212,18 +212,23 @@ class TestSyncReq:
 
     @patch("src.sync_http.config")
     @patch("src.sync_http._get_opener")
-    def test_url_error_raises(self, mock_opener_fn, mock_config):
-        # URLError 被重新抛出.
+    def test_url_error_returns_empty_and_logs(self, mock_opener_fn, mock_config):
+        # URLError 不再伪装为响应体：返回空串并记录错误日志.
         import urllib.error
+        from unittest.mock import call
 
         mock_config.ssl_verify = True
         mock_opener = MagicMock()
         mock_opener.open.side_effect = urllib.error.URLError("connection refused")
         mock_opener_fn.return_value = mock_opener
 
-        result = sync_req("http://example.com")
-        # URLError 被捕获后转为 str
-        assert "connection refused" in result
+        with patch("src.sync_http.logger") as mock_logger:
+            result = sync_req("http://example.com")
+            # 错误被记录（原 URLError 已 warning 级），且结果不再包含错误文本
+            mock_logger.warning.assert_called_once()
+            mock_logger.error.assert_called_once()
+        assert result == ""
+        assert "connection refused" not in result
 
     @patch("src.sync_http.config")
     @patch("src.sync_http._get_opener")
@@ -253,10 +258,15 @@ class TestSyncReq:
             assert result == "http://redirected.com"
 
     @patch("src.sync_http.config")
-    def test_general_exception_returns_error_string(self, mock_config):
-        # 一般异常被捕获并返回错误字符串.
+    def test_general_exception_returns_empty_and_logs(self, mock_config):
+        # 一般异常被捕获：记录错误日志并返回空串，而非错误文本.
         mock_config.ssl_verify = True
         # 让 opener 抛异常
         with patch("src.sync_http._get_opener", side_effect=Exception("unexpected")):
-            result = sync_req("http://example.com")
-            assert "unexpected" in result
+            with patch("src.sync_http.logger") as mock_logger:
+                result = sync_req("http://example.com")
+                # 错误被记录（至少一次），且末尾不再以错误文本伪装响应体
+                assert mock_logger.error.call_count >= 1
+                assert any("sync_req 请求失败" in str(c.args) for c in mock_logger.error.call_args_list)
+        assert result == ""
+        assert "unexpected" not in result

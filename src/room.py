@@ -92,8 +92,8 @@ async def get_sec_user_id(
                     raise RuntimeError("Could not find sec_user_id in the URL.")
             else:
                 raise UnsupportedUrlError("The redirect URL does not contain 'reflow/'.")
-    except UnsupportedUrlError as e:
-        raise e
+    except UnsupportedUrlError:
+        raise
     except Exception as e:
         raise RuntimeError(f"An error occurred: {e}")
 
@@ -217,8 +217,8 @@ async def get_unique_id(url: str, proxy_addr: str | None = None, headers: dict[s
                 return unique_id
             else:
                 raise RuntimeError(f"Could not resolve unique_id for sec_user_id={sec_user_id}")
-    except UnsupportedUrlError as e:
-        raise e
+    except UnsupportedUrlError:
+        raise
     except Exception as e:
         raise RuntimeError(f"An error occurred: {e}")
 

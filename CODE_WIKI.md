@@ -675,6 +675,10 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 - 监听 `0.0.0.0` 且未启用认证时输出安全告警
 - 文件下载路径校验（`_is_within` 防目录穿越）
 - 敏感配置项（Cookie / 账号密码 / web_password）API 返回时脱敏为 `***`
+- **未认证危险配置写保护**：`web_auth_enable = false` 时，`PUT /api/config` 禁止改写 [Recorder] 与 [Push] 危险键（如「录制完成后执行自定义脚本」`run_script`），仅允许 [Web] 及白名单键，阻断未认证 RCE 链
+- **INI 注入防护**：配置值与直播间名称过滤 `\n`/`\r`，防止向 `config.ini` / `URL_config.ini` 注入任意新行 / 新节
+- **登录爆破限流**：`/api/login` 连续失败达阈值（默认 5 次 / 5 分钟）后锁定一段时间（默认 10 分钟），防御密码在线爆破
+- **推送日志脱敏**：`msg_push.py` 的 `_mask_url()` 对失败日志中的 webhook URL 遮挡 query 内 token / secret，避免凭证经日志泄露
 
 ---
 
@@ -845,7 +849,7 @@ Web 管理面板配置（`web.py` 模式专用）
 | ---------------- | ------------------------------------- | --------- |
 | web_host         | 监听地址（Docker 内需设为 0.0.0.0）             | 127.0.0.1 |
 | web_port         | 监听端口                                  | 8000      |
-| web_auth_enable  | 是否启用密码认证                              | false     |
+| web_auth_enable  | 是否启用密码认证。关闭时 API 禁止改写 [Recorder]/[Push] 危险配置（如自定义脚本），但仍允许修改 [Web] 设置 | false     |
 | web_password     | 登录密码（认证开启时必填，PBKDF2-HMAC-SHA256 哈希存储） | (空)       |
 | web_token_expiry | Token 有效期（秒）                          | 86400     |
 | web_show_console | 是否显示控制台窗口（false 时后台隐藏运行）              | true      |
@@ -1494,6 +1498,32 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 
 - `_launch()` 让子进程自成进程组/会话（Windows `CREATE_NEW_PROCESS_GROUP`，Unix `start_new_session`）
 - 新增 `_kill_tree(proc)`：Windows `taskkill /T /F /PID`，Unix `os.killpg(getpgid(pid), SIGKILL)`，消除 GitHub Actions runner 孤儿进程清理噪声
+
+---
+
+### v4.0.8.1-dev (2026-08-10) — 安全加固与代码质量修复
+
+**严重安全修复：**
+
+- `src/web_config.py` + `src/web_api.py`：新增 `DANGEROUS_CONFIG_KEYS` 常量与 `validate_config_value()` / `safe_update_config_line()`；`PUT /api/config` 在未认证时禁止改写 [Recorder]/[Push] 危险键（如「录制完成后执行自定义脚本」），阻断「未认证 Web 面板绑定 0.0.0.0 即 RCE」的利用链
+- `src/web_config.py` + `src/web_api.py`：`update_config_line` 与 `RoomCreate`/`RoomUpdate` 过滤 `\n`/`\r`，修复 INI 注入（可向 config.ini / URL_config.ini 注入任意新行 / 新节）
+
+**中等修复：**
+
+- `src/web_api.py`：`/api/login` 新增爆破限流（默认 5 分钟内失败 5 次锁定 10 分钟）
+- `src/sync_http.py`：异常不再伪装成响应体返回，改为 `logger.error` 并记录后返回 `""`，避免故障被静默吞掉
+- `msg_push.py`：新增 `_mask_url()`，钉钉 / 微信 / Bark / ntfy / Telegram 推送失败日志中的 webhook URL 自动脱敏，防止含 token 的凭证泄露到日志
+
+**轻微修复：**
+
+- `src/spider.py`：`_get_dd_calcu` 内的 `subprocess.run(node ...)` 改 `asyncio.to_thread` 执行，避免阻塞事件循环
+- `src/utils.py`：`check_md5` 改为分块读取，大文件不再全量载入内存
+- `src/room.py`：两处 `raise e` 改为 `raise`，保留原始 traceback
+- `src/async_http.py`：`_client_cache` 加 `threading.Lock`，防止并发首次创建产生孤儿 client
+- `main.py`：转码线程设 `daemon=True`；录制目录创建加 `exist_ok=True` 修复 TOCTOU 竞态
+- `scripts/smoke_test.py`：black 格式化对齐（行宽 120）
+
+**验证：** pytest 417 全过；mypy src/ 无类型错误；isort 通过；black 全仓库 59 文件通过；覆盖率门禁 6 模块达标。
 
 ---
 

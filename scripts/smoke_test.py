@@ -143,9 +143,7 @@ def run_check(check, base_url, default_timeout):
             for key, val in expect_json.items():
                 actual = data.get(key)
                 if actual != val:
-                    result["errors"].append(
-                        f"JSON 字段 {key}={actual!r} != 期望 {val!r}"
-                    )
+                    result["errors"].append(f"JSON 字段 {key}={actual!r} != 期望 {val!r}")
 
     result["passed"] = len(result["errors"]) == 0
     return result
@@ -168,9 +166,7 @@ def print_console(results, elapsed_ms):
         for err in r["errors"]:
             print(f"        {_fail('✗')} {err}")
     print("-" * 70)
-    summary = _ok(f"{passed}/{total} 通过") if passed == total else _fail(
-        f"{passed}/{total} 通过"
-    )
+    summary = _ok(f"{passed}/{total} 通过") if passed == total else _fail(f"{passed}/{total} 通过")
     print(f"总计: {summary}   耗时 {elapsed_ms:.0f}ms")
     print("=" * 70)
 
@@ -188,8 +184,7 @@ def build_summary(results, elapsed_ms):
 
 def write_json_report(results, summary, path):
     with open(path, "w", encoding="utf-8") as f:
-        json.dump({"summary": summary, "results": results}, f,
-                  ensure_ascii=False, indent=2)
+        json.dump({"summary": summary, "results": results}, f, ensure_ascii=False, indent=2)
 
 
 def write_html_report(results, summary, path):
@@ -198,8 +193,7 @@ def write_html_report(results, summary, path):
         status_cls = "ok" if r["passed"] else "bad"
         detail = ""
         if r["matched_contains"]:
-            detail += "<div class='match'>命中: " + ", ".join(
-                r["matched_contains"]) + "</div>"
+            detail += "<div class='match'>命中: " + ", ".join(r["matched_contains"]) + "</div>"
         for err in r["errors"]:
             detail += f"<div class='err'>✗ {err}</div>"
         rows.append(
@@ -252,13 +246,10 @@ def write_html_report(results, summary, path):
 def main():
     p = argparse.ArgumentParser(description="可复用的 Web/接口冒烟测试工具")
     p.add_argument("--config", "-c", required=True, help="检查项配置文件 (JSON)")
-    p.add_argument("--base-url", "-b", default=None,
-                   help="基础 URL 前缀，拼接配置里非完整地址的 url")
-    p.add_argument("--timeout", "-t", type=float, default=DEFAULT_TIMEOUT,
-                   help="默认超时(秒)")
+    p.add_argument("--base-url", "-b", default=None, help="基础 URL 前缀，拼接配置里非完整地址的 url")
+    p.add_argument("--timeout", "-t", type=float, default=DEFAULT_TIMEOUT, help="默认超时(秒)")
     p.add_argument("--report", "-r", default=None, help="输出报告文件路径")
-    p.add_argument("--format", "-f", choices=["json", "html"], default=None,
-                   help="报告格式 (json/html)，默认仅控制台")
+    p.add_argument("--format", "-f", choices=["json", "html"], default=None, help="报告格式 (json/html)，默认仅控制台")
     p.add_argument("--no-color", action="store_true", help="禁用控制台颜色")
     args = p.parse_args()
 
@@ -277,8 +268,7 @@ def main():
 
     summary = build_summary(results, elapsed)
     if args.report:
-        fmt = args.format or ("html" if args.report.endswith(".html")
-                              else "json")
+        fmt = args.format or ("html" if args.report.endswith(".html") else "json")
         if fmt == "html":
             write_html_report(results, summary, args.report)
         else:
