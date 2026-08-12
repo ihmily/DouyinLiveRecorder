@@ -43,8 +43,8 @@ _tokens: dict[str, float] = {}
 # 保护 _tokens 并发访问的锁（login 写入、middleware 查询、密码变更时 clear 均需持锁）
 _tokens_lock = threading.Lock()
 
-# 登录失败限流：按客户端 IP 记录失败时间戳，防止在线爆破密码。
-_FAILED_LOGINS: dict[str, deque] = {}
+# 登录失败限流：按客户端 IP 记录失败时间戳（float，来自 time.time()），防止在线爆破密码。
+_FAILED_LOGINS: dict[str, deque[float]] = {}
 _FAILED_LOGINS_LOCK = threading.Lock()
 _LOGIN_MAX_ATTEMPTS = 5
 _LOGIN_WINDOW_SECONDS = 60

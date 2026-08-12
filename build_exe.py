@@ -329,7 +329,9 @@ def _download_ffmpeg(target_dir: Path) -> bool:
                         for binary in ("ffmpeg", "ffprobe"):
                             src = item / binary
                             if src.exists():
-                                shutil.copy2(str(src), str(ffmpeg_dir / binary))
+                                # shutil.copy2 返回目标路径，此处未使用其结果，赋给 _ 消除 reportUnusedCallResult；
+                                # 参数直接用 Path（兼容 os.PathLike），省略冗余的 str() 转换。
+                                _ = shutil.copy2(src, ffmpeg_dir / binary)
                         break
 
         archive.unlink(missing_ok=True)

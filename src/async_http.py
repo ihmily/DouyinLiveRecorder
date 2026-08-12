@@ -22,15 +22,20 @@ _httpx_limits = httpx.Limits(max_connections=100, max_keepalive_connections=20)
 # 值为 (client, 创建时的事件循环)，用于检测 asyncio.run() 导致的循环变更
 _client_cache: dict[tuple[str, bool, bool], tuple[httpx.AsyncClient, asyncio.AbstractEventLoop]] = {}
 # 保护 _client_cache 的并发读写：替换失效 client 中存在 await 点，需加锁避免重复创建导致连接池泄漏。
-_client_lock: asyncio.Lock | None = None
+# 注意：本项目为「每 room 独立线程 + 独立 asyncio.run 循环」模型，模块级 asyncio.Lock 会在首个循环惰性绑定，
+# 被后续循环的协程 await 时触发 'bound to a different event loop' 错误（被 async_req 吞掉会误判空响应为风控）。
+# 因此锁随当前事件循环一起缓存/重建，与 _client_cache 的 (client, loop) 机制保持一致。
+_client_lock: tuple[asyncio.Lock, asyncio.AbstractEventLoop] | None = None
 
 
 def _get_client_lock() -> asyncio.Lock:
-    # 延迟创建锁，避免在导入时（无运行循环）初始化 asyncio.Lock 报错。
+    # 延迟创建锁，并随事件循环变更重建，避免跨循环 await 模块级 asyncio.Lock 触发
+    # 'bound to a different event loop' 错误（该错误被 async_req 整段吞掉会误判成风控空响应）。
     global _client_lock
-    if _client_lock is None:
-        _client_lock = asyncio.Lock()
-    return _client_lock
+    current_loop = asyncio.get_running_loop()
+    if _client_lock is None or _client_lock[1] is not current_loop:
+        _client_lock = (asyncio.Lock(), current_loop)
+    return _client_lock[0]
 
 
 async def _get_client(
@@ -61,7 +66,7 @@ async def _get_client(
                 try:
                     await old_client.aclose()
                 except Exception as e:
-                    logger.debug(f"关闭失效 AsyncClient 失败: {e}")
+                    logger.debug(f"关闭失效 AsyncClient 失败: {type(e).__name__}: {e}")
             elif not old_loop.is_closed():
                 # 跨事件循环：在其创建循环上安排 aclose，避免在其创建循环外操作 transport
                 try:
@@ -86,7 +91,7 @@ async def _close_all_clients() -> None:
             if not client.is_closed:
                 await client.aclose()
         except Exception as e:
-            logger.debug(e)
+            logger.debug(f"关闭 AsyncClient 失败: {type(e).__name__}: {e}")
     _client_cache.clear()
 
 
@@ -170,7 +175,9 @@ async def async_req(
         #   redirect_url -> 空字符串（调用方据此判定未取到 URL）
         #   return_cookies -> 空 dict / ("", {})（调用方据此判定登录/取 cookie 失败）
         #   默认文本 -> 空字符串（调用方解析失败进入各自异常分支）
-        logger.debug(e)
+        # 注意：Windows 下 socket.timeout/TimeoutError 的 str() 为空，仅打印 {e} 会得到空白日志，
+        # 必须带上 URL 与异常类型，否则无法定位是超时、连接被拒还是证书问题。
+        logger.debug(f"async_req 请求失败: {url} - {type(e).__name__}: {e}")
         if redirect_url:
             return ""
         elif return_cookies:

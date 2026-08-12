@@ -8,6 +8,7 @@
 # 与 main.py 共用同一录制引擎（通过 import main 触发初始化），
 # 在守护线程运行 main.main()，主线程运行 uvicorn。
 import asyncio
+import ctypes
 import os
 import sys
 import threading
@@ -34,18 +35,39 @@ def _reconfigure_stream(stream: object) -> None:
             pass
 
 
-def _fix_encoding():
+def _get_kernel32() -> ctypes.CDLL | None:
+    # 使用 ctypes.WinDLL 而非 ctypes.windll（后者在 Python 3.13+ 已移除）。
+    # 显式声明 argtypes/restype，避免 64 位下 GetConsoleWindow 返回值被截断。
+    try:
+        dll = ctypes.WinDLL("kernel32", use_last_error=True)
+        dll.SetConsoleOutputCP.argtypes = [ctypes.c_uint]
+        dll.SetConsoleCP.argtypes = [ctypes.c_uint]
+        dll.GetConsoleWindow.restype = ctypes.c_void_p
+        return dll
+    except Exception:
+        return None
+
+
+def _get_user32() -> ctypes.CDLL | None:
+    try:
+        dll = ctypes.WinDLL("user32", use_last_error=True)
+        dll.ShowWindow.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        return dll
+    except Exception:
+        return None
+
+
+def _fix_encoding() -> None:
     _streams: list[object] = [getattr(sys, "stdout", None), getattr(sys, "stderr", None)]
     for _s in _streams:
         if _s is not None:
             _reconfigure_stream(_s)
     if sys.platform == "win32":
         try:
-            import ctypes
-
-            _k32 = ctypes.windll.kernel32
-            _k32.SetConsoleOutputCP(65001)
-            _k32.SetConsoleCP(65001)
+            _k32 = _get_kernel32()
+            if _k32 is not None:
+                _k32.SetConsoleOutputCP(65001)
+                _k32.SetConsoleCP(65001)
         except Exception:
             pass
 
@@ -83,11 +105,12 @@ def _enter_background_mode(logs_dir: str, host: str, port: int) -> None:
     # Windows: 隐藏控制台窗口（SW_HIDE = 0）
     if sys.platform == "win32":
         try:
-            import ctypes
-
-            hwnd: int = cast(int, ctypes.windll.kernel32.GetConsoleWindow())
-            if hwnd:
-                ctypes.windll.user32.ShowWindow(hwnd, 0)
+            _k32 = _get_kernel32()
+            _user32 = _get_user32()
+            if _k32 is not None and _user32 is not None:
+                hwnd = cast(ctypes.c_void_p, _k32.GetConsoleWindow())
+                if hwnd:
+                    _user32.ShowWindow(hwnd, 0)
         except Exception:
             pass
 

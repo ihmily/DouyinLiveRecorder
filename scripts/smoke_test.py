@@ -15,20 +15,26 @@
 #   python smoke_test.py --config smoke_targets.json --report report.html --format html
 #   python smoke_test.py --config smoke_targets.json --report result.json --format json
 import argparse
+import http.client
 import json
 import sys
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from datetime import datetime
+from typing import cast
 
 DEFAULT_TIMEOUT = 5
 DEFAULT_METHOD = "GET"
 
+# 检查结果字典为嵌套异构结构，统一以 object 承载，读取处用 cast 收敛
+CheckResult = dict[str, object]
+CheckConfig = dict[str, object]
+
 
 # ---------- 颜色（仅控制台） ----------
-_USE_COLOR = sys.stdout.isatty()
+# 用单元素列表包裹可变标志，避免用全大写常量被重新赋值触发 reportConstantRedefinition
+_color_flag = [sys.stdout.isatty()]
 _RESET = "\033[0m"
 _RED = "\033[31m"
 _GREEN = "\033[32m"
@@ -36,34 +42,38 @@ _YELLOW = "\033[33m"
 _DIM = "\033[2m"
 
 
-def _c(text, code):
-    return f"{code}{text}{_RESET}" if _USE_COLOR else text
+def _use_color() -> bool:
+    return _color_flag[0]
 
 
-def _ok(s):
+def _c(text: str, code: str) -> str:
+    return f"{code}{text}{_RESET}" if _use_color() else text
+
+
+def _ok(s: str) -> str:
     return _c(s, _GREEN)
 
 
-def _fail(s):
+def _fail(s: str) -> str:
     return _c(s, _RED)
 
 
-def _warn(s):
-    return _c(s, _YELLOW)
-
-
 # ---------- 配置加载 ----------
-def load_config(path):
+def load_config(path: str) -> tuple[list[CheckConfig], str | None]:
     with open(path, "r", encoding="utf-8") as f:
-        cfg = json.load(f)
+        cfg = cast(object, json.load(f))
+    if isinstance(cfg, list):
+        # 允许顶层直接写成 checks 列表
+        return cast(list[CheckConfig], cfg), None
     if isinstance(cfg, dict):
         # 允许顶层写成 {"base_url": "...", "checks": [...]}
-        return cfg.get("checks", []), cfg.get("base_url")
-    return cfg, None
+        typed = cast(dict[str, object], cfg)
+        return cast(list[CheckConfig], typed.get("checks", [])), cast(str | None, typed.get("base_url"))
+    return [], None
 
 
-def _resolve_url(check, base_url):
-    raw = check.get("url") or check.get("path") or "/"
+def _resolve_url(check: CheckConfig, base_url: str | None) -> str:
+    raw = cast(str, check.get("url") or check.get("path") or "/")
     if raw.startswith("http://") or raw.startswith("https://"):
         return raw
     if base_url:
@@ -72,24 +82,26 @@ def _resolve_url(check, base_url):
 
 
 # ---------- 单个检查 ----------
-def run_check(check, base_url, default_timeout):
-    method = (check.get("method") or DEFAULT_METHOD).upper()
+def run_check(check: CheckConfig, base_url: str | None, default_timeout: float) -> CheckResult:
+    method_raw = cast(str, check.get("method") or DEFAULT_METHOD)
+    method = method_raw.upper()
     url = _resolve_url(check, base_url)
-    timeout = check.get("timeout", default_timeout)
-    headers = dict(check.get("headers", {}))
+    timeout = cast(float, check.get("timeout", default_timeout))
+    headers_raw = cast(dict[str, object], check.get("headers", {}))
+    headers: dict[str, str] = {k: str(v) for k, v in headers_raw.items()}
     body = check.get("body")
     if isinstance(body, (dict, list)):
         body = json.dumps(body).encode("utf-8")
-        headers.setdefault("Content-Type", "application/json")
+        _ = headers.setdefault("Content-Type", "application/json")
     elif isinstance(body, str):
         body = body.encode("utf-8")
 
-    expected_status = check.get("expected_status", 200)
-    expect_contains = check.get("expect_contains", []) or []
-    expect_json = check.get("expect_json")  # dict: 顶层字段 -> 期望值
+    expected_status = cast(int, check.get("expected_status", 200))
+    expect_contains = cast(list[str], check.get("expect_contains", []) or [])
+    expect_json = cast(dict[str, object] | None, check.get("expect_json"))  # dict: 顶层字段 -> 期望值
 
     name = check.get("name") or f"{method} {url}"
-    result = {
+    result: CheckResult = {
         "name": name,
         "method": method,
         "url": url,
@@ -100,79 +112,93 @@ def run_check(check, base_url, default_timeout):
         "errors": [],
         "passed": False,
     }
+    errors = cast(list[str], result["errors"])
+    matched = cast(list[str], result["matched_contains"])
 
-    req = urllib.request.Request(url, data=body, method=method, headers=headers)
+    req = urllib.request.Request(url, data=cast("bytes | None", body), method=method, headers=headers)
     start = time.time()
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with cast(http.client.HTTPResponse, urllib.request.urlopen(req, timeout=timeout)) as resp:
             status = resp.status
             content = resp.read().decode("utf-8", errors="replace")
         result["status"] = status
         result["time_ms"] = round((time.time() - start) * 1000, 1)
         if status != expected_status:
-            result["errors"].append(f"状态码 {status} != 期望 {expected_status}")
+            errors.append(f"状态码 {status} != 期望 {expected_status}")
     except urllib.error.HTTPError as e:
-        result["status"] = e.code
+        e_code: int = e.code
+        result["status"] = e_code
         result["time_ms"] = round((time.time() - start) * 1000, 1)
-        if e.code != expected_status:
-            result["errors"].append(f"状态码 {e.code} != 期望 {expected_status}")
+        if e_code != expected_status:
+            errors.append(f"状态码 {e_code} != 期望 {expected_status}")
         try:
             content = e.read().decode("utf-8", errors="replace")
         except Exception:
             content = ""
     except Exception as e:  # 连接失败、超时、DNS 等
         result["time_ms"] = round((time.time() - start) * 1000, 1)
-        result["errors"].append(f"{type(e).__name__}: {e}")
+        errors.append(f"{type(e).__name__}: {e}")
         content = ""
 
     # 文本包含校验
     for token in expect_contains:
         if token in content:
-            result["matched_contains"].append(token)
+            matched.append(token)
         else:
-            result["errors"].append(f"响应中未找到文本: {token!r}")
+            errors.append(f"响应中未找到文本: {token!r}")
 
     # JSON 字段校验
     if expect_json:
         try:
-            data = json.loads(content)
+            parsed = cast(object, json.loads(content))
         except Exception as e:
-            result["errors"].append(f"响应不是合法 JSON: {e}")
-            data = None
-        if isinstance(data, dict):
+            errors.append(f"响应不是合法 JSON: {e}")
+            parsed = None
+        if isinstance(parsed, dict):
+            typed = cast(dict[str, object], parsed)
             for key, val in expect_json.items():
-                actual = data.get(key)
+                actual = typed.get(key)
                 if actual != val:
-                    result["errors"].append(f"JSON 字段 {key}={actual!r} != 期望 {val!r}")
+                    errors.append(f"JSON 字段 {key}={actual!r} != 期望 {val!r}")
 
-    result["passed"] = len(result["errors"]) == 0
+    result["passed"] = len(errors) == 0
     return result
 
 
 # ---------- 报告 ----------
-def print_console(results, elapsed_ms):
+def _safe_print(*values: object) -> None:
+    """打印并在控制台编码不兼容时（如 Windows GBK 下的非 ASCII 字符）做容错替换。"""
+    text = " ".join(str(v) for v in values)
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        print(text.encode("ascii", "replace").decode("ascii"))
+
+
+def print_console(results: list[CheckResult], elapsed_ms: float) -> None:
     total = len(results)
-    passed = sum(1 for r in results if r["passed"])
-    print()
-    print("=" * 70)
-    print(f"冒烟测试报告   {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("=" * 70)
+    passed = sum(1 for r in results if cast(bool, r["passed"]))
+    _safe_print()
+    _safe_print("=" * 70)
+    _safe_print(f"冒烟测试报告   {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    _safe_print("=" * 70)
     for r in results:
-        mark = _ok("PASS") if r["passed"] else _fail("FAIL")
+        mark = _ok("PASS") if cast(bool, r["passed"]) else _fail("FAIL")
         t = f"{r['time_ms']}ms" if r["time_ms"] is not None else "-"
-        print(f"[{mark}] {r['name']}  ->  {r['status']}  ({t})")
-        if r["matched_contains"]:
-            print(f"        {_DIM}命中文本: {r['matched_contains']}{_RESET}")
-        for err in r["errors"]:
-            print(f"        {_fail('✗')} {err}")
-    print("-" * 70)
+        _safe_print(f"[{mark}] {r['name']}  ->  {r['status']}  ({t})")
+        matched = cast(list[str], r["matched_contains"])
+        if matched:
+            _safe_print(f"        {_DIM}命中文本: {matched}{_RESET}")
+        for err in cast(list[str], r["errors"]):
+            _safe_print(f"        {_fail('x')} {err}")
+    _safe_print("-" * 70)
     summary = _ok(f"{passed}/{total} 通过") if passed == total else _fail(f"{passed}/{total} 通过")
-    print(f"总计: {summary}   耗时 {elapsed_ms:.0f}ms")
-    print("=" * 70)
+    _safe_print(f"总计: {summary}   耗时 {elapsed_ms:.0f}ms")
+    _safe_print("=" * 70)
 
 
-def build_summary(results, elapsed_ms):
-    passed = sum(1 for r in results if r["passed"])
+def build_summary(results: list[CheckResult], elapsed_ms: float) -> CheckResult:
+    passed = sum(1 for r in results if cast(bool, r["passed"]))
     return {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "total": len(results),
@@ -182,30 +208,32 @@ def build_summary(results, elapsed_ms):
     }
 
 
-def write_json_report(results, summary, path):
+def write_json_report(results: list[CheckResult], summary: CheckResult, path: str) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump({"summary": summary, "results": results}, f, ensure_ascii=False, indent=2)
 
 
-def write_html_report(results, summary, path):
-    rows = []
+def write_html_report(results: list[CheckResult], summary: CheckResult, path: str) -> None:
+    rows: list[str] = []
     for r in results:
-        status_cls = "ok" if r["passed"] else "bad"
+        status_cls = "ok" if cast(bool, r["passed"]) else "bad"
         detail = ""
-        if r["matched_contains"]:
-            detail += "<div class='match'>命中: " + ", ".join(r["matched_contains"]) + "</div>"
-        for err in r["errors"]:
+        matched_html = cast(list[str], r["matched_contains"])
+        if matched_html:
+            detail += "<div class='match'>命中: " + ", ".join(matched_html) + "</div>"
+        for err in cast(list[str], r["errors"]):
             detail += f"<div class='err'>✗ {err}</div>"
-        rows.append(
+        row = (
             f"<tr class='{status_cls}'>"
-            f"<td>{'✅' if r['passed'] else '❌'}</td>"
-            f"<td>{r['name']}</td>"
-            f"<td>{r['method']}</td>"
-            f"<td>{r['status']}</td>"
-            f"<td>{r['time_ms']}ms</td>"
-            f"<td>{detail}</td>"
-            f"</tr>"
+            + f"<td>{'✅' if cast(bool, r['passed']) else '❌'}</td>"
+            + f"<td>{r['name']}</td>"
+            + f"<td>{r['method']}</td>"
+            + f"<td>{r['status']}</td>"
+            + f"<td>{r['time_ms']}ms</td>"
+            + f"<td>{detail}</td>"
+            + f"</tr>"
         )
+        rows.append(row)
     html = (
         f"<!DOCTYPE html>\n"
         f'<html lang="zh-CN"><head><meta charset="utf-8">\n'
@@ -226,11 +254,11 @@ def write_html_report(results, summary, path):
         f".badge.bad{{background:#e74c3c;color:#fff;}}\n"
         f"</style></head><body>\n"
         f"<h1>冒烟测试报告</h1>\n"
-        f'<div class="meta">生成时间: {summary["timestamp"]} ｜ 耗时 {summary["elapsed_ms"]}ms</div>\n'
+        f'<div class="meta">生成时间: {summary["timestamp"]} ｜ 耗时 {cast(float, summary["elapsed_ms"])}ms</div>\n'
         f'<div style="margin-bottom:12px;">\n'
-        f'<span class="badge ok">通过 {summary["passed"]}</span>\n'
-        f'<span class="badge bad">失败 {summary["failed"]}</span>\n'
-        f'<span class="badge" style="background:#888;color:#fff;">共 {summary["total"]}</span>\n'
+        f'<span class="badge ok">通过 {cast(int, summary["passed"])}</span>\n'
+        f'<span class="badge bad">失败 {cast(int, summary["failed"])}</span>\n'
+        f'<span class="badge" style="background:#888;color:#fff;">共 {cast(int, summary["total"])}</span>\n'
         f"</div>\n"
         f"<table>\n"
         f"<tr><th>结果</th><th>名称</th><th>方法</th><th>状态码</th><th>耗时</th><th>详情</th></tr>\n"
@@ -239,43 +267,48 @@ def write_html_report(results, summary, path):
         f"</body></html>"
     )
     with open(path, "w", encoding="utf-8") as f:
-        f.write(html)
+        _ = f.write(html)
 
 
 # ---------- 入口 ----------
-def main():
+def main() -> None:
     p = argparse.ArgumentParser(description="可复用的 Web/接口冒烟测试工具")
-    p.add_argument("--config", "-c", required=True, help="检查项配置文件 (JSON)")
-    p.add_argument("--base-url", "-b", default=None, help="基础 URL 前缀，拼接配置里非完整地址的 url")
-    p.add_argument("--timeout", "-t", type=float, default=DEFAULT_TIMEOUT, help="默认超时(秒)")
-    p.add_argument("--report", "-r", default=None, help="输出报告文件路径")
-    p.add_argument("--format", "-f", choices=["json", "html"], default=None, help="报告格式 (json/html)，默认仅控制台")
-    p.add_argument("--no-color", action="store_true", help="禁用控制台颜色")
+    _ = p.add_argument("--config", "-c", required=True, help="检查项配置文件 (JSON)")
+    _ = p.add_argument("--base-url", "-b", default=None, help="基础 URL 前缀，拼接配置里非完整地址的 url")
+    _ = p.add_argument("--timeout", "-t", type=float, default=DEFAULT_TIMEOUT, help="默认超时(秒)")
+    _ = p.add_argument("--report", "-r", default=None, help="输出报告文件路径")
+    _ = p.add_argument("--format", "-f", choices=["json", "html"], default=None, help="报告格式 (json/html)，默认仅控制台")
+    _ = p.add_argument("--no-color", action="store_true", help="禁用控制台颜色")
     args = p.parse_args()
 
-    global _USE_COLOR
-    if args.no_color:
-        _USE_COLOR = False
+    if cast(bool, args.no_color):
+        _color_flag[0] = False
 
-    checks, cfg_base = load_config(args.config)
-    base_url = args.base_url or cfg_base
+    config_path = cast(str, args.config)
+    timeout = cast(float, args.timeout)
+    base_url_arg = cast(str | None, args.base_url)
+    report_path = cast(str | None, args.report)
+    report_format = cast(str | None, args.format)
+
+    checks, cfg_base = load_config(config_path)
+    base_url = base_url_arg or cfg_base
 
     t0 = time.time()
-    results = [run_check(c, base_url, args.timeout) for c in checks]
+    results = [run_check(c, base_url, timeout) for c in checks]
     elapsed = (time.time() - t0) * 1000
 
     print_console(results, elapsed)
 
     summary = build_summary(results, elapsed)
-    if args.report:
-        fmt = args.format or ("html" if args.report.endswith(".html") else "json")
+    if report_path:
+        fmt = report_format or ("html" if report_path.endswith(".html") else "json")
         if fmt == "html":
-            write_html_report(results, summary, args.report)
+            write_html_report(results, summary, report_path)
         else:
-            write_json_report(results, summary, args.report)
-        print(f"\n报告已写出: {args.report}")
+            write_json_report(results, summary, report_path)
+        print(f"\n报告已写出: {report_path}")
 
-    failed = summary["failed"]
+    failed = cast(int, summary["failed"])
     sys.exit(1 if failed else 0)
 
 

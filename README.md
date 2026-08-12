@@ -684,6 +684,12 @@ brew install node
 
 ## ⏳ 更新日志
 
+### v4.0.8.1-dev (2026-08-12) — 修复跨事件循环锁误判风控 + 空白异常日志收口
+
+- **根因修复**（`src/async_http.py` `_get_client_lock()`）：模块级 `_client_lock` 原为单例 `asyncio.Lock()`，在首个 room 的 `asyncio.run()` 循环里惰性绑定后，后续 room 各自 `asyncio.run()` 起新循环再次 `await` 会触发 `RuntimeError: ... is bound to a different event loop`；该异常被 `async_req` 吞掉返回空串，被 `spider.py` 误判成「风控空响应」并级联回退 HTML 抓取失败。现改为随**当前事件循环**缓存/重建 `(lock, loop)` 二元组，与 `_client_cache` 的「client + loop」机制一致
+- **空白异常日志收口**：`async_req`、`_close_all_clients` 及跨循环旧 client 关闭处的 `logger.debug(e)` 全部改为带 `type(e).__name__`（必要时含 URL），消除 Windows 下异常 `str()` 为空时打出空白日志、无法定位的问题
+- **回归测试**：`tests/test_async_http.py` 新增 `TestGetClientLock`，锁定「跨循环锁自动重建」行为
+
 ### v4.0.8.1-dev (2026-08-09) — 注释规范与 Web/接口冒烟测试工具
 
 - **注释规范**：模块/函数说明统一使用 `#` 行注释，不再使用三引号 `"""` 文档字符串

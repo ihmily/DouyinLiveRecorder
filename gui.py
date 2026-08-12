@@ -16,7 +16,7 @@ import tkinter as tk
 from collections.abc import Callable
 from datetime import datetime
 from tkinter import messagebox
-from typing import TYPE_CHECKING, Literal, cast, final
+from typing import TYPE_CHECKING, Literal, TypeAlias, cast, final
 
 import customtkinter as ctk
 from PIL import Image, ImageDraw
@@ -68,9 +68,13 @@ _fix_encoding()
 if TYPE_CHECKING:
     import pystray
 
-    # pystray 无类型存根，Icon 推断为 Any。用别名避免在类型表达式里直接写
-    # 模块属性 `pystray.Icon`（会触发 reportInvalidTypeForm）。
-    PystrayIcon = pystray.Icon
+    # pystray 无类型存根，Icon 推断为 Any。用 TypeAlias 别名避免在类型表达式里直接写
+    # 模块属性 `pystray.Icon`（会触发 reportInvalidTypeForm），同时让 mypy 将其识别为类型别名
+    # 而非变量（否则 `PystrayIcon | None` 会报 “not valid as a type” 并级联到所有属性访问）。
+    PystrayIcon: TypeAlias = pystray.Icon
+else:
+    # 运行期占位：仅用于注解，不作为值使用。
+    PystrayIcon: TypeAlias = object
 
 
 # ─── 现代化色彩系统（浅色 / 深色双主题） ──────────────────
@@ -713,8 +717,14 @@ class LiveRecorderGUI:
 
     def _build_sidebar(self) -> "tk.Frame":
         # 构建左侧导航栏
-        sidebar = ctk.CTkFrame(
-            self.root, corner_radius=0, fg_color=(Colors.SIDEBAR_LIGHT, Colors.SIDEBAR_DARK), border_width=0
+        # mypy 不加载 typings/customtkinter 存根，ctk.CTkFrame(...) 推断为 Any；
+        # 按本模块约定（CTkFrame 实为 tkinter.Frame 子类）cast 为 tk.Frame，
+        # 既给 mypy 具体返回类型消除 no-any-return，也保持基于存根的 basedpyright 0/0/0。
+        sidebar = cast(
+            "tk.Frame",
+            ctk.CTkFrame(
+                self.root, corner_radius=0, fg_color=(Colors.SIDEBAR_LIGHT, Colors.SIDEBAR_DARK), border_width=0
+            ),
         )
         sidebar.grid(row=0, column=0, sticky="nsew")
         sidebar.grid_propagate(False)
@@ -1293,7 +1303,7 @@ class LiveRecorderGUI:
             status_text = "⚠ 降级"
             status_color = Colors.DANGER
             actual_color = Colors.DANGER
-            row_fg = ("#FEF2F2", "#2A1518")
+            row_fg: str | tuple[str, str] = ("#FEF2F2", "#2A1518")
         else:
             actual_display = "✓ 同等"
             status_text = "✓ 正常"
@@ -1448,7 +1458,14 @@ class LiveRecorderGUI:
                 return ci, ofmt, self._tray_status_str()
 
             config = configparser.ConfigParser()
-            config.optionxform = lambda optionstr: optionstr
+            # mypy 不允许直接给方法 optionxform 赋值（"Cannot assign to a method"），
+            # 用 setattr 绕过该误报；保持 key 原样（不转小写）以匹配中文配置节名。
+            # 用 setattr 绕过 mypy "Cannot assign to a method" 误报；
+            # lambda 显式标注 (str) -> str 以同时满足 basedpyright 的 reportUnknownLambdaType。
+            def _preserve_case(optionstr: str) -> str:
+                return optionstr
+
+            setattr(config, "optionxform", _preserve_case)
             config.read(self.main_config_file, encoding="utf-8-sig")
 
             if "录制设置" in config:
