@@ -59,7 +59,7 @@
 ### 项目基本信息
 
 - **项目名称**: DouyinLiveRecorder (抖音直播录制器)
-- **版本**: 4.0.8.1
+- **版本**: 4.0.8.2
 - **作者**: Hmily
 - **开源协议**: MIT
 - **项目地址**: [GitHub](https://github.com/ihmily/DouyinLiveRecorder)
@@ -1072,7 +1072,7 @@ def _app_root() -> str:
 
 | Job                  | 运行环境             | 内容                                                                                                                                       |
 | -------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `lint`               | py3.12           | `black --check .`                                                                                                                        |
+| `lint`               | py3.13           | `black --check .`                                                                                                                        |
 | `typecheck`          | py3.10           | 安装 requirements + mypy 后运行 `mypy src/`                                                                                                   |
 | `isort`              | py3.12           | `isort --check .`                                                                                                                        |
 | `version-check`      | py3.12           | `python scripts/check_version.py`（版本号单一事实源一致性校验）                                                                                         |
@@ -1265,6 +1265,33 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 ---
 
 ## 更新日志
+
+### v4.0.8.1-dev (2026-08-13) — 修复 `get_startup_info()` 跨平台 mypy 回归
+
+**现象**：CI `mypy src/`（Linux）报 2 个错误 —— `main.py:764: Module has no attribute "STARTUPINFO"`、`main.py:769: Variable "main._StartupInfoType" is not valid as a type`。
+
+**根因**：上一批次（下一条日志）为满足 basedpyright，把 `get_startup_info()` 的返回类型别名 `_StartupInfoType` 移入 `if TYPE_CHECKING:` 块并改为引号注解 `"_StartupInfoType | None"`。但 mypy **恒将 `TYPE_CHECKING` 视为 True**，于是无条件求值 `subprocess.STARTUPINFO`；而该符号只存在于 Windows typeshed，Linux 下 mypy 解析不到 → `attr-defined`；引号注解里的名字又被当作变量 → `valid-type`。
+
+**修复**：`subprocess.STARTUPINFO` 在非 Windows typeshed 中根本不存在，无法作为跨平台精确返回类型引用。改为 `-> object | None`：函数体内 `sys.platform == "win32"` 字面量分支保持不变（mypy 在 Linux 跳过该分支，不解析 STARTUPINFO）；调用方仅把返回值透传给 `subprocess` 的 `startupinfo=` 参数（typeshed 中本就为宽松类型），故 `object | None` 不损失实际类型安全。删除 `_StartupInfoType` 别名与 `TYPE_CHECKING` 导入。
+
+**验证**：`mypy --platform linux src/`（模拟 CI）与 `mypy src/`（本地 win32）均 `Success: no issues found in 16 source files`；basedpyright 0 errors（仅剩 2 条 `reportMissingImports` 属隔离 venv 未装 `httpx`/`loguru` 的环境假象）；`py_compile` 通过。结论：`TYPE_CHECKING` 别名方案对 `sys.platform` 平台专属符号（`STARTUPINFO` 等）不成立，平台专属符号的返回类型只能退化为 `object` 或包进 `sys.platform` 分支内使用。
+
+---
+
+### v4.0.8.1-dev (2026-08-13) — CI `black --check` 失败修复 + lint job 升 Python 3.13
+
+**现象**：CI `lint` job（`black --check .`）失败退出码 1，提示 `scripts/smoke_test.py` 与 `gui.py` 各有一处需 reformat。
+
+**根因与修复（纯格式，不改动逻辑）**：
+- `scripts/smoke_test.py:280`：`p.add_argument("--format", ...)` 单行超 120 字符，按 black `line-length=120` 换行展开为多行签名。
+- `gui.py:1460`：`config = configparser.ConfigParser()` 后缺空行（注释前需空行），补回空行。
+- 修复后 `black --check .` → `All done! ✨ 🍰 ✨ 59 files would be left unchanged.`（exit 0）。
+
+**消噪（可选增强）**：`.github/workflows/ci.yml` 的 `lint` job 运行 Python 由 `3.12` 升到 `3.13`，与 `pyproject.toml` 中 `target-version` 最高值对齐，消除「Python 3.12 无法对 py313 目标做 AST 安全校验」告警。`isort` / `version-check` job 仍用 3.12（不涉及 black AST 校验，无需改动）。
+
+**验证**：managed Python 3.13 隔离 venv 跑 `black --check .` → 全部 unchanged，exit 0。
+
+---
 
 ### v4.0.8.1-dev (2026-08-13) — 基于参考信息的类型/逻辑修复批次
 
@@ -1796,4 +1823,4 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 
 ---
 
-*本文档最后更新: 2026-08-13（新增：基于参考信息的类型/逻辑修复批次 — web_api.py deque 类型收紧、build_exe.py Linux ffmpeg 拷贝报告、msg_push.py tg_bot NameError/业务失败校验、main.py PATH 快照与 STARTUPINFO 类型别名、gui.py PystrayIcon TypeAlias 与 mypy 清零）*
+*本文档最后更新: 2026-08-13（新增：① `get_startup_info()` 跨平台 mypy 回归修复 — 弃 `TYPE_CHECKING` 别名方案、返回类型退化为 `object | None`；② 基于参考信息的类型/逻辑修复批次 — web_api.py deque 类型收紧、build_exe.py Linux ffmpeg 拷贝报告、msg_push.py tg_bot NameError/业务失败校验、main.py PATH 快照与 STARTUPINFO 类型别名、gui.py PystrayIcon TypeAlias 与 mypy 清零；③ CI `black --check` 失败修复（smoke_test.py 超长行换行、gui.py 补空行）+ lint job 运行 Python 由 3.12 升 3.13）*

@@ -684,11 +684,26 @@ brew install node
 
 ## ⏳ 更新日志
 
-### v4.0.8.1-dev (2026-08-12) — 修复跨事件循环锁误判风控 + 空白异常日志收口
+### v4.0.8.2 (2026-08-13) — 静态检查 / CI 加固与跨平台类型回归修复
+
+- **CI `lint` 修复**：`black --check .` 因 `scripts/smoke_test.py:280` 超长行与 `gui.py:1460` 缺空行两处格式违规失败，已手工格式化修复（59 files unchanged）；lint job 运行 Python 由 3.12 升到 3.13（与 `target-version` 最高值对齐，消除 AST 安全校验告警噪声）
+- **`get_startup_info()` 跨平台类型回归修复**（`main.py`）：上一批次为满足 basedpyright 的 `TYPE_CHECKING` 别名方案在 Linux 下 mypy 报 `Module has no attribute "STARTUPINFO"` 与 `Variable "..._StartupInfoType" is not valid as a type`。Windows 专属 typeshed 符号无法用 `TYPE_CHECKING` 别名跨平台引用，改为返回类型退化为 `object | None`（`sys.platform == "win32"` 门控保留），mypy `--platform linux` / `win32` 均通过
+- **`src/web_api.py` 类型修复**：`_FAILED_LOGINS: dict[str, deque[float]]` 补全 `deque` 类型参数，消除 `reportMissingTypeArgument` 及下游 406/411/418/419/425 共 10 处 `deque[Unknown]` 级联告警
+- **`build_exe.py` 复查**：Linux ffmpeg 分支 `reportUnusedCallResult` 上批已修复并合规，本次复查无新增改动
+
+### v4.0.8.2 (2026-08-12) — 修复跨事件循环锁误判风控 + 空白异常日志收口
 
 - **根因修复**（`src/async_http.py` `_get_client_lock()`）：模块级 `_client_lock` 原为单例 `asyncio.Lock()`，在首个 room 的 `asyncio.run()` 循环里惰性绑定后，后续 room 各自 `asyncio.run()` 起新循环再次 `await` 会触发 `RuntimeError: ... is bound to a different event loop`；该异常被 `async_req` 吞掉返回空串，被 `spider.py` 误判成「风控空响应」并级联回退 HTML 抓取失败。现改为随**当前事件循环**缓存/重建 `(lock, loop)` 二元组，与 `_client_cache` 的「client + loop」机制一致
 - **空白异常日志收口**：`async_req`、`_close_all_clients` 及跨循环旧 client 关闭处的 `logger.debug(e)` 全部改为带 `type(e).__name__`（必要时含 URL），消除 Windows 下异常 `str()` 为空时打出空白日志、无法定位的问题
 - **回归测试**：`tests/test_async_http.py` 新增 `TestGetClientLock`，锁定「跨循环锁自动重建」行为
+- **代码质量 / 静态检查加固（同日）**：
+  - `scripts/check_coverage.py`：修复全局覆盖率 < 50% 时逐模块门禁被非零退出码跳过、临时文件残留、`subprocess.run` 缺 `encoding`（Windows 非 UTF-8 locale 崩溃）等问题（basedpyright 0/0/0、mypy 通过）
+  - `scripts/smoke_test.py`：修复 Windows GBK 控制台 `UnicodeEncodeError` 崩溃与 `reportConstantRedefinition`，失败标记改 ASCII、新增 `_safe_print` 容错（basedpyright 0/0/0、mypy 通过）
+  - `web.py`：ctypes 3.13+ 兼容（`windll` 已移除）+ 64 位 `HWND` 截断导致控制台窗口隐藏失败修复，改用 `ctypes.WinDLL` 并显式声明 `argtypes`/`restype`
+  - `msg_push.py`：修复 `tg_bot` 未绑定变量（`NameError` 崩溃）与 Telegram 业务失败（`{"ok": false}`）漏检，成功标识改为 chat_id
+  - `main.py`：修复 line 524 PATH 拼接覆盖后续追加/重复插入（改用实时 `os.environ["PATH"]` 并去重）；`get_startup_info` 类型别名 `reportInvalidTypeForm` 初步处理（最终跨平台方案见上 2026-08-13 条目）
+  - `gui.py`：`PystrayIcon` 别名 mypy 13 错误清零 + 剩余 2 处 mypy 错误清零，最终 basedpyright 0/0/0、mypy `Success: no issues found`
+  - `build_exe.py`：Linux ffmpeg 分支未使用返回值（`reportUnusedCallResult`）修复
 
 ### v4.0.8.1-dev (2026-08-09) — 注释规范与 Web/接口冒烟测试工具
 

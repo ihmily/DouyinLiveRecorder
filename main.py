@@ -20,7 +20,7 @@
 # GitHub: https://github.com/ihmily
 # Date: 2023-07-17 23:52:05
 # Update: 2025-10-23 19:48:05
-# Version: v4.0.8.1
+# Version: v4.0.8.2
 # Copyright (c) 2023-2025 by Hmily, All Rights Reserved.
 
 # 强制标准流以 UTF-8 输出。
@@ -755,18 +755,9 @@ def delete_line(file_path: str, del_line: str, delete_all: bool = False) -> None
 
 
 # Windows 下 subprocess.STARTUPINFO 仅存在于 Windows typeshed，Linux/macOS 上 mypy 无法解析该名字。
-# 类型检查阶段（TYPE_CHECKING）无条件将其解析为真实类型 subprocess.STARTUPINFO（pyright 完整求值该分支），
-# 运行时恒为 object 占位；仅 win32 分支才实际构造 STARTUPINFO，其余平台恒返回 None，
-# 既满足跨平台类型检查，又避免 “类型表达式中使用变量” 告警。
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    _StartupInfoType = subprocess.STARTUPINFO
-else:
-    _StartupInfoType = object
-
-
-def get_startup_info(system_type: str) -> "_StartupInfoType | None":
+# 返回值类型用 object 而非具体 STARTUPINFO：该符号在非 Windows typeshed 中不存在，无法作为跨平台类型引用；
+# 调用方仅将其透传给 subprocess 的 startupinfo 参数（typeshed 中本就是宽松类型），object | None 不损失实际类型安全。
+def get_startup_info(system_type: str) -> object | None:
     # 获取平台启动信息（Windows 隐藏控制台窗口）。
     # 运行时只在 Windows（os.name == "nt"）构造 STARTUPINFO，其他平台恒返回 None；
     # mypy 依据 sys.platform 字面量分支跳过非当前平台代码，从而通过跨平台类型检查。
