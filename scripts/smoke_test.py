@@ -277,7 +277,9 @@ def main() -> None:
     _ = p.add_argument("--base-url", "-b", default=None, help="基础 URL 前缀，拼接配置里非完整地址的 url")
     _ = p.add_argument("--timeout", "-t", type=float, default=DEFAULT_TIMEOUT, help="默认超时(秒)")
     _ = p.add_argument("--report", "-r", default=None, help="输出报告文件路径")
-    _ = p.add_argument("--format", "-f", choices=["json", "html"], default=None, help="报告格式 (json/html)，默认仅控制台")
+    _ = p.add_argument(
+        "--format", "-f", choices=["json", "html"], default=None, help="报告格式 (json/html)，默认仅控制台"
+    )
     _ = p.add_argument("--no-color", action="store_true", help="禁用控制台颜色")
     args = p.parse_args()
 

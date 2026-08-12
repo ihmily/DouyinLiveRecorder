@@ -36,6 +36,13 @@ SYNC_TARGETS: list[tuple[str, list[tuple[str, str]]]] = [
             (r"(- \*\*版本\*\*:\s*)[\d.]+", r"\g<1>{version}"),
         ],
     ),
+    # README.md:  更新日志顶部首个 "### vx.y.z[-dev]" 标题
+    (
+        "README.md",
+        [
+            (r"(###\s+v)[\d.]+(-dev)?", r"\g<1>{version}"),
+        ],
+    ),
     # i18n .po 文件:  注释行 + Project-Id-Version 头
     (
         "i18n/zh_CN/LC_MESSAGES/zh_CN.po",

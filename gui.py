@@ -1458,6 +1458,7 @@ class LiveRecorderGUI:
                 return ci, ofmt, self._tray_status_str()
 
             config = configparser.ConfigParser()
+
             # mypy 不允许直接给方法 optionxform 赋值（"Cannot assign to a method"），
             # 用 setattr 绕过该误报；保持 key 原样（不转小写）以匹配中文配置节名。
             # 用 setattr 绕过 mypy "Cannot assign to a method" 误报；
