@@ -1,0 +1,4 @@
+d:\DouyinLiveRecorder-coding\src\web_api.py
+  d:\DouyinLiveRecorder-coding\src\web_api.py:34:5 - warning: "validate_room_target" 导入项未使用 (reportUnusedImport)
+  d:\DouyinLiveRecorder-coding\src\web_api.py:410:13 - warning: "float" 类型调用表达式的结果未使用。如果确有必要，应赋值给变量 `_` (reportUnusedCallResult)
+0 errors, 2 warnings, 0 notes

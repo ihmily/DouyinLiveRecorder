@@ -168,18 +168,24 @@ def send_email(
 
 def tg_bot(chat_id: str | int, token: str, content: str) -> dict[str, list[str | int]]:
     # Telegram Bot 推送
+    # url 在 try 外预绑定，避免构造 json_data 异常时 except 块引用未绑定变量触发 NameError
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
         json_data = {"chat_id": chat_id, "text": content}
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
         data = json.dumps(json_data).encode("utf-8")
         req = urllib.request.Request(url, data=data, headers=headers)
         with cast(http.client.HTTPResponse, opener.open(req, timeout=15)) as response:
             json_str = response.read().decode("utf-8")
-        json.loads(json_str)
-        return {"success": [1], "error": []}
+        resp_data: dict[str, object] = cast(dict[str, object], json.loads(json_str))
+        # Telegram 即使返回 2xx，业务失败也会返回 {"ok": false, "description": "..."}
+        if resp_data.get("ok") is True:
+            return {"success": [str(chat_id)], "error": []}
+        error_detail = resp_data.get("description", "未知错误")
+        logger.warning(f"tg推送失败, 聊天ID：{chat_id}, 推送地址：{_mask_url(url)}, 失败信息:{error_detail}")
+        return {"success": [], "error": [str(chat_id)]}
     except Exception as e:
         logger.warning(f"tg推送失败, 聊天ID：{chat_id}, 推送地址：{_mask_url(url)}, 错误信息:{e}")
-        return {"success": [], "error": [1]}
+        return {"success": [], "error": [str(chat_id)]}
 
 
 def bark(

@@ -589,6 +589,8 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 - HTTP/2 支持
 - **连接池复用**: 按 (代理, verify, http2) 维度复用 AsyncClient，发挥 keepalive 连接池作用
 - **事件循环检测**: 缓存记录每个 client 创建时的事件循环引用，检测到 `asyncio.run()` 导致循环变更时自动重建客户端，避免 `'NoneType' object has no attribute 'send'` 错误
+- **模块级锁随事件循环重建**（2026-08-12 修复）: 保护 `_client_cache` 读写的 `_client_lock` 原是模块级单例 `asyncio.Lock()`，在首个 room 的 `asyncio.run()` 循环里惰性绑定后，后续 room 各自 `asyncio.run()` 起新循环再次 `await` 会触发 `RuntimeError: ... is bound to a different event loop`；该异常被 `async_req` 吞掉后返回空串，被 `spider.py` 误判成「风控空响应」并级联触发 HTML 兜底失败。现 `_get_client_lock()` 改为缓存 `(lock, loop)` 二元组，当前循环变更时自动重建锁，与 `_client_cache` 的「client + loop」机制一致，从源头消除跨循环锁错误
+- **异常日志带类型**（2026-08-12 收口）: `async_req`、`_close_all_clients` 内所有 `except Exception as e: logger.debug(e)` 改为带 `type(e).__name__`（必要时含 URL），消除 Windows 下异常 `str()` 为空时打出空白日志、无法定位的问题
 - **SSL 验证**: 由全局配置 `src/http_config.py` 统一控制，默认启用
 - **连接池清理**: 进程退出时通过 atexit / 信号处理器释放所有复用的 AsyncClient
 - **`get_response_status()` m3u8 容错**（2026-08-05 增强）: HEAD 校验失败时，若 URL 以 `.m3u8` 结尾则补一次 `Range: bytes=0-0` GET 轻量探测（**含 404 在内的所有非 2xx 均触发探测**，返回 200/206 即判可达）；非 m3u8 源（FLV/record_url）行为不变。异常日志带 URL + `type(e).__name__`（如 `ConnectTimeout` / `TimeoutError`），避免 Windows 下 `socket.timeout` 的 `str()` 为空时只输出空白消息；探测失败记录 `status_code` / `content-type` 便于排障
@@ -1264,6 +1266,54 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 
 ## 更新日志
 
+### v4.0.8.1-dev (2026-08-13) — 基于参考信息的类型/逻辑修复批次
+
+本轮依据用户提供的参考信息（编辑器选中区块）逐项修复，主检查器为 basedpyright（1.39.9，默认忽略 `# type: ignore`），次检查器为 mypy；改动最小化、保留原功能。
+
+**`src/web_api.py`（登录爆破限流类型收紧）：**
+- `_FAILED_LOGINS: dict[str, deque] = {}` → `dict[str, deque[float]]`：原裸 `deque` 在严格模式下退化为 `deque[Unknown]`，触发 `reportMissingTypeArgument` 并级联 `reportUnknownVariableType` / `reportUnknownMemberType` / `reportUnknownArgumentType`（影响 `_login_blocked` / `_record_failed_login` / `_clear_failed_logins` 共 5 处）。 deque 存储 `time.time()` 返回的 float 时间戳，参数化后 1 error + 10 warnings → 0 errors（仅剩 2 条非附件区 warning：line 34 未用导入 `validate_room_target`、line 410 `float` 表达式结果未用）。
+
+**`build_exe.py`（Linux ffmpeg 拷贝分支，line 327-335）：**
+- `shutil.copy2` 返回值未使用 → 赋 `_ = shutil.copy2(...)`，消除 `reportUnusedCallResult`。
+- 拷贝参数改用 `Path`（兼容 `os.PathLike`），省略冗余 `str()` 转换。
+- 现状：basedpyright 0 errors；剩余 18 条 warning 均位于非附件区（`_download_file` 的 urllib/json `Any` 返回 line 210-267、`os.getpgid` `Any` line 421），按"忽略其他区域"约定不动。
+
+**`msg_push.py`（tg_bot 推送，line 169-182）：**
+- url 原在 try 内绑定，构造 `json_data` 异常时 except 块引用未绑定变量 → `NameError`；修复为 url 在 try 外预绑定。
+- 不校验 Telegram 业务失败（`{"ok": false}`）→ 补充 `resp_data.get("ok") is True` 判定，失败取 `description` 记录并返回 error。
+- 失败返回占位 `[1]` 与成功 `[str(chat_id)]` 不一致 → 统一为 `[str(chat_id)]`。
+
+**`main.py`（两处）：**
+- line 524 PATH 拼接：`current_env_path` 是 import 时快照，覆盖后续 PATH 修改；`ffmpeg_path` 未归一化/去重 → 改为实时 `os.environ.get("PATH", "")` + `os.path.normpath` + 去重。
+- `get_startup_info()`（line 765）：`_StartupInfoType` 在 `if sys.platform` 运行期分支赋值被 pyright 视为变量 → 移入 `TYPE_CHECKING` 块无条件赋值 `subprocess.STARTUPINFO` + 引号注解。
+
+**`gui.py`（PystrayIcon 别名 + 两处 mypy 误报）：**
+- line 179 `PystrayIcon`：basedpyright 0/0/0，但 mypy 16 错误（别名在 `TYPE_CHECKING` 内被当变量）→ 用 `TypeAlias` 声明（`PystrayIcon: TypeAlias = pystray.Icon` / `object`）。
+- line 830 `ctk.CTkFrame` 对 mypy 为 Any → `cast("tk.Frame", ...)`。
+- 补充清理剩余 2 个 mypy 错误：line 1312 `row_fg` 注解联合类型 `str | tuple[str, str]`；line 1461 `config.optionxform` 赋值 mypy 误报 → `setattr` + 具名函数 `_preserve_case`（非 lambda，规避 basedpyright `reportUnknownLambdaType`）。最终 gui.py 0/0/0 + mypy Success。
+
+**验证**：各文件基于 basedpyright / mypy 复验，附件区块告警清零；非附件区既有 warning 按约定未触碰。
+
+---
+
+### v4.0.8.1-dev (2026-08-12) — 修复跨事件循环锁误判风控 + 空白异常日志收口
+
+**问题背景**：运行日志高频出现 `... is bound to a different event loop` 后，抖音 web API 被判定「empty response from API (possible risk control)」并级联回退 HTML 抓取双双失败。根因不在风控：`ttwid` 获取正常、UA 也无问题。
+
+**根因**：项目并发模型为每个 room 独立线程 + 独立 `asyncio.run()` 循环（main.py 上百处 `asyncio.run(...)` 已证实）。`src/async_http.py` 的 `_client_lock` 是模块级单例 `asyncio.Lock()`，在首个 room 循环里被 `await` 后惰性绑定到该循环；后续 room 各自 `asyncio.run()` 起新循环再次 `await _get_client_lock()` 时，触发 CPython 的 `RuntimeError: ... is bound to a different event loop`（日志里那条 `<asyncio.locks.Lock …>` 即此异常的 `str`）。该异常被 `async_req` 的 `except Exception as e:` 整段吞掉，在异常分支打日志后返回 `""`；`spider.py` 把空串当成「空响应 → 疑似风控」，于是 WARNING 回退 HTML、HTML 抓取同样因同一锁错误返回空 → ERROR 级联。
+
+**改动（4 处 + 1 测试）**：
+
+- `src/async_http.py` `_get_client_lock()`：**根因修复**。由「单例 `asyncio.Lock | None`」改为随**当前事件循环**缓存/重建的 `(lock, loop)` 二元组，各 room 在自己的循环里取到本循环绑定的锁，不再跨循环 `await`；逻辑与已有的 `_client_cache`（client + loop）一致，并发安全
+- `src/async_http.py` `async_req` 异常分支：`logger.debug(e)` → `logger.debug(f"async_req 请求失败: {url} - {type(e).__name__}: {e}")`，消除 Windows 下空 `str()` 异常造成的空白日志，同时让 20:29–20:31:08 那批真实瞬时网络错误变得可观测
+- `src/async_http.py` `_close_all_clients`：`logger.debug(e)` → `logger.debug(f"关闭 AsyncClient 失败: {type(e).__name__}: {e}")`
+- `src/async_http.py` 跨循环旧 client 关闭：`logger.debug(f"关闭失效 AsyncClient 失败: {e}")` 补上 `type(e).__name__`
+- `tests/test_async_http.py` 新增 `TestGetClientLock`：验证同一循环内返回同一把锁；独立线程/新循环里取到**不同**锁且 `await` 不触发 `bound to a different event loop`（根因回归锁定）
+
+**验证**（managed Python 3.13 隔离 venv）：`pytest tests/test_async_http.py` → **27 passed**；`mypy src/async_http.py` → Success；`black --check` / `isort --check-only` 通过；`py_compile` 通过。修复后原日志链（锁错误 → 误判风控 → 回退失败）已断，若仍有 `async_req 请求失败: … - <类型>: …` 的 DEBUG（带 URL 与异常类型）即为真实网络/超时问题，可直接定位。
+
+---
+
 ### v4.0.8.1-dev (2026-08-11) — 修复 Linux/macOS 下 mypy 跨平台类型错误
 
 - **背景**：CI（ubuntu-latest）跑 `mypy src/` 报 6 个错误 —— `src/web_tray.py` 三处 `ctypes.windll`（attr-defined）、`main.py` 的 `subprocess.STARTUPINFO` / `STARTF_USESHOWWINDOW`（name-defined / attr-defined）。根因：这些符号只存在于 Windows typeshed，而这两处代码缺少 `sys.platform` 字面量分支保护；项目其他 `ctypes.windll` 用法（web.py / main.py / gui.py）都包在 `if sys.platform == "win32":` 内，mypy 平台感知会跳过非当前平台分支
@@ -1746,4 +1796,4 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 
 ---
 
-*本文档最后更新: 2026-08-09（新增：全量代码审查与 pyproject 非法邮箱构建修复、GUI 停止录制优雅退出加固、pythonw 子进程兼容性修复、gui_legacy 遗留问题说明）*
+*本文档最后更新: 2026-08-13（新增：基于参考信息的类型/逻辑修复批次 — web_api.py deque 类型收紧、build_exe.py Linux ffmpeg 拷贝报告、msg_push.py tg_bot NameError/业务失败校验、main.py PATH 快照与 STARTUPINFO 类型别名、gui.py PystrayIcon TypeAlias 与 mypy 清零）*

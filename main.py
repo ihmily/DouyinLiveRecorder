@@ -94,7 +94,7 @@ from loguru import logger
 
 from msg_push import bark, dingtalk, ntfy, pushplus, send_email, tg_bot, xizhi
 from src import spider, stream, utils
-from src.ffmpeg_install import check_ffmpeg, current_env_path, ffmpeg_path
+from src.ffmpeg_install import check_ffmpeg, ffmpeg_path
 from src.proxy import ProxyDetector
 
 
@@ -521,7 +521,14 @@ def _get_error_line(e: BaseException) -> str:
 
 os_type: str = os.name
 color_obj: "utils.Color" = utils.Color()
-os.environ["PATH"] = ffmpeg_path + os.pathsep + (current_env_path or os.environ.get("PATH", ""))
+# 将 ffmpeg 目录前置到当前 PATH：使用实时 os.environ（而非 import 时快照），
+# 避免丢弃 import 之后对其余 PATH 条目的追加修改；并跳过重复插入。
+_current_path = os.environ.get("PATH", "")
+ffmpeg_path_norm = os.path.normpath(ffmpeg_path)
+if ffmpeg_path_norm and ffmpeg_path_norm not in _current_path.split(os.pathsep):
+    os.environ["PATH"] = ffmpeg_path_norm + os.pathsep + _current_path
+else:
+    os.environ["PATH"] = _current_path
 
 PLATFORM_HOST = [
     "live.douyin.com",
@@ -747,15 +754,19 @@ def delete_line(file_path: str, del_line: str, delete_all: bool = False) -> None
                 _ = f.write(txt_line)
 
 
-# Windows 下 subprocess.STARTUPINFO 仅存在于 Windows typeshed，Linux/macOS 上 mypy 无法解析该名字；
-# 非 Windows 平台 get_startup_info 恒返回 None，用 object 占位仅用于满足类型检查，不影响运行。
-if sys.platform == "win32":
+# Windows 下 subprocess.STARTUPINFO 仅存在于 Windows typeshed，Linux/macOS 上 mypy 无法解析该名字。
+# 类型检查阶段（TYPE_CHECKING）无条件将其解析为真实类型 subprocess.STARTUPINFO（pyright 完整求值该分支），
+# 运行时恒为 object 占位；仅 win32 分支才实际构造 STARTUPINFO，其余平台恒返回 None，
+# 既满足跨平台类型检查，又避免 “类型表达式中使用变量” 告警。
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
     _StartupInfoType = subprocess.STARTUPINFO
 else:
     _StartupInfoType = object
 
 
-def get_startup_info(system_type: str) -> _StartupInfoType | None:
+def get_startup_info(system_type: str) -> "_StartupInfoType | None":
     # 获取平台启动信息（Windows 隐藏控制台窗口）。
     # 运行时只在 Windows（os.name == "nt"）构造 STARTUPINFO，其他平台恒返回 None；
     # mypy 依据 sys.platform 字面量分支跳过非当前平台代码，从而通过跨平台类型检查。
