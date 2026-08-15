@@ -352,7 +352,15 @@ def create_app(
     @app.get("/api/files")
     async def list_files(path: str = Query("")) -> list[dict[str, str | int | float]]:
         root = cast(str, app.state.downloads_root)
-        target = os.path.realpath(os.path.join(root, path))
+        raw_path = (path or "").replace("\\", "/")
+        if os.path.isabs(raw_path):
+            raise HTTPException(400, "非法路径")
+        safe_rel = os.path.normpath(raw_path) if raw_path else ""
+        if safe_rel in (".",):
+            safe_rel = ""
+        if safe_rel.startswith("..") or safe_rel == ".." or os.path.isabs(safe_rel):
+            raise HTTPException(400, "非法路径")
+        target = os.path.realpath(os.path.join(root, safe_rel))
         if not _is_within(target, root):
             raise HTTPException(400, "非法路径")
         if not os.path.exists(target):
@@ -368,7 +376,7 @@ def create_app(
                     "type": "file",
                     "size": st.st_size,
                     "mtime": st.st_mtime,
-                    "path": path,
+                    "path": safe_rel,
                 }
             ]
         items: list[dict[str, str | int | float]] = []
