@@ -374,16 +374,19 @@ def create_app(
         items: list[dict[str, str | int | float]] = []
         for name in sorted(os.listdir(target)):
             full = os.path.join(target, name)
+            full_real = os.path.realpath(full)
+            if not _is_within(full_real, root):
+                continue
             # 跳过符号链接：下载端点经 realpath 拦截穿越，列表同样不暴露外部文件信息（C9）
             if os.path.islink(full):
                 continue
             try:
-                st = os.stat(full)
-                is_dir = os.path.isdir(full)
+                st = os.stat(full_real)
+                is_dir = os.path.isdir(full_real)
             except OSError:
                 # 录制中文件可能被 ffmpeg 原子替换/重命名而瞬时消失，跳过该项而非整页 500（C6）
                 continue
-            rel = os.path.relpath(full, root).replace("\\", "/")
+            rel = os.path.relpath(full_real, root).replace("\\", "/")
             items.append(
                 {
                     "name": name,
