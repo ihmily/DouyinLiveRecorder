@@ -197,7 +197,10 @@
         }
         $('stat-monitoring').textContent = (s.monitoring != null ? s.monitoring : '-');
         $('stat-recording').textContent = (s.recording_count != null ? s.recording_count : '-');
-        $('stat-errors').textContent = (s.error_count != null ? s.error_count : '-');
+        // 错误数双口径：累计（进程启动起）/ 近期（近 error_window_size 次检测周期内）
+        var errTotal = (s.error_count != null ? s.error_count : '-');
+        var errRecent = (s.recent_errors != null ? s.recent_errors : '-');
+        $('stat-errors').textContent = errTotal + ' / ' + errRecent;
         $('stat-disk').textContent = (s.disk_free_gb != null ? s.disk_free_gb : '-');
         var tbody = $('recording-tbody');
         var rec = s.recording || [];
@@ -407,6 +410,11 @@
         if (token) headers['Authorization'] = 'Bearer ' + token;
         fetch('/api/files/download?path=' + encodeURIComponent(path), { headers: headers })
             .then(function (res) {
+                if (res.status === 401) {
+                    setToken('');
+                    showLogin();
+                    throw new Error('登录已过期，请重新登录');
+                }
                 if (!res.ok) throw new Error(res.statusText);
                 return res.blob();
             })

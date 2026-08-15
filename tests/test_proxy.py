@@ -1,8 +1,5 @@
 # Tests for src/proxy.py module - 代理检测模块.
 
-import os
-from unittest.mock import patch
-
 import pytest
 
 from src.proxy import ProxyDetector, ProxyInfo
@@ -87,60 +84,71 @@ class TestProxyInfo:
             setattr(info, "ip", "other")
 
 
+# 代理相关环境变量：_get_proxy_info_linux / _is_proxy_enabled_linux 会读取这些。
+# 测试统一用 monkeypatch 逐个删/设，避免 patch.dict(os.environ) 整体快照/恢复环境时，
+# 因 harness 注入的 CODEBUDDY_MCP_CONFIG 膨胀超过 Windows 环境变量 32767 上限而崩溃。
+_PROXY_ENV_KEYS = ("http_proxy", "https_proxy", "ftp_proxy", "all_proxy", "ALL_PROXY")
+
+
+def _clear_proxy_env(monkeypatch) -> None:
+    # 清除所有代理相关环境变量，保证测试对机器环境无依赖。
+    for key in _PROXY_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
+
 class TestProxyDetectorLinux:
     # Test ProxyDetector Linux 平台方法.
 
-    @patch.dict(os.environ, {"http_proxy": "http://user:pass@proxy.example.com:3128/"}, clear=False)
-    def test_linux_get_proxy_info_with_auth(self):
+    def test_linux_get_proxy_info_with_auth(self, monkeypatch):
         # 带认证信息的代理 URL 正确解析.
+        _clear_proxy_env(monkeypatch)
+        monkeypatch.setenv("http_proxy", "http://user:pass@proxy.example.com:3128/")
         ip, port = ProxyDetector._get_proxy_info_linux()
-        assert ip == "proxy.example.com:3128" or ip == "proxy.example.com"
+        assert ip == "proxy.example.com"
+        assert port == "3128"
         # 实际解析逻辑：去掉 user:pass@ 后按 : 分割
 
-    @patch.dict(os.environ, {"http_proxy": "http://10.0.0.1:8080"}, clear=False)
-    def test_linux_get_proxy_info_simple(self):
+    def test_linux_get_proxy_info_simple(self, monkeypatch):
         # 简单代理 URL 解析.
+        _clear_proxy_env(monkeypatch)
+        monkeypatch.setenv("http_proxy", "http://10.0.0.1:8080")
         ip, port = ProxyDetector._get_proxy_info_linux()
         assert ip == "10.0.0.1"
         assert port == "8080"
 
-    @patch.dict(os.environ, {"https_proxy": "http://proxy.test:9090/"}, clear=False)
-    def test_linux_get_proxy_info_https(self):
+    def test_linux_get_proxy_info_https(self, monkeypatch):
         # https_proxy 环境变量解析.
+        _clear_proxy_env(monkeypatch)
+        monkeypatch.setenv("https_proxy", "http://proxy.test:9090/")
         ip, port = ProxyDetector._get_proxy_info_linux()
         # 取决于环境变量优先级
         assert isinstance(ip, str)
         assert isinstance(port, str)
 
-    @patch.dict(os.environ, {}, clear=True)
-    def test_linux_no_proxy(self):
+    def test_linux_no_proxy(self, monkeypatch):
         # 无代理环境变量时返回空.
-        # 确保所有代理变量都清除
-        for key in list(os.environ.keys()):
-            if "proxy" in key.lower():
-                del os.environ[key]
+        _clear_proxy_env(monkeypatch)
         ip, port = ProxyDetector._get_proxy_info_linux()
         assert ip == ""
         assert port == ""
 
-    @patch.dict(os.environ, {}, clear=True)
-    def test_linux_is_proxy_enabled_false(self):
+    def test_linux_is_proxy_enabled_false(self, monkeypatch):
         # 无代理时返回 False.
-        for key in list(os.environ.keys()):
-            if "proxy" in key.lower():
-                del os.environ[key]
+        _clear_proxy_env(monkeypatch)
         detector = ProxyDetector.__new__(ProxyDetector)
         assert detector._is_proxy_enabled_linux() is False
 
-    @patch.dict(os.environ, {"http_proxy": "http://proxy:8080"}, clear=False)
-    def test_linux_is_proxy_enabled_true(self):
+    def test_linux_is_proxy_enabled_true(self, monkeypatch):
         # 有代理时返回 True.
+        _clear_proxy_env(monkeypatch)
+        monkeypatch.setenv("http_proxy", "http://proxy:8080")
         detector = ProxyDetector.__new__(ProxyDetector)
         assert detector._is_proxy_enabled_linux() is True
 
-    @patch.dict(os.environ, {"http_proxy": "http://proxy.example.com:8080/"}, clear=False)
-    def test_linux_proxy_with_trailing_slash(self):
+    def test_linux_proxy_with_trailing_slash(self, monkeypatch):
         # 末尾斜杠被正确处理.
+        _clear_proxy_env(monkeypatch)
+        monkeypatch.setenv("http_proxy", "http://proxy.example.com:8080/")
         ip, port = ProxyDetector._get_proxy_info_linux()
         assert ip == "proxy.example.com"
         assert port == "8080"

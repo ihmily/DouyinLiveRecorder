@@ -9,14 +9,14 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Mapping
-from typing import cast
+from typing import Any, TypeAlias, cast
 
 import requests
 
-try:
-    from requests._types import JsonType
-except ImportError:
-    from typing import Any as JsonType  # type: ignore[assignment,misc]
+# JSON 可序列化数据的类型别名。
+# 历史上尝试从 requests._types 导入 JsonType，但 requests 2.34+ 已移除该符号，
+# 原 try 分支恒为 ImportError、实际始终退化为 Any；此处直接显式声明类型别名。
+JsonType: TypeAlias = dict[str, Any] | list[Any] | str | int | float | bool | None
 
 from . import http_config as config
 from .logger import logger

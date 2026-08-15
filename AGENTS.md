@@ -5,7 +5,7 @@
 ## 项目概览
 
 - **名称**: DouyinLiveRecorder
-- **版本**: 4.0.8.2（单源：`pyproject.toml` 中的 `version` 字段，`main.py` 运行时自动从该文件读取；`Dockerfile` / `README.md` / `CODE_WIKI.md` / `i18n/zh_CN/LC_MESSAGES/zh_CN.po` 需同步更新）
+- **版本**: 4.0.8.2（唯一事实源：`pyproject.toml` 的 `version` 字段。`main.py` 与 `src/web_api.py` 运行时经 `importlib.metadata` 动态读取；`Dockerfile` 经 `APP_VERSION` 构建参数动态注入；`i18n/zh_CN/LC_MESSAGES/zh_CN.po` 不再携带版本号。`README.md` / `CODE_WIKI.md` 为文档，不再纳入版本同步/校验。）
 - **描述**: 支持抖音、TikTok、YouTube、快手等 60+ 平台的直播录制工具
 - **许可证**: MIT
 
@@ -148,9 +148,9 @@ python build_exe.py --no-zip     # 只打包不压缩
 python build_exe.py --no-runtime # 跳过 ffmpeg/node（减小体积）
 python build_exe.py --dual       # 同时生成 lite + full 两个 zip
 
-# Docker 构建
-docker build -t douyin-recorder .
-docker compose up -d             # 使用 docker-compose.yaml
+# Docker 构建（版本号经 --build-arg 从 pyproject.toml 动态注入）
+docker build --build-arg APP_VERSION="$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")" -t douyin-recorder .
+docker compose up -d             # 使用 docker-compose.yaml（APP_VERSION 可由 .env 提供）
 ```
 
 ## 格式化命令
@@ -163,7 +163,7 @@ mypy src/
 
 ## 关键约定
 
-1. **版本号同步**: 修改版本时只需更新 `pyproject.toml`（单一事实源），然后同步 `Dockerfile`, `README.md`, `CODE_WIKI.md`, `i18n/zh_CN/LC_MESSAGES/zh_CN.po`；`main.py` 运行时自动读取 `pyproject.toml`，无需手动修改
+1. **版本号同步**: 版本唯一事实源是 `pyproject.toml`，各消费方均动态读取、不再写死。`main.py` 与 `src/web_api.py` 运行时经 `importlib.metadata` 读取（无需修改源码）；`Dockerfile` 通过 `APP_VERSION` 构建参数动态注入；`i18n/zh_CN/LC_MESSAGES/zh_CN.po` 不再写版本号。`README.md` / `CODE_WIKI.md` 为文档，不纳入版本同步/校验。`scripts/check_version.py` 校验上述“动态化”状态
 2. **行宽**: 120 字符（black + isort 统一）
 3. **导入排序**: isort 使用 `black` profile，`known_first_party = ["src", "i18n"]`
 4. **运行时资源**: `config/`, `ffmpeg/`, `node/` 与 exe 保持同级，不进入 `_internal/`

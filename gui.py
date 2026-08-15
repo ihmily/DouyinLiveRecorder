@@ -653,7 +653,11 @@ class LiveRecorderGUI:
             try:
                 callback(*args)
             except Exception:
-                pass
+                # 记录回调异常便于排查，避免静默吞掉 UI 回调 bug
+                self._log("UI 事件回调执行异常（详见控制台）", "error")
+                import traceback
+
+                traceback.print_exc()
 
         if not self._pump_active:
             return
@@ -1680,6 +1684,9 @@ class LiveRecorderGUI:
                     self._log("进程已终止（硬杀路径，ffmpeg 已随进程树终止）")
             except subprocess.TimeoutExpired:
                 self._log("进程未能及时退出，整树强制终止...")
+            except Exception as e:
+                # wait 本身的异常（OSError 等）不应让线程静默死亡导致 _stopping 卡死
+                self._log(f"等待子进程退出异常: {e}")
 
             if not terminated and proc.poll() is None:
                 try:
@@ -2054,40 +2061,65 @@ class LiveRecorderGUI:
         threading.Thread(target=self._shutdown_and_quit, daemon=True).start()
 
     def _shutdown_and_quit(self) -> None:
-        # 后台执行：优雅停止录制子进程（由其清理 ffmpeg）→ 超时整树强杀 → 兜底清理
+        # 后台执行：优雅停止录制子进程（由其清理 ffmpeg）→ 超时整树强杀 → 兜底清理。
+        # 与停止路径保持同一策略：CTRL_BREAK 失败时不能只 proc.terminate()——
+        # TerminateProcess 硬杀不触发 main.py 的 safe_exit，且 wait() 立即成功会绕过
+        # taskkill /T 兜底分支，导致 ffmpeg 孤儿化继续录制。
         proc = self.process
         child_pid = proc.pid if proc is not None else None
-        if proc is not None:
-            if sys.platform == "win32":
-                if not _send_ctrl_break_to_child(proc.pid):
-                    proc.terminate()
-            else:
+        try:
+            if proc is not None:
+                if sys.platform == "win32":
+                    if not _send_ctrl_break_to_child(proc.pid):
+                        self._log("发送 CTRL_BREAK 失败，整树强制终止（避免 ffmpeg 孤儿化）", "warn")
+                        try:
+                            subprocess.run(
+                                ["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, timeout=5
+                            )
+                        except Exception as e:
+                            self._log(f"taskkill 整树终止失败，回退 terminate: {e}")
+                            proc.terminate()
+                else:
+                    try:
+                        os.kill(proc.pid, signal.SIGINT)
+                    except Exception as e:
+                        self._log(f"发送 SIGINT 失败，回退 terminate: {e}")
+                        proc.terminate()
+
                 try:
-                    os.kill(proc.pid, signal.SIGINT)
-                except Exception:
-                    proc.terminate()
+                    proc.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    # main.py 未能自行退出，整树强杀（含其下所有 ffmpeg，避免孤儿）
+                    try:
+                        if sys.platform == "win32":
+                            subprocess.run(
+                                ["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, timeout=5
+                            )
+                        else:
+                            proc.kill()
+                            subprocess.run(
+                                ["pkill", "-P", str(proc.pid), "-x", "ffmpeg"], capture_output=True, timeout=5
+                            )
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        self._log("警告：进程可能仍在运行！", "warn")
+                    except Exception as e:
+                        self._log(f"强制终止失败: {e}")
+                except Exception as e:
+                    # proc.wait 本身的异常（OSError 等）不能中断收尾流程，
+                    # 否则 _finalize_quit 永不执行、窗口无法销毁
+                    self._log(f"等待子进程退出异常: {e}")
 
-            try:
-                proc.wait(timeout=15)
-            except subprocess.TimeoutExpired:
-                # main.py 未能自行退出，整树强杀（含其下所有 ffmpeg，避免孤儿）
-                try:
-                    if sys.platform == "win32":
-                        subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, timeout=5)
-                    else:
-                        proc.kill()
-                        subprocess.run(["pkill", "-P", str(proc.pid), "-x", "ffmpeg"], capture_output=True, timeout=5)
-                    proc.wait(timeout=5)
-                except Exception:
-                    pass
+                self.running = False
+                self.process = None
+                self.process_pid = None
 
-            self.running = False
-            self.process = None
-            self.process_pid = None
-
-        # 兜底清理进程树中可能残留的 ffmpeg（显式传入已捕获的 PID，
-        # 避免此处读到已被清空的 self.process_pid 导致清理失效）
-        self._cleanup_zombie_ffmpeg(child_pid)
+            # 兜底清理进程树中可能残留的 ffmpeg（显式传入已捕获的 PID，
+            # 避免此处读到已被清空的 self.process_pid 导致清理失效）
+            self._cleanup_zombie_ffmpeg(child_pid)
+        except Exception as e:
+            # 任何异常都不能阻断 UI 收尾，否则窗口无法销毁、进程无法退出
+            self._log(f"退出清理流程异常: {e}", "warn")
 
         # 通过事件泵路由回 UI 线程收尾销毁（禁止直接跨线程调用 root.after）
         self.post_ui(self._finalize_quit)

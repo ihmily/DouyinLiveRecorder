@@ -2,10 +2,20 @@
 # -*- encoding: utf-8 -*-
 # Weverse 平台认证模块 - 负责 Token 刷新功能
 
+import os
 import uuid
 from typing import cast
 
 import requests
+
+# Weverse 网页客户端公开密钥（随官方前端公开可见，非用户私密凭据）；
+# 允许通过环境变量覆盖以便上游轮换后无需改代码。
+_DEFAULT_APP_SECRET = "5419526f1c624b38b10787e5c10b2a7a"
+
+
+def _app_secret() -> str:
+    # 读取 Weverse 客户端密钥（支持环境变量覆盖）
+    return os.environ.get("DOUYIN_WEVERSE_APP_SECRET", _DEFAULT_APP_SECRET)
 
 
 def refresh_weverse_token(refresh_token: str | None) -> tuple[str | None, str | None]:
@@ -21,7 +31,7 @@ def refresh_weverse_token(refresh_token: str | None) -> tuple[str | None, str | 
         "Origin": "https://weverse.io",
         "Referer": "https://weverse.io/",
         "X-ACC-SERVICE-ID": "weverse",
-        "X-ACC-APP-SECRET": "5419526f1c624b38b10787e5c10b2a7a",
+        "X-ACC-APP-SECRET": _app_secret(),
         "X-ACC-TRACE-ID": str(uuid.uuid4()),
     }
 

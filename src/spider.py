@@ -13,6 +13,7 @@ import json
 import random
 import re
 import subprocess
+import threading
 import time
 import urllib.parse
 import uuid
@@ -65,6 +66,12 @@ async def _ensure_ttwid(proxy_addr: OptionalStr = None) -> str:
 # 各平台自动获取凭据的缓存，避免每次请求都重新获取
 _cached_kuaishou_did: str = ""
 _cached_twitch_client_id: str = ""
+# 跨线程去重锁（与 ttwid.py 同理：多房间各独立线程/事件循环并发首轮请求时避免重复拉取）。
+# 用 RLock 而非 Lock：锁会跨越 await 持有，若同一事件循环内出现第二个并发协程，
+# 普通 Lock 会同线程自旋死锁（持锁协程永远无法恢复执行）；RLock 允许同线程重入，
+# 最坏情况退化为一次重复拉取（幂等 GET，无害），跨线程去重语义不变。
+_kuaishou_did_lock = threading.RLock()
+_twitch_client_id_lock = threading.RLock()
 
 
 async def _ensure_kuaishou_did(proxy_addr: OptionalStr = None) -> str:
@@ -72,25 +79,29 @@ async def _ensure_kuaishou_did(proxy_addr: OptionalStr = None) -> str:
     global _cached_kuaishou_did
     if _cached_kuaishou_did:
         return _cached_kuaishou_did
-    try:
-        cookies_dict = await async_req(
-            url="https://live.kuaishou.com/",
-            proxy_addr=proxy_addr,
-            headers={
-                "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
-            },
-            return_cookies=True,
-            timeout=10,
-        )
-        if isinstance(cookies_dict, dict):
-            did = cookies_dict.get("did", "")
-            didv = cookies_dict.get("didv", "")
-            if did:
-                _cached_kuaishou_did = f"did={did}; didv={didv}" if didv else f"did={did}"
-                logger.debug("自动获取快手 did 成功")
-    except Exception as e:
-        logger.warning(f"自动获取快手 did 失败: {e}")
+    # 持锁二次检查：并发首轮请求只拉取一次（与 ttwid.py 同一线程模型假设）
+    with _kuaishou_did_lock:
+        if _cached_kuaishou_did:
+            return _cached_kuaishou_did
+        try:
+            cookies_dict = await async_req(
+                url="https://live.kuaishou.com/",
+                proxy_addr=proxy_addr,
+                headers={
+                    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+                },
+                return_cookies=True,
+                timeout=10,
+            )
+            if isinstance(cookies_dict, dict):
+                did = cookies_dict.get("did", "")
+                didv = cookies_dict.get("didv", "")
+                if did:
+                    _cached_kuaishou_did = f"did={did}; didv={didv}" if didv else f"did={did}"
+                    logger.debug("自动获取快手 did 成功")
+        except Exception as e:
+            logger.warning(f"自动获取快手 did 失败: {e}")
     return _cached_kuaishou_did
 
 
@@ -101,22 +112,26 @@ async def _ensure_twitch_client_id(proxy_addr: OptionalStr = None) -> str:
     global _cached_twitch_client_id
     if _cached_twitch_client_id:
         return _cached_twitch_client_id
-    fallback_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0"
-    try:
-        html = await async_req(
-            url="https://www.twitch.tv/",
-            proxy_addr=proxy_addr,
-            headers={"User-Agent": fallback_ua, "Accept-Language": "en-US"},
-            timeout=10,
-        )
-        html = _get_str_response(html)
-        # Twitch 主页 HTML 中通过 "Client-ID" 字符串内嵌公开客户端标识
-        match = re.search(r'"Client-ID"\s*[:=]\s*"([a-z0-9]{20,})"', html)
-        if match:
-            _cached_twitch_client_id = match.group(1)
-            logger.debug("自动获取 Twitch Client-Id 成功")
-    except Exception as e:
-        logger.warning(f"自动获取 Twitch Client-Id 失败: {e}")
+    # 持锁二次检查：并发首轮请求只拉取一次（与 ttwid.py 同一线程模型假设）
+    with _twitch_client_id_lock:
+        if _cached_twitch_client_id:
+            return _cached_twitch_client_id
+        fallback_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0"
+        try:
+            html = await async_req(
+                url="https://www.twitch.tv/",
+                proxy_addr=proxy_addr,
+                headers={"User-Agent": fallback_ua, "Accept-Language": "en-US"},
+                timeout=10,
+            )
+            html = _get_str_response(html)
+            # Twitch 主页 HTML 中通过 "Client-ID" 字符串内嵌公开客户端标识
+            match = re.search(r'"Client-ID"\s*[:=]\s*"([a-z0-9]{20,})"', html)
+            if match:
+                _cached_twitch_client_id = match.group(1)
+                logger.debug("自动获取 Twitch Client-Id 成功")
+        except Exception as e:
+            logger.warning(f"自动获取 Twitch Client-Id 失败: {e}")
     return _cached_twitch_client_id
 
 
@@ -577,11 +592,10 @@ async def get_tiktok_stream_data(
         + "5177d5d53bbd822e1bf66128887d942c9c3e2f",
     }
 
-    for _ in range(3):
+    for _attempt in range(3):
         html_str = _get_str_response(
             await async_req(url=url, proxy_addr=proxy_addr, headers=headers, abroad=True, http2=False)
         )
-        await asyncio.sleep(1)  # 异步休眠，避免阻塞事件循环
         if "We regret to inform you that we have discontinued operating TikTok" in html_str:
             msg = re.search("<p>\n\\s+(We regret to inform you that we have discontinu.*?)\\.\n\\s+</p>", html_str)
             raise ConnectionError(
@@ -600,6 +614,9 @@ async def get_tiktok_stream_data(
             except Exception:
                 raise ConnectionError("Please check if your network can access the TikTok website normally")
             return _loads_dict(json_str)
+        # 仅重试前休眠（成功或最后一次失败都无需再等待）
+        if _attempt < 2:
+            await asyncio.sleep(1)
 
     raise ConnectionError(
         "Failed to retrieve TikTok data after 3 retries, please check if your network can access "
@@ -1155,7 +1172,7 @@ async def get_bilibili_stream_data(
         if not stream_data_list:
             return None
         sorted_stream_list: list[dict[str, object]] = sorted(
-            stream_data_list, key=itemgetter("current_qn"), reverse=True
+            stream_data_list, key=lambda s: cast(int, s.get("current_qn", 0)), reverse=True
         )
         video_quality_options = {"10000": 0, "400": 1, "250": 2, "150": 3, "80": 4}
         qn_count = len(sorted_stream_list)
@@ -1201,7 +1218,8 @@ async def get_xhs_stream_url(
     match_data = re.search("<script>window.__INITIAL_STATE__=(.*?)</script>", html_str)
 
     if match_data:
-        json_str = match_data.group(1).replace("undefined", "null")
+        # 仅替换 JSON 裸字面量 undefined（键值/数组元素位置），避免全局替换误伤字符串值
+        json_str = re.sub(r"(?<=[:,[])\s*undefined\b", " null", match_data.group(1))
         json_data = json.loads(json_str)
 
         if json_data.get("liveStream"):
@@ -1607,7 +1625,7 @@ async def get_sooplive_stream_data(
         bandwidth_pattern = re.compile(r"BANDWIDTH=(\d+)")
         bandwidth_list = bandwidth_pattern.findall(resp)
         url_to_bandwidth = {purl: int(bandwidth) for bandwidth, purl in zip(bandwidth_list, play_url_list)}
-        play_url_list = sorted(play_url_list, key=lambda purl: url_to_bandwidth[purl], reverse=True)
+        play_url_list = sorted(play_url_list, key=lambda purl: url_to_bandwidth.get(purl, 0), reverse=True)
         return play_url_list
 
     if not anchor_name:
@@ -2511,7 +2529,10 @@ async def get_twitcasting_stream_url(
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
     }
 
-    anchor_id = url.split("/")[3]
+    _twitcast_parts = url.split("?")[0].split("/")
+    if len(_twitcast_parts) < 4:
+        raise RuntimeError(f"TwitCasting URL 格式不正确，无法提取主播 ID: {url}")
+    anchor_id = _twitcast_parts[3]
     if cookies:
         headers["Cookie"] = cookies
 
@@ -2683,6 +2704,8 @@ async def get_weibo_stream_data(
     if "show/" in url:
         room_id = url.split("?")[0].split("show/")[1]
     else:
+        if "/u/" not in url:
+            raise RuntimeError(f"微博 URL 格式不正确，无法提取 uid: {url}")
         uid = url.split("?")[0].rsplit("/u/", maxsplit=1)[1]
         web_api = f"https://weibo.com/ajax/statuses/mymblog?uid={uid}&page=1&feature=0"
         json_str = await async_req(web_api, proxy_addr=proxy_addr, headers=headers)
@@ -2914,7 +2937,9 @@ async def get_liveme_stream_url(
     room_id = url.split("/index.html")[0].rsplit("/", maxsplit=1)[-1]
     with open(f"{JS_SCRIPT_PATH}/liveme.js", encoding="utf-8") as f:
         liveme_js = f.read()
-    sign_data = execjs.compile(liveme_js).call("sign", room_id, f"{JS_SCRIPT_PATH}/crypto-js.min.js")
+    # execjs 会同步 fork Node 子进程阻塞事件循环，移入线程池执行（与 migu 路径一致）
+    _liveme_compiled = execjs.compile(liveme_js)
+    sign_data = await asyncio.to_thread(_liveme_compiled.call, "sign", room_id, f"{JS_SCRIPT_PATH}/crypto-js.min.js")
     lm_s_sign = sign_data.pop("lm_s_sign")
     tongdun_black_box = sign_data.pop("tongdun_black_box")
     platform = sign_data.pop("os")
@@ -3040,13 +3065,13 @@ async def get_huajiao_stream_url_app(
     json_str = _get_str_response(json_str)
     json_data = json.loads(json_str)
 
-    if json_data["errmsg"] or not json_data["data"].get("creatime"):
+    data = json_data.get("data") or {}
+    if json_data.get("errmsg") or not data.get("creatime"):
         print(
             "Failed to retrieve live room data, the Huajiao live room address is not fixed, please manually change "
             "the address for recording."
         )
         return None
-    data = json_data["data"]
     return {
         "anchor_name": data["author"]["nickname"],
         "title": data["feed"]["title"],
@@ -3427,7 +3452,12 @@ async def get_zhihu_stream_url(
         json_str = await async_req(api, proxy_addr=proxy_addr, headers=headers)
         json_str = _get_str_response(json_str)
         json_data = json.loads(json_str)
-        live_page_url = json_data["drama"]["living_theater"]["theater_url"]
+        drama = json_data.get("drama") or {}
+        theater = drama.get("living_theater") or {}
+        live_page_url = cast(str, theater.get("theater_url") or "")
+        if not live_page_url:
+            # 未开播/接口结构变化时 drama 不存在：原实现 KeyError 被吞成未直播，改为显式返回
+            return {"anchor_name": "", "is_live": False}
     else:
         live_page_url = url
 
@@ -3513,7 +3543,9 @@ async def get_haixiu_stream_url(
     params = {"accessToken": access_token, "tku": "3000006", "c": "10138100100000", "_st1": int(time.time() * 1000)}
     with open(f"{JS_SCRIPT_PATH}/haixiu.js", encoding="utf-8") as f:
         haixiu_js = f.read()
-    ajax_data = execjs.compile(haixiu_js).call("sign", params, f"{JS_SCRIPT_PATH}/crypto-js.min.js")
+    # execjs 会同步 fork Node 子进程阻塞事件循环，移入线程池执行（与 migu 路径一致）
+    _haixiu_compiled = execjs.compile(haixiu_js)
+    ajax_data = await asyncio.to_thread(_haixiu_compiled.call, "sign", params, f"{JS_SCRIPT_PATH}/crypto-js.min.js")
 
     params["accessToken"] = urllib.parse.unquote(urllib.parse.unquote(access_token))
     params["_ajaxData1"] = ajax_data
@@ -3579,13 +3611,14 @@ async def get_vvxqiu_stream_url(
         anchor_name = json_data["data"]["memberVO"]["memberName"]
 
     result: dict[str, object] = {"anchor_name": anchor_name, "is_live": False}
-    if room_id:
-        m3u8_url = f"https://liveplay-pro.wasaixiu.com/live/1400442770_{room_id}_{room_id[2:]}_single.m3u8"
-    else:
-        m3u8_url = ""
+    if not room_id:
+        logger.warning("vvxqiu 房间号缺失，无法构造直播流地址")
+        return result
+    m3u8_url = f"https://liveplay-pro.wasaixiu.com/live/1400442770_{room_id}_{room_id[2:]}_single.m3u8"
     resp = await async_req(m3u8_url, proxy_addr=proxy_addr, headers=headers)
     resp = _get_str_response(resp)
-    if "Not Found" not in resp:
+    # 空响应（网络失败/超时返回 ""）不得误判为直播中
+    if resp and "Not Found" not in resp:
         result |= {"is_live": True, "m3u8_url": m3u8_url, "record_url": m3u8_url}
     return result
 
@@ -3758,14 +3791,27 @@ async def get_shopee_stream_url(
 
     if "live.shopee" not in url and "uid" not in url:
         url_result = await async_req(url, proxy_addr=proxy_addr, headers=headers, redirect_url=True, abroad=True)
-        if isinstance(url_result, str):
+        if isinstance(url_result, str) and url_result:
             url = url_result
 
+    try:
+        url_host = url.split("/")[2]
+    except IndexError:
+        logger.warning(f"Shopee URL 格式异常（重定向可能失败）: {url!r}")
+        return result
+
     if "live.shopee" in url:
-        host_suffix = url.split("/")[2].rsplit(".", maxsplit=1)[1]
+        host_suffix = url_host.rsplit(".", maxsplit=1)[1]
         is_living = get_params(url, "uid") is None
     else:
-        host_suffix = url.split("/")[2].split(".", maxsplit=1)[0]
+        # 非 live.shopee 域名（重定向失败或主页链接）：取 shopee. 之后的完整后缀
+        # （如 shopee.co.id → co.id、shopee.vn → vn）。原实现取首段拼出
+        # live.shopee.shopee 这类错误 host。
+        host_suffix = url_host.split("shopee.", 1)[1] if "shopee." in url_host else ""
+
+    if not host_suffix:
+        logger.warning(f"Shopee URL 域名解析失败: {url!r}")
+        return result
 
     uid = get_params(url, "uid")
     api_host = f"https://live.shopee.{host_suffix}"
@@ -4056,7 +4102,9 @@ async def get_faceit_stream_data(
     anchor_id = platform_info.get("platformId")
     platform = platform_info.get("platform")
     if platform == "twitch":
-        result = await get_twitchtv_stream_data(f"https://www.twitch.tv/{anchor_id}")
+        # 透传 proxy_addr 与 cookies：Faceit 转 Twitch 的录制请求若丢失代理与登录态，
+        # 海外房间将无法录制（与此前修复的代理丢失问题同类）
+        result = await get_twitchtv_stream_data(f"https://www.twitch.tv/{anchor_id}", proxy_addr, cookies)
         result["anchor_name"] = anchor_name
     else:
         result = {"anchor_name": anchor_name, "is_live": False}
@@ -4087,8 +4135,8 @@ async def get_migu_stream_url(
     json_str = _get_str_response(json_str)
     json_data = json.loads(json_str)
 
-    anchor_name = json_data["body"]["title"]
-    live_title = json_data["body"].get("title") + "-" + json_data["body"].get("detailPageTitle", "")
+    anchor_name = json_data["body"].get("title") or ""
+    live_title = (json_data["body"].get("title") or "") + "-" + (json_data["body"].get("detailPageTitle") or "")
     room_id = json_data["body"].get("pId")
 
     result: dict[str, object] = {"anchor_name": anchor_name, "is_live": False}
@@ -4118,7 +4166,8 @@ async def get_migu_stream_url(
         source_url = json_data["body"]["urlInfo"]["url"]
 
         async def _get_dd_calcu(url: str) -> str:
-            # 来秀签名算法（内部方法）。subprocess 同步阻塞，交由线程池执行避免卡住事件循环。
+            # 来秀签名算法（内部方法）。subprocess 同步阻塞，交由线程池执行避免卡住事件循环；
+            # 加超时防止 node 挂起永久占用线程池线程。
             try:
                 result = await asyncio.to_thread(
                     subprocess.run,
@@ -4126,8 +4175,15 @@ async def get_migu_stream_url(
                     capture_output=True,
                     text=True,
                     check=True,
+                    timeout=30,
                 )
                 return result.stdout.strip()
+            except subprocess.CalledProcessError as e:
+                raise ProgramError(
+                    f"Failed to execute JS code (exit {e.returncode}). Please check the Node.js environment"
+                )
+            except subprocess.TimeoutExpired:
+                raise ProgramError("JS 签名执行超时。请检查 Node.js 环境")
             except ProgramError:
                 raise ProgramError("Failed to execute JS code. Please check if the Node.js environment")
 
@@ -4135,6 +4191,10 @@ async def get_migu_stream_url(
         real_source_url = f"{source_url}&ddCalcu={ddCalcu}&sv=10010"
         if ".m3u8" in real_source_url:
             m3u8_url = await async_req(real_source_url, proxy_addr=proxy_addr, headers=headers, redirect_url=True)
+            # 重定向失败时 async_req 返回空串，不得写入空 URL 误判直播
+            if not isinstance(m3u8_url, str) or not m3u8_url:
+                logger.warning("migu m3u8 重定向地址获取失败")
+                return result
             result["m3u8_url"] = m3u8_url
             result["record_url"] = m3u8_url
         else:
@@ -4172,6 +4232,9 @@ async def get_lianjie_stream_url(
     if live_status == 1:
         title = room_data["defaultRoomTitle"]
         webrtc_url = room_data["videoUrl"]
+        if not isinstance(webrtc_url, str) or "webrtc://" not in webrtc_url:
+            logger.warning(f"连接直播视频地址格式异常: {webrtc_url!r}")
+            return result
         https_url = "https://" + webrtc_url.split("webrtc://")[1]
         flv_url = https_url.replace("?", ".flv?")
         m3u8_url = https_url.replace("?", ".m3u8?")

@@ -175,5 +175,7 @@ class TestCredentialSharing:
         from src.ttwid import _cached_ttwid, _ttwid_lock
 
         # 验证模块级变量存在且类型正确
+        # 锁为 threading.RLock：跨线程去重的同时允许同线程重入，
+        # 避免锁跨越 await 时同事件循环并发协程自旋死锁
         assert isinstance(_cached_ttwid, str)
-        assert isinstance(_ttwid_lock, type(threading.Lock()))
+        assert isinstance(_ttwid_lock, type(threading.RLock()))

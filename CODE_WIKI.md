@@ -1215,11 +1215,12 @@ HLS URL validation failed, falling back to FLV    ← 原因完全不可见
 - 格式化: `black .`
 - 导入排序: `isort .`
 - 类型检查: `mypy src/`（已启用 `disallow_untyped_defs = true`，`--strict` 模式全通过）
+- 类型检查（增强，本地）: `basedpyright` 已在 `pyproject.toml` 配置 `[tool.basedpyright]`（standard 模式、排除 `typings/`/`node/`/`ffmpeg/` 等、`venvPath` 指向 workbuddy managed venv）；CI 仍以 `mypy src/` 为准（basedpyright 非 CI 检查项，换机需重新指定 venvPath）
 - 注释规范: 模块/函数说明统一使用 `#` 行注释，**不使用三引号 `"""` 文档字符串**；多行说明每行以 `#` 开头（功能性多行字符串字面量除外，如模板/SQL，应改用单引号 + 换行拼接而非 `"""`）
 
 ### 测试与覆盖率
 
-- 运行测试: `pytest`（`asyncio_mode = "auto"`，异步用例无需显式标记）；当前 417 passed，总覆盖率 50.34%
+- 运行测试: `pytest`（`asyncio_mode = "auto"`，异步用例无需显式标记）；当前 496 passed / 2 skipped，总覆盖率 50.34%
 - 覆盖率配置集中在 `pyproject.toml`：`source = ["src"]`，全局门禁 `fail_under = 50`
 - 高频变更核心模块设独立覆盖率门禁（记录于 `pyproject.toml` 注释，CI 中通过 `--cov-fail-under` 或脚本检查）：
 
@@ -1265,6 +1266,42 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 ---
 
 ## 更新日志
+
+### v4.0.8.1-dev (2026-08-15) — 修复 test_proxy.py 因 harness 环境变量膨胀导致的 flaky 失败
+
+**现象**：整套 `pytest` 偶尔 1 failed（`tests/test_proxy.py::TestProxyDetectorLinux::test_linux_get_proxy_info_with_auth`），单测通过、复跑多次又全绿——典型测试间状态污染的假象。
+
+**根因**：`unittest.mock.patch.dict` 对 `os.environ` 的操作**无论 `clear` 取 True/False** 都会整体快照并恢复整个环境（`_patch_dict` 内 `original = in_dict.copy()`；`_unpatch_dict` 内无条件 `_clear_dict()` 后 `update(original)` 整体写回）。环境里 WorkBuddy harness 注入的 `CODEBUDDY_MCP_CONFIG` 等变量会**动态膨胀**，一旦超过 Windows 环境变量 32767 字符上限，`update(original)` 写回即抛 `ValueError: the environment variable is longer than 32767 characters`。修复第一处后失败「转移」到下一个 `patch.dict` 用例（`test_linux_get_proxy_info_simple`），同样的报错——根因共通而非单点问题。
+
+**改动（tests/test_proxy.py）**：
+- `TestProxyDetectorLinux` 类全部 7 处 `patch.dict(os.environ, ...)` 统一替换为 pytest 的 `monkeypatch.setenv/delenv`（只操作单个 key，不整体快照/恢复环境）；新增 `_clear_proxy_env(monkeypatch)` 辅助函数统一清除代理相关变量
+- `test_linux_get_proxy_info_with_auth` 断言收紧为 `ip == "proxy.example.com"` 且 `port == "3128"`（去掉永假死分支 `"proxy.example.com:3128"`）
+- 删除不再使用的 `import os` 与 `from unittest.mock import patch`
+
+**约定沉淀**：Windows + harness 环境下，测试操作环境变量一律用 `monkeypatch`，避免 `patch.dict(os.environ)`——否则 harness 变量膨胀超 32767 上限会触发 `ValueError`。已记入项目长期记忆（MEMORY.md 已知坑）。
+
+**验证**：`tests/test_proxy.py` → 21 passed（连跑 5 次稳定）；全量 `pytest` **496 passed / 2 skipped / 0 failed**（连跑多次稳定）。
+
+---
+
+### v4.0.8.1-dev (2026-08-15) — basedpyright 配置落地 + 类型/依赖/测试收尾
+
+**背景**：全量跑 basedpyright 报 **189 errors / 3241 warnings**，初看吓人但绝大多数是噪音。定位后根因是**配置缺失 + 两处真实缺陷**，现已全部清零。
+
+**根因与改动**：
+
+- **`pyproject.toml` 新增 `[tool.basedpyright]` 配置段**：项目依赖其实装在 workbuddy managed venv（`envs/default`），但 basedpyright 未识别自身 venv、退用未装包的 system Python 3.13.12，导致全量 `reportMissingImports`（mypy 靠 `ignore_missing_imports` 蒙混过去才显绿）。配置 `venvPath`/`venv` 指向 `envs/default`、`typeCheckingMode=standard`、排除 `typings/`/`node/`/`ffmpeg/`/`downloads/` 等、`reportMissingModuleSource=none`。配置后业务代码从 189/3241 → **0 errors / 0 warnings / 0 notes**。
+  - **注意**：`venvPath` 写死本机 workbuddy managed venv 路径（机器相关），CI 仍以 `mypy src/` 为准（basedpyright 非 CI 检查项）；换机/CI 需另行覆盖或改为 `python.analysis` 自动探测。
+- **装 `exejs` 到 managed venv**：`pyproject.toml` 声明了 `exejs>=1.0.1`，但 venv 只装了 PyExecJS，导致 `room.py`/`spider.py`/`utils.py` 三处 `import exejs` 在基于 basedpyright 配置后报 `reportMissingImports`（运行时 `ImportError`）。装包后 3 error 消失。
+- **`src/sync_http.py` JsonType 死代码重构（配置后暴露的真问题）**：原 `try: from requests._types import JsonType except ImportError: from typing import Any as JsonType`。实测 `requests` 2.34.2 的 `requests._types` 模块存在但**无 `JsonType` 符号**，try 分支运行时恒失败、永远走 `Any as JsonType`；basedpyright 判 `Any as JsonType` 为变量（`reportInvalidTypeForm`）。改为显式类型别名 `JsonType: TypeAlias = dict[str, Any] | list[Any] | str | int | float | bool | None`（`sync_http.py` 顶部已 `from typing import TypeAlias`）。
+- **`main.py:3271`** 裸 `tuple` → `tuple[Any, ...]`（第 89 行 typing 导入补 `Any`）。
+- **`gui_legacy.py:425`** `__init__` 补 `self._status_anim_timer: str | None = None`（原仅在方法内赋值，未初始化）。旧版 GUI 入口，优先级低但已补严谨性。
+
+**测试收尾（环境相关）**：`tests/test_web_api.py` 的 `TestListFiles::test_broken_symlink_skipped` 与 `test_symlink_outside_skipped` 在 Windows sandbox 下 `os.symlink` **不抛异常**却生成普通文件（`islink()=False`），原 `except OSError: pytest.skip()` 守卫失效导致 2 个 FAILED。在两个测试 `os.symlink` 后补 `else` 分支校验 `os.path.islink()` 真实性，不能创建真符号链接则 `pytest.skip`；正常环境 `islink=True` 继续测试。
+
+**验证**（managed Python 3.13 venv）：`black --check .` 66 文件 unchanged；`isort --check-only .` 通过；`mypy src/` 16 文件 0 问题；`basedpyright`（业务代码）0/0/0；`pytest` **496 passed / 2 skipped / 0 failed**（原 2 failed → 2 skipped）。结论：代码本身无真实类型/逻辑 bug，basedpyright 海量报错系配置缺失 + 一处死代码 + exejs 未装共同导致，现已全部修复，四项检查工具与测试套件全绿。
+
+---
 
 ### v4.0.8.1-dev (2026-08-13) — 修复 `get_startup_info()` 跨平台 mypy 回归
 
@@ -1571,6 +1608,34 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 
 ---
 
+### v4.0.8.1-dev (2026-08-15) — 代码审查跟进修复（锁防死锁 / error_count 语义 / 格式化排除）
+
+**凭据去重锁防死锁加固（`src/spider.py` / `src/ttwid.py`）：**
+
+- `_kuaishou_did_lock` / `_twitch_client_id_lock` / `_ttwid_lock` 由 `threading.Lock` 改为 `threading.RLock`：
+  锁跨越 `await` 持有时，若同一事件循环内出现第二个并发协程，普通 Lock 会同线程自旋死锁；
+  RLock 允许同线程重入（最坏退化为一次幂等重复拉取），跨线程去重语义不变
+- `tests/test_concurrency.py::test_ttwid_module_pattern` 同步更新断言为 RLock
+
+**error_count 语义明确化（`main.py`）：**
+
+- `error_count` 不再被 `adjust_max_request` 周期清零，语义固定为「进程启动起累计错误数」；
+  CLI 状态行文案由「目前瞬时错误数」更正为「累计错误数」
+- `get_status()` 新增 `recent_errors` 字段（`max_request_lock` 持锁采样 `sum(error_window)`），
+  为 Web 面板提供窗口口径的瞬时错误数，与累计 `error_count` 并存
+- Web 面板（`web/index.html` / `web/app.js`）：错误数卡片标签改为「错误数(累计/近期)」，
+  数值展示为 `累计 / 近期` 双口径（任一字段缺失时回退 `-`）
+
+**pyproject.toml 格式化排除补全：**
+
+- black `exclude` / isort `extend_skip` 新增 `.agents` / `.qoder` / `.workbuddy` / `.plugin-src` /
+  `.dsh-validation` / `.ego-browser-test` / `.npm-cache` / `.pnpm-store`，
+  消除第三方目录造成的 89 个文件的格式化噪音；全量 `black --check` / `isort --check-only` 现已零告警
+
+验证：mypy 0 问题，pytest 496 passed / 2 skipped。
+
+---
+
 ### v4.0.8.1-dev (2026-07-27) — ttwid 共享模块抽取与冒烟测试进程树清理
 
 **ttwid 共享模块（`src/ttwid.py`）：**
@@ -1823,4 +1888,4 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 
 ---
 
-*本文档最后更新: 2026-08-13（新增：① `get_startup_info()` 跨平台 mypy 回归修复 — 弃 `TYPE_CHECKING` 别名方案、返回类型退化为 `object | None`；② 基于参考信息的类型/逻辑修复批次 — web_api.py deque 类型收紧、build_exe.py Linux ffmpeg 拷贝报告、msg_push.py tg_bot NameError/业务失败校验、main.py PATH 快照与 STARTUPINFO 类型别名、gui.py PystrayIcon TypeAlias 与 mypy 清零；③ CI `black --check` 失败修复（smoke_test.py 超长行换行、gui.py 补空行）+ lint job 运行 Python 由 3.12 升 3.13）*
+*本文档最后更新: 2026-08-15（新增：代码审查跟进批次 — ① spider.py/ttwid.py 凭据去重锁 Lock→RLock 防同循环死锁；② main.py error_count 固定为累计语义、get_status 新增 recent_errors 窗口口径字段；③ pyproject.toml black/isort 排除 .agents 等第三方目录，格式化检查零告警）*

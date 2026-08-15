@@ -115,6 +115,11 @@ def _enter_background_mode(logs_dir: str, host: str, port: int) -> None:
             pass
 
 
+def _is_loopback_host(host: str) -> bool:
+    # 判断 host 是否为回环地址（仅本机可访问）。
+    return host.strip() in ("127.0.0.1", "localhost", "::1", "[::1]")
+
+
 def main() -> None:
     # 启动 Web 管理面板：录制引擎（守护线程）+ uvicorn HTTP 服务。
     # 导入 main 模块：触发模块级初始化（FFmpeg 检查、配置读取、备份线程等），
@@ -173,33 +178,41 @@ def main() -> None:
 
     print(f"[web] Web 管理面板启动中: http://{host}:{port}")
     print(f"[web] 认证: {'开启' if web_cfg['web_auth_enable'] else '关闭'}")
-    # 不安全默认值告警（C1）：监听 0.0.0.0 且未启用认证时，局域网内任何人均可访问。
-    if not web_cfg["web_auth_enable"] and host == "0.0.0.0":
-        print("[web] ⚠️ 警告: Web 面板监听 0.0.0.0 且未启用认证，局域网内任何人均可访问。")
-        print("      建议在 config.ini [Web] 节设置 web_auth_enable = true 并配置 web_password，")
-        print("      或将 web_host 改为 127.0.0.1 仅限本机访问。")
+    # 不安全绑定防护（C1）：未启用认证时拒绝监听非回环地址，防止局域网内未授权访问
+    # （文件下载/配置读写）。需显式设置环境变量 DOUYIN_WEB_ALLOW_INSECURE=1 才放行。
+    if not web_cfg["web_auth_enable"] and not _is_loopback_host(host):
+        allow_insecure = os.environ.get("DOUYIN_WEB_ALLOW_INSECURE", "").strip().lower() in ("1", "true", "yes")
+        if not allow_insecure:
+            print(f"[web] ❌ 拒绝启动: 未启用 Web 认证时不允许监听非回环地址 ({host})。请二选一:")
+            print("      1. config.ini [Web] 节设置 web_auth_enable = true 并配置 web_password；")
+            print("      2. 或设置 web_host = 127.0.0.1 仅限本机访问。")
+            print("      如确需在无认证状态暴露到局域网，请设置环境变量 DOUYIN_WEB_ALLOW_INSECURE=1 后重启（不推荐）。")
+            sys.exit(1)
+        print("[web] ⚠️ 警告: Web 面板监听非回环地址且未启用认证，局域网内任何人均可访问。")
+        print("      建议在 config.ini [Web] 节设置 web_auth_enable = true 并配置 web_password。")
 
     # 阻塞运行；托盘「退出程序」或 Ctrl+C 会将 should_exit 置真，serve() 优雅返回。
     # server.serve() 为 async 协程，必须用 asyncio.run 驱动事件循环真正运行，
     # 否则仅生成一个被丢弃的协程对象，Web 服务不会启动。
-    asyncio.run(server.serve())
-
-    # 优雅关闭：serve() 返回后趁解释器尚存活主动清理，避免依赖 atexit 在模块部分卸载后才清理。
-    # 主动终止 ffmpeg 子进程，杜绝退出后残留孤儿进程。
     try:
-        main.cleanup_all_ffmpeg_processes()
-    except Exception as e:
-        print(f"[web] 清理 ffmpeg 进程失败: {e}")
-    try:
-        from src.async_http import close_all_clients_sync
+        asyncio.run(server.serve())
+    finally:
+        # 优雅关闭：serve() 正常返回或抛异常（如端口被占用）都执行清理，
+        # 主动终止 ffmpeg 子进程并释放 HTTP 连接池，杜绝退出后残留孤儿进程。
+        try:
+            main.cleanup_all_ffmpeg_processes()
+        except Exception as e:
+            print(f"[web] 清理 ffmpeg 进程失败: {e}")
+        try:
+            from src.async_http import close_all_clients_sync
 
-        close_all_clients_sync()
-    except Exception as e:
-        print(f"[web] 清理 HTTP 连接池失败: {e}")
+            close_all_clients_sync()
+        except Exception as e:
+            print(f"[web] 清理 HTTP 连接池失败: {e}")
 
-    # serve() 已返回（优雅关闭），收起托盘图标，进程随后正常退出。
-    if tray is not None:
-        tray.stop()
+        # serve() 已返回（优雅关闭），收起托盘图标，进程随后正常退出。
+        if tray is not None:
+            tray.stop()
 
 
 if __name__ == "__main__":

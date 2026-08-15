@@ -69,3 +69,19 @@ class TestRefreshWeverseToken:
         assert "accountapi.weverse.io" in call_args.args[0]
         assert call_args.kwargs["json"] == {"refreshToken": "token"}
         assert call_args.kwargs["timeout"] == 10
+
+
+class TestAppSecret:
+    # 客户端密钥支持环境变量覆盖（批次5修复：硬编码密钥改为可覆盖）.
+
+    def test_default_secret(self, monkeypatch):
+        from src.weverse_auth import _app_secret
+
+        monkeypatch.delenv("DOUYIN_WEVERSE_APP_SECRET", raising=False)
+        assert len(_app_secret()) >= 20
+
+    def test_env_override(self, monkeypatch):
+        from src.weverse_auth import _app_secret
+
+        monkeypatch.setenv("DOUYIN_WEVERSE_APP_SECRET", "custom-secret")
+        assert _app_secret() == "custom-secret"

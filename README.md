@@ -545,14 +545,21 @@ black .
 # 排序导入
 isort .
 
-# 类型检查
+# 类型检查（CI 以 mypy 为准）
 mypy .
+
+# 类型检查（本地增强，可选）：basedpyright
+# 已在 pyproject.toml 配置 [tool.basedpyright]，venvPath 指向工作区 .venv（相对路径，可移植）
+# 首次需创建并安装依赖：python -m venv .venv && .venv/Scripts/pip install -r requirements.txt
+basedpyright .
 
 # 运行测试
 pytest
 ```
 
 > **注释规范**：模块/函数说明统一使用 `#` 行注释，不使用三引号 `"""` 文档字符串；功能性多行字符串字面量（模板/SQL）改用单引号 + 换行拼接而非 `"""`。
+
+> **测试说明**：`tests/test_web_api.py` 的符号链接相关用例（`TestListFiles::test_broken_symlink_skipped` / `test_symlink_outside_skipped`）在无法创建真实符号链接的环境（未开启开发者模式的 Windows、部分沙箱）会自动 `pytest.skip`，属正常现象，不代表代码缺陷。当前结果：496 passed / 2 skipped。
 
 ### 项目文档
 

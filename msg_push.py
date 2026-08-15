@@ -25,7 +25,8 @@ def _mask_secret(secret: str) -> str:
     # 脱敏：仅保留前后各 2 位用于排查，其余以 * 遮挡，避免凭证泄露到日志。
     if not secret:
         return ""
-    if len(secret) <= 4:
+    if len(secret) <= 6:
+        # 短密钥（如测试 token）遮蔽 1-2 位形同虚设，整体遮蔽
         return "****"
     return f"{secret[:2]}{'*' * (len(secret) - 4)}{secret[-2:]}"
 
@@ -46,6 +47,8 @@ def _mask_url(url: str) -> str:
                 masked_segs.append("****")
             elif len(seg) > 12 and "sendmessage" not in seg.lower():
                 masked_segs.append("****")  # 疑似长密钥（Server酱/Bark 末段）
+            elif parts.hostname and parts.hostname.endswith("day.app"):
+                masked_segs.append("****")  # Bark key（8 位短密钥，原规则漏遮蔽）
             else:
                 masked_segs.append(seg)
         masked_path = "/" + "/".join(masked_segs) if masked_segs else ""
@@ -61,10 +64,14 @@ def dingtalk(url: str, content: str, number: str | None = None, is_atall: bool =
     error: list[str | int] = []
     api_list = url.replace("，", ",").split(",") if url.strip() else []
     for api in api_list:
+        at_payload: dict[str, object] = {"isAtAll": is_atall}
+        if number:
+            # 未填手机号时不传 atMobiles，避免序列化为 [null] 被钉钉判非法
+            at_payload["atMobiles"] = [number]
         json_data = {
             "msgtype": "text",
             "text": {"content": content},
-            "at": {"atMobiles": [number], "isAtAll": is_atall},
+            "at": at_payload,
         }
         try:
             data = json.dumps(json_data).encode("utf-8")

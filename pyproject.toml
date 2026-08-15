@@ -121,6 +121,15 @@ exclude = '''
     | ffmpeg
     | downloads
     | logs
+    # 第三方/工具生成目录（非项目代码，不纳入格式化）
+    | \.agents
+    | \.qoder
+    | \.workbuddy
+    | \.plugin-src
+    | \.dsh-validation
+    | \.ego-browser-test
+    | \.npm-cache
+    | \.pnpm-store
 )/
 '''
 
@@ -128,7 +137,20 @@ exclude = '''
 profile = "black"
 line_length = 120
 known_first_party = ["src", "i18n"]
-extend_skip = ["node", "ffmpeg", "downloads"]
+# 第三方/工具生成目录（非项目代码，不纳入导入排序）
+extend_skip = [
+    "node",
+    "ffmpeg",
+    "downloads",
+    ".agents",
+    ".qoder",
+    ".workbuddy",
+    ".plugin-src",
+    ".dsh-validation",
+    ".ego-browser-test",
+    ".npm-cache",
+    ".pnpm-store",
+]
 extend_skip_glob = ["*.pyc"]
 
 [tool.mypy]
@@ -178,3 +200,30 @@ exclude_lines = [
 # ttwid.py   >= 85%  (认证模块)
 # ab_sign.py >= 95%  (签名模块)
 # proxy.py   >= 50%  (代理管理)
+
+[tool.basedpyright]
+# basedpyright 类型检查配置（本地增强，CI 仍以 mypy 为准）。
+# venvPath 使用工作区相对路径指向 .venv。注意：basedpyright 的 venvPath 不支持
+# ${env:...} / ~ 展开，且本项目依赖装在 workbuddy managed venv（位于工作区之外），
+# 故采用「工作区 .venv」约定（标准且可移植），不在配置里写死机器专属绝对路径。
+# 首次使用需创建并安装依赖：python -m venv .venv && .venv/Scripts/pip install -r requirements.txt
+# .venv 已被 .gitignore 忽略，不会误提交；其他开发者各自创建即可。
+pythonVersion = "3.10"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+exclude = [
+    "**/typings",
+    "**/node",
+    "**/ffmpeg",
+    "**/downloads",
+    "**/build",
+    "**/dist",
+    "**/__pycache__",
+    ".qoder",
+    ".workbuddy",
+    "pytest-cache-files-g1bpkgza",
+    "pytest-cache-files-wt8ppn27",
+]
+# 第三方库无源码属正常，不报；类型存根质量非本项目职责
+reportMissingModuleSource = "none"
