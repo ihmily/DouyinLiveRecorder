@@ -9,9 +9,9 @@ import pytest
 
 from src.async_http import (
     _client_cache,
+    _client_cache_lock,
     _close_all_clients,
     _get_client,
-    _get_client_lock,
     async_req,
     close_all_clients_sync,
     get_response_status,
@@ -76,63 +76,33 @@ class TestGetClient:
             await _close_all_clients()
 
 
-class TestGetClientLock:
-    # _get_client_lock: 锁随当前事件循环创建/重建，避免「每 room 独立 asyncio.run 循环」模型下
-    # 跨循环 await 模块级 asyncio.Lock 触发 'bound to a different event loop' 错误（被 async_req 吞掉会误判空响应为风控）。
+class TestClientCacheLock:
+    # 批次5重构：_client_cache 由普通 threading.Lock 保护（临界区无 await），
+    # 避免原「模块级单槽 asyncio.Lock 随循环重建」的跨线程竞态——
+    # 线程 A 可能拿到线程 B 循环绑定的锁并 await，触发 'bound to a different event loop'。
 
-    @staticmethod
-    def _reset() -> None:
-        # 清空模块级锁，模拟进程冷启动。
-        import src.async_http as mod
+    def test_cache_lock_is_threading_lock(self):
+        assert isinstance(_client_cache_lock, type(threading.Lock()))
 
-        mod._client_lock = None
+    def test_concurrent_get_client_across_loops_no_error(self):
+        # 多线程各用独立事件循环并发获取客户端：不应抛跨循环/跨线程异常
+        errors: list[Exception] = []
 
-    @staticmethod
-    def _lock_in_new_loop() -> tuple[object, object]:
-        # 在独立线程里用全新事件循环取锁并 await 一次，模拟另一条 room 线程的 asyncio.run 循环。
-        # 返回 (lock, error_type_or_None)；若返回非 None 错误类型说明出现了跨循环断言。
-        import src.async_http as mod
+        def run() -> None:
+            try:
+                client = asyncio.run(_get_client(None, 10, True, False))
+                assert client is not None
+            except Exception as e:  # pragma: no cover - 仅收集异常
+                errors.append(e)
 
-        box: dict[str, object] = {}
-
-        def target() -> None:
-            async def _inner() -> None:
-                lock = mod._get_client_lock()
-                box["lock"] = lock
-                try:
-                    async with lock:
-                        pass
-                except RuntimeError as e:
-                    box["err"] = type(e).__name__
-
-            asyncio.run(_inner())
-
-        t = threading.Thread(target=target)
-        t.start()
-        t.join()
-        return box.get("lock"), box.get("err")
-
-    @pytest.mark.asyncio
-    async def test_same_loop_returns_same_lock(self):
-        # 同一循环内多次调用返回同一把锁。
-        self._reset()
-        try:
-            assert _get_client_lock() is _get_client_lock()
-        finally:
-            self._reset()
-
-    @pytest.mark.asyncio
-    async def test_per_loop_lock_no_cross_loop_error(self):
-        # 两个独立循环拿到不同锁，且各自循环内 await 不触发 'bound to a different event loop'。
-        self._reset()
-        try:
-            loop1_lock = _get_client_lock()  # 测试所在循环
-            loop2_lock, err2 = self._lock_in_new_loop()
-            assert loop2_lock is not None
-            assert loop2_lock is not loop1_lock
-            assert err2 is None
-        finally:
-            self._reset()
+        threads = [threading.Thread(target=run) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=15)
+        assert errors == []
+        with _client_cache_lock:
+            _client_cache.clear()
 
 
 # ────────────────────────────────────────────────────────────

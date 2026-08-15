@@ -116,7 +116,8 @@ def dict_to_cookie_str(cookies_dict: Mapping[str, object]) -> str:
 
 def read_config_value(file_path: str | Path, section: str, key: str) -> str | None:
     # 从配置文件读取指定配置项的值
-    config = configparser.ConfigParser()
+    # 关闭插值：cookie 等含 % 的值在 BasicInterpolation 下取值会抛异常（与 update_config 一致）
+    config = configparser.ConfigParser(interpolation=None)
 
     try:
         _ = config.read(file_path, encoding="utf-8-sig")

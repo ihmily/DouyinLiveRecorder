@@ -2,6 +2,7 @@
 # 异步 HTTP 客户端模块 - 提供高效的异步 HTTP 请求功能
 
 import asyncio
+import threading
 from collections.abc import Mapping, Sequence
 from typing import cast
 
@@ -21,21 +22,12 @@ _httpx_limits = httpx.Limits(max_connections=100, max_keepalive_connections=20)
 # AsyncClient 必须在事件循环内创建并使用，进程退出时需 aclose() 释放连接池
 # 值为 (client, 创建时的事件循环)，用于检测 asyncio.run() 导致的循环变更
 _client_cache: dict[tuple[str, bool, bool], tuple[httpx.AsyncClient, asyncio.AbstractEventLoop]] = {}
-# 保护 _client_cache 的并发读写：替换失效 client 中存在 await 点，需加锁避免重复创建导致连接池泄漏。
-# 注意：本项目为「每 room 独立线程 + 独立 asyncio.run 循环」模型，模块级 asyncio.Lock 会在首个循环惰性绑定，
-# 被后续循环的协程 await 时触发 'bound to a different event loop' 错误（被 async_req 吞掉会误判空响应为风控）。
-# 因此锁随当前事件循环一起缓存/重建，与 _client_cache 的 (client, loop) 机制保持一致。
-_client_lock: tuple[asyncio.Lock, asyncio.AbstractEventLoop] | None = None
-
-
-def _get_client_lock() -> asyncio.Lock:
-    # 延迟创建锁，并随事件循环变更重建，避免跨循环 await 模块级 asyncio.Lock 触发
-    # 'bound to a different event loop' 错误（该错误被 async_req 整段吞掉会误判成风控空响应）。
-    global _client_lock
-    current_loop = asyncio.get_running_loop()
-    if _client_lock is None or _client_lock[1] is not current_loop:
-        _client_lock = (asyncio.Lock(), current_loop)
-    return _client_lock[0]
+# 保护 _client_cache 的普通线程锁（threading.Lock）：临界区内不含任何 await 点，
+# 因此不会绑定事件循环，也就不会出现跨循环 await 的问题。
+# 原实现为「模块级单槽 asyncio.Lock 随循环缓存/重建」，在多房间各自独立线程+独立循环的
+# 并发模型下存在跨线程竞态：线程 A 可能读到线程 B 循环绑定的锁并 await，触发
+# 'bound to a different event loop' 错误（被 async_req 吞掉导致请求静默失败）。
+_client_cache_lock = threading.Lock()
 
 
 async def _get_client(
@@ -54,25 +46,15 @@ async def _get_client(
         # client 未关闭且事件循环未变更时直接复用
         if not client.is_closed and client_loop is current_loop:
             return client
-    async with _get_client_lock():
-        # 持锁后重新检查：等待期间可能已有其他协程创建/复用
+    # 需要替换缓存条目：临界区内只做检查与创建（无 await 点，线程锁安全），
+    # 旧客户端的关闭移到锁外执行，避免持锁跨越 await。
+    old_entry: tuple[httpx.AsyncClient, asyncio.AbstractEventLoop] | None = None
+    with _client_cache_lock:
         cached = _client_cache.get(key)
         if cached is not None and not cached[0].is_closed and cached[1] is current_loop:
             return cached[0]
-        # 缓存的 client 已失效（已关闭或事件循环变更）：先释放旧连接池，避免泄漏
         if cached is not None and not cached[0].is_closed:
-            old_client, old_loop = cached
-            if old_loop is current_loop:
-                try:
-                    await old_client.aclose()
-                except Exception as e:
-                    logger.debug(f"关闭失效 AsyncClient 失败: {type(e).__name__}: {e}")
-            elif not old_loop.is_closed():
-                # 跨事件循环：在其创建循环上安排 aclose，避免在其创建循环外操作 transport
-                try:
-                    _ = asyncio.run_coroutine_threadsafe(old_client.aclose(), old_loop)
-                except Exception as e:
-                    logger.debug(f"跨循环关闭 AsyncClient 失败: {e}")
+            old_entry = cached
         client = httpx.AsyncClient(
             proxy=proxy_addr,
             timeout=timeout,
@@ -81,18 +63,34 @@ async def _get_client(
             limits=_httpx_limits,
         )
         _client_cache[key] = (client, current_loop)
-        return client
+
+    # 锁外释放旧连接池，避免泄漏；跨事件循环时在其创建循环上安排 aclose
+    if old_entry is not None:
+        old_client, old_loop = old_entry
+        if old_loop is current_loop:
+            try:
+                await old_client.aclose()
+            except Exception as e:
+                logger.debug(f"关闭失效 AsyncClient 失败: {type(e).__name__}: {e}")
+        elif not old_loop.is_closed():
+            try:
+                _ = asyncio.run_coroutine_threadsafe(old_client.aclose(), old_loop)
+            except Exception as e:
+                logger.debug(f"跨循环关闭 AsyncClient 失败: {e}")
+    return client
 
 
 async def _close_all_clients() -> None:
     # 进程退出时释放所有复用的 AsyncClient，避免连接池泄漏
-    for client, _ in list(_client_cache.values()):
+    with _client_cache_lock:
+        clients = list(_client_cache.values())
+        _client_cache.clear()
+    for client, _ in clients:
         try:
             if not client.is_closed:
                 await client.aclose()
         except Exception as e:
             logger.debug(f"关闭 AsyncClient 失败: {type(e).__name__}: {e}")
-    _client_cache.clear()
 
 
 def close_all_clients_sync() -> None:
@@ -108,12 +106,14 @@ def close_all_clients_sync() -> None:
         if loop.is_running():
             # 信号/atexit 钩子在事件循环线程中触发时无法再 run_until_complete，
             # 仅清理缓存引用，让循环关闭时由 AsyncClient.__del__ 兜底关闭
-            _client_cache.clear()
+            with _client_cache_lock:
+                _client_cache.clear()
             return
         loop.run_until_complete(_close_all_clients())
     except Exception as e:
         logger.debug(f"close_all_clients_sync 回退到引用清理: {e}")
-        _client_cache.clear()
+        with _client_cache_lock:
+            _client_cache.clear()
 
 
 async def async_req(

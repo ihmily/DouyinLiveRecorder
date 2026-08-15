@@ -41,12 +41,14 @@ FROM python:3.13-slim-bookworm
 
 # 标签
 LABEL maintainer="Hmily <ihmily@github>" \
-      version="4.0.8.2" \
+      version="${APP_VERSION}" \
       description="支持抖音、TikTok、YouTube等60+平台直播录制工具" \
       url="https://github.com/ihmily/DouyinLiveRecorder"
 
 # 构建参数
 ARG TZ=Asia/Shanghai
+# 版本号从 pyproject.toml 动态注入：构建时通过 --build-arg APP_VERSION=<版本> 传入
+ARG APP_VERSION
 
 # 环境变量
 ENV PYTHONUNBUFFERED=1 \

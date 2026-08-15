@@ -22,6 +22,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # 版本号从 pyproject.toml 动态注入；可在 .env 中设置 APP_VERSION，
+      # 不设置则镜像 LABEL 的 version 为空（镜像内版本仍由 pyproject.toml / main.py 在运行时读取）
+      args:
+        APP_VERSION: "${APP_VERSION}"
 
     # 环境变量
     environment:

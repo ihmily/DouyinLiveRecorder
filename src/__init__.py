@@ -30,5 +30,9 @@ node_dir_str = str(node_execute_dir)
 if node_execute_dir.is_dir() and node_dir_str not in current_env_path.split(os.pathsep):
     os.environ["PATH"] = node_dir_str + os.pathsep + current_env_path
 
-# 初始化检查 Node.js 环境（仅为副作用：缺失则自动安装，返回值此处无需处理）
-_ = check_node()
+# 导入期运行时检查开关：测试/CI/静态工具导入 src 包时不应触发 node 子进程检查
+# 或自动安装副作用（受限环境下子进程管道偶发失败还会导致导入崩溃）。
+# 生产运行不设置该变量，行为不变。
+if os.environ.get("DOUYIN_SKIP_RUNTIME_CHECK", "").strip().lower() not in ("1", "true", "yes"):
+    # 初始化检查 Node.js 环境（仅为副作用：缺失则自动安装，返回值此处无需处理）
+    _ = check_node()

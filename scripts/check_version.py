@@ -1,7 +1,12 @@
 # 版本一致性检查脚本。
 #
-# 以 pyproject.toml 中的 version 字段作为单一事实源（Single Source of Truth），
-# 与 main.py、Dockerfile、README.md、CODE_WIKI.md、i18n/zh_CN.po 中的版本号比对。
+# 以 pyproject.toml 中的 version 字段作为单一事实源（Single Source of Truth）。
+# 各消费方均已改为从 pyproject.toml 动态读取，本脚本仅校验其“已动态化、未写死”状态：
+#   - main.py         运行时从 pyproject.toml 读取（无硬编码版本）
+#   - src/web_api.py  FastAPI(version=) 从 pyproject.toml 动态读取（无硬编码版本）
+#   - Dockerfile      经 APP_VERSION 构建参数从 pyproject.toml 注入
+#   - i18n/zh_CN.po   不再携带版本号
+# README.md / CODE_WIKI.md 为文档，版本由人工维护，不在校验范围。
 # 任何不一致将以非零退出码报告，适用于 CI 流水线。
 #
 
@@ -46,28 +51,45 @@ def extract_main_version() -> str | None:
 
 
 def extract_dockerfile_version() -> str | None:
-    # 从 Dockerfile LABEL 中提取 version。
+    # Dockerfile 通过构建参数 APP_VERSION 从 pyproject.toml 动态注入版本号，
+    # LABEL version="${APP_VERSION}"，文件内不再写死版本。
+    # 返回:
+    #   "DYNAMIC"  -> 已是动态注入（正确）
+    #   字面版本号  -> 仍写死版本（应改为动态）
+    #   None       -> 未找到 version 标签（视为动态/跳过）
     text = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    if re.search(r'version="\$\{APP_VERSION\}"', text):
+        return "DYNAMIC"
     m = re.search(r'version="(.+?)"', text)
     return strip_v(m.group(1)) if m else None
 
 
-def extract_readme_version() -> str | None:
-    # 从 README.md 变更日志标题提取最新版本号。
-    text = (ROOT / "README.md").read_text(encoding="utf-8")
-    m = re.search(r"^###\s+v?(\d+\.\d+\.\d+(?:\.\d+)?)", text, re.MULTILINE)
-    return strip_v(m.group(1)) if m else None
-
-
-def extract_codewiki_version() -> str | None:
-    # 从 CODE_WIKI.md 项目概览中提取版本号。
-    text = (ROOT / "CODE_WIKI.md").read_text(encoding="utf-8")
-    m = re.search(r"\*\*版本\*\*:\s*(\d+\.\d+\.\d+(?:\.\d+)?)", text)
-    return strip_v(m.group(1)) if m else None
+def extract_webapi_version() -> str | None:
+    # src/web_api.py 的 FastAPI(version=...) 应从 pyproject.toml 动态读取，
+    # 不应写死字面版本号。
+    # 返回:
+    #   "DYNAMIC"  -> version 由函数/变量动态提供（正确）
+    #   字面版本号  -> 仍写死版本（应改为动态）
+    #   None       -> 未找到 FastAPI(version=...)（跳过）
+    text = (ROOT / "src" / "web_api.py").read_text(encoding="utf-8")
+    m = re.search(
+        r"FastAPI\(.*?version\s*=\s*(\"([^\"]+)\"|([A-Za-z_][\w.()]*))",
+        text,
+        re.DOTALL,
+    )
+    if not m:
+        return None
+    if m.group(2) is not None:
+        return m.group(2)  # 写死字面量
+    return "DYNAMIC"  # 由变量/函数动态提供
 
 
 def extract_po_version() -> str | None:
-    # 从 i18n/zh_CN.po 注释或 Project-Id-Version 中提取版本号。
+    # i18n/zh_CN.po 不再携带版本号（Project-Id-Version 不含版本、
+    # 删除 # 版本: 注释），版本以 pyproject.toml 为唯一事实源。
+    # 返回:
+    #   字面版本号  -> 仍写死版本（应移除）
+    #   None       -> 已动态化（正确，跳过）
     po_path = ROOT / "i18n" / "zh_CN" / "LC_MESSAGES" / "zh_CN.po"
     if not po_path.exists():
         return None
@@ -82,21 +104,23 @@ def main() -> int:
     base_version = extract_pyproject_version()
     print(f"基准版本 (pyproject.toml): {base_version}")
 
-    checks: list[tuple[str, str | None]] = [
-        ("Dockerfile", extract_dockerfile_version()),
-        ("README.md", extract_readme_version()),
-        ("CODE_WIKI.md", extract_codewiki_version()),
-        ("i18n/zh_CN.po", extract_po_version()),
-    ]
-
     errors: list[str] = []
-    for name, ver in checks:
-        if ver is None:
-            errors.append(f"  [WARN] {name}: 未能提取版本号")
-        elif ver != base_version:
-            errors.append(f"  [FAIL] {name}: {ver} != {base_version}")
-        else:
-            print(f"  [OK]   {name}: {ver}")
+
+    # Dockerfile：应改用 APP_VERSION 构建参数从 pyproject.toml 动态注入
+    docker_status = extract_dockerfile_version()
+    if docker_status == "DYNAMIC":
+        print("  [OK]   Dockerfile: 版本号经 APP_VERSION 构建参数从 pyproject.toml 动态注入")
+    elif docker_status is None:
+        print("  [OK]   Dockerfile: 未写死版本号（动态注入）")
+    else:
+        errors.append(f"  [FAIL] Dockerfile: 仍写死版本号 {docker_status}（应改用 APP_VERSION 构建参数）")
+
+    # i18n/zh_CN.po：不应携带版本号（pyproject.toml 为唯一事实源）
+    po_status = extract_po_version()
+    if po_status is None:
+        print("  [OK]   i18n/zh_CN.po: 未携带版本号（动态，pyproject.toml 为事实源）")
+    else:
+        errors.append(f"  [FAIL] i18n/zh_CN.po: 仍写死版本号 {po_status}（应移除）")
 
     # 检查 main.py 是否已移除硬编码版本号
     main_status = extract_main_version()
@@ -104,6 +128,15 @@ def main() -> int:
         errors.append("  [FAIL] main.py: 仍存在硬编码版本号，应改为从 pyproject.toml 动态读取")
     else:
         print("  [OK]   main.py: 已从 pyproject.toml 动态读取版本号")
+
+    # 检查 src/web_api.py 的 FastAPI(version=) 是否已动态化
+    web_status = extract_webapi_version()
+    if web_status == "DYNAMIC":
+        print("  [OK]   src/web_api.py: FastAPI 版本号从 pyproject.toml 动态读取")
+    elif web_status is None:
+        print("  [OK]   src/web_api.py: 未找到 FastAPI(version=)（跳过）")
+    else:
+        errors.append(f"  [FAIL] src/web_api.py: 仍写死版本号 {web_status}（应从 pyproject.toml 动态读取）")
 
     if errors:
         print("\n版本不一致:", file=sys.stderr)

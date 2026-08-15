@@ -10,8 +10,10 @@
 #   - warmup_ttwid() : 程序启动期同步预热，提前把缓存填好，后续调用直接命中。
 #
 # 跨线程/跨循环去重：每个 room 各自 asyncio.run() 独立循环并发执行，
-# per-loop 的 asyncio.Lock 无法跨循环协调，故用 threading.Lock。
-# 安全性：单个 asyncio.run 循环内仅一个 get_ttwid 协程，持有 threading.Lock 跨越 await 不会死锁。
+# per-loop 的 asyncio.Lock 无法跨循环协调，故用 threading.RLock。
+# 用 RLock 而非 Lock：锁跨越 await 持有，若同一循环内出现第二个并发协程，
+# 普通 Lock 会同线程自旋死锁；RLock 允许同线程重入（最坏退化为一次重复拉取，幂等无害），
+# 跨线程去重语义不变。
 # pyright: reportUnreachable=none, reportImplicitStringConcatenation=none, reportUnusedCallResult=none
 import asyncio
 import configparser
@@ -36,8 +38,8 @@ def _app_root() -> str:
 
 # 进程级唯一缓存
 _cached_ttwid: str = ""
-# 跨线程去重锁
-_ttwid_lock = threading.Lock()
+# 跨线程去重锁（RLock 原因见文件头注释）
+_ttwid_lock = threading.RLock()
 
 # 配置文件中的 ttwid 键名（位于 [Cookie] 段），用户手动填写时优先于自动获取
 _CONFIG_TTWID_KEY = "ttwid"

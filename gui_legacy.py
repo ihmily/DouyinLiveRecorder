@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 import tkinter.font as tkfont
 from datetime import datetime
@@ -422,6 +423,7 @@ class LiveRecorderGUI:
         # 状态指示器动画
         self._status_animating = False
         self._status_anim_index = 0
+        self._status_anim_timer: str | None = None
 
         # 响应式布局（防抖优化，避免频繁 resize 导致布局抖动）
         self._resize_throttle_id: str | None = None
@@ -1128,6 +1130,8 @@ class LiveRecorderGUI:
                         self._log_queue.put(None)
                         self._log_queue_has_data = True
                         break
+                    # EOF 但进程仍存活：短暂休眠避免 100% CPU 忙等空转
+                    time.sleep(0.05)
                     continue
 
                 clean_line = self.ANSI_ESCAPE_PATTERN.sub("", line.rstrip())

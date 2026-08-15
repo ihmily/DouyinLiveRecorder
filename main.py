@@ -20,7 +20,6 @@
 # GitHub: https://github.com/ihmily
 # Date: 2023-07-17 23:52:05
 # Update: 2025-10-23 19:48:05
-# Version: v4.0.8.2
 # Copyright (c) 2023-2025 by Hmily, All Rights Reserved.
 
 # 强制标准流以 UTF-8 输出。
@@ -87,7 +86,7 @@ from collections import deque
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import httpx
 from loguru import logger
@@ -139,7 +138,7 @@ recording_time_list: dict[str, list[datetime.datetime | str]] = {}  # 记录每�
 exit_recording: bool = False  # 退出标志
 
 # 错误控制和动态调优
-error_count: int = 0  # 当前错误计数
+error_count: int = 0  # 累计错误计数（自进程启动起单调递增，不做周期清零；窗口口径见 error_window）
 pre_max_request: int = 10  # 之前的最大请求数
 max_request: int = 3  # 同一时间访问网络的线程数（由 main() 读取配置后覆盖）
 max_request_lock: threading.Lock = threading.Lock()  # 最大请求数的线程锁
@@ -195,7 +194,8 @@ text_encoding: str = "utf-8-sig"  # 文本文件编码（支持 BOM
 rstr: str = r"[\/\\\:\*\？?\"\<\>\|&#.。,， ~！· ]"  # 文件名字符过滤正则
 default_path: str = f"{script_path}/downloads"  # 默认下载目录
 os.makedirs(default_path, exist_ok=True)  # 确保下载目录存在
-file_update_lock: threading.Lock = threading.Lock()  # 文件更新锁（防止多线程写入冲突
+# RLock：主循环持锁读取配置期间可能再次进入 read_config_value 的写入路径，可重入避免同线程死锁
+file_update_lock: threading.RLock = threading.RLock()  # 文件更新锁（防止多线程写入冲突
 
 # 录制状态全局锁（保护 recording/running_list/monitoring/recording_time_list）
 record_state_lock: threading.Lock = threading.Lock()
@@ -674,7 +674,7 @@ def display_info() -> None:
                 print("是否生成时间文件: 是", end=" | ")
             print(f"录制视频质量为: {video_record_quality}", end=" | ")
             print(f"录制视频格式为: {video_save_type}", end=" | ")
-            print(f"目前瞬时错误数为: {error_count}", end=" | ")
+            print(f"累计错误数为: {error_count}", end=" | ")
             now = time.strftime("%H:%M:%S", time.localtime())
             print(f"当前时间: {now}")
 
@@ -770,6 +770,22 @@ def get_startup_info(system_type: str) -> object | None:
     return None
 
 
+def _run_ffmpeg_checked(command: list[str], timeout: int = 600) -> str:
+    # 执行 ffmpeg 命令并捕获输出；超时则终止子进程，防止转码卡死永久挂住线程。
+    with subprocess.Popen(
+        command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type)
+    ) as process:
+        try:
+            out, _ = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            out, _ = process.communicate()
+            raise
+        if process.returncode != 0:
+            raise subprocess.CalledProcessError(process.returncode, command, output=out)
+        return out.decode("utf-8", errors="replace")
+
+
 def segment_video(
     converts_file_path: str,
     segment_save_file_path: str,
@@ -802,7 +818,7 @@ def segment_video(
                 "+frag_keyframe+empty_moov",
                 segment_save_file_path,
             ]
-            _ = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type))
+            _ = _run_ffmpeg_checked(ffmpeg_command)
             if is_original_delete:
                 time.sleep(1)
                 if os.path.exists(converts_file_path):
@@ -851,7 +867,7 @@ def converts_mp4(converts_file_path: str, is_original_delete: bool = True) -> No
                     "mp4",
                     converts_file_path.rsplit(".", maxsplit=1)[0] + ".mp4",
                 ]
-            _ = subprocess.check_output(ffmpeg_command, stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type))
+            _ = _run_ffmpeg_checked(ffmpeg_command)
             if is_original_delete:
                 time.sleep(1)
                 if os.path.exists(converts_file_path):
@@ -866,24 +882,21 @@ def converts_m4a(converts_file_path: str, is_original_delete: bool = True) -> No
     # 将录制文件转换为 M4A 音频格式
     try:
         if os.path.exists(converts_file_path) and os.path.getsize(converts_file_path) > 0:
-            _ = subprocess.check_output(
-                [
-                    "ffmpeg",
-                    "-i",
-                    converts_file_path,
-                    "-n",
-                    "-vn",
-                    "-c:a",
-                    "aac",
-                    "-bsf:a",
-                    "aac_adtstoasc",
-                    "-ab",
-                    "320k",
-                    converts_file_path.rsplit(".", maxsplit=1)[0] + ".m4a",
-                ],
-                stderr=subprocess.STDOUT,
-                startupinfo=get_startup_info(os_type),
-            )
+            m4a_command = [
+                "ffmpeg",
+                "-i",
+                converts_file_path,
+                "-n",
+                "-vn",
+                "-c:a",
+                "aac",
+                "-bsf:a",
+                "aac_adtstoasc",
+                "-ab",
+                "320k",
+                converts_file_path.rsplit(".", maxsplit=1)[0] + ".m4a",
+            ]
+            _ = _run_ffmpeg_checked(m4a_command)
             if is_original_delete:
                 time.sleep(1)
                 if os.path.exists(converts_file_path):
@@ -933,16 +946,23 @@ def generate_subtitles(record_name: str, ass_filename: str, sub_format: str = "s
 
 
 def record_error() -> None:
-    # 线程安全地记录一次错误：递增计数并追加到滑动窗口（deque maxlen 自动裁剪）
+    # 线程安全地记录一次错误：递增计数并追加 1 到滑动窗口（deque maxlen 自动裁剪）
     global error_count
     with max_request_lock:
         error_count += 1
         error_window.append(1)
 
 
+def record_success() -> None:
+    # 线程安全地记录一次成功完成的检测周期（追加 0），与 record_error 的 1 混合采样，
+    # 使 error_window 反映真实错误率（此前只记 1 导致错误率恒为 1.0，并发只能降不能升）。
+    with max_request_lock:
+        error_window.append(0)
+
+
 def adjust_max_request() -> None:
-    # 根据错误率动态调整并发线程数
-    global max_request, error_count, pre_max_request
+    # 根据错误率动态调整并发线程数。窗口混合 0/1 样本，错误率真实可降可升。
+    global max_request, pre_max_request, semaphore
     preset = max_request
 
     while True:
@@ -955,17 +975,14 @@ def adjust_max_request() -> None:
 
             if error_rate > error_threshold:
                 max_request = max(1, max_request - 1)
+                semaphore = threading.Semaphore(max_request)
             elif error_rate < error_threshold / 2 and max_request < preset:
                 max_request += 1
-            else:
-                pass
+                semaphore = threading.Semaphore(max_request)
 
             if pre_max_request != max_request:
                 pre_max_request = max_request
-                logger.debug(f"同一时间访问网络的线程数动态改为 {max_request}")
-
-            # 复位本周期错误数（窗口只记录错误事件，由 record_error 统一追加 1，避免口径混用）
-            error_count = 0
+                logger.debug(f"同一时间访问网络的线程数动态改为 {max_request}（信号量已重建）")
 
 
 def push_message(record_name: str, live_url: str, content: str) -> None:
@@ -1036,6 +1053,8 @@ def clear_record_info(record_name: str, record_url: str) -> None:
     global monitoring
     with record_state_lock:
         recording.discard(record_name)
+        # 清理录制时间记录，防止长期运行内存无界增长
+        recording_time_list.pop(record_name, None)
         if record_url in url_comments and record_url in running_list:
             running_list.remove(record_url)
             monitoring -= 1
@@ -1163,6 +1182,7 @@ def check_subprocess(
 
     with record_state_lock:
         recording.discard(record_name)
+        recording_time_list.pop(record_name, None)
     # 取消注册 ffmpeg 进程
     unregister_ffmpeg_process(process)
     return False
@@ -1248,7 +1268,7 @@ def _validate_stream_url(
         return False
 
 
-def select_source_url(_link: str, stream_info: Mapping[str, object], proxy_addr: str | None = None) -> str | None:
+def select_source_url(stream_info: Mapping[str, object], proxy_addr: str | None = None) -> str | None:
     # HLS(m3u8) 优先采集：当存在 HLS 源且配置启用 HLS 采集时优先使用；
     # 仅当无 HLS 源 或 配置关闭 HLS 采集时，才回退使用 FLV 源。
     # proxy_addr 必须透传给校验器：TikTok 等境外平台的流地址若不走与解析阶段
@@ -1265,9 +1285,16 @@ def select_source_url(_link: str, stream_info: Mapping[str, object], proxy_addr:
     if isinstance(flv_url, str) and flv_url:
         codec = utils.get_query_params(flv_url, "codec")
         if isinstance(codec, list) and codec and codec[0] == "h265":
-            logger.warning("FLV is not supported for h265 codec, use HLS source instead")
-            if hls_available:
-                return cast(str | None, m3u8_url)
+            # h265 FLV 无法 copy 录制。存在 HLS 源且启用 HLS 采集时改走 HLS（先校验可达性，
+            # 原实现不校验且无视 HLS 开关强制切回 HLS）；关闭 HLS 采集时尊重用户配置。
+            if hls_available and hls_collection_enabled:
+                if _validate_stream_url(cast(str, m3u8_url), proxy_addr=proxy_addr):
+                    logger.warning("FLV is not supported for h265 codec, use HLS source instead")
+                    return cast(str | None, m3u8_url)
+                logger.warning("FLV 为 h265 且 HLS 源校验失败，本轮放弃")
+            else:
+                logger.warning("FLV 为 h265 无法录制且 HLS 采集已关闭，本轮放弃")
+            return None
         if _validate_stream_url(flv_url, proxy_addr=proxy_addr):
             return flv_url
         logger.warning("FLV URL validation failed, trying record_url fallback")
@@ -1316,8 +1343,10 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
             if proxy_addr:
                 proxy_address = None
                 if enable_proxy_platform_list:
-                    for platform in enable_proxy_platform_list:
-                        if platform and platform.strip() in record_url:
+                    # 循环变量不用 platform：避免遮蔽外层 platform="未知平台"，
+                    # 导致循环结束后 platform 残留为列表最后一个元素（日志误报平台名）
+                    for _proxy_platform in enable_proxy_platform_list:
+                        if _proxy_platform and _proxy_platform.strip() in record_url:
                             proxy_address = proxy_addr
                             break
 
@@ -1330,6 +1359,9 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
             # print(f'\r代理地址:{proxy_address}')
             # print(f'\r全局代理:{global_proxy}')
             while True:
+                if exit_recording:
+                    logger.debug(f"检测到退出标志，录制线程退出: {record_url}")
+                    return
                 try:
                     port_info = {}
                     if record_url.find("douyin.com/") > -1:
@@ -1481,9 +1513,13 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                                     )
                                 )
                                 if json_data and json_data.get("new_cookies"):
-                                    utils.update_config(
-                                        config_file, "Cookie", "sooplive_cookie", cast(str, json_data["new_cookies"])
-                                    )
+                                    with file_update_lock:  # 与主循环 config.read/其他写入方互斥，防止半写
+                                        utils.update_config(
+                                            config_file,
+                                            "Cookie",
+                                            "sooplive_cookie",
+                                            cast(str, json_data["new_cookies"]),
+                                        )
                                 port_info = asyncio.run(stream.get_stream_url(json_data, record_quality, spec=True))
                             else:
                                 logger.error("错误信息: 网络异常，请检查本网络是否能正常访问SOOP(原AfreecaTV)平台")
@@ -1554,9 +1590,10 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                                     )
                                 )
                                 if json_data and json_data.get("new_cookies"):
-                                    utils.update_config(
-                                        config_file, "Cookie", "flextv_cookie", cast(str, json_data["new_cookies"])
-                                    )
+                                    with file_update_lock:  # 与主循环 config.read/其他写入方互斥，防止半写
+                                        utils.update_config(
+                                            config_file, "Cookie", "flextv_cookie", cast(str, json_data["new_cookies"])
+                                        )
                                 if "play_url_list" in json_data:
                                     port_info = asyncio.run(stream.get_stream_url(json_data, record_quality, spec=True))
                                 else:
@@ -1590,12 +1627,13 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                                     )
                                 )
                                 if port_info and port_info.get("new_token"):
-                                    utils.update_config(
-                                        file_path=config_file,
-                                        section="Authorization",
-                                        key="popkontv_token",
-                                        new_value=cast(str, port_info["new_token"]),
-                                    )
+                                    with file_update_lock:  # 与主循环 config.read/其他写入方互斥，防止半写
+                                        utils.update_config(
+                                            file_path=config_file,
+                                            section="Authorization",
+                                            key="popkontv_token",
+                                            new_value=cast(str, port_info["new_token"]),
+                                        )
 
                             else:
                                 logger.error("错误信息: 网络异常，请检查本网络是否能正常访问PopkonTV直播平台")
@@ -1616,12 +1654,13 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                             port_info = asyncio.run(stream.get_stream_url(json_data, record_quality, spec=False))
 
                             if port_info and port_info.get("new_cookies"):
-                                utils.update_config(
-                                    file_path=config_file,
-                                    section="Cookie",
-                                    key="twitcasting_cookie",
-                                    new_value=cast(str, port_info["new_cookies"]),
-                                )
+                                with file_update_lock:  # 与主循环 config.read/其他写入方互斥，防止半写
+                                    utils.update_config(
+                                        file_path=config_file,
+                                        section="Cookie",
+                                        key="twitcasting_cookie",
+                                        new_value=cast(str, port_info["new_cookies"]),
+                                    )
 
                     elif record_url.find("live.baidu.com/") > -1:
                         platform = "百度直播"
@@ -1945,8 +1984,9 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                             port_info["m3u8_url"] = record_url
 
                     else:
-                        logger.error(f"{record_url} {platform}直播地址")
-                        return
+                        # 不可达分支（main() 已按平台白名单过滤），break 进入延迟后重试而非直接结束线程
+                        logger.error(f"无法识别的直播地址，本轮跳过: {record_url}")
+                        break
 
                     if anchor_name:
                         if "主播:" in anchor_name:
@@ -2025,7 +2065,7 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                                 time.sleep(push_check_seconds)
                                 continue
 
-                            real_url = select_source_url(record_url, port_info, proxy_address)
+                            real_url = select_source_url(port_info, proxy_address)
                             full_path = f"{default_path}/{platform}"
                             if real_url:
                                 now = datetime.datetime.today().strftime("%Y-%m-%d_%H-%M-%S")
@@ -2326,6 +2366,7 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
 
                                             with record_state_lock:
                                                 recording.discard(record_name)
+                                                recording_time_list.pop(record_name, None)
                                         else:
                                             logger.debug("未找到FLV直播流，跳过录制")
                                     except Exception as e:
@@ -2393,31 +2434,20 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                                         record_error()
 
                                     try:
-                                        if converts_to_mp4:
-                                            seg_file_path = f"{full_path}/{anchor_name}_{title_in_name}{now}_%03d.mp4"
-                                            if split_video_by_time:
-                                                segment_video(
-                                                    save_file_path,
-                                                    seg_file_path,
-                                                    segment_format="mp4",
-                                                    segment_time=split_time,
-                                                    is_original_delete=delete_origin_file,
-                                                )
-                                            else:
-                                                threading.Thread(
-                                                    target=converts_mp4, args=(save_file_path, delete_origin_file)
-                                                ).start()
-
-                                        else:
-                                            seg_file_path = f"{full_path}/{anchor_name}_{title_in_name}{now}_%03d.flv"
-                                            if split_video_by_time:
-                                                segment_video(
-                                                    save_file_path,
-                                                    seg_file_path,
-                                                    segment_format="flv",
-                                                    segment_time=split_time,
-                                                    is_original_delete=delete_origin_file,
-                                                )
+                                        if converts_to_mp4 and split_video_by_time:
+                                            # FLV 分段产物是 <前缀>_%03d.flv 模式串对应的多个文件，
+                                            # 逐段转码为同名 .mp4（原 segment_video 对模式串 os.path.exists
+                                            # 恒为 False，整条转换路径是死代码）
+                                            seg_pattern = f"{anchor_name}_{title_in_name}{now}_%03d.flv"
+                                            seg_files = sorted(Path(full_path).glob(seg_pattern))
+                                            if not seg_files:
+                                                logger.warning(f"未找到分段 FLV 文件，跳过转换: {seg_pattern}")
+                                            for seg_file in seg_files:
+                                                converts_mp4(str(seg_file), delete_origin_file)
+                                        elif converts_to_mp4:
+                                            threading.Thread(
+                                                target=converts_mp4, args=(save_file_path, delete_origin_file)
+                                            ).start()
                                     except Exception as e:
                                         logger.error(f"转码失败: {e} ")
 
@@ -2548,8 +2578,10 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                                                 "segment",
                                                 "-segment_time",
                                                 split_time,
+                                                # 音频分段用 ipod 容器（即 .m4a），而非 mpegts：
+                                                # 原实现强制 mpegts 但输出扩展名为 .m4a，容器与扩展名不符
                                                 "-segment_format",
-                                                "mpegts",
+                                                "ipod",
                                                 "-reset_timestamps",
                                                 "1",
                                                 save_file_path,
@@ -2610,6 +2642,7 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                                             record_error()
 
                                 count_time = time.time()
+                                record_success()  # 本轮检测周期完整走完，追加成功样本
 
                 except Exception as e:
                     logger.error(f"错误信息: {e} 发生错误的行数: {_get_error_line(e)}")
@@ -2620,7 +2653,7 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                     num = 0
                 x = num
 
-                if error_count > 20:
+                if sum(error_window) >= 5:
                     x = x + 60
                     color_obj.print_colored("\r瞬时错误太多,延迟加60秒", color_obj.YELLOW)
 
@@ -2701,13 +2734,13 @@ def check_ffmpeg_existence() -> bool:
     ffmpeg_exists = False
     try:
         result = subprocess.run(["ffmpeg", "-version"], check=True, capture_output=True, text=True)
-        if result.returncode == 0:
-            lines = result.stdout.splitlines()
-            version_line = lines[0] if lines else "unknown"
-            built_line = lines[1] if len(lines) > 1 else ""
-            print(version_line)
-            if built_line:
-                print(built_line)
+        # check=True 已保证 returncode==0，直接打印版本信息
+        lines = result.stdout.splitlines()
+        version_line = lines[0] if lines else "unknown"
+        built_line = lines[1] if len(lines) > 1 else ""
+        print(version_line)
+        if built_line:
+            print(built_line)
     except subprocess.CalledProcessError as e:
         logger.error(e)
     except FileNotFoundError:
@@ -2726,12 +2759,12 @@ print(f"版本号: {version}")
 print("GitHub: https://github.com/ihmily/DouyinLiveRecorder")
 print(f"支持平台: {platforms}")
 print(".....................................................")
-if not check_ffmpeg_existence():
-    logger.error("缺少ffmpeg，录制主循环将不会启动（Web 面板仍可运行）")
+# 不再在模块级执行 check_ffmpeg_existence()：import main（web.py/gui.py/测试/工具）不应触发
+# 111MB 的 FFmpeg 下载副作用。安装检查统一由各真实入口的 main() 完成（CLI/Web 录制线程）。
 os.makedirs(os.path.dirname(config_file), exist_ok=True)
 t3 = threading.Thread(target=backup_file_start, args=(), daemon=True)
 t3.start()
-utils.remove_duplicate_lines(url_config_file)
+# URL_config.ini 去重已移入 main() 入口执行：import main 不应改写用户配置文件
 
 
 def read_config_value(
@@ -2751,14 +2784,39 @@ def read_config_value(
             config_parser.add_section("账号密码")
         return config_parser.get(section, option)
     except (configparser.NoSectionError, configparser.NoOptionError):
-        config_parser.set(section, option, str(default_value))
-        with open(config_file, "w", encoding=text_encoding) as f:
-            config_parser.write(f)
+        # 兜底创建 section（白名单外的 section 直接 set 会抛 NoSectionError），
+        # 并持 file_update_lock 写回，避免与录制线程的 update_config 并发半写。
+        with file_update_lock:
+            if section not in config_parser.sections():
+                config_parser.add_section(section)
+            config_parser.set(section, option, str(default_value))
+            with open(config_file, "w", encoding=text_encoding) as f:
+                config_parser.write(f)
         return str(default_value)
 
 
 options: dict[str, bool] = {"是": True, "否": False}
 config: configparser.RawConfigParser = configparser.RawConfigParser()
+
+
+def _safe_int(value: str | None, default: int) -> int:
+    # 配置数值安全转换：非法值记录告警并回退默认，避免 main() 主循环因 ValueError 崩溃
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        logger.warning(f"配置项数值非法: {value!r}，使用默认值 {default}")
+        return default
+
+
+def _safe_float(value: str | None, default: float) -> float:
+    # 配置数值安全转换（浮点版）
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        logger.warning(f"配置项数值非法: {value!r}，使用默认值 {default}")
+        return default
+
+
 _config_read_result = config.read(config_file, encoding=text_encoding)
 language = read_config_value(config, "录制设置", "language(zh_cn/en)", "zh_cn")
 skip_proxy_check = options.get(read_config_value(config, "录制设置", "是否跳过代理检测(是/否)", "否"), False)
@@ -2800,6 +2858,7 @@ def get_status() -> dict[str, object]:
     monitoring_val: int = monitoring
     running_val: list[str] = []
     error_val: int = error_count
+    snapshot_ok = False
     for _attempt in range(5):
         try:
             with record_state_lock:
@@ -2827,9 +2886,15 @@ def get_status() -> dict[str, object]:
                 monitoring_val = monitoring
                 running_val = list(running_list)
                 error_val = error_count
+                snapshot_ok = True
                 break
         except (RuntimeError, IndexError):
             continue
+    if not snapshot_ok:
+        logger.warning("获取录制状态失败（并发竞争），返回空快照")
+    # 窗口口径错误数：error_window 由 max_request_lock 保护，持锁采样避免迭代期并发修改
+    with max_request_lock:
+        recent_errors_val = sum(error_window)
     try:
         disk_free_gb = utils.check_disk_capacity(default_path)
     except Exception:
@@ -2855,7 +2920,8 @@ def get_status() -> dict[str, object]:
             for _n in recording_snapshot
         ],
         "running_list": running_val,
-        "error_count": error_val,
+        "error_count": error_val,  # 累计错误数（进程启动起单调递增）
+        "recent_errors": recent_errors_val,  # 近 error_window_size 次检测周期内的错误数（瞬时口径）
         "disk_free_gb": round(disk_free_gb, 2),
         "uptime": uptime,
         "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
@@ -2874,7 +2940,7 @@ def main(non_interactive: bool = False) -> None:
     global changliao_cookie, check_path, chzzk_cookie, clean_emoji, converts_to_h264, converts_to_mp4, create_time_file, custom_script, delay_default, delete_origin_file, dingtalk_api_url
     global dingtalk_is_atall, dingtalk_phone_num, disable_record, disk_space_limit, douyu_cookie, dy_cookie, email_host, email_password, enable_https_recording, enable_proxy_platform, enable_proxy_platform_list, exit_recording
     global extra_enable_proxy, extra_enable_proxy_platform_list, faceit_cookie, filename_by_title, first_run, first_start, flextv_cookie, flextv_password, flextv_username, folder_by_author, folder_by_time, folder_by_title
-    global haixiu_cookie, host_id, huajiao_cookie, huamao_cookie, hy_cookie, ini_URL_content, input_url, is_comment_line, is_run_script, jd_cookie, ks_cookie, kugou_cookie
+    global haixiu_cookie, hls_collection_enabled, host_id, huajiao_cookie, huamao_cookie, hy_cookie, ini_URL_content, input_url, is_comment_line, is_run_script, jd_cookie, ks_cookie, kugou_cookie
     global laixiu_cookie, langlive_cookie, lehaitv_cookie, lianjie_cookie, line, line_list, line_spilt, liuxing_cookie, live_status_push, liveme_cookie, local_delay_default, login_email
     global look_cookie, loop_time, maoerfm_cookie, max_request, middle, migu_cookie, monitoring, name, netease_cookie, new_line, new_url, new_word
     global ntfy_api, ntfy_email, ntfy_tags, open_smtp_ssl, origin_line, over_push_message_text, over_show_push, pandatv_cookie, picarto_cookie, popkontv_access_token, popkontv_partner_code, popkontv_password
@@ -2892,6 +2958,10 @@ def main(non_interactive: bool = False) -> None:
         logger.error("缺少ffmpeg无法进行录制，程序退出")
         return
 
+    # 启动时清理 URL_config.ini 重复行（原为模块级副作用，移入入口处执行）
+    if os.path.isfile(url_config_file):
+        utils.remove_duplicate_lines(url_config_file)
+
     while True:
 
         try:
@@ -2899,8 +2969,10 @@ def main(non_interactive: bool = False) -> None:
                 with open(config_file, "w", encoding=text_encoding) as file:
                     pass
 
-            # 每轮重新读取配置文件，支持运行期间热更新
-            _ = config.read(config_file, encoding=text_encoding)
+            # 每轮重新读取配置文件，支持运行期间热更新；
+            # 持锁读取避免与录制线程的 update_config 并发读到半写文件
+            with file_update_lock:
+                _ = config.read(config_file, encoding=text_encoding)
 
             ini_URL_content = ""
             if os.path.isfile(url_config_file):
@@ -2915,8 +2987,9 @@ def main(non_interactive: bool = False) -> None:
                 input_url = input("请输入要录制的主播直播间网址（尽量使用PC网页端的直播间地址）:\n")
                 with open(url_config_file, "w", encoding=text_encoding) as file:
                     _ = file.write(input_url)
-        except OSError as err:
-            logger.error(f"发生 I/O 错误: {err}")
+        except (OSError, configparser.Error) as err:
+            logger.error(f"发生 I/O 或配置解析错误: {err}")
+            time.sleep(3)
 
         video_save_path = read_config_value(config, "录制设置", "直播保存路径(不填则默认)", "")
         folder_by_author = options.get(read_config_value(config, "录制设置", "保存文件夹是否以作者区分", "是"), False)
@@ -2926,20 +2999,28 @@ def main(non_interactive: bool = False) -> None:
         clean_emoji = options.get(read_config_value(config, "录制设置", "是否去除名称中的表情符号", "是"), True)
         video_save_type = read_config_value(config, "录制设置", "视频保存格式ts|mkv|flv|mp4|mp3音频|m4a音频", "ts")
         video_record_quality = read_config_value(config, "录制设置", "原画|超清|高清|标清|流畅", "原画")
+        hls_collection_enabled = options.get(
+            read_config_value(config, "录制设置", "是否启用HLS采集(是/否)", "是"), True
+        )
         use_proxy = options.get(read_config_value(config, "录制设置", "是否使用代理ip(是/否)", "是"), False)
         proxy_addr_bak = read_config_value(config, "录制设置", "代理地址", "")
         proxy_addr = None if not use_proxy else proxy_addr_bak
-        max_request = int(read_config_value(config, "录制设置", "同一时间访问网络的线程数", 3))
-        semaphore = threading.Semaphore(max_request)
-        delay_default = int(read_config_value(config, "录制设置", "循环时间(秒)", 120))
-        local_delay_default = int(read_config_value(config, "录制设置", "排队读取网址时间(秒)", 0))
+        # 仅在配置值变化时重建信号量：此前每轮循环无条件重建，录制线程持有的旧实例
+        # 与新实例并发计数失效，导致并发上限形同虚设
+        new_max_request = _safe_int(read_config_value(config, "录制设置", "同一时间访问网络的线程数", 3), 3)
+        if new_max_request != max_request:
+            max_request = new_max_request
+            semaphore = threading.Semaphore(max_request)
+            logger.debug(f"并发上限更新为 {max_request}（信号量已重建）")
+        delay_default = _safe_int(read_config_value(config, "录制设置", "循环时间(秒)", 120), 120)
+        local_delay_default = _safe_int(read_config_value(config, "录制设置", "排队读取网址时间(秒)", 0), 0)
         loop_time = options.get(read_config_value(config, "录制设置", "是否显示循环秒数", "否"), False)
         show_url = options.get(read_config_value(config, "录制设置", "是否显示直播源地址", "否"), False)
         split_video_by_time = options.get(read_config_value(config, "录制设置", "分段录制是否开启", "否"), False)
         enable_https_recording = options.get(
             read_config_value(config, "录制设置", "是否强制启用https录制", "否"), False
         )
-        disk_space_limit = float(read_config_value(config, "录制设置", "录制空间剩余阈值(gb)", 1.0))
+        disk_space_limit = _safe_float(read_config_value(config, "录制设置", "录制空间剩余阈值(gb)", 1.0), 1.0)
         split_time = str(read_config_value(config, "录制设置", "视频分段时间(秒)", 1800))
         converts_to_mp4 = options.get(read_config_value(config, "录制设置", "录制完成后自动转为mp4格式", "否"), False)
         converts_to_h264 = options.get(read_config_value(config, "录制设置", "mp4格式重新编码为h264", "否"), False)
@@ -2986,7 +3067,7 @@ def main(non_interactive: bool = False) -> None:
         begin_push_message_text = read_config_value(config, "推送配置", "自定义开播推送内容", "")
         over_push_message_text = read_config_value(config, "推送配置", "自定义关播推送内容", "")
         disable_record = options.get(read_config_value(config, "推送配置", "只推送通知不录制(是/否)", "否"), False)
-        push_check_seconds = int(read_config_value(config, "推送配置", "直播推送检测频率(秒)", 1800))
+        push_check_seconds = _safe_int(read_config_value(config, "推送配置", "直播推送检测频率(秒)", 1800), 1800)
         begin_show_push = options.get(read_config_value(config, "推送配置", "开播推送开启(是/否)", "是"), True)
         over_show_push = options.get(read_config_value(config, "推送配置", "关播推送开启(是/否)", "否"), False)
         sooplive_username = read_config_value(config, "账号密码", "sooplive账号", "")
@@ -3058,7 +3139,14 @@ def main(non_interactive: bool = False) -> None:
             video_save_type = "TS"
 
         check_path = video_save_path or default_path
-        if utils.check_disk_capacity(check_path, show=first_run) < disk_space_limit:
+        try:
+            # 自定义保存路径可能尚不存在，shutil.disk_usage 会抛 FileNotFoundError
+            os.makedirs(check_path, exist_ok=True)
+            disk_free_gb = utils.check_disk_capacity(check_path, show=first_run)
+        except Exception as e:
+            logger.warning(f"磁盘空间检测失败（跳过限制检查）: {type(e).__name__}: {e}")
+            disk_free_gb = float("inf")
+        if disk_free_gb < disk_space_limit:
             exit_recording = True
             if not recording:
                 logger.warning(
@@ -3175,15 +3263,25 @@ def main(non_interactive: bool = False) -> None:
                     if url_tuple[1] in not_record_list:
                         continue
 
-                    if url_tuple[1] not in running_list:
+                    if url_tuple[1] not in running_list and not exit_recording:
                         print(f"\r{'新增' if not first_start else '传入'}地址: {url_tuple[1]}")
                         with record_state_lock:
                             monitoring += 1
                             running_list.append(url_tuple[1])
                             args = (url_tuple, monitoring)
-                        create_var[f"thread_{monitoring}"] = threading.Thread(target=start_record, args=args)
-                        create_var[f"thread_{monitoring}"].daemon = True
-                        create_var[f"thread_{monitoring}"].start()
+                        thread_key = f"thread_{monitoring}"
+
+                        # 线程结束后从 create_var 清理，防止长期运行字典无界增长
+                        def _room_thread_target(_key: str = thread_key, _args: tuple[Any, ...] = args) -> None:
+                            try:
+                                start_record(*_args)
+                            finally:
+                                with record_state_lock:
+                                    create_var.pop(_key, None)
+
+                        create_var[thread_key] = threading.Thread(target=_room_thread_target, name=thread_key)
+                        create_var[thread_key].daemon = True
+                        create_var[thread_key].start()
                         time.sleep(local_delay_default)
             url_tuples_list = []
             first_start = False

@@ -240,3 +240,18 @@ class TestGetQueryParams:
     def test_missing_param(self):
         result = get_query_params("https://example.com?a=1", "missing")
         assert result == []
+
+
+class TestReadConfigValue:
+    # read_config_value 关闭 BasicInterpolation：含 % 的值（cookie/URL 编码）不应抛异常（批次5修复）.
+
+    def test_percent_value_readable(self, tmp_path):
+        cfg = tmp_path / "c.ini"
+        cfg.write_text("[s]\nk = 100%x\n", encoding="utf-8")
+        assert read_config_value(cfg, "s", "k") == "100%x"
+
+    def test_missing_key_returns_none(self, tmp_path, capsys):
+        cfg = tmp_path / "c.ini"
+        cfg.write_text("[s]\nk = v\n", encoding="utf-8")
+        assert read_config_value(cfg, "s", "nope") is None
+        _ = capsys.readouterr()  # 吞掉提示输出

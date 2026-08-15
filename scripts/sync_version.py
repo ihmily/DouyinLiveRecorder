@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
-# 版本号同步脚本 — 从 pyproject.toml 读取版本号并同步到所有相关文件。
+# 版本号同步脚本 — 从 pyproject.toml 读取版本号并同步到仍写死版本的相关文件。
 #
 # 用法:
 # python scripts/sync_version.py              # 使用 pyproject.toml 中的版本号
 # python scripts/sync_version.py 4.0.9.0      # 指定新版本号
 # python scripts/sync_version.py --check       # 仅检查是否一致，不修改文件
+#
+# 注: 项目版本号现已统一以 pyproject.toml 为唯一事实源，各消费方均动态读取、
+# 不再写死，因此本脚本当前没有需要同步的目标（SYNC_TARGETS 为空）:
+#   - main.py / src/web_api.py  运行时从 pyproject.toml（importlib.metadata）动态读取
+#   - Dockerfile                经 APP_VERSION 构建参数从 pyproject.toml 注入
+#   - i18n/zh_CN.po             不再携带版本号
+#   - README.md / CODE_WIKI.md  为文档，版本由人工维护，不在本脚本范围
+# 脚本结构保留以便未来扩展。动态化状态由 scripts/check_version.py 校验。
 #
 
 from __future__ import annotations
@@ -21,44 +29,9 @@ PYPROJECT_PATH = ROOT_DIR / "pyproject.toml"
 # ── 需要同步的目标文件及其替换规则 ─────────────────────────────────────
 # 每条规则: (相对路径, [(正则模式, 替换模板), ...])
 #   替换模板中可用 \1 捕获组 + {version} 占位符
-SYNC_TARGETS: list[tuple[str, list[tuple[str, str]]]] = [
-    # Dockerfile:  LABEL version="x.y.z"
-    (
-        "Dockerfile",
-        [
-            (r'(\n\s+version=")[^"]*(")', r"\g<1>{version}\g<2>"),
-        ],
-    ),
-    # CODE_WIKI.md:  - **版本**: x.y.z  (仅第一处)
-    (
-        "CODE_WIKI.md",
-        [
-            (r"(- \*\*版本\*\*:\s*)[\d.]+", r"\g<1>{version}"),
-        ],
-    ),
-    # README.md:  更新日志顶部首个 "### vx.y.z[-dev]" 标题
-    (
-        "README.md",
-        [
-            (r"(###\s+v)[\d.]+(-dev)?", r"\g<1>{version}"),
-        ],
-    ),
-    # i18n .po 文件:  注释行 + Project-Id-Version 头
-    (
-        "i18n/zh_CN/LC_MESSAGES/zh_CN.po",
-        [
-            (r"(#\s*版本:\s*)[\d.]+", r"\g<1>{version}"),
-            (r"(Project-Id-Version:\s*DouyinLiveRecorder\s*)[\d.]+", r"\g<1>{version}"),
-        ],
-    ),
-    # main.py 顶部注释:  # Version: vx.y.z
-    (
-        "main.py",
-        [
-            (r"(#\s*Version:\s*v)[\d.]+", r"\g<1>{version}"),
-        ],
-    ),
-]
+# 当前所有版本号均已动态化（见文件头部注释），无待同步目标。
+# 若未来新增写死版本的文件，在此追加规则即可。
+SYNC_TARGETS: list[tuple[str, list[tuple[str, str]]]] = []
 
 
 def read_version_from_pyproject() -> str:
