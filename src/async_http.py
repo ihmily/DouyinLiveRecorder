@@ -22,11 +22,8 @@ _httpx_limits = httpx.Limits(max_connections=100, max_keepalive_connections=20)
 # AsyncClient 必须在事件循环内创建并使用，进程退出时需 aclose() 释放连接池
 # 值为 (client, 创建时的事件循环)，用于检测 asyncio.run() 导致的循环变更
 _client_cache: dict[tuple[str, bool, bool], tuple[httpx.AsyncClient, asyncio.AbstractEventLoop]] = {}
-# 保护 _client_cache 的普通线程锁（threading.Lock）：临界区内不含任何 await 点，
-# 因此不会绑定事件循环，也就不会出现跨循环 await 的问题。
-# 原实现为「模块级单槽 asyncio.Lock 随循环缓存/重建」，在多房间各自独立线程+独立循环的
-# 并发模型下存在跨线程竞态：线程 A 可能读到线程 B 循环绑定的锁并 await，触发
-# 'bound to a different event loop' 错误（被 async_req 吞掉导致请求静默失败）。
+# 保护 _client_cache 的跨线程锁：多房间「独立线程+独立事件循环」并发取客户端时
+# 序列化 check-then-act 竞态。临界区内只做同步 dict 操作、绝不含 await。
 _client_cache_lock = threading.Lock()
 
 
@@ -40,43 +37,41 @@ async def _get_client(
     # timeout 在每次请求时单独传入，避免不同调用方覆盖彼此的超时
     key = (proxy_addr or "", verify, http2)
     current_loop = asyncio.get_running_loop()
-    cached = _client_cache.get(key)
+    with _client_cache_lock:
+        cached = _client_cache.get(key)
     if cached is not None:
         client, client_loop = cached
         # client 未关闭且事件循环未变更时直接复用
         if not client.is_closed and client_loop is current_loop:
             return client
-    # 需要替换缓存条目：临界区内只做检查与创建（无 await 点，线程锁安全），
-    # 旧客户端的关闭移到锁外执行，避免持锁跨越 await。
-    old_entry: tuple[httpx.AsyncClient, asyncio.AbstractEventLoop] | None = None
+        # 缓存的 client 已失效（已关闭或事件循环变更）：先释放旧连接池，避免泄漏
+        stale = False
+        with _client_cache_lock:
+            # 二次检查：可能已被并发线程替换，替换成功者负责旧 client 的释放
+            if _client_cache.get(key) is cached:
+                _client_cache.pop(key, None)
+                stale = True
+        if stale and not client.is_closed:
+            if client_loop is current_loop:
+                try:
+                    await client.aclose()
+                except Exception as e:
+                    logger.debug(f"关闭失效 AsyncClient 失败: {e}")
+            elif not client_loop.is_closed():
+                # 跨事件循环：在其创建循环上安排 aclose，避免在其创建循环外操作 transport
+                try:
+                    _ = asyncio.run_coroutine_threadsafe(client.aclose(), client_loop)
+                except Exception as e:
+                    logger.debug(f"跨循环关闭 AsyncClient 失败: {e}")
+    client = httpx.AsyncClient(
+        proxy=proxy_addr,
+        timeout=timeout,
+        verify=verify,
+        http2=http2,
+        limits=_httpx_limits,
+    )
     with _client_cache_lock:
-        cached = _client_cache.get(key)
-        if cached is not None and not cached[0].is_closed and cached[1] is current_loop:
-            return cached[0]
-        if cached is not None and not cached[0].is_closed:
-            old_entry = cached
-        client = httpx.AsyncClient(
-            proxy=proxy_addr,
-            timeout=timeout,
-            verify=verify,
-            http2=http2,
-            limits=_httpx_limits,
-        )
         _client_cache[key] = (client, current_loop)
-
-    # 锁外释放旧连接池，避免泄漏；跨事件循环时在其创建循环上安排 aclose
-    if old_entry is not None:
-        old_client, old_loop = old_entry
-        if old_loop is current_loop:
-            try:
-                await old_client.aclose()
-            except Exception as e:
-                logger.debug(f"关闭失效 AsyncClient 失败: {type(e).__name__}: {e}")
-        elif not old_loop.is_closed():
-            try:
-                _ = asyncio.run_coroutine_threadsafe(old_client.aclose(), old_loop)
-            except Exception as e:
-                logger.debug(f"跨循环关闭 AsyncClient 失败: {e}")
     return client
 
 
@@ -90,15 +85,16 @@ async def _close_all_clients() -> None:
             if not client.is_closed:
                 await client.aclose()
         except Exception as e:
-            logger.debug(f"关闭 AsyncClient 失败: {type(e).__name__}: {e}")
+            logger.debug(e)
 
 
 def close_all_clients_sync() -> None:
     # 同步安全清理（供 atexit / 信号处理器调用）：
     # 若当前线程有可用事件循环，则在其上驱动 _close_all_clients；
     # 否则清空缓存交由 GC 兜底（httpx.AsyncClient 析构会尝试关闭底层传输）
-    if not _client_cache:
-        return
+    with _client_cache_lock:
+        if not _client_cache:
+            return
     try:
         loop = asyncio.get_event_loop()
         if loop.is_closed():
@@ -175,9 +171,7 @@ async def async_req(
         #   redirect_url -> 空字符串（调用方据此判定未取到 URL）
         #   return_cookies -> 空 dict / ("", {})（调用方据此判定登录/取 cookie 失败）
         #   默认文本 -> 空字符串（调用方解析失败进入各自异常分支）
-        # 注意：Windows 下 socket.timeout/TimeoutError 的 str() 为空，仅打印 {e} 会得到空白日志，
-        # 必须带上 URL 与异常类型，否则无法定位是超时、连接被拒还是证书问题。
-        logger.debug(f"async_req 请求失败: {url} - {type(e).__name__}: {e}")
+        logger.debug(e)
         if redirect_url:
             return ""
         elif return_cookies:

@@ -10,10 +10,8 @@
 #   - warmup_ttwid() : 程序启动期同步预热，提前把缓存填好，后续调用直接命中。
 #
 # 跨线程/跨循环去重：每个 room 各自 asyncio.run() 独立循环并发执行，
-# per-loop 的 asyncio.Lock 无法跨循环协调，故用 threading.RLock。
-# 用 RLock 而非 Lock：锁跨越 await 持有，若同一循环内出现第二个并发协程，
-# 普通 Lock 会同线程自旋死锁；RLock 允许同线程重入（最坏退化为一次重复拉取，幂等无害），
-# 跨线程去重语义不变。
+# per-loop 的 asyncio.Lock 无法跨循环协调，故用 threading.Lock。
+# 安全性：单个 asyncio.run 循环内仅一个 get_ttwid 协程，持有 threading.Lock 跨越 await 不会死锁。
 # pyright: reportUnreachable=none, reportImplicitStringConcatenation=none, reportUnusedCallResult=none
 import asyncio
 import configparser
@@ -22,6 +20,7 @@ import sys
 import threading
 
 from .async_http import async_req
+from .cookie_cache import fetch_cookies as _cache_fetch_cookies
 from .logger import logger
 
 OptionalStr = str | None
@@ -38,7 +37,8 @@ def _app_root() -> str:
 
 # 进程级唯一缓存
 _cached_ttwid: str = ""
-# 跨线程去重锁（RLock 原因见文件头注释）
+# 跨线程去重锁。RLock 允许同线程重入：锁跨越 await 时同事件循环的并发协程
+# 重入不会自旋死锁（threading.Lock 情况下同线程二次 acquire 会永久阻塞）
 _ttwid_lock = threading.RLock()
 
 # 配置文件中的 ttwid 键名（位于 [Cookie] 段），用户手动填写时优先于自动获取
@@ -64,19 +64,21 @@ def _read_config_ttwid() -> str:
 
 
 async def _fetch_ttwid(proxy_addr: OptionalStr = None) -> str:
-    # 实际拉取并写入缓存，失败返回空字符串
+    # 实际拉取并写入缓存，失败返回空字符串。
+    # 改经统一 cookie 缓存（src/cookie_cache.fetch_cookies）从抖音主页动态获取，
+    # 同网址下的其他模块（弹幕、url 解析等）直接复用，避免重复请求触发风控。
     global _cached_ttwid
     try:
-        cookies_dict = await async_req(
+        cookies_dict = await _cache_fetch_cookies(
             url="https://live.douyin.com/",
             proxy_addr=proxy_addr,
             headers={
                 "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
+                "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
             },
-            return_cookies=True,
             timeout=10,
             http2=False,  # 抖音对 HTTP/2 支持不稳定，常触发 ReadError('')，降级到 HTTP/1.1
+            fetcher=async_req,  # 传入本模块 async_req，使单测对 src.ttwid.async_req 打桩仍生效
         )
         if isinstance(cookies_dict, dict) and cookies_dict.get("ttwid"):
             _cached_ttwid = f"ttwid={cookies_dict['ttwid']}"

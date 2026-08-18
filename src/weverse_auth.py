@@ -8,14 +8,14 @@ from typing import cast
 
 import requests
 
-# Weverse 网页客户端公开密钥（随官方前端公开可见，非用户私密凭据）；
-# 允许通过环境变量覆盖以便上游轮换后无需改代码。
+# Weverse 网页客户端公开的应用密钥（非用户凭据）；官方更换时无需改码，
+# 通过环境变量 DOUYIN_WEVERSE_APP_SECRET 即可覆盖
 _DEFAULT_APP_SECRET = "5419526f1c624b38b10787e5c10b2a7a"
 
 
 def _app_secret() -> str:
-    # 读取 Weverse 客户端密钥（支持环境变量覆盖）
-    return os.environ.get("DOUYIN_WEVERSE_APP_SECRET", _DEFAULT_APP_SECRET)
+    # 客户端密钥：优先读环境变量覆盖，未设置时用内置默认值
+    return os.environ.get("DOUYIN_WEVERSE_APP_SECRET") or _DEFAULT_APP_SECRET
 
 
 def refresh_weverse_token(refresh_token: str | None) -> tuple[str | None, str | None]:
@@ -27,7 +27,7 @@ def refresh_weverse_token(refresh_token: str | None) -> tuple[str | None, str | 
 
     headers: dict[str, str] = {
         "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
         "Origin": "https://weverse.io",
         "Referer": "https://weverse.io/",
         "X-ACC-SERVICE-ID": "weverse",

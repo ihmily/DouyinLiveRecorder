@@ -3,14 +3,22 @@
 # This file is distributed under the same license as the DouyinLiveRecorder package.
 #
 # DouyinLiveRecorder 简体中文翻译文件
-# 更新日期: 2026-06-20
+# 更新日期: 2026-08-17
+#
+# 维护说明：
+#   - 本文件是翻译源文本；gettext 运行时只读取同目录编译产物 zh_CN.mo。
+#     修改本文件后必须执行 `python scripts/compile_po.py` 重新编译并一并提交，
+#     否则翻译改动不会生效（CI 可用 `--check` 参数校验两者同步）。
+#   - 运行时真正经过翻译查找的是 print() 输出的常量英文串（i18n.py 包装
+#     builtins.print 实现）；logger.* 输出与 f-string 插值后的文本不参与查找，
+#     相关条目仅作为后续日志接入 i18n 时的现成翻译底稿保留。
 
 msgid ""
 msgstr ""
 "Project-Id-Version: DouyinLiveRecorder\n"
 "MIME-Version: 1.0\n"
 "POT-Creation-Date: 2024-10-20 00:00+0800\n"
-"PO-Revision-Date: 2026-07-26 02:10+0800\n"
+"PO-Revision-Date: 2026-08-17 12:00+0800\n"
 "Last-Translator: Hmily <ihmily@github>\n"
 "Language-Team: Chinese\n"
 "Content-Type: text/plain; charset=UTF-8\n"
@@ -267,14 +275,6 @@ msgid "全局/规则网络代理已开启"
 msgstr "全局/规则网络代理已开启"
 
 #: main.py
-msgid "HTTP error occurred"
-msgstr "HTTP错误发生"
-
-#: main.py
-msgid "An unexpected error occurred"
-msgstr "发生意外错误"
-
-#: main.py
 msgid "新增地址"
 msgstr "新增地址"
 
@@ -410,13 +410,9 @@ msgstr "若是Linux环境, 请先执行"
 msgid "授予脚本可执行权限"
 msgstr "授予脚本可执行权限"
 
-#: main.py
-msgid "Please add"
-msgstr "请在脚本文件开头添加"
-
-#: main.py
-msgid "at the beginning of your bash script file."
-msgstr "作为 bash 脚本文件的开头。"
+#: src/notify.py
+msgid "Please add `#!/bin/bash` at the beginning of your bash script file."
+msgstr "请在 bash 脚本文件开头添加 `#!/bin/bash`。"
 
 # =============================================================================
 # 流媒体相关消息
@@ -514,259 +510,255 @@ msgstr "备份配置文件失败, 错误信息"
 # GUI 相关消息（如果使用 GUI 模式）
 # =============================================================================
 
-#: gui.pyw
+#: gui.py
 msgid "直播录制控制台"
 msgstr "直播录制控制台"
 
-#: gui.pyw
+#: gui.py
 msgid "开始录制"
 msgstr "开始录制"
 
-#: gui.pyw
+#: gui.py
 msgid "停止录制"
 msgstr "停止录制"
 
-#: gui.pyw
+#: gui.py
 msgid "运行中"
 msgstr "运行中"
 
-#: gui.pyw
+#: gui.py
 msgid "未运行"
 msgstr "未运行"
 
-#: gui.pyw
+#: gui.py
 msgid "最小化到托盘"
 msgstr "最小化到托盘"
 
-#: gui.pyw
+#: gui.py
 msgid "彻底退出"
 msgstr "彻底退出"
 
-#: gui.pyw
+#: gui.py
 msgid "打开下载目录"
 msgstr "打开下载目录"
 
-#: gui.pyw
+#: gui.py
 msgid "高级设置"
 msgstr "高级设置"
 
-#: gui.pyw
+#: gui.py
 msgid "URL 配置编辑区"
 msgstr "URL 配置编辑区"
 
-#: gui.pyw
+#: gui.py
 msgid "保存 URL 配置"
 msgstr "保存 URL 配置"
 
-#: gui.pyw
+#: gui.py
 msgid "重新读取配置"
 msgstr "重新读取配置"
 
-#: gui.pyw
+#: gui.py
 msgid "运行日志"
 msgstr "运行日志"
 
-#: gui.pyw
+#: gui.py
 msgid "格式说明"
 msgstr "格式说明"
 
-#: gui.pyw
+#: gui.py
 msgid "每行一个直播链接，支持 # 开头的注释行"
 msgstr "每行一个直播链接，支持 # 开头的注释行"
 
-#: gui.pyw
+#: gui.py
 msgid "点击窗口关闭按钮（X）将最小化到系统托盘"
 msgstr "点击窗口关闭按钮（X）将最小化到系统托盘"
 
-#: gui.pyw
+#: gui.py
 msgid "成功"
 msgstr "成功"
 
-#: gui.pyw
+#: gui.py
 msgid "URL 配置已保存成功"
 msgstr "URL 配置已保存成功"
 
-#: gui.pyw
+#: gui.py
 msgid "错误"
 msgstr "错误"
 
-#: gui.pyw
+#: gui.py
 msgid "保存配置文件失败"
 msgstr "保存配置文件失败"
 
-#: gui.pyw
+#: gui.py
 msgid "警告"
 msgstr "警告"
 
-#: gui.pyw
+#: gui.py
 msgid "录制已在运行中"
 msgstr "录制已在运行中"
 
-#: gui.pyw
+#: gui.py
 msgid "没有正在运行的录制进程"
 msgstr "没有正在运行的录制进程"
 
-#: gui.pyw
+#: gui.py
 msgid "启动录制失败"
 msgstr "启动录制失败"
 
-#: gui.pyw
+#: gui.py
 msgid "正在停止录制"
 msgstr "正在停止录制"
 
-#: gui.pyw
+#: gui.py
 msgid "正在发送终止信号"
 msgstr "正在发送终止信号"
 
-#: gui.pyw
+#: gui.py
 msgid "正在发送 SIGINT 信号"
 msgstr "正在发送 SIGINT 信号"
 
-#: gui.pyw
+#: gui.py
 msgid "进程已优雅退出"
 msgstr "进程已优雅退出"
 
-#: gui.pyw
+#: gui.py
 msgid "进程未能及时退出，尝试强制终止"
 msgstr "进程未能及时退出，尝试强制终止"
 
-#: gui.pyw
+#: gui.py
 msgid "正在强制终止进程"
 msgstr "正在强制终止进程"
 
-#: gui.pyw
+#: gui.py
 msgid "进程已强制终止"
 msgstr "进程已强制终止"
 
-#: gui.pyw
+#: gui.py
 msgid "警告：进程可能仍在运行"
 msgstr "警告：进程可能仍在运行"
 
-#: gui.pyw
+#: gui.py
 msgid "强制终止失败"
 msgstr "强制终止失败"
 
-#: gui.pyw
+#: gui.py
 msgid "录制进程已停止"
 msgstr "录制进程已停止"
 
-#: gui.pyw
+#: gui.py
 msgid "录制进程已启动"
 msgstr "录制进程已启动"
 
-#: gui.pyw
-msgid "Python"
-msgstr "Python"
-
-#: gui.pyw
+#: gui.py
 msgid "工作目录"
 msgstr "工作目录"
 
-#: gui.pyw
+#: gui.py
 msgid "录制进程已结束"
 msgstr "录制进程已结束"
 
-#: gui.pyw
+#: gui.py
 msgid "加载配置文件失败"
 msgstr "加载配置文件失败"
 
-#: gui.pyw
+#: gui.py
 msgid "打开目录失败"
 msgstr "打开目录失败"
 
-#: gui.pyw
+#: gui.py
 msgid "已打开下载目录"
 msgstr "已打开下载目录"
 
-#: gui.pyw
+#: gui.py
 msgid "输出流已关闭"
 msgstr "输出流已关闭"
 
-#: gui.pyw
+#: gui.py
 msgid "读取输出错误"
 msgstr "读取输出错误"
 
-#: gui.pyw
+#: gui.py
 msgid "加载配置文件不存在，请新建"
 msgstr "配置文件不存在，请新建"
 
-#: gui.pyw
+#: gui.py
 msgid "高级设置配置已保存"
 msgstr "高级设置配置已保存"
 
-#: gui.pyw
+#: gui.py
 msgid "退出确认"
 msgstr "退出确认"
 
-#: gui.pyw
+#: gui.py
 msgid "录制正在后台进行，确定要退出吗"
 msgstr "录制正在后台进行，确定要退出吗"
 
-#: gui.pyw
+#: gui.py
 msgid "正在后台清理可能残留的 ffmpeg 进程"
 msgstr "正在后台清理可能残留的 ffmpeg 进程"
 
-#: gui.pyw
+#: gui.py
 msgid "已通过 taskkill 清理本进程树的 ffmpeg 进程"
 msgstr "已通过 taskkill 清理本进程树的 ffmpeg 进程"
 
-#: gui.pyw
+#: gui.py
 msgid "已通过 pkill 清理本进程树的 ffmpeg 进程"
 msgstr "已通过 pkill 清理本进程树的 ffmpeg 进程"
 
-#: gui.pyw
+#: gui.py
 msgid "taskkill 执行失败"
 msgstr "taskkill 执行失败"
 
-#: gui.pyw
+#: gui.py
 msgid "pkill 执行失败"
 msgstr "pkill 执行失败"
 
-#: gui.pyw
+#: gui.py
 msgid "未发现需要清理的 ffmpeg 进程"
 msgstr "未发现需要清理的 ffmpeg 进程"
 
-#: gui.pyw
+#: gui.py
 msgid "程序已最小化到系统托盘，双击托盘图标可恢复窗口"
 msgstr "程序已最小化到系统托盘，双击托盘图标可恢复窗口"
 
-#: gui.pyw
+#: gui.py
 msgid "关闭选项"
 msgstr "关闭选项"
 
-#: gui.pyw
+#: gui.py
 msgid "请选择关闭方式"
 msgstr "请选择关闭方式"
 
-#: gui.pyw
+#: gui.py
 msgid "显示主界面"
 msgstr "显示主界面"
 
-#: gui.pyw
+#: gui.py
 msgid "退出程序"
 msgstr "退出程序"
 
-#: gui.pyw
+#: gui.py
 msgid "直播录制器"
 msgstr "直播录制器"
 
-#: gui.pyw
+#: gui.py
 msgid "没有找到录制程序的进程"
 msgstr "没有找到录制程序的进程"
 
-#: gui.pyw
+#: gui.py
 msgid "已成功结束正在录制直播的进程"
 msgstr "已成功结束正在录制直播的进程"
 
-#: gui.pyw
+#: gui.py
 msgid "录制程序将在后台自动关闭"
 msgstr "录制程序将在后台自动关闭"
 
-#: gui.pyw
+#: gui.py
 msgid "已取消结束录制操作"
 msgstr "已取消结束录制操作"
 
-#: gui.pyw
+#: gui.py
 msgid "已使用命令行方式结束录制进程"
 msgstr "已使用命令行方式结束录制进程"
 
@@ -774,27 +766,27 @@ msgstr "已使用命令行方式结束录制进程"
 # 状态相关消息
 # =============================================================================
 
-#: gui.pyw
+#: gui.py
 msgid "状态"
 msgstr "状态"
 
-#: gui.pyw
+#: gui.py
 msgid "循环检测"
 msgstr "循环检测"
 
-#: gui.pyw
+#: gui.py
 msgid "格式"
 msgstr "格式"
 
-#: gui.pyw
+#: gui.py
 msgid "托盘"
 msgstr "托盘"
 
-#: gui.pyw
+#: gui.py
 msgid "启用"
 msgstr "启用"
 
-#: gui.pyw
+#: gui.py
 msgid "未启动"
 msgstr "未启动"
 
@@ -837,10 +829,6 @@ msgstr "TwitCasting登录错误，"
 #: src/spider.py
 msgid "Error message: {e} Error line: {tb_lineno}"
 msgstr "错误信息: {e} 错误行号: {tb_lineno}"
-
-#: src/spider.py
-msgid "First data retrieval failed: {url} Preparing to switch parsing methods due to {e}"
-msgstr "首次数据获取失败: {url} 由于 {e} 正在准备切换解析方法"
 
 #: src/spider.py
 msgid "Failed to fetch data from {url}.{e}"
@@ -905,10 +893,6 @@ msgstr "键 [{key}] 在节 [{section}] 中不存在。"
 #: src/utils.py
 msgid "Section [{section}] does not exist in the file."
 msgstr "节 [{section}] 在文件中不存在。"
-
-#: src/utils.py
-msgid "An error occurred while reading the configuration file: {e}"
-msgstr "读取配置文件时发生错误: {e}"
 
 #: src/utils.py
 msgid "The value of {key} under [{section}] in the configuration file has been updated."

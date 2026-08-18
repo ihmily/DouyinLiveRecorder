@@ -8,15 +8,15 @@ import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Mapping
-from typing import Any, TypeAlias, cast
+from collections.abc import Mapping, Sequence
+from typing import TypeAlias, cast
 
 import requests
 
-# JSON 可序列化数据的类型别名。
-# 历史上尝试从 requests._types 导入 JsonType，但 requests 2.34+ 已移除该符号，
-# 原 try 分支恒为 ImportError、实际始终退化为 Any；此处直接显式声明类型别名。
-JsonType: TypeAlias = dict[str, Any] | list[Any] | str | int | float | bool | None
+# JSON 可序列化类型别名：对齐 requests._types.JsonType 的结构（该别名在较新版 requests 中
+# 定义于 TYPE_CHECKING 块内、运行时不可导入，故本地显式重定义，同时满足运行时注解求值
+# 与 requests.post(json=...) 的参数类型校验两端）。
+JsonType: TypeAlias = None | bool | int | float | str | Sequence["JsonType"] | Mapping[str, "JsonType"]
 
 from . import http_config as config
 from .logger import logger
@@ -146,9 +146,8 @@ def sync_req(
                 raise
 
     except Exception as e:
-        # 异常不再伪装成正常响应体返回：记录错误日志并返回空串，
-        # 避免调用方将错误文本误当业务数据解析。
-        logger.error(f"sync_req 请求失败: {e}")
+        # 请求失败统一记录并返回空串：错误文本伪装成响应体会被上游误当有效数据解析
+        logger.error(f"sync_req 请求失败: {type(e).__name__}: {e}")
         resp_str = ""
 
     return resp_str
