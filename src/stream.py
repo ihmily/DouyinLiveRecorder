@@ -9,12 +9,8 @@
 # Copyright (c) 2023-2025 by Hmily, All Rights Reserved.
 # Function: Get live stream data.
 
-import base64
-import hashlib
 import json
-import random
 import re
-import time
 import urllib.parse
 from typing import TypedDict, TypeVar, cast
 
@@ -103,12 +99,14 @@ class HuyaGameLiveInfo(TypedDict, total=False):
 
 
 class HuyaStreamInfo(TypedDict, total=False):
+    sCdnType: str
     sFlvUrl: str
     sStreamName: str
     sFlvUrlSuffix: str
     sHlsUrl: str
     sHlsUrlSuffix: str
     sFlvAntiCode: str
+    sHlsAntiCode: str
 
 
 class DouyuStreamUrl(TypedDict, total=False):
@@ -496,95 +494,105 @@ async def get_huya_stream_url(json_data: dict[str, object], video_quality: str |
     data_list: list[HuyaDataItem] = h.get("data") or []
     if not data_list:
         return {"anchor_name": "", "is_live": False}
-    game_live_info = data_list[0].get("gameLiveInfo") or {}
+    item0 = data_list[0]
+    game_live_info = item0.get("gameLiveInfo") or {}
     live_title = game_live_info.get("introduction", "")
-    stream_info_list = data_list[0].get("gameStreamInfoList") or []
+    stream_info_list = item0.get("gameStreamInfoList") or []
     anchor_name = game_live_info.get("nick", "")
 
     result: dict[str, object] = {"anchor_name": anchor_name, "is_live": False}
+    if not stream_info_list:
+        return result
 
-    if stream_info_list:
-        select_cdn = stream_info_list[0]
-        flv_url = select_cdn.get("sFlvUrl", "")
-        stream_name = select_cdn.get("sStreamName", "")
-        flv_url_suffix = select_cdn.get("sFlvUrlSuffix", "")
-        hls_url = select_cdn.get("sHlsUrl", "")
-        hls_url_suffix = select_cdn.get("sHlsUrlSuffix", "")
-        flv_anti_code = select_cdn.get("sFlvAntiCode") or ""
-
-        if not flv_anti_code:
-            return result
-
-        def get_anti_code(old_anti_code: str) -> str:
-            # 解析虎牙 flv_anti_code 参数为字典
-            params_t = 100
-            sdk_version = 2403051612
-            t13 = int(time.time()) * 1000
-            sdk_sid = t13
-            init_uuid = (t13 % 10**10 * 1000 + int(1000 * random.random())) % 4294967295
-            uid = random.randint(1400000000000, 1400009999999)
-            seq_id = uid + sdk_sid
-            target_unix_time = (t13 + 110624) // 1000
-            ws_time = f"{target_unix_time:x}".lower()
-            url_query = urllib.parse.parse_qs(old_anti_code)
-            fm_value = url_query.get("fm", [""])[0]
-            if not fm_value:
-                return old_anti_code
-            ws_secret_pf = base64.b64decode(urllib.parse.unquote(fm_value).encode()).decode().split("_")[0]
-            ws_secret_hash = hashlib.md5(f'{seq_id}|{url_query["ctype"][0]}|{params_t}'.encode()).hexdigest()
-            ws_secret = f"{ws_secret_pf}_{uid}_{stream_name}_{ws_secret_hash}_{ws_time}"
-            ws_secret_md5 = hashlib.md5(ws_secret.encode()).hexdigest()
-
-            anti_code = (
-                f'wsSecret={ws_secret_md5}&wsTime={ws_time}&seqid={seq_id}&ctype={url_query["ctype"][0]}&ver=1'
-                f'&fs={url_query["fs"][0]}&uuid={init_uuid}&u={uid}&t={params_t}&sv={sdk_version}'
-                f"&sdk_sid={sdk_sid}&codec=264"
-            )
-            return anti_code
-
-        new_anti_code = get_anti_code(flv_anti_code)
-        flv_url = f"{flv_url}/{stream_name}.{flv_url_suffix}?{new_anti_code}&ratio="
-        m3u8_url = f"{hls_url}/{stream_name}.{hls_url_suffix}?{new_anti_code}&ratio="
-
-        quality_list = flv_anti_code.split("&exsphd=")
-        actual_quality = video_quality  # OD/BD 默认即请求值
-        available_qualities: list[str] | None = None
-        if len(quality_list) > 1 and video_quality not in ["OD", "BD"]:
-            pattern = r"(?<=264_)\d+"
-            quality_list = cast(list[str], re.findall(pattern, quality_list[1]))[::-1]
-            if quality_list:
-                # 不再 _pad_list；按实际可用档位构造 options
-                labels = ["UHD", "HD", "SD", "LD"]
-                video_quality_options = dict(zip(labels, quality_list))
-                available_qualities = ["OD", "BD"] + list(video_quality_options.keys())
-                if video_quality in video_quality_options:
-                    ratio_val = video_quality_options[video_quality]
-                    actual_quality = video_quality
+    # 画质 ratio 解析（与历史行为一致）：从首个候选的 sFlvAntiCode 中解析 exsphd 档位表，
+    # 按 video_quality 选择对应 ratio；无 exsphd 时不附加 ratio（保持原始防盗链参数原样）。
+    first_anti = stream_info_list[0].get("sFlvAntiCode") or ""
+    quality_list = first_anti.split("&exsphd=")
+    actual_quality = video_quality  # OD/BD 默认即请求值
+    available_qualities: list[str] | None = None
+    ratio_val: str = ""
+    if len(quality_list) > 1 and video_quality not in ["OD", "BD"]:
+        pattern = r"(?<=264_)\d+"
+        qlist = cast(list[str], re.findall(pattern, quality_list[1]))[::-1]
+        if qlist:
+            # 不再 _pad_list；按实际可用档位构造 options
+            labels = ["UHD", "HD", "SD", "LD"]
+            video_quality_options = dict(zip(labels, qlist))
+            available_qualities = ["OD", "BD"] + list(video_quality_options.keys())
+            if video_quality in video_quality_options:
+                ratio_val = video_quality_options[video_quality]
+                actual_quality = video_quality
+            else:
+                # 请求档位不在可用列表：降级到最近的更低档，若无更低档则取最低可用档
+                req_level = QUALITY_LEVEL.get(video_quality or "", 4)
+                lower = [
+                    (level, ratio) for level, ratio in video_quality_options.items() if QUALITY_LEVEL.get(level, 0) >= req_level
+                ]
+                if lower:
+                    actual_quality, ratio_val = lower[0]
                 else:
-                    # 请求档位不在可用列表：降级到最近的更低档，若无更低档则取最低可用档
-                    req_level = QUALITY_LEVEL.get(video_quality or "", 4)
-                    lower = [
-                        (level, ratio)
-                        for level, ratio in video_quality_options.items()
-                        if QUALITY_LEVEL.get(level, 0) >= req_level
-                    ]
-                    if lower:
-                        actual_quality, ratio_val = lower[0]
-                    else:
-                        # 取最低可用档（列表最后一个）
-                        actual_quality, ratio_val = list(video_quality_options.items())[-1]
-                flv_url = flv_url + str(ratio_val)
-                m3u8_url = m3u8_url + str(ratio_val)
-        result |= {
-            "is_live": True,
-            "title": live_title,
-            "quality": video_quality,
-            "actual_quality": actual_quality,
-            "available_qualities": available_qualities,
-            "m3u8_url": m3u8_url,
-            "flv_url": flv_url,
-            "record_url": flv_url or m3u8_url,
-        }
+                    # 取最低可用档（列表最后一个）
+                    actual_quality, ratio_val = list(video_quality_options.items())[-1]
+
+    # CDN 候选排序：实测 HLS 可靠承载线路为 HS（AL/TX 常因该房间未启用该线路返回 403，
+    # 且三条线路共享完全相同的防盗链参数——AL/TX 的 403 非请求问题、而是线路未承载推流，
+    # 随时可能切换）。故枚举全部 CDN 候选交给 select_source_url 逐条按可达性校验，
+    # 首位优先 HS 以最大化「首试即中」。线路可用性动态变化，必须每轮现拉现校验、不得长期缓存。
+    cdn_priority = ["HS", "HW", "TX", "AL"]
+
+    def _rank(cdn: object) -> int:
+        try:
+            return cdn_priority.index(str(cdn))
+        except ValueError:
+            return len(cdn_priority)
+
+    candidates: list[dict[str, str]] = []
+    for cdn in sorted(stream_info_list, key=lambda c: _rank(c.get("sCdnType"))):
+        s_cdn = cdn.get("sCdnType", "") or ""
+        s_stream_name = cdn.get("sStreamName", "")
+        s_flv_url = cdn.get("sFlvUrl", "")
+        s_flv_suffix = cdn.get("sFlvUrlSuffix", "")
+        s_flv_anti = cdn.get("sFlvAntiCode") or ""
+        s_hls_url = cdn.get("sHlsUrl", "")
+        s_hls_suffix = cdn.get("sHlsUrlSuffix", "")
+        s_hls_anti = cdn.get("sHlsAntiCode") or ""
+        if not s_stream_name or not s_flv_anti:
+            continue
+        # 直接使用房间页内嵌防盗链参数（与端到端校验报告一致：HS 经 GET 校验 200 正常拉流），
+        # 不重建 anti_code（避免引入未被验证的签名算法）。统一降为 http：实测 https 返回 403、
+        # 仅 http 可用（含 HLS/FLV），与校验探针共用此 scheme 防止「校验 http 可用、录制 https 被拒」。
+        flv_url = f"{str(s_flv_url).replace('https://', 'http://')}/{s_stream_name}.{s_flv_suffix}?{s_flv_anti}"
+        if ratio_val:
+            flv_url = flv_url + "&ratio=" + str(ratio_val)
+        hls_url = ""
+        if s_hls_anti and s_hls_url and s_hls_suffix:
+            hls_url = f"{str(s_hls_url).replace('https://', 'http://')}/{s_stream_name}.{s_hls_suffix}?{s_hls_anti}"
+            if ratio_val:
+                hls_url = hls_url + "&ratio=" + str(ratio_val)
+        if hls_url or flv_url:
+            candidates.append({"cdn_type": s_cdn, "m3u8_url": hls_url, "flv_url": flv_url})
+
+    if not candidates:
+        return result
+
+    # 主源取排序后首位候选；全部候选注入 m3u8_url_list/flv_url_list 供 select_source_url
+    # 逐条按可达性校验、首条可达即选用（动态规避离线 CDN 线路）。record_url 与所选 flv 同源。
+    primary = candidates[0]
+    m3u8_url_list = [c["m3u8_url"] for c in candidates if c["m3u8_url"]]
+    flv_url_list = [c["flv_url"] for c in candidates if c["flv_url"]]
+    record_url = primary["flv_url"] or primary["m3u8_url"]
+    result |= {
+        "is_live": True,
+        "title": live_title,
+        "quality": video_quality,
+        "actual_quality": actual_quality,
+        "available_qualities": available_qualities,
+        "m3u8_url": primary["m3u8_url"],
+        "m3u8_url_list": m3u8_url_list,
+        "flv_url": primary["flv_url"],
+        "flv_url_list": flv_url_list,
+        "record_url": record_url,
+    }
     return result
 
 
@@ -620,6 +628,14 @@ async def get_douyu_stream_url(
     if rtmp_live:
         flv_url = f"{rtmp_url}/{rtmp_live}"
         result |= {"flv_url": flv_url, "record_url": flv_url}
+        # 斗鱼 wsAuth token 对 FLV/HLS 通用：路径 .flv 换 .m3u8 即同 token 的 HLS 播放列表
+        # （实测 hw CDN 200 + application/vnd.apple.mpegurl，且 token 存活远超 75 秒）。
+        # 游客态 FLV 长连接常被 CDN 约 70 秒掐断（反复分段），HLS 逐段拉取不维持长连接、
+        # 天然免疫；select_source_url 会在启用 HLS 采集时优先校验并选用 m3u8，不可达时
+        # 自动回退 FLV，故此处无条件附带该候选。
+        path, _, query = flv_url.partition("?")
+        if path.endswith(".flv"):
+            result["m3u8_url"] = f"{path[:-4]}.m3u8" + (f"?{query}" if query else "")
     return result
 
 

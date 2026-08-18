@@ -33,6 +33,7 @@ except ImportError:
 
 from . import JS_SCRIPT_PATH, http_config, utils
 from .async_http import async_req
+from .cookie_cache import fetch_cookies as _cache_fetch_cookies
 from .logger import logger, script_path
 from .room import UnsupportedUrlError, get_sec_user_id, get_unique_id, is_user_homepage_url
 from .ttwid import get_ttwid as _shared_get_ttwid
@@ -66,33 +67,32 @@ async def _ensure_ttwid(proxy_addr: OptionalStr = None) -> str:
 # 各平台自动获取凭据的缓存，避免每次请求都重新获取
 _cached_kuaishou_did: str = ""
 _cached_twitch_client_id: str = ""
-# 跨线程去重锁（与 ttwid.py 同理：多房间各独立线程/事件循环并发首轮请求时避免重复拉取）。
-# 用 RLock 而非 Lock：锁会跨越 await 持有，若同一事件循环内出现第二个并发协程，
-# 普通 Lock 会同线程自旋死锁（持锁协程永远无法恢复执行）；RLock 允许同线程重入，
-# 最坏情况退化为一次重复拉取（幂等 GET，无害），跨线程去重语义不变。
-_kuaishou_did_lock = threading.RLock()
-_twitch_client_id_lock = threading.RLock()
+# 凭据获取的互斥锁 + 二次检查：多房间线程并发首轮请求时只拉取一次，
+# 避免重复打平台接口（触发风控）与凭据互相覆盖
+_kuaishou_did_lock = threading.Lock()
+_twitch_client_id_lock = threading.Lock()
 
 
 async def _ensure_kuaishou_did(proxy_addr: OptionalStr = None) -> str:
-    # 自动获取快手访客 did/didv（访问快手直播主页时服务器下发），替代硬编码过期凭据
+    # 自动获取快手访客 did/didv（访问快手直播主页时服务器下发），替代硬编码过期凭据。
+    # 改经统一 cookie 缓存（src/cookie_cache.fetch_cookies）从快手主页动态获取，
+    # 同网址下的其他模块直接复用，避免重复请求触发风控。
     global _cached_kuaishou_did
     if _cached_kuaishou_did:
         return _cached_kuaishou_did
-    # 持锁二次检查：并发首轮请求只拉取一次（与 ttwid.py 同一线程模型假设）
     with _kuaishou_did_lock:
         if _cached_kuaishou_did:
             return _cached_kuaishou_did
         try:
-            cookies_dict = await async_req(
+            cookies_dict = await _cache_fetch_cookies(
                 url="https://live.kuaishou.com/",
                 proxy_addr=proxy_addr,
                 headers={
                     "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+                    "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
                 },
-                return_cookies=True,
                 timeout=10,
+                fetcher=async_req,  # 传入本模块 async_req，使单测对 src.spider.async_req 打桩仍生效
             )
             if isinstance(cookies_dict, dict):
                 did = cookies_dict.get("did", "")
@@ -112,11 +112,10 @@ async def _ensure_twitch_client_id(proxy_addr: OptionalStr = None) -> str:
     global _cached_twitch_client_id
     if _cached_twitch_client_id:
         return _cached_twitch_client_id
-    # 持锁二次检查：并发首轮请求只拉取一次（与 ttwid.py 同一线程模型假设）
     with _twitch_client_id_lock:
         if _cached_twitch_client_id:
             return _cached_twitch_client_id
-        fallback_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0"
+        fallback_ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0"
         try:
             html = await async_req(
                 url="https://www.twitch.tv/",
@@ -592,10 +591,11 @@ async def get_tiktok_stream_data(
         + "5177d5d53bbd822e1bf66128887d942c9c3e2f",
     }
 
-    for _attempt in range(3):
+    for _ in range(3):
         html_str = _get_str_response(
             await async_req(url=url, proxy_addr=proxy_addr, headers=headers, abroad=True, http2=False)
         )
+        await asyncio.sleep(1)  # 异步休眠，避免阻塞事件循环
         if "We regret to inform you that we have discontinued operating TikTok" in html_str:
             msg = re.search("<p>\n\\s+(We regret to inform you that we have discontinu.*?)\\.\n\\s+</p>", html_str)
             raise ConnectionError(
@@ -614,9 +614,6 @@ async def get_tiktok_stream_data(
             except Exception:
                 raise ConnectionError("Please check if your network can access the TikTok website normally")
             return _loads_dict(json_str)
-        # 仅重试前休眠（成功或最后一次失败都无需再等待）
-        if _attempt < 2:
-            await asyncio.sleep(1)
 
     raise ConnectionError(
         "Failed to retrieve TikTok data after 3 retries, please check if your network can access "
@@ -630,7 +627,7 @@ async def get_kuaishou_stream_data(
 ) -> dict[str, object]:
     # 获取快手直播数据
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
         "Accept-Language": "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2",
     }
     if cookies:
@@ -759,7 +756,7 @@ async def get_huya_stream_data(
 ) -> dict[str, object]:
     # 获取虎牙直播数据
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2",
         # 移除原硬编码的长串过期 Cookie（含大量 session/token，多数为访客统计字段）
@@ -825,60 +822,83 @@ async def get_huya_app_stream_url(
             i = cast(dict[str, object], i_obj)
             cdn_type = i.get("sCdnType")
             stream_name = i.get("sStreamName")
-            s_flv_url = i.get("sFlvUrl")
             flv_anti_code = i.get("sFlvAntiCode")
+            s_flv_url = i.get("sFlvUrl")
             s_hls_url = i.get("sHlsUrl")
             hls_anti_code = i.get("sHlsAntiCode")
-            m3u8_url = f"{s_hls_url}/{stream_name}.m3u8?{hls_anti_code}"
-            flv_url = f"{s_flv_url}/{stream_name}.flv?{flv_anti_code}"
-            play_url_list.append(
-                {
-                    "cdn_type": cdn_type,
-                    "m3u8_url": m3u8_url,
-                    "flv_url": flv_url,
-                }
-            )
-        # print(json.dumps(play_url_list, indent=4, ensure_ascii=False))
-        # flv_url = 'https://' + play_url_list[0]['flv_url'].split('://')[1]
-        # record_url = flv_url
+            if not (stream_name and flv_anti_code):
+                continue
+            # 直接使用小程序接口返回的原始防盗链参数（sHlsAntiCode/sFlvAntiCode），
+            # 统一降为 http（实测 https 返回 403、仅 http 可用），并对所有 CDN 一致地做
+            # 反爬参数替换（tars_mp→huya_webh5, bhct→bgct，缺失时幂等无副作用）。
+            # suffix 显式区分 HLS(.m3u8)/FLV(.flv)，不可依据 host 推断（HLS/FLV host 路径同为 /src）。
+            def _normalize(base: object, anti: object, suffix: str) -> str:
+                if not (isinstance(base, str) and isinstance(anti, str) and base and anti):
+                    return ""
+                url = f"{base}/{stream_name}.{suffix}?{anti}"
+                url = url.replace("https://", "http://")
+                return url.replace("&ctype=tars_mp", "&ctype=huya_webh5").replace("&fs=bhct", "&fs=bgct")
 
-        # 设定优先级，优先选择 TX,2025/03/14时AL不可用
-        priority_order = ["TX", "HW", "HS", "AL"]
+            m3u8_url = _normalize(s_hls_url, hls_anti_code, "m3u8")
+            flv_url = _normalize(s_flv_url, flv_anti_code, "flv")
+            play_url_list.append({"cdn_type": cdn_type, "m3u8_url": m3u8_url, "flv_url": flv_url})
 
-        # 查找优先的 flv_url
-        selected_flv_url: str | None = None
-        selected_cdn_type = None
+        if not play_url_list:
+            return {"anchor_name": anchor_name, "is_live": True}
 
-        for cdn in priority_order:
-            for item in play_url_list:
-                if item["cdn_type"] == cdn:
-                    item_flv = item["flv_url"]
-                    selected_flv_url = item_flv if isinstance(item_flv, str) else None
-                    selected_cdn_type = cdn
-                    break
-            if selected_flv_url:
-                break
+        # 候选排序：实测 HLS 可靠承载线路为 HS（AL/TX 常因该房间未启用该线路返回 403，
+        # 且各线路共享完全相同的防盗链参数——403 非请求问题、而是线路未承载推流，随时可能切换）。
+        # 故枚举全部候选交给 select_source_url 逐条按可达性校验，首位优先 HS 以最大化「首试即中」；
+        # 不再固定取 index0（AL 抢占时徒增无谓探针）或固定 TX 优先（TX 同样会离线）。
+        cdn_priority = ["HS", "HW", "TX", "AL"]
 
-        # 处理 flv_url，确保使用 https
+        def _rank(item: dict[str, object]) -> int:
+            try:
+                return cdn_priority.index(str(item.get("cdn_type")))
+            except ValueError:
+                return len(cdn_priority)
+
+        ordered = sorted(play_url_list, key=_rank)
+        selected_item = ordered[0]
+
+        selected_cdn_type = selected_item.get("cdn_type")
+        selected_m3u8 = selected_item.get("m3u8_url")
+        selected_flv = selected_item.get("flv_url")
+        selected_m3u8_url: str | None = selected_m3u8 if isinstance(selected_m3u8, str) else None
+        selected_flv_url: str | None = selected_flv if isinstance(selected_flv, str) else None
+
+        # record_url: 与所选 flv 同源，始终保持 http（https 实测 403）。
         record_url: str | None
         if selected_flv_url:
-            flv_url = "https://" + selected_flv_url.split("://")[1]
-
-            # 如果选择的是 TX，执行额外的字符串替换
-            if selected_cdn_type == "TX":
-                flv_url = flv_url.replace("&ctype=tars_mp", "&ctype=huya_webh5").replace("&fs=bhct", "&fs=bgct")
-
-            record_url = flv_url
+            record_url = selected_flv_url
         else:
             record_url = None
+
+        # 弹幕所需三元组:yyid 取自 profileInfo;lChannelId/lSubChannelId 优先取 data 顶层
+        # chTopId/subChId(部分响应含), 否则回退到 baseSteamInfoList[0](直播路径下必非空)。
+        # 供 main.py 在 OD/BD/UHD 分支直接组装 ayyuid/topSid/subSid, 与 web 路径字段一致。
+        first_steam_info = cast(dict[str, object], base_steam_info_list[0] if base_steam_info_list else {})
+        yyid = profile_info.get("yyid")
+        l_channel_id = data_field.get("chTopId") or first_steam_info.get("lChannelId")
+        l_sub_channel_id = data_field.get("subChId") or first_steam_info.get("lSubChannelId")
+
+        # 全部候选注入 m3u8_url_list/flv_url_list，供 select_source_url 逐条按可达性校验、
+        # 首条可达即选用（动态规避离线 CDN 线路）。候选顺序已按 HS 优先排序。
+        m3u8_url_list = [c.get("m3u8_url") for c in ordered if isinstance(c.get("m3u8_url"), str) and c.get("m3u8_url")]
+        flv_url_list = [c.get("flv_url") for c in ordered if isinstance(c.get("flv_url"), str) and c.get("flv_url")]
 
         return {
             "anchor_name": anchor_name,
             "is_live": True,
-            "m3u8_url": play_url_list[0]["m3u8_url"],
-            "flv_url": play_url_list[0]["flv_url"],
+            "m3u8_url": selected_m3u8_url,
+            "m3u8_url_list": m3u8_url_list,
+            "flv_url": selected_flv_url,
+            "flv_url_list": flv_url_list,
             "record_url": record_url,
             "title": live_title,
+            "yyid": yyid,
+            "lChannelId": l_channel_id,
+            "lSubChannelId": l_sub_channel_id,
         }
 
 
@@ -893,7 +913,7 @@ async def get_token_js(rid: str, did: str, proxy_addr: OptionalStr = None) -> di
         key_url = f"https://www.douyu.com/wgapi/livenc/liveweb/websec/getEncryption?did={did}"
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-            + "Chrome/120.0.0.0 Safari/537.36",
+            + "Chrome/141.0.0.0 Safari/537.36",
             "Referer": f"https://www.douyu.com/{rid}",
         }
         json_str = _get_str_response(await async_req(url=key_url, proxy_addr=proxy_addr, headers=headers))
@@ -949,7 +969,7 @@ async def get_douyu_info_data(
         json_data = json.loads(json_str)
         rid = json_data["pageProps"]["room"]["roomInfo"]["roomInfo"]["rid"]
 
-    headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0"
+    headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0"
     url2 = f"https://www.douyu.com/betard/{rid}"
     json_str = await async_req(url=url2, proxy_addr=proxy_addr, headers=headers)
     json_str = _get_str_response(json_str)
@@ -973,7 +993,7 @@ async def get_douyu_stream_data(
         return {"error": -1, "msg": "Failed to get sign params", "data": {}}
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36",
+        "Chrome/141.0.0.0 Safari/537.36",
         "Referer": f"https://www.douyu.com/{rid}",
         "Content-Type": "application/x-www-form-urlencoded",
     }
@@ -1000,7 +1020,7 @@ async def get_yy_stream_data(
 ) -> dict[str, object]:
     # 获取 YY 直播流数据
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0",
         "Accept-Language": "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2",
         "Referer": "https://www.yy.com/",
         # 移除原硬编码的 YY 访客统计 Cookie（hd_newui/hdjs_session_id 等均为临时统计字段）
@@ -1053,8 +1073,8 @@ async def get_yy_stream_data(
 async def get_bilibili_room_info_h5(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> str:
     # 获取 B站直播间 H5 接口信息
     headers = {
-        "user-agent": "Mozilla/5.0 (Linux; Android 11; SAMSUNG SM-G973U) AppleWebKit/537.36 (KHTML, like Gecko) "
-        "SamsungBrowser/14.2 Chrome/87.0.4280.141 Mobile Safari/537.36",
+        "user-agent": "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/141.0.0.0 Mobile Safari/537.36",
         "accept-language": "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2",
         "cookie": "",
         "origin": "https://live.bilibili.com",
@@ -1078,7 +1098,7 @@ async def get_bilibili_room_info(
 ) -> dict[str, object]:
     # 获取 B站直播间信息（含主播名）
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2",
     }
@@ -1114,7 +1134,7 @@ async def get_bilibili_stream_data(
 ) -> dict[str, object] | None:
     # 获取 B站直播流数据（多清晰度），返回 {url, current_qn, accept_qn}
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
         "Accept-Language": "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2",
         "origin": "https://live.bilibili.com",
         "referer": "https://live.bilibili.com/26066074",
@@ -1172,7 +1192,7 @@ async def get_bilibili_stream_data(
         if not stream_data_list:
             return None
         sorted_stream_list: list[dict[str, object]] = sorted(
-            stream_data_list, key=lambda s: cast(int, s.get("current_qn", 0)), reverse=True
+            stream_data_list, key=itemgetter("current_qn"), reverse=True
         )
         video_quality_options = {"10000": 0, "400": 1, "250": 2, "150": 3, "80": 4}
         qn_count = len(sorted_stream_list)
@@ -1189,6 +1209,275 @@ async def get_bilibili_stream_data(
         current_qn = str(stream_data.get("current_qn", qn))
         accept_qn = [str(s.get("current_qn")) for s in sorted_stream_list]
         return {"url": m3u8_url, "current_qn": current_qn, "accept_qn": accept_qn}
+
+
+# B站 wbi 签名混排表（官方固定 64 位置换，用于将 img_key+sub_key 截取为 32 位 mixinKey）
+_MIXIN_KEY_ENC_TAB = [
+    46,
+    47,
+    18,
+    2,
+    53,
+    8,
+    23,
+    32,
+    15,
+    50,
+    10,
+    31,
+    58,
+    3,
+    45,
+    35,
+    27,
+    43,
+    5,
+    49,
+    33,
+    9,
+    42,
+    19,
+    29,
+    28,
+    14,
+    39,
+    12,
+    38,
+    41,
+    13,
+    37,
+    48,
+    7,
+    16,
+    24,
+    55,
+    40,
+    61,
+    26,
+    17,
+    6,
+    60,
+    21,
+    57,
+    59,
+    62,
+    11,
+    36,
+    20,
+    51,
+    54,
+    25,
+    1,
+    34,
+    56,
+    30,
+    4,
+    22,
+    44,
+    52,
+    63,
+    0,
+]
+
+
+def _get_mixin_key(orig: str) -> str:
+    # 按官方混排表从 img_key+sub_key 截取 32 位 mixinKey
+    return "".join(orig[i] for i in _MIXIN_KEY_ENC_TAB)[:32]
+
+
+def _sign_wbi(params: dict[str, str], img_key: str, sub_key: str) -> dict[str, str]:
+    # 生成 w_rid 签名：拼接 img_key+sub_key -> mixinKey -> 追加参数并 md5
+    mixin_key = _get_mixin_key(img_key + sub_key)
+    params["wts"] = str(int(time.time()))
+    query = urllib.parse.urlencode(sorted(params.items()))
+    params["w_rid"] = hashlib.md5((query + mixin_key).encode("utf-8")).hexdigest()
+    return params
+
+
+# B站 buvid 缓存：设备级标识（非房间级），进程内首次获取/生成后全局复用，
+# 避免每个监测周期重复请求 spi 反复触发 B站风控（200+空 body，越取越失败的循环）
+_bili_buvid_lock = threading.Lock()
+_bili_buvid_cached = ""
+# 当前缓存值是否为「生成的随机 UUID 兜底」（非服务器注册的真实设备标识）。
+# 弹幕服务器对未注册 buvid 的 AUTH 会软拒绝；客户端收到拒绝后经
+# invalidate_bili_buvid_cache() 清除缓存，下一轮监测重新走真实获取链。
+_bili_buvid_is_fallback = False
+
+
+def invalidate_bili_buvid_cache() -> None:
+    # 使进程内 buvid 缓存失效（不清 cookie_cache 的首页 Set-Cookie TTL 缓存——那里存的
+    # 是真实注册标识，可继续复用）。触发方为弹幕 AUTH 被拒：兜底 UUID 被服务器拒绝后
+    # 不可复用，必须重新获取；真实 buvid 被拒时重取亦无副作用。
+    global _bili_buvid_cached, _bili_buvid_is_fallback
+    with _bili_buvid_lock:
+        _bili_buvid_cached = ""
+        _bili_buvid_is_fallback = False
+
+
+async def get_bilibili_danmaku_info(
+    url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None
+) -> dict[str, object] | None:
+    # 获取 B站弹幕连接参数（token/server_host/host_list/room_id/uid/buvid），供 BilibiliDanmaku 进房。
+    # 必须带 wbi 签名，否则 getDanmuInfo 返回 -352 风控。短号房间需先 room_init 转为真实 room_id。
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2",
+        "origin": "https://live.bilibili.com",
+        "referer": "https://live.bilibili.com",
+    }
+    if cookies:
+        headers["Cookie"] = cookies
+
+    room_id = _safe_extract_id(url)
+
+    # 1) room_init 取真实 room_id 与 uid（短号房间 URL 的 path id 可能是短号，需转换）
+    real_room_id = room_id
+    uid = 0
+    try:
+        init_str = await async_req(
+            f"https://api.live.bilibili.com/room/v1/Room/room_init?id={room_id}",
+            proxy_addr=proxy_addr,
+            headers=headers,
+        )
+        init_data = _loads_dict(_get_str_response(init_str))
+        init_room: dict[str, object] = {}
+        if isinstance(init_data, dict):
+            d = init_data.get("data")
+            if isinstance(d, dict):
+                init_room = d
+        real_room_id = str(init_room.get("room_id") or room_id)
+        _uid = init_room.get("uid")
+        uid = int(_uid) if isinstance(_uid, int) else 0
+    except Exception as e:
+        logger.warning(f"[B站直播]room_init 失败: {type(e).__name__}: {e}")
+
+    # 2) nav 取 wbi_img（img_key/sub_key）
+    img_key = ""
+    sub_key = ""
+    try:
+        nav_str = await async_req(
+            "https://api.bilibili.com/x/web-interface/nav", proxy_addr=proxy_addr, headers=headers
+        )
+        nav_data = _loads_dict(_get_str_response(nav_str))
+        nav_wbi: dict[str, object] = {}
+        if isinstance(nav_data, dict):
+            w = nav_data.get("data")
+            if isinstance(w, dict):
+                nw = w.get("wbi_img")
+                if isinstance(nw, dict):
+                    nav_wbi = nw
+        img_url = str(nav_wbi.get("img_url", ""))
+        sub_url = str(nav_wbi.get("sub_url", ""))
+        img_key = img_url.rsplit("/", 1)[-1].split(".")[0]
+        sub_key = sub_url.rsplit("/", 1)[-1].split(".")[0]
+    except Exception as e:
+        logger.warning(f"[B站直播]nav(wbi) 获取失败: {type(e).__name__}: {e}")
+
+    # 3) buvid 获取链（匿名弹幕进房也需要 buvid 字段），按「真实注册标识优先」排序：
+    #    a. 进程缓存   —— 设备级标识，长期有效；
+    #    b. 登录 cookie —— cookie 带 buvid3= 时提取（服务器注册过的最可靠来源）；
+    #    c. spi 接口   —— 官方端点 /x/frontend/finger/spi（注意结尾 i，拼写错误会 200+空 body）。
+    #                     偶发风控返回空响应体（200+空 body）→ _loads_dict 得 {}，重试一次再定罪；
+    #    d. 首页 Set-Cookie —— GET https://www.bilibili.com/ 响应头下发真实注册 buvid3
+    #                     （与 spi 不同域名，spi 被风控时通常仍可用；经 cookie_cache 复用）；
+    #    e. 随机 UUID 兜底 —— 未注册标识，弹幕服务器 AUTH 会软拒绝；仅保进房包非空，
+    #                     被拒后由 invalidate_bili_buvid_cache() 清除，下一轮重新获取。
+    # 进房包带空 buvid 会被弹幕服务器硬断连（"no close frame received or sent"），故必须非空。
+    # 锁覆盖取值全程：并发首次调用只打一次 spi/首页；兜底 UUID 同样缓存但标记 is_fallback。
+    global _bili_buvid_cached, _bili_buvid_is_fallback
+    with _bili_buvid_lock:
+        buvid = _bili_buvid_cached
+        if not buvid and cookies:
+            _m = re.search(r"buvid3=([^;\s]+)", str(cookies))
+            if _m and _m.group(1).strip():
+                buvid = _m.group(1).strip()
+                logger.debug(f"[B站直播]使用 cookie 中的 buvid3: {buvid}")
+        if not buvid:
+            for _attempt in range(2):
+                try:
+                    spi_str = await async_req(
+                        "https://api.bilibili.com/x/frontend/finger/spi", proxy_addr=proxy_addr, headers=headers
+                    )
+                    spi_data = _loads_dict(_get_str_response(spi_str))
+                    spi_d: dict[str, object] = {}
+                    if isinstance(spi_data, dict):
+                        s = spi_data.get("data")
+                        if isinstance(s, dict):
+                            spi_d = s
+                    buvid = str(spi_d.get("b_3") or spi_d.get("buvid") or "")
+                    if buvid:
+                        break
+                except Exception as e:
+                    if _attempt == 0:
+                        logger.debug(f"[B站直播]buvid 获取失败(将重试): {type(e).__name__}: {e}")
+                    else:
+                        logger.warning(f"[B站直播]buvid 获取失败: {type(e).__name__}: {e}")
+        if not buvid:
+            # spi 两跳仍空（风控）：改走首页 Set-Cookie（真实注册标识，cookie_cache 内置
+            # TTL 缓存与并发去重；UA 需浏览器态——headers 已是 Firefox UA）
+            try:
+                home_cookies = await _cache_fetch_cookies(
+                    "https://www.bilibili.com/", proxy_addr=proxy_addr, headers=headers, fetcher=async_req
+                )
+                buvid = str(home_cookies.get("buvid3", "")).strip()
+                if buvid:
+                    logger.debug(f"[B站直播]spi 失败，从首页 Set-Cookie 获取 buvid3: {buvid}")
+            except Exception as e:
+                logger.debug(f"[B站直播]首页 Set-Cookie 获取 buvid3 失败: {type(e).__name__}: {e}")
+        if not buvid:
+            buvid = str(uuid.uuid4())
+            _bili_buvid_is_fallback = True
+            logger.debug(f"[B站直播]spi/首页均无 buvid，使用生成兜底 buvid3（未注册，AUTH 可能被拒）: {buvid}")
+        else:
+            _bili_buvid_is_fallback = False
+        _bili_buvid_cached = buvid
+
+    # 4) getDanmuInfo（wbi 签名）；无 wbi 则跳过签名，由调用方 -352 风控日志体现
+    danmu_params: dict[str, str] = {"id": real_room_id, "type": "0", "web_location": "444.8"}
+    if img_key and sub_key:
+        try:
+            _sign_wbi(danmu_params, img_key, sub_key)
+        except Exception as e:
+            logger.warning(f"[B站直播]wbi 签名失败: {type(e).__name__}: {e}")
+    try:
+        danmu_str = await async_req(
+            f"https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo?"
+            f"{urllib.parse.urlencode(danmu_params)}",
+            proxy_addr=proxy_addr,
+            headers=headers,
+        )
+        danmu_data = _loads_dict(_get_str_response(danmu_str))
+        danmu: dict[str, object] = {}
+        if isinstance(danmu_data, dict):
+            dd = danmu_data.get("data")
+            if isinstance(dd, dict):
+                danmu = dd
+        if not danmu:
+            logger.warning("[B站直播]getDanmuInfo 返回空（可能 -352 风控，检查 wbi 签名/cookie）")
+            return None
+        token = str(danmu.get("token", ""))
+        host_list_raw = danmu.get("host_list")
+        host_list: list[str] = []
+        if isinstance(host_list_raw, list):
+            host_list = [str(h.get("host", "")) for h in host_list_raw if isinstance(h, dict) and h.get("host")]
+        if not host_list:
+            logger.warning("[B站直播]getDanmuInfo 无可用 host")
+            return None
+        server_host = host_list[0]
+    except Exception as e:
+        logger.warning(f"[B站直播]getDanmuInfo 失败: {type(e).__name__}: {e}")
+        return None
+
+    return {
+        "room_id": int(real_room_id) if str(real_room_id).isdigit() else real_room_id,
+        "uid": uid,
+        "token": token,
+        "server_host": server_host,
+        "host_list": host_list,
+        "buvid": buvid,
+        "cookie": cookies or "",
+    }
 
 
 @trace_error_decorator
@@ -1218,8 +1507,7 @@ async def get_xhs_stream_url(
     match_data = re.search("<script>window.__INITIAL_STATE__=(.*?)</script>", html_str)
 
     if match_data:
-        # 仅替换 JSON 裸字面量 undefined（键值/数组元素位置），避免全局替换误伤字符串值
-        json_str = re.sub(r"(?<=[:,[])\s*undefined\b", " null", match_data.group(1))
+        json_str = match_data.group(1).replace("undefined", "null")
         json_data = json.loads(json_str)
 
         if json_data.get("liveStream"):
@@ -1265,7 +1553,7 @@ async def get_bigo_stream_url(
 ) -> dict[str, object]:
     # 获取 bigo 直播流地址
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
         "Accept-Language": "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2",
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
         "Referer": "https://www.bigo.tv/",
@@ -1365,7 +1653,7 @@ async def login_sooplive(username: str, password: str, proxy_addr: OptionalStr =
         )
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
         "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
         "Origin": "https://play.sooplive.co.kr",
         "Referer": "https://play.sooplive.co.kr/superbsw123/277837074",
@@ -1409,7 +1697,7 @@ async def get_sooplive_cdn_url(
 ) -> dict[str, object]:
     # 获取 SOOP(原AfreecaTV) 平台 CDN 流地址
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
         "Accept-Language": "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2",
         "Origin": "https://play.sooplive.co.kr",
         "Referer": "https://play.sooplive.co.kr/oul282/249469582",
@@ -1440,7 +1728,7 @@ async def get_sooplive_tk(
 ) -> str | tuple[str, str]:
     # 获取 SOOP(原AfreecaTV) 平台临时访问 token
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
         "Origin": "https://play.sooplive.co.kr",
         "Referer": "https://play.sooplive.co.kr/secretx/250989857",
         "Content-Type": "application/x-www-form-urlencoded",
@@ -1575,7 +1863,7 @@ async def get_sooplive_stream_data(
 ) -> dict[str, object]:
     # 获取 SOOP(原AfreecaTV) 平台直播流数据
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
         "Accept-Language": "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2",
         "Referer": "https://m.sooplive.co.kr/",
         "Content-Type": "application/x-www-form-urlencoded",
@@ -1625,7 +1913,7 @@ async def get_sooplive_stream_data(
         bandwidth_pattern = re.compile(r"BANDWIDTH=(\d+)")
         bandwidth_list = bandwidth_pattern.findall(resp)
         url_to_bandwidth = {purl: int(bandwidth) for bandwidth, purl in zip(bandwidth_list, play_url_list)}
-        play_url_list = sorted(play_url_list, key=lambda purl: url_to_bandwidth.get(purl, 0), reverse=True)
+        play_url_list = sorted(play_url_list, key=lambda purl: url_to_bandwidth[purl], reverse=True)
         return play_url_list
 
     if not anchor_name:
@@ -1702,7 +1990,7 @@ async def get_netease_stream_data(
         "accept": "application/json, text/plain, */*",
         "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
         "referer": "https://cc.163.com/",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
     }
     if cookies:
         headers["Cookie"] = cookies
@@ -1742,7 +2030,7 @@ async def get_qiandurebo_stream_data(
         "application/signed-exchange;v=b3;q=0.7",
         "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
         "referer": "https://qiandurebo.com/web/index.php",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
     }
     if cookies:
         headers["Cookie"] = cookies
@@ -1778,7 +2066,7 @@ async def get_pandatv_stream_data(
     headers = {
         "origin": "https://www.pandalive.co.kr",
         "referer": "https://www.pandalive.co.kr/",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
     }
     if cookies:
         headers["Cookie"] = cookies
@@ -1839,7 +2127,7 @@ async def get_maoerfm_stream_url(
         "accept": "application/json, text/plain, */*",
         "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
         "referer": "https://fm.missevan.com/live/868895007",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
     }
     if cookies:
         headers["Cookie"] = cookies
@@ -1876,7 +2164,7 @@ async def get_winktv_bj_info(
         "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
         "content-type": "application/x-www-form-urlencoded",
         "referer": "https://www.winktv.co.kr/",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
     }
     if cookies:
         headers["Cookie"] = cookies
@@ -1907,7 +2195,7 @@ async def get_winktv_stream_data(
         "content-type": "application/x-www-form-urlencoded",
         "referer": "https://www.winktv.co.kr",
         "origin": "https://www.winktv.co.kr",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
     }
     if cookies:
         headers["Cookie"] = cookies
@@ -1954,7 +2242,7 @@ async def login_flextv(username: str, password: str, proxy_addr: OptionalStr = N
         "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
         "content-type": "application/json;charset=UTF-8",
         "referer": "https://www.ttinglive.com/",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
     }
 
     data = {
@@ -2002,7 +2290,7 @@ async def get_flextv_stream_url(url: str, proxy_addr: OptionalStr = None, cookie
             "accept": "application/json, text/plain, */*",
             "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
             "referer": "https://www.ttinglive.com/",
-            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
         }
         user_id = url.split("/live")[0].rsplit("/", maxsplit=1)[-1]
         if cookie:
@@ -2039,7 +2327,7 @@ async def get_flextv_stream_data(
         "accept": "application/json, text/plain, */*",
         "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
         "referer": "https://www.ttinglive.com/",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
     }
     if cookies:
         headers["Cookie"] = cookies
@@ -2176,7 +2464,7 @@ async def get_looklive_stream_url(
     # 通过PC网页端的接口获取完整直播源，只有params和encSecKey这两个加密请求参数。
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
         "Accept": "application/json, text/javascript",
         "Accept-Language": "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2",
         "Content-Type": "application/x-www-form-urlencoded",
@@ -2227,7 +2515,7 @@ async def login_popkontv(
         "Authorization": "Basic FpAhe6mh8Qtz116OENBmRddbYVirNKasktdXQiuHfm88zRaFydTsFy63tzkdZY0u",
         "Content-Type": "application/json",
         "Origin": "https://www.popkontv.com",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
     }
 
     data = {
@@ -2270,14 +2558,14 @@ async def get_popkontv_stream_data(
     cookies: OptionalStr = None,
     username: OptionalStr = None,
     code: OptionalStr = "P-00001",
-) -> tuple[str, list[object] | None] | dict[str, object]:
+) -> tuple[str, list[object] | None]:
     # 获取 PopkonTV 直播流数据
     headers = {
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
         "Content-Type": "application/json",
         "Origin": "https://www.popkontv.com",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
     }
     if cookies:
         headers["Cookie"] = cookies
@@ -2357,7 +2645,7 @@ async def get_popkontv_stream_url(
         "ClientKey": "Client FpAhe6mh8Qtz116OENBmRddbYVirNKasktdXQiuHfm88zRaFydTsFy63tzkdZY0u",
         "Content-Type": "application/json",
         "Origin": "https://www.popkontv.com",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
     }
 
     if access_token:
@@ -2369,7 +2657,7 @@ async def get_popkontv_stream_url(
     result: dict[str, object] = {"anchor_name": anchor_name, "is_live": False}
     new_token = None
     if room_info:
-        cast_start_date_code, cast_partner_code, mc_sign_id, cast_type, is_private = room_info  # type: ignore[str-unpack]
+        cast_start_date_code, cast_partner_code, mc_sign_id, cast_type, is_private = room_info
         result["is_live"] = True
         room_password = get_params(url, "pwd")
         if int(cast(str, is_private)) != 0 and not room_password:
@@ -2526,13 +2814,14 @@ async def get_twitcasting_stream_url(
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
         "Referer": "https://twitcasting.tv/?ch0",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
     }
 
-    _twitcast_parts = url.split("?")[0].split("/")
-    if len(_twitcast_parts) < 4:
-        raise RuntimeError(f"TwitCasting URL 格式不正确，无法提取主播 ID: {url}")
-    anchor_id = _twitcast_parts[3]
+    parts = url.split("?")[0].split("/")
+    if len(parts) < 4 or not parts[3].strip():
+        # 畸形 URL（无主播 ID 段）：显式报错而非 IndexError
+        raise RuntimeError(f"无法从链接中解析 TwitCasting 主播 ID: {url}")
+    anchor_id = parts[3]
     if cookies:
         headers["Cookie"] = cookies
 
@@ -2694,7 +2983,7 @@ async def get_weibo_stream_data(
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
         # 移除原硬编码的微博登录态 Cookie（含 XSRF-TOKEN/SUB/SUBP/WBPSESS 等用户登录凭据）
         # 未配置 cookie 时不发送 Cookie 头；公开直播间信息无需登录态
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
         "Referer": "https://weibo.com/u/5885340893",
     }
     if cookies:
@@ -2704,9 +2993,11 @@ async def get_weibo_stream_data(
     if "show/" in url:
         room_id = url.split("?")[0].split("show/")[1]
     else:
-        if "/u/" not in url:
-            raise RuntimeError(f"微博 URL 格式不正确，无法提取 uid: {url}")
-        uid = url.split("?")[0].rsplit("/u/", maxsplit=1)[1]
+        parts = url.split("?")[0].rsplit("/u/", maxsplit=1)
+        if len(parts) < 2 or not parts[1].strip():
+            # 畸形 URL（无 /u/ 用户段）：显式报错而非 IndexError
+            raise RuntimeError(f"无法从链接中解析微博用户 ID: {url}")
+        uid = parts[1]
         web_api = f"https://weibo.com/ajax/statuses/mymblog?uid={uid}&page=1&feature=0"
         json_str = await async_req(web_api, proxy_addr=proxy_addr, headers=headers)
         json_str = _get_str_response(json_str)
@@ -2746,7 +3037,7 @@ async def get_kugou_stream_url(
 ) -> dict[str, object]:
     # 获取酷狗繁星直播流地址
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
         "Accept": "application/json",
         "Accept-Language": "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2",
         "Referer": "https://fanxing2.kugou.com/",
@@ -2804,7 +3095,7 @@ async def get_twitchtv_room_info(
     # 动态获取 Twitch Web 端公开 Client-Id，替代原硬编码值
     client_id = await _ensure_twitch_client_id(proxy_addr)
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
         "Accept-Language": "zh-CN",
         "Referer": "https://www.twitch.tv/",
         "Client-Id": client_id,
@@ -2850,7 +3141,7 @@ async def get_twitchtv_stream_data(
     # 动态获取 Twitch Web 端公开 Client-Id，替代原硬编码值
     client_id = await _ensure_twitch_client_id(proxy_addr)
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
         "Accept-Language": "en-US",
         "Referer": "https://www.twitch.tv/",
         "Client-ID": client_id,
@@ -2937,9 +3228,7 @@ async def get_liveme_stream_url(
     room_id = url.split("/index.html")[0].rsplit("/", maxsplit=1)[-1]
     with open(f"{JS_SCRIPT_PATH}/liveme.js", encoding="utf-8") as f:
         liveme_js = f.read()
-    # execjs 会同步 fork Node 子进程阻塞事件循环，移入线程池执行（与 migu 路径一致）
-    _liveme_compiled = execjs.compile(liveme_js)
-    sign_data = await asyncio.to_thread(_liveme_compiled.call, "sign", room_id, f"{JS_SCRIPT_PATH}/crypto-js.min.js")
+    sign_data = execjs.compile(liveme_js).call("sign", room_id, f"{JS_SCRIPT_PATH}/crypto-js.min.js")
     lm_s_sign = sign_data.pop("lm_s_sign")
     tongdun_black_box = sign_data.pop("tongdun_black_box")
     platform = sign_data.pop("os")
@@ -2973,7 +3262,7 @@ async def get_huajiao_sn(
     headers = {
         "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
         "referer": "https://www.huajiao.com/",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
     }
 
     if cookies:
@@ -3009,7 +3298,7 @@ async def get_huajiao_user_info(
     headers = {
         "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
         "referer": "https://www.huajiao.com/",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
     }
 
     if cookies:
@@ -3065,13 +3354,13 @@ async def get_huajiao_stream_url_app(
     json_str = _get_str_response(json_str)
     json_data = json.loads(json_str)
 
-    data = json_data.get("data") or {}
-    if json_data.get("errmsg") or not data.get("creatime"):
+    if json_data["errmsg"] or not json_data["data"].get("creatime"):
         print(
             "Failed to retrieve live room data, the Huajiao live room address is not fixed, please manually change "
             "the address for recording."
         )
         return None
+    data = json_data["data"]
     return {
         "anchor_name": data["author"]["nickname"],
         "title": data["feed"]["title"],
@@ -3090,7 +3379,7 @@ async def get_huajiao_stream_url(
     headers = {
         "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
         "referer": "https://www.huajiao.com/",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
     }
     if cookies:
         headers["Cookie"] = cookies
@@ -3175,7 +3464,7 @@ async def get_showroom_stream_data(
     # 获取 ShowRoom 直播流数据
     headers = {
         "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
     }
     if cookies:
         headers["Cookie"] = cookies
@@ -3231,7 +3520,7 @@ async def get_acfun_sign_params(
     did = f"web_{utils.generate_random_string(16)}"
     headers = {
         "referer": "https://live.acfun.cn/",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
         "cookie": f"_did={did};",
     }
     if cookies:
@@ -3255,7 +3544,7 @@ async def get_acfun_stream_data(
     # 获取 Acfun 直播流数据
     headers = {
         "referer": "https://live.acfun.cn/live/17912421",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
     }
     if cookies:
         headers["Cookie"] = cookies
@@ -3352,7 +3641,7 @@ async def get_yingke_stream_url(
     # 获取映客直播流地址
     headers = {
         "Referer": "https://www.inke.cn/",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
     }
     if cookies:
         headers["Cookie"] = cookies
@@ -3441,7 +3730,7 @@ async def get_zhihu_stream_url(
     # 获取知乎直播流地址
     headers = {
         "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
     }
     if cookies:
         headers["Cookie"] = cookies
@@ -3453,11 +3742,11 @@ async def get_zhihu_stream_url(
         json_str = _get_str_response(json_str)
         json_data = json.loads(json_str)
         drama = json_data.get("drama") or {}
-        theater = drama.get("living_theater") or {}
-        live_page_url = cast(str, theater.get("theater_url") or "")
-        if not live_page_url:
-            # 未开播/接口结构变化时 drama 不存在：原实现 KeyError 被吞成未直播，改为显式返回
+        living_theater = drama.get("living_theater") or {}
+        # 未开播（无 drama/无在映剧场）直接返回，不再发起后续页面请求
+        if not living_theater.get("theater_url"):
             return {"anchor_name": "", "is_live": False}
+        live_page_url = living_theater["theater_url"]
     else:
         live_page_url = url
 
@@ -3496,7 +3785,7 @@ async def get_chzzk_stream_data(
         "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
         "origin": "https://chzzk.naver.com",
         "referer": "https://chzzk.naver.com/live/458f6ec20b034f49e0fc6d03921646d2",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
     }
     if cookies:
         headers["Cookie"] = cookies
@@ -3543,9 +3832,7 @@ async def get_haixiu_stream_url(
     params = {"accessToken": access_token, "tku": "3000006", "c": "10138100100000", "_st1": int(time.time() * 1000)}
     with open(f"{JS_SCRIPT_PATH}/haixiu.js", encoding="utf-8") as f:
         haixiu_js = f.read()
-    # execjs 会同步 fork Node 子进程阻塞事件循环，移入线程池执行（与 migu 路径一致）
-    _haixiu_compiled = execjs.compile(haixiu_js)
-    ajax_data = await asyncio.to_thread(_haixiu_compiled.call, "sign", params, f"{JS_SCRIPT_PATH}/crypto-js.min.js")
+    ajax_data = execjs.compile(haixiu_js).call("sign", params, f"{JS_SCRIPT_PATH}/crypto-js.min.js")
 
     params["accessToken"] = urllib.parse.unquote(urllib.parse.unquote(access_token))
     params["_ajaxData1"] = ajax_data
@@ -3611,13 +3898,13 @@ async def get_vvxqiu_stream_url(
         anchor_name = json_data["data"]["memberVO"]["memberName"]
 
     result: dict[str, object] = {"anchor_name": anchor_name, "is_live": False}
+    # 房间号缺失时不再探测 m3u8（拼不出有效地址，请求必然无意义）
     if not room_id:
-        logger.warning("vvxqiu 房间号缺失，无法构造直播流地址")
         return result
     m3u8_url = f"https://liveplay-pro.wasaixiu.com/live/1400442770_{room_id}_{room_id[2:]}_single.m3u8"
     resp = await async_req(m3u8_url, proxy_addr=proxy_addr, headers=headers)
     resp = _get_str_response(resp)
-    # 空响应（网络失败/超时返回 ""）不得误判为直播中
+    # 空响应也判未直播：此前空串不含 "Not Found" 会误判为开播
     if resp and "Not Found" not in resp:
         result |= {"is_live": True, "m3u8_url": m3u8_url, "record_url": m3u8_url}
     return result
@@ -3704,7 +3991,7 @@ async def get_pplive_stream_url(
         headers["Cookie"] = cookies
 
     room_id = get_params(url, "anchorUid")
-    json_data = {
+    req_body = {
         "inviteUuid": "",
         "anchorUuid": room_id,
     }
@@ -3715,7 +4002,7 @@ async def get_pplive_stream_url(
         headers["Referer"] = "https://h.catshow168.com"
     else:
         api = "https://api.pp.weimipopo.com/live/preview"
-    json_str = await async_req(api, json_data=json_data, proxy_addr=proxy_addr, headers=headers)
+    json_str = await async_req(api, json_data=req_body, proxy_addr=proxy_addr, headers=headers)
     json_str = _get_str_response(json_str)
     json_data = json.loads(json_str)
     live_info = json_data["data"]
@@ -3791,27 +4078,20 @@ async def get_shopee_stream_url(
 
     if "live.shopee" not in url and "uid" not in url:
         url_result = await async_req(url, proxy_addr=proxy_addr, headers=headers, redirect_url=True, abroad=True)
+        # 重定向失败（空响应）时保留原 URL 继续解析，避免后续 split 越界
         if isinstance(url_result, str) and url_result:
             url = url_result
 
-    try:
-        url_host = url.split("/")[2]
-    except IndexError:
-        logger.warning(f"Shopee URL 格式异常（重定向可能失败）: {url!r}")
+    # 畸形 URL（无 host）直接判未直播，不再抛 IndexError
+    if "://" not in url or len(url.split("/")) < 3 or not url.split("/")[2]:
         return result
 
     if "live.shopee" in url:
-        host_suffix = url_host.rsplit(".", maxsplit=1)[1]
+        host_suffix = url.split("/")[2].rsplit(".", maxsplit=1)[1]
         is_living = get_params(url, "uid") is None
     else:
-        # 非 live.shopee 域名（重定向失败或主页链接）：取 shopee. 之后的完整后缀
-        # （如 shopee.co.id → co.id、shopee.vn → vn）。原实现取首段拼出
-        # live.shopee.shopee 这类错误 host。
-        host_suffix = url_host.split("shopee.", 1)[1] if "shopee." in url_host else ""
-
-    if not host_suffix:
-        logger.warning(f"Shopee URL 域名解析失败: {url!r}")
-        return result
+        # 完整 TLD 后缀：shopee.co.id → "co.id"（只取首段会拼出 live.shopee.shopee）
+        host_suffix = url.split("/")[2].split(".", maxsplit=1)[-1]
 
     uid = get_params(url, "uid")
     api_host = f"https://live.shopee.{host_suffix}"
@@ -3865,7 +4145,7 @@ async def get_youtube_stream_url(
     # 获取 YouTube 直播流地址
     headers = {
         "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
     }
 
     if cookies:
@@ -3899,7 +4179,7 @@ async def get_taobao_stream_url(
     # 获取淘宝直播流地址
     headers = {
         "Referer": "https://huodong.m.taobao.com/",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
         "Cookie": "",
     }
 
@@ -4082,7 +4362,7 @@ async def get_faceit_stream_data(
     headers = {
         "Referer": "https://www.faceit.com/zh/players/qpjzz/stream",
         "faceit-referer": "web-next",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
     }
 
     if cookies:
@@ -4102,8 +4382,7 @@ async def get_faceit_stream_data(
     anchor_id = platform_info.get("platformId")
     platform = platform_info.get("platform")
     if platform == "twitch":
-        # 透传 proxy_addr 与 cookies：Faceit 转 Twitch 的录制请求若丢失代理与登录态，
-        # 海外房间将无法录制（与此前修复的代理丢失问题同类）
+        # 委托 Twitch 解析：透传代理与 cookies，否则登录态/代理全部丢失
         result = await get_twitchtv_stream_data(f"https://www.twitch.tv/{anchor_id}", proxy_addr, cookies)
         result["anchor_name"] = anchor_name
     else:
@@ -4120,7 +4399,7 @@ async def get_migu_stream_url(
         "origin": "https://www.miguvideo.com",
         "referer": "https://www.miguvideo.com/",
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0",
+        "Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0",
         "appCode": "miguvideo_default_www",
         "appId": "miguvideo",
         "channel": "H5",
@@ -4136,7 +4415,8 @@ async def get_migu_stream_url(
     json_data = json.loads(json_str)
 
     anchor_name = json_data["body"].get("title") or ""
-    live_title = (json_data["body"].get("title") or "") + "-" + (json_data["body"].get("detailPageTitle") or "")
+    detail_title = json_data["body"].get("detailPageTitle") or ""
+    live_title = f"{anchor_name}-{detail_title}" if detail_title else anchor_name
     room_id = json_data["body"].get("pId")
 
     result: dict[str, object] = {"anchor_name": anchor_name, "is_live": False}
@@ -4166,11 +4446,10 @@ async def get_migu_stream_url(
         source_url = json_data["body"]["urlInfo"]["url"]
 
         async def _get_dd_calcu(url: str) -> str:
-            # 来秀签名算法（内部方法）。subprocess 同步阻塞，交由线程池执行避免卡住事件循环；
-            # 加超时防止 node 挂起永久占用线程池线程。
+            # 咪咕签名算法（内部方法）：node 失败/超时统一转为 ProgramError，
+            # 由上层装饰器按平台错误处理，不向调用方泄漏 CalledProcessError
             try:
-                result = await asyncio.to_thread(
-                    subprocess.run,
+                result = subprocess.run(
                     ["node", f"{JS_SCRIPT_PATH}/migu.js", url],
                     capture_output=True,
                     text=True,
@@ -4178,22 +4457,16 @@ async def get_migu_stream_url(
                     timeout=30,
                 )
                 return result.stdout.strip()
-            except subprocess.CalledProcessError as e:
-                raise ProgramError(
-                    f"Failed to execute JS code (exit {e.returncode}). Please check the Node.js environment"
-                )
-            except subprocess.TimeoutExpired:
-                raise ProgramError("JS 签名执行超时。请检查 Node.js 环境")
-            except ProgramError:
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
                 raise ProgramError("Failed to execute JS code. Please check if the Node.js environment")
 
         ddCalcu = await _get_dd_calcu(source_url)
         real_source_url = f"{source_url}&ddCalcu={ddCalcu}&sv=10010"
         if ".m3u8" in real_source_url:
             m3u8_url = await async_req(real_source_url, proxy_addr=proxy_addr, headers=headers, redirect_url=True)
-            # 重定向失败时 async_req 返回空串，不得写入空 URL 误判直播
-            if not isinstance(m3u8_url, str) or not m3u8_url:
-                logger.warning("migu m3u8 重定向地址获取失败")
+            m3u8_url = _get_str_response(m3u8_url)
+            # 重定向失败（空响应）判未直播，避免把空串当流地址返回
+            if not m3u8_url:
                 return result
             result["m3u8_url"] = m3u8_url
             result["record_url"] = m3u8_url
@@ -4211,7 +4484,7 @@ async def get_lianjie_stream_url(
     # 获取连接直播流地址
     headers = {
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0",
+        "Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0",
         "accept-language": "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2",
     }
 
@@ -4232,8 +4505,8 @@ async def get_lianjie_stream_url(
     if live_status == 1:
         title = room_data["defaultRoomTitle"]
         webrtc_url = room_data["videoUrl"]
-        if not isinstance(webrtc_url, str) or "webrtc://" not in webrtc_url:
-            logger.warning(f"连接直播视频地址格式异常: {webrtc_url!r}")
+        # videoUrl 非 webrtc:// 格式时无法拼出可录制的 https 地址，判未直播而非 IndexError
+        if not str(webrtc_url).startswith("webrtc://"):
             return result
         https_url = "https://" + webrtc_url.split("webrtc://")[1]
         flv_url = https_url.replace("?", ".flv?")
@@ -4267,7 +4540,7 @@ async def get_laixiu_stream_url(
     sign_data = calculate_sign(ua_type="pc")
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/138.0.0.0 Safari/537.36 Edg/138.0.0.0",
+        "Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0",
         "mobileModel": "web",
         "timestamp": str(sign_data["timestamp"]),
         "loginType": "2",
@@ -4312,7 +4585,7 @@ async def get_picarto_stream_url(
     # 获取 Picarto 直播流地址
     headers = {
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0",
+        "Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0",
         "accept-language": "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2",
     }
 

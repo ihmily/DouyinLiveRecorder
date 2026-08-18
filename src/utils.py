@@ -100,12 +100,10 @@ def trace_error_decorator(func: Callable[P, R]) -> Callable[P, R]:
 
 
 def check_md5(file_path: str | Path) -> str:
-    # 计算文件的 MD5 值（分块读取，避免大文件一次性载入内存）
-    md5_hash = hashlib.md5()
+    # 计算文件的 MD5 值
     with open(file_path, "rb") as fp:
-        for chunk in iter(lambda: fp.read(8192), b""):
-            md5_hash.update(chunk)
-    return md5_hash.hexdigest()
+        file_md5 = hashlib.md5(fp.read()).hexdigest()
+    return file_md5
 
 
 def dict_to_cookie_str(cookies_dict: Mapping[str, object]) -> str:
@@ -116,7 +114,7 @@ def dict_to_cookie_str(cookies_dict: Mapping[str, object]) -> str:
 
 def read_config_value(file_path: str | Path, section: str, key: str) -> str | None:
     # 从配置文件读取指定配置项的值
-    # 关闭插值：cookie 等含 % 的值在 BasicInterpolation 下取值会抛异常（与 update_config 一致）
+    # 关闭插值：值中的裸 %（如 cookie、时间格式）不应触发 InterpolationSyntaxError
     config = configparser.ConfigParser(interpolation=None)
 
     try:

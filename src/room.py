@@ -30,8 +30,10 @@ class UnsupportedUrlError(Exception):
 
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Linux; Android 11; SAMSUNG SM-G973U) AppleWebKit/537.36 (KHTML, like Gecko) "
-    + "SamsungBrowser/14.2 Chrome/87.0.4280.141 Mobile Safari/537.36",
+    # 移动端 UA（2026-08 统一升级为 Android 14 + Chrome 141，与 stream_select.MOBILE_UA
+    # 一致；X-Bogus 签名以请求头中的同一 UA 计算，UA 与签名自洽，更新字符串安全）
+    "User-Agent": "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) "
+    + "Chrome/141.0.0.0 Mobile Safari/537.36",
     "Accept-Language": "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2",
     # 移除原硬编码的 s_v_web_id 访客校验 Cookie
     # 该字段为抖音访客校验 ID，原值为硬编码过期凭据，访问页面时服务器会重新下发
@@ -92,8 +94,8 @@ async def get_sec_user_id(
                     raise RuntimeError("Could not find sec_user_id in the URL.")
             else:
                 raise UnsupportedUrlError("The redirect URL does not contain 'reflow/'.")
-    except UnsupportedUrlError:
-        raise
+    except UnsupportedUrlError as e:
+        raise e
     except Exception as e:
         raise RuntimeError(f"An error occurred: {e}")
 
@@ -217,8 +219,8 @@ async def get_unique_id(url: str, proxy_addr: str | None = None, headers: dict[s
                 return unique_id
             else:
                 raise RuntimeError(f"Could not resolve unique_id for sec_user_id={sec_user_id}")
-    except UnsupportedUrlError:
-        raise
+    except UnsupportedUrlError as e:
+        raise e
     except Exception as e:
         raise RuntimeError(f"An error occurred: {e}")
 

@@ -4,6 +4,9 @@ import os
 import sys
 import threading
 import types
+from collections.abc import Generator
+from pathlib import Path
+from typing import cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,16 +16,17 @@ def _install_fake_main() -> types.ModuleType:
     # 注入轻量 fake main 模块：避免导入真实 main.py 触发 FFmpeg/Node 检查等重副作用。
     # web_api 路由在请求处理中才 import main，仅使用其 file_update_lock 等符号。
     fake = types.ModuleType("main")
-    fake.file_update_lock = threading.Lock()
-    fake.running_list: list[str] = []
-    fake.record_state_lock = threading.Lock()
-    fake.recording: set[str] = set()
+    # types.ModuleType 不接受静态注解的任意属性赋值，用 setattr 注入测试替身符号
+    setattr(fake, "file_update_lock", threading.Lock())
+    setattr(fake, "running_list", [])
+    setattr(fake, "record_state_lock", threading.Lock())
+    setattr(fake, "recording", set())
     sys.modules["main"] = fake
     return fake
 
 
 @pytest.fixture(scope="function")
-def fake_main() -> types.ModuleType:
+def fake_main() -> Generator[types.ModuleType, None, None]:
     old = sys.modules.get("main")
     fake = _install_fake_main()
     yield fake
@@ -32,7 +36,7 @@ def fake_main() -> types.ModuleType:
         sys.modules.pop("main", None)
 
 
-def _write_web_section(cfg_path, *, auth: str = "true", password: str = "", trusted_proxy: str = "") -> None:
+def _write_web_section(cfg_path: Path, *, auth: str = "true", password: str = "", trusted_proxy: str = "") -> None:
     # 写入 [Web] 节配置（password 传哈希值或空）。
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
@@ -47,7 +51,7 @@ def _write_web_section(cfg_path, *, auth: str = "true", password: str = "", trus
 
 
 @pytest.fixture(scope="function")
-def app_env(tmp_path, fake_main):
+def app_env(tmp_path: Path, fake_main: types.ModuleType) -> Generator[types.SimpleNamespace, None, None]:
     from src import web_api as wa
 
     # 重置模块级状态，避免测试间串扰
@@ -89,15 +93,15 @@ def _login(client: TestClient) -> str:
     assert resp.status_code == 200, resp.text
     token = resp.json()["token"]
     assert token
-    return token
+    return cast(str, token)
 
 
 class TestAuthMiddleware:
-    def test_api_requires_token_when_auth_enabled(self, app_env):
+    def test_api_requires_token_when_auth_enabled(self, app_env: types.SimpleNamespace) -> None:
         resp = app_env.client.get("/api/rooms")
         assert resp.status_code == 401
 
-    def test_api_open_when_auth_disabled(self, tmp_path, fake_main):
+    def test_api_open_when_auth_disabled(self, tmp_path: Path, fake_main: types.ModuleType) -> None:
         from src import web_api as wa
 
         cfg = tmp_path / "config.ini"
@@ -117,7 +121,7 @@ class TestAuthMiddleware:
 
 
 class TestLoginRateLimit:
-    def test_xff_spoofing_cannot_bypass_without_trusted_proxy(self, app_env):
+    def test_xff_spoofing_cannot_bypass_without_trusted_proxy(self, app_env: types.SimpleNamespace) -> None:
         # 无可信代理时 XFF 被忽略：所有请求计为同一 IP，第 6 次被限流（C4）
         client = app_env.client
         for i in range(5):
@@ -126,7 +130,7 @@ class TestLoginRateLimit:
         resp = client.post("/api/login", json={"password": "wrong"}, headers={"X-Forwarded-For": "9.9.9.9"})
         assert resp.status_code == 429
 
-    def test_trusted_proxy_trusts_xff(self, app_env):
+    def test_trusted_proxy_trusts_xff(self, app_env: types.SimpleNamespace) -> None:
         # TestClient 的 client.host 为 testclient；将其配置为可信代理后 XFF 才生效：
         # 不同伪造 IP 各自计数，不应触发限流。
         app_env.wa.hash_web_password  # noqa: B018 - 仅确认模块可用
@@ -143,7 +147,7 @@ class TestLoginRateLimit:
         resp = client.post("/api/login", json={"password": "wrong"}, headers={"X-Forwarded-For": "6.6.6.6"})
         assert resp.status_code == 401
 
-    def test_successful_login_resets_failures(self, app_env):
+    def test_successful_login_resets_failures(self, app_env: types.SimpleNamespace) -> None:
         client = app_env.client
         for _ in range(3):
             resp = client.post("/api/login", json={"password": "wrong"})
@@ -153,7 +157,7 @@ class TestLoginRateLimit:
 
 
 class TestRoomEndpoints:
-    def test_quality_newline_rejected(self, app_env):
+    def test_quality_newline_rejected(self, app_env: types.SimpleNamespace) -> None:
         token = _login(app_env.client)
         resp = app_env.client.post(
             "/api/rooms",
@@ -162,7 +166,7 @@ class TestRoomEndpoints:
         )
         assert resp.status_code == 422
 
-    def test_add_room_no_bom_in_middle(self, app_env):
+    def test_add_room_no_bom_in_middle(self, app_env: types.SimpleNamespace) -> None:
         # 连续追加两行后，除文件头部 BOM 外不应再出现 U+FEFF（C8 回归）
         token = _login(app_env.client)
         for u in ("https://live.douyin.com/1", "https://live.douyin.com/2"):
@@ -173,7 +177,7 @@ class TestRoomEndpoints:
         assert "https://live.douyin.com/1" in text
         assert "https://live.douyin.com/2" in text
 
-    def test_add_room_duplicate_409(self, app_env):
+    def test_add_room_duplicate_409(self, app_env: types.SimpleNamespace) -> None:
         token = _login(app_env.client)
         headers = {"Authorization": f"Bearer {token}"}
         resp = app_env.client.post("/api/rooms", json={"url": "https://live.douyin.com/3"}, headers=headers)
@@ -181,7 +185,7 @@ class TestRoomEndpoints:
         resp = app_env.client.post("/api/rooms", json={"url": "https://live.douyin.com/3"}, headers=headers)
         assert resp.status_code == 409
 
-    def test_add_room_concurrent_no_duplicates(self, app_env):
+    def test_add_room_concurrent_no_duplicates(self, app_env: types.SimpleNamespace) -> None:
         # TOCTOU 回归（C10）：并发 POST 同一 URL，仅一条成功，其余 409
         token = _login(app_env.client)
         n = 8
@@ -212,7 +216,7 @@ class TestRoomEndpoints:
 
 
 class TestPasswordManagement:
-    def test_clear_password_rejected_when_auth_enabled(self, app_env):
+    def test_clear_password_rejected_when_auth_enabled(self, app_env: types.SimpleNamespace) -> None:
         token = _login(app_env.client)
         resp = app_env.client.put(
             "/api/config",
@@ -221,7 +225,7 @@ class TestPasswordManagement:
         )
         assert resp.status_code == 400
 
-    def test_password_change_revokes_tokens(self, app_env):
+    def test_password_change_revokes_tokens(self, app_env: types.SimpleNamespace) -> None:
         client = app_env.client
         token = _login(client)
         resp = client.put(
@@ -237,7 +241,7 @@ class TestPasswordManagement:
         resp = client.post("/api/login", json={"password": "newpass456"})
         assert resp.status_code == 200
 
-    def test_new_password_stored_hashed(self, app_env):
+    def test_new_password_stored_hashed(self, app_env: types.SimpleNamespace) -> None:
         token = _login(app_env.client)
         resp = app_env.client.put(
             "/api/config",
@@ -251,7 +255,7 @@ class TestPasswordManagement:
 
 
 class TestDangerousKeys:
-    def test_dangerous_key_blocked_when_auth_disabled(self, tmp_path, fake_main):
+    def test_dangerous_key_blocked_when_auth_disabled(self, tmp_path: Path, fake_main: types.ModuleType) -> None:
         from src import web_api as wa
 
         cfg = tmp_path / "config.ini"
@@ -274,7 +278,7 @@ class TestDangerousKeys:
 
 
 class TestListFiles:
-    def test_broken_symlink_skipped(self, app_env):
+    def test_broken_symlink_skipped(self, app_env: types.SimpleNamespace) -> None:
         (app_env.downloads / "ok.ts").write_text("x", encoding="utf-8")
         broken = app_env.downloads / "broken.ts"
         try:
@@ -292,7 +296,7 @@ class TestListFiles:
         assert "ok.ts" in names
         assert "broken.ts" not in names
 
-    def test_symlink_outside_skipped(self, app_env):
+    def test_symlink_outside_skipped(self, app_env: types.SimpleNamespace) -> None:
         outside = app_env.cfg  # downloads 目录之外的任意文件
         link = app_env.downloads / "leak.ts"
         try:
@@ -308,7 +312,7 @@ class TestListFiles:
         names = [i["name"] for i in resp.json()]
         assert "leak.ts" not in names
 
-    def test_nested_listing_ok(self, app_env):
+    def test_nested_listing_ok(self, app_env: types.SimpleNamespace) -> None:
         sub = app_env.downloads / "sub"
         sub.mkdir()
         (sub / "a.ts").write_text("x", encoding="utf-8")

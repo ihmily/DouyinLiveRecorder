@@ -6,8 +6,11 @@
 # GitHub: https://github.com/ihmily
 # Date: 2023-2025
 
+from __future__ import annotations
+
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 from .node_install import check_node
 
@@ -36,3 +39,68 @@ if node_execute_dir.is_dir() and node_dir_str not in current_env_path.split(os.p
 if os.environ.get("DOUYIN_SKIP_RUNTIME_CHECK", "").strip().lower() not in ("1", "true", "yes"):
     # 初始化检查 Node.js 环境（仅为副作用：缺失则自动安装，返回值此处无需处理）
     _ = check_node()
+
+
+# ---------------------------------------------------------------------------
+# 弹幕录制公共 API（原 src/danmaku/__init__.py，随目录扁平化迁移至此处）
+# ---------------------------------------------------------------------------
+# 弹幕模块从 dart_simple_live 移植，为录制工具提供与录像同步、按半小时分片的
+# SRT 弹幕录制能力。下方注册「平台名 -> 弹幕类」映射表，并对外提供
+# get_danmaku_class() 与 get_danmaku_collector() 两个工厂函数。
+
+from src.base import DanmakuBase
+
+if TYPE_CHECKING:
+    from src.collector import DanmakuCollector
+
+
+# 平台名 -> 弹幕类。平台名与 main.py 中的 platform 标识一致。
+# 注册表按需惰性构建，避免 `import src` 时即拉起 websockets/protobuf 等重依赖。
+def get_danmaku_class(platform: str) -> Optional[type[DanmakuBase]]:
+    # 返回该平台对应的弹幕类，不支持则返回 None。
+    from src.platforms.bilibili import BilibiliDanmaku
+    from src.platforms.douyin import DouyinDanmaku
+    from src.platforms.douyu import DouyuDanmaku
+    from src.platforms.huya import HuyaDanmaku
+    from src.platforms.twitch import TwitchDanmaku
+
+    _DANMAKU_REGISTRY = {
+        "斗鱼直播": DouyuDanmaku,
+        "B站直播": BilibiliDanmaku,
+        "虎牙直播": HuyaDanmaku,
+        "抖音直播": DouyinDanmaku,
+        "TwitchTV": TwitchDanmaku,
+    }
+    return cast(Optional[type[DanmakuBase]], _DANMAKU_REGISTRY.get(platform))
+
+
+# 工厂函数：按 platform 取弹幕类并用 danmaku_args、base_filename、segment_seconds、only_fans
+# 构造 DanmakuCollector 返回；room_name / write_srt 透传给采集器（监控显示名与是否落 SRT）；
+# 平台不支持或 danmaku_args 为空时返回 None（延迟导入避免循环依赖）。
+def get_danmaku_collector(
+    platform: str,
+    danmaku_args: Any,
+    base_filename: str,
+    segment_seconds: Optional[float] = 1800.0,
+    only_fans: bool = True,
+    room_name: Optional[str] = None,
+    write_srt: bool = True,
+) -> Optional["DanmakuCollector"]:
+    # 构造该平台的 DanmakuCollector，不支持该平台或缺少参数时返回 None。
+    from src.collector import DanmakuCollector
+
+    cls = get_danmaku_class(platform)
+    if cls is None:
+        return None
+    if not danmaku_args:
+        return None
+    return DanmakuCollector(
+        danmaku_cls=cls,
+        danmaku_args=danmaku_args,
+        base_filename=base_filename,
+        segment_seconds=segment_seconds,
+        only_fans=only_fans,
+        room_name=room_name,
+        platform_name=platform,
+        write_srt=write_srt,
+    )

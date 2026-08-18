@@ -29,15 +29,11 @@ def _app_root() -> str:
 # 移除默认处理器
 logger.remove()
 
-# 日志异步入队开关：enqueue=True 依赖 multiprocessing.SimpleQueue（Windows 命名管道），
-# 受限环境（测试/CI 沙箱）中可能阻塞或失败；允许通过环境变量禁用（仅影响性能，不影响行为）。
-_log_enqueue = os.environ.get("DOUYIN_LOG_NO_ENQUEUE", "").strip().lower() not in ("1", "true", "yes")
-
 # 控制台日志格式（彩色）
 custom_format = "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> - <level>{message}</level>"
 
 # 添加控制台输出（无论是否启用日志文件，控制台输出始终保留）
-_ = logger.add(sink=sys.stderr, format=custom_format, level="DEBUG", colorize=True, enqueue=_log_enqueue)
+_ = logger.add(sink=sys.stderr, format=custom_format, level="DEBUG", colorize=True, enqueue=True)
 
 # 运行时资源根目录（exe 同级：config/ logs/ downloads/ 等），
 # 与 _app_root() 保持一致；冻结后指向 exe 父目录而非 _internal。
@@ -67,7 +63,7 @@ if _log_to_file:
         format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
         filter=lambda i: i["level"].name != "INFO",
         serialize=False,
-        enqueue=_log_enqueue,
+        enqueue=True,
         retention=3,
         rotation="300 KB",
         encoding="utf-8",
@@ -80,7 +76,7 @@ if _log_to_file:
         format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {message}",
         filter=lambda i: i["level"].name == "INFO",
         serialize=False,
-        enqueue=_log_enqueue,
+        enqueue=True,
         retention=3,
         rotation="300 KB",
         encoding="utf-8",

@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from src import spider as sp
+from src.cookie_cache import clear as clear_cookie_cache
 
 
 class TestVvxqiu:
@@ -198,6 +199,7 @@ class TestCacheLocks:
     def test_kuaishou_did_fetched_once_under_concurrency(self):
         # 多线程并发首轮请求只拉取一次（锁二次检查回归）
         sp._cached_kuaishou_did = ""
+        clear_cookie_cache()  # 隔离统一 cookie 缓存单例，确保本测试真正发起拉取
         call_count = 0
         count_lock = threading.Lock()
 
@@ -211,6 +213,8 @@ class TestCacheLocks:
         def run() -> None:
             asyncio.run(sp._ensure_kuaishou_did())
 
+        # _ensure_kuaishou_did 现经统一 cookie 缓存(src.cookie_cache) 从快手主页拉取，
+        # 通过传入本模块 async_req 作为 fetcher 复用缓存，故此处仍 patch sp.async_req
         with patch.object(sp, "async_req", new=fake_req):
             threads = [threading.Thread(target=run) for _ in range(5)]
             for t in threads:

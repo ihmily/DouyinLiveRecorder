@@ -11,6 +11,7 @@
         <div class="brand">直播录制管理面板</div>
         <nav class="tabs">
             <button class="tab active" data-view="dashboard">仪表盘</button>
+            <button class="tab" data-view="danmaku">弹幕监控</button>
             <button class="tab" data-view="rooms">直播间</button>
             <button class="tab" data-view="config">配置</button>
             <button class="tab" data-view="files">文件</button>
@@ -50,6 +51,26 @@
         <section class="panel">
             <h3>实时日志</h3>
             <div id="log-stream" class="terminal"></div>
+        </section>
+    </main>
+
+    <!-- 弹幕监控 -->
+    <main id="danmaku-view" class="view hidden">
+        <section class="panel">
+            <h3>弹幕房间</h3>
+            <table class="data-table">
+                <thead><tr><th>名称</th><th>平台</th><th>状态</th><th>累计弹幕</th><th>速率(条/分)</th><th>礼物</th><th>在线</th><th>开始时间</th></tr></thead>
+                <tbody id="danmaku-rooms-tbody"><tr><td colspan="8" class="empty">暂无监控数据</td></tr></tbody>
+            </table>
+        </section>
+        <section class="panel">
+            <div class="danmaku-toolbar">
+                <h3>实时弹幕</h3>
+                <select id="danmaku-room-filter"><option value="">全部房间</option></select>
+                <button id="danmaku-clear-btn" class="small">清空</button>
+            </div>
+            <div id="danmaku-stream" class="terminal danmaku-terminal"></div>
+            <div id="danmaku-hint" class="danmaku-hint hidden">未看到数据？请在「配置 → 录制设置」开启「是否弹幕监控(是/否)」，且直播间平台需支持弹幕（斗鱼/B站/虎牙/抖音/Twitch）</div>
         </section>
     </main>
 

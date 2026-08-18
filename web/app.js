@@ -1,5 +1,6 @@
-// DouyinLiveRecorder Web 管理面板前端逻辑（Task 9）。
-// 将 UI 绑定到 src/web_api.py 暴露的 REST API。不修改 index.html / style.css。
+// DouyinLiveRecorder Web 管理面板前端逻辑。
+// 将 UI 绑定到 src/web_api.py 暴露的 REST API：
+// 仪表盘（状态轮询/日志）、弹幕监控（增量游标轮询）、直播间、配置、文件。
 (function () {
     'use strict';
 
@@ -11,6 +12,14 @@
     var sseStopped = true;
     var configBackup = null;
     var toastTimer = null;
+
+    // 弹幕监控状态：dmTimer/dmStopped 控制轮询；dmLastSeq 为增量游标；
+    // dmMessages 为前端保留的近期消息（最多 300 条），切筛选时全量重绘。
+    var dmTimer = null;
+    var dmStopped = true;
+    var dmLastSeq = 0;
+    var dmMessages = [];
+    var DM_MAX_MESSAGES = 300;
 
     function $(id) { return document.getElementById(id); }
 
@@ -118,6 +127,7 @@
 
     // 8. showView
     function showView(name) {
+        stopDanmakuPolling();
         hideAllViews();
         var v = $(name + '-view');
         if (v) v.classList.remove('hidden');
@@ -135,6 +145,8 @@
             loadConfig();
         } else if (name === 'files') {
             loadFiles('');
+        } else if (name === 'danmaku') {
+            startDanmakuPolling();
         } else if (name === 'dashboard') {
             startSSE();
             loadLogs();
@@ -149,6 +161,7 @@
         var lv = $('login-view');
         if (lv) lv.classList.remove('hidden');
         stopSSE();
+        stopDanmakuPolling();
     }
 
     // 10. doLogin
@@ -239,6 +252,142 @@
         } catch (e) {
             /* 忽略日志加载错误 */
         }
+    }
+
+    // 13b. 弹幕监控：轮询 + 渲染（增量游标 since=seq，2 秒一次）
+    function startDanmakuPolling() {
+        stopDanmakuPolling();
+        dmStopped = false;
+        dmTimer = setTimeout(function poll() {
+            api('/api/danmaku?since=' + dmLastSeq).then(renderDanmaku).catch(function () {}).then(function () {
+                if (!dmStopped) {
+                    dmTimer = setTimeout(poll, 2000);
+                }
+            });
+        }, 0);
+    }
+    function stopDanmakuPolling() {
+        dmStopped = true;
+        if (dmTimer) {
+            clearTimeout(dmTimer);
+            dmTimer = null;
+        }
+    }
+
+    // 时间戳（epoch 秒）→ HH:MM:SS
+    function dmFmtTime(ts) {
+        var n = Number(ts);
+        if (isNaN(n)) return '';
+        var d = new Date(n * 1000);
+        function p(x) { return (x < 10 ? '0' : '') + x; }
+        return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+    }
+
+    // 单条消息 → 行 HTML（全量 esc() 转义；礼物/SC 高亮；采样折叠计数后缀）
+    function dmLineHtml(m) {
+        if (m.type === 'sys') {
+            return '<span class="dm-line dm-dropped">[' + dmFmtTime(m.ts) + '] ' + esc(m.text) + '</span>';
+        }
+        var cls = m.type === 'gift' ? ' dm-gift' : (m.type === 'superChat' ? ' dm-sc' : '');
+        var label = m.type === 'gift' ? '[礼物] ' : (m.type === 'superChat' ? '[SC] ' : '');
+        var dropped = m.dropped ? ' <span class="dm-dropped">(+' + m.dropped + ' 条已省略)</span>' : '';
+        var userPart = m.user ? '<span class="dm-user">' + esc(m.user) + '</span>: ' : '';
+        return '<span class="dm-line' + cls + '">[' + dmFmtTime(m.ts) + '] <span class="dm-room">['
+            + esc(m.room) + ']</span> ' + label + userPart + esc(m.text) + dropped + '</span>';
+    }
+
+    // 全量重绘弹幕流（按当前筛选），保持底部跟随（用户上滚时不打扰）
+    function dmRenderStream() {
+        var el = $('danmaku-stream');
+        if (!el) return;
+        var filter = $('danmaku-room-filter') ? $('danmaku-room-filter').value : '';
+        var nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 30;
+        var html = '';
+        var shown = 0;
+        for (var i = 0; i < dmMessages.length; i++) {
+            var m = dmMessages[i];
+            if (filter && m.room !== filter) continue;
+            html += dmLineHtml(m);
+            shown++;
+        }
+        if (!shown) {
+            el.textContent = dmMessages.length ? '' : '暂无弹幕数据';
+            if (!dmMessages.length) { return; }
+        }
+        el.innerHTML = html;
+        if (nearBottom) {
+            el.scrollTop = el.scrollHeight;
+        }
+    }
+
+    // 渲染一次 /api/danmaku 响应：房间表 + 筛选下拉 + 增量消息
+    function renderDanmaku(data) {
+        if (!data) data = {};
+        var rooms = data.rooms || [];
+        var tbody = $('danmaku-rooms-tbody');
+        if (tbody) {
+            if (!rooms.length) {
+                tbody.innerHTML = '<tr><td colspan="8" class="empty">暂无监控数据</td></tr>';
+            } else {
+                var html = '';
+                for (var i = 0; i < rooms.length; i++) {
+                    var r = rooms[i];
+                    var st = r.connected
+                        ? '<span class="dm-status-on">已连接</span>'
+                        : '<span class="dm-status-off">已断开</span>';
+                    html += '<tr>'
+                        + '<td>' + esc(r.name) + '</td>'
+                        + '<td>' + esc(r.platform) + '</td>'
+                        + '<td>' + st + '</td>'
+                        + '<td>' + esc(r.msg_total) + '</td>'
+                        + '<td>' + esc(r.msg_rate) + '</td>'
+                        + '<td>' + esc(r.gift_total) + '</td>'
+                        + '<td>' + esc(r.online) + '</td>'
+                        + '<td>' + esc(r.started_at) + '</td>'
+                        + '</tr>';
+                }
+                tbody.innerHTML = html;
+            }
+        }
+        var hint = $('danmaku-hint');
+        if (hint) {
+            if (rooms.length) {
+                hint.classList.add('hidden');
+            } else {
+                hint.classList.remove('hidden');
+            }
+        }
+        // 房间筛选下拉：保留当前选择，选项随房间列表刷新
+        var sel = $('danmaku-room-filter');
+        if (sel) {
+            var cur = sel.value;
+            var opts = '<option value="">全部房间</option>';
+            for (var j = 0; j < rooms.length; j++) {
+                opts += '<option value="' + esc(rooms[j].name) + '">' + esc(rooms[j].name) + '</option>';
+            }
+            sel.innerHTML = opts;
+            var found = false;
+            for (var k = 0; k < sel.options.length; k++) {
+                if (sel.options[k].value === cur) { found = true; break; }
+            }
+            sel.value = found ? cur : '';
+        }
+        // 增量消息：追加到本地缓冲（截断标记说明中间有遗漏，补一条提示行）
+        var msgs = data.messages || [];
+        if (data.truncated) {
+            dmMessages.push({ ts: msgs.length ? msgs[0].ts : Date.now() / 1000, room: '', type: 'sys', user: '', text: '（消息量过大，部分已折叠）' });
+        }
+        for (var x = 0; x < msgs.length; x++) {
+            dmMessages.push(msgs[x]);
+        }
+        if (dmMessages.length > DM_MAX_MESSAGES) {
+            dmMessages = dmMessages.slice(-DM_MAX_MESSAGES);
+        }
+        var lastSeq = Number(data.last_seq);
+        if (!isNaN(lastSeq) && lastSeq > dmLastSeq) {
+            dmLastSeq = lastSeq;
+        }
+        dmRenderStream();
     }
 
     // 14. loadRooms
@@ -503,6 +652,11 @@
             addRoom();
         });
         $('config-save-btn').addEventListener('click', saveConfig);
+        $('danmaku-room-filter').addEventListener('change', dmRenderStream);
+        $('danmaku-clear-btn').addEventListener('click', function () {
+            dmMessages = [];
+            dmRenderStream();
+        });
 
         // 事件委托：替换内联 onclick/onchange 拼接，避免每次渲染重新解析 JS 字符串，更稳健
         $('rooms-tbody').addEventListener('change', function (e) {

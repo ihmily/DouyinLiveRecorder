@@ -1,26 +1,145 @@
-# DouyinLiveRecorder 可执行文件构建与发布工作流
+# =============================================================================
+# Build & Release —— 三平台可执行文件构建与 GitHub Release 发布
+# -----------------------------------------------------------------------------
+# 触发条件：
+#   1. push tag `v*`（如 v4.0.8.2）→ 构建三平台产物 + 自动创建 GitHub Release
+#   2. workflow_dispatch（手动）    → 仅构建并上传 artifact，**不创建 Release**
 #
-# 触发方式：
-#   1. 手动触发（workflow_dispatch）：构建三平台产物并上传 artifact
-#   2. 推送 v* 标签（如 v4.0.8）：构建 + 自动创建 GitHub Release 并附上产物
+# 构建逻辑统一由仓库根目录 build_exe.py 承担（本地 / CI 行为一致）：
+#   · --dual   PyInstaller 只跑一次，先产 lite（不含运行时）再产 full（含 ffmpeg+node）
+#   · --smoke  对打出的 CLI / Web / GUI 三个入口依次做启动冒烟
+#   产物命名：dist/DouyinLiveRecorder-v<版本>-<os>-<arch>{-lite,-full}.zip
 #
-# 构建逻辑统一由仓库根目录的 build_exe.py 承担（本地与 CI 行为一致）。
+# 版本号事实源：pyproject.toml [project].version（唯一）。
+#   main.py / src/web_api.py 运行时经 importlib.metadata 读取；
+#   Dockerfile 经 APP_VERSION 构建参数注入；
+#   本工作流的 prepare job 负责「提取 + 校验 tag 与之一致」，不一致直接失败，
+#   从根上避免「打了 v4.0.9 的 tag 却发布出 4.0.8.2 的包」。
+#
+# ---------------------------------------------------------------------------
+# 环境变量与 Secrets 说明
+# ---------------------------------------------------------------------------
+#   · secrets.GITHUB_TOKEN  —— Actions 自动注入，**无需手工配置**。
+#                              softprops/action-gh-release 默认读取它来创建 Release，
+#                              因此本文件不显式传 `token:`；权限通过 release job 的
+#                              `permissions: contents: write` 授予（其余 job 只读）。
+#   · HOMEBREW_NO_REQUIRE_TAP_TRUST —— 仅 macOS job 使用，绕过 GitHub macOS runner
+#                              预置的未受信 aws/tap 导致的 brew 报错。
+#   · PYTHONUTF8            —— 由 build_exe.py 内部 _ensure_utf8_streams() 自行设置，
+#                              避免 Windows runner cp1252 控制台输出中文日志崩溃。
+#   如需代码签名（Windows Authenticode / macOS codesign & notarize），
+#   再新增 secrets.WINDOWS_CERT_PFX_BASE64 / APPLE_ID / APPLE_APP_PASSWORD 等，
+#   并在对应平台的构建步骤后追加签名步骤。当前发布**未签名**。
+# =============================================================================
 
-name: Build Executables
+name: Build & Release
 
 on:
-  workflow_dispatch:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
+# 默认最小权限；仅 release job 单独提升为 contents: write
 permissions:
-  contents: write   # 创建 Release 需要
+  contents: read
+
+# 发布类流水线不允许「取消进行中的运行」（半途取消会产出不完整的 Release），
+# 与 ci.yml 的 cancel-in-progress: true 策略有意区分。
+concurrency:
+  group: build-release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  # ── 0. 版本提取与一致性校验 ──────────────────────────────────────────────
+  prepare:
+    name: Prepare (version & constants)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      is_release: ${{ steps.version.outputs.is_release }}
+      # 与 ci.yml 保持一致的运行环境常量（单一事实源，改一处即全局生效）
+      python_build: ${{ steps.consts.outputs.python_build }}
+      node_version: ${{ steps.consts.outputs.node_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Declare shared constants
+        id: consts
+        shell: bash
+        run: |
+          set -euo pipefail
+          # python_build : 打包解释器版本。有意固定为 3.12（而非 ci.yml 的
+          #                python_latest = 3.13）—— 发布二进制的解释器一经验证不轻易变更；
+          #                ci.yml 的 build-verify job 使用同一版本，保证验证环境 == 发布环境。
+          # node_version : 与 ci.yml 同值；供冒烟测试期间 JS 签名脚本可用
+          #                （full 版本内置的 node 由 build_exe.py 自行下载，与此无关）。
+          {
+            echo "python_build=3.12"
+            echo "node_version=24"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      # 用 tomllib（3.11+ 标准库）解析，避免正则误匹配
+      - name: Extract version from pyproject.toml
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(python -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version'])")
+          if [ -z "$VERSION" ]; then
+            echo "::error::未能从 pyproject.toml 解析出 [project].version"
+            exit 1
+          fi
+          echo "版本号（pyproject.toml）: ${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            TAG="${GITHUB_REF_NAME}"
+            TAG_VERSION="${TAG#v}"
+            echo "推送的 tag: ${TAG}（去 v 前缀: ${TAG_VERSION}）"
+            if [ "$TAG_VERSION" != "$VERSION" ]; then
+              echo "::error::tag 与 pyproject.toml 版本不一致：tag=${TAG_VERSION} pyproject=${VERSION}。请先用 scripts/sync_version.py 同步版本再重新打 tag。"
+              exit 1
+            fi
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "手动触发（非 tag），仅构建并上传 artifact，不创建 Release"
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # 复用 CI 同一脚本，确保各消费方仍是「动态读取」而非写死版本号
+      - name: Check version consistency across consumers
+        run: python scripts/check_version.py
+
+      - name: Write job summary
+        shell: bash
+        run: |
+          {
+            echo "### 构建版本"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "| --- | --- |"
+            echo "| 版本号 | \`${{ steps.version.outputs.version }}\` |"
+            echo "| 触发方式 | \`${{ github.event_name }}\` |"
+            echo "| 创建 Release | \`${{ steps.version.outputs.is_release }}\` |"
+            echo "| 打包 Python | \`${{ steps.consts.outputs.python_build }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ── 1. 三平台构建 + 冒烟 ─────────────────────────────────────────────────
   build:
-    name: Build (${{ matrix.os }})
+    name: Build (${{ matrix.platform }})
+    needs: prepare
     runs-on: ${{ matrix.os }}
+    # full 版本需下载 ffmpeg + node（约 300MB）并压缩，Windows/macOS 明显更慢，
+    # 故给 90 分钟上限：既能兜住慢网络，又不会在卡死时白烧 6 小时默认额度。
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -36,39 +155,94 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Setup Python
+      - name: Setup Python ${{ needs.prepare.outputs.python_build }}
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: ${{ needs.prepare.outputs.python_build }}
+          # 无 lock 文件，缓存 key 以 requirements.txt + pyproject.toml 的 hash 为准
           cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
 
-      # 冒烟测试需要 ffmpeg（main.py 启动即检查）。
-      # 三平台均用系统包管理器安装 ffmpeg 供冒烟测试使用（冒烟测试跑在 lite 版本上）；
-      # full 版本由 build_exe.py --dual 在构建时下载预构建二进制并打包。
-      # Linux 额外安装 xvfb：GUI（tkinter/pystray）冒烟测试需要虚拟显示。
-      - name: Install ffmpeg (Windows)
+      # 冒烟测试期间 JS 签名脚本可能需要 node（src/javascript/*.js 由 exejs 调起）
+      - name: Setup Node.js ${{ needs.prepare.outputs.node_version }}
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ needs.prepare.outputs.node_version }}
+
+      # ── ffmpeg：冒烟测试需要（main.py 启动即检查）──────────────────────
+      # 冒烟跑在 lite 产物上（不含内置运行时），故三平台都用系统包管理器装一份。
+      # full 版本内置的 ffmpeg 由 build_exe.py --dual 在打包阶段单独下载。
+      # Linux 额外装 xvfb：GUI（tkinter/pystray）冒烟需要虚拟显示。
+      - name: Install ffmpeg (Windows, retry x3)
         if: matrix.platform == 'windows'
-        run: choco install ffmpeg -y
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in 1 2 3; do
+            if choco install ffmpeg -y --no-progress; then
+              exit 0
+            fi
+            echo "::warning::choco 安装 ffmpeg 失败（第 ${i}/3 次），$((i * 15))s 后重试"
+            sleep $((i * 15))
+          done
+          echo "::error::choco 安装 ffmpeg 连续 3 次失败"
+          exit 1
 
-      - name: Install ffmpeg + xvfb (Linux)
+      - name: Install ffmpeg + xvfb (Linux, retry x3)
         if: matrix.platform == 'linux'
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg xvfb
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in 1 2 3; do
+            if sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg xvfb; then
+              exit 0
+            fi
+            echo "::warning::apt 安装失败（第 ${i}/3 次），$((i * 15))s 后重试"
+            sleep $((i * 15))
+          done
+          echo "::error::apt 安装 ffmpeg/xvfb 连续 3 次失败"
+          exit 1
 
-      - name: Install ffmpeg (macOS)
+      - name: Install ffmpeg (macOS, retry x3)
         if: matrix.platform == 'macos'
+        shell: bash
         env:
           HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
+          HOMEBREW_NO_AUTO_UPDATE: "1"
         run: |
-          # GitHub 的 macOS runner预置了未受信的 aws/tap，
-          # Homebrew 新的 tap 信任机制会因此报错。先信任该 tap 作为兜底关闭校验。
+          set -euo pipefail
+          # GitHub 的 macOS runner 预置了未受信的 aws/tap，Homebrew 新的 tap
+          # 信任机制会因此报错。先信任该 tap，配合上面的环境变量兜底关闭校验。
           brew trust aws/tap || true
-          brew install ffmpeg
+          for i in 1 2 3; do
+            if brew install ffmpeg; then
+              exit 0
+            fi
+            echo "::warning::brew 安装 ffmpeg 失败（第 ${i}/3 次），$((i * 15))s 后重试"
+            sleep $((i * 15))
+          done
+          echo "::error::brew 安装 ffmpeg 连续 3 次失败"
+          exit 1
 
-      - name: Install dependencies
+      # PyInstaller 来自 pyproject [project.optional-dependencies].build，
+      # 不写死版本，保持与项目声明一致（>=6.10.0）。
+      - name: Install dependencies (retry x3)
+        shell: bash
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
+          set -euo pipefail
+          for i in 1 2 3; do
+            if python -m pip install --upgrade pip \
+              && pip install -r requirements.txt \
+              && pip install ".[build]"; then
+              exit 0
+            fi
+            echo "::warning::pip 安装失败（第 ${i}/3 次），$((i * 10))s 后重试"
+            sleep $((i * 10))
+          done
+          echo "::error::pip 安装连续 3 次失败（PyPI 网络异常）"
+          exit 1
 
       - name: Build executables + smoke test (Linux, xvfb)
         if: matrix.platform == 'linux'
@@ -78,17 +252,24 @@ jobs:
         if: matrix.platform != 'linux'
         run: python build_exe.py --smoke --dual
 
+      - name: List build output
+        shell: bash
+        run: ls -lh dist/
+
+      # ── 产物上传 ───────────────────────────────────────────────────────
+      # lite 体积小，v7 内置重试足够覆盖瞬时故障
       - name: Upload lite artifact
-        uses: actions/upload-artifact@v7   # v7 原生 Node.js 24，且相比 v5 改进了上传重试逻辑
+        uses: actions/upload-artifact@v7
         with:
           name: DouyinLiveRecorder-${{ matrix.platform }}-lite
           path: dist/*-lite.zip
-          compression-level: 0             # zip 已压缩，跳过重复压缩以加速上传
+          compression-level: 0        # zip 已压缩，跳过二次压缩以加速上传
           if-no-files-found: error
+          retention-days: 30
 
-      # full 版本含 ffmpeg + node（~300MB），即使 v7 内置重试仍可能因瞬时网络
-      # 故障（如 EHOSTUNREACH）失败。此处叠加工作流级别的显式重试（最多 3 次，
-      # 退避 30s → 60s），且最后一次失败才会让 job 失败。
+      # full 版本含 ffmpeg + node（约 300MB），即使 v7 内置重试仍可能因瞬时网络
+      # 故障（如 EHOSTUNREACH）失败。此处叠加工作流级显式重试（最多 3 次，
+      # 退避 30s → 60s），仅最后一次失败才让 job 失败。
       - name: Upload full artifact (attempt 1/3)
         id: upload_full_1
         uses: actions/upload-artifact@v7
@@ -98,9 +279,11 @@ jobs:
           path: dist/*-full.zip
           compression-level: 0
           if-no-files-found: error
+          retention-days: 30
 
       - name: Wait before retry (30s)
         if: steps.upload_full_1.outcome == 'failure'
+        shell: bash
         run: sleep 30
 
       - name: Upload full artifact (attempt 2/3)
@@ -113,9 +296,11 @@ jobs:
           path: dist/*-full.zip
           compression-level: 0
           if-no-files-found: error
+          retention-days: 30
 
       - name: Wait before retry (60s)
         if: steps.upload_full_1.outcome == 'failure' && steps.upload_full_2.outcome == 'failure'
+        shell: bash
         run: sleep 60
 
       - name: Upload full artifact (attempt 3/3)
@@ -126,22 +311,88 @@ jobs:
           path: dist/*-full.zip
           compression-level: 0
           if-no-files-found: error
+          retention-days: 30
 
+  # ── 2. 创建 GitHub Release（仅 tag 推送）─────────────────────────────────
   release:
     name: Create GitHub Release
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [prepare, build]
+    if: needs.prepare.outputs.is_release == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write        # 唯一需要写权限的 job：创建 Release / 上传附件
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v7   # 同步升级至 Node.js 24 运行时
+        uses: actions/download-artifact@v7
         with:
           path: artifacts
           merge-multiple: true
 
+      - name: List downloaded artifacts
+        shell: bash
+        run: ls -lh artifacts/
+
+      # 校验产物齐全：3 平台 × (lite + full) = 6 个 zip。
+      # 缺失说明某平台构建被跳过或上传失败，此时不应发布残缺 Release。
+      - name: Verify artifact completeness
+        shell: bash
+        run: |
+          set -euo pipefail
+          count=$(find artifacts -name '*.zip' -type f | wc -l)
+          echo "找到 ${count} 个 zip 产物"
+          find artifacts -name '*.zip' -type f | sort
+          if [ "$count" -lt 6 ]; then
+            echo "::error::产物数量不足（期望 6 个：windows/linux/macos × lite/full，实际 ${count} 个）"
+            exit 1
+          fi
+
+      # 提供校验和便于用户验证下载完整性
+      - name: Generate SHA256 checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd artifacts
+          sha256sum *.zip | tee SHA256SUMS.txt
+
       - name: Create Release
         uses: softprops/action-gh-release@v3
         with:
-          files: artifacts/*.zip
+          # tag_name 省略 → 默认使用触发本次运行的 tag
+          name: v${{ needs.prepare.outputs.version }}
+          files: |
+            artifacts/*.zip
+            artifacts/SHA256SUMS.txt
           generate_release_notes: true
           draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+          body: |
+            ## DouyinLiveRecorder v${{ needs.prepare.outputs.version }}
+
+            ### 下载说明
+
+            | 版本 | 说明 |
+            | --- | --- |
+            | `*-lite.zip` | 精简版，**不含** ffmpeg / Node.js，首次运行时按需自动下载（体积小） |
+            | `*-full.zip` | 完整版，已内置 ffmpeg + Node.js，解压即用（适合内网 / 无外网环境） |
+
+            按操作系统与架构选择对应文件；下载后可用 `SHA256SUMS.txt` 校验完整性：
+
+            ```bash
+            sha256sum -c SHA256SUMS.txt --ignore-missing
+            ```
+
+            > 产物由 GitHub Actions 在 `windows-latest` / `ubuntu-latest` / `macos-latest`
+            > 上经 `build_exe.py --smoke --dual` 构建，并已通过 CLI / Web / GUI 三入口启动冒烟测试。
+            > 可执行文件**未做代码签名**，首次运行时系统可能提示未知发布者。
+
+      - name: Write job summary
+        shell: bash
+        run: |
+          {
+            echo "### Release 已创建"
+            echo ""
+            echo "- 版本：\`v${{ needs.prepare.outputs.version }}\`"
+            echo "- 产物：见 Release 附件（含 SHA256SUMS.txt）"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # 消息推送模块 - 支持多种消息推送渠道用于直播状态通知
+# 提供钉钉/微信(Server酱)/Telegram/Bark/ntfy/PushPlus 推送及 SMTP 邮件发送，
+# 各推送函数接收地址与内容，返回 {"success": [...], "error": [...]}。
 
 import base64
 import http.client
@@ -21,6 +23,7 @@ opener: urllib.request.OpenerDirector = urllib.request.build_opener(no_proxy_han
 headers: dict[str, str] = {"Content-Type": "application/json"}
 
 
+# 脱敏密钥：保留前后各 2 位，其余以 * 遮挡，防日志泄露
 def _mask_secret(secret: str) -> str:
     # 脱敏：仅保留前后各 2 位用于排查，其余以 * 遮挡，避免凭证泄露到日志。
     if not secret:
@@ -31,6 +34,7 @@ def _mask_secret(secret: str) -> str:
     return f"{secret[:2]}{'*' * (len(secret) - 4)}{secret[-2:]}"
 
 
+# 脱敏推送地址：隐藏 query 与疑似密钥路径段，仅供日志展示
 def _mask_url(url: str) -> str:
     # 脱敏推送地址：隐藏 query 中的 token 与疑似密钥的路径段，避免凭证泄露到日志。
     # 仅用于日志展示，不影响实际请求。
@@ -58,6 +62,8 @@ def _mask_url(url: str) -> str:
         return _mask_secret(url)
 
 
+# 钉钉群机器人推送文本消息，支持 @手机号/全体，返回成功与失败地址列表
+# 钉钉群机器人推送文本消息，支持 @手机号/全体，返回成功与失败地址列表
 def dingtalk(url: str, content: str, number: str | None = None, is_atall: bool = False) -> dict[str, list[str | int]]:
     # 钉钉群机器人推送
     success: list[str | int] = []
@@ -90,6 +96,7 @@ def dingtalk(url: str, content: str, number: str | None = None, is_atall: bool =
     return {"success": success, "error": error}
 
 
+# 通过 Server酱/微信 推送消息（url 为推送地址，title/content 为内容）。
 def xizhi(url: str, title: str, content: str) -> dict[str, list[str | int]]:
     # 微信推送（Server酱/WeChat）
     success: list[str | int] = []
@@ -116,6 +123,7 @@ def xizhi(url: str, title: str, content: str) -> dict[str, list[str | int]]:
     return {"success": success, "error": error}
 
 
+# 通过 SMTP 发送邮件（支持 SSL/非SSL），返回成功与失败收件人列表
 def send_email(
     email_host: str,
     login_email: str,
@@ -173,6 +181,7 @@ def send_email(
                 pass
 
 
+# Telegram Bot 推送文本消息，返回成功与失败聊天ID列表
 def tg_bot(chat_id: str | int, token: str, content: str) -> dict[str, list[str | int]]:
     # Telegram Bot 推送
     # url 在 try 外预绑定，避免构造 json_data 异常时 except 块引用未绑定变量触发 NameError
@@ -195,6 +204,7 @@ def tg_bot(chat_id: str | int, token: str, content: str) -> dict[str, list[str |
         return {"success": [], "error": [str(chat_id)]}
 
 
+# Bark（iOS）推送通知，返回成功与失败地址列表
 def bark(
     api: str,
     title: str = "message",
@@ -244,6 +254,7 @@ def bark(
     return {"success": success, "error": error}
 
 
+# ntfy 跨平台推送通知（支持 tags/优先级/附件等），返回成功与失败列表
 def ntfy(
     api: str,
     title: str = "message",
@@ -315,6 +326,7 @@ def ntfy(
     return {"success": success, "error": error}
 
 
+# PushPlus 推送（token+title+content），返回成功与失败 token 列表
 def pushplus(token: str, title: str, content: str) -> dict[str, list[str | int]]:
     # PushPlus 推送
     success: list[str | int] = []

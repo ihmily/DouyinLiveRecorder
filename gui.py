@@ -1,9 +1,16 @@
 # -*- encoding: utf-8 -*-
 # 直播录制器 GUI 界面（基于 CustomTkinter 的现代化重构）
+# 本模块为图形界面主入口：构建系统托盘（pystray，含 macOS 主线程模型）、
+# 主窗口及五个页面（控制台 / 画质监控 / 弹幕监控 / URL 配置 / 运行日志），管理子进程
+# 录制生命周期、跨线程日志队列与 UI 事件泵、画质降级监控、弹幕监控（tail 边车
+# JSONL 文件）以及优雅退出清理。
+# 对外主要类：LiveRecorderGUI（主界面）、SystemTray（托盘管理器）、
+# AdvancedSettingsWindow（config.ini 编辑器）、Colors / Fonts（主题与字体）。
 from __future__ import annotations
 
 import configparser
 import io
+import json
 import os
 import queue
 import re
@@ -13,10 +20,11 @@ import sys
 import threading
 import time
 import tkinter as tk
+from collections import deque
 from collections.abc import Callable
 from datetime import datetime
 from tkinter import messagebox
-from typing import TYPE_CHECKING, Literal, TypeAlias, cast, final
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast, final
 
 import customtkinter as ctk
 from PIL import Image, ImageDraw
@@ -80,6 +88,7 @@ else:
 # ─── 现代化色彩系统（浅色 / 深色双主题） ──────────────────
 
 
+# 主题色值常量集合（浅色 / 深色双主题统一色板）。
 @final
 class Colors:
     # 品牌主色
@@ -120,11 +129,13 @@ _FONT_FAMILY = "Microsoft YaHei UI"
 _MONO_FAMILY = "Cascadia Code"
 
 
+# 字体工厂：按需创建并缓存复用的 CustomTkinter 字体对象。
 @final
 class Fonts:
     # 常用字体配置（惰性创建，避免在 Tk 初始化前调用失败）
     _cache: dict[str, ctk.CTkFont] = {}
 
+    # 按 size/weight/family 获取（并缓存）CTkFont 字体对象。
     @classmethod
     def get(cls, size: int, weight: Literal["normal", "bold"] = "normal", family: str = _FONT_FAMILY) -> ctk.CTkFont:
         key = f"{family}_{size}_{weight}"
@@ -132,37 +143,51 @@ class Fonts:
             cls._cache[key] = ctk.CTkFont(family=family, size=size, weight=weight)
         return cls._cache[key]
 
+    # 获取小号（12px）字体，bold 控制是否加粗。
     @classmethod
+    # 返回小号（12px）字体，bold 可控制是否加粗。
     def small(cls, bold: bool = False) -> ctk.CTkFont:
         return cls.get(12, "bold" if bold else "normal")
 
+    # 获取正文（13px）字体，bold 控制是否加粗。
     @classmethod
+    # 返回正文（13px）字体，bold 可控制是否加粗。
     def body(cls, bold: bool = False) -> ctk.CTkFont:
         return cls.get(13, "bold" if bold else "normal")
 
+    # 获取标题（15px）字体，默认加粗。
     @classmethod
+    # 返回标题（15px）字体，默认加粗。
     def heading(cls, bold: bool = True) -> ctk.CTkFont:
         return cls.get(15, "bold" if bold else "normal")
 
+    # 获取大标题（20px 加粗）字体。
     @classmethod
+    # 返回大标题（20px 加粗）字体。
     def title(cls) -> ctk.CTkFont:
         return cls.get(20, "bold")
 
+    # 获取大号状态（26px 加粗）字体。
     @classmethod
+    # 返回大号状态（26px 加粗）字体。
     def big_status(cls) -> ctk.CTkFont:
         return cls.get(26, "bold")
 
+    # 获取等宽字体描述元组（字体名, 11）。
     @classmethod
+    # 返回等宽字体描述元组（字体名, 11）。
     def mono(cls) -> tuple[str, int]:
         return (_MONO_FAMILY, 11)
 
 
+# 将 #RRGGBB 十六进制颜色字符串解析为 (R, G, B) 整数元组。
 def _hex_to_rgb(color: str) -> tuple[int, int, int]:
     # 将 #RRGGBB 转为 RGB 元组
     color = color.lstrip("#")
     return (int(color[0:2], 16), int(color[2:4], 16), int(color[4:6], 16))
 
 
+# 按给定比例混合两种十六进制颜色，用于状态点呼吸动画。
 def _mix(color_a: str, color_b: str, ratio: float) -> str:
     # 按 ratio 混合两种颜色（0 = A，1 = B），用于呼吸灯动画
     ra, ga, ba = _hex_to_rgb(color_a)
@@ -173,10 +198,12 @@ def _mix(color_a: str, color_b: str, ratio: float) -> str:
     return f"#{r:02X}{g:02X}{b:02X}"
 
 
+# 系统托盘管理器：构建菜单图标、处理托盘交互与跨平台运行模型。
 @final
 class SystemTray:
     # 系统托盘管理器
 
+    # 初始化系统托盘管理器（持有 GUI 引用、运行状态与 macOS detached 标志）。
     def __init__(self, gui_app: "LiveRecorderGUI"):
         # 初始化系统托盘管理器
         self.gui = gui_app
@@ -186,6 +213,7 @@ class SystemTray:
         # 该模式下 stop() 前需先主动隐藏图标（详见 stop() 注释）。
         self.detached = False
 
+    # 绘制并返回托盘图标位图（圆角矩形 + 白色圆环 + 录制红点）。
     def create_icon_image(self) -> Image.Image:
         # 创建现代化托盘图标
         size = 64
@@ -235,23 +263,28 @@ class SystemTray:
             pass
         return image
 
+    # 托盘菜单「显示主界面」回调：路由到 UI 线程恢复窗口。
     def on_show(self, _icon: "PystrayIcon | None" = None) -> None:
         # 托盘菜单：显示主窗口（pystray 回调运行在托盘线程，Tk 操作必须路由回 UI 线程）
         self.gui.post_ui(self._do_show)
 
+    # 在 UI 线程中恢复并显示主窗口（deiconify + lift）。
     def _do_show(self) -> None:
         # 在 UI 线程中恢复窗口
         self.gui.root.deiconify()
         self.gui.root.lift()
 
+    # 托盘菜单「退出程序」回调：路由到 UI 线程执行退出。
     def on_exit(self, _icon: "PystrayIcon | None" = None) -> None:
         # 托盘菜单：退出程序（路由回 UI 线程，避免跨线程弹窗/操作 Tk）
         self.gui.post_ui(self.gui.quit_application)
 
+    # 托盘菜单「最小化到托盘」回调：路由到 UI 线程隐藏窗口。
     def on_minimize(self, _icon: "PystrayIcon | None" = None) -> None:
         # 托盘菜单：最小化到托盘（路由回 UI 线程）
         self.gui.post_ui(self.gui.root.withdraw)
 
+    # 构造 pystray 图标与菜单（延迟导入 pystray 以兼容 headless）。
     def _build_icon(self) -> "PystrayIcon":
         # 构造 pystray Icon（菜单 + 图标位图）。
         import pystray  # 延迟导入：避免 headless 环境在模块顶层即失败
@@ -263,6 +296,7 @@ class SystemTray:
         )
         return pystray.Icon("LiveRecorder", self.create_icon_image(), "LiveRecorder - click to show", menu)
 
+    # 托盘不可用时优雅降级，避免 GUI 进程因崩溃堆栈退出。
     def _degrade(self, exc: BaseException) -> None:
         # 无系统托盘（headless / 无显示 / 库缺失）时优雅降级，
         # 避免崩溃堆栈导致整个 GUI 进程退出（冒烟测试会据此判定失败）。
@@ -273,6 +307,7 @@ class SystemTray:
         except Exception:
             pass
 
+    # 在后台线程启动托盘图标（Windows / Linux 阻塞运行，macOS 禁用）。
     def run(self) -> None:
         # 启动系统托盘图标（阻塞运行；Windows / Linux 专用，由后台线程调用）。
         # 注意：macOS 禁止走本方法 —— pystray darwin 后端的 icon.run() 会以
@@ -288,6 +323,7 @@ class SystemTray:
         except Exception as exc:
             self._degrade(exc)
 
+    # macOS 主线程非阻塞启动托盘（仅注册状态栏图标，不接管事件循环）。
     def run_detached(self) -> None:
         # macOS 专用：在「主线程」调用（进入 Tk mainloop 之前），非阻塞。
         # pystray darwin 后端的 run_detached() 只做 _mark_ready()（注册状态栏图标），
@@ -316,6 +352,7 @@ class SystemTray:
         except Exception as exc:
             self._degrade(exc)
 
+    # 停止系统托盘并移除状态栏图标（全平台容错，detached 先隐藏）。
     def stop(self) -> None:
         # 停止系统托盘（stop() 可能由 UI 线程调用，全程容错）。
         # macOS detached 模式下 pystray _run() 的 finally（移除状态栏项）不会执行，
@@ -332,6 +369,7 @@ class SystemTray:
                 pass
             self.running = False
 
+    # 发送系统通知（仅在托盘图标可用时）。
     def notify(self, message: str, title: str = "直播录制器") -> None:
         # 显示系统通知
         if self.icon:
@@ -341,10 +379,12 @@ class SystemTray:
                 pass
 
 
+# 高级设置窗口：以文本形式编辑并保存 config/config.ini。
 @final
 class AdvancedSettingsWindow:
     # 高级设置窗口：编辑 config/config.ini
 
+    # 初始化高级设置窗口（构建 UI、加载配置并延迟安全 grab）。
     def __init__(self, parent: ctk.CTk, config_file: str, log_callback: Callable[[str], None] | None = None):
         # 初始化高级设置窗口
         self.config_file = config_file
@@ -362,6 +402,7 @@ class AdvancedSettingsWindow:
         # 延迟 grab，等待窗口可见，避免 Windows 下 grab_set 报错
         self.window.after(100, self._safe_grab)
 
+    # 安全地为窗口设置模态（容错 grab_set，避免 Windows 报错）。
     def _safe_grab(self) -> None:
         # 安全地设置模态
         try:
@@ -369,6 +410,7 @@ class AdvancedSettingsWindow:
         except Exception:
             pass
 
+    # 构建高级设置窗口 UI（标题栏、编辑器、保存 / 取消按钮）。
     def _setup_ui(self) -> None:
         # 顶部标题栏
         header = ctk.CTkFrame(self.window, fg_color=Colors.PRIMARY, corner_radius=0, height=52)
@@ -424,6 +466,7 @@ class AdvancedSettingsWindow:
             corner_radius=8,
         ).pack(side=tk.RIGHT)
 
+    # 加载 config.ini 内容到编辑器（文件不存在时提示新建）。
     def _load_config(self) -> None:
         # 加载 config.ini 到编辑器
         try:
@@ -437,6 +480,7 @@ class AdvancedSettingsWindow:
         except Exception as e:
             messagebox.showerror("错误", f"加载配置文件失败: {e}")
 
+    # 保存编辑器内容到 config.ini 并提示成功、关闭窗口。
     def save_config(self) -> None:
         # 保存编辑器内容到 config.ini
         try:
@@ -450,6 +494,7 @@ class AdvancedSettingsWindow:
             messagebox.showerror("错误", f"保存配置文件失败: {e}")
 
 
+# 将文本控件内容保存为文件（UTF-8-SIG，自动补末尾换行）。
 def _save_text_widget_to_file(text_widget: ctk.CTkTextbox, file_path: str) -> None:
     # 从文本控件读取内容并写入文件
     content = text_widget.get("1.0", tk.END).rstrip("\n")
@@ -459,6 +504,7 @@ def _save_text_widget_to_file(text_widget: ctk.CTkTextbox, file_path: str) -> No
         f.write(content)
 
 
+# 向指定 PID 的子进程发送 CTRL_BREAK 信号（仅 Windows），返回是否成功。
 def _send_ctrl_break_to_child(pid: int) -> bool:
     # 向拥有独立控制台的子进程发送 CTRL_BREAK（仅 Windows），返回是否成功。
     # 为什么不能用 proc.send_signal(CTRL_BREAK_EVENT)：
@@ -477,6 +523,7 @@ def _send_ctrl_break_to_child(pid: int) -> bool:
     had_console = bool(cast(int, k32.GetConsoleWindow()))
     handler_routine = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_ulong)
 
+    # 控制台 Ctrl 事件回调：返回 True 表示事件已处理，保护 GUI 不被终止。
     def _ignore(_ctrl_type: int) -> bool:
         return True  # 声明事件已处理，避免 GUI 自身被 CTRL_BREAK 终止
 
@@ -499,6 +546,7 @@ def _send_ctrl_break_to_child(pid: int) -> bool:
             k32.AttachConsole(0xFFFFFFFF)
 
 
+# 直播录制 GUI 主类：整合界面、子进程录制、日志队列与画质监控。
 @final
 class LiveRecorderGUI:
     # 直播录制 GUI 主类
@@ -544,7 +592,14 @@ class LiveRecorderGUI:
     _q_stat_ok: ctk.CTkLabel
     _q_stat_down: ctk.CTkLabel
     _quality_scroll: ctk.CTkScrollableFrame
+    _dm_stat_rooms: ctk.CTkLabel
+    _dm_stat_connected: ctk.CTkLabel
+    _dm_stat_msgs: ctk.CTkLabel
+    _dm_scroll: ctk.CTkScrollableFrame
+    _dm_filter_menu: ctk.CTkOptionMenu
+    danmaku_text: tk.Text
 
+    # 初始化 GUI 主窗口、路径配置、状态与所有后台调度。
     def __init__(self, root: ctk.CTk):
         # 初始化 GUI 主窗口及所有组件
         self.root = root
@@ -606,6 +661,21 @@ class LiveRecorderGUI:
         self._quality_data: dict[str, dict[str, str | bool | float]] = {}
         self._quality_last_displayed: dict[str, dict[str, str | bool | float]] = {}
 
+        # 弹幕监控数据（线程安全：_danmaku_lock 保护以下字段）
+        # _danmaku_rooms: {room: {platform/connected/started_at/msg_total/msg_rate/gift_total/online}}
+        # _danmaku_msgs: 近期消息环形缓冲（tail 线程追加，UI 线程渲染，最多 300 条）
+        self._danmaku_lock = threading.Lock()
+        self._danmaku_rooms: dict[str, dict[str, str | bool | int | float]] = {}
+        self._danmaku_msgs: deque[dict[str, Any]] = deque(maxlen=300)
+        self._danmaku_filter = "全部房间"
+        self._danmaku_stats_dirty = True  # 统计表是否有变化待重绘
+        self._danmaku_stream_dirty = True  # 弹幕流是否有新消息待重绘
+        # 仅缓存上次渲染的 rows 用于比较去重（见 _update_danmaku_display），值不含 float
+        self._danmaku_last_stats: list[dict[str, str | bool | int]] | None = None
+        self._danmaku_tail_thread: threading.Thread | None = None
+        self._danmaku_tail_stop = threading.Event()
+        self._danmaku_refresh_job_id: str | None = None
+
         # UI 线程事件队列：后台线程一律通过 post_ui 投递回调，
         # 由 _pump_ui_events 在 UI 线程执行。tkinter 不是线程安全的，
         # 后台线程直接调 root.after/createcommand 会随机崩溃
@@ -633,14 +703,17 @@ class LiveRecorderGUI:
         self._load_config()
         self._schedule_log_flush()
         self._schedule_status_refresh()
+        self._danmaku_refresh_job_id = self.root.after(1000, self._schedule_danmaku_refresh)
         self._ui_pump_job_id = self.root.after(100, self._pump_ui_events)
 
     # ─── UI 线程事件泵（线程安全调度） ──────────────────────
 
+    # 从任意线程安全地调度回调到 UI 线程执行（仅入队，不触碰 Tk）。
     def post_ui(self, callback: Callable[..., None], *args: object) -> None:
         # 从任意线程安全地调度回调到 UI 线程执行（只写队列，不触碰 Tk）
         self._ui_event_queue.put((callback, args))
 
+    # UI 线程事件泵：执行后台投递的回调并激活日志刷新链。
     def _pump_ui_events(self) -> None:
         # UI 线程泵：执行后台线程投递的回调，并激活日志刷新链
         if not self._pump_active:
@@ -673,36 +746,47 @@ class LiveRecorderGUI:
     # ─── 进程状态线程安全访问 ───────────────────────────────
 
     @property
+    # 线程安全地读取当前子进程对象。
     def process(self) -> subprocess.Popen[str] | None:
         # 获取子进程对象（线程安全）
         with self._process_lock:
             return self._process
 
+    # 设置当前子进程对象（线程安全）。
     @process.setter
+    # 线程安全地设置子进程对象。
     def process(self, value: subprocess.Popen[str] | None) -> None:
         # 设置子进程对象（线程安全）
         with self._process_lock:
             self._process = value
 
+    # 读取当前子进程 PID（线程安全）。
     @property
+    # 线程安全地读取子进程 PID。
     def process_pid(self) -> int | None:
         # 获取子进程 PID
         with self._process_lock:
             return self._process_pid
 
+    # 设置当前子进程 PID（线程安全）。
     @process_pid.setter
+    # 线程安全地设置子进程 PID。
     def process_pid(self, value: int | None) -> None:
         # 设置子进程 PID
         with self._process_lock:
             self._process_pid = value
 
+    # 读取录制运行状态（线程安全）。
     @property
+    # 线程安全地读取录制运行状态。
     def running(self) -> bool:
         # 获取运行状态
         with self._process_lock:
             return self._running
 
+    # 设置录制运行状态（线程安全）。
     @running.setter
+    # 线程安全地设置录制运行状态。
     def running(self, value: bool) -> None:
         # 设置运行状态
         with self._process_lock:
@@ -710,6 +794,7 @@ class LiveRecorderGUI:
 
     # ─── UI 初始化 ─────────────────────────────────────────
 
+    # 构建主布局（左侧导航栏 + 右侧内容区）并展示默认页。
     def _setup_ui(self) -> None:
         # 主布局：左侧导航栏 + 右侧内容区（grid）
         self.root.grid_columnconfigure(0, minsize=230, weight=0)
@@ -719,6 +804,7 @@ class LiveRecorderGUI:
         self._build_content()
         self._show_page("dashboard")
 
+    # 构建左侧导航栏（品牌、状态胶囊、导航按钮、外观与退出）。
     def _build_sidebar(self) -> "tk.Frame":
         # 构建左侧导航栏
         # mypy 不加载 typings/customtkinter 存根，ctk.CTkFrame(...) 推断为 Any；
@@ -780,6 +866,7 @@ class LiveRecorderGUI:
 
         self._add_nav_button(nav, "dashboard", "📊   控制台")
         self._add_nav_button(nav, "quality", "🎯   画质监控")
+        self._add_nav_button(nav, "danmaku", "💬   弹幕监控")
         self._add_nav_button(nav, "config", "📝   URL 配置")
         self._add_nav_button(nav, "logs", "📋   运行日志")
 
@@ -839,6 +926,7 @@ class LiveRecorderGUI:
 
         return sidebar
 
+    # 向侧边栏添加一项导航按钮并绑定页面切换回调。
     def _add_nav_button(self, parent: ctk.CTkFrame, page_id: str, text: str) -> None:
         # 添加侧边栏导航按钮
         btn = ctk.CTkButton(
@@ -856,6 +944,7 @@ class LiveRecorderGUI:
         btn.pack(fill=tk.X, pady=2)
         self._nav_buttons[page_id] = btn
 
+    # 切换至指定页面并高亮对应的导航按钮。
     def _show_page(self, page_id: str) -> None:
         # 切换到指定页面并高亮对应导航按钮
         if page_id not in self._pages:
@@ -874,6 +963,7 @@ class LiveRecorderGUI:
                     fg_color="transparent", text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK), font=Fonts.body()
                 )
 
+    # 切换浅色 / 深色 / 系统外观模式并同步自绘控件颜色。
     def _on_appearance_change(self, choice: str) -> None:
         # 切换外观模式
         mapping = {"跟随系统": "system", "浅色": "light", "深色": "dark"}
@@ -881,11 +971,13 @@ class LiveRecorderGUI:
         # 主题切换后同步自绘控件颜色（Canvas 不随主题自动变化）
         self.root.after(50, self._sync_canvas_bg)
 
+    # 主题切换后同步所有自绘 Canvas（状态圆点）背景色。
     def _sync_canvas_bg(self) -> None:
         # 同步所有自绘 Canvas 的背景色（主题切换后调用）
         self._sync_dot_bg()
         self._sync_big_dot_bg()
 
+    # 同步侧边栏状态圆点的画布背景色（Canvas 不随主题自动变化）。
     def _sync_dot_bg(self) -> None:
         # 同步状态圆点画布背景色（Canvas 不随主题自动变化）
         try:
@@ -895,6 +987,7 @@ class LiveRecorderGUI:
         except Exception:
             pass
 
+    # 构建右侧内容区并叠放四个页面（tkraise 切换）。
     def _build_content(self) -> None:
         # 构建右侧内容区（三个页面叠放，tkraise 切换）
         container = ctk.CTkFrame(self.root, fg_color=(Colors.BG_LIGHT, Colors.BG_DARK))
@@ -904,12 +997,14 @@ class LiveRecorderGUI:
 
         self._pages["dashboard"] = self._build_dashboard_page(container)
         self._pages["quality"] = self._build_quality_page(container)
+        self._pages["danmaku"] = self._build_danmaku_page(container)
         self._pages["config"] = self._build_config_page(container)
         self._pages["logs"] = self._build_logs_page(container)
 
         for page in self._pages.values():
             page.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
 
+    # 创建带可选标题的圆角卡片容器，返回卡片 Frame。
     def _create_card(self, parent: ctk.CTkFrame, title: str = "") -> ctk.CTkFrame:
         # 创建圆角卡片容器
         card = ctk.CTkFrame(
@@ -930,6 +1025,7 @@ class LiveRecorderGUI:
 
     # ─── 页面：控制台 ───────────────────────────────────────
 
+    # 构建控制台页：状态总览、录制控制与快捷操作卡片。
     def _build_dashboard_page(self, parent: ctk.CTkFrame) -> ctk.CTkFrame:
         # 控制台页面：大状态卡片 + 录制控制 + 快捷操作
         page = ctk.CTkFrame(parent, fg_color="transparent")
@@ -1055,6 +1151,7 @@ class LiveRecorderGUI:
 
         return page
 
+    # 在状态卡片添加一项信息（标签 + 值），返回值标签以便后续更新。
     def _add_info_item(self, parent: ctk.CTkFrame, label: str, value: str, row: int, col: int) -> ctk.CTkLabel:
         # 在状态卡片中添加一个信息项，返回值标签便于后续更新
         box = ctk.CTkFrame(parent, fg_color="transparent")
@@ -1068,6 +1165,7 @@ class LiveRecorderGUI:
         val.pack(anchor=tk.W)
         return val
 
+    # 同步控制台大状态圆点的画布背景色（Canvas 不随主题自动变化）。
     def _sync_big_dot_bg(self) -> None:
         # 同步大圆点画布背景（Canvas 不随主题自动变化）
         try:
@@ -1079,6 +1177,7 @@ class LiveRecorderGUI:
 
     # ─── 页面：URL 配置 ─────────────────────────────────────
 
+    # 构建 URL 配置编辑页（文本编辑器 + 重新读取 / 保存按钮）。
     def _build_config_page(self, parent: ctk.CTkFrame) -> ctk.CTkFrame:
         # URL 配置编辑页面
         page = ctk.CTkFrame(parent, fg_color="transparent")
@@ -1150,6 +1249,7 @@ class LiveRecorderGUI:
 
     # ─── 页面：运行日志 ─────────────────────────────────────
 
+    # 构建运行日志页（终端风格文本框 + 清空日志按钮）。
     def _build_logs_page(self, parent: ctk.CTkFrame) -> ctk.CTkFrame:
         # 运行日志页面（终端风格）
         page = ctk.CTkFrame(parent, fg_color="transparent")
@@ -1222,6 +1322,7 @@ class LiveRecorderGUI:
 
     # ─── 页面：画质监控 ─────────────────────────────────────
 
+    # 构建画质监控页（统计卡片 + 实时详情列表）。
     def _build_quality_page(self, parent: ctk.CTkFrame) -> ctk.CTkFrame:
         # 画质监控页面：检测各直播间实际画质是否与设置一致
         page = ctk.CTkFrame(parent, fg_color="transparent")
@@ -1236,9 +1337,9 @@ class LiveRecorderGUI:
         summary_body.pack(fill=tk.X, padx=18, pady=16)
         summary_body.grid_columnconfigure((0, 1, 2), weight=1)
 
-        self._q_stat_total = self._add_quality_stat_item(summary_body, "录制中", "0", 0, Colors.PRIMARY)
-        self._q_stat_ok = self._add_quality_stat_item(summary_body, "画质正常", "0", 1, Colors.SUCCESS)
-        self._q_stat_down = self._add_quality_stat_item(summary_body, "画质降级", "0", 2, Colors.DANGER)
+        self._q_stat_total = self._add_stat_item(summary_body, "录制中", "0", 0, Colors.PRIMARY)
+        self._q_stat_ok = self._add_stat_item(summary_body, "画质正常", "0", 1, Colors.SUCCESS)
+        self._q_stat_down = self._add_stat_item(summary_body, "画质降级", "0", 2, Colors.DANGER)
 
         # 详情卡片
         detail_card = self._create_card(page, "🎯  画质监控（实时检测实际画质是否与设置一致）")
@@ -1261,9 +1362,8 @@ class LiveRecorderGUI:
 
         return page
 
-    def _add_quality_stat_item(
-        self, parent: ctk.CTkFrame, label: str, value: str, col: int, color: str
-    ) -> ctk.CTkLabel:
+    # 在统计卡片添加一项统计（标签 + 值），返回值标签（画质/弹幕监控页共用）。
+    def _add_stat_item(self, parent: ctk.CTkFrame, label: str, value: str, col: int, color: str) -> ctk.CTkLabel:
         # 在统计卡片中添加一个统计项，返回值标签便于后续更新
         box = ctk.CTkFrame(parent, fg_color="transparent")
         box.grid(row=0, column=col, padx=10, pady=4, sticky="ew")
@@ -1275,6 +1375,7 @@ class LiveRecorderGUI:
         val.pack(anchor=tk.CENTER, pady=(2, 0))
         return val
 
+    # 添加画质监控详情表的表头行（主播 / 设置 / 实际 / 状态 / 时间）。
     def _add_quality_header_row(self) -> None:
         # 添加画质监控表头行
         header = ctk.CTkFrame(self._quality_scroll, fg_color="transparent", height=28)
@@ -1294,6 +1395,7 @@ class LiveRecorderGUI:
                 anchor=tk.W,
             ).grid(row=0, column=col, sticky=tk.W, padx=6, pady=4)
 
+    # 添加一行画质监控数据（按降级状态着色显示）。
     def _add_quality_data_row(self, name: str, info: dict[str, str | bool | float]) -> None:
         # 添加一行画质监控数据
         downgraded = bool(info.get("downgraded", False))
@@ -1344,6 +1446,211 @@ class LiveRecorderGUI:
             anchor=tk.W,
         ).grid(row=0, column=4, sticky=tk.W, padx=4, pady=5)
 
+    # ─── 页面：弹幕监控 ─────────────────────────────────────
+
+    # 构建弹幕监控页（统计卡片 + 房间明细表 + 终端风格实时弹幕流）。
+    def _build_danmaku_page(self, parent: ctk.CTkFrame) -> ctk.CTkFrame:
+        # 弹幕监控页面：数据来自 tail 线程解析 logs/danmaku_monitor.jsonl
+        page = ctk.CTkFrame(parent, fg_color="transparent")
+        page.grid_columnconfigure(0, weight=1)
+        page.grid_rowconfigure(0, weight=0)
+        page.grid_rowconfigure(1, weight=0)
+        page.grid_rowconfigure(2, weight=1)
+
+        # 统计卡片
+        summary_card = self._create_card(page)
+        summary_card.grid(row=0, column=0, sticky="ew", pady=(0, 14))
+
+        summary_body = ctk.CTkFrame(summary_card, fg_color="transparent")
+        summary_body.pack(fill=tk.X, padx=18, pady=16)
+        summary_body.grid_columnconfigure((0, 1, 2), weight=1)
+
+        self._dm_stat_rooms = self._add_stat_item(summary_body, "监控房间", "0", 0, Colors.PRIMARY)
+        self._dm_stat_connected = self._add_stat_item(summary_body, "已连接", "0", 1, Colors.SUCCESS)
+        self._dm_stat_msgs = self._add_stat_item(summary_body, "累计弹幕", "0", 2, Colors.PRIMARY)
+
+        # 房间明细卡片
+        detail_card = self._create_card(page, "💬  弹幕房间（连接状态 / 累计弹幕 / 速率 / 礼物）")
+        detail_card.grid(row=1, column=0, sticky="ew", pady=(0, 14))
+
+        inner = ctk.CTkFrame(detail_card, fg_color="transparent")
+        inner.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 14))
+
+        self._dm_scroll = ctk.CTkScrollableFrame(inner, fg_color="transparent", height=150)
+        self._dm_scroll.pack(fill=tk.BOTH, expand=True)
+
+        ctk.CTkLabel(
+            self._dm_scroll,
+            text="暂无弹幕监控数据\n\n启动录制并在 config.ini 开启「是否弹幕监控(是/否)」后，"
+            "支持弹幕的平台（斗鱼/B站/虎牙/抖音/Twitch）将显示实时弹幕",
+            font=Fonts.body(),
+            text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
+            justify=tk.CENTER,
+        ).pack(pady=30)
+
+        # 实时弹幕流卡片
+        stream_card = self._create_card(page, "📋  实时弹幕")
+        stream_card.grid(row=2, column=0, sticky="nsew")
+
+        stream_inner = ctk.CTkFrame(stream_card, fg_color="transparent")
+        stream_inner.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 14))
+
+        # 工具栏：房间筛选 + 清空
+        toolbar = ctk.CTkFrame(stream_inner, fg_color="transparent")
+        toolbar.pack(fill=tk.X, pady=(0, 8))
+
+        self._dm_filter_menu = ctk.CTkOptionMenu(
+            toolbar,
+            values=["全部房间"],
+            command=self._on_danmaku_filter_change,
+            font=Fonts.small(),
+            corner_radius=8,
+            height=30,
+            width=200,
+            fg_color=(Colors.BG_LIGHT, Colors.BG_DARK),
+            button_color=("#D6DAE5", "#2A3040"),
+            button_hover_color=("#C3C9D8", "#343B4E"),
+            text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
+            dropdown_fg_color=(Colors.CARD_LIGHT, Colors.CARD_DARK),
+            dropdown_text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
+            dropdown_hover_color=(Colors.PRIMARY_SOFT_LIGHT, Colors.PRIMARY_SOFT_DARK),
+        )
+        self._dm_filter_menu.pack(side=tk.LEFT)
+        self._dm_filter_menu.set("全部房间")
+
+        ctk.CTkButton(
+            toolbar,
+            text="🗑   清空",
+            command=self._clear_danmaku,
+            font=Fonts.small(),
+            height=30,
+            corner_radius=8,
+            width=90,
+            fg_color="transparent",
+            text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
+            border_width=1,
+            border_color=(Colors.BORDER_LIGHT, Colors.BORDER_DARK),
+            hover_color=(Colors.BG_LIGHT, Colors.BG_DARK),
+        ).pack(side=tk.RIGHT)
+
+        ctk.CTkLabel(
+            toolbar,
+            text="高频房间弹幕按每秒 10 条采样展示，统计计数始终精确",
+            font=Fonts.small(),
+            text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
+        ).pack(side=tk.RIGHT, padx=(0, 12))
+
+        # 终端容器
+        term_wrap = ctk.CTkFrame(stream_inner, fg_color=Colors.TERMINAL_BG, corner_radius=10)
+        term_wrap.pack(fill=tk.BOTH, expand=True)
+
+        self.danmaku_text = tk.Text(
+            term_wrap,
+            wrap=tk.WORD,
+            font=Fonts.mono(),
+            bg=Colors.TERMINAL_BG,
+            fg=Colors.TERMINAL_FG,
+            insertbackground="#FFFFFF",
+            relief=tk.FLAT,
+            bd=0,
+            padx=12,
+            pady=10,
+            state=tk.DISABLED,
+            selectbackground=Colors.TERMINAL_SELECT,
+            selectforeground="#FFFFFF",
+        )
+        dm_scrollbar = ctk.CTkScrollbar(
+            term_wrap,
+            command=cast("Callable[..., None]", self.danmaku_text.yview),
+            fg_color=Colors.TERMINAL_BG,
+            button_color="#30363D",
+            button_hover_color="#484F58",
+        )
+        self.danmaku_text.configure(yscrollcommand=dm_scrollbar.set)
+        dm_scrollbar.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 4), pady=4)
+        self.danmaku_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # 弹幕类型着色：普通弹幕用默认前景，礼物黄色，SC 粉色，采样折叠灰斜体
+        self.danmaku_text.tag_config("gift", foreground=Colors.TERMINAL_WARN)
+        self.danmaku_text.tag_config("superChat", foreground="#DB61A2")
+        self.danmaku_text.tag_config("dropped", foreground="#8B949E", font=(_MONO_FAMILY, 10, "italic"))
+
+        return page
+
+    # 添加弹幕房间明细表的表头行（房间/平台/状态/累计/速率/礼物/在线/开始时间）。
+    def _add_danmaku_header_row(self) -> None:
+        header = ctk.CTkFrame(self._dm_scroll, fg_color="transparent", height=28)
+        header.pack(fill=tk.X, pady=(0, 2))
+        header.pack_propagate(False)
+        weights = [3, 2, 1, 1, 1, 1, 1, 2]
+        for col, w in enumerate(weights):
+            header.grid_columnconfigure(col, weight=w)
+        for col, text in enumerate(["房间", "平台", "状态", "累计弹幕", "速率(条/分)", "礼物", "在线", "开始时间"]):
+            ctk.CTkLabel(
+                header,
+                text=text,
+                font=Fonts.small(bold=True),
+                text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
+                anchor=tk.W,
+            ).grid(row=0, column=col, sticky=tk.W, padx=6, pady=4)
+
+    # 添加一行弹幕房间数据（断开连接的行整行淡化）。
+    def _add_danmaku_data_row(self, name: str, info: dict[str, str | bool | int]) -> None:
+        connected = bool(info.get("connected", False))
+        weights = [3, 2, 1, 1, 1, 1, 1, 2]
+
+        row = ctk.CTkFrame(
+            self._dm_scroll,
+            fg_color="transparent" if connected else ("#F8FAFC", "#1C2029"),
+            corner_radius=6,
+            height=32,
+        )
+        row.pack(fill=tk.X, pady=1)
+        row.pack_propagate(False)
+        for col, w in enumerate(weights):
+            row.grid_columnconfigure(col, weight=w)
+
+        normal_color = (Colors.TEXT_LIGHT, Colors.TEXT_DARK) if connected else (Colors.MUTED_LIGHT, Colors.MUTED_DARK)
+        cells: list[tuple[str, str | bool | int | float, str, bool]] = [
+            ("房间", name, "normal", True),
+            ("平台", str(info.get("platform", "—")), "normal", False),
+            ("状态", "已连接" if connected else "已断开", "status", False),
+            ("累计弹幕", str(info.get("msg_total", 0)), "normal", False),
+            ("速率(条/分)", str(info.get("msg_rate", 0)), "normal", False),
+            ("礼物", str(info.get("gift_total", 0)), "normal", False),
+            ("在线", str(info.get("online", 0)), "normal", False),
+            ("开始时间", str(info.get("started_at", "—")), "muted", False),
+        ]
+        for col, (_label, value, kind, bold) in enumerate(cells):
+            if kind == "status":
+                color: str | tuple[str, str] = Colors.SUCCESS if connected else Colors.DANGER
+            elif kind == "muted":
+                color = (Colors.MUTED_LIGHT, Colors.MUTED_DARK)
+            else:
+                color = normal_color
+            ctk.CTkLabel(
+                row,
+                text=str(value),
+                font=Fonts.body(bold=bold),
+                text_color=color,
+                anchor=tk.W,
+            ).grid(row=0, column=col, sticky=tk.W, padx=6, pady=4)
+
+    # 筛选下拉变化：立即重绘弹幕流。
+    def _on_danmaku_filter_change(self, choice: str) -> None:
+        with self._danmaku_lock:
+            self._danmaku_filter = choice
+            self._danmaku_stream_dirty = True
+        self._render_danmaku_stream()
+
+    # 清空弹幕流显示。
+    def _clear_danmaku(self) -> None:
+        with self._danmaku_lock:
+            self._danmaku_msgs.clear()
+            self._danmaku_stream_dirty = True
+        self._render_danmaku_stream()
+
+    # 清空运行日志文本框内容。
     def _clear_log(self) -> None:
         # 清空日志显示
         self.log_text.config(state=tk.NORMAL)
@@ -1352,6 +1659,7 @@ class LiveRecorderGUI:
 
     # ─── 状态指示器动画 ─────────────────────────────────────
 
+    # 启动大状态圆点的呼吸式动画（若未在运行）。
     def _start_status_animation(self) -> None:
         # 启动状态指示器呼吸动画
         if self._status_animating:
@@ -1360,6 +1668,7 @@ class LiveRecorderGUI:
         self._status_anim_index = 0
         self._animate_status_dot()
 
+    # 停止状态指示器动画并取消定时回调。
     def _stop_status_animation(self) -> None:
         # 停止状态指示器动画
         self._status_animating = False
@@ -1370,6 +1679,7 @@ class LiveRecorderGUI:
                 pass
             self._status_anim_timer = None
 
+    # 状态圆点呼吸动画的单帧回调（大小 + 亮度往返渐变）。
     def _animate_status_dot(self) -> None:
         # 状态指示器动画帧回调（呼吸式脉冲：大小 + 亮度）
         if not self._status_animating:
@@ -1390,6 +1700,7 @@ class LiveRecorderGUI:
         self._status_anim_index += 1
         self._status_anim_timer = self.root.after(120, self._animate_status_dot)
 
+    # 设置整体状态指示（圆点颜色 / 动画）并刷新状态栏。
     def _set_status(self, color: str, running: bool) -> None:
         # 设置状态指示器状态（idle/recording）
         self._sync_dot_bg()
@@ -1409,6 +1720,7 @@ class LiveRecorderGUI:
 
     # ─── 配置读写 ──────────────────────────────────────────
 
+    # 加载 URL_config.ini 到编辑器，并跳过无变化的重载。
     def _load_config(self) -> None:
         # 加载 URL 配置文件
         config_dir = os.path.dirname(self.url_config_file)
@@ -1434,6 +1746,7 @@ class LiveRecorderGUI:
         except Exception as e:
             self._log(f"加载配置文件失败: {e}", "error")
 
+    # 将编辑器中的 URL 配置写入 URL_config.ini 并提示。
     def save_config(self) -> None:
         # 保存 URL 配置文件
         try:
@@ -1447,6 +1760,7 @@ class LiveRecorderGUI:
 
     # ─── 状态信息 ──────────────────────────────────────────
 
+    # 从 config.ini 读取循环间隔 / 输出格式与托盘状态（带缓存）。
     def _get_dynamic_status_info(self) -> tuple[str, str, str]:
         # 获取动态状态信息，返回 (check_interval, output_format, tray_status)
         check_interval = "120秒"
@@ -1467,6 +1781,7 @@ class LiveRecorderGUI:
             # 用 setattr 绕过该误报；保持 key 原样（不转小写）以匹配中文配置节名。
             # 用 setattr 绕过 mypy "Cannot assign to a method" 误报；
             # lambda 显式标注 (str) -> str 以同时满足 basedpyright 的 reportUnknownLambdaType。
+            # 配置项键名保持原样（不转小写），以匹配中文配置节名。
             def _preserve_case(optionstr: str) -> str:
                 return optionstr
 
@@ -1492,12 +1807,14 @@ class LiveRecorderGUI:
 
         return check_interval, output_format, self._tray_status_str()
 
+    # 返回系统托盘是否启用的中文状态字符串。
     def _tray_status_str(self) -> str:
         # 返回托盘状态的字符串描述
         return "启用" if self.system_tray and self.system_tray.running else "未启动"
 
     # ─── 子进程管理 ────────────────────────────────────────
 
+    # 跨平台打开 downloads 下载目录（不存在则先创建）。
     def open_downloads_folder(self) -> None:
         # 打开下载目录
         downloads_path = self.downloads_dir
@@ -1515,10 +1832,12 @@ class LiveRecorderGUI:
         except Exception as e:
             self._log(f"打开目录失败: {e}", "error")
 
+    # 打开高级设置窗口以编辑 config.ini。
     def open_advanced_settings(self) -> None:
         # 打开高级设置窗口
         AdvancedSettingsWindow(self.root, self.main_config_file, self._log)
 
+    # 启动录制：构造命令行拉起录制核心并接管其输出线程。
     def start_recording(self) -> None:
         # 开始录制
         if self._stopping:
@@ -1608,6 +1927,9 @@ class LiveRecorderGUI:
             self.output_thread = threading.Thread(target=self._read_output, args=(proc,), daemon=True)
             self.output_thread.start()
 
+            # 弹幕监控：tail 子进程写入的 logs/danmaku_monitor.jsonl
+            self._start_danmaku_tail()
+
             self._log("━" * 40)
             self._log(f"录制进程已启动 (PID: {proc.pid})")
             self._log(f"执行程序: {record_cmd[0]}")
@@ -1626,6 +1948,7 @@ class LiveRecorderGUI:
             self._set_status(Colors.DANGER, False)
             self._update_status_bar()
 
+    # 停止录制：发送信号优雅退出，超时则整树强杀 ffmpeg。
     def stop_recording(self) -> None:
         # 停止录制
         proc = self.process
@@ -1670,6 +1993,7 @@ class LiveRecorderGUI:
                 self._log(f"发送 SIGINT 失败，回退 terminate: {e}")
                 proc.terminate()
 
+        # 后台等待子进程退出并清理，完成后路由 UI 线程更新。
         def _wait_and_update_ui() -> None:
             # 先等待子进程自行清理其下所有 ffmpeg，超时再整树强杀
             terminated = False
@@ -1713,8 +2037,10 @@ class LiveRecorderGUI:
 
         threading.Thread(target=_wait_and_update_ui, daemon=True).start()
 
+    # 进程终止后在 UI 线程更新按钮状态与状态指示。
     def _on_recording_stopped(self) -> None:
         # 进程终止后的 UI 更新回调（在 UI 线程中执行）
+        self._stop_danmaku_tail()
         self.start_btn.configure(state=tk.NORMAL)
         self.stop_btn.configure(state=tk.DISABLED)
         self._set_status(Colors.DANGER, False)
@@ -1723,12 +2049,14 @@ class LiveRecorderGUI:
         self._log("━" * 40)
         self._flush_log_queue()
 
+    # 读取子进程输出流，解析画质日志并批量入队（线程安全）。
     def _read_output(self, proc: subprocess.Popen[str]) -> None:
         # 读取子进程输出。proc 由调用方显式传入并全程使用局部引用，
         # 避免停止后立即重启时本线程误读新进程的 stdout（两线程抢读同一管道）。
         batch: list[tuple[str, str]] = []
         batch_size = 10
 
+        # 将缓冲的日志批次入队并标记有待刷新。
         def flush_batch() -> None:
             # 批量刷新日志队列到文本控件（只写队列，调度由 UI 线程泵负责）
             nonlocal batch
@@ -1787,6 +2115,7 @@ class LiveRecorderGUI:
 
         flush_batch()
 
+    # 定时从日志队列批量刷新消息到日志文本框（UI 线程）。
     def _schedule_log_flush(self) -> None:
         # 定时从队列批量刷新日志到 UI
         messages: list[tuple[str, str]] = []
@@ -1839,6 +2168,7 @@ class LiveRecorderGUI:
         else:
             self._log_flush_job_id = None
 
+    # 子进程自然结束后的 UI 收尾（重置状态与按钮）。
     def _process_ended(self) -> None:
         # 子进程结束回调（仅在 UI 线程中调用）
         # 等待输出线程收尾，确保所有日志都被读取到 UI 后再重置状态
@@ -1847,6 +2177,7 @@ class LiveRecorderGUI:
             return
         if self.output_thread and self.output_thread.is_alive():
             self.output_thread.join(timeout=5)
+        self._stop_danmaku_tail()
         self.running = False
         self.process = None
         self.process_pid = None
@@ -1860,6 +2191,7 @@ class LiveRecorderGUI:
         self._log("录制进程已结束")
         self._log("━" * 40)
 
+    # 线程安全地向日志队列追加一条消息（不触碰 Tk 对象）。
     def _log(self, message: str, level: str = "info") -> None:
         # 添加日志到队列（线程安全）。本方法不触碰任何 Tk 对象，
         # 可在任意线程调用；刷新链由 UI 线程泵 _pump_ui_events 按需激活。
@@ -1867,6 +2199,7 @@ class LiveRecorderGUI:
         with self._log_queue_lock:
             self._log_queue_has_data = True
 
+    # 立即（UI 线程）刷新日志队列到文本控件。
     def _flush_log_queue(self) -> None:
         # 立即刷新日志队列到 UI（仅在 UI 线程中调用）
         if self._log_flush_job_id:
@@ -1880,6 +2213,7 @@ class LiveRecorderGUI:
 
     # ─── 画质监控 ──────────────────────────────────────────
 
+    # 解析日志行，提取画质降级告警与录制状态并更新监控数据。
     def _parse_quality_log(self, line: str) -> None:
         # 解析子进程日志行，提取画质降级告警和录制状态信息。
         # 可在输出线程中调用（仅操作 _quality_data，不触碰 Tk 对象）。
@@ -1937,6 +2271,7 @@ class LiveRecorderGUI:
                 for info in self._quality_data.values():
                     info["recording"] = False
 
+    # 在 UI 线程刷新画质监控页面与统计（仅限录制中的项）。
     def _update_quality_display(self) -> None:
         # 更新画质监控页面显示（仅在 UI 线程中调用）
         if not hasattr(self, "_quality_scroll"):
@@ -1985,13 +2320,260 @@ class LiveRecorderGUI:
         except Exception:
             pass
 
+    # ─── 弹幕监控（tail 边车 JSONL 文件） ──────────────────
+
+    # 启动弹幕监控 tail 线程：清空上一轮数据后跟随 logs/danmaku_monitor.jsonl。
+    def _start_danmaku_tail(self) -> None:
+        self._stop_danmaku_tail()
+        with self._danmaku_lock:
+            self._danmaku_rooms.clear()
+            self._danmaku_msgs.clear()
+            self._danmaku_last_stats = None
+            self._danmaku_stats_dirty = True
+            self._danmaku_stream_dirty = True
+        self._danmaku_tail_stop.clear()
+        self._danmaku_tail_thread = threading.Thread(target=self._danmaku_tail_loop, name="danmaku-tail", daemon=True)
+        self._danmaku_tail_thread.start()
+
+    # 停止 tail 线程（幂等；已显示的数据保留，下次启动录制时清空）。
+    def _stop_danmaku_tail(self) -> None:
+        self._danmaku_tail_stop.set()
+        t = self._danmaku_tail_thread
+        if t is not None and t is not threading.current_thread() and t.is_alive():
+            t.join(timeout=2)
+        self._danmaku_tail_thread = None
+
+    # tail 线程主体：二进制模式增量读取 JSONL（文本模式 tell 偏移不透明、不能与
+    # 文件字节数比较），解码后按行分发事件；处理轮转回绕，首读仅回看末尾 64KB
+    # 以免重放历史会话。
+    def _danmaku_tail_loop(self) -> None:
+        path = os.path.join(self.app_root, "logs", "danmaku_monitor.jsonl")
+        offset = 0
+        partial = ""
+        first_open = True
+        while not self._danmaku_tail_stop.is_set():
+            try:
+                if not os.path.exists(path):
+                    time.sleep(0.5)
+                    continue
+                size = os.path.getsize(path)
+                if size < offset:
+                    # 文件被轮转（变短）：从头重读
+                    offset = 0
+                    partial = ""
+                if size == offset:
+                    time.sleep(0.3)
+                    continue
+                with open(path, "rb") as f:
+                    if first_open:
+                        # 大文件仅回看末尾 64KB（跳过半个行首对齐到下一行）；
+                        # 小文件从头读，不丢首行事件
+                        if size > 64 * 1024:
+                            f.seek(size - 64 * 1024)
+                            f.readline()  # 丢弃半个行首，对齐到下一行
+                        offset = f.tell()
+                        first_open = False
+                        if size == offset:
+                            continue
+                    f.seek(offset)
+                    chunk = f.read()
+                    offset += len(chunk)
+                partial += chunk.decode("utf-8", errors="replace")
+                lines = partial.split("\n")
+                partial = lines.pop()
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                    except (ValueError, TypeError):
+                        continue
+                    if isinstance(event, dict):
+                        self._danmaku_dispatch(event)
+            except OSError:
+                time.sleep(1.0)
+            except Exception:
+                time.sleep(1.0)
+
+    # 分发一条 JSONL 事件到线程安全缓冲（tail 线程调用，只写锁内数据、不触碰 Tk）。
+    # conn 事件维护房间连接状态；stats 事件为统计权威来源；msg 事件进入弹幕流缓冲。
+    def _danmaku_dispatch(self, event: dict[str, Any]) -> None:
+        ev = str(event.get("ev", ""))
+        room = str(event.get("room", ""))
+        with self._danmaku_lock:
+            if ev == "conn":
+                state = str(event.get("state", ""))
+                if state == "started":
+                    self._danmaku_rooms[room] = {
+                        "platform": str(event.get("platform", "—")),
+                        "connected": False,
+                        "started_at": float(event.get("ts", 0.0)),
+                        "msg_total": 0,
+                        "msg_rate": 0,
+                        "gift_total": 0,
+                        "online": 0,
+                    }
+                else:
+                    if state == "stopped":
+                        # 房间已停止监控（URL 被移除/注释，录制线程退出）：从监控表移除，
+                        # 不再显示已失效直播间及其旧弹幕数据
+                        self._danmaku_rooms.pop(room, None)
+                    else:
+                        info = self._danmaku_rooms.get(room)
+                        if info is not None:
+                            info["connected"] = state == "ready"
+                self._danmaku_stats_dirty = True
+            elif ev == "msg":
+                self._danmaku_msgs.append(event)
+                self._danmaku_stream_dirty = True
+            elif ev == "stats":
+                info = self._danmaku_rooms.setdefault(
+                    room,
+                    {
+                        "platform": str(event.get("platform", "—")),
+                        "connected": False,
+                        "started_at": 0.0,
+                        "msg_total": 0,
+                        "msg_rate": 0,
+                        "gift_total": 0,
+                        "online": 0,
+                    },
+                )
+                info["platform"] = str(event.get("platform", info.get("platform", "—")))
+                info["connected"] = bool(event.get("connected", False))
+                info["msg_total"] = int(event.get("msg_total", info.get("msg_total", 0)))
+                info["msg_rate"] = int(event.get("msg_rate", info.get("msg_rate", 0)))
+                info["gift_total"] = int(event.get("gift_total", info.get("gift_total", 0)))
+                info["online"] = int(event.get("online", info.get("online", 0)))
+                self._danmaku_stats_dirty = True
+
+    # 每秒刷新弹幕监控页（UI 线程）：统计表按脏标记重建，弹幕流按脏标记重绘。
+    def _schedule_danmaku_refresh(self) -> None:
+        self._update_danmaku_display()
+        self._render_danmaku_stream()
+        self._danmaku_refresh_job_id = self.root.after(1000, self._schedule_danmaku_refresh)
+
+    # 在 UI 线程重建弹幕房间统计表与顶部统计（数据未变化时跳过，避免闪烁）。
+    def _update_danmaku_display(self) -> None:
+        if not hasattr(self, "_dm_scroll"):
+            return
+        with self._danmaku_lock:
+            if not self._danmaku_stats_dirty:
+                return
+            self._danmaku_stats_dirty = False
+            rooms_snapshot = {name: dict(info) for name, info in self._danmaku_rooms.items()}
+
+        rows: list[dict[str, str | bool | int]] = []
+        total_msgs = 0
+        connected_count = 0
+        for name, info in rooms_snapshot.items():
+            started_ts = float(info.get("started_at", 0.0))
+            rows.append(
+                {
+                    "room": name,
+                    "platform": str(info.get("platform", "—")),
+                    "connected": bool(info.get("connected")),
+                    "msg_total": int(info.get("msg_total", 0)),
+                    "msg_rate": int(info.get("msg_rate", 0)),
+                    "gift_total": int(info.get("gift_total", 0)),
+                    "online": int(info.get("online", 0)),
+                    "started_at": time.strftime("%H:%M:%S", time.localtime(started_ts)) if started_ts else "—",
+                }
+            )
+            total_msgs += int(info.get("msg_total", 0))
+            if bool(info.get("connected")):
+                connected_count += 1
+
+        if rows == self._danmaku_last_stats:
+            return
+        self._danmaku_last_stats = rows
+
+        for widget in self._dm_scroll.winfo_children():
+            widget.destroy()
+
+        if not rows:
+            ctk.CTkLabel(
+                self._dm_scroll,
+                text="暂无弹幕监控数据\n\n启动录制并在 config.ini 开启「是否弹幕监控(是/否)」后，"
+                "支持弹幕的平台（斗鱼/B站/虎牙/抖音/Twitch）将显示实时弹幕",
+                font=Fonts.body(),
+                text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
+                justify=tk.CENTER,
+            ).pack(pady=30)
+        else:
+            self._add_danmaku_header_row()
+            for row in sorted(rows, key=lambda r: str(r["room"])):
+                self._add_danmaku_data_row(str(row["room"]), row)
+
+        # 顶部统计与筛选下拉（保持当前选择，房间列表变化时刷新选项）
+        try:
+            self._dm_stat_rooms.configure(text=str(len(rows)))
+            self._dm_stat_connected.configure(text=str(connected_count))
+            self._dm_stat_msgs.configure(text=str(total_msgs))
+            current = self._dm_filter_menu.get()
+            values = ["全部房间"] + sorted(rooms_snapshot.keys())
+            self._dm_filter_menu.configure(values=values)
+            if current not in values:
+                self._dm_filter_menu.set("全部房间")
+        except Exception:
+            pass
+
+    # 在 UI 线程重绘弹幕流文本框（脏标记跳过；用户上滚查看历史时不强制拉到底）。
+    def _render_danmaku_stream(self) -> None:
+        if not hasattr(self, "danmaku_text"):
+            return
+        with self._danmaku_lock:
+            if not self._danmaku_stream_dirty:
+                return
+            self._danmaku_stream_dirty = False
+            filter_value = self._danmaku_filter
+            msgs = list(self._danmaku_msgs)
+
+        try:
+            at_bottom = self.danmaku_text.yview()[1] >= 0.98
+        except Exception:
+            at_bottom = True
+
+        self.danmaku_text.config(state=tk.NORMAL)
+        self.danmaku_text.delete("1.0", tk.END)
+        shown = 0
+        for m in msgs:
+            room = str(m.get("room", ""))
+            if filter_value != "全部房间" and room != filter_value:
+                continue
+            mtype = str(m.get("type", "chat"))
+            ts = float(m.get("ts", 0.0))
+            tstr = time.strftime("%H:%M:%S", time.localtime(ts)) if ts else "--:--:--"
+            user = str(m.get("user", ""))
+            text = str(m.get("text", ""))
+            dropped = m.get("dropped")
+            if mtype == "gift":
+                tag, label = "gift", "[礼物] "
+            elif mtype == "superChat":
+                tag, label = "superChat", "[SC] "
+            else:
+                tag, label = "", ""
+            line = f"[{tstr}] [{room}] {label}{user}: {text}\n" if user else f"[{tstr}] [{room}] {label}{text}\n"
+            self.danmaku_text.insert(tk.END, line, tag)
+            if dropped:
+                self.danmaku_text.insert(tk.END, f"    （+{dropped} 条已省略）\n", "dropped")
+            shown += 1
+        if not shown:
+            self.danmaku_text.insert(tk.END, "暂无弹幕数据\n")
+        self.danmaku_text.config(state=tk.DISABLED)
+        if at_bottom:
+            self.danmaku_text.see(tk.END)
+
     # ─── 时间与状态栏 ──────────────────────────────────────
 
     @staticmethod
+    # 返回当前本地时间的时间戳字符串。
     def _get_timestamp() -> str:
         # 获取当前时间戳
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    # 刷新控制台状态文字与信息网格（间隔 / 格式 / 托盘 / 时间）。
     def _update_status_bar(self) -> None:
         # 更新状态显示（动态读取配置）
         try:
@@ -2015,6 +2597,7 @@ class LiveRecorderGUI:
         except Exception:
             pass
 
+    # 周期性刷新状态栏、画质显示并监控 URL 配置变化。
     def _schedule_status_refresh(self) -> None:
         # 动态刷新状态：有录制时每3秒刷新，否则每10秒
         self._update_status_bar()
@@ -2023,6 +2606,7 @@ class LiveRecorderGUI:
         interval = self._STATUS_REFRESH_INTERVAL_ACTIVE if self.running else self._STATUS_REFRESH_INTERVAL
         self._refresh_job_id = self.root.after(interval, self._schedule_status_refresh)
 
+    # 监控 URL_config.ini 的修改时间，变化时自动重载。
     def _watch_url_config(self) -> None:
         # 监控 URL_config.ini 文件变化，外部修改时自动重新加载
         if not os.path.exists(self.url_config_file):
@@ -2036,6 +2620,7 @@ class LiveRecorderGUI:
 
     # ─── 托盘与退出 ────────────────────────────────────────
 
+    # 最小化到系统托盘（无托盘时降级为任务栏最小化）。
     def minimize_to_tray(self) -> None:
         # 最小化到托盘；托盘不可用（如 Linux 无 X11）时降级为普通最小化，避免窗口无法恢复
         if self.system_tray and self.system_tray.running:
@@ -2045,6 +2630,7 @@ class LiveRecorderGUI:
             self.root.iconify()
             self._log("系统托盘不可用，已改为最小化到任务栏", "warn")
 
+    # 退出程序：确认后后台停止录制与清理，再销毁窗口（防重入）。
     def quit_application(self) -> None:
         # 退出程序（防重入：双击/托盘+按钮同时触发只执行一次）
         if self._quitting:
@@ -2060,6 +2646,7 @@ class LiveRecorderGUI:
         # 避免窗口先被 destroy 导致清理线程被强杀、ffmpeg 残留。
         threading.Thread(target=self._shutdown_and_quit, daemon=True).start()
 
+    # 后台执行：优雅停止录制子进程并按需整树强杀与清理 ffmpeg。
     def _shutdown_and_quit(self) -> None:
         # 后台执行：优雅停止录制子进程（由其清理 ffmpeg）→ 超时整树强杀 → 兜底清理。
         # 与停止路径保持同一策略：CTRL_BREAK 失败时不能只 proc.terminate()——
@@ -2124,6 +2711,7 @@ class LiveRecorderGUI:
         # 通过事件泵路由回 UI 线程收尾销毁（禁止直接跨线程调用 root.after）
         self.post_ui(self._finalize_quit)
 
+    # 在 UI 线程收尾退出：取消调度、停托盘并销毁窗口。
     def _finalize_quit(self) -> None:
         # 退出收尾（必须在 UI 线程执行）
         self._pump_active = False
@@ -2139,8 +2727,20 @@ class LiveRecorderGUI:
             self._log_flush_job_id = None
 
         if self._refresh_job_id:
-            self.root.after_cancel(self._refresh_job_id)
+            try:
+                self.root.after_cancel(self._refresh_job_id)
+            except Exception:
+                pass
             self._refresh_job_id = None
+
+        if self._danmaku_refresh_job_id:
+            try:
+                self.root.after_cancel(self._danmaku_refresh_job_id)
+            except Exception:
+                pass
+            self._danmaku_refresh_job_id = None
+
+        self._stop_danmaku_tail()
 
         self._stop_status_animation()
 
@@ -2150,6 +2750,7 @@ class LiveRecorderGUI:
         self.root.quit()
         self.root.destroy()
 
+    # 清理录制子进程树及其下的 ffmpeg 残留进程（跨平台）。
     def _cleanup_zombie_ffmpeg(self, target_pid: int | None = None) -> None:
         # 清理录制子进程（main.py）及其下的 ffmpeg 进程。
         # 注意：ffmpeg 的父进程是 main.py，不是 GUI 自身，
@@ -2196,6 +2797,7 @@ class LiveRecorderGUI:
         except Exception as e:
             self._log(f"清理 ffmpeg 进程时出错: {e}")
 
+    # 窗口关闭事件：弹出「最小化到托盘 / 完全退出」对话框（单例）。
     def on_closing(self) -> None:
         # 窗口关闭事件处理，显示关闭选项对话框（单例：重复点击只保留一个）
         if self._close_dialog is not None:
@@ -2232,11 +2834,13 @@ class LiveRecorderGUI:
         btn_frame = ctk.CTkFrame(dialog, fg_color="transparent")
         btn_frame.pack(padx=16, pady=(0, 16))
 
+        # 最小化到托盘并关闭关闭选项对话框。
         def minimize_to_tray_and_close() -> None:
             # 最小化到托盘并关闭对话框
             self.minimize_to_tray()
             dialog.destroy()
 
+        # 退出应用并关闭关闭选项对话框。
         def quit_and_close() -> None:
             # 退出应用并关闭对话框
             self.quit_application()
@@ -2269,6 +2873,7 @@ class LiveRecorderGUI:
         ).pack(side=tk.LEFT)
 
         # 键盘快捷键
+        # Escape 键关闭关闭选项对话框。
         def _on_escape(_event: object = None) -> None:
             dialog.destroy()
 
@@ -2277,7 +2882,9 @@ class LiveRecorderGUI:
         # 延迟 grab，等待窗口可见
         dialog.after(100, lambda: self._safe_dialog_grab(dialog))
 
+    # 安全地为对话框设置模态（容错 grab_set）。
     @staticmethod
+    # 安全地为对话框设置模态（容错 grab_set）。
     def _safe_dialog_grab(dialog: ctk.CTkToplevel) -> None:
         # 安全地设置模态
         try:
@@ -2286,6 +2893,7 @@ class LiveRecorderGUI:
             pass
 
 
+# 程序入口：初始化主窗口与系统托盘，并按平台进入主事件循环。
 def main() -> None:
     # 主函数
     ctk.set_appearance_mode("system")

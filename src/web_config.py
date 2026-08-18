@@ -8,10 +8,8 @@ import binascii
 import configparser
 import hashlib
 import hmac
-import os
 import re
 import secrets
-import time
 from pathlib import Path
 from typing import cast
 
@@ -48,38 +46,9 @@ WEB_DEFAULTS: dict[str, str | int | bool] = {
     "web_token_expiry": 86400,
     "web_show_console": True,
     "web_minimize_to_tray": True,
-    # 可信反向代理地址（逗号分隔）。仅在请求确来自该代理时才采信 X-Forwarded-For，
-    # 否则攻击者可伪造 XFF 绕过登录限流。留空 = 永不信任 XFF。
+    # 可信代理列表（逗号分隔）：仅当直连对端在列表中才信任 X-Forwarded-For
     "web_trusted_proxy": "",
 }
-
-# 危险配置键集合：写入这些键等同于在录制完成后执行任意命令（RCE）。
-# 当 Web 认证关闭时，拒绝通过 API 改写，避免未授权远程命令执行。
-DANGEROUS_CONFIG_KEYS: set[tuple[str, str]] = {
-    ("录制设置", "是否录制完成后执行自定义脚本"),
-    ("录制设置", "自定义脚本执行命令"),
-}
-
-# section/key 允许的字符范围（不含换行与 INI 分隔符），用于校验写入目标。
-_SAFE_KEY_PATTERN = re.compile(r"^[\w\u4e00-\u9fff\-\. ]+$")
-
-
-def validate_config_target(section: str, key: str, value: str) -> None:
-    # 校验配置写入目标，防止 INI 注入（换行注入新行/新节）与非法字符。
-    if not section or not key:
-        raise ValueError("section 与 key 不能为空")
-    if not _SAFE_KEY_PATTERN.match(section) or not _SAFE_KEY_PATTERN.match(key):
-        raise ValueError("section 或 key 包含非法字符")
-    if any(c in value for c in ("\n", "\r")) or "\x00" in value:
-        raise ValueError("配置值包含非法换行或控制字符")
-
-
-def validate_room_target(url: str, name: str | None) -> None:
-    # 校验直播间写入目标，防止 URL_config.ini 换行注入新行。
-    if any(c in url for c in ("\n", "\r")):
-        raise ValueError("URL 包含非法换行符")
-    if name and any(c in name for c in ("\n", "\r")):
-        raise ValueError("主播名包含非法换行符")
 
 
 def normalize_url(url: str) -> str:
@@ -168,16 +137,21 @@ def _normalize_quality(q: str) -> str:
     return q if q in QUALITY_KEYWORDS else DEFAULT_QUALITY
 
 
+def _reject_newline(kind: str, value: str) -> None:
+    # 换行注入防护：URL_config.ini 行级格式，任何字段含换行即可伪造额外配置行
+    if value and ("\n" in value or "\r" in value):
+        raise ValueError(f"{kind} 含换行符，禁止写入配置文件")
+
+
 def format_url_line(url: str, quality: str | None = None, name: str | None = None) -> str:
     # 格式化一行 URL_config.ini 内容（不含换行）。
     # - 仅 URL：返回 url
     # - 画质+URL：返回 "画质,url"
     # - 全部：返回 "画质,url,主播: 名称"
     # quality 为空或默认"原画"时省略画质段（与 main.py 风格一致）。
-    # 兜底校验：任一字段含换行/控制字符直接拒绝，防止向 URL_config.ini 注入多行（C3）。
-    for label, value in (("url", url), ("quality", quality), ("name", name)):
-        if value and any(c in value for c in ("\n", "\r", "\x00")):
-            raise ValueError(f"{label} 包含非法换行或控制字符")
+    _reject_newline("URL", url)
+    _reject_newline("画质", quality or "")
+    _reject_newline("主播名", name or "")
     url = normalize_url(url)
     parts: list[str] = []
     q = (quality or "").strip()
@@ -188,6 +162,18 @@ def format_url_line(url: str, quality: str | None = None, name: str | None = Non
     if n:
         parts.append(f"主播: {n}")
     return ",".join(parts)
+
+
+def validate_config_target(section: str, key: str, value: str) -> None:
+    # 校验 /api/config 写入目标：值含换行即拒绝（同换行注入防护，避免伪造配置行）
+    _reject_newline(f"配置项 [{section}] {key} 的值", value)
+
+
+def validate_room_target(url: str, quality: str | None = None, name: str | None = None) -> None:
+    # 校验房间写入目标（URL/画质/主播名均不得含换行）
+    _reject_newline("URL", url)
+    _reject_newline("画质", quality or "")
+    _reject_newline("主播名", name or "")
 
 
 def read_web_config(config_file: str | Path) -> dict[str, str | int | bool]:
@@ -279,27 +265,7 @@ def update_config_line(config_file: str | Path, section: str, key: str, value: s
         new_lines.append(line)
     if not replaced:
         return False
-    # 原子写入：先写同目录临时文件再 os.replace，避免读取方（认证中间件每请求读配置）
-    # 读到半写文件导致 500 或认证状态瞬时翻转（C7）。
-    # Windows 下杀毒软件可能短暂占用刚写入的临时文件导致 os.replace 偶发 WinError 5，
-    # 做有限次重试；仍失败则退回直接写（保持旧行为），避免配置保存完全失败。
-    tmp_path = path.with_name(f".{path.name}.tmp{secrets.token_hex(4)}")
-    try:
-        _ = tmp_path.write_text("".join(new_lines), encoding=TEXT_ENCODING)
-        last_error: Exception | None = None
-        for _attempt in range(5):
-            try:
-                os.replace(tmp_path, path)
-                last_error = None
-                break
-            except PermissionError as e:
-                last_error = e
-                time.sleep(0.05)
-        if last_error is not None:
-            _ = path.write_text("".join(new_lines), encoding=TEXT_ENCODING)
-    finally:
-        if tmp_path.exists():
-            tmp_path.unlink()
+    _ = path.write_text("".join(new_lines), encoding=TEXT_ENCODING)
     return True
 
 
@@ -331,9 +297,9 @@ def verify_web_password(plaintext: str, stored: str) -> bool:
             _, iters_s, salt_b64, hash_b64 = stored.split("$")
             salt = base64.b64decode(salt_b64)
             expected = base64.b64decode(hash_b64)
-            # iters 非法（手工改坏配置）时直接判定不匹配，避免登录接口 500
             dk = hashlib.pbkdf2_hmac("sha256", plaintext.encode("utf-8"), salt, int(iters_s))
         except (ValueError, binascii.Error):
+            # 哈希串损坏/迭代数非法：视为校验失败而非崩溃
             return False
         return hmac.compare_digest(dk, expected)
     # 兼容历史明文存储

@@ -1,47 +1,56 @@
 # =============================================================================
 # DouyinLiveRecorder .dockerignore
-# 原则：只把容器运行所需内容送入构建上下文（main.py / web.py / gui.py + src/ + web/ + i18n/）
-# 注意：i18n/**/*.mo 编译翻译文件是 gettext 运行时必需，Dockerfile 不会重新编译，不可排除
+# -----------------------------------------------------------------------------
+# 目的：只把容器运行所需内容送入构建上下文，减小上下文体积、避免把宿主机
+# 敏感文件 / 开发产物打进镜像。
+# 运行所需：main.py / web.py / gui.py + src/（含 javascript/ 签名脚本、danmaku/ 弹幕、
+#            proto/ 协议）+ web/（面板前端）+ i18n/（编译好的 .mo 翻译）
+# 注意：i18n/**/*.mo 编译翻译文件是 gettext 运行时必需，Dockerfile 不会重新编译，
+#       不可排除；仅排除 .po 源文件与编译脚本。
 # =============================================================================
 
-# Git / CI
+# ---------- Git / CI（构建上下文无需版本库与流水线定义）----------
 .git
 .gitignore
 .gitattributes
 .github/
 
-# AI 助手工作目录
+# ---------- AI 助手工作目录（含本项目记忆 / 技能，不打入镜像）----------
 .workbuddy/
 .codebuddy/
 .trae/
 
-# 文档（容器内无需）
+# ---------- 文档（容器内无需运行；保留 CODE_WIKI.md 等正式文档已在下方显式排除）----------
 README.md
 LICENSE
 CODE_WIKI.md
 CODE_CHANGES.md
 TRAE_AGENT_CODE_WIKI.md
+# 根目录开发 / 排查笔记（弹幕代理决策、弹幕审查、进度清单），仅开发期参考，不打入镜像
+bili_danmuku_proxy.md
+danmaku_check.md
+todo.md
 
-# Docker 相关（避免自嵌套；.env 由 compose 在运行时加载，不打入镜像）
+# ---------- Docker 相关（避免自嵌套；.env 由 compose 运行时加载，不打入镜像）----------
 .dockerignore
 Dockerfile
 docker-compose*.yaml
 docker-compose*.yml
 .env
 
-# Python 缓存
+# ---------- Python 缓存 ----------
 __pycache__/
 *.py[cod]
 *$py.class
 
-# 虚拟环境
+# ---------- 虚拟环境（容器内自建 /opt/venv，不拷宿主机环境）----------
 .venv/
 venv/
 env/
 .env/
 ENV/
 
-# 测试和覆盖率
+# ---------- 测试和覆盖率（镜像不含测试代码与覆盖率产物）----------
 tests/
 .pytest_cache/
 .coverage
@@ -49,10 +58,10 @@ htmlcov/
 .tox/
 .nox/
 
-# 类型存根（仅供 IDE / mypy 静态检查，运行时无用）
+# ---------- 类型存根（仅供 IDE / mypy 静态检查，运行时无用）----------
 typings/
 
-# IDE 和编辑器
+# ---------- IDE 和编辑器 ----------
 .vscode/
 .idea/
 *.swp
@@ -61,56 +70,56 @@ typings/
 *.sublime-project
 *.sublime-workspace
 
-# 构建产物
+# ---------- 构建产物（PyInstaller 产物 / 打包中间文件）----------
 build/
 dist/
 *.egg-info/
 .eggs/
 
-# 打包与桌面平台专用文件（容器内不使用）
-build_exe.py
-gui_legacy.py
-StopRecording.vbs
+# ---------- 打包与桌面平台专用文件（容器内不使用）----------
+build_exe.py             # 仅本地 / CI 打包脚本，镜像运行不需要
+gui_legacy.py            # 旧版 GUI 入口，已弃用
+StopRecording.vbs        # Windows 停止录制脚本，非容器适用
 # 根目录 index.html 是独立的 M3U8 播放器页面；Web 面板使用 web/ 目录，不受影响
 index.html
 
-# PyInstaller
+# ---------- PyInstaller ----------
 *.spec
 *.manifest
 
-# 配置文件（含敏感信息，运行时通过卷挂载 ./config 提供）
+# ---------- 配置文件（含敏感信息，运行时通过卷挂载 ./config 提供）----------
 config/config.ini
 config/URL_config.ini
 
-# 录制产物 / 日志 / 备份（运行时通过卷挂载提供）
+# ---------- 录制产物 / 日志 / 备份（运行时通过卷挂载提供，不固化进镜像）----------
 downloads/
 recordings/
 logs/
 backup_config/
 
-# 平台二进制（容器内改用 apt 安装 ffmpeg 与 nodejs）
+# ---------- 平台二进制（容器内改用 apt 安装 ffmpeg 与 nodejs，不拷宿主机二进制）----------
 ffmpeg/
 node/
 node-v*.zip
 
-# 翻译：仅排除 .po 源文件与编译脚本，编译好的 .mo 必须保留
+# ---------- 翻译：仅排除 .po 源文件与编译脚本，编译好的 .mo 必须保留 ----------
 i18n/**/*.po
 i18n/**/compile_po.py
 
-# Windows 专用二进制与脚本
+# ---------- Windows 专用二进制与脚本（容器内为 Linux，无需）----------
 *.exe
 *.dll
 *.cmd
 *.bat
 *.vbs
 
-# 临时文件
+# ---------- 临时文件 ----------
 *.tmp
 *.temp
 *.bak
 *.log
 
-# 系统文件
+# ---------- 系统文件 ----------
 .DS_Store
 Thumbs.db
 desktop.ini

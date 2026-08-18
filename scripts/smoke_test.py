@@ -167,7 +167,7 @@ def run_check(check: CheckConfig, base_url: str | None, default_timeout: float) 
 
 # ---------- 报告 ----------
 def _safe_print(*values: object) -> None:
-    """打印并在控制台编码不兼容时（如 Windows GBK 下的非 ASCII 字符）做容错替换。"""
+    # 打印并在控制台编码不兼容时（如 Windows GBK 下的非 ASCII 字符）做容错替换。
     text = " ".join(str(v) for v in values)
     try:
         print(text)

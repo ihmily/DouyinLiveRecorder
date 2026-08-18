@@ -35,28 +35,51 @@ def _reconfigure_stream(stream: object) -> None:
             pass
 
 
+# kernel32/user32 DLL 句柄缓存为模块级单例：
+# 1) 避免每次进入后台模式都重复加载（WinDLL 构造虽轻量但无意义）；
+# 2) 保证同一进程内 argtypes/restype 声明只设置一次，行为一致；
+# 3) 加载失败时 _KERNEL32/_USER32 仍为 None，后续调用会自动重试。
+_KERNEL32: ctypes.CDLL | None = None
+_USER32: ctypes.CDLL | None = None
+
+
+# 加载 kernel32 DLL（WinDLL）并声明参数/返回类型，失败返回 None。
 def _get_kernel32() -> ctypes.CDLL | None:
+    global _KERNEL32
+    if _KERNEL32 is not None:
+        return _KERNEL32
     # 使用 ctypes.WinDLL 而非 ctypes.windll（后者在 Python 3.13+ 已移除）。
-    # 显式声明 argtypes/restype，避免 64 位下 GetConsoleWindow 返回值被截断。
+    # 显式声明 argtypes/restype：GetConsoleWindow 返回 HWND（64 位指针，避免被截断），
+    # SetConsole*CP 返回 BOOL（明确 restype 为 c_int）。
     try:
         dll = ctypes.WinDLL("kernel32", use_last_error=True)
         dll.SetConsoleOutputCP.argtypes = [ctypes.c_uint]
+        dll.SetConsoleOutputCP.restype = ctypes.c_int
         dll.SetConsoleCP.argtypes = [ctypes.c_uint]
+        dll.SetConsoleCP.restype = ctypes.c_int
         dll.GetConsoleWindow.restype = ctypes.c_void_p
+        _KERNEL32 = dll
         return dll
     except Exception:
         return None
 
 
+# 加载 user32 DLL（WinDLL），失败返回 None。
 def _get_user32() -> ctypes.CDLL | None:
+    global _USER32
+    if _USER32 is not None:
+        return _USER32
     try:
         dll = ctypes.WinDLL("user32", use_last_error=True)
         dll.ShowWindow.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        dll.ShowWindow.restype = ctypes.c_int
+        _USER32 = dll
         return dll
     except Exception:
         return None
 
 
+# 将标准输出/错误流重配置为 UTF-8，并在 Windows 下将控制台代码页设为 65001。
 def _fix_encoding() -> None:
     _streams: list[object] = [getattr(sys, "stdout", None), getattr(sys, "stderr", None)]
     for _s in _streams:
@@ -66,8 +89,9 @@ def _fix_encoding() -> None:
         try:
             _k32 = _get_kernel32()
             if _k32 is not None:
-                _k32.SetConsoleOutputCP(65001)
-                _k32.SetConsoleCP(65001)
+                # 两个调用均返回 BOOL（成功非 0）；失败不影响后续，返回值显式丢弃。
+                _ = _k32.SetConsoleOutputCP(65001)
+                _ = _k32.SetConsoleCP(65001)
         except Exception:
             pass
 
@@ -75,6 +99,7 @@ def _fix_encoding() -> None:
 _fix_encoding()
 
 
+# 进入后台模式：隐藏控制台窗口并将标准输出重定向到日志文件。
 def _enter_background_mode(logs_dir: str, host: str, port: int) -> None:
     # 进入后台运行模式：隐藏控制台窗口，将输出重定向到日志文件。
     # Windows 下隐藏控制台窗口（SW_HIDE）；其他平台仅重定向输出。
@@ -108,18 +133,21 @@ def _enter_background_mode(logs_dir: str, host: str, port: int) -> None:
             _k32 = _get_kernel32()
             _user32 = _get_user32()
             if _k32 is not None and _user32 is not None:
-                hwnd = cast(ctypes.c_void_p, _k32.GetConsoleWindow())
+                # GetConsoleWindow.restype 已设为 c_void_p，返回值即句柄，无需再 cast。
+                hwnd = _k32.GetConsoleWindow()
                 if hwnd:
                     _user32.ShowWindow(hwnd, 0)
         except Exception:
             pass
 
 
+# 判断给定 host 是否为回环地址（仅本机可访问）。
 def _is_loopback_host(host: str) -> bool:
     # 判断 host 是否为回环地址（仅本机可访问）。
     return host.strip() in ("127.0.0.1", "localhost", "::1", "[::1]")
 
 
+# Web 管理面板入口：启动录制引擎守护线程与 uvicorn HTTP 服务。
 def main() -> None:
     # 启动 Web 管理面板：录制引擎（守护线程）+ uvicorn HTTP 服务。
     # 导入 main 模块：触发模块级初始化（FFmpeg 检查、配置读取、备份线程等），

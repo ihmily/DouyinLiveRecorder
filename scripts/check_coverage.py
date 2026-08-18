@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
-"""Per-module coverage gate check.
-
-Reads the .coverage data file produced by pytest-cov and verifies that each
-declared module meets its minimum coverage threshold.
-
-Thresholds mirror the comments in pyproject.toml:
-    spider.py  >= 50%   stream.py  >= 70%   utils.py   >= 80%
-    ttwid.py   >= 85%   ab_sign.py >= 95%   proxy.py   >= 50%
-
-Usage:
-    # After running pytest with coverage
-    pytest --cov=src --cov-report=term-missing
-    python scripts/check_coverage.py
-
-    # Or specify a custom .coverage data file
-    python scripts/check_coverage.py --data-file path/to/.coverage
-"""
+# Per-module coverage gate check.
+#
+# Reads the .coverage data file produced by pytest-cov and verifies that each
+# declared module meets its minimum coverage threshold.
+#
+# Thresholds mirror the comments in pyproject.toml:
+#    spider.py  >= 50%   stream.py  >= 70%   utils.py   >= 80%
+#    ttwid.py   >= 85%   ab_sign.py >= 95%   proxy.py   >= 50%
+#
+# Usage:
+#    # After running pytest with coverage
+#    pytest --cov=src --cov-report=term-missing
+#    python scripts/check_coverage.py
+#
+#    # Or specify a custom .coverage data file
+#    python scripts/check_coverage.py --data-file path/to/.coverage
 
 from __future__ import annotations
 
@@ -43,7 +42,7 @@ CoverageData = dict[str, object]
 
 
 def _get_coverage_json(data_file: str | None) -> CoverageData:
-    """Generate and parse a coverage JSON report."""
+    # Generate and parse a coverage JSON report.
     tmp_path: str | None = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
@@ -85,7 +84,7 @@ def _get_coverage_json(data_file: str | None) -> CoverageData:
 
 
 def _find_module_coverage(coverage_data: CoverageData, module_path: str) -> CoverageData | None:
-    """Locate a module's coverage data in the JSON report."""
+    # Locate a module's coverage data in the JSON report.
     files = cast(dict[str, CoverageData], coverage_data.get("files", {}))
 
     # Direct match
@@ -107,7 +106,7 @@ def _find_module_coverage(coverage_data: CoverageData, module_path: str) -> Cove
 
 
 def check_coverage(data_file: str | None = None) -> int:
-    """Check per-module coverage thresholds. Returns 0 if all pass, 1 otherwise."""
+    # Check per-module coverage thresholds. Returns 0 if all pass, 1 otherwise.
     coverage_data = _get_coverage_json(data_file)
 
     failures: list[tuple[str, float, float]] = []

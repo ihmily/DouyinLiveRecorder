@@ -1,5 +1,9 @@
 # -*- encoding: utf-8 -*-
-# 直播录制器 GUI 界面
+# 直播录制器 GUI 界面（旧版入口）
+# 基于 Tkinter 的录制控制台：编辑 URL/config 配置、启停 main.py 子进程、
+# 实时显示运行日志与状态、并支持系统托盘与响应式布局。
+# 主要类：Colors（配色）、DpiFont（DPI 字体）、SystemTray（托盘）、
+# AdvancedSettingsWindow（高级设置）、LiveRecorderGUI（主界面）；入口函数 main()。
 from __future__ import annotations
 
 import configparser
@@ -28,6 +32,7 @@ if TYPE_CHECKING:
 # ─── 高对比度色彩系统（满足 WCAG AA 标准） ──────────────
 
 
+# Colors：集中定义高对比度配色常量（主色/语义色/中性色/终端色），满足 WCAG AA
 class Colors:
     # 主色调（#1D4ED8 在白色背景上对比度 7.2:1，远超 AA 等级 4.5:1）
     PRIMARY = "#1D4ED8"
@@ -67,6 +72,7 @@ class Colors:
 # ─── DPI 感知字体系统 ────────────────────────────────────
 
 
+# DpiFont：DPI 感知字体工厂，按系统缩放与基准字号生成并缓存字体三元组
 class DpiFont:
     # 字体缓存（避免重复创建对象，降低 GC 压力）
     _cache: dict[str, tuple[str, int, str]] = {}
@@ -79,6 +85,7 @@ class DpiFont:
     BASE_HEADING = 11
     BASE_TITLE = 14
 
+    # 检测并缓存系统 DPI 缩放比例（tk scaling），失败回退 1.0
     @classmethod
     def _detect(cls) -> float:
         # 检测系统 DPI 缩放比例（带缓存）
@@ -95,6 +102,7 @@ class DpiFont:
             cls._scale = 1.0
         return cls._scale
 
+    # 检测并返回系统可用字体族（优先中英文界面字体），结果缓存
     @classmethod
     def family(cls) -> str:
         # 检测系统可用字体（带缓存）
@@ -111,6 +119,7 @@ class DpiFont:
             cls._family = next((f for f in families if f in tkfont.families()), "TkDefaultFont")
         return cls._family
 
+    # 按基准字号与 DPI 缩放计算实际字号并返回 (family, size, style)，带缓存
     @classmethod
     def get(cls, base_size: int, bold: bool = False) -> tuple[str, int, str]:
         # 基于基准尺寸 + DPI 缩放计算实际字号，结果缓存
@@ -124,41 +133,49 @@ class DpiFont:
         cls._cache[key] = result
         return result
 
+    # 返回小号字体配置 (family, size, style)
     @classmethod
     def small(cls, bold: bool = False) -> tuple[str, int, str]:
         # 获取小号字体配置
         return cls.get(cls.BASE_SMALL, bold)
 
+    # 返回正文字体配置 (family, size, style)
     @classmethod
     def body(cls, bold: bool = False) -> tuple[str, int, str]:
         # 获取正文字体配置
         return cls.get(cls.BASE_BODY, bold)
 
+    # 返回标题字体配置 (family, size, style)
     @classmethod
     def heading(cls, bold: bool = False) -> tuple[str, int, str]:
         # 获取标题字体配置
         return cls.get(cls.BASE_HEADING, bold)
 
+    # 返回大标题字体配置 (family, size, style)
     @classmethod
     def title(cls, bold: bool = False) -> tuple[str, int, str]:
         # 获取大标题字体配置
         return cls.get(cls.BASE_TITLE, bold)
 
+    # 返回等宽字体配置 (family, size)，用于代码与日志
     @classmethod
     def mono(cls) -> tuple[str, int]:
         # 等宽字体用于代码和日志
         return ("Cascadia Code", max(9, round(9 * cls._detect())))
 
 
+# SystemTray：系统托盘管理器，提供托盘图标、菜单与通知
 class SystemTray:
     # 系统托盘管理器
 
+    # 初始化托盘管理器，持有 GUI 引用与图标状态
     def __init__(self, gui_app: "LiveRecorderGUI"):
         # 初始化系统托盘管理器
         self.gui = gui_app
         self.icon: "pystray.Icon | None" = None  # type: ignore[type-arg]
         self.running = False
 
+    # 绘制并返回托盘图标 Image（圆角蓝底 + 录制红点）
     def create_icon_image(self) -> Image.Image:
         # 创建现代化托盘图标
         size = 64
@@ -183,21 +200,25 @@ class SystemTray:
 
         return image
 
+    # 托盘菜单回调：恢复并显示主窗口
     def on_show(self, _icon: "pystray.Icon | None" = None) -> None:  # type: ignore[type-arg]
         # 托盘菜单：显示主窗口
         if self.gui.root:
             self.gui.root.deiconify()
             self.gui.root.lift()
 
+    # 托盘菜单回调：退出整个应用程序
     def on_exit(self, _icon: "pystray.Icon | None" = None) -> None:  # type: ignore[type-arg]
         # 托盘菜单：退出程序
         self.gui.quit_application()
 
+    # 托盘菜单回调：将主窗口隐藏到托盘
     def on_minimize(self, _icon: "pystray.Icon | None" = None) -> None:  # type: ignore[type-arg]
         # 托盘菜单：最小化到托盘
         if self.gui.root:
             self.gui.root.withdraw()
 
+    # 构建菜单并启动托盘图标事件循环（阻塞，应在独立线程调用）
     def run(self) -> None:
         # 启动系统托盘图标（阻塞运行）
         import pystray  # 延迟导入：避免 headless 环境在模块顶层即失败
@@ -213,12 +234,14 @@ class SystemTray:
         self.running = True
         icon.run()
 
+    # 停止托盘图标运行
     def stop(self) -> None:
         # 停止系统托盘
         if self.icon and self.running:
             self.icon.stop()
             self.running = False
 
+    # 发送系统托盘通知消息（失败静默忽略）
     def notify(self, message: str, title: str = "直播录制器") -> None:
         # 显示系统通知
         if self.icon:
@@ -228,9 +251,11 @@ class SystemTray:
                 pass
 
 
+# AdvancedSettingsWindow：编辑 config/config.ini 的高级设置弹窗
 class AdvancedSettingsWindow:
     # 高级设置窗口：编辑 config/config.ini
 
+    # 初始化高级设置窗口并加载 UI 与配置（parent, config_file, log_callback）
     def __init__(self, parent: tk.Toplevel | tk.Tk, config_file: str, log_callback: Any = None):
         # 初始化高级设置窗口
         self.config_file = config_file
@@ -246,6 +271,7 @@ class AdvancedSettingsWindow:
         self._setup_ui()
         self._load_config()
 
+    # 构建高级设置窗口的标题、文本编辑器与按钮布局
     def _setup_ui(self) -> None:
         # 顶部标题栏
         header = tk.Frame(self.window, bg=Colors.PRIMARY, height=48)
@@ -337,6 +363,7 @@ class AdvancedSettingsWindow:
             btn.bind("<Enter>", lambda e, b=btn: b.configure(relief=tk.FLAT))
             btn.bind("<Leave>", lambda e, b=btn: b.configure(relief=tk.FLAT))
 
+    # 读取 config.ini 内容填充到编辑器（文件不存在则提示新建）
     def _load_config(self) -> None:
         # 加载 config.ini 到编辑器
         try:
@@ -350,6 +377,7 @@ class AdvancedSettingsWindow:
         except Exception as e:
             messagebox.showerror("错误", f"加载配置文件失败: {e}")
 
+    # 将编辑器内容写回 config.ini 并关闭窗口
     def save_config(self) -> None:
         # 保存编辑器内容到 config.ini
         try:
@@ -362,6 +390,7 @@ class AdvancedSettingsWindow:
             messagebox.showerror("错误", f"保存配置文件失败: {e}")
 
 
+# 从 Text/ScrolledText 控件读取文本并写入文件（保证以换行结尾）
 def _save_text_widget_to_file(text_widget: tk.Text | scrolledtext.ScrolledText, file_path: str) -> None:
     # 从 Text 控件读取内容并写入文件
     content = text_widget.get(1.0, tk.END).rstrip("\n")
@@ -371,6 +400,7 @@ def _save_text_widget_to_file(text_widget: tk.Text | scrolledtext.ScrolledText, 
         f.write(content)
 
 
+# LiveRecorderGUI：直播录制控制台主界面，管理配置、子进程、日志与托盘
 class LiveRecorderGUI:
     # 直播录制 GUI 主类
 
@@ -382,6 +412,7 @@ class LiveRecorderGUI:
     _STATUS_REFRESH_INTERVAL = 10000  # 未录制时的刷新间隔（毫秒）
     _STATUS_REFRESH_INTERVAL_ACTIVE = 3000  # 有录制直播间时的刷新间隔（毫秒）
 
+    # 初始化主窗口、路径、进程状态与各类后台任务调度
     def __init__(self, root: tk.Tk):
         # 初始化 GUI 主窗口及所有组件
         self.root = root
@@ -439,6 +470,7 @@ class LiveRecorderGUI:
 
     # ─── 响应式布局 ────────────────────────────────────────
 
+    # 防抖处理窗口尺寸变化，延迟应用响应式布局
     def _on_window_resize(self, event: tk.Event) -> None:
         # 防抖 resize 事件：仅在 root 尺寸变化时处理，200ms 延迟合并连续事件
         if event.widget != self.root:
@@ -451,6 +483,7 @@ class LiveRecorderGUI:
             self.root.after_cancel(self._resize_throttle_id)
         self._resize_throttle_id = self.root.after(200, self._apply_responsive_layout)
 
+    # 应用响应式布局（当前为占位，依赖 pack 弹性伸缩）
     def _apply_responsive_layout(self) -> None:
         # 应用响应式布局调整
         self._resize_throttle_id = None
@@ -459,36 +492,42 @@ class LiveRecorderGUI:
 
     # ─── 进程状态线程安全访问 ───────────────────────────────
 
+    # 线程安全地获取当前子进程对象
     @property
     def process(self) -> subprocess.Popen[str] | None:
         # 获取子进程对象（线程安全）
         with self._process_lock:
             return self._process
 
+    # 线程安全地设置当前子进程对象
     @process.setter
     def process(self, value: subprocess.Popen[str] | None) -> None:
         # 设置子进程对象（线程安全）
         with self._process_lock:
             self._process = value
 
+    # 线程安全地获取子进程 PID
     @property
     def process_pid(self) -> int | None:
         # 获取子进程 PID
         with self._process_lock:
             return self._process_pid
 
+    # 线程安全地设置子进程 PID
     @process_pid.setter
     def process_pid(self, value: int | None) -> None:
         # 设置子进程 PID
         with self._process_lock:
             self._process_pid = value
 
+    # 线程安全地获取录制运行状态
     @property
     def running(self) -> bool:
         # 获取运行状态
         with self._process_lock:
             return self._running
 
+    # 线程安全地设置录制运行状态
     @running.setter
     def running(self, value: bool) -> None:
         # 设置运行状态
@@ -497,6 +536,7 @@ class LiveRecorderGUI:
 
     # ─── UI 初始化 ─────────────────────────────────────────
 
+    # 配置 ttk 主题与各类按钮/滚动条样式（高对比度）
     def _setup_style(self) -> None:
         # 设置 ttk 样式（DPI 感知 + 高对比度）
         self.style = ttk.Style()
@@ -602,6 +642,7 @@ class LiveRecorderGUI:
         )
         self.style.map("TScrollbar", background=[("active", Colors.GRAY_300)])
 
+    # 创建带标题与边框的卡片容器，返回 (outer, content)
     def _create_card(self, parent: tk.Widget, title: str) -> tuple[tk.Frame, tk.Frame]:
         # 创建圆角卡片容器
         outer = tk.Frame(parent, bg=Colors.GRAY_50)
@@ -626,11 +667,13 @@ class LiveRecorderGUI:
 
         return outer, inner_content
 
+    # 创建统一样式的 ttk 按钮并返回
     def _create_modern_button(self, parent: tk.Widget, text: str, command, style: str, width: int = 14) -> ttk.Button:
         # 创建统一风格的按钮
         btn = ttk.Button(parent, text=text, command=command, style=style, width=width)
         return btn
 
+    # 构建主窗口全部 UI：标题栏、工具栏、配置区与日志区
     def _setup_ui(self) -> None:
         # 设置主窗口界面（DPI 感知字体 + 响应式布局）
 
@@ -824,6 +867,7 @@ class LiveRecorderGUI:
 
     # ─── 状态指示器动画 ─────────────────────────────────────
 
+    # 启动状态指示灯呼吸动画
     def _start_status_animation(self) -> None:
         # 启动状态指示器呼吸动画
         if self._status_animating:
@@ -832,10 +876,12 @@ class LiveRecorderGUI:
         self._status_anim_index = 0
         self._animate_status_dot()
 
+    # 停止状态指示灯动画
     def _stop_status_animation(self) -> None:
         # 停止状态指示器动画
         self._status_animating = False
 
+    # 状态指示灯动画帧：脉冲缩放圆点，定时回调自身
     def _animate_status_dot(self) -> None:
         # 状态指示器动画帧回调
         if not self._status_animating:
@@ -850,6 +896,7 @@ class LiveRecorderGUI:
         self._status_anim_index += 1
         self._status_anim_timer = self.root.after(120, self._animate_status_dot)
 
+    # 设置状态指示灯颜色与运行态（color, running）并刷新状态栏
     def _set_status(self, color: str, running: bool) -> None:
         # 设置状态指示器状态（idle/recording/error）
         if running:
@@ -863,6 +910,7 @@ class LiveRecorderGUI:
 
     # ─── 配置读写 ──────────────────────────────────────────
 
+    # 加载 URL_config.ini 到编辑框，外部变更时自动重载
     def _load_config(self) -> None:
         # 加载 URL 配置文件
         config_dir = os.path.dirname(self.url_config_file)
@@ -887,6 +935,7 @@ class LiveRecorderGUI:
         except Exception as e:
             self._log(f"加载配置文件失败: {e}", "error")
 
+    # 将编辑框中的 URL 配置保存回 URL_config.ini
     def save_config(self) -> None:
         # 保存 URL 配置文件
         try:
@@ -900,6 +949,7 @@ class LiveRecorderGUI:
 
     # ─── 状态信息 ──────────────────────────────────────────
 
+    # 读取配置返回 (循环间隔, 输出格式, 托盘状态)，带 mtime 缓存
     def _get_dynamic_status_info(self) -> tuple[str, str, str]:
         # 获取动态状态信息，返回 (check_interval, output_format, tray_status)
         check_interval = "120秒"
@@ -937,12 +987,14 @@ class LiveRecorderGUI:
 
         return check_interval, output_format, self._tray_status_str()
 
+    # 返回托盘启用状态的文字描述（启用/未启动）
     def _tray_status_str(self) -> str:
         # 返回托盘状态的字符串描述
         return "启用" if self.system_tray and self.system_tray.running else "未启动"
 
     # ─── 子进程管理 ────────────────────────────────────────
 
+    # 打开 downloads 下载目录（按平台选择打开方式）
     def open_downloads_folder(self) -> None:
         # 打开下载目录
         downloads_path = self.downloads_dir
@@ -960,10 +1012,12 @@ class LiveRecorderGUI:
         except Exception as e:
             self._log(f"打开目录失败: {e}", "error")
 
+    # 打开高级设置窗口（编辑 config.ini）
     def open_advanced_settings(self) -> None:
         # 打开高级设置窗口
         AdvancedSettingsWindow(self.root, self.main_config_file, self._log)
 
+    # 启动 main.py 子进程开始录制，并接管其输出线程
     def start_recording(self) -> None:
         # 开始录制
         if self.process is not None:
@@ -1021,6 +1075,7 @@ class LiveRecorderGUI:
             self._log(f"启动录制失败: {e}", "error")
             messagebox.showerror("错误", f"启动录制失败: {e}")
 
+    # 向录制子进程发送退出信号并等待/强杀，清理 ffmpeg
     def stop_recording(self) -> None:
         # 停止录制
         proc = self.process
@@ -1051,6 +1106,7 @@ class LiveRecorderGUI:
                 self._log(f"发送 SIGINT 失败，回退 terminate: {e}")
                 proc.terminate()
 
+        # 等待子进程退出并清理，结束后切回 UI 线程更新
         def _wait_and_update_ui() -> None:
             # 先等待子进程自行清理其下所有 ffmpeg，超时再整树强杀
             terminated = False
@@ -1088,6 +1144,7 @@ class LiveRecorderGUI:
 
         threading.Thread(target=_wait_and_update_ui, daemon=True).start()
 
+    # 录制停止后的 UI 状态更新（在 UI 线程执行）
     def _on_recording_stopped(self) -> None:
         # 进程终止后的 UI 更新回调（在 UI 线程中执行）
         self.start_btn.state(["!disabled"])
@@ -1098,11 +1155,13 @@ class LiveRecorderGUI:
         self._log("━" * 40)
         self._flush_log_queue()
 
+    # 循环读取子进程输出，清洗 ANSI 后批量入日志队列
     def _read_output(self) -> None:
         # 读取子进程输出
         batch: list[tuple[str, str]] = []
         batch_size = 10
 
+        # 将累积的日志批次推入队列并调度刷新
         def flush_batch() -> None:
             # 批量刷新日志队列到文本控件
             nonlocal batch
@@ -1159,6 +1218,7 @@ class LiveRecorderGUI:
 
         flush_batch()
 
+    # 定时从日志队列批量刷新消息到日志控件并限制行数
     def _schedule_log_flush(self) -> None:
         # 定时从队列批量刷新日志到 UI
         messages: list[tuple[str, str]] = []
@@ -1208,6 +1268,7 @@ class LiveRecorderGUI:
         else:
             self._log_flush_job_id = None
 
+    # 子进程结束的统一收尾：复位状态并更新 UI
     def _process_ended(self) -> None:
         # 子进程结束回调（仅在 UI 线程中调用）
         self.running = False
@@ -1223,6 +1284,7 @@ class LiveRecorderGUI:
         self._log(f"[{self._get_timestamp()}] 录制进程已结束")
         self._log("━" * 40)
 
+    # 线程安全地向日志队列追加一条消息（level: info/warn/error）
     def _log(self, message: str, level: str = "info") -> None:
         # 添加日志到队列（线程安全），按需激活 _schedule_log_flush
         self._log_queue.put([(message, level)])
@@ -1230,6 +1292,7 @@ class LiveRecorderGUI:
         if self._log_flush_job_id is None:
             self._log_flush_job_id = self.root.after(self._LOG_FLUSH_INTERVAL, self._schedule_log_flush)
 
+    # 立即刷新日志队列到 UI（仅 UI 线程调用）
     def _flush_log_queue(self) -> None:
         # 立即刷新日志队列到 UI（仅在 UI 线程中调用）
         if self._log_flush_job_id:
@@ -1241,16 +1304,19 @@ class LiveRecorderGUI:
 
     # ─── 时间与状态栏 ──────────────────────────────────────
 
+    # 标题栏尺寸变化时调整状态文本换行宽度
     def _on_header_resize(self, event: tk.Event) -> None:
         # 窗口尺寸变化时调整表头布局
         new_wraplength = max(event.width - 40, 200)
         self.status_text_label.configure(wraplength=new_wraplength)
 
+    # 返回当前本地时间戳字符串（YYYY-MM-DD HH:MM:SS）
     @staticmethod
     def _get_timestamp() -> str:
         # 获取当前时间戳
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    # 组装并刷新顶部状态栏文本（含配置动态信息）
     def _update_status_bar(self) -> None:
         # 更新状态栏（动态读取配置）
         try:
@@ -1273,6 +1339,7 @@ class LiveRecorderGUI:
 
         self.status_var.set(status_text)
 
+    # 定时刷新状态栏并监控 URL 配置变更（按运行态选择间隔）
     def _schedule_status_refresh(self) -> None:
         # 动态刷新状态栏：有录制直播间时每3秒刷新，否则每10秒
         self._update_status_bar()
@@ -1280,6 +1347,7 @@ class LiveRecorderGUI:
         interval = self._STATUS_REFRESH_INTERVAL_ACTIVE if self.running else self._STATUS_REFRESH_INTERVAL
         self._refresh_job_id = self.root.after(interval, self._schedule_status_refresh)
 
+    # 检测 URL_config.ini 修改时间，变动则重载配置
     def _watch_url_config(self) -> None:
         # 监控 URL_config.ini 文件变化，外部修改时自动重新加载
         if not os.path.exists(self.url_config_file):
@@ -1293,12 +1361,14 @@ class LiveRecorderGUI:
 
     # ─── 托盘与退出 ────────────────────────────────────────
 
+    # 隐藏主窗口到系统托盘并发送通知
     def minimize_to_tray(self) -> None:
         # 最小化到托盘
         self.root.withdraw()
         if self.system_tray:
             self.system_tray.notify("程序已最小化到系统托盘，双击托盘图标可恢复窗口")
 
+    # 退出确认后后台执行停止录制与清理再销毁窗口
     def quit_application(self) -> None:
         # 退出程序
         if self.process is not None:
@@ -1310,6 +1380,7 @@ class LiveRecorderGUI:
         # 避免窗口先被 destroy 导致清理线程被强杀、ffmpeg 残留。
         threading.Thread(target=self._shutdown_and_quit, daemon=True).start()
 
+    # 后台优雅停止录制子进程并整树强杀，兜底清理残留 ffmpeg
     def _shutdown_and_quit(self) -> None:
         # 后台执行：优雅停止录制子进程（由其清理 ffmpeg）→ 超时整树强杀 → 兜底清理
         proc = self.process
@@ -1353,6 +1424,7 @@ class LiveRecorderGUI:
         # 回到 UI 线程收尾销毁
         self.root.after(0, self._finalize_quit)
 
+    # UI 线程收尾：取消定时任务、停托盘、销毁窗口
     def _finalize_quit(self) -> None:
         # 退出收尾（必须在 UI 线程执行）
         if self._log_flush_job_id:
@@ -1371,6 +1443,7 @@ class LiveRecorderGUI:
         self.root.quit()
         self.root.destroy()
 
+    # 按 main.py PID 整树清理残留 ffmpeg 进程（含兜底）
     def _cleanup_zombie_ffmpeg(self) -> None:
         # 清理录制子进程（main.py）及其下的 ffmpeg 进程。
         # 注意：ffmpeg 的父进程是 main.py（self.process_pid），不是 GUI 自身，
@@ -1421,6 +1494,7 @@ class LiveRecorderGUI:
         except Exception as e:
             self._log(f"清理 ffmpeg 进程时出错: {e}")
 
+    # 窗口关闭事件：弹出「最小化到托盘 / 完全退出」选择框
     def on_closing(self) -> None:
         # 窗口关闭事件处理，显示关闭选项对话框
         dialog = tk.Toplevel(self.root)
@@ -1457,11 +1531,13 @@ class LiveRecorderGUI:
         btn_frame = tk.Frame(dialog, bg=Colors.WHITE)
         btn_frame.pack(padx=12, pady=(0, 16))
 
+        # 选择框按钮：最小化到托盘并关闭对话框
         def minimize_to_tray_and_close() -> None:
             # 最小化到托盘并关闭主窗口
             self.minimize_to_tray()
             dialog.destroy()
 
+        # 选择框按钮：退出应用并关闭对话框
         def quit_and_close() -> None:
             # 退出应用并关闭窗口
             self.quit_application()
@@ -1505,6 +1581,7 @@ class LiveRecorderGUI:
         dialog.bind("<Escape>", lambda e: dialog.destroy())
 
 
+# 程序入口：创建主窗口、启动托盘线程并进入 Tk 主事件循环
 def main() -> None:
     # 主函数
     root = tk.Tk()

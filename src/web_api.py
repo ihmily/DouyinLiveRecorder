@@ -18,11 +18,10 @@ from typing import cast
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel
 from starlette.responses import Response
 
 from src.web_config import (
-    DANGEROUS_CONFIG_KEYS,
     format_url_line,
     hash_web_password,
     is_hashed_web_password,
@@ -39,11 +38,74 @@ from src.web_config import (
 # web/ 静态资源目录（项目根/web）
 _WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
+# token 存储：{token: expiry_timestamp}
+_tokens: dict[str, float] = {}
+# 保护 _tokens 并发访问的锁（login 写入、middleware 查询、密码变更时 clear 均需持锁）
+_tokens_lock = threading.Lock()
+
+# 登录失败限流：{client_ip: [失败时间戳...]}（滑动窗口内计数，成功登录即清零）
+_FAILED_LOGINS: dict[str, list[float]] = {}
+# 保护 _FAILED_LOGINS 并发访问的锁（多线程 uvicorn 下 login 并发写、定期清理均需持锁）
+_FAILED_LOGINS_LOCK = threading.Lock()
+# 窗口内最大失败次数（第 N+1 次尝试直接 429，不再到后端验证密码）
+_LOGIN_MAX_FAILURES = 5
+# 失败计数滑动窗口（秒）
+_LOGIN_FAILURE_WINDOW = 300.0
+
+# 危险配置键黑名单：允许通过 Web 修改等价于远程命令执行，任何认证状态下都禁止写入
+_DANGEROUS_CONFIG_KEYS = {"自定义脚本执行命令"}
+
+# 房间列表写入互斥锁：序列化「查重 + 追加」的 TOCTOU 窗口，
+# 多线程 uvicorn 下并发 POST 同一 URL 时只允许一条成功
+_rooms_config_lock = threading.Lock()
+
+
+# app.state 上的自定义属性由 Starlette 动态承载（类型化为 Any），读取处统一用 cast 收敛类型。
+class LoginRequest(BaseModel):
+    password: str
+
+
+def _get_client_ip(request: Request, cfg: dict[str, str | int | bool]) -> str:
+    # 解析客户端真实 IP：仅当 TCP 直连对端在 web_trusted_proxy 列表中才信任
+    # X-Forwarded-For（取第一个即最初客户端），否则一律用直连对端地址，
+    # 防止伪造 XFF 头绕过按 IP 的登录限流
+    peer = request.client.host if request.client else "unknown"
+    trusted = {h.strip() for h in str(cast(str, cfg.get("web_trusted_proxy", ""))).split(",") if h.strip()}
+    if peer in trusted:
+        xff = request.headers.get("x-forwarded-for", "")
+        if xff:
+            return xff.split(",")[0].strip()
+    return peer
+
+
+class RoomCreate(BaseModel):
+    url: str
+    quality: str | None = None
+    name: str | None = None
+
+
+class RoomUpdate(BaseModel):
+    old_url: str
+    url: str
+    quality: str | None = None
+    name: str | None = None
+
+
+class RoomToggle(BaseModel):
+    url: str
+    enable: bool
+
+
+class ConfigUpdate(BaseModel):
+    section: str
+    key: str
+    value: str
+
 
 def _read_app_version() -> str:
-    # 版本号统一从 pyproject.toml（单一事实源）动态读取，不写死。
-    # 优先使用 importlib.metadata（打包/安装后可用），
-    # 回退到直接解析 pyproject.toml 文件（源码运行场景）。
+    # 运行时从 pyproject.toml 读取版本号（单一事实源），失败回退 "0.0.0"。
+    # 优先 importlib.metadata（已安装时），回退直接解析 pyproject.toml 文件。
+    # 与 main.py 的 _read_version_from_pyproject 保持一致的数据来源。
     try:
         from importlib.metadata import version as _get_version
 
@@ -59,61 +121,8 @@ def _read_app_version() -> str:
     return "0.0.0"  # 最终回退
 
 
-# token 存储：{token: expiry_timestamp}
-_tokens: dict[str, float] = {}
-# 保护 _tokens 并发访问的锁（login 写入、middleware 查询、密码变更时 clear 均需持锁）
-_tokens_lock = threading.Lock()
-
-# 登录失败限流：按客户端 IP 记录失败时间戳（float，来自 time.time()），防止在线爆破密码。
-_FAILED_LOGINS: dict[str, deque[float]] = {}
-_FAILED_LOGINS_LOCK = threading.Lock()
-_LOGIN_MAX_ATTEMPTS = 5
-_LOGIN_WINDOW_SECONDS = 60
-# 失败记录 IP 数上限：超限时先清理过期条目、再按插入顺序淘汰最旧 IP，防内存无界增长（C5）
-_FAILED_LOGINS_MAX_IPS = 2048
-
-
-# app.state 上的自定义属性由 Starlette 动态承载（类型化为 Any），读取处统一用 cast 收敛类型。
-class LoginRequest(BaseModel):
-    password: str
-
-
-class RoomCreate(BaseModel):
-    url: str
-    quality: str | None = None
-    name: str | None = None
-
-    @field_validator("url", "quality", "name")
-    @classmethod
-    def _no_newline(cls, v: str | None) -> str | None:
-        if v and any(c in v for c in ("\n", "\r")):
-            raise ValueError("不能包含换行符")
-        return v
-
-
-class RoomUpdate(BaseModel):
-    old_url: str
-    url: str
-    quality: str | None = None
-    name: str | None = None
-
-    @field_validator("old_url", "url", "quality", "name")
-    @classmethod
-    def _no_newline(cls, v: str | None) -> str | None:
-        if v and any(c in v for c in ("\n", "\r")):
-            raise ValueError("不能包含换行符")
-        return v
-
-
-class RoomToggle(BaseModel):
-    url: str
-    enable: bool
-
-
-class ConfigUpdate(BaseModel):
-    section: str
-    key: str
-    value: str
+# 应用版本号：运行时从 pyproject.toml 动态读取（单一事实源）
+_APP_VERSION = _read_app_version()
 
 
 def create_app(
@@ -124,7 +133,8 @@ def create_app(
 ) -> FastAPI:
     # 创建 FastAPI 应用。
     # 参数显式传入（而非读全局），便于测试时指向临时文件。
-    app = FastAPI(title="DouyinLiveRecorder Web Panel", version=_read_app_version())
+    # version 由 _APP_VERSION 在运行时从 pyproject.toml 动态提供，避免硬编码。
+    app = FastAPI(title="DouyinLiveRecorder Web Panel", version=_APP_VERSION)
 
     # 将路径与配置存入 app.state，路由通过 request.app.state 访问
     # 写入处用 setattr 避免对已类型化为 Any 的 app.state 触发 reportAny。
@@ -172,10 +182,14 @@ def create_app(
         cfg = read_web_config(cast(str, app.state.config_file))
         if not cast(bool, cfg["web_auth_enable"]):
             return {"token": "", "expires_in": 0, "auth_required": False}
-        client_ip = _client_ip(request, cast(str, cfg.get("web_trusted_proxy", "")))
-        # 登录失败限流：同一 IP 在窗口内失败次数过多则拒绝，防止在线爆破。
-        if _login_blocked(client_ip):
-            raise HTTPException(429, "尝试次数过多，请稍后再试")
+        client_ip = _get_client_ip(request, cfg)
+        # 登录失败限流：滑动窗口内失败达上限后直接拒绝，避免密码被在线爆破
+        now = time.time()
+        with _FAILED_LOGINS_LOCK:
+            failures = [t for t in _FAILED_LOGINS.get(client_ip, []) if now - t < _LOGIN_FAILURE_WINDOW]
+            _FAILED_LOGINS[client_ip] = failures
+            if len(failures) >= _LOGIN_MAX_FAILURES:
+                raise HTTPException(429, "登录失败次数过多，请稍后再试")
         with _tokens_lock:
             _purge_expired_tokens()
         if not cast(str, cfg["web_password"]):
@@ -186,9 +200,12 @@ def create_app(
             _ = update_config_line(cast(str, app.state.config_file), "Web", "web_password", hashed)
             cfg["web_password"] = hashed
         if not verify_web_password(req.password, cast(str, cfg["web_password"])):
-            _record_failed_login(client_ip)
+            with _FAILED_LOGINS_LOCK:
+                _FAILED_LOGINS.setdefault(client_ip, []).append(time.time())
             raise HTTPException(401, "密码错误")
-        _clear_failed_logins(client_ip)
+        # 登录成功：清零该 IP 的失败计数
+        with _FAILED_LOGINS_LOCK:
+            _FAILED_LOGINS.pop(client_ip, None)
         token = secrets.token_urlsafe(32)
         expiry = time.time() + cast(float, cfg["web_token_expiry"])
         with _tokens_lock:
@@ -240,23 +257,21 @@ def create_app(
     @app.post("/api/rooms")
     async def add_room(req: RoomCreate) -> dict[str, object]:
         url = normalize_url(req.url)
+        try:
+            validate_room_target(req.url, req.quality, req.name)
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from e
         line = format_url_line(url, req.quality, req.name)
-        # 存在性检查与追加必须在同一把锁内完成，否则并发 POST 同一 URL 会
-        # 双双通过检查而重复追加（C10 TOCTOU）。
         # 持有 file_update_lock 与录制主循环的 update_file/delete_line 互斥，
-        # 避免热重载的 read→rewrite 窗口内追加行丢失（I2）。
+        # 避免热重载的 read→rewrite 窗口内追加行丢失（I2）；
+        # _rooms_config_lock 将「查重 + 追加」原子化，杜绝并发 TOCTOU 重复写入。
         import main as _main
 
-        with _main.file_update_lock:
+        with _rooms_config_lock, _main.file_update_lock:
             existing = parse_url_config(cast(str, app.state.url_config_file))
             if any(r["url"] == url for r in existing):
                 raise HTTPException(409, "直播间已存在")
-            # 空/新文件用 utf-8-sig（带 BOM），已有文件用 utf-8 追加，
-            # 避免 Python 3.10-3.12 在文件中部写入 BOM 污染新增行（C8）。
-            path = Path(cast(str, app.state.url_config_file))
-            new_file = not path.exists() or path.stat().st_size == 0
-            encoding = "utf-8-sig" if new_file else "utf-8"
-            with open(path, "a", encoding=encoding) as f:
+            with open(cast(str, app.state.url_config_file), "a", encoding="utf-8-sig") as f:
                 _ = f.write(line + "\n")
         return {"ok": True}
 
@@ -322,29 +337,28 @@ def create_app(
 
     @app.put("/api/config")
     async def update_config(req: ConfigUpdate) -> dict[str, object]:
-        # 校验写入目标，防止 INI 注入（换行注入新行/新节）
-        try:
-            validate_config_target(req.section, req.key, req.value)
-        except ValueError as e:
-            raise HTTPException(400, f"非法配置项: {e}")
-        # 认证关闭时拒绝改写可触发命令执行的危险配置键，避免未授权 RCE
-        web_cfg = read_web_config(cast(str, app.state.config_file))
-        if not cast(bool, web_cfg["web_auth_enable"]):
-            if (req.section, req.key) in DANGEROUS_CONFIG_KEYS:
-                raise HTTPException(403, "未开启 Web 认证，禁止通过 API 修改可触发命令执行的配置项；请先在面板开启认证")
+        # 危险配置键（可致远程命令执行）任何认证状态下都禁止修改
+        if req.key in _DANGEROUS_CONFIG_KEYS:
+            raise HTTPException(403, "该配置项不允许通过 Web 修改")
+        # 认证开启时禁止清空密码：空密码 + 开启认证会让 login 直接 500，面板自锁
+        if req.section == "Web" and req.key == "web_password" and not req.value.strip():
+            current_cfg = read_web_config(cast(str, app.state.config_file))
+            if cast(bool, current_cfg["web_auth_enable"]):
+                raise HTTPException(400, "请先关闭 Web 认证再清空密码")
         value = req.value
-        if req.section == "Web" and req.key == "web_password":
-            # 认证开启时禁止清空密码：空密码会导致登录恒 500、面板锁死（C11）
-            if cast(bool, web_cfg["web_auth_enable"]) and not value.strip():
-                raise HTTPException(400, "Web 认证已开启，密码不能为空")
-            # 密码统一以 PBKDF2 哈希存储，避免明文落盘
-            if value.strip() and not is_hashed_web_password(value):
+        try:
+            validate_config_target(req.section, req.key, value)
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from e
+        # 密码统一以 PBKDF2 哈希存储，避免明文落盘
+        if req.section == "Web" and req.key == "web_password" and value.strip():
+            if not is_hashed_web_password(value):
                 value = hash_web_password(value)
         ok = update_config_line(cast(str, app.state.config_file), req.section, req.key, value)
         if not ok:
             raise HTTPException(404, "未找到对应的配置项")
-        # 密码任何变更（含清空）都吊销所有现有 token，强制重新登录
-        if req.section == "Web" and req.key == "web_password":
+        # 密码变更后吊销所有现有 token，强制重新登录
+        if req.section == "Web" and req.key == "web_password" and req.value.strip():
             with _tokens_lock:
                 _tokens.clear()
         return {"ok": True}
@@ -352,54 +366,32 @@ def create_app(
     @app.get("/api/files")
     async def list_files(path: str = Query("")) -> list[dict[str, str | int | float]]:
         root = cast(str, app.state.downloads_root)
-        raw_path = (path or "").replace("\\", "/")
-        if os.path.isabs(raw_path):
-            raise HTTPException(400, "非法路径")
-        safe_rel = os.path.normpath(raw_path) if raw_path else ""
-        if safe_rel in (".",):
-            safe_rel = ""
-        if safe_rel.startswith("..") or safe_rel == ".." or os.path.isabs(safe_rel):
-            raise HTTPException(400, "非法路径")
-        target = os.path.realpath(os.path.join(root, safe_rel))
+        target = os.path.realpath(os.path.join(root, path))
         if not _is_within(target, root):
             raise HTTPException(400, "非法路径")
         if not os.path.exists(target):
             raise HTTPException(404, "路径不存在")
         if os.path.isfile(target):
-            try:
-                st = os.stat(target)
-            except OSError:
-                raise HTTPException(404, "路径不存在")
+            st = os.stat(target)
             return [
                 {
                     "name": os.path.basename(target),
                     "type": "file",
                     "size": st.st_size,
                     "mtime": st.st_mtime,
-                    "path": safe_rel,
+                    "path": path,
                 }
             ]
         items: list[dict[str, str | int | float]] = []
         for name in sorted(os.listdir(target)):
             full = os.path.join(target, name)
-            full_real = os.path.realpath(full)
-            if not _is_within(full_real, root):
-                continue
-            # 跳过符号链接：下载端点经 realpath 拦截穿越，列表同样不暴露外部文件信息（C9）
-            if os.path.islink(full):
-                continue
-            try:
-                st = os.stat(full_real)
-                is_dir = os.path.isdir(full_real)
-            except OSError:
-                # 录制中文件可能被 ffmpeg 原子替换/重命名而瞬时消失，跳过该项而非整页 500（C6）
-                continue
-            rel = os.path.relpath(full_real, root).replace("\\", "/")
+            st = os.stat(full)
+            rel = os.path.relpath(full, root).replace("\\", "/")
             items.append(
                 {
                     "name": name,
-                    "type": "dir" if is_dir else "file",
-                    "size": st.st_size if not is_dir else 0,
+                    "type": "dir" if os.path.isdir(full) else "file",
+                    "size": st.st_size if os.path.isfile(full) else 0,
                     "mtime": st.st_mtime,
                     "path": rel,
                 }
@@ -426,6 +418,18 @@ def create_app(
         except Exception as e:
             raise HTTPException(500, str(e))
 
+    @app.get("/api/danmaku")
+    async def get_danmaku(since: int = Query(0, ge=0)) -> dict[str, object]:
+        # 弹幕监控快照：rooms 为各房间统计，messages 为 seq 游标之后的增量消息。
+        # 与录制引擎同进程，直接读 DanmakuMonitorHub 内存快照；异常时返回空快照而非 500，
+        # 避免面板因监控旁路故障整页报错。
+        try:
+            from src.danmaku_monitor import get_hub
+
+            return get_hub().snapshot(since)
+        except Exception as e:
+            return {"rooms": [], "messages": [], "last_seq": since, "truncated": False, "error": str(e)}
+
     # ===== 静态资源 =====
     if _WEB_DIR.exists():
         app.mount("/web", StaticFiles(directory=str(_WEB_DIR), html=True), name="web")
@@ -443,57 +447,6 @@ def _purge_expired_tokens() -> None:
     expired = [t for t, exp in _tokens.items() if exp <= now]
     for t in expired:
         _ = _tokens.pop(t, None)
-
-
-def _client_ip(request: Request, trusted_proxy: str = "") -> str:
-    # 取客户端 IP。仅当请求确实来自配置的可信反向代理时才采信 X-Forwarded-For 首地址，
-    # 否则攻击者可伪造 XFF 头绕过登录限流（C4）。
-    client_host = request.client.host if request.client is not None else "unknown"
-    if trusted_proxy:
-        allowed = {p.strip() for p in trusted_proxy.split(",") if p.strip()}
-        if client_host in allowed:
-            fwd = request.headers.get("X-Forwarded-For")
-            if fwd:
-                return fwd.split(",")[0].strip()
-    return client_host
-
-
-def _login_blocked(ip: str) -> bool:
-    # 判断该 IP 是否在限流窗口内已达最大失败次数。调用方无需持锁。
-    now = time.time()
-    with _FAILED_LOGINS_LOCK:
-        dq = _FAILED_LOGINS.get(ip)
-        if dq is None:
-            return False
-        while dq and now - dq[0] > _LOGIN_WINDOW_SECONDS:
-            dq.popleft()
-        return len(dq) >= _LOGIN_MAX_ATTEMPTS
-
-
-def _record_failed_login(ip: str) -> None:
-    # 记录一次登录失败时间戳。调用方无需持锁。
-    now = time.time()
-    with _FAILED_LOGINS_LOCK:
-        dq = _FAILED_LOGINS.setdefault(ip, deque())
-        dq.append(now)
-        # 防无界增长：IP 数超上限时先清理已过期的条目，仍超限则按插入顺序淘汰最旧 IP
-        if len(_FAILED_LOGINS) > _FAILED_LOGINS_MAX_IPS:
-            for stale_ip in list(_FAILED_LOGINS):
-                stale_dq = _FAILED_LOGINS[stale_ip]
-                while stale_dq and now - stale_dq[0] > _LOGIN_WINDOW_SECONDS:
-                    stale_dq.popleft()
-                if not stale_dq:
-                    _ = _FAILED_LOGINS.pop(stale_ip, None)
-                if len(_FAILED_LOGINS) <= _FAILED_LOGINS_MAX_IPS:
-                    break
-            while len(_FAILED_LOGINS) > _FAILED_LOGINS_MAX_IPS:
-                _ = _FAILED_LOGINS.pop(next(iter(_FAILED_LOGINS)), None)
-
-
-def _clear_failed_logins(ip: str) -> None:
-    # 登录成功后清空该 IP 的失败记录。调用方无需持锁。
-    with _FAILED_LOGINS_LOCK:
-        _ = _FAILED_LOGINS.pop(ip, None)
 
 
 def _is_within(child: str, parent: str) -> bool:

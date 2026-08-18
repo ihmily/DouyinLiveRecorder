@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import src.ttwid as ttwid_module
+from src.cookie_cache import clear as clear_cookie_cache
 from src.ttwid import (
     _app_root,
     _cached_ttwid,
@@ -67,6 +68,7 @@ class TestFetchTtwid:
     @pytest.mark.asyncio
     async def test_success(self):
         ttwid_module._cached_ttwid = ""
+        clear_cookie_cache()
         cookies = {"ttwid": "test_value_123"}
         with patch("src.ttwid.async_req", new_callable=AsyncMock, return_value=cookies):
             result = await _fetch_ttwid()
@@ -77,6 +79,7 @@ class TestFetchTtwid:
     @pytest.mark.asyncio
     async def test_no_ttwid_in_cookies(self):
         ttwid_module._cached_ttwid = ""
+        clear_cookie_cache()
         cookies = {"other": "value"}
         with patch("src.ttwid.async_req", new_callable=AsyncMock, return_value=cookies):
             result = await _fetch_ttwid()
@@ -86,6 +89,7 @@ class TestFetchTtwid:
     @pytest.mark.asyncio
     async def test_exception_returns_empty(self):
         ttwid_module._cached_ttwid = ""
+        clear_cookie_cache()
         with patch("src.ttwid.async_req", new_callable=AsyncMock, side_effect=Exception("net")):
             result = await _fetch_ttwid()
             assert result == ""
@@ -130,6 +134,7 @@ class TestWarmupTtwid:
 
     def test_success(self):
         ttwid_module._cached_ttwid = ""
+        clear_cookie_cache()
         # warmup_ttwid calls asyncio.run(get_ttwid()), which internally calls _fetch_ttwid
         # and sets _cached_ttwid. We mock async_req to control _fetch_ttwid's behavior.
         cookies = {"ttwid": "warm_value"}
