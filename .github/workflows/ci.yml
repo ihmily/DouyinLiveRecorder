@@ -241,6 +241,8 @@ jobs:
     if: contains(fromJSON(needs.setup.outputs.filters), 'python')
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     strategy:
       fail-fast: false
       matrix:
@@ -314,7 +316,7 @@ jobs:
       # 固定在最低支持版本上执行一次，避免矩阵内重复上传；fail_ci_if_error: false
       # 保证 Codecov 服务异常时不会反噬 CI 门禁。使用浮动主版本 @v5。
       - name: Upload coverage to Codecov
-        if: matrix.python-version == needs.setup.outputs.python_min && secrets.CODECOV_TOKEN != ''
+        if: matrix.python-version == needs.setup.outputs.python_min && env.CODECOV_TOKEN != ''
         uses: codecov/codecov-action@v5
         with:
           files: coverage.xml
