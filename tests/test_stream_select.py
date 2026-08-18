@@ -221,9 +221,7 @@ def test_select_source_url_m3u8_list_picks_first_reachable() -> None:
         patch.object(main, "hls_collection_enabled", True),
         patch("src.stream_select._validate_stream_url", side_effect=_validate) as mock_v,
     ):
-        result = select_source_url(
-            {"m3u8_url": dead, "m3u8_url_list": [dead, hs], "flv_url": "", "record_url": ""}
-        )
+        result = select_source_url({"m3u8_url": dead, "m3u8_url_list": [dead, hs], "flv_url": "", "record_url": ""})
     assert result == hs
     # 离线候选先被校验（False），随后 HS 候选被校验（True）并选中
     assert mock_v.call_count == 2

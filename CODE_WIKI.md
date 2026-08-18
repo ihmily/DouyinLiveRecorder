@@ -1365,6 +1365,48 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 
 ## 更新日志
 
+### v4.0.8.2-dev (2026-08-19) — 测试/接口修复：`test_huya_danmaku::test_profileRoom_fields` 断言陈旧 + `web_api.list_files` 悬空/逃出 root 符号链接崩溃与信息泄露
+
+**来源**：CI `pytest --cov=src ...` 报 3 failed（641 passed）。`test_profileRoom_fields` 断言 `flv_url.startswith("https://")` 失败（实际 `http://hwcdn.huya.com/...`）；`test_web_api::TestListFiles::test_broken_symlink_skipped` 抛 `FileNotFoundError: .../broken.ts`；`test_web_api::TestListFiles::test_symlink_outside_skipped` 返回含 `leak.ts`（根外符号链接名泄露）。
+
+**根因**：
+1. **测试陈旧（非代码 bug）**：`spider.get_huya_app_stream_url` 的 `_normalize`（`src/spider.py:840` 附近）刻意将 `https://` 降为 `http://`（虎牙实测 https 返回 403、仅 http 可用，memory 已记）。测试仍断言 `https://`，与既定正确行为冲突。
+2. **`web_api.list_files` 代码 bug**：遍历目录时 `st = os.stat(full)` 默认**跟随符号链接**（约 `src/web_api.py:388`）。对悬空链接（`broken.ts → 不存在目标`）抛 `FileNotFoundError` 致整步 500，而非「跳过该条目」。
+3. **`web_api.list_files` 信息泄露隐患**：仅对*请求路径*用 `os.path.realpath + _is_within` 校验（`src/web_api.py:369-371`），**未对目录内每个 entry 重新解析校验**。于是 `leak.ts → ../../config.ini` 这类逃出 `downloads` 根的链接被照常 `os.stat` 并列出，泄露了根外文件名（下载接口 `download_file` 自身有 realpath+_is_within 防护，下载安全，但列名仍泄露）。
+
+**修复**：
+1. `tests/test_huya_danmaku.py:118`：断言改为 `assert result["flv_url"].startswith("http://")`（与既定行为一致，运行行为不变）。
+2. `src/web_api.py` 的 `list_files` 循环加两项防护：
+   - 越界跳过：`resolved = os.path.realpath(full)` 后 `if not _is_within(resolved, root): continue`（修复根外链接名泄露）。
+   - 悬空容错：`st = os.stat(full)` 包 `try/except OSError: continue`（修复悬空链接 500）。
+
+**验证**：`python -m py_compile src/web_api.py` 通过；3 个目标测试在 Linux 上修复后应通过（本机 Windows 沙箱无 symlink 支持，两 symlink 用例 `OSError`/`islink=False` 跳过保护触发 skipped，另以单测级模拟直接驱动真实 `list_files` 代码路径确认：悬空+逃出 root 链接均被跳过、仅返回 `['ok.ts']`）；`tests/test_web_api.py` + `tests/test_huya_danmaku.py` 全量 17 passed / 2 skipped 无回归；`mypy src/`（win32 与 `--platform linux`）均 `Success: no issues found in 37 source files`。
+
+### v4.0.8.2-dev (2026-08-19) — 类型检查修复：src/web_tray.py 两处 `ctypes.windll` 缺少 `sys.platform` 平台门导致 mypy 非 Windows 校验失败
+
+**来源**：`mypy src/` 在 Linux/macOS（CI `ubuntu-latest`）报 `src/web_tray.py:111/112/178: error: Module has no attribute "windll" [attr-defined]`（Found 3 errors in 1 file）。Windows 本机 `mypy src/` 不报错（Windows typeshed 含 `ctypes.windll`）。
+
+**根因**：`ctypes.windll` 是 Windows-only API，仅存在于 Windows typeshed；非 Windows 类型桩没有该属性。原 `web_tray.py` 的 `_patch_console_window`（行 111–112）与 `_on_show`（行 178）直接调用 `ctypes.windll.user32` / `ctypes.windll.kernel32`，且未被 `sys.platform` 平台门挡住，非 Windows 平台静态校验即报 `attr-defined`。`web_tray.py` 顶部已定义模块级 `ENABLED = sys.platform == "win32"`，但函数体未复用该门控。
+
+**修复**（`src/web_tray.py`，沿用 mypy-platform-gating 的「提前返回门」范式，不依赖 `# type: ignore`）：
+1. `_patch_console_window`：函数开头（`try: import ctypes` 之前）加 `if sys.platform != "win32": return`（保留原 `try/except import` 容错）。
+2. `_on_show`：`if not hwnd: return` 之后加 `if sys.platform != "win32": return`。
+两处运行时行为不变：非 Windows 下 `ENABLED` 本为 `False`、托盘不启用，逻辑原就走不到；Windows 下与修复前完全一致。未使用 `# type: ignore`——该写法在 Windows 上会被 basedpyright 严格模式报 `reportUnnecessaryTypeIgnoreComment`，平台门才是双平台都干净的唯一修法。
+
+**验证**：`python -m py_compile src/web_tray.py` 通过；`mypy --platform linux src/`（模拟 CI）与 `mypy src/`（本地 win32）均 `Success: no issues found in 37 source files`。
+
+### v4.0.8.2-dev (2026-08-19) — CI 修复：ci.yml Codecov step 的 `if` 误用 `secrets` 上下文导致工作流校验失败（改用 job 级 env 传递）
+
+**来源**：GitHub Actions 工作流校验报错 `Invalid workflow file: .github/workflows/ci.yml#L1(Line: 317, Col: 13): Unrecognized named-value: 'secrets'`。
+
+**根因**：GitHub Actions 的 `if` 表达式解析器仅允许白名单上下文（`github`/`needs`/`vars`/`matrix`/`inputs`/`env`/`steps`/`runner`/`job` 及状态函数），**`secrets` 上下文被明确排除在 `if` 条件之外**（job 级与 step 级 `if` 均不可用）。原 `test` job 内 `Upload coverage to Codecov` step 的 `if` 写为 `matrix.python-version == needs.setup.outputs.python_min && secrets.CODECOV_TOKEN != ''`，意图「仓库配置了 `secrets.CODECOV_TOKEN` 才上传、未配置自动跳过」，但表达式引擎在校验阶段遇到 `secrets` 即报 `Unrecognized named-value`，整份工作流无法加载。第 320 行 `token: ${{ secrets.CODECOV_TOKEN }}` 位于 `with:`（非 `if`），合法不受影响。
+
+**修复**（`.github/workflows/ci.yml`）：
+1. `test:` job 新增 job 级 `env:` 块，把 secret 提升为环境变量：`env: CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}`（job 级 env 对所有 step 的 `if` 可见，`env` 上下文允许在 step 级 `if` 使用）。
+2. 第 319 行 step `if` 由 `secrets.CODECOV_TOKEN != ''` 改为 `env.CODECOV_TOKEN != ''`，即 `if: matrix.python-version == needs.setup.outputs.python_min && env.CODECOV_TOKEN != ''`。原「未配置 token 时整步跳过」意图不变。
+
+**验证**：提交后 GitHub 不再报 `Unrecognized named-value`；未配置 `CODECOV_TOKEN` 的 fork / 仓库该 step `if` 判否自动跳过，配置了 token 的仓库照常经 `codecov/codecov-action@v5` 上传覆盖率（`fail_ci_if_error: false` 保证 Codecov 服务异常不反噬门禁）。
+
 ### v4.0.8.2-dev (2026-08-18) — 虎牙 HLS 录制 403 真因：CDN 已反向校验，强制 Referer 反而 403（移除虎牙 Referer 规则）
 
 **来源**：2026-08-18 21:39 运行日志（room 179966，原画）+ 实时 curl 复现。上轮「多 CDN 枚举 + HS 优先」逻辑已正确（日志可见 hs→tx→al 逐候选校验），但**每条候选均 403**，ffmpeg 同样 `Server returned 403 Forbidden`、返回码 3436169992。失败 URL 形如 `http://hs.hls.huya.com/src/...m3u8?...&ctype=huya_webh5&fs=bgct&t=102`，与 2026-08-16「补 Referer」条目的结论（"无 Referer → 403、带 Referer → 200"）直接矛盾。

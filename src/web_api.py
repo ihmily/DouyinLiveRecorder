@@ -385,7 +385,17 @@ def create_app(
         items: list[dict[str, str | int | float]] = []
         for name in sorted(os.listdir(target)):
             full = os.path.join(target, name)
-            st = os.stat(full)
+            # 逐条解析真实路径并校验仍在 downloads 根内，跳过指向 root 之外（或
+            # 逃出根目录）的符号链接，避免列目录泄露根外文件名（信息泄露）。
+            resolved = os.path.realpath(full)
+            if not _is_within(resolved, root):
+                continue
+            # 跟随符号链接 stat 时，悬空（指向不存在目标）的符号链接会抛
+            # FileNotFoundError 导致整个接口 500；此处容错跳过该条目。
+            try:
+                st = os.stat(full)
+            except OSError:
+                continue
             rel = os.path.relpath(full, root).replace("\\", "/")
             items.append(
                 {

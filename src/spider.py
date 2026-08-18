@@ -828,6 +828,7 @@ async def get_huya_app_stream_url(
             hls_anti_code = i.get("sHlsAntiCode")
             if not (stream_name and flv_anti_code):
                 continue
+
             # 直接使用小程序接口返回的原始防盗链参数（sHlsAntiCode/sFlvAntiCode），
             # 统一降为 http（实测 https 返回 403、仅 http 可用），并对所有 CDN 一致地做
             # 反爬参数替换（tars_mp→huya_webh5, bhct→bgct，缺失时幂等无副作用）。

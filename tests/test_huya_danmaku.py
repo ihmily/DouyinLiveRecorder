@@ -114,8 +114,8 @@ def test_profileRoom_fields():
     assert args["ayyuid"] == 1486578378
     assert args["topSid"] == 1346609715
     assert args["subSid"] == 1346609715
-    # 录制字段不受影响
-    assert result["flv_url"].startswith("https://")
+    # 录制字段不受影响（虎牙防盗链统一降为 http，https 实测 403）
+    assert result["flv_url"].startswith("http://")
     assert "m3u8_url" in result
 
 

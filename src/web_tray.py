@@ -102,7 +102,9 @@ class WebConsoleTray:
 
     def _patch_console_window(self) -> None:
         # 把控制台窗口改为工具窗口（无任务栏按钮），并禁用关闭按钮。
-        # 失败则静默跳过，不影响 Web 服务运行。
+        # 失败则静默跳过，不影响 Web 服务运行；非 Windows 无 conhost 窗口，直接跳过。
+        if sys.platform != "win32":
+            return
         try:
             import ctypes
         except Exception:
@@ -172,6 +174,8 @@ class WebConsoleTray:
         # 恢复控制台窗口（允许从托盘线程调用 ShowWindow 恢复顶层窗口）
         hwnd = self._hwnd
         if not hwnd:
+            return
+        if sys.platform != "win32":
             return
         import ctypes
 

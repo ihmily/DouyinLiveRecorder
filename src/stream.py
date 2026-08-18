@@ -526,7 +526,9 @@ async def get_huya_stream_url(json_data: dict[str, object], video_quality: str |
                 # 请求档位不在可用列表：降级到最近的更低档，若无更低档则取最低可用档
                 req_level = QUALITY_LEVEL.get(video_quality or "", 4)
                 lower = [
-                    (level, ratio) for level, ratio in video_quality_options.items() if QUALITY_LEVEL.get(level, 0) >= req_level
+                    (level, ratio)
+                    for level, ratio in video_quality_options.items()
+                    if QUALITY_LEVEL.get(level, 0) >= req_level
                 ]
                 if lower:
                     actual_quality, ratio_val = lower[0]
