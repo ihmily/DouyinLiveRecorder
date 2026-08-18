@@ -3,7 +3,7 @@
 # -----------------------------------------------------------------------------
 # 触发条件：
 #   1. push tag `v*`（如 v4.0.8.2）→ 构建三平台产物 + 自动创建 GitHub Release
-#   2. workflow_dispatch（手动）    → 仅构建并上传 artifact，**不创建 Release**
+#   2. workflow_dispatch（手动）    → 默认仅构建并上传 artifact；勾选 create_release 输入后亦创建 Release
 #
 # 构建逻辑统一由仓库根目录 build_exe.py 承担（本地 / CI 行为一致）：
 #   · --dual   PyInstaller 只跑一次，先产 lite（不含运行时）再产 full（含 ffmpeg+node）
@@ -39,6 +39,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      create_release:
+        description: "手动触发时是否创建 GitHub Release（默认 false：仅构建并上传 artifact）"
+        type: boolean
+        default: false
 
 # 默认最小权限；仅 release job 单独提升为 contents: write
 permissions:
@@ -110,7 +115,7 @@ jobs:
             fi
             echo "is_release=true" >> "$GITHUB_OUTPUT"
           else
-            echo "手动触发（非 tag），仅构建并上传 artifact，不创建 Release"
+            echo "手动触发（非 tag）：默认仅构建并上传 artifact；勾选 create_release 输入可额外创建 Release"
             echo "is_release=false" >> "$GITHUB_OUTPUT"
           fi
 
@@ -316,11 +321,13 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  # ── 2. 创建 GitHub Release（仅 tag 推送）─────────────────────────────────
+  # ── 2. 创建 GitHub Release（tag 推送，或手动触发且勾选 create_release）──
   release:
     name: Create GitHub Release
     needs: [prepare, build]
-    if: needs.prepare.outputs.is_release == 'true'
+    if: >-
+      needs.prepare.outputs.is_release == 'true' ||
+      (github.event_name == 'workflow_dispatch' && inputs.create_release == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
