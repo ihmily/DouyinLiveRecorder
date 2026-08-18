@@ -150,6 +150,14 @@ jobs:
     permissions:
       contents: write
     steps:
+      # 手动发版路径需要 git 仓库来打/推 tag（Ensure git tag exists 步骤）。
+      # 若无 checkout，runner 无 .git 目录，git 命令直接报
+      # "fatal: not in a git directory"（exit 128）。
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
       - name: Skip (non-release path)
         if: >-
           needs.prepare.outputs.is_release != 'true' &&
