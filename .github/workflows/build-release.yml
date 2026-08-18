@@ -196,7 +196,10 @@ jobs:
         run: |
           set -euo pipefail
           for i in 1 2 3; do
-            if sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg xvfb; then
+            if sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq -o Acquire::Retries=3 \
+              && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+                  -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
+                  --no-install-recommends ffmpeg xvfb; then
               exit 0
             fi
             echo "::warning::apt 安装失败（第 ${i}/3 次），$((i * 15))s 后重试"
