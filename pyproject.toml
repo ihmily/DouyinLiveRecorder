@@ -57,6 +57,12 @@ dependencies = [
     "uvicorn[standard]>=0.51.0",
     "python-multipart>=0.0.32",
     "pydantic>=2.13.4",
+    "PyExecJS>=1.5.1",
+    "websockets>=12.0",
+    # 弹幕（src/danmaku）运行时依赖：protobuf 解析抖音弹幕协议、brotli 解压 B站弹幕。
+    # 下界与 requirements.txt 严格保持一致（运行时必需，缺失会导致弹幕采集分支失效）。
+    "protobuf>=6.31.1",
+    "brotli>=1.2.0",
 ]
 
 [project.optional-dependencies]
@@ -130,6 +136,7 @@ exclude = '''
     | \.ego-browser-test
     | \.npm-cache
     | \.pnpm-store
+    | \.mimosa
 )/
 '''
 
@@ -150,6 +157,7 @@ extend_skip = [
     ".ego-browser-test",
     ".npm-cache",
     ".pnpm-store",
+    ".mimosa",
 ]
 extend_skip_glob = ["*.pyc"]
 
@@ -163,6 +171,7 @@ exclude = [
     "node",
     "ffmpeg",
     "downloads",
+    ".mimosa",
     "__pycache__",
 ]
 
@@ -180,6 +189,7 @@ omit = [
     "*/__pycache__/*",
     "*/node/*",
     "*/ffmpeg/*",
+    "*/.mimosa/*",
 ]
 
 [tool.coverage.report]
@@ -222,6 +232,7 @@ exclude = [
     "**/__pycache__",
     ".qoder",
     ".workbuddy",
+    "**/.mimosa",
     "pytest-cache-files-g1bpkgza",
     "pytest-cache-files-wt8ppn27",
 ]

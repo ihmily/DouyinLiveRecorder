@@ -1,0 +1,35 @@
+# =============================================================================
+# 并发测试专用覆盖率配置
+# -----------------------------------------------------------------------------
+# 由 CI 的 concurrency-test job 通过环境变量 COVERAGE_RCFILE 加载：
+#   env:
+#     COVERAGE_RCFILE: .coveragerc-concurrency
+# 该 job 只运行并发相关测试（tests/test_concurrency.py +
+# tests/test_concurrency_rate_limit.py），覆盖 threading.Lock / RLock 跨 await
+# 死锁修复、速率限制、凭证（ttwid / kuaishou_did / twitch_client_id）共享去重。
+#
+# 这些测试天然只触及并发相关代码，覆盖率远低于全局阈值。全局覆盖率下限
+# （fail_under = 50）由完整 test job 的 pyproject [tool.coverage.report] 与
+# scripts/check_coverage.py 逐模块门禁共同保证；此处不设置全局下限
+# （fail_under = 0），仅输出覆盖率明细供人工审阅，避免误杀并发测试 job。
+# =============================================================================
+
+[run]
+# 仅统计 src/ 包，排除测试代码与第三方 / 平台二进制目录
+source = src
+omit =
+    */tests/*          # 测试代码本身不计入覆盖率
+    */__pycache__/*    # 字节码缓存
+    */node/*           # 运行时自动下载的 Node.js（防御性排除：src 内无嵌套 node/）
+    */ffmpeg/*         # 运行时自动下载的 FFmpeg（防御性排除：src 内无嵌套 ffmpeg/）
+
+[report]
+# 并发场景覆盖率低属预期，不设置下限，避免误杀并发测试 job
+fail_under = 0
+# 与 pyproject [tool.coverage.report] 保持一致的排除规则
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:

@@ -8,12 +8,13 @@
 #   gui（profile）    GUI 模式（需 X11）     docker compose --profile gui up -d
 #
 # 可在此文件同目录下创建 .env 文件覆盖默认环境变量（compose 自动加载），
-# 例如：TZ=America/New_York 可修改时区。
+# 例如：TZ=America/New_York 可修改时区；APP_VERSION=4.0.8.2 可固定镜像 LABEL 版本。
 # =============================================================================
 
 services:
   # ---------------------------------------------------------------
   # 主录制服务 - 持续监测并录制直播（main.py，纯命令行，不监听端口）
+  # 通过 YAML 锚点 &recorder 定义，web / gui 服务复用其全部配置后按需覆盖。
   # ---------------------------------------------------------------
   recorder: &recorder
     image: ihmily/douyin-live-recorder:latest
@@ -27,41 +28,49 @@ services:
       args:
         APP_VERSION: "${APP_VERSION}"
 
-    # 环境变量
+    # 环境变量（注入容器运行时行为）
     environment:
-      # Python 运行时
+      # Python 运行时：无缓冲输出、不写字节码、UTF-8 编码
       - PYTHONUNBUFFERED=1
       - PYTHONDONTWRITEBYTECODE=1
       - PYTHONIOENCODING=utf-8
-      # 时区
+      # 时区（与 Dockerfile ARG TZ 默认一致，可在 .env 覆盖）
       - TZ=Asia/Shanghai
-      # 终端
+      # 终端（彩色日志）
       - TERM=xterm-256color
 
-    # 从 .env 文件加载环境变量（如果存在）
+    # 从 .env 文件加载环境变量（如果存在）；不存在也不报错
     env_file:
       - path: .env
         required: false
 
-    # 交互式终端支持（可在容器内使用 Ctrl+C 停止录制）
+    # 交互式终端支持（可在容器内使用 Ctrl+C 停止录制；main.py 已同时接管 SIGINT/SIGTERM）
     tty: true
     stdin_open: true
 
-    # 卷挂载
+    # 优雅停止：docker stop 发送 SIGTERM，main.py 的 safe_exit 会分级终止 ffmpeg
+    # 子进程并在退出前 flush 弹幕 SRT，给足 30s 避免录制文件 / 弹幕被截断
+    stop_grace_period: 30s
+
+    # 安全加固：禁止容器进程获取新权限（防御提权）
+    security_opt:
+      - no-new-privileges:true
+
+    # 卷挂载（宿主机目录 : 容器目录 : 读写权限）
     volumes:
-      # 配置文件目录（必需）- 包含 config.ini 和 URL_config.ini
+      # 配置文件目录（必需）- 包含 config.ini 和 URL_config.ini（也含敏感信息，不进镜像）
       - ./config:/app/config:rw
-      # 录制文件下载目录（必需）
+      # 录制文件下载目录（必需）- 视频 / 音频 / 弹幕 SRT 落盘于此
       - ./downloads:/app/downloads:rw
-      # 运行日志目录
+      # 运行日志目录（logs/streamget.log 等）
       - ./logs:/app/logs:rw
-      # 配置备份目录
+      # 配置备份目录（运行时修改 config 时的自动备份）
       - ./backup_config:/app/backup_config:rw
 
-    # 重启策略：除非手动停止，否则自动重启
+    # 重启策略：除非手动停止，否则自动重启（网络抖动 / 直播掉线后恢复）
     restart: unless-stopped
 
-    # 健康检查：同时兼容 main.py 与 web.py 两种模式
+    # 健康检查：同时兼容 main.py 与 web.py 两种模式（gui 模式在下方单独覆盖）
     healthcheck:
       test: ["CMD-SHELL", "pgrep -f 'python (main|web).py' || exit 1"]
       interval: 30s
@@ -69,7 +78,7 @@ services:
       retries: 3
       start_period: 15s
 
-    # 资源限制
+    # 资源限制（防止异常占用拖垮宿主机）
     deploy:
       resources:
         limits:
@@ -79,7 +88,7 @@ services:
           cpus: '0.5'
           memory: 512M
 
-    # 日志限制
+    # 日志限制（防止容器日志无限膨胀占满磁盘）
     logging:
       driver: "json-file"
       options:
@@ -100,7 +109,7 @@ services:
     profiles:
       - web
     entrypoint: ["python", "web.py"]
-    # 端口映射仅 Web 模式需要（宿主机:容器）
+    # 端口映射仅 Web 模式需要（宿主机:容器），与 Dockerfile EXPOSE 8000 对应
     ports:
       - "8000:8000"
 
@@ -109,7 +118,7 @@ services:
   # 启动：docker compose --profile gui up -d
   # 前置条件：
   #   1. 宿主机运行：xhost +local:
-  #   2. 取消下方 DISPLAY 和 X11 socket 的注释
+  #   2. 取消下方 DISPLAY 和 X11 socket 的注释，将显示环境透传进容器
   # ---------------------------------------------------------------
   gui:
     <<: *recorder
@@ -125,6 +134,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 15s
+    # 显示环境透传（取消注释并先在宿主机执行 xhost +local: 后启用）
     # environment:
     #   - DISPLAY=${DISPLAY}
     # volumes:

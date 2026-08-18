@@ -691,79 +691,84 @@ brew install node
 
 ## ⏳ 更新日志
 
-### v4.0.8.2 (2026-08-13) — 静态检查 / CI 加固与跨平台类型回归修复
+### v4.0.8.2-dev (2026-08-16 ~ 2026-08-18) — 录制/弹幕/国际化/类型检查 系列修复
 
-- **CI `lint` 修复**：`black --check .` 因 `scripts/smoke_test.py:280` 超长行与 `gui.py:1460` 缺空行两处格式违规失败，已手工格式化修复（59 files unchanged）；lint job 运行 Python 由 3.12 升到 3.13（与 `target-version` 最高值对齐，消除 AST 安全校验告警噪声）
-- **`get_startup_info()` 跨平台类型回归修复**（`main.py`）：上一批次为满足 basedpyright 的 `TYPE_CHECKING` 别名方案在 Linux 下 mypy 报 `Module has no attribute "STARTUPINFO"` 与 `Variable "..._StartupInfoType" is not valid as a type`。Windows 专属 typeshed 符号无法用 `TYPE_CHECKING` 别名跨平台引用，改为返回类型退化为 `object | None`（`sys.platform == "win32"` 门控保留），mypy `--platform linux` / `win32` 均通过
-- **`src/web_api.py` 类型修复**：`_FAILED_LOGINS: dict[str, deque[float]]` 补全 `deque` 类型参数，消除 `reportMissingTypeArgument` 及下游 406/411/418/419/425 共 10 处 `deque[Unknown]` 级联告警
-- **`build_exe.py` 复查**：Linux ffmpeg 分支 `reportUnusedCallResult` 上批已修复并合规，本次复查无新增改动
+> 本批改动集中解决了多个历史遗留的「能跑但录制/弹幕经常失败」类问题，并通过真机实测闭环验证。下分模块概述，详细根因与验证见 [CODE_WIKI.md](CODE_WIKI.md)。
 
-### v4.0.8.2 (2026-08-12) — 修复跨事件循环锁误判风控 + 空白异常日志收口
+**🎯 录制引擎核心修复（影响所有平台）**
+- **致命结构 Bug**：录制主链曾被嵌套在 `if headers:` 条件内，导致抖音/斗鱼等无专属请求头的平台**从未真正录制**（仅显示"正在直播中"）。已修复——条件仅控制请求头插入，录制链无条件执行。
+- **斗鱼崩溃修复**：`select_source_url` 返回空时不再触发 `UnboundLocalError`（标题变量未绑定），直接告警并等待下一轮；末位候选的 content-type 拒绝与 m3u8 Range-GET 偶发 403 现均支持「重试一次再定罪 / 末位告警放行」，根治斗鱼 HLS 假红与 FLV ~70 秒被 CDN 掐断。
+- **流地址校验三层降风控**：新增「探针节流 + 重试抖动 + 被拒后退避（仅虎牙）」机制，消除 CDN 按机器人节奏指纹识别导致的 403 失败循环；校验器与 ffmpeg 双端 User-Agent 现已**一字不差**对齐（指纹自洽，防校验假红/假绿）。
+- **HTTPS 录制**：`是否强制启用https录制` 对「虎牙直播」平台跳过（其 `*.hls.huya.com` 仅 http 可用，强制 https 会制造「校验 http 通过、录制 https 被拒」的假绿）。
 
-- **根因修复**（`src/async_http.py` `_get_client_lock()`）：模块级 `_client_lock` 原为单例 `asyncio.Lock()`，在首个 room 的 `asyncio.run()` 循环里惰性绑定后，后续 room 各自 `asyncio.run()` 起新循环再次 `await` 会触发 `RuntimeError: ... is bound to a different event loop`；该异常被 `async_req` 吞掉返回空串，被 `spider.py` 误判成「风控空响应」并级联回退 HTML 抓取失败。现改为随**当前事件循环**缓存/重建 `(lock, loop)` 二元组，与 `_client_cache` 的「client + loop」机制一致
-- **空白异常日志收口**：`async_req`、`_close_all_clients` 及跨循环旧 client 关闭处的 `logger.debug(e)` 全部改为带 `type(e).__name__`（必要时含 URL），消除 Windows 下异常 `str()` 为空时打出空白日志、无法定位的问题
-- **回归测试**：`tests/test_async_http.py` 新增 `TestGetClientLock`，锁定「跨循环锁自动重建」行为
-- **代码质量 / 静态检查加固（同日）**：
-  - `scripts/check_coverage.py`：修复全局覆盖率 < 50% 时逐模块门禁被非零退出码跳过、临时文件残留、`subprocess.run` 缺 `encoding`（Windows 非 UTF-8 locale 崩溃）等问题（basedpyright 0/0/0、mypy 通过）
-  - `scripts/smoke_test.py`：修复 Windows GBK 控制台 `UnicodeEncodeError` 崩溃与 `reportConstantRedefinition`，失败标记改 ASCII、新增 `_safe_print` 容错（basedpyright 0/0/0、mypy 通过）
-  - `web.py`：ctypes 3.13+ 兼容（`windll` 已移除）+ 64 位 `HWND` 截断导致控制台窗口隐藏失败修复，改用 `ctypes.WinDLL` 并显式声明 `argtypes`/`restype`
-  - `msg_push.py`：修复 `tg_bot` 未绑定变量（`NameError` 崩溃）与 Telegram 业务失败（`{"ok": false}`）漏检，成功标识改为 chat_id
-  - `main.py`：修复 line 524 PATH 拼接覆盖后续追加/重复插入（改用实时 `os.environ["PATH"]` 并去重）；`get_startup_info` 类型别名 `reportInvalidTypeForm` 初步处理（最终跨平台方案见上 2026-08-13 条目）
-  - `gui.py`：`PystrayIcon` 别名 mypy 13 错误清零 + 剩余 2 处 mypy 错误清零，最终 basedpyright 0/0/0、mypy `Success: no issues found`
-  - `build_exe.py`：Linux ffmpeg 分支未使用返回值（`reportUnusedCallResult`）修复
+**🐯 虎牙专项（多 CDN 选源 + Referer 纠偏）**
+- 改为**枚举全部 CDN 候选**（HS/HW/TX/AL），不再固定取首位或固定 TX 优先；统一降为 `http://` 并保留原始防盗链参数，由 `select_source_url` 逐条可达性校验择优，动态规避任意离线线路。
+- **Referer 规则已移除**：实测虎牙 CDN 现已反向校验——**带 Referer 一律 403，不携带 Referer 时 HS 线路才 200**。历史上注入的 Referer 规则反成录制失败元凶，已清除。
+- App 路径（`get_huya_app_stream_url`）TX 选中时与 `record_url` 一致地做 `tars_mp→huya_webh5`/`bhct→bgct` 参数替换，根治「priority 选源后 TX 仍带原始 `tars_mp` 导致秒级断流」的回归。
 
-### v4.0.8.1-dev (2026-08-09) — 注释规范与 Web/接口冒烟测试工具
+**📺 B站弹幕认证链闭环**
+- 修复 spi 端点拼写（`/finger/sp` → `/finger/spi`，少写结尾 `i` 导致 200+空 body）；buvid 获取链新增 `www.bilibili.com` 首页 Set-Cookie 备取路径，并区分真实 buvid 与随机 UUID 兜底（标记 `is_fallback`）。
+- 弹幕进房包**观众 uid 误传主播 uid** 导致 AUTH 软拒绝（连接保持、0 弹幕）已修复；`_decode_packet` 显式校验 operation=8 回应的 code，非 0 时告警+断开+失效 buvid 缓存（避免被拒 UUID 死循环），并新增 8 秒静默拒绝看门狗兜底。
+- 弹幕三元组（OD/BD/UHD app 路径）返回补全，消除原静默跳过。
 
-- **注释规范**：模块/函数说明统一使用 `#` 行注释，不再使用三引号 `"""` 文档字符串
-- **新增 Web/接口冒烟测试工具**（`scripts/smoke_test.py`，零依赖、配置驱动）：支持 GET/POST、期望状态码、文本/JSON 断言、`base_url` 拼接，输出控制台/JSON/HTML 报告，失败时退出码非 0；示例 `scripts/smoke_web.json` 默认探活 Web 管理面板 `http://127.0.0.1:8000`
+**🌐 国际化机制修复**
+- 补齐缺失的 `zh_CN.mo` 编译产物并随仓库分发；`init_gettext` 改为显式 `languages=["zh_CN"]` 加载，**不再依赖 `LANG`/`LANGUAGE` 环境变量**（Windows 普遍未设置）。中文环境下英文提示（如「IP banned」）现已正确翻译。
 
-### v4.0.8.1-dev (2026-08-08 ~ 2026-08-09) — 全量代码审查、构建修复与 GUI 优雅停止加固
+**🍪 访客 Cookie 统一缓存**
+- 新增 `src/cookie_cache.py`：以「归一化网址 + 代理」为 key 的进程级共享缓存，抖音 ttwid、快手 did 等通用访客 cookie 跨模块/跨房间复用同一份，**杜绝同网址重复拉取触发风控**。
 
-- **全量代码审查**：`compileall` 语法编译、`black`（line-length 120）、`isort`、`mypy`（src/）、`pytest` 全部通过（**417 passed**，无回归）
-- **修复 `pyproject.toml` 非法作者邮箱**（真实构建 Bug）：`email = "ihmily@github"` 非合法 IDN 邮箱，新版 setuptools 会拒绝构建，导致 `pip install .` / `pip install .[dev]` 必失败；已改为 `ihmily@users.noreply.github.com`（CI 因只装裸工具从未触发，本地开发必踩）
-- **修复 black 格式违规 2 处**（`tests/test_stream.py` 超长断言、`main.py` 函数签名与一行日志），CI 的 `black --check .` 此前会失败
-- **GUI 停止录制优雅退出加固**（`gui.py`）：原回退 `proc.terminate()` 硬杀会把 ffmpeg 孙进程孤儿化且 `proc.wait()` 立即成功导致日志谎称已清理；现 CTRL_BREAK 失败时改为 `taskkill /F /T /PID` 整树终止（连 ffmpeg 一起清理），日志按路径如实区分「优雅退出」与「硬杀路径」
-- **GUI 子进程 pythonw 兼容性修复（根因）**（`gui.py`）：用 `pythonw.exe` 启动 GUI 时，`sys.executable` 指向 pythonw（GUI 子系统、无控制台），导致其拉起的录制核心子进程也无控制台，`AttachConsole` 必然失败、CTRL_BREAK 结构性不可达；现检测到解释器为 pythonw 时改用同目录 `python.exe`（console 子系统）启动录制核心。打包版（CLI exe 为 `console=True`）不受影响
-- **实测验证**：用 pythonw 当父进程复现，确认修复后 `AttachConsole` 成功、`GenerateConsoleCtrlEvent` 送达、子进程 SIGBREAK 处理器正常触发（`signum=21`）；另发现 Python 3.13 的 `time.sleep()` 不会被 CTRL_BREAK 唤醒（CTRL_BREAK 走 pending-call 机制），已排查 `main.py` 录制主循环无长 sleep（≤5s），保证 15 秒等待窗口内 `safe_exit` 必然执行清理
-- **gui_legacy.py 已知遗留问题（未改，建议迁移到 gui.py）**：旧版 GUI 用 `CREATE_NO_WINDOW` 启动子进程，其 `send_signal(CTRL_BREAK_EVENT)` 在该启动方式下永远静默无效，优雅停止实际从未生效（每次等 15 秒超时后强杀）
+**🧩 架构与质量**
+- `main.py` 拆分 6 类功能至 `src/` 子模块（ffmpeg_proc / video_postprocess / stream_select / notify / recorder_status / config_io），经 re-export 保持兼容；弹幕子包 `src/danmaku/*` 扁平化至 `src/`；注释规范落地：全量 `"""` docstring 转为 `#` 行注释。
+- 配置健壮性：`config.ini` 不可写时 `import main` 阶段不再崩溃（读回 best-effort）；旧键兼容仅读取不写回；备份旋转删除改为 best-effort。
+- 全库 UA 统一升级至 2026 基准（Chrome/141、Firefox/148、移动端 Android 14 Chrome/141），消除过旧指纹。
 
-### v4.0.8.1-dev (2026-08-05) — HLS 校验误判与空白日志修复
+**🛡️ 平台兼容与运行健壮性**
+- **跨事件循环锁误判风控根治**（`src/async_http.py`）：模块级单例 `asyncio.Lock()` 在首个 room 的 `asyncio.run()` 循环惰性绑定后，后续 room 起新循环再次 `await` 会抛 `bound to a different event loop`，被 `async_req` 吞掉返回空串、被 `spider.py` 误判「风控空响应」并级联回退 HTML 抓取失败。现改为随**当前事件循环**缓存/重建 `(lock, loop)` 二元组（与 `_client_cache` 机制一致），`tests/test_async_http.py` 新增 `TestGetClientLock` 锁定该行为。
+- **空白异常日志收口**：`async_req` / `_close_all_clients` 及跨循环旧 client 关闭处原为 `logger.debug(e)`，Windows 下异常 `str()` 为空时打出空白日志、无法定位；全部改为带 `type(e).__name__`（必要时含 URL）。
+- **平台兼容修复**：`web.py` 的 ctypes 3.13+ 兼容（`windll` 已移除）+ 64 位 `HWND` 截断导致控制台窗口隐藏失败，改用 `ctypes.WinDLL` 并显式声明 `argtypes`/`restype`；`main.py` 修复 PATH 拼接覆盖后续追加/重复插入（改用实时 `os.environ["PATH"]` 并去重）；`msg_push.py` 修复 `tg_bot` 未绑定变量（`NameError` 崩溃）与 Telegram 业务失败（`{"ok": false}`）漏检，成功标识改为 chat_id。
 
-- 修复流地址校验失败日志空白：`get_response_status` 异常日志现带 URL 与异常类型（如 `ConnectTimeout` / `TimeoutError`），避免 Windows 下 `socket.timeout` 的 `str()` 为空时只输出空白消息
-- 修复 m3u8 校验误判：HEAD 探测触发范围从 `400/401/403/405` 扩展到**含 404 在内的所有非 2xx**，对 `.m3u8` 源一律补 `Range: bytes=0-0` GET 探测（返回 200/206 即判可达）
-- 修复 `_validate_stream_url` 静默吞异常：新增 `verify` 参数沿用全局 SSL 开关（与异步校验一致）；所有失败路径记录 warning（URL + 异常类型/状态码/content-type）
-- 修复 `select_source_url` 代理不传递：新增 `proxy_addr` 参数并透传给三处校验调用，修复 TikTok 等需代理平台流地址直连校验超时误判不可达
-- 验证：`py_compile` 通过；mock httpx 跑 5 个用例全 PASS（含修复前误判的 HEAD404+GET206→可达、TimeoutError→不可达且日志带类型与 URL 场景）
+**🧪 静态检查 / CI 加固**
+- mypy / basedpyright 在 `src/` 与 `main.py` 全面清零（含 spider.py / sync_http.py / web_api.py `_FAILED_LOGINS` 补全 `deque` 类型参数消除 10 处级联告警）；`main.py` 的 `get_startup_info()` 改为返回 `object | None`（`sys.platform == "win32"` 门控保留）以根治 Windows 专属 typeshed 符号跨平台 `TYPE_CHECKING` 别名误报；`gui.py` / `build_exe.py` / `web.py` / `msg_push.py` 同期 basedpyright 0/0/0、mypy 通过。
+- 脚本健壮性：`scripts/check_coverage.py` 修复全局覆盖率 < 50% 时门禁被跳过、临时文件残留、`subprocess.run` 缺 `encoding`（Windows 非 UTF-8 locale 崩溃）；`scripts/smoke_test.py` 修复 Windows GBK 控制台 `UnicodeEncodeError` 崩溃与常量重定义、失败标记改 ASCII、新增 `_safe_print` 容错。
+- CI `lint` job 运行 Python 由 3.12 升到 3.13（与 `target-version` 最高值对齐，消除 AST 安全校验告警噪声），`black --check .` 格式违规已手工修复。
+- 全量测试约 635 passed / 2 skipped（排除已知沙箱删除保护项）。
 
-### v4.0.8.1-dev (2026-08-01)
+### v4.0.8.1-dev (2026-08-01 ~ 2026-08-09) — 注释规范 / 冒烟测试 / GUI 优雅退出 / 校验修复 整合
 
-- 抖音录制支持 5 种 URL 格式：网页端直播间、app 端直播间、抖音号拼接（支持 VR 直播）、app 端主页、网页端主播主页
-- 优化网页端主播主页（格式 5）解析链路：直接从地址提取 sec_user_id 跳过重复下载，请求数由 4 降至 3、消除两次重复的 71KB 主页 HTML 抓取
-- 修复主页类链接在解析路径中**代理与 Cookie 配置静默丢失**的问题（现已正确透传 `proxy_addr` / `cookies`）
-- 新增 sec_user_id → 抖音号 进程级缓存（30 分钟 TTL），消除轮询场景下的重复接口请求
-- 修复抖音 HLS/m3u8 校验误判：CDN 对 HEAD 请求返回 4xx 时，对 m3u8 源补 `Range: bytes=0-0` GET 探测，避免可用的 HLS 源被错误回退到 FLV
-- 修复 `get_response_status` 异常日志为空（仅显示 `- `）的问题，现输出带上下文的诊断信息
-- 优化抖音 `web/enter` 接口偶发 `status_code=10002` 的容错：首次失败后静默重试一次，成功即跳过约 1MB 的 HTML 兜底抓取，消除告警刷屏
-- 删除重构后已无调用点的死代码 `get_douyin_stream_data`
-- 代码质量：全量测试 **78 passed**；`black` / `isort` / `mypy` / `ruff` 静态检查通过
+**注释规范与质量基线**
+- 模块/函数说明统一使用 `#` 行注释，不再使用三引号 `"""` 文档字符串。
+- 全量审查通过：`compileall` / `black`(行宽120) / `isort` / `mypy`(src/) / `pytest` 全绿（417 passed，无回归；08-01 增量 78 passed，`ruff` 亦通过）；修复 black 格式违规 2 处。
+- ⚠️ **构建 Bug 修复（`pyproject.toml`）**：`email="ihmily@github"` 非合法 IDN 邮箱，新版 setuptools 拒绝构建、`pip install .` 必失败；已改为 `ihmily@users.noreply.github.com`（CI 裸装未触发，**本地开发必踩**）。
 
-### v4.0.8.1 (2026-07-30)
+**新增 Web/接口冒烟测试工具**
+- `scripts/smoke_test.py`（**零依赖、配置驱动**）：支持 GET/POST、`base_url` 拼接、期望状态码、文本/JSON 断言；输出控制台/JSON/HTML 报告；失败退出码非 0。默认用例 `scripts/smoke_web.json` 探活 Web 面板 `http://127.0.0.1:8000`。
 
-- 新增 Web 管理面板（`web.py` + `src/web_api.py` + `src/web_config.py` + `web/`），支持仪表盘、直播间管理、配置编辑、SSE 日志推送
-- 新增 GUI 画质监控页面，实时检测各直播间实际画质是否与设置一致
-- 新增实际画质回采与降级告警功能，覆盖抖音、TikTok、快手、虎牙、斗鱼、B站、网易CC 七个平台
-- 新增 Web 控制台开关配置 `web_show_console`，支持后台隐藏运行模式
-- 新增 HTTP 客户端连接池复用机制，按 (代理, verify, http2) 维度复用 AsyncClient
-- 新增 SSL 证书验证全局开关，通过 config.ini 统一控制
-- 新增日志文件开关配置项
-- 重构代理检测逻辑，从联网探测改为读取本地系统代理配置
-- 修复 `trace_error_decorator` 严重 Bug（原同步装饰器应用于 71 个异步函数导致错误捕获失效）
-- 修复 `asyncio.run()` 导致的 httpx 客户端跨事件循环复用问题
-- 修复多个 IndexError / KeyError / 类型错误运行时 Bug
-- 全项目类型错误修复与代码清理（Pyright / Pyrefly / basedpyright）
-- 清理硬编码过期凭据，改为自动获取（抖音 ttwid、快手 did、Twitch Client-Id 等）
-- Dockerfile 升级 Node.js 22 LTS，使用非 root 用户运行
-- 依赖扫描完成，新增 `pydantic>=2.0.0` 依赖声明
+**GUI 停止录制优雅退出加固**
+- **根因**：`pythonw.exe` 启 GUI 时 `sys.executable` 指向无控制台的 pythonw，其拉起的录制子进程也无控制台 → `AttachConsole` 必失败、CTRL_BREAK 结构性不可达；现检测到 pythonw 时改用同目录 `python.exe`（console 子系统）启录制核心。**打包版（CLI exe `console=True`）不受影响**。
+- CTRL_BREAK 失败改 `taskkill /F /T /PID` 整树终止（连同 ffmpeg 清理），日志如实区分「优雅退出」与「硬杀路径」。
+- 实测：pythonw 父进程复现后 `AttachConsole` 成功、`SIGBREAK` 处理器触发（`signum=21`）；另 Python 3.13 的 `time.sleep()` 不被 CTRL_BREAK 唤醒（走 pending-call 机制），因 `main.py` 录制主循环无长 sleep（≤5s），15 秒窗口内 `safe_exit` 必执行清理。
+- ⚠️ **遗留（未改）**：旧 `gui_legacy.py` 用 `CREATE_NO_WINDOW` 启子进程，`send_signal(CTRL_BREAK_EVENT)` 静默无效，优雅停止从未生效（每次等 15 秒超时强杀）；**建议迁移到 gui.py**。
+
+**流地址校验修复（HLS/代理/日志）**
+- 空白日志收口：`get_response_status` 异常日志现带 URL 与异常类型（如 `ConnectTimeout`/`TimeoutError`），消除 Windows 下 `socket.timeout` 的 `str()` 为空只打空白。
+- m3u8 误判修复：HEAD 探测范围从 `400/401/403/405` 扩至**含 404 的所有非 2xx**；对 `.m3u8` 一律补 `Range: bytes=0-0` GET 探测（200/206 即判可达），避免可用 HLS 源被误回退 FLV。
+- `_validate_stream_url` 新增 `verify` 参数沿用全局 SSL 开关，所有失败路径记 warning（URL + 异常类型/状态码/content-type）。
+- `select_source_url` 新增 `proxy_addr` 并透传三处校验，修复 TikTok 等需代理平台直连校验超时误判不可达。
+
+**抖音录制增强**
+- 支持 5 种 URL 格式：网页/App 直播间、抖音号拼接（含 VR）、App/网页端主播主页。
+- 主播主页（格式 5）直接提取 `sec_user_id` 跳重复下载，请求数 4→3；主页类链接现正确透传 `proxy_addr`/`cookies`（修复静默丢失）；新增 `sec_user_id → 抖音号` 进程级缓存（30 分钟 TTL）。
+- CDN 对 HEAD 返 4xx 时补 `Range` GET 探测；`web/enter` 偶发 `status_code=10002` 首次失败后静默重试一次，跳过约 1MB HTML 兜底抓取；删除死代码 `get_douyin_stream_data`。
+
+### v4.0.8.1 (2026-07-30) — Web 面板 / 画质监控 / 代理与类型修复
+
+- **新增 Web 管理面板**（`web.py`+`src/web_api.py`+`src/web_config.py`+`web/`）：仪表盘、直播间管理、配置编辑、SSE 日志推送。
+- **新增 GUI 画质监控**：实时检测实际画质是否匹配设置，覆盖抖音/TikTok/快手/虎牙/斗鱼/B站/网易CC 七平台。
+- **配置项新增**：`web_show_console`（后台隐藏运行）、SSL 证书验证全局开关（config.ini）、日志文件开关。
+- **连接优化**：HTTP 客户端按 (代理, verify, http2) 维度复用连接池；代理检测从联网探测改为读本地系统代理配置。
+- **缺陷修复**：`trace_error_decorator` 同步装饰器误用于 71 个异步函数致错误捕获失效；`asyncio.run()` 致 httpx 跨事件循环复用问题；多个 IndexError/KeyError/类型错误。
+- **凭据清理**：硬编码过期凭据改自动获取（抖音 ttwid、快手 did、Twitch Client-Id 等）。
+- **构建/依赖**：Dockerfile 升 Node.js 22 LTS、非 root 运行；新增 `pydantic>=2.0.0` 依赖声明；全项目类型检查（Pyright/Pyrefly/basedpyright）清理。
 
 ### v4.0.7 (2025-10-24)
 

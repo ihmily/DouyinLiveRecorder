@@ -10,14 +10,22 @@ from pathlib import Path
 from typing import Callable, TextIO
 
 
+# 初始化 gettext 翻译环境，返回绑定域与目录的 gettext 函数。
 def init_gettext(locale_dir: str | Path, locale_name: str) -> Callable[[str], str]:
     # 初始化 gettext 翻译环境。
     # 不再写死 LANG 环境变量：".utf8" 后缀在 macOS 上不是合法 locale（应为 .UTF-8），
     # 且该变量会经 gui.py 的 env=os.environ.copy() 传染整个录制子进程树，
     # 导致子进程 locale.setlocale(LC_ALL, '') 抛 locale.Error。
+    #
+    # 同时不再依赖 gettext.gettext 的全局查找：那会按 LANGUAGE/LC_ALL/LANG 环境变量
+    # 推断语言目录，而 Windows 客户端普遍不设置这些变量（本仓库又未随包分发 .mo 的
+    # 回退查找路径），结果 zh_CN.mo 永远查不到、翻译静默失效。
+    # 这里显式指定 languages=[locale_name] 直接加载 locale_dir 下对应 .mo，
+    # 缺文件时回退恒等映射，行为与之前一致。
     _ = gettext.bindtextdomain(locale_name, locale_dir)
     _ = gettext.textdomain(locale_name)
-    return gettext.gettext
+    translation = gettext.translation(locale_name, locale_dir, languages=[locale_name], fallback=True)
+    return translation.gettext
 
 
 # 检测执行目录，支持打包后 (_internal) 和源码两种运行方式
@@ -39,6 +47,7 @@ original_print = builtins.print  # 保存原始 print 函数
 _project_root = os.path.normpath(str(module_dir))
 
 
+# 判断调用者文件是否位于需要翻译的项目源码目录下。
 def _should_translate(caller_file: str) -> bool:
     # 判断调用者文件是否来自需要翻译的源码目录
     caller_norm = os.path.normpath(caller_file)
@@ -46,6 +55,7 @@ def _should_translate(caller_file: str) -> bool:
     return caller_norm.startswith(_project_root)
 
 
+# 包装 print：对来自源码目录的输出自动翻译后再打印。
 def translated_print(
     *args: object,
     sep: str = " ",

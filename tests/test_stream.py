@@ -291,6 +291,161 @@ class TestGetDouyinStreamUrl:
         assert result.get("actual_quality") in ("SD", "HD")
 
 
+class TestGetHuyaStreamUrl:
+    # get_huya_stream_url: 虎牙 web 路径 HLS 解析。枚举全部 CDN 候选（不再固定取 index0），
+    # HS-first 排序，使用房间页内嵌防盗链参数、统一 http（https 实测 403），
+    # 全部候选注入 m3u8_url_list/flv_url_list 供 select_source_url 按可达性校验选用。
+
+    @staticmethod
+    def _json(ordered_cdn_types: list[str]) -> dict[str, object]:
+        # 复刻 room 179966 房间页 gameStreamInfoList 结构（含 sCdnType/sStreamName/各 URL/反链参数）
+        base = {
+            "AL": ("http://al.hls.huya.com/src", "http://al.flv.huya.com/src", "wsSecret=al&wsTime=6a&ctype=huya_live&fs=bgct"),
+            "TX": ("http://tx.hls.huya.com/src", "http://tx.flv.huya.com/src", "wsSecret=tx&wsTime=6a&ctype=huya_live&fs=bgct"),
+            "HS": ("http://hs.hls.huya.com/src", "http://hs.flv.huya.com/src", "wsSecret=hs&wsTime=6a&ctype=huya_live&fs=bgct"),
+        }
+        stream_list = []
+        for cdn in ordered_cdn_types:
+            hls, flv, anti = base[cdn]
+            stream_list.append(
+                {
+                    "sCdnType": cdn,
+                    "sStreamName": "STREAMNAME",
+                    "sFlvUrl": flv,
+                    "sFlvUrlSuffix": "flv",
+                    "sFlvAntiCode": anti,
+                    "sHlsUrl": hls,
+                    "sHlsUrlSuffix": "m3u8",
+                    "sHlsAntiCode": anti,
+                }
+            )
+        return {"data": [{"gameLiveInfo": {"nick": "anchor", "introduction": "title"}, "gameStreamInfoList": stream_list}]}
+
+    @pytest.mark.asyncio
+    async def test_enumerates_all_cdn_candidates_hs_first(self):
+        # room 179966 实测：gameStreamInfoList 顺序为 [AL, X, HS]（AL 为 index0 且离线）。
+        # 修复前固定取 index0=AL 导致 HLS 整轮不可达；修复后枚举全部候选、HS 排首位选中。
+        from src.stream import get_huya_stream_url
+
+        json_data = self._json(["AL", "TX", "HS"])
+        result = await get_huya_stream_url(json_data)
+        assert result["is_live"] is True
+        # 主源为 HS（不再因 AL 在 index0 而选到离线 AL）
+        assert result["m3u8_url"] == "http://hs.hls.huya.com/src/STREAMNAME.m3u8?wsSecret=hs&wsTime=6a&ctype=huya_live&fs=bgct"
+        # 候选列表按 HS→TX→AL（HS-first）
+        assert result["m3u8_url_list"] == [
+            "http://hs.hls.huya.com/src/STREAMNAME.m3u8?wsSecret=hs&wsTime=6a&ctype=huya_live&fs=bgct",
+            "http://tx.hls.huya.com/src/STREAMNAME.m3u8?wsSecret=tx&wsTime=6a&ctype=huya_live&fs=bgct",
+            "http://al.hls.huya.com/src/STREAMNAME.m3u8?wsSecret=al&wsTime=6a&ctype=huya_live&fs=bgct",
+        ]
+        # 全部为 http（无 https 化），且三条 FLV 候选齐全
+        assert all(u.startswith("http://") for u in result["m3u8_url_list"] + result["flv_url_list"])
+        assert len(result["flv_url_list"]) == 3
+
+    @pytest.mark.asyncio
+    async def test_https_in_input_downgraded_to_http(self):
+        # 房间页若返回 https 形式的 CDN URL，必须降为 http（https 实测 403）
+        from src.stream import get_huya_stream_url
+
+        json_data = {
+            "data": [
+                {
+                    "gameLiveInfo": {"nick": "anchor", "introduction": "title"},
+                    "gameStreamInfoList": [
+                        {
+                            "sCdnType": "HS",
+                            "sStreamName": "STREAMNAME",
+                            "sFlvUrl": "https://hs.flv.huya.com/src",
+                            "sFlvUrlSuffix": "flv",
+                            "sFlvAntiCode": "wsSecret=hs&wsTime=6a&ctype=huya_live&fs=bgct",
+                            "sHlsUrl": "https://hs.hls.huya.com/src",
+                            "sHlsUrlSuffix": "m3u8",
+                            "sHlsAntiCode": "wsSecret=hs&wsTime=6a&ctype=huya_live&fs=bgct",
+                        }
+                    ],
+                }
+            ]
+        }
+        result = await get_huya_stream_url(json_data)
+        assert result["m3u8_url"].startswith("http://")
+        assert result["m3u8_url_list"][0].startswith("http://")
+
+    @pytest.mark.asyncio
+    async def test_empty_game_stream_info_list_returns_not_live(self):
+        from src.stream import get_huya_stream_url
+
+        json_data = {"data": [{"gameLiveInfo": {"nick": "anchor"}, "gameStreamInfoList": []}]}
+        result = await get_huya_stream_url(json_data)
+        assert result["is_live"] is False
+
+
+class TestGetDouyuStreamUrl:
+    # get_douyu_stream_url: 斗鱼流解析 + FLV→m3u8 同 token HLS 候选。
+
+    @pytest.mark.asyncio
+    async def test_offline_returns_not_live(self):
+        from src.stream import get_douyu_stream_url
+
+        result = await get_douyu_stream_url({"anchor_name": "dy_off", "is_live": False})
+        assert result["is_live"] is False
+        assert "flv_url" not in result and "m3u8_url" not in result
+
+    @pytest.mark.asyncio
+    async def test_flv_url_carries_m3u8_candidate(self):
+        # 同 token 的 .flv → .m3u8 改写：查询串原样保留，FLV/record_url 不受影响。
+        from src.stream import get_douyu_stream_url
+
+        json_data = {"anchor_name": "dy_live", "is_live": True, "room_id": 100}
+        flv_data = {
+            "data": {
+                "rtmp_url": "https://hw1a.douyucdn2.cn/live",
+                "rtmp_live": "100rPCLP.flv?wsAuth=abc&token=t",
+                "rate": 0,
+            }
+        }
+        with patch("src.stream.get_douyu_stream_data", new_callable=AsyncMock, return_value=flv_data):
+            result = await get_douyu_stream_url(json_data, video_quality="OD")
+        assert result["is_live"] is True
+        assert result["flv_url"] == "https://hw1a.douyucdn2.cn/live/100rPCLP.flv?wsAuth=abc&token=t"
+        assert result["record_url"] == result["flv_url"]
+        assert result["m3u8_url"] == "https://hw1a.douyucdn2.cn/live/100rPCLP.m3u8?wsAuth=abc&token=t"
+
+    @pytest.mark.asyncio
+    async def test_flv_without_query_keeps_clean_m3u8(self):
+        # 无查询串的 FLV 改写后不得残留悬空 "?"
+        from src.stream import get_douyu_stream_url
+
+        json_data = {"anchor_name": "dy_live", "is_live": True, "room_id": 999}
+        flv_data = {"data": {"rtmp_url": "https://x.douyucdn2.cn/live", "rtmp_live": "999x.flv", "rate": 0}}
+        with patch("src.stream.get_douyu_stream_data", new_callable=AsyncMock, return_value=flv_data):
+            result = await get_douyu_stream_url(json_data)
+        assert result["m3u8_url"] == "https://x.douyucdn2.cn/live/999x.m3u8"
+
+    @pytest.mark.asyncio
+    async def test_non_flv_rtmp_live_has_no_m3u8(self):
+        # rtmp_live 非 .flv 后缀（如 h265 流）不改写，避免伪造不可用的 m3u8 候选
+        from src.stream import get_douyu_stream_url
+
+        json_data = {"anchor_name": "dy_h265", "is_live": True, "room_id": 888}
+        flv_data = {"data": {"rtmp_url": "https://x.douyucdn2.cn/live", "rtmp_live": "888x.xsls?wsAuth=abc", "rate": 0}}
+        with patch("src.stream.get_douyu_stream_data", new_callable=AsyncMock, return_value=flv_data):
+            result = await get_douyu_stream_url(json_data)
+        assert result["flv_url"] == "https://x.douyucdn2.cn/live/888x.xsls?wsAuth=abc"
+        assert "m3u8_url" not in result
+
+    @pytest.mark.asyncio
+    async def test_empty_rtmp_live_returns_no_urls(self):
+        # rtmp_live 为空（风控/边界）：is_live=True 但无流地址，交由 select_source_url 告警
+        from src.stream import get_douyu_stream_url
+
+        json_data = {"anchor_name": "dy_edge", "is_live": True, "room_id": 777}
+        flv_data = {"data": {"rtmp_url": "", "rtmp_live": "", "rate": 0}}
+        with patch("src.stream.get_douyu_stream_data", new_callable=AsyncMock, return_value=flv_data):
+            result = await get_douyu_stream_url(json_data)
+        assert result["is_live"] is True
+        assert "flv_url" not in result and "m3u8_url" not in result
+
+
 class TestGetTiktokStreamUrl:
     # get_tiktok_stream_url: TikTok 直播流解析。
 

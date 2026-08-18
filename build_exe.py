@@ -123,6 +123,7 @@ coll = COLLECT(
 """
 
 
+# 解析 pyproject.toml 中的 version 字段，返回版本字符串（失败回退 "0.0.0"）
 def read_version() -> str:
     # 从 pyproject.toml 中解析版本号（单一事实源），解析失败时回退到 0.0.0
     text = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
@@ -130,6 +131,7 @@ def read_version() -> str:
     return m.group(1) if m else "0.0.0"
 
 
+# 打包前预编译所有入口脚本与 src/ 源码，提前以文件名+行号暴露语法错误
 def preflight_syntax_check() -> None:
     # 预检：在启动 PyInstaller 之前先编译入口脚本与 src/ 全部源码。
     #
@@ -159,6 +161,7 @@ def preflight_syntax_check() -> None:
     print(f"[build] 预检通过：{len(targets)} 个源码文件语法正常")
 
 
+# 生成 spec 模板并调用 PyInstaller 完成 CLI/GUI/Web 三入口 onedir 打包
 def run_pyinstaller() -> None:
     # 生成 spec 并调用 PyInstaller 完成三入口 onedir 打包
     preflight_syntax_check()
@@ -169,6 +172,7 @@ def run_pyinstaller() -> None:
     _ = subprocess.run(cmd, check=True, cwd=PROJECT_ROOT)
 
 
+# 将仓库内 ffmpeg/node/config 复制到发布根目录（exe 同级），运行时可直接读写
 def copy_external_binaries(include_runtime: bool = True) -> None:
     # 将仓库内已有的 ffmpeg / node / config 目录复制到发布根目录（exe 同级）。
     #
@@ -204,6 +208,7 @@ def copy_external_binaries(include_runtime: bool = True) -> None:
 # ==================== 运行时二进制下载（--dual full 版本） ====================
 
 
+# 用 urllib 下载文件到 dest 并打印进度（自动跟随重定向）
 def _download_file(url: str, dest: Path, desc: str) -> None:
     # 下载文件到 dest（带简单进度输出）。urllib 默认跟随重定向。
     print(f"[build] 下载 {desc}：{url}")
@@ -223,6 +228,7 @@ def _download_file(url: str, dest: Path, desc: str) -> None:
         print()
 
 
+# 下载并解压匹配当前平台的 Node.js LTS 到 target_dir/node/，返回是否成功
 def _download_nodejs(target_dir: Path) -> bool:
     # 下载并解压 Node.js 预构建二进制到 target_dir/node/。
     # 使用官方 dist 源（https://nodejs.org/dist/），自动选取最新 LTS 与当前平台/架构匹配的包。
@@ -275,6 +281,7 @@ def _download_nodejs(target_dir: Path) -> bool:
         return False
 
 
+# 按平台下载并解压 ffmpeg/ffprobe 到 target_dir/ffmpeg/，返回是否成功
 def _download_ffmpeg(target_dir: Path) -> bool:
     # 下载并解压 ffmpeg 二进制到 target_dir/ffmpeg/。
     #   Windows: gyan.dev release-essentials（提取 bin/）
@@ -327,12 +334,14 @@ def _download_ffmpeg(target_dir: Path) -> bool:
                 for item in Path(tmp).iterdir():
                     if item.is_dir() and item.name.startswith("ffmpeg-"):
                         for binary in ("ffmpeg", "ffprobe"):
-                            src = item / binary
-                            if src.exists():
+                            bin_path = item / binary
+                            if bin_path.is_file():
                                 # shutil.copy2 返回目标路径，此处未使用其结果，赋给 _ 消除 reportUnusedCallResult；
                                 # 参数直接用 Path（兼容 os.PathLike），省略冗余的 str() 转换。
-                                _ = shutil.copy2(src, ffmpeg_dir / binary)
-                        break
+                                _ = shutil.copy2(bin_path, ffmpeg_dir / binary)
+                    # 跳出外层目录遍历（tar 内仅一个 ffmpeg-* 目录），
+                    # 注意：必须位于内层 for 循环之外，否则只会复制 ffmpeg 而漏掉 ffprobe。
+                    break
 
         archive.unlink(missing_ok=True)
         print(f"[build] ffmpeg 已安装到 {ffmpeg_dir}")
@@ -342,6 +351,7 @@ def _download_ffmpeg(target_dir: Path) -> bool:
         return False
 
 
+# 下载 ffmpeg + node 运行时（单组件失败不中断），用于 --dual 的 full 版本
 def download_runtime_binaries(target_dir: Path) -> None:
     # 下载 ffmpeg + node 到 target_dir（用于 --dual 的 full 版本）。
     # 单个组件失败不中断，仅打印警告（full zip 仍可生成，只是缺该组件）。
@@ -350,6 +360,7 @@ def download_runtime_binaries(target_dir: Path) -> None:
     _ = _download_nodejs(target_dir)
 
 
+# 将发布目录压缩为带平台/架构标识的 zip（suffix 区分 lite/full），返回路径
 def make_zip(version: str, suffix: str = "") -> Path:
     # 把发布目录压缩为带平台与架构标识的 zip。
     # suffix 用于 --dual 模式区分 lite / full（如 "-lite"、"-full"）。
@@ -366,6 +377,7 @@ def make_zip(version: str, suffix: str = "") -> Path:
 FATAL_MARKERS = ("Traceback (most recent call last)", "ModuleNotFoundError", "ImportError")
 
 
+# 准备 URL 配置文件：若为空则写入一条注释示例 URL，避免 CLI 阻塞在 input()。
 def _prepare_url_config() -> None:
     # 写入一条注释 URL，避免 URL 配置为空时 CLI 阻塞在 input()
     #
@@ -377,17 +389,25 @@ def _prepare_url_config() -> None:
         _ = url_cfg.write_text("#https://live.douyin.com/000000000000\n", encoding="utf-8")
 
 
-def _launch(exe: Path) -> subprocess.Popen[str]:
+# 以独立进程组/会话启动子进程，便于冒烟结束一次性杀掉整棵进程树
+# 以独立进程组/会话启动子进程，便于冒烟结束一次性杀掉整棵进程树
+def _launch(exe: Path, extra_env: "dict[str, str] | None" = None) -> subprocess.Popen[str]:
     # 让子进程自成进程组/会话：冒烟结束时能一次性杀掉整棵进程树
     # （含应用 spawn 的 ffmpeg 子进程），避免子进程孤儿化被 runner 清理时刷屏。
     #   - Unix:    start_new_session=True → 子进程成为新会话首领，PGID == 其 PID
     #   - Windows: creationflags=CREATE_NEW_PROCESS_GROUP → 新进程组，配合 taskkill /T 递归终止
     # 两个参数均显式传递（非本平台的分支取默认 0/False），既满足类型检查又保持跨平台语义。
+    # extra_env：向子进程注入的额外环境变量（合并到 os.environ，不覆盖其余变量）。
+    #   冒烟测试用它向 Web 面板传入 DOUYIN_WEB_ALLOW_INSECURE=1 以绕过「非回环地址需认证」护栏。
     start_new_session = not IS_WIN
     creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if IS_WIN else 0
+    launch_env = os.environ.copy()
+    if extra_env:
+        launch_env.update(extra_env)
     return subprocess.Popen(
         [str(exe)],
         cwd=RELEASE_DIR,
+        env=launch_env,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -399,6 +419,7 @@ def _launch(exe: Path) -> subprocess.Popen[str]:
     )
 
 
+# 杀掉整个进程树（应用本体及其 ffmpeg 子进程），跨平台处理 Windows/Unix。
 def _kill_tree(proc: subprocess.Popen[str]) -> None:  # pylint: disable=not-callable,no-member
     # 杀掉整个进程树（应用本体 + 其 spawn 的 ffmpeg 等子进程）。
     # 仅杀父进程会留下孤儿化的 ffmpeg，最终被 runner 的 orphan-process 清理收尸，
@@ -430,6 +451,7 @@ def _kill_tree(proc: subprocess.Popen[str]) -> None:  # pylint: disable=not-call
         pass
 
 
+# 收尾：终止进程并检查输出中是否有崩溃堆栈（可按 ignore_patterns 豁免良性输出）
 def _finish(
     proc: subprocess.Popen[str],
     name: str,
@@ -463,6 +485,7 @@ def _finish(
     print(f"[smoke:{name}] 通过 ✅")
 
 
+# 冒烟：运行 CLI 数秒确认进入监控循环且无崩溃堆栈
 def smoke_cli(timeout: int = 25) -> None:
     # CLI：运行数秒确认进入监控循环且无崩溃
     exe = RELEASE_DIR / f"{APP_NAME}{EXE_SUFFIX}"
@@ -474,6 +497,7 @@ def smoke_cli(timeout: int = 25) -> None:
     _finish(proc, "cli", expect_alive=True)
 
 
+# 冒烟：启动 Web 后 HTTP 探活首页（IPv4+localhost），能返回即视为面板可用
 def smoke_web(timeout: int = 90, port: int = 8000) -> None:
     # Web：启动后 HTTP 探活首页，能返回即视为面板可用。
     # 探测地址同时覆盖 IPv4(127.0.0.1) 与主机名(localhost)：
@@ -485,10 +509,14 @@ def smoke_web(timeout: int = 90, port: int = 8000) -> None:
     # 关键：用 ProxyHandler({}) 构造「无代理」opener。macOS 上 urllib 默认会读取
     # 系统代理配置（SystemConfiguration），CI runner 的 localhost 请求可能被路由到
     # 不存在的代理而挂起超时——即便服务已正常监听。禁用代理后探测直连本机端口。
+    # 安全护栏（web.py C1）：未启用 Web 认证时拒绝监听非回环地址（config 默认 web_host=0.0.0.0）。
+    # 冒烟测试仅做本地 HTTP 探活，从不真正暴露到局域网，故注入 DOUYIN_WEB_ALLOW_INSECURE=1
+    # 放行——这正是该环境变量的设计用途（本地 CI/沙箱内临时暴露），不影响生产部署的默认安全行为；
+    # 同时保留了「真实绑定 0.0.0.0」的验证路径，比把 web_host 改成 127.0.0.1 更能暴露回归。
     exe = RELEASE_DIR / f"{APP_NAME}-Web{EXE_SUFFIX}"
     hosts = ("127.0.0.1", "localhost")
     print(f"[smoke:web] 启动 {exe}，探活 http://127.0.0.1:{port}/（最长 {timeout}s）...")
-    proc = _launch(exe)
+    proc = _launch(exe, extra_env={"DOUYIN_WEB_ALLOW_INSECURE": "1"})
     ok = False
     start = time.time()
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -512,6 +540,7 @@ def smoke_web(timeout: int = 90, port: int = 8000) -> None:
     print("[smoke:web] HTTP 探活成功 ✅")
 
 
+# 冒烟：启动 GUI 数秒确认窗口存活，无显示环境自动跳过
 def smoke_gui(timeout: int = 8) -> None:
     # GUI：启动数秒确认窗口进程存活且无崩溃；无显示环境自动跳过
     if sys.platform not in ("win32", "darwin") and not os.environ.get("DISPLAY"):
@@ -529,6 +558,7 @@ def smoke_gui(timeout: int = 8) -> None:
     _finish(proc, "gui", expect_alive=True, ignore_patterns=("Failed to dock icon",))
 
 
+# 依次运行 CLI/Web/GUI 冒烟测试，全部通过才算成功
 def smoke_test() -> None:
     _prepare_url_config()
     smoke_cli()
@@ -537,6 +567,7 @@ def smoke_test() -> None:
     print("[smoke] 全部冒烟测试通过 ✅")
 
 
+# 将 stdout/stderr 配置为 UTF-8，避免 Windows CI 下中文日志抛 UnicodeEncodeError
 def _ensure_utf8_streams() -> None:
     # Windows CI 的 stdout/stderr 默认编码为 cp1252，无法输出中文日志会抛
     # UnicodeEncodeError。重新配置为 UTF-8，并让后续派生的 Python 子进程也用 UTF-8。
@@ -550,6 +581,7 @@ def _ensure_utf8_streams() -> None:
                 pass
 
 
+# 解析命令行参数并驱动打包/可选冒烟/可选压缩的全流程
 def main() -> None:
     _ensure_utf8_streams()
     parser = argparse.ArgumentParser(description=f"{APP_NAME} 打包脚本")

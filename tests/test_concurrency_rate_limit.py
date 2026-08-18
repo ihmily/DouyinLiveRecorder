@@ -7,6 +7,7 @@
 #
 import threading
 import time
+from collections.abc import Callable
 
 # ---------------------------------------------------------------------------
 # 1. threading.Lock 线程安全：模拟统一凭证管理
@@ -16,10 +17,11 @@ import time
 class TestThreadSafeCredentialCache:
     # 验证 threading.Lock 保护共享缓存的线程安全性。
 
-    def test_concurrent_access_only_fetches_once(self):
+    def test_concurrent_access_only_fetches_once(self) -> None:
         # 多线程并发访问时，底层 fetch 只被调用一次。
         lock = threading.Lock()
-        cached_value: str = ""
+        # 用 None 作显式「未初始化」哨兵,避免空串/falsy 值被 if cached_value 误判为未缓存。
+        cached_value: str | None = None
         fetch_count = 0
 
         def fake_fetch() -> str:
@@ -30,12 +32,14 @@ class TestThreadSafeCredentialCache:
 
         def get_credential() -> str:
             nonlocal cached_value
-            if cached_value:
+            if cached_value is not None:
                 return cached_value
             with lock:
                 # 双重检查：拿到锁后再看一次
-                if not cached_value:
+                if cached_value is None:
                     cached_value = fake_fetch()
+                # 此处 cached_value 必然已填充(None 哨兵下不可能为空串),断言收窄类型。
+                assert cached_value is not None
                 return cached_value
 
         results: list[str] = []
@@ -53,19 +57,19 @@ class TestThreadSafeCredentialCache:
         assert all(r == "credential_value" for r in results)
         assert fetch_count == 1, f"期望 fetch 仅调用 1 次，实际调用 {fetch_count} 次"
 
-    def test_lock_prevents_race_condition(self):
+    def test_lock_prevents_race_condition(self) -> None:
         # 无锁计数器会出现竞态，有锁计数器结果正确。
         counter_no_lock = 0
         counter_with_lock = 0
         lock = threading.Lock()
         iterations = 1000
 
-        def increment_no_lock():
+        def increment_no_lock() -> None:
             nonlocal counter_no_lock
             for _ in range(iterations):
                 counter_no_lock += 1
 
-        def increment_with_lock():
+        def increment_with_lock() -> None:
             nonlocal counter_with_lock
             for _ in range(iterations):
                 with lock:
@@ -84,7 +88,7 @@ class TestThreadSafeCredentialCache:
         assert counter_with_lock == 10 * iterations
         # 无锁计数器在高竞争下 *通常* 会小于期望值，但不保证一定不等，故仅断言有锁正确
 
-    def test_lock_acquire_nonblocking(self):
+    def test_lock_acquire_nonblocking(self) -> None:
         # 非阻塞 acquire：未抢到锁的线程应等待而非重复获取。
         lock = threading.Lock()
         acquired_order: list[int] = []
@@ -117,7 +121,7 @@ class TestThreadSafeCredentialCache:
 class TestRateLimiter:
     # 验证速率限制器的最小间隔控制。
 
-    def _make_rate_limiter(self, min_interval: float):
+    def _make_rate_limiter(self, min_interval: float) -> Callable[[], float]:
         # 创建一个速率限制器闭包。
         rate_lock = threading.Lock()
         last_request_time: float = 0.0
@@ -136,7 +140,7 @@ class TestRateLimiter:
 
         return rate_limit
 
-    def test_rate_limit_enforces_minimum_interval(self):
+    def test_rate_limit_enforces_minimum_interval(self) -> None:
         # 连续调用间隔不小于 min_interval。
         min_interval = 0.1
         rate_limit = self._make_rate_limiter(min_interval)
@@ -150,7 +154,7 @@ class TestRateLimiter:
             gap = timestamps[i] - timestamps[i - 1]
             assert gap >= min_interval * 0.9, f"第 {i} 次间隔 {gap:.4f}s < 期望 {min_interval}s"
 
-    def test_rate_limit_thread_safety(self):
+    def test_rate_limit_thread_safety(self) -> None:
         # 多线程并发调用速率限制器，所有调用均被串行化。
         min_interval = 0.05
         rate_limit = self._make_rate_limiter(min_interval)
@@ -158,7 +162,7 @@ class TestRateLimiter:
         timestamps: list[float] = []
         ts_lock = threading.Lock()
 
-        def worker():
+        def worker() -> None:
             rate_limit()
             with ts_lock:
                 timestamps.append(time.monotonic())
@@ -176,7 +180,7 @@ class TestRateLimiter:
             gap = timestamps[i] - timestamps[i - 1]
             assert gap >= min_interval * 0.8, f"并发场景第 {i} 次间隔 {gap:.4f}s < 期望 {min_interval}s"
 
-    def test_rate_limit_no_wait_when_enough_time_passed(self):
+    def test_rate_limit_no_wait_when_enough_time_passed(self) -> None:
         # 间隔足够长时不应额外等待。
         min_interval = 0.05
         rate_limit = self._make_rate_limiter(min_interval)

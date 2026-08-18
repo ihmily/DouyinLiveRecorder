@@ -913,6 +913,145 @@ class TestHuyaAppStreamUrl:
             assert "flv_url" in result
 
     @pytest.mark.asyncio
+    async def test_priority_prefers_tx_over_al_at_index0(self):
+        # AL 抢占 index 0 时, 候选仍应按 HS-first 优先级排序, TX 排在 AL 前,
+        # 而非固定取 play_url_list[0](AL)。所有候选注入 m3u8_url_list/flv_url_list,
+        # 由 select_source_url 按可达性校验选用。URL 统一为 http（https 实测 403）。
+        resp = json.dumps(
+            {
+                "data": {
+                    "profileInfo": {"nick": "anchor"},
+                    "realLiveStatus": "ON",
+                    "liveData": {"introduction": "test title"},
+                    "stream": {
+                        "baseSteamInfoList": [
+                            {
+                                "sCdnType": "AL",
+                                "sStreamName": "alstream",
+                                "sFlvUrl": "http://al.flv.example.com",
+                                "sFlvAntiCode": "auth=al",
+                                "sHlsUrl": "http://al.hls.example.com",
+                                "sHlsAntiCode": "auth=al",
+                            },
+                            {
+                                "sCdnType": "TX",
+                                "sStreamName": "txstream",
+                                "sFlvUrl": "http://tx.flv.example.com",
+                                "sFlvAntiCode": "codec=flv&ctype=tars_mp&fs=bhct",
+                                "sHlsUrl": "http://tx.hls.example.com",
+                                "sHlsAntiCode": "auth=tx",
+                            },
+                        ]
+                    },
+                }
+            }
+        )
+        with patch("src.spider.async_req", new_callable=AsyncMock, return_value=resp):
+            result = await get_huya_app_stream_url("https://www.huya.com/12345")
+            assert result["is_live"] is True
+            # 三项均来自 TX（TX 优先于 AL，且非 index0 的 AL），scheme 为 http
+            assert result["m3u8_url"] == "http://tx.hls.example.com/txstream.m3u8?auth=tx"
+            assert result["flv_url"] == "http://tx.flv.example.com/txstream.flv?codec=flv&ctype=huya_webh5&fs=bgct"
+            assert result["record_url"] == "http://tx.flv.example.com/txstream.flv?codec=flv&ctype=huya_webh5&fs=bgct"
+            assert "alstream" not in result["m3u8_url"]
+            assert "alstream" not in result["flv_url"]
+            # 候选列表按 TX→AL 顺序注入（HS-first 排序下 TX 在 AL 前）
+            assert result["m3u8_url_list"] == [
+                "http://tx.hls.example.com/txstream.m3u8?auth=tx",
+                "http://al.hls.example.com/alstream.m3u8?auth=al",
+            ]
+            assert result["flv_url_list"] == [
+                "http://tx.flv.example.com/txstream.flv?codec=flv&ctype=huya_webh5&fs=bgct",
+                "http://al.flv.example.com/alstream.flv?auth=al",
+            ]
+
+    @pytest.mark.asyncio
+    async def test_hs_cdn_selected_first_when_present(self):
+        # 含 HS 候选时按 HS-first 排序, 主源与候选列表首位均为 HS（实测 HS 为 HLS 可靠承载线路）。
+        resp = json.dumps(
+            {
+                "data": {
+                    "profileInfo": {"nick": "anchor"},
+                    "realLiveStatus": "ON",
+                    "liveData": {"introduction": "test title"},
+                    "stream": {
+                        "baseSteamInfoList": [
+                            {
+                                "sCdnType": "AL",
+                                "sStreamName": "alstream",
+                                "sFlvUrl": "http://al.flv.example.com",
+                                "sFlvAntiCode": "auth=al",
+                                "sHlsUrl": "http://al.hls.example.com",
+                                "sHlsAntiCode": "auth=al",
+                            },
+                            {
+                                "sCdnType": "HS",
+                                "sStreamName": "hsstream",
+                                "sFlvUrl": "http://hs.flv.example.com",
+                                "sFlvAntiCode": "auth=hs",
+                                "sHlsUrl": "http://hs.hls.example.com",
+                                "sHlsAntiCode": "auth=hs",
+                            },
+                            {
+                                "sCdnType": "TX",
+                                "sStreamName": "txstream",
+                                "sFlvUrl": "http://tx.flv.example.com",
+                                "sFlvAntiCode": "auth=tx",
+                                "sHlsUrl": "http://tx.hls.example.com",
+                                "sHlsAntiCode": "auth=tx",
+                            },
+                        ]
+                    },
+                }
+            }
+        )
+        with patch("src.spider.async_req", new_callable=AsyncMock, return_value=resp):
+            result = await get_huya_app_stream_url("https://www.huya.com/12345")
+            assert result["is_live"] is True
+            # 主源取 HS
+            assert result["m3u8_url"] == "http://hs.hls.example.com/hsstream.m3u8?auth=hs"
+            # 候选列表按 HS→TX→AL 顺序（HS-first）
+            assert result["m3u8_url_list"] == [
+                "http://hs.hls.example.com/hsstream.m3u8?auth=hs",
+                "http://tx.hls.example.com/txstream.m3u8?auth=tx",
+                "http://al.hls.example.com/alstream.m3u8?auth=al",
+            ]
+            # 无 https 化：所有 URL 均保持 http
+            assert all(u.startswith("http://") for u in result["m3u8_url_list"] + result["flv_url_list"])
+
+    @pytest.mark.asyncio
+    async def test_al_used_as_last_resort_when_only_cdn(self):
+        # 仅 AL 可用时(末位兜底)仍应正常选源, 不出现空地址; scheme 保持 http。
+        resp = json.dumps(
+            {
+                "data": {
+                    "profileInfo": {"nick": "anchor"},
+                    "realLiveStatus": "ON",
+                    "liveData": {"introduction": "test title"},
+                    "stream": {
+                        "baseSteamInfoList": [
+                            {
+                                "sCdnType": "AL",
+                                "sStreamName": "alstream",
+                                "sFlvUrl": "http://al.flv.example.com",
+                                "sFlvAntiCode": "auth=al",
+                                "sHlsUrl": "http://al.hls.example.com",
+                                "sHlsAntiCode": "auth=al",
+                            }
+                        ]
+                    },
+                }
+            }
+        )
+        with patch("src.spider.async_req", new_callable=AsyncMock, return_value=resp):
+            result = await get_huya_app_stream_url("https://www.huya.com/12345")
+            assert result["is_live"] is True
+            assert result["m3u8_url"] == "http://al.hls.example.com/alstream.m3u8?auth=al"
+            assert result["flv_url"] == "http://al.flv.example.com/alstream.flv?auth=al"
+            # 仅 AL 时 record_url 与 flv 同源且保持 http（不强制 https 化）
+            assert result["record_url"] == "http://al.flv.example.com/alstream.flv?auth=al"
+
+    @pytest.mark.asyncio
     async def test_error_returns_false(self):
         with patch("src.spider.async_req", new_callable=AsyncMock, side_effect=Exception("net")):
             result = await get_huya_app_stream_url("https://www.huya.com/12345")

@@ -232,3 +232,37 @@ button.small { background: var(--primary-soft); color: var(--primary); border: n
     .config-row { grid-template-columns: 1fr; }
     .tabs { overflow-x: auto; }
 }
+
+/* ===== 弹幕监控 ===== */
+.danmaku-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+.danmaku-toolbar h3 { margin-bottom: 0; flex: 1; }
+.danmaku-toolbar select {
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+    max-width: 220px;
+}
+.danmaku-terminal { height: 340px; line-height: 1.7; }
+.danmaku-terminal .dm-line { display: block; }
+.danmaku-terminal .dm-time { color: var(--muted); opacity: 0.7; }
+.danmaku-terminal .dm-room { color: #56D364; }
+.danmaku-terminal .dm-user { color: var(--terminal-fg); font-weight: 600; }
+.danmaku-terminal .dm-gift .dm-user { color: var(--terminal-warn); }
+.danmaku-terminal .dm-sc .dm-user { color: #DB61A2; }
+.danmaku-terminal .dm-dropped { color: var(--muted); opacity: 0.7; font-style: italic; }
+.danmaku-terminal .dm-empty { color: var(--muted); opacity: 0.7; }
+.danmaku-hint {
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 8px;
+}
+.dm-status-on { color: var(--success); font-weight: 600; }
+.dm-status-off { color: var(--danger); font-weight: 600; }
