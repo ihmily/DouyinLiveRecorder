@@ -327,7 +327,9 @@ def _validate_stream_url(
                 # 同语义）：斗鱼 hw/虎牙 al 等 CDN 对毫秒级连击探针（HEAD→GET）偶发 403，同 URL
                 # 片刻后重试即 200（探针误杀、ffmpeg 单次 GET 正常）。HLS 优先于 FLV 录制——
                 # 斗鱼游客态 FLV 长连接约 70 秒被 CDN 掐断，HLS 逐段拉取免疫，须尽力救回。
-                probe: httpx.Response | None = None  # 失败路径（last_resort/告警）需 Range-GET 结果；先置 None 避免未绑定
+                probe: httpx.Response | None = (
+                    None  # 失败路径（last_resort/告警）需 Range-GET 结果；先置 None 避免未绑定
+                )
                 for attempt in range(2):
                     probe = client.get(url, headers={"Range": "bytes=0-0"}, follow_redirects=True)
                     if probe.status_code in (200, 206):
@@ -467,7 +469,11 @@ def select_source_url(
             # ffmpeg 不可拉流），其余 FLV 候选失败继续回退下一候选/record_url。
             is_last = idx == len(flv_candidates) - 1
             if _validate_stream_url(
-                cand, proxy_addr=proxy_addr, platform=platform, cookies=cookies, last_resort=is_last and not has_record_url
+                cand,
+                proxy_addr=proxy_addr,
+                platform=platform,
+                cookies=cookies,
+                last_resort=is_last and not has_record_url,
             ):
                 return cand
         logger.warning("FLV URL validation failed, trying record_url fallback")

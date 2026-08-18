@@ -171,7 +171,9 @@ class TestFetchCookies:
     async def test_default_fetcher_is_async_req(self, monkeypatch: pytest.MonkeyPatch) -> None:
         seen: dict[str, Any] = {}
 
-        async def fake_async_req(url: str, *, proxy_addr: str | None = None, headers: Any = None, **kwargs: Any) -> dict[str, Any]:
+        async def fake_async_req(
+            url: str, *, proxy_addr: str | None = None, headers: Any = None, **kwargs: Any
+        ) -> dict[str, Any]:
             seen["url"] = url
             return {"ttwid": "from_async_req"}
 
@@ -192,7 +194,9 @@ class TestFetchCookies:
             await asyncio.sleep(0.01)
             return {"a": "1"}
 
-        results = await asyncio.gather(*(fetch_cookies("https://live.example.com/", fetcher=fake_fetcher) for _ in range(5)))
+        results = await asyncio.gather(
+            *(fetch_cookies("https://live.example.com/", fetcher=fake_fetcher) for _ in range(5))
+        )
         assert all(r == {"a": "1"} for r in results)
 
     def test_cross_thread_concurrent_fetch_once(self) -> None:

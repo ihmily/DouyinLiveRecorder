@@ -300,9 +300,21 @@ class TestGetHuyaStreamUrl:
     def _json(ordered_cdn_types: list[str]) -> dict[str, object]:
         # 复刻 room 179966 房间页 gameStreamInfoList 结构（含 sCdnType/sStreamName/各 URL/反链参数）
         base = {
-            "AL": ("http://al.hls.huya.com/src", "http://al.flv.huya.com/src", "wsSecret=al&wsTime=6a&ctype=huya_live&fs=bgct"),
-            "TX": ("http://tx.hls.huya.com/src", "http://tx.flv.huya.com/src", "wsSecret=tx&wsTime=6a&ctype=huya_live&fs=bgct"),
-            "HS": ("http://hs.hls.huya.com/src", "http://hs.flv.huya.com/src", "wsSecret=hs&wsTime=6a&ctype=huya_live&fs=bgct"),
+            "AL": (
+                "http://al.hls.huya.com/src",
+                "http://al.flv.huya.com/src",
+                "wsSecret=al&wsTime=6a&ctype=huya_live&fs=bgct",
+            ),
+            "TX": (
+                "http://tx.hls.huya.com/src",
+                "http://tx.flv.huya.com/src",
+                "wsSecret=tx&wsTime=6a&ctype=huya_live&fs=bgct",
+            ),
+            "HS": (
+                "http://hs.hls.huya.com/src",
+                "http://hs.flv.huya.com/src",
+                "wsSecret=hs&wsTime=6a&ctype=huya_live&fs=bgct",
+            ),
         }
         stream_list = []
         for cdn in ordered_cdn_types:
@@ -319,7 +331,9 @@ class TestGetHuyaStreamUrl:
                     "sHlsAntiCode": anti,
                 }
             )
-        return {"data": [{"gameLiveInfo": {"nick": "anchor", "introduction": "title"}, "gameStreamInfoList": stream_list}]}
+        return {
+            "data": [{"gameLiveInfo": {"nick": "anchor", "introduction": "title"}, "gameStreamInfoList": stream_list}]
+        }
 
     @pytest.mark.asyncio
     async def test_enumerates_all_cdn_candidates_hs_first(self):
@@ -331,7 +345,10 @@ class TestGetHuyaStreamUrl:
         result = await get_huya_stream_url(json_data)
         assert result["is_live"] is True
         # 主源为 HS（不再因 AL 在 index0 而选到离线 AL）
-        assert result["m3u8_url"] == "http://hs.hls.huya.com/src/STREAMNAME.m3u8?wsSecret=hs&wsTime=6a&ctype=huya_live&fs=bgct"
+        assert (
+            result["m3u8_url"]
+            == "http://hs.hls.huya.com/src/STREAMNAME.m3u8?wsSecret=hs&wsTime=6a&ctype=huya_live&fs=bgct"
+        )
         # 候选列表按 HS→TX→AL（HS-first）
         assert result["m3u8_url_list"] == [
             "http://hs.hls.huya.com/src/STREAMNAME.m3u8?wsSecret=hs&wsTime=6a&ctype=huya_live&fs=bgct",
