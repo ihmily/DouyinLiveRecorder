@@ -113,7 +113,7 @@ jobs:
       # 仅当 Python 源码 / 测试 / 项目配置变更时才跑重活；
       # 纯文档（*.md）、前端静态资源（web/）、翻译（i18n/）变更不触发。
       - name: Detect path changes
-        uses: dorny/paths-filter@v3
+        uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
