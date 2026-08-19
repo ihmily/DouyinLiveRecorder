@@ -69,7 +69,7 @@ jobs:
       node_version: ${{ steps.consts.outputs.node_version }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Declare shared constants
         id: consts
@@ -87,7 +87,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Setup Python 3.12
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -150,20 +150,55 @@ jobs:
     permissions:
       contents: write
     steps:
+      # 手动发版路径需要 git 仓库来打/推 tag（Ensure git tag exists 步骤）。
+      # 若无 checkout，runner 无 .git 目录，git 命令直接报
+      # "fatal: not in a git directory"（exit 128）。
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
       - name: Skip (non-release path)
         if: >-
           needs.prepare.outputs.is_release != 'true' &&
-          !(github.event_name == 'workflow_dispatch' && inputs.create_release == 'true')
+          !(github.event_name == 'workflow_dispatch' && inputs.create_release == true)
         shell: bash
         run: echo "非发版路径，跳过预创建 Release"
+
+      # GitHub Release 必须挂在 tag 上。tag 推送路径下 tag 已存在；
+      # 但手动触发 + create_release 路径（文档明确支持）没有 tag，github.ref 是分支，
+      # 若不在此创建轻量 tag，后续 build 上传 / release job 的 `gh release download vX.Y.Z`
+      # 会因找不到对应 tag 的 Release 而失败。故在单例的 release-create job 中创建，
+      # 避免多平台 build job 并发推送 tag 引发竞态。
+      - name: Ensure git tag exists (manual release path)
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          inputs.create_release == true &&
+          needs.prepare.outputs.is_release != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="v${{ needs.prepare.outputs.version }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "tag ${TAG} 已存在，跳过创建"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi
 
       - name: Preallocate GitHub Release
         if: >-
           needs.prepare.outputs.is_release == 'true' ||
-          (github.event_name == 'workflow_dispatch' && inputs.create_release == 'true')
+          (github.event_name == 'workflow_dispatch' && inputs.create_release == true)
         uses: softprops/action-gh-release@v3
         with:
-          # tag_name 省略 → 使用触发本次运行的 tag
+          # 显式指定 tag_name：不依赖 action 从 github.ref 推断（手动分支触发时会误挂到分支），
+          # 保证 release-create / build 上传 / release 收尾三处指向同一个 Release。
+          tag_name: v${{ needs.prepare.outputs.version }}
           # 仅建记录，不传 files；body/notes 由 release job 的 Finalize 收尾统一写
           name: v${{ needs.prepare.outputs.version }}
           draft: false
@@ -194,10 +229,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Setup Python ${{ needs.prepare.outputs.python_build }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ needs.prepare.outputs.python_build }}
           # 无 lock 文件，缓存 key 以 requirements.txt + pyproject.toml 的 hash 为准
@@ -309,10 +344,12 @@ jobs:
       - name: Upload to GitHub Release
         if: >-
           needs.prepare.outputs.is_release == 'true' ||
-          (github.event_name == 'workflow_dispatch' && inputs.create_release == 'true')
+          (github.event_name == 'workflow_dispatch' && inputs.create_release == true)
         uses: softprops/action-gh-release@v3
         with:
-          # tag_name 省略 → 使用触发本次运行的 tag
+          # 显式指定 tag_name，与 release-create / release 收尾三处保持一致，
+          # 避免手动分支触发时误挂到分支 ref
+          tag_name: v${{ needs.prepare.outputs.version }}
           files: |
             dist/*-lite.zip
             dist/*-full.zip
@@ -325,7 +362,7 @@ jobs:
       - name: Upload build artifact (inspection only)
         if: >-
           needs.prepare.outputs.is_release != 'true' &&
-          !(github.event_name == 'workflow_dispatch' && inputs.create_release == 'true')
+          !(github.event_name == 'workflow_dispatch' && inputs.create_release == true)
         uses: actions/upload-artifact@v7
         with:
           name: DouyinLiveRecorder-${{ matrix.platform }}
@@ -340,7 +377,7 @@ jobs:
     needs: [prepare, build]
     if: >-
       needs.prepare.outputs.is_release == 'true' ||
-      (github.event_name == 'workflow_dispatch' && inputs.create_release == 'true')
+      (github.event_name == 'workflow_dispatch' && inputs.create_release == true)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -390,7 +427,8 @@ jobs:
       - name: Finalize Release (notes + checksums)
         uses: softprops/action-gh-release@v3
         with:
-          # tag_name 省略 → 默认使用触发本次运行的 tag
+          # 显式指定 tag_name，与 release-create / build 上传三处保持一致
+          tag_name: v${{ needs.prepare.outputs.version }}
           name: v${{ needs.prepare.outputs.version }}
           files: |
             artifacts/SHA256SUMS.txt
@@ -427,3 +465,10 @@ jobs:
             echo "- 版本：\`v${{ needs.prepare.outputs.version }}\`"
             echo "- 产物：见 Release 附件（含 SHA256SUMS.txt）"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Debug inputs
+        shell: bash
+        run: |
+          echo "inputs.create_release = ${{ inputs.create_release }}"
+          echo "github.event.inputs.create_release = ${{ github.event.inputs.create_release }}"
+          echo "type of create_release = $(type -t ${{ inputs.create_release }})"  # 仅示意
