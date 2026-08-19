@@ -692,34 +692,11 @@ brew install node
 
 直接编辑 `config/config.ini` 中的 `web_password` 项，修改后重启 `web.py` 即可。密码变更后所有现有 Token 会自动失效，需重新登录。
 
-## 🤖 相关项目
-
-- [StreamCap](https://github.com/ihmily/StreamCap) - 直播录制工具
-- [streamget](https://github.com/ihmily/streamget) - 流媒体获取工具
-
 ## ❤️ 贡献者
 
-<a href="https://github.com/ihmily"><img src="https://github.com/ihmily.png?size=50" width="50" height="50" alt="Hmily"></a>
-<a href="https://github.com/iridescentGray"><img src="https://github.com/iridescentGray.png?size=50" width="50" height="50" alt="iridescentGray"></a>
-<a href="https://github.com/annidy"><img src="https://github.com/annidy.png?size=50" width="50" height="50" alt="annidy"></a>
-<a href="https://github.com/wwkk2580"><img src="https://github.com/wwkk2580.png?size=50" width="50" height="50" alt="wwkk2580"></a>
-<a href="https://github.com/missuo"><img src="https://github.com/missuo.png?size=50" width="50" height="50" alt="missuo"></a>
-<a href="https://github.com/xueli12"><img src="https://github.com/xueli12.png?size=50" width="50" height="50" alt="xueli12"></a>
-<a href="https://github.com/kaine1973"><img src="https://github.com/kaine1973.png?size=50" width="50" height="50" alt="kaine1973"></a>
-<a href="https://github.com/yinruiqing"><img src="https://github.com/yinruiqing.png?size=50" width="50" height="50" alt="yinruiqing"></a>
-<a href="https://github.com/Max-Tortoise"><img src="https://github.com/Max-Tortoise.png?size=50" width="50" height="50" alt="Max-Tortoise"></a>
-<a href="https://github.com/justdoiting"><img src="https://github.com/justdoiting.png?size=50" width="50" height="50" alt="justdoiting"></a>
-<a href="https://github.com/dhbxs"><img src="https://github.com/dhbxs.png?size=50" width="50" height="50" alt="dhbxs"></a>
-<a href="https://github.com/wujiyu115"><img src="https://github.com/wujiyu115.png?size=50" width="50" height="50" alt="wujiyu115"></a>
-<a href="https://github.com/zhanghao333"><img src="https://github.com/zhanghao333.png?size=50" width="50" height="50" alt="zhanghao333"></a>
-<a href="https://github.com/gyc0123"><img src="https://github.com/gyc0123.png?size=50" width="50" height="50" alt="gyc0123"></a>
-<a href="https://github.com/HoratioShaw"><img src="https://github.com/HoratioShaw.png?size=50" width="50" height="50" alt="HoratioShaw"></a>
-<a href="https://github.com/nov30th"><img src="https://github.com/nov30th.png?size=50" width="50" height="50" alt="nov30th"></a>
-<a href="https://github.com/727155455"><img src="https://github.com/727155455.png?size=50" width="50" height="50" alt="727155455"></a>
-<a href="https://github.com/nixingshiguang"><img src="https://github.com/nixingshiguang.png?size=50" width="50" height="50" alt="nixingshiguang"></a>
-<a href="https://github.com/1411430556"><img src="https://github.com/1411430556.png?size=50" width="50" height="50" alt="1411430556"></a>
-<a href="https://github.com/Ovear"><img src="https://github.com/Ovear.png?size=50" width="50" height="50" alt="Ovear"></a>
-<a href="https://github.com/y123ao6"><img src="https://github.com/y123ao6.png?size=50" width="50" height="50" alt="y123ao6"></a>
+<a href="https://github.com/y123ao6/DouyinLiveRecorder/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=y123ao6/DouyinLiveRecorder" />
+</a>
 
 ## 📄 许可证
 
@@ -875,6 +852,6 @@ brew install node
 
 </details>
 
-## 💬 有问题可以向我提 Issue，我会在这里持续添加更多直播平台的录制 欢迎 Star
+## 💬 有问题或者需求可以向我提 Issue，欢迎 Star 与 Fork
 
 [![Star History Chart](https://api.star-history.com/svg?repos=y123ao6/DouyinLiveRecorder&type=Timeline)](https://star-history.com/#y123ao6/DouyinLiveRecorder&Timeline)
