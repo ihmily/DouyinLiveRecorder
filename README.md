@@ -90,32 +90,56 @@ DouyinLiveRecorder/
 │   ├── config.ini             # 主配置文件
 │   └── URL_config.ini         # 直播间地址列表
 ├── src/                        # 核心源码包
-│   ├── __init__.py             # 包初始化 + Node.js 环境配置
-│   ├── spider.py              # 直播数据爬虫（60+ 平台）
-│   ├── stream.py              # 直播流解析（含画质回采）
+│   ├── __init__.py             # 包初始化 + Node.js 环境配置 + 弹幕平台注册表/工厂
+│   ├── spider.py              # 直播流地址解析（60+ 平台，已抽离弹幕逻辑）
+│   ├── stream.py              # 直播流录制编排（ffmpeg 命令/分段/格式）
+│   ├── stream_select.py       # 流地址选源/可达性校验/探针退避
 │   ├── room.py                # 直播间信息解析
 │   ├── utils.py               # 工具函数库
 │   ├── logger.py              # Loguru 日志配置
 │   ├── proxy.py               # 代理检测
 │   ├── ab_sign.py             # 抖音 A-Bogus 签名
+│   ├── ttwid.py               # 抖音访客 ttwid 获取/缓存
 │   ├── node_install.py        # Node.js 自动安装/初始化
+│   ├── ffmpeg_install.py      # FFmpeg 安装脚本
+│   ├── ffmpeg_proc.py         # ffmpeg 子进程管理（抽离自 main.py）
+│   ├── video_postprocess.py   # 录制后处理（转封装/转码）
+│   ├── notify.py              # 直播状态消息推送（抽离自 main.py）
+│   ├── recorder_status.py     # 录制状态跟踪（抽离自 main.py）
+│   ├── config_io.py           # 配置读写/数值转换/备份（抽离自 main.py）
+│   ├── cookie_cache.py        # 访客 Cookie 进程级共享缓存
 │   ├── weverse_auth.py        # Weverse 平台认证
-│   ├── ttwid.py               # 抖音访客 ttwid 获取
-│   ├── web_api.py             # Web 管理面板 FastAPI 应用
-│   ├── web_config.py          # Web 面板配置读写
-│   ├── web_tray.py            # Web 模式系统托盘（最小化到托盘）
 │   ├── http_config.py          # HTTP 客户端共享配置（SSL 验证开关）
 │   ├── async_http.py          # 异步 HTTP 客户端 (httpx)
 │   ├── sync_http.py           # 同步 HTTP 客户端
-│   ├── javascript/            # JavaScript 签名脚本
-│   │   ├── crypto-js.min.js
-│   │   ├── x-bogus.js
-│   │   ├── haixiu.js
-│   │   ├── laixiu.js
-│   │   ├── liveme.js
-│   │   ├── migu.js
-│   │   └── taobao-sign.js
-│   └── ffmpeg_install.py     # FFmpeg 安装脚本
+│   ├── web_api.py             # Web 管理面板 FastAPI 应用
+│   ├── web_config.py          # Web 面板配置读写
+│   ├── web_tray.py            # Web 模式系统托盘（最小化到托盘）
+│   ├── base.py               # 弹幕采集基类（DanmakuBase / DanmakuMessage）
+│   ├── collector.py           # 弹幕采集器（线程桥接主流程）
+│   ├── danmaku_monitor.py     # 弹幕监控枢纽（DanmakuMonitorHub）
+│   ├── srt_writer.py         # 弹幕时间字幕（SRT）写入
+│   ├── ws_client.py          # WebSocket 传输层（弹幕直连、proxy=None）
+│   ├── platforms/            # 弹幕平台实现（按平台标识经工厂注册）
+│   │   ├── douyin.py         # 抖音弹幕（protobuf + _tars 心跳）
+│   │   ├── douyu.py          # 斗鱼弹幕（STT 协议）
+│   │   ├── huya.py           # 虎牙弹幕（WSP 协议）
+│   │   ├── bilibili.py       # B站弹幕（WebSocket）
+│   │   ├── twitch.py         # Twitch 弹幕（IRC/WS）
+│   │   ├── _tars.py          # TARS 私有协议编解码
+│   │   └── _xbogus.py        # X-Bogus 签名
+│   ├── proto/                # 抖音弹幕 protobuf 定义
+│   │   ├── douyin.proto      # protoc 源定义
+│   │   ├── douyin_pb2.py      # protoc 生成（DO NOT EDIT）
+│   │   └── douyin_pb2.pyi     # 类型存根
+│   └── javascript/            # JavaScript 签名脚本
+│       ├── crypto-js.min.js
+│       ├── x-bogus.js
+│       ├── haixiu.js
+│       ├── laixiu.js
+│       ├── liveme.js
+│       ├── migu.js
+│       └── taobao-sign.js
 ├── web/                        # Web 管理面板前端
 │   ├── index.html              # 单页应用入口
 │   ├── app.js                  # 前端逻辑（API、SSE、渲染）
@@ -583,10 +607,21 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 
 ### 添加新平台支持
 
-1. 在 `src/spider.py` 中添加平台数据获取函数（参考现有平台实现）
+**视频录制平台：**
+
+1. 在 `src/spider.py` 中添加平台流地址解析函数（参考现有平台实现）
 2. 在 `src/stream.py` 中添加流地址解析函数，返回值包含 `actual_quality` 和 `available_qualities` 字段
 3. 在 `main.py` 中添加平台识别逻辑（`PLATFORM_HOST` 列表和录制分支）
 4. 更新 `README.md` 和 `CODE_WIKI.md`
+
+**弹幕录制平台（如需支持弹幕）：**
+
+1. 在 `src/platforms/` 下新建 `<平台>.py`，继承 `src/base.py` 的 `DanmakuBase`，实现连接/鉴权/消息解析
+2. 在 `src/__init__.py` 的弹幕平台注册表中登记（平台名与 `main.py` 的 platform 标识一致），由 `get_danmaku_class` / `get_danmaku_collector` 工厂解耦创建
+3. 在 `main.py` 的弹幕录制接线处补充平台分支（构造 `record_danmaku_args` 并传入 `check_subprocess`）
+4. 更新 `README.md` 和 `CODE_WIKI.md`
+
+> 注：弹幕子系统与 `src/spider.py`（视频流地址解析）是平行解耦的两套抽象，`spider.py` 不 import `src/platforms`。
 
 ## ❓ 常见问题
 
@@ -690,6 +725,14 @@ brew install node
 本项目基于 [MIT License](LICENSE) 开源，欢迎 Star 和 Fork！
 
 ## ⏳ 更新日志
+
+### v4.0.8.3 (2026-08-19 ~ 2026-08-20) — 文档同步更新（README / CODE_WIKI 反映最新架构）
+
+- 同步 `README.md` 与 `CODE_WIKI.md`，使文档结构与真实代码对齐：
+  - 项目结构树补全弹幕子系统与抽象层模块：`src/platforms/`（抖音/斗鱼/虎牙/B站/Twitch 弹幕 + 私有签名 `_tars`/`_xbogus`）、`src/proto/`（抖音 protobuf 解析）、`src/base.py`/`src/collector.py`/`src/danmaku_monitor.py`/`src/srt_writer.py`/`src/ws_client.py`/`src/cookie_cache.py`，以及从 `main.py` 拆分的 `src/stream_select.py`/`src/ffmpeg_proc.py`/`src/video_postprocess.py`/`src/notify.py`/`src/recorder_status.py`/`src/config_io.py`。
+  - 「添加新平台支持」开发者指南补充弹幕平台接入步骤：在 `src/platforms/` 继承 `src/base.py` 的 `DanmakuBase` 实现，并在 `src/__init__.py` 的弹幕注册表登记，经 `get_danmaku_class` / `get_danmaku_collector` 工厂解耦创建。
+  - 版本号更正为 `4.0.8.3`（对齐 `pyproject.toml` 唯一事实源）。
+- 本次仅更新文档，未改动任何源码；弹幕子系统与视频流解析（`src/spider.py`）为平行解耦的两套抽象，`spider.py` 不 import `src/platforms`。
 
 ### v4.0.8.2-dev (2026-08-16 ~ 2026-08-18) — 录制/弹幕/国际化/类型检查 系列修复
 

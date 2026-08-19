@@ -58,7 +58,7 @@
 ### 项目基本信息
 
 - **项目名称**: DouyinLiveRecorder (抖音直播录制器)
-- **版本**: 4.0.8.2
+- **版本**: 4.0.8.3
 - **作者**: Hmily
 - **开源协议**: MIT
 - **项目地址**: [GitHub](https://github.com/ihmily/DouyinLiveRecorder)
@@ -118,6 +118,9 @@
 | gettext (msgfmt)                 | 国际化翻译编译                                              |
 | mypy                             | 静态类型检查（`--strict` 模式，`disallow_untyped_defs = true`） |
 | pyflakes                         | 静态代码检查                                               |
+| websockets                       | 弹幕 WebSocket 传输层（`src/ws_client.py`，各平台弹幕共用）         |
+| protobuf                         | 抖音弹幕协议解码（`src/proto/douyin_pb2`，protoc 生成模块）         |
+| brotli                           | B站弹幕解压（protover=3 需 brotli 解压）                       |
 
 ---
 
@@ -189,7 +192,7 @@ DouyinLiveRecorder/
 │   ├── config.ini                      # 主配置文件
 │   └── URL_config.ini                  # 直播间地址列表
 ├── src/                                 # 核心源码包
-│   ├── __init__.py                     # 包初始化 + Node.js 环境配置
+│   ├── __init__.py                     # 包初始化 + Node.js 环境配置 + 弹幕注册表/工厂（get_danmaku_class / get_danmaku_collector）
 │   ├── spider.py                       # 直播数据爬虫（60+ 平台）
 │   ├── stream.py                       # 直播流地址解析（含画质回采）
 │   ├── room.py                         # 直播间信息解析
@@ -220,7 +223,15 @@ DouyinLiveRecorder/
 │   ├── stream_select.py                 # 流地址选择/校验/画质码/抖音限速（抽离自 main.py）
 │   ├── notify.py                        # 推送/脚本/成功失败计数/并发调节（抽离自 main.py）
 │   ├── recorder_status.py               # 录制状态快照与展示（抽离自 main.py）
-│   └── config_io.py                     # 配置读写/安全数值转换/备份（抽离自 main.py）
+│   ├── config_io.py                     # 配置读写/安全数值转换/备份（抽离自 main.py）
+│   ├── base.py                          # 弹幕基类与数据结构（DanmakuBase / DanmakuMessage / DanmakuMessageType）
+│   ├── collector.py                     # 弹幕采集器（线程化包装 DanmakuBase，落 SRT + 上报监控枢纽）
+│   ├── cookie_cache.py                  # 按 URL 的访客 Cookie 进程内缓存（防并发重复请求触发风控）
+│   ├── danmaku_monitor.py               # 弹幕监控枢纽（进程单例，内存快照 + JSONL 边车）
+│   ├── srt_writer.py                    # SRT 字幕分段写入（时间轴对齐 ffmpeg segment）
+│   ├── ws_client.py                     # 弹幕 WebSocket 传输层（各平台弹幕共用，proxy=None 直连）
+│   ├── platforms/                       # 各平台弹幕客户端：Douyin/Douyu/Huya/Bilibili/Twitch + 私有签名 _tars/_xbogus
+│   └── proto/                           # 抖音弹幕 protobuf（douyin.proto + 生成的 douyin_pb2）
 ├── web/                                 # Web 管理面板前端
 │   ├── index.html                      # 单页应用入口
 │   ├── app.js                          # 前端逻辑（API 调用、SSE、渲染）
@@ -338,6 +349,8 @@ recording_time_list: dict   # 录制时间与画质记录 {name: [start_time, qu
 - `_args` 类型具体化为 `tuple[tuple[str, str, str], int]`（`url_tuple` 为 `tuple[str, str, str]`，与 `start_record(url_data, count_variable)` 签名一致）；
 - 通过 `threading.Thread(target=..., args=(thread_key, args))` 在创建线程时显式绑定当前循环值，移除默认参数 hack，语义更清晰、更易维护；
 - 线程退出仍 `finally: create_var.pop(_key, None)` 清理，防止 `create_var` 字典长期无界增长。
+
+**弹幕录制集成（2026-08-16 接线定稿）**：`start_record` 各平台分支收集 `record_danmaku_args`（每轮重置 `None`）→ 6 处 `check_subprocess(..., platform=platform, danmaku_args=record_danmaku_args)` 全部接线 → `get_danmaku_collector(platform, args, base_filename, segment_seconds)` 创建采集器。采集器在 `while process.poll() is None` 循环外 `stop()`（`DanmakuCollector.stop()` 有 `_stop_called` 防重入，幂等）。分段文件名约定：ffmpeg 视频分段模板统一 `_%03d`（FLV 已从 `_%02d` 对齐；音频仍 `_%02d` 但无弹幕），SRT 分片 `{seg:03d}`（`_000.srt` 对 `_000.ts`）；`check_subprocess` 同时剥离 `_%02d`/`_%03d` 占位符。抖音空 cookie 时 `DouyinDanmaku.start()` 协程内 `await get_ttwid()` 动态获取（采集线程独立事件循环，可直接 await；进程级缓存）。`弹幕分片时长(秒)` 走 `_safe_float(..., 1800.0)`。弹幕平台注册表见 `src/__init__.py` 的 `get_danmaku_class`（斗鱼直播/B站直播/虎牙直播/抖音直播/TwitchTV）。
 
 ---
 
@@ -719,6 +732,51 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 
 ---
 
+### 14. 弹幕采集子系统 (`src/platforms/` + `src/collector.py` + 关联模块)
+
+**职责与架构总览**: 提供与视频录制同步、按半小时分片的直播弹幕（bullet-chat）采集能力——弹幕落为 SRT 字幕文件，并可经「弹幕监控」独立查看（仅监控不落盘）。弹幕模块自 `dart_simple_live` 移植，原位于 `src/danmaku/`，后随目录扁平化迁移至 `src/` 根（基类 `src/base.py`、采集器 `src/collector.py`、监控 `src/danmaku_monitor.py`、传输 `src/ws_client.py`、缓存 `src/cookie_cache.py`、字幕 `src/srt_writer.py`、`src/proto/`、各平台实现 `src/platforms/`）。
+
+**与流解析解耦**: 弹幕子系统与 `src/spider.py`（视频流地址解析）是**平行的两套抽象**。`spider.py` 负责解析视频流地址，弹幕客户端经 `src/__init__.py` 的注册表/工厂解耦；`spider.py` 完全不 import `src/platforms`。仅 B站弹幕在 AUTH 被拒时会懒加载回调 `spider.invalidate_bili_buvid_cache()`。
+
+**生命周期接线**（与录制同起同停）:
+
+- `main.start_record` 各平台分支收集 `record_danmaku_args`（每轮重置 `None`）；
+- 6 处 `check_subprocess(..., platform=platform, danmaku_args=record_danmaku_args)` 全部接线；
+- 由 `src/__init__.py:get_danmaku_collector(platform, danmaku_args, base_filename, segment_seconds, only_fans, room_name, write_srt)` 工厂按平台取弹幕类并构造 `DanmakuCollector`；平台不支持或 `danmaku_args` 为空时返回 `None`；
+- `DanmakuCollector` 在 `while process.poll() is None` 循环外 `stop()`，`DanmakuCollector.stop()` 有 `_stop_called` 防重入（幂等）。
+
+**平台注册表**（`src/__init__.py:get_danmaku_class`，平台名与 `main.py` 标识一致）:
+
+| 平台标识     | 弹幕类（`src/platforms/`） |
+| -------- | --------------------- |
+| 斗鱼直播     | `DouyuDanmaku`        |
+| B站直播     | `BilibiliDanmaku`     |
+| 虎牙直播     | `HuyaDanmaku`         |
+| 抖音直播     | `DouyinDanmaku`       |
+| TwitchTV | `TwitchDanmaku`       |
+
+**关键文件**:
+
+- **基类与数据结构 (`src/base.py`)**: `DanmakuBase(ABC)` 定义统一契约——类属性 `heartbeat_interval=45.0`；构造 `__init__(on_message, on_close, on_ready)` 保存回调并置 `_stopped=False`；四个抽象方法 `async start(args)` / `async stop()` / `async heartbeat()` / `decode_message(data: bytes|str)`，辅助 `_emit(msg)` 经 `on_message` 上抛。`DanmakuMessageType(Enum)`（`CHAT/GIFT/ONLINE/SUPER_CHAT`）；`DanmakuMessage` dataclass（`type/user_name/message/data/color/timestamp_ms`，`timestamp_ms` 由采集器注入）。
+- **弹幕采集器 (`src/collector.py`)**: `DanmakuCollector` 把异步弹幕客户端包装为线程化的同步采集器。构造参数含 `danmaku_cls / danmaku_args / base_filename / segment_seconds / only_fans / room_name / platform_name / write_srt`（`write_srt=False` 为仅监控不落盘模式）；`start()` 锚定 SRT 时间轴并起 daemon 线程 `_run()`（新 `asyncio.new_event_loop()`，实例化弹幕类 `run_until_complete(danmaku.start(args))`）；`_on_message` 把全部类型上报监控枢纽 `hub.room_message(...)`，仅 `CHAT` 且用户名/内容非空才写 SRT；`stop(timeout=8.0)` 幂等，`message_count` 属性。依赖 `src.base` / `src.danmaku_monitor` / `src.srt_writer`。
+- **各平台弹幕客户端 (`src/platforms/`)**: 五个 `DanmakuBase` 子类 + 两个私有签名/编解码工具。
+  | 文件            | 类                 | WebSocket 端点                                                | 关键协议/逻辑                                                                                                                                                                     |
+  | ------------- | ----------------- | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `douyin.py`   | `DouyinDanmaku`   | `wss://webcast100-ws-web-lq.douyin.com/webcast/im/push/v2/` | gzip 解 `PushFrame.payload`→`Response`（protobuf）；`danmaku_signature`（`_xbogus`）生成 `signature`；Cookie 缺失 `await get_ttwid()`；`backup_url` 把 `lq`→`lf`                         |
+  | `douyu.py`    | `DouyuDanmaku`    | `wss://danmuproxy.douyu.com:8506`                           | 小端二进制帧 + STT 文本协议；`_dispatch` 处理 `chatmsg`（按 `if==1` 粉丝过滤）emit CHAT；心跳发 `mrkl`                                                                                              |
+  | `huya.py`     | `HuyaDanmaku`     | `wss://cdnws.api.huya.com`                                  | Tars 二进制协议（`_tars`）；`_make_join_data()` 写 `WSRegisterReq`；`cmdType==7`→`_decode_chat`（HYMessage）                                                                            |
+  | `bilibili.py` | `BilibiliDanmaku` | `wss://{host}/sub`（遍历 `host_list`）                          | 16B 大端帧头；`protover=2` zlib / `=3` brotli 解压；`operation==8` AUTH_REPLY 校验 `code==0`，失败/超时经 `_reject_auth()` + `spider.invalidate_bili_buvid_cache()`；`_auth_watchdog`(8s) 兜底 |
+  | `twitch.py`   | `TwitchDanmaku`   | `wss://irc-ws.chat.twitch.tv`                               | 纯 IRC；匿名 `justinfan{random}` 连接；`PING`→`PONG`，正则解析 PRIVMSG emit CHAT；代理经 `handle_proxy_addr` 或系统代理                                                                          |
+  | `_tars.py`    | （私有）Tars 编解码器     | —                                                           | 虎牙用极简 Tars：`TarsInputStream` / `TarsOutputStream`，头字节高 4 位 tag、低 4 位 type                                                                                                   |
+  | `_xbogus.py`  | （私有）X-Bogus 签名    | —                                                           | 抖音弹幕用：`generate_xbogus`（RC4 + 自定义 base64）、`danmaku_signature(room_id, unique_id)`                                                                                           |
+- **弹幕监控枢纽 (`src/danmaku_monitor.py`)**: `DanmakuMonitorHub`（进程单例，经 `get_hub()` 惰性创建）聚合各房间弹幕事件——`room_started/room_connected/room_closed/room_stopped/room_message`，内存快照 `snapshot(since=0)` 供 Web API 消费，并写 JSONL 边车 `logs/danmaku_monitor.jsonl`（5MB 轮转）。所有方法异常全吞；含 10s×6 桶速率窗与每秒 ≤10 条采样折叠。
+- **SRT 字幕写入 (`src/srt_writer.py`)**: `SrtWriter` 按 `segment_seconds` 分片输出 `{base}_{seg:03d}.srt`（单文件模式 `{base}.srt`），时间轴以 `time.monotonic()` 为基准、与 ffmpeg `segment -reset_timestamps` PTS 对齐；`write()` 持 `threading.Lock` 写条目并 flush。
+- **WebSocket 传输层 (`src/ws_client.py`)**: `WsClient` 各平台弹幕共用的异步 WS 客户端。`connect()` 显式 `proxy=None`（弹幕直连、不跟随系统代理，避免 SOCKS 需 python-socks 报错）；`ping_interval=None`（各平台自带心跳）；`max_size=None`、`asyncio.Lock` 串行发送；支持 `on_message/on_ready/on_heartbeat/on_close/on_reconnect` 回调与 `max_reconnect` 重连策略。
+- **访客 Cookie 缓存 (`src/cookie_cache.py`)**: 进程内唯一「按网址动态获取访客 cookie」缓存，避免多 room 并发重复请求触发风控。`fetch_cookies(url, proxy, *, ttl=30min, fetcher=None)` 无锁快速路径 + `RLock` 双检查；`get_cookie_str` / `invalidate` / `clear`。
+- **抖音弹幕协议 (`src/proto/`)**: `douyin.proto`（Proto3）定义 `Response/Message/ChatMessage/GiftMessage/...` 等；`douyin_pb2.py` 为 protoc 生成（DO NOT EDIT），`douyin_pb2.pyi` 为基于pyright 类型存根。抖音弹幕解析链路：`PushFrame.payload`（gzip 后 `Response`）→`Message.payload`→`ChatMessage`。
+
+---
+
 ## 关键类与函数
 
 ### 签名算法 (`src/ab_sign.py`)
@@ -816,6 +874,18 @@ main.py
 │   └── src/logger.py
 ├── msg_push.py
 └── src/ffmpeg_install.py
+
+src/__init__.py (弹幕注册表/工厂)
+├── get_danmaku_collector() → src/collector.py
+│   └── DanmakuCollector
+│       ├── src/base.DanmakuBase (契约)
+│       ├── src/platforms/<X>Danmaku (各平台实现)
+│       │   ├── src/ws_client.WsClient (传输，proxy=None 直连)
+│       │   ├── src/cookie_cache.fetch_cookies (访客 cookie)
+│       │   ├── src/proto.douyin_pb2 (抖音解码)
+│       │   └── src/ttwid.get_ttwid (抖音动态 ttwid)
+│       ├── src/srt_writer.SrtWriter (落 SRT)
+│       └── src/danmaku_monitor.get_hub() (监控枢纽，进程单例)
 
 web.py
 ├── src/web_api.py
@@ -1116,7 +1186,7 @@ def _app_root() -> str:
 
 工作流文件：`.github/workflows/ci.yml`，在 push 到 main / PR 时运行，确保代码风格、类型安全与功能正确性在合入前通过验证。
 
-**路径过滤**：`changes` job 使用 `dorny/paths-filter@v3` 检测变更文件类别，仅当 Python 源码（src/、根目录入口）、测试、`scripts/`、依赖清单或工作流自身变更时才运行下游 job；纯前端（web/）、文档（*.md）、国际化（i18n/）变更不会触发。
+**路径过滤**：`changes` job 使用 `dorny/paths-filter@v4` 检测变更文件类别，仅当 Python 源码（src/、根目录入口）、测试、`scripts/`、依赖清单或工作流自身变更时才运行下游 job；纯前端（web/）、文档（*.md）、国际化（i18n/）变更不会触发。
 
 **并行 jobs**（均 `needs: changes` 条件门控）：
 
@@ -1186,6 +1256,10 @@ python build_exe.py --smoke --dual  # 与 CI 一致：lite + full 双产物
 ### 5. 模板方法模式 (Template Method Pattern)
 
 各平台的录制流程遵循相同的模板：检测 → 获取流 → 录制 → 推送。
+
+### 6. 工厂 / 注册表模式 (Factory + Registry Pattern)
+
+弹幕子系统通过 `src/__init__.py` 的 `get_danmaku_class(platform)` 注册表（中文平台名 → 弹幕类）与 `get_danmaku_collector(...)` 工厂统一创建各平台采集器；`main.py` 按平台标识取采集器，无需感知具体平台实现。新增弹幕平台只需在注册表登记并实现 `DanmakuBase` 的 `start/stop/heartbeat/decode_message` 四个抽象方法，对调用方零侵入。
 
 ---
 
@@ -1365,16 +1439,103 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 
 ## 更新日志
 
+### v4.0.8.3 (2026-08-19) — 架构文档更新：补全弹幕采集子系统与 src/platforms、src/proto 等模块说明
+
+**来源**：用户要求通读工作空间全部源码、提取架构/模块/核心逻辑/关键实现信息，更新 `CODE_WIKI.md` 以反映最新代码状态（涵盖各文件职责、重要函数/类作用、依赖关系及使用方式），保持原有文档风格与结构。
+
+**新增 / 修正内容**：
+
+- **目录结构**：补充 `src/base.py`、`src/collector.py`、`src/cookie_cache.py`、`src/danmaku_monitor.py`、`src/srt_writer.py`、`src/ws_client.py`、`src/platforms/`、`src/proto/` 等弹幕相关条目；`src/__init__.py` 注释补充弹幕注册表/工厂职责（`get_danmaku_class` / `get_danmaku_collector`）。
+- **技术栈**：新增 `websockets` / `protobuf` / `brotli` 三个弹幕运行时依赖说明（对应 `requirements.txt` 弹幕段）。
+- **核心模块详解**：新增「14. 弹幕采集子系统」整节，覆盖基类契约（`DanmakuBase` / `DanmakuMessage` / `DanmakuMessageType`）、采集器（`DanmakuCollector`）、五个平台弹幕客户端（抖音/斗鱼/虎牙/B站/Twitch）+ 私有签名 `_tars` / `_xbogus`、监控枢纽（`DanmakuMonitorHub`）、SRT 写入（`SrtWriter`）、WS 传输层（`WsClient`）、访客 Cookie 缓存（`cookie_cache`）、抖音 protobuf（`src/proto/`）；`main.py` 节补充弹幕录制接线说明。
+- **模块依赖关系图**：补充弹幕子系统（`src/__init__.py` 注册表 → `collector` → `platforms/*Danmaku` → `ws_client` / `cookie_cache` / `proto` / `ttwid`，并接 `srt_writer` / `danmaku_monitor`）。
+- **设计模式**：新增「工厂 / 注册表模式」，说明弹幕按平台标识经 `get_danmaku_class` / `get_danmaku_collector` 解耦创建。
+- **版本号**：项目基本信息版本由 `4.0.8.2` 更正为 `4.0.8.3`（对齐 `pyproject.toml` 唯一事实源）。
+- 明确弹幕子系统与 `src/spider.py` 流解析为平行解耦的两套抽象（`spider.py` 不 import `src/platforms`）。
+
+**验证**：文档内容与 `src/__init__.py`、`src/base.py`、`src/platforms/*`、`src/collector.py`、`src/danmaku_monitor.py`、`src/srt_writer.py`、`src/ws_client.py`、`src/cookie_cache.py`、`src/proto/`、`requirements.txt`、`pyproject.toml` 现状逐项核对一致；未改动任何源码。
+
+### v4.0.8.2-dev (2026-08-19) — CI 重构：build-release.yml 去除 download-artifact 来回 + 修复 release 并发竞态/布尔比较/缺失 checkout
+
+**来源**：用户要求将 release job 的 `actions/download-artifact@v7` 更换为 `softprops/action-gh-release`；实测手动 `workflow_dispatch` 勾选 `create_release` 时 `release` 被 skip，随后报 `fatal: not in a git directory`（exit 128）。
+
+**根因**（四类，均已修复）：
+
+1. **结构调整**：原 `upload-artifact` → `download-artifact` → `softprops` 中，`download-artifact` 仅负责把产物拉回 release job 本地。若直接删它改用 softprops 发版，release job 拿不到文件、校验/SHA256SUMS 全失败。
+2. **并发竞态**：三平台 build job 并发调 `softprops` 创建同一 Release（相同 tag）存在「同 tag 同时 create」竞态。
+3. **布尔比较恒 false**（原版就有的 bug）：`create_release` 是 boolean 输入，原 `if` 写 `inputs.create_release == 'true'`（与**字符串**比）恒为 false → 手动勾选路径 `release`/`release-create`/build 上传步骤全部失效、被 skip。
+4. **缺失 checkout**：`release-create` job 的手动发版路径需 `git tag/git push` 推轻量 tag，但该 job 无 `actions/checkout`，runner 无 `.git` 目录 → `fatal: not in a git directory`（exit 128）。
+
+**修复**（`.github/workflows/build-release.yml`）：
+
+1. **build job 直传 Release**：新增 `permissions: contents: write`；发版路径（`is_release=='true'` 或手动勾选 `create_release`）用 `softprops/action-gh-release@v3` 直传 `dist/*-lite.zip` + `dist/*-full.zip`（显式 `tag_name: v<版本>`）；仅构建路径保留 `actions/upload-artifact@v7` 供人工取回。
+2. **新增 `release-create` 单例 job**（`needs: prepare`，`permissions: contents: write`）：job 级不挂 `if`（避免被 skip 后级联 skip 依赖它的 build），是否真正创建由**步骤级** `if` 控制——发版路径先 `git tag/git push` 推 `v<版本>` 轻量 tag，再 `softprops` 预建空 Release（`tag_name` 显式指定）。build `needs` 改为 `[prepare, release-create]`，消除并发 create 竞态。
+3. **release job 改用 gh CLI 拉回**：去掉 `actions/download-artifact@v7`，改用 `gh release download <tag> -D artifacts` 把已发布附件拉回本地做 6 文件完整性校验 + 生成 `SHA256SUMS.txt`；收尾 `softprops` 仅追加 `SHA256SUMS.txt` + 发版说明（zip 已在 Release 上、不重复列）。
+4. **布尔比较修复**：5 处 `inputs.create_release == 'true'` → `inputs.create_release == true`（`needs.prepare.outputs.is_release == 'true'` 字符串比较**保持不动**——`is_release` 是字符串输出）。
+5. **补 checkout**：`release-create` 加 `actions/checkout@v7`（`fetch-depth: 0`），覆盖手动路径的 `git tag/git push`。
+
+**验证**：
+
+- `yaml.safe_load` 解析通过；job 依赖图 `prepare → release-create → build(×3) → release` 正确。
+- 全 job checkout 覆盖检查：prepare/build 已有、release-create 已补、release 仅用 gh API 无需 git。
+- 逻辑链：手动 dispatch + 勾选 `create_release` → checkout → 推 tag → 预建 Release → 三平台 build 直传 zip → release 拉回校验 + SHA256SUMS + 发版说明。
+
+### v4.0.8.2-dev (2026-08-19) — 测试/覆盖率：tests/test_ttwid.py 补充分支测试，src/ttwid.py 覆盖率 82.3% → 96.77%（越过 85% 门禁）
+
+**来源**：CI `python scripts/check_coverage.py` 报 `src/ttwid.py 82.3% (>= 85%) <- 2.7% short`，覆盖率门禁失败（exit code 1）。
+
+**根因**：`src/ttwid.py` 的 `coverage.xml` 显示以下分支在单测下不可达（51/62 行已覆盖，需 ≥53 行达 85%）：
+
+- L34：`_app_root()` frozen 分支（`sys.frozen` 测试中恒为 False）；
+- L58–59：`_read_config_ttwid` 的宽 `except Exception`（非 ConfigParser 的意外错误）；
+- L86–87：`_fetch_ttwid` 异常处理器（`_cache_fetch_cookies` 抛错）；
+- L99–104：`get_ttwid` 锁竞争兜底（仅真实并发可达）；
+- L108：缓存二次校验竞态守卫（仅真实并发命中）。
+
+正确做法是为这些分支补测试，而非下调门禁阈值。
+
+**修复**（`tests/test_ttwid.py`）：
+
+1. 新增 `TestGetTtwid`：覆盖从 `config.ini`（tempfile 写入含 `[ttwid]` 段）→ `cookie_cache` → 动态 `fetch` → 缓存返回 的四级优先级链路；含「`cookie_cache` 命中但不在 config 而抛 FileNotFoundError → 回退 fetch」与「fetch 抛异常忠实向上传播」分支。
+2. 新增 `TestReadConfigTtwid`：覆盖「`_app_root()` frozen 分支被 `sys.frozen=True` 触发」「ConfigParser 解析意外异常被宽 `except` 兜住」「`_cached_config_ttwid` 短路命中」三分支。
+3. 新增 `TestFetchTtwid`：覆盖 `_cache_fetch_cookies` 抛错时 `_fetch_ttwid` 的异常处理器分支。
+4. 新增 `TestGetTtwidContention`：把模块级 `_ttwid_lock` 替换为 fake lock（`acquire(blocking=False)` 返回 False），模拟「锁被其他线程持有」→ 进入竞争兜底分支、`get_ttwid` 兜底重试一次 fetch。
+
+注意：C 层 `RLock.acquire` 为只读属性，`monkeypatch.setattr` 实例方法会抛错，故改为替换模块级锁对象。
+
+**验证**：
+
+- `pytest tests/test_ttwid.py` 全绿（17 passed）。
+- 覆盖率：本次运行 `src/ttwid.py` 达 **96.77%**（L34/58/59/86/87/99/100/102/103 均命中）；仅 L104、L108 两个纯并发竞态守卫不可在单线程下单测命中，但 96.77% ≥ 85% 门禁已通过。`scripts/check_coverage.py` 不再 FAIL。
+
+### v4.0.8.2-dev (2026-08-19) — CI 修复：ci.yml `dorny/paths-filter@v3` → `v4` 消除 Node.js 20 弃用告警
+
+**来源**：GitHub Actions 工作流运行告警 `Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: dorny/paths-filter@v3`。GitHub 自 2025-09-19 起在 runner 上弃用 Node.js 20，凡声明 node20 运行时的 action 会被强制升到 Node 24 运行并打印该弃用告警。
+
+**根因**：`.github/workflows/ci.yml` 第 116 行 `uses: dorny/paths-filter@v3`。v3 这一系（含最新 v3.0.4）的 `action.yml` 仍声明 `runs.using: 'node20'`，告警无法通过升小版本消除；唯一解决途径是升到 **v4**（v4.0.0 的 PR #294 把运行时升到 node24，最新 v4.0.3）。
+
+**修复**（`.github/workflows/ci.yml`）：`uses: dorny/paths-filter@v3` → `uses: dorny/paths-filter@v4`（锁定 v4.0.3）。
+
+**验证 / 兼容性**：
+
+- v4 的 `filters` 输入与 `changes` 输出 API 与 v3 完全一致；下游消费链路 `steps.filter.outputs.changes` → `outputs.filters` → `contains(fromJSON(needs.setup.outputs.filters), 'python')` 不受影响。
+- 默认 `predicate-quantifier: 'some'`（至少一个模式命中即算变更）语义未变，本工作流的单组 `python` 过滤行为保持原样。
+- 附带安全加固：v4 合入 GHSA-7hc6-8hq5-9q2m 多行文件名转义修复（本工作流未用 `list-files`，属顺带）。
+- 已 grep 确认 `.github/workflows/` 下仅此一处引用，无 `build-release.yml` 同类问题需同步。
+- 纯依赖版本号提升、零逻辑改动，可直接提交。
+
 ### v4.0.8.2-dev (2026-08-19) — 测试/接口修复：`test_huya_danmaku::test_profileRoom_fields` 断言陈旧 + `web_api.list_files` 悬空/逃出 root 符号链接崩溃与信息泄露
 
 **来源**：CI `pytest --cov=src ...` 报 3 failed（641 passed）。`test_profileRoom_fields` 断言 `flv_url.startswith("https://")` 失败（实际 `http://hwcdn.huya.com/...`）；`test_web_api::TestListFiles::test_broken_symlink_skipped` 抛 `FileNotFoundError: .../broken.ts`；`test_web_api::TestListFiles::test_symlink_outside_skipped` 返回含 `leak.ts`（根外符号链接名泄露）。
 
 **根因**：
+
 1. **测试陈旧（非代码 bug）**：`spider.get_huya_app_stream_url` 的 `_normalize`（`src/spider.py:840` 附近）刻意将 `https://` 降为 `http://`（虎牙实测 https 返回 403、仅 http 可用，memory 已记）。测试仍断言 `https://`，与既定正确行为冲突。
 2. **`web_api.list_files` 代码 bug**：遍历目录时 `st = os.stat(full)` 默认**跟随符号链接**（约 `src/web_api.py:388`）。对悬空链接（`broken.ts → 不存在目标`）抛 `FileNotFoundError` 致整步 500，而非「跳过该条目」。
-3. **`web_api.list_files` 信息泄露隐患**：仅对*请求路径*用 `os.path.realpath + _is_within` 校验（`src/web_api.py:369-371`），**未对目录内每个 entry 重新解析校验**。于是 `leak.ts → ../../config.ini` 这类逃出 `downloads` 根的链接被照常 `os.stat` 并列出，泄露了根外文件名（下载接口 `download_file` 自身有 realpath+_is_within 防护，下载安全，但列名仍泄露）。
+3. **`web_api.list_files` 信息泄露隐患**：仅对*请求路径*用 `os.path.realpath + _is_within` 校验（`src/web_api.py:369-371`），**未对目录内每个 entry 重新解析校验**。于是 `leak.ts → ../../config.ini` 这类逃出 `downloads` 根的链接被照常 `os.stat` 并列出，泄露了根外文件名（下载接口 `download_file` 自身有 realpath+\_is_within 防护，下载安全，但列名仍泄露）。
 
 **修复**：
+
 1. `tests/test_huya_danmaku.py:118`：断言改为 `assert result["flv_url"].startswith("http://")`（与既定行为一致，运行行为不变）。
 2. `src/web_api.py` 的 `list_files` 循环加两项防护：
    - 越界跳过：`resolved = os.path.realpath(full)` 后 `if not _is_within(resolved, root): continue`（修复根外链接名泄露）。
@@ -1389,9 +1550,10 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 **根因**：`ctypes.windll` 是 Windows-only API，仅存在于 Windows typeshed；非 Windows 类型桩没有该属性。原 `web_tray.py` 的 `_patch_console_window`（行 111–112）与 `_on_show`（行 178）直接调用 `ctypes.windll.user32` / `ctypes.windll.kernel32`，且未被 `sys.platform` 平台门挡住，非 Windows 平台静态校验即报 `attr-defined`。`web_tray.py` 顶部已定义模块级 `ENABLED = sys.platform == "win32"`，但函数体未复用该门控。
 
 **修复**（`src/web_tray.py`，沿用 mypy-platform-gating 的「提前返回门」范式，不依赖 `# type: ignore`）：
+
 1. `_patch_console_window`：函数开头（`try: import ctypes` 之前）加 `if sys.platform != "win32": return`（保留原 `try/except import` 容错）。
-2. `_on_show`：`if not hwnd: return` 之后加 `if sys.platform != "win32": return`。
-两处运行时行为不变：非 Windows 下 `ENABLED` 本为 `False`、托盘不启用，逻辑原就走不到；Windows 下与修复前完全一致。未使用 `# type: ignore`——该写法在 Windows 上会被 basedpyright 严格模式报 `reportUnnecessaryTypeIgnoreComment`，平台门才是双平台都干净的唯一修法。
+2. `_on_show`：`if not hwnd: return` 之后加 `if sys.platform != "win32": return`。  
+   两处运行时行为不变：非 Windows 下 `ENABLED` 本为 `False`、托盘不启用，逻辑原就走不到；Windows 下与修复前完全一致。未使用 `# type: ignore`——该写法在 Windows 上会被 basedpyright 严格模式报 `reportUnnecessaryTypeIgnoreComment`，平台门才是双平台都干净的唯一修法。
 
 **验证**：`python -m py_compile src/web_tray.py` 通过；`mypy --platform linux src/`（模拟 CI）与 `mypy src/`（本地 win32）均 `Success: no issues found in 37 source files`。
 
@@ -1402,6 +1564,7 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 **根因**：GitHub Actions 的 `if` 表达式解析器仅允许白名单上下文（`github`/`needs`/`vars`/`matrix`/`inputs`/`env`/`steps`/`runner`/`job` 及状态函数），**`secrets` 上下文被明确排除在 `if` 条件之外**（job 级与 step 级 `if` 均不可用）。原 `test` job 内 `Upload coverage to Codecov` step 的 `if` 写为 `matrix.python-version == needs.setup.outputs.python_min && secrets.CODECOV_TOKEN != ''`，意图「仓库配置了 `secrets.CODECOV_TOKEN` 才上传、未配置自动跳过」，但表达式引擎在校验阶段遇到 `secrets` 即报 `Unrecognized named-value`，整份工作流无法加载。第 320 行 `token: ${{ secrets.CODECOV_TOKEN }}` 位于 `with:`（非 `if`），合法不受影响。
 
 **修复**（`.github/workflows/ci.yml`）：
+
 1. `test:` job 新增 job 级 `env:` 块，把 secret 提升为环境变量：`env: CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}`（job 级 env 对所有 step 的 `if` 可见，`env` 上下文允许在 step 级 `if` 使用）。
 2. 第 319 行 step `if` 由 `secrets.CODECOV_TOKEN != ''` 改为 `env.CODECOV_TOKEN != ''`，即 `if: matrix.python-version == needs.setup.outputs.python_min && env.CODECOV_TOKEN != ''`。原「未配置 token 时整步跳过」意图不变。
 
@@ -1413,20 +1576,22 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 
 **根因（实测对照，使用刚从 `get_huya_stream_data` 拉取的【新鲜】 token）**：虎牙 CDN 现已**反向校验**——
 
-| 请求 | HS 线路 | AL/TX 线路 |
-|------|--------|-----------|
-| 携带 `Referer: https://www.huya.com/` | **403** | 403（房间未承载推流，与 Referer 无关） |
-| 不携带 Referer | **200** ✅ | 403（房间未承载推流） |
+| 请求                                  | HS 线路     | AL/TX 线路                  |
+| ----------------------------------- | --------- | ------------------------- |
+| 携带 `Referer: https://www.huya.com/` | **403**   | 403（房间未承载推流，与 Referer 无关） |
+| 不携带 Referer                         | **200** ✅ | 403（房间未承载推流）              |
 
 即：**带 Referer 一律 403，去 Referer 时 HS 线路 GET 200 正常拉流**。`ctype`（`huya_webh5`/`huya_live`）与 `t=102` 经对照测试均非决定因素，**Referer 才是唯一开关**。2026-08-16 的探针把「过期 token 裸请求」的 403 误判为「缺 Referer 所致」（过期 token 无论带不带 Referer 都 403，恰好去 Referer 那次踩中有效窗口），从而错误注入了 Referer 规则；该规则如今成为录制失败的真正元凶。
 
 **修复（src/stream_select.py）**：
+
 1. 移除 `_RECORD_HEADER_RULES["虎牙直播"]` 的 `"referer:https://www.huya.com/"` 规则（留注释说明其已废弃）。
 2. 同步修正两处陈旧注释：原「虎牙 CDN 对无 Referer 直接 403、须带 Referer 才能 200」已失效，改为「携带 Referer 反而 403、须不携带 Referer」。
 3. 属平台级 base 头变更，经 `get_record_headers` 同时作用于**校验探针**（`_validate_stream_url`）与 **ffmpeg 录制命令**（`main.py:1762`），两端一致地不再下发 Referer——HS 线路即 200。登录态 Cookie（`hy_cookie`）仍经 `cookies` 参数独立注入，不受影响。
 4. 与上轮多 CDN 修复的关系：多 CDN 枚举（HS 优先）本身正确且保留；去掉 Referer 后 HS 即 200，AL/TX 离线房间仍由多 CDN 校验自动跳过。
 
 **验证**：
+
 - 实时 curl 对照（新鲜 token）：带 Referer → 403、去 Referer → 200（HS）；AL/TX 两线路无论如何均 403（房间未承载）。
 - 更新 `tests/test_main_fixes.py::TestHuyaReferer`（3 例）：`get_record_headers("虎牙直播", ...)` 不再返回 Referer、`_validate_stream_url(platform="虎牙直播")` 不附加 Referer；新增 `tests/test_stream_select.py::test_huya_record_headers_has_no_referer`（并保留 B站仍依赖 Referer 的对照）。
 - `pytest tests/test_stream_select.py tests/test_stream.py tests/test_spider_platform.py tests/test_main_fixes.py` 全绿（含更新的虎牙 Referer 用例）；`mypy src/stream_select.py` 0 错误。
@@ -1438,16 +1603,14 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 **修复内容**：
 
 1. **`spider.py:867`（mypy `Incompatible types in assignment`）**：原 `m3u8_url = selected_m3u8 if isinstance(selected_m3u8, str) else None` 把 line 842 已声明为 `str` 的 `m3u8_url`/`flv_url` 重新赋值为 `str | None`（来自 `dict[str, object].get()` 的 `object | None`），类型收窄冲突；且 line 872 `record_url = flv_url` 引用了被改写的变量。改为引入新变量 `selected_m3u8_url: str | None` / `selected_flv_url: str | None`，原 `m3u8_url`/`flv_url`（`str`）保持不变用于构造候选列表，return dict 与 `record_url` 逻辑改引用新变量。
-
 2. **`spider.py:2660`（mypy `Unpacking a string is disallowed`，code `misc`）**：`get_popkontv_stream_data` 返回注解误写成 `tuple[str, list[object] | None] | dict[str, object]`，但函数三条 return 路径从不返回 dict（全是 `(str, None)` / `(str, list)`）。残留的 `dict` 联合成员让 mypy 把 `room_info` 解包视为解包 dict（键为 `str`）触发 `misc` 错误；行尾 `# type: ignore[str-unpack]` 又写错错误码（应为 `misc`），且该版本 pyright 默认不生效。修复：返回注解删掉 `| dict[str, object]`；删除无效的 `type: ignore` 注释（`room_info: list[object] | None`，`if room_info:` 收窄后解包类型安全）。函数仅本文件内部调用，无外部影响。
-
 3. **`spider.py:4009-4013`（mypy `Value of type "str | None" is not indexable`）**：`get_pplive_stream_url` 中请求体 dict 与 JSON 响应解析结果**共用变量名 `json_data`**——line 3994 请求体 `json_data = {"inviteUuid": "", "anchorUuid": room_id}` 因 `room_id` 为 `OptionalStr`（`str | None`）被推断为 `dict[str, str | None]`；line 4007 又 `json_data = json.loads(json_str)`（`Any`）。mypy 对多次赋值取联合类型，残留 `str | None` 值类型使 `live_info = json_data["data"]` 被判为 `str | None`，其 `["name"]`/`["living"]`/`["pullUrl"]` 全部不可索引。对照同文件 `get_lang_live_stream_url` 的 `json_data` 仅经 `json.loads` 单次赋值、干净无报错。修复：将 line 3994 请求体重命名为 `req_body`、同步改 line 4005 的 `json_data=req_body`；`json_data` 此后仅由 `json.loads` 赋值，联合类型不再含 `str | None`。
-
 4. **`src/sync_http.py:52`（basedpyright `reportInvalidTypeForm`「类型表达式中不允许使用变量」）**：原 `try: from requests._types import JsonType except ImportError: from typing import Any as JsonType`。`typing.Any` 是运行期值，`from typing import Any as JsonType` 将符号判为**变量**，类型表达式禁用；且 requests 2.33+ 已把 `JsonType` 收进 `TYPE_CHECKING` 块、运行时导入必然失败，回退分支是唯一运行路径。修复：删除 `try/except`，本地显式定义递归 `TypeAlias`，结构与 requests 自身 `JsonType` 完全一致——`JsonType: TypeAlias = None | bool | int | float | str | Sequence["JsonType"] | Mapping[str, "JsonType"]`（顶部补 `from collections.abc import Sequence` 与 `from typing import TypeAlias`）。`requests.post(json=json_data)` 参数校验不受影响。
 
 **验证**：`python -m basedpyright src/spider.py` 与 `src/sync_http.py` 均 **0 errors / 0 warnings / 0 notes**；运行期导入正常（递归 TypeAlias 在 Python 3.10+ 可正常求值）。
 
 **教训沉淀**：
+
 - 返回注解必须与实际 return 路径严格一致，多余的联合成员会污染调用方类型推断（尤其解包场景）；错误码写错的 `type: ignore` 注释是死代码，应一并清理。
 - 请求体 dict 与 JSON 响应解析结果**不可共用同一变量名**（尤其值类型含 `None` 时），否则字面量值类型会污染 mypy 的联合推断、造成后续索引误报；命名上以 `req_body`/`payload`（请求体）与 `json_data`（响应）区分。
 - `from typing import Any as X` 在 `try/except` 中作类型回退会污染符号为「变量」、触发 `reportInvalidTypeForm`；应以本地递归 `TypeAlias` 替代。
@@ -1455,12 +1618,14 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 ### v4.0.8.2-dev (2026-08-18) — 虎牙 HLS 多 CDN 解析与播放根治：枚举全部 CDN 候选 + HS 优先 + http 化 + `select_source_url` 逐候选可达性校验（取代固定取 index0 / TX 优先的脆弱选源）
 
 **来源**：`新建文件夹/huya_179966_hls_report.md` + `huya_179966.html` + `hls_entries.txt`（房间 `https://www.huya.com/179966`，2026-08-18）。对报告中的真实 HLS 地址逐 CDN 实测探测：
+
 - `al.hls.huya.com` → GET **403**、`tx.hls.huya.com` → GET **403**、`hs.hls.huya.com` → **GET 200**（`application/x-mpegurl`，可拉流）；
 - `https://hs.hls.huya.com/...` → GET **403**（同一 HS 地址，仅 http 可用、https 被拒）。
 
 结论：同一房间内多条 CDN 线路（HS/HW/TX/AL）的防盗链参数完全一致，但仅当前承载推流的线路返回 200、其余稳定 403；且 https 统一 403、只有 http 可用。本条目取代并泛化了上一轮「固定 TX 优先」方案——TX 优先对 TX 在线房间有效，但对 TX/AL 均离线的房间（如 179966）仍整轮失败；枚举全候选 + `select_source_url` 逐条校验可动态规避任意离线线路。
 
 **根因**：旧实现把"选哪条 CDN 线路"做成静态决策，与"该线路是否在线"解耦，导致两类失败：
+
 1. **Web 路径 `get_huya_stream_url`**（`src/stream.py`）固定取 `stream_info_list[0]`，而房间页 `gameStreamInfoList` 首项常为 AL（实测 AL→403），整轮 HLS 直接不可达、被迫回退 FLV。
 2. **App 路径 `get_huya_app_stream_url`**（`src/spider.py`）按 `priority_order=["TX","HW","HS","AL"]` 取 TX（上一轮修复）。但对房间 179966 TX 同样离线（→403）；且旧的 `enable_https_recording` 升级把所选 URL 的 `http://` 强改为 `https://`，而 `*.hls.huya.com` 的 https 实测 403——校验探针若走 http（200）而 ffmpeg 实际走 https（403）会"校验假绿、录制真红"。
 3. 两条路径都**只产出单一 `m3u8_url`/`flv_url`**、无候选列表，`select_source_url` 只能"校验单条 → 失败 → 整轮放弃"，无法在多在线线路间择优。
@@ -1468,7 +1633,6 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 **修复**（四处协同）：
 
 1. **`src/stream_select.py:select_source_url`** — 新增候选列表支持：兼容旧的单个 `m3u8_url`/`flv_url`，同时消费平台（虎牙）返回的 `m3u8_url_list`/`flv_url_list`；去重并按"主源在前、候选列表在后"合并。HLS 优先时逐候选校验、首条可达即返回；中间候选失败继续尝试下一条；仅当"最后一条 HLS 且无其它回退源"才以 `last_resort` 放行给 ffmpeg。FLV 候选同理逐条迭代，h265 候选跳过并试其它 FLV。保留既有三级回退（HLS→FLV→record_url）与末位 `last_resort` 语义。
-
 2. **`src/stream.py:get_huya_stream_url`（Web 路径）** — 不再取 `stream_info_list[0]`：
    - 对 `gameStreamInfoList` **全部 CDN 项**构建 HLS+FLV 地址，直接使用房间页内嵌的原始防盗链参数（`sHlsAntiCode`/`sFlvAntiCode`），**不再重建 anti_code**（规避未被验证的签名算法）。
    - 统一降为 `http://`（实测 https 403、仅 http 可用），与校验探针共用同 scheme 防止"校验 http 可用、录制 https 被拒"。
@@ -1476,15 +1640,14 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
    - 画质 ratio 解析逻辑不变（仍从首个候选 `exsphd` 取档位表）。
    - 返回 `m3u8_url`/`flv_url`（主源=排序首位）+ `m3u8_url_list`/`flv_url_list`（全部候选，供 `select_source_url` 逐条校验）。
    - 清理死代码：移除废弃的 `get_anti_code` 重建函数及不再使用的 `base64/hashlib/random/time/urllib.parse` 导入。
-
 3. **`src/spider.py:get_huya_app_stream_url`（小程序 / OD / BD / UHD 路径）** — 不再固定 TX 优先：
    - 对 `baseSteamInfoList` **全部 CDN 项**用原始 `sHlsAntiCode`/`sFlvAntiCode` 构建地址；`_normalize` 显式传 `suffix` 区分 `.m3u8`/`.flv`，修复原"按 host 推断"在 HLS/FLV 同 host+`/src` 时恒判 m3u8 的隐患；统一 `http://` 化 + 全 CDN 一致地做 `tars_mp→huya_webh5`、`bhct→bgct` 反爬参数替换（缺失幂等）。
    - 按 `cdn_priority=["HS","HW","TX","AL"]` 排序候选；移除旧的固定 `priority_order` 与 TX-only 的 https 特例。
    - 返回 `m3u8_url`/`flv_url`（主源）+ `m3u8_url_list`/`flv_url_list`（全部候选）+ 同源 `record_url`（保持 http）。
-
 4. **`main.py`** — `enable_https_recording` 的 `http://`→`https://` 升级对 `虎牙直播` 平台**跳过**（与 `自定义录制直播` 同列），因为 `https://*.hls.huya.com` 实测 403、仅 http 可用；否则会制造"校验 http 通过、录制 https 被拒"的假绿。
 
 **验证**：
+
 - `tests/test_stream_select.py` 新增 `test_select_source_url_m3u8_list_picks_first_reachable`（候选列表首条可达即选用）、`test_select_source_url_m3u8_list_all_dead_falls_back_to_flv`（全部 HLS 候选死则回退 FLV）、`test_select_source_url_huya_backoff_round_straight_to_ffmpeg`（虎牙退避末位轮直放 ffmpeg）。
 - `tests/test_stream.py::TestGetHuyaStreamUrl` 重写/扩展（9 例）：`test_enumerates_all_cdn_candidates_hs_first`（枚举全 CDN 且 HS 优先）、`test_https_in_input_downgraded_to_http`（输入含 https 时降为 http）、`test_flv_url_carries_m3u8_candidate`、`test_flv_without_query_keeps_clean_m3u8`、offline/empty/none 等边界。
 - `tests/test_spider_platform.py::TestHuyaAppStreamUrl` 更新：`test_priority_prefers_tx_over_al_at_index0`（现验证 HS-first 顺序 + http scheme + `m3u8_url_list`/`flv_url_list` 注入）、新增 `test_hs_cdn_selected_first_when_present`（含 HS 候选时主源与列表首位均为 HS、全 http）、`test_al_used_as_last_resort_when_only_cdn`（仅 AL 时保持 http、同源 record_url）。
@@ -1501,6 +1664,7 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 **修复**（`src/spider.py:get_huya_app_stream_url`）：TX 选中时，`m3u8_url`/`flv_url` 与 `record_url` 一致地做 https 化 + `tars_mp→huya_webh5`/`bhct→bgct` 替换；非 TX 的 AL/HW/HS 维持原始 URL（不动旧行为）。`record_url` 仍由所选 flv 派生、始终 https 化，TX 优先的最终兜底语义不变。
 
 **验证**：
+
 - `tests/test_spider_platform.py::TestHuyaAppStreamUrl` 新增 `test_priority_prefers_tx_over_al_at_index0`（AL 抢占 index 0 时三项均落到 TX 且带 `huya_webh5`）、`test_al_used_as_last_resort_when_only_cdn`（仅 AL 时末位兜底、保持原始 URL）；全部 5 例通过。
 - `py_compile` + `basedpyright src/spider.py`：0 errors / 0 warnings。
 - **✅ 已用户实测验证**（2026-08-18 07:09–07:10，房间 `https://www.huya.com/528300` 安德罗妮丶，Web 模式 v4.0.8.2）：
@@ -1550,13 +1714,13 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 
 **逐行排查与根因映射**：
 
-| 时间 | 级别 | 日志内容 | 根因定位 | 对应源码 | 影响 |
-| --- | --- | --- | --- | --- | --- |
+| 时间                | 级别      | 日志内容                                                                               | 根因定位                                                       | 对应源码                                                                                                                                                    | 影响               |
+| ----------------- | ------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
 | 22:09:57–22:10:00 | WARNING | 流地址校验失败: `hs/tx/al.hls.huya.com/...m3u8` - HEAD=403, Range-GET=403（al 为 text/html） | 三个 HLS CDN **全部**返回 403（应用层拒绝），HEAD 与 Range-GET 双拒 → 均判不可达 | `src/stream_select.py:_validate_stream_url` 的 m3u8 分支（HEAD 非 2xx → Range-GET 探测，403 重试后仍拒 → False）；上层记 `HLS URL validation failed, falling back to FLV` | 否（触发 HLS→FLV 回退） |
-| 22:10:00.535 | WARNING | `HLS URL validation failed, falling back to FLV` | 回退逻辑正常执行 | `src/stream_select.py:select_source_url` | 否 |
-| 22:10:00.859 | DEBUG | `[弹幕采集]HuyaDanmaku 连接就绪,开始接收弹幕` | 弹幕 WebSocket 独立建链成功（与视频 CDN 无关） | `src/platforms/huya.py:HuyaDanmaku.start` → `wss://cdnws.api.huya.com`（Tars 编码） | 否（弹幕正常） |
-| 22:10:06 | INFO | `准备开始录制视频 .../蛇类科普蛇哥_2026-08-18_22-10-00.ts` | FLV 校验一次通过，ffmpeg 直接拉流（无 FLV 失败日志） | `main.py` 录制链 + `src/spider.py:get_huya_app_stream_url` | 否（录制正常） |
-| 22:10:06–22:10:45 | INFO | `累计错误数为: 0`，弹幕 5 条 | 全程无录制/解析错误，HLS 三拒已被回退链吸收 | — | 否 |
+| 22:10:00.535      | WARNING | `HLS URL validation failed, falling back to FLV`                                   | 回退逻辑正常执行                                                   | `src/stream_select.py:select_source_url`                                                                                                                | 否                |
+| 22:10:00.859      | DEBUG   | `[弹幕采集]HuyaDanmaku 连接就绪,开始接收弹幕`                                                    | 弹幕 WebSocket 独立建链成功（与视频 CDN 无关）                            | `src/platforms/huya.py:HuyaDanmaku.start` → `wss://cdnws.api.huya.com`（Tars 编码）                                                                         | 否（弹幕正常）          |
+| 22:10:06          | INFO    | `准备开始录制视频 .../蛇类科普蛇哥_2026-08-18_22-10-00.ts`                                       | FLV 校验一次通过，ffmpeg 直接拉流（无 FLV 失败日志）                         | `main.py` 录制链 + `src/spider.py:get_huya_app_stream_url`                                                                                                 | 否（录制正常）          |
+| 22:10:06–22:10:45 | INFO    | `累计错误数为: 0`，弹幕 5 条                                                                 | 全程无录制/解析错误，HLS 三拒已被回退链吸收                                   | —                                                                                                                                                       | 否                |
 
 **与 60066 复盘的结构性差异**：今早 60066 仅 **AL 单 CDN** 403（HLS 经 TX 可用、FLV 经 AL 假绿回退 record_url）；本次 179966 **HLS 三 CDN（hs/tx/al）同时全拒**，FLV 校验却一次通过并直接录制。三 HLS 全拒疑与房间 URL 的 `fs=bgct&t=102` 风控参数或游客态有关，但 FLV 兜底即时生效、零影响——印证「坏候选被校验干净排除 → 可用候选兜底」链路对「全拒」与「单拒」形态同样鲁棒。
 
@@ -2334,7 +2498,7 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 
 **新增 `.github/workflows/ci.yml` 静态验证工作流**：
 
-- push 到 main / PR 触发；`dorny/paths-filter@v3` 路径过滤，纯前端/文档/i18n 变更不触发 Python 检查
+- push 到 main / PR 触发；`dorny/paths-filter@v4` 路径过滤，纯前端/文档/i18n 变更不触发 Python 检查
 - 7 个并行 job：lint（black --check）、typecheck（mypy src/，py3.10）、isort（--check）、version-check（`scripts/check_version.py`）、test（pytest + 覆盖率）、concurrency-test、integration-verify（ffmpeg/node 二进制可发现性 + `check_ffmpeg_installed()` / `check_nodejs_installed()` 检测函数验证）
 - concurrency-test 通过 `COVERAGE_RCFILE=.coveragerc-concurrency` 使用专用覆盖率配置（不设全局阈值，全局门禁由完整 test job 保证），运行 `test_concurrency_rate_limit.py` + `test_concurrency.py`
 
@@ -2705,4 +2869,4 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 - 重构为异步架构
 - 新增强制 H264 编码选项
 
-*本文档最后更新: 2026-08-18（新增：类型检查收尾——spider.py 三处 mypy 告警 867/2660/4009-4013 + sync_http.py:52 basedpyright reportInvalidTypeForm 清零；修正 sync_http.py JsonType 实现描述）*
+*本文档最后更新: 2026-08-19（新增：CI 重构——build-release.yml 去除 download-artifact 来回，build job 经 softprops 直传 Release，release job 改用 gh CLI 拉回校验；新增 release-create 单例 job 消除并发竞态；修复 create_release boolean 比较恒 false（5 处）与 release-create 缺 checkout 导致 `fatal: not in a git directory`）*
