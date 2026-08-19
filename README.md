@@ -1,10 +1,9 @@
-![video_spider](https://socialify.git.ci/ihmily/DouyinLiveRecorder/image?font=Inter&forks=1&language=1&owner=1&pattern=Circuit%20Board&stargazers=1&theme=Light)
+![video_spider](https://socialify.git.ci/y123ao6/DouyinLiveRecorder/image?font=Inter&forks=1&language=1&owner=1&pattern=Circuit%20Board&stargazers=1&theme=Light)
 
 ## 💡 简介
 
 [![Python Version](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Supported Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS-blue.svg)](https://github.com/y123ao6/DouyinLiveRecorder)
-[![Docker Pulls](https://img.shields.io/docker/pulls/ihmily/douyin-live-recorder?label=Docker%20Pulls&color=blue&logo=docker)](https://hub.docker.com/r/ihmily/douyin-live-recorder/tags)
 [![GitHub issues](https://img.shields.io/github/issues/y123ao6/DouyinLiveRecorder.svg)](https://github.com/y123ao6/DouyinLiveRecorder/issues)
 [![Latest Release](https://img.shields.io/github/v/release/y123ao6/DouyinLiveRecorder)](https://github.com/y123ao6/DouyinLiveRecorder/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/y123ao6/DouyinLiveRecorder/total)](https://github.com/y123ao6/DouyinLiveRecorder/releases/latest)
@@ -12,6 +11,8 @@
 [![Stars](https://img.shields.io/github/stars/y123ao6/DouyinLiveRecorder?style=flat-square)](https://github.com/y123ao6/DouyinLiveRecorder/stargazers)
 
 一款**简易**的可循环值守的直播录制工具，基于 FFmpeg 实现多平台直播源录制，支持自定义配置录制以及直播状态推送。
+
+上游项目：[ihmily/DouyinLiveRecorder](https://github.com/ihmily/DouyinLiveRecorder)
 
 ## ✨ 功能特性
 
@@ -698,27 +699,27 @@ brew install node
 
 ## ❤️ 贡献者
 
-[![Hmily](https://github.com/ihmily.png?size=50)](https://github.com/ihmily)
-[![iridescentGray](https://github.com/iridescentGray.png?size=50)](https://github.com/iridescentGray)
-[![annidy](https://github.com/annidy.png?size=50)](https://github.com/annidy)
-[![wwkk2580](https://github.com/wwkk2580.png?size=50)](https://github.com/wwkk2580)
-[![missuo](https://github.com/missuo.png?size=50)](https://github.com/missuo)
-[![xueli12](https://github.com/xueli12.png?size=50)](https://github.com/xueli12)
-[![kaine1973](https://github.com/kaine1973.png?size=50)](https://github.com/kaine1973)
-[![yinruiqing](https://github.com/yinruiqing.png?size=50)](https://github.com/yinruiqing)
-[![Max-Tortoise](https://github.com/Max-Tortoise.png?size=50)](https://github.com/Max-Tortoise)
-[![justdoiting](https://github.com/justdoiting.png?size=50)](https://github.com/justdoiting)
-[![dhbxs](https://github.com/dhbxs.png?size=50)](https://github.com/dhbxs)
-[![wujiyu115](https://github.com/wujiyu115.png?size=50)](https://github.com/wujiyu115)
-[![zhanghao333](https://github.com/zhanghao333.png?size=50)](https://github.com/zhanghao333)
-[![gyc0123](https://github.com/gyc0123.png?size=50)](https://github.com/gyc0123)
-
-[![HoratioShaw](https://github.com/HoratioShaw.png?size=50)](https://github.com/HoratioShaw)
-[![nov30th](https://github.com/nov30th.png?size=50)](https://github.com/nov30th)
-[![727155455](https://github.com/727155455.png?size=50)](https://github.com/727155455)
-[![nixingshiguang](https://github.com/nixingshiguang.png?size=50)](https://github.com/nixingshiguang)
-[![1411430556](https://github.com/1411430556.png?size=50)](https://github.com/1411430556)
-[![Ovear](https://github.com/Ovear.png?size=50)](https://github.com/Ovear)
+<a href="https://github.com/ihmily"><img src="https://github.com/ihmily.png?size=50" width="50" height="50" alt="Hmily"></a>
+<a href="https://github.com/iridescentGray"><img src="https://github.com/iridescentGray.png?size=50" width="50" height="50" alt="iridescentGray"></a>
+<a href="https://github.com/annidy"><img src="https://github.com/annidy.png?size=50" width="50" height="50" alt="annidy"></a>
+<a href="https://github.com/wwkk2580"><img src="https://github.com/wwkk2580.png?size=50" width="50" height="50" alt="wwkk2580"></a>
+<a href="https://github.com/missuo"><img src="https://github.com/missuo.png?size=50" width="50" height="50" alt="missuo"></a>
+<a href="https://github.com/xueli12"><img src="https://github.com/xueli12.png?size=50" width="50" height="50" alt="xueli12"></a>
+<a href="https://github.com/kaine1973"><img src="https://github.com/kaine1973.png?size=50" width="50" height="50" alt="kaine1973"></a>
+<a href="https://github.com/yinruiqing"><img src="https://github.com/yinruiqing.png?size=50" width="50" height="50" alt="yinruiqing"></a>
+<a href="https://github.com/Max-Tortoise"><img src="https://github.com/Max-Tortoise.png?size=50" width="50" height="50" alt="Max-Tortoise"></a>
+<a href="https://github.com/justdoiting"><img src="https://github.com/justdoiting.png?size=50" width="50" height="50" alt="justdoiting"></a>
+<a href="https://github.com/dhbxs"><img src="https://github.com/dhbxs.png?size=50" width="50" height="50" alt="dhbxs"></a>
+<a href="https://github.com/wujiyu115"><img src="https://github.com/wujiyu115.png?size=50" width="50" height="50" alt="wujiyu115"></a>
+<a href="https://github.com/zhanghao333"><img src="https://github.com/zhanghao333.png?size=50" width="50" height="50" alt="zhanghao333"></a>
+<a href="https://github.com/gyc0123"><img src="https://github.com/gyc0123.png?size=50" width="50" height="50" alt="gyc0123"></a>
+<a href="https://github.com/HoratioShaw"><img src="https://github.com/HoratioShaw.png?size=50" width="50" height="50" alt="HoratioShaw"></a>
+<a href="https://github.com/nov30th"><img src="https://github.com/nov30th.png?size=50" width="50" height="50" alt="nov30th"></a>
+<a href="https://github.com/727155455"><img src="https://github.com/727155455.png?size=50" width="50" height="50" alt="727155455"></a>
+<a href="https://github.com/nixingshiguang"><img src="https://github.com/nixingshiguang.png?size=50" width="50" height="50" alt="nixingshiguang"></a>
+<a href="https://github.com/1411430556"><img src="https://github.com/1411430556.png?size=50" width="50" height="50" alt="1411430556"></a>
+<a href="https://github.com/Ovear"><img src="https://github.com/Ovear.png?size=50" width="50" height="50" alt="Ovear"></a>
+<a href="https://github.com/y123ao6"><img src="https://github.com/y123ao6.png?size=50" width="50" height="50" alt="y123ao6"></a>
 
 ## 📄 许可证
 
@@ -813,6 +814,8 @@ brew install node
 - **凭据清理**：硬编码过期凭据改自动获取（抖音 ttwid、快手 did、Twitch Client-Id 等）。
 - **构建/依赖**：Dockerfile 升 Node.js 22 LTS、非 root 运行；新增 `pydantic>=2.0.0` 依赖声明；全项目类型检查（Pyright/Pyrefly/basedpyright）清理。
 
+<details><summary>点击展开更多历史版本</summary>
+
 ### v4.0.7 (2025-10-24)
 
 - 修复抖音风控无法获取数据问题
@@ -847,8 +850,6 @@ brew install node
 - 修复 Liveme 直播录制、twitch 直播录制
 - 新增 Windows 平台一键停止录制 VB 脚本程序
 
-<details><summary>点击展开更多历史版本</summary>
-
 ### v4.0.3 (2024-10-05)
 
 - 新增邮箱和 Bark 推送
@@ -874,6 +875,6 @@ brew install node
 
 </details>
 
-## 💬 有问题可以提 Issue，我会在这里持续添加更多直播平台的录制 欢迎 Star
+## 💬 有问题可以向我提 Issue，我会在这里持续添加更多直播平台的录制 欢迎 Star
 
-[![Star History Chart](https://api.star-history.com/svg?repos=ihmily/DouyinLiveRecorder&type=Timeline)](https://star-history.com/#ihmily/DouyinLiveRecorder&Timeline)
+[![Star History Chart](https://api.star-history.com/svg?repos=y123ao6/DouyinLiveRecorder&type=Timeline)](https://star-history.com/#y123ao6/DouyinLiveRecorder&Timeline)
