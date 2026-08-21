@@ -1462,6 +1462,44 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 
 ## 更新日志
 
+### v4.0.8.3-dev (2026-08-22) — pythonw / 窗口化运行崩溃可观测性加固：logger None-stderr 守卫 + 顶层崩溃落盘钩子（缺陷修复）
+
+**来源**：用户反馈 `pythonw.exe gui.py`（及 `console=False` 冻结 exe）启动后完全无窗口、无任何报错，而 `python.exe gui.py` 正常。首轮在 gui.py 顶部加崩溃兜底层但未生效，最终靠该兜底层抓到的真实堆栈定位到根因：`src/logger.py:36` 在模块导入期 `logger.add(sink=sys.stderr, ...)` 抛 `TypeError: Cannot log to objects of type 'NoneType'`。
+
+**根因**：`pythonw` / `console=False` 冻结 exe 不分配控制台，`sys.stdin/stdout/stderr` 全为 `None`。loguru 拒绝把 `None` 作为 sink，于是在 `gui.py → src.web_config → src.__init__ → node_install → logger` 的导入链上、模块加载期即抛异常并静默退出。**与解释器是否一致无关**（用户 pythonw 与能跑的 python.exe 同为 CPython 3.14）。
+
+**改动**：
+
+- **`src/logger.py`（`_ = logger.add(sink=sys.stderr, ...)` 加 `sys.stderr is not None` 守卫）**：
+  - 无控制台环境（pythonw / 冻结 `console=False`）跳过控制台 sink，避免导入期 `TypeError`；日志持久化仍由下方 `logs/streamget.log`、`PlayURL.log` 文件 sink 兜底。
+  - 加注释说明 pythonw 窗口化 `sys.stderr=None` 语义与判空理由。
+
+- **`gui.py` 窗口化崩溃可观测性加固（前序提交，本次一并记入）**：
+  - 文件最顶部新增 `_install_crash_sink()`：在**所有风险导入之前**装 `sys.excepthook` 与 `threading.excepthook`，将任何未捕获异常（含模块导入期失败）的完整堆栈写入 `%TEMP%/douyin_recorder_gui_error.log` 并尽力弹 `tkinter.messagebox` 报错框，根治「窗口化运行静默死亡、看不到原因」的问题。
+  - `LiveRecorderGUI.__init__` 的 UI 回调异常分支原 `traceback.print_exc()`（None stderr 下二次 `AttributeError` 崩溃、带崩事件泵）改为 `self._log(traceback.format_exc(), "error")`，走程序内「运行日志」队列，无控制台亦可观测。
+  - `__main__` 包 `try: main() except: _bootstrap_error_sink(); raise`，控制台环境仍保留原始堆栈。
+
+**验证**：模拟 `sys.stderr=None` 下 `import src.logger` 成功、注册 2 个文件 sink、不抛 `TypeError`；`py_compile src/logger.py` 通过；`black --check src/logger.py` 通过。前序 gui.py 改动 `py_compile` 与 `black --check` 均通过；并已用沙箱模拟「导入期崩溃」验证顶层崩溃钩子能落盘。
+
+**关联**：长期坑已写入 `MEMORY.md`（「pythonw 窗口化 sys.stderr=None 致 logger.add 崩溃」）；排查套路——窗口化静默崩溃先装 `sys.excepthook`/`threading.excepthook` 落盘+弹窗钩子，再逐层 grep `sink=sys.` / `print_exc` / `sys.stdout.write` 等 None 敏感点逐一判空。
+
+### v4.0.8.3-dev (2026-08-22) — 类型检查修复：i18n 可选依赖存根忽略 + gui.py messagebox 显式导入 + 线程钩子判空（代码质量）
+
+**来源**：类型检查工具报告三处错误——① mypy 在 `i18n.py:23` 报 `Library stubs not installed for "yaml"`（YAML 为可选依赖、被 `try/except ImportError` 包裹，静态分析找不到类型存根）；② basedpyright 在 `gui.py:46` 与 `gui.py:3035` 报 `reportAttributeAccessIssue`：「"messagebox" 不是 "tkinter" 模块的已知属性」（`messagebox` 是 tkinter 子模块，不能经 `_tk.messagebox` 属性式访问）；③ basedpyright/mypy 在 `gui.py:56` 报 `reportArgumentType`：`threading.ExceptHookArgs.exc_value` 类型为 `BaseException | None`，不兼容 `_dump` 形参要求的 `BaseException`。
+
+**改动**：
+
+- **`i18n.py`（可选依赖存根忽略）**：
+  - `import yaml` 加 `# type: ignore[import-untyped]`，明确声明 PyYAML 为可选依赖、忽略缺失存根提示（不安装 `types-PyYAML`，以保留「缺失仅损失 YAML 格式」的运行时降级语义，符合 AGENTS.md 约定）。
+  - 降级分支 `yaml = None` 改为 `yaml: Any | None = None`，提供显式类型注解（替换原 `# type: ignore[assignment]`），并在 `from typing import` 中补入 `Any`。
+- **`gui.py`（messagebox 显式导入，两处）**：
+  - 文件顶部 `_dump` 崩溃弹窗：`import tkinter as _tk` 后新增 `from tkinter import messagebox as _mb`，改用 `_mb.showerror(...)` 替代 `_tk.messagebox.showerror(...)`。
+  - `main()` 入口崩溃弹窗：同样改为显式导入并使用 `_mb.showerror(...)`。
+- **`gui.py`（线程钩子判空）**：
+  - `_thread_dump` 中 `args.exc_value` 可能为 `None`，新增 `if args.exc_value is None: return` 守卫后再调 `_dump(...)`，消除 `BaseException | None` 不兼容报错。
+
+**验证**：`mypy i18n.py` → `Success: no issues found`；`basedpyright gui.py` → **0 errors / 0 warnings / 0 notes**；`black --check` / `isort --check-only` 两文件通过；运行时行为不变（YAML 缺失仍降级、崩溃弹窗仍经标准库 tkinter 弹出）。
+
 ### v4.0.8.3-dev (2026-08-21) — start_record 复杂度治理：平台分派链抽取 + 录制链冗余条件消除（代码质量）
 
 **来源**：basedpyright 在 `main.py:866`（`start_record`）报告「代码过于复杂导致无法完成分析」——该函数约 1600 行（内含 700 行 / 52 个平台的分派 if/elif 链 + 900 行录制执行链），条件流节点超出 basedpyright 单函数分析上限。

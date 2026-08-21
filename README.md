@@ -827,7 +827,7 @@ brew install node
 
 ## ⏳ 更新日志
 
-### v4.0.8.3 (2026-08-19 ~ 2026-08-21) — 主播名自动更新 / SSL 配置整合 / 四语国际化 / FFmpeg9·Node24 兼容 / 类型安全加固 / start_record 复杂度治理
+### v4.0.8.3 (2026-08-19 ~ 2026-08-22) — 主播名自动更新 / SSL 配置整合 / 四语国际化 / FFmpeg9·Node24 兼容 / 类型安全加固 / start_record 复杂度治理 / 窗口化崩溃加固 / 类型检查缺陷修复
 
 > 本版本在 4.0.8.2 系列修复基础上补齐多项新增能力与底层兼容，并以 mypy / basedpyright / pytest(0 warnings) / black / isort 五工具门禁全绿收口。详细根因与验证见 [CODE_WIKI.md](CODE_WIKI.md)。
 
@@ -854,6 +854,16 @@ brew install node
 
 **🧹 start_record 复杂度治理（代码质量）**
 - `main.py:start_record`（原约 1600 行）的平台分派 if/elif 链（52 平台分支）抽取为独立模块级函数 `_resolve_platform_stream`，录制执行链控制流未动；消除 19 个被掩盖的 `possibly unbound`（移除恒真冗余 `if real_url:` 包装、清理失效 cast、修复 `record_name` 绑定），同时修复「录制链不得嵌套于条件内」反模式。basedpyright 原「过于复杂」错误消除。
+
+**🧩 类型检查缺陷修复（代码质量）**
+- `i18n.py`：`import yaml` 加 `# type: ignore[import-untyped]` 忽略可选依赖缺失存根提示（保留「缺失仅损失 YAML 格式」的运行时降级语义，符合 AGENTS.md 约定）；降级分支 `yaml = None` 改为 `yaml: Any | None = None` 显式注解。
+- `gui.py`：`messagebox` 由属性式 `_tk.messagebox` 改为显式 `from tkinter import messagebox as _mb` 导入（两处崩溃弹窗），消除 `reportAttributeAccessIssue`；线程钩子 `_thread_dump` 对 `args.exc_value` 为 `None` 时新增 `if args.exc_value is None: return` 守卫，消除 `BaseException | None` 不兼容报错。
+- 验证：`mypy i18n.py` → `Success: no issues found`；`basedpyright gui.py` → 0 errors / 0 warnings / 0 notes；`black --check` / `isort --check-only` 通过；运行时行为不变。
+
+**🪟 窗口化运行崩溃可观测性加固（缺陷修复）**
+- 修复 `pythonw.exe`（及 `console=False` 冻结 exe）启动 GUI 时**完全无窗口、无任何报错**的问题：根因为 `src/logger.py` 在导入期 `logger.add(sink=sys.stderr, ...)` 遇 `sys.stderr=None` 抛 `TypeError: Cannot log to objects of type 'NoneType'`，于导入链上静默退出。**已加 `sys.stderr is not None` 守卫**，无控制台环境跳过控制台 sink、由 `logs/streamget.log`、`PlayURL.log` 文件 sink 兜底。
+- `gui.py` 顶部新增 `_install_crash_sink()`：在**所有风险导入之前**装 `sys.excepthook` / `threading.excepthook`，将未捕获异常（含导入期失败）完整堆栈写入 `%TEMP%/douyin_recorder_gui_error.log` 并尽力弹错误框，根治窗口化静默死亡；UI 回调异常分支改用程序内「运行日志」队列，`__main__` 包 `try/except` 保留控制台原始堆栈。
+- 验证：模拟 `sys.stderr=None` 下 `import src.logger` 成功、注册 2 个文件 sink、不抛 `TypeError`；`py_compile` 与 `black --check` 均通过。
 
 **📚 架构文档更新**
 - `CODE_WIKI.md` 补全弹幕采集子系统（基类/采集器/5 平台客户端/监控枢纽/SRT/WS/访客 Cookie 缓存/protobuf）、`src/platforms` 与 `src/proto` 模块说明、模块依赖图与设计模式；版本号更正为 4.0.8.3（对齐 `pyproject.toml` 唯一事实源）。

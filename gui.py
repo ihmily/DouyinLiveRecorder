@@ -8,6 +8,65 @@
 # AdvancedSettingsWindow（config.ini 编辑器）、Colors / Fonts（主题与字体）。
 from __future__ import annotations
 
+
+# 窗口化运行（pythonw / PyInstaller console=False 冻结 exe）下 sys.stderr 为
+# None，任何未捕获异常（含模块顶层 import 失败、后台线程异常）都会被静默吞掉，
+# 表现为“启动后无窗口、无报错”。这里在一切风险导入之前安装全局异常钩子，
+# 把堆栈落盘到临时目录并尽力弹窗，保证可观测。
+def _install_crash_sink() -> None:
+    import os
+    import sys
+    import tempfile
+    import threading
+    import traceback
+    from types import TracebackType
+
+    _LOG = os.path.join(tempfile.gettempdir(), "douyin_recorder_gui_error.log")
+
+    def _dump(
+        exc_type: type[BaseException],
+        exc_value: BaseException,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        try:
+            text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        except Exception:
+            text = repr(exc_value)
+        try:
+            with open(_LOG, "a", encoding="utf-8") as _f:
+                _f.write(text)
+        except Exception:
+            pass
+        # 尽力弹窗（customtkinter/PIL 缺失时，标准库 tkinter 通常仍可用）
+        try:
+            import tkinter as _tk
+            import tkinter.messagebox as _messagebox
+
+            _root = _tk.Tk()
+            _root.withdraw()
+            _messagebox.showerror("GUI 启动失败", text[-3000:])
+        except Exception:
+            pass
+
+    sys.excepthook = _dump  # type: ignore[assignment]
+    if hasattr(threading, "excepthook"):
+        _orig_thread_hook = threading.excepthook
+
+        def _thread_dump(args: threading.ExceptHookArgs) -> None:
+            if args.exc_value is None:
+                return
+            _dump(args.exc_type, args.exc_value, args.exc_traceback)
+            try:
+                _orig_thread_hook(args)  # type: ignore[call-arg]
+            except Exception:
+                pass
+
+        threading.excepthook = _thread_dump  # type: ignore[assignment]
+
+
+_install_crash_sink()
+
+
 import configparser
 import io
 import json
@@ -19,6 +78,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import tkinter as tk
 from collections import deque
 from collections.abc import Callable
@@ -733,11 +793,13 @@ class LiveRecorderGUI:
             try:
                 callback(*args)
             except Exception:
-                # 记录回调异常便于排查，避免静默吞掉 UI 回调 bug
-                self._log("UI 事件回调执行异常（详见控制台）", "error")
-                import traceback
-
-                traceback.print_exc()
+                # 记录回调异常便于排查，避免静默吞掉 UI 回调 bug。
+                # 窗口化运行（pythonw / PyInstaller console=False 冻结 exe）
+                # 下 sys.stderr 为 None，直接 traceback.print_exc() 会二次崩溃
+                # （AttributeError: 'NoneType' object has no attribute 'write'）；
+                # 改写为程序内日志，保证无控制台环境也可观测且不抛。
+                self._log("UI 事件回调执行异常（详见运行日志）", "error")
+                self._log(traceback.format_exc(), "error")
 
         if not self._pump_active:
             return
@@ -2954,6 +3016,30 @@ class LiveRecorderGUI:
             pass
 
 
+# 顶层兜底：窗口化运行（pythonw / PyInstaller console=False 冻结 exe）下
+# sys.stderr 为 None，任何启动期未捕获异常会被静默吞掉，表现为“启动后
+# 无窗口、无报错”。这里把堆栈落盘到临时目录并弹窗，保证可观测。
+def _bootstrap_error_sink(exc: BaseException) -> None:
+    tb_text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    try:
+        import tempfile
+
+        log_path = os.path.join(tempfile.gettempdir(), "douyin_recorder_gui_error.log")
+        with open(log_path, "w", encoding="utf-8") as _f:
+            _f.write(tb_text)
+    except Exception:
+        pass
+    try:
+        import tkinter as _tk
+        from tkinter import messagebox as _mb
+
+        _root = _tk.Tk()
+        _root.withdraw()
+        _mb.showerror("GUI 启动失败", tb_text[-3000:])
+    except Exception:
+        pass
+
+
 # 程序入口：初始化主窗口与系统托盘，并按平台进入主事件循环。
 def main() -> None:
     # 主函数
@@ -2986,4 +3072,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as _exc:  # 顶层兜底：窗口化运行也能看到错误
+        _bootstrap_error_sink(_exc)
+        raise  # 保留控制台环境的原始堆栈可见性
