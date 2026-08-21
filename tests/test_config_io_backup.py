@@ -21,7 +21,7 @@ def _seed_backups(backup_dir: str, prefix: str, count: int) -> None:
         with open(path, "w", encoding="utf-8") as f:
             _ = f.write("x")
         # 递增 mtime，保证旋转时按"由旧到新"排序确定
-        _ = os.utime(path, (i * 100, i * 100))
+        os.utime(path, (i * 100, i * 100))
 
 
 def test_rotation_deletes_excess(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -57,7 +57,12 @@ def test_rotation_delete_failure_is_best_effort(tmp_path: Path, monkeypatch: pyt
     _seed_backups(str(backup_dir), prefix, seed)
 
     calls: list[str] = []
-    monkeypatch.setattr(os, "remove", lambda p: (_calls_append(calls, p), _raise())[0])
+
+    def _remove_and_raise(p: str) -> None:
+        calls.append(p)
+        _raise()
+
+    monkeypatch.setattr(os, "remove", _remove_and_raise)
 
     captured: list[str] = []
     handler_id = logger.add(lambda msg: captured.append(str(msg)), level="WARNING")

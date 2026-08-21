@@ -14,6 +14,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from typing import Any, cast
+
 from src import spider  # noqa: E402
 from src.platforms._tars import TarsInputStream, TarsOutputStream  # noqa: E402
 
@@ -55,7 +57,7 @@ PROFILEROOM_SAMPLE = {
 }
 
 
-def test_int64_branch():
+def test_int64_branch() -> None:
     # write_int 对超 int32 的值写 INT8; 边界值与 int32 内仍写 INT4; 0 写 ZERO_TAG。
     oos = TarsOutputStream()
     oos.write_int(0, 0)  # ZERO_TAG
@@ -75,7 +77,7 @@ def test_int64_branch():
     assert ins.read_int(5) == 5000000000
 
 
-def test_join_data_ayyuid_overflow():
+def test_join_data_ayyuid_overflow() -> None:
     # 真实超 int32 的 ayyuid 也能用 _make_join_data 编码,不抛 struct.error。
     from src.platforms.huya import HuyaDanmaku
 
@@ -85,14 +87,14 @@ def test_join_data_ayyuid_overflow():
     assert isinstance(data, bytes) and len(data) > 0
 
 
-def test_profileRoom_fields():
+def test_profileRoom_fields() -> None:
     # get_huya_app_stream_url 返回的 dict 含弹幕所需三元组, 与 web 路径字段一致。
 
-    async def fake_async_req(url=None, proxy_addr=None, headers=None):
+    async def fake_async_req(url: Any = None, proxy_addr: Any = None, headers: Any = None) -> str:
         # 数值型 roomid 不触发 html 抓取, 直接返回 profileRoom JSON
         return json.dumps(PROFILEROOM_SAMPLE)
 
-    spider.async_req = fake_async_req
+    spider.async_req = fake_async_req  # type: ignore[assignment]
     result = asyncio.run(
         spider.get_huya_app_stream_url(
             url="https://www.huya.com/660000",
@@ -107,15 +109,15 @@ def test_profileRoom_fields():
     assert result["lSubChannelId"] == 1346609715
     # 可作为弹幕 join 参数(与 huya.py _args 键一致)
     args = {
-        "ayyuid": int(result["yyid"]),
-        "topSid": int(result["lChannelId"]),
-        "subSid": int(result["lSubChannelId"]),
+        "ayyuid": int(cast(Any, result["yyid"])),
+        "topSid": int(cast(Any, result["lChannelId"])),
+        "subSid": int(cast(Any, result["lSubChannelId"])),
     }
     assert args["ayyuid"] == 1486578378
     assert args["topSid"] == 1346609715
     assert args["subSid"] == 1346609715
     # 录制字段不受影响（虎牙防盗链统一降为 http，https 实测 403）
-    assert result["flv_url"].startswith("http://")
+    assert str(result["flv_url"]).startswith("http://")
     assert "m3u8_url" in result
 
 

@@ -321,3 +321,73 @@ class TestListFiles:
         assert resp.status_code == 200
         names = [i["name"] for i in resp.json()]
         assert "a.ts" in names
+
+
+class TestLanguageApi:
+    """GET/PUT /api/language：语言查询与即时切换（写回 config + 热切换进程内翻译）。"""
+
+    def _write_language_section(self, cfg: Path, value: str = "zh_cn") -> None:
+        # 追加 [录制设置] 节与 language 键（update_config_line 行级更新需键已存在）
+        text = cfg.read_text(encoding="utf-8-sig")
+        if "[录制设置]" not in text:
+            text += "\n[录制设置]\n"
+        if "language(zh_cn/en)" not in text:
+            text += f"language(zh_cn/en) = {value}\n"
+        cfg.write_text(text, encoding="utf-8-sig")
+
+    def test_get_language_returns_current_and_available(self, app_env: types.SimpleNamespace) -> None:
+        token = _login(app_env.client)
+        resp = app_env.client.get("/api/language", headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["language"] in ("zh_CN", "en_US", "en_GB", "zh_TW")
+        assert set(data["available"].keys()) == {"zh_CN", "en_US", "en_GB", "zh_TW"}
+
+    def test_put_language_switches_and_persists(self, app_env: types.SimpleNamespace) -> None:
+        import i18n as i18n_module
+
+        saved = i18n_module.get_language()
+        try:
+            self._write_language_section(app_env.cfg, "zh_cn")
+            token = _login(app_env.client)
+            resp = app_env.client.put(
+                "/api/language", json={"language": "en_US"}, headers={"Authorization": f"Bearer {token}"}
+            )
+            assert resp.status_code == 200, resp.text
+            assert resp.json()["language"] == "en_US"
+            # 进程内翻译已热切换
+            assert i18n_module.get_language() == "en_US"
+            # config.ini 已写回归一化语言码
+            assert "language(zh_cn/en) = en_US" in app_env.cfg.read_text(encoding="utf-8-sig")
+        finally:
+            _ = i18n_module.set_language(saved)
+
+    def test_put_language_accepts_alias(self, app_env: types.SimpleNamespace) -> None:
+        import i18n as i18n_module
+
+        saved = i18n_module.get_language()
+        try:
+            self._write_language_section(app_env.cfg, "zh_cn")
+            token = _login(app_env.client)
+            resp = app_env.client.put(
+                "/api/language", json={"language": "zh-TW"}, headers={"Authorization": f"Bearer {token}"}
+            )
+            assert resp.status_code == 200
+            assert resp.json()["language"] == "zh_TW"
+        finally:
+            _ = i18n_module.set_language(saved)
+
+    def test_put_language_rejects_unknown(self, app_env: types.SimpleNamespace) -> None:
+        self._write_language_section(app_env.cfg, "zh_cn")
+        token = _login(app_env.client)
+        resp = app_env.client.put(
+            "/api/language", json={"language": "klingon"}, headers={"Authorization": f"Bearer {token}"}
+        )
+        assert resp.status_code == 400
+
+    def test_put_language_rejects_empty(self, app_env: types.SimpleNamespace) -> None:
+        token = _login(app_env.client)
+        resp = app_env.client.put(
+            "/api/language", json={"language": "  "}, headers={"Authorization": f"Bearer {token}"}
+        )
+        assert resp.status_code == 400

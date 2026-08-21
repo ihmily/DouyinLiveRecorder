@@ -8,6 +8,7 @@ import asyncio
 import os
 import sys
 import time
+from typing import Any, cast
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -25,9 +26,9 @@ def main() -> None:
         print(f"[FAIL] 房间未开播或信息获取失败: {info!r}")
         sys.exit(1)
     danmaku_args = {
-        "ayyuid": int(info["yyid"]),
-        "topSid": int(info["lChannelId"]),
-        "subSid": int(info["lSubChannelId"]),
+        "ayyuid": int(cast(Any, info["yyid"])),
+        "topSid": int(cast(Any, info["lChannelId"])),
+        "subSid": int(cast(Any, info["lSubChannelId"])),
     }
     print(f"[OK] danmaku_args: {danmaku_args}")
 
@@ -52,8 +53,8 @@ def main() -> None:
 
     srt_file = base + ".srt"
     if os.path.isfile(srt_file):
-        with open(srt_file, encoding="utf-8") as f:
-            content = f.read()
+        with open(srt_file, encoding="utf-8") as fh:
+            content = fh.read()
         print("=== SRT 内容(前 20 行) ===")
         print("\n".join(content.splitlines()[:20]))
         if count > 0:

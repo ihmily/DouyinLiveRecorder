@@ -25,13 +25,13 @@ from src.utils import (
 class TestDictToCookieStr:
     # Test dict_to_cookie_str.
 
-    def test_empty_dict(self):
+    def test_empty_dict(self) -> None:
         assert dict_to_cookie_str({}) == ""
 
-    def test_single_cookie(self):
+    def test_single_cookie(self) -> None:
         assert dict_to_cookie_str({"key": "value"}) == "key=value"
 
-    def test_multiple_cookies(self):
+    def test_multiple_cookies(self) -> None:
         result = dict_to_cookie_str({"a": "1", "b": "2"})
         assert "a=1" in result
         assert "b=2" in result
@@ -41,14 +41,14 @@ class TestDictToCookieStr:
 class TestCheckMd5:
     # Test check_md5.
 
-    def test_returns_md5(self, tmp_path):
+    def test_returns_md5(self, tmp_path: Path) -> None:
         test_file = tmp_path / "test.txt"
         test_file.write_text("hello world", encoding="utf-8")
         result = check_md5(test_file)
         assert len(result) == 32
         assert result.isalnum()
 
-    def test_same_content_same_md5(self, tmp_path):
+    def test_same_content_same_md5(self, tmp_path: Path) -> None:
         f1 = tmp_path / "a.txt"
         f2 = tmp_path / "b.txt"
         f1.write_text("same content", encoding="utf-8")
@@ -59,12 +59,12 @@ class TestCheckMd5:
 class TestCheckDiskCapacity:
     # Test check_disk_capacity.
 
-    def test_returns_positive_float(self, tmp_path):
+    def test_returns_positive_float(self, tmp_path: Path) -> None:
         result = check_disk_capacity(str(tmp_path))
         assert isinstance(result, float)
         assert result > 0
 
-    def test_with_show(self, tmp_path, capsys):
+    def test_with_show(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         result = check_disk_capacity(str(tmp_path), show=True)
         captured = capsys.readouterr()
         assert "Total" in captured.out
@@ -75,7 +75,7 @@ class TestCheckDiskCapacity:
 class TestRemoveDuplicateLines:
     # Test remove_duplicate_lines.
 
-    def test_removes_duplicates(self, tmp_path):
+    def test_removes_duplicates(self, tmp_path: Path) -> None:
         test_file = tmp_path / "test.txt"
         test_file.write_text("line1\nline2\nline1\nline3\nline2\n", encoding="utf-8-sig")
         remove_duplicate_lines(test_file)
@@ -90,13 +90,13 @@ class TestRemoveDuplicateLines:
 class TestReadConfigValue:
     # Test read_config_value.
 
-    def test_read_existing_key(self, tmp_path):
+    def test_read_existing_key(self, tmp_path: Path) -> None:
         config_file = tmp_path / "config.ini"
         config_file.write_text("[section1]\nkey1 = value1\n", encoding="utf-8-sig")
         result = read_config_value(config_file, "section1", "key1")
         assert result == "value1"
 
-    def test_read_missing_key(self, tmp_path, capsys):
+    def test_read_missing_key(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         config_file = tmp_path / "config.ini"
         config_file.write_text("[section1]\nkey1 = value1\n", encoding="utf-8-sig")
         result = read_config_value(config_file, "section1", "missing_key")
@@ -104,7 +104,7 @@ class TestReadConfigValue:
         captured = capsys.readouterr()
         assert "does not exist" in captured.out
 
-    def test_read_missing_section(self, tmp_path, capsys):
+    def test_read_missing_section(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         config_file = tmp_path / "config.ini"
         config_file.write_text("[section1]\nkey1 = value1\n", encoding="utf-8-sig")
         result = read_config_value(config_file, "missing_section", "key1")
@@ -112,11 +112,23 @@ class TestReadConfigValue:
         captured = capsys.readouterr()
         assert "does not exist" in captured.out
 
+    # read_config_value 关闭 BasicInterpolation：含 % 的值（cookie/URL 编码）不应抛异常（批次5修复）.
+    def test_percent_value_readable(self, tmp_path: Path) -> None:
+        cfg = tmp_path / "c.ini"
+        cfg.write_text("[s]\nk = 100%x\n", encoding="utf-8")
+        assert read_config_value(cfg, "s", "k") == "100%x"
+
+    def test_missing_key_returns_none(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        cfg = tmp_path / "c.ini"
+        cfg.write_text("[s]\nk = v\n", encoding="utf-8")
+        assert read_config_value(cfg, "s", "nope") is None
+        _ = capsys.readouterr()  # 吞掉提示输出
+
 
 class TestUpdateConfig:
     # Test update_config.
 
-    def test_update_existing_key(self, tmp_path, capsys):
+    def test_update_existing_key(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         config_file = tmp_path / "config.ini"
         config_file.write_text("[section1]\nkey1 = old_value\n", encoding="utf-8-sig")
         update_config(config_file, "section1", "key1", "new_value")
@@ -125,7 +137,7 @@ class TestUpdateConfig:
         captured = capsys.readouterr()
         assert "updated" in captured.out
 
-    def test_update_missing_section(self, tmp_path, capsys):
+    def test_update_missing_section(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         config_file = tmp_path / "config.ini"
         config_file.write_text("[section1]\nkey1 = value1\n", encoding="utf-8-sig")
         update_config(config_file, "missing_section", "key1", "new_value")
@@ -136,7 +148,7 @@ class TestUpdateConfig:
 class TestGetFilePaths:
     # Test get_file_paths.
 
-    def test_returns_files(self, tmp_path):
+    def test_returns_files(self, tmp_path: Path) -> None:
         (tmp_path / "a.txt").write_text("hello")
         sub = tmp_path / "sub"
         sub.mkdir()
@@ -146,7 +158,7 @@ class TestGetFilePaths:
         assert any("a.txt" in p for p in result)
         assert any("b.txt" in p for p in result)
 
-    def test_empty_directory(self, tmp_path):
+    def test_empty_directory(self, tmp_path: Path) -> None:
         result = get_file_paths(str(tmp_path))
         assert result == []
 
@@ -154,14 +166,14 @@ class TestGetFilePaths:
 class TestRemoveEmojis:
     # Test remove_emojis.
 
-    def test_no_emojis(self):
+    def test_no_emojis(self) -> None:
         assert remove_emojis("hello world") == "hello world"
 
-    def test_with_emojis(self):
+    def test_with_emojis(self) -> None:
         result = remove_emojis("hello \U0001f600 world")
         assert result == "hello  world"
 
-    def test_replace_text(self):
+    def test_replace_text(self) -> None:
         result = remove_emojis("hello \U0001f600", "[emoji]")
         assert result == "hello [emoji]"
 
@@ -169,33 +181,33 @@ class TestRemoveEmojis:
 class TestHandleProxyAddr:
     # Test handle_proxy_addr.
 
-    def test_none_returns_none(self):
+    def test_none_returns_none(self) -> None:
         assert handle_proxy_addr(None) is None
 
-    def test_empty_returns_none(self):
+    def test_empty_returns_none(self) -> None:
         assert handle_proxy_addr("") is None
 
-    def test_no_prefix_adds_http(self):
+    def test_no_prefix_adds_http(self) -> None:
         assert handle_proxy_addr("127.0.0.1:8080") == "http://127.0.0.1:8080"
 
-    def test_with_prefix_kept(self):
+    def test_with_prefix_kept(self) -> None:
         assert handle_proxy_addr("https://proxy.com:1080") == "https://proxy.com:1080"
 
 
 class TestJsonpToJson:
     # Test jsonp_to_json.
 
-    def test_valid_jsonp(self):
+    def test_valid_jsonp(self) -> None:
         jsonp = 'callback({"key": "value"});'
         result = jsonp_to_json(jsonp)
         assert result == {"key": "value"}
 
-    def test_dotted_callback_name(self):
+    def test_dotted_callback_name(self) -> None:
         jsonp = 'a.b.callback({"a": 1});'
         result = jsonp_to_json(jsonp)
         assert result == {"a": 1}
 
-    def test_no_callback_raises(self):
+    def test_no_callback_raises(self) -> None:
         with pytest.raises(Exception, match="No JSON data"):
             jsonp_to_json("not a jsonp string")
 
@@ -203,21 +215,21 @@ class TestJsonpToJson:
 class TestReplaceUrl:
     # Test replace_url.
 
-    def test_replace_exact_line(self, tmp_path):
+    def test_replace_exact_line(self, tmp_path: Path) -> None:
         f = tmp_path / "test.txt"
         f.write_text("https://old.com/stream\nother line\n", encoding="utf-8-sig")
         replace_url(f, "https://old.com/stream", "https://new.com/stream")
         content = f.read_text(encoding="utf-8-sig")
         assert "https://new.com/stream" in content
 
-    def test_replace_inline(self, tmp_path):
+    def test_replace_inline(self, tmp_path: Path) -> None:
         f = tmp_path / "test.txt"
         f.write_text("url = https://old.com/live\n", encoding="utf-8-sig")
         replace_url(f, "https://old.com/live", "https://new.com/live")
         content = f.read_text(encoding="utf-8-sig")
         assert "https://new.com/live" in content
 
-    def test_no_match_unchanged(self, tmp_path):
+    def test_no_match_unchanged(self, tmp_path: Path) -> None:
         f = tmp_path / "test.txt"
         f.write_text("unrelated content\n", encoding="utf-8-sig")
         replace_url(f, "https://old.com", "https://new.com")
@@ -228,30 +240,15 @@ class TestReplaceUrl:
 class TestGetQueryParams:
     # Test get_query_params.
 
-    def test_all_params(self):
+    def test_all_params(self) -> None:
         result = get_query_params("https://example.com?a=1&b=2", None)
         assert "a" in result
         assert "b" in result
 
-    def test_specific_param(self):
+    def test_specific_param(self) -> None:
         result = get_query_params("https://example.com?a=1&b=2", "a")
         assert result == ["1"]
 
-    def test_missing_param(self):
+    def test_missing_param(self) -> None:
         result = get_query_params("https://example.com?a=1", "missing")
         assert result == []
-
-
-class TestReadConfigValue:
-    # read_config_value 关闭 BasicInterpolation：含 % 的值（cookie/URL 编码）不应抛异常（批次5修复）.
-
-    def test_percent_value_readable(self, tmp_path):
-        cfg = tmp_path / "c.ini"
-        cfg.write_text("[s]\nk = 100%x\n", encoding="utf-8")
-        assert read_config_value(cfg, "s", "k") == "100%x"
-
-    def test_missing_key_returns_none(self, tmp_path, capsys):
-        cfg = tmp_path / "c.ini"
-        cfg.write_text("[s]\nk = v\n", encoding="utf-8")
-        assert read_config_value(cfg, "s", "nope") is None
-        _ = capsys.readouterr()  # 吞掉提示输出

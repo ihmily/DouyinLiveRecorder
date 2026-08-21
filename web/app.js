@@ -57,7 +57,7 @@
         if (resp.status === 401) {
             setToken('');
             showLogin();
-            throw new Error(text || '未授权');
+            throw new Error(text || t('common.unauthorized'));
         }
         if (!resp.ok) {
             throw new Error(text);
@@ -118,6 +118,229 @@
             .replace(/'/g, '&#39;');
     }
 
+    // 6b. 前端 i18n：界面文案字典（与后端 i18n.py 的语言集一致）。
+    // 后端负责控制台/日志输出翻译（GET/PUT /api/language 即时热切换），
+    // 前端负责静态界面文案：data-i18n / data-i18n-placeholder 属性 + t() 动态拼接。
+    var LANG_KEY = 'dlr_lang';
+    var currentLang = 'zh_CN';
+    var I18N = {
+        zh_CN: {
+            'title': 'DouyinLiveRecorder 管理面板', 'brand': '直播录制管理面板',
+            'tab.dashboard': '仪表盘', 'tab.danmaku': '弹幕监控', 'tab.rooms': '直播间',
+            'tab.config': '配置', 'tab.files': '文件', 'logout': '退出',
+            'login.title': '登录', 'login.password': '访问密码', 'login.submit': '登录', 'login.failed': '登录失败',
+            'dashboard.engineWarning': '⚠️ 录制引擎已停止运行，请检查日志或重启服务',
+            'dashboard.monitoring': '监测中', 'dashboard.recording': '录制中',
+            'dashboard.errors': '错误数(累计/近期)', 'dashboard.disk': '磁盘剩余(GB)',
+            'dashboard.recordingNow': '正在录制', 'dashboard.logs': '实时日志',
+            'col.name': '名称', 'col.platform': '平台', 'col.status': '状态', 'col.startTime': '开始时间',
+            'col.duration': '已录时长', 'col.qualitySet': '设置画质', 'col.qualityActual': '实际画质',
+            'col.url': '地址', 'col.enabled': '启用', 'col.recording': '录制中', 'col.actions': '操作',
+            'col.type': '类型', 'col.size': '大小', 'col.mtime': '修改时间',
+            'empty.noRecording': '暂无录制', 'loading': '加载中...', 'loadFailed': '加载失败',
+            'danmaku.rooms': '弹幕房间', 'danmaku.col.total': '累计弹幕', 'danmaku.col.rate': '速率(条/分)',
+            'danmaku.col.gifts': '礼物', 'danmaku.col.online': '在线', 'danmaku.emptyRooms': '暂无监控数据',
+            'danmaku.live': '实时弹幕', 'danmaku.allRooms': '全部房间', 'danmaku.clear': '清空',
+            'danmaku.connected': '已连接', 'danmaku.disconnected': '已断开', 'danmaku.noData': '暂无弹幕数据',
+            'danmaku.gift': '[礼物] ', 'danmaku.sc': '[SC] ', 'danmaku.dropped': ' 条已省略)',
+            'danmaku.truncated': '（消息量过大，部分已折叠）',
+            'danmaku.hint': '未看到数据？请在「配置 → 录制设置」开启「是否弹幕监控(是/否)」，且直播间平台需支持弹幕（斗鱼/B站/虎牙/抖音/Twitch）',
+            'rooms.add': '添加直播间', 'rooms.urlPlaceholder': '直播间地址', 'rooms.defaultQuality': '默认画质',
+            'rooms.namePlaceholder': '主播名称（可选）', 'rooms.addBtn': '添加', 'rooms.list': '直播间列表',
+            'rooms.empty': '暂无直播间', 'rooms.delete': '删除', 'rooms.enter': '进入', 'rooms.download': '下载',
+            'rooms.deleteConfirm': '确认删除该直播间？',
+            'config.title': '录制与推送配置', 'config.save': '保存配置', 'config.noChanges': '无变更',
+            'config.saved': '已保存 {n} 项', 'config.loadFailed': '加载失败', 'config.none': '无配置',
+            'config.hint.https': '开启 = HTTPS 录制并跳过 SSL 证书校验；关闭 = HTTP 录制并恢复默认证书校验（已整合原「是否强制启用https录制」与「是否禁用SSL证书验证」）',
+            'config.hint.sslOn': 'HTTPS 录制模式：已全局跳过 SSL 证书校验，此列表无需配置（兼容保留）',
+            'config.hint.sslOff': 'HTTP 录制模式：默认校验证书；列表内平台将跳过证书校验（适用于证书异常平台，如虎牙/B站）',
+            'config.deprecated': '已整合进「是否启用https录制」，此配置不再生效',
+            'files.title': '录制文件', 'files.root': '根目录', 'files.emptyDir': '空目录',
+            'common.yes': '是', 'common.no': '否', 'common.unauthorized': '未授权',
+            'toast.enabled': '已启用', 'toast.disabled': '已禁用', 'toast.opFailed': '操作失败: ',
+            'toast.deleted': '已删除', 'toast.deleteFailed': '删除失败: ', 'toast.added': '已添加',
+            'toast.addFailed': '添加失败: ', 'toast.urlRequired': '请输入直播间地址',
+            'toast.downloadFailed': '下载失败: ', 'toast.loginExpired': '登录已过期，请重新登录',
+            'toast.saveFailed': '保存失败: ', 'toast.langSwitched': '语言已切换',
+            'toast.langSwitchFailed': '语言切换失败: '
+        },
+        en_US: {
+            'title': 'DouyinLiveRecorder Panel', 'brand': 'Live Recording Panel',
+            'tab.dashboard': 'Dashboard', 'tab.danmaku': 'Danmaku', 'tab.rooms': 'Rooms',
+            'tab.config': 'Config', 'tab.files': 'Files', 'logout': 'Logout',
+            'login.title': 'Login', 'login.password': 'Access password', 'login.submit': 'Login', 'login.failed': 'Login failed',
+            'dashboard.engineWarning': '⚠️ The recording engine has stopped. Check logs or restart the service',
+            'dashboard.monitoring': 'Monitoring', 'dashboard.recording': 'Recording',
+            'dashboard.errors': 'Errors (total/recent)', 'dashboard.disk': 'Disk free (GB)',
+            'dashboard.recordingNow': 'Recording now', 'dashboard.logs': 'Live logs',
+            'col.name': 'Name', 'col.platform': 'Platform', 'col.status': 'Status', 'col.startTime': 'Start time',
+            'col.duration': 'Duration', 'col.qualitySet': 'Set quality', 'col.qualityActual': 'Actual quality',
+            'col.url': 'URL', 'col.enabled': 'Enabled', 'col.recording': 'Recording', 'col.actions': 'Actions',
+            'col.type': 'Type', 'col.size': 'Size', 'col.mtime': 'Modified',
+            'empty.noRecording': 'No recordings', 'loading': 'Loading...', 'loadFailed': 'Load failed',
+            'danmaku.rooms': 'Danmaku rooms', 'danmaku.col.total': 'Messages', 'danmaku.col.rate': 'Rate (msg/min)',
+            'danmaku.col.gifts': 'Gifts', 'danmaku.col.online': 'Online', 'danmaku.emptyRooms': 'No monitoring data',
+            'danmaku.live': 'Live danmaku', 'danmaku.allRooms': 'All rooms', 'danmaku.clear': 'Clear',
+            'danmaku.connected': 'Connected', 'danmaku.disconnected': 'Disconnected', 'danmaku.noData': 'No danmaku data',
+            'danmaku.gift': '[Gift] ', 'danmaku.sc': '[SC] ', 'danmaku.dropped': ' messages omitted)',
+            'danmaku.truncated': '(Too many messages, some collapsed)',
+            'danmaku.hint': 'No data? Enable "是否弹幕监控(是/否)" in Config → Recording settings, and make sure the platform supports danmaku (Douyu/Bilibili/Huya/Douyin/Twitch)',
+            'rooms.add': 'Add room', 'rooms.urlPlaceholder': 'Live room URL', 'rooms.defaultQuality': 'Default quality',
+            'rooms.namePlaceholder': 'Streamer name (optional)', 'rooms.addBtn': 'Add', 'rooms.list': 'Room list',
+            'rooms.empty': 'No rooms', 'rooms.delete': 'Delete', 'rooms.enter': 'Open', 'rooms.download': 'Download',
+            'rooms.deleteConfirm': 'Delete this room?',
+            'config.title': 'Recording & Push Config', 'config.save': 'Save config', 'config.noChanges': 'No changes',
+            'config.saved': 'Saved {n} items', 'config.loadFailed': 'Load failed', 'config.none': 'No config',
+            'config.hint.https': 'On = HTTPS recording with SSL certificate verification skipped; Off = HTTP recording with default certificate verification (merges the former "force HTTPS" and "disable SSL verification" options)',
+            'config.hint.sslOn': 'HTTPS mode: certificate verification is globally skipped; this list is not needed (kept for compatibility)',
+            'config.hint.sslOff': 'HTTP mode: certificates are verified by default; platforms in this list skip verification (for platforms with broken certificates, e.g. Huya/Bilibili)',
+            'config.deprecated': 'Merged into "是否启用https录制"; this option no longer takes effect',
+            'files.title': 'Recordings', 'files.root': 'Root', 'files.emptyDir': 'Empty folder',
+            'common.yes': 'Yes', 'common.no': 'No', 'common.unauthorized': 'Unauthorized',
+            'toast.enabled': 'Enabled', 'toast.disabled': 'Disabled', 'toast.opFailed': 'Operation failed: ',
+            'toast.deleted': 'Deleted', 'toast.deleteFailed': 'Delete failed: ', 'toast.added': 'Added',
+            'toast.addFailed': 'Add failed: ', 'toast.urlRequired': 'Please enter a live room URL',
+            'toast.downloadFailed': 'Download failed: ', 'toast.loginExpired': 'Login expired, please log in again',
+            'toast.saveFailed': 'Save failed: ', 'toast.langSwitched': 'Language switched',
+            'toast.langSwitchFailed': 'Language switch failed: '
+        },
+        en_GB: {
+            'title': 'DouyinLiveRecorder Panel', 'brand': 'Live Recording Panel',
+            'tab.dashboard': 'Dashboard', 'tab.danmaku': 'Danmaku', 'tab.rooms': 'Rooms',
+            'tab.config': 'Config', 'tab.files': 'Files', 'logout': 'Log out',
+            'login.title': 'Log in', 'login.password': 'Access password', 'login.submit': 'Log in', 'login.failed': 'Log in failed',
+            'dashboard.engineWarning': '⚠️ The recording engine has stopped. Check logs or restart the service',
+            'dashboard.monitoring': 'Monitoring', 'dashboard.recording': 'Recording',
+            'dashboard.errors': 'Errors (total/recent)', 'dashboard.disk': 'Disk free (GB)',
+            'dashboard.recordingNow': 'Recording now', 'dashboard.logs': 'Live logs',
+            'col.name': 'Name', 'col.platform': 'Platform', 'col.status': 'Status', 'col.startTime': 'Start time',
+            'col.duration': 'Duration', 'col.qualitySet': 'Set quality', 'col.qualityActual': 'Actual quality',
+            'col.url': 'URL', 'col.enabled': 'Enabled', 'col.recording': 'Recording', 'col.actions': 'Actions',
+            'col.type': 'Type', 'col.size': 'Size', 'col.mtime': 'Modified',
+            'empty.noRecording': 'No recordings', 'loading': 'Loading...', 'loadFailed': 'Load failed',
+            'danmaku.rooms': 'Danmaku rooms', 'danmaku.col.total': 'Messages', 'danmaku.col.rate': 'Rate (msg/min)',
+            'danmaku.col.gifts': 'Gifts', 'danmaku.col.online': 'Online', 'danmaku.emptyRooms': 'No monitoring data',
+            'danmaku.live': 'Live danmaku', 'danmaku.allRooms': 'All rooms', 'danmaku.clear': 'Clear',
+            'danmaku.connected': 'Connected', 'danmaku.disconnected': 'Disconnected', 'danmaku.noData': 'No danmaku data',
+            'danmaku.gift': '[Gift] ', 'danmaku.sc': '[SC] ', 'danmaku.dropped': ' messages omitted)',
+            'danmaku.truncated': '(Too many messages, some collapsed)',
+            'danmaku.hint': 'No data? Enable "是否弹幕监控(是/否)" in Config → Recording settings, and make sure the platform supports danmaku (Douyu/Bilibili/Huya/Douyin/Twitch)',
+            'rooms.add': 'Add room', 'rooms.urlPlaceholder': 'Live room URL', 'rooms.defaultQuality': 'Default quality',
+            'rooms.namePlaceholder': 'Streamer name (optional)', 'rooms.addBtn': 'Add', 'rooms.list': 'Room list',
+            'rooms.empty': 'No rooms', 'rooms.delete': 'Delete', 'rooms.enter': 'Open', 'rooms.download': 'Download',
+            'rooms.deleteConfirm': 'Delete this room?',
+            'config.title': 'Recording & Push Config', 'config.save': 'Save config', 'config.noChanges': 'No changes',
+            'config.saved': 'Saved {n} items', 'config.loadFailed': 'Load failed', 'config.none': 'No config',
+            'config.hint.https': 'On = HTTPS recording with SSL certificate verification skipped; Off = HTTP recording with default certificate verification (merges the former "force HTTPS" and "disable SSL verification" options)',
+            'config.hint.sslOn': 'HTTPS mode: certificate verification is globally skipped; this list is not needed (kept for compatibility)',
+            'config.hint.sslOff': 'HTTP mode: certificates are verified by default; platforms in this list skip verification (for platforms with broken certificates, e.g. Huya/Bilibili)',
+            'config.deprecated': 'Merged into "是否启用https录制"; this option no longer takes effect',
+            'files.title': 'Recordings', 'files.root': 'Root', 'files.emptyDir': 'Empty folder',
+            'common.yes': 'Yes', 'common.no': 'No', 'common.unauthorized': 'Unauthorised',
+            'toast.enabled': 'Enabled', 'toast.disabled': 'Disabled', 'toast.opFailed': 'Operation failed: ',
+            'toast.deleted': 'Deleted', 'toast.deleteFailed': 'Delete failed: ', 'toast.added': 'Added',
+            'toast.addFailed': 'Add failed: ', 'toast.urlRequired': 'Please enter a live room URL',
+            'toast.downloadFailed': 'Download failed: ', 'toast.loginExpired': 'Log in expired, please log in again',
+            'toast.saveFailed': 'Save failed: ', 'toast.langSwitched': 'Language switched',
+            'toast.langSwitchFailed': 'Language switch failed: '
+        },
+        zh_TW: {
+            'title': 'DouyinLiveRecorder 管理面板', 'brand': '直播錄製管理面板',
+            'tab.dashboard': '儀表板', 'tab.danmaku': '彈幕監控', 'tab.rooms': '直播間',
+            'tab.config': '設定', 'tab.files': '檔案', 'logout': '登出',
+            'login.title': '登入', 'login.password': '存取密碼', 'login.submit': '登入', 'login.failed': '登入失敗',
+            'dashboard.engineWarning': '⚠️ 錄製引擎已停止執行，請檢查日誌或重新啟動服務',
+            'dashboard.monitoring': '監測中', 'dashboard.recording': '錄製中',
+            'dashboard.errors': '錯誤數(累計/近期)', 'dashboard.disk': '磁碟剩餘(GB)',
+            'dashboard.recordingNow': '正在錄製', 'dashboard.logs': '即時日誌',
+            'col.name': '名稱', 'col.platform': '平台', 'col.status': '狀態', 'col.startTime': '開始時間',
+            'col.duration': '已錄時長', 'col.qualitySet': '設定畫質', 'col.qualityActual': '實際畫質',
+            'col.url': '位址', 'col.enabled': '啟用', 'col.recording': '錄製中', 'col.actions': '操作',
+            'col.type': '類型', 'col.size': '大小', 'col.mtime': '修改時間',
+            'empty.noRecording': '暫無錄製', 'loading': '載入中...', 'loadFailed': '載入失敗',
+            'danmaku.rooms': '彈幕房間', 'danmaku.col.total': '累計彈幕', 'danmaku.col.rate': '速率(條/分)',
+            'danmaku.col.gifts': '禮物', 'danmaku.col.online': '線上', 'danmaku.emptyRooms': '暫無監控資料',
+            'danmaku.live': '即時彈幕', 'danmaku.allRooms': '全部房間', 'danmaku.clear': '清空',
+            'danmaku.connected': '已連線', 'danmaku.disconnected': '已斷線', 'danmaku.noData': '暫無彈幕資料',
+            'danmaku.gift': '[禮物] ', 'danmaku.sc': '[SC] ', 'danmaku.dropped': ' 條已省略)',
+            'danmaku.truncated': '（訊息量過大，部分已摺疊）',
+            'danmaku.hint': '未看到資料？請在「設定 → 錄製設定」開啟「是否彈幕監控(是/否)」，且直播間平台需支援彈幕（鬥魚/B站/虎牙/抖音/Twitch）',
+            'rooms.add': '新增直播間', 'rooms.urlPlaceholder': '直播間位址', 'rooms.defaultQuality': '預設畫質',
+            'rooms.namePlaceholder': '主播名稱（可選）', 'rooms.addBtn': '新增', 'rooms.list': '直播間列表',
+            'rooms.empty': '暫無直播間', 'rooms.delete': '刪除', 'rooms.enter': '進入', 'rooms.download': '下載',
+            'rooms.deleteConfirm': '確認刪除該直播間？',
+            'config.title': '錄製與推送設定', 'config.save': '儲存設定', 'config.noChanges': '無變更',
+            'config.saved': '已儲存 {n} 項', 'config.loadFailed': '載入失敗', 'config.none': '無設定',
+            'config.hint.https': '開啟 = HTTPS 錄製並跳過 SSL 憑證校驗；關閉 = HTTP 錄製並恢復預設憑證校驗（已整合原「是否強制啟用https錄製」與「是否禁用SSL憑證驗證」）',
+            'config.hint.sslOn': 'HTTPS 錄製模式：已全域跳過 SSL 憑證校驗，此列表無需設定（相容保留）',
+            'config.hint.sslOff': 'HTTP 錄製模式：預設校驗憑證；列表內平台將跳過憑證校驗（適用於憑證異常平台，如虎牙/B站）',
+            'config.deprecated': '已整合進「是否啟用https錄製」，此設定不再生效',
+            'files.title': '錄製檔案', 'files.root': '根目錄', 'files.emptyDir': '空資料夾',
+            'common.yes': '是', 'common.no': '否', 'common.unauthorized': '未授權',
+            'toast.enabled': '已啟用', 'toast.disabled': '已停用', 'toast.opFailed': '操作失敗: ',
+            'toast.deleted': '已刪除', 'toast.deleteFailed': '刪除失敗: ', 'toast.added': '已新增',
+            'toast.addFailed': '新增失敗: ', 'toast.urlRequired': '請輸入直播間位址',
+            'toast.downloadFailed': '下載失敗: ', 'toast.loginExpired': '登入已過期，請重新登入',
+            'toast.saveFailed': '儲存失敗: ', 'toast.langSwitched': '語言已切換',
+            'toast.langSwitchFailed': '語言切換失敗: '
+        }
+    };
+
+    // 界面文案取值：当前语言缺失时回退 zh_CN，再缺失回退键名本身
+    function t(key) {
+        var dict = I18N[currentLang] || I18N.zh_CN;
+        if (Object.prototype.hasOwnProperty.call(dict, key)) return dict[key];
+        if (Object.prototype.hasOwnProperty.call(I18N.zh_CN, key)) return I18N.zh_CN[key];
+        return key;
+    }
+
+    // 应用静态文案：data-i18n → textContent；data-i18n-placeholder → placeholder
+    function applyTranslations() {
+        var nodes = document.querySelectorAll('[data-i18n]');
+        for (var i = 0; i < nodes.length; i++) {
+            nodes[i].textContent = t(nodes[i].getAttribute('data-i18n'));
+        }
+        var phNodes = document.querySelectorAll('[data-i18n-placeholder]');
+        for (var j = 0; j < phNodes.length; j++) {
+            phNodes[j].setAttribute('placeholder', t(phNodes[j].getAttribute('data-i18n-placeholder')));
+        }
+        document.documentElement.setAttribute('lang', currentLang.replace('_', '-'));
+    }
+
+    // 初始化语言选择器：读后端当前语言（失败回退 localStorage），渲染选项
+    function initLanguage() {
+        var sel = $('language-select');
+        if (!sel) return;
+        var langNames = { zh_CN: '简体中文', en_US: 'English (US)', en_GB: 'English (UK)', zh_TW: '繁體中文' };
+        var codes = ['zh_CN', 'en_US', 'en_GB', 'zh_TW'];
+        var opts = '';
+        for (var i = 0; i < codes.length; i++) {
+            opts += '<option value="' + codes[i] + '">' + langNames[codes[i]] + '</option>';
+        }
+        sel.innerHTML = opts;
+        api('/api/language').then(function (data) {
+            currentLang = data && data.language ? data.language : (localStorage.getItem(LANG_KEY) || 'zh_CN');
+            localStorage.setItem(LANG_KEY, currentLang);
+            sel.value = currentLang;
+            applyTranslations();
+        }).catch(function () {
+            currentLang = localStorage.getItem(LANG_KEY) || 'zh_CN';
+            sel.value = currentLang;
+            applyTranslations();
+        });
+        sel.addEventListener('change', function () {
+            var target = sel.value;
+            api('/api/language', { method: 'PUT', body: { language: target } }).then(function () {
+                currentLang = target;
+                localStorage.setItem(LANG_KEY, target);
+                applyTranslations();
+                toast(t('toast.langSwitched'), 'success');
+            }).catch(function (e) {
+                toast(t('toast.langSwitchFailed') + (e.message || ''), 'error');
+            });
+        });
+    }
+
     function hideAllViews() {
         var views = document.querySelectorAll('.view');
         for (var i = 0; i < views.length; i++) {
@@ -173,7 +396,7 @@
             $('login-error').textContent = '';
             showView('dashboard');
         } catch (e) {
-            $('login-error').textContent = e.message || '登录失败';
+            $('login-error').textContent = e.message || t('login.failed');
         }
     }
 
@@ -289,8 +512,8 @@
             return '<span class="dm-line dm-dropped">[' + dmFmtTime(m.ts) + '] ' + esc(m.text) + '</span>';
         }
         var cls = m.type === 'gift' ? ' dm-gift' : (m.type === 'superChat' ? ' dm-sc' : '');
-        var label = m.type === 'gift' ? '[礼物] ' : (m.type === 'superChat' ? '[SC] ' : '');
-        var dropped = m.dropped ? ' <span class="dm-dropped">(+' + m.dropped + ' 条已省略)</span>' : '';
+        var label = m.type === 'gift' ? t('danmaku.gift') : (m.type === 'superChat' ? t('danmaku.sc') : '');
+        var dropped = m.dropped ? ' <span class="dm-dropped">(+' + m.dropped + t('danmaku.dropped') + '</span>' : '';
         var userPart = m.user ? '<span class="dm-user">' + esc(m.user) + '</span>: ' : '';
         return '<span class="dm-line' + cls + '">[' + dmFmtTime(m.ts) + '] <span class="dm-room">['
             + esc(m.room) + ']</span> ' + label + userPart + esc(m.text) + dropped + '</span>';
@@ -327,14 +550,14 @@
         var tbody = $('danmaku-rooms-tbody');
         if (tbody) {
             if (!rooms.length) {
-                tbody.innerHTML = '<tr><td colspan="8" class="empty">暂无监控数据</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="8" class="empty">' + esc(t('danmaku.emptyRooms')) + '</td></tr>';
             } else {
                 var html = '';
                 for (var i = 0; i < rooms.length; i++) {
                     var r = rooms[i];
                     var st = r.connected
-                        ? '<span class="dm-status-on">已连接</span>'
-                        : '<span class="dm-status-off">已断开</span>';
+                        ? '<span class="dm-status-on">' + esc(t('danmaku.connected')) + '</span>'
+                        : '<span class="dm-status-off">' + esc(t('danmaku.disconnected')) + '</span>';
                     html += '<tr>'
                         + '<td>' + esc(r.name) + '</td>'
                         + '<td>' + esc(r.platform) + '</td>'
@@ -361,7 +584,7 @@
         var sel = $('danmaku-room-filter');
         if (sel) {
             var cur = sel.value;
-            var opts = '<option value="">全部房间</option>';
+            var opts = '<option value="">' + esc(t('danmaku.allRooms')) + '</option>';
             for (var j = 0; j < rooms.length; j++) {
                 opts += '<option value="' + esc(rooms[j].name) + '">' + esc(rooms[j].name) + '</option>';
             }
@@ -396,7 +619,7 @@
         try {
             var rooms = await api('/api/rooms');
             if (!rooms.length) {
-                tbody.innerHTML = '<tr><td colspan="6" class="empty">暂无直播间</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6" class="empty">' + esc(t('rooms.empty')) + '</td></tr>';
                 return;
             }
             var html = '';
@@ -409,13 +632,13 @@
                     + '<td>' + esc(r.name) + '</td>'
                     + '<td><label class="switch"><input type="checkbox"' + checked
                         + ' data-action="toggle" data-url="' + esc(r.url) + '"><span class="slider"></span></label></td>'
-                    + '<td>' + (r.recording ? '是' : '否') + '</td>'
-                    + '<td><button class="danger" data-action="delete" data-url="' + esc(r.url) + '">删除</button></td>'
+                    + '<td>' + (r.recording ? esc(t('common.yes')) : esc(t('common.no'))) + '</td>'
+                    + '<td><button class="danger" data-action="delete" data-url="' + esc(r.url) + '">' + esc(t('rooms.delete')) + '</button></td>'
                     + '</tr>';
             }
             tbody.innerHTML = html;
         } catch (e) {
-            tbody.innerHTML = '<tr><td colspan="6" class="empty">加载失败</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="6" class="empty">' + esc(t('loadFailed')) + '</td></tr>';
         }
     }
 
@@ -432,17 +655,49 @@
 
     // 16. window.deleteRoom
     window.deleteRoom = async function (url) {
-        if (!confirm('确认删除该直播间？')) return;
+        if (!confirm(t('rooms.deleteConfirm'))) return;
         try {
             await api('/api/rooms?url=' + encodeURIComponent(url), { method: 'DELETE' });
-            toast('已删除', 'success');
+            toast(t('toast.deleted'), 'success');
             loadRooms();
         } catch (e) {
-            toast('删除失败: ' + e.message, 'error');
+            toast(t('toast.deleteFailed') + e.message, 'error');
         }
     };
 
     // 17. loadConfig
+    // SSL/HTTPS 整合：「是否启用https录制」已合并原「是否强制启用https录制」与
+    // 「是否禁用SSL证书验证(是/否)」——开启=https 拉流并跳过证书校验；关闭=http
+    // 拉流并恢复默认证书校验。旧键标注为已废弃（只读置灰），整合语义在界面明示。
+    // FFmpeg 9.0 起 TLS 证书验证默认开启：「禁用SSL证书验证的平台」在 HTTP 录制模式
+    // （默认校验）下生效——列表内平台跳过证书校验；HTTPS 模式已全局跳过、列表冗余。
+    var HTTPS_RECORD_KEY = '是否启用https录制';
+    var DEPRECATED_CONFIG_KEYS = {
+        '是否强制启用https录制': 'config.deprecated',
+        '是否禁用SSL证书验证(是/否)': 'config.deprecated',
+        '虎牙是否禁用SSL证书验证(是/否)': 'config.deprecated'
+    };
+    var SSL_PLATFORM_KEY = '禁用SSL证书验证的平台(逗号分隔)';
+
+    function httpsRecordingEnabled() {
+        var inputs = document.querySelectorAll('#config-container input');
+        for (var i = 0; i < inputs.length; i++) {
+            if (inputs[i].getAttribute('data-key') === HTTPS_RECORD_KEY) {
+                return (inputs[i].value || '').trim() === '是';
+            }
+        }
+        return false;
+    }
+
+    function updateSslPlatformHint() {
+        var hint = $('ssl-platform-hint');
+        if (!hint) return;
+        var enabled = httpsRecordingEnabled();
+        // HTTPS 模式：全局跳过校验，列表冗余；HTTP 模式（FFmpeg 9.0 默认校验）：列表生效
+        hint.textContent = enabled ? t('config.hint.sslOn') : t('config.hint.sslOff');
+        hint.className = 'config-hint ' + (enabled ? 'hint-on' : 'hint-off');
+    }
+
     async function loadConfig() {
         var container = $('config-container');
         try {
@@ -457,15 +712,36 @@
                     if (!items.hasOwnProperty(key)) continue;
                     var val = items[key];
                     var inputType = SENSITIVE_SECTIONS[section] ? 'password' : 'text';
-                    html += '<div class="config-row">'
+                    var hintHtml = '';
+                    var rowClass = 'config-row';
+                    var readOnly = '';
+                    if (DEPRECATED_CONFIG_KEYS.hasOwnProperty(key)) {
+                        // 废弃键：只读置灰，提示整合去向，防止误改无效配置
+                        rowClass += ' row-deprecated';
+                        readOnly = ' readonly';
+                        hintHtml = '<div class="config-hint hint-off">' + esc(t(DEPRECATED_CONFIG_KEYS[key])) + '</div>';
+                    } else if (key === HTTPS_RECORD_KEY) {
+                        hintHtml = '<div class="config-hint">' + esc(t('config.hint.https')) + '</div>';
+                    } else if (key === SSL_PLATFORM_KEY) {
+                        hintHtml = '<div class="config-hint" id="ssl-platform-hint"></div>';
+                    }
+                    html += '<div class="' + rowClass + '">'
                         + '<label>' + esc(key) + '</label>'
                         + '<input type="' + inputType + '" data-section="' + esc(section) + '"'
-                        + ' data-key="' + esc(key) + '" value="' + esc(val) + '">'
+                        + ' data-key="' + esc(key) + '" value="' + esc(val) + '"' + readOnly + '>'
+                        + hintHtml
                         + '</div>';
                 }
                 html += '</div>';
             }
             container.innerHTML = html || '无配置';
+            updateSslPlatformHint();
+            var inputs = document.querySelectorAll('#config-container input');
+            for (var j = 0; j < inputs.length; j++) {
+                if (inputs[j].getAttribute('data-key') === HTTPS_RECORD_KEY) {
+                    inputs[j].addEventListener('input', updateSslPlatformHint);
+                }
+            }
         } catch (e) {
             container.textContent = '加载失败';
         }
@@ -492,13 +768,13 @@
                 }
             }
             if (count > 0) {
-                toast('已保存 ' + count + ' 项', 'success');
+                toast(t('config.saved').replace('{n}', String(count)), 'success');
             } else {
-                toast('无变更', 'info');
+                toast(t('config.noChanges'), 'info');
             }
             await loadConfig();
         } catch (e) {
-            toast('保存失败: ' + e.message, 'error');
+            toast(t('toast.saveFailed') + e.message, 'error');
         }
     }
 
@@ -511,7 +787,7 @@
             var items = await api('/api/files?path=' + encodeURIComponent(path));
             // 面包屑：根目录 + 逐级路径
             var crumbHtml = '';
-            crumbHtml += '<a data-path="">根目录</a>';
+            crumbHtml += '<a data-path="">' + esc(t('files.root')) + '</a>';
             var parts = path ? path.split('/') : [];
             var cumul = '';
             for (var i = 0; i < parts.length; i++) {
@@ -546,7 +822,7 @@
             }
             tbody.innerHTML = html;
         } catch (e) {
-            tbody.innerHTML = '<tr><td colspan="5" class="empty">加载失败</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="5" class="empty">' + esc(t('loadFailed')) + '</td></tr>';
         }
     }
     window.loadFiles = loadFiles;
@@ -562,7 +838,7 @@
                 if (res.status === 401) {
                     setToken('');
                     showLogin();
-                    throw new Error('登录已过期，请重新登录');
+                    throw new Error(t('toast.loginExpired'));
                 }
                 if (!res.ok) throw new Error(res.statusText);
                 return res.blob();
@@ -586,7 +862,7 @@
         var quality = $('room-quality').value;
         var name = $('room-name').value.trim();
         if (!url) {
-            toast('请输入直播间地址', 'error');
+            toast(t('toast.urlRequired'), 'error');
             return;
         }
         try {
@@ -598,13 +874,13 @@
                     name: name || null,
                 },
             });
-            toast('已添加', 'success');
+            toast(t('toast.added'), 'success');
             $('room-url').value = '';
             $('room-quality').value = '';
             $('room-name').value = '';
             loadRooms();
         } catch (e) {
-            toast('添加失败: ' + e.message, 'error');
+            toast(t('toast.addFailed') + e.message, 'error');
         }
     }
 
@@ -629,6 +905,7 @@
     // 23. DOMContentLoaded init
     document.addEventListener('DOMContentLoaded', function () {
         initTheme();
+        initLanguage();
 
         var tabs = document.querySelectorAll('.tab');
         for (var i = 0; i < tabs.length; i++) {

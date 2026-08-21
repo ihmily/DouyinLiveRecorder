@@ -5,6 +5,8 @@ import asyncio
 import threading
 from unittest.mock import patch
 
+import pytest
+
 from src import async_http as ah
 
 
@@ -30,7 +32,8 @@ class TestClientCacheConcurrency:
         with ah._client_cache_lock:
             ah._client_cache.clear()
 
-    def test_concurrent_threads_no_cross_loop_error(self):
+    @pytest.mark.filterwarnings("ignore::RuntimeWarning")
+    def test_concurrent_threads_no_cross_loop_error(self) -> None:
         errors: list[Exception] = []
 
         def run() -> None:
@@ -48,7 +51,7 @@ class TestClientCacheConcurrency:
                 t.join(timeout=15)
         assert errors == []
 
-    def test_same_loop_reuses_client(self):
+    def test_same_loop_reuses_client(self) -> None:
         async def get_twice() -> tuple:
             a = await ah._get_client(proxy_addr=None, timeout=10, verify=True, http2=False)
             b = await ah._get_client(proxy_addr=None, timeout=10, verify=True, http2=False)
@@ -58,7 +61,7 @@ class TestClientCacheConcurrency:
             a, b = asyncio.run(get_twice())
         assert a is b  # 同一循环内复用连接池
 
-    def test_loop_change_replaces_client_and_closes_old(self):
+    def test_loop_change_replaces_client_and_closes_old(self) -> None:
         with patch("httpx.AsyncClient", new=FakeAsyncClient):
             first = asyncio.run(ah._get_client(proxy_addr=None, timeout=10, verify=True, http2=False))
             second = asyncio.run(ah._get_client(proxy_addr=None, timeout=10, verify=True, http2=False))
@@ -66,7 +69,7 @@ class TestClientCacheConcurrency:
         # 旧循环已关闭，旧客户端交由 GC（不跨循环 await）
         assert second is not None
 
-    def test_different_params_use_different_cache_keys(self):
+    def test_different_params_use_different_cache_keys(self) -> None:
         async def get_two() -> tuple:
             a = await ah._get_client(proxy_addr=None, timeout=10, verify=True, http2=False)
             b = await ah._get_client(proxy_addr="http://p:1", timeout=10, verify=True, http2=False)

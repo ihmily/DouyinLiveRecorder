@@ -5,7 +5,10 @@
 # 另覆盖虎牙探针退避：CDN 限流（连续 403）时跳过探针、末位直接放行 ffmpeg。
 # 全程 mock httpx.Client，不触网。
 
+from __future__ import annotations
+
 import time
+from typing import Iterator, Literal
 from unittest.mock import patch
 
 import pytest
@@ -27,12 +30,12 @@ from src.stream_select import (
 
 
 @pytest.fixture(autouse=True)
-def no_probe_throttle(monkeypatch: pytest.MonkeyPatch):
+def no_probe_throttle(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     # 探针节流是模块级全局状态（按 host 记录上次探针时刻）：单测多次调用同 host 探针
     # 会触发真实 sleep 拖慢测试；且部分用例 patch 整个 time 模块（time.time 为
     # MagicMock），节流的时间差比较会炸——统一将 _validate_stream_url 内的节流
     # 置为 no-op（节流专项测试自行恢复真实实现），并清空全局记录隔离用例。
-    monkeypatch.setattr(ss, "_throttle_probe", lambda url: None)
+    monkeypatch.setattr(ss, "_throttle_probe", lambda _url: None)
     ss._probe_last_seen.clear()
     yield
     ss._probe_last_seen.clear()
@@ -47,6 +50,12 @@ class _FakeResponse:
         self.headers = {"content-type": content_type} if content_type else {}
 
 
+class _M3u8ProbeClient:
+    # 仅用于在类型层暴露 get_calls（运行时由嵌套子类重置为 0），
+    # 使 _m3u8_client_cls 的返回类型可被 mypy 解析、调用方 cls.get_calls 合法。
+    get_calls: int = 0
+
+
 class _FakeHead405HtmlClient:
     # 模拟斗鱼 hw CDN：HEAD 一律 405（禁用 HEAD 方法）+ 错误页 content-type
     head_status = 405
@@ -58,7 +67,7 @@ class _FakeHead405HtmlClient:
     def __enter__(self) -> "_FakeHead405HtmlClient":
         return self
 
-    def __exit__(self, *args: object) -> bool:
+    def __exit__(self, *_args: object) -> Literal[False]:
         return False
 
     def head(self, url: str, follow_redirects: bool = True) -> _FakeResponse:
@@ -107,10 +116,10 @@ def test_non_last_resort_odd_status_rejected() -> None:
 # ---- m3u8 Range-GET 探针重试（斗鱼 hw CDN 毫秒连击探针偶发 403 误杀） ----
 
 
-def _m3u8_client_cls(get_statuses: list[int], get_types: list[str]) -> type:
+def _m3u8_client_cls(get_statuses: list[int], get_types: list[str]) -> type[_M3u8ProbeClient]:
     # 构造 HEAD=405+text/html、Range-GET 按序返回预设状态码的假客户端；
     # get_calls 为类级计数器，供断言重试次数
-    class _C:
+    class _C(_M3u8ProbeClient):
         get_calls = 0
 
         def __init__(self, *args: object, **kwargs: object) -> None:
@@ -119,7 +128,7 @@ def _m3u8_client_cls(get_statuses: list[int], get_types: list[str]) -> type:
         def __enter__(self) -> "_C":
             return self
 
-        def __exit__(self, *args: object) -> bool:
+        def __exit__(self, *_args: object) -> Literal[False]:
             return False
 
         def head(self, url: str, follow_redirects: bool = True) -> _FakeResponse:
@@ -262,7 +271,7 @@ _HUYA_FLV_URL = (
 
 
 @pytest.fixture()
-def clear_probe_backoff():
+def clear_probe_backoff() -> Iterator[None]:
     # 退避表是模块级状态：用例前后清空，避免跨用例污染
     with _probe_backoff_lock:
         _probe_backoff.clear()
@@ -271,7 +280,7 @@ def clear_probe_backoff():
         _probe_backoff.clear()
 
 
-def test_huya_stable_403_marks_backoff_then_skips_probe(clear_probe_backoff) -> None:
+def test_huya_stable_403_marks_backoff_then_skips_probe(clear_probe_backoff: None) -> None:
     # 第 1 轮：HLS 探针全 403（稳定拒绝）→ 判不可达并记入退避
     cls = _m3u8_client_cls([403, 403], ["text/html", "text/html"])
     with patch("src.stream_select.httpx.Client", cls), patch("src.stream_select.time.sleep"):
@@ -290,7 +299,7 @@ def test_huya_stable_403_marks_backoff_then_skips_probe(clear_probe_backoff) -> 
     assert _NoProbeClient.instantiated == 0
 
 
-def test_huya_backoff_last_resort_released_without_probe(clear_probe_backoff) -> None:
+def test_huya_backoff_last_resort_released_without_probe(clear_probe_backoff: None) -> None:
     # 退避中的末位候选（无备选）：直接放行给 ffmpeg，不发探针（省下连接预算）
     _mark_probe_reject(_HUYA_FLV_URL, "虎牙直播")
 
@@ -305,7 +314,7 @@ def test_huya_backoff_last_resort_released_without_probe(clear_probe_backoff) ->
     assert _NoProbeClient.instantiated == 0
 
 
-def test_huya_transient_flv_403_marks_backoff(clear_probe_backoff) -> None:
+def test_huya_transient_flv_403_marks_backoff(clear_probe_backoff: None) -> None:
     # FLV「HEAD 200 + GET 复核先 403 后 200」：校验通过（重试救回），但偶发 403 仍是
     # 限流证据 → 记入退避，下一轮让 ffmpeg 直连（实测该形态下 ffmpeg 立即 403）
     class _FlvTransient403Client:
@@ -317,7 +326,7 @@ def test_huya_transient_flv_403_marks_backoff(clear_probe_backoff) -> None:
         def __enter__(self) -> "_FlvTransient403Client":
             return self
 
-        def __exit__(self, *args: object) -> bool:
+        def __exit__(self, *_args: object) -> Literal[False]:
             return False
 
         def head(self, url: str, follow_redirects: bool = True) -> _FakeResponse:
@@ -335,7 +344,7 @@ def test_huya_transient_flv_403_marks_backoff(clear_probe_backoff) -> None:
         def __enter__(self) -> _FakeResponse:
             return self._resp
 
-        def __exit__(self, *args: object) -> bool:
+        def __exit__(self, *_args: object) -> Literal[False]:
             return False
 
     with patch("src.stream_select.httpx.Client", _FlvTransient403Client), patch("src.stream_select.time.sleep"):
@@ -343,7 +352,7 @@ def test_huya_transient_flv_403_marks_backoff(clear_probe_backoff) -> None:
     assert _probe_in_backoff(_HUYA_FLV_URL, "虎牙直播") is True
 
 
-def test_backoff_key_ignores_query_token(clear_probe_backoff) -> None:
+def test_backoff_key_ignores_query_token(clear_probe_backoff: None) -> None:
     # 虎牙每轮解析返回新 token（query 变化）但路径稳定：退避键须按 host+路径聚合跨轮命中
     _mark_probe_reject(_HUYA_M3U8_URL, "虎牙直播")
     fresh_token_url = _HUYA_M3U8_URL.replace("wsSecret=abc", "wsSecret=newsecret")
@@ -351,7 +360,7 @@ def test_backoff_key_ignores_query_token(clear_probe_backoff) -> None:
     assert _probe_in_backoff(fresh_token_url, "虎牙直播") is True
 
 
-def test_backoff_expires_after_window(clear_probe_backoff) -> None:
+def test_backoff_expires_after_window(clear_probe_backoff: None) -> None:
     # 超过退避窗口后恢复正常探针（限流解除/主播重新开播时走正常校验）
     _mark_probe_reject(_HUYA_M3U8_URL, "虎牙直播")
     with _probe_backoff_lock:
@@ -359,7 +368,7 @@ def test_backoff_expires_after_window(clear_probe_backoff) -> None:
     assert _probe_in_backoff(_HUYA_M3U8_URL, "虎牙直播") is False
 
 
-def test_non_backoff_platform_keeps_retry_semantics(clear_probe_backoff) -> None:
+def test_non_backoff_platform_keeps_retry_semantics(clear_probe_backoff: None) -> None:
     # 斗鱼不在退避名单：稳定 403 不记退避，下一轮仍正常探针（保住「重试一次再定罪」
     # 与 HLS-first 语义，不因负缓存跳过导致回退 FLV 的回归）
     cls = _m3u8_client_cls([403, 403], ["text/html", "text/html"])
@@ -373,7 +382,7 @@ def test_non_backoff_platform_keeps_retry_semantics(clear_probe_backoff) -> None
     assert cls2.get_calls == 1
 
 
-def test_select_source_url_huya_backoff_round_straight_to_ffmpeg(clear_probe_backoff) -> None:
+def test_select_source_url_huya_backoff_round_straight_to_ffmpeg(clear_probe_backoff: None) -> None:
     # 复刻实测日志第 2 轮形态：HLS/FLV 均因 403 进入退避 → select_source_url
     # 零探针直接放行 FLV 给 ffmpeg（独享连接预算，403 失败循环自愈）
     _mark_probe_reject(_HUYA_M3U8_URL, "虎牙直播")

@@ -27,7 +27,8 @@ def main() -> None:
     print(f"[OK] anchor={info.get('anchor_name')} room_id={info.get('room_id')}")
 
     port = asyncio.run(stream.get_douyu_stream_url(json_data=info, video_quality=QUALITY, cookies="", proxy_addr=None))
-    flv = port.get("flv_url") or ""
+    flv_value = port.get("flv_url")
+    flv = flv_value if isinstance(flv_value, str) else ""
     is_live = port.get("is_live")
     print(f"[OK] is_live={is_live} quality={port.get('quality')}")
     print(f"flv_url_len={len(flv)} prefix={flv[:90]}")

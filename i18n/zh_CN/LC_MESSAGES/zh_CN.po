@@ -925,3 +925,263 @@ msgstr "发生未知错误："
 msgid "return web_rid:"
 msgstr "返回 web_rid："
 
+
+# =============================================================================
+# 2026-08-21 补全条目（扫描运行时代码 print/logger 常量串比对得出）
+# =============================================================================
+
+msgid "\r检测直播间中..."
+msgstr "\r检测直播间中..."
+
+msgid "\r没有正在监测和录制的直播"
+msgstr "\r没有正在监测和录制的直播"
+
+msgid "      1. config.ini [Web] 节设置 web_auth_enable = true 并配置 web_password；"
+msgstr "      1. config.ini [Web] 节设置 web_auth_enable = true 并配置 web_password；"
+
+msgid "      2. 或设置 web_host = 127.0.0.1 仅限本机访问。"
+msgstr "      2. 或设置 web_host = 127.0.0.1 仅限本机访问。"
+
+msgid "      如确需在无认证状态暴露到局域网，请设置环境变量 DOUYIN_WEB_ALLOW_INSECURE=1 后重启（不推荐）。"
+msgstr "      如确需在无认证状态暴露到局域网，请设置环境变量 DOUYIN_WEB_ALLOW_INSECURE=1 后重启（不推荐）。"
+
+msgid "      建议在 config.ini [Web] 节设置 web_auth_enable = true 并配置 web_password。"
+msgstr "      建议在 config.ini [Web] 节设置 web_auth_enable = true 并配置 web_password。"
+
+msgid "-----------------------------------------------------"
+msgstr "-----------------------------------------------------"
+
+msgid "....................................................."
+msgstr "....................................................."
+
+msgid "All download methods failed. Please manually install ffmpeg by yourself."
+msgstr "所有下载方式均失败，请手动安装 ffmpeg。"
+
+msgid "FLV URL validation failed, trying record_url fallback"
+msgstr "FLV 地址校验失败，尝试 record_url 备选"
+
+msgid "FLV is not supported for h265 codec, use TS format instead"
+msgstr "FLV 不支持 h265 编码，改用 TS 格式"
+
+msgid "FLV 为 h265 且 HLS 源校验失败，尝试其它 FLV 候选"
+msgstr "FLV 为 h265 且 HLS 源校验失败，尝试其它 FLV 候选"
+
+msgid "FLV 为 h265 无法录制且 HLS 采集已关闭，尝试其它 FLV 候选"
+msgstr "FLV 为 h265 无法录制且 HLS 采集已关闭，尝试其它 FLV 候选"
+
+msgid "Failed to build download URL from lanzou response"
+msgstr "无法从蓝奏云响应构建下载地址"
+
+msgid "Failed to execute JS code. Please check if the Node.js environment"
+msgstr "执行 JS 代码失败，请检查 Node.js 环境"
+
+msgid "Failed to extract sign from lanzou page"
+msgstr "无法从蓝奏云页面提取签名"
+
+msgid "Failed to install EPEL repository"
+msgstr "安装 EPEL 软件源失败"
+
+msgid "Failed to obtain ffmpeg download address from lanzou"
+msgstr "无法从蓝奏云获取 ffmpeg 下载地址"
+
+msgid "Failed to retrieve the Node.js version page"
+msgstr "获取 Node.js 版本页面失败"
+
+msgid "Failed to retrieve the download URL for the latest version of Node.js..."
+msgstr "获取最新版 Node.js 下载地址失败..."
+
+msgid "Failed to update package lists using apt"
+msgstr "使用 apt 更新软件源列表失败"
+
+msgid "Failed to update package lists using yum."
+msgstr "使用 yum 更新软件源列表失败。"
+
+msgid "HLS URL validation failed, falling back to FLV"
+msgstr "HLS 地址校验失败，回退 FLV"
+
+msgid "HTML scraping fallback succeeded"
+msgstr "HTML 解析兜底成功"
+
+msgid "Installing the latest version of Node.js for CentOS..."
+msgstr "正在为 CentOS 安装最新版 Node.js..."
+
+msgid "Installing the latest version of Node.js for Ubuntu..."
+msgstr "正在为 Ubuntu 安装最新版 Node.js..."
+
+msgid "Installing the latest version of Node.js for macOS..."
+msgstr "正在为 macOS 安装最新版 Node.js..."
+
+msgid "Installing the latest version of ffmpeg from lanzou for Windows..."
+msgstr "正在为 Windows 从蓝奏云安装最新版 ffmpeg..."
+
+msgid "Installing the stable version of Node.js for Windows..."
+msgstr "正在为 Windows 安装稳定版 Node.js..."
+
+msgid "Installing the stable version of ffmpeg for macOS..."
+msgstr "正在为 macOS 安装稳定版 ffmpeg..."
+
+msgid "Manual installation of ffmpeg is required. Please manually install ffmpeg by yourself."
+msgstr "需要手动安装 ffmpeg，请自行安装。"
+
+msgid "No proxy is enabled on the system"
+msgstr "系统未开启代理"
+
+msgid "Node.js directory exists but not working"
+msgstr "Node.js 目录已存在但不可用"
+
+msgid "Node.js installation failed"
+msgstr "Node.js 安装失败"
+
+msgid "Node.js installation file already exists, start install..."
+msgstr "Node.js 安装文件已存在，开始安装..."
+
+msgid "Node.js installation was successful. Restart for changes to take effect"
+msgstr "Node.js 安装成功，重启后生效"
+
+msgid "Node.js installation was successful. Restart for changes to take effect."
+msgstr "Node.js 安装成功，重启后生效。"
+
+msgid "Node.js is not installed."
+msgstr "未安装 Node.js。"
+
+msgid "Official source unavailable, falling back to lanzou download..."
+msgstr "官方源不可用，回退蓝奏云下载..."
+
+msgid "Please delete the ffmpeg and try to download and install again."
+msgstr "请删除 ffmpeg 目录后重新下载安装。"
+
+msgid "Please install Node.js manually or check your Homebrew installation."
+msgstr "请手动安装 Node.js 或检查 Homebrew 安装。"
+
+msgid "Please install ffmpeg manually or check your Homebrew installation."
+msgstr "请手动安装 ffmpeg 或检查 Homebrew 安装。"
+
+msgid "Trying to install ffmpeg from official source (gyan.dev)..."
+msgstr "正在尝试从官方源 (gyan.dev) 安装 ffmpeg..."
+
+msgid "Trying to install the stable version of ffmpeg"
+msgstr "正在尝试安装稳定版 ffmpeg"
+
+msgid "Trying to install the stable version of ffmpeg for Linux using apt..."
+msgstr "正在尝试使用 apt 为 Linux 安装稳定版 ffmpeg..."
+
+msgid "[B站弹幕]进房认证成功（AUTH_REPLY code=0）"
+msgstr "[B站弹幕]进房认证成功（AUTH_REPLY code=0）"
+
+msgid "[B站直播]getDanmuInfo 无可用 host"
+msgstr "[B站直播]getDanmuInfo 无可用 host"
+
+msgid "[B站直播]getDanmuInfo 返回空（可能 -352 风控，检查 wbi 签名/cookie）"
+msgstr "[B站直播]getDanmuInfo 返回空（可能 -352 风控，检查 wbi 签名/cookie）"
+
+msgid "[web] ⚠️ 警告: Web 面板监听非回环地址且未启用认证，局域网内任何人均可访问。"
+msgstr "[web] ⚠️ 警告: Web 面板监听非回环地址且未启用认证，局域网内任何人均可访问。"
+
+msgid "[web] 已启用系统托盘：控制台窗口不在任务栏显示，最小化后收起到托盘"
+msgstr "[web] 已启用系统托盘：控制台窗口不在任务栏显示，最小化后收起到托盘"
+
+msgid "[web] 进入后台运行模式，控制台窗口将隐藏"
+msgstr "[web] 进入后台运行模式，控制台窗口将隐藏"
+
+msgid "[抖音弹幕]无可用 cookie/ttwid，WS 握手可能被服务端拒绝"
+msgstr "[抖音弹幕]无可用 cookie/ttwid，WS 握手可能被服务端拒绝"
+
+msgid "apt command not found, unable to install ffmpeg. Please manually install ffmpeg by yourself"
+msgstr "未找到 apt 命令，无法安装 ffmpeg，请手动安装"
+
+msgid "ffmpeg (lanzou) installation was successful"
+msgstr "ffmpeg（蓝奏云）安装成功"
+
+msgid "ffmpeg (official) installation was successful"
+msgstr "ffmpeg（官方源）安装成功"
+
+msgid "ffmpeg installation failed"
+msgstr "ffmpeg 安装失败"
+
+msgid "ffmpeg installation file already exists, start install..."
+msgstr "ffmpeg 安装文件已存在，开始安装..."
+
+msgid "ffmpeg installation was successful using apt. Restart for changes to take effect."
+msgstr "ffmpeg 已通过 apt 安装成功，重启后生效。"
+
+msgid "ffmpeg installation was successful using yum. Restart for changes to take effect."
+msgstr "ffmpeg 已通过 yum 安装成功，重启后生效。"
+
+msgid "ffmpeg installation was successful. Restart for changes to take effect."
+msgstr "ffmpeg 安装成功，重启后生效。"
+
+msgid "ffmpeg is not installed."
+msgstr "未安装 ffmpeg。"
+
+msgid "ffmpeg lanzou installation verification failed"
+msgstr "ffmpeg 蓝奏云安装校验失败"
+
+msgid "ffmpeg official installation verification failed"
+msgstr "ffmpeg 官方源安装校验失败"
+
+msgid "ffmpeg.exe not found in official package"
+msgstr "官方压缩包中未找到 ffmpeg.exe"
+
+msgid "record_url has h265 codec, but no HLS or FLV fallback available"
+msgstr "record_url 为 h265 编码，且无 HLS 或 FLV 备选可用"
+
+msgid "yum command not found, trying to install using apt..."
+msgstr "未找到 yum 命令，尝试使用 apt 安装..."
+
+msgid "使用配置文件中的 ttwid"
+msgstr "使用配置文件中的 ttwid"
+
+msgid "如需恢复控制台显示，请在 config.ini 设置 web_show_console = true 后重启"
+msgstr "如需恢复控制台显示，请在 config.ini 设置 web_show_console = true 后重启"
+
+msgid "录制分段开启: 否"
+msgstr "录制分段开启: 否"
+
+msgid "提示: 「是否禁用SSL证书验证(是/否)」已整合进「是否启用https录制」，旧配置项不再生效"
+msgstr "提示: 「是否禁用SSL证书验证(是/否)」已整合进「是否启用https录制」，旧配置项不再生效"
+
+msgid "是否生成时间文件: 是"
+msgstr "是否生成时间文件: 是"
+
+msgid "脚本无执行权限!, 若是Linux环境, 请先执行:chmod +x your_script.sh 授予脚本可执行权限"
+msgstr "脚本无执行权限!, 若是Linux环境, 请先执行:chmod +x your_script.sh 授予脚本可执行权限"
+
+msgid "自动获取 Twitch Client-Id 成功"
+msgstr "自动获取 Twitch Client-Id 成功"
+
+msgid "自动获取快手 did 成功"
+msgstr "自动获取快手 did 成功"
+
+msgid "自动获取抖音 ttwid 成功"
+msgstr "自动获取抖音 ttwid 成功"
+
+msgid "获取录制状态失败（并发竞争），返回空快照"
+msgstr "获取录制状态失败（并发竞争），返回空快照"
+
+msgid "错误信息: 网络异常，请检查本网络是否能正常访问LiveMe直播平台"
+msgstr "错误信息: 网络异常，请检查本网络是否能正常访问LiveMe直播平台"
+
+msgid "错误信息: 网络异常，请检查本网络是否能正常访问PandaTV直播平台"
+msgstr "错误信息: 网络异常，请检查本网络是否能正常访问PandaTV直播平台"
+
+msgid "错误信息: 网络异常，请检查本网络是否能正常访问PopkonTV直播平台"
+msgstr "错误信息: 网络异常，请检查本网络是否能正常访问PopkonTV直播平台"
+
+msgid "错误信息: 网络异常，请检查本网络是否能正常访问SOOP(原AfreecaTV)平台"
+msgstr "错误信息: 网络异常，请检查本网络是否能正常访问SOOP(原AfreecaTV)平台"
+
+msgid "错误信息: 网络异常，请检查本网络是否能正常访问TTingLive(原Flextv)直播平台"
+msgstr "错误信息: 网络异常，请检查本网络是否能正常访问TTingLive(原Flextv)直播平台"
+
+msgid "错误信息: 网络异常，请检查本网络是否能正常访问TwitchTV直播平台"
+msgstr "错误信息: 网络异常，请检查本网络是否能正常访问TwitchTV直播平台"
+
+msgid "错误信息: 网络异常，请检查本网络是否能正常访问WinkTV直播平台"
+msgstr "错误信息: 网络异常，请检查本网络是否能正常访问WinkTV直播平台"
+
+msgid "错误信息: 网络异常，请检查本网络是否能正常访问faceit直播平台"
+msgstr "错误信息: 网络异常，请检查本网络是否能正常访问faceit直播平台"
+
+msgid "错误信息: 网络异常，请检查网络是否能正常访问TikTok平台"
+msgstr "错误信息: 网络异常，请检查网络是否能正常访问TikTok平台"
+

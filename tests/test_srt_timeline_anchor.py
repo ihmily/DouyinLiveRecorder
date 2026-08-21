@@ -8,6 +8,7 @@ import asyncio
 import os
 import sys
 import time
+from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -34,8 +35,8 @@ def test_immediate_file_and_anchored_timeline() -> None:
     w.write("A", "第10秒的弹幕", now=t0 + 10.5)
     w.write("B", "第12秒的弹幕", now=t0 + 12.0)
     w.close()
-    with open(base + ".srt", encoding="utf-8") as f:
-        content = f.read()
+    with open(base + ".srt", encoding="utf-8") as fh:
+        content = fh.read()
     assert "00:00:10,500 --> 00:00:12,000" in content, f"时间戳应锚定录像起点(非0):\n{content}"
     assert content.startswith("1\n00:00:10,500"), f"首条不应是 00:00:00,000:\n{content}"
     print("[PASS] 单文件:start() 立即建 SRT + 时间戳锚定录像起点")
@@ -56,10 +57,10 @@ def test_segment_reset() -> None:
     seg1 = base + "_001.srt"
     assert os.path.isfile(seg0), "分段模式应一开始就生成 _000"
     assert os.path.isfile(seg1), "应有 _001"
-    with open(seg0, encoding="utf-8") as f:
-        c0 = f.read()
-    with open(seg1, encoding="utf-8") as f:
-        c1 = f.read()
+    with open(seg0, encoding="utf-8") as fh:
+        c0 = fh.read()
+    with open(seg1, encoding="utf-8") as fh:
+        c1 = fh.read()
     assert "00:00:00,500" in c0, f"片0应为片内时间:\n{c0}"
     assert "00:00:00,500" in c1, f"片1时间应重置回0:\n{c1}"
     print("[PASS] 分段:每片时间轴重置为 0,且 _000 立即生成")
@@ -71,8 +72,8 @@ def test_no_start_fallback() -> None:
     w = SrtWriter(base_filename=base, segment_seconds=None)
     w.write("A", "首条", now=1.05)
     w.close()
-    with open(base + ".srt", encoding="utf-8") as f:
-        content = f.read()
+    with open(base + ".srt", encoding="utf-8") as fh:
+        content = fh.read()
     assert content.startswith("1\n00:00:00,000"), f"兜底应为首条=0:\n{content}"
     print("[PASS] 兜底:未 start() 时首条弹幕为 00:00:00,000")
 
@@ -82,16 +83,17 @@ class _SilentDanmaku(DanmakuBase):
 
     heartbeat_interval = 0.0
 
-    async def start(self, args):
+    async def start(self, args: Any) -> None:
+        _ = args
         await asyncio.sleep(60)
 
-    async def stop(self):
+    async def stop(self) -> None:
         pass
 
-    async def heartbeat(self):
+    async def heartbeat(self) -> None:
         pass
 
-    def decode_message(self, data):
+    def decode_message(self, data: bytes | str) -> None:
         pass
 
 

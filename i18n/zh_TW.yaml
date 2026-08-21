@@ -1,0 +1,291 @@
+"\r检测直播间中...": "\r檢測直播間中..."
+"\r没有正在监测和录制的直播": "\r沒有正在監測和錄製的直播"
+'      1. config.ini [Web] 节设置 web_auth_enable = true 并配置 web_password；': '      1. config.ini [Web] 節設定 web_auth_enable = true 並配置 web_password；'
+'      2. 或设置 web_host = 127.0.0.1 仅限本机访问。': '      2. 或設定 web_host = 127.0.0.1 僅限本機訪問。'
+'      如确需在无认证状态暴露到局域网，请设置环境变量 DOUYIN_WEB_ALLOW_INSECURE=1 后重启（不推荐）。': '      如確需在無認證狀態暴露到局域網，請設定環境變量 DOUYIN_WEB_ALLOW_INSECURE=1 後重啟（不推薦）。'
+'      建议在 config.ini [Web] 节设置 web_auth_enable = true 并配置 web_password。': '      建議在 config.ini [Web] 節設定 web_auth_enable = true 並配置 web_password。'
+'-----------------------------------------------------': '-----------------------------------------------------'
+'.....................................................': '.....................................................'
+All download methods failed. Please manually install ffmpeg by yourself.: 所有下載方式均失敗，請手動安裝 ffmpeg。
+'An error occurred during login: {e}': '登錄過程中發生錯誤: {e}'
+'An exception occurred during get_live_room_id: {e}': '獲取直播間ID時發生異常: {e}'
+'An exception occurred during popkontv login: {e}': 'popkontv登錄過程中發生異常: {e}'
+'An unexpected error occurred:': 發生未知錯誤：
+An unknown error occurred: 發生未知錯誤
+Attempting to log in to TwitCasting...: TwitCasting正在嘗試登錄...
+? Attempting to log in to the FlexTV live streaming platform, please ensure your account and password are correctly filled in the configuration file.
+: 正在嘗試登錄TTingLive(原Flextv)直播平台，請確保已在設定檔中填寫好您的賬號和密碼
+? Attempting to log in to the popkontv live streaming platform, please ensure your account and password are correctly filled in the configuration file.
+: 正在嘗試登錄popkontv直播平台，請確保已在設定檔中填寫好您的賬號和密碼
+? Attempting to log in to the sooplive live streaming platform with your account and password, please ensure it is configured.
+: 正在嘗試使用您的賬號和密碼登錄SOOP(原AfreecaTV)直播平台，請確保已在config設定檔中配置
+Disk space remaining is below: 剩餘磁碟空間低于
+'Error message: {e} Error line: {tb_lineno}': '錯誤訊息: {e} 錯誤行號: {tb_lineno}'
+Error occurred during conversion: 轉換過程中發生錯誤
+'Error occurred while reading the configuration file: {e}': '讀取設定檔時發生錯誤: {e}'
+'Error occurred while writing to the configuration file: {e}': '寫入設定檔時發生錯誤: {e}'
+'Error: Please log in to YouTube on your device''s webpage and configure cookies in the config.ini': 錯誤：請先在設備網頁上登錄YouTube，並在config.ini中配置cookies
+FLV URL validation failed, trying record_url fallback: FLV 位址校驗失敗，嘗試 record_url 備選
+FLV is not supported for h265 codec, use HLS source instead: FLV不支援h265編碼，改用HLS源
+FLV is not supported for h265 codec, use TS format instead: FLV 不支援 h265 編碼，改用 TS 格式
+FLV 为 h265 且 HLS 源校验失败，尝试其它 FLV 候选: FLV 為 h265 且 HLS 源校驗失敗，嘗試其它 FLV 候選
+FLV 为 h265 无法录制且 HLS 采集已关闭，尝试其它 FLV 候选: FLV 為 h265 無法錄製且 HLS 採集已關閉，嘗試其它 FLV 候選
+FLV下载错误: FLV下載錯誤
+'Failed URL: {url} Error message: {error_msg}': '失敗的URL: {url} 錯誤訊息: {error_msg}'
+Failed to build download URL from lanzou response: 無法從藍奏雲響應構建下載位址
+Failed to execute JS code. Please check if the Node.js environment: 執行 JS 程式碼失敗，請檢查 Node.js 環境
+Failed to extract sign from lanzou page: 無法從藍奏雲頁面提取簽名
+Failed to fetch data from {url}.{e}: 從 {url} 獲取數據失敗。{e}
+Failed to install EPEL repository: 安裝 EPEL 軟體來源失敗
+Failed to obtain ffmpeg download address from lanzou: 無法從藍奏雲獲取 ffmpeg 下載位址
+'Failed to parse JSON data from {url}. Error: {e}': '從 {url} 解析JSON數據失敗。錯誤: {e}'
+Failed to retrieve TwitCasting data, attempting to log in...: 獲取TwitCasting數據失敗，正在嘗試登錄...
+Failed to retrieve data from FlexTV live room: 從TTingLive(原Flextv)直播間獲取數據失敗
+? Failed to retrieve live room data, the Huajiao live room address is not fixed, please manually change the address for recording.
+: 獲取直播間數據失敗，花椒直播間位址是非固定的，請手動更換位址進行錄製
+Failed to retrieve live stream source,: 獲取直播流源失敗，
+'Failed to retrieve popkontv live stream [token does not exist or has expired]: Please log in to watch.': 'popkontv直播獲取失敗[token不存在或者已過期]: 請登錄後觀看'
+Failed to retrieve the Node.js version page: 獲取 Node.js 版本頁面失敗
+Failed to retrieve the download URL for the latest version of Node.js...: 獲取最新版 Node.js 下載位址失敗...
+Failed to update package lists using apt: 使用 apt 更新軟體來源列表失敗
+Failed to update package lists using yum.: 使用 yum 更新軟體來源列表失敗。
+Fetch shopee live data failed, please update the address of the live broadcast room and try again.: 獲取shopee直播間數據失敗，請手動更換直播錄製位址後重試
+'FlexTV live stream retrieval failed [not logged in]: 19+ live streams are only available for logged-in adults.': 'TTingLive(原Flextv)直播獲取失敗[未登錄]: 19+直播需要登錄後是成人才可觀看'
+'FlexTV login request exception: {e}': 'TTingLive(原Flextv)登錄請求異常: {e}'
+FlexTV直播平台: TTingLive(原Flextv)直播平台
+'Get douyu sign params error: {e}': '獲取鬥魚簽名參數錯誤: {e}'
+'GitHub: https://github.com/ihmily/DouyinLiveRecorder': 'GitHub: https://github.com/ihmily/DouyinLiveRecorder'
+HLS URL validation failed, falling back to FLV: HLS 位址校驗失敗，回退 FLV
+HTML scraping fallback succeeded: HTML 解析兜底成功
+'HTTP status error occurred during login: {e.response.status_code}': '登錄時發生HTTP狀態錯誤: {e.response.status_code}'
+'HTTP status error occurred: {e.response.status_code}': '發生HTTP狀態錯誤: {e.response.status_code}'
+IP banned. Please change device or network.: IP被禁止 請更換設備或網路
+Installing the latest version of Node.js for CentOS...: 正在為 CentOS 安裝最新版 Node.js...
+Installing the latest version of Node.js for Ubuntu...: 正在為 Ubuntu 安裝最新版 Node.js...
+Installing the latest version of Node.js for macOS...: 正在為 macOS 安裝最新版 Node.js...
+Installing the latest version of ffmpeg from lanzou for Windows...: 正在為 Windows 從藍奏雲安裝最新版 ffmpeg...
+Installing the stable version of Node.js for Windows...: 正在為 Windows 安裝穩定版 Node.js...
+Installing the stable version of ffmpeg for macOS...: 正在為 macOS 安裝穩定版 ffmpeg...
+Key [{key}] does not exist in section [{section}].: 鍵 [{key}] 在節 [{section}] 中不存在。
+LiveMe直播平台: LiveMe直播平台
+Logged into FlexTV platform successfully! Starting to fetch live streaming data...: TTingLive(原Flextv)平台登錄成功！開始獲取直播數據...
+Logged into popkontv platform successfully! Starting to fetch live streaming data...: popkontv平台登錄成功！開始獲取直播數據...
+Logging into FlexTV platform...: TTingLive(原Flextv)平台登錄中...
+Logging into popkontv platform...: popkontv平台登錄中...
+Look live currently only supports audio live streaming, not video live streaming!: Look直播暫時只支援音頻直播，不支援Look影片直播!
+Manual installation of ffmpeg is required. Please manually install ffmpeg by yourself.: 需要手動安裝 ffmpeg，請自行安裝。
+No proxy is enabled on the system: 系統未開啟代理
+Node.js directory exists but not working: Node.js 目錄已存在但不可用
+Node.js installation failed: Node.js 安裝失敗
+Node.js installation file already exists, start install...: Node.js 安裝檔案已存在，開始安裝...
+Node.js installation was successful. Restart for changes to take effect: Node.js 安裝成功，重啟後生效
+Node.js installation was successful. Restart for changes to take effect.: Node.js 安裝成功，重啟後生效。
+Node.js is not installed.: 未安裝 Node.js。
+Official source unavailable, falling back to lanzou download...: 官方源不可用，回退藍奏雲下載...
+PandaTV直播平台: PandaTV直播平台
+Please add `#!/bin/bash` at the beginning of your bash script file.: 請在 bash 腳本檔案開頭添加 `#!/bin/bash`。
+Please check if the FlexTV account and password in the configuration file are correct.: 請檢查設定檔中的TTingLive(原Flextv)賬號和密碼是否正確
+Please delete the ffmpeg and try to download and install again.: 請刪除 ffmpeg 目錄後重新下載安裝。
+Please install Node.js manually or check your Homebrew installation.: 請手動安裝 Node.js 或檢查 Homebrew 安裝。
+Please install ffmpeg manually or check your Homebrew installation.: 請手動安裝 ffmpeg 或檢查 Homebrew 安裝。
+PopkonTV直播平台: PopkonTV直播平台
+SOOP平台: SOOP(原AfreecaTV)平台
+Section [{section}] does not exist in the file.: 節 [{section}] 在檔案中不存在。
+The anchor did not start broadcasting.: 主播並未開播
+The value of {key} under [{section}] in the configuration file has been updated.: 設定檔中 [{section}] 節下的 {key} 的值已更新。
+TikTok平台: TikTok平台
+Trying to install ffmpeg from official source (gyan.dev)...: 正在嘗試從官方源 (gyan.dev) 安裝 ffmpeg...
+Trying to install the stable version of ffmpeg: 正在嘗試安裝穩定版 ffmpeg
+Trying to install the stable version of ffmpeg for Linux using apt...: 正在嘗試使用 apt 為 Linux 安裝穩定版 ffmpeg...
+TwitCasting login error,: TwitCasting登錄錯誤，
+TwitCasting login successful! Starting to fetch data...: TwitCasting 登錄成功！開始獲取數據...
+TwitchTV直播平台: TwitchTV直播平台
+URL 配置已保存成功: URL 配置已保存成功
+URL 配置编辑区: URL 配置編輯區
+Use Direct Downloader to Download FLV Stream: 使用直接下載器下載FLV流
+WinkTV直播平台: WinkTV直播平台
+'[B站弹幕]进房认证成功（AUTH_REPLY code=0）': '[B站彈幕]進房認證成功（AUTH_REPLY code=0）'
+'[B站直播]getDanmuInfo 无可用 host': '[B站直播]getDanmuInfo 無可用 host'
+'[B站直播]getDanmuInfo 返回空（可能 -352 风控，检查 wbi 签名/cookie）': '[B站直播]getDanmuInfo 返回空（可能 -352 風控，檢查 wbi 簽名/cookie）'
+'[web] ⚠️ 警告: Web 面板监听非回环地址且未启用认证，局域网内任何人均可访问。': '[web] ⚠️ 警告: Web 面板監聽非回環位址且未啟用認證，局域網內任何人均可訪問。'
+'[web] 已启用系统托盘：控制台窗口不在任务栏显示，最小化后收起到托盘': '[web] 已啟用系統托盤：控制台窗口不在任務欄顯示，最小化後收起到托盤'
+'[web] 进入后台运行模式，控制台窗口将隐藏': '[web] 進入後台執行模式，控制台窗口將隱藏'
+'[抖音弹幕]无可用 cookie/ttwid，WS 握手可能被服务端拒绝': '[抖音彈幕]無可用 cookie/ttwid，WS 握手可能被服務端拒絕'
+apt command not found, unable to install ffmpeg. Please manually install ffmpeg by yourself: 未找到 apt 命令，無法安裝 ffmpeg，請手動安裝
+error message：Please check if the input sooplive live room address is correct.: 錯誤訊息：請檢查輸入的SOOP(原AfreecaTV)直播間位址是否正確
+faceit直播平台: faceit直播平台
+ffmpeg (lanzou) installation was successful: ffmpeg（藍奏雲）安裝成功
+ffmpeg (official) installation was successful: ffmpeg（官方源）安裝成功
+ffmpeg installation failed: ffmpeg 安裝失敗
+ffmpeg installation file already exists, start install...: ffmpeg 安裝檔案已存在，開始安裝...
+ffmpeg installation was successful using apt. Restart for changes to take effect.: ffmpeg 已透過 apt 安裝成功，重啟後生效。
+ffmpeg installation was successful using yum. Restart for changes to take effect.: ffmpeg 已透過 yum 安裝成功，重啟後生效。
+ffmpeg installation was successful. Restart for changes to take effect.: ffmpeg 安裝成功，重啟後生效。
+ffmpeg is not installed.: 未安裝 ffmpeg。
+ffmpeg lanzou installation verification failed: ffmpeg 藍奏雲安裝校驗失敗
+ffmpeg official installation verification failed: ffmpeg 官方源安裝校驗失敗
+ffmpeg 进程: ffmpeg 進程
+ffmpeg 进程可能没有完全终止，请检查系统进程: ffmpeg 進程可能沒有完全終止，請檢查系統進程
+ffmpeg.exe not found in official package: 官方壓縮包中未找到 ffmpeg.exe
+pkill 执行失败: pkill 執行失敗
+record_url has h265 codec, but no HLS or FLV fallback available: record_url 為 h265 編碼，且無 HLS 或 FLV 備選可用
+'return web_rid:': 返回 web_rid：
+sooplive live stream failed to retrieve, the live stream just ended.: SOOP(原AfreecaTV)直播獲取失敗,該直播間剛結束直播
+sooplive live stream retrieval failed, the live needs 19+, you are not logged in.: SOOP(原AfreecaTV)直播獲取失敗，該直播間需要年齡19+觀看，您尚未登錄
+sooplive platform login successful! Starting to fetch live streaming data...: SOOP(原AfreecaTV)平台登錄成功！開始獲取直播數據...
+taskkill 执行失败: taskkill 執行失敗
+yum command not found, trying to install using apt...: 未找到 yum 命令，嘗試使用 apt 安裝...
+? '{disk_root} Total: {disk_usage.total / (1024 ** 3):.2f} GB Used: {disk_usage.used / (1024 ** 3):.2f} GB Free: {free_space_gb:.2f} GB
+
+  '
+: '{disk_root} 總計: {disk_usage.total / (1024 ** 3):.2f} GB 已用: {disk_usage.used / (1024 ** 3):.2f} GB 可用: {free_space_gb:.2f} GB
+
+  '
+'{e}, Failed URL: {url}, preparing to switch to a backup plan for re-parsing.': '{e}，失敗的URL: {url}，正在準備切換到備用方案重新解析。'
+'|                DouyinLiveRecorder                 |': '|                DouyinLiveRecorder                 |'
+个直播: 個直播
+个直播中: 個直播中
+传入地址: 傳入位址
+使用配置文件中的 ttwid: 使用設定檔中的 ttwid
+保存 URL 配置: 保存 URL 配置
+保存配置文件失败: 保存設定檔失敗
+停止录制: 停止錄製
+全局/规则网络代理已开启: 全局/規則網路代理已開啟
+共监测: 共監測
+关闭选项: 關閉選項
+准备开始录制: 準備開始錄製
+准备开始录制音频: 準備開始錄製音頻
+加载配置文件不存在，请新建: 設定檔不存在，請新建
+加载配置文件失败: 加載設定檔失敗
+发生 I/O 错误: 發生 I/O 錯誤
+发生错误的行数: 發生錯誤的行數
+同一时间访问网络的线程数: 同一時間訪問網路的線程數
+否: 否
+启动录制失败: 啟動錄製失敗
+启用: 啟用
+备份配置文件: 備份設定檔
+备份配置文件失败, 错误信息: 備份設定檔失敗, 錯誤訊息
+失败: 失敗
+如需恢复控制台显示，请在 config.ini 设置 web_show_console = true 后重启: 如需恢復控制台顯示，請在 config.ini 設定 web_show_console = true 後重啟
+将强制使用FLV格式录制: 將強制使用FLV格式錄製
+尝试终止 ffmpeg 进程: 嘗試終止 ffmpeg 進程
+工作目录: 工作目錄
+已使用命令行方式结束录制进程: 已使用命令行方式結束錄製進程
+已取消结束录制操作: 已取消結束錄製操作
+已成功结束正在录制直播的进程: 已成功結束正在錄製直播的進程
+已打开下载目录: 已打開下載目錄
+已清理: 已清理
+已经将: 已經將
+已被注释,本条线程将会退出: 已被注釋,本條線程將會退出
+已通过 pkill 清理本进程树的 ffmpeg 进程: 已透過 pkill 清理本進程樹的 ffmpeg 進程
+已通过 taskkill 清理本进程树的 ffmpeg 进程: 已透過 taskkill 清理本進程樹的 ffmpeg 進程
+平台: 平台
+序号: 序號
+开始录制: 開始錄製
+开始执行脚本命令!: 開始執行腳本命令!
+强制终止失败: 強制終止失敗
+当前时间: 當前時間
+录制分段开启: 錄製分段開啟
+'录制分段开启: 否': '錄製分段開啟: 否'
+录制已在运行中: 錄製已在執行中
+录制正在后台进行，确定要退出吗: 錄製正在後台進行，確定要退出嗎
+录制程序将在后台自动关闭: 錄製程式將在後台自動關閉
+录制视频格式为: 錄製影片格式為
+录制视频质量为: 錄製影片品質為
+录制进程已停止: 錄製進程已停止
+录制进程已启动: 錄製進程已啟動
+录制进程已结束: 錄製進程已結束
+彻底退出: 徹底退出
+循环检测: 循環檢測
+循环等待: 循環等待
+成功: 成功
+所有 ffmpeg 进程清理完成: 所有 ffmpeg 進程清理完成
+打开下载目录: 打開下載目錄
+打开目录失败: 打開目錄失敗
+托盘: 托盤
+授予脚本可执行权限: 授予腳本可執行權限
+提示: 提示
+'提示: 「是否禁用SSL证书验证(是/否)」已整合进「是否启用https录制」，旧配置项不再生效': '提示: 「是否禁用SSL證書驗證(是/否)」已整合進「是否啟用https錄製」，舊配置項不再生效'
+提示信息: 提示訊息
+支持平台: 支援平台
+新增地址: 新增位址
+是: 是
+是否开启代理录制: 是否開啟代理錄製
+是否生成时间文件: 是否生成時間檔案
+'是否生成时间文件: 是': '是否生成時間檔案: 是'
+显示主界面: 顯示主界面
+最小化到托盘: 最小化到托盤
+未发现需要清理的 ffmpeg 进程: 未發現需要清理的 ffmpeg 進程
+未启动: 未啟動
+未找到FLV直播流，跳过录制: 未找到FLV直播流，跳過錄製
+未运行: 未執行
+格式: 格式
+格式说明: 格式說明
+检测直播间中...: 檢測直播間中...
+正在停止录制: 正在停止錄製
+正在发送 SIGINT 信号: 正在發送 SIGINT 信號
+正在发送终止信号: 正在發送終止信號
+正在后台清理可能残留的 ffmpeg 进程: 正在後台清理可能殘留的 ffmpeg 進程
+正在强制终止进程: 正在強制終止進程
+正在录制: 正在錄製
+正在录制中: 正在錄製中
+正在清理所有 ffmpeg 进程...: 正在清理所有 ffmpeg 進程...
+'每行一个直播链接，支持 # 开头的注释行': '每行一個直播鏈接，支援 # 開頭的注釋行'
+没有找到录制程序的进程: 沒有找到錄製程式的進程
+没有正在录制的直播 循环监测间隔时间: 沒有正在錄製的直播 循環監測間隔時間
+没有正在监测和录制的直播: 沒有正在監測和錄製的直播
+没有正在运行的录制进程: 沒有正在執行的錄製進程
+清理 ffmpeg 进程时出错: 清理 ffmpeg 進程時出錯
+点击窗口关闭按钮（X）将最小化到系统托盘: 點擊窗口關閉按鈕（X）將最小化到系統托盤
+版本号: 版本號
+状态: 狀態
+目前瞬时错误数为: 目前瞬時錯誤數為
+直播录制器: 直播錄製器
+直播录制完成: 直播錄製完成
+直播录制控制台: 直播錄製控制台
+直播状态消息推送至你的: 直播狀態訊息推送至你的
+秒: 秒
+程序已最小化到系统托盘，双击托盘图标可恢复窗口: 程式已最小化到系統托盤，雙擊托盤圖標可恢復窗口
+等待直播...: 等待直播...
+系统代理检测中，请耐心等待...: 系統代理檢測中，請耐心等待...
+终止 ffmpeg 进程时出错: 終止 ffmpeg 進程時出錯
+缺少ffmpeg无法进行录制，程序退出: 缺少ffmpeg無法進行錄製，程式退出
+网址内容获取失败,进行重试中...获取失败的地址是: 網址內容獲取失敗,進行重試中...獲取失敗的位址是
+网络异常，请检查网络是否能正常访问: 網路異常，請檢查網路是否能正常訪問
+脚本命令执行结束!: 腳本命令執行結束!
+脚本无执行权限!: 腳本無執行權限!
+脚本无执行权限!, 若是Linux环境, 请先执行:chmod +x your_script.sh 授予脚本可执行权限: 腳本無執行權限!, 若是Linux環境, 請先執行:chmod +x your_script.sh 授予腳本可執行權限
+自动获取 Twitch Client-Id 成功: 自動獲取 Twitch Client-Id 成功
+自动获取快手 did 成功: 自動獲取快手 did 成功
+自动获取抖音 ttwid 成功: 自動獲取抖音 ttwid 成功
+若是Linux环境, 请先执行: 若是Linux環境, 請先執行
+获取录制状态失败（并发竞争），返回空快照: 獲取錄製狀態失敗（並發競爭），返回空快照
+警告: 警告
+警告：进程可能仍在运行: 警告：進程可能仍在執行
+请求直播流失败，状态码: 請求直播流失敗，狀態碼
+请清理磁盘空间或调整保存路径: 請清理磁碟空間或調整保存路徑
+请选择关闭方式: 請選擇關閉方式
+读取输出错误: 讀取輸出錯誤
+转码失败: 轉碼失敗
+输出流已关闭: 輸出流已關閉
+运行中: 執行中
+运行日志: 執行日志
+进程已优雅退出: 進程已優雅退出
+进程已强制终止: 進程已強制終止
+进程未能及时退出，尝试强制终止: 進程未能及時退出，嘗試強制終止
+退出确认: 退出確認
+退出程序: 退出程式
+重新读取配置: 重新讀取配置
+错误: 錯誤
+错误信息: 錯誤訊息
+'错误信息: 网络异常，请检查本网络是否能正常访问LiveMe直播平台': '錯誤訊息: 網路異常，請檢查本網路是否能正常訪問LiveMe直播平台'
+'错误信息: 网络异常，请检查本网络是否能正常访问PandaTV直播平台': '錯誤訊息: 網路異常，請檢查本網路是否能正常訪問PandaTV直播平台'
+'错误信息: 网络异常，请检查本网络是否能正常访问PopkonTV直播平台': '錯誤訊息: 網路異常，請檢查本網路是否能正常訪問PopkonTV直播平台'
+'错误信息: 网络异常，请检查本网络是否能正常访问SOOP(原AfreecaTV)平台': '錯誤訊息: 網路異常，請檢查本網路是否能正常訪問SOOP(原AfreecaTV)平台'
+'错误信息: 网络异常，请检查本网络是否能正常访问TTingLive(原Flextv)直播平台': '錯誤訊息: 網路異常，請檢查本網路是否能正常訪問TTingLive(原Flextv)直播平台'
+'错误信息: 网络异常，请检查本网络是否能正常访问TwitchTV直播平台': '錯誤訊息: 網路異常，請檢查本網路是否能正常訪問TwitchTV直播平台'
+'错误信息: 网络异常，请检查本网络是否能正常访问WinkTV直播平台': '錯誤訊息: 網路異常，請檢查本網路是否能正常訪問WinkTV直播平台'
+'错误信息: 网络异常，请检查本网络是否能正常访问faceit直播平台': '錯誤訊息: 網路異常，請檢查本網路是否能正常訪問faceit直播平台'
+'错误信息: 网络异常，请检查网络是否能正常访问TikTok平台': '錯誤訊息: 網路異常，請檢查網路是否能正常訪問TikTok平台'
+高级设置: 進階設定
+高级设置配置已保存: 進階設定配置已保存

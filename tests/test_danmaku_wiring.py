@@ -11,7 +11,9 @@
 import subprocess
 import sys
 import types
+from collections.abc import Generator
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -21,7 +23,7 @@ from src.srt_writer import SrtWriter
 
 
 @pytest.fixture(scope="module")
-def main_mod():
+def main_mod() -> Generator[Any, None, None]:
     # main.py 的 _app_root() 基于 sys.argv[0] 定位 config/，pytest 下 argv[0] 指向 pytest 自身，
     # 需在导入前修正为项目 main.py（与 tests/test_main_fixes.py 同一模式）。
     old_argv = sys.argv[:]
@@ -34,21 +36,21 @@ def main_mod():
         sys.argv = old_argv
 
 
-def _make_subprocess_shim(poll_results: list) -> types.SimpleNamespace:
+def _make_subprocess_shim(poll_results: list[int | None]) -> types.SimpleNamespace:
     # 构造 main 模块级 subprocess 引用的替身（只换 main.subprocess 全局引用，不污染 stdlib——
     # 直接 patch stdlib Popen 会波及同进程 harness 守护线程的 subprocess.run）。
     # Popen 必须是类：check_subprocess 内层函数注解 subprocess.Popen[bytes] 在 def 时求值，
     # 故需 __class_getitem__；poll 按给定序列返回，耗尽后视为已退出（返回 0）。
 
     class _FakePopen:
-        def __init__(self, *args, **kwargs) -> None:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
             self._poll_results = list(poll_results)
             self.returncode = 0
 
-        def __class_getitem__(cls, item):
+        def __class_getitem__(cls, item: Any) -> Any:
             return cls
 
-        def poll(self):
+        def poll(self) -> int | None:
             if self._poll_results:
                 return self._poll_results.pop(0)
             return 0
@@ -62,7 +64,7 @@ def _make_subprocess_shim(poll_results: list) -> types.SimpleNamespace:
     return shim
 
 
-def _setup_common(monkeypatch: pytest.MonkeyPatch, main, poll_results: list) -> MagicMock:
+def _setup_common(monkeypatch: pytest.MonkeyPatch, main: Any, poll_results: list) -> MagicMock:
     # 装配 check_subprocess 运行所需的全部外部依赖 mock，返回弹幕工厂 Mock。
     monkeypatch.setattr(main, "enable_danmaku", True)
     monkeypatch.setattr(main, "enable_danmaku_monitor", False)
@@ -83,7 +85,7 @@ def _setup_common(monkeypatch: pytest.MonkeyPatch, main, poll_results: list) -> 
     return factory
 
 
-def test_wiring_starts_collector_with_platform_and_args(main_mod, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_wiring_starts_collector_with_platform_and_args(main_mod: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     # 接线回归：platform/danmaku_args 必须送达弹幕工厂，采集器随 ffmpeg 启动。
     main = main_mod
     monkeypatch.setattr(main, "split_video_by_time", True)
@@ -113,7 +115,7 @@ def test_wiring_starts_collector_with_platform_and_args(main_mod, monkeypatch: p
     assert collector.start.call_count == 1
 
 
-def test_monitor_only_mode_skips_srt(main_mod, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_monitor_only_mode_skips_srt(main_mod: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     # 弹幕监控独立开关回归：录制弹幕关、弹幕监控开时仍创建采集器（write_srt=False），
     # 且房间名（监控显示名）正确透传。
     main = main_mod
@@ -143,7 +145,7 @@ def test_monitor_only_mode_skips_srt(main_mod, monkeypatch: pytest.MonkeyPatch) 
     )
 
 
-def test_no_danmaku_when_both_switches_off(main_mod, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_no_danmaku_when_both_switches_off(main_mod: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     # 双开关全关时不创建采集器（不建立弹幕连接）。
     main = main_mod
     monkeypatch.setattr(main, "split_video_by_time", False)
@@ -165,7 +167,7 @@ def test_no_danmaku_when_both_switches_off(main_mod, monkeypatch: pytest.MonkeyP
     factory.assert_not_called()
 
 
-def test_stop_called_once_after_loop_not_per_iteration(main_mod, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_stop_called_once_after_loop_not_per_iteration(main_mod: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     # stop 位置回归：轮询 3 轮后 ffmpeg 自然退出，stop() 必须恰好调用一次
     # （修复前 stop 在循环体内，此场景会被调用 3 次，弹幕 1 秒即被终止）。
     main = main_mod
@@ -187,7 +189,7 @@ def test_stop_called_once_after_loop_not_per_iteration(main_mod, monkeypatch: py
     assert collector.stop.call_count == 1, "ffmpeg 正常退出时 stop() 应在循环外恰好执行一次"
 
 
-def test_srt_base_strips_02d_and_03d_placeholders(main_mod, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_srt_base_strips_02d_and_03d_placeholders(main_mod: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     # 占位符剥离回归：_%02d(音频/历史 FLV) 与 _%03d(视频分段) 都必须从 SRT 基名剥除。
     main = main_mod
     monkeypatch.setattr(main, "split_video_by_time", True)
@@ -207,7 +209,7 @@ def test_srt_base_strips_02d_and_03d_placeholders(main_mod, monkeypatch: pytest.
         assert base == "/tmp/主播名_now", f"模板 {template} 未正确剥离: {base}"
 
 
-def test_early_interrupt_stops_danmaku_and_terminates(main_mod, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_early_interrupt_stops_danmaku_and_terminates(main_mod: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     # 提前中断回归：URL 被注释时弹幕立即停止、ffmpeg 被终止、返回 True 通知线程退出。
     main = main_mod
     monkeypatch.setattr(main, "split_video_by_time", False)
@@ -234,7 +236,7 @@ def test_early_interrupt_stops_danmaku_and_terminates(main_mod, monkeypatch: pyt
     assert terminate.call_count == 1
 
 
-def test_unsupported_platform_skips_collector(main_mod, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_unsupported_platform_skips_collector(main_mod: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     # 负向用例：平台不在弹幕列表时不创建采集器，录制流程不受影响。
     main = main_mod
     monkeypatch.setattr(main, "split_video_by_time", False)
@@ -267,13 +269,15 @@ def test_srt_segment_path_matches_ffmpeg_3wide(tmp_path: Path) -> None:
 def test_collector_stop_idempotent(tmp_path: Path) -> None:
     # 幂等回归：stop() 重复调用安全（防重入），SRT close 不会重复执行。
     collector = DanmakuCollector(
-        danmaku_cls=MagicMock(),
+        danmaku_cls=cast(Any, MagicMock()),
         danmaku_args={},
         base_filename=str(tmp_path / "idem"),
         segment_seconds=None,
     )
     close_spy = MagicMock()
-    collector._srt.close = close_spy  # type: ignore[method-assign]
+    srt = collector._srt
+    assert srt is not None
+    srt.close = close_spy  # type: ignore[method-assign]
     collector.stop()
     collector.stop()
     assert close_spy.call_count == 1
@@ -286,13 +290,13 @@ async def test_douyin_empty_cookie_fetches_ttwid(monkeypatch: pytest.MonkeyPatch
     captured: dict = {}
 
     class _FakeWs:
-        def __init__(self, **kwargs) -> None:
+        def __init__(self, **kwargs: Any) -> None:
             captured.update(kwargs)
 
         async def connect(self) -> None:
             captured["connected"] = True
 
-    async def _fake_get_ttwid(proxy_addr=None) -> str:
+    async def _fake_get_ttwid(proxy_addr: Any = None) -> str:
         return "ttwid=fake_dynamic_value"
 
     monkeypatch.setattr(dy_mod, "WsClient", _FakeWs)
@@ -312,13 +316,13 @@ async def test_douyin_ttwid_fetch_failure_warns_but_continues(monkeypatch: pytes
     captured: dict = {}
 
     class _FakeWs:
-        def __init__(self, **kwargs) -> None:
+        def __init__(self, **kwargs: Any) -> None:
             captured.update(kwargs)
 
         async def connect(self) -> None:
             pass
 
-    async def _boom(proxy_addr=None) -> str:
+    async def _boom(proxy_addr: Any = None) -> str:
         raise RuntimeError("network down")
 
     monkeypatch.setattr(dy_mod, "WsClient", _FakeWs)
