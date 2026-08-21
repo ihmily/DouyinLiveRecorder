@@ -4448,7 +4448,10 @@ async def get_migu_stream_url(
 
         async def _get_dd_calcu(url: str) -> str:
             # 咪咕签名算法（内部方法）：node 失败/超时统一转为 ProgramError，
-            # 由上层装饰器按平台错误处理，不向调用方泄漏 CalledProcessError
+            # 由上层装饰器按平台错误处理，不向调用方泄漏 CalledProcessError。
+            # migu.js（2026-08 重写版）输出带 ddCalcu/sv 参数的完整地址：
+            # 加密因子与 sv 版本号由脚本端从官网接口获取（失败回退播放器内置
+            # 默认因子），此处不再拼接固定 sv=10010（该值已过期）。
             try:
                 result = subprocess.run(
                     ["node", f"{JS_SCRIPT_PATH}/migu.js", url],
@@ -4461,8 +4464,7 @@ async def get_migu_stream_url(
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
                 raise ProgramError("Failed to execute JS code. Please check if the Node.js environment")
 
-        ddCalcu = await _get_dd_calcu(source_url)
-        real_source_url = f"{source_url}&ddCalcu={ddCalcu}&sv=10010"
+        real_source_url = await _get_dd_calcu(source_url)
         if ".m3u8" in real_source_url:
             m3u8_url = await async_req(real_source_url, proxy_addr=proxy_addr, headers=headers, redirect_url=True)
             m3u8_url = _get_str_response(m3u8_url)

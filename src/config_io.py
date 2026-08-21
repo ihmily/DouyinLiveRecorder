@@ -4,6 +4,7 @@
 # 负责：
 # - 安全更新 URL 配置文件内容（update_file）
 # - 从配置文件删除指定行（delete_line）
+# - 按 URL 更新配置行主播名字段（update_anchor_name，主播名自动同步）
 # - 从 config.ini 读取并兜底写回配置值（read_config_value）
 # - 配置数值安全转换（_safe_int / _safe_float）
 # - 配置文件备份（backup_file / backup_file_start）
@@ -15,6 +16,7 @@
 import configparser
 import datetime
 import os
+import re
 import shutil
 import time
 
@@ -57,6 +59,78 @@ def update_file(file_path: str, old_str: str, new_str: str, start_str: str | Non
             # 更新快照为当前已落盘内容，使后续异常恢复只回滚到最近一次成功修改，而非整个循环开始时的旧内容
             main.ini_URL_content = joined
         return new_str
+
+
+# 将 URL 配置文件中指定 URL 所在行的主播名字段更新为 new_name（行内无主播名字段时追加），
+# 保留画质段/注释前缀/行尾换行；返回是否发生了变更（未命中/已是目标名/写失败均返回 False）
+def update_anchor_name(url: str, new_name: str) -> bool:
+    # 主播名自动同步：按 URL 精确定位配置行（段级匹配，避免 URL 前缀相似的行误命中），
+    # 持锁读写避免与录制线程的 update_file / Web API 写入并发半写
+    if not url or not new_name:
+        return False
+    with main.file_update_lock:
+        if not os.path.exists(main.url_config_file):
+            return False
+        try:
+            # newline=""：读/写均不做换行符翻译，保留文件原有的 \n / \r\n 行尾风格
+            with open(main.url_config_file, "r", encoding=main.text_encoding, newline="") as f:
+                lines = f.readlines()
+        except (RuntimeError, UnicodeDecodeError, OSError) as e:
+            logger.error(f"读取 URL 配置失败，跳过主播名更新: {e}")
+            return False
+        changed = False
+        out_lines: list[str] = []
+        for raw_line in lines:
+            rewritten = _rewrite_anchor_field(raw_line, url, new_name)
+            if rewritten is not None:
+                changed = True
+                out_lines.append(rewritten)
+            else:
+                out_lines.append(raw_line)
+        if not changed:
+            return False
+        joined = "".join(out_lines)
+        try:
+            with open(main.url_config_file, "w", encoding=main.text_encoding, newline="") as f:
+                _ = f.write(joined)
+            # 更新快照为当前已落盘内容（与 update_file 保持一致的异常恢复基线）
+            main.ini_URL_content = joined
+        except OSError as e:
+            logger.warning(f"主播名写回 URL 配置失败（已忽略，下轮重试）: {e}")
+            return False
+        return True
+
+
+# 重写单行配置的主播名字段；行不匹配 URL 或已是目标名时返回 None（无需变更）
+def _rewrite_anchor_field(raw_line: str, url: str, new_name: str) -> str | None:
+    # 行格式: [画质,]URL[,主播: 名称]，# 前缀表示注释（禁用）——重写时全部保留
+    stripped = raw_line.rstrip("\r\n")
+    eol = raw_line[len(stripped) :]
+    # 分离注释前缀（保留原有 # 数量）
+    comment_prefix = ""
+    body = stripped
+    if body.lstrip().startswith("#"):
+        idx = body.find("#")
+        comment_prefix = body[: idx + 1]
+        body = body[idx + 1 :]
+    if not body.strip():
+        return None
+    # 段级 URL 匹配：防止 URL 前缀相似（如 /1 与 /12）导致误改他行
+    segments = [seg.strip() for seg in re.split(r"[,，]", body)]
+    if url not in segments:
+        return None
+    # 定位主播名字段：取最后一个「主播:」/「主播：」之后的尾段整体替换（名字可含空格）；
+    # 全角冒号行统一重写为半角格式（与 main.py 的行解析约定一致）
+    idx = max(body.rfind("主播:"), body.rfind("主播："))
+    if idx >= 0:
+        head = body[:idx].rstrip()
+        if body[idx + 3 :].strip() == new_name:
+            return None  # 已是目标名，幂等跳过
+        rebuilt = f"{head}主播: {new_name}"
+    else:
+        # 行内无主播名字段：在行尾追加（URL 段原样保留）
+        rebuilt = f"{body.rstrip()},主播: {new_name}"
+    return f"{comment_prefix}{rebuilt}{eol}"
 
 
 # 从 file_path 中删除与 del_line 完全相同的行，delete_all=True 时删除全部匹配行；无返回值

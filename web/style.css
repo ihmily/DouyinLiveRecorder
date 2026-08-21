@@ -74,7 +74,7 @@ body {
 .tab:hover { background: var(--primary-soft); color: var(--primary); }
 .tab.active { background: var(--primary); color: #fff; }
 
-.topbar-right { display: flex; gap: 8px; }
+.topbar-right { display: flex; gap: 8px; align-items: center; }
 .topbar-right button {
     background: transparent;
     border: 1px solid var(--border);
@@ -84,6 +84,17 @@ body {
     cursor: pointer;
     font-size: 14px;
 }
+/* 语言选择器：与主题切换按钮同风格 */
+.topbar-right select {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 8px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+}
+.topbar-right select:focus { outline: 1px solid var(--primary); }
 
 .view { flex: 1; padding: 20px; max-width: 1200px; width: 100%; margin: 0 auto; }
 .hidden { display: none !important; }
@@ -198,6 +209,13 @@ button.small { background: var(--primary-soft); color: var(--primary); border: n
 .config-row label { color: var(--muted); font-size: 13px; }
 .config-row input { padding: 6px 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--text); font-size: 13px; }
 
+/* SSL/HTTPS 整合说明：「是否启用https录制」统一控制协议与证书校验，旧键废弃置灰 */
+.config-hint { grid-column: 2; font-size: 12px; line-height: 1.5; color: var(--muted); }
+.config-hint.hint-on { color: var(--success); }
+.config-hint.hint-off { color: var(--warning); }
+.config-row.row-deprecated label, .config-row.row-deprecated input { opacity: 0.5; text-decoration: line-through; }
+.config-row.row-deprecated .config-hint { text-decoration: none; }
+
 .file-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
 .breadcrumb { color: var(--muted); font-size: 13px; }
 .breadcrumb a { color: var(--primary); cursor: pointer; text-decoration: none; }
@@ -230,6 +248,7 @@ button.small { background: var(--primary-soft); color: var(--primary); border: n
 @media (max-width: 768px) {
     .stat-cards { grid-template-columns: repeat(2, 1fr); }
     .config-row { grid-template-columns: 1fr; }
+    .config-hint { grid-column: 1; }
     .tabs { overflow-x: auto; }
 }
 

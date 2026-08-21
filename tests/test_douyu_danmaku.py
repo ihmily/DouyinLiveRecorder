@@ -14,6 +14,8 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from typing import Any
+
 from src.base import DanmakuMessageType
 from src.platforms.douyu import DouyuDanmaku
 
@@ -21,7 +23,7 @@ count = 0
 start_ts = time.monotonic()
 
 
-def on_message(msg):
+def on_message(msg: Any) -> None:
     global count
     count += 1
     if msg.type == DanmakuMessageType.CHAT:
@@ -29,11 +31,11 @@ def on_message(msg):
         print(f"[{rel:6.2f}s] #{count:4d} <{msg.user_name}> {msg.message}")
 
 
-def on_close(msg):
+def on_close(msg: Any) -> None:
     print(f"[close] {msg}")
 
 
-async def main():
+async def main() -> None:
     room_id = sys.argv[1] if len(sys.argv) > 1 else "3125893"
     duration = 60
     print(f"连接斗鱼直播间 {room_id}，持续 {duration} 秒...")

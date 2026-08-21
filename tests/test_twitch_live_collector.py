@@ -48,8 +48,8 @@ print(f"[OK] 收到弹幕消息数: {count}")
 
 srt_file = base + ".srt"
 if os.path.isfile(srt_file):
-    with open(srt_file, encoding="utf-8") as f:
-        content = f.read()
+    with open(srt_file, encoding="utf-8") as fh:
+        content = fh.read()
     print("=== SRT 内容(前 20 行) ===")
     print("\n".join(content.splitlines()[:20]))
     if count > 0:

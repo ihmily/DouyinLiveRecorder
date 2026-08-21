@@ -26,7 +26,7 @@ class TestGetClient:
     # _get_client: 按 (proxy, verify, http2) 维度复用 AsyncClient。
 
     @pytest.mark.asyncio
-    async def test_creates_new_client(self):
+    async def test_creates_new_client(self) -> None:
         # 首次调用创建新 AsyncClient 并缓存。
         _client_cache.clear()
         try:
@@ -39,7 +39,7 @@ class TestGetClient:
             await _close_all_clients()
 
     @pytest.mark.asyncio
-    async def test_reuses_cached_client(self):
+    async def test_reuses_cached_client(self) -> None:
         # 相同参数复用同一 client 实例。
         _client_cache.clear()
         try:
@@ -50,7 +50,7 @@ class TestGetClient:
             await _close_all_clients()
 
     @pytest.mark.asyncio
-    async def test_different_proxy_creates_different_client(self):
+    async def test_different_proxy_creates_different_client(self) -> None:
         # 不同 proxy 参数创建不同 client。
         _client_cache.clear()
         try:
@@ -62,7 +62,7 @@ class TestGetClient:
             await _close_all_clients()
 
     @pytest.mark.asyncio
-    async def test_closed_client_replaced(self):
+    async def test_closed_client_replaced(self) -> None:
         # 缓存的 client 已关闭时创建新的。
         _client_cache.clear()
         try:
@@ -81,10 +81,10 @@ class TestClientCacheLock:
     # 避免原「模块级单槽 asyncio.Lock 随循环重建」的跨线程竞态——
     # 线程 A 可能拿到线程 B 循环绑定的锁并 await，触发 'bound to a different event loop'。
 
-    def test_cache_lock_is_threading_lock(self):
+    def test_cache_lock_is_threading_lock(self) -> None:
         assert isinstance(_client_cache_lock, type(threading.Lock()))
 
-    def test_concurrent_get_client_across_loops_no_error(self):
+    def test_concurrent_get_client_across_loops_no_error(self) -> None:
         # 多线程各用独立事件循环并发获取客户端：不应抛跨循环/跨线程异常
         errors: list[Exception] = []
 
@@ -114,7 +114,7 @@ class TestCloseAllClients:
     # _close_all_clients: 释放所有缓存客户端。
 
     @pytest.mark.asyncio
-    async def test_close_all(self):
+    async def test_close_all(self) -> None:
         # 关闭所有缓存的 client，缓存清空。
         _client_cache.clear()
         c1 = await _get_client(None, 10, True, False)
@@ -128,7 +128,7 @@ class TestCloseAllClients:
         assert len(_client_cache) == 0
 
     @pytest.mark.asyncio
-    async def test_close_empty_cache(self):
+    async def test_close_empty_cache(self) -> None:
         # 空缓存调用不报错。
         _client_cache.clear()
         await _close_all_clients()
@@ -138,12 +138,12 @@ class TestCloseAllClients:
 class TestCloseAllClientsSync:
     # close_all_clients_sync: 同步安全清理。
 
-    def test_empty_cache_no_error(self):
+    def test_empty_cache_no_error(self) -> None:
         # 空缓存时直接返回，不报错。
         _client_cache.clear()
         close_all_clients_sync()  # 不应抛异常
 
-    def test_clears_cache_when_populated(self):
+    def test_clears_cache_when_populated(self) -> None:
         # 缓存非空时，调用后缓存被清空（无论是否在事件循环内）。
         _client_cache.clear()
         mock_client = MagicMock(spec=httpx.AsyncClient)
@@ -163,7 +163,7 @@ class TestAsyncReq:
     # async_req: GET/POST 请求 + 异常回退。
 
     @pytest.mark.asyncio
-    async def test_get_request_returns_text(self):
+    async def test_get_request_returns_text(self) -> None:
         # GET 请求返回响应文本。
         mock_response = MagicMock()
         mock_response.text = "response body"
@@ -184,7 +184,7 @@ class TestAsyncReq:
         mock_client.get.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_post_with_dict_data(self):
+    async def test_post_with_dict_data(self) -> None:
         # POST dict 数据使用 data= 参数。
         mock_response = MagicMock()
         mock_response.text = '{"ok": true}'
@@ -202,7 +202,7 @@ class TestAsyncReq:
         mock_client.post.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_post_with_string_data(self):
+    async def test_post_with_string_data(self) -> None:
         # POST 字符串数据使用 content= 参数。
         mock_response = MagicMock()
         mock_response.text = "ok"
@@ -219,7 +219,7 @@ class TestAsyncReq:
         assert result == "ok"
 
     @pytest.mark.asyncio
-    async def test_post_with_bytes_data(self):
+    async def test_post_with_bytes_data(self) -> None:
         # POST bytes 数据使用 content= 参数。
         mock_response = MagicMock()
         mock_response.text = "ok"
@@ -236,7 +236,7 @@ class TestAsyncReq:
         assert result == "ok"
 
     @pytest.mark.asyncio
-    async def test_redirect_url_returns_url(self):
+    async def test_redirect_url_returns_url(self) -> None:
         # redirect_url=True 返回重定向后 URL。
         mock_response = MagicMock()
         mock_response.url = "https://redirected.example.com/final"
@@ -253,7 +253,7 @@ class TestAsyncReq:
         assert result == "https://redirected.example.com/final"
 
     @pytest.mark.asyncio
-    async def test_return_cookies_returns_cookies(self):
+    async def test_return_cookies_returns_cookies(self) -> None:
         # return_cookies=True 返回 cookie 字典。
         mock_response = MagicMock()
         mock_response.text = "ok"
@@ -273,7 +273,7 @@ class TestAsyncReq:
         assert result == {"session": "abc123", "token": "xyz"}
 
     @pytest.mark.asyncio
-    async def test_return_cookies_with_include_cookies(self):
+    async def test_return_cookies_with_include_cookies(self) -> None:
         # return_cookies=True + include_cookies=True 返回 (text, cookies) 元组。
         mock_response = MagicMock()
         mock_response.text = "page content"
@@ -293,7 +293,7 @@ class TestAsyncReq:
         assert result == ("page content", {"sid": "val"})
 
     @pytest.mark.asyncio
-    async def test_exception_returns_empty_string(self):
+    async def test_exception_returns_empty_string(self) -> None:
         # 请求异常时返回空字符串。
         mock_client = AsyncMock()
         mock_client.get.side_effect = httpx.ConnectError("connection refused")
@@ -307,7 +307,7 @@ class TestAsyncReq:
         assert result == ""
 
     @pytest.mark.asyncio
-    async def test_exception_redirect_returns_empty_string(self):
+    async def test_exception_redirect_returns_empty_string(self) -> None:
         # redirect_url 模式异常返回空字符串。
         mock_client = AsyncMock()
         mock_client.get.side_effect = httpx.TimeoutException("timeout")
@@ -321,7 +321,7 @@ class TestAsyncReq:
         assert result == ""
 
     @pytest.mark.asyncio
-    async def test_exception_cookies_returns_empty_dict(self):
+    async def test_exception_cookies_returns_empty_dict(self) -> None:
         # return_cookies 模式异常返回空字典。
         mock_client = AsyncMock()
         mock_client.get.side_effect = Exception("network error")
@@ -335,7 +335,7 @@ class TestAsyncReq:
         assert result == {}
 
     @pytest.mark.asyncio
-    async def test_verify_defaults_to_config(self):
+    async def test_verify_defaults_to_config(self) -> None:
         # verify=None 时使用 config.ssl_verify 默认值。
         mock_response = MagicMock()
         mock_response.text = "ok"
@@ -362,7 +362,7 @@ class TestGetResponseStatus:
     # get_response_status: URL 可达性检测。
 
     @pytest.mark.asyncio
-    async def test_status_200_returns_true(self):
+    async def test_status_200_returns_true(self) -> None:
         # HEAD 返回 200 → True。
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -379,7 +379,7 @@ class TestGetResponseStatus:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_status_404_returns_false(self):
+    async def test_status_404_returns_false(self) -> None:
         # HEAD 返回 404 → False。
         mock_response = MagicMock()
         mock_response.status_code = 404
@@ -396,7 +396,7 @@ class TestGetResponseStatus:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_m3u8_head_405_fallback_to_get(self):
+    async def test_m3u8_head_405_fallback_to_get(self) -> None:
         # m3u8 URL HEAD 返回 405 → 降级 Range GET 探测。
         head_response = MagicMock()
         head_response.status_code = 405
@@ -418,7 +418,7 @@ class TestGetResponseStatus:
         mock_client.get.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_m3u8_head_403_get_also_fails(self):
+    async def test_m3u8_head_403_get_also_fails(self) -> None:
         # m3u8 URL HEAD 403 + Range GET 也失败 → False。
         head_response = MagicMock()
         head_response.status_code = 403
@@ -439,7 +439,7 @@ class TestGetResponseStatus:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_exception_returns_false(self):
+    async def test_exception_returns_false(self) -> None:
         # 请求异常 → False（判定为不可达）。
         mock_client = AsyncMock()
         mock_client.head.side_effect = httpx.ConnectError("refused")
@@ -453,7 +453,7 @@ class TestGetResponseStatus:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_non_m3u8_403_returns_false_directly(self):
+    async def test_non_m3u8_403_returns_false_directly(self) -> None:
         # 非 m3u8 URL 返回 403 → 直接 False，不做 Range GET 探测。
         mock_response = MagicMock()
         mock_response.status_code = 403

@@ -269,8 +269,5 @@ TRAE_AGENT_CODE_WIKI.md
 tests/_out_e2e/
 tests/_out_live/
 
-# 临时覆盖率配置（并发测试专用，由 CI 通过 COVERAGE_RCFILE 引用，不入库）
-.coveragerc-concurrency
-
 # isort 备份残留（格式化工具偶发生成的 .py.isorted，需清理避免误提交）
 *.isorted

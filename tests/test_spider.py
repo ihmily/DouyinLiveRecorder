@@ -29,33 +29,33 @@ from src.spider import (
 class TestGetStrResponse:
     # Test _get_str_response helper.
 
-    def test_str_input(self):
+    def test_str_input(self) -> None:
         assert _get_str_response("hello") == "hello"
 
-    def test_tuple_input(self):
+    def test_tuple_input(self) -> None:
         assert _get_str_response(("body", {"cookie": "x"})) == "body"
 
-    def test_none_input(self):
+    def test_none_input(self) -> None:
         assert _get_str_response(None) == ""
 
-    def test_empty_tuple(self):
+    def test_empty_tuple(self) -> None:
         assert _get_str_response(()) == ""
 
 
 class TestLoadsDict:
     # Test _loads_dict helper.
 
-    def test_valid_json(self):
+    def test_valid_json(self) -> None:
         result = _loads_dict('{"key": "value"}')
         assert result == {"key": "value"}
 
-    def test_empty_string(self):
+    def test_empty_string(self) -> None:
         assert _loads_dict("") == {}
 
-    def test_non_dict_json(self):
+    def test_non_dict_json(self) -> None:
         assert _loads_dict("[1,2,3]") == {}
 
-    def test_invalid_json(self):
+    def test_invalid_json(self) -> None:
         with pytest.raises(json.JSONDecodeError):
             _loads_dict("not json")
 
@@ -63,7 +63,7 @@ class TestLoadsDict:
 class TestExtractDouyinHevcFlvUrl:
     # Test extract_douyin_hevc_flv_url - 从HTML提取HEVC FLV流地址.
 
-    def test_normal_extraction(self):
+    def test_normal_extraction(self) -> None:
         # 正常路径：HTML包含有效HEVC FLV流地址，正确提取并清理。
         html = (
             '<script>var data = "https://pull-flv-q11.douyincdn.com/thirdgame/'
@@ -75,7 +75,7 @@ class TestExtractDouyinHevcFlvUrl:
         assert "&" in result  # \u0026 已替换为 &
         assert "\\u0026" not in result
 
-    def test_skips_audio_only(self):
+    def test_skips_audio_only(self) -> None:
         # 正常路径：跳过 only_audio=1 的流地址。
         html = (
             '"https://pull-flv-q11.douyincdn.com/thirdgame/'
@@ -87,12 +87,12 @@ class TestExtractDouyinHevcFlvUrl:
         assert result is not None
         assert "stream-731829344212345679.flv" in result
 
-    def test_no_match_returns_none(self):
+    def test_no_match_returns_none(self) -> None:
         # 异常路径：HTML中无匹配流地址，返回None。
         html = "<html><body>no stream here</body></html>"
         assert extract_douyin_hevc_flv_url(html) is None
 
-    def test_empty_html(self):
+    def test_empty_html(self) -> None:
         # 异常路径：空HTML返回None。
         assert extract_douyin_hevc_flv_url("") is None
 
@@ -101,7 +101,7 @@ class TestGetDouyinWebStreamData:
     # Test get_douyin_web_stream_data - 抖音网页端API获取直播数据.
 
     @pytest.mark.asyncio
-    async def test_normal_api_response(self):
+    async def test_normal_api_response(self) -> None:
         # 正常路径：API返回有效JSON，status=2且包含stream_url，正确解析房间数据。
         api_response = json.dumps(
             {
@@ -135,7 +135,7 @@ class TestGetDouyinWebStreamData:
         assert "stream_url" in result
 
     @pytest.mark.asyncio
-    async def test_api_empty_response_fallback_html(self):
+    async def test_api_empty_response_fallback_html(self) -> None:
         # 异常路径：API两次返回空响应，回退到HTML抓取成功。
         html_with_data = (
             '{"state":1}\\"roomStore\\":{\\"roomInfo\\":{\\"room\\":{\\"status\\":2,'
@@ -165,7 +165,7 @@ class TestGetDouyinWebStreamData:
         assert isinstance(result, dict)
 
     @pytest.mark.asyncio
-    async def test_api_error_returns_empty_anchor(self):
+    async def test_api_error_returns_empty_anchor(self) -> None:
         # 异常路径：API返回非0状态码且HTML回退也失败，返回空anchor_name。
         error_response = json.dumps({"status_code": 10002, "status_msg": "risk control"})
 
@@ -183,7 +183,7 @@ class TestGetDouyinWebStreamData:
         assert result["anchor_name"] == ""
 
     @pytest.mark.asyncio
-    async def test_custom_cookies_used(self):
+    async def test_custom_cookies_used(self) -> None:
         # 正常路径：传入自定义cookies时不再调用_ensure_ttwid。
         api_response = json.dumps(
             {
@@ -210,7 +210,7 @@ class TestGetDouyinAppStreamData:
     # Test get_douyin_app_stream_data - 抖音APP端接口获取直播数据.
 
     @pytest.mark.asyncio
-    async def test_live_douyin_url_delegates_to_web(self):
+    async def test_live_douyin_url_delegates_to_web(self) -> None:
         # 正常路径：live.douyin.com 链接直接委托给 get_douyin_web_stream_data。
         expected = {"status": 2, "anchor_name": "主播", "stream_url": {}}
 
@@ -221,7 +221,7 @@ class TestGetDouyinAppStreamData:
         assert result == expected
 
     @pytest.mark.asyncio
-    async def test_short_url_normal_resolution(self):
+    async def test_short_url_normal_resolution(self) -> None:
         # 正常路径：短链接通过 get_sec_user_id 解析后调用APP接口获取数据。
         app_response = json.dumps(
             {
@@ -255,7 +255,7 @@ class TestGetDouyinAppStreamData:
         assert result["status"] == 2
 
     @pytest.mark.asyncio
-    async def test_error_returns_empty_anchor(self):
+    async def test_error_returns_empty_anchor(self) -> None:
         # 异常路径：所有解析路径失败，返回空anchor_name字典。
         with (
             patch(
@@ -274,11 +274,11 @@ class TestGetDouyinAppStreamData:
 class TestExtractRoomDataFromHtml:
     # Test _extract_room_data_from_html - HTML回退解析.
 
-    def test_empty_html(self):
+    def test_empty_html(self) -> None:
         # 异常路径：空HTML返回空字典。
         assert _extract_room_data_from_html("") == {}
 
-    def test_no_match_returns_empty(self):
+    def test_no_match_returns_empty(self) -> None:
         # 异常路径：HTML中无匹配模式返回空字典。
         assert _extract_room_data_from_html("<html><body>nothing</body></html>") == {}
 
@@ -286,23 +286,23 @@ class TestExtractRoomDataFromHtml:
 class TestSafeExtractId:
     # Test _safe_extract_id - URL安全提取路径ID.
 
-    def test_basic_url(self):
+    def test_basic_url(self) -> None:
         assert _safe_extract_id("https://example.com/path/12345") == "12345"
 
-    def test_url_with_query(self):
+    def test_url_with_query(self) -> None:
         assert _safe_extract_id("https://example.com/path/12345?foo=bar") == "12345"
 
-    def test_url_with_trailing_slash(self):
+    def test_url_with_trailing_slash(self) -> None:
         assert _safe_extract_id("https://example.com/path/12345/") == "12345"
 
-    def test_no_path_id(self):
+    def test_no_path_id(self) -> None:
         # "https://example.com/" → rsplit → ["https:", "example.com"] → 返回 "example.com"
         assert _safe_extract_id("https://example.com/") == "example.com"
 
-    def test_root_url(self):
+    def test_root_url(self) -> None:
         assert _safe_extract_id("https://example.com") == "example.com"
 
-    def test_default_value(self):
+    def test_default_value(self) -> None:
         # 仅当路径中无 "/" 时才返回 default
         assert _safe_extract_id("https://example.com", default="fallback") == "example.com"
         assert _safe_extract_id("single_segment", default="fallback") == "fallback"
@@ -311,29 +311,29 @@ class TestSafeExtractId:
 class TestGetParams:
     # Test get_params - URL参数提取.
 
-    def test_existing_param(self):
+    def test_existing_param(self) -> None:
         assert get_params("https://example.com?foo=bar&baz=qux", "foo") == "bar"
 
-    def test_missing_param(self):
+    def test_missing_param(self) -> None:
         assert get_params("https://example.com?foo=bar", "missing") is None
 
-    def test_no_query_string(self):
+    def test_no_query_string(self) -> None:
         assert get_params("https://example.com/path", "foo") is None
 
-    def test_multiple_values_returns_first(self):
+    def test_multiple_values_returns_first(self) -> None:
         assert get_params("https://example.com?a=1&a=2", "a") == "1"
 
 
 class TestMd5:
     # Test md5 - MD5哈希计算.
 
-    def test_known_hash(self):
+    def test_known_hash(self) -> None:
         assert md5("hello") == "5d41402abc4b2a76b9719d911017c592"
 
-    def test_empty_string(self):
+    def test_empty_string(self) -> None:
         assert md5("") == "d41d8cd98f00b204e9800998ecf8427e"
 
-    def test_deterministic(self):
+    def test_deterministic(self) -> None:
         assert md5("test") == md5("test")
 
 
@@ -341,7 +341,7 @@ class TestGetPlayUrlList:
     # Test get_play_url_list - M3U8播放列表解析.
 
     @pytest.mark.asyncio
-    async def test_https_urls(self):
+    async def test_https_urls(self) -> None:
         # 提取以 https:// 开头的 URL.
         m3u8_content = "#EXTM3U\nhttps://cdn.example.com/stream1.m3u8\nhttps://cdn.example.com/stream2.m3u8"
         with patch("src.spider.async_req", new_callable=AsyncMock, return_value=m3u8_content):
@@ -350,7 +350,7 @@ class TestGetPlayUrlList:
             assert "stream1.m3u8" in result[0]
 
     @pytest.mark.asyncio
-    async def test_relative_m3u8_urls(self):
+    async def test_relative_m3u8_urls(self) -> None:
         # 提取相对路径 m3u8.
         m3u8_content = "#EXTM3U\nstream1.m3u8\nstream2.m3u8"
         with patch("src.spider.async_req", new_callable=AsyncMock, return_value=m3u8_content):
@@ -358,21 +358,21 @@ class TestGetPlayUrlList:
             assert len(result) == 2
 
     @pytest.mark.asyncio
-    async def test_empty_response(self):
+    async def test_empty_response(self) -> None:
         # 空响应返回空列表.
         with patch("src.spider.async_req", new_callable=AsyncMock, return_value=""):
             result = await get_play_url_list("https://example.com/master.m3u8")
             assert result == []
 
     @pytest.mark.asyncio
-    async def test_non_string_response(self):
+    async def test_non_string_response(self) -> None:
         # 非字符串响应返回空列表.
         with patch("src.spider.async_req", new_callable=AsyncMock, return_value={"error": "bad"}):
             result = await get_play_url_list("https://example.com/master.m3u8")
             assert result == []
 
     @pytest.mark.asyncio
-    async def test_bandwidth_sorting(self):
+    async def test_bandwidth_sorting(self) -> None:
         # 按带宽降序排序.
         m3u8_content = (
             "#EXTINF:10\n#EXT-X-BANDWIDTH=1000000\nhttps://cdn.example.com/low.m3u8\n"
@@ -388,14 +388,14 @@ class TestKuaishouStreamData:
     # Test get_kuaishou_stream_data - 快手直播数据.
 
     @pytest.mark.asyncio
-    async def test_network_error_returns_not_live(self):
+    async def test_network_error_returns_not_live(self) -> None:
         # 网络异常返回 is_live=False.
         with patch("src.spider.async_req", new_callable=AsyncMock, side_effect=Exception("network error")):
             result = await get_kuaishou_stream_data("https://live.kuaishou.com/u/testuser")
             assert result["is_live"] is False
 
     @pytest.mark.asyncio
-    async def test_no_initial_state_returns_not_live(self):
+    async def test_no_initial_state_returns_not_live(self) -> None:
         # 无 __INITIAL_STATE__ 返回 is_live=False.
         with patch("src.spider.async_req", new_callable=AsyncMock, return_value="<html>no data</html>"):
             result = await get_kuaishou_stream_data("https://live.kuaishou.com/u/testuser")
@@ -406,14 +406,14 @@ class TestHuyaStreamData:
     # Test get_huya_stream_data - 虎牙直播数据.
 
     @pytest.mark.asyncio
-    async def test_no_stream_data_returns_empty(self):
+    async def test_no_stream_data_returns_empty(self) -> None:
         # 无流数据时装饰器捕获异常，返回空字典。
         with patch("src.spider.async_req", new_callable=AsyncMock, return_value="<html>no stream</html>"):
             result = await get_huya_stream_data("https://www.huya.com/12345")
             assert result == {"is_live": False}
 
     @pytest.mark.asyncio
-    async def test_successful_parse(self):
+    async def test_successful_parse(self) -> None:
         # 正常解析虎牙流数据.
         html = 'stream: {"data":{"gameStreamInfoList":[]}},"iWebDefaultBitRate"'
         with patch("src.spider.async_req", new_callable=AsyncMock, return_value=html):
@@ -425,7 +425,7 @@ class TestDouyuInfoData:
     # Test get_douyu_info_data - 斗鱼直播间信息.
 
     @pytest.mark.asyncio
-    async def test_rid_from_url(self):
+    async def test_rid_from_url(self) -> None:
         # 从 URL 提取 rid.
         betard_response = json.dumps(
             {
@@ -444,7 +444,7 @@ class TestDouyuInfoData:
             assert result["is_live"] is True
 
     @pytest.mark.asyncio
-    async def test_not_live(self):
+    async def test_not_live(self) -> None:
         # 未开播状态.
         betard_response = json.dumps(
             {
@@ -466,14 +466,14 @@ class TestNeteaseStreamData:
     # Test get_netease_stream_data - 网易CC直播数据.
 
     @pytest.mark.asyncio
-    async def test_no_next_data_returns_empty(self):
+    async def test_no_next_data_returns_empty(self) -> None:
         # 无 __NEXT_DATA__ 时装饰器捕获异常，返回空字典。
         with patch("src.spider.async_req", new_callable=AsyncMock, return_value="<html>no data</html>"):
             result = await get_netease_stream_data("https://cc.163.com/12345")
             assert result == {"is_live": False}
 
     @pytest.mark.asyncio
-    async def test_live_status(self):
+    async def test_live_status(self) -> None:
         # 直播中状态解析。
         next_data = {
             "props": {
@@ -503,14 +503,14 @@ class TestQiandureboStreamData:
     # Test get_qiandurebo_stream_data - 千度热播直播数据.
 
     @pytest.mark.asyncio
-    async def test_no_user_data(self):
+    async def test_no_user_data(self) -> None:
         # 无用户数据返回空.
         with patch("src.spider.async_req", new_callable=AsyncMock, return_value="<html>no user</html>"):
             result = await get_qiandurebo_stream_data("https://qiandurebo.com/web/index.php?room=123")
             assert result["is_live"] is False
 
     @pytest.mark.asyncio
-    async def test_live_stream(self):
+    async def test_live_stream(self) -> None:
         # 直播中解析。
         # 正则: var user = (.*?)\r\n\s+user\.play_url （要求 user.play_url 前有缩进）
         # play_url 正则: "play_url": "(.*?)",\r\n 要求行尾有 \r\n
@@ -532,7 +532,7 @@ class TestBilibiliRoomInfo:
     # Test get_bilibili_room_info - B站直播间信息.
 
     @pytest.mark.asyncio
-    async def test_error_returns_empty(self):
+    async def test_error_returns_empty(self) -> None:
         # 异常返回空 anchor_name.
         with patch("src.spider.async_req", new_callable=AsyncMock, side_effect=Exception("network")):
             result = await get_bilibili_room_info("https://live.bilibili.com/26066074")
@@ -540,7 +540,7 @@ class TestBilibiliRoomInfo:
             assert result["live_status"] is False
 
     @pytest.mark.asyncio
-    async def test_successful_parse(self):
+    async def test_successful_parse(self) -> None:
         # 正常解析B站直播间.
         init_resp = json.dumps({"data": {"uid": 12345, "live_status": 1}})
         master_resp = json.dumps({"data": {"info": {"uname": "B站主播"}}})
@@ -561,7 +561,7 @@ class TestBilibiliStreamData:
     # Test get_bilibili_stream_data - B站直播流数据.
 
     @pytest.mark.asyncio
-    async def test_play_url_success(self):
+    async def test_play_url_success(self) -> None:
         # playUrl 接口成功.
         resp = json.dumps(
             {
@@ -578,7 +578,7 @@ class TestBilibiliStreamData:
             assert result["url"] == "https://d1--cn-gotcha01.bilivideo.com/live/test.flv"
 
     @pytest.mark.asyncio
-    async def test_play_url_empty_durl_fallback(self):
+    async def test_play_url_empty_durl_fallback(self) -> None:
         # playUrl 无 durl 时回退到 getRoomPlayInfo.
         play_url_resp = json.dumps({"code": 0, "data": {"durl": []}})
         room_info_resp = json.dumps(
@@ -598,7 +598,7 @@ class TestBilibiliStreamData:
             assert result is None
 
     @pytest.mark.asyncio
-    async def test_empty_durl_list_returns_none(self):
+    async def test_empty_durl_list_returns_none(self) -> None:
         # 空 durl 列表返回 None.
         resp = json.dumps({"code": 0, "data": {"durl": []}})
         room_info = json.dumps({"data": {"live_status": 0, "playurl_info": {"playurl": {"stream": []}}}})

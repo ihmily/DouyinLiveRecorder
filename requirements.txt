@@ -54,6 +54,9 @@ websockets>=12.0          # 弹幕 WebSocket 客户端（src/danmaku/ws_client.p
 protobuf>=6.31.1 # 抖音弹幕协议解码（src/danmaku/proto/douyin_pb2.py，protoc 生成模块）
 brotli>=1.2.0 # B站弹幕解压（src/danmaku/platforms/bilibili.py，protover=3 需 brotli 解压）
 
+# ---------- 国际化（i18n）----------
+PyYAML>=6.0.3             # YAML 翻译目录支持（i18n.py 加载 i18n/zh_TW.yaml；缺失仅损失 YAML 格式）
+
 # 注：可执行文件打包需 PyInstaller，仅构建期使用、非运行时依赖：
 #   pip install .[build]   或   pip install pyinstaller>=6.10.0
 # （PyInstaller 不在本清单内，由 pyproject.toml [project.optional-dependencies].build 声明）

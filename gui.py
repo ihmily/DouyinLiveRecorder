@@ -29,6 +29,12 @@ from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast, final
 import customtkinter as ctk
 from PIL import Image, ImageDraw
 
+# i18n 多语言：GUI 侧边栏语言菜单即时热切换（i18n.set_language 重载翻译目录，
+# 本进程后续 print/日志输出即时换语言）；config 写回经 web_config.update_config_line
+# （与 Web 面板同款行级更新，保留注释）。GUI 自身界面文案为静态中文，不随切换重绘。
+import i18n as i18n_module
+from src.web_config import update_config_line
+
 # tkinter 的 pack/grid/configure/after 等副作用方法在 typeshed 中被类型化为返回
 # 非 None（如配置字典、网格信息或计时器 id），实际调用仅为产生副作用。本文件统一
 # 关闭 reportUnusedCallResult，避免对大量纯副作用调用误报「结果未使用」。
@@ -576,6 +582,7 @@ class LiveRecorderGUI:
     _big_dot_item: int
     sidebar_status_label: ctk.CTkLabel
     appearance_menu: ctk.CTkOptionMenu
+    language_menu: ctk.CTkOptionMenu
     big_status_label: ctk.CTkLabel
     big_status_sub: ctk.CTkLabel
     info_interval: ctk.CTkLabel
@@ -896,6 +903,45 @@ class LiveRecorderGUI:
         self.appearance_menu.pack(fill=tk.X, padx=2, pady=(0, 12))
         self.appearance_menu.set("跟随系统")
 
+        # 语言切换：显示名 → 语言码映射；选择即热切换本进程翻译目录并写回 config.ini
+        ctk.CTkLabel(
+            bottom,
+            text="语言 Language",
+            font=Fonts.small(),
+            text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
+            anchor=tk.W,
+        ).pack(fill=tk.X, padx=6, pady=(0, 4))
+        self._language_names: dict[str, str] = {
+            code: name.split(" (")[0] if " (" in name else name
+            for code, name in i18n_module.available_languages().items()
+        }
+        self.language_menu = ctk.CTkOptionMenu(
+            bottom,
+            values=list(self._language_names.values()),
+            command=self._on_language_change,
+            font=Fonts.body(),
+            corner_radius=8,
+            height=34,
+            fg_color=(Colors.BG_LIGHT, Colors.BG_DARK),
+            button_color=("#D6DAE5", "#2A3040"),
+            button_hover_color=("#C3C9D8", "#343B4E"),
+            text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
+            dropdown_fg_color=(Colors.CARD_LIGHT, Colors.CARD_DARK),
+            dropdown_text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
+            dropdown_hover_color=(Colors.PRIMARY_SOFT_LIGHT, Colors.PRIMARY_SOFT_DARK),
+        )
+        self.language_menu.pack(fill=tk.X, padx=2, pady=(0, 12))
+        # 初始值：读 config.ini 的语言键（缺失/非法回退默认），同步到 i18n
+        try:
+            _cfg = configparser.ConfigParser(interpolation=None)
+            _cfg.read(self.main_config_file, encoding="utf-8-sig")
+            _raw_lang = _cfg.get("录制设置", "language(zh_cn/en)", fallback="") if _cfg.has_section("录制设置") else ""
+        except Exception:
+            _raw_lang = ""
+        _norm_lang = i18n_module.normalize_language(_raw_lang)
+        _ = i18n_module.set_language(_norm_lang)
+        self.language_menu.set(self._language_names.get(_norm_lang, self._language_names[i18n_module.DEFAULT_LANGUAGE]))
+
         ctk.CTkButton(
             bottom,
             text="📥   最小化到托盘",
@@ -970,6 +1016,21 @@ class LiveRecorderGUI:
         ctk.set_appearance_mode(mapping.get(choice, "system"))
         # 主题切换后同步自绘控件颜色（Canvas 不随主题自动变化）
         self.root.after(50, self._sync_canvas_bg)
+
+    # 语言菜单选择回调：即时热切换翻译目录并持久化到 config.ini。
+    def _on_language_change(self, choice: str) -> None:
+        # 显示名 → 语言码（SUPPORTED_LANGUAGES 的显示名去掉英文括注部分即菜单值）
+        code_by_name = {name: code for code, name in self._language_names.items()}
+        lang_code = code_by_name.get(choice, i18n_module.DEFAULT_LANGUAGE)
+        _ = i18n_module.set_language(lang_code)
+        # 写回 config.ini（行级更新保留注释；失败仅告警，不影响内存态切换）
+        try:
+            if not update_config_line(self.main_config_file, "录制设置", "language(zh_cn/en)", lang_code):
+                self._log(f"语言切换成功（{lang_code}），但配置写回失败：未找到 language 配置行", "warning")
+            else:
+                self._log(f"语言已切换: {lang_code}（录制子进程重启后同步生效）")
+        except Exception as e:
+            self._log(f"语言切换成功（{lang_code}），但配置写回失败: {e}", "warning")
 
     # 主题切换后同步所有自绘 Canvas（状态圆点）背景色。
     def _sync_canvas_bg(self) -> None:

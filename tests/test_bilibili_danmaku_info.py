@@ -6,6 +6,7 @@
 
 import asyncio
 from collections.abc import Iterator
+from typing import Any, cast
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -86,6 +87,7 @@ def test_get_bilibili_danmaku_info_happy_path() -> None:
     assert captured["spi_url"].endswith("/x/frontend/finger/spi")
 
 
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")
 def test_get_bilibili_danmaku_info_spi_empty_uses_fallback_buvid() -> None:
     # 回归：spi 端点风控返回空响应体（200 + 空 body，_loads_dict 得 {}），
     # 旧逻辑会让 buvid 静默为空 -> 进房包带空 buvid -> 弹幕服务器硬断连。
@@ -122,7 +124,7 @@ def test_get_bilibili_danmaku_info_spi_empty_uses_fallback_buvid() -> None:
     assert result is not None
     # buvid 必须非空且为合法 uuid（兜底生成）；首页 Set-Cookie 备取也已尝试但为空
     assert result["buvid"]
-    assert _uuid.UUID(result["buvid"])
+    assert _uuid.UUID(cast(str, result["buvid"]))
     assert spider._bili_buvid_is_fallback is True
     assert home_mock.await_count == 1
     assert result["token"] == "TOKEN123"
@@ -250,7 +252,7 @@ class _FakeWs:
         self.sent.append(data)
 
 
-def _join_body(args: dict) -> dict:
+def _join_body(args: dict) -> dict[str, object]:
     import json as _json
 
     from src.platforms.bilibili import BilibiliDanmaku
@@ -261,7 +263,8 @@ def _join_body(args: dict) -> dict:
     client._ws = ws  # type: ignore[assignment]
     asyncio.run(client._join_room())
     assert ws.sent, "进房包未发送"
-    return _json.loads(ws.sent[0][16:].decode("utf-8"))
+    body: dict[str, object] = _json.loads(ws.sent[0][16:].decode("utf-8"))
+    return body
 
 
 def test_join_room_uid_anonymous_is_zero() -> None:
@@ -336,7 +339,7 @@ class _FakeAuthWs:
         self.closed = True
 
 
-def _decode_auth_reply(payload: bytes):
+def _decode_auth_reply(payload: bytes) -> tuple[Any, Any]:
     import struct
 
     from src.platforms.bilibili import BilibiliDanmaku
@@ -429,7 +432,7 @@ def test_invalidate_bili_buvid_cache_clears_state() -> None:
 # ---- 认证看门狗（服务器不回 AUTH_REPLY 的静默拒绝形态） ----
 
 
-def _watchdog_client():
+def _watchdog_client() -> tuple[Any, Any]:
     from src.platforms.bilibili import BilibiliDanmaku
 
     client = BilibiliDanmaku(on_message=lambda m: None, on_close=lambda r: None, on_ready=lambda: None)

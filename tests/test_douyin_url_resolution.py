@@ -9,6 +9,8 @@
 #
 
 import json
+from collections.abc import Generator
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -18,7 +20,7 @@ from src.room import UnsupportedUrlError, extract_sec_user_id
 
 
 @pytest.fixture(autouse=True)
-def _clear_sec_uid_cache():
+def _clear_sec_uid_cache() -> Generator[None, None, None]:
     # 进程级 sec_user_id->抖音号 缓存在测试间共享（同进程），清空以避免跨用例污染
     room._SEC_UID_UNIQUE_CACHE.clear()
     yield
@@ -34,7 +36,7 @@ SEC_UID = "MS4wLjABAAAASGMSxxCNSLh6Obfutqd_VtTnfp0cLgfhAeT9kpJb9Ar8D9_WMFSez95is
 
 
 class _FakeResponse:
-    def __init__(self, url: str = "", text: str = "", json_data: object = None, json_raises: bool = False):
+    def __init__(self, url: str = "", text: str = "", json_data: object = None, json_raises: bool = False) -> None:
         self.url = url
         self.text = text
         self._json_data = json_data
@@ -50,22 +52,23 @@ class _FakeResponse:
 class _FakeClient:
     # 记录所有请求，并按 handler 返回预设响应。
 
-    def __init__(self, handler):
+    def __init__(self, handler: Any) -> None:
         self._handler = handler
         self.requests: list[tuple[str, dict[str, str]]] = []
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "_FakeClient":
         return self
 
-    async def __aexit__(self, *_args) -> bool:
-        return False
+    async def __aexit__(self, *_args: Any) -> None:
+        return None
 
-    async def get(self, url, headers=None, follow_redirects=False):
+    async def get(self, url: Any, headers: Any = None, follow_redirects: Any = False) -> _FakeResponse:
         self.requests.append((url, dict(headers or {})))
-        return self._handler(url)
+        result: _FakeResponse = self._handler(url)
+        return result
 
 
-def _patch_client(handler):
+def _patch_client(handler: Any) -> tuple[Any, Any]:
     # 把 src.room 中的 httpx.AsyncClient 替换为返回 _FakeClient 的工厂。
     client = _FakeClient(handler)
     return client, patch("src.room.httpx.AsyncClient", lambda **_kwargs: client)
@@ -79,20 +82,20 @@ def _patch_client(handler):
 class TestExtractSecUserId:
     # 主页链接 -> sec_user_id 的提取，覆盖三种真实形态。
 
-    def test_web_user_page(self):
+    def test_web_user_page(self) -> None:
         # 格式 5：网页端主页路径。
         assert extract_sec_user_id(f"https://www.douyin.com/user/{SEC_UID}") == SEC_UID
 
-    def test_share_user_page_with_query(self):
+    def test_share_user_page_with_query(self) -> None:
         # 格式 4：v.douyin.com 短链重定向后的 iesdouyin 分享页（带大量查询参数）。
         url = f"https://www.iesdouyin.com/share/user/{SEC_UID}?from_aid=1128&sec_uid={SEC_UID}&from_ssr=1"
         assert extract_sec_user_id(url) == SEC_UID
 
-    def test_trailing_slash_not_empty(self):
+    def test_trailing_slash_not_empty(self) -> None:
         # 回归：原 rsplit('/') 实现遇到尾斜杠会取到空串。
         assert extract_sec_user_id(f"https://www.douyin.com/user/{SEC_UID}/") == SEC_UID
 
-    def test_sec_uid_query_param_preferred(self):
+    def test_sec_uid_query_param_preferred(self) -> None:
         # 路径无法识别时，回退到 sec_uid 查询参数。
         assert extract_sec_user_id(f"https://www.douyin.com/share?sec_uid={SEC_UID}&x=1") == SEC_UID
 
@@ -106,10 +109,10 @@ class TestGetUniqueId:
     # 主页链接 -> 抖音号，主路径为 JSON 接口，HTML 为兜底。
 
     @pytest.mark.asyncio
-    async def test_resolves_via_json_api(self):
+    async def test_resolves_via_json_api(self) -> None:
         # 主路径：JSON 接口返回 unique_id。
 
-        def handler(url: str):
+        def handler(url: str) -> _FakeResponse:
             if "/web/api/v2/user/info/" in url:
                 return _FakeResponse(url=url, json_data={"status_code": 0, "user_info": {"unique_id": "47884081925"}})
             return _FakeResponse(url=f"https://www.douyin.com/user/{SEC_UID}")
@@ -123,10 +126,10 @@ class TestGetUniqueId:
         assert not any("/share/user/" in url for url, _ in client.requests)
 
     @pytest.mark.asyncio
-    async def test_json_api_uses_desktop_ua(self):
+    async def test_json_api_uses_desktop_ua(self) -> None:
         # 回归：接口对 UA 敏感，旧移动端 UA 会被风控返回空响应体，必须用桌面端 UA。
 
-        def handler(url: str):
+        def handler(url: str) -> _FakeResponse:
             if "/web/api/v2/user/info/" in url:
                 return _FakeResponse(url=url, json_data={"user_info": {"unique_id": "47884081925"}})
             return _FakeResponse(url=f"https://www.douyin.com/user/{SEC_UID}")
@@ -140,10 +143,10 @@ class TestGetUniqueId:
         assert "Android" not in api_headers["User-Agent"]
 
     @pytest.mark.asyncio
-    async def test_falls_back_to_short_id_when_unique_id_empty(self):
+    async def test_falls_back_to_short_id_when_unique_id_empty(self) -> None:
         # 部分账号未设置抖音号，unique_id 为空时退回 short_id。
 
-        def handler(url: str):
+        def handler(url: str) -> _FakeResponse:
             if "/web/api/v2/user/info/" in url:
                 return _FakeResponse(url=url, json_data={"user_info": {"unique_id": "", "short_id": "123456"}})
             return _FakeResponse(url=f"https://www.douyin.com/user/{SEC_UID}")
@@ -155,10 +158,10 @@ class TestGetUniqueId:
         assert result == "123456"
 
     @pytest.mark.asyncio
-    async def test_falls_back_to_html_when_api_returns_empty_body(self):
+    async def test_falls_back_to_html_when_api_returns_empty_body(self) -> None:
         # 接口被风控返回空响应体时，降级到分享页 HTML 正则。
 
-        def handler(url: str):
+        def handler(url: str) -> _FakeResponse:
             if "/web/api/v2/user/info/" in url:
                 return _FakeResponse(url=url, json_raises=True)
             if "/share/user/" in url:
@@ -172,10 +175,10 @@ class TestGetUniqueId:
         assert result == "legacy_id"
 
     @pytest.mark.asyncio
-    async def test_raises_when_both_paths_fail(self):
+    async def test_raises_when_both_paths_fail(self) -> None:
         # 接口与 HTML 均失败时抛出可读错误，而非静默返回 None。
 
-        def handler(url: str):
+        def handler(url: str) -> _FakeResponse:
             if "/web/api/v2/user/info/" in url:
                 return _FakeResponse(url=url, json_raises=True)
             if "/share/user/" in url:
@@ -188,10 +191,10 @@ class TestGetUniqueId:
                 _ = await room.get_unique_id(f"https://www.douyin.com/user/{SEC_UID}")
 
     @pytest.mark.asyncio
-    async def test_reflow_url_raises_unsupported(self):
+    async def test_reflow_url_raises_unsupported(self) -> None:
         # 重定向到 reflow/（直播间分享码）时交回 get_sec_user_id 处理。
 
-        def handler(url: str):
+        def handler(url: str) -> _FakeResponse:
             return _FakeResponse(url="https://webcast.amemv.com/webcast/reflow/7318293442?sec_user_id=MS4w")
 
         _client, client_patch = _patch_client(handler)
@@ -200,11 +203,11 @@ class TestGetUniqueId:
                 _ = await room.get_unique_id("https://v.douyin.com/iQFeBnt/")
 
     @pytest.mark.asyncio
-    async def test_module_headers_not_mutated(self):
+    async def test_module_headers_not_mutated(self) -> None:
         # 回归：不得就地修改模块级共享 HEADERS（多线程下会互相污染）。
         original = dict(room.HEADERS)
 
-        def handler(url: str):
+        def handler(url: str) -> _FakeResponse:
             if "/web/api/v2/user/info/" in url:
                 return _FakeResponse(url=url, json_data={"user_info": {"unique_id": "47884081925"}})
             return _FakeResponse(url=f"https://www.douyin.com/user/{SEC_UID}")
@@ -216,11 +219,11 @@ class TestGetUniqueId:
         assert room.HEADERS == original
 
     @pytest.mark.asyncio
-    async def test_cache_eliminates_repeat_api_request(self):
+    async def test_cache_eliminates_repeat_api_request(self) -> None:
         # 优化：同一 sec_user_id 在轮询中重复解析时，第二次应命中进程级缓存、不再请求 iesdouyin 接口。
         call_count = {"api": 0}
 
-        def handler(url: str):
+        def handler(url: str) -> _FakeResponse:
             if "/web/api/v2/user/info/" in url:
                 call_count["api"] += 1
                 return _FakeResponse(url=url, json_data={"user_info": {"unique_id": "47884081925"}})
@@ -245,7 +248,7 @@ class TestGetDouyinWebStreamData:
     # 测试网页端接口，覆盖数字房间号与抖音号（VR）两种 live.douyin.com 形态。
 
     @pytest.mark.asyncio
-    async def test_numeric_room_id_uses_web_enter_api(self):
+    async def test_numeric_room_id_uses_web_enter_api(self) -> None:
         # 格式 1：数字房间号直接走 web/enter API 并返回房间数据。
         api_json = (
             '{"status_code":0,"data":{"data":[{"status":4,"id":"745964462470"}],' '"user":{"nickname":"数字房间主播"}}}'
@@ -260,7 +263,7 @@ class TestGetDouyinWebStreamData:
         assert "web_rid=745964462470" in called_url
 
     @pytest.mark.asyncio
-    async def test_douyin_number_passed_directly_as_web_rid(self):
+    async def test_douyin_number_passed_directly_as_web_rid(self) -> None:
         # 格式 3：web/enter 接口直接接受抖音号，不应发起额外的重定向解析请求。
         api_json = '{"status_code":0,"data":{"data":[{"status":4,"id":"745964462470"}],"user":{"nickname":"VR主播"}}}'
         mock_req = AsyncMock(side_effect=[api_json])
@@ -273,7 +276,7 @@ class TestGetDouyinWebStreamData:
         assert "web_rid=yall1102" in mock_req.call_args.kwargs["url"]
 
     @pytest.mark.asyncio
-    async def test_trailing_slash_stripped_from_web_rid(self):
+    async def test_trailing_slash_stripped_from_web_rid(self) -> None:
         # URL 末尾斜杠不应混入 web_rid。
         api_json = '{"status_code":0,"data":{"data":[{"status":4}],"user":{"nickname":"主播"}}}'
         mock_req = AsyncMock(side_effect=[api_json])
@@ -282,7 +285,7 @@ class TestGetDouyinWebStreamData:
         assert "web_rid=yall1102&" in mock_req.call_args.kwargs["url"] + "&"
 
     @pytest.mark.asyncio
-    async def test_web_api_10002_retries_then_succeeds_without_html_fallback(self):
+    async def test_web_api_10002_retries_then_succeeds_without_html_fallback(self) -> None:
         # web/enter 首次返回 10002（瞬时风控）→ 静默重试成功 → 不触发 HTML 回退、不刷 WARNING。
         fail_json = json.dumps({"status_code": 10002, "status_msg": "unknown error", "data": {}})
         ok_json = json.dumps(
@@ -320,12 +323,12 @@ class TestGetDouyinAppStreamData:
     # 测试 app 端接口，覆盖直播间分享码与主播主页两种形态。
 
     @pytest.mark.asyncio
-    async def test_app_live_room_via_sec_user_id(self):
+    async def test_app_live_room_via_sec_user_id(self) -> None:
         # 格式 2：v.douyin.com 直播间分享码经 get_sec_user_id 走 reflow API。
         reflow_json = '{"status_code":0,"data":{"room":{"owner":{"nickname":"app直播间主播"},"status":4}}}'
         mock_req = AsyncMock(return_value=reflow_json)
 
-        async def fake_sec_user_id(url, **kwargs):
+        async def fake_sec_user_id(url: Any, **kwargs: Any) -> tuple[object, ...]:
             return ("7318293442", "MS4wLjABAAAA_sec")
 
         with (
@@ -336,11 +339,11 @@ class TestGetDouyinAppStreamData:
         assert result.get("anchor_name") == "app直播间主播"
 
     @pytest.mark.asyncio
-    async def test_app_homepage_via_unique_id_fallback(self):
+    async def test_app_homepage_via_unique_id_fallback(self) -> None:
         # 格式 4：v.douyin.com 主播主页 → get_sec_user_id 失败 → get_unique_id → 网页解析。
         room_data = {"anchor_name": "主页主播", "status": 4}
 
-        async def fake_sec_user_id(url, **kwargs):
+        async def fake_sec_user_id(url: Any, **kwargs: Any) -> None:
             raise UnsupportedUrlError("no reflow")
 
         with (
@@ -360,7 +363,7 @@ class TestGetDouyinAppStreamData:
         assert mock_sec.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_web_user_page_via_unique_id_fallback(self):
+    async def test_web_user_page_via_unique_id_fallback(self) -> None:
         # 格式 5：www.douyin.com/user/<sec_user_id> 直接经主页解析，跳过必然失败的 get_sec_user_id 探测。
         room_data = {"anchor_name": "用户页主播", "status": 4}
 

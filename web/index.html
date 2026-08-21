@@ -3,53 +3,54 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DouyinLiveRecorder 管理面板</title>
+    <title data-i18n="title">DouyinLiveRecorder 管理面板</title>
     <link rel="stylesheet" href="/web/style.css">
 </head>
 <body data-theme="light">
     <header class="topbar">
-        <div class="brand">直播录制管理面板</div>
+        <div class="brand" data-i18n="brand">直播录制管理面板</div>
         <nav class="tabs">
-            <button class="tab active" data-view="dashboard">仪表盘</button>
-            <button class="tab" data-view="danmaku">弹幕监控</button>
-            <button class="tab" data-view="rooms">直播间</button>
-            <button class="tab" data-view="config">配置</button>
-            <button class="tab" data-view="files">文件</button>
+            <button class="tab active" data-view="dashboard" data-i18n="tab.dashboard">仪表盘</button>
+            <button class="tab" data-view="danmaku" data-i18n="tab.danmaku">弹幕监控</button>
+            <button class="tab" data-view="rooms" data-i18n="tab.rooms">直播间</button>
+            <button class="tab" data-view="config" data-i18n="tab.config">配置</button>
+            <button class="tab" data-view="files" data-i18n="tab.files">文件</button>
         </nav>
         <div class="topbar-right">
+            <select id="language-select" title="Language / 语言"></select>
             <button id="theme-toggle" title="切换主题">🌙</button>
-            <button id="logout-btn" class="hidden">退出</button>
+            <button id="logout-btn" class="hidden" data-i18n="logout">退出</button>
         </div>
     </header>
 
     <!-- 登录页 -->
     <main id="login-view" class="view hidden">
         <div class="login-card">
-            <h2>登录</h2>
-            <input type="password" id="login-password" placeholder="访问密码">
-            <button id="login-submit">登录</button>
+            <h2 data-i18n="login.title">登录</h2>
+            <input type="password" id="login-password" data-i18n-placeholder="login.password" placeholder="访问密码">
+            <button id="login-submit" data-i18n="login.submit">登录</button>
             <div id="login-error" class="error-msg"></div>
         </div>
     </main>
 
     <!-- 仪表盘 -->
     <main id="dashboard-view" class="view">
-        <div id="engine-warning" class="engine-warning hidden">⚠️ 录制引擎已停止运行，请检查日志或重启服务</div>
+        <div id="engine-warning" class="engine-warning hidden" data-i18n="dashboard.engineWarning">⚠️ 录制引擎已停止运行，请检查日志或重启服务</div>
         <div class="stat-cards">
-            <div class="stat-card"><div class="stat-label">监测中</div><div class="stat-value" id="stat-monitoring">-</div></div>
-            <div class="stat-card"><div class="stat-label">录制中</div><div class="stat-value" id="stat-recording">-</div></div>
-            <div class="stat-card"><div class="stat-label">错误数(累计/近期)</div><div class="stat-value" id="stat-errors">-</div></div>
-            <div class="stat-card"><div class="stat-label">磁盘剩余(GB)</div><div class="stat-value" id="stat-disk">-</div></div>
+            <div class="stat-card"><div class="stat-label" data-i18n="dashboard.monitoring">监测中</div><div class="stat-value" id="stat-monitoring">-</div></div>
+            <div class="stat-card"><div class="stat-label" data-i18n="dashboard.recording">录制中</div><div class="stat-value" id="stat-recording">-</div></div>
+            <div class="stat-card"><div class="stat-label" data-i18n="dashboard.errors">错误数(累计/近期)</div><div class="stat-value" id="stat-errors">-</div></div>
+            <div class="stat-card"><div class="stat-label" data-i18n="dashboard.disk">磁盘剩余(GB)</div><div class="stat-value" id="stat-disk">-</div></div>
         </div>
         <section class="panel">
-            <h3>正在录制</h3>
+            <h3 data-i18n="dashboard.recordingNow">正在录制</h3>
             <table class="data-table">
-                <thead><tr><th>名称</th><th>设置画质</th><th>实际画质</th><th>开始时间</th><th>已录时长</th></tr></thead>
-                <tbody id="recording-tbody"><tr><td colspan="5" class="empty">暂无录制</td></tr></tbody>
+                <thead><tr><th data-i18n="col.name">名称</th><th data-i18n="col.qualitySet">设置画质</th><th data-i18n="col.qualityActual">实际画质</th><th data-i18n="col.startTime">开始时间</th><th data-i18n="col.duration">已录时长</th></tr></thead>
+                <tbody id="recording-tbody"><tr><td colspan="5" class="empty" data-i18n="empty.noRecording">暂无录制</td></tr></tbody>
             </table>
         </section>
         <section class="panel">
-            <h3>实时日志</h3>
+            <h3 data-i18n="dashboard.logs">实时日志</h3>
             <div id="log-stream" class="terminal"></div>
         </section>
     </main>
@@ -57,31 +58,31 @@
     <!-- 弹幕监控 -->
     <main id="danmaku-view" class="view hidden">
         <section class="panel">
-            <h3>弹幕房间</h3>
+            <h3 data-i18n="danmaku.rooms">弹幕房间</h3>
             <table class="data-table">
-                <thead><tr><th>名称</th><th>平台</th><th>状态</th><th>累计弹幕</th><th>速率(条/分)</th><th>礼物</th><th>在线</th><th>开始时间</th></tr></thead>
-                <tbody id="danmaku-rooms-tbody"><tr><td colspan="8" class="empty">暂无监控数据</td></tr></tbody>
+                <thead><tr><th data-i18n="col.name">名称</th><th data-i18n="col.platform">平台</th><th data-i18n="col.status">状态</th><th data-i18n="danmaku.col.total">累计弹幕</th><th data-i18n="danmaku.col.rate">速率(条/分)</th><th data-i18n="danmaku.col.gifts">礼物</th><th data-i18n="danmaku.col.online">在线</th><th data-i18n="col.startTime">开始时间</th></tr></thead>
+                <tbody id="danmaku-rooms-tbody"><tr><td colspan="8" class="empty" data-i18n="danmaku.emptyRooms">暂无监控数据</td></tr></tbody>
             </table>
         </section>
         <section class="panel">
             <div class="danmaku-toolbar">
-                <h3>实时弹幕</h3>
-                <select id="danmaku-room-filter"><option value="">全部房间</option></select>
-                <button id="danmaku-clear-btn" class="small">清空</button>
+                <h3 data-i18n="danmaku.live">实时弹幕</h3>
+                <select id="danmaku-room-filter"><option value="" data-i18n="danmaku.allRooms">全部房间</option></select>
+                <button id="danmaku-clear-btn" class="small" data-i18n="danmaku.clear">清空</button>
             </div>
             <div id="danmaku-stream" class="terminal danmaku-terminal"></div>
-            <div id="danmaku-hint" class="danmaku-hint hidden">未看到数据？请在「配置 → 录制设置」开启「是否弹幕监控(是/否)」，且直播间平台需支持弹幕（斗鱼/B站/虎牙/抖音/Twitch）</div>
+            <div id="danmaku-hint" class="danmaku-hint hidden" data-i18n="danmaku.hint">未看到数据？请在「配置 → 录制设置」开启「是否弹幕监控(是/否)」，且直播间平台需支持弹幕（斗鱼/B站/虎牙/抖音/Twitch）</div>
         </section>
     </main>
 
     <!-- 直播间管理 -->
     <main id="rooms-view" class="view hidden">
         <section class="panel">
-            <h3>添加直播间</h3>
+            <h3 data-i18n="rooms.add">添加直播间</h3>
             <form id="room-add-form" class="inline-form">
-                <input type="text" id="room-url" placeholder="直播间地址" required>
+                <input type="text" id="room-url" data-i18n-placeholder="rooms.urlPlaceholder" placeholder="直播间地址" required>
                 <select id="room-quality">
-                    <option value="">默认画质</option>
+                    <option value="" data-i18n="rooms.defaultQuality">默认画质</option>
                     <option value="原画">原画</option>
                     <option value="蓝光">蓝光</option>
                     <option value="超清">超清</option>
@@ -89,15 +90,15 @@
                     <option value="标清">标清</option>
                     <option value="流畅">流畅</option>
                 </select>
-                <input type="text" id="room-name" placeholder="主播名称（可选）">
-                <button type="submit">添加</button>
+                <input type="text" id="room-name" data-i18n-placeholder="rooms.namePlaceholder" placeholder="主播名称（可选）">
+                <button type="submit" data-i18n="rooms.addBtn">添加</button>
             </form>
         </section>
         <section class="panel">
-            <h3>直播间列表</h3>
+            <h3 data-i18n="rooms.list">直播间列表</h3>
             <table class="data-table">
-                <thead><tr><th>地址</th><th>画质</th><th>名称</th><th>启用</th><th>录制中</th><th>操作</th></tr></thead>
-                <tbody id="rooms-tbody"><tr><td colspan="6" class="empty">加载中...</td></tr></tbody>
+                <thead><tr><th data-i18n="col.url">地址</th><th data-i18n="col.qualitySet">画质</th><th data-i18n="col.name">名称</th><th data-i18n="col.enabled">启用</th><th data-i18n="col.recording">录制中</th><th data-i18n="col.actions">操作</th></tr></thead>
+                <tbody id="rooms-tbody"><tr><td colspan="6" class="empty" data-i18n="loading">加载中...</td></tr></tbody>
             </table>
         </section>
     </main>
@@ -105,9 +106,9 @@
     <!-- 配置 -->
     <main id="config-view" class="view hidden">
         <section class="panel">
-            <h3>录制与推送配置</h3>
-            <div id="config-container">加载中...</div>
-            <button id="config-save-btn" class="primary">保存配置</button>
+            <h3 data-i18n="config.title">录制与推送配置</h3>
+            <div id="config-container" data-i18n="loading">加载中...</div>
+            <button id="config-save-btn" class="primary" data-i18n="config.save">保存配置</button>
         </section>
     </main>
 
@@ -115,12 +116,12 @@
     <main id="files-view" class="view hidden">
         <section class="panel">
             <div class="file-header">
-                <h3>录制文件</h3>
+                <h3 data-i18n="files.title">录制文件</h3>
                 <div id="file-breadcrumb" class="breadcrumb"></div>
             </div>
             <table class="data-table">
-                <thead><tr><th>名称</th><th>类型</th><th>大小</th><th>修改时间</th><th>操作</th></tr></thead>
-                <tbody id="files-tbody"><tr><td colspan="5" class="empty">加载中...</td></tr></tbody>
+                <thead><tr><th data-i18n="col.name">名称</th><th data-i18n="col.type">类型</th><th data-i18n="col.size">大小</th><th data-i18n="col.mtime">修改时间</th><th data-i18n="col.actions">操作</th></tr></thead>
+                <tbody id="files-tbody"><tr><td colspan="5" class="empty" data-i18n="loading">加载中...</td></tr></tbody>
             </table>
         </section>
     </main>

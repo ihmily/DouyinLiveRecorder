@@ -15,14 +15,14 @@ class TestGetOpener:
     # Test opener 选择逻辑.
 
     @patch("src.sync_http.config")
-    def test_ssl_verify_true_returns_secure_opener(self, mock_config):
+    def test_ssl_verify_true_returns_secure_opener(self, mock_config: MagicMock) -> None:
         # ssl_verify=True 时使用安全 opener.
         mock_config.ssl_verify = True
         opener = _get_opener()
         assert opener is not None
 
     @patch("src.sync_http.config")
-    def test_ssl_verify_false_returns_insecure_opener(self, mock_config):
+    def test_ssl_verify_false_returns_insecure_opener(self, mock_config: MagicMock) -> None:
         # ssl_verify=False 时使用不安全 opener.
         mock_config.ssl_verify = False
         opener = _get_opener()
@@ -34,7 +34,7 @@ class TestSyncReq:
 
     @patch("src.sync_http.config")
     @patch("src.sync_http._get_opener")
-    def test_basic_get_request(self, mock_opener_fn, mock_config):
+    def test_basic_get_request(self, mock_opener_fn: MagicMock, mock_config: MagicMock) -> None:
         # 基本 GET 请求.
         mock_config.ssl_verify = True
         mock_response = MagicMock()
@@ -52,7 +52,7 @@ class TestSyncReq:
 
     @patch("src.sync_http.config")
     @patch("src.sync_http._get_opener")
-    def test_gzip_response(self, mock_opener_fn, mock_config):
+    def test_gzip_response(self, mock_opener_fn: MagicMock, mock_config: MagicMock) -> None:
         # gzip 解压响应.
         mock_config.ssl_verify = True
         original_data = b"compressed content"
@@ -72,7 +72,7 @@ class TestSyncReq:
 
     @patch("src.sync_http.config")
     @patch("src.sync_http._get_opener")
-    def test_redirect_url_returns_url(self, mock_opener_fn, mock_config):
+    def test_redirect_url_returns_url(self, mock_opener_fn: MagicMock, mock_config: MagicMock) -> None:
         # redirect_url=True 返回重定向后的 URL.
         mock_config.ssl_verify = True
         mock_response = MagicMock()
@@ -87,7 +87,7 @@ class TestSyncReq:
 
     @patch("src.sync_http.requests")
     @patch("src.sync_http.config")
-    def test_proxy_get_request(self, mock_config, mock_requests):
+    def test_proxy_get_request(self, mock_config: MagicMock, mock_requests: MagicMock) -> None:
         # 带代理的 GET 请求.
         mock_config.ssl_verify = True
         mock_response = MagicMock()
@@ -101,7 +101,7 @@ class TestSyncReq:
 
     @patch("src.sync_http.requests")
     @patch("src.sync_http.config")
-    def test_proxy_post_request(self, mock_config, mock_requests):
+    def test_proxy_post_request(self, mock_config: MagicMock, mock_requests: MagicMock) -> None:
         # 带代理的 POST 请求.
         mock_config.ssl_verify = True
         mock_response = MagicMock()
@@ -115,7 +115,7 @@ class TestSyncReq:
 
     @patch("src.sync_http.requests")
     @patch("src.sync_http.config")
-    def test_proxy_redirect_url(self, mock_config, mock_requests):
+    def test_proxy_redirect_url(self, mock_config: MagicMock, mock_requests: MagicMock) -> None:
         # 带代理的 redirect_url 返回 URL.
         mock_config.ssl_verify = True
         mock_response = MagicMock()
@@ -127,7 +127,7 @@ class TestSyncReq:
 
     @patch("src.sync_http.requests")
     @patch("src.sync_http.config")
-    def test_proxy_post_with_json_data(self, mock_config, mock_requests):
+    def test_proxy_post_with_json_data(self, mock_config: MagicMock, mock_requests: MagicMock) -> None:
         # 带代理的 JSON POST 请求.
         mock_config.ssl_verify = True
         mock_response = MagicMock()
@@ -140,7 +140,7 @@ class TestSyncReq:
 
     @patch("src.sync_http.config")
     @patch("src.sync_http._get_opener")
-    def test_post_data_dict_encoding(self, mock_opener_fn, mock_config):
+    def test_post_data_dict_encoding(self, mock_opener_fn: MagicMock, mock_config: MagicMock) -> None:
         # dict 类型 data 被 URL 编码.
         mock_config.ssl_verify = True
         mock_response = MagicMock()
@@ -157,7 +157,7 @@ class TestSyncReq:
 
     @patch("src.sync_http.config")
     @patch("src.sync_http._get_opener")
-    def test_post_data_string_encoding(self, mock_opener_fn, mock_config):
+    def test_post_data_string_encoding(self, mock_opener_fn: MagicMock, mock_config: MagicMock) -> None:
         # 字符串类型 data 被编码.
         mock_config.ssl_verify = True
         mock_response = MagicMock()
@@ -174,7 +174,7 @@ class TestSyncReq:
 
     @patch("src.sync_http.config")
     @patch("src.sync_http._get_opener")
-    def test_json_data_encoding(self, mock_opener_fn, mock_config):
+    def test_json_data_encoding(self, mock_opener_fn: MagicMock, mock_config: MagicMock) -> None:
         # json_data 被 JSON 编码后发送.
         mock_config.ssl_verify = True
         mock_response = MagicMock()
@@ -191,7 +191,7 @@ class TestSyncReq:
 
     @patch("src.sync_http.config")
     @patch("src.sync_http._get_opener")
-    def test_http_error_400_returns_body(self, mock_opener_fn, mock_config):
+    def test_http_error_400_returns_body(self, mock_opener_fn: MagicMock, mock_config: MagicMock) -> None:
         # HTTP 400 错误返回响应体.
         mock_config.ssl_verify = True
         mock_error = MagicMock()
@@ -212,7 +212,7 @@ class TestSyncReq:
 
     @patch("src.sync_http.config")
     @patch("src.sync_http._get_opener")
-    def test_url_error_returns_empty_and_logs(self, mock_opener_fn, mock_config):
+    def test_url_error_returns_empty_and_logs(self, mock_opener_fn: MagicMock, mock_config: MagicMock) -> None:
         # URLError 不再伪装为响应体：返回空串并记录错误日志.
         import urllib.error
         from unittest.mock import call
@@ -232,7 +232,7 @@ class TestSyncReq:
 
     @patch("src.sync_http.config")
     @patch("src.sync_http._get_opener")
-    def test_abroad_request(self, mock_opener_fn, mock_config):
+    def test_abroad_request(self, mock_opener_fn: MagicMock, mock_config: MagicMock) -> None:
         # abroad=True 使用 urlopen.
         mock_config.ssl_verify = True
         mock_response = MagicMock()
@@ -247,7 +247,7 @@ class TestSyncReq:
 
     @patch("src.sync_http.config")
     @patch("src.sync_http._get_opener")
-    def test_abroad_redirect_url(self, mock_opener_fn, mock_config):
+    def test_abroad_redirect_url(self, mock_opener_fn: MagicMock, mock_config: MagicMock) -> None:
         # abroad=True + redirect_url=True.
         mock_config.ssl_verify = True
         mock_response = MagicMock()
@@ -258,7 +258,7 @@ class TestSyncReq:
             assert result == "http://redirected.com"
 
     @patch("src.sync_http.config")
-    def test_general_exception_returns_empty_and_logs(self, mock_config):
+    def test_general_exception_returns_empty_and_logs(self, mock_config: MagicMock) -> None:
         # 一般异常被捕获：记录错误日志并返回空串，而非错误文本.
         mock_config.ssl_verify = True
         # 让 opener 抛异常

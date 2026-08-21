@@ -109,7 +109,7 @@ def official_join_parse(bs: bytes) -> dict:
                     break
                 skip(t)
 
-    out = {}
+    out: dict[str, bytes | int] = {}
     while p[0] < len(bs):
         b = bs[p[0]]
         typ, tag = b & 0xF, (b >> 4) & 0xF
@@ -130,7 +130,7 @@ def official_join_parse(bs: bytes) -> dict:
     return out
 
 
-def test_decode_official_chat_push():
+def test_decode_official_chat_push() -> None:
     # 官方编码的弹幕推送走生产 HuyaDanmaku.decode_message 能解出 nick/content/uri。
     #
     #    HYMessage 是平铺字段(tag0=userInfo, tag3=内容)，此处喂完整外层帧验证生产解码,
@@ -151,7 +151,7 @@ def test_decode_official_chat_push():
     print("[PASS] 官方编码弹幕推送过生产 decode_message: nick/content/color 全部正确")
 
 
-def test_decode_official_chat_push_with_list():
+def test_decode_official_chat_push_with_list() -> None:
     # bulletFormat 内含 LIST(size=自描述整数域) 的弹幕推送也能正确解码。
     #
     #    防回归: _skip 曾把 LIST/MAP 的 size 读成固定 int32, 真实数据错位后解析出
@@ -172,7 +172,7 @@ def test_decode_official_chat_push_with_list():
     print("[PASS] 含 LIST 的弹幕推送过生产 decode_message: nick/content/color 全部正确")
 
 
-def test_encode_join_official_layout():
+def test_encode_join_official_layout() -> None:
     # join 输出符合官方布局(长度域含头字节),且被独立官方语义解析器判读为合法注册。
     from src.platforms.huya import HuyaDanmaku
 

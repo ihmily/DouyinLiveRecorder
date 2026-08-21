@@ -18,13 +18,13 @@ import pytest
 class TestThreadSafeCredential:
     # 测试线程安全的凭证管理（对应 ttwid.py 模式）
 
-    def test_lock_prevents_duplicate_fetch(self):
+    def test_lock_prevents_duplicate_fetch(self) -> None:
         # 验证 threading.Lock 确保凭证只获取一次
         fetch_count = 0
         lock = threading.Lock()
         cached: str | None = None
 
-        def get_credential():
+        def get_credential() -> str:
             nonlocal fetch_count, cached
             if cached:
                 return cached
@@ -55,7 +55,7 @@ class TestThreadSafeCredential:
         # 凭证只获取一次
         assert fetch_count == 1
 
-    def test_lock_is_threading_lock(self):
+    def test_lock_is_threading_lock(self) -> None:
         # 验证使用的是 threading.Lock 而非其他锁类型
         lock = threading.Lock()
         assert isinstance(lock, type(threading.Lock()))
@@ -66,14 +66,14 @@ class TestThreadSafeCredential:
 class TestRateLimit:
     # 测试速率限制（对应 main.py _douyin_rate_limit 模式）
 
-    def test_rate_limit_enforces_min_interval(self):
+    def test_rate_limit_enforces_min_interval(self) -> None:
         # 验证速率限制确保最小请求间隔
         rate_lock = threading.Lock()
         last_request_time: float = 0.0
         min_interval: float = 0.1  # 测试用 100ms（生产环境为 3.0s）
         request_times: list[float] = []
 
-        def rate_limit():
+        def rate_limit() -> None:
             nonlocal last_request_time
             with rate_lock:
                 now = time.time()
@@ -93,7 +93,7 @@ class TestRateLimit:
             interval = request_times[i] - request_times[i - 1]
             assert interval >= min_interval * 0.9  # 允许 10% 误差
 
-    def test_rate_limit_serializes_concurrent_calls(self):
+    def test_rate_limit_serializes_concurrent_calls(self) -> None:
         # 验证速率限制在多线程下串行化执行
         rate_lock = threading.Lock()
         last_request_time: float = 0.0
@@ -101,7 +101,7 @@ class TestRateLimit:
         execution_order: list[int] = []
         order_lock = threading.Lock()
 
-        def rate_limit(thread_id: int):
+        def rate_limit(thread_id: int) -> None:
             nonlocal last_request_time
             with rate_lock:
                 now = time.time()
@@ -125,11 +125,11 @@ class TestRateLimit:
 class TestCredentialSharing:
     # 测试凭证共享（对应 ttwid.py 统一缓存模式）
 
-    def test_shared_credential_single_source(self):
+    def test_shared_credential_single_source(self) -> None:
         # 验证多模块复用同一凭证缓存
         # 模拟统一的凭证模块
         class CredentialModule:
-            def __init__(self):
+            def __init__(self) -> None:
                 self._cached: str = ""
                 self._lock = threading.Lock()
                 self.fetch_count = 0
@@ -156,12 +156,11 @@ class TestCredentialSharing:
         module = CredentialModule()
 
         # 模拟多个模块（room.py, spider.py）并发调用同一凭证模块
-        async def consumer():
+        async def consumer() -> str:
             return await module.get()
 
-        async def run_consumers():
-            results = await asyncio.gather(*[consumer() for _ in range(10)])
-            return results
+        async def run_consumers() -> list[str]:
+            return list(await asyncio.gather(*[consumer() for _ in range(10)]))
 
         results = asyncio.run(run_consumers())
 
@@ -170,7 +169,7 @@ class TestCredentialSharing:
         # 凭证只获取一次
         assert module.fetch_count == 1
 
-    def test_ttwid_module_pattern(self):
+    def test_ttwid_module_pattern(self) -> None:
         # 验证实际 ttwid.py 模块的缓存模式
         from src.ttwid import _cached_ttwid, _ttwid_lock
 

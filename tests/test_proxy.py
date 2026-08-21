@@ -1,6 +1,7 @@
 # Tests for src/proxy.py module - 代理检测模块.
 
 import pytest
+from pytest import MonkeyPatch
 
 from src.proxy import ProxyDetector, ProxyInfo
 
@@ -8,75 +9,75 @@ from src.proxy import ProxyDetector, ProxyInfo
 class TestProxyInfo:
     # Test ProxyInfo 数据类.
 
-    def test_empty_creation(self):
+    def test_empty_creation(self) -> None:
         # 空 IP 和端口有效（表示无代理）.
         info = ProxyInfo()
         assert info.ip == ""
         assert info.port == ""
 
-    def test_valid_ip_port(self):
+    def test_valid_ip_port(self) -> None:
         # 有效 IP 和端口.
         info = ProxyInfo("192.168.1.1", "8080")
         assert info.ip == "192.168.1.1"
         assert info.port == "8080"
 
-    def test_localhost_valid(self):
+    def test_localhost_valid(self) -> None:
         # localhost 是合法的代理主机名.
         info = ProxyInfo("localhost", "3128")
         assert info.ip == "localhost"
         assert info.port == "3128"
 
-    def test_ip_without_port_raises(self):
+    def test_ip_without_port_raises(self) -> None:
         # 仅有 IP 无端口抛异常.
         with pytest.raises(ValueError, match="IP or port"):
             ProxyInfo("192.168.1.1", "")
 
-    def test_port_without_ip_raises(self):
+    def test_port_without_ip_raises(self) -> None:
         # 仅有端口无 IP 抛异常.
         with pytest.raises(ValueError, match="IP or port"):
             ProxyInfo("", "8080")
 
-    def test_invalid_port_non_numeric(self):
+    def test_invalid_port_non_numeric(self) -> None:
         # 非数字端口抛异常.
         with pytest.raises(ValueError, match="Port must be"):
             ProxyInfo("192.168.1.1", "abc")
 
-    def test_invalid_port_out_of_range(self):
+    def test_invalid_port_out_of_range(self) -> None:
         # 超范围端口抛异常.
         with pytest.raises(ValueError, match="Port must be"):
             ProxyInfo("192.168.1.1", "99999")
 
-    def test_invalid_port_zero(self):
+    def test_invalid_port_zero(self) -> None:
         # 端口 0 抛异常.
         with pytest.raises(ValueError, match="Port must be"):
             ProxyInfo("192.168.1.1", "0")
 
-    def test_invalid_ip_format(self):
+    def test_invalid_ip_format(self) -> None:
         # 非法 IP 格式抛异常.
         with pytest.raises(ValueError, match="Invalid IP"):
             ProxyInfo("999.999.999.999", "8080")
 
-    def test_valid_domain(self):
+    def test_valid_domain(self) -> None:
         # 合法域名作为代理地址.
         info = ProxyInfo("proxy.example.com", "8080")
         assert info.ip == "proxy.example.com"
 
-    def test_invalid_domain_format(self):
+    def test_invalid_domain_format(self) -> None:
         # 非法域名格式抛异常.
         with pytest.raises(ValueError, match="Invalid IP"):
             ProxyInfo("inv@lid!", "8080")
 
-    def test_port_boundary_low(self):
+    def test_port_boundary_low(self) -> None:
         # 端口下界 1 有效.
         info = ProxyInfo("10.0.0.1", "1")
         assert info.port == "1"
 
-    def test_port_boundary_high(self):
+    def test_port_boundary_high(self) -> None:
         # 端口上界 65535 有效.
         info = ProxyInfo("10.0.0.1", "65535")
         assert info.port == "65535"
 
-    def test_frozen_dataclass(self):
+    def test_frozen_dataclass(self) -> None:
         # 不可变数据类：对冻结实例赋值应抛 AttributeError（FrozenInstanceError 的基类）.
         info = ProxyInfo("10.0.0.1", "8080")
         with pytest.raises(AttributeError):
@@ -90,7 +91,7 @@ class TestProxyInfo:
 _PROXY_ENV_KEYS = ("http_proxy", "https_proxy", "ftp_proxy", "all_proxy", "ALL_PROXY")
 
 
-def _clear_proxy_env(monkeypatch) -> None:
+def _clear_proxy_env(monkeypatch: MonkeyPatch) -> None:
     # 清除所有代理相关环境变量，保证测试对机器环境无依赖。
     for key in _PROXY_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
@@ -99,7 +100,7 @@ def _clear_proxy_env(monkeypatch) -> None:
 class TestProxyDetectorLinux:
     # Test ProxyDetector Linux 平台方法.
 
-    def test_linux_get_proxy_info_with_auth(self, monkeypatch):
+    def test_linux_get_proxy_info_with_auth(self, monkeypatch: MonkeyPatch) -> None:
         # 带认证信息的代理 URL 正确解析.
         _clear_proxy_env(monkeypatch)
         monkeypatch.setenv("http_proxy", "http://user:pass@proxy.example.com:3128/")
@@ -108,7 +109,7 @@ class TestProxyDetectorLinux:
         assert port == "3128"
         # 实际解析逻辑：去掉 user:pass@ 后按 : 分割
 
-    def test_linux_get_proxy_info_simple(self, monkeypatch):
+    def test_linux_get_proxy_info_simple(self, monkeypatch: MonkeyPatch) -> None:
         # 简单代理 URL 解析.
         _clear_proxy_env(monkeypatch)
         monkeypatch.setenv("http_proxy", "http://10.0.0.1:8080")
@@ -116,7 +117,7 @@ class TestProxyDetectorLinux:
         assert ip == "10.0.0.1"
         assert port == "8080"
 
-    def test_linux_get_proxy_info_https(self, monkeypatch):
+    def test_linux_get_proxy_info_https(self, monkeypatch: MonkeyPatch) -> None:
         # https_proxy 环境变量解析.
         _clear_proxy_env(monkeypatch)
         monkeypatch.setenv("https_proxy", "http://proxy.test:9090/")
@@ -125,27 +126,27 @@ class TestProxyDetectorLinux:
         assert isinstance(ip, str)
         assert isinstance(port, str)
 
-    def test_linux_no_proxy(self, monkeypatch):
+    def test_linux_no_proxy(self, monkeypatch: MonkeyPatch) -> None:
         # 无代理环境变量时返回空.
         _clear_proxy_env(monkeypatch)
         ip, port = ProxyDetector._get_proxy_info_linux()
         assert ip == ""
         assert port == ""
 
-    def test_linux_is_proxy_enabled_false(self, monkeypatch):
+    def test_linux_is_proxy_enabled_false(self, monkeypatch: MonkeyPatch) -> None:
         # 无代理时返回 False.
         _clear_proxy_env(monkeypatch)
         detector = ProxyDetector.__new__(ProxyDetector)
         assert detector._is_proxy_enabled_linux() is False
 
-    def test_linux_is_proxy_enabled_true(self, monkeypatch):
+    def test_linux_is_proxy_enabled_true(self, monkeypatch: MonkeyPatch) -> None:
         # 有代理时返回 True.
         _clear_proxy_env(monkeypatch)
         monkeypatch.setenv("http_proxy", "http://proxy:8080")
         detector = ProxyDetector.__new__(ProxyDetector)
         assert detector._is_proxy_enabled_linux() is True
 
-    def test_linux_proxy_with_trailing_slash(self, monkeypatch):
+    def test_linux_proxy_with_trailing_slash(self, monkeypatch: MonkeyPatch) -> None:
         # 末尾斜杠被正确处理.
         _clear_proxy_env(monkeypatch)
         monkeypatch.setenv("http_proxy", "http://proxy.example.com:8080/")

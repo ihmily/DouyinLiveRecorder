@@ -236,11 +236,13 @@ DouyinLiveRecorder/
 │   ├── index.html                      # 单页应用入口
 │   ├── app.js                          # 前端逻辑（API 调用、SSE、渲染）
 │   └── style.css                       # 样式表（主题、响应式）
-├── i18n/                                # 国际化文件（gettext）
+├── i18n/                                # 国际化翻译目录（多语言多格式）
 │   ├── zh_CN/LC_MESSAGES/
-│   │   ├── zh_CN.po                   # 中文翻译源
+│   │   ├── zh_CN.po                   # 简体中文翻译源（gettext）
 │   │   └── zh_CN.mo                   # 编译后的翻译（运行时必需，随仓库/镜像分发）
-│   └── en/LC_MESSAGES/                 # 英文（预留，当前为空）
+│   ├── en_US.json                     # 英语（美国）目录（JSON 格式）
+│   ├── en_GB.json                     # 英语（英国）目录（JSON 格式）
+│   └── zh_TW.yaml                     # 繁体中文目录（YAML 格式）
 ├── typings/                             # 第三方库类型存根（仅静态检查用）
 ├── ffmpeg/                              # FFmpeg 二进制目录（Windows，git 忽略 exe）
 ├── node/                                # Node.js 二进制目录（Windows，git 忽略）
@@ -282,6 +284,7 @@ DouyinLiveRecorder/
 │   ├── test_weverse_auth.py            # Weverse 认证测试
 │   ├── test_concurrency.py             # 线程安全并发测试
 │   ├── test_i18n.py                    # i18n 翻译加载/环境变量独立性/po-mo 同步回归测试
+│   ├── test_anchor_rename.py           # 主播名自动同步测试（config_io.update_anchor_name + main.rename_anchor_directory）
 │   └── test_concurrency_rate_limit.py  # 抖音速率限制并发测试
 ├── .github/                             # GitHub Actions 工作流目录
 │   └── workflows/
@@ -549,20 +552,23 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 
 **实现机制**:
 
-- `translated_print` 包装 `builtins.print`，自动翻译调用者来自项目根（`src/` 包及 `main.py` 等顶层脚本）的输出；`main.py` 在配置语言非英文时执行 `builtins.print = translated_print` 替换
+- `translated_print` 包装 `builtins.print`，自动翻译调用者来自项目根（`src/` 包及 `main.py` 等顶层脚本）的输出；`main.py` 导入时无条件安装 `builtins.print = translated_print`（任何语言下均安装——zh_CN/zh_TW 把英文常量串译为中文，en_US/en_GB 把中文串译为英文，未知串恒等返回）
 - 支持源码运行和 PyInstaller 打包两种路径检测（`_internal/i18n` vs `i18n/`）
-- `init_gettext` 显式指定 `languages=["zh_CN"]` 直接加载 `.mo`，**不依赖 `LANG`/`LANGUAGE` 等环境变量**（Windows 客户端普遍不设置，环境变量推断会导致翻译静默失效）；`.mo` 缺失时回退恒等映射
-- 默认语言：简体中文（zh_CN）
+- **多格式目录加载（2026-08 起）**：`i18n.py` 按语言依次探测 gettext `.mo` → `<lang>.json` → `<lang>.yaml`，三种格式均为「原文 → 译文」扁平映射，行为一致；`PyYAML` 为运行时依赖（缺失时仅损失 YAML 格式支持）
+- **语言热切换**：`set_language(lang)` 归一化（`normalize_language` 别名表：zh_cn/zh-CN/en/en-US/zh-Hant/zh_CN.UTF-8 等写法均可）后热替换 `_tr` 翻译函数，无需重启进程。三个切换入口：Web 面板（`GET/PUT /api/language`，写回 config + 热切换 + 前端 `data-i18n` 文案重绘）、GUI（侧边栏「语言 Language」菜单）、CLI 主循环（每轮按 config 重同步）
+- 默认语言：简体中文（zh_CN）；受支持语言：zh_CN / en_US / en_GB / zh_TW
 
 **翻译文件**:
 
 | 文件                                | 说明                                    | 条目数 |
 | --------------------------------- | ------------------------------------- | --- |
-| `i18n/zh_CN/LC_MESSAGES/zh_CN.po` | 中文翻译源文件（可编辑）                          | 197 |
-| `i18n/zh_CN/LC_MESSAGES/zh_CN.mo` | 编译后的二进制翻译文件（gettext 运行时唯一读取，随仓库/镜像分发） | 197 |
-| `i18n/en/LC_MESSAGES/`            | 英文翻译目录（预留）                            | —   |
+| `i18n/zh_CN/LC_MESSAGES/zh_CN.po` | 简体中文翻译源文件（gettext，可编辑）                  | 282 |
+| `i18n/zh_CN/LC_MESSAGES/zh_CN.mo` | 编译后的二进制翻译文件（gettext 运行时唯一读取，随仓库/镜像分发） | 282 |
+| `i18n/en_US.json`                | 英语（美国）目录（JSON 格式，英文源恒等 + 中文源译英）        | 282 |
+| `i18n/en_GB.json`                | 英语（英国）目录（JSON 格式，英式拼写：minimise/log in 等） | 282 |
+| `i18n/zh_TW.yaml`                | 繁体中文目录（YAML 格式，简→繁字符转换 + 台湾用语适配）       | 282 |
 
-**维护流程**: 修改 `.po` 后必须执行 `python scripts/compile_po.py` 重新编译并一并提交 `.mo`，否则翻译改动不会生效；`python scripts/compile_po.py --check`（CI `static` job）会在两者不同步时拦截。
+**维护流程**: 修改 `.po` 后必须执行 `python scripts/compile_po.py` 重新编译并一并提交 `.mo`，否则翻译改动不会生效；`python scripts/compile_po.py --check`（CI `static` job）会在两者不同步时拦截。**四种语言的目录键集合必须一致**（`tests/test_i18n.py::test_catalogs_share_same_keyset` 强制校验）——新增 msgid 时需同步更新四个目录。
 
 **翻译覆盖范围**:
 
@@ -650,8 +656,9 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 
 **功能**:
 
-- SSL 证书验证全局开关（`ssl_verify`），默认启用（True，安全优先）
-- 提供 `set_ssl_verify()` 函数，由主配置在启动时统一设置
+- SSL 证书验证全局开关（`ssl_verify`），默认启用（True，安全优先）；已整合进「是否启用https录制」——开启=https 拉流 + 禁用证书验证，关闭=http 拉流 + 默认严格校验（由 main.py 每轮热同步）
+- 提供 `set_ssl_verify()` / `set_https_recording()` 函数，由主配置启动时及主循环每轮设置
+- 平台级 SSL 覆盖（`ssl_verify_platform_overrides`）：兼容保留，整合后不改变实际行为
 - 异步 / 同步 HTTP 客户端在发起请求时读取此配置
 
 ---
@@ -902,30 +909,31 @@ web.py
 
 #### [录制设置] 节
 
-| 配置项                | 说明                                                                                | 默认值                                                                                                                |     |       |       |                        |    |
-| ------------------ | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | --- | ----- | ----- | ---------------------- | -- |
-| language(zh_cn/en) | 界面语言                                                                              | zh_cn                                                                                                              |     |       |       |                        |    |
-| 是否跳过代理检测(是/否)      | 是否跳过代理检测                                                                          | 是                                                                                                                  |     |       |       |                        |    |
-| 是否禁用SSL证书验证(是/否)   | 是否禁用 SSL 证书验证                                                                     | 否                                                                                                                  |     |       |       |                        |    |
-| 禁用SSL证书验证的平台(逗号分隔) | 按平台关闭 SSL 证书校验（逗号分隔，留空=全部严格校验；兼容旧键「虎牙是否禁用SSL证书验证(是/否)」）                           | (空)                                                                                                                |     |       |       |                        |    |
-| 是否启用日志文件(是/否)      | 是否将日志写入文件                                                                         | 是                                                                                                                  |     |       |       |                        |    |
-| 直播保存路径(不填则默认)      | 录制文件保存路径                                                                          | (空，默认当前目录)                                                                                                         |     |       |       |                        |    |
-| 保存文件夹是否以作者区分       | 是否按主播名分类                                                                          | 是                                                                                                                  |     |       |       |                        |    |
-| 视频保存格式ts           | mkv                                                                               | flv                                                                                                                | mp4 | mp3音频 | m4a音频 | ts/mkv/flv/mp4/mp3/m4a | ts |
-| 原画                 | 超清                                                                                | 高清                                                                                                                 | 标清  | 流畅    | 默认画质  | 原画                     |    |
-| 是否使用代理ip(是/否)      | 是否启用代理                                                                            | 否                                                                                                                  |     |       |       |                        |    |
-| 代理地址               | 代理服务器地址；支持带协议前缀（`http://` / `https://` / `socks://` 等），裸地址（ip:端口）自动补 `http://` 前缀 | (空)                                                                                                                |     |       |       |                        |    |
-| 同一时间访问网络的线程数       | 并发数                                                                               | 3                                                                                                                  |     |       |       |                        |    |
-| 循环时间(秒)            | 直播状态检测间隔                                                                          | 120                                                                                                                |     |       |       |                        |    |
-| 分段录制是否开启           | 是否分段                                                                              | 是                                                                                                                  |     |       |       |                        |    |
-| 是否启用HLS采集(是/否)     | 是否优先使用 HLS(m3u8) 源采集；关闭或源不可用时回退 FLV                                               | 是                                                                                                                  |     |       |       |                        |    |
-| 视频分段时间(秒)          | 分段时长                                                                              | 1800                                                                                                               |     |       |       |                        |    |
-| 使用代理录制的平台(逗号分隔)    | 按域名子串匹配直播间 URL，命中即走代理（须先开启「是否使用代理ip」）                                             | tiktok, sooplive, pandalive, winktv, flextv, popkontv, twitch, liveme, showroom, chzzk, shopee, shp, youtu, faceit |     |       |       |                        |    |
-| 额外使用代理录制的平台        | 在上表之外追加走代理的平台（逗号分隔），代理地址取「代理地址」之外的兜底值                                             | (空)                                                                                                                |     |       |       |                        |    |
-| 是否录制弹幕(是/否)        | 是否将弹幕落为 SRT 字幕文件                                                                  | 否                                                                                                                  |     |       |       |                        |    |
-| 是否弹幕监控(是/否)        | 弹幕监控独立开关：GUI「弹幕监控」页 / Web「弹幕监控」标签实时查看弹幕流与统计；与「是否录制弹幕」解耦，仅监控时不落 SRT，两者都开时复用同一条弹幕连接 | 否                                                                                                                  |     |       |       |                        |    |
-| 弹幕录制平台(逗号分隔)       | 目前支持弹幕录制的平台（名称须完全一致）：斗鱼直播、B站直播、虎牙直播、抖音直播、TwitchTV（见 `src/__init__.py` 弹幕注册表）      | 斗鱼直播,B站直播,虎牙直播,抖音直播,TwitchTV                                                                                       |     |       |       |                        |    |
-| 弹幕分片时长(秒)          | 弹幕 SRT 分片时长（需开启分段录制）                                                              | 1800                                                                                                               |     |       |       |                        |    |
+| 配置项                | 说明                                                                                                                | 默认值                                                                                                                |     |       |       |                        |    |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | --- | ----- | ----- | ---------------------- | -- |
+| language(zh_cn/en) | 界面语言（键名保留兼容，值支持 zh_cn/zh_CN/en/en_US/en_GB/zh_TW 等写法，经 normalize_language 归一；Web/GUI 可即时切换并写回本键） | zh_cn                                                                                                              |     |       |       |                        |    |
+| 是否跳过代理检测(是/否)      | 是否跳过代理检测                                                                                                          | 是                                                                                                                  |     |       |       |                        |    |
+| 是否启用https录制        | 整合开关（合并原「是否强制启用https录制」与「是否禁用SSL证书验证(是/否)」）：开启=https 拉流+跳过证书校验；关闭=http 拉流+默认证书校验（https-only 海外平台保持原样）             | 否                                                                                                                  |     |       |       |                        |    |
+| 禁用SSL证书验证的平台(逗号分隔) | 平台级证书校验豁免列表：**仅在「需要证书校验」时生效**（即 http 录制模式，FFmpeg 9.0 起 TLS 证书验证默认开启）——列表内平台跳过证书校验（适用于虎牙/B站等证书异常平台）；https 录制模式已全局跳过、列表冗余。启动时自动追加缺失的必需平台（虎牙直播、B站直播，只追加不移除用户手填项） | 虎牙直播,B站直播                                                                                                          |     |       |       |                        |    |
+| 是否启用日志文件(是/否)      | 是否将日志写入文件                                                                                                         | 是                                                                                                                  |     |       |       |                        |    |
+| 直播保存路径(不填则默认)      | 录制文件保存路径                                                                                                          | (空，默认当前目录)                                                                                                         |     |       |       |                        |    |
+| 保存文件夹是否以作者区分       | 是否按主播名分类                                                                                                          | 是                                                                                                                  |     |       |       |                        |    |
+| 是否自动更新主播名(是/否)     | 主播改名后自动同步：更新 URL_config.ini 主播名字段，并重命名旧主播名命名的录制文件夹及文件夹内录制文件（含弹幕/字幕等同前缀产物）；仅在该直播间未在录制时触发，进行中的录制不受影响；关闭则保持手动填写的名称不变 | 是                                                                                                                  |     |       |       |                        |    |
+| 视频保存格式ts           | mkv                                                                                                               | flv                                                                                                                | mp4 | mp3音频 | m4a音频 | ts/mkv/flv/mp4/mp3/m4a | ts |
+| 原画                 | 超清                                                                                                                | 高清                                                                                                                 | 标清  | 流畅    | 默认画质  | 原画                     |    |
+| 是否使用代理ip(是/否)      | 是否启用代理                                                                                                            | 否                                                                                                                  |     |       |       |                        |    |
+| 代理地址               | 代理服务器地址；支持带协议前缀（`http://` / `https://` / `socks://` 等），裸地址（ip:端口）自动补 `http://` 前缀                                 | (空)                                                                                                                |     |       |       |                        |    |
+| 同一时间访问网络的线程数       | 并发数                                                                                                               | 3                                                                                                                  |     |       |       |                        |    |
+| 循环时间(秒)            | 直播状态检测间隔                                                                                                          | 120                                                                                                                |     |       |       |                        |    |
+| 分段录制是否开启           | 是否分段                                                                                                              | 是                                                                                                                  |     |       |       |                        |    |
+| 是否启用HLS采集(是/否)     | 是否优先使用 HLS(m3u8) 源采集；关闭或源不可用时回退 FLV                                                                               | 是                                                                                                                  |     |       |       |                        |    |
+| 视频分段时间(秒)          | 分段时长                                                                                                              | 1800                                                                                                               |     |       |       |                        |    |
+| 使用代理录制的平台(逗号分隔)    | 按域名子串匹配直播间 URL，命中即走代理（须先开启「是否使用代理ip」）                                                                             | tiktok, sooplive, pandalive, winktv, flextv, popkontv, twitch, liveme, showroom, chzzk, shopee, shp, youtu, faceit |     |       |       |                        |    |
+| 额外使用代理录制的平台        | 在上表之外追加走代理的平台（逗号分隔），代理地址取「代理地址」之外的兜底值                                                                             | (空)                                                                                                                |     |       |       |                        |    |
+| 是否录制弹幕(是/否)        | 是否将弹幕落为 SRT 字幕文件                                                                                                  | 否                                                                                                                  |     |       |       |                        |    |
+| 是否弹幕监控(是/否)        | 弹幕监控独立开关：GUI「弹幕监控」页 / Web「弹幕监控」标签实时查看弹幕流与统计；与「是否录制弹幕」解耦，仅监控时不落 SRT，两者都开时复用同一条弹幕连接                                 | 否                                                                                                                  |     |       |       |                        |    |
+| 弹幕录制平台(逗号分隔)       | 目前支持弹幕录制的平台（名称须完全一致）：斗鱼直播、B站直播、虎牙直播、抖音直播、TwitchTV（见 `src/__init__.py` 弹幕注册表）                                      | 斗鱼直播,B站直播,虎牙直播,抖音直播,TwitchTV                                                                                       |     |       |       |                        |    |
+| 弹幕分片时长(秒)          | 弹幕 SRT 分片时长（需开启分段录制）                                                                                              | 1800                                                                                                               |     |       |       |                        |    |
 
 #### [推送配置] 节
 
@@ -994,6 +1002,22 @@ https://live.douyin.com/745964462470
 # https://live.douyin.com/123456789
 ```
 
+**主播名自动更新**: 开启 `config.ini` 的 `[录制设置] 是否自动更新主播名(是/否)`（默认开启）后，每轮轮询解析到平台最新主播名与当前使用名不一致时，会自动完成：
+
+1. 重命名保存目录中旧主播名命名的文件夹（`{保存路径}/{平台}/{旧主播名}`，目标已存在则逐项合并）；
+2. 同步重命名文件夹内（含日期/标题子目录）所有以旧主播名为前缀的录制文件（`{旧主播名}_*`）及弹幕 SRT/时间字幕等同前缀产物，并把以 `_{旧主播名}` 结尾的标题目录（`{标题}_{旧主播名}`）一并改名；
+3. 更新 `URL_config.ini` 对应行的主播名字段（按 URL 精确匹配该行，保留画质段、`#` 注释前缀与行尾换行风格，全角冒号统一半角，幂等）。
+
+**触发与安全性**
+
+- 触发点在每轮解析直播数据之后、录制启动之前，此刻该房间线程必然不在录制中（录制期间阻塞在 ffmpeg 守护里），因此改名不会触碰正在写入的文件，进行中的录制不受影响。
+- 跳过条件：`platform == "自定义录制直播"`（其主播名含每轮随机 UUID，不应反复触发改名），或平台返回名为「空白昵称」等无效名。
+- 同步顺序：**先改文件系统、后写配置文件**；两者全部成功才切换本轮使用名。任一失败（如配置文件被编辑器锁定、目录改名失败）保持旧名，下轮轮询自动重试（已完成的目录改名幂等，不会重复操作）。
+- 被后台转码/播放器占用的个别文件改名失败仅告警跳过、不阻塞整体，其余文件照常处理，下轮补齐；同时清理旧名残留的录制状态条目（`recording` / `recording_time_list`），避免监控页长期挂旧名。
+- 配置写入持 `file_update_lock`，与录制线程的 `update_file` / Web API 写入互斥，避免半写。
+
+关闭该选项则保持手动填写的名称不变。
+
 ---
 
 ## 运行方式
@@ -1048,7 +1072,7 @@ python web.py
 #   （Node.js 只在运行时需要，builder 阶段不安装）
 
 # 阶段 2: runtime
-# - 精简基础镜像 + apt 安装 ffmpeg / nodejs(22 LTS) / tzdata / procps
+# - 精简基础镜像 + apt 安装 ffmpeg / nodejs(24 LTS) / tzdata / procps
 # - 从 builder 复制 /opt/venv 虚拟环境
 # - 非 root 用户 recorder(uid=1000) 运行
 # - HEALTHCHECK 兼容 main.py 与 web.py 两种模式（pgrep）
@@ -1058,10 +1082,9 @@ python web.py
 **`.dockerignore` 要点**：
 
 - 排除平台二进制（`ffmpeg/`、`node/`，容器内 apt 安装）、`config/*.ini`（运行时挂载）、
-
   `typings/`、`build_exe.py`、`gui_legacy.py` 等桌面/构建专用文件；
-- **保留 `i18n/**/*.mo`** 编译翻译文件 —— gettext 运行时必需且 Dockerfile 不会重新编译，
-
+- **保留 `i18n/**/*.mo` 编译翻译文件与 `i18n/*.json`、`i18n/*.yaml` 多语言目录** ——
+  运行时必需（gettext / JSON / YAML 三种翻译目录格式）且 Dockerfile 不会重新编译/生成，
   仅排除 `.po` 源文件与编译脚本。
 
 #### 使用 docker compose (推荐)
@@ -1439,7 +1462,128 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 
 ## 更新日志
 
-### v4.0.8.3 (2026-08-19) — 架构文档更新：补全弹幕采集子系统与 src/platforms、src/proto 等模块说明
+### v4.0.8.3-dev (2026-08-21) — start_record 复杂度治理：平台分派链抽取 + 录制链冗余条件消除（代码质量）
+
+**来源**：basedpyright 在 `main.py:866`（`start_record`）报告「代码过于复杂导致无法完成分析」——该函数约 1600 行（内含 700 行 / 52 个平台的分派 if/elif 链 + 900 行录制执行链），条件流节点超出 basedpyright 单函数分析上限。
+
+**改动**：
+
+- **平台分派链抽取为独立模块级函数 `_resolve_platform_stream`**（`main.py`）：
+  - 将 `start_record` 内 918-1618 行的平台分派 if/elif 链（52 个分支，含抖音/TikTok/快手/虎牙/斗鱼/YY/B站/小红书/bigo/blued/SOOP/网易CC/千度热播/PandaTV/猫耳FM/WinkTV/TTingLive/Look/TwitCasting/百度/微博/酷狗/花椒/流星/ShowRoom/Acfun/畅聊/映客/音播/知乎/嗨秀/VV星球/17Live/浪Live/飘飘/六间房/乐嗨/花猫/Shopee/YouTube/淘宝/京东/faceit/咪咕/连接/来秀/Picarto/自定义录制等 40+ 平台）原样字节级搬移为 `_resolve_platform_stream(record_url, proxy_address, record_quality) -> tuple[str, dict, dict | None, str] | None`。
+  - 返回 `(platform, port_info, record_danmaku_args, new_record_url)` 四元组；无法识别的地址返回 `None`，调用方 `break` 保持原「延迟后重试」语义（非直接结束线程）。
+  - 分支体语义未变：cookie/代理等配置项仍按模块级全局变量即时读取，`json_data` 局部变量保留在函数内部（链后无需暴露）。
+  - 录制执行链的控制流完全未动（含 AGENTS.md 已知坑区域：`if not real_url: continue` 守卫、`check_subprocess` 调用、弹幕参数传递等）。
+
+- **消除被掩盖的 19 个 `possibly unbound` 存量错误**（basedpyright 在复杂度消除后首次真正分析该函数时暴露）：
+  - 移除恒真冗余的 `if real_url:` 包装（上方 `if not real_url: continue` 守卫已保证非空），`now`/`title_in_name` 改为无条件赋值——同时修复「录制链不得嵌套于条件内」反模式（AGENTS.md 已知坑的延伸）。
+  - 清理 ffmpeg 命令中失效的 `cast(str, real_url)` 与过时注释（守卫保证 `real_url` 非空后 cast 多余）。
+  - `record_name = ""` 初始化从 `try:` 内部移至外层 `while True` 循环顶部，消除 `finally` 中潜在的 `NameError`（`try` 首语句前抛异常时 `record_name` 未绑定会掩盖原始异常）。
+
+- **AGENTS.md 同步更新**：将「`real_url` 为空必须跳过录制链」一条的描述更新为反映新结构——守卫之后 `now`/`title_in_name` 为无条件赋值，原恒真冗余的 `if real_url:` 包装已移除。
+
+**验证**：`basedpyright main.py` 0 errors / 0 warnings / 0 notes（原「过于复杂」错误消除）；`mypy main.py` `Success: no issues found`；`black --check main.py` / `isort --check-only main.py` 无变更；`pytest` 699 passed / 2 skipped（与治理前一致，尾部 loguru 噪音为解释器关闭时的既有 atexit 现象，与本次无关）。
+
+### v4.0.8.3-dev (2026-08-21) — FFmpeg 9.0 / Node 24 兼容基线 + i18n 多语言重构 + tests 五工具全绿（综合维护）
+
+**来源**：用户要求一次性完成六项维护：① config.ini 的 SSL 平台键改为「仅当需要证书校验时生效」并自动追加必需平台；② 全库 FFmpeg 参数对齐 FFmpeg 9.0；③ Node.js 相关代码对齐 24.19.0；④ i18n 重构（YAML/JSON 支持 + zh_CN 补全 + 新增 en_US/en_GB/zh_TW + Web/GUI 即时切换语言）；⑤ tests/ 以 basedpyright/mypy/pytest/black/isort 五工具检测并消除全部报警；⑥ 补全 AGENTS.md/.gitignore/.dockerignore/.coveragerc-concurrency/docker-compose.yaml/Dockerfile/pyproject.toml/requirements.txt/uv.lock 与 CODE_WIKI.md。
+
+**改动**：
+
+- **SSL 平台键语义重构（`src/http_config.py` + `main.py` + `src/web_config.py`）**：
+  - `get_effective_ssl_verify`：平台覆盖改为仅在全局 `ssl_verify=True`（**需要证书校验**时，即 http 录制模式）参与读取；https 模式全局已禁用、平台覆盖无额外意义。背景：**FFmpeg 9.0（2026-08-04 发布，代号 Lei）起 TLS 证书验证默认开启**（8.0 预告、9.0 落地），http 模式下 https-only 流也会被默认校验证书，证书异常平台（虎牙 TX CDN 主机名不匹配、B站部分节点证书链异常）需经此列表豁免才能拉流。
+  - `main.py` 新增 `SSL_DISABLE_REQUIRED_PLATFORMS = ("虎牙直播", "B站直播")` 与 `_sync_ssl_disable_platforms()`：启动时分析可监控录制平台、把缺失的必需平台**自动追加**至配置键并写回（只追加、绝不移除用户手填项；行级写回保留注释）。
+  - `src/web_config.py` 的 `update_config_line` 键匹配改为**大小写不敏感**（与 configparser `optionxform` 语义对齐）——代码常量（大写 SSL/SMTP/B站）与配置文件行（小写写法）大小写不一致时仍可定位，修复 Web 面板编辑此类键 404 的隐患。
+  - 键值审计：config.ini 全部 136 个键均被代码引用（无失效键）、代码读取的全部键均已存在（无缺失键），无需增删。
+- **FFmpeg 9.0 兼容（`main.py`）**：核查全库 ffmpeg 命令构造（录制/分段/转封装/转码/抽音轨），确认未使用任何 9.0 移除的 CLI 参数（`-vsync`/`-top`/`-qphist`/`-filter_complex_script`/`-adrift_threshold`）与移除组件（OpenMAX 编码器/NPP 滤镜/v308/v408/v410 编解码器/独立 CELT 解码器/Sonic 编解码器）；删除冗余死参数 `-v verbose`（被其后 `-loglevel error` 覆盖）；`-tls_verify 0` 插入条件统一经 `get_effective_ssl_verify(platform)` 裁决（与 SSL 键新语义自洽），并在命令构造处落注释说明 9.0 基线。
+- **Node.js 24.19.0 兼容（`src/javascript/migu.js` 重写 + `Dockerfile`）**：
+  - **migu.js 全量重写**：migu 官网播放器（dataFetcher.js）自 2025 下半年起变更 mgprtcl.wasm 接口——导入函数从 3 个（a/b/c）扩至 12 个（a..l，缺失会 `LinkError: function import requires a callable`），导出名整体重排（对照播放器 Emscripten 胶水层映射：memory=m、malloc=p、free=q、CI1=t、CI2=u、CI3=v、CI4=w、CI5=x、CI6=y、CI7=z、CI8=A、CI9=B、CI10=C、CI11=D、CI12=E、CI14=F），且固定加密因子改为经 `/gateway/app-management/videox/staticcache/v2/factor` 接口下发（失败回退播放器内置默认因子 `{sv:119, factor:"BjfS7eNf3OIROs2T1E8hHQ=="}`）。旧脚本在任何 Node 版本下实例化即失败（录制功能整体不可用）。重写版**输出契约变更**：输出带 `ddCalcu`/`sv` 参数的完整签名地址（旧版仅输出 ddCalcu 值）；`spider.get_migu_stream_url` 直接使用该 URL，删除已过期的固定 `sv=10010` 拼接。
+  - 其余 JS 签名脚本（x-bogus/haixiu/laixiu/liveme/taobao-sign/crypto-js）与 execjs 运行时在 Node 24.19.0 下逐一实测通过（x-bogus sign 输出正常）。
+  - `Dockerfile`：nodesource 源由 `setup_22.x` 升级至 `setup_24.x`（Node 24 LTS，与实测基线及 node_install.py 拉取的最新稳定版同代）。
+- **i18n 重构（`i18n.py` + 翻译目录 + Web 前端 + GUI）**：
+  - **`i18n.py` 重构**：新增多格式目录加载（按语言依次探测 gettext `.mo` → `<lang>.json` → `<lang>.yaml`，均归一为「原文→译文」扁平 dict）、`SUPPORTED_LANGUAGES`（zh_CN/en_US/en_GB/zh_TW）、`normalize_language()`（别名表：zh_cn/zh-CN/en/en-US/zh-Hant/zh_CN.UTF-8 等写法归一，别名表键统一「小写+连字符」形态）、`is_recognized_language()`、`set_language()`（**热切换**：归一化后重载目录并热替换 `_tr`，无需重启）、`get_language()`/`available_languages()`；YAML 为可选依赖（缺失仅损失该格式）。保留 `init_gettext`/`translated_print`/`_should_translate` 兼容接口。
+  - **zh_CN 补全**：AST 扫描运行时代码（main/web/gui/msg_push/i18n/src/）全部 `print`/`logger.*` 常量串，与 .po 现有条目比对，追加 85 条缺失条目（ffmpeg/node 安装消息英文→中文、web/recorder_status/ttwid/notify/platforms 中文运行时消息），目录 197 → 282 条并重编译 .mo（`scripts/compile_po.py`，字节级同步由测试强制）。
+  - **新增三语翻译**：`i18n/en_US.json`（英文源恒等 + 中文源译英，282 条）、`i18n/en_GB.json`（英式拼写变体：minimise/log in/Unauthorised 等）、`i18n/zh_TW.yaml`（简→繁字符映射 + 台湾用语适配：视频→影片、网络→網路、服务器→伺服器、软件→軟體、设置→設定、默认→預設、磁盘→磁碟、地址→位址、运行→執行、代码→程式碼、支持→支援、文件→檔案、高级设置→進階設定、错误信息→錯誤訊息、录制→錄製 等）；四目录键集合一致（测试强制）。
+  - **Web 即时切换语言**：后端新增 `GET /api/language`（当前语言 + 受支持列表）与 `PUT /api/language`（校验 → 写回 config → 热切换进程内翻译，非法值 400）；前端顶栏新增语言选择器，`index.html` 静态文案标记 `data-i18n`/`data-i18n-placeholder`，`app.js` 内置四语文案字典（`t()` 取值、`applyTranslations()` 重绘），动态渲染文案（toast/空态/按钮/确认框）全部接入 `t()`；语言偏好存 localStorage。
+  - **GUI 即时切换语言**：`gui.py` 侧边栏新增「语言 Language」OptionMenu（外观菜单同款样式），选择即 `i18n.set_language()` 热切换 + `update_config_line` 写回 config.ini + 日志提示；启动时从 config 读取语言并初始化 i18n。
+  - **main.py 语言链路**：导入时 `set_language(language)` 初始化（任何语言下均安装 `translated_print`）；主循环每轮检测配置语言变化即时热切换（Web/GUI 改配置后下轮生效）；`language(zh_cn/en)` 键名保留兼容，值支持全部新写法。
+  - 依赖：新增 `PyYAML>=6.0.3`（pyproject + requirements.txt + uv.lock）。
+- **tests/ 五工具全绿**：
+  - **mypy tests/**：初始 435 errors → 0。自动注解脚本补齐约 420 处签名注解（`-> None`/fixture 参数类型/返回类型推断/生成器 `Generator[None, None, None]`），人工修复约 60 处真实类型问题（`__enter__`/`__exit__` 返回类型、`__wrapped__` 经 `_unwrap()` 取用、`object` 收窄 cast、`_srt` 可空收窄、mock 签名默认值恢复等）；修复期间回归两处自动脚本引入的缺陷（裸 `*` 分隔符误注解、参数默认值丢失——后者曾致 `test_douyin_empty_cookie_fetches_ttwid` 失败，已恢复默认值并全量回归）。
+  - **basedpyright tests/**：0 errors / 0 warnings / 0 notes（`MagicMock` 作 `danmaku_cls`、`int(object)`、`"x" not in object` 四处 cast 收窄）。
+  - **pytest**：699 passed / 2 skipped / **0 warnings**（两个 FakeAsyncClient.aclose 未 await 的良性 RuntimeWarning 以针对性 `filterwarnings` 标记消除；fastapi testclient 第三方弃用提示经 pyproject `filterwarnings` 过滤）。
+  - **black/isort**：全项目（含 tests/）`--check` 通过。
+  - 新增测试：语言 API 5 个（GET 当前+可用 / PUT 切换+持久化 / 别名接受 / 非法值 400 / 空值 400）、i18n 新功能 10 个（多格式目录加载优先级、四目录键集一致、热切换、归一化变体、is_recognized、available_languages 拷贝、目录缺失恒等回退）、SSL 平台自动追加 3 个（缺项追加写回 / 幂等 / 键缺失自愈）、SSL 新语义 2 个（http 模式平台覆盖生效 / https 模式覆盖忽略）、migu 输出契约 1 个（适配完整 URL 输出）。
+- **配置与文档维护**：
+  - **`.coveragerc-concurrency` 新建**：CI concurrency-test job 经 `COVERAGE_RCFILE` 引用该文件但仓库中缺失（且被 .gitignore 错误忽略），现随仓库分发（`fail_under = 0`、source/omit 与 pyproject 对齐），并从 .gitignore 移除忽略项。
+  - **`uv.lock` 重新生成**：版本同步 `4.0.8.2 → 4.0.8.3`（此前滞后）、纳入 PyYAML；注释头（功能分组说明）保留并更新。
+  - **`pyproject.toml`**：新增 PyYAML 依赖（带用途注释）、pytest `filterwarnings`（第三方弃用提示）。
+  - **`.gitignore`**：移除 `.coveragerc-concurrency` 错误忽略；头注释补充「保留 .json/.yaml 翻译目录」。
+  - **`.dockerignore`**：无需改动（i18n 段仅排除 .po 与编译脚本，.json/.yaml 自动随目录进入镜像）。
+  - **`AGENTS.md`**：项目结构 i18n 目录更新；依赖清单补 PyYAML；测试节新增「tests/ 五工具质量门禁」；已知坑新增 5 条（SSL 平台键条件生效语义 + update_config_line 大小写不敏感、i18n 多格式目录与热切换、migu.js 输出契约、Node 24 / FFmpeg 9.0 兼容基线）。
+  - **`CODE_WIKI.md`**（本文件）：目录结构 i18n 条目、i18n 模块详解（多格式/热切换/四语目录表）、配置表 SSL 键与语言键说明、Docker 节 Node 24 LTS 与 .dockerignore 要点、更新日志（本条）。
+  - `docker-compose.yaml` 无需改动（锚点复用 Dockerfile 构建，Node 升级自动继承）。
+
+**验证**：全量 `pytest` **699 passed / 2 skipped / 0 warnings**；`mypy tests/` 与 `mypy src/` 均 `Success: no issues found`；`basedpyright tests/` **0 errors / 0 warnings / 0 notes**；`black --check .` 与 `isort --check-only .` 全项目通过；`python scripts/compile_po.py --check` .po/.mo 同步；i18n 四目录切换实测（zh_CN=.mo、en_US/en_GB=.json、zh_TW=.yaml 加载与翻译输出正确）；Node 24.19.0 下全部 JS 签名脚本加载/执行通过（migu.js 因需真实 playurl 凭据无法端到端验证，映射关系提取自官方播放器胶水层，LinkError 已消除、完整调用链贯通）。
+
+### v4.0.8.3-dev (2026-08-20) — URL_config.ini 主播名自动更新（新增功能）
+
+**来源**：用户要求为 `URL_config.ini` 增加主播名自动更新机制——每次解析到最新主播名时，若与配置文件中的主播名不同则自动更新配置文件，并在主播改名时同步重命名以主播名命名的录制文件夹及其内部所有相关文件，且保证路径引用完整性。
+
+**改动**：
+
+- **`src/config_io.py`（配置文件更新）**：新增 `update_anchor_name(url, new_name) -> bool` 与 `_rewrite_anchor_field(raw_line, url, new_name) -> str | None`。持 `file_update_lock` 逐行重写 `URL_config.ini`，按 **URL 段级精确匹配**（防止 `/1` 误改 `/12` 行）只替换该行主播名字段，完整保留画质段、`#` 注释前缀、行尾换行风格；幂等，落盘后带异常恢复快照。
+- **`main.py`（文件系统同步）**：新增 `rename_anchor_directory(old_name, new_name, platform) -> bool` 与 `_rename_prefixed_entries(base_dir, old_name, new_name) -> None`；模块级新增 `auto_update_anchor_name: bool = True`（由 `main()` 读取配置后覆盖，见 `config.ini` 新键）。`start_record` 线程在「解析直播数据之后、录制启动之前」检测最新主播名与当前使用名是否一致（此检测点线程必然不在录制中，天然避开 ffmpeg 占用窗口）。
+  - `rename_anchor_directory`：重命名 `{保存路径}/{平台}/{旧主播名}` → 新名；目标已存在则逐项合并移入（兼容主播改回曾用名）。
+  - `_rename_prefixed_entries`：递归重命名目录树内所有以 `{旧名}_` 开头的录制文件（含日期/标题子目录下的 TS/FLV/弹幕 SRT/字幕等同前缀产物）及 `_{旧名}` 结尾的标题目录。
+- **路径引用完整性**：改名只发生在该房间未录制时，进行中的录制不受影响；**先文件系统、后配置文件，两者全部成功才切换本轮使用名**，任一失败保持旧名、下轮轮询自动重试（重命名对已完成目录幂等）；被后台转码/播放器占用的个别文件仅告警跳过、不阻塞整体，并清理旧名残留的录制状态条目。
+- **配置开关与防护**：`[录制设置] 是否自动更新主播名(是/否)`（默认「是」，关闭则保持手动名称），支持热加载；跳过自定义流地址（其主播名含每轮随机 UUID，防止反复触发）；清洗后为「空白昵称」的名字不触发改名。
+- **`tests/test_anchor_rename.py`**：新增 21 个用例，覆盖各配置行格式（画质段/注释/全角冒号/无名字段追加/CRLF 保留）、目录改名/合并/标题子目录/无作者目录/文件占用/目录失败重试、以及端到端一致性。
+- **`config/config.ini` 与 `CODE_WIKI.md`**：补充说明（配置项表与「主播名自动更新」专节）。
+
+**验证**：全量 `pytest` **667 passed / 2 skipped**；`basedpyright src/config_io.py` 0 告警；`black` / `isort` / `mypy` 通过。
+
+### v4.0.8.3-dev (2026-08-20) — 类型安全加固：补齐多测试文件与 `src/async_http.py` 类型注解（满足 mypy `disallow_untyped_defs` / basedpyright 门禁）
+
+**来源**：多轮 `@command://fix` 反馈——CI 的 mypy（`disallow_untyped_defs = true`，见 `AGENTS.md`）与 IDE basedpyright 在测试文件及个别源码处报类型注解缺失 / 类型收窄错误。本轮统一补齐，均与项目既定代码风格一致、纯签名/注解层改动、零运行时行为变化。
+
+**受影响模块与具体修改点**：
+
+- **`tests/test_anchor_rename.py`**：`main_mod` 为 pytest fixture 注入参数，mypy 无法从 fixture 推断其类型（fixture 返回 `ModuleType`）。为全文件所有 `main_mod` 参数补 `ModuleType` 注解（9 处单参数签名 `main_mod: ModuleType`、2 处多行签名 `main_mod: ModuleType, monkeypatch: pytest.MonkeyPatch`、2 处 fixture 签名）。
+- **`tests/test_ttwid.py`**：所有 `def test_*` / `async def test_*` 补 `-> None`；`tmp_path` 补 `tmp_path: Path`；`monkeypatch` 补 `monkeypatch: pytest.MonkeyPatch`；嵌套类方法 `_BoomParser.read` / `.get`（`*args: object, **kwargs: object -> list[str]`）与 `_ContendedLock.acquire/release/__enter__/__exit__`（补 `*args: object, **kwargs: object` 及对应返回类型）也一并补注解（`Path` 已在文件内导入）。
+- **`tests/test_i18n.py`**：① `captured: list[object]` → `list[tuple[object, ...]]`（line 58），修复 basedpyright `"object" 类型上未定义 "__getitem__" 方法`（`side_effect` 的 `*a` 是 `tuple`）；② 9 个测试方法补 `-> None`。
+- **`src/async_http.py`**：line 141、201（`get_response_status` 内）`client = await _get_client(...)` 显式注解 `client: httpx.AsyncClient = ...`。根因：IDE 语言服务器在 `httpx` stub 解析异常时会把 `client` 拓宽为 `object`，触发 `无法访问 "object*" 类的 "post"/"head" 属性`（CLI 实测 0 errors，仅 IDE 侧）；显式定宽后无论 stub 如何解析都不再被拓宽，零运行时成本。
+- **`tests/test_sync_http.py`**：17 个测试方法由 `@patch` 装饰器注入 `mock_config` / `mock_opener_fn` / `mock_requests` 等参数，原未标注类型；遵循仓库既有约定（如 `tests/test_weverse_auth.py` 用 `MagicMock` 标注），为每个 mock 参数补 `MagicMock` 注解并统一 `-> None`（`MagicMock` 已导入）。
+- **`tests/test_utils.py`**：① 消除同名类遮蔽——文件中存在两个 `class TestReadConfigValue`（line 90 与 245），后定义者遮蔽前者、pytest 收集冲突丢用例；将第二个类的 2 个测试方法合并进第一个类、删除重复类定义，5 个用例全部保留；② 17 个测试方法因 `tmp_path` / `capsys` 参数缺注解触发 `no-untyped-def`，补 `tmp_path: Path` 与 `capsys: pytest.CaptureFixture[str]`。
+- **`tests/test_stream.py`**：① 全文件测试方法补 `-> None`；辅助方法 `TestGetHuyaStreamUrl._json` 补 `-> dict[str, object]`；② 修复 19 处 `dict[str, object]` 不变性（invariant）报错——A 类（传入侧：具体嵌套 dict 无法赋给 `dict[str, object]` 形参）、B 类（返回侧：huya `result["m3u8_url"]` 等访问被收窄为 `object`）。按 `MEMORY.md` 既定「cast 零成本」策略在测试侧收窄：**未改动 `src/stream.py`**；顶部 `from typing import TypedDict, cast` 并导入真实导出的 `HuyaStreamUrl`/`TiktokStreamUrl`/`YyStreamUrl`，定义本地 `class HuyaResult(TypedDict, total=True)`（必须 `total=True`，否则 basedpyright 报 `reportTypedDictNotRequiredAccess`），传入侧 `cast(dict[str, object], ...)`、huya 返回侧 `cast("HuyaResult", ...)`，tiktok/yy 仅传入侧 cast 即可。
+- **`tests/test_stream_select.py`**：修复 17 处类型错误——① autouse fixture `no_probe_throttle` 补 `-> Iterator[None]`（顶部 `from typing import Iterator, Literal`），内部 `lambda url: None` → `lambda _url: None` 消除未存取提示；② 四个 `__exit__`（`_FakeHead405HtmlClient` / `_C` / `_FlvTransient403Client` / `_StreamCtx`）由 `-> bool` 改为 `-> Literal[False]`（恒返回 `False` 不吞异常，宽泛 `bool` 触发 `exit-return` 校验），参数 `*args: object` → `*_args: object`；③ `_m3u8_client_cls` 返回注解 `-> type` 改为 `-> type[_M3u8ProbeClient]`（新增模块级基类 `_M3u8ProbeClient` 声明 `get_calls: int = 0`，嵌套 `_C` 继承之，每轮仍构造全新子类、测试隔离不受影响）；④ `clear_probe_backoff` fixture 补 `-> Iterator[None]`，7 个引用它的测试函数参数补 `clear_probe_backoff: None`。
+
+**验证**：
+
+- `tests/test_anchor_rename.py`：`mypy ... -> Success: no issues found in 1 source file`。
+- `tests/test_ttwid.py` / `tests/test_i18n.py` / `tests/test_sync_http.py` / `tests/test_utils.py`：`mypy ... -> Success: no issues found`；`basedpyright` 对应文件 0 errors / 0 warnings / 0 notes。
+- `src/async_http.py`：`basedpyright ... 0 errors / 0 warnings / 0 notes`（CLI 实测本就 0 errors）。
+- `tests/test_stream.py`：`mypy ... Success: no issues found`；`basedpyright` 0 errors；`pytest` **62 passed**。
+- `tests/test_stream_select.py`：`mypy` / `basedpyright` 0 errors / 0 warnings / 0 notes；`pytest` **25 passed**。
+
+### v4.0.8.3-dev (2026-08-20) — 「是否禁用SSL证书验证」并入「是否启用https录制」（配置项整合）
+
+**来源**：用户要求把「是否禁用SSL证书验证」的功能整合进「是否启用https录制」选项，选项更名为「是否启用https录制」，开启=https 录制、关闭=http 录制。
+
+**改动**：
+
+- **配置整合（`main.py`）**：新增 `_read_https_recording_config()` 统一读取新键「是否启用https录制」，合并原「是否强制启用https录制」（协议强转）与「是否禁用SSL证书验证(是/否)」两项功能。新键存在直接取值；仅旧强制键存在时继承其值并迁移写回新键（旧键只读、绝不重建）；两键皆无则自动补默认值「否」。检测到旧 SSL 开关=是时打印迁移提示。
+- **联动语义（`main.py` 模块级 + 主循环每轮热同步）**：`_http_config.set_https_recording(x)` + `_http_config.set_ssl_verify(not x)`——开启=https 拉流+禁用证书验证；关闭=http 拉流+默认严格校验。
+- **录制协议切换（`main.py:1796` 区）**：开启时 `http://`→`https://`（原行为，虎牙/自定义/shopee/migu 例外保留）；关闭时 `https://`→`http://`（新增），`OVERSEAS_PLATFORM_HOST` 内的 https-only 海外平台（TikTok/YouTube 等）保持原样，避免强转 http 必然拉流失败。
+- **`-tls_verify 0` 自洽**：https 模式全局禁用验证时插入（仅 https 流），http 模式无 TLS 不涉及，注释同步更新。
+- **`src/http_config.py`**：`ssl_verify` 注释更新为整合语义；平台级覆盖（`ssl_verify_platform_overrides`）兼容保留、不改变实际行为；`get_effective_ssl_verify` / `set_https_recording` 注释同步。
+- **Web 界面（`web/app.js` + `web/style.css`）**：新键「是否启用https录制」附整合语义说明；旧键「是否强制启用https录制」「是否禁用SSL证书验证(是/否)」「虎牙是否禁用SSL证书验证(是/否)」标注废弃、只读置灰；兼容保留的「禁用SSL证书验证的平台」列表按当前模式动态提示其兼容地位。
+- **文档**：`README.md` 配置列表/说明、`CODE_WIKI.md` 配置表（见「配置文件说明」）同步更名与解释。
+
+**验证**：新增 9 个测试（整合联动 4 个：开=禁校验/关=恢复/开↔关热切换/平台覆盖失效；旧键迁移读取 5 个：新键优先/旧键迁移是·否/默认补写/新旧并存取新）；全量 `pytest` 680 passed、2 skipped，`mypy src/http_config.py src/stream_select.py` 无错误，`node --check web/app.js` 通过。
+
+**注**：旧组合「强制https=否 + 禁用SSL=是」整合后变为 http 拉流+默认校验（原“不验证”能力并入开关语义，无法独立保留）。
+
+### v4.0.8.3-dev (2026-08-19) — 架构文档更新：补全弹幕采集子系统与 src/platforms、src/proto 等模块说明
 
 **来源**：用户要求通读工作空间全部源码、提取架构/模块/核心逻辑/关键实现信息，更新 `CODE_WIKI.md` 以反映最新代码状态（涵盖各文件职责、重要函数/类作用、依赖关系及使用方式），保持原有文档风格与结构。
 
@@ -2667,6 +2811,8 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 - `src/ttwid.py`：支持从 config.ini `[Cookie]` 段读取用户配置的 ttwid，获取优先级 = 缓存 > 配置 > 自动获取
 
 **build_exe.py 冒烟测试进程树清理**：
+
+
 
 - `_launch()` 让子进程自成进程组/会话（Windows `CREATE_NEW_PROCESS_GROUP`，Unix `start_new_session`）
 - 新增 `_kill_tree(proc)`：Windows `taskkill /T /F /PID`，Unix `os.killpg(getpgid(pid), SIGKILL)`，消除 GitHub Actions runner 孤儿进程清理噪声
