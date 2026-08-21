@@ -122,8 +122,8 @@ def get_lanzou_download_link(url: str, password: str | None = None) -> str | Non
     try:
         headers = {
             "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
-            "Origin": "https://wweb.lanzouv.com",
-            "Referer": "https://wweb.lanzouv.com/iXncv0dly6mh",
+            "Origin": "https://wwasx.lanzout.com",
+            "Referer": "https://wwasx.lanzout.com/b00hryv9ch",
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0",
         }
         # 获取页面 sign 签名
@@ -141,7 +141,7 @@ def get_lanzou_download_link(url: str, password: str | None = None) -> str | Non
             "p": password,
             "kd": "1",
         }
-        with requests.post("https://wweb.lanzouv.com/ajaxm.php", headers=headers, data=data, timeout=30) as response:
+        with requests.post("https://wwasx.lanzout.com/ajaxm.php", headers=headers, data=data, timeout=30) as response:
             json_data = cast(dict[str, str], response.json())
         download_url = json_data.get("dom", "") + "/file/" + json_data.get("url", "")
         if not download_url or download_url == "/file/":
@@ -160,7 +160,7 @@ def _install_ffmpeg_lanzou() -> bool:
     # Windows: 从蓝奏云备用源安装 FFmpeg
     try:
         logger.debug("Installing the latest version of ffmpeg from lanzou for Windows...")
-        ffmpeg_url = get_lanzou_download_link("https://wweb.lanzouv.com/iHAc22ly3r3g", "eots")
+        ffmpeg_url = get_lanzou_download_link("https://wwasx.lanzout.com/b00hryv9ch", "eh7o")
         if not ffmpeg_url:
             logger.error("Failed to obtain ffmpeg download address from lanzou")
             return False

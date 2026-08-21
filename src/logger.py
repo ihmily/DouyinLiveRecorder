@@ -33,7 +33,13 @@ logger.remove()
 custom_format = "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> - <level>{message}</level>"
 
 # 添加控制台输出（无论是否启用日志文件，控制台输出始终保留）
-_ = logger.add(sink=sys.stderr, format=custom_format, level="DEBUG", colorize=True, enqueue=True)
+# 注意：pythonw / 窗口化启动器（console=False 的冻结 exe）不会分配控制台，
+# 此时 sys.stderr 为 None；loguru 拒绝把 None 作为 sink，会抛
+# `TypeError: Cannot log to objects of type 'NoneType'`，导致模块导入期即崩溃、
+# 窗口化运行静默失败。故此处先行判空：无控制台环境跳过控制台 sink，
+# 日志持久化交由下方文件 sink 兜底。
+if sys.stderr is not None:
+    _ = logger.add(sink=sys.stderr, format=custom_format, level="DEBUG", colorize=True, enqueue=True)
 
 # 运行时资源根目录（exe 同级：config/ logs/ downloads/ 等），
 # 与 _app_root() 保持一致；冻结后指向 exe 父目录而非 _internal。
