@@ -1,13 +1,173 @@
 # -*- coding: utf-8 -*-
-# 国际化（i18n）模块 - 基于 gettext 的多语言支持系统
+# 国际化（i18n）模块 - 多语言、多格式（gettext/.mo、JSON、YAML）翻译支持系统
+#
+# 语言目录（locale_path）布局与加载优先级（对每个语言依次探测，首个命中即用）：
+#   1. <locale_path>/<lang>/LC_MESSAGES/<lang>.mo   # gettext 编译产物（zh_CN 现行方案）
+#   2. <locale_path>/<lang>.json                    # JSON 目录：{"原文": "译文", ...}
+#   3. <locale_path>/<lang>.yaml                    # YAML 目录：与 JSON 同构的键值映射
+# 三种格式均为「原文 → 译文」的扁平字符串映射，加载后统一为 dict，行为一致。
+#
+# 运行时切换：set_language(lang) 热替换翻译函数（_tr），后续 print/logger 输出
+# 即时使用新语言，无需重启进程（Web 面板/GUI 的即时切换语言功能依赖此入口）。
 
 import builtins
 import gettext
 import inspect
+import json
 import os
 import sys
 from pathlib import Path
-from typing import Callable, TextIO
+from typing import Any, Callable, TextIO
+
+# YAML 为可选依赖：缺失时仅损失 .yaml 目录支持，JSON/gettext 不受影响。
+# mypy 默认配置要求显式 stubs（types-PyYAML），但项目把 PyYAML 视为可选，
+# 故在此忽略"未安装/无类型存根"提示；运行时经下方 try/except 优雅降级。
+try:
+    import yaml  # type: ignore[import-untyped]
+except ImportError:  # pragma: no cover - 环境相关分支
+    yaml = None  # type: ignore[assignment]
+
+# 支持的语言（有序；键为规范语言码，值为界面显示名，供 GUI/Web 语言选择器使用）
+SUPPORTED_LANGUAGES: dict[str, str] = {
+    "zh_CN": "简体中文 (Simplified Chinese)",
+    "en_US": "English (US)",
+    "en_GB": "English (UK)",
+    "zh_TW": "繁體中文 (Traditional Chinese)",
+}
+
+# 默认语言（源码输出以中文为主、部分英文常量串，缺失翻译时回退恒等映射）
+DEFAULT_LANGUAGE = "zh_CN"
+
+# 语言别名归一化表：配置文件/浏览器/历史键值里的各种写法 → 规范语言码。
+# 键统一为「小写 + 连字符」形态（normalize_language 会把下划线归一为连字符后查表）
+_LANGUAGE_ALIASES: dict[str, str] = {
+    "zh-cn": "zh_CN",
+    "zh": "zh_CN",
+    "zh-hans": "zh_CN",
+    "zh-sg": "zh_CN",
+    "en": "en_US",
+    "en-us": "en_US",
+    "en-gb": "en_GB",
+    "zh-tw": "zh_TW",
+    "zh-hant": "zh_TW",
+    "zh-hk": "zh_TW",
+    "zh-mo": "zh_TW",
+}
+
+
+# 判断语言标识是否可识别（受支持码/已知别名/带编码后缀变体）；不回退默认值
+def is_recognized_language(value: str | None) -> bool:
+    # 可识别 = 精确匹配规范码、别名表命中、或带编码后缀的前缀命中
+    if not value:
+        return False
+    v = value.strip()
+    if v in SUPPORTED_LANGUAGES:
+        return True
+    low = v.lower().replace("_", "-")
+    if low in _LANGUAGE_ALIASES:
+        return True
+    prefix = low.split(".")[0].split("@")[0]
+    if prefix in _LANGUAGE_ALIASES:
+        return True
+    return prefix.replace("-", "_") in SUPPORTED_LANGUAGES
+
+
+# 把任意语言标识归一化为受支持的规范语言码；无法识别时回退默认语言
+def normalize_language(value: str | None) -> str:
+    # 归一化规则：精确匹配 → 别名表（小写/连字符）→ 前缀匹配（如 zh_CN.UTF-8）→ 默认
+    if not value:
+        return DEFAULT_LANGUAGE
+    v = value.strip()
+    if v in SUPPORTED_LANGUAGES:
+        return v
+    low = v.lower().replace("_", "-")
+    if low in _LANGUAGE_ALIASES:
+        return _LANGUAGE_ALIASES[low]
+    # 前缀匹配：zh_CN.UTF-8 / en_US.UTF-8 等带编码后缀的写法
+    prefix = low.split(".")[0].split("@")[0]
+    if prefix in _LANGUAGE_ALIASES:
+        return _LANGUAGE_ALIASES[prefix]
+    if prefix.replace("-", "_") in SUPPORTED_LANGUAGES:
+        return prefix.replace("-", "_")
+    return DEFAULT_LANGUAGE
+
+
+# 检测执行目录，支持打包后 (_internal) 和源码两种运行方式
+# 优先基于本模块文件所在目录定位，避免 sys.argv[0] 在打包/-m 运行时被误解析；
+# 冻结运行时模块可能位于 PYZ 中，__file__ 指向 PYZ 目录，需回退到 sys._MEIPASS。
+module_dir = Path(__file__).resolve().parent
+_meipass = getattr(sys, "_MEIPASS", None)
+if os.path.exists(module_dir / "_internal/i18n"):
+    locale_path = module_dir / "_internal/i18n"  # PyInstaller 打包版位置
+elif _meipass and os.path.exists(Path(_meipass) / "i18n"):
+    locale_path = Path(_meipass) / "i18n"  # 冻结运行 data 目录
+else:
+    locale_path = module_dir / "i18n"  # 源码运行位置
+
+# 需要翻译的源码目录：src/ 包以及项目根（main.py 等顶层脚本）
+# 统一规范化路径分隔符，兼容 Windows 下 sys._getframe 返回 / 而 os.path.realpath 返回 \ 的情况
+_project_root = os.path.normpath(str(module_dir))
+
+
+# 判断调用者文件是否位于需要翻译的项目源码目录下。
+def _should_translate(caller_file: str) -> bool:
+    # 判断调用者文件是否来自需要翻译的源码目录
+    caller_norm = os.path.normpath(caller_file)
+    # 在项目根目录下即为项目源码（含 src/ 及 main.py/web.py/gui.py 等）
+    return caller_norm.startswith(_project_root)
+
+
+# 从 JSON 文件加载「原文 → 译文」映射；文件不存在或解析失败时返回 None
+def _load_json_catalog(path: Path) -> dict[str, str] | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    # 仅保留 str→str 条目，其余类型跳过（容忍手工编辑出的杂项值）
+    return {str(k): str(v) for k, v in data.items() if isinstance(k, str) and isinstance(v, str)}
+
+
+# 从 YAML 文件加载「原文 → 译文」映射；未安装 pyyaml / 文件不存在 / 解析失败时返回 None
+def _load_yaml_catalog(path: Path) -> dict[str, str] | None:
+    if yaml is None:
+        return None
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return {str(k): str(v) for k, v in data.items() if isinstance(k, str) and isinstance(v, str)}
+
+
+# 从 gettext .mo 编译产物加载「原文 → 译文」映射；文件不存在时返回 None
+def _load_mo_catalog(locale_dir: str | Path, lang: str) -> dict[str, str] | None:
+    mo_path = Path(locale_dir) / lang / "LC_MESSAGES" / f"{lang}.mo"
+    if not mo_path.is_file():
+        return None
+    try:
+        # fallback=False：文件存在但损坏时抛异常，由调用方降级到下一格式
+        translation = gettext.translation(lang, str(locale_dir), languages=[lang], fallback=False)
+    except Exception:
+        return None
+    # 直读 .mo 条目表：GNUTranslations._catalog 即 {msgid: msgstr}（含空串头，剔除）
+    catalog = dict(getattr(translation, "_catalog", {}))
+    catalog.pop("", None)
+    return {k: v for k, v in catalog.items() if isinstance(k, str)}
+
+
+# 按优先级加载某语言的翻译目录：gettext .mo → JSON → YAML；全缺失时返回 None
+def _load_translations(locale_dir: str | Path, lang: str) -> dict[str, str] | None:
+    base = Path(locale_dir)
+    mo = _load_mo_catalog(base, lang)
+    if mo is not None:
+        return mo
+    json_catalog = _load_json_catalog(base / f"{lang}.json")
+    if json_catalog is not None:
+        return json_catalog
+    return _load_yaml_catalog(base / f"{lang}.yaml")
 
 
 # 初始化 gettext 翻译环境，返回绑定域与目录的 gettext 函数。
@@ -28,31 +188,40 @@ def init_gettext(locale_dir: str | Path, locale_name: str) -> Callable[[str], st
     return translation.gettext
 
 
-# 检测执行目录，支持打包后 (_internal) 和源码两种运行方式
-# 优先基于本模块文件所在目录定位，避免 sys.argv[0] 在打包/-m 运行时被误解析；
-# 冻结运行时模块可能位于 PYZ 中，__file__ 指向 PYZ 目录，需回退到 sys._MEIPASS。
-module_dir = Path(__file__).resolve().parent
-_meipass = getattr(sys, "_MEIPASS", None)
-if os.path.exists(module_dir / "_internal/i18n"):
-    locale_path = module_dir / "_internal/i18n"  # PyInstaller 打包版位置
-elif _meipass and os.path.exists(Path(_meipass) / "i18n"):
-    locale_path = Path(_meipass) / "i18n"  # 冻结运行 data 目录
-else:
-    locale_path = module_dir / "i18n"  # 源码运行位置
-_tr = init_gettext(locale_path, "zh_CN")  # 默认中文
+# 构建某语言的翻译函数：加载翻译目录，命中返回译文、未命中回退原文
+def _build_translator(locale_dir: str | Path, lang: str) -> Callable[[str], str]:
+    catalog = _load_translations(locale_dir, lang)
+    if not catalog:
+        return lambda text: text
+    return lambda text: catalog.get(text, text)
+
+
+# 当前语言（模块级状态；set_language 热切换）
+_current_language: str = DEFAULT_LANGUAGE
+
+# 当前翻译函数：所有输出翻译统一经此引用（translated_print 与外部按需取用）
+_tr: Callable[[str], str] = _build_translator(locale_path, DEFAULT_LANGUAGE)
 original_print = builtins.print  # 保存原始 print 函数
 
-# 需要翻译的源码目录：src/ 包以及项目根（main.py 等顶层脚本）
-# 统一规范化路径分隔符，兼容 Windows 下 sys._getframe 返回 / 而 os.path.realpath 返回 \ 的情况
-_project_root = os.path.normpath(str(module_dir))
+
+# 切换当前语言：归一化 → 加载翻译目录 → 热替换 _tr；语言不可用或目录缺失时回退恒等映射。
+# 返回切换是否成功（归一化后语言即视为成功；目录缺失只影响译文，不视为失败）
+def set_language(lang: str | None) -> bool:
+    global _current_language, _tr
+    normalized = normalize_language(lang)
+    _current_language = normalized
+    _tr = _build_translator(locale_path, normalized)
+    return True
 
 
-# 判断调用者文件是否位于需要翻译的项目源码目录下。
-def _should_translate(caller_file: str) -> bool:
-    # 判断调用者文件是否来自需要翻译的源码目录
-    caller_norm = os.path.normpath(caller_file)
-    # 在项目根目录下即为项目源码（含 src/ 及 main.py/web.py/gui.py 等）
-    return caller_norm.startswith(_project_root)
+# 返回当前语言规范码
+def get_language() -> str:
+    return _current_language
+
+
+# 返回受支持的语言映射（键为语言码、值为显示名），供选择器渲染
+def available_languages() -> dict[str, str]:
+    return dict(SUPPORTED_LANGUAGES)
 
 
 # 包装 print：对来自源码目录的输出自动翻译后再打印。

@@ -68,7 +68,9 @@ ENV PYTHONUNBUFFERED=1 \
 #   curl        - 下载 Node.js 安装脚本
 #   procps      - 提供 pgrep，供下方 HEALTHCHECK 判定进程存活
 #   ca-certificates - HTTPS 抓取所需根证书
-#   nodejs(22 LTS) - PyExecJS / exejs 运行各平台 JS 签名脚本（与 README / Dockerfile 约定一致）
+#   nodejs(24 LTS) - PyExecJS / exejs 运行各平台 JS 签名脚本（2026-08 已实测
+#                    兼容 Node 24.19.0：全部签名脚本 + migu.js 重写版通过；
+#                    与 node_install.py 拉取的最新稳定版保持同代）
 # 随后 apt-get upgrade -y 升级已安装包到最新安全补丁（权衡：牺牲一点可重现性换取及时安全修复）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
@@ -76,7 +78,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     procps \
     ca-certificates \
-    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
     && apt-get install -y nodejs \
     && apt-get upgrade -y \
     && ln -fs /usr/share/zoneinfo/${TZ} /etc/localtime \

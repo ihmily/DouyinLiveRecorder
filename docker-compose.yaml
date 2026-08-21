@@ -8,7 +8,7 @@
 #   gui（profile）    GUI 模式（需 X11）     docker compose --profile gui up -d
 #
 # 可在此文件同目录下创建 .env 文件覆盖默认环境变量（compose 自动加载），
-# 例如：TZ=America/New_York 可修改时区；APP_VERSION=4.0.8.2 可固定镜像 LABEL 版本。
+# 例如：TZ=America/New_York 可修改时区；APP_VERSION=4.0.8.3 可固定镜像 LABEL 版本。
 # =============================================================================
 
 services:

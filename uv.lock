@@ -16,14 +16,11 @@
 #   · GUI 图形界面    ：customtkinter、pystray、Pillow
 #   · Web 管理面板    ：fastapi、starlette、uvicorn、python-multipart、pydantic
 #   · 弹幕采集        ：websockets、protobuf、brotli
+#   · 国际化（i18n）  ：PyYAML（YAML 翻译目录，i18n/zh_TW.yaml）
 #   可选依赖组        ：dev（pytest / black / isort / mypy 等）、gui、build（pyinstaller）
 #
-# 注：PyExecJS（pyexecjs）在 PyPI 仅有 sdist 源码包（无 wheel），需从源码构建元数据；
-# 当前环境无法完成该构建（沙箱安全删除守卫限制），故其 [[package]] 块由历史锁定结果
-# 直接并入，版本与哈希保持与 PyPI 一致（1.5.1）。其余依赖均由 uv 正常解析。
-# 使用 `uv sync` / `uv run` 时，uv 会复用本锁文件，不会再尝试构建 PyExecJS。
+# 使用 `uv sync` / `uv run` 时，uv 会复用本锁文件完成可复现安装。
 # =============================================================================
-
 version = 1
 revision = 3
 requires-python = ">=3.10"
@@ -147,7 +144,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/a0/59/76ab57e3fe74484f48a53f8e337171b4a2349e506eabe136d7e01d059086/backports_asyncio_runner-1.2.0-py3-none-any.whl", hash = "sha256:0da0a936a8aeb554eccb426dc55af3ba63bcdc69fa1a600b5bb305413a4477b5", size = 12313, upload-time = "2025-07-02T02:27:14.263Z" },
 ]
 
-# （dev 可选）代码格式化
 [[package]]
 name = "black"
 version = "26.5.1"
@@ -192,7 +188,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/94/51/f975cae76d44274cc2868dc9040ac5d58d464784610234455b4e7b19c6ef/black-26.5.1-py3-none-any.whl", hash = "sha256:4ed7f7da04046d2e488437170797d3b4a4ad83906683bcb7dfc68b673bbce5e2", size = 213693, upload-time = "2026-05-18T16:53:33.964Z" },
 ]
 
-# B站弹幕解压（src/danmaku/platforms/bilibili.py，protover=3 需 brotli 解压）
 [[package]]
 name = "brotli"
 version = "1.2.0"
@@ -577,7 +572,6 @@ toml = [
     { name = "tomli", marker = "python_full_version <= '3.11'" },
 ]
 
-# 现代化 GUI 框架（圆角控件、深浅色主题、DPI 自适应）
 [[package]]
 name = "customtkinter"
 version = "6.0.0"
@@ -600,7 +594,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/f2/f2/728f041460f1b9739b85ee23b45fa5a505962ea11fd85bdbe2a02b021373/darkdetect-0.8.0-py3-none-any.whl", hash = "sha256:a7509ccf517eaad92b31c214f593dbcf138ea8a43b2935406bbd565e15527a85", size = 8955, upload-time = "2022-12-16T14:14:40.92Z" },
 ]
 
-# Linux 发行版识别（自动选择下载源 / 给出安装提示）
 [[package]]
 name = "distro"
 version = "1.9.0"
@@ -612,7 +605,7 @@ wheels = [
 
 [[package]]
 name = "douyinliverecorder"
-version = "4.0.8.2"
+version = "4.0.8.3"
 source = { editable = "." }
 dependencies = [
     { name = "brotli" },
@@ -625,10 +618,11 @@ dependencies = [
     { name = "pillow" },
     { name = "protobuf" },
     { name = "pycryptodome" },
-    { name = "pyexecjs" },
     { name = "pydantic" },
+    { name = "pyexecjs" },
     { name = "pystray" },
     { name = "python-multipart" },
+    { name = "pyyaml" },
     { name = "requests" },
     { name = "starlette" },
     { name = "tqdm" },
@@ -672,8 +666,8 @@ requires-dist = [
     { name = "pillow", marker = "extra == 'gui'", specifier = ">=12.3.0" },
     { name = "protobuf", specifier = ">=6.31.1" },
     { name = "pycryptodome", specifier = ">=3.23.0" },
-    { name = "pyexecjs", specifier = ">=1.5.1" },
     { name = "pydantic", specifier = ">=2.13.4" },
+    { name = "pyexecjs", specifier = ">=1.5.1" },
     { name = "pyinstaller", marker = "extra == 'build'", specifier = ">=6.10.0" },
     { name = "pystray", specifier = ">=0.19.5" },
     { name = "pystray", marker = "extra == 'gui'", specifier = ">=0.19.5" },
@@ -681,6 +675,7 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
     { name = "python-multipart", specifier = ">=0.0.32" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "requests", specifier = ">=2.34.2" },
     { name = "starlette", specifier = ">=0.49.1" },
     { name = "tqdm", specifier = ">=4.69.0" },
@@ -701,7 +696,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/8a/0e/97c33bf5009bdbac74fd2beace167cab3f978feb69cc36f1ef79360d6c4e/exceptiongroup-1.3.1-py3-none-any.whl", hash = "sha256:a7a39a3bd276781e98394987d3a5701d0c4edffb633bb7a5144577f82c773598", size = 16740, upload-time = "2025-11-21T23:01:53.443Z" },
 ]
 
-# JS 执行引擎（PyExecJS 的活跃维护继任者，优先使用，需 Node.js 运行时）
 [[package]]
 name = "exejs"
 version = "1.0.1"
@@ -711,7 +705,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/cd/d4/8a02500810353b8c4c6428ee11483eeecfc715beea719ccdc213acc1edf1/exejs-1.0.1-py3-none-any.whl", hash = "sha256:d5536447b61323bf941497b16bea0f5b4705e0eb61509f35e85437026ea910e3", size = 15818, upload-time = "2026-06-28T16:33:56.419Z" },
 ]
 
-# Web 框架（src/web_api.py，录制引擎守护线程之上的 HTTP 接口）
 [[package]]
 name = "fastapi"
 version = "0.141.1"
@@ -822,7 +815,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/48/63/b906c01e53f50d432c0defe43ce52764a111dc1bdd028bafbeb54dcfd008/httptools-0.8.0-cp314-cp314t-win_amd64.whl", hash = "sha256:384c17174464c8e873398b7af24f0b1f44d992c820328413951a625323155d77", size = 108209, upload-time = "2026-05-25T22:17:39.473Z" },
 ]
 
-# 异步 HTTP 客户端（含 HTTP/2，src/async_http.py 并发抓取流地址）
 [[package]]
 name = "httpx"
 version = "0.28.1"
@@ -870,7 +862,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/cb/b1/3846dd7f199d53cb17f49cba7e651e9ce294d8497c8c150530ed11865bb8/iniconfig-2.3.0-py3-none-any.whl", hash = "sha256:f631c04d2c48c52b84d0d0549c99ff3859c98df65b3101406327ecc7d53fbf12", size = 7484, upload-time = "2025-10-18T21:55:41.639Z" },
 ]
 
-# （dev 可选）导入排序
 [[package]]
 name = "isort"
 version = "8.0.1"
@@ -1010,7 +1001,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/38/a6/800800bfed7b1fb10fc3f3d557785c3854e80d3f7a9800d784b176a1fc2d/librt-0.15.0-cp315-cp315t-win_arm64.whl", hash = "sha256:84d244b00604d17df3fc7736c327892d6bba66181254aa4087be807b6c342bdc", size = 110700, upload-time = "2026-08-07T10:49:15.499Z" },
 ]
 
-# 结构化日志（src/logger.py 统一封装，DEBUG/ERROR 落盘 logs/streamget.log）
 [[package]]
 name = "loguru"
 version = "0.7.3"
@@ -1036,7 +1026,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/c7/d1/a9f36f8ecdf0fb7c9b1e78c8d7af12b8c8754e74851ac7b94a8305540fc7/macholib-1.16.4-py2.py3-none-any.whl", hash = "sha256:da1a3fa8266e30f0ce7e97c6a54eefaae8edd1e5f86f3eb8b95457cae90265ea", size = 38117, upload-time = "2025-11-22T08:28:36.939Z" },
 ]
 
-# （dev 可选）静态类型检查
 [[package]]
 name = "mypy"
 version = "2.3.1"
@@ -1140,7 +1129,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/54/16/12b82f791c7f50ddec566873d5bdd245baa1491bac11d15ffb98aecc8f8b/pefile-2024.8.26-py3-none-any.whl", hash = "sha256:76f8b485dcd3b1bb8166f1128d395fa3d87af26360c2358fb75b80019b957c6f", size = 74766, upload-time = "2024-08-26T21:01:02.632Z" },
 ]
 
-# 图像处理（托盘图标生成 / 缩略图）
 [[package]]
 name = "pillow"
 version = "12.3.0"
@@ -1253,7 +1241,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/54/20/4d324d65cc6d9205fabedc306948156824eb9f0ee1633355a8f7ec5c66bf/pluggy-1.6.0-py3-none-any.whl", hash = "sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746", size = 20538, upload-time = "2025-05-15T12:30:06.134Z" },
 ]
 
-# 抖音弹幕协议解码（src/danmaku/proto/douyin_pb2.py，protoc 生成模块）
 [[package]]
 name = "protobuf"
 version = "7.35.1"
@@ -1269,7 +1256,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/19/c7/5f7c636ec43e0c545e28d1f1db71990108306f7bdcb89f069ba97e428e7f/protobuf-7.35.1-py3-none-any.whl", hash = "sha256:4bc97768d8fe4ad6743c8a19403e314511ed9f6d13205b687e52421c023ac1b9", size = 171659, upload-time = "2026-06-11T21:55:39.155Z" },
 ]
 
-# 加密算法（SM3 / RC4 / AES，部分平台签名与响应解密）
 [[package]]
 name = "pycryptodome"
 version = "3.23.0"
@@ -1305,7 +1291,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/d1/92/2eadd1341abd2989cce2e2740b4423608ee2014acb8110438244ee97d7ff/pycryptodome-3.23.0-pp310-pypy310_pp73-win_amd64.whl", hash = "sha256:45c69ad715ca1a94f778215a11e66b7ff989d792a4d63b68dc586a1da1392ff5", size = 1803005, upload-time = "2025-05-17T17:21:31.37Z" },
 ]
 
-# 请求模型校验（FastAPI 依赖，代码直接引用 BaseModel）
 [[package]]
 name = "pydantic"
 version = "2.13.4"
@@ -1437,10 +1422,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/4b/2d/69abac8f838090bbecd5df894befb2c2619e7996a98ddb949db9f3b93225/pydantic_core-2.46.4-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:d51026d73fcfd93610abc7b27789c26b313920fcfb20e27462d74a7f8b06e983", size = 2193071, upload-time = "2026-05-06T13:38:08.682Z" },
 ]
 
-
-# PyExecJS（pyexecjs）：JS 执行引擎回退兜底，已停止维护，仅作 PyExecJS 缺失时的兼容。
-# 注意：PyPI 仅有 sdist 源码包、无 wheel，需从源码构建；其 [[package]] 块由历史锁定结果并入，
-# 版本(1.5.1)与哈希与 PyPI 一致。其唯一依赖为 six（已由 pystray/pyinstaller 引入，已在下方锁定）。
 [[package]]
 name = "pyexecjs"
 version = "1.5.1"
@@ -1449,6 +1430,7 @@ dependencies = [
     { name = "six" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/ba/8e/aedef81641c8dca6fd0fb7294de5bed9c45f3397d67fddf755c1042c2642/PyExecJS-1.5.1.tar.gz", hash = "sha256:34cc1d070976918183ff7bdc0ad71f8157a891c92708c00c5fbbff7a769f505c", size = 13344, upload-time = "2018-01-18T04:33:55.126Z" }
+
 [[package]]
 name = "pygments"
 version = "2.20.0"
@@ -1458,7 +1440,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/f4/7e/a72dd26f3b0f4f2bf1dd8923c85f7ceb43172af56d63c7383eb62b332364/pygments-2.20.0-py3-none-any.whl", hash = "sha256:81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176", size = 1231151, upload-time = "2026-03-29T13:29:30.038Z" },
 ]
 
-# （build 可选）可执行文件打包，仅构建期使用、非运行时依赖
 [[package]]
 name = "pyinstaller"
 version = "6.22.1"
@@ -1557,7 +1538,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/aa/eb/5fb627c2457046883c6fd12d25c44db40c12bcde4622dc0f30851108e106/pyobjc_framework_quartz-12.2.2-cp315-cp315t-macosx_10_15_universal2.whl", hash = "sha256:8f58c589b5a76ba98f186b1f3b19fb1c8b730e82351f81fb62e6194f64a71622", size = 224767, upload-time = "2026-08-11T19:40:30.991Z" },
 ]
 
-# 系统托盘图标（GUI / Web 托盘；0.19.5 起 macOS 改用 PNG 替代 TIFF）
 [[package]]
 name = "pystray"
 version = "0.19.5"
@@ -1572,7 +1552,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/5c/64/927a4b9024196a4799eba0180e0ca31568426f258a4a5c90f87a97f51d28/pystray-0.19.5-py2.py3-none-any.whl", hash = "sha256:a0c2229d02cf87207297c22d86ffc57c86c227517b038c0d3c59df79295ac617", size = 49068, upload-time = "2023-09-17T13:44:26.872Z" },
 ]
 
-# （dev 可选）测试框架
 [[package]]
 name = "pytest"
 version = "9.1.1"
@@ -1591,7 +1570,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/24/25/1de2678b631f5a49215c6c96fff41ba892b0a34df68d6d80292b1b48aa7f/pytest-9.1.1-py3-none-any.whl", hash = "sha256:37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c", size = 386536, upload-time = "2026-06-19T10:58:31.347Z" },
 ]
 
-# （dev 可选）pytest 异步支持
 [[package]]
 name = "pytest-asyncio"
 version = "1.4.0"
@@ -1606,7 +1584,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/03/e2/08a497ef684b88559c9cc5f4ad53a37e7b99e727094a86d6ea32536d5d3c/pytest_asyncio-1.4.0-py3-none-any.whl", hash = "sha256:933ca923a23075a87fb7070c0ec272a6848489824d887c85c812670932835aa1", size = 16930, upload-time = "2026-05-26T09:56:02.576Z" },
 ]
 
-# （dev 可选）覆盖率统计
 [[package]]
 name = "pytest-cov"
 version = "7.1.0"
@@ -1630,7 +1607,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/0b/d7/1959b9648791274998a9c3526f6d0ec8fd2233e4d4acce81bbae76b44b2a/python_dotenv-1.2.2-py3-none-any.whl", hash = "sha256:1d8214789a24de455a8b8bd8ae6fe3c6b69a5e3d64aa8a8e5d68e694bbcb285a", size = 22101, upload-time = "2026-03-01T16:00:25.09Z" },
 ]
 
-# 表单 / 文件上传解析（Web 接口接收配置上传）
 [[package]]
 name = "python-multipart"
 version = "0.0.32"
@@ -1764,7 +1740,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/f1/12/de94a39c2ef588c7e6455cfbe7343d3b2dc9d6b6b2f40c4c6565744c873d/pyyaml-6.0.3-cp314-cp314t-win_arm64.whl", hash = "sha256:ebc55a14a21cb14062aa4162f906cd962b28e2e9ea38f9b4391244cd8de4ae0b", size = 149341, upload-time = "2025-09-25T21:32:56.828Z" },
 ]
 
-# 同步 HTTP 请求（spider / 各平台页面抓取 / Weverse 认证直连）
 [[package]]
 name = "requests"
 version = "2.34.2"
@@ -1798,7 +1773,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050, upload-time = "2024-12-04T17:35:26.475Z" },
 ]
 
-# ASGI 工具集（fastapi 传递依赖，src/web_api.py 直接导入）
 [[package]]
 name = "starlette"
 version = "1.6.0"
@@ -1866,7 +1840,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/7b/61/cceae43728b7de99d9b847560c262873a1f6c98202171fd5ed62640b494b/tomli-2.4.1-py3-none-any.whl", hash = "sha256:0d85819802132122da43cb86656f8d1f8c6587d54ae7dcaf30e90533028b49fe", size = 14583, upload-time = "2026-03-25T20:22:03.012Z" },
 ]
 
-# 下载进度条显示（命令行录制模式）
 [[package]]
 name = "tqdm"
 version = "4.70.0"
@@ -1909,7 +1882,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/7f/3e/5db95bcf282c52709639744ca2a8b149baccf648e39c8cc87553df9eae0c/urllib3-2.7.0-py3-none-any.whl", hash = "sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897", size = 131087, upload-time = "2026-05-07T16:13:17.151Z" },
 ]
 
-# ASGI 服务器（web.py 启动面板，[standard] 含 uvloop/ws 等可选件）
 [[package]]
 name = "uvicorn"
 version = "0.52.3"
@@ -2096,7 +2068,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/e9/f9/45d021e4a5cc7b9dd567f7cbb06d3b75f751a690063fb6cc7ec60f4e46b7/watchfiles-1.2.0-pp311-pypy311_pp73-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:a88fc94e647bc4eec523f1caa540258eb71d14278b9daf72fa1e2658a98df0f0", size = 457771, upload-time = "2026-05-18T04:30:56.331Z" },
 ]
 
-# 弹幕 WebSocket 客户端（src/danmaku/ws_client.py；支持 proxy=None 直连）
 [[package]]
 name = "websockets"
 version = "16.1.1"
