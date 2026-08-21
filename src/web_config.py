@@ -227,6 +227,9 @@ def update_config_line(config_file: str | Path, section: str, key: str, value: s
     # 逐行扫描：进入目标 section 后，匹配 `^\\s*key\\s*[=：:]\\s*` 的行并替换其值；
     # 未找到 section 或 key 时返回 False（不写入）。
     # 保留所有注释、空行、节顺序与原分隔符风格。
+    # key 匹配大小写不敏感：configparser 读取侧经 optionxform 统一小写，
+    # 代码内常量（如「禁用SSL证书验证的平台」）与配置文件实际行（小写 ssl）
+    # 大小写不一致时仍应可定位（与 configparser 语义对齐）。
     path = Path(config_file)
     if not path.exists():
         return False
@@ -234,8 +237,8 @@ def update_config_line(config_file: str | Path, section: str, key: str, value: s
     cur_section: str | None = None
     in_target = False
     replaced = False
-    # 匹配 key 行：允许 = 或 ：或 : 分隔，key 前后空白
-    key_pattern = re.compile(r"^(\s*" + re.escape(key) + r"\s*[=:：]\s*)(.*)$")
+    # 匹配 key 行：允许 = 或 ：或 : 分隔，key 前后空白（大小写不敏感）
+    key_pattern = re.compile(r"^(\s*" + re.escape(key) + r"\s*[=:：]\s*)(.*)$", re.IGNORECASE)
     new_lines: list[str] = []
     for line in lines:
         stripped = line.strip()

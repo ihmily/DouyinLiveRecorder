@@ -138,7 +138,7 @@ async def async_req(
     try:
         # 处理代理地址
         proxy_addr = utils.handle_proxy_addr(proxy_addr)
-        client = await _get_client(proxy_addr, timeout, verify, http2)
+        client: httpx.AsyncClient = await _get_client(proxy_addr, timeout, verify, http2)
         if data or json_data:
             if isinstance(data, (bytes, bytearray, memoryview)):
                 # 将 bytearray/memoryview 转换为 bytes（已是 bytes 时直接使用，避免无谓拷贝）
@@ -198,7 +198,7 @@ async def get_response_status(
         verify = config.ssl_verify
     try:
         proxy_addr = utils.handle_proxy_addr(proxy_addr)
-        client = await _get_client(proxy_addr, timeout, verify, http2)
+        client: httpx.AsyncClient = await _get_client(proxy_addr, timeout, verify, http2)
         response = await client.head(url, headers=headers, follow_redirects=True, timeout=timeout)
         if response.status_code == 200:
             return True

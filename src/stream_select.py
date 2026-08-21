@@ -282,8 +282,9 @@ def _validate_stream_url(
     #    否则回退 FLV 时无法定位真实原因（如超时、被拒、内容类型不符）；
     # 4) 按 platform 透传录制所需请求头（如虎牙 Referer），否则虎牙 CDN 无 Referer
     #    直接 403，校验会误判不可达而放弃录制——必须与 ffmpeg 录制路径保持一致。
-    # 5) 未显式指定 verify 时取平台有效校验开关：平台有覆盖（如虎牙可选关闭）取覆盖值，
-    #    否则取全局 ssl_verify（默认 True，安全优先）。保证校验器与录制路径一致。
+    # 5) 未显式指定 verify 时取平台有效校验开关：由「是否启用https录制」统一联动——
+    #    开启=https 拉流且全局禁用证书验证；关闭=http 拉流（恢复默认严格校验）。
+    #    平台覆盖受 https_recording_enabled 门控，保证校验器与录制路径一致。
     if verify is None:
         verify = _http_config.get_effective_ssl_verify(platform)
     headers: dict[str, str] = {}

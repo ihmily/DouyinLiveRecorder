@@ -102,6 +102,10 @@ class ConfigUpdate(BaseModel):
     value: str
 
 
+class LanguageUpdate(BaseModel):
+    language: str
+
+
 def _read_app_version() -> str:
     # 运行时从 pyproject.toml 读取版本号（单一事实源），失败回退 "0.0.0"。
     # 优先 importlib.metadata（已安装时），回退直接解析 pyproject.toml 文件。
@@ -362,6 +366,32 @@ def create_app(
             with _tokens_lock:
                 _tokens.clear()
         return {"ok": True}
+
+    @app.get("/api/language")
+    async def get_language() -> dict[str, object]:
+        # 当前语言 + 受支持语言列表（供前端语言选择器渲染）
+        import i18n as i18n_module
+
+        return {
+            "language": i18n_module.get_language(),
+            "available": i18n_module.available_languages(),
+        }
+
+    @app.put("/api/language")
+    async def set_language(req: LanguageUpdate) -> dict[str, object]:
+        # 即时切换语言：归一化校验 → 写回 config.ini → 热切换本进程翻译目录。
+        # 本进程（uvicorn 与录制守护线程同进程）后续控制台/日志输出即时使用新语言；
+        # main() 主循环每轮也会按配置重同步，两者一致。
+        import i18n as i18n_module
+
+        if not req.language.strip() or not i18n_module.is_recognized_language(req.language):
+            # 无法识别的语言值（既非受支持码也非已知别名）→ 400 而非静默回退
+            raise HTTPException(400, f"不支持的语言: {req.language}")
+        normalized = i18n_module.normalize_language(req.language)
+        if not update_config_line(cast(str, app.state.config_file), "录制设置", "language(zh_cn/en)", normalized):
+            raise HTTPException(500, "语言配置写回失败")
+        _ = i18n_module.set_language(normalized)
+        return {"ok": True, "language": normalized}
 
     @app.get("/api/files")
     async def list_files(path: str = Query("")) -> list[dict[str, str | int | float]]:
