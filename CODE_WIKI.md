@@ -1,5 +1,7 @@
 # DouyinLiveRecorder 项目架构文档
 
+简体中文&nbsp;&nbsp;|&nbsp;&nbsp;[**English**](CODE_WIKI_EN.md)
+
 ## 目录
 
 - [文档统计与索引](#文档统计与索引)
