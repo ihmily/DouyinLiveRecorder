@@ -76,20 +76,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # python_build : 打包解释器版本。有意固定为 3.12（而非 ci.yml 的
-          #                python_latest = 3.13）—— 发布二进制的解释器一经验证不轻易变更；
+          # python_build : 打包解释器版本（3.14，与 ci.yml 的 python_build 同值）——
+          #                发布二进制的解释器一经验证不轻易变更；
           #                ci.yml 的 build-verify job 使用同一版本，保证验证环境 == 发布环境。
           # node_version : 与 ci.yml 同值；供冒烟测试期间 JS 签名脚本可用
           #                （full 版本内置的 node 由 build_exe.py 自行下载，与此无关）。
           {
-            echo "python_build=3.12"
+            echo "python_build=3.14"
             echo "node_version=24"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Setup Python 3.12
+      - name: Setup Python 3.14
         uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: "3.14"
 
       # 用 tomllib（3.11+ 标准库）解析，避免正则误匹配
       - name: Extract version from pyproject.toml
