@@ -166,3 +166,85 @@ class TestLanguageSwitching:
         # 直接构造翻译函数时目录缺失回退恒等映射
         tr = i18n._build_translator(i18n.locale_path, "zh_CN")
         assert tr("不存在的串") == "不存在的串"
+
+
+class TestResolveLanguage:
+    """resolve_language：配置键 language 的统一解析（空 → 系统语言；异常 → en_US 回退）。"""
+
+    def test_empty_uses_system_language(self) -> None:
+        # 空 → 系统语言（检测命中受支持语言且有目录；带编码后缀的写法同样归一）
+        with patch.object(i18n, "detect_system_language", return_value="zh_CN"):
+            assert i18n.resolve_language("") == "zh_CN"
+        with patch.object(i18n, "detect_system_language", return_value="en_US.UTF-8"):
+            assert i18n.resolve_language(None) == "en_US"
+
+    def test_empty_system_unrecognized_falls_back(self) -> None:
+        # 系统语言不受支持（无别名/目录）→ en_US
+        with patch.object(i18n, "detect_system_language", return_value="fr_FR"):
+            assert i18n.resolve_language("") == i18n.FALLBACK_LANGUAGE
+
+    def test_empty_system_undetectable_falls_back(self) -> None:
+        # 系统语言检测失败（返回 None）→ en_US
+        with patch.object(i18n, "detect_system_language", return_value=None):
+            assert i18n.resolve_language("  ") == i18n.FALLBACK_LANGUAGE
+
+    def test_recognized_value_kept(self) -> None:
+        # 可识别且有目录 → 归一化后返回该语言（别名/大小写/连字符写法均支持）
+        assert i18n.resolve_language("zh_cn") == "zh_CN"
+        assert i18n.resolve_language("zh-CN") == "zh_CN"
+        assert i18n.resolve_language("en") == "en_US"
+        assert i18n.resolve_language("zh-Hant") == "zh_TW"
+        assert i18n.resolve_language("en_GB") == "en_GB"
+
+    def test_unrecognized_value_falls_back(self) -> None:
+        # 键值不可识别（既非受支持码也非别名）→ en_US
+        assert i18n.resolve_language("fr_FR") == i18n.FALLBACK_LANGUAGE
+        assert i18n.resolve_language("java") == i18n.FALLBACK_LANGUAGE
+
+    def test_missing_catalog_falls_back(self) -> None:
+        # 可识别但语言目录文件缺失（如打包遗漏）→ en_US；空值走系统语言时同样兜底
+        with patch.object(i18n, "has_catalog", return_value=False):
+            assert i18n.resolve_language("zh_CN") == i18n.FALLBACK_LANGUAGE
+            with patch.object(i18n, "detect_system_language", return_value="zh_CN"):
+                assert i18n.resolve_language("") == i18n.FALLBACK_LANGUAGE
+
+    def test_fallback_language_is_en_us(self) -> None:
+        # 回退语言固定为 en_US（语言文件缺失时的默认显示语言）
+        assert i18n.FALLBACK_LANGUAGE == "en_US"
+
+
+class TestDetectSystemLanguage:
+    """detect_system_language：环境变量优先，Windows UI 语言与 POSIX locale 兜底。"""
+
+    def _env_without_locale_vars(self) -> dict[str, str]:
+        return {k: v for k, v in os.environ.items() if not k.startswith(("LANGUAGE", "LC_", "LANG"))}
+
+    def test_language_env_var_takes_first_of_list(self) -> None:
+        # LANGUAGE 为冒号分隔列表，取首项
+        env = self._env_without_locale_vars()
+        env["LANGUAGE"] = "zh_CN:en_US"
+        with patch.dict(os.environ, env, clear=True):
+            assert i18n.detect_system_language() == "zh_CN"
+
+    def test_lang_env_var(self) -> None:
+        env = self._env_without_locale_vars()
+        env["LANG"] = "en_US.UTF-8"
+        with patch.dict(os.environ, env, clear=True):
+            assert i18n.detect_system_language() == "en_US.UTF-8"
+
+    def test_c_and_posix_env_ignored(self) -> None:
+        # C / POSIX 视为未设置：Windows 走 UI 语言、其他平台走 getlocale，均不得返回 "C"
+        env = self._env_without_locale_vars()
+        env["LANG"] = "C"
+        with patch.dict(os.environ, env, clear=True):
+            assert i18n.detect_system_language() != "C"
+
+    def test_returns_none_when_nothing_detectable(self) -> None:
+        # 全部来源不可用 → None（调用方 resolve_language 据此回退 en_US）
+        env = self._env_without_locale_vars()
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(i18n, "_windows_ui_language", return_value=None),
+            patch.object(i18n.locale, "getlocale", return_value=(None, None)),
+        ):
+            assert i18n.detect_system_language() is None

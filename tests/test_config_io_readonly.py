@@ -16,7 +16,7 @@ def test_read_config_value_missing_key_readonly_ok(tmp_path: Path, monkeypatch: 
     # （只读 / 被占用）时，必须只记 warning 并返回默认值，而不是抛出 PermissionError
     # 导致整个 app 在 import main 阶段崩溃。
     cfg = tmp_path / "config.ini"
-    cfg.write_text("[录制设置]\nlanguage(zh_cn/en)=zh_cn\n", encoding="utf-8")
+    cfg.write_text("[录制设置]\nlanguage=zh_cn\n", encoding="utf-8")
     # 设为只读，模拟「配置文件被占用 / 不可写」场景
     cfg.chmod(0o444)
 
@@ -123,9 +123,9 @@ def test_https_config_legacy_key_migrates_no(tmp_path: Path, monkeypatch: Monkey
 def test_https_config_both_missing_writes_default(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     # 新旧键皆无 → read_config_value 补写新键默认值「否」（配置自愈）
     cfg = tmp_path / "config.ini"
-    cfg.write_text("[录制设置]\nlanguage(zh_cn/en)=zh_cn\n", encoding="utf-8")
+    cfg.write_text("[录制设置]\nlanguage=zh_cn\n", encoding="utf-8")
     monkeypatch.setattr(main, "config_file", str(cfg))
-    parser = _make_parser("[录制设置]\nlanguage(zh_cn/en)=zh_cn\n")
+    parser = _make_parser("[录制设置]\nlanguage=zh_cn\n")
     assert main._read_https_recording_config(parser) is False
     migrated = _read_migrated(cfg)
     assert migrated.get("录制设置", "是否启用https录制") == "否"
@@ -172,8 +172,53 @@ def test_sync_ssl_disable_platforms_idempotent(tmp_path: Path, monkeypatch: Monk
 def test_sync_ssl_disable_platforms_missing_key_writes_default(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     # 键整体缺失 → read_config_value 补写空默认值，随后追加必需平台
     cfg = tmp_path / "config.ini"
+    cfg.write_text("[录制设置]\nlanguage=zh_cn\n", encoding="utf-8")
+    monkeypatch.setattr(main, "config_file", str(cfg))
+    parser = _make_parser("[录制设置]\nlanguage=zh_cn\n")
+    result = main._sync_ssl_disable_platforms(parser)
+    assert result == set(main.SSL_DISABLE_REQUIRED_PLATFORMS)
+
+
+# ---------------- 「language」语言键迁移读取 ----------------
+
+
+def test_language_new_key_present(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    # 新键存在 → 直接取值，不触发任何写回
+    cfg = tmp_path / "config.ini"
+    cfg.write_text("[录制设置]\nlanguage=en_US\n", encoding="utf-8")
+    monkeypatch.setattr(main, "config_file", str(cfg))
+    parser = _make_parser("[录制设置]\nlanguage=en_US\n")
+    assert main._read_language_config(parser) == "en_US"
+    assert cfg.read_text(encoding="utf-8") == "[录制设置]\nlanguage=en_US\n"
+
+
+def test_language_legacy_key_migrates(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    # 新键缺失、旧键 language(zh_cn/en)=zh_cn → 继承旧值并迁移写回新键（旧键保留仅作历史）
+    cfg = tmp_path / "config.ini"
     cfg.write_text("[录制设置]\nlanguage(zh_cn/en)=zh_cn\n", encoding="utf-8")
     monkeypatch.setattr(main, "config_file", str(cfg))
     parser = _make_parser("[录制设置]\nlanguage(zh_cn/en)=zh_cn\n")
-    result = main._sync_ssl_disable_platforms(parser)
-    assert result == set(main.SSL_DISABLE_REQUIRED_PLATFORMS)
+    assert main._read_language_config(parser) == "zh_cn"
+    migrated = _read_migrated(cfg)
+    assert migrated.get("录制设置", "language") == "zh_cn"
+    assert migrated.has_option("录制设置", "language(zh_cn/en)")
+
+
+def test_language_new_key_empty_overrides_legacy(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    # 新旧键同时存在（迁移后旧键残留）→ 以新键为准：新键空值即「跟随系统语言」，不继承旧键
+    cfg = tmp_path / "config.ini"
+    cfg.write_text("[录制设置]\nlanguage=\nlanguage(zh_cn/en)=zh_cn\n", encoding="utf-8")
+    monkeypatch.setattr(main, "config_file", str(cfg))
+    parser = _make_parser("[录制设置]\nlanguage=\nlanguage(zh_cn/en)=zh_cn\n")
+    assert main._read_language_config(parser) == ""
+
+
+def test_language_both_missing_writes_empty_default(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    # 新旧键皆无 → read_config_value 补写新键空默认值（空 = 跟随系统语言，解析由 i18n 兜底）
+    cfg = tmp_path / "config.ini"
+    cfg.write_text("[录制设置]\n是否启用https录制=否\n", encoding="utf-8")
+    monkeypatch.setattr(main, "config_file", str(cfg))
+    parser = _make_parser("[录制设置]\n是否启用https录制=否\n")
+    assert main._read_language_config(parser) == ""
+    migrated = _read_migrated(cfg)
+    assert migrated.get("录制设置", "language") == ""
