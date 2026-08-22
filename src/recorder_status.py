@@ -66,7 +66,7 @@ def get_status() -> dict[str, object]:
                 error_val = main.error_count
                 snapshot_ok = True
                 break
-        except (RuntimeError, IndexError):
+        except RuntimeError, IndexError:
             continue
     if not snapshot_ok:
         logger.warning("获取录制状态失败（并发竞争），返回空快照")

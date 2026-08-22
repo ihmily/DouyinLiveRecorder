@@ -107,7 +107,7 @@ class WsClient:
                         hb_task.cancel()
                         try:
                             await hb_task
-                        except (asyncio.CancelledError, Exception):
+                        except asyncio.CancelledError, Exception:
                             pass
             except asyncio.CancelledError:
                 break

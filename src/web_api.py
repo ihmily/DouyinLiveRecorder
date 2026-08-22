@@ -388,7 +388,7 @@ def create_app(
             # 无法识别的语言值（既非受支持码也非已知别名）→ 400 而非静默回退
             raise HTTPException(400, f"不支持的语言: {req.language}")
         normalized = i18n_module.normalize_language(req.language)
-        if not update_config_line(cast(str, app.state.config_file), "录制设置", "language(zh_cn/en)", normalized):
+        if not update_config_line(cast(str, app.state.config_file), "录制设置", "language", normalized):
             raise HTTPException(500, "语言配置写回失败")
         _ = i18n_module.set_language(normalized)
         return {"ok": True, "language": normalized}

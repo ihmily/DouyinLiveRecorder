@@ -386,7 +386,7 @@ async def get_douyin_web_stream_data(
                             continue
                         try:
                             cand_data = cast(dict[str, object], _loads_dict(candidate).get("data") or {})
-                        except (json.JSONDecodeError, TypeError):
+                        except json.JSONDecodeError, TypeError:
                             continue
                         if "origin" not in cand_data:
                             continue
@@ -399,7 +399,7 @@ async def get_douyin_web_stream_data(
                                 "VCodec", ""
                             )
                             codec = codec_val if isinstance(codec_val, str) else ""
-                        except (json.JSONDecodeError, KeyError, TypeError):
+                        except json.JSONDecodeError, KeyError, TypeError:
                             codec = ""
                         if "h265" in codec.lower() or "hevc" in codec.lower():
                             hevc_candidate = candidate
@@ -551,7 +551,7 @@ async def get_douyin_app_stream_data(
                                 sd_data = cast(dict[str, object], _loads_dict(stream_data).get("data") or {})
                                 sd_origin = cast(dict[str, object], sd_data.get("origin") or {})
                                 origin_data = cast(dict[str, object], sd_origin.get("main") or {})
-                            except (json.JSONDecodeError, TypeError):
+                            except json.JSONDecodeError, TypeError:
                                 origin_data = {}
                             sdk_params_raw = origin_data.get("sdk_params", "{}")
                             sdk_params = _loads_dict(sdk_params_raw if isinstance(sdk_params_raw, str) else "{}")
@@ -4461,7 +4461,7 @@ async def get_migu_stream_url(
                     timeout=30,
                 )
                 return result.stdout.strip()
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
+            except subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError:
                 raise ProgramError("Failed to execute JS code. Please check if the Node.js environment")
 
         real_source_url = await _get_dd_calcu(source_url)
