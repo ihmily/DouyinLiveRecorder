@@ -105,7 +105,7 @@
 
 | 技术                               | 用途                                                   |
 | -------------------------------- | ---------------------------------------------------- |
-| Python 3.10+                     | 核心编程语言                                               |
+| Python 3.14+                     | 核心编程语言                                               |
 | asyncio + httpx                  | 异步网络请求                                               |
 | asyncio                          | 异步装饰器支持                                              |
 | FFmpeg                           | 视频录制与转码                                              |
@@ -911,7 +911,7 @@ web.py
 
 | 配置项                | 说明                                                                                                                | 默认值                                                                                                                |     |       |       |                        |    |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | --- | ----- | ----- | ---------------------- | -- |
-| language(zh_cn/en) | 界面语言（键名保留兼容，值支持 zh_cn/zh_CN/en/en_US/en_GB/zh_TW 等写法，经 normalize_language 归一；Web/GUI 可即时切换并写回本键） | zh_cn                                                                                                              |     |       |       |                        |    |
+| language           | 界面语言（留空跟随系统语言；值支持 zh_cn/zh_CN/en/en_US/en_GB/zh_TW 等写法，经 resolve_language 解析归一，不可识别或语言文件缺失回退 en_US；旧键 language(zh_cn/en) 启动时自动迁移继承；Web/GUI 可即时切换并写回本键） | （空）                                                                                                              |     |       |       |                        |    |
 | 是否跳过代理检测(是/否)      | 是否跳过代理检测                                                                                                          | 是                                                                                                                  |     |       |       |                        |    |
 | 是否启用https录制        | 整合开关（合并原「是否强制启用https录制」与「是否禁用SSL证书验证(是/否)」）：开启=https 拉流+跳过证书校验；关闭=http 拉流+默认证书校验（https-only 海外平台保持原样）             | 否                                                                                                                  |     |       |       |                        |    |
 | 禁用SSL证书验证的平台(逗号分隔) | 平台级证书校验豁免列表：**仅在「需要证书校验」时生效**（即 http 录制模式，FFmpeg 9.0 起 TLS 证书验证默认开启）——列表内平台跳过证书校验（适用于虎牙/B站等证书异常平台）；https 录制模式已全局跳过、列表冗余。启动时自动追加缺失的必需平台（虎牙直播、B站直播，只追加不移除用户手填项） | 虎牙直播,B站直播                                                                                                          |     |       |       |                        |    |
@@ -1026,7 +1026,7 @@ https://live.douyin.com/745964462470
 
 #### 前置要求
 
-- Python 3.10+
+- Python 3.14+
 - FFmpeg
 - Node.js
 
@@ -1063,7 +1063,7 @@ python web.py
 
 ### 方式 2: Docker 运行
 
-#### Dockerfile 多阶段构建说明（基础镜像 `python:3.13-slim-bookworm`）
+#### Dockerfile 多阶段构建说明（基础镜像 `python:3.14-slim-bookworm`）
 
 ```dockerfile
 # 阶段 1: builder
@@ -1216,10 +1216,10 @@ def _app_root() -> str:
 | Job                  | 运行环境             | 内容                                                                                                                                              |
 | -------------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | `static`             | py 最新            | `black --check .` + `isort --check .` + `python scripts/check_version.py`（版本号单一事实源校验） + `python scripts/compile_po.py --check`（i18n po/mo 同步校验） |
-| `typecheck`          | py3.10           | 安装 requirements + mypy 后运行 `mypy src/`                                                                                                          |
-| `test`               | py3.10           | `pytest --cov=src --cov-report=term-missing`（全局 `fail_under=50` 门禁）                                                                             |
-| `concurrency-test`   | py3.10           | 并发专项：`COVERAGE_RCFILE=.coveragerc-concurrency` 下跑 `test_concurrency_rate_limit.py` + `test_concurrency.py`（专用配置不设全局阈值，避免与完整 test job 冲突）        |
-| `integration-verify` | py3.10 + Node 24 | apt 安装 ffmpeg；验证 ffmpeg/node 二进制可发现、版本可读，并调用 `check_ffmpeg_installed()` / `check_nodejs_installed()` 验证检测逻辑                                     |
+| `typecheck`          | py3.14           | 安装 requirements + mypy 后运行 `mypy src/`                                                                                                          |
+| `test`               | py3.14           | `pytest --cov=src --cov-report=term-missing`（全局 `fail_under=50` 门禁）                                                                             |
+| `concurrency-test`   | py3.14           | 并发专项：`COVERAGE_RCFILE=.coveragerc-concurrency` 下跑 `test_concurrency_rate_limit.py` + `test_concurrency.py`（专用配置不设全局阈值，避免与完整 test job 冲突）        |
+| `integration-verify` | py3.14 + Node 24 | apt 安装 ffmpeg；验证 ffmpeg/node 二进制可发现、版本可读，并调用 `check_ffmpeg_installed()` / `check_nodejs_installed()` 验证检测逻辑                                     |
 | `build-verify`       | ubuntu-latest    | PyInstaller 打包 + 冒烟测试（仅 python 类变更触发）                                                                                                           |
 | `ci-summary`         | —                | 汇总以上全部 job 的 required check 状态                                                                                                                  |
 
@@ -1232,11 +1232,11 @@ def _app_root() -> str:
 - 手动触发（`workflow_dispatch`）：三平台构建并上传 artifact。
 - 推送 `v*` 标签（如 `v4.0.8`）：构建 + 自动创建 GitHub Release 并附产物（`permissions: contents: write`）。
 
-**构建矩阵**：`windows-latest` / `ubuntu-latest` / `macos-latest`，Python 3.12（`fail-fast: false`）。
+**构建矩阵**：`windows-latest` / `ubuntu-latest` / `macos-latest`，Python 3.14（`fail-fast: false`）。
 
 **流程**：
 
-1. Checkout → Setup Python 3.12（pip 缓存）。
+1. Checkout → Setup Python 3.14（pip 缓存）。
 2. 各平台用系统包管理器安装 ffmpeg 供冒烟测试：Windows `choco install ffmpeg`、Linux `apt`（额外装 `xvfb`，GUI 冒烟需虚拟显示）、macOS `brew install ffmpeg`（先 `brew trust aws/tap` 兜底 runner 预置未受信 tap）。
 3. `pip install -r requirements.txt pyinstaller`。
 4. `python build_exe.py --smoke --dual`（Linux 用 `xvfb-run -a` 包裹）：PyInstaller 只跑一次，先产 **lite** zip（不含 ffmpeg/node，运行时自动下载）再下载预构建二进制产 **full** zip（内置运行时）；冒烟测试跑在 lite 版本上。
@@ -1461,6 +1461,63 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 ---
 
 ## 更新日志
+
+### v4.0.9-dev (2026-08-23) — Python 3.14 升级 + 语言配置键迁移（综合维护）
+
+**来源**：用户要求将项目升级至 Python 3.14，全面检查并移除已被废弃的语法/模块/特性，将最低版本要求从 Python 3.10 提升至 `>=3.14`，同时将 `config/config.ini` 的 `language(zh_cn/en)` 配置项统一改为 `language`，并实现"留空跟随系统语言、不可识别回退 en_US、GUI/Web 面板支持免重启热切换、启动时自动迁移旧键值"的完整链路。
+
+**改动**：
+
+- **Python 版本基线升级（`pyproject.toml` + `Dockerfile` + `.github/workflows/ci.yml` + `AGENTS.md` + 文档）**：
+  - `pyproject.toml`：`requires-python = ">=3.14"`、`[tool.black] target-version = ['py314']`、`[tool.mypy] python_version = "3.14"`、`[tool.pytest] asyncio_mode = "auto"` 保持不变；`uv.lock` 同步升级 Python 版本标记。
+  - `Dockerfile`：基础镜像由 `python:3.13-slim-bookworm` 升级为 `python:3.14-slim-bookworm`，`APP_VERSION` build-arg 机制不变。
+  - `.github/workflows/ci.yml`：`setup-python` 的 `python-version` 矩阵由 `'3.13'` 更新为 `'3.14'`（`typecheck` / `test` / `concurrency-test` / `integration-verify` / `build-verify` 全链路统一）。
+  - `AGENTS.md`：项目概览、Python 版本、已知坑条目、mypy 检查版本全部对齐为 Python 3.14，并新增 3.14 破坏性变更基线说明（`asyncio.get_event_loop()`、`pkg_resources`、`PEP 594` 亡故电池、`ctypes.windll` 使用约定）。
+  - `README.md` / `README_EN.md` / `CODE_WIKI.md`：Python 徽章由 `3.13` 改为 `3.14`，运行方式前置要求同步更新。
+
+- **Python 3.14 兼容性修复（`src/async_http.py`）**：
+  - `close_all_clients_sync()`（`atexit` / 信号钩子调用）因 Python 3.14 起 `asyncio.get_event_loop()` 在当前线程无循环时抛 `RuntimeError`（≤3.13 为隐式创建 + `DeprecationWarning`），改为 `try: asyncio.get_event_loop() except RuntimeError: loop = None` 捕获 `RuntimeError`，以引用清理兜底；协程内获取循环统一走 `asyncio.get_running_loop()`。
+  - 新增「`asyncio.get_event_loop()` 3.14 起不再隐式创建事件循环」条目记入 `AGENTS.md` 已知坑，供后续维护参考。
+
+- **语言配置键迁移与系统语言回退（`i18n.py` + `main.py` + `gui.py` + `src/web_api.py` + `src/web_config.py`）**：
+  - `i18n.py`：新增 `FALLBACK_LANGUAGE = "en_US"`、`detect_system_language()`（环境变量 `LANGUAGE`/`LC_ALL`/`LC_MESSAGES` → Windows `GetUserDefaultUILanguage` → POSIX `locale.getdefaultlocale()`）、`has_catalog(lang)`（按 `i18n/<lang>/` 多格式目录探测可用翻译）、`resolve_language(value)`（空值 → 系统语言 → `FALLBACK_LANGUAGE`；非法值或目录缺失 → `FALLBACK_LANGUAGE`）。
+  - `main.py`：新增 `_read_language_config()`，启动时读取 `config.ini` 中 `language` 新键；若仅存在旧键 `language(zh_cn/en)` 则读取其值、迁移写回新键、旧键保留仅作历史；主循环每轮按 `resolve_language` 同步 i18n 翻译函数，保证 Web/GUI 面板改配置后 CLI 下一轮即时热切换。
+  - `gui.py`：初始语言读取改为先查 `language` 新键、回退旧键 `language(zh_cn/en)`、再回退系统语言；侧边栏「语言 Language」菜单写回 `language` 新键。
+  - `src/web_api.py`：`PUT /api/language` 写回键名由 `language(zh_cn/en)` 改为 `language`；`GET /api/language` 返回值经 `resolve_language` 归一化。
+  - `src/web_config.py`：`_write_language_section` 写入 `language = {value}` 而非旧键，避免并行编辑冲突时回退到旧字段。
+
+- **测试补充（`tests/test_i18n.py` + `tests/test_web_api.py` + `tests/test_config_io_readonly.py`）**：
+  - `tests/test_i18n.py`：新增 `TestResolveLanguage`（空值→系统语言→en_US、非法值→en_US、目录缺失→en_US、合法值直接返回）、`TestDetectSystemLanguage`（环境变量优先）共 8 个用例。
+  - `tests/test_web_api.py`：修复 `_write_language_section` 回归，确保写入新键 `language` 而非旧键。
+  - `tests/test_config_io_readonly.py`：新增语言键迁移 3 个用例（旧键自动迁移写回、新键优先、默认值补写）。
+
+- **代码风格与静态检查（`black` / `isort` / `mypy` / `basedpyright`）**：
+  - 升级 `black` 目标版本为 `py314`（PEP 758 `except A, B` 语法自动支持），全项目 `black .` / `isort .` 重格式化；`mypy src/` 以 `python_version = "3.14"` 重新校验，`disallow_untyped_defs = true` 仍全通过；`basedpyright src/` 0 errors / 0 warnings。
+  - 新增代码全部补齐类型注解，保持项目 `disallow_untyped_defs = true` 门禁。
+
+- **质量门禁验证**：
+  - 全量 `pytest` **714 passed / 2 skipped / 0 warnings**（含新增的语言键迁移与 `async_http` 回归用例）；
+  - `black --check .` 全部文件 unchanged；`isort --check-only .` 全通过；
+  - `mypy src/` → `Success: no issues found`；`basedpyright src/` → **0 errors / 0 warnings / 0 notes**；
+  - `python scripts/compile_po.py --check` 确认 `.po` / `.mo` 字节级同步未受影响。
+
+- **文档与约定同步**：
+  - `AGENTS.md`：项目结构、Python 版本说明、已知坑、mypy 检查版本等章节同步更新，并新增 Python 3.14 迁移基线与 `language` 新键语义说明。
+  - `README.md` / `README_EN.md`：Python 徽章升级为 3.14，配置说明中的语言字段改为 `language =` 并补充系统回退 / 热切换说明。
+  - `CODE_WIKI.md`：本节（更新日志）新增本条；`i18n` 模块详解与配置文件表中 `language` 字段说明同步更新（见前文「配置文件说明」「国际化模块」章节）。
+
+**验证**：
+
+- `python -m py_compile` 全量源码通过；
+- `pytest` 全量 **714 passed / 2 skipped / 0 warnings**；
+- `mypy src/` → `Success: no issues found in 37 source files`；
+- `basedpyright src/` → **0 errors / 0 warnings / 0 notes**；
+- `black --check .` / `isort --check-only .` 全项目通过；
+- 手动验证：`config.ini` 仅含旧键 `language(zh_cn/en) = zh_cn` 时启动主程序会自动迁移为 `language = zh_cn`、旧键保留；`language =` 空值时 CLI/GUI/Web 均按系统语言显示；GUI 侧边栏与 Web 面板切换语言后即时生效、无需重启。
+
+**关联**：
+- 与前序 v4.0.8.3-dev (2026-08-22) 「pythonw / 窗口化运行崩溃可观测性加固」为同一系列 Python 3.14 兼容性收尾工作，后者修复 `logger` 在无控制台环境下的崩溃，本条修复事件循环与配置层面的 3.14 兼容。
+- `asyncio.get_event_loop()` 的 RuntimeError 兜底模式、`language` 键迁移模式、系统语言检测约定均已沉淀至 `AGENTS.md` 已知坑章节，供后续改动参考。
 
 ### v4.0.8.3-dev (2026-08-22) — pythonw / 窗口化运行崩溃可观测性加固：logger None-stderr 守卫 + 顶层崩溃落盘钩子（缺陷修复）
 

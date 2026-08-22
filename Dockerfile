@@ -1,7 +1,7 @@
 # =============================================================================
 # DouyinLiveRecorder Dockerfile
 # 支持抖音、TikTok、YouTube等60+平台直播录制工具
-# 基础镜像：python:3.13-slim-bookworm（Debian 12，最小 Python 运行时）
+# 基础镜像：python:3.14-slim-bookworm（Debian 12，最小 Python 运行时）
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -11,7 +11,7 @@
 # 弹幕（src/danmaku）运行时依赖 websockets / protobuf / brotli 也在此阶段随
 # requirements.txt 一并装入 /opt/venv，运行时直接可用。
 # -----------------------------------------------------------------------------
-FROM python:3.13-slim-bookworm AS builder
+FROM python:3.14-slim-bookworm AS builder
 
 # 设置环境变量（无缓冲输出便于容器日志、禁止写字节码减小体积、关闭 pip 缓存与版本检查）
 ENV PYTHONUNBUFFERED=1 \
@@ -41,7 +41,7 @@ RUN /opt/venv/bin/pip install --upgrade pip \
 # -----------------------------------------------------------------------------
 # 阶段2：运行阶段 - 最小化运行镜像
 # -----------------------------------------------------------------------------
-FROM python:3.13-slim-bookworm
+FROM python:3.14-slim-bookworm
 
 # 标签（version 由构建参数 APP_VERSION 注入，来自 pyproject.toml 的 version）
 LABEL maintainer="Hmily <ihmily@github>" \

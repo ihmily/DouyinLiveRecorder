@@ -11,9 +11,10 @@
 
 ## Python 版本
 
-- **最低要求**: Python >= 3.10
-- **目标版本**: py310, py311, py312, py313
-- **mypy 检查版本**: 3.10
+- **最低要求**: Python >= 3.14
+- **目标版本**: py314
+- **mypy 检查版本**: 3.14
+- **3.14 破坏性变更基线**: `asyncio.get_event_loop()` 不再隐式创建事件循环（无当前循环时抛 RuntimeError）；`pkg_resources`、PEP 594 亡故电池模块（telnetlib/cgi/pipes 等）均已移除；`ctypes.windll` 虽仍可用但新代码统一走 `ctypes.WinDLL`（对齐 web.py 惯例）
 
 ## 代码风格
 
@@ -21,7 +22,7 @@
 
 ```toml
 line-length = 120
-target-version = ['py310', 'py311', 'py312', 'py313']
+target-version = ['py314']
 include = '\.pyi?$'
 ```
 
@@ -40,7 +41,7 @@ known_first_party = ["src", "i18n"]
 ### mypy
 
 ```toml
-python_version = "3.10"
+python_version = "3.14"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
@@ -192,6 +193,7 @@ mypy src/
 - **UA 双端一字不差约定与全库统一基准**：录制拉流链的 UA 存在两组"必须一字不差"的配对——`main.py` ffmpeg 命令默认移动 UA ≡ `stream_select.MOBILE_UA`（校验探针与 ffmpeg 客户端指纹一致，否则校验假红/假绿）；`room.HEADERS` 的 UA 参与 X-Bogus 签名（签名以请求头同一 UA 计算、自洽，改字符串安全但四处须同步：`stream_select.MOBILE_UA`、`main.py` ffmpeg 默认 UA、`room.HEADERS`、B站 H5 接口 UA）。全库统一基准（2026-08）：桌面 Chrome/141（对齐 `room.DESKTOP_UA`）、Edg/141、Firefox/148（rv:148.0）、移动端 `Android 14; Pixel 8` Chrome/141——新增 UA 或升级版本时必须对齐该基准，禁止回落 Chrome≤138/Firefox≤127/SamsungBrowser 等过旧指纹（过旧 UA 是风控按指纹识别的特征之一）。
 - **探针节流/抖动语义不得移除**：`src/stream_select.py` 的同 host 探针节流（`_throttle_probe`，`_PROBE_MIN_HOST_INTERVAL=0.35s`+抖动，按 host 全局限速）与重试抖动（`_recheck_delay`，`0.8s+uniform(0,0.7s)`）用于消除两类机器人节奏指纹：多房间并发下同 CDN 的毫秒级连击探针、固定 0.8s 恒定重试间隔。把重试间隔改回固定值或移除节流会重新引入"按节奏识别→误触发 403"的风控误伤（实测虎牙/斗鱼 CDN 均有此行为）。测试侧依赖 autouse fixture 把 `_throttle_probe` 置 no-op（部分用例 patch 整个 time 模块，真实节流的时间差比较会炸）；节流专项测试经 from-import 的真实函数引用绕过 no-op。
 - **「禁用SSL证书验证的平台」仅在需要证书校验时生效（FFmpeg 9.0 语义）**：FFmpeg 9.0 起 TLS 证书验证默认开启。`http_config.get_effective_ssl_verify` 的平台覆盖仅在全局 `ssl_verify=True`（http 录制模式，即需要证书校验时）参与读取；https 录制模式全局已禁用、平台覆盖无意义。`main.py` 启动时经 `_sync_ssl_disable_platforms` 把证书异常平台（虎牙直播/B站直播，`SSL_DISABLE_REQUIRED_PLATFORMS`）自动追加至配置键并写回——只追加、绝不移除用户手填项。`update_config_line` 的键匹配为大小写不敏感（与 configparser optionxform 语义对齐），改回精确匹配会导致代码常量（大写 SSL/SMTP）与配置文件行（小写）无法互找。
-- **i18n 多格式目录与语言热切换**：`i18n.py` 按语言依次探测 gettext `.mo` → `<lang>.json` → `<lang>.yaml`（zh_CN 用 .mo、en_US/en_GB 用 .json、zh_TW 用 .yaml）；四种目录键集合必须一致（test_i18n.py 强制）。`set_language()` 热替换 `_tr` 供 Web（PUT /api/language）/GUI（侧边栏语言菜单）/main 主循环（每轮重同步）即时切换；`language(zh_cn/en)` 配置键名保留兼容，值经 `normalize_language` 归一（别名表键统一为「小写+连字符」形态）。修改 zh_CN.po 后必须 `python scripts/compile_po.py` 重编译 .mo（测试强制字节级同步）。
+- **i18n 多格式目录与语言热切换**：`i18n.py` 按语言依次探测 gettext `.mo` → `<lang>.json` → `<lang>.yaml`（zh_CN 用 .mo、en_US/en_GB 用 .json、zh_TW 用 .yaml）；四种目录键集合必须一致（test_i18n.py 强制）。`set_language()` 热替换 `_tr` 供 Web（PUT /api/language）/GUI（侧边栏语言菜单）/main 主循环（每轮重同步）即时切换；语言配置键为 `language`，统一经 `i18n.resolve_language` 解析——留空 → 系统语言（`detect_system_language`：环境变量 → Windows UI 语言 → POSIX locale），键值不可识别或语言目录文件缺失 → 回退 `FALLBACK_LANGUAGE`（en_US）；旧键 `language(zh_cn/en)` 由 `main._read_language_config` 启动时继承迁移写回新键（旧键保留仅作历史）。值经 `normalize_language` 归一（别名表键统一为「小写+连字符」形态）。修改 zh_CN.po 后必须 `python scripts/compile_po.py` 重编译 .mo（测试强制字节级同步）。
 - **migu.js 输出契约为完整签名 URL**：2026-08 重写后的 `src/javascript/migu.js` 适配 migu 播放器 v_20260731+ 的 wasm 接口（导入函数 a..l 共 12 个、导出名整体重排：memory=m/malloc=p/CI1=t…CI14=F），并改为输出带 `ddCalcu`/`sv` 参数的**完整地址**（sv 由官网因子接口获取，失败回退播放器内置默认因子）；`spider.get_migu_stream_url` 直接使用该 URL，不再拼接固定 `sv=10010`（已过期）。
 - **Node 24 / FFmpeg 9.0 兼容基线（2026-08）**：Node 运行时以 24.19.0 实测为准（全部 JS 签名脚本 + migu.js 通过），Dockerfile 随之安装 Node 24 LTS；FFmpeg 以 9.0 为基线——9.0 移除的 CLI 参数（`-vsync`/`-top`/`-qphist`/`-filter_complex_script`/`-adrift_threshold`）禁止引入，录制命令中的冗余 `-v verbose` 已删除（被 `-loglevel error` 覆盖）。
+- **`asyncio.get_event_loop()` 3.14 起不再隐式创建事件循环**：当前线程无循环时抛 `RuntimeError`（≤3.13 为隐式创建+DeprecationWarning）。`src/async_http.py` 的 `close_all_clients_sync`（atexit/信号钩子调用）已改为捕获 RuntimeError 后走引用清理兜底；协程内获取循环一律用 `get_running_loop()`，atexit 类同步清理如需复用已存在的循环，保持「try get_event_loop / except RuntimeError → 引用清理」结构，不要改回裸调用。

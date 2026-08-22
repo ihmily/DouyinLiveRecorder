@@ -78,8 +78,8 @@ import subprocess
 import sys
 import threading
 import time
-import traceback
 import tkinter as tk
+import traceback
 from collections import deque
 from collections.abc import Callable
 from datetime import datetime
@@ -993,14 +993,20 @@ class LiveRecorderGUI:
             dropdown_hover_color=(Colors.PRIMARY_SOFT_LIGHT, Colors.PRIMARY_SOFT_DARK),
         )
         self.language_menu.pack(fill=tk.X, padx=2, pady=(0, 12))
-        # 初始值：读 config.ini 的语言键（缺失/非法回退默认），同步到 i18n
+        # 初始值：读 config.ini 的 language 键（新键缺失时读旧键 language(zh_cn/en) 继承
+        # 迁移值，写回迁移由 main() 启动时完成；空 → 系统语言，未识别/目录缺失 → en_US）
         try:
             _cfg = configparser.ConfigParser(interpolation=None)
             _cfg.read(self.main_config_file, encoding="utf-8-sig")
-            _raw_lang = _cfg.get("录制设置", "language(zh_cn/en)", fallback="") if _cfg.has_section("录制设置") else ""
+            _raw_lang = ""
+            if _cfg.has_section("录制设置"):
+                if _cfg.has_option("录制设置", "language"):
+                    _raw_lang = _cfg.get("录制设置", "language", fallback="")
+                elif _cfg.has_option("录制设置", "language(zh_cn/en)"):
+                    _raw_lang = _cfg.get("录制设置", "language(zh_cn/en)", fallback="")
         except Exception:
             _raw_lang = ""
-        _norm_lang = i18n_module.normalize_language(_raw_lang)
+        _norm_lang = i18n_module.resolve_language(_raw_lang)
         _ = i18n_module.set_language(_norm_lang)
         self.language_menu.set(self._language_names.get(_norm_lang, self._language_names[i18n_module.DEFAULT_LANGUAGE]))
 
@@ -1087,7 +1093,7 @@ class LiveRecorderGUI:
         _ = i18n_module.set_language(lang_code)
         # 写回 config.ini（行级更新保留注释；失败仅告警，不影响内存态切换）
         try:
-            if not update_config_line(self.main_config_file, "录制设置", "language(zh_cn/en)", lang_code):
+            if not update_config_line(self.main_config_file, "录制设置", "language", lang_code):
                 self._log(f"语言切换成功（{lang_code}），但配置写回失败：未找到 language 配置行", "warning")
             else:
                 self._log(f"语言已切换: {lang_code}（录制子进程重启后同步生效）")
@@ -2510,7 +2516,7 @@ class LiveRecorderGUI:
                         continue
                     try:
                         event = json.loads(line)
-                    except (ValueError, TypeError):
+                    except ValueError, TypeError:
                         continue
                     if isinstance(event, dict):
                         self._danmaku_dispatch(event)

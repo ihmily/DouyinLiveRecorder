@@ -9,11 +9,15 @@
 #
 # 运行时切换：set_language(lang) 热替换翻译函数（_tr），后续 print/logger 输出
 # 即时使用新语言，无需重启进程（Web 面板/GUI 的即时切换语言功能依赖此入口）。
+#
+# 语言解析：resolve_language(value) 为配置键 language 的统一解析入口——
+# 空 → 系统语言（detect_system_language）；不可识别或语言目录文件缺失 → en_US 回退。
 
 import builtins
 import gettext
 import inspect
 import json
+import locale
 import os
 import sys
 from pathlib import Path
@@ -37,6 +41,9 @@ SUPPORTED_LANGUAGES: dict[str, str] = {
 
 # 默认语言（源码输出以中文为主、部分英文常量串，缺失翻译时回退恒等映射）
 DEFAULT_LANGUAGE = "zh_CN"
+
+# 回退语言：配置键值不可识别、或对应语言的目录文件缺失时，统一回退显示该语言
+FALLBACK_LANGUAGE = "en_US"
 
 # 语言别名归一化表：配置文件/浏览器/历史键值里的各种写法 → 规范语言码。
 # 键统一为「小写 + 连字符」形态（normalize_language 会把下划线归一为连字符后查表）
@@ -92,6 +99,70 @@ def normalize_language(value: str | None) -> str:
     return DEFAULT_LANGUAGE
 
 
+# 检测系统语言，失败返回 None（不抛异常）：
+#   1) 环境变量 LANGUAGE / LC_ALL / LC_MESSAGES / LANG（LANGUAGE 为冒号分隔列表，
+#      取首项；C / POSIX 视为未设置）
+#   2) Windows：用户默认 UI 语言（LANGID 经 locale.windows_locale 映射为 zh_CN 等代码）
+#   3) POSIX：locale.getlocale()（进程已 setlocale 时有效）
+def detect_system_language() -> str | None:
+    for var in ("LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"):
+        value = os.environ.get(var, "").strip()
+        if value and value.upper() not in ("C", "POSIX"):
+            return value.split(":")[0].strip() or None
+    if sys.platform == "win32":
+        win_lang = _windows_ui_language()
+        if win_lang:
+            return win_lang
+    try:
+        current = locale.getlocale()[0]
+    except ValueError:
+        current = None
+    return current or None
+
+
+# Windows 用户默认 UI 语言代码（如 zh_CN / en_US）；非 Windows 或调用失败返回 None
+def _windows_ui_language() -> str | None:
+    try:
+        import ctypes
+
+        # WinDLL 而非 windll：与 web.py 的 Windows API 调用惯例一致（显式声明返回类型）
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetUserDefaultUILanguage.restype = ctypes.c_uint16
+        lang_id = int(kernel32.GetUserDefaultUILanguage())
+    except Exception:
+        return None
+    return locale.windows_locale.get(lang_id)
+
+
+# 判断某语言是否存在可加载的翻译目录文件（.mo / .json / .yaml 任一存在即可）
+def has_catalog(lang: str) -> bool:
+    base = Path(locale_path)
+    return (
+        (base / lang / "LC_MESSAGES" / f"{lang}.mo").is_file()
+        or (base / f"{lang}.json").is_file()
+        or (base / f"{lang}.yaml").is_file()
+    )
+
+
+# 把配置语言键值解析为最终显示语言（main.py 启动初始化/热切换与 GUI 初始解析的统一入口）：
+#   空 / 缺失         → 系统语言（检测结果不可用或无对应目录时回退 FALLBACK_LANGUAGE）
+#   可识别且有目录    → 该语言（别名归一化，如 zh-cn → zh_CN）
+#   不可识别 / 无目录 → FALLBACK_LANGUAGE（en_US）
+def resolve_language(value: str | None) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        system_lang = detect_system_language()
+        if system_lang and is_recognized_language(system_lang):
+            normalized = normalize_language(system_lang)
+            if has_catalog(normalized):
+                return normalized
+        return FALLBACK_LANGUAGE
+    if not is_recognized_language(raw):
+        return FALLBACK_LANGUAGE
+    normalized = normalize_language(raw)
+    return normalized if has_catalog(normalized) else FALLBACK_LANGUAGE
+
+
 # 检测执行目录，支持打包后 (_internal) 和源码两种运行方式
 # 优先基于本模块文件所在目录定位，避免 sys.argv[0] 在打包/-m 运行时被误解析；
 # 冻结运行时模块可能位于 PYZ 中，__file__ 指向 PYZ 目录，需回退到 sys._MEIPASS。
@@ -121,7 +192,7 @@ def _should_translate(caller_file: str) -> bool:
 def _load_json_catalog(path: Path) -> dict[str, str] | None:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
     if not isinstance(data, dict):
         return None
@@ -135,7 +206,7 @@ def _load_yaml_catalog(path: Path) -> dict[str, str] | None:
         return None
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
     if not isinstance(data, dict):
         return None
@@ -237,7 +308,7 @@ def translated_print(
         frame = inspect.currentframe()
         caller_file = frame.f_back.f_code.co_filename if frame and frame.f_back else ""
         should_translate = _should_translate(caller_file)
-    except (ValueError, AttributeError):
+    except ValueError, AttributeError:
         should_translate = False
 
     translated_args: list[str] = []

@@ -2,7 +2,7 @@
 
 ## 💡 简介
 
-[![Python Version](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Python Version](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
 [![Supported Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS-blue.svg)](https://github.com/y123ao6/DouyinLiveRecorder)
 [![GitHub issues](https://img.shields.io/github/issues/y123ao6/DouyinLiveRecorder.svg)](https://github.com/y123ao6/DouyinLiveRecorder/issues)
 [![Latest Release](https://img.shields.io/github/v/release/y123ao6/DouyinLiveRecorder)](https://github.com/y123ao6/DouyinLiveRecorder/releases/latest)
@@ -199,8 +199,8 @@ DouyinLiveRecorder/
 
 ```ini
 [录制设置]
-# 界面语言：zh_CN | en_US | en_GB | zh_TW（键名保留兼容，值支持 zh_cn/zh-CN/en/en-GB/zh-Hant 等写法，自动归一）
-language(zh_cn/en) = zh_CN
+# 界面语言：zh_CN | en_US | en_GB | zh_TW（留空跟随系统语言；值支持 zh_cn/zh-CN/en/en-GB/zh-Hant 等写法，自动归一；对应语言文件缺失时回退 en_US）
+language = zh_CN
 # 是否跳过代理检测(是/否)
 是否跳过代理检测(是/否) = 是
 # 是否启用日志文件(是/否)
@@ -562,7 +562,7 @@ Windows 下控制台默认「最小化到系统托盘」（`web_minimize_to_tray
 | `en_GB` | English (UK) | `i18n/en_GB.json` |
 | `zh_TW` | 繁體中文 | `i18n/zh_TW.yaml` |
 
-- 配置键 `language(zh_cn/en)` 保留兼容，取值支持 `zh_cn` / `zh-CN` / `en` / `en-US` / `en-GB` / `zh-Hant` / `zh_CN.UTF-8` 等写法，会自动归一化到规范语言码
+- 配置键 `language`（原 `language(zh_cn/en)`，启动时自动迁移继承旧值）：留空跟随系统语言；取值支持 `zh_cn` / `zh-CN` / `en` / `en-US` / `en-GB` / `zh-Hant` / `zh_CN.UTF-8` 等写法，自动归一化到规范语言码；键值不可识别或对应语言文件缺失时回退 `en_US`
 - **热切换**：GUI 侧边栏语言选择器、Web 面板顶栏语言选择器、直接编辑 `config.ini` 三种途径均可切换；命令行主循环每轮检测配置变化并即时重载翻译，**无需重启进程**（录制中的 ffmpeg 子进程不受影响）
 - 翻译不再依赖 `LANG` / `LANGUAGE` 环境变量（Windows 普遍未设置）
 - `zh_TW.yaml` 需要 `PyYAML`；缺失时仅损失该语言，其余格式不受影响
@@ -667,7 +667,7 @@ ports:
 
 ### 环境要求
 
-- Python >= 3.10
+- Python >= 3.14
 - FFmpeg (Linux/macOS 需要手动安装)
 - Node.js (Windows 下自动安装，Linux/macOS 需手动安装)
 
@@ -868,7 +868,7 @@ brew install node
 **📚 架构文档更新**
 - `CODE_WIKI.md` 补全弹幕采集子系统（基类/采集器/5 平台客户端/监控枢纽/SRT/WS/访客 Cookie 缓存/protobuf）、`src/platforms` 与 `src/proto` 模块说明、模块依赖图与设计模式；版本号更正为 4.0.8.3（对齐 `pyproject.toml` 唯一事实源）。
 
-### v4.0.8.2-dev (2026-08-16 ~ 2026-08-18) — 录制/弹幕/国际化/类型检查 系列修复
+### v4.0.8.2 (2026-08-16 ~ 2026-08-18) — 录制/弹幕/国际化/类型检查 系列修复
 
 > 本批改动集中解决了多个历史遗留的「能跑但录制/弹幕经常失败」类问题，并通过真机实测闭环验证。下分模块概述，详细根因与验证见 [CODE_WIKI.md](CODE_WIKI.md)。
 
@@ -910,7 +910,7 @@ brew install node
 - CI `lint` job 运行 Python 由 3.12 升到 3.13（与 `target-version` 最高值对齐，消除 AST 安全校验告警噪声），`black --check .` 格式违规已手工修复。
 - 全量测试约 635 passed / 2 skipped（排除已知沙箱删除保护项）。
 
-### v4.0.8.1-dev (2026-08-01 ~ 2026-08-09) — 注释规范 / 冒烟测试 / GUI 优雅退出 / 校验修复 整合
+### v4.0.8.1 (2026-08-01 ~ 2026-08-09) — 注释规范 / 冒烟测试 / GUI 优雅退出 / 校验修复 整合
 
 **注释规范与质量基线**
 - 模块/函数说明统一使用 `#` 行注释，不再使用三引号 `"""` 文档字符串。
@@ -937,7 +937,7 @@ brew install node
 - 主播主页（格式 5）直接提取 `sec_user_id` 跳重复下载，请求数 4→3；主页类链接现正确透传 `proxy_addr`/`cookies`（修复静默丢失）；新增 `sec_user_id → 抖音号` 进程级缓存（30 分钟 TTL）。
 - CDN 对 HEAD 返 4xx 时补 `Range` GET 探测；`web/enter` 偶发 `status_code=10002` 首次失败后静默重试一次，跳过约 1MB HTML 兜底抓取；删除死代码 `get_douyin_stream_data`。
 
-### v4.0.8.1 (2026-07-30) — Web 面板 / 画质监控 / 代理与类型修复
+### v4.0.8 (2026-07-30) — Web 面板 / 画质监控 / 代理与类型修复
 
 - **新增 Web 管理面板**（`web.py`+`src/web_api.py`+`src/web_config.py`+`web/`）：仪表盘、直播间管理、配置编辑、SSE 日志推送。
 - **新增 GUI 画质监控**：实时检测实际画质是否匹配设置，覆盖抖音/TikTok/快手/虎牙/斗鱼/B站/网易CC 七平台。

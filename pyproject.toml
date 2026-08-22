@@ -1,9 +1,9 @@
 [project]
 name = "DouyinLiveRecorder"
-version = "4.0.8.3"
+version = "4.0.9"
 description = "支持抖音、TikTok、YouTube、快手等60+平台的直播录制工具，支持循环录制、多人录制、消息推送"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.14"
 license = { text = "MIT" }
 authors = [
     { name = "Hmily", email = "ihmily@users.noreply.github.com" }
@@ -32,10 +32,7 @@ classifiers = [
     "Operating System :: Microsoft :: Windows :: Win32",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Multimedia :: Video :: Capture",
     "Topic :: Communications :: Chat",
 ]
@@ -114,7 +111,7 @@ src = ["javascript/*.js"]
 
 [tool.black]
 line-length = 120
-target-version = ['py310', 'py311', 'py312', 'py313']
+target-version = ['py314']
 include = '\.pyi?$'
 exclude = '''
 /(
@@ -163,7 +160,7 @@ extend_skip = [
 extend_skip_glob = ["*.pyc"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.14"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
@@ -223,7 +220,7 @@ exclude_lines = [
 # 故采用「工作区 .venv」约定（标准且可移植），不在配置里写死机器专属绝对路径。
 # 首次使用需创建并安装依赖：python -m venv .venv && .venv/Scripts/pip install -r requirements.txt
 # .venv 已被 .gitignore 忽略，不会误提交；其他开发者各自创建即可。
-pythonVersion = "3.10"
+pythonVersion = "3.14"
 typeCheckingMode = "standard"
 venvPath = "."
 venv = ".venv"

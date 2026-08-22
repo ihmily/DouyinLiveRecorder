@@ -2421,14 +2421,27 @@ config: configparser.RawConfigParser = configparser.RawConfigParser()
 
 
 _config_read_result = config.read(config_file, encoding=text_encoding)
-language = read_config_value(config, "录制设置", "language(zh_cn/en)", "zh_cn")
-# i18n 多语言初始化：归一化配置值（zh_cn/zh-CN/en/en_US/en_GB/zh_TW 等写法均可）
-# 并加载对应翻译目录（gettext .mo / JSON / YAML，见 i18n.py）；后续输出即时按该语言翻译
-from i18n import normalize_language as _i18n_normalize
+
+
+# 读取语言配置键 language：新键缺失而旧键 language(zh_cn/en) 存在时继承旧值并迁移
+# 写回新键（与「是否启用https录制」同款迁移策略；旧键保留仅作历史，不再参与语义）。
+# 返回原始配置值；空/未识别/语言目录缺失的兜底由 i18n.resolve_language 统一处理。
+def _read_language_config(config_parser: configparser.RawConfigParser) -> str:
+    legacy = ""
+    if config_parser.has_option("录制设置", "language(zh_cn/en)"):
+        legacy = config_parser.get("录制设置", "language(zh_cn/en)").strip()
+    return read_config_value(config_parser, "录制设置", "language", legacy)
+
+
+language = _read_language_config(config)
+# i18n 多语言初始化：resolve_language 统一解析——空 → 系统语言；键值不可识别或
+# 语言目录文件缺失 → en_US 回退；随后加载对应翻译目录（gettext .mo / JSON / YAML，
+# 见 i18n.py），后续输出即时按该语言翻译
+from i18n import resolve_language as _i18n_resolve
 from i18n import set_language as _i18n_set_language
 
+language = _i18n_resolve(language)
 _i18n_set_language(language)
-language = _i18n_normalize(language)
 skip_proxy_check = options.get(read_config_value(config, "录制设置", "是否跳过代理检测(是/否)", "否"), False)
 
 
@@ -2621,8 +2634,9 @@ def main(non_interactive: bool = False) -> None:
         loop_time = options.get(read_config_value(config, "录制设置", "是否显示循环秒数", "否"), False)
         show_url = options.get(read_config_value(config, "录制设置", "是否显示直播源地址", "否"), False)
         # 语言热切换：配置变化时即时重载翻译目录（Web 面板/GUI 改语言后下轮循环生效），
-        # 无需重启进程；录制中的 ffmpeg 子进程不受影响，仅影响新产生的控制台输出
-        _new_language = _i18n_normalize(read_config_value(config, "录制设置", "language(zh_cn/en)", "zh_cn"))
+        # 无需重启进程；录制中的 ffmpeg 子进程不受影响，仅影响新产生的控制台输出。
+        # 空/未识别/语言目录缺失经 resolve_language 统一兜底（与启动初始化同语义）
+        _new_language = _i18n_resolve(read_config_value(config, "录制设置", "language", ""))
         if _new_language != language:
             language = _new_language
             _i18n_set_language(_new_language)
