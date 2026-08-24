@@ -3,7 +3,7 @@
 # This file is distributed under the same license as the DouyinLiveRecorder package.
 #
 # DouyinLiveRecorder 简体中文翻译文件
-# 更新日期: 2026-08-17
+# 更新日期: 2026-08-24
 #
 # 维护说明：
 #   - 本文件是翻译源文本；gettext 运行时只读取同目录编译产物 zh_CN.mo。
@@ -18,7 +18,7 @@ msgstr ""
 "Project-Id-Version: DouyinLiveRecorder\n"
 "MIME-Version: 1.0\n"
 "POT-Creation-Date: 2024-10-20 00:00+0800\n"
-"PO-Revision-Date: 2026-08-17 12:00+0800\n"
+"PO-Revision-Date: 2026-08-24 12:00+0800\n"
 "Last-Translator: Hmily <ihmily@github>\n"
 "Language-Team: Chinese\n"
 "Content-Type: text/plain; charset=UTF-8\n"
@@ -1184,4 +1184,26 @@ msgstr "错误信息: 网络异常，请检查本网络是否能正常访问face
 
 msgid "错误信息: 网络异常，请检查网络是否能正常访问TikTok平台"
 msgstr "错误信息: 网络异常，请检查网络是否能正常访问TikTok平台"
+
+# =============================================================================
+# 2026-08-24 补全：build_exe.py 打包/冒烟脚本常量串（该模块经 i18n 翻译路径输出）
+# =============================================================================
+
+msgid "[build] --no-runtime：跳过 ffmpeg/ 与 node/（用户首次运行时自动下载）"
+msgstr "[build] --no-runtime：跳过 ffmpeg/ 与 node/（用户首次运行时自动下载）"
+
+msgid "[build] 开始下载运行时二进制（ffmpeg + Node.js）..."
+msgstr "[build] 开始下载运行时二进制（ffmpeg + Node.js）..."
+
+msgid "[build] 未找到 Node.js LTS 版本，跳过 node 下载"
+msgstr "[build] 未找到 Node.js LTS 版本，跳过 node 下载"
+
+msgid "[smoke:gui] 无显示环境（DISPLAY 未设置），跳过 GUI 冒烟测试"
+msgstr "[smoke:gui] 无显示环境（DISPLAY 未设置），跳过 GUI 冒烟测试"
+
+msgid "[smoke:web] HTTP 探活成功 ✅"
+msgstr "[smoke:web] HTTP 探活成功 ✅"
+
+msgid "[smoke] 全部冒烟测试通过 ✅"
+msgstr "[smoke] 全部冒烟测试通过 ✅"
 

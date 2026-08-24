@@ -96,8 +96,14 @@ def close_all_clients_sync() -> None:
         if not _client_cache:
             return
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_closed():
+        # Python 3.14 起 asyncio.get_event_loop() 不再隐式创建事件循环：当前线程
+        # 无循环时抛 RuntimeError；捕获后走下方引用清理兜底（交由 GC 关闭连接）
+        loop: asyncio.AbstractEventLoop | None
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = None
+        if loop is None or loop.is_closed():
             raise RuntimeError("loop closed")
         if loop.is_running():
             # 信号/atexit 钩子在事件循环线程中触发时无法再 run_until_complete，

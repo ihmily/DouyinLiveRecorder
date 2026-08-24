@@ -160,7 +160,7 @@ class DanmakuCollector:
             try:
                 # start() 内部会阻塞直到连接关闭或 stop() 被调用（stop 经 call_soon_threadsafe 关闭 ws）
                 loop.run_until_complete(danmaku.start(self._danmaku_args))
-            except (asyncio.CancelledError, RuntimeError):
+            except asyncio.CancelledError, RuntimeError:
                 pass
             except Exception as e:
                 logger.warning(f"[弹幕采集]{self._danmaku_cls.__name__} 运行异常,不影响录制: {e}")

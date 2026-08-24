@@ -360,6 +360,19 @@ def test_backoff_key_ignores_query_token(clear_probe_backoff: None) -> None:
     assert _probe_in_backoff(fresh_token_url, "虎牙直播") is True
 
 
+def test_mark_ffmpeg_reject_marks_backoff(clear_probe_backoff: None) -> None:
+    # ffmpeg 录制失败侧的反馈入口（check_subprocess 快速失败时调用）：
+    # 与探针侧 _mark_probe_reject 同语义——按 host+路径记入退避（跨轮新 token 命中），
+    # 平台不在退避名单（斗鱼）时为无操作
+    ss.mark_ffmpeg_reject(_HUYA_M3U8_URL, "虎牙直播")
+    assert _probe_in_backoff(_HUYA_M3U8_URL, "虎牙直播") is True
+    fresh_token_url = _HUYA_M3U8_URL.replace("wsSecret=abc", "wsSecret=next-round")
+    assert _probe_in_backoff(fresh_token_url, "虎牙直播") is True
+
+    ss.mark_ffmpeg_reject(_FLV_URL, "斗鱼直播")
+    assert _probe_in_backoff(_FLV_URL, "斗鱼直播") is False
+
+
 def test_backoff_expires_after_window(clear_probe_backoff: None) -> None:
     # 超过退避窗口后恢复正常探针（限流解除/主播重新开播时走正常校验）
     _mark_probe_reject(_HUYA_M3U8_URL, "虎牙直播")

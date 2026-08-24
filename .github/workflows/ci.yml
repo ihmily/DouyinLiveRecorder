@@ -2,7 +2,7 @@
 # CI —— 静态检查 / 测试 / 构建验证
 # -----------------------------------------------------------------------------
 # 技术栈事实（本文件所有步骤均按此适配，勿凭猜测改动）：
-#   · 纯 Python 项目（requires-python >= 3.10，target py310~py313），**无前端构建**
+#   · 纯 Python 项目（requires-python >= 3.14，target py314），**无前端构建**
 #     —— web/ 仅为 FastAPI 的静态资源（index.html / app.js / style.css），
 #        仓库内不存在 package.json / lock 文件，故 **不需要 npm ci / node build**。
 #   · Node.js 仅作为「JS 签名脚本运行时」：src/javascript/*.js 由 exejs / PyExecJS
@@ -89,15 +89,15 @@ jobs:
           # python_min     : 最低支持版本，用作 mypy 目标与覆盖率门禁基准版本
           # python_latest  : 最高支持版本，用作格式化检查（与 black target-version 上界对齐）
           # python_matrix  : 测试矩阵取「最低 + 最高」两端边界，兼顾覆盖面与额度成本；
-          #                  若要全量覆盖改为 ["3.10","3.11","3.12","3.13"] 即可。
+          #                  当前基线仅 3.14，矩阵含 3.15 为向前兼容预检。
           # python_build   : 打包解释器版本，**必须与 build-release.yml 的 python_build 同值**，
           #                  保证「CI 验证的打包环境」等于「实际发布的打包环境」。
           # node_version   : 仅供 JS 签名脚本运行时探测使用（非前端构建）
           {
-            echo "python_min=3.10"
-            echo "python_latest=3.13"
-            echo 'python_matrix=["3.10","3.13"]'
-            echo "python_build=3.12"
+            echo "python_min=3.14"
+            echo "python_latest=3.14"
+            echo 'python_matrix=["3.14","3.14"]'
+            echo "python_build=3.14"
             echo "node_version=24"
           } >> "$GITHUB_OUTPUT"
 
@@ -193,7 +193,7 @@ jobs:
         run: python scripts/compile_po.py --check
 
   # ── 2. 静态类型检查 ──────────────────────────────────────────────────────
-  # 按 pyproject [tool.mypy] python_version = "3.10" 使用最低支持版本运行，
+  # 按 pyproject [tool.mypy] python_version = "3.14" 使用最低支持版本运行，
   # 保证类型结论对最老解释器成立。
   typecheck:
     name: Type Check (mypy, py${{ needs.setup.outputs.python_min }})

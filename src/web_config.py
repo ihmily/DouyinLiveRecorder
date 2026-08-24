@@ -191,7 +191,7 @@ def read_web_config(config_file: str | Path) -> dict[str, str | int | bool]:
         elif isinstance(default, int):
             try:
                 result[key] = int(raw)
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 result[key] = default
         else:
             result[key] = raw
@@ -301,7 +301,7 @@ def verify_web_password(plaintext: str, stored: str) -> bool:
             salt = base64.b64decode(salt_b64)
             expected = base64.b64decode(hash_b64)
             dk = hashlib.pbkdf2_hmac("sha256", plaintext.encode("utf-8"), salt, int(iters_s))
-        except (ValueError, binascii.Error):
+        except ValueError, binascii.Error:
             # 哈希串损坏/迭代数非法：视为校验失败而非崩溃
             return False
         return hmac.compare_digest(dk, expected)

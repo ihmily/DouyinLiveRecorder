@@ -323,16 +323,15 @@ class TestListFiles:
         assert "a.ts" in names
 
 
+# GET/PUT /api/language：语言查询与即时切换（写回 config + 热切换进程内翻译）。
 class TestLanguageApi:
-    """GET/PUT /api/language：语言查询与即时切换（写回 config + 热切换进程内翻译）。"""
-
     def _write_language_section(self, cfg: Path, value: str = "zh_cn") -> None:
         # 追加 [录制设置] 节与 language 键（update_config_line 行级更新需键已存在）
         text = cfg.read_text(encoding="utf-8-sig")
         if "[录制设置]" not in text:
             text += "\n[录制设置]\n"
-        if "language(zh_cn/en)" not in text:
-            text += f"language(zh_cn/en) = {value}\n"
+        if not any(line.strip().startswith("language") for line in text.splitlines()):
+            text += f"language = {value}\n"
         cfg.write_text(text, encoding="utf-8-sig")
 
     def test_get_language_returns_current_and_available(self, app_env: types.SimpleNamespace) -> None:
@@ -358,7 +357,7 @@ class TestLanguageApi:
             # 进程内翻译已热切换
             assert i18n_module.get_language() == "en_US"
             # config.ini 已写回归一化语言码
-            assert "language(zh_cn/en) = en_US" in app_env.cfg.read_text(encoding="utf-8-sig")
+            assert "language = en_US" in app_env.cfg.read_text(encoding="utf-8-sig")
         finally:
             _ = i18n_module.set_language(saved)
 

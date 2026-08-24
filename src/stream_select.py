@@ -217,6 +217,17 @@ def _probe_in_backoff(url: str, platform: str | None) -> bool:
         return ts is not None and time.time() - ts <= _PROBE_BACKOFF_SECONDS
 
 
+# ffmpeg 录制失败侧的反馈入口：录制「快速失败」（输入打开即被拒，如虎牙 HS 线路
+# 探针 200/206 通过、ffmpeg 紧随其后 GET 却 403）时，把 ffmpeg 实际拉流的地址记入
+# 探针退避窗口。下一轮 select_source_url 会跳过该地址的探针、直接尝试下一 CDN
+# 候选——这类「探针假绿」在探针侧永远观测不到（httpx 与 ffmpeg 客户端指纹不同），
+# 只有录制侧的失败能反馈该信息；不标记会形成「探针通过→录制被拒→下轮探针仍通过」
+# 的死循环，房间永远录不上。platform 不在退避名单内时为无操作（与 _mark_probe_reject
+# 同一白名单，当前仅虎牙）。
+def mark_ffmpeg_reject(url: str, platform: str | None) -> None:
+    _mark_probe_reject(url, platform)
+
+
 # FLV/record_url 源 HEAD 通过后的 GET 复核（流式请求、不读 body）：
 # 虎牙 al.flv.huya.com 等 CDN 出现过 HEAD=200 而 GET=403 —— 校验“假绿”后 ffmpeg 打开即 403、
 # 录制反复失败。ffmpeg 拉流是「无 Range 的全量 GET」，复核必须与之完全一致：

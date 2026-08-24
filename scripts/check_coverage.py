@@ -74,7 +74,7 @@ def _get_coverage_json(data_file: str | None) -> CoverageData:
         try:
             with open(tmp_path, encoding="utf-8") as f:
                 return cast(CoverageData, json.load(f))
-        except (OSError, ValueError):
+        except OSError, ValueError:
             print(f"ERROR: failed to read coverage json report: {tmp_path}")
             sys.exit(2)
     finally:

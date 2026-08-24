@@ -1,8 +1,10 @@
 ![video_spider](https://socialify.git.ci/y123ao6/DouyinLiveRecorder/image?font=Inter&forks=1&language=1&owner=1&pattern=Circuit%20Board&stargazers=1&theme=Light)
 
+简体中文&nbsp;&nbsp;|&nbsp;&nbsp;[**English**](README_EN.md)
+
 ## 💡 简介
 
-[![Python Version](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Python Version](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
 [![Supported Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS-blue.svg)](https://github.com/y123ao6/DouyinLiveRecorder)
 [![GitHub issues](https://img.shields.io/github/issues/y123ao6/DouyinLiveRecorder.svg)](https://github.com/y123ao6/DouyinLiveRecorder/issues)
 [![Latest Release](https://img.shields.io/github/v/release/y123ao6/DouyinLiveRecorder)](https://github.com/y123ao6/DouyinLiveRecorder/releases/latest)
@@ -167,7 +169,7 @@ DouyinLiveRecorder/
 ├── logs/                       # 日志文件目录（运行时生成，含 danmaku_monitor.jsonl）
 ├── i18n/                       # 国际化翻译目录（多语言多格式）
 │   ├── zh_CN/LC_MESSAGES/      # 简体中文（gettext）
-│   │   ├── zh_CN.po           # 中文翻译源（282 条）
+│   │   ├── zh_CN.po           # 中文翻译源（288 条）
 │   │   └── zh_CN.mo           # 编译后翻译（运行时必需，随仓库分发）
 │   ├── en_US.json              # English (US)（JSON 格式目录）
 │   ├── en_GB.json              # English (UK)（英式拼写变体）
@@ -199,8 +201,8 @@ DouyinLiveRecorder/
 
 ```ini
 [录制设置]
-# 界面语言：zh_CN | en_US | en_GB | zh_TW（键名保留兼容，值支持 zh_cn/zh-CN/en/en-GB/zh-Hant 等写法，自动归一）
-language(zh_cn/en) = zh_CN
+# 界面语言：zh_CN | en_US | en_GB | zh_TW（留空跟随系统语言；值支持 zh_cn/zh-CN/en/en-GB/zh-Hant 等写法，自动归一；对应语言文件缺失时回退 en_US）
+language = zh_CN
 # 是否跳过代理检测(是/否)
 是否跳过代理检测(是/否) = 是
 # 是否启用日志文件(是/否)
@@ -562,7 +564,7 @@ Windows 下控制台默认「最小化到系统托盘」（`web_minimize_to_tray
 | `en_GB` | English (UK) | `i18n/en_GB.json` |
 | `zh_TW` | 繁體中文 | `i18n/zh_TW.yaml` |
 
-- 配置键 `language(zh_cn/en)` 保留兼容，取值支持 `zh_cn` / `zh-CN` / `en` / `en-US` / `en-GB` / `zh-Hant` / `zh_CN.UTF-8` 等写法，会自动归一化到规范语言码
+- 配置键 `language`：留空跟随系统语言；取值支持 `zh_cn` / `zh-CN` / `en` / `en-US` / `en-GB` / `zh-Hant` / `zh_CN.UTF-8` 等写法，自动归一化到规范语言码；键值不可识别或对应语言文件缺失时回退 `en_US`
 - **热切换**：GUI 侧边栏语言选择器、Web 面板顶栏语言选择器、直接编辑 `config.ini` 三种途径均可切换；命令行主循环每轮检测配置变化并即时重载翻译，**无需重启进程**（录制中的 ffmpeg 子进程不受影响）
 - 翻译不再依赖 `LANG` / `LANGUAGE` 环境变量（Windows 普遍未设置）
 - `zh_TW.yaml` 需要 `PyYAML`；缺失时仅损失该语言，其余格式不受影响
@@ -661,13 +663,13 @@ ports:
 - **健康检查**：自动检测 `main.py` 或 `web.py` 进程是否存活
 - **资源限制**：默认限制 2 CPU / 2G 内存（可在 docker-compose.yaml 调整）
 - **日志轮转**：单文件 50MB，最多保留 3 份
-- **内置 Node.js 22 LTS**：用于运行 JavaScript 签名脚本
+- **内置 Node.js 24 LTS**：用于运行 JavaScript 签名脚本
 
 ## 🛠️ 开发指南
 
 ### 环境要求
 
-- Python >= 3.10
+- Python >= 3.14
 - FFmpeg (Linux/macOS 需要手动安装)
 - Node.js (Windows 下自动安装，Linux/macOS 需手动安装)
 
@@ -827,6 +829,45 @@ brew install node
 
 ## ⏳ 更新日志
 
+### v4.0.9-dev (2026-08-23 ~ 2026-08-24) — 高并发多平台录制调度优化 / 录制反馈闭环 / 并发双模式 / Python 3.14 升级与语言键迁移 / 四语本地化目录统一与英式美式分流 / 类型与 CI 质量门禁修复
+
+> 本批改动聚焦高并发（80+ 任务）多平台录制的调度中枢治理、录制侧反馈闭环与 Python 3.14 基线升级。详细根因与验证见 [CODE_WIKI.md](CODE_WIKI.md)。
+
+**🚀 高并发调度中枢（新增 src/scheduler.py）**
+- 引入 `ResizableSemaphore`（运行期可重置容量）、`PlatformBreaker`（按 host 熔断器，closed→open→half-open 状态机）、`ConcurrencyScheduler`（自适应全局并发容量，默认下限 8 / 上限 128，错误率高时温和降容、永不低于安全下限）、`host_of(url)`。
+- 取代旧「全局固定 3 槽信号量 + 单向错误率压制」模型，支持 80+ 任务跨多平台录制、降低排队延迟；单平台接口抖动被隔离降级，不再连锁拖垮全局。
+- 仅在 `main.py` / `notify.py` 固定接线点接入，未改写 50+ 平台分派/录制函数，向后兼容；新增配置项「最大同时录制数(0=不限制)」（默认 0=不限制）。
+
+**🔁 录制结果反馈闭环（虎牙 403 死循环根治）**
+- 修复录制侧反馈缺失：`check_subprocess` 此前按退出码既不上报失败样本、轮末还无条件上报成功，导致按 host 熔断统计被稀释、永不触发，虎牙房间无限重撞「探针 200 → ffmpeg 403」死线路。
+- 现按退出码上报成功/失败样本（按 host）；ffmpeg 快速失败（CDN 拒绝签名）触发 `mark_ffmpeg_reject` 探针退避（60 秒），下一轮改试下一 CDN 候选而非重试同一坏线路（退避白名单仅限虎牙）。
+- 控制台状态行改为显示调度器实时并发容量（`_live_network_capacity`），不再误显配置值。
+
+**⚙️ 网络并发双模式（动态调速 / 固定并发）**
+- 在自适应容量基础上新增「固定并发」模式：「最大同时录制数(0=不限制)」兼作模式开关——=0 启用动态调速（随活跃任务数自适应、下限 8/上限 128），≠0 忽略动态调速器、容量恒为「同一时间访问网络的线程数」（热更新即时生效、最小 1 槽）。
+- 按 host 平台熔断与模式正交，两种模式下均生效；同时录制上限仍由 `scheduler.set_recording_limit` 管控，不受模式切换影响。
+
+**🐍 Python 3.14 升级 + 语言配置键迁移（综合维护）**
+- 项目基线由 Python 3.10 提升至 `>=3.14`（`pyproject.toml` / `Dockerfile` / CI 全链路）；修复 `async_http.py` 在 3.14 下 `asyncio.get_event_loop()` 不再隐式创建事件循环的兼容问题。
+- `config.ini` 语言键 `language(zh_cn/en)` 统一迁移为 `language`：留空跟随系统语言、非法值回退 en_US、GUI/Web 面板免重启热切换、启动自动迁移旧键。
+- 修复 14 个源文件共 21 处 Python 2 风格 `except A, B:` 残留语法，使项目在 Python 3 下可导入/可测试；全量 `pytest` **714 passed / 2 skipped / 0 warnings**，black/isort/mypy/basedpyright 全绿。
+
+**🌐 四语本地化目录统一与英式/美式英语分流**
+- 统一 zh_CN.po / en_US.json / en_GB.json / zh_TW.yaml 四份目录为同一 288 条 key 集合（原 282 条 + 补齐 build_exe.py 的 6 条打包/冒烟常量串）。
+- 修正 en_US 内部混用的英式拼写（统一为美式 minimizes/minimized/canceled）；en_GB 原是 en_US 克隆，改写为真正英式（minimise/minimises/minimised/cancelled），仅在 4 条拼写相关条目上与 en_US 不同。
+- 重新编译 zh_CN.po → zh_CN.mo（compile_po.py --check 确认字节级同步），不影响任何运行时逻辑。
+
+**🧪 类型检查 / CI 质量门禁修复**
+- 修复 CI `mypy src/` 两处报错：`i18n.py` 的 `ctypes.WinDLL` 平台门控（`sys.platform != "win32"` 早返回，双端干净）、`src/recorder_status.py` 三参 `getattr` 改为直接属性访问（消除 `no-any-return` 泄漏）。
+- 修复 CI `pytest` 在 C/POSIX locale 下 `detect_system_language()` 回退路径未过滤 `("C","POSIX")` 导致断言失败；测试中 4 处 `patch.dict(os.environ)` 改为 `monkeypatch.setenv/delenv`（遵循 AGENTS.md 强制规约，规避 Windows 32767 字符上限溢出）。
+- 修复 `src/config_io.py` 的 `read_config_value()` 在 Python 3.14 下含分隔符键 `write()` 抛 `InvalidWriteError` 的写回崩溃（内存完整序列化成功后才落盘，坏键回滚）。
+- 全仓 black 26.5.1 + `target-version=['py314']` 重排（剥除 PEP 758 `except (A, B):` 括号），本地 dev venv 升级至 3.14.7；四大门禁在 3.14 环境全绿。
+
+**📦 构建 / 依赖 / 平台适配**
+- 版本号 `4.0.8.3` → `4.0.9`（唯一事实源）；`requires-python` 升 `>=3.14`、classifiers 收敛为仅 3.14；新增 `PyYAML>=6.0.3` 依赖（i18n 的 zh_TW.yaml 支持）。
+- `Dockerfile` 基础镜像升 `python:3.14-slim-bookworm`、Node.js 源 `setup_22.x` → `setup_24.x`；CI 矩阵同步升 3.14。
+- `src/spider.py` 咪咕 `get_migu_stream_url()` 现采用重写版 `migu.js` 输出带 `ddCalcu`/`sv` 参数的完整地址（移除本地过期固定 `sv=10010`）；FFmpeg 下载源 `wweb.lanzouv.com` → `wwasx.lanzout.com` 切换。
+
 ### v4.0.8.3 (2026-08-19 ~ 2026-08-22) — 主播名自动更新 / SSL 配置整合 / 四语国际化 / FFmpeg9·Node24 兼容 / 类型安全加固 / start_record 复杂度治理 / 窗口化崩溃加固 / 类型检查缺陷修复
 
 > 本版本在 4.0.8.2 系列修复基础上补齐多项新增能力与底层兼容，并以 mypy / basedpyright / pytest(0 warnings) / black / isort 五工具门禁全绿收口。详细根因与验证见 [CODE_WIKI.md](CODE_WIKI.md)。
@@ -868,7 +909,7 @@ brew install node
 **📚 架构文档更新**
 - `CODE_WIKI.md` 补全弹幕采集子系统（基类/采集器/5 平台客户端/监控枢纽/SRT/WS/访客 Cookie 缓存/protobuf）、`src/platforms` 与 `src/proto` 模块说明、模块依赖图与设计模式；版本号更正为 4.0.8.3（对齐 `pyproject.toml` 唯一事实源）。
 
-### v4.0.8.2-dev (2026-08-16 ~ 2026-08-18) — 录制/弹幕/国际化/类型检查 系列修复
+### v4.0.8.2 (2026-08-16 ~ 2026-08-18) — 录制/弹幕/国际化/类型检查 系列修复
 
 > 本批改动集中解决了多个历史遗留的「能跑但录制/弹幕经常失败」类问题，并通过真机实测闭环验证。下分模块概述，详细根因与验证见 [CODE_WIKI.md](CODE_WIKI.md)。
 
@@ -910,7 +951,7 @@ brew install node
 - CI `lint` job 运行 Python 由 3.12 升到 3.13（与 `target-version` 最高值对齐，消除 AST 安全校验告警噪声），`black --check .` 格式违规已手工修复。
 - 全量测试约 635 passed / 2 skipped（排除已知沙箱删除保护项）。
 
-### v4.0.8.1-dev (2026-08-01 ~ 2026-08-09) — 注释规范 / 冒烟测试 / GUI 优雅退出 / 校验修复 整合
+### v4.0.8.1 (2026-08-01 ~ 2026-08-09) — 注释规范 / 冒烟测试 / GUI 优雅退出 / 校验修复 整合
 
 **注释规范与质量基线**
 - 模块/函数说明统一使用 `#` 行注释，不再使用三引号 `"""` 文档字符串。
@@ -937,7 +978,7 @@ brew install node
 - 主播主页（格式 5）直接提取 `sec_user_id` 跳重复下载，请求数 4→3；主页类链接现正确透传 `proxy_addr`/`cookies`（修复静默丢失）；新增 `sec_user_id → 抖音号` 进程级缓存（30 分钟 TTL）。
 - CDN 对 HEAD 返 4xx 时补 `Range` GET 探测；`web/enter` 偶发 `status_code=10002` 首次失败后静默重试一次，跳过约 1MB HTML 兜底抓取；删除死代码 `get_douyin_stream_data`。
 
-### v4.0.8.1 (2026-07-30) — Web 面板 / 画质监控 / 代理与类型修复
+### v4.0.8 (2026-07-30) — Web 面板 / 画质监控 / 代理与类型修复
 
 - **新增 Web 管理面板**（`web.py`+`src/web_api.py`+`src/web_config.py`+`web/`）：仪表盘、直播间管理、配置编辑、SSE 日志推送。
 - **新增 GUI 画质监控**：实时检测实际画质是否匹配设置，覆盖抖音/TikTok/快手/虎牙/斗鱼/B站/网易CC 七平台。
