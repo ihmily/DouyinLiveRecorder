@@ -15,7 +15,6 @@
 
 import shlex
 import subprocess
-import threading
 import time
 from typing import cast
 
@@ -100,44 +99,37 @@ def run_script(command: str) -> None:
 
 
 # 线程安全记录一次错误：累计计数 error_count 加一，并向错误率窗口追加样本 1；无入参无返回值
-def record_error() -> None:
-    # 线程安全地记录一次错误：递增计数并追加 1 到滑动窗口（deque maxlen 自动裁剪）
+def record_error(key: str | None = None) -> None:
+    # 线程安全地记录一次错误：递增计数并追加 1 到滑动窗口（deque maxlen 自动裁剪）；
+    # 同时上报给并发调度器（按 key 驱动熔断与全局背压）。key 为可选（直播间 host），
+    # 缺省时仅维护全局错误窗口（保持无参调用以兼容既有调用方与测试）。
     with main.max_request_lock:
         main.error_count += 1
         main.error_window.append(1)
+    scheduler = getattr(main, "scheduler", None)
+    if scheduler is not None:
+        scheduler.record_failure(key)
 
 
 # 线程安全记录一次成功的检测周期：向错误率窗口追加样本 0；无入参无返回值
-def record_success() -> None:
+def record_success(key: str | None = None) -> None:
     # 线程安全地记录一次成功完成的检测周期（追加 0），与 record_error 的 1 混合采样，
-    # 使 error_window 反映真实错误率（此前只记 1 导致错误率恒为 1.0，并发只能降不能升）。
+    # 使 error_window 反映真实错误率（此前只记 1 导致错误率恒为 1.0，并发只能降不能升）；
+    # 同时上报给并发调度器。保持无参调用以兼容既有调用方与测试。
     with main.max_request_lock:
         main.error_window.append(0)
+    scheduler = getattr(main, "scheduler", None)
+    if scheduler is not None:
+        scheduler.record_success(key)
 
 
-# 守护线程主体：每 5 秒按错误窗口的错误率增减 max_request 并重建信号量；无入参，死循环不返回
+# 守护线程主体：委托给并发调度器的自适应调速循环；无入参，死循环不返回
 def adjust_max_request() -> None:
-    # 根据错误率动态调整并发线程数。窗口混合 0/1 样本，错误率真实可降可升。
-    preset = main.max_request
-
-    while True:
-        time.sleep(5)
-        with main.max_request_lock:
-            if main.error_window:
-                error_rate = sum(main.error_window) / len(main.error_window)
-            else:
-                error_rate = 0
-
-            if error_rate > main.error_threshold:
-                main.max_request = max(1, main.max_request - 1)
-                main.semaphore = threading.Semaphore(main.max_request)
-            elif error_rate < main.error_threshold / 2 and main.max_request < preset:
-                main.max_request += 1
-                main.semaphore = threading.Semaphore(main.max_request)
-
-            if main.pre_max_request != main.max_request:
-                main.pre_max_request = main.max_request
-                logger.debug(f"同一时间访问网络的线程数动态改为 {main.max_request}（信号量已重建）")
+    # 并发调速改为由 ConcurrencyScheduler.adjust_loop 负责：自适应全局容量 + per-key 熔断。
+    # 保留函数名以兼容 main 的守护线程启动调用；调度器就绪前先等待。
+    while main.scheduler is None:
+        time.sleep(1)
+    main.scheduler.adjust_loop()
 
 
 # 清理 record_name 的录制状态；若 record_url 已被注释则从运行列表移除并把监控计数减一；无返回值

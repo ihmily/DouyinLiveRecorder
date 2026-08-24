@@ -66,7 +66,7 @@ def get_status() -> dict[str, object]:
                 error_val = main.error_count
                 snapshot_ok = True
                 break
-        except RuntimeError, IndexError:
+        except (RuntimeError, IndexError):
             continue
     if not snapshot_ok:
         logger.warning("获取录制状态失败（并发竞争），返回空快照")
@@ -107,6 +107,18 @@ def get_status() -> dict[str, object]:
     }
 
 
+# 当前网络并发容量的实时值：调度器就绪时取自适应容量（随活跃任务数缩放、错误率温和降容），
+# 未就绪（main() 尚未初始化调度器，如极早期启动/测试环境）时回退配置值。
+# 2026-08-23 定稿：实际并发槽由 ConcurrencyScheduler 动态决定，配置值「同一时间访问网络的
+# 线程数」只是容量下限之一——控制台直接显示配置值会严重误导（实测容量 12/20 而显示 3，
+# 高并发优化形同「未生效」）。
+def _live_network_capacity() -> int:
+    scheduler = getattr(main, "scheduler", None)
+    if scheduler is not None:
+        return scheduler.network_semaphore.value
+    return main.max_request
+
+
 # 守护线程主体：每 5 秒清屏并打印监控数/并发数/画质/格式/累计错误数及各房间已录时长；无入参，死循环不返回
 def display_info() -> None:
     # 后台线程：刷新控制台状态显示
@@ -119,7 +131,7 @@ def display_info() -> None:
                 _ = sys.stdout.write("\033[2J\033[H")
                 _ = sys.stdout.flush()
             print(f"\r共监测{main.monitoring}个直播中", end=" | ")
-            print(f"同一时间访问网络的线程数: {main.max_request}", end=" | ")
+            print(f"同一时间访问网络的线程数: {_live_network_capacity()}", end=" | ")
             print(f"是否开启代理录制: {'是' if main.use_proxy else '否'}", end=" | ")
             if main.split_video_by_time:
                 print(f"录制分段开启: {main.split_time}秒", end=" | ")

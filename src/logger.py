@@ -54,7 +54,7 @@ try:
     _cfg_parser = configparser.RawConfigParser()
     _files_read = _cfg_parser.read(f"{script_path}/config/config.ini", encoding="utf-8-sig")
     _log_to_file = _cfg_parser.get("录制设置", "是否启用日志文件(是/否)").strip() != "否"
-except configparser.NoSectionError, configparser.NoOptionError:
+except (configparser.NoSectionError, configparser.NoOptionError):
     # 配置项缺失时保持默认启用（向后兼容）
     pass
 except Exception:

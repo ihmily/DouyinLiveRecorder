@@ -53,7 +53,7 @@ def _read_config_ttwid() -> str:
         parser = configparser.RawConfigParser()
         _ = parser.read(f"{_app_root()}/config/config.ini", encoding="utf-8-sig")
         raw = parser.get(_CONFIG_SECTION, _CONFIG_TTWID_KEY).strip()
-    except configparser.NoSectionError, configparser.NoOptionError, configparser.Error:
+    except (configparser.NoSectionError, configparser.NoOptionError, configparser.Error):
         return ""
     except Exception:
         return ""

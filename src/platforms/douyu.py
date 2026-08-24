@@ -161,7 +161,7 @@ class DouyuDanmaku(DanmakuBase):
                 col = 0
                 try:
                     col = int(it.get("col", 0))
-                except TypeError, ValueError:
+                except (TypeError, ValueError):
                     col = 0
                 self._emit(
                     DanmakuMessage(

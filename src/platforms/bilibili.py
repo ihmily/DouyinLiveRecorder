@@ -248,7 +248,7 @@ class BilibiliDanmaku(DanmakuBase):
                 try:
                     if isinstance(info[0], list) and len(info[0]) > 3:
                         color_int = int(info[0][3])
-                except TypeError, ValueError:
+                except (TypeError, ValueError):
                     color_int = 0
                 user_info = info[2]
                 if isinstance(user_info, list) and len(user_info) > 1:

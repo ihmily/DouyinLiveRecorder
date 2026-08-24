@@ -15,6 +15,7 @@
 
 import configparser
 import datetime
+import io
 import os
 import re
 import shutil
@@ -168,7 +169,7 @@ def read_config_value(
         if "账号密码" not in config_parser.sections():
             config_parser.add_section("账号密码")
         return config_parser.get(section, option)
-    except configparser.NoSectionError, configparser.NoOptionError:
+    except (configparser.NoSectionError, configparser.NoOptionError):
         # 兜底创建 section（白名单外的 section 直接 set 会抛 NoSectionError），
         # 并持 file_update_lock 写回，避免与录制线程的 update_config 并发半写。
         with main.file_update_lock:
@@ -178,11 +179,17 @@ def read_config_value(
             # 写回失败（瞬时占用 / 并发进程 / 编辑器锁 / 只读挂载）仅记 warning 并返回默认值，
             # 不再抛出——避免「任何缺键 + 配置不可写」导致整个 app 在 import 阶段崩溃。
             # 与 backup_file 的 best-effort 模式保持一致。
+            # 先在内存完整序列化、成功后才落盘：键名含 = / : 等 configparser 分隔符时
+            # write() 会抛 InvalidWriteError（Python 3.13+），直接写文件会把配置截断损坏；
+            # 失败时回滚内存态，避免坏键滞留解析器导致后续缺键写回连环失败。
             try:
+                buffer = io.StringIO()
+                config_parser.write(buffer)
                 with open(main.config_file, "w", encoding=main.text_encoding) as f:
-                    config_parser.write(f)
-            except OSError as e:
+                    _ = f.write(buffer.getvalue())
+            except (OSError, configparser.Error) as e:
                 logger.warning(f"配置项 {section}/{option} 缺省值写回失败（已忽略）: {type(e).__name__}: {e}")
+                _ = config_parser.remove_option(section, option)
         return str(default_value)
 
 
@@ -191,7 +198,7 @@ def _safe_int(value: str | None, default: int) -> int:
     # 配置数值安全转换：非法值记录告警并回退默认，避免 main() 主循环因 ValueError 崩溃
     try:
         return int(str(value).strip())
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         logger.warning(f"配置项数值非法: {value!r}，使用默认值 {default}")
         return default
 
@@ -201,7 +208,7 @@ def _safe_float(value: str | None, default: float) -> float:
     # 配置数值安全转换（浮点版）
     try:
         return float(str(value).strip())
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         logger.warning(f"配置项数值非法: {value!r}，使用默认值 {default}")
         return default
 
