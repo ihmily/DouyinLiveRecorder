@@ -6,6 +6,8 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 import i18n
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,14 +33,16 @@ class TestMoCatalog:
         # gettext 运行时只读取 .mo；.po 修改后必须重编译并随仓库分发（见 .gitignore 约定）
         assert MO_PATH.exists() and MO_PATH.stat().st_size > 0
 
-    def test_translation_works_without_lang_env(self) -> None:
+    def test_translation_works_without_lang_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Windows 客户端普遍不设置 LANG/LC_* 环境变量；翻译加载不得依赖它们。
         # 清空这些变量后直接走 init_gettext 真实加载路径做一次翻译查找：
         # 若实现回退为按环境变量查找的全局 gettext.gettext，此处会查不到而失败。
-        cleaned = {k: v for k, v in os.environ.items() if not k.startswith(("LANG", "LC_"))}
-        with patch.dict(os.environ, cleaned, clear=True):
-            tr = i18n.init_gettext(i18n.locale_path, "zh_CN")
-            assert tr("IP banned. Please change device or network.") == "IP被禁止 请更换设备或网络"
+        # 必须用 monkeypatch 逐键删除：patch.dict(os.environ) 会整体快照并回写环境，
+        # harness 注入的超长变量会撞上 Windows 32767 字符上限（见 AGENTS.md 已知坑）。
+        for key in [k for k in os.environ if k.startswith(("LANG", "LC_"))]:
+            monkeypatch.delenv(key, raising=False)
+        tr = i18n.init_gettext(i18n.locale_path, "zh_CN")
+        assert tr("IP banned. Please change device or network.") == "IP被禁止 请更换设备或网络"
 
     def test_po_and_mo_in_sync(self) -> None:
         # .po 与 .mo 字节级同步，改动 .po 忘记重编译时在此失败；
@@ -68,9 +72,8 @@ class TestTranslatedPrint:
         assert i18n._should_translate("C:/somewhere/else/file.py") is False
 
 
+# 多格式翻译目录：gettext .mo（zh_CN）+ JSON（en_US/en_GB）+ YAML（zh_TW）。
 class TestMultiFormatCatalogs:
-    """多格式翻译目录：gettext .mo（zh_CN）+ JSON（en_US/en_GB）+ YAML（zh_TW）。"""
-
     def test_supported_languages_complete(self) -> None:
         assert set(i18n.SUPPORTED_LANGUAGES.keys()) == {"zh_CN", "en_US", "en_GB", "zh_TW"}
         assert i18n.DEFAULT_LANGUAGE == "zh_CN"
@@ -106,9 +109,8 @@ class TestMultiFormatCatalogs:
         assert tw.get("开始录制") == "開始錄製"
 
 
+# 运行时语言切换（Web 面板/GUI 即时切换语言功能的底层机制）。
 class TestLanguageSwitching:
-    """运行时语言切换（Web 面板/GUI 即时切换语言功能的底层机制）。"""
-
     def setup_method(self) -> None:
         self._saved = i18n.get_language()
 
@@ -168,9 +170,8 @@ class TestLanguageSwitching:
         assert tr("不存在的串") == "不存在的串"
 
 
+# resolve_language：配置键 language 的统一解析（空 → 系统语言；异常 → en_US 回退）。
 class TestResolveLanguage:
-    """resolve_language：配置键 language 的统一解析（空 → 系统语言；异常 → en_US 回退）。"""
-
     def test_empty_uses_system_language(self) -> None:
         # 空 → 系统语言（检测命中受支持语言且有目录；带编码后缀的写法同样归一）
         with patch.object(i18n, "detect_system_language", return_value="zh_CN"):
@@ -213,9 +214,8 @@ class TestResolveLanguage:
         assert i18n.FALLBACK_LANGUAGE == "en_US"
 
 
+# detect_system_language：环境变量优先，Windows UI 语言与 POSIX locale 兜底。
 class TestDetectSystemLanguage:
-    """detect_system_language：环境变量优先，Windows UI 语言与 POSIX locale 兜底。"""
-
     def _env_without_locale_vars(self) -> dict[str, str]:
         return {k: v for k, v in os.environ.items() if not k.startswith(("LANGUAGE", "LC_", "LANG"))}
 

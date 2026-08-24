@@ -140,6 +140,7 @@ from src.recorder_status import (
     display_info,
     get_status,
 )
+from src.scheduler import ConcurrencyScheduler, ResizableSemaphore, host_of
 from src.stream_select import (
     _douyin_rate_limit,
     _validate_stream_url,
@@ -148,6 +149,7 @@ from src.stream_select import (
     get_quality_code,
     get_record_headers,
     get_record_user_agent,
+    mark_ffmpeg_reject,
     select_source_url,
 )
 from src.video_postprocess import (
@@ -283,7 +285,11 @@ enable_proxy_platform: str = ""
 enable_proxy_platform_list: list[str] | None = None
 extra_enable_proxy: str = ""
 extra_enable_proxy_platform_list: list[str] | None = None
-semaphore: threading.Semaphore = threading.Semaphore(1)
+# 并发调度器：自适应全局网络并发 + 按平台(host)熔断降级 + 可选录制并发软上限。
+# 由 main() 启动时实例化；semaphore/recording_semaphore 指向其内部信号量，供 `with` 直接使用。
+scheduler: ConcurrencyScheduler | None = None
+semaphore: ResizableSemaphore = ResizableSemaphore(1)
+recording_semaphore: ResizableSemaphore = ResizableSemaphore(1024)
 local_delay_default: int = 0
 loop_time: bool = False
 show_url: bool = False
@@ -648,6 +654,12 @@ def direct_download_stream(
         return False
 
 
+# ffmpeg「快速失败」判定阈值（秒）：进程存活不超过该值即退出，视为输入打开被 CDN 拒绝
+# 的签名（实测虎牙 HS 线路探针 200 后 ffmpeg 立即 403，约 1 秒退出）；拉流中断/重连耗尽
+# （-reconnect_delay_max 60）通常远超该值，不属此类。模块级常量便于测试注入。
+_FFMPEG_FAST_FAIL_SECONDS = 20.0
+
+
 # 启动并全程守护一次 ffmpeg 录制：ffmpeg_command 为已拼好的完整命令（末位为输出路径），
 # save_type 决定是否转 mp4/是否跳过弹幕与字幕，script_command 为录后自定义脚本，
 # platform + danmaku_args 用于同步启停弹幕采集；
@@ -663,6 +675,7 @@ def check_subprocess(
 ) -> bool:
     # 检查 FFmpeg 子进程状态并处理异常
     save_file_path = ffmpeg_command[-1]
+    _proc_started_at = time.time()  # 进程启动时刻：失败时区分「快速失败(输入打开被拒)」与「拉流中断」
     process = subprocess.Popen(
         ffmpeg_command, stdin=subprocess.PIPE, stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type)
     )
@@ -713,24 +726,32 @@ def check_subprocess(
         # 复用模块级公共终止逻辑（避免重复实现导致的逻辑漂移）
         return _terminate_ffmpeg_process(proc, timeout)
 
-    while process.poll() is None:
-        if record_url in url_comments or exit_recording:
-            color_obj.print_colored(f"[{record_name}]录制时已被注释,本条线程将会退出", color_obj.YELLOW)
-            clear_record_info(record_name, record_url)
+    # 录制并发软上限（资源治理）：限制同时进行的 ffmpeg 录制数，防 80+ 任务同时录制拖垮
+    # CPU/磁盘/带宽。recording_limit=0 时 recording_semaphore 容量极高，acquire 不阻塞（等同不限制）。
+    _rec_sem = recording_semaphore
+    _rec_sem.acquire()
+    try:
+        while process.poll() is None:
+            if record_url in url_comments or exit_recording:
+                color_obj.print_colored(f"[{record_name}]录制时已被注释,本条线程将会退出", color_obj.YELLOW)
+                clear_record_info(record_name, record_url)
 
-            # 录制提前停止:在意SIGINT前 flush 弹幕,确保最后一批写入
-            if danmaku_collector is not None:
-                danmaku_collector.stop()
+                # 录制提前停止:在意SIGINT前 flush 弹幕,确保最后一批写入
+                if danmaku_collector is not None:
+                    danmaku_collector.stop()
 
-            # 使用更可靠的进程终止机制
-            success = terminate_ffmpeg_process(process)
-            if not success:
-                logger.warning(f"[{record_name}] ffmpeg 进程可能没有完全终止，请检查系统进程")
+                # 使用更可靠的进程终止机制
+                success = terminate_ffmpeg_process(process)
+                if not success:
+                    logger.warning(f"[{record_name}] ffmpeg 进程可能没有完全终止，请检查系统进程")
 
-            # 确保异常路径也注销 ffmpeg 进程
-            unregister_ffmpeg_process(process)
-            return True
-        time.sleep(1)
+                # 确保异常路径也注销 ffmpeg 进程
+                unregister_ffmpeg_process(process)
+                return True
+            time.sleep(1)
+    finally:
+        # 无论正常结束还是提前中断/异常，均释放录制并发槽，避免槽位泄漏导致后续录制饿死
+        _rec_sem.release()
 
     # ffmpeg 正常退出:弹幕尾收兜底停止(循环外,整个录制周期仅执行一次)
     if danmaku_collector is not None:
@@ -776,9 +797,26 @@ def check_subprocess(
             script_command = script_command.strip() + " " + " ".join(params)
             run_script(script_command)
             logger.debug("脚本命令执行结束!")
+        # 流正常结束（主播下线）＝平台健康：按房间 host 记一次成功样本（与下方失败分支配对）
+        record_success(host_of(record_url))
 
     else:
         color_obj.print_colored(f"\n{record_name} {stop_time} 直播录制出错,返回码: {return_code}\n", color_obj.RED)
+        # —— 录制失败反馈调度器（2026-08-23 实测定稿）：
+        # ① 按房间 host 记失败样本，驱动按平台熔断与全局背压——此前录制失败不上报，
+        #   轮末还会无条件记成功样本，多房间同 host 时失败率被稀释、熔断永不触发
+        #   （实测虎牙房间秒级 403 失败循环，www.huya.com 熔断器始终 closed）；
+        # ② 快速失败（≤20s，输入打开被 CDN 拒绝的签名；拉流中断/重连耗尽通常 >60s）时，
+        #   把 ffmpeg 实际拉流地址记入探针退避：下一轮 select_source_url 跳过该线路探针、
+        #   直接尝试下一 CDN 候选。「探针 200 → ffmpeg 403」的假绿只在录制侧可观测，
+        #   不标记则房间会无限循环撞同一条死线路（实测 hs.hls.huya.com）。——
+        record_error(host_of(record_url))
+        if time.time() - _proc_started_at <= _FFMPEG_FAST_FAIL_SECONDS:
+            try:
+                _stream_url = ffmpeg_command[ffmpeg_command.index("-i") + 1]
+                mark_ffmpeg_reject(_stream_url, platform)
+            except ValueError:
+                logger.debug(f"[{record_name}] ffmpeg 命令缺少 -i 输入参数，跳过探针退避标记")
 
     with record_state_lock:
         recording.discard(record_name)
@@ -1478,6 +1516,9 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
         # 本轮录制显示名；线程退出清理监控房间时复用（首轮可能为空）。置于 try 之前，
         # 保证 finally 中引用必然已绑定（try 首语句前抛异常时不以 NameError 掩盖原始异常）
         record_name = ""
+        # 熔断 key（host）：与 record_name 一同置于 try 之前，保证最外层 except（2386）引用必然已绑定；
+        # 默认空串在异常早退分支被 record_error 视为 falsy，仅计入全局错误预算、不触发按 key 熔断。
+        record_host = ""
         try:
             record_finished = False
             run_once = False
@@ -1487,6 +1528,8 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
             count_time = time.time()
             record_quality_zh, record_url, anchor_name = url_data
             record_quality = get_quality_code(record_quality_zh)
+            # 熔断 key：本直播间 host，用于按平台隔离并发与错误预算（降级/避免连锁报错）
+            record_host = host_of(record_url)
             # 真实下发的画质代码（由 stream 模块回采，可能为 None）
             from src.stream import code_to_zh
             from src.stream import is_downgrade as _is_downgrade
@@ -1523,6 +1566,14 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                     print(f"[{record_url}]已被注释,本条线程将会退出")
                     clear_record_info(record_name, record_url)
                     return
+                # —— 并发熔断预检：该平台(host)连续失败达阈值时跳过本轮网络探测并退避，
+                # 释放全局并发槽给其他平台，避免单平台抖动拖垮整体（降级应对连锁报错）——
+                if scheduler is not None and not scheduler.allow(record_host):
+                    _backoff = scheduler.backoff_seconds(record_host)
+                    _backoff = min(_backoff, max(30.0, float(delay_default)))
+                    logger.debug(f"[{record_host}] 并发熔断中，跳过本轮探测，退避 {_backoff:.0f}s")
+                    time.sleep(_backoff)
+                    continue
                 try:
                     # 平台分派解析（复杂度控制已抽取为 _resolve_platform_stream）：
                     # 返回 (platform, port_info, 弹幕参数, Shopee新URL)；无法识别的地址返回 None
@@ -1544,7 +1595,7 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
 
                     if not port_info.get("anchor_name", ""):
                         print(f"序号{count_variable} 网址内容获取失败,进行重试中...获取失败的地址是:{url_data}")
-                        record_error()
+                        record_error(record_host)
                     else:
                         anchor_name = clean_name(anchor_name)
 
@@ -1958,7 +2009,7 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
 
                                 except subprocess.CalledProcessError as e:
                                     logger.error(f"错误信息: {e} 发生错误的行数: {_get_error_line(e)}")
-                                    record_error()
+                                    record_error(record_host)
 
                             elif only_flv_record:
                                 logger.info(f"Use Direct Downloader to Download FLV Stream: {record_url}")
@@ -2016,6 +2067,9 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                                             print(
                                                 f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制完成\n"
                                             )
+                                            # 直下路径无 check_subprocess 退出码反馈：成功按 host 补样本
+                                            # （失败路径 except 分支已有 record_error），与 ffmpeg 路径语义对齐
+                                            record_success(record_host)
 
                                         with record_state_lock:
                                             recording.discard(record_name)
@@ -2029,7 +2083,7 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                                         color_obj.RED,
                                     )
                                     logger.error(f"错误信息: {e} 发生错误的行数: {_get_error_line(e)}")
-                                    record_error()
+                                    record_error(record_host)
 
                             elif record_save_type == "FLV":
                                 filename = anchor_name + f"_{title_in_name}" + now + "_00" + ".flv"
@@ -2090,7 +2144,7 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
 
                                 except subprocess.CalledProcessError as e:
                                     logger.error(f"错误信息: {e} 发生错误的行数: {_get_error_line(e)}")
-                                    record_error()
+                                    record_error(record_host)
 
                                 try:
                                     if converts_to_mp4 and split_video_by_time:
@@ -2170,7 +2224,7 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
 
                                 except subprocess.CalledProcessError as e:
                                     logger.error(f"错误信息: {e} 发生错误的行数: {_get_error_line(e)}")
-                                    record_error()
+                                    record_error(record_host)
 
                             elif record_save_type == "MP4":
                                 filename = anchor_name + f"_{title_in_name}" + now + ".mp4"
@@ -2229,7 +2283,7 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
 
                                 except subprocess.CalledProcessError as e:
                                     logger.error(f"错误信息: {e} 发生错误的行数: {_get_error_line(e)}")
-                                    record_error()
+                                    record_error(record_host)
 
                             else:
                                 if split_video_by_time:
@@ -2285,7 +2339,7 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
 
                                     except subprocess.CalledProcessError as e:
                                         logger.error(f"错误信息: {e} 发生错误的行数: {_get_error_line(e)}")
-                                        record_error()
+                                        record_error(record_host)
 
                                 else:
                                     filename = anchor_name + f"_{title_in_name}" + now + ".ts"
@@ -2323,14 +2377,17 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
 
                                     except subprocess.CalledProcessError as e:
                                         logger.error(f"错误信息: {e} 发生错误的行数: {_get_error_line(e)}")
-                                        record_error()
+                                        record_error(record_host)
 
                             count_time = time.time()
-                            record_success()  # 本轮检测周期完整走完，追加成功样本
+                            # 样本改由各录制路径按实际结果上报（check_subprocess 按退出码记成功/失败，
+                            # 直下路径按下载结果记）：旧的「轮末无条件记成功」会把 ffmpeg 失败轮
+                            # （如 CDN 403 秒退）也记成成功样本，稀释按 host 熔断统计——多房间
+                            # 同 host 时失败率永远到不了熔断阈值，坏线路被无限重撞。
 
                 except Exception as e:
                     logger.error(f"错误信息: {e} 发生错误的行数: {_get_error_line(e)}")
-                    record_error()
+                    record_error(record_host)
 
                 num = random.randint(-5, 5) + delay_default
                 if num < 0:
@@ -2362,7 +2419,7 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                     print("\r检测直播间中...", end="")
         except Exception as e:
             logger.error(f"错误信息: {e} 发生错误的行数: {_get_error_line(e)}")
-            record_error()
+            record_error(record_host)
             time.sleep(2)
         finally:
             # 房间线程退出（URL 被注释/移除/收到退出标志触发 return）：从弹幕监控枢纽
@@ -2423,14 +2480,10 @@ config: configparser.RawConfigParser = configparser.RawConfigParser()
 _config_read_result = config.read(config_file, encoding=text_encoding)
 
 
-# 读取语言配置键 language：新键缺失而旧键 language(zh_cn/en) 存在时继承旧值并迁移
-# 写回新键（与「是否启用https录制」同款迁移策略；旧键保留仅作历史，不再参与语义）。
-# 返回原始配置值；空/未识别/语言目录缺失的兜底由 i18n.resolve_language 统一处理。
+# 读取语言配置键 language：值留空则「跟随系统语言」，由 i18n.resolve_language 兜底
+# 返回原始配置值；不可识别或语言目录文件缺失的兜底由 i18n 统一处理。
 def _read_language_config(config_parser: configparser.RawConfigParser) -> str:
-    legacy = ""
-    if config_parser.has_option("录制设置", "language(zh_cn/en)"):
-        legacy = config_parser.get("录制设置", "language(zh_cn/en)").strip()
-    return read_config_value(config_parser, "录制设置", "language", legacy)
+    return read_config_value(config_parser, "录制设置", "language", "")
 
 
 language = _read_language_config(config)
@@ -2560,6 +2613,7 @@ def main(non_interactive: bool = False) -> None:
     global ntfy_api, ntfy_email, ntfy_tags, open_smtp_ssl, origin_line, over_push_message_text, over_show_push, pandatv_cookie, picarto_cookie, popkontv_access_token, popkontv_partner_code, popkontv_password
     global popkontv_username, pplive_cookie, proxy_addr, proxy_addr_bak, push_check_seconds, push_message_title, pushplus_token, qiandurebo_cookie, quality, replace_words, running_snapshot, running_url
     global seen_urls, semaphore, sender_email, sender_name, shopee_cookie, show_url, showroom_cookie, six_room_cookie, smtp_port, sooplive_cookie, sooplive_password, sooplive_username
+    global scheduler, recording_semaphore
     global split_line, split_time, split_video_by_time, start_with, t, t2, taobao_cookie, text_no_repeat_url, tg_chat_id, tg_token, tiktok_cookie, to_email
     global twitcasting_account_type, twitcasting_cookie, twitcasting_password, twitcasting_username, twitch_cookie, url, url_comments, url_host, url_line_list, url_tuple, url_tuples_list, use_proxy
     global video_record_quality, video_save_path, video_save_type, video_save_type_list, vvxqiu_cookie, weibo_cookie, winktv_cookie, xhs_cookie, xizhi_api_url, yinbo_cookie, yingke_cookie, yiqilive_cookie
@@ -2575,6 +2629,13 @@ def main(non_interactive: bool = False) -> None:
     # 启动时清理 URL_config.ini 重复行（原为模块级副作用，移入入口处执行）
     if os.path.isfile(url_config_file):
         utils.remove_duplicate_lines(url_config_file)
+
+    # 初始化并发调度器（自适应全局容量 + 按平台熔断降级 + 可选录制并发软上限）。
+    # 在 while 循环前创建，确保 start_record 线程启动前 scheduler/semaphore 已就绪。
+    if scheduler is None:
+        scheduler = ConcurrencyScheduler(configured_limit=max_request)
+        semaphore = scheduler.network_semaphore
+        recording_semaphore = scheduler.recording_semaphore
 
     while True:
 
@@ -2622,13 +2683,27 @@ def main(non_interactive: bool = False) -> None:
         use_proxy = options.get(read_config_value(config, "录制设置", "是否使用代理ip(是/否)", "是"), False)
         proxy_addr_bak = read_config_value(config, "录制设置", "代理地址", "")
         proxy_addr = None if not use_proxy else proxy_addr_bak
-        # 仅在配置值变化时重建信号量：此前每轮循环无条件重建，录制线程持有的旧实例
-        # 与新实例并发计数失效，导致并发上限形同虚设
+        # 仅在配置值变化时更新并发调度器：该值在动态模式下作为容量下限之一（容量随活跃任务数
+        # 缩放、带安全下限），固定模式下即并发限制本身（见下方并发模式解析）；
+        # 不再每轮重建信号量（旧逻辑会因实例替换导致并发计数失效、上限形同虚设）
         new_max_request = _safe_int(read_config_value(config, "录制设置", "同一时间访问网络的线程数", 3), 3)
         if new_max_request != max_request:
             max_request = new_max_request
-            semaphore = threading.Semaphore(max_request)
-            logger.debug(f"并发上限更新为 {max_request}（信号量已重建）")
+            if scheduler is not None:
+                scheduler.set_configured_limit(new_max_request)
+            logger.debug(f"并发线程数配置更新为 {max_request}")
+        # 录制并发软上限（资源治理）：0=不限制；>0 时限制同时 ffmpeg 录制数，防资源耗尽。
+        # 键名不得含 = / : 等 configparser 分隔符：读取会在首个分隔符处截断（永远查不到键），
+        # 写回会抛 InvalidWriteError（Python 3.13+ 禁止键名含分隔符）——曾致启动即崩溃
+        new_recording_limit = _safe_int(read_config_value(config, "录制设置", "最大同时录制数(0为不限制)", 0), 0)
+        if scheduler is not None and new_recording_limit != scheduler.recording_limit:
+            scheduler.set_recording_limit(new_recording_limit)
+        # 并发模式解析：该配置项兼作模式开关——为 0 时启用动态调速器（网络容量随活跃任务数自适应，
+        # 带安全上下限）；非 0 时忽略动态调速器，固定使用「同一时间访问网络的线程数」作为并发限制
+        # （最小 1 个槽位）。set_dynamic_mode 内部幂等（模式未变不重复播报），可每轮安全调用；
+        # 同时录制上限语义不变（仍由上方 set_recording_limit 管控 ffmpeg 数量）
+        if scheduler is not None:
+            scheduler.set_dynamic_mode(new_recording_limit == 0)
         delay_default = _safe_int(read_config_value(config, "录制设置", "循环时间(秒)", 120), 120)
         local_delay_default = _safe_int(read_config_value(config, "录制设置", "排队读取网址时间(秒)", 0), 0)
         loop_time = options.get(read_config_value(config, "录制设置", "是否显示循环秒数", "否"), False)
@@ -2925,6 +3000,9 @@ def main(non_interactive: bool = False) -> None:
                         create_var[thread_key].daemon = True
                         create_var[thread_key].start()
                         time.sleep(local_delay_default)
+            # 上报当前活跃监控数，供调度器自适应全局并发容量（解除多任务排队瓶颈）
+            if scheduler is not None:
+                scheduler.set_active_count(monitoring)
             url_tuples_list = []
             first_start = False
 

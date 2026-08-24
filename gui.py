@@ -993,17 +993,13 @@ class LiveRecorderGUI:
             dropdown_hover_color=(Colors.PRIMARY_SOFT_LIGHT, Colors.PRIMARY_SOFT_DARK),
         )
         self.language_menu.pack(fill=tk.X, padx=2, pady=(0, 12))
-        # 初始值：读 config.ini 的 language 键（新键缺失时读旧键 language(zh_cn/en) 继承
-        # 迁移值，写回迁移由 main() 启动时完成；空 → 系统语言，未识别/目录缺失 → en_US）
+        # 初始值：读 config.ini 的 language 键（空 → 系统语言，未识别/目录缺失 → en_US）
         try:
             _cfg = configparser.ConfigParser(interpolation=None)
             _cfg.read(self.main_config_file, encoding="utf-8-sig")
             _raw_lang = ""
-            if _cfg.has_section("录制设置"):
-                if _cfg.has_option("录制设置", "language"):
-                    _raw_lang = _cfg.get("录制设置", "language", fallback="")
-                elif _cfg.has_option("录制设置", "language(zh_cn/en)"):
-                    _raw_lang = _cfg.get("录制设置", "language(zh_cn/en)", fallback="")
+            if _cfg.has_option("录制设置", "language"):
+                _raw_lang = _cfg.get("录制设置", "language", fallback="")
         except Exception:
             _raw_lang = ""
         _norm_lang = i18n_module.resolve_language(_raw_lang)
@@ -2516,7 +2512,7 @@ class LiveRecorderGUI:
                         continue
                     try:
                         event = json.loads(line)
-                    except ValueError, TypeError:
+                    except (ValueError, TypeError):
                         continue
                     if isinstance(event, dict):
                         self._danmaku_dispatch(event)

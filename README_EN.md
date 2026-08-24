@@ -564,7 +564,7 @@ Four translation catalogs are built in, probed at load time in the order `gettex
 | `en_GB` | English (UK) | `i18n/en_GB.json` |
 | `zh_TW` | Traditional Chinese | `i18n/zh_TW.yaml` |
 
-- The config key `language` (formerly `language(zh_cn/en)`; the old value is inherited and migrated automatically on startup): leave it empty to follow the system language; values such as `zh_cn` / `zh-CN` / `en` / `en-US` / `en-GB` / `zh-Hant` / `zh_CN.UTF-8` are accepted and auto-normalized to the canonical language code; unrecognized values or missing language files fall back to `en_US`
+- The config key `language`: leave it empty to follow the system language; values such as `zh_cn` / `zh-CN` / `en` / `en-US` / `en-GB` / `zh-Hant` / `zh_CN.UTF-8` are accepted and auto-normalized to the canonical language code; unrecognized values or missing language files fall back to `en_US`
 - **Hot switching**: switchable via three paths — the GUI sidebar language selector, the Web panel top-bar language selector, or directly editing `config.ini`; the CLI main loop checks for config changes each round and reloads translations immediately, **no process restart needed** (the running ffmpeg subprocess is unaffected)
 - Translations no longer depend on the `LANG` / `LANGUAGE` environment variables (generally unset on Windows)
 - `zh_TW.yaml` requires `PyYAML`; if missing, only that language is lost, other formats are unaffected
@@ -661,7 +661,7 @@ ports:
 - **Health check**: automatically detects whether the `main.py` or `web.py` process is alive
 - **Resource limits**: defaults to 2 CPU / 2G memory (adjustable in docker-compose.yaml)
 - **Log rotation**: single file 50MB, up to 3 retained
-- **Built-in Node.js 22 LTS**: for running JavaScript signature scripts
+- **Built-in Node.js 24 LTS**: for running JavaScript signature scripts
 
 ## 🛠️ Development Guide
 

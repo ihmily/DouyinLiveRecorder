@@ -323,9 +323,8 @@ class TestListFiles:
         assert "a.ts" in names
 
 
+# GET/PUT /api/language：语言查询与即时切换（写回 config + 热切换进程内翻译）。
 class TestLanguageApi:
-    """GET/PUT /api/language：语言查询与即时切换（写回 config + 热切换进程内翻译）。"""
-
     def _write_language_section(self, cfg: Path, value: str = "zh_cn") -> None:
         # 追加 [录制设置] 节与 language 键（update_config_line 行级更新需键已存在）
         text = cfg.read_text(encoding="utf-8-sig")

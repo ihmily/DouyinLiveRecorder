@@ -577,7 +577,7 @@ def _ensure_utf8_streams() -> None:
         if callable(reconfigure):
             try:
                 _ = reconfigure(encoding="utf-8")
-            except ValueError, OSError:
+            except (ValueError, OSError):
                 pass
 
 

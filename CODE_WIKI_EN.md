@@ -913,7 +913,7 @@ web.py
 
 | Config Item | Description | Default |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| language | Interface language (blank follows system language; values support zh_cn/zh_CN/en/en_US/en_GB/zh_TW etc., normalized via resolve_language; falls back to en_US if unrecognized or the language file is missing; the legacy key language(zh_cn/en) is auto-migrated and inherited at startup; Web/GUI can switch instantly and write back to this key) | (empty) |
+| language | Interface language (blank follows system language; values support zh_cn/zh_CN/en/en_US/en_GB/zh_TW etc., normalized via resolve_language; falls back to en_US if unrecognized or the language file is missing; Web/GUI can switch instantly and write back to this key) | (empty) |
 | 是否跳过代理检测(是/否) | Whether to skip proxy detection | Yes |
 | 是否启用https录制 | Combined switch (merges the former "whether to force https recording" and "whether to disable SSL certificate verification (yes/no)"): enabled = https pull + skip cert verification; disabled = http pull + default cert verification (https-only overseas platforms stay as-is) | No |
 | 禁用SSL证书验证的平台(逗号分隔) | Platform-level cert-verification exemption list: **only takes effect when certificate verification is required** (i.e. http recording mode, where TLS cert verification is on by default since FFmpeg 9.0) — platforms in the list skip cert verification (for platforms with abnormal certs like Huya/Bilibili); in https recording mode cert verification is already skipped globally, making the list redundant. At startup, missing required platforms are auto-appended (Huya Live, Bilibili Live — only appended, user-entered items are never removed) | 虎牙直播,B站直播 |
@@ -1459,6 +1459,116 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 
 ## Changelog
 
+### v4.0.9-dev (2026-08-24) — High-Concurrency Multi-Platform Recording Scheduling & Resource Management Optimization (Adaptive Concurrency + Per-Platform Circuit Breaking)
+
+**Change Summary**: Addresses the reported issue of "severe latency, sharp performance degradation, and a large number of errors when recording more than 80 tasks simultaneously across multiple different platforms". Root-cause analysis of the logs (`logs/log.log` shows "共监测79个直播中 | 同一时间访问网络的线程数: 3" / "正在录制2个直播") confirmed four root causes: ① the global network semaphore was hard-fixed at 3 and `adjust_max_request` could only suppress it one-way; ② error-rate feedback formed a death spiral (more errors → more limits → more errors); ③ no platform isolation, so a single platform's API jitter dragged down the whole system; ④ no circuit-breaker/degradation mechanism, so a single task's exception was amplified in a chain.
+
+This change introduces `src/scheduler.py` as a unified scheduling hub, replacing the old "single global fixed semaphore + one-way error-rate suppression" model with "runtime-resizable semaphore + per-host circuit breaker + adaptive global concurrency capacity", and wires it into fixed integration points in `main.py` / `src/notify.py`. It also fixes 21 pre-existing Python 2-style `except A, B:` syntax errors across 14 source files (a historical leftover that blocked importing/testing the project under Python 3).
+
+**Files Involved**:
+- New `src/scheduler.py`: the scheduling core module, containing `ResizableSemaphore` / `PlatformBreaker` / `ConcurrencyScheduler` / `host_of`.
+- Modified `src/notify.py`: `record_error` / `record_success` gained a `key` parameter and delegate to `scheduler` to record the per-key error budget; `adjust_max_request` was rewritten to launch the `scheduler.adjust_loop` daemon loop; removed the now-unused `import threading`.
+- Modified `main.py`: imports `ConcurrencyScheduler` / `ResizableSemaphore` / `host_of`; the global `semaphore: threading.Semaphore = threading.Semaphore(1)` was replaced by `scheduler` / `semaphore` (`ResizableSemaphore`) / `recording_semaphore` (`ResizableSemaphore`); `main()` initializes the scheduler and wires in "最大同时访问网络线程数" (max concurrent network threads) and the new "最大同时录制数(0=不限制)" (max concurrent recordings, 0=unlimited); `start_record` adds a per-host circuit-breaker pre-check and `record_host` propagation, and pre-initializes `record_host = ""` at the top of `while True` (before `try`) to eliminate a possibly-unbound error; `check_subprocess` now gates its recording loop with `recording_semaphore`.
+- New `tests/test_scheduler.py`: 12 unit tests covering semaphore resizing, breaker state machine, adaptive capacity scaling/floor, per-key isolation, and the recording-concurrency soft cap.
+- Fixed 21 Python 2-style `except A, B:` syntax errors in 14 source files (`build_exe.py`, `gui.py`, `i18n.py`, `scripts/check_coverage.py`, `scripts/compile_po.py`, `src/collector.py`, `src/config_io.py`, `src/recorder_status.py`, `src/spider.py` (2), `src/ttwid.py`, `src/web_config.py`, `src/ws_client.py`, `src/platforms/bilibili.py`, `src/platforms/douyu.py`), making the project importable/testable under Python 3 (a pre-freeze historical leftover that did not affect the frozen exe).
+
+**Change Details**:
+- **`ResizableSemaphore`**: a context-manager semaphore supporting runtime `set_value` capacity changes — increasing wakes waiters, decreasing only lowers the ceiling without forcibly reclaiming held permits, eliminating the race of the old "destroy-and-rebuild semaphore" approach. `__init__` / `set_value` allow a capacity of 0 (paused state).
+- **`PlatformBreaker`**: a per-key circuit breaker with a closed→open→half-open state machine. When the consecutive-failure ratio exceeds a threshold it opens (skips probing and backs off); after cooldown a single probe is allowed; a successful probe returns to closed, a failed probe re-opens. This isolates a single platform's jitter as degradation instead of amplifying it globally.
+- **`ConcurrencyScheduler`**: the hub. Global network concurrency capacity = `max(configured_floor, min(ceiling, ceil(active/scale_divisor)))`, gently reduced under extreme error rates but never below a safety floor (default min=8 / max=128); per-key error budgets drive each platform's breaker; an optional recording-concurrency soft cap (default 0=unlimited, restored to high capacity); `adjust_loop` is a daemon loop that recomputes capacity every 5 seconds, replacing the old one-way `adjust_max_request`.
+- **`host_of(url)`**: extracts the URL host (lowercased, stripped of port/path/query) as the breaker key; custom flv/m3u8 direct links fall back to the path itself.
+- **`notify.py` wiring**: `record_error(key=None)` / `record_success(key=None)`, in addition to updating `main.error_window` / `error_count`, delegate via `getattr(main, "scheduler", None)` to record the per-key breaker budget; `adjust_max_request` was rewritten to wait for `main.scheduler` and then start `scheduler.adjust_loop()` as a daemon thread.
+- **`main.py` wiring**:
+  - The global was changed from `semaphore: threading.Semaphore = threading.Semaphore(1)` to `scheduler: ConcurrencyScheduler | None` (None placeholder), `semaphore: ResizableSemaphore`, and `recording_semaphore: ResizableSemaphore`.
+  - `main()` initializes `scheduler = ConcurrencyScheduler(configured_limit=max_request)` on first run and points `semaphore` / `recording_semaphore` at its attributes; reads the new "最大同时录制数(0=不限制)" config via `scheduler.set_recording_limit(...)`; after the thread-spawn loop, `scheduler.set_active_count(monitoring)` reports the active count.
+  - `start_record`: `record_host = host_of(record_url)` (with `record_host = ""` pre-set at the top of `while True`, before `try`, to eliminate possibly-unbound); before platform dispatch it performs a breaker pre-check — if `scheduler.allow(record_host)` is False, `time.sleep(backoff)` then `continue` to skip this round's probe; all `record_error()` / `record_success()` calls pass through `record_host`.
+  - `check_subprocess`: wraps the `while process.poll() is None:` recording loop in `recording_semaphore` `acquire()` / `release()` (try/finally), enabling an optional cap on simultaneous ffmpeg recordings.
+- **Test additions**: `tests/test_scheduler.py` with 12 cases (including corrections to two test premises: ① `ResizableSemaphore(0)` is a valid paused state; ② a breaker only resets after "cooldown + a successful probe", not by a direct `record_success` while open).
+
+**Impact Scope**:
+- The concurrency model is upgraded from "single global fixed 3-slot semaphore + one-way error-rate suppression" to "adaptive global capacity (scales with active task count, with a safety floor) + per-host platform-isolated circuit breaking + optional recording-concurrency soft cap". With 80+ tasks across multiple platforms, the 77-thread queue behind a fixed 3 slots no longer occurs; a single platform's API jitter is isolated as degradation and does not drag down the whole system; a single task's exception is captured and counted into the per-platform error budget, preventing chain errors from making the system unavailable.
+- Only `src/scheduler.py` was added and wired into fixed integration points in `main.py` / `src/notify.py`; the 50+ platform dispatch/recording functions were **not rewritten**, and behavior is backward compatible. The old `semaphore` global name is retained (now pointing at a `ResizableSemaphore`), so downstream `with semaphore:` usage is unchanged.
+- New config item "最大同时录制数(0为不限制)" (max concurrent recordings, 0=unlimited; default 0 = treated as high capacity, non-blocking; the key was initially misnamed "最大同时录制数(0=不限制)", whose embedded `=` delimiter truncated reads and raised `InvalidWriteError` on write-back, crashing startup — renamed, with `read_config_value`'s fallback hardened). "最大同时访问网络线程数" (max concurrent network threads) is now one of the concurrency-capacity floors (no longer the sole one-way suppression knob).
+- Performance: network concurrency capacity scales up adaptively with the active task count (default floor 8, ceiling 128), significantly reducing probe queuing and processing latency in high-concurrency scenarios.
+
+**Verification**:
+- `tests/test_scheduler.py` + `tests/test_main_fixes.py`: **41 passed**;
+- Full `pytest`: **707 passed / 3 skipped**, with 2 failures both being the pre-existing sandbox safe-delete guard in `tests/test_twitch_live_collector.py` (`SAFE_DELETE_FAIL_CLOSED … windows-sandbox-recycle-bin-unavailable`) — a historical environment limitation unrelated to this change;
+- `basedpyright src/scheduler.py tests/test_scheduler.py`, `basedpyright tests/`, and `basedpyright main.py src/notify.py src/scheduler.py` all report **0 errors / 0 warnings / 0 notes**;
+- `black --check` / `isort --check-only` pass on all touched files;
+- `python -m py_compile` passes on all sources.
+
+**Related**:
+- Same lineage as v4.0.8.3-dev (2026-08-21) "start_record complexity governance" — that change extracted the platform-dispatch chain into `_resolve_platform_stream`; this change adds a circuit-breaker pre-check before that function's call, without touching its recording execution chain.
+- The per-host isolation/degradation approach is consistent with the AGENTS.md known-pitfall "single-platform CDN occasional 403/405 probe false-kill" remediation goal (after isolation, a single platform's jitter no longer amplifies globally).
+
+
+### v4.0.9-dev (2026-08-23) — Recording-Result Feedback to Scheduler + Probe Backoff Marking (Root Fix for Huya 403 Dead Loop)
+
+**Summary**: The 2026-08-23 GUI real-world run with 79 rooms exposed a missing recording-side feedback loop: Huya rooms showed probe 200/206 success followed immediately by ffmpeg 403 rejection, yet `check_subprocess` previously **neither reported failure samples by return code, nor recorded a success sample unconditionally at round end** — the per-host circuit-breaker error budget got diluted and never triggered, so rooms kept looping on the same dead CDN line. Console concurrency display showed the config value (3) instead of the scheduler's adaptive value (12/20), misleading users into thinking the optimization had no effect. This change wires recording failures into the scheduler and triggers probe backoff so the next round picks the next CDN candidate.
+
+**Files touched**:
+- `main.py`: `check_subprocess` adds `_proc_started_at = time.time()`; branches on `return_code` (rc==0 → `record_success(host_of(record_url))`, rc!=0 → `record_error(host_of(record_url))`); new module constant `_FFMPEG_FAST_FAIL_SECONDS = 20.0`, fast-fail path extracts the actual stream URL from `ffmpeg_command` (`-i` arg) and calls `mark_ffmpeg_reject` to record it into the probe-backoff table; removes unconditional `record_success(record_host)` at round end; `direct_download_stream` success path adds `record_success(record_host)`.
+- `src/stream_select.py`: new public entry `mark_ffmpeg_reject(url, platform)` (delegates to `_mark_probe_reject`); silent no-op when `platform` not in `_PROBE_BACKOFF_PLATFORMS` (only `"虎牙直播"`).
+- `src/recorder_status.py`: new `_live_network_capacity()` returns scheduler live value (`scheduler.network_semaphore.value`), falls back to `main.max_request` when scheduler is not ready; console status line displays this live value.
+- New `tests/test_record_failure_feedback.py`: 5 unit tests covering success / fast-fail+backoff / slow-fail-no-mark / missing `-i` flag / capacity fallback.
+- `tests/test_stream_select.py`: adds `test_mark_ffmpeg_reject_marks_backoff` (cross-round token hit + non-whitelisted platform no-op).
+- `AGENTS.md`: new "Recording-result feedback conventions" subsection.
+
+**Details**:
+- **Failure sample reporting**: `check_subprocess` in its `return_code` branch — success (rc==0, stream ends normally/streamer goes offline) records one success sample per room host to keep `error_window` error-rate accurate; failure (rc!=0, CDN rejection) records one failure sample to drive per-host circuit-breaking and global back-pressure.
+- **Fast-fail probe backoff**: `time.time() - _proc_started_at <= _FFMPEG_FAST_FAIL_SECONDS` (20 s) signals a fast failure (signature of input-open CDN rejection; Huya HS-line ffmpeg exits ~1 s after probe 200 with 403); extracts the actual stream URL behind `-i` from `ffmpeg_command`, calls `mark_ffmpeg_reject` to record into the 60 s `_probe_backoff` window; the next `select_source_url` round skips probing this line and tries the next CDN candidate. This "probe false-green" is invisible from the probe side (httpx) — only the recording side can feed back this info.
+- **Slow-fail exemption**: `-reconnect_delay_max 60` exhaustion (>60 s) is stream interruption / reconnection-exhaustion, not "line unreachable" — only records failure sample, does not mark probe backoff (line was previously reachable; marking it backoff would hurt candidate selection).
+- **Malformed-input fallback**: if `ffmpeg_command` lacks `-i`, `except ValueError` catches, records failure sample only, skips backoff mark.
+- **Capacity display**: `_live_network_capacity()` reads `scheduler.network_semaphore.value` (when scheduler is ready), else falls back to `main.max_request` (early init / test env); console no longer misleads.
+- **Direct-download alignment**: `direct_download_stream` success path adds `record_success(record_host)` to align with ffmpeg-path semantics (failure already has `record_error` in the except branch).
+
+**Impact**:
+- Huya rooms hitting "probe 200 → ffmpeg 403" dead loops will now skip that CDN line's probe next round and try the next candidate among HS/HW/TX/AL — dead lines get abandoned quickly, avoiding wasted retry loops and circuit-breaker stat pollution.
+- Only `main.py` / `src/stream_select.py` / `src/recorder_status.py` are modified; wiring points are the `check_subprocess` return-code branch, `direct_download_stream` success path, and `display_info` status line — the platform dispatch chain and recording execution mainline are untouched.
+- Backoff whitelist is Huya-only (`_PROBE_BACKOFF_PLATFORMS = ("虎牙直播",)`); other platforms unaffected, preserving "retry-once-then-verdict" semantics.
+
+**Verification**:
+- `pytest tests/test_record_failure_feedback.py tests/test_stream_select.py tests/test_scheduler.py`: **43 passed / 0 failed**;
+- Full `pytest --ignore=tests/test_twitch_live_collector.py --ignore=tests/test_srt_timeline_anchor.py`: **710 passed / 3 skipped**, plus 1 unrelated failure (`test_config_io_readonly.py::test_read_config_value_delimiter_key_no_crash` — config_io key-name-contains-`=` writeback fallback, Python-version-dependent);
+- `black --check` (run with Python 3.14; venv Python 3.13 cannot AST-verify 3.14-suffixed syntax) / `isort --check-only` all pass on the 5 touched files;
+- `basedpyright main.py src/recorder_status.py src/stream_select.py tests/test_record_failure_feedback.py`: **0 errors / 0 warnings / 0 notes**.
+
+**Related**:
+- Continues the v4.0.9-dev (2026-08-23) scheduler governance — the scheduler already had per-host circuit-breakers and adaptive capacity; this change closes the last feedback loop: "recording-side failure → circuit-breaker sample + probe backoff".
+- Consistent with the AGENTS.md known-pitfall "CDN probe throttling/backoff" remediation goal: probe-side throttling+backoff lowers false-risk-control rate, recording-side backoff marking closes the blind spot where probe (httpx) and ffmpeg client fingerprints differ.
+
+### v4.0.9-dev (2026-08-23) — Dual Network-Concurrency Modes (Adaptive vs Fixed)
+
+**Change Summary**: On top of the already-adaptive `ConcurrencyScheduler` capacity, this change introduces a "fixed concurrency" mode so that the `最大同时录制数(0为不限制)` (max concurrent recordings, 0=unlimited) config item doubles as the concurrency-mode switch, letting users choose the scheduling strategy instead of being forced to use the adaptive governor.
+
+**Files touched**:
+- `src/scheduler.py`: `ConcurrencyScheduler` gains a `_dynamic_mode` field plus `set_dynamic_mode(enabled: bool)` and `dynamic_mode` property. `_compute_capacity()` now branches by mode — dynamic mode keeps the `max(floor, min(ceiling, ceil(active/scale_divisor)))` adaptive formula plus error back-pressure; fixed mode ignores the adaptive governor and back-pressure and pins capacity to `configured_limit` (the `同一时间访问网络的线程数` config, minimum 1 slot, hot-reload effective immediately). `recompute()` and `set_dynamic_mode()` now log per-mode `并发模式: 动态调速/固定` messages; `set_dynamic_mode()` is idempotent (returns early if the mode hasn't changed and was already announced), avoiding spurious per-round re-computes and noisy logs from `main()`.
+- `main.py`: the hot-reload loop now appends `scheduler.set_dynamic_mode(new_recording_limit == 0)` right after `scheduler.set_recording_limit(...)`, wiring in the "0=dynamic, non-zero=fixed" switch; the message at line 2693 was narrowed to remove the dynamic-mode-only wording "容量由调度器自适应" (which was incorrect for fixed mode).
+- New 3 cases in `tests/test_scheduler.py`: `test_scheduler_fixed_mode_pins_capacity_to_configured_limit` (fixed capacity stays pinned regardless of task count; round-trip switching back to dynamic restores adaptive scaling), `test_scheduler_fixed_mode_ignores_error_backpressure` (fixed mode ignores error-rate back-pressure), `test_scheduler_fixed_mode_guarantees_min_one_slot` (fixed-mode hot update takes effect immediately; illegal values floor at 1).
+- `AGENTS.md`: concurrency-model section updated with the mode semantics (`set_dynamic_mode` integration, dual-branch logic, orthogonality of per-key breaker and mode, 15 scheduler cases).
+
+**Change details**:
+- **Mode semantics**: `最大同时录制数(0为不限制)` = 0 enables adaptive scaling (network capacity scales with active task count, floor 8 / ceiling 128, gently reduced under extreme error rates but never below the safety floor). ≠ 0 disables the adaptive governor: network capacity is pinned to `同一时间访问网络的线程数` (hot-reload effective, minimum 1 slot, error back-pressure does not shrink it). The per-key platform breaker is orthogonal to the mode and stays active in both modes.
+- **Recording-concurrency cap unchanged**: still governed by `scheduler.set_recording_limit(...)`, unaffected by mode switching.
+- **`adjust_loop` becomes a recompute no-op in fixed mode** (`recompute()` skips `set_value` when the target capacity is unchanged), so the same daemon loop is safe to reuse.
+- **Logging**: `set_dynamic_mode()` emits `并发模式: 动态调速（网络容量随活跃任务数自适应，当前 <n>，下限 <min>，上限 <max>）` or `并发模式: 固定（忽略动态调速器，网络容量固定为 <n>，来源: 配置「同一时间访问网络的线程数」）` on first broadcast / mode change; capacity changes append `并发模式: 动态调速/固定，网络容量调整为 <n>（活跃任务 <n>/来源: ...）`.
+
+**Impact scope**:
+- Only `src/scheduler.py` / `main.py` / `tests/test_scheduler.py` / `AGENTS.md` are modified. All existing `ConcurrencyScheduler` APIs — `set_active_count` / `set_configured_limit` / `set_recording_limit` / `allow` / `record_error` / `record_success` / `network_semaphore` / `recording_semaphore` — and the downstream `with semaphore:` usage are preserved, fully backward compatible.
+- Users switch to fixed concurrency by setting `最大同时录制数(0为不限制)` to a non-zero value (e.g. 2); in that mode `同一时间访问网络的线程数` is the effective concurrency limit (no longer a capacity floor). Setting it back to 0 restores adaptive scaling.
+
+**Verification**:
+- `pytest tests/test_scheduler.py`: **15 passed** (the 3 new mode cases included);
+- `pytest tests/test_record_failure_feedback.py tests/test_concurrency.py -q`: **11 passed** (scheduler-governance and concurrency-thread-safety regressions all green);
+- `black --check src/scheduler.py main.py tests/test_scheduler.py`, `isort --check-only src/scheduler.py main.py tests/test_scheduler.py`, `mypy src/scheduler.py tests/test_scheduler.py`, `basedpyright tests/test_scheduler.py`, `py_compile main.py src/scheduler.py` all pass with **0 errors / 0 warnings**;
+- End-to-end smoke (against real `config/config.ini` values: `最大同时录制数(0为不限制)=0`, `同一时间访问网络的线程数=3`): dynamic mode with 80 active tasks → capacity 20 (scales up, respects floor 8); switched to fixed mode with 200 active tasks → capacity stays 3; in fixed mode, setting configured limit to 0 floors capacity to 1; logs emit `并发模式: 动态调速/固定 …` as expected.
+
+**Related**:
+- Continues the v4.0.9-dev (2026-08-23) / (2026-08-24) scheduler governance — with per-host breakers, adaptive capacity, recording-side feedback and probe backoff already in place, this change adds the "user-selectable concurrency strategy" layer on top, letting the scheduler serve both strong-throughput-adaptive and stable-concurrency-ceiling workloads.
+- Synced with the AGENTS.md concurrency-model section and the `test_scheduler.py` case count (12 → 15).
+
+
 ### v4.0.9-dev (2026-08-23) — Python 3.14 Upgrade + Language Config Key Migration (Comprehensive Maintenance)
 
 **Source**: The user asked to upgrade the project to Python 3.14, comprehensively check and remove deprecated syntax/modules/features, raise the minimum version requirement from Python 3.10 to `>=3.14`, and at the same time unify the `config/config.ini` `language(zh_cn/en)` config item into `language`, implementing the complete chain of "blank follows system language, unrecognized falls back to en_US, GUI/Web panels support restart-free hot switching, and old key values are auto-migrated at startup".
@@ -1597,7 +1707,7 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
   - **Added three-language translations**: `i18n/en_US.json` (English source identical + Chinese source translated to English, 282 entries), `i18n/en_GB.json` (British spelling variants: minimise/log in/Unauthorised, etc.), `i18n/zh_TW.yaml` (simplified→traditional character mapping + Taiwan usage adaptation: 视频→影片/网络→網路/服务器→伺服器/软件→軟體/设置→設定/默认→預設/磁盘→磁碟/地址→位址/运行→執行/代码→程式碼/支持→支援/文件→檔案/高级设置→進階設定/错误信息→錯誤訊息/录制→錄製, etc.); the four catalogs have consistent key sets (enforced by tests).
   - **Web instant language switch**: backend added `GET /api/language` (current language + supported list) and `PUT /api/language` (validate → write back to config → hot-switch in-process translation, illegal value 400); frontend top bar added a language selector, `index.html` static text marked with `data-i18n`/`data-i18n-placeholder`, `app.js` has a built-in four-language text dictionary (`t()` for values, `applyTranslations()` for redraw), all dynamically rendered text (toast/empty-state/buttons/confirm) wired into `t()`; language preference stored in localStorage.
   - **GUI instant language switch**: `gui.py` sidebar added a "Language" OptionMenu (same style as the appearance menu), selection immediately calls `i18n.set_language()` hot-switch + `update_config_line` writes back to config.ini + logs a hint; at startup reads language from config and initializes i18n.
-  - **main.py language chain**: `set_language(language)` initialization at import (installs `translated_print` under any language); main loop detects config language changes each round and hot-switches immediately (Web/GUI config changes take effect next round); the `language(zh_cn/en)` key name kept for compatibility, values support all new spellings.
+  - **main.py language chain**: `set_language(language)` initialization at import (installs `translated_print` under any language); main loop detects config language changes each round and hot-switches immediately (Web/GUI config changes take effect next round); the language config key is unified as `language` (the legacy key `language(zh_cn/en)` has been removed); values support all new spellings.
   - Dependency: added `PyYAML>=6.0.3` (pyproject + requirements.txt + uv.lock).
 - **tests/ five-tool all-green**:
   - **mypy tests/**: initial 435 errors → 0. Auto-annotation script added ~420 signature annotations (`-> None`/fixture param types/return type inference/`Generator[None, None, None]`), and ~60 real type issues fixed manually (`__enter__`/`__exit__` return types, `__wrapped__` via `_unwrap()`, `object` narrowing cast, `_srt` nullable narrowing, mock signature default restoration, etc.); two defects introduced by the auto-script during fixing regressed (bare `*` separator mis-annotation, lost param default — the latter once caused `test_douyin_empty_cookie_fetches_ttwid` to fail; default restored and fully regressed).

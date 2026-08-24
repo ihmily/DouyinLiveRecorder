@@ -564,7 +564,7 @@ Windows 下控制台默认「最小化到系统托盘」（`web_minimize_to_tray
 | `en_GB` | English (UK) | `i18n/en_GB.json` |
 | `zh_TW` | 繁體中文 | `i18n/zh_TW.yaml` |
 
-- 配置键 `language`（原 `language(zh_cn/en)`，启动时自动迁移继承旧值）：留空跟随系统语言；取值支持 `zh_cn` / `zh-CN` / `en` / `en-US` / `en-GB` / `zh-Hant` / `zh_CN.UTF-8` 等写法，自动归一化到规范语言码；键值不可识别或对应语言文件缺失时回退 `en_US`
+- 配置键 `language`：留空跟随系统语言；取值支持 `zh_cn` / `zh-CN` / `en` / `en-US` / `en-GB` / `zh-Hant` / `zh_CN.UTF-8` 等写法，自动归一化到规范语言码；键值不可识别或对应语言文件缺失时回退 `en_US`
 - **热切换**：GUI 侧边栏语言选择器、Web 面板顶栏语言选择器、直接编辑 `config.ini` 三种途径均可切换；命令行主循环每轮检测配置变化并即时重载翻译，**无需重启进程**（录制中的 ffmpeg 子进程不受影响）
 - 翻译不再依赖 `LANG` / `LANGUAGE` 环境变量（Windows 普遍未设置）
 - `zh_TW.yaml` 需要 `PyYAML`；缺失时仅损失该语言，其余格式不受影响
@@ -663,7 +663,7 @@ ports:
 - **健康检查**：自动检测 `main.py` 或 `web.py` 进程是否存活
 - **资源限制**：默认限制 2 CPU / 2G 内存（可在 docker-compose.yaml 调整）
 - **日志轮转**：单文件 50MB，最多保留 3 份
-- **内置 Node.js 22 LTS**：用于运行 JavaScript 签名脚本
+- **内置 Node.js 24 LTS**：用于运行 JavaScript 签名脚本
 
 ## 🛠️ 开发指南
 

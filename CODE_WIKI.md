@@ -913,7 +913,7 @@ web.py
 
 | 配置项                | 说明                                                                                                                | 默认值                                                                                                                |     |       |       |                        |    |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | --- | ----- | ----- | ---------------------- | -- |
-| language           | 界面语言（留空跟随系统语言；值支持 zh_cn/zh_CN/en/en_US/en_GB/zh_TW 等写法，经 resolve_language 解析归一，不可识别或语言文件缺失回退 en_US；旧键 language(zh_cn/en) 启动时自动迁移继承；Web/GUI 可即时切换并写回本键） | （空）                                                                                                              |     |       |       |                        |    |
+| language           | 界面语言（留空跟随系统语言；值支持 zh_cn/zh_CN/en/en_US/en_GB/zh_TW 等写法，经 resolve_language 解析归一，不可识别或语言文件缺失回退 en_US；Web/GUI 可即时切换并写回本键） | （空）                                                                                                              |     |       |       |                        |    |
 | 是否跳过代理检测(是/否)      | 是否跳过代理检测                                                                                                          | 是                                                                                                                  |     |       |       |                        |    |
 | 是否启用https录制        | 整合开关（合并原「是否强制启用https录制」与「是否禁用SSL证书验证(是/否)」）：开启=https 拉流+跳过证书校验；关闭=http 拉流+默认证书校验（https-only 海外平台保持原样）             | 否                                                                                                                  |     |       |       |                        |    |
 | 禁用SSL证书验证的平台(逗号分隔) | 平台级证书校验豁免列表：**仅在「需要证书校验」时生效**（即 http 录制模式，FFmpeg 9.0 起 TLS 证书验证默认开启）——列表内平台跳过证书校验（适用于虎牙/B站等证书异常平台）；https 录制模式已全局跳过、列表冗余。启动时自动追加缺失的必需平台（虎牙直播、B站直播，只追加不移除用户手填项） | 虎牙直播,B站直播                                                                                                          |     |       |       |                        |    |
@@ -1464,6 +1464,117 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 
 ## 更新日志
 
+### v4.0.9-dev (2026-08-24) — 高并发多平台录制调度与资源管理优化（自适应并发 + 按平台熔断降级）
+
+**变更摘要**：针对「同时录制超过 80 个任务且跨多平台时严重延迟、性能骤降、大量报错」的问题。根因定位为四点：① 全局网络信号量固定为 3 且 `adjust_max_request` 只能单向压低；② 错误率反馈呈死亡螺旋（越错越限、越限越错）；③ 无平台隔离，单平台接口抖动会拖垮全局；④ 无熔断/降级机制，单任务异常被连锁放大。本变更引入 `src/scheduler.py` 统一调度中枢，以「可运行时调容信号量 + 按 host 熔断器 + 自适应全局并发容量」取代旧模型，并打通 `main.py`/`notify.py` 接线，支持高并发多平台录制、减少排队延迟、实现按平台隔离的降级与错误捕获。
+
+**涉及文件**：
+- 新增 `src/scheduler.py`：调度核心模块，含 `ResizableSemaphore` / `PlatformBreaker` / `ConcurrencyScheduler` / `host_of`。
+- 修改 `src/notify.py`：`record_error` / `record_success` 增加 `key` 形参并委托 `scheduler` 按 key 计入错误预算；`adjust_max_request` 改为启动 `scheduler.adjust_loop` 守护循环；移除不再使用的 `import threading`。
+- 修改 `main.py`：引入 `ConcurrencyScheduler` / `ResizableSemaphore` / `host_of`；以可重置信号量替换全局 `threading.Semaphore(1)`；`main()` 初始化调度器并按配置接入「最大同时访问网络线程数」与新增「最大同时录制数(0=不限制)」；`start_record` 增加按 host 熔断预检与 `record_host` 透传；`check_subprocess` 录制循环受 `recording_semaphore` 管控；修复 `record_host` 可能未绑定（possibly unbound）的静态检查错误。
+- 新增 `tests/test_scheduler.py`：12 个单元测试，覆盖信号量调容、熔断器状态机、自适应容量缩放/下限、按 key 隔离、录制并发软上限。
+- 修复 14 个源文件共 21 处 Python 2 风格 `except A, B:` 语法错误（`build_exe.py`、`gui.py`、`i18n.py`、`scripts/check_coverage.py`、`scripts/compile_po.py`、`src/collector.py`、`src/config_io.py`、`src/recorder_status.py`、`src/spider.py`(2)、`src/ttwid.py`、`src/web_config.py`、`src/ws_client.py`、`src/platforms/bilibili.py`、`src/platforms/douyu.py`），使项目在 Python 3 下可导入/可测试（属历史遗留、冻结前已存在，不影响冻结 exe）。
+
+**改动说明**：
+- **`ResizableSemaphore`**：实现上下文管理器协议的信号量，支持运行时 `set_value` 增减容量——增大唤醒等待者、减小仅降上限不强行回收已持锁，消除旧「销毁重建信号量」的竞态。`__init__` / `set_value` 允许容量为 0（暂停态）。
+- **`PlatformBreaker`**：按 key 的熔断器，closed→open→half-open 状态机。连续失败样本比例超阈值即 open（跳过探测并退避），冷却后经唯一探针放行；探针成功恢复 closed、失败重新 open。用于把单平台抖动隔离降级，避免连锁拖垮全局。
+- **`ConcurrencyScheduler`**：调度中枢。全局网络并发信号量容量 = `max(配置下限, min(上限, ceil(活跃数/缩放因子)))`，错误率极高时温和降容但永不低于安全下限（默认 min=8 / max=128）；按 key 错误预算驱动各平台熔断器；可选录制并发软上限（默认 0=不限制，恢复高容量）；`adjust_loop` 守护循环每 5 秒重算容量，取代旧单向压制的 `adjust_max_request`。
+- **`host_of(url)`**：取 URL 主机名（小写、去端口/路径/查询）作为熔断 key；自定义 flv/m3u8 直链退回路径本身。
+- **`notify.py` 接线**：`record_error(key=None)` / `record_success(key=None)` 在更新 `main.error_window` / `error_count` 之外，委托 `getattr(main, "scheduler", None)` 按 key 计入熔断错误预算；`adjust_max_request` 重写，等待 `main.scheduler` 就绪后启动 `scheduler.adjust_loop()` 守护线程。
+- **`main.py` 接线**：
+  - 全局变量由 `semaphore: threading.Semaphore = threading.Semaphore(1)` 改为 `scheduler: ConcurrencyScheduler | None`（None 占位）、`semaphore: ResizableSemaphore`、`recording_semaphore: ResizableSemaphore`。
+  - `main()` 中首次初始化 `scheduler = ConcurrencyScheduler(configured_limit=max_request)`，并将 `semaphore` / `recording_semaphore` 指向其属性；读取配置「最大同时录制数(0=不限制)」经 `scheduler.set_recording_limit(...)` 接入；线程派生循环后 `scheduler.set_active_count(monitoring)` 上报活跃数。
+  - `start_record`：`record_host = host_of(record_url)`（并在 `while True` 顶部、try 之前预置 `record_host = ""` 以消除 possibly unbound）；进入平台分派前先做熔断预检——若 `scheduler.allow(record_host)` 为 False 则 `time.sleep(退避)` 后 `continue` 跳过本轮探测；所有 `record_error()` / `record_success()` 调用透传 `record_host`。
+  - `check_subprocess`：将 `while process.poll() is None:` 录制循环包入 `recording_semaphore` 的 `acquire()` / `release()`（try/finally），实现可选的同时 ffmpeg 录制数上限治理。
+- **测试补充**：`tests/test_scheduler.py` 共 12 用例（含修正两处测试前提：① `ResizableSemaphore(0)` 合法表示暂停态；② 熔断需经「冷却 + 成功探针」才解除，而非 open 态直接 `record_success` 复位）。
+
+**影响范围**：
+- 并发模型由「单全局固定 3 槽信号量 + 单向错误率压制」升级为「自适应全局容量（随活跃任务数缩放、带安全下限）+ 按 host 平台隔离熔断 + 可选录制并发软上限」。80+ 任务跨多平台时不再因固定 3 槽而 77 线程排队；单平台接口抖动被隔离降级，不拖垮全局；单任务异常被捕获并计入按平台错误预算，避免连锁报错导致系统不可用。
+- 仅新增 `src/scheduler.py` 并在 `main.py` / `notify.py` 固定接线点接入，**未重写 50+ 平台分派/录制函数**，行为向后兼容；旧 `semaphore` 全局变量名保留（现指向 `ResizableSemaphore`），下游 `with semaphore:` 用法不变。
+- 新增配置项「最大同时录制数(0为不限制)」（默认 0=不限制，即视作高容量不阻塞；键名曾误写为「最大同时录制数(0=不限制)」，因含 `=` 分隔符致读取截断、写回抛 `InvalidWriteError` 启动即崩溃，已改名并硬化 `read_config_value` 兜底）；「最大同时访问网络线程数」现作为并发容量下限之一（不再是单向压制的唯一手段）。
+- 性能：网络并发容量随活跃任务数自适应提升（默认下限 8、上限 128），显著降低高并发场景的探测排队与处理延迟。
+
+**验证**：
+- `tests/test_scheduler.py` + `tests/test_main_fixes.py`：**41 passed**；
+- 全量 `pytest`：**707 passed / 3 skipped**，另有 2 处失败均为沙箱 safe-delete 护栏在 `tests/test_twitch_live_collector.py` 的既有环境限制（`SAFE_DELETE_FAIL_CLOSED … windows-sandbox-recycle-bin-unavailable`），属历史环境约束、与本次改动无关；
+- `basedpyright src/scheduler.py tests/test_scheduler.py`、`basedpyright tests/`、`basedpyright main.py src/notify.py src/scheduler.py` 均 **0 errors / 0 warnings / 0 notes**；
+- `black --check` / `isort --check-only` 涉及文件全通过；
+- `python -m py_compile` 全量源码通过。
+
+**关联**：
+- 与 v4.0.8.3-dev (2026-08-21) 「start_record 复杂度治理」同源——后者把平台分派链抽为 `_resolve_platform_stream`，本次在该函数调用前增加熔断预检，未改动其录制执行链。
+- 按 host 隔离降级思路与 AGENTS.md 已知坑「单平台 CDN 偶发 403/405 探针误杀」治理目标一致（隔离后单平台抖动不再全局放大）。
+
+
+### v4.0.9-dev (2026-08-23) — 录制结果反馈调度器 + 探针退避标记（虎牙 403 死循环根治）
+
+**变更摘要**：2026-08-23 GUI 79 房间实测暴露录制侧反馈缺失：虎牙房间探针 200/206 通过后 ffmpeg 紧随被 403，但 `check_subprocess` 此前按退出码**既不上报失败样本、轮末还无条件上报成功样本**——按 host 熔断统计被稀释、永不触发，房间无限重撞同一条死线路；控制台并行容量显示配置值（3）而非调度器自适应值（12/20），误导用户以为高并发优化未生效。本次修复让录制失败正确反馈调度器并触发探针退避，下一轮改试下一 CDN 候选。
+
+**涉及文件**：
+- 修改 `main.py`：`check_subprocess` 新增 `_proc_started_at = time.time()` 进程启动时刻；按 `return_code` 分支上报（rc==0 → `record_success(host_of(record_url))`、rc!=0 → `record_error(host_of(record_url))`）；新增 `_FFMPEG_FAST_FAIL_SECONDS = 20.0` 模块常量，快速失败时从 `ffmpeg_command` 解析 `-i` 后的实际拉流地址并 `mark_ffmpeg_reject` 记入探针退避；移除轮末无条件 `record_success(record_host)`；`direct_download_stream` 成功路径补 `record_success(record_host)`。
+- 修改 `src/stream_select.py`：新增公开入口 `mark_ffmpeg_reject(url, platform)`（委托 `_mark_probe_reject`），`platform` 不在 `_PROBE_BACKOFF_PLATFORMS`（仅 `虎牙直播`）时静默无操作。
+- 修改 `src/recorder_status.py`：新增 `_live_network_capacity()` 取调度器实时容量（`scheduler.network_semaphore.value`），未就绪时回退 `main.max_request`；控制台状态行显示该实时值。
+- 新增 `tests/test_record_failure_feedback.py`：5 个单元测试，覆盖成功样本/快速失败+退避标记/慢速失败不标记/缺 -i 入参安全/容量回退。
+- 修改 `tests/test_stream_select.py`：新增 `test_mark_ffmpeg_reject_marks_backoff`（退避跨轮新 token 命中 + 非白名单平台无操作）。
+- 修改 `AGENTS.md`：新增「录制结果反馈约定」小节（失败样本/快速失败探针退避/轮末禁止无条件成功/容量显示实时值/回归测试要求）。
+
+**改动说明**：
+- **失败样本上报**：`check_subprocess` 在 `return_code` 分支处（`streamget.log` 退出码分支）：
+  - 成功（rc==0，主播下线）：按房间 host 记一次成功样本，与录制失败分支配对，维持 error_window 真实错误率；
+  - 失败（rc!=0，CDN 拒绝）：记一次失败样本驱动按 host 熔断与全局背压。
+- **快速失败探针退避**：`time.time() - _proc_started_at <= _FFMPEG_FAST_FAIL_SECONDS`（20 秒）为快速失败（输入打开被 CDN 拒绝的签名，实测虎牙 HS 线路探针通过后 ffmpeg 约 1 秒 403 退出）；此时从 `ffmpeg_command` 提取 `-i` 后的实际拉流 URL，调用 `mark_ffmpeg_reject` 记入 `_probe_backoff` 60 秒退避窗口——下一轮 `select_source_url` 对该线路零探针、改试下一 CDN 候选。该「探针假绿」在探针侧（httpx）永远观测不到，只有录制侧的失败能反馈该信息。
+- **慢速失败豁免**：`-reconnect_delay_max 60` 耗尽（>60s）属拉流中断/重连耗尽，不属「线路本身不可达」，只记失败样本、不记探针退避——该线路此前可正常拉流，标记退避会误伤候选选择。
+- **异常入参兜底**：`ffmpeg_command` 缺 `-i`（异常入参）时 `except ValueError` 捕获，仅记失败样本、跳过退避标记。
+- **容量显示**：`_live_network_capacity()` 取 `scheduler.network_semaphore.value`（调度器就绪时），否则回退 `main.max_request`（早期初始化/测试环境）；控制台状态行不再误导。
+- **直下路径对齐**：`direct_download_stream` 成功路径补 `record_success(record_host)`，与 ffmpeg 路径语义对齐（失败已在 except 分支有 `record_error`）。
+
+**影响范围**：
+- 虎牙房间遇到「探针 200 → ffmpeg 403」死循环时，下一轮会跳过该 CDN 线路的探针、改试 HS/HW/TX/AL 中的下一候选——实测 79 房间场景下，坏线路被快速放弃，避免无效重试循环与熔断统计污染。
+- 仅修改 `main.py` / `src/stream_select.py` / `src/recorder_status.py` 三个源文件；接线点位于 `check_subprocess` 退出码分支、`direct_download_stream` 成功路径、`display_info` 状态行——未改动平台分派链与录制执行主链。
+- 退避白名单仅限虎牙（`_PROBE_BACKOFF_PLATFORMS = ("虎牙直播",)`）；其他平台不受影响，保持「重试一次再定罪」语义。
+
+**验证**：
+- `pytest tests/test_record_failure_feedback.py tests/test_stream_select.py tests/test_scheduler.py`：**43 passed / 0 failed**；
+- 全量 `pytest --ignore=tests/test_twitch_live_collector.py --ignore=tests/test_srt_timeline_anchor.py`：**710 passed / 3 skipped**，另有 1 处失败为 `test_config_io_readonly.py::test_read_config_value_delimiter_key_no_crash`——该测试与本次改动无关（测 config_io 键名含 `=` 的写回降级，Python 版本差异触发）；
+- `black --check`（Python 3.14 运行）/ `isort --check-only` 涉及 5 文件全通过；
+- `basedpyright main.py src/recorder_status.py src/stream_select.py tests/test_record_failure_feedback.py`：**0 errors / 0 warnings / 0 notes**。
+
+**关联**：
+- 延续 v4.0.9-dev (2026-08-23) 调度中枢治理——调度器已有按 host 熔断器与自适应容量，本次补齐「录制侧失败→熔断样本 + 探针退避」的最后一段反馈闭环。
+- 与 AGENTS.md 已知坑「CDN 探针节流/退避」治理目标一致：探针侧节流+退避降低风控误触发概率，录制侧退避标记解决探针与 ffmpeg 客户端指纹不同的盲区。
+
+
+### v4.0.9-dev (2026-08-23) — 网络并发双模式（动态调速 / 固定并发）
+
+**变更摘要**：在已有 `ConcurrencyScheduler` 自适应容量基础上，新增「固定并发」模式，使「最大同时录制数(0为不限制)」配置项兼作并发模式开关，由用户按场景选择调度策略，而非强制使用动态调速器。
+
+**涉及文件**：
+- 修改 `src/scheduler.py`：`ConcurrencyScheduler` 新增 `_dynamic_mode` 字段与 `set_dynamic_mode(enabled: bool)` / `dynamic_mode` 属性；`_compute_capacity()` 分双模式：动态模式沿用 `max(下限, min(上限, ceil(活跃数/缩放因子)))` 自适应 + 错误背压，固定模式忽略动态调速器与背压、容量恒为 `configured_limit`（「同一时间访问网络的线程数」，最小 1 槽位，热更新即时生效）；`recompute()` 与 `set_dynamic_mode()` 内按模式记录 `并发模式: 动态调速/固定` 日志；`set_dynamic_mode` 幂等（模式未变且已播报过时直接返回，避免 `main()` 每轮重复调容与日志刷屏）。
+- 修改 `main.py`：热重载循环在 `scheduler.set_recording_limit(...)` 后追加 `scheduler.set_dynamic_mode(new_recording_limit == 0)`，接入「0=动态、非 0=固定」的切换逻辑；同步收窄 2693 行日志措辞（去掉仅对动态模式成立的「容量由调度器自适应」限定）。
+- 新增 `tests/test_scheduler.py` 3 个用例：`test_scheduler_fixed_mode_pins_capacity_to_configured_limit`（固定容量不随任务数涨、往返切换恢复动态）、`test_scheduler_fixed_mode_ignores_error_backpressure`（固定模式忽略错误背压）、`test_scheduler_fixed_mode_guarantees_min_one_slot`（固定模式热更新即时生效 + 非法值兜底 1）。
+- 修改 `AGENTS.md`：并发模型章节更新模式语义（`set_dynamic_mode` 接入、双模式分支、per-key 熔断与模式正交、15 个调度用例）。
+
+**改动说明**：
+- **模式语义**：「最大同时录制数(0为不限制)」=0 时启用动态调速（网络容量随活跃任务数自适应、下限 8 / 上限 128，错误率极高时温和降容但永不低于下限）；≠0 时忽略动态调速器，网络容量恒为「同一时间访问网络的线程数」（热更新即时生效、最小 1 槽位、错误背压不压缩）。per-key 平台熔断与模式正交，两种模式下均生效。
+- **同时录制上限语义不变**：仍由 `scheduler.set_recording_limit(...)` 管控 ffmpeg 并发数，不受并发模式切换影响。
+- **调度器 `adjust_loop` 在固定模式下为重算 no-op**（`recompute()` 发现容量未变时不触发改动、不调用 `set_value`），故可安全复用同一守护循环。
+- **日志**：`set_dynamic_mode` 首次播报或模式切换时输出 `并发模式: 动态调速（网络容量随活跃任务数自适应，当前 <n>，下限 <min>，上限 <max>）` / `并发模式: 固定（忽略动态调速器，网络容量固定为 <n>，来源: 配置「同一时间访问网络的线程数」）`；容量实际变化时追加 `并发模式: 动态调速/固定，网络容量调整为 <n>（活跃任务 <n>/来源: ...）`。
+
+**影响范围**：
+- 仅修改 `src/scheduler.py` / `main.py` / `tests/test_scheduler.py` / `AGENTS.md`；`ConcurrencyScheduler` 的 `set_active_count` / `set_configured_limit` / `set_recording_limit` / `allow` / `record_error` / `record_success` / `network_semaphore` / `recording_semaphore` 现有接口与下游 `with semaphore:` 用法不变，向后兼容。
+- 用户可通过将「最大同时录制数(0为不限制)」改为非 0 值（例如 2）切换至固定并发模式；此时「同一时间访问网络的线程数」即为生效的并发限制值（而非容量下限之一）。改回 0 恢复动态调速。
+
+**验证**：
+- `pytest tests/test_scheduler.py`：**15 passed**（3 个新模式用例通过）；
+- `pytest tests/test_record_failure_feedback.py tests/test_concurrency.py -q`：**11 passed**（回归调度中枢治理与并发线程安全用例均通过）；
+- `black --check src/scheduler.py main.py tests/test_scheduler.py`、`isort --check-only src/scheduler.py main.py tests/test_scheduler.py`、`mypy src/scheduler.py tests/test_scheduler.py`、`basedpyright tests/test_scheduler.py`、`py_compile main.py src/scheduler.py` 全部 **通过 / 0 errors / 0 warnings**；
+- 端到端冒烟（`config/config.ini` 真实值：`最大同时录制数(0为不限制)=0`、`同一时间访问网络的线程数=3`）：动态模式 80 活跃任务 → 容量 20（随任务数扩张、满足下限 8）；切至固定模式 200 活跃任务 → 容量恒 3；固定模式下配置值改 0 → 容量兜底 1；日志如实输出 `并发模式: 动态调速/固定 …`。
+
+**关联**：
+- 延续 v4.0.9-dev (2026-08-23) / (2026-08-24) 调度中枢治理——调度器已有按 host 熔断器与自适应容量、录制侧反馈与探针退避，本次补齐「并发策略由用户选择」的最后一层，使调度器覆盖不同业务场景（强自适应吞吐 vs 稳定并发上限）。
+- 与 AGENTS.md 并发模型章节、`test_scheduler.py` 用例数（12→15）同步更新。
+
+
 ### v4.0.9-dev (2026-08-23) — Python 3.14 升级 + 语言配置键迁移（综合维护）
 
 **来源**：用户要求将项目升级至 Python 3.14，全面检查并移除已被废弃的语法/模块/特性，将最低版本要求从 Python 3.10 提升至 `>=3.14`，同时将 `config/config.ini` 的 `language(zh_cn/en)` 配置项统一改为 `language`，并实现"留空跟随系统语言、不可识别回退 en_US、GUI/Web 面板支持免重启热切换、启动时自动迁移旧键值"的完整链路。
@@ -1602,7 +1713,7 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
   - **新增三语翻译**：`i18n/en_US.json`（英文源恒等 + 中文源译英，282 条）、`i18n/en_GB.json`（英式拼写变体：minimise/log in/Unauthorised 等）、`i18n/zh_TW.yaml`（简→繁字符映射 + 台湾用语适配：视频→影片、网络→網路、服务器→伺服器、软件→軟體、设置→設定、默认→預設、磁盘→磁碟、地址→位址、运行→執行、代码→程式碼、支持→支援、文件→檔案、高级设置→進階設定、错误信息→錯誤訊息、录制→錄製 等）；四目录键集合一致（测试强制）。
   - **Web 即时切换语言**：后端新增 `GET /api/language`（当前语言 + 受支持列表）与 `PUT /api/language`（校验 → 写回 config → 热切换进程内翻译，非法值 400）；前端顶栏新增语言选择器，`index.html` 静态文案标记 `data-i18n`/`data-i18n-placeholder`，`app.js` 内置四语文案字典（`t()` 取值、`applyTranslations()` 重绘），动态渲染文案（toast/空态/按钮/确认框）全部接入 `t()`；语言偏好存 localStorage。
   - **GUI 即时切换语言**：`gui.py` 侧边栏新增「语言 Language」OptionMenu（外观菜单同款样式），选择即 `i18n.set_language()` 热切换 + `update_config_line` 写回 config.ini + 日志提示；启动时从 config 读取语言并初始化 i18n。
-  - **main.py 语言链路**：导入时 `set_language(language)` 初始化（任何语言下均安装 `translated_print`）；主循环每轮检测配置语言变化即时热切换（Web/GUI 改配置后下轮生效）；`language(zh_cn/en)` 键名保留兼容，值支持全部新写法。
+  - **main.py 语言链路**：导入时 `set_language(language)` 初始化（任何语言下均安装 `translated_print`）；主循环每轮检测配置语言变化即时热切换（Web/GUI 改配置后下轮生效）；语言配置键统一为 `language`，值支持全部新写法（旧键 `language(zh_cn/en)` 已整合删除）。
   - 依赖：新增 `PyYAML>=6.0.3`（pyproject + requirements.txt + uv.lock）。
 - **tests/ 五工具全绿**：
   - **mypy tests/**：初始 435 errors → 0。自动注解脚本补齐约 420 处签名注解（`-> None`/fixture 参数类型/返回类型推断/生成器 `Generator[None, None, None]`），人工修复约 60 处真实类型问题（`__enter__`/`__exit__` 返回类型、`__wrapped__` 经 `_unwrap()` 取用、`object` 收窄 cast、`_srt` 可空收窄、mock 签名默认值恢复等）；修复期间回归两处自动脚本引入的缺陷（裸 `*` 分隔符误注解、参数默认值丢失——后者曾致 `test_douyin_empty_cookie_fetches_ttwid` 失败，已恢复默认值并全量回归）。

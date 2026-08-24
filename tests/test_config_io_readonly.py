@@ -39,6 +39,51 @@ def test_read_config_value_missing_key_readonly_ok(tmp_path: Path, monkeypatch: 
     assert any("写回失败" in c for c in captured)
 
 
+def test_read_config_value_delimiter_key_no_crash(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    # 关键回归（2026-08 启动崩溃）：键名含 = 等 configparser 分隔符时（历史键
+    # 「最大同时录制数(0=不限制)」），读取侧在首个 = 处截断必查不到键，写回侧
+    # Python 3.13+ 的 write() 抛 InvalidWriteError——必须降级为 warning + 返回默认值，
+    # 不得让整个 app 在启动阶段崩溃，且坏键须回滚、不得滞留解析器污染后续写回。
+    cfg = tmp_path / "config.ini"
+    cfg.write_text("[录制设置]\nlanguage=zh_cn\n", encoding="utf-8")
+    monkeypatch.setattr(main, "config_file", str(cfg))
+
+    captured: list[str] = []
+    handler_id = logger.add(lambda msg: captured.append(str(msg)), level="WARNING")
+    try:
+        parser = config_io.configparser.RawConfigParser()
+        parser.read_string("[录制设置]\nlanguage=zh_cn\n")
+        result = config_io.read_config_value(parser, "录制设置", "坏键(0=不限)", "0")
+    finally:
+        logger.remove(handler_id)
+
+    assert result == "0"
+    # 记了 warning（含异常类型）而非崩溃
+    assert any("写回失败" in c and "InvalidWriteError" in c for c in captured)
+    # 坏键已从内存解析器回滚：后续其他缺键的写回不再被坏键拖垮
+    assert not parser.has_option("录制设置", "坏键(0=不限)")
+    # 序列化在内存完成后才落盘：配置文件未被截断，原有键仍完整
+    assert "language" in cfg.read_text(encoding="utf-8")
+
+
+def test_read_config_value_delimiter_key_then_normal_key_still_writes(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    # 坏键写回失败后，同一解析器上另一个正常缺键的写回应能成功（坏键未污染解析器）
+    cfg = tmp_path / "config.ini"
+    cfg.write_text("[录制设置]\nlanguage=zh_cn\n", encoding="utf-8")
+    monkeypatch.setattr(main, "config_file", str(cfg))
+
+    parser = config_io.configparser.RawConfigParser()
+    parser.read_string("[录制设置]\nlanguage=zh_cn\n")
+    _ = config_io.read_config_value(parser, "录制设置", "坏键(0=不限)", "0")
+    result = config_io.read_config_value(parser, "录制设置", "正常缺键", "5")
+
+    assert result == "5"
+    migrated = config_io.configparser.RawConfigParser()
+    migrated.read_string(cfg.read_text(encoding="utf-8-sig"))
+    assert migrated.get("录制设置", "正常缺键") == "5"
+    assert not migrated.has_option("录制设置", "坏键(0=不限)")
+
+
 def test_main_huya_old_key_compat_missing_only_reads(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     # main.py 兼容旧键在缺键时仅读取、绝不写回——缺失时不进入写回路径。
     options = {"是": True, "否": False}
@@ -183,7 +228,7 @@ def test_sync_ssl_disable_platforms_missing_key_writes_default(tmp_path: Path, m
 
 
 def test_language_new_key_present(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
-    # 新键存在 → 直接取值，不触发任何写回
+    # language 键存在 → 直接取值，不触发任何写回
     cfg = tmp_path / "config.ini"
     cfg.write_text("[录制设置]\nlanguage=en_US\n", encoding="utf-8")
     monkeypatch.setattr(main, "config_file", str(cfg))
@@ -192,29 +237,8 @@ def test_language_new_key_present(tmp_path: Path, monkeypatch: MonkeyPatch) -> N
     assert cfg.read_text(encoding="utf-8") == "[录制设置]\nlanguage=en_US\n"
 
 
-def test_language_legacy_key_migrates(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
-    # 新键缺失、旧键 language(zh_cn/en)=zh_cn → 继承旧值并迁移写回新键（旧键保留仅作历史）
-    cfg = tmp_path / "config.ini"
-    cfg.write_text("[录制设置]\nlanguage(zh_cn/en)=zh_cn\n", encoding="utf-8")
-    monkeypatch.setattr(main, "config_file", str(cfg))
-    parser = _make_parser("[录制设置]\nlanguage(zh_cn/en)=zh_cn\n")
-    assert main._read_language_config(parser) == "zh_cn"
-    migrated = _read_migrated(cfg)
-    assert migrated.get("录制设置", "language") == "zh_cn"
-    assert migrated.has_option("录制设置", "language(zh_cn/en)")
-
-
-def test_language_new_key_empty_overrides_legacy(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
-    # 新旧键同时存在（迁移后旧键残留）→ 以新键为准：新键空值即「跟随系统语言」，不继承旧键
-    cfg = tmp_path / "config.ini"
-    cfg.write_text("[录制设置]\nlanguage=\nlanguage(zh_cn/en)=zh_cn\n", encoding="utf-8")
-    monkeypatch.setattr(main, "config_file", str(cfg))
-    parser = _make_parser("[录制设置]\nlanguage=\nlanguage(zh_cn/en)=zh_cn\n")
-    assert main._read_language_config(parser) == ""
-
-
 def test_language_both_missing_writes_empty_default(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
-    # 新旧键皆无 → read_config_value 补写新键空默认值（空 = 跟随系统语言，解析由 i18n 兜底）
+    # language 键缺失 → read_config_value 补写新键空默认值（空 = 跟随系统语言，解析由 i18n 兜底）
     cfg = tmp_path / "config.ini"
     cfg.write_text("[录制设置]\n是否启用https录制=否\n", encoding="utf-8")
     monkeypatch.setattr(main, "config_file", str(cfg))
