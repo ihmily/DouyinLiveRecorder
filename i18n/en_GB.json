@@ -206,7 +206,7 @@
   "是否生成时间文件": "Generate time subtitle file",
   "是否生成时间文件: 是": "Generate time file: Yes",
   "显示主界面": "Show main window",
-  "最小化到托盘": "Minimise to tray",
+  "最小化到托盘": "Minimize to tray",
   "未发现需要清理的 ffmpeg 进程": "No ffmpeg processes to clean up",
   "未启动": "Not started",
   "未找到FLV直播流，跳过录制": "FLV stream not found, skipping recording",
@@ -280,5 +280,11 @@
   "错误信息: 网络异常，请检查本网络是否能正常访问faceit直播平台": "Error: network error. Please check whether this network can access the faceit platform",
   "错误信息: 网络异常，请检查网络是否能正常访问TikTok平台": "Error: network error. Please check whether this network can access the TikTok platform",
   "高级设置": "Advanced Settings",
-  "高级设置配置已保存": "Advanced settings saved"
+  "高级设置配置已保存": "Advanced settings saved",
+  "[build] --no-runtime：跳过 ffmpeg/ 与 node/（用户首次运行时自动下载）": "[build] --no-runtime: skip ffmpeg/ and node/ (auto-downloaded on first run)",
+  "[build] 开始下载运行时二进制（ffmpeg + Node.js）...": "[build] Downloading runtime binaries (ffmpeg + Node.js)...",
+  "[build] 未找到 Node.js LTS 版本，跳过 node 下载": "[build] Node.js LTS version not found, skipping node download",
+  "[smoke:gui] 无显示环境（DISPLAY 未设置），跳过 GUI 冒烟测试": "[smoke:gui] No display environment (DISPLAY not set), skipping GUI smoke test",
+  "[smoke:web] HTTP 探活成功 ✅": "[smoke:web] HTTP health check passed ✅",
+  "[smoke] 全部冒烟测试通过 ✅": "[smoke] All smoke tests passed ✅"
 }

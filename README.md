@@ -829,6 +829,34 @@ brew install node
 
 ## ⏳ 更新日志
 
+### v4.0.9-dev (2026-08-23 ~ 2026-08-24) — 高并发多平台录制调度优化 / 录制反馈闭环 / 并发双模式 / Python 3.14 升级与语言键迁移 / 四语本地化目录统一与英式美式分流
+
+> 本批改动聚焦高并发（80+ 任务）多平台录制的调度中枢治理、录制侧反馈闭环与 Python 3.14 基线升级。详细根因与验证见 [CODE_WIKI.md](CODE_WIKI.md)。
+
+**🚀 高并发调度中枢（新增 src/scheduler.py）**
+- 引入 `ResizableSemaphore`（运行期可重置容量）、`PlatformBreaker`（按 host 熔断器，closed→open→half-open 状态机）、`ConcurrencyScheduler`（自适应全局并发容量，默认下限 8 / 上限 128，错误率高时温和降容、永不低于安全下限）、`host_of(url)`。
+- 取代旧「全局固定 3 槽信号量 + 单向错误率压制」模型，支持 80+ 任务跨多平台录制、降低排队延迟；单平台接口抖动被隔离降级，不再连锁拖垮全局。
+- 仅在 `main.py` / `notify.py` 固定接线点接入，未改写 50+ 平台分派/录制函数，向后兼容；新增配置项「最大同时录制数(0=不限制)」（默认 0=不限制）。
+
+**🔁 录制结果反馈闭环（虎牙 403 死循环根治）**
+- 修复录制侧反馈缺失：`check_subprocess` 此前按退出码既不上报失败样本、轮末还无条件上报成功，导致按 host 熔断统计被稀释、永不触发，虎牙房间无限重撞「探针 200 → ffmpeg 403」死线路。
+- 现按退出码上报成功/失败样本（按 host）；ffmpeg 快速失败（CDN 拒绝签名）触发 `mark_ffmpeg_reject` 探针退避（60 秒），下一轮改试下一 CDN 候选而非重试同一坏线路（退避白名单仅限虎牙）。
+- 控制台状态行改为显示调度器实时并发容量（`_live_network_capacity`），不再误显配置值。
+
+**⚙️ 网络并发双模式（动态调速 / 固定并发）**
+- 在自适应容量基础上新增「固定并发」模式：「最大同时录制数(0=不限制)」兼作模式开关——=0 启用动态调速（随活跃任务数自适应、下限 8/上限 128），≠0 忽略动态调速器、容量恒为「同一时间访问网络的线程数」（热更新即时生效、最小 1 槽）。
+- 按 host 平台熔断与模式正交，两种模式下均生效；同时录制上限仍由 `scheduler.set_recording_limit` 管控，不受模式切换影响。
+
+**🐍 Python 3.14 升级 + 语言配置键迁移（综合维护）**
+- 项目基线由 Python 3.10 提升至 `>=3.14`（`pyproject.toml` / `Dockerfile` / CI 全链路）；修复 `async_http.py` 在 3.14 下 `asyncio.get_event_loop()` 不再隐式创建事件循环的兼容问题。
+- `config.ini` 语言键 `language(zh_cn/en)` 统一迁移为 `language`：留空跟随系统语言、非法值回退 en_US、GUI/Web 面板免重启热切换、启动自动迁移旧键。
+- 修复 14 个源文件共 21 处 Python 2 风格 `except A, B:` 残留语法，使项目在 Python 3 下可导入/可测试；全量 `pytest` **714 passed / 2 skipped / 0 warnings**，black/isort/mypy/basedpyright 全绿。
+
+**🌐 四语本地化目录统一与英式/美式英语分流**
+- 统一 zh_CN.po / en_US.json / en_GB.json / zh_TW.yaml 四份目录为同一 288 条 key 集合（原 282 条 + 补齐 build_exe.py 的 6 条打包/冒烟常量串）。
+- 修正 en_US 内部混用的英式拼写（统一为美式 minimizes/minimized/canceled）；en_GB 原是 en_US 克隆，改写为真正英式（minimise/minimises/minimised/cancelled），仅在 4 条拼写相关条目上与 en_US 不同。
+- 重新编译 zh_CN.po → zh_CN.mo（compile_po.py --check 确认字节级同步），不影响任何运行时逻辑。
+
 ### v4.0.8.3 (2026-08-19 ~ 2026-08-22) — 主播名自动更新 / SSL 配置整合 / 四语国际化 / FFmpeg9·Node24 兼容 / 类型安全加固 / start_record 复杂度治理 / 窗口化崩溃加固 / 类型检查缺陷修复
 
 > 本版本在 4.0.8.2 系列修复基础上补齐多项新增能力与底层兼容，并以 mypy / basedpyright / pytest(0 warnings) / black / isort 五工具门禁全绿收口。详细根因与验证见 [CODE_WIKI.md](CODE_WIKI.md)。

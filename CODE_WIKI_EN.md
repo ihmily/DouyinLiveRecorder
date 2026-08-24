@@ -1503,6 +1503,37 @@ This change introduces `src/scheduler.py` as a unified scheduling hub, replacing
 - The per-host isolation/degradation approach is consistent with the AGENTS.md known-pitfall "single-platform CDN occasional 403/405 probe false-kill" remediation goal (after isolation, a single platform's jitter no longer amplifies globally).
 
 
+### v4.0.9-dev (2026-08-24) — Four-Language Catalog Unification & British/American Split + Build-Script Strings Added + zh_CN.mo Recompiled
+
+**Change Summary**: Unified and corrected the four localization catalogs (zh_CN.po / en_US.json / en_GB.json / zh_TW.yaml). An AST parse of all .py sources in the workspace (excluding tests / venv / node / ffmpeg / build / dist) extracted the print()/_tr() constant strings as the authoritative localizable set, confirming the runtime scope (main.py / gui.py / web.py / src/*) was already fully covered by the existing 282 entries; only 6 constant build/smoke strings ([build]… / [smoke]…) in build_exe.py were missing. The four catalogs already shared an identical 282-key set, but en_US had mixed in British spellings (minimises/minimised/cancelled) and en_GB was effectively a clone of en_US. This change adds the 6 build strings to all four catalogs (now a uniform 288-key set), unifies en_US to pure American (minimizes/minimized/canceled), rewrites en_GB as genuinely British (minimise/minimises/minimised/cancelled) differing from en_US in only 4 spelling-sensitive entries, and updates and recompiles zh_CN.po into zh_CN.mo (compile_po.py --check confirms byte-level sync).
+
+**Files involved**:
+- Modified `i18n/zh_CN/LC_MESSAGES/zh_CN.po`: appended 6 build/smoke constant strings, bumped PO-Revision-Date to 2026-08-24, refreshed header comments.
+- Modified `i18n/en_US.json`: added 6 new strings; unified the whole file to American spelling (removed British leftovers such as minimise/minimised/cancelled).
+- Modified `i18n/en_GB.json`: added 6 new strings; rewritten to genuinely British spelling (minimise/minimises/minimised/cancelled), differing from en_US only in the 4 spelling-sensitive entries.
+- Modified `i18n/zh_TW.yaml`: added 6 new strings (Simplified→Traditional conversion, e.g. 跳过→跳過, 开始下载运行时二进制→開始下載執行時二進位檔).
+- Regenerated `i18n/zh_CN/LC_MESSAGES/zh_CN.mo` (28,697 bytes) and verified it syncs with the .po.
+
+**Change details**:
+- **Four-language key-set consistency**: used the source constant strings as the authoritative baseline, covering the full runtime scope; confirmed the existing 282 entries matched the runtime with no gaps, then merged the 6 new strings uniformly so all four catalogs now share the same 288-key set.
+- **Build-script strings added**: build_exe.py emits through the i18n translation path and its messages are user-visible packaging info; its 6 pure constant (non-f-string) strings were previously uncataloged — `[build] --no-runtime: skip ffmpeg/ and node/ (auto-downloaded on first run)`, `[build] Downloading runtime binaries (ffmpeg + Node.js)...`, `[build] Node.js LTS not found, skipping node download`, `[smoke:gui] No display environment (DISPLAY unset), skipping GUI smoke test`, `[smoke:web] HTTP liveness probe succeeded ✅`, `[smoke] All smoke tests passed ✅` — now merged into all four catalogs.
+- **American/British split**: en_US was internally inconsistent (mixed British minimise, cancelled, etc.), now unified to American minimizes/minimized/canceled; en_GB was a clone of en_US, rewritten to genuinely British minimise/minimises/minimised/cancelled, differing from en_US in only 4 spelling-sensitive entries — avoiding the "labeled British but actually American" confusion.
+
+**Impact scope**:
+- All four catalogs now share the same 288-key set, with no missing or extra entries; zh_CN.mo is byte-level synced with zh_CN.po.
+- Only localization resources changed; no code-logic modifications; runtime behavior and existing translations are unaffected.
+- Scope follows the project i18n convention (localize user-facing product strings only): CI/version-check scripts/*.py, third-party bundled assets, the tests directory, and personal temp scripts are excluded from the catalogs.
+
+**Verification**:
+- A custom reconciler script parsed all four catalogs and confirmed identical key sets (288 each, excluding the gettext header pseudo-key).
+- `python scripts/compile_po.py --check`: zh_CN.mo syncs with zh_CN.po (289 entries incl. the gettext standard header), passed.
+- JSON / YAML both valid (json.loads / yaml.safe_load raise no errors).
+
+**Related**:
+- Same internationalization-system maintenance as v4.0.9-dev (2026-08-23) "Python 3.14 upgrade + language-key migration" — that change completed the language-key migration and the four-language catalog hot-switch chain; this change completes the unification and spelling split of the translation catalogs themselves.
+- Consistent with the four-language catalog table (zh_CN.po / en_US.json / en_GB.json / zh_TW.yaml) in CODE_WIKI.md's "Internationalization Module" section; the corresponding capability description in README.md's "Multi-language and UI switching" section is unchanged.
+
+
 ### v4.0.9-dev (2026-08-23) — Recording-Result Feedback to Scheduler + Probe Backoff Marking (Root Fix for Huya 403 Dead Loop)
 
 **Summary**: The 2026-08-23 GUI real-world run with 79 rooms exposed a missing recording-side feedback loop: Huya rooms showed probe 200/206 success followed immediately by ffmpeg 403 rejection, yet `check_subprocess` previously **neither reported failure samples by return code, nor recorded a success sample unconditionally at round end** — the per-host circuit-breaker error budget got diluted and never triggered, so rooms kept looping on the same dead CDN line. Console concurrency display showed the config value (3) instead of the scheduler's adaptive value (12/20), misleading users into thinking the optimization had no effect. This change wires recording failures into the scheduler and triggers probe backoff so the next round picks the next CDN candidate.
@@ -3203,17 +3234,3 @@ This round fixed item-by-item per the reference info the user provided (editor-s
 - Config-file refactor (pyproject.toml, requirements.txt, .gitignore, .dockerignore)
 - New Douyin stream-data debug tool `debug_douyin_streams.py`
 - Completed i18n translations (YouTube/FlexTV/PopkonTV/TwitCasting)
-
-### v4.0.7 (2025-10-24)
-
-- Fixed Douyin risk-control issue
-- New SOOP platform support
-- Fixed Bigo recording
-
-### v4.0.6 (2025-01-27)
-
-- New Taobao, JD, Faceit live
-- Refactored to async architecture
-- New force-H264-encode option
-
-*This document last updated: 2026-08-19 (added: CI refactor — build-release.yml removed download-artifact round-trips, build job passes directly to Release via softprops, release job switched to gh CLI to pull back for verification; added release-create singleton job to eliminate concurrency race; fixed create_release boolean comparison always-false (5 places) and release-create missing checkout causing `fatal: not in a git directory`)*

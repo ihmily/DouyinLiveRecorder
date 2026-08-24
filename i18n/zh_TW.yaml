@@ -289,3 +289,9 @@ yum command not found, trying to install using apt...: 未找到 yum 命令，�
 '错误信息: 网络异常，请检查网络是否能正常访问TikTok平台': '錯誤訊息: 網路異常，請檢查網路是否能正常訪問TikTok平台'
 高级设置: 進階設定
 高级设置配置已保存: 進階設定配置已保存
+'[build] --no-runtime：跳过 ffmpeg/ 与 node/（用户首次运行时自动下载）': '[build] --no-runtime：跳過 ffmpeg/ 與 node/（使用者首次執行時自動下載）'
+'[build] 开始下载运行时二进制（ffmpeg + Node.js）...': '[build] 開始下載執行時二進位檔（ffmpeg + Node.js）...'
+'[build] 未找到 Node.js LTS 版本，跳过 node 下载': '[build] 未找到 Node.js LTS 版本，跳過 node 下載'
+'[smoke:gui] 无显示环境（DISPLAY 未设置），跳过 GUI 冒烟测试': '[smoke:gui] 無顯示環境（DISPLAY 未設定），跳過 GUI 冒煙測試'
+'[smoke:web] HTTP 探活成功 ✅': '[smoke:web] HTTP 探活成功 ✅'
+'[smoke] 全部冒烟测试通过 ✅': '[smoke] 全部冒煙測試通過 ✅'

@@ -1,6 +1,6 @@
 # DouyinLiveRecorder 项目架构文档
 
-简体中文&nbsp;&nbsp;|&nbsp;&nbsp;[**English**](CODE_WIKI_EN.md)
+简体中文  |  [**English**](CODE_WIKI_EN.md)
 
 ## 目录
 
@@ -562,13 +562,13 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 
 **翻译文件**:
 
-| 文件                                | 说明                                    | 条目数 |
-| --------------------------------- | ------------------------------------- | --- |
-| `i18n/zh_CN/LC_MESSAGES/zh_CN.po` | 简体中文翻译源文件（gettext，可编辑）                  | 282 |
-| `i18n/zh_CN/LC_MESSAGES/zh_CN.mo` | 编译后的二进制翻译文件（gettext 运行时唯一读取，随仓库/镜像分发） | 282 |
-| `i18n/en_US.json`                | 英语（美国）目录（JSON 格式，英文源恒等 + 中文源译英）        | 282 |
-| `i18n/en_GB.json`                | 英语（英国）目录（JSON 格式，英式拼写：minimise/log in 等） | 282 |
-| `i18n/zh_TW.yaml`                | 繁体中文目录（YAML 格式，简→繁字符转换 + 台湾用语适配）       | 282 |
+| 文件                                | 说明                                       | 条目数 |
+| --------------------------------- | ---------------------------------------- | --- |
+| `i18n/zh_CN/LC_MESSAGES/zh_CN.po` | 简体中文翻译源文件（gettext，可编辑）                   | 282 |
+| `i18n/zh_CN/LC_MESSAGES/zh_CN.mo` | 编译后的二进制翻译文件（gettext 运行时唯一读取，随仓库/镜像分发）    | 282 |
+| `i18n/en_US.json`                 | 英语（美国）目录（JSON 格式，英文源恒等 + 中文源译英）          | 282 |
+| `i18n/en_GB.json`                 | 英语（英国）目录（JSON 格式，英式拼写：minimise/log in 等） | 282 |
+| `i18n/zh_TW.yaml`                 | 繁体中文目录（YAML 格式，简→繁字符转换 + 台湾用语适配）         | 282 |
 
 **维护流程**: 修改 `.po` 后必须执行 `python scripts/compile_po.py` 重新编译并一并提交 `.mo`，否则翻译改动不会生效；`python scripts/compile_po.py --check`（CI `static` job）会在两者不同步时拦截。**四种语言的目录键集合必须一致**（`tests/test_i18n.py::test_catalogs_share_same_keyset` 强制校验）——新增 msgid 时需同步更新四个目录。
 
@@ -911,31 +911,31 @@ web.py
 
 #### [录制设置] 节
 
-| 配置项                | 说明                                                                                                                | 默认值                                                                                                                |     |       |       |                        |    |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | --- | ----- | ----- | ---------------------- | -- |
-| language           | 界面语言（留空跟随系统语言；值支持 zh_cn/zh_CN/en/en_US/en_GB/zh_TW 等写法，经 resolve_language 解析归一，不可识别或语言文件缺失回退 en_US；Web/GUI 可即时切换并写回本键） | （空）                                                                                                              |     |       |       |                        |    |
-| 是否跳过代理检测(是/否)      | 是否跳过代理检测                                                                                                          | 是                                                                                                                  |     |       |       |                        |    |
-| 是否启用https录制        | 整合开关（合并原「是否强制启用https录制」与「是否禁用SSL证书验证(是/否)」）：开启=https 拉流+跳过证书校验；关闭=http 拉流+默认证书校验（https-only 海外平台保持原样）             | 否                                                                                                                  |     |       |       |                        |    |
+| 配置项                | 说明                                                                                                                                                            | 默认值                                                                                                                |     |       |       |                        |    |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | --- | ----- | ----- | ---------------------- | -- |
+| language           | 界面语言（留空跟随系统语言；值支持 zh_cn/zh_CN/en/en_US/en_GB/zh_TW 等写法，经 resolve_language 解析归一，不可识别或语言文件缺失回退 en_US；Web/GUI 可即时切换并写回本键）                                        | （空）                                                                                                                |     |       |       |                        |    |
+| 是否跳过代理检测(是/否)      | 是否跳过代理检测                                                                                                                                                      | 是                                                                                                                  |     |       |       |                        |    |
+| 是否启用https录制        | 整合开关（合并原「是否强制启用https录制」与「是否禁用SSL证书验证(是/否)」）：开启=https 拉流+跳过证书校验；关闭=http 拉流+默认证书校验（https-only 海外平台保持原样）                                                         | 否                                                                                                                  |     |       |       |                        |    |
 | 禁用SSL证书验证的平台(逗号分隔) | 平台级证书校验豁免列表：**仅在「需要证书校验」时生效**（即 http 录制模式，FFmpeg 9.0 起 TLS 证书验证默认开启）——列表内平台跳过证书校验（适用于虎牙/B站等证书异常平台）；https 录制模式已全局跳过、列表冗余。启动时自动追加缺失的必需平台（虎牙直播、B站直播，只追加不移除用户手填项） | 虎牙直播,B站直播                                                                                                          |     |       |       |                        |    |
-| 是否启用日志文件(是/否)      | 是否将日志写入文件                                                                                                         | 是                                                                                                                  |     |       |       |                        |    |
-| 直播保存路径(不填则默认)      | 录制文件保存路径                                                                                                          | (空，默认当前目录)                                                                                                         |     |       |       |                        |    |
-| 保存文件夹是否以作者区分       | 是否按主播名分类                                                                                                          | 是                                                                                                                  |     |       |       |                        |    |
-| 是否自动更新主播名(是/否)     | 主播改名后自动同步：更新 URL_config.ini 主播名字段，并重命名旧主播名命名的录制文件夹及文件夹内录制文件（含弹幕/字幕等同前缀产物）；仅在该直播间未在录制时触发，进行中的录制不受影响；关闭则保持手动填写的名称不变 | 是                                                                                                                  |     |       |       |                        |    |
-| 视频保存格式ts           | mkv                                                                                                               | flv                                                                                                                | mp4 | mp3音频 | m4a音频 | ts/mkv/flv/mp4/mp3/m4a | ts |
-| 原画                 | 超清                                                                                                                | 高清                                                                                                                 | 标清  | 流畅    | 默认画质  | 原画                     |    |
-| 是否使用代理ip(是/否)      | 是否启用代理                                                                                                            | 否                                                                                                                  |     |       |       |                        |    |
-| 代理地址               | 代理服务器地址；支持带协议前缀（`http://` / `https://` / `socks://` 等），裸地址（ip:端口）自动补 `http://` 前缀                                 | (空)                                                                                                                |     |       |       |                        |    |
-| 同一时间访问网络的线程数       | 并发数                                                                                                               | 3                                                                                                                  |     |       |       |                        |    |
-| 循环时间(秒)            | 直播状态检测间隔                                                                                                          | 120                                                                                                                |     |       |       |                        |    |
-| 分段录制是否开启           | 是否分段                                                                                                              | 是                                                                                                                  |     |       |       |                        |    |
-| 是否启用HLS采集(是/否)     | 是否优先使用 HLS(m3u8) 源采集；关闭或源不可用时回退 FLV                                                                               | 是                                                                                                                  |     |       |       |                        |    |
-| 视频分段时间(秒)          | 分段时长                                                                                                              | 1800                                                                                                               |     |       |       |                        |    |
-| 使用代理录制的平台(逗号分隔)    | 按域名子串匹配直播间 URL，命中即走代理（须先开启「是否使用代理ip」）                                                                             | tiktok, sooplive, pandalive, winktv, flextv, popkontv, twitch, liveme, showroom, chzzk, shopee, shp, youtu, faceit |     |       |       |                        |    |
-| 额外使用代理录制的平台        | 在上表之外追加走代理的平台（逗号分隔），代理地址取「代理地址」之外的兜底值                                                                             | (空)                                                                                                                |     |       |       |                        |    |
-| 是否录制弹幕(是/否)        | 是否将弹幕落为 SRT 字幕文件                                                                                                  | 否                                                                                                                  |     |       |       |                        |    |
-| 是否弹幕监控(是/否)        | 弹幕监控独立开关：GUI「弹幕监控」页 / Web「弹幕监控」标签实时查看弹幕流与统计；与「是否录制弹幕」解耦，仅监控时不落 SRT，两者都开时复用同一条弹幕连接                                 | 否                                                                                                                  |     |       |       |                        |    |
-| 弹幕录制平台(逗号分隔)       | 目前支持弹幕录制的平台（名称须完全一致）：斗鱼直播、B站直播、虎牙直播、抖音直播、TwitchTV（见 `src/__init__.py` 弹幕注册表）                                      | 斗鱼直播,B站直播,虎牙直播,抖音直播,TwitchTV                                                                                       |     |       |       |                        |    |
-| 弹幕分片时长(秒)          | 弹幕 SRT 分片时长（需开启分段录制）                                                                                              | 1800                                                                                                               |     |       |       |                        |    |
+| 是否启用日志文件(是/否)      | 是否将日志写入文件                                                                                                                                                     | 是                                                                                                                  |     |       |       |                        |    |
+| 直播保存路径(不填则默认)      | 录制文件保存路径                                                                                                                                                      | (空，默认当前目录)                                                                                                         |     |       |       |                        |    |
+| 保存文件夹是否以作者区分       | 是否按主播名分类                                                                                                                                                      | 是                                                                                                                  |     |       |       |                        |    |
+| 是否自动更新主播名(是/否)     | 主播改名后自动同步：更新 URL_config.ini 主播名字段，并重命名旧主播名命名的录制文件夹及文件夹内录制文件（含弹幕/字幕等同前缀产物）；仅在该直播间未在录制时触发，进行中的录制不受影响；关闭则保持手动填写的名称不变                                             | 是                                                                                                                  |     |       |       |                        |    |
+| 视频保存格式ts           | mkv                                                                                                                                                           | flv                                                                                                                | mp4 | mp3音频 | m4a音频 | ts/mkv/flv/mp4/mp3/m4a | ts |
+| 原画                 | 超清                                                                                                                                                            | 高清                                                                                                                 | 标清  | 流畅    | 默认画质  | 原画                     |    |
+| 是否使用代理ip(是/否)      | 是否启用代理                                                                                                                                                        | 否                                                                                                                  |     |       |       |                        |    |
+| 代理地址               | 代理服务器地址；支持带协议前缀（`http://` / `https://` / `socks://` 等），裸地址（ip:端口）自动补 `http://` 前缀                                                                             | (空)                                                                                                                |     |       |       |                        |    |
+| 同一时间访问网络的线程数       | 并发数                                                                                                                                                           | 3                                                                                                                  |     |       |       |                        |    |
+| 循环时间(秒)            | 直播状态检测间隔                                                                                                                                                      | 120                                                                                                                |     |       |       |                        |    |
+| 分段录制是否开启           | 是否分段                                                                                                                                                          | 是                                                                                                                  |     |       |       |                        |    |
+| 是否启用HLS采集(是/否)     | 是否优先使用 HLS(m3u8) 源采集；关闭或源不可用时回退 FLV                                                                                                                           | 是                                                                                                                  |     |       |       |                        |    |
+| 视频分段时间(秒)          | 分段时长                                                                                                                                                          | 1800                                                                                                               |     |       |       |                        |    |
+| 使用代理录制的平台(逗号分隔)    | 按域名子串匹配直播间 URL，命中即走代理（须先开启「是否使用代理ip」）                                                                                                                         | tiktok, sooplive, pandalive, winktv, flextv, popkontv, twitch, liveme, showroom, chzzk, shopee, shp, youtu, faceit |     |       |       |                        |    |
+| 额外使用代理录制的平台        | 在上表之外追加走代理的平台（逗号分隔），代理地址取「代理地址」之外的兜底值                                                                                                                         | (空)                                                                                                                |     |       |       |                        |    |
+| 是否录制弹幕(是/否)        | 是否将弹幕落为 SRT 字幕文件                                                                                                                                              | 否                                                                                                                  |     |       |       |                        |    |
+| 是否弹幕监控(是/否)        | 弹幕监控独立开关：GUI「弹幕监控」页 / Web「弹幕监控」标签实时查看弹幕流与统计；与「是否录制弹幕」解耦，仅监控时不落 SRT，两者都开时复用同一条弹幕连接                                                                             | 否                                                                                                                  |     |       |       |                        |    |
+| 弹幕录制平台(逗号分隔)       | 目前支持弹幕录制的平台（名称须完全一致）：斗鱼直播、B站直播、虎牙直播、抖音直播、TwitchTV（见 `src/__init__.py` 弹幕注册表）                                                                                  | 斗鱼直播,B站直播,虎牙直播,抖音直播,TwitchTV                                                                                       |     |       |       |                        |    |
+| 弹幕分片时长(秒)          | 弹幕 SRT 分片时长（需开启分段录制）                                                                                                                                          | 1800                                                                                                               |     |       |       |                        |    |
 
 #### [推送配置] 节
 
@@ -1083,10 +1083,10 @@ python web.py
 
 **`.dockerignore` 要点**：
 
-- 排除平台二进制（`ffmpeg/`、`node/`，容器内 apt 安装）、`config/*.ini`（运行时挂载）、
+- 排除平台二进制（`ffmpeg/`、`node/`，容器内 apt 安装）、`config/*.ini`（运行时挂载）、  
   `typings/`、`build_exe.py`、`gui_legacy.py` 等桌面/构建专用文件；
-- **保留 `i18n/**/*.mo` 编译翻译文件与 `i18n/*.json`、`i18n/*.yaml` 多语言目录** ——
-  运行时必需（gettext / JSON / YAML 三种翻译目录格式）且 Dockerfile 不会重新编译/生成，
+- **保留 `i18n/**/*.mo` 编译翻译文件与 `i18n/*.json`、`i18n/*.yaml` 多语言目录** ——  
+  运行时必需（gettext / JSON / YAML 三种翻译目录格式）且 Dockerfile 不会重新编译/生成，  
   仅排除 `.po` 源文件与编译脚本。
 
 #### 使用 docker compose (推荐)
@@ -1469,6 +1469,7 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 **变更摘要**：针对「同时录制超过 80 个任务且跨多平台时严重延迟、性能骤降、大量报错」的问题。根因定位为四点：① 全局网络信号量固定为 3 且 `adjust_max_request` 只能单向压低；② 错误率反馈呈死亡螺旋（越错越限、越限越错）；③ 无平台隔离，单平台接口抖动会拖垮全局；④ 无熔断/降级机制，单任务异常被连锁放大。本变更引入 `src/scheduler.py` 统一调度中枢，以「可运行时调容信号量 + 按 host 熔断器 + 自适应全局并发容量」取代旧模型，并打通 `main.py`/`notify.py` 接线，支持高并发多平台录制、减少排队延迟、实现按平台隔离的降级与错误捕获。
 
 **涉及文件**：
+
 - 新增 `src/scheduler.py`：调度核心模块，含 `ResizableSemaphore` / `PlatformBreaker` / `ConcurrencyScheduler` / `host_of`。
 - 修改 `src/notify.py`：`record_error` / `record_success` 增加 `key` 形参并委托 `scheduler` 按 key 计入错误预算；`adjust_max_request` 改为启动 `scheduler.adjust_loop` 守护循环；移除不再使用的 `import threading`。
 - 修改 `main.py`：引入 `ConcurrencyScheduler` / `ResizableSemaphore` / `host_of`；以可重置信号量替换全局 `threading.Semaphore(1)`；`main()` 初始化调度器并按配置接入「最大同时访问网络线程数」与新增「最大同时录制数(0=不限制)」；`start_record` 增加按 host 熔断预检与 `record_host` 透传；`check_subprocess` 录制循环受 `recording_semaphore` 管控；修复 `record_host` 可能未绑定（possibly unbound）的静态检查错误。
@@ -1476,6 +1477,7 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 - 修复 14 个源文件共 21 处 Python 2 风格 `except A, B:` 语法错误（`build_exe.py`、`gui.py`、`i18n.py`、`scripts/check_coverage.py`、`scripts/compile_po.py`、`src/collector.py`、`src/config_io.py`、`src/recorder_status.py`、`src/spider.py`(2)、`src/ttwid.py`、`src/web_config.py`、`src/ws_client.py`、`src/platforms/bilibili.py`、`src/platforms/douyu.py`），使项目在 Python 3 下可导入/可测试（属历史遗留、冻结前已存在，不影响冻结 exe）。
 
 **改动说明**：
+
 - **`ResizableSemaphore`**：实现上下文管理器协议的信号量，支持运行时 `set_value` 增减容量——增大唤醒等待者、减小仅降上限不强行回收已持锁，消除旧「销毁重建信号量」的竞态。`__init__` / `set_value` 允许容量为 0（暂停态）。
 - **`PlatformBreaker`**：按 key 的熔断器，closed→open→half-open 状态机。连续失败样本比例超阈值即 open（跳过探测并退避），冷却后经唯一探针放行；探针成功恢复 closed、失败重新 open。用于把单平台抖动隔离降级，避免连锁拖垮全局。
 - **`ConcurrencyScheduler`**：调度中枢。全局网络并发信号量容量 = `max(配置下限, min(上限, ceil(活跃数/缩放因子)))`，错误率极高时温和降容但永不低于安全下限（默认 min=8 / max=128）；按 key 错误预算驱动各平台熔断器；可选录制并发软上限（默认 0=不限制，恢复高容量）；`adjust_loop` 守护循环每 5 秒重算容量，取代旧单向压制的 `adjust_max_request`。
@@ -1489,12 +1491,14 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 - **测试补充**：`tests/test_scheduler.py` 共 12 用例（含修正两处测试前提：① `ResizableSemaphore(0)` 合法表示暂停态；② 熔断需经「冷却 + 成功探针」才解除，而非 open 态直接 `record_success` 复位）。
 
 **影响范围**：
+
 - 并发模型由「单全局固定 3 槽信号量 + 单向错误率压制」升级为「自适应全局容量（随活跃任务数缩放、带安全下限）+ 按 host 平台隔离熔断 + 可选录制并发软上限」。80+ 任务跨多平台时不再因固定 3 槽而 77 线程排队；单平台接口抖动被隔离降级，不拖垮全局；单任务异常被捕获并计入按平台错误预算，避免连锁报错导致系统不可用。
 - 仅新增 `src/scheduler.py` 并在 `main.py` / `notify.py` 固定接线点接入，**未重写 50+ 平台分派/录制函数**，行为向后兼容；旧 `semaphore` 全局变量名保留（现指向 `ResizableSemaphore`），下游 `with semaphore:` 用法不变。
 - 新增配置项「最大同时录制数(0为不限制)」（默认 0=不限制，即视作高容量不阻塞；键名曾误写为「最大同时录制数(0=不限制)」，因含 `=` 分隔符致读取截断、写回抛 `InvalidWriteError` 启动即崩溃，已改名并硬化 `read_config_value` 兜底）；「最大同时访问网络线程数」现作为并发容量下限之一（不再是单向压制的唯一手段）。
 - 性能：网络并发容量随活跃任务数自适应提升（默认下限 8、上限 128），显著降低高并发场景的探测排队与处理延迟。
 
 **验证**：
+
 - `tests/test_scheduler.py` + `tests/test_main_fixes.py`：**41 passed**；
 - 全量 `pytest`：**707 passed / 3 skipped**，另有 2 处失败均为沙箱 safe-delete 护栏在 `tests/test_twitch_live_collector.py` 的既有环境限制（`SAFE_DELETE_FAIL_CLOSED … windows-sandbox-recycle-bin-unavailable`），属历史环境约束、与本次改动无关；
 - `basedpyright src/scheduler.py tests/test_scheduler.py`、`basedpyright tests/`、`basedpyright main.py src/notify.py src/scheduler.py` 均 **0 errors / 0 warnings / 0 notes**；
@@ -1502,15 +1506,51 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 - `python -m py_compile` 全量源码通过。
 
 **关联**：
+
 - 与 v4.0.8.3-dev (2026-08-21) 「start_record 复杂度治理」同源——后者把平台分派链抽为 `_resolve_platform_stream`，本次在该函数调用前增加熔断预检，未改动其录制执行链。
 - 按 host 隔离降级思路与 AGENTS.md 已知坑「单平台 CDN 偶发 403/405 探针误杀」治理目标一致（隔离后单平台抖动不再全局放大）。
 
+### v4.0.9-dev (2026-08-24) — 四语本地化目录统一与英式/美式英语分流 + 打包脚本串补齐 + zh_CN.mo 重编译
+
+**变更摘要**：对四份本地化资源（zh_CN.po / en_US.json / en_GB.json / zh_TW.yaml）做统一与修正。以 AST 解析工作空间全部 .py 源文件（排除 tests / venv / node / ffmpeg / build / dist），提取 print()/\_tr() 常量串作为权威待本地化集合，确认运行时作用域（main.py / gui.py / web.py / src/*）已被既有 282 条目录完整覆盖；仅 build_exe.py 的 6 条常量打包/冒烟串（[build]… / [smoke]…）尚未收录。四份目录原先 key 集合已一致（282 条），但 en_US 内部混用英式拼写（minimises/minimised/cancelled），en_GB 实质为 en_US 克隆。本次：补齐 6 条 build 串至四份目录（统一为 288 条 key）；将 en_US 统一为纯美式（minimizes/minimized/canceled）；将 en_GB 改写为真正英式（minimise/minimises/minimised/cancelled），仅在 4 条拼写相关条目上与 en_US 不同；更新 zh_CN.po 并重新编译生成 zh_CN.mo，compile_po.py --check 确认字节级同步。
+
+**涉及文件**：
+
+- 修改 `i18n/zh_CN/LC_MESSAGES/zh_CN.po`：追加 6 条 build/smoke 常量串、更新 PO-Revision-Date 至 2026-08-24、刷新头部注释。
+- 修改 `i18n/en_US.json`：补齐 6 条新串；全量统一为美式拼写（消除 minimise/minimised/cancelled 等英式残留）。
+- 修改 `i18n/en_GB.json`：补齐 6 条新串；改写为真正英式拼写（minimise/minimises/minimised/cancelled），与 en_US 仅在 4 条拼写敏感条目存在差集。
+- 修改 `i18n/zh_TW.yaml`：补齐 6 条新串（简→繁转换，如 跳过→跳過、开始下载运行时二进制→開始下載執行時二進位檔）。
+- 重新生成 `i18n/zh_CN/LC_MESSAGES/zh_CN.mo`（28,697 字节）并校验与 .po 同步。
+
+**改动说明**：
+
+- **四语 key 集合一致性**：以源码常量串为权威基准，覆盖运行时全作用域；确认既有 282 条与运行时一致、无遗漏，再统一并入 6 条新串，四份目录现为同一 288 条 key。
+- **打包脚本串补齐**：build_exe.py 经 i18n 翻译路径输出、属用户可感知的打包信息，其 6 条纯常量（非 f-string 插值）串此前未收录——`[build] --no-runtime：跳过 ffmpeg/ 与 node/（用户首次运行时自动下载）`、`[build] 开始下载运行时二进制（ffmpeg + Node.js）...`、`[build] 未找到 Node.js LTS 版本，跳过 node 下载`、`[smoke:gui] 无显示环境（DISPLAY 未设置），跳过 GUI 冒烟测试`、`[smoke:web] HTTP 探活成功 ✅`、`[smoke] 全部冒烟测试通过 ✅`——现已并入四份目录。
+- **美式/英式分流**：en_US 原内部不一致（混合 minimise、cancelled 等英式），统一为美式 minimizes/minimized/canceled；en_GB 原为 en_US 克隆，改写为真正英式 minimise/minimises/minimised/cancelled，与 en_US 仅在 4 条拼写相关条目存在差集，避免「标识英式实则美式」的误导。
+
+**影响范围**：
+
+- 四份目录现共享同一 288 条 key 集合，无缺失、无多余；zh_CN.mo 与 zh_CN.po 字节级同步。
+- 仅本地化资源变更，无代码逻辑改动；不影响运行时行为与既有翻译。
+- 范围遵循项目 i18n 约定（仅本地化面向用户的产品串）：CI/版本检查类 scripts/*.py、第三方 bundled 资源、测试目录及个人临时脚本不纳入目录。
+
+**验证**：
+
+- 自写 reconciler 脚本解析四份目录，确认 key 集合完全一致（各 288 条，去除 gettext 头部伪 key）。
+- `python scripts/compile_po.py --check`：zh_CN.mo 与 zh_CN.po 同步（289 条，含 gettext 标准头部），通过。
+- JSON / YAML 均合法（json.loads / yaml.safe_load 无异常）。
+
+**关联**：
+
+- 与 v4.0.9-dev (2026-08-23) 「Python 3.14 升级 + 语言配置键迁移」同属国际化体系维护——后者完成 language 键迁移与四语目录热切换链路，本次完成四语翻译目录本身的统一与拼写分流。
+- 与 CODE_WIKI.md「国际化模块」章节的四语目录表（zh_CN.po / en_US.json / en_GB.json / zh_TW.yaml）一致；README.md「多语言与界面切换」章节对应能力描述不变。
 
 ### v4.0.9-dev (2026-08-23) — 录制结果反馈调度器 + 探针退避标记（虎牙 403 死循环根治）
 
 **变更摘要**：2026-08-23 GUI 79 房间实测暴露录制侧反馈缺失：虎牙房间探针 200/206 通过后 ffmpeg 紧随被 403，但 `check_subprocess` 此前按退出码**既不上报失败样本、轮末还无条件上报成功样本**——按 host 熔断统计被稀释、永不触发，房间无限重撞同一条死线路；控制台并行容量显示配置值（3）而非调度器自适应值（12/20），误导用户以为高并发优化未生效。本次修复让录制失败正确反馈调度器并触发探针退避，下一轮改试下一 CDN 候选。
 
 **涉及文件**：
+
 - 修改 `main.py`：`check_subprocess` 新增 `_proc_started_at = time.time()` 进程启动时刻；按 `return_code` 分支上报（rc==0 → `record_success(host_of(record_url))`、rc!=0 → `record_error(host_of(record_url))`）；新增 `_FFMPEG_FAST_FAIL_SECONDS = 20.0` 模块常量，快速失败时从 `ffmpeg_command` 解析 `-i` 后的实际拉流地址并 `mark_ffmpeg_reject` 记入探针退避；移除轮末无条件 `record_success(record_host)`；`direct_download_stream` 成功路径补 `record_success(record_host)`。
 - 修改 `src/stream_select.py`：新增公开入口 `mark_ffmpeg_reject(url, platform)`（委托 `_mark_probe_reject`），`platform` 不在 `_PROBE_BACKOFF_PLATFORMS`（仅 `虎牙直播`）时静默无操作。
 - 修改 `src/recorder_status.py`：新增 `_live_network_capacity()` 取调度器实时容量（`scheduler.network_semaphore.value`），未就绪时回退 `main.max_request`；控制台状态行显示该实时值。
@@ -1519,6 +1559,7 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 - 修改 `AGENTS.md`：新增「录制结果反馈约定」小节（失败样本/快速失败探针退避/轮末禁止无条件成功/容量显示实时值/回归测试要求）。
 
 **改动说明**：
+
 - **失败样本上报**：`check_subprocess` 在 `return_code` 分支处（`streamget.log` 退出码分支）：
   - 成功（rc==0，主播下线）：按房间 host 记一次成功样本，与录制失败分支配对，维持 error_window 真实错误率；
   - 失败（rc!=0，CDN 拒绝）：记一次失败样本驱动按 host 熔断与全局背压。
@@ -1529,51 +1570,57 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 - **直下路径对齐**：`direct_download_stream` 成功路径补 `record_success(record_host)`，与 ffmpeg 路径语义对齐（失败已在 except 分支有 `record_error`）。
 
 **影响范围**：
+
 - 虎牙房间遇到「探针 200 → ffmpeg 403」死循环时，下一轮会跳过该 CDN 线路的探针、改试 HS/HW/TX/AL 中的下一候选——实测 79 房间场景下，坏线路被快速放弃，避免无效重试循环与熔断统计污染。
 - 仅修改 `main.py` / `src/stream_select.py` / `src/recorder_status.py` 三个源文件；接线点位于 `check_subprocess` 退出码分支、`direct_download_stream` 成功路径、`display_info` 状态行——未改动平台分派链与录制执行主链。
 - 退避白名单仅限虎牙（`_PROBE_BACKOFF_PLATFORMS = ("虎牙直播",)`）；其他平台不受影响，保持「重试一次再定罪」语义。
 
 **验证**：
+
 - `pytest tests/test_record_failure_feedback.py tests/test_stream_select.py tests/test_scheduler.py`：**43 passed / 0 failed**；
 - 全量 `pytest --ignore=tests/test_twitch_live_collector.py --ignore=tests/test_srt_timeline_anchor.py`：**710 passed / 3 skipped**，另有 1 处失败为 `test_config_io_readonly.py::test_read_config_value_delimiter_key_no_crash`——该测试与本次改动无关（测 config_io 键名含 `=` 的写回降级，Python 版本差异触发）；
 - `black --check`（Python 3.14 运行）/ `isort --check-only` 涉及 5 文件全通过；
 - `basedpyright main.py src/recorder_status.py src/stream_select.py tests/test_record_failure_feedback.py`：**0 errors / 0 warnings / 0 notes**。
 
 **关联**：
+
 - 延续 v4.0.9-dev (2026-08-23) 调度中枢治理——调度器已有按 host 熔断器与自适应容量，本次补齐「录制侧失败→熔断样本 + 探针退避」的最后一段反馈闭环。
 - 与 AGENTS.md 已知坑「CDN 探针节流/退避」治理目标一致：探针侧节流+退避降低风控误触发概率，录制侧退避标记解决探针与 ffmpeg 客户端指纹不同的盲区。
-
 
 ### v4.0.9-dev (2026-08-23) — 网络并发双模式（动态调速 / 固定并发）
 
 **变更摘要**：在已有 `ConcurrencyScheduler` 自适应容量基础上，新增「固定并发」模式，使「最大同时录制数(0为不限制)」配置项兼作并发模式开关，由用户按场景选择调度策略，而非强制使用动态调速器。
 
 **涉及文件**：
+
 - 修改 `src/scheduler.py`：`ConcurrencyScheduler` 新增 `_dynamic_mode` 字段与 `set_dynamic_mode(enabled: bool)` / `dynamic_mode` 属性；`_compute_capacity()` 分双模式：动态模式沿用 `max(下限, min(上限, ceil(活跃数/缩放因子)))` 自适应 + 错误背压，固定模式忽略动态调速器与背压、容量恒为 `configured_limit`（「同一时间访问网络的线程数」，最小 1 槽位，热更新即时生效）；`recompute()` 与 `set_dynamic_mode()` 内按模式记录 `并发模式: 动态调速/固定` 日志；`set_dynamic_mode` 幂等（模式未变且已播报过时直接返回，避免 `main()` 每轮重复调容与日志刷屏）。
 - 修改 `main.py`：热重载循环在 `scheduler.set_recording_limit(...)` 后追加 `scheduler.set_dynamic_mode(new_recording_limit == 0)`，接入「0=动态、非 0=固定」的切换逻辑；同步收窄 2693 行日志措辞（去掉仅对动态模式成立的「容量由调度器自适应」限定）。
 - 新增 `tests/test_scheduler.py` 3 个用例：`test_scheduler_fixed_mode_pins_capacity_to_configured_limit`（固定容量不随任务数涨、往返切换恢复动态）、`test_scheduler_fixed_mode_ignores_error_backpressure`（固定模式忽略错误背压）、`test_scheduler_fixed_mode_guarantees_min_one_slot`（固定模式热更新即时生效 + 非法值兜底 1）。
 - 修改 `AGENTS.md`：并发模型章节更新模式语义（`set_dynamic_mode` 接入、双模式分支、per-key 熔断与模式正交、15 个调度用例）。
 
 **改动说明**：
+
 - **模式语义**：「最大同时录制数(0为不限制)」=0 时启用动态调速（网络容量随活跃任务数自适应、下限 8 / 上限 128，错误率极高时温和降容但永不低于下限）；≠0 时忽略动态调速器，网络容量恒为「同一时间访问网络的线程数」（热更新即时生效、最小 1 槽位、错误背压不压缩）。per-key 平台熔断与模式正交，两种模式下均生效。
 - **同时录制上限语义不变**：仍由 `scheduler.set_recording_limit(...)` 管控 ffmpeg 并发数，不受并发模式切换影响。
 - **调度器 `adjust_loop` 在固定模式下为重算 no-op**（`recompute()` 发现容量未变时不触发改动、不调用 `set_value`），故可安全复用同一守护循环。
 - **日志**：`set_dynamic_mode` 首次播报或模式切换时输出 `并发模式: 动态调速（网络容量随活跃任务数自适应，当前 <n>，下限 <min>，上限 <max>）` / `并发模式: 固定（忽略动态调速器，网络容量固定为 <n>，来源: 配置「同一时间访问网络的线程数」）`；容量实际变化时追加 `并发模式: 动态调速/固定，网络容量调整为 <n>（活跃任务 <n>/来源: ...）`。
 
 **影响范围**：
+
 - 仅修改 `src/scheduler.py` / `main.py` / `tests/test_scheduler.py` / `AGENTS.md`；`ConcurrencyScheduler` 的 `set_active_count` / `set_configured_limit` / `set_recording_limit` / `allow` / `record_error` / `record_success` / `network_semaphore` / `recording_semaphore` 现有接口与下游 `with semaphore:` 用法不变，向后兼容。
 - 用户可通过将「最大同时录制数(0为不限制)」改为非 0 值（例如 2）切换至固定并发模式；此时「同一时间访问网络的线程数」即为生效的并发限制值（而非容量下限之一）。改回 0 恢复动态调速。
 
 **验证**：
+
 - `pytest tests/test_scheduler.py`：**15 passed**（3 个新模式用例通过）；
 - `pytest tests/test_record_failure_feedback.py tests/test_concurrency.py -q`：**11 passed**（回归调度中枢治理与并发线程安全用例均通过）；
 - `black --check src/scheduler.py main.py tests/test_scheduler.py`、`isort --check-only src/scheduler.py main.py tests/test_scheduler.py`、`mypy src/scheduler.py tests/test_scheduler.py`、`basedpyright tests/test_scheduler.py`、`py_compile main.py src/scheduler.py` 全部 **通过 / 0 errors / 0 warnings**；
 - 端到端冒烟（`config/config.ini` 真实值：`最大同时录制数(0为不限制)=0`、`同一时间访问网络的线程数=3`）：动态模式 80 活跃任务 → 容量 20（随任务数扩张、满足下限 8）；切至固定模式 200 活跃任务 → 容量恒 3；固定模式下配置值改 0 → 容量兜底 1；日志如实输出 `并发模式: 动态调速/固定 …`。
 
 **关联**：
+
 - 延续 v4.0.9-dev (2026-08-23) / (2026-08-24) 调度中枢治理——调度器已有按 host 熔断器与自适应容量、录制侧反馈与探针退避，本次补齐「并发策略由用户选择」的最后一层，使调度器覆盖不同业务场景（强自适应吞吐 vs 稳定并发上限）。
 - 与 AGENTS.md 并发模型章节、`test_scheduler.py` 用例数（12→15）同步更新。
-
 
 ### v4.0.9-dev (2026-08-23) — Python 3.14 升级 + 语言配置键迁移（综合维护）
 
@@ -1587,33 +1634,27 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
   - `.github/workflows/ci.yml`：`setup-python` 的 `python-version` 矩阵由 `'3.13'` 更新为 `'3.14'`（`typecheck` / `test` / `concurrency-test` / `integration-verify` / `build-verify` 全链路统一）。
   - `AGENTS.md`：项目概览、Python 版本、已知坑条目、mypy 检查版本全部对齐为 Python 3.14，并新增 3.14 破坏性变更基线说明（`asyncio.get_event_loop()`、`pkg_resources`、`PEP 594` 亡故电池、`ctypes.windll` 使用约定）。
   - `README.md` / `README_EN.md` / `CODE_WIKI.md`：Python 徽章由 `3.13` 改为 `3.14`，运行方式前置要求同步更新。
-
 - **Python 3.14 兼容性修复（`src/async_http.py`）**：
   - `close_all_clients_sync()`（`atexit` / 信号钩子调用）因 Python 3.14 起 `asyncio.get_event_loop()` 在当前线程无循环时抛 `RuntimeError`（≤3.13 为隐式创建 + `DeprecationWarning`），改为 `try: asyncio.get_event_loop() except RuntimeError: loop = None` 捕获 `RuntimeError`，以引用清理兜底；协程内获取循环统一走 `asyncio.get_running_loop()`。
   - 新增「`asyncio.get_event_loop()` 3.14 起不再隐式创建事件循环」条目记入 `AGENTS.md` 已知坑，供后续维护参考。
-
 - **语言配置键迁移与系统语言回退（`i18n.py` + `main.py` + `gui.py` + `src/web_api.py` + `src/web_config.py`）**：
   - `i18n.py`：新增 `FALLBACK_LANGUAGE = "en_US"`、`detect_system_language()`（环境变量 `LANGUAGE`/`LC_ALL`/`LC_MESSAGES` → Windows `GetUserDefaultUILanguage` → POSIX `locale.getdefaultlocale()`）、`has_catalog(lang)`（按 `i18n/<lang>/` 多格式目录探测可用翻译）、`resolve_language(value)`（空值 → 系统语言 → `FALLBACK_LANGUAGE`；非法值或目录缺失 → `FALLBACK_LANGUAGE`）。
   - `main.py`：新增 `_read_language_config()`，启动时读取 `config.ini` 中 `language` 新键；若仅存在旧键 `language(zh_cn/en)` 则读取其值、迁移写回新键、旧键保留仅作历史；主循环每轮按 `resolve_language` 同步 i18n 翻译函数，保证 Web/GUI 面板改配置后 CLI 下一轮即时热切换。
   - `gui.py`：初始语言读取改为先查 `language` 新键、回退旧键 `language(zh_cn/en)`、再回退系统语言；侧边栏「语言 Language」菜单写回 `language` 新键。
   - `src/web_api.py`：`PUT /api/language` 写回键名由 `language(zh_cn/en)` 改为 `language`；`GET /api/language` 返回值经 `resolve_language` 归一化。
   - `src/web_config.py`：`_write_language_section` 写入 `language = {value}` 而非旧键，避免并行编辑冲突时回退到旧字段。
-
 - **测试补充（`tests/test_i18n.py` + `tests/test_web_api.py` + `tests/test_config_io_readonly.py`）**：
   - `tests/test_i18n.py`：新增 `TestResolveLanguage`（空值→系统语言→en_US、非法值→en_US、目录缺失→en_US、合法值直接返回）、`TestDetectSystemLanguage`（环境变量优先）共 8 个用例。
   - `tests/test_web_api.py`：修复 `_write_language_section` 回归，确保写入新键 `language` 而非旧键。
   - `tests/test_config_io_readonly.py`：新增语言键迁移 3 个用例（旧键自动迁移写回、新键优先、默认值补写）。
-
 - **代码风格与静态检查（`black` / `isort` / `mypy` / `basedpyright`）**：
   - 升级 `black` 目标版本为 `py314`（PEP 758 `except A, B` 语法自动支持），全项目 `black .` / `isort .` 重格式化；`mypy src/` 以 `python_version = "3.14"` 重新校验，`disallow_untyped_defs = true` 仍全通过；`basedpyright src/` 0 errors / 0 warnings。
   - 新增代码全部补齐类型注解，保持项目 `disallow_untyped_defs = true` 门禁。
-
 - **质量门禁验证**：
   - 全量 `pytest` **714 passed / 2 skipped / 0 warnings**（含新增的语言键迁移与 `async_http` 回归用例）；
   - `black --check .` 全部文件 unchanged；`isort --check-only .` 全通过；
   - `mypy src/` → `Success: no issues found`；`basedpyright src/` → **0 errors / 0 warnings / 0 notes**；
   - `python scripts/compile_po.py --check` 确认 `.po` / `.mo` 字节级同步未受影响。
-
 - **文档与约定同步**：
   - `AGENTS.md`：项目结构、Python 版本说明、已知坑、mypy 检查版本等章节同步更新，并新增 Python 3.14 迁移基线与 `language` 新键语义说明。
   - `README.md` / `README_EN.md`：Python 徽章升级为 3.14，配置说明中的语言字段改为 `language =` 并补充系统回退 / 热切换说明。
@@ -1629,6 +1670,7 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 - 手动验证：`config.ini` 仅含旧键 `language(zh_cn/en) = zh_cn` 时启动主程序会自动迁移为 `language = zh_cn`、旧键保留；`language =` 空值时 CLI/GUI/Web 均按系统语言显示；GUI 侧边栏与 Web 面板切换语言后即时生效、无需重启。
 
 **关联**：
+
 - 与前序 v4.0.8.3-dev (2026-08-22) 「pythonw / 窗口化运行崩溃可观测性加固」为同一系列 Python 3.14 兼容性收尾工作，后者修复 `logger` 在无控制台环境下的崩溃，本条修复事件循环与配置层面的 3.14 兼容。
 - `asyncio.get_event_loop()` 的 RuntimeError 兜底模式、`language` 键迁移模式、系统语言检测约定均已沉淀至 `AGENTS.md` 已知坑章节，供后续改动参考。
 
@@ -1643,7 +1685,6 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 - **`src/logger.py`（`_ = logger.add(sink=sys.stderr, ...)` 加 `sys.stderr is not None` 守卫）**：
   - 无控制台环境（pythonw / 冻结 `console=False`）跳过控制台 sink，避免导入期 `TypeError`；日志持久化仍由下方 `logs/streamget.log`、`PlayURL.log` 文件 sink 兜底。
   - 加注释说明 pythonw 窗口化 `sys.stderr=None` 语义与判空理由。
-
 - **`gui.py` 窗口化崩溃可观测性加固（前序提交，本次一并记入）**：
   - 文件最顶部新增 `_install_crash_sink()`：在**所有风险导入之前**装 `sys.excepthook` 与 `threading.excepthook`，将任何未捕获异常（含模块导入期失败）的完整堆栈写入 `%TEMP%/douyin_recorder_gui_error.log` 并尽力弹 `tkinter.messagebox` 报错框，根治「窗口化运行静默死亡、看不到原因」的问题。
   - `LiveRecorderGUI.__init__` 的 UI 回调异常分支原 `traceback.print_exc()`（None stderr 下二次 `AttributeError` 崩溃、带崩事件泵）改为 `self._log(traceback.format_exc(), "error")`，走程序内「运行日志」队列，无控制台亦可观测。
@@ -1681,12 +1722,10 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
   - 返回 `(platform, port_info, record_danmaku_args, new_record_url)` 四元组；无法识别的地址返回 `None`，调用方 `break` 保持原「延迟后重试」语义（非直接结束线程）。
   - 分支体语义未变：cookie/代理等配置项仍按模块级全局变量即时读取，`json_data` 局部变量保留在函数内部（链后无需暴露）。
   - 录制执行链的控制流完全未动（含 AGENTS.md 已知坑区域：`if not real_url: continue` 守卫、`check_subprocess` 调用、弹幕参数传递等）。
-
 - **消除被掩盖的 19 个 `possibly unbound` 存量错误**（basedpyright 在复杂度消除后首次真正分析该函数时暴露）：
   - 移除恒真冗余的 `if real_url:` 包装（上方 `if not real_url: continue` 守卫已保证非空），`now`/`title_in_name` 改为无条件赋值——同时修复「录制链不得嵌套于条件内」反模式（AGENTS.md 已知坑的延伸）。
   - 清理 ffmpeg 命令中失效的 `cast(str, real_url)` 与过时注释（守卫保证 `real_url` 非空后 cast 多余）。
   - `record_name = ""` 初始化从 `try:` 内部移至外层 `while True` 循环顶部，消除 `finally` 中潜在的 `NameError`（`try` 首语句前抛异常时 `record_name` 未绑定会掩盖原始异常）。
-
 - **AGENTS.md 同步更新**：将「`real_url` 为空必须跳过录制链」一条的描述更新为反映新结构——守卫之后 `now`/`title_in_name` 为无条件赋值，原恒真冗余的 `if real_url:` 包装已移除。
 
 **验证**：`basedpyright main.py` 0 errors / 0 warnings / 0 notes（原「过于复杂」错误消除）；`mypy main.py` `Success: no issues found`；`black --check main.py` / `isort --check-only main.py` 无变更；`pytest` 699 passed / 2 skipped（与治理前一致，尾部 loguru 噪音为解释器关闭时的既有 atexit 现象，与本次无关）。
@@ -3020,8 +3059,6 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 
 **build_exe.py 冒烟测试进程树清理**：
 
-
-
 - `_launch()` 让子进程自成进程组/会话（Windows `CREATE_NEW_PROCESS_GROUP`，Unix `start_new_session`）
 - 新增 `_kill_tree(proc)`：Windows `taskkill /T /F /PID`，Unix `os.killpg(getpgid(pid), SIGKILL)`，消除 GitHub Actions runner 孤儿进程清理噪声
 
@@ -3210,17 +3247,3 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 - 配置文件重构（pyproject.toml、requirements.txt、.gitignore、.dockerignore）
 - 新增抖音流数据调试工具 `debug_douyin_streams.py`
 - 完善国际化翻译（YouTube/FlexTV/PopkonTV/TwitCasting）
-
-### v4.0.7 (2025-10-24)
-
-- 修复抖音风控问题
-- 新增 SOOP 平台支持
-- 修复 Bigo 录制
-
-### v4.0.6 (2025-01-27)
-
-- 新增淘宝、京东、Faceit 直播
-- 重构为异步架构
-- 新增强制 H264 编码选项
-
-*本文档最后更新: 2026-08-19（新增：CI 重构——build-release.yml 去除 download-artifact 来回，build job 经 softprops 直传 Release，release job 改用 gh CLI 拉回校验；新增 release-create 单例 job 消除并发竞态；修复 create_release boolean 比较恒 false（5 处）与 release-create 缺 checkout 导致 `fatal: not in a git directory`）*

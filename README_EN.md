@@ -827,6 +827,34 @@ This project is open-sourced under the [MIT License](LICENSE). Stars and Forks a
 
 ## ⏳ Changelog
 
+### v4.0.9-dev (2026-08-23 ~ 2026-08-24) — High-concurrency multi-platform recording scheduler optimization / recording-feedback loop / dual concurrency modes / Python 3.14 upgrade and language-key migration / four-language catalog unification and British-American split
+
+> This batch focuses on the scheduling-hub governance for high-concurrency (80+ tasks) multi-platform recording, the recording-side feedback loop, and the Python 3.14 baseline upgrade. For detailed root cause and verification, see [CODE_WIKI.md](CODE_WIKI.md).
+
+**🚀 High-concurrency scheduling hub (new src/scheduler.py)**
+- Introduces `ResizableSemaphore` (runtime-resizable capacity), `PlatformBreaker` (per-host circuit breaker with closed→open→half-open state machine), `ConcurrencyScheduler` (adaptive global concurrency capacity, default floor 8 / ceiling 128, gently throttling under high error rate but never below the safe floor), and `host_of(url)`.
+- Replaces the old "global fixed 3-slot semaphore + one-way error-rate suppression" model, supporting 80+ concurrent cross-platform recordings with reduced queueing latency; single-platform interface jitter is isolated and degraded instead of cascading to the whole system.
+- Wired in only at fixed integration points in `main.py` / `notify.py`, leaving the 50+ platform dispatch/recording functions untouched (backward compatible); adds the new config item "最大同时录制数(0=不限制)" ("max simultaneous recordings, 0=unlimited", default 0).
+
+**🔁 Recording-result feedback loop (root-cause fix for the Huya 403 retry loop)**
+- Fixed missing recording-side feedback: `check_subprocess` previously neither reported a failure sample by exit code nor (at round end) unconditionally reported success, diluting the per-host circuit-breaker stats so they never tripped — Huya rooms infinitely re-hit the dead "probe 200 → ffmpeg 403" route.
+- Now reports success/failure samples by host by exit code; a fast ffmpeg failure (CDN-reject signature) triggers `mark_ffmpeg_reject` probe backoff (60s) so the next round tries the next CDN candidate instead of retrying the same dead line (backoff allowlist limited to Huya only).
+- The console status line now shows the scheduler's real-time concurrency capacity (`_live_network_capacity`) instead of the misleading static config value.
+
+**⚙️ Dual network-concurrency modes (dynamic / fixed)**
+- Adds a "fixed concurrency" mode on top of adaptive capacity: "最大同时录制数(0=不限制)" also acts as a mode switch — =0 enables dynamic throttling (capacity adapts to active task count, floor 8 / ceiling 128); ≠0 ignores the dynamic throttler and pins capacity to "同一时间访问网络的线程数" ("threads accessing the network at once", hot-reload takes effect immediately, minimum 1 slot).
+- Per-host platform circuit breaking is orthogonal to the mode and works under both; the simultaneous-recording cap is still governed by `scheduler.set_recording_limit` and unaffected by mode switching.
+
+**🐍 Python 3.14 upgrade + language-key migration (general maintenance)**
+- Project baseline raised from Python 3.10 to `>=3.14` (pyproject.toml / Dockerfile / full CI chain); fixed `async_http.py` compatibility where `asyncio.get_event_loop()` no longer implicitly creates an event loop under 3.14.
+- `config.ini` language key `language(zh_cn/en)` unified into `language`: empty follows system language, illegal values fall back to en_US, GUI/Web panels hot-switch without restart, and old keys are auto-migrated at startup.
+- Fixed 21 Python 2-style `except A, B:` legacy syntax errors across 14 source files so the project imports/tests under Python 3; full `pytest` **714 passed / 2 skipped / 0 warnings**, black/isort/mypy/basedpyright all green.
+
+**🌐 Four-language catalog unification and British/American split**
+- Unified zh_CN.po / en_US.json / en_GB.json / zh_TW.yaml to the same 288-key set (original 282 + 6 build/smoke constant strings added from build_exe.py).
+- Fixed en_US's internally mixed British spellings (now consistently American: minimizes/minimized/canceled); en_GB was previously a clone of en_US, rewritten as genuinely British (minimise/minimises/minimised/cancelled), differing from en_US in only 4 spelling-sensitive entries.
+- Recompiled zh_CN.po → zh_CN.mo (compile_po.py --check confirms byte-level sync), with no runtime-logic changes.
+
 ### v4.0.8.3 (2026-08-19 ~ 2026-08-22) — Auto anchor-name update / SSL config consolidation / four-language i18n / FFmpeg9·Node24 compatibility / type-safety hardening / start_record complexity governance / windowed-crash hardening / type-check defect fixes
 
 > This version builds on the 4.0.8.2 fixes with several new capabilities and low-level compatibility, closing out with all five quality gates (mypy / basedpyright / pytest (0 warnings) / black / isort) green. For detailed root cause and verification, see [CODE_WIKI.md](CODE_WIKI.md).
