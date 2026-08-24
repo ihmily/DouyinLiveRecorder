@@ -95,8 +95,8 @@ jobs:
           # node_version   : 仅供 JS 签名脚本运行时探测使用（非前端构建）
           {
             echo "python_min=3.14"
-            echo "python_latest=3.15"
-            echo 'python_matrix=["3.14","3.15"]'
+            echo "python_latest=3.14"
+            echo 'python_matrix=["3.14","3.14"]'
             echo "python_build=3.14"
             echo "node_version=24"
           } >> "$GITHUB_OUTPUT"
