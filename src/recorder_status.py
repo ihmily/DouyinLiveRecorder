@@ -66,7 +66,7 @@ def get_status() -> dict[str, object]:
                 error_val = main.error_count
                 snapshot_ok = True
                 break
-        except (RuntimeError, IndexError):
+        except RuntimeError, IndexError:
             continue
     if not snapshot_ok:
         logger.warning("获取录制状态失败（并发竞争），返回空快照")
@@ -113,7 +113,10 @@ def get_status() -> dict[str, object]:
 # 线程数」只是容量下限之一——控制台直接显示配置值会严重误导（实测容量 12/20 而显示 3，
 # 高并发优化形同「未生效」）。
 def _live_network_capacity() -> int:
-    scheduler = getattr(main, "scheduler", None)
+    # 直接属性访问而非三参 getattr：mypy 不对三参 getattr 做字面量名解析（返回 Any），
+    # 既触发 no-any-return 又丢失属性类型检查；main.scheduler 有模块级声明
+    # （ConcurrencyScheduler | None，main.py），属性必然存在，无需 getattr 兜底。
+    scheduler = main.scheduler
     if scheduler is not None:
         return scheduler.network_semaphore.value
     return main.max_request

@@ -169,7 +169,7 @@ def read_config_value(
         if "账号密码" not in config_parser.sections():
             config_parser.add_section("账号密码")
         return config_parser.get(section, option)
-    except (configparser.NoSectionError, configparser.NoOptionError):
+    except configparser.NoSectionError, configparser.NoOptionError:
         # 兜底创建 section（白名单外的 section 直接 set 会抛 NoSectionError），
         # 并持 file_update_lock 写回，避免与录制线程的 update_config 并发半写。
         with main.file_update_lock:
@@ -198,7 +198,7 @@ def _safe_int(value: str | None, default: int) -> int:
     # 配置数值安全转换：非法值记录告警并回退默认，避免 main() 主循环因 ValueError 崩溃
     try:
         return int(str(value).strip())
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         logger.warning(f"配置项数值非法: {value!r}，使用默认值 {default}")
         return default
 
@@ -208,7 +208,7 @@ def _safe_float(value: str | None, default: float) -> float:
     # 配置数值安全转换（浮点版）
     try:
         return float(str(value).strip())
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         logger.warning(f"配置项数值非法: {value!r}，使用默认值 {default}")
         return default
 
