@@ -103,7 +103,8 @@ def normalize_language(value: str | None) -> str:
 #   1) 环境变量 LANGUAGE / LC_ALL / LC_MESSAGES / LANG（LANGUAGE 为冒号分隔列表，
 #      取首项；C / POSIX 视为未设置）
 #   2) Windows：用户默认 UI 语言（LANGID 经 locale.windows_locale 映射为 zh_CN 等代码）
-#   3) POSIX：locale.getlocale()（进程已 setlocale 时有效）
+#   3) POSIX：locale.getlocale()（进程已 setlocale 时有效；C / POSIX 结果同样视为未设置，
+#      实测 Linux CI 的 LANG=C 进程里 getlocale() 返回 ('C', None)，不拦会原样泄漏 "C"）
 def detect_system_language() -> str | None:
     for var in ("LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"):
         value = os.environ.get(var, "").strip()
@@ -117,11 +118,17 @@ def detect_system_language() -> str | None:
         current = locale.getlocale()[0]
     except ValueError:
         current = None
-    return current or None
+    if current and current.upper() not in ("C", "POSIX"):
+        return current
+    return None
 
 
 # Windows 用户默认 UI 语言代码（如 zh_CN / en_US）；非 Windows 或调用失败返回 None
 def _windows_ui_language() -> str | None:
+    # 平台门控放函数体首行：WinDLL 仅存在于 Windows typeshed，裸引用会让 mypy 在
+    # 非 win32 平台（CI 的 linux runner）报 attr-defined（对齐 src/web_tray.py 的门控惯例）
+    if sys.platform != "win32":
+        return None
     try:
         import ctypes
 
@@ -192,7 +199,7 @@ def _should_translate(caller_file: str) -> bool:
 def _load_json_catalog(path: Path) -> dict[str, str] | None:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
     if not isinstance(data, dict):
         return None
@@ -206,7 +213,7 @@ def _load_yaml_catalog(path: Path) -> dict[str, str] | None:
         return None
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
     if not isinstance(data, dict):
         return None
@@ -308,7 +315,7 @@ def translated_print(
         frame = inspect.currentframe()
         caller_file = frame.f_back.f_code.co_filename if frame and frame.f_back else ""
         should_translate = _should_translate(caller_file)
-    except (ValueError, AttributeError):
+    except ValueError, AttributeError:
         should_translate = False
 
     translated_args: list[str] = []

@@ -2512,7 +2512,7 @@ class LiveRecorderGUI:
                         continue
                     try:
                         event = json.loads(line)
-                    except (ValueError, TypeError):
+                    except ValueError, TypeError:
                         continue
                     if isinstance(event, dict):
                         self._danmaku_dispatch(event)

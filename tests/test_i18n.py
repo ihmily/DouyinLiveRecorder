@@ -2,7 +2,9 @@
 
 import importlib.util
 import os
+import sys
 import tempfile
+import types
 from pathlib import Path
 from unittest.mock import patch
 
@@ -216,35 +218,63 @@ class TestResolveLanguage:
 
 # detect_system_language：环境变量优先，Windows UI 语言与 POSIX locale 兜底。
 class TestDetectSystemLanguage:
-    def _env_without_locale_vars(self) -> dict[str, str]:
-        return {k: v for k, v in os.environ.items() if not k.startswith(("LANGUAGE", "LC_", "LANG"))}
+    # 清空 detect_system_language 会读取的全部 locale 环境变量。
+    # 约定：环境变量一律 monkeypatch，禁用 patch.dict(os.environ)（整体快照写回会超
+    # Windows 环境变量长度上限，见 AGENTS.md「测试编写强制约定」）
+    def _clear_locale_vars(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for var in ("LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"):
+            monkeypatch.delenv(var, raising=False)
 
-    def test_language_env_var_takes_first_of_list(self) -> None:
+    def test_language_env_var_takes_first_of_list(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # LANGUAGE 为冒号分隔列表，取首项
-        env = self._env_without_locale_vars()
-        env["LANGUAGE"] = "zh_CN:en_US"
-        with patch.dict(os.environ, env, clear=True):
-            assert i18n.detect_system_language() == "zh_CN"
+        self._clear_locale_vars(monkeypatch)
+        monkeypatch.setenv("LANGUAGE", "zh_CN:en_US")
+        assert i18n.detect_system_language() == "zh_CN"
 
-    def test_lang_env_var(self) -> None:
-        env = self._env_without_locale_vars()
-        env["LANG"] = "en_US.UTF-8"
-        with patch.dict(os.environ, env, clear=True):
-            assert i18n.detect_system_language() == "en_US.UTF-8"
+    def test_lang_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._clear_locale_vars(monkeypatch)
+        monkeypatch.setenv("LANG", "en_US.UTF-8")
+        assert i18n.detect_system_language() == "en_US.UTF-8"
 
-    def test_c_and_posix_env_ignored(self) -> None:
+    def test_c_and_posix_env_ignored(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # C / POSIX 视为未设置：Windows 走 UI 语言、其他平台走 getlocale，均不得返回 "C"
-        env = self._env_without_locale_vars()
-        env["LANG"] = "C"
-        with patch.dict(os.environ, env, clear=True):
-            assert i18n.detect_system_language() != "C"
+        self._clear_locale_vars(monkeypatch)
+        monkeypatch.setenv("LANG", "C")
+        assert i18n.detect_system_language() != "C"
 
-    def test_returns_none_when_nothing_detectable(self) -> None:
-        # 全部来源不可用 → None（调用方 resolve_language 据此回退 en_US）
-        env = self._env_without_locale_vars()
+    def test_c_locale_from_getlocale_ignored(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 回归（Linux CI 实测）：LANG=C 进程里 locale.getlocale() 返回 ('C', None)，
+        # getlocale 兜底同样须把 C / POSIX 视为未设置，不得原样泄漏 "C"
+        self._clear_locale_vars(monkeypatch)
         with (
-            patch.dict(os.environ, env, clear=True),
+            patch.object(i18n, "_windows_ui_language", return_value=None),
+            patch.object(i18n.locale, "getlocale", return_value=("C", None)),
+        ):
+            assert i18n.detect_system_language() is None
+
+    def test_returns_none_when_nothing_detectable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 全部来源不可用 → None（调用方 resolve_language 据此回退 en_US）
+        self._clear_locale_vars(monkeypatch)
+        with (
             patch.object(i18n, "_windows_ui_language", return_value=None),
             patch.object(i18n.locale, "getlocale", return_value=(None, None)),
         ):
             assert i18n.detect_system_language() is None
+
+
+# _windows_ui_language：函数体首行 sys.platform 门控（WinDLL 仅存在于 Windows typeshed，
+# 裸引用会让 mypy 非 win32 平台报 attr-defined；非 win32 必须直接返回 None）。
+class TestWindowsUiLanguagePlatformGate:
+    def test_non_win32_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 门控回归：非 win32 直接返回 None（不依赖 ctypes 异常兜底）
+        monkeypatch.setattr(sys, "platform", "linux")
+        assert i18n._windows_ui_language() is None
+
+    def test_win32_gate_not_inverted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 门控条件写反（== win32 提前返回）mypy 静态检查无法发现，须运行时锁定：
+        # win32 下仍完整走「WinDLL → GetUserDefaultUILanguage → windows_locale」链路
+        monkeypatch.setattr(sys, "platform", "win32")
+        fake_dll = types.SimpleNamespace(GetUserDefaultUILanguage=lambda: 2052)  # 0x0804 → zh_CN
+        fake_ctypes = types.SimpleNamespace(WinDLL=lambda name, use_last_error=False: fake_dll, c_uint16=int)
+        monkeypatch.setitem(sys.modules, "ctypes", fake_ctypes)
+        assert i18n._windows_ui_language() == "zh_CN"

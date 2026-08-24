@@ -169,7 +169,7 @@ DouyinLiveRecorder/
 ├── logs/                       # log dir (generated at runtime, includes danmaku_monitor.jsonl)
 ├── i18n/                       # i18n translation dirs (multilingual, multi-format)
 │   ├── zh_CN/LC_MESSAGES/      # Simplified Chinese (gettext)
-│   │   ├── zh_CN.po           # Chinese translation source (282 entries)
+│   │   ├── zh_CN.po           # Chinese translation source (288 entries)
 │   │   └── zh_CN.mo           # compiled translation (required at runtime, shipped with repo)
 │   ├── en_US.json              # English (US) (JSON catalog)
 │   ├── en_GB.json              # English (UK) (British spelling variant)
@@ -827,7 +827,7 @@ This project is open-sourced under the [MIT License](LICENSE). Stars and Forks a
 
 ## ⏳ Changelog
 
-### v4.0.9-dev (2026-08-23 ~ 2026-08-24) — High-concurrency multi-platform recording scheduler optimization / recording-feedback loop / dual concurrency modes / Python 3.14 upgrade and language-key migration / four-language catalog unification and British-American split
+### v4.0.9-dev (2026-08-23 ~ 2026-08-24) — High-concurrency multi-platform recording scheduler optimization / recording-feedback loop / dual concurrency modes / Python 3.14 upgrade and language-key migration / four-language catalog unification and British-American split / type and CI quality-gate fixes
 
 > This batch focuses on the scheduling-hub governance for high-concurrency (80+ tasks) multi-platform recording, the recording-side feedback loop, and the Python 3.14 baseline upgrade. For detailed root cause and verification, see [CODE_WIKI.md](CODE_WIKI.md).
 
@@ -854,6 +854,17 @@ This project is open-sourced under the [MIT License](LICENSE). Stars and Forks a
 - Unified zh_CN.po / en_US.json / en_GB.json / zh_TW.yaml to the same 288-key set (original 282 + 6 build/smoke constant strings added from build_exe.py).
 - Fixed en_US's internally mixed British spellings (now consistently American: minimizes/minimized/canceled); en_GB was previously a clone of en_US, rewritten as genuinely British (minimise/minimises/minimised/cancelled), differing from en_US in only 4 spelling-sensitive entries.
 - Recompiled zh_CN.po → zh_CN.mo (compile_po.py --check confirms byte-level sync), with no runtime-logic changes.
+
+**🧪 Type-check / CI quality-gate fixes**
+- Fixed two CI `mypy src/` errors: `i18n.py`'s `ctypes.WinDLL` platform gate (`sys.platform != "win32"` early return, clean on both ends), and `src/recorder_status.py`'s three-arg `getattr` changed to direct attribute access (eliminating the `no-any-return` leak).
+- Fixed CI `pytest` assertion failure under C/POSIX locale where `detect_system_language()`'s `locale.getlocale()` fallback did not filter `("C", "POSIX")`; replaced 4 `patch.dict(os.environ)` calls in tests with `monkeypatch.setenv/delenv` (per AGENTS.md mandatory convention, avoiding the Windows 32767-char env limit overflow).
+- Fixed `src/config_io.py`'s `read_config_value()` write-back crash where Python 3.14 throws `InvalidWriteError` on `write()` for keys containing a delimiter (now fully serialized to an in-memory buffer and flushed to disk only on success, with bad-key rollback).
+- Repo-wide black 26.5.1 + `target-version=['py314']` reformat (stripping PEP 758 `except (A, B):` parentheses); local dev venv upgraded to 3.14.7; all four quality gates green under the 3.14 environment.
+
+**📦 Build / dependencies / platform adaptation**
+- Version bump `4.0.8.3` → `4.0.9` (single source of truth); `requires-python` raised to `>=3.14`, classifiers narrowed to 3.14 only; added `PyYAML>=6.0.3` dependency (for i18n's zh_TW.yaml support).
+- `Dockerfile` base image upgraded to `python:3.14-slim-bookworm`, Node.js source `setup_22.x` → `setup_24.x`; CI matrix synced to 3.14.
+- `src/spider.py`'s Migu `get_migu_stream_url()` now uses the rewritten `migu.js` that outputs the complete URL with `ddCalcu`/`sv` params (dropping the local stale fixed `sv=10010`); FFmpeg download source switched from `wweb.lanzouv.com` to `wwasx.lanzout.com`.
 
 ### v4.0.8.3 (2026-08-19 ~ 2026-08-22) — Auto anchor-name update / SSL config consolidation / four-language i18n / FFmpeg9·Node24 compatibility / type-safety hardening / start_record complexity governance / windowed-crash hardening / type-check defect fixes
 

@@ -223,8 +223,9 @@ DouyinLiveRecorder/
 │   ├── ffmpeg_proc.py                   # FFmpeg 进程注册/注销/终止/清理（抽离自 main.py）
 │   ├── video_postprocess.py             # 视频后处理：分段/转码/字幕（抽离自 main.py）
 │   ├── stream_select.py                 # 流地址选择/校验/画质码/抖音限速（抽离自 main.py）
-│   ├── notify.py                        # 推送/脚本/成功失败计数/并发调节（抽离自 main.py）
-│   ├── recorder_status.py               # 录制状态快照与展示（抽离自 main.py）
+│   ├── notify.py                        # Push/script/success-failure counting/concurrency adjustment (extracted from main.py)
+│   ├── scheduler.py                     # Concurrency scheduling hub (adaptive capacity + per-platform circuit breaker + runtime-resizable semaphore)
+│   ├── recorder_status.py               # Recording status snapshot and display (extracted from main.py)
 │   ├── config_io.py                     # 配置读写/安全数值转换/备份（抽离自 main.py）
 │   ├── base.py                          # 弹幕基类与数据结构（DanmakuBase / DanmakuMessage / DanmakuMessageType）
 │   ├── collector.py                     # 弹幕采集器（线程化包装 DanmakuBase，落 SRT + 上报监控枢纽）
@@ -287,12 +288,29 @@ DouyinLiveRecorder/
 │   ├── test_concurrency.py             # 线程安全并发测试
 │   ├── test_i18n.py                    # i18n 翻译加载/环境变量独立性/po-mo 同步回归测试
 │   ├── test_anchor_rename.py           # 主播名自动同步测试（config_io.update_anchor_name + main.rename_anchor_directory）
-│   └── test_concurrency_rate_limit.py  # 抖音速率限制并发测试
-├── .github/                             # GitHub Actions 工作流目录
+│   ├── test_scheduler.py               # Scheduler tests (ResizableSemaphore / PlatformBreaker / ConcurrencyScheduler, 15 cases)
+│   ├── test_record_failure_feedback.py # Recording failure feedback tests (success/fast-fail backoff/slow-fail/missing -i/capacity fallback, 5 cases)
+│   ├── test_stream_select.py           # Stream selection and probe backoff marking tests
+│   ├── test_cookie_cache.py            # Visitor Cookie cache tests
+│   ├── test_danmaku_monitor.py         # Danmaku monitoring hub tests
+│   ├── test_http_config.py             # HTTP configuration tests
+│   ├── test_config_io_readonly.py      # Config readonly/language key migration tests
+│   ├── test_config_io_backup.py        # Config backup tests
+│   ├── test_bilibili_danmaku_info.py   # Bilibili danmaku info fetch tests
+│   ├── test_huya_danmaku.py            # Huya danmaku tests
+│   └── test_concurrency_rate_limit.py  # Douyin rate-limit concurrency test
+├── .github/                             # GitHub Actions workflow directory
+│   ├── ISSUE_TEMPLATE/                 # Issue templates (Bug report / Feature request)
+│   ├── PULL_REQUEST_TEMPLATE.md         # PR template
 │   └── workflows/
-│       ├── ci.yml                      # CI 静态验证（static/typecheck/test/concurrency/integration/build-verify）
-│       └── build-release.yml           # 三平台构建（lite + full 双产物）+ 自动发布 Release
-└── CODE_WIKI.md                        # 本架构文档
+│       ├── ci.yml                      # CI static verification (static/typecheck/test/concurrency/integration/build-verify)
+│       ├── build-release.yml           # Three-platform build (lite + full dual artifact) + auto-publish Release
+│       └── issue-translator.yml        # Issue auto-translation workflow (CN↔EN)
+├── .coveragerc-concurrency             # Concurrency test coverage config (used by CI concurrency-test job, no global threshold)
+├── CODE_WIKI.md                        # This architecture document (Chinese)
+├── CODE_WIKI_EN.md                     # This architecture document (English)
+├── README.md                           # Project README (Chinese)
+├── README_EN.md                        # Project README (English)
 ```
 
 ---
@@ -782,7 +800,48 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 - **SRT subtitle writer (`src/srt_writer.py`)**: `SrtWriter` shards by `segment_seconds` to `{base}_{seg:03d}.srt` (single-file mode `{base}.srt`); the timeline is based on `time.monotonic()` and aligned with ffmpeg's `segment -reset_timestamps` PTS; `write()` holds a `threading.Lock` to write entries and flush.
 - **WebSocket transport layer (`src/ws_client.py`)**: `WsClient` is the async WS client shared by all platform danmaku. `connect()` explicitly sets `proxy=None` (danmaku connects directly, not following the system proxy, avoiding the SOCKS-requires-python-socks error); `ping_interval=None` (each platform has its own heartbeat); `max_size=None`, `asyncio.Lock` serializes sending; supports `on_message/on_ready/on_heartbeat/on_close/on_reconnect` callbacks and a `max_reconnect` reconnect policy.
 - **Visitor Cookie cache (`src/cookie_cache.py`)**: the only in-process "dynamically fetch visitor cookie by URL" cache, avoiding risk-control triggers from concurrent duplicate requests across multiple rooms. `fetch_cookies(url, proxy, *, ttl=30min, fetcher=None)` uses a lock-free fast path + `RLock` double-check; `get_cookie_str` / `invalidate` / `clear`.
-- **Douyin danmaku protocol (`src/proto/`)**: `douyin.proto` (Proto3) defines `Response/Message/ChatMessage/GiftMessage/...` etc.; `douyin_pb2.py` is protoc-generated (DO NOT EDIT), `douyin_pb2.pyi` is the basedpyright type stub. Douyin danmaku parse chain: `PushFrame.payload` (gzip → `Response`) → `Message.payload` → `ChatMessage`.
+- **Douyin danmaku protocol (`src/proto/`)**: `douyin.proto` (Proto3) defines `Response/Message/ChatMessage/GiftMessage/...`; `douyin_pb2.py` is protoc-generated (DO NOT EDIT), `douyin_pb2.pyi` is a pyright-based type stub. Douyin danmaku parsing chain: `PushFrame.payload` (gzip → `Response`) → `Message.payload` → `ChatMessage`.
+
+---
+
+### 15. Concurrency Scheduling Hub (`src/scheduler.py`)
+
+**Responsibility**: Uniformly manages global network concurrency capacity, per-platform (host) isolated circuit breaker degradation, and supports both adaptive speed adjustment and fixed concurrency modes with runtime-resizable semaphores.
+
+**Core Classes**:
+
+- **`ResizableSemaphore`**: A runtime-resizable semaphore implementing the context manager protocol. Supports `set_value(n)` for runtime capacity adjustments — on increase, wakes the corresponding number of waiters; on decrease, only lowers the upper bound without forcibly reclaiming held slots. `__init__` / `set_value` allow a capacity of 0 (paused state). Eliminates the race condition of the old "destroy-and-recreate semaphore" approach.
+
+- **`PlatformBreaker`**: A per-key (host) isolated circuit breaker implementing a `closed → open → half-open` three-state state machine. When the continuous failure sample ratio exceeds the threshold, it opens (skips probing and enters cooldown); after cooldown, a **single** probe is released; probe success restores closed, probe failure re-opens. Used to isolate and degrade single-platform jitter, preventing cascading global failures.
+
+- **`ConcurrencyScheduler`**: The scheduling hub, integrating adaptive capacity, platform circuit breaker, and recording concurrency limit capabilities.
+  - **Network concurrency capacity** = `max(configured lower bound, min(upper bound, ceil(active count / scale factor)))`; when the error rate is extremely high, capacity is gently reduced but never below the safe lower bound (default min=8 / max=128)
+  - **Adaptive mode** (default, `Max simultaneous recordings (0=unlimited)` = 0): capacity dynamically scales with active task count, error feedback drives gentle backpressure
+  - **Fixed concurrency mode** (`Max simultaneous recordings (0=unlimited)` ≠ 0): ignores the adaptive governor and error backpressure; network capacity is fixed to "Network thread count" (minimum 1 slot, hot-updates take effect immediately)
+  - **Recording concurrency soft limit**: controls the simultaneous ffmpeg recording count via `recording_semaphore`, default 0 means unlimited
+  - `adjust_loop` daemon recalculates capacity every 5 seconds, replacing the old one-way suppression `adjust_max_request`
+
+**Key Functions**:
+
+- `host_of(url)`: Extracts hostname from URL (lowercase, strip port/path/query) as circuit breaker key; custom flv/m3u8 direct links fall back to the path itself
+- `allow(key)`: Pre-checks whether the specified host is circuit-broken; returns False when the caller should skip this round of probing
+- `record_error(key)` / `record_success(key)`: Records success/failure samples per host, driving circuit breaker state transitions
+
+**Wiring Points** (fixed locations, does not modify 50+ platform dispatch functions):
+
+- `notify.record_error/record_success` adds a `key` parameter, delegates to `scheduler`
+- `start_record` entry performs `scheduler.allow(record_host)` circuit breaker pre-check before platform dispatch
+- `check_subprocess` recording loop is governed by `recording_semaphore`
+- `main()` initializes the scheduler in the first round; `semaphore` / `recording_semaphore` point to its attributes
+
+**Configuration Items**:
+
+| Config Item | Description | Default |
+|-------------|-------------|---------|
+| Max simultaneous recordings (0=unlimited) | 0=unlimited (also serves as concurrency mode switch: 0=adaptive speed, non-zero=fixed concurrency) | 0 |
+| Network thread count | In adaptive mode, one of the capacity lower bounds; in fixed mode, the fixed concurrency limit value | 3 |
+
+**Tests**: `tests/test_scheduler.py` has 15 test cases covering semaphore resizing, circuit breaker state machine, adaptive capacity scaling/lower bound, fixed concurrency mode, per-key isolation, recording concurrency soft limit, etc.
 
 ---
 
@@ -821,7 +880,36 @@ async def some_function():
 
 ### Dynamic Concurrency Adjustment
 
-A dynamic concurrency adjustment mechanism based on error rate, implemented in `main.py`, to avoid being rate-limited by platforms.
+`main.py` implements an error-rate-based dynamic concurrency adjustment mechanism to avoid being rate-limited by platforms.
+
+### Concurrency Scheduler (`src/scheduler.py`)
+
+```python
+# Runtime-resizable semaphore
+class ResizableSemaphore:
+    def set_value(self, n: int) -> None: ...
+    def acquire(self) -> None: ...
+    def release(self) -> None: ...
+
+# Per-platform circuit breaker
+class PlatformBreaker:
+    def allow(self) -> bool: ...
+    def record_success(self) -> None: ...
+    def record_failure(self) -> None: ...
+
+# Scheduling hub
+class ConcurrencyScheduler:
+    network_semaphore: ResizableSemaphore
+    recording_semaphore: ResizableSemaphore
+    def set_dynamic_mode(self, enabled: bool) -> None: ...
+    def set_recording_limit(self, limit: int) -> None: ...
+    def allow(self, key: str) -> bool: ...
+    def record_error(self, key: str) -> None: ...
+    def record_success(self, key: str) -> None: ...
+
+# Helper function
+def host_of(url: str) -> str: ...
+```
 
 ---
 
@@ -877,6 +965,11 @@ main.py
 ├── src/stream.py
 │   ├── src/spider.py
 │   └── src/async_http.py
+├── src/scheduler.py (concurrency scheduling hub)
+│   ├── ResizableSemaphore (runtime-resizable semaphore)
+│   ├── PlatformBreaker (per-platform circuit breaker)
+│   └── ConcurrencyScheduler (scheduling hub)
+├── src/notify.py (record_error/record_success delegates to scheduler)
 ├── src/http_config.py
 ├── src/async_http.py
 ├── src/utils.py
@@ -1458,6 +1551,136 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 ---
 
 ## Changelog
+
+### v4.0.9-dev (2026-08-24) — This Session's Change Overview (Classified by Module)
+
+> This entry is a systematic, module-classified overview of **all working-tree changes** accumulated in v4.0.9-dev up to 2026-08-24. The `### v4.0.9-dev (2026-08-24) — …` entries below are per-feature details (explaining "why and how"); this entry complements them by stating "which files changed and under which module". Note: this overview covers the entire 4.0.9-dev working tree (including the Python 3.14 upgrade, four-language i18n, concurrency scheduling, type fixes, etc.); some sub-items have deeper cause-effect analysis in the per-feature entries.
+
+**1. Build / CI / Dependencies (Modifications)**
+
+- `pyproject.toml`:
+  - Version `4.0.8.3` → `4.0.9` (single source of truth; read dynamically by `main.py`/`web_api.py` via `importlib.metadata`; injected into `Dockerfile` via the `APP_VERSION` build arg).
+  - `requires-python` `>=3.10` → `>=3.14`; classifiers collapsed from `3.10–3.13` to `3.14` only.
+  - `[project.dependencies]` added `PyYAML>=6.0.3` (i18n YAML catalog `i18n/zh_TW.yaml` support; missing only loses that format, JSON/gettext unaffected).
+  - `[tool.black] target-version` `['py310','py311','py312','py313']` → `['py314']`.
+  - `[tool.mypy] python_version` `3.10` → `3.14`.
+  - `[tool.pytest.ini_options]` added `filterwarnings`: ignore the `httpx`+`starlette.testclient` deprecation warning (third-party, unrelated to project code).
+  - `[tool.basedpyright] pythonVersion` `3.10` → `3.14`.
+- `requirements.txt`: added `PyYAML>=6.0.3` (strictly consistent with the `pyproject.toml` lower bound).
+- `Dockerfile`: base image `python:3.13-slim-bookworm` → `python:3.14-slim-bookworm` (both builder and runtime stages); Node.js source `setup_22.x` → `setup_24.x` (24 LTS, empirically compatible with `node_install.py`).
+- `.github/workflows/ci.yml`: `python_min` `3.10`→`3.14`, `python_latest` `3.13`→`3.15`, `python_matrix` `["3.10","3.13"]`→`["3.14","3.15"]`, `python_build` `3.12`→`3.14`; top-of-file tech-stack comment synced (pure Python, no frontend build, target py314).
+- `.github/workflows/build-release.yml`: `python_build` `3.12`→`3.14` (same value as ci.yml, so verification env == release env).
+- `.gitignore`: removed the ignore rule for `.coveragerc-concurrency` (now tracked, see below).
+- New `.coveragerc-concurrency`: concurrency-test coverage config (referenced by CI via `COVERAGE_RCFILE`, `fail_under = 0`, report-only for manual review).
+- New community templates: `.github/ISSUE_TEMPLATE/` (issue templates), `.github/PULL_REQUEST_TEMPLATE.md` (PR template), `.github/workflows/issue-translator.yml` (issue auto-translation Action).
+
+**2. Internationalization (i18n) System (New Feature + Modifications)**
+
+- `i18n.py`: rewritten as a four-format translation engine. Added `detect_system_language()` / `_windows_ui_language()` (with `sys.platform` gate, fixing the mypy `WinDLL` error) / `resolve_language()` / `set_language()` (runtime hot-switch) / `get_language()` / `available_languages()` / `normalize_language()` / `is_recognized_language()` / `has_catalog()` / `_load_json_catalog()` / `_load_yaml_catalog()` / `_load_mo_catalog()` / `_load_translations()` / `_build_translator()`; unified loading and runtime hot-switch across gettext `.po/.mo` + JSON (`en_US`/`en_GB`) + YAML (`zh_TW`). See the per-feature entries "Four-Language Catalog Unification" and "CI mypy Double-Error Fix".
+- New `i18n/en_US.json`, `i18n/en_GB.json`, `i18n/zh_TW.yaml`: four-language catalogs, 288 keys each (American / British spelling split).
+- Recompiled `i18n/zh_CN/LC_MESSAGES/zh_CN.mo` (28,697 bytes); `compile_po.py --check` confirms byte-level sync.
+- New `CODE_WIKI_EN.md` (English architecture doc), `README_EN.md` (English user doc), structurally aligned with the Chinese versions.
+- `gui.py`: added `_on_language_change()` (GUI language-switch dropdown), `_install_crash_sink()` / `_bootstrap_error_sink()` (top-level crash dump hook, making windowed silent crashes observable).
+- `src/web_api.py`: added `LanguageUpdate` model and `GET/PUT /api/language` endpoints (Web-panel language hot-switch: normalize-validate → write back to `config.ini` → hot-switch this process's translation catalog).
+- `web/index.html` / `web/app.js` / `web/style.css`: added language selector and related UI (+291 / +83 / +13 lines).
+
+**3. Concurrency Scheduling & Resource Management (High-Concurrency Multi-Platform) (New Feature)**
+
+- New `src/scheduler.py`: `ResizableSemaphore` / `PlatformBreaker` / `ConcurrencyScheduler` / `host_of`. Replaces the old "fixed 3-slot semaphore + one-way error-rate suppression" with "runtime-resizable semaphore + per-host platform-isolated circuit breaking + adaptive global concurrency capacity".
+- `main.py`: scheduler wiring — `main()` initializes the scheduler, wires the capacity floor into "最大同时访问网络线程数" (max concurrent network threads), and adds the new "最大同时录制数(0=不限制)" (max concurrent recordings, 0=unlimited); `start_record` adds a per-host circuit-breaker pre-check and `record_host` propagation (pre-set to `""` to eliminate possibly-unbound); `check_subprocess`'s recording loop is gated by `recording_semaphore`; `semaphore`/`recording_semaphore` are now `ResizableSemaphore`.
+- `src/notify.py`: `record_error`/`record_success` gained a `key` parameter and delegate to the scheduler to record the per-key error budget; `adjust_max_request` now launches the `scheduler.adjust_loop` daemon loop.
+- New `tests/test_scheduler.py` (12 cases).
+- Fixed 21 Python 2-style `except A, B:` syntax errors across 14 source files (`build_exe.py`, `gui.py`, `i18n.py`, `scripts/check_coverage.py`, `scripts/compile_po.py`, `src/collector.py`, `src/config_io.py`, `src/recorder_status.py`, `src/spider.py` (2), `src/ttwid.py`, `src/web_config.py`, `src/ws_client.py`, `src/platforms/bilibili.py`, `src/platforms/douyu.py`), making the project importable/testable under Python 3. See the per-feature entry "High-Concurrency Multi-Platform Recording Scheduling & Resource Management Optimization".
+
+**4. Recording-Result Feedback to Scheduler + Probe Backoff (Root Fix for Huya 403 Dead Loop)**
+
+- `main.py`: `check_subprocess` now feeds back by return code — `rc==0`→`record_success(host_of)`, `rc!=0`→`record_error(host_of)`; fast-fail (≤20s) extracts the real URL after `-i` and calls `mark_ffmpeg_reject` to record probe backoff; the direct-download success path adds `record_success`; the unconditional end-of-round `record_success` is removed.
+- `src/stream_select.py`: added `mark_ffmpeg_reject(url, platform)` (delegates to `_mark_probe_reject`); silently no-ops when `platform` is not in `_PROBE_BACKOFF_PLATFORMS` (only `"虎牙直播"`).
+- New `tests/test_record_failure_feedback.py` (5 cases). See the per-feature entry "Recording-Result Feedback to Scheduler + Probe Backoff Marking".
+
+**5. Type / Quality-Gate Fixes (Modifications)**
+
+- `i18n.py`: `_windows_ui_language()` adds `if sys.platform != "win32": return None` platform gate (fixes `mypy --platform linux` `Module has no attribute "WinDLL"`).
+- `src/recorder_status.py`: in `_live_network_capacity()`, the 3-arg `getattr(main,"scheduler",None)` is replaced by direct `main.scheduler` (fixes `no-any-return` Any leak).
+- `tests/test_i18n.py`: added `TestWindowsUiLanguagePlatformGate` (2 cases) and `test_c_locale_from_getlocale_ignored` (C/POSIX filter regression); 4 `patch.dict(os.environ)` calls replaced with `monkeypatch.setenv/delenv` (AGENTS.md mandatory convention); fixed the pytest-collection `sys.argv` parsing guard.
+- `i18n.py` `detect_system_language()`: the `locale.getlocale()` fallback path now adds C/POSIX filtering.
+- `src/async_http.py`: `close_all_clients_sync()` adapted to Python 3.14 — `asyncio.get_event_loop()` no longer implicitly creates a loop; catches `RuntimeError` and falls back to reference cleanup.
+- `src/config_io.py`: `read_config_value()`'s default-value write-back now "serializes fully in memory via `io.StringIO` first, then writes to disk only on success"; catches `InvalidWriteError` (Python 3.14+ raises this from `configparser` when writing a key containing a delimiter) and rolls back the in-memory state while removing the bad key; multiple `except` clauses comma-ized (PEP 758).
+- `src/http_config.py`: since FFmpeg 9.0 validates TLS certificates by default, the "platforms with SSL verification disabled" override is effective again; `get_effective_ssl_verify()` now reads the per-platform override when `ssl_verify=True` (http mode, default strict verification restored).
+- `src/logger.py`: `sys.stderr is None` guard (pythonw / `console=False` frozen exe has no console, so the console sink is skipped to avoid an import-time `TypeError` silent crash).
+- `src/web_config.py` / `src/spider.py` / `build_exe.py`: `except` clauses comma-ized (PEP 758 mechanical reformat).
+
+**6. Platform Adaptation / Download Sources (Modifications)**
+
+- `src/ffmpeg_install.py`: switched the LanZou FFmpeg download source — `wweb.lanzouv.com` → `wwasx.lanzout.com` (new extraction code); `get_lanzou_download_link()` and `_install_ffmpeg_lanzou()` domain/password synced.
+- `src/spider.py` `get_migu_stream_url()`: the Migu `migu.js` (2026-08 rewrite) now emits the full URL with `ddCalcu`/`sv` params; the locally hard-coded expired `sv=10010` concatenation is removed.
+
+**7. Repo-wide Formatting (PEP 758 / py314) & Local Environment (Modifications)**
+
+- `black` 26.5.1 + `target-version=['py314']` repo-wide reformat: strips parentheses from `except (A, B):` (PEP 758 re-legalizes the syntax in Python 3.14). Executed under a **Python 3.14.7** runtime (the local 3.13 venv cannot emit this syntax and black's safety check rejects it), reformatted **295 files** in total (**53 project `.py` files**; the rest are third-party packages inside `.venv`, which were moved out of the repo and do not affect the project).
+- The local dev venv was rebuilt from Python 3.13.14 to **3.14.7** (with all runtime dependencies + `black==26.5.1` / `isort==8.0.1` / `mypy==2.3.0` / `basedpyright` / `pytest`). All four gates (`black --check .` / `isort --check-only .` / `mypy src/` + `mypy --platform linux src/` / `basedpyright`) are now green under 3.14.
+- This item was marked "TODO" in the "CI mypy Double-Error Fix" entry; it has been completed during this session's wrap-up (including the venv rebuild).
+
+### v4.0.9-dev (2026-08-24) — CI pytest failure fix: C/POSIX locale detection and monkeypatch convention
+
+**Change Summary**: Fixed CI `tests/test_i18n.py::TestDetectSystemLanguage::test_c_and_posix_env_ignored` assertion failure (`assert 'C' != 'C'`). Root cause was that the `locale.getlocale()` fallback path in `detect_system_language()` returned `('C', None)` under Linux CI (`LANG=C`) without filtering C/POSIX special values, leaking the raw value. Synchronously replaced 4 `patch.dict(os.environ, clear=True)` calls in `tests/test_i18n.py` with `monkeypatch.setenv/delenv` (following AGENTS.md mandatory convention: `patch.dict` snapshots the entire `os.environ`, which can trigger a 32767-character upper limit overflow on Windows). Finally performed a full-repository `black` formatting to resolve PEP 758 `except (A, B):` parentheses stripping under Python 3.14 that caused CI Static Checks failures.
+
+**Files Changed**:
+
+- Modified `i18n.py`: The `locale.getlocale()` fallback path in `detect_system_language()` now adds C/POSIX filtering — the `current = locale.getlocale()[0]` return value is only returned after checking `current.upper() not in ("C", "POSIX")`, otherwise returns `None`, consistent with the C/POSIX filtering semantics of the environment variable path. Added 3 PEP 758 format changes (`except (OSError, ValueError):` → `except OSError, ValueError:`).
+- Modified `tests/test_i18n.py`:
+  - `TestDetectSystemLanguage._env_without_locale_vars` refactored to `_clear_locale_vars(monkeypatch)`, using `monkeypatch.delenv(var, raising=False)` to individually delete locale-related environment variables;
+  - 4 `patch.dict(os.environ, ..., clear=True)` calls replaced with `monkeypatch.setenv/delenv`;
+  - Added `test_c_locale_from_getlocale_ignored` regression test: patches `locale.getlocale` to return `("C", None)`, verifies `detect_system_language()` returns `None` (does not depend on real environment variables);
+  - Fixed `sys.argv` parameter parsing conflict during pytest collection: `SECONDS = int(sys.argv[2]) if len(sys.argv) > 2 and not sys.argv[2].startswith("-") else N` (prevents `int('-q')` crash from pytest `-q` parameter).
+
+**Implementation Details**:
+
+- **Unified C/POSIX filtering**: `detect_system_language()` has two paths for obtaining language — environment variables (`LANGUAGE`/`LC_ALL`/`LC_MESSAGES`/`LANG`) and `locale.getlocale()`. The former already had C/POSIX filtering, the latter was missing. In Linux CI processes with `LANG=C`, `locale.getlocale()` returns `('C', None)`, which was returned unfiltered as `"C"`, causing the test assertion to fail. This change unifies filtering across both paths.
+- **Monkeypatch convention**: `patch.dict(os.environ, clear=True)` creates a full snapshot of `os.environ` (`original = in_dict.copy()`) and unconditionally writes back `_clear_dict() + update(original)` on exit. AGENTS.md mandates using `monkeypatch` — the coding agent harness injects `CODEBUDDY_MCP_CONFIG` which dynamically inflates `os.environ`, and the Windows 32767-character limit can be exceeded, causing a `ValueError` on write-back. `monkeypatch` only operates on individual keys without creating a full snapshot.
+- **PEP 758 formatting**: black 26.5.1 (CI pinned version) automatically strips `except (A, B):` parentheses under `target-version = ['py314']`. All project files were reformatted (including 3 `except (OSError, ValueError):` instances in `i18n.py`); the final run under a Python 3.14.7 runtime reformatted 53 project `.py` files in total — for the full scope and venv rebuild see "This Session's Change Overview (Classified by Module)" section 7 above.
+
+**Impact**:
+
+- Zero runtime behavior change — `detect_system_language()` under C/POSIX locale now returns `None` instead of `"C"` (equivalent to no system language set); downstream `resolve_language(None)` falls back to `FALLBACK_LANGUAGE = "en_US"`, which is the expected behavior (C locale does not indicate the user selected Chinese).
+- Improved test stability — no longer relies on `patch.dict` full-snapshot of `os.environ`, avoiding `ValueError` from harness environment variable expansion.
+- Formatting alignment — full-repository black output is unified to Python 3.14 style; CI Static Checks continue to pass.
+
+**Verification**:
+
+- `pytest tests/test_i18n.py`: **33 passed** (including the new `test_c_locale_from_getlocale_ignored` regression test);
+- `black --check .`: **512 files clean**;
+- `isort --check-only .`: all passed;
+- `mypy tests/`, `mypy src/`, `mypy --platform linux src/`: all `Success`;
+- `basedpyright tests/`: **0 errors / 0 warnings**;
+- `py_compile i18n.py tests/test_i18n.py`: passed.
+
+**Related**:
+
+- Homologous to the `detect_system_language()` logic added in v4.0.9-dev (2026-08-23) "Python 3.14 upgrade + language config key migration" — this fix addresses the missing C/POSIX filtering in the `locale.getlocale()` fallback path.
+- Consistent with AGENTS.md test writing convention (environment variables must use `monkeypatch.setenv/delenv`, `patch.dict(os.environ)` is prohibited).
+
+### v4.0.9-dev (2026-08-24) — CI mypy Double-Error Fix (ctypes.WinDLL Platform Gating + 3-arg getattr Any Leak)
+
+**Change Summary**: Fixes two errors from CI `mypy src/` (mypy 2.3.0, linux runner) — `i18n.py:129: Module has no attribute "WinDLL" [attr-defined]` and `src/recorder_status.py:118: Returning Any from function declared to return "int" [no-any-return]`. Both are static-typing issues; zero runtime behavior change.
+
+**Files Changed**:
+
+- `i18n.py`: `_windows_ui_language()` now opens with an early-return platform gate `if sys.platform != "win32": return None`. `ctypes.WinDLL` only exists in the Windows typeshed; CI's mypy runs on a linux runner (and `mypy src/` pulls root-level `main.py`/`i18n.py` into the check via the import chain), so a bare reference inside the function body always raises `attr-defined`. The sole caller (`detect_system_language()`) already sits inside a `sys.platform == "win32"` branch, and on non-Windows the old code likewise returned None via `except` — behavior is identical (aligns with the gating convention of `src/web_tray.py._patch_console_window`).
+- `src/recorder_status.py`: in `_live_network_capacity()`, `getattr(main, "scheduler", None)` is replaced by direct attribute access `main.scheduler`. mypy does not resolve the literal name for the 3-arg `getattr` (reveal_type shows `Any | None`), which both triggers `no-any-return` and silently disables type checking along the whole `scheduler.network_semaphore.value` chain; `main.scheduler` has a module-level declaration in `main.py` (`ConcurrencyScheduler | None`), so the attribute always exists. Tests only substitute it via `monkeypatch.setattr` (never delete), so the runtime is equivalent.
+- `tests/test_i18n.py`: adds `TestWindowsUiLanguagePlatformGate` with two cases — ① on non-win32 the platform gate returns None directly (no reliance on the ctypes exception fallback); ② an inverted gate condition (`== win32` returning early) is a blind spot mypy cannot catch, so a fake `ctypes` injection (sys.modules patch) locks in that win32 still walks the full "WinDLL → GetUserDefaultUILanguage → windows_locale" chain (2052/0x0804 → zh_CN).
+
+**Design Notes**:
+
+- The platform gate uses a first-line early return rather than wrapping call sites: the function owns its platform contract (its comment already states "returns None on non-Windows"), so callers need no duplicate gating; both mypy and basedpyright recognize branch pruning on literal `sys.platform` comparisons.
+- Deliberately no `# type: ignore[attr-defined]`: the comment would be required on Linux CI but redundant on a Windows box, and basedpyright would flag `reportUnnecessaryTypeIgnoreComment` — there is no way to be clean on both ends; the `sys.platform` branch is the only dual-clean form.
+- Deliberately no `cast(ConcurrencyScheduler | None, getattr(...))`: cast gives up checking and hides the fact that the attribute is declared and directly accessible.
+
+**Impact Scope**: static typing and tests only; no runtime behavior change; CI `mypy src/` back to green.
+
+**Verification**: `mypy src/` (win32) and `mypy --platform linux src/` (CI simulation) both report `Success: no issues found in 38 source files`; `basedpyright i18n.py src/recorder_status.py` reports 0 errors/0 warnings; `py_compile` passes; full `pytest` run: 717 passed / 3 skipped (4 unrelated failures: 3 are harness safe-delete quota artifacts — pass after pre-cleaning `tests/_out_live` via shell; 1 is `test_read_config_value_delimiter_key_no_crash`, caused by the local venv's Python 3.13 lacking the "delimiter-in-key `write()` raises `InvalidWriteError`" check — empirically 3.13 writes silently while 3.14+ raises, so CI's 3.14/3.15 matrix passes it).
+
+**Also Discovered (Completed during this session's wrap-up)**: after the working tree migrated black's `target-version` to `py314`-only, the pinned black 26.5.1 strips parentheses from `except (A, B):` under the py314 grammar target (PEP 758 re-legalizes the syntax in 3.14). This was completed during the wrap-up under a **Python 3.14.7** runtime: the repo-wide `black .` reformatted **53 project `.py` files** (including untouched-but-format-due `src/collector.py`/`src/ttwid.py`/`src/ws_client.py`), restoring CI Static Checks (`black --check .`) to green; the output contains 3.14-only syntax, so the local dev venv was rebuilt to **3.14.7** as well. Full details in "This Session's Change Overview (Classified by Module)" section 7 above.
 
 ### v4.0.9-dev (2026-08-24) — High-Concurrency Multi-Platform Recording Scheduling & Resource Management Optimization (Adaptive Concurrency + Per-Platform Circuit Breaking)
 

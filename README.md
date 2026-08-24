@@ -169,7 +169,7 @@ DouyinLiveRecorder/
 ├── logs/                       # 日志文件目录（运行时生成，含 danmaku_monitor.jsonl）
 ├── i18n/                       # 国际化翻译目录（多语言多格式）
 │   ├── zh_CN/LC_MESSAGES/      # 简体中文（gettext）
-│   │   ├── zh_CN.po           # 中文翻译源（282 条）
+│   │   ├── zh_CN.po           # 中文翻译源（288 条）
 │   │   └── zh_CN.mo           # 编译后翻译（运行时必需，随仓库分发）
 │   ├── en_US.json              # English (US)（JSON 格式目录）
 │   ├── en_GB.json              # English (UK)（英式拼写变体）
@@ -829,7 +829,7 @@ brew install node
 
 ## ⏳ 更新日志
 
-### v4.0.9-dev (2026-08-23 ~ 2026-08-24) — 高并发多平台录制调度优化 / 录制反馈闭环 / 并发双模式 / Python 3.14 升级与语言键迁移 / 四语本地化目录统一与英式美式分流
+### v4.0.9-dev (2026-08-23 ~ 2026-08-24) — 高并发多平台录制调度优化 / 录制反馈闭环 / 并发双模式 / Python 3.14 升级与语言键迁移 / 四语本地化目录统一与英式美式分流 / 类型与 CI 质量门禁修复
 
 > 本批改动聚焦高并发（80+ 任务）多平台录制的调度中枢治理、录制侧反馈闭环与 Python 3.14 基线升级。详细根因与验证见 [CODE_WIKI.md](CODE_WIKI.md)。
 
@@ -856,6 +856,17 @@ brew install node
 - 统一 zh_CN.po / en_US.json / en_GB.json / zh_TW.yaml 四份目录为同一 288 条 key 集合（原 282 条 + 补齐 build_exe.py 的 6 条打包/冒烟常量串）。
 - 修正 en_US 内部混用的英式拼写（统一为美式 minimizes/minimized/canceled）；en_GB 原是 en_US 克隆，改写为真正英式（minimise/minimises/minimised/cancelled），仅在 4 条拼写相关条目上与 en_US 不同。
 - 重新编译 zh_CN.po → zh_CN.mo（compile_po.py --check 确认字节级同步），不影响任何运行时逻辑。
+
+**🧪 类型检查 / CI 质量门禁修复**
+- 修复 CI `mypy src/` 两处报错：`i18n.py` 的 `ctypes.WinDLL` 平台门控（`sys.platform != "win32"` 早返回，双端干净）、`src/recorder_status.py` 三参 `getattr` 改为直接属性访问（消除 `no-any-return` 泄漏）。
+- 修复 CI `pytest` 在 C/POSIX locale 下 `detect_system_language()` 回退路径未过滤 `("C","POSIX")` 导致断言失败；测试中 4 处 `patch.dict(os.environ)` 改为 `monkeypatch.setenv/delenv`（遵循 AGENTS.md 强制规约，规避 Windows 32767 字符上限溢出）。
+- 修复 `src/config_io.py` 的 `read_config_value()` 在 Python 3.14 下含分隔符键 `write()` 抛 `InvalidWriteError` 的写回崩溃（内存完整序列化成功后才落盘，坏键回滚）。
+- 全仓 black 26.5.1 + `target-version=['py314']` 重排（剥除 PEP 758 `except (A, B):` 括号），本地 dev venv 升级至 3.14.7；四大门禁在 3.14 环境全绿。
+
+**📦 构建 / 依赖 / 平台适配**
+- 版本号 `4.0.8.3` → `4.0.9`（唯一事实源）；`requires-python` 升 `>=3.14`、classifiers 收敛为仅 3.14；新增 `PyYAML>=6.0.3` 依赖（i18n 的 zh_TW.yaml 支持）。
+- `Dockerfile` 基础镜像升 `python:3.14-slim-bookworm`、Node.js 源 `setup_22.x` → `setup_24.x`；CI 矩阵同步升 3.14。
+- `src/spider.py` 咪咕 `get_migu_stream_url()` 现采用重写版 `migu.js` 输出带 `ddCalcu`/`sv` 参数的完整地址（移除本地过期固定 `sv=10010`）；FFmpeg 下载源 `wweb.lanzouv.com` → `wwasx.lanzout.com` 切换。
 
 ### v4.0.8.3 (2026-08-19 ~ 2026-08-22) — 主播名自动更新 / SSL 配置整合 / 四语国际化 / FFmpeg9·Node24 兼容 / 类型安全加固 / start_record 复杂度治理 / 窗口化崩溃加固 / 类型检查缺陷修复
 
