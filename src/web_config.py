@@ -272,6 +272,39 @@ def update_config_line(config_file: str | Path, section: str, key: str, value: s
     return True
 
 
+def append_config_line(config_file: str | Path, section: str, key: str, value: str) -> bool:
+    # 缺键补建的行级追加：update_config_line 只做替换、键或节缺失时返回 False
+    # （如历史 config.ini 没有 `language` 键，Web 先于引擎首轮读配置时切换语言），
+    # 本函数把 `key = value` 插入目标 section 内；节不存在时于文件尾新建。
+    # 与 update_config_line 相同的行级文本风格：注释、空行、节顺序与其余内容全部保留。
+    path = Path(config_file)
+    if not path.exists():
+        return False
+    lines: list[str] = path.read_text(encoding=TEXT_ENCODING).splitlines(keepends=True)
+    insert_at: int | None = None  # 目标节内的插入点（下一节头之前）；None＝文件尾
+    in_section = False
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if not (stripped.startswith("[") and stripped.endswith("]")):
+            continue
+        name = stripped[1:-1].strip()
+        if in_section:
+            insert_at = idx  # 走到下一节头部即目标节结束
+            break
+        if name == section:
+            in_section = True
+    # 末行无尾换行时先补一个：无论插入文件中间还是尾部，都不得与原内容粘连成一行
+    if lines and not lines[-1].endswith("\n"):
+        lines[-1] += "\n"
+    entry = f"{key} = {value}\n"
+    if in_section:
+        lines.insert(insert_at if insert_at is not None else len(lines), entry)
+    else:
+        lines.append(f"[{section}]\n{entry}")
+    _ = path.write_text("".join(lines), encoding=TEXT_ENCODING)
+    return True
+
+
 # === Web 登录密码哈希（PBKDF2-HMAC-SHA256）===
 # 存储格式：pbkdf2_sha256$<iterations>$<salt_b64>$<hash_b64>
 # 落地配置只保存哈希，不保存明文；历史明文配置在首次登录时自动升级。

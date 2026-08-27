@@ -89,13 +89,13 @@ def run_script(command: str) -> None:
         if stderr_decoded.strip():
             print(stderr_decoded)
     except PermissionError as e:
-        logger.error(e)
+        logger.error(f"执行自定义脚本失败（无执行权限）: {command} - {type(e).__name__}: {e}")
         logger.error("脚本无执行权限!, 若是Linux环境, 请先执行:chmod +x your_script.sh 授予脚本可执行权限")
     except OSError as e:
-        logger.error(e)
+        logger.error(f"执行自定义脚本失败: {command} - {type(e).__name__}: {e}")
         logger.error("Please add `#!/bin/bash` at the beginning of your bash script file.")
     except ValueError as e:
-        logger.error(f"脚本命令解析失败: {e}")
+        logger.error(f"脚本命令解析失败: {command} - {type(e).__name__}: {e}")
 
 
 # 线程安全记录一次错误：累计计数 error_count 加一，并向错误率窗口追加样本 1；无入参无返回值
@@ -106,7 +106,8 @@ def record_error(key: str | None = None) -> None:
     with main.max_request_lock:
         main.error_count += 1
         main.error_window.append(1)
-    scheduler = getattr(main, "scheduler", None)
+    # 直接访问模块级声明属性（AGENTS.md 禁止三参 getattr：返回 Any 使类型检查静默失效）
+    scheduler = main.scheduler
     if scheduler is not None:
         scheduler.record_failure(key)
 
@@ -118,7 +119,8 @@ def record_success(key: str | None = None) -> None:
     # 同时上报给并发调度器。保持无参调用以兼容既有调用方与测试。
     with main.max_request_lock:
         main.error_window.append(0)
-    scheduler = getattr(main, "scheduler", None)
+    # 直接访问模块级声明属性（AGENTS.md 禁止三参 getattr：返回 Any 使类型检查静默失效）
+    scheduler = main.scheduler
     if scheduler is not None:
         scheduler.record_success(key)
 
