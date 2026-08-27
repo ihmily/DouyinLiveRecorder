@@ -264,10 +264,14 @@ TRAE_AGENT_CODE_WIKI.md
 .ego-browser-test/
 .plugin-src/
 .tmp-dps-extract/
+.mimosa/
 
 # 测试输出目录（端到端 / 真实房间采集的临时产物）
 tests/_out_e2e/
 tests/_out_live/
+
+# pytest 缓存残留（conftest 落盘型 cache 目录，曾被 basedpyright 误扫描）
+pytest-cache-files-*/
 
 # isort 备份残留（格式化工具偶发生成的 .py.isorted，需清理避免误提交）
 *.isorted
