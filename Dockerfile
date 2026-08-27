@@ -8,7 +8,7 @@
 # 阶段1：构建阶段 - 仅安装 Python 依赖到虚拟环境
 # 说明：Node.js 只在运行时需要（PyExecJS / exejs 运行签名脚本），由阶段2安装，
 #       构建阶段无需引入，从而保持 builder 镜像精简、利用层缓存。
-# 弹幕（src/danmaku）运行时依赖 websockets / protobuf / brotli 也在此阶段随
+# 弹幕采集链运行时依赖 websockets / protobuf / brotli 也在此阶段随
 # requirements.txt 一并装入 /opt/venv，运行时直接可用。
 # -----------------------------------------------------------------------------
 FROM python:3.14-slim-bookworm AS builder

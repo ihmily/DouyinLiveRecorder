@@ -829,17 +829,19 @@ brew install node
 
 ## ⏳ 更新日志
 
-### v4.0.9.1 (2026-08-27) — 高并发调度加固 / 本地化系统修复 / 编译与熔断门禁修复
+### v4.0.9.1 (2026-08-27 ~ 2026-08-28) — 高并发调度加固 / 本地化系统修复 / 编译与熔断门禁修复 / CI 工作流优化与重试收敛
 
-> 本版本为 4.0.9 调度体系的审查修复与加固批次，并收尾本地化子系统：全量质量门禁 + 并行代码审查发现并修复多个高危/中危缺陷，i18n 目录经全仓 AST 扫描全量补全至 496 条、解除 i18n 模块语法阻塞并重新编译 `zh_CN.mo`。**无破坏性变更**（配置项与运行时语义完全兼容）。详细根因与验证见 [CODE_WIKI.md](CODE_WIKI.md)。
+> 本版本为 4.0.9 调度体系的审查修复与加固批次，并收尾本地化子系统：全量质量门禁 + 并行代码审查发现并修复多个高危/中危缺陷，i18n 目录经全仓 AST 扫描全量补全至 496 条、解除 i18n 模块语法阻塞并重新编译 `zh_CN.mo`；08-28 追加 CI 工作流优化（重试收敛为复合动作）、PEP 758 格式化随 black 26 落地与仓库元数据八文件同步。**无破坏性变更**（配置项与运行时语义完全兼容）。详细根因与验证见 [CODE_WIKI.md](CODE_WIKI.md)。
 
 **✨ 新增功能**
 - **Web 配置行级追加 API**：`web_config.py` 新增 `append_config_line(config_file, section, key, value)`，在键/节缺失时按行级文本风格补建（与既有 `update_config_line` 互补），便于缺键配置的安全写入。
 - **语言切换写回降级**：`web_api.py` 的 `PUT /api/language` 写回在行级替换失败时自动调用 `append_config_line` 节末追加补建，历史 config.ini 缺 `language` 键时不再恒 500。
 - **i18n 四目录全量补全（288 → 496 条）**：AST 扫描全仓运行时 `print()`/`logger.*()` 常量串（47 文件、355 串），新增 204+ 条翻译（并发调度日志、流地址校验全套消息、B站 buvid 认证链、弹幕采集/监控、七渠道推送失败分支、ffmpeg/Node.js 安装、配置读写等）；四语键集完全一致，重编译 `zh_CN.mo`（`--check` 字节级同步）。
+- **CI 网络安装重试复合动作（`.github/actions/retry`）**：新增复合动作统一包装 pip / apt / choco / brew 网络安装命令的线性退避重试（`command` / `label` / `attempts` / `backoff` 可参数化），取代两份 workflow 共 13 处几乎相同的内联重试脚本（ci.yml 9 处 + build-release.yml 4 处）——重试策略唯一事实源为 action.yml 一处，调整一处全局生效；经成功/失败双路径模拟验证。
 
 **🐛 问题修复**
 - **i18n 本地化系统阻断（高危）**：`i18n.py`（3 处）与 `scripts/compile_po.py`（1 处）的 Python 2 风格 `except A, B:`（含一例三异常逗号）多异常写法改为 `except (A, B):`，解除 Python 3 硬 `SyntaxError`——此前 `i18n` 无法 `import`、`.mo` 无法编译、CLI/GUI/Web 本地化整体失效；修复后受管 3.13 与 3.14 运行时均合法，并重新编译 `zh_CN.mo`（496 条，`--check` 字节级同步）。
+- **CI black 门禁（PEP 758 格式化）**：上述 4 处元组括号随后按 black 26.5.1（`target-version=['py314']`，CI 与本地同版本）的 PEP 758 规范化统一为免括号形式（`except A, B:` 与 `except (A, B):` 在 3.14 下完全等价、语义零变化），CI `black --check` 恢复绿色；**此 4 处今后由 black 维护，勿手工改括号**。
 - **编译同步门禁恒真（P1）**：`scripts/compile_po.py` 的 `write_mo()` 改为纯内存产出（去除写盘副作用），落盘决策上移至调用方，`--check` 不再「先落盘再读回自比」（此前恒真），改为真实比对已提交 `.mo`；`ci.yml` 的 paths-filter 新增 `i18n/**`，纯翻译变更也会触发 static 门禁。
 - **熔断探针租约自愈（高危）**：根治 `PlatformBreaker` half-open 探针泄漏——探针轮以 `continue` 结束且不上报样本时 `_probing` 标志永不复位、该 host 永久熔断直到进程重启；新增探针租约（`_PROBE_LEASE_SECONDS = 60s`）超时自动重新授予，实现自愈。
 - **调度成功采样缺口（中危）**：`start_record` 解析成功分支补报 `record_success(record_host)`（与失败分支对称），half-open 探针房间长录期间同 host 其余房间不再持续饿死。
@@ -849,14 +851,19 @@ brew install node
 - **弹幕参数每轮重置恢复**：`main.py` 内层监测循环顶部恢复 `record_danmaku_args = None`（此前重构合并了轮内重置点）。
 - **损坏 YAML 目录致 500**：`_load_yaml_catalog()` 补捕获 `yaml.YAMLError`（非 OSError/ValueError 子类），降级跳过到下一格式。
 - **ISSUE_TEMPLATE 版本缺失**：`.github/ISSUE_TEMPLATE` 四个模板 Python 版本下拉补 `Python 3.14`。
+- **i18n 提取器两处噪声源**：`scripts/extract_i18n_strings.py` 的 `is_valuable()` 改以花括号块之外的残渣判定（纯占位符模板如 `{color}{text}` 不再误报为缺失）、po 头部空 `msgid ""` 比对前剔除（消除四语一致性「少 1」假阳性）；修正后重跑确认四语目录零缺失（318 条有价值串全在库、各 496 条）。
 
 **🎨 体验优化**
 - **前端硬编码中文入翻译字典**：`web/app.js` 约十处硬编码中文字符串改走内嵌四语字典 `t()`（录制/弹幕空态、截断提示、开关/操作 toast、配置/文件列表空态、进入/下载按钮等），英文/繁体界面不再显示简体中文。
 - **GUI 崩溃弹窗去重**：`gui.py` 顶层异常不再双弹窗/日志双份堆栈，`_bootstrap_error_sink` 置位标记后 re-raise 触发的 excepthook 据此跳过。
 
+**🔧 CI / 工程维护**
+- **CI 工作流优化（ci.yml 重写，job 与门禁语义不变）**：`actions/checkout` v5→v7、`setup-python` v6→v7（与 build-release.yml 对齐消除版本漂移）；apt 安装补强化参数（`DEBIAN_FRONTEND=noninteractive` + `Acquire::Retries=3` + `--no-install-recommends`，更抗网络抖动）；macOS `brew trust aws/tap` 拆为独立幂等步骤、`HOMEBREW_*` 变量改命令内 `export`；头注释补 job 拓扑图与「止于验证、不含部署」职责边界。
+- **仓库元数据八文件同步**：requirements.txt / Dockerfile 过时的 `src/danmaku/` 路径注释修正为实际模块位置；`.dockerignore` 补 16 个排除项（本地工具目录 / `uv.lock` / `scripts/` / 双语文档等，镜像上下文瘦身）；`.gitignore` 补 `.mimosa/` 等；pyproject 清理死目录；docker-compose 示例版本对齐 `4.0.9.1`；`AGENTS.md` 模块计数 39→41 并新增 CI/workflow 约定小节。
+
 **🧪 测试与验证**
 - 新增 `tests/test_record_failure_feedback.py`（5 → 7 用例）、`tests/test_web_api.py` 缺键补建/边界用例；`test_scheduler.py` 探针租约自愈（15 → 16）、`test_i18n.py` 损坏 YAML 降级并适配 `write_mo()` 新签名。
-- 全量 `pytest` **744 passed / 2 skipped**；black / isort / mypy（Windows + Linux 双平台）/ basedpyright 全绿。
+- 全量 `pytest` **744 passed / 2 skipped**；black / isort / mypy（Windows + Linux 双平台）/ basedpyright 全绿；`compile_po.py --check` 字节级同步、提取器零缺失；两 workflow YAML 结构断言（needs 链 / retry 调用计数 / action 版本计数）通过。
 
 ### v4.0.9 (2026-08-23 ~ 2026-08-24) — 高并发多平台录制调度优化 / 录制反馈闭环 / 并发双模式 / Python 3.14 升级与语言键迁移 / 四语本地化目录统一与英式美式分流 / 类型与 CI 质量门禁修复
 

@@ -36,12 +36,12 @@ Excluding `.git/`, the workspace contains **324** Markdown files in total, categ
 
 | Category | Path | Count | Nature | Manually Maintained |
 | -------- | ---------------------- | --- | ---------------------------------------------- | ------ |
-| Project root docs | `*.md` (repo root) | 3 | Source of truth | ✅ Yes |
+| Project root docs | `*.md` (repo root) | 5 | Source of truth (CN/EN document pairs) | ✅ Yes |
 | Auto-generated repo docs | `.qoder/repowiki/**` | 302 | AI-generated English architecture/knowledge base derived from code (content 72 + knowledge 230) | ❌ Auto-generated |
 | Workspace memory | `.workbuddy/memory/**` | 12 | Local agent's daily work logs | ❌ Cache |
 | Historical memory | `.codebuddy/memory/**` | 7 | Legacy agent memory (deprecated) | ❌ Cache |
 
-**Conclusion**: Only the **3** docs at the repo root are genuinely hand-maintained and should serve as the source for changes; the other 321 are AI-generated derivative docs or local caches and must not be merged into this document, to avoid introducing redundant content that is out of sync with the code.
+**Conclusion**: Only the **5** docs at the repo root are genuinely hand-maintained and should serve as the source for changes; the rest are AI-generated derivative docs or local caches and must not be merged into this document, to avoid introducing redundant content that is out of sync with the code. (Statistics snapshot generated on 2026-08-09; the root-doc count was updated to 5 on 2026-08-28 as the CN/EN document pairs were completed.)
 
 ### Root Document Index
 
@@ -49,9 +49,11 @@ Excluding `.git/`, the workspace contains **324** Markdown files in total, categ
 | ---- | ---- | ---- |
 | `AGENTS.md` | Coding agent conventions | Single source of truth for version (`pyproject.toml`), code style (black / isort / mypy), project structure, dependency/test/build commands, key conventions |
 | `README.md` | User/developer guide | Features, supported platforms (51), quick start, configuration, usage, Docker deployment, development guide, FAQ, changelog |
-| `CODE_WIKI.md` | Project architecture doc (this document) | Module details, dependencies, design patterns, troubleshooting, contributing guide, changelog |
+| `CODE_WIKI.md` | Project architecture doc (Chinese) | Module details, dependencies, design patterns, troubleshooting, contributing guide, changelog |
+| `README_EN.md` | User/developer guide (English) | English counterpart of `README.md` (added 2026-08-24, structure aligned with the Chinese version) |
+| `CODE_WIKI_EN.md` | Project architecture doc (English) | English counterpart of this document (added 2026-08-24, entries correspond one-to-one with the Chinese version) |
 
-> The three documents are complementary: when changing platform support or configuration items, both `README.md` and this document must be updated in sync; engineering conventions follow `AGENTS.md`.
+> The five documents are complementary: when changing platform support or configuration items, both `README.md` and the wiki must be updated in sync; engineering conventions follow `AGENTS.md`; `README_EN.md` / `CODE_WIKI_EN.md` are updated in sync with their Chinese counterparts.
 
 ---
 
@@ -260,11 +262,13 @@ DouyinLiveRecorder/
 ├── build_exe.py                         # PyInstaller 打包脚本（CLI/GUI/Web 三入口）
 ├── DouyinLiveRecorder.spec              # 由 build_exe.py 自动生成（.gitignore 已忽略）
 ├── requirements.txt                     # Python 依赖列表
+├── uv.lock                              # uv dependency lock file (committed to the repo; image/CI use pip + requirements.txt, do not consume it)
 ├── pyproject.toml                      # Python 项目配置（版本号/工具配置/覆盖率门禁单一事实源）
-├── .coveragerc-concurrency             # 并发测试专用覆盖率配置（CI concurrency-test job 使用，不设全局阈值）
 ├── scripts/                             # 辅助脚本
 │   ├── check_version.py                # 版本号一致性校验（CI static job 调用）
+│   ├── check_coverage.py               # Per-module coverage gate (invoked by the CI test job, thresholds in MODULE_THRESHOLDS)
 │   ├── compile_po.py                   # gettext catalog compiler (.po → .mo; --check zero-side-effect sync check, invoked by the CI static job)
+│   ├── extract_i18n_strings.py         # i18n pending-translation string extractor (AST scan + four-catalog comparison, maintenance-time tool)
 │   └── sync_version.py                 # 版本号同步脚本（pyproject → 各文档）
 ├── Dockerfile                          # Docker 构建文件（多阶段）
 ├── docker-compose.yaml                 # Docker Compose（recorder/web/gui 三服务）
@@ -302,8 +306,10 @@ DouyinLiveRecorder/
 ├── .github/                             # GitHub Actions workflow directory
 │   ├── ISSUE_TEMPLATE/                 # Issue templates (Bug report / Feature request)
 │   ├── PULL_REQUEST_TEMPLATE.md         # PR template
+│   ├── actions/
+│   │   └── retry/                      # Composite action: linear-backoff retry wrapper for network install commands (shared by ci.yml / build-release.yml)
 │   └── workflows/
-│       ├── ci.yml                      # CI static verification (static/typecheck/test/concurrency/integration/build-verify)
+│       ├── ci.yml                      # CI static verification (setup/static/typecheck/test/concurrency/integration/build-verify/summary)
 │       ├── build-release.yml           # Three-platform build (lite + full dual artifact) + auto-publish Release
 │       └── issue-translator.yml        # Issue auto-translation workflow (CN↔EN)
 ├── .coveragerc-concurrency             # Concurrency test coverage config (used by CI concurrency-test job, no global threshold)
@@ -588,7 +594,7 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 | `i18n/en_GB.json` | UK English catalog (JSON format, British spelling: minimise/unrecognised, etc.) | 496 |
 | `i18n/zh_TW.yaml` | Traditional Chinese catalog (YAML format, simplified→traditional character conversion + Taiwan usage adaptation) | 496 |
 
-**Maintenance workflow**: After modifying `.po` you must run `python scripts/compile_po.py` to recompile and commit the `.mo` together, otherwise translation changes will not take effect; `python scripts/compile_po.py --check` (CI `static` job) blocks when the two are out of sync — internally `write_mo()` is **pure in-memory output with no disk write**, so `--check` has zero side effects and genuinely compares against the committed `.mo` on disk; only non-check mode writes the file. The CI path filter (paths-filter) treats `i18n/**` as a trigger condition: translation-only changes also run this gate. **The key sets of all four language catalogs must be consistent** (enforced by `tests/test_i18n.py::test_catalogs_share_same_keyset`) — when adding a new msgid you must update all four catalogs.
+**Maintenance workflow**: After modifying `.po` you must run `python scripts/compile_po.py` to recompile and commit the `.mo` together, otherwise translation changes will not take effect; `python scripts/compile_po.py --check` (CI `static` job) blocks when the two are out of sync — internally `write_mo()` is **pure in-memory output with no disk write**, so `--check` has zero side effects and genuinely compares against the committed `.mo` on disk; only non-check mode writes the file. The CI path filter (paths-filter) treats `i18n/**` as a trigger condition: translation-only changes also run this gate. **The key sets of all four language catalogs must be consistent** (enforced by `tests/test_i18n.py::test_catalogs_share_same_keyset`) — when adding a new msgid you must update all four catalogs. To extract and compare pending-translation strings, run `python scripts/extract_i18n_strings.py` (AST-scans runtime code for print constant strings + logger f-string template drafts and compares against the four catalogs; f-string template normalization conventions: format/conversion specifiers dropped, double quotes inside expressions converted to single quotes; pure-placeholder templates (e.g. `{color}{text}`) and the gettext header empty msgid are filtered out, producing no noise).
 
 **Translation coverage** (after the full 2026-08-27 replenishment, covering all runtime constant strings and logger template drafts):
 
@@ -1184,10 +1190,12 @@ python web.py
 # - ENTRYPOINT ["python", "main.py"]，EXPOSE 8000（Web 模式用）
 ```
 
-**`.dockerignore` key points**:
+**`.dockerignore` key points** (after the 2026-08-28 sync):
 
 - Exclude platform binaries (`ffmpeg/`, `node/`, installed via apt in the container), `config/*.ini` (mounted at runtime), `typings/`, `build_exe.py`, `gui_legacy.py`, and other desktop/build-specific files;
-- **Keep `i18n/**/*.mo` compiled translation files and `i18n/*.json`, `i18n/*.yaml` multilingual catalogs** — they are required at runtime (gettext / JSON / YAML, the three translation catalog formats) and the Dockerfile will not recompile/regenerate them; only the `.po` sources and compile scripts are excluded.
+- **Keep `i18n/**/*.mo` compiled translation files and `i18n/*.json`, `i18n/*.yaml` multilingual catalogs** — they are required at runtime (gettext / JSON / YAML, the three translation catalog formats) and the Dockerfile will not recompile/regenerate them; only the `.po` sources and compile scripts are excluded;
+- Exclude local tool / AI-assistant generated directories (`.mimosa/`, `.qoder/`, `.agents/`, `.pnpm-store/`, `.dsh-validation/`, `.ego-browser-test/`, `.plugin-src/`, `pytest-cache-files-*/`, etc., maintained in sync with `.gitignore`);
+- Exclude content the image does not consume at runtime: `uv.lock` (the image uses pip + requirements.txt), `scripts/` (maintenance scripts, zero references from the runtime chain), `tests/`, docs such as `AGENTS.md` / `README_EN.md` / `CODE_WIKI_EN.md`, and `.coveragerc-concurrency` (CI-specific).
 
 #### Using Docker Compose (recommended)
 
@@ -1307,21 +1315,30 @@ Before smoke testing, a commented URL is written to the exe-level `config/URL_co
 
 ### 6. GitHub Actions CI Static Verification (`ci.yml`)
 
-Workflow file: `.github/workflows/ci.yml`, runs on push to main / PR, ensuring code style, type safety, and functional correctness pass verification before merge.
+Workflow file: `.github/workflows/ci.yml`, runs on push to main / PR, ensuring code style, type safety, and functional correctness pass verification before merge (structure after the 2026-08-28 optimization).
 
-**Path filtering**: The `changes` job uses `dorny/paths-filter@v4` to detect changed file categories; downstream jobs run only when Python source (src/, root entry points), tests, `scripts/`, dependency manifests, or the workflow itself change; pure frontend (web/), docs (*.md), or i18n (i18n/) changes do not trigger.
+**Unified strategy**:
 
-**Parallel jobs** (all gated by `needs: changes`):
+- The `setup` job centrally declares **shared constants** (Python version matrix / Node version / pinned black / isort / mypy versions) and performs path filtering; constants are exported to job outputs for reference by all jobs and `strategy.matrix` (matrix cannot reference the env context), serving as the workflow's single source of truth;
+- **actions major versions unified at v7** (`checkout` / `setup-python` / `setup-node` / `upload-artifact`), fully consistent with build-release.yml;
+- **Network-install retries uniformly go through the `.github/actions/retry` composite action** (linear backoff ×3; `command` / `label` / `attempts` / `backoff` parameterizable) — 9 pip / apt call sites; the retry strategy is maintained in action.yml alone, and re-inlining retry loops inside jobs is forbidden;
+- **apt hardening flags** (aligned with the Linux build of build-release.yml): `DEBIAN_FRONTEND=noninteractive` + `Acquire::Retries=3` + `--no-install-recommends`;
+- Every job sets an explicit `timeout-minutes`; a new push to the same branch/PR cancels stale runs via `cancel-in-progress: true` (fast feedback, deliberately different from the non-cancellable release pipeline);
+- pip caching uniformly keyed by `hash(requirements.txt + pyproject.toml)` (no lock file participates in installation).
+
+**Path filtering**: the `setup` job uses `dorny/paths-filter@v4` to detect changed file categories; downstream jobs run only when Python source (src/, root entry points), tests, `scripts/`, dependency manifests, **`i18n/**`**, or the workflow itself change; pure frontend (web/) or docs (*.md) changes do not trigger. **`i18n/**` is a trigger condition** — translation-only changes also run the static job's compile_po --check sync gate.
+
+**Parallel jobs** (all gated by `needs: setup`):
 
 | Job | Environment | Content |
 | -------------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `static` | latest py | `black --check .` + `isort --check .` + `python scripts/check_version.py` (version single-source-of-truth check) + `python scripts/compile_po.py --check` (i18n po/mo sync check) |
-| `typecheck` | py3.14 | Install requirements + mypy, then run `mypy src/` |
-| `test` | py3.14 | `pytest --cov=src --cov-report=term-missing` (global `fail_under=50` gate) |
-| `concurrency-test` | py3.14 | Concurrency-specific: under `COVERAGE_RCFILE=.coveragerc-concurrency` run `test_concurrency_rate_limit.py` + `test_concurrency.py` (dedicated config sets no global threshold, avoiding conflict with the full test job) |
-| `integration-verify` | py3.14 + Node 24 | apt install ffmpeg; verify ffmpeg/node binaries are discoverable and versions readable, and call `check_ffmpeg_installed()` / `check_nodejs_installed()` to verify detection logic |
-| `build-verify` | ubuntu-latest | PyInstaller packaging + smoke test (triggered only on python-class changes) |
-| `ci-summary` | — | Summarizes the required-check status of all the above jobs |
+| `static` | py3.15 | `black --check .` + `isort --check .` + `python scripts/check_version.py` (version single-source-of-truth check) + `python scripts/compile_po.py --check` (i18n po/mo sync check, zero side effects) |
+| `typecheck` | py3.14 | Install requirements + pinned mypy, then run `mypy src/` (run on the minimum supported version so conclusions hold for the oldest interpreter) |
+| `test` | py3.14 / py3.15 matrix | `pytest --cov=src --cov-report=term-missing` (global `fail_under=50` gate, `fail-fast: false`); on the minimum version additionally runs the `scripts/check_coverage.py` per-module gate + coverage.xml upload + optional Codecov |
+| `concurrency-test` | py3.14 | Concurrency-specific: under `COVERAGE_RCFILE=.coveragerc-concurrency` runs `test_concurrency_rate_limit.py` + `test_concurrency.py` + `test_async_http_lock.py` (dedicated config sets no global threshold) |
+| `integration-verify` | py3.14 + Node 24 | apt install ffmpeg; verify the ffmpeg/node binaries are discoverable, and call `check_ffmpeg_installed()` / `check_nodejs_installed()` to verify detection logic |
+| `build-verify` | py3.14 packaging interpreter | `build_exe.py --smoke --no-runtime --no-zip` (lite packaging + CLI/Web/GUI three-entry smoke, on Linux via `xvfb-run -a`); release-grade full packaging is left to build-release.yml |
+| `ci-summary` | — | The only required check: aggregates the results of all upstream jobs (skipped counts as passed — path-filter skips never leave branch protection permanently pending) |
 
 ### 7. GitHub Actions Automated Build and Release (`build-release.yml`)
 
@@ -1329,21 +1346,21 @@ Workflow file: `.github/workflows/build-release.yml` (job name `Build (${{ matri
 
 **Trigger methods**:
 
-- Manual trigger (`workflow_dispatch`): build on three platforms and upload artifacts.
-- Push a `v*` tag (e.g. `v4.0.8`): build + automatically create a GitHub Release with artifacts attached (`permissions: contents: write`).
+- Manual trigger (`workflow_dispatch`, optional `create_release` input): by default only builds and uploads artifacts; checking the input also creates a Release.
+- Push a `v*` tag (e.g. `v4.0.9.1`): build + automatically create a GitHub Release with artifacts attached (`permissions: contents: write`, granted only to the build / release jobs).
 
-**Build matrix**: `windows-latest` / `ubuntu-latest` / `macos-latest`, Python 3.14 (`fail-fast: false`).
+**Build matrix**: `windows-latest` / `ubuntu-latest` / `macos-latest`, Python 3.14 (`fail-fast: false`; same value as ci.yml's build-verify packaging interpreter, guaranteeing "the packaging environment validated by CI == the one actually released").
 
 **Steps**:
 
-1. Checkout → Setup Python 3.14 (pip cache).
-2. Each platform uses its system package manager to install ffmpeg for smoke testing: Windows `choco install ffmpeg`, Linux `apt` (additionally `xvfb`, GUI smoke needs a virtual display), macOS `brew install ffmpeg` (first `brew trust aws/tap` as a fallback for the runner's pre-set untrusted tap).
-3. `pip install -r requirements.txt pyinstaller`.
-4. `python build_exe.py --smoke --dual` (on Linux wrapped with `xvfb-run -a`): PyInstaller runs only once, first producing the **lite** zip (no ffmpeg/node, auto-downloaded at runtime) then downloading prebuilt binaries to produce the **full** zip (built-in runtime); smoke tests run on the lite version.
-5. Upload artifacts (`actions/upload-artifact@v7`, `compression-level: 0` to skip redundant compression): lite uploaded directly; full (~300MB) adds workflow-level explicit retries (up to 3 times, backoff 30s → 60s) to handle transient network failures, only failing the job on the last failure.
-6. `release` job (tag-triggered only): `actions/download-artifact@v7` (`merge-multiple`) downloads all artifacts, uses `softprops/action-gh-release@v3` to create the Release and attach all zips, `generate_release_notes: true`.
+1. `prepare` job: extracts the version from pyproject.toml via tomllib and validates tag consistency (a mistagged release fails immediately); runs `check_version.py` to confirm all consumers read the version dynamically.
+2. `release-create` job: on the release path **pre-creates** the Release record (a singleton job eliminating the race where multi-platform build jobs concurrently create the same Release; no files attached); on the manual release path it also creates the lightweight tag (a Release must be attached to a tag).
+3. build job (matrix): each platform installs ffmpeg via its system package manager for smoke testing — Windows `choco`, Linux `apt` (plus `xvfb`; GUI smoke needs a virtual display), macOS `brew` (`brew trust aws/tap` as a separate idempotent step, `HOMEBREW_*` variables exported inline in the command); **all network-install commands are wrapped by the `.github/actions/retry` composite action** (linear backoff ×3; system package managers back off 15s, pip 10s); dependencies via `pip install -r requirements.txt` + `pip install ".[build]"`.
+4. `python build_exe.py --smoke --dual` (on Linux wrapped with `xvfb-run -a`): PyInstaller runs only once, first producing the **lite** zip (no ffmpeg/node, auto-downloaded at runtime) then the **full** zip (built-in runtime, ~300MB); smoke tests run on the lite version.
+5. Artifact publishing: on the release path (tag / manual with create_release) the build job uploads zips **directly to the Release** via `softprops/action-gh-release@v3` (explicit `tag_name` pointing at the same Release as release-create; GitHub supports concurrent uploads of distinct assets to the same Release); the build-only path uses `upload-artifact@v7` (`compression-level: 0` to skip re-compression, retained 30 days for manual retrieval).
+6. `release` job (release path): `gh release download` pulls the published assets back to verify completeness (3 platforms × lite/full = 6 zips; any shortfall fails instead of publishing an incomplete Release), generates `SHA256SUMS.txt`, and finally via `softprops/action-gh-release@v3` attaches the checksums and writes the release notes (`generate_release_notes: true`).
 
-**Artifact naming**: `DouyinLiveRecorder-v{version}-{os}-{arch}-{lite|full}.zip` (e.g. `DouyinLiveRecorder-v4.0.8.1-windows-amd64-full.zip`).
+**Artifact naming**: `DouyinLiveRecorder-v{version}-{os}-{arch}-{lite|full}.zip` (e.g. `DouyinLiveRecorder-v4.0.9.1-windows-amd64-full.zip`).
 
 ### 8. Local Packaging Steps
 
@@ -1561,6 +1578,76 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 ---
 
 ## Changelog
+
+### v4.0.9.1-dev (2026-08-28) — CI Workflow Optimization & Network-Install Retry Consolidation (retry Composite Action) + PEP 758 Formatting Landed via black 26 + i18n Extractor Fixes + Eight-File Repository Metadata Sync
+
+**Change Summary**: This entry records four batches of changes from the late 2026-08-27 session through 08-28. ① **CI red→green**: the CI `black --check` failed — black 26.5.1 enables PEP 758 normalization for `target-version=['py314']` (multi-except `except` clauses without an `as` sub-clause have their tuple parentheses stripped); local and CI run the same version, so this was simply a missed pre-commit formatting run, fixed by applying black; ② **CI workflow optimization**: ci.yml rewritten (actions unified at v7, apt hardening flags, job topology documented in the header) plus a new `.github/actions/retry` composite action consolidating 13 nearly identical inline retry scripts across the two workflows into a single implementation; ③ **i18n extractor fixes**: two defects in `scripts/extract_i18n_strings.py` fixed and re-run, confirming the four-language catalogs have zero missing entries (496 each); ④ **eight-file repository metadata sync**: corrected the stale `src/danmaku/` path comments in requirements.txt / Dockerfile and filled the drift gaps in .dockerignore / .gitignore / pyproject / compose. Full gate re-verification: **744 passed, 2 skipped**.
+
+**Files Involved (Classified by Module)**:
+
+**1. CI / GitHub Actions (New Feature + Modifications)**
+
+- `.github/actions/retry/action.yml` (**new**): composite action `retry` — the unified retry wrapper for network-install commands. `inputs`: `command` (required, bash semantics, supports `&&` chaining; expressions at the call site are expanded to literals first) / `label` (failure-log attribution) / `attempts` (default 3) / `backoff` (linear backoff base seconds, default 10); the command is passed via env and executed by `bash -c`, the n-th failure waits `n × backoff` seconds before retrying, and only consecutive failures produce `::error` + exit 1. Verified via Git Bash simulation of both the success and failure paths (first-try success / linear-backoff retries then exit code 1).
+- `.github/workflows/ci.yml` (rewritten; job structure and gate semantics unchanged):
+  - `actions/checkout` v5→v7 and `actions/setup-python` v6→v7 (WebSearch confirmed v7 is the current latest major for both, aligned with build-release.yml to eliminate action-version drift between the two workflows);
+  - 9 inline retry scripts (pip ×5 / apt ×3 / build-verify deps ×1, ~12 lines each) replaced with retry composite-action calls (apt backoff kept at the original 10s);
+  - apt installs aligned with build-release.yml's hardening flags: `DEBIAN_FRONTEND=noninteractive` (guards against interactive hangs) + `Acquire::Retries=3` (apt's own network retries) + `--no-install-recommends` (faster, less disk);
+  - header comments gained the job topology diagram (setup fanning out to six parallel jobs → ci-summary aggregation) and the responsibility boundary "this workflow stops at verification and contains no deployment"; the unified-strategy block centrally declares action versions / caching / timeouts / retries / apt flags; the static job name now mentions i18n (it actually runs the po/mo sync gate).
+- `.github/workflows/build-release.yml`: 4 inline retry scripts (choco / apt / brew / pip) replaced with the retry composite action (backoff values match the original scripts one-to-one: system package managers 15s, pip 10s); the macOS `brew trust aws/tap` split into a separate idempotent step (no longer re-executed on each install retry, semantics unchanged); `HOMEBREW_NO_REQUIRE_TAP_TRUST` / `HOMEBREW_NO_AUTO_UPDATE` moved from step env to an inline `export` (composite actions have no officially guaranteed visibility of caller step-level env; explicit export is deterministic).
+
+**2. Internationalization Module (Modifications — Formatting + Maintenance Tooling)**
+
+- `i18n.py` + `scripts/compile_po.py`: after an earlier same-day entry converted 4 `except` clauses to tuple parentheses, black 26.5.1 (same version locally and in CI) under the py314 target **strips** the parentheses of multi-except clauses without `as` sub-clauses, turning the CI `black --check` red. This session applied black to convert them back to the bare-comma form (`i18n.py:202/218/320`, `compile_po.py:128`) — zero semantic change (the two forms are fully equivalent under PEP 758), style-consistent with the repo's other bare-comma sites, and the CI gate is green again. **From now on these 4 sites are maintained by black — do not flip them by hand.**
+- `scripts/extract_i18n_strings.py` (**two defect fixes; first recorded into the directory tree and §8 maintenance workflow by this entry**):
+  - `is_valuable()` reworked: the old logic stripped braces then looked for letters, but identifiers inside placeholder expressions (`color`/`Color`) are letters too, so pure-placeholder templates (`{color}{text}{Color.RESET}` / `{rec_info}/{filename}`) were falsely reported as "missing, to translate"; the check now judges by the **residue outside** the brace blocks — verified by an old/new diff that the delta is exactly those 2 untranslatable templates (zero false kills of recorded entries);
+  - `load_catalog_keys()`: the po header empty `msgid ""` is now excluded before comparison — JSON/YAML catalogs intentionally do not contain it (runtime loading pops it too); without exclusion the four-language consistency check always reported a "missing 1" false positive.
+  - Re-run after the fixes: 318 valuable runtime strings all present, 0 missing, four-language catalog key sets consistent (496 each) — confirming that after the morning's full replenishment the source introduced no new translatable strings (subsequent edits touched only except syntax and workflow YAML).
+
+**3. Repository Metadata Eight-File Sync (Modifications)**
+
+- `requirements.txt` / `Dockerfile`: 4 comment references to the **nonexistent `src/danmaku/` path** corrected to the actual locations (`src/ws_client.py` / `src/proto/douyin_pb2.py` / `src/platforms/bilibili.py` / the collector factory chain) — the danmaku modules actually live in src/ root, platforms/, and proto/; there is no danmaku/ subpackage.
+- `.dockerignore`: 16 exclusions added — `.mimosa/` plus 7 local tool directories (`.qoder/`, `.agents/`, `.pnpm-store/`, `.dsh-validation/`, `.ego-browser-test/`, `.plugin-src/`, `.tmp-dps-extract/`, `pytest-cache-files-*/`, kept in sync with .gitignore), `uv.lock` (the image uses pip and does not consume it), `scripts/` (grep-verified zero references from the runtime chain), `AGENTS.md` / `README_EN.md` / `CODE_WIKI_EN.md` / `.coveragerc-concurrency` / `*.isorted`; the header comment's danmaku wording fixed as well.
+- `.gitignore`: added `.mimosa/` (previously excluded in all four pyproject tool configs yet still showing as untracked `?? .mimosa/` in git status) and a defensive `pytest-cache-files-*/` entry.
+- `pyproject.toml`: basedpyright exclude cleaned of 2 already-deleted dead directories (`pytest-cache-files-g1bpkgza` / `pytest-cache-files-wt8ppn27`); the 20 dependencies verified identical with requirements.txt item by item (no change needed).
+- `docker-compose.yaml`: the `.env` example version `4.0.8.3` → `4.0.9.1` (aligned with the current pyproject version).
+- `AGENTS.md`: module count 39 → 41 (measured: 31 in src root + 8 in platforms + 2 in proto); project tree gained `Dockerfile` / `docker-compose.yaml` / `uv.lock` / `.github/actions/retry/`; coverage exclusions gained `.mimosa/`; new "CI / workflow conventions (2026-08-28)" section (retry single source of truth, actions v7 baseline, cross-workflow constant parity, brew tap trust as a separate step, trigger/concurrency policy split, dockerignore/gitignore same-source convention); the i18n entry gained the extractor tool and f-string template normalization conventions.
+- `.coveragerc-concurrency`: item-by-item verification against pyproject `[tool.coverage.*]` — fully consistent (source / omit / exclude_lines identical; `fail_under=0` is the intentional, documented difference) — zero changes; a verification-only sync.
+
+**4. Documentation (This Entry)**
+
+- `CODE_WIKI.md` / `CODE_WIKI_EN.md`: directory tree gained `.github/actions/retry/`, `scripts/extract_i18n_strings.py`, `scripts/check_coverage.py`, `uv.lock` (and removed the duplicated `.coveragerc-concurrency` entry); document-statistics root-doc count 3 → 5 (README_EN / CODE_WIKI_EN index rows added); §6 ci.yml section rewritten (setup job / retry composite action / actions v7 / apt hardening / py3.14+3.15 matrix with per-module gates / `i18n/**` trigger semantics corrected); §7 build-release.yml section aligned with the current flow (prepare / release-create preallocation / direct Release upload / `gh release download` verification / SHA256SUMS finalize / `pip install ".[build]"`); §8 maintenance workflow gained the extractor tool; the Docker section's .dockerignore key points gained the post-sync exclusion scope; this changelog entry added (CN/EN in sync).
+
+**Change Notes**:
+
+- **Clarifying the PEP 758 round-trip**: an earlier same-day entry converted the 4 `except` clauses to tuple parentheses (then judged "safest for ≥3.13"), and this session converted them back to bare commas — the two are not contradictory: the former solved parseability, the latter is black 26.5.1's **enforced style** under `target-version=['py314']` (the CI gate is that very tool). The project requires Python ≥3.14 and the locally verified interpreter is 3.14.7, so the bare-comma form is legal; once black owns these sites, the "hand-edit parentheses → CI red" round-trip cannot recur.
+- **Why consolidate retries**: the two workflows had 13 nearly identical 12-line inline retry loops; changing retry count / backoff / log format required editing each site by hand and drifts easily (a real historical divergence existed: ci.yml apt backoff 10s vs build-release.yml 15s — this session preserved each original value, zero behavior change). After consolidation the single source of truth for the strategy is action.yml, effective for all 13 install steps at once.
+- **macOS brew step split**: `brew trust aws/tap` is idempotent with a `|| true` fallback; previously it sat inside the retry block and re-ran on every retry; as a separate step the semantics are unchanged (trust once, retry the install).
+- **.mimosa/ three-layer sync**: pyproject excludes it in four places while .gitignore never ignored it, so git status showed it untracked indefinitely; this session aligned all three layers (gitignore / dockerignore / existing pyproject) and wrote the same-source convention into AGENTS.md to prevent re-drift.
+- **Basis for excluding scripts/ from the image**: grep verified that all root entry scripts and `src/**` have zero references to `scripts/`; they are pure maintenance scripts (CI checks / po compilation / version sync / extractor) with no consumer inside the image.
+
+**Impact Scope**:
+
+- CI gate green again and more maintainable: unified action versions, single-source retry strategy, apt installs more resilient to network jitter; build / release behavior unchanged (retry semantics, choco/apt/brew commands, and backoff values all preserved).
+- i18n four-language catalogs confirmed complete (318 valuable strings all present), `.mo` byte-level synced with `.po` (497 entries incl. header); the extractor is ready for incremental maintenance.
+- Docker build context significantly slimmed (scripts/, tests/, bilingual docs, local tool directories, uv.lock, etc. — 16 items excluded) and contains nothing the runtime does not need.
+- **Zero runtime behavior change** — everything in this entry is CI / docs / comments / config sync / formatting (extract_i18n_strings.py is a maintenance-time tool, not in the runtime chain).
+
+**Verification**:
+
+- `black --check .`: 115 files unchanged (incl. the PEP 758-converted i18n.py / compile_po.py); `isort --check-only .` pass;
+- `mypy src/` + `mypy --platform linux src/`: both runs, 38 files, 0 issues;
+- `pytest -q` full suite: **744 passed, 2 skipped** (36s);
+- `python scripts/compile_po.py --check`: `.mo` synced with `.po` (497 entries incl. header); `python scripts/extract_i18n_strings.py`: 0 missing, four-language consistent, no inconsistency lines;
+- Four-language runtime smoke: zh_CN Chinese translation / en_US identity / zh_TW Traditional-Chinese translation correct, unknown-language fallback intact (`tests/test_i18n.py` 34 passed);
+- Eight-file sync consistency assertions (TOML/YAML parsing, 20 dependencies identical across both sources, zero `src/danmaku` references, .mimosa three-layer sync, 8 tool directories in both ignore files, image-only exclusions, AGENTS module count 41) all passed; `git check-ignore .mimosa/` confirms the ignore takes effect;
+- Both workflow YAMLs validated via `yaml.safe_load` + structural assertions (needs chains / output keys / local action path existence / retry call counts 9+4 / version counts checkout@v7 ×7, setup-python@v7 ×6, setup-node@v7 ×2 / no DEBIAN_FRONTEND typos); the retry composite action verified via Git Bash simulation of success/failure paths.
+
+**Related**:
+
+- v4.0.9.1-dev (2026-08-27) "i18n Localization System Fix (except → tuple parentheses)" — this entry hands those 4 sites to black as unified PEP 758 bare-comma style (a semantically equivalent round-trip, see Change Notes);
+- v4.0.9-dev (2026-08-24) "PEP 758 / py314 repo-wide formatting" — this session is the closing alignment under the same black version policy;
+- v4.0.8.2-dev (2026-08-19) "CI refactor: build-release drops the download-artifact round-trip" — the §7 description is now aligned to that flow (release-create preallocation + direct upload);
+- v4.0.9.1-dev (2026-08-27) first pass "four-language catalog full replenishment" — extract_i18n_strings.py is the tool that session left behind; this session fixed its two noise sources.
 
 ### v4.0.9.1-dev (2026-08-27) — i18n Localization System Fix (Python 2-style `except` Multi-Except → Tuple Parentheses) + zh_CN.mo Recompile
 

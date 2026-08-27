@@ -235,8 +235,6 @@ exclude = [
     ".qoder",
     ".workbuddy",
     "**/.mimosa",
-    "pytest-cache-files-g1bpkgza",
-    "pytest-cache-files-wt8ppn27",
 ]
 # 第三方库无源码属正常，不报；类型存根质量非本项目职责
 reportMissingModuleSource = "none"

@@ -47,12 +47,13 @@ python-multipart>=0.0.32   # 表单 / 文件上传解析（Web 接口接收配�
 pydantic>=2.13.4           # 请求模型校验（FastAPI 依赖，代码直接引用 BaseModel）
 
 # ---------- 弹幕（直播弹幕采集）运行时依赖 ----------
-# 以下三个包均为「运行时必需」依赖，由 src/danmaku/ 各平台采集器使用，并非构建期依赖。
+# 以下三个包均为「运行时必需」依赖，由弹幕采集链使用（src/collector.py 工厂 +
+# src/platforms/ 各平台采集器 + src/proto/ 协议解码），并非构建期依赖。
 # 缺失会导致：venv 安装后 web.py 启动报 ModuleNotFoundError（douyin_pb2 导入链），
 # 且弹幕采集分支因无法导入而整体失效（2026-08 工作日志已确认需补装）。
-websockets>=12.0          # 弹幕 WebSocket 客户端（src/danmaku/ws_client.py；支持 proxy=None 直连）
-protobuf>=6.31.1 # 抖音弹幕协议解码（src/danmaku/proto/douyin_pb2.py，protoc 生成模块）
-brotli>=1.2.0 # B站弹幕解压（src/danmaku/platforms/bilibili.py，protover=3 需 brotli 解压）
+websockets>=12.0          # 弹幕 WebSocket 客户端（src/ws_client.py；支持 proxy=None 直连）
+protobuf>=6.31.1 # 抖音弹幕协议解码（src/proto/douyin_pb2.py，protoc 生成模块）
+brotli>=1.2.0 # B站弹幕解压（src/platforms/bilibili.py，protover=3 需 brotli 解压）
 
 # ---------- 国际化（i18n）----------
 PyYAML>=6.0.3             # YAML 翻译目录支持（i18n.py 加载 i18n/zh_TW.yaml；缺失仅损失 YAML 格式）
