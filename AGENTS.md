@@ -9,7 +9,7 @@
 ## 项目概览
 
 - **名称**: DouyinLiveRecorder
-- **版本**: 4.0.8.3（唯一事实源：`pyproject.toml` 的 `version` 字段。`main.py` 与 `src/web_api.py` 运行时经 `importlib.metadata` 动态读取；`Dockerfile` 经 `APP_VERSION` 构建参数动态注入；`i18n/zh_CN/LC_MESSAGES/zh_CN.po` 不再携带版本号。`README.md` / `CODE_WIKI.md` 为文档，不再纳入版本同步/校验。）
+- **版本**: 4.0.9.1（唯一事实源：`pyproject.toml` 的 `version` 字段。`main.py` 与 `src/web_api.py` 运行时经 `importlib.metadata` 动态读取；`Dockerfile` 经 `APP_VERSION` 构建参数动态注入；`i18n/zh_CN/LC_MESSAGES/zh_CN.po` 不再携带版本号。`README.md` / `CODE_WIKI.md` 为文档，不再纳入版本同步/校验。）
 - **描述**: 支持抖音、TikTok、YouTube、快手等 60+ 平台的直播录制工具
 - **许可证**: MIT
 
@@ -269,6 +269,10 @@ mypy src/
   **不强行回收已持有的槽位**）；`__init__` / `set_value` **允许容量 0**（暂停态）。
 - `PlatformBreaker`（按 host 熔断，`closed → open → half-open`）：open 经冷却后放**唯一**探针，
   探针成功 → closed、失败 → 重新 open。按 host 隔离，单平台故障不拖垮其他平台。
+  **探针带租约（`_PROBE_LEASE_SECONDS = 60s`）**：探针轮可能以 `continue` 结束且不触发 `record`
+  （主播未开播等待轮、`disable_record`、房间线程退出等路径），`_probing` 标志若无租约兜底将
+  永不复位 → 该 host 永久熔断直到进程重启；租约超时后 `allow()` 重新授予探针实现自愈，
+  删除该租约会重新引入永久熔断（回归测试 `test_platform_breaker_probe_lease_regrants_after_timeout`）。
 - **接线点仅限固定几处**（未改动 50+ 平台函数，改动时须维持此边界）：
   - `notify.record_error/record_success` 增 `key` 形参，委托给 `main.scheduler`；
   - `start_record` 入口 `record_host = host_of(record_url)`，且**必须在 `while True` 外层 try 之前
@@ -279,7 +283,7 @@ mypy src/
   见「已知坑」configparser 分隔符条目）**兼作网络并发模式开关**（0=动态调速 / 非 0=固定并发，见上）；
   `同一时间访问网络的线程数` 在动态模式下为**容量下限之一**（不再是硬上限），
   在固定模式下即**固定并发限制值本身**（最小 1）。
-- **调度模块测试与验证要点**：测试文件 `tests/test_scheduler.py`（共 15 用例，覆盖
+- **调度模块测试与验证要点**：测试文件 `tests/test_scheduler.py`（共 16 用例，覆盖
   `ConcurrencyScheduler` 容量自适应、动态/固定并发模式切换、`ResizableSemaphore` 调容、
   `PlatformBreaker` 熔断状态机等）。
   改动 scheduler 后须 `pytest tests/test_scheduler.py` 确认。
@@ -305,6 +309,11 @@ mypy src/
     此前可正常拉流，标记退避会误伤下一轮的候选选择。
 - **直下路径（`direct_download_stream`）补成功样本**：成功路径末尾须 `record_success(record_host)`，
   与 ffmpeg 路径语义对齐（失败已在 except 分支有 `record_error`）。
+- **解析成功轮即上报成功样本（2026-08-27 定稿）**：`main.start_record` 解析成功分支
+  （`port_info["anchor_name"]` 非空）须 `record_success(record_host)`，与解析失败分支的
+  `record_error` 对称——此前成功样本仅在 ffmpeg 退出时上报，half-open 探针房间进入长时间录制
+  期间同 host 其余房间持续熔断饿死；主播未开播等正常轮次则完全无样本，探针标志永不复位。
+  这不是「轮末无条件 record_success」（禁令所指的失败轮记成功样本），而是仅解析真正成功才上报。
 - **控制台并发容量显示调度器实时值**：`src/recorder_status._live_network_capacity()` 优先取
   `scheduler.network_semaphore.value`，调度器未就绪时回退 `main.max_request`（旧显示固定打印配置值，
   实测容量 12/20 却显示 3，误导用户认为并发优化未生效）。

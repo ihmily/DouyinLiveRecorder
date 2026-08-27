@@ -264,7 +264,7 @@ DouyinLiveRecorder/
 ├── .coveragerc-concurrency             # 并发测试专用覆盖率配置（CI concurrency-test job 使用，不设全局阈值）
 ├── scripts/                             # 辅助脚本
 │   ├── check_version.py                # 版本号一致性校验（CI static job 调用）
-│   ├── compile_po.py                   # gettext 翻译编译（.po → .mo；--check 校验同步，CI static job 调用）
+│   ├── compile_po.py                   # gettext catalog compiler (.po → .mo; --check zero-side-effect sync check, invoked by the CI static job)
 │   └── sync_version.py                 # 版本号同步脚本（pyproject → 各文档）
 ├── Dockerfile                          # Docker 构建文件（多阶段）
 ├── docker-compose.yaml                 # Docker Compose（recorder/web/gui 三服务）
@@ -288,8 +288,8 @@ DouyinLiveRecorder/
 │   ├── test_concurrency.py             # 线程安全并发测试
 │   ├── test_i18n.py                    # i18n 翻译加载/环境变量独立性/po-mo 同步回归测试
 │   ├── test_anchor_rename.py           # 主播名自动同步测试（config_io.update_anchor_name + main.rename_anchor_directory）
-│   ├── test_scheduler.py               # Scheduler tests (ResizableSemaphore / PlatformBreaker / ConcurrencyScheduler, 15 cases)
-│   ├── test_record_failure_feedback.py # Recording failure feedback tests (success/fast-fail backoff/slow-fail/missing -i/capacity fallback, 5 cases)
+│   ├── test_scheduler.py               # Scheduler tests (ResizableSemaphore / PlatformBreaker / ConcurrencyScheduler, 16 cases)
+│   ├── test_record_failure_feedback.py # Recording failure feedback tests (success/fast-fail backoff/slow-fail/missing -i/capacity fallback/direct-download failure & success sampling, 7 cases)
 │   ├── test_stream_select.py           # Stream selection and probe backoff marking tests
 │   ├── test_cookie_cache.py            # Visitor Cookie cache tests
 │   ├── test_danmaku_monitor.py         # Danmaku monitoring hub tests
@@ -574,30 +574,37 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 
 - `translated_print` wraps `builtins.print`, automatically translating output whose caller comes from the project root (`src/` package and top-level scripts like `main.py`); `main.py` unconditionally installs `builtins.print = translated_print` at import time (installed under any language — zh_CN/zh_TW translate English constant strings into Chinese, en_US/en_GB translate Chinese strings into English, unknown strings are returned identically)
 - Supports both source-run and PyInstaller-packaged path detection (`_internal/i18n` vs `i18n/`)
-- **Multi-format catalog loading (since 2026-08)**: `i18n.py` probes in order gettext `.mo` → `<lang>.json` → `<lang>.yaml`; all three formats are flat "original → translation" mappings with consistent behavior; `PyYAML` is a runtime dependency (only YAML format support is lost if missing)
-- **Hot language switch**: `set_language(lang)` normalizes (via the `normalize_language` alias table: `zh_cn`/`zh-CN`/`en`/`en-US`/`zh-Hant`/`zh_CN.UTF-8` and other spellings all work) then hot-swaps the `_tr` translation function without restarting the process. Three switch entry points: Web panel (`GET/PUT /api/language`, writes back to config + hot switch + redraws frontend `data-i18n` text), GUI (sidebar "Language" menu), CLI main loop (re-syncs per round from config)
+- **Multi-format catalog loading (since 2026-08)**: `i18n.py` probes in order gettext `.mo` → `<lang>.json` → `<lang>.yaml`; all three formats are flat "original → translation" mappings with consistent behavior; `PyYAML` is a runtime dependency (only YAML format support is lost if missing). `_load_yaml_catalog()` catches `yaml.YAMLError` (not an OSError/ValueError subclass) — a corrupted yaml catalog returns None and degrades to the next format instead of letting `set_language` raise (web language-switch endpoint 500)
+- **Hot language switch**: `set_language(lang)` normalizes (via the `normalize_language` alias table: `zh_cn`/`zh-CN`/`en`/`en-US`/`zh-Hant`/`zh_CN.UTF-8` and other spellings all work) then hot-swaps the `_tr` translation function without restarting the process. Three switch entry points: Web panel (`GET/PUT /api/language`, writes back to config + hot switch + redraws frontend `data-i18n` text; on `PUT`, a missing `language` config key now falls back to appending it at the end of its section instead of an unconditional 500), GUI (sidebar "Language" menu), CLI main loop (re-syncs per round from config)
 - Default language: Simplified Chinese (zh_CN); supported languages: zh_CN / en_US / en_GB / zh_TW
 
 **Translation files**:
 
 | File | Description | Entries |
 | --------------------------------- | ------------------------------------- | --- |
-| `i18n/zh_CN/LC_MESSAGES/zh_CN.po` | Simplified Chinese translation source (gettext, editable) | 282 |
-| `i18n/zh_CN/LC_MESSAGES/zh_CN.mo` | Compiled binary translation (the only file gettext reads at runtime, distributed with repo/image) | 282 |
-| `i18n/en_US.json` | US English catalog (JSON format, English source identical + Chinese source translated to English) | 282 |
-| `i18n/en_GB.json` | UK English catalog (JSON format, British spelling: minimise/log in, etc.) | 282 |
-| `i18n/zh_TW.yaml` | Traditional Chinese catalog (YAML format, simplified→traditional character conversion + Taiwan usage adaptation) | 282 |
+| `i18n/zh_CN/LC_MESSAGES/zh_CN.po` | Simplified Chinese translation source (gettext, editable) | 496 |
+| `i18n/zh_CN/LC_MESSAGES/zh_CN.mo` | Compiled binary translation (the only file gettext reads at runtime, distributed with repo/image) | 496 |
+| `i18n/en_US.json` | US English catalog (JSON format, English source identical + Chinese source translated to English) | 496 |
+| `i18n/en_GB.json` | UK English catalog (JSON format, British spelling: minimise/unrecognised, etc.) | 496 |
+| `i18n/zh_TW.yaml` | Traditional Chinese catalog (YAML format, simplified→traditional character conversion + Taiwan usage adaptation) | 496 |
 
-**Maintenance workflow**: After modifying `.po` you must run `python scripts/compile_po.py` to recompile and commit the `.mo` together, otherwise translation changes will not take effect; `python scripts/compile_po.py --check` (CI `static` job) blocks when the two are out of sync. **The key sets of all four language catalogs must be consistent** (enforced by `tests/test_i18n.py::test_catalogs_share_same_keyset`) — when adding a new msgid you must update all four catalogs.
+**Maintenance workflow**: After modifying `.po` you must run `python scripts/compile_po.py` to recompile and commit the `.mo` together, otherwise translation changes will not take effect; `python scripts/compile_po.py --check` (CI `static` job) blocks when the two are out of sync — internally `write_mo()` is **pure in-memory output with no disk write**, so `--check` has zero side effects and genuinely compares against the committed `.mo` on disk; only non-check mode writes the file. The CI path filter (paths-filter) treats `i18n/**` as a trigger condition: translation-only changes also run this gate. **The key sets of all four language catalogs must be consistent** (enforced by `tests/test_i18n.py::test_catalogs_share_same_keyset`) — when adding a new msgid you must update all four catalogs.
 
-**Translation coverage**:
+**Translation coverage** (after the full 2026-08-27 replenishment, covering all runtime constant strings and logger template drafts):
 
-- `src/spider.py` — per-platform live data fetch messages (36 entries)
-- `main.py` — main program general messages (82 entries)
-- `gui.py` — GUI interface messages (69 entries)
-- `src/room.py` — live room info parse exception messages (3 entries)
-- `src/utils.py` — config read/write, disk space messages (6 entries)
-- `src/notify.py` — bash script shebang-missing hint (1 entry)
+- `src/spider.py` — per-platform live data fetch/login/risk-control messages (including the Bilibili buvid auth chain)
+- `main.py` — main program general messages, recording chain, quality downgrade, anchor-name sync, disk space
+- `gui.py` — GUI interface messages (widget text, process management, tray, exit confirmation)
+- `src/scheduler.py` — concurrency mode switching and capacity-adjustment broadcasts
+- `src/stream_select.py` — the full stream-URL validation message set (probe backoff, GET recheck, last-resort pass-through)
+- `src/collector.py` / `src/danmaku_monitor.py` — danmaku capture and monitoring
+- `src/async_http.py` / `src/sync_http.py` / `src/cookie_cache.py` — HTTP clients and cookie cache
+- `msg_push.py` — seven-channel push-failure branches (WeChat/DingTalk/TG/Bark/ntfy/PushPlus/email)
+- `src/ffmpeg_install.py` / `src/node_install.py` — ffmpeg/Node.js auto installation
+- `src/config_io.py` / `src/utils.py` — config read/write, backup, disk space
+- `src/notify.py` — custom script execution errors
+- `web.py` / `src/web_tray.py` — web panel startup and tray
+- `src/room.py` / `src/recorder_status.py` / `src/ttwid.py` / `src/ffmpeg_proc.py` / `src/platforms/bilibili.py` / `src/platforms/douyin.py` / `build_exe.py` — remaining runtime messages
 
 > Note: What actually participates in translation lookup at runtime is the constant English string output by `print()`; `logger.*` output and f-string-interpolated text do not go through lookup, and the related entries in the catalogs are kept only as ready-made translation drafts for later log i18n integration.
 
@@ -812,7 +819,7 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 
 - **`ResizableSemaphore`**: A runtime-resizable semaphore implementing the context manager protocol. Supports `set_value(n)` for runtime capacity adjustments — on increase, wakes the corresponding number of waiters; on decrease, only lowers the upper bound without forcibly reclaiming held slots. `__init__` / `set_value` allow a capacity of 0 (paused state). Eliminates the race condition of the old "destroy-and-recreate semaphore" approach.
 
-- **`PlatformBreaker`**: A per-key (host) isolated circuit breaker implementing a `closed → open → half-open` three-state state machine. When the continuous failure sample ratio exceeds the threshold, it opens (skips probing and enters cooldown); after cooldown, a **single** probe is released; probe success restores closed, probe failure re-opens. Used to isolate and degrade single-platform jitter, preventing cascading global failures.
+- **`PlatformBreaker`**: A per-key (host) isolated circuit breaker implementing a `closed → open → half-open` three-state state machine. When the continuous failure sample ratio exceeds the threshold, it opens (skips probing and enters cooldown); after cooldown, a **single** probe is released; probe success restores closed, probe failure re-opens. Used to isolate and degrade single-platform jitter, preventing cascading global failures. **The probe carries a lease (`_PROBE_LEASE_SECONDS = 60s`, since 2026-08-27)**: if no sample is reported after the lease expires (not-live waiting rounds, `disable_record`, room-thread exit — paths that never trigger `record`), `allow()` re-grants the probe for self-healing — without the lease, the `_probing` flag never resets and the host stays permanently circuit-broken until process restart.
 
 - **`ConcurrencyScheduler`**: The scheduling hub, integrating adaptive capacity, platform circuit breaker, and recording concurrency limit capabilities.
   - **Network concurrency capacity** = `max(configured lower bound, min(upper bound, ceil(active count / scale factor)))`; when the error rate is extremely high, capacity is gently reduced but never below the safe lower bound (default min=8 / max=128)
@@ -823,16 +830,19 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 
 **Key Functions**:
 
-- `host_of(url)`: Extracts hostname from URL (lowercase, strip port/path/query) as circuit breaker key; custom flv/m3u8 direct links fall back to the path itself
-- `allow(key)`: Pre-checks whether the specified host is circuit-broken; returns False when the caller should skip this round of probing
+- `host_of(url)`: Extracts the hostname from the URL (cut at the first `/`, `?`, or `#`; lowercased, port kept) as the circuit breaker key; empty strings or parse errors uniformly map to `"unknown"` (unrelated broken URLs share one breaker key — a coarse-grained fallback)
+- `allow(key)`: Pre-checks whether the specified host is circuit-broken; returns False when the caller should skip this round of probing; the half-open state carries a probe lease (see `PlatformBreaker`)
 - `record_error(key)` / `record_success(key)`: Records success/failure samples per host, driving circuit breaker state transitions
 
 **Wiring Points** (fixed locations, does not modify 50+ platform dispatch functions):
 
 - `notify.record_error/record_success` adds a `key` parameter, delegates to `scheduler`
 - `start_record` entry performs `scheduler.allow(record_host)` circuit breaker pre-check before platform dispatch
+- The parse-success branch of `start_record` (non-empty `anchor_name`) reports `record_success(record_host)` — the half-open probe relies on this round's result to close the loop, so other rooms on the same host no longer starve while the probe room is in a long recording
 - `check_subprocess` recording loop is governed by `recording_semaphore`
 - `main()` initializes the scheduler in the first round; `semaphore` / `recording_semaphore` point to its attributes
+
+**Thread Safety** (hardened 2026-08-27): the config fields (mode/configured limit/active count/error window) are read and written concurrently by the main thread and the `adjust_loop` daemon; `_compute_capacity()` snapshots all mutable inputs under a single lock, and `set_configured_limit()` / `set_dynamic_mode()` write inside the lock (idempotence check + write atomic). `Lock` is non-reentrant, so all setters call `recompute()` only after releasing the lock — no nested lock holding anywhere in the chain.
 
 **Configuration Items**:
 
@@ -841,7 +851,7 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 | Max simultaneous recordings (0=unlimited) | 0=unlimited (also serves as concurrency mode switch: 0=adaptive speed, non-zero=fixed concurrency) | 0 |
 | Network thread count | In adaptive mode, one of the capacity lower bounds; in fixed mode, the fixed concurrency limit value | 3 |
 
-**Tests**: `tests/test_scheduler.py` has 15 test cases covering semaphore resizing, circuit breaker state machine, adaptive capacity scaling/lower bound, fixed concurrency mode, per-key isolation, recording concurrency soft limit, etc.
+**Tests**: `tests/test_scheduler.py` has 16 test cases covering semaphore resizing, circuit breaker state machine (including probe-lease timeout self-healing), adaptive capacity scaling/lower bound, fixed concurrency mode, per-key isolation, recording concurrency soft limit, etc.
 
 ---
 
@@ -1551,6 +1561,184 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 ---
 
 ## Changelog
+
+### v4.0.9.1-dev (2026-08-27) — i18n Localization System Fix (Python 2-style `except` Multi-Except → Tuple Parentheses) + zh_CN.mo Recompile
+
+**Change Summary**: This entry records the 2026-08-27 evening session's fix to the localization subsystem — the true closure of the same-day first-pass "Four-language Catalog Unification". The first pass replenished 288 → 492 entries, but the `zh_CN.mo` recompile was blocked at the time: `i18n.py` and `scripts/compile_po.py` still carried Python 2-style `except A, B:` (including one three-except `except A, B, C:`) multi-except forms, which are hard `SyntaxError`s under Python 3. `compile_po.py` could not run and produce `.mo`, and `i18n.py` itself could not be `import`ed (the entire translation system was unusable). This session converts all four `except` clauses to `except (A, B, ...):` (behavior unchanged, pure syntax legalization), unblocks the compile chain, and regenerates `zh_CN.mo` (496 entries) aligned with the current `zh_CN.po`.
+
+**Files Involved (Classified by Module)**:
+
+**1. Internationalization Module (Modifications)**
+
+- `i18n.py`: three `except` multi-except comma forms converted to tuple parentheses (behavior unchanged):
+  - `i18n.py:202` `except OSError, ValueError:` → `except (OSError, ValueError):`;
+  - `i18n.py:218` `except OSError, ValueError, yaml.YAMLError:` → `except (OSError, ValueError, yaml.YAMLError):` (the three-except comma form is illegal in every Python version and was the true fatal point);
+  - `i18n.py:320` `except ValueError, AttributeError:` → `except (ValueError, AttributeError):`.
+  - After the fix `py_compile` passes and `import i18n` works (`_load_translations(locale_path, 'zh_CN')` loads 496 entries).
+- `scripts/compile_po.py`: `scripts/compile_po.py:128` `except AttributeError, OSError:` → `except (AttributeError, OSError):`. After the fix the compile script runs normally.
+
+**2. Build Artifact (Regenerated)**
+
+- `i18n/zh_CN/LC_MESSAGES/zh_CN.mo`: after the syntax fix, `python scripts/compile_po.py` regenerates it (aligned with the current `zh_CN.po`, 496 entries including the gettext header, `--check` byte-level synced).
+
+**Change Notes**:
+
+- **Why it was a blocking defect**: the first-pass "full replenishment" `zh_CN.mo` was in fact never written to disk (the compile script itself could not be parsed by Python). i18n implements translation by wrapping `builtins.print`; once `i18n.py` raises a `SyntaxError` the whole `import` fails, and the `import i18n` at the top of the CLI entry `main.py` failing would prevent the program from starting, taking down GUI/Web language switching and all localization.
+- **Correction to the first-pass "PEP 758 legal / no change" assessment**: the same-day second-pass review entry claimed "all 16 `except A, B:` across the repo are legal under 3.14 and were not changed". This session proves that, of the 4 sites in `i18n.py` / `compile_po.py`, the three-except comma form is illegal in every version, and the two-except comma form, while syntactically legal under Python 3.14 (PEP 758 allows omitting the tuple parentheses), is still a `SyntaxError` under the project's managed Python 3.13 runtime (used by the quality gates and compilation). Converting to `except (A, B):` is legal on all ≥3.13 versions and semantically equivalent to 3.14, making it the safest fix. This correction applies only to these two files and does not affect the first pass's assessment of other `except A, B:` sites such as in `src/notify.py`.
+- **§8 translation-file table entry count**: updated from 492 to 496 in tandem (aligned with the current 496 entries in `.po`/`.mo`).
+
+**Impact Scope**:
+
+- `i18n.py` imports normally; four-language localization (CLI prints / GUI / Web language switch) is usable again; `scripts/compile_po.py` runs repeatedly; the `.mo` compile and CI `--check` gate chain is unblocked.
+- `zh_CN.mo` is realigned with the current `zh_CN.po` (496 entries); Simplified-Chinese runtime translation is complete.
+- Source functionality is unchanged — only the `except` multi-except syntax form was adjusted (4 sites).
+
+**Verification**:
+
+- `python3 -m py_compile i18n.py scripts/compile_po.py`: pass; repo-wide grep for bare-comma `except A, B` forms returns zero.
+- `python3 -c "import i18n"`: imports successfully; `i18n._load_translations(i18n.locale_path, 'zh_CN')` loads 496 entries without error.
+- `python scripts/compile_po.py`: OK, generates `zh_CN.mo`; `python scripts/compile_po.py --check`: `.mo` synced with `.po` (496 entries).
+
+**Related**:
+
+- v4.0.9.1-dev (2026-08-27) first pass "Four-language localization catalog unification" — this entry unblocks its blocked `.mo` recompile and is the true closure of the first-pass localization replenishment;
+- targeted correction of the same-day second-pass review entry's "PEP 758 legal / no change" assessment (limited to the two files `i18n.py` and `compile_po.py`).
+
+### v4.0.9.1-dev (2026-08-27) — Second-Pass Review Fixes (compile_po --check Always-True Gate + Direct-Download Failure Sampling Gap + i18n/Web Gap Closure)
+
+**Change Summary**: This entry systematically records nine changes made to the working tree during the second 2026-08-27 session (three parallel review subagents followed by manual cross-validation, fixed item by item in P1/P2 priority order). ① **P1 gate failure**: `scripts/compile_po.py --check` wrote to disk before reading back for comparison — always equal, rendering the CI po/mo sync gate useless; moreover the ci.yml path filter did not include `i18n/**` (translation-only changes didn't even trigger the test job); ② **P1 circuit-breaker sampling gap**: direct-download "non-200 / network error" failures were swallowed inside the function into a bare `False`, neither caller branch reported a sample, so dead routes kept being re-hit while bypassing per-host breaker statistics; ③ **P2 ×4**: the inner monitoring loop lost its per-round reset of danmaku args, `PUT /api/language` returned an unconditional 500 when the config key was missing, about ten hardcoded Chinese strings in the frontend bypassed the translation dictionary, and ISSUE_TEMPLATE lacked Python 3.14; ④ **legacy cleanup ×2**: two bare `logger.debug(e)` calls in `src/async_http.py` and a leftover Debug step in build-release.yml. One important clarification: all 16 bare-comma multi-except clauses (`except A, B:`) across the repo are **legal under Python 3.14 PEP 758** (both syntax and runtime catching verified by test) — the first machine-review pass misreported them as fatal syntax errors due to unawareness of this feature, so no change was made here. Full verification: **744 passed, 2 skipped**.
+
+**Files Involved (Classified by Module)**:
+
+**1. Build / CI / Community Templates (Modifications + Deletions)**
+
+- `scripts/compile_po.py`:
+  - **`write_mo()` converted to pure in-memory output** (removed the `path.write_bytes()` side effect and the `path` parameter): previously `main()` unconditionally called `write_mo(entries, MO_PATH)` before the `--check` branch, overwriting `.mo` with the freshly compiled result; the subsequent `committed = MO_PATH.read_bytes()` read back exactly what had just been written, making the `committed != fresh` branch unreachable and the check always true;
+  - **Disk-write decision moved to the caller**: non-check mode explicitly does `MO_PATH.write_bytes(fresh)` before printing the success message; `--check` mode never touches disk and genuinely compares against the committed `.mo`;
+  - Header usage comment updated with the "zero side effects, no disk write" semantics.
+- `.github/workflows/ci.yml`: added `- 'i18n/**'` to the paths-filter `python` filter and corrected the adjacent comment — previously the static job (including compile_po --check) did not run for translation-only changes, which was the second root cause of "edit .po but forget to recompile .mo merging fully green".
+- `.github/workflows/build-release.yml`: removed the leftover no-op step "Debug inputs" at the end of the release job (produced meaningless output on the tag path only).
+- `.github/ISSUE_TEMPLATE/bug.yml` / `bug_en.yml` / `question.yml` / `question_en.yml`: added `- Python 3.14` to the version dropdowns (the project requires ≥3.14; source-run users previously had to pick Other, distorting version telemetry).
+
+**2. Recording Main Chain (Modifications)**
+
+- `main.py`:
+  - **Direct-download failure sample reporting** (direct-download branch of `start_record`): after the `if download_success:` success-sample branch, added `elif record_url not in url_comments and not exit_recording: record_error(record_host)` — both "non-200" (CDN rejection, the Huya-style signature) and "network error" (httpx exceptions already swallowed inside `direct_download_stream`) surface as `return False` and never reach the outer try's `record_error`; direct-download-only platforms such as shopee/Huajiao no longer bypass breaker statistics when rejected. Manually-interrupted rounds (commented-out URL / exit flag) do not count as samples;
+  - **Per-round danmaku-args reset restored**: added `record_danmaku_args = None` at the top of the inner monitoring loop (before the `exit_recording` check), per the AGENTS.md "reset to None each round" convention (an earlier refactor merged the original two in-loop reset points into a single init at the top of the try). `_resolve_platform_stream` return values are re-unpacked every round, so actual harm was limited — defensive hardening;
+  - **Two log messages normalized**: the non-200 branch of `direct_download_stream` now includes the request URL; the exception branch adds `{type(e).__name__}` (on Windows timeout-style exceptions have empty `str()`, so bare logging loses all context).
+- `src/async_http.py` (legacy cleanup): the two bare `logger.debug(e)` calls in `_close_all_clients()` and the main except of `async_req()` were normalized to `f"<action>: {url} - {type(e).__name__}: {e}"` format (matching the existing example in `get_response_status` in the same file; the swallow-and-return-empty contract is unchanged — only observability improved).
+
+**3. Web Config & API (New Features + Modifications)**
+
+- `src/web_config.py`: added `append_config_line(config_file, section, key, value)` — line-level append for missing-key backfill (`update_config_line` only replaces lines and returns False when key or section is missing). Inserts `key = value` inside the target section (before the next section header) or creates the section at end of file; same line-level text style as `update_config_line`, preserving comments, blank lines, and section order; if the last line lacks a trailing newline it is normalized first to avoid concatenation corruption.
+- `src/web_api.py`: `PUT /api/language` write-back fallback chain — when line-level replacement fails (historical config.ini without the `language` key, e.g. Web started before the engine's first config read), `append_config_line` backfills at the end of the section; only genuine failure still returns 500.
+
+**4. Web Frontend (Modifications)**
+
+- `web/app.js`: about ten hardcoded Chinese strings switched to the embedded four-language dictionary via `t()` (wrapped in `esc()` consistently with the rest of the file) — recording table empty state `empty.noRecording`, danmaku stream empty state `danmaku.noData`, truncation notice `danmaku.truncated`, toggle toast `toast.enabled/disabled`, op-failed `toast.opFailed`, config page empty state `config.none` and load failure `loadFailed`, file list empty state `files.emptyDir` plus enter/download buttons `rooms.enter/rooms.download`, download failure `toast.downloadFailed`. All dictionary keys already existed — these were pure call-site omissions; those spots on English/Traditional-Chinese UIs no longer show Simplified Chinese.
+
+**5. Tests (New Features + Modifications)**
+
+- `tests/test_record_failure_feedback.py`: added httpx streaming fakes `_FakeStreamResponse` / `_FakeHttpClient` (`__exit__` annotated `-> None` to satisfy mypy `exit-return`), plus 2 cases: `test_direct_download_stream_rejects_non_200_as_failure` (non-200 → False failure contract) and `test_direct_download_stream_writes_chunks_on_success` (chunk-by-chunk writes → True), 5 → 7 cases; header background comments updated with the direct-download sampling convention.
+- `tests/test_web_api.py`: added `test_put_language_missing_key_appends_and_succeeds` (PUT no longer 500s when `[录制设置]`/`language` are absent, backfill lands correctly and leaves `[Web]` untouched) and `test_append_config_line_edge_cases` (target section present with interleaved comments / target section last with no trailing newline / section missing), also correcting the old comment that admitted "update_config_line requires the key to pre-exist; hand-writing keys hid the real path".
+- `tests/test_i18n.py`: `test_po_and_mo_in_sync` adapted to the new `write_mo()` signature (no path parameter; compare against the returned bytes directly), removing the now-redundant `tempfile` import.
+
+**6. Documentation (Modifications)**
+
+- `CODE_WIKI.md` / `CODE_WIKI_EN.md` (this entry): directory-tree tests annotations updated (test_record_failure_feedback 7 cases; compile_po zero side effects); §3.x i18n maintenance workflow updated with pure-in-memory `write_mo()` / zero-side-effect `--check` / paths-filter including `i18n/**`; hot-language-switch entry updated with the missing-key append fallback.
+
+**Change Notes**:
+
+- **Why --check must be side-effect free**: a sync check fundamentally compares "working-tree artifact ↔ committed artifact"; if the check itself overwrites the object under inspection first, everything is trivially consistent at all times — the classic form of CI gate failure. The companion paths-filter gap meant the only truly effective fallback (`tests/test_i18n.py::test_po_and_mo_in_sync` byte-level assertion) never ran either; both defense layers failing simultaneously is why the defect stayed hidden.
+- **Condition design of the direct-download sample branch**: `record_url not in url_comments and not exit_recording` distinguishes "real failure" from "manual interruption" — interrupted rounds lead to thread exit and must not inject noise samples into the breaker; in the tiny race window (URL commented out right at decision time) the worst case is one missed sample, which is harmless.
+- **PEP 758 clarification** (important for future reviews): since Python 3.14, `except A, B:` is fully equivalent to `except (A, B):` (PEP 758 allows omitting the exception-tuple parentheses); with this project requiring Python ≥3.14, all 16 bare-comma sites across the repo are **legal and were runtime-verified on 3.14.7**. Machine review misreported them as fatal import-crash errors based on ≤3.13 knowledge; avoid repeating that class of false positive when tooling or agents are upgraded.
+- **append_config_line edge handling**: the new boundary tests caught and fixed one initial-version defect — when the source file's last line had no trailing newline, the "insert mid-file" path corrupted that last line via concatenation; the compensation logic was promoted from the new-section branch to a unified pre-pass.
+
+**Impact Scope**:
+
+- The CI i18n gate resumes its duty: any future "edited .po but forgot to recompile .mo" will be blocked by the static job, even if the PR touches only i18n/**.
+- High-frequency-rejected routes of direct-download platforms (shopee / Huajiao) now properly accumulate breaker error budgets; past threshold they back off and release concurrency slots to other platforms instead of looping failures every few seconds.
+- Scheduling semantics of "max simultaneous recordings(0=unlimited)" doubling as the concurrency-mode switch, probe-backoff allowlist, and HLS/FLV source selection are all unchanged.
+- Dynamic frontend texts (toast/empty states/buttons) are fully localized for English/Traditional-Chinese users; static `data-i18n` texts were already covered before.
+
+**Verification**:
+
+- Full `pytest -q`: **744 passed, 2 skipped** (36.3s, net +4 new cases);
+- `black --check .` (after reformatting 2 new test files to the 120-column limit, re-verified) / `isort --check-only .`: 114 files unchanged / pass (`.isorted` backups cleaned);
+- `mypy src/` + `mypy --platform linux src/`: dual-platform `Success: no issues found in 38 source files`; `mypy tests/`: 46 files, 0 errors (fixed an exit-return complaint from my own fake `__exit__ -> bool`);
+- `basedpyright tests/`: 0 errors / 0 warnings / 0 notes;
+- `python scripts/compile_po.py --check`: `.mo` synced with `.po` (493 entries), and the run confirmed `.mo` md5 unchanged before/after (zero side effects in effect); node --check validated app.js syntax; all six YAML edits passed safe_load;
+- Grep review of frontend hardcoded-text leftovers: zero (only the dictionary definitions themselves remain).
+
+**Related**:
+
+- Same-day follow-up to the v4.0.9.1-dev (2026-08-27) first-pass review entry (probe lease self-healing + parse-success sampling) — that pass established the "report samples by exit code / parse outcome" framework; this pass closes its direct-download bypass and the gate-side loopholes;
+- v4.0.9-dev (2026-08-23) "Recording failure feedback scheduler" — direct-download failure sampling completes its goal of "semantics aligned with the ffmpeg path" (its comment wrongly assumed False could only come from exceptions);
+- v4.0.9-dev (2026-08-24) "Four-language localization catalog unification" and Web hot language switch — this round fixes the two remaining gaps: the write-back side and the frontend dynamic-text side.
+
+### v4.0.9.1-dev (2026-08-27) — Code-Review Fixes (Circuit-Breaker Probe Lease Self-Healing + Scheduler Success Sampling) + Scheduler Thread-Safety Hardening + Full i18n Catalog Replenishment (288 → 492 entries)
+
+**Change Summary**: This entry systematically records three batches of working-tree changes from the 2026-08-27 session. ① **Code-review fixes**: full quality gates (pytest 738 passed / black / isort / mypy dual-platform / basedpyright all green) plus three parallel review subagents, uncovering and fixing 1 high-severity and 3 medium-severity defects — `PlatformBreaker` half-open probe leak causing permanent host circuit-break (when the probe round ends via `continue` without triggering `record`, `_probing` never resets), probe success signal delayed until ffmpeg exit (other rooms on the same host starved for a long time), three-arg `getattr` Any leak in `notify.py` (mypy false-green), and uncaught YAML parse exceptions in `i18n.py` (a corrupted zh_TW.yaml caused `PUT /api/language` to return 500); ② **leftover review-item fixes**: bare `logger.error(e)` in `notify.py` (on Windows `str()` of `socket.timeout` is empty, losing log context), `host_of` comment-implementation mismatch in `scheduler.py`, and unlocked config-field reads/writes in the scheduler; ③ **full i18n catalog replenishment**: AST-scanned runtime code `print()`/`logger.*()` constant strings (47 files, 355 strings), added 204 translation entries after comparing against the four-language catalogs (288 → 492) and recompiled `zh_CN.mo`. Full verification: **740 passed, 2 skipped**.
+
+**Files Involved (Classified by Module)**:
+
+**1. Concurrency Scheduling Module (New Features + Modifications)**
+
+- `src/scheduler.py`:
+  - **Added probe lease** (high-severity fix): module constant `_PROBE_LEASE_SECONDS = 60.0`; `PlatformBreaker` gains a `_probe_granted_at` field — `allow()` records a timestamp when granting a half-open probe, and re-grants the probe after the lease expires without a sample report (paths that never trigger `record`: not-live waiting rounds, `disable_record`, room-thread exit, etc.), enabling self-healing — previously `_probing` never reset, permanently circuit-breaking that host until process restart;
+  - **Config-field locking** (thread-safety hardening): `_compute_capacity()` now takes a single lock to snapshot all mutable inputs (mode/config/active count/error window, multi-field read consistency); the log branch of `recompute()` snapshots under the lock; `set_configured_limit()` writes inside the lock; `set_dynamic_mode()` makes the idempotence check and the write atomically under the same lock (read-modify-write). `Lock` is non-reentrant, so all setters call `recompute()` only after releasing the lock — no nested lock holding anywhere in the chain;
+  - **`host_of()` comment fix**: the old comment claimed "strip port / custom direct links fall back to the path itself", which did not match the implementation (which keeps the port, returns only the host, and uniformly maps broken URLs to the shared `"unknown"` breaker key); rewritten to describe actual behavior.
+- `main.py`: the parse-success branch of `start_record` (non-empty `port_info["anchor_name"]`) now reports `record_success(record_host)` — symmetric with the `record_error` in the parse-failure branch. Fixes delayed probe-success signaling: previously success samples were only reported on ffmpeg `rc==0`, so while a half-open probe room was in a long recording, all other rooms on the same host kept starving under circuit-break.
+- `src/notify.py`:
+  - The three-arg `getattr(main, "scheduler", None)` in `record_error` / `record_success` replaced with direct `main.scheduler` access (AGENTS.md ban: three-arg getattr returns `Any`, silently disabling type checking at the call sites);
+  - The three bare `logger.error(e)` calls in `run_script` now include "action + object + exception type" (the `PermissionError`/`OSError`/`ValueError` branches all carry `command` and `type(e).__name__`).
+
+**2. Internationalization Module (Modifications)**
+
+- `i18n.py`: the `except` of `_load_yaml_catalog()` now also catches `yaml.YAMLError` (ParserError/ScannerError are not OSError/ValueError subclasses; without the catch, a corrupted yaml makes `set_language` raise and the web language-switch endpoint return 500 outright).
+- `i18n/zh_CN/LC_MESSAGES/zh_CN.po`: 204 new entries (288 → 492), with a dated section comment and the header `PO-Revision-Date` updated to 2026-08-27; recompiled `zh_CN.mo` (493 entries including the header pseudo-key, 59,810 bytes, `--check` byte-level synced).
+- `i18n/en_US.json` / `i18n/en_GB.json` / `i18n/zh_TW.yaml`: appended the same 204 entries (each 288 → 492), four-language key sets fully identical. Newly covered: concurrency-scheduling and circuit-break logs, the full stream-URL validation message set (`src/stream_select.py`), the Bilibili buvid auth chain (`src/platforms/bilibili.py`), danmaku capture/monitoring (`src/collector.py`/`src/danmaku_monitor.py`), the seven-channel push-failure branches (`msg_push.py`), ffmpeg/Node.js installation (`src/ffmpeg_install.py`/`src/node_install.py`), config read/write (`src/config_io.py`), anchor-name sync, and web/gui/build_exe smoke output, among others.
+
+**3. GUI Module (Modifications)**
+
+- `gui.py`: new `_bootstrap_crash_reported` module-level flag — after `_bootstrap_error_sink` handles a top-level `main()` exception and sets the flag, the excepthook installed by `_install_crash_sink` skips the re-raised exception (previously the same exception produced two identical error dialogs and a doubly-stacked log file: `"w"` overwrite + `"a"` append).
+
+**4. Tests (New Features)**
+
+- `tests/test_scheduler.py`: added `test_platform_breaker_probe_lease_regrants_after_timeout` (the full self-healing chain: lease expiry → re-grant → new probe reports success → closed), 15 → 16 cases.
+- `tests/test_i18n.py`: added `test_load_yaml_catalog_corrupted_returns_none` (a corrupted YAML returns None for graceful degradation instead of raising).
+
+**5. Documentation (Modifications)**
+
+- `AGENTS.md`: version 4.0.8.3 → 4.0.9.1 (aligned with the `pyproject.toml` single source of truth); the "Concurrency & Threading Model" section documents the PlatformBreaker probe-lease convention (with the warning that removing it regresses to permanent circuit-break); the "Recording-Result Feedback Conventions" section documents the parse-success sampling convention (clarifying the boundary against the "unconditional end-of-round record_success" ban); `tests/test_scheduler.py` case count 15 → 16.
+- `CODE_WIKI.md` / `CODE_WIKI_EN.md` (this entry): Section 8 translation-file table entry counts 282 → 492, coverage updated; Section 15 `PlatformBreaker` gains the probe lease, the `host_of` description aligned with the implementation, the wiring points add parse-success sampling, test count 15 → 16.
+
+**Change Notes**:
+
+- **Probe lease vs. success sampling**: the two are complementary — parse-success sampling closes the loop immediately for the "probe round flows normally" scenario (a probe room that is not live reports `record_success` each round, restoring the breaker to closed); the lease is the fallback self-healing for paths where the probe round reports no sample at all (thread exit, recording disabled, etc.). Removing either layer alone regresses its corresponding defect.
+- **Zero behavioral impact of locking**: the order of snapshot/write inside the lock and `recompute()` after lock release guarantees no nested lock holding (`Lock` is non-reentrant); in `__init__`, `_lock` is created before the first `_compute_capacity()` call, so initialization order is safe. All 16 existing scheduler cases pass.
+- **i18n replenishment methodology**: the authoritative baseline is static AST extraction (all constant args of `print()` + the first constant arg of `logger.debug/info/warning/error/...` with f-string template reconstruction), excluding 5 items of no translation value (pure format templates like `{color}{text}{Color.RESET}`, `{'=' * 60}` separator lines, `{rec_info}/{filename}` with no natural language, and 1 near-duplicate of an existing key differing only in placeholder spelling); the update script embedded a bidirectional "extracted key set ↔ translation-table key set" assertion to guard against transcription errors.
+
+**Impact Scope**:
+
+- The circuit breaker's self-healing on frequently failing platforms (Huya/Douyu CDN jitter) is significantly strengthened — previously, once a host entered half-open with a not-live probe round, all rooms on that platform backed off permanently; multi-room scenarios on the same host (Bilibili/Douyin batch monitoring) no longer starve the other rooms because of one room's long recording.
+- A corrupted `zh_TW.yaml` degrades from "web language switch returns 500" to "that catalog is skipped, falling back to the next format".
+- The runtime concurrency-capacity computation logic (adaptive/fixed dual modes, error backpressure) is semantically unchanged — locking only eliminates a theoretical race (under the GIL, int/bool assignment is atomic; a transient stale value affects only a single capacity round and is corrected by the next 5s recompute).
+
+**Verification**:
+
+- Full `pytest -q`: **740 passed, 2 skipped** (34.8s, including the 2 new cases);
+- `black --check .` / `isort --check-only .`: 114 files unchanged / pass;
+- `mypy src/` + `mypy --platform linux src/` + `mypy` on the three root entry files: all `Success`;
+- `basedpyright tests/`: 0 errors / 0 warnings;
+- `python scripts/compile_po.py --check`: `.mo` synced with `.po` (493 entries);
+- Four-language key-set assertion: `set(en_US) == set(en_GB) == set(zh_TW) == set(.mo entries)` (492 keys); runtime spot-check via `i18n._tr` confirmed new entries translate correctly in all four languages.
+
+**Related**:
+
+- Same origin as v4.0.9-dev (2026-08-24) "High-Concurrency Multi-Platform Recording Scheduling & Resource Management Optimization" — this session adds probe-lease self-healing to its `PlatformBreaker` and thread safety plus parse-success sampling to its `ConcurrencyScheduler`;
+- Same origin as v4.0.9-dev (2026-08-23) "Recording-Result Feedback to Scheduler" — parse-success sampling completes that feedback system (previously only ffmpeg exit codes and the direct-download path reported);
+- Same origin as v4.0.9-dev (2026-08-24) "Four-Language Catalog Unification" — this session expands the catalogs from 288 to 492 entries, extending coverage from print constant strings to repository-wide logger template drafts.
 
 ### v4.0.9-dev (2026-08-24) — This Session's Change Overview (Classified by Module)
 

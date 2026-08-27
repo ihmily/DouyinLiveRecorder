@@ -85,7 +85,8 @@ async def _close_all_clients() -> None:
             if not client.is_closed:
                 await client.aclose()
         except Exception as e:
-            logger.debug(e)
+            # Windows 下 socket.timeout 等异常 str() 可能为空串，必须带类型名否则日志空白无线索
+            logger.debug(f"进程退出释放 AsyncClient 失败: {type(e).__name__}: {e}")
 
 
 def close_all_clients_sync() -> None:
@@ -177,7 +178,7 @@ async def async_req(
         #   redirect_url -> 空字符串（调用方据此判定未取到 URL）
         #   return_cookies -> 空 dict / ("", {})（调用方据此判定登录/取 cookie 失败）
         #   默认文本 -> 空字符串（调用方解析失败进入各自异常分支）
-        logger.debug(e)
+        logger.debug(f"async_req 请求失败: {url} - {type(e).__name__}: {e}")
         if redirect_url:
             return ""
         elif return_cookies:

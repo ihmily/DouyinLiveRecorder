@@ -630,7 +630,7 @@ def direct_download_stream(
             ) as client:
                 with client.stream("GET", source_url, headers=headers, follow_redirects=True) as response:
                     if response.status_code != 200:
-                        logger.error(f"请求直播流失败，状态码: {response.status_code}")
+                        logger.error(f"请求直播流失败: {source_url} - 状态码: {response.status_code}")
                         return False
 
                     downloaded = 0
@@ -650,7 +650,7 @@ def direct_download_stream(
                     print()
                     return True
     except Exception as e:
-        logger.error(f"FLV下载错误: {e} 发生错误的行数: {_get_error_line(e)}")
+        logger.error(f"FLV下载错误: {source_url} - {type(e).__name__}: {e} 发生错误的行数: {_get_error_line(e)}")
         return False
 
 
@@ -1556,6 +1556,9 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
             # print(f'\r代理地址:{proxy_address}')
             # print(f'\r全局代理:{global_proxy}')
             while True:
+                # 弹幕参数每个监测轮先归零再分派（AGENTS.md 约定）：绝不沿用上一轮录制遗留的旧参数，
+                # 防御未来把解析短路/复用旧值的改动重新引入陈旧 danmaku_args 到 check_subprocess
+                record_danmaku_args = None
                 if exit_recording:
                     logger.debug(f"检测到退出标志，录制线程退出: {record_url}")
                     return
@@ -1597,6 +1600,12 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                         print(f"序号{count_variable} 网址内容获取失败,进行重试中...获取失败的地址是:{url_data}")
                         record_error(record_host)
                     else:
+                        # —— 解析成功即上报成功样本：half-open 探针依赖本轮结果闭环——
+                        # 此前成功样本仅在 ffmpeg 退出(rc==0)时上报，探针房间进入长时间
+                        # 录制期间，同 host 其余房间持续熔断饿死；主播未开播等正常轮次
+                        # 则完全无样本，探针 _probing 永不复位（靠调度器租约超时兜底自愈）。
+                        # 与上方解析失败分支的 record_error 对称，仅解析真正成功才上报。
+                        record_success(record_host)
                         anchor_name = clean_name(anchor_name)
 
                         # —— 主播名自动同步：平台最新名与当前使用名不一致时，先重命名历史
@@ -2067,9 +2076,14 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                                             print(
                                                 f"\n{anchor_name} {time.strftime('%Y-%m-%d %H:%M:%S')} 直播录制完成\n"
                                             )
-                                            # 直下路径无 check_subprocess 退出码反馈：成功按 host 补样本
-                                            # （失败路径 except 分支已有 record_error），与 ffmpeg 路径语义对齐
+                                            # 直下路径无 check_subprocess 退出码反馈：成功按 host 补样本，
+                                            # 与 ffmpeg 路径语义对齐
                                             record_success(record_host)
+                                        elif record_url not in url_comments and not exit_recording:
+                                            # 真-失败（CDN 拒绝非 200 / 网络异常在函数内部已消化成 False，
+                                            # 走不到外层 except 的 record_error）必须在此上报，否则坏线路
+                                            # 绕开按 host 熔断统计被无限重撞；被注释/退出标志的中断不计样本
+                                            record_error(record_host)
 
                                         with record_state_lock:
                                             recording.discard(record_name)

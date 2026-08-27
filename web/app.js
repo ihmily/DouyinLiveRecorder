@@ -441,7 +441,7 @@
         var tbody = $('recording-tbody');
         var rec = s.recording || [];
         if (!rec.length) {
-            tbody.innerHTML = '<tr><td colspan="5" class="empty">暂无录制</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="5" class="empty">' + esc(t('empty.noRecording')) + '</td></tr>';
             return;
         }
         var html = '';
@@ -534,7 +534,7 @@
             shown++;
         }
         if (!shown) {
-            el.textContent = dmMessages.length ? '' : '暂无弹幕数据';
+            el.textContent = dmMessages.length ? '' : t('danmaku.noData');
             if (!dmMessages.length) { return; }
         }
         el.innerHTML = html;
@@ -598,7 +598,7 @@
         // 增量消息：追加到本地缓冲（截断标记说明中间有遗漏，补一条提示行）
         var msgs = data.messages || [];
         if (data.truncated) {
-            dmMessages.push({ ts: msgs.length ? msgs[0].ts : Date.now() / 1000, room: '', type: 'sys', user: '', text: '（消息量过大，部分已折叠）' });
+            dmMessages.push({ ts: msgs.length ? msgs[0].ts : Date.now() / 1000, room: '', type: 'sys', user: '', text: t('danmaku.truncated') });
         }
         for (var x = 0; x < msgs.length; x++) {
             dmMessages.push(msgs[x]);
@@ -646,9 +646,9 @@
     window.toggleRoom = async function (url, enable) {
         try {
             await api('/api/rooms/toggle', { method: 'POST', body: { url: url, enable: enable } });
-            toast(enable ? '已启用' : '已禁用', 'success');
+            toast(enable ? t('toast.enabled') : t('toast.disabled'), 'success');
         } catch (e) {
-            toast('操作失败: ' + e.message, 'error');
+            toast(t('toast.opFailed') + e.message, 'error');
             loadRooms();
         }
     };
@@ -734,7 +734,7 @@
                 }
                 html += '</div>';
             }
-            container.innerHTML = html || '无配置';
+            container.innerHTML = html || t('config.none');
             updateSslPlatformHint();
             var inputs = document.querySelectorAll('#config-container input');
             for (var j = 0; j < inputs.length; j++) {
@@ -743,7 +743,7 @@
                 }
             }
         } catch (e) {
-            container.textContent = '加载失败';
+            container.textContent = t('loadFailed');
         }
     }
 
@@ -799,7 +799,7 @@
             crumb.innerHTML = crumbHtml;
             // 文件列表
             if (!items.length) {
-                tbody.innerHTML = '<tr><td colspan="5" class="empty">空目录</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="5" class="empty">' + esc(t('files.emptyDir')) + '</td></tr>';
                 return;
             }
             var html = '';
@@ -808,9 +808,9 @@
                 var icon = it.type === 'dir' ? '📁' : '📄';
                 var action;
                 if (it.type === 'dir') {
-                    action = '<button class="small" data-action="enter" data-path="' + esc(it.path) + '">进入</button>';
+                    action = '<button class="small" data-action="enter" data-path="' + esc(it.path) + '">' + esc(t('rooms.enter')) + '</button>';
                 } else {
-                    action = '<button class="small" data-action="download" data-path="' + esc(it.path) + '">下载</button>';
+                    action = '<button class="small" data-action="download" data-path="' + esc(it.path) + '">' + esc(t('rooms.download')) + '</button>';
                 }
                 html += '<tr>'
                     + '<td>' + icon + ' ' + esc(it.name) + '</td>'
@@ -853,7 +853,7 @@
                 document.body.removeChild(a);
                 URL.revokeObjectURL(url);
             })
-            .catch(function (e) { toast('下载失败: ' + e.message, 'error'); });
+            .catch(function (e) { toast(t('toast.downloadFailed') + e.message, 'error'); });
     };
 
     // 20. addRoom（room-add-form submit 处理）

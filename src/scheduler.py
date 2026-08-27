@@ -18,6 +18,11 @@ from typing import Any
 
 from .logger import logger
 
+# 探针租约时长：half-open 探针被授予后超过该时长仍未上报样本（未开播等待轮、
+# 禁录、房间线程退出等不上报样本的路径）时，allow() 重新授予探针——否则
+# _probing 标志永不复位，该 key 将永久熔断直到进程重启。
+_PROBE_LEASE_SECONDS = 60.0
+
 
 class ResizableSemaphore:
     # 可运行时调容的信号量，实现上下文管理器协议。
@@ -103,6 +108,7 @@ class PlatformBreaker:
         self._state = "closed"  # "closed" | "open" | "half-open"
         self._open_until = 0.0
         self._probing = False
+        self._probe_granted_at = 0.0
 
     def record(self, success: bool) -> None:
         # 上报一次结果（True=成功 / False=失败），按状态机推进。
@@ -128,6 +134,9 @@ class PlatformBreaker:
 
     def allow(self) -> bool:
         # 是否允许本次探测。open 且冷却结束后放行唯一探针；half-open 仅放一个探针；closed 放行。
+        # 探针带租约：被授予后超过 _PROBE_LEASE_SECONDS 仍未上报样本（探针轮以 continue
+        # 结束且不触发 record 的路径，如主播未开播）时重新授予，防止 _probing 永不复位
+        # 导致该 key 永久熔断（进程重启才恢复）。
         with self._lock:
             if self._state == "closed":
                 return True
@@ -136,6 +145,7 @@ class PlatformBreaker:
                 if now >= self._open_until:
                     if not self._probing:
                         self._probing = True
+                        self._probe_granted_at = now
                         self._state = "half-open"
                         return True
                     return False
@@ -143,6 +153,11 @@ class PlatformBreaker:
             # half-open
             if not self._probing:
                 self._probing = True
+                self._probe_granted_at = now
+                return True
+            if now - self._probe_granted_at >= _PROBE_LEASE_SECONDS:
+                # 租约超时：原探针未回报样本，重新授予（自愈）
+                self._probe_granted_at = now
                 return True
             return False
 
@@ -217,22 +232,26 @@ class ConcurrencyScheduler:
 
     # —— 容量计算 ——
     def _compute_capacity(self) -> int:
-        # 固定模式：忽略动态调速器与错误背压，容量恒为 configured_limit
-        # （即「同一时间访问网络的线程数」，set_configured_limit 已保证最小 1 个槽位）。
-        if not self._dynamic_mode:
-            return self._configured_limit
-        # 动态模式：目标容量 = max(配置值, min(上限, ceil(活跃数/缩放因子)))；错误率极高时温和降容但永不低于下限。
+        # 单次加锁快照全部可变输入（模式/配置/活跃数/错误窗口由 main 主线程与 adjust_loop
+        # 守护线程并发读写），保证多字段读取的一致性；_min/_max/_scale_divisor/
+        # _error_rate_floor 构造后不变，锁外读取安全。
         with self._lock:
+            dynamic = self._dynamic_mode
+            configured = self._configured_limit
             active = self._active_count
-        target = max(
-            self._configured_limit,
-            min(self._max_capacity, (active + self._scale_divisor - 1) // self._scale_divisor),
-        )
-        with self._lock:
             if self._global_errors:
                 rate = sum(self._global_errors) / len(self._global_errors)
             else:
                 rate = 0.0
+        # 固定模式：忽略动态调速器与错误背压，容量恒为 configured_limit
+        # （即「同一时间访问网络的线程数」，set_configured_limit 已保证最小 1 个槽位）。
+        if not dynamic:
+            return configured
+        # 动态模式：目标容量 = max(配置值, min(上限, ceil(活跃数/缩放因子)))；错误率极高时温和降容但永不低于下限。
+        target = max(
+            configured,
+            min(self._max_capacity, (active + self._scale_divisor - 1) // self._scale_divisor),
+        )
         if rate >= self._error_rate_floor:
             target = max(self._min_capacity, int(target * 0.6))
         return max(self._min_capacity, target)
@@ -242,8 +261,11 @@ class ConcurrencyScheduler:
         new_cap = self._compute_capacity()
         if new_cap != self._network_semaphore.value:
             self._network_semaphore.set_value(new_cap)
-            if self._dynamic_mode:
-                logger.debug(f"并发模式: 动态调速，网络容量调整为 {new_cap}（活跃任务 {self._active_count}）")
+            with self._lock:
+                dynamic = self._dynamic_mode
+                active = self._active_count
+            if dynamic:
+                logger.debug(f"并发模式: 动态调速，网络容量调整为 {new_cap}（活跃任务 {active}）")
             else:
                 logger.debug(f"并发模式: 固定，网络容量调整为 {new_cap}（来源: 同一时间访问网络的线程数）")
 
@@ -257,7 +279,9 @@ class ConcurrencyScheduler:
     def set_configured_limit(self, n: int) -> None:
         # 上报配置中的「同一时间访问网络的线程数」：动态模式下作为容量下限之一；
         # 固定模式下即网络并发容量本身（固定值，非法值兜底为最小 1）。
-        self._configured_limit = max(1, int(n))
+        # 锁内写、锁释放后再 recompute（Lock 不可重入，避免与 _compute_capacity 嵌套）。
+        with self._lock:
+            self._configured_limit = max(1, int(n))
         self.recompute()
 
     def set_recording_limit(self, n: int) -> None:
@@ -274,10 +298,13 @@ class ConcurrencyScheduler:
         # 幂等：模式未变且已播报过时直接返回（main 主循环每轮调用，避免重复日志与无谓调容）；
         # 模式变化或首次调用时重算容量，并播报当前模式与有效并发数值。
         enabled = bool(enabled)
-        if enabled == self._dynamic_mode and self._mode_announced:
-            return
-        self._dynamic_mode = enabled
-        self._mode_announced = True
+        # 幂等检查与写入同锁完成（read-modify-write 原子）；锁释放后再 recompute
+        # （Lock 不可重入，避免与 _compute_capacity 嵌套）。
+        with self._lock:
+            if enabled == self._dynamic_mode and self._mode_announced:
+                return
+            self._dynamic_mode = enabled
+            self._mode_announced = True
         self.recompute()
         if enabled:
             logger.debug(
@@ -358,7 +385,9 @@ class ConcurrencyScheduler:
 
 
 def host_of(url: str) -> str:
-    # 熔断 key：取 URL 主机名（小写、去端口/路径/查询），自定义 flv/m3u8 直链退回路径本身。
+    # 熔断 key：取 URL 主机名——「://」后截到首个 /、?、# 为止（无 scheme 时对整串同样处理），
+    # 小写、保留端口。空串或解析异常统一归 "unknown"：互不相关的坏 URL 会共享同一熔断
+    # key，粗粒度兜底视为可接受（不为坏地址细分会引入更多零散熔断桶，统计意义更弱）。
     try:
         tail = url.split("://", 1)[-1]
         host = tail.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]

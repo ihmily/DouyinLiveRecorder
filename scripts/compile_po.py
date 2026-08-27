@@ -9,7 +9,7 @@
 #
 # 用法：
 #   python scripts/compile_po.py            # 编译生成 .mo
-#   python scripts/compile_po.py --check    # 校验已提交的 .mo 与 .po 是否同步（CI 用）
+#   python scripts/compile_po.py --check    # 校验已提交的 .mo 与 .po 是否同步（CI 用，零副作用不写盘）
 
 import io
 import struct
@@ -88,8 +88,8 @@ def parse_po(path: Path) -> dict[str, str]:
     return entries
 
 
-def write_mo(entries: dict[str, str], path: Path) -> bytes:
-    # 按 GNU mo 格式写出：排序后的 (msgid, msgstr) 表 + NUL 结尾字符串区。
+def write_mo(entries: dict[str, str]) -> bytes:
+    # 按 GNU mo 格式构建字节流；不落盘——是否写入由调用方决定（--check 必须零副作用）。
     keys = sorted(entries.keys())
     ids = bytearray()
     strs = bytearray()
@@ -115,8 +115,6 @@ def write_mo(entries: dict[str, str], path: Path) -> bytes:
     output += struct.pack(f"<{2 * n}i", *koffsets)
     output += struct.pack(f"<{2 * n}i", *voffsets)
     output += bytes(ids) + bytes(strs)
-
-    path.write_bytes(output)
     return output
 
 
@@ -127,14 +125,16 @@ def main() -> int:
             # typeshed 将其声明为 TextIO | Any，TextIO 抽象基无该方法，故收窄到真实类型。
             cast("io.TextIOWrapper", sys.stdout).reconfigure(encoding="utf-8")
             cast("io.TextIOWrapper", sys.stderr).reconfigure(encoding="utf-8")
-        except AttributeError, OSError:
+        except (AttributeError, OSError):
             pass
 
     if not PO_PATH.exists():
         print(f"ERROR: 未找到 {PO_PATH}", file=sys.stderr)
         return 2
     entries = parse_po(PO_PATH)
-    fresh = write_mo(entries, MO_PATH)  # --check 模式也需要产出以做字节比对
+    # 先纯内存产出编译结果；--check 分支绝不触碰磁盘上的 .mo，否则读回自己刚写的
+    # 文件必然相等，校验恒真、门禁形同虚设。
+    fresh = write_mo(entries)
 
     if "--check" in sys.argv:
         committed = MO_PATH.read_bytes() if MO_PATH.exists() else b""
@@ -147,6 +147,7 @@ def main() -> int:
         print(f"OK: {MO_PATH.name} 与 .po 同步（{len(entries)} 条）")
         return 0
 
+    MO_PATH.write_bytes(fresh)
     print(f"OK: 已生成 {MO_PATH}（{len(entries)} 条，{len(fresh)} 字节）")
     return 0
 

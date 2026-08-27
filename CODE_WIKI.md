@@ -264,7 +264,7 @@ DouyinLiveRecorder/
 ├── .coveragerc-concurrency             # 并发测试专用覆盖率配置（CI concurrency-test job 使用，不设全局阈值）
 ├── scripts/                             # 辅助脚本
 │   ├── check_version.py                # 版本号一致性校验（CI static job 调用）
-│   ├── compile_po.py                   # gettext 翻译编译（.po → .mo；--check 校验同步，CI static job 调用）
+│   ├── compile_po.py                   # gettext 翻译编译（.po → .mo；--check 零副作用校验同步，CI static job 调用）
 │   └── sync_version.py                 # 版本号同步脚本（pyproject → 各文档）
 ├── Dockerfile                          # Docker 构建文件（多阶段）
 ├── docker-compose.yaml                 # Docker Compose（recorder/web/gui 三服务）
@@ -288,8 +288,8 @@ DouyinLiveRecorder/
 │   ├── test_concurrency.py             # 线程安全并发测试
 │   ├── test_i18n.py                    # i18n 翻译加载/环境变量独立性/po-mo 同步回归测试
 │   ├── test_anchor_rename.py           # 主播名自动同步测试（config_io.update_anchor_name + main.rename_anchor_directory）
-│   ├── test_scheduler.py               # 调度器测试（ResizableSemaphore / PlatformBreaker / ConcurrencyScheduler 共 15 用例）
-│   ├── test_record_failure_feedback.py # 录制结果反馈测试（成功样本/快速失败退避/慢速失败/缺 -i/容量回退共 5 用例）
+│   ├── test_scheduler.py               # 调度器测试（ResizableSemaphore / PlatformBreaker / ConcurrencyScheduler 共 16 用例）
+│   ├── test_record_failure_feedback.py # 录制结果反馈测试（成功样本/快速失败退避/慢速失败/缺 -i/容量回退/直下失败与成功样本共 7 用例）
 │   ├── test_stream_select.py           # 流选择与探针退避标记测试
 │   ├── test_cookie_cache.py            # 访客 Cookie 缓存测试
 │   ├── test_danmaku_monitor.py         # 弹幕监控枢纽测试
@@ -575,30 +575,37 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 
 - `translated_print` 包装 `builtins.print`，自动翻译调用者来自项目根（`src/` 包及 `main.py` 等顶层脚本）的输出；`main.py` 导入时无条件安装 `builtins.print = translated_print`（任何语言下均安装——zh_CN/zh_TW 把英文常量串译为中文，en_US/en_GB 把中文串译为英文，未知串恒等返回）
 - 支持源码运行和 PyInstaller 打包两种路径检测（`_internal/i18n` vs `i18n/`）
-- **多格式目录加载（2026-08 起）**：`i18n.py` 按语言依次探测 gettext `.mo` → `<lang>.json` → `<lang>.yaml`，三种格式均为「原文 → 译文」扁平映射，行为一致；`PyYAML` 为运行时依赖（缺失时仅损失 YAML 格式支持）
-- **语言热切换**：`set_language(lang)` 归一化（`normalize_language` 别名表：zh_cn/zh-CN/en/en-US/zh-Hant/zh_CN.UTF-8 等写法均可）后热替换 `_tr` 翻译函数，无需重启进程。三个切换入口：Web 面板（`GET/PUT /api/language`，写回 config + 热切换 + 前端 `data-i18n` 文案重绘）、GUI（侧边栏「语言 Language」菜单）、CLI 主循环（每轮按 config 重同步）
+- **多格式目录加载（2026-08 起）**：`i18n.py` 按语言依次探测 gettext `.mo` → `<lang>.json` → `<lang>.yaml`，三种格式均为「原文 → 译文」扁平映射，行为一致；`PyYAML` 为运行时依赖（缺失时仅损失 YAML 格式支持）。`_load_yaml_catalog()` 捕获 `yaml.YAMLError`（非 OSError/ValueError 子类）——损坏的 yaml 目录返回 None 降级到下一格式，而非让 `set_language` 抛异常（Web 语言切换接口 500）
+- **语言热切换**：`set_language(lang)` 归一化（`normalize_language` 别名表：zh_cn/zh-CN/en/en-US/zh-Hant/zh_CN.UTF-8 等写法均可）后热替换 `_tr` 翻译函数，无需重启进程。三个切换入口：Web 面板（`GET/PUT /api/language`，写回 config + 热切换 + 前端 `data-i18n` 文案重绘；`PUT` 在配置缺 `language` 键时降级为节末追加补建，不再恒 500）、GUI（侧边栏「语言 Language」菜单）、CLI 主循环（每轮按 config 重同步）
 - 默认语言：简体中文（zh_CN）；受支持语言：zh_CN / en_US / en_GB / zh_TW
 
 **翻译文件**:
 
-| 文件                                | 说明                                       | 条目数 |
-| --------------------------------- | ---------------------------------------- | --- |
-| `i18n/zh_CN/LC_MESSAGES/zh_CN.po` | 简体中文翻译源文件（gettext，可编辑）                   | 282 |
-| `i18n/zh_CN/LC_MESSAGES/zh_CN.mo` | 编译后的二进制翻译文件（gettext 运行时唯一读取，随仓库/镜像分发）    | 282 |
-| `i18n/en_US.json`                 | 英语（美国）目录（JSON 格式，英文源恒等 + 中文源译英）          | 282 |
-| `i18n/en_GB.json`                 | 英语（英国）目录（JSON 格式，英式拼写：minimise/log in 等） | 282 |
-| `i18n/zh_TW.yaml`                 | 繁体中文目录（YAML 格式，简→繁字符转换 + 台湾用语适配）         | 282 |
+| 文件                                | 说明                                             | 条目数 |
+| --------------------------------- | ---------------------------------------------- | --- |
+| `i18n/zh_CN/LC_MESSAGES/zh_CN.po` | 简体中文翻译源文件（gettext，可编辑）                         | 496 |
+| `i18n/zh_CN/LC_MESSAGES/zh_CN.mo` | 编译后的二进制翻译文件（gettext 运行时唯一读取，随仓库/镜像分发）          | 496 |
+| `i18n/en_US.json`                 | 英语（美国）目录（JSON 格式，英文源恒等 + 中文源译英）                | 496 |
+| `i18n/en_GB.json`                 | 英语（英国）目录（JSON 格式，英式拼写：minimise/unrecognised 等） | 496 |
+| `i18n/zh_TW.yaml`                 | 繁体中文目录（YAML 格式，简→繁字符转换 + 台湾用语适配）               | 496 |
 
-**维护流程**: 修改 `.po` 后必须执行 `python scripts/compile_po.py` 重新编译并一并提交 `.mo`，否则翻译改动不会生效；`python scripts/compile_po.py --check`（CI `static` job）会在两者不同步时拦截。**四种语言的目录键集合必须一致**（`tests/test_i18n.py::test_catalogs_share_same_keyset` 强制校验）——新增 msgid 时需同步更新四个目录。
+**维护流程**: 修改 `.po` 后必须执行 `python scripts/compile_po.py` 重新编译并一并提交 `.mo`，否则翻译改动不会生效；`python scripts/compile_po.py --check`（CI `static` job）在两者不同步时拦截——其内部 `write_mo()` 为**纯内存产出不落盘**，`--check` 模式零副作用、真实比对磁盘上已提交的 `.mo`，仅非 check 模式才写盘。CI 路径过滤器（paths-filter）将 `i18n/**` 视为触发条件：纯翻译变更同样会运行该门禁。**四种语言的目录键集合必须一致**（`tests/test_i18n.py::test_catalogs_share_same_keyset` 强制校验）——新增 msgid 时需同步更新四个目录。
 
-**翻译覆盖范围**:
+**翻译覆盖范围**（2026-08-27 全量补全后，覆盖运行时全部常量串与 logger 模板底稿）:
 
-- `src/spider.py` — 各平台直播数据获取消息（36 条）
-- `main.py` — 主程序通用消息（82 条）
-- `gui.py` — GUI 界面消息（69 条）
-- `src/room.py` — 直播间信息解析异常消息（3 条）
-- `src/utils.py` — 配置文件读写、磁盘空间消息（6 条）
-- `src/notify.py` — bash 脚本 shebang 缺失提示（1 条）
+- `src/spider.py` — 各平台直播数据获取/登录/风控消息（含 B站 buvid 认证链路）
+- `main.py` — 主程序通用消息、录制链、画质降级、主播名同步、磁盘空间
+- `gui.py` — GUI 界面消息（控件文本、进程管理、托盘、退出确认）
+- `src/scheduler.py` — 并发模式切换与容量调整播报
+- `src/stream_select.py` — 流地址校验全套消息（探针退避、GET 复核、末位放行）
+- `src/collector.py` / `src/danmaku_monitor.py` — 弹幕采集与监控
+- `src/async_http.py` / `src/sync_http.py` / `src/cookie_cache.py` — HTTP 客户端与 cookie 缓存
+- `msg_push.py` — 七渠道推送失败分支（微信/钉钉/TG/Bark/ntfy/PushPlus/邮件）
+- `src/ffmpeg_install.py` / `src/node_install.py` — ffmpeg/Node.js 自动安装
+- `src/config_io.py` / `src/utils.py` — 配置读写、备份、磁盘空间
+- `src/notify.py` — 自定义脚本执行错误
+- `web.py` / `src/web_tray.py` — Web 面板启动与托盘
+- `src/room.py` / `src/recorder_status.py` / `src/ttwid.py` / `src/ffmpeg_proc.py` / `src/platforms/bilibili.py` / `src/platforms/douyin.py` / `build_exe.py` — 其余运行时消息
 
 > 注：运行时真正参与翻译查找的是 `print()` 输出的常量英文串；`logger.*` 输出与 f-string 插值后的文本不经过查找，目录中相关条目仅作为后续日志接入 i18n 时的现成翻译底稿保留。
 
@@ -812,9 +819,7 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 **核心类**:
 
 - **`ResizableSemaphore`**: 可运行时调容的信号量，实现上下文管理器协议。支持 `set_value(n)` 运行时增减容量——增大时唤醒相应数量的等待者，减小时仅降低上限、不强行回收已持有槽位。`__init__` / `set_value` 允许容量为 0（暂停态）。消除旧「销毁重建信号量」的竞态风险。
-
-- **`PlatformBreaker`**: 按 key（host）隔离的熔断器，实现 `closed → open → half-open` 三态状态机。连续失败样本比例超阈值即 open（跳过探测并进入冷却），冷却后经**唯一**探针放行；探针成功恢复 closed、失败重新 open。用于将单平台抖动隔离降级，避免连锁拖垮全局。
-
+- **`PlatformBreaker`**: 按 key（host）隔离的熔断器，实现 `closed → open → half-open` 三态状态机。连续失败样本比例超阈值即 open（跳过探测并进入冷却），冷却后经**唯一**探针放行；探针成功恢复 closed、失败重新 open。用于将单平台抖动隔离降级，避免连锁拖垮全局。**探针带租约（`_PROBE_LEASE_SECONDS = 60s`，2026-08-27 起）**：探针被授予后超过租约仍未回报样本（主播未开播等待轮、`disable_record`、房间线程退出等不触发 `record` 的路径）时，`allow()` 重新授予探针实现自愈——无租约时 `_probing` 标志永不复位会导致该 host 永久熔断直到进程重启。
 - **`ConcurrencyScheduler`**: 调度中枢，整合自适应容量、平台熔断、录制并发上限三大能力。
   - **网络并发容量** = `max(配置下限, min(上限, ceil(活跃数/缩放因子)))`；错误率极高时温和降容但永不低于安全下限（默认 min=8 / max=128）
   - **自适应模式**（默认，`最大同时录制数(0为不限制) = 0`）：容量随活跃任务数动态缩放，错误率反馈驱动温和背压
@@ -824,25 +829,28 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 
 **关键函数**:
 
-- `host_of(url)`: 从 URL 提取主机名（小写、去端口/路径/查询）作为熔断 key；自定义 flv/m3u8 直链退回路径本身
-- `allow(key)`: 预检指定 host 是否已熔断，返回 False 时调用方应跳过本轮探测
+- `host_of(url)`: 从 URL 提取主机名（截到首个 `/`、`?`、`#` 为止，小写、保留端口）作为熔断 key；空串或解析异常统一归 `"unknown"`（互不相关的坏 URL 共享同一熔断 key，粗粒度兜底）
+- `allow(key)`: 预检指定 host 是否已熔断，返回 False 时调用方应跳过本轮探测；half-open 态带探针租约（见 `PlatformBreaker`）
 - `record_error(key)` / `record_success(key)`: 按 host 计入成功/失败样本，驱动熔断器状态迁移
 
 **接线点**（固定几处，不改动 50+ 平台分派函数）:
 
 - `notify.record_error/record_success` 增 `key` 形参，委托给 `scheduler`
 - `start_record` 入口在平台分派前做 `scheduler.allow(record_host)` 熔断预检
+- `start_record` 解析成功分支（`anchor_name` 非空）上报 `record_success(record_host)`——half-open 探针依赖本轮结果闭环，探针房间进入长时间录制期间同 host 其余房间不再饿死
 - `check_subprocess` 的录制循环受 `recording_semaphore` 管控
 - `main()` 首轮初始化调度器，`semaphore` / `recording_semaphore` 指向其属性
 
+**线程安全**（2026-08-27 加固）: 配置字段（模式/配置上限/活跃数/错误窗口）由 main 主线程与 `adjust_loop` 守护线程并发读写，`_compute_capacity()` 单次加锁快照全部可变输入、`set_configured_limit()` / `set_dynamic_mode()` 锁内写入（幂等检查与写入原子）；`Lock` 不可重入，所有 setter 在锁释放后再调 `recompute()`，全链路无嵌套持锁。
+
 **配置项**:
 
-| 配置项 | 说明 | 默认值 |
-|--------|------|--------|
-| 最大同时录制数(0为不限制) | 0=不限制（同时兼作并发模式开关：0=动态调速，非0=固定并发） | 0 |
-| 同一时间访问网络的线程数 | 动态模式下为容量下限之一；固定模式下为固定并发限制值 | 3 |
+| 配置项            | 说明                               | 默认值 |
+| -------------- | -------------------------------- | --- |
+| 最大同时录制数(0为不限制) | 0=不限制（同时兼作并发模式开关：0=动态调速，非0=固定并发） | 0   |
+| 同一时间访问网络的线程数   | 动态模式下为容量下限之一；固定模式下为固定并发限制值       | 3   |
 
-**测试**: `tests/test_scheduler.py` 共 15 用例，覆盖信号量调容、熔断器状态机、自适应容量缩放/下限、固定并发模式、按 key 隔离、录制并发软上限等。
+**测试**: `tests/test_scheduler.py` 共 16 用例，覆盖信号量调容、熔断器状态机（含探针租约超时自愈）、自适应容量缩放/下限、固定并发模式、按 key 隔离、录制并发软上限等。
 
 ---
 
@@ -936,6 +944,7 @@ def host_of(url: str) -> str: ...
 | uvicorn[standard] | >=0.51.0  | ASGI 服务器                                          |
 | python-multipart  | >=0.0.32  | 表单/文件上传解析                                         |
 | pydantic          | >=2.13.4  | 请求模型校验                                            |
+|                   |           |                                                   |
 
 > 注 1：Weverse 平台认证由 `src/weverse_auth.py` 通过 requests 直接调用 API 实现，
 >
@@ -1557,6 +1566,186 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 ---
 
 ## 更新日志
+
+### v4.0.9.1-dev (2026-08-27) — i18n 本地化系统修复（Python 2 风格 `except` 多异常 → 元组括号）+ zh_CN.mo 重编译
+
+**变更摘要**：本条目记录 2026-08-27 晚会话对本地化子系统的修复，是同日首轮「四语本地化目录统一」的真正收尾。首轮虽完成 288 → 492 条补全，但 `zh_CN.mo` 的重编译动作当时被阻断——`i18n.py` 与 `scripts/compile_po.py` 残留 Python 2 风格 `except A, B:`（含一例三异常 `except A, B, C:`）多异常写法，属 Python 3 硬 `SyntaxError`：`compile_po.py` 无法执行、`.mo` 无法产出，`i18n.py` 自身无法 `import`（翻译系统整体不可用）。本次将四处 `except` 统一改为 `except (A, B, ...):`（行为不变、纯语法合法化），打通编译链路并重新产出与当前 `zh_CN.po` 对齐的 `zh_CN.mo`（496 条）。
+
+**涉及文件（按模块分类）**：
+
+**一、国际化模块（修改内容）**
+
+- `i18n.py`：三处 `except` 多异常逗号写法改为元组括号（行为不变）：
+  - `i18n.py:202` `except OSError, ValueError:` → `except (OSError, ValueError):`；
+  - `i18n.py:218` `except OSError, ValueError, yaml.YAMLError:` → `except (OSError, ValueError, yaml.YAMLError):`（三异常逗号写法在任意 Python 版本均非法，是真正的致命点）；
+  - `i18n.py:320` `except ValueError, AttributeError:` → `except (ValueError, AttributeError):`。
+  - 修复后 `py_compile` 通过、`import i18n` 正常（`_load_translations(locale_path, 'zh_CN')` 可加载 496 条）。
+- `scripts/compile_po.py`：`scripts/compile_po.py:128` `except AttributeError, OSError:` → `except (AttributeError, OSError):`。修复后编译脚本可正常执行。
+
+**二、构建产物（重新生成）**
+
+- `i18n/zh_CN/LC_MESSAGES/zh_CN.mo`：语法修复后执行 `python scripts/compile_po.py` 重新生成（与当前 `zh_CN.po` 对齐，496 条含 gettext 头，`--check` 字节级同步）。
+
+**改动说明**：
+
+- **为何是阻断性缺陷**：首轮「全量补全」的 `zh_CN.mo` 实际从未成功落盘（编译脚本自身无法被 Python 解析）。i18n 以包装 `builtins.print` 实现翻译，`i18n.py` 一旦 `SyntaxError` 即整个 `import` 失败，CLI 入口 `main.py` 顶部 `import i18n` 失败将导致程序无法启动，GUI/Web 语言切换与全部本地化随之失效。
+- **对首轮「PEP 758 合法 / 未改动」评估的订正**：同日二轮复查条目声称「全仓 16 处 `except A, B:` 在 3.14 下合法、未改动」。本会话证明 `i18n.py` / `compile_po.py` 的上述 4 处写法中，三异常逗号形式在任意版本均非法；两异常逗号形式虽在 Python 3.14（PEP 758 允许省略元组括号）语法合法，但在本项目受管 3.13 运行时（质量门禁与编译所用）仍是 `SyntaxError`。改为 `except (A, B):` 后对所有 ≥3.13 版本均合法，且与 3.14 语义等价，是最稳妥修复。该订正仅针对这两文件，不影响首轮对 `src/notify.py` 等其余 `except A, B:` 现场的判定。
+- **§8 翻译文件表条目数**：同步由 492 更新为 496（对齐当前 `.po`/`.mo` 实际 496 条）。
+
+**影响范围**：
+
+- `i18n.py` 可正常导入，四语本地化（CLI 打印 / GUI / Web 语言切换）恢复可用；`scripts/compile_po.py` 可重复执行，`.mo` 编译与 CI `--check` 门禁链路打通。
+- `zh_CN.mo` 与当前 `zh_CN.po`（496 条）重新对齐，简体中文运行时翻译完整。
+- 源码功能逻辑零变化，仅 `except` 多异常语法形式调整（4 处）。
+
+**验证**：
+
+- `python3 -m py_compile i18n.py scripts/compile_po.py`：通过；全仓 `except A, B` 裸逗号写法 grep 复核为零。
+- `python3 -c "import i18n"`：成功导入；`i18n._load_translations(i18n.locale_path, 'zh_CN')` 加载 496 条无异常。
+- `python scripts/compile_po.py`：OK，生成 `zh_CN.mo`；`python scripts/compile_po.py --check`：`.mo` 与 `.po` 同步（496 条）。
+
+**关联**：
+
+- v4.0.9.1-dev (2026-08-27) 首轮「四语本地化目录统一」——本条目打通其被阻断的 `.mo` 重编译动作，是首轮本地化补全的真正收尾；
+- v4.0.9.1-dev (2026-08-27) 二轮复查条目「PEP 758 合法 / 未改动」评估的针对性订正（限 `i18n.py` 与 `compile_po.py` 两文件）。
+
+### v4.0.9.1-dev (2026-08-27) — 二轮复查修复（compile_po --check 恒真 + 直下失败采样缺口 + i18n/Web 缺口补全）
+
+**变更摘要**：本条目系统性记录 2026-08-27 第二次会话对工作树的九项改动（三路子代理并行复查 + 人工交叉验证后按 P1/P2 优先级逐项修复）。① **P1 门禁失效**：`scripts/compile_po.py --check` 先落盘再读回比对恒等、CI 的 po/mo 同步门禁形同虚设，且 ci.yml 路径过滤器不含 `i18n/**`（纯翻译变更连测试 job 都不触发）；② **P1 熔断采样缺口**：直下下载路径的「非 200 / 网络异常」失败在函数内部消化成 `False`，调用方两个分支均不上报样本，坏线路绕开按 host 熔断统计被无限重撞；③ **P2×4**：内层监测循环丢失弹幕参数每轮重置、`PUT /api/language` 在配置缺键时恒 500、前端约十处硬编码中文绕过翻译字典、ISSUE_TEMPLATE Python 版本缺 3.14；④ **存量清理×2**：`src/async_http.py` 两处裸 `logger.debug(e)` 与 build-release.yml 残留 Debug 步骤。另有重要澄清：全仓 16 处 `except A, B:` 裸逗号多异常为 **Python 3.14 PEP 758 合法语法**（语法与运行时捕获均实测通过），首次机器审查因不了解该特性误报为致命语法错误，本次未做任何改动。全量验证 **744 passed, 2 skipped**。
+
+**涉及文件（按模块分类）**：
+
+**一、构建 / CI / 社区模板（修改内容 + 删除项）**
+
+- `scripts/compile_po.py`：
+  - **`write_mo()` 改为纯内存产出**（去除 `path.write_bytes()` 写盘副作用与 `path` 参数）：原先 `main()` 在 `--check` 分支之前无条件调用 `write_mo(entries, MO_PATH)` 把新编译结果写盘覆盖 `.mo`，随后 `committed = MO_PATH.read_bytes()` 读回的是自己刚写的文件，`committed != fresh` 分支不可达、校验恒真；
+  - **落盘决策上移至调用方**：非 check 模式在打印成功消息前显式 `MO_PATH.write_bytes(fresh)`；`--check` 模式全程不触碰磁盘，真实比对已提交的 `.mo`；
+  - 头部用法注释补「零副作用不写盘」语义说明。
+- `.github/workflows/ci.yml`：paths-filter 的 `python` 过滤器新增 `- 'i18n/**'` 并同步修正注释——此前 static job（含 compile_po --check）不随纯翻译变更触发，是「改 .po 忘编译 .mo 可全绿合入」的第二根因。
+- `.github/workflows/build-release.yml`：删除 release job 末尾残留的无用步骤 "Debug inputs"（tag 路径下仅产生无意义输出）。
+- `.github/ISSUE_TEMPLATE/bug.yml` / `bug_en.yml` / `question.yml` / `question_en.yml`：Python 版本下拉补 `- Python 3.14` 选项（项目要求 ≥3.14，源码运行用户此前被迫选 Other，版本信息采集失真）。
+
+**二、录制主链（修改内容）**
+
+- `main.py`：
+  - **直下路径失败样本补报**（`start_record` 直下分支）：`if download_success:` 记成功样本之后新增 `elif record_url not in url_comments and not exit_recording: record_error(record_host)`——`direct_download_stream` 的「非 200」（CDN 拒绝，虎牙式签名）与「网络异常」（httpx 异常已被函数内部 except 消化）都表现为 `return False`，走不到外层 try 的 `record_error`；shopee/花椒直播这类直下专用平台被拒时不再绕开熔断统计无限重撞死线路。「被注释 / 退出标志」的中断不计样本；
+  - **弹幕参数每轮重置恢复**：内层监测循环顶部（`exit_recording` 检查前）补 `record_danmaku_args = None`（AGENTS.md「每轮重置为 None」约定；此前的重构把原有两处轮内重置点合并成了 try 顶部单次初始化）；函数 `_resolve_platform_stream` 返回值每轮解包刷新、使用前必然重新赋值，故实际危害有限，属防御性收敛；
+  - **两处日志规范化**：`direct_download_stream` 非 200 分支补请求 URL 上下文、异常分支补 `{type(e).__name__}`（Windows 下超时类异常 `str()` 为空串，裸打无线索）。
+- `src/async_http.py`（存量清理）：`_close_all_clients()` 与 `async_req()` 主异常分支的两处裸 `logger.debug(e)` 规范为 `f"<动作>: {url} - {type(e).__name__}: {e}"` 格式（对齐同文件 `get_response_status` 已有范例；异常吞掉返回空值契约不变，仅日志可观测性增强）。
+
+**三、Web 配置与 API（新增功能 + 修改内容）**
+
+- `src/web_config.py`：新增 `append_config_line(config_file, section, key, value)`——缺键补建的行级追加（`update_config_line` 只做替换、键或节缺失时返回 False）。把 `key = value` 插入目标节内（下一节头之前），节缺失时文件尾新建；与 `update_config_line` 相同的行级文本风格，注释、空行、节顺序全部保留；末行无尾换行时先补换行避免粘连污染。
+- `src/web_api.py`：`PUT /api/language` 写回降级链路——行级替换失败（历史 config.ini 无 `language` 键、Web 先于引擎首轮读配置启动的窗口）时调用 `append_config_line` 节末追加补建，仍失败才 500。
+
+**四、Web 前端（修改内容）**
+
+- `web/app.js`：约十处硬编码中文字符串改走内嵌四语字典 `t()`（与文件其余部分风格一致地包 `esc()`）——录制表空态 `empty.noRecording`、弹幕流空态 `danmaku.noData`、截断提示 `danmaku.truncated`、开关 toast `toast.enabled/disabled`、操作失败 `toast.opFailed`、配置页空态 `config.none` 与加载失败 `loadFailed`、文件列表空态 `files.emptyDir` 与进入/下载按钮 `rooms.enter/rooms.download`、下载失败 `toast.downloadFailed`。字典键均已存在，纯调用点遗漏，英文/繁体界面这些位置不再显示简体中文。
+
+**五、测试（新增功能 + 修改内容）**
+
+- `tests/test_record_failure_feedback.py`：新增 `_FakeStreamResponse` / `_FakeHttpClient` httpx 流式替身（`__exit__` 返回类型标注 `None` 规避 mypy `exit-return`），新增 2 用例：`test_direct_download_stream_rejects_non_200_as_failure`（非 200 → False 失败契约）、`test_direct_download_stream_writes_chunks_on_success`（逐块写入 → True），5 → 7 用例；头部背景注释补直下路径采样约定说明。
+- `tests/test_web_api.py`：新增 `test_put_language_missing_key_appends_and_succeeds`（配置无 `[录制设置]`/`language` 键时 PUT 不再 500 且补建正确、不影响已有 `[Web]` 节）、`test_append_config_line_edge_cases`（目标节存在且夹注释 / 目标节为最后一节且文件无尾换行 / 节缺失三种形态），并修正旧注释坦承的「update_config_line 行级更新需键已存在，手工预写键掩盖了真实路径」。
+- `tests/test_i18n.py`：`test_po_and_mo_in_sync` 适配 `write_mo()` 新签名（去 path 参数，取返回值直接比对），移除随之冗余的 `tempfile` 导入。
+
+**六、文档（修改内容）**
+
+- `CODE_WIKI.md` / `CODE_WIKI_EN.md`（本条目）：目录树 tests 注释更新（test_record_failure_feedback 7 用例、compile_po 零副作用）；第 3.x 节 i18n 维护流程补 `write_mo()` 纯内存产出 / `--check` 零副作用 / paths-filter 含 `i18n/**`；语言热切换条目补 PUT 缺键降级追加；第 8 节 CI job 表 static 描述不变（行为语义未变）。
+
+**改动说明**：
+
+- **为何 --check 必须零副作用**：校验逻辑的本质是「工作区产物 ↔ 已提交工件」的一致性检查，若校验过程先覆盖被检对象，则任何时刻都自洽——这是 CI 门禁失效的最典型形态。配套的 paths-filter 缺口意味着唯一真正有效的兜底（`tests/test_i18n.py::test_po_and_mo_in_sync` 字节级断言）恰好不被触发，两层防线同时失守才使该缺陷长期潜伏。
+- **直下路径样本分支的条件设计**：`record_url not in url_comments and not exit_recording` 用于区分「真失败」与「人为中断」——中断轮线程即将退出、不应向熔断器注入噪声样本；竞态窗口（判定瞬间 URL 恰被注释）最坏只是少记一个样本，无害。
+- **PEP 758 澄清**（对未来评审重要）：Python 3.14 起 `except A, B:` 与 `except (A, B):` 完全等价（PEP 758 允许省略异常元组括号），本项目 requires-python ≥3.14 下全仓 16 处裸逗号写法**合法且已在 3.14.7 运行时实测**。机器审查基于 ≤3.13 的知识将其误报为 import 即崩的致命错误；今后工具链升级或新代理接入时勿重复此类误判。
+- **append_config_line 的边界处理**：经新增边界用例发现并修复一处初版缺陷——源文件末行无换行符时，「插入到文件中间」路径会先于拼接污染原末行，补偿逻辑从新建节分支提升为统一前置处理。
+
+**影响范围**：
+
+- CI i18n 门禁恢复正常职能：此后任何「改 .po 忘记重编译 .mo」都会被 static job 拦截（哪怕 PR 只动了 i18n/\*\*）。
+- shopee / 花椒直播直下平台的高频拒绝线路将正常积累熔断错误预算，达到阈值后退避放并发槽给其他平台，而非秒级死循环。
+- 「最大同时录制数(0为不限制)」兼作并发模式开关的调度语义、探针退避白名单、HLS/FLV 选源行为均零变化。
+- 面板英文/繁体用户的动态文案（toast/空态/按钮）完整本地化；静态 `data-i18n` 文案此前已覆盖不受影响。
+
+**验证**：
+
+- `pytest -q` 全量：**744 passed, 2 skipped**（36.3s，净增 4 新用例）；
+- `black --check .`（2 个新测试文件按 120 列重排后复验）/ `isort --check-only .`：114 files unchanged / 通过（`.isorted` 备份已清理）；
+- `mypy src/` + `mypy --platform linux src/`：双平台 `Success: no issues found in 38 source files`；`mypy tests/`：46 文件 0 错误（修复了自引入 Fake 替身 `__exit__ -> bool` 的 exit-return 报错）；
+- `basedpyright tests/`：0 errors / 0 warnings / 0 notes；
+- `python scripts/compile_po.py --check`：`.mo` 与 `.po` 同步（493 条），且实测运行前后 `.mo` md5 不变（零副作用生效）；node --check 校验 app.js 语法通过；六处 YAML 变更逐一 safe_load 通过；
+- 前端硬编码残留 grep 复核为零（仅剩字典定义本身）。
+
+**关联**：
+
+- v4.0.9.1-dev (2026-08-27) 首轮审查条目（探针租约自愈 + 解析成功采样）的同日续作——首轮确立「按退出码/解析结果上报样本」框架，本轮堵住其直下路径旁路与门禁侧漏洞；
+- v4.0.9-dev (2026-08-23)「录制结果反馈调度器」——直下失败采样是其「与 ffmpeg 路径语义对齐」目标的最后一块拼图（当时注释误以为 False 仅来自异常路径）；
+
+
+- v4.0.9-dev (2026-08-24)「四语本地化目录统一」与 Web 语言热切换——本轮修复的是热切换写入侧与前端动态文案侧的两处收尾缺口。
+
+### v4.0.9.1-dev (2026-08-27) — 代码审查修复（熔断探针租约自愈 + 调度成功采样）+ 调度器线程安全加固 + i18n 四目录全量补全（288 → 492 条）
+
+**变更摘要**：本条目系统性记录 2026-08-27 会话对工作树的三批改动。① **代码审查修复**：全量质量门禁（pytest 738 passed / black / isort / mypy 双平台 / basedpyright 全绿）+ 三路子代理并行审查，发现并修复 1 个高危、3 个中危缺陷——`PlatformBreaker` half-open 探针泄漏致 host 永久熔断（探针轮以 `continue` 结束且不触发 `record` 时 `_probing` 永不复位）、探针成功信号延迟到 ffmpeg 退出（同 host 其余房间长时间饿死）、`notify.py` 三参 `getattr` Any 泄漏（mypy 假绿）、`i18n.py` YAML 解析异常未捕获（损坏 zh_TW.yaml 致 `PUT /api/language` 500）；② **审查遗留项修复**：`notify.py` 裸 `logger.error(e)`（Windows 下 `socket.timeout` 的 `str()` 为空、日志失去线索）、`scheduler.py` `host_of` 注释与实现不符、调度器配置字段无锁读写；③ **i18n 目录全量补全**：AST 扫描运行时代码 `print()`/`logger.*()` 常量串（47 个文件、355 个串），比对四语目录后新增 204 条翻译条目（288 → 492）并重编译 `zh_CN.mo`。全量验证后 **740 passed, 2 skipped**。
+
+**涉及文件（按模块分类）**：
+
+**一、并发调度模块（新增功能 + 修改内容）**
+
+- `src/scheduler.py`：
+  - **新增探针租约**（修复高危缺陷）：模块常量 `_PROBE_LEASE_SECONDS = 60.0`；`PlatformBreaker` 新增 `_probe_granted_at` 字段，`allow()` 授予 half-open 探针时记录时间戳，超时未回报样本（未开播等待轮、`disable_record`、房间线程退出等不触发 `record` 的路径）则重新授予探针实现自愈——此前 `_probing` 永不复位会导致该 host 永久熔断直到进程重启；
+  - **配置字段加锁**（线程安全加固）：`_compute_capacity()` 改为单次加锁快照全部可变输入（模式/配置/活跃数/错误窗口，多字段读取一致性）；`recompute()` 日志分支锁内快照；`set_configured_limit()` 锁内写入；`set_dynamic_mode()` 幂等检查与写入同锁原子（read-modify-write）。`Lock` 不可重入，所有 setter 均在锁释放后再调 `recompute()`，全链路无嵌套持锁；
+  - **`host_of()` 注释修正**：原注释称「去端口/自定义直链退回路径本身」与实现不符（实现保留端口、仅返回 host、坏 URL 统一归 `"unknown"` 共享熔断 key），改为如实描述。
+- `main.py`：`start_record` 解析成功分支（`port_info["anchor_name"]` 非空）新增 `record_success(record_host)`——与解析失败分支的 `record_error` 对称。修复探针成功信号延迟：此前成功样本仅在 ffmpeg `rc==0` 时上报，half-open 探针房间进入长时间录制期间，同 host 其余房间持续熔断饿死。
+- `src/notify.py`：
+  - `record_error` / `record_success` 中三参 `getattr(main, "scheduler", None)` 改为直接访问 `main.scheduler`（AGENTS.md 禁令：三参 getattr 返回 `Any`，调用点类型检查静默失效）；
+  - `run_script` 三处裸 `logger.error(e)` 补齐「动作 + 对象 + 异常类型」（`PermissionError`/`OSError`/`ValueError` 分支均带 `command` 与 `type(e).__name__`）。
+
+**二、国际化模块（修改内容）**
+
+- `i18n.py`：`_load_yaml_catalog()` 的 `except` 补 `yaml.YAMLError`（ParserError/ScannerError 非 OSError/ValueError 子类，不捕获则损坏的 yaml 会让 `set_language` 抛异常、Web 语言切换接口直接 500）。
+- `i18n/zh_CN/LC_MESSAGES/zh_CN.po`：新增 204 条（288 → 492），含日期分节注释、头部 `PO-Revision-Date` 更新至 2026-08-27；重编译 `zh_CN.mo`（493 条含头部伪键，59,810 字节，`--check` 字节级同步）。
+- `i18n/en_US.json` / `i18n/en_GB.json` / `i18n/zh_TW.yaml`：同步追加 204 条（各 288 → 492），四语键集完全一致。翻译覆盖新增：并发调度与熔断日志、流地址校验全套消息（`src/stream_select.py`）、B站 buvid 认证链路（`src/platforms/bilibili.py`）、弹幕采集/监控（`src/collector.py`/`src/danmaku_monitor.py`）、七渠道推送失败分支（`msg_push.py`）、ffmpeg/Node.js 安装（`src/ffmpeg_install.py`/`src/node_install.py`）、配置读写（`src/config_io.py`）、主播名同步、web/gui/build_exe 冒烟输出等。
+
+**三、GUI 模块（修改内容）**
+
+- `gui.py`：新增 `_bootstrap_crash_reported` 模块级标记——`_bootstrap_error_sink` 处理 `main()` 顶层异常并置位后，re-raise 触发的 `_install_crash_sink` excepthook 钩子据此跳过（此前同一异常双弹窗、日志文件含双份堆栈：`"w"` 覆盖写 + `"a"` 追加写）。
+
+**四、测试（新增功能）**
+
+- `tests/test_scheduler.py`：新增 `test_platform_breaker_probe_lease_regrants_after_timeout`（探针租约超时重授予 → 新探针成功上报 → closed 的自愈全链路），15 → 16 用例。
+- `tests/test_i18n.py`：新增 `test_load_yaml_catalog_corrupted_returns_none`（损坏 YAML 返回 None 降级，不抛异常）。
+
+**五、文档（修改内容）**
+
+- `AGENTS.md`：版本号 4.0.8.3 → 4.0.9.1（对齐 `pyproject.toml` 唯一事实源）；「并发与线程模型」补记 PlatformBreaker 探针租约约定（含删除会回归永久熔断的警示）；「录制结果反馈约定」补记解析成功轮采样约定（与「轮末无条件 record_success」禁令的边界澄清）；`tests/test_scheduler.py` 用例数 15 → 16。
+- `CODE_WIKI.md` / `CODE_WIKI_EN.md`（本条目）：第 8 节翻译文件表条目数 282 → 492、覆盖范围更新；第 15 节 `PlatformBreaker` 补探针租约、`host_of` 描述对齐实现、接线点补解析成功采样、测试数 15 → 16。
+
+**改动说明**：
+
+- **探针租约与成功采样的关系**：两者互补——解析成功采样让「探针轮正常流转」的场景即时闭环（探针房间未开播时每轮 `record_success` 使熔断器恢复 closed）；租约是「探针轮完全不上报样本」路径（线程退出、禁录等）的兜底自愈。单独删除任一层都会回归相应缺陷。
+- **加锁对行为的零影响**：锁内快照/写入与锁释放后 `recompute()` 的顺序保证无嵌套持锁（`Lock` 不可重入）；`__init__` 中 `_lock` 先于 `_compute_capacity()` 首次调用创建，初始化顺序安全。既有 16 个调度用例全部通过。
+- **i18n 补全方法论**：以 AST 静态提取（`print()` 全部常量参数 + `logger.debug/info/warning/error/...` 首参常量与 f-string 模板还原）为权威基线，排除 5 条无翻译价值项（纯格式模板 `{color}{text}{Color.RESET}`、`{'=' * 60}` 装饰线、`{rec_info}/{filename}` 无自然语言、1 条与既有键仅占位符写法不同的近重复），更新脚本内置「提取键集 ↔ 翻译表键集」双向断言防抄写误差。
+
+**影响范围**：
+
+- 熔断器在高频失败平台（虎牙/斗鱼 CDN 抖动）下的自愈能力显著增强——此前一旦进入 half-open 且探针轮未开播，该平台所有房间永久退避；同 host 多房间场景（B站/抖音批量监控）不再因单房间长录制而饿死其余房间。
+- 损坏的 `zh_TW.yaml` 从「Web 语言切换 500」降级为「该语言目录跳过、回退下一格式」。
+- 运行时并发容量计算逻辑（动态/固定双模式、错误背压）语义零变化——加锁仅消除理论竞态（GIL 下 int/bool 原子，瞬态旧值仅影响单轮容量、5s 后 recompute 纠正）。
+
+**验证**：
+
+- `pytest -q` 全量：**740 passed, 2 skipped**（34.8s，含新增 2 用例）；
+- `black --check .` / `isort --check-only .`：114 files unchanged / 通过；
+- `mypy src/` + `mypy --platform linux src/` + `mypy` 根目录三入口：全部 `Success`；
+- `basedpyright tests/`：0 errors / 0 warnings；
+- `python scripts/compile_po.py --check`：`.mo` 与 `.po` 同步（493 条）；
+- 四语键集断言：`set(en_US) == set(en_GB) == set(zh_TW) == set(.mo 条目)`（492 条）；运行时抽查 `i18n._tr` 四种语言各取新条目均正确译出。
+
+**关联**：
+
+- 与 v4.0.9-dev (2026-08-24)「高并发多平台录制调度与资源管理优化」同源——本次为其 `PlatformBreaker` 补上探针租约自愈、为 `ConcurrencyScheduler` 补上线程安全与解析成功采样；
+- 与 v4.0.9-dev (2026-08-23)「录制结果反馈调度器」同源——解析成功轮采样是该反馈体系的补全（此前仅 ffmpeg 退出码与直下路径上报）；
+- 与 v4.0.9-dev (2026-08-24)「四语本地化目录统一」同源——本次将目录从 288 条扩至 492 条，收录范围从 print 常量串扩展到全仓 logger 模板底稿。
 
 ### v4.0.9-dev (2026-08-24) — 本次改动总览（按模块分类）
 

@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from starlette.responses import Response
 
 from src.web_config import (
+    append_config_line,
     format_url_line,
     hash_web_password,
     is_hashed_web_password,
@@ -389,7 +390,10 @@ def create_app(
             raise HTTPException(400, f"不支持的语言: {req.language}")
         normalized = i18n_module.normalize_language(req.language)
         if not update_config_line(cast(str, app.state.config_file), "录制设置", "language", normalized):
-            raise HTTPException(500, "语言配置写回失败")
+            # 键不存在（历史 config.ini 无 language 键，Web 先于引擎首轮读配置启动）：
+            # 行级替换失败时降级为节末追加补建，仍失败才 500
+            if not append_config_line(cast(str, app.state.config_file), "录制设置", "language", normalized):
+                raise HTTPException(500, "语言配置写回失败")
         _ = i18n_module.set_language(normalized)
         return {"ok": True, "language": normalized}
 

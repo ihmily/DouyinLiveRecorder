@@ -8,11 +8,17 @@
 # AdvancedSettingsWindow（config.ini 编辑器）、Colors / Fonts（主题与字体）。
 from __future__ import annotations
 
-
 # 窗口化运行（pythonw / PyInstaller console=False 冻结 exe）下 sys.stderr 为
 # None，任何未捕获异常（含模块顶层 import 失败、后台线程异常）都会被静默吞掉，
 # 表现为“启动后无窗口、无报错”。这里在一切风险导入之前安装全局异常钩子，
 # 把堆栈落盘到临时目录并尽力弹窗，保证可观测。
+#
+# 防重复上报标记：main() 顶层异常先经 _bootstrap_error_sink 落盘弹窗再 re-raise，
+# 随后会再次触发本钩子——同一异常若不去重会弹两个相同错误框、日志写两份堆栈
+# （_bootstrap_error_sink 以 "w" 覆盖写，本钩子以 "a" 追加写，最终文件含双份）。
+_bootstrap_crash_reported = False
+
+
 def _install_crash_sink() -> None:
     import os
     import sys
@@ -28,6 +34,10 @@ def _install_crash_sink() -> None:
         exc_value: BaseException,
         exc_tb: TracebackType | None,
     ) -> None:
+        global _bootstrap_crash_reported
+        if _bootstrap_crash_reported:
+            # _bootstrap_error_sink 已处理同一异常（落盘+弹窗），跳过避免双份上报
+            return
         try:
             text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
         except Exception:
@@ -3022,6 +3032,9 @@ class LiveRecorderGUI:
 # sys.stderr 为 None，任何启动期未捕获异常会被静默吞掉，表现为“启动后
 # 无窗口、无报错”。这里把堆栈落盘到临时目录并弹窗，保证可观测。
 def _bootstrap_error_sink(exc: BaseException) -> None:
+    # 置位防重复上报标记：re-raise 后触发的 excepthook 钩子据此跳过（避免双弹窗/双落盘）
+    global _bootstrap_crash_reported
+    _bootstrap_crash_reported = True
     tb_text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
     try:
         import tempfile
