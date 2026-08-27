@@ -13,6 +13,7 @@
 import ast
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -103,27 +104,19 @@ def is_valuable(text: str) -> bool:
         return False
     if set(text.strip()) <= set("=-.*#|+_/ \t\r\n"):
         return False
-    if not any(ch.isalpha() or "\u4e00" <= ch <= "\u9fff" for ch in text):
-        return False
-    # 纯占位符序列（{a}{b}{c} 无任何裸自然语言字符）
-    stripped = text
-    for ch in "{}":
-        stripped = stripped.replace(ch, "")
-    if not any(ch.isalpha() or "\u4e00" <= ch <= "\u9fff" for ch in stripped.split("'")[0]):
-        # 占位符内容多为标识符（字母），先剥掉 {...} 块再判断是否残留自然语言
-        import re
-
-        residue = re.sub(r"\{[^{}]*\}", "", text)
-        if not any("\u4e00" <= ch <= "\u9fff" for ch in residue) and not any(
-            ch.isalpha() for ch in residue.split()[:1] if residue.split()
-        ):
-            return False
-    return True
+    # 剥掉 {expr} 占位符块后须残留自然语言（CJK 或字母词），否则属纯占位符
+    # 模板（如 {color}{text}{Color.RESET} / {rec_info}/{filename}），无翻译价值。
+    # 注意不能先剥花括号再查字母：占位符表达式内的标识符（color/Color）也是字母，
+    # 会让纯模板被误判为有价值——必须以「花括号块之外」的残渣为准。
+    residue = re.sub(r"\{[^{}]*\}", "", text)
+    return any(ch.isalpha() or "\u4e00" <= ch <= "\u9fff" for ch in residue)
 
 
 def load_catalog_keys() -> dict[str, set[str]]:
     compile_po = _load_compile_po()
-    keys = {"zh_CN(po)": set(parse_keys(compile_po))}
+    # 剔除 gettext 头部空 msgid ""：JSON/YAML 目录本就不含它（运行时加载亦会 pop），
+    # 不剔除会让一致性比对永远报「少 1」的假阳性
+    keys = {"zh_CN(po)": set(parse_keys(compile_po)) - {""}}
     for lang in ("en_US", "en_GB"):
         keys[f"{lang}.json"] = set(json.loads((ROOT / "i18n" / f"{lang}.json").read_text(encoding="utf-8-sig")))
     import yaml

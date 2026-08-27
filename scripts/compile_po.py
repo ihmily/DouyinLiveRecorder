@@ -125,7 +125,7 @@ def main() -> int:
             # typeshed 将其声明为 TextIO | Any，TextIO 抽象基无该方法，故收窄到真实类型。
             cast("io.TextIOWrapper", sys.stdout).reconfigure(encoding="utf-8")
             cast("io.TextIOWrapper", sys.stderr).reconfigure(encoding="utf-8")
-        except (AttributeError, OSError):
+        except AttributeError, OSError:
             pass
 
     if not PO_PATH.exists():

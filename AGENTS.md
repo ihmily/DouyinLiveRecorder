@@ -65,6 +65,9 @@ ignore_missing_imports = true
 ├── build_exe.py         # PyInstaller 打包脚本
 ├── pyproject.toml       # 项目元数据 + 工具配置
 ├── requirements.txt     # 运行时依赖（与 pyproject.toml 同步）
+├── uv.lock              # uv 锁文件（随仓库分发；镜像/CI 用 pip 走 requirements.txt，不消费它）
+├── Dockerfile           # Docker 镜像构建（python:3.14-slim 多阶段 + Node 24 LTS）
+├── docker-compose.yaml  # compose 编排（recorder / web / gui 三模式服务）
 │
 ├── src/                 # 核心源码包
 │   ├── __init__.py      # 包出口（含 get_danmaku_collector 工厂）
@@ -123,7 +126,10 @@ ignore_missing_imports = true
 │   ├── customtkinter/   # customtkinter 类型存根（__init__.pyi）
 │   ├── execjs/          # PyExecJS 类型存根（多个 .pyi）
 │   └── pystray/         # pystray 类型存根（__init__.pyi）
-└── .github/workflows/   # CI/CD（GitHub Actions 构建发布）
+│
+└── .github/
+    ├── actions/retry/   # 复合动作：网络安装重试包装（ci.yml / build-release.yml 共用）
+    └── workflows/       # CI/CD（ci.yml 门禁 + build-release.yml 构建发布）
 ```
 
 ## 入口点
@@ -162,7 +168,7 @@ asyncio_mode = "auto"
 - 运行测试: `pytest`
 - **tests/ 质量门禁（2026-08 起全绿，须保持）**: `pytest`（0 警告）、`black --check tests/`、`isort --check-only tests/`、`mypy tests/`、`basedpyright tests/`（0 error/0 warning）
 - 覆盖率源码: `src/`
-- 覆盖率排除: `tests/`, `__pycache__/`, `node/`, `ffmpeg/`
+- 覆盖率排除: `tests/`, `__pycache__/`, `node/`, `ffmpeg/`, `.mimosa/`
 - 逐模块覆盖率门禁: `python scripts/check_coverage.py`（CI 自动执行，阈值定义见脚本 `MODULE_THRESHOLDS`）
 - 并发测试专用覆盖率配置: `.coveragerc-concurrency`（随仓库分发，CI 经 `COVERAGE_RCFILE` 引用，`fail_under = 0`）
 - 创建/更新测试: 使用 [test-creator Skill](.qoder/skills/test-creator/SKILL.md) 标准化流程（源码分析 → Mock 配置 → 验证执行）
@@ -224,6 +230,26 @@ docker compose up -d             # 使用 docker-compose.yaml（APP_VERSION 可�
   - `_finish()` **仅当进程已退出且输出含 FATAL_MARKERS 才判失败**；进程仍存活时输出里的 Traceback
     视为良性（长驻程序运行期可能打印可恢复异常）。
   - GUI 冒烟用 `ignore_patterns=("Failed to dock icon",)` 忽略 headless 环境下 pystray 的良性堆栈。
+
+### CI / workflow 约定（2026-08-28 定稿）
+
+- **网络安装重试统一走 `.github/actions/retry` 复合动作**（线性退避，`attempts` / `backoff` / `label`
+  可参数化）：`ci.yml`（9 处）与 `build-release.yml`（4 处）的 pip / apt / choco / brew 安装步骤全部经它
+  包装，**禁止在 job 内重新内联 `for i in 1 2 3` 重试循环**——重试策略调整只改 action.yml 一处。
+- **actions 大版本基线 v7**：`checkout` / `setup-python` / `setup-node` / `upload-artifact` 统一 v7，
+  两个 workflow 保持一致，避免行为漂移（`dorny/paths-filter@v4` / `codecov-action@v5` 维持现状）。
+- **版本常量跨 workflow 同值**：`python_build`（3.14）与 `node_version`（24）在 ci.yml 的 setup job 与
+  build-release.yml 的 prepare job 各自声明，**改一处须同步另一处**（保证「CI 验证的打包环境 ==
+  实际发布的打包环境」）。
+- **macOS brew 的 tap 信任是独立步骤**（`brew trust aws/tap || true`，幂等、不随重试重复执行）；
+  `HOMEBREW_*` 环境变量写在命令内 `export`（复合动作对调用方 step 级 env 的可见性无官方保证）。
+- **触发与并发策略有意区分**：ci.yml 限 main 的 push / PR + `cancel-in-progress: true`（快速反馈）；
+  build-release.yml 由 `v*` tag 触发 + `cancel-in-progress: false`（发布流不可半途取消）。
+- **dockerignore / gitignore 同源约定**：本地工具生成目录（`.mimosa/`、`.qoder/`、`.agents/`、
+  `.pnpm-store/`、`.dsh-validation/`、`.ego-browser-test/`、`.plugin-src/`、`.tmp-dps-extract/`、
+  `pytest-cache-files-*/`）须在两份 ignore 文件与 pyproject 各工具排除列表中同步维护，漏一处即
+  出现「未跟踪目录 / 误入镜像 / 工具误扫描」。镜像额外排除 `uv.lock` / `scripts/` / `AGENTS.md` /
+  `README_EN.md` / `CODE_WIKI_EN.md` / `.coveragerc-concurrency`（运行时链路不消费）。
 
 ## 格式化命令
 
@@ -341,7 +367,7 @@ mypy src/
 4. **运行时资源**: `config/`, `ffmpeg/`, `node/` 与 exe 保持同级，不进入 `_internal/`
 5. **JS 签名脚本**: 位于 `src/javascript/`，通过 `__file__` 定位，打包时收入 `_internal/`
 6. **编码与注释风格**: 源文件统一 UTF-8，注释统一用中文
-   - **注释一律用 `#` 行注释，禁止 `"""..."""` docstring**：模块/类/函数的说明也写成 `#` 注释置于定义上方。全仓已 100% 满足——`src/` 39 个模块（含 `src/platforms/`）、`main.py`/`gui.py`/`gui_legacy.py`/`web.py`/`i18n.py`/`msg_push.py`、`scripts/`、`tests/` 均为 **0 处 docstring**，新增与重构代码须保持
+   - **注释一律用 `#` 行注释，禁止 `"""..."""` docstring**：模块/类/函数的说明也写成 `#` 注释置于定义上方。全仓已 100% 满足——`src/` 41 个模块（含 `src/platforms/`、`src/proto/`）、`main.py`/`gui.py`/`gui_legacy.py`/`web.py`/`i18n.py`/`msg_push.py`、`scripts/`、`tests/` 均为 **0 处 docstring**，新增与重构代码须保持
    - **例外**：多行字符串**字面量**不属 docstring，合法保留（如 `build_exe.py` 的 `SPEC_TEMPLATE = """\...` PyInstaller spec 模板）
 7. **排除目录**: `node/`, `ffmpeg/`, `downloads/`, `__pycache__/` 在所有工具中均排除
 
@@ -360,7 +386,7 @@ mypy src/
 - **UA 双端一字不差约定与全库统一基准**：录制拉流链的 UA 存在两组"必须一字不差"的配对——`main.py` ffmpeg 命令默认移动 UA ≡ `stream_select.MOBILE_UA`（校验探针与 ffmpeg 客户端指纹一致，否则校验假红/假绿）；`room.HEADERS` 的 UA 参与 X-Bogus 签名（签名以请求头同一 UA 计算、自洽，改字符串安全但四处须同步：`stream_select.MOBILE_UA`、`main.py` ffmpeg 默认 UA、`room.HEADERS`、B站 H5 接口 UA）。全库统一基准（2026-08）：桌面 Chrome/141（对齐 `room.DESKTOP_UA`）、Edg/141、Firefox/148（rv:148.0）、移动端 `Android 14; Pixel 8` Chrome/141——新增 UA 或升级版本时必须对齐该基准，禁止回落 Chrome≤138/Firefox≤127/SamsungBrowser 等过旧指纹（过旧 UA 是风控按指纹识别的特征之一）。
 - **探针节流/抖动语义不得移除**：`src/stream_select.py` 的同 host 探针节流（`_throttle_probe`，`_PROBE_MIN_HOST_INTERVAL=0.35s`+抖动，按 host 全局限速）与重试抖动（`_recheck_delay`，`0.8s+uniform(0,0.7s)`）用于消除两类机器人节奏指纹：多房间并发下同 CDN 的毫秒级连击探针、固定 0.8s 恒定重试间隔。把重试间隔改回固定值或移除节流会重新引入"按节奏识别→误触发 403"的风控误伤（实测虎牙/斗鱼 CDN 均有此行为）。测试侧依赖 autouse fixture 把 `_throttle_probe` 置 no-op（部分用例 patch 整个 time 模块，真实节流的时间差比较会炸）；节流专项测试经 from-import 的真实函数引用绕过 no-op。
 - **「禁用SSL证书验证的平台」仅在需要证书校验时生效（FFmpeg 9.0 语义）**：FFmpeg 9.0 起 TLS 证书验证默认开启。`http_config.get_effective_ssl_verify` 的平台覆盖仅在全局 `ssl_verify=True`（http 录制模式，即需要证书校验时）参与读取；https 录制模式全局已禁用、平台覆盖无意义。`main.py` 启动时经 `_sync_ssl_disable_platforms` 把证书异常平台（虎牙直播/B站直播，`SSL_DISABLE_REQUIRED_PLATFORMS`）自动追加至配置键并写回——只追加、绝不移除用户手填项。`update_config_line` 的键匹配为大小写不敏感（与 configparser optionxform 语义对齐），改回精确匹配会导致代码常量（大写 SSL/SMTP）与配置文件行（小写）无法互找。
-- **i18n 多格式目录与语言热切换**：`i18n.py` 按语言依次探测 gettext `.mo` → `<lang>.json` → `<lang>.yaml`（zh_CN 用 .mo、en_US/en_GB 用 .json、zh_TW 用 .yaml）；四种目录键集合必须一致（test_i18n.py 强制）。`set_language()` 热替换 `_tr` 供 Web（PUT /api/language）/GUI（侧边栏语言菜单）/main 主循环（每轮重同步）即时切换；语言配置键为 `language`，统一经 `i18n.resolve_language` 解析——留空 → 系统语言（`detect_system_language`：环境变量 → Windows UI 语言 → POSIX locale），键值不可识别或语言目录文件缺失 → 回退 `FALLBACK_LANGUAGE`（en_US）。值经 `normalize_language` 归一（别名表键统一为「小写+连字符」形态）。修改 zh_CN.po 后必须 `python scripts/compile_po.py` 重编译 .mo（测试强制字节级同步）。
+- **i18n 多格式目录与语言热切换**：`i18n.py` 按语言依次探测 gettext `.mo` → `<lang>.json` → `<lang>.yaml`（zh_CN 用 .mo、en_US/en_GB 用 .json、zh_TW 用 .yaml）；四种目录键集合必须一致（test_i18n.py 强制）。`set_language()` 热替换 `_tr` 供 Web（PUT /api/language）/GUI（侧边栏语言菜单）/main 主循环（每轮重同步）即时切换；语言配置键为 `language`，统一经 `i18n.resolve_language` 解析——留空 → 系统语言（`detect_system_language`：环境变量 → Windows UI 语言 → POSIX locale），键值不可识别或语言目录文件缺失 → 回退 `FALLBACK_LANGUAGE`（en_US）。值经 `normalize_language` 归一（别名表键统一为「小写+连字符」形态）。修改 zh_CN.po 后必须 `python scripts/compile_po.py` 重编译 .mo（测试强制字节级同步）。新增待翻译串的提取用 `python scripts/extract_i18n_strings.py`（AST 扫描 print 常量串 + logger f-string 模板底稿并与四语目录比对；f-string 模板归一化约定：格式/转换符丢弃、表达式内双引号转单引号；纯占位符模板如 `{color}{text}` 无翻译价值、不收录）。
 - **migu.js 输出契约为完整签名 URL**：2026-08 重写后的 `src/javascript/migu.js` 适配 migu 播放器 v_20260731+ 的 wasm 接口（导入函数 a..l 共 12 个、导出名整体重排：memory=m/malloc=p/CI1=t…CI14=F），并改为输出带 `ddCalcu`/`sv` 参数的**完整地址**（sv 由官网因子接口获取，失败回退播放器内置默认因子）；`spider.get_migu_stream_url` 直接使用该 URL，不再拼接固定 `sv=10010`（已过期）。
 - **Node 24 / FFmpeg 9.0 兼容基线（2026-08）**：Node 运行时以 24.19.0 实测为准（全部 JS 签名脚本 + migu.js 通过），Dockerfile 随之安装 Node 24 LTS；FFmpeg 以 9.0 为基线——9.0 移除的 CLI 参数（`-vsync`/`-top`/`-qphist`/`-filter_complex_script`/`-adrift_threshold`）禁止引入，录制命令中的冗余 `-v verbose` 已删除（被 `-loglevel error` 覆盖）。
 - **`asyncio.get_event_loop()` 3.14 起不再隐式创建事件循环**：当前线程无循环时抛 `RuntimeError`（≤3.13 为隐式创建+DeprecationWarning）。`src/async_http.py` 的 `close_all_clients_sync`（atexit/信号钩子调用）已改为捕获 RuntimeError 后走引用清理兜底；协程内获取循环一律用 `get_running_loop()`，atexit 类同步清理如需复用已存在的循环，保持「try get_event_loop / except RuntimeError → 引用清理」结构，不要改回裸调用。

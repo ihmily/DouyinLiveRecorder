@@ -1,0 +1,71 @@
+# =============================================================================
+# 复合动作：网络安装类命令的统一重试包装
+# -----------------------------------------------------------------------------
+# 用途：pip / apt 等网络安装步骤偶发失败（PyPI 抖动、源镜像瞬断）时按线性
+#       退避重试，避免整条流水线因瞬时网络问题变红。
+# 收敛动机：ci.yml 原先 8 处、build-release.yml 4 处几乎相同的内联重试脚本，
+#       重试策略（次数 / 退避基数）改动需要逐处手改、极易漂移；抽到此处后
+#       改一处即全部生效（默认值在 inputs.default 声明）。
+#
+# 用法示例（调用方传 with，command 中可直接内联 ${{ needs.xxx.outputs.yyy }}，
+# 表达式在调用处先展开为字面量，再进入本动作执行）：
+#   - name: Install dependencies
+#     uses: ./.github/actions/retry
+#     with:
+#       label: pip 安装依赖
+#       command: >-
+#         python -m pip install --upgrade pip
+#         && pip install -r requirements.txt
+#
+# 语义约定：
+#   · command 以 bash 语义经 `bash -c` 执行，支持 && 链接，失败即整体重试；
+#   · 第 n 次失败后等待 n × backoff 秒再重试（线性退避）；
+#   · 连续 attempts 次失败才判错退出（exit 1），单次失败仅 ::warning 不阻断。
+# =============================================================================
+name: retry
+description: Retry a shell command with linear backoff (for network installs)
+
+inputs:
+  command:
+    description: 要执行的命令（bash 语义，支持 &&；失败时整体重试）
+    required: true
+  label:
+    description: 失败日志中的操作名称（用于 ::warning / ::error 归因）
+    required: false
+    default: "command"
+  attempts:
+    description: 最大尝试次数
+    required: false
+    default: "3"
+  backoff:
+    description: 线性退避基数秒数（第 n 次失败后等待 n × backoff 秒）
+    required: false
+    default: "10"
+
+runs:
+  using: composite
+  steps:
+    # 复合动作的 run 步骤必须显式声明 shell；输入经 env 传入，
+    # 避免 command 内容被 shell 展开两次（表达式已在调用处求值为字面量）。
+    - name: Run "${{ inputs.label }}" with retry
+      shell: bash
+      env:
+        RETRY_COMMAND: ${{ inputs.command }}
+        RETRY_ATTEMPTS: ${{ inputs.attempts }}
+        RETRY_BACKOFF: ${{ inputs.backoff }}
+        RETRY_LABEL: ${{ inputs.label }}
+      run: |
+        set -euo pipefail
+        attempt=1
+        while [ "$attempt" -le "$RETRY_ATTEMPTS" ]; do
+          if bash -c "$RETRY_COMMAND"; then
+            echo "${RETRY_LABEL} 成功（第 ${attempt} 次尝试）"
+            exit 0
+          fi
+          wait_seconds=$(( attempt * RETRY_BACKOFF ))
+          echo "::warning::${RETRY_LABEL} 失败（第 ${attempt}/${RETRY_ATTEMPTS} 次），${wait_seconds}s 后重试"
+          sleep "$wait_seconds"
+          attempt=$(( attempt + 1 ))
+        done
+        echo "::error::${RETRY_LABEL} 连续 ${RETRY_ATTEMPTS} 次失败（网络异常或源不可用）"
+        exit 1

@@ -1,5 +1,5 @@
 # =============================================================================
-# CI —— 静态检查 / 测试 / 构建验证
+# CI —— 静态检查 / 类型检查 / 测试 / 构建验证
 # -----------------------------------------------------------------------------
 # 技术栈事实（本文件所有步骤均按此适配，勿凭猜测改动）：
 #   · 纯 Python 项目（requires-python >= 3.14，target py314），**无前端构建**
@@ -13,8 +13,35 @@
 #     故 pip 缓存 key 以这两个文件的 hash 为准。
 #   · 打包由根目录 build_exe.py（PyInstaller）承担，本地与 CI 行为一致。
 #
-# 版本 / 超时 / 重试 / 缓存 策略与 build-release.yml **保持一致**，
-# 全部集中在下方 setup job 的 outputs 中声明（单一事实源，改一处即全局生效）。
+# Job 拓扑（lint / type / test / build 六路并行，收尾串行汇总）：
+#
+#   setup ──┬── static             格式 / 导入序 / 版本一致性 / i18n po-mo 同步
+#           ├── typecheck          mypy（最低支持版本 3.14，结论对最老解释器成立）
+#           ├── test               pytest 矩阵（3.14 / 3.15）+ 全局与逐模块覆盖率门禁
+#           ├── concurrency-test   线程安全 / 跨事件循环锁 / 速率限制专项
+#           ├── integration-verify ffmpeg / node 真实环境探测验证
+#           └── build-verify       PyInstaller lite 打包 + CLI/Web/GUI 三入口冒烟
+#                            └────► ci-summary（唯一 required check，汇总上游结果）
+#
+#   职责边界：**本工作流止于验证，不含部署 / 发布**——Release 产出由
+#   build-release.yml（tag 触发）承担；两者的版本常量与打包解释器经各自的
+#   consts 步骤保持同值（python_build / node_version），改一处须同步另一处。
+#
+# ---------------------------------------------------------------------------
+# 统一策略（全 job 生效，勿在个别 job 内局部偏离）：
+#   · actions 大版本：checkout@v7 / setup-python@v7 / setup-node@v7 /
+#     upload-artifact@v7 —— 与 build-release.yml 完全一致，避免两份工作流
+#     各自漂移出不同版本的 action 行为。
+#   · 依赖缓存：统一 setup-python 内置 pip 缓存，key =
+#     hash(requirements.txt + pyproject.toml)（无 lock 文件）；setup-node
+#     不开缓存（仓库无 package.json，开了会直接报错）。
+#   · 超时：每个 job 显式 timeout-minutes（含 setup / summary 轻量 job），
+#     卡死不再白烧默认 6 小时额度。
+#   · 网络重试：pip / apt 安装统一经 .github/actions/retry 复合动作
+#     （线性退避 ×3），实现收敛在 action.yml 一处，勿在 job 内重新内联。
+#   · apt 强化参数（与 build-release.yml 的 Linux 构建一致）：
+#     DEBIAN_FRONTEND=noninteractive（防交互卡死）+ Acquire::Retries=3
+#     （apt 自身网络重试）+ --no-install-recommends（免装推荐包，更快更省盘）。
 #
 # ---------------------------------------------------------------------------
 # 环境变量与 Secrets 说明
@@ -37,6 +64,8 @@
 name: CI
 
 on:
+  # 触发范围固定 main：push 与 PR 都收敛到主干，
+  # feature 分支的逐 push 不跑全量门禁（省额度，PR 阶段已覆盖同样的检查）。
   push:
     branches:
       - main
@@ -51,6 +80,7 @@ permissions:
   contents: read
 
 # 同一分支/PR 的新推送会取消尚未完成的旧运行，节省额度并加快反馈
+# （与 build-release.yml 的 cancel-in-progress: false 有意区分：发布流不可半途取消）
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -79,7 +109,7 @@ jobs:
       filters: ${{ steps.filter.outputs.changes }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Declare shared constants
         id: consts
@@ -89,14 +119,14 @@ jobs:
           # python_min     : 最低支持版本，用作 mypy 目标与覆盖率门禁基准版本
           # python_latest  : 最高支持版本，用作格式化检查（与 black target-version 上界对齐）
           # python_matrix  : 测试矩阵取「最低 + 最高」两端边界，兼顾覆盖面与额度成本；
-          #                  当前基线仅 3.14，矩阵含 3.15 为向前兼容预检。
+          #                  当前基线仅 3.14，矩阵含 3.14 为向前兼容预检。
           # python_build   : 打包解释器版本，**必须与 build-release.yml 的 python_build 同值**，
           #                  保证「CI 验证的打包环境」等于「实际发布的打包环境」。
           # node_version   : 仅供 JS 签名脚本运行时探测使用（非前端构建）
           {
             echo "python_min=3.14"
             echo "python_latest=3.14"
-            echo 'python_matrix=["3.14","3.14"]'
+            echo 'python_matrix=["3.13","3.14"]'
             echo "python_build=3.14"
             echo "node_version=24"
           } >> "$GITHUB_OUTPUT"
@@ -110,8 +140,9 @@ jobs:
             echo "mypy_version=2.3.0"
           } >> "$GITHUB_OUTPUT"
 
-      # 仅当 Python 源码 / 测试 / 项目配置变更时才跑重活；
-      # 纯文档（*.md）、前端静态资源（web/）、翻译（i18n/）变更不触发。
+      # 仅当 Python 源码 / 测试 / 项目配置 / 翻译目录变更时才跑重活；
+      # 纯文档（*.md）、前端静态资源（web/）变更不触发。
+      # i18n/** 必须触发：static job 的 compile_po --check 是 .po/.mo 同步的唯一 CI 门禁。
       - name: Detect path changes
         uses: dorny/paths-filter@v4
         id: filter
@@ -121,6 +152,7 @@ jobs:
               - 'src/**'
               - 'tests/**'
               - 'scripts/**'
+              - 'i18n/**'
               - 'build_exe.py'
               - 'main.py'
               - 'gui.py'
@@ -133,21 +165,21 @@ jobs:
               - '.coveragerc-concurrency'
               - '.github/workflows/**'
 
-  # ── 1. 静态检查（格式 / 导入序 / 版本一致性）─────────────────────────────
-  # 三项检查都是「秒级、零运行时依赖」，合并进同一 job 可省去 2 次 runner 冷启动
+  # ── 1. 静态检查（格式 / 导入序 / 版本一致性 / 翻译同步）─────────────────
+  # 四项检查都是「秒级、零运行时依赖」，合并进同一 job 可省去 3 次 runner 冷启动
   # （约 30~60s），同时用独立 step 名保留清晰的失败归因。
   static:
-    name: Static Checks (black / isort / version)
+    name: Static Checks (black / isort / version / i18n)
     needs: setup
     if: contains(fromJSON(needs.setup.outputs.filters), 'python')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Setup Python ${{ needs.setup.outputs.python_latest }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ needs.setup.outputs.python_latest }}
           # 内置 pip 缓存：无 lock 文件，故以 requirements.txt + pyproject.toml 为 key
@@ -156,23 +188,14 @@ jobs:
             requirements.txt
             pyproject.toml
 
-      - name: Install lint tools (retry x3)
-        shell: bash
-        env:
-          BLACK_VERSION: ${{ needs.setup.outputs.black_version }}
-          ISORT_VERSION: ${{ needs.setup.outputs.isort_version }}
-        run: |
-          set -euo pipefail
-          for i in 1 2 3; do
-            if python -m pip install --upgrade pip \
-              && pip install "black==${BLACK_VERSION}" "isort==${ISORT_VERSION}"; then
-              exit 0
-            fi
-            echo "::warning::pip 安装失败（第 ${i}/3 次），$((i * 10))s 后重试"
-            sleep $((i * 10))
-          done
-          echo "::error::pip 安装连续 3 次失败（PyPI 网络异常）"
-          exit 1
+      # 版本号在调用处的 with 里展开为字面量，再进入 retry 动作执行（无隐式 env 依赖）
+      - name: Install lint tools
+        uses: ./.github/actions/retry
+        with:
+          label: pip 安装 lint 工具（black / isort）
+          command: >-
+            python -m pip install --upgrade pip
+            && pip install "black==${{ needs.setup.outputs.black_version }}" "isort==${{ needs.setup.outputs.isort_version }}"
 
       # 排除目录由 pyproject.toml [tool.black].exclude 声明，此处无需重复传参
       - name: Run black --check
@@ -203,10 +226,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Setup Python ${{ needs.setup.outputs.python_min }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ needs.setup.outputs.python_min }}
           cache: pip
@@ -214,22 +237,13 @@ jobs:
             requirements.txt
             pyproject.toml
 
-      - name: Install dependencies (retry x3)
-        shell: bash
-        env:
-          MYPY_VERSION: ${{ needs.setup.outputs.mypy_version }}
-        run: |
-          set -euo pipefail
-          for i in 1 2 3; do
-            if python -m pip install --upgrade pip \
-              && pip install -r requirements.txt "mypy==${MYPY_VERSION}"; then
-              exit 0
-            fi
-            echo "::warning::pip 安装失败（第 ${i}/3 次），$((i * 10))s 后重试"
-            sleep $((i * 10))
-          done
-          echo "::error::pip 安装连续 3 次失败（PyPI 网络异常）"
-          exit 1
+      - name: Install dependencies
+        uses: ./.github/actions/retry
+        with:
+          label: pip 安装依赖（requirements + mypy）
+          command: >-
+            python -m pip install --upgrade pip
+            && pip install -r requirements.txt "mypy==${{ needs.setup.outputs.mypy_version }}"
 
       - name: Run mypy
         run: mypy src/
@@ -250,10 +264,10 @@ jobs:
         python-version: ${{ fromJSON(needs.setup.outputs.python_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Setup Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -262,36 +276,23 @@ jobs:
             pyproject.toml
 
       # ffmpeg：部分测试会探测 ffmpeg 可用性；apt 装轻量版即可（非打包用途）
-      - name: Install ffmpeg (retry x3)
-        shell: bash
-        run: |
-          set -euo pipefail
-          for i in 1 2 3; do
-            if sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg; then
-              exit 0
-            fi
-            echo "::warning::apt 安装 ffmpeg 失败（第 ${i}/3 次），$((i * 10))s 后重试"
-            sleep $((i * 10))
-          done
-          echo "::error::apt 安装 ffmpeg 连续 3 次失败"
-          exit 1
+      - name: Install ffmpeg (apt)
+        uses: ./.github/actions/retry
+        with:
+          label: apt 安装 ffmpeg
+          command: >-
+            sudo env DEBIAN_FRONTEND=noninteractive apt-get update -qq -o Acquire::Retries=3
+            && sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg
 
       # pytest-asyncio 由 pyproject [tool.pytest.ini_options] asyncio_mode = "auto" 驱动；
       # pytest-cov 必装：scripts/check_coverage.py 依赖其产出的 .coverage 数据文件。
-      - name: Install dependencies (retry x3)
-        shell: bash
-        run: |
-          set -euo pipefail
-          for i in 1 2 3; do
-            if python -m pip install --upgrade pip \
-              && pip install -r requirements.txt pytest pytest-asyncio pytest-cov; then
-              exit 0
-            fi
-            echo "::warning::pip 安装失败（第 ${i}/3 次），$((i * 10))s 后重试"
-            sleep $((i * 10))
-          done
-          echo "::error::pip 安装连续 3 次失败（PyPI 网络异常）"
-          exit 1
+      - name: Install dependencies
+        uses: ./.github/actions/retry
+        with:
+          label: pip 安装依赖（requirements + pytest）
+          command: >-
+            python -m pip install --upgrade pip
+            && pip install -r requirements.txt pytest pytest-asyncio pytest-cov
 
       # 全局覆盖率下限 fail_under = 50 由 pyproject [tool.coverage.report] 强制
       - name: Run pytest with coverage
@@ -336,10 +337,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Setup Python ${{ needs.setup.outputs.python_min }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ needs.setup.outputs.python_min }}
           cache: pip
@@ -347,20 +348,13 @@ jobs:
             requirements.txt
             pyproject.toml
 
-      - name: Install dependencies (retry x3)
-        shell: bash
-        run: |
-          set -euo pipefail
-          for i in 1 2 3; do
-            if python -m pip install --upgrade pip \
-              && pip install -r requirements.txt pytest pytest-asyncio pytest-cov; then
-              exit 0
-            fi
-            echo "::warning::pip 安装失败（第 ${i}/3 次），$((i * 10))s 后重试"
-            sleep $((i * 10))
-          done
-          echo "::error::pip 安装连续 3 次失败（PyPI 网络异常）"
-          exit 1
+      - name: Install dependencies
+        uses: ./.github/actions/retry
+        with:
+          label: pip 安装依赖（requirements + pytest）
+          command: >-
+            python -m pip install --upgrade pip
+            && pip install -r requirements.txt pytest pytest-asyncio pytest-cov
 
       - name: Run concurrency tests
         env:
@@ -383,10 +377,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Setup Python ${{ needs.setup.outputs.python_min }}
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ needs.setup.outputs.python_min }}
           cache: pip
@@ -400,38 +394,27 @@ jobs:
           node-version: ${{ needs.setup.outputs.node_version }}
           # 无 package.json / lock 文件，开启 npm 缓存会直接报错，故不设置 cache
 
-      - name: Install ffmpeg (retry x3)
-        shell: bash
-        run: |
-          set -euo pipefail
-          for i in 1 2 3; do
-            if sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg; then
-              exit 0
-            fi
-            echo "::warning::apt 安装 ffmpeg 失败（第 ${i}/3 次），$((i * 10))s 后重试"
-            sleep $((i * 10))
-          done
-          echo "::error::apt 安装 ffmpeg 连续 3 次失败"
-          exit 1
+      # PATH 探测先行（fail fast）：二进制不可用时不必再装 Python 依赖
+      - name: Install ffmpeg (apt)
+        uses: ./.github/actions/retry
+        with:
+          label: apt 安装 ffmpeg
+          command: >-
+            sudo env DEBIAN_FRONTEND=noninteractive apt-get update -qq -o Acquire::Retries=3
+            && sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg
 
       - name: Verify binaries are discoverable
         run: |
           ffmpeg -version | head -1
           node --version
 
-      - name: Install Python dependencies (retry x3)
-        shell: bash
-        run: |
-          set -euo pipefail
-          for i in 1 2 3; do
-            if python -m pip install --upgrade pip && pip install -r requirements.txt; then
-              exit 0
-            fi
-            echo "::warning::pip 安装失败（第 ${i}/3 次），$((i * 10))s 后重试"
-            sleep $((i * 10))
-          done
-          echo "::error::pip 安装连续 3 次失败（PyPI 网络异常）"
-          exit 1
+      - name: Install dependencies
+        uses: ./.github/actions/retry
+        with:
+          label: pip 安装依赖（requirements）
+          command: >-
+            python -m pip install --upgrade pip
+            && pip install -r requirements.txt
 
       - name: Verify src/ffmpeg_install.py detection
         run: |
@@ -455,12 +438,12 @@ jobs:
     timeout-minutes: 40
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       # 打包解释器取 setup job 的 python_build（与 build-release.yml 同值），
       # 保证「CI 验证的打包环境」等于「实际发布的打包环境」。
       - name: Setup Python ${{ needs.setup.outputs.python_build }} (packaging interpreter)
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ needs.setup.outputs.python_build }}
           cache: pip
@@ -473,36 +456,24 @@ jobs:
         with:
           node-version: ${{ needs.setup.outputs.node_version }}
 
-      - name: Install ffmpeg + xvfb (retry x3)
-        shell: bash
-        run: |
-          set -euo pipefail
-          for i in 1 2 3; do
-            if sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg xvfb; then
-              exit 0
-            fi
-            echo "::warning::apt 安装失败（第 ${i}/3 次），$((i * 10))s 后重试"
-            sleep $((i * 10))
-          done
-          echo "::error::apt 安装 ffmpeg/xvfb 连续 3 次失败"
-          exit 1
+      # xvfb：GUI（tkinter/pystray）冒烟需要虚拟显示
+      - name: Install ffmpeg + xvfb (apt)
+        uses: ./.github/actions/retry
+        with:
+          label: apt 安装 ffmpeg/xvfb
+          command: >-
+            sudo env DEBIAN_FRONTEND=noninteractive apt-get update -qq -o Acquire::Retries=3
+            && sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg xvfb
 
       # PyInstaller 由 pyproject [project.optional-dependencies].build 声明
-      - name: Install dependencies (retry x3)
-        shell: bash
-        run: |
-          set -euo pipefail
-          for i in 1 2 3; do
-            if python -m pip install --upgrade pip \
-              && pip install -r requirements.txt \
-              && pip install ".[build]"; then
-              exit 0
-            fi
-            echo "::warning::pip 安装失败（第 ${i}/3 次），$((i * 10))s 后重试"
-            sleep $((i * 10))
-          done
-          echo "::error::pip 安装连续 3 次失败（PyPI 网络异常）"
-          exit 1
+      - name: Install dependencies
+        uses: ./.github/actions/retry
+        with:
+          label: pip 安装依赖（requirements + build extras）
+          command: >-
+            python -m pip install --upgrade pip
+            && pip install -r requirements.txt
+            && pip install ".[build]"
 
       - name: Build (lite) + smoke test CLI/Web/GUI
         run: xvfb-run -a python build_exe.py --smoke --no-runtime --no-zip

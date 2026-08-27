@@ -199,7 +199,7 @@ def _should_translate(caller_file: str) -> bool:
 def _load_json_catalog(path: Path) -> dict[str, str] | None:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
     if not isinstance(data, dict):
         return None
@@ -215,7 +215,7 @@ def _load_yaml_catalog(path: Path) -> dict[str, str] | None:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
     # yaml.YAMLError（ParserError/ScannerError 等）不是 OSError/ValueError 子类，
     # 不捕获则损坏的 yaml 会让 set_language 抛异常（Web 语言切换接口直接 500）
-    except (OSError, ValueError, yaml.YAMLError):
+    except OSError, ValueError, yaml.YAMLError:
         return None
     if not isinstance(data, dict):
         return None
@@ -317,7 +317,7 @@ def translated_print(
         frame = inspect.currentframe()
         caller_file = frame.f_back.f_code.co_filename if frame and frame.f_back else ""
         should_translate = _should_translate(caller_file)
-    except (ValueError, AttributeError):
+    except ValueError, AttributeError:
         should_translate = False
 
     translated_args: list[str] = []

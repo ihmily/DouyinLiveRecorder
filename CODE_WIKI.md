@@ -36,12 +36,12 @@
 
 | 分类       | 路径                     | 数量  | 性质                                             | 是否手工维护 |
 | -------- | ---------------------- | --- | ---------------------------------------------- | ------ |
-| 项目根文档    | `*.md`（仓库根目录）          | 3   | 事实来源（source of truth）                          | ✅ 是    |
+| 项目根文档    | `*.md`（仓库根目录）          | 5   | 事实来源（source of truth，中英双语文档各成对）              | ✅ 是    |
 | 自动生成仓库文档 | `.qoder/repowiki/**`   | 302 | AI 基于代码生成的英文架构/知识库（content 72 + knowledge 230） | ❌ 自动生成 |
 | 工作区记忆    | `.workbuddy/memory/**` | 12  | 本机 agent 每日工作日志                                | ❌ 缓存   |
 | 历史记忆     | `.codebuddy/memory/**` | 7   | 旧版 agent 记忆（遗留）                                | ❌ 缓存   |
 
-**结论**：真正由人工维护、应作为改动来源的文档仅为仓库根目录的 **3 个**；其余 321 个为 AI 生成的衍生文档或本地缓存，不应合并进本文档，以免引入与代码不同步的冗余内容。
+**结论**：真正由人工维护、应作为改动来源的文档仅为仓库根目录的 **5 个**；其余为 AI 生成的衍生文档或本地缓存，不应合并进本文档，以免引入与代码不同步的冗余内容。（统计快照生成于 2026-08-09；根文档数于 2026-08-28 随中英双语文档补齐更新为 5）
 
 ### 根文档索引
 
@@ -50,8 +50,10 @@
 | `AGENTS.md`    | 编码代理约定      | 版本号单一事实源（`pyproject.toml`）、代码风格（black / isort / mypy）、项目结构、依赖/测试/构建命令、关键约定 |
 | `README.md`    | 用户/开发者说明    | 功能特性、已支持平台（51 个）、快速开始、配置说明、使用说明、Docker 部署、开发指南、FAQ、更新日志                    |
 | `CODE_WIKI.md` | 项目架构文档（本文档） | 模块详解、依赖关系、设计模式、常见问题排查、贡献指南、更新日志                                            |
+| `README_EN.md` | 用户/开发者说明（英文） | `README.md` 的英文对应版（2026-08-24 新增，与中文版结构对齐）                                  |
+| `CODE_WIKI_EN.md` | 项目架构文档（英文） | 本文档的英文对应版（2026-08-24 新增，条目与中文版一一对应）                                          |
 
-> 三份文档职责互补：改动平台支持/配置项时须同步更新 `README.md` 与本文档；工程约定以 `AGENTS.md` 为准。
+> 五份文档职责互补：改动平台支持/配置项时须同步更新 `README.md` 与本文档；工程约定以 `AGENTS.md` 为准；`README_EN.md` / `CODE_WIKI_EN.md` 随对应中文版同步更新。
 
 ---
 
@@ -260,11 +262,13 @@ DouyinLiveRecorder/
 ├── build_exe.py                         # PyInstaller 打包脚本（CLI/GUI/Web 三入口）
 ├── DouyinLiveRecorder.spec              # 由 build_exe.py 自动生成（.gitignore 已忽略）
 ├── requirements.txt                     # Python 依赖列表
+├── uv.lock                              # uv 依赖锁文件（随仓库分发；镜像/CI 走 pip + requirements.txt，不消费）
 ├── pyproject.toml                      # Python 项目配置（版本号/工具配置/覆盖率门禁单一事实源）
-├── .coveragerc-concurrency             # 并发测试专用覆盖率配置（CI concurrency-test job 使用，不设全局阈值）
 ├── scripts/                             # 辅助脚本
 │   ├── check_version.py                # 版本号一致性校验（CI static job 调用）
+│   ├── check_coverage.py               # 逐模块覆盖率门禁（CI test job 调用，阈值 MODULE_THRESHOLDS）
 │   ├── compile_po.py                   # gettext 翻译编译（.po → .mo；--check 零副作用校验同步，CI static job 调用）
+│   ├── extract_i18n_strings.py         # i18n 待翻译串提取器（AST 扫描 print/logger 字面量 + 四语目录比对，维护期使用）
 │   └── sync_version.py                 # 版本号同步脚本（pyproject → 各文档）
 ├── Dockerfile                          # Docker 构建文件（多阶段）
 ├── docker-compose.yaml                 # Docker Compose（recorder/web/gui 三服务）
@@ -302,8 +306,10 @@ DouyinLiveRecorder/
 ├── .github/                             # GitHub Actions 工作流目录
 │   ├── ISSUE_TEMPLATE/                 # Issue 模板（Bug 报告 / 功能请求）
 │   ├── PULL_REQUEST_TEMPLATE.md         # PR 模板
+│   ├── actions/
+│   │   └── retry/                      # 复合动作：网络安装命令线性退避重试包装（ci.yml / build-release.yml 共用）
 │   └── workflows/
-│       ├── ci.yml                      # CI 静态验证（static/typecheck/test/concurrency/integration/build-verify）
+│       ├── ci.yml                      # CI 静态验证（setup/static/typecheck/test/concurrency/integration/build-verify/summary）
 │       ├── build-release.yml           # 三平台构建（lite + full 双产物）+ 自动发布 Release
 │       └── issue-translator.yml        # Issue 自动翻译工作流（中英互译）
 ├── .coveragerc-concurrency             # 并发测试专用覆盖率配置（CI concurrency-test job 使用，不设全局阈值）
@@ -589,7 +595,7 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 | `i18n/en_GB.json`                 | 英语（英国）目录（JSON 格式，英式拼写：minimise/unrecognised 等） | 496 |
 | `i18n/zh_TW.yaml`                 | 繁体中文目录（YAML 格式，简→繁字符转换 + 台湾用语适配）               | 496 |
 
-**维护流程**: 修改 `.po` 后必须执行 `python scripts/compile_po.py` 重新编译并一并提交 `.mo`，否则翻译改动不会生效；`python scripts/compile_po.py --check`（CI `static` job）在两者不同步时拦截——其内部 `write_mo()` 为**纯内存产出不落盘**，`--check` 模式零副作用、真实比对磁盘上已提交的 `.mo`，仅非 check 模式才写盘。CI 路径过滤器（paths-filter）将 `i18n/**` 视为触发条件：纯翻译变更同样会运行该门禁。**四种语言的目录键集合必须一致**（`tests/test_i18n.py::test_catalogs_share_same_keyset` 强制校验）——新增 msgid 时需同步更新四个目录。
+**维护流程**: 修改 `.po` 后必须执行 `python scripts/compile_po.py` 重新编译并一并提交 `.mo`，否则翻译改动不会生效；`python scripts/compile_po.py --check`（CI `static` job）在两者不同步时拦截——其内部 `write_mo()` 为**纯内存产出不落盘**，`--check` 模式零副作用、真实比对磁盘上已提交的 `.mo`，仅非 check 模式才写盘。CI 路径过滤器（paths-filter）将 `i18n/**` 视为触发条件：纯翻译变更同样会运行该门禁。**四种语言的目录键集合必须一致**（`tests/test_i18n.py::test_catalogs_share_same_keyset` 强制校验）——新增 msgid 时需同步更新四个目录。新增待翻译串的提取与比对用 `python scripts/extract_i18n_strings.py`（AST 扫描运行时代码 print 常量串 + logger f-string 模板底稿并与四语目录比对；f-string 模板归一化约定：格式/转换符丢弃、表达式内双引号转单引号；纯占位符模板（如 `{color}{text}`）与 gettext 头部空 msgid 已过滤，不产生噪声）。
 
 **翻译覆盖范围**（2026-08-27 全量补全后，覆盖运行时全部常量串与 logger 模板底稿）:
 
@@ -1184,13 +1190,14 @@ python web.py
 # - ENTRYPOINT ["python", "main.py"]，EXPOSE 8000（Web 模式用）
 ```
 
-**`.dockerignore` 要点**：
+**`.dockerignore` 要点**（2026-08-28 同步后）：
 
-- 排除平台二进制（`ffmpeg/`、`node/`，容器内 apt 安装）、`config/*.ini`（运行时挂载）、  
-  `typings/`、`build_exe.py`、`gui_legacy.py` 等桌面/构建专用文件；
-- **保留 `i18n/**/*.mo` 编译翻译文件与 `i18n/*.json`、`i18n/*.yaml` 多语言目录** ——  
-  运行时必需（gettext / JSON / YAML 三种翻译目录格式）且 Dockerfile 不会重新编译/生成，  
-  仅排除 `.po` 源文件与编译脚本。
+- 排除平台二进制（`ffmpeg/`、`node/`，容器内 apt 安装）、`config/*.ini`（运行时挂载）、`typings/`、`build_exe.py`、`gui_legacy.py` 等桌面/构建专用文件；
+- **保留 `i18n/**/*.mo` 编译翻译文件与 `i18n/*.json`、`i18n/*.yaml` 多语言目录** ——
+  运行时必需（gettext / JSON / YAML 三种翻译目录格式）且 Dockerfile 不会重新编译/生成，
+  仅排除 `.po` 源文件与编译脚本；
+- 排除本地工具 / AI 助手生成目录（`.mimosa/`、`.qoder/`、`.agents/`、`.pnpm-store/`、`.dsh-validation/`、`.ego-browser-test/`、`.plugin-src/`、`pytest-cache-files-*/` 等，与 `.gitignore` 同源维护）；
+- 排除镜像运行不消费的内容：`uv.lock`（镜像走 pip + requirements.txt）、`scripts/`（维护脚本，运行时链路零引用）、`tests/`、`AGENTS.md` / `README_EN.md` / `CODE_WIKI_EN.md` 等文档、`.coveragerc-concurrency`（CI 专用）。
 
 #### 使用 docker compose (推荐)
 
@@ -1312,21 +1319,30 @@ def _app_root() -> str:
 
 ### 6. GitHub Actions CI 静态验证（`ci.yml`）
 
-工作流文件：`.github/workflows/ci.yml`，在 push 到 main / PR 时运行，确保代码风格、类型安全与功能正确性在合入前通过验证。
+工作流文件：`.github/workflows/ci.yml`，在 push 到 main / PR 时运行，确保代码风格、类型安全与功能正确性在合入前通过验证（2026-08-28 优化后结构如下）。
 
-**路径过滤**：`changes` job 使用 `dorny/paths-filter@v4` 检测变更文件类别，仅当 Python 源码（src/、根目录入口）、测试、`scripts/`、依赖清单或工作流自身变更时才运行下游 job；纯前端（web/）、文档（*.md）、国际化（i18n/）变更不会触发。
+**统一策略**：
 
-**并行 jobs**（均 `needs: changes` 条件门控）：
+- `setup` job 集中声明**共享常量**（Python 版本矩阵 / Node 版本 / black / isort / mypy 固定版本号）并执行路径过滤，常量输出至 job outputs 供各 job 与 `strategy.matrix` 引用（matrix 无法引用 env 上下文），是全工作流的单一事实源；
+- **actions 大版本统一 v7**（`checkout` / `setup-python` / `setup-node` / `upload-artifact`），与 build-release.yml 完全一致；
+- **网络安装重试统一经 `.github/actions/retry` 复合动作**（线性退避 ×3；`command` / `label` / `attempts` / `backoff` 可参数化）——pip / apt 安装共 9 处调用，重试策略只在 action.yml 一处维护，禁止 job 内重新内联重试循环；
+- **apt 强化参数**（对齐 build-release.yml 的 Linux 构建）：`DEBIAN_FRONTEND=noninteractive` + `Acquire::Retries=3` + `--no-install-recommends`；
+- 每个 job 显式 `timeout-minutes`；同分支/PR 新推送 `cancel-in-progress: true` 取消旧运行（快速反馈，与发布流的不可取消策略有意区分）；
+- pip 缓存统一以 `hash(requirements.txt + pyproject.toml)` 为 key（仓库无 lock 文件参与安装）。
+
+**路径过滤**：`setup` job 使用 `dorny/paths-filter@v4` 检测变更文件类别，仅当 Python 源码（src/、根目录入口）、测试、`scripts/`、依赖清单、**`i18n/**`** 或工作流自身变更时才运行下游 job；纯前端（web/）、文档（*.md）变更不触发。**`i18n/**` 是触发条件**——纯翻译变更同样会跑 static job 的 compile_po --check 同步门禁。
+
+**并行 jobs**（均 `needs: setup` 条件门控）：
 
 | Job                  | 运行环境             | 内容                                                                                                                                              |
 | -------------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `static`             | py 最新            | `black --check .` + `isort --check .` + `python scripts/check_version.py`（版本号单一事实源校验） + `python scripts/compile_po.py --check`（i18n po/mo 同步校验） |
-| `typecheck`          | py3.14           | 安装 requirements + mypy 后运行 `mypy src/`                                                                                                          |
-| `test`               | py3.14           | `pytest --cov=src --cov-report=term-missing`（全局 `fail_under=50` 门禁）                                                                             |
-| `concurrency-test`   | py3.14           | 并发专项：`COVERAGE_RCFILE=.coveragerc-concurrency` 下跑 `test_concurrency_rate_limit.py` + `test_concurrency.py`（专用配置不设全局阈值，避免与完整 test job 冲突）        |
-| `integration-verify` | py3.14 + Node 24 | apt 安装 ffmpeg；验证 ffmpeg/node 二进制可发现、版本可读，并调用 `check_ffmpeg_installed()` / `check_nodejs_installed()` 验证检测逻辑                                     |
-| `build-verify`       | ubuntu-latest    | PyInstaller 打包 + 冒烟测试（仅 python 类变更触发）                                                                                                           |
-| `ci-summary`         | —                | 汇总以上全部 job 的 required check 状态                                                                                                                  |
+| `static`             | py3.15           | `black --check .` + `isort --check .` + `python scripts/check_version.py`（版本号单一事实源校验） + `python scripts/compile_po.py --check`（i18n po/mo 同步校验，零副作用） |
+| `typecheck`          | py3.14           | 安装 requirements + 固定版 mypy 后运行 `mypy src/`（最低支持版本运行，结论对最老解释器成立）                                                                        |
+| `test`               | py3.14 / py3.15 矩阵 | `pytest --cov=src --cov-report=term-missing`（全局 `fail_under=50` 门禁，`fail-fast: false`）；最低版本上追加 `scripts/check_coverage.py` 逐模块门禁 + coverage.xml 上传 + 可选 Codecov |
+| `concurrency-test`   | py3.14           | 并发专项：`COVERAGE_RCFILE=.coveragerc-concurrency` 下跑 `test_concurrency_rate_limit.py` + `test_concurrency.py` + `test_async_http_lock.py`（专用配置不设全局阈值） |
+| `integration-verify` | py3.14 + Node 24 | apt 装 ffmpeg；验证 ffmpeg/node 二进制可发现，并调 `check_ffmpeg_installed()` / `check_nodejs_installed()` 验证探测逻辑                                                |
+| `build-verify`       | py3.14 打包解释器    | `build_exe.py --smoke --no-runtime --no-zip`（lite 打包 + CLI/Web/GUI 三入口冒烟，Linux 经 `xvfb-run -a`）；发布级完整打包留给 build-release.yml              |
+| `ci-summary`         | —                | 唯一 required check：汇总上游全部 job 结果（skipped 视为通过——路径过滤跳过不会让分支保护永久 pending）                                                          |
 
 ### 7. GitHub Actions 自动构建与发布（`build-release.yml`）
 
@@ -1334,21 +1350,21 @@ def _app_root() -> str:
 
 **触发方式**：
 
-- 手动触发（`workflow_dispatch`）：三平台构建并上传 artifact。
-- 推送 `v*` 标签（如 `v4.0.8`）：构建 + 自动创建 GitHub Release 并附产物（`permissions: contents: write`）。
+- 手动触发（`workflow_dispatch`，可选 `create_release` 输入）：默认仅构建并上传 artifact，勾选后亦创建 Release。
+- 推送 `v*` 标签（如 `v4.0.9.1`）：构建 + 自动创建 GitHub Release 并附产物（`permissions: contents: write`，仅 build / release 相关 job 授予）。
 
-**构建矩阵**：`windows-latest` / `ubuntu-latest` / `macos-latest`，Python 3.14（`fail-fast: false`）。
+**构建矩阵**：`windows-latest` / `ubuntu-latest` / `macos-latest`，Python 3.14（`fail-fast: false`；与 ci.yml build-verify 的打包解释器同值，保证「CI 验证的打包环境 == 实际发布的打包环境」）。
 
 **流程**：
 
-1. Checkout → Setup Python 3.14（pip 缓存）。
-2. 各平台用系统包管理器安装 ffmpeg 供冒烟测试：Windows `choco install ffmpeg`、Linux `apt`（额外装 `xvfb`，GUI 冒烟需虚拟显示）、macOS `brew install ffmpeg`（先 `brew trust aws/tap` 兜底 runner 预置未受信 tap）。
-3. `pip install -r requirements.txt pyinstaller`。
-4. `python build_exe.py --smoke --dual`（Linux 用 `xvfb-run -a` 包裹）：PyInstaller 只跑一次，先产 **lite** zip（不含 ffmpeg/node，运行时自动下载）再下载预构建二进制产 **full** zip（内置运行时）；冒烟测试跑在 lite 版本上。
-5. 上传 artifact（`actions/upload-artifact@v7`，`compression-level: 0` 跳过重复压缩）：lite 直接上传；full（约 300MB）叠加工作流级显式重试（最多 3 次，退避 30s → 60s），应对瞬时网络故障，最后一次失败才令 job 失败。
-6. `release` job（仅 tag 触发）：`actions/download-artifact@v7`（`merge-multiple`）下载全部产物，用 `softprops/action-gh-release@v3` 创建 Release 并附全部 zip，`generate_release_notes: true`。
+1. `prepare` job：用 tomllib 从 pyproject.toml 提取版本号并校验 tag 一致（打错 tag 直接失败），跑 `check_version.py` 确认各消费方动态读取。
+2. `release-create` job：发版路径下**预创建** Release 记录（单例 job，消除多平台 build 并发创建同一 Release 的竞态；不传 files）；手动发版路径在此补建轻量 tag（Release 必须挂在 tag 上）。
+3. build job（矩阵）：各平台以系统包管理器装 ffmpeg 供冒烟——Windows `choco`、Linux `apt`（额外 `xvfb`，GUI 冒烟需虚拟显示）、macOS `brew`（`brew trust aws/tap` 为独立幂等步骤，`HOMEBREW_*` 变量在命令内 export）；**全部网络安装命令经 `.github/actions/retry` 复合动作包装**（线性退避 ×3，系统包管理器退避 15s、pip 10s）；依赖为 `pip install -r requirements.txt` + `pip install ".[build]"`。
+4. `python build_exe.py --smoke --dual`（Linux 用 `xvfb-run -a` 包裹）：PyInstaller 只跑一次，先产 **lite** zip（不含 ffmpeg/node，运行时自动下载）再产 **full** zip（内置运行时，约 300MB）；冒烟测试跑在 lite 版本上。
+5. 产物发布：发版路径（tag / 手动勾选 create_release）由 build job 经 `softprops/action-gh-release@v3` 把 zip **直传 Release**（显式 `tag_name` 与 release-create 指向同一 Release，GitHub 支持同 Release 并发上传不同 asset）；仅构建路径走 `upload-artifact@v7`（`compression-level: 0` 跳过二次压缩，留存 30 天供人工取回）。
+6. `release` job（发版路径）：`gh release download` 拉回已发布附件校验齐全（3 平台 × lite/full = 6 个 zip，缺失即失败不发布残缺 Release），生成 `SHA256SUMS.txt`，最后经 `softprops/action-gh-release@v3` 补传校验和并写发版说明（`generate_release_notes: true`）。
 
-**产物命名**：`DouyinLiveRecorder-v{version}-{os}-{arch}-{lite|full}.zip`（如 `DouyinLiveRecorder-v4.0.8.1-windows-amd64-full.zip`）。
+**产物命名**：`DouyinLiveRecorder-v{version}-{os}-{arch}-{lite|full}.zip`（如 `DouyinLiveRecorder-v4.0.9.1-windows-amd64-full.zip`）。
 
 ### 8. 本地打包步骤
 
@@ -1566,6 +1582,76 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 ---
 
 ## 更新日志
+
+### v4.0.9.1-dev (2026-08-28) — CI 工作流优化与网络安装重试收敛（retry 复合动作）+ PEP 758 格式化随 black 26 落地 + i18n 提取器修正 + 仓库元数据八文件同步
+
+**变更摘要**：本条目记录 2026-08-27 深夜至 08-28 会话的四批改动。① **CI red→green**：CI `black --check` 失败——black 26.5.1 对 `target-version=['py314']` 启用 PEP 758 规范化（无 `as` 子句的多异常 `except` 剥除元组括号），本地与 CI 同版本、属提交前漏跑格式化，应用 black 即修复；② **CI 工作流优化**：ci.yml 重写（actions 统一 v7、apt 强化参数、job 拓扑入头注释），新建 `.github/actions/retry` 复合动作把两个 workflow 共 13 处几乎相同的内联重试脚本收敛为一处实现；③ **i18n 提取器修正**：`scripts/extract_i18n_strings.py` 两处缺陷修复后重跑，确认四语目录零缺失（各 496 条）；④ **仓库元数据八文件同步**：修正 requirements.txt / Dockerfile 过时的 `src/danmaku/` 路径注释，补齐 .dockerignore / .gitignore / pyproject / compose 漂移项。全量门禁复验 **744 passed, 2 skipped**。
+
+**涉及文件（按模块分类）**：
+
+**一、CI / GitHub Actions（新增功能 + 修改内容）**
+
+- `.github/actions/retry/action.yml`（**新增**）：复合动作 `retry`——网络安装命令统一重试包装。`inputs`：`command`（必填，bash 语义、支持 `&&` 链接，调用处表达式先展开为字面量）/ `label`（失败日志归因）/ `attempts`（默认 3）/ `backoff`（线性退避基数秒，默认 10）；command 经 env 传入、`bash -c` 执行，第 n 次失败等待 `n × backoff` 秒后重试，连续失败才 `::error` + exit 1。经 Git Bash 成功/失败双路径模拟验证（成功首试即过 / 失败线性退避后退出码 1）。
+- `.github/workflows/ci.yml`（重写，job 结构与门禁语义不变）：
+  - `actions/checkout` v5→v7、`actions/setup-python` v6→v7（经 WebSearch 确认 v7 均为当前最新大版本，与 build-release.yml 对齐，消除两份工作流 action 版本漂移）；
+  - 9 处内联重试脚本（pip ×5 / apt ×3 / build-verify 依赖 ×1，各约 12 行）替换为 retry 复合动作调用（apt 退避保持原 10s）；
+  - apt 安装对齐 build-release.yml 强化参数：`DEBIAN_FRONTEND=noninteractive`（防交互卡死）+ `Acquire::Retries=3`（apt 自身网络重试）+ `--no-install-recommends`（更快更省盘）；
+  - 头注释补 job 拓扑图（setup 六路并行 → ci-summary 汇总）与「本工作流止于验证、不含部署」职责边界；统一策略段集中声明 actions 版本 / 缓存 / 超时 / 重试 / apt 参数；static job 名补 i18n（实际跑 po/mo 同步门禁）。
+- `.github/workflows/build-release.yml`：4 处内联重试脚本（choco / apt / brew / pip）替换为 retry 复合动作（退避值与原脚本逐一一致：系统包管理器 15s、pip 10s）；macOS `brew trust aws/tap` 拆为独立幂等步骤（不随安装重试重复执行，语义不变）；`HOMEBREW_NO_REQUIRE_TAP_TRUST` / `HOMEBREW_NO_AUTO_UPDATE` 从 step env 改为命令内 `export`（复合动作对调用方 step 级 env 的可见性无官方保证，显式 export 行为最确定）。
+
+**二、国际化模块（修改内容——格式 + 维护工具）**
+
+- `i18n.py` + `scripts/compile_po.py`：同日早前条目把 4 处 `except` 改为元组括号后，black 26.5.1（CI 与本地同版本）在 py314 目标下按 PEP 758 规范化**剥除**无 `as` 子句的多异常括号，CI `black --check` 变红。本次应用 black 转回免括号形式（`i18n.py:202/218/320`、`compile_po.py:128`）——语义零变化（PEP 758 下两种形式完全等价），与全仓其余裸逗号写法风格统一，CI 门禁恢复绿色。**此 4 处今后交给 black 维护即可，勿手工来回改。**
+- `scripts/extract_i18n_strings.py`（**两处缺陷修正，本条目首次录入目录树与 §8 维护流程**）：
+  - `is_valuable()` 重构：旧逻辑剥花括号后查字母，占位符表达式内的标识符（`color`/`Color`）也是字母，导致纯占位符模板（`{color}{text}{Color.RESET}` / `{rec_info}/{filename}`）被误报为「缺失待翻译」；改为以花括号块**之外**的残渣是否含字母/CJK 为判定基准，新旧口径差经对比验证恰好为上述 2 条不可翻译模板（已入库条目零误杀）；
+  - `load_catalog_keys()`：po 头部空 `msgid ""` 剔除后再比对——JSON/YAML 目录设计上不含它（运行时加载亦会 pop），不剔除会让四语一致性检查永远报「少 1」假阳性。
+  - 修正后重跑：运行时有价值串 318 条全部在库、缺失 0、四语目录键集一致（各 496 条）——确认今晨全量补全后源码未引入新可翻译串（此后仅改过 except 语法与 workflow YAML）。
+
+**三、仓库元数据八文件同步（修改内容）**
+
+- `requirements.txt` / `Dockerfile`：注释中 4 处引用**不存在的 `src/danmaku/` 路径**修正为实际位置（`src/ws_client.py` / `src/proto/douyin_pb2.py` / `src/platforms/bilibili.py` / collector 工厂链）——弹幕模块实际分布在 src/ 根、platforms/、proto/，无 danmaku/ 子包。
+- `.dockerignore`：补 16 个排除项——`.mimosa/` 与 7 个本地工具目录（`.qoder/`、`.agents/`、`.pnpm-store/`、`.dsh-validation/`、`.ego-browser-test/`、`.plugin-src/`、`.tmp-dps-extract/`、`pytest-cache-files-*/`，与 .gitignore 同源）、`uv.lock`（镜像走 pip 不消费）、`scripts/`（经 grep 验证运行时链路零引用）、`AGENTS.md` / `README_EN.md` / `CODE_WIKI_EN.md` / `.coveragerc-concurrency` / `*.isorted`；头注释同步修正 danmaku 路径表述。
+- `.gitignore`：补 `.mimosa/`（此前 pyproject 的 black/isort/mypy/coverage 四处均排除它，git status 却持续显示 `?? .mimosa/` 未跟踪）与 `pytest-cache-files-*/` 防御条目。
+- `pyproject.toml`：basedpyright exclude 清理 2 个已删除的死目录（`pytest-cache-files-g1bpkgza` / `pytest-cache-files-wt8ppn27`）；依赖 20 包与 requirements.txt 逐项核对完全一致（无需改动）。
+- `docker-compose.yaml`：`.env` 示例版本号 `4.0.8.3` → `4.0.9.1`（对齐 pyproject 当前版本）。
+- `AGENTS.md`：模块计数 39 → 41（实测 src 根 31 + platforms 8 + proto 2）；项目结构树补 `Dockerfile` / `docker-compose.yaml` / `uv.lock` / `.github/actions/retry/`；覆盖率排除补 `.mimosa/`；新增「CI / workflow 约定（2026-08-28 定稿）」小节（retry 唯一事实源、actions v7 基线、跨 workflow 版本常量同值、brew tap 信任独立步骤、触发/并发策略区分、dockerignore/gitignore 同源约定）；i18n 条目补提取器工具与 f-string 模板归一化约定。
+- `.coveragerc-concurrency`：逐项核对与 pyproject `[tool.coverage.*]` 完全一致（source / omit / exclude_lines 同值，`fail_under=0` 为有意差异且已注释说明）——零改动，属验证性同步。
+
+**四、文档（本条目）**
+
+- `CODE_WIKI.md` / `CODE_WIKI_EN.md`：目录树补 `.github/actions/retry/`、`scripts/extract_i18n_strings.py`、`scripts/check_coverage.py`、`uv.lock`（并清理 `.coveragerc-concurrency` 重复条目）；文档统计根文档数 3 → 5（补 README_EN / CODE_WIKI_EN 索引行）；§6 ci.yml 节重写（setup job / retry 复合动作 / actions v7 / apt 强化 / py3.14+3.15 矩阵与逐模块门禁 / `i18n/**` 触发语义订正）；§7 build-release.yml 节对齐当前流程（prepare/release-create 预分配 / 直传 Release / `gh release download` 校验 / SHA256SUMS 收尾 / `pip install ".[build]"`）；§8 维护流程补提取器工具；Docker 节 .dockerignore 要点补同步后排除范围；更新日志新增本条目（中英同步）。
+
+**改动说明**：
+
+- **PEP 758 往返的澄清**：同日早前条目把 4 处 `except` 改为元组括号（当时判定「对 ≥3.13 最稳妥」），本次又转回免括号——两者并不矛盾：前者解决语法可解析性，后者是 black 26.5.1 在 `target-version=['py314']` 下的**强制风格**（CI 门禁即该工具）。项目 requires-python ≥3.14 且本地实测解释器为 3.14.7，免括号形式合法；交由 black 统一维护后不再出现「手工改括号 → CI 变红」的往返。
+- **重试收敛的动机**：两份 workflow 原共 13 处几乎相同的 12 行内联重试循环，重试次数 / 退避 / 日志格式改动需逐处手改、极易漂移（实测已存在 ci.yml apt 退避 10s vs build-release.yml 15s 的历史差异——本次保留各自原值、行为零变化）。收敛后策略唯一事实源为 action.yml 一处，13 个安装步骤同时生效。
+- **macOS brew 步骤拆分**：`brew trust aws/tap` 幂等且带 `|| true` 兜底，原与重试循环同层导致每次重试都重复执行；拆为独立步骤后语义不变（信任一次、安装重试）。
+- **.mimosa/ 的三层同步**：pyproject 四处排除均含它、.gitignore 却未忽略，git status 长期显示未跟踪；本次三层（gitignore / dockerignore / pyproject 已有）对齐，并写入 AGENTS.md 同源约定防再漂移。
+- **镜像排除 scripts/ 的依据**：grep 验证根目录全部入口脚本与 `src/**` 对 `scripts/` 零引用，属纯维护脚本（CI 校验 / po 编译 / 版本同步 / 提取器），进镜像无消费者。
+
+**影响范围**：
+
+- CI 门禁恢复全绿且结构更可维护：action 版本统一、重试策略单源、apt 安装更抗网络抖动；构建 / 发布行为零变化（重试语义、choco/apt/brew 命令、退避值均保持原值）。
+- i18n 四语目录确认零缺失（318 条有价值串全在库），`.mo` 与 `.po` 字节级同步（497 条含头）；提取器今后可直接用于增量维护。
+- 镜像构建上下文显著瘦身（排除 scripts/、tests/、双语文档、本地工具目录、uv.lock 等 16 项）且不含任何运行时不需要的内容。
+- **运行时行为零变化**——本条目全部改动为 CI / 文档 / 注释 / 配置同步 / 格式化（extract_i18n_strings.py 为维护期工具，不进运行时链路）。
+
+**验证**：
+
+- `black --check .`：115 files unchanged（含 PEP 758 转换后的 i18n.py / compile_po.py）；`isort --check-only .` 通过；
+- `mypy src/` + `mypy --platform linux src/`：双跑 38 files 0 issue；
+- `pytest -q` 全量：**744 passed, 2 skipped**（36s）；
+- `python scripts/compile_po.py --check`：`.mo` 与 `.po` 同步（497 条含头）；`python scripts/extract_i18n_strings.py`：缺失 0、四语一致、无不一致行；
+- 四语目录运行时冒烟：zh_CN 中文译文 / en_US 恒等 / zh_TW 繁体译文正确、未知语言回退正常（`tests/test_i18n.py` 34 passed）；
+- 八文件同步一致性断言（TOML/YAML 解析、依赖 20 包双源一致、`src/danmaku` 引用清零、.mimosa 三层同步、8 个工具目录双 ignore 同源、镜像额外排除项、AGENTS 模块数 41）全部通过；`git check-ignore .mimosa/` 确认忽略生效；
+- 两个 workflow YAML 经 `yaml.safe_load` + 结构断言（needs 链 / outputs 键 / 本地 action 路径存在 / retry 调用计数 9+4 / 版本计数 checkout@v7 ×7、setup-python@v7 ×6、setup-node@v7 ×2 / DEBIAN_FRONTEND 无拼写错误）；retry 复合动作经 Git Bash 成功/失败双路径模拟验证。
+
+**关联**：
+
+- v4.0.9.1-dev (2026-08-27)「i18n 本地化系统修复（except → 元组括号）」——本条目把该 4 处交给 black 统一为 PEP 758 免括号风格（语义等价往返，见改动说明）；
+- v4.0.9-dev (2026-08-24)「PEP 758 / py314 全仓格式化」——本次是同一 black 版本策略下的收尾对齐；
+- v4.0.8.2-dev (2026-08-19)「CI 重构：build-release 去除 download-artifact 来回」——§7 节描述本次对齐至该版流程（release-create 预分配 + 直传）；
+- v4.0.9.1-dev (2026-08-27) 首轮「四语本地化目录全量补全」——extract_i18n_strings.py 即该会话沉淀的提取工具，本次修正其两处噪声源。
 
 ### v4.0.9.1-dev (2026-08-27) — i18n 本地化系统修复（Python 2 风格 `except` 多异常 → 元组括号）+ zh_CN.mo 重编译
 
