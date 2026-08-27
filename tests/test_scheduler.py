@@ -6,7 +6,12 @@
 import threading
 import time
 
-from src.scheduler import ConcurrencyScheduler, PlatformBreaker, ResizableSemaphore
+from src.scheduler import (
+    _PROBE_LEASE_SECONDS,
+    ConcurrencyScheduler,
+    PlatformBreaker,
+    ResizableSemaphore,
+)
 
 
 def test_resizable_semaphore_context_and_value() -> None:
@@ -73,6 +78,24 @@ def test_platform_breaker_reopen_on_probe_failure() -> None:
     b.record(False)  # 探针失败，重新熔断
     assert b.state == "open"
     assert b.allow() is False
+
+
+def test_platform_breaker_probe_lease_regrants_after_timeout() -> None:
+    # 探针租约自愈：探针轮可能以 continue 结束且不触发 record（主播未开播等待轮、
+    # 禁录、房间线程退出等路径），_probing 若无租约兜底将永不复位 → 该 key 永久熔断
+    # 直到进程重启。租约超时后 allow() 应重新授予探针，实现自愈。
+    b = PlatformBreaker("t", window=10, fail_rate=0.5, cooldown=0.05, min_samples=4)
+    for _ in range(4):
+        b.record(False)
+    assert b.state == "open"
+    time.sleep(0.1)  # 冷却结束
+    assert b.allow() is True  # 授予唯一探针
+    assert b.allow() is False  # 探针在飞（租约内），拒绝
+    b._probe_granted_at -= _PROBE_LEASE_SECONDS + 1.0  # 模拟租约超时（探针未回报样本）
+    assert b.allow() is True  # 租约到期 → 重新授予探针（自愈）
+    b.record(True)  # 新探针成功上报
+    assert b.state == "closed"
+    assert b.allow() is True
 
 
 def test_scheduler_capacity_floor_and_scaling() -> None:

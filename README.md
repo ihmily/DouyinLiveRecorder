@@ -829,7 +829,58 @@ brew install node
 
 ## ⏳ 更新日志
 
-### v4.0.9-dev (2026-08-23 ~ 2026-08-24) — 高并发多平台录制调度优化 / 录制反馈闭环 / 并发双模式 / Python 3.14 升级与语言键迁移 / 四语本地化目录统一与英式美式分流 / 类型与 CI 质量门禁修复
+### v4.0.9.1-dev (2026-08-27) — 本地化系统修复（i18n 语法阻断解除 + zh_CN.mo 重编译）/ 编译门禁与熔断采样缺口修复
+
+> 本版本为 4.0.9.1 发布前的收尾批次：解除 i18n 模块 Python 2 风格 `except` 语法阻断、打通 `zh_CN.mo` 编译链路，并修复编译同步门禁恒真与直下路径熔断采样缺口等复查发现的问题。**无破坏性变更**（配置项与运行时语义完全兼容）。详细根因与验证见 [CODE_WIKI.md](CODE_WIKI.md)。
+
+**🌐 i18n 本地化系统修复（阻断性）**
+- `i18n.py` 三处与 `scripts/compile_po.py` 一处 Python 2 风格 `except A, B:`（含一例三异常逗号）多异常写法改为 `except (A, B):`：原为 Python 3 硬 `SyntaxError`，导致 `i18n` 无法 `import`、`.mo` 无法编译、CLI/GUI/Web 本地化整体失效；修复后受管 3.13 与 3.14 运行时均合法。
+- 语法修复后重新编译 `zh_CN.mo`（与 `zh_CN.po` 对齐，496 条，`--check` 字节级同步）；§8 翻译文件表条目数 492 → 496。
+
+**🛠️ 编译同步门禁修复（P1）**
+- `scripts/compile_po.py` 的 `write_mo()` 改为纯内存产出（去除写盘副作用），落盘决策上移至调用方：`--check` 不再先落盘再读回自比（此前恒真），改为真实比对已提交 `.mo`；`ci.yml` 的 paths-filter 新增 `i18n/**`，纯翻译变更也会触发 static 门禁。
+
+**🛡️ 直下路径熔断采样缺口修复（P1）**
+- `main.py` 直下下载分支「非 200 / 网络异常」失败原在函数内部消化为 `False`、调用方不上报样本，坏线路绕开按 host 熔断被无限重撞；新增 `record_error(record_host)` 补报（被注释/退出标志的中断不计样本）。
+
+**🔧 复查缺口补全（P2）与存量清理**
+- `web_config.py` 新增 `append_config_line()`、`web_api.py` 的 `PUT /api/language` 写回降级为「替换失败→节末追加补建」，缺键不再恒 500。
+- `web/app.js` 约十处硬编码中文改走内嵌四语字典 `t()`，英文/繁体界面不再显示简体中文。
+- `main.py` 内层监测循环恢复弹幕参数每轮重置、`direct_download_stream` 补 URL 与异常类型日志；`async_http.py` 两处裸 `logger.debug(e)` 规范为带 URL/类型的格式。
+- `.github/ISSUE_TEMPLATE` 四个模板 Python 版本下拉补 `Python 3.14`；`build-release.yml` 删除残留无用的 Debug 步骤。
+
+**🧪 测试与验证**
+- 新增 `tests/test_record_failure_feedback.py`（5 → 7 用例）、`tests/test_web_api.py` 缺键补建/边界用例；`test_i18n.py` 适配 `write_mo()` 新签名。
+- 全量 `pytest` **744 passed / 2 skipped**；black / isort / mypy / basedpyright 全绿。
+
+### v4.0.9.1 (2026-08-27) — 熔断探针租约自愈（永久熔断根治）/ 调度成功采样与线程安全加固 / i18n 四目录全量补全（288 → 492 条）/ GUI 崩溃弹窗去重
+
+> 本版本为 4.0.9 调度体系的审查修复与加固批次：全量质量门禁 + 并行代码审查发现并修复 1 个高危、3 个中危缺陷，i18n 目录经全仓 AST 扫描补全至 492 条。**无破坏性变更**（配置项与运行时语义完全兼容）。详细根因与验证见 [CODE_WIKI.md](CODE_WIKI.md)。
+
+**🛡️ 熔断探针租约自愈（高危修复）**
+- 根治 `PlatformBreaker` half-open 探针泄漏：探针轮以 `continue` 结束且不上报样本（主播未开播等待轮、禁录、房间线程退出等路径）时 `_probing` 标志永不复位，该 host 将**永久熔断直到进程重启**——高频失败平台（虎牙/斗鱼 CDN 抖动）此前一次 half-open + 未开播即整平台永久退避。
+- 新增探针租约（`_PROBE_LEASE_SECONDS = 60s`）：授予探针时记录时间戳，超时未回报样本即重新授予，实现自愈。
+
+**🔁 调度成功采样（中危修复）**
+- `start_record` 解析成功分支上报 `record_success(record_host)`（与解析失败分支对称）：此前成功样本仅在 ffmpeg 正常退出时上报，half-open 探针房间进入长时间录制期间，同 host 其余房间持续熔断饿死。
+- 与探针租约互补：正常流转场景即时闭环，无样本路径由租约兜底；同 host 多房间批量监控（B站/抖音）不再互相饿死。
+
+**🔒 调度器线程安全加固 + 类型与日志修复**
+- `ConcurrencyScheduler` 配置字段（模式/上限/活跃数/错误窗口）加锁：`_compute_capacity()` 单次加锁快照、setter 锁内写入（幂等检查原子化），消除 main 主线程与 `adjust_loop` 守护线程间的理论竞态；运行时容量语义零变化。
+- `notify.py`：三参 `getattr(main, "scheduler")` 改为直接属性访问（消除 Any 泄漏导致的 mypy 假绿）；`run_script` 三处裸 `logger.error(e)` 补齐异常类型与命令上下文（Windows 下 `socket.timeout` 的 `str()` 为空、日志失去线索）。
+
+**🌐 i18n 四目录全量补全（288 → 492 条）**
+- AST 扫描全仓运行时 `print()`/`logger.*()` 常量串（47 个文件、355 个串），新增 204 条翻译：并发调度日志、流地址校验全套消息、B站 buvid 认证链、弹幕采集/监控、七渠道推送失败分支、ffmpeg/Node.js 安装、配置读写等；四语键集完全一致，重编译 `zh_CN.mo`（`--check` 字节级同步）。
+- 修复损坏 YAML 目录致 `PUT /api/language` 500：`_load_yaml_catalog()` 补捕获 `yaml.YAMLError`（非 OSError/ValueError 子类），降级跳过到下一格式。
+
+**🖥️ GUI 崩溃弹窗去重**
+- `gui.py` 顶层异常不再双弹窗/日志双份堆栈：`_bootstrap_error_sink` 处理并置位标记后，re-raise 触发的 excepthook 钩子据此跳过。
+
+**🧪 测试与验证**
+- 新增 2 个回归用例：探针租约超时自愈全链路（`test_scheduler.py` 15 → 16）、损坏 YAML 降级（`test_i18n.py`）。
+- 全量 `pytest` **740 passed / 2 skipped**；black / isort / mypy（Windows + Linux 双平台）/ basedpyright 全绿。
+
+### v4.0.9 (2026-08-23 ~ 2026-08-24) — 高并发多平台录制调度优化 / 录制反馈闭环 / 并发双模式 / Python 3.14 升级与语言键迁移 / 四语本地化目录统一与英式美式分流 / 类型与 CI 质量门禁修复
 
 > 本批改动聚焦高并发（80+ 任务）多平台录制的调度中枢治理、录制侧反馈闭环与 Python 3.14 基线升级。详细根因与验证见 [CODE_WIKI.md](CODE_WIKI.md)。
 

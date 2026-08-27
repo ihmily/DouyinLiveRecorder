@@ -384,6 +384,50 @@ class TestLanguageApi:
         )
         assert resp.status_code == 400
 
+    def test_put_language_missing_key_appends_and_succeeds(self, app_env: types.SimpleNamespace) -> None:
+        # 历史 config.ini 无 [录制设置]/language 键时不得恒 500：行级替换失败须降级为节末追加补建
+        # （此前 update_config_line 对缺键返回 False 直接抛 500，测试为求绿先手工写键、掩盖了真实路径）
+        import i18n as i18n_module
+
+        saved = i18n_module.get_language()
+        try:
+            assert "[录制设置]" not in app_env.cfg.read_text(encoding="utf-8-sig")
+            token = _login(app_env.client)
+            resp = app_env.client.put(
+                "/api/language", json={"language": "en_US"}, headers={"Authorization": f"Bearer {token}"}
+            )
+            assert resp.status_code == 200, resp.text
+            text = app_env.cfg.read_text(encoding="utf-8-sig")
+            # 补建的节与键均在位，且不影响已有 Web 节
+            assert "[录制设置]" in text and "language = en_US" in text and "[Web]" in text
+        finally:
+            _ = i18n_module.set_language(saved)
+
+    def test_append_config_line_edge_cases(self, app_env: types.SimpleNamespace) -> None:
+        # append_config_line 行级追加的边界：目标节存在（含无尾换行文件）与节缺失时新建于尾部
+        wa = app_env.wa
+
+        # 节存在但中间夹有其他内容：插入点应在下一节头之前、保留注释与顺序
+        cfg = app_env.cfg
+        cfg.write_text(
+            "[Web]\nweb_auth = true\n# 注释行\n[录制设置]\ndelay = 5\n[Cookie]\nk = v\n", encoding="utf-8-sig"
+        )
+        assert wa.append_config_line(str(cfg), "录制设置", "language", "en_US") is True
+        lines = cfg.read_text(encoding="utf-8-sig").splitlines()
+        assert lines.index("language = en_US") < lines.index("[Cookie]")
+        assert "# 注释行" in lines
+
+        # 目标节是最后一节且文件无尾换行：追加后不应与原末行粘连
+        cfg.write_text("[Web]\nweb_auth = true\n[录制设置]\ndelay = 5", encoding="utf-8-sig")
+        assert wa.append_config_line(str(cfg), "录制设置", "language", "zh_TW") is True
+        text = cfg.read_text(encoding="utf-8-sig")
+        assert "delay = 5\nlanguage = zh_TW" in text
+
+        # 节缺失：文件尾新建节再插键，返回 True
+        cfg.write_text("[Web]\nweb_auth = true\n", encoding="utf-8-sig")
+        assert wa.append_config_line(str(cfg), "录制设置", "language", "en_GB") is True
+        assert "[录制设置]\nlanguage = en_GB\n" in cfg.read_text(encoding="utf-8-sig")
+
     def test_put_language_rejects_empty(self, app_env: types.SimpleNamespace) -> None:
         token = _login(app_env.client)
         resp = app_env.client.put(

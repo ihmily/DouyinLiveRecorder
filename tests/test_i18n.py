@@ -3,7 +3,6 @@
 import importlib.util
 import os
 import sys
-import tempfile
 import types
 from pathlib import Path
 from unittest.mock import patch
@@ -54,8 +53,8 @@ class TestMoCatalog:
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         entries = mod.parse_po(mod.PO_PATH)
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            fresh_bytes = mod.write_mo(entries, Path(tmp_dir) / "zh_CN.mo")
+        # write_mo 纯内存产出不落盘（CI --check 的零副作用语义依赖此约定），取返回值直接比对
+        fresh_bytes = mod.write_mo(entries)
         assert fresh_bytes == MO_PATH.read_bytes(), ".po 已修改但 .mo 未重编译，请运行 python scripts/compile_po.py"
 
 
@@ -109,6 +108,13 @@ class TestMultiFormatCatalogs:
         tw = i18n._load_translations(i18n.locale_path, "zh_TW")
         assert tw is not None
         assert tw.get("开始录制") == "開始錄製"
+
+    def test_load_yaml_catalog_corrupted_returns_none(self, tmp_path: Path) -> None:
+        # 损坏的 YAML 抛 yaml.YAMLError（非 OSError/ValueError 子类）：须捕获并返回 None 降级，
+        # 否则 set_language 抛异常会让 Web 语言切换接口（PUT /api/language）直接 500
+        bad = tmp_path / "bad.yaml"
+        bad.write_text("{invalid: [unclosed", encoding="utf-8")
+        assert i18n._load_yaml_catalog(bad) is None
 
 
 # 运行时语言切换（Web 面板/GUI 即时切换语言功能的底层机制）。

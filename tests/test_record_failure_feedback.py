@@ -7,6 +7,9 @@
 # - 修复：check_subprocess 按退出码上报（rc==0→record_success / rc!=0→record_error），
 #   且快速失败（输入打开被拒的签名）时把 ffmpeg 实际拉流地址经 mark_ffmpeg_reject
 #   记入探针退避——下一轮 select_source_url 跳过该线路探针、改试下一 CDN 候选。
+# - 直下下载路径（direct_download_stream，shopee/花椒直播专用）无 ffmpeg 退出码：
+#   非 200 / 网络异常在函数内部消化成 False，调用方按「未被注释且无退出标志」判定
+#   为真-失败并记 record_error，否则坏线路绕开熔断统计被无限重撞。
 # - 控制台并发容量显示调度器实时自适应值（旧实现显示配置值，实测容量 12 显示 3）。
 
 import subprocess
@@ -186,3 +189,73 @@ def test_live_network_capacity_fallback_and_scheduler_value(main_mod: Any, monke
     fake_scheduler = types.SimpleNamespace(network_semaphore=types.SimpleNamespace(value=12))
     monkeypatch.setattr(main, "scheduler", fake_scheduler)
     assert _live_network_capacity() == 12
+
+
+class _FakeStreamResponse:
+    # httpx 流式响应替身：status_code/数据块由用例注入
+    def __init__(self, status_code: int, chunks: list[bytes]) -> None:
+        self.status_code = status_code
+        self._chunks = chunks
+
+    def __enter__(self) -> "_FakeStreamResponse":
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        return None
+
+    def iter_bytes(self, chunk_size: int) -> Any:
+        return iter(self._chunks)
+
+
+class _FakeHttpClient:
+    # httpx.Client 替身：stream(method, url, headers=..., follow_redirects=...) 返回注入的响应
+    def __init__(self, response: _FakeStreamResponse) -> None:
+        self._response = response
+
+    def __enter__(self) -> "_FakeHttpClient":
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        return None
+
+    def stream(self, method: str, url: str, **kwargs: Any) -> _FakeStreamResponse:
+        return self._response
+
+
+def test_direct_download_stream_rejects_non_200_as_failure(
+    main_mod: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # CDN 拒绝（非 200）＝真-失败签名：吞异常返回 False、不写半截文件后假装完成；
+    # 调用方（start_record 直下分支）依据「未被注释且无退出标志」将 False 记入熔断失败样本
+    main = main_mod
+    monkeypatch.setattr(main, "get_record_headers", lambda *a, **k: {})
+    monkeypatch.setattr(main, "get_record_user_agent", lambda *a, **k: "")
+    monkeypatch.setattr(main.httpx, "Client", lambda **kw: _FakeHttpClient(_FakeStreamResponse(403, [])))
+    save_path = tmp_path / "out.flv"
+
+    assert (
+        main.direct_download_stream(
+            "http://cdn.example/live.flv", str(save_path), "主播", "https://x/huya.com/1", "虎牙直播"
+        )
+        is False
+    )
+
+
+def test_direct_download_stream_writes_chunks_on_success(
+    main_mod: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # 正常拉流：逐块写入文件并返回 True（调用方据此记 record_success 样本）
+    main = main_mod
+    monkeypatch.setattr(main, "get_record_headers", lambda *a, **k: {})
+    monkeypatch.setattr(main, "get_record_user_agent", lambda *a, **k: "")
+    payload = [b"flv-header", b"chunk", b"tail"]
+    monkeypatch.setattr(main.httpx, "Client", lambda **kw: _FakeHttpClient(_FakeStreamResponse(200, payload)))
+    save_path = tmp_path / "out.flv"
+
+    assert (
+        main.direct_download_stream(
+            "http://cdn.example/live.flv", str(save_path), "主播", "https://www.huya.com/1", "虎牙直播"
+        )
+        is True
+    )
+    assert save_path.read_bytes() == b"".join(payload)
