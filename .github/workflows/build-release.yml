@@ -9,6 +9,8 @@
 #   · --dual   PyInstaller 只跑一次，先产 lite（不含运行时）再产 full（含 ffmpeg+node）
 #   · --smoke  对打出的 CLI / Web / GUI 三个入口依次做启动冒烟
 #   产物命名：dist/DouyinLiveRecorder-v<版本>-<os>-<arch>{-lite,-full}.zip
+#   · 网络安装（choco / apt / brew / pip）统一经 .github/actions/retry 复合动作
+#     包装（线性退避重试），与 ci.yml 共用同一实现——重试策略调整只改 action.yml 一处。
 #
 # 版本号事实源：pyproject.toml [project].version（唯一）。
 #   main.py / src/web_api.py 运行时经 importlib.metadata 读取；
@@ -251,77 +253,58 @@ jobs:
       # 冒烟跑在 lite 产物上（不含内置运行时），故三平台都用系统包管理器装一份。
       # full 版本内置的 ffmpeg 由 build_exe.py --dual 在打包阶段单独下载。
       # Linux 额外装 xvfb：GUI（tkinter/pystray）冒烟需要虚拟显示。
-      - name: Install ffmpeg (Windows, retry x3)
+      - name: Install ffmpeg (Windows)
         if: matrix.platform == 'windows'
-        shell: bash
-        run: |
-          set -euo pipefail
-          for i in 1 2 3; do
-            if choco install ffmpeg -y --no-progress; then
-              exit 0
-            fi
-            echo "::warning::choco 安装 ffmpeg 失败（第 ${i}/3 次），$((i * 15))s 后重试"
-            sleep $((i * 15))
-          done
-          echo "::error::choco 安装 ffmpeg 连续 3 次失败"
-          exit 1
+        uses: ./.github/actions/retry
+        with:
+          label: choco 安装 ffmpeg
+          backoff: "15"
+          command: choco install ffmpeg -y --no-progress
 
-      - name: Install ffmpeg + xvfb (Linux, retry x3)
+      - name: Install ffmpeg + xvfb (Linux)
         if: matrix.platform == 'linux'
-        shell: bash
-        run: |
-          set -euo pipefail
-          for i in 1 2 3; do
-            if sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq -o Acquire::Retries=3 \
-              && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-                  -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
-                  --no-install-recommends ffmpeg xvfb; then
-              exit 0
-            fi
-            echo "::warning::apt 安装失败（第 ${i}/3 次），$((i * 15))s 后重试"
-            sleep $((i * 15))
-          done
-          echo "::error::apt 安装 ffmpeg/xvfb 连续 3 次失败"
-          exit 1
+        uses: ./.github/actions/retry
+        with:
+          label: apt 安装 ffmpeg/xvfb
+          backoff: "15"
+          command: >-
+            sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq -o Acquire::Retries=3
+            && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq
+            -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold
+            --no-install-recommends ffmpeg xvfb
 
-      - name: Install ffmpeg (macOS, retry x3)
+      # GitHub 的 macOS runner 预置了未受信的 aws/tap，Homebrew 新的 tap 信任机制
+      # 会因此报错。先显式信任该 tap（幂等、失败不阻断，无需重试），安装步骤内的
+      # HOMEBREW_NO_REQUIRE_TAP_TRUST=1 再兜底关闭整个校验。
+      # HOMEBREW_* 写在命令内而非 step env：复合动作对调用方 step 级 env 的可见性
+      # 无官方保证，显式 export 行为最确定。
+      - name: Trust preinstalled Homebrew tap (macOS)
         if: matrix.platform == 'macos'
         shell: bash
-        env:
-          HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
-          HOMEBREW_NO_AUTO_UPDATE: "1"
         run: |
-          set -euo pipefail
-          # GitHub 的 macOS runner 预置了未受信的 aws/tap，Homebrew 新的 tap
-          # 信任机制会因此报错。先信任该 tap，配合上面的环境变量兜底关闭校验。
+          export HOMEBREW_NO_REQUIRE_TAP_TRUST=1 HOMEBREW_NO_AUTO_UPDATE=1
           brew trust aws/tap || true
-          for i in 1 2 3; do
-            if brew install ffmpeg; then
-              exit 0
-            fi
-            echo "::warning::brew 安装 ffmpeg 失败（第 ${i}/3 次），$((i * 15))s 后重试"
-            sleep $((i * 15))
-          done
-          echo "::error::brew 安装 ffmpeg 连续 3 次失败"
-          exit 1
+
+      - name: Install ffmpeg (macOS)
+        if: matrix.platform == 'macos'
+        uses: ./.github/actions/retry
+        with:
+          label: brew 安装 ffmpeg
+          backoff: "15"
+          command: >-
+            export HOMEBREW_NO_REQUIRE_TAP_TRUST=1 HOMEBREW_NO_AUTO_UPDATE=1
+            && brew install ffmpeg
 
       # PyInstaller 来自 pyproject [project.optional-dependencies].build，
       # 不写死版本，保持与项目声明一致（>=6.10.0）。
-      - name: Install dependencies (retry x3)
-        shell: bash
-        run: |
-          set -euo pipefail
-          for i in 1 2 3; do
-            if python -m pip install --upgrade pip \
-              && pip install -r requirements.txt \
-              && pip install ".[build]"; then
-              exit 0
-            fi
-            echo "::warning::pip 安装失败（第 ${i}/3 次），$((i * 10))s 后重试"
-            sleep $((i * 10))
-          done
-          echo "::error::pip 安装连续 3 次失败（PyPI 网络异常）"
-          exit 1
+      - name: Install dependencies
+        uses: ./.github/actions/retry
+        with:
+          label: pip 安装依赖（requirements + build extras）
+          command: >-
+            python -m pip install --upgrade pip
+            && pip install -r requirements.txt
+            && pip install ".[build]"
 
       - name: Build executables + smoke test (Linux, xvfb)
         if: matrix.platform == 'linux'
@@ -465,10 +448,3 @@ jobs:
             echo "- 版本：\`v${{ needs.prepare.outputs.version }}\`"
             echo "- 产物：见 Release 附件（含 SHA256SUMS.txt）"
           } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Debug inputs
-        shell: bash
-        run: |
-          echo "inputs.create_release = ${{ inputs.create_release }}"
-          echo "github.event.inputs.create_release = ${{ github.event.inputs.create_release }}"
-          echo "type of create_release = $(type -t ${{ inputs.create_release }})"  # 仅示意
