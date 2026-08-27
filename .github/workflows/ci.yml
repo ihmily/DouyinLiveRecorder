@@ -119,14 +119,14 @@ jobs:
           # python_min     : 最低支持版本，用作 mypy 目标与覆盖率门禁基准版本
           # python_latest  : 最高支持版本，用作格式化检查（与 black target-version 上界对齐）
           # python_matrix  : 测试矩阵取「最低 + 最高」两端边界，兼顾覆盖面与额度成本；
-          #                  当前基线仅 3.14，矩阵含 3.15 为向前兼容预检。
+          #                  当前基线仅 3.14，矩阵含 3.14 为向前兼容预检。
           # python_build   : 打包解释器版本，**必须与 build-release.yml 的 python_build 同值**，
           #                  保证「CI 验证的打包环境」等于「实际发布的打包环境」。
           # node_version   : 仅供 JS 签名脚本运行时探测使用（非前端构建）
           {
             echo "python_min=3.14"
-            echo "python_latest=3.15"
-            echo 'python_matrix=["3.14","3.15"]'
+            echo "python_latest=3.14"
+            echo 'python_matrix=["3.13","3.14"]'
             echo "python_build=3.14"
             echo "node_version=24"
           } >> "$GITHUB_OUTPUT"
