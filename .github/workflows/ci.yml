@@ -9,7 +9,8 @@
 #     调起，src/node_install.py 负责探测与自动下载 —— 因此 CI 只需保证 node 可执行，
 #     而非构建前端。
 #   · 依赖管理为单源双写：requirements.txt（运行时）与 pyproject.toml
-#     [project.optional-dependencies]（dev / gui / build）。**没有 lock 文件**，
+#     [project.optional-dependencies]（dev / gui / build）。**没有 lock 文件**
+#     （uv.lock 仅随仓库分发，镜像/CI 均用 pip 走 requirements.txt，不消费它），
 #     故 pip 缓存 key 以这两个文件的 hash 为准。
 #   · 打包由根目录 build_exe.py（PyInstaller）承担，本地与 CI 行为一致。
 #
@@ -17,7 +18,7 @@
 #
 #   setup ──┬── static             格式 / 导入序 / 版本一致性 / i18n po-mo 同步
 #           ├── typecheck          mypy（最低支持版本 3.14，结论对最老解释器成立）
-#           ├── test               pytest 矩阵（3.14 / 3.15）+ 全局与逐模块覆盖率门禁
+#           ├── test               pytest 矩阵（3.14）+ 全局与逐模块覆盖率门禁
 #           ├── concurrency-test   线程安全 / 跨事件循环锁 / 速率限制专项
 #           ├── integration-verify ffmpeg / node 真实环境探测验证
 #           └── build-verify       PyInstaller lite 打包 + CLI/Web/GUI 三入口冒烟
@@ -118,15 +119,17 @@ jobs:
           set -euo pipefail
           # python_min     : 最低支持版本，用作 mypy 目标与覆盖率门禁基准版本
           # python_latest  : 最高支持版本，用作格式化检查（与 black target-version 上界对齐）
-          # python_matrix  : 测试矩阵取「最低 + 最高」两端边界，兼顾覆盖面与额度成本；
-          #                  当前基线仅 3.14，矩阵含 3.14 为向前兼容预检。
+          # python_matrix  : 测试矩阵固定 3.14 —— requires-python = ">=3.14" 且全库使用
+          #                  PEP 758 无括号多异常语法（except A, B:），3.13 及以下连
+          #                  解析都过不了，加入低版本矩阵只会常红；未来扩展新版本时
+          #                  仅改此一处（python_min / python_latest 同步更新）。
           # python_build   : 打包解释器版本，**必须与 build-release.yml 的 python_build 同值**，
           #                  保证「CI 验证的打包环境」等于「实际发布的打包环境」。
           # node_version   : 仅供 JS 签名脚本运行时探测使用（非前端构建）
           {
             echo "python_min=3.14"
             echo "python_latest=3.14"
-            echo 'python_matrix=["3.13","3.14"]'
+            echo 'python_matrix=["3.14"]'
             echo "python_build=3.14"
             echo "node_version=24"
           } >> "$GITHUB_OUTPUT"
@@ -197,27 +200,31 @@ jobs:
             python -m pip install --upgrade pip
             && pip install "black==${{ needs.setup.outputs.black_version }}" "isort==${{ needs.setup.outputs.isort_version }}"
 
-      # 排除目录由 pyproject.toml [tool.black].exclude 声明，此处无需重复传参
+      # 门禁显式传参（AGENTS.md 约定）：line-length / target-version / profile 不经
+      # 配置文件隐式继承，必须写全；排除目录仍由 pyproject [tool.black].exclude /
+      # [tool.isort].extend_skip 声明，此处无需重复传参
       - name: Run black --check
-        run: black --check --diff .
+        run: python -m black --check --diff --line-length 120 --target-version py314 .
 
-      # 排除目录由 pyproject.toml [tool.isort].extend_skip 声明
       - name: Run isort --check
-        run: isort --check --diff .
+        run: python -m isort --check-only --diff --profile black --line-length 120 .
 
       # 校验「版本号单一事实源」：pyproject.toml 为准，
       # main.py / src/web_api.py 动态读取、Dockerfile 经 APP_VERSION 注入
+      # （纯标准库实现，无需安装项目依赖）
       - name: Check version consistency
         run: python scripts/check_version.py
 
       # 校验 gettext 翻译同步：改 .po 忘记重编译 .mo 时拦截
-      # （.mo 随仓库分发，gettext 运行时只读 .mo）
+      # （.mo 随仓库分发，gettext 运行时只读 .mo；纯标准库实现）
       - name: Check i18n po/mo sync
         run: python scripts/compile_po.py --check
 
   # ── 2. 静态类型检查 ──────────────────────────────────────────────────────
   # 按 pyproject [tool.mypy] python_version = "3.14" 使用最低支持版本运行，
   # 保证类型结论对最老解释器成立。
+  # ubuntu runner 默认即为 linux 平台，等价于本地双跑门禁中的
+  # `mypy --platform linux src/`（AGENTS.md 平台符号门控约定）。
   typecheck:
     name: Type Check (mypy, py${{ needs.setup.outputs.python_min }})
     needs: setup
