@@ -21,6 +21,7 @@ def _install_fake_main() -> types.ModuleType:
     setattr(fake, "running_list", [])
     setattr(fake, "record_state_lock", threading.Lock())
     setattr(fake, "recording", set())
+    setattr(fake, "recording_enabled", False)
     sys.modules["main"] = fake
     return fake
 
@@ -252,6 +253,25 @@ class TestPasswordManagement:
         text = app_env.cfg.read_text(encoding="utf-8-sig")
         assert "newpass456" not in text
         assert "pbkdf2_sha256$" in text
+
+
+# POST /api/recording/toggle：Web 面板「开始/停止录制」按钮的录制开关。
+class TestRecordingToggle:
+    def test_toggle_requires_auth(self, app_env: types.SimpleNamespace) -> None:
+        resp = app_env.client.post("/api/recording/toggle", json={"enable": True})
+        assert resp.status_code == 401
+
+    def test_toggle_flips_engine_flag(self, app_env: types.SimpleNamespace, fake_main: types.ModuleType) -> None:
+        token = _login(app_env.client)
+        headers = {"Authorization": f"Bearer {token}"}
+        resp = app_env.client.post("/api/recording/toggle", json={"enable": True}, headers=headers)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["recording_enabled"] is True
+        assert fake_main.recording_enabled is True
+        resp = app_env.client.post("/api/recording/toggle", json={"enable": False}, headers=headers)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["recording_enabled"] is False
+        assert fake_main.recording_enabled is False
 
 
 class TestDangerousKeys:

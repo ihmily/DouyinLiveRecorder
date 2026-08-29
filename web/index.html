@@ -36,6 +36,14 @@
     <!-- 仪表盘 -->
     <main id="dashboard-view" class="view">
         <div id="engine-warning" class="engine-warning hidden" data-i18n="dashboard.engineWarning">⚠️ 录制引擎已停止运行，请检查日志或重启服务</div>
+        <div class="recording-control">
+            <span class="recording-state">
+                <span class="state-on hidden" data-i18n="recording.state.on">录制运行中</span>
+                <span class="state-off" data-i18n="recording.state.off">录制已停止</span>
+            </span>
+            <button id="recording-start-btn" data-i18n="recording.start">开始录制</button>
+            <button id="recording-stop-btn" data-i18n="recording.stop">停止录制</button>
+        </div>
         <div class="stat-cards">
             <div class="stat-card"><div class="stat-label" data-i18n="dashboard.monitoring">监测中</div><div class="stat-value" id="stat-monitoring">-</div></div>
             <div class="stat-card"><div class="stat-label" data-i18n="dashboard.recording">录制中</div><div class="stat-value" id="stat-recording">-</div></div>
@@ -85,6 +93,10 @@
                     <option value="" data-i18n="rooms.defaultQuality">默认画质</option>
                     <option value="原画">原画</option>
                     <option value="蓝光">蓝光</option>
+                    <option value="蓝光30M">蓝光30M</option>
+                    <option value="蓝光20M">蓝光20M</option>
+                    <option value="蓝光8M">蓝光8M</option>
+                    <option value="蓝光4M">蓝光4M</option>
                     <option value="超清">超清</option>
                     <option value="高清">高清</option>
                     <option value="标清">标清</option>

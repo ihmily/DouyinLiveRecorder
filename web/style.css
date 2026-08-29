@@ -245,6 +245,35 @@ button.small { background: var(--primary-soft); color: var(--primary); border: n
     font-weight: 600;
 }
 
+/* ===== 录制控制条（开始/停止录制按钮 + 状态标签） ===== */
+.recording-control {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 20px;
+}
+.recording-state { flex: 1; font-size: 14px; }
+.recording-state .state-on { color: var(--success); font-weight: 600; }
+.recording-state .state-off { color: var(--muted); font-weight: 600; }
+.recording-control button {
+    padding: 8px 20px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    transition: all 0.15s;
+}
+#recording-start-btn { background: var(--primary); color: #fff; }
+#recording-start-btn:hover:not(:disabled) { background: var(--primary-hover); }
+#recording-stop-btn { background: var(--danger); color: #fff; }
+#recording-stop-btn:hover:not(:disabled) { opacity: 0.9; }
+.recording-control button:disabled { opacity: 0.5; cursor: not-allowed; }
+
 @media (max-width: 768px) {
     .stat-cards { grid-template-columns: repeat(2, 1fr); }
     .config-row { grid-template-columns: 1fr; }

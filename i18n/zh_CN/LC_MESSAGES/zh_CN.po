@@ -1840,3 +1840,39 @@ msgstr "async_req 请求失败: {url} - {type(e).__name__}: {e}"
 msgid "进程退出释放 AsyncClient 失败: {type(e).__name__}: {e}"
 msgstr "进程退出释放 AsyncClient 失败: {type(e).__name__}: {e}"
 
+
+# 2026-08-29 补全：画质档位专项/选源重构/录制开关新增日志与提示串（11 条，
+# 来源 scripts/extract_i18n_strings.py 缺失清单；英文源串按 zh_CN 语义译出，中文源串恒等回填）。
+
+msgid "FLV URL validation failed, falling back to HLS"
+msgstr "FLV 地址校验失败，回退 HLS"
+
+msgid "HLS/FLV URL validation failed, trying record_url fallback"
+msgstr "HLS/FLV 地址校验失败，尝试回退 record_url"
+
+msgid "[{record_name}] ffmpeg 命令缺少 -i 输入参数，跳过探针退避清除"
+msgstr "[{record_name}] ffmpeg 命令缺少 -i 输入参数，跳过探针退避清除"
+
+msgid "[斗鱼直播] 全部档位拉流失败(尝试={attempt_rates})，本轮无可用流地址"
+msgstr "[斗鱼直播] 全部档位拉流失败(尝试={attempt_rates})，本轮无可用流地址"
+
+msgid "[斗鱼直播] 斗鱼无蓝光30M/20M档位，按蓝光8M(rate=8200)请求"
+msgstr "[斗鱼直播] 斗鱼无蓝光30M/20M档位，按蓝光8M(rate=8200)请求"
+
+msgid "[斗鱼直播] 请求档位 {code_to_zh(requested_code)}(rate={rate}) 失败，降级为 {code_to_zh(actual_code)}(rate={attempt}) 拉流成功"
+msgstr "[斗鱼直播] 请求档位 {code_to_zh(requested_code)}(rate={rate}) 失败，降级为 {code_to_zh(actual_code)}(rate={attempt}) 拉流成功"
+
+msgid "[虎牙直播] 请求档位 {code_to_zh(video_quality)}(ratio={target_ratio}) 不可用(房间最高码率={max_ratio})，降级为 {code_to_zh(actual_quality)}(ratio={chosen})"
+msgstr "[虎牙直播] 请求档位 {code_to_zh(video_quality)}(ratio={target_ratio}) 不可用(房间最高码率={max_ratio})，降级为 {code_to_zh(actual_quality)}(ratio={chosen})"
+
+msgid "[虎牙直播] 请求档位 {code_to_zh(video_quality)}(ratio={target_ratio}) 不可用(房间最高码率={max_ratio}，无更低档位)，按原画拉流"
+msgstr "[虎牙直播] 请求档位 {code_to_zh(video_quality)}(ratio={target_ratio}) 不可用(房间最高码率={max_ratio}，无更低档位)，按原画拉流"
+
+msgid "h265 编码候选无法 copy 录制，跳过: {url}"
+msgstr "h265 编码候选无法 copy 录制，跳过: {url}"
+
+msgid "关闭探针客户端失败: {type(e).__name__}: {e}"
+msgstr "关闭探针客户端失败: {type(e).__name__}: {e}"
+
+msgid "录制已停止，房间线程退出: {record_url}"
+msgstr "录制已停止，房间线程退出: {record_url}"

@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from src.stream import (
+    BD_SUB_TIERS,
     QUALITY_CODE_TO_ZH,
     QUALITY_LEVEL,
     QUALITY_MAPPING,
@@ -188,13 +189,29 @@ class TestConstants:
     # 确保画质相关常量映射保持一致。
 
     def test_quality_mapping_keys_match_level_keys(self) -> None:
-        assert set(QUALITY_MAPPING.keys()) == set(QUALITY_LEVEL.keys())
+        # QUALITY_LEVEL 是 QUALITY_MAPPING 的超集：额外含蓝光细粒度子档位（BD30/BD20/BD8/BD4）
+        assert set(QUALITY_MAPPING.keys()) <= set(QUALITY_LEVEL.keys())
+        assert set(BD_SUB_TIERS) == set(QUALITY_LEVEL.keys()) - set(QUALITY_MAPPING.keys())
 
     def test_quality_mapping_keys_match_bit_keys(self) -> None:
-        assert set(QUALITY_MAPPING.keys()) == set(QUALITY_MAPPING_BIT.keys())
+        # QUALITY_MAPPING_BIT 是 QUALITY_MAPPING 的超集：额外含蓝光细粒度子档位
+        assert set(QUALITY_MAPPING.keys()) <= set(QUALITY_MAPPING_BIT.keys())
+        assert set(BD_SUB_TIERS) == set(QUALITY_MAPPING_BIT.keys()) - set(QUALITY_MAPPING.keys())
 
     def test_quality_code_to_zh_keys_match_mapping_keys(self) -> None:
-        assert set(QUALITY_CODE_TO_ZH.keys()) == set(QUALITY_MAPPING.keys())
+        # QUALITY_CODE_TO_ZH 是 QUALITY_MAPPING 的超集：额外含蓝光细粒度子档位中文名
+        assert set(QUALITY_MAPPING.keys()) <= set(QUALITY_CODE_TO_ZH.keys())
+        assert set(BD_SUB_TIERS) == set(QUALITY_CODE_TO_ZH.keys()) - set(QUALITY_MAPPING.keys())
+
+    def test_bd_sub_tier_level_order(self) -> None:
+        # 蓝光子档位等级序：OD/BD(0) > BD30 > BD20 > BD8 > BD4 > UHD > HD > SD > LD
+        # （数值越大画质越低；is_downgrade 按 actual > requested 判定）
+        levels = [QUALITY_LEVEL[c] for c in ("OD", "BD", "BD30", "BD20", "BD8", "BD4", "UHD", "HD", "SD", "LD")]
+        assert levels == sorted(levels)
+        assert is_downgrade("BD8", "BD4") is True
+        assert is_downgrade("BD8", "BD30") is False
+        assert is_downgrade("BD4", "UHD") is True
+        assert is_downgrade("UHD", "BD4") is False
 
 
 # ────────────────────────────────────────────────────────────

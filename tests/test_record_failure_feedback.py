@@ -132,6 +132,56 @@ def test_check_subprocess_fast_failure_records_error_and_backoff(
     assert marks == [("http://hs.hls.huya.com/src/x.m3u8", "虎牙直播")]
 
 
+def test_check_subprocess_interrupts_when_recording_disabled(main_mod: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    # 停止录制（Web 面板「停止录制」置 recording_enabled=False）：录制中的 ffmpeg
+    # 被终止、返回 True（调用方据此结束房间线程）。poll 恒返回 None 模拟 ffmpeg
+    # 一直运行，验证中断只能来自 recording_enabled 检测点。
+    main = main_mod
+    successes, failures, _marks = _setup_common(monkeypatch, main, 0)
+    monkeypatch.setattr(main, "recording_enabled", False)
+
+    class _RunningPopen:
+        # 恒运行替身：poll 永远 None，__class_getitem__ 供 def 时注解求值（见 _setup_common 注释）
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.returncode = 0
+
+        def __class_getitem__(cls, item: Any) -> Any:
+            return cls
+
+        def poll(self) -> int | None:
+            return None
+
+        def wait(self, timeout: int = 0) -> int:
+            return 0
+
+    shim = types.SimpleNamespace(**vars(subprocess))
+    shim.Popen = _RunningPopen
+    monkeypatch.setattr(main, "subprocess", shim)
+
+    terminated: list[object] = []
+
+    def _fake_terminate(proc: object, timeout: int = 30) -> bool:
+        terminated.append(proc)
+        return True
+
+    monkeypatch.setattr(main, "_terminate_ffmpeg_process", _fake_terminate)
+
+    result = main.check_subprocess(
+        "主播名",
+        "https://www.huya.com/16028551",
+        ["ffmpeg", "-i", "http://hs.hls.huya.com/src/x.m3u8", "/tmp/out.ts"],
+        "TS",
+        None,
+        platform="虎牙直播",
+    )
+
+    assert result is True
+    assert len(terminated) == 1
+    # 中断退出非自然结束：不计成功/失败样本（与注释退出路径语义一致）
+    assert successes == []
+    assert failures == []
+
+
 def test_check_subprocess_slow_failure_skips_backoff_mark(main_mod: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     # 慢速失败（拉流中断/重连耗尽，通常 >60s）：只记失败样本，不记探针退避——
     # 该线路此前可正常拉流，标记退避会误伤下一轮的候选选择。

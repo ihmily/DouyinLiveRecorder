@@ -85,55 +85,64 @@ class TestSyncReq:
         result = sync_req("http://example.com", redirect_url=True)
         assert result == "http://redirected.com"
 
-    @patch("src.sync_http.requests")
+    # 代理分支走线程内复用的 Session（_session()），故 patch 该工厂函数而非 requests 模块本身。
+    @patch("src.sync_http._session")
     @patch("src.sync_http.config")
-    def test_proxy_get_request(self, mock_config: MagicMock, mock_requests: MagicMock) -> None:
+    def test_proxy_get_request(self, mock_config: MagicMock, mock_session_fn: MagicMock) -> None:
         # 带代理的 GET 请求.
         mock_config.ssl_verify = True
+        mock_session = MagicMock()
+        mock_session_fn.return_value = mock_session
         mock_response = MagicMock()
         mock_response.text = "proxy response"
         mock_response.url = "http://example.com"
-        mock_requests.get.return_value = mock_response
+        mock_session.get.return_value = mock_response
 
         result = sync_req("http://example.com", proxy_addr="http://proxy:8080")
         assert result == "proxy response"
-        mock_requests.get.assert_called_once()
+        mock_session.get.assert_called_once()
 
-    @patch("src.sync_http.requests")
+    @patch("src.sync_http._session")
     @patch("src.sync_http.config")
-    def test_proxy_post_request(self, mock_config: MagicMock, mock_requests: MagicMock) -> None:
+    def test_proxy_post_request(self, mock_config: MagicMock, mock_session_fn: MagicMock) -> None:
         # 带代理的 POST 请求.
         mock_config.ssl_verify = True
+        mock_session = MagicMock()
+        mock_session_fn.return_value = mock_session
         mock_response = MagicMock()
         mock_response.text = "post response"
         mock_response.url = "http://example.com"
-        mock_requests.post.return_value = mock_response
+        mock_session.post.return_value = mock_response
 
         result = sync_req("http://example.com", proxy_addr="http://proxy:8080", data={"key": "val"})
         assert result == "post response"
-        mock_requests.post.assert_called_once()
+        mock_session.post.assert_called_once()
 
-    @patch("src.sync_http.requests")
+    @patch("src.sync_http._session")
     @patch("src.sync_http.config")
-    def test_proxy_redirect_url(self, mock_config: MagicMock, mock_requests: MagicMock) -> None:
+    def test_proxy_redirect_url(self, mock_config: MagicMock, mock_session_fn: MagicMock) -> None:
         # 带代理的 redirect_url 返回 URL.
         mock_config.ssl_verify = True
+        mock_session = MagicMock()
+        mock_session_fn.return_value = mock_session
         mock_response = MagicMock()
         mock_response.url = "http://final.com"
-        mock_requests.get.return_value = mock_response
+        mock_session.get.return_value = mock_response
 
         result = sync_req("http://example.com", proxy_addr="http://proxy:8080", redirect_url=True)
         assert result == "http://final.com"
 
-    @patch("src.sync_http.requests")
+    @patch("src.sync_http._session")
     @patch("src.sync_http.config")
-    def test_proxy_post_with_json_data(self, mock_config: MagicMock, mock_requests: MagicMock) -> None:
+    def test_proxy_post_with_json_data(self, mock_config: MagicMock, mock_session_fn: MagicMock) -> None:
         # 带代理的 JSON POST 请求.
         mock_config.ssl_verify = True
+        mock_session = MagicMock()
+        mock_session_fn.return_value = mock_session
         mock_response = MagicMock()
         mock_response.text = "json response"
         mock_response.url = "http://example.com"
-        mock_requests.post.return_value = mock_response
+        mock_session.post.return_value = mock_response
 
         result = sync_req("http://example.com", proxy_addr="http://proxy:8080", json_data={"a": 1})
         assert result == "json response"
