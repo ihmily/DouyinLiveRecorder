@@ -829,6 +829,42 @@ brew install node
 
 ## ⏳ 更新日志
 
+### v4.0.9.2 (2026-08-28 ~ 2026-08-29) — Web 面板录制手动控制 / 虎牙·斗鱼蓝光细粒度画质档位 / 性能审查优化落地（P1~P5）/ 探针退避窗口自愈与虎牙 FLV-first / Web 后台日志 sink 重建
+
+> 本版本沿「可控性、画质粒度、高并发性能」三条主线：Web 面板移除启动自动录制、新增「开始/停止录制」手动控制（全局开关 + 录制主链 7 处中断点 + ffmpeg 分级优雅终止）；虎牙/斗鱼支持蓝光细粒度档位（蓝光4M/8M/20M/30M 的选档 → 拉流 → 不可用就近降级全链路）；性能审查落地 P1~P5 五项优化（80 房间选源探针耗时 12.7s → 1.15s），并经三轮真机验证根治虎牙冷启动「探针假绿 → ffmpeg 403」死循环（退避窗口对齐主循环 + 录制成功清除退避 + 虎牙 FLV-first）与 Web 后台模式日志写向被隐藏窗口的问题。**无破坏性变更**（配置项与运行时语义完全兼容；虎牙选源顺序反转为 FLV-first、斗鱼保持 HLS-first，属行为变更）。详细根因与验证见 [CODE_WIKI.md](CODE_WIKI.md)。
+
+**🎥 Web 面板录制手动控制（新增功能）**
+- 全局开关 `main.recording_enabled`（默认 True，CLI/GUI 直跑完全不受影响）：Web 启动录制引擎前先置 False，面板默认**不再自动录制**；点「开始录制」后主循环按 URL 配置逐个拉起房间，配置热加载、并发调度器、弹幕监控全程保持运行。
+- 录制主链注入 **7 处中断点**：ffmpeg 轮询（1s 周期）、直下下载 chunk 级、房间线程入口、直下失败判定排除、循环等待期打断、主循环拉起新线程前、线程退出 finally 兜底（`remove_room_from_running` 幂等清理运行列表，保证重新开始后房间能再次拉起）。
+- 新增 `POST /api/recording/toggle` 切换端点（处于既有 Bearer 认证中间件覆盖内）与状态快照 `recording_enabled` 字段；前端新增「开始/停止录制」按钮与运行状态标签，仪表盘 2s 轮询持续同步真实态（按钮防重复点击、引擎存活联动禁用）。
+- **停止语义为主动分级优雅终止**：轮询命中开关关闭即按「stdin 写 'q'（写完文件尾，TS/FLV/分段不损坏）→ terminate → kill」三级升级（总窗口 30s），进程 wait 回收、注册表注销，无孤儿 ffmpeg；停止中断不计入错误样本（防止误触按 host 熔断与错误背压降容）。
+- `recording_enabled` 为会话级运行时开关、不持久化：重启后面板回到停止态，避免从后门重新引入「启动即自动录制」。
+
+**🎚️ 虎牙/斗鱼蓝光细粒度画质档位（新增功能）**
+- 画质代码层扩展：`QUALITY_LEVEL` / `QUALITY_MAPPING_BIT` / `QUALITY_CODE_TO_ZH` 由 6 项扩为 10 项（新增 `BD30`/`BD20`/`BD8`/`BD4`）并新增 `BD_SUB_TIERS` 冻结集合；`get_quality_index` 将蓝光子档位折叠到 `BD` 槽位，抖音/TikTok 等按数字 0–5 选档平台的语义完全不变。
+- 虎牙：新增 `HUYA_FIXED_TIERS`（ratio 即码率上限 kbps，直接拼在 FLV/HLS URL query 上选档、流地址路径不变）；`exsphd` 档位表优先、`gameLiveInfo.bitRate` 兜底推导可用档；请求档不可用时**就近向下降级**并明确告警（含请求档/房间上限/实际档），无任何更低档时按原画拉流、链路不中断。
+- 斗鱼：新增 `DOUYU_RATE_BY_CODE` / `DOUYU_RATE_TO_CODE` / `DOUYU_RATE_DESC`；请求档被限制（如游客态原画被拒）时按全序**本地最多回退 2 档重试**；服务端「就近钳制」的真实档位经 `rate` 字段回采（实测请求 rate=8200 无此档被钳到 rate=4 → 蓝光4M）。斗鱼无 20M/30M 档，选择时按蓝光8M 请求。
+- Web 面板画质下拉新增 蓝光30M/20M/8M/4M 四个选项；真机 ffprobe 采样确认各档分辨率/帧率与档位表一致（原画 2560×1440@60、蓝光30M~8M 1920×1080@60、蓝光4M 1080p30、超清 720p30、流畅 450p24）。
+
+**⚡ 性能优化（审查落地 P1~P5）**
+- **P1 探针客户端整轮复用**：`select_source_url` 全部候选共用一支 `httpx.Client`（`finally` 关闭，UA/Referer/Cookie 改逐请求下发）；80 房间 × 10 探针的每轮选源耗时 **12.7s → 1.15s**，并发连接峰值反而 4 → 1。刻意不做全局客户端缓存（虎牙 CDN 按连接预算限流，常驻 keepalive 会与 ffmpeg 拉流争抢预算），并实测证明**禁止为保险关 keepalive**（反而 8 连接 / 72.99ms，收益全退）。
+- **P2 `requests.Session` 线程级复用**：`sync_http` 经 `threading.local` 每线程一支 Session（125 个调用点全部受益），实测单请求 11.9ms → 1.47ms。
+- **P3 主循环去重容器 set 化**：`url_comments` / `line_list` / `url_line_list` 由 list 改 set（成员检测 O(N²) → O(1)），`url_comments.discard` 取代每行整表重建。
+- **P4 调度器计数增量**：熔断窗口与全局错误窗口改增量维护（O(1) 替代持锁下 O(40) 全量求和），缩短锁持有时间。
+- **P5 高频正则提模块级常量**：表情模式（约 400 字符）、URL 片段、HLS 带宽、抖音 HEVC 等 5 处函数内 `re.compile` 上提为模块级常量；`update_config_line` 按 key 编译的正则经 `functools.lru_cache` 缓存。
+
+**🐛 问题修复（真机验证衍生）**
+- **探针退避窗口自愈（虎牙假绿死循环根因）**：原固定 60s 退避窗口小于主循环默认 120s 间隔——快速失败记入退避后下一轮 T+124s 才到、早已过期，历史日志中「CDN 探针退避中」告警从未出现；改为 `_probe_backoff_window() = max(60s, 循环间隔 + 70s)`，覆盖「单轮等待 = 间隔 + ±5s 抖动 + 错误窗口满 5 次再 +60s」的最坏节奏。
+- **录制成功撤销探针退避**：新增 `clear_ffmpeg_reject()` 与失败侧 `mark_ffmpeg_reject` 配对——已恢复的线路不再被窗口内继续跳过、白白回退到次优线路。
+- **虎牙选源反转为 FLV-first**：三轮真机实证 HLS 三条 CDN（hs/tx/al）冷启动探针假绿（探针 200/206、ffmpeg 打开即 403），FLV 每轮稳定可用（最长连录 6 分钟）——虎牙候选顺序改为 FLV → HLS → record_url，冷启动假绿损失约 2 分钟 → 0（斗鱼绝不加入，其游客态 FLV 约 70 秒被 CDN 掐断必须 HLS-first）；h265 候选在构建统一候选序列时即剔除，不再白烧探针。真机对比：修复前 5 次秒退、12 分钟才稳定 → 修复后 1 次秒退、2 分钟即稳定。
+- **Web 后台模式日志 sink 重建**：loguru 的 sink 在 `add()` 时绑定具体对象、不随 `sys.stderr` 重定向而变——不重建则 DEBUG/WARNING 全部写向被 SW_HIDE 隐藏的控制台，`web_console.log` 只剩 print 输出（实测曾据此把「探针假绿」误判成「校验未执行」）；`logger.py` 新增 `rebind_console_sink()`，`web.py` 后台模式重定向后重建 sink，并补 `sys.stderr is None` 判空（pythonw / 冻结 exe 导入期静默崩溃根治）。
+- **Web 录制控制双轮审查修复**：前端状态标签选择器缺陷（容器实为 class 却用 `#id` 选择器、状态永不切换，P1）等 3 处。
+
+**🧪 测试与验证**
+- 新增 `tests/test_quality_tiers.py`（29 用例：子档位映射/索引折叠/虎牙就近降级/斗鱼重试链）、`tests/test_logger_console_sink.py`（3 用例：跟随当前 stderr / 替换而非追加 / None 静默）；`test_stream_select.py` 新增客户端整轮复用与逐请求头、退避窗口覆盖主循环周期、成功清除退避、虎牙 FLV-first 与斗鱼保持 HLS-first 用例；`test_record_failure_feedback.py` 增「停止录制中断不采样」用例；`test_web_api.py` 增录制开关端点用例。
+- 全量 `pytest` **786 passed / 2 skipped**；black / isort / `compile_po.py --check` 全绿。类型门禁存数处已知遗留（`stream.py:609` 的 mypy 报错、`test_quality_tiers.py` 的 basedpyright 5 处 `await_args` Optional 访问、CI 测试矩阵 3.13 档与 PEP 758 语法冲突），均不影响运行时，修复项已记录于 CODE_WIKI 总览条目「验证」节。
+- 三轮真机验证（虎牙 880214 / chuhe、斗鱼 3168536）：退避告警首次出现、FLV 稳定连录 6 分钟、`web_console.log` 恢复完整 DEBUG/WARNING；斗鱼 rate 钳制与回采行为实测吻合。
+
 ### v4.0.9.1 (2026-08-27 ~ 2026-08-28) — 高并发调度加固 / 本地化系统修复 / 编译与熔断门禁修复 / CI 工作流优化与重试收敛
 
 > 本版本为 4.0.9 调度体系的审查修复与加固批次，并收尾本地化子系统：全量质量门禁 + 并行代码审查发现并修复多个高危/中危缺陷，i18n 目录经全仓 AST 扫描全量补全至 496 条、解除 i18n 模块语法阻塞并重新编译 `zh_CN.mo`；08-28 追加 CI 工作流优化（重试收敛为复合动作）、PEP 758 格式化随 black 26 落地与仓库元数据八文件同步。**无破坏性变更**（配置项与运行时语义完全兼容）。详细根因与验证见 [CODE_WIKI.md](CODE_WIKI.md)。

@@ -1579,6 +1579,343 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 
 ## Changelog
 
+### v4.0.9.2-dev (2026-08-29) — Full Working-Tree Change Overview (Classified by Module): 98 files / +10334 −3123, covering all uncommitted changes from 2026-08-23 through 08-29
+
+**Change Summary**: This entry is the systematic, module-classified overview of the **entire uncommitted working tree** (95 tracked files changed +10334/−3123, plus 3 new untracked documents — 98 files in total), superseding the v4.0.9-dev (2026-08-24) overview entry as the latest full snapshot (work landed after 08-24 — scheduling feedback, performance optimization, CI restructuring, Web recording control, quality tiers, etc. — is documented in the individual feature entries; this entry consolidates everything into a single "file → module → change type (new feature / modification / deletion)" index). Feature highlights — new: ① concurrency scheduling hub `src/scheduler.py`, ② Web panel manual recording control, ③ Huya/Douyu fine-grained Blu-ray quality tiers, ④ the i18n four-language four-format localization system, ⑤ GUI crash observability and the language menu; modified: main.py recorder-engine refactor (platform-dispatch extraction + recording-result feedback + set-based dedup), stream_select unified candidate sequence and probe backoff, HTTP-layer session reuse and 3.14 adaptation, CI/CD workflow restructuring; deleted: the old fixed semaphore and one-way `adjust_max_request` suppression, unconditional end-of-round success sampling, the expired Migu `sv=10010` concatenation, and leftover debug steps in build-release.
+
+**Files Involved (Classified by Module)**:
+
+**1. Concurrency Scheduling & Recording-Engine Core (new feature + modification) — `src/scheduler.py` (new) / `main.py` / `src/notify.py` / `src/recorder_status.py`**
+
+- `src/scheduler.py` (**new file, 442 lines**): `ResizableSemaphore` (runtime-resizable semaphore, capacity may be 0, growing wakes waiters) / `PlatformBreaker` (per-host circuit breaker closed→open→half-open, probe carries a 60s lease that self-heals to prevent permanent tripping) / `ConcurrencyScheduler` (dynamic scaling default min=8/max=128, fixed-concurrency dual mode, incremental global error-window counting, `adjust_loop` 5s daemon loop) / `host_of` (breaker key extraction). Replaces the old "single global `threading.Semaphore(1)` + one-way error-rate suppression" model.
+- `main.py` (+922/−796, the largest single-file change): ① scheduler wiring — `scheduler` instantiated on the first `main()` round, `semaphore`/`recording_semaphore` rebound to its internal semaphores, `set_configured_limit`/`set_recording_limit`/`set_dynamic_mode`/`set_active_count` hot-updated every round; ② platform-dispatch extraction — the former ~700-line inline if/elif chain moved out into `_resolve_platform_stream()` (semantics unchanged); ③ recording-result feedback — `check_subprocess` reports `record_success`/`record_error(host_of)` by exit code, fast failure (≤20s) calls `mark_ffmpeg_reject` to arm probe backoff, success rounds call `clear_ffmpeg_reject`, successful resolution reports a success sample immediately, and the direct-download path reports by download result; ④ Web recording switch — new global `recording_enabled` flag + 7 interrupt points (ffmpeg polling / direct-download chunk / thread entry / failure classification / wait period / pre-spawn check / finally cleanup); ⑤ main-loop performance — `url_comments`/`line_list`/`url_line_list` converted from list to set (O(N²)→O(1)), `url_comments.discard` replaces whole-list rebuilds, `dict.fromkeys` for order-preserving dedup; ⑥ misc — `_sync_ssl_disable_platforms` (auto-append Huya/Bilibili to the SSL-disable platform key at startup), `_read_language_config` legacy-key migration, room-thread finally calling `get_hub().room_stopped`, per-round i18n hot re-sync.
+- `src/notify.py` (+39/−30): `record_error`/`record_success` gain a `key` parameter and delegate to the scheduler (per-key breaking + global backpressure); `adjust_max_request` now waits for scheduler readiness and runs `adjust_loop` (old incremental up/down logic deleted); new `remove_room_from_running()` (thread-exit fallback cleanup of the running list).
+- `src/recorder_status.py` (+20/−2): status JSON gains a `recording_enabled` field; new `_live_network_capacity()` (console shows the scheduler's live capacity, falling back to the configured value when not ready); bare `logger.error(e)`-style exception logs augmented with type and context.
+- **Deletions**: the old `adjust_max_request` `threading.Semaphore` rebuild logic, the unconditional end-of-round `record_success` in `check_subprocess`, and the module-level `threading.Semaphore(1)` in main.py.
+
+**2. Source Selection & Stream-URL Validation (modification) — `src/stream_select.py` / `src/stream.py`**
+
+- `src/stream_select.py` (+260/−131): ① unified candidate sequence — HLS/FLV/record_url merged into a single ordered sequence validated candidate-by-candidate (Huya flipped to FLV-first via `_FLV_FIRST_PLATFORMS`), h265 candidates removed at sequence construction, `last_resort` unified as "last of the filtered sequence with no record_url"; ② probe-client reuse — `select_source_url` shares one `httpx.Client` across the whole round (closed in `finally`), `_validate_stream_url` gains an optional `client` parameter with `owns_client` self-management semantics, and UA/Referer/Cookie are now sent per-request; ③ probe backoff — `_probe_backoff_window()` dynamic window (≥ one main-loop period + 70s margin), new public entries `mark_ffmpeg_reject()`/`clear_ffmpeg_reject()` (symmetric); ④ `_confirm_get_ok` gains a `headers` parameter (GET recheck uses the same headers as HEAD); ⑤ `_PROBE_TIMEOUT_SECONDS` constant; ⑥ `_URL_PATTERN` and the 10-tier `get_quality_code` mapping (see the quality entry); ⑦ two silent paths (all three address kinds empty / HLS disabled with no fallback) now log warnings.
+- `src/stream.py` (+202/−18): the fine-grained Blu-ray tier specialization — `QUALITY_MAPPING_BIT`/`QUALITY_LEVEL`/`QUALITY_CODE_TO_ZH` expanded to 10 items, new `BD_SUB_TIERS`/`HUYA_FIXED_TIERS`/`HUYA_RATIO_TO_CODE`/`DOUYU_RATE_BY_CODE`/`DOUYU_RATE_TO_CODE`/`DOUYU_RATE_DESC`, `get_quality_index` folding sub-tiers into BD, `get_huya_stream_url` ratio-based tier selection with nearest-downgrade, and `get_douyu_stream_url` rate retry chain (up to 2 fallback tiers) with the real tier read back from the `rate` field.
+- **Deletions**: the old `DOUYU video_quality_options`/`rate_to_code` tables, the old "FLV is h265 → immediately retry the whole HLS group" inserted fallback, and the `sv=10010` local concatenation (see 3).
+
+**3. Platform Parsers & JS Signing (modification) — `src/spider.py` / `src/javascript/migu.js` (rewritten) / `src/platforms/bilibili.py` / `src/platforms/douyu.py`**
+
+- `src/javascript/migu.js` (+159/−74, full rewrite): adapted to the migu player v_20260731+ wasm interface (import functions 3→12, a..l, with export names reshuffled); the encryption factor is fetched from the official factor API (falling back to the player's built-in default on failure); outputs the **complete signed URL** with `ddCalcu`/`sv` parameters.
+- `src/spider.py` (+18/−12): `_BANDWIDTH_PATTERN`/`_DOUYIN_HEVC_FLV_PATTERN` hoisted to module-level precompiled regexes; `get_migu_stream_url` consumes the full URL produced by migu.js directly (removing the fixed `sv=10010` concatenation); PEP 758 formatting.
+- `src/platforms/bilibili.py` / `src/platforms/douyu.py`: danmaku color parsing `except` comma-style (PEP 758 mechanical reformat).
+
+**4. HTTP & Network Layer (modification) — `src/async_http.py` / `src/sync_http.py` / `src/http_config.py` / `src/ws_client.py` / `src/ttwid.py` / `src/collector.py`**
+
+- `src/async_http.py` (+15/−2): `close_all_clients_sync` adapted to Python 3.14 — catches `RuntimeError` from `asyncio.get_event_loop()` when no loop exists and falls back to reference cleanup; `async_req` exception logs now include the URL and exception type (fixing empty-string exceptions on Windows).
+- `src/sync_http.py` (+21/−2): `_session()` reuses `requests.Session` per thread via `threading.local()` (all ~125 `sync_req` call sites go through it; measured 11.9ms→1.47ms per request).
+- `src/http_config.py` (+14/−9): FFmpeg 9.0 verifies TLS certificates by default — the "platforms with SSL verification disabled" override regains real effect; `get_effective_ssl_verify()` now consults platform overrides only when `ssl_verify=True` (http recording mode).
+- `src/ws_client.py` / `src/ttwid.py` / `src/collector.py`: PEP 758 formatting (the danmaku WS `proxy=None` direct-connect convention unchanged).
+
+**5. Config, Logging & Utilities (modification) — `src/config_io.py` / `src/web_config.py` / `src/logger.py` / `src/ffmpeg_install.py` / `src/utils.py`**
+
+- `src/config_io.py` (+17/−2): `read_config_value` default-value write-back now fully serializes into an in-memory `StringIO` first and only touches disk on success; on failure it rolls back the in-memory state and removes the bad key (preventing Python 3.14's `InvalidWriteError` from truncating the config file).
+- `src/web_config.py` (+50/−6): `update_config_line` key matching is now case-insensitive (`_key_line_pattern` precompiled via `lru_cache(128)`); new `append_config_line()` (creates missing keys, the Web language write-back fallback); `QUALITY_KEYWORDS` expanded to 10 tiers; PEP 758.
+- `src/logger.py` (+35/−3): `sys.stderr is None` guard (root-causes the import-time silent crash under pythonw / `console=False` frozen executables); new `rebind_console_sink()` (rebuilds the loguru console sink after Web background-mode stderr redirection).
+- `src/ffmpeg_install.py` (+8/−8): Lanzou-cloud FFmpeg download-source domain switch `wweb.lanzouv.com` → `wwasx.lanzout.com` (Origin/Referer/API and extraction password updated together).
+- `src/utils.py` (+23/−18): `_EMOJI_PATTERN` hoisted to a module-level precompiled regex (`remove_emojis` no longer recompiles the ~400-char pattern per call).
+
+**6. Web Panel (new feature + modification) — `src/web_api.py` / `web.py` / `web/index.html` / `web/app.js` / `web/style.css`**
+
+- `src/web_api.py` (+49): new `POST /api/recording/toggle` (recording master switch) and `GET/PUT /api/language` (language query / hot switch: normalized validation → `update_config_line` write-back, falling back to `append_config_line` key creation → `set_language` hot swap); new `RecordingToggle`/`LanguageUpdate` models; both endpoints sit inside the existing Bearer auth middleware.
+- `web.py` (+15/−2): sets `main.recording_enabled = False` before starting the engine thread (Web does not auto-record); `_enter_background_mode` calls `rebind_console_sink()` after redirecting stderr.
+- `web/index.html` (+54/−41): new "recording control" block (state twin spans + start/stop buttons) and a topbar language selector; the `room-quality` dropdown gains the BD30M/BD20M/BD8M/BD4M tiers; all elements annotated with `data-i18n`/`data-i18n-placeholder`.
+- `web/app.js` (+323/−45): new front-end i18n dictionary `I18N` (~230 lines, ~95 keys × 4 languages) with `t()`/`applyTranslations()`/`initLanguage()` (localStorage memory + backend sync); new `renderRecordingControl()` (mutually exclusive buttons + engine-alive gating) and `toggleRecording()` (POST toggle + status re-fetch); all previously hardcoded Chinese copy switched to `t()` calls.
+- `web/style.css` (+41/−1): recording-control styles (primary start / red stop / disabled states).
+
+**7. GUI (new feature + modification) — `gui.py` (+173/−7)**
+
+- Crash observability: new `_install_crash_sink()` (`sys.excepthook` + `threading.excepthook` dumping to a temp-dir log with a best-effort dialog, fixing the windowless silent crash under pythonw / frozen executables), `_bootstrap_error_sink()` (`main()` top-level fallback), and the `_bootstrap_crash_reported` duplicate-suppression flag.
+- Language menu: a sidebar "语言 Language" `CTkOptionMenu`; `_on_language_change()` hot-swaps via `set_language()` and persists through `update_config_line` to config.ini; startup resolves config → system language.
+- UI callback exceptions changed from `traceback.print_exc()` (which would crash again when `sys.stderr is None`) to in-app logging.
+
+**8. i18n Localization System (new feature + modification) — `i18n.py` (rewritten) / `i18n/en_US.json` (new) / `i18n/en_GB.json` (new) / `i18n/zh_TW.yaml` (new) / `i18n/zh_CN.po|.mo` / `scripts/extract_i18n_strings.py` (new) / `scripts/compile_po.py`**
+
+- `i18n.py` (+270/−31): rewritten as a multi-format engine — per language it probes gettext `.mo` → `<lang>.json` → `<lang>.yaml` in order; new `resolve_language()` (empty → system language → en_US fallback, one entry point), `detect_system_language()` (environment variables → Windows `GetUserDefaultUILanguage` behind a platform gate → POSIX locale, with C/POSIX filtering), `set_language()` runtime hot swap, plus `normalize_language()`/`is_recognized_language()`/`has_catalog()` and other public helpers (nine in total); the four catalogs' key sets are enforced identical (locked by test_i18n).
+- Catalogs: new `i18n/en_US.json`, `i18n/en_GB.json` (American/British spelling split), `i18n/zh_TW.yaml`; `zh_CN.po` recompiled into `.mo`; all four catalogs now hold **496 entries** each (288 → 492 → 496 across three replenishment rounds); `.mo` is byte-level synced with `.po` (CI `compile_po --check` gate).
+- New `scripts/extract_i18n_strings.py` (166 lines): AST-scans print constant strings + logger f-string templates and diffs them against the four catalogs (f-string normalization: drop format/conversion specs, double→single quotes, pure-placeholder templates excluded).
+- `scripts/compile_po.py`: pure-Python po→mo compilation fixed (its own earlier syntax error meant `.mo` was never written); `scripts/check_coverage.py` minor adjustments.
+
+**9. Build / CI / Dependencies / Repository Metadata (modification + addition) — `pyproject.toml` / `requirements.txt` / `uv.lock` / `Dockerfile` / `docker-compose.yaml` / `build_exe.py` / `.github/*` / `.coveragerc-concurrency` (new) / `.dockerignore` / `.gitignore`**
+
+- `pyproject.toml`: version `4.0.8.3` → `4.0.9.1`; `requires-python` `>=3.10` → `>=3.14`; classifiers collapsed to 3.14; dependency addition `PyYAML>=6.0.3`; `[tool.black] target-version=['py314']`, `[tool.mypy] python_version=3.14`, `[tool.basedpyright] pythonVersion=3.14`; pytest gains `filterwarnings` (starlette testclient deprecation ignored).
+- `requirements.txt`: adds `PyYAML>=6.0.3` (lower bound consistent with pyproject); danmaku dependency comment paths corrected (`src/danmaku/` → actual `src/` layout).
+- `uv.lock`: re-locked against the 3.14 baseline (net −963 lines; images/CI install via pip from requirements.txt and do not consume it).
+- `Dockerfile`: base image `python:3.13-slim` → `python:3.14-slim`; Node.js `setup_22.x` → `setup_24.x` (24 LTS, verified against all JS signing scripts plus the rewritten migu.js).
+- `docker-compose.yaml`: version example comment synced to 4.0.9.1.
+- `build_exe.py`: PEP 758 formatting (packaging/smoke semantics unchanged).
+- `.github/workflows/ci.yml`: restructured into a setup + static/typecheck/test/concurrency-test/integration-verify/build-verify/ci-summary topology (explicit per-job timeouts, ci-summary as the sole required check); actions bumped to v7 (checkout/setup-python/setup-node/upload-artifact); `python_min/python_latest/python_build=3.14`, `python_matrix=["3.13","3.14"]`, pinned mypy 2.3.0 / black 26.5.1 / isort 8.0.1; paths-filter now triggers on `i18n/**`. Note: the 3.13 matrix leg conflicts with the repo-wide PEP 758 paren-less syntax at collection time (Python 3.13 does not support `except A, B:`); the matrix must be collapsed to `["3.14"]` before committing.
+- `.github/workflows/build-release.yml`: `python_build` 3.12→3.14; all network installs (choco/apt/brew/pip) consolidated into the retry composite action; macOS tap trust as a separate step; trailing "Debug inputs" step deleted.
+- New `.github/actions/retry/action.yml` (linear-backoff ×3 composite action, shared by 9 sites in ci.yml + 4 in build-release.yml); new `.github/ISSUE_TEMPLATE/` (bug/feature/question, ZH+EN), `.github/PULL_REQUEST_TEMPLATE.md`, `.github/workflows/issue-translator.yml` (automatic issue translation).
+- New `.coveragerc-concurrency` (coverage config dedicated to concurrency tests, referenced by CI via `COVERAGE_RCFILE`); `.dockerignore`/`.gitignore` expanded in lockstep (local tool dirs, `uv.lock`, `scripts/`, `AGENTS.md`, `*.isorted`, etc.).
+- **Deletions**: 13 inline `for i in 1 2 3` retry loops across the two workflows, and the build-release.yml debug step.
+
+**10. Tests (4 new files + 30 modified) — `tests/`**
+
+- New: `tests/test_scheduler.py` (192 lines, 16 cases: capacity adaptation / dual-mode switching / `ResizableSemaphore` resizing / breaker state machine and probe lease), `tests/test_record_failure_feedback.py` (311 lines: success / fast failure / slow failure / missing `-i` tolerance / no sampling on stop interrupts / capacity display fallback), `tests/test_quality_tiers.py` (270 lines, 29 cases: sub-tier mapping / index folding / Huya nearest-downgrade / Douyu retry chain), `tests/test_logger_console_sink.py` (72 lines: stderr guard + sink rebuild).
+- Modified (representative): `tests/test_stream_select.py` (+215: unified candidate sequence / last-resort pass-through / cross-round backoff hit / no-op for non-whitelisted platforms), `tests/test_i18n.py` (+234: four-catalog consistency / platform gating / C-POSIX filtering / monkeypatch compliance), `tests/test_config_io_readonly.py` (+134: StringIO pre-serialization / bad-key rollback), `tests/test_web_api.py` (+133: language endpoints / recording toggle endpoint), `tests/test_spider_platform.py`, `tests/test_main_fixes.py`, `tests/test_concurrency.py` (lock-type assertions synced), etc.
+- Current suite status: `pytest` **786 passed, 2 skipped** (0 failures); `tests/test_twitch_live_collector.py` must run in isolation due to the sandbox recycle-bin guard — an environment limitation, not a regression.
+
+**11. Documentation & Review Artifacts (new + modified) — `AGENTS.md` / `README.md` / `CODE_WIKI.md` / `CODE_WIKI_EN.md` (new) / `README_EN.md` (new) / `PERF_REVIEW_2026-08-28.md` (untracked)**
+
+- `AGENTS.md` (+270): consolidates the "Concurrency & Thread Model" (scheduling hub / recording-result feedback / lock conventions) and a dozen-plus "Known Pitfalls (Regression Avoidance)" entries (danmaku `proxy=None`, probe tolerance semantics, Huya backoff & FLV-first, UA parity, PEP 758, 3.14 breaking changes, i18n multi-format, configparser delimiters, etc.).
+- `README.md` (+303): user documentation updated for the 3.14 baseline, i18n, Web recording control, etc.; new `README_EN.md` (English user docs) and `CODE_WIKI_EN.md` (English architecture doc, mirrored with this document).
+- `CODE_WIKI.md` / `CODE_WIKI_EN.md`: a dozen-plus per-feature changelog entries added since 2026-08-23 plus this overview entry (ZH/EN synchronized).
+- `PERF_REVIEW_2026-08-28.md` (untracked, local working-tree file): the full review report behind the P1~P5 performance optimizations (including one misjudgment and its rollback), with conclusions already distilled into AGENTS.md and the 2026-08-28 performance entry.
+- Erratum: the `docs/web-recording-control-changelog.md` and `docs/security-triage-2026-08-29.md` mentioned by the earlier "Web Panel Manual Recording Control" entry are not present in the current working tree; the file list in this overview is authoritative.
+
+**Change Notes**:
+
+- **Complete change-type inventory** — new features (scheduler, Web recording control, fine-grained quality tiers, i18n system, GUI crash fallback/language menu, retry composite action, community templates, three English/bilingual documents, 4 new test files); modifications (main.py engine refactor, stream_select source selection, HTTP-layer reuse and 3.14 adaptation, CI topology, Docker baseline, pyproject/requirements); deletions (old semaphore rebuild and one-way suppression, unconditional end-of-round success sampling, old Douyu tier tables, `sv=10010` concatenation, CI inline retries and the debug step, the `language(zh_cn/en)` legacy-key semantics).
+- **Three main lines are mutually independent yet interlocking**: concurrency scheduling (who may issue network requests) → recording feedback (results feed breaker statistics) → probe backoff (bad routes short-listed); quality tiers (which tier to pick) → unified candidate sequence (what order to try) → probe-client reuse (how to try more cheaply); i18n backend (four-format catalogs + hot swap) → Web front-end dictionary (UI copy) → GUI menu (entry point).
+- **The Python 3.14 migration cuts across every module**: the `asyncio.get_event_loop` RuntimeError fallback, the `configparser.InvalidWriteError` pre-serialization defense, repo-wide PEP 758 formatting (black py314-enforced style, not a syntax regression), and `ctypes.WinDLL` platform gating.
+- This overview complements the individual entries: those explain "why and how", this one explains "which files changed and which module they belong to"; line numbers live in the individual entries and are not repeated here.
+
+**Impact Scope**:
+
+- User-visible: the Web panel no longer auto-records on startup (requires clicking "Start recording"); UI/console support four-language hot switching; Huya/Douyu offer fine-grained Blu-ray tiers with automatic downgrade; queuing delay and error amplification under 80+ room concurrency are substantially reduced; pythonw/frozen GUI crashes are observable.
+- Unchanged behavior: CLI/GUI direct-run recording flow, danmaku `proxy=None` direct connection, probe tolerance (retry-once-then-condemn / last-resort pass-through), word-for-word UA parity, Douyu HLS-first / Huya FLV-first and all other existing conventions.
+- Deployment: Docker image baseline 3.14 + Node 24; the packaging interpreter matches the CI-verified environment (3.14); new `PyYAML` runtime dependency (missing it only forfeits the zh_TW.yaml format).
+
+**Verification** (full recheck on 2026-08-29):
+
+- `pytest` full suite **786 passed, 2 skipped** (0 failures); `compileall` (venv Python 3.14.7) passes for main/gui/web/i18n/build_exe/src/scripts.
+- `black --check --line-length 120 --target-version py314` and `isort --check-only --profile black --line-length 120` (101 files) all green.
+- `mypy src/` + `mypy --platform linux src/`: 1 error each (pre-existing `src/stream.py:609` `call-overload`, with the `# type: ignore[arg-type]` error-code mismatch — **blocks the CI typecheck; fix before committing**).
+- `basedpyright tests/`: 5 errors (5 `mock.await_args` optional-member accesses in `tests/test_quality_tiers.py` — **blocks the local type gate; fix before committing**).
+- i18n: `scripts/extract_i18n_strings.py` reports 11 new runtime strings pending catalog inclusion (no functional impact; raw text fallback); four-catalog key sets identical and `.po/.mo` byte-level sync passes.
+- Known to-dos (before committing): the ci.yml test matrix's 3.13 leg fails at collection due to PEP 758 syntax and must be collapsed to `["3.14"]`; `check_subprocess` acquires `recording_semaphore` only after `Popen`, so the "max simultaneous recordings" cap does not constrain process creation as intended — move the acquire earlier.
+
+**Related**:
+
+- Per-feature entries: v4.0.9-dev (2026-08-24) "High-Concurrency Multi-Platform Recording Scheduling & Resource Management", "Four-Language Localization Catalog Unification", "CI mypy Dual-Error Fixes"; v4.0.9.1-dev (2026-08-27) "Recording-Result Feedback Scheduler + Probe Backoff", "Code-Review Fixes (Circuit-Breaker Probe Lease Self-Healing + Scheduler Success Sampling)", "i18n Localization System Fix"; v4.0.9.1-dev (2026-08-28) "Performance Review Optimization Landed (P1~P5)", "CI Workflow Optimization & Network-Install Retry Consolidation"; v4.0.9.1-dev (2026-08-29) "Web Panel Manual Recording Control", "Huya/Douyu Quality-Tier Specialization".
+- `AGENTS.md`: all regression-avoidance conventions distilled from this batch (Concurrency & Thread Model / Recording-Result Feedback conventions / Known Pitfalls).
+- v4.0.9-dev (2026-08-24) "This Session's Change Overview (Classified by Module)": the previous full snapshot (covering up to 08-24), superseded by this entry.
+
+### v4.0.9.2-dev (2026-08-29) — Huya/Douyu Quality-Tier Specialization (Fine-grained Blu-ray Tier Enumeration + User Tier Selection + Unavailable Downgrade Fallback + Cross-Platform Compatibility)
+
+**Change Summary**: This entry systematically records the "Huya/Douyu live quality-tier specialization" landed during the 2026-08-29 session. Based on ffprobe measurements of `huya.com/chuhe` (six tiers: Smooth/Ultra/BD4M/BD8M/BD20M/BD30M) and `douyu.com/3168536` (five tiers: HD/Ultra/BD4M/BD8M/Origin), we complete the enumeration and Chinese labels for the Blu-ray sub-tiers (BD4M/BD8M/BD20M/BD30M), wire up the full chain "user selects a tier before recording → record at the selected tier", and provide clear error messages plus a nearest-neighbor downgrade fallback for unavailable/restricted tiers — without changing the existing semantics of index-based tier selection on Douyin/TikTok/Bilibili/Kuaishou etc. ① **Quality-code layer**: `QUALITY_LEVEL`/`QUALITY_MAPPING_BIT`/`QUALITY_CODE_TO_ZH` expanded from a 6-item base set to a 10-item set (adding `BD30`/`BD20`/`BD8`/`BD4`), with a new frozen `BD_SUB_TIERS` set; `get_quality_index` folds Blu-ray sub-tiers into the `BD` slot, preserving the digit-input 0–5 selection semantics; ② **Huya selection**: new `HUYA_FIXED_TIERS`/`HUYA_RATIO_TO_CODE`, where `ratio` = the bitrate ceiling (kbps) appended to the FLV/HLS URL query to pick a tier; the `exsphd` tier table takes priority, falling back to `gameLiveInfo.bitRate` when absent; an unavailable requested tier downgrades to the nearest lower one, and to Origin when no lower tier exists; ③ **Douyu selection**: new `DOUYU_RATE_BY_CODE`/`DOUYU_RATE_TO_CODE`/`DOUYU_RATE_DESC`, mapping by `rate` and retrying lower tiers along a total order (up to 2) when the requested tier is restricted (e.g. login-gated Origin); the server's nearest-clamp real tier is read back via the `rate` field; ④ **Chinese mapping & integration points**: `stream_select.get_quality_code`, `web_config.QUALITY_KEYWORDS`, the main.py quality whitelist, and the `web/index.html` dropdown options are all extended with the Blu-ray sub-tiers; ⑤ **Tests**: new `tests/test_quality_tiers.py` (3 classes, 29 cases) covering sub-tier mapping / index folding / Huya nearest-downgrade / Douyu retry chain; `tests/test_stream.py` constant-consistency assertions changed to superset semantics plus a new `test_bd_sub_tier_level_order`.
+
+**Files Involved (Classified by Module)**:
+
+**1. Quality codes & tier tables (new feature — enumeration/labels/downgrade judgment) — `src/stream.py`**
+
+- New module-level `from loguru import logger` (used for selection-downgrade logging).
+- `QUALITY_MAPPING_BIT` (L203): appends `BD30:30000`/`BD20:20000`/`BD8:8000`/`BD4:4000` (bitrate ceiling kbps) on top of the base 6 items.
+- `QUALITY_LEVEL` (L214): extended to `OD/BD(0) > BD30(1) > BD20(2) > BD8(3) > BD4(4) > UHD(5) > HD(6) > SD(7) > LD(8)`, where larger number = lower quality, used by `is_downgrade` to judge downgrade direction.
+- `QUALITY_CODE_TO_ZH` (L222): appends `BD30→蓝光30M`/`BD20→蓝光20M`/`BD8→蓝光8M`/`BD4→蓝光4M`.
+- `BD_SUB_TIERS` (L232): `frozenset({"BD30","BD20","BD8","BD4"})`, the Blu-ray sub-tier set (excluded from the generic index mapping).
+- Inline measured data (L236-247): under the chuhe room `bitRate=30000`, each ratio's measured resolution/fps — Origin 2560×1440@60fps, BD30M/BD20M/BD8M all 1920×1080@60fps, BD4M 1920×1080@30fps, Ultra 1280×720@30fps, Smooth 800×450@24fps.
+- `HUYA_FIXED_TIERS` (L248): `(("BD30",30000),("BD20",20000),("BD8",8000),("BD4",4000))`; `HUYA_RATIO_TO_CODE` (L250): ratio-string → code read-back table.
+- Douyu tier tables (L268-293): `DOUYU_RATE_BY_CODE` (request code → rate, incl. `BD30/BD20→8200`, `BD8→8200`, `BD4→4000`, `UHD→3`, `HD→2`, `SD/LD→1`, `OD/BD→0`), `DOUYU_RATE_TO_CODE` (issued rate → code read-back), `DOUYU_RATE_DESC` (total-order downgrade chain `"8200","4000","3","2","1"`). Inline note documents the 3168536 room measured rate-clamp behavior (requesting 8200 when the room lacks that tier is server-clamped to issued rate=4).
+- `get_quality_index` (L335): folds Blu-ray sub-tiers into the `BD` slot (`if quality_str in BD_SUB_TIERS: quality_str = "BD"`), preserving the digit-input 0–5 semantics of index-based selection platforms like Douyin/TikTok.
+
+**2. Huya selection implementation (modified — fine-grained tiers + nearest downgrade) — `src/stream.py::get_huya_stream_url`**
+
+- Parse `gameLiveInfo.bitRate` into `max_ratio` (with `except TypeError, ValueError` tolerance — the legal py314 PEP 758 form); parse the available ratio set from `sFlvAntiCode`'s `exsphd` (L~607-617).
+- When the requested tier is in `BD_SUB_TIERS` (L~627): take the fixed `target_ratio` from `HUYA_FIXED_TIERS`; the `exsphd` set takes priority, falling back to a `bitRate`-derived available-ratio set when absent; if `target_ratio` is available, record directly; otherwise take the largest available ratio `< target` for a nearest downgrade and emit a `logger.warning` (including requested tier / room bitrate ceiling / actual downgraded tier); if no lower tier exists, set `actual_quality="OD"` and record at Origin with a warning; `available_qualities` is emitted in a unified tier order for display.
+
+**3. Douyu selection implementation (modified — rate mapping + restricted downgrade retry chain) — `src/stream.py::get_douyu_stream_url`**
+
+- The old `video_quality_options`/`rate_to_code` tables are removed in favor of `DOUYU_RATE_BY_CODE` (L~756); when `BD30`/`BD20` have no matching tier, request the highest Blu-ray tier (BD8M, `rate=8200`) and log via `logger.info`.
+- Downgrade chain (L~765): along the total order `order = ["0", *DOUYU_RATE_DESC]`, take the requested tier plus up to 2 lower tiers and retry `get_douyu_stream_data` in turn; a tier with `error==0` and a non-empty `rtmp_live` succeeds (a `logger.warning` notes the downgrade when it is not the first tier); on total failure return `is_live=True` but no stream URL (preserving the existing contract for the upper layer to alert and retry) and a `logger.error` summarizing the tried rate sequence.
+- `actual_quality` is now read back via `DOUYU_RATE_TO_CODE.get(actual_rate, ...)` to reflect the server's real issued tier (the `rate` field reflects the nearest clamp, e.g. 8200→4→BD4).
+
+**4. Chinese-name mapping & config/integration whitelist (modified)**
+
+- `src/stream_select.py::get_quality_code` (L57): `quality_zh_to_en` extended to 10 items, adding `蓝光30M/20M/8M/4M → BD30/BD20/BD8/BD4`; unknown quality still falls back to `OD`.
+- `src/web_config.py::QUALITY_KEYWORDS` (L21): tuple extended from 6 to 10 items (incl. Blu-ray sub-tiers), aligned with the main.py whitelist.
+- `main.py` (L2955): the per-URL-config quality whitelist extended from 6 to 10 items; an invalid value falls back to "原画/Origin" (rest of the parsing logic unchanged).
+
+**5. Web panel dropdown options (modified) — `web/index.html`**
+
+- The `room-quality` dropdown gains four new `<option>`s — `蓝光30M`/`蓝光20M`/`蓝光8M`/`蓝光4M` (right after "蓝光/Blu-ray"), preserving the default option and the existing option order; the option value is the Chinese tier name, which `main.py` maps to the internal code via `get_quality_code` — the chain works without changing `web/app.js`'s value-reading logic.
+
+**6. Tests (new + modified)**
+
+- `tests/test_quality_tiers.py` (**new file, 270 lines**): 3 classes, 29 cases — `TestGetQualityCodeSubTiers` (sub-tier Chinese-name mapping / legacy names unchanged / unknown falls back to OD), `TestGetQualityIndexSubTiers` (sub-tiers fold to BD / digit semantics unchanged), `TestHuyaSubTiers` (available tier appends ratio / unavailable nearest downgrade / exsphd-driven downgrade / low-capacity room degrades to lowest available / no lower tier falls back to Origin / unknown capacity requests directly / OD unchanged / legacy UHD-exsphd label compatibility), `TestDouyuSubTiers` (BD4 rate and read-back / BD8 server-clamped / BD30·20 fold to BD8 / OD success single call / OD restricted downgrade retry / all-rates-failed returns no URL / legacy OD-rate mapping unchanged). Uses monkeypatch throughout (no `patch.dict(os.environ)`), breaks the circular import via `import main` — consistent with AGENTS.md's mandatory test-authoring conventions.
+- `tests/test_stream.py`: `test_quality_mapping_keys_match_level_keys`/`test_quality_mapping_keys_match_bit_keys`/`test_quality_code_to_zh_keys_match_mapping_keys` changed from "set equality" to "base set ⊆ extended set and `BD_SUB_TIERS` == extended set − base set"; new `test_bd_sub_tier_level_order` (level-order monotonicity + `is_downgrade` direction assertions).
+
+**Notes on the Changes**:
+
+- **Blu-ray sub-tiers do not pollute the generic index**: index-based selection platforms (Douyin/TikTok etc.) still only recognize OD/BD/UHD/HD/SD/LD; Huya/Douyu use their own `HUYA_FIXED_TIERS`/`DOUYU_RATE_BY_CODE` tables, so Blu-ray sub-tiers take effect only on those two platforms. The `get_quality_index` fold guarantees that "Douyin requests BD4M" degrades to "BD" rather than misaligning.
+- **Huya `ratio` is the bitrate ceiling**: measurements confirm `ratio` is appended to the FLV/HLS URL query to pick a tier, all CDN lines share the same anti-leech params, and the stream-path is unchanged (consistent with the historical `sFlvAntiCode` parsing). Deriving the available tier with `exsphd` first and `bitRate` as fallback lets a room that is offline / lacks `exsphd` still downgrade correctly by its real peak bitrate, avoiding a 403 from "requesting 30M while the room only has 4M yet forcing ratio=30000".
+- **Douyu's built-in nearest-clamp is the primary downgrade path; the local retry chain is supplementary**: most requests for a non-existent tier are silently server-clamped to a lower tier (read back via `rate`); only a few cases such as "login-gated Origin rejected" return an error — then the local retry along `DOUYU_RATE_DESC` covers login/rate-limit restrictive failures (up to 2 tiers).
+- **Downgrade semantics aligned with `QUALITY_LEVEL`**: `is_downgrade(actual, requested)` judges direction by the level number (e.g. `BD8`(3) > `BD4`(4) is a true downgrade); `test_bd_sub_tier_level_order` locks this order to prevent a maintainer from mis-editing a level and causing false downgrade/upgrade misjudgment.
+
+**Impact Scope**:
+
+- Huya recording: the user can pick any tier from Smooth to BD30M in the Web panel / URL config and record at that tier; when the room's bitrate is insufficient it downgrades to the nearest tier with a clear message (log includes requested tier / room ceiling / actual tier), and auto-falls-back to Origin when no lower tier exists — the chain is never broken.
+- Douyu recording: the user can pick HD/Ultra/BD4M/BD8M/Origin (Douyu has no 20M/30M, so selecting those records at BD8M); a restricted tier auto-retries lower tiers, and the `rate`-read-back real tier is written into the result.
+- Douyin/TikTok/Bilibili/Kuaishou/NetEaseCC/YY etc.: quality-selection semantics are exactly as before (sub-tiers fold to BD, index mapping unchanged), unaffected by this change.
+- The return-value contracts of `get_huya_stream_url`/`get_douyu_stream_url` are unchanged (`is_live`/`anchor_name`/`flv_url`/`m3u8_url`/`actual_quality` all present), so the upper-layer `select_source_url`/probe/scheduler logic needs no change.
+
+**Verification**:
+
+- `py_compile` (venv Python 3.14) on `src/stream.py`/`src/stream_select.py`/`src/web_config.py`/`main.py` all pass.
+- `pytest` quality specialization: `tests/test_quality_tiers.py` **29 passed**; `tests/test_stream.py` quality classes + `test_bd_sub_tier_level_order` all pass; `tests/test_stream_select.py` Chinese-mapping cases pass.
+- Full `pytest` gate **784 passed, 2 skipped**; the 2 sporadic failures of `tests/test_srt_timeline_anchor.py` inside the full suite are the sandbox safe-delete quota guard (`OSError SAFE_DELETE_BULK_CONFIRM_REQUIRED`) misfiring — running that file in isolation yields 4 passed, consistent with the harness behavior documented in AGENTS.md, not a code regression.
+- `black --check`/`isort --check-only` (line-length 120, target py314) on the changed files pass; `mypy src/`/`basedpyright` report 0 issues on the newly added paths (the pre-existing `src/stream.py:609` item is unchanged from last time, not introduced here).
+- Real-device measurements: the chuhe room (bitRate=30000) ffprobe sampling confirms the seven tiers' (incl. Origin) resolution/fps/bitrate match `HUYA_FIXED_TIERS`; the 3168536 room confirms the rate-clamp and read-back behavior (measured: requesting rate=8200 issues rate=4 → `_4000.flv`).
+
+**Related**:
+
+- `src/stream_select.py` source-selection/probe (2026-08-28 entry): Huya FLV-first, backoff window aligned to the main loop — this feature hands off to its source selection after Huya tier selection, chaining seamlessly.
+- `AGENTS.md` regression-prevention: three conventions landed, see "Known Pitfalls (Avoid Regressions)" — "Blu-ray sub-tiers (Blu-ray 4M/8M/20M/30M) must fold into the BD index, must not be inserted into the generic `QUALITY_MAPPING`", "Huya tier selection ratio derived from the room bitrate ceiling, exsphd first / bitRate fallback, nearest downgrade or fall back to origin when unavailable", "Douyu local retry chain only supplements the server-side rate clamp, must not replace the HLS candidate or global backoff".
+- v4.0.9.2-dev (2026-08-29) "Web Panel Manual Recording Control" — the `web/index.html` tier options added by this feature live in the same form as that panel's "Recording Control" section.
+
+### v4.0.9.2-dev (2026-08-29) — Web Panel Manual Recording Control (Global Switch + 7 Interrupt Points + Start/Stop Buttons) + Two-Pass Review Fixes + E2E Smoke & Commit-Gate Triage
+
+**Change Summary**: This entry systematically records the "remove auto-recording on Web startup, switch to user manual control" feature landed during the 2026-08-29 session, together with its supporting verification. ① **The feature itself**: new global switch `main.recording_enabled` (default `True`, CLI/GUI unaffected) + 7 interrupt points in the `main.py` recording chain + a `POST /api/recording/toggle` endpoint + frontend Start/Stop Recording buttons with 2s polling state sync — the Web panel no longer records automatically on startup; ② **independent code review**: completeness of all 7 interrupt points, process reaping, error-sample isolation, concurrency safety, and auth consistency all confirmed; 3 defects fixed (including one P1 frontend status-label selector bug); ③ **end-to-end smoke test**: real panel (background mode) startup → start recording → stop recording → graceful exit, full flow passed; full `pytest` **786 passed, 2 skipped** re-run consistent; ④ **commit-gate triage**: the git commit was hard-blocked by the Mimosa L3 gate on unremediated high findings; completed the official deep scan (seal `sha256:5250cdc7…`) plus a finding-by-finding triage of all 44 alerts — all pre-existing false positives / upstream patterns, none on this feature's code; triage report written to disk, commit pending maintainer approval.
+
+**Files Involved (Classified by Module)**:
+
+**1. Recording-chain global switch — `main.py`**
+
+- New module-level `recording_enabled: bool = True` (L210); 7 interrupt-point injections: direct-download ffmpeg polling (L648, chunk-level interrupt), `check_subprocess` polling (L743, on hit performs a graded graceful termination of ffmpeg: stdin 'q' → terminate → kill, three escalation tiers within 30s each with wait), `start_record` entry guard (L1581, early return without entering the recording loop), direct-download failure-classification exclusion (L2102, stop-interrupts do not count as failure samples), room main-loop wait-period check (L2452), `main()` main loop before spawning new threads (L3038, rooms are re-spawned per config after re-enabling), and thread-exit `finally` cleanup (L3057 calls `remove_room_from_running`, covering both the stop path and abnormal exits). Review fix: L650 direct-download interrupt message "或请求停止" unified to "或停止录制".
+
+**2. Running-list cleanup — `src/notify.py`**
+
+- New `remove_room_from_running(record_url)` (L153): idempotently removes the room from `running_list` on thread exit (membership check first, decrements `monitoring` only on actual removal, shares `record_state_lock` with `clear_record_info`), guaranteeing rooms can be re-spawned after "stop recording" followed by "start recording".
+
+**3. Web API & status exposure — `src/web_api.py` + `src/recorder_status.py`**
+
+- `web_api.py`: new `POST /api/recording/toggle` (L249-258) — request body `{"enable": bool}`, flips `main.recording_enabled` and returns `{"ok": true, "recording_enabled": ...}`; covered by the global auth middleware (allowlist only for login and static assets), consistent with other write endpoints.
+- `recorder_status.py`: status JSON gains `"recording_enabled": main.recording_enabled` (L109) — after page refresh/reconnect the frontend restores the true button state via 2s polling (orthogonal to `engine_alive`).
+
+**4. Web panel entry — `web.py`**
+
+- Sets `main.recording_enabled = False` **before** the engine thread starts (L188-189, set-then-`start()` eliminates the startup race): the panel defaults to not recording, while config hot-reload / scheduler / danmaku monitoring keep running, awaiting manual trigger.
+
+**5. Frontend — `web/index.html` + `web/app.js` + `web/style.css`**
+
+- `index.html` (L39-46) adds a "recording control" strip: state indicator (twin spans `Recording active`/`Recording stopped` toggled via `hidden`) + start/stop buttons, copy served by static `data-i18n` translation (applies immediately on language switch).
+- `app.js`: new `renderRecordingControl` (mutually exclusive button enable/disable, `engine_alive` linkage, state-label toggling) and `toggleRecording` (POST toggle → success toast → status refetch in its own try/catch so a refetch failure stays silent and the 2s polling syncs, instead of a misleading "operation failed" toast); the `I18N` dictionary gains 6 keys × 4 languages (`recording.state.on/off`, `recording.start/stop`, `toast.recordingStarted/Stopped`, complete across zh_CN/en_US/en_GB/zh_TW). Review fix (P1): the state-label query originally used the `#recording-state` ID selector while the container is actually `class="recording-state"`, so the label never switched — changed to the class selector with a comment to prevent regression.
+- `style.css` (L248-275) adds the control-strip styles: primary-colored start button / red stop button / disabled state (opacity + pointer-events disabled), consistent with the existing card style.
+
+**6. Tests (new + modified)**
+
+- `tests/test_web_api.py`: new `TestRecordingToggle` (2 cases — 401 without auth, toggle flip writing the real module attribute).
+- `tests/test_record_failure_feedback.py` (**new file**): `test_check_subprocess_interrupts_when_recording_disabled` verifies that with `recording_enabled=False` the ffmpeg polling loop interrupts, graceful termination is called exactly once, and no success/failure samples are recorded; all-monkeypatch (no `patch.dict(os.environ)`), `_RunningPopen` is a class defining `__class_getitem__`, and main's global reference is replaced via `types.SimpleNamespace(**vars(subprocess))` — compliant with the AGENTS.md mandatory testing conventions.
+
+**7. Documentation (new)**
+
+- `docs/web-recording-control-changelog.md` (**new**): feature change summary — background, design (global switch + multi-entry interrupts), key design decisions (including the corrected "stop semantics = active graded graceful termination" wording), integration points, test verification, known limitations, and closure of all 5 follow-up items (commit / review / smoke / persistence evaluation / per-room switch decision).
+- `docs/security-triage-2026-08-29.md` (**new**): finding-by-finding triage of the 44 Mimosa L3 commit-gate alerts — SSRF (hardcoded official download sources), path traversal (fixed-constant paths plus the existing `clean_name` sanitizer whose `main.rstr` regex includes `/ \ : .`), command injection (plain JS operations inside PyExecJS), hardcoded credentials (public platform client tokens), weak randomness (non-crypto jitter) — all pre-existing false positives or upstream patterns, Zip-Slip already guarded by `realpath` checks, none on this feature's code.
+- `CODE_WIKI.md` / `CODE_WIKI_EN.md`: this changelog entry added (bilingual sync).
+
+**Change Notes**:
+
+- **Stop semantics is active graded graceful termination, not "natural finish"**: the 1s polling loop detects the switch being off and terminates ffmpeg — 'q' is written first so it finalizes the file tail (TS/FLV/segments uncorrupted), then escalates terminate → kill; the process is reaped via wait and deregistered — no orphan ffmpeg. The earlier "natural finish" wording has been corrected (so future maintainers do not "fix" the interrupt logic).
+- **Error-sample isolation is a prerequisite of the breaker system**: stop-period interrupts do not count as `record_error` samples, preventing a user "stop recording" from being misread as mass recording failures that would trigger error back-pressure downsizing or per-platform circuit breaking.
+- **`recording_enabled` is not persisted (follow-up item 4 evaluation)**: persisting `True` would auto-resume recording after a panel restart, re-introducing "auto-record on Web startup" through the back door — exactly the behavior this feature's P0 requirement 1 removes; persisting `False` is indistinguishable from the default. It stays a session-scoped runtime switch (like OBS's "Start/Stop Streaming", not remembered across sessions); every startup returns to the stopped state.
+- **Per-room switch remains deferred (item 5)**: consistent with known-limitation #1 — "record all / stop all" is the common Web need; per-URL control awaits real demand (would require a `dict[str, bool]` replacing the global bool).
+- **All 7 interrupt points are early-return patterns**: normal flow paths unchanged; the only inherent window is "stop clicked after the loop-top check passes but before ffmpeg spawns" — ffmpeg is then terminated within ≤1s by L743, consistent with the existing `exit_recording` semantics.
+
+**Impact Scope**:
+
+- The Web panel no longer spawns any room thread on startup; after "Start Recording" the main loop spawns rooms per the URL config, and after "Stop Recording" room threads exit and the running list is cleaned, ready to restart at any time.
+- CLI (direct `main.py`) and GUI entry behavior completely unchanged (`recording_enabled` defaults to `True`).
+- While recording is stopped, config hot-reload, the concurrency scheduler, and the danmaku monitor hub keep running (only recording threads are not spawned/continued).
+- All other behavior (scheduling semantics, source-selection order, probe tolerance, UA conventions, etc.) unchanged.
+
+**Verification**:
+
+- Full `pytest`: **786 passed, 2 skipped** (2026-08-29 re-run consistent); `black --check --line-length 120 --target-version py314` and `isort --check-only --profile black --line-length 120` pass; `mypy src/` shows only the pre-existing `src/stream.py:609` error (not introduced here).
+- E2E smoke (real panel `python web.py` background mode + API-driven): on startup `recording_enabled=false` / `recording_count=0` / `engine_alive=true` → within ~20s of toggle-on `monitoring=3` (3 room threads spawned) → within 3s of toggle-off `monitoring=0` / `recording_count=0` → CTRL_BREAK graceful exit, log shows "正在清理所有 ffmpeg 进程" (all ffmpeg processes cleaned), port closed, no ffmpeg leftovers, no leftover download files. (All configured rooms were offline during the smoke window, so `recording_count` stayed 0; the terminate-while-recording path is covered by the unit test above.)
+- Commit gate: Mimosa git-gate blocked twice (graded mode must deny on high; no findings allowlist mechanism); per the gate's demand the official deep scan was completed (scanId `scan-2026-08-29T02-38-21.160Z-4c613b3699ed`, seal `sha256:5250cdc7…`) plus a finding-by-finding triage of all 44; no code change required, commit pending the maintainer adjusting gate policy or releasing it manually.
+
+**Related**:
+
+- `docs/web-recording-control-changelog.md`: feature change summary and follow-up-item closure record (review fixes detailed in section 3.4).
+- `docs/security-triage-2026-08-29.md`: gate-alert triage details and the two release paths.
+- v4.0.9.1-dev (2026-08-27) "Recording Result Feedback Scheduler" — stop-period error-sample isolation builds on its `record_error`/`record_success` semantics; the existing `check_subprocess` early-interrupt mechanism (flush danmaku before terminating ffmpeg) is pre-existing behavior; this feature only adds `recording_enabled` to its trigger condition.
+
+### v4.0.9.1-dev (2026-08-28) — Performance Review Optimization Landed (P1~P5 + Probe-Client Reuse + Backoff-Window Self-Healing + Web Log-Sink Rebuild + Huya FLV-first)
+
+**Change Summary**: This entry systematically records the performance review and optimization of the codebase during the 2026-08-28 session, plus the four fixes derived from real-device verification. ① **Performance review** (local HTTP/1.1 measurements, 200 requests): 7 bottlenecks P1~P7 identified; landed **P1** (probe `httpx.Client` reused for one selection round), **P2** (thread-local reuse of `sync_http.Session`), **P3** (set-based dedup in the main loop), **P4** (incremental scheduler counters + hoist `import time` to module top), **P5** (hoist regexes to module-level constants); P6 (config dirty-check) deferred, P7 (`_resolve_platform_stream` → dict dispatch) explicitly not done; ② **real-device verification** (Huya/Douyu, three rounds) overturned several early assumptions and pinned down the root cause of Huya's cold-start HLS probe false-green — the fixed 60s backoff window is shorter than the 120s main-loop interval, so the self-healing loop never fired (fixes one/two); ③ **Web background-mode loguru console sink wrote to the hidden window** (fix three); ④ **Huya cold-start still failed once on the first round**, so FLV-first source selection was implemented (fix four). Full gate: **751 passed, 2 skipped**.
+
+**Files Involved (Classified by Module)**:
+
+**1. Stream Probe & Source Selection (Perf P1 + Fixes one/four) — `src/stream_select.py`**
+
+- **P1 probe-client reuse**: `select_source_url` shares one `httpx.Client` across all candidates of a single round (`finally` closes it; the two "no candidate to validate" branches return early to avoid constructing a client on the zero-probe path); `_validate_stream_url` gains an optional `client` parameter (`owns_client` guarantees only self-managed clients are closed); headers now passed per-request (`head` / Range-`get` as `{**headers, "Range": "bytes=0-0"}` / `_confirm_get_ok`'s `stream`); `_confirm_get_ok` gains a `headers: Mapping[str, str]` parameter; new `_PROBE_TIMEOUT_SECONDS = 5` unifies the timeout value. Deliberately **no** module-level global cache keyed by `(proxy, verify)` (Huya's CDN rate-limits by connection budget; persistent keepalive would compete with the ffmpeg pull that immediately follows, opposite to the optimization goal).
+- **Fix one — backoff window aligned to the main loop**: new `_PROBE_BACKOFF_INTERVAL_MARGIN = 70.0`; `_probe_backoff_window()` = `max(_PROBE_BACKOFF_SECONDS, main.delay_default + 70.0)` (the old fixed 60s never covered the 120s loop interval, so backoff never once hit); `_mark_probe_reject` / `_probe_in_backoff` now go through this function. New `clear_ffmpeg_reject(url, platform)` (same allowlist and backoff key as the existing `mark_ffmpeg_reject`, symmetric clear).
+- **Fix four — Huya FLV-first**: new `_FLV_FIRST_PLATFORMS = ("虎牙直播",)` (**Douyu never added** — its guest-state FLV is cut off at ~70s, so it must stay HLS-first); `select_source_url` refactored from three blocks into one ordered sequence `[(url, is_hls)]`, reversed for Huya to FLV → HLS → record_url; h265 candidates are excluded at build time (fixes the old "h265 → immediately retry the whole HLS group" wasted probes under the default order); `last_resort` unified to "last in the filtered sequence and no record_url fallback".
+
+**2. Recording Main Chain (Fix two) — `main.py`**
+
+- In `check_subprocess`, the success branch (parsing the address after `-i` in `ffmpeg_command`) calls `clear_ffmpeg_reject(...)`, pairing with the `mark_ffmpeg_reject` in the failure branch — clearing that host+path's backoff so a recovered route is not skipped; top-level import gains `clear_ffmpeg_reject`.
+
+**3. Concurrency Scheduling (Perf P4) — `src/scheduler.py`**
+
+- `import time` hoisted to module top (`_now` / `_sleep` no longer import inside functions); `PlatformBreaker._fail_count` becomes incremental (deque-full subtracts the evicted old sample, `clear()` zeros it, O(1) shrinks lock hold); `ConcurrencyScheduler._global_error_count` + `_push_global_error()` (same incremental pattern as `_fail_count`, replacing `sum(self._samples)`'s O(40)).
+
+**4. Synchronous HTTP (Perf P2) — `src/sync_http.py`**
+
+- New `_thread_local = threading.local()` and `_session()` (thread-local `requests.Session` reuse; Session is not thread-safe); the proxy-branch `get` / `post` now go through `_session()` (benefits the 125 call sites).
+
+**5. Utils / Parsing / Config (Perf P5)**
+
+- `src/utils.py`: `remove_emojis`'s ~400-char emoji pattern hoisted to the module-level constant `_EMOJI_PATTERN` (no per-call `re.compile`).
+- `src/stream_select.py`: `contains_url`'s pattern hoisted to the module-level constant `_URL_PATTERN`.
+- `src/spider.py`: new `_BANDWIDTH_PATTERN` / `_DOUYIN_HEVC_FLV_PATTERN`, replacing 4 in-function `re.compile` calls (`spider.py:178/202/1844/1918`).
+- `src/web_config.py`: `update_config_line`'s "compile regex by key" changed to `functools.lru_cache(maxsize=128)` (`web_config.py:228`).
+
+**6. Main-Loop Deduplication (Perf P3) — `main.py`**
+
+- `url_comments` / `line_list` / `url_line_list` changed from list to `set`; `check_subprocess`'s per-room-per-second full-table rebuild `[i for i in url_comments if url not in i]` becomes the O(1) `discard(url)`; `text_no_repeat_url` uses `dict.fromkeys` for order-preserving dedup (main loop O(N²) → O(1)).
+
+**7. Logging (Fix three) — `src/logger.py` + `web.py`**
+
+- `src/logger.py`: new module-level `_console_sink_id` captures the `logger.add` return value (lines 36/58); `rebind_console_sink()` (line 45) first removes the old sink (tolerates `ValueError` for an already-invalid id) → rebuilds against the **current** `sys.stderr` (disables `colorize` when not a TTY to avoid ANSI polluting the log file; silently skips when `sys.stderr is None`); `__all__` exports `rebind_console_sink`.
+- `web.py`: `_enter_background_mode` (`web.py:103`), after redirecting `sys.stdout/stderr` to `logs/web_console.log` and `SW_HIDE`-hiding the console window, calls `rebind_console_sink()` to rebuild the console sink (loguru binds the concrete object at `add()` time and does not follow a later reassignment of `sys.stderr` — without a rebuild all DEBUG/WARNING went to the hidden window).
+
+**8. Tests (New + Modified)**
+
+- `tests/test_stream_select.py`: 3 client fakes gain a `headers` parameter on `head` / `stream`; `test_select_source_url_huya_backoff_round_straight_to_ffmpeg`'s assertion changed from "construct count == 0" to "probe-request count == 0" (after the client hoist, closer to the real invariant: zero network activity inside the backoff window); new `test_select_source_url_shares_one_client_and_sends_headers_per_request` (one client for the whole round, every request carries UA/Referer/Cookie), `test_backoff_window_covers_main_loop_interval` (covers the real 124s/185s cadence + falls back when the interval shrinks), `test_clear_ffmpeg_reject_removes_backoff`, `test_huya_flv_first_prefers_flv_on_cold_start`, `test_huya_flv_failed_falls_back_to_hls`, `test_douyu_keeps_hls_first`.
+- `tests/test_sync_http.py`: 4 proxy cases' patch target changed from `src.sync_http.requests` to `src.sync_http._session`.
+- `tests/test_logger_console_sink.py` (**new**, 3 cases): follows the current stderr / replaces rather than appends / silent when `None` (assertions must `logger.complete()` to drain the `enqueue=True` async queue).
+
+**9. Documentation (This Entry)**
+
+- `CODE_WIKI.md` / `CODE_WIKI_EN.md`: changelog gained this entry (CN/EN in sync).
+- `PERF_REVIEW_2026-08-28.md` (**new**): performance-review report (bottleneck list P1~P7, local-benchmark measurements, three-round real-device conclusions, three misjudgment corrections).
+- `AGENTS.md`: 6 regression-prevention conventions added (probe-client reuse scope = one selection round, never disable keepalive "for safety", backoff window must be ≥ one main-loop interval, clear backoff on record success, rebuild Web-background sink, Huya FLV-first with Douyu excluded).
+
+**Change Notes**:
+
+- **P1 real speedup is ~5.5× not 36×**: the old `with httpx.Client(...)` already reused one connection for HEAD + Range-GET (one connection per candidate, not per request); 36× is the upper-bound scenario of "new Client per request", now annotated as such in the report.
+- **"headers not forwarded" was not a defect**: httpx `_merge_headers` *merges* rather than replaces, so client-level UA/Referer/Cookie still apply; passing headers per-request is the **necessary follow-up** once the client is shared across candidates (business headers must not stay on the client level, or candidates would pollute each other).
+- **The backoff-window mismatch was the true root cause**: fixed 60s < 120s loop interval, so after a ffmpeg fast-failure records the backoff, the next round at T+124s arrives long after expiry → hits the same dead route again. The historical "CDN probe backoff" warning **never appeared** in the logs — the iron proof. The 70s margin covers the worst cadence "single-round wait = delay_default + jitter (±5s), and +60s more when `main.py`'s error window fills to 5". Longer is cheap (the last candidate is already passed to ffmpeg, and success clears immediately); shorter = false-green loop, so prefer longer.
+- **Concurrent-connection peak measured at 1**: candidates are validated serially, so reuse does not raise the instantaneous connection count and actually reduces new connections (old 4 → reused 1, 70.88ms → 12.78ms). The "P1 worsens Huya's connection budget" worry is disproven → no global cache, and **never disable keepalive "for safety"** (measured: disabling keepalive jumps to 8 connections / 72.99ms, undoing all the gain).
+- **Huya FLV-first payoff**: three rounds of real devices (880214 / chuhe etc.) prove Huya's three HLS CDNs (hs/tx/al) false-green on cold start (probe 200/206, ffmpeg opens → 403, return code 3436169992), while FLV is stable every round (longest continuous record 6 minutes). FLV-first reduces the cold-start false-green loss from ~2 minutes (one backoff period) to zero; when FLV is unavailable it still falls back to HLS in order, preserving the chain.
+
+**Impact Scope**:
+
+- Huya source-selection behavior changed (backoff-window alignment + success-clear + FLV-first): before the fix, 5 instant failures then stable only after 12 minutes; after, 1 instant failure then stable within 2 minutes (third-round real device 00:30–00:38: backoff warning first appeared, FLV recorded for 6m02s).
+- Web-panel-mode logs now fully land in `logs/web_console.log` (before the fix only `print` output showed; DEBUG/WARNING went to the SW_HIDE-hidden window).
+- Performance: 80 rooms × 10 probes/round selection time ~12.7s → 1.15s (P1 round-level reuse); main-loop dedup O(N²) → O(1); scheduler incremental counters shorten lock contention.
+- The "max simultaneous recordings(0=unlimited)" scheduling semantics, HLS/FLV last-resort pass, probe throttle/jitter, `_confirm_get_ok` retry tolerance, and stream-validation tolerance are **all unchanged** (only Huya's candidate order reversed + backoff window dynamized).
+
+**Verification**:
+
+- `compileall` (venv Python 3.14) passes; `black --check --line-length 120 --target-version py314` all files unchanged; `isort --check-only --profile black --line-length 120` passes; `mypy src/` + `mypy --platform linux src/` 0 issue; `basedpyright` 0 errors / 0 warnings / 0 notes.
+- `pytest` full suite: **751 passed, 2 skipped** (2 srt failures are sandbox-deletion quota, not regressions).
+- Three rounds of real devices (Huya 880214 / chuhe, Douyu, Douyin): backoff warning first appeared, FLV recorded stably for 6 minutes, `web_console.log` contains DEBUG/WARNING, cold-start first round expected to record FLV with zero instant-failure (fix four pending an independent cold-start re-verification).
+- Local HTTP/1.1 benchmark: probe reuse peak connection 1 / 12.78ms; disabling keepalive instead 8 connections / 72.99ms (the forbidden case reverse-verified).
+
+**Related**:
+
+- `PERF_REVIEW_2026-08-28.md`: the performance-review report corresponding to this entry (with three misjudgment corrections).
+- `AGENTS.md` regression-prevention entries: Huya backoff / FLV-first / probe-client scope / keepalive / backoff window ≥ main-loop interval / Web-background sink.
+- v4.0.9.1-dev (2026-08-27) "Recording Failure Feedback Scheduler" — `mark_ffmpeg_reject` is that framework; this session adds the `clear_ffmpeg_reject` pairing and the `_PROBE_BACKOFF_INTERVAL_MARGIN` dynamization.
+
 ### v4.0.9.1-dev (2026-08-28) — CI Workflow Optimization & Network-Install Retry Consolidation (retry Composite Action) + PEP 758 Formatting Landed via black 26 + i18n Extractor Fixes + Eight-File Repository Metadata Sync
 
 **Change Summary**: This entry records four batches of changes from the late 2026-08-27 session through 08-28. ① **CI red→green**: the CI `black --check` failed — black 26.5.1 enables PEP 758 normalization for `target-version=['py314']` (multi-except `except` clauses without an `as` sub-clause have their tuple parentheses stripped); local and CI run the same version, so this was simply a missed pre-commit formatting run, fixed by applying black; ② **CI workflow optimization**: ci.yml rewritten (actions unified at v7, apt hardening flags, job topology documented in the header) plus a new `.github/actions/retry` composite action consolidating 13 nearly identical inline retry scripts across the two workflows into a single implementation; ③ **i18n extractor fixes**: two defects in `scripts/extract_i18n_strings.py` fixed and re-run, confirming the four-language catalogs have zero missing entries (496 each); ④ **eight-file repository metadata sync**: corrected the stale `src/danmaku/` path comments in requirements.txt / Dockerfile and filled the drift gaps in .dockerignore / .gitignore / pyproject / compose. Full gate re-verification: **744 passed, 2 skipped**.

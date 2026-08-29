@@ -97,6 +97,10 @@ class RoomToggle(BaseModel):
     enable: bool
 
 
+class RecordingToggle(BaseModel):
+    enable: bool
+
+
 class ConfigUpdate(BaseModel):
     section: str
     key: str
@@ -241,6 +245,17 @@ def create_app(
                 await asyncio.sleep(2)
 
         return StreamingResponse(event_gen(), media_type="text/event-stream")
+
+    @app.post("/api/recording/toggle")
+    async def toggle_recording(req: RecordingToggle) -> dict[str, object]:
+        # Web 面板「开始/停止录制」按钮的后端：切换全局录制开关 main.recording_enabled。
+        # 开启 → 主循环下一轮（≤3s）自动拉起全部已配置房间线程；
+        # 关闭 → 各房间线程在检测点（内层循环顶/ffmpeg 轮询/直下分片/循环等待）自行退出，
+        #         进行中的 ffmpeg 录制被终止，退出线程从运行列表移除，可随时重新开始。
+        import main
+
+        main.recording_enabled = req.enable
+        return {"ok": True, "recording_enabled": req.enable}
 
     @app.get("/api/rooms")
     async def list_rooms() -> list[dict[str, str | bool]]:

@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64
 import binascii
 import configparser
+import functools
 import hashlib
 import hmac
 import re
@@ -16,8 +17,8 @@ from typing import cast
 # 与 main.py 保持一致的文本编码
 TEXT_ENCODING = "utf-8-sig"
 
-# 画质关键词（对齐 main.py get_quality_code）
-QUALITY_KEYWORDS = ("原画", "蓝光", "超清", "高清", "标清", "流畅")
+# 画质关键词（对齐 main.py get_quality_code，含蓝光细粒度档位）
+QUALITY_KEYWORDS = ("原画", "蓝光", "蓝光4M", "蓝光8M", "蓝光20M", "蓝光30M", "超清", "高清", "标清", "流畅")
 
 # 与 main.py CLEAN_URL_HOST_LIST 一致：这些 host 的 URL 去除 query string
 CLEAN_URL_HOST_LIST = (
@@ -222,6 +223,14 @@ def read_config_safe(config_file: str | Path) -> dict[str, dict[str, str]]:
     return result
 
 
+# 按 key 缓存编译后的行匹配模式：模式串依赖 key，无法整体预编译，但同 key 反复更新时应复用。
+# maxsize 取 128，远超配置文件键数量，命中率接近 100%。
+@functools.lru_cache(maxsize=128)
+def _key_line_pattern(key: str) -> re.Pattern[str]:
+    # 匹配 key 行：允许 = 或 ：或 : 分隔，key 前后空白（大小写不敏感）
+    return re.compile(r"^(\s*" + re.escape(key) + r"\s*[=:：]\s*)(.*)$", re.IGNORECASE)
+
+
 def update_config_line(config_file: str | Path, section: str, key: str, value: str) -> bool:
     # 注释保留的行级配置更新。
     # 逐行扫描：进入目标 section 后，匹配 `^\\s*key\\s*[=：:]\\s*` 的行并替换其值；
@@ -237,8 +246,7 @@ def update_config_line(config_file: str | Path, section: str, key: str, value: s
     cur_section: str | None = None
     in_target = False
     replaced = False
-    # 匹配 key 行：允许 = 或 ：或 : 分隔，key 前后空白（大小写不敏感）
-    key_pattern = re.compile(r"^(\s*" + re.escape(key) + r"\s*[=:：]\s*)(.*)$", re.IGNORECASE)
+    key_pattern = _key_line_pattern(key)
     new_lines: list[str] = []
     for line in lines:
         stripped = line.strip()

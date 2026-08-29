@@ -4,7 +4,8 @@
 # 版本约束与 pyproject.toml [project.dependencies] 严格保持一致（单一事实源）。
 # 本文件同时被以下场景复用：
 #   - Docker 多阶段构建（builder 阶段 `pip install -r requirements.txt`）
-#   - CI 流水线（typecheck / test / concurrency-test job 安装依赖）
+#   - CI 流水线（typecheck / test / concurrency-test / integration-verify /
+#     build-verify 各 job 安装依赖；static job 只装固定版本 lint 工具，不经本文件）
 #   - 本地开发：`pip install -r requirements.txt`
 # 构建期「可选」依赖（PyInstaller）不在此处，见 pyproject.toml
 #   [project.optional-dependencies].build，通过 `pip install .[build]` 安装。

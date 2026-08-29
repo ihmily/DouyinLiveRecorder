@@ -14,6 +14,8 @@ import re
 import urllib.parse
 from typing import TypedDict, TypeVar, cast
 
+from loguru import logger
+
 from .async_http import get_response_status
 from .spider import get_bilibili_stream_data, get_douyu_stream_data
 from .utils import trace_error_decorator
@@ -191,17 +193,104 @@ class TiktokSdkParams(TypedDict, total=False):
 
 # 画质 -> 排序后列表中的位置（索引）。必须与 get_douyin_stream_url 中 _sort_quality_items 的
 # order 字典保持一致（ORIGIN/OD=0, BD=1, UHD=2, HD=3, SD=4, LD=5），否则按名称选画质会错位。
+# 蓝光子档位（BD30/BD20/BD8/BD4）不参与通用索引映射（避免改变数字输入 0-5 的语义），
+# 由 get_quality_index 折叠到 BD 槽位；虎牙/斗鱼走各自的专属档位表（HUYA_FIXED_TIERS / DOUYU_RATE_BY_CODE）。
 QUALITY_MAPPING = {"OD": 0, "BD": 1, "UHD": 2, "HD": 3, "SD": 4, "LD": 5}
-QUALITY_MAPPING_BIT = {"OD": 99999, "BD": 4000, "UHD": 2000, "HD": 1000, "SD": 800, "LD": 600}
+QUALITY_MAPPING_BIT = {
+    "OD": 99999,
+    "BD": 4000,
+    "BD30": 30000,
+    "BD20": 20000,
+    "BD8": 8000,
+    "BD4": 4000,
+    "UHD": 2000,
+    "HD": 1000,
+    "SD": 800,
+    "LD": 600,
+}
 
-# 画质等级值（数值越大画质越低），用于降级判定
-QUALITY_LEVEL = {"OD": 0, "BD": 0, "UHD": 1, "HD": 2, "SD": 3, "LD": 4}
+# 画质等级值（数值越大画质越低），用于降级判定。
+# 蓝光子档位按码率上限插入等级序：OD/BD(0) > BD30(1) > BD20(2) > BD8(3) > BD4(4) > UHD(5) > HD(6) > SD(7) > LD(8)。
+# （BD 与 OD 同级：两者在虎牙/斗鱼侧均不加 ratio/rate，即按原画拉流。）
+QUALITY_LEVEL = {"OD": 0, "BD": 0, "BD30": 1, "BD20": 2, "BD8": 3, "BD4": 4, "UHD": 5, "HD": 6, "SD": 7, "LD": 8}
 
 # 画质代码 → 中文名（对齐 main.py get_quality_code 的反向）
-QUALITY_CODE_TO_ZH = {"OD": "原画", "BD": "蓝光", "UHD": "超清", "HD": "高清", "SD": "标清", "LD": "流畅"}
+QUALITY_CODE_TO_ZH = {
+    "OD": "原画",
+    "BD": "蓝光",
+    "BD30": "蓝光30M",
+    "BD20": "蓝光20M",
+    "BD8": "蓝光8M",
+    "BD4": "蓝光4M",
+    "UHD": "超清",
+    "HD": "高清",
+    "SD": "标清",
+    "LD": "流畅",
+}
+
+# 蓝光子档位代码集合（虎牙/斗鱼细粒度档位）
+BD_SUB_TIERS = frozenset({"BD30", "BD20", "BD8", "BD4"})
 
 # 网易CC 画质名 → 统一代码
 NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard": "SD"}
+
+# ── 虎牙画质档位 ─────────────────────────────────────────────
+# 虎牙细粒度档位：ratio 参数即该档位的码率上限(kbps)。
+# 2026-08-29 在 huya.com/chuhe（bitRate=30000）实测 ffmpeg 3 秒采样验证：
+#   ratio=0    原画  2560x1440 @60fps（不加 ratio 即原画）
+#   ratio=30000 蓝光30M 1920x1080 @60fps
+#   ratio=20000 蓝光20M 1920x1080 @60fps
+#   ratio=8000  蓝光8M  1920x1080 @60fps
+#   ratio=4000  蓝光4M  1920x1080 @30fps
+#   ratio=2000  超清   1280x720  @30fps
+#   ratio=500   流畅   800x450   @24fps
+# （各 CDN 线路共享同一防盗链参数，ratio 直接拼在 FLV/HLS URL 的 query 上，流地址路径不变。）
+HUYA_FIXED_TIERS: tuple[tuple[str, int], ...] = (("BD30", 30000), ("BD20", 20000), ("BD8", 8000), ("BD4", 4000))
+# ratio(字符串) → 画质代码：选中/降级后回采实际档位用
+HUYA_RATIO_TO_CODE = {
+    "30000": "BD30",
+    "20000": "BD20",
+    "8000": "BD8",
+    "4000": "BD4",
+    "2000": "UHD",
+    "500": "LD",
+}
+
+# ── 斗鱼画质档位 ─────────────────────────────────────────────
+# 斗鱼 rate 语义（2026-08-29 在 3168536 房间实测）：
+#   请求 rate=0    → 下发 rate=0，rtmp_live 无后缀（原画 1080p60）
+#   请求 rate=8200 → 蓝光8M；房间无此档时服务端自动钳制到下发 rate=4（蓝光4M _4000.flv）
+#   请求 rate=4000 → 下发 rate=4，_4000.flv（1080p30）
+#   请求 rate=3    → 下发 rate=3，_2000.flv（超清 720p30）
+#   请求 rate=2    → 下发 rate=2，_900.flv（高清 540p25）
+#   请求 rate=1    → 流畅；该房间钳制到 rate=2
+# 服务端自带「就近钳制」：请求不存在的档位不会报错，而是下发更低档，rate 字段回采真实档位。
+DOUYU_RATE_BY_CODE = {
+    "OD": "0",
+    "BD": "0",
+    "BD30": "8200",
+    "BD20": "8200",
+    "BD8": "8200",
+    "BD4": "4000",
+    "UHD": "3",
+    "HD": "2",
+    "SD": "1",
+    "LD": "1",
+}
+# 斗鱼下发 rate（字符串）→ 画质代码：回采实际档位用
+DOUYU_RATE_TO_CODE = {
+    "0": "OD",
+    "1": "SD",
+    "2": "HD",
+    "3": "UHD",
+    "4": "BD4",
+    "8200": "BD8",
+    "4000": "BD4",
+    "2000": "UHD",
+}
+# 斗鱼降级链：各请求 rate 失败（原画需登录等被限制场景）时依次回退的更低 rate。
+# 斗鱼 rates 按画质从高到低的全序（用于构造「严格低于请求档」的回退序列）。
+DOUYU_RATE_DESC = ("8200", "4000", "3", "2", "1")
 
 
 def bitrate_to_quality(bitrate: int) -> str:
@@ -255,6 +344,10 @@ def get_quality_index(quality: str | int | None) -> tuple[str, int]:
         if quality_int >= len(keys):
             quality_int = 0
         quality_str = keys[quality_int]
+    # 蓝光子档位不参与通用索引：折叠到 BD 槽位（抖音/TikTok 等按索引选档的平台
+    # 请求 蓝光4M/8M/20M/30M 时退化为「蓝光」档，保持其余档位索引语义不变）
+    if quality_str in BD_SUB_TIERS:
+        quality_str = "BD"
     if quality_str not in QUALITY_MAPPING:
         quality_str = list(QUALITY_MAPPING.keys())[0]
     return quality_str, QUALITY_MAPPING[quality_str]
@@ -504,14 +597,67 @@ async def get_huya_stream_url(json_data: dict[str, object], video_quality: str |
     if not stream_info_list:
         return result
 
-    # 画质 ratio 解析（与历史行为一致）：从首个候选的 sFlvAntiCode 中解析 exsphd 档位表，
-    # 按 video_quality 选择对应 ratio；无 exsphd 时不附加 ratio（保持原始防盗链参数原样）。
+    # 画质 ratio 解析：ratio 即码率上限(kbps)，拼在 FLV/HLS URL 的 query 上选档。
+    # 可用档位来源（按优先级）：
+    #   1. sFlvAntiCode 中的 exsphd 档位表（房间实际可拉取的 ratio 集合）
+    #   2. gameLiveInfo.bitRate（房间最高码率，chuhe 实测 30000 → 蓝光30M 可用）
+    # 两者都缺失时不附加 ratio（保持原始防盗链参数原样，即按原画拉流）。
     first_anti = stream_info_list[0].get("sFlvAntiCode") or ""
     quality_list = first_anti.split("&exsphd=")
+    bit_rate = game_live_info.get("bitRate") or 0
+    try:
+        max_ratio = int(bit_rate)  # type: ignore[arg-type]
+    except TypeError, ValueError:
+        max_ratio = 0
+    # exsphd 档位表（可能含 264_0/264_500 等，转 int 集合）
+    exsphd_ratios: set[int] = set()
+    if len(quality_list) > 1:
+        for v in cast(list[str], re.findall(r"(?<=264_)\d+", quality_list[1])):
+            r = int(v)
+            if r > 0:
+                exsphd_ratios.add(r)
+        if exsphd_ratios:
+            max_ratio = max(max_ratio, max(exsphd_ratios))
+
     actual_quality = video_quality  # OD/BD 默认即请求值
     available_qualities: list[str] | None = None
     ratio_val: str = ""
-    if len(quality_list) > 1 and video_quality not in ["OD", "BD"]:
+
+    if video_quality in BD_SUB_TIERS:
+        # 细粒度蓝光档位（蓝光30M/20M/8M/4M）：请求固定 ratio，不可用时就近向下降级
+        target_ratio = dict(HUYA_FIXED_TIERS)[video_quality]
+        # 可用 ratio 集合：exsphd 档位表优先；缺失时按 bitRate 上限推导；
+        # 两者皆缺（max_ratio<=0）时不做本地降级判断，直接按请求值拉流（交由服务端决定）
+        if exsphd_ratios:
+            available_ratios: set[int] = exsphd_ratios
+        elif max_ratio > 0:
+            available_ratios = {r for r in (30000, 20000, 8000, 4000, 2000, 500) if r <= max_ratio}
+        else:
+            available_ratios = set()
+        if not available_ratios or target_ratio in available_ratios:
+            ratio_val = str(target_ratio)
+            actual_quality = video_quality
+        elif any(r < target_ratio for r in available_ratios):
+            # 就近向下降级：取可用集合中 < target 的最大 ratio
+            chosen = max(r for r in available_ratios if r < target_ratio)
+            ratio_val = str(chosen)
+            actual_quality = HUYA_RATIO_TO_CODE.get(str(chosen), video_quality)
+            logger.warning(
+                f"[虎牙直播] 请求档位 {code_to_zh(video_quality)}(ratio={target_ratio}) 不可用"
+                f"(房间最高码率={max_ratio})，降级为 {code_to_zh(actual_quality)}(ratio={chosen})"
+            )
+        else:
+            # 无任何更低档可用：不附加 ratio 按原画拉流
+            actual_quality = "OD"
+            logger.warning(
+                f"[虎牙直播] 请求档位 {code_to_zh(video_quality)}(ratio={target_ratio}) 不可用"
+                f"(房间最高码率={max_ratio}，无更低档位)，按原画拉流"
+            )
+        # 按统一档位序输出可用档位（信息展示用）
+        available_qualities = (
+            ["OD"] + [c for c, r in HUYA_FIXED_TIERS if max_ratio > 0 and r <= max_ratio] + ["UHD", "LD"]
+        )
+    elif len(quality_list) > 1 and video_quality not in ["OD", "BD"]:
         pattern = r"(?<=264_)\d+"
         qlist = cast(list[str], re.findall(pattern, quality_list[1]))[::-1]
         if qlist:
@@ -607,24 +753,62 @@ async def get_douyu_stream_url(
     if not dy.get("is_live"):
         return {"anchor_name": dy.get("anchor_name"), "is_live": False}
 
-    video_quality_options = {"OD": "0", "BD": "0", "UHD": "3", "HD": "2", "SD": "1", "LD": "1"}
-    # 反向映射：rate 值 → 画质代码（多对一取最高档）
-    rate_to_code = {"0": "OD", "3": "UHD", "2": "HD", "1": "SD"}
-
     rid = str(dy.get("room_id", ""))
-    rate = video_quality_options.get(video_quality or "", "0")
-    flv_data = await get_douyu_stream_data(rid, rate, cookies=cookies, proxy_addr=proxy_addr)
-    flv_data_inner = cast(DouyuFlvData, flv_data.get("data") or {})
+    requested_code = video_quality or "OD"
+    rate = DOUYU_RATE_BY_CODE.get(requested_code, "0")
+    # 蓝光30M/20M 斗鱼无对应档位：按最高蓝光档（蓝光8M）请求
+    if requested_code in ("BD30", "BD20") and rate == "8200":
+        logger.info("[斗鱼直播] 斗鱼无蓝光30M/20M档位，按蓝光8M(rate=8200)请求")
+
+    # 降级链：请求档位被限制（如游客态请求原画被拒）时，依次回退更低档位重试（最多 2 次）
+    flv_data: dict[str, object] = {}
+    flv_data_inner: DouyuFlvData = {}
+    # 全序（高→低）：原画(0) → 蓝光8M(8200) → 蓝光4M(4000) → 超清(3) → 高清(2) → 流畅(1)
+    order = ["0", *DOUYU_RATE_DESC]
+    if rate in order:
+        pos = order.index(rate)
+        attempt_rates = order[pos : pos + 3]  # 请求档 + 最多 2 个更低档
+    else:
+        attempt_rates = [rate]
+    for idx, attempt in enumerate(attempt_rates):
+        flv_data = await get_douyu_stream_data(rid, attempt, cookies=cookies, proxy_addr=proxy_addr)
+        err_code = flv_data.get("error", 0)
+        flv_data_inner = cast(DouyuFlvData, flv_data.get("data") or {})
+        if not err_code and flv_data_inner.get("rtmp_live"):
+            if idx > 0:
+                actual_code = DOUYU_RATE_TO_CODE.get(attempt, requested_code)
+                logger.warning(
+                    f"[斗鱼直播] 请求档位 {code_to_zh(requested_code)}(rate={rate}) 失败"
+                    f"，降级为 {code_to_zh(actual_code)}(rate={attempt}) 拉流成功"
+                )
+            break
+        err_msg = flv_data.get("msg", "")
+        if idx + 1 < len(attempt_rates):
+            logger.warning(
+                f"[斗鱼直播] rate={attempt} 拉流失败(error={err_code}"
+                + (f", msg={err_msg}" if err_msg else "")
+                + f")，尝试更低档位 rate={attempt_rates[idx + 1]}"
+            )
+        else:
+            logger.warning(
+                f"[斗鱼直播] rate={attempt} 拉流失败(error={err_code}"
+                + (f", msg={err_msg}" if err_msg else "")
+                + ")，已无更低档位"
+            )
+    else:
+        # 全部尝试失败：返回 is_live=True 但无流地址（保持既有契约，交由上层告警重试）
+        logger.error(f"[斗鱼直播] 全部档位拉流失败(尝试={attempt_rates})，本轮无可用流地址")
+
     rtmp_url = flv_data_inner.get("rtmp_url", "")
     rtmp_live = flv_data_inner.get("rtmp_live", "")
-    # 平台实际下发的 rate
+    # 平台实际下发的 rate（服务端会把不存在的档位就近钳制到更低档，如 8200→4）
     actual_rate = str(flv_data_inner.get("rate", ""))
-    actual_quality = rate_to_code.get(actual_rate, video_quality)
+    actual_quality = DOUYU_RATE_TO_CODE.get(actual_rate, requested_code)
 
     result: dict[str, object] = {
         "anchor_name": dy.get("anchor_name"),
         "is_live": True,
-        "quality": video_quality,
+        "quality": requested_code,
         "actual_quality": actual_quality,
     }
     if rtmp_live:

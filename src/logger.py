@@ -8,7 +8,7 @@ import sys
 
 from loguru import logger
 
-__all__ = ["logger"]
+__all__ = ["logger", "rebind_console_sink"]
 
 
 def _app_root() -> str:
@@ -32,6 +32,32 @@ logger.remove()
 # 控制台日志格式（彩色）
 custom_format = "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> - <level>{message}</level>"
 
+# 控制台 sink 的 handler id：供 rebind_console_sink() 在 stderr 被重定向后重建
+_console_sink_id: int | None = None
+
+
+# 按当前 sys.stderr 建立/重建控制台 sink。
+# loguru 的 sink 在 add() 时即绑定具体对象，**不会**因之后 sys.stderr 被替换而跟着变。
+# Web 后台模式（web.py::_enter_background_mode）在本模块导入之后才把 sys.stdout/sys.stderr
+# 重定向到 logs/web_console.log 并 SW_HIDE 隐藏控制台窗口——若不重建 sink，全部 DEBUG/
+# WARNING 日志仍写往已被隐藏的控制台，web_console.log 里只剩 print 输出，排障时会误判
+# 「没有日志 = 没有发生」（实测据此把「探针假绿」错判成「校验未执行」）。
+def rebind_console_sink() -> None:
+    global _console_sink_id
+    if _console_sink_id is not None:
+        try:
+            logger.remove(_console_sink_id)
+        except ValueError:
+            # handler 已不存在（如调用方执行过 logger.remove()）：id 失效，忽略即可
+            pass
+        _console_sink_id = None
+    if sys.stderr is None:
+        return
+    # 重定向到文件后不再着色：ANSI 转义序列会污染日志文本
+    is_tty = bool(getattr(sys.stderr, "isatty", lambda: False)())
+    _console_sink_id = logger.add(sink=sys.stderr, format=custom_format, level="DEBUG", colorize=is_tty, enqueue=True)
+
+
 # 添加控制台输出（无论是否启用日志文件，控制台输出始终保留）
 # 注意：pythonw / 窗口化启动器（console=False 的冻结 exe）不会分配控制台，
 # 此时 sys.stderr 为 None；loguru 拒绝把 None 作为 sink，会抛
@@ -39,7 +65,7 @@ custom_format = "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: 
 # 窗口化运行静默失败。故此处先行判空：无控制台环境跳过控制台 sink，
 # 日志持久化交由下方文件 sink 兜底。
 if sys.stderr is not None:
-    _ = logger.add(sink=sys.stderr, format=custom_format, level="DEBUG", colorize=True, enqueue=True)
+    _console_sink_id = logger.add(sink=sys.stderr, format=custom_format, level="DEBUG", colorize=True, enqueue=True)
 
 # 运行时资源根目录（exe 同级：config/ logs/ downloads/ 等），
 # 与 _app_root() 保持一致；冻结后指向 exe 父目录而非 _internal。
