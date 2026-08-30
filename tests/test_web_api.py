@@ -273,6 +273,29 @@ class TestRecordingToggle:
         assert resp.json()["recording_enabled"] is False
         assert fake_main.recording_enabled is False
 
+    def test_toggle_stop_triggers_log_archive(
+        self, app_env: types.SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 停止录制（enable=False）是手动停止路径，须触发运行日志归档；
+        # 开始录制（enable=True）不触发。归档进程仍继续运行，故 reopen_streams=True。
+        import src.log_archive as la
+
+        calls: list[bool] = []
+
+        def fake_archive(*, reopen_streams: bool = True) -> list[str]:
+            calls.append(reopen_streams)
+            return []
+
+        monkeypatch.setattr(la, "archive_runtime_logs", fake_archive)
+        token = _login(app_env.client)
+        headers = {"Authorization": f"Bearer {token}"}
+        resp = app_env.client.post("/api/recording/toggle", json={"enable": True}, headers=headers)
+        assert resp.status_code == 200, resp.text
+        assert calls == []
+        resp = app_env.client.post("/api/recording/toggle", json={"enable": False}, headers=headers)
+        assert resp.status_code == 200, resp.text
+        assert calls == [True]
+
 
 class TestDangerousKeys:
     def test_dangerous_key_blocked_when_auth_disabled(self, tmp_path: Path, fake_main: types.ModuleType) -> None:

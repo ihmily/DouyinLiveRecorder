@@ -235,6 +235,7 @@ DouyinLiveRecorder/
 │   ├── danmaku_monitor.py               # 弹幕监控枢纽（进程单例，内存快照 + JSONL 边车）
 │   ├── srt_writer.py                    # SRT 字幕分段写入（时间轴对齐 ffmpeg segment）
 │   ├── ws_client.py                     # 弹幕 WebSocket 传输层（各平台弹幕共用，proxy=None 直连）
+│   ├── log_archive.py                   # 运行日志归档（停止录制流程收尾：四日志按时间戳改名）
 │   ├── platforms/                       # 各平台弹幕客户端：Douyin/Douyu/Huya/Bilibili/Twitch + 私有签名 _tars/_xbogus
 │   └── proto/                           # 抖音弹幕 protobuf（douyin.proto + 生成的 douyin_pb2）
 ├── web/                                 # Web 管理面板前端
@@ -746,6 +747,7 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 | `/api/rooms`        | GET/POST   | 直播间列表查询 / 新增             |
 | `/api/rooms/{url}`  | PUT/DELETE | 编辑 / 删除直播间               |
 | `/api/rooms/toggle` | POST       | 启用 / 禁用直播间               |
+| `/api/recording/toggle` | POST   | 录制全局开关（开始/停止录制；停止时触发运行日志归档） |
 | `/api/config`       | GET/PUT    | 读取 / 修改配置                |
 | `/api/logs/stream`  | GET        | SSE 实时日志推送               |
 
@@ -1583,9 +1585,70 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 
 ## 更新日志
 
-### v4.0.9.2-dev (2026-08-29) — 全量工作树改动总览（按模块分类）：98 文件 / +10334 −3123，覆盖 2026-08-23 ~ 08-29 全部未提交变更
+### v4.0.9.2-dev (2026-08-30) — 停止录制流程运行日志归档（四日志按时间戳改名归档）+ i18n 四语目录补齐（507 → 516 条）+ 仓库元数据同源清单同步（.v2c / .mypy_cache）
 
-**变更摘要**：本条目为当前**整个未提交工作树**（95 个跟踪文件变更 +10334/−3123，另 3 个未跟踪新文档，合计 98 个文件）的系统性、按模块分类总览，取代 v4.0.9-dev (2026-08-24) 的旧总览条目作为最新全量快照（08-24 之后落地的调度反馈、性能优化、CI 重构、Web 录制控制、画质档位等分散记载于各分条目，本条目按「文件 → 模块 → 改动类型（新增功能/修改内容/删除项）」收敛为一份索引）。条目体系：新增功能主线为①并发调度中枢 `src/scheduler.py`、②Web 面板录制手动控制、③虎牙/斗鱼蓝光细粒度画质档位、④i18n 四语四格式本地化体系、⑤GUI 崩溃可观测与语言菜单；修改主线为 main.py 录制引擎重构（平台分派抽取 + 录制结果反馈 + set 去重）、stream_select 统一候选序列与探针退避、HTTP 层会话复用与 3.14 适配、CI/CD 工作流重构；删除项为旧固定信号量与 `adjust_max_request` 单向压制、轮末无条件成功采样、咪咕过期 `sv=10010` 拼接、build-release 调试残留步骤。
+**变更摘要**：本条目系统性记录 2026-08-30 会话落地的三项改动。① **新增功能：停止录制流程的运行日志归档**——Web 面板「停止录制」与进程退出全路径（信号 `safe_exit` / 磁盘满 / 未捕获异常 / Web 托盘退出）统一把四个运行日志（`logs/streamget.log`、`logs/PlayURL.log`、`logs/danmaku_monitor.jsonl`、`logs/web_console.log`）按「原名_YYYYMMDD_HHMMSS.扩展名」改名归档：目标冲突追加 `_N` 序号、文件缺失跳过、单文件改名失败仅告警不中断、改名前先 flush+close 对应句柄（Windows 下句柄未关 rename 必抛 WinError 32）；归档后日志写入链路立即恢复，下次录制生成全新同名文件。② **i18n 四语目录补齐**：归档功能引入的 9 条新日志串补入四语目录（507 → 516 条）并重编译 `zh_CN.mo`。③ **仓库元数据同步审计**：九配置文件（`AGENTS.md` / `docker-compose.yaml` / `requirements.txt` / `Dockerfile` / `.gitignore` / `.dockerignore` / `.coveragerc-concurrency` / `pyproject.toml` / `uv.lock`）一致性核对，修复 2 处漂移（`.v2c/` 未纳入本地工具目录同源清单、`.mypy_cache/` 缺失于 `.dockerignore`）。**删除项：无**（本批改动纯增量，未移除任何文件、函数或配置项）。
+
+**一、运行日志归档（新增功能）— `src/log_archive.py`（新增）/ `src/logger.py` / `src/danmaku_monitor.py` / `main.py` / `src/web_api.py`**
+
+- `src/log_archive.py`（**新增文件**）：归档入口 `archive_runtime_logs(*, reopen_streams=True)` 与辅助函数 `_archive_target()`（原名_时间戳.扩展名，`os.path.exists` 探测后 `_1`/`_2` 递增去重）/ `_streams_bound_to()`（识别 `sys.stdout`/`sys.stderr` 中绑定 web_console.log 的句柄）/ `_rebind_web_console()`（重建句柄 + 重定向标准流 + `rebind_console_sink()`）/ `_archive_web_console()`（关闭→改名→重建；未绑定标准流的遗留文件仅改名、绝不劫持当前 stdout）/ `_rename_one()`（单文件归档：缺失跳过、失败告警）；`ARCHIVE_LOG_NAMES` 固定四日志清单；模块级串行锁防「面板停止 × atexit」并发重入；顶层 try/except 兜底——任何意外仅告警返回空列表，绝不中断停止录制流程；双守卫早返回：GUI 父进程（`DLR_GUI_PARENT=1`，不持有录制日志句柄、不得改名录制子进程正在写的日志）与测试进程（`DOUYIN_DISABLE_LOG_ARCHIVE=1`）。
+- `src/logger.py`：新增模块级 `_streamget_sink_id` / `_playurl_sink_id` 跟踪两个录制日志 sink 的 handler id；导入期注册重构为 `_add_streamget_sink()` / `_add_playurl_sink()` 两个 helper（导入期与运行期重建共用同参）；新增公开 `remove_file_sinks()`（loguru `remove()` 先 flush enqueue 队列再关闭文件句柄，保证改名前内容完整落盘；幂等 no-op）与 `add_file_sinks()`（重新注册 sink，loguru `add()` 即创建全新同名文件；GUI 父进程或「是否启用日志文件=否」时不注册）。
+- `src/danmaku_monitor.py`：`DanmakuMonitorHub` 新增 `close_file()`（持 `_file_lock` flush+close+置空引用，半损坏句柄交给 `_write_line` 既有异常恢复路径，下一条事件自动重开）；模块级 `close_monitor_file()`（单例未初始化时 no-op，刻意不经 `get_hub()` 触发建单例）。
+- `main.py`：模块级 `atexit.register(archive_runtime_logs, reopen_streams=False)`，**注册顺序刻意先于 `cleanup_all_ffmpeg_processes` / `close_all_clients_sync`**（atexit 为 LIFO——归档最后执行，把 ffmpeg 清理等收尾日志一并收进归档文件；进程退出场景不重建 sink，下次启动经导入期注册自然重建）；信号 `safe_exit`（CLI Ctrl+C / GUI 停止按钮的 CTRL_BREAK / 控制台关闭）、磁盘满 `sys.exit(-1)`、未捕获异常、Web 托盘退出全部经 atexit 覆盖。
+- `src/web_api.py`：`toggle_recording` 在 `enable=False`（面板「停止录制」，手动停止路径）时立即触发 `archive_runtime_logs(reopen_streams=True)`（进程继续运行，改名后重建 loguru sink 与 web_console 句柄，录制引擎与 Web 服务的日志写入不受影响）；时间戳取停止操作发生时刻；「开始录制」不触发。
+
+**二、测试（新增 1 文件 + 修改 2 文件）— `tests/`**
+
+- 新增 `tests/test_log_archive.py`（14 用例）：四日志改名格式正则锁定（原名_YYYYMMDD_HHMMSS.扩展名）、固定时间戳下目标冲突 `_1`/`_2` 递增且不覆盖既有文件、目录为空全跳过、单文件改名失败（PermissionError 替身模拟句柄占用）不中断整批、`DLR_GUI_PARENT=1` 守卫（不触碰文件与句柄）、`DOUYIN_DISABLE_LOG_ARCHIVE=1` 守卫、`reopen_streams` 双态语义（False 不重建 sink / True 重建）、web_console 绑定句柄轮转（flush+close → 改名 → 重建新句柄 → rebind，`handle.closed` 断言）、未绑定标准流的遗留 web_console 仅改名且不重定向 stdout、hub `close_file` 后下一条事件惰性重开与重复关闭幂等、logger sink remove→add 往返与幂等（importlib.reload 隔离 + `add()` 即建文件断言）、main.py 归档 atexit 注册顺序静态锁（先于两个 cleanup 注册 + `reopen_streams=False`）。
+- `tests/test_web_api.py`：`TestRecordingToggle` 新增 `test_toggle_stop_triggers_log_archive`（enable=False 恰好触发一次且 `reopen_streams=True`；enable=True 不触发）。
+- `tests/conftest.py`：`pytest_configure` 增设 `DOUYIN_DISABLE_LOG_ARCHIVE=1`——测试进程导入 main 会注册归档 atexit，pytest 退出并非「停止录制」事件，防止改名开发者真实 `logs/`（归档专项用例内自行 delenv）。
+
+**三、i18n 四语目录补齐（修改内容）— `i18n/zh_CN/LC_MESSAGES/zh_CN.po` + `zh_CN.mo` / `i18n/en_US.json` / `i18n/en_GB.json` / `i18n/zh_TW.yaml`**
+
+- 四目录各新增 9 条（507 → 516 条，键集保持一致）：归档功能的 9 条新日志串——「运行日志已归档」「运行日志归档失败(忽略)」「日志已归档」「日志归档失败(跳过)」×2、「关闭 web_console 句柄异常(忽略)」「重建 web_console.log 句柄失败」「[弹幕监控]close_file 失败(忽略)」「[弹幕监控]关闭边车文件异常(忽略)」。
+- `zh_CN.po`：新增「日志归档模块（src/log_archive.py / src/danmaku_monitor.py，2026-08-30 新增）」分节（简中恒等翻译风格），头部「更新日期 / PO-Revision-Date」同步；`scripts/compile_po.py` 重编译 `.mo`（517 条含头部，63888 字节），`--check` 字节级同步通过。
+- `en_US.json` / `en_GB.json`：英文译文（两变体同文，涉词无英美拼写差异）；`zh_TW.yaml`：繁体译文按既有语汇转换（日志→日誌、文件→檔案、归档→歸檔、运行日志→執行日誌、句柄→控制代碼），含单引号占位符的条目改用双引号 YAML 标量书写。
+- 验证：`scripts/extract_i18n_strings.py` 复扫缺失 0 条；`tests/test_i18n.py` 34 用例全过（含四目录键集一致 + po/mo 同步）。
+
+**四、仓库元数据同步（修改内容）— `pyproject.toml` / `.coveragerc-concurrency` / `.gitignore` / `.dockerignore` / `AGENTS.md`**
+
+- 审计一致项（无需改动）：`requirements.txt` ≡ `pyproject.toml [project.dependencies]`（20=20 逐条同下界）；`uv.lock` 经 `uv lock --check` 确认同步；Dockerfile（python:3.14-slim-bookworm + Node 24）≡ ci.yml（`python_build=3.14` / `node_version=24`）；版本链 4.0.9.2 与 `scripts/check_version.py` 全过；Docker 镜像额外排除集完整；`.coveragerc-concurrency` omit ≡ pyproject coverage omit。
+- 修复漂移 ×2：① **`.v2c/`**（video2code 插件生成目录，工作区实存）补入全部 9 个同步点——`.gitignore`、`.dockerignore`、pyproject 五处排除列表（black exclude / isort extend_skip / mypy exclude / basedpyright exclude / coverage omit）、`.coveragerc-concurrency` omit、AGENTS.md「dockerignore / gitignore 同源约定」规范清单；② **`.mypy_cache/`** 补入 `.dockerignore`「Python 缓存」小节（原仅 `.gitignore` 有，`COPY . .` 构建上下文会误送）。
+- `AGENTS.md`：项目结构补 `src/log_archive.py` 条目；「关键约定」新增第 8 条「停止录制流程的日志归档（2026-08-30 定稿）」（触发点仅两处 / 命名与去重规则 / 句柄关闭硬约束 / GUI 与测试双守卫 / 回归锁清单）。
+
+**影响范围**：
+
+- 用户可感知：停止录制后 `logs/` 下出现 `streamget_YYYYMMDD_HHMMSS.log` 等归档文件（同秒重复停止自动 `_1` 递增）；原始四日志在下次录制/写日志时自动重建；Web 面板「停止录制」即时归档，CLI Ctrl+C / GUI 停止按钮 / 控制台关闭 / Web 托盘退出在进程退出时归档。
+- 行为不变项：日志内容/格式/目录、loguru 轮转（300 KB）与保留策略、弹幕监控 JSONL 轮转（5 MB）、四语键集一致性、GUI 父进程仅写 gui.log、CLI 模式不产生 web_console.log 等全部保持。
+- 已知边界：GUI 停止录制的 `taskkill /F /T` 硬杀兜底路径进程无机会执行任何 Python 代码（含归档），属结构性限制（CTRL_BREAK 主路径归档正常）；`web_console.log` 仅 Web 后台模式存在，归档后重建空文件承接后续输出。
+
+**验证**（2026-08-30）：
+
+- `pytest` 全量 **806 passed, 2 skipped**（0 警告；本批新增 15 用例：`test_log_archive.py` 14 例 + toggle 归档触发 1 例）。
+- Windows 真实链路黑盒验证：loguru `remove()`（flush+close）→ `os.rename` → `add()` 旧文件内容完整、新同名文件立即重建（印证句柄占用约束下的归档可行性）。
+- 四语运行时查找冒烟：9 条新串在 zh_CN（.mo）/ en_US / en_GB / zh_TW 精确命中。
+- 配置终验：pyproject 五排除列表 / coveragerc omit / 两份 ignore / AGENTS 同源清单程序化断言全过；`black --check`（exclude 正则合法）、`mypy src/` 双平台、`uv lock --check`、`coverage debug config` 全过；`scripts/check_version.py` PASS。
+
+**关联**：
+
+- `AGENTS.md`：「关键约定」第 8 条「停止录制流程的日志归档（2026-08-30 定稿）」+「dockerignore / gitignore 同源约定」清单（含 `.v2c/`）。
+- 回归锁：`tests/test_log_archive.py` + `tests/test_web_api.py::TestRecordingToggle::test_toggle_stop_triggers_log_archive` + `tests/test_i18n.py`（四目录键集 / `compile_po --check`）。
+- 上一版全量快照：v4.0.9.2-dev (2026-08-29)「全量工作树改动总览（按模块分类）」。
+
+### v4.0.9.2-dev (2026-08-29) — GUI 父进程日志句柄隔离：修复 streamget.log 轮转 WinError 32 与录制日志全量丢失
+
+**问题**：GUI 模式下 GUI 进程（`gui.py` 经 `src.web_config → src/__init__ → src.logger` 导入链初始化文件 sink）与录制子进程（`main.py`）同时持有 `logs/streamget.log` 的 loguru 文件 sink 句柄；文件越过 `rotation="300 KB"` 阈值（loguru 按 1000 进制）后，任一方写日志都要先 `os.rename` 轮转改名，对方句柄未关即抛 `PermissionError: [WinError 32]`——轮转永不成功，录制子进程的文件日志自此全量静默丢失（实测：streamget.log 卡在 300031 字节、mtime 停在 08-28 19:19，GUI 面板被 `Logging error in Loguru Handler #2` 刷屏；轮转目标名 `streamget.2026-08-27_*.log` 为 loguru 按文件 ctime 命名，`logs/` 下从未出现，证实轮转从未成功）。仅 GUI 模式触发：CLI / Web 为单进程录制、`gui_legacy.py` 不导入 src，均不受影响。
+
+**修复**（`src/logger.py` / `gui.py` / `tests/test_logger_gui_parent.py` 新增）：
+
+- `src/logger.py`：新增 `GUI_PARENT_ENV = "DLR_GUI_PARENT"` 环境标记与导入期判定——GUI 进程只写**本进程独占**的 `logs/gui.log`（同款轮转/保留策略），绝不创建 `streamget.log` / `PlayURL.log`；录制进程（CLI / Web / GUI 子进程）行为不变。新增公开 helper `child_process_env()`：构建录制子进程启动环境（剔除标记 + 固定 `PYTHONIOENCODING=utf-8`）。
+- `gui.py`：在导入任何 `src` 模块之前设置标记（src.logger 在导入期读标记，设置必须先于导入）；拉起录制核心（main.py / 冻结 CLI exe）的 env 改经 `child_process_env()`。
+- `tests/test_logger_gui_parent.py`（5 用例）：录制进程持有 streamget/PlayURL 不产生 gui.log、GUI 进程仅 gui.log、「是否启用日志文件=否」对 GUI 同样生效、`child_process_env` 剔除标记与 UTF-8 固定、gui.py 标记先于 src 导入 + env 构建走 helper 的静态回归锁。
+- `src/stream.py`：补全 `HuyaGameLiveInfo` TypedDict 的 `bitRate: int` 字段声明并移除 `# type: ignore[arg-type]`（对齐仓库禁用 ignore 约定）——未声明键经 `.get()` 退化为 `object`，新版本 mypy 对 `int(bit_rate)` 报 `call-overload` 且旧 ignore 代码不覆盖；运行时语义零变化（TypedDict 声明无运行时效果，`try/except TypeError, ValueError` 兜底保留），`mypy src/` 全量（38 文件）恢复全绿。
+
+### v4.0.9.2-dev (2026-08-29) — 全量工作树改动总览（按模块分类）：97 文件 / +10659 −3138，覆盖 2026-08-23 ~ 08-29 全部未提交变更
+
+**变更摘要**：本条目为当前**整个未提交工作树**（95 个跟踪文件变更 +10659/−3138，另 2 个未跟踪新文档，合计 97 个文件）的系统性、按模块分类总览，取代 v4.0.9-dev (2026-08-24) 的旧总览条目作为最新全量快照（08-24 之后落地的调度反馈、性能优化、CI 重构、Web 录制控制、画质档位等分散记载于各分条目，本条目按「文件 → 模块 → 改动类型（新增功能/修改内容/删除项）」收敛为一份索引）。条目体系：新增功能主线为①并发调度中枢 `src/scheduler.py`、②Web 面板录制手动控制、③虎牙/斗鱼蓝光细粒度画质档位、④i18n 四语四格式本地化体系、⑤GUI 崩溃可观测与语言菜单；修改主线为 main.py 录制引擎重构（平台分派抽取 + 录制结果反馈 + set 去重）、stream_select 统一候选序列与探针退避、HTTP 层会话复用与 3.14 适配、CI/CD 工作流重构；删除项为旧固定信号量与 `adjust_max_request` 单向压制、轮末无条件成功采样、咪咕过期 `sv=10010` 拼接、build-release 调试残留步骤。
 
 **涉及文件（按模块分类）**：
 
@@ -1647,11 +1710,11 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 
 **九、构建 / CI / 依赖 / 仓库元数据（修改内容 + 新增）— `pyproject.toml` / `requirements.txt` / `uv.lock` / `Dockerfile` / `docker-compose.yaml` / `build_exe.py` / `.github/*` / `.coveragerc-concurrency`（新增）/ `.dockerignore` / `.gitignore`**
 
-- `pyproject.toml`：版本 `4.0.8.3` → `4.0.9.1`；`requires-python` `>=3.10` → `>=3.14`；classifiers 收敛至 3.14；依赖新增 `PyYAML>=6.0.3`；`[tool.black] target-version=['py314']`、`[tool.mypy] python_version=3.14`、`[tool.basedpyright] pythonVersion=3.14`；pytest 新增 `filterwarnings`（starlette testclient 弃用提示忽略）。
+- `pyproject.toml`：版本 `4.0.8.3` → `4.0.9.2`；`requires-python` `>=3.10` → `>=3.14`；classifiers 收敛至 3.14；依赖新增 `PyYAML>=6.0.3`；`[tool.black] target-version=['py314']`、`[tool.mypy] python_version=3.14`、`[tool.basedpyright] pythonVersion=3.14`；pytest 新增 `filterwarnings`（starlette testclient 弃用提示忽略）。
 - `requirements.txt`：新增 `PyYAML>=6.0.3`（与 pyproject 下界一致）；弹幕依赖注释路径订正（`src/danmaku/` → `src/` 实际布局）。
-- `uv.lock`：随 3.14 基线重锁（净 −963 行；镜像/CI 经 requirements.txt 走 pip、不消费它）。
+- `uv.lock`：随 3.14 基线重锁（净 −963 行；镜像/CI 经 requirements.txt 走 pip、不消费它）；随版本号提升经 `uv lock` 同步根包版本字段（`4.0.9` → `4.0.9.2`，`uv lock --check` 通过）。
 - `Dockerfile`：基础镜像 `python:3.13-slim` → `python:3.14-slim`；Node.js `setup_22.x` → `setup_24.x`（24 LTS，实测全部 JS 签名脚本 + migu.js 重写版通过）。
-- `docker-compose.yaml`：版本示例注释同步 4.0.9.1。
+- `docker-compose.yaml`：版本示例注释同步 4.0.9.2。
 - `build_exe.py`：PEP 758 格式化（打包冒烟判定语义未变）。
 - `.github/workflows/ci.yml`：重构为 setup + static/typecheck/test/concurrency-test/integration-verify/build-verify/ci-summary 拓扑（每 job 显式 timeout、ci-summary 唯一 required check）；actions 升 v7（checkout/setup-python/setup-node/upload-artifact）；`python_min/python_latest/python_build=3.14`、`python_matrix=["3.13","3.14"]`、mypy 2.3.0 / black 26.5.1 / isort 8.0.1 固定版本；paths-filter 增 `i18n/**` 触发。注意：3.13 矩阵档与全仓 PEP 758 无括号语法在收集期冲突（Python 3.13 不支持 `except A, B:`），提交前需将矩阵收敛为 `["3.14"]`。
 - `.github/workflows/build-release.yml`：`python_build` 3.12→3.14；网络安装（choco/apt/brew/pip）全部收敛到 retry 复合动作；macOS tap 信任独立步骤；删除尾部「Debug inputs」残留步骤。

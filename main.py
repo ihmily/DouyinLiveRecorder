@@ -127,6 +127,7 @@ from src.ffmpeg_proc import (
     register_ffmpeg_process,
     unregister_ffmpeg_process,
 )
+from src.log_archive import archive_runtime_logs
 from src.notify import (
     adjust_max_request,
     clear_record_info,
@@ -479,6 +480,10 @@ if hasattr(signal, "SIGBREAK"):
     _ = signal.signal(signal.SIGBREAK, safe_exit)
 
 # 进程异常退出时兜底清理 ffmpeg 与 HTTP 连接池（覆盖硬杀 / 未捕获异常等非优雅退出路径）
+# 注意注册顺序：atexit 为 LIFO，归档必须先于两个 cleanup 注册——
+# 进程退出（信号 safe_exit / 磁盘满 / 未捕获异常 / web 面板退出）时把 ffmpeg 清理等
+# 收尾日志一并收进归档文件，四个运行日志统一按「原名_YYYYMMDD_HHMMSS.扩展名」改名
+_atexit_result_0 = atexit.register(archive_runtime_logs, reopen_streams=False)
 _atexit_result_1 = atexit.register(cleanup_all_ffmpeg_processes)
 from src.async_http import close_all_clients_sync
 

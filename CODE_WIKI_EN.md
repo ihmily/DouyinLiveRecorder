@@ -235,6 +235,7 @@ DouyinLiveRecorder/
 │   ├── danmaku_monitor.py               # 弹幕监控枢纽（进程单例，内存快照 + JSONL 边车）
 │   ├── srt_writer.py                    # SRT 字幕分段写入（时间轴对齐 ffmpeg segment）
 │   ├── ws_client.py                     # 弹幕 WebSocket 传输层（各平台弹幕共用，proxy=None 直连）
+│   ├── log_archive.py                   # 运行日志归档（停止录制流程收尾：四日志按时间戳改名）
 │   ├── platforms/                       # 各平台弹幕客户端：Douyin/Douyu/Huya/Bilibili/Twitch + 私有签名 _tars/_xbogus
 │   └── proto/                           # 抖音弹幕 protobuf（douyin.proto + 生成的 douyin_pb2）
 ├── web/                                 # Web 管理面板前端
@@ -745,6 +746,7 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 | `/api/rooms` | GET/POST | Live room list query / add |
 | `/api/rooms/{url}` | PUT/DELETE | Edit / delete a live room |
 | `/api/rooms/toggle` | POST | Enable / disable a live room |
+| `/api/recording/toggle` | POST | Recording master switch (start/stop recording; stopping triggers runtime log archiving) |
 | `/api/config` | GET/PUT | Read / modify config |
 | `/api/logs/stream` | GET | SSE real-time log push |
 
@@ -1579,9 +1581,59 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 
 ## Changelog
 
-### v4.0.9.2-dev (2026-08-29) — Full Working-Tree Change Overview (Classified by Module): 98 files / +10334 −3123, covering all uncommitted changes from 2026-08-23 through 08-29
+### v4.0.9.2-dev (2026-08-30) — Runtime Log Archiving on Recording Stop (four logs renamed with timestamp) + i18n catalog completion (507 → 516 entries) + repo metadata sync-list alignment (.v2c / .mypy_cache)
 
-**Change Summary**: This entry is the systematic, module-classified overview of the **entire uncommitted working tree** (95 tracked files changed +10334/−3123, plus 3 new untracked documents — 98 files in total), superseding the v4.0.9-dev (2026-08-24) overview entry as the latest full snapshot (work landed after 08-24 — scheduling feedback, performance optimization, CI restructuring, Web recording control, quality tiers, etc. — is documented in the individual feature entries; this entry consolidates everything into a single "file → module → change type (new feature / modification / deletion)" index). Feature highlights — new: ① concurrency scheduling hub `src/scheduler.py`, ② Web panel manual recording control, ③ Huya/Douyu fine-grained Blu-ray quality tiers, ④ the i18n four-language four-format localization system, ⑤ GUI crash observability and the language menu; modified: main.py recorder-engine refactor (platform-dispatch extraction + recording-result feedback + set-based dedup), stream_select unified candidate sequence and probe backoff, HTTP-layer session reuse and 3.14 adaptation, CI/CD workflow restructuring; deleted: the old fixed semaphore and one-way `adjust_max_request` suppression, unconditional end-of-round success sampling, the expired Migu `sv=10010` concatenation, and leftover debug steps in build-release.
+**Change Summary**: This entry systematically records the three changes landed in the 2026-08-30 session. ① **New feature: runtime log archiving on recording stop** — the Web panel "Stop Recording" button and every process-exit path (signal `safe_exit` / disk-full / uncaught exception / Web tray exit) now uniformly rename the four runtime logs (`logs/streamget.log`, `logs/PlayURL.log`, `logs/danmaku_monitor.jsonl`, `logs/web_console.log`) to "originalname_YYYYMMDD_HHMMSS.ext": conflicting targets get a `_N` sequence suffix, missing files are skipped, a single failed rename only warns without interrupting, and the corresponding handle is flushed and closed before renaming (on Windows, renaming a file with an open handle raises WinError 32); after archiving, the logging pipeline is restored immediately and the next recording session recreates fresh same-name files. ② **i18n catalog completion**: the 9 new log strings introduced by the archiving feature were added to all four language catalogs (507 → 516 entries) and `zh_CN.mo` was recompiled. ③ **Repo metadata sync audit**: consistency review of the nine config files (`AGENTS.md` / `docker-compose.yaml` / `requirements.txt` / `Dockerfile` / `.gitignore` / `.dockerignore` / `.coveragerc-concurrency` / `pyproject.toml` / `uv.lock`) fixed 2 drifts (`.v2c/` missing from the local-tool-directory sync list, `.mypy_cache/` missing from `.dockerignore`). **Deletions: none** (this batch is purely additive — no files, functions, or config entries were removed).
+
+**1. Runtime Log Archiving (new feature) — `src/log_archive.py` (new) / `src/logger.py` / `src/danmaku_monitor.py` / `main.py` / `src/web_api.py`**
+
+- `src/log_archive.py` (**new file**): archive entry `archive_runtime_logs(*, reopen_streams=True)` plus helpers `_archive_target()` (original name_timestamp.ext, dedup via `os.path.exists` probing with `_1`/`_2` increments) / `_streams_bound_to()` (finds the handles bound to web_console.log among `sys.stdout`/`sys.stderr`) / `_rebind_web_console()` (recreate the handle + reassign the standard streams + `rebind_console_sink()`) / `_archive_web_console()` (close → rename → recreate; a leftover file not bound to any standard stream is only renamed, never hijacking the current stdout) / `_rename_one()` (single-file archive: skip if missing, warn on failure); `ARCHIVE_LOG_NAMES` pins the four-log list; a module-level lock guards against "panel stop × atexit" concurrent re-entry; a top-level try/except ensures any unexpected error only warns and returns an empty list, never interrupting the stop-recording flow; two guards return early: the GUI parent process (`DLR_GUI_PARENT=1` — owns no recording-log handles and must never rename logs being written by the recorder child) and test processes (`DOUYIN_DISABLE_LOG_ARCHIVE=1`).
+- `src/logger.py`: new module-level `_streamget_sink_id` / `_playurl_sink_id` tracking the handler ids of the two recording-log sinks; import-time registration refactored into the `_add_streamget_sink()` / `_add_playurl_sink()` helpers (identical parameters for import time and runtime re-creation); new public `remove_file_sinks()` (loguru `remove()` first flushes the enqueue queue and then closes the file handle, guaranteeing content is fully persisted before renaming; idempotent no-op) and `add_file_sinks()` (re-registers the sinks — loguru `add()` immediately creates fresh same-name files; skipped for the GUI parent process or when "enable log file" is off).
+- `src/danmaku_monitor.py`: `DanmakuMonitorHub` gains `close_file()` (flush+close+clear the reference under `_file_lock`; a half-broken handle is left to the existing exception-recovery path of `_write_line`, and the next event reopens automatically); module-level `close_monitor_file()` (no-op when the singleton is uninitialized — deliberately not going through `get_hub()` to avoid creating it).
+- `main.py`: module-level `atexit.register(archive_runtime_logs, reopen_streams=False)`, **registered deliberately before `cleanup_all_ffmpeg_processes` / `close_all_clients_sync`** (atexit is LIFO — archiving runs last, sweeping the ffmpeg-cleanup and other final logs into the archived files; the process-exit path does not re-create sinks, the next start rebuilds them via import-time registration); signal `safe_exit` (CLI Ctrl+C / the GUI stop button's CTRL_BREAK / console close), disk-full `sys.exit(-1)`, uncaught exceptions, and the Web tray exit are all covered through atexit.
+- `src/web_api.py`: `toggle_recording` triggers `archive_runtime_logs(reopen_streams=True)` immediately on `enable=False` (the panel "Stop Recording" manual-stop path; the process keeps running, so after renaming the loguru sinks and the web_console handle are rebuilt and logging for the recorder engine and the Web service is unaffected); the timestamp is taken at the moment the stop operation happens; "Start Recording" does not trigger archiving.
+
+**2. Tests (1 new file + 2 modified) — `tests/`**
+
+- New `tests/test_log_archive.py` (14 cases): regex lock on the four-log rename format (originalname_YYYYMMDD_HHMMSS.ext), `_1`/`_2` increment without overwriting existing files under a fixed timestamp, empty directory skips everything, a single failed rename (PermissionError stub simulating a locked handle) does not interrupt the batch, `DLR_GUI_PARENT=1` guard (no files or handles touched), `DOUYIN_DISABLE_LOG_ARCHIVE=1` guard, both `reopen_streams` semantics (False does not re-create sinks / True does), web_console bound-handle rotation (flush+close → rename → recreate the handle → rebind, asserting `handle.closed`), a leftover web_console not bound to standard streams is only renamed without redirecting stdout, hub `close_file` followed by lazy reopen on the next event and idempotent repeated close, logger sink remove→add round trip and idempotency (importlib.reload isolation + "add() creates the file" assertion), and a static lock on main.py's archive atexit registration order (registered before the two cleanups + `reopen_streams=False`).
+- `tests/test_web_api.py`: `TestRecordingToggle` gains `test_toggle_stop_triggers_log_archive` (enable=False triggers exactly once with `reopen_streams=True`; enable=True does not trigger).
+- `tests/conftest.py`: `pytest_configure` sets `DOUYIN_DISABLE_LOG_ARCHIVE=1` — a test process importing main registers the archive atexit hook, but a pytest exit is not a "stop recording" event, preventing renames of the developer's real `logs/` (the archiving-specific cases delenv it themselves).
+
+**3. i18n Four-Language Catalog Completion (modification) — `i18n/zh_CN/LC_MESSAGES/zh_CN.po` + `zh_CN.mo` / `i18n/en_US.json` / `i18n/en_GB.json` / `i18n/zh_TW.yaml`**
+
+- 9 entries added to each of the four catalogs (507 → 516, key sets kept identical): the 9 new log strings from the archiving feature — "runtime logs archived", "runtime log archiving failed (ignored)", "log archived", "log archiving failed (skipped)" ×2, "failed to close web_console handle (ignored)", "failed to recreate web_console.log handle", "[danmaku monitor] close_file failed (ignored)", "[danmaku monitor] exception while closing sidecar file (ignored)".
+- `zh_CN.po`: new section "Log Archive Module (src/log_archive.py / src/danmaku_monitor.py, added 2026-08-30)" (identity-translation style for Simplified Chinese), header "update date / PO-Revision-Date" synced; `scripts/compile_po.py` recompiled the `.mo` (517 entries including the header, 63888 bytes) and `--check` byte-level sync passes.
+- `en_US.json` / `en_GB.json`: English translations (identical for both variants — no US/GB spelling divergence involved); `zh_TW.yaml`: Traditional Chinese following the existing vocabulary conventions (日志→日誌, 文件→檔案, 归档→歸檔, 运行日志→執行日誌, 句柄→控制代碼), with entries containing single-quoted placeholders written as double-quoted YAML scalars.
+- Verification: `scripts/extract_i18n_strings.py` re-scan reports 0 missing; `tests/test_i18n.py` — all 34 cases pass (including four-catalog keyset equality + po/mo sync).
+
+**4. Repository Metadata Sync (modification) — `pyproject.toml` / `.coveragerc-concurrency` / `.gitignore` / `.dockerignore` / `AGENTS.md`**
+
+- Consistent items found by the audit (no change needed): `requirements.txt` ≡ `pyproject.toml [project.dependencies]` (20=20, same lower bounds entry by entry); `uv.lock` confirmed in sync via `uv lock --check`; Dockerfile (python:3.14-slim-bookworm + Node 24) ≡ ci.yml (`python_build=3.14` / `node_version=24`); the version chain 4.0.9.2 and `scripts/check_version.py` fully pass; the Docker mirror exclusion set is complete; `.coveragerc-concurrency` omit ≡ pyproject coverage omit.
+- 2 drifts fixed: ① **`.v2c/`** (a video2code plugin directory present in the workspace) added to all 9 sync points — `.gitignore`, `.dockerignore`, the five pyproject exclude lists (black exclude / isort extend_skip / mypy exclude / basedpyright exclude / coverage omit), the `.coveragerc-concurrency` omit, and the canonical list in AGENTS.md's "dockerignore / gitignore sync convention"; ② **`.mypy_cache/`** added to `.dockerignore`'s "Python caches" section (previously only in `.gitignore`, so `COPY . .` would ship it into the build context).
+- `AGENTS.md`: project structure gains the `src/log_archive.py` entry; "Key Conventions" gains item 8, "Runtime log archiving on recording stop (finalized 2026-08-30)" (exactly two trigger points / naming and dedup rules / handle-closing hard constraints / GUI and test guards / regression-lock list).
+
+**Impact**:
+
+- User-visible: after stopping, timestamped archive files such as `streamget_YYYYMMDD_HHMMSS.log` appear under `logs/` (repeated stops within the same second get `_1` increments); the original four logs are automatically recreated at the next recording/log write; the Web panel's "Stop Recording" archives immediately, while CLI Ctrl+C / the GUI stop button / console close / Web tray exit archive at process exit.
+- Unchanged behavior: log content/format/directory, loguru rotation (300 KB) and retention policy, the danmaku-monitor JSONL rotation (5 MB), four-catalog keyset equality, the GUI parent writing only gui.log, and CLI mode never creating web_console.log are all preserved.
+- Known boundary: the GUI stop-recording fallback `taskkill /F /T` hard-kills the process, leaving no chance to run any Python code (including archiving) — a structural limitation (the primary CTRL_BREAK path archives normally); `web_console.log` only exists in Web background mode, and after archiving a fresh empty file is recreated to carry subsequent output.
+
+**Verification** (2026-08-30):
+
+- Full `pytest`: **806 passed, 2 skipped** (0 warnings; 15 new cases in this batch: 14 in `test_log_archive.py` + 1 toggle-archive trigger).
+- Black-box verification of the real chain on Windows: loguru `remove()` (flush+close) → `os.rename` → `add()` leaves the old file fully intact and immediately recreates the fresh same-name file (confirming the archive works under the handle-locking constraint).
+- Runtime lookup smoke test in four languages: all 9 new strings hit exactly in zh_CN (.mo) / en_US / en_GB / zh_TW.
+- Config final checks: programmatic assertions over the five pyproject exclude lists / coveragerc omit / both ignore files / the AGENTS sync list all pass; `black --check` (valid exclude regex), `mypy src/` on both platforms, `uv lock --check`, and `coverage debug config` all pass; `scripts/check_version.py` PASS.
+
+**Related**:
+
+- `AGENTS.md`: "Key Conventions" item 8, "Runtime log archiving on recording stop (finalized 2026-08-30)" + the "dockerignore / gitignore sync convention" list (including `.v2c/`).
+- Regression locks: `tests/test_log_archive.py` + `tests/test_web_api.py::TestRecordingToggle::test_toggle_stop_triggers_log_archive` + `tests/test_i18n.py` (four-catalog keyset / `compile_po --check`).
+- Previous full snapshot: v4.0.9.2-dev (2026-08-29) "Full Working-Tree Change Overview (Classified by Module)".
+
+### v4.0.9.2-dev (2026-08-29) — Full Working-Tree Change Overview (Classified by Module): 97 files / +10659 −3138, covering all uncommitted changes from 2026-08-23 through 08-29
+
+**Change Summary**: This entry is the systematic, module-classified overview of the **entire uncommitted working tree** (95 tracked files changed +10659/−3138, plus 2 new untracked documents — 97 files in total), superseding the v4.0.9-dev (2026-08-24) overview entry as the latest full snapshot (work landed after 08-24 — scheduling feedback, performance optimization, CI restructuring, Web recording control, quality tiers, etc. — is documented in the individual feature entries; this entry consolidates everything into a single "file → module → change type (new feature / modification / deletion)" index). Feature highlights — new: ① concurrency scheduling hub `src/scheduler.py`, ② Web panel manual recording control, ③ Huya/Douyu fine-grained Blu-ray quality tiers, ④ the i18n four-language four-format localization system, ⑤ GUI crash observability and the language menu; modified: main.py recorder-engine refactor (platform-dispatch extraction + recording-result feedback + set-based dedup), stream_select unified candidate sequence and probe backoff, HTTP-layer session reuse and 3.14 adaptation, CI/CD workflow restructuring; deleted: the old fixed semaphore and one-way `adjust_max_request` suppression, unconditional end-of-round success sampling, the expired Migu `sv=10010` concatenation, and leftover debug steps in build-release.
 
 **Files Involved (Classified by Module)**:
 
@@ -1643,11 +1695,11 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 
 **9. Build / CI / Dependencies / Repository Metadata (modification + addition) — `pyproject.toml` / `requirements.txt` / `uv.lock` / `Dockerfile` / `docker-compose.yaml` / `build_exe.py` / `.github/*` / `.coveragerc-concurrency` (new) / `.dockerignore` / `.gitignore`**
 
-- `pyproject.toml`: version `4.0.8.3` → `4.0.9.1`; `requires-python` `>=3.10` → `>=3.14`; classifiers collapsed to 3.14; dependency addition `PyYAML>=6.0.3`; `[tool.black] target-version=['py314']`, `[tool.mypy] python_version=3.14`, `[tool.basedpyright] pythonVersion=3.14`; pytest gains `filterwarnings` (starlette testclient deprecation ignored).
+- `pyproject.toml`: version `4.0.8.3` → `4.0.9.2`; `requires-python` `>=3.10` → `>=3.14`; classifiers collapsed to 3.14; dependency addition `PyYAML>=6.0.3`; `[tool.black] target-version=['py314']`, `[tool.mypy] python_version=3.14`, `[tool.basedpyright] pythonVersion=3.14`; pytest gains `filterwarnings` (starlette testclient deprecation ignored).
 - `requirements.txt`: adds `PyYAML>=6.0.3` (lower bound consistent with pyproject); danmaku dependency comment paths corrected (`src/danmaku/` → actual `src/` layout).
-- `uv.lock`: re-locked against the 3.14 baseline (net −963 lines; images/CI install via pip from requirements.txt and do not consume it).
+- `uv.lock`: re-locked against the 3.14 baseline (net −963 lines; images/CI install via pip from requirements.txt and do not consume it); root-package version field synced with the version bump via `uv lock` (`4.0.9` → `4.0.9.2`, `uv lock --check` passing).
 - `Dockerfile`: base image `python:3.13-slim` → `python:3.14-slim`; Node.js `setup_22.x` → `setup_24.x` (24 LTS, verified against all JS signing scripts plus the rewritten migu.js).
-- `docker-compose.yaml`: version example comment synced to 4.0.9.1.
+- `docker-compose.yaml`: version example comment synced to 4.0.9.2.
 - `build_exe.py`: PEP 758 formatting (packaging/smoke semantics unchanged).
 - `.github/workflows/ci.yml`: restructured into a setup + static/typecheck/test/concurrency-test/integration-verify/build-verify/ci-summary topology (explicit per-job timeouts, ci-summary as the sole required check); actions bumped to v7 (checkout/setup-python/setup-node/upload-artifact); `python_min/python_latest/python_build=3.14`, `python_matrix=["3.13","3.14"]`, pinned mypy 2.3.0 / black 26.5.1 / isort 8.0.1; paths-filter now triggers on `i18n/**`. Note: the 3.13 matrix leg conflicts with the repo-wide PEP 758 paren-less syntax at collection time (Python 3.13 does not support `except A, B:`); the matrix must be collapsed to `["3.14"]` before committing.
 - `.github/workflows/build-release.yml`: `python_build` 3.12→3.14; all network installs (choco/apt/brew/pip) consolidated into the retry composite action; macOS tap trust as a separate step; trailing "Debug inputs" step deleted.
@@ -1836,7 +1888,74 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 - `docs/security-triage-2026-08-29.md`: gate-alert triage details and the two release paths.
 - v4.0.9.1-dev (2026-08-27) "Recording Result Feedback Scheduler" — stop-period error-sample isolation builds on its `record_error`/`record_success` semantics; the existing `check_subprocess` early-interrupt mechanism (flush danmaku before terminating ffmpeg) is pre-existing behavior; this feature only adds `recording_enabled` to its trigger condition.
 
-### v4.0.9.1-dev (2026-08-28) — Performance Review Optimization Landed (P1~P5 + Probe-Client Reuse + Backoff-Window Self-Healing + Web Log-Sink Rebuild + Huya FLV-first)
+### v4.0.9.2-dev (2026-08-29) — Web Panel Manual Recording Control (Global Switch + 7 Interrupt Points + Start/Stop Buttons) + Two-Round Review Fixes + End-to-End Smoke Test & Commit-Gate Triage
+
+**Change Summary**: This entry systematically records the "remove auto-recording on Web startup, switch to user manual control" feature and its supporting verification landed in the 2026-08-29 session. ① **Feature core**: new global switch `main.recording_enabled` (default True; CLI/GUI direct runs unaffected) + 7 interrupt points in the main.py recording chain + the `POST /api/recording/toggle` endpoint + frontend "Start/Stop Recording" buttons with 2s-polling state sync — the Web panel no longer auto-records on startup; ② **Independent code review**: all 7 interrupt points verified for completeness, process reclamation, error-sample isolation, concurrency safety, and auth consistency, with 3 defects fixed (including 1 P1 frontend state-label selector defect); ③ **End-to-end smoke test**: the full flow — real panel (background mode) startup → start recording → stop recording → graceful exit — passed, with the full `pytest` suite re-run consistently at **786 passed, 2 skipped**; ④ **Commit-gate triage**: the git commit was hard-blocked by the Mimosa L3 gate on unfixed high findings; the official deep scan was completed per the gate's requirement (seal `sha256:5250cdc7…`) with all 44 findings triaged one by one — every one a pre-existing false positive or upstream pattern and none in this feature's code; the triage report is on disk awaiting maintainer approval.
+
+**Files Involved (Classified by Module)**:
+
+**1. Recording Main-Chain Global Switch — `main.py`**
+
+- New module-level `recording_enabled: bool = True` (L210); 7 interrupt points injected: direct-download ffmpeg polling (L648, chunk-level interrupt), `check_subprocess` polling (L743, on hit gracefully terminates ffmpeg in escalating steps: stdin 'q' → terminate → kill, three levels within 30s with a wait at each level), `start_record` entry guard (L1581, early return without entering the recording loop), direct-download failure-classification exclusion (L2102, stop interrupts don't count as failure samples), room main-loop wait-period check (L2452), before `main()` spawns a new thread (L3038, rooms re-spawn per config after re-enabling), and thread-exit finally cleanup (L3057 calls `remove_room_from_running`, covering both the stop and abnormal-exit paths as a fallback). Review fix: the L650 direct-download interrupt message "或请求停止" (or requested stop) was unified to "或停止录制" (or stop recording).
+
+**2. Running-List Cleanup — `src/notify.py`**
+
+- New `remove_room_from_running(record_url)` (L153): idempotently removes a room from `running_list` when its thread exits (membership check first, decrements `monitoring` only when actually removed, shares `record_state_lock` with `clear_record_info`), ensuring rooms can be spawned again after "Stop Recording" → "Start".
+
+**3. Web API & State Exposure — `src/web_api.py` + `src/recorder_status.py`**
+
+- `web_api.py` adds `POST /api/recording/toggle` (L249-258): request body `{"enable": bool}`, flips `main.recording_enabled` and echoes `{"ok": true, "recording_enabled": ...}`; inside the global auth middleware's coverage (the allowlist covers only login and static assets), consistent with the other write endpoints' auth model.
+- `recorder_status.py` status JSON appends `"recording_enabled": main.recording_enabled` (L109): after a page refresh/reconnect the frontend restores the button's true state via the 2s polling (orthogonal to `engine_alive`).
+
+**4. Web Panel Entry — `web.py`**
+
+- Sets `main.recording_enabled = False` **before** starting the engine thread (L188-189, set before `start()` to eliminate the startup race): the panel defaults to not auto-recording, while config hot-reload / scheduler / danmaku monitoring keep running, awaiting manual trigger.
+
+**5. Frontend — `web/index.html` + `web/app.js` + `web/style.css`**
+
+- `index.html` (L39-46) adds a "Recording Control" area: state indicator (dual spans `录制运行中`/`录制已停止` with `hidden` toggling) + start/stop buttons, with text going through `data-i18n` static translation (effective immediately on language switch).
+- `app.js` adds `renderRecordingControl` (mutually exclusive button enable/disable, `engine_alive` linkage, state-label switching) and `toggleRecording` (POST toggle → success toast → independent try/catch state re-fetch; failures stay silent and are left to the 2s polling to sync, avoiding false "operation failed" reports); the `I18N` dictionary gains 6 keys × 4 languages (`recording.state.on/off`, `recording.start/stop`, `toast.recordingStarted/Stopped`, complete for zh_CN/en_US/en_GB/zh_TW). Review fix (P1): the state-label query originally used the `#recording-state` ID selector while the container actually uses `class="recording-state"`, so the label never switched — changed to a class selector with a comment added to prevent regression.
+- `style.css` (L248-275) adds control-area styles: primary-color start button / red stop button / disabled state (opacity + disabled pointer events), consistent with the existing card style.
+
+**6. Tests (new + modified)**
+
+- `tests/test_web_api.py`: new `TestRecordingToggle` (2 cases — 401 without auth, switch flip writes the real module attribute).
+- `tests/test_record_failure_feedback.py` (**new file**): `test_check_subprocess_interrupts_when_recording_disabled` verifies that with `recording_enabled=False` the ffmpeg polling loop interrupts, the graceful termination is called exactly once, and no success/failure samples are recorded; monkeypatch throughout (no `patch.dict(os.environ)`), `_RunningPopen` is a class defining `__class_getitem__`, and main's global reference is replaced via `types.SimpleNamespace(**vars(subprocess))` — complying with the AGENTS.md mandatory test conventions.
+
+**7. Documentation (new)**
+
+- `docs/web-recording-control-changelog.md` (**new**): feature change summary — background, design (global switch + multi-entry interrupts), key design decisions (including the corrected wording "stop semantics = active, tiered graceful termination"), integration points, test verification, known limitations, and 5 closed follow-up items (commit / review / smoke test / persistence evaluation / per-room switch decision).
+- `docs/security-triage-2026-08-29.md` (**new**): item-by-item triage of all 44 Mimosa L3 commit-gate findings — SSRF (hardcoded official download sources) / path traversal (fixed constant paths + the existing `clean_name` sanitization line, where `main.rstr` contains `/ \ : .`) / command injection (plain JS arithmetic inside PyExecJS) / hardcoded credentials (platform-public client tokens) / weak randomness (non-crypto jitter) — all pre-existing false positives or upstream patterns; Zip-Slip already has `realpath` protection; none touch this feature's code.
+- `CODE_WIKI.md` / `CODE_WIKI_EN.md`: this entry added to both changelogs (CN/EN in sync).
+
+**Change Notes**:
+
+- **Stop semantics are active, tiered graceful termination — not "natural wind-down"**: the 1s polling loop terminates ffmpeg as soon as it sees the switch off — it first writes 'q' so ffmpeg finishes the file trailer (TS/FLV/segments stay intact), then escalates terminate → kill; the process is wait()-reclaimed and deregistered, with no orphan ffmpeg. The earlier "natural wind-down" wording has been corrected (to keep future maintainers from altering the interrupt logic).
+- **Error-statistics isolation is a prerequisite of the circuit-breaker system**: interrupts during a stop do not count as `record_error` samples, preventing a user's "Stop Recording" from being misread as a mass recording failure that triggers error-backpressure downscaling or per-platform breaking.
+- **`recording_enabled` is not persisted (conclusion of follow-up item 4)**: persisting `True` would auto-resume recording after a panel restart, re-introducing "Web auto-records on startup" through the back door — exactly what this feature's P0 requirement 1 removes; persisting `False` is indistinguishable from the default. It stays a session-scoped runtime switch (analogous to OBS "Start/Stop Streaming" not persisting across sessions); every start begins in the stopped state.
+- **Per-room switch remains deferred (item 5)**: consistent with known-limitation #1 — in Web scenarios "record all / stop all" is the common need; per-URL granularity awaits a real requirement (it would need a `dict[str, bool]` instead of the global bool).
+- **All 7 interrupt points are early-return patterns**: the normal flow path is unchanged; the only inherent window is stopping "after the loop-top check but before ffmpeg starts", in which case the just-spawned ffmpeg is terminated within ≤1s by L743 — consistent with the existing `exit_recording` semantics.
+
+**Impact**:
+
+- After Web panel startup no room threads are auto-spawned; "Start Recording" spawns them one by one per the URL config; "Stop Recording" exits room threads and clears the running list, ready to restart at any time.
+- CLI (`main.py` direct) and GUI entry behavior are completely unchanged (`recording_enabled` defaults to True).
+- During a stop, config hot-reload, the concurrency scheduler, and the danmaku monitor hub keep running (only no new/recording threads are spawned).
+- All other behaviors (scheduling semantics, source ordering, probe tolerance, UA conventions, etc.) are unchanged.
+
+**Verification**:
+
+- Full `pytest`: **786 passed, 2 skipped** (consistent on re-run 2026-08-29); `black --check --line-length 120 --target-version py314` and `isort --check-only --profile black --line-length 120` pass; `mypy src/` retains only the pre-existing `src/stream.py:609` error (not introduced by this change).
+- End-to-end smoke (real panel via `python web.py` background mode, API-driven): startup shows `recording_enabled=false`/`recording_count=0`/`engine_alive=true` → ~20s after toggle-on `monitoring=3` (3 room threads spawned) → within 3s of toggle-off `monitoring=0`/`recording_count=0` → CTRL_BREAK graceful exit with the log "正在清理所有 ffmpeg 进程" (cleaning up all ffmpeg processes), port closed, no ffmpeg leftovers, no leftover download files. (No room was live during the smoke window, so `recording_count` stayed 0; the tiered-termination path while recording is covered by the unit test above.)
+- Commit gate: the Mimosa git-gate blocked twice (graded mode must deny unfixed high; there is no findings whitelist); per the gate's requirement the official deep scan was completed (scanId `scan-2026-08-29T02-38-21.160Z-4c613b3699ed`, seal `sha256:5250cdc7…`) with all 44 findings triaged — no code change needed; the commit awaits the maintainer adjusting gate policy or approving manually.
+
+**Related**:
+
+- `docs/web-recording-control-changelog.md`: feature change summary and follow-up closure record (review-fix details in section 3.4).
+- `docs/security-triage-2026-08-29.md`: gate-finding triage details and the two approval paths.
+- v4.0.9.1-dev (2026-08-27) "Recording-Result Feedback Scheduler" — the stop-interrupt error-sample isolation builds on its `record_error`/`record_success` semantics; the `check_subprocess` early-interrupt mechanism (flush danmaku before terminating ffmpeg) is pre-existing behavior, and this feature only adds `recording_enabled` to its trigger conditions.
+
+### v4.0.9.2-dev (2026-08-28) — Performance Review Optimization Landed (P1~P5 + Probe-Client Reuse + Backoff-Window Self-Healing + Web Log-Sink Rebuild + Huya FLV-first)
 
 **Change Summary**: This entry systematically records the performance review and optimization of the codebase during the 2026-08-28 session, plus the four fixes derived from real-device verification. ① **Performance review** (local HTTP/1.1 measurements, 200 requests): 7 bottlenecks P1~P7 identified; landed **P1** (probe `httpx.Client` reused for one selection round), **P2** (thread-local reuse of `sync_http.Session`), **P3** (set-based dedup in the main loop), **P4** (incremental scheduler counters + hoist `import time` to module top), **P5** (hoist regexes to module-level constants); P6 (config dirty-check) deferred, P7 (`_resolve_platform_stream` → dict dispatch) explicitly not done; ② **real-device verification** (Huya/Douyu, three rounds) overturned several early assumptions and pinned down the root cause of Huya's cold-start HLS probe false-green — the fixed 60s backoff window is shorter than the 120s main-loop interval, so the self-healing loop never fired (fixes one/two); ③ **Web background-mode loguru console sink wrote to the hidden window** (fix three); ④ **Huya cold-start still failed once on the first round**, so FLV-first source selection was implemented (fix four). Full gate: **751 passed, 2 skipped**.
 

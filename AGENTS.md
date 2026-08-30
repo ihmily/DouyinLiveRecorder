@@ -9,7 +9,7 @@
 ## 项目概览
 
 - **名称**: DouyinLiveRecorder
-- **版本**: 4.0.9.1（唯一事实源：`pyproject.toml` 的 `version` 字段。`main.py` 与 `src/web_api.py` 运行时经 `importlib.metadata` 动态读取；`Dockerfile` 经 `APP_VERSION` 构建参数动态注入；`i18n/zh_CN/LC_MESSAGES/zh_CN.po` 不再携带版本号。`README.md` / `CODE_WIKI.md` 为文档，不再纳入版本同步/校验。）
+- **版本**: 4.0.9.2（唯一事实源：`pyproject.toml` 的 `version` 字段。`main.py` 与 `src/web_api.py` 运行时经 `importlib.metadata` 动态读取；`Dockerfile` 经 `APP_VERSION` 构建参数动态注入；`i18n/zh_CN/LC_MESSAGES/zh_CN.po` 不再携带版本号。`README.md` / `CODE_WIKI.md` 为文档，不再纳入版本同步/校验。）
 - **描述**: 支持抖音、TikTok、YouTube、快手等 60+ 平台的直播录制工具
 - **许可证**: MIT
 
@@ -99,6 +99,7 @@ ignore_missing_imports = true
 │   ├── web_api.py       # FastAPI Web API
 │   ├── web_config.py    # Web 配置
 │   ├── web_tray.py      # Web 托盘
+│   ├── log_archive.py   # 运行日志归档（停止录制流程收尾：四日志按时间戳改名）
 │   ├── weverse_auth.py  # Weverse 认证
 │   ├── ffmpeg_install.py # FFmpeg 自动安装
 │   ├── node_install.py  # Node.js 自动安装
@@ -257,7 +258,7 @@ docker compose up -d             # 使用 docker-compose.yaml（APP_VERSION 可�
   build-release.yml 由 `v*` tag 触发 + `cancel-in-progress: false`（发布流不可半途取消）。
 - **dockerignore / gitignore 同源约定**：本地工具生成目录（`.mimosa/`、`.qoder/`、`.agents/`、
   `.pnpm-store/`、`.npm-cache/`、`.dsh-validation/`、`.ego-browser-test/`、`.plugin-src/`、
-  `.tmp-dps-extract/`、`pytest-cache-files-*/`）须在两份 ignore 文件与 pyproject 各工具排除列表
+  `.tmp-dps-extract/`、`.v2c/`、`pytest-cache-files-*/`）须在两份 ignore 文件与 pyproject 各工具排除列表
   （black exclude / isort extend_skip / mypy exclude / basedpyright exclude / coverage omit，
   `.coveragerc-concurrency` 的 omit 与后者一致）中同步维护，漏一处即
   出现「未跟踪目录 / 误入镜像 / 工具误扫描」。镜像额外排除 `uv.lock` / `scripts/` / `AGENTS.md` /
@@ -389,6 +390,20 @@ mypy src/
    - **注释一律用 `#` 行注释，禁止 `"""..."""` docstring**：模块/类/函数的说明也写成 `#` 注释置于定义上方。全仓已 100% 满足——`src/` 41 个模块（含 `src/platforms/`、`src/proto/`）、`main.py`/`gui.py`/`gui_legacy.py`/`web.py`/`i18n.py`/`msg_push.py`、`scripts/`、`tests/` 均为 **0 处 docstring**，新增与重构代码须保持
    - **例外**：多行字符串**字面量**不属 docstring，合法保留（如 `build_exe.py` 的 `SPEC_TEMPLATE = """\...` PyInstaller spec 模板）
 7. **排除目录**: `node/`, `ffmpeg/`, `downloads/`, `__pycache__/` 在所有工具中均排除
+8. **停止录制流程的日志归档（2026-08-30 定稿）**: 四个运行日志（`logs/streamget.log`、`logs/PlayURL.log`、
+   `logs/danmaku_monitor.jsonl`、`logs/web_console.log`）在停止录制时统一经 `src/log_archive.py::archive_runtime_logs`
+   按「原名_YYYYMMDD_HHMMSS.扩展名」改名归档（目标冲突追加 `_N`，文件缺失/改名失败仅告警跳过、绝不中断停止流程）。
+   触发点仅两处：Web 面板「停止录制」（`src/web_api.py::toggle_recording` enable=False，进程继续运行故
+   `reopen_streams=True` 重建 sink）；进程退出统一走 `main.py` 的 atexit（**必须先于两个 cleanup 注册**——
+   atexit 为 LIFO，归档要跑在 ffmpeg 清理之后、把收尾日志一并收进归档文件，且传 `reopen_streams=False`），
+   信号 `safe_exit` / 磁盘满 / 未捕获异常 / Web 托盘退出全部经此覆盖。硬约束：Windows 下句柄未关的文件
+   rename 必抛 PermissionError，改名前须先关句柄——loguru 文件 sink 经 `logger.remove()`（先 flush enqueue 队列）、
+   弹幕监控边车经 `DanmakuMonitorHub.close_file()`（下一条事件自动重开）、`web_console.log` 经
+   sys.stdout/stderr 自身 flush+close（仅 Web 后台模式绑定；改名后须立即重建句柄并 `rebind_console_sink()`，
+   遗留未绑定文件仅改名、绝不劫持当前 stdout）。GUI 父进程（`DLR_GUI_PARENT=1`）与测试进程
+   （`DOUYIN_DISABLE_LOG_ARCHIVE=1`，由 tests/conftest.py 设置——pytest 导入 main 会注册归档
+   atexit，但测试退出并非停止录制事件，不得改名开发者真实日志）一律早返回。
+   回归锁：`tests/test_log_archive.py` + `tests/test_web_api.py::TestRecordingToggle`。
 
 ## 已知坑（避免回归）
 
@@ -404,6 +419,7 @@ mypy src/
 - **探针退避窗口必须 ≥ 一个主循环周期（否则闭环恒不成立）**：退避窗口由 `_probe_backoff_window()` = `max(_PROBE_BACKOFF_SECONDS, main.delay_default + _PROBE_BACKOFF_INTERVAL_MARGIN)` 动态计算，**不可改回固定 60s 常量**。原实现固定 60s，而 `main.py` 的 `delay_default` 默认 **120s**——ffmpeg 快速失败记入退避后，下一轮在 T+124s 才到，早已超出窗口，于是又去撞同一条死线路。实测虎牙 880214（2026-08-28）：重试 7 轮仅 2 轮侥幸录上，两轮日志中「CDN 探针退避中」告警**一次都没出现**。margin 取 70s 是为覆盖最坏节奏「单轮等待 = delay_default + 抖动(±5s)，且 `main.py:2413` 在错误窗口满 5 次时再 +60s」；退避偏长的代价很小（末位候选本就放行给 ffmpeg，且录制成功会立即清除退避），偏短的代价是假绿死循环，故宁长勿短。
 - **录制成功须撤销该地址的探针退避（`clear_ffmpeg_reject`）**：`main.py::check_subprocess` 的成功分支（与失败分支的 `mark_ffmpeg_reject` 配对）解析 `ffmpeg_command` 的 `-i` 后地址并调 `clear_ffmpeg_reject`，撤销该 host+路径 的退避记录——否则窗口内明明已恢复的线路会被继续跳过、白白回退到次优线路。注意清除的是**实际录制成功的地址**（如 FLV），HLS 的退避不会被顺带清掉，这正是期望语义（HLS 仍不可用时应继续走 FLV）。
 - **Web 后台模式必须重建 loguru 控制台 sink**：`web.py::_enter_background_mode` 在 `main()` 里 `import main`（触发 `src.logger` 导入、绑定控制台 sink）**之后**，才把 `sys.stdout/sys.stderr` 重定向到 `logs/web_console.log` 并 `SW_HIDE` 隐藏控制台窗口。loguru 的 sink 在 `add()` 时即绑定具体对象，**不会**因 `sys.stderr` 后续被重新赋值而跟着变——不调用 `rebind_console_sink()` 重建 sink，全部 DEBUG/WARNING 会写往被隐藏的控制台，`web_console.log` 里只剩 `print` 输出。实测后果：排查虎牙 403 时因 `web_console.log` 无校验日志，把「探针假绿（探针通过→ffmpeg 403）」误判成「探针未执行」，方向一度跑偏；真相在 `logs/streamget.log` 里（文件 sink 不受影响、一直在正常写入）。**排查 Web 模式问题一律先看 `logs/streamget.log` / `PlayURL.log`，不要只看 `web_console.log`。**
+- **GUI 父进程绝不持有录制日志文件句柄（`DLR_GUI_PARENT` 标记）**：`gui.py` 必须在导入任何 `src` 模块**之前**设 `os.environ["DLR_GUI_PARENT"] = "1"`，拉起录制核心时 env 必须经 `src/logger.py::child_process_env()` 构建（剔除标记 + 固定 `PYTHONIOENCODING=utf-8`）。`src/logger.py` 在**导入期**读该标记决定文件 sink 归属：GUI 进程只写本进程独占的 `logs/gui.log`，绝不创建 `streamget.log` / `PlayURL.log`。否则 GUI（经 `src.web_config → src/__init__ → src.logger` 导入链也会初始化文件 sink）与录制子进程双开同一日志文件，任一方到达轮转阈值（`rotation="300 KB"`，loguru 按 1000 进制）写日志都要先 `os.rename` 改名，对方句柄未关即抛 `PermissionError WinError 32`——轮转永不成功、该进程的文件日志自此**全量静默丢失**且每条日志向 stderr 吐 `Logging error in Loguru Handler #N` 刷屏 GUI 面板（2026-08-29 实测：streamget.log 卡在 300031 字节，录制子进程日志全丢，文件 mtime 停在轮转阈值越过日）。改名标记须同步两处：`src/logger.py`（读）与 `gui.py`（设 + 子进程剔除）；`gui_legacy.py` 不导入 src、无互锁问题。同理，手动另起的第二个录制进程与 GUI 子进程并发也会互锁，多实例并发录制属使用限制。回归锁：`tests/test_logger_gui_parent.py`（含「标记先于 src 导入」静态断言）。
 - **弹幕监控房间须随录制线程退出而移除**：`DanmakuMonitorHub._rooms` 此前永不删除条目，URL 从 URL_config.ini 移除/注释后房间线程退出，但 Web/GUI 监控页会一直残留"已失效直播间"及其旧弹幕数据。`main.py` 的 `start_record` 在 outer try 的 `finally` 中调 `get_hub().room_stopped(record_name)`（录制态/轮询态/解析失败态的 return 全覆盖），枢纽写 `conn/stopped` 事件、GUI `_danmaku_dispatch` 收到 `state=="stopped"` 后 pop 房间行；同房间重新录制时由 collector `room_started` 重新注册。删掉该清理会重新引入旧房间残留。
 - **「已被注释」检查必须在解析之前**：`main.py` 房间线程内层循环顶部（`exit_recording` 检查后）须先查 `record_url in url_comments` 再进入平台解析——原检查点位于解析成功之后，平台接口持续失败（如风控返回空）时永远走不到，线程滞留占用监控位，URL_config.ini 的移除/注释变更迟迟不生效。
 - **UA 双端一字不差约定与全库统一基准**：录制拉流链的 UA 存在两组"必须一字不差"的配对——`main.py` ffmpeg 命令默认移动 UA ≡ `stream_select.MOBILE_UA`（校验探针与 ffmpeg 客户端指纹一致，否则校验假红/假绿）；`room.HEADERS` 的 UA 参与 X-Bogus 签名（签名以请求头同一 UA 计算、自洽，改字符串安全但四处须同步：`stream_select.MOBILE_UA`、`main.py` ffmpeg 默认 UA、`room.HEADERS`、B站 H5 接口 UA）。全库统一基准（2026-08）：桌面 Chrome/141（对齐 `room.DESKTOP_UA`）、Edg/141、Firefox/148（rv:148.0）、移动端 `Android 14; Pixel 8` Chrome/141——新增 UA 或升级版本时必须对齐该基准，禁止回落 Chrome≤138/Firefox≤127/SamsungBrowser 等过旧指纹（过旧 UA 是风控按指纹识别的特征之一）。

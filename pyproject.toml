@@ -139,6 +139,7 @@ exclude = '''
     | \.pnpm-store
     | \.mimosa
     | \.tmp-dps-extract
+    | \.v2c
     | pytest-cache-files-[^/]*
 )/
 '''
@@ -164,6 +165,7 @@ extend_skip = [
     ".pnpm-store",
     ".mimosa",
     ".tmp-dps-extract",
+    ".v2c",
 ]
 extend_skip_glob = ["*.pyc", "pytest-cache-files-*"]
 
@@ -192,6 +194,7 @@ exclude = [
     "\\.ego-browser-test",
     "\\.plugin-src",
     "\\.tmp-dps-extract",
+    "\\.v2c",
     "pytest-cache-files-",
 ]
 
@@ -226,6 +229,7 @@ omit = [
     "*/.ego-browser-test/*",
     "*/.plugin-src/*",
     "*/.tmp-dps-extract/*",
+    "*/.v2c/*",
     "*/pytest-cache-files-*/*",
 ]
 
@@ -279,6 +283,7 @@ exclude = [
     ".ego-browser-test",
     ".plugin-src",
     ".tmp-dps-extract",
+    ".v2c",
     "**/.mimosa",
     "**/pytest-cache-files-*",
 ]

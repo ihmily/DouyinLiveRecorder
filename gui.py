@@ -99,10 +99,16 @@ from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast, final
 import customtkinter as ctk
 from PIL import Image, ImageDraw
 
+# GUI 父进程标记：必须先于任何 src 导入设置——src.logger 在导入期读取该标记决定
+# 文件 sink 归属（GUI 进程只写 logs/gui.log，不持有 streamget/PlayURL 句柄，
+# 避免与录制子进程轮转改名互锁致日志全量丢失，详见 src/logger.py::GUI_PARENT_ENV）
+os.environ["DLR_GUI_PARENT"] = "1"
+
 # i18n 多语言：GUI 侧边栏语言菜单即时热切换（i18n.set_language 重载翻译目录，
 # 本进程后续 print/日志输出即时换语言）；config 写回经 web_config.update_config_line
 # （与 Web 面板同款行级更新，保留注释）。GUI 自身界面文案为静态中文，不随切换重绘。
 import i18n as i18n_module
+from src.logger import child_process_env
 from src.web_config import update_config_line
 
 # tkinter 的 pack/grid/configure/after 等副作用方法在 typeshed 中被类型化为返回
@@ -2015,8 +2021,9 @@ class LiveRecorderGUI:
                 record_cmd = [exe, main_py]
 
             startupinfo = None
-            env = os.environ.copy()
-            env["PYTHONIOENCODING"] = "utf-8"
+            # 经 child_process_env() 构建子进程环境：剔除 GUI 父进程标记，
+            # 否则录制子进程也被判为 GUI、不写录制日志文件（见 src/logger.py）
+            env = child_process_env()
             if sys.platform == "win32":
                 startupinfo = subprocess.STARTUPINFO()
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW

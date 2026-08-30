@@ -829,9 +829,9 @@ brew install node
 
 ## ⏳ 更新日志
 
-### v4.0.9.2 (2026-08-28 ~ 2026-08-29) — Web 面板录制手动控制 / 虎牙·斗鱼蓝光细粒度画质档位 / 性能审查优化落地（P1~P5）/ 探针退避窗口自愈与虎牙 FLV-first / Web 后台日志 sink 重建
+### v4.0.9.2 (2026-08-28 ~ 2026-08-30) — Web 面板录制手动控制 / 虎牙·斗鱼蓝光细粒度画质档位 / 停止录制流程日志归档 / 性能审查优化落地（P1~P5）/ 探针退避窗口自愈与虎牙 FLV-first / Web 后台日志 sink 重建 / GUI 父进程日志句柄隔离
 
-> 本版本沿「可控性、画质粒度、高并发性能」三条主线：Web 面板移除启动自动录制、新增「开始/停止录制」手动控制（全局开关 + 录制主链 7 处中断点 + ffmpeg 分级优雅终止）；虎牙/斗鱼支持蓝光细粒度档位（蓝光4M/8M/20M/30M 的选档 → 拉流 → 不可用就近降级全链路）；性能审查落地 P1~P5 五项优化（80 房间选源探针耗时 12.7s → 1.15s），并经三轮真机验证根治虎牙冷启动「探针假绿 → ffmpeg 403」死循环（退避窗口对齐主循环 + 录制成功清除退避 + 虎牙 FLV-first）与 Web 后台模式日志写向被隐藏窗口的问题。**无破坏性变更**（配置项与运行时语义完全兼容；虎牙选源顺序反转为 FLV-first、斗鱼保持 HLS-first，属行为变更）。详细根因与验证见 [CODE_WIKI.md](CODE_WIKI.md)。
+> 本版本沿「可控性、画质粒度、高并发性能、可运维性」四条主线：Web 面板移除启动自动录制、新增「开始/停止录制」手动控制（全局开关 + 录制主链 7 处中断点 + ffmpeg 分级优雅终止）；虎牙/斗鱼支持蓝光细粒度档位（蓝光4M/8M/20M/30M 的选档 → 拉流 → 不可用就近降级全链路）；性能审查落地 P1~P5 五项优化（80 房间选源探针耗时 12.7s → 1.15s），并经三轮真机验证根治虎牙冷启动「探针假绿 → ffmpeg 403」死循环（退避窗口对齐主循环 + 录制成功清除退避 + 虎牙 FLV-first）与 Web 后台模式日志写向被隐藏窗口的问题；08-30 起停止录制流程统一把四个运行日志按时间戳改名归档（冲突递增、缺失跳过、句柄先行关闭），GUI 父进程与录制子进程日志句柄隔离根治 `streamget.log` 轮转 WinError 32（录制日志全量静默丢失），i18n 四语目录补齐至 516 条并重编译 `zh_CN.mo`。**无破坏性变更**（配置项与运行时语义完全兼容；虎牙选源顺序反转为 FLV-first、斗鱼保持 HLS-first，属行为变更）。详细根因与验证见 [CODE_WIKI.md](CODE_WIKI.md)。
 
 **🎥 Web 面板录制手动控制（新增功能）**
 - 全局开关 `main.recording_enabled`（默认 True，CLI/GUI 直跑完全不受影响）：Web 启动录制引擎前先置 False，面板默认**不再自动录制**；点「开始录制」后主循环按 URL 配置逐个拉起房间，配置热加载、并发调度器、弹幕监控全程保持运行。
@@ -846,6 +846,12 @@ brew install node
 - 斗鱼：新增 `DOUYU_RATE_BY_CODE` / `DOUYU_RATE_TO_CODE` / `DOUYU_RATE_DESC`；请求档被限制（如游客态原画被拒）时按全序**本地最多回退 2 档重试**；服务端「就近钳制」的真实档位经 `rate` 字段回采（实测请求 rate=8200 无此档被钳到 rate=4 → 蓝光4M）。斗鱼无 20M/30M 档，选择时按蓝光8M 请求。
 - Web 面板画质下拉新增 蓝光30M/20M/8M/4M 四个选项；真机 ffprobe 采样确认各档分辨率/帧率与档位表一致（原画 2560×1440@60、蓝光30M~8M 1920×1080@60、蓝光4M 1080p30、超清 720p30、流畅 450p24）。
 
+**📼 停止录制流程日志归档（新增功能）**
+- 触发点两处：Web 面板「停止录制」**即时归档**（进程继续运行，归档后立即重建日志句柄，录制引擎与 Web 服务日志写入不受影响）；进程退出全路径——CLI Ctrl+C / GUI 停止按钮（CTRL_BREAK）/ 控制台关闭 / 磁盘满 / 未捕获异常 / Web 托盘退出——经 `main.py` 的 atexit 统一归档（注册先于两个清理钩子，atexit LIFO 保证归档最后执行，把 ffmpeg 清理等收尾日志一并收进归档文件）。
+- 归档规则：四个运行日志（`streamget.log` / `PlayURL.log` / `danmaku_monitor.jsonl` / `web_console.log`）按「原名_YYYYMMDD_HHMMSS.扩展名」改名（时间戳取停止操作发生时刻）；目标冲突自动追加 `_1`/`_2` 序号不覆盖、文件缺失跳过、单文件改名失败仅告警，**绝不中断停止录制流程**；归档后日志写入链路立即恢复，下次录制生成全新同名文件。
+- 句柄安全（Windows 下句柄未关 rename 必抛 WinError 32）：loguru 文件 sink 经 `remove()` 先 flush 异步队列再关句柄；弹幕监控边车经 `close_file()` 关闭、下一条事件自动重开；`web_console.log` 关闭改名后重建并重新接管 `sys.stdout/stderr` 与控制台 sink（仅 Web 后台模式绑定；历史遗留未绑定文件仅改名，绝不劫持当前 stdout）。
+- 安全守卫：GUI 父进程（`DLR_GUI_PARENT=1`）与测试进程（`DOUYIN_DISABLE_LOG_ARCHIVE=1`）一律早返回，不改名录制子进程正在写或开发者工作副本中的真实日志。
+
 **⚡ 性能优化（审查落地 P1~P5）**
 - **P1 探针客户端整轮复用**：`select_source_url` 全部候选共用一支 `httpx.Client`（`finally` 关闭，UA/Referer/Cookie 改逐请求下发）；80 房间 × 10 探针的每轮选源耗时 **12.7s → 1.15s**，并发连接峰值反而 4 → 1。刻意不做全局客户端缓存（虎牙 CDN 按连接预算限流，常驻 keepalive 会与 ffmpeg 拉流争抢预算），并实测证明**禁止为保险关 keepalive**（反而 8 连接 / 72.99ms，收益全退）。
 - **P2 `requests.Session` 线程级复用**：`sync_http` 经 `threading.local` 每线程一支 Session（125 个调用点全部受益），实测单请求 11.9ms → 1.47ms。
@@ -859,11 +865,18 @@ brew install node
 - **虎牙选源反转为 FLV-first**：三轮真机实证 HLS 三条 CDN（hs/tx/al）冷启动探针假绿（探针 200/206、ffmpeg 打开即 403），FLV 每轮稳定可用（最长连录 6 分钟）——虎牙候选顺序改为 FLV → HLS → record_url，冷启动假绿损失约 2 分钟 → 0（斗鱼绝不加入，其游客态 FLV 约 70 秒被 CDN 掐断必须 HLS-first）；h265 候选在构建统一候选序列时即剔除，不再白烧探针。真机对比：修复前 5 次秒退、12 分钟才稳定 → 修复后 1 次秒退、2 分钟即稳定。
 - **Web 后台模式日志 sink 重建**：loguru 的 sink 在 `add()` 时绑定具体对象、不随 `sys.stderr` 重定向而变——不重建则 DEBUG/WARNING 全部写向被 SW_HIDE 隐藏的控制台，`web_console.log` 只剩 print 输出（实测曾据此把「探针假绿」误判成「校验未执行」）；`logger.py` 新增 `rebind_console_sink()`，`web.py` 后台模式重定向后重建 sink，并补 `sys.stderr is None` 判空（pythonw / 冻结 exe 导入期静默崩溃根治）。
 - **Web 录制控制双轮审查修复**：前端状态标签选择器缺陷（容器实为 class 却用 `#id` 选择器、状态永不切换，P1）等 3 处。
+- **GUI 父进程日志句柄隔离**：GUI 进程（经 `src.web_config → src/__init__ → src.logger` 导入链初始化文件 sink）与录制子进程双开 `streamget.log`，任一方到达 300 KB 轮转阈值都要先改名，对方句柄未关即抛 `PermissionError: [WinError 32]`——轮转永不成功、录制子进程的文件日志自此全量静默丢失（实测卡在 300031 字节、GUI 面板被 Logging error 刷屏）；`src/logger.py` 新增 `DLR_GUI_PARENT` 环境标记（GUI 进程只写本进程独占的 `gui.log`，绝不创建录制日志文件）与 `child_process_env()`（拉起录制子进程的 env 剔除标记并固定 UTF-8 输出），`gui.py` 在导入任何 src 模块**之前**设置标记；仅 GUI 模式受影响，CLI / Web 单进程录制行为不变。
+- **类型修复**：`src/stream.py` 补全 `HuyaGameLiveInfo` TypedDict 的 `bitRate: int` 字段声明并移除 `# type: ignore`（新版 mypy 对未声明键退化类型报 `call-overload`），运行时语义零变化，`mypy src/` 恢复全绿。
+
+**🔧 CI / 工程维护**
+- **i18n 四语目录补齐（507 → 516 条）**：日志归档功能引入的 9 条新日志串补入 `zh_CN.po` / `en_US.json` / `en_GB.json` / `zh_TW.yaml`（繁体按既有语汇转换：日志→日誌、文件→檔案、归档→歸檔、句柄→控制代碼），`zh_CN.po` 新增「日志归档模块」分节并重编译 `zh_CN.mo`（`--check` 字节级同步）；提取器复扫缺失 0 条、四语键集一致断言通过。
+- **仓库元数据同源清单同步**：九配置文件（`AGENTS.md` / `docker-compose.yaml` / `requirements.txt` / `Dockerfile` / `.gitignore` / `.dockerignore` / `.coveragerc-concurrency` / `pyproject.toml` / `uv.lock`）一致性审计——依赖三处一致（20=20）、`uv lock --check` 同步、Dockerfile（python:3.14-slim + Node 24）≡ CI（python_build=3.14 / node_version=24）、版本链 `check_version.py` 全过；修复 2 处漂移：`.v2c/`（video2code 插件生成目录）补入 `.gitignore` / `.dockerignore` / pyproject 五处工具排除列表 / `.coveragerc-concurrency` / AGENTS 规范清单共 9 个同步点；`.mypy_cache/` 补入 `.dockerignore`（此前 `COPY . .` 构建上下文会误送）。
 
 **🧪 测试与验证**
+- 日志归档专项：新增 `tests/test_log_archive.py`（14 用例：改名格式正则锁定、`_N` 序号去重不覆盖、缺失全跳过、单文件改名失败不中断整批、GUI/测试进程双守卫、`reopen_streams` 双态语义、web_console 绑定句柄轮转、hub `close_file` 后惰性重开、sink remove→add 往返幂等、main.py 归档 atexit 注册顺序静态锁）；`test_web_api.py` 增「停止录制触发归档」用例；`tests/conftest.py` 增设 `DOUYIN_DISABLE_LOG_ARCHIVE=1`（pytest 退出并非停止录制事件，不改名开发者真实日志）。
 - 新增 `tests/test_quality_tiers.py`（29 用例：子档位映射/索引折叠/虎牙就近降级/斗鱼重试链）、`tests/test_logger_console_sink.py`（3 用例：跟随当前 stderr / 替换而非追加 / None 静默）；`test_stream_select.py` 新增客户端整轮复用与逐请求头、退避窗口覆盖主循环周期、成功清除退避、虎牙 FLV-first 与斗鱼保持 HLS-first 用例；`test_record_failure_feedback.py` 增「停止录制中断不采样」用例；`test_web_api.py` 增录制开关端点用例。
-- 全量 `pytest` **786 passed / 2 skipped**；black / isort / `compile_po.py --check` 全绿。类型门禁存数处已知遗留（`stream.py:609` 的 mypy 报错、`test_quality_tiers.py` 的 basedpyright 5 处 `await_args` Optional 访问、CI 测试矩阵 3.13 档与 PEP 758 语法冲突），均不影响运行时，修复项已记录于 CODE_WIKI 总览条目「验证」节。
-- 三轮真机验证（虎牙 880214 / chuhe、斗鱼 3168536）：退避告警首次出现、FLV 稳定连录 6 分钟、`web_console.log` 恢复完整 DEBUG/WARNING；斗鱼 rate 钳制与回采行为实测吻合。
+- 全量 `pytest` **806 passed / 2 skipped**（0 警告；较 08-29 新增 15 用例）；black / isort / `compile_po.py --check` / `mypy src/`（Windows + Linux 双平台，`stream.py:609` 已随 bitRate 声明修复）/ `uv lock --check` / `check_version.py` 全绿。类型门禁存 1 处已知遗留（`test_quality_tiers.py` 的 basedpyright 5 处 `await_args` Optional 访问），不影响运行时。
+- 三轮真机验证（虎牙 880214 / chuhe、斗鱼 3168536）：退避告警首次出现、FLV 稳定连录 6 分钟、`web_console.log` 恢复完整 DEBUG/WARNING；斗鱼 rate 钳制与回采行为实测吻合；Windows 真机 loguru 链路黑盒验证 `remove → rename → re-add` 归档可行（旧文件内容完整、新同名文件立即重建）。
 
 ### v4.0.9.1 (2026-08-27 ~ 2026-08-28) — 高并发调度加固 / 本地化系统修复 / 编译与熔断门禁修复 / CI 工作流优化与重试收敛
 
