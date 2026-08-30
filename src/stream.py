@@ -98,6 +98,9 @@ class HuyaDataItem(TypedDict, total=False):
 class HuyaGameLiveInfo(TypedDict, total=False):
     introduction: str
     nick: str
+    # 房间最高码率(kbps)，画质 ratio 推导的上限来源；API 实测为数值，
+    # 异常形态（如字符串）由取用处 try/except 兜底为 0
+    bitRate: int
 
 
 class HuyaStreamInfo(TypedDict, total=False):
@@ -606,7 +609,7 @@ async def get_huya_stream_url(json_data: dict[str, object], video_quality: str |
     quality_list = first_anti.split("&exsphd=")
     bit_rate = game_live_info.get("bitRate") or 0
     try:
-        max_ratio = int(bit_rate)  # type: ignore[arg-type]
+        max_ratio = int(bit_rate)
     except TypeError, ValueError:
         max_ratio = 0
     # exsphd 档位表（可能含 264_0/264_500 等，转 int 集合）

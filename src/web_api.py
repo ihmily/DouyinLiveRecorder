@@ -255,6 +255,13 @@ def create_app(
         import main
 
         main.recording_enabled = req.enable
+        if not req.enable:
+            # Web 面板「停止录制」手动停止路径：立即归档四个运行日志（时间戳取停止操作
+            # 发生时刻）。进程仍继续运行，reopen_streams=True 在改名后重建日志句柄，
+            # 录制引擎与 Web 服务的日志写入链路不受影响；归档内部全程容错、绝不抛异常。
+            from src.log_archive import archive_runtime_logs
+
+            _ = archive_runtime_logs(reopen_streams=True)
         return {"ok": True, "recording_enabled": req.enable}
 
     @app.get("/api/rooms")
