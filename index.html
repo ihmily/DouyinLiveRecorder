@@ -144,7 +144,7 @@
 	        <video controls></video>
 	    </div>
 	    <div class="description">
-            <p><strong>说明</strong><p>
+            <p><strong>说明</strong></p>
             <p>M3U8文件格式</p>
             <p>M3U8文件是采用UTF-8编码格式的M3U文件。M3U文件本身是一个纯文本索引文件，其核心功能是记录多媒体文件链接。当用户打开此类文件时，播放软件会根据索引查找相应的音视频文件网络地址，然后进行在线播放。</p>
             <p>M3U最初设计用于播放音频文件，例如MP3。但随着时间推移，更多的播放器和软件开始使用M3U来播放视频文件列表，同时也支持在线流媒体音频源的指定。目前，许多播放器和软件都兼容M3U文件格式。</p>
@@ -154,57 +154,112 @@
           <p>&copy; 2023 <a href='https://github.com/ihmily/DouyinLiveRecorder' class="no_style" target="_blank" rel="noopener">Hmily</a>. All rights reserved.</p>
         </div>
 	    <script>
-    	    function httpToHttps(url) {
-              if (url.startsWith("http://")) {
+        function httpToHttps(url) {
+            if (url.startsWith("http://")) {
                 return url.replace("http://", "https://");
-              }
-              return url;
             }
-	        function playVideo() {
-            let videoUrl = document.getElementById('videoUrlInput').value;
+            return url;
+        }
+
+        // 当前持有的播放器实例（HLS 与 FLV 二选一），换址重播或失败时必须先销毁，否则旧实例会堆积
+        let currentHls = null;
+        let currentFlv = null;
+
+        function destroyCurrentPlayer(video) {
+            if (currentHls) {
+                currentHls.destroy();
+                currentHls = null;
+            }
+            if (currentFlv) {
+                currentFlv.destroy();
+                currentFlv = null;
+            }
+            video.removeAttribute('src');
+            video.load();
+        }
+
+        function showError(message) {
+            alert(message);
+            console.error(message);
+        }
+
+        // 播放失败后销毁实例，并把页面恢复到可重新输入地址的状态
+        function resetPlayerView(video, description) {
+            destroyCurrentPlayer(video);
+            document.getElementById('videoPlayer').style.display = 'none';
+            description.style.display = 'block';
+        }
+
+        function playVideo() {
+            const videoUrl = httpToHttps(document.getElementById('videoUrlInput').value.trim());
             const video = document.querySelector('#videoPlayer video');
             const description = document.querySelector('.description');
+            const playerBox = document.getElementById('videoPlayer');
             if (videoUrl == ''){
                 alert('请输入视频链接');
                 return;
             }
-            videoUrl = httpToHttps(videoUrl);
             if (videoUrl.includes('.m3u8')) {
-                videoPlayer.style.display = 'block';
-                description.style.display = 'none';
                 if (Hls.isSupported()) {
+                    playerBox.style.display = 'block';
+                    description.style.display = 'none';
+                    destroyCurrentPlayer(video);
                     const hls = new Hls();
+                    currentHls = hls;
                     hls.attachMedia(video);
                     hls.on(Hls.Events.MEDIA_ATTACHED, () => {
                         hls.loadSource(videoUrl);
                     });
+                    let netRetryCount = 0;
+                    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                        netRetryCount = 0;
+                    });
+                    hls.on(Hls.Events.ERROR, (event, data) => {
+                        if (!data.fatal) {
+                            return;
+                        }
+                        // 网络类致命错误限量重试（直播流短暂抖动可自愈），其余致命错误直接提示失败
+                        if (data.type === Hls.ErrorTypes.NETWORK_ERROR && netRetryCount < 3) {
+                            netRetryCount++;
+                            hls.startLoad();
+                            return;
+                        }
+                        showError('M3U8 播放失败：' + data.details);
+                        resetPlayerView(video, description);
+                    });
                 } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                    playerBox.style.display = 'block';
+                    description.style.display = 'none';
+                    destroyCurrentPlayer(video);
                     video.src = videoUrl;
+                    video.play().catch(() => {});
                 } else {
-                    alert('M3U8 格式不受您的浏览器支持。');
-                    console.error('M3U8 格式不受您的浏览器支持。');
+                    showError('M3U8 格式不受您的浏览器支持。');
                     return;
                 }
             } else if (videoUrl.includes('.flv')) {
                 if (flvjs.isSupported()) {
+                    playerBox.style.display = 'block';
+                    description.style.display = 'none';
+                    destroyCurrentPlayer(video);
                     const flvPlayer = flvjs.createPlayer({
                         type: 'flv',
                         url: videoUrl
                     });
+                    currentFlv = flvPlayer;
                     flvPlayer.attachMediaElement(video);
+                    flvPlayer.on(flvjs.Events.ERROR, (errorType, errorDetail) => {
+                        showError('FLV 播放失败：' + errorType + ' - ' + errorDetail);
+                        resetPlayerView(video, description);
+                    });
                     flvPlayer.load();
                     flvPlayer.play();
                 } else {
-                    alert('FLV 格式不受您的浏览器支持。');
-                    console.error('FLV 格式不受您的浏览器支持。');
+                    showError('FLV 格式不受您的浏览器支持。');
                     return;
                 }
-
-                videoPlayer.style.display = 'block';
-                description.style.display = 'none';
             } else {
-                console.error('不支持播放该视频格式。');
-                alert('不支持播放该视频格式。');
+                showError('不支持播放该视频格式。');
             }
         }
 
