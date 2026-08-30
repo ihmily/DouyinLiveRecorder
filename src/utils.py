@@ -34,6 +34,27 @@ from .logger import logger
 OptionalStr = str | None
 OptionalDict = dict[str, object] | None
 
+# 表情符号匹配模式（模块级编译一次）：原实现在 remove_emojis 内每次调用都拼接 10 段字符串
+# 构造约 400 字符的模式再 re.compile——既产生临时字符串分配，又要对长模式串做哈希查表。
+# 该函数经 clean_name 被每个房间每轮多次调用（80+ 房间场景下每秒可达数百次），
+# 提为模块级常量后省去拼接与编译查表开销，匹配语义完全不变。
+_EMOJI_PATTERN = re.compile(
+    "["
+    + "\U0001f1e0-\U0001f1ff"  # flags (iOS)
+    + "\U0001f300-\U0001f5ff"  # symbols & pictographs
+    + "\U0001f600-\U0001f64f"  # emoticons
+    + "\U0001f680-\U0001f6ff"  # transport & map symbols
+    + "\U0001f700-\U0001f77f"  # alchemical symbols
+    + "\U0001f780-\U0001f7ff"  # Geometric Shapes Extended
+    + "\U0001f800-\U0001f8ff"  # Supplemental Arrows-C
+    + "\U0001f900-\U0001f9ff"  # Supplemental Symbols and Pictographs
+    + "\U0001fa00-\U0001fa6f"  # Chess Symbols
+    + "\U0001fa70-\U0001faff"  # Symbols and Pictographs Extended-A
+    + "\U00002702-\U000027b0"  # Dingbats
+    + "]+",
+    flags=re.UNICODE,
+)
+
 
 class Color:
     # 终端彩色输出常量类
@@ -169,24 +190,8 @@ def get_file_paths(directory: str) -> list[str]:
 
 
 def remove_emojis(text: str, replace_text: str = "") -> str:
-    # 从文本中移除表情符号
-    emoji_pattern = re.compile(
-        "["
-        + "\U0001f1e0-\U0001f1ff"  # flags (iOS)
-        + "\U0001f300-\U0001f5ff"  # symbols & pictographs
-        + "\U0001f600-\U0001f64f"  # emoticons
-        + "\U0001f680-\U0001f6ff"  # transport & map symbols
-        + "\U0001f700-\U0001f77f"  # alchemical symbols
-        + "\U0001f780-\U0001f7ff"  # Geometric Shapes Extended
-        + "\U0001f800-\U0001f8ff"  # Supplemental Arrows-C
-        + "\U0001f900-\U0001f9ff"  # Supplemental Symbols and Pictographs
-        + "\U0001fa00-\U0001fa6f"  # Chess Symbols
-        + "\U0001fa70-\U0001faff"  # Symbols and Pictographs Extended-A
-        + "\U00002702-\U000027b0"  # Dingbats
-        + "]+",
-        flags=re.UNICODE,
-    )
-    return emoji_pattern.sub(replace_text, text)
+    # 从文本中移除表情符号（模式为模块级常量 _EMOJI_PATTERN，此处不再重复编译）
+    return _EMOJI_PATTERN.sub(replace_text, text)
 
 
 def remove_duplicate_lines(file_path: str | Path) -> None:

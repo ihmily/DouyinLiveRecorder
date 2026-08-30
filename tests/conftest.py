@@ -12,6 +12,9 @@ def pytest_configure(config: Any) -> None:
     os.environ.setdefault("DOUYIN_SKIP_RUNTIME_CHECK", "1")
     # 禁用 loguru 异步入队：enqueue 依赖 multiprocessing 命名管道，受限环境可能阻塞/失败
     os.environ.setdefault("DOUYIN_LOG_NO_ENQUEUE", "1")
+    # 测试进程导入 main 会注册日志归档 atexit；pytest 退出并非「停止录制」事件，
+    # 禁用归档以免改名开发者工作副本里的真实 logs/ 日志（归档专项用例内自行 delenv）
+    os.environ.setdefault("DOUYIN_DISABLE_LOG_ARCHIVE", "1")
 
 
 @pytest.fixture(autouse=True)

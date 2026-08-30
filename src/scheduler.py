@@ -12,6 +12,7 @@
 # 设计目标：80+ 任务跨多平台时不因固定 3 槽而排队；单平台抖动被隔离降级，
 # 不拖垮全局；单任务异常被捕获，避免连锁报错导致系统不可用。
 
+import time
 from collections import deque
 from threading import Condition, Lock
 from typing import Any
@@ -105,18 +106,30 @@ class PlatformBreaker:
         self._min_samples = max(1, int(min_samples))
         self._lock = Lock()
         self._samples: deque[int] = deque(maxlen=self._window_size)
+        # 窗口内失败样本的增量计数（与 _samples 严格同步）：原实现每次 record 都对
+        # 整个窗口 sum()（O(window)），而该操作在 _lock 内执行——80+ 任务并发上报时
+        # 直接放大锁持有时间。改增量后判据为 O(1)，语义完全等价。
+        self._fail_count = 0
         self._state = "closed"  # "closed" | "open" | "half-open"
         self._open_until = 0.0
         self._probing = False
         self._probe_granted_at = 0.0
 
+    def _push_sample(self, failed: int) -> None:
+        # 入队一个样本并同步维护 _fail_count（调用方须已持锁）。
+        # deque 达 maxlen 时 append 会挤出最旧样本，需扣减其贡献以保持计数与窗口一致。
+        if len(self._samples) == self._window_size:
+            self._fail_count -= self._samples[0]
+        self._samples.append(failed)
+        self._fail_count += failed
+
     def record(self, success: bool) -> None:
         # 上报一次结果（True=成功 / False=失败），按状态机推进。
         with self._lock:
-            self._samples.append(0 if success else 1)
+            self._push_sample(0 if success else 1)
             if self._state == "closed":
                 if len(self._samples) >= self._min_samples and (
-                    sum(self._samples) / len(self._samples) >= self._fail_rate
+                    self._fail_count / len(self._samples) >= self._fail_rate
                 ):
                     self._state = "open"
                     self._open_until = _now() + self._cooldown
@@ -126,6 +139,7 @@ class PlatformBreaker:
                 if success:
                     self._state = "closed"
                     self._samples.clear()
+                    self._fail_count = 0
                 else:
                     self._state = "open"
                     self._open_until = _now() + self._cooldown
@@ -178,7 +192,7 @@ class PlatformBreaker:
         with self._lock:
             if not self._samples:
                 return 0.0
-            return sum(self._samples) / len(self._samples)
+            return self._fail_count / len(self._samples)
 
 
 class ConcurrencyScheduler:
@@ -221,6 +235,9 @@ class ConcurrencyScheduler:
         # 全局错误窗口（仅用于温和的全局背压，带安全下限），与 per-key 熔断互补。
         # 必须在 _compute_capacity() 首次调用（下方创建 network_semaphore 时）之前初始化。
         self._global_errors: deque[int] = deque(maxlen=self._error_window_size)
+        # 窗口内失败数增量计数（与 _global_errors 同步）：原实现每次容量重算都对整个
+        # 窗口 sum()（O(window)），且持 _lock 执行。改增量后为 O(1)，语义等价。
+        self._global_error_count = 0
 
         self._network_semaphore = ResizableSemaphore(self._compute_capacity())
         # 录制并发信号量：默认高容量（视作不限制）；set_recording_limit(>0) 时下调为实际上限
@@ -240,7 +257,7 @@ class ConcurrencyScheduler:
             configured = self._configured_limit
             active = self._active_count
             if self._global_errors:
-                rate = sum(self._global_errors) / len(self._global_errors)
+                rate = self._global_error_count / len(self._global_errors)
             else:
                 rate = 0.0
         # 固定模式：忽略动态调速器与错误背压，容量恒为 configured_limit
@@ -347,13 +364,21 @@ class ConcurrencyScheduler:
         if key:
             self._breaker(key).record(True)
         with self._lock:
-            self._global_errors.append(0)
+            self._push_global_error(0)
 
     def record_failure(self, key: str | None = None) -> None:
         if key:
             self._breaker(key).record(False)
         with self._lock:
-            self._global_errors.append(1)
+            self._push_global_error(1)
+
+    def _push_global_error(self, failed: int) -> None:
+        # 入队一个全局样本并同步维护计数（调用方须已持 _lock）。
+        # deque 达 maxlen 时 append 会挤出最旧样本，需扣减其贡献以保持计数与窗口一致。
+        if len(self._global_errors) == self._error_window_size:
+            self._global_error_count -= self._global_errors[0]
+        self._global_errors.append(failed)
+        self._global_error_count += failed
 
     # —— 暴露信号量（供 `with scheduler.network_semaphore:` 直接使用）——
     @property
@@ -400,14 +425,12 @@ def host_of(url: str) -> str:
 
 
 def _now() -> float:
-    import time
-
+    # 顶层已 import time：allow() 每个房间每轮都会走到这里，函数内 import 会多一次
+    # sys.modules 查表与属性绑定，属纯浪费（此处仅为保留可 patch 的间接层）。
     return time.monotonic()
 
 
 def _sleep(seconds: float) -> None:
-    import time
-
     time.sleep(seconds)
 
 

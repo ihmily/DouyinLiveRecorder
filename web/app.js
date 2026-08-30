@@ -133,6 +133,9 @@
             'dashboard.monitoring': '监测中', 'dashboard.recording': '录制中',
             'dashboard.errors': '错误数(累计/近期)', 'dashboard.disk': '磁盘剩余(GB)',
             'dashboard.recordingNow': '正在录制', 'dashboard.logs': '实时日志',
+            'recording.state.on': '录制运行中', 'recording.state.off': '录制已停止',
+            'recording.start': '开始录制', 'recording.stop': '停止录制',
+            'toast.recordingStarted': '录制已开始', 'toast.recordingStopped': '录制已停止',
             'col.name': '名称', 'col.platform': '平台', 'col.status': '状态', 'col.startTime': '开始时间',
             'col.duration': '已录时长', 'col.qualitySet': '设置画质', 'col.qualityActual': '实际画质',
             'col.url': '地址', 'col.enabled': '启用', 'col.recording': '录制中', 'col.actions': '操作',
@@ -173,6 +176,9 @@
             'dashboard.monitoring': 'Monitoring', 'dashboard.recording': 'Recording',
             'dashboard.errors': 'Errors (total/recent)', 'dashboard.disk': 'Disk free (GB)',
             'dashboard.recordingNow': 'Recording now', 'dashboard.logs': 'Live logs',
+            'recording.state.on': 'Recording active', 'recording.state.off': 'Recording stopped',
+            'recording.start': 'Start recording', 'recording.stop': 'Stop recording',
+            'toast.recordingStarted': 'Recording started', 'toast.recordingStopped': 'Recording stopped',
             'col.name': 'Name', 'col.platform': 'Platform', 'col.status': 'Status', 'col.startTime': 'Start time',
             'col.duration': 'Duration', 'col.qualitySet': 'Set quality', 'col.qualityActual': 'Actual quality',
             'col.url': 'URL', 'col.enabled': 'Enabled', 'col.recording': 'Recording', 'col.actions': 'Actions',
@@ -213,6 +219,9 @@
             'dashboard.monitoring': 'Monitoring', 'dashboard.recording': 'Recording',
             'dashboard.errors': 'Errors (total/recent)', 'dashboard.disk': 'Disk free (GB)',
             'dashboard.recordingNow': 'Recording now', 'dashboard.logs': 'Live logs',
+            'recording.state.on': 'Recording active', 'recording.state.off': 'Recording stopped',
+            'recording.start': 'Start recording', 'recording.stop': 'Stop recording',
+            'toast.recordingStarted': 'Recording started', 'toast.recordingStopped': 'Recording stopped',
             'col.name': 'Name', 'col.platform': 'Platform', 'col.status': 'Status', 'col.startTime': 'Start time',
             'col.duration': 'Duration', 'col.qualitySet': 'Set quality', 'col.qualityActual': 'Actual quality',
             'col.url': 'URL', 'col.enabled': 'Enabled', 'col.recording': 'Recording', 'col.actions': 'Actions',
@@ -253,6 +262,9 @@
             'dashboard.monitoring': '監測中', 'dashboard.recording': '錄製中',
             'dashboard.errors': '錯誤數(累計/近期)', 'dashboard.disk': '磁碟剩餘(GB)',
             'dashboard.recordingNow': '正在錄製', 'dashboard.logs': '即時日誌',
+            'recording.state.on': '錄製運行中', 'recording.state.off': '錄製已停止',
+            'recording.start': '開始錄製', 'recording.stop': '停止錄製',
+            'toast.recordingStarted': '錄製已開始', 'toast.recordingStopped': '錄製已停止',
             'col.name': '名稱', 'col.platform': '平台', 'col.status': '狀態', 'col.startTime': '開始時間',
             'col.duration': '已錄時長', 'col.qualitySet': '設定畫質', 'col.qualityActual': '實際畫質',
             'col.url': '位址', 'col.enabled': '啟用', 'col.recording': '錄製中', 'col.actions': '操作',
@@ -423,6 +435,7 @@
     // 12. renderStatus
     function renderStatus(s) {
         if (!s) s = {};
+        renderRecordingControl(s);
         var warnEl = $('engine-warning');
         if (warnEl) {
             if (s.engine_alive === false) {
@@ -462,6 +475,46 @@
                 + '</tr>';
         }
         tbody.innerHTML = html;
+    }
+
+    // 12b. 录制控制条：按状态快照同步「开始/停止录制」按钮与状态标签。
+    // recording_enabled 为引擎级录制开关（后端 get_status 暴露）：开启时禁用「开始」
+    // 并启用「停止」，关闭时反之；引擎线程死亡时两按钮均禁用（切换开关已无意义，
+    // 页面顶部另有引擎告警横幅）。状态标签用双子 span + hidden 切换，文案交给
+    // data-i18n 静态翻译（语言切换即时生效，无需等下一次轮询）。
+    function renderRecordingControl(s) {
+        var enabled = s.recording_enabled === true;
+        var engineAlive = s.engine_alive !== false;
+        // 状态标签容器是 class（index.html 的 span.recording-state），勿用 #id 选择器
+        var onEl = document.querySelector('.recording-state .state-on');
+        var offEl = document.querySelector('.recording-state .state-off');
+        if (onEl && offEl) {
+            onEl.classList.toggle('hidden', !enabled);
+            offEl.classList.toggle('hidden', enabled);
+        }
+        var startBtn = $('recording-start-btn');
+        var stopBtn = $('recording-stop-btn');
+        if (startBtn) startBtn.disabled = enabled || !engineAlive;
+        if (stopBtn) stopBtn.disabled = !enabled || !engineAlive;
+    }
+
+    // 12c. 开始/停止录制：POST /api/recording/toggle 后立即拉取状态同步按钮，
+    // 页面刷新/重连后的按钮真实态由仪表盘 2s 轮询（renderStatus）持续同步
+    async function toggleRecording(enable) {
+        var btn = enable ? $('recording-start-btn') : $('recording-stop-btn');
+        if (btn) btn.disabled = true; // 防重复点击；成功后按后端真实状态恢复，失败立即恢复
+        try {
+            await api('/api/recording/toggle', { method: 'POST', body: { enable: enable } });
+            toast(enable ? t('toast.recordingStarted') : t('toast.recordingStopped'), 'success');
+        } catch (e) {
+            toast(t('toast.opFailed') + (e.message || ''), 'error');
+            if (btn) btn.disabled = false;
+            return;
+        }
+        // 状态回拉独立容错：toggle 已成功，回拉失败静默交给 2s 轮询同步，勿误报「操作失败」
+        try {
+            renderStatus(await api('/api/status'));
+        } catch (e) { /* 忽略 */ }
     }
 
     // 13. loadLogs
@@ -914,6 +967,8 @@
             });
         }
         $('theme-toggle').addEventListener('click', toggleTheme);
+        $('recording-start-btn').addEventListener('click', function () { toggleRecording(true); });
+        $('recording-stop-btn').addEventListener('click', function () { toggleRecording(false); });
         $('login-submit').addEventListener('click', doLogin);
         $('login-password').addEventListener('keypress', function (e) {
             if (e.key === 'Enter' || e.keyCode === 13) {

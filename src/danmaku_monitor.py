@@ -369,8 +369,27 @@ class DanmakuMonitorHub:
                 pass
             self._file = None
 
+    # flush 并关闭 JSONL 边车文件句柄（停止录制归档流程在改名前调用）。
+    # 关闭后下一条事件写入时经 _write_line 的惰性重开逻辑自动重建句柄，不影响后续监控；
+    # 全程容错：关闭失败仅记 debug，绝不影响录制主流程。
+    def close_file(self) -> None:
+        try:
+            with self._file_lock:
+                try:
+                    if self._file is not None:
+                        self._file.flush()
+                        self._file.close()
+                except Exception as e:
+                    logger.debug(f"[弹幕监控]关闭边车文件异常(忽略): {type(e).__name__}: {e}")
+                finally:
+                    # 无论关闭成功与否都置空引用：半损坏句柄交给 _write_line 的异常恢复路径重建
+                    self._file = None
+        except Exception as e:
+            logger.debug(f"[弹幕监控]close_file 失败(忽略): {type(e).__name__}: {e}")
 
-# 进程级单例访问：首次调用时以默认路径 <script_path>/logs/danmaku_monitor.jsonl 创建。
+    # 进程级单例访问：首次调用时以默认路径 <script_path>/logs/danmaku_monitor.jsonl 创建。
+
+
 _hub: Optional[DanmakuMonitorHub] = None
 _hub_lock = threading.Lock()
 
@@ -382,3 +401,12 @@ def get_hub() -> DanmakuMonitorHub:
         if _hub is None:
             _hub = DanmakuMonitorHub(log_path=os.path.join(script_path, "logs", "danmaku_monitor.jsonl"))
         return _hub
+
+
+# 关闭弹幕监控边车文件句柄（停止录制归档流程调用，归档改名前必须先关句柄——
+# Windows 下句柄未关的文件 rename 会抛 PermissionError）。枢纽单例未初始化时为 no-op，
+# 刻意不经 get_hub() 触发初始化：未启用监控的进程不应凭空创建枢纽实例。
+def close_monitor_file() -> None:
+    hub = _hub
+    if hub is not None:
+        hub.close_file()

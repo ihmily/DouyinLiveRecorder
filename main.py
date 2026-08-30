@@ -127,12 +127,14 @@ from src.ffmpeg_proc import (
     register_ffmpeg_process,
     unregister_ffmpeg_process,
 )
+from src.log_archive import archive_runtime_logs
 from src.notify import (
     adjust_max_request,
     clear_record_info,
     push_message,
     record_error,
     record_success,
+    remove_room_from_running,
     run_script,
 )
 from src.proxy import ProxyDetector
@@ -145,6 +147,7 @@ from src.stream_select import (
     _douyin_rate_limit,
     _validate_stream_url,
     clean_name,
+    clear_ffmpeg_reject,
     contains_url,
     get_quality_code,
     get_record_headers,
@@ -202,6 +205,10 @@ monitoring: int = 0  # 正在监控的直播间数量
 running_list: list[str] = []  # 正在运行的 URL 列表
 recording_time_list: dict[str, list[datetime.datetime | str]] = {}  # 记录每个直播间的开始录制时间
 exit_recording: bool = False  # 退出标志
+# Web 模式录制开关：False 时主循环不拉起新房间线程，既有房间线程终止 ffmpeg/下载后退出。
+# CLI/GUI 直跑保持 True（行为不变）；web.py 启动录制引擎前置 False，由 Web 面板
+# 「开始/停止录制」按钮经 POST /api/recording/toggle 手动切换（见 src/web_api.py）。
+recording_enabled: bool = True
 
 # 错误控制和动态调优
 error_count: int = 0  # 累计错误计数（自进程启动起单调递增，不做周期清零；窗口口径见 error_window）
@@ -214,7 +221,9 @@ error_threshold: float = 0.5  # 错误率阈值（0-1），错误率超过后降
 
 # URL 和配置管理
 url_tuples_list: list[tuple[str, str, str]] = []  # 解析后的 URL 配置列表（格式：(画质, URL, 主播名)
-url_comments: list[str] = []  # 被注释掉的 URL 列表
+# 被注释掉的 URL 集合：主循环与 check_subprocess/start_record 均只做成员检测，
+# 用 set 保证 O(1)（见下方主循环注释）。
+url_comments: set[str] = set()
 text_no_repeat_url: list[tuple[str, str, str]] = []  # 去重后的 URL 文本
 need_update_line_list: list[str] = []  # 需要更新的配置行
 not_record_list: list[str] = []  # 不录制的直播间列表
@@ -426,7 +435,7 @@ host_id: re.Match[str] | None = None
 input_url: str = ""
 is_comment_line: bool = False
 line: str = ""
-line_list: list[str] = []
+line_list: set[str] = set()  # 主循环内用于检测重复配置行，只做成员检测，用 set 保证 O(1)
 line_spilt: list[str] = []
 middle: str = ""
 name: str = ""
@@ -445,7 +454,7 @@ t: threading.Thread | None = None
 t2: threading.Thread | None = None
 url: str = ""
 url_host: str = ""
-url_line_list: list[str] = []
+url_line_list: set[str] = set()  # 主循环内已解析的 URL，只做成员检测，用 set 保证 O(1)
 url_tuple: tuple[str, ...] = ()
 
 _recorder_thread = None  # 由 web.py 设置，用于 get_status() 检测存活
@@ -471,6 +480,10 @@ if hasattr(signal, "SIGBREAK"):
     _ = signal.signal(signal.SIGBREAK, safe_exit)
 
 # 进程异常退出时兜底清理 ffmpeg 与 HTTP 连接池（覆盖硬杀 / 未捕获异常等非优雅退出路径）
+# 注意注册顺序：atexit 为 LIFO，归档必须先于两个 cleanup 注册——
+# 进程退出（信号 safe_exit / 磁盘满 / 未捕获异常 / web 面板退出）时把 ffmpeg 清理等
+# 收尾日志一并收进归档文件，四个运行日志统一按「原名_YYYYMMDD_HHMMSS.扩展名」改名
+_atexit_result_0 = atexit.register(archive_runtime_logs, reopen_streams=False)
 _atexit_result_1 = atexit.register(cleanup_all_ffmpeg_processes)
 from src.async_http import close_all_clients_sync
 
@@ -637,9 +650,9 @@ def direct_download_stream(
                     chunk_size = 1024 * 16
 
                     for chunk in response.iter_bytes(chunk_size):
-                        if live_url in url_comments or exit_recording:
+                        if live_url in url_comments or exit_recording or not recording_enabled:
                             color_obj.print_colored(
-                                f"[{record_name}]录制时已被注释或请求停止,下载中断", color_obj.YELLOW
+                                f"[{record_name}]录制时已被注释或停止录制,下载中断", color_obj.YELLOW
                             )
                             clear_record_info(record_name, live_url)
                             return False
@@ -732,8 +745,8 @@ def check_subprocess(
     _rec_sem.acquire()
     try:
         while process.poll() is None:
-            if record_url in url_comments or exit_recording:
-                color_obj.print_colored(f"[{record_name}]录制时已被注释,本条线程将会退出", color_obj.YELLOW)
+            if record_url in url_comments or exit_recording or not recording_enabled:
+                color_obj.print_colored(f"[{record_name}]录制时已被注释或停止录制,本条线程将会退出", color_obj.YELLOW)
                 clear_record_info(record_name, record_url)
 
                 # 录制提前停止:在意SIGINT前 flush 弹幕,确保最后一批写入
@@ -799,6 +812,12 @@ def check_subprocess(
             logger.debug("脚本命令执行结束!")
         # 流正常结束（主播下线）＝平台健康：按房间 host 记一次成功样本（与下方失败分支配对）
         record_success(host_of(record_url))
+        # 与下方失败分支的 mark_ffmpeg_reject 配对：本地址实际拉流成功，撤销先前记入的
+        # 探针退避，避免窗口内明明已恢复的线路继续被跳过、白白回退到次优线路。
+        try:
+            clear_ffmpeg_reject(ffmpeg_command[ffmpeg_command.index("-i") + 1], platform)
+        except ValueError:
+            logger.debug(f"[{record_name}] ffmpeg 命令缺少 -i 输入参数，跳过探针退避清除")
 
     else:
         color_obj.print_colored(f"\n{record_name} {stop_time} 直播录制出错,返回码: {return_code}\n", color_obj.RED)
@@ -1562,6 +1581,11 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                 if exit_recording:
                     logger.debug(f"检测到退出标志，录制线程退出: {record_url}")
                     return
+                # 停止录制（Web 面板开关关闭）：本房间线程退出，运行列表清理由
+                # _room_thread_target 的 finally 兜底（保证重新开始后能再次拉起）
+                if not recording_enabled:
+                    logger.debug(f"录制已停止，房间线程退出: {record_url}")
+                    return
                 # 配置实时性：URL 被注释/移除后立即退出，不等本轮解析结果——
                 # 原检查点位于解析成功之后，解析持续失败（平台接口异常）时永远走不到，
                 # 线程滞留并占用监控位，URL_config.ini 的变更迟迟不生效
@@ -2079,10 +2103,13 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                                             # 直下路径无 check_subprocess 退出码反馈：成功按 host 补样本，
                                             # 与 ffmpeg 路径语义对齐
                                             record_success(record_host)
-                                        elif record_url not in url_comments and not exit_recording:
+                                        elif (
+                                            record_url not in url_comments and not exit_recording and recording_enabled
+                                        ):
                                             # 真-失败（CDN 拒绝非 200 / 网络异常在函数内部已消化成 False，
                                             # 走不到外层 except 的 record_error）必须在此上报，否则坏线路
-                                            # 绕开按 host 熔断统计被无限重撞；被注释/退出标志的中断不计样本
+                                            # 绕开按 host 熔断统计被无限重撞；被注释/退出标志/停止录制
+                                            # 的中断不计样本（非网络故障，不应污染错误窗口）
                                             record_error(record_host)
 
                                         with record_state_lock:
@@ -2425,6 +2452,10 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
 
                 # 这里是正常循环
                 while x:
+                    # 停止录制时打断剩余等待，尽快回到循环顶检测退出标志——
+                    # 否则空闲房间线程会残留最长一个完整循环周期才退出
+                    if not recording_enabled:
+                        break
                     x = x - 1
                     if loop_time:
                         print(f"\r{anchor_name}循环等待{x}秒 ", end="")
@@ -2880,15 +2911,17 @@ def main(non_interactive: bool = False) -> None:
                 sys.exit(-1)
 
         try:
-            url_comments = []
-            line_list = []
-            url_line_list = []
+            # 三者均只用于成员检测：原为 list，导致本循环内每行的 `in` 都是 O(N) 线性扫描，
+            # 80+ 房间时退化成 O(N²)；改 set 后为 O(1)，且消除下方 url_comments 的整表重建。
+            url_comments = set()
+            line_list = set()
+            url_line_list = set()
             seen_urls = set()
             with open(url_config_file, "r", encoding=text_encoding, errors="ignore") as file:
                 for origin_line in file:
                     if origin_line in line_list:
                         delete_line(url_config_file, origin_line)
-                    line_list.append(origin_line)
+                    line_list.add(origin_line)
                     line = origin_line.strip()
                     if len(line) < 18:
                         continue
@@ -2924,13 +2957,24 @@ def main(non_interactive: bool = False) -> None:
                     else:
                         quality, url, name = split_line
 
-                    if quality not in ("原画", "蓝光", "超清", "高清", "标清", "流畅"):
+                    if quality not in (
+                        "原画",
+                        "蓝光",
+                        "蓝光4M",
+                        "蓝光8M",
+                        "蓝光20M",
+                        "蓝光30M",
+                        "超清",
+                        "高清",
+                        "标清",
+                        "流畅",
+                    ):
                         quality = "原画"
 
-                    if url not in url_line_list:
-                        url_line_list.append(url)
-                    else:
+                    if url in url_line_list:
                         delete_line(url_config_file, origin_line)
+                    else:
+                        url_line_list.add(url)
 
                     url = "https://" + url if "://" not in url else url
                     url_host = url.split("/")[2]
@@ -2948,9 +2992,13 @@ def main(non_interactive: bool = False) -> None:
                                 new_url = url.split("?")[0] + f"?host_id={host_id.group(1)}"
                                 url = update_file(url_config_file, old_str=url, new_str=new_url) or url
                         seen_urls.add(url)
-                        url_comments = [i for i in url_comments if url not in i]
+                        # 原实现为 `[i for i in url_comments if url not in i]`：每解析一行都重建
+                        # 整个列表（O(N²) 次比较与内存分配），且子串匹配会误删「以该 URL 为前缀」
+                        # 的其它 URL（如 .../1 与 .../12）。集合元素均为规范化后的完整 URL，
+                        # 精确 discard 语义更准确，且为 O(1)。
+                        url_comments.discard(url)
                         if is_comment_line:
-                            url_comments.append(url)
+                            url_comments.add(url)
                         else:
                             new_line = (quality, url, name)
                             url_tuples_list.append(new_line)
@@ -2975,9 +3023,11 @@ def main(non_interactive: bool = False) -> None:
             running_snapshot = list(running_list)
             for running_url in running_snapshot:
                 if running_url not in seen_urls and running_url not in url_comments:
-                    url_comments.append(running_url)
+                    url_comments.add(running_url)
 
-            text_no_repeat_url = list(set(url_tuples_list))
+            # 原为 list(set(...))：去重的同时把配置顺序打乱，导致每轮启动/新增房间的顺序随机
+            # （日志与「序号N」提示随之抖动）。dict.fromkeys 保序去重，且同为 O(N)。
+            text_no_repeat_url = list(dict.fromkeys(url_tuples_list))
 
             if len(text_no_repeat_url) > 0:
                 for url_tuple in text_no_repeat_url:
@@ -2987,7 +3037,10 @@ def main(non_interactive: bool = False) -> None:
                     if url_tuple[1] in not_record_list:
                         continue
 
-                    if url_tuple[1] not in running_list and not exit_recording:
+                    # 录制开关关闭（Web 面板「停止录制」）时不拉起新房间线程；
+                    # 已退出的房间线程由 remove_room_from_running 清理运行列表，
+                    # 重新开启后本循环会按配置再次拉起
+                    if url_tuple[1] not in running_list and not exit_recording and recording_enabled:
                         print(f"\r{'新增' if not first_start else '传入'}地址: {url_tuple[1]}")
                         with record_state_lock:
                             monitoring += 1
@@ -3003,6 +3056,10 @@ def main(non_interactive: bool = False) -> None:
                             try:
                                 start_record(*_args)
                             finally:
+                                # 房间线程退出兜底：从运行列表移除该房间 URL（幂等，注释退出
+                                # 路径已由 clear_record_info 清理）。覆盖「停止录制」退出路径——
+                                # 不清理则主循环误判「仍在运行」，重新开始后该房间永不重启
+                                remove_room_from_running(_args[0][1])
                                 with record_state_lock:
                                     create_var.pop(_key, None)
 

@@ -47,6 +47,11 @@ OptionalStreamDict = dict[str, str | bool] | None
 # 缓存自动获取的 ttwid，避免重复请求主页（已委托给共享 ttwid.py 模块，保留变量兼容旧引用）
 _cached_ttwid: str = ""
 
+# 模块级预编译正则：原先在解析函数内每次调用都 re.compile（m3u8 带宽提取、抖音 HEVC FLV
+# 提取），平台解析每房间每轮多次触发。预编译后省去重复编译，匹配语义不变。
+_BANDWIDTH_PATTERN = re.compile(r"BANDWIDTH=(\d+)")
+_DOUYIN_HEVC_FLV_PATTERN = re.compile(r'(https?://[^\s"\']*stream-\d{10,}(?!_[a-z0-9]+)\.flv(?:[^"\']|\\u0026)+)')
+
 
 def _safe_extract_id(url: str, default: str = "") -> str:
     # 从 URL 中安全提取路径 ID（避免 rsplit 越界）
@@ -170,8 +175,7 @@ def get_params(url: str, params: str) -> OptionalStr:
 
 def extract_douyin_hevc_flv_url(html: str) -> OptionalStr:
     # 从抖音页面 HTML 中提取 HEVC/H265 FLV 流地址
-    pattern = re.compile(r'(https?://[^\s"\']*stream-\d{10,}(?!_[a-z0-9]+)\.flv(?:[^"\']|\\u0026)+)')
-    for match in pattern.findall(html):
+    for match in _DOUYIN_HEVC_FLV_PATTERN.findall(html):
         clean_url = match.replace("\\u0026", "&").rstrip("\\").strip()
         query = urllib.parse.parse_qs(urllib.parse.urlparse(clean_url).query)
         if query.get("only_audio", ["0"])[0] == "1":
@@ -195,7 +199,7 @@ async def get_play_url_list(
         for i in resp.split("\n"):
             if i.strip().endswith("m3u8"):
                 play_url_list.append(i.strip())
-    bandwidth_pattern = re.compile(r"BANDWIDTH=(\d+)")
+    bandwidth_pattern = _BANDWIDTH_PATTERN
     bandwidth_list = cast(list[str], bandwidth_pattern.findall(resp))
     if bandwidth_list and len(bandwidth_list) == len(play_url_list):
         url_to_bandwidth = {url: int(bandwidth) for bandwidth, url in zip(bandwidth_list, play_url_list)}
@@ -1837,7 +1841,7 @@ async def _fetch_web_stream_data_global(
             for i in resp.split("\n"):
                 if not i.startswith("#") and i.strip():
                     play_url_list.append(url_prefix + i.strip())
-            bandwidth_pattern = re.compile(r"BANDWIDTH=(\d+)")
+            bandwidth_pattern = _BANDWIDTH_PATTERN
             bandwidth_list = bandwidth_pattern.findall(resp)
             url_to_bandwidth = {purl: int(bandwidth) for bandwidth, purl in zip(bandwidth_list, play_url_list)}
             # 未匹配到带宽的 URL 置 0，避免排序时 KeyError
@@ -1911,7 +1915,7 @@ async def get_sooplive_stream_data(
         for i in resp.split("\n"):
             if i.startswith("auth_playlist"):
                 play_url_list.append(url_prefix + i.strip())
-        bandwidth_pattern = re.compile(r"BANDWIDTH=(\d+)")
+        bandwidth_pattern = _BANDWIDTH_PATTERN
         bandwidth_list = bandwidth_pattern.findall(resp)
         url_to_bandwidth = {purl: int(bandwidth) for bandwidth, purl in zip(bandwidth_list, play_url_list)}
         play_url_list = sorted(play_url_list, key=lambda purl: url_to_bandwidth[purl], reverse=True)

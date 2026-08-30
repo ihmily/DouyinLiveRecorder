@@ -21,11 +21,12 @@
 .codebuddy/
 .trae/
 
-# ---------- 本地工具 / 审查生成物（第三方编码代理 / 浏览器测试等，与 .gitignore 同源）----------
+# ---------- 本地工具 / 审查生成物（第三方编码代理 / 浏览器测试等，与 .gitignore 及 pyproject 各工具排除列表同源）----------
 .mimosa/
 .qoder/
 .agents/
 .pnpm-store/
+.npm-cache/
 .dsh-validation/
 .ego-browser-test/
 .plugin-src/
@@ -41,6 +42,7 @@ CODE_WIKI_EN.md
 AGENTS.md
 CODE_CHANGES.md
 TRAE_AGENT_CODE_WIKI.md
+PERF_REVIEW_2026-08-28.md
 # 根目录开发 / 排查笔记（弹幕代理决策、弹幕审查、进度清单），仅开发期参考，不打入镜像
 bili_danmuku_proxy.md
 danmaku_check.md
@@ -72,6 +74,7 @@ ENV/
 tests/
 .pytest_cache/
 .coverage
+.coverage.*
 htmlcov/
 .tox/
 .nox/

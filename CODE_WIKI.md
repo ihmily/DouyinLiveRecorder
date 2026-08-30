@@ -235,6 +235,7 @@ DouyinLiveRecorder/
 │   ├── danmaku_monitor.py               # 弹幕监控枢纽（进程单例，内存快照 + JSONL 边车）
 │   ├── srt_writer.py                    # SRT 字幕分段写入（时间轴对齐 ffmpeg segment）
 │   ├── ws_client.py                     # 弹幕 WebSocket 传输层（各平台弹幕共用，proxy=None 直连）
+│   ├── log_archive.py                   # 运行日志归档（停止录制流程收尾：四日志按时间戳改名）
 │   ├── platforms/                       # 各平台弹幕客户端：Douyin/Douyu/Huya/Bilibili/Twitch + 私有签名 _tars/_xbogus
 │   └── proto/                           # 抖音弹幕 protobuf（douyin.proto + 生成的 douyin_pb2）
 ├── web/                                 # Web 管理面板前端
@@ -746,6 +747,7 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 | `/api/rooms`        | GET/POST   | 直播间列表查询 / 新增             |
 | `/api/rooms/{url}`  | PUT/DELETE | 编辑 / 删除直播间               |
 | `/api/rooms/toggle` | POST       | 启用 / 禁用直播间               |
+| `/api/recording/toggle` | POST   | 录制全局开关（开始/停止录制；停止时触发运行日志归档） |
 | `/api/config`       | GET/PUT    | 读取 / 修改配置                |
 | `/api/logs/stream`  | GET        | SSE 实时日志推送               |
 
@@ -1582,6 +1584,404 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 ---
 
 ## 更新日志
+
+### v4.0.9.2-dev (2026-08-30) — 停止录制流程运行日志归档（四日志按时间戳改名归档）+ i18n 四语目录补齐（507 → 516 条）+ 仓库元数据同源清单同步（.v2c / .mypy_cache）
+
+**变更摘要**：本条目系统性记录 2026-08-30 会话落地的三项改动。① **新增功能：停止录制流程的运行日志归档**——Web 面板「停止录制」与进程退出全路径（信号 `safe_exit` / 磁盘满 / 未捕获异常 / Web 托盘退出）统一把四个运行日志（`logs/streamget.log`、`logs/PlayURL.log`、`logs/danmaku_monitor.jsonl`、`logs/web_console.log`）按「原名_YYYYMMDD_HHMMSS.扩展名」改名归档：目标冲突追加 `_N` 序号、文件缺失跳过、单文件改名失败仅告警不中断、改名前先 flush+close 对应句柄（Windows 下句柄未关 rename 必抛 WinError 32）；归档后日志写入链路立即恢复，下次录制生成全新同名文件。② **i18n 四语目录补齐**：归档功能引入的 9 条新日志串补入四语目录（507 → 516 条）并重编译 `zh_CN.mo`。③ **仓库元数据同步审计**：九配置文件（`AGENTS.md` / `docker-compose.yaml` / `requirements.txt` / `Dockerfile` / `.gitignore` / `.dockerignore` / `.coveragerc-concurrency` / `pyproject.toml` / `uv.lock`）一致性核对，修复 2 处漂移（`.v2c/` 未纳入本地工具目录同源清单、`.mypy_cache/` 缺失于 `.dockerignore`）。**删除项：无**（本批改动纯增量，未移除任何文件、函数或配置项）。
+
+**一、运行日志归档（新增功能）— `src/log_archive.py`（新增）/ `src/logger.py` / `src/danmaku_monitor.py` / `main.py` / `src/web_api.py`**
+
+- `src/log_archive.py`（**新增文件**）：归档入口 `archive_runtime_logs(*, reopen_streams=True)` 与辅助函数 `_archive_target()`（原名_时间戳.扩展名，`os.path.exists` 探测后 `_1`/`_2` 递增去重）/ `_streams_bound_to()`（识别 `sys.stdout`/`sys.stderr` 中绑定 web_console.log 的句柄）/ `_rebind_web_console()`（重建句柄 + 重定向标准流 + `rebind_console_sink()`）/ `_archive_web_console()`（关闭→改名→重建；未绑定标准流的遗留文件仅改名、绝不劫持当前 stdout）/ `_rename_one()`（单文件归档：缺失跳过、失败告警）；`ARCHIVE_LOG_NAMES` 固定四日志清单；模块级串行锁防「面板停止 × atexit」并发重入；顶层 try/except 兜底——任何意外仅告警返回空列表，绝不中断停止录制流程；双守卫早返回：GUI 父进程（`DLR_GUI_PARENT=1`，不持有录制日志句柄、不得改名录制子进程正在写的日志）与测试进程（`DOUYIN_DISABLE_LOG_ARCHIVE=1`）。
+- `src/logger.py`：新增模块级 `_streamget_sink_id` / `_playurl_sink_id` 跟踪两个录制日志 sink 的 handler id；导入期注册重构为 `_add_streamget_sink()` / `_add_playurl_sink()` 两个 helper（导入期与运行期重建共用同参）；新增公开 `remove_file_sinks()`（loguru `remove()` 先 flush enqueue 队列再关闭文件句柄，保证改名前内容完整落盘；幂等 no-op）与 `add_file_sinks()`（重新注册 sink，loguru `add()` 即创建全新同名文件；GUI 父进程或「是否启用日志文件=否」时不注册）。
+- `src/danmaku_monitor.py`：`DanmakuMonitorHub` 新增 `close_file()`（持 `_file_lock` flush+close+置空引用，半损坏句柄交给 `_write_line` 既有异常恢复路径，下一条事件自动重开）；模块级 `close_monitor_file()`（单例未初始化时 no-op，刻意不经 `get_hub()` 触发建单例）。
+- `main.py`：模块级 `atexit.register(archive_runtime_logs, reopen_streams=False)`，**注册顺序刻意先于 `cleanup_all_ffmpeg_processes` / `close_all_clients_sync`**（atexit 为 LIFO——归档最后执行，把 ffmpeg 清理等收尾日志一并收进归档文件；进程退出场景不重建 sink，下次启动经导入期注册自然重建）；信号 `safe_exit`（CLI Ctrl+C / GUI 停止按钮的 CTRL_BREAK / 控制台关闭）、磁盘满 `sys.exit(-1)`、未捕获异常、Web 托盘退出全部经 atexit 覆盖。
+- `src/web_api.py`：`toggle_recording` 在 `enable=False`（面板「停止录制」，手动停止路径）时立即触发 `archive_runtime_logs(reopen_streams=True)`（进程继续运行，改名后重建 loguru sink 与 web_console 句柄，录制引擎与 Web 服务的日志写入不受影响）；时间戳取停止操作发生时刻；「开始录制」不触发。
+
+**二、测试（新增 1 文件 + 修改 2 文件）— `tests/`**
+
+- 新增 `tests/test_log_archive.py`（14 用例）：四日志改名格式正则锁定（原名_YYYYMMDD_HHMMSS.扩展名）、固定时间戳下目标冲突 `_1`/`_2` 递增且不覆盖既有文件、目录为空全跳过、单文件改名失败（PermissionError 替身模拟句柄占用）不中断整批、`DLR_GUI_PARENT=1` 守卫（不触碰文件与句柄）、`DOUYIN_DISABLE_LOG_ARCHIVE=1` 守卫、`reopen_streams` 双态语义（False 不重建 sink / True 重建）、web_console 绑定句柄轮转（flush+close → 改名 → 重建新句柄 → rebind，`handle.closed` 断言）、未绑定标准流的遗留 web_console 仅改名且不重定向 stdout、hub `close_file` 后下一条事件惰性重开与重复关闭幂等、logger sink remove→add 往返与幂等（importlib.reload 隔离 + `add()` 即建文件断言）、main.py 归档 atexit 注册顺序静态锁（先于两个 cleanup 注册 + `reopen_streams=False`）。
+- `tests/test_web_api.py`：`TestRecordingToggle` 新增 `test_toggle_stop_triggers_log_archive`（enable=False 恰好触发一次且 `reopen_streams=True`；enable=True 不触发）。
+- `tests/conftest.py`：`pytest_configure` 增设 `DOUYIN_DISABLE_LOG_ARCHIVE=1`——测试进程导入 main 会注册归档 atexit，pytest 退出并非「停止录制」事件，防止改名开发者真实 `logs/`（归档专项用例内自行 delenv）。
+
+**三、i18n 四语目录补齐（修改内容）— `i18n/zh_CN/LC_MESSAGES/zh_CN.po` + `zh_CN.mo` / `i18n/en_US.json` / `i18n/en_GB.json` / `i18n/zh_TW.yaml`**
+
+- 四目录各新增 9 条（507 → 516 条，键集保持一致）：归档功能的 9 条新日志串——「运行日志已归档」「运行日志归档失败(忽略)」「日志已归档」「日志归档失败(跳过)」×2、「关闭 web_console 句柄异常(忽略)」「重建 web_console.log 句柄失败」「[弹幕监控]close_file 失败(忽略)」「[弹幕监控]关闭边车文件异常(忽略)」。
+- `zh_CN.po`：新增「日志归档模块（src/log_archive.py / src/danmaku_monitor.py，2026-08-30 新增）」分节（简中恒等翻译风格），头部「更新日期 / PO-Revision-Date」同步；`scripts/compile_po.py` 重编译 `.mo`（517 条含头部，63888 字节），`--check` 字节级同步通过。
+- `en_US.json` / `en_GB.json`：英文译文（两变体同文，涉词无英美拼写差异）；`zh_TW.yaml`：繁体译文按既有语汇转换（日志→日誌、文件→檔案、归档→歸檔、运行日志→執行日誌、句柄→控制代碼），含单引号占位符的条目改用双引号 YAML 标量书写。
+- 验证：`scripts/extract_i18n_strings.py` 复扫缺失 0 条；`tests/test_i18n.py` 34 用例全过（含四目录键集一致 + po/mo 同步）。
+
+**四、仓库元数据同步（修改内容）— `pyproject.toml` / `.coveragerc-concurrency` / `.gitignore` / `.dockerignore` / `AGENTS.md`**
+
+- 审计一致项（无需改动）：`requirements.txt` ≡ `pyproject.toml [project.dependencies]`（20=20 逐条同下界）；`uv.lock` 经 `uv lock --check` 确认同步；Dockerfile（python:3.14-slim-bookworm + Node 24）≡ ci.yml（`python_build=3.14` / `node_version=24`）；版本链 4.0.9.2 与 `scripts/check_version.py` 全过；Docker 镜像额外排除集完整；`.coveragerc-concurrency` omit ≡ pyproject coverage omit。
+- 修复漂移 ×2：① **`.v2c/`**（video2code 插件生成目录，工作区实存）补入全部 9 个同步点——`.gitignore`、`.dockerignore`、pyproject 五处排除列表（black exclude / isort extend_skip / mypy exclude / basedpyright exclude / coverage omit）、`.coveragerc-concurrency` omit、AGENTS.md「dockerignore / gitignore 同源约定」规范清单；② **`.mypy_cache/`** 补入 `.dockerignore`「Python 缓存」小节（原仅 `.gitignore` 有，`COPY . .` 构建上下文会误送）。
+- `AGENTS.md`：项目结构补 `src/log_archive.py` 条目；「关键约定」新增第 8 条「停止录制流程的日志归档（2026-08-30 定稿）」（触发点仅两处 / 命名与去重规则 / 句柄关闭硬约束 / GUI 与测试双守卫 / 回归锁清单）。
+
+**影响范围**：
+
+- 用户可感知：停止录制后 `logs/` 下出现 `streamget_YYYYMMDD_HHMMSS.log` 等归档文件（同秒重复停止自动 `_1` 递增）；原始四日志在下次录制/写日志时自动重建；Web 面板「停止录制」即时归档，CLI Ctrl+C / GUI 停止按钮 / 控制台关闭 / Web 托盘退出在进程退出时归档。
+- 行为不变项：日志内容/格式/目录、loguru 轮转（300 KB）与保留策略、弹幕监控 JSONL 轮转（5 MB）、四语键集一致性、GUI 父进程仅写 gui.log、CLI 模式不产生 web_console.log 等全部保持。
+- 已知边界：GUI 停止录制的 `taskkill /F /T` 硬杀兜底路径进程无机会执行任何 Python 代码（含归档），属结构性限制（CTRL_BREAK 主路径归档正常）；`web_console.log` 仅 Web 后台模式存在，归档后重建空文件承接后续输出。
+
+**验证**（2026-08-30）：
+
+- `pytest` 全量 **806 passed, 2 skipped**（0 警告；本批新增 15 用例：`test_log_archive.py` 14 例 + toggle 归档触发 1 例）。
+- Windows 真实链路黑盒验证：loguru `remove()`（flush+close）→ `os.rename` → `add()` 旧文件内容完整、新同名文件立即重建（印证句柄占用约束下的归档可行性）。
+- 四语运行时查找冒烟：9 条新串在 zh_CN（.mo）/ en_US / en_GB / zh_TW 精确命中。
+- 配置终验：pyproject 五排除列表 / coveragerc omit / 两份 ignore / AGENTS 同源清单程序化断言全过；`black --check`（exclude 正则合法）、`mypy src/` 双平台、`uv lock --check`、`coverage debug config` 全过；`scripts/check_version.py` PASS。
+
+**关联**：
+
+- `AGENTS.md`：「关键约定」第 8 条「停止录制流程的日志归档（2026-08-30 定稿）」+「dockerignore / gitignore 同源约定」清单（含 `.v2c/`）。
+- 回归锁：`tests/test_log_archive.py` + `tests/test_web_api.py::TestRecordingToggle::test_toggle_stop_triggers_log_archive` + `tests/test_i18n.py`（四目录键集 / `compile_po --check`）。
+- 上一版全量快照：v4.0.9.2-dev (2026-08-29)「全量工作树改动总览（按模块分类）」。
+
+### v4.0.9.2-dev (2026-08-29) — GUI 父进程日志句柄隔离：修复 streamget.log 轮转 WinError 32 与录制日志全量丢失
+
+**问题**：GUI 模式下 GUI 进程（`gui.py` 经 `src.web_config → src/__init__ → src.logger` 导入链初始化文件 sink）与录制子进程（`main.py`）同时持有 `logs/streamget.log` 的 loguru 文件 sink 句柄；文件越过 `rotation="300 KB"` 阈值（loguru 按 1000 进制）后，任一方写日志都要先 `os.rename` 轮转改名，对方句柄未关即抛 `PermissionError: [WinError 32]`——轮转永不成功，录制子进程的文件日志自此全量静默丢失（实测：streamget.log 卡在 300031 字节、mtime 停在 08-28 19:19，GUI 面板被 `Logging error in Loguru Handler #2` 刷屏；轮转目标名 `streamget.2026-08-27_*.log` 为 loguru 按文件 ctime 命名，`logs/` 下从未出现，证实轮转从未成功）。仅 GUI 模式触发：CLI / Web 为单进程录制、`gui_legacy.py` 不导入 src，均不受影响。
+
+**修复**（`src/logger.py` / `gui.py` / `tests/test_logger_gui_parent.py` 新增）：
+
+- `src/logger.py`：新增 `GUI_PARENT_ENV = "DLR_GUI_PARENT"` 环境标记与导入期判定——GUI 进程只写**本进程独占**的 `logs/gui.log`（同款轮转/保留策略），绝不创建 `streamget.log` / `PlayURL.log`；录制进程（CLI / Web / GUI 子进程）行为不变。新增公开 helper `child_process_env()`：构建录制子进程启动环境（剔除标记 + 固定 `PYTHONIOENCODING=utf-8`）。
+- `gui.py`：在导入任何 `src` 模块之前设置标记（src.logger 在导入期读标记，设置必须先于导入）；拉起录制核心（main.py / 冻结 CLI exe）的 env 改经 `child_process_env()`。
+- `tests/test_logger_gui_parent.py`（5 用例）：录制进程持有 streamget/PlayURL 不产生 gui.log、GUI 进程仅 gui.log、「是否启用日志文件=否」对 GUI 同样生效、`child_process_env` 剔除标记与 UTF-8 固定、gui.py 标记先于 src 导入 + env 构建走 helper 的静态回归锁。
+- `src/stream.py`：补全 `HuyaGameLiveInfo` TypedDict 的 `bitRate: int` 字段声明并移除 `# type: ignore[arg-type]`（对齐仓库禁用 ignore 约定）——未声明键经 `.get()` 退化为 `object`，新版本 mypy 对 `int(bit_rate)` 报 `call-overload` 且旧 ignore 代码不覆盖；运行时语义零变化（TypedDict 声明无运行时效果，`try/except TypeError, ValueError` 兜底保留），`mypy src/` 全量（38 文件）恢复全绿。
+
+### v4.0.9.2-dev (2026-08-29) — 全量工作树改动总览（按模块分类）：97 文件 / +10659 −3138，覆盖 2026-08-23 ~ 08-29 全部未提交变更
+
+**变更摘要**：本条目为当前**整个未提交工作树**（95 个跟踪文件变更 +10659/−3138，另 2 个未跟踪新文档，合计 97 个文件）的系统性、按模块分类总览，取代 v4.0.9-dev (2026-08-24) 的旧总览条目作为最新全量快照（08-24 之后落地的调度反馈、性能优化、CI 重构、Web 录制控制、画质档位等分散记载于各分条目，本条目按「文件 → 模块 → 改动类型（新增功能/修改内容/删除项）」收敛为一份索引）。条目体系：新增功能主线为①并发调度中枢 `src/scheduler.py`、②Web 面板录制手动控制、③虎牙/斗鱼蓝光细粒度画质档位、④i18n 四语四格式本地化体系、⑤GUI 崩溃可观测与语言菜单；修改主线为 main.py 录制引擎重构（平台分派抽取 + 录制结果反馈 + set 去重）、stream_select 统一候选序列与探针退避、HTTP 层会话复用与 3.14 适配、CI/CD 工作流重构；删除项为旧固定信号量与 `adjust_max_request` 单向压制、轮末无条件成功采样、咪咕过期 `sv=10010` 拼接、build-release 调试残留步骤。
+
+**涉及文件（按模块分类）**：
+
+**一、并发调度与录制引擎核心（新增功能 + 修改内容）— `src/scheduler.py`（新增）/ `main.py` / `src/notify.py` / `src/recorder_status.py`**
+
+- `src/scheduler.py`（**新增文件，442 行**）：`ResizableSemaphore`（可运行时调容信号量，容量允许 0、增容唤醒等待者）/ `PlatformBreaker`（按 host 熔断 closed→open→half-open，探针带 60s 租约自愈防永久熔断）/ `ConcurrencyScheduler`（动态调速默认 min=8/max=128、固定并发双模式、全局错误窗口增量计数、`adjust_loop` 5s 守护循环）/ `host_of`（熔断 key 提取）。取代旧「单个全局 `threading.Semaphore(1)` + 单向错误率压制」模型。
+- `main.py`（+922/−796，本次最大单文件改动）：① 调度接线——`scheduler` 实例化于 `main()` 首轮、`semaphore`/`recording_semaphore` 重绑定为其内部信号量、`set_configured_limit`/`set_recording_limit`/`set_dynamic_mode`/`set_active_count` 每轮热更新；② 平台分派抽取——原约 700 行内联 if/elif 链迁出为 `_resolve_platform_stream()`（语义不变）；③ 录制结果反馈——`check_subprocess` 按退出码 `record_success`/`record_error(host_of)`、快速失败（≤20s）`mark_ffmpeg_reject` 记探针退避、成功轮 `clear_ffmpeg_reject` 撤销、解析成功即上报成功样本、直下路径按下载结果上报；④ Web 录制开关——新增 `recording_enabled` 全局开关 + 7 处中断点（ffmpeg 轮询/直下 chunk/线程入口/失败判定/等待期/拉起前/finally 清理）；⑤ 主循环性能——`url_comments`/`line_list`/`url_line_list` 由 list 改 set（O(N²)→O(1)）、`url_comments.discard` 取代整表重建、`dict.fromkeys` 保序去重；⑥ 其他——`_sync_ssl_disable_platforms`（启动自动追加虎牙/B站至禁用 SSL 平台键）、`_read_language_config` 语言键迁移、房间线程 finally 调 `get_hub().room_stopped`、i18n 主循环热同步。
+- `src/notify.py`（+39/−30）：`record_error`/`record_success` 增 `key` 形参并委托 scheduler（按 key 熔断 + 全局背压）；`adjust_max_request` 改为等待调度器就绪后跑 `adjust_loop`（旧增量/降容逻辑删除）；新增 `remove_room_from_running()`（线程退出兜底清理运行列表）。
+- `src/recorder_status.py`（+20/−2）：状态 JSON 增 `recording_enabled` 字段；新增 `_live_network_capacity()`（控制台显示调度器实时容量，未就绪回退配置值）；裸 `logger.error(e)` 等异常日志补类型与上下文。
+- **删除项**：旧 `adjust_max_request` 的 `threading.Semaphore` 重建逻辑、`check_subprocess` 轮末无条件 `record_success`、main.py 模块级 `threading.Semaphore(1)`。
+
+**二、选源与流地址校验（修改内容）— `src/stream_select.py` / `src/stream.py`**
+
+- `src/stream_select.py`（+260/−131）：① 统一候选序列——HLS/FLV/record_url 三类地址并入单一有序序列逐候选校验（虎牙经 `_FLV_FIRST_PLATFORMS` 反转为 FLV-first），h265 候选构建时剔除，`last_resort` 统一为「过滤后序列末位且无 record_url」；② 探针客户端单轮复用——`select_source_url` 整轮共用一支 `httpx.Client`（finally 关闭），`_validate_stream_url` 增可选 `client` 形参与 `owns_client` 自管语义，UA/Referer/Cookie 改逐请求下发；③ 探针退避——`_probe_backoff_window()` 动态窗口（≥ 主循环周期 + 70s 余量）、新增公开入口 `mark_ffmpeg_reject()`/`clear_ffmpeg_reject()`（对称）；④ `_confirm_get_ok` 增 `headers` 形参（GET 复核与 HEAD 同头）；⑤ `_PROBE_TIMEOUT_SECONDS` 常量化；⑥ `_URL_PATTERN`/`get_quality_code` 十档映射（详见画质条目）；⑦ 三类地址全空/HLS 关闭无回退两处静默路径补告警。
+- `src/stream.py`（+202/−18）：蓝光细粒度档位专项——`QUALITY_MAPPING_BIT`/`QUALITY_LEVEL`/`QUALITY_CODE_TO_ZH` 扩为 10 项、新增 `BD_SUB_TIERS`/`HUYA_FIXED_TIERS`/`HUYA_RATIO_TO_CODE`/`DOUYU_RATE_BY_CODE`/`DOUYU_RATE_TO_CODE`/`DOUYU_RATE_DESC`、`get_quality_index` 子档位折叠到 BD、`get_huya_stream_url` 按 ratio 选档 + 就近降级、`get_douyu_stream_url` rate 重试链（最多回退 2 档）+ `rate` 字段回采真实档位。
+- **删除项**：旧 `DOUYU video_quality_options`/`rate_to_code` 两表、旧「FLV 为 h265 → 立即重试整组 HLS」插入式回退、`sv=10010` 本地拼接（见三）。
+
+**三、平台解析与 JS 签名（修改内容）— `src/spider.py` / `src/javascript/migu.js`（重写）/ `src/platforms/bilibili.py` / `src/platforms/douyu.py`**
+
+- `src/javascript/migu.js`（+159/−74，整体重写）：适配 migu 播放器 v_20260731+ 的 wasm 新接口（导入函数 3→12 个 a..l、导出名重排），加密因子经官网 factor 接口获取（失败回退播放器内置默认），输出带 `ddCalcu`/`sv` 参数的**完整签名地址**。
+- `src/spider.py`（+18/−12）：`_BANDWIDTH_PATTERN`/`_DOUYIN_HEVC_FLV_PATTERN` 提为模块级预编译正则；`get_migu_stream_url` 直接使用 migu.js 输出的完整地址（删除 `sv=10010` 固定拼接）；PEP 758 格式化。
+- `src/platforms/bilibili.py` / `src/platforms/douyu.py`：弹幕颜色解析 `except` 逗号化（PEP 758 机械重排）。
+
+**四、HTTP 与网络层（修改内容）— `src/async_http.py` / `src/sync_http.py` / `src/http_config.py` / `src/ws_client.py` / `src/ttwid.py` / `src/collector.py`**
+
+- `src/async_http.py`（+15/−2）：`close_all_clients_sync` 适配 Python 3.14——`asyncio.get_event_loop()` 无循环时捕获 `RuntimeError` 走引用清理兜底；`async_req` 异常日志带 URL 与异常类型（修复 Windows 空串异常）。
+- `src/sync_http.py`（+21/−2）：`_session()` 经 `threading.local()` 线程级复用 `requests.Session`（约 125 处 `sync_req` 调用点全走此路径，实测单请求 11.9ms→1.47ms）。
+- `src/http_config.py`（+14/−9）：FFmpeg 9.0 起 TLS 证书默认校验——「禁用SSL证书验证的平台」覆盖恢复实际作用，`get_effective_ssl_verify()` 改为 `ssl_verify=True`（http 录制模式）时参与读取。
+- `src/ws_client.py` / `src/ttwid.py` / `src/collector.py`：PEP 758 格式化（弹幕 WS `proxy=None` 直连约定未变）。
+
+**五、配置、日志与工具（修改内容）— `src/config_io.py` / `src/web_config.py` / `src/logger.py` / `src/ffmpeg_install.py` / `src/utils.py`**
+
+- `src/config_io.py`（+17/−2）：`read_config_value` 缺省值写回改为「内存 `StringIO` 完整序列化成功后才落盘」，失败回滚内存态并移除坏键（防 Python 3.14 `InvalidWriteError` 截断配置文件）。
+- `src/web_config.py`（+50/−6）：`update_config_line` 键匹配改大小写不敏感（`_key_line_pattern` 经 `lru_cache(128)` 预编译）；新增 `append_config_line()`（缺键补建，Web 语言写回兜底）；`QUALITY_KEYWORDS` 扩为十档；PEP 758。
+- `src/logger.py`（+35/−3）：`sys.stderr is None` 判空守卫（pythonw/`console=False` 冻结 exe 导入期静默崩溃根治）；新增 `rebind_console_sink()`（Web 后台模式重定向 stderr 后重建控制台 sink）。
+- `src/ffmpeg_install.py`（+8/−8）：蓝奏云 FFmpeg 下载源域名切换 `wweb.lanzouv.com` → `wwasx.lanzout.com`（Origin/Referer/接口与提取密码同步）。
+- `src/utils.py`（+23/−18）：`_EMOJI_PATTERN` 提为模块级预编译（`remove_emojis` 每调用省去约 400 字符模式重编译）。
+
+**六、Web 面板（新增功能 + 修改内容）— `src/web_api.py` / `web.py` / `web/index.html` / `web/app.js` / `web/style.css`**
+
+- `src/web_api.py`（+49）：新增 `POST /api/recording/toggle`（录制全局开关切换）与 `GET/PUT /api/language`（语言查询/热切换：归一化校验 → `update_config_line` 写回、失败降级 `append_config_line` 补建 → `set_language` 热切换）；新增 `RecordingToggle`/`LanguageUpdate` 模型；两端点均在既有 Bearer 认证中间件覆盖内。
+- `web.py`（+15/−2）：引擎线程启动前置 `main.recording_enabled = False`（Web 默认不自动录制）；`_enter_background_mode` 重定向 stderr 后调 `rebind_console_sink()` 重建 loguru 控制台 sink。
+- `web/index.html`（+54/−41）：新增「录制控制」区（状态双子 span + 开始/停止按钮）与顶栏语言选择器；`room-quality` 下拉新增蓝光30M/20M/8M/4M 四档；全量元素补 `data-i18n`/`data-i18n-placeholder` 标注。
+- `web/app.js`（+323/−45）：新增前端 i18n 字典 `I18N`（约 230 行，四语各 ~95 键）与 `t()`/`applyTranslations()`/`initLanguage()`（localStorage 记忆 + 后端同步）；新增 `renderRecordingControl()`（按钮互斥 + 引擎存活联动）与 `toggleRecording()`（POST toggle + 状态回拉）；既有硬编码中文文案全部改 `t()` 调用。
+- `web/style.css`（+41/−1）：录制控制区样式（主色开始/红色停止/禁用态）。
+
+**七、GUI（新增功能 + 修改内容）— `gui.py`（+173/−7）**
+
+- 崩溃可观测：新增 `_install_crash_sink()`（`sys.excepthook` + `threading.excepthook` 落盘到临时目录并尽力弹窗，根治 pythonw/冻结 exe 静默崩溃无窗口无报错）、`_bootstrap_error_sink()`（`main()` 顶层兜底）与 `_bootstrap_crash_reported` 防双份上报标记。
+- 语言菜单：侧边栏新增「语言 Language」`CTkOptionMenu`，`_on_language_change()` 即时 `set_language()` 热切换并 `update_config_line` 写回 config.ini；启动时按 config → 系统语言解析初始化。
+- UI 回调异常由 `traceback.print_exc()`（`sys.stderr is None` 时二次崩溃）改为程序内日志。
+
+**八、i18n 本地化体系（新增功能 + 修改内容）— `i18n.py`（重写）/ `i18n/en_US.json`（新增）/ `i18n/en_GB.json`（新增）/ `i18n/zh_TW.yaml`（新增）/ `i18n/zh_CN.po|.mo` / `scripts/extract_i18n_strings.py`（新增）/ `scripts/compile_po.py`**
+
+- `i18n.py`（+270/−31）：重写为多格式引擎——按语言依次探测 gettext `.mo` → `<lang>.json` → `<lang>.yaml`；新增 `resolve_language()`（空→系统语言→en_US 回退统一解析）、`detect_system_language()`（环境变量 → Windows `GetUserDefaultUILanguage` 平台门控 → POSIX locale，C/POSIX 过滤）、`set_language()` 运行期热切换、`normalize_language()`/`is_recognized_language()`/`has_catalog()` 等九个公开函数；四语目录键集强制一致（test_i18n 锁定）。
+- 翻译目录：新增 `i18n/en_US.json`、`i18n/en_GB.json`（美式/英式拼写分流）、`i18n/zh_TW.yaml`；`zh_CN.po` 重编译 `.mo`，四目录现各 **496 条**（288 → 492 → 496 三轮补全）；`.mo` 与 `.po` 字节级同步（CI `compile_po --check` 门禁）。
+- 新增 `scripts/extract_i18n_strings.py`（166 行）：AST 扫描 print 常量串 + logger f-string 模板底稿，与四语目录比对输出缺失清单（f-string 归一化：丢格式/转换符、双引号转单引号、纯占位符不收录）。
+- `scripts/compile_po.py`：纯 Python po→mo 编译修正（此前自身语法错误致 `.mo` 从未落盘）；`scripts/check_coverage.py` 微调。
+
+**九、构建 / CI / 依赖 / 仓库元数据（修改内容 + 新增）— `pyproject.toml` / `requirements.txt` / `uv.lock` / `Dockerfile` / `docker-compose.yaml` / `build_exe.py` / `.github/*` / `.coveragerc-concurrency`（新增）/ `.dockerignore` / `.gitignore`**
+
+- `pyproject.toml`：版本 `4.0.8.3` → `4.0.9.2`；`requires-python` `>=3.10` → `>=3.14`；classifiers 收敛至 3.14；依赖新增 `PyYAML>=6.0.3`；`[tool.black] target-version=['py314']`、`[tool.mypy] python_version=3.14`、`[tool.basedpyright] pythonVersion=3.14`；pytest 新增 `filterwarnings`（starlette testclient 弃用提示忽略）。
+- `requirements.txt`：新增 `PyYAML>=6.0.3`（与 pyproject 下界一致）；弹幕依赖注释路径订正（`src/danmaku/` → `src/` 实际布局）。
+- `uv.lock`：随 3.14 基线重锁（净 −963 行；镜像/CI 经 requirements.txt 走 pip、不消费它）；随版本号提升经 `uv lock` 同步根包版本字段（`4.0.9` → `4.0.9.2`，`uv lock --check` 通过）。
+- `Dockerfile`：基础镜像 `python:3.13-slim` → `python:3.14-slim`；Node.js `setup_22.x` → `setup_24.x`（24 LTS，实测全部 JS 签名脚本 + migu.js 重写版通过）。
+- `docker-compose.yaml`：版本示例注释同步 4.0.9.2。
+- `build_exe.py`：PEP 758 格式化（打包冒烟判定语义未变）。
+- `.github/workflows/ci.yml`：重构为 setup + static/typecheck/test/concurrency-test/integration-verify/build-verify/ci-summary 拓扑（每 job 显式 timeout、ci-summary 唯一 required check）；actions 升 v7（checkout/setup-python/setup-node/upload-artifact）；`python_min/python_latest/python_build=3.14`、`python_matrix=["3.13","3.14"]`、mypy 2.3.0 / black 26.5.1 / isort 8.0.1 固定版本；paths-filter 增 `i18n/**` 触发。注意：3.13 矩阵档与全仓 PEP 758 无括号语法在收集期冲突（Python 3.13 不支持 `except A, B:`），提交前需将矩阵收敛为 `["3.14"]`。
+- `.github/workflows/build-release.yml`：`python_build` 3.12→3.14；网络安装（choco/apt/brew/pip）全部收敛到 retry 复合动作；macOS tap 信任独立步骤；删除尾部「Debug inputs」残留步骤。
+- 新增 `.github/actions/retry/action.yml`（线性退避 ×3 复合动作，ci.yml 9 处 + build-release.yml 4 处共用）；新增 `.github/ISSUE_TEMPLATE/`（bug/feature/question 中英六模板）、`.github/PULL_REQUEST_TEMPLATE.md`、`.github/workflows/issue-translator.yml`（议题自动翻译）。
+- 新增 `.coveragerc-concurrency`（并发测试专用覆盖率配置，CI 经 `COVERAGE_RCFILE` 引用）；`.dockerignore`/`.gitignore` 同源扩充（本地工具目录、`uv.lock`、`scripts/`、`AGENTS.md`、`*.isorted` 等）。
+- **删除项**：两 workflow 内 13 处内联 `for i in 1 2 3` 重试循环、build-release.yml 调试步骤。
+
+**十、测试（新增 4 文件 + 修改 30 文件）— `tests/`**
+
+- 新增：`tests/test_scheduler.py`（192 行，16 用例：容量自适应/双模式切换/`ResizableSemaphore` 调容/熔断状态机与探针租约）、`tests/test_record_failure_feedback.py`（311 行，成功/快速失败/慢速失败/缺 `-i` 容错/停止中断不采样/容量显示回退）、`tests/test_quality_tiers.py`（270 行，29 用例：子档位映射/索引折叠/虎牙就近降级/斗鱼重试链）、`tests/test_logger_console_sink.py`（72 行：stderr 判空 + sink 重建）。
+- 修改（代表）：`tests/test_stream_select.py`（+215：统一候选序列/末位放行/退避跨轮命中/非白名单无操作）、`tests/test_i18n.py`（+234：四目录一致性/平台门控/C-POSIX 过滤/monkeypatch 规约化）、`tests/test_config_io_readonly.py`（+134：StringIO 预序列化/坏键回滚）、`tests/test_web_api.py`（+133：语言端点/录制开关端点）、`tests/test_spider_platform.py`、`tests/test_main_fixes.py`、`tests/test_concurrency.py`（锁类型断言同步）等。
+- 全套件当前状态：`pytest` **786 passed, 2 skipped**（`tests/test_twitch_live_collector.py` 因沙箱回收站护栏需隔离运行，属环境限制非回归）。
+
+**十一、文档与审查产物（新增 + 修改）— `AGENTS.md` / `README.md` / `CODE_WIKI.md` / `CODE_WIKI_EN.md`（新增）/ `README_EN.md`（新增）/ `PERF_REVIEW_2026-08-28.md`（未跟踪）**
+
+- `AGENTS.md`（+270）：沉淀「并发与线程模型」（调度中枢/录制结果反馈/锁约定）与「已知坑」十余条防回归约定（弹幕 `proxy=None`、探针容错语义、虎牙退避与 FLV-first、UA 双端一致、PEP 758、3.14 破坏性变更、i18n 多格式、configparser 分隔符等）。
+- `README.md`（+303）：3.14 基线、i18n、Web 录制控制等用户文档更新；新增 `README_EN.md` 英文版、`CODE_WIKI_EN.md` 英文架构文档（与本文档结构镜像）。
+- `CODE_WIKI.md` / `CODE_WIKI_EN.md`：更新日志自 2026-08-23 起新增十余条分功能条目 + 本总览条目（中英同步）。
+- `PERF_REVIEW_2026-08-28.md`（未跟踪，工作树本地文件）：P1~P5 性能优化的完整审查报告（含一次误判及其回滚记录），结论已沉淀至 AGENTS.md 与 2026-08-28 性能条目。
+- 勘误：早前「Web 面板录制手动控制」条目提及的 `docs/web-recording-control-changelog.md` 与 `docs/security-triage-2026-08-29.md` 未保留在当前工作树中，实际文件清单以本总览为准。
+
+**改动说明**：
+
+- **改动类型的完整口径**：新增功能（scheduler、Web 录制控制、画质细档位、i18n 体系、GUI 崩溃兜底/语言菜单、retry 复合动作、社区模板、三份英文/双语文档、4 个新测试文件）；修改内容（main.py 引擎重构、stream_select 选源、HTTP 层复用与 3.14 适配、CI 拓扑、Docker 基线、pyproject/requirements）；删除项（旧信号量重建与单向压制、轮末无条件成功采样、斗鱼旧档位表、`sv=10010` 拼接、CI 内联重试与调试步骤、`language(zh_cn/en)` 旧键语义）。
+- **三条主线互相独立又彼此衔接**：并发调度（谁允许发起网络请求）→ 录制反馈（结果回灌熔断统计）→ 探针退避（坏线路短期拉黑）；画质档位（选什么档）→ 统一候选序列（按什么顺序试）→ 探针客户端复用（怎么试更省）；i18n 后端（四格式目录 + 热切换）→ Web 前端字典（界面文案）→ GUI 菜单（入口）。
+- **Python 3.14 迁移贯穿全部模块**：`asyncio.get_event_loop` RuntimeError 兜底、`configparser.InvalidWriteError` 预序列化防御、PEP 758 全仓格式化（black py314 强制风格，非语法回归）、`ctypes.WinDLL` 平台门控。
+- 本总览与分条目互补：分条目讲「为什么、怎么做」，本条目讲「改了哪些文件、归在哪个模块」；文件行号以分条目记载为准（本条目不重复）。
+
+**影响范围**：
+
+- 用户可感知：Web 面板默认不自动录制（需点「开始录制」）；界面/控制台支持四语热切换；虎牙/斗鱼可选蓝光细档位并自动降级；80+ 房间高并发下排队延迟与错误放大显著缓解；pythonw/冻结 GUI 崩溃可观测。
+- 行为不变项：CLI/GUI 直跑录制流程、弹幕 `proxy=None` 直连、探针容错（重试一次再定罪/末位放行）、UA 双端一字不差、斗鱼 HLS-first/虎牙 FLV-first 等既有约定全部保持。
+- 部署面：Docker 镜像基线 3.14 + Node 24；打包解释器与 CI 验证环境同值（3.14）；新增 `PyYAML` 运行时依赖（缺失仅损 zh_TW.yaml 格式）。
+
+**验证**（2026-08-29 全量复查）：
+
+- `pytest` 全量 **786 passed, 2 skipped**（0 失败）；`compileall`（venv Python 3.14.7）main/gui/web/i18n/build_exe/src/scripts 全过。
+- `black --check --line-length 120 --target-version py314` 与 `isort --check-only --profile black --line-length 120`（101 文件）全绿。
+- `mypy src/` + `mypy --platform linux src/`：各存 1 error（`src/stream.py:609` 预存 `call-overload`，`# type: ignore[arg-type]` 错误码错位——**阻塞 CI typecheck，提交前需修复**）。
+- `basedpyright tests/`：5 errors（`tests/test_quality_tiers.py` 5 处 `mock.await_args` Optional 成员访问——**阻塞本地类型门禁，提交前需修复**）。
+- i18n：`scripts/extract_i18n_strings.py` 报 11 条新增运行时串待收录（不影响功能，原文回退）；四目录键集一致、`.po/.mo` 字节级同步通过。
+- 已知待办（提交前）：ci.yml 测试矩阵 3.13 档因 PEP 758 语法在收集期失败，需收敛为 `["3.14"]`；`check_subprocess` 的 `recording_semaphore.acquire()` 时序（Popen 之后才获取）使「最大同时录制数」上限未按预期约束进程创建，需将 acquire 前移。
+
+**关联**：
+
+- 分功能详述条目：v4.0.9-dev (2026-08-24)「高并发多平台录制调度与资源管理优化」「四语本地化目录统一」「CI mypy 双错误修复」；v4.0.9.1-dev (2026-08-27)「录制结果反馈调度器 + 探针退避」「代码审查修复（熔断探针租约自愈 + 调度成功采样）」「i18n 本地化系统修复」；v4.0.9.1-dev (2026-08-28)「性能审查优化落地（P1~P5）」「CI 工作流优化与网络安装重试收敛」；v4.0.9.1-dev (2026-08-29)「Web 面板录制手动控制」「虎牙/斗鱼画质档位专项」。
+- `AGENTS.md`：本批改动沉淀的全部防回归约定（并发与线程模型 / 录制结果反馈约定 / 已知坑）。
+- v4.0.9-dev (2026-08-24)「本次改动总览（按模块分类）」：上一版全量快照（覆盖至 08-24），由本条目取代。
+
+### v4.0.9.2-dev (2026-08-29) — 虎牙/斗鱼画质档位专项（细粒度蓝光档位枚举 + 用户选档录制 + 不可用降级回退 + 全平台兼容）
+
+**变更摘要**：本条目系统性记录 2026-08-29 会话落地的「虎牙/斗鱼直播画质档位专项」。基于 `huya.com/chuhe`（六档：流畅/超清/蓝光4M/蓝光8M/蓝光20M/蓝光30M）与 `douyu.com/3168536`（五档：高清/超清/蓝光4M/蓝光8M/原画）的 ffprobe 实测参数，补全蓝光子档位（蓝光4M/8M/20M/30M）的枚举与中文标识，打通「用户录制前选择档位 → 按所选档位拉流录制」全链路，并对档位不可用/被限制访问场景提供清晰错误提示与就近降级回退策略，且不改变抖音/TikTok/B站/快手等按索引选档平台的既有语义。① **画质代码层扩展**：`QUALITY_LEVEL`/`QUALITY_MAPPING_BIT`/`QUALITY_CODE_TO_ZH` 由 6 项基础集扩展为 10 项（含 `BD30`/`BD20`/`BD8`/`BD4`），新增 `BD_SUB_TIERS` 冻结集合；`get_quality_index` 将蓝光子档位折叠到 `BD` 槽位，保持数字输入 0–5 选档语义不变；② **虎牙选档逻辑**：新增 `HUYA_FIXED_TIERS`/`HUYA_RATIO_TO_CODE`，`ratio`=码率上限(kbps)拼于 FLV/HLS URL 的 query 选档，`exsphd` 档位表优先、缺失时按 `gameLiveInfo.bitRate` 推导可用档，请求档不可用则就近向下降级、无更低档按原画拉流；③ **斗鱼选档逻辑**：新增 `DOUYU_RATE_BY_CODE`/`DOUYU_RATE_TO_CODE`/`DOUYU_RATE_DESC`，按 `rate` 映射拉流，请求档被限制（如登录态原画）时按全序链回退更低档重试（最多 2 档），服务端就近钳制的真实档位经 `rate` 字段回采；④ **中文映射与接入点**：`stream_select.get_quality_code`、`web_config.QUALITY_KEYWORDS`、main.py 画质白名单、`web/index.html` 下拉选项同步新增蓝光细档位；⑤ **测试**：新增 `tests/test_quality_tiers.py`（3 类 29 例）覆盖子档位映射/索引折叠/虎牙就近降级/斗鱼重试链，`tests/test_stream.py` 常量一致性断言改为超集语义并补 `test_bd_sub_tier_level_order`。
+
+**涉及文件（按模块分类）**：
+
+**一、画质代码与档位表（新增功能 — 枚举/标识/降级判定）— `src/stream.py`**
+
+- 模块顶部新增 `from loguru import logger`（选档降级日志用）。
+- `QUALITY_MAPPING_BIT`（L203）：在基础 6 项上追加 `BD30:30000`/`BD20:20000`/`BD8:8000`/`BD4:4000`（码率上限 kbps）。
+- `QUALITY_LEVEL`（L214）：扩展为 `OD/BD(0) > BD30(1) > BD20(2) > BD8(3) > BD4(4) > UHD(5) > HD(6) > SD(7) > LD(8)`，数值越大画质越低，供 `is_downgrade` 判定降级方向。
+- `QUALITY_CODE_TO_ZH`（L222）：追加 `BD30→蓝光30M`/`BD20→蓝光20M`/`BD8→蓝光8M`/`BD4→蓝光4M`。
+- `BD_SUB_TIERS`（L232）：`frozenset({"BD30","BD20","BD8","BD4"})`，蓝光子档位集合（不参与通用索引映射）。
+- 注释块补实测数据（L236-247）：虎牙 chuhe 房间 `bitRate=30000` 下各 ratio 实测分辨率/帧率（原画 2560×1440@60fps、蓝光30M/20M/8M 均 1920×1080@60fps、蓝光4M 1920×1080@30fps、超清 1280×720@30fps、流畅 800×450@24fps）。
+- `HUYA_FIXED_TIERS`（L248）：`(("BD30",30000),("BD20",20000),("BD8",8000),("BD4",4000))`；`HUYA_RATIO_TO_CODE`（L250）：ratio 字符串→代码回采表。
+- 斗鱼档位表（L268-293）：`DOUYU_RATE_BY_CODE`（请求代码→rate，含 `BD30/BD20→8200`、`BD8→8200`、`BD4→4000`、`UHD→3`、`HD→2`、`SD/LD→1`、`OD/BD→0`）、`DOUYU_RATE_TO_CODE`（下发 rate→代码回采）、`DOUYU_RATE_DESC`（全序降级链 `"8200","4000","3","2","1"`）。注释块补 3168536 房间实测 rate 钳制行为（请求 8200 房间无此档时服务端钳制到下发 rate=4）。
+- `get_quality_index`（L335）：蓝光子档位折叠到 `BD` 槽位（`if quality_str in BD_SUB_TIERS: quality_str = "BD"`），保持抖音/TikTok 等按索引选档平台的数字输入 0–5 语义不变。
+
+**二、虎牙选档实现（修改内容 — 细粒度档位 + 就近降级）— `src/stream.py::get_huya_stream_url`**
+
+- 解析 `gameLiveInfo.bitRate` 为 `max_ratio`（含 `except TypeError, ValueError` 容错——py314 PEP 758 合法形式）；从 `sFlvAntiCode` 的 `exsphd` 解析可用 ratio 集合（L~607-617）。
+- 请求档在 `BD_SUB_TIERS` 时（L~627）：取 `HUYA_FIXED_TIERS` 固定 `target_ratio`；`exsphd` 集合优先、缺失按 `bitRate` 推导可用 ratio 集合；`target_ratio` 可用则直接拉流，否则取可用集合中 `< target` 的最大 ratio 就近降级并 `logger.warning` 提示（含请求档/房间最高码率/实际降级档），无任何更低档则 `actual_quality="OD"` 按原画拉流并告警；`available_qualities` 按统一档位序输出供展示。
+
+**三、斗鱼选档实现（修改内容 — rate 映射 + 被限制降级重试链）— `src/stream.py::get_douyu_stream_url`**
+
+- 原 `video_quality_options`/`rate_to_code` 两表删除，改走 `DOUYU_RATE_BY_CODE`（L~756）；`BD30`/`BD20` 无对应档时按最高蓝光档（蓝光8M, `rate=8200`）请求并 `logger.info` 说明。
+- 降级链（L~765）：按 `order = ["0", *DOUYU_RATE_DESC]` 全序，取请求档及最多 2 个更低档依次 `get_douyu_stream_data` 重试；某档 `error==0` 且有 `rtmp_live` 即成功（非首档时 `logger.warning` 提示降级）；全部失败返回 `is_live=True` 但无流地址（保持既有契约交上层告警重试），并 `logger.error` 汇总尝试过的 rate 序列。
+- `actual_quality` 改经 `DOUYU_RATE_TO_CODE.get(actual_rate, ...)` 回采服务端真实下发档（`rate` 字段反映就近钳制，如 8200→4→BD4）。
+
+**四、中文名映射与配置/接入白名单（修改内容）**
+
+- `src/stream_select.py::get_quality_code`（L57）：`quality_zh_to_en` 扩展为 10 项，新增 `蓝光30M/20M/8M/4M → BD30/BD20/BD8/BD4`；未知画质仍回退 `OD`。
+- `src/web_config.py::QUALITY_KEYWORDS`（L21）：元组由 6 项扩展为 10 项（含蓝光细档位），与 main.py 白名单对齐。
+- `main.py`（L2955）：单条 URL 配置解析的画质白名单由 6 项扩展为 10 项，非法值回退「原画」（其余解析逻辑不变）。
+
+**五、Web 面板下拉选项（修改内容）— `web/index.html`**
+
+- `room-quality` 下拉新增 `蓝光30M`/`蓝光20M`/`蓝光8M`/`蓝光4M` 四个 `<option>`（紧邻「蓝光」之后），默认项与既有选项顺序保持；选项 value 即中文档位名，`main.py` 经 `get_quality_code` 映射为内部代码，链路打通无需改 `web/app.js` 取值逻辑。
+
+**六、测试（新增 + 修改）**
+
+- `tests/test_quality_tiers.py`（**新增文件，270 行**）：3 类 29 例——`TestGetQualityCodeSubTiers`（子档位中文名映射/旧名不变/未知回退 OD）、`TestGetQualityIndexSubTiers`（子档位折叠到 BD/数字语义不变）、`TestHuyaSubTiers`（可用档拼 ratio/不可用就近降级/exsphd 驱动降级/低码率房间降级到最低可用/无更低档回原画/未知容量直接请求/OD 不变/旧 UHD-exsphd 标签兼容）、`TestDouyuSubTiers`（BD4 rate 与回采/BD8 被服务端钳制/BD30·20 折叠到 BD8/OD 成功单次调用/OD 受限降级重试/全档失败返回无地址/旧 OD-rate 映射不变）。全程 monkeypatch（无 `patch.dict(os.environ)`）、经 `import main` 打破循环导入——符合 AGENTS.md 测试编写强制约定。
+- `tests/test_stream.py`：`test_quality_mapping_keys_match_level_keys`/`test_quality_mapping_keys_match_bit_keys`/`test_quality_code_to_zh_keys_match_mapping_keys` 由「集合相等」改为「基础集 ⊆ 扩展集 且 `BD_SUB_TIERS` == 扩展集 − 基础集」；新增 `test_bd_sub_tier_level_order`（等级序单调性 + `is_downgrade` 方向断言）。
+
+**改动说明**：
+
+- **蓝光子档位不污染通用索引**：抖音/TikTok 等按数字 0–5 选档平台仍只识别 OD/BD/UHD/HD/SD/LD；虎牙/斗鱼走各自的专属 `HUYA_FIXED_TIERS`/`DOUYU_RATE_BY_CODE` 表，蓝光子档位仅在两平台生效。`get_quality_index` 的折叠保证「抖音请求蓝光4M」退化为「蓝光」而非错位。
+- **虎牙 ratio 即码率上限**：实测确认 ratio 拼于 FLV/HLS URL query 选档、各 CDN 线路共享同一防盗链参数、流地址路径不变（与历史 `sFlvAntiCode` 解析行为一致）。`exsphd` 优先、`bitRate` 兜底的可用档推导，使房间未开播/无 exsphd 时仍按真实最高码率正确降级，避免「请求 30M 但房间仅 4M 却强行拼 30000」导致 403。
+- **斗鱼服务端自带就近钳制是主降级路径、本地重试链是补充**：斗鱼请求不存在的档位多数被服务端静默钳制到更低档（`rate` 字段回采），仅「原画需登录被拒」等少数场景返回 error——此时本地按 `DOUYU_RATE_DESC` 全序回退更低档重试（最多 2 档），覆盖登录态/限流等限制性失败。
+- **降级语义对齐 `QUALITY_LEVEL`**：`is_downgrade(actual, requested)` 按等级数值方向判定（如 `BD8`(3) > `BD4`(4) 为真降级），`test_bd_sub_tier_level_order` 锁死该序，防止后续维护者改错等级导致「假降级/假升级」误判。
+
+**影响范围**：
+
+- 虎牙录制：用户可在 Web 面板/URL 配置选择流畅~蓝光30M 任一档位，按所选档拉流；房间码率不足时就近降级并明确提示（日志含请求档/房间上限/实际档），无更低档自动回原画，链路不中断。
+- 斗鱼录制：用户可选高清/超清/蓝光4M/蓝光8M/原画（斗鱼无 20M/30M，选这两项按蓝光8M 拉流）；受限档位自动重试更低档，`rate` 回采真实档位写入结果。
+- 抖音/TikTok/B站/快手/网易CC/YY 等：画质选择语义与改动前完全一致（子档位折叠到 BD、索引映射未变），不受本次改动影响。
+- `get_huya_stream_url`/`get_douyu_stream_url` 返回值契约不变（`is_live`/`anchor_name`/`flv_url`/`m3u8_url`/`actual_quality` 字段齐备），上层 `select_source_url`/探针/调度逻辑无需改动。
+
+**验证**：
+
+- `py_compile`（venv Python 3.14）`src/stream.py`/`src/stream_select.py`/`src/web_config.py`/`main.py` 全过。
+- `pytest` 画质专项：`tests/test_quality_tiers.py` **29 passed**；`tests/test_stream.py` 画质相关类 + `test_bd_sub_tier_level_order` 全过；`tests/test_stream_select.py` 中文映射用例通过。
+- 全量 `pytest` 门禁 **784 passed, 2 skipped**；完整套件中 `tests/test_srt_timeline_anchor.py` 2 例偶发失败为沙箱 safe-delete 配额护栏（`OSError SAFE_DELETE_BULK_CONFIRM_REQUIRED`）误拦，隔离运行 4 passed 全过——与 AGENTS.md 记载的 harness 行为一致，非代码回归。
+- `black --check`/`isort --check-only`（line-length 120, target py314）改动文件通过；`mypy src/`/`basedpyright` 本次新增路径 0 issue（既有 `src/stream.py:609` 预存项与上次一致，非本次引入）。
+- 真机实测：虎牙 chuhe（bitRate=30000）ffprobe 采样确认七档（含原画）分辨率/帧率/码率与 `HUYA_FIXED_TIERS` 一致；斗鱼 3168536 确认 rate 钳制与回采行为（实测 rate=8200 房间下发 4→_4000.flv）。
+
+**关联**：
+
+- `src/stream_select.py` 选源/探针（2026-08-28 条目）：虎牙 FLV-first、退避窗口对齐主循环——本特性在虎牙选档成功后交其选源，链路衔接。
+- `AGENTS.md` 防回归：三条约定已落地，见「已知坑（避免回归）」——「蓝光子档位（蓝光4M/8M/20M/30M）必须折叠到 BD 索引，不得塞进通用 `QUALITY_MAPPING`」「虎牙选档 ratio 按房间码率上限推导，exsphd 优先、bitRate 兜底，不可用时就近降级或回原画」「斗鱼本地重试链只补强服务端 rate 钳制，不得替代 HLS 候选与全局退避」。
+- v4.0.9.2-dev (2026-08-29)「Web 面板录制手动控制」——本特性新增的 `web/index.html` 档位选项即在该面板的「录制控制」区同一表单内。
+
+### v4.0.9.2-dev (2026-08-29) — Web 面板录制手动控制（全局开关 + 7 处中断点 + 开始/停止按钮）+ 双轮审查修复 + 端到端冒烟与提交门禁分诊
+
+**变更摘要**：本条目系统性记录 2026-08-29 会话落地的「移除 Web 启动自动录制、改为用户手动控制」特性及其配套验证。① **特性本体**：新增全局开关 `main.recording_enabled`（默认 True，CLI/GUI 直跑不受影响）+ `main.py` 录制主链 7 处中断点 + `POST /api/recording/toggle` 端点 + 前端「开始/停止录制」按钮与 2s 轮询状态同步，Web 面板默认不自动录制；② **独立代码审查**：7 个中断点完整性、进程回收、错误样本隔离、并发安全、认证一致性全部确认，修复 3 处缺陷（含 1 个 P1 前端状态标签选择器缺陷）；③ **端到端冒烟**：真实面板（后台模式）启动 → 开始录制 → 停止录制 → 优雅退出全流程通过，`pytest` 全量 **786 passed, 2 skipped** 复跑一致；④ **提交门禁分诊**：git 提交被 Mimosa L3 门禁按未修复 high 硬拦，完成官方深度扫描（封印 `sha256:5250cdc7…`）+ 44 条告警逐条分诊，结论全部为预存误报/上游模式且无一处在本次特性代码上，分诊报告落盘待维护者放行。
+
+**涉及文件（按模块分类）**：
+
+**一、录制主链全局开关 — `main.py`**
+
+- 新增模块级 `recording_enabled: bool = True`（L210）；7 处中断点注入：直下路径 ffmpeg 轮询（L648，chunk 级中断）、`check_subprocess` 轮询（L743，命中即分级优雅终止 ffmpeg：stdin 写 'q' → terminate → kill，30s 内三级升级且每级 wait）、`start_record` 入口守卫（L1581，早返回不进入录制循环）、直下路径失败判定排除（L2102，停止中断不计失败样本）、房间主循环等待期检查（L2452）、`main()` 主循环拉起新线程前（L3038，重新开启后按配置再次拉起）、线程退出 finally 清理（L3057 调 `remove_room_from_running`，兜底覆盖停止与异常退出两条路径）。审查修复：L650 直下中断消息「或请求停止」统一为「或停止录制」。
+
+**二、运行列表清理 — `src/notify.py`**
+
+- 新增 `remove_room_from_running(record_url)`（L153）：线程退出时从 `running_list` 幂等移除（成员检查前置、仅在真正移除时递减 `monitoring`、与 `clear_record_info` 共用 `record_state_lock`），保证「停止录制」后重新开始时房间能再次拉起。
+
+**三、Web API 与状态暴露 — `src/web_api.py` + `src/recorder_status.py`**
+
+- `web_api.py` 新增 `POST /api/recording/toggle`（L249-258）：请求体 `{"enable": bool}`，切换 `main.recording_enabled` 并回显 `{"ok": true, "recording_enabled": ...}`；处于全局认证中间件覆盖内（放行名单仅登录与静态资源），与其他写端点认证模式一致。
+- `recorder_status.py` 状态 JSON 追加 `"recording_enabled": main.recording_enabled`（L109）：前端页面刷新/重连后经 2s 轮询恢复按钮真实态（与 `engine_alive` 正交）。
+
+**四、Web 面板入口 — `web.py`**
+
+- 引擎线程启动**前**置 `main.recording_enabled = False`（L188-189，先置位再 `start()` 消除启动竞态）：面板默认不自动录制，配置热加载/调度器/弹幕监控照常运行，等待用户手动触发。
+
+**五、前端 — `web/index.html` + `web/app.js` + `web/style.css`**
+
+- `index.html`（L39-46）新增「录制控制」区：状态指示（`录制运行中`/`录制已停止` 双子 span + `hidden` 切换）+ 开始/停止按钮，文案走 `data-i18n` 静态翻译（语言切换即时生效）。
+- `app.js` 新增 `renderRecordingControl`（按钮互斥启用/禁用、`engine_alive` 联动、状态标签切换）与 `toggleRecording`（POST toggle → 成功 toast → 状态回拉独立 try/catch，失败静默交由 2s 轮询同步，勿误报「操作失败」）；`I18N` 字典新增 6 键 × 4 语言（`recording.state.on/off`、`recording.start/stop`、`toast.recordingStarted/Stopped`，zh_CN/en_US/en_GB/zh_TW 齐全）。审查修复（P1）：状态标签查询原用 `#recording-state` ID 选择器而容器实为 `class="recording-state"`，标签永不切换——改为 class 选择器并补注释防回归。
+- `style.css`（L248-275）新增控制区样式：主色开始按钮/红色停止按钮/禁用态（透明度 + 禁用鼠标事件），与既有卡片风格一致。
+
+**六、测试（新增 + 修改）**
+
+- `tests/test_web_api.py`：新增 `TestRecordingToggle`（2 例——无认证 401、开关翻转写入真实模块属性）。
+- `tests/test_record_failure_feedback.py`（**新增文件**）：`test_check_subprocess_interrupts_when_recording_disabled` 验证 `recording_enabled=False` 时 ffmpeg 轮询循环中断、优雅终止恰好调用一次、不记任何成功/失败样本；全程 monkeypatch（无 `patch.dict(os.environ)`）、`_RunningPopen` 为类且定义 `__class_getitem__`、经 `types.SimpleNamespace(**vars(subprocess))` 替换 main 全局引用——符合 AGENTS.md 测试编写强制约定。
+
+**七、文档（新增）**
+
+- `docs/web-recording-control-changelog.md`（**新增**）：特性改动汇总——需求背景、设计方案（全局开关 + 多入口中断）、关键设计决策（含「停止语义为主动分级优雅终止」的表述更正）、集成点、测试验证、已知限制、后续计划 5 项闭环（提交/审查/冒烟/持久化评估/单房间开关决策）。
+- `docs/security-triage-2026-08-29.md`（**新增**）：Mimosa L3 提交门禁 44 条告警逐条分诊——SSRF（硬编码官方下载源）/路径穿越（固定常量路径 + `clean_name` 既有净化防线 `main.rstr` 含 `/ \ : .`）/命令注入（PyExecJS 内普通 JS 运算）/硬编码凭据（平台公开客户端 token）/弱随机数（非加密抖动），全部预存误报或上游模式，Zip-Slip 已有 `realpath` 防护，无一处在本次特性代码上。
+- `CODE_WIKI.md` / `CODE_WIKI_EN.md`：更新日志新增本条目（中英同步）。
+
+**改动说明**：
+
+- **停止语义是主动分级优雅终止，不是「自然收尾」**：轮询 1s 周期命中开关关闭即终止 ffmpeg——先写 'q' 使其写完文件尾（TS/FLV/分段不损坏），再按 terminate → kill 升级；进程被 wait 回收、注册表注销，无孤儿 ffmpeg。早期文档「自然收尾」表述已更正（避免后续维护者误改中断逻辑）。
+- **错误统计隔离是熔断体系的前提**：停止期间的中断不计 `record_error` 样本，防止用户「停止录制」被误判为批量录制失败而触发错误背压降容或按平台熔断。
+- **`recording_enabled` 不持久化（后续计划条目 4 评估结论）**：持久化 `True` 会使面板重启后自动恢复录制，从后门重新引入「Web 启动即自动录制」——正是本特性 P0 需求 1 要移除的行为；持久化 `False` 与默认值无差异。保持会话级运行时开关（类比 OBS「开始/停止推流」不跨会话记忆），每次启动回到停止态。
+- **单房间开关维持延后（条目 5）**：与已知限制 #1 决策一致——Web 场景「全部录制/全部停止」为最常见需求，按 URL 粒度控制待需求出现再扩展（需引入 `dict[str, bool]` 替代全局 bool）。
+- **7 处中断点均为提前返回模式**：不改变正常流程路径；唯一固有窗口是「循环顶检查通过后、ffmpeg 启动前」点停止，此时 ffmpeg 拉起后 ≤1s 被 L743 终止，与 `exit_recording` 既有语义一致。
+
+**影响范围**：
+
+- Web 面板启动后不再自动拉起任何房间线程；「开始录制」后主循环按 URL 配置逐个拉起，「停止录制」后房间线程退出且运行列表被清理，可随时重新开始。
+- CLI（`main.py` 直跑）与 GUI 入口行为完全不变（`recording_enabled` 默认 True）。
+- 停止录制期间配置热加载、并发调度器、弹幕监控枢纽保持运行（仅不拉起/继续录制线程）。
+- 其余行为（调度语义、选源顺序、探针容错、UA 约定等）均不变。
+
+**验证**：
+
+- `pytest` 全量 **786 passed, 2 skipped**（2026-08-29 复跑一致）；`black --check --line-length 120 --target-version py314` 与 `isort --check-only --profile black --line-length 120` 通过；`mypy src/` 仅存预存 `src/stream.py:609` 错误（非本次引入）。
+- 端到端冒烟（真实面板 `python web.py` 后台模式 + API 驱动）：启动即 `recording_enabled=false`/`recording_count=0`/`engine_alive=true` → toggle 开启后约 20s 内 `monitoring=3`（3 个房间线程拉起）→ toggle 停止后 3s 内 `monitoring=0`/`recording_count=0` → CTRL_BREAK 优雅退出，日志「正在清理所有 ffmpeg 进程」、端口关闭、无 ffmpeg 残留、无残留下载文件。（冒烟时段房间均未开播，`recording_count` 恒为 0；「录制中停止」的分级终止路径由上述单测覆盖。）
+- 提交门禁：Mimosa git-gate 两次拦截（graded 模式 high 必须 deny、无 findings 白名单机制）；按门禁要求完成官方深度扫描（scanId `scan-2026-08-29T02-38-21.160Z-4c613b3699ed`，封印 `sha256:5250cdc7…`）+ 44 条逐条分诊，代码无需修改，提交待维护者调整门禁策略或自行放行。
+
+**关联**：
+
+- `docs/web-recording-control-changelog.md`：特性改动汇总与后续计划闭环记录（含审查修复明细 3.4 节）。
+- `docs/security-triage-2026-08-29.md`：门禁告警分诊明细与两条放行路径。
+- v4.0.9.1-dev (2026-08-27)「录制结果反馈调度器」——停止中断的错误样本隔离建立在其 `record_error`/`record_success` 语义之上；`check_subprocess` 提前中断机制（弹幕先 flush 再终止 ffmpeg）为既有行为，本特性仅在触发条件中增加 `recording_enabled`。
+
+### v4.0.9.2-dev (2026-08-28) — 性能审查优化落地（P1~P5 + 探针客户端复用 + 退避窗口自愈 + Web 日志 sink 重建 + 虎牙 FLV-first）
+
+**变更摘要**：本条目系统性记录 2026-08-28 会话对代码库的性能审查与优化，以及真机验证中衍生的四个修复。① **性能审查**（本地 HTTP/1.1 实测，200 次请求）：定位 7 个瓶颈 P1~P7，落地 **P1**（探针 `httpx.Client` 整轮复用）、**P2**（`sync_http.Session` 线程级复用）、**P3**（主循环集合化去重）、**P4**（scheduler 计数增量 + `import time` 提顶层）、**P5**（正则提模块级常量）；P6（配置脏检查）待评估、P7（`_resolve_platform_stream` 改 dict 分派）明确不做；② **真机验证**（虎牙/斗鱼三轮）推翻多项早期假设，定位虎牙冷启动 HLS 探针假绿根因——退避窗口固定 60s < 主循环间隔 120s，自愈闭环从未生效（修复一/二）；③ **Web 后台模式 loguru 控制台 sink 写向被隐藏窗口**（修复三）；④ **虎牙冷启动首轮仍假绿一次**，实施 FLV-first 选源（修复四）。全量门禁 **751 passed, 2 skipped**。
+
+**涉及文件（按模块分类）**：
+
+**一、流地址探针与选源（性能 P1 + 修复一/四）— `src/stream_select.py`**
+
+- **P1 探针客户端复用**：`select_source_url` 整轮候选共用一支 `httpx.Client`（`finally` 关闭，两个「无候选可校验」分支提前 return 避免零探针路径白建客户端）；`_validate_stream_url` 新增可选 `client` 参数（`owns_client` 保证只关闭自己建的）；headers 改请求级传参（`head` / Range-`get` 用 `{**headers, "Range": "bytes=0-0"}` / `_confirm_get_ok` 的 `stream`）；`_confirm_get_ok` 新增 `headers: Mapping[str, str]` 形参；新增 `_PROBE_TIMEOUT_SECONDS = 5` 统一超时取值。刻意**不做**按 `(proxy, verify)` 的模块级全局缓存（虎牙 CDN 按连接预算限流，常驻 keepalive 与紧随其后的 ffmpeg 拉流争抢同一份预算，方向与优化目标相反）。
+- **修复一 退避窗口对齐主循环**：新增 `_PROBE_BACKOFF_INTERVAL_MARGIN = 70.0`；`_probe_backoff_window()` = `max(_PROBE_BACKOFF_SECONDS, main.delay_default + 70.0)`（原固定 60s 因 < 120s 循环间隔，退避一次都没命中过）；`_mark_probe_reject` / `_probe_in_backoff` 一律改走该函数。新增 `clear_ffmpeg_reject(url, platform)`（与既有 `mark_ffmpeg_reject` 同白名单、同退避键，对称清除）。
+- **修复四 虎牙 FLV-first**：新增 `_FLV_FIRST_PLATFORMS = ("虎牙直播",)`（**斗鱼绝不加入**，其游客态 FLV 约 70s 被掐必须 HLS-first）；`select_source_url` 三分块重构为统一有序序列 `[(url, is_hls)]`，虎牙反转为 FLV → HLS → record_url；h265 候选在构建时即剔除（修掉旧实现「h265 → 立即重试整组 HLS」在默认顺序下白烧一遍的重复探针）；`last_resort` 统一为「过滤后序列末位 且 无 record_url 备选」。
+
+**二、录制主链（修复二）— `main.py`**
+
+- `check_subprocess` 成功分支（解析 `ffmpeg_command` 的 `-i` 后地址）调用 `clear_ffmpeg_reject(...)`，与失败分支的 `mark_ffmpeg_reject` 配对——撤销该 host+路径的退避，避免已恢复的线路被继续跳过；顶部 import 补 `clear_ffmpeg_reject`。
+
+**三、并发调度（性能 P4）— `src/scheduler.py`**
+
+- `import time` 提至模块顶层（`_now` / `_sleep` 不再函数内 import）；`PlatformBreaker._fail_count` 改为增量计数（样本 deque 满时扣减被挤出旧样本、`clear()` 归零，O(1) 缩短持锁时长）；`ConcurrencyScheduler._global_error_count` + `_push_global_error()`（与 `_fail_count` 同一增量模式，O(1) 替代 `sum(self._samples)` 的 O(40)）。
+
+**四、同步 HTTP（性能 P2）— `src/sync_http.py`**
+
+- 新增 `_thread_local = threading.local()` 与 `_session()`（线程局部复用 `requests.Session`，Session 非线程安全）；代理分支的 `get` / `post` 改走 `_session()`（125 个调用点受益）。
+
+**五、工具 / 解析 / 配置（性能 P5）**
+
+- `src/utils.py`：`remove_emojis` 的 ~400 字符表情模式提为模块级常量 `_EMOJI_PATTERN`（每次调用不再重复 `re.compile`）。
+- `src/stream_select.py`：`contains_url` 模式提为模块级常量 `_URL_PATTERN`。
+- `src/spider.py`：新增 `_BANDWIDTH_PATTERN` / `_DOUYIN_HEVC_FLV_PATTERN`，替换 4 处函数内 `re.compile`（`spider.py:178/202/1844/1918`）。
+- `src/web_config.py`：`update_config_line` 的「按 key 编译正则」改 `functools.lru_cache(maxsize=128)`（`web_config.py:228`）。
+
+**六、主循环去重（性能 P3）— `main.py`**
+
+- `url_comments` / `line_list` / `url_line_list` 由 list 改 `set`；`check_subprocess` 每秒每房间扫 `url_comments` 的整表重建 `[i for i in url_comments if url not in i]` 改为 O(1) `discard(url)`；`text_no_repeat_url` 改 `dict.fromkeys` 保序去重（主循环 O(N²) 降为 O(1)）。
+
+**七、日志（修复三）— `src/logger.py` + `web.py`**
+
+- `src/logger.py`：新增模块级 `_console_sink_id` 捕获 `logger.add` 返回值（第 36/58 行）；`rebind_console_sink()`（第 45 行）先移除旧 sink（对已失效 id 容错 `ValueError`）→ 按**当前** `sys.stderr` 重建（非 TTY 关 `colorize`、避免 ANSI 污染日志文件；`sys.stderr is None` 时静默跳过）；`__all__` 导出 `rebind_console_sink`。
+- `web.py`：`_enter_background_mode`（`web.py:103`）在把 `sys.stdout/stderr` 重定向到 `logs/web_console.log` 并 `SW_HIDE` 隐藏控制台窗口**之后**，调用 `rebind_console_sink()` 重建控制台 sink（loguru 的 sink 在 `add()` 时绑定具体对象、不随 `sys.stderr` 后续重新赋值而变——不重建则全部 DEBUG/WARNING 写向被隐藏窗口）。
+
+**八、测试（新增 + 修改）**
+
+- `tests/test_stream_select.py`：3 处客户端替身的 `head` / `stream` 补 `headers` 形参；`test_select_source_url_huya_backoff_round_straight_to_ffmpeg` 断言由「构造数 == 0」改「探针请求数 == 0」（客户端上提后更贴近真实不变式：退避窗口内零网络活动）；新增 `test_select_source_url_shares_one_client_and_sends_headers_per_request`（整轮只构造 1 支客户端、每请求带齐 UA/Referer/Cookie）、`test_backoff_window_covers_main_loop_interval`（覆盖 124s/185s 实际节奏 + 间隔调小时回落）、`test_clear_ffmpeg_reject_removes_backoff`、`test_huya_flv_first_prefers_flv_on_cold_start`、`test_huya_flv_failed_falls_back_to_hls`、`test_douyu_keeps_hls_first`。
+- `tests/test_sync_http.py`：4 个代理用例 patch 目标由 `src.sync_http.requests` 改为 `src.sync_http._session`。
+- `tests/test_logger_console_sink.py`（**新增**，3 例）：跟随当前 stderr / 替换而非追加 / `None` 时静默（断言前须 `logger.complete()` 排空 `enqueue=True` 异步队列）。
+
+**九、文档（本条目）**
+
+- `CODE_WIKI.md` / `CODE_WIKI_EN.md`：更新日志新增本条目（中英同步）。
+- `PERF_REVIEW_2026-08-28.md`（**新增**）：性能审查报告（瓶颈清单 P1~P7、本地基准实测、三轮真机验证结论、三处误判口径校正）。
+- `AGENTS.md`：补 6 条防回归约定（探针客户端复用作用域 = 单次选源、禁止为保险关 keepalive、退避窗口须 ≥ 主循环周期、录制成功清除退避、Web 后台重建 sink、虎牙 FLV-first 且斗鱼不加入）。
+
+**改动说明**：
+
+- **P1 真实提速约 5.5× 而非 36×**：原实现 `with httpx.Client(...)` 内 HEAD 与 Range-GET 已复用同一条连接（每候选 1 条，非每请求 1 条）；36× 是「每请求新建 Client」的上界场景，报告已加口径校正注。
+- **「headers 未透传」不是缺陷**：httpx `_merge_headers` 是「合并」非「替换」，client 级 UA/Referer/Cookie 仍生效；改成请求级是客户端在多个候选间复用后的**必要配套**（业务头不能再挂 client 级，否则候选互相污染）。
+- **退避窗口失配是真因**：固定 60s < 120s 循环间隔，ffmpeg 快速失败记入退避后下一轮在 T+124s 才到、早已过期 → 又撞同一条死线路。历史日志中「CDN 探针退避中」告警**从未出现**即铁证。margin 取 70s 覆盖最坏节奏「单轮等待 = delay_default + 抖动(±5s) 且 `main.py` 错误窗口满 5 次时再 +60s」；偏长代价小（末位候选本就放行 ffmpeg、且成功即清除），偏短 = 假绿死循环，故宁长勿短。
+- **并发连接峰值实测恒为 1**：候选串行校验，复用不抬升瞬时连接数、反而净减新建连接数（原 4 条 → 复用 1 条，70.88ms → 12.78ms）。据此「P1 加重虎牙连接预算消耗」疑虑已证伪 → 不做全局缓存，且**禁止为保险关 keepalive**（实测关 keepalive 反而 8 连接 / 72.99ms，把收益全退掉）。
+- **虎牙 FLV-first 收益**：三轮真机（880214 / chuhe 等）实证 HLS 三条 CDN（hs/tx/al）冷启动探针假绿（探针 200/206、ffmpeg 打开即 403，返回码 3436169992），FLV 每轮稳定可用（最长连录 6 分钟）。FLV-first 把冷启动假绿损失从约 2 分钟（一个退避周期）降到零；FLV 不可用时仍按序回退 HLS，链路保留。
+
+**影响范围**：
+
+- 虎牙选源行为变更（退避窗口对齐 + 成功清除 + FLV-first）：修复前 5 次秒退、12 分钟才稳定；修复后仅 1 次秒退、2 分钟即稳定（第三轮真机 00:30–00:38 验证：退避告警首现、FLV 录 6 分 02 秒）。
+- Web 面板模式日志完整落盘 `logs/web_console.log`（修复前只剩 `print` 输出，DEBUG/WARNING 写向被 SW_HIDE 隐藏的窗口）。
+- 性能：80 房间 × 10 探针/轮选源耗时约 12.7s → 1.15s（P1 整轮复用）；主循环去重 O(N²) → O(1)；scheduler 计数增量缩短锁竞争。
+- 「最大同时录制数」调度语义、HLS/FLV 末位放行、探针节流/抖动、`_confirm_get_ok` 重试容错、流地址校验容错语义**均保持不变**（仅虎牙候选序列反转 + 退避窗口动态化）。
+
+**验证**：
+
+- `compileall`（venv Python 3.14）全过；`black --check --line-length 120 --target-version py314` 全 files unchanged；`isort --check-only --profile black --line-length 120` 过；`mypy src/` + `mypy --platform linux src/` 0 issue；`basedpyright` 0 errors / 0 warnings / 0 notes。
+- `pytest` 全量：**751 passed, 2 skipped**（2 个 srt 失败为沙箱删除配额、非回归）。
+- 三轮真机（虎牙 880214 / chuhe、斗鱼、抖音）：退避告警首次出现、FLV 稳定录 6 分钟、`web_console.log` 含 DEBUG/WARNING、冷启动首轮预期 FLV 零秒退（修复四待冷启动独立复验）。
+- 本地 HTTP/1.1 基准：探针复用峰值连接 1 / 12.78ms；keepalive 关闭反而 8 连接 / 72.99ms（禁止项已反向验证）。
+
+**关联**：
+
+- `PERF_REVIEW_2026-08-28.md`：本条目对应的性能审查报告（含三处误判校正）。
+- `AGENTS.md` 防回归条目：虎牙退避 / FLV-first / 探针客户端作用域 / keepalive / 退避窗口 ≥ 主循环周期 / Web 后台 sink。
+- v4.0.9.1-dev (2026-08-27)「录制结果反馈调度器」—— `mark_ffmpeg_reject` 即该框架；本次补 `clear_ffmpeg_reject` 配对与 `_PROBE_BACKOFF_INTERVAL_MARGIN` 动态化。
 
 ### v4.0.9.1-dev (2026-08-28) — CI 工作流优化与网络安装重试收敛（retry 复合动作）+ PEP 758 格式化随 black 26 落地 + i18n 提取器修正 + 仓库元数据八文件同步
 

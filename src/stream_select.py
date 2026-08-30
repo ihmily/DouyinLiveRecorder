@@ -28,12 +28,15 @@ import main
 from src import http_config as _http_config
 from src import utils
 
+# 类 URL 片段匹配模式（模块级编译一次）：主循环每解析一行 URL 配置就调用 contains_url，
+# 80+ 房间时每轮上百次；原实现每次走 re 模块的模式串缓存查表，预编译后省去查表与解析。
+_URL_PATTERN = re.compile(r"(https?://)?(www\.)?[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)+(:\d+)?(/.*)?")
+
 
 # 判断 string 中是否包含类 URL 片段（用于区分配置行里的画质字段与网址）；返回布尔值
 def contains_url(string: str) -> bool:
     # 检查字符串是否包含 URL
-    pattern = r"(https?://)?(www\.)?[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)+(:\d+)?(/.*)?"
-    return re.search(pattern, string) is not None
+    return _URL_PATTERN.search(string) is not None
 
 
 # 清洗 input_text 为合法文件名（过滤非法字符、可选去表情、& 换下划线）；返回清洗结果，全空时返回"空白昵称"
@@ -48,10 +51,23 @@ def clean_name(input_text: str) -> str:
     return cleaned_name or "空白昵称"
 
 
-# 把中文画质名 qn（原画/蓝光/超清/高清/标清/流畅）映射为内部画质代码（OD/BD/UHD/HD/SD/LD），未知值回退 "OD"
+# 把中文画质名 qn 映射为内部画质代码，未知值回退 "OD"。
+# 蓝光细粒度档位（蓝光4M/8M/20M/30M）：虎牙/斗鱼按各自专属档位表处理（见 src/stream.py），
+# 其他平台经 get_quality_index 折叠到 BD 槽位。
 def get_quality_code(qn: str) -> str:
-    # 将画质描述转为代码（原画/超清/高清等）
-    quality_zh_to_en = {"原画": "OD", "蓝光": "BD", "超清": "UHD", "高清": "HD", "标清": "SD", "流畅": "LD"}
+    # 将画质描述转为代码（原画/蓝光/超清/高清等）
+    quality_zh_to_en = {
+        "原画": "OD",
+        "蓝光": "BD",
+        "蓝光30M": "BD30",
+        "蓝光20M": "BD20",
+        "蓝光8M": "BD8",
+        "蓝光4M": "BD4",
+        "超清": "UHD",
+        "高清": "HD",
+        "标清": "SD",
+        "流畅": "LD",
+    }
     # 未知画质回退到 OD，避免返回 None 导致后续比较逻辑出错
     return quality_zh_to_en.get(qn, "OD")
 
@@ -184,9 +200,33 @@ def _throttle_probe(url: str) -> None:
 # 若对斗鱼启用退避跳过探针，会导致斗鱼 HLS-first 回退 FLV（游客态约 70 秒被掐）回归，
 # 绝不可扩大名单。
 _PROBE_BACKOFF_PLATFORMS = ("虎牙直播",)
+# FLV-first 平台：select_source_url 的候选尝试顺序反转为 FLV → HLS → record_url。
+# 依据（2026-08-28/29 三轮真机，虎牙 880214 与 chuhe 两房间复现）：HLS 三条 CDN 线路
+# （hs/tx/al.hls.huya.com）冷启动探针假绿——探针 200/206 而 ffmpeg 打开即 403（返回码
+# 3436169992），且 TX/AL 在次轮探针也稳定 403；FLV 则每轮稳定可用（最长连录 6 分钟）。
+# 恒定 FLV 优先把「冷启动假绿损失」从约 2 分钟（一个完整退避周期）降为零；FLV 不可用时
+# 仍按序回退 HLS，链路保留。斗鱼绝不加入：其游客态 FLV 长连接约 70 秒被 CDN 掐断，
+# 必须 HLS 优先（见 tests 与 AGENTS.md 既有记载）。
+_FLV_FIRST_PLATFORMS = ("虎牙直播",)
+# 退避窗口下限（秒）。实际窗口由 _probe_backoff_window() 计算，必须 ≥ 一个主循环周期。
 _PROBE_BACKOFF_SECONDS = 60.0
+# 覆盖主循环间隔的余量（秒）：main.py 的单轮等待 = delay_default + 抖动(±5s)，且错误窗口
+# 满 5 次时再 +60s。取 70s 以覆盖「一个完整周期 + 抖动 + 最坏错误加成」。
+# 退避偏长的代价很小（末位候选本就放行给 ffmpeg，且录制成功会立即清除退避），
+# 偏短的代价是假绿死循环，故宁长勿短。
+_PROBE_BACKOFF_INTERVAL_MARGIN = 70.0
 _probe_backoff: dict[str, float] = {}
 _probe_backoff_lock = threading.Lock()
+
+
+# 计算当前退避窗口长度：必须至少跨过一个主循环周期，否则闭环恒不成立。
+# 原实现固定 60s，而 main.py 的循环间隔（delay_default）默认为 **120s**——ffmpeg 快速失败
+# 记入退避后，下一轮在 T+124s 才到，早已超出 60s 窗口，于是又去撞同一条死线路。实测
+# 虎牙 880214 即此形态：两轮日志中「CDN 探针退避中」告警一次都没出现，房间在
+# 「探针假绿 → ffmpeg 403」之间无限循环（间隔实测 ~124s，重试 7 轮仅 2 轮侥幸录上）。
+def _probe_backoff_window() -> float:
+    interval = float(main.delay_default or 0)
+    return max(_PROBE_BACKOFF_SECONDS, interval + _PROBE_BACKOFF_INTERVAL_MARGIN)
 
 
 # 提取 url 的退避键（scheme://host/路径，去掉 query）：虎牙每轮解析返回新 token（query 变化）
@@ -202,10 +242,21 @@ def _mark_probe_reject(url: str, platform: str | None) -> None:
         return
     key = _probe_backoff_key(url)
     now = time.time()
+    window = _probe_backoff_window()
     with _probe_backoff_lock:
-        for stale in [k for k, ts in _probe_backoff.items() if now - ts > _PROBE_BACKOFF_SECONDS]:
+        for stale in [k for k, ts in _probe_backoff.items() if now - ts > window]:
             _probe_backoff.pop(stale, None)
         _probe_backoff[key] = now
+
+
+# 撤销一次退避记录：该地址已被实际拉流验证可用（录制成功），先前的拒绝（探针假绿或
+# 偶发限流）已解除。不清除会让明明恢复的线路在窗口内继续被跳过、白白回退到次优线路。
+def _clear_probe_reject(url: str, platform: str | None) -> None:
+    if platform not in _PROBE_BACKOFF_PLATFORMS:
+        return
+    key = _probe_backoff_key(url)
+    with _probe_backoff_lock:
+        _probe_backoff.pop(key, None)
 
 
 # 查询 url 是否处于探针退避窗口内（仅对退避名单内平台生效）。
@@ -214,7 +265,7 @@ def _probe_in_backoff(url: str, platform: str | None) -> bool:
         return False
     with _probe_backoff_lock:
         ts = _probe_backoff.get(_probe_backoff_key(url))
-        return ts is not None and time.time() - ts <= _PROBE_BACKOFF_SECONDS
+        return ts is not None and time.time() - ts <= _probe_backoff_window()
 
 
 # ffmpeg 录制失败侧的反馈入口：录制「快速失败」（输入打开即被拒，如虎牙 HS 线路
@@ -226,6 +277,17 @@ def _probe_in_backoff(url: str, platform: str | None) -> bool:
 # 同一白名单，当前仅虎牙）。
 def mark_ffmpeg_reject(url: str, platform: str | None) -> None:
     _mark_probe_reject(url, platform)
+
+
+# ffmpeg 录制成功侧的反馈入口（与 mark_ffmpeg_reject 严格对称：同一白名单、同一退避键）：
+# 该地址本轮实际拉流成功，说明先前记入的退避已过期或属误判，立即撤销，避免下一轮
+# 明明可用却被跳过。platform 不在退避名单内时为无操作。
+def clear_ffmpeg_reject(url: str, platform: str | None) -> None:
+    _clear_probe_reject(url, platform)
+
+
+# 单次探针的超时秒数（HEAD / Range-GET / GET 复核共用）
+_PROBE_TIMEOUT_SECONDS = 5
 
 
 # FLV/record_url 源 HEAD 通过后的 GET 复核（流式请求、不读 body）：
@@ -243,13 +305,16 @@ def _confirm_get_ok(
     client: httpx.Client,
     url: str,
     head_status: int,
+    headers: Mapping[str, str],
     last_resort: bool = False,
     platform: str | None = None,
 ) -> bool:
     reject_status: int | None = None
     for attempt in range(2):
         try:
-            with client.stream("GET", url, follow_redirects=True) as probe:
+            # headers 由调用方逐请求显式传入：探针客户端在多个候选间复用，不能再把
+            # UA/Referer/Cookie 挂在 client 上（否则各候选互相污染）
+            with client.stream("GET", url, headers=headers, follow_redirects=True) as probe:
                 if probe.status_code not in (401, 403):
                     if attempt:
                         logger.debug(f"流地址校验: {url} - GET 复核重试通过({probe.status_code})，先前拒绝为偶发")
@@ -278,12 +343,17 @@ def _confirm_get_ok(
 def _validate_stream_url(
     url: str,
     proxy_addr: str | None = None,
-    timeout: int = 5,
+    timeout: int = _PROBE_TIMEOUT_SECONDS,
     verify: bool | None = None,
     platform: str | None = None,
     cookies: str | None = None,
     last_resort: bool = False,
+    client: httpx.Client | None = None,
 ) -> bool:
+    # client 为可选复用的 httpx 客户端：由 select_source_url 传入时在本轮全部候选探针间
+    # 复用（keepalive 生效、省去每候选重建 SSLContext 与传输层的开销）；不传时自建自管，
+    # 与旧行为一致。传入时 verify/timeout/proxy 以该 client 为准（其已按同样规则构造），
+    # 本函数不再覆盖——多候选的代理与 SSL 校验开关本就相同。
     # 校验流地址可达性（与 async_http.get_response_status 语义保持一致）：
     # 1) 未显式指定时沿用全局 SSL 验证开关，避免与解析阶段的校验行为不一致
     #    （用户关闭证书验证后，同步校验仍验证证书会导致误判不可达）；
@@ -296,6 +366,7 @@ def _validate_stream_url(
     # 5) 未显式指定 verify 时取平台有效校验开关：由「是否启用https录制」统一联动——
     #    开启=https 拉流且全局禁用证书验证；关闭=http 拉流（恢复默认严格校验）。
     #    平台覆盖受 https_recording_enabled 门控，保证校验器与录制路径一致。
+    # verify 仍按原规则解析（供自建 client 时使用）；传入 client 时其值被忽略
     if verify is None:
         verify = _http_config.get_effective_ssl_verify(platform)
     headers: dict[str, str] = {}
@@ -322,87 +393,110 @@ def _validate_stream_url(
     # 同 host 探针节流（退避未命中才走到这里）：补足与上次同 host 探针的最小间隔，
     # 消除多房间并发监控下的毫秒级连击探针——降低风控被误触发的概率。
     _throttle_probe(url)
+    # 探针客户端：select_source_url 传入时在整轮候选间复用（keepalive 生效、省去每候选
+    # 重建 SSLContext/连接池的开销——实测构造一个 httpx.Client 约 6.7ms、复用后单次探针
+    # 约 0.77ms）；未传入时自建自管，行为与旧版一致。客户端在多个候选间共享，故 UA /
+    # Referer / Cookie 不能再挂到 client 上，必须逐请求显式传入（语义与原先挂在 client
+    # 上时完全等价：httpx 的 _merge_headers 本就是「client 头为底、请求头覆盖」）。
+    owns_client = client is None
+    probe_client: httpx.Client | None = client
     try:
-        with httpx.Client(timeout=timeout, proxy=proxy_addr, verify=verify, headers=headers) as client:
-            response = client.head(url, follow_redirects=True)
-            content_type = response.headers.get("content-type", "").lower()
-            if response.status_code in (401, 403):
+        if probe_client is None:
+            probe_client = httpx.Client(timeout=timeout, proxy=proxy_addr, verify=verify)
+        response = probe_client.head(url, headers=headers, follow_redirects=True)
+        content_type = response.headers.get("content-type", "").lower()
+        if response.status_code in (401, 403):
+            _mark_probe_reject(url, platform)
+        # m3u8 源：抖音等 CDN 对 HEAD 常回 4xx（如 405）+ text/html，但 GET 实际可拉流。
+        # 优先做 Range GET 探测，绕过 HEAD 不可靠的 content-type/状态码（与 async_http.get_response_status 保持一致）。
+        if ".m3u8" in url:
+            if response.status_code == 200 or any(
+                k in content_type for k in ("video", "octet-stream", "flash", "mpegurl")
+            ):
+                return True
+            # Range-GET 401/403 先隔 _GET_RECHECK_INTERVAL 原样重试一次再定罪（与 _confirm_get_ok
+            # 同语义）：斗鱼 hw/虎牙 al 等 CDN 对毫秒级连击探针（HEAD→GET）偶发 403，同 URL
+            # 片刻后重试即 200（探针误杀、ffmpeg 单次 GET 正常）。HLS 优先于 FLV 录制——
+            # 斗鱼游客态 FLV 长连接约 70 秒被 CDN 掐断，HLS 逐段拉取免疫，须尽力救回。
+            probe: httpx.Response | None = None  # 失败路径（last_resort/告警）需 Range-GET 结果；先置 None 避免未绑定
+            for attempt in range(2):
+                # 显式合并 headers 与 Range（与 async_http.py 同语义）：客户端在候选间复用，
+                # Range 只能作为请求级头附加，不能覆盖录制所需的 UA/Referer/Cookie
+                probe = probe_client.get(url, headers={**headers, "Range": "bytes=0-0"}, follow_redirects=True)
+                if probe.status_code in (200, 206):
+                    if attempt:
+                        logger.debug(f"流地址校验: {url} - Range-GET 重试通过({probe.status_code})，先前拒绝为偶发")
+                    return True
+                if probe.status_code not in (401, 403):
+                    break  # 非探针误杀类拒绝（如 404），不重试
                 _mark_probe_reject(url, platform)
-            # m3u8 源：抖音等 CDN 对 HEAD 常回 4xx（如 405）+ text/html，但 GET 实际可拉流。
-            # 优先做 Range GET 探测，绕过 HEAD 不可靠的 content-type/状态码（与 async_http.get_response_status 保持一致）。
-            if ".m3u8" in url:
-                if response.status_code == 200 or any(
-                    k in content_type for k in ("video", "octet-stream", "flash", "mpegurl")
-                ):
-                    return True
-                # Range-GET 401/403 先隔 _GET_RECHECK_INTERVAL 原样重试一次再定罪（与 _confirm_get_ok
-                # 同语义）：斗鱼 hw/虎牙 al 等 CDN 对毫秒级连击探针（HEAD→GET）偶发 403，同 URL
-                # 片刻后重试即 200（探针误杀、ffmpeg 单次 GET 正常）。HLS 优先于 FLV 录制——
-                # 斗鱼游客态 FLV 长连接约 70 秒被 CDN 掐断，HLS 逐段拉取免疫，须尽力救回。
-                probe: httpx.Response | None = (
-                    None  # 失败路径（last_resort/告警）需 Range-GET 结果；先置 None 避免未绑定
-                )
-                for attempt in range(2):
-                    probe = client.get(url, headers={"Range": "bytes=0-0"}, follow_redirects=True)
-                    if probe.status_code in (200, 206):
-                        if attempt:
-                            logger.debug(f"流地址校验: {url} - Range-GET 重试通过({probe.status_code})，先前拒绝为偶发")
-                        return True
-                    if probe.status_code not in (401, 403):
-                        break  # 非探针误杀类拒绝（如 404），不重试
-                    _mark_probe_reject(url, platform)
-                    if attempt == 0:
-                        time.sleep(_recheck_delay())
-                # 循环已至少执行一次，probe 必非空；断言收窄类型供后续日志引用
-                assert probe is not None
-                if last_resort:
-                    logger.warning(
-                        f"流地址校验: {url} - HEAD={response.status_code}, Range-GET={probe.status_code}；"
-                        "已无备选源，仍交由 ffmpeg 尝试（探针与 ffmpeg 客户端指纹不同）"
-                    )
-                    return True
-                logger.warning(
-                    f"流地址校验失败: {url} - HEAD={response.status_code}, Range-GET={probe.status_code}, "
-                    f"content-type={probe.headers.get('content-type', '')}"
-                )
-                return False
-            # 非 m3u8 源（flv/record_url）沿用 content-type 启发式；HEAD 判定通过后再做
-            # GET 复核（流式），杜绝 HEAD=200/GET=403 的“假绿”（ffmpeg 实际拉流是 GET）
-            if any(k in content_type for k in ("video", "octet-stream", "flash", "mpegurl")):
-                return _confirm_get_ok(client, url, response.status_code, last_resort=last_resort, platform=platform)
-            if "text/html" in content_type or "application/json" in content_type:
-                if last_resort:
-                    # 斗鱼 hw CDN 对探针 HEAD 回 405+text/html（禁用 HEAD 方法），ffmpeg 实际 GET 拉流正常。
-                    # 末位候选（无备选可回退）稳定拒绝也仅告警放行、交由 ffmpeg 定夺，
-                    # 避免 content-type 启发式误杀可用源导致整轮放弃录制。
-                    logger.warning(
-                        f"流地址校验: {url} - status_code={response.status_code}, content-type={content_type}；"
-                        "已无备选源，仍交由 ffmpeg 尝试（探针与 ffmpeg 客户端指纹不同）"
-                    )
-                    return True
-                logger.warning(
-                    f"流地址校验失败（返回非流媒体内容）: {url} - status_code={response.status_code}, content-type={content_type}"
-                )
-                return False
-            if response.status_code == 200:
-                return _confirm_get_ok(client, url, response.status_code, last_resort=last_resort, platform=platform)
+                if attempt == 0:
+                    time.sleep(_recheck_delay())
+            # 循环已至少执行一次，probe 必非空；断言收窄类型供后续日志引用
+            assert probe is not None
             if last_resort:
-                # 同上：末位候选的稳定拒绝（非 200 且无法识别 content-type）仅告警放行
+                logger.warning(
+                    f"流地址校验: {url} - HEAD={response.status_code}, Range-GET={probe.status_code}；"
+                    "已无备选源，仍交由 ffmpeg 尝试（探针与 ffmpeg 客户端指纹不同）"
+                )
+                return True
+            logger.warning(
+                f"流地址校验失败: {url} - HEAD={response.status_code}, Range-GET={probe.status_code}, "
+                f"content-type={probe.headers.get('content-type', '')}"
+            )
+            return False
+        # 非 m3u8 源（flv/record_url）沿用 content-type 启发式；HEAD 判定通过后再做
+        # GET 复核（流式），杜绝 HEAD=200/GET=403 的“假绿”（ffmpeg 实际拉流是 GET）
+        if any(k in content_type for k in ("video", "octet-stream", "flash", "mpegurl")):
+            return _confirm_get_ok(
+                probe_client, url, response.status_code, headers, last_resort=last_resort, platform=platform
+            )
+        if "text/html" in content_type or "application/json" in content_type:
+            if last_resort:
+                # 斗鱼 hw CDN 对探针 HEAD 回 405+text/html（禁用 HEAD 方法），ffmpeg 实际 GET 拉流正常。
+                # 末位候选（无备选可回退）稳定拒绝也仅告警放行、交由 ffmpeg 定夺，
+                # 避免 content-type 启发式误杀可用源导致整轮放弃录制。
                 logger.warning(
                     f"流地址校验: {url} - status_code={response.status_code}, content-type={content_type}；"
                     "已无备选源，仍交由 ffmpeg 尝试（探针与 ffmpeg 客户端指纹不同）"
                 )
                 return True
-            logger.warning(f"流地址校验失败: {url} - status_code={response.status_code}, content-type={content_type}")
+            logger.warning(
+                f"流地址校验失败（返回非流媒体内容）: {url} - status_code={response.status_code}, content-type={content_type}"
+            )
             return False
+        if response.status_code == 200:
+            return _confirm_get_ok(
+                probe_client, url, response.status_code, headers, last_resort=last_resort, platform=platform
+            )
+        if last_resort:
+            # 同上：末位候选的稳定拒绝（非 200 且无法识别 content-type）仅告警放行
+            logger.warning(
+                f"流地址校验: {url} - status_code={response.status_code}, content-type={content_type}；"
+                "已无备选源，仍交由 ffmpeg 尝试（探针与 ffmpeg 客户端指纹不同）"
+            )
+            return True
+        logger.warning(f"流地址校验失败: {url} - status_code={response.status_code}, content-type={content_type}")
+        return False
     except Exception as e:
         # Windows 下 socket.timeout 的 str() 为空，必须带上异常类型与 URL
         logger.warning(f"流地址校验异常（判定为不可达）: {url} - {type(e).__name__}: {e}")
         return False
+    finally:
+        # 仅关闭本函数自建的客户端；复用的客户端由 select_source_url 统一关闭。
+        # 选源结束即释放连接：常驻 keepalive 会长期占用 CDN 侧的连接预算，与随后的
+        # ffmpeg 拉流争抢（虎牙实测：连接预算耗尽后 ffmpeg 打开即 403）。
+        if owns_client and probe_client is not None:
+            try:
+                probe_client.close()
+            except Exception as e:
+                logger.debug(f"关闭探针客户端失败: {type(e).__name__}: {e}")
 
 
 # 从 stream_info（解析结果，含 m3u8_url/flv_url/record_url 等键）挑选本轮实际录制地址：
-# 优先 HLS，其次 FLV，最后 record_url，proxy_addr 透传给可达性校验；全部不可用时返回 None
+# 候选尝试顺序：默认优先 HLS，其次 FLV，最后 record_url；FLV-first 平台（见
+# _FLV_FIRST_PLATFORMS，当前仅虎牙）反转为 FLV → HLS → record_url。proxy_addr 透传给
+# 可达性校验；全部不可用时返回 None
 def select_source_url(
     stream_info: Mapping[str, object],
     proxy_addr: str | None = None,
@@ -440,79 +534,103 @@ def select_source_url(
     flv_available = bool(flv_candidates)
     has_fallback = flv_available or has_record_url
 
-    if hls_available and main.hls_collection_enabled:
-        # 逐 HLS 候选校验：中间候选失败继续尝试下一候选；仅当「最后一条 HLS 且无其它回退源」
-        # 时才以 last_resort 放行（交给 ffmpeg 定夺），否则正常回退 FLV/record_url。
-        for idx, cand in enumerate(hls_candidates):
-            is_last = idx == len(hls_candidates) - 1
-            if _validate_stream_url(
-                cand,
-                proxy_addr=proxy_addr,
-                platform=platform,
-                cookies=cookies,
-                last_resort=is_last and not has_fallback,
-            ):
-                return cand
-        logger.warning("HLS URL validation failed, falling back to FLV")
-
-    if flv_available:
-        for idx, cand in enumerate(flv_candidates):
-            codec = utils.get_query_params(cand, "codec")
-            if isinstance(codec, list) and codec and codec[0] == "h265":
-                # h265 FLV 无法 copy 录制。存在 HLS 源且启用 HLS 采集时改走 HLS（逐候选校验，
-                # 末位为 last_resort）；HLS 也不可用时不放弃整轮，继续尝试下一 FLV 候选
-                # （可能非 h265），全部 h265 且 HLS 不可用才交由后续 record_url 兜底。
-                if hls_available and main.hls_collection_enabled:
-                    for h_idx, h_cand in enumerate(hls_candidates):
-                        if _validate_stream_url(
-                            h_cand,
-                            proxy_addr=proxy_addr,
-                            platform=platform,
-                            cookies=cookies,
-                            last_resort=h_idx == len(hls_candidates) - 1,
-                        ):
-                            logger.warning("FLV is not supported for h265 codec, use HLS source instead")
-                            return h_cand
-                    logger.warning("FLV 为 h265 且 HLS 源校验失败，尝试其它 FLV 候选")
-                else:
-                    logger.warning("FLV 为 h265 无法录制且 HLS 采集已关闭，尝试其它 FLV 候选")
-                continue
-            # 末位 FLV 且无 record_url 备选时恒为 last_resort（交给 ffmpeg 尝试，探针拒绝 ≠
-            # ffmpeg 不可拉流），其余 FLV 候选失败继续回退下一候选/record_url。
-            is_last = idx == len(flv_candidates) - 1
-            if _validate_stream_url(
-                cand,
-                proxy_addr=proxy_addr,
-                platform=platform,
-                cookies=cookies,
-                last_resort=is_last and not has_record_url,
-            ):
-                return cand
-        logger.warning("FLV URL validation failed, trying record_url fallback")
-
-    if isinstance(record_url, str) and record_url:
-        codec = utils.get_query_params(record_url, "codec")
-        if isinstance(codec, list) and codec and codec[0] == "h265":
-            logger.warning("record_url has h265 codec, but no HLS or FLV fallback available")
-        # record_url 是最后一档候选，恒为 last_resort：稳定拒绝也放行给 ffmpeg 定夺
-        if _validate_stream_url(
-            record_url, proxy_addr=proxy_addr, platform=platform, cookies=cookies, last_resort=True
-        ):
-            return record_url
     # 三类地址全为空：此前静默返回 None，房间会永远打印“正在直播中...”却不录制且无任何
     # 诊断线索（斗鱼 rtmp_live 为空即此形态）。必须留一条日志暴露根因。
+    # （该分支不会产生任何探针，先于客户端构造处理，避免无谓的连接池开销）
     if not (hls_available or has_fallback):
         logger.warning(
             f"解析结果无任何流地址（m3u8/flv/record_url 均为空），本轮放弃: {stream_info.get('anchor_name') or ''}"
         )
-    elif hls_available and not main.hls_collection_enabled and not has_fallback:
+        return None
+    if hls_available and not main.hls_collection_enabled and not has_fallback:
         # m3u8 存在但 HLS 采集关闭、且无 FLV/record_url 可回退：同为静默路径，
         # 用户可通过开启 HLS 采集恢复录制，必须提示而非无声跳过
         logger.warning(
             f"存在 HLS 源但 HLS 采集未启用，且无 FLV/record_url 可回退，本轮放弃"
             f"（可开启 HLS 采集恢复录制）: {stream_info.get('anchor_name') or ''}"
         )
-    return None
+        return None
+
+    # 本轮全部候选探针共用一个 httpx.Client：keepalive 生效，且 SSLContext / 连接池只构造
+    # 一次（原每候选各建一个——虎牙 4 条 CDN 线路即 4 次；实测构造约 6.7ms、复用后单次探针
+    # 约 0.77ms，而新建 Client + 单次探针约 15.9ms）。
+    # 作用域严格限制在本次选源内、finally 关闭：刻意不做全局缓存——常驻 keepalive 会长期
+    # 占用 CDN 侧的连接预算，与紧随其后的 ffmpeg 拉流争抢（虎牙实测：预算耗尽后 ffmpeg 打开
+    # 即 403），且全局缓存会引入跨线程共享与进程退出清理的额外复杂度。
+    probe_client = httpx.Client(
+        timeout=_PROBE_TIMEOUT_SECONDS,
+        proxy=proxy_addr,
+        verify=_http_config.get_effective_ssl_verify(platform),
+    )
+    try:
+        # ---- 候选序列：按平台偏好排序（默认 HLS 优先，FLV-first 平台反转）----
+        # 统一为一个有序序列逐候选校验。两处与旧分块逻辑的刻意差异：
+        # ① h265 候选在构建序列时即剔除——h265 无法 copy 录制，不构成真实备选；旧实现
+        #    「FLV 为 h265 → 立即重试整组 HLS」在默认顺序（HLS 已在前面试过全败）下会把
+        #    HLS 探针白烧一遍；剔除后末位放行（last_resort）基于过滤后的序列判定，
+        #    h265 之前的候选自然获得末位资格，语义与旧「插入式回退」一致但不多烧探针。
+        # ② last_resort 统一为「过滤后序列的末位 且 无 record_url」：原「HLS 末位还需无
+        #    FLV」的条件在新结构下由「序列末位」天然覆盖（其后已无任何候选）。
+        flv_first = platform in _FLV_FIRST_PLATFORMS
+        hls_seq: list[tuple[str, bool]] = (
+            [(u, True) for u in hls_candidates] if (hls_available and main.hls_collection_enabled) else []
+        )
+        flv_seq: list[tuple[str, bool]] = [(u, False) for u in flv_candidates]
+        seq = flv_seq + hls_seq if flv_first else hls_seq + flv_seq
+
+        usable: list[tuple[str, bool]] = []
+        for url, is_hls in seq:
+            codec = utils.get_query_params(url, "codec")
+            if isinstance(codec, list) and codec and codec[0] == "h265":
+                logger.warning(f"h265 编码候选无法 copy 录制，跳过: {url}")
+                continue
+            usable.append((url, is_hls))
+
+        # 逐候选校验：中间候选失败继续尝试下一候选；仅末位且无 record_url 时以 last_resort
+        # 放行（交给 ffmpeg 定夺，探针拒绝 ≠ ffmpeg 不可拉流）。到达分组边界即意味前一
+        # 类候选已全部校验失败（顺序遍历），打一条与旧实现同义的回退告警。
+        prev_kind: bool | None = None
+        for idx, (cand, is_hls) in enumerate(usable):
+            if prev_kind is not None and is_hls != prev_kind:
+                if prev_kind:
+                    logger.warning("HLS URL validation failed, falling back to FLV")
+                else:
+                    logger.warning("FLV URL validation failed, falling back to HLS")
+            prev_kind = is_hls
+            is_last = idx == len(usable) - 1
+            if _validate_stream_url(
+                cand,
+                proxy_addr=proxy_addr,
+                platform=platform,
+                cookies=cookies,
+                last_resort=is_last and not has_record_url,
+                client=probe_client,
+            ):
+                return cand
+        if usable and has_record_url:
+            logger.warning("HLS/FLV URL validation failed, trying record_url fallback")
+
+        if isinstance(record_url, str) and record_url:
+            codec = utils.get_query_params(record_url, "codec")
+            if isinstance(codec, list) and codec and codec[0] == "h265":
+                logger.warning("record_url has h265 codec, but no HLS or FLV fallback available")
+            # record_url 是最后一档候选，恒为 last_resort：稳定拒绝也放行给 ffmpeg 定夺
+            if _validate_stream_url(
+                record_url,
+                proxy_addr=proxy_addr,
+                platform=platform,
+                cookies=cookies,
+                last_resort=True,
+                client=probe_client,
+            ):
+                return record_url
+        return None
+    finally:
+        # 选源结束即释放连接：连接预算要让给随后的 ffmpeg 拉流
+        try:
+            probe_client.close()
+        except Exception as e:
+            logger.debug(f"关闭探针客户端失败: {type(e).__name__}: {e}")
 
 
 # 抖音接口调用限流：必要时 sleep，保证两次抖音请求间隔不小于 douyin_min_interval 秒；无入参无返回值

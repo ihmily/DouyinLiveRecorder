@@ -7,6 +7,7 @@
 # - 线程安全的错误/成功计数（record_error / record_success）
 # - 按错误率动态调整并发线程数（adjust_max_request）
 # - 清理单个直播间的录制状态（clear_record_info）
+# - 房间线程退出时从运行列表移除该房间（remove_room_from_running）
 #
 # 这些函数需要读取/写入 main 的大量配置与运行时全局变量
 # （推送渠道配置、录制状态集合、错误率窗口、并发信号量等），
@@ -145,3 +146,17 @@ def clear_record_info(record_name: str, record_url: str) -> None:
             main.running_list.remove(record_url)
             main.monitoring -= 1
             main.color_obj.print_colored(f"[{record_name}]已经从录制列表中移除\n", main.color_obj.YELLOW)
+
+
+# 房间线程退出时从运行列表移除 record_url 并把监控计数减一（幂等：已被 clear_record_info
+# 移除时为无操作）；进程整体退出（exit_recording=True）时跳过，避免与全局清理竞争；无返回值
+def remove_room_from_running(record_url: str) -> None:
+    # 兜底清理：覆盖「停止录制」（recording_enabled=False）与线程意外退出路径——
+    # 线程退出后运行列表若残留该 URL，主循环会误判「仍在运行」而不再重新拉起，
+    # 重新开始录制后该房间将永久失联
+    if main.exit_recording or not record_url:
+        return
+    with main.record_state_lock:
+        if record_url in main.running_list:
+            main.running_list.remove(record_url)
+            main.monitoring -= 1

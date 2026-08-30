@@ -255,11 +255,13 @@ desktop.ini
 # 临时 / 过程性文档（CODE_WIKI.md 是正式架构文档，随仓库分发，不忽略）
 CODE_CHANGES.md
 TRAE_AGENT_CODE_WIKI.md
+PERF_REVIEW_2026-08-28.md
 
-# 本地工具 / 审查生成物（第三方编码代理 / 浏览器测试 / 插件源码等）
+# 本地工具 / 审查生成物（第三方编码代理 / 浏览器测试 / 插件源码等；与 .dockerignore 及 pyproject 各工具排除列表同源维护）
 .qoder/
 .agents/
 .pnpm-store/
+.npm-cache/
 .dsh-validation/
 .ego-browser-test/
 .plugin-src/

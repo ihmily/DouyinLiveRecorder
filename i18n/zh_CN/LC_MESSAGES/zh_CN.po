@@ -3,7 +3,7 @@
 # This file is distributed under the same license as the DouyinLiveRecorder package.
 #
 # DouyinLiveRecorder 简体中文翻译文件
-# 更新日期: 2026-08-27
+# 更新日期: 2026-08-30
 #
 # 维护说明：
 #   - 本文件是翻译源文本；gettext 运行时只读取同目录编译产物 zh_CN.mo。
@@ -18,7 +18,7 @@ msgstr ""
 "Project-Id-Version: DouyinLiveRecorder\n"
 "MIME-Version: 1.0\n"
 "POT-Creation-Date: 2024-10-20 00:00+0800\n"
-"PO-Revision-Date: 2026-08-27 12:00+0800\n"
+"PO-Revision-Date: 2026-08-30 12:00+0800\n"
 "Last-Translator: Hmily <ihmily@github>\n"
 "Language-Team: Chinese\n"
 "Content-Type: text/plain; charset=UTF-8\n"
@@ -1840,3 +1840,69 @@ msgstr "async_req 请求失败: {url} - {type(e).__name__}: {e}"
 msgid "进程退出释放 AsyncClient 失败: {type(e).__name__}: {e}"
 msgstr "进程退出释放 AsyncClient 失败: {type(e).__name__}: {e}"
 
+
+# 2026-08-29 补全：画质档位专项/选源重构/录制开关新增日志与提示串（11 条，
+# 来源 scripts/extract_i18n_strings.py 缺失清单；英文源串按 zh_CN 语义译出，中文源串恒等回填）。
+
+msgid "FLV URL validation failed, falling back to HLS"
+msgstr "FLV 地址校验失败，回退 HLS"
+
+msgid "HLS/FLV URL validation failed, trying record_url fallback"
+msgstr "HLS/FLV 地址校验失败，尝试回退 record_url"
+
+msgid "[{record_name}] ffmpeg 命令缺少 -i 输入参数，跳过探针退避清除"
+msgstr "[{record_name}] ffmpeg 命令缺少 -i 输入参数，跳过探针退避清除"
+
+msgid "[斗鱼直播] 全部档位拉流失败(尝试={attempt_rates})，本轮无可用流地址"
+msgstr "[斗鱼直播] 全部档位拉流失败(尝试={attempt_rates})，本轮无可用流地址"
+
+msgid "[斗鱼直播] 斗鱼无蓝光30M/20M档位，按蓝光8M(rate=8200)请求"
+msgstr "[斗鱼直播] 斗鱼无蓝光30M/20M档位，按蓝光8M(rate=8200)请求"
+
+msgid "[斗鱼直播] 请求档位 {code_to_zh(requested_code)}(rate={rate}) 失败，降级为 {code_to_zh(actual_code)}(rate={attempt}) 拉流成功"
+msgstr "[斗鱼直播] 请求档位 {code_to_zh(requested_code)}(rate={rate}) 失败，降级为 {code_to_zh(actual_code)}(rate={attempt}) 拉流成功"
+
+msgid "[虎牙直播] 请求档位 {code_to_zh(video_quality)}(ratio={target_ratio}) 不可用(房间最高码率={max_ratio})，降级为 {code_to_zh(actual_quality)}(ratio={chosen})"
+msgstr "[虎牙直播] 请求档位 {code_to_zh(video_quality)}(ratio={target_ratio}) 不可用(房间最高码率={max_ratio})，降级为 {code_to_zh(actual_quality)}(ratio={chosen})"
+
+msgid "[虎牙直播] 请求档位 {code_to_zh(video_quality)}(ratio={target_ratio}) 不可用(房间最高码率={max_ratio}，无更低档位)，按原画拉流"
+msgstr "[虎牙直播] 请求档位 {code_to_zh(video_quality)}(ratio={target_ratio}) 不可用(房间最高码率={max_ratio}，无更低档位)，按原画拉流"
+
+msgid "h265 编码候选无法 copy 录制，跳过: {url}"
+msgstr "h265 编码候选无法 copy 录制，跳过: {url}"
+
+msgid "关闭探针客户端失败: {type(e).__name__}: {e}"
+msgstr "关闭探针客户端失败: {type(e).__name__}: {e}"
+
+msgid "录制已停止，房间线程退出: {record_url}"
+msgstr "录制已停止，房间线程退出: {record_url}"
+
+# =============================================================================
+# 日志归档模块（src/log_archive.py / src/danmaku_monitor.py，2026-08-30 新增）
+# =============================================================================
+msgid "运行日志已归档: {'、'.join(os.path.basename(p) for p in archived)}"
+msgstr "运行日志已归档: {'、'.join(os.path.basename(p) for p in archived)}"
+
+msgid "运行日志归档失败(忽略): {type(e).__name__}: {e}"
+msgstr "运行日志归档失败(忽略): {type(e).__name__}: {e}"
+
+msgid "日志已归档: {name} -> {os.path.basename(target)}"
+msgstr "日志已归档: {name} -> {os.path.basename(target)}"
+
+msgid "日志归档失败(跳过): {name} - {type(e).__name__}: {e}"
+msgstr "日志归档失败(跳过): {name} - {type(e).__name__}: {e}"
+
+msgid "日志归档失败(跳过): web_console.log - {type(e).__name__}: {e}"
+msgstr "日志归档失败(跳过): web_console.log - {type(e).__name__}: {e}"
+
+msgid "关闭 web_console 句柄异常(忽略): {type(e).__name__}: {e}"
+msgstr "关闭 web_console 句柄异常(忽略): {type(e).__name__}: {e}"
+
+msgid "重建 web_console.log 句柄失败: {type(e).__name__}: {e}"
+msgstr "重建 web_console.log 句柄失败: {type(e).__name__}: {e}"
+
+msgid "[弹幕监控]close_file 失败(忽略): {type(e).__name__}: {e}"
+msgstr "[弹幕监控]close_file 失败(忽略): {type(e).__name__}: {e}"
+
+msgid "[弹幕监控]关闭边车文件异常(忽略): {type(e).__name__}: {e}"
+msgstr "[弹幕监控]关闭边车文件异常(忽略): {type(e).__name__}: {e}"

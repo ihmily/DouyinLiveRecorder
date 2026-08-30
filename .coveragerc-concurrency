@@ -11,12 +11,25 @@
 
 [run]
 source = src
+# 与 pyproject.toml [tool.coverage.run].omit 保持一致（本地工具生成目录同源维护）
 omit =
     */tests/*
     */__pycache__/*
     */node/*
     */ffmpeg/*
     */.mimosa/*
+    */.qoder/*
+    */.agents/*
+    */.workbuddy/*
+    */.codebuddy/*
+    */.trae/*
+    */.pnpm-store/*
+    */.npm-cache/*
+    */.dsh-validation/*
+    */.ego-browser-test/*
+    */.plugin-src/*
+    */.tmp-dps-extract/*
+    */pytest-cache-files-*/*
 
 [report]
 fail_under = 0

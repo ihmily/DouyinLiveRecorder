@@ -118,6 +118,16 @@ def _enter_background_mode(logs_dir: str, host: str, port: int) -> None:
     log_stream = open(log_path, "a", encoding="utf-8", buffering=1)
     sys.stdout = log_stream
     sys.stderr = log_stream
+    # 关键：loguru 的控制台 sink 在 src.logger 导入期（main() 中 import main 时）就已绑定
+    # 当时的 sys.stderr 对象，不会因这里的重新赋值而跟着变。不重建 sink，DEBUG/WARNING
+    # 日志会全部写往随后被 SW_HIDE 隐藏的控制台窗口，web_console.log 里只剩 print 输出，
+    # 排障时会把「日志没进来」误判成「事件没发生」。
+    try:
+        from src.logger import rebind_console_sink
+
+        rebind_console_sink()
+    except Exception:
+        pass
 
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"\n{'=' * 60}")
@@ -173,7 +183,10 @@ def main() -> None:
     if not web_cfg["web_show_console"]:
         _enter_background_mode(logs_dir, host, port)
 
-    # 在守护线程启动录制引擎
+    # Web 模式默认不自动开启录制：录制引擎线程保持运行（配置热加载/调度器就绪），
+    # 但不拉起任何房间线程，由面板「开始录制」按钮经 POST /api/recording/toggle 手动触发。
+    # CLI/GUI 直跑不受影响（recording_enabled 默认 True）
+    main.recording_enabled = False
     recorder_thread = threading.Thread(
         target=main.main,
         name="recorder-engine",

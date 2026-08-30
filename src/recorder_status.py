@@ -104,6 +104,9 @@ def get_status() -> dict[str, object]:
         "uptime": uptime,
         "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
         "engine_alive": engine_alive,
+        # Web 录制开关（False=已停止）：面板「开始/停止录制」按钮状态的同步依据，
+        # 页面刷新/重连后经本字段恢复按钮的真实态（与引擎线程存活正交）
+        "recording_enabled": main.recording_enabled,
     }
 
 

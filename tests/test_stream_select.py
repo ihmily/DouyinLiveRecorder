@@ -70,7 +70,8 @@ class _FakeHead405HtmlClient:
     def __exit__(self, *_args: object) -> Literal[False]:
         return False
 
-    def head(self, url: str, follow_redirects: bool = True) -> _FakeResponse:
+    # headers 由生产代码逐请求传入（客户端在多候选间复用，不能再挂 client 级头）
+    def head(self, url: str, headers: dict[str, str] | None = None, follow_redirects: bool = True) -> _FakeResponse:
         return _FakeResponse(self.head_status, self.head_content_type)
 
 
@@ -131,7 +132,7 @@ def _m3u8_client_cls(get_statuses: list[int], get_types: list[str]) -> type[_M3u
         def __exit__(self, *_args: object) -> Literal[False]:
             return False
 
-        def head(self, url: str, follow_redirects: bool = True) -> _FakeResponse:
+        def head(self, url: str, headers: dict[str, str] | None = None, follow_redirects: bool = True) -> _FakeResponse:
             return _FakeResponse(405, "text/html")
 
         def get(self, url: str, headers: dict | None = None, follow_redirects: bool = True) -> _FakeResponse:
@@ -256,6 +257,60 @@ def test_select_source_url_m3u8_list_all_dead_falls_back_to_flv() -> None:
     assert mock_v.call_count == 3
 
 
+def test_select_source_url_shares_one_client_and_sends_headers_per_request() -> None:
+    # 一次选源内多个候选的探针必须共用同一支 httpx.Client：原实现每个候选各建一支，
+    # 虎牙 4 条 CDN 线路即 4 次 SSLContext / 连接池重建（实测构造约 6.7ms/次）；
+    # 单候选约 0.77ms vs 新建 Client + 单次探针约 15.9ms。
+    # 配套前提：客户端复用后 UA / Referer / Cookie 不能再挂 client 级（否则各候选互相污染），
+    # 必须逐请求下发——本例同时断言每个请求都带齐录制所需的三个头。
+    class _CountingClient:
+        instantiated = 0
+        close_calls = 0
+
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            _CountingClient.instantiated += 1
+            # 客户端级不得再带业务头：录制头一律走请求级
+            assert "headers" not in kwargs, "客户端复用后业务头只能逐请求传入"
+
+        def close(self) -> None:
+            _CountingClient.close_calls += 1
+
+        def head(self, url: str, headers: dict[str, str] | None = None, follow_redirects: bool = True) -> _FakeResponse:
+            seen_headers.append(dict(headers or {}))
+            return _FakeResponse(404, "text/html")
+
+        def get(self, url: str, headers: dict | None = None, follow_redirects: bool = True) -> _FakeResponse:
+            seen_headers.append(dict(headers or {}))
+            return _FakeResponse(404, "text/html")
+
+    seen_headers: list[dict[str, str]] = []
+    hls_a = "https://a.cdn/live/1.m3u8"
+    hls_b = "https://a.cdn/live/2.m3u8"
+    flv = "https://a.cdn/live/1.flv"
+    with (
+        patch.object(main, "hls_collection_enabled", True),
+        patch("src.stream_select.httpx.Client", _CountingClient),
+    ):
+        result = select_source_url(
+            {"m3u8_url": hls_a, "m3u8_url_list": [hls_a, hls_b], "flv_url": flv, "record_url": ""},
+            platform="B站直播",
+            cookies="buvid3=abc",
+        )
+    # 末位 FLV 稳定拒绝仍放行给 ffmpeg（既有 last_resort 语义，非本次改动）
+    assert result == flv
+    # 5 次探针（2 条 HLS 各 HEAD+Range-GET，1 条 FLV 仅 HEAD）只构造了 1 支客户端
+    assert len(seen_headers) == 5
+    assert _CountingClient.instantiated == 1
+    # 选源结束必须关闭，避免常驻连接占用 CDN 连接预算（与 ffmpeg 争抢）
+    assert _CountingClient.close_calls == 1
+    # 每个请求都带齐录制头：客户端复用不得丢失 UA / Referer / Cookie
+    assert seen_headers, "探针必须携带请求头"
+    for h in seen_headers:
+        assert h.get("referer", "").startswith("https://live.bilibili.com")
+        assert h.get("cookie") == "buvid3=abc"
+        assert h.get("User-Agent")
+
+
 # ---- 虎牙探针退避：CDN 限流（连续 403）时跳过探针，ffmpeg 独享连接预算 ----
 #
 # 虎牙 aldirect CDN 对同一路径短时间连续连接限流：每轮「HLS 3 连探针 + FLV 2~3 连探针 +
@@ -329,10 +384,12 @@ def test_huya_transient_flv_403_marks_backoff(clear_probe_backoff: None) -> None
         def __exit__(self, *_args: object) -> Literal[False]:
             return False
 
-        def head(self, url: str, follow_redirects: bool = True) -> _FakeResponse:
+        def head(self, url: str, headers: dict[str, str] | None = None, follow_redirects: bool = True) -> _FakeResponse:
             return _FakeResponse(200, "video/x-flv")
 
-        def stream(self, method: str, url: str, follow_redirects: bool = True) -> "_StreamCtx":
+        def stream(
+            self, method: str, url: str, headers: dict[str, str] | None = None, follow_redirects: bool = True
+        ) -> "_StreamCtx":
             code = self.get_codes[min(self._calls, len(self.get_codes) - 1)]
             self._calls += 1
             return _StreamCtx(_FakeResponse(code, ""))
@@ -374,11 +431,54 @@ def test_mark_ffmpeg_reject_marks_backoff(clear_probe_backoff: None) -> None:
 
 
 def test_backoff_expires_after_window(clear_probe_backoff: None) -> None:
-    # 超过退避窗口后恢复正常探针（限流解除/主播重新开播时走正常校验）
+    # 超过退避窗口后恢复正常探针（限流解除/主播重新开播时走正常校验）。
+    # 窗口已由固定 60s 改为动态值（≥ 主循环间隔），故按当前窗口计算过期时刻
     _mark_probe_reject(_HUYA_M3U8_URL, "虎牙直播")
     with _probe_backoff_lock:
-        _probe_backoff[_probe_backoff_key(_HUYA_M3U8_URL)] = time.time() - 61.0
+        _probe_backoff[_probe_backoff_key(_HUYA_M3U8_URL)] = time.time() - (ss._probe_backoff_window() + 1.0)
     assert _probe_in_backoff(_HUYA_M3U8_URL, "虎牙直播") is False
+    # 窗口内仍命中：刚记入的退避必须被下一轮观测到
+    _mark_probe_reject(_HUYA_M3U8_URL, "虎牙直播")
+    assert _probe_in_backoff(_HUYA_M3U8_URL, "虎牙直播") is True
+
+
+def test_backoff_window_covers_main_loop_interval(monkeypatch: pytest.MonkeyPatch, clear_probe_backoff: None) -> None:
+    # 回归核心：退避窗口必须 ≥ 一个主循环周期，否则「ffmpeg 快速失败 → 下轮跳过该线路」
+    # 的闭环恒不成立。原实现固定 60s，而 main.delay_default 默认 120s —— ffmpeg 1~2s 内
+    # 403 被记入退避后，下一轮 T+124s 才到，早已超出窗口，于是又去撞同一条死线路
+    # （实测虎牙 880214：两轮日志中「CDN 探针退避中」告警从未出现，房间假绿死循环）。
+    monkeypatch.setattr(main, "delay_default", 120)
+    window = ss._probe_backoff_window()
+    assert window > 120.0 + 5.0  # 覆盖默认间隔 + 抖动
+    # 模拟实测节奏：T 记入退避 → T+124s（间隔 120s + 抖动 4s）下一轮到达时仍须命中
+    ss.mark_ffmpeg_reject(_HUYA_M3U8_URL, "虎牙直播")
+    with _probe_backoff_lock:
+        _probe_backoff[_probe_backoff_key(_HUYA_M3U8_URL)] = time.time() - 124.0
+    assert _probe_in_backoff(_HUYA_M3U8_URL, "虎牙直播") is True
+    # 错误窗口满 5 次时 main.py 还会再 +60s（间隔 ~185s），最坏节奏同样须覆盖
+    with _probe_backoff_lock:
+        _probe_backoff[_probe_backoff_key(_HUYA_M3U8_URL)] = time.time() - 185.0
+    assert _probe_in_backoff(_HUYA_M3U8_URL, "虎牙直播") is True
+    # 循环间隔被用户调小时窗口随之回落（不应按最大值锁死）
+    monkeypatch.setattr(main, "delay_default", 30)
+    assert ss._probe_backoff_window() == 30.0 + ss._PROBE_BACKOFF_INTERVAL_MARGIN
+    assert ss._probe_backoff_window() < window
+
+
+def test_clear_ffmpeg_reject_removes_backoff(clear_probe_backoff: None) -> None:
+    # 录制成功侧的反馈入口（与 mark_ffmpeg_reject 对称）：地址实际拉流成功后撤销退避，
+    # 避免窗口内明明已恢复的线路继续被跳过、白白回退到次优线路
+    ss.mark_ffmpeg_reject(_HUYA_M3U8_URL, "虎牙直播")
+    assert _probe_in_backoff(_HUYA_M3U8_URL, "虎牙直播") is True
+    ss.clear_ffmpeg_reject(_HUYA_M3U8_URL, "虎牙直播")
+    assert _probe_in_backoff(_HUYA_M3U8_URL, "虎牙直播") is False
+    # 跨轮新 token（query 变化）同样命中，与写入侧同键
+    ss.mark_ffmpeg_reject(_HUYA_M3U8_URL, "虎牙直播")
+    ss.clear_ffmpeg_reject(_HUYA_M3U8_URL.replace("wsSecret=abc", "wsSecret=new"), "虎牙直播")
+    assert _probe_in_backoff(_HUYA_M3U8_URL, "虎牙直播") is False
+    # 平台不在退避名单（斗鱼）时为无操作，不误伤
+    ss.clear_ffmpeg_reject(_FLV_URL, "斗鱼直播")
+    assert _probe_in_backoff(_FLV_URL, "斗鱼直播") is False
 
 
 def test_non_backoff_platform_keeps_retry_semantics(clear_probe_backoff: None) -> None:
@@ -397,15 +497,31 @@ def test_non_backoff_platform_keeps_retry_semantics(clear_probe_backoff: None) -
 
 def test_select_source_url_huya_backoff_round_straight_to_ffmpeg(clear_probe_backoff: None) -> None:
     # 复刻实测日志第 2 轮形态：HLS/FLV 均因 403 进入退避 → select_source_url
-    # 零探针直接放行 FLV 给 ffmpeg（独享连接预算，403 失败循环自愈）
+    # 零探针直接放行序列末位候选给 ffmpeg（独享连接预算，403 失败循环自愈）。
+    # 虎牙为 FLV-first（FLV → HLS），序列末位是 HLS——两者均在退避中、都不可信时
+    # 放行谁皆属「交由 ffmpeg 定夺」，核心不变式是零探针。
     _mark_probe_reject(_HUYA_M3U8_URL, "虎牙直播")
     _mark_probe_reject(_HUYA_FLV_URL, "虎牙直播")
 
     class _NoProbeClient:
-        instantiated = 0
+        # 客户端对象会被构造一次（select_source_url 整轮共用一支），但不得发出任何探针：
+        # 退避的意义是不消耗 CDN 连接预算，故断言的是「探针请求数 == 0」而非「构造数 == 0」
+        probe_calls = 0
 
         def __init__(self, *args: object, **kwargs: object) -> None:
-            _NoProbeClient.instantiated += 1
+            pass
+
+        def head(self, url: str, headers: dict[str, str] | None = None, follow_redirects: bool = True) -> _FakeResponse:
+            _NoProbeClient.probe_calls += 1
+            return _FakeResponse(200, "video/x-flv")
+
+        def get(self, url: str, headers: dict | None = None, follow_redirects: bool = True) -> _FakeResponse:
+            _NoProbeClient.probe_calls += 1
+            return _FakeResponse(200, "application/vnd.apple.mpegurl")
+
+        def stream(self, method: str, url: str, **kwargs: object) -> object:
+            _NoProbeClient.probe_calls += 1
+            raise AssertionError("退避窗口内不应发出任何探针")
 
     with (
         patch.object(main, "hls_collection_enabled", True),
@@ -415,8 +531,74 @@ def test_select_source_url_huya_backoff_round_straight_to_ffmpeg(clear_probe_bac
             {"m3u8_url": _HUYA_M3U8_URL, "flv_url": _HUYA_FLV_URL, "record_url": ""},
             platform="虎牙直播",
         )
+    assert result == _HUYA_M3U8_URL
+    assert _NoProbeClient.probe_calls == 0
+
+
+def test_huya_flv_first_prefers_flv_on_cold_start(clear_probe_backoff: None) -> None:
+    # 修复冷启动假绿：虎牙 HLS 三条 CDN 线路（hs/tx/al）冷启动探针假绿——探针 200/206
+    # 而 ffmpeg 打开即 403（实测两房间复现，每次冷启动损失约 2 分钟），FLV 则每轮稳定可用
+    # （最长连录 6 分钟）。FLV-first 下首个被校验的必须是 FLV，且 FLV 可达时不再触碰 HLS。
+    probed: list[str] = []
+
+    def _validate(url: str, **kwargs: object) -> bool:
+        probed.append(url)
+        return url == _HUYA_FLV_URL
+
+    with (
+        patch.object(main, "hls_collection_enabled", True),
+        patch("src.stream_select._validate_stream_url", side_effect=_validate),
+    ):
+        result = select_source_url(
+            {"m3u8_url": _HUYA_M3U8_URL, "flv_url": _HUYA_FLV_URL, "record_url": ""},
+            platform="虎牙直播",
+        )
     assert result == _HUYA_FLV_URL
-    assert _NoProbeClient.instantiated == 0
+    assert probed == [_HUYA_FLV_URL]  # HLS 探针一次都不发
+
+
+def test_huya_flv_failed_falls_back_to_hls(clear_probe_backoff: None) -> None:
+    # FLV-first 不砍回退链：FLV 校验失败后仍按序尝试 HLS
+    probed: list[str] = []
+
+    def _validate(url: str, **kwargs: object) -> bool:
+        probed.append(url)
+        return url == _HUYA_M3U8_URL
+
+    with (
+        patch.object(main, "hls_collection_enabled", True),
+        patch("src.stream_select._validate_stream_url", side_effect=_validate),
+    ):
+        result = select_source_url(
+            {"m3u8_url": _HUYA_M3U8_URL, "flv_url": _HUYA_FLV_URL, "record_url": ""},
+            platform="虎牙直播",
+        )
+    assert result == _HUYA_M3U8_URL
+    assert probed == [_HUYA_FLV_URL, _HUYA_M3U8_URL]
+
+
+def test_douyu_keeps_hls_first(clear_probe_backoff: None) -> None:
+    # 斗鱼绝不 FLV-first：游客态 FLV 长连接约 70 秒被 CDN 掐断，必须 HLS 优先
+    probed: list[str] = []
+
+    def _validate(url: str, **kwargs: object) -> bool:
+        probed.append(url)
+        return True
+
+    with (
+        patch.object(main, "hls_collection_enabled", True),
+        patch("src.stream_select._validate_stream_url", side_effect=_validate),
+    ):
+        result = select_source_url(
+            {
+                "m3u8_url": "https://hw3.douyucdn2.cn/live/x.m3u8?wsAuth=1",
+                "flv_url": "https://hw1a.douyucdn2.cn/live/x.flv?wsAuth=1",
+                "record_url": "",
+            },
+            platform="斗鱼直播",
+        )
+    assert result == "https://hw3.douyucdn2.cn/live/x.m3u8?wsAuth=1"
+    assert probed == [result]  # 首个被校验的是 HLS（顺序断言）
 
 
 # ---- 探针节流与重试抖动：降低风控误触发 ----
