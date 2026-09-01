@@ -372,13 +372,19 @@ def run_script(command: str) -> None:
         logger.error(e)
         logger.error('Please add `#!/bin/bash` at the beginning of your bash script file.')
 
+def clear_monitor_info(record_url: str) -> bool:
+    global monitoring
+
+    if record_url not in running_list:
+        return False
+
+    running_list.remove(record_url)
+    monitoring -= 1
+    return True
 
 def clear_record_info(record_name: str, record_url: str) -> None:
-    global monitoring
     recording.discard(record_name)
-    if record_url in url_comments and record_url in running_list:
-        running_list.remove(record_url)
-        monitoring -= 1
+    if record_url in url_comments and clear_monitor_info(record_url):
         color_obj.print_colored(f"[{record_name}]已经从录制列表中移除\n", color_obj.YELLOW)
 
 
@@ -1631,6 +1637,11 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
 
                 # 这里是正常循环
                 while x:
+                    if record_url in url_comments:
+                        clear_monitor_info(record_url)
+                        return
+                    if exit_recording:
+                        return
                     x = x - 1
                     if loop_time:
                         print(f'\r{anchor_name}循环等待{x}秒 ', end="")
