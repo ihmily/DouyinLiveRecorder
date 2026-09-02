@@ -183,9 +183,9 @@ class TestFetchCookies:
         assert seen["url"] == "https://live.example.com/"
 
     async def test_same_loop_reentrant_no_deadlock(self) -> None:
-        # RLock 允许同事件循环协程重入：并发 gather 不会死锁、结果一致。
-        # 同循环内本不保证去重（每个 room 线程各自独立循环，真实场景为跨循环并发），
-        # 此用例重点是验证 RLock 跨 await 持有的安全性。
+        # 同事件循环内并发 gather：既不死锁、结果一致，也应只拉取一次（singleflight）。
+        # 旧实现的 RLock 跨 await 持有时同循环协程全部可重入、互斥失效，会并发拉取
+        # 同一网址——正是本模块要消除的风控触发源。
         calls = 0
 
         async def fake_fetcher(**kwargs: Any) -> dict[str, Any]:
@@ -198,10 +198,11 @@ class TestFetchCookies:
             *(fetch_cookies("https://live.example.com/", fetcher=fake_fetcher) for _ in range(5))
         )
         assert all(r == {"a": "1"} for r in results)
+        assert calls == 1
 
     def test_cross_thread_concurrent_fetch_once(self) -> None:
-        # 真实并发模型：多个 room 线程各自独立 asyncio.run 循环，经 threading.RLock
-        # 跨循环协调，同一网址只应被拉取一次，其余线程复用缓存结果。
+        # 真实并发模型：多个 room 线程各自独立 asyncio.run 循环，经在途登记表 +
+        # call_soon_threadsafe 跨循环交付，同一网址只应被拉取一次，其余线程复用结果。
         call_count = 0
         call_lock = threading.Lock()
         barrier = threading.Barrier(4)
