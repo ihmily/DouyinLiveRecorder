@@ -22,29 +22,14 @@ from tqdm import tqdm
 # 应用根目录复用 src.logger 公开导出的 script_path（等价原私有 _app_root() 的返回值）
 from src.logger import script_path
 
+# 解压实现与 node_install 共用同一份（原先两处逐字重复，见 src/utils.unzip_file）
+from src.utils import unzip_file
+
 # 全局路径和环境变量
 current_platform = platform.system()
 execute_dir = script_path  # 冻结后指向 _internal/，与 __file__ 定位的资源收敛到同一处
 current_env_path = os.environ.get("PATH")
 ffmpeg_path = os.path.join(execute_dir, "ffmpeg")
-
-
-def unzip_file(zip_path: str | Path, extract_to: str | Path, delete: bool = True) -> None:
-    # 解压 ZIP 文件
-    if not os.path.exists(extract_to):
-        os.makedirs(extract_to)
-
-    extract_root = os.path.realpath(extract_to)
-    with zipfile.ZipFile(zip_path, "r") as zip_ref:
-        for member in zip_ref.namelist():
-            # 防止 Zip Slip 目录穿越攻击：校验每个成员解压后的真实路径
-            member_path = os.path.realpath(os.path.join(extract_root, member))
-            if not member_path.startswith(extract_root + os.sep) and member_path != extract_root:
-                raise ValueError(f"Unsafe path in zip file: {member}")
-        zip_ref.extractall(extract_to)
-
-    if delete and os.path.exists(zip_path):
-        os.remove(zip_path)
 
 
 def download_ffmpeg_official(url: str, dest_dir: str) -> bool:

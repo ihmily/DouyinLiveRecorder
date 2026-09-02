@@ -360,7 +360,10 @@ class DanmakuMonitorHub:
                     self._file = open(self._log_path, "a", encoding="utf-8")
                 self._file.write(line + "\n")
                 self._file.flush()
-        except Exception:
+        except Exception as e:
+            # 与本模块「异常全吞但必须留痕」的约定一致：写失败记 debug 日志
+            # （弹幕边车是旁路功能，绝不影响录制主流程，但不允许静默丢数据无迹可查）
+            logger.debug(f"弹幕边车文件写入失败: {type(e).__name__}: {e}")
             # 句柄可能已损坏：关闭置空，下一条事件重新打开
             try:
                 if self._file is not None:

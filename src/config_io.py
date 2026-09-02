@@ -262,6 +262,8 @@ def backup_file_start() -> None:
                 if new_url_config_md5 != url_config_md5:
                     backup_file(main.url_config_file, main.backup_dir)
                     url_config_md5 = new_url_config_md5
-            time.sleep(600)
         except Exception as e:
             logger.error(f"备份配置文件失败, 错误信息: {e}")
+        # sleep 必须在 try 外：否则 check_md5/backup 持续失败时异常分支不等待，
+        # 守护线程退化成紧循环空转，疯狂刷日志并空耗 CPU
+        time.sleep(600)

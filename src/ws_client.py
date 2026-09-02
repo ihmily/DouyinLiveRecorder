@@ -107,7 +107,13 @@ class WsClient:
                         hb_task.cancel()
                         try:
                             await hb_task
-                        except asyncio.CancelledError, Exception:
+                        except asyncio.CancelledError:
+                            # hb_task 按预期被取消（回收心跳任务）属正常路径，吞掉即可；
+                            # 若系本协程自身被取消（hb_task 并未处于 cancelled 态），
+                            # 不得吞掉取消信号，原样上抛交由外层统一退出
+                            if not hb_task.cancelled():
+                                raise
+                        except Exception:
                             pass
             except asyncio.CancelledError:
                 break

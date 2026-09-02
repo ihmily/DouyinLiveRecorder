@@ -181,6 +181,12 @@ def _throttle_probe(url: str) -> None:
     with _probe_throttle_lock:
         now = time.time()
         min_gap = _PROBE_MIN_HOST_INTERVAL + random.uniform(0, _PROBE_THROTTLE_JITTER)
+        # 顺带剔除长期未探针的旧 host（对照 _probe_backoff 的过期清理）：
+        # _probe_last_seen 只增不删会在 60+ 平台长跑下无界增长；清掉空闲超过阈值的
+        # host 无副作用——其下次探针按首次对待（不等待），节流语义不变
+        retention = _PROBE_MIN_HOST_INTERVAL * 10
+        for stale_host in [h for h, ts in _probe_last_seen.items() if now - ts > retention]:
+            _probe_last_seen.pop(stale_host, None)
         last = _probe_last_seen.get(host, 0.0)
         if now - last < min_gap:
             wait = min_gap - (now - last)
@@ -268,22 +274,22 @@ def _probe_in_backoff(url: str, platform: str | None) -> bool:
         return ts is not None and time.time() - ts <= _probe_backoff_window()
 
 
-# ffmpeg 录制失败侧的反馈入口：录制「快速失败」（输入打开即被拒，如虎牙 HS 线路
-# 探针 200/206 通过、ffmpeg 紧随其后 GET 却 403）时，把 ffmpeg 实际拉流的地址记入
-# 探针退避窗口。下一轮 select_source_url 会跳过该地址的探针、直接尝试下一 CDN
-# 候选——这类「探针假绿」在探针侧永远观测不到（httpx 与 ffmpeg 客户端指纹不同），
-# 只有录制侧的失败能反馈该信息；不标记会形成「探针通过→录制被拒→下轮探针仍通过」
-# 的死循环，房间永远录不上。platform 不在退避名单内时为无操作（与 _mark_probe_reject
-# 同一白名单，当前仅虎牙）。
-def mark_ffmpeg_reject(url: str, platform: str | None) -> None:
-    _mark_probe_reject(url, platform)
+# ffmpeg 录制侧的反馈入口：与探针侧 _mark_probe_reject / _clear_probe_reject 共用同一份
+# 实现（同一白名单、同一退避键），不再各写一层纯转发包装——语义说明集中在上面两处
+# 内部函数的注释里。录制「快速失败」（输入打开即被拒，如虎牙 HS 线路探针 200/206 通过、
+# ffmpeg 紧随其后 GET 却 403）时把实际拉流地址记入退避窗口，下一轮 select_source_url
+# 跳过该地址探针、直接尝试下一 CDN 候选——「探针假绿」在探针侧永远观测不到（httpx 与
+# ffmpeg 客户端指纹不同），不标记会形成「探针通过→录制被拒→下轮探针仍通过」的死循环；
+# 录制成功则立即撤销退避，避免明明可用的线路被继续跳过。
+mark_ffmpeg_reject = _mark_probe_reject
+clear_ffmpeg_reject = _clear_probe_reject
 
 
-# ffmpeg 录制成功侧的反馈入口（与 mark_ffmpeg_reject 严格对称：同一白名单、同一退避键）：
-# 该地址本轮实际拉流成功，说明先前记入的退避已过期或属误判，立即撤销，避免下一轮
-# 明明可用却被跳过。platform 不在退避名单内时为无操作。
-def clear_ffmpeg_reject(url: str, platform: str | None) -> None:
-    _clear_probe_reject(url, platform)
+# 判定流地址是否为 h265 编码：h265 无法 copy 录制，候选构建与 record_url 兜底
+# 两处共用的判定逻辑，抽为单一实现避免口径漂移
+def _is_h265(url: str) -> bool:
+    codec = utils.get_query_params(url, "codec")
+    return isinstance(codec, list) and bool(codec) and codec[0] == "h265"
 
 
 # 单次探针的超时秒数（HEAD / Range-GET / GET 复核共用）
@@ -322,8 +328,15 @@ def _confirm_get_ok(
                 reject_status = probe.status_code
                 # 偶发 403 即使重试恢复也是限流证据：记录退避，下一轮让 ffmpeg 直连
                 _mark_probe_reject(url, platform)
-        except Exception:
-            return True  # GET 复核异常（超时等）不推翻 HEAD 结论
+        except Exception as e:
+            # 异常（超时等）不推翻 HEAD 结论，但必须留痕（禁止静默吞异常）；
+            # attempt 0 的异常可能是偶发超时，按「重试一次再定罪」语义隔开后重试，
+            # 两次均异常才放弃复核（HEAD 结论维持通过）
+            logger.debug(f"流地址校验: {url} - GET 复核异常: {type(e).__name__}: {e}（attempt {attempt}）")
+            if attempt == 0:
+                time.sleep(_recheck_delay())
+                continue
+            return True
         if attempt == 0:
             time.sleep(_recheck_delay())
     if last_resort:
@@ -432,8 +445,11 @@ def _validate_stream_url(
                 _mark_probe_reject(url, platform)
                 if attempt == 0:
                     time.sleep(_recheck_delay())
-            # 循环已至少执行一次，probe 必非空；断言收窄类型供后续日志引用
-            assert probe is not None
+            # 循环已至少执行一次，probe 理论上必非空；显式判空收窄类型（assert 在 -O
+            # 下会被整体剔除，且失败抛 AssertionError 而非可诊断的告警路径）
+            if probe is None:
+                logger.warning(f"流地址校验: {url} - Range-GET 未取得响应，按校验失败处理")
+                return False
             if last_resort:
                 logger.warning(
                     f"流地址校验: {url} - HEAD={response.status_code}, Range-GET={probe.status_code}；"
@@ -546,7 +562,7 @@ def select_source_url(
         # m3u8 存在但 HLS 采集关闭、且无 FLV/record_url 可回退：同为静默路径，
         # 用户可通过开启 HLS 采集恢复录制，必须提示而非无声跳过
         logger.warning(
-            f"存在 HLS 源但 HLS 采集未启用，且无 FLV/record_url 可回退，本轮放弃"
+            "存在 HLS 源但 HLS 采集未启用，且无 FLV/record_url 可回退，本轮放弃"
             f"（可开启 HLS 采集恢复录制）: {stream_info.get('anchor_name') or ''}"
         )
         return None
@@ -580,8 +596,7 @@ def select_source_url(
 
         usable: list[tuple[str, bool]] = []
         for url, is_hls in seq:
-            codec = utils.get_query_params(url, "codec")
-            if isinstance(codec, list) and codec and codec[0] == "h265":
+            if _is_h265(url):
                 logger.warning(f"h265 编码候选无法 copy 录制，跳过: {url}")
                 continue
             usable.append((url, is_hls))
@@ -611,8 +626,7 @@ def select_source_url(
             logger.warning("HLS/FLV URL validation failed, trying record_url fallback")
 
         if isinstance(record_url, str) and record_url:
-            codec = utils.get_query_params(record_url, "codec")
-            if isinstance(codec, list) and codec and codec[0] == "h265":
+            if _is_h265(record_url):
                 logger.warning("record_url has h265 codec, but no HLS or FLV fallback available")
             # record_url 是最后一档候选，恒为 last_resort：稳定拒绝也放行给 ffmpeg 定夺
             if _validate_stream_url(
