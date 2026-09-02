@@ -72,13 +72,12 @@ for _stream in (sys.stdout, sys.stderr):
     if _stream is not None and hasattr(_stream, "reconfigure"):
         try:
             _stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
-        except (ValueError, OSError):
+        except ValueError, OSError:
             pass
 
 # 桌面 Chrome UA：国内 CDN(虎牙/B站)会拒绝移动端 UA(403)，录制拉流必须用桌面 UA。
 DESKTOP_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
 )
 # 移动端 UA：与 ffmpeg 录制命令默认 UA 保持一字不差(校验与录制两端必须一致)。
 MOBILE_UA = (
@@ -238,7 +237,7 @@ def dig(obj: Any, *keys: Any, default: Any = None) -> Any:
                 cur = cur[k]
             else:
                 cur = cur[k]
-        except (KeyError, IndexError, TypeError, AttributeError):
+        except KeyError, IndexError, TypeError, AttributeError:
             return default
     return cur if cur is not None else default
 
@@ -827,6 +826,7 @@ def resolve_douyu(url: str, proxy: str | None = None, cookies: str = "") -> Stre
 
 # ---------- 平台分派表 ----------
 
+
 class PlatformResolver(Protocol):
     """平台解析器调用约定：必须支持 proxy/cookies 关键字调用。
 
@@ -1072,7 +1072,9 @@ def find_ffmpeg(explicit: str = "") -> str:
     return shutil.which("ffmpeg") or ""
 
 
-def build_ffmpeg_cmd(ffmpeg_bin: str, url: str, out_path: str, platform: str, cookies: str, duration: float) -> list[str]:
+def build_ffmpeg_cmd(
+    ffmpeg_bin: str, url: str, out_path: str, platform: str, cookies: str, duration: float
+) -> list[str]:
     """构造 ffmpeg 命令。
 
     -headers 必须用 \\r\\n 结尾(HTTP 头规范)，且必须与校验探针的 UA/Referer/Cookie
@@ -1188,14 +1190,14 @@ def load_settings(config_path: str) -> Settings:
 def _safe_int(text: str, default: int) -> int:
     try:
         return int(float(str(text).strip()))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return default
 
 
 def _safe_float(text: str, default: float) -> float:
     try:
         return float(str(text).strip())
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return default
 
 
@@ -1297,9 +1299,7 @@ class Recorder:
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = str(out_dir / f"{name}.flv")
 
-        cmd = build_ffmpeg_cmd(
-            self.st.ffmpeg_bin, src, out_path, stream.platform, stream.cookies, self.st.duration
-        )
+        cmd = build_ffmpeg_cmd(self.st.ffmpeg_bin, src, out_path, stream.platform, stream.cookies, self.st.duration)
         info(f"开始录制: {stream.anchor_name} -> {out_path}")
         return run_ffmpeg(cmd, os.path.join("logs", "ffmpeg.log"))
 
@@ -1346,7 +1346,9 @@ def selftest() -> int:
     print("=== 自检开始 ===")
 
     # --- 文件名清洗 ---
-    check("clean_name 去非法字符", clean_name('a/b:c*d?e"f<g>h|i') == "a_b_c_d_e_f_g_h_i", clean_name('a/b:c*d?e"f<g>h|i'))
+    check(
+        "clean_name 去非法字符", clean_name('a/b:c*d?e"f<g>h|i') == "a_b_c_d_e_f_g_h_i", clean_name('a/b:c*d?e"f<g>h|i')
+    )
     check("clean_name 替换 &", "&" not in clean_name("A&B 直播"))
     check("clean_name 空值兜底", clean_name("") == FALLBACK_NAME)
     check("clean_name 去 emoji", clean_name("主播🎉开播") == "主播_开播", clean_name("主播🎉开播"))
@@ -1436,7 +1438,10 @@ def selftest() -> int:
     cmd = build_ffmpeg_cmd("ffmpeg", "http://x/y.flv", "out.flv", "B站直播", "sid=1", 0)
     check("ffmpeg 含 headers", "-headers" in cmd)
     check("ffmpeg headers 含 Referer", "Referer: https://live.bilibili.com/" in " ".join(cmd))
-    check("ffmpeg headers \\r\\n 结尾", "".join(f"{k}: {v}\r\n" for k, v in {"User-Agent": DESKTOP_UA}.items()).endswith("\r\n"))
+    check(
+        "ffmpeg headers \\r\\n 结尾",
+        "".join(f"{k}: {v}\r\n" for k, v in {"User-Agent": DESKTOP_UA}.items()).endswith("\r\n"),
+    )
     check("ffmpeg 输出路径在末尾", cmd[-1] == "out.flv")
     check("ffmpeg 未加 -t", "-t" not in cmd)
     cmd2 = build_ffmpeg_cmd("ffmpeg", "http://x/y.flv", "out.flv", "抖音直播", "", 30)
