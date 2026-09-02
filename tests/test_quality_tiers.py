@@ -199,6 +199,9 @@ class TestDouyuSubTiers:
             mock.return_value = _douyu_flv(rate=4, suffix="_4000")
             result = await get_douyu_stream_url(cast(dict[str, object], json_data), video_quality="BD4")
         mock.assert_awaited_once()
+        # await_args 类型为 _Call | None（mock 未被 await 时为 None）：mypy 无法从
+        # assert_awaited_once 收窄，需显式判空；兼作运行时的明确失败点
+        assert mock.await_args is not None
         assert mock.await_args.args[1] == "4000"
         assert result["quality"] == "BD4"
         assert result["actual_quality"] == "BD4"
@@ -211,6 +214,7 @@ class TestDouyuSubTiers:
         with patch("src.stream.get_douyu_stream_data", new_callable=AsyncMock) as mock:
             mock.return_value = _douyu_flv(rate=4, suffix="_4000")
             result = await get_douyu_stream_url(cast(dict[str, object], json_data), video_quality="BD8")
+        assert mock.await_args is not None
         assert mock.await_args.args[1] == "8200"
         assert result["quality"] == "BD8"
         assert result["actual_quality"] == "BD4"
@@ -222,6 +226,7 @@ class TestDouyuSubTiers:
         with patch("src.stream.get_douyu_stream_data", new_callable=AsyncMock) as mock:
             mock.return_value = _douyu_flv(rate=8200)
             result = await get_douyu_stream_url(cast(dict[str, object], json_data), video_quality="BD30")
+        assert mock.await_args is not None
         assert mock.await_args.args[1] == "8200"
         assert result["actual_quality"] == "BD8"
 
@@ -233,6 +238,7 @@ class TestDouyuSubTiers:
             mock.return_value = _douyu_flv(rate=0)
             result = await get_douyu_stream_url(cast(dict[str, object], json_data), video_quality="OD")
         mock.assert_awaited_once()
+        assert mock.await_args is not None
         assert mock.await_args.args[1] == "0"
         assert result["actual_quality"] == "OD"
 
@@ -266,5 +272,6 @@ class TestDouyuSubTiers:
         with patch("src.stream.get_douyu_stream_data", new_callable=AsyncMock) as mock:
             mock.return_value = _douyu_flv(rate=3, suffix="_2000")
             result = await get_douyu_stream_url(cast(dict[str, object], json_data), video_quality="UHD")
+        assert mock.await_args is not None
         assert mock.await_args.args[1] == "3"
         assert result["actual_quality"] == "UHD"

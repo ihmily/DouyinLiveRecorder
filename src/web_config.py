@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import base64
-import binascii
 import configparser
 import functools
 import hashlib
@@ -342,9 +341,11 @@ def verify_web_password(plaintext: str, stored: str) -> bool:
             salt = base64.b64decode(salt_b64)
             expected = base64.b64decode(hash_b64)
             dk = hashlib.pbkdf2_hmac("sha256", plaintext.encode("utf-8"), salt, int(iters_s))
-        except ValueError, binascii.Error:
-            # 哈希串损坏/迭代数非法：视为校验失败而非崩溃
+        except ValueError:
+            # 哈希串损坏/迭代数非法（base64.b64decode 的 binascii.Error 亦为 ValueError 子类）：
+            # 视为校验失败而非崩溃
             return False
         return hmac.compare_digest(dk, expected)
-    # 兼容历史明文存储
-    return hmac.compare_digest(plaintext, stored)
+    # 兼容历史明文存储。必须先编码再比较：compare_digest 对含非 ASCII 字符的 str
+    # 直接抛 TypeError（历史明文密码含中文时 /api/login 会 500），bytes 比较无此限制
+    return hmac.compare_digest(plaintext.encode("utf-8"), stored.encode("utf-8"))

@@ -17,6 +17,7 @@ import threading
 import time
 import tkinter as tk
 import tkinter.font as tkfont
+from collections.abc import Callable
 from datetime import datetime
 from tkinter import messagebox, scrolledtext, ttk
 from typing import TYPE_CHECKING, Any
@@ -358,10 +359,18 @@ class AdvancedSettingsWindow:
         )
         self.save_btn.pack(side=tk.RIGHT)
 
-        # 按钮悬停效果
+        # 按钮悬停效果。具名闭包 + 显式参数类型：lambda 在 bind 的重载上下文中
+        # 无法推断参数类型（mypy 报 "Cannot infer type of lambda"），写法对齐
+        # gui.py 的 _on_escape 惯例
+        def _flat_relief(button: tk.Button) -> Callable[..., None]:
+            def _handler(_event: object = None) -> None:
+                button.configure(relief=tk.FLAT)
+
+            return _handler
+
         for btn in [cancel_btn, self.save_btn]:
-            btn.bind("<Enter>", lambda e, b=btn: b.configure(relief=tk.FLAT))
-            btn.bind("<Leave>", lambda e, b=btn: b.configure(relief=tk.FLAT))
+            btn.bind("<Enter>", _flat_relief(btn))
+            btn.bind("<Leave>", _flat_relief(btn))
 
     # 读取 config.ini 内容填充到编辑器（文件不存在则提示新建）
     def _load_config(self) -> None:
@@ -668,7 +677,9 @@ class LiveRecorderGUI:
         return outer, inner_content
 
     # 创建统一样式的 ttk 按钮并返回
-    def _create_modern_button(self, parent: tk.Widget, text: str, command, style: str, width: int = 14) -> ttk.Button:
+    def _create_modern_button(
+        self, parent: tk.Widget, text: str, command: str | Callable[[], Any], style: str, width: int = 14
+    ) -> ttk.Button:
         # 创建统一风格的按钮
         btn = ttk.Button(parent, text=text, command=command, style=style, width=width)
         return btn
@@ -965,7 +976,14 @@ class LiveRecorderGUI:
                 return ci, ofmt, self._tray_status_str()
 
             config = configparser.ConfigParser()
-            config.optionxform = lambda optionstr: optionstr
+
+            # mypy 不允许直接给方法 optionxform 赋值（"Cannot assign to a method"），
+            # 用 setattr 绕过该误报；具名函数显式标注 (str) -> str（写法对齐 gui.py）。
+            # 配置项键名保持原样（不转小写），以匹配中文配置节名。
+            def _preserve_case(optionstr: str) -> str:
+                return optionstr
+
+            setattr(config, "optionxform", _preserve_case)
             config.read(self.main_config_file, encoding="utf-8-sig")
 
             if "录制设置" in config:

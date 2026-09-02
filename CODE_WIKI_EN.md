@@ -736,6 +736,7 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 - kernel32 / user32 `WinDLL` handles are cached as module-level singletons (`_KERNEL32` / `_USER32`), avoiding repeated DLL loads when `_fix_encoding()` and `_enter_background_mode()` are called multiple times; on load failure they remain `None` and subsequent calls auto-retry
 - Completed `restype` declarations: `SetConsoleOutputCP` / `SetConsoleCP` return `BOOL` (explicit `restype = ctypes.c_int`), `ShowWindow` returns `BOOL`, consistent with the existing `GetConsoleWindow.restype = c_void_p`, eliminating implicit reliance on ctypes' default return type
 - In `_enter_background_mode()`, `GetConsoleWindow()` already returns `c_void_p`; removed the redundant `cast(ctypes.c_void_p, ...)`, directly checking for null then `ShowWindow(hwnd, 0)`
+- **Tray-module alignment (2026-09-02)**: `src/web_tray.py`'s console-window restyling (`_patch_console_window`) and tray restore (`_on_show`) switched to the same `WinDLL` + explicit `argtypes`/`restype` conventions (HWND/HMENU declared as `c_void_p`, fixing 64-bit handles being truncated by ctypes' default `c_int` — which could redirect window operations to a wrong address), with module-level `_KERNEL32`/`_USER32` singleton caching; the second parameter of `SetWindowPos` (insert-after window) is accordingly narrowed to `c_void_p | None`
 
 **API routes**:
 
@@ -814,7 +815,7 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 - **Danmaku monitor hub (`src/danmaku_monitor.py`)**: `DanmakuMonitorHub` (process singleton, lazily created via `get_hub()`) aggregates danmaku events from each room — `room_started/room_connected/room_closed/room_stopped/room_message`; in-memory snapshot `snapshot(since=0)` for the Web API to consume, and writes a JSONL sidecar `logs/danmaku_monitor.jsonl` (5MB rotation). All methods swallow exceptions; includes a 10s×6-bucket rate window and ≤10 messages/sec sampling fold.
 - **SRT subtitle writer (`src/srt_writer.py`)**: `SrtWriter` shards by `segment_seconds` to `{base}_{seg:03d}.srt` (single-file mode `{base}.srt`); the timeline is based on `time.monotonic()` and aligned with ffmpeg's `segment -reset_timestamps` PTS; `write()` holds a `threading.Lock` to write entries and flush.
 - **WebSocket transport layer (`src/ws_client.py`)**: `WsClient` is the async WS client shared by all platform danmaku. `connect()` explicitly sets `proxy=None` (danmaku connects directly, not following the system proxy, avoiding the SOCKS-requires-python-socks error); `ping_interval=None` (each platform has its own heartbeat); `max_size=None`, `asyncio.Lock` serializes sending; supports `on_message/on_ready/on_heartbeat/on_close/on_reconnect` callbacks and a `max_reconnect` reconnect policy.
-- **Visitor Cookie cache (`src/cookie_cache.py`)**: the only in-process "dynamically fetch visitor cookie by URL" cache, avoiding risk-control triggers from concurrent duplicate requests across multiple rooms. `fetch_cookies(url, proxy, *, ttl=30min, fetcher=None)` uses a lock-free fast path + `RLock` double-check; `get_cookie_str` / `invalidate` / `clear`.
+- **Visitor Cookie cache (`src/cookie_cache.py`)**: the only in-process "dynamically fetch visitor cookie by URL" cache, avoiding risk-control triggers from concurrent duplicate requests across multiple rooms. `fetch_cookies(url, proxy, *, ttl=30min, fetcher=None)` uses a lock-free fast path + singleflight deduplication (rewritten 2026-09-02: `threading.Lock` only guards the synchronous reads/writes of the cache dict and the in-flight registry — **never awaiting while holding the lock**; under the old RLock-across-await scheme, same-loop coroutines could all re-enter the lock, voiding mutual exclusion; same-loop waiters reuse a future, cross-loop delivery goes through `loop.call_soon_threadsafe` (futures are not thread-safe); if the fetching coroutine is cancelled it immediately delivers an empty result to waiters, and waiters carry a timeout fallback to prevent hanging forever); `get_cookie_str` / `invalidate` / `clear`.
 - **Douyin danmaku protocol (`src/proto/`)**: `douyin.proto` (Proto3) defines `Response/Message/ChatMessage/GiftMessage/...`; `douyin_pb2.py` is protoc-generated (DO NOT EDIT), `douyin_pb2.pyi` is a pyright-based type stub. Douyin danmaku parsing chain: `PushFrame.payload` (gzip → `Response`) → `Message.payload` → `ChatMessage`.
 
 ---
@@ -1580,6 +1581,97 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 ---
 
 ## Changelog
+
+### v4.0.9.3-dev (2026-09-02) — Standalone single-file integration (standalone) type-annotation fixes (mypy: 4 errors cleared)
+
+**Change Summary**: This entry records the 2026-09-02 session's fix of 4 mypy static-type warnings (IDE mypy / `warn_return_any`) in the root-level single-file integration script `douyin_live_recorder_standalone.py`. All changes are **modifications** (type-annotation cleanup, no new features, no behavioral change); import cleanup: removed the unused `Callable`, added `Protocol, cast`. **Deletions**: the `Callable` import in `typing` (no remaining references).
+
+**Files Involved (Classified by Module)**:
+
+**1. Type-annotation fixes (modification) — `douyin_live_recorder_standalone.py`**
+
+- L265 `_fetch_json`: the return `json.loads(resp.text)` was typed `Any` by mypy (declared `dict[str, Any]`) → changed to `cast(dict[str, Any], json.loads(resp.text))`.
+- L751 `_douyu_sign`: the return `json.loads(out.stdout.strip())` was typed `Any` (declared `dict[str, str] | None`) → first guard with `isinstance(sign, dict)` (returns `None` when not a dict), then `cast(dict[str, str], sign)`, eliminating a non-dict runtime crash.
+- L853 `dispatch`: `fn(url, proxy=proxy, cookies=cookies)` keyword call raised mypy "Unexpected keyword argument 'proxy'/'cookies'" — root cause: `PLATFORM_RULES` used `Callable[[str, str | None, str], StreamInfo`, whose alias drops parameter names so only positional passing type-checks. Fixed by adding a `PlatformResolver(Protocol)` (`__call__(url, proxy=None, cookies="")`) and re-annotating `PLATFORM_RULES` as `list[tuple[str, str, PlatformResolver]]`; the four `resolve_*` functions already match the Protocol, no changes needed.
+- `typing` import: `from typing import Any, Callable` → `from typing import Any, Protocol, cast` (removed the now-unreferenced `Callable`).
+
+**Impact scope**:
+
+- User-visible: none (pure static type annotations, runtime behavior unchanged).
+- Unchanged behavior: the dispatch chain of the four platform resolvers (`resolve_douyin` / `resolve_huya` / `resolve_bilibili` / `resolve_douyu`) and the keyword-call form (`proxy=` / `cookies=`) are fully preserved.
+
+**Verification** (2026-09-02):
+
+- `python -m py_compile douyin_live_recorder_standalone.py`: passed (0 syntax errors).
+- IDE lint (`douyin_live_recorder_standalone.py`): 0 errors, 0 warnings.
+- The local interpreter (Python 3.14.7) does not have `mypy` / `basedpyright` installed, so a full local type check could not be run; please run `mypy douyin_live_recorder_standalone.py` in an environment with a type checker to confirm.
+
+**Related**:
+
+- Convention alignment (MEMORY.md "basedpyright strict-mode constraints & convergence tips"): when the RHS is `Any`, `json.loads` must be `cast`-wrapped rather than relying on `# type: ignore` (this repo forbids ignore comments).
+
+### v4.0.9.3-dev (2026-09-02) — Full Fix of All 20 Issues from the Code Inspection Report (cookie_cache singleflight rewrite + Web non-ASCII password crash + probe/resource/style robustness) + mypy Whole-Repo Clean Slate (tests / gui_legacy / scripts)
+
+**Change Summary**: This entry systematically records the complete fix of all 20 review issues from `代码检查报告.md` (Code Inspection Report) in the 2026-09-02 session, plus the subsequent clearance of two batches of leftover mypy errors. Two high-priority items: ① `src/cookie_cache.py` concurrency deduplication rewritten as singleflight — the old implementation held a `threading.RLock` across `await`, and RLock is a thread-affine lock: concurrent coroutines in the same event loop all belong to one thread and can all re-enter the lock, so mutual exclusion was completely void and multiple coroutines could concurrently request the same URL (precisely the risk-control trigger this module exists to eliminate); ② `src/web_config.py`'s legacy plaintext-password compatibility path raised `TypeError` directly on non-ASCII passwords (`hmac.compare_digest` does not support comparing strs containing non-ASCII characters; with a legacy plaintext password containing Chinese characters, `/api/login` returned a 500). Eight medium-priority items cover the Web API write-path consistency, a busy-looping backup daemon thread, probe exception logging and unbounded throttle-dict growth, ctypes handle truncation, decorator fallback types, HTTP response connection leaks, duplicate unzip_file consolidation, and Session lifecycle management. Eight low-priority items are redundancy and style cleanups. The environment item fixed the venv editable install pointing (it previously targeted `D:\DouyinLiveRecorder-coding`, causing the ghost problem of "edited directory A while tests ran against directory B"). **Deletions**: the duplicate `unzip_file()` implementations in `src/node_install.py` and `src/ffmpeg_install.py` (consolidated into a single implementation in `src/utils.py`), the pure forwarding wrappers `mark_ffmpeg_reject`/`clear_ffmpeg_reject` in `src/stream_select.py` (merged into aliases of the internal functions), the redundant `binascii.Error` catch and unused `import binascii` in `src/web_config.py`, and the placeholder-free f-string prefix and `assert`-based type narrowing in `src/stream_select.py` (replaced with an explicit null check plus a warning path).
+
+**1. Concurrency correctness (high) — `src/cookie_cache.py` (rewritten) / `tests/test_cookie_cache.py`**
+
+- `src/cookie_cache.py`: `fetch_cookies` rewritten in singleflight style — `threading.Lock` only guards the synchronous reads/writes of the "cache dict + in-flight registry `_inflight`" (**never awaits inside the lock**); the coroutine that wins the fetch right performs one fetch, same-loop waiters register a future to reuse the same result, and cross-loop waiters receive delivery via `loop.call_soon_threadsafe` (futures are not thread-safe; calling `set_result` across threads directly is forbidden); if the fetching coroutine is cancelled (room stop / process exit), the `BaseException` branch immediately removes the registration and delivers an empty result to waiters; waiters carry a `timeout + 5s` margin fallback (guarding against hanging forever if the fetching thread dies abnormally). Existing semantics fully preserved: failure is not cached, TTL expiry, `fetcher` passthrough, etc.
+- `tests/test_cookie_cache.py`: `test_same_loop_reentrant_no_deadlock` strengthened to also assert "5 coroutines gathered concurrently trigger exactly one fetch" (this assertion would necessarily fail under the old RLock implementation — exactly the target behavior of this fix); the cross-thread case (4-thread barrier, `call_count == 1`) comments updated accordingly. All 26 tests pass.
+
+**2. Web panel defect fixes (high / medium-high / medium) — `src/web_config.py` / `src/web_api.py` / `src/web_tray.py`**
+
+- `src/web_config.py`: ① the legacy plaintext compatibility path in `verify_web_password` now uses `hmac.compare_digest(plaintext.encode("utf-8"), stored.encode("utf-8"))` (bytes comparison has no non-ASCII restriction); ② the PBKDF2 parsing branch drops the redundant `binascii.Error` catch (it is a subclass of `ValueError`) and the unused `import binascii`.
+- `src/web_api.py`: `PUT /api/rooms` (`update_room`) now writes the line using `normalize_url(req.url)` — the previously written un-normalized URL was inconsistent with the deduplication criteria of add/delete/toggle, so a PUT-written line could never be matched again on the next round.
+- `src/web_tray.py`: `_patch_console_window` / `_on_show` switched to `ctypes.WinDLL` + explicit `argtypes`/`restype` (`GetConsoleWindow.restype = c_void_p`; full signatures declared for `GetWindowLongW`/`SetWindowLongW`/`SetWindowPos`/`GetSystemMenu`/`EnableMenuItem`/`ShowWindow`/`SetForegroundWindow`), fixing 64-bit HWND/HMENU truncation by the default `c_int`; module-level `_KERNEL32`/`_USER32` singleton caching (aligned with the `web.py` conventions); the second parameter of `SetWindowPos` narrowed to `c_void_p | None`.
+
+**3. Daemon-thread and probe robustness (medium) — `src/config_io.py` / `src/stream_select.py` / `src/danmaku_monitor.py` / `src/ws_client.py`**
+
+- `src/config_io.py`: the `time.sleep(600)` in the `backup_file_start` daemon loop moved out of `try` — the old exception branch did not wait, so persistent check_md5/backup failures degraded into a busy loop spinning wild log spam and burning CPU.
+- `src/stream_select.py`: ① `_confirm_get_ok`'s `except Exception` now logs `logger.debug` (including exception type + attempt number, no more silent swallowing), and an attempt-0 exception follows the "retry once before convicting" semantics — sleeping `_recheck_delay()` then retrying, giving up the recheck only if both attempts raise (the HEAD conclusion stands); ② `_throttle_probe` now evicts hosts idle for more than `_PROBE_MIN_HOST_INTERVAL × 10` while writing, so `_probe_last_seen` no longer grows without bound (mirroring `_probe_backoff`'s expiry cleanup; prevents unbounded growth across 60+ platforms in long runs); ③ `mark_ffmpeg_reject`/`clear_ffmpeg_reject` merged from pure forwarding wrappers into module-level aliases of `_mark_probe_reject`/`_clear_probe_reject` (semantic comments preserved); ④ extracted `_is_h265(url)` to eliminate the duplicated check between candidate construction and the record_url fallback; ⑤ removed a placeholder-free f-string prefix; ⑥ `assert probe is not None` replaced with an explicit null check + warning (`assert` is stripped entirely under `-O`).
+- `src/danmaku_monitor.py`: the `_write_line` failure branch now logs `logger.debug` (with exception type), consistent with this module's "swallow all exceptions but always leave a trace" convention — sidecar data is no longer dropped without a trace.
+- `src/ws_client.py`: the heartbeat-task reclamation `except asyncio.CancelledError, Exception:` was split — `CancelledError` is swallowed only when hb_task itself was cancelled as expected (`hb_task.cancelled()` is true); if the current coroutine was cancelled, it re-raises so the cancellation signal is no longer swallowed.
+
+**4. Decorator fallback types and resource management (medium) — `src/utils.py` / `src/spider.py` / `src/node_install.py` / `src/ffmpeg_install.py` / `src/sync_http.py`**
+
+- `src/utils.py`: ① the decorator's shared implementation consolidated into `_make_trace_error_guard(func, fallback)`, with the new `trace_error_decorator_or_none` (returns `None` on error); error logs now include the function name and fallback type; ② added the shared `unzip_file()` (with Zip Slip validation).
+- `src/spider.py`: five functions returning str/tuple (`get_bilibili_room_info_h5` / `login_sooplive` / `get_sooplive_tk` / `get_winktv_bj_info` / `login_flextv`) switched from `trace_error_decorator` to `trace_error_decorator_or_none` — the old uniform dict fallback disguised errors as normal results (the dict returned by a failed `login_flextv` was once misjudged as a successful login by `if new_cookies`).
+- `src/node_install.py`: both `requests.get` calls (version page + streaming zip download) now managed with `with` to close connections; the local `unzip_file` was deleted in favor of importing from `src/utils`.
+- `src/ffmpeg_install.py`: local `unzip_file` deleted in favor of importing from `src/utils` (the two verbatim-duplicate implementations consolidated into one).
+- `src/sync_http.py`: added `_all_sessions` (`weakref.WeakSet`) + `_all_sessions_lock` to register thread-local Sessions, `close_session()` (explicit release for the current thread), and `close_all_sessions()` (registered with `atexit` to gracefully close all connection pools at process exit).
+- `tests/test_spider_platform.py`: 4 assertions that had pinned the old dict fallback behavior (TestLoginSooplive ×2 / TestLoginFlexTv / TestSoopliveTk / TestWinktvBjInfo) updated to `is None`.
+
+**5. Style conventions and environment (low) — `AGENTS.md` / venv**
+
+- PEP 758 style finalized: the report originally suggested uniformly adding parentheses as `except (A, B):`, but testing showed **black 26.x's stable style is the paren-less form** (`black --check` rewrites a single-line-fitting `except (A, B):` back to `except A, B:`, so adding parentheses actually fails the format gate). The report's fallback option was therefore adopted: keep the paren-less style (syntax legality guaranteed by the `requires-python = ">=3.14"` floor), and record the convention explicitly in `AGENTS.md`'s "Code Style → Black" section: "depends on PEP 758; do not add parentheses for <3.14 compatibility".
+- venv fix: the editable install in `.venv` previously pointed to `D:\DouyinLiveRecorder-coding` (a different checkout); after reinstalling with `pip install -e .` (4.0.9 → 4.0.9.2), `direct_url.json` targets this workspace, and `import src.*` confirmed resolving to this directory.
+
+**6. Leftover mypy clearance (two follow-up batches) — `tests/test_quality_tiers.py` / `gui_legacy.py` / `scripts/extract_i18n_strings.py`**
+
+- `tests/test_quality_tiers.py`: added `assert mock.await_args is not None` before the 5 `mock.await_args.args[1]` accesses — typeshed declares `await_args` as `_Call | None`; `assert_awaited_once()` guarantees non-None at runtime but mypy cannot narrow it (union-attr).
+- `gui_legacy.py`: 4 fixes — ① the two hover-effect lambdas replaced by the named closure factory `_flat_relief(button)` (event parameter explicitly annotated, aligned with gui.py's `_on_escape` convention); ② `_create_modern_button`'s `command` parameter annotated `str | Callable[[], Any]` (exactly matching the ttk.Button stub); ③ `config.optionxform = lambda` replaced by the named function `_preserve_case` + `setattr` (the same gui.py workaround for "Cannot assign to a method"); ④ `from collections.abc import Callable` added at the top.
+- `scripts/extract_i18n_strings.py`: `parse_keys`'s dynamic `getattr` call result narrowed with `cast(dict[str, str], ...)` (`warn_return_any` gate), removing the now-unneeded `type: ignore[arg-type]`.
+
+**Impact scope**:
+
+- User-visible: Web panel login works again for legacy plaintext passwords containing non-ASCII characters; concurrent rooms on the same platform no longer repeatedly request visitor cookies from the same domain (further reducing risk-control trigger probability); CPU no longer spins when the backup directory persistently fails.
+- Unchanged behavior: cookie-cache TTL / failure-not-cached / fetcher passthrough, probe backoff and throttling semantics, the Douyu/Huya GET-recheck "retry once before convicting" semantics, all Web API route contracts, the danmaku collection chain, etc. all preserved.
+- Known trade-off: the PEP 758 paren-less except syntax is incompatible with <3.14 (this repo's floor is 3.14; not a regression but an explicit convention).
+
+**Verification** (2026-09-02):
+
+- Full `pytest`: **806 passed, 2 skipped, 0 failed**.
+- `mypy` whole-repo scope (src + tests + all entry points + build_exe + scripts): **Success: no issues found in 102 source files** (the CI scope `mypy src/` with 39 files, the report scope with 44 files, and the tests-included scope with 94 files are all green).
+- `basedpyright --outputjson`: errorCount=0, warningCount=0.
+- `black --check`: 105 files unchanged; `isort --check-only` all compliant; `compileall` 0 syntax errors.
+- web_tray live check: `WinDLL` loads successfully and the window-restyling chain is exception-free (headless `GetConsoleWindow` returns empty and skips as expected).
+
+**Related**:
+
+- `AGENTS.md`: "Code Style → Black" gains the multi-exception except syntax (PEP 758) convention.
+- Regression locks: `tests/test_cookie_cache.py` (same-loop single-fetch + cross-thread dedup), `tests/test_spider_platform.py` (None fallback for 5 functions), `tests/test_stream_select.py` + `tests/test_record_failure_feedback.py` (probe/backoff semantics).
+- Issue source: the 20-item list in `代码检查报告.md` (Code Inspection Report, #1–#20); this entry is its full closure record.
+- Previous full snapshot: v4.0.9.2-dev (2026-08-30) "Runtime Log Archiving on Recording Stop".
 
 ### v4.0.9.2-dev (2026-08-30) — Runtime Log Archiving on Recording Stop (four logs renamed with timestamp) + i18n catalog completion (507 → 516 entries) + repo metadata sync-list alignment (.v2c / .mypy_cache)
 

@@ -305,7 +305,9 @@ def create_app(
     @app.put("/api/rooms")
     async def update_room(req: RoomUpdate) -> dict[str, object]:
         old_url = normalize_url(req.old_url)
-        new_line = format_url_line(req.url, req.quality, req.name)
+        # 写入行同样使用归一化 URL：与 add/delete/toggle 的查重口径一致，
+        # 否则 PUT 写回的原始 URL 下一轮再也匹配不到（归一化 vs 未归一化）
+        new_line = format_url_line(normalize_url(req.url), req.quality, req.name)
         old_rooms = parse_url_config(cast(str, app.state.url_config_file))
         # 找到匹配行（含注释状态）
         import main as _main

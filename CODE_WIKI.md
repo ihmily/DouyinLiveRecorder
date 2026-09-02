@@ -710,6 +710,7 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 - 重定向跟踪
 - **SSL 验证**: 由全局配置 `src/http_config.py` 统一控制
 - **Opener 预构建**: 按 SSL 验证开关预构建 insecure / secure 两个 opener，避免运行时重复构建
+- **Session 生命周期管理（2026-09-02）**: thread-local `requests.Session` 经模块级 `WeakSet` 弱引用登记（线程销毁后条目自动回收、不阻止 GC）；`atexit` 注册 `close_all_sessions()` 在进程退出时统一优雅关闭全部存活连接池（80+ 房间长跑场景）；另提供 `close_session()` 供房间线程退出路径显式释放当前线程 Session，关闭后下次 `_session()` 自动重建
 
 ---
 
@@ -815,7 +816,7 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 - **弹幕监控枢纽 (`src/danmaku_monitor.py`)**: `DanmakuMonitorHub`（进程单例，经 `get_hub()` 惰性创建）聚合各房间弹幕事件——`room_started/room_connected/room_closed/room_stopped/room_message`，内存快照 `snapshot(since=0)` 供 Web API 消费，并写 JSONL 边车 `logs/danmaku_monitor.jsonl`（5MB 轮转）。所有方法异常全吞；含 10s×6 桶速率窗与每秒 ≤10 条采样折叠。
 - **SRT 字幕写入 (`src/srt_writer.py`)**: `SrtWriter` 按 `segment_seconds` 分片输出 `{base}_{seg:03d}.srt`（单文件模式 `{base}.srt`），时间轴以 `time.monotonic()` 为基准、与 ffmpeg `segment -reset_timestamps` PTS 对齐；`write()` 持 `threading.Lock` 写条目并 flush。
 - **WebSocket 传输层 (`src/ws_client.py`)**: `WsClient` 各平台弹幕共用的异步 WS 客户端。`connect()` 显式 `proxy=None`（弹幕直连、不跟随系统代理，避免 SOCKS 需 python-socks 报错）；`ping_interval=None`（各平台自带心跳）；`max_size=None`、`asyncio.Lock` 串行发送；支持 `on_message/on_ready/on_heartbeat/on_close/on_reconnect` 回调与 `max_reconnect` 重连策略。
-- **访客 Cookie 缓存 (`src/cookie_cache.py`)**: 进程内唯一「按网址动态获取访客 cookie」缓存，避免多 room 并发重复请求触发风控。`fetch_cookies(url, proxy, *, ttl=30min, fetcher=None)` 无锁快速路径 + `RLock` 双检查；`get_cookie_str` / `invalidate` / `clear`。
+- **访客 Cookie 缓存 (`src/cookie_cache.py`)**: 进程内唯一「按网址动态获取访客 cookie」缓存，避免多 room 并发重复请求触发风控。`fetch_cookies(url, proxy, *, ttl=30min, fetcher=None)` 无锁快速路径 + singleflight 去重（2026-09-02 重写：`threading.Lock` 仅保护缓存字典与在途登记表的同步读写、**锁内绝无 await**——旧 RLock 跨 await 持有时同循环协程全部可重入、互斥失效；同循环等待者复用 future，跨循环经 `loop.call_soon_threadsafe` 交付（future 非线程安全）；拉取协程被取消时立即交付空结果，等待者带超时兜底防永久挂起）；`get_cookie_str` / `invalidate` / `clear`。
 - **抖音弹幕协议 (`src/proto/`)**: `douyin.proto`（Proto3）定义 `Response/Message/ChatMessage/GiftMessage/...` 等；`douyin_pb2.py` 为 protoc 生成（DO NOT EDIT），`douyin_pb2.pyi` 为基于pyright 类型存根。抖音弹幕解析链路：`PushFrame.payload`（gzip 后 `Response`）→`Message.payload`→`ChatMessage`。
 
 ---
@@ -1584,6 +1585,97 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 ---
 
 ## 更新日志
+
+### v4.0.9.3-dev (2026-09-02) — 单文件整合版 (standalone) 类型标注修复（mypy：4 处报错清零）
+
+**变更摘要**：本条目记录 2026-09-02 会话对根目录单文件整合脚本 `douyin_live_recorder_standalone.py` 的 4 处 mypy 静态类型告警修复（IDE mypy / `warn_return_any`）。改动均为**修改内容**（类型标注收敛，无新增功能、无业务逻辑变化）；导入清理：移除未用的 `Callable`，新增 `Protocol, cast`。**删除项**：`typing` 中的 `Callable` 导入（已无引用）。
+
+**涉及文件（按模块分类）**：
+
+**一、类型标注修复（修改内容）— `douyin_live_recorder_standalone.py`**
+
+- L265 `_fetch_json`：返回值 `json.loads(resp.text)` 被 mypy 判为 `Any`（声明 `dict[str, Any]`）→ 改为 `cast(dict[str, Any], json.loads(resp.text))`。
+- L751 `_douyu_sign`：返回值 `json.loads(out.stdout.strip())` 被判为 `Any`（声明 `dict[str, str] | None`）→ 先 `isinstance(sign, dict)` 守卫（非 dict 直接返回 `None`），再 `cast(dict[str, str], sign)`，杜绝非 dict 运行时崩溃。
+- L853 `dispatch`：`fn(url, proxy=proxy, cookies=cookies)` 关键字调用被 mypy 报「Unexpected keyword argument "proxy"/"cookies"」——根因为 `PLATFORM_RULES` 用 `Callable[[str, str | None, str], StreamInfo]`，Callable 别名丢失形参名、只能按位置传参。改为新增 `PlatformResolver(Protocol)`（`__call__(url, proxy=None, cookies="")`），`PLATFORM_RULES` 注解改为 `list[tuple[str, str, PlatformResolver]]`；四个 `resolve_*` 函数签名与 Protocol 完全一致，无需改动。
+- `typing` 导入：`from typing import Any, Callable` → `from typing import Any, Protocol, cast`（移除已无引用的 `Callable`）。
+
+**影响范围**：
+
+- 用户可见：无（纯静态类型标注，运行行为不变）。
+- 不变语义：四个平台解析器（`resolve_douyin` / `resolve_huya` / `resolve_bilibili` / `resolve_douyu`）的分派链路、关键字调用形式（`proxy=` / `cookies=`）全部保留。
+
+**验证**（2026-09-02）：
+
+- `python -m py_compile douyin_live_recorder_standalone.py`：通过（0 语法错误）。
+- IDE lint（`douyin_live_recorder_standalone.py`）：0 错 0 警告。
+- 本机解释器（Python 3.14.7）未安装 `mypy` / `basedpyright`，未能本地跑全量类型检查；请在含类型检查器的环境执行 `mypy douyin_live_recorder_standalone.py` 复核。
+
+**相关**：
+
+- 收敛技巧对齐 MEMORY.md「basedpyright 严格模式约束与收敛技巧」：RHS 为 Any 时 `json.loads` 必须 `cast`，而非依赖 `# type: ignore`（本仓禁用 ignore 注释）。
+
+### v4.0.9.3-dev (2026-09-02) — 代码检查报告 20 项问题全量修复（cookie_cache singleflight 重写 + Web 非 ASCII 密码崩溃 + 探针/资源/风格健壮性）+ mypy 全仓清零（tests / gui_legacy / scripts）
+
+**变更摘要**：本条目系统性记录 2026-09-02 会话依据《代码检查报告.md》对 20 项审查问题的全量修复，以及后续两批 mypy 遗留报错清零。高优先级两项：① `src/cookie_cache.py` 并发去重重写为 singleflight——原实现跨 `await` 持有 `threading.RLock`，而 RLock 是线程亲和锁：同事件循环内的并发协程属于同一线程、全部可重入该锁，互斥完全失效，多协程会并发请求同一网址（恰是本模块要消除的风控触发源）；② `src/web_config.py` 历史明文密码兼容路径对非 ASCII 密码直接抛 `TypeError`（`hmac.compare_digest` 不支持含非 ASCII 字符的 str 比较，历史明文密码含中文时 `/api/login` 直接 500）。中优先级八项覆盖 Web API 写入口径、备份守护线程紧循环、探针异常留痕与节流字典无界增长、ctypes 句柄截断、装饰器兜底值类型、HTTP 响应连接泄漏、重复 unzip_file 收敛、Session 生命周期管理。低优先级八项为冗余与风格清理。环境项修复 venv editable 指向（原指向 `D:\DouyinLiveRecorder-coding` 导致「改了 A 目录、测试跑的是 B 目录」的幽灵问题）。**删除项**：`src/node_install.py` 与 `src/ffmpeg_install.py` 各自的 `unzip_file()` 重复实现（收敛至 `src/utils.py` 单一实现）、`src/stream_select.py` 的 `mark_ffmpeg_reject`/`clear_ffmpeg_reject` 纯转发包装（合并为内部函数别名）、`src/web_config.py` 的冗余 `binascii.Error` 捕获与未用 `import binascii`、`src/stream_select.py` 无占位符 f-string 前缀与 `assert` 类型收窄（改为显式判空 + 告警路径）。
+
+**一、并发正确性（高）— `src/cookie_cache.py`（重写）/ `tests/test_cookie_cache.py`**
+
+- `src/cookie_cache.py`：`fetch_cookies` 重写为 singleflight 模式——`threading.Lock` 只保护「缓存字典 + 在途登记表 `_inflight`」的同步读写（**锁内绝无 await**）；抢到拉取权的协程负责拉取一次，同循环等待者登记 future 复用同一份结果，跨循环等待者经 `loop.call_soon_threadsafe` 交付（future 非线程安全，禁止跨线程直接 `set_result`）；拉取协程被取消（房间停止/进程退出）时在 `BaseException` 分支立即摘除登记并给等待者交付空结果；等待者带 `timeout + 5s` 余量超时兜底（防拉取线程异常死亡导致永久挂起）。失败不缓存、TTL 失效、`fetcher` 透传等既有语义全部保留。
+- `tests/test_cookie_cache.py`：`test_same_loop_reentrant_no_deadlock` 加强为同时断言「并发 gather 5 协程只拉取一次」（旧 RLock 实现下该断言必失败——正是本次修复的目标行为）；跨线程用例（4 线程 barrier、`call_count == 1`）注释同步更新。26 用例全过。
+
+**二、Web 面板缺陷修复（高 / 中高 / 中）— `src/web_config.py` / `src/web_api.py` / `src/web_tray.py`**
+
+- `src/web_config.py`：① `verify_web_password` 历史明文兼容路径改为 `hmac.compare_digest(plaintext.encode("utf-8"), stored.encode("utf-8"))`（bytes 比较无非 ASCII 限制）；② PBKDF2 解析分支删除冗余 `binascii.Error` 捕获（其为 `ValueError` 子类）与未用 `import binascii`。
+- `src/web_api.py`：`PUT /api/rooms`（`update_room`）写入行改用 `normalize_url(req.url)`——原写入未归一化 URL，与 add/delete/toggle 三处的查重口径不一致，PUT 写回的行下一轮可能再也匹配不到。
+- `src/web_tray.py`：`_patch_console_window` / `_on_show` 改用 `ctypes.WinDLL` + 显式 `argtypes`/`restype`（`GetConsoleWindow.restype = c_void_p`；`GetWindowLongW`/`SetWindowLongW`/`SetWindowPos`/`GetSystemMenu`/`EnableMenuItem`/`ShowWindow`/`SetForegroundWindow` 全量声明签名），修复 64 位下 HWND/HMENU 被默认 `c_int` 截断；模块级 `_KERNEL32`/`_USER32` 单例缓存（写法对齐 `web.py` 惯例）；`SetWindowPos` 第二参数收敛为 `c_void_p | None`。
+
+**三、守护线程与探针健壮性（中）— `src/config_io.py` / `src/stream_select.py` / `src/danmaku_monitor.py` / `src/ws_client.py`**
+
+- `src/config_io.py`：`backup_file_start` 守护循环的 `time.sleep(600)` 移出 `try`——原异常分支不等待，check_md5/backup 持续失败时退化成紧循环空转、疯狂刷日志并空耗 CPU。
+- `src/stream_select.py`：① `_confirm_get_ok` 的 `except Exception` 补 `logger.debug`（含异常类型 + attempt 序号，不再静默吞异常），且 attempt 0 异常按「重试一次再定罪」语义隔 `_recheck_delay()` 后重试、两次均异常才放弃复核（HEAD 结论维持通过）；② `_throttle_probe` 写入时顺带剔除空闲超过 `_PROBE_MIN_HOST_INTERVAL × 10` 的旧 host，`_probe_last_seen` 不再只增不删（对照 `_probe_backoff` 的过期清理策略，60+ 平台长跑防无界增长）；③ `mark_ffmpeg_reject`/`clear_ffmpeg_reject` 由纯转发包装合并为 `_mark_probe_reject`/`_clear_probe_reject` 的模块级别名（语义注释保留）；④ 抽取 `_is_h265(url)` 消除候选构建与 record_url 兜底两处重复判定；⑤ 移除无占位符 f-string 前缀；⑥ `assert probe is not None` 改显式判空 + 告警（`-O` 运行时 assert 被整体剔除）。
+- `src/danmaku_monitor.py`：`_write_line` 写失败分支补 `logger.debug`（含异常类型），与本模块「异常全吞但必须留痕」约定一致，边车数据不再无迹丢弃。
+- `src/ws_client.py`：心跳任务回收的 `except asyncio.CancelledError, Exception:` 拆分——`CancelledError` 仅吞 hb_task 自身按预期被取消的情形（`hb_task.cancelled()` 为真），本协程被取消时原样上抛，取消信号不再被吞没。
+
+**四、装饰器兜底类型与资源管理（中）— `src/utils.py` / `src/spider.py` / `src/node_install.py` / `src/ffmpeg_install.py` / `src/sync_http.py`**
+
+- `src/utils.py`：① 装饰器共用实现收敛为 `_make_trace_error_guard(func, fallback)`，新增 `trace_error_decorator_or_none`（出错返回 `None`），错误日志同时标注函数名与兜底值类型；② 新增共享 `unzip_file()`（含 Zip Slip 校验）。
+- `src/spider.py`：5 个返回 str/tuple 的函数（`get_bilibili_room_info_h5` / `login_sooplive` / `get_sooplive_tk` / `get_winktv_bj_info` / `login_flextv`）由 `trace_error_decorator` 切换至 `trace_error_decorator_or_none`——旧统一 dict 兜底会把错误伪装成正常结果（`login_flextv` 失败时返回的 dict 曾被 `if new_cookies` 误判为登录成功）。
+- `src/node_install.py`：两处 `requests.get`（版本页面 + zip 流式下载）改 `with` 管理关闭连接；删除本地 `unzip_file` 改从 `src/utils` 导入。
+- `src/ffmpeg_install.py`：删除本地 `unzip_file` 改从 `src/utils` 导入（两处逐字重复的实现收敛为一份）。
+- `src/sync_http.py`：新增 `_all_sessions`（`weakref.WeakSet`）+ `_all_sessions_lock` 登记 thread-local Session、`close_session()`（当前线程显式释放）、`close_all_sessions()`（`atexit` 注册，进程退出统一优雅关闭全部连接池）。
+- `tests/test_spider_platform.py`：4 个固化旧 dict 兜底行为的断言（TestLoginSooplive ×2 / TestLoginFlexTv / TestSoopliveTk / TestWinktvBjInfo）同步改为 `is None`。
+
+**五、风格约定与环境（低）— `AGENTS.md` / venv**
+
+- PEP 758 写法定稿：报告原建议统一 `except (A, B):` 加括号，但实测 **black 26.x 稳定风格就是无括号形式**（`black --check` 会把能放进一行的 `except (A, B):` 改写回 `except A, B:`，加括号反而过不了格式门禁），故采用报告备选方案：保持无括号风格（由 `requires-python = ">=3.14"` 下限保证语法合法），并在 `AGENTS.md`「代码风格 → Black」小节显式记录「依赖 PEP 758，勿为兼容 <3.14 加括号」。
+- venv 修复：`.venv` 中 editable 安装原指向 `D:\DouyinLiveRecorder-coding`（另一 checkout），`pip install -e .` 重装后（4.0.9 → 4.0.9.2）`direct_url.json` 指向本工作区，`import src.*` 确认解析到本目录。
+
+**六、mypy 遗留清零（后续两批）— `tests/test_quality_tiers.py` / `gui_legacy.py` / `scripts/extract_i18n_strings.py`**
+
+- `tests/test_quality_tiers.py`：5 处 `mock.await_args.args[1]` 前补 `assert mock.await_args is not None`——typeshed 将 `await_args` 声明为 `_Call | None`，`assert_awaited_once()` 运行时保证非空但 mypy 无法收窄（union-attr）。
+- `gui_legacy.py`：4 处修复——① 悬停效果两个 lambda 改具名闭包工厂 `_flat_relief(button)`（事件参数显式标注，对齐 gui.py 的 `_on_escape` 惯例）；② `_create_modern_button` 的 `command` 参数补注解 `str | Callable[[], Any]`（精确匹配 ttk.Button stub）；③ `config.optionxform = lambda` 改具名函数 `_preserve_case` + `setattr`（gui.py 同款绕过「Cannot assign to a method」）；④ 顶部新增 `from collections.abc import Callable`。
+- `scripts/extract_i18n_strings.py`：`parse_keys` 的 `getattr` 动态调用结果用 `cast(dict[str, str], ...)` 收敛（`warn_return_any` 门禁），移除已无用的 `type: ignore[arg-type]`。
+
+**影响范围**：
+
+- 用户可感知：历史明文密码含非 ASCII 字符的 Web 面板登录恢复正常；同平台多房间并发时对同一域名不再重复请求访客 cookie（风控触发概率进一步降低）；备份目录持续失败时 CPU 不再空转。
+- 行为不变项：cookie 缓存 TTL/失败不缓存/fetcher 透传、探针退避与节流语义、斗鱼/虎牙 GET 复核「重试一次再定罪」语义、Web API 全部路由契约、弹幕采集链路等均保持。
+- 已知取舍：PEP 758 无括号 except 写法与 <3.14 不兼容（本仓下限即 3.14，非回退项，属显式约定）。
+
+**验证**（2026-09-02）：
+
+- `pytest` 全量 **806 passed, 2 skipped, 0 failed**。
+- `mypy` 全仓口径（src + tests + 全部入口 + build_exe + scripts）**Success: no issues found in 102 source files**（CI 口径 `mypy src/` 39 文件、报告口径 44 文件、含 tests 94 文件均全绿）。
+- `basedpyright --outputjson`：errorCount=0, warningCount=0。
+- `black --check`：105 files unchanged；`isort --check-only` 全部合规；`compileall` 0 语法错误。
+- web_tray 实测：`WinDLL` 加载成功、窗口改写链路无异常（headless 下 `GetConsoleWindow` 返回空、按预期跳过）。
+
+**关联**：
+
+- `AGENTS.md`：「代码风格 → Black」新增 except 多异常写法（PEP 758）约定。
+- 回归锁：`tests/test_cookie_cache.py`（同循环只拉取一次 + 跨线程去重）、`tests/test_spider_platform.py`（5 函数 None 兜底）、`tests/test_stream_select.py` + `tests/test_record_failure_feedback.py`（探针/退避语义）。
+- 问题来源：《代码检查报告.md》20 项清单（#1～#20）；本条目即其全量闭环记录。
+- 上一版全量快照：v4.0.9.2-dev (2026-08-30)「停止录制流程运行日志归档」。
 
 ### v4.0.9.2-dev (2026-08-30) — 停止录制流程运行日志归档（四日志按时间戳改名归档）+ i18n 四语目录补齐（507 → 516 条）+ 仓库元数据同源清单同步（.v2c / .mypy_cache）
 

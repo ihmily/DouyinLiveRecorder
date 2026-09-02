@@ -1,3 +1,67 @@
+Metadata-Version: 2.4
+Name: DouyinLiveRecorder
+Version: 4.0.9.2
+Summary: 支持抖音、TikTok、YouTube、快手等60+平台的直播录制工具，支持循环录制、多人录制、消息推送
+Author-email: Hmily <ihmily@users.noreply.github.com>
+License: MIT
+Project-URL: Homepage, https://github.com/ihmily/DouyinLiveRecorder
+Project-URL: Documentation, https://github.com/ihmily/DouyinLiveRecorder
+Project-URL: Repository, https://github.com/ihmily/DouyinLiveRecorder
+Project-URL: Issues, https://github.com/ihmily/DouyinLiveRecorder/issues
+Project-URL: Changelog, https://github.com/ihmily/DouyinLiveRecorder/releases
+Project-URL: Sponsor, https://github.com/sponsors/ihmily
+Keywords: live-streaming,recorder,douyin,tiktok,bilibili,twitch,youtube,直播录制,抖音,虎牙,斗鱼
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Environment :: Console
+Classifier: Environment :: GUI
+Classifier: Intended Audience :: End Users/Desktop
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Classifier: Operating System :: MacOS X
+Classifier: Operating System :: Microsoft :: Windows :: Win32
+Classifier: Operating System :: POSIX :: Linux
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.14
+Classifier: Topic :: Multimedia :: Video :: Capture
+Classifier: Topic :: Communications :: Chat
+Requires-Python: >=3.14
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: requests>=2.34.2
+Requires-Dist: loguru>=0.7.3
+Requires-Dist: pycryptodome>=3.23.0
+Requires-Dist: distro>=1.9.0
+Requires-Dist: tqdm>=4.69.0
+Requires-Dist: httpx[http2]>=0.28.1
+Requires-Dist: exejs>=1.0.1
+Requires-Dist: PyExecJS>=1.5.1
+Requires-Dist: customtkinter>=6.0.0
+Requires-Dist: pystray>=0.19.5
+Requires-Dist: Pillow>=12.3.0
+Requires-Dist: fastapi>=0.140.0
+Requires-Dist: starlette>=0.49.1
+Requires-Dist: uvicorn[standard]>=0.51.0
+Requires-Dist: python-multipart>=0.0.32
+Requires-Dist: pydantic>=2.13.4
+Requires-Dist: websockets>=12.0
+Requires-Dist: protobuf>=6.31.1
+Requires-Dist: brotli>=1.2.0
+Requires-Dist: PyYAML>=6.0.3
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.21.0; extra == "dev"
+Requires-Dist: pytest-cov>=4.0.0; extra == "dev"
+Requires-Dist: black>=23.0.0; extra == "dev"
+Requires-Dist: isort>=5.12.0; extra == "dev"
+Requires-Dist: mypy>=1.5.0; extra == "dev"
+Provides-Extra: gui
+Requires-Dist: customtkinter>=6.0.0; extra == "gui"
+Requires-Dist: pystray>=0.19.5; extra == "gui"
+Requires-Dist: Pillow>=12.3.0; extra == "gui"
+Provides-Extra: build
+Requires-Dist: pyinstaller>=6.10.0; extra == "build"
+Dynamic: license-file
+
 ![video_spider](https://socialify.git.ci/y123ao6/DouyinLiveRecorder/image?font=Inter&forks=1&language=1&owner=1&pattern=Circuit%20Board&stargazers=1&theme=Light)
 
 简体中文&nbsp;&nbsp;|&nbsp;&nbsp;[**English**](README_EN.md)
@@ -828,49 +892,6 @@ brew install node
 本项目基于 [MIT License](LICENSE) 开源，欢迎 Star 和 Fork！
 
 ## ⏳ 更新日志
-
-### v4.0.9.3 (2026-09-02) — 代码审查 20 项问题全量修复（cookie 缓存并发去重 singleflight 重写 / Web 非 ASCII 密码登录崩溃 / 探针异常留痕与节流自清理 / 64 位 ctypes 句柄截断 / 连接资源生命周期）+ mypy 全仓类型清零（tests / gui_legacy / scripts / standalone）
-
-> 本版本为《代码检查报告》20 项审查问题的全量闭环批次，并完成 mypy 静态类型检查全仓清零（102 个源文件 0 报错，首次覆盖 CI 口径之外的 tests / gui_legacy / scripts 与单文件整合版 standalone）。两项高优先级修复：① cookie 缓存并发去重按 singleflight 模式重写——原实现跨 `await` 持有线程亲和的 `threading.RLock`，同事件循环内的并发协程全部可重入该锁、互斥完全失效，多协程照样并发请求同一网址（恰是本模块要消除的风控触发源）；② Web 面板历史明文密码兼容路径对非 ASCII 密码直接抛 `TypeError`（`hmac.compare_digest` 不支持含中文的 str 比较，`/api/login` 直接 500）。中优先级八项覆盖 Web API 写入口径、备份守护线程紧循环、探针异常留痕与节流字典无界增长、64 位句柄截断、装饰器兜底值类型、HTTP 连接泄漏、重复实现收敛与 Session 生命周期；低优先级八项为冗余与风格清理。**无破坏性变更**（cookie 缓存 TTL / 失败不缓存 / 探针退避与节流 / Web API 路由契约等运行时语义全部保持）。详细根因与验证见 [CODE_WIKI.md](CODE_WIKI.md)。
-
-**🍪 Cookie 缓存并发去重重写（高危修复）**
-- **根因**：`fetch_cookies` 原实现跨 `await` 持有 `threading.RLock`——RLock 是线程亲和锁，同一事件循环内的并发协程属于同一线程、全部可重入该锁，互斥完全失效，多协程会并发请求同一网址（恰是本模块要消除的风控触发源）。
-- **singleflight 重写**：`threading.Lock` 只保护「缓存字典 + 在途登记表 `_inflight`」的同步读写（**锁内绝无 await**）；抢到拉取权的协程负责拉取一次，同循环等待者登记 future 复用同一份结果，跨循环等待者经 `loop.call_soon_threadsafe` 交付（future 非线程安全，禁止跨线程直接 `set_result`）。
-- **健壮性**：拉取协程被取消（房间停止/进程退出）时在 `BaseException` 分支立即摘除登记并给等待者交付空结果；等待者带 `timeout + 5s` 余量超时兜底（防拉取线程异常死亡导致永久挂起）；失败不缓存、TTL 失效、`fetcher` 透传等既有语义全部保留。
-- 效果：同平台多房间并发时对同一域名不再重复请求访客 cookie，风控触发概率进一步降低。
-
-**🔐 Web 面板与系统托盘缺陷修复（高危 / 中高 / 中）**
-- **非 ASCII 明文密码登录 500**：`verify_web_password` 历史明文兼容路径改为 `hmac.compare_digest` 的 UTF-8 bytes 比较（str 比较不支持非 ASCII，历史明文密码含中文时 `/api/login` 直接 500）；PBKDF2 分支顺带删除冗余 `binascii.Error` 捕获（其为 `ValueError` 子类）与未用导入。
-- **Web API 写入口径统一**：`PUT /api/rooms` 写入行改用 `normalize_url`——原写入未归一化 URL，与 add/delete/toggle 三处查重口径不一致，PUT 写回的行下一轮可能再也匹配不到。
-- **64 位 ctypes 句柄截断**：`web_tray.py` 改用 `ctypes.WinDLL` + 全量 `argtypes`/`restype` 显式声明（`GetConsoleWindow.restype = c_void_p`），修复 64 位下 HWND/HMENU 被默认 `c_int` 截断；模块级 `_KERNEL32`/`_USER32` 单例缓存（写法对齐 `web.py` 惯例）。
-
-**🛡️ 守护线程与探针健壮性（中）**
-- **备份守护紧循环**：`config_io.py` 的 `time.sleep(600)` 移出 `try`——原异常分支不等待，check_md5/backup 持续失败时退化成紧循环空转、疯狂刷日志并空耗 CPU。
-- **探针异常留痕与复核语义**：`stream_select.py` 的 `_confirm_get_ok` 补 `logger.debug`（含异常类型 + attempt 序号，不再静默吞异常），attempt 0 异常按「重试一次再定罪」隔 `_recheck_delay()` 后重试、两次均异常才放弃复核（HEAD 结论维持通过）。
-- **节流字典自清理**：`_throttle_probe` 写入时顺带剔除空闲超过 `_PROBE_MIN_HOST_INTERVAL × 10` 的旧 host，`_probe_last_seen` 不再只增不删（对照 `_probe_backoff` 的过期清理策略，60+ 平台长跑防无界增长）；`mark_ffmpeg_reject`/`clear_ffmpeg_reject` 纯转发包装合并为模块级别名，另抽取 `_is_h265()` 消除两处重复判定。
-- **弹幕边车留痕**：`danmaku_monitor.py` 的 `_write_line` 写失败分支补 `logger.debug`，与本模块「异常全吞但必须留痕」约定一致，边车数据不再无迹丢弃。
-- **取消信号不再被吞**：`ws_client.py` 心跳任务回收的 `except asyncio.CancelledError, Exception:` 拆分——`CancelledError` 仅吞 hb_task 自身按预期被取消的情形，本协程被取消时原样上抛。
-
-**♻️ 资源管理与兜底类型（中）**
-- **装饰器兜底值类型**：`utils.py` 装饰器共用实现收敛为 `_make_trace_error_guard(func, fallback)`，新增 `trace_error_decorator_or_none`（出错返回 `None`），错误日志同时标注函数名与兜底值类型。
-- **消除「错误伪装成正常结果」**：`spider.py` 5 个返回 str/tuple 的函数（`get_bilibili_room_info_h5` / `login_sooplive` / `get_sooplive_tk` / `get_winktv_bj_info` / `login_flextv`）由统一 dict 兜底切换至 `None` 兜底——旧实现中 `login_flextv` 失败返回的 dict 曾被 `if new_cookies` 误判为登录成功。
-- **重复实现收敛**：`node_install.py` 与 `ffmpeg_install.py` 各自逐字重复的 `unzip_file()` 收敛至 `src/utils.py` 单一实现（含 Zip Slip 校验）；`node_install.py` 两处 `requests.get` 改 `with` 管理关闭连接。
-- **Session 生命周期**：`sync_http.py` 新增 `WeakSet` 登记线程级 Session、`close_session()`（当前线程显式释放）与 `close_all_sessions()`（`atexit` 注册，进程退出统一优雅关闭全部连接池）。
-
-**🧹 风格约定 / 环境修复（低）**
-- **PEP 758 except 写法定稿**：实测 black 26.x 稳定风格就是无括号形式 `except A, B:`（加括号反而过不了格式门禁），采用报告备选方案并在 `AGENTS.md`「代码风格 → Black」显式记录约定（由 `requires-python >= 3.14` 下限保证语法合法）。
-- **venv 幽灵问题修复**：`.venv` 中 editable 安装原指向另一 checkout（`D:\DouyinLiveRecorder-coding`），`pip install -e .` 重装后 `import src.*` 确认解析到本工作区，消除「改了 A 目录、测试跑的是 B 目录」的问题。
-
-**🧹 mypy 全仓清零**
-- `tests/test_quality_tiers.py`：5 处 `mock.await_args.args[1]` 前补 `assert mock.await_args is not None`（typeshed 将 `await_args` 声明为 Optional，运行时保证非空但 mypy 无法收窄）。
-- `gui_legacy.py`：4 处——悬停效果 lambda 改具名闭包工厂、`command` 参数补 `str | Callable[[], Any]` 注解、`optionxform` 改具名函数 + `setattr` 绕过（对齐 `gui.py` 惯例）、补 `collections.abc.Callable` 导入。
-- `scripts/extract_i18n_strings.py`：动态 `getattr` 结果用 `cast` 收敛（`warn_return_any` 门禁），移除已无用的 `type: ignore`。
-- **单文件整合版（standalone）**：`douyin_live_recorder_standalone.py` 4 处告警清零——`json.loads` 返回值 `cast`、`_douyu_sign` 补 `isinstance(sign, dict)` 守卫（非 dict 直接返回 `None`，杜绝运行时崩溃）、新增 `PlatformResolver` Protocol 使 `PLATFORM_RULES` 分派表支持 `proxy=`/`cookies=` 关键字调用；导入清理移除未用的 `Callable`。
-
-**🧪 测试与验证**
-- `tests/test_cookie_cache.py` 加强：`test_same_loop_reentrant_no_deadlock` 同时断言「并发 gather 5 协程只拉取一次」（旧 RLock 实现下该断言必失败——正是本次修复的目标行为）；26 用例全过。`tests/test_spider_platform.py` 4 个固化旧 dict 兜底行为的断言同步改为 `is None`。
-- 全量 `pytest` **806 passed / 2 skipped / 0 failed**；`mypy` 全仓口径（src + tests + 全部入口 + build_exe + scripts）**102 source files 0 issues**（CI 口径 39 文件、报告口径 44 文件、含 tests 94 文件均全绿）；basedpyright errorCount=0 / warningCount=0；black 105 files unchanged；isort 全部合规；compileall 0 语法错误。
-- web_tray 实测：`WinDLL` 加载成功、窗口改写链路无异常（headless 下 `GetConsoleWindow` 返回空、按预期跳过）。
 
 ### v4.0.9.2 (2026-08-28 ~ 2026-08-30) — Web 面板录制手动控制 / 虎牙·斗鱼蓝光细粒度画质档位 / 停止录制流程日志归档 / 性能审查优化落地（P1~P5）/ 探针退避窗口自愈与虎牙 FLV-first / Web 后台日志 sink 重建 / GUI 父进程日志句柄隔离
 

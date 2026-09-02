@@ -5,7 +5,6 @@ import os
 import platform
 import re
 import subprocess
-import zipfile
 from pathlib import Path
 
 import distro
@@ -19,27 +18,12 @@ from tqdm import tqdm
 # 应用根目录复用 src.logger 公开导出的 script_path（等价原私有 _app_root() 的返回值）
 from .logger import script_path
 
+# 解压实现与 ffmpeg_install 共用同一份（原先两处逐字重复，见 src/utils.unzip_file）
+from .utils import unzip_file
+
 current_platform = platform.system()
 execute_dir = script_path  # 冻结后指向 _internal/，与 __file__ 定位的资源收敛到同一处
 current_env_path = os.environ.get("PATH", "")
-
-
-def unzip_file(zip_path: str | Path, extract_to: str | Path, delete: bool = True) -> None:
-    # 解压 ZIP 文件到指定目录
-    if not os.path.exists(extract_to):
-        os.makedirs(extract_to)
-
-    extract_root = os.path.realpath(extract_to)
-    with zipfile.ZipFile(zip_path, "r") as zip_ref:
-        # 防止 Zip Slip 目录穿越攻击：校验每个成员解压后的真实路径
-        for member in zip_ref.namelist():
-            member_path = os.path.realpath(os.path.join(extract_root, member))
-            if not member_path.startswith(extract_root + os.sep) and member_path != extract_root:
-                raise ValueError(f"Unsafe path in zip file: {member}")
-        zip_ref.extractall(extract_to)
-
-    if delete and os.path.exists(zip_path):
-        os.remove(zip_path)
 
 
 def install_nodejs_windows() -> bool:
@@ -47,24 +31,27 @@ def install_nodejs_windows() -> bool:
     try:
         logger.warning("Node.js is not installed.")
         logger.debug("Installing the stable version of Node.js for Windows...")
-        response = requests.get("https://nodejs.cn/download/", timeout=30)
-        if response.status_code == 200:
-            match = re.search("https://npmmirror.com/mirrors/node/(v.*?)/node-(v.*?)-x64.msi", response.text)
-            if match:
-                version = match.group(1)
-                system_bit = "x64" if "32" not in platform.machine() else "x86"
-                url = f"https://npmmirror.com/mirrors/node/{version}/node-{version}-win-{system_bit}.zip"
-            else:
-                logger.error("Failed to retrieve the download URL for the latest version of Node.js...")
+        # 两处下载响应均以 with 管理（页面 + zip 流式下载），关闭连接不泄漏
+        # （与 ffmpeg_install 的写法保持一致）
+        with requests.get("https://nodejs.cn/download/", timeout=30) as response:
+            if response.status_code != 200:
+                logger.error("Failed to retrieve the Node.js version page")
                 return False
+            match = re.search("https://npmmirror.com/mirrors/node/(v.*?)/node-(v.*?)-x64.msi", response.text)
+        if not match:
+            logger.error("Failed to retrieve the download URL for the latest version of Node.js...")
+            return False
+        version = match.group(1)
+        system_bit = "x64" if "32" not in platform.machine() else "x86"
+        url = f"https://npmmirror.com/mirrors/node/{version}/node-{version}-win-{system_bit}.zip"
 
-            full_file_name = url.rsplit("/", maxsplit=1)[-1]
-            zip_file_path = Path(execute_dir) / full_file_name
+        full_file_name = url.rsplit("/", maxsplit=1)[-1]
+        zip_file_path = Path(execute_dir) / full_file_name
 
-            if Path(zip_file_path).exists():
-                logger.debug("Node.js installation file already exists, start install...")
-            else:
-                response = requests.get(url, stream=True, timeout=30)
+        if Path(zip_file_path).exists():
+            logger.debug("Node.js installation file already exists, start install...")
+        else:
+            with requests.get(url, stream=True, timeout=30) as response:
                 response.raise_for_status()
                 total_size = int(response.headers.get("Content-Length", 0))
                 block_size = 1024
@@ -77,30 +64,27 @@ def install_nodejs_windows() -> bool:
                             _ = t.update(len(data))
                             _ = f.write(data)
 
-            unzip_file(zip_file_path, execute_dir)
-            extract_dir_path = str(zip_file_path).rsplit(".", maxsplit=1)[0]
-            new_extract_dir_path = Path(execute_dir) / "node"
-            if Path(extract_dir_path).exists() and not Path(new_extract_dir_path).exists():
-                os.rename(extract_dir_path, new_extract_dir_path)
-                os.environ["PATH"] = os.path.join(execute_dir, "node") + os.pathsep + current_env_path
-                result = subprocess.run(["node", "-v"], capture_output=True)
-                if result.returncode == 0:
-                    logger.debug("Node.js installation was successful. Restart for changes to take effect")
-                    return True
-                else:
-                    logger.debug("Node.js installation failed")
-                    return False
-            elif Path(new_extract_dir_path).exists():
-                # 已有安装目录，验证可用性
-                result = subprocess.run(["node", "-v"], capture_output=True)
-                if result.returncode == 0:
-                    return True
-                logger.debug("Node.js directory exists but not working")
+        unzip_file(zip_file_path, execute_dir)
+        extract_dir_path = str(zip_file_path).rsplit(".", maxsplit=1)[0]
+        new_extract_dir_path = Path(execute_dir) / "node"
+        if Path(extract_dir_path).exists() and not Path(new_extract_dir_path).exists():
+            os.rename(extract_dir_path, new_extract_dir_path)
+            os.environ["PATH"] = os.path.join(execute_dir, "node") + os.pathsep + current_env_path
+            result = subprocess.run(["node", "-v"], capture_output=True)
+            if result.returncode == 0:
+                logger.debug("Node.js installation was successful. Restart for changes to take effect")
+                return True
+            else:
+                logger.debug("Node.js installation failed")
                 return False
+        elif Path(new_extract_dir_path).exists():
+            # 已有安装目录，验证可用性
+            result = subprocess.run(["node", "-v"], capture_output=True)
+            if result.returncode == 0:
+                return True
+            logger.debug("Node.js directory exists but not working")
             return False
-        else:
-            logger.error("Failed to retrieve the Node.js version page")
-            return False
+        return False
 
     except Exception as e:
         logger.error(f"type: {type(e).__name__}, Node.js installation failed {e}")

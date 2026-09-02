@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 # 同步 HTTP 客户端模块 - 提供同步 HTTP 请求功能
 
+import atexit
 import gzip
 import http.client
 import json
@@ -9,6 +10,7 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+import weakref
 from collections.abc import Mapping, Sequence
 from typing import TypeAlias, cast
 
@@ -42,6 +44,10 @@ def _get_opener() -> urllib.request.OpenerDirector:
 
 
 _thread_local = threading.local()
+# 进程内全部线程 Session 的弱引用登记：线程销毁后条目自动回收，不阻止 GC；
+# 进程退出时（atexit）据此统一优雅关闭仍存活的连接池（80+ 房间长跑场景）
+_all_sessions: "weakref.WeakSet[requests.Session]" = weakref.WeakSet()
+_all_sessions_lock = threading.Lock()
 
 
 def _session() -> requests.Session:
@@ -56,7 +62,37 @@ def _session() -> requests.Session:
     if session is None:
         session = requests.Session()
         _thread_local.session = session
+        with _all_sessions_lock:
+            _all_sessions.add(session)
     return session
+
+
+def close_session() -> None:
+    # 关闭当前线程的 Session 并释放其连接池（房间线程退出路径可显式调用）。
+    # 关闭后下次 _session() 会重建，不影响后续请求
+    session: requests.Session | None = getattr(_thread_local, "session", None)
+    if session is not None:
+        _thread_local.session = None
+        try:
+            session.close()
+        except Exception:
+            pass
+
+
+def close_all_sessions() -> None:
+    # 进程退出时统一关闭所有线程（含主线程）的 Session 连接池，由 atexit 调用；
+    # WeakSet 快照迭代受 _IterationGuard 保护，期间条目被 GC 移除也安全
+    with _all_sessions_lock:
+        sessions = list(_all_sessions)
+        _all_sessions.clear()
+    for session in sessions:
+        try:
+            session.close()
+        except Exception:
+            pass
+
+
+atexit.register(close_all_sessions)
 
 
 OptionalStr = str | None

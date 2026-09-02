@@ -37,7 +37,7 @@ from .cookie_cache import fetch_cookies as _cache_fetch_cookies
 from .logger import logger, script_path
 from .room import UnsupportedUrlError, get_sec_user_id, get_unique_id, is_user_homepage_url
 from .ttwid import get_ttwid as _shared_get_ttwid
-from .utils import generate_random_string, trace_error_decorator
+from .utils import generate_random_string, trace_error_decorator, trace_error_decorator_or_none
 
 OptionalStr = str | None
 OptionalDict = dict[str, str] | None
@@ -1074,7 +1074,7 @@ async def get_yy_stream_data(
     return cast(dict[str, object], json_data)
 
 
-@trace_error_decorator
+@trace_error_decorator_or_none
 async def get_bilibili_room_info_h5(url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None) -> str:
     # 获取 B站直播间 H5 接口信息
     headers = {
@@ -1648,7 +1648,7 @@ async def get_blued_stream_url(
     return result
 
 
-@trace_error_decorator
+@trace_error_decorator_or_none
 async def login_sooplive(username: str, password: str, proxy_addr: OptionalStr = None) -> OptionalStr:
     # SOOP(原AfreecaTV) 平台登录获取认证 Cookie
     if len(username) < 6 or len(password) < 10:
@@ -1727,7 +1727,7 @@ async def get_sooplive_cdn_url(
     return cast(dict[str, object], json_data)
 
 
-@trace_error_decorator
+@trace_error_decorator_or_none
 async def get_sooplive_tk(
     url: str, rtype: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None
 ) -> str | tuple[str, str]:
@@ -2159,7 +2159,7 @@ async def get_maoerfm_stream_url(
     return result
 
 
-@trace_error_decorator
+@trace_error_decorator_or_none
 async def get_winktv_bj_info(
     url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None
 ) -> tuple[str, object]:
@@ -2239,7 +2239,7 @@ async def get_winktv_stream_data(
     return result
 
 
-@trace_error_decorator
+@trace_error_decorator_or_none
 async def login_flextv(username: str, password: str, proxy_addr: OptionalStr = None) -> OptionalStr:
     # TTingLive(原Flextv) 平台登录认证
     headers = {

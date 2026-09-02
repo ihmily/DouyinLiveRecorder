@@ -20,6 +20,8 @@ import threading
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
+    import ctypes
+
     import uvicorn
     from PIL import Image
     from pystray import Icon
@@ -41,6 +43,70 @@ SWP_NOMOVE = 0x0002
 SWP_NOSIZE = 0x0001
 SWP_NOZORDER = 0x0004
 SWP_FRAMECHANGED = 0x0020
+
+# kernel32/user32 DLL 句柄缓存为模块级单例（与 web.py 的 WinDLL 惯例一致）：
+# 不用 ctypes.windll——其函数指针缺省 restype=c_int，会把 64 位指针宽度的句柄
+# （HWND/HMENU）截断为 32 位；句柄一旦截断，后续窗口操作会改写到错误地址。
+_KERNEL32: "ctypes.CDLL | None" = None
+_USER32: "ctypes.CDLL | None" = None
+
+
+def _get_kernel32() -> "ctypes.CDLL | None":
+    # 加载 kernel32 并声明 GetConsoleWindow 的返回类型，失败返回 None（调用方降级跳过）
+    global _KERNEL32
+    if _KERNEL32 is not None:
+        return _KERNEL32
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+
+        dll = ctypes.WinDLL("kernel32", use_last_error=True)
+        # HWND 是指针宽度：restype 必须显式声明为 c_void_p，否则被截断
+        dll.GetConsoleWindow.restype = ctypes.c_void_p
+        _KERNEL32 = dll
+        return dll
+    except Exception:
+        return None
+
+
+def _get_user32() -> "ctypes.CDLL | None":
+    # 加载 user32 并声明本模块用到的全部函数签名，失败返回 None（调用方降级跳过）
+    global _USER32
+    if _USER32 is not None:
+        return _USER32
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+
+        dll = ctypes.WinDLL("user32", use_last_error=True)
+        dll.GetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        dll.GetWindowLongW.restype = ctypes.c_long
+        dll.SetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_long]
+        dll.SetWindowLongW.restype = ctypes.c_long
+        dll.SetWindowPos.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_uint,
+        ]
+        dll.SetWindowPos.restype = ctypes.c_int
+        dll.GetSystemMenu.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        dll.GetSystemMenu.restype = ctypes.c_void_p
+        dll.EnableMenuItem.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint]
+        dll.EnableMenuItem.restype = ctypes.c_int
+        dll.ShowWindow.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        dll.ShowWindow.restype = ctypes.c_int
+        dll.SetForegroundWindow.argtypes = [ctypes.c_void_p]
+        dll.SetForegroundWindow.restype = ctypes.c_int
+        _USER32 = dll
+        return dll
+    except Exception:
+        return None
 
 
 class WebConsoleTray:
@@ -103,20 +169,16 @@ class WebConsoleTray:
     def _patch_console_window(self) -> None:
         # 把控制台窗口改为工具窗口（无任务栏按钮），并禁用关闭按钮。
         # 失败则静默跳过，不影响 Web 服务运行；非 Windows 无 conhost 窗口，直接跳过。
-        if sys.platform != "win32":
-            return
-        try:
-            import ctypes
-        except Exception:
+        kernel32 = _get_kernel32()
+        user32 = _get_user32()
+        if kernel32 is None or user32 is None:
             return
 
-        user32 = ctypes.windll.user32
-        kernel32 = ctypes.windll.kernel32
-
-        hwnd = cast(int, kernel32.GetConsoleWindow())
+        # GetConsoleWindow.restype 已声明为 c_void_p（指针宽度），返回 int 或 None
+        hwnd = kernel32.GetConsoleWindow()
         if not hwnd:
             return
-        self._hwnd = hwnd
+        self._hwnd = cast(int, hwnd)
 
         try:
             exstyle = cast(int, user32.GetWindowLongW(hwnd, GWL_EXSTYLE))
@@ -125,7 +187,7 @@ class WebConsoleTray:
             # 触发 WM_STYLECHANGED，让任务栏重新评估是否创建按钮
             user32.SetWindowPos(
                 hwnd,
-                0,
+                None,
                 0,
                 0,
                 0,
@@ -134,7 +196,7 @@ class WebConsoleTray:
             )
 
             # 置灰系统菜单的关闭项，防止误点 X 关闭整个进程
-            hmenu = cast(int, user32.GetSystemMenu(hwnd, False))
+            hmenu = user32.GetSystemMenu(hwnd, False)
             if hmenu:
                 user32.EnableMenuItem(hmenu, SC_CLOSE, MF_BYCOMMAND | MF_GRAYED)
         except Exception:
@@ -175,11 +237,9 @@ class WebConsoleTray:
         hwnd = self._hwnd
         if not hwnd:
             return
-        if sys.platform != "win32":
+        user32 = _get_user32()
+        if user32 is None:
             return
-        import ctypes
-
-        user32 = ctypes.windll.user32
         user32.ShowWindow(hwnd, SW_RESTORE)
         try:
             user32.SetForegroundWindow(hwnd)

@@ -729,9 +729,10 @@ class TestWinktvBjInfo:
 
     @pytest.mark.asyncio
     async def test_error_returns_empty(self) -> None:
+        # 出错返回 None（类型匹配兜底）：返回 tuple 的函数不能再拿到 dict 兜底值
         with patch("src.spider.async_req", new_callable=AsyncMock, side_effect=Exception("network")):
             result = await get_winktv_bj_info("https://www.winktv.co.kr/test")
-            assert result == {"is_live": False}
+            assert result is None
 
 
 class TestKuaishouStreamData2:
@@ -866,9 +867,10 @@ class TestSoopliveTk:
 
     @pytest.mark.asyncio
     async def test_error_returns_false(self) -> None:
+        # 出错返回 None（类型匹配兜底）：返回 str/tuple 的函数不能再拿到 dict 兜底值
         with patch("src.spider.async_req", new_callable=AsyncMock, side_effect=Exception("net")):
             result = await get_sooplive_tk("https://play.sooplive.co.kr/testbj/123", rtype="live")
-            assert result == {"is_live": False}
+            assert result is None
 
 
 class TestHuyaAppStreamUrl:
@@ -1202,15 +1204,16 @@ class TestLoginSooplive:
 
     @pytest.mark.asyncio
     async def test_short_username_raises(self) -> None:
+        # 出错返回 None（类型匹配兜底）：返回 cookie 字符串的函数不能再拿到 dict 兜底值
         with patch("src.spider.async_req", new_callable=AsyncMock):
             result = await login_sooplive("short", "longpassword1")
-            assert result == {"is_live": False}
+            assert result is None
 
     @pytest.mark.asyncio
     async def test_short_password_raises(self) -> None:
         with patch("src.spider.async_req", new_callable=AsyncMock):
             result = await login_sooplive("validuser", "short")
-            assert result == {"is_live": False}
+            assert result is None
 
 
 class TestBilibiliStreamData:
@@ -1392,9 +1395,10 @@ class TestLoginFlexTv:
 
     @pytest.mark.asyncio
     async def test_error_returns_false(self) -> None:
+        # 出错返回 None（类型匹配兜底）：旧 dict 兜底会被 if new_cookies 误判为登录成功
         with patch("src.spider.async_req", new_callable=AsyncMock, side_effect=Exception("net")):
             result = await login_flextv("user", "pass")
-            assert result == {"is_live": False}
+            assert result is None
 
 
 class TestGetFlexTvStreamUrl:

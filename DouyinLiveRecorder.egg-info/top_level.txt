@@ -1,0 +1,7 @@
+gui
+gui_legacy
+i18n
+main
+msg_push
+src
+web

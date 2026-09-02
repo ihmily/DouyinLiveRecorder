@@ -12,6 +12,7 @@ import re
 import shutil
 import string
 import traceback
+import zipfile
 from collections import OrderedDict
 from collections.abc import Mapping
 from pathlib import Path
@@ -77,47 +78,64 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
-def trace_error_decorator(func: Callable[P, R]) -> Callable[P, R]:
-    # 错误追踪装饰器（支持同步和异步函数）
+def _make_trace_error_guard(func: Callable[P, R], fallback: R) -> Callable[P, R]:
+    # 错误追踪装饰器的共用实现（支持同步和异步函数）：吞掉异常并返回 fallback，
+    # 日志同时标注函数名与兜底值类型，便于定位「错误被伪装成正常结果」的现场
     if inspect.iscoroutinefunction(func):
 
         @functools.wraps(func)
         async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-            # 异步函数包装器：捕获并记录异常，返回空字典
+            # 异步函数包装器：捕获并记录异常，返回 fallback
             try:
                 return cast(R, await func(*args, **kwargs))
             except ProgramError:
                 logger.warning("Failed to execute JS code. Please check if the Node.js environment")
-                return cast(R, {"is_live": False})
+                return fallback
             except Exception as e:
                 tb = traceback.extract_tb(e.__traceback__) if e.__traceback__ else None
                 error_line = tb[-1].lineno if tb else "unknown"
                 error_info = (
                     f"message: type: {type(e).__name__}, {str(e)} in function {func.__name__} at line: {error_line}"
+                    f", fallback type: {type(fallback).__name__}"
                 )
                 logger.error(error_info)
-                return cast(R, {"is_live": False})
+                return fallback
 
         return cast(Callable[P, R], async_wrapper)
 
     @functools.wraps(func)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-        # 同步函数包装器：捕获并记录异常，返回空字典
+        # 同步函数包装器：捕获并记录异常，返回 fallback
         try:
             return func(*args, **kwargs)
         except ProgramError:
             logger.warning("Failed to execute JS code. Please check if the Node.js environment")
-            return cast(R, {"is_live": False})
+            return fallback
         except Exception as e:
             tb = traceback.extract_tb(e.__traceback__) if e.__traceback__ else None
             error_line = tb[-1].lineno if tb else "unknown"
             error_info = (
                 f"message: type: {type(e).__name__}, {str(e)} in function {func.__name__} at line: {error_line}"
+                f", fallback type: {type(fallback).__name__}"
             )
             logger.error(error_info)
-            return cast(R, {"is_live": False})
+            return fallback
 
     return wrapper
+
+
+def trace_error_decorator(func: Callable[P, R]) -> Callable[P, R]:
+    # 错误追踪装饰器：吞掉异常并返回 {"is_live": False}。绝大多数被装饰函数（各平台
+    # get_xxx_stream_data）返回含 is_live 键的 dict，调用方据其判定未开播。
+    # 返回 str/tuple/None 的函数必须改用 trace_error_decorator_or_none，否则调用方会
+    # 静默拿到一个 dict，把错误伪装成正常结果。
+    return _make_trace_error_guard(func, cast(R, {"is_live": False}))
+
+
+def trace_error_decorator_or_none(func: Callable[P, R]) -> Callable[P, R]:
+    # trace_error_decorator 的类型匹配变体：出错返回 None，供返回 str/tuple 等类型的
+    # 函数（login_*、get_*_info、get_*_tk）使用，调用方按 falsy 处理失败。
+    return _make_trace_error_guard(func, cast(R, None))
 
 
 def check_md5(file_path: str | Path) -> str:
@@ -125,6 +143,26 @@ def check_md5(file_path: str | Path) -> str:
     with open(file_path, "rb") as fp:
         file_md5 = hashlib.md5(fp.read()).hexdigest()
     return file_md5
+
+
+def unzip_file(zip_path: str | Path, extract_to: str | Path, delete: bool = True) -> None:
+    # 解压 ZIP 文件到指定目录（含 Zip Slip 目录穿越校验）。
+    # node_install / ffmpeg_install 共用同一份实现——原先两处逐字重复，
+    # 任一处打安全补丁都会漏掉另一处
+    if not os.path.exists(extract_to):
+        os.makedirs(extract_to)
+
+    extract_root = os.path.realpath(extract_to)
+    with zipfile.ZipFile(zip_path, "r") as zip_ref:
+        # 防止 Zip Slip 目录穿越攻击：校验每个成员解压后的真实路径
+        for member in zip_ref.namelist():
+            member_path = os.path.realpath(os.path.join(extract_root, member))
+            if not member_path.startswith(extract_root + os.sep) and member_path != extract_root:
+                raise ValueError(f"Unsafe path in zip file: {member}")
+        zip_ref.extractall(extract_to)
+
+    if delete and os.path.exists(zip_path):
+        os.remove(zip_path)
 
 
 def dict_to_cookie_str(cookies_dict: Mapping[str, object]) -> str:
