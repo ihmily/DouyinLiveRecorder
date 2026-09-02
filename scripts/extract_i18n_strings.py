@@ -16,6 +16,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import cast
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -126,8 +127,9 @@ def load_catalog_keys() -> dict[str, set[str]]:
 
 
 def parse_keys(compile_po: object) -> dict[str, str]:
-    # 复用 compile_po 的权威 po 解析（多行 msgid / 转义还原均正确）
-    return getattr(compile_po, "parse_po")(getattr(compile_po, "PO_PATH"))  # type: ignore[arg-type]
+    # 复用 compile_po 的权威 po 解析（多行 msgid / 转义还原均正确）。
+    # 经 getattr 动态取属性调用返回 Any，cast 收敛回声明类型（warn_return_any 门禁）
+    return cast(dict[str, str], getattr(compile_po, "parse_po")(getattr(compile_po, "PO_PATH")))
 
 
 def main() -> int:
