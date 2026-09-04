@@ -37,6 +37,7 @@ from msg_push import (
 from ffmpeg_install import (
     check_ffmpeg, ffmpeg_path, current_env_path
 )
+from runtime_events import emit_runtime_event
 
 version = "v4.0.7"
 platforms = ("\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look|TwitCasting|百度|微博|"
@@ -372,17 +373,28 @@ def run_script(command: str) -> None:
         logger.error(e)
         logger.error('Please add `#!/bin/bash` at the beginning of your bash script file.')
 
+def clear_monitor_info(record_url: str) -> bool:
+    global monitoring
+
+    if record_url not in running_list:
+        return False
+
+    running_list.remove(record_url)
+    monitoring -= 1
+    emit_runtime_event(
+        "room_monitoring_stopped",
+        url=record_url
+    )
+    return True
 
 def clear_record_info(record_name: str, record_url: str) -> None:
-    global monitoring
     recording.discard(record_name)
-    if record_url in url_comments and record_url in running_list:
-        running_list.remove(record_url)
-        monitoring -= 1
+    if record_url in url_comments and clear_monitor_info(record_url):
         color_obj.print_colored(f"[{record_name}]已经从录制列表中移除\n", color_obj.YELLOW)
 
 
 def direct_download_stream(source_url: str, save_path: str, record_name: str, live_url: str, platform: str) -> bool:
+    recording_started_emitted = False
     try:
         with open(save_path, 'wb') as f:
             client = httpx.Client(timeout=None)
@@ -398,22 +410,57 @@ def direct_download_stream(source_url: str, save_path: str, record_name: str, li
                     logger.error(f"请求直播流失败，状态码: {response.status_code}")
                     return False
 
+                emit_runtime_event(
+                    "recording_started",
+                    url=live_url,
+                    backend="direct_flv",
+                    output_path=save_path,
+                    format="FLV"
+                )
+                recording_started_emitted = True
+
                 downloaded = 0
                 chunk_size = 1024 * 16
 
                 for chunk in response.iter_bytes(chunk_size):
                     if live_url in url_comments or exit_recording:
+                        stop_reason = "disabled" if live_url in url_comments else "disk_space_limit"
                         color_obj.print_colored(f"[{record_name}]录制时已被注释或请求停止,下载中断", color_obj.YELLOW)
                         clear_record_info(record_name, live_url)
+                        emit_runtime_event(
+                            "recording_stopped",
+                            url=live_url,
+                            backend="direct_flv",
+                            output_path=save_path,
+                            format="FLV",
+                            reason=stop_reason
+                        )
                         return False
 
                     if chunk:
                         f.write(chunk)
                         downloaded += len(chunk)
                 print()
+                emit_runtime_event(
+                    "recording_stopped",
+                    url=live_url,
+                    backend="direct_flv",
+                    output_path=save_path,
+                    format="FLV",
+                    reason="completed"
+                )
                 return True
     except Exception as e:
         logger.error(f"FLV下载错误: {e} 发生错误的行数: {e.__traceback__.tb_lineno}")
+        if recording_started_emitted:
+            emit_runtime_event(
+                "recording_stopped",
+                url=live_url,
+                backend="direct_flv",
+                output_path=save_path,
+                format="FLV",
+                reason="backend_error"
+            )
         return False
 
 
@@ -422,6 +469,14 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
     save_file_path = ffmpeg_command[-1]
     process = subprocess.Popen(
         ffmpeg_command, stdin=subprocess.PIPE, stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type)
+    )
+
+    emit_runtime_event(
+        "recording_started",
+        url=record_url,
+        backend="ffmpeg",
+        output_path=save_file_path,
+        format=save_type
     )
 
     subs_file_path = save_file_path.rsplit('.', maxsplit=1)[0]
@@ -435,6 +490,7 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
 
     while process.poll() is None:
         if record_url in url_comments or exit_recording:
+            stop_reason = "disabled" if record_url in url_comments else "disk_space_limit"
             color_obj.print_colored(f"[{record_name}]录制时已被注释,本条线程将会退出", color_obj.YELLOW)
             clear_record_info(record_name, record_url)
             # process.terminate()
@@ -445,10 +501,27 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
             else:
                 process.send_signal(signal.SIGINT)
             process.wait()
+            emit_runtime_event(
+                "recording_stopped",
+                url=record_url,
+                backend="ffmpeg",
+                output_path=save_file_path,
+                format=save_type,
+                reason=stop_reason
+            )
             return True
         time.sleep(1)
 
     return_code = process.returncode
+    emit_runtime_event(
+        "recording_stopped",
+        url=record_url,
+        backend="ffmpeg",
+        output_path=save_file_path,
+        format=save_type,
+        reason="completed" if return_code == 0 else "backend_error",
+        return_code=return_code
+    )
     stop_time = time.strftime('%Y-%m-%d %H:%M:%S')
     if return_code == 0:
         if converts_to_mp4 and save_type == 'TS':
@@ -545,6 +618,8 @@ def select_source_url(link, stream_info):
 def start_record(url_data: tuple, count_variable: int = -1) -> None:
     global error_count
 
+    monitoring_started_emitted = False
+
     while True:
         try:
             record_finished = False
@@ -554,6 +629,14 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
             count_time = time.time()
             retry = 0
             record_quality_zh, record_url, anchor_name = url_data
+
+            if not monitoring_started_emitted:
+                emit_runtime_event(
+                    "room_monitoring_started",
+                    url=record_url,
+                    quality=record_quality_zh
+                )
+                monitoring_started_emitted = True
             record_quality = get_quality_code(record_quality_zh)
             proxy_address = proxy_addr
             platform = '未知平台'
@@ -1095,6 +1178,14 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                             content = f"\r{record_name} 正在直播中..."
                             print(content)
 
+                            emit_runtime_event(
+                                "room_live",
+                                url=record_url,
+                                platform=platform,
+                                anchor=anchor_name,
+                                quality=record_quality_zh
+                            )
+
                             if live_status_push and not start_pushed:
                                 if begin_show_push:
                                     push_content = "直播间状态更新：[直播间名称] 正在直播中，时间：[时间]"
@@ -1629,8 +1720,27 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                 else:
                     x = num
 
+                if x > 0 and record_url not in url_comments and not exit_recording:
+                    emit_runtime_event(
+                        "room_waiting",
+                        url=record_url,
+                        platform=platform,
+                        anchor=anchor_name,
+                        quality=record_quality_zh,
+                        retry_after=x,
+                        next_check=(
+                            datetime.datetime.now(datetime.timezone.utc)
+                            + datetime.timedelta(seconds=x)
+                        ).isoformat()
+                    )
+
                 # 这里是正常循环
                 while x:
+                    if record_url in url_comments:
+                        clear_monitor_info(record_url)
+                        return
+                    if exit_recording:
+                        return
                     x = x - 1
                     if loop_time:
                         print(f'\r{anchor_name}循环等待{x}秒 ', end="")
@@ -1779,6 +1889,11 @@ except URLError:
                             color_obj.YELLOW)
 except Exception as err:
     print("An unexpected error occurred:", err)
+
+emit_runtime_event(
+    "runtime_started",
+    version=version
+)
 
 while True:
 
