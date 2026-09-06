@@ -20,6 +20,8 @@ OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_out_e2e")
 os.makedirs(OUT, exist_ok=True)
 
 
+# 守护正常路径：start() 须同步创建 SRT 文件（即使尚无弹幕）；弹幕时间戳相对录像起点
+# T0 计算（非从 0 开始），且对同一 writer 重复 start() 保持幂等（不重置 T0）。
 def test_immediate_file_and_anchored_timeline() -> None:
     base = os.path.join(OUT, "anchor_单文件")
     for f in os.listdir(OUT):
@@ -42,6 +44,7 @@ def test_immediate_file_and_anchored_timeline() -> None:
     print("[PASS] 单文件:start() 立即建 SRT + 时间戳锚定录像起点")
 
 
+# 守护分段模式：每片时间轴各自从片内 0 复位，且 start() 即生成 _000 片（无需等弹幕到达）。
 def test_segment_reset() -> None:
     base = os.path.join(OUT, "anchor_分段")
     for f in os.listdir(OUT):
@@ -66,6 +69,8 @@ def test_segment_reset() -> None:
     print("[PASS] 分段:每片时间轴重置为 0,且 _000 立即生成")
 
 
+# 守护旧行为兜底：未显式 start() 时以首条弹幕为 T0（时间戳 00:00:00,000），
+# 兼容直接写调用、无需预热起点。
 def test_no_start_fallback() -> None:
     # 未调 start() 时以首条弹幕为 T0(兼容直接写调用的测试)。
     base = os.path.join(OUT, "anchor_兜底")
@@ -97,6 +102,8 @@ class _SilentDanmaku(DanmakuBase):
         pass
 
 
+# 经真实 DanmakuCollector 启动的集成回归：即使一条弹幕都没有，SRT 也须在 start() 同步
+# 存在——守护「文件在 start() 同步落盘、不依赖弹幕到达」的不变量（time.sleep 仅为等线程）。
 def test_collector_creates_srt_at_start() -> None:
     # 经真实 DanmakuCollector 启动,即使一条弹幕都没有,SRT 也应立即存在。
     base = os.path.join(OUT, "anchor_collector")

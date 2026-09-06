@@ -1,4 +1,13 @@
-# Tests for src/web_api.py - Web 面板 FastAPI 应用安全与健壮性回归测试.
+# -*- coding: utf-8 -*-
+# src/web_api.py 测试：Web 面板 FastAPI 应用的安全与健壮性回归。聚焦四类契约 ——
+# ① 鉴权中间件（启用认证时所有 /api/* 须 401，禁用时开放）；② 登录限流（防 XFF 伪造绕过、
+# 失败计数与成功重置、密码变更吊销 token）；③ 写接口的注入/越权防护（quality 含换行被 422、
+# 危险配置键被 403 阻断 RCE）；④ 并发安全（TOCTOU 重复添加房间）与副作用（停止录制触发日志归档、
+# 语言即时切换写回 config）。
+# 测试策略：用 types.ModuleType 注入轻量 fake main（避免导入真实 main.py 触发的 FFmpeg/Node 检查
+# 等重副作用，web_api 仅在请求处理时才 import main、仅用到 file_update_lock 等符号）；通过
+# create_app 注入临时 config/URL_config/downloads/logs 目录隔离文件系统；用 FastAPI TestClient
+# 同步驱动异步路由，全程不监听端口。用例内 C4/C8/C10/C11 等为安全/健壮性回归编号（见 CODE_WIKI 变更记录）。
 
 import os
 import sys
@@ -28,6 +37,7 @@ def _install_fake_main() -> types.ModuleType:
 
 @pytest.fixture(scope="function")
 def fake_main() -> Generator[types.ModuleType, None, None]:
+    # function 级 fixture：每个用例用独立假 main，避免模块级状态串扰。
     old = sys.modules.get("main")
     fake = _install_fake_main()
     yield fake
@@ -90,6 +100,7 @@ def app_env(tmp_path: Path, fake_main: types.ModuleType) -> Generator[types.Simp
 
 
 def _login(client: TestClient) -> str:
+    # 测试辅助：复用固定密码登录换取 token，避免每个用例重复登录样板。
     resp = client.post("/api/login", json={"password": "secret123"})
     assert resp.status_code == 200, resp.text
     token = resp.json()["token"]
@@ -98,7 +109,10 @@ def _login(client: TestClient) -> str:
 
 
 class TestAuthMiddleware:
+    # 守护鉴权中间件：认证启用时所有 /api/* 无 Bearer token 必须 401（fail-closed），
+    # 禁用时面板完全开放（200）。验证默认拒绝与可配置开放两种契约。
     def test_api_requires_token_when_auth_enabled(self, app_env: types.SimpleNamespace) -> None:
+        # 认证启用时未带 Bearer token 访问受保护接口必须 401，验证中间件默认拒绝（fail-closed）。
         resp = app_env.client.get("/api/rooms")
         assert resp.status_code == 401
 
@@ -149,6 +163,8 @@ class TestLoginRateLimit:
         assert resp.status_code == 401
 
     def test_successful_login_resets_failures(self, app_env: types.SimpleNamespace) -> None:
+        # 连续失败计数后一次成功登录须清零失败表；
+        # 防止合法用户被持续限流（C4 失败后重置）。
         client = app_env.client
         for _ in range(3):
             resp = client.post("/api/login", json={"password": "wrong"})
@@ -159,6 +175,7 @@ class TestLoginRateLimit:
 
 class TestRoomEndpoints:
     def test_quality_newline_rejected(self, app_env: types.SimpleNamespace) -> None:
+        # quality 字段含换行（"高清\n# evil"）属于响应头/配置注入向量，须被 422 校验拒绝而非落盘。
         token = _login(app_env.client)
         resp = app_env.client.post(
             "/api/rooms",
@@ -179,6 +196,8 @@ class TestRoomEndpoints:
         assert "https://live.douyin.com/2" in text
 
     def test_add_room_duplicate_409(self, app_env: types.SimpleNamespace) -> None:
+        # 同一 URL 二次添加须返回 409（去重），不重复写入；
+        # 验证 URL_config 幂等守护。
         token = _login(app_env.client)
         headers = {"Authorization": f"Bearer {token}"}
         resp = app_env.client.post("/api/rooms", json={"url": "https://live.douyin.com/3"}, headers=headers)
@@ -216,8 +235,152 @@ class TestRoomEndpoints:
         assert results.count(409) == n - 1
 
 
+class TestRoomQualityApi:
+    # 守护按房间切换画质端点（PUT /api/rooms/quality）：与 GUI 画质监控共用
+    # update_room_quality 落盘画质段，验证切换/恢复默认/幂等/404/422 全链路契约。
+    def _auth_headers(self, app_env: types.SimpleNamespace) -> dict[str, str]:
+        token = _login(app_env.client)
+        return {"Authorization": f"Bearer {token}"}
+
+    def test_change_and_reset_quality(self, app_env: types.SimpleNamespace) -> None:
+        # 切换画质 → 文件含画质段；恢复默认（quality=null）→ 画质段移除且行保持完整
+        headers = self._auth_headers(app_env)
+        url = "https://www.huya.com/dank1ng"
+        resp = app_env.client.post("/api/rooms", json={"url": url, "name": "DANK1NG"}, headers=headers)
+        assert resp.status_code == 200, resp.text
+
+        resp = app_env.client.put("/api/rooms/quality", json={"url": url, "quality": "蓝光8M"}, headers=headers)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["changed"] is True
+        text = app_env.url_cfg.read_text(encoding="utf-8-sig")
+        assert "蓝光8M,https://www.huya.com/dank1ng,主播: DANK1NG" in text
+
+        # 幂等：重复切换同一画质 changed=False
+        resp = app_env.client.put("/api/rooms/quality", json={"url": url, "quality": "蓝光8M"}, headers=headers)
+        assert resp.status_code == 200
+        assert resp.json()["changed"] is False
+
+        # 恢复默认：quality 为空移除画质段，主播名保留
+        resp = app_env.client.put("/api/rooms/quality", json={"url": url, "quality": None}, headers=headers)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["changed"] is True
+        text = app_env.url_cfg.read_text(encoding="utf-8-sig")
+        assert "https://www.huya.com/dank1ng,主播: DANK1NG" in text
+        assert "蓝光8M," not in text
+
+    def test_change_quality_room_not_found_404(self, app_env: types.SimpleNamespace) -> None:
+        # 未配置的 URL 切画质须 404，不得写入任何内容
+        headers = self._auth_headers(app_env)
+        resp = app_env.client.put(
+            "/api/rooms/quality", json={"url": "https://live.douyin.com/404", "quality": "高清"}, headers=headers
+        )
+        assert resp.status_code == 404
+
+    def test_change_quality_invalid_rejected_422(self, app_env: types.SimpleNamespace) -> None:
+        # 白名单外档位与含换行的画质名均须 422（后者为换行注入防护），文件不被写入
+        headers = self._auth_headers(app_env)
+        url = "https://www.douyu.com/36252"
+        resp = app_env.client.post("/api/rooms", json={"url": url}, headers=headers)
+        assert resp.status_code == 200
+
+        resp = app_env.client.put(
+            "/api/rooms/quality", json={"url": url, "quality": "8K无敌"}, headers=headers
+        )
+        assert resp.status_code == 422
+        resp = app_env.client.put(
+            "/api/rooms/quality", json={"url": url, "quality": "高清\n# evil"}, headers=headers
+        )
+        assert resp.status_code == 422
+        text = app_env.url_cfg.read_text(encoding="utf-8-sig")
+        assert "8K无敌" not in text
+        assert "evil" not in text
+
+    def test_change_quality_requires_auth(self, app_env: types.SimpleNamespace) -> None:
+        # 认证启用时无 Bearer token 的画质切换请求必须 401（写接口 fail-closed）
+        resp = app_env.client.put(
+            "/api/rooms/quality", json={"url": "https://live.douyin.com/1", "quality": "高清"}
+        )
+        assert resp.status_code == 401
+
+    def test_change_quality_on_disabled_room_preserves_comment(self, app_env: types.SimpleNamespace) -> None:
+        # 已注释（禁用）的房间也可预设画质：切换成功、# 前缀原样保留（含其后空格）、房间保持禁用态
+        headers = self._auth_headers(app_env)
+        app_env.url_cfg.write_text(
+            "# https://www.huya.com/dank1ng,主播: DANK1NG\n",
+            encoding="utf-8-sig",
+        )
+        resp = app_env.client.put(
+            "/api/rooms/quality",
+            json={"url": "https://www.huya.com/dank1ng", "quality": "超清"},
+            headers=headers,
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["changed"] is True
+        assert (
+            app_env.url_cfg.read_text(encoding="utf-8-sig")
+            == "# 超清,https://www.huya.com/dank1ng,主播: DANK1NG\n"
+        )
+        # 房间列表仍为禁用，但画质已更新（重新启用后即按预设画质录制）
+        rooms = app_env.client.get("/api/rooms", headers=headers).json()
+        room = next(r for r in rooms if r["url"] == "https://www.huya.com/dank1ng")
+        assert room["enabled"] is False
+        assert room["quality"] == "超清"
+
+    def test_quality_visible_in_room_list_after_change(self, app_env: types.SimpleNamespace) -> None:
+        # 读-写一致性：PUT 切换后 GET /api/rooms 立即返回新画质；相邻房间行不受影响
+        headers = self._auth_headers(app_env)
+        resp = app_env.client.post(
+            "/api/rooms", json={"url": "https://live.douyin.com/1", "name": "A"}, headers=headers
+        )
+        assert resp.status_code == 200
+        resp = app_env.client.post(
+            "/api/rooms", json={"url": "https://live.douyin.com/2", "quality": "标清", "name": "B"}, headers=headers
+        )
+        assert resp.status_code == 200
+
+        resp = app_env.client.put(
+            "/api/rooms/quality", json={"url": "https://live.douyin.com/1", "quality": "蓝光4M"}, headers=headers
+        )
+        assert resp.status_code == 200
+        rooms = app_env.client.get("/api/rooms", headers=headers).json()
+        by_url = {r["url"]: r for r in rooms}
+        assert by_url["https://live.douyin.com/1"]["quality"] == "蓝光4M"
+        assert by_url["https://live.douyin.com/2"]["quality"] == "标清"
+
+    def test_change_quality_matches_schemeless_url(self, app_env: types.SimpleNamespace) -> None:
+        # PUT 侧 URL 归一化：不带 scheme 的地址也能匹配到（add_room 已规范化写入的）配置行
+        headers = self._auth_headers(app_env)
+        resp = app_env.client.post("/api/rooms", json={"url": "www.huya.com/dank1ng"}, headers=headers)
+        assert resp.status_code == 200
+        resp = app_env.client.put(
+            "/api/rooms/quality", json={"url": "www.huya.com/dank1ng", "quality": "高清"}, headers=headers
+        )
+        assert resp.status_code == 200, resp.text
+        assert "高清,https://www.huya.com/dank1ng" in app_env.url_cfg.read_text(encoding="utf-8-sig")
+
+    def test_empty_string_quality_resets_to_default(self, app_env: types.SimpleNamespace) -> None:
+        # quality 传空串与 null 等价：均移除画质段恢复默认（前端 quality||null 之外的直连调用路径）
+        headers = self._auth_headers(app_env)
+        url = "https://www.douyu.com/36252"
+        resp = app_env.client.post("/api/rooms", json={"url": url}, headers=headers)
+        assert resp.status_code == 200
+        resp = app_env.client.put("/api/rooms/quality", json={"url": url, "quality": "超清"}, headers=headers)
+        assert resp.status_code == 200
+
+        resp = app_env.client.put("/api/rooms/quality", json={"url": url, "quality": ""}, headers=headers)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["changed"] is True
+        text = app_env.url_cfg.read_text(encoding="utf-8-sig")
+        assert "超清," not in text
+        assert url in text
+
+
 class TestPasswordManagement:
+    # 守护密码管理：认证启用时清空密码须 400（防误关认证）；改密须吊销旧 token（C11）、
+    # 且新密码以 pbkdf2 哈希落盘而非明文。覆盖越权与凭据泄露回归。
     def test_clear_password_rejected_when_auth_enabled(self, app_env: types.SimpleNamespace) -> None:
+        # 认证启用时清空密码（web_password=""）须被 400 拒绝；
+        # 防误关认证（空密码=任何人可登录）。
         token = _login(app_env.client)
         resp = app_env.client.put(
             "/api/config",
@@ -243,6 +406,8 @@ class TestPasswordManagement:
         assert resp.status_code == 200
 
     def test_new_password_stored_hashed(self, app_env: types.SimpleNamespace) -> None:
+        # 修改密码后配置文件须存哈希（pbkdf2）而非明文；
+        # 验证密码落盘安全，防明文泄露。
         token = _login(app_env.client)
         resp = app_env.client.put(
             "/api/config",
@@ -258,10 +423,14 @@ class TestPasswordManagement:
 # POST /api/recording/toggle：Web 面板「开始/停止录制」按钮的录制开关。
 class TestRecordingToggle:
     def test_toggle_requires_auth(self, app_env: types.SimpleNamespace) -> None:
+        # 录制开关是写操作，未带 token 必须 401（与读接口同受中间件保护）；
+        # 锁住「控制面变更须认证」契约，防未授权启停录制。
         resp = app_env.client.post("/api/recording/toggle", json={"enable": True})
         assert resp.status_code == 401
 
     def test_toggle_flips_engine_flag(self, app_env: types.SimpleNamespace, fake_main: types.ModuleType) -> None:
+        # enable 真/假须同步翻转引擎开关（返回体与 fake main 的 recording_enabled 双校验）；
+        # 锁住「Web 开关 ↔ 引擎状态」一致契约，防止面板与实际录制脱节。
         token = _login(app_env.client)
         headers = {"Authorization": f"Bearer {token}"}
         resp = app_env.client.post("/api/recording/toggle", json={"enable": True}, headers=headers)
@@ -298,7 +467,11 @@ class TestRecordingToggle:
 
 
 class TestDangerousKeys:
+    # 守护危险配置键护栏：即便认证禁用，自定义脚本执行命令等危险键仍须 403 阻断，
+    # 防未授权 RCE（危险配置键无视认证的 C 类回归）。
     def test_dangerous_key_blocked_when_auth_disabled(self, tmp_path: Path, fake_main: types.ModuleType) -> None:
+        # 即便认证禁用，自定义脚本执行命令等危险键仍须 403 阻断；
+        # 防未授权 RCE（危险配置键无视认证的 C 类回归）。
         from src import web_api as wa
 
         cfg = tmp_path / "config.ini"
@@ -321,6 +494,8 @@ class TestDangerousKeys:
 
 
 class TestListFiles:
+    # 守护文件列举：损坏符号链接与指向 downloads 之外的符号链接（目录遍历）均须被跳过不列出；
+    # 子目录须能递归浏览。防通过软链泄露任意文件。
     def test_broken_symlink_skipped(self, app_env: types.SimpleNamespace) -> None:
         (app_env.downloads / "ok.ts").write_text("x", encoding="utf-8")
         broken = app_env.downloads / "broken.ts"
@@ -340,6 +515,8 @@ class TestListFiles:
         assert "broken.ts" not in names
 
     def test_symlink_outside_skipped(self, app_env: types.SimpleNamespace) -> None:
+        # 指向 downloads 之外的符号链接（目录遍历）须被跳过、不列出；
+        # 防通过软链泄露任意文件。
         outside = app_env.cfg  # downloads 目录之外的任意文件
         link = app_env.downloads / "leak.ts"
         try:
@@ -356,6 +533,8 @@ class TestListFiles:
         assert "leak.ts" not in names
 
     def test_nested_listing_ok(self, app_env: types.SimpleNamespace) -> None:
+        # 子目录文件须能被递归列出（?path=sub）；
+        # 验证嵌套目录浏览正常。
         sub = app_env.downloads / "sub"
         sub.mkdir()
         (sub / "a.ts").write_text("x", encoding="utf-8")
@@ -378,6 +557,8 @@ class TestLanguageApi:
         cfg.write_text(text, encoding="utf-8-sig")
 
     def test_get_language_returns_current_and_available(self, app_env: types.SimpleNamespace) -> None:
+        # GET /api/language 须返回当前语言码与全部可用语言集合；
+        # 锁住枚举契约（zh_CN/en_US/en_GB/zh_TW）。
         token = _login(app_env.client)
         resp = app_env.client.get("/api/language", headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 200
@@ -405,6 +586,8 @@ class TestLanguageApi:
             _ = i18n_module.set_language(saved)
 
     def test_put_language_accepts_alias(self, app_env: types.SimpleNamespace) -> None:
+        # 方言码 "zh-TW" 须被规整为内部键 "zh_TW"；锁住别名归一契约，
+        # 防连字符格式的语言码绕过校验或写成非标键。
         import i18n as i18n_module
 
         saved = i18n_module.get_language()
@@ -420,6 +603,8 @@ class TestLanguageApi:
             _ = i18n_module.set_language(saved)
 
     def test_put_language_rejects_unknown(self, app_env: types.SimpleNamespace) -> None:
+        # 不在白名单的语言码（"klingon"）须 400 拒绝；锁住枚举护栏，
+        # 防非法值写入 config 导致 i18n 初始化失败。
         self._write_language_section(app_env.cfg, "zh_cn")
         token = _login(app_env.client)
         resp = app_env.client.put(
@@ -472,8 +657,64 @@ class TestLanguageApi:
         assert "[录制设置]\nlanguage = en_GB\n" in cfg.read_text(encoding="utf-8-sig")
 
     def test_put_language_rejects_empty(self, app_env: types.SimpleNamespace) -> None:
+        # 全空白语言码（"  "）须被 400 拒绝；
+        # 防空/空格绕过校验。
         token = _login(app_env.client)
         resp = app_env.client.put(
             "/api/language", json={"language": "  "}, headers={"Authorization": f"Bearer {token}"}
         )
         assert resp.status_code == 400
+
+
+class TestQualityOptionsEndpoints:
+    # GET/PUT /api/rooms/qualities：WEB 端「画质选项」管理与 GUI 端画质切换菜单共用入口。
+    # 守护：① 缺省返回内置全集；② PUT 仅接受内置档位（白名单外的会被后端剔除而非写入）；
+    #     ③ PUT 持久化到 config.ini，再次 GET 应回读到同样的列表；④ 换行注入必须 422。
+
+    def test_get_defaults_to_builtin(self, app_env: types.SimpleNamespace) -> None:
+        # 缺省：config.ini 无「自定义画质选项」键 → 返回 builtin 全集，且 builtin 字段也在
+        token = _login(app_env.client)
+        resp = app_env.client.get("/api/rooms/qualities", headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 200
+        body = resp.json()
+        from src.web_config import BUILTIN_QUALITIES
+
+        assert body["options"] == list(BUILTIN_QUALITIES)
+        assert body["builtin"] == list(BUILTIN_QUALITIES)
+
+    def test_put_persists_to_config_ini(self, app_env: types.SimpleNamespace) -> None:
+        # 写回的选项必须落到 config.ini [录制设置] 自定义画质选项(逗号分隔)
+        token = _login(app_env.client)
+        resp = app_env.client.put(
+            "/api/rooms/qualities",
+            json={"options": ["超清", "高清", "流畅"]},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["options"] == ["超清", "高清", "流畅"]
+        text = app_env.cfg.read_text(encoding="utf-8-sig")
+        assert "自定义画质选项(逗号分隔) = 超清,高清,流畅" in text
+        # 持久化后再读仍能复现
+        resp2 = app_env.client.get("/api/rooms/qualities", headers={"Authorization": f"Bearer {token}"})
+        assert resp2.json()["options"] == ["超清", "高清", "流畅"]
+
+    def test_put_drops_unknown_quality_silently(self, app_env: types.SimpleNamespace) -> None:
+        # 白名单外的画质名（如 "2K"）不应写入；后端用规范化列表兜底，避免静默丢失用户输入
+        token = _login(app_env.client)
+        resp = app_env.client.put(
+            "/api/rooms/qualities",
+            json={"options": ["超清", "2K", "流畅"]},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["options"] == ["超清", "流畅"]
+
+    def test_put_newline_rejected_422(self, app_env: types.SimpleNamespace) -> None:
+        # 换行注入与 format_url_line / validate_config_target 同款防护（C3）
+        token = _login(app_env.client)
+        resp = app_env.client.put(
+            "/api/rooms/qualities",
+            json={"options": ["超清\n# evil"]},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 422

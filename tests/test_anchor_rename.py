@@ -37,13 +37,16 @@ def url_config(tmp_path: Path, main_mod: ModuleType, monkeypatch: pytest.MonkeyP
 
 
 class TestUpdateAnchorName:
+    # 基础更新：把列表里已存在主播行的名字段改写为新名；守护默认段结构 url,主播: X 的解析正确
     def test_basic_update(self, url_config: Path) -> None:
         from src.config_io import update_anchor_name
 
+        # 列表项首段无画质前缀时，主播名字段居于逗号后首段（默认段结构：url,主播: X）
         url_config.write_text("https://live.douyin.com/1,主播: 旧名字\n", encoding="utf-8-sig")
         assert update_anchor_name("https://live.douyin.com/1", "新名字") is True
         assert url_config.read_text(encoding="utf-8-sig") == "https://live.douyin.com/1,主播: 新名字\n"
 
+    # 带画质前缀（超清,）的行更新后仍保留前缀：守护前缀是列表项首段、更新只动主播字段
     def test_keeps_quality_segment(self, url_config: Path) -> None:
         from src.config_io import update_anchor_name
 
@@ -51,16 +54,21 @@ class TestUpdateAnchorName:
         assert update_anchor_name("https://live.bilibili.com/123", "新名字") is True
         assert url_config.read_text(encoding="utf-8-sig") == "超清,https://live.bilibili.com/123,主播: 新名字\n"
 
+    # 注释行（# 前缀）须整行跳过不误改：否则会把用户禁用的条目误激活
+    # 误改注释行会把用户临时禁用的房间重新激活，造成重复录制或风控
     def test_preserves_comment_prefix(self, url_config: Path) -> None:
         from src.config_io import update_anchor_name
 
+        # 注释行（# 开头）须整行跳过、不误改，否则会把禁用条目误激活
         url_config.write_text("#https://live.douyin.com/9,主播: 旧名字\n", encoding="utf-8-sig")
         assert update_anchor_name("https://live.douyin.com/9", "新名字") is True
         assert url_config.read_text(encoding="utf-8-sig") == "#https://live.douyin.com/9,主播: 新名字\n"
 
+    # 仅有 URL 无主播字段时补全 ',主播: X'；空行不处理，避免产生空主播名条目
     def test_appends_when_field_missing(self, url_config: Path) -> None:
         from src.config_io import update_anchor_name
 
+        # 列表项仅有 URL 无主播字段时补全 ",主播: X"；空行不处理，避免产生空主播名条目
         url_config.write_text("https://live.douyin.com/2\n超清,https://live.douyin.com/3\n", encoding="utf-8-sig")
         assert update_anchor_name("https://live.douyin.com/2", "小明") is True
         assert update_anchor_name("https://live.douyin.com/3", "小红") is True
@@ -68,6 +76,7 @@ class TestUpdateAnchorName:
         assert "https://live.douyin.com/2,主播: 小明\n" in content
         assert "超清,https://live.douyin.com/3,主播: 小红\n" in content
 
+    # 配置用全角冒号 "主播：" 时须识别并统一重写为半角冒号，与 main.py 行解析一致
     def test_fullwidth_colon_supported(self, url_config: Path) -> None:
         from src.config_io import update_anchor_name
 
@@ -76,6 +85,7 @@ class TestUpdateAnchorName:
         # 统一重写为半角冒号格式（与 main.py 行解析一致）
         assert url_config.read_text(encoding="utf-8-sig") == "https://live.douyin.com/4,主播: 新名字\n"
 
+    # 已是新名字时返回 False 且不改写：幂等，避免每轮轮询都无谓写盘
     def test_idempotent_when_already_new_name(self, url_config: Path) -> None:
         from src.config_io import update_anchor_name
 
@@ -83,6 +93,8 @@ class TestUpdateAnchorName:
         assert update_anchor_name("https://live.douyin.com/5", "新名字") is False
         assert url_config.read_text(encoding="utf-8-sig") == "https://live.douyin.com/5,主播: 新名字\n"
 
+    # 回归：URL 前缀相似（/1 与 /12）时不得误改他行，须段级匹配而非子串匹配
+    # 段级（逗号分隔）匹配而非子串，防止 /1 误伤 /12、/10 误伤 /100
     def test_url_prefix_not_mismatched(self, url_config: Path) -> None:
         # 回归：URL 前缀相似（/1 与 /12）时不得误改他行（段级匹配而非子串匹配）
         from src.config_io import update_anchor_name
@@ -96,6 +108,7 @@ class TestUpdateAnchorName:
         assert "https://live.douyin.com/1,主播: 丙" in content
         assert "https://live.douyin.com/12,主播: 乙" in content
 
+    # 更新目标行同时须保留其余行与原始行尾（CRLF），避免改写破坏配置文件格式
     def test_other_lines_untouched_and_eol_preserved(self, url_config: Path) -> None:
         from src.config_io import update_anchor_name
 
@@ -119,12 +132,13 @@ class TestUpdateAnchorName:
     def test_missing_file_returns_false(self, url_config: Path) -> None:
         from src.config_io import update_anchor_name
 
-        # 文件不存在（url_config fixture 未写入内容）
+        # 配置文件缺失时安全返回 False 且不抛异常（轮询线程可能早于配置文件就绪）
         assert update_anchor_name("https://live.douyin.com/x", "新") is False
 
     def test_empty_args_return_false(self, url_config: Path) -> None:
         from src.config_io import update_anchor_name
 
+        # 空 URL 或空名字均为非法入参（用户清空输入框），立即返回 False 而非写脏数据
         assert update_anchor_name("", "新") is False
         assert update_anchor_name("https://live.douyin.com/x", "") is False
 
@@ -143,6 +157,7 @@ def save_root(tmp_path: Path, main_mod: ModuleType, monkeypatch: pytest.MonkeyPa
 
 
 class TestRenameAnchorDirectory:
+    # folder_by_author 默认布局：重命名主播目录，并将目录下文件名前缀同步为新名
     def test_renames_author_dir_and_prefixed_files(self, save_root: Path, main_mod: ModuleType) -> None:
         # folder_by_author（默认开启）结构：{platform}/{主播名}/日期/录制文件（含 SRT）
         anchor_dir = save_root / "抖音直播" / "旧名字"
@@ -184,6 +199,7 @@ class TestRenameAnchorDirectory:
         assert main_mod.rename_anchor_directory("旧名字", "新名字", "抖音直播") is True
         assert list((save_root / "抖音直播").iterdir()) == []
 
+    # 平台目录都不存在：直接视为成功，不动任何文件
     def test_missing_platform_dir_is_success(self, save_root: Path, main_mod: ModuleType) -> None:
         assert main_mod.rename_anchor_directory("旧名字", "新名字", "抖音直播") is True
 
@@ -201,6 +217,8 @@ class TestRenameAnchorDirectory:
         assert (platform_dir / "新名字_260102_000000_000.ts").exists()
         assert (date_dir / "新名字_260102_000000.srt").exists()
         assert (platform_dir / "别人_260102.ts").exists()
+
+        # 标题含主播名，改名须同步刷新子目录名，否则旧标题目录残留导致文件散落
 
     def test_renames_title_anchor_subdir(self, save_root: Path, main_mod: ModuleType) -> None:
         # folder_by_title + folder_by_time 组合：子目录名形如 "{标题}_{主播名}"
@@ -241,6 +259,8 @@ class TestRenameAnchorDirectory:
         assert (new_dir / "旧名字_locked.ts").exists()  # 占用文件保留旧名
         assert (new_dir / "新名字_free.ts").exists()
 
+    # 目录级失败（整目录被占用）：返回 False，调用方下轮重试且不更新配置
+    # 目录级失败（整目录被占用）：返回 False，调用方下轮重试、不更新配置
     def test_directory_rename_failure_returns_false(
         self, save_root: Path, main_mod: ModuleType, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -257,6 +277,7 @@ class TestRenameAnchorDirectory:
         assert main_mod.rename_anchor_directory("旧名字", "新名字", "抖音直播") is False
         assert anchor_dir.is_dir()  # 原目录原样保留
 
+    # 空名或新旧同名视为无操作直接返回 True，不触发任何文件系统改动
     def test_same_and_empty_names_are_noop(self, save_root: Path, main_mod: ModuleType) -> None:
         assert main_mod.rename_anchor_directory("", "x", "抖音直播") is True
         assert main_mod.rename_anchor_directory("x", "", "抖音直播") is True
@@ -266,7 +287,10 @@ class TestRenameAnchorDirectory:
 # ============================ 端到端：配置 + 文件系统一致性 ============================
 
 
+# 端到端：先改文件系统（失败则中止）成功后再更新配置，保证两者一致。
 class TestAnchorRenameEndToEnd:
+    # 模拟 start_record 同步顺序：文件系统与配置文件须一致使用新名，其他房间不受影响
+    # 端到端：先改文件系统（失败则中止）成功后再更新配置，两者一致使用新名、其他房间不受影响
     def test_config_and_filesystem_stay_consistent(
         self, url_config: Path, save_root: Path, main_mod: ModuleType
     ) -> None:

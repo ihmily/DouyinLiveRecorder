@@ -1,4 +1,7 @@
 # Tests for src/sync_http.py module - 同步 HTTP 客户端.
+# 全程 mock 底层 opener / 线程内 Session / urlopen，不触网；按 ssl_verify 与是否走代理分流两条实现路径，
+# 断言覆盖编码分支（dict→表单 / 字符串 / json）、gzip 解压、重定向取 URL、错误返回空串且记日志等契约。
+# 非代理路径 patch _get_opener，代理路径 patch 线程内 Session 工厂 _session，避免触网且精准命中实现层。
 
 import gzip
 import http.client
@@ -15,7 +18,9 @@ class TestGetOpener:
     # Test opener 选择逻辑.
 
     @patch("src.sync_http.config")
+    # ssl_verify=True 须返回标准安全 opener，与默认生产环境一致
     def test_ssl_verify_true_returns_secure_opener(self, mock_config: MagicMock) -> None:
+        # 开启证书校验（ssl_verify=True）须返回标准 opener，与默认生产环境一致
         # ssl_verify=True 时使用安全 opener.
         mock_config.ssl_verify = True
         opener = _get_opener()
@@ -29,12 +34,16 @@ class TestGetOpener:
         assert opener is not None
 
 
+# sync_req 同步请求入口：按 ssl_verify 与是否走代理分流两条实现路径。
+# 守卫编码分支、gzip 解压、重定向取 URL、错误返回空串且记日志等契约。
 class TestSyncReq:
     # Test sync_req 同步请求函数.
 
     @patch("src.sync_http.config")
     @patch("src.sync_http._get_opener")
+    # 正常 GET 路径：解码响应体返回字符串，且用后必须 close 一次释放连接
     def test_basic_get_request(self, mock_opener_fn: MagicMock, mock_config: MagicMock) -> None:
+        # 正常 GET 路径：解码响应体返回字符串，且用后必须 close 一次以释放连接
         # 基本 GET 请求.
         mock_config.ssl_verify = True
         mock_response = MagicMock()
@@ -53,6 +62,7 @@ class TestSyncReq:
     @patch("src.sync_http.config")
     @patch("src.sync_http._get_opener")
     def test_gzip_response(self, mock_opener_fn: MagicMock, mock_config: MagicMock) -> None:
+        # Content-Encoding=gzip 时必须透明解压出原文，调用方无需感知压缩
         # gzip 解压响应.
         mock_config.ssl_verify = True
         original_data = b"compressed content"
@@ -89,6 +99,7 @@ class TestSyncReq:
     @patch("src.sync_http._session")
     @patch("src.sync_http.config")
     def test_proxy_get_request(self, mock_config: MagicMock, mock_session_fn: MagicMock) -> None:
+        # 经 _session 工厂拿线程内 Session，断言 session.get 被调用一次且返回其 text
         # 带代理的 GET 请求.
         mock_config.ssl_verify = True
         mock_session = MagicMock()
@@ -120,6 +131,7 @@ class TestSyncReq:
 
     @patch("src.sync_http._session")
     @patch("src.sync_http.config")
+    # 代理 + redirect_url：返回重定向后的最终 URL
     def test_proxy_redirect_url(self, mock_config: MagicMock, mock_session_fn: MagicMock) -> None:
         # 带代理的 redirect_url 返回 URL.
         mock_config.ssl_verify = True
@@ -150,6 +162,7 @@ class TestSyncReq:
     @patch("src.sync_http.config")
     @patch("src.sync_http._get_opener")
     def test_post_data_dict_encoding(self, mock_opener_fn: MagicMock, mock_config: MagicMock) -> None:
+        # dict 型 data 必须被 urlencode 为表单体（application/x-www-form-urlencoded）
         # dict 类型 data 被 URL 编码.
         mock_config.ssl_verify = True
         mock_response = MagicMock()
@@ -183,6 +196,7 @@ class TestSyncReq:
 
     @patch("src.sync_http.config")
     @patch("src.sync_http._get_opener")
+    # json_data 须被 JSON 序列化后作为请求体发送
     def test_json_data_encoding(self, mock_opener_fn: MagicMock, mock_config: MagicMock) -> None:
         # json_data 被 JSON 编码后发送.
         mock_config.ssl_verify = True
@@ -221,6 +235,7 @@ class TestSyncReq:
 
     @patch("src.sync_http.config")
     @patch("src.sync_http._get_opener")
+    # URLError 不再伪装为响应体：返回空串并记录 warning/error 日志
     def test_url_error_returns_empty_and_logs(self, mock_opener_fn: MagicMock, mock_config: MagicMock) -> None:
         # URLError 不再伪装为响应体：返回空串并记录错误日志.
         import urllib.error
@@ -267,7 +282,9 @@ class TestSyncReq:
             assert result == "http://redirected.com"
 
     @patch("src.sync_http.config")
+    # opener 抛任意异常时须返回空串 + 记 error 日志，且不把异常文本当响应体泄漏
     def test_general_exception_returns_empty_and_logs(self, mock_config: MagicMock) -> None:
+        # opener 抛任意异常时须返回空串 + 记 error 日志，且不得把异常文本当响应体泄漏
         # 一般异常被捕获：记录错误日志并返回空串，而非错误文本.
         mock_config.ssl_verify = True
         # 让 opener 抛异常

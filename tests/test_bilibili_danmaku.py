@@ -15,6 +15,8 @@ from src.platforms.bilibili import BilibiliDanmaku
 from src.ws_client import WsClient
 
 URL = "https://live.bilibili.com/3428783"
+# NEW_ROOM 仅作「是否带命令行参数」的开关占位（此处恒 False）：本脚本固定用内置房间验证
+# wbi 签名修复，未启用动态房间切换。
 NEW_ROOM = len(sys.argv) > 1
 
 
@@ -52,6 +54,8 @@ async def main() -> None:
             )
 
     client = CaptureDanmaku(on_message=lambda m: None, on_close=lambda r: None, on_ready=lambda: None)
+    # 30s 存活探针：验证 wbi 签名修复后能拿到 token 并成功建连 WS、持续收弹幕不崩溃；
+    # 超时即视为连接稳定（等待弹幕或正常保活），不判失败。
     try:
         await asyncio.wait_for(client.start(info), timeout=30)
     except asyncio.TimeoutError:

@@ -601,6 +601,121 @@ def test_douyu_keeps_hls_first(clear_probe_backoff: None) -> None:
     assert probed == [result]  # 首个被校验的是 HLS（顺序断言）
 
 
+# ---- HLS 采集排除列表：命中平台无视「是否启用HLS采集」配置、恒走 FLV ----
+
+
+def test_excluded_platform_ignores_hls_and_uses_flv(clear_probe_backoff: None) -> None:
+    # 核心语义：HLS 采集开（=是）+ 平台在排除列表 → 无视 HLS 配置，FLV 被选中，
+    # 且 HLS 探针一次都不发（HLS 候选整组剔除，而非降序回退）
+    probed: list[str] = []
+
+    def _validate(url: str, **kwargs: object) -> bool:
+        probed.append(url)
+        return True
+
+    with (
+        patch.object(main, "hls_collection_enabled", True),
+        patch.object(main, "hls_collection_exclude_platforms", ["斗鱼直播"]),
+        patch("src.stream_select._validate_stream_url", side_effect=_validate),
+    ):
+        result = select_source_url(
+            {
+                "m3u8_url": "https://hw3.douyucdn2.cn/live/x.m3u8?wsAuth=1",
+                "flv_url": "https://hw1a.douyucdn2.cn/live/x.flv?wsAuth=1",
+                "record_url": "",
+            },
+            platform="斗鱼直播",
+        )
+    assert result == "https://hw1a.douyucdn2.cn/live/x.flv?wsAuth=1"
+    assert probed == [result]  # 仅 FLV 被校验（顺序+唯一性断言）
+
+
+def test_excluded_platform_flv_failed_never_falls_back_to_hls(clear_probe_backoff: None) -> None:
+    # 「始终走 FLV」的强化语义：排除平台 FLV 校验失败时不得回退 HLS（与 FLV-first
+    # 平台仅调序、保留 HLS 回退不同），按常规监测间隔等待下一轮
+    probed: list[str] = []
+
+    def _validate(url: str, **kwargs: object) -> bool:
+        probed.append(url)
+        return False
+
+    with (
+        patch.object(main, "hls_collection_enabled", True),
+        patch.object(main, "hls_collection_exclude_platforms", ["斗鱼直播"]),
+        patch("src.stream_select._validate_stream_url", side_effect=_validate),
+    ):
+        result = select_source_url(
+            {
+                "m3u8_url": "https://hw3.douyucdn2.cn/live/x.m3u8?wsAuth=1",
+                "flv_url": "https://hw1a.douyucdn2.cn/live/x.flv?wsAuth=1",
+                "record_url": "",
+            },
+            platform="斗鱼直播",
+        )
+    assert result is None
+    # 仅 FLV 被校验：FLV 失败后 HLS 从未被探测（候选已在序列构建时剔除）
+    assert probed == ["https://hw1a.douyucdn2.cn/live/x.flv?wsAuth=1"]
+
+
+def test_excluded_platform_hls_only_no_fallback_warns(clear_probe_backoff: None) -> None:
+    # 排除平台仅有 HLS 源：与全局关闭 HLS 采集同义（等效于对该平台关闭），
+    # 必须告警并放弃本轮，且恢复指引指向排除列表而非 HLS 开关
+    info: dict[str, object] = {"anchor_name": "坤记喜事多", "m3u8_url": "https://x/abc.m3u8", "record_url": ""}
+    with (
+        patch.object(main, "hls_collection_enabled", True),
+        patch.object(main, "hls_collection_exclude_platforms", ["斗鱼直播"]),
+        patch("src.stream_select.logger.warning") as warn,
+    ):
+        result = select_source_url(info, platform="斗鱼直播")
+    assert result is None
+    assert any("排除列表" in str(c.args[0]) for c in warn.call_args_list)
+
+
+def test_non_excluded_platform_keeps_hls_priority(clear_probe_backoff: None) -> None:
+    # 对照：列表外平台不受排除列表影响，HLS 采集开时仍 HLS 优先（顺序断言）
+    probed: list[str] = []
+
+    def _validate(url: str, **kwargs: object) -> bool:
+        probed.append(url)
+        return True
+
+    with (
+        patch.object(main, "hls_collection_enabled", True),
+        patch.object(main, "hls_collection_exclude_platforms", ["斗鱼直播"]),
+        patch("src.stream_select._validate_stream_url", side_effect=_validate),
+    ):
+        result = select_source_url(
+            {
+                "m3u8_url": "https://hs.hls.huya.com/src/x.m3u8",
+                "flv_url": "https://hw.flv.huya.com/src/x.flv",
+                "record_url": "",
+            },
+            platform="虎牙直播",
+        )
+    # 虎牙为 FLV-first 平台且不在排除列表：仍按 FLV → HLS 既有顺序（不受列表影响）
+    assert result == "https://hw.flv.huya.com/src/x.flv"
+    assert probed == [result]
+
+
+def test_excluded_platform_h265_flv_not_switched_to_hls(clear_probe_backoff: None) -> None:
+    # 排除平台连带失效 h265-FLV → HLS 切换：h265 FLV 无法 copy 录制、HLS 又被排除
+    # 剔除 → 与关闭 HLS 采集同义，本轮无可用候选返回 None
+    with (
+        patch.object(main, "hls_collection_enabled", True),
+        patch.object(main, "hls_collection_exclude_platforms", ["斗鱼直播"]),
+        patch("src.stream_select._validate_stream_url", return_value=True),
+    ):
+        result = select_source_url(
+            {
+                "flv_url": "https://hw1a.douyucdn2.cn/live/x.flv?wsAuth=1&codec=h265",
+                "m3u8_url": "https://hw3.douyucdn2.cn/live/x.m3u8?wsAuth=1",
+                "record_url": "",
+            },
+            platform="斗鱼直播",
+        )
+    assert result is None
+
+
 # ---- 探针节流与重试抖动：降低风控误触发 ----
 #
 # 固定间隔探针（0.8s 恒定重试）与同 host 毫秒级连击探针都是机器人节奏指纹，

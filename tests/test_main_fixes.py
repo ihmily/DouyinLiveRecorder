@@ -32,14 +32,19 @@ class TestSafeNumberParsers:
     # _safe_int/_safe_float：非法配置值回退默认，避免主循环崩溃.
 
     def test_safe_int_valid(self, main_mod: Any) -> None:
+        # 合法整数字符串原样解析，不被默认值覆盖
         assert main_mod._safe_int("7", 3) == 7
 
     def test_safe_int_invalid_falls_back(self, main_mod: Any) -> None:
+        # 非数字/None/空串等脏配置值一律回落默认 3，防止主循环用 None 做算术而崩
+        # 覆盖 abc / None / "" 三类典型脏值，证明解析失败一律安全兜底。
         assert main_mod._safe_int("abc", 3) == 3
         assert main_mod._safe_int(None, 3) == 3
         assert main_mod._safe_int("", 3) == 3
 
     def test_safe_float_invalid_falls_back(self, main_mod: Any) -> None:
+        # 同上：float 解析失败回落默认 1.5，合法值 2.5 优先于默认 1.0
+        # 验证合法值 2.5 不被默认 1.0 覆盖（解析成功路径与 int 对称）。
         assert main_mod._safe_float("x", 1.5) == 1.5
         assert main_mod._safe_float("2.5", 1.0) == 2.5
 
@@ -48,11 +53,13 @@ class TestErrorWindow:
     # 错误窗口混合 0/1 采样：错误率可降可升（此前只记 1 导致只能降不能升）.
 
     def setup_method(self) -> None:
+        # 每个用例前清空模块级 error_window（防止 record_error/record_success 跨用例累积污染）。
         import main
 
         main.error_window.clear()
 
     def test_window_mixes_success_and_error(self, main_mod: Any) -> None:
+        # 混合 0/1 采样：此前只记 1 导致错误率只能降不能升；本例 [1,0,0] 验证升降皆可。
         main_mod.record_error()
         main_mod.record_success()
         main_mod.record_success()
@@ -60,11 +67,15 @@ class TestErrorWindow:
         assert sum(main_mod.error_window) / len(main_mod.error_window) == pytest.approx(1 / 3)
 
     def test_window_bounded(self, main_mod: Any) -> None:
+        # 连续写入 20 条（远超窗口容量）：验证旧样本被丢弃，长度恒等于 error_window_size
+        # （否则无限增长会拖慢错误率计算并污染长期统计）
+        # 20 > error_window_size：写入后应被裁剪回窗口容量，证明滑动窗口生效。
         for _ in range(20):
             main_mod.record_error()
         assert len(main_mod.error_window) == main_mod.error_window_size
 
     def test_error_count_increments(self, main_mod: Any) -> None:
+        # 全局错误计数器随 record_error 单调 +1，供错误率背压与熔断统计使用。
         before = main_mod.error_count
         main_mod.record_error()
         assert main_mod.error_count == before + 1
@@ -75,6 +86,7 @@ class TestFileUpdateLock:
         # RLock：主循环持锁读配置期间可重入 read_config_value 的写入路径。
         # 行为化验证：同一线程连续两次 acquire 不阻塞（普通 Lock 会死锁）。
         lock = main_mod.file_update_lock
+        # 非阻塞 acquire 连续两次成功（普通 Lock 第二次会死锁），证明 RLock 可重入。
         assert lock.acquire(blocking=False)
         try:
             assert lock.acquire(blocking=False)
@@ -87,6 +99,7 @@ class TestSelectSourceUrl:
     # h265 FLV 无法 copy 录制：启用 HLS 采集且校验通过才切 HLS；关闭时尊重配置.
 
     def test_h265_flv_uses_hls_when_enabled_and_valid(self, main_mod: Any) -> None:
+        # 端到端：h265 FLV 校验通过 + HLS 采集开 → 选源切到 m3u8（规避 h265 copy 限制）。
         with patch("src.stream_select._validate_stream_url", return_value=True):
             info: Mapping[str, object] = {
                 "flv_url": "https://cdn.example.com/live.flv?codec=h265",
@@ -118,6 +131,7 @@ class TestSelectSourceUrl:
         assert result is None
 
     def test_plain_flv_returned(self, main_mod: Any) -> None:
+        # 对照：h264 FLV 不受 h265 限制，HLS 采集开启时仍尊重配置返回 FLV 原文。
         with patch("src.stream_select._validate_stream_url", return_value=True):
             info: Mapping[str, object] = {"flv_url": "https://cdn.example.com/live.flv?codec=h264"}
             with patch.object(main_mod, "hls_collection_enabled", True):
@@ -128,6 +142,7 @@ class TestSelectSourceUrl:
 class FakeProcess:
     # 模拟 subprocess.Popen：验证 _run_ffmpeg_checked 的超时终止与退出码处理
     def __init__(self, returncode: int = 0, out: bytes = b"", timeout_on_communicate: bool = False) -> None:
+        # returncode/out 模拟 ffmpeg 退出码与输出；timeout_on_communicate 模拟首次 communicate 超时。
         self.returncode = returncode
         self.out = out
         self.timeout_on_communicate = timeout_on_communicate
@@ -146,11 +161,13 @@ class FakeProcess:
         return self.out, b""
 
     def kill(self) -> None:
+        # 记录 kill 被调用（验证超时路径确实终止了 ffmpeg 子进程）。
         self.killed = True
 
 
 class TestRunFfmpegChecked:
     # _run_ffmpeg_checked：超时终止 + 非零退出抛 CalledProcessError（转码不再挂死线程）.
+    # 旧实现直接 subprocess.run 阻塞，ffmpeg 卡死会拖垮整个录制线程。
 
     def test_success_returns_output(self, main_mod: Any) -> None:
         with patch("subprocess.Popen", return_value=FakeProcess(returncode=0, out=b"ok output")) as mock_popen:
@@ -173,6 +190,7 @@ class TestRunFfmpegChecked:
 
 class _FakeResponse:
     # 模拟 httpx 响应：默认 200 + 流媒体 content-type（走 video 分支直接判可达）.
+    # 仅暴露 status_code/headers，足以驱动 _validate_stream_url 的 HEAD 判定。
     def __init__(self, status_code: int = 200, headers: dict | None = None) -> None:
         self.status_code = status_code
         self.headers = headers or {}
@@ -192,6 +210,7 @@ class _FakeStreamResponse:
 
 class _RecordingClient:
     # 记录 httpx.Client 构造时的关键字参数（含 headers），用于断言 Referer 注入.
+    # last_kwargs 跨用例累积，故每个用例新建实例以隔离请求头断言。
     last_kwargs: dict = {}
 
     def __init__(self, **kwargs: Any) -> None:
@@ -225,6 +244,7 @@ class _SequenceStreamClient(_RecordingClient):
         self.stream_calls = 0
 
     def stream(self, method: Any, url: Any, **kw: Any) -> _FakeStreamResponse:
+        # 按调用次数取预设状态码；超出长度则钳到末位（稳定拒绝场景复用末状态）。
         status = self._statuses[min(self.stream_calls, len(self._statuses) - 1)]
         self.stream_calls += 1
         self.last_stream_kwargs = kw
@@ -264,6 +284,7 @@ class TestFlvGetConfirm:
     # 修复：FLV/record_url HEAD 判定通过后必须做流式 Range GET 复核，401/403 才推翻结论。
 
     def test_head_ok_get_403_returns_false(self, main_mod: Any) -> None:
+        # 回归：HEAD=200 但 GET 复核 403（校验假绿）必须推翻结论返回 False。
         client = _RecordingClient()
         client.stream_status = 403
         with patch("src.stream_select.httpx.Client", return_value=client), patch("src.stream_select.time.sleep"):
@@ -307,6 +328,7 @@ class TestGetConfirmRetry:
 
     def test_first_403_retry_200_passes(self, main_mod: Any) -> None:
         # 偶发拒绝：首探 403、重试 200 → 判可达，且必须真的发了第二次复核
+        # （stream_calls==2 证明重试确实发生，而非首探即定罪）。
         client = _SequenceStreamClient([403, 200])
         with patch("src.stream_select.httpx.Client", return_value=client), patch("src.stream_select.time.sleep"):
             ok = main_mod._validate_stream_url("https://hw1a.douyucdn2.cn/live/100rPCLP.flv?wsAuth=1")
@@ -323,6 +345,7 @@ class TestGetConfirmRetry:
 
     def test_stable_403_last_resort_passes_with_warning(self, main_mod: Any) -> None:
         # 末位候选：稳定 403 也不否决（探针与 ffmpeg 客户端指纹不同），仅告警放行
+        # 告警文案须含「仍交由 ffmpeg 尝试」，便于运维识别末位兜底放行。
         client = _SequenceStreamClient([403, 403])
         with (
             patch("src.stream_select.httpx.Client", return_value=client),
@@ -375,6 +398,7 @@ class TestSelectSourceUrlEmpty:
     # 旧逻辑静默 None → 房间永远“正在直播中...”却不录制且无诊断线索。
 
     def test_all_urls_empty_returns_none_with_warning(self, main_mod: Any) -> None:
+        # 回归：三类 URL 全空仍 is_live=True 时，旧逻辑静默 None → 房间“正在直播”却不录制。
         info: Mapping[str, object] = {"anchor_name": "王者荣耀官方赛事", "is_live": True}
         with patch.object(main_mod, "hls_collection_enabled", True), patch("src.stream_select.logger.warning") as warn:
             result = main_mod.select_source_url(info)

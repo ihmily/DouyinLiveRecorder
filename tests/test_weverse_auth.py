@@ -1,4 +1,9 @@
 # Tests for src/weverse_auth.py module - Weverse 认证模块.
+# 中文：本文件验证 Weverse 刷新令牌接口 refresh_weverse_token 的边界与契约——
+# None/空令牌直接短路、网络/HTTP 异常统一兜底 (None, None)、请求体/URL/超时契约正确；
+# 并验证客户端密钥 _app_secret 支持环境变量覆盖（批次5修复：去硬编码）。
+# Mock 设计：全程 patch src.weverse_auth.requests.post 隔离真实网络；密钥覆盖用例用
+# monkeypatch.setenv/delenv 操作环境变量（遵循 AGENTS.md 约定，禁用 patch.dict(os.environ)）。
 
 from unittest.mock import MagicMock, patch
 
@@ -76,6 +81,7 @@ class TestRefreshWeverseToken:
 class TestAppSecret:
     # 客户端密钥支持环境变量覆盖（批次5修复：硬编码密钥改为可覆盖）.
 
+    # 默认密钥：未设环境变量时回退内置常量，长度须 >= 20（安全基线，防止误配极短密钥）。
     def test_default_secret(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from src.weverse_auth import _app_secret
 
