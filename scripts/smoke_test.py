@@ -69,11 +69,16 @@ def load_config(path: str) -> tuple[list[CheckConfig], str | None]:
         # 允许顶层写成 {"base_url": "...", "checks": [...]}
         typed = cast(dict[str, object], cfg)
         return cast(list[CheckConfig], typed.get("checks", [])), cast(str | None, typed.get("base_url"))
+    # 既不是 list 也不是 dict：返回空 checks；main 会 0 检查全"通过"并以退出码 0 结束，
+    # CI 不会感知到配置损坏——配置格式错误是静默通过而非失败。
     return [], None
 
 
+# 把配置里的 url/path 解析为最终请求地址：已是完整 http(s) 则原样使用；否则与 base_url 拼接。
+# 缺失 url 时回退 path，再缺省为 "/"（对 base_url 做健康检查）。
 def _resolve_url(check: CheckConfig, base_url: str | None) -> str:
     raw = cast(str, check.get("url") or check.get("path") or "/")
+    # 已是完整地址直接返回，不做 base_url 拼接（避免把绝对 URL 误拼成 base_url+url 的无效地址）。
     if raw.startswith("http://") or raw.startswith("https://"):
         return raw
     if base_url:
@@ -84,22 +89,30 @@ def _resolve_url(check: CheckConfig, base_url: str | None) -> str:
 # ---------- 单个检查 ----------
 def run_check(check: CheckConfig, base_url: str | None, default_timeout: float) -> CheckResult:
     method_raw = cast(str, check.get("method") or DEFAULT_METHOD)
+    # 方法统一大写：配置里写 get/Get 都能匹配，urlopen 对方法大小写敏感。
     method = method_raw.upper()
     url = _resolve_url(check, base_url)
+    # 注意：timeout 原样透传给 urlopen，若 JSON 里写成字符串 "5" 会被当作非数值触发 TypeError；
+    # 配置应保证为数字，本函数不做强制转换（cast 仅为类型检查，不改运行时值）。
     timeout = cast(float, check.get("timeout", default_timeout))
     headers_raw = cast(dict[str, object], check.get("headers", {}))
     headers: dict[str, str] = {k: str(v) for k, v in headers_raw.items()}
     body = check.get("body")
+    # dict/list 请求体按 JSON 序列化并设置 Content-Type（setdefault 不覆盖调用方已指定的类型）；
+    # 字符串体原样编码，交给调用方决定编码与类型。
     if isinstance(body, (dict, list)):
         body = json.dumps(body).encode("utf-8")
         _ = headers.setdefault("Content-Type", "application/json")
     elif isinstance(body, str):
         body = body.encode("utf-8")
 
+    # 默认期望 200：未显式配置 expected_status 时，任何非 200（含 3xx 重定向、4xx）都判失败；
+    # 测试"应重定向"的接口必须在配置里写明期望码，否则误报失败。
     expected_status = cast(int, check.get("expected_status", 200))
     expect_contains = cast(list[str], check.get("expect_contains", []) or [])
     expect_json = cast(dict[str, object] | None, check.get("expect_json"))  # dict: 顶层字段 -> 期望值
 
+    # 未配置 name 时用 "METHOD url" 兜底，保证控制台/报告每行都有可读标识。
     name = check.get("name") or f"{method} {url}"
     result: CheckResult = {
         "name": name,
@@ -125,6 +138,8 @@ def run_check(check: CheckConfig, base_url: str | None, default_timeout: float) 
         result["time_ms"] = round((time.time() - start) * 1000, 1)
         if status != expected_status:
             errors.append(f"状态码 {status} != 期望 {expected_status}")
+    # HTTPError 仍是"有效响应"（带真实状态码如 404/500）；计入 status 并与 expected_status 比较，
+    # 因此"期望 404"的检查可正确通过，而非被当成连接异常。
     except urllib.error.HTTPError as e:
         e_code: int = e.code
         result["status"] = e_code
@@ -213,6 +228,8 @@ def write_json_report(results: list[CheckResult], summary: CheckResult, path: st
         json.dump({"summary": summary, "results": results}, f, ensure_ascii=False, indent=2)
 
 
+# 生成自包含 HTML 报告：逐行拼接表格行（含命中文本与错误），通过/失败行用 ok/bad 样式区分；
+# 内容直接拼入 HTML，依赖配置可信（测试目标由使用者提供，非外部不可信输入）。
 def write_html_report(results: list[CheckResult], summary: CheckResult, path: str) -> None:
     rows: list[str] = []
     for r in results:
@@ -303,6 +320,7 @@ def main() -> None:
 
     summary = build_summary(results, elapsed)
     if report_path:
+        # 未显式指定 --format 时按扩展名推断：.html→html，其余→json，降低调用负担。
         fmt = report_format or ("html" if report_path.endswith(".html") else "json")
         if fmt == "html":
             write_html_report(results, summary, report_path)
@@ -310,6 +328,8 @@ def main() -> None:
             write_json_report(results, summary, report_path)
         print(f"\n报告已写出: {report_path}")
 
+    # CI 以退出码判定成败：任一检查 failed 即返回 1 使流水线变红；全部通过（含 0 检查）返回 0。
+    # 与 load_config 的空配置静默通过呼应——零检查也会退出 0。
     failed = cast(int, summary["failed"])
     sys.exit(1 if failed else 0)
 

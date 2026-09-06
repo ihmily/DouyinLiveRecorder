@@ -243,6 +243,9 @@ language = zh_CN
 分段录制是否开启 = 是
 # Whether HLS capture is enabled (yes/no) — if disabled, only non-HLS candidates such as FLV are used
 是否启用HLS采集(是/否) = 是
+# HLS capture exclusion platforms (comma-separated) — listed platforms ignore the "是否启用HLS采集" setting and always use FLV capture
+# (platform names must exactly match those shown in logs/config, e.g. 斗鱼直播,虎牙直播; leave empty to exclude nothing)
+HLS采集排除平台(逗号分隔) =
 # Whether https recording is enabled — consolidates the former "是否强制启用https录制" and "是否禁用SSL证书验证(是/否)":
 # enabled = stream pulled over https and SSL cert verification skipped; disabled = stream pulled over http and default cert verification restored
 # (the value of the old key "是否强制启用https录制" is auto-migrated and inherited; https-only overseas platforms like TikTok/YouTube keep their original form when disabled)
@@ -520,6 +523,21 @@ Under Windows the console defaults to "minimize to system tray" (`web_minimize_t
 | LD | 流畅 | Low Definition, lowest quality |
 
 Supported platforms: Douyin, TikTok, Kuaishou, Huya, Douyu, Bilibili, NetEase CC. When a platform's actually delivered quality is lower than the configured quality, an automatic alert and flag are raised.
+
+### Source selection (HLS/FLV)
+
+The recording stream source is automatically selected between HLS (m3u8, pulled segment by segment) and FLV (a single long connection): by default HLS is preferred, falling back to FLV in order when validation fails, with `record_url` as the final fallback. It is controlled by two config items together:
+
+| Config item | Effect |
+|-------------|--------|
+| `是否启用HLS采集(是/否)` | Global switch: when enabled (default), the HLS source is preferred and falls back to FLV when unreachable or absent; when disabled, all platforms use only non-HLS candidates such as FLV |
+| `HLS采集排除平台(逗号分隔)` | Platform-level exclusion list: listed platforms **ignore the global switch and always use FLV capture** (equivalent to disabling HLS capture for that platform only — HLS sources take no part in candidates or fallback) |
+
+- **Use case**: you prefer HLS recording overall (HLS pulls segment by segment and is immune to a single long connection being cut off by the CDN), but an individual platform's HLS source is unstable or risk-controlled, and you want only that platform forced onto FLV — just add it to the exclusion list, without having to turn off the global HLS switch
+- **Fill format**: platform names must **exactly match** what the logs/config file show (e.g. `斗鱼直播`, not `斗鱼`); separate multiple platforms with commas (Chinese or English commas both work), e.g. `斗鱼直播,虎牙直播`; leave empty (default) to exclude nothing — behavior stays identical to previous versions
+- **Priority semantics**: the exclusion list takes precedence over the global switch — even with "是否启用HLS采集(是/否) = 是" (yes), a listed platform only uses FLV; platforms outside the list are completely unaffected and keep HLS priority per the global config
+- **Boundary behavior**: if an excluded platform's parsed result contains only an HLS source with no FLV/record_url fallback, the round is abandoned with a warning (the log suggests "remove the platform from the exclusion list to restore HLS capture"); an h265-encoded FLV source no longer triggers a switch to HLS (the logic that auto-saves h265 FLV recordings as TS format is unaffected)
+- **Hot reload**: the main loop re-reads the config every round — save your changes and the next monitoring round picks them up, no restart needed
 
 ### Danmaku recording and danmaku monitoring
 
@@ -826,6 +844,31 @@ Directly edit the `web_password` item in `config/config.ini`; after changing it,
 This project is open-sourced under the [MIT License](LICENSE). Stars and Forks are welcome!
 
 ## ⏳ Changelog
+
+### v4.0.9.4 (2026-09-03 ~ 2026-09-06) — HLS capture exclusion list / quality-option add-drop & inline switching / P0 segmented-container mismatch fix / packaging defect fix / repo-wide comment completion & metadata sync
+
+> This cycle (v4.0.9.4, 2026-09-03 ~ 09-06) is a consistency and quality wrap-up batch. New: an HLS capture exclusion-platform list config, and user-addable/droppable quality options with inline quality switching in GUI/WEB. Two high-severity issues fixed — Douyin original-quality HEVC was unrecordable due to a segmented-container mismatch (P0), and a cross-loop coroutine warning made pytest warnings fluctuate; also fixed a `pyproject.toml` packaging defect (undeclared sub-packages made `pip install .` emit an incomplete distribution). Also completed repo-wide Chinese comment completion (41 files / +1370 lines), eight-file metadata sync, and four-language catalog completion (516→521). **No breaking changes** (all runtime semantics preserved; the PEP 758 parenthesis-free `except` form only affects <3.14 — this repo's floor is 3.14, an established convention rather than a regression). See [CODE_WIKI.md](CODE_WIKI.md) for full root-cause analysis and verification.
+
+**✨ New Features**
+- **HLS capture exclusion-platform list**: new config key `HLS采集排除平台(逗号分隔)` — listed platforms ignore the "是否启用HLS采集" (enable HLS capture) switch and always use FLV capture; platforms outside the list keep HLS-first behavior. Supports Chinese/English comma separators and per-loop hot reload.
+- **Quality-option add/drop + inline switching**: quality options changed from a fixed 10-tier engine whitelist to a user-selected subset (stored in `config.ini` [录制设置] custom quality options); GUI quality monitor gains a "Switch quality" menu and WEB gains a `PUT /api/rooms/quality` endpoint — picking a non-default quality writes back as `quality,live-room-address` and takes effect on the next loop, while picking the default quality removes the quality segment and falls back to the global default.
+- **Standalone single-file build moved to `scripts/`**: `douyin_live_recorder_standalone.py` relocated from the repo root into `scripts/`, so the run command gains a `scripts/` prefix; ffmpeg location logic was fixed after the move (probe in order: script-sibling `ffmpeg/` → repo-root `ffmpeg/` → PATH).
+
+**🐛 Fixes**
+- **P0 segmented-recording container mismatch**: Douyin original-quality HEVC was unrecordable because the TS+segment branch used the `ipod` container for `-segment_format`, causing `-c copy` to exit with `AVERROR(EINVAL)` (Windows exit code 4294967274); H.264 instead silently produced a corrupt "MP4 content + .ts extension" file. The "output extension → inner container" mapping was consolidated into a module-level constant `SEGMENT_FORMAT_BY_SUFFIX` with `tests/test_record_container.py` pinning the assertions; also fixed `src/spider.py`'s `hevc_flv_url` missing `&codec=h265`, which had caused h265 detection to be missed.
+- **Flaky warning root-caused**: `src/async_http.py` dropped the cross-loop `run_coroutine_threadsafe(client.aclose(), ...)` dispatch branch (root cause: when the old loop had stopped but not closed, the coroutine was never awaited and GC raised "never awaited"); `pyproject.toml` now explicitly filters the third-party starlette/anyio deprecation warning, finalizing the pytest zero-warning gate.
+- **GUI quality-switch three defects**: key-format mismatch (serial-number prefix caused the lookup table to miss), persistence loss (the editor still held the pre-write snapshot and got overwritten on save), and display reset (the table read stale subprocess log values) — after switching, the serial-number prefix is stripped before lookup, the editor snapshot is synced after write-back, and the display follows the config file.
+- **Packaging defect fix**: `pyproject.toml`'s `[tool.setuptools].packages` changed from `["src"]` to `["src", "src.platforms", "src.proto"]`, fixing the `ModuleNotFoundError` at runtime when `pip install .` omitted `src/platforms` (per-platform danmaku collectors) and `src/proto` (Douyin protobuf).
+
+**🛠️ Repo Maintenance & Quality Gates**
+- **Repo-wide Chinese comment completion**: 41 files / +1370 lines (average density 7.6%→20.4%), proven logic-neutral by AST equivalence; added `scripts/check_annotations.py` (comment lint + AST equivalence check, three modes) wired into the `ci.yml` `static` job.
+- **Eight-file metadata sync**: using `pyproject.toml` as the single source of truth, corrected version / path / directory-list / dependency drift across `AGENTS.md`, `docker-compose.yaml`, `requirements.txt`, `Dockerfile`, `.gitignore`, `.dockerignore`, and `.coveragerc-concurrency`.
+- **Four-language catalog completion**: 5 missing strings added via `extract_i18n_strings.py`, all four catalogs re-aligned (521 entries each), `zh_CN.mo` recompiled (`--check` passes byte-level).
+- **Test-output self-cleanup**: `tests/conftest.py` gained a `pytest_unconfigure` hook that deletes `tests/_out_live` / `tests/_out_e2e` after each session.
+
+**🧪 Tests & Verification**
+- Full `pytest` **858 passed / 2 skipped / 0 warnings**; `pytest tests/test_i18n.py` 34 passed (four-catalog key-set consistency).
+- `mypy` / `basedpyright` (0 error / 0 warning) / `black --check` / `isort --check` / `scripts/check_annotations.py` all green; `scripts/extract_i18n_strings.py` 0 missing; `scripts/compile_po.py --check` in sync with `.po` (522 entries); `scripts/check_version.py` PASS.
 
 ### v4.0.9.3 (2026-09-02) — Full fixes for all 20 code-review findings (cookie-cache singleflight rewrite / Web non-ASCII password login crash / probe exception logging & throttle self-cleanup / 64-bit ctypes handle truncation / connection-resource lifecycle) + repo-wide mypy type-clean (tests / gui_legacy / scripts / standalone)
 

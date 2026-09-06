@@ -7,6 +7,8 @@
     <link rel="stylesheet" href="/web/style.css">
 </head>
 <body data-theme="light">
+    <!-- 顶栏：品牌 + 标签页导航(.tab[data-view]) + 语言选择/主题切换/退出。
+         这些控件在 app.js 的 DOMContentLoaded 中统一绑定；data-view 决定 showView 切换到哪个面板。 -->
     <header class="topbar">
         <div class="brand" data-i18n="brand">直播录制管理面板</div>
         <nav class="tabs">
@@ -23,7 +25,8 @@
         </div>
     </header>
 
-    <!-- 登录页 -->
+    <!-- 登录页：#login-password 输入、#login-submit 触发 doLogin()、#login-error 显示后端报错；
+         初始靠 .hidden 隐藏，由 showLogin()/启动引导根据 /api/status 是否 401 显隐。 -->
     <main id="login-view" class="view hidden">
         <div class="login-card">
             <h2 data-i18n="login.title">登录</h2>
@@ -33,7 +36,10 @@
         </div>
     </main>
 
-    <!-- 仪表盘 -->
+    <!-- 仪表盘：进入即 startSSE() 每 2s 轮询 /api/status 并 loadLogs()。
+         #engine-warning 引擎死亡横幅由 renderStatus 按 engine_alive===false 显隐；
+         .recording-state 双 span 由 renderRecordingControl 按 recording_enabled 切换；
+         #stat-* 四个卡片、#recording-tbody 录制中列表均被 renderStatus 覆盖刷新。 -->
     <main id="dashboard-view" class="view">
         <div id="engine-warning" class="engine-warning hidden" data-i18n="dashboard.engineWarning">⚠️ 录制引擎已停止运行，请检查日志或重启服务</div>
         <div class="recording-control">
@@ -63,7 +69,9 @@
         </section>
     </main>
 
-    <!-- 弹幕监控 -->
+    <!-- 弹幕监控：进入即 startDanmakuPolling() 每 2s 轮询 /api/danmaku?since=。
+         #danmaku-rooms-tbody 房间表、#danmaku-room-filter 房间筛选下拉、#danmaku-stream 弹幕流、
+         #danmaku-hint 无数据提示均由 renderDanmaku/dmRenderStream 维护；#danmaku-clear-btn 清空本地缓冲。 -->
     <main id="danmaku-view" class="view hidden">
         <section class="panel">
             <h3 data-i18n="danmaku.rooms">弹幕房间</h3>
@@ -83,7 +91,8 @@
         </section>
     </main>
 
-    <!-- 直播间管理 -->
+    <!-- 直播间管理：#room-add-form 提交走 addRoom()；#rooms-tbody 由 loadRooms() 渲染，
+         行内开关(data-action=toggle)/删除(data-action=delete)经事件委托转发 toggleRoom/deleteRoom。 -->
     <main id="rooms-view" class="view hidden">
         <section class="panel">
             <h3 data-i18n="rooms.add">添加直播间</h3>
@@ -91,20 +100,23 @@
                 <input type="text" id="room-url" data-i18n-placeholder="rooms.urlPlaceholder" placeholder="直播间地址" required>
                 <select id="room-quality">
                     <option value="" data-i18n="rooms.defaultQuality">默认画质</option>
-                    <option value="原画">原画</option>
-                    <option value="蓝光">蓝光</option>
-                    <option value="蓝光30M">蓝光30M</option>
-                    <option value="蓝光20M">蓝光20M</option>
-                    <option value="蓝光8M">蓝光8M</option>
-                    <option value="蓝光4M">蓝光4M</option>
-                    <option value="超清">超清</option>
-                    <option value="高清">高清</option>
-                    <option value="标清">标清</option>
-                    <option value="流畅">流畅</option>
                 </select>
                 <input type="text" id="room-name" data-i18n-placeholder="rooms.namePlaceholder" placeholder="主播名称（可选）">
                 <button type="submit" data-i18n="rooms.addBtn">添加</button>
             </form>
+            <!-- 画质选项管理：#room-quality 的下拉项不再硬编码，改由 loadQualityOptions() 从
+                 config.ini 读取用户自选列表动态填充；此处提供增删入口，改动即时 PUT 回写。 -->
+            <div class="quality-options">
+                <button type="button" id="quality-manage-btn" class="small" data-i18n="rooms.manageQuality">画质选项</button>
+                <div id="quality-manage-panel" class="quality-panel hidden">
+                    <div id="quality-chips" class="quality-chips"></div>
+                    <div class="inline-form quality-add-row">
+                        <select id="quality-candidate"></select>
+                        <button type="button" id="quality-add-btn" class="small" data-i18n="rooms.addQuality">添加画质</button>
+                    </div>
+                    <div class="quality-hint" data-i18n="rooms.qualityHint">画质选项存于 config.ini，WEB 与桌面端画质切换菜单共用；仅内置档位可选（自定义名称不会被录制引擎识别）</div>
+                </div>
+            </div>
         </section>
         <section class="panel">
             <h3 data-i18n="rooms.list">直播间列表</h3>
@@ -115,7 +127,8 @@
         </section>
     </main>
 
-    <!-- 配置 -->
+    <!-- 配置：#config-container 由 loadConfig() 按 /api/config 动态生成输入行（含 data-section/data-key）；
+         #config-save-btn 触发 saveConfig() 仅 PUT 有变更的键。HTTPS 开关输入会实时联动 #ssl-platform-hint。 -->
     <main id="config-view" class="view hidden">
         <section class="panel">
             <h3 data-i18n="config.title">录制与推送配置</h3>
@@ -124,7 +137,8 @@
         </section>
     </main>
 
-    <!-- 文件浏览 -->
+    <!-- 文件浏览：#file-breadcrumb 面包屑（点击下钻）、#files-tbody 由 loadFiles() 渲染；
+         dir 行「进入」/file 行「下载」按钮经事件委托转发 loadFiles/downloadFile。 -->
     <main id="files-view" class="view hidden">
         <section class="panel">
             <div class="file-header">
@@ -138,6 +152,8 @@
         </section>
     </main>
 
+    <!-- 全局轻提示：toast() 写 #toast 文本并按类型加 success/error/info 类，2.5s 后隐藏；
+         单例 toastTimer 保证连续提示互不打架（新提示清除旧定时器）。 -->
     <div id="toast" class="toast hidden"></div>
     <script src="/web/app.js"></script>
 </body>

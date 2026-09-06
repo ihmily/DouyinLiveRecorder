@@ -52,6 +52,9 @@ LABEL maintainer="Hmily <ihmily@github>" \
 # 构建参数
 ARG TZ=Asia/Shanghai
 # 版本号从 pyproject.toml 动态注入：构建时通过 --build-arg APP_VERSION=<版本> 传入
+# （唯一事实源是 pyproject.toml 的 [project].version；CI / 本地构建用
+#   docker build --build-arg APP_VERSION="$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"，
+#   docker-compose.yaml 则从 .env 读同名变量，示例值随 pyproject 同步）
 ARG APP_VERSION
 
 # 环境变量（运行时行为：无缓冲、不写字节码、UTF-8 输出、时区、彩色终端、venv 入 PATH）
@@ -97,6 +100,10 @@ WORKDIR /app
 COPY --from=builder /opt/venv /opt/venv
 
 # 复制应用代码，设置正确的所有权（运行时以 recorder 用户运行）
+# 实际内容由 .dockerignore 裁剪：必须保留 main.py / web.py / gui.py + src/（含 javascript/JS 签名脚本、
+# platforms/ 平台实现、proto/ 弹幕协议）+ web/（面板前端静态资源）+ i18n/**/*.mo（gettext 运行时必需）；
+# tests/、scripts/、typings/、uv.lock、根目录文档（README*/CODE_WIKI*/AGENTS.md）、
+# .coveragerc-concurrency、ffmpeg/、node/、config/*.ini、logs/、downloads/ 均不进镜像
 COPY --chown=recorder:recorder . ./
 
 # 运行时创建必要目录（日志 / 录制产物 / 配置备份），并统一归属 recorder

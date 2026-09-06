@@ -10,7 +10,7 @@
 
 - **名称**: DouyinLiveRecorder
 
-- **版本**: 4.0.9.3（唯一事实源：`pyproject.toml` 的 `version` 字段。`main.py` 与 `src/web_api.py` 运行时经 `importlib.metadata` 动态读取；`Dockerfile` 经 `APP_VERSION` 构建参数动态注入；`i18n/zh_CN/LC_MESSAGES/zh_CN.po` 不再携带版本号。`README.md` / `CODE_WIKI.md` 为文档，不再纳入版本同步/校验。）
+- **版本**: 4.0.9.4（唯一事实源：`pyproject.toml` 的 `version` 字段。`main.py` 与 `src/web_api.py` 运行时经 `importlib.metadata` 动态读取；`Dockerfile` 经 `APP_VERSION` 构建参数动态注入；`i18n/zh_CN/LC_MESSAGES/zh_CN.po` 不再携带版本号。`README.md` / `CODE_WIKI.md` 为文档，不再纳入版本同步/校验。）
 
 - **描述**: 支持抖音、TikTok、YouTube、快手等 60+ 平台的直播录制工具
 
@@ -64,6 +64,45 @@ disallow_untyped_defs = true
 ignore_missing_imports = true
 ```
 
+### 注释约定
+
+- **注释统一使用 `#` 行注释，不使用三引号 docstring**。这不是风格偏好而是可机检的约束：
+  docstring 会作为 `Expr` 节点进入抽象语法树，而 `#` 注释不会——因此「AST 等价性校验」
+  能借这一点同时证明「逻辑未改动」与「未误插 docstring」。
+- **注释内容写「为什么」而非「做什么」**。复述代码行为的注释是噪音；有价值的是边界条件、
+  平台差异、风控信号、降级路径、异常吞没的后果、并发与时序假设。
+- 三个层次：模块头总览（职责 / 核心机制 / 与其它模块关系 / 设计取舍）、函数级职责说明、
+  关键分支与边界的「为什么」。`src/stream_select.py`（约 35%）与 `src/scheduler.py`
+  （约 22%）是本仓注释质量的参照。
+- 修改注释时**只增不改**：不得删除或重写已有注释（避免丢失历史上下文），需要修正时在其
+  下方补充。若因此产生相邻重复注释，需合并。
+
+### 注释检查工具（scripts/check_annotations.py）
+
+三模式，CI 可调用：
+
+| 命令 | 用途 |
+| --- | --- |
+| `python scripts/check_annotations.py` | 规范检查（无需基线）：禁 docstring、密度阈值、模块头 |
+| `python scripts/check_annotations.py --snapshot DIR` | 建立基线快照 |
+| `python scripts/check_annotations.py --baseline DIR` | 与基线比对，证明「只改了注释、未改逻辑」 |
+| `python scripts/check_annotations.py --min-density N` | 自定义密度阈值（默认 13.0） |
+
+- 等价性校验原理：Python 比对 `ast.dump` 全量序列化，JS/CSS/HTML 剥离注释后比对有效代码行。
+  注释与空行不参与比对，故签名相同即代表可执行逻辑一致。
+- 密度检查只对 Python 生效——前端文件的注释需按各自语言惯例（`//`、`/* */`、`<!-- -->`），
+  且用 Python `tokenize` 统计 JS/CSS 密度不准确。
+- 排除项：`douyin_pb2.py`（protoc 生成，自带 docstring且标注 DO NOT EDIT）、
+  `douyin_live_recorder_standalone.py`、`gui_legacy.py`（历史遗留），
+  以及 `__pycache__` / `node` / `ffmpeg` / `.venv` / `build` / `dist` 等目录。
+
+**该工具的两个盲点（工具发现不了，须另行检查）**：
+
+1. `except A, B:`（PEP 758）与 `except (A, B):` 的 AST **完全相同**，故「无括号写法被改写成
+   带括号」不会被等价性校验发现，需额外 grep 计数核对：
+   `grep -c 'except [A-Za-z_][A-Za-z0-9_.]*, [A-Za-z_]' <file>`
+2. 注释缩进错误不影响 AST，只有 `black --check` 能发现。故该工具必须与 black 配套使用。
+
 ## 项目结构
 
 ```
@@ -116,12 +155,17 @@ ignore_missing_imports = true
 │   ├── ffmpeg_install.py # FFmpeg 自动安装
 │   ├── node_install.py  # Node.js 自动安装
 │   ├── platforms/       # 平台专属实现（douyin/douyu/huya/bilibili/twitch + _xbogus/_tars）
-│   ├── proto/           # protobuf（douyin.proto + douyin_pb2.py + douyin_pb2.pyi 存根）
+│   ├── proto/           # protobuf（__init__.py + douyin.proto + douyin_pb2.py + douyin_pb2.pyi 存根）
 │   └── javascript/      # JS 签名脚本（各平台）
 │
 ├── config/              # 运行时配置（exe 同级）
 │   ├── config.ini       # 主配置
 │   └── URL_config.ini   # 直播间 URL 配置
+│
+├── tests/               # 测试（pytest 用例 + 前端用例）
+│   ├── conftest.py      # 全局 fixture（禁日志归档 env、代理清理等）
+│   ├── test_*.py        # 后端 / 集成用例（与 src 模块一一对应）
+│   └── frontend/        # 前端用例（.mjs，Node 内置 node:test，零 npm 依赖）
 │
 ├── web/                 # Web 面板前端静态资源
 │   ├── index.html
@@ -141,18 +185,30 @@ ignore_missing_imports = true
 │   ├── execjs/          # PyExecJS 类型存根（多个 .pyi）
 │   └── pystray/         # pystray 类型存根（__init__.pyi）
 │
-├── scripts/             # 维护脚本（CI 门禁与 i18n 工具，运行时链路不引用）
+├── scripts/             # 维护脚本与独立工具（CI 门禁、i18n 工具、单文件整合版；运行时链路不引用）
 │   ├── check_coverage.py       # 逐模块覆盖率门禁（阈值见 MODULE_THRESHOLDS）
 │   ├── check_version.py        # 版本「动态化、未写死」状态校验
 │   ├── sync_version.py         # 从 pyproject.toml 同步版本号到遗留文件
 │   ├── compile_po.py           # 纯 Python po→mo 编译（CI --check 字节级门禁）
 │   ├── extract_i18n_strings.py # i18n 待翻译串提取（AST 扫描，与四语目录比对）
+│   ├── check_annotations.py   # 注释规范检查 + 逻辑等价性校验（三模式，见下方「注释约定」章节）
 │   ├── smoke_test.py           # Web/接口冒烟测试工具（JSON 配置驱动，纯标准库）
-│   └── smoke_web.json          # 冒烟测试接口配置
+│   ├── smoke_web.json          # 冒烟测试接口配置
+│   └── douyin_live_recorder_standalone.py # 单文件整合版录制脚本（抖音/虎牙/B站/斗鱼，零第三方依赖）
 │
 └── .github/
     ├── actions/retry/   # 复合动作：网络安装重试包装（ci.yml / build-release.yml 共用）
-    └── workflows/       # CI/CD（ci.yml 门禁 + build-release.yml 构建发布）
+    ├── ISSUE_TEMPLATE/  # 议题模板（中英双语：bug / feature / question）
+    ├── PULL_REQUEST_TEMPLATE.md
+    └── workflows/       # CI/CD（ci.yml 门禁 + build-release.yml 构建发布 + issue-translator.yml）
+
+# 根目录文档与分发脚本（不进镜像，见 .dockerignore）
+├── README.md / README_EN.md        # 用户说明（中英）
+├── CODE_WIKI.md / CODE_WIKI_EN.md  # 架构文档（中英）
+├── AGENTS.md                       # 编码代理约定（本文件）
+├── LICENSE                         # MIT
+├── index.html                      # 独立 M3U8 播放器页面（Web 面板用 web/ 目录）
+└── StopRecording.vbs               # Windows 停止录制脚本（UTF-16 LE 带 BOM，见「已知坑」）
 ```
 
 ## 入口点
@@ -174,6 +230,14 @@ ignore_missing_imports = true
 - **GUI 依赖**: `pip install .[gui]`（customtkinter, pystray, Pillow）
 
 - **i18n 依赖**: PyYAML（zh\_TW\.yaml 目录加载；缺失时仅损失 YAML 格式，JSON/gettext 不受影响）
+
+- **开发依赖不在** **`requirements.txt`** **内**：pytest / pytest-asyncio / pytest-cov / black / isort / mypy 由
+  `pyproject.toml [project.optional-dependencies].dev` 声明（`pip install .[dev]`），打包用 `.[build]`，
+  GUI 用 `.[gui]`——三者均不进运行时清单，故 `requirements.txt` 只有 20 条运行时依赖（与
+  `[project.dependencies]` 一一对应，改一处须同步另一处）。
+
+- **前端测试零 Python/npm 依赖**: `tests/frontend/*.mjs` 用 Node 内置 `node:test`，只需系统安装 Node.js
+  （与 JS 签名脚本共用同一运行时，`src/node_install.py` 会自动下载），无需 `npm install`。
 
 - **版本下限（须与** **`requirements.txt`** **和** **`pyproject.toml [project.dependencies]`** **三处一致）**:
   `pystray>=0.19.5`（macOS 改走 PNG 图标）、`Pillow>=12.3.0`、`customtkinter>=6.0.0`
@@ -199,6 +263,8 @@ asyncio_mode = "auto"
 
 - **tests/ 质量门禁（2026-08 起全绿，须保持）**: `pytest`（0 警告）、`black --check tests/`、`isort --check-only tests/`、`mypy tests/`、`basedpyright tests/`（0 error/0 warning）
 
+- **pytest「0 警告」口径（2026-09-04 定稿）**: 指全量运行后 **warnings summary 为空（0 条）**。项目自身代码（`src/`、`tests/`、根目录入口）不得产生任何告警；确属第三方库的告警（现基线两条：starlette testclient 模块 import 期的 `anyio.abc.BlockingPortal` 弃用提示、fastapi testclient 内部的 httpx 弃用提示）一律经 `pyproject.toml [tool.pytest.ini_options].filterwarnings` 显式 ignore 并附来源注释，故 summary 恒为 0。**新增 ignore 前必须先确认告警源自第三方 import 链而非本项目代码——禁止用 filterwarnings 掩盖项目自身告警**；同理禁止给用例加 `filterwarnings("ignore::RuntimeWarning")` 之类宽泛过滤（`tests/test_async_http_lock.py` 曾靠它压制协程告警，2026-09-04 已移除作回归守卫）。另注意：协程类 RuntimeWarning（`... was never awaited`）由 GC 延迟触发、可能逸出到任意后续用例（pytest 经 unraisableexception 捕获），ignore 拦不住——必须修根因（见「已知坑」跨循环关闭 AsyncClient 条目），不得靠过滤压制。
+
 - 覆盖率源码: `src/`
 
 - 覆盖率排除: `tests/`, `__pycache__/`, `node/`, `ffmpeg/`, `.mimosa/` 及其余本地工具生成目录（与 `.gitignore`/`.dockerignore`/pyproject 各工具排除列表同源，完整清单见 pyproject `[tool.coverage.run].omit`）
@@ -207,7 +273,14 @@ asyncio_mode = "auto"
 
 - 并发测试专用覆盖率配置: `.coveragerc-concurrency`（随仓库分发，CI 经 `COVERAGE_RCFILE` 引用，`fail_under = 0`）
 
-- 创建/更新测试: 使用 [test-creator Skill](.qoder/skills/test-creator/SKILL.md) 标准化流程（源码分析 → Mock 配置 → 验证执行）
+- **前端用例（`tests/frontend/*.mjs`，2026-09-06 起）**: 用 Node 内置 `node:test` + `node:vm` 沙箱驱动
+  `web/app.js`（IIFE 加载期零副作用），DOM/fetch 桩手工触发事件、经真实事件委托链路断言，**零 npm 依赖**
+  （故 `requirements.txt` / `pyproject.toml` 均无新增项）。由同名的 Python 包装用例（如
+  `tests/test_frontend_quality_ui.py`）以子进程 `node --test` 调用，**Node 缺失时 skip**——属环境限制口径，
+  不是失败。新增前端用例沿用「`.mjs` 真用例 + `.py` 包装」双文件结构。
+
+- 创建/更新测试: 按「源码分析 → Mock 配置 → 验证执行」标准化流程编写；新建用例须与被测模块同名
+  （`src/x.py` ↔ `tests/test_x.py`），并用变异验证（临时改坏被测代码，确认测试变红）证明用例真能抓回归
 
 ### 测试编写强制约定
 
@@ -456,7 +529,7 @@ mypy src/
 5. **JS 签名脚本**: 位于 `src/javascript/`，通过 `__file__` 定位，打包时收入 `_internal/`
 6. **编码与注释风格**: 源文件统一 UTF-8，注释统一用中文
 
-   - **注释一律用** **`#`** **行注释，禁止** **`"""..."""`** **docstring**：模块/类/函数的说明也写成 `#` 注释置于定义上方。全仓已 100% 满足——`src/` 41 个模块（含 `src/platforms/`、`src/proto/`）、`main.py`/`gui.py`/`gui_legacy.py`/`web.py`/`i18n.py`/`msg_push.py`、`scripts/`、`tests/` 均为 **0 处 docstring**，新增与重构代码须保持
+   - **注释一律用** **`#`** **行注释，禁止** **`"""..."""`** **docstring**：模块/类/函数的说明也写成 `#` 注释置于定义上方。全仓已 100% 满足——`src/` 42 个模块（含 `src/platforms/`、`src/proto/`）、`main.py`/`gui.py`/`gui_legacy.py`/`web.py`/`i18n.py`/`msg_push.py`、`scripts/`、`tests/` 均为 **0 处 docstring**，新增与重构代码须保持
 
    - **例外**：多行字符串**字面量**不属 docstring，合法保留（如 `build_exe.py` 的 `SPEC_TEMPLATE = """\...` PyInstaller spec 模板）
 7. **排除目录**: `node/`, `ffmpeg/`, `downloads/`, `__pycache__/` 在所有工具中均排除
@@ -521,6 +594,8 @@ mypy src/
 
 - **`asyncio.get_event_loop()`** **3.14 起不再隐式创建事件循环**：当前线程无循环时抛 `RuntimeError`（≤3.13 为隐式创建+DeprecationWarning）。`src/async_http.py` 的 `close_all_clients_sync`（atexit/信号钩子调用）已改为捕获 RuntimeError 后走引用清理兜底；协程内获取循环一律用 `get_running_loop()`，atexit 类同步清理如需复用已存在的循环，保持「try get\_event\_loop / except RuntimeError → 引用清理」结构，不要改回裸调用。
 
+- **跨事件循环禁止创建/调度旧 AsyncClient 的 aclose 协程（2026-09-04 定稿）**：`src/async_http.py::_get_client` 淘汰他循环创建的旧客户端时，一律**不创建** `aclose()` 协程（旧循环运行中/已停止/已关闭同样对待），释放引用交由 GC 兜底；进程级收尾仍由 atexit 的 `close_all_clients_sync` 负责。三个坑（勿回退）：① `run_coroutine_threadsafe` 只调度不等待——旧循环停止/关闭后排入的回调永不执行，协程从未被 await，GC 时报 `coroutine ... aclose was never awaited` 且 GC 时机随机致告警在 1~2 条间波动（经 unraisableexception 逸出到任意后续用例，`filterwarnings` 拦不住）；② 加 `is_running()` 门控并 `fut.result(timeout)` 等待也无法根治——`asyncio.run` 收尾窗口内循环还在运转（is\_running 为真）但随时停止，安排的任务可能永不执行（`Task was destroyed but it is pending`），future 永不完成还会把一次收尾竞态放大成整段超时时长的阻塞；③ 在当前循环直接 `await 旧client.aclose()` 会操作绑定旧循环的 transport（httpcore 连接池关闭触碰旧循环的 `call_soon`，循环已关时直接 RuntimeError）。外部线程无法可靠控制他线程循环的生命周期，唯一可靠做法就是不创建协程。回归锁：`tests/test_async_http_lock.py::test_cross_loop_running_old_loop_skips_close` / `test_cross_loop_stopped_old_loop_skips_close`；并发的 `test_concurrent_threads_no_cross_loop_error` 已移除 `ignore::RuntimeWarning` 过滤，告警回归会直接显现。
+
 - **异常日志必须带异常类型与上下文，禁止裸** **`logger.xxx(e)`**：Windows 下 `socket.timeout` / `TimeoutError` 的 `str()` **为空字符串**，`f"...: {e}"` 或 `logger.debug(e)` 会打出空白行，排查时完全失去线索。凡 `except Exception as e:` 的日志一律写成 `f"<动作>: {url} - {type(e).__name__}: {e}"`（`src/async_http.py` 的 `async_req` 已按此修正）。流地址校验失败还须额外输出 `status_code` 与 `content-type`，**禁止静默吞异常**。
 
 - **流地址可达性探测的方法基线**：抖音等 CDN 对 m3u8 的 `HEAD` 常回 4xx（**含 404**）而 `GET` 能正常拉流，故校验逻辑一律「HEAD 非 2xx → Range `GET bytes=0-0` 探测（200/206 判可达）」，**不要只覆盖 400/401/403/405**。同步校验器（`main.py` 的 `_validate_stream_url`）与异步校验器（`src/async_http.py` 的 `get_response_status`）的 **proxy / verify / UA 三者必须保持一致**，否则境外平台（TikTok）直连校验会误判不可达而回退或放弃录制。本条与前述「GET 复核容错语义」「末位候选放行」「探针节流/抖动」「虎牙探针退避」四条互补，不可相互简化。
@@ -567,5 +642,31 @@ mypy src/
 
 - **近期性能优化与修复的完整变更记录见** **`CODE_WIKI.md`** **/** **`CODE_WIKI_EN.md`** **的「更新日志 / Changelog」**：本文件只沉淀「可回归的硬约定」。2026-08-28/29 的 P1\~P5 性能优化（探针客户端复用 / `requests.Session` 线程级复用 / 主循环 set 去重 / 调度器增量计数 / 正则提常量）、探针退避窗口对齐主循环、录制成功清除退避、虎牙 FLV-first、Web 模式 loguru 控制台 sink 重建，均已逐条落地为上述约定与「录制结果反馈约定」「并发与线程模型」章节，对应行为不可在无充分理由下回退。
 
+- **分段录制的 `-segment_format` 必须与输出扩展名严格一致，且一律经 `SEGMENT_FORMAT_BY_SUFFIX` 查表（2026-09-04 P0 事故）**：映射表为 `main.py` 模块级常量，`.ts→mpegts`、`.flv→flv`、`.mkv→matroska`、`.mp4→mp4`、`.m4a→ipod`（音频分支扩展名是变量，用 `SEGMENT_FORMAT_BY_SUFFIX.get("." + extension, "ipod")` 兜底——`only_audio_record` 平台保存类型不含 m4a 时 extension 为 mp3 而编码仍走 aac，沿用 ipod 不得抛 KeyError）。**禁止在任何分支直接写 `-segment_format` 的字符串字面量**——事故正是 TS 分支误写 `ipod`、M4A 分支误写 `mpegts`（两值互换，连解释性注释也串到了错误分支上），而字面量取值能通过 black/isort/mypy/AST 等价性校验，只有语义断言能拦住。后果双向且都不好惹：`ipod` 是「iPod H.264 MP4」子集封装器（扩展名 m4v/m4a/m4b），codec tag 表**无 HEVC 条目**，HEVC 原画 `-c copy` 进去直接 `AVERROR(EINVAL)` 退出（Windows 退出码以无符号呈现为 **4294967274**，即 -22；已由 `_describe_return_code` 归一化并附 errno 提示），而 **H.264 不报错、exit 0，只是把 MP4 内容写进 `.ts` 文件名**（产物魔数为 `ftyp` 而非 `0x47`）——静默损坏，比报错更难排查，历史录像需按魔数复核。回归锁：`tests/test_record_container.py`（映射表内容 + AST 扫描断言「5 处取值全部来自查表、无裸字面量」+ 查表键已注册 + 音频兜底为 ipod）。
+
+- **`hevc_flv_url` 必须带 `codec=h265` 标记**：`spider.extract_douyin_hevc_flv_url()` 从直播间 HTML 正则抠出的 HEVC 地址，必须补 `&codec=h265`（已带 codec 参数时原样返回、不得重复拼接），对齐同文件给 ORIGIN 线路拼 `&codec=<VCodec>` 的既有做法。下游 `_is_h265()`（`src/stream_select.py`）与 `main.py` 的 h265 兜底判定**只认 URL 上的 codec 查询参数**，缺失会让 HEVC 源伪装成普通 FLV 通过全部校验、直接进 `-c copy`。注意 `utils.get_query_params` 返回 **list**（`spider.get_params` 返回 str，两者不可混用）。
+
 - **`StopRecording.vbs`** **必须保存为 UTF-16 LE（带 BOM），进程匹配不得回退为按通用映像名全系统击杀（2026-08 修订）**：该脚本由 wscript/cscript 消费，按系统 ANSI 代码页解释 `.vbs`，**UTF-8 保存会让全部中文提示乱码**，仅 UTF-16 LE（带 BOM）被自动识别——「源文件统一 UTF-8」约定**不适用于该文件**。修改流程：按 UTF-8 编辑后 `sed 's/\r*$/\r/' StopRecording.vbs | iconv -f UTF-8 -t UTF-16LE > tmp && printf '\xff\xfe' | cat - tmp > StopRecording.vbs` 转码回写（顺带保证 CRLF；注意 `iconv -t UTF-16` 输出**大端**，必须显式 `-t UTF-16LE` + 手动前置 `FF FE`）。进程匹配现为三层：① 程序专属 exe（`DouyinLiveRecorder.exe` / `-GUI` / `-Web`，对齐 `build_exe.py` 的三个 `name=`）按映像名命中；② python 须命令行含入口脚本（`main.py` / `gui.py` / `web.py`，前紧邻路径分隔符/空格/引号防 `test_main.py` 误匹配）或 pip 启动器名 `douyin-recorder`——**刻意不按项目目录匹配**：项目 venv 内的编辑器工具进程（实测 VSCode isort 语言服务器）路径同样指向项目目录，按目录匹配会误杀；③ ffmpeg 须「父进程为已识别录制主进程」或「路径/命令行锚定到程序目录或 `douyinliverecorder` 关键字」（孤儿 ffmpeg 兜底）。结束顺序为先录制主进程（`taskkill /f /t /pid` 连带子进程树，venv python 的「启动器→真实解释器→ffmpeg」三级链已实测整树杀净）后残留 ffmpeg——原版「先杀 ffmpeg → 等 10s → 再杀主进程」存在主进程存活期间重新拉起 ffmpeg 的竞态（WMI `Terminate()` 不杀子树，会留孤儿 ffmpeg），且强杀不走 atexit、四日志归档与 ffmpeg 收尾不会执行，本脚本仅作进程卡死时的最后手段。静默模式 `cscript //nologo StopRecording.vbs -y` 跳过确认框、状态走 stdout，供自动化调用（实弹验证可复现：ping.exe 副本伪装各进程名 + 快照对比）。
+
+- **「HLS 采集排除平台」是整组剔除，与「FLV-first 调序」是两种语义，不可互相实现（2026-09-05 定稿）**：配置项
+  `[录制设置] HLS采集排除平台(逗号分隔)` 命中的平台，在 `src/stream_select.py::select_source_url` 里计算
+  `hls_effective_enabled = main.hls_collection_enabled and not hls_excluded`，据此**不把 HLS 候选放入序列**
+  （HLS 探针一次都不发、FLV 校验失败也不回退 HLS、h265-FLV 也不切 HLS）；而 `_FLV_FIRST_PLATFORMS`
+  （虎牙）只是把 FLV 排到 HLS **之前**、HLS 仍留在序列里作回退。两者刻意不同，把前者实现成调序会让
+  「排除」失效（仍会去探 HLS），把后者实现成剔除会砍掉虎牙唯一的 HLS 回退。平台名须与 `platform` 字段
+  完全一致（如「斗鱼直播」），默认空 = 不排除。回归锁：`tests/test_stream_select.py` 的 5 个排除列用例（含
+  「HLS 探针零发出」与「列表外平台行为不变」断言）。
+
+- **GUI / WEB 画质切换写回 `URL_config.ini` 后必须同步「编辑器快照」与「显示源」（2026-09-06 定稿）**：三个已修缺陷
+  同源——① 反查表 `_anchor_url_map` 的键是 `URL_config.ini` 里的**纯主播名**，而画质监控菜单传的是带
+  `序号N ` 前缀的显示名，查表前必须 `re.sub(r"^序号\d+\s+", "", anchor_name)` 剥离，否则恒 miss 并误报
+  「未能在 URL_config.ini 中找到」；② 写回文件后必须调 `_load_config()` 同步 `config_text`，否则 URL 配置
+  编辑器仍持写回前的旧快照，用户点「保存」会用旧内容整文件覆盖、把刚写的画质段抹掉（原实现只同步 mtime）；
+  ③ 画质监控表格的「设置画质」列**必须以配置文件为准**（新增 `_anchor_quality_map`），不能取子进程日志值——
+  切换画质不重启录制子进程，日志里的恒为旧值，每轮重建表格会把菜单显示重置回旧画质。WEB 端
+  `PUT /api/rooms/quality` 与 GUI 共用 `src/web_config.py::update_room_quality`（同一份行级写回实现：保留
+  `#` 注释前缀、主播名字段与 URL 原文，空值/「原画」=移除画质段，`os.replace` 原子写，换行注入 ValueError），
+  两端改一处即同步。档位白名单只允许 `BUILTIN_QUALITIES`（与 `stream_select.get_quality_code` 对齐），
+  不接受任意自定义名。回归锁：`tests/test_web_config.py::TestUpdateRoomQuality` +
+  `tests/test_web_api.py::TestRoomQualityApi` + `tests/frontend/test_quality_ui.mjs`。
 
