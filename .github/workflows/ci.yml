@@ -59,7 +59,7 @@
 #     · secrets.CODECOV_TOKEN —— 可选：test job 的覆盖率上传步骤仅在「已配置该 secret
 #                              且为最低支持版本」时运行；未配置则自动跳过，不阻断 CI。
 #                              公开仓库也可不配置（Codecov 可从 commit 关联推断），配置后
-#                              报告更可靠。使用浮动主版本 codecov/codecov-action@v5。
+#                              报告更可靠。使用浮动主版本 codecov/codecov-action@v7。
 # =============================================================================
 
 name: CI
@@ -139,8 +139,8 @@ jobs:
           # （dependabot 不会更新 workflow 内联的 pip 版本，需人工随 pyproject 一起 bump）。
           {
             echo "black_version=26.5.1"
-            echo "isort_version=8.0.1"
-            echo "mypy_version=2.3.0"
+            echo "isort_version=9.0.1"
+            echo "mypy_version=2.3.1"
           } >> "$GITHUB_OUTPUT"
 
       # 仅当 Python 源码 / 测试 / 项目配置 / 翻译目录变更时才跑重活；
@@ -172,7 +172,7 @@ jobs:
   # 四项检查都是「秒级、零运行时依赖」，合并进同一 job 可省去 3 次 runner 冷启动
   # （约 30~60s），同时用独立 step 名保留清晰的失败归因。
   static:
-    name: Static Checks (black / isort / version / i18n)
+    name: Static Checks (black / isort / version / i18n / annotations)
     needs: setup
     if: contains(fromJSON(needs.setup.outputs.filters), 'python')
     runs-on: ubuntu-latest
@@ -219,6 +219,12 @@ jobs:
       # （.mo 随仓库分发，gettext 运行时只读 .mo；纯标准库实现）
       - name: Check i18n po/mo sync
         run: python scripts/compile_po.py --check
+
+      # 校验注释规范：禁用三引号 docstring（AGENTS.md 硬性约定——docstring 会进 AST，
+      # 而 # 注释不会）、注释密度下限、模块头存在性。纯标准库实现，无需装项目依赖。
+      # 大批量「只改注释」的改动另可先 --snapshot 建基线、改完 --baseline 验证逻辑未动。
+      - name: Check annotation conventions
+        run: python scripts/check_annotations.py
 
   # ── 2. 静态类型检查 ──────────────────────────────────────────────────────
   # 按 pyproject [tool.mypy] python_version = "3.14" 使用最低支持版本运行，
@@ -322,10 +328,11 @@ jobs:
 
       # 可选能力：仅在仓库配置了 secrets.CODECOV_TOKEN 时运行（未配置自动跳过）。
       # 固定在最低支持版本上执行一次，避免矩阵内重复上传；fail_ci_if_error: false
-      # 保证 Codecov 服务异常时不会反噬 CI 门禁。使用浮动主版本 @v5。
+      # 保证 Codecov 服务异常时不会反噬 CI 门禁。使用浮动主版本 @v7
+      # （v6 唯一破坏性变更是迁移 node24 运行时，ubuntu-latest 原生支持；inputs 无变化）。
       - name: Upload coverage to Codecov
         if: matrix.python-version == needs.setup.outputs.python_min && env.CODECOV_TOKEN != ''
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           files: coverage.xml
           token: ${{ secrets.CODECOV_TOKEN }}
