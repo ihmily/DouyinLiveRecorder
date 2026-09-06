@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
 # Node.js 环境自动安装模块 - 跨平台的 Node.js 自动检测和安装功能
+#
+# 职责：检测 `node` 命令是否可用（check_nodejs_installed），不可用则按平台自动安装
+#   （Windows 从 npmmirror 拉 zip 解压；Linux 按发行版走 yum/apt；macOS 走 Homebrew）。
+# 安装落点：execute_dir（冻结后指向 _internal/），解压后把 node 目录前置注入 PATH，
+#   使同进程后续 `node` 调用直接命中。所有路径最后 `node -v` 校验 returncode==0 才认成功。
+# 设计取舍：安装失败只返 False、不抛异常，交由调用方提示用户手动安装，避免中断主程序启动。
 
 import os
 import platform
@@ -37,11 +43,15 @@ def install_nodejs_windows() -> bool:
             if response.status_code != 200:
                 logger.error("Failed to retrieve the Node.js version page")
                 return False
+            # 从 nodejs.cn 下载页正则抠出 npmmirror 镜像直链；该页面 HTML 结构一旦变动，match 为空即安装失败，
+            # 依赖上游文案稳定（魔改字符串来源）。
             match = re.search("https://npmmirror.com/mirrors/node/(v.*?)/node-(v.*?)-x64.msi", response.text)
         if not match:
             logger.error("Failed to retrieve the download URL for the latest version of Node.js...")
             return False
         version = match.group(1)
+        # 以 platform.machine() 是否含 "32" 粗略判架构：仅覆盖 x86/x64，不含 ARM(arm64)——
+        # Windows on ARM 的 machine 为 "ARM64" 不含 "32" 会被误判 x64，下载的 zip 无法运行。
         system_bit = "x64" if "32" not in platform.machine() else "x86"
         url = f"https://npmmirror.com/mirrors/node/{version}/node-{version}-win-{system_bit}.zip"
 
@@ -64,9 +74,11 @@ def install_nodejs_windows() -> bool:
                             _ = t.update(len(data))
                             _ = f.write(data)
 
+        # 解压到 execute_dir；zip 内顶层目录名为 node-vX.Y.Z-win-x64，提取后整体改名为 "node" 目录以便固定 PATH 引用。
         unzip_file(zip_file_path, execute_dir)
         extract_dir_path = str(zip_file_path).rsplit(".", maxsplit=1)[0]
         new_extract_dir_path = Path(execute_dir) / "node"
+        # 仅当解压出的原目录存在、且目标 "node" 目录尚不存在时才重命名；已存在则走下方验证分支（避免覆盖/重复）。
         if Path(extract_dir_path).exists() and not Path(new_extract_dir_path).exists():
             os.rename(extract_dir_path, new_extract_dir_path)
             os.environ["PATH"] = os.path.join(execute_dir, "node") + os.pathsep + current_env_path
@@ -116,6 +128,7 @@ def install_nodejs_centos() -> bool:
 
 def install_nodejs_ubuntu() -> bool:
     # 在 Ubuntu/Debian 系统上通过 apt 安装 Node.js
+    # Ubuntu/Debian：直接 apt 装 nodejs（未先 apt update，依赖已就新的包索引；装失败即返 False 提示手动）。
     try:
         logger.warning("Node.js is not installed.")
         logger.debug("Installing the latest version of Node.js for Ubuntu...")
@@ -155,6 +168,9 @@ def install_nodejs_mac() -> bool:
 
 def get_package_manager() -> str:
     # 检测 Linux 发行版类型，返回包管理器标识
+    # distro.id() 为小写发行版标识；仅上述 RHEL 系走 yum，其余（含 alpine/suse/arch 等）一律归 DBS(apt)。
+    # 对无 apt 的发行版最终会 apt 不存在而失败，需用户手动安装——列表即"支持的包管理器白名单"。
+    # 仅上述 RHEL 系发行版走 yum；其余（含 alpine/suse/arch 等无 apt 的）一律归 DBS，最终会因 apt 缺失而失败，需用户手动。
     dist_id = distro.id()
     if dist_id in ["centos", "fedora", "rhel", "amzn", "oracle", "scientific", "opencloudos", "alinux"]:
         return "RHS"
@@ -182,12 +198,14 @@ def install_nodejs() -> bool:
 
 
 def check_nodejs_installed() -> bool:
-    # 检查系统是否已安装 Node.js
+    # 仅校验 `node` 命令存在即视为已安装；不检查 npm。若 Node 存在但 npm 缺失，
+    # 依赖 npm 的下游功能仍会失败，此处不感知（false positive）。
     try:
         result = subprocess.run(["node", "-v"], capture_output=True)
         version = result.stdout.strip()
         if result.returncode == 0 and version:
             return True
+    # 命令不存在（FileNotFoundError）即视为未安装、静默返 False 触发自动安装；其它异常也吞掉返 False。
     except FileNotFoundError:
         pass
     return False

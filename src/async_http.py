@@ -57,12 +57,19 @@ async def _get_client(
                     await client.aclose()
                 except Exception as e:
                     logger.debug(f"关闭失效 AsyncClient 失败: {e}")
-            elif not client_loop.is_closed():
-                # 跨事件循环：在其创建循环上安排 aclose，避免在其创建循环外操作 transport
-                try:
-                    _ = asyncio.run_coroutine_threadsafe(client.aclose(), client_loop)
-                except Exception as e:
-                    logger.debug(f"跨循环关闭 AsyncClient 失败: {e}")
+            # 跨事件循环：在其创建循环上安排 aclose，避免在其创建循环外操作 transport
+            # 跨循环旧循环（运行中/已停止/已关闭）一律不创建 aclose 协程（2026-09-04 修复）：
+            # 旧实现用 run_coroutine_threadsafe 只调度不等待，旧循环已停/已关时回调永不执行，
+            # 协程从未被 await，GC 时报 "coroutine ... aclose was never awaited"
+            # 且数量随机波动（1~2 条 flaky，经 unraisableexception 逸出到任意后续用例）；
+            # 改为「等待 future + is_running 门控」仍无法根治——asyncio.run 收尾窗口内
+            # 循环还在运转但随时停止，安排的任务可能永不执行（"Task was destroyed
+            # but it is pending"），future 永不完成还会把收尾竞态放大成整段超时时长的
+            # 阻塞；而在当前循环直接 await aclose 会操作绑定旧循环的 transport
+            # （httpcore 连接池关闭触碰旧循环的 call_soon，循环已关时直接 RuntimeError）。
+            # 外部线程无法可靠控制他线程循环的生命周期，唯一可靠做法就是不创建协程，
+            # 释放引用交由 GC 兜底（httpx.AsyncClient 析构会尝试关闭底层传输；
+            # 进程级收尾仍由 atexit 的 close_all_clients_sync 负责）
     client = httpx.AsyncClient(
         proxy=proxy_addr,
         timeout=timeout,

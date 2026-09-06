@@ -1,6 +1,20 @@
 #!/usr/bin/env python3
 # -*- encoding: utf-8 -*-
 # 直播流地址获取模块 - 从各平台解析获取直播流地址，支持多种画质选择
+#
+# 职责：把各平台 spider 解析出的 json_data 归一化为统一结构
+#   {is_live, anchor_name, title, quality, actual_quality, available_qualities,
+#    m3u8_url, flv_url, record_url, m3u8_url_list, flv_url_list}，供上层录制与
+#    流地址校验（src.stream_select.select_source_url）消费。
+# 核心机制：
+#   - 画质档位映射（QUALITY_MAPPING / QUALITY_MAPPING_BIT / QUALITY_LEVEL）与平台专属
+#     档位表（HUYA_FIXED_TIERS / DOUYU_RATE_BY_CODE）把"中文画质名"转为各平台请求参数；
+#   - 各平台按统一画质索引选档，并对不可用档位做就近降级（is_downgrade 判定告警）；
+#   - 虎牙/斗鱼细粒度蓝光档位走各自专属表，不污染通用 0-5 数字索引语义。
+# 与其它模块关系：本模块只"取地址 + 选画质降级"，不做可达性校验与 ffmpeg 拉流；
+#   地址可用性由 stream_select.py 的 select_source_url 逐候选校验、首条可达即选用。
+# 设计取舍：所有 get_*_stream_url 缺字段即按"未开播"返回 is_live=False；
+#   保持上游 json_data 透传，避免对离线房间伪造 is_live=True 误导调度器。
 
 # Author: Hmily
 # GitHub: https://github.com/ihmily
@@ -20,10 +34,12 @@ from .async_http import get_response_status
 from .spider import get_bilibili_stream_data, get_douyu_stream_data
 from .utils import trace_error_decorator
 
+# 通用列表填充辅助的类型变量：_pad_list 把任意元素类型的列表填充到指定最小长度
 _PadT = TypeVar("_PadT")
 
 
 # ---- 各平台 json_data 结构类型（仅用于静态类型检查，运行时完全透明）----
+# 抖音解析结果结构：status=2 表示直播中，stream_url 内含 flv/hls 拉流映射
 class DouyinStreamUrl(TypedDict, total=False):
     anchor_name: str | None
     status: int
@@ -36,6 +52,7 @@ class DouyinStreamInner(TypedDict, total=False):
     hevc_flv_url: str
 
 
+# TikTok 解析结果顶层：LiveRoom 包裹直播间与用户态
 class TiktokStreamUrl(TypedDict, total=False):
     LiveRoom: "TiktokLiveRoom"
 
@@ -69,6 +86,7 @@ class TiktokPullData(TypedDict, total=False):
     stream_data: str
 
 
+# 快手 m3u8 候选项：单条 url
 class KuaishouM3u8Item(TypedDict, total=False):
     url: str
 
@@ -78,6 +96,7 @@ class KuaishouFlvItem(TypedDict, total=False):
     bitrate: int
 
 
+# 快手解析结果：type(1未开播/2开播)、m3u8_url_list / flv_url_list 候选
 class KuaishouStreamUrl(TypedDict, total=False):
     type: int
     is_live: bool
@@ -86,6 +105,7 @@ class KuaishouStreamUrl(TypedDict, total=False):
     flv_url_list: list[KuaishouFlvItem]
 
 
+# 虎牙解析结果：data 列表，每项含房间信息与多 CDN 线路
 class HuyaStreamUrl(TypedDict, total=False):
     data: list["HuyaDataItem"]
 
@@ -144,6 +164,7 @@ class YyCdnDetail(TypedDict, total=False):
     url: str
 
 
+# B站解析结果：live_status(1=直播中)、anchor_name、title、room_url
 class BilibiliStreamUrl(TypedDict, total=False):
     anchor_name: str
     live_status: int
@@ -182,12 +203,14 @@ class GenericStreamUrl(TypedDict, total=False):
     play_url_list: list[dict[str, str]]
 
 
+# 排序用画质项：url + vbitrate（码率）+ resolution（宽高元组）
 class StreamQuality(TypedDict, total=False):
     url: str
     vbitrate: int
     resolution: tuple[int, int]
 
 
+# TikTok 单路 sdk_params：vbitrate / VCodec（编码）/ resolution（宽x高）
 class TiktokSdkParams(TypedDict, total=False):
     vbitrate: int
     VCodec: str
@@ -298,6 +321,8 @@ DOUYU_RATE_DESC = ("8200", "4000", "3", "2", "1")
 
 def bitrate_to_quality(bitrate: int) -> str:
     # 根据码率反查画质代码。返回码率上限 >= 给定值的最高档；0/未知回退 OD。
+    # 按 LD→OD 升序查找：首个"容量 >= 实码率"的档即能容纳该码率的最低档，
+    # 升序保证返回"够用的最低档"，避免把低码率源误标成高画质。
     if not bitrate or bitrate <= 0:
         return "OD"
     # 从低到高找第一个能容纳该码率的档位（LD<SD<HD<UHD<BD<OD）
@@ -309,6 +334,7 @@ def bitrate_to_quality(bitrate: int) -> str:
 
 def code_to_zh(code: str | None) -> str:
     # 画质代码转中文；未知代码原样返回。
+    # 原样返回而非兜底默认，避免把解析异常（如 None/空串）伪装成有效画质名。
     if not code:
         return code or ""
     return QUALITY_CODE_TO_ZH.get(code, code)
@@ -365,6 +391,8 @@ async def get_douyin_stream_url(
     anchor_name = d.get("anchor_name")
     result: dict[str, object] = {"anchor_name": anchor_name, "is_live": False}
     status = d.get("status", 4)
+    # 抖音 status 约定：2=直播中；其余值（含默认 4=未开播/轮播）一律按非 live 处理。
+    # 不能把"未开播"误判为 live，否则会带着空地址进入录制流程、空跑一路 ffmpeg。
 
     if status == 2:
         stream_url = d.get("stream_url") or {}
@@ -398,6 +426,8 @@ async def get_douyin_stream_url(
 
         m3u8_codec = urllib.parse.parse_qs(urllib.parse.urlparse(m3u8_url or "").query).get("codec", [""])[0]
         m3u8_is_hevc = "h265" in m3u8_codec.lower() or "hevc" in m3u8_codec.lower()
+        # 仅原画请求(quality_index==0)且存在 hevc 备用地址、且 m3u8 非 h265 时启用 hevc flv；
+        # 否则仍走通用 h264 源，避免把编码不兼容的源当成可录地址。
         use_hevc_flv = quality_index == 0 and bool(hevc_flv_url) and not m3u8_is_hevc
         if use_hevc_flv and hevc_flv_url:
             flv_url = hevc_flv_url
@@ -407,6 +437,8 @@ async def get_douyin_stream_url(
             # 仅有 FLV 源：跳过对空 URL 的可用性校验，避免误判失败并错误降级画质
             ok = True
         if not ok:
+            # m3u8 不可达时向"相邻档"降级：还有更高档就升一档，否则降到前一档；
+            # 仅做单步回退，避免跨档跳过可用画质。
             index = flv_idx + 1 if flv_idx < len(flv_pairs) - 1 else max(flv_idx - 1, 0)
             if m3u8_pairs:
                 m3u8_quality_name, m3u8_url = m3u8_pairs[index]
@@ -449,6 +481,8 @@ async def get_tiktok_stream_url(
             play_url = ""
             url_value = cast(str, url_info.get(q_key) or "")
             if url_value:
+                # 区分 URL 是否自带 query：带 .flv/.m3u8 后缀通常无 query 用 ? 拼接 codec；
+                # 其余（已含 query 的地址）用 & 追加，避免破坏原查询串。
                 if url_value.endswith(".flv") or url_value.endswith(".m3u8"):
                     play_url = url_value + "?codec=" + v_codec
                 else:
@@ -486,6 +520,8 @@ async def get_tiktok_stream_url(
         if not flv_url_list and not m3u8_url_list:
             return result
 
+        # 先 _pad_list 防御空列表索引越界（空列表填 5 个 None），随后 min 截断由 quality_index 决定实际档位；
+        # pad 不改变档位语义，仅防止下面 [quality_index] 索引越界。
         _ = _pad_list(flv_url_list)
         _ = _pad_list(m3u8_url_list)
         video_quality, quality_index = get_quality_index(video_quality)
@@ -533,6 +569,8 @@ async def get_tiktok_stream_url(
 async def get_kuaishou_stream_url(json_data: dict[str, object], video_quality: str | None = None) -> dict[str, object]:
     # 获取快手直播流URL
     k = cast(KuaishouStreamUrl, cast(object, json_data))
+    # 快手 type 语义：1=未开播（仅返回房间信息，无流地址），2=开播。type==1 且 is_live 为假时
+    # 原样回传 json_data，交由上层判离线，不可在此构造空 is_live=True 误导调度器。
     if k.get("type") == 1 and not k.get("is_live"):
         return json_data
     live_status = k.get("is_live", False)
@@ -551,6 +589,7 @@ async def get_kuaishou_stream_url(json_data: dict[str, object], video_quality: s
 
         flv_list = k.get("flv_url_list")
         if flv_list:
+            # 两种 FLV 候选形态：带 bitrate 字段的按码率排序选档；否则按画质索引从反序列表拣选。
             if "bitrate" in flv_list[0]:
                 flv_sorted = sorted(flv_list, key=lambda x: x.get("bitrate", 0), reverse=True)
                 quality_str = video_quality.upper() if video_quality else "OD"
@@ -839,6 +878,7 @@ async def get_yy_stream_url(json_data: dict[str, object]) -> dict[str, object]:
         stream_line_addr = avp.get("stream_line_addr") or {}
         if not stream_line_addr:
             return result
+        # 仅取首条 CDN 线路、未做多线路回退（YY 单线路可用性假设）；首路失败即无备选。
         cdn_info = list(stream_line_addr.values())[0]
         cdn_detail = cdn_info.get("cdn_info") or {}
         flv_url = cdn_detail.get("url", "")
@@ -904,6 +944,7 @@ async def get_netease_stream_url(json_data: dict[str, object], video_quality: st
         stream_list = stream_list_data.get("resolution") or {}
         order = ["blueray", "ultra", "high", "standard"]
         sorted_keys = [key for key in order if key in stream_list]
+        # 该房间 stream_list 不含任何已知画质键：保持透传上游，不伪造 is_live，交由上层判离线。
         if not sorted_keys:
             return json_data
         video_quality, quality_index = get_quality_index(video_quality)
@@ -913,6 +954,7 @@ async def get_netease_stream_url(json_data: dict[str, object], video_quality: st
         actual_quality = NETEASE_QUALITY_MAP.get(selected_quality, video_quality)
         available_qualities = [NETEASE_QUALITY_MAP.get(k, k.upper()) for k in sorted_keys]
         flv_url_list = stream_list[selected_quality].get("cdn") or {}
+        # 网易 CDN 取首个 key，未做连通性校验/多 CDN 回退；首路失败会直接影响该画质录制可用性。
         selected_cdn = list(flv_url_list.keys())[0]
         flv_url = flv_url_list[selected_cdn]
 
@@ -956,6 +998,8 @@ async def get_stream_url(
         return play_url[cast(str, key)] if key else play_url
 
     if url_type == "all":
+        # spec=True 时优先返回平台原始 m3u8_url/flv_url（未经验证），仅保留上游已给出的可用地址，
+        # 避免 get_url 解析覆盖掉已知可用地址；非 spec 则用 play_url_list 解析出的地址。
         m3u8_url = get_url(hls_extra_key)
         flv_url = get_url(flv_extra_key)
         data |= {
