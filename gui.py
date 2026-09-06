@@ -109,7 +109,13 @@ os.environ["DLR_GUI_PARENT"] = "1"
 # （与 Web 面板同款行级更新，保留注释）。GUI 自身界面文案为静态中文，不随切换重绘。
 import i18n as i18n_module
 from src.logger import child_process_env
-from src.web_config import update_config_line
+from src.web_config import (
+    find_room_url_by_anchor_name,
+    parse_url_config,
+    read_quality_options,
+    update_config_line,
+    update_room_quality,
+)
 
 # tkinter 的 pack/grid/configure/after 等副作用方法在 typeshed 中被类型化为返回
 # 非 None（如配置字典、网格信息或计时器 id），实际调用仅为产生副作用。本文件统一
@@ -743,6 +749,15 @@ class LiveRecorderGUI:
         self._quality_lock = threading.Lock()
         self._quality_data: dict[str, dict[str, str | bool | float]] = {}
         self._quality_last_displayed: dict[str, dict[str, str | bool | float]] = {}
+        # 画质切换相关（仅 UI 线程访问）：
+        # _quality_options 为「切换画质」菜单的可选项（读 config.ini，与 WEB 端共用）；
+        # _quality_default_label 为菜单首项，选中即移除配置行画质段、回落到全局默认画质；
+        # _anchor_url_map 为 主播名 → 直播间地址 的反查表（写回 URL_config.ini 需要 URL）；
+        # _anchor_quality_map 为 主播名 → 配置行当前画质 的映射（「设置画质」列的显示来源）。
+        self._quality_options: list[str] = []
+        self._quality_default_label = "默认画质"
+        self._anchor_url_map: dict[str, str] = {}
+        self._anchor_quality_map: dict[str, str] = {}
 
         # 弹幕监控数据（线程安全：_danmaku_lock 保护以下字段）
         # _danmaku_rooms: {room: {platform/connected/started_at/msg_total/msg_rate/gift_total/online}}
@@ -1489,8 +1504,22 @@ class LiveRecorderGUI:
         inner = ctk.CTkFrame(detail_card, fg_color="transparent")
         inner.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 14))
 
+        # 画质可选项与「主播名 → 直播间地址」反查表首次构建时加载一次
+        self._refresh_quality_context()
+
         self._quality_scroll = ctk.CTkScrollableFrame(inner, fg_color="transparent")
-        self._quality_scroll.pack(fill=tk.BOTH, expand=True)
+        self._quality_scroll.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
+
+        ctk.CTkLabel(
+            inner,
+            text="「切换画质」选中非默认画质时，会以「画质,直播间地址」格式写回 config/URL_config.ini，"
+            "在下一轮检测循环（默认 120 秒）自动生效；选择「默认画质」则移除该行画质段、回落到全局默认画质。",
+            font=Fonts.small(),
+            text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
+            anchor=tk.W,
+            justify=tk.LEFT,
+            wraplength=1000,
+        ).pack(fill=tk.X, pady=(0, 10))
 
         # 初始空状态
         ctk.CTkLabel(
@@ -1516,7 +1545,67 @@ class LiveRecorderGUI:
         val.pack(anchor=tk.CENTER, pady=(2, 0))
         return val
 
-    # 添加画质监控详情表的表头行（主播 / 设置 / 实际 / 状态 / 时间）。
+    # 重新加载「切换画质」所需的上下文：可选项（config.ini）+ 主播名 → URL 反查表（URL_config.ini）。
+    # 两者都随配置文件变化，故在首次构建画质页与 URL 配置被重载时调用。
+    def _refresh_quality_context(self) -> None:
+        try:
+            self._quality_options = read_quality_options(self.main_config_file)
+        except Exception as e:
+            # 配置读取失败不应阻断页面构建：退化为无可选画质（菜单只剩「默认画质」）
+            self._log(f"读取画质选项失败: {e}", "error")
+            self._quality_options = []
+        try:
+            rooms = parse_url_config(self.url_config_file)
+            named = [r for r in rooms if str(r["name"]).strip()]
+            self._anchor_url_map = {str(r["name"]).strip(): str(r["url"]) for r in named}
+            self._anchor_quality_map = {str(r["name"]).strip(): str(r["quality"]) for r in named}
+        except Exception as e:
+            self._log(f"解析 URL 配置失败: {e}", "error")
+            self._anchor_url_map = {}
+            self._anchor_quality_map = {}
+
+    # 供「切换画质」菜单使用：返回「默认画质 + 用户自选档位」的展示列表。
+    def _quality_menu_values(self, current: str) -> list[str]:
+        values = [self._quality_default_label, *self._quality_options]
+        # 当前画质可能已被用户从选项列表中移除，仍需在菜单里可见，否则显示值会错位到首项
+        if current and current not in values:
+            values.insert(1, current)
+        return values
+
+    # 用户切换某直播间画质：非默认画质按「画质,URL」写回 URL_config.ini，默认画质则移除画质段。
+    def _on_room_quality_change(self, anchor_name: str, selected: str) -> None:
+        # 行名来自子进程日志（record_name = "序号N 主播名"），而反查表键为 URL_config.ini
+        # 中的纯主播名（parse_url_config 的 name 字段），查表前需剥离序号前缀，否则键格式
+        # 不匹配必然查不到（表现为「未能在 URL_config.ini 中找到…画质未修改」报错）。
+        key = re.sub(r"^序号\d+\s+", "", anchor_name).strip()
+        url = self._anchor_url_map.get(key, "")
+        if not url:
+            self._log(f"未能在 URL_config.ini 中找到「{anchor_name}」对应的直播间地址，画质未修改", "error")
+            messagebox.showerror(
+                "切换画质失败", f"未能在 config/URL_config.ini 中找到「{anchor_name}」对应的直播间地址"
+            )
+            return
+        # 菜单首项「默认画质」= 不写画质段，回落到全局默认画质。
+        # 注：CTkOptionMenu.set() 只改显示值、不触发 command，故表格重建回设当前画质不会误写配置。
+        new_quality = "" if selected == self._quality_default_label else selected
+        try:
+            changed = update_room_quality(self.url_config_file, url, new_quality)
+        except (OSError, ValueError) as e:
+            self._log(f"切换「{anchor_name}」画质失败: {e}", "error")
+            messagebox.showerror("切换画质失败", f"写入 config/URL_config.ini 失败：{e}")
+            return
+        # 写回成功后重载编辑器：config_text 若仍持有写回前的旧快照，用户在 URL 配置页
+        # 点「保存」会把画质段覆盖回旧内容（表现为切换"失效"）。_load_config 内部会同步
+        # mtime（避免 _watch_url_config 重复触发）、刷新编辑器并重建反查表/画质映射。
+        # 与外部修改（录制子进程写回 / WEB 端操作）的编辑器重载语义一致。
+        self._load_config()
+        if changed:
+            tip = f"「{anchor_name}」画质已切换为 {selected}，将在下一轮检测循环生效"
+            self._log(tip)
+        else:
+            self._log(f"「{anchor_name}」画质未发生变化（已是 {selected}）")
+
+    # 添加画质监控详情表的表头行（主播 / 设置 / 实际 / 状态 / 告警时间 / 切换画质）。
     def _add_quality_header_row(self) -> None:
         # 添加画质监控表头行
         header = ctk.CTkFrame(self._quality_scroll, fg_color="transparent", height=28)
@@ -1527,7 +1616,8 @@ class LiveRecorderGUI:
         header.grid_columnconfigure(2, weight=1)
         header.grid_columnconfigure(3, weight=1)
         header.grid_columnconfigure(4, weight=2)
-        for col, text in enumerate(["主播名称", "设置画质", "实际画质", "状态", "告警时间"]):
+        header.grid_columnconfigure(5, weight=2)
+        for col, text in enumerate(["主播名称", "设置画质", "实际画质", "状态", "告警时间", "切换画质"]):
             ctk.CTkLabel(
                 header,
                 text=text,
@@ -1540,8 +1630,13 @@ class LiveRecorderGUI:
     def _add_quality_data_row(self, name: str, info: dict[str, str | bool | float]) -> None:
         # 添加一行画质监控数据
         downgraded = bool(info.get("downgraded", False))
-        # info 值为 str | bool | float 联合，而 CTkLabel.text 仅接受 str，统一转字符串展示
-        set_q = str(info.get("set_quality", "—"))
+        # 「设置画质」以 URL_config.ini 的当前画质段为准（用户切换意图即时可见）；
+        # 子进程日志里的画质是本轮录制启动时的快照（录制中的流不重启则恒为旧值），
+        # 若直接用它渲染，表格每轮重建会把已切换的画质"重置"回旧值。仅反查表未命中
+        # （如配置行无主播名）时才回退到日志值。name 与 _quality_data 键同为「序号N 主播名」，
+        # 查表前剥离序号前缀（与 _on_room_quality_change 同一约定）。
+        key = re.sub(r"^序号\d+\s+", "", name).strip()
+        set_q = self._anchor_quality_map.get(key) or str(info.get("set_quality", "—"))
         actual_q = str(info.get("actual_quality", ""))
         alert_time = str(info.get("alert_time", ""))
 
@@ -1566,6 +1661,7 @@ class LiveRecorderGUI:
         row.grid_columnconfigure(2, weight=1)
         row.grid_columnconfigure(3, weight=1)
         row.grid_columnconfigure(4, weight=2)
+        row.grid_columnconfigure(5, weight=2)
 
         ctk.CTkLabel(
             row, text=name, font=Fonts.body(), text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK), anchor=tk.W
@@ -1586,6 +1682,26 @@ class LiveRecorderGUI:
             text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
             anchor=tk.W,
         ).grid(row=0, column=4, sticky=tk.W, padx=4, pady=5)
+
+        # 「切换画质」菜单：可选项来自 config.ini（与 WEB 端共用），首项为「默认画质」。
+        # 菜单显示当前设置画质；选中即写回 URL_config.ini（见 _on_room_quality_change）。
+        menu = ctk.CTkOptionMenu(
+            row,
+            values=self._quality_menu_values(set_q),
+            command=lambda value, n=name: self._on_room_quality_change(n, value),
+            font=Fonts.small(),
+            corner_radius=6,
+            height=26,
+            fg_color=(Colors.BG_LIGHT, Colors.BG_DARK),
+            button_color=("#D6DAE5", "#2A3040"),
+            button_hover_color=("#C3C9D8", "#343B4E"),
+            text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
+            dropdown_font=Fonts.small(),
+            dynamic_resizing=False,
+            width=120,
+        )
+        menu.set(set_q if set_q else self._quality_default_label)
+        menu.grid(row=0, column=5, sticky=tk.W, padx=4, pady=4)
 
     # ─── 页面：弹幕监控 ─────────────────────────────────────
 
@@ -1876,6 +1992,9 @@ class LiveRecorderGUI:
                 content = f.read()
 
             current_content = self.config_text.get("1.0", tk.END).rstrip("\n")
+            # 任意外部修改（WEB API / 录制子进程写回 / 编辑器之外的手改）都同步刷新
+            # 「主播名 → 直播间地址」反查表，保证画质切换菜单的 URL 解析始终最新
+            self._refresh_quality_context()
             # 两侧统一去掉尾部换行再比较，否则文件末尾换行会导致比较永远失败
             if content.rstrip("\n") == current_content:
                 self._last_url_config_mtime = os.path.getmtime(self.url_config_file)

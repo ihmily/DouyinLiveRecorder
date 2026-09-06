@@ -11,7 +11,8 @@
 # - 抖音接口限流（_douyin_rate_limit）
 #
 # 部分函数需要读取 main 的少量配置全局变量（rstr / clean_emoji / hls_collection_enabled /
-# douyin_* 限流变量），通过 `import main` 在运行时惰性读取，避免循环导入与 __main__ 二次执行。
+# hls_collection_exclude_platforms / douyin_* 限流变量），通过 `import main` 在运行时惰性读取，
+# 避免循环导入与 __main__ 二次执行。
 
 import random
 import re
@@ -512,7 +513,10 @@ def _validate_stream_url(
 # 从 stream_info（解析结果，含 m3u8_url/flv_url/record_url 等键）挑选本轮实际录制地址：
 # 候选尝试顺序：默认优先 HLS，其次 FLV，最后 record_url；FLV-first 平台（见
 # _FLV_FIRST_PLATFORMS，当前仅虎牙）反转为 FLV → HLS → record_url。proxy_addr 透传给
-# 可达性校验；全部不可用时返回 None
+# 可达性校验；全部不可用时返回 None。
+# HLS 采集排除列表（main.hls_collection_exclude_platforms）：命中平台无视「是否启用HLS采集」
+# 配置、恒按 FLV 采集（等效于仅对该平台关闭 HLS 采集，HLS 候选整组剔除、不作回退）；
+# 列表外平台不受影响，仍按全局配置 HLS 优先。
 def select_source_url(
     stream_info: Mapping[str, object],
     proxy_addr: str | None = None,
@@ -521,6 +525,7 @@ def select_source_url(
 ) -> str | None:
     # HLS(m3u8) 优先采集：当存在 HLS 源且配置启用 HLS 采集时优先使用；
     # 仅当无 HLS 源 或 配置关闭 HLS 采集时，才回退使用 FLV 源。
+    # 排除列表命中时无视该开关（等效于对本平台关闭 HLS 采集），列表外平台行为不变。
     # proxy_addr 必须透传给校验器：TikTok 等境外平台的流地址若不走与解析阶段
     # 相同的代理路径，直连校验会超时被误判为不可达，导致错误回退甚至放弃录制。
     # 候选合并：兼容「单 m3u8_url/flv_url」旧结构，同时支持平台（如虎牙）返回的候选列表
@@ -550,6 +555,11 @@ def select_source_url(
     flv_available = bool(flv_candidates)
     has_fallback = flv_available or has_record_url
 
+    # HLS 采集排除列表：命中平台无视「是否启用HLS采集」配置（等效于仅对该平台关闭 HLS
+    # 采集），HLS 候选整组剔除、不作回退，恒按 FLV 采集；列表外平台不受影响。
+    hls_excluded = platform is not None and platform in main.hls_collection_exclude_platforms
+    hls_effective_enabled = main.hls_collection_enabled and not hls_excluded
+
     # 三类地址全为空：此前静默返回 None，房间会永远打印“正在直播中...”却不录制且无任何
     # 诊断线索（斗鱼 rtmp_live 为空即此形态）。必须留一条日志暴露根因。
     # （该分支不会产生任何探针，先于客户端构造处理，避免无谓的连接池开销）
@@ -558,13 +568,19 @@ def select_source_url(
             f"解析结果无任何流地址（m3u8/flv/record_url 均为空），本轮放弃: {stream_info.get('anchor_name') or ''}"
         )
         return None
-    if hls_available and not main.hls_collection_enabled and not has_fallback:
-        # m3u8 存在但 HLS 采集关闭、且无 FLV/record_url 可回退：同为静默路径，
-        # 用户可通过开启 HLS 采集恢复录制，必须提示而非无声跳过
-        logger.warning(
-            "存在 HLS 源但 HLS 采集未启用，且无 FLV/record_url 可回退，本轮放弃"
-            f"（可开启 HLS 采集恢复录制）: {stream_info.get('anchor_name') or ''}"
-        )
+    if hls_available and not hls_effective_enabled and not has_fallback:
+        # m3u8 存在但 HLS 采集对本平台关闭（全局关闭 或 命中排除列表）、且无 FLV/record_url
+        # 可回退：同为静默路径，必须提示而非无声跳过；两种成因给出各自的恢复指引
+        if hls_excluded:
+            logger.warning(
+                f"平台 {platform} 在 HLS 采集排除列表中，且无 FLV/record_url 可回退，本轮放弃"
+                f"（可将该平台移出排除列表恢复 HLS 采集）: {stream_info.get('anchor_name') or ''}"
+            )
+        else:
+            logger.warning(
+                "存在 HLS 源但 HLS 采集未启用，且无 FLV/record_url 可回退，本轮放弃"
+                f"（可开启 HLS 采集恢复录制）: {stream_info.get('anchor_name') or ''}"
+            )
         return None
 
     # 本轮全部候选探针共用一个 httpx.Client：keepalive 生效，且 SSLContext / 连接池只构造
@@ -588,8 +604,10 @@ def select_source_url(
         # ② last_resort 统一为「过滤后序列的末位 且 无 record_url」：原「HLS 末位还需无
         #    FLV」的条件在新结构下由「序列末位」天然覆盖（其后已无任何候选）。
         flv_first = platform in _FLV_FIRST_PLATFORMS
+        # 排除列表命中（hls_excluded）时 hls_effective_enabled 恒为 False，HLS 候选整组
+        # 剔除、不进入序列（连同 h265-FLV → HLS 的切换一并失效），恒按 FLV 采集
         hls_seq: list[tuple[str, bool]] = (
-            [(u, True) for u in hls_candidates] if (hls_available and main.hls_collection_enabled) else []
+            [(u, True) for u in hls_candidates] if (hls_available and hls_effective_enabled) else []
         )
         flv_seq: list[tuple[str, bool]] = [(u, False) for u in flv_candidates]
         seq = flv_seq + hls_seq if flv_first else hls_seq + flv_seq

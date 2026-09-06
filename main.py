@@ -246,6 +246,9 @@ split_time: str = "1800"  # 视频分段时间（秒）
 create_time_file: bool = False  # 是否生成时间字幕文件
 auto_update_anchor_name: bool = True  # 主播名变更时自动同步配置与录制文件（由 main() 读取配置后覆盖）
 hls_collection_enabled: bool = True  # 是否优先使用 HLS(m3u8) 源采集；关闭时回退 FLV
+# HLS 采集排除平台列表（「HLS采集排除平台(逗号分隔)」，由 main() 读取配置后覆盖）：
+# 命中平台无视「是否启用HLS采集」配置、恒按 FLV 采集（等效于仅对该平台关闭 HLS 采集）
+hls_collection_exclude_platforms: list[str] = []
 # 弹幕录制设置（main() 热加载配置时经 global 写回，check_subprocess 读取）
 enable_danmaku: bool = False  # 是否录制弹幕
 enable_danmaku_monitor: bool = False  # 是否弹幕监控（与弹幕录制解耦：仅监控不落 SRT）
@@ -667,10 +670,47 @@ def direct_download_stream(
         return False
 
 
+# 分段录制的「输出扩展名 → segment 内层容器」映射：容器必须与输出文件的扩展名严格一致，
+# 否则会产出「容器与扩展名不符」的文件——轻则播放器拒绝，重则直接封装失败。
+# 历史回归（2026-09-04）：TS 分支误用 ipod、M4A 分支误用 mpegts（两个值被互换），
+# 导致 HEVC 原画 copy 进 ipod 时 AVERROR(EINVAL) 退出（Windows 上退出码显示为 4294967274），
+# 而 H.264 虽不报错却把 MP4 内容写进 .ts 文件名（静默损坏，比报错更难排查）。
+# 收敛为单一映射表后，新增分支只能查表取值，配合 tests/test_record_container.py 的断言，
+# 杜绝「容器 ↔ 扩展名」再次错位。
+SEGMENT_FORMAT_BY_SUFFIX: dict[str, str] = {
+    ".ts": "mpegts",
+    ".flv": "flv",
+    ".mkv": "matroska",
+    ".mp4": "mp4",
+    ".m4a": "ipod",
+}
+
+
 # ffmpeg「快速失败」判定阈值（秒）：进程存活不超过该值即退出，视为输入打开被 CDN 拒绝
 # 的签名（实测虎牙 HS 线路探针 200 后 ffmpeg 立即 403，约 1 秒退出）；拉流中断/重连耗尽
 # （-reconnect_delay_max 60）通常远超该值，不属此类。模块级常量便于测试注入。
 _FFMPEG_FAST_FAIL_SECONDS = 20.0
+
+
+# ffmpeg 退出码的 errno 语义提示：Windows 上 subprocess 拿到的是无符号 32 位值
+# （如 -22 呈现为 4294967274），直接打印原值无法定位问题方向。仅收录本仓实测出现过
+# 或语义明确可指路的取值，未知值返回空串，避免给日志堆噪音。
+_FFMPEG_ERRNO_HINTS: dict[int, str] = {
+    -22: " (EINVAL：封装参数/容器与编码不匹配，如 HEVC 写进 ipod 容器)",
+    -11: " (EAGAIN：输出写入被阻塞，多为磁盘 IO 或管道背压)",
+    -2: " (ENOENT：输入地址或输出路径不存在)",
+    -109: " (EBADF：连接被对端重置，多为 CDN 断流)",
+    1: " (ffmpeg 常规错误，详见上方 ffmpeg 输出)",
+    2: " (命令行参数错误)",
+    255: " (ffmpeg 初始化失败/被中断)",
+}
+
+
+# 把 ffmpeg 退出码归一化为有符号 errno 并附语义提示：4294967274 → -22 (EINVAL…)。
+# 仅当值超出 32 位有符号正区间时才做补码换算，正常小退出码原样返回。
+def _describe_return_code(return_code: int) -> str:
+    signed_rc = return_code - (1 << 32) if return_code > 0x7FFFFFFF else return_code
+    return f"{signed_rc}{_FFMPEG_ERRNO_HINTS.get(signed_rc, '')}"
 
 
 # 启动并全程守护一次 ffmpeg 录制：ffmpeg_command 为已拼好的完整命令（末位为输出路径），
@@ -820,7 +860,12 @@ def check_subprocess(
             logger.debug(f"[{record_name}] ffmpeg 命令缺少 -i 输入参数，跳过探针退避清除")
 
     else:
-        color_obj.print_colored(f"\n{record_name} {stop_time} 直播录制出错,返回码: {return_code}\n", color_obj.RED)
+        # —— 退出码归一化（2026-09-04 定稿）：ffmpeg 在 Windows 上以无符号 32 位呈现退出码
+        # （EINVAL 显示为 4294967274 而非 -22），直接打印原值只能靠经验猜；换算回有符号
+        # 并附 errno 语义，一眼可判断是「容器/参数不匹配」还是「网络/路径」问题。
+        color_obj.print_colored(
+            f"\n{record_name} {stop_time} 直播录制出错,返回码: {_describe_return_code(return_code)}\n", color_obj.RED
+        )
         # —— 录制失败反馈调度器（2026-08-23 实测定稿）：
         # ① 按房间 host 记失败样本，驱动按平台熔断与全局背压——此前录制失败不上报，
         #   轮末还会无条件记成功样本，多房间同 host 时失败率被稀释、熔断永不触发
@@ -1993,8 +2038,13 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                                                 "segment",
                                                 "-segment_time",
                                                 split_time,
+                                                # 音频分段用 ipod 容器（即 .m4a），而非 mpegts：
+                                                # 输出扩展名是 .m4a，强制 mpegts 会让容器与扩展名不符
+                                                # （播放器按扩展名走 MP4 解复用，读到 TS 同步字节即报无法播放）。
+                                                # 兜底 ipod 覆盖「only_audio_record 平台但保存类型不含 m4a」的组合：
+                                                # 此时 extension 为 mp3 而编码仍走 aac，沿用既有行为，不因查表落空中断录制。
                                                 "-segment_format",
-                                                "mpegts",
+                                                SEGMENT_FORMAT_BY_SUFFIX.get("." + extension, "ipod"),
                                                 "-reset_timestamps",
                                                 "1",
                                                 save_file_path,
@@ -2149,7 +2199,7 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                                             "-segment_time",
                                             split_time,
                                             "-segment_format",
-                                            "flv",
+                                            SEGMENT_FORMAT_BY_SUFFIX[".flv"],
                                             "-reset_timestamps",
                                             "1",
                                             save_file_path,
@@ -2229,7 +2279,7 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                                             "-segment_time",
                                             split_time,
                                             "-segment_format",
-                                            "matroska",
+                                            SEGMENT_FORMAT_BY_SUFFIX[".mkv"],
                                             "-reset_timestamps",
                                             "1",
                                             save_file_path,
@@ -2288,7 +2338,7 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                                             "-segment_time",
                                             split_time,
                                             "-segment_format",
-                                            "mp4",
+                                            SEGMENT_FORMAT_BY_SUFFIX[".mp4"],
                                             "-reset_timestamps",
                                             "1",
                                             "-movflags",
@@ -2345,10 +2395,14 @@ def start_record(url_data: tuple[str, str, str], count_variable: int = -1) -> No
                                             "segment",
                                             "-segment_time",
                                             split_time,
-                                            # 音频分段用 ipod 容器（即 .m4a），而非 mpegts：
-                                            # 原实现强制 mpegts 但输出扩展名为 .m4a，容器与扩展名不符
+                                            # 视频分段必须显式 mpegts：segment 虽会按 .ts 扩展名猜测容器，
+                                            # 但显式指定可避免上层改扩展名/容器时静默错封装。
+                                            # ipod 是「iPod H.264 MP4」子集封装器（扩展名 m4v/m4a/m4b），
+                                            # codec tag 表无 HEVC 条目：copy HEVC 直接 AVERROR(EINVAL) 退出
+                                            # （退出码按无符号呈现为 4294967274），H.264 虽不报错却会把
+                                            # MP4 内容写进 .ts 文件名——静默损坏，比报错更难排查
                                             "-segment_format",
-                                            "ipod",
+                                            SEGMENT_FORMAT_BY_SUFFIX[".ts"],
                                             "-reset_timestamps",
                                             "1",
                                             save_file_path,
@@ -2652,7 +2706,7 @@ def main(non_interactive: bool = False) -> None:
     global changliao_cookie, check_path, chzzk_cookie, clean_emoji, converts_to_h264, converts_to_mp4, create_time_file, custom_script, delay_default, delete_origin_file, dingtalk_api_url, danmaku_platforms, danmaku_split_time, enable_danmaku, enable_danmaku_monitor
     global dingtalk_is_atall, dingtalk_phone_num, disable_record, disk_space_limit, douyu_cookie, dy_cookie, email_host, email_password, enable_https_recording, enable_proxy_platform, enable_proxy_platform_list, exit_recording
     global extra_enable_proxy, extra_enable_proxy_platform_list, faceit_cookie, filename_by_title, first_run, first_start, flextv_cookie, flextv_password, flextv_username, folder_by_author, folder_by_time, folder_by_title
-    global haixiu_cookie, hls_collection_enabled, host_id, huajiao_cookie, huamao_cookie, hy_cookie, ini_URL_content, input_url, is_comment_line, is_run_script, jd_cookie, ks_cookie, kugou_cookie
+    global haixiu_cookie, hls_collection_enabled, hls_collection_exclude_platforms, host_id, huajiao_cookie, huamao_cookie, hy_cookie, ini_URL_content, input_url, is_comment_line, is_run_script, jd_cookie, ks_cookie, kugou_cookie
     global laixiu_cookie, langlive_cookie, language, lehaitv_cookie, lianjie_cookie, line, line_list, line_spilt, liuxing_cookie, live_status_push, liveme_cookie, local_delay_default, login_email
     global look_cookie, loop_time, maoerfm_cookie, max_request, middle, migu_cookie, monitoring, name, netease_cookie, new_line, new_url, new_word
     global ntfy_api, ntfy_email, ntfy_tags, open_smtp_ssl, origin_line, over_push_message_text, over_show_push, pandatv_cookie, picarto_cookie, popkontv_access_token, popkontv_partner_code, popkontv_password
@@ -2724,6 +2778,14 @@ def main(non_interactive: bool = False) -> None:
         video_record_quality = read_config_value(config, "录制设置", "原画|超清|高清|标清|流畅", "原画")
         hls_collection_enabled = options.get(
             read_config_value(config, "录制设置", "是否启用HLS采集(是/否)", "是"), True
+        )
+        # HLS 采集排除平台：命中平台无视「是否启用HLS采集」配置、恒按 FLV 采集（select_source_url
+        # 按平台名精确匹配）；支持中英文逗号分隔，热更新与 HLS 开关一致（每轮主循环重读）
+        hls_exclude_platforms_str = read_config_value(config, "录制设置", "HLS采集排除平台(逗号分隔)", "")
+        hls_collection_exclude_platforms = (
+            [p.strip() for p in hls_exclude_platforms_str.replace("，", ",").split(",") if p.strip()]
+            if hls_exclude_platforms_str
+            else []
         )
         use_proxy = options.get(read_config_value(config, "录制设置", "是否使用代理ip(是/否)", "是"), False)
         proxy_addr_bak = read_config_value(config, "录制设置", "代理地址", "")

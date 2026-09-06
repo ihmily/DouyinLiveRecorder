@@ -29,33 +29,48 @@ from src.spider import (
 class TestGetStrResponse:
     # Test _get_str_response helper.
 
+    # _get_str_response 是 async_req 返回值的归一化入口：真实请求可能返回纯文本，也可能返回
+    # (响应体, 响应头) 元组（主流程靠元组透传 cookie）。下游一律按字符串处理，故须统一抽取。
+
     def test_str_input(self) -> None:
+        # 已是字符串：原样返回，不二次包装
         assert _get_str_response("hello") == "hello"
 
     def test_tuple_input(self) -> None:
+        # 元组形态 (body, headers)：解包只取首元素（纯响应体），丢弃头部
         assert _get_str_response(("body", {"cookie": "x"})) == "body"
 
     def test_none_input(self) -> None:
+        # 网络异常时 async_req 可能返回 None：须归一化为 "" 而非让下游 str() 崩
         assert _get_str_response(None) == ""
 
     def test_empty_tuple(self) -> None:
+        # 空元组解包保护：缺省为 ""，避免 IndexError 冒泡到录制主流程
         assert _get_str_response(()) == ""
 
 
 class TestLoadsDict:
     # Test _loads_dict helper.
 
+    # _loads_dict 是「解析优先、失败即空 dict」的容错解析器。下游普遍依赖
+    # "解析失败 => {}" 不变量来跳过脏数据，而非区分"无数据"与"解析异常"。
+
     def test_valid_json(self) -> None:
+        # 标准 JSON 对象原样解析
         result = _loads_dict('{"key": "value"}')
         assert result == {"key": "value"}
 
     def test_empty_string(self) -> None:
+        # 空响应体（非 JSON）返回 {}：调用方据此判断"无房间数据"继续回退
         assert _loads_dict("") == {}
 
     def test_non_dict_json(self) -> None:
+        # 顶层非 dict（如列表）按失败处理：防止下游 result.get 误把列表当映射而取到 None
         assert _loads_dict("[1,2,3]") == {}
 
     def test_invalid_json(self) -> None:
+        # 非法 JSON 必须上抛 JSONDecodeError 由调用方捕获——与"返回 {}"语义不同，
+        # 此处验证异常路径确实被抛出而非被静默吞成空 dict
         with pytest.raises(json.JSONDecodeError):
             _loads_dict("not json")
 
@@ -121,6 +136,8 @@ class TestGetDouyinWebStreamData:
                 },
             }
         )
+        # 抖音 web API 的 room.status 字段：2=直播中、4=未开播（见 test_custom_cookies_used）。
+        # async_req 的 side_effect 顺序即 fetch 顺序：[API 响应, HEVC HTML]，本例两调都命中。
         # 第二次请求（获取 HEVC FLV URL 的 HTML）
         html_response = "<html>no hevc stream</html>"
 
@@ -327,13 +344,18 @@ class TestGetParams:
 class TestMd5:
     # Test md5 - MD5哈希计算.
 
+    # md5 用于签名参数（如快手/抖音请求体）。断言钉死标准 MD5 摘要值，防止算法被误改。
+
     def test_known_hash(self) -> None:
+        # 经典向量 MD5("hello")：跨实现一致，作为回归锚点
         assert md5("hello") == "5d41402abc4b2a76b9719d911017c592"
 
     def test_empty_string(self) -> None:
+        # 空串摘要固定为全零初值，验证边界不影响下游拼接
         assert md5("") == "d41d8cd98f00b204e9800998ecf8427e"
 
     def test_deterministic(self) -> None:
+        # 同一输入必须产出同一摘要（幂等），否则签名每次都变会被服务端拒
         assert md5("test") == md5("test")
 
 

@@ -267,6 +267,7 @@ DouyinLiveRecorder/
 ├── pyproject.toml                      # Python 项目配置（版本号/工具配置/覆盖率门禁单一事实源）
 ├── scripts/                             # 辅助脚本
 │   ├── check_version.py                # 版本号一致性校验（CI static job 调用）
+│   ├── check_annotations.py            # 注释规范与逻辑等价性校验（禁 docstring / 密度下限 / --baseline AST 等价比对，CI static job 调用）
 │   ├── check_coverage.py               # 逐模块覆盖率门禁（CI test job 调用，阈值 MODULE_THRESHOLDS）
 │   ├── compile_po.py                   # gettext 翻译编译（.po → .mo；--check 零副作用校验同步，CI static job 调用）
 │   ├── extract_i18n_strings.py         # i18n 待翻译串提取器（AST 扫描 print/logger 字面量 + 四语目录比对，维护期使用）
@@ -361,7 +362,7 @@ recording_time_list: dict   # 录制时间与画质记录 {name: [start_time, qu
 - `check_live_status()` - 检测直播状态
 - `display_info()` - 终端状态展示（兼容新旧 recording_time_list 格式）
 - `get_status()` - 返回录制状态 dict（含 actual_quality 字段，供 Web API 使用）
-- `select_source_url()` - 在 m3u8/FLV 源间选择，HLS 源校验失败时回退 FLV（`delay_default=120s` 轮询）；新增 `proxy_addr` 参数透传给三处校验调用，避免 TikTok 等需代理平台直连校验误判不可达；计算「末位候选」（FLV 无 record_url 备选时、record_url 恒为）并以 `last_resort` 传给校验器——稳定拒绝也仅告警放行、交由 ffmpeg 实际拉流定夺
+- `select_source_url()` - 在 m3u8/FLV 源间选择，HLS 源校验失败时回退 FLV（`delay_default=120s` 轮询）；新增 `proxy_addr` 参数透传给三处校验调用，避免 TikTok 等需代理平台直连校验误判不可达；计算「末位候选」（FLV 无 record_url 备选时、record_url 恒为）并以 `last_resort` 传给校验器——稳定拒绝也仅告警放行、交由 ffmpeg 实际拉流定夺；**HLS 采集排除列表**（`main.hls_collection_exclude_platforms`，配置键「HLS采集排除平台(逗号分隔)」）：命中平台无视「是否启用HLS采集」配置、恒按 FLV 采集（等效于仅对该平台关闭 HLS 采集，HLS 候选整组剔除、不作回退；仅剩 HLS 源无回退时告警并放弃本轮，恢复指引指向移出排除列表），列表外平台行为不变
 - `_validate_stream_url()` - 流地址校验：content-type 判定补充 `mpegurl`；HEAD 被拒时对 `.m3u8` 源（**含 404**）补 `Range: bytes=0-0` GET 探测——抖音 CDN 的 m3u8 常对 HEAD 返回 4xx，此前会被误判不可达而总回退 FLV；新增 `verify` 参数沿用全局 SSL 开关（与异步校验一致）；所有失败路径记录 warning（URL + 异常类型/状态码/content-type），不再静默吞异常；GET 复核（`_confirm_get_ok`）收到 401/403 先原样重试一次（间隔 0.8s）再定罪——斗鱼 hw/虎牙 al 等 CDN 对毫秒级连击探针（HEAD→GET）偶发 403（实测同 URL 片刻后重试即 200、ffmpeg 单次 GET 正常），重试可区分「偶发限流」与「稳定拒绝」，历史虎牙假绿场景重试仍 403 依旧被正确否决
 
 **重构（2026-08-16）**：下列职责已抽离至 `src/` 子模块，经 `main.py` re-export 保持 `main.<name>` 命名空间兼容（`web.py`/`gui.py`/`web_api.py`/测试零改动）：
@@ -675,6 +676,7 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 - **模块级锁随事件循环重建**（2026-08-12 修复）: 保护 `_client_cache` 读写的 `_client_lock` 原是模块级单例 `asyncio.Lock()`，在首个 room 的 `asyncio.run()` 循环里惰性绑定后，后续 room 各自 `asyncio.run()` 起新循环再次 `await` 会触发 `RuntimeError: ... is bound to a different event loop`；该异常被 `async_req` 吞掉后返回空串，被 `spider.py` 误判成「风控空响应」并级联触发 HTML 兜底失败。现 `_get_client_lock()` 改为缓存 `(lock, loop)` 二元组，当前循环变更时自动重建锁，与 `_client_cache` 的「client + loop」机制一致，从源头消除跨循环锁错误
 - **异常日志带类型**（2026-08-12 收口）: `async_req`、`_close_all_clients` 内所有 `except Exception as e: logger.debug(e)` 改为带 `type(e).__name__`（必要时含 URL），消除 Windows 下异常 `str()` 为空时打出空白日志、无法定位的问题
 - **SSL 验证**: 由全局配置 `src/http_config.py` 统一控制，默认启用
+- **跨循环旧客户端不再调度关闭**（2026-09-04 修复）: 淘汰他循环创建的旧 AsyncClient 时一律**不创建** `aclose()` 协程（旧循环运行中/已停止/已关闭同样对待），释放引用交由 GC 兜底。旧实现 `run_coroutine_threadsafe` 只调度不等待，旧循环处于 `asyncio.run` 收尾窗口（已停未关）时回调永不执行，GC 报 "coroutine ... aclose was never awaited" 且数量随机波动（1~2 条 flaky，经 unraisableexception 逸出）；「is_running 门控 + 等待 future」实测仍无法根治（收尾阶段任务可能已创建却永不步进 `Task was destroyed but it is pending`，future 永不完成还会把收尾竞态放大成秒级阻塞）；在当前循环直接 await 则会操作绑定旧循环的 transport。回归锁：`tests/test_async_http_lock.py::test_cross_loop_running_old_loop_skips_close` / `test_cross_loop_stopped_old_loop_skips_close`
 - **连接池清理**: 进程退出时通过 atexit / 信号处理器释放所有复用的 AsyncClient
 - **`get_response_status()` m3u8 容错**（2026-08-05 增强）: HEAD 校验失败时，若 URL 以 `.m3u8` 结尾则补一次 `Range: bytes=0-0` GET 轻量探测（**含 404 在内的所有非 2xx 均触发探测**，返回 200/206 即判可达）；非 m3u8 源（FLV/record_url）行为不变。异常日志带 URL + `type(e).__name__`（如 `ConnectTimeout` / `TimeoutError`），避免 Windows 下 `socket.timeout` 的 `str()` 为空时只输出空白消息；探测失败记录 `status_code` / `content-type` 便于排障
 
@@ -1041,6 +1043,7 @@ web.py
 | 循环时间(秒)            | 直播状态检测间隔                                                                                                                                                      | 120                                                                                                                |     |       |       |                        |    |
 | 分段录制是否开启           | 是否分段                                                                                                                                                          | 是                                                                                                                  |     |       |       |                        |    |
 | 是否启用HLS采集(是/否)     | 是否优先使用 HLS(m3u8) 源采集；关闭或源不可用时回退 FLV                                                                                                                           | 是                                                                                                                  |     |       |       |                        |    |
+| HLS采集排除平台(逗号分隔) | HLS 采集排除列表：命中平台**无视「是否启用HLS采集」配置、恒按 FLV 采集**（等效于仅对该平台关闭 HLS 采集，HLS 候选整组剔除、不作回退，连带失效 h265-FLV → HLS 切换）；列表外平台不受影响仍 HLS 优先。平台名须完全一致（如：斗鱼直播）；支持中英文逗号，主循环每轮热更新 | (空，不排除任何平台)                                                                                                 |     |       |       |                        |    |
 | 视频分段时间(秒)          | 分段时长                                                                                                                                                          | 1800                                                                                                               |     |       |       |                        |    |
 | 使用代理录制的平台(逗号分隔)    | 按域名子串匹配直播间 URL，命中即走代理（须先开启「是否使用代理ip」）                                                                                                                         | tiktok, sooplive, pandalive, winktv, flextv, popkontv, twitch, liveme, showroom, chzzk, shopee, shp, youtu, faceit |     |       |       |                        |    |
 | 额外使用代理录制的平台        | 在上表之外追加走代理的平台（逗号分隔），代理地址取「代理地址」之外的兜底值                                                                                                                         | (空)                                                                                                                |     |       |       |                        |    |
@@ -1339,7 +1342,7 @@ def _app_root() -> str:
 
 | Job                  | 运行环境             | 内容                                                                                                                                              |
 | -------------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `static`             | py3.15           | `black --check .` + `isort --check .` + `python scripts/check_version.py`（版本号单一事实源校验） + `python scripts/compile_po.py --check`（i18n po/mo 同步校验，零副作用） |
+| `static`             | py3.15           | `black --check .` + `isort --check .` + `python scripts/check_version.py`（版本号单一事实源校验） + `python scripts/compile_po.py --check`（i18n po/mo 同步校验，零副作用） + `python scripts/check_annotations.py`（注释规范：禁 docstring / 密度下限 / 模块头，零副作用） |
 | `typecheck`          | py3.14           | 安装 requirements + 固定版 mypy 后运行 `mypy src/`（最低支持版本运行，结论对最老解释器成立）                                                                        |
 | `test`               | py3.14 / py3.15 矩阵 | `pytest --cov=src --cov-report=term-missing`（全局 `fail_under=50` 门禁，`fail-fast: false`）；最低版本上追加 `scripts/check_coverage.py` 逐模块门禁 + coverage.xml 上传 + 可选 Codecov |
 | `concurrency-test`   | py3.14           | 并发专项：`COVERAGE_RCFILE=.coveragerc-concurrency` 下跑 `test_concurrency_rate_limit.py` + `test_concurrency.py` + `test_async_http_lock.py`（专用配置不设全局阈值） |
@@ -1585,6 +1588,316 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 ---
 
 ## 更新日志
+
+### v4.0.9.4-dev (2026-09-06) — 仓库元数据八文件同源同步 + 四语本地化目录补齐（516 → 521 条）+ 本期改动总览（按模块分类）
+
+**变更摘要**：收尾两项一致性工作，并汇总本期（v4.0.9.4-dev，2026-09-02 ~ 09-06）全部改动。① **元数据同步**：以 `pyproject.toml` 为单一事实源，逐项核对并修正 `AGENTS.md` / `docker-compose.yaml` / `requirements.txt` / `Dockerfile` / `.gitignore` / `.dockerignore` / `.coveragerc-concurrency` / `pyproject.toml` 八份文件之间的版本、路径、目录清单与依赖漂移；其中 `pyproject.toml` 修掉一处**会让 `pip install .` 产出残缺发行包**的打包缺陷（子包未显式声明）。② **本地化补齐**：经 `scripts/extract_i18n_strings.py` 扫描补入 5 条缺失串，四语目录（zh_CN.po / en_US.json / en_GB.json / zh_TW.yaml）键集合重新一致（各 521 条），`zh_CN.mo` 重编译。③ **改动总览**：把本期散落在 10 条更新日志中的改动按模块归并，并单列删除项与遗留项。
+
+#### 一、元数据与构建（8 文件）
+
+- `pyproject.toml`：`[tool.setuptools].packages` 由 `["src"]` 改为 `["src", "src.platforms", "src.proto"]`。显式 `packages` **不递归发现子包**，漏列会让 `pip install .` 的发行包缺失 `src/platforms`（各平台弹幕采集器）与 `src/proto`（抖音弹幕 protobuf），运行时以 `ModuleNotFoundError` 炸在导入链上（`DouyinLiveRecorder.egg-info/SOURCES.txt` 仅 102 行、两子包均未收录，可据此核对）。版本 `4.0.9.4` 与 20 条依赖经脚本比对无漂移。
+- `AGENTS.md`：
+  - 项目结构树补 `tests/`（含 `frontend/`）、`src/proto/__init__.py`、`.github/ISSUE_TEMPLATE/` + `PULL_REQUEST_TEMPLATE.md` + `issue-translator.yml`，并补根目录文档组（`README.md` / `README_EN.md` / `CODE_WIKI.md` / `CODE_WIKI_EN.md` / `AGENTS.md` / `LICENSE` / `index.html` / `StopRecording.vbs`）；
+  - 「关键约定」模块计数 41 → 42（新增 `src/proto/__init__.py`）；
+  - 测试节新增前端用例约定（`tests/frontend/*.mjs` 用 Node 内置 `node:test`，零 npm 依赖；由同名 Python 包装用例以子进程 `node --test` 调用，Node 缺失时 skip），并移除指向 `.qoder/skills/test-creator/SKILL.md` 的失效引用（该目录在本工作区不存在）；
+  - 依赖管理节补「开发依赖在 `[project.optional-dependencies].dev`、不进 `requirements.txt`」与「前端测试零 npm 依赖」两条口径；
+  - 「已知坑」新增 2 条：HLS 采集排除平台是**整组剔除**（与 `_FLV_FIRST_PLATFORMS` 的调序语义不可互相实现）、GUI/WEB 画质切换写回后必须同步编辑器快照与显示源（序号前缀 / 旧快照覆盖 / 日志旧值三个缺陷同源）。
+- `docker-compose.yaml`：注释中 `APP_VERSION` 示例值 `4.0.9.2` → `4.0.9.4`（对齐 `pyproject.toml`），并补「不设则 LABEL version 为空、镜像内版本仍由 `importlib.metadata` 在运行时读取」的说明。
+- `requirements.txt`：头部注释补「开发依赖走 `.[dev]`、GUI 走 `.[gui]`、均不进运行时清单」与「前端用例零 npm 依赖」；20 条运行时依赖与 `pyproject.toml [project.dependencies]` 经脚本**逐条一致**核对（无增删）。
+- `Dockerfile`：`ARG APP_VERSION` 处补「唯一事实源为 `pyproject.toml`、构建时用 tomllib 取值注入」的口径；`COPY . ./` 处补注释，列明 `.dockerignore` 裁剪后**必须保留**（`main.py` / `web.py` / `gui.py` + `src/` 含 JS 签名脚本与 proto + `web/` + `i18n/**/*.mo`）与**明确排除**的内容。
+- `.gitignore` / `.dockerignore`：两份同源新增 `*.pyc_probe_tmp`（过程性探针残留，如遗留的 `src/stream.pyc_probe_tmp`，非源码）。
+- `.coveragerc-concurrency`：头部补注「前端 `.mjs` 用例不产生 Python 覆盖率数据」与「omit 清单与 pyproject / 两份 ignore 同源维护」。
+
+#### 二、本地化（4 目录 + 编译产物）
+
+- 新增 5 条（均为 logger 侧 f-string 模板，来源：`src/stream_select.py` 3 条、`src/danmaku_monitor.py` 1 条、`src/cookie_cache.py` 1 条）：
+  - `平台 {platform} 在 HLS 采集排除列表中，且无 FLV/record_url 可回退，本轮放弃（可将该平台移出排除列表恢复 HLS 采集）: ...`（`src/stream_select.py`）
+  - `弹幕边车文件写入失败: {type(e).__name__}: {e}`（`src/danmaku_monitor.py`）
+  - `流地址校验: {url} - GET 复核异常: {type(e).__name__}: {e}（attempt {attempt}）`（`src/stream_select.py`）
+  - `流地址校验: {url} - Range-GET 未取得响应，按校验失败处理`（`src/stream_select.py`）
+  - `等待其它线程的 cookie 拉取超时，返回空结果: {key}`（`src/cookie_cache.py`）
+- 目录条目 516 → 521，四目录键集合经提取器复检**完全一致**；运行时「有、目录无」缺口由 5 条清零（保留 183 条历史/兼容冗余项不动）。
+- `zh_CN.po` 头部「更新日期 / PO-Revision-Date」2026-08-30 → 2026-09-06；`python scripts/compile_po.py` 重编译 `zh_CN.mo`（522 条含头部空 msgid，64930 字节），`--check` 字节级同步通过。
+- `web/app.js` 前端四语字典（各 106 键）经扫描核对键集合一致，无需改动（前端文案独立于四语目录维护）。
+
+#### 三、本期代码改动总览（按模块分类，2026-09-02 ~ 09-06）
+
+- **`main.py`**：新增全局 `hls_collection_exclude_platforms` 与主循环解析（支持中英文逗号分隔、每轮热更新）；新增模块级常量 `SEGMENT_FORMAT_BY_SUFFIX`（`.ts→mpegts` / `.flv→flv` / `.mkv→matroska` / `.mp4→mp4` / `.m4a→ipod`，音频分支 `.get(..., "ipod")` 兜底）并替换 5 处裸字面量；新增 `_FFMPEG_ERRNO_HINTS` + `_describe_return_code()`（`4294967274` → `-22 EINVAL` 归一化）。
+- **`src/stream_select.py`**：`select_source_url` 新增有效开关 `hls_effective_enabled = main.hls_collection_enabled and not hls_excluded`（命中排除列表时 HLS 候选整组剔除、不进序列）。
+- **`src/spider.py`**：`extract_douyin_hevc_flv_url()` 返回前补 `&codec=h265`（已带则原样返回），修复下游 `_is_h265()` 与 h265 兜底判定漏判。
+- **`src/async_http.py`**：删除跨循环 `run_coroutine_threadsafe(client.aclose(), ...)` 调度分支（根治 flaky 告警「FakeAsyncClient.aclose was never awaited」）。
+- **`src/web_config.py`**：新增 `BUILTIN_QUALITIES`（对齐 `stream_select.get_quality_code`，`QUALITY_KEYWORDS` 指向同一元组）、`QUALITY_OPTIONS_SECTION` / `QUALITY_OPTIONS_KEY`、`_split_multi_value` / `normalize_quality_options` / `read_quality_options` / `write_quality_options`、`update_room_quality`（行级改写、保留注释前缀与 URL 原文、`os.replace` 原子写）、`find_room_url_by_anchor_name`。
+- **`src/web_api.py`**：新增 `GET /api/rooms/qualities` 与 `PUT /api/rooms/qualities`（选项增删）、`PUT /api/rooms/quality` + `RoomQualityUpdate`（按房间切换画质，与 GUI 共用 `update_room_quality`）。
+- **`gui.py`**：新增 `_refresh_quality_context` / `_anchor_url_map` / `_anchor_quality_map` / `_quality_menu_values` / `_on_room_quality_change`，画质监控表新增第 6 列「切换画质」（`CTkOptionMenu`）；切换后剥离 `序号N ` 前缀查表、`_load_config()` 同步编辑器快照、显示以配置文件为准。
+- **`web/index.html` / `web/app.js` / `web/style.css`**：画质下拉改为后端驱动的可增删选项（chips 面板）、房间列表画质列改为行内下拉 + 事件委托、新增三语/四语文案、`.data-table select` 样式。
+- **`scripts/`**：`douyin_live_recorder_standalone.py` 自根目录迁入并修 `find_ffmpeg()`（脚本同级 → 仓库根 → PATH 三级探测）；新增 `scripts/check_annotations.py`（注释规范 + AST 等价性校验，三模式，已接入 CI `static` job）。
+- **`tests/`**：新增 `test_record_container.py`（13 用例，含 AST 扫描断言禁裸字面量）、`tests/frontend/test_quality_ui.mjs`（6 用例，Node 内置 `node:test` + `node:vm` 沙箱）+ `tests/test_frontend_quality_ui.py`（包装，Node 缺失 skip）；`test_web_config.py` 增 3 类、`test_web_api.py` 增 2 类、`test_stream_select.py` 增 5 例、`test_async_http_lock.py` 增 2 例；`conftest.py` 新增 `pytest_unconfigure` 钩子自动清理 `tests/_out_live` / `tests/_out_e2e`。
+- **全仓注释补齐**（2026-09-03）：41 文件 / +1370 行，经 `ast.dump` 等价性校验证明零逻辑改动。
+
+#### 四、删除项与遗留清理
+
+- **删除**：`src/async_http.py` 跨循环 aclose 调度分支；`tests/test_async_http_lock.py` 的 `@pytest.mark.filterwarnings("ignore::RuntimeWarning")`；`scripts/douyin_live_recorder_standalone.py` 未用的 `Callable` 导入（09-02）；`AGENTS.md` 中 `.qoder/skills/test-creator/SKILL.md` 死链引用。
+- **移动**：`douyin_live_recorder_standalone.py` 根目录 → `scripts/`（等价删除根目录副本）。
+- **遗留（未删除、已纳入忽略）**：`src/stream.pyc_probe_tmp`（2026-09-01 的探针过程产物，非源码），已加入 `.gitignore` / `.dockerignore`，待人工确认后清理。
+
+#### 五、验证（2026-09-06）
+
+- `pytest -q` 全量：**858 passed, 2 skipped，0 warnings**；
+- `python scripts/extract_i18n_strings.py`：缺失 0 条，四语目录零差异；
+- `python scripts/compile_po.py` / `--check`：与 .po 同步（522 条）；
+- `python scripts/check_version.py`：PASS（版本动态化状态无回退）；
+- 依赖比对脚本：`requirements.txt` 与 `pyproject.toml` 各 20 条逐条一致；
+- `pytest tests/test_i18n.py`：34 passed（四目录键集合一致性断言）。
+
+### v4.0.9.4-dev (2026-09-06) — GUI 画质切换持久化修复 + WEB 端按房间切换画质完整链路 + 前后端单元测试补齐
+
+**变更摘要**：收尾上一改动的三个缺陷并补齐 WEB 端完整功能。缺陷 1（GUI 键格式不匹配）：画质监控菜单传 `序号11 DANK1NG` 给反查表（键为纯主播名 `DANK1NG`），查表恒 miss，切换后报「未能在 URL_config.ini 中找到…画质未修改」。缺陷 2（持久化丢失）：切换写回文件后 URL 配置编辑器 `config_text` 仍持有写回前的旧快照，用户点「保存」即用旧内容整文件覆盖，画质段被抹掉。缺陷 3（显示重置）：画质监控表格「设置画质」列取自子进程日志（录制中流不重启、恒为旧值），每轮重建后菜单显示被重置回旧画质。WEB 端此前只有画质选项增删，无按房间切换画质的入口与后端端点。本次修复：GUI 查表剥离序号前缀、写回后同步编辑器 + 显示改为以配置文件为准；WEB 后端新增 `PUT /api/rooms/quality`（与 GUI 共用 `update_room_quality` 落盘、持锁防并发），前端房间列表画质列改为行内下拉（事件委托驱动 change → PUT → 回拉刷新）；后端 API 用例 8 条、前端 node:test 6 条（DOM/fetch 桩驱动真实事件委托链路）。
+
+**改动清单**：
+
+- `gui.py`：
+  - `_on_room_quality_change`：查表前加 `re.sub(r"^序号\d+\s+", "", anchor_name)` 剥离序号前缀，使键与 `_anchor_url_map` 一致（反查表由 `parse_url_config` 构建，键为 URL_config.ini 中纯主播名，不含序号前缀）；写入成功后调 `_load_config()` 同步 `config_text` 与反查表/画质映射，消除旧快照保存覆盖画质段的路径（原实现只同步 mtime 不同步编辑器）；
+  - 新增实例字段 `_anchor_quality_map`（主播名 → 配置行当前画质），`_refresh_quality_context` 同步构建（与反查表同来自 `parse_url_config`）；
+  - `_add_quality_data_row`：「设置画质」列改以 `_anchor_quality_map` 为准（查表前同样剥离序号前缀），仅反查表未命中时回退日志值——切换后表格重建立即显示新画质，不再被子进程日志的旧快照重置。
+- `src/web_api.py`：
+  - 导入追加 `update_room_quality`；
+  - 新增 `RoomQualityUpdate(BaseModel)`（`url: str` + `quality: str | None`，空/None 等价移除画质段）；
+  - 新增 `PUT /api/rooms/quality`：参数经 `validate_room_target` 走换行注入防护 + 白名单校验（仅放行 `BUILTIN_QUALITIES`，杜绝永远不生效的档位名），持 `_rooms_config_lock` + `main.file_update_lock` 防并发覆盖，404（房间不存在）/422（校验失败）/200 `{ok, changed}`；落盘委托 `update_room_quality`（与 GUI 同一份实现，两端互相同步）。
+- `web/app.js`：
+  - `buildRoomQualitySelect(url, current)`：构造行内画质下拉（选项 = 默认画质 + `qualityOptions` + 当前值兜底追加防止显示错位），`data-action="quality"` + `data-url` 透传；
+  - `loadRooms`：画质列从纯文本 `<td>` 改为调用 `buildRoomQualitySelect`；
+  - 事件委托 `rooms-tbody` 新增 `select[data-action="quality"]` change 分支，转发 `changeRoomQuality(url, value)`；
+  - 新增 `changeRoomQuality(url, quality)`：`PUT /api/rooms/quality`，成功 toast 后 `loadRooms()` 回拉刷新，失败 toast + 回拉恢复真值（不残留用户误选）；
+  - `showView('rooms')`：`loadRooms()` 改为 `loadQualityOptions().finally(loadRooms)`，保证下拉选项在渲染前就绪；
+  - 三语文案补齐（`toast.qualityChanged` / `toast.qualityReset` / `toast.qualityChangeFailed`），API 契约注释更新。
+- `web/style.css`：新增 `.data-table select` 紧凑样式（`padding: 4px 6px / font-size: 12px / max-width: 110px`），与表单 `.inline-form select` 区分。
+- `tests/test_web_api.py`（既有 `TestRoomQualityApi` 基础上扩展至 8 用例）：
+  - `test_change_quality_requires_auth`：无 Bearer token 的 PUT 必须 401；
+  - `test_change_quality_on_disabled_room_preserves_comment`：已注释房间（`# 超清,...`）切换画质成功、`#` 前缀原样保留、房间保持禁用态、列表可见新画质；
+  - `test_quality_visible_in_room_list_after_change`：PUT 后 GET /api/rooms 立即返回新画质、相邻房间行不受影响；
+  - `test_change_quality_matches_schemeless_url`：URL 归一化匹配（不带 scheme 的地址也能命中已规范化写入的配置行）；
+  - `test_empty_string_quality_resets_to_default`：`quality: ""` 与 `null` 等价，均移除画质段恢复默认。
+- `tests/frontend/test_quality_ui.mjs`（新文件，Node 内置 `node:test` + `node:vm` 沙箱，零 npm 依赖）：
+  - 用 DOM/fetch 桩加载 app.js（IIFE 加载期零副作用），手动触发 `DOMContentLoaded`，经真实事件委托链路驱动（tab 点击 → 渲染下拉 → change 委托 → PUT → toast/回拉）；
+  - 6 用例：沙箱冒烟 / 下拉渲染（选项构成 + 选中态 + URL 转义 + 行结构）/ change 委托请求契约 / 空值序列化为 null / 失败回拉恢复真值 / 四语文案行为级断言；
+  - 变异验证：临时删掉 `buildRoomQualitySelect` 的 `esc(url)` 后断言正确变红，证明测试真能抓回归。
+- `tests/test_frontend_quality_ui.py`（新文件）：pytest 包装，子进程 `node --test`，Node 缺失时 skip（环境限制口径）。
+
+### v4.0.9.4-dev (2026-09-06) — WEB/GUI 端画质选项可增删 + 画质监控行内切换画质
+
+**变更摘要**：将直播间画质设置从「引擎白名单内固定 10 个档位」改为「用户自选子集」——WEB 端直播间管理提供可增删的画质选项（落地 config.ini [录制设置] 自定义画质选项(逗号分隔)），与 GUI 端画质监控新增的「切换画质」菜单共用同一份配置；选非默认画质时按「画质,直播间地址」格式写回 config/URL_config.ini，由下一轮检测循环（默认 120 秒）自动生效。
+
+**改动清单**：
+
+- `src/web_config.py`：
+  - 引入 `BUILTIN_QUALITIES` 元组（与 `stream_select.get_quality_code` 的画质代码映射对齐），同时把历史别名 `QUALITY_KEYWORDS` 指向同一元组，避免两处并列维护；
+  - 新增画质选项落盘位置常量 `QUALITY_OPTIONS_SECTION = "录制设置"` / `QUALITY_OPTIONS_KEY = "自定义画质选项(逗号分隔)"`；
+  - `_split_multi_value` / `normalize_quality_options` / `read_quality_options` / `write_quality_options`：选项读写只允许内置档位（白名单外的名称会被静默回退成「原画」，不允许放进下拉让用户选错），全空 / 全非法时回退内置全集；写回用 `update_config_line` 保留注释与节顺序，缺键时 `append_config_line` 补建；写入前逐项 `_reject_newline` 防换行注入（与 `format_url_line` 同款防护）；
+  - `update_room_quality`：按 URL 定位 URL_config.ini 中的配置行，行级改写画质段；保留注释前缀（含 `#` 与其后的空格）、行尾换行、主播名字段与 URL 原文；幂等性（已为目标画质返回 False）；URL 段级匹配借助 `normalize_url` 处理缺 scheme 行；空值或默认「原画」视为回落 = 移除画质段；通过临时文件 + `os.replace` 原子写，避免读方读到半写内容（C7 守护：精确匹配 `.tmp` 后缀的清理断言）。
+  - `find_room_url_by_anchor_name`：按主播名反查直播间地址（GUI 画质切换写回 URL_config.ini 需要 URL），先精确匹配再子串兜底；未命中返回空串。
+- `src/web_api.py`：
+  - 新增 `GET /api/rooms/qualities`（返回 `{options, builtin}`，builtin 一并返回以便前端「添加画质」候选列表不必再硬编码档位名）；
+  - 新增 `PUT /api/rooms/qualities` body `{options: [...]}`：写入前经 `validate_config_target` 走换行注入防护，非法档位在后端规范化时剔除（白名单兜底），落盘由 `write_quality_options` 行级完成；同步导出 `QUALITY_OPTIONS_SECTION` / `QUALITY_OPTIONS_KEY` 给校验复用，避免硬编码两处。
+- `web/index.html`：直播间设置模块移除硬编码的画质 `<option>` 列表，仅保留「默认画质」首项；表单下方新增「画质选项」管理面板（chips 列表 + 候选下拉 + 添加按钮 + 说明文案），由 `loadQualityOptions()` 从后端拉取后动态填充。
+- `web/style.css`：新增 `.quality-options` / `.quality-panel` / `.quality-chips` / `.quality-chip` / `.quality-add-row` / `.quality-hint` 等样式，chips 内的 `×` 按钮与候选下拉沿用全局色板（浅色/深色主题自适应）。
+- `web/app.js`：模块状态新增 `qualityOptions` / `qualityBuiltin`；新增 `loadQualityOptions` / `renderQualityOptions` / `replaceChildren`（避免 innerHTML 拼接，转用 `createElement` + `textContent`）/ `buildQualityChip` / `saveQualityOptions` / `addQualityOption` / `removeQualityOption`；API 契约注释补 `/api/rooms/qualities` 行；`showView('rooms')` 时同步刷新选项；DOMContentLoaded 注册 `#quality-manage-btn` 切换面板、`#quality-add-btn` 添加、`#quality-chips` 事件委托删除；四语字典新增 `rooms.manageQuality` / `rooms.addQuality` / `rooms.qualityHint` / `rooms.qualityEmpty` / `toast.qualityAdded` / `toast.qualityRemoved` / `toast.qualitySaveFailed` / `toast.qualityLoadFailed` 等 i18n 文案。
+- `gui.py`：
+  - 导入追加 `parse_url_config` / `read_quality_options` / `update_room_quality`（`find_room_url_by_anchor_name` 备用）；
+  - 新增实例字段 `_quality_options`（菜单可选项）/ `_quality_default_label = "默认画质"`（首项=回落）/ `_anchor_url_map`（主播名→URL 反查表，写回 URL_config.ini 需要 URL）；
+  - 新增 `_refresh_quality_context`：读 `config.ini` 拿选项 + 解析 `URL_config.ini` 建反查表；钩入既有 `_load_config`（外部编辑 URL_config.ini 时自动同步反查表，避免画质切换写出错地址）；
+  - 新增 `_quality_menu_values`（菜单展示列表：默认画质 + 用户选项 + 当前画质兜底，防止画质被从选项中移除后菜单显示值错位到首项）；
+  - 新增 `_on_room_quality_change`（用户切换触发：选「默认画质」= 移除画质段回落；选非默认 = 按 `画质,URL` 行级改写 `URL_config.ini`；写入后同步 `_last_url_config_mtime` 防止 `_watch_url_config` 把同一修改当成外部变更、重载 URL 配置编辑器、顶掉用户未保存的手改内容；写入失败弹错误框并写错误日志；未匹配到 URL 也弹错误框 + 错误日志，跳过静默丢数据）；
+  - 画质监控详情表头行新增「切换画质」列；`_add_quality_data_row` 新增第 6 列 `CTkOptionMenu`（沿用 `appearance_menu` 的浅色/深色双主题色板）；列权重 2；
+  - 画质页底部新增 wraplength 提示文案，说明「切换后下一轮循环生效」与「选择默认画质移除画质段」的语义。
+- `tests/test_web_config.py`（新增 3 类）：`TestQualityOptions`（normalize 过滤非法/空/重复，缺键回退内置全集，写回 append/update 行级切换，换行注入 ValueError）；`TestUpdateRoomQuality`（无画质段→新增、修改、回落默认、保留注释前缀 + 行尾换行、幂等性、URL 归一化匹配、无匹配 False、换行注入 ValueError、原子写无 .tmp 残留）；`TestFindRoomUrlByAnchorName`（精确匹配 + 未命中返回空串）。
+- `tests/test_web_api.py`（新增 `TestQualityOptionsEndpoints`）：GET 缺省返内置全集、PUT 持久化到 config.ini 且再次 GET 回读到同样列表、PUT 自动剔除白名单外的档位、PUT 换行注入 422。
+- `README.md` / `README_EN.md`：本批改动在用户面上是「下拉从固定列表改为自选 + 监控行可切换画质」，与既有「添加直播间」/「画质监控」章节并行即可，无需新增小节；更新日志条目同步新增（中英）。
+
+**影响范围**：
+
+- 用户可见：WEB 端「添加直播间」的画质下拉不再固定 10 项，可自行挑选想展示的档位；GUI 端画质监控每行新增「切换画质」菜单，选非默认画质时按「画质,URL」格式回写到 URL_config.ini，下一轮循环生效；选择「默认画质」=移除画质段、回落到 `[录制设置] / 原画|超清|高清|标清|流畅` 配置的全局默认。
+- 不变语义：仅内置 10 个档位可选（与 main.py 的画质白名单、`stream_select.get_quality_code` 键对齐），不允许任意自定义名称；切换画质不重启录制子进程，不打断其他正在进行的房间；WEB/GUI 选项以 config.ini 同一份配置为准。
+- 边界处理：未匹配 URL 时弹错误提示而非静默丢数据；写入失败弹错误框 + 错误日志；写入成功后同步 mtime 防止 URL 配置编辑器被自己的写操作误重载。
+
+**验证（2026-09-06）**：
+
+- `pytest tests/`：**849 passed, 2 skipped**（新增 3 个纯函数测试类 + 1 个 API 测试类，全量无回归）；
+- `mypy src/ main.py web.py gui.py`：42 个源文件 0 问题；
+- `basedpyright src/ main.py web.py gui.py`：0 errors, 0 warnings, 0 notes；
+- `black --check` / `isort --check` / `scripts/check_annotations.py`：全绿（注释密度 21.2%，未触及 13% 阈值）。
+
+### v4.0.9.4-dev (2026-09-05) — HLS 采集排除平台列表：命中平台无视 HLS 开关、恒走 FLV 采集
+
+**变更摘要**：新增配置项「HLS采集排除平台(逗号分隔)」——当「是否启用HLS采集(是/否) = 是」时，若请求网站（平台）填写在排除列表中，则无视 HLS 采集配置、仍按 FLV 采集方式处理；列表外网站不受影响、保持正常 HLS 优先行为。
+
+**改动清单**：
+
+- `main.py`：
+  - 模块级新增全局 `hls_collection_exclude_platforms: list[str] = []`（紧邻 `hls_collection_enabled`），并加入 `main()` 的 `global` 声明；
+  - `main()` 主循环在读取「是否启用HLS采集(是/否)」之后读取「录制设置 / HLS采集排除平台(逗号分隔)」（默认空），支持中英文逗号分隔、逐项 strip 去空（沿用 `danmaku_platforms` 的解析模式），每轮热更新。
+- `src/stream_select.py`（`select_source_url`）：
+  - 新增有效开关计算：`hls_excluded = platform in main.hls_collection_exclude_platforms`，`hls_effective_enabled = main.hls_collection_enabled and not hls_excluded`——命中排除列表时等效于仅对该平台关闭 HLS 采集；
+  - 候选序列构建（`hls_seq`）由 `main.hls_collection_enabled` 改用 `hls_effective_enabled`：排除平台 HLS 候选**整组剔除、不进入序列**（与 `_FLV_FIRST_PLATFORMS` 仅调序、保留 HLS 回退的语义刻意不同），连带失效 h265-FLV → HLS 的切换；
+  - 「HLS 源存在但 HLS 采集关闭且无回退」告警分支同样改用有效开关，并区分两种成因：命中排除列表时提示「可将该平台移出排除列表恢复 HLS 采集」，全局关闭时维持原文提示。
+- `tests/test_stream_select.py`：新增 5 个用例——排除平台恒选 FLV（HLS 探针零发出）、FLV 校验失败不回退 HLS（HLS 从未被探测）、仅剩 HLS 源时告警返回 None（断言告警指向排除列表）、列表外平台行为不变（含 FLV-first 平台对照）、排除平台 h265-FLV 不切换 HLS。
+- `README.md` / `README_EN.md`：配置示例新增「HLS采集排除平台(逗号分隔)」键及说明；「使用说明」章节新增「采集方式选择（HLS/FLV）」小节（全局开关与排除列表的配置项表、适用场景、填写格式、优先级语义、边界行为与热更新说明）。
+- `CODE_WIKI.md` / `CODE_WIKI_EN.md`：`[录制设置]` 配置表新增该键条目；`select_source_url()` 功能描述补充排除列表行为。
+
+**影响范围**：
+
+- 用户可见：新配置项默认空 = 不排除任何平台，既有行为零变化；填写平台名（须与日志/配置中显示的完全一致，如「斗鱼直播」）后该平台恒走 FLV。
+- 边界语义：排除平台若仅有 HLS 源且无 FLV/record_url 回退，与全局关闭 HLS 采集同义——告警并放弃本轮录制（告警文案给出移出列表的恢复指引）；`record_url` 兜底链不受影响。
+
+**验证（2026-09-05）**：
+
+- `pytest tests/`：**828 passed, 2 skipped**（新增 5 用例，全量无回归）；
+- `mypy .`：105 个源文件 0 问题。
+
+### v4.0.9.4-dev (2026-09-05) — 单文件整合版迁移至 scripts/ 目录（ffmpeg 定位逻辑同步修复）
+
+**变更摘要**：将单文件整合版 `douyin_live_recorder_standalone.py` 从仓库根目录迁移至 `scripts/` 目录（文件名不变），同步修复迁移后 `find_ffmpeg` 的 ffmpeg 定位逻辑与全部路径引用；迁移后开箱即用行为不变，运行命令统一为在仓库根目录执行 `python scripts/douyin_live_recorder_standalone.py ...`。
+
+**改动清单**：
+
+- `scripts/douyin_live_recorder_standalone.py`（自根目录迁入）：
+  - `find_ffmpeg()` 修复（**必须项**，仅移动不改此函数即构成回归）——原实现按 `Path(__file__).parent / "ffmpeg" / exe` 定位仓库自带 ffmpeg/，迁入 `scripts/` 后该路径落空、静默退化为 PATH 查找（仓库自带 ffmpeg 不再生效）；改为依次探测「脚本同级 `ffmpeg/` → 脚本上一级（仓库根目录）`ffmpeg/` → PATH」，兼顾仓库内运行与脚本单独拷出两种场景；
+  - 文件头「使用」示例与 `RUN_STEPS`（`--help-steps` 输出）的全部命令补 `scripts/` 前缀；FFmpeg 安装说明改为「仓库根目录的 ffmpeg/ 目录」；config.ini 说明修正为「按运行时工作目录解析」（`load_settings` 一直按 CWD 解析，原文「放在本文件同级」措辞迁移后产生误导，行为本身未变）。
+- `AGENTS.md`：项目结构树 `scripts/` 目录新增该文件条目，目录注释由「维护脚本（CI 门禁与 i18n 工具）」更新为「维护脚本与独立工具（CI 门禁、i18n 工具、单文件整合版）」。
+- `scripts/check_annotations.py`：**无需改动**——`EXCLUDE_FILES` 按**文件名**匹配（`path.name in EXCLUDE_FILES`），与所在目录无关，迁移后排除规则依然生效（已实测）。
+- `README.md` / `README_EN.md`：无需改动——仅更新日志的历史条目按文件名提及该文件（无路径引用，保留历史原貌）。
+
+**影响范围**：
+
+- 用户可见：运行命令前缀变化（根目录 → `scripts/`）；仓库自带 `ffmpeg/` 仍从仓库根目录自动发现。
+- 不变语义：config.ini / URL_config.ini / `downloads/` 输出目录均按运行时工作目录（CWD）解析；`--selftest` / `--dry-run` / 四平台解析与录制链路全部不变。
+
+**验证（2026-09-05）**：
+
+- `python -m py_compile scripts/douyin_live_recorder_standalone.py`：通过；
+- `python scripts/douyin_live_recorder_standalone.py --selftest`：**62 项全部 [PASS]**，退出码 0；
+- `find_ffmpeg()` 实测返回 `D:\DouyinLiveRecorder-dev\ffmpeg\ffmpeg.exe`（若不修复则落空退化为 PATH 查找）；
+- `black --check` / `mypy`（单文件）：0 问题；
+- `python scripts/check_annotations.py`：通过（105 个 Python 文件，该文件仍按文件名被排除、未参与密度检查）。
+
+### v4.0.9.4-dev (2026-09-05) — pytest 会话结束自动清理测试输出目录 _out_live/_out_e2e
+
+**变更摘要**：`tests/conftest.py` 新增 `pytest_unconfigure` 钩子，pytest 会话结束（含收集失败/中断退出）后自动删除 `tests/_out_live` 与 `tests/_out_e2e` 两个测试输出目录，消除离线用例（如 `test_srt_timeline_anchor.py` 的 SRT 落盘断言）每次运行后的残留临时文件。
+
+**实现要点**：
+
+- 路径常量 `_TEST_OUT_DIRS` 基于 `tests/` 目录自身定位（`__file__` 推导），不依赖 CWD；
+- `shutil.rmtree(..., ignore_errors=True)`：目录不存在或 Windows 下偶发句柄占用（杀毒/索引扫描）时静默跳过，清理失败不会让 pytest 以异常退出码结束；
+- 两目录本已在 `.gitignore`，残留不污染仓库，本清理属防御性收尾；
+- 手动验证脚本（`test_bili_live_collector.py` 等以 `python tests/xxx.py` 直跑的真实直播端到端）不经 pytest、不受影响——其「先清空再写」语义与 SRT 人工检查用途保持不变。
+
+**验证（2026-09-05）**：
+
+- `pytest tests/test_srt_timeline_anchor.py`：4 passed，运行后 `tests/_out_e2e` 自动删除（连同此前残留的 `_out_live` 一并清理）；
+- 重复运行（目录已不存在时）无报错，幂等；
+- 全量 `pytest -q`：**823 passed, 2 skipped**（与 2026-09-04 基线一致，无回归），结束后两目录均不存在；
+- `mypy tests/conftest.py` / `black --check` / `isort --check-only` 全通过。
+
+### v4.0.9.4-dev (2026-09-04) — P0 修复：分段录制容器错配导致抖音原画 HEVC 无法录制（返回码 4294967274）
+
+**变更摘要**：修复「TS + 分段录制」分支 `-segment_format` 误用 `ipod` 的 P0 回归（HEVC 原画 `-c copy` 直接 `AVERROR(EINVAL)` 退出，Windows 退出码显示为 `4294967274`；H.264 则静默产出「MP4 内容 + .ts 扩展名」的损坏文件），并把「输出扩展名 → 内层容器」的映射收敛为单一模块级常量 `SEGMENT_FORMAT_BY_SUFFIX`，新增 `tests/test_record_container.py` 固化断言。
+
+**根因**：`main.py` 两处取值**互换**——TS 分支写 `ipod`（应 `mpegts`）、M4A 音频分支写 `mpegts`（应 `ipod`），连解释性注释（「音频分段用 ipod 容器…」）也串到了视频分支上，构成错位指纹。`ipod` 是「iPod H.264 MP4」子集封装器（`ffmpeg -h muxer=ipod`：扩展名 m4v/m4a/m4b，默认视频编码 h264），其 codec tag 表**无 HEVC 条目**。
+
+**实测复现（ffmpeg n9.0.1）**：
+
+- HEVC + `segment/ipod` → `Could not find tag for codec hevc in stream #0` + `Could not write header … Invalid argument`，与线上日志逐字一致（线上为 stream #1，因直播源含音轨），exit≠0；
+- HEVC + `segment/mpegts` → exit 0，产物 40KB，首字节 `0x47`，可被 mpegts 解复用；
+- **H.264 + `segment/ipod` → exit 0 且不报错，但产物魔数为 `00 00 00 20 66 74 79 70`（`ftyp`）**——MP4 容器被写进 `.ts` 文件名，属静默损坏，历史录像需按魔数复核。
+
+**改动清单**：
+
+- `main.py`：新增模块级常量 `SEGMENT_FORMAT_BY_SUFFIX`（`.ts→mpegts` / `.flv→flv` / `.mkv→matroska` / `.mp4→mp4` / `.m4a→ipod`），5 处分段分支改为查表取值（音频分支扩展名为变量，用 `.get("." + extension, "ipod")` 兜底，避免 `only_audio_record` 平台 extension 为 mp3 时 KeyError）；两处错位注释各归其位。
+- `main.py`：新增 `_FFMPEG_ERRNO_HINTS` + `_describe_return_code()`，退出码按 32 位有符号归一化并附 errno 语义（`4294967274` → `-22 (EINVAL：封装参数/容器与编码不匹配…)`），未知取值不加提示以免堆噪音。
+- `src/spider.py`：`extract_douyin_hevc_flv_url()` 返回前补 `&codec=h265`（已带 codec 参数时原样返回）。此前 HTML 正则抠出的 HEVC 地址不带该参数，使 `_is_h265()` 与 `main.py` 的 h265 兜底判定全部漏判，HEVC 源伪装成普通 FLV 通过校验直接进 `-c copy`。
+- `tests/test_record_container.py`（新增 13 用例）：映射表内容断言、TS≠ipod / M4A≠mpegts 双向回归、AST 扫描断言「5 处取值全部来自查表、禁止裸字面量」、查表键已注册、音频兜底为 ipod、`hevc_flv_url` 补标记且 `_is_h265()` 可识别、退出码归一化。
+- `AGENTS.md`：已知坑新增 2 条（分段容器映射 + `hevc_flv_url` 必须带 codec 标记）。
+
+**验证（2026-09-04）**：
+
+- 全量 `pytest -q`：**823 passed, 2 skipped，0 warnings**（修复前基线 808 passed）；
+- `black --check`（123 文件）/ `isort --check-only` / `mypy`（3 个改动文件）/ `scripts/check_annotations.py`（平均密度 21.2%）全通过；
+- 复现脚本已清理，未残留临时文件。
+
+**同步与遗留**：
+
+- 运行目录 `D:\DouyinLiveRecorder`（与开发仓 `D:\DouyinLiveRecorder-dev` 分离）已同步**最小修复**（`main.py` 两处容器取值 + `src/spider.py` 的 codec 标记），原文件备份为 `*.bak-20260904`；退出码归一化与映射表重构未下沉到运行目录（其 `src/spider.py` 为 4617 行的旧版本，与开发仓 5143 行不同源，不做整文件覆盖）。
+- 已录历史 TS 文件需在修复后按魔数（首字节 `0x47`）复核，H.264 房间的历史产物可能为真 MP4。
+
+### v4.0.9.4-dev (2026-09-04) — 修复 flaky 告警「FakeAsyncClient.aclose was never awaited」+ AGENTS.md pytest 0 警告门禁口径定稿
+
+**变更摘要**：修复全量 pytest 下波动于 1~2 条的 flaky 告警 `RuntimeWarning: coroutine 'FakeAsyncClient.aclose' was never awaited`（根因 `src/async_http.py::_get_client` 跨循环关闭旧 AsyncClient 的调度竞态），并使 AGENTS.md「pytest（0 警告）」门禁与实际基线一致：第三方 starlette/anyio 弃用告警经 `pyproject.toml filterwarnings` 显式过滤并附来源注释，全量运行 warnings summary 恒为 0。
+
+**根因分析（三个方案的实测排除）**：
+
+- 旧实现（原 L63）：淘汰他循环创建的旧客户端时用 `run_coroutine_threadsafe(client.aclose(), client_loop)` 只调度不等待。回调能否执行取决于旧循环后续运转，而 `is_closed()` 为假不代表循环还会运转——`asyncio.run` 收尾窗口内循环已停未关，回调永不执行，`aclose()` 协程从未被 await，GC 时报 "never awaited"；GC 时机随机（多在用例结束后、经 pytest unraisableexception 插件捕获），既逃过用例级 `filterwarnings("ignore::RuntimeWarning")`，又使告警数量在 1~2 条间波动。
+- 中间方案「`is_running()` 门控 + `fut.result(timeout=5)` 等待」实测仍无法根治：`asyncio.run` 收尾阶段（`_cancel_all_tasks` / `shutdown_asyncgens` 的多次 `run_until_complete`）循环还在运转（is_running 为真）但随时停止——安排的任务可能已创建却永不步进（`Task was destroyed but it is pending!`），future 永不完成还把一次收尾竞态放大成 5 秒整的阻塞（压力实测单轮 0.4s → 5.4s，且告警未消失）。
+- 在当前循环直接 `await 旧client.aclose()` 亦不可行：会操作绑定旧循环的 transport（httpcore 连接池关闭触碰旧循环的 `call_soon`，循环已关时直接 RuntimeError）。
+
+**结论**：外部线程无法可靠控制他线程事件循环的生命周期，唯一可靠做法是**跨循环一律不创建 aclose 协程**——释放引用交由 GC 兜底，与既有「同线程换轮后旧循环已关闭」路径语义统一；进程级收尾仍由 atexit 的 `close_all_clients_sync` 负责。
+
+**改动清单**：
+
+- `src/async_http.py`：删除跨循环 `run_coroutine_threadsafe` 调度分支，改为不创建协程，注释完整记录三个不可行方案的实测结论（勿回退）。
+- `tests/test_async_http_lock.py`：`test_concurrent_threads_no_cross_loop_error` 移除 `@pytest.mark.filterwarnings("ignore::RuntimeWarning")`（拦不住 GC 延迟触发的告警、只会掩盖回归，移除后作回归守卫）；新增 2 个回归用例：`test_cross_loop_running_old_loop_skips_close`（旧循环运行中也不调度关闭，后台线程 `run_forever` 复现）与 `test_cross_loop_stopped_old_loop_skips_close`（`run_until_complete` 已返回未 close，复现 asyncio.run 收尾窗口形态）。
+- `pyproject.toml`：`[tool.pytest.ini_options].filterwarnings` 新增 starlette testclient import 期 `anyio.abc.BlockingPortal` 弃用提示的过滤（与既有 httpx 弃用提示同样定性：第三方、附来源注释）。
+- `AGENTS.md`：新增「pytest『0 警告』口径」条目（summary 为空、项目自身告警与可过滤第三方告警的区分、禁止用过滤掩盖项目告警、协程类告警须修根因）；「已知坑」新增「跨事件循环禁止创建/调度旧 AsyncClient 的 aclose 协程」条目。
+
+**验证（2026-09-04）**：
+
+- `tests/test_async_http_lock.py` 连续重跑 30 + 20 轮：0 告警、0 `Task was destroyed`、无秒级阻塞（修复前 15 轮中 8 轮出现告警）；
+- 全量 `pytest -q`：**808 passed, 2 skipped，0 warnings**（warnings summary 恒为 0，含新过滤的第三方告警）；
+- `black --check` / `isort --check-only` / `mypy`（含 `--platform linux`）/ `basedpyright`（0 error/0 warning）/ `scripts/check_annotations.py` 全通过。
+
+### v4.0.9.4-dev (2026-09-03) — 全仓中文注释补齐（41 文件 / +1370 行）+ 注释检查工具 scripts/check_annotations.py 建立并接入 CI
+
+**变更摘要**：本条目记录 2026-09-03 会话对全仓代码注释的系统性补齐。代码改动**仅为注释**（零可执行逻辑变化，经 AST 等价性校验 41/41 证明），并新增注释规范检查工具 `scripts/check_annotations.py`（三模式）接入 `ci.yml` 的 `static` job。
+
+**背景与范围决策**：先做全量注释密度体检（`tokenize` 精确统计），发现仓库大部分文件已有高质量中文注释（`stream_select.py` 35%、`http_config.py` 52%、`scheduler.py` 22%），故收敛为「查漏补缺」而非全量重写。最终范围：38 个 Python 文件 + 3 个前端文件；粒度为「模块头 + 函数级 + 边界与坑位」；按决策跳过 `douyin_live_recorder_standalone.py`、`gui_legacy.py`、`src/proto/douyin_pb2.py`（protoc 生成，标注 DO NOT EDIT）。
+
+**涉及文件（按模块分类）**：
+
+- **核心源码**：`src/spider.py`（5.0% → 14.6%，四轮处理，新增 519 行注释）、`src/stream.py`、`src/ffmpeg_install.py`、`src/node_install.py`、`msg_push.py`
+- **测试**：`tests/` 下 33 个文件（含 `test_spider_platform.py` 5.8% → 15.5%、`test_danmaku_monitor.py` 10.4% → 15.6%、`test_cookie_cache.py` 6.0% → 16.4% 等）
+- **脚本**：`scripts/smoke_test.py`
+- **前端**：`web/app.js`（补 IIFE 架构总览 / API 契约 / 轮询定时器清理 / esc() 转义要点）、`web/index.html`、`web/style.css`
+- **新增**：`scripts/check_annotations.py`
+- **CI / 文档**：`.github/workflows/ci.yml`（`static` job 新增步骤）、`AGENTS.md`（新增「注释约定」与「注释检查工具」两节）、`CODE_WIKI.md` / `CODE_WIKI_EN.md`（本条目）
+
+**关键设计：AST 等价性校验**
+
+本项目**非 git 仓库**（无 HEAD 作基准），故改动前快照基线，改动后逐文件比对：Python 用 `ast.dump(ast.parse(旧)) == ast.dump(ast.parse(新))`，前端剥离注释后比对有效代码行。注释不进 AST，而三引号 docstring 会作为 `Expr` 节点进 AST——因此 AST 全等可**同时**证明「可执行逻辑一字未动」与「未误插 docstring」，把 AGENTS.md 的 `#` 注释约定变成可机检约束。
+
+**改动说明**：
+
+- **工具三模式**：默认模式（**无需基线**）做规范检查——禁 docstring、密度阈值（默认 13%）、模块头存在性，故可常驻 CI；`--snapshot DIR` 建基线；`--baseline DIR` 证「只改了注释」。纯标准库实现，`static` job 只装 black/isort 即可运行（已用 `python -I` 隔离验证）。
+- **等价性校验的两个盲点**（已写入 AGENTS.md 与脚本文档注释）：① `except A, B:`（PEP 758）与 `except (A, B):` 的 AST 完全相同，工具发现不了改写，需 grep 计数核对；② 注释缩进错误不影响 AST，只有 `black --check` 能发现，故工具须与 black 配套使用。
+- **修复 CI 既有 YAML 隐患**：`static` job 中 `Check version consistency` 等步骤为 6 空格缩进，而 `Check i18n po/mo sync` 为 8 空格——`yaml.safe_load` 报 `expected <block end>, but found '-'`。该不一致原已存在，插入新步骤时才暴露，已统一为 6 空格。
+- **子协作方越界改动的处置**：第四轮 `src/spider.py` 处理中，执行者在 `get_yy_stream_data` 里新增了一行冗余赋值 `json_data["anchor_name"] = anchor_name`（该函数前面已赋过一次），被等价性校验当场抓到（41/41 → 40 通过 + 1 FAIL）。修复时**删掉新增代码行，但把注释里有价值的信息上移到原本那次赋值处**——既恢复逻辑又保留知识。
+
+**影响范围**：
+
+- 平均注释密度 **7.6% → 20.4%**（41 个目标文件），Python 文件合计新增注释 **1370 行**，38 个 Python 文件全部 ≥13%。
+- 运行时行为**零变化**（AST 全等作证）；新增工具仅 CI / 手动调用时运行，不进运行时链路，且 `.dockerignore` 已排除 `scripts/`。
+- 注释约定与工具用法已固化进 AGENTS.md，避免后续漂移。
+
+**验证**：
+
+- `pytest -q` 全量：**808 passed**（与改动前基线一致；warnings 在 1~2 间波动，属既有 flaky，见「关联」）；
+- `mypy`：99 文件 Success；`black --check` 与 `isort --check-only` 全通过；
+- `python scripts/check_annotations.py`：全部通过，平均密度 21.2%；
+- `python scripts/check_annotations.py --baseline <基线>`：41 文件等价、零逻辑改动；
+- **反向测试**：向 `src/stream.py` 注入一行代码后工具报 FAIL（退出码 1）并精确定位到该文件，恢复后回到 41/41 通过（退出码 0），证明工具真能拦截逻辑改动；
+- `.github/workflows/ci.yml` 经 `yaml.safe_load` 解析通过，`static` job 共 8 个步骤。
+
+**关联**：
+
+- flaky 告警（非本次引入，未修）：`RuntimeWarning: coroutine 'FakeAsyncClient.aclose' was never awaited` 在 1~2 warnings 间波动，根因在 `src/async_http.py` 跨循环用 `run_coroutine_threadsafe(client.aclose(), client_loop)` 安排关闭且不等待结果，旧循环已关闭时协程永不 await、GC 时告警。基线同样存在。
+- `starlette` 的 anyio `DeprecationWarning` 为第三方依赖既有告警（AGENTS.md 门禁写的「pytest 0 警告」与基线实际的 1 条第三方告警不一致，本次未越界修改）。
 
 ### v4.0.9.3-dev (2026-09-02) — 单文件整合版 (standalone) 类型标注修复（mypy：4 处报错清零）
 

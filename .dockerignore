@@ -31,6 +31,7 @@
 .ego-browser-test/
 .plugin-src/
 .tmp-dps-extract/
+.v2c/
 pytest-cache-files-*/
 
 # ---------- 文档（容器内无需运行）----------
@@ -60,6 +61,7 @@ uv.lock
 
 # ---------- Python 缓存 ----------
 __pycache__/
+.mypy_cache/
 *.py[cod]
 *$py.class
 
@@ -144,6 +146,8 @@ i18n/**/compile_po.py
 *.bak
 *.log
 *.isorted
+# 过程性探针 / 调试残留（非源码，与 .gitignore 同源维护）
+*.pyc_probe_tmp
 
 # ---------- 系统文件 ----------
 .DS_Store

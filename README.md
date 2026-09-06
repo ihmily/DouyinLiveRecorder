@@ -243,6 +243,9 @@ language = zh_CN
 分段录制是否开启 = 是
 # 是否启用HLS采集(是/否) - 关闭则只走 FLV 等非 HLS 候选
 是否启用HLS采集(是/否) = 是
+# HLS采集排除平台(逗号分隔) - 命中平台无视「是否启用HLS采集」配置、恒按 FLV 采集
+# （平台名须与日志/配置中显示的完全一致，如：斗鱼直播,虎牙直播；留空不排除任何平台）
+HLS采集排除平台(逗号分隔) =
 # 是否启用https录制 - 已整合原「是否强制启用https录制」与「是否禁用SSL证书验证(是/否)」：
 # 开启 = 流地址以 https 拉流并跳过 SSL 证书校验；关闭 = 流地址以 http 拉流并恢复默认证书校验
 # （旧键「是否强制启用https录制」的值会自动迁移继承；TikTok/YouTube 等 https-only 海外平台在关闭时保持原样）
@@ -520,6 +523,21 @@ Windows 下控制台默认「最小化到系统托盘」（`web_minimize_to_tray
 | LD | 流畅 | Low Definition，最低画质 |
 
 支持平台：抖音、TikTok、快手、虎牙、斗鱼、B站、网易CC。当平台实际下发画质低于设置画质时，会自动告警并标记。
+
+### 采集方式选择（HLS/FLV）
+
+录制拉流源在 HLS（m3u8，逐段拉取）与 FLV（单条长连接）之间自动选择：默认优先 HLS、校验不可达时按序回退 FLV，最后兜底 `record_url`。由两个配置项共同控制：
+
+| 配置项 | 作用 |
+|--------|------|
+| `是否启用HLS采集(是/否)` | 全局开关：开启（默认）时优先使用 HLS 源，不可达或源不存在时回退 FLV；关闭则所有平台只走 FLV 等非 HLS 候选 |
+| `HLS采集排除平台(逗号分隔)` | 平台级排除列表：命中平台**无视全局开关、恒按 FLV 采集**（等效于仅对该平台关闭 HLS 采集，HLS 源不参与候选与回退） |
+
+- **适用场景**：整体偏好 HLS 录制（HLS 逐段拉取免疫单条长连接被 CDN 掐断），但个别平台的 HLS 源不稳定或被风控，希望仅该平台强制走 FLV 时，将其加入排除列表即可——无需为此关闭全局 HLS 开关
+- **填写格式**：平台名须与日志/配置文件中显示的**完全一致**（如 `斗鱼直播`，不能简写为 `斗鱼`）；多个平台逗号分隔（中英文逗号均可），如 `斗鱼直播,虎牙直播`；留空（默认）不排除任何平台，行为与旧版本完全一致
+- **优先级语义**：排除列表优先于全局开关——即使「是否启用HLS采集(是/否) = 是」，命中平台也只走 FLV；列表外平台不受任何影响，仍按全局配置 HLS 优先
+- **边界行为**：排除平台若解析结果仅有 HLS 源且无 FLV/record_url 可回退，本轮放弃录制并输出告警（日志会提示「可将该平台移出排除列表恢复 HLS 采集」）；h265 编码的 FLV 源不再触发切换 HLS（h265 FLV 录制自动改存 TS 格式的逻辑不受影响）
+- **热更新**：主循环每轮重读配置，修改保存后无需重启程序，下一轮监测即生效
 
 ### 弹幕录制与弹幕监控
 
@@ -828,6 +846,31 @@ brew install node
 本项目基于 [MIT License](LICENSE) 开源，欢迎 Star 和 Fork！
 
 ## ⏳ 更新日志
+
+### v4.0.9.4 (2026-09-03 ~ 2026-09-06) — HLS 采集排除平台列表 / 画质选项增删与行内切换 / P0 分段容器错配修复 / 打包缺陷修复 / 全仓注释补齐与元数据同源同步
+
+> 本期（v4.0.9.4，2026-09-03 ~ 09-06）为多项一致性与质量收尾批次。新增 HLS 采集排除平台列表配置、画质选项用户可增删 + GUI/WEB 行内切换画质；修复两处高危问题——抖音原画 HEVC 因分段容器错配无法录制（P0）、`async_http` 跨循环协程告警导致 pytest 波动告警；修复 `pyproject.toml` 打包缺陷（子包未声明致 `pip install .` 发行包残缺）。同时完成全仓中文注释补齐（41 文件 / +1370 行）、八文件元数据同源同步、四语本地化目录补齐（516→521）。**无破坏性变更**（运行时语义全部保持；PEP 758 无括号 except 写法仅影响 <3.14，本仓下限即 3.14，属既定约定非回退）。详细根因与验证见 [CODE_WIKI.md](CODE_WIKI.md)。
+
+**✨ 新增功能**
+- **HLS 采集排除平台列表**：新增配置项 `HLS采集排除平台(逗号分隔)`——命中平台无视「是否启用HLS采集」开关、恒按 FLV 采集；列表外平台保持 HLS 优先。支持中英文逗号分隔、每轮热更新。
+- **画质选项可增删 + 行内切换画质**：画质选项从引擎白名单固定 10 档改为用户自选子集（落 `config.ini` [录制设置] 自定义画质选项）；GUI 画质监控新增「切换画质」菜单、WEB 新增 `PUT /api/rooms/quality` 端点，选非默认画质按「画质,直播间地址」写回、下一轮循环生效，选择「默认画质」移除画质段回落全局默认。
+- **单文件整合版迁移至 `scripts/`**：`douyin_live_recorder_standalone.py` 自根目录迁入 `scripts/`，运行命令加 `scripts/` 前缀，并修复迁移后 ffmpeg 定位逻辑（依次探测脚本同级 → 仓库根 → PATH）。
+
+**🐛 修复的问题**
+- **P0 分段录制容器错配**：抖音原画 HEVC 因 TS+分段分支 `-segment_format` 误用 `ipod` 容器，`-c copy` 直接 `AVERROR(EINVAL)` 退出（Windows 退出码 4294967274）；H.264 则静默产出「MP4 内容 + .ts 扩展名」损坏文件。将「输出扩展名 → 内层容器」映射收敛为模块级常量 `SEGMENT_FORMAT_BY_SUFFIX`，新增 `tests/test_record_container.py` 固化断言；另修复 `src/spider.py` 的 `hevc_flv_url` 漏拼 `&codec=h265` 致 h265 判定漏判。
+- **flaky 告警根治**：`src/async_http.py` 删除跨循环 `run_coroutine_threadsafe(client.aclose(), ...)` 调度分支（根因：旧循环已停未关时协程永不 await、GC 报 "never awaited"）；`pyproject.toml` 显式过滤第三方 starlette/anyio 弃用告警，pytest 全量 0 警告门禁定稿。
+- **GUI 画质切换三缺陷**：键格式不匹配（序号前缀导致反查表 miss）、持久化丢失（写回后编辑器仍持旧快照被整文件覆盖）、显示重置（表格取自子进程旧日志值）——切换后剥离序号前缀查表、写回后同步编辑器快照、显示以配置文件为准。
+- **打包缺陷修复**：`pyproject.toml` 的 `[tool.setuptools].packages` 由 `["src"]` 改为 `["src", "src.platforms", "src.proto"]`，修复 `pip install .` 发行包缺失 `src/platforms`（各平台弹幕采集器）与 `src/proto`（抖音 protobuf）的运行时 `ModuleNotFoundError`。
+
+**🛠️ 仓库维护与质量门禁**
+- **全仓中文注释补齐**：41 文件 / +1370 行（平均密度 7.6%→20.4%），AST 等价性校验证逻辑零改动；新增 `scripts/check_annotations.py`（注释规范 + AST 等价性校验，三模式）接入 `ci.yml` 的 `static` job。
+- **八文件元数据同源同步**：以 `pyproject.toml` 为单一事实源，修正 `AGENTS.md` / `docker-compose.yaml` / `requirements.txt` / `Dockerfile` / `.gitignore` / `.dockerignore` / `.coveragerc-concurrency` 的版本、路径、目录清单与依赖漂移。
+- **四语本地化目录补齐**：经 `extract_i18n_strings.py` 补入 5 条缺失串，四目录键集合重一致（各 521 条），`zh_CN.mo` 重编译（`--check` 字节级同步通过）。
+- **测试残留自清理**：`tests/conftest.py` 新增 `pytest_unconfigure` 钩子，会话结束自动删除 `tests/_out_live` / `tests/_out_e2e`。
+
+**🧪 测试与验证**
+- 全量 `pytest` **858 passed / 2 skipped / 0 warnings**；`pytest tests/test_i18n.py` 34 passed（四目录键集合一致性）。
+- `mypy` / `basedpyright`（0 error / 0 warning）/ `black --check` / `isort --check` / `scripts/check_annotations.py` 全绿；`scripts/extract_i18n_strings.py` 缺失 0 条；`scripts/compile_po.py --check` 与 `.po` 同步（522 条）；`scripts/check_version.py` PASS。
 
 ### v4.0.9.3 (2026-09-02) — 代码审查 20 项问题全量修复（cookie 缓存并发去重 singleflight 重写 / Web 非 ASCII 密码登录崩溃 / 探针异常留痕与节流自清理 / 64 位 ctypes 句柄截断 / 连接资源生命周期）+ mypy 全仓类型清零（tests / gui_legacy / scripts / standalone）
 

@@ -1,6 +1,6 @@
 [project]
 name = "DouyinLiveRecorder"
-version = "4.0.9.3"
+version = "4.0.9.4"
 description = "支持抖音、TikTok、YouTube、快手等60+平台的直播录制工具，支持循环录制、多人录制、消息推送"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -101,7 +101,10 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["src"]
+# 子包必须显式列出：显式 packages 不会递归发现，漏列会让 `pip install .` 产出的
+# 发行包缺失 src/platforms（各平台弹幕采集器）与 src/proto（抖音弹幕 protobuf），
+# 运行时以 ModuleNotFoundError 形式炸在导入链上（egg-info/SOURCES.txt 可核对）
+packages = ["src", "src.platforms", "src.proto"]
 # 顶层单文件模块：保证 [project.scripts] 三个入口（main/gui/web）安装后可用
 py-modules = ["main", "web", "gui", "gui_legacy", "i18n", "msg_push"]
 
@@ -207,6 +210,8 @@ asyncio_mode = "auto"
 filterwarnings = [
     # 第三方弃用提示（fastapi testclient 内部 import 触发），与本项目代码无关
     "ignore:Using `httpx` with `starlette.testclient` is deprecated",
+    # 第三方弃用提示（starlette testclient 模块 import 期触发，anyio 4.x 别名迁移），与本项目代码无关
+    "ignore:The anyio\\.abc\\.BlockingPortal alias is deprecated",
 ]
 
 [tool.coverage.run]

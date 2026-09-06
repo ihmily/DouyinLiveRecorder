@@ -1,4 +1,12 @@
-# Tests for src/stream.py module — 纯工具函数 + 核心平台流地址解析路径。
+# -*- coding: utf-8 -*-
+# src/stream.py 测试：分两部分 —— ① 纯工具/画质映射函数（bitrate_to_quality / code_to_zh /
+# is_downgrade / _pad_list / get_quality_index 及四张画质常量表一致性）；② 核心平台流地址解析
+# （抖音/虎牙/斗鱼/快手/YY/网易/TikTok 的 get_*_stream_url）。
+# 测试策略：用 AsyncMock 桩掉 src.stream.get_response_status（可用性网络探针），把「解析逻辑」
+# 与「候选可达性探测」彻底隔离 —— 这样 m3u8 不可达降级、离线短路等分支可被确定性触发，而非依赖
+# 真实 CDN 响应。画质边界数字（LD≤600 / HD≤1000 / BD≤4000）直接来自 QUALITY_MAPPING 阈值，
+# 用例既锁住分段边界也防阈值回归。通用入口 get_stream_url 的「原样返回」契约用同一性断言 `is`
+# 锁定，杜绝短路路径返回被篡改副本的回归。
 
 from typing import TypedDict, cast
 from unittest.mock import AsyncMock, patch
@@ -40,9 +48,11 @@ class TestBitrateToQuality:
     # bitrate_to_quality: 码率 → 画质代码映射。
 
     def test_zero_bitrate_returns_od(self) -> None:
+        # 0 码率视为「无有效流」→ 落到原画 OD（最低档兜底），避免负/零码率算出更低的伪档位。
         assert bitrate_to_quality(0) == "OD"
 
     def test_negative_bitrate_returns_od(self) -> None:
+        # 负码率（接口异常/缺字段）同样兜底到 OD，与 0 同处理，不抛错。
         assert bitrate_to_quality(-100) == "OD"
 
     def test_low_bitrate_returns_ld(self) -> None:
@@ -50,6 +60,8 @@ class TestBitrateToQuality:
         assert bitrate_to_quality(500) == "LD"
 
     def test_boundary_600_returns_ld(self) -> None:
+        # 码率==LD 上限边界（600）须仍判 LD；
+        # 锁住分段闭区间，防阈值回归把边界错判为 SD。
         assert bitrate_to_quality(600) == "LD"
 
     def test_boundary_601_returns_sd(self) -> None:
@@ -68,6 +80,8 @@ class TestBitrateToQuality:
         assert bitrate_to_quality(99999) == "OD"
 
     def test_exact_bd_boundary(self) -> None:
+        # 码率==BD 上限边界（4000）须仍判 BD；
+        # 锁住 BD 闭区间，防把刚好 4000 错判为原画 OD。
         assert bitrate_to_quality(4000) == "BD"
 
 
@@ -106,6 +120,8 @@ class TestIsDowngrade:
         assert is_downgrade(None, "HD") is False
 
     def test_none_actual_not_downgrade(self) -> None:
+        # 实际画质缺失时不判降级；
+        # 防 None 比较异常。
         assert is_downgrade("HD", None) is False
 
     def test_unknown_code_not_downgrade(self) -> None:
@@ -124,6 +140,8 @@ class TestPadList:
         assert result == [1, 2, 2, 2, 2]
 
     def test_exact_length_unchanged(self) -> None:
+        # 长度恰好等于 min_length 时不增不减；
+        # 锁住边界不变。
         result = _pad_list([1, 2, 3], min_length=3)
         assert result == [1, 2, 3]
 
@@ -132,6 +150,8 @@ class TestPadList:
         assert result == [1, 2, 3, 4]
 
     def test_default_min_length_is_5(self) -> None:
+        # 缺省 min_length=5；
+        # 锁住默认填充长度与末项复制。
         result = _pad_list([1])
         assert len(result) == 5
         assert result[0] == 1
@@ -147,10 +167,14 @@ class TestGetQualityIndex:
         assert idx == QUALITY_MAPPING["OD"]
 
     def test_empty_string_returns_first(self) -> None:
+        # 空字符串同未传 → 默认 OD；
+        # 防空串被当非法代码。
         name, idx = get_quality_index("")
         assert name == "OD"
 
     def test_string_code(self) -> None:
+        # 传入画质代码字符串 → 原样返回该档；
+        # 锁住代码直通契约。
         name, idx = get_quality_index("HD")
         assert name == "HD"
         assert idx == QUALITY_MAPPING["HD"]
@@ -299,7 +323,8 @@ class TestGetDouyinStreamUrl:
 
     @pytest.mark.asyncio
     async def test_m3u8_unreachable_triggers_fallback(self) -> None:
-        # m3u8 不可达 → 降级到相邻画质。
+        # m3u8 不可达（get_response_status=False）→ 触发降级到相邻画质；断言放宽到 (SD, HD)
+        # 是因降级算法取「请求档之下最近的可用档」，锁定「确实发生了降级」而非具体落到哪一档。
         from src.stream import get_douyin_stream_url
 
         json_data = {
@@ -420,6 +445,8 @@ class TestGetHuyaStreamUrl:
 
     @pytest.mark.asyncio
     async def test_empty_game_stream_info_list_returns_not_live(self) -> None:
+        # gameStreamInfoList 为空（房间无 CDN 候选）→ 离线；
+        # 验证空候选不抛错、契约返回 is_live=False。
         from src.stream import get_huya_stream_url
 
         json_data = {"data": [{"gameLiveInfo": {"nick": "anchor"}, "gameStreamInfoList": []}]}
@@ -573,6 +600,8 @@ class TestGetKuaishouStreamUrl:
 
     @pytest.mark.asyncio
     async def test_not_live(self) -> None:
+        # type=0 且 is_live=False → 离线；
+        # 锁住 type 路由与离线契约。
         from src.stream import get_kuaishou_stream_url
 
         json_data = {"type": 0, "is_live": False, "anchor_name": "ks_anchor"}
@@ -581,6 +610,8 @@ class TestGetKuaishouStreamUrl:
 
     @pytest.mark.asyncio
     async def test_live_with_bitrate(self) -> None:
+        # 在线且含 flv 码率候选 → 选中画质；
+        # 验证按 video_quality 匹配清晰度。
         from src.stream import get_kuaishou_stream_url
 
         json_data = {

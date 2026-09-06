@@ -9,6 +9,9 @@
 #   - 本地开发：`pip install -r requirements.txt`
 # 构建期「可选」依赖（PyInstaller）不在此处，见 pyproject.toml
 #   [project.optional-dependencies].build，通过 `pip install .[build]` 安装。
+# 开发期依赖（pytest / black / isort / mypy）同理在 [project.optional-dependencies].dev，
+#   通过 `pip install .[dev]` 安装；GUI 专属依赖在 .gui（本清单已含，pip 安装时一并拉取）。
+# 前端用例（tests/frontend/*.mjs）用 Node 内置 node:test，零 npm 依赖，无需新增 Python 包。
 # =============================================================================
 
 # ---------- HTTP 请求 ----------

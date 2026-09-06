@@ -32,10 +32,13 @@ def _reset_bili_buvid_cache() -> Iterator[None]:
 
 def test_get_record_headers_bilibili() -> None:
     # B站直播流缺 Referer 会被 bilivideo.com 拒 403，校验器/ffmpeg 需带 Referer
+    # （Referer 是 B站防盗链必要头；与虎牙「必须不带 Referer」形成对照，见 test_stream_select）
     assert get_record_headers("B站直播", "https://live.bilibili.com/123") == {"referer": "https://live.bilibili.com/"}
 
 
 def test_get_bilibili_danmaku_info_happy_path() -> None:
+    # 四端点 mock 响应：room_init 短号转真实 room_id、nav 取 wbi 密钥、finger/sp 取 buvid、
+    # getDanmuInfo 取弹幕 token 与 host_list；字段须与解析逻辑严格对应，否则断言失配。
     responses = {
         "room_init": '{"code":0,"data":{"room_id":763679,"uid":12345}}',
         "nav": '{"code":0,"data":{"wbi_img":{"img_url":"https://i0.hdslb.com/bfs/wbi/'
@@ -48,8 +51,10 @@ def test_get_bilibili_danmaku_info_happy_path() -> None:
         '{"host":"broadcastlv.chat.bilibili.com","port":2243,"ws_port":2244,"wss_port":443},'
         '{"host":"broadcastlv2.chat.bilibili.com","port":2243,"ws_port":2244,"wss_port":443}]}}',
     }
+    # captured 收集 getDanmuInfo 与 finger/sp 的真实请求 URL，用于校验 wbi 签名与端点路径。
     captured: dict[str, str] = {}
 
+    # 按 URL 子串路由：顺序命中 room_init / nav / finger/sp / getDanmuInfo，其余返回空串。
     async def fake_req(url: str, *args: object, **kwargs: object) -> str:
         if "room_init" in url:
             return responses["room_init"]
@@ -63,6 +68,7 @@ def test_get_bilibili_danmaku_info_happy_path() -> None:
             return responses["getDanmuInfo"]
         return ""
 
+    # 冻结 time 为 1700000000：w_rid 签名依赖 wts 时间戳，固定值使签名可复现、断言稳定。
     with patch("src.spider.async_req", side_effect=fake_req), patch("src.spider.time") as t:
         t.time.return_value = 1700000000
         # 预期 w_rid（与函数内用同一冻结时间签名，验证签名路径可复现）
@@ -72,8 +78,10 @@ def test_get_bilibili_danmaku_info_happy_path() -> None:
     assert result is not None
     assert result["room_id"] == 763679  # 短号 462 经 room_init 转为真实 room_id
     assert result["uid"] == 12345
+    # token 来自 getDanmuInfo，是进房握手凭证；server_host 取 host_list 首元素（主弹幕服务器）。
     assert result["token"] == "TOKEN123"
     assert result["server_host"] == "broadcastlv.chat.bilibili.com"
+    # host_list 为全部弹幕服务器（主+备），AUTH 失败或重连时按序切换。
     assert result["host_list"] == [
         "broadcastlv.chat.bilibili.com",
         "broadcastlv2.chat.bilibili.com",
@@ -92,6 +100,7 @@ def test_get_bilibili_danmaku_info_spi_empty_uses_fallback_buvid() -> None:
     # 回归：spi 端点风控返回空响应体（200 + 空 body，_loads_dict 得 {}），
     # 旧逻辑会让 buvid 静默为空 -> 进房包带空 buvid -> 弹幕服务器硬断连。
     # 修复后：重试一次仍空则生成兜底 buvid3（uuid），保证非空。
+    # 兜底 buvid 走 uuid 生成：需校验结果非空且为合法 uuid 格式（未注册标识也会被弹幕服务器软拒绝）。
     import uuid as _uuid
 
     responses = {
@@ -113,6 +122,7 @@ def test_get_bilibili_danmaku_info_spi_empty_uses_fallback_buvid() -> None:
                 return responses[key]
         return ""
 
+    # 同时 mock 首页 Set-Cookie 备取（返回空）与冻结时间；spi 两跳空走 uuid 兜底路径。
     with (
         patch("src.spider.async_req", side_effect=fake_req),
         patch("src.spider._cache_fetch_cookies", new_callable=AsyncMock, return_value={}) as home_mock,
@@ -143,6 +153,7 @@ def test_get_bilibili_danmaku_info_empty_danmu_returns_none() -> None:
         "getDanmuInfo": '{"code":-352,"message":"风控","data":null}',
     }
 
+    # 路由同 happy_path；本例 getDanmuInfo 返回 code=-352（风控），data 为 null 触发空值分支。
     async def fake_req(url: str, *args: object, **kwargs: object) -> str:
         for key in ("room_init", "nav", "finger/sp", "getDanmuInfo"):
             if key in url:
@@ -171,6 +182,7 @@ def test_bili_buvid_cached_across_calls() -> None:
     )
     spi_hits = {"count": 0}
 
+    # 路由：finger/sp 命中即计数（验证缓存后不再请求）；room_init 按 URL 区分两房间号。
     async def fake_req(url: str, *args: object, **kwargs: object) -> str:
         if "finger/sp" in url:
             spi_hits["count"] += 1
@@ -184,6 +196,7 @@ def test_bili_buvid_cached_across_calls() -> None:
             return danmu_resp
         return ""
 
+    # 两次调用不同房间（462 / 3336696）：验证 buvid 进程内缓存使第二次不再请求 spi 端点。
     with patch("src.spider.async_req", side_effect=fake_req), patch("src.spider.time") as t:
         t.time.return_value = 1700000000
         r1 = asyncio.run(spider.get_bilibili_danmaku_info("https://live.bilibili.com/462"))
@@ -210,6 +223,7 @@ def test_bili_buvid_fallback_cached_across_calls() -> None:
     )
     spi_hits = {"count": 0}
 
+    # 路由同前；finger/sp 两跳均空（风控），验证重试两次后转 uuid 且值被缓存跨调用复用。
     async def fake_req(url: str, *args: object, **kwargs: object) -> str:
         if "finger/sp" in url:
             spi_hits["count"] += 1
@@ -222,6 +236,7 @@ def test_bili_buvid_fallback_cached_across_calls() -> None:
             return danmu_resp
         return ""
 
+    # 两次调用同房间：spi 空触发 uuid 兜底，兜底值同样缓存，第二次 0 次 spi 请求。
     with (
         patch("src.spider.async_req", side_effect=fake_req),
         patch("src.spider._cache_fetch_cookies", new_callable=AsyncMock, return_value={}),
@@ -263,6 +278,7 @@ def _join_body(args: dict) -> dict[str, object]:
     client._ws = ws  # type: ignore[assignment]
     asyncio.run(client._join_room())
     assert ws.sent, "进房包未发送"
+    # 进房包帧头固定 16 字节（包长/头长/版本/op/seq），跳过帧头解析 JSON 载荷。
     body: dict[str, object] = _json.loads(ws.sent[0][16:].decode("utf-8"))
     return body
 
@@ -317,6 +333,7 @@ def test_buvid_prefers_cookie_over_spi() -> None:
             return danmu_resp
         return ""
 
+    # cookie 携带真实注册 buvid3：必须优先提取并跳过 spi，避免用未注册 uuid 被 AUTH 软拒绝。
     cookie = "SESSDATA=x; buvid3=REAL-BUVID3-123; other=1"
     with patch("src.spider.async_req", side_effect=fake_req), patch("src.spider.time") as t:
         t.time.return_value = 1700000000
@@ -347,6 +364,9 @@ def _decode_auth_reply(payload: bytes) -> tuple[Any, Any]:
     client = BilibiliDanmaku(on_message=lambda m: None, on_close=lambda r: None, on_ready=lambda: None)
     ws = _FakeAuthWs()
     client._ws = ws  # type: ignore[assignment]
+    # 手工拼一条 B站弹幕协议帧：头部 >IHHII = (包长, 头长16, 协议版本1, operation=8 即 AUTH_REPLY,
+    # 序列号1) + JSON 载荷。operation=8 是进房认证回包，用真帧喂 decode_message 才能走到认证分支。
+    # 大端 > 与 B站 WS 协议严格一致；头长恒 16，载荷为 JSON 文本。
     frame = struct.pack(">IHHII", 16 + len(payload), 16, 1, 8, 1) + payload
 
     async def _run() -> None:
@@ -359,6 +379,7 @@ def _decode_auth_reply(payload: bytes) -> tuple[Any, Any]:
 
 def test_auth_reply_ok_keeps_connection() -> None:
     # code=0 认证成功：不置停止标志、不断开连接
+    # （对照组：验证失败路径才主动断开，成功路径不得误杀连接）
     client, ws = _decode_auth_reply(b'{"code":0}')
     assert client._stopped is False
     assert ws.closed is False
@@ -367,6 +388,7 @@ def test_auth_reply_ok_keeps_connection() -> None:
 def test_auth_reply_failure_closes_connection() -> None:
     # code!=0 软拒绝：此前连接保持却不推弹幕且无任何感知；修复后主动断开并带原因退出，
     # 同时使 spider 侧 buvid 缓存失效（兜底 UUID 被拒后不可复用，下一轮重新获取）
+    # AUTH 被拒：断言缓存失效钩子被调用一次（兜底 UUID 被软拒绝后不可复用，下一轮重新获取）。
     with patch("src.spider.invalidate_bili_buvid_cache") as inv:
         client, ws = _decode_auth_reply(b'{"code":-101,"message":"auth failed"}')
     assert client._stopped is True
@@ -407,6 +429,7 @@ def test_buvid_from_homepage_setcookie_when_spi_empty() -> None:
         assert url == "https://www.bilibili.com/"
         return {"buvid3": "HOME-BUVID-777", "b_nut": "1721975923"}
 
+    # 让 spi 两跳空、首页 Set-Cookie 返回真实 buvid3；验证优先采用首页值而非 uuid 兜底。
     with (
         patch("src.spider.async_req", side_effect=fake_req),
         patch("src.spider._cache_fetch_cookies", side_effect=fake_home),
@@ -417,6 +440,7 @@ def test_buvid_from_homepage_setcookie_when_spi_empty() -> None:
 
     assert result is not None
     assert result["buvid"] == "HOME-BUVID-777"
+    # 首页真实 buvid3 非兜底（fallback=False），避免误标为 uuid 兜底而触发无谓重取。
     assert spider._bili_buvid_is_fallback is False
 
 
@@ -447,6 +471,8 @@ def test_auth_watchdog_fires_without_reply() -> None:
 
     client, ws = _watchdog_client()
 
+    # 将 _AUTH_TIMEOUT 压到 0.01s 加速触发看门狗（真实超时较长，单测不可等）；
+    # 未收到任何 AUTH_REPLY 即按被拒处理。
     async def _run() -> None:
         with patch.object(BilibiliDanmaku, "_AUTH_TIMEOUT", 0.01):
             await client._auth_watchdog(ws)
@@ -454,6 +480,7 @@ def test_auth_watchdog_fires_without_reply() -> None:
 
     with patch("src.spider.invalidate_bili_buvid_cache") as inv:
         asyncio.run(_run())
+    # 软拒绝路径：连接被标记停止并主动断开，buvid 缓存失效钩子恰好调用一次。
     assert client._stopped is True
     assert ws.closed is True
     inv.assert_called_once()
@@ -461,6 +488,7 @@ def test_auth_watchdog_fires_without_reply() -> None:
 
 def test_auth_watchdog_noop_after_ok_reply() -> None:
     # 已收到 code=0 回应（_auth_ok=True）：看门狗不动作
+    # （守护 _auth_ok 标志，防止成功进房后看门狗误触发断开）
     from src.platforms.bilibili import BilibiliDanmaku
 
     client, ws = _watchdog_client()
@@ -483,6 +511,7 @@ def test_auth_watchdog_stale_ws_noop() -> None:
     from src.platforms.bilibili import BilibiliDanmaku
 
     client, ws = _watchdog_client()
+    # 模拟 host 切换：看门狗存活期间 self._ws 已指向新会话，旧看门狗须识别并作废
     client._ws = _FakeAuthWs()  # type: ignore[assignment]  # 模拟切换到下一 host
 
     async def _run() -> None:
@@ -491,5 +520,6 @@ def test_auth_watchdog_stale_ws_noop() -> None:
             await asyncio.sleep(0)
 
     asyncio.run(_run())
+    # 旧 host 看门狗识别到 self._ws 已切换，作废自身：不置停止、不断开新连接。
     assert client._stopped is False
     assert ws.closed is False

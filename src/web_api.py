@@ -22,6 +22,9 @@ from pydantic import BaseModel
 from starlette.responses import Response
 
 from src.web_config import (
+    BUILTIN_QUALITIES,
+    QUALITY_OPTIONS_KEY,
+    QUALITY_OPTIONS_SECTION,
     append_config_line,
     format_url_line,
     hash_web_password,
@@ -29,11 +32,14 @@ from src.web_config import (
     normalize_url,
     parse_url_config,
     read_config_safe,
+    read_quality_options,
     read_web_config,
     update_config_line,
+    update_room_quality,
     validate_config_target,
     validate_room_target,
     verify_web_password,
+    write_quality_options,
 )
 
 # web/ 静态资源目录（项目根/web）
@@ -95,6 +101,18 @@ class RoomUpdate(BaseModel):
 class RoomToggle(BaseModel):
     url: str
     enable: bool
+
+
+class RoomQualityUpdate(BaseModel):
+    # 按房间切换画质：quality 为 None/空串表示移除画质段（回落全局默认画质），
+    # 非空时必须是内置档位（白名单外的名称会被录制引擎静默回退成「原画」）
+    url: str
+    quality: str | None = None
+
+
+class QualityOptionsUpdate(BaseModel):
+    # 画质选项列表（WEB 下拉与 GUI 切换菜单共用，落地 config.ini [录制设置]）
+    options: list[str]
 
 
 class RecordingToggle(BaseModel):
@@ -359,6 +377,49 @@ def create_app(
                 )
                 return {"ok": True, "enabled": req.enable}
         raise HTTPException(404, "未找到直播间")
+
+    # 按房间切换画质：与 GUI 画质监控页「切换画质」菜单共用 update_room_quality 落盘
+    # （「画质,URL,主播: 名称」行格式），下一轮检测循环生效；两端的切换互相同步。
+    @app.put("/api/rooms/quality")
+    async def change_room_quality(req: RoomQualityUpdate) -> dict[str, object]:
+        url = normalize_url(req.url)
+        quality = (req.quality or "").strip()
+        try:
+            validate_room_target(req.url, quality)
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from e
+        # 白名单校验：与 GUI 下拉一致仅放行内置档位，杜绝写入永远不生效的档位名
+        if quality and quality not in BUILTIN_QUALITIES:
+            raise HTTPException(422, f"未知画质档位: {quality}")
+        import main as _main
+
+        # 持锁与 add_room / 录制主循环的 update_file 互斥，避免「查房间 + 改画质段」
+        # 的读改写窗口内被他方写回覆盖（update_room_quality 自身无锁，依赖调用方串行化）
+        with _rooms_config_lock, _main.file_update_lock:
+            rooms = parse_url_config(cast(str, app.state.url_config_file))
+            if not any(r["url"] == url for r in rooms):
+                raise HTTPException(404, "未找到直播间")
+            changed = update_room_quality(cast(str, app.state.url_config_file), url, quality)
+        return {"ok": True, "changed": changed}
+
+    # 画质选项：WEB 直播间设置的画质下拉与 GUI 画质监控的切换菜单共用同一份列表，
+    # 落地 config.ini [录制设置]/自定义画质选项(逗号分隔)，保证两端选项一致。
+    @app.get("/api/rooms/qualities")
+    async def list_quality_options() -> dict[str, object]:
+        # builtin 一并返回，前端「添加画质」候选列表不必再硬编码一份档位名
+        return {
+            "options": read_quality_options(cast(str, app.state.config_file)),
+            "builtin": list(BUILTIN_QUALITIES),
+        }
+
+    @app.put("/api/rooms/qualities")
+    async def update_quality_options(req: QualityOptionsUpdate) -> dict[str, object]:
+        try:
+            validate_config_target(QUALITY_OPTIONS_SECTION, QUALITY_OPTIONS_KEY, ",".join(req.options))
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from e
+        options = write_quality_options(cast(str, app.state.config_file), req.options)
+        return {"ok": True, "options": options}
 
     @app.get("/api/config")
     async def get_config() -> dict[str, dict[str, str]]:

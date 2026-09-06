@@ -267,6 +267,7 @@ DouyinLiveRecorder/
 ├── pyproject.toml                      # Python 项目配置（版本号/工具配置/覆盖率门禁单一事实源）
 ├── scripts/                             # 辅助脚本
 │   ├── check_version.py                # 版本号一致性校验（CI static job 调用）
+│   ├── check_annotations.py            # Annotation-convention & AST-equivalence checker (no docstrings / density floor / --baseline equivalence compare, invoked by the CI static job)
 │   ├── check_coverage.py               # Per-module coverage gate (invoked by the CI test job, thresholds in MODULE_THRESHOLDS)
 │   ├── compile_po.py                   # gettext catalog compiler (.po → .mo; --check zero-side-effect sync check, invoked by the CI static job)
 │   ├── extract_i18n_strings.py         # i18n pending-translation string extractor (AST scan + four-catalog comparison, maintenance-time tool)
@@ -360,7 +361,7 @@ recording_time_list: dict   # 录制时间与画质记录 {name: [start_time, qu
 - `check_live_status()` - detect live status
 - `display_info()` - terminal status display (compatible with old and new `recording_time_list` formats)
 - `get_status()` - return recording status dict (includes the `actual_quality` field, used by the Web API)
-- `select_source_url()` - selects between m3u8/FLV sources, falling back to FLV when HLS source validation fails (polling with `delay_default=120s`); a new `proxy_addr` parameter is passed through to the three validation calls to avoid misjudging proxy-required platforms like TikTok as unreachable on direct validation; computes the "last-resort candidate" (when FLV has no `record_url` fallback, or `record_url` is always present) and passes it to the validator as `last_resort` — even a stable rejection only warns and passes through, leaving the final decision to ffmpeg's actual stream pull
+- `select_source_url()` - selects between m3u8/FLV sources, falling back to FLV when HLS source validation fails (polling with `delay_default=120s`); a new `proxy_addr` parameter is passed through to the three validation calls to avoid misjudging proxy-required platforms like TikTok as unreachable on direct validation; computes the "last-resort candidate" (when FLV has no `record_url` fallback, or `record_url` is always present) and passes it to the validator as `last_resort` — even a stable rejection only warns and passes through, leaving the final decision to ffmpeg's actual stream pull; **HLS capture exclusion list** (`main.hls_collection_exclude_platforms`, config key "HLS采集排除平台(逗号分隔)"): listed platforms ignore the "whether to enable HLS capture" setting and always use FLV capture (equivalent to disabling HLS capture for that platform only — the whole HLS candidate group is removed with no fallback; when only HLS sources remain with no fallback, it warns and gives up the round, with recovery guidance pointing to removing the platform from the exclusion list); platforms outside the list behave unchanged
 - `_validate_stream_url()` - stream address validation: the content-type check now also accepts `mpegurl`; when HEAD is rejected, for `.m3u8` sources (including **404**) it adds a `Range: bytes=0-0` GET probe — Douyin CDN's m3u8 often returns 4xx to HEAD, which used to be misjudged as unreachable and always fell back to FLV; a new `verify` parameter follows the global SSL switch (consistent with async validation); all failure paths now log a warning (URL + exception type/status code/content-type) instead of silently swallowing the exception; the GET re-check (`_confirm_get_ok`) retries once verbatim (0.8s interval) when receiving 401/403 before convicting — CDNs such as Douyu hw/Huya al occasionally return 403 to millisecond-level back-to-back probes (HEAD→GET) (in practice the same URL returns 200 after a brief retry, and ffmpeg's single GET works normally); the retry distinguishes "intermittent rate limiting" from "stable rejection", and the historically false-green Huya scenario that still returns 403 after retry is correctly rejected
 
 **Refactoring (2026-08-16)**: The following responsibilities have been extracted into `src/` submodules, re-exported by `main.py` to preserve `main.<name>` namespace compatibility (zero changes to `web.py`/`gui.py`/`web_api.py`/tests):
@@ -674,6 +675,7 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 - **Module-level lock rebuilt with the event loop** (fixed 2026-08-12): the `_client_lock` protecting `_client_cache` reads/writes was a module-level singleton `asyncio.Lock()`; after it lazily bound to the first room's `asyncio.run()` loop, subsequent rooms each started a new loop via `asyncio.run()` and `await`ing it again triggered `RuntimeError: ... is bound to a different event loop`; that exception was swallowed by `async_req` and returned an empty string, which `spider.py` misjudged as "risk-control empty response" and cascaded into HTML fallback failure. Now `_get_client_lock()` caches a `(lock, loop)` tuple and automatically rebuilds the lock when the current loop changes, consistent with `_client_cache`'s "client + loop" mechanism, eliminating cross-loop lock errors at the source
 - **Typed exception logs** (consolidated 2026-08-12): all `except Exception as e: logger.debug(e)` inside `async_req` and `_close_all_clients` now include `type(e).__name__` (with URL when necessary), eliminating the blank-log problem on Windows when an exception's `str()` is empty and impossible to locate
 - **SSL verification**: uniformly controlled by the global config `src/http_config.py`, enabled by default
+- **No more scheduled close of stale cross-loop clients** (fixed 2026-09-04): when evicting a stale AsyncClient created on another event loop, **no** `aclose()` coroutine is ever created (running / stopped / closed old loops are all treated the same); the reference is dropped and GC handles cleanup. The old implementation scheduled via `run_coroutine_threadsafe` without waiting — when the old loop sat inside the `asyncio.run` teardown window (stopped but not yet closed) the callback never executed, and GC reported "coroutine ... aclose was never awaited" with randomly fluctuating counts (1~2 flaky occurrences, escaping via unraisableexception); the "is_running gate + wait for future" variant was empirically still incurable (during teardown a scheduled task may be created yet never stepped — `Task was destroyed but it is pending` — and a never-resolving future amplifies the race into multi-second blocking); awaiting directly on the current loop would operate a transport bound to the old loop. Regression locks: `tests/test_async_http_lock.py::test_cross_loop_running_old_loop_skips_close` / `test_cross_loop_stopped_old_loop_skips_close`
 - **Connection pool cleanup**: release all reused AsyncClients on process exit via atexit / signal handlers
 - **`get_response_status()` m3u8 fault tolerance** (enhanced 2026-08-05): when HEAD validation fails, if the URL ends with `.m3u8` it adds a lightweight `Range: bytes=0-0` GET probe (all non-2xx including **404** trigger the probe; returns 200/206 → reachable); behavior for non-m3u8 sources (FLV/record_url) is unchanged. Exception logs include URL + `type(e).__name__` (e.g. `ConnectTimeout` / `TimeoutError`), avoiding blank messages when Windows `socket.timeout`'s `str()` is empty; probe failures log `status_code` / `content-type` for troubleshooting
 
@@ -1041,6 +1043,7 @@ web.py
 | 循环时间(秒) | Live status check interval | 120 |
 | 分段录制是否开启 | Whether to segment recordings | Yes |
 | 是否启用HLS采集(是/否) | Whether to prefer HLS (m3u8) source collection; falls back to FLV when disabled or the source is unavailable | Yes |
+| HLS采集排除平台(逗号分隔) | HLS capture exclusion list: listed platforms **ignore the "whether to enable HLS capture" setting and always use FLV capture** (equivalent to disabling HLS capture for that platform only — the whole HLS candidate group is removed with no fallback, and the h265-FLV → HLS switch is disabled as well); platforms outside the list are unaffected and keep HLS priority. Platform names must match exactly (e.g. 斗鱼直播); both Chinese and English commas are supported; hot-reloaded every main-loop iteration | (empty, excludes nothing) |
 | 视频分段时间(秒) | Segment duration | 1800 |
 | 使用代理录制的平台(逗号分隔) | Matches live room URLs by domain substring; a hit routes through the proxy (requires "whether to use proxy ip" enabled first) | tiktok, sooplive, pandalive, winktv, flextv, popkontv, twitch, liveme, showroom, chzzk, shopee, shp, youtu, faceit |
 | 额外使用代理录制的平台 | Append additional proxy-routed platforms (comma-separated) beyond the table above; the proxy address falls back to a value other than "proxy address" | (empty) |
@@ -1335,7 +1338,7 @@ Workflow file: `.github/workflows/ci.yml`, runs on push to main / PR, ensuring c
 
 | Job | Environment | Content |
 | -------------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `static` | py3.15 | `black --check .` + `isort --check .` + `python scripts/check_version.py` (version single-source-of-truth check) + `python scripts/compile_po.py --check` (i18n po/mo sync check, zero side effects) |
+| `static` | py3.15 | `black --check .` + `isort --check .` + `python scripts/check_version.py` (version single-source-of-truth check) + `python scripts/compile_po.py --check` (i18n po/mo sync check, zero side effects) + `python scripts/check_annotations.py` (annotation conventions: no docstrings / density floor / module headers, zero side effects) |
 | `typecheck` | py3.14 | Install requirements + pinned mypy, then run `mypy src/` (run on the minimum supported version so conclusions hold for the oldest interpreter) |
 | `test` | py3.14 / py3.15 matrix | `pytest --cov=src --cov-report=term-missing` (global `fail_under=50` gate, `fail-fast: false`); on the minimum version additionally runs the `scripts/check_coverage.py` per-module gate + coverage.xml upload + optional Codecov |
 | `concurrency-test` | py3.14 | Concurrency-specific: under `COVERAGE_RCFILE=.coveragerc-concurrency` runs `test_concurrency_rate_limit.py` + `test_concurrency.py` + `test_async_http_lock.py` (dedicated config sets no global threshold) |
@@ -1581,6 +1584,295 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 ---
 
 ## Changelog
+
+### v4.0.9.4-dev (2026-09-06) — Eight-file repository metadata sync + i18n catalog completion (516 → 521 entries) + this cycle's change overview (classified by module)
+
+**Change Summary**: Two consistency wrap-ups plus an overview. ① **Metadata sync**: using `pyproject.toml` as the single source of truth, every version / path / directory-list / dependency drift among `AGENTS.md`, `docker-compose.yaml`, `requirements.txt`, `Dockerfile`, `.gitignore`, `.dockerignore`, `.coveragerc-concurrency` and `pyproject.toml` was checked and corrected — including a **packaging defect in `pyproject.toml` that made `pip install .` emit an incomplete distribution** (sub-packages not declared). ② **Localization**: 5 missing strings found by `scripts/extract_i18n_strings.py` were added, so all four catalogs (`zh_CN.po` / `en_US.json` / `en_GB.json` / `zh_TW.yaml`) share an identical key set again (521 entries each), and `zh_CN.mo` was recompiled. ③ **Overview**: this cycle's changes — spread across 10 changelog entries — are merged here by module, with deletions and leftovers listed separately.
+
+#### 1. Metadata & Build (8 files)
+
+- `pyproject.toml`: `[tool.setuptools].packages` changed from `["src"]` to `["src", "src.platforms", "src.proto"]`. An explicit `packages` list is **not recursive**, so the omission made distributions built by `pip install .` miss `src/platforms` (per-platform danmaku collectors) and `src/proto` (Douyin danmaku protobuf) — a runtime `ModuleNotFoundError` on the import chain (`DouyinLiveRecorder.egg-info/SOURCES.txt` has only 102 lines and lists neither sub-package; verifiable). Version `4.0.9.4` and the 20 dependencies verified drift-free.
+- `AGENTS.md`:
+  - Directory tree gained `tests/` (incl. `frontend/`), `src/proto/__init__.py`, `.github/ISSUE_TEMPLATE/` + `PULL_REQUEST_TEMPLATE.md` + `issue-translator.yml`, plus a root-docs group (`README.md` / `README_EN.md` / `CODE_WIKI.md` / `CODE_WIKI_EN.md` / `AGENTS.md` / `LICENSE` / `index.html` / `StopRecording.vbs`);
+  - module count in "Key Conventions" 41 → 42 (new `src/proto/__init__.py`);
+  - testing section gained the frontend-test convention (`tests/frontend/*.mjs` uses Node's built-in `node:test`, zero npm dependencies; invoked by a same-named Python wrapper via `node --test` subprocess, skipped when Node is absent) and dropped the dead link to `.qoder/skills/test-creator/SKILL.md` (that directory does not exist in this workspace);
+  - dependency section gained two notes: dev dependencies live in `[project.optional-dependencies].dev` and never enter `requirements.txt`; frontend tests need no npm packages;
+  - "Known Pitfalls" gained 2 entries: the HLS capture exclusion list **removes the whole HLS candidate group** (must not be implemented as the reordering semantics of `_FLV_FIRST_PLATFORMS`), and GUI/WEB quality switches must sync the editor snapshot and the display source after writing back (the serial-number prefix / stale-snapshot overwrite / stale log value defects share one root).
+- `docker-compose.yaml`: the `APP_VERSION` example in comments `4.0.9.2` → `4.0.9.4` (aligned with `pyproject.toml`), plus a note that leaving it unset only empties the LABEL while the in-image version is still read at runtime via `importlib.metadata`.
+- `requirements.txt`: header notes added for "dev deps come from `.[dev]`, GUI from `.[gui]`, neither enters the runtime list" and "frontend tests need zero npm deps"; the 20 runtime deps were diffed against `pyproject.toml [project.dependencies]` **entry by entry** with no additions or removals.
+- `Dockerfile`: `ARG APP_VERSION` now documents `pyproject.toml` as the single source of truth and CI injection via tomllib; the `COPY . ./` step documents what `.dockerignore` must **keep** (`main.py` / `web.py` / `gui.py` + `src/` incl. JS signing scripts and proto + `web/` + `i18n/**/*.mo`) and what it excludes.
+- `.gitignore` / `.dockerignore`: both gained `*.pyc_probe_tmp` (transient probe artifacts such as the leftover `src/stream.pyc_probe_tmp`, not source).
+- `.coveragerc-concurrency`: header notes that frontend `.mjs` tests produce no Python coverage data, and that the `omit` list is maintained in lockstep with pyproject and both ignore files.
+
+#### 2. Localization (4 catalogs + compiled artifact)
+
+- 5 entries added (all logger-side f-string templates; sources: 3 from `src/stream_select.py`, 1 from `src/danmaku_monitor.py`, 1 from `src/cookie_cache.py`):
+  - `平台 {platform} 在 HLS 采集排除列表中…` (platform in the HLS capture exclusion list with no fallback) — `src/stream_select.py`
+  - `弹幕边车文件写入失败: {type(e).__name__}: {e}` (danmaku sidecar file write failed) — `src/danmaku_monitor.py`
+  - `流地址校验: {url} - GET 复核异常: …（attempt {attempt}）` (stream-URL validation: GET recheck exception) — `src/stream_select.py`
+  - `流地址校验: {url} - Range-GET 未取得响应，按校验失败处理` (Range-GET returned no response) — `src/stream_select.py`
+  - `等待其它线程的 cookie 拉取超时，返回空结果: {key}` (timed out waiting for another thread's cookie fetch) — `src/cookie_cache.py`
+- Catalog size 516 → 521; the extractor confirms all four key sets are **identical** again, and the "present at runtime but absent from catalog" gap is down from 5 to 0 (183 historical/compatibility entries intentionally kept).
+- `zh_CN.po` header dates 2026-08-30 → 2026-09-06; `python scripts/compile_po.py` recompiled `zh_CN.mo` (522 entries incl. the header empty msgid, 64930 bytes) and `--check` passes byte-level.
+- `web/app.js` frontend dictionaries (106 keys each) verified key-consistent across all four languages — no change needed (frontend strings are maintained separately from the four catalogs).
+
+#### 3. This Cycle's Code Changes (Classified by Module, 2026-09-02 ~ 09-06)
+
+- **`main.py`**: new global `hls_collection_exclude_platforms` plus main-loop parsing (supports Chinese/English comma separators, hot-reloaded each round); new module constant `SEGMENT_FORMAT_BY_SUFFIX` (`.ts→mpegts` / `.flv→flv` / `.mkv→matroska` / `.mp4→mp4` / `.m4a→ipod`, with `.get(..., "ipod")` fallback for the audio branch) replacing 5 bare literals; new `_FFMPEG_ERRNO_HINTS` + `_describe_return_code()` (normalizes `4294967274` → `-22 EINVAL`).
+- **`src/stream_select.py`**: `select_source_url` gained the effective switch `hls_effective_enabled = main.hls_collection_enabled and not hls_excluded` (excluded platforms drop the whole HLS candidate group instead of reordering it).
+- **`src/spider.py`**: `extract_douyin_hevc_flv_url()` now appends `&codec=h265` (returns as-is if already present), fixing missed detection in `_is_h265()` and the h265 fallback logic.
+- **`src/async_http.py`**: removed the cross-loop `run_coroutine_threadsafe(client.aclose(), ...)` branch (root fix for the flaky "FakeAsyncClient.aclose was never awaited" warning).
+- **`src/web_config.py`**: added `BUILTIN_QUALITIES` (aligned with `stream_select.get_quality_code`; `QUALITY_KEYWORDS` now points at the same tuple), `QUALITY_OPTIONS_SECTION` / `QUALITY_OPTIONS_KEY`, `_split_multi_value` / `normalize_quality_options` / `read_quality_options` / `write_quality_options`, `update_room_quality` (line-level rewrite preserving comment prefix and original URL, atomic `os.replace`), and `find_room_url_by_anchor_name`.
+- **`src/web_api.py`**: added `GET /api/rooms/qualities` and `PUT /api/rooms/qualities` (option add/remove) plus `PUT /api/rooms/quality` with `RoomQualityUpdate` (per-room quality change, sharing `update_room_quality` with the GUI).
+- **`gui.py`**: added `_refresh_quality_context` / `_anchor_url_map` / `_anchor_quality_map` / `_quality_menu_values` / `_on_room_quality_change`, plus a 6th "Switch quality" column (`CTkOptionMenu`) in the quality monitor; the switch now strips the `序号N ` prefix before lookup, calls `_load_config()` to sync the editor snapshot, and displays from the config file.
+- **`web/index.html` / `web/app.js` / `web/style.css`**: quality dropdown became a backend-driven add/remove option list (chips panel); the room list quality column became an inline dropdown driven by event delegation; new i18n strings; `.data-table select` styling.
+- **`scripts/`**: `douyin_live_recorder_standalone.py` moved in from the repo root with `find_ffmpeg()` fixed (script dir → repo root → PATH); new `scripts/check_annotations.py` (comment lint + AST equivalence check, three modes, wired into the CI `static` job).
+- **`tests/`**: new `test_record_container.py` (13 cases incl. an AST scan forbidding bare literals), `tests/frontend/test_quality_ui.mjs` (6 cases, Node `node:test` + `node:vm` sandbox) and `tests/test_frontend_quality_ui.py` (wrapper, skips without Node); +3 classes in `test_web_config.py`, +2 classes in `test_web_api.py`, +5 cases in `test_stream_select.py`, +2 in `test_async_http_lock.py`; `conftest.py` gained a `pytest_unconfigure` hook that cleans `tests/_out_live` / `tests/_out_e2e`.
+- **Repo-wide comment completion** (2026-09-03): 41 files / +1370 lines, proven logic-neutral by `ast.dump` equivalence.
+
+#### 4. Deletions & Leftovers
+
+- **Deleted**: the cross-loop aclose dispatch branch in `src/async_http.py`; `@pytest.mark.filterwarnings("ignore::RuntimeWarning")` in `tests/test_async_http_lock.py`; the unused `Callable` import in `scripts/douyin_live_recorder_standalone.py` (09-02); the dead `.qoder/skills/test-creator/SKILL.md` reference in `AGENTS.md`.
+- **Moved**: `douyin_live_recorder_standalone.py` from the repo root into `scripts/` (equivalent to deleting the root copy).
+- **Leftover (not deleted, now ignored)**: `src/stream.pyc_probe_tmp` (a 2026-09-01 probe artifact, not source) — added to `.gitignore` / `.dockerignore`, awaiting manual cleanup.
+- **Changelog dedup**: `CODE_WIKI_EN.md` carried two near-identical translations of the same 2026-08-29 "Web Panel Manual Recording Control" entry (the Chinese doc has one); the duplicate block was removed and the surviving entry's title realigned with the Chinese wording.
+
+#### 5. Verification (2026-09-06)
+
+- Full `pytest -q`: **858 passed, 2 skipped, 0 warnings**;
+- `python scripts/extract_i18n_strings.py`: 0 missing, zero divergence between the four catalogs;
+- `python scripts/compile_po.py` / `--check`: in sync with the .po (522 entries);
+- `python scripts/check_version.py`: PASS (dynamic-versioning state intact);
+- dependency diff script: `requirements.txt` and `pyproject.toml` agree on all 20 entries;
+- `pytest tests/test_i18n.py`: 34 passed (four-catalog key-set consistency assertions).
+
+### v4.0.9.4-dev (2026-09-06) — GUI quality-switch persistence fixes + full WEB per-room quality-change path + frontend/backend unit tests
+
+**Summary**: Follow-up to the previous change that fixed three defects and completed the missing WEB-side functionality. Defect 1 (GUI key-format mismatch): the quality-monitor menu passed `"序号11 DANK1NG"` (row name with prefix) to the reverse lookup table whose keys are pure anchor names (`"DANK1NG"`), so every lookup missed and the toast "URL_config.ini entry not found, quality unchanged" fired. Defect 2 (persistence loss): writing the change updated `URL_config.ini` on disk but left the URL-config editor's `config_text` widget holding the pre-write snapshot — the user hitting "Save" later would overwrite the file with old content, erasing the quality segment. Defect 3 (display reset): the "set quality" column was rendered from the subprocess log (`序号11 DANK1NG[原画] 正在录制中`, a snapshot taken when recording started) and every table rebuild (≈5 s) reset the menu back to the stale value. The WEB panel previously exposed only add/drop quality options (global list) but had no per-room quality switcher entry or backend endpoint. This fix: GUI strips the `序号N ` prefix before lookup, reloads the editor after a successful write (so the user's "Save" does not overwrite), and renders "set quality" from the live config file instead of the log snapshot. WEB: new `PUT /api/rooms/quality` endpoint sharing `update_room_quality` with the GUI (same line format, file lock against concurrent rewrites); frontend room-list quality column changed to inline `<select>` driven by event delegation (change → PUT → reload). Backend API tests 8, frontend `node:test` 6 (DOM/fetch stubs, drives the real event-delegation chain).
+
+**Changes**:
+
+- `gui.py`:
+  - `_on_room_quality_change`: strips the `序号\d+(\s|$)` prefix before the reverse lookup so the row-name key matches `_anchor_url_map` (built by `parse_url_config` from plain anchor names, never prefixed); after a successful write, calls `_load_config()` to refresh `config_text`, the URL map, and the quality map — eliminating the "Save overwrites the quality segment" path (previous code only synced `mtime`, not the widget content).
+  - New instance field `_anchor_quality_map` (anchor name → current quality in the config row); `_refresh_quality_context` builds it alongside the reverse URL map from the same `parse_url_config` pass.
+  - `_add_quality_data_row`: the "set quality" column now sources from `_anchor_quality_map` (same prefix-strip before lookup), falling back to the log value only when the anchor is missing from the map — so the table rebuilds immediately showing the newly selected quality instead of the stale subprocess-log snapshot.
+- `src/web_api.py`:
+  - Import extended with `update_room_quality`.
+  - New `RoomQualityUpdate(BaseModel)`: `url: str` + `quality: str | None` (empty/None = remove quality segment, fall back to the global default).
+  - New `PUT /api/rooms/quality`: request body validated through `validate_room_target` (newline-injection guard) + whitelist (`BUILTIN_QUALITIES`, so a tier that would silently regress to "原画" cannot be written); serialised by holding `_rooms_config_lock` and `main.file_update_lock` to avoid TOCTOU races with the main loop's rewriter and add/droom endpoints; returns 404 (room not found) / 422 (validation) / 200 `{ok, changed}`; persistence delegated to `update_room_quality` — same implementation the GUI uses, so a change on one side is immediately visible on the other.
+- `web/app.js`:
+  - `buildRoomQualitySelect(url, current)`: constructs an inline quality `<select>` (options = default + `qualityOptions` + current as fallback so removing the current tier from the option list does not visually collapse the row); `data-action="quality"` + `data-url` forward the identity.
+  - `loadRooms`: the quality column changes from a plain-text `<td>` to `buildRoomQualitySelect(...)`.
+  - `rooms-tbody` event delegation gains a `select[data-action="quality"]` change branch, which dispatches `changeRoomQuality(url, value)`.
+  - New `changeRoomQuality(url, quality)`: `PUT /api/rooms/quality`, toast on success followed by `loadRooms()` refresh; on failure it toasts and reloads the list so the UI reverts to the server-side truth (no user misselection stuck in the DOM).
+  - `showView('rooms')`: `loadRooms()` is now chained after `loadQualityOptions().finally(loadRooms)` so the `<select>` has its full option set before the row renders.
+  - Three-locale i18n keys added (`toast.qualityChanged` / `toast.qualityReset` / `toast.qualityChangeFailed`); API-contract comment block updated.
+- `web/style.css`: new `.data-table select` compact rule (`padding: 4px 6px / font-size: 12px / max-width: 110px`) that intentionally differs from the form-level `.inline-form select`.
+- `tests/test_web_api.py` (extends existing `TestRoomQualityApi` to 8 cases total):
+  - `test_change_quality_requires_auth`: PUT without a Bearer token must return 401.
+  - `test_change_quality_on_disabled_room_preserves_comment`: a commented-out room (`# 超清,...`) accepts a quality change, keeps the `#` prefix, stays disabled, and shows the new quality in the list.
+  - `test_quality_visible_in_room_list_after_change`: PUT is immediately reflected by the next GET /api/rooms; sibling rows are unaffected.
+  - `test_change_quality_matches_schemeless_url`: the URL normalisation in the backend lets a request with a bare host match a row written with a scheme.
+  - `test_empty_string_quality_resets_to_default`: `quality: ""` behaves the same as `null` — both remove the quality segment.
+- `tests/frontend/test_quality_ui.mjs` (new file, Node built-in `node:test` + `node:vm` sandbox, zero npm dependency):
+  - DOM/fetch stubs load app.js (IIFE has no side effects at import time); `DOMContentLoaded` is fired manually; every test drives the real event-delegation chain (tab click → render → select change → PUT → toast/reload).
+  - 6 cases: sandbox smoke, dropdown rendering (option composition + selected state + URL escaping + row structure), change-request contract, empty-value serialises to null, failure reverts to server truth, three-locale toast behaviour.
+  - Mutation guard verified: temporarily removing `esc(url)` from `buildRoomQualitySelect` flips the escape assertion red (proves the test actually catches regressions, not just passes by accident).
+- `tests/test_frontend_quality_ui.py` (new file): pytest wrapper that runs `node --test` as a subprocess; skips when Node is unavailable (same environment-restriction convention as other harness-limited cases).
+
+### v4.0.9.4-dev (2026-09-06) — Add/drop quality options in WEB/GUI + per-row quality switcher in quality monitor
+
+**Summary**: The room-quality setting now goes from a fixed set of 10 engine-recognised tiers to a user-curated subset. The WEB "Rooms" view exposes add/remove controls for the quality dropdown (persisted under `config.ini [录制设置] / 自定义画质选项(逗号分隔)`); the GUI quality monitor gains an inline "switch quality" dropdown on every recording row. Both share the same config. Selecting a non-default quality rewrites the room line in `config/URL_config.ini` as `quality,url[,主播: name]`; the new quality takes effect on the next detection cycle (default 120 s).
+
+**Changes**:
+
+- `src/web_config.py`:
+  - Introduced `BUILTIN_QUALITIES` tuple (aligned with `stream_select.get_quality_code`); legacy alias `QUALITY_KEYWORDS` now points to the same tuple to avoid parallel maintenance.
+  - Added `QUALITY_OPTIONS_SECTION = "录制设置"` / `QUALITY_OPTIONS_KEY = "自定义画质选项(逗号分隔)"` as the single source of truth for the storage location.
+  - `_split_multi_value` / `normalize_quality_options` / `read_quality_options` / `write_quality_options`: only built-in tiers are accepted (unknown names would silently degrade to "原画" downstream, so they're filtered out before reaching the dropdown); empty/all-invalid input falls back to the full built-in list; writes go through `update_config_line` (comment + section order preserved) and fall back to `append_config_line` when the key is missing; every input item is `_reject_newline`-checked before normalisation (parity with `format_url_line`, C3 hardening).
+  - `update_room_quality`: URL-keyed line-level rewrite of `URL_config.ini`. Preserves the comment prefix (including the space after `#`), line-ending, anchor-name field, and the URL segment verbatim; idempotent (returns `False` when already at the target); segment-level URL match uses `normalize_url` so rows lacking a scheme are still hit; empty value or `"原画"` removes the quality segment (falls back to the global default); atomic write via temp file + `os.replace` so readers never see a half-written state; C7 hardening asserts no `.tmp` leftovers.
+  - `find_room_url_by_anchor_name`: name → URL reverse lookup used by the GUI quality switcher (the GUI knows rows by anchor name but writes by URL); exact match first, substring fallback, empty string on miss.
+- `src/web_api.py`:
+  - New `GET /api/rooms/qualities` returns `{options, builtin}` — exposing `builtin` removes the need for the frontend to hard-code a tier list.
+  - New `PUT /api/rooms/qualities` body `{options: [...]}`: validated through `validate_config_target` (newline-injection guard); invalid tiers are filtered by normalisation rather than accepted; persistence delegated to `write_quality_options`; re-exports `QUALITY_OPTIONS_SECTION` / `QUALITY_OPTIONS_KEY` to avoid hard-coding the same keys twice.
+- `web/index.html`: removed the hard-coded `<option>` list inside the room-add form; only the "default quality" entry remains. A new "quality options" panel below the form (chips list + candidate select + add button + hint copy) is populated dynamically by `loadQualityOptions()`.
+- `web/style.css`: added `.quality-options` / `.quality-panel` / `.quality-chips` / `.quality-chip` / `.quality-add-row` / `.quality-hint` styles. Chip delete buttons and the candidate select follow the global palette (light/dark theme aware).
+- `web/app.js`: added module state `qualityOptions` / `qualityBuiltin`; new helpers `loadQualityOptions` / `renderQualityOptions` / `replaceChildren` (DOM API, avoids `innerHTML` concatenation per the security hook) / `buildQualityChip` / `saveQualityOptions` / `addQualityOption` / `removeQualityOption`; API-contract block updated with the new endpoint; `showView('rooms')` now also triggers `loadQualityOptions`; DOMContentLoaded wires `#quality-manage-btn` (toggle panel), `#quality-add-btn` (add), and `#quality-chips` event delegation (remove); four-locale i18n dicts gain `rooms.manageQuality` / `rooms.addQuality` / `rooms.qualityHint` / `rooms.qualityEmpty` / `toast.qualityAdded` / `toast.qualityRemoved` / `toast.qualitySaveFailed` / `toast.qualityLoadFailed`.
+- `gui.py`:
+  - Imports extended with `parse_url_config` / `read_quality_options` / `update_room_quality` (`find_room_url_by_anchor_name` kept for future use).
+  - New instance fields: `_quality_options` (dropdown choices) / `_quality_default_label = "默认画质"` (first entry = fall back) / `_anchor_url_map` (anchor name → URL; needed to write back to `URL_config.ini`).
+  - New `_refresh_quality_context`: reads the option list from `config.ini` and rebuilds the anchor → URL map by parsing `URL_config.ini`. Hooked into the existing `_load_config` so external edits to `URL_config.ini` keep the map fresh.
+  - New `_quality_menu_values`: assembles the menu values (`default quality` + user-selected + current value as fallback, so removing the currently-selected option doesn't visually collapse the row to the first entry).
+  - New `_on_room_quality_change`: choosing "default quality" clears the quality segment (falls back to global default); choosing a tier rewrites the line via `update_room_quality` as `quality,url[,主播: name]`. After a successful write, `_last_url_config_mtime` is synced so `_watch_url_config` doesn't treat the GUI's own write as an external change and clobber the URL-config editor; write failures surface an error dialog + error log (no silent data loss); unknown anchors also surface an error dialog + error log.
+  - Quality-monitor detail header gains a "switch quality" column; `_add_quality_data_row` adds a `CTkOptionMenu` in column 6 (same light/dark theme palette as `appearance_menu`), with column weight 2.
+  - A small wraplength hint at the bottom of the quality page documents the "takes effect next cycle" and "default quality = remove segment" semantics.
+- `tests/test_web_config.py` (3 new classes): `TestQualityOptions` (normalisation strips unknown/empty/duplicates, missing key → built-in list, append/update round-trip preserves other keys, newline injection raises `ValueError`); `TestUpdateRoomQuality` (plain URL → add quality, modify existing, fall back to default, preserve comment prefix + line ending, idempotency, URL normalisation match, miss returns `False`, newline injection raises, atomic write leaves no `.tmp`); `TestFindRoomUrlByAnchorName` (exact match + miss returns empty string).
+- `tests/test_web_api.py` (new `TestQualityOptionsEndpoints`): GET defaults to built-in list, PUT persists and survives a follow-up GET, PUT filters non-whitelisted tiers, PUT newline injection → 422.
+- `README.md` / `README_EN.md`: the user-facing change is an additive refinement of the existing "Add room" / "Quality monitor" sections — no new top-level section needed; a changelog line is added in both languages.
+
+**Impact**:
+
+- User-visible: WEB room-add quality dropdown is no longer a fixed list of 10 entries; users pick which tiers to expose. GUI quality monitor gains a per-row switch; selecting a non-default quality rewrites `URL_config.ini` as `quality,url[,主播: name]` and takes effect on the next detection cycle. Selecting "default quality" removes the quality segment (room falls back to the global default in `[录制设置] / 原画|超清|高清|标清|流畅`).
+- Unchanged: only the 10 built-in tiers are selectable (aligned with main.py's whitelist and `stream_select.get_quality_code` keys); arbitrary custom names are rejected. Switching quality does NOT restart the recorder subprocess and does not interrupt other rooms in progress. WEB and GUI share the same option list via `config.ini`.
+- Edge handling: unknown URL surfaces an error dialog + error log instead of silently dropping the change; write failures surface an error dialog + error log; after a successful write, `_last_url_config_mtime` is synced to avoid the URL-config editor reloading on its own write.
+
+**Verification (2026-09-06)**:
+
+- `pytest tests/`: **849 passed, 2 skipped** (3 new pure-function test classes + 1 new API test class; no regressions).
+- `mypy src/ main.py web.py gui.py`: 0 issues across 42 source files.
+- `basedpyright src/ main.py web.py gui.py`: 0 errors, 0 warnings, 0 notes.
+- `black --check` / `isort --check` / `scripts/check_annotations.py`: all green (comment density 21.2%, well above the 13% threshold).
+
+### v4.0.9.4-dev (2026-09-05) — HLS capture exclusion platform list: listed platforms ignore the HLS switch and always use FLV capture
+
+**Summary**: Added the config key "HLS采集排除平台(逗号分隔)" — when "是否启用HLS采集(是/否) = 是" and the requested website (platform) is in the exclusion list, the HLS capture setting is ignored and FLV capture is used instead; websites outside the list are unaffected and keep normal HLS-priority behavior.
+
+**Change list**:
+
+- `main.py`:
+  - New module-level global `hls_collection_exclude_platforms: list[str] = []` (next to `hls_collection_enabled`), added to `main()`'s `global` declaration;
+  - `main()` main loop reads "录制设置 / HLS采集排除平台(逗号分隔)" (default empty) right after "是否启用HLS采集(是/否)" — supports Chinese and English commas, strips each entry and drops empties (following the `danmaku_platforms` parsing pattern), hot-reloaded every round.
+- `src/stream_select.py` (`select_source_url`):
+  - New effective-switch computation: `hls_excluded = platform in main.hls_collection_exclude_platforms`, `hls_effective_enabled = main.hls_collection_enabled and not hls_excluded` — a hit is equivalent to disabling HLS capture for that platform only;
+  - Candidate sequence construction (`hls_seq`) now uses `hls_effective_enabled` instead of `main.hls_collection_enabled`: for excluded platforms the HLS candidates are **removed as a whole and never enter the sequence** (deliberately different from `_FLV_FIRST_PLATFORMS`, which only reorders while keeping HLS as fallback); the h265-FLV → HLS switch is disabled as a consequence;
+  - The "HLS source present but HLS capture disabled with no fallback" warning branch also uses the effective switch and differentiates the two causes: a hit on the exclusion list suggests "remove the platform from the exclusion list to restore HLS capture", while the global-off case keeps the original wording.
+- `tests/test_stream_select.py`: 5 new cases — excluded platform always selects FLV (zero HLS probes), FLV validation failure never falls back to HLS (HLS never probed), HLS-only source warns and returns None (asserting the warning points to the exclusion list), platforms outside the list behave unchanged (including a FLV-first platform control), excluded platform h265-FLV does not switch to HLS.
+- `README.md` / `README_EN.md`: config example gained the "HLS采集排除平台(逗号分隔)" key with explanation; the Usage section gained a "Source selection (HLS/FLV)" subsection (config-item table for the global switch and the exclusion list, use case, fill format, priority semantics, boundary behavior, and hot-reload notes).
+- `CODE_WIKI.md` / `CODE_WIKI_EN.md`: the `[录制设置]` config table gained the new key row; the `select_source_url()` description documents the exclusion-list behavior.
+
+**Impact**:
+
+- User-visible: the new key defaults to empty = no platform excluded, zero behavior change; once a platform name is filled in (must exactly match what logs/config show, e.g. "斗鱼直播"), that platform always uses FLV.
+- Boundary semantics: an excluded platform with only HLS sources and no FLV/record_url fallback behaves the same as globally disabling HLS capture — warns and gives up the round (the warning text points to removing the platform from the list); the `record_url` fallback chain is unaffected.
+
+**Verification (2026-09-05)**:
+
+- `pytest tests/`: **828 passed, 2 skipped** (5 new cases, no regression in the full suite);
+- `mypy .`: 105 source files, 0 issues.
+
+### v4.0.9.4-dev (2026-09-05) — Standalone single-file build relocated to scripts/ (ffmpeg lookup fixed accordingly)
+
+**Summary**: Relocated the standalone single-file integration script `douyin_live_recorder_standalone.py` from the repository root to `scripts/` (filename unchanged), and fixed the ffmpeg lookup in `find_ffmpeg` plus all path references accordingly. Out-of-box behavior is unchanged; the run command is now `python scripts/douyin_live_recorder_standalone.py ...` executed from the repository root.
+
+**Change list**:
+
+- `scripts/douyin_live_recorder_standalone.py` (moved in from the root):
+  - `find_ffmpeg()` fix (**mandatory** — moving the file without this change would be a regression): the original lookup used `Path(__file__).parent / "ffmpeg" / exe`, which silently falls through to a PATH lookup once the file lives in `scripts/` (the repo-bundled ffmpeg/ would never be found). It now probes, in order, the script's own directory `ffmpeg/`, then its parent (repository root) `ffmpeg/`, then PATH — covering both in-repo runs and standalone copies of the script;
+  - The usage examples in the file header and all commands in `RUN_STEPS` (the `--help-steps` output) gained the `scripts/` prefix; the FFmpeg install instructions now point to the repository-root `ffmpeg/` directory; the config.ini wording was corrected to "resolved against the runtime working directory" (`load_settings` has always been CWD-based — the old "place it next to this file" wording became misleading after the move; the behavior itself is unchanged).
+- `AGENTS.md`: added the file to the `scripts/` section of the project-structure tree; the directory comment updated from "maintenance scripts (CI gates & i18n tools)" to "maintenance scripts & standalone tools (CI gates, i18n tools, single-file build)".
+- `scripts/check_annotations.py`: **no change needed** — `EXCLUDE_FILES` matches by **file name** (`path.name in EXCLUDE_FILES`), independent of directory; the exclusion still works after the move (verified).
+- `README.md` / `README_EN.md`: no change needed — the file is only mentioned by name in historical changelog entries (no path references; history preserved as-is).
+
+**Impact**:
+
+- User-visible: the run command gains the `scripts/` prefix (root → `scripts/`); the repo-bundled `ffmpeg/` is still auto-discovered at the repository root.
+- Unchanged semantics: config.ini / URL_config.ini / the `downloads/` output directory are all resolved against the runtime working directory (CWD); `--selftest` / `--dry-run` / the four-platform resolve-and-record pipeline are all unchanged.
+
+**Verification (2026-09-05)**:
+
+- `python -m py_compile scripts/douyin_live_recorder_standalone.py`: passed;
+- `python scripts/douyin_live_recorder_standalone.py --selftest`: **all 62 checks [PASS]**, exit code 0;
+- `find_ffmpeg()` returns `D:\DouyinLiveRecorder-dev\ffmpeg\ffmpeg.exe` (without the fix it would fall through to a PATH lookup);
+- `black --check` / `mypy` (single file): 0 issues;
+- `python scripts/check_annotations.py`: passed (105 Python files; the moved file remains excluded by name and is not part of the density check).
+
+### v4.0.9.4-dev (2026-09-05) — Auto-clean test output dirs _out_live/_out_e2e after pytest sessions
+
+**Summary**: `tests/conftest.py` gains a `pytest_unconfigure` hook that automatically deletes the `tests/_out_live` and `tests/_out_e2e` output directories once a pytest session ends (including collection failures / interrupted runs), eliminating leftover temp files from offline test cases (e.g. the SRT-on-disk assertions in `test_srt_timeline_anchor.py`).
+
+**Implementation notes**:
+
+- The path constant `_TEST_OUT_DIRS` is derived from the `tests/` directory itself (via `__file__`), independent of CWD;
+- `shutil.rmtree(..., ignore_errors=True)`: missing directories or sporadic Windows handle locks (antivirus / indexer scans) are silently skipped — cleanup failures never turn into abnormal pytest exit codes;
+- Both directories were already in `.gitignore`, so leftovers never polluted the repo; this cleanup is defensive housekeeping;
+- Manual verification scripts (real-live end-to-end ones run directly via `python tests/xxx.py`, e.g. `test_bili_live_collector.py`) bypass pytest and are unaffected — their "clean-then-write" semantics and the human-review purpose of the SRT output remain unchanged.
+
+**Verification (2026-09-05)**:
+
+- `pytest tests/test_srt_timeline_anchor.py`: 4 passed, `tests/_out_e2e` auto-deleted afterwards (together with the previously leftover `_out_live`);
+- Repeated runs (when the dirs no longer exist) pass without errors — idempotent;
+- Full `pytest -q`: **823 passed, 2 skipped** (identical to the 2026-09-04 baseline, no regression), both dirs absent afterwards;
+- `mypy tests/conftest.py` / `black --check` / `isort --check-only` all pass.
+
+### v4.0.9.4-dev (2026-09-04) — P0 fix: segmented-recording container mismatch made Douyin original-quality HEVC unrecordable (return code 4294967274)
+
+**Summary**: Fixed a P0 regression where the "TS + segmented recording" branch passed `-segment_format ipod` — HEVC original-quality streams exited immediately with `AVERROR(EINVAL)` (shown as `4294967274` on Windows), while H.264 streams silently produced corrupt files with MP4 content under a `.ts` extension. The output-extension → inner-container mapping is now consolidated into a single module-level constant `SEGMENT_FORMAT_BY_SUFFIX`, asserted by the new `tests/test_record_container.py`.
+
+**Root cause**: Two values in `main.py` were **swapped** — the TS branch used `ipod` (should be `mpegts`) and the M4A audio branch used `mpegts` (should be `ipod`); even the explanatory comment ("audio segmentation uses the ipod container…") had drifted onto the video branch, leaving the fingerprint of the swap. `ipod` is the "iPod H.264 MP4" subset muxer (`ffmpeg -h muxer=ipod`: extensions m4v/m4a/m4b, default video codec h264), whose codec tag table has **no HEVC entry**.
+
+**Reproduction (ffmpeg n9.0.1)**:
+
+- HEVC + `segment/ipod` → `Could not find tag for codec hevc in stream #0` + `Could not write header … Invalid argument`, byte-for-byte identical to the production log (production shows stream #1 because the live source carries an audio track), exit ≠ 0;
+- HEVC + `segment/mpegts` → exit 0, 40 KB output, first byte `0x47`, demuxable as mpegts;
+- **H.264 + `segment/ipod` → exit 0 with no error, but the output magic is `00 00 00 20 66 74 79 70` (`ftyp`)** — an MP4 container written into a `.ts` filename. Silent corruption; previously recorded files must be re-checked by magic byte.
+
+**Changes**:
+
+- `main.py`: new module-level constant `SEGMENT_FORMAT_BY_SUFFIX` (`.ts→mpegts` / `.flv→flv` / `.mkv→matroska` / `.mp4→mp4` / `.m4a→ipod`); all five segment branches now look the value up (the audio branch has a dynamic extension and uses `.get("." + extension, "ipod")` so `only_audio_record` platforms with an mp3 extension cannot raise KeyError); both misplaced comments moved back to their proper branches.
+- `main.py`: added `_FFMPEG_ERRNO_HINTS` + `_describe_return_code()` — return codes are normalized to signed 32-bit with errno semantics (`4294967274` → `-22 (EINVAL: muxer parameters / container-codec mismatch…)`); unknown codes get no hint to avoid log noise.
+- `src/spider.py`: `extract_douyin_hevc_flv_url()` now appends `&codec=h265` (returned as-is when a codec parameter already exists). Previously the HEVC URL scraped from the room HTML carried no such parameter, so `_is_h265()` and the h265 fallback check in `main.py` both missed it and the HEVC source went straight into `-c copy` disguised as a plain FLV.
+- `tests/test_record_container.py` (new, 13 cases): mapping-table assertions, two-way TS≠ipod / M4A≠mpegts regression guards, an AST scan asserting all five values come from the lookup table with no bare literals, registered lookup keys, the ipod audio fallback, codec-marker emission verified through `_is_h265()`, and return-code normalization.
+- `AGENTS.md`: two new anti-regression entries (segment container mapping; `hevc_flv_url` must carry the codec marker).
+
+**Verification (2026-09-04)**:
+
+- Full `pytest -q`: **823 passed, 2 skipped, 0 warnings** (baseline before the fix: 808 passed);
+- `black --check` (123 files) / `isort --check-only` / `mypy` (3 changed files) / `scripts/check_annotations.py` (average density 21.2%) all pass;
+- Reproduction artifacts removed; no temporary files left behind.
+
+**Sync and follow-ups**:
+
+- The runtime directory `D:\DouyinLiveRecorder` (separate from the dev checkout `D:\DouyinLiveRecorder-dev`) received the **minimal fix** only (two container values in `main.py` + the codec marker in `src/spider.py`), with the originals backed up as `*.bak-20260904`. Return-code normalization and the mapping-table refactor were not pushed there: its `src/spider.py` is an older 4617-line revision that does not share history with the dev checkout's 5143-line file, so it was not overwritten wholesale.
+- Previously recorded TS files should be re-checked by magic byte (first byte `0x47`); historical output from H.264 rooms may actually be MP4.
+
+### v4.0.9.4-dev (2026-09-04) — Fixed flaky warning "FakeAsyncClient.aclose was never awaited" + AGENTS.md pytest zero-warning gate baseline finalized
+
+**Change summary**: Fixed the flaky warning `RuntimeWarning: coroutine 'FakeAsyncClient.aclose' was never awaited` that fluctuated between 1~2 occurrences across full pytest runs (root cause: the scheduling race when `src/async_http.py::_get_client` closes a stale AsyncClient across event loops), and aligned the AGENTS.md "pytest (0 warnings)" gate with the actual baseline: third-party starlette/anyio deprecation warnings are now explicitly filtered via `pyproject.toml filterwarnings` with source comments, so the warnings summary of a full run is deterministically 0.
+
+**Root-cause analysis (three candidate fixes ruled out empirically)**:
+
+- Old implementation (original L63): when evicting a stale client created on another loop, it used `run_coroutine_threadsafe(client.aclose(), client_loop)` — schedule without waiting. Whether the callback ever runs depends on the old loop's remaining lifetime, and `is_closed()` being false does not mean the loop will ever turn again — inside the `asyncio.run` teardown window the loop is already stopped but not yet closed, so the callback never executes, the `aclose()` coroutine is never awaited, and GC reports "never awaited"; because GC timing is random (usually after the test ends, captured by pytest's unraisableexception plugin), it escapes the per-test `filterwarnings("ignore::RuntimeWarning")` and makes the warning count fluctuate between 1 and 2.
+- The intermediate fix ("`is_running()` gate + `fut.result(timeout=5)` wait") still cannot cure it, as measured: during the `asyncio.run` teardown phase (`_cancel_all_tasks` / `shutdown_asyncgens` running several `run_until_complete` passes) the loop is still turning (is_running is true) but stops at any moment — the scheduled task may already be created yet never stepped (`Task was destroyed but it is pending!`), and the future never resolving amplifies a teardown race into a full 5-second block (stress-measured: a single test round went from 0.4s to 5.4s, with warnings still present).
+- Directly `await old_client.aclose()` on the current loop is also not viable: it operates a transport bound to the old loop (httpcore's connection-pool close touches the old loop's `call_soon`, raising RuntimeError outright once that loop is closed).
+
+**Conclusion**: an external thread cannot reliably control the lifetime of another thread's event loop; the only reliable approach is to **never create an aclose coroutine across loops** — drop the reference and let GC handle it, unifying with the existing "same-thread round change, old loop already closed" path semantics; process-level cleanup remains the responsibility of atexit's `close_all_clients_sync`.
+
+**Changes**:
+
+- `src/async_http.py`: removed the cross-loop `run_coroutine_threadsafe` scheduling branch, replaced with not creating the coroutine at all; comments record the empirically ruled-out alternatives in full (do not revert).
+- `tests/test_async_http_lock.py`: `test_concurrent_threads_no_cross_loop_error` dropped its `@pytest.mark.filterwarnings("ignore::RuntimeWarning")` (it cannot intercept GC-delayed warnings and only masks regressions; removing it turns the test into a regression guard); added 2 regression tests: `test_cross_loop_running_old_loop_skips_close` (a running old loop also gets no close scheduled, reproduced via a background `run_forever` thread) and `test_cross_loop_stopped_old_loop_skips_close` (`run_until_complete` returned but not closed, reproducing the asyncio.run teardown-window shape).
+- `pyproject.toml`: `[tool.pytest.ini_options].filterwarnings` gained a filter for starlette testclient's import-time `anyio.abc.BlockingPortal` deprecation notice (same classification as the existing httpx deprecation notice: third-party, with a source comment).
+- `AGENTS.md`: added the "pytest '0 warnings' baseline" entry (empty summary; distinction between project-owned warnings and filterable third-party warnings; filtering must never mask project warnings; coroutine warnings must be fixed at the root cause); added the "never create/schedule aclose coroutines of old AsyncClients across event loops" entry to Known Pitfalls.
+
+**Verification (2026-09-04)**:
+
+- `tests/test_async_http_lock.py` re-run 30 + 20 consecutive rounds: 0 warnings, 0 `Task was destroyed`, no multi-second stalls (before the fix, 8 out of 15 rounds showed warnings);
+- Full `pytest -q`: **808 passed, 2 skipped, 0 warnings** (warnings summary deterministically 0, including the newly filtered third-party warning);
+- `black --check` / `isort --check-only` / `mypy` (incl. `--platform linux`) / `basedpyright` (0 errors/0 warnings) / `scripts/check_annotations.py` all pass.
+
+### v4.0.9.4-dev (2026-09-03) — Repo-wide Chinese comment completion (41 files / +1370 lines) + annotation-check tool scripts/check_annotations.py created and wired into CI
+
+**Change summary**: This entry records the systematic comment completion pass over the whole repo performed in the 2026-09-03 session. All code changes are **comments only** (zero executable-logic changes, proven by AST-equivalence checking 41/41), plus one new annotation-convention gate script `scripts/check_annotations.py` (three modes) wired into the `static` job of `ci.yml`.
+
+**Scope and outcomes**:
+
+- 38 Python files (+ 3 frontend files `web/app.js` / `web/index.html` / `web/style.css`) went from an average comment density of 7.6% to 20.7%, +1370 comment lines total;
+- `src/spider.py` (the 60+ platform crawler core, 4617 lines) went through four dedicated rounds: 5.0% → 14.6% (+519 lines), covering the module header, all 54 large functions (≥35 lines, 75% of the file), ~33 small functions, constant tables, and boundary/pitfall annotations;
+- The remaining low-density test files were brought up to ≥13% each (targets 16–18% for the larger ones).
+
+**Key design: AST-equivalence verification**
+
+Since this repo is not a git checkout, there was no HEAD to diff against. Instead, a full-text baseline snapshot was taken before editing, and after each round `ast.dump(ast.parse(old)) == ast.dump(ast.parse(new))` was enforced for every touched file. Because comments do not enter the AST while triple-quoted docstrings do, passing this check simultaneously proves (a) no executable logic was touched and (b) no docstrings were introduced — turning the AGENTS.md "use `#`, never docstrings" convention into a machine-verifiable constraint. During the pass this check caught one real violation: a subagent had added a duplicate `json_data["anchor_name"] = anchor_name` assignment in `get_yy_stream_data`; it was reverted while the valuable knowledge from its comment was relocated to the original assignment site.
+
+**New script `scripts/check_annotations.py` (stdlib-only, zero side effects)**:
+
+- Default mode: checks the repo-wide annotation conventions — docstrings forbidden (except protoc-generated `douyin_pb2.py`), per-file comment-density floor (default 13%), module header presence;
+- `--baseline <dir>` mode: AST-equivalence comparison of current files against a previously snapshotted baseline (used to prove comment-only changes);
+- `--snapshot <dir>` mode: writes a baseline snapshot for later equivalence checks.
+
+**AGENTS.md**: added an "Annotation Conventions" subsection (docstrings forbidden; `#` only; density floor 13%; how to use the tool) and registered the script in the project tree. **CI**: `ci.yml` `static` job gained the step "Check annotation conventions".
+
+**Verification**: `pytest` 808 passed (1 pre-existing third-party warning, identical to baseline); `mypy` 98 files clean; `black` / `isort` pass; `check_annotations.py` default mode 104 files pass (avg density 21.2%); baseline mode 41 files equivalent, zero logic changes.
 
 ### v4.0.9.3-dev (2026-09-02) — Standalone single-file integration (standalone) type-annotation fixes (mypy: 4 errors cleared)
 
@@ -1913,7 +2205,7 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 - `AGENTS.md` regression-prevention: three conventions landed, see "Known Pitfalls (Avoid Regressions)" — "Blu-ray sub-tiers (Blu-ray 4M/8M/20M/30M) must fold into the BD index, must not be inserted into the generic `QUALITY_MAPPING`", "Huya tier selection ratio derived from the room bitrate ceiling, exsphd first / bitRate fallback, nearest downgrade or fall back to origin when unavailable", "Douyu local retry chain only supplements the server-side rate clamp, must not replace the HLS candidate or global backoff".
 - v4.0.9.2-dev (2026-08-29) "Web Panel Manual Recording Control" — the `web/index.html` tier options added by this feature live in the same form as that panel's "Recording Control" section.
 
-### v4.0.9.2-dev (2026-08-29) — Web Panel Manual Recording Control (Global Switch + 7 Interrupt Points + Start/Stop Buttons) + Two-Pass Review Fixes + E2E Smoke & Commit-Gate Triage
+### v4.0.9.2-dev (2026-08-29) — Web Panel Manual Recording Control (Global Switch + 7 Interrupt Points + Start/Stop Buttons) + Two-Round Review Fixes + End-to-End Smoke Test & Commit-Gate Triage
 
 **Change Summary**: This entry systematically records the "remove auto-recording on Web startup, switch to user manual control" feature landed during the 2026-08-29 session, together with its supporting verification. ① **The feature itself**: new global switch `main.recording_enabled` (default `True`, CLI/GUI unaffected) + 7 interrupt points in the `main.py` recording chain + a `POST /api/recording/toggle` endpoint + frontend Start/Stop Recording buttons with 2s polling state sync — the Web panel no longer records automatically on startup; ② **independent code review**: completeness of all 7 interrupt points, process reaping, error-sample isolation, concurrency safety, and auth consistency all confirmed; 3 defects fixed (including one P1 frontend status-label selector bug); ③ **end-to-end smoke test**: real panel (background mode) startup → start recording → stop recording → graceful exit, full flow passed; full `pytest` **786 passed, 2 skipped** re-run consistent; ④ **commit-gate triage**: the git commit was hard-blocked by the Mimosa L3 gate on unremediated high findings; completed the official deep scan (seal `sha256:5250cdc7…`) plus a finding-by-finding triage of all 44 alerts — all pre-existing false positives / upstream patterns, none on this feature's code; triage report written to disk, commit pending maintainer approval.
 
@@ -1979,73 +2271,6 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 - `docs/web-recording-control-changelog.md`: feature change summary and follow-up-item closure record (review fixes detailed in section 3.4).
 - `docs/security-triage-2026-08-29.md`: gate-alert triage details and the two release paths.
 - v4.0.9.1-dev (2026-08-27) "Recording Result Feedback Scheduler" — stop-period error-sample isolation builds on its `record_error`/`record_success` semantics; the existing `check_subprocess` early-interrupt mechanism (flush danmaku before terminating ffmpeg) is pre-existing behavior; this feature only adds `recording_enabled` to its trigger condition.
-
-### v4.0.9.2-dev (2026-08-29) — Web Panel Manual Recording Control (Global Switch + 7 Interrupt Points + Start/Stop Buttons) + Two-Round Review Fixes + End-to-End Smoke Test & Commit-Gate Triage
-
-**Change Summary**: This entry systematically records the "remove auto-recording on Web startup, switch to user manual control" feature and its supporting verification landed in the 2026-08-29 session. ① **Feature core**: new global switch `main.recording_enabled` (default True; CLI/GUI direct runs unaffected) + 7 interrupt points in the main.py recording chain + the `POST /api/recording/toggle` endpoint + frontend "Start/Stop Recording" buttons with 2s-polling state sync — the Web panel no longer auto-records on startup; ② **Independent code review**: all 7 interrupt points verified for completeness, process reclamation, error-sample isolation, concurrency safety, and auth consistency, with 3 defects fixed (including 1 P1 frontend state-label selector defect); ③ **End-to-end smoke test**: the full flow — real panel (background mode) startup → start recording → stop recording → graceful exit — passed, with the full `pytest` suite re-run consistently at **786 passed, 2 skipped**; ④ **Commit-gate triage**: the git commit was hard-blocked by the Mimosa L3 gate on unfixed high findings; the official deep scan was completed per the gate's requirement (seal `sha256:5250cdc7…`) with all 44 findings triaged one by one — every one a pre-existing false positive or upstream pattern and none in this feature's code; the triage report is on disk awaiting maintainer approval.
-
-**Files Involved (Classified by Module)**:
-
-**1. Recording Main-Chain Global Switch — `main.py`**
-
-- New module-level `recording_enabled: bool = True` (L210); 7 interrupt points injected: direct-download ffmpeg polling (L648, chunk-level interrupt), `check_subprocess` polling (L743, on hit gracefully terminates ffmpeg in escalating steps: stdin 'q' → terminate → kill, three levels within 30s with a wait at each level), `start_record` entry guard (L1581, early return without entering the recording loop), direct-download failure-classification exclusion (L2102, stop interrupts don't count as failure samples), room main-loop wait-period check (L2452), before `main()` spawns a new thread (L3038, rooms re-spawn per config after re-enabling), and thread-exit finally cleanup (L3057 calls `remove_room_from_running`, covering both the stop and abnormal-exit paths as a fallback). Review fix: the L650 direct-download interrupt message "或请求停止" (or requested stop) was unified to "或停止录制" (or stop recording).
-
-**2. Running-List Cleanup — `src/notify.py`**
-
-- New `remove_room_from_running(record_url)` (L153): idempotently removes a room from `running_list` when its thread exits (membership check first, decrements `monitoring` only when actually removed, shares `record_state_lock` with `clear_record_info`), ensuring rooms can be spawned again after "Stop Recording" → "Start".
-
-**3. Web API & State Exposure — `src/web_api.py` + `src/recorder_status.py`**
-
-- `web_api.py` adds `POST /api/recording/toggle` (L249-258): request body `{"enable": bool}`, flips `main.recording_enabled` and echoes `{"ok": true, "recording_enabled": ...}`; inside the global auth middleware's coverage (the allowlist covers only login and static assets), consistent with the other write endpoints' auth model.
-- `recorder_status.py` status JSON appends `"recording_enabled": main.recording_enabled` (L109): after a page refresh/reconnect the frontend restores the button's true state via the 2s polling (orthogonal to `engine_alive`).
-
-**4. Web Panel Entry — `web.py`**
-
-- Sets `main.recording_enabled = False` **before** starting the engine thread (L188-189, set before `start()` to eliminate the startup race): the panel defaults to not auto-recording, while config hot-reload / scheduler / danmaku monitoring keep running, awaiting manual trigger.
-
-**5. Frontend — `web/index.html` + `web/app.js` + `web/style.css`**
-
-- `index.html` (L39-46) adds a "Recording Control" area: state indicator (dual spans `录制运行中`/`录制已停止` with `hidden` toggling) + start/stop buttons, with text going through `data-i18n` static translation (effective immediately on language switch).
-- `app.js` adds `renderRecordingControl` (mutually exclusive button enable/disable, `engine_alive` linkage, state-label switching) and `toggleRecording` (POST toggle → success toast → independent try/catch state re-fetch; failures stay silent and are left to the 2s polling to sync, avoiding false "operation failed" reports); the `I18N` dictionary gains 6 keys × 4 languages (`recording.state.on/off`, `recording.start/stop`, `toast.recordingStarted/Stopped`, complete for zh_CN/en_US/en_GB/zh_TW). Review fix (P1): the state-label query originally used the `#recording-state` ID selector while the container actually uses `class="recording-state"`, so the label never switched — changed to a class selector with a comment added to prevent regression.
-- `style.css` (L248-275) adds control-area styles: primary-color start button / red stop button / disabled state (opacity + disabled pointer events), consistent with the existing card style.
-
-**6. Tests (new + modified)**
-
-- `tests/test_web_api.py`: new `TestRecordingToggle` (2 cases — 401 without auth, switch flip writes the real module attribute).
-- `tests/test_record_failure_feedback.py` (**new file**): `test_check_subprocess_interrupts_when_recording_disabled` verifies that with `recording_enabled=False` the ffmpeg polling loop interrupts, the graceful termination is called exactly once, and no success/failure samples are recorded; monkeypatch throughout (no `patch.dict(os.environ)`), `_RunningPopen` is a class defining `__class_getitem__`, and main's global reference is replaced via `types.SimpleNamespace(**vars(subprocess))` — complying with the AGENTS.md mandatory test conventions.
-
-**7. Documentation (new)**
-
-- `docs/web-recording-control-changelog.md` (**new**): feature change summary — background, design (global switch + multi-entry interrupts), key design decisions (including the corrected wording "stop semantics = active, tiered graceful termination"), integration points, test verification, known limitations, and 5 closed follow-up items (commit / review / smoke test / persistence evaluation / per-room switch decision).
-- `docs/security-triage-2026-08-29.md` (**new**): item-by-item triage of all 44 Mimosa L3 commit-gate findings — SSRF (hardcoded official download sources) / path traversal (fixed constant paths + the existing `clean_name` sanitization line, where `main.rstr` contains `/ \ : .`) / command injection (plain JS arithmetic inside PyExecJS) / hardcoded credentials (platform-public client tokens) / weak randomness (non-crypto jitter) — all pre-existing false positives or upstream patterns; Zip-Slip already has `realpath` protection; none touch this feature's code.
-- `CODE_WIKI.md` / `CODE_WIKI_EN.md`: this entry added to both changelogs (CN/EN in sync).
-
-**Change Notes**:
-
-- **Stop semantics are active, tiered graceful termination — not "natural wind-down"**: the 1s polling loop terminates ffmpeg as soon as it sees the switch off — it first writes 'q' so ffmpeg finishes the file trailer (TS/FLV/segments stay intact), then escalates terminate → kill; the process is wait()-reclaimed and deregistered, with no orphan ffmpeg. The earlier "natural wind-down" wording has been corrected (to keep future maintainers from altering the interrupt logic).
-- **Error-statistics isolation is a prerequisite of the circuit-breaker system**: interrupts during a stop do not count as `record_error` samples, preventing a user's "Stop Recording" from being misread as a mass recording failure that triggers error-backpressure downscaling or per-platform breaking.
-- **`recording_enabled` is not persisted (conclusion of follow-up item 4)**: persisting `True` would auto-resume recording after a panel restart, re-introducing "Web auto-records on startup" through the back door — exactly what this feature's P0 requirement 1 removes; persisting `False` is indistinguishable from the default. It stays a session-scoped runtime switch (analogous to OBS "Start/Stop Streaming" not persisting across sessions); every start begins in the stopped state.
-- **Per-room switch remains deferred (item 5)**: consistent with known-limitation #1 — in Web scenarios "record all / stop all" is the common need; per-URL granularity awaits a real requirement (it would need a `dict[str, bool]` instead of the global bool).
-- **All 7 interrupt points are early-return patterns**: the normal flow path is unchanged; the only inherent window is stopping "after the loop-top check but before ffmpeg starts", in which case the just-spawned ffmpeg is terminated within ≤1s by L743 — consistent with the existing `exit_recording` semantics.
-
-**Impact**:
-
-- After Web panel startup no room threads are auto-spawned; "Start Recording" spawns them one by one per the URL config; "Stop Recording" exits room threads and clears the running list, ready to restart at any time.
-- CLI (`main.py` direct) and GUI entry behavior are completely unchanged (`recording_enabled` defaults to True).
-- During a stop, config hot-reload, the concurrency scheduler, and the danmaku monitor hub keep running (only no new/recording threads are spawned).
-- All other behaviors (scheduling semantics, source ordering, probe tolerance, UA conventions, etc.) are unchanged.
-
-**Verification**:
-
-- Full `pytest`: **786 passed, 2 skipped** (consistent on re-run 2026-08-29); `black --check --line-length 120 --target-version py314` and `isort --check-only --profile black --line-length 120` pass; `mypy src/` retains only the pre-existing `src/stream.py:609` error (not introduced by this change).
-- End-to-end smoke (real panel via `python web.py` background mode, API-driven): startup shows `recording_enabled=false`/`recording_count=0`/`engine_alive=true` → ~20s after toggle-on `monitoring=3` (3 room threads spawned) → within 3s of toggle-off `monitoring=0`/`recording_count=0` → CTRL_BREAK graceful exit with the log "正在清理所有 ffmpeg 进程" (cleaning up all ffmpeg processes), port closed, no ffmpeg leftovers, no leftover download files. (No room was live during the smoke window, so `recording_count` stayed 0; the tiered-termination path while recording is covered by the unit test above.)
-- Commit gate: the Mimosa git-gate blocked twice (graded mode must deny unfixed high; there is no findings whitelist); per the gate's requirement the official deep scan was completed (scanId `scan-2026-08-29T02-38-21.160Z-4c613b3699ed`, seal `sha256:5250cdc7…`) with all 44 findings triaged — no code change needed; the commit awaits the maintainer adjusting gate policy or approving manually.
-
-**Related**:
-
-- `docs/web-recording-control-changelog.md`: feature change summary and follow-up closure record (review-fix details in section 3.4).
-- `docs/security-triage-2026-08-29.md`: gate-finding triage details and the two approval paths.
-- v4.0.9.1-dev (2026-08-27) "Recording-Result Feedback Scheduler" — the stop-interrupt error-sample isolation builds on its `record_error`/`record_success` semantics; the `check_subprocess` early-interrupt mechanism (flush danmaku before terminating ffmpeg) is pre-existing behavior, and this feature only adds `recording_enabled` to its trigger conditions.
 
 ### v4.0.9.2-dev (2026-08-28) — Performance Review Optimization Landed (P1~P5 + Probe-Client Reuse + Backoff-Window Self-Healing + Web Log-Sink Rebuild + Huya FLV-first)
 

@@ -28,6 +28,7 @@ def _mask_secret(secret: str) -> str:
     # 脱敏：仅保留前后各 2 位用于排查，其余以 * 遮挡，避免凭证泄露到日志。
     if not secret:
         return ""
+    # 短密钥（<=6）整体遮蔽而非保留首尾：首尾保留后仅遮 1-2 位等同明文，无脱敏意义。
     if len(secret) <= 6:
         # 短密钥（如测试 token）遮蔽 1-2 位形同虚设，整体遮蔽
         return "****"
@@ -69,6 +70,7 @@ def dingtalk(url: str, content: str, number: str | None = None, is_atall: bool =
     success: list[str | int] = []
     error: list[str | int] = []
     api_list = url.replace("，", ",").split(",") if url.strip() else []
+    # 支持多 webhook 逗号分隔批量推送；单条异常被下方 try 单独捕获，不影响其余地址（旁路通知不阻断录制）。
     for api in api_list:
         at_payload: dict[str, object] = {"isAtAll": is_atall}
         if number:
@@ -85,6 +87,8 @@ def dingtalk(url: str, content: str, number: str | None = None, is_atall: bool =
             with cast(http.client.HTTPResponse, opener.open(req, timeout=10)) as response:
                 json_str = response.read().decode("utf-8")
             resp_data: dict[str, object] = cast(dict[str, object], json.loads(json_str))
+            # 钉钉以响应体 errcode==0 判成功；非 0 即业务失败（如 IP 未加白），必须显式计入 error。
+            # 区别于 Server酱/Bark/PushPlus 的 code==200 判定，勿混用字段。
             if resp_data.get("errcode") == 0:
                 success.append(api)
             else:
@@ -102,6 +106,7 @@ def xizhi(url: str, title: str, content: str) -> dict[str, list[str | int]]:
     success: list[str | int] = []
     error: list[str | int] = []
     api_list = url.replace("，", ",").split(",") if url.strip() else []
+    # 支持多推送地址逗号分隔批量发送；单条异常被下方 try 单独捕获，不影响其余地址。
     for api in api_list:
         json_data = {"title": title, "content": content}
         try:
@@ -110,6 +115,8 @@ def xizhi(url: str, title: str, content: str) -> dict[str, list[str | int]]:
             with cast(http.client.HTTPResponse, opener.open(req, timeout=10)) as response:
                 json_str = response.read().decode("utf-8")
             resp_data: dict[str, object] = cast(dict[str, object], json.loads(json_str))
+            # Server酱/息知以响应体 code==200 标识成功（非 HTTP 状态码、也非 errcode）；
+            # 误用 errcode 字段会漏判，需与钉钉区分。
             if resp_data.get("code") == 200:
                 success.append(api)
             else:
@@ -173,6 +180,7 @@ def send_email(
     except Exception as e:
         logger.warning(f"邮件推送失败, 推送邮箱：{to_email}, 错误信息:{e}")
         return {"success": [], "error": receivers}
+    # 无论成功失败都主动 quit() 关闭 SMTP 会话，避免连接悬挂；quit 失败忽略（连接本就要丢弃）。
     finally:
         if smtp_obj:
             try:
@@ -194,6 +202,7 @@ def tg_bot(chat_id: str | int, token: str, content: str) -> dict[str, list[str |
             json_str = response.read().decode("utf-8")
         resp_data: dict[str, object] = cast(dict[str, object], json.loads(json_str))
         # Telegram 即使返回 2xx，业务失败也会返回 {"ok": false, "description": "..."}
+        # Telegram 即便 HTTP 2xx 也可能业务失败（ok=false + description），须以 ok 字段判定，不能只看状态码。
         if resp_data.get("ok") is True:
             return {"success": [str(chat_id)], "error": []}
         error_detail = resp_data.get("description", "未知错误")
@@ -241,6 +250,8 @@ def bark(
             with cast(http.client.HTTPResponse, opener.open(req, timeout=10)) as response:
                 json_str = response.read().decode("utf-8")
             resp_data: dict[str, object] = cast(dict[str, object], json.loads(json_str))
+            # Bark 同样以响应体 code==200 判定成功（与 Server酱/息知一致，区别于钉钉 errcode）。
+            # Bark 以响应体 code==200 判成功（与 Server酱/息知/PushPlus 一致，区别于钉钉 errcode）。
             if resp_data.get("code") == 200:
                 success.append(_api)
             else:
@@ -274,6 +285,7 @@ def ntfy(
     success: list[str | int] = []
     error: list[str | int] = []
     api_list = api.replace("，", ",").split(",") if api.strip() else []
+    # 支持多 ntfy 地址逗号分隔批量推送；单条异常被下方 try/except 单独捕获，不影响其余地址。
     if isinstance(tags, str):
         tags = tags.replace("，", ",").split(",") if tags else ["partying_face"]
     elif not tags:
@@ -300,11 +312,15 @@ def ntfy(
                 "call": call,
             }
 
+            # ensure_ascii=False 保留中文原文，否则 ntfy 收到 \uXXXX 转义会显示成乱码/编码体；
+            # 推文/标题含中文时必须如此。
             data = json.dumps(json_data, ensure_ascii=False).encode("utf-8")
             req = urllib.request.Request(server, data=data, headers=headers)
             with cast(http.client.HTTPResponse, opener.open(req, timeout=10)) as response:
                 json_str = response.read().decode("utf-8")
             resp_data: dict[str, object] = cast(dict[str, object], json.loads(json_str))
+            # ntfy 成功响应无 "error" 字段，失败才带 error；与上面的 code==200 风格不同，
+            # 必须按"无 error 即成功"判定，否则会把成功误判为失败。
             if "error" not in resp_data:
                 success.append(_api)
             else:
@@ -333,6 +349,7 @@ def pushplus(token: str, title: str, content: str) -> dict[str, list[str | int]]
     error: list[str | int] = []
     token_list = token.replace("，", ",").split(",") if token.strip() else []
 
+    # 支持多 token 逗号分隔批量推送；单条异常被下方 try 单独捕获，不影响其余 token。
     for _token in token_list:
         json_data = {"token": _token, "title": title, "content": content}
 
@@ -344,6 +361,7 @@ def pushplus(token: str, title: str, content: str) -> dict[str, list[str | int]]
                 json_str = response.read().decode("utf-8")
             resp_data: dict[str, object] = cast(dict[str, object], json.loads(json_str))
 
+            # PushPlus 以响应体 code==200 判定成功（与 Server酱/Bark 一致）。
             if resp_data.get("code") == 200:
                 success.append(_token)
             else:

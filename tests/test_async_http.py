@@ -28,6 +28,7 @@ class TestGetClient:
     @pytest.mark.asyncio
     async def test_creates_new_client(self) -> None:
         # 首次调用创建新 AsyncClient 并缓存。
+        # 守护「首次缓存填充」不变量，避免每次请求重建连接池（复用实测省约 15.9ms/次）。
         _client_cache.clear()
         try:
             client = await _get_client(None, 10, True, False)
@@ -52,6 +53,7 @@ class TestGetClient:
     @pytest.mark.asyncio
     async def test_different_proxy_creates_different_client(self) -> None:
         # 不同 proxy 参数创建不同 client。
+        # proxy 是缓存 key 一维，换代理须隔离独立连接（cookie/鉴权不串房间）。
         _client_cache.clear()
         try:
             c1 = await _get_client(None, 10, True, False)
@@ -64,6 +66,7 @@ class TestGetClient:
     @pytest.mark.asyncio
     async def test_closed_client_replaced(self) -> None:
         # 缓存的 client 已关闭时创建新的。
+        # 已关闭的 client 必须重建，否则后续请求在死连接上挂死、拖垮整轮。
         _client_cache.clear()
         try:
             c1 = await _get_client(None, 10, True, False)
@@ -82,10 +85,13 @@ class TestClientCacheLock:
     # 线程 A 可能拿到线程 B 循环绑定的锁并 await，触发 'bound to a different event loop'。
 
     def test_cache_lock_is_threading_lock(self) -> None:
+        # 缓存锁必须是普通 threading.Lock 而非模块级单槽 asyncio.Lock；
+        # 临界区无 await，避免跨线程/跨循环 await 触发 'bound to a different event loop'。
         assert isinstance(_client_cache_lock, type(threading.Lock()))
 
     def test_concurrent_get_client_across_loops_no_error(self) -> None:
         # 多线程各用独立事件循环并发获取客户端：不应抛跨循环/跨线程异常
+        # 8 线程各跑独立 loop 刻意制造循环多样性，复现原模块级单槽锁跨循环竞态。
         errors: list[Exception] = []
 
         def run() -> None:
@@ -95,6 +101,9 @@ class TestClientCacheLock:
             except Exception as e:  # pragma: no cover - 仅收集异常
                 errors.append(e)
 
+        # 8 个线程各跑独立事件循环（asyncio.run 创建并绑定各自 loop），刻意制造循环多样性
+        # 以复现「模块级单槽锁跨循环」竞态；8 与 15s 仅为压测规模/收尾余量，非精确不变量。
+        # 断言 errors == []：无跨循环/跨线程异常，验证 threading.Lock 重构化解了原竞态。
         threads = [threading.Thread(target=run) for _ in range(8)]
         for t in threads:
             t.start()
@@ -130,6 +139,7 @@ class TestCloseAllClients:
     @pytest.mark.asyncio
     async def test_close_empty_cache(self) -> None:
         # 空缓存调用不报错。
+        # 空缓存关闭路径须幂等，防无房间时 shutdown 崩溃。
         _client_cache.clear()
         await _close_all_clients()
         assert len(_client_cache) == 0
@@ -140,11 +150,13 @@ class TestCloseAllClientsSync:
 
     def test_empty_cache_no_error(self) -> None:
         # 空缓存时直接返回，不报错。
+        # 同步清理空缓存须安全返回，供信号处理/atexit 兜底调用。
         _client_cache.clear()
         close_all_clients_sync()  # 不应抛异常
 
     def test_clears_cache_when_populated(self) -> None:
         # 缓存非空时，调用后缓存被清空（无论是否在事件循环内）。
+        # 非空缓存不论是否在 loop 内都应清空，避免旧 client 泄漏被误复用。
         _client_cache.clear()
         mock_client = MagicMock(spec=httpx.AsyncClient)
         mock_client.is_closed = False
@@ -161,10 +173,14 @@ class TestCloseAllClientsSync:
 
 class TestAsyncReq:
     # async_req: GET/POST 请求 + 异常回退。
+    # Mock 策略：每个用例都 patch 掉 _get_client（避免构造真实 httpx.AsyncClient / 触网）
+    # 与 utils.handle_proxy_addr（隔离代理地址解析，避免读真实配置或做 DNS），从而只验证
+    # async_req 自身的请求分派与异常回退分支。
 
     @pytest.mark.asyncio
     async def test_get_request_returns_text(self) -> None:
         # GET 请求返回响应文本。
+        # GET 是主路径，锁住分派与响应体透传，确保异常分支不吞文本。
         mock_response = MagicMock()
         mock_response.text = "response body"
         mock_response.url = "https://example.com"
@@ -238,6 +254,7 @@ class TestAsyncReq:
     @pytest.mark.asyncio
     async def test_redirect_url_returns_url(self) -> None:
         # redirect_url=True 返回重定向后 URL。
+        # redirect_url 模式须返回最终 URL（而非文本），供上层跟随跳转拿真地址。
         mock_response = MagicMock()
         mock_response.url = "https://redirected.example.com/final"
 
@@ -255,6 +272,7 @@ class TestAsyncReq:
     @pytest.mark.asyncio
     async def test_return_cookies_returns_cookies(self) -> None:
         # return_cookies=True 返回 cookie 字典。
+        # return_cookies 须把 cookie jar 转 dict，供登录态向下游透传。
         mock_response = MagicMock()
         mock_response.text = "ok"
         mock_cookies = MagicMock()
@@ -309,6 +327,7 @@ class TestAsyncReq:
     @pytest.mark.asyncio
     async def test_exception_redirect_returns_empty_string(self) -> None:
         # redirect_url 模式异常返回空字符串。
+        # redirect 模式异常同样降级空串，与文本模式失败语义一致（统一兜底）。
         mock_client = AsyncMock()
         mock_client.get.side_effect = httpx.TimeoutException("timeout")
 
@@ -349,7 +368,10 @@ class TestAsyncReq:
             patch("src.async_http.config.ssl_verify", False),
         ):
             await async_req("https://example.com")
-            # _get_client 被调用时 verify 参数应为 config.ssl_verify 的值
+            # 调用参数 (proxy=None, timeout=20, verify=False, http2=True)：
+            # 20 是请求默认超时（async_req 未显式传入时的兜底值），
+            # False 来自 patch 的 config.ssl_verify，True 为 http2 默认开关。
+            # 此用例守护「verify 缺省回落配置」而非硬编码 True/False。
             mock_get.assert_called_once_with(None, 20, False, True)
 
 
@@ -364,6 +386,7 @@ class TestGetResponseStatus:
     @pytest.mark.asyncio
     async def test_status_200_returns_true(self) -> None:
         # HEAD 返回 200 → True。
+        # HEAD 200 即可达，是 URL 校验主路径（不浪费一次 GET）。
         mock_response = MagicMock()
         mock_response.status_code = 200
 
@@ -381,6 +404,7 @@ class TestGetResponseStatus:
     @pytest.mark.asyncio
     async def test_status_404_returns_false(self) -> None:
         # HEAD 返回 404 → False。
+        # HEAD 404 即不可达，快速定罪不误放死链。
         mock_response = MagicMock()
         mock_response.status_code = 404
 
@@ -398,6 +422,7 @@ class TestGetResponseStatus:
     @pytest.mark.asyncio
     async def test_m3u8_head_405_fallback_to_get(self) -> None:
         # m3u8 URL HEAD 返回 405 → 降级 Range GET 探测。
+        # 复刻斗鱼 hw CDN 禁用 HEAD（405）实测，须降级 Range GET 才能拿到真地址。
         head_response = MagicMock()
         head_response.status_code = 405
 
@@ -420,6 +445,7 @@ class TestGetResponseStatus:
     @pytest.mark.asyncio
     async def test_m3u8_head_403_get_also_fails(self) -> None:
         # m3u8 URL HEAD 403 + Range GET 也失败 → False。
+        # HEAD 403 且 Range GET 仍失败 → 真不可达，防误判可用放行死链。
         head_response = MagicMock()
         head_response.status_code = 403
 

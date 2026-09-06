@@ -1,6 +1,24 @@
 // DouyinLiveRecorder Web 管理面板前端逻辑。
 // 将 UI 绑定到 src/web_api.py 暴露的 REST API：
 // 仪表盘（状态轮询/日志）、弹幕监控（增量游标轮询）、直播间、配置、文件。
+//
+// 【整体架构】
+// 整个前端用一个 IIFE 模块包裹（见下方 (function(){...})()），所有状态与函数都封闭在
+// 私有作用域内，仅把 window.toggleRoom / window.deleteRoom / window.loadFiles /
+// window.downloadFile 暴露给内联/事件委托调用。这样避免污染全局，也避免每次重渲染表格时
+// 重新解析内联 onclick 字符串（表格行由 innerHTML 拼接，已改用 rooms-tbody 上的事件委托）。
+//
+// 状态组织：以一组模块级闭包变量保存（sseStopped/sseSource 仪表盘轮询、dm* 弹幕轮询与缓冲、
+// configBackup 配置原始快照用于 diff、toastTimer 提示定时器），没有引入框架或状态机。
+//
+// 与后端交互：统一经 api() 包装 fetch，自动附带 Bearer Token、JSON 序列化、401 跳转登录、
+// 按 content-type 决定返回 JSON 还是纯文本；二进制下载绕过 api() 直接 fetch+blob。
+// 轮询全部用 setTimeout 递归（非真 SSE/WebSocket），每轮结束后若未被停止则排下一轮，
+// 离屏/切视图时通过 stop* 清理定时器，避免多个视图同时轮询造成请求堆积。
+//
+// 安全要点：所有动态文本（房间名、弹幕、文件名、配置值、日志）渲染前一律经 esc() 转义，
+// 敏感配置段（Cookie/账号密码/Authorization）输入框用 password 类型，saveConfig 跳过 '***'
+// 掩码，防止配置值原样回写覆盖后端真实凭据。
 (function () {
     'use strict';
 
@@ -21,6 +39,29 @@
     var dmMessages = [];
     var DM_MAX_MESSAGES = 300;
 
+    // 画质选项状态：qualityOptions 为用户已选档位（渲染下拉与 chips），
+    // qualityBuiltin 为引擎支持的全部内置档位（渲染「添加画质」候选项）。
+    var qualityOptions = [];
+    var qualityBuiltin = [];
+
+    // ===== API 接口契约速查（路径/方法/关键参数/返回/前后端处理）=====
+    // 所有请求经 api() 自动带 Bearer Token；401 统一清 Token 并跳登录；非 2xx 抛错由调用方 catch。
+    // GET  /api/status                 → 仪表盘快照 {engine_alive, recording_enabled, monitoring,
+    //                                         recording_count, error_count, recent_errors, disk_free_gb,
+    //                                         recording:[{name,quality,actual_quality,start_time,duration}]}
+    // POST /api/recording/toggle       body{enable:bool} → 切换引擎录制开关，成功即回拉 /api/status 同步按钮
+    // GET  /api/logs?lines=100         → {lines:[...]} 纯文本日志行，拼到 #log-stream
+    // GET  /api/danmaku?since=<seq>     → {rooms:[...], messages:[...], last_seq, truncated}
+    //                                         增量游标：首次 since=0，之后用返回 last_seq 续拉，避免重复
+    // GET  /api/language               → {language}；PUT body{language} 热切换（后端控制台/日志同步翻译）
+    // POST /api/login    body{password}→ {token}；失败抛错显示到 #login-error
+    // GET  /api/rooms                 → [{url,quality,name,enabled,recording}]；增删/启停/切画质：
+    // POST /api/rooms   body{url,quality?,name?}；DELETE /api/rooms?url=；POST /api/rooms/toggle body{url,enable}
+    // PUT  /api/rooms/quality         body{url,quality} → 按房间切换画质（quality 空=恢复默认，与桌面端共用画质段）
+    // GET  /api/rooms/qualities       → {options:[...], builtin:[...]}；PUT body{options:[...]} 回写画质选项
+    //                                         （与桌面端画质切换菜单共用，落地 config.ini [录制设置]）
+    // GET  /api/config                 → {section:{key:value}}；PUT /api/config body{section,key,value} 单键落盘
+    // GET  /api/files?path=            → [{name,type,path,size?,mtime?}]；下载绕过 api() 直接 blob 流
     function $(id) { return document.getElementById(id); }
 
     // 1. Token helpers
@@ -152,6 +193,13 @@
             'rooms.namePlaceholder': '主播名称（可选）', 'rooms.addBtn': '添加', 'rooms.list': '直播间列表',
             'rooms.empty': '暂无直播间', 'rooms.delete': '删除', 'rooms.enter': '进入', 'rooms.download': '下载',
             'rooms.deleteConfirm': '确认删除该直播间？',
+            'rooms.manageQuality': '画质选项', 'rooms.addQuality': '添加画质',
+            'rooms.qualityHint': '画质选项存于 config.ini，WEB 与桌面端画质切换菜单共用；仅内置档位可选（自定义名称不会被录制引擎识别）',
+            'rooms.qualityEmpty': '已全部添加', 'rooms.qualityAddBtn': '添加',
+            'toast.qualityAdded': '已添加画质选项', 'toast.qualityRemoved': '已移除画质选项',
+            'toast.qualitySaveFailed': '保存画质选项失败: ', 'toast.qualityLoadFailed': '加载画质选项失败: ',
+            'toast.qualityChanged': '已切换画质为 {q}，下一轮检测循环生效', 'toast.qualityReset': '已恢复默认画质，下一轮检测循环生效',
+            'toast.qualityChangeFailed': '切换画质失败: ',
             'config.title': '录制与推送配置', 'config.save': '保存配置', 'config.noChanges': '无变更',
             'config.saved': '已保存 {n} 项', 'config.loadFailed': '加载失败', 'config.none': '无配置',
             'config.hint.https': '开启 = HTTPS 录制并跳过 SSL 证书校验；关闭 = HTTP 录制并恢复默认证书校验（已整合原「是否强制启用https录制」与「是否禁用SSL证书验证」）',
@@ -195,6 +243,13 @@
             'rooms.namePlaceholder': 'Streamer name (optional)', 'rooms.addBtn': 'Add', 'rooms.list': 'Room list',
             'rooms.empty': 'No rooms', 'rooms.delete': 'Delete', 'rooms.enter': 'Open', 'rooms.download': 'Download',
             'rooms.deleteConfirm': 'Delete this room?',
+            'rooms.manageQuality': 'Quality options', 'rooms.addQuality': 'Add quality',
+            'rooms.qualityHint': 'Quality options are stored in config.ini and shared with the desktop quality switcher; only built-in tiers can be selected (custom names are not recognised by the recording engine)',
+            'rooms.qualityEmpty': 'All added', 'rooms.qualityAddBtn': 'Add',
+            'toast.qualityAdded': 'Quality option added', 'toast.qualityRemoved': 'Quality option removed',
+            'toast.qualitySaveFailed': 'Failed to save quality options: ', 'toast.qualityLoadFailed': 'Failed to load quality options: ',
+            'toast.qualityChanged': 'Quality changed to {q}, effective on the next check cycle', 'toast.qualityReset': 'Reset to default quality, effective on the next check cycle',
+            'toast.qualityChangeFailed': 'Failed to change quality: ',
             'config.title': 'Recording & Push Config', 'config.save': 'Save config', 'config.noChanges': 'No changes',
             'config.saved': 'Saved {n} items', 'config.loadFailed': 'Load failed', 'config.none': 'No config',
             'config.hint.https': 'On = HTTPS recording with SSL certificate verification skipped; Off = HTTP recording with default certificate verification (merges the former "force HTTPS" and "disable SSL verification" options)',
@@ -238,6 +293,13 @@
             'rooms.namePlaceholder': 'Streamer name (optional)', 'rooms.addBtn': 'Add', 'rooms.list': 'Room list',
             'rooms.empty': 'No rooms', 'rooms.delete': 'Delete', 'rooms.enter': 'Open', 'rooms.download': 'Download',
             'rooms.deleteConfirm': 'Delete this room?',
+            'rooms.manageQuality': 'Quality options', 'rooms.addQuality': 'Add quality',
+            'rooms.qualityHint': 'Quality options are stored in config.ini and shared with the desktop quality switcher; only built-in tiers can be selected (custom names are not recognised by the recording engine)',
+            'rooms.qualityEmpty': 'All added', 'rooms.qualityAddBtn': 'Add',
+            'toast.qualityAdded': 'Quality option added', 'toast.qualityRemoved': 'Quality option removed',
+            'toast.qualitySaveFailed': 'Failed to save quality options: ', 'toast.qualityLoadFailed': 'Failed to load quality options: ',
+            'toast.qualityChanged': 'Quality changed to {q}, effective on the next check cycle', 'toast.qualityReset': 'Reset to default quality, effective on the next check cycle',
+            'toast.qualityChangeFailed': 'Failed to change quality: ',
             'config.title': 'Recording & Push Config', 'config.save': 'Save config', 'config.noChanges': 'No changes',
             'config.saved': 'Saved {n} items', 'config.loadFailed': 'Load failed', 'config.none': 'No config',
             'config.hint.https': 'On = HTTPS recording with SSL certificate verification skipped; Off = HTTP recording with default certificate verification (merges the former "force HTTPS" and "disable SSL verification" options)',
@@ -281,6 +343,13 @@
             'rooms.namePlaceholder': '主播名稱（可選）', 'rooms.addBtn': '新增', 'rooms.list': '直播間列表',
             'rooms.empty': '暫無直播間', 'rooms.delete': '刪除', 'rooms.enter': '進入', 'rooms.download': '下載',
             'rooms.deleteConfirm': '確認刪除該直播間？',
+            'rooms.manageQuality': '畫質選項', 'rooms.addQuality': '新增畫質',
+            'rooms.qualityHint': '畫質選項存於 config.ini，Web 與桌面端畫質切換選單共用；僅內建檔位可選（自訂名稱不會被錄製引擎識別）',
+            'rooms.qualityEmpty': '已全部新增', 'rooms.qualityAddBtn': '新增',
+            'toast.qualityAdded': '已新增畫質選項', 'toast.qualityRemoved': '已移除畫質選項',
+            'toast.qualitySaveFailed': '儲存畫質選項失敗: ', 'toast.qualityLoadFailed': '載入畫質選項失敗: ',
+            'toast.qualityChanged': '已切換畫質為 {q}，下一輪檢測循環生效', 'toast.qualityReset': '已恢復預設畫質，下一輪檢測循環生效',
+            'toast.qualityChangeFailed': '切換畫質失敗: ',
             'config.title': '錄製與推送設定', 'config.save': '儲存設定', 'config.noChanges': '無變更',
             'config.saved': '已儲存 {n} 項', 'config.loadFailed': '載入失敗', 'config.none': '無設定',
             'config.hint.https': '開啟 = HTTPS 錄製並跳過 SSL 憑證校驗；關閉 = HTTP 錄製並恢復預設憑證校驗（已整合原「是否強制啟用https錄製」與「是否禁用SSL憑證驗證」）',
@@ -375,7 +444,9 @@
             }
         }
         if (name === 'rooms') {
-            loadRooms();
+            // 先拉画质选项再渲染房间列表：行内画质下拉的选项来自 qualityOptions，
+            // 顺序颠倒会导致首屏下拉只有「默认画质」+ 当前值（选项未就绪）
+            loadQualityOptions().finally(loadRooms);
         } else if (name === 'config') {
             loadConfig();
         } else if (name === 'files') {
@@ -399,7 +470,8 @@
         stopDanmakuPolling();
     }
 
-    // 10. doLogin
+    // 10. doLogin —— 调 POST /api/login，成功把返回的 token 存入 localStorage 并进入仪表盘；
+    // 失败（含 401）在 #login-error 显示后端报错文案。密码仅此一次明文发送，之后用 Token。
     async function doLogin() {
         var pw = $('login-password').value;
         try {
@@ -517,7 +589,8 @@
         } catch (e) { /* 忽略 */ }
     }
 
-    // 13. loadLogs
+    // 13. loadLogs —— GET /api/logs?lines=100，取最近 100 行纯文本日志拼到 #log-stream
+    // 并滚动到底部；错误被静默忽略（仪表盘轮询期间偶发失败不应闪烁界面）。
     async function loadLogs() {
         try {
             var data = await api('/api/logs?lines=100');
@@ -666,7 +739,23 @@
         dmRenderStream();
     }
 
-    // 14. loadRooms
+    // 14. loadRooms —— GET /api/rooms 拉全量直播间，按 enabled 渲染开关、按 recording 渲染录制中；
+    // 行内开关/删除按钮靠 data-url 透传，点击由 rooms-tbody 上的事件委托转发到 toggleRoom/deleteRoom。
+    // 画质列为行内下拉（选项 = 默认画质 + qualityOptions + 当前值兜底），change 委托转发 changeRoomQuality。
+    // 注意：url 直接拼进 data-url 与 title，已用 esc() 转义防止属性注入；del 失败会回拉一次列表恢复 UI。
+    function buildRoomQualitySelect(url, current) {
+        // 当前值可能不在选项列表（如用户已从画质选项中移除该档位），追加为候选项防止显示错位
+        var opts = [''].concat(qualityOptions.slice());
+        if (current && opts.indexOf(current) < 0) opts.push(current);
+        var html = '<select data-action="quality" data-url="' + esc(url) + '">';
+        for (var i = 0; i < opts.length; i++) {
+            var sel = opts[i] === current ? ' selected' : '';
+            var label = opts[i] === '' ? t('rooms.defaultQuality') : opts[i];
+            html += '<option value="' + esc(opts[i]) + '"' + sel + '>' + esc(label) + '</option>';
+        }
+        return html + '</select>';
+    }
+
     async function loadRooms() {
         var tbody = $('rooms-tbody');
         try {
@@ -681,7 +770,7 @@
                 var checked = r.enabled ? ' checked' : '';
                 html += '<tr>'
                     + '<td title="' + esc(r.url) + '">' + esc(r.url) + '</td>'
-                    + '<td>' + esc(r.quality) + '</td>'
+                    + '<td>' + buildRoomQualitySelect(r.url, r.quality) + '</td>'
                     + '<td>' + esc(r.name) + '</td>'
                     + '<td><label class="switch"><input type="checkbox"' + checked
                         + ' data-action="toggle" data-url="' + esc(r.url) + '"><span class="slider"></span></label></td>'
@@ -692,6 +781,138 @@
             tbody.innerHTML = html;
         } catch (e) {
             tbody.innerHTML = '<tr><td colspan="6" class="empty">' + esc(t('loadFailed')) + '</td></tr>';
+        }
+    }
+
+    // 14b. 画质选项（WEB 直播间设置的下拉项 + 桌面端画质切换菜单共用一份 config.ini 配置）。
+    // qualityOptions = 用户已选档位（下拉项 + chips）；qualityBuiltin = 引擎支持的全部内置档位，
+    // 两者差值即「添加画质」的候选项。增删后 PUT /api/rooms/qualities 回写，本地同步重渲染。
+    async function loadQualityOptions() {
+        try {
+            var data = await api('/api/rooms/qualities');
+            qualityOptions = Array.isArray(data.options) ? data.options.slice() : [];
+            qualityBuiltin = Array.isArray(data.builtin) ? data.builtin.slice() : qualityOptions.slice();
+            renderQualityOptions();
+        } catch (e) {
+            toast(t('toast.qualityLoadFailed') + (e.message || ''), 'error');
+        }
+    }
+
+    // 构建单个 chip：画质名 + 删除按钮（数据经 data-quality 透传，由事件委托处理）
+    function buildQualityChip(name) {
+        var span = document.createElement('span');
+        span.className = 'quality-chip';
+        span.appendChild(document.createTextNode(name));
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.setAttribute('data-action', 'remove-quality');
+        btn.setAttribute('data-quality', name);
+        btn.title = t('rooms.delete');
+        btn.textContent = '\u00d7';
+        span.appendChild(btn);
+        return span;
+    }
+
+    // 清空并重建子节点（避免 innerHTML 拼接，画质名一律走 textContent）
+    function replaceChildren(node, children) {
+        while (node.firstChild) {
+            node.removeChild(node.firstChild);
+        }
+        for (var i = 0; i < children.length; i++) {
+            node.appendChild(children[i]);
+        }
+    }
+
+    // 把当前选项渲染进三处：#room-quality 下拉、#quality-chips 标签、#quality-candidate 候选。
+    // 下拉首位恒为「默认画质」（value 为空 = 不写画质段，回落到全局默认画质）。
+    function renderQualityOptions() {
+        var sel = $('room-quality');
+        if (sel) {
+            var keep = sel.value;
+            var opts = [];
+            var defOpt = document.createElement('option');
+            defOpt.value = '';
+            defOpt.textContent = t('rooms.defaultQuality');
+            opts.push(defOpt);
+            for (var i = 0; i < qualityOptions.length; i++) {
+                var opt = document.createElement('option');
+                opt.value = qualityOptions[i];
+                opt.textContent = qualityOptions[i];
+                opts.push(opt);
+            }
+            replaceChildren(sel, opts);
+            sel.value = keep;
+            // 选中项已被移除时 select.value 回落到空串，即「默认画质」
+            if (sel.value !== keep) {
+                sel.value = '';
+            }
+        }
+
+        var chips = $('quality-chips');
+        if (chips) {
+            var chipNodes = [];
+            for (var j = 0; j < qualityOptions.length; j++) {
+                chipNodes.push(buildQualityChip(qualityOptions[j]));
+            }
+            replaceChildren(chips, chipNodes);
+        }
+
+        var cand = $('quality-candidate');
+        if (cand) {
+            var left = qualityBuiltin.filter(function (q) { return qualityOptions.indexOf(q) < 0; });
+            var candOpts = [];
+            if (left.length) {
+                for (var k = 0; k < left.length; k++) {
+                    var c = document.createElement('option');
+                    c.value = left[k];
+                    c.textContent = left[k];
+                    candOpts.push(c);
+                }
+            } else {
+                var empty = document.createElement('option');
+                empty.value = '';
+                empty.textContent = t('rooms.qualityEmpty');
+                candOpts.push(empty);
+            }
+            replaceChildren(cand, candOpts);
+            cand.disabled = !left.length;
+            var addBtn = $('quality-add-btn');
+            if (addBtn) {
+                addBtn.disabled = !left.length;
+            }
+        }
+    }
+
+    // 增删后统一走这里回写：PUT 成功后以后端返回的规范化列表为准（非法项会被后端剔除）
+    async function saveQualityOptions(next) {
+        try {
+            var data = await api('/api/rooms/qualities', { method: 'PUT', body: { options: next } });
+            qualityOptions = Array.isArray(data.options) ? data.options.slice() : next.slice();
+            renderQualityOptions();
+            return true;
+        } catch (e) {
+            toast(t('toast.qualitySaveFailed') + (e.message || ''), 'error');
+            return false;
+        }
+    }
+
+    // 添加画质：把候选下拉选中的档位并入选项列表（后端会去重并剔除非法项）
+    async function addQualityOption() {
+        var cand = $('quality-candidate');
+        if (!cand || !cand.value) {
+            return;
+        }
+        var picked = cand.value;
+        if (await saveQualityOptions(qualityOptions.concat([picked]))) {
+            toast(t('toast.qualityAdded'), 'success');
+        }
+    }
+
+    // 移除画质：从选项列表剔除；若该项正被下拉选中，renderQualityOptions 会回落到默认画质
+    async function removeQualityOption(name) {
+        var next = qualityOptions.filter(function (q) { return q !== name; });
+        if (await saveQualityOptions(next)) {
+            toast(t('toast.qualityRemoved'), 'success');
         }
     }
 
@@ -718,7 +939,22 @@
         }
     };
 
-    // 17. loadConfig
+    // 16b. changeRoomQuality —— PUT /api/rooms/quality 按房间切换画质（与桌面端画质监控共用
+    // URL_config.ini 画质段，下一轮检测循环生效）。失败回拉列表恢复下拉显示值。
+    async function changeRoomQuality(url, quality) {
+        try {
+            await api('/api/rooms/quality', { method: 'PUT', body: { url: url, quality: quality || null } });
+            toast(quality ? t('toast.qualityChanged').replace('{q}', quality) : t('toast.qualityReset'), 'success');
+            loadRooms();
+        } catch (e) {
+            toast(t('toast.qualityChangeFailed') + e.message, 'error');
+            loadRooms();
+        }
+    }
+
+    // 17. loadConfig —— GET /api/config 取 {section:{key:value}}，逐段逐键渲染为 input（敏感段用
+    // password 类型、旧键置灰只读、HTTPS 键与 SSL 平台列表键附动态提示）。渲染后把整份配置深拷贝进
+    // configBackup，供 saveConfig 做「仅提交变更键」的 diff 比较，避免无谓回写。
     // SSL/HTTPS 整合：「是否启用https录制」已合并原「是否强制启用https录制」与
     // 「是否禁用SSL证书验证(是/否)」——开启=https 拉流并跳过证书校验；关闭=http
     // 拉流并恢复默认证书校验。旧键标注为已废弃（只读置灰），整合语义在界面明示。
@@ -831,7 +1067,9 @@
         }
     }
 
-    // 19. loadFiles
+    // 19. loadFiles —— GET /api/files?path=，按路径取目录项渲染表格，并据 path 切分重构面包屑
+    // （根目录 + 逐级累积路径）。dir 行渲染「进入」按钮（事件委托转发 loadFiles 下钻），
+    // file 行渲染「下载」按钮（转 downloadFile）。path 经 encodeURIComponent 编码，防分隔符/中文破坏路由。
     async function loadFiles(path) {
         path = path || '';
         var tbody = $('files-tbody');
@@ -983,6 +1221,17 @@
             e.preventDefault();
             addRoom();
         });
+        // 画质选项管理：按钮展开/收起面板，候选下拉 + 添加按钮补选项，chip 上的 × 删选项
+        $('quality-manage-btn').addEventListener('click', function () {
+            $('quality-manage-panel').classList.toggle('hidden');
+        });
+        $('quality-add-btn').addEventListener('click', addQualityOption);
+        $('quality-chips').addEventListener('click', function (e) {
+            var btn = e.target.closest && e.target.closest('button[data-action="remove-quality"]');
+            if (btn) {
+                removeQualityOption(btn.getAttribute('data-quality'));
+            }
+        });
         $('config-save-btn').addEventListener('click', saveConfig);
         $('danmaku-room-filter').addEventListener('change', dmRenderStream);
         $('danmaku-clear-btn').addEventListener('click', function () {
@@ -995,6 +1244,8 @@
             var t = e.target;
             if (t && t.matches && t.matches('input[type="checkbox"][data-action="toggle"]')) {
                 toggleRoom(t.getAttribute('data-url'), t.checked);
+            } else if (t && t.matches && t.matches('select[data-action="quality"]')) {
+                changeRoomQuality(t.getAttribute('data-url'), t.value);
             }
         });
         $('rooms-tbody').addEventListener('click', function (e) {

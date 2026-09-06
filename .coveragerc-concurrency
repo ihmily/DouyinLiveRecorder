@@ -7,6 +7,10 @@
 # （pyproject.toml [tool.coverage.report].fail_under = 50），故此处
 # fail_under = 0（不设下限），仅产出报告用于人工审查。
 # 其余配置与 pyproject.toml [tool.coverage.*] 保持一致（source / omit）。
+# 注：前端用例（tests/frontend/*.mjs，Node 内置 node:test）不产生 Python 覆盖率数据，
+#     不在本文件覆盖范围内；其 Python 包装用例只做子进程调用，亦不计入。
+#     omit 清单与 pyproject [tool.coverage.run].omit、.gitignore、.dockerignore 同源维护
+#     （本地工具生成目录漏一处即出现「未跟踪目录 / 误入镜像 / 工具误扫描」）。
 # =============================================================================
 
 [run]
@@ -29,6 +33,7 @@ omit =
     */.ego-browser-test/*
     */.plugin-src/*
     */.tmp-dps-extract/*
+    */.v2c/*
     */pytest-cache-files-*/*
 
 [report]

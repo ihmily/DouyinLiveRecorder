@@ -1,9 +1,17 @@
 # Pytest configuration and fixtures.
 
 import os
+import shutil
 from typing import Any
 
 import pytest
+
+_TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+# 测试运行期产生的临时输出目录（SRT 落盘等），会话结束后统一清理，避免残留
+_TEST_OUT_DIRS = (
+    os.path.join(_TESTS_DIR, "_out_live"),
+    os.path.join(_TESTS_DIR, "_out_e2e"),
+)
 
 
 def pytest_configure(config: Any) -> None:
@@ -24,3 +32,11 @@ def _hermetic_danmaku_hub(monkeypatch: pytest.MonkeyPatch) -> None:
     import src.danmaku_monitor as dm
 
     monkeypatch.setattr(dm, "_hub", dm.DanmakuMonitorHub(log_path=None))
+
+
+def pytest_unconfigure(config: Any) -> None:
+    # 会话结束（含 pytest 收集失败/中断退出）后清理测试输出目录，确保不残留临时文件；
+    # ignore_errors=True：目录不存在或 Windows 下偶发句柄占用（杀毒/索引扫描）时静默跳过，
+    # 清理失败不应让 pytest 以异常退出码结束。两个目录已在 .gitignore，残留亦不污染仓库。
+    for out_dir in _TEST_OUT_DIRS:
+        shutil.rmtree(out_dir, ignore_errors=True)

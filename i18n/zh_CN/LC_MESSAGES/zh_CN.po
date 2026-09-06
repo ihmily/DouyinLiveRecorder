@@ -3,7 +3,7 @@
 # This file is distributed under the same license as the DouyinLiveRecorder package.
 #
 # DouyinLiveRecorder 简体中文翻译文件
-# 更新日期: 2026-08-30
+# 更新日期: 2026-09-06
 #
 # 维护说明：
 #   - 本文件是翻译源文本；gettext 运行时只读取同目录编译产物 zh_CN.mo。
@@ -18,7 +18,7 @@ msgstr ""
 "Project-Id-Version: DouyinLiveRecorder\n"
 "MIME-Version: 1.0\n"
 "POT-Creation-Date: 2024-10-20 00:00+0800\n"
-"PO-Revision-Date: 2026-08-30 12:00+0800\n"
+"PO-Revision-Date: 2026-09-06 12:00+0800\n"
 "Last-Translator: Hmily <ihmily@github>\n"
 "Language-Team: Chinese\n"
 "Content-Type: text/plain; charset=UTF-8\n"
@@ -1906,3 +1906,26 @@ msgstr "[弹幕监控]close_file 失败(忽略): {type(e).__name__}: {e}"
 
 msgid "[弹幕监控]关闭边车文件异常(忽略): {type(e).__name__}: {e}"
 msgstr "[弹幕监控]关闭边车文件异常(忽略): {type(e).__name__}: {e}"
+
+# =============================================================================
+# 补齐条目（2026-09-06 提取器扫描新增：HLS 采集排除列表 / 弹幕边车 / 探针异常 / cookie 超时）
+# =============================================================================
+#: src/stream_select.py
+msgid "平台 {platform} 在 HLS 采集排除列表中，且无 FLV/record_url 可回退，本轮放弃（可将该平台移出排除列表恢复 HLS 采集）: {stream_info.get('anchor_name') or ''}"
+msgstr "平台 {platform} 在 HLS 采集排除列表中，且无 FLV/record_url 可回退，本轮放弃（可将该平台移出排除列表恢复 HLS 采集）: {stream_info.get('anchor_name') or ''}"
+
+#: src/danmaku_monitor.py
+msgid "弹幕边车文件写入失败: {type(e).__name__}: {e}"
+msgstr "弹幕边车文件写入失败: {type(e).__name__}: {e}"
+
+#: src/stream_select.py
+msgid "流地址校验: {url} - GET 复核异常: {type(e).__name__}: {e}（attempt {attempt}）"
+msgstr "流地址校验: {url} - GET 复核异常: {type(e).__name__}: {e}（attempt {attempt}）"
+
+#: src/stream_select.py
+msgid "流地址校验: {url} - Range-GET 未取得响应，按校验失败处理"
+msgstr "流地址校验: {url} - Range-GET 未取得响应，按校验失败处理"
+
+#: src/cookie_cache.py
+msgid "等待其它线程的 cookie 拉取超时，返回空结果: {key}"
+msgstr "等待其它线程的 cookie 拉取超时，返回空结果: {key}"
