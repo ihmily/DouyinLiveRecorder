@@ -1,0 +1,386 @@
+/* 全局布局与主题说明
+   - 主题走 CSS 变量方案：:root/[data-theme="light"] 与 [data-theme="dark"] 各定义一套
+     --primary/--bg/--card/--terminal-* 等变量；切主题只改 <body data-theme>，不重写规则。
+   - body 用 flex 纵向布局 + min-height:100vh，顶栏固定高度、主内容(.view)自适应撑开。
+   - 所有交互色集中在变量里，配色改动只动 :root/暗色块，组件样式引用 var() 即可。 */
+/* 浅色主题（默认） */
+:root, [data-theme="light"] {
+    --primary: #4F6DF5;
+    --primary-hover: #3D5BE0;
+    --primary-soft: #E8EDFE;
+    --success: #16A34A;
+    --danger: #DC2626;
+    --warning: #D97706;
+    --bg: #F4F6FB;
+    --card: #FFFFFF;
+    --sidebar: #FFFFFF;
+    --border: #E5E8F0;
+    --text: #1E293B;
+    --muted: #64748B;
+    --terminal-bg: #0D1117;
+    --terminal-fg: #7DA7FF;
+    --terminal-err: #F85149;
+    --terminal-warn: #D29922;
+}
+
+[data-theme="dark"] {
+    --primary: #4F6DF5;
+    --primary-hover: #5B7AF7;
+    --primary-soft: #232B45;
+    --success: #16A34A;
+    --danger: #DC2626;
+    --warning: #D97706;
+    --bg: #0F1117;
+    --card: #171A23;
+    --sidebar: #12151D;
+    --border: #262B3A;
+    --text: #E2E8F0;
+    --muted: #8B93A7;
+    --terminal-bg: #0D1117;
+    --terminal-fg: #7DA7FF;
+    --terminal-err: #F85149;
+    --terminal-warn: #D29922;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+    font-family: "Microsoft YaHei UI", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.topbar {
+    display: flex;
+    align-items: center;
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+    padding: 0 20px;
+    height: 56px;
+    gap: 24px;
+}
+
+.brand { font-weight: 700; font-size: 16px; color: var(--primary); white-space: nowrap; }
+
+.tabs { display: flex; gap: 4px; flex: 1; }
+.tab {
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    padding: 8px 16px;
+    cursor: pointer;
+    border-radius: 6px;
+    font-size: 14px;
+    transition: all 0.15s;
+}
+.tab:hover { background: var(--primary-soft); color: var(--primary); }
+.tab.active { background: var(--primary); color: #fff; }
+
+.topbar-right { display: flex; gap: 8px; align-items: center; }
+.topbar-right button {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+}
+/* 语言选择器：与主题切换按钮同风格 */
+.topbar-right select {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 8px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+}
+.topbar-right select:focus { outline: 1px solid var(--primary); }
+
+.view { flex: 1; padding: 20px; max-width: 1200px; width: 100%; margin: 0 auto; }
+/* .hidden 用 !important 确保它在任何视图/元素上都能强制隐藏，压过组件自身的 display 规则；
+   轮询与视图切换全靠增删 .hidden 控制显隐，故必须不可被其他规则意外覆盖。 */
+.hidden { display: none !important; }
+
+.login-card {
+    background: var(--card);
+    padding: 32px;
+    border-radius: 10px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    max-width: 360px;
+    margin: 60px auto;
+}
+.login-card h2 { margin-bottom: 16px; color: var(--primary); }
+.login-card input {
+    width: 100%;
+    padding: 10px;
+    margin-bottom: 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+}
+.login-card button {
+    width: 100%;
+    padding: 10px;
+    background: var(--primary);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+}
+.error-msg { color: var(--danger); font-size: 13px; margin-top: 8px; min-height: 18px; }
+
+.stat-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 20px; }
+.stat-card {
+    background: var(--card);
+    padding: 16px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+}
+.stat-label { color: var(--muted); font-size: 13px; margin-bottom: 8px; }
+.stat-value { font-size: 28px; font-weight: 700; color: var(--primary); }
+
+.panel {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 16px;
+}
+.panel h3 { margin-bottom: 12px; font-size: 15px; }
+
+.data-table { width: 100%; border-collapse: collapse; }
+.data-table th, .data-table td {
+    padding: 10px 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+}
+.data-table th { color: var(--muted); font-weight: 600; }
+.data-table .empty { text-align: center; color: var(--muted); padding: 24px; }
+.data-table td.quality-down { color: var(--danger); font-weight: 600; }
+
+.inline-form { display: flex; gap: 8px; flex-wrap: wrap; }
+.inline-form input, .inline-form select {
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+}
+/* 直播间列表行内画质下拉（.inline-form select 的紧凑版） */
+.data-table select {
+    padding: 4px 6px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 12px;
+    max-width: 110px;
+}
+.inline-form input[type="text"] { flex: 1; min-width: 200px; }
+.inline-form button, .primary {
+    padding: 8px 16px;
+    background: var(--primary);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+}
+.inline-form button:hover, .primary:hover { background: var(--primary-hover); }
+
+button.danger { background: var(--danger); color: #fff; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+button.small { background: var(--primary-soft); color: var(--primary); border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+
+/* 开关(switch)：原生 checkbox 视觉隐藏(opacity:0 占 0 尺寸)但保留可聚焦/可点，
+   真实交互落到 .slider 伪元素；:checked 时滑块右移并变绿，纯 CSS 实现启停态切换，无需 JS 改样式。 */
+.switch { position: relative; display: inline-block; width: 40px; height: 22px; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider { position: absolute; cursor: pointer; inset: 0; background: var(--border); border-radius: 22px; transition: 0.2s; }
+.slider:before { content: ""; position: absolute; height: 16px; width: 16px; left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: 0.2s; }
+.switch input:checked + .slider { background: var(--success); }
+.switch input:checked + .slider:before { transform: translateX(18px); }
+
+.terminal {
+    background: var(--terminal-bg);
+    color: var(--terminal-fg);
+    font-family: "Cascadia Code", "Consolas", monospace;
+    font-size: 12px;
+    padding: 12px;
+    border-radius: 6px;
+    height: 240px;
+    overflow-y: auto;
+    /* 等宽字体贴近日志/弹幕观感；pre-wrap + word-break 让超长 URL/弹幕整行折行不横向溢出，
+       overflow-y 配合固定高度独立滚动，避免日志把整个页面撑长。 */
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+.config-group { margin-bottom: 16px; }
+.config-group h4 { color: var(--primary); margin-bottom: 8px; font-size: 14px; }
+.config-row { display: grid; grid-template-columns: 240px 1fr; gap: 12px; align-items: center; margin-bottom: 8px; }
+.config-row label { color: var(--muted); font-size: 13px; }
+.config-row input { padding: 6px 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--text); font-size: 13px; }
+
+/* SSL/HTTPS 整合说明：「是否启用https录制」统一控制协议与证书校验，旧键废弃置灰 */
+.config-hint { grid-column: 2; font-size: 12px; line-height: 1.5; color: var(--muted); }
+.config-hint.hint-on { color: var(--success); }
+.config-hint.hint-off { color: var(--warning); }
+.config-row.row-deprecated label, .config-row.row-deprecated input { opacity: 0.5; text-decoration: line-through; }
+.config-row.row-deprecated .config-hint { text-decoration: none; }
+
+.file-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.breadcrumb { color: var(--muted); font-size: 13px; }
+.breadcrumb a { color: var(--primary); cursor: pointer; text-decoration: none; }
+
+.toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    padding: 12px 20px;
+    border-radius: 6px;
+    color: #fff;
+    font-size: 14px;
+    /* fixed 脱离文档流、贴右下角常驻，z-index:1000 压过所有面板（含 terminal、弹幕流），
+       保证操作反馈在所有视图层级之上可见；单例避免多条提示堆叠。 */
+    z-index: 1000;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+.toast.success { background: var(--success); }
+.toast.error { background: var(--danger); }
+.toast.info { background: var(--primary); }
+
+.engine-warning {
+    background: var(--danger);
+    color: #fff;
+    padding: 10px 16px;
+    border-radius: 6px;
+    margin-bottom: 16px;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+/* ===== 录制控制条（开始/停止录制按钮 + 状态标签） ===== */
+.recording-control {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 20px;
+}
+.recording-state { flex: 1; font-size: 14px; }
+.recording-state .state-on { color: var(--success); font-weight: 600; }
+.recording-state .state-off { color: var(--muted); font-weight: 600; }
+.recording-control button {
+    padding: 8px 20px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    transition: all 0.15s;
+}
+#recording-start-btn { background: var(--primary); color: #fff; }
+#recording-start-btn:hover:not(:disabled) { background: var(--primary-hover); }
+#recording-stop-btn { background: var(--danger); color: #fff; }
+#recording-stop-btn:hover:not(:disabled) { opacity: 0.9; }
+.recording-control button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* 响应式断点：窄屏(≤768px)下把仪表盘卡片从 4 列降到 2 列、配置行从两栏变单栏，
+   配置提示改占第 1 列；标签页允许横向滚动以免溢出被裁切。无更大断点，移动端即按此布局。 */
+@media (max-width: 768px) {
+    .stat-cards { grid-template-columns: repeat(2, 1fr); }
+    .config-row { grid-template-columns: 1fr; }
+    .config-hint { grid-column: 1; }
+    .tabs { overflow-x: auto; }
+}
+
+/* ===== 弹幕监控 ===== */
+.danmaku-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+.danmaku-toolbar h3 { margin-bottom: 0; flex: 1; }
+.danmaku-toolbar select {
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+    max-width: 220px;
+}
+.danmaku-terminal { height: 340px; line-height: 1.7; }
+.danmaku-terminal .dm-line { display: block; }
+.danmaku-terminal .dm-time { color: var(--muted); opacity: 0.7; }
+.danmaku-terminal .dm-room { color: #56D364; }
+.danmaku-terminal .dm-user { color: var(--terminal-fg); font-weight: 600; }
+.danmaku-terminal .dm-gift .dm-user { color: var(--terminal-warn); }
+.danmaku-terminal .dm-sc .dm-user { color: #DB61A2; }
+.danmaku-terminal .dm-dropped { color: var(--muted); opacity: 0.7; font-style: italic; }
+.danmaku-terminal .dm-empty { color: var(--muted); opacity: 0.7; }
+.danmaku-hint {
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 8px;
+}
+.dm-status-on { color: var(--success); font-weight: 600; }
+.dm-status-off { color: var(--danger); font-weight: 600; }
+
+/* 画质选项管理：面板位于「添加直播间」表单下方，chips 展示当前选项并可逐个删除，
+   候选下拉 + 添加按钮用于补充选项（可选项固定为录制引擎支持的 10 个内置档位）。 */
+.quality-options { margin-top: 12px; }
+.quality-panel {
+    margin-top: 10px;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+}
+.quality-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.quality-chips:empty { margin-bottom: 0; }
+.quality-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px 4px 10px;
+    background: var(--primary-soft);
+    color: var(--primary);
+    border-radius: 14px;
+    font-size: 12px;
+}
+.quality-chip button {
+    width: 18px;
+    height: 18px;
+    line-height: 1;
+    padding: 0;
+    background: transparent;
+    color: var(--primary);
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 14px;
+}
+.quality-chip button:hover { background: var(--primary); color: #fff; }
+.quality-add-row select {
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+}
+.quality-add-row button { padding: 6px 12px; }
+.quality-hint { color: var(--muted); font-size: 12px; margin-top: 10px; line-height: 1.6; }

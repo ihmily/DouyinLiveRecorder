@@ -1,0 +1,528 @@
+# =============================================================================
+# CI —— 静态检查 / 类型检查 / 测试 / 构建验证
+# -----------------------------------------------------------------------------
+# 技术栈事实（本文件所有步骤均按此适配，勿凭猜测改动）：
+#   · 纯 Python 项目（requires-python >= 3.14，target py314），**无前端构建**
+#     —— web/ 仅为 FastAPI 的静态资源（index.html / app.js / style.css），
+#        仓库内不存在 package.json / lock 文件，故 **不需要 npm ci / node build**。
+#   · Node.js 仅作为「JS 签名脚本运行时」：src/javascript/*.js 由 exejs / PyExecJS
+#     调起，src/node_install.py 负责探测与自动下载 —— 因此 CI 只需保证 node 可执行，
+#     而非构建前端。
+#   · 依赖管理为单源双写：requirements.txt（运行时）与 pyproject.toml
+#     [project.optional-dependencies]（dev / gui / build）。**没有 lock 文件**
+#     （uv.lock 仅随仓库分发，镜像/CI 均用 pip 走 requirements.txt，不消费它），
+#     故 pip 缓存 key 以这两个文件的 hash 为准。
+#   · 打包由根目录 build_exe.py（PyInstaller）承担，本地与 CI 行为一致。
+#
+# Job 拓扑（lint / type / test / build 六路并行，收尾串行汇总）：
+#
+#   setup ──┬── static             格式 / 导入序 / 版本一致性 / i18n po-mo 同步
+#           ├── typecheck          mypy（最低支持版本 3.14，结论对最老解释器成立）
+#           ├── test               pytest 矩阵（3.14）+ 全局与逐模块覆盖率门禁
+#           ├── concurrency-test   线程安全 / 跨事件循环锁 / 速率限制专项
+#           ├── integration-verify ffmpeg / node 真实环境探测验证
+#           └── build-verify       PyInstaller lite 打包 + CLI/Web/GUI 三入口冒烟
+#                            └────► ci-summary（唯一 required check，汇总上游结果）
+#
+#   职责边界：**本工作流止于验证，不含部署 / 发布**——Release 产出由
+#   build-release.yml（tag 触发）承担；两者的版本常量与打包解释器经各自的
+#   consts 步骤保持同值（python_build / node_version），改一处须同步另一处。
+#
+# ---------------------------------------------------------------------------
+# 统一策略（全 job 生效，勿在个别 job 内局部偏离）：
+#   · actions 大版本：checkout@v7 / setup-python@v7 / setup-node@v7 /
+#     upload-artifact@v7 —— 与 build-release.yml 完全一致，避免两份工作流
+#     各自漂移出不同版本的 action 行为。
+#   · 依赖缓存：统一 setup-python 内置 pip 缓存，key =
+#     hash(requirements.txt + pyproject.toml)（无 lock 文件）；setup-node
+#     不开缓存（仓库无 package.json，开了会直接报错）。
+#   · 超时：每个 job 显式 timeout-minutes（含 setup / summary 轻量 job），
+#     卡死不再白烧默认 6 小时额度。
+#   · 网络重试：pip / apt 安装统一经 .github/actions/retry 复合动作
+#     （线性退避 ×3），实现收敛在 action.yml 一处，勿在 job 内重新内联。
+#   · apt 强化参数（与 build-release.yml 的 Linux 构建一致）：
+#     DEBIAN_FRONTEND=noninteractive（防交互卡死）+ Acquire::Retries=3
+#     （apt 自身网络重试）+ --no-install-recommends（免装推荐包，更快更省盘）。
+#
+# ---------------------------------------------------------------------------
+# 环境变量与 Secrets 说明
+# ---------------------------------------------------------------------------
+#   本工作流 **默认不需要自定义 secret**；仅 Codecov 上传为可选能力（见下文
+#   secrets.CODECOV_TOKEN 说明），未配置时对应步骤自动跳过。其余步骤均使用公共资源：
+#     · GITHUB_TOKEN        —— Actions 自动注入，此处仅被 actions/checkout 隐式使用，
+#                              无需在 with.token 显式传递；权限已按最小化收敛为 contents: read。
+#     · COVERAGE_RCFILE     —— 仅 concurrency-test job 使用，指向仓库内
+#                              .coveragerc-concurrency（并发测试不设全局覆盖率下限）。
+#     · DOUYIN_SKIP_RUNTIME_CHECK / DOUYIN_LOG_NO_ENQUEUE
+#                           —— 由 tests/conftest.py 自动 setdefault，无需在此声明。
+#     · DISPLAY             —— 由 xvfb-run 注入（build-verify job 的 GUI 冒烟）。
+#     · secrets.CODECOV_TOKEN —— 可选：test job 的覆盖率上传步骤仅在「已配置该 secret
+#                              且为最低支持版本」时运行；未配置则自动跳过，不阻断 CI。
+#                              公开仓库也可不配置（Codecov 可从 commit 关联推断），配置后
+#                              报告更可靠。使用浮动主版本 codecov/codecov-action@v7。
+# =============================================================================
+
+name: CI
+
+on:
+  # 触发范围固定 main：push 与 PR 都收敛到主干，
+  # feature 分支的逐 push 不跑全量门禁（省额度，PR 阶段已覆盖同样的检查）。
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  # 允许手动触发（便于在不改代码的情况下复跑全部门禁）
+  workflow_dispatch:
+
+# 最小权限：CI 只读仓库内容即可（发布权限在 build-release.yml 中单独授予）
+permissions:
+  contents: read
+
+# 同一分支/PR 的新推送会取消尚未完成的旧运行，节省额度并加快反馈
+# （与 build-release.yml 的 cancel-in-progress: false 有意区分：发布流不可半途取消）
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── 0. 统一常量 + 路径过滤 ────────────────────────────────────────────────
+  # 版本常量放在 job outputs 而非 workflow env：因为 GitHub Actions 的
+  # strategy.matrix **无法引用 env 上下文**，但可以引用 needs 上下文。
+  # 这样矩阵与普通步骤共用同一份版本定义，彻底避免版本漂移。
+  setup:
+    name: Setup (constants & path filter)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      # —— 运行环境版本（与 build-release.yml 同值）——
+      python_min: ${{ steps.consts.outputs.python_min }}
+      python_latest: ${{ steps.consts.outputs.python_latest }}
+      python_matrix: ${{ steps.consts.outputs.python_matrix }}
+      python_build: ${{ steps.consts.outputs.python_build }}
+      node_version: ${{ steps.consts.outputs.node_version }}
+      # —— 静态检查工具固定版本（见 consts 步骤内注释）——
+      black_version: ${{ steps.consts.outputs.black_version }}
+      isort_version: ${{ steps.consts.outputs.isort_version }}
+      mypy_version: ${{ steps.consts.outputs.mypy_version }}
+      # —— 路径过滤结果 ——
+      filters: ${{ steps.filter.outputs.changes }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Declare shared constants
+        id: consts
+        shell: bash
+        run: |
+          set -euo pipefail
+          # python_min     : 最低支持版本，用作 mypy 目标与覆盖率门禁基准版本
+          # python_latest  : 最高支持版本，用作格式化检查（与 black target-version 上界对齐）
+          # python_matrix  : 测试矩阵固定 3.14 —— requires-python = ">=3.14" 且全库使用
+          #                  PEP 758 无括号多异常语法（except A, B:），3.13 及以下连
+          #                  解析都过不了，加入低版本矩阵只会常红；未来扩展新版本时
+          #                  仅改此一处（python_min / python_latest 同步更新）。
+          # python_build   : 打包解释器版本，**必须与 build-release.yml 的 python_build 同值**，
+          #                  保证「CI 验证的打包环境」等于「实际发布的打包环境」。
+          # node_version   : 仅供 JS 签名脚本运行时探测使用（非前端构建）
+          {
+            echo "python_min=3.14"
+            echo "python_latest=3.14"
+            echo 'python_matrix=["3.14"]'
+            echo "python_build=3.14"
+            echo "node_version=24"
+          } >> "$GITHUB_OUTPUT"
+
+          # 静态检查工具**固定版本**：black / isort 的新大版本会改变格式化结果，
+          # 不固定会导致「代码未改动却突然 CI 变红」。此处集中声明便于统一升级
+          # （dependabot 不会更新 workflow 内联的 pip 版本，需人工随 pyproject 一起 bump）。
+          {
+            echo "black_version=26.5.1"
+            echo "isort_version=9.0.1"
+            echo "mypy_version=2.3.1"
+          } >> "$GITHUB_OUTPUT"
+
+      # 仅当 Python 源码 / 测试 / 项目配置 / 翻译目录变更时才跑重活；
+      # 纯文档（*.md）、前端静态资源（web/）变更不触发。
+      # i18n/** 必须触发：static job 的 compile_po --check 是 .po/.mo 同步的唯一 CI 门禁。
+      - name: Detect path changes
+        uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            python:
+              - 'src/**'
+              - 'tests/**'
+              - 'scripts/**'
+              - 'i18n/**'
+              - 'build_exe.py'
+              - 'main.py'
+              - 'gui.py'
+              - 'gui_legacy.py'
+              - 'web.py'
+              - 'i18n.py'
+              - 'msg_push.py'
+              - 'requirements.txt'
+              - 'pyproject.toml'
+              - '.coveragerc-concurrency'
+              - '.github/workflows/**'
+
+  # ── 1. 静态检查（格式 / 导入序 / 版本一致性 / 翻译同步）─────────────────
+  # 四项检查都是「秒级、零运行时依赖」，合并进同一 job 可省去 3 次 runner 冷启动
+  # （约 30~60s），同时用独立 step 名保留清晰的失败归因。
+  static:
+    name: Static Checks (black / isort / version / i18n / annotations)
+    needs: setup
+    if: contains(fromJSON(needs.setup.outputs.filters), 'python')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python ${{ needs.setup.outputs.python_latest }}
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ needs.setup.outputs.python_latest }}
+          # 内置 pip 缓存：无 lock 文件，故以 requirements.txt + pyproject.toml 为 key
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+
+      # 版本号在调用处的 with 里展开为字面量，再进入 retry 动作执行（无隐式 env 依赖）
+      - name: Install lint tools
+        uses: ./.github/actions/retry
+        with:
+          label: pip 安装 lint 工具（black / isort）
+          command: >-
+            python -m pip install --upgrade pip
+            && pip install "black==${{ needs.setup.outputs.black_version }}" "isort==${{ needs.setup.outputs.isort_version }}"
+
+      # 门禁显式传参（AGENTS.md 约定）：line-length / target-version / profile 不经
+      # 配置文件隐式继承，必须写全；排除目录仍由 pyproject [tool.black].exclude /
+      # [tool.isort].extend_skip 声明，此处无需重复传参
+      - name: Run black --check
+        run: python -m black --check --diff --line-length 120 --target-version py314 .
+
+      - name: Run isort --check
+        run: python -m isort --check-only --diff --profile black --line-length 120 .
+
+      # 校验「版本号单一事实源」：pyproject.toml 为准，
+      # main.py / src/web_api.py 动态读取、Dockerfile 经 APP_VERSION 注入
+      # （纯标准库实现，无需安装项目依赖）
+      - name: Check version consistency
+        run: python scripts/check_version.py
+
+      # 校验 gettext 翻译同步：改 .po 忘记重编译 .mo 时拦截
+      # （.mo 随仓库分发，gettext 运行时只读 .mo；纯标准库实现）
+      - name: Check i18n po/mo sync
+        run: python scripts/compile_po.py --check
+
+      # 校验注释规范：禁用三引号 docstring（AGENTS.md 硬性约定——docstring 会进 AST，
+      # 而 # 注释不会）、注释密度下限、模块头存在性。纯标准库实现，无需装项目依赖。
+      # 大批量「只改注释」的改动另可先 --snapshot 建基线、改完 --baseline 验证逻辑未动。
+      - name: Check annotation conventions
+        run: python scripts/check_annotations.py
+
+  # ── 2. 静态类型检查 ──────────────────────────────────────────────────────
+  # 按 pyproject [tool.mypy] python_version = "3.14" 使用最低支持版本运行，
+  # 保证类型结论对最老解释器成立。
+  # ubuntu runner 默认即为 linux 平台，等价于本地双跑门禁中的
+  # `mypy --platform linux src/`（AGENTS.md 平台符号门控约定）。
+  typecheck:
+    name: Type Check (mypy, py${{ needs.setup.outputs.python_min }})
+    needs: setup
+    if: contains(fromJSON(needs.setup.outputs.filters), 'python')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python ${{ needs.setup.outputs.python_min }}
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ needs.setup.outputs.python_min }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+
+      - name: Install dependencies
+        uses: ./.github/actions/retry
+        with:
+          label: pip 安装依赖（requirements + mypy）
+          command: >-
+            python -m pip install --upgrade pip
+            && pip install -r requirements.txt "mypy==${{ needs.setup.outputs.mypy_version }}"
+
+      - name: Run mypy
+        run: mypy src/
+
+  # ── 3. 单元测试 + 覆盖率门禁 ─────────────────────────────────────────────
+  test:
+    name: Test (pytest, py${{ matrix.python-version }})
+    needs: setup
+    if: contains(fromJSON(needs.setup.outputs.filters), 'python')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # 矩阵引用 needs 上下文（env 上下文在 strategy 中不可用）
+        python-version: ${{ fromJSON(needs.setup.outputs.python_matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+
+      # ffmpeg：部分测试会探测 ffmpeg 可用性；apt 装轻量版即可（非打包用途）
+      - name: Install ffmpeg (apt)
+        uses: ./.github/actions/retry
+        with:
+          label: apt 安装 ffmpeg
+          command: >-
+            sudo env DEBIAN_FRONTEND=noninteractive apt-get update -qq -o Acquire::Retries=3
+            && sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg
+
+      # pytest-asyncio 由 pyproject [tool.pytest.ini_options] asyncio_mode = "auto" 驱动；
+      # pytest-cov 必装：scripts/check_coverage.py 依赖其产出的 .coverage 数据文件。
+      - name: Install dependencies
+        uses: ./.github/actions/retry
+        with:
+          label: pip 安装依赖（requirements + pytest）
+          command: >-
+            python -m pip install --upgrade pip
+            && pip install -r requirements.txt pytest pytest-asyncio pytest-cov
+
+      # 全局覆盖率下限 fail_under = 50 由 pyproject [tool.coverage.report] 强制
+      - name: Run pytest with coverage
+        run: pytest --cov=src --cov-report=term-missing --cov-report=xml
+
+      # 逐模块门禁（spider/stream/utils/ttwid/ab_sign/proxy）只需跑一次，
+      # 固定在最低支持版本上执行，避免矩阵内重复且结论歧义。
+      - name: Per-module coverage gate
+        if: matrix.python-version == needs.setup.outputs.python_min
+        run: python scripts/check_coverage.py
+
+      - name: Upload coverage report
+        if: matrix.python-version == needs.setup.outputs.python_min
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-xml-py${{ matrix.python-version }}
+          path: coverage.xml
+          if-no-files-found: warn
+          retention-days: 14
+
+      # 可选能力：仅在仓库配置了 secrets.CODECOV_TOKEN 时运行（未配置自动跳过）。
+      # 固定在最低支持版本上执行一次，避免矩阵内重复上传；fail_ci_if_error: false
+      # 保证 Codecov 服务异常时不会反噬 CI 门禁。使用浮动主版本 @v7
+      # （v6 唯一破坏性变更是迁移 node24 运行时，ubuntu-latest 原生支持；inputs 无变化）。
+      - name: Upload coverage to Codecov
+        if: matrix.python-version == needs.setup.outputs.python_min && env.CODECOV_TOKEN != ''
+        uses: codecov/codecov-action@v7
+        with:
+          files: coverage.xml
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+          slug: ihmily/DouyinLiveRecorder
+
+  # ── 4. 并发 / 线程安全专项测试 ───────────────────────────────────────────
+  # 覆盖「每 room 独立事件循环」模型下的跨循环 asyncio.Lock、跨 await 持有的
+  # threading.RLock 去重、速率限制等回归点。此类测试天然只触及并发相关代码，
+  # 覆盖率远低于全局阈值，故用 .coveragerc-concurrency（fail_under = 0）。
+  concurrency-test:
+    name: Concurrency Test (thread safety & rate limit)
+    needs: setup
+    if: contains(fromJSON(needs.setup.outputs.filters), 'python')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python ${{ needs.setup.outputs.python_min }}
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ needs.setup.outputs.python_min }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+
+      - name: Install dependencies
+        uses: ./.github/actions/retry
+        with:
+          label: pip 安装依赖（requirements + pytest）
+          command: >-
+            python -m pip install --upgrade pip
+            && pip install -r requirements.txt pytest pytest-asyncio pytest-cov
+
+      - name: Run concurrency tests
+        env:
+          COVERAGE_RCFILE: .coveragerc-concurrency
+        run: |
+          python -m pytest \
+            tests/test_concurrency_rate_limit.py \
+            tests/test_concurrency.py \
+            tests/test_async_http_lock.py \
+            --cov=src --cov-report=term-missing:skip-covered
+
+  # ── 5. 运行时依赖探测验证（ffmpeg / node）────────────────────────────────
+  # 验证 src/ffmpeg_install.py 与 src/node_install.py 的探测逻辑在真实环境成立。
+  # 注意：此处的 node 是「JS 签名脚本运行时」，不是前端构建工具链。
+  integration-verify:
+    name: Integration Verify (ffmpeg & node detection)
+    needs: setup
+    if: contains(fromJSON(needs.setup.outputs.filters), 'python')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python ${{ needs.setup.outputs.python_min }}
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ needs.setup.outputs.python_min }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+
+      - name: Setup Node.js ${{ needs.setup.outputs.node_version }}
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ needs.setup.outputs.node_version }}
+          # 无 package.json / lock 文件，开启 npm 缓存会直接报错，故不设置 cache
+
+      # PATH 探测先行（fail fast）：二进制不可用时不必再装 Python 依赖
+      - name: Install ffmpeg (apt)
+        uses: ./.github/actions/retry
+        with:
+          label: apt 安装 ffmpeg
+          command: >-
+            sudo env DEBIAN_FRONTEND=noninteractive apt-get update -qq -o Acquire::Retries=3
+            && sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg
+
+      - name: Verify binaries are discoverable
+        run: |
+          ffmpeg -version | head -1
+          node --version
+
+      - name: Install dependencies
+        uses: ./.github/actions/retry
+        with:
+          label: pip 安装依赖（requirements）
+          command: >-
+            python -m pip install --upgrade pip
+            && pip install -r requirements.txt
+
+      - name: Verify src/ffmpeg_install.py detection
+        run: |
+          python -c "from src.ffmpeg_install import check_ffmpeg_installed; assert check_ffmpeg_installed(), 'ffmpeg not detected'; print('check_ffmpeg_installed() passed')"
+
+      - name: Verify src/node_install.py detection
+        run: |
+          python -c "from src.node_install import check_nodejs_installed; assert check_nodejs_installed(), 'node not detected'; print('check_nodejs_installed() passed')"
+
+  # ── 6. 构建验证（PyInstaller 打包 + 三入口冒烟）──────────────────────────
+  # 与 build-release.yml 共用同一 build_exe.py，但用 --no-runtime --no-zip 跳过
+  # ffmpeg/node 下载（约 300MB）与压缩，只验证「能否打出可启动的 exe」，
+  # 把发布级别的完整打包留给 build-release.yml，避免每个 PR 付出全量成本。
+  # xvfb-run 提供虚拟显示：否则 build_exe.py 的 smoke_gui() 会因无 DISPLAY 跳过，
+  # GUI 入口就得不到验证。
+  build-verify:
+    name: Build Verify (PyInstaller + smoke)
+    needs: setup
+    if: contains(fromJSON(needs.setup.outputs.filters), 'python')
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # 打包解释器取 setup job 的 python_build（与 build-release.yml 同值），
+      # 保证「CI 验证的打包环境」等于「实际发布的打包环境」。
+      - name: Setup Python ${{ needs.setup.outputs.python_build }} (packaging interpreter)
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ needs.setup.outputs.python_build }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+
+      - name: Setup Node.js ${{ needs.setup.outputs.node_version }}
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ needs.setup.outputs.node_version }}
+
+      # xvfb：GUI（tkinter/pystray）冒烟需要虚拟显示
+      - name: Install ffmpeg + xvfb (apt)
+        uses: ./.github/actions/retry
+        with:
+          label: apt 安装 ffmpeg/xvfb
+          command: >-
+            sudo env DEBIAN_FRONTEND=noninteractive apt-get update -qq -o Acquire::Retries=3
+            && sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg xvfb
+
+      # PyInstaller 由 pyproject [project.optional-dependencies].build 声明
+      - name: Install dependencies
+        uses: ./.github/actions/retry
+        with:
+          label: pip 安装依赖（requirements + build extras）
+          command: >-
+            python -m pip install --upgrade pip
+            && pip install -r requirements.txt
+            && pip install ".[build]"
+
+      - name: Build (lite) + smoke test CLI/Web/GUI
+        run: xvfb-run -a python build_exe.py --smoke --no-runtime --no-zip
+
+  # ── 7. 汇总门禁 ─────────────────────────────────────────────────────────
+  # 上游 job 会被路径过滤跳过，分支保护若直接勾选它们会「永久 pending」。
+  # 因此对外只暴露本 job 作为唯一 required check：
+  #   skipped / success → 通过；failure / cancelled → 失败。
+  ci-summary:
+    name: CI Summary (required check)
+    if: always()
+    needs:
+      - setup
+      - static
+      - typecheck
+      - test
+      - concurrency-test
+      - integration-verify
+      - build-verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # 使用原生对象过滤器 needs.*.result（GitHub 官方推荐写法），
+      # 不引入 jq / 内联脚本，避免 shell 引号陷阱。
+      # skipped 视为通过：路径过滤跳过属预期行为。
+      - name: Fail if any upstream job failed or was cancelled
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        shell: bash
+        run: |
+          echo "::error::存在未通过的上游 job（failure / cancelled），请查看本次运行的 job 列表定位"
+          echo "各 job 结果：${{ join(needs.*.result, ', ') }}"
+          exit 1
+
+      - name: All checks passed
+        shell: bash
+        run: |
+          echo "✅ 全部 job 通过（或按路径过滤合法跳过）"
+          echo "各 job 结果：${{ join(needs.*.result, ', ') }}"

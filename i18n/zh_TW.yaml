@@ -1,0 +1,562 @@
+"\r检测直播间中...": "\r檢測直播間中..."
+"\r没有正在监测和录制的直播": "\r沒有正在監測和錄製的直播"
+'      1. config.ini [Web] 节设置 web_auth_enable = true 并配置 web_password；': '      1. config.ini [Web] 節設定 web_auth_enable = true 並配置 web_password；'
+'      2. 或设置 web_host = 127.0.0.1 仅限本机访问。': '      2. 或設定 web_host = 127.0.0.1 僅限本機訪問。'
+'      如确需在无认证状态暴露到局域网，请设置环境变量 DOUYIN_WEB_ALLOW_INSECURE=1 后重启（不推荐）。': '      如確需在無認證狀態暴露到局域網，請設定環境變量 DOUYIN_WEB_ALLOW_INSECURE=1 後重啟（不推薦）。'
+'      建议在 config.ini [Web] 节设置 web_auth_enable = true 并配置 web_password。': '      建議在 config.ini [Web] 節設定 web_auth_enable = true 並配置 web_password。'
+'-----------------------------------------------------': '-----------------------------------------------------'
+'.....................................................': '.....................................................'
+All download methods failed. Please manually install ffmpeg by yourself.: 所有下載方式均失敗，請手動安裝 ffmpeg。
+'An error occurred during login: {e}': '登錄過程中發生錯誤: {e}'
+'An exception occurred during get_live_room_id: {e}': '獲取直播間ID時發生異常: {e}'
+'An exception occurred during popkontv login: {e}': 'popkontv登錄過程中發生異常: {e}'
+'An unexpected error occurred:': 發生未知錯誤：
+An unknown error occurred: 發生未知錯誤
+Attempting to log in to TwitCasting...: TwitCasting正在嘗試登錄...
+? Attempting to log in to the FlexTV live streaming platform, please ensure your account and password are correctly filled in the configuration file.
+: 正在嘗試登錄TTingLive(原Flextv)直播平台，請確保已在設定檔中填寫好您的賬號和密碼
+? Attempting to log in to the popkontv live streaming platform, please ensure your account and password are correctly filled in the configuration file.
+: 正在嘗試登錄popkontv直播平台，請確保已在設定檔中填寫好您的賬號和密碼
+? Attempting to log in to the sooplive live streaming platform with your account and password, please ensure it is configured.
+: 正在嘗試使用您的賬號和密碼登錄SOOP(原AfreecaTV)直播平台，請確保已在config設定檔中配置
+Disk space remaining is below: 剩餘磁碟空間低于
+'Error message: {e} Error line: {tb_lineno}': '錯誤訊息: {e} 錯誤行號: {tb_lineno}'
+Error occurred during conversion: 轉換過程中發生錯誤
+'Error occurred while reading the configuration file: {e}': '讀取設定檔時發生錯誤: {e}'
+'Error occurred while writing to the configuration file: {e}': '寫入設定檔時發生錯誤: {e}'
+'Error: Please log in to YouTube on your device''s webpage and configure cookies in the config.ini': 錯誤：請先在設備網頁上登錄YouTube，並在config.ini中配置cookies
+FLV URL validation failed, trying record_url fallback: FLV 位址校驗失敗，嘗試 record_url 備選
+FLV is not supported for h265 codec, use HLS source instead: FLV不支援h265編碼，改用HLS源
+FLV is not supported for h265 codec, use TS format instead: FLV 不支援 h265 編碼，改用 TS 格式
+FLV 为 h265 且 HLS 源校验失败，尝试其它 FLV 候选: FLV 為 h265 且 HLS 源校驗失敗，嘗試其它 FLV 候選
+FLV 为 h265 无法录制且 HLS 采集已关闭，尝试其它 FLV 候选: FLV 為 h265 無法錄製且 HLS 採集已關閉，嘗試其它 FLV 候選
+FLV下载错误: FLV下載錯誤
+'Failed URL: {url} Error message: {error_msg}': '失敗的URL: {url} 錯誤訊息: {error_msg}'
+Failed to build download URL from lanzou response: 無法從藍奏雲響應構建下載位址
+Failed to execute JS code. Please check if the Node.js environment: 執行 JS 程式碼失敗，請檢查 Node.js 環境
+Failed to extract sign from lanzou page: 無法從藍奏雲頁面提取簽名
+Failed to fetch data from {url}.{e}: 從 {url} 獲取數據失敗。{e}
+Failed to install EPEL repository: 安裝 EPEL 軟體來源失敗
+Failed to obtain ffmpeg download address from lanzou: 無法從藍奏雲獲取 ffmpeg 下載位址
+'Failed to parse JSON data from {url}. Error: {e}': '從 {url} 解析JSON數據失敗。錯誤: {e}'
+Failed to retrieve TwitCasting data, attempting to log in...: 獲取TwitCasting數據失敗，正在嘗試登錄...
+Failed to retrieve data from FlexTV live room: 從TTingLive(原Flextv)直播間獲取數據失敗
+? Failed to retrieve live room data, the Huajiao live room address is not fixed, please manually change the address for recording.
+: 獲取直播間數據失敗，花椒直播間位址是非固定的，請手動更換位址進行錄製
+Failed to retrieve live stream source,: 獲取直播流源失敗，
+'Failed to retrieve popkontv live stream [token does not exist or has expired]: Please log in to watch.': 'popkontv直播獲取失敗[token不存在或者已過期]: 請登錄後觀看'
+Failed to retrieve the Node.js version page: 獲取 Node.js 版本頁面失敗
+Failed to retrieve the download URL for the latest version of Node.js...: 獲取最新版 Node.js 下載位址失敗...
+Failed to update package lists using apt: 使用 apt 更新軟體來源列表失敗
+Failed to update package lists using yum.: 使用 yum 更新軟體來源列表失敗。
+Fetch shopee live data failed, please update the address of the live broadcast room and try again.: 獲取shopee直播間數據失敗，請手動更換直播錄製位址後重試
+'FlexTV live stream retrieval failed [not logged in]: 19+ live streams are only available for logged-in adults.': 'TTingLive(原Flextv)直播獲取失敗[未登錄]: 19+直播需要登錄後是成人才可觀看'
+'FlexTV login request exception: {e}': 'TTingLive(原Flextv)登錄請求異常: {e}'
+FlexTV直播平台: TTingLive(原Flextv)直播平台
+'Get douyu sign params error: {e}': '獲取鬥魚簽名參數錯誤: {e}'
+'GitHub: https://github.com/ihmily/DouyinLiveRecorder': 'GitHub: https://github.com/ihmily/DouyinLiveRecorder'
+HLS URL validation failed, falling back to FLV: HLS 位址校驗失敗，回退 FLV
+HTML scraping fallback succeeded: HTML 解析兜底成功
+'HTTP status error occurred during login: {e.response.status_code}': '登錄時發生HTTP狀態錯誤: {e.response.status_code}'
+'HTTP status error occurred: {e.response.status_code}': '發生HTTP狀態錯誤: {e.response.status_code}'
+IP banned. Please change device or network.: IP被禁止 請更換設備或網路
+Installing the latest version of Node.js for CentOS...: 正在為 CentOS 安裝最新版 Node.js...
+Installing the latest version of Node.js for Ubuntu...: 正在為 Ubuntu 安裝最新版 Node.js...
+Installing the latest version of Node.js for macOS...: 正在為 macOS 安裝最新版 Node.js...
+Installing the latest version of ffmpeg from lanzou for Windows...: 正在為 Windows 從藍奏雲安裝最新版 ffmpeg...
+Installing the stable version of Node.js for Windows...: 正在為 Windows 安裝穩定版 Node.js...
+Installing the stable version of ffmpeg for macOS...: 正在為 macOS 安裝穩定版 ffmpeg...
+Key [{key}] does not exist in section [{section}].: 鍵 [{key}] 在節 [{section}] 中不存在。
+LiveMe直播平台: LiveMe直播平台
+Logged into FlexTV platform successfully! Starting to fetch live streaming data...: TTingLive(原Flextv)平台登錄成功！開始獲取直播數據...
+Logged into popkontv platform successfully! Starting to fetch live streaming data...: popkontv平台登錄成功！開始獲取直播數據...
+Logging into FlexTV platform...: TTingLive(原Flextv)平台登錄中...
+Logging into popkontv platform...: popkontv平台登錄中...
+Look live currently only supports audio live streaming, not video live streaming!: Look直播暫時只支援音頻直播，不支援Look影片直播!
+Manual installation of ffmpeg is required. Please manually install ffmpeg by yourself.: 需要手動安裝 ffmpeg，請自行安裝。
+No proxy is enabled on the system: 系統未開啟代理
+Node.js directory exists but not working: Node.js 目錄已存在但不可用
+Node.js installation failed: Node.js 安裝失敗
+Node.js installation file already exists, start install...: Node.js 安裝檔案已存在，開始安裝...
+Node.js installation was successful. Restart for changes to take effect: Node.js 安裝成功，重啟後生效
+Node.js installation was successful. Restart for changes to take effect.: Node.js 安裝成功，重啟後生效。
+Node.js is not installed.: 未安裝 Node.js。
+Official source unavailable, falling back to lanzou download...: 官方源不可用，回退藍奏雲下載...
+PandaTV直播平台: PandaTV直播平台
+Please add `#!/bin/bash` at the beginning of your bash script file.: 請在 bash 腳本檔案開頭添加 `#!/bin/bash`。
+Please check if the FlexTV account and password in the configuration file are correct.: 請檢查設定檔中的TTingLive(原Flextv)賬號和密碼是否正確
+Please delete the ffmpeg and try to download and install again.: 請刪除 ffmpeg 目錄後重新下載安裝。
+Please install Node.js manually or check your Homebrew installation.: 請手動安裝 Node.js 或檢查 Homebrew 安裝。
+Please install ffmpeg manually or check your Homebrew installation.: 請手動安裝 ffmpeg 或檢查 Homebrew 安裝。
+PopkonTV直播平台: PopkonTV直播平台
+SOOP平台: SOOP(原AfreecaTV)平台
+Section [{section}] does not exist in the file.: 節 [{section}] 在檔案中不存在。
+The anchor did not start broadcasting.: 主播並未開播
+The value of {key} under [{section}] in the configuration file has been updated.: 設定檔中 [{section}] 節下的 {key} 的值已更新。
+TikTok平台: TikTok平台
+Trying to install ffmpeg from official source (gyan.dev)...: 正在嘗試從官方源 (gyan.dev) 安裝 ffmpeg...
+Trying to install the stable version of ffmpeg: 正在嘗試安裝穩定版 ffmpeg
+Trying to install the stable version of ffmpeg for Linux using apt...: 正在嘗試使用 apt 為 Linux 安裝穩定版 ffmpeg...
+TwitCasting login error,: TwitCasting登錄錯誤，
+TwitCasting login successful! Starting to fetch data...: TwitCasting 登錄成功！開始獲取數據...
+TwitchTV直播平台: TwitchTV直播平台
+URL 配置已保存成功: URL 配置已保存成功
+URL 配置编辑区: URL 配置編輯區
+Use Direct Downloader to Download FLV Stream: 使用直接下載器下載FLV流
+WinkTV直播平台: WinkTV直播平台
+'[B站弹幕]进房认证成功（AUTH_REPLY code=0）': '[B站彈幕]進房認證成功（AUTH_REPLY code=0）'
+'[B站直播]getDanmuInfo 无可用 host': '[B站直播]getDanmuInfo 無可用 host'
+'[B站直播]getDanmuInfo 返回空（可能 -352 风控，检查 wbi 签名/cookie）': '[B站直播]getDanmuInfo 返回空（可能 -352 風控，檢查 wbi 簽名/cookie）'
+'[web] ⚠️ 警告: Web 面板监听非回环地址且未启用认证，局域网内任何人均可访问。': '[web] ⚠️ 警告: Web 面板監聽非回環位址且未啟用認證，局域網內任何人均可訪問。'
+'[web] 已启用系统托盘：控制台窗口不在任务栏显示，最小化后收起到托盘': '[web] 已啟用系統托盤：控制台窗口不在任務欄顯示，最小化後收起到托盤'
+'[web] 进入后台运行模式，控制台窗口将隐藏': '[web] 進入後台執行模式，控制台窗口將隱藏'
+'[抖音弹幕]无可用 cookie/ttwid，WS 握手可能被服务端拒绝': '[抖音彈幕]無可用 cookie/ttwid，WS 握手可能被服務端拒絕'
+apt command not found, unable to install ffmpeg. Please manually install ffmpeg by yourself: 未找到 apt 命令，無法安裝 ffmpeg，請手動安裝
+error message：Please check if the input sooplive live room address is correct.: 錯誤訊息：請檢查輸入的SOOP(原AfreecaTV)直播間位址是否正確
+faceit直播平台: faceit直播平台
+ffmpeg (lanzou) installation was successful: ffmpeg（藍奏雲）安裝成功
+ffmpeg (official) installation was successful: ffmpeg（官方源）安裝成功
+ffmpeg installation failed: ffmpeg 安裝失敗
+ffmpeg installation file already exists, start install...: ffmpeg 安裝檔案已存在，開始安裝...
+ffmpeg installation was successful using apt. Restart for changes to take effect.: ffmpeg 已透過 apt 安裝成功，重啟後生效。
+ffmpeg installation was successful using yum. Restart for changes to take effect.: ffmpeg 已透過 yum 安裝成功，重啟後生效。
+ffmpeg installation was successful. Restart for changes to take effect.: ffmpeg 安裝成功，重啟後生效。
+ffmpeg is not installed.: 未安裝 ffmpeg。
+ffmpeg lanzou installation verification failed: ffmpeg 藍奏雲安裝校驗失敗
+ffmpeg official installation verification failed: ffmpeg 官方源安裝校驗失敗
+ffmpeg 进程: ffmpeg 進程
+ffmpeg 进程可能没有完全终止，请检查系统进程: ffmpeg 進程可能沒有完全終止，請檢查系統進程
+ffmpeg.exe not found in official package: 官方壓縮包中未找到 ffmpeg.exe
+pkill 执行失败: pkill 執行失敗
+record_url has h265 codec, but no HLS or FLV fallback available: record_url 為 h265 編碼，且無 HLS 或 FLV 備選可用
+'return web_rid:': 返回 web_rid：
+sooplive live stream failed to retrieve, the live stream just ended.: SOOP(原AfreecaTV)直播獲取失敗,該直播間剛結束直播
+sooplive live stream retrieval failed, the live needs 19+, you are not logged in.: SOOP(原AfreecaTV)直播獲取失敗，該直播間需要年齡19+觀看，您尚未登錄
+sooplive platform login successful! Starting to fetch live streaming data...: SOOP(原AfreecaTV)平台登錄成功！開始獲取直播數據...
+taskkill 执行失败: taskkill 執行失敗
+yum command not found, trying to install using apt...: 未找到 yum 命令，嘗試使用 apt 安裝...
+? '{disk_root} Total: {disk_usage.total / (1024 ** 3):.2f} GB Used: {disk_usage.used / (1024 ** 3):.2f} GB Free: {free_space_gb:.2f} GB
+
+  '
+: '{disk_root} 總計: {disk_usage.total / (1024 ** 3):.2f} GB 已用: {disk_usage.used / (1024 ** 3):.2f} GB 可用: {free_space_gb:.2f} GB
+
+  '
+'{e}, Failed URL: {url}, preparing to switch to a backup plan for re-parsing.': '{e}，失敗的URL: {url}，正在準備切換到備用方案重新解析。'
+'|                DouyinLiveRecorder                 |': '|                DouyinLiveRecorder                 |'
+个直播: 個直播
+个直播中: 個直播中
+传入地址: 傳入位址
+使用配置文件中的 ttwid: 使用設定檔中的 ttwid
+保存 URL 配置: 保存 URL 配置
+保存配置文件失败: 保存設定檔失敗
+停止录制: 停止錄製
+全局/规则网络代理已开启: 全局/規則網路代理已開啟
+共监测: 共監測
+关闭选项: 關閉選項
+准备开始录制: 準備開始錄製
+准备开始录制音频: 準備開始錄製音頻
+加载配置文件不存在，请新建: 設定檔不存在，請新建
+加载配置文件失败: 加載設定檔失敗
+发生 I/O 错误: 發生 I/O 錯誤
+发生错误的行数: 發生錯誤的行數
+同一时间访问网络的线程数: 同一時間訪問網路的線程數
+否: 否
+启动录制失败: 啟動錄製失敗
+启用: 啟用
+备份配置文件: 備份設定檔
+备份配置文件失败, 错误信息: 備份設定檔失敗, 錯誤訊息
+失败: 失敗
+如需恢复控制台显示，请在 config.ini 设置 web_show_console = true 后重启: 如需恢復控制台顯示，請在 config.ini 設定 web_show_console = true 後重啟
+将强制使用FLV格式录制: 將強制使用FLV格式錄製
+尝试终止 ffmpeg 进程: 嘗試終止 ffmpeg 進程
+工作目录: 工作目錄
+已使用命令行方式结束录制进程: 已使用命令行方式結束錄製進程
+已取消结束录制操作: 已取消結束錄製操作
+已成功结束正在录制直播的进程: 已成功結束正在錄製直播的進程
+已打开下载目录: 已打開下載目錄
+已清理: 已清理
+已经将: 已經將
+已被注释,本条线程将会退出: 已被注釋,本條線程將會退出
+已通过 pkill 清理本进程树的 ffmpeg 进程: 已透過 pkill 清理本進程樹的 ffmpeg 進程
+已通过 taskkill 清理本进程树的 ffmpeg 进程: 已透過 taskkill 清理本進程樹的 ffmpeg 進程
+平台: 平台
+序号: 序號
+开始录制: 開始錄製
+开始执行脚本命令!: 開始執行腳本命令!
+强制终止失败: 強制終止失敗
+当前时间: 當前時間
+录制分段开启: 錄製分段開啟
+'录制分段开启: 否': '錄製分段開啟: 否'
+录制已在运行中: 錄製已在執行中
+录制正在后台进行，确定要退出吗: 錄製正在後台進行，確定要退出嗎
+录制程序将在后台自动关闭: 錄製程式將在後台自動關閉
+录制视频格式为: 錄製影片格式為
+录制视频质量为: 錄製影片品質為
+录制进程已停止: 錄製進程已停止
+录制进程已启动: 錄製進程已啟動
+录制进程已结束: 錄製進程已結束
+彻底退出: 徹底退出
+循环检测: 循環檢測
+循环等待: 循環等待
+成功: 成功
+所有 ffmpeg 进程清理完成: 所有 ffmpeg 進程清理完成
+打开下载目录: 打開下載目錄
+打开目录失败: 打開目錄失敗
+托盘: 托盤
+授予脚本可执行权限: 授予腳本可執行權限
+提示: 提示
+'提示: 「是否禁用SSL证书验证(是/否)」已整合进「是否启用https录制」，旧配置项不再生效': '提示: 「是否禁用SSL證書驗證(是/否)」已整合進「是否啟用https錄製」，舊配置項不再生效'
+提示信息: 提示訊息
+支持平台: 支援平台
+新增地址: 新增位址
+是: 是
+是否开启代理录制: 是否開啟代理錄製
+是否生成时间文件: 是否生成時間檔案
+'是否生成时间文件: 是': '是否生成時間檔案: 是'
+显示主界面: 顯示主界面
+最小化到托盘: 最小化到托盤
+未发现需要清理的 ffmpeg 进程: 未發現需要清理的 ffmpeg 進程
+未启动: 未啟動
+未找到FLV直播流，跳过录制: 未找到FLV直播流，跳過錄製
+未运行: 未執行
+格式: 格式
+格式说明: 格式說明
+检测直播间中...: 檢測直播間中...
+正在停止录制: 正在停止錄製
+正在发送 SIGINT 信号: 正在發送 SIGINT 信號
+正在发送终止信号: 正在發送終止信號
+正在后台清理可能残留的 ffmpeg 进程: 正在後台清理可能殘留的 ffmpeg 進程
+正在强制终止进程: 正在強制終止進程
+正在录制: 正在錄製
+正在录制中: 正在錄製中
+正在清理所有 ffmpeg 进程...: 正在清理所有 ffmpeg 進程...
+'每行一个直播链接，支持 # 开头的注释行': '每行一個直播鏈接，支援 # 開頭的注釋行'
+没有找到录制程序的进程: 沒有找到錄製程式的進程
+没有正在录制的直播 循环监测间隔时间: 沒有正在錄製的直播 循環監測間隔時間
+没有正在监测和录制的直播: 沒有正在監測和錄製的直播
+没有正在运行的录制进程: 沒有正在執行的錄製進程
+清理 ffmpeg 进程时出错: 清理 ffmpeg 進程時出錯
+点击窗口关闭按钮（X）将最小化到系统托盘: 點擊窗口關閉按鈕（X）將最小化到系統托盤
+版本号: 版本號
+状态: 狀態
+目前瞬时错误数为: 目前瞬時錯誤數為
+直播录制器: 直播錄製器
+直播录制完成: 直播錄製完成
+直播录制控制台: 直播錄製控制台
+直播状态消息推送至你的: 直播狀態訊息推送至你的
+秒: 秒
+程序已最小化到系统托盘，双击托盘图标可恢复窗口: 程式已最小化到系統托盤，雙擊托盤圖標可恢復窗口
+等待直播...: 等待直播...
+系统代理检测中，请耐心等待...: 系統代理檢測中，請耐心等待...
+终止 ffmpeg 进程时出错: 終止 ffmpeg 進程時出錯
+缺少ffmpeg无法进行录制，程序退出: 缺少ffmpeg無法進行錄製，程式退出
+网址内容获取失败,进行重试中...获取失败的地址是: 網址內容獲取失敗,進行重試中...獲取失敗的位址是
+网络异常，请检查网络是否能正常访问: 網路異常，請檢查網路是否能正常訪問
+脚本命令执行结束!: 腳本命令執行結束!
+脚本无执行权限!: 腳本無執行權限!
+脚本无执行权限!, 若是Linux环境, 请先执行:chmod +x your_script.sh 授予脚本可执行权限: 腳本無執行權限!, 若是Linux環境, 請先執行:chmod +x your_script.sh 授予腳本可執行權限
+自动获取 Twitch Client-Id 成功: 自動獲取 Twitch Client-Id 成功
+自动获取快手 did 成功: 自動獲取快手 did 成功
+自动获取抖音 ttwid 成功: 自動獲取抖音 ttwid 成功
+若是Linux环境, 请先执行: 若是Linux環境, 請先執行
+获取录制状态失败（并发竞争），返回空快照: 獲取錄製狀態失敗（並發競爭），返回空快照
+警告: 警告
+警告：进程可能仍在运行: 警告：進程可能仍在執行
+请求直播流失败，状态码: 請求直播流失敗，狀態碼
+请清理磁盘空间或调整保存路径: 請清理磁碟空間或調整保存路徑
+请选择关闭方式: 請選擇關閉方式
+读取输出错误: 讀取輸出錯誤
+转码失败: 轉碼失敗
+输出流已关闭: 輸出流已關閉
+运行中: 執行中
+运行日志: 執行日志
+进程已优雅退出: 進程已優雅退出
+进程已强制终止: 進程已強制終止
+进程未能及时退出，尝试强制终止: 進程未能及時退出，嘗試強制終止
+退出确认: 退出確認
+退出程序: 退出程式
+重新读取配置: 重新讀取配置
+错误: 錯誤
+错误信息: 錯誤訊息
+'错误信息: 网络异常，请检查本网络是否能正常访问LiveMe直播平台': '錯誤訊息: 網路異常，請檢查本網路是否能正常訪問LiveMe直播平台'
+'错误信息: 网络异常，请检查本网络是否能正常访问PandaTV直播平台': '錯誤訊息: 網路異常，請檢查本網路是否能正常訪問PandaTV直播平台'
+'错误信息: 网络异常，请检查本网络是否能正常访问PopkonTV直播平台': '錯誤訊息: 網路異常，請檢查本網路是否能正常訪問PopkonTV直播平台'
+'错误信息: 网络异常，请检查本网络是否能正常访问SOOP(原AfreecaTV)平台': '錯誤訊息: 網路異常，請檢查本網路是否能正常訪問SOOP(原AfreecaTV)平台'
+'错误信息: 网络异常，请检查本网络是否能正常访问TTingLive(原Flextv)直播平台': '錯誤訊息: 網路異常，請檢查本網路是否能正常訪問TTingLive(原Flextv)直播平台'
+'错误信息: 网络异常，请检查本网络是否能正常访问TwitchTV直播平台': '錯誤訊息: 網路異常，請檢查本網路是否能正常訪問TwitchTV直播平台'
+'错误信息: 网络异常，请检查本网络是否能正常访问WinkTV直播平台': '錯誤訊息: 網路異常，請檢查本網路是否能正常訪問WinkTV直播平台'
+'错误信息: 网络异常，请检查本网络是否能正常访问faceit直播平台': '錯誤訊息: 網路異常，請檢查本網路是否能正常訪問faceit直播平台'
+'错误信息: 网络异常，请检查网络是否能正常访问TikTok平台': '錯誤訊息: 網路異常，請檢查網路是否能正常訪問TikTok平台'
+高级设置: 進階設定
+高级设置配置已保存: 進階設定配置已保存
+'[build] --no-runtime：跳过 ffmpeg/ 与 node/（用户首次运行时自动下载）': '[build] --no-runtime：跳過 ffmpeg/ 與 node/（使用者首次執行時自動下載）'
+'[build] 开始下载运行时二进制（ffmpeg + Node.js）...': '[build] 開始下載執行時二進位檔（ffmpeg + Node.js）...'
+'[build] 未找到 Node.js LTS 版本，跳过 node 下载': '[build] 未找到 Node.js LTS 版本，跳過 node 下載'
+'[smoke:gui] 无显示环境（DISPLAY 未设置），跳过 GUI 冒烟测试': '[smoke:gui] 無顯示環境（DISPLAY 未設定），跳過 GUI 冒煙測試'
+'[smoke:web] HTTP 探活成功 ✅': '[smoke:web] HTTP 探活成功 ✅'
+'[smoke] 全部冒烟测试通过 ✅': '[smoke] 全部冒煙測試通過 ✅'
+? '
+
+  {anchor_name} {time.strftime(''%Y-%m-%d %H:%M:%S'')} 直播录制完成
+
+  '
+: '
+
+  {anchor_name} {time.strftime(''%Y-%m-%d %H:%M:%S'')} 直播錄製完成
+
+  '
+? '
+
+  {record_name} {stop_time} 直播录制完成
+
+  '
+: '
+
+  {record_name} {stop_time} 直播錄製完成
+
+  '
+"\r[build] {desc}: {downloaded // 1024}KB / {total // 1024}KB ({pct}%)": "\r[build] {desc}: {downloaded // 1024}KB / {total // 1024}KB ({pct}%)"
+"\r{'新增' if not first_start else '传入'}地址: {url_tuple[1]}": "\r{'新增' if not first_start else '传入'}位址: {url_tuple[1]}"
+"\r{anchor_name} 准备开始录制音频: {save_file_path}": "\r{anchor_name} 準備開始錄製音頻: {save_file_path}"
+"\r{anchor_name}循环等待{x}秒 ": "\r{anchor_name}循環等待{x}秒 "
+"\r{record_name} 等待直播... ": "\r{record_name} 等待直播... "
+"\r共监测{main.monitoring}个直播中": "\r共監測{main.monitoring}個直播中"
+"\r备份配置文件 {file_path} 失败：{e}": "\r備份設定檔 {file_path} 失敗：{e}"
+"\r没有正在录制的直播 循环监测间隔时间：{main.delay_default}秒": "\r沒有正在錄製的直播 循環監測間隔時間：{main.delay_default}秒"
+'An error occurred while reading the configuration file: {e}': '讀取設定檔時發生錯誤: {e}'
+'An error occurred while trying to install ffmpeg using apt: {e}': '嘗試使用 apt 安裝 ffmpeg 時發生錯誤: {e}'
+'An error occurred while trying to install ffmpeg using yum: {e}': '嘗試使用 yum 安裝 ffmpeg 時發生錯誤: {e}'
+'An error occurred: {e}': '發生錯誤: {e}'
+'An unexpected error occurred: {e}': 發生未知錯誤：{e}
+'An unknown error occurred: {e}': '發生未知錯誤: {e}'
+Bark推送失败, 推送地址：{_mask_url(_api)}, 失败信息：{resp_data.get('message', '未知错误')}: Bark推送失敗, 推送位址：{_mask_url(_api)}, 失敗訊息：{resp_data.get('message', '未知錯誤')}
+Bark推送失败, 推送地址：{_mask_url(_api)}, 错误信息:{e}: Bark推送失敗, 推送位址：{_mask_url(_api)}, 錯誤訊息:{e}
+Disk space remaining is below {disk_space_limit} GB. Exiting program due to the disk space limit being reached.: 剩餘磁碟空間低於 {disk_space_limit} GB，達到磁碟空間限制，程式退出。
+'Douyin web API failed: {api_error}, falling back to HTML scraping': '抖音網頁接口失敗: {api_error}，回退 HTML 解析兜底'
+'Error occurred during conversion: {e}': '轉換過程中發生錯誤: {e}'
+'FLV下载错误: {e} 发生错误的行数: {_get_error_line(e)}': 'FLV下載錯誤: {e} 發生錯誤的行數: {_get_error_line(e)}'
+Failed to install Node.js using Homebrew. {e}: 使用 Homebrew 安裝 Node.js 失敗。{e}
+Failed to install ffmpeg using Homebrew. {e}: 使用 Homebrew 安裝 ffmpeg 失敗。{e}
+Failed to obtain ffmpeg download address. {e}: 獲取 ffmpeg 下載位址失敗。{e}
+'Node.js auto installation is not supported on this platform: {current_platform}. Please install Node.js manually.': '當前平台不支援自動安裝 Node.js: {current_platform}，請手動安裝。'
+'OSError occurred: {e}. ffmpeg may not be installed correctly or is not available in the system PATH.': '發生 OSError: {e}。ffmpeg 可能未正確安裝或不在系統 PATH 中。'
+'Official ffmpeg download failed (network error): {e}': 'ffmpeg 官方源下載失敗（網路錯誤）: {e}'
+'Official ffmpeg installation failed: {type(e).__name__} - {e}': 'ffmpeg 官方源安裝失敗: {type(e).__name__} - {e}'
+PushPlus推送失败, Token：{_mask_secret(_token)}, 失败信息：{resp_data.get('msg', '未知错误')}: PushPlus推送失敗, Token：{_mask_secret(_token)}, 失敗訊息：{resp_data.get('msg', '未知錯誤')}
+PushPlus推送失败, Token：{_mask_secret(_token)}, 错误信息:{e}: PushPlus推送失敗, Token：{_mask_secret(_token)}, 錯誤訊息:{e}
+'URL Error: {e}': 'URL 錯誤: {e}'
+'Use Direct Downloader to Download FLV Stream: {record_url}': '使用直接下載器下載FLV流: {record_url}'
+'[B站弹幕]进房认证 {self._AUTH_TIMEOUT} 秒无回应，按被拒处理主动断开': '[B站彈幕]進房認證 {self._AUTH_TIMEOUT} 秒無回應，按被拒處理主動斷開'
+'[B站弹幕]进房认证失败（AUTH_REPLY code={code}），主动断开: {reply}': '[B站彈幕]進房認證失敗（AUTH_REPLY code={code}），主動斷開: {reply}'
+'[B站直播]buvid 获取失败(将重试): {type(e).__name__}: {e}': '[B站直播]buvid 獲取失敗(將重試): {type(e).__name__}: {e}'
+'[B站直播]buvid 获取失败: {type(e).__name__}: {e}': '[B站直播]buvid 獲取失敗: {type(e).__name__}: {e}'
+'[B站直播]getDanmuInfo 失败: {type(e).__name__}: {e}': '[B站直播]getDanmuInfo 失敗: {type(e).__name__}: {e}'
+'[B站直播]nav(wbi) 获取失败: {type(e).__name__}: {e}': '[B站直播]nav(wbi) 獲取失敗: {type(e).__name__}: {e}'
+'[B站直播]room_init 失败: {type(e).__name__}: {e}': '[B站直播]room_init 失敗: {type(e).__name__}: {e}'
+'[B站直播]spi 失败，从首页 Set-Cookie 获取 buvid3: {buvid}': '[B站直播]spi 失敗，從首頁 Set-Cookie 獲取 buvid3: {buvid}'
+'[B站直播]spi/首页均无 buvid，使用生成兜底 buvid3（未注册，AUTH 可能被拒）: {buvid}': '[B站直播]spi/首頁均無 buvid，使用生成兜底 buvid3（未註冊，AUTH 可能被拒）: {buvid}'
+'[B站直播]wbi 签名失败: {type(e).__name__}: {e}': '[B站直播]wbi 簽名失敗: {type(e).__name__}: {e}'
+'[B站直播]使用 cookie 中的 buvid3: {buvid}': '[B站直播]使用 cookie 中的 buvid3: {buvid}'
+'[B站直播]弹幕信息获取失败: {e}': '[B站直播]彈幕訊息獲取失敗: {e}'
+'[B站直播]首页 Set-Cookie 获取 buvid3 失败: {type(e).__name__}: {e}': '[B站直播]首頁 Set-Cookie 獲取 buvid3 失敗: {type(e).__name__}: {e}'
+'[TwitchTV]弹幕 channel 提取失败: {e}': '[TwitchTV]彈幕 channel 提取失敗: {e}'
+'[build] Node.js {version} 已安装到 {node_dir}': '[build] Node.js {version} 已安裝到 {node_dir}'
+'[build] Node.js 下载失败：{type(e).__name__}: {e}': '[build] Node.js 下載失敗：{type(e).__name__}: {e}'
+? "[build] PyInstaller 命令：\n  {' '.join(cmd)}"
+: "[build] PyInstaller 命令：\n  {' '.join(cmd)}"
+'[build] ffmpeg 下载失败：{type(e).__name__}: {e}': '[build] ffmpeg 下載失敗：{type(e).__name__}: {e}'
+'[build] ffmpeg 已安装到 {ffmpeg_dir}': '[build] ffmpeg 已安裝到 {ffmpeg_dir}'
+'[build] 下载 {desc}：{url}': '[build] 下載 {desc}：{url}'
+'[build] 不支持的平台：{sys.platform}，跳过 node 下载': '[build] 不支援的平台：{sys.platform}，跳過 node 下載'
+'[build] 压缩包已生成：{zip_path}（{zip_path.stat().st_size / 1024 / 1024} MB）': '[build] 壓縮包已生成：{zip_path}（{zip_path.stat().st_size / 1024 / 1024} MB）'
+'[build] 完成。发布目录：{RELEASE_DIR}': '[build] 完成。發布目錄：{RELEASE_DIR}'
+'[build] 完成。发布目录：{RELEASE_DIR}（已生成 lite + full 两个 zip）': '[build] 完成。發布目錄：{RELEASE_DIR}（已生成 lite + full 兩個 zip）'
+'[build] 已复制 config/ -> {cfg_dst}': '[build] 已複製 config/ -> {cfg_dst}'
+'[build] 已复制 {name}/ -> {dst}': '[build] 已複製 {name}/ -> {dst}'
+'[build] 已生成 spec：{SPEC_PATH}': '[build] 已生成 spec：{SPEC_PATH}'
+'[build] 跳过 {name}/（Windows 二进制，与当前平台不符）': '[build] 跳過 {name}/（Windows 二進位，與當前平台不符）'
+'[build] 项目版本：v{version}，平台：{sys.platform}/{platform.machine()}': '[build] 項目版本：v{version}，平台：{sys.platform}/{platform.machine()}'
+? '[build] 预检失败：{path.relative_to(PROJECT_ROOT)} 存在语法错误：
+
+  {exc.msg}'
+: '[build] 預檢失敗：{path.relative_to(PROJECT_ROOT)} 存在語法錯誤：
+
+  {exc.msg}'
+'[build] 预检失败：{path.relative_to(PROJECT_ROOT)} 首行以空白开头（文件头可能被破坏）': '[build] 預檢失敗：{path.relative_to(PROJECT_ROOT)} 首行以空白開頭（檔案頭可能被破壞）'
+'[build] 预检通过：{len(targets)} 个源码文件语法正常': '[build] 預檢通過：{len(targets)} 個源碼檔案語法正常'
+'[smoke:cli] 启动 {exe}（最长 {timeout}s）...': '[smoke:cli] 啟動 {exe}（最長 {timeout}s）...'
+'[smoke:gui] 启动 {exe}（运行 {timeout}s 后终止）...': '[smoke:gui] 啟動 {exe}（執行 {timeout}s 後終止）...'
+'[smoke:web] 启动 {exe}，探活 http://127.0.0.1:{port}/（最长 {timeout}s）...': '[smoke:web] 啟動 {exe}，探活 http://127.0.0.1:{port}/（最長 {timeout}s）...'
+? '[smoke:{name}] 进程输出（末尾 20 行）：
+
+  {tail}'
+: '[smoke:{name}] 進程輸出（末尾 20 行）：
+
+  {tail}'
+'[smoke:{name}] 通过 ✅': '[smoke:{name}] 通過 ✅'
+'[tray] 系统托盘启动失败，已忽略：{exc}': '[tray] 系統托盤啟動失敗，已忽略：{exc}'
+'[web] Web 管理面板启动中: http://{host}:{port}': '[web] Web 管理面板啟動中: http://{host}:{port}'
+'[web] ❌ 拒绝启动: 未启用 Web 认证时不允许监听非回环地址 ({host})。请二选一:': '[web] ❌ 拒絕啟動: 未啟用 Web 認證時不允許監聽非回環位址 ({host})。請二選一:'
+'[web] 录制引擎已在守护线程启动 (tid={recorder_thread.ident})': '[web] 錄製引擎已在守護線程啟動 (tid={recorder_thread.ident})'
+'[web] 托盘不可用（缺少 pystray/Pillow）：{e}': '[web] 托盤不可用（缺少 pystray/Pillow）：{e}'
+'[web] 日志文件: {log_path}': '[web] 日誌檔案: {log_path}'
+'[web] 清理 HTTP 连接池失败: {e}': '[web] 清理 HTTP 連接池失敗: {e}'
+'[web] 清理 ffmpeg 进程失败: {e}': '[web] 清理 ffmpeg 進程失敗: {e}'
+'[web] 认证: {''开启'' if web_cfg[''web_auth_enable''] else ''关闭''}': '[web] 認證: {''开启'' if web_cfg[''web_auth_enable''] else ''关闭''}'
+'[web] 访问地址: http://{host}:{port}': '[web] 訪問位址: http://{host}:{port}'
+'[{anchor_name}]已被注释,本条线程将会退出': '[{anchor_name}]已被注釋,本條線程將會退出'
+'[{record_host}] 并发熔断中，跳过本轮探测，退避 {_backoff}s': '[{record_host}] 並發熔斷中，跳過本輪探測，退避 {_backoff}s'
+'[{record_name}] ffmpeg 命令缺少 -i 输入参数，跳过探针退避标记': '[{record_name}] ffmpeg 命令缺少 -i 輸入參數，跳過探針退避標記'
+'[{record_name}] ffmpeg 进程可能没有完全终止，请检查系统进程': '[{record_name}] ffmpeg 進程可能沒有完全終止，請檢查系統進程'
+'[{record_name}]弹幕跳过: 平台={platform} 未获取到弹幕参数(danmaku_args 为空),请查看上游日志': '[{record_name}]彈幕跳過: 平台={platform} 未獲取到彈幕參數(danmaku_args 為空),請查看上游日誌'
+'[{record_name}]弹幕采集启动失败,不影响录制: {e}': '[{record_name}]彈幕採集啟動失敗,不影響錄製: {e}'
+'[{record_url}]已被注释,本条线程将会退出': '[{record_url}]已被注釋,本條線程將會退出'
+'[{ts}] Web 管理面板进入后台运行模式': '[{ts}] Web 管理面板進入後台執行模式'
+'[弹幕监控]room_closed 处理失败(忽略): {e}': '[彈幕監控]room_closed 處理失敗(忽略): {e}'
+'[弹幕监控]room_connected 处理失败(忽略): {e}': '[彈幕監控]room_connected 處理失敗(忽略): {e}'
+'[弹幕监控]room_message 处理失败(忽略): {e}': '[彈幕監控]room_message 處理失敗(忽略): {e}'
+'[弹幕监控]room_started 处理失败(忽略): {e}': '[彈幕監控]room_started 處理失敗(忽略): {e}'
+'[弹幕监控]room_stopped 处理失败(忽略): {e}': '[彈幕監控]room_stopped 處理失敗(忽略): {e}'
+'[弹幕监控]snapshot 处理失败(忽略): {e}': '[彈幕監控]snapshot 處理失敗(忽略): {e}'
+'[弹幕监控]stats 循环异常(忽略): {e}': '[彈幕監控]stats 循環異常(忽略): {e}'
+'[弹幕监控]日志目录创建失败，禁用文件输出: {e}': '[彈幕監控]日誌目錄創建失敗，禁用檔案輸出: {e}'
+'[弹幕采集]SRT 初始化失败(继续尝试写弹幕): {e}': '[彈幕採集]SRT 初始化失敗(繼續嘗試寫彈幕): {e}'
+'[弹幕采集]{self._danmaku_cls.__name__} 运行异常,不影响录制: {e}': '[彈幕採集]{self._danmaku_cls.__name__} 執行異常,不影響錄製: {e}'
+'[弹幕采集]{self._danmaku_cls.__name__} 连接关闭: {reason}': '[彈幕採集]{self._danmaku_cls.__name__} 連接關閉: {reason}'
+'[弹幕采集]{self._danmaku_cls.__name__} 连接就绪,开始接收弹幕': '[彈幕採集]{self._danmaku_cls.__name__} 連接就緒,開始接收彈幕'
+'[弹幕采集]{self._danmaku_cls.__name__} 采集线程已退出,共收到 {self._msg_count} 条消息': '[彈幕採集]{self._danmaku_cls.__name__} 採集線程已退出,共收到 {self._msg_count} 條消息'
+'[抖音弹幕]动态获取 ttwid 失败: {type(e).__name__}: {e}': '[抖音彈幕]動態獲取 ttwid 失敗: {type(e).__name__}: {e}'
+'[虎牙直播]OD/BD/UHD app路径弹幕参数提取失败: {e}': '[虎牙直播]OD/BD/UHD app路徑彈幕參數提取失敗: {e}'
+'[虎牙直播]OD/BD/UHD app路径弹幕参数缺失，跳过弹幕: yyid={_ayyuid}, lChannelId={_topSid}, lSubChannelId={_subSid}': '[虎牙直播]OD/BD/UHD app路徑彈幕參數缺失，跳過彈幕: yyid={_ayyuid}, lChannelId={_topSid}, lSubChannelId={_subSid}'
+'[虎牙直播]弹幕参数提取失败: {e}': '[虎牙直播]彈幕參數提取失敗: {e}'
+'close_all_clients_sync 回退到引用清理: {e}': 'close_all_clients_sync 回退到引用清理: {e}'
+'ffmpeg auto installation is not supported on this platform: {current_platform}. Please install ffmpeg manually.': '當前平台不支援自動安裝 ffmpeg: {current_platform}，請手動安裝。'
+'ffmpeg lanzou installation failed: {type(e).__name__} - {e}': 'ffmpeg 藍奏雲安裝失敗: {type(e).__name__} - {e}'
+'ffmpeg 进程 (PID: {proc.pid}) 已清理': 'ffmpeg 進程 (PID: {proc.pid}) 已清理'
+'get_response_status 校验失败（判定为不可达）: {url} - {type(e).__name__}: {e}': 'get_response_status 校驗失敗（判定為不可達）: {url} - {type(e).__name__}: {e}'
+? 'get_response_status 校验未通过: {url} - HEAD={response.status_code}, Range-GET={probe.status_code}, content-type={probe.headers.get(''content-type'', '''')}'
+: 'get_response_status 校驗未通過: {url} - HEAD={response.status_code}, Range-GET={probe.status_code}, content-type={probe.headers.get(''content-type'', '''')}'
+? 'get_response_status 校验未通过: {url} - status_code={response.status_code}, content-type={response.headers.get(''content-type'', '''')}'
+: 'get_response_status 校驗未通過: {url} - status_code={response.status_code}, content-type={response.headers.get(''content-type'', '''')}'
+ntfy推送失败, 推送地址：{_mask_url(_api)}, 失败信息：{resp_data['error']}: ntfy推送失敗, 推送位址：{_mask_url(_api)}, 失敗訊息：{resp_data['error']}
+ntfy推送失败, 推送地址：{_mask_url(_api)}, 错误信息:{error_detail}: ntfy推送失敗, 推送位址：{_mask_url(_api)}, 錯誤訊息:{error_detail}
+ntfy推送失败, 推送地址：{_mask_url(_api)}, 错误信息:{e}: ntfy推送失敗, 推送位址：{_mask_url(_api)}, 錯誤訊息:{e}
+'sync_req 请求失败: {type(e).__name__}: {e}': 'sync_req 請求失敗: {type(e).__name__}: {e}'
+tg推送失败, 聊天ID：{chat_id}, 推送地址：{_mask_url(url)}, 失败信息:{error_detail}: tg推送失敗, 聊天ID：{chat_id}, 推送位址：{_mask_url(url)}, 失敗訊息:{error_detail}
+tg推送失败, 聊天ID：{chat_id}, 推送地址：{_mask_url(url)}, 错误信息:{e}: tg推送失敗, 聊天ID：{chat_id}, 推送位址：{_mask_url(url)}, 錯誤訊息:{e}
+'type: {type(e).__name__}, Node.js installation failed {e}': '類型: {type(e).__name__}，Node.js 安裝失敗 {e}'
+'type: {type(e).__name__}, Node.js installation failed, {e}': '類型: {type(e).__name__}，Node.js 安裝失敗，{e}'
+'{anchor_name} 本轮未获取到可用流地址，跳过录制': '{anchor_name} 本輪未獲取到可用流位址，跳過錄製'
+'{platform} | {anchor_name} | 直播源地址: {port_info.get(''m3u8_url'')}': '{platform} | {anchor_name} | 直播源位址: {port_info.get(''m3u8_url'')}'
+'{platform} | {anchor_name} | 直播源地址: {real_url}': '{platform} | {anchor_name} | 直播源位址: {real_url}'
+'{record_name} 画质降级：设置 {record_quality_zh}({record_quality}) 实际 {actual_quality_zh}({actual_quality_code})': '{record_name} 畫質降級：設定 {record_quality_zh}({record_quality}) 實際 {actual_quality_zh}({actual_quality_code})'
+'{recording_live}[{qa}] 正在录制中 {str(have_record_time).split(''.'')[0]}': '{recording_live}[{qa}] 正在錄製中 {str(have_record_time).split(''.'')[0]}'
+'主播名写回 URL 配置失败（已忽略，下轮重试）: {e}': '主播名寫回 URL 配置失敗（已忽略，下輪重試）: {e}'
+'主播名变更重命名失败（已跳过，不影响其余文件）: {entry.path}: {e}': '主播名變更重命名失敗（已跳過，不影響其餘檔案）: {entry.path}: {e}'
+'主播名已变更，配置与录制文件同步更新: {anchor_name} -> {latest_anchor_name}': '主播名已變更，配置與錄製檔案同步更新: {anchor_name} -> {latest_anchor_name}'
+'关闭失效 AsyncClient 失败: {e}': '關閉失效 AsyncClient 失敗: {e}'
+'删除旧主播目录失败（已忽略）: {old_dir}: {e}': '刪除舊主播目錄失敗（已忽略）: {old_dir}: {e}'
+'动态获取 cookie 失败: {url} - {type(e).__name__}: {e}': '動態獲取 cookie 失敗: {url} - {type(e).__name__}: {e}'
+'动态获取 cookie 成功并缓存: {key}': '動態獲取 cookie 成功並快取: {key}'
+'发生 I/O 或配置解析错误: {err}': '發生 I/O 或配置解析錯誤: {err}'
+'合并主播目录时发现同名文件（双方保留，请手动整理）: {dst}': '合併主播目錄時發現同名檔案（雙方保留，請手動整理）: {dst}'
+'合并主播目录条目失败（下轮重试）: {entry.path} -> {dst}: {e}': '合併主播目錄條目失敗（下輪重試）: {entry.path} -> {dst}: {e}'
+'同一时间访问网络的线程数: {_live_network_capacity()}': '同一時間訪問網路的線程數: {_live_network_capacity()}'
+'启动时预热 ttwid 失败: {e}': '啟動時預熱 ttwid 失敗: {e}'
+'备份配置文件失败, 错误信息: {e}': '備份設定檔失敗, 錯誤訊息: {e}'
+'存在 HLS 源但 HLS 采集未启用，且无 FLV/record_url 可回退，本轮放弃（可开启 HLS 采集恢复录制）: {stream_info.get(''anchor_name'') or ''''}': '存在 HLS 源但 HLS 採集未啟用，且無 FLV/record_url 可回退，本輪放棄（可開啟 HLS 採集恢復錄製）: {stream_info.get(''anchor_name'') or ''''}'
+'尝试终止 ffmpeg 进程 (PID: {proc.pid})': '嘗試終止 ffmpeg 進程 (PID: {proc.pid})'
+'并发模式: 动态调速（网络容量随活跃任务数自适应，当前 {self._network_semaphore.value}，下限 {self._min_capacity}，上限 {self._max_capacity}）': '並發模式: 動態調速（網路容量隨活躍任務數自適應，當前 {self._network_semaphore.value}，下限 {self._min_capacity}，上限 {self._max_capacity}）'
+'并发模式: 动态调速，网络容量调整为 {new_cap}（活跃任务 {active}）': '並發模式: 動態調速，網路容量調整為 {new_cap}（活躍任務 {active}）'
+'并发模式: 固定（忽略动态调速器，网络容量固定为 {self._network_semaphore.value}，来源: 配置「同一时间访问网络的线程数」）': '並發模式: 固定（忽略動態調速器，網路容量固定為 {self._network_semaphore.value}，來源: 配置「同一時間訪問網路的線程數」）'
+'并发模式: 固定，网络容量调整为 {new_cap}（来源: 同一时间访问网络的线程数）': '並發模式: 固定，網路容量調整為 {new_cap}（來源: 同一時間訪問網路的線程數）'
+并发线程数配置更新为 {max_request}: 並發線程數配置更新為 {max_request}
+'并发调度重算异常（已忽略）: {type(e).__name__}: {e}': '並發調度重算異常（已忽略）: {type(e).__name__}: {e}'
+序号{count_variable} 网址内容获取失败,进行重试中...获取失败的地址是:{url_data}: 序號{count_variable} 網址內容獲取失敗,進行重試中...獲取失敗的位址是:{url_data}
+'当前时间: {now}': '當前時間: {now}'
+'录制分段开启: {main.split_time}秒': '錄製分段開啟: {main.split_time}秒'
+'录制视频格式为: {main.video_save_type}': '錄製影片格式為: {main.video_save_type}'
+'录制视频质量为: {main.video_record_quality}': '錄製影片品質為: {main.video_record_quality}'
+微信推送失败, 推送地址：{_mask_url(api)}, 失败信息：{resp_data.get('msg', '未知错误')}: 微信推送失敗, 推送位址：{_mask_url(api)}, 失敗訊息：{resp_data.get('msg', '未知錯誤')}
+微信推送失败, 推送地址：{_mask_url(api)}, 错误信息:{e}: 微信推送失敗, 推送位址：{_mask_url(api)}, 錯誤訊息:{e}
+'执行自定义脚本失败: {command} - {type(e).__name__}: {e}': '執行自定義腳本失敗: {command} - {type(e).__name__}: {e}'
+'执行自定义脚本失败（无执行权限）: {command} - {type(e).__name__}: {e}': '執行自定義腳本失敗（無執行權限）: {command} - {type(e).__name__}: {e}'
+'控制台窗口已隐藏，访问地址: http://{host}:{port}': '控制台窗口已隱藏，訪問位址: http://{host}:{port}'
+'提示: {platform} 将强制使用FLV格式录制': '提示: {platform} 將強制使用FLV格式錄製'
+'提示: 已自动追加需禁用SSL证书验证的平台: {'',''.join(appended)}': '提示: 已自動追加需禁用SSL證書驗證的平台: {'',''.join(appended)}'
+提示信息：已经将[{record_name}]直播状态消息推送至你的{platform}, 成功{len(result_dict['success'])}, 失败{len(result_dict['error'])}: 提示信息：已經將[{record_name}]直播狀態訊息推送至你的{platform}, 成功{len(result_dict['success'])}, 失敗{len(result_dict['error'])}
+'支持平台: {platforms}': '支援平台: {platforms}'
+'无法识别的直播地址，本轮跳过: {record_url}': '無法識別的直播位址，本輪跳過: {record_url}'
+'日志文件: {log_path}': '日誌檔案: {log_path}'
+'是否开启代理录制: {''是'' if main.use_proxy else ''否''}': '是否開啟代理錄製: {''是'' if main.use_proxy else ''否''}'
+'未找到分段 FLV 文件，跳过转换: {seg_pattern}': '未找到分段 FLV 檔案，跳過轉換: {seg_pattern}'
+'检测到退出标志，录制线程退出: {record_url}': '檢測到退出標誌，錄製線程退出: {record_url}'
+'正在录制{len(no_repeat_recording)}个直播: ': '正在錄製{len(no_repeat_recording)}個直播: '
+'流地址校验: {url} - CDN 探针退避中，跳过探针直接交由 ffmpeg 拉流': '流位址校驗: {url} - CDN 探針退避中，跳過探針直接交由 ffmpeg 拉流'
+'流地址校验: {url} - CDN 探针退避中，跳过本轮探针、回退下一候选': '流位址校驗: {url} - CDN 探針退避中，跳過本輪探針、回退下一候選'
+'流地址校验: {url} - GET 复核重试通过({probe.status_code})，先前拒绝为偶发': '流位址校驗: {url} - GET 複核重試通過({probe.status_code})，先前拒絕為偶發'
+'流地址校验: {url} - HEAD={head_status} 通过但 GET 复核两次 {reject_status}；已无备选源，仍交由 ffmpeg 尝试（探针与 ffmpeg 客户端指纹不同，探针拒绝不代表 ffmpeg 不可拉流）': '流位址校驗: {url} - HEAD={head_status} 通過但 GET 複核兩次 {reject_status}；已無備選源，仍交由 ffmpeg 嘗試（探針與 ffmpeg 客戶端指紋不同，探針拒絕不代表 ffmpeg 不可拉流）'
+'流地址校验: {url} - HEAD={response.status_code}, Range-GET={probe.status_code}；已无备选源，仍交由 ffmpeg 尝试（探针与 ffmpeg 客户端指纹不同）': '流位址校驗: {url} - HEAD={response.status_code}, Range-GET={probe.status_code}；已無備選源，仍交由 ffmpeg 嘗試（探針與 ffmpeg 客戶端指紋不同）'
+'流地址校验: {url} - Range-GET 重试通过({probe.status_code})，先前拒绝为偶发': '流位址校驗: {url} - Range-GET 重試通過({probe.status_code})，先前拒絕為偶發'
+'流地址校验: {url} - status_code={response.status_code}, content-type={content_type}；已无备选源，仍交由 ffmpeg 尝试（探针与 ffmpeg 客户端指纹不同）': '流位址校驗: {url} - status_code={response.status_code}, content-type={content_type}；已無備選源，仍交由 ffmpeg 嘗試（探針與 ffmpeg 客戶端指紋不同）'
+'流地址校验失败: {url} - HEAD={head_status} 通过但 GET 复核两次 {reject_status}（CDN 稳定拒绝 GET），判定不可达': '流位址校驗失敗: {url} - HEAD={head_status} 通過但 GET 複核兩次 {reject_status}（CDN 穩定拒絕 GET），判定不可達'
+? '流地址校验失败: {url} - HEAD={response.status_code}, Range-GET={probe.status_code}, content-type={probe.headers.get(''content-type'', '''')}'
+: '流位址校驗失敗: {url} - HEAD={response.status_code}, Range-GET={probe.status_code}, content-type={probe.headers.get(''content-type'', '''')}'
+'流地址校验失败: {url} - status_code={response.status_code}, content-type={content_type}': '流位址校驗失敗: {url} - status_code={response.status_code}, content-type={content_type}'
+'流地址校验失败（返回非流媒体内容）: {url} - status_code={response.status_code}, content-type={content_type}': '流位址校驗失敗（返回非流媒體內容）: {url} - status_code={response.status_code}, content-type={content_type}'
+'流地址校验异常（判定为不可达）: {url} - {type(e).__name__}: {e}': '流位址校驗異常（判定為不可達）: {url} - {type(e).__name__}: {e}'
+'清理 ffmpeg 进程异常: {e}': '清理 ffmpeg 進程異常: {e}'
+'清理 ffmpeg 进程时出错: {e}': '清理 ffmpeg 進程時出錯: {e}'
+清理过期备份 {oldest_file} 失败（已保留）：{e}: 清理過期備份 {oldest_file} 失敗（已保留）：{e}
+'版本号: {version}': '版本號: {version}'
+'磁盘空间检测失败（跳过限制检查）: {type(e).__name__}: {e}': '磁碟空間檢測失敗（跳過限制檢查）: {type(e).__name__}: {e}'
+'累计错误数为: {main.error_count}': '累計錯誤數為: {main.error_count}'
+'终止 ffmpeg 进程时出错: {e}': '終止 ffmpeg 進程時出錯: {e}'
+'脚本命令解析失败: {command} - {type(e).__name__}: {e}': '腳本命令解析失敗: {command} - {type(e).__name__}: {e}'
+'自动获取 Twitch Client-Id 失败: {e}': '自動獲取 Twitch Client-Id 失敗: {e}'
+'自动获取快手 did 失败: {e}': '自動獲取快手 did 失敗: {e}'
+'自动获取抖音 ttwid 失败: {e}': '自動獲取抖音 ttwid 失敗: {e}'
+自动追加需禁用SSL验证的平台 {appended} 写回配置失败（已忽略，内存态仍生效）: 自動追加需禁用SSL驗證的平台 {appended} 寫回配置失敗（已忽略，記憶體態仍生效）
+'解析结果无任何流地址（m3u8/flv/record_url 均为空），本轮放弃: {stream_info.get(''anchor_name'') or ''''}': '解析結果無任何流位址（m3u8/flv/record_url 均為空），本輪放棄: {stream_info.get(''anchor_name'') or ''''}'
+'语言已切换: {_new_language}': '語言已切換: {_new_language}'
+'请求直播流失败，状态码: {response.status_code}': '請求直播流失敗，狀態碼: {response.status_code}'
+'读取 URL 配置失败，跳过主播名更新: {e}': '讀取 URL 配置失敗，跳過主播名更新: {e}'
+'跨循环关闭 AsyncClient 失败: {e}': '跨循環關閉 AsyncClient 失敗: {e}'
+'转码失败: {e} ': '轉碼失敗: {e} '
+邮件推送失败, 推送邮箱：{to_email}, 错误信息:{e}: 郵件推送失敗, 推送郵箱：{to_email}, 錯誤訊息:{e}
+'配置项 {section}/{option} 缺省值写回失败（已忽略）: {type(e).__name__}: {e}': '配置項 {section}/{option} 缺省值寫回失敗（已忽略）: {type(e).__name__}: {e}'
+'配置项数值非法: {value}，使用默认值 {default}': '配置項數值非法: {value}，使用預設值 {default}'
+'重命名主播目录失败（下轮重试）: {old_name} -> {new_name}: {e}': '重命名主播目錄失敗（下輪重試）: {old_name} -> {new_name}: {e}'
+钉钉推送失败, 推送地址：{_mask_url(api)}, {resp_data.get('errmsg', '未知错误')}: 釘釘推送失敗, 推送位址：{_mask_url(api)}, {resp_data.get('errmsg', '未知錯誤')}
+钉钉推送失败, 推送地址：{_mask_url(api)}, 错误信息:{e}: 釘釘推送失敗, 推送位址：{_mask_url(api)}, 錯誤訊息:{e}
+'错误信息: {err} 发生错误的行数: {_get_error_line(err)}': '錯誤訊息: {err} 發生錯誤的行數: {_get_error_line(err)}'
+'错误信息: {e} 发生错误的行数: {_get_error_line(e)}': '錯誤訊息: {e} 發生錯誤的行數: {_get_error_line(e)}'
+'FLV下载错误: {source_url} - {type(e).__name__}: {e} 发生错误的行数: {_get_error_line(e)}': 'FLV下載錯誤: {source_url} - {type(e).__name__}: {e} 發生錯誤的行數: {_get_error_line(e)}'
+'请求直播流失败: {source_url} - 状态码: {response.status_code}': '請求直播流失敗: {source_url} - 狀態碼: {response.status_code}'
+'async_req 请求失败: {url} - {type(e).__name__}: {e}': 'async_req 請求失敗: {url} - {type(e).__name__}: {e}'
+'进程退出释放 AsyncClient 失败: {type(e).__name__}: {e}': '進程退出釋放 AsyncClient 失敗: {type(e).__name__}: {e}'
+'FLV URL validation failed, falling back to HLS': 'FLV 位址校驗失敗，回退 HLS'
+'HLS/FLV URL validation failed, trying record_url fallback': 'HLS/FLV 位址校驗失敗，嘗試回退 record_url'
+'[{record_name}] ffmpeg 命令缺少 -i 输入参数，跳过探针退避清除': '[{record_name}] ffmpeg 命令缺少 -i 輸入參數，跳過探針退避清除'
+'[斗鱼直播] 全部档位拉流失败(尝试={attempt_rates})，本轮无可用流地址': '[鬥魚直播] 全部檔位拉流失敗(嘗試={attempt_rates})，本輪無可用流位址'
+'[斗鱼直播] 斗鱼无蓝光30M/20M档位，按蓝光8M(rate=8200)请求': '[鬥魚直播] 斗魚無藍光30M/20M檔位，按藍光8M(rate=8200)請求'
+'[斗鱼直播] 请求档位 {code_to_zh(requested_code)}(rate={rate}) 失败，降级为 {code_to_zh(actual_code)}(rate={attempt}) 拉流成功': '[鬥魚直播] 請求檔位 {code_to_zh(requested_code)}(rate={rate}) 失敗，降級為 {code_to_zh(actual_code)}(rate={attempt}) 拉流成功'
+'[虎牙直播] 请求档位 {code_to_zh(video_quality)}(ratio={target_ratio}) 不可用(房间最高码率={max_ratio})，降级为 {code_to_zh(actual_quality)}(ratio={chosen})': '[虎牙直播] 請求檔位 {code_to_zh(video_quality)}(ratio={target_ratio}) 不可用(房間最高碼率={max_ratio})，降級為 {code_to_zh(actual_quality)}(ratio={chosen})'
+'[虎牙直播] 请求档位 {code_to_zh(video_quality)}(ratio={target_ratio}) 不可用(房间最高码率={max_ratio}，无更低档位)，按原画拉流': '[虎牙直播] 請求檔位 {code_to_zh(video_quality)}(ratio={target_ratio}) 不可用(房間最高碼率={max_ratio}，無更低檔位)，按原畫拉流'
+'h265 编码候选无法 copy 录制，跳过: {url}': 'h265 編碼候選無法 copy 錄製，跳過: {url}'
+'关闭探针客户端失败: {type(e).__name__}: {e}': '關閉探針客戶端失敗: {type(e).__name__}: {e}'
+'录制已停止，房间线程退出: {record_url}': '錄製已停止，房間線程退出: {record_url}'
+"运行日志已归档: {'、'.join(os.path.basename(p) for p in archived)}": "執行日誌已歸檔: {'、'.join(os.path.basename(p) for p in archived)}"
+'运行日志归档失败(忽略): {type(e).__name__}: {e}': '執行日誌歸檔失敗(忽略): {type(e).__name__}: {e}'
+'日志已归档: {name} -> {os.path.basename(target)}': '日誌已歸檔: {name} -> {os.path.basename(target)}'
+'日志归档失败(跳过): {name} - {type(e).__name__}: {e}': '日誌歸檔失敗(跳過): {name} - {type(e).__name__}: {e}'
+'日志归档失败(跳过): web_console.log - {type(e).__name__}: {e}': '日誌歸檔失敗(跳過): web_console.log - {type(e).__name__}: {e}'
+'关闭 web_console 句柄异常(忽略): {type(e).__name__}: {e}': '關閉 web_console 控制代碼異常(忽略): {type(e).__name__}: {e}'
+'重建 web_console.log 句柄失败: {type(e).__name__}: {e}': '重建 web_console.log 控制代碼失敗: {type(e).__name__}: {e}'
+'[弹幕监控]close_file 失败(忽略): {type(e).__name__}: {e}': '[彈幕監控]close_file 失敗(忽略): {type(e).__name__}: {e}'
+'[弹幕监控]关闭边车文件异常(忽略): {type(e).__name__}: {e}': '[彈幕監控]關閉邊車檔案異常(忽略): {type(e).__name__}: {e}'
+'平台 {platform} 在 HLS 采集排除列表中，且无 FLV/record_url 可回退，本轮放弃（可将该平台移出排除列表恢复 HLS 采集）: {stream_info.get(''anchor_name'') or ''''}': '平台 {platform} 在 HLS 採集排除清單中，且無 FLV/record_url 可回退，本輪放棄（可將該平台移出排除清單恢復 HLS 採集）: {stream_info.get(''anchor_name'') or ''''}'
+'弹幕边车文件写入失败: {type(e).__name__}: {e}': '彈幕邊車檔案寫入失敗: {type(e).__name__}: {e}'
+'流地址校验: {url} - GET 复核异常: {type(e).__name__}: {e}（attempt {attempt}）': '流位址校驗: {url} - GET 複核異常: {type(e).__name__}: {e}（attempt {attempt}）'
+'流地址校验: {url} - Range-GET 未取得响应，按校验失败处理': '流位址校驗: {url} - Range-GET 未取得響應，按校驗失敗處理'
+'等待其它线程的 cookie 拉取超时，返回空结果: {key}': '等待其它線程的 cookie 拉取逾時，返回空結果: {key}'

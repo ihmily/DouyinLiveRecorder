@@ -1,23 +1,296 @@
 [project]
 name = "DouyinLiveRecorder"
-version = "4.0.7"
-description = "可循环值守和多人录制的直播录制软件, 支持抖音、TikTok、Youtube、快手、虎牙、斗鱼、B站、小红书、pandatv、sooplive、flextv、popkontv、twitcasting、winktv、百度、微博、酷狗、17Live、Twitch、Acfun、CHZZK、shopee等40+平台直播录制"
+version = "4.0.9.4"
+description = "支持抖音、TikTok、YouTube、快手等60+平台的直播录制工具，支持循环录制、多人录制、消息推送"
 readme = "README.md"
-authors = [{name = "Hmily"}]
+requires-python = ">=3.14"
 license = { text = "MIT" }
-requires-python = ">=3.10"
-dependencies = [
-    "requests>=2.31.0",
-    "loguru>=0.7.3",
-    "pycryptodome>=3.20.0",
-    "distro>=1.9.0",
-    "tqdm>=4.67.1",
-    "httpx[http2]>=0.28.1",
-    "PyExecJS>=1.5.1"
+authors = [
+    { name = "Hmily", email = "ihmily@users.noreply.github.com" }
+]
+keywords = [
+    "live-streaming",
+    "recorder",
+    "douyin",
+    "tiktok",
+    "bilibili",
+    "twitch",
+    "youtube",
+    "直播录制",
+    "抖音",
+    "虎牙",
+    "斗鱼"
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Environment :: GUI",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Operating System :: MacOS X",
+    "Operating System :: Microsoft :: Windows :: Win32",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Multimedia :: Video :: Capture",
+    "Topic :: Communications :: Chat",
 ]
 
+dependencies = [
+    "requests>=2.34.2",
+    "loguru>=0.7.3",
+    "pycryptodome>=3.23.0",
+    "distro>=1.9.0",
+    "tqdm>=4.69.0",
+    "httpx[http2]>=0.28.1",
+    "exejs>=1.0.1",
+    "PyExecJS>=1.5.1",
+    "customtkinter>=6.0.0",
+    "pystray>=0.19.5",
+    "Pillow>=12.3.0",
+    "fastapi>=0.140.0",
+    "starlette>=0.49.1",
+    "uvicorn[standard]>=0.51.0",
+    "python-multipart>=0.0.32",
+    "pydantic>=2.13.4",
+    "websockets>=12.0",
+    # 弹幕（src/collector.py 工厂 + src/platforms/ 各平台采集器 + src/proto/ 协议解码）
+    # 运行时依赖：protobuf 解析抖音弹幕协议、brotli 解压 B站弹幕。
+    # 下界与 requirements.txt 严格保持一致（运行时必需，缺失会导致弹幕采集分支失效）。
+    "protobuf>=6.31.1",
+    "brotli>=1.2.0",
+    # i18n YAML 翻译目录支持（i18n/zh_TW.yaml；缺失时仅损失该格式，JSON/gettext 不受影响）
+    "PyYAML>=6.0.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "mypy>=1.5.0",
+]
+gui = [
+    "customtkinter>=6.0.0",
+    "pystray>=0.19.5",
+    "Pillow>=12.3.0",
+]
+# 可执行文件打包（build_exe.py / CI 使用，非运行时依赖）
+build = [
+    "pyinstaller>=6.10.0",
+]
+
+[project.scripts]
+douyin-recorder = "main:main"
+douyin-recorder-gui = "gui:main"
+douyin-recorder-web = "web:main"
+
 [project.urls]
-"Homepage" = "https://github.com/ihmily/DouyinLiveRecorder"
-"Documentation" = "https://github.com/ihmily/DouyinLiveRecorder"
-"Repository" = "https://github.com/ihmily/DouyinLiveRecorder"
-"Issues" = "https://github.com/ihmily/DouyinLiveRecorder/issues"
+Homepage = "https://github.com/ihmily/DouyinLiveRecorder"
+Documentation = "https://github.com/ihmily/DouyinLiveRecorder"
+Repository = "https://github.com/ihmily/DouyinLiveRecorder"
+Issues = "https://github.com/ihmily/DouyinLiveRecorder/issues"
+Changelog = "https://github.com/ihmily/DouyinLiveRecorder/releases"
+Sponsor = "https://github.com/sponsors/ihmily"
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# 子包必须显式列出：显式 packages 不会递归发现，漏列会让 `pip install .` 产出的
+# 发行包缺失 src/platforms（各平台弹幕采集器）与 src/proto（抖音弹幕 protobuf），
+# 运行时以 ModuleNotFoundError 形式炸在导入链上（egg-info/SOURCES.txt 可核对）
+packages = ["src", "src.platforms", "src.proto"]
+# 顶层单文件模块：保证 [project.scripts] 三个入口（main/gui/web）安装后可用
+py-modules = ["main", "web", "gui", "gui_legacy", "i18n", "msg_push"]
+
+[tool.setuptools.package-data]
+src = ["javascript/*.js"]
+# 注：i18n/ 翻译目录不是 Python 包（无 __init__.py），无法通过 package-data 分发；
+# .mo 文件随 git 仓库、发布 zip（build_exe.py）与 Docker 镜像分发。
+
+[tool.black]
+line-length = 120
+target-version = ['py314']
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+    | \.venv
+    | build
+    | dist
+    | __pycache__
+    | \.pyc
+    | node
+    | ffmpeg
+    | downloads
+    | logs
+    # 第三方/工具生成目录（非项目代码，不纳入格式化；与 .gitignore/.dockerignore 同源维护）
+    | \.agents
+    | \.qoder
+    | \.workbuddy
+    | \.codebuddy
+    | \.trae
+    | \.plugin-src
+    | \.dsh-validation
+    | \.ego-browser-test
+    | \.npm-cache
+    | \.pnpm-store
+    | \.mimosa
+    | \.tmp-dps-extract
+    | \.v2c
+    | pytest-cache-files-[^/]*
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 120
+known_first_party = ["src", "i18n"]
+# 第三方/工具生成目录（非项目代码，不纳入导入排序；与 .gitignore/.dockerignore 同源维护）
+extend_skip = [
+    "node",
+    "ffmpeg",
+    "downloads",
+    ".agents",
+    ".qoder",
+    ".workbuddy",
+    ".codebuddy",
+    ".trae",
+    ".plugin-src",
+    ".dsh-validation",
+    ".ego-browser-test",
+    ".npm-cache",
+    ".pnpm-store",
+    ".mimosa",
+    ".tmp-dps-extract",
+    ".v2c",
+]
+extend_skip_glob = ["*.pyc", "pytest-cache-files-*"]
+
+[tool.mypy]
+python_version = "3.14"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+# 排除目录（正则子串匹配；本地工具生成目录与 .gitignore/.dockerignore 同源维护）
+exclude = [
+    "node",
+    "ffmpeg",
+    "downloads",
+    "typings",
+    "__pycache__",
+    "\\.mimosa",
+    "\\.qoder",
+    "\\.agents",
+    "\\.workbuddy",
+    "\\.codebuddy",
+    "\\.trae",
+    "\\.pnpm-store",
+    "\\.npm-cache",
+    "\\.dsh-validation",
+    "\\.ego-browser-test",
+    "\\.plugin-src",
+    "\\.tmp-dps-extract",
+    "\\.v2c",
+    "pytest-cache-files-",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+filterwarnings = [
+    # 第三方弃用提示（fastapi testclient 内部 import 触发），与本项目代码无关
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated",
+    # 第三方弃用提示（starlette testclient 模块 import 期触发，anyio 4.x 别名迁移），与本项目代码无关
+    "ignore:The anyio\\.abc\\.BlockingPortal alias is deprecated",
+]
+
+[tool.coverage.run]
+source = ["src"]
+# 本地工具生成目录与 .gitignore/.dockerignore 同源维护（.coveragerc-concurrency 的 omit 保持一致）
+omit = [
+    "*/tests/*",
+    "*/__pycache__/*",
+    "*/node/*",
+    "*/ffmpeg/*",
+    "*/.mimosa/*",
+    "*/.qoder/*",
+    "*/.agents/*",
+    "*/.workbuddy/*",
+    "*/.codebuddy/*",
+    "*/.trae/*",
+    "*/.pnpm-store/*",
+    "*/.npm-cache/*",
+    "*/.dsh-validation/*",
+    "*/.ego-browser-test/*",
+    "*/.plugin-src/*",
+    "*/.tmp-dps-extract/*",
+    "*/.v2c/*",
+    "*/pytest-cache-files-*/*",
+]
+
+[tool.coverage.report]
+fail_under = 50
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+
+# 逐模块覆盖率门禁 — 由 scripts/check_coverage.py 机械强制执行
+# 修改阈值时同步更新该脚本中的 MODULE_THRESHOLDS
+# spider.py  >= 50%  (核心爬虫)
+# stream.py  >= 70%  (直播流解析)
+# utils.py   >= 80%  (工具函数)
+# ttwid.py   >= 85%  (认证模块)
+# ab_sign.py >= 95%  (签名模块)
+# proxy.py   >= 50%  (代理管理)
+
+[tool.basedpyright]
+# basedpyright 类型检查配置（本地增强，CI 仍以 mypy 为准）。
+# venvPath 使用工作区相对路径指向 .venv。注意：basedpyright 的 venvPath 不支持
+# ${env:...} / ~ 展开，且本项目依赖装在 workbuddy managed venv（位于工作区之外），
+# 故采用「工作区 .venv」约定（标准且可移植），不在配置里写死机器专属绝对路径。
+# 首次使用需创建并安装依赖：python -m venv .venv && .venv/Scripts/pip install -r requirements.txt
+# .venv 已被 .gitignore 忽略，不会误提交；其他开发者各自创建即可。
+pythonVersion = "3.14"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+exclude = [
+    "**/typings",
+    "**/node",
+    "**/ffmpeg",
+    "**/downloads",
+    "**/build",
+    "**/dist",
+    "**/__pycache__",
+    # 本地工具生成目录（与 .gitignore/.dockerignore 同源维护，防误扫描）
+    ".qoder",
+    ".workbuddy",
+    ".codebuddy",
+    ".trae",
+    ".agents",
+    ".pnpm-store",
+    ".npm-cache",
+    ".dsh-validation",
+    ".ego-browser-test",
+    ".plugin-src",
+    ".tmp-dps-extract",
+    ".v2c",
+    "**/.mimosa",
+    "**/pytest-cache-files-*",
+]
+# 第三方库无源码属正常，不报；类型存根质量非本项目职责
+reportMissingModuleSource = "none"

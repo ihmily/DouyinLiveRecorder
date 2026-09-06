@@ -1,8 +1,8 @@
-name: Issue Translator
-on:
-  issue_comment:
+name: 'issue-translator'
+on: 
+  issue_comment: 
     types: [created]
-  issues:
+  issues: 
     types: [opened]
 
 jobs:
@@ -12,4 +12,7 @@ jobs:
       - uses: usthe/issues-translate-action@v2.7
         with:
           IS_MODIFY_TITLE: false
-          CUSTOM_BOT_NOTE: Bot detected the issue body's language is not English, translate it automatically.
+          # 非必须，决定是否需要修改issue标题内容   
+          # 若是true，则机器人账户@Issues-translate-bot必须拥有修改此仓库issue权限。可以通过邀请@Issues-translate-bot加入仓库协作者实现。
+          CUSTOM_BOT_NOTE: Bot detected the issue body's language is not English, translate it automatically. 👯👭🏻🧑🤝🧑👫🧑🏿🤝🧑🏻👩🏾🤝👨🏿👬🏿
+          # 非必须，自定义机器人翻译的前缀开始内容。  

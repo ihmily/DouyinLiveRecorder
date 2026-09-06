@@ -1,3 +1,12 @@
+# =============================================================================
+# DouyinLiveRecorder .gitignore
+# -----------------------------------------------------------------------------
+# 原则：忽略字节码 / 构建产物 / 虚拟环境 / 测试与覆盖率 / 敏感配置 /
+#       运行期产物（录制文件、日志、备份）与本地工具目录；
+#       保留：源码、编译好的 .mo 翻译（gettext 运行时必需）、StopRecording.vbs 等分发脚本。
+#       运行时资源 config/、ffmpeg/、node/ 与 exe 同级，但 config/*.ini 含敏感信息需忽略。
+# =============================================================================
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -27,8 +36,8 @@ share/python-wheels/
 MANIFEST
 
 # PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+# Usually these files are written by a python script from a template
+# before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
 
@@ -53,6 +62,8 @@ cover/
 
 # Translations
 *.pot
+# 保留编译好的 .mo 文件用于分发（gettext 运行时必需，Docker / 发布 zip 均依赖）
+# *.mo
 
 # Django stuff:
 *.log
@@ -81,37 +92,37 @@ target/
 profile_default/
 ipython_config.py
 
-# DouyinLiveRecord
-backup_config/
-logs/
-node/
-node-v*.zip
+# ---------------- DouyinLiveRecorder 专用（运行时自动生成目录）----------------
+backup_config/        # 运行时配置自动备份（main.py 修改 config 时生成）
+logs/                 # 运行日志（logs/streamget.log 等，DEBUG/ERROR 落盘）
+node/                 # 运行时自动下载的 Node.js（Windows 专用，容器内改用 apt 安装）
+node-v*.zip           # Node.js 安装包
 
 # pyenv
-#   For a library or package, you might want to ignore these files since the code is
-#   intended to run in multiple environments; otherwise, check them in:
+# For a library or package, you might want to ignore these files since the code is
+# intended to run in multiple environments; otherwise, check them in:
 .python-version
 
 # pipenv
-#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
-#   However, in case of collaboration, if having platform-specific dependencies or dependencies
-#   having no cross-platform support, pipenv may install dependencies that don't work, or not
-#   install all needed dependencies.
+# According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
+# However, in case of collaboration, if having platform-specific dependencies or dependencies
+# having no cross-platform support, pipenv may install dependencies that don't work, or not
+# install all needed dependencies.
 #Pipfile.lock
 
 # poetry
-#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
+# Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
+# This is especially recommended for binary packages to ensure reproducibility, and is more
+# commonly ignored for libraries.
+# https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
 poetry.lock
 
 # pdm
-#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
+# Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
 #pdm.lock
-#   pdm stores project-wide configurations in .pdm.toml, but it is recommended to not include it
-#   in version control.
-#   https://pdm.fming.dev/#use-with-ide
+# pdm stores project-wide configurations in .pdm.toml, but it is recommended to not include it
+# in version control.
+# https://pdm.fming.dev/#use-with-ide
 .pdm.toml
 
 # PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
@@ -158,10 +169,115 @@ dmypy.json
 cython_debug/
 
 # PyCharm
-#  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
-#  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
-#  and can be added to the global gitignore or merged into this file.  For a more nuclear
-#  option (not recommended) you can uncomment the following to ignore the entire idea folder.
-#.idea/
+# JetBrains specific template is maintained in a separate JetBrains.gitignore that can
+# be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
+# and can be added to the global gitignore or merged into this file. For a more nuclear
+# option (not recommended) you can uncomment the following to ignore the entire idea folder.
+.idea/
+*.iml
+*.iws
+*.ipr
 
+# VS Code
+.vscode/
+*.code-workspace
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# ---------------- DouyinLiveRecorder 项目专用配置 ----------------
+# 配置文件（含敏感信息：录制账号 Cookie / 代理 / Web 密码等，禁止入库）
+config/config.ini
+config/URL_config.ini
+
+# FFmpeg 二进制文件（Windows 分发用；容器内改用 apt 安装，故忽略宿主机二进制）
+ffmpeg/*.exe
+ffmpeg/*.dll
+ffmpeg/ffmpeg
+ffmpeg/ffprobe
+
+# 录制的音视频与弹幕产物（视频 .ts/.mp4/.flv 与弹幕 .srt 均落盘于此，禁止入库）
+downloads/
+recordings/
+
+# 配置备份目录（运行时自动生成）
 backup_config/
+
+# 日志文件（含 logs/ 目录与根目录散落日志）
+logs/
+*.log
+*.log.*
+
+# 编译的翻译文件 .mo 随仓库分发（gettext 运行时必需，不忽略）；仅忽略临时编译脚本
+i18n/**/compile_po.py
+
+# Windows 特定文件
+Thumbs.db
+desktop.ini
+.DS_Store
+*.exe
+*.dll
+*.cmd
+*.bat
+*.vbs
+# StopRecording.vbs 是项目自带的停止录制脚本，需要随仓库分发（否定上面的 *.vbs）
+!StopRecording.vbs
+
+# macOS 特定文件
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Linux 特定文件
+*~
+
+# 临时文件
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+
+# 过程性探针 / 调试残留（非源码，如 src/stream.pyc_probe_tmp，勿提交）
+*.pyc_probe_tmp
+
+# 系统托盘图标缓存
+*.icon
+
+# AI 助手工作目录（含本项目记忆 / 技能 / 第三方代理生成物，禁止入库）
+.workbuddy/
+.codebuddy/
+.trae/
+
+# 临时 / 过程性文档（CODE_WIKI.md 是正式架构文档，随仓库分发，不忽略）
+CODE_CHANGES.md
+TRAE_AGENT_CODE_WIKI.md
+PERF_REVIEW_2026-08-28.md
+
+# 本地工具 / 审查生成物（第三方编码代理 / 浏览器测试 / 插件源码等；与 .dockerignore 及 pyproject 各工具排除列表同源维护）
+.qoder/
+.agents/
+.pnpm-store/
+.npm-cache/
+.dsh-validation/
+.ego-browser-test/
+.plugin-src/
+.tmp-dps-extract/
+.mimosa/
+.v2c/
+
+# 测试输出目录（端到端 / 真实房间采集的临时产物）
+tests/_out_e2e/
+tests/_out_live/
+
+# pytest 缓存残留（conftest 落盘型 cache 目录，曾被 basedpyright 误扫描）
+pytest-cache-files-*/
+
+# isort 备份残留（格式化工具偶发生成的 .py.isorted，需清理避免误提交）
+*.isorted
