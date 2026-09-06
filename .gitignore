@@ -244,6 +244,9 @@ desktop.ini
 *.swp
 *.swo
 
+# 过程性探针 / 调试残留（非源码，如 src/stream.pyc_probe_tmp，勿提交）
+*.pyc_probe_tmp
+
 # 系统托盘图标缓存
 *.icon
 
@@ -267,6 +270,7 @@ PERF_REVIEW_2026-08-28.md
 .plugin-src/
 .tmp-dps-extract/
 .mimosa/
+.v2c/
 
 # 测试输出目录（端到端 / 真实房间采集的临时产物）
 tests/_out_e2e/
