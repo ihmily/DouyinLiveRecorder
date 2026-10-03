@@ -1695,7 +1695,8 @@ def _rename_prefixed_entries(base_dir: str, old_name: str, new_name: str) -> Non
 # 复杂度上限），分支体语义未变；cookie/代理等配置项仍按模块级全局变量即时读取。
 # 返回 (platform, port_info, record_danmaku_args, new_record_url)：
 # - record_danmaku_args 为弹幕参数(平台相关)，进房失败为 None，由调用方传入 check_subprocess 启停弹幕；
-# - new_record_url 为 Shopee 平台专用（带 uid 的完整 URL，用于更新配置）；
+# - new_record_url 为「解析后需要回写配置的规范地址」：Shopee 用它落带 uid 的完整 URL，
+#   小红书用它把短链/动态路径解析出的最终直播地址写回 URL_config.ini（2026-10-04）；
 # - 无法识别的直播地址返回 None，由调用方 break 进入延迟后重试而非直接结束线程。
 # 平台解析上下文（F-01c）：承载迁移前 _resolve_platform_stream 的函数局部变量。
 # 60+ 平台 elif 链改成分发表后，各平台处理函数需要显式载体读写这四个结果字段。
@@ -1709,7 +1710,7 @@ class _PlatformResolveContext:
         self.port_info: dict[str, Any] = {}
         # 本轮弹幕参数;平台分支填充;进房失败为 None 时跳过弹幕
         self.record_danmaku_args: dict[str, Any] | None = None
-        # Shopee 平台专用：记录带 uid 的完整 URL 用于更新配置
+        # 解析后需回写配置的规范地址（Shopee 带 uid 的 URL、小红书短链解出的直播长链）
         self.new_record_url = ""
         # 兜底分支命中（无法识别的地址）：调用方据此返回 None 并延迟重试
         self.unrecognized = False
@@ -2293,6 +2294,24 @@ def _resolve_xhslink_com(ctx: _PlatformResolveContext) -> None:
     platform = "小红书直播"
     with semaphore:
         port_info = asyncio.run(spider.get_xhs_stream_url(record_url, proxy_addr=proxy_address, cookies=xhs_cookie))
+    # 2026-10-04 小红书链接归一化批次：解析器给出结构化错误类别（链接不是直播/非官方域/短链
+    # 重定向失败等），这些都不是「主播没开播」，必须在分派侧按未识别处理并留一条可检索告警——
+    # 否则 start_record 会把它们当正常离线轮空转，只看到「等待直播」，永远指不到链接本身有问题。
+    _error = str(port_info.get("error") or "")
+    if _error:
+        logger.warning(
+            i18n.tr(
+                "小红书链接解析失败，本轮按未识别处理: {record_url} - {code}",
+                record_url=utils.mask_credentials(record_url),
+                code=_error,
+            )
+        )
+        ctx.unrecognized = True
+    # 规范地址回写：短链/动态路径解析出的最终直播地址经 new_record_url 落回 URL_config.ini
+    # （沿用 Shopee 的既有回写通道），后续轮次直接用长链，省掉每轮一次短链跳转请求。
+    _normalized = str(port_info.get("normalized_url") or "")
+    if _normalized and _normalized != record_url:
+        new_record_url = _normalized
     ctx.platform = platform
     ctx.port_info = port_info
     ctx.record_danmaku_args = record_danmaku_args
@@ -5660,11 +5679,22 @@ def main(non_interactive: bool = False) -> None:
                         if url_host in CLEAN_URL_HOST_LIST:
                             url = update_file(url_config_file, old_str=url, new_str=url.split("?")[0]) or url
 
-                        if "xiaohongshu" in url:
-                            host_id = re.search("&host_id=(.*?)(?=&|$)", url)
-                            if host_id:
-                                new_url = url.split("?")[0] + f"?host_id={host_id.group(1)}"
-                                url = update_file(url_config_file, old_str=url, new_str=new_url) or url
+                        if url_host == "www.xiaohongshu.com":
+                            # 2026-10-04：改走统一解析器 spider.parse_xhs_live_url。旧写法
+                            # `re.search("&host_id=(.*?)(?=&|$)")` 有三个洞：① `&` 前缀使
+                            # `?host_id=...`（首个参数）整条落空，等于没归一化；② 只留 host_id，
+                            # 把页面鉴权用的 xsec_token/xsec_source 一并剥掉；③ 判据与解析器
+                            # 各写一份，路径形态一变就漂移。归一化失败（非直播/非主页路径）时
+                            # 保留原始地址，交由解析侧给出明确错误，不在这里把行注释掉。
+                            # 短链不在此归一化：解跳转要发网络请求，准入阶段做会因一次抖动
+                            # 就改写用户配置；短链的规范地址由 _resolve_xhslink_com 经
+                            # new_record_url 通道在首轮解析成功后回写。
+                            try:
+                                normalized = spider.parse_xhs_live_url(url)["normalized_url"]
+                            except spider.XhsUrlError:
+                                normalized = url
+                            if normalized != url:
+                                url = update_file(url_config_file, old_str=url, new_str=normalized) or url
                         _seen_urls.add(url)
                         # 原实现为 `[i for i in url_comments if url not in i]`：每解析一行都重建
                         # 整个列表（O(N²) 次比较与内存分配），且子串匹配会误删「以该 URL 为前缀」

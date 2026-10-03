@@ -232,7 +232,7 @@ class TestXhsRedirectCredentialContainment:
             return ""
 
         with patch.object(sp, "async_req", new=AsyncMock(side_effect=_req)):
-            await sp.get_xhs_stream_url("https://xhslink.com/abc", cookies="SESSDATA=SECRET")
+            await sp.get_xhs_stream_url("https://xhslink.com/o/abc", cookies="SESSDATA=SECRET")
 
         # 不得向 evil.example.com 发起任何请求（那正是凭据被递送的目标）
         assert not any("evil.example.com" in cast(str, s["url"]) for s in sent), f"凭据被送往外部主机: {sent}"
@@ -248,19 +248,19 @@ class TestXhsRedirectCredentialContainment:
             url = str(kwargs.get("url") or (args[0] if args else ""))
             sent.append({"url": url, "headers": kwargs.get("headers") or {}})
             if kwargs.get("redirect_url"):
-                return "https://www.xiaohongshu.com/live/123"
+                return "https://www.xiaohongshu.com/livestream/123"
             return "<html></html>"
 
         with (
             patch.object(sp, "async_req", new=AsyncMock(side_effect=_req)),
             patch.object(sp.web_config, "_host_internal_reason", return_value="解析到内网地址 127.0.0.1"),
         ):
-            await sp.get_xhs_stream_url("https://xhslink.com/abc", cookies="SESSDATA=SECRET")
+            await sp.get_xhs_stream_url("https://xhslink.com/o/abc", cookies="SESSDATA=SECRET")
 
         # 内网落地页必须被丢弃：不得对**该落地页**发起请求（凭据不外送）。
         # 丢弃后 url 回落到原始 xhslink 短链（其 host 由用户填写、可信），故 rstrip 精确匹配落地页前缀。
         assert not any(
-            cast(str, s["url"]).startswith("https://www.xiaohongshu.com/live/") for s in sent
+            cast(str, s["url"]).startswith("https://www.xiaohongshu.com/livestream/") for s in sent
         ), f"内网落地页被请求: {sent}"
 
     @pytest.mark.asyncio
@@ -272,11 +272,11 @@ class TestXhsRedirectCredentialContainment:
             url = str(kwargs.get("url") or (args[0] if args else ""))
             sent.append({"url": url, "headers": kwargs.get("headers") or {}})
             if kwargs.get("redirect_url"):
-                return "https://www.xiaohongshu.com/live/123"
+                return "https://www.xiaohongshu.com/livestream/123"
             return "<html></html>"
 
         with patch.object(sp, "async_req", new=AsyncMock(side_effect=_req)):
-            await sp.get_xhs_stream_url("https://xhslink.com/abc", cookies="SESSDATA=SECRET")
+            await sp.get_xhs_stream_url("https://xhslink.com/o/abc", cookies="SESSDATA=SECRET")
 
         landing = [s for s in sent if "www.xiaohongshu.com" in cast(str, s["url"])]
         assert landing, f"合法落地页应被请求: {sent}"

@@ -857,5 +857,9 @@
   "未取得 ffmpeg 官方 SHA256（API 返回 {status}）: {masked_url}": "Could not obtain the official ffmpeg SHA256 (API returned {status}): {masked_url}",
   "未取得 ffmpeg 官方 SHA256（请求异常）: {masked_url} - {type_name}: {err}": "Could not obtain the official ffmpeg SHA256 (request failed): {masked_url} - {type_name}: {err}",
   "未取得 ffmpeg 官方公布的 SHA256，本次不安装未校验的二进制（如接受首次信任降级，请显式设 {env}=1）: {masked_url}": "Could not obtain the officially published SHA256 for ffmpeg; refusing to install an unverified binary (set {env}=1 to opt into the trust-on-first-use fallback): {masked_url}",
-  "未取得官方 SHA256，本次为 Linux ffmpeg 首次记录基准（TOFU，等同未校验安装）: {file} = {actual}{stale}": "No official SHA256 obtained; recording the first Linux ffmpeg baseline (TOFU, equivalent to an unverified install): {file} = {actual}{stale}"
+  "未取得官方 SHA256，本次为 Linux ffmpeg 首次记录基准（TOFU，等同未校验安装）: {file} = {actual}{stale}": "No official SHA256 obtained; recording the first Linux ffmpeg baseline (TOFU, equivalent to an unverified install): {file} = {actual}{stale}",
+  "小红书链接解析失败（不发送任何带凭据请求）: {url} - {code}": "XHS link parsing failed (no credentialed request sent): {url} - {code}",
+  "小红书短链重定向失败，本轮按解析失败处理: {url}": "XHS short-link redirect failed; treated as a parse failure this round: {url}",
+  "小红书短链落地页不是可识别的直播间，已忽略跳转: {url} - {code}": "XHS short link landed on an unrecognized page; redirect ignored: {url} - {code}",
+  "小红书链接解析失败，本轮按未识别处理: {record_url} - {code}": "XHS link parsing failed; treated as unrecognized this round: {record_url} - {code}"
 }

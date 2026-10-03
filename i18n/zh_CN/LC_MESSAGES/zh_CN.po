@@ -2633,6 +2633,18 @@ msgstr "小红书短链落地页不可信，已忽略跳转: {url} ({reason})"
 msgid "小红书短链跳转到非白名单主机，已忽略跳转: {url}"
 msgstr "小红书短链跳转到非白名单主机，已忽略跳转: {url}"
 
+msgid "小红书链接解析失败（不发送任何带凭据请求）: {url} - {code}"
+msgstr "小红书链接解析失败（不发送任何带凭据请求）: {url} - {code}"
+
+msgid "小红书短链重定向失败，本轮按解析失败处理: {url}"
+msgstr "小红书短链重定向失败，本轮按解析失败处理: {url}"
+
+msgid "小红书短链落地页不是可识别的直播间，已忽略跳转: {url} - {code}"
+msgstr "小红书短链落地页不是可识别的直播间，已忽略跳转: {url} - {code}"
+
+msgid "小红书链接解析失败，本轮按未识别处理: {record_url} - {code}"
+msgstr "小红书链接解析失败，本轮按未识别处理: {record_url} - {code}"
+
 msgid "Shopee 短链落地页不可信，已忽略跳转: {url} ({reason})"
 msgstr "Shopee 短链落地页不可信，已忽略跳转: {url} ({reason})"
 
