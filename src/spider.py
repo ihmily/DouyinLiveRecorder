@@ -2456,6 +2456,99 @@ def _xhs_is_allowed_host(url: str) -> bool:
     return any(host == suffix or host.endswith("." + suffix) for suffix in _XHS_ALLOWED_HOST_SUFFIXES)
 
 
+class XhsUrlError(ValueError):
+    # 小红书链接不可解析/不受支持的统一异常。继承 ValueError：调用方（分派、配置归一化）
+    # 既有的「ValueError = 用户输入不合格」判定不必改动即可覆盖这一类。
+    pass
+
+
+# 主机的**精确**白名单（不做域族后缀匹配）：本函数输出会进配置回写与后续取流请求，
+# 放宽成后缀匹配会把 evil-xiaohongshu.com 这类伪装域写进用户的配置文件。
+# 注意与 _XHS_ALLOWED_HOST_SUFFIXES 分工不同：那边管「响应给出的落地页能不能带凭据」，
+# 这边管「用户填的链接长什么样」，前者必须能容纳 CDN 子域，后者只认官网与短链两个主机。
+_XHS_MAIN_HOST = "www.xiaohongshu.com"
+_XHS_SHORT_HOST = "xhslink.com"
+# 分享参数白名单，**顺序即重建顺序**：host_id 承担主页兜底、xsec_token/xsec_source 是页面
+# 鉴权参数；timestamp/share_source/share_id 只用于分享溯源统计，带上会让同一房间的规范
+# 地址每次都不同，配置回写后逐轮漂移（PROPOSAL_2026-10-04 已批准边界）。
+_XHS_QUERY_KEYS = ("host_id", "xsec_token", "xsec_source")
+# 四类受支持路径：标准直播 / 动态段直播（分享页带一段随机前缀）/ 短链 / 作者主页。
+# 房间号一律取路径末段且必须全数字；动态段只认一段——真机出现更多段时先存脱敏样例再扩
+# 规则，不提前放宽（同 PROPOSAL「假设与回滚」）。
+_XHS_LIVE_PATH_RE = re.compile(r"^/livestream/(\d+)/?$")
+_XHS_LIVE_DYNAMIC_PATH_RE = re.compile(r"^/livestream/([^/]+)/(\d+)/?$")
+_XHS_SHORT_PATH_RE = re.compile(r"^/o/([^/]+)/?$")
+_XHS_PROFILE_PATH_RE = re.compile(r"^/user/profile/([^/]+)/?$")
+
+
+def parse_xhs_live_url(url: str) -> dict[str, str]:
+    # 小红书链接的统一解析入口（**纯函数**：不发请求、不读配置、不写全局），把标准直播链接、
+    # 动态段直播链接、xhslink 短链、作者主页四类地址归一到
+    # {kind, normalized_url, room_id, user_id}，让分派、配置归一化与取流共用同一份判据。
+    # 判定顺序刻意「先验 scheme/host/port/userinfo，再看路径」：非法域一律挡在路径解析之前，
+    # 免得 https://evil.com/livestream/... 这类伪装地址先被当成合法直播间。
+    raw = (url or "").strip()
+    if not raw:
+        raise XhsUrlError("小红书链接为空")
+    try:
+        parsed = urllib.parse.urlparse(raw)
+        # .hostname 对畸形 IPv6 字面量、.port 对非数字端口都会抛 ValueError
+        host = parsed.hostname or ""
+        port = parsed.port
+    except ValueError as e:
+        raise XhsUrlError(f"小红书链接格式非法: {e}") from e
+    scheme = parsed.scheme.lower()
+    if scheme not in ("http", "https"):
+        raise XhsUrlError(f"小红书链接协议不受支持（只接受 http/https）: {parsed.scheme or '空'}")
+    if parsed.username is not None or parsed.password is not None:
+        # userinfo 既不是用户手填形态，也常是「@ 之后才是真 host」的伪装载体
+        raise XhsUrlError("小红书链接不允许携带用户信息（userinfo）")
+    if port is not None and port != (443 if scheme == "https" else 80):
+        raise XhsUrlError(f"小红书链接不允许指定非默认端口: {port}")
+    host = host.lower()
+    if host not in (_XHS_MAIN_HOST, _XHS_SHORT_HOST):
+        raise XhsUrlError(f"小红书链接域名不受支持（只接受 {_XHS_MAIN_HOST} 与 {_XHS_SHORT_HOST}）: {host or '空'}")
+
+    # 规范化：scheme 统一 https（XHS 只在 https 下发 xsec_token），尾斜杠去掉，
+    # query 只留白名单三项并按固定顺序重建，fragment 直接丢弃。
+    path = parsed.path or "/"
+    kept = urllib.parse.parse_qs(parsed.query, keep_blank_values=False)
+    pairs = [(key, kept[key][0]) for key in _XHS_QUERY_KEYS if kept.get(key)]
+    normalized_url = f"https://{host}{path.rstrip('/')}"
+    if pairs:
+        normalized_url += "?" + urllib.parse.urlencode(pairs)
+
+    if host == _XHS_SHORT_HOST:
+        if not _XHS_SHORT_PATH_RE.match(path):
+            raise XhsUrlError(f"小红书短链路径必须是 /o/<短码>: {path}")
+        # 短码本身不含房间号，room_id 只能等解重定向后从落地页再解析一次
+        return {"kind": "short", "normalized_url": normalized_url, "room_id": "", "user_id": ""}
+    profile_match = _XHS_PROFILE_PATH_RE.match(path)
+    if profile_match:
+        return {
+            "kind": "profile",
+            "normalized_url": normalized_url,
+            "room_id": "",
+            "user_id": profile_match.group(1),
+        }
+    dynamic_match = _XHS_LIVE_DYNAMIC_PATH_RE.match(path)
+    if dynamic_match:
+        room_id = dynamic_match.group(2)
+    else:
+        live_match = _XHS_LIVE_PATH_RE.match(path)
+        if not live_match:
+            raise XhsUrlError(f"小红书链接不是直播间或作者主页地址: {path}")
+        room_id = live_match.group(1)
+    return {
+        "kind": "live",
+        # 动态段保持原样：删掉它之后页面未必还能打开，故不折叠成标准路径
+        "normalized_url": normalized_url,
+        "room_id": room_id,
+        # 沿用既有兜底口径：直播链接没走 /user/profile/ 时拿 host_id 当 user_id
+        "user_id": dict(pairs).get("host_id", ""),
+    }
+
+
 def _read_xhs_sid() -> str:
     # XHS 会话 sid 的外部覆盖值（MID-50a）：优先环境变量 XHS_SESSION_SID，其次
     # config.ini 的 [Cookie] xhs_session_sid，最后回落内置缺省。
