@@ -2456,6 +2456,102 @@ def _xhs_is_allowed_host(url: str) -> bool:
     return any(host == suffix or host.endswith("." + suffix) for suffix in _XHS_ALLOWED_HOST_SUFFIXES)
 
 
+class XhsUrlError(ValueError):
+    # code 是稳定的机器可读分类；消息只描述类别，不回显可能携带凭据的原始 URL/path。
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        super().__init__(message)
+
+
+# 主机的**精确**白名单（不做域族后缀匹配）：本函数输出会进配置回写与后续取流请求，
+# 放宽成后缀匹配会把 evil-xiaohongshu.com 这类伪装域写进用户的配置文件。
+# 注意与 _XHS_ALLOWED_HOST_SUFFIXES 分工不同：那边管「响应给出的落地页能不能带凭据」，
+# 这边管「用户填的链接长什么样」，前者必须能容纳 CDN 子域，后者只认官网与短链两个主机。
+_XHS_MAIN_HOST = "www.xiaohongshu.com"
+_XHS_SHORT_HOST = "xhslink.com"
+# 分享参数白名单，**顺序即重建顺序**：host_id 承担主页兜底、xsec_token/xsec_source 是页面
+# 鉴权参数；timestamp/share_source/share_id 只用于分享溯源统计，带上会让同一房间的规范
+# 地址每次都不同，配置回写后逐轮漂移（PROPOSAL_2026-10-04 已批准边界）。
+_XHS_QUERY_KEYS = ("host_id", "xsec_token", "xsec_source")
+# 四类受支持路径：标准直播 / 动态段直播（分享页带一段随机前缀）/ 短链 / 作者主页。
+# 房间号一律取路径末段且必须全数字；动态段只认一段——真机出现更多段时先存脱敏样例再扩
+# 规则，不提前放宽（同 PROPOSAL「假设与回滚」）。
+_XHS_LIVE_PATH_RE = re.compile(r"^/livestream/([0-9]+)/?$")
+_XHS_LIVE_DYNAMIC_PATH_RE = re.compile(r"^/livestream/[A-Za-z0-9_-]+/([0-9]+)/?$")
+_XHS_SHORT_PATH_RE = re.compile(r"^/o/[A-Za-z0-9_-]+/?$")
+_XHS_PROFILE_PATH_RE = re.compile(r"^/user/profile/([A-Za-z0-9_-]+)/?$")
+
+
+def parse_xhs_live_url(url: str) -> dict[str, str]:
+    # 小红书链接的统一解析入口（**纯函数**：不发请求、不读配置、不写全局），把标准直播链接、
+    # 动态段直播链接、xhslink 短链、作者主页四类地址归一到
+    # {kind, normalized_url, room_id, user_id}，让分派、配置归一化与取流共用同一份判据。
+    # 判定顺序刻意「先验 scheme/host/port/userinfo，再看路径」：非法域一律挡在路径解析之前，
+    # 免得 https://evil.com/livestream/... 这类伪装地址先被当成合法直播间。
+    raw = (url or "").strip()
+    if not raw:
+        raise XhsUrlError("format", "小红书链接为空")
+    try:
+        parsed = urllib.parse.urlparse(raw)
+        # .hostname 对畸形 IPv6 字面量、.port 对非数字端口都会抛 ValueError
+        host = parsed.hostname or ""
+        port = parsed.port
+    except ValueError as e:
+        raise XhsUrlError("format", "小红书链接格式非法") from e
+    scheme = parsed.scheme.lower()
+    if scheme not in ("http", "https"):
+        raise XhsUrlError("scheme", "小红书链接协议不受支持（只接受 http/https）")
+    if parsed.username is not None or parsed.password is not None:
+        # userinfo 既不是用户手填形态，也常是「@ 之后才是真 host」的伪装载体
+        raise XhsUrlError("userinfo", "小红书链接不允许携带用户信息（userinfo）")
+    if port is not None and port != (443 if scheme == "https" else 80):
+        raise XhsUrlError("port", "小红书链接不允许指定非默认端口")
+    host = host.lower()
+    if host not in (_XHS_MAIN_HOST, _XHS_SHORT_HOST):
+        raise XhsUrlError("host", f"小红书链接域名不受支持: {host or '空'}")
+
+    # 规范化：scheme 统一 https（XHS 只在 https 下发 xsec_token），尾斜杠去掉，
+    # query 只留白名单三项并按固定顺序重建，fragment 直接丢弃。
+    path = parsed.path or "/"
+    kept = urllib.parse.parse_qs(parsed.query, keep_blank_values=False)
+    pairs = [(key, kept[key][0]) for key in _XHS_QUERY_KEYS if kept.get(key)]
+    normalized_url = f"https://{host}{path.rstrip('/')}"
+    if pairs:
+        normalized_url += "?" + urllib.parse.urlencode(pairs)
+
+    if host == _XHS_SHORT_HOST:
+        if not _XHS_SHORT_PATH_RE.match(path):
+            raise XhsUrlError("short_path", "小红书短链路径必须是 /o/<短码>")
+        # 短码本身不含房间号，room_id 只能等解重定向后从落地页再解析一次
+        return {"kind": "short", "normalized_url": normalized_url, "room_id": "", "user_id": ""}
+    profile_match = _XHS_PROFILE_PATH_RE.match(path)
+    if profile_match:
+        return {
+            "kind": "profile",
+            "normalized_url": normalized_url,
+            "room_id": "",
+            "user_id": profile_match.group(1),
+        }
+    dynamic_match = _XHS_LIVE_DYNAMIC_PATH_RE.match(path)
+    if dynamic_match:
+        room_id = dynamic_match.group(1)
+    else:
+        live_match = _XHS_LIVE_PATH_RE.match(path)
+        if not live_match:
+            if path == "/livestream" or path.startswith("/livestream/"):
+                raise XhsUrlError("room_id", "小红书直播链接的房间 ID 缺失或非数字")
+            raise XhsUrlError("non_live_path", "小红书链接不是直播间或作者主页地址")
+        room_id = live_match.group(1)
+    return {
+        "kind": "live",
+        # 动态段保持原样：删掉它之后页面未必还能打开，故不折叠成标准路径
+        "normalized_url": normalized_url,
+        "room_id": room_id,
+        # 沿用既有兜底口径：直播链接没走 /user/profile/ 时拿 host_id 当 user_id
+        "user_id": dict(pairs).get("host_id", ""),
+    }
+
+
 def _read_xhs_sid() -> str:
     # XHS 会话 sid 的外部覆盖值（MID-50a）：优先环境变量 XHS_SESSION_SID，其次
     # config.ini 的 [Cookie] xhs_session_sid，最后回落内置缺省。
@@ -2489,6 +2585,20 @@ async def get_xhs_stream_url(
     # 与下方 SEV-2214 落地页校验同源）——本函数 headers 内嵌 xy-common-params（含会话 sid）
     # 与用户 Cookie，分发侧按 host 收紧（main._match_host）之外的防御纵深：必须在任何请求
     # 发出前确认目标是官方域，而不是等第一个带凭据请求已经出去了再补救。
+    # 统一走 parse_xhs_live_url 判型：它同时承担 scheme/host/userinfo/port 白名单与四类路径校验，
+    # 因此下面 M-03 的域族校验只保留“域族合法但结构不支持”这一层兜底（如 CDN 子域）。
+    try:
+        link_info = parse_xhs_live_url(url)
+    except XhsUrlError as e:
+        # 用户填的链接结构非法：发任何请求前即拒，错误类别带给调用方（main 分派按类提示）
+        logger.warning(
+            i18n.tr(
+                "小红书链接解析失败（不发送任何带凭据请求）: {url} - {code}",
+                url=utils.mask_credentials(url),
+                code=e.code,
+            )
+        )
+        return {"anchor_name": "", "is_live": False, "error": e.code}
     if not _xhs_is_allowed_host(url):
         logger.warning(
             i18n.tr(
@@ -2524,53 +2634,79 @@ async def get_xhs_stream_url(
         headers["Cookie"] = cookies
 
     # xhslink.com 是分享短链，需先解析出真实落地页 URL 再继续（redirect_url=True 取最终地址）。
-    if "xhslink.com" in url:
+    if link_info["kind"] == "short":
         url_result = await async_req(url, proxy_addr=proxy_addr, headers=headers, redirect_url=True)
-        if isinstance(url_result, str):
-            # SEV-2214（2026-09-22）：落地页由**响应**决定，其后无 host 判定就用同一份 headers 再请求，
-            # 等于把用户 Cookie 与会话 sid 递送给任意 http(s) host:port。两道闸：
-            #   ① 落地页 host 必须落在 XHS 域族白名单内（_xhs_is_allowed_host）；
-            #   ② 落地页不得解析到内网/回环/云元数据（复用仓内既有判定 web_config._host_internal_reason，
-            #      不自造——它已覆盖 inet_aton 缩写 IP、CGNAT、metadata 域名等绕过形态）。
-            # 任一条不满足即丢弃跳转结果、保留原始 xhslink url（原请求是用户自己填的合法短链宿主，
-            # 不会把凭据送往响应指定的目标），并对该落地页剥离 Cookie / xy-common-params。
-            _landing = url_result
-            if _xhs_is_allowed_host(_landing):
+        # 跳转结果不可用（非字符串 / 空串）时直接判失败：继续拿短链本身请求只会拿到 200 空壳页，
+        # 用户侧表现为「网址内容获取失败」无限重试，线索指不到「短链已失效」上。
+        if not isinstance(url_result, str) or not url_result.strip():
+            logger.warning(i18n.tr("小红书短链重定向失败，本轮按解析失败处理: {url}", url=utils.mask_credentials(url)))
+            return {"anchor_name": "", "is_live": False, "error": "short_redirect"}
+        # SEV-2214（2026-09-22）：落地页由**响应**决定，其后无 host 判定就用同一份 headers 再请求，
+        # 等于把用户 Cookie 与会话 sid 递送给任意 http(s) host:port。两道闸：
+        #   ① 落地页 host 必须落在 XHS 域族白名单内（_xhs_is_allowed_host）；
+        #   ② 落地页不得解析到内网/回环/云元数据（复用仓内既有判定 web_config._host_internal_reason，
+        #      不自造——它已覆盖 inet_aton 缩写 IP、CGNAT、metadata 域名等绕过形态）。
+        # 任一条不满足即丢弃跳转结果、保留原始 xhslink url（原请求是用户自己填的合法短链宿主，
+        # 不会把凭据送往响应指定的目标），并对该落地页剥离 Cookie / xy-common-params。
+        _landing = url_result.strip()
+        if _xhs_is_allowed_host(_landing):
+            try:
+                # DNS 判定；web_config._host_internal_reason 解析失败（NXDOMAIN）也返回拒绝理由。
+                _landing_host = (urllib.parse.urlparse(_landing).hostname or "").lower()
+                _internal_reason = web_config._host_internal_reason(_landing_host) if _landing_host else "缺少主机名"
+            except Exception as e:
+                _internal_reason = f"内网判定异常: {type(e).__name__}"
+            if _internal_reason is None:
+                # 落地页仍要过一遍统一解析：跳转结果可能指向笔记页/搜索页或结构异常的直播路径，
+                # 此时不得再对落地页发任何请求（凭据不外送），直接按类别回报失败。
                 try:
-                    # DNS 判定；web_config._host_internal_reason 解析失败（NXDOMAIN）也返回拒绝理由。
-                    _landing_host = (urllib.parse.urlparse(_landing).hostname or "").lower()
-                    _internal_reason = (
-                        web_config._host_internal_reason(_landing_host) if _landing_host else "缺少主机名"
-                    )
-                except Exception as e:
-                    _internal_reason = f"内网判定异常: {type(e).__name__}"
-                if _internal_reason is None:
-                    url = _landing
-                else:
+                    link_info = parse_xhs_live_url(_landing)
+                except XhsUrlError as e:
                     logger.warning(
                         i18n.tr(
-                            "小红书短链落地页不可信，已忽略跳转: {url} ({reason})",
+                            "小红书短链落地页不是可识别的直播间，已忽略跳转: {url} - {code}",
                             url=utils.mask_credentials(_landing),
-                            reason=_internal_reason,
+                            code=e.code,
                         )
                     )
+                    return {"anchor_name": "", "is_live": False, "error": e.code}
+                url = link_info["normalized_url"]
             else:
                 logger.warning(
                     i18n.tr(
-                        "小红书短链跳转到非白名单主机，已忽略跳转: {url}",
+                        "小红书短链落地页不可信，已忽略跳转: {url} ({reason})",
                         url=utils.mask_credentials(_landing),
+                        reason=_internal_reason,
                     )
                 )
+        else:
+            logger.warning(
+                i18n.tr(
+                    "小红书短链跳转到非白名单主机，已忽略跳转: {url}",
+                    url=utils.mask_credentials(_landing),
+                )
+            )
+    else:
+        # 长链按统一解析结果请求：分享统计参数已剥离、鉴权参数保留，
+        # 动态路径段也原样带上（删掉后页面未必可访问）。
+        url = link_info["normalized_url"]
 
-    host_id = get_params(url, "host_id")
-    user_id_match = re.search("/user/profile/(.*?)(?=/|\\?|$)", url)
-    user_id = user_id_match.group(1) if user_id_match else host_id
-    result: dict[str, object] = {"anchor_name": "", "is_live": False}
+    # 兜底再取一次 host_id：短链路径下 link_info 已在落地页重解析，取值即落地页的白名单 host_id。
+    host_id = get_params(url, "host_id") or link_info["user_id"]
+    user_id = link_info["user_id"] or host_id or ""
+    result: dict[str, object] = {
+        "anchor_name": "",
+        "is_live": False,
+        "room_id": link_info["room_id"],
+        "normalized_url": link_info["normalized_url"],
+    }
     # 走到这里 url 已保证落在 XHS 白名单域内（原始短链宿主或可信落地页），故带凭据安全。
     html_str = await async_req(url, proxy_addr=proxy_addr, headers=headers)
     html_str = _get_str_response(html_str)
     # 内联 __INITIAL_STATE__ 里混有 JS 的 undefined（非法 JSON 字面量），先替换为 null 再解析。
     match_data = re.search("<script>window.__INITIAL_STATE__=(.*?)</script>", html_str)
+    # 预置空串：页面无内联状态 / liveStream 为空时会一路走到下方兜底，变量必须已绑定
+    anchor_name = ""
 
     if match_data:
         json_str = match_data.group(1).replace("undefined", "null")
@@ -2583,6 +2719,12 @@ async def get_xhs_stream_url(
 
         if _dig(json_data, "liveStream"):
             stream_data = _dig(json_data, "liveStream")
+            # 主播名优先取 roomData.hostInfo.nickName：2026-10-04 活体取证确认该字段在
+            # liveStatus="end"（未开播/已下播）时依然存在，而旧实现只在开播态从
+            # roomInfo.deeplink 抠 host_nickname —— 于是标准 /livestream/<id> 链接在等待开播的
+            # 每一轮都拿不到 anchor_name，start_record 会判「网址内容获取失败」并把该房间打回重试，
+            # 表现为「配了链接却永远等不到开播提示」。
+            anchor_name = _dig_str(stream_data, "roomData", "hostInfo", "nickName")
             # liveStatus=="success" 才是开播；标题含「回放」视为非实时直播，跳过取流。
             if _dig(stream_data, "liveStatus") == "success":
                 room_info = _dig(stream_data, "roomData", "roomInfo")
@@ -2592,7 +2734,11 @@ async def get_xhs_stream_url(
                 title = _dig_str(room_info, "roomTitle")
                 if title and "回放" not in title:
                     live_link = _dig_str(room_info, "deeplink")
-                    anchor_name = get_params(live_link, "host_nickname")
+                    # deeplink 的 host_nickname 为空时回落到上方已取到的 hostInfo.nickName：
+                    # 旧写法是整体覆盖，未开播/字段缺失时会把已取到的主播名清空。
+                    deeplink_name = get_params(live_link, "host_nickname")
+                    if deeplink_name:
+                        anchor_name = deeplink_name
                     flv_url = get_params(live_link, "flvUrl")
                     if not flv_url:
                         raise RuntimeError("Failed to get flvUrl")
@@ -2611,8 +2757,15 @@ async def get_xhs_stream_url(
                         "flv_url": flv_url,
                         "m3u8_url": m3u8_url,
                         "record_url": flv_url,
+                        # 开播态的 room_id 取自签名流地址（deeplink），优先于链接路径里的房间号：
+                        # 两者同房间时一致，但 CDN 段才是真正决定拉流的那一段
+                        "room_id": room_id,
                     }
                     return result
+        # 未开播/回放态也要把已取到的主播名写回：start_record 以 anchor_name 非空为
+        # 「本轮解析成功」判据，留空会被记成失败轮并持续重试（见上方 hostInfo 注释）。
+        if anchor_name:
+            result["anchor_name"] = anchor_name
     else:
         # MID-2218：内联状态**整段**缺失 = 页面本身不合预期（风控壳页 / sid 被拒 / 页面改版）；
         # 离线房间的页面照样带 __INITIAL_STATE__（只是不含 liveStream），不会落到这里，
@@ -2623,13 +2776,18 @@ async def get_xhs_stream_url(
             _warn_if_builtin_sid()
 
     # 内联状态未命中直播（未开播/分享页无 liveStream）时，退到用户主页仅补全 anchor_name，
-    # 不影响录制判定（is_live 保持 False）；http 直链里抠不到昵称则留空返回。
-    profile_url = f"https://www.xiaohongshu.com/user/profile/{user_id}"
-    html_str = await async_req(profile_url, proxy_addr=proxy_addr, headers=headers)
-    html_str = _get_str_response(html_str)
-    anchor_name_match = re.search("<title>@(.*?) 的个人主页</title>", html_str)
-    if anchor_name_match:
-        result["anchor_name"] = anchor_name_match.group(1)
+    # 不影响录制判定（is_live 保持 False）。主页链接走同一兜底（既有监控兼容）。
+    # 直播链接若连昵称都没取到，用「小红书_<room_id>」兜底成稳定名：user_id 为空时请求
+    # /user/profile/None 只会浪费一轮请求，且空 anchor_name 让 start_record 判失败重试。
+    if not result.get("anchor_name") and user_id:
+        profile_url = f"https://www.xiaohongshu.com/user/profile/{user_id}"
+        html_str = await async_req(profile_url, proxy_addr=proxy_addr, headers=headers)
+        html_str = _get_str_response(html_str)
+        anchor_name_match = re.search("<title>@(.*?) 的个人主页</title>", html_str)
+        if anchor_name_match:
+            result["anchor_name"] = anchor_name_match.group(1)
+    if not result.get("anchor_name") and link_info["room_id"]:
+        result["anchor_name"] = f"小红书_{link_info['room_id']}"
 
     return result
 

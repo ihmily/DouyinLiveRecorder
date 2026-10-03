@@ -642,7 +642,10 @@ class TestMiguHardening(_GuardCase):
 class TestXhsHardening(_GuardCase):
     # 小红书：__INITIAL_STATE__ 未命中 liveStream 是「未开播/分享页」的正常形态（函数下方还有
     # profile 兜底补昵称），故只有「命中了脚本标签但内联 JSON 被截断」才需要归因。
-    URL = "https://www.xiaohongshu.com/live/livestream/x123"
+    # URL 用真实直播形态 /livestream/<数字房间ID> 并带 host_id：既符合 parse_xhs_live_url 的
+    # 路径白名单，也让下方 profile 兜底仍能拿到 user_id（旧桩用的 /live/livestream/x123 是
+    # 杜撰形态，真实小红书不产出该路径，现被统一解析器按 non_live_path 拒收）。
+    URL = "https://www.xiaohongshu.com/livestream/123456?host_id=5f3e2a1b"
     _PROFILE_HTML = "<title>@兜底昵称 的个人主页</title>"
     _TRUNCATED = '<script>window.__INITIAL_STATE__={"liveStream": {"liveStatus": "succe</script>'
     _NO_LIVE = "<script>window.__INITIAL_STATE__=" + json.dumps({"user": {"notes": []}}) + "</script>"
@@ -669,6 +672,8 @@ class TestXhsHardening(_GuardCase):
     )
     abnormal = [(_TRUNCATED, "小红书 __INITIAL_STATE__", None)]
     silent_body = _NO_LIVE
+    # room_id / normalized_url 是 2026-10-04 小红书链接归一化批次新增的稳定字段：
+    # 前者给配置回写与日志定位，后者让短链/动态路径解析出的规范地址能落回 URL_config.ini。
     expected = {
         "anchor_name": "小红书",
         "is_live": True,
@@ -676,10 +681,12 @@ class TestXhsHardening(_GuardCase):
         "flv_url": "http://live-source-play.xhscdn.com/live/abc.flv",
         "m3u8_url": "http://live-source-play.xhscdn.com/live/abc.m3u8",
         "record_url": "http://live-source-play.xhscdn.com/live/abc.flv",
+        "room_id": "abc",
+        "normalized_url": "https://www.xiaohongshu.com/livestream/123456?host_id=5f3e2a1b",
     }
 
     def payloads(self, body: str | None) -> dict[str, Any]:
-        return {"live/livestream": body if body is not None else self._OK, "user/profile": self._PROFILE_HTML}
+        return {"livestream": body if body is not None else self._OK, "user/profile": self._PROFILE_HTML}
 
     async def call(self) -> Any:
         return await sp.get_xhs_stream_url(self.URL)
