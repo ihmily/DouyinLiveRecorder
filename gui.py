@@ -171,14 +171,10 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from tkinter import messagebox
+from tkinter import font as tkfont
+from tkinter import messagebox, ttk
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast, final
 
-import customtkinter as ctk
-
-# ScalingTracker 不经 customtkinter 顶层命名空间导出（顶层取用报 reportAttributeAccessIssue），
-# 从定义路径显式导入：自适应折行的 wraplength 缩放率折算取自这里
-from customtkinter.windows.widgets.scaling.scaling_tracker import ScalingTracker
 from PIL import Image, ImageDraw
 
 # GUI 父进程标记：必须先于任何 src 导入设置——src.logger 在导入期读取该标记决定
@@ -192,13 +188,36 @@ os.environ["DLR_GUI_PARENT"] = "1"
 import i18n as i18n_module
 from src.config_bool import parse_config_bool
 from src.logger import child_process_env, logger
-from src.ui_theme import DEFAULT_THEME, THEME_IDS, ThemeManager, load_theme_preference, save_theme_preference
+from src.ui_kit import (
+    NAV_ACTIVE_STYLE,
+    NAV_STYLE,
+    Button,
+    DataTable,
+    EditorText,
+    Frame,
+    Label,
+    Menu,
+    font_style,
+    terminal_text,
+)
+from src.ui_theme import (
+    DEFAULT_THEME,
+    GUI_SECTION,
+    THEME_IDS,
+    THEME_KEY,
+    THEMES,
+    ThemeManager,
+    detect_system_appearance,
+    load_theme_preference,
+    save_theme_preference,
+)
 from src.utils import atomic_write_text, mask_credentials
 from src.web_config import (
     find_room_url_by_anchor_name,
     parse_url_config,
     read_quality_options,
     update_config_line,
+    update_or_append_config_line,
     update_room_quality,
 )
 
@@ -320,7 +339,10 @@ class Colors:
     PRIMARY_SOFT_LIGHT = "#E8EDFE"
     PRIMARY_SOFT_DARK = "#232B45"
     # 语义色
-    SUCCESS = "#16A34A"
+    # [2026-10-03 阶段4] SUCCESS 从 #16A34A 加深到 #15803D：与 ui_theme 的 success token
+    # 同批统一——ttk 变体按钮的白字标签要达正文 AA 4.5（白压 #16A34A 实测 3.30），
+    # 状态点呼吸动画与录制按钮/托盘图标同绿，不得出现两种「成功绿」。
+    SUCCESS = "#15803D"
     SUCCESS_HOVER = "#15803D"
     DANGER = "#DC2626"
     DANGER_HOVER = "#B91C1C"
@@ -356,45 +378,50 @@ _MONO_FAMILY = "Cascadia Code"
 @final
 class Fonts:
     # 常用字体配置（惰性创建，避免在 Tk 初始化前调用失败）
-    _cache: dict[str, ctk.CTkFont] = {}
+    _cache: dict[str, tkfont.Font] = {}
 
-    # 按 size/weight/family 获取（并缓存）CTkFont 字体对象。
+    # 按 size/weight/family 获取（并缓存）字体对象。
+    # [阶段5] CTkFont → tk.font.Font：CTk 的 size 语义是「100% DPI 下的逻辑像素」，Tk 原生
+    # 等价物是**负数点值**（1pt = 4/3 px @100%，随 `tk scaling` 跨 DPI 自动缩放）——
+    # size 按 3/4 折算保持各档字号在 100% 下与 CTk 时代逐像素等价；正数像素值不随
+    # DPI 缩放，高 DPI 下会整体偏小，禁用。
     @classmethod
-    def get(cls, size: int, weight: Literal["normal", "bold"] = "normal", family: str = _FONT_FAMILY) -> ctk.CTkFont:
+    def get(cls, size: int, weight: Literal["normal", "bold"] = "normal", family: str = _FONT_FAMILY) -> tkfont.Font:
         key = f"{family}_{size}_{weight}"
         if key not in cls._cache:
-            cls._cache[key] = ctk.CTkFont(family=family, size=size, weight=weight)
+            cls._cache[key] = tkfont.Font(family=family, size=-round(size * 3 / 4), weight=weight)
         return cls._cache[key]
 
     # 获取小号（12px）字体，bold 控制是否加粗。
     @classmethod
-    def small(cls, bold: bool = False) -> ctk.CTkFont:
+    def small(cls, bold: bool = False) -> tkfont.Font:
         return cls.get(12, "bold" if bold else "normal")
 
     # 获取正文（13px）字体，bold 控制是否加粗。
     @classmethod
-    def body(cls, bold: bool = False) -> ctk.CTkFont:
+    def body(cls, bold: bool = False) -> tkfont.Font:
         return cls.get(13, "bold" if bold else "normal")
 
     # 获取标题（15px）字体，默认加粗。
     @classmethod
-    def heading(cls, bold: bool = True) -> ctk.CTkFont:
+    def heading(cls, bold: bool = True) -> tkfont.Font:
         return cls.get(15, "bold" if bold else "normal")
 
     # 获取大标题（20px 加粗）字体。
     @classmethod
-    def title(cls) -> ctk.CTkFont:
+    def title(cls) -> tkfont.Font:
         return cls.get(20, "bold")
 
     # 获取大号状态（26px 加粗）字体。
     @classmethod
-    def big_status(cls) -> ctk.CTkFont:
+    def big_status(cls) -> tkfont.Font:
         return cls.get(26, "bold")
 
     # 获取等宽字体描述元组（字体名, 11）。
     @classmethod
     def mono(cls) -> tuple[str, int]:
-        return (_MONO_FAMILY, 11)
+        # 负数点值（tk 字体元组同支持）：11 逻辑像素 ≈ -8pt，随 DPI 自动缩放（原正数像素不缩放）
+        return (_MONO_FAMILY, -8)
 
 
 # 将 #RRGGBB 十六进制颜色字符串解析为 (R, G, B) 整数元组。
@@ -413,69 +440,64 @@ def _mix(color_a: str, color_b: str, ratio: float) -> str:
     return f"#{r:02X}{g:02X}{b:02X}"
 
 
-# 阶段3 过渡映射：token 主题 → CTk 外观模式。high_contrast 归入 dark（CTk 无高对比模式，
-# 先取深色让终端/弹幕区与主题气质一致）；阶段4 token 整窗重绘接管后本表退役。
-_THEME_CTK_MODE: dict[str, str] = {"light": "light", "dark": "dark", "high_contrast": "dark"}
+# 「跟随系统」在界面主题菜单里的哨兵 id（刻意不在 THEME_IDS 内）：_on_theme_change 见它
+# 即经 detect_system_appearance() 探测系统明暗落主题，并清空 [GUI] gui_theme 显式偏好
+# （写空值，load_theme_preference 对空值按「未设置」处理 → 下次启动继续跟随系统）。
+_FOLLOW_SYSTEM_ID = "_follow_system_"
 
 # 主题 id → i18n msgid（菜单显示名）。msgid 用简中原文（本仓 msgid 惯例），四语目录同批维护。
 _THEME_LABELS: dict[str, str] = {"light": "浅色", "dark": "深色", "high_contrast": "高对比度"}
 
 
-def _ctk_mode_to_theme(mode: str) -> str:
-    # CTk 外观模式（get_appearance_mode 返回 "Light"/"Dark"）→ 主题 id。
-    # get_appearance_mode 不会返回 "System"（已解析成明暗），未识别值按编程性意外回默认主题。
-    normalized = mode.strip().lower()
-    return normalized if normalized in THEME_IDS else DEFAULT_THEME
+def _compute_wraplength(width_device_px: float, margin: int = 8) -> int:
+    # 由标签窗口的设备像素宽折算 wraplength。[2026-10-03 阶段4] 标签从 CTkLabel 换成
+    # ttk.Label 后不再经过 CTk 的「configure 值 × 控件缩放率」换算（Tk 9.0 实测：
+    # ttk 的 wraplength 是原始设备像素、不随 tk scaling 缩放），设备像素直接可用；
+    # 120 设备像素是下限——极窄容器里宁可逐字折行也不得让 wraplength 掉到 0
+    # （0 = 不折行 = 回到两侧裁切的老路）。旧签名 (width, scale) 里的缩放率参数随
+    # ScalingTracker 一并退役：[历史注] CTk 时代公式为 max(120, int((width-margin)/scale))，
+    # 锚点 1584@1.5→1050；两者在 150% DPI 下视觉等价（1050 逻辑 × 1.5 ≈ 1576 设备）。
+    return max(120, int(width_device_px - margin))
 
 
-def _compute_wraplength(width_device_px: float, scale: float, margin: int = 8) -> int:
-    # 由标签窗口的设备像素宽折算 wraplength 逻辑值。CTk 对 wraplength 做 DPI 缩放
-    # （ctk_label.py configure 时乘 _widget_scaling），而 <Configure> 事件给的是设备像素，
-    # 故须除以控件缩放率折回；120 逻辑像素是下限——极窄容器里宁可逐字折行也不得让
-    # wraplength 掉到 0（0 = 不折行 = 回到两侧裁切的老路）。
-    if scale <= 0:
-        scale = 1.0
-    return max(120, int((width_device_px - margin) / scale))
-
-
-def _wrap_should_apply(current: int, new: int, scale_changed: bool) -> bool:
+def _wrap_should_apply(current: int, new: int) -> bool:
     # 迟滞判据（纯函数，供无头测试）：新值与已应用值差异显著才写。
     # 阈值取 max(12, 2%)：滚动条出现/消失让容器宽 ±~11 逻辑像素，若逐次照写，
-    # 「折行变高 → 滚动条翻转 → 宽度变化 → 再折行」会在阈值边界无限互振；
-    # 缩放率变化（跨屏拖拽 / 系统 DPI 调整）说明设备像素↔逻辑值的换算基准变了，
-    # 必须强制重算一次。current==0（从未应用）恒写。
+    # 「折行变高 → 滚动条翻转 → 宽度变化 → 再折行」会在阈值边界无限互振。
+    # current==0（从未应用）恒写。[历史注] 旧签名含 scale_changed 强制重算分支，
+    # 专为 CTk 跨 DPI 重缩放设计；ttk 控件的换算基准与缩放率无关（见
+    # _compute_wraplength），该分支随阶段4 去缩放一并退役。
     if current == 0:
-        return True
-    if scale_changed:
         return True
     return abs(new - current) > max(12, int(current * 0.02))
 
 
-def _bind_adaptive_wraplength(label: ctk.CTkLabel, margin: int = 8, debounce_ms: int = 120) -> None:
-    # 长提示文案自适应换行（防抖 + 迟滞版，2026-09-29 卡死事故修复）。
+def _bind_adaptive_wraplength(label: ttk.Label, margin: int = 8, debounce_ms: int = 120) -> None:
+    # 长提示文案自适应换行（防抖 + 迟滞版，2026-09-29 卡死事故修复；2026-10-03 阶段4
+    # 适配 ttk.Label）。label 形参是两类标签的联合：ttk.Label（存根宽松，wraplength
+    # 可直传 kwargs）与 CTkLabel（无存根、Any——**不能**用 Misc.configure 的 cnf 字典
+    # 形态下发，CTk 的 configure 重载只收命名参数、位置字典会被静默忽略，实测
+    # wraplength 恒 0）。CTk 的控件缩放不再参与换算（见 _compute_wraplength）。
     #
-    # 为什么必须防抖：CTk 的 DPI 重缩放走 update_scaling_callbacks_* → 各控件 _set_scaling →
-    # _draw → _update_dimensions_event → update_idletasks 的**递归互泵**（ctk_scrollbar.py 深处）。
-    # 重缩放期间内部标签宽度剧烈瞬时摆动（实测 350↔1566 设备像素），若在 <Configure> 里同步
-    # 追写 wraplength，每次写入又使几何再失效、排进同一 idle 队列——队列永远排不空，
-    # update()/mainloop 永不返回（实测 10 次 DPI 翻转即卡死；no-op 对照组 9.2s 正常跑完）。
-    # 防抖把写入推迟到事件风暴安静 120ms 之后：风暴期间零写入，结构性不可能反馈进递归。
+    # 为什么必须防抖：旧 CTkLabel 时代的根因是 CTk 的 DPI 重缩放递归互泵
+    # （update_scaling_callbacks → _set_scaling → _draw → update_idletasks），重缩放期间
+    # 标签宽度剧烈瞬时摆动，同步追写 wraplength 会让几何失效排进同一 idle 队列且永不
+    # 排空。ttk 控件不参与该递归，但窗口拖拽/滚动条出现消失仍会产生高频 <Configure>，
+    # 防抖 + 迟滞继续吸收抖动；回调里 label 可能已被销毁（弹幕/画质占位每轮刷新重建），
+    # TclError 守卫保留。
     #
-    # 前提仍是标签以 pack(fill=tk.X) 布局——窗口宽由 packer 分配，与标签自请求解耦；
-    # 绑定时若已有实宽（启动重建场景）同步先应用一次，让首帧即成形，后续变更走防抖。
-    state: dict[str, Any] = {"job": None, "last_scale": None, "last_applied": 0}
+    # 前提仍是标签以 pack(fill=tk.X) / grid 拉伸布局——窗口宽由布局器分配，与标签自请求
+    # 解耦；绑定时若已有实宽（启动重建场景）同步先应用一次，让首帧即成形，后续变更走防抖。
+    state: dict[str, Any] = {"job": None, "last_applied": 0}
 
     def _run() -> None:
         state["job"] = None
         try:
-            scale = ScalingTracker.get_widget_scaling(label)
-            wrap = _compute_wraplength(label.winfo_width(), scale, margin)
+            wrap = _compute_wraplength(label.winfo_width(), margin)
         except tk.TclError:
             # 标签已销毁（弹幕/画质占位每轮刷新重建，防抖回调可能与销毁竞态）
             return
-        scale_changed = state["last_scale"] is not None and scale != state["last_scale"]
-        state["last_scale"] = scale
-        if not _wrap_should_apply(state["last_applied"], wrap, scale_changed):
+        if not _wrap_should_apply(state["last_applied"], wrap):
             return
         try:
             label.configure(wraplength=wrap)
@@ -484,9 +506,7 @@ def _bind_adaptive_wraplength(label: ctk.CTkLabel, margin: int = 8, debounce_ms:
         state["last_applied"] = wrap
 
     def _adapt(event: tk.Event) -> None:
-        # 真防抖：风暴期间每个 Configure 都重置计时器，风暴不安静就**一次都不写**——
-        # 结构性杜绝把几何失效喂回 CTk 的重缩放递归（节流式「每 120ms 写一次」在风暴中途
-        # 的写入仍可能经滚动条阈值互振重新点燃递归，故不采用）。
+        # 真防抖：风暴期间每个 Configure 都重置计时器，风暴不安静就**一次都不写**。
         if state["job"] is not None:
             label.after_cancel(state["job"])
         state["job"] = label.after(debounce_ms, _run)
@@ -726,9 +746,19 @@ class AdvancedSettingsWindow:
     _CONFIG_WATCH_INTERVAL_MS = 5000
 
     # 初始化高级设置窗口（构建 UI、加载配置并延迟安全 grab）。
-    def __init__(self, parent: ctk.CTk, config_file: str, log_callback: Callable[[str], None] | None = None):
+    # tokens [阶段4 新增可选参]：编辑器（tk.Text）的主题 token 配色由宿主 GUI 传入当前
+    # 主题；未传（独立/测试场景）按默认主题取值，构造行为不变。
+    def __init__(
+        self,
+        parent: tk.Tk,
+        config_file: str,
+        log_callback: Callable[[str], None] | None = None,
+        *,
+        tokens: dict[str, str] | None = None,
+    ):
         self.config_file = config_file
         self.log_callback = log_callback
+        self._tokens = tokens if tokens is not None else dict(THEMES[DEFAULT_THEME])
         # MID-55：两份基线——_baseline_content 是「编辑器上次加载/保存时的内容」，
         # _disk_snapshot 是「上次看到的磁盘内容」。保存前比对二者即可识别冲突。
         self._baseline_content = ""
@@ -743,7 +773,9 @@ class AdvancedSettingsWindow:
         # 一个没有父窗口、文案完全误导的错误框。故必须保存 id 并在 destroy 前取消。
         self._config_watch_job_id: str | None = None
 
-        self.window = ctk.CTkToplevel(parent)
+        # [阶段5] tk.Toplevel 替代 CTkToplevel：底色随主题 token（标题栏跟随系统明暗，
+        # 为可接受的观感边界——自绘暗色标题栏需 dwmapi 额外接入，未纳入本批）。
+        self.window = tk.Toplevel(parent, bg=self._tokens["surface"])
         self.window.title("高级设置 - config.ini")
         self.window.geometry("780x560")
         self.window.minsize(560, 400)
@@ -769,68 +801,57 @@ class AdvancedSettingsWindow:
     # 构建高级设置窗口 UI（标题栏、编辑器、保存 / 取消按钮）。
     def _setup_ui(self) -> None:
         # 顶部标题栏
-        header = ctk.CTkFrame(self.window, fg_color=Colors.PRIMARY, corner_radius=0, height=52)
+        header = Frame(self.window, variant="primary", height=52)
         header.pack(fill=tk.X)
         header.pack_propagate(False)
-        ctk.CTkLabel(header, text="⚙  高级设置", text_color="#FFFFFF", font=Fonts.heading()).pack(
+        Label(header, text="⚙  高级设置", font=Fonts.heading(), variant="on_primary").pack(
             side=tk.LEFT, padx=20, pady=12
         )
 
         # 内容区域
-        content = ctk.CTkFrame(self.window, fg_color="transparent")
+        content = Frame(self.window)
         content.pack(fill=tk.BOTH, expand=True, padx=16, pady=(16, 0))
 
-        ctk.CTkLabel(content, text="📄 配置文件内容 (config/config.ini)", font=Fonts.body(), anchor=tk.W).pack(
+        Label(content, text="📄 配置文件内容 (config/config.ini)", font=Fonts.body(), anchor=tk.W).pack(
             fill=tk.X, pady=(0, 8)
         )
 
         # 外部改动提示行（MID-55）：窗口长时间打开时，config.ini 可能已被录制进程写过；
         # 有未保存编辑时不弹窗打断（保存时才要用户裁决），只在这一行给出可见信号。
-        self._hint_label = ctk.CTkLabel(
+        self._hint_label = Label(
             content,
             text="",
             font=Fonts.small(),
-            text_color=Colors.DANGER,
+            variant="danger",
             anchor=tk.W,
         )
         self._hint_label.pack(fill=tk.X, pady=(0, 4))
 
-        # 编辑器（等宽字体）
-        self.config_text = ctk.CTkTextbox(
-            content, wrap="none", font=Fonts.mono(), corner_radius=10, border_width=1, activate_scrollbars=True
-        )
+        # 编辑器（等宽字体；tk.Text + token 配色，主题切换经 restyle 跟随）
+        self.config_text = EditorText(content, tokens=self._tokens, font=Fonts.mono())
         self.config_text.pack(fill=tk.BOTH, expand=True)
 
         # 底部按钮
-        btn_frame = ctk.CTkFrame(self.window, fg_color="transparent")
+        btn_frame = Frame(self.window)
         btn_frame.pack(fill=tk.X, padx=16, pady=16)
 
-        ctk.CTkButton(
+        Button(
             btn_frame,
             text="取消",
             command=self._close,
-            fg_color="transparent",
-            border_width=1,
-            text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
-            border_color=(Colors.BORDER_LIGHT, Colors.BORDER_DARK),
-            hover_color=(Colors.BG_LIGHT, Colors.BG_DARK),
             font=Fonts.body(),
-            width=110,
-            height=36,
-            corner_radius=8,
+            padding=(12, 6),
+            variant="ghost",
+            width=8,
         ).pack(side=tk.RIGHT, padx=(8, 0))
 
-        ctk.CTkButton(
+        Button(
             btn_frame,
             text="💾  保存配置",
             command=self.save_config,
-            fg_color=Colors.PRIMARY,
-            hover_color=Colors.PRIMARY_HOVER,
-            text_color="#FFFFFF",
             font=Fonts.body(bold=True),
-            width=130,
-            height=36,
-            corner_radius=8,
+            padding=(12, 6),
+            width=10,
         ).pack(side=tk.RIGHT)
 
     # 加载 config.ini 内容到编辑器（文件不存在时提示新建），并刷新两份基线快照。
@@ -1001,8 +1022,9 @@ def _save_text_to_file(content: str, file_path: str) -> None:
 
 
 # 将文本控件内容保存为文件（UTF-8-SIG，自动补末尾换行）。
-def _save_text_widget_to_file(text_widget: ctk.CTkTextbox, file_path: str) -> None:
-    # pyrefly: ignore [bad-argument-type]
+def _save_text_widget_to_file(text_widget: tk.Text, file_path: str) -> None:
+    # [阶段4] 形参从 CTkTextbox 收敛为 tk.Text（EditorText 即 tk.Text）；
+    # get("1.0", tk.END) 调用面两者逐字一致。
     _save_text_to_file(str(text_widget.get("1.0", tk.END)), file_path)
 
 
@@ -1370,9 +1392,11 @@ class LiveRecorderGUI:
     _CHAIN_WARN_INTERVAL_SECONDS = 30.0
 
     # 由构建方法（_build_*）初始化的实例组件声明，供类型检查器识别。
-    # customtkinter 无类型存根，CTkFrame 推断为 Unknown；改用有 typeshed 存根的
-    # tkinter.Frame 作为具体声明类型（运行时 CTkFrame 同样可赋值）。
-    sidebar: "tk.Frame"
+    # [2026-10-03 阶段4] 内容页控件从 CTk* 换成 src.ui_kit 的 ttk 工厂；ttk 控件有
+    # typeshed 存根，声明类型随之收敛为 ui_kit 的具体类。注意 ttk.Frame 不是
+    # tkinter.Frame 子类（ttk.Widget 一族），sidebar/status_pill 声明改用 ui_kit.Frame。
+    sidebar: "Frame"
+    status_pill: "Frame"
 
     # 以下实例组件仅在 _build_* 方法中初始化，而 _build_* 均在 __init__ 中被
     # self._setup_ui() 调用，运行期必然已初始化。此处仅做类型声明（供 .configure
@@ -1380,46 +1404,47 @@ class LiveRecorderGUI:
     _sidebar_dot_item: int
     _big_dot: tk.Canvas
     _big_dot_item: int
-    sidebar_status_label: ctk.CTkLabel
-    appearance_menu: ctk.CTkOptionMenu
-    theme_menu: ctk.CTkOptionMenu
-    language_menu: ctk.CTkOptionMenu
-    big_status_label: ctk.CTkLabel
-    big_status_sub: ctk.CTkLabel
-    info_interval: ctk.CTkLabel
-    info_format: ctk.CTkLabel
-    info_tray: ctk.CTkLabel
-    info_time: ctk.CTkLabel
-    start_btn: ctk.CTkButton
-    stop_btn: ctk.CTkButton
-    config_text: ctk.CTkTextbox
-    reload_btn: ctk.CTkButton
-    save_btn: ctk.CTkButton
+    sidebar_status_label: Label
+    theme_menu: Menu
+    language_menu: Menu
+    big_status_label: Label
+    big_status_sub: Label
+    info_interval: Label
+    info_format: Label
+    info_tray: Label
+    info_time: Label
+    start_btn: Button
+    stop_btn: Button
+    config_text: EditorText
+    reload_btn: Button
+    save_btn: Button
     log_text: tk.Text
-    _q_stat_total: ctk.CTkLabel
-    _q_stat_ok: ctk.CTkLabel
-    _q_stat_down: ctk.CTkLabel
-    _quality_scroll: ctk.CTkScrollableFrame
-    _dm_stat_rooms: ctk.CTkLabel
-    _dm_stat_connected: ctk.CTkLabel
-    _dm_stat_msgs: ctk.CTkLabel
-    _dm_scroll: ctk.CTkScrollableFrame
-    _dm_filter_menu: ctk.CTkOptionMenu
+    _q_stat_total: Label
+    _q_stat_ok: Label
+    _q_stat_down: Label
+    _quality_table: DataTable
+    _quality_placeholder: Label
+    _quality_row_setq: dict[str, str]
+    _dm_stat_rooms: Label
+    _dm_stat_connected: Label
+    _dm_stat_msgs: Label
+    _dm_table: DataTable
+    _dm_placeholder: Label
+    _dm_filter_menu: Menu
     danmaku_text: tk.Text
 
     # 初始化 GUI 主窗口、路径配置、状态与所有后台调度。
-    def __init__(self, root: ctk.CTk):
+    def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("直播录制控制台")
         self.root.geometry("1120x740")
         self.root.minsize(920, 620)
 
-        # 外观模式：跟随系统
-        ctk.set_appearance_mode("system")
-
-        # status_pill 由 _build_header 重建并布局；此处先以有类型的占位实例初始化，
-        # 消除 reportUninitializedInstanceVariable（未打包的 Frame 不会渲染）。
-        self.status_pill: tk.Frame = tk.Frame(self.root)
+        # status_pill 由 _build_sidebar 重建并布局；此处先以真实占位实例初始化，
+        # 消除 reportUninitializedInstanceVariable（未打包的 Frame 不会渲染，且
+        # _sidebar_dot 的占位 Canvas 需要一个父容器）。占位样式未过 ThemeManager，
+        # 但它从不显示，_build_sidebar 会以 themed Frame 替换。
+        self.status_pill = Frame(self.root)
         # _sidebar_dot 等同理：构建方法重建并打包，此处以有类型占位实例初始化。
         self._sidebar_dot: tk.Canvas = tk.Canvas(self.status_pill)
 
@@ -1435,18 +1460,22 @@ class LiveRecorderGUI:
         self.main_config_file = os.path.join(self.app_root, "config", "config.ini")
         self.downloads_dir = os.path.join(self.app_root, "downloads")
 
-        # 阶段3 主题层：ttk 主题注册 + 偏好持久化（[GUI] gui_theme）。未设置（""）时按 CTk
-        # 外观模式解析出的明暗落主题——保持升级前「跟随系统」的行为，只有显式选择过的主题
-        # 才覆盖它（并在上面把外观模式同步成主题归属）。CTk 控件的颜色体系由阶段4（ui_kit）
-        # 接管 token；本阶段主题切换的可见效果 = 外观模式映射 + ttk 元素配色。
+        # 阶段3 主题层：ttk 主题注册 + 偏好持久化（[GUI] gui_theme）。未设置（""）时按
+        # 明暗落主题——保持升级前「跟随系统」的行为，只有显式选择过的主题才覆盖它。
+        # [2026-10-03 阶段4] 全部 ttk 控件配色已由 ThemeManager 的变体样式从 token 派生
+        # （本调用即注册）；[阶段5] CTk 外观模式退役，「跟随系统」由
+        # detect_system_appearance() 探测，根窗口底色由 _apply_root_chrome() 按 token 上色。
         self.theme_manager = ThemeManager()
         saved_theme = load_theme_preference(self.main_config_file)
+        # 「跟随系统」当前是否生效：无显式偏好即跟随（含用户在统一后的主题菜单里选了
+        # 「跟随系统」并写回空值的情形）；主题菜单的初始显示值与「跟随系统」选择回调都读它。
+        self._theme_follow_system = saved_theme == ""
         if saved_theme:
             self.theme_manager.select(saved_theme)
-            ctk.set_appearance_mode(_THEME_CTK_MODE.get(saved_theme, "dark"))
         else:
-            self.theme_manager.select(_ctk_mode_to_theme(ctk.get_appearance_mode()))
+            self.theme_manager.select(detect_system_appearance())
         self.theme_manager.apply(self.root)
+        self._apply_root_chrome()
 
         # 进程状态（线程安全访问）
         self._process_lock = threading.Lock()
@@ -1570,13 +1599,13 @@ class LiveRecorderGUI:
         self._status_anim_index = 0
         self._status_anim_timer: str | None = None
 
-        self._nav_buttons: dict[str, ctk.CTkButton] = {}
-        self._pages: dict[str, ctk.CTkFrame] = {}
+        self._nav_buttons: dict[str, Button] = {}
+        self._pages: dict[str, Frame] = {}
         self._current_page = ""
 
         # 退出/对话框防重入标志
         self._quitting = False
-        self._close_dialog: ctk.CTkToplevel | None = None
+        self._close_dialog: tk.Toplevel | None = None
 
         self.sidebar = self._build_sidebar()
         self._setup_ui()
@@ -1678,45 +1707,25 @@ class LiveRecorderGUI:
         self._build_content()
         self._show_page("dashboard")
 
-    # 构建左侧导航栏（品牌、状态胶囊、导航按钮、外观与退出）。
-    def _build_sidebar(self) -> "tk.Frame":
-        # mypy 不加载 typings/customtkinter 存根，ctk.CTkFrame(...) 推断为 Any；
-        # 按本模块约定（CTkFrame 实为 tkinter.Frame 子类）cast 为 tk.Frame，
-        # 既给 mypy 具体返回类型消除 no-any-return，也保持基于存根的 basedpyright 0/0/0。
-        sidebar = cast(
-            "tk.Frame",
-            ctk.CTkFrame(
-                self.root, corner_radius=0, fg_color=(Colors.SIDEBAR_LIGHT, Colors.SIDEBAR_DARK), border_width=0
-            ),
-        )
+    # 构建左侧导航栏（品牌、状态胶囊、导航按钮、界面主题/语言与退出）。
+    # [2026-10-03 阶段4] 控件层换 src.ui_kit 的 ttk 工厂；「外观模式」菜单并入
+    # 「界面主题」（跟随系统 + 三主题单入口），配色全部走 ui_theme 变体样式。
+    def _build_sidebar(self) -> Frame:
+        sidebar = Frame(self.root)
         sidebar.grid(row=0, column=0, sticky="nsew")
         sidebar.grid_propagate(False)
 
         # 品牌区
-        brand = ctk.CTkFrame(sidebar, fg_color="transparent")
+        brand = Frame(sidebar)
         brand.pack(fill=tk.X, padx=20, pady=(24, 6))
-        ctk.CTkLabel(brand, text="🎬", font=ctk.CTkFont(size=30)).pack(side=tk.LEFT)
-        brand_text = ctk.CTkFrame(brand, fg_color="transparent")
+        Label(brand, text="🎬", font=Fonts.get(30)).pack(side=tk.LEFT)
+        brand_text = Frame(brand)
         brand_text.pack(side=tk.LEFT, padx=(10, 0))
-        ctk.CTkLabel(
-            brand_text, text="直播录制", font=Fonts.title(), text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK)
-        ).pack(anchor=tk.W)
-        ctk.CTkLabel(
-            brand_text,
-            text="DouyinLiveRecorder",
-            font=Fonts.small(),
-            text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
-        ).pack(anchor=tk.W)
+        Label(brand_text, text="直播录制", font=Fonts.title()).pack(anchor=tk.W)
+        Label(brand_text, text="DouyinLiveRecorder", font=Fonts.small(), variant="muted").pack(anchor=tk.W)
 
-        # 状态胶囊
-        self.status_pill = ctk.CTkFrame(
-            sidebar,
-            corner_radius=20,
-            height=38,
-            fg_color=(Colors.BG_LIGHT, Colors.BG_DARK),
-            border_width=1,
-            border_color=(Colors.BORDER_LIGHT, Colors.BORDER_DARK),
-        )
+        # 状态胶囊（底色 = surface_alt，圆点画布与文字标签底色必须同槽）
+        self.status_pill = Frame(sidebar, variant="alt", height=38)
         self.status_pill.pack(fill=tk.X, padx=16, pady=(14, 6))
         self.status_pill.pack_propagate(False)
 
@@ -1725,16 +1734,16 @@ class LiveRecorderGUI:
         self._sidebar_dot_item = self._sidebar_dot.create_oval(1, 1, 11, 11, fill=Colors.DANGER, outline="")
         self._sync_dot_bg()
 
-        self.sidebar_status_label = ctk.CTkLabel(
+        self.sidebar_status_label = Label(
             self.status_pill,
             text="未运行",
             font=Fonts.body(bold=True),
-            text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
+            variant="alt",
         )
         self.sidebar_status_label.pack(side=tk.LEFT)
 
         # 导航按钮
-        nav = ctk.CTkFrame(sidebar, fg_color="transparent")
+        nav = Frame(sidebar)
         nav.pack(fill=tk.X, padx=12, pady=(18, 0))
 
         self._add_nav_button(nav, "dashboard", "📊   控制台")
@@ -1744,74 +1753,34 @@ class LiveRecorderGUI:
         self._add_nav_button(nav, "logs", "📋   运行日志")
 
         # 底部区域
-        bottom = ctk.CTkFrame(sidebar, fg_color="transparent")
+        bottom = Frame(sidebar)
         bottom.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=16)
 
-        # 外观切换
-        ctk.CTkLabel(
-            bottom, text="外观模式", font=Fonts.small(), text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK), anchor=tk.W
-        ).pack(fill=tk.X, padx=6, pady=(0, 4))
-        self.appearance_menu = ctk.CTkOptionMenu(
-            bottom,
-            values=["跟随系统", "浅色", "深色"],
-            command=self._on_appearance_change,
-            font=Fonts.body(),
-            corner_radius=8,
-            height=34,
-            fg_color=(Colors.BG_LIGHT, Colors.BG_DARK),
-            button_color=("#D6DAE5", "#2A3040"),
-            button_hover_color=("#C3C9D8", "#343B4E"),
-            text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
-            dropdown_fg_color=(Colors.CARD_LIGHT, Colors.CARD_DARK),
-            dropdown_text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
-            dropdown_hover_color=(Colors.PRIMARY_SOFT_LIGHT, Colors.PRIMARY_SOFT_DARK),
+        # 界面主题（阶段4 统一后的唯一明暗/对比度入口）：「跟随系统」= 清空显式偏好并按
+        # 系统明暗落 light/dark（下次启动继续跟随）；三个显式主题即选即持久化
+        # （config.ini [GUI] gui_theme）。显示名经 i18n；旧「外观模式」菜单连同
+        # 其硬编码中文标签随本批次移除。
+        Label(bottom, text=i18n_module.tr("界面主题"), font=Fonts.small(), variant="muted", anchor=tk.W).pack(
+            fill=tk.X, padx=6, pady=(0, 4)
         )
-        self.appearance_menu.pack(fill=tk.X, padx=2, pady=(0, 12))
-        self.appearance_menu.set("跟随系统")
-
-        # 界面主题（阶段3）：token 主题选择，选择即写回 config.ini [GUI] gui_theme 并注册
-        # ttk 主题。显示名经 i18n（外观模式菜单的硬编码中文是既有遗留，阶段4 统一两控件时处理）。
-        ctk.CTkLabel(
-            bottom,
-            text=i18n_module.tr("界面主题"),
-            font=Fonts.small(),
-            text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
-            anchor=tk.W,
-        ).pack(fill=tk.X, padx=6, pady=(0, 4))
-        # 显示名 → 主题 id 反查表；展示顺序固定 light → dark → high_contrast，与 THEME_IDS 一致
         self._theme_ids_by_display: dict[str, str] = {}
         _theme_values: list[str] = []
-        for _tid in THEME_IDS:
-            _display = i18n_module.tr(_THEME_LABELS[_tid])
+        for _tid in (_FOLLOW_SYSTEM_ID, *THEME_IDS):
+            _display = i18n_module.tr("跟随系统") if _tid == _FOLLOW_SYSTEM_ID else i18n_module.tr(_THEME_LABELS[_tid])
             self._theme_ids_by_display[_display] = _tid
             _theme_values.append(_display)
-        self.theme_menu = ctk.CTkOptionMenu(
-            bottom,
-            values=_theme_values,
-            command=self._on_theme_change,
-            font=Fonts.body(),
-            corner_radius=8,
-            height=34,
-            fg_color=(Colors.BG_LIGHT, Colors.BG_DARK),
-            button_color=("#D6DAE5", "#2A3040"),
-            button_hover_color=("#C3C9D8", "#343B4E"),
-            text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
-            dropdown_fg_color=(Colors.CARD_LIGHT, Colors.CARD_DARK),
-            dropdown_text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
-            dropdown_hover_color=(Colors.PRIMARY_SOFT_LIGHT, Colors.PRIMARY_SOFT_DARK),
-        )
+        self.theme_menu = Menu(bottom, values=_theme_values, command=self._on_theme_change, font=Fonts.body())
         self.theme_menu.pack(fill=tk.X, padx=2, pady=(0, 12))
-        # 初始值 = 当前已生效主题（__init__ 已按持久化偏好/外观跟随选定）
-        self.theme_menu.set(i18n_module.tr(_THEME_LABELS[self.theme_manager.theme_id]))
+        # 初始值：跟随系统时不得显示解析后的主题名（用户并未显式选过它）
+        if self._theme_follow_system:
+            self.theme_menu.set(i18n_module.tr("跟随系统"))
+        else:
+            self.theme_menu.set(i18n_module.tr(_THEME_LABELS[self.theme_manager.theme_id]))
 
         # 语言切换：显示名 → 语言码映射；选择即热切换本进程翻译目录并写回 config.ini
-        ctk.CTkLabel(
-            bottom,
-            text="语言 Language",
-            font=Fonts.small(),
-            text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
-            anchor=tk.W,
-        ).pack(fill=tk.X, padx=6, pady=(0, 4))
+        Label(bottom, text="语言 Language", font=Fonts.small(), variant="muted", anchor=tk.W).pack(
+            fill=tk.X, padx=6, pady=(0, 4)
+        )
         # MID-53：显示名一律取 i18n.unique_display_names()，不得再在本文件裁剪括注。
         # 旧写法 `name.split(" (")[0]` 把 "English (US)" / "English (UK)" 折成同一个
         # "English"，于是下面的反向表后写覆盖前写只剩 en_GB —— 用户点任一 English 都写回
@@ -1819,20 +1788,11 @@ class LiveRecorderGUI:
         self._language_names: dict[str, str] = i18n_module.unique_display_names()
         # 显示名 → 语言码（unique_display_names 已保证值互不相同，故此表无覆盖风险）
         self._language_codes: dict[str, str] = {name: code for code, name in self._language_names.items()}
-        self.language_menu = ctk.CTkOptionMenu(
+        self.language_menu = Menu(
             bottom,
             values=list(self._language_names.values()),
             command=self._on_language_change,
             font=Fonts.body(),
-            corner_radius=8,
-            height=34,
-            fg_color=(Colors.BG_LIGHT, Colors.BG_DARK),
-            button_color=("#D6DAE5", "#2A3040"),
-            button_hover_color=("#C3C9D8", "#343B4E"),
-            text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
-            dropdown_fg_color=(Colors.CARD_LIGHT, Colors.CARD_DARK),
-            dropdown_text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
-            dropdown_hover_color=(Colors.PRIMARY_SOFT_LIGHT, Colors.PRIMARY_SOFT_DARK),
         )
         self.language_menu.pack(fill=tk.X, padx=2, pady=(0, 12))
         # 初始值：读 config.ini 的 language 键（空 → 系统语言，未识别/目录缺失 → en_US）
@@ -1853,50 +1813,27 @@ class LiveRecorderGUI:
             self._language_names.get(_effective_lang, self._language_names[i18n_module.DEFAULT_LANGUAGE])
         )
 
-        ctk.CTkButton(
+        Button(
             bottom,
             text="📥   最小化到托盘",
             command=self.minimize_to_tray,
             font=Fonts.body(),
-            height=38,
-            corner_radius=8,
-            fg_color="transparent",
-            text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
-            border_width=1,
-            border_color=(Colors.BORDER_LIGHT, Colors.BORDER_DARK),
-            hover_color=(Colors.BG_LIGHT, Colors.BG_DARK),
-            anchor=tk.W,
+            variant="side_ghost",
         ).pack(fill=tk.X, pady=(0, 8))
 
-        ctk.CTkButton(
+        Button(
             bottom,
             text="❌   彻底退出",
             command=self.quit_application,
             font=Fonts.body(bold=True),
-            height=38,
-            corner_radius=8,
-            fg_color=Colors.DANGER,
-            hover_color=Colors.DANGER_HOVER,
-            text_color="#FFFFFF",
-            anchor=tk.W,
+            variant="side_danger",
         ).pack(fill=tk.X)
 
         return sidebar
 
     # 向侧边栏添加一项导航按钮并绑定页面切换回调。
-    def _add_nav_button(self, parent: ctk.CTkFrame, page_id: str, text: str) -> None:
-        btn = ctk.CTkButton(
-            parent,
-            text=text,
-            command=lambda: self._show_page(page_id),
-            font=Fonts.body(),
-            height=42,
-            corner_radius=8,
-            fg_color="transparent",
-            text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
-            hover_color=(Colors.BG_LIGHT, Colors.BG_DARK),
-            anchor=tk.W,
-        )
+    def _add_nav_button(self, parent: Frame, page_id: str, text: str) -> None:
+        btn = Button(parent, text=text, command=lambda: self._show_page(page_id), font=Fonts.body(), variant="nav")
         btn.pack(fill=tk.X, pady=2)
         self._nav_buttons[page_id] = btn
 
@@ -1908,31 +1845,29 @@ class LiveRecorderGUI:
         self._pages[page_id].tkraise()
         for pid, btn in self._nav_buttons.items():
             if pid == page_id:
-                btn.configure(
-                    fg_color=(Colors.PRIMARY_SOFT_LIGHT, Colors.PRIMARY_SOFT_DARK),
-                    text_color=(Colors.PRIMARY, "#9DB1FF"),
-                    font=Fonts.body(bold=True),
-                )
+                btn.configure(style=font_style(NAV_ACTIVE_STYLE, Fonts.body(bold=True), btn))
             else:
-                btn.configure(
-                    fg_color="transparent", text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK), font=Fonts.body()
-                )
+                btn.configure(style=font_style(NAV_STYLE, Fonts.body(), btn))
 
-    # 切换浅色 / 深色 / 系统外观模式并同步自绘控件颜色。
-    def _on_appearance_change(self, choice: str) -> None:
-        mapping = {"跟随系统": "system", "浅色": "light", "深色": "dark"}
-        ctk.set_appearance_mode(mapping.get(choice, "system"))
-        # 主题切换后同步自绘控件颜色（Canvas 不随主题自动变化）
-        self.root.after(50, self._sync_canvas_bg)
-
-    # 界面主题菜单选择回调（阶段3）：内存态切换 + ttk 注册 + 持久化 + 外观模式同步。
+    # 界面主题菜单选择回调（阶段3 建立，阶段4 统一单入口，阶段5 去 CTk 化）：内存态切换 +
+    # ttk 注册 + 持久化（「跟随系统」写空值 = 清空显式偏好）+ 根窗口底色 + 自绘控件重上色。
     # 写回失败只告警不阻断——内存态已切换，与语言菜单的容错口径一致。
     def _on_theme_change(self, choice: str) -> None:
-        theme_id = self._theme_ids_by_display.get(choice, DEFAULT_THEME)
-        effective = self.theme_manager.select(theme_id)
+        theme_id = self._theme_ids_by_display.get(choice, _FOLLOW_SYSTEM_ID)
+        follow = theme_id == _FOLLOW_SYSTEM_ID
+        if follow:
+            effective = self.theme_manager.select(detect_system_appearance())
+        else:
+            effective = self.theme_manager.select(theme_id)
         self.theme_manager.apply(self.root)
         try:
-            if save_theme_preference(self.main_config_file, effective):
+            if follow:
+                # 写空值而非删键：load_theme_preference 对空值按「未设置」处理，
+                # 行级写回同时保留注释与节顺序（与 save_theme_preference 同一通道）。
+                saved = update_or_append_config_line(self.main_config_file, GUI_SECTION, THEME_KEY, "")
+            else:
+                saved = save_theme_preference(self.main_config_file, effective)
+            if saved:
                 self._log(i18n_module.tr("界面主题已切换: {theme}", theme=effective))
             else:
                 self._log(
@@ -1950,11 +1885,10 @@ class LiveRecorderGUI:
                 ),
                 "warn",
             )
-        # 阶段3 过渡：token 整窗重绘在阶段4 接管，先映射外观模式让 CTk 控件跟随主题明暗
-        ctk_mode = _THEME_CTK_MODE.get(effective, "dark")
-        ctk.set_appearance_mode(ctk_mode)
-        # 外观模式菜单的显示值同步主题归属，避免两个控件显示漂移（该菜单无持久化，阶段4 统一）
-        self.appearance_menu.set({"light": "浅色", "dark": "深色"}.get(ctk_mode, "深色"))
+        self._theme_follow_system = follow
+        # 根窗口底色随主题 token；ttk 控件由全局样式重绘，tk 自绘件见 _sync_theme_extras
+        self._apply_root_chrome()
+        self._sync_theme_extras()
         self.root.after(50, self._sync_canvas_bg)
 
     # 语言菜单选择回调：即时热切换翻译目录并持久化到 config.ini。
@@ -1977,23 +1911,43 @@ class LiveRecorderGUI:
         except Exception as e:
             self._log(f"语言已切换为 {effective}，但配置写回失败: {e}", "warn")
 
-    # 主题切换后同步所有自绘 Canvas（状态圆点）背景色。
+    # 主题切换后同步自绘控件（Canvas 圆点 / Treeview 行标记 / tk.Text 编辑器）。
+    # [2026-10-03 阶段4] 圆点底色改从当前主题 token 取值——CTk 外观模式不再是配色事实源
+    # （ttk 控件由全局样式自绘，只剩这三类 tk 控件需要显式跟随）。
+    # 根窗口底色随主题 token（[阶段5] 原 CTk root 外观模式底色的职责承接；ttk 内容区
+    # 铺满两列，root 底色只在缝隙可见，取 surface 与侧边栏同槽）。
+    def _apply_root_chrome(self) -> None:
+        try:
+            self.root.configure(bg=self.theme_manager.tokens()["surface"])
+        except tk.TclError:
+            pass
+
+    def _sync_theme_extras(self) -> None:
+        tokens = self.theme_manager.tokens()
+        self._sync_dot_bg()
+        self._sync_big_dot_bg()
+        self._sync_table_tags(tokens)
+        self.config_text.restyle(tokens)
+        if self._adv_settings_window is not None:
+            # 高级设置窗口打开期间切主题：编辑器同为 tk.Text，一并跟随（窗口其余部分是
+            # ttk/CTk，前者随全局样式、后者随外观模式映射）
+            self._adv_settings_window.config_text.restyle(tokens)
+
+    # 主题/外观变化后延迟重取 Canvas 圆点底色（after(50) 的入口；CTk 外观模式落地后再取值）。
     def _sync_canvas_bg(self) -> None:
         self._sync_dot_bg()
         self._sync_big_dot_bg()
 
-    # 同步侧边栏状态圆点的画布背景色（Canvas 不随主题自动变化）。
     def _sync_dot_bg(self) -> None:
         try:
-            mode = ctk.get_appearance_mode().lower()
-            bg = Colors.BG_DARK if mode == "dark" else Colors.BG_LIGHT
-            self._sidebar_dot.configure(bg=bg)
+            # 圆点画在状态胶囊（surface_alt）里，画布底色必须与胶囊同槽
+            self._sidebar_dot.configure(bg=self.theme_manager.tokens()["surface_alt"])
         except Exception:
             pass
 
     # 构建右侧内容区并叠放五个页面（控制台 / 画质 / 弹幕 / URL 配置 / 运行日志，tkraise 切换）。
     def _build_content(self) -> None:
-        container = ctk.CTkFrame(self.root, fg_color=(Colors.BG_LIGHT, Colors.BG_DARK))
+        container = Frame(self.root, variant="alt")
         container.grid(row=0, column=1, sticky="nsew")
         container.grid_columnconfigure(0, weight=1)
         container.grid_rowconfigure(0, weight=1)
@@ -2007,29 +1961,44 @@ class LiveRecorderGUI:
         for page in self._pages.values():
             page.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
 
-    # 创建带可选标题的圆角卡片容器，返回卡片 Frame。
-    def _create_card(self, parent: ctk.CTkFrame, title: str = "") -> ctk.CTkFrame:
-        card = ctk.CTkFrame(
-            parent,
-            corner_radius=12,
-            fg_color=(Colors.CARD_LIGHT, Colors.CARD_DARK),
-            border_width=1,
-            border_color=(Colors.BORDER_LIGHT, Colors.BORDER_DARK),
+    # 给两张监控表上/换行级标记颜色（构建时与主题切换时共用；token 取值随主题变化）。
+    # Treeview 的 tag 是行级的：降级行整行红字 + 浅红底（_mix 派生自 danger/surface 槽位，
+    # 不引入第二套手写色）；断连行整行淡化为 muted——旧实现里「实际/状态列各自着色」的
+    # 逐元组形态在 Treeview 下不可表达（tag 不支持按列），✓/⚠ 字形保留状态语义。
+    def _sync_table_tags(self, tokens: dict[str, str]) -> None:
+        soft_danger = _mix(tokens["danger"], tokens["surface"], 0.9)
+        self._quality_table.restyle_tags(
+            {
+                "normal": {"foreground": tokens["text"], "background": tokens["surface_alt"]},
+                "downgraded": {
+                    "foreground": tokens["danger"],
+                    "background": soft_danger,
+                    "font": Fonts.body(bold=True),
+                },
+            }
         )
+        self._dm_table.restyle_tags(
+            {
+                "normal": {"foreground": tokens["text"], "background": tokens["surface_alt"]},
+                "disconnected": {"foreground": tokens["text_muted"], "background": tokens["surface_alt"]},
+            }
+        )
+
+    # 创建带可选标题的圆角卡片容器，返回卡片 Frame。
+    def _create_card(self, parent: Frame, title: str = "") -> Frame:
+        card = Frame(parent, variant="card")
         if title:
-            header = ctk.CTkFrame(card, fg_color="transparent", height=46)
+            header = Frame(card, height=46)
             header.pack(fill=tk.X)
             header.pack_propagate(False)
-            ctk.CTkLabel(
-                header, text=title, font=Fonts.body(bold=True), text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK)
-            ).pack(side=tk.LEFT, padx=18, pady=12)
+            Label(header, text=title, font=Fonts.body(bold=True)).pack(side=tk.LEFT, padx=18, pady=12)
         return card
 
     # ─── 页面：控制台 ───────────────────────────────────────
 
     # 构建控制台页：状态总览、录制控制与快捷操作卡片。
-    def _build_dashboard_page(self, parent: ctk.CTkFrame) -> ctk.CTkFrame:
-        page = ctk.CTkFrame(parent, fg_color="transparent")
+    def _build_dashboard_page(self, parent: Frame) -> Frame:
+        page = Frame(parent)
         page.grid_columnconfigure(0, weight=1)
         page.grid_rowconfigure(0, weight=0)
         page.grid_rowconfigure(1, weight=0)
@@ -2041,7 +2010,7 @@ class LiveRecorderGUI:
         status_card.grid_columnconfigure(1, weight=1)
 
         # 左侧大圆点（呼吸动画）
-        dot_wrap = ctk.CTkFrame(status_card, fg_color="transparent", width=90, height=90)
+        dot_wrap = Frame(status_card, width=90, height=90)
         dot_wrap.grid(row=0, column=0, padx=(20, 6), pady=22)
         dot_wrap.grid_propagate(False)
         self._big_dot = tk.Canvas(dot_wrap, width=64, height=64, highlightthickness=0, bd=0)
@@ -2050,19 +2019,15 @@ class LiveRecorderGUI:
         self._sync_big_dot_bg()
 
         # 中间：状态文字
-        mid = ctk.CTkFrame(status_card, fg_color="transparent")
+        mid = Frame(status_card)
         mid.grid(row=0, column=1, sticky="w", pady=18)
-        self.big_status_label = ctk.CTkLabel(
-            mid, text="待 机", font=Fonts.big_status(), text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK)
-        )
+        self.big_status_label = Label(mid, text="待 机", font=Fonts.big_status())
         self.big_status_label.pack(anchor=tk.W)
-        self.big_status_sub = ctk.CTkLabel(
-            mid, text="录制进程未运行", font=Fonts.body(), text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK)
-        )
+        self.big_status_sub = Label(mid, text="录制进程未运行", font=Fonts.body(), variant="muted")
         self.big_status_sub.pack(anchor=tk.W, pady=(2, 0))
 
         # 右侧：信息网格（2 列 x 2 行）
-        info = ctk.CTkFrame(status_card, fg_color="transparent")
+        info = Frame(status_card)
         info.grid(row=0, column=2, padx=24, pady=18, sticky="e")
 
         self.info_interval = self._add_info_item(info, "循环检测", "-", 0, 0)
@@ -2074,45 +2039,37 @@ class LiveRecorderGUI:
         ctrl_card = self._create_card(page, "录制控制")
         ctrl_card.grid(row=1, column=0, sticky="ew", pady=(0, 14))
 
-        ctrl_body = ctk.CTkFrame(ctrl_card, fg_color="transparent")
+        ctrl_body = Frame(ctrl_card)
         ctrl_body.pack(fill=tk.X, padx=18, pady=(0, 16))
 
-        self.start_btn = ctk.CTkButton(
+        self.start_btn = Button(
             ctrl_body,
             text="▶   开始录制",
             command=self.start_recording,
             font=Fonts.heading(),
-            height=48,
-            corner_radius=10,
-            fg_color=Colors.SUCCESS,
-            hover_color=Colors.SUCCESS_HOVER,
-            text_color="#FFFFFF",
-            width=200,
+            padding=(24, 11),
+            variant="success",
         )
         self.start_btn.pack(side=tk.LEFT, padx=(0, 12))
 
-        self.stop_btn = ctk.CTkButton(
+        self.stop_btn = Button(
             ctrl_body,
             text="⏹   停止录制",
             command=self.stop_recording,
             font=Fonts.heading(),
-            height=48,
-            corner_radius=10,
-            fg_color=Colors.DANGER,
-            hover_color=Colors.DANGER_HOVER,
-            text_color="#FFFFFF",
-            width=200,
+            padding=(24, 11),
+            variant="danger",
             state=tk.DISABLED,
         )
         self.stop_btn.pack(side=tk.LEFT)
 
         # fill+expand 让标签窗口 = 按钮行右侧全部剩余宽（窗口宽由 packer 分配，是自适应换行的前提）；
         # 窄窗口 / 高 DPI 下放不下时自动折行，不再被 pack 按 anchor=center 两侧对称裁切
-        hint_label = ctk.CTkLabel(
+        hint_label = Label(
             ctrl_body,
             text="启动后将调用 main.py 循环监测 URL 配置中的直播间并自动录制",
             font=Fonts.small(),
-            text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
+            variant="muted",
             anchor=tk.W,
             justify=tk.LEFT,
         )
@@ -2123,68 +2080,51 @@ class LiveRecorderGUI:
         quick_card = self._create_card(page, "快捷操作")
         quick_card.grid(row=2, column=0, sticky="new")
 
-        quick_body = ctk.CTkFrame(quick_card, fg_color="transparent")
+        quick_body = Frame(quick_card)
         quick_body.pack(fill=tk.X, padx=18, pady=(0, 16))
 
-        ctk.CTkButton(
+        Button(
             quick_body,
             text="📂   打开下载目录",
             command=self.open_downloads_folder,
             font=Fonts.body(),
-            height=40,
-            corner_radius=8,
-            width=170,
-            fg_color=(Colors.BG_LIGHT, Colors.BG_DARK),
-            text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
-            border_width=1,
-            border_color=(Colors.BORDER_LIGHT, Colors.BORDER_DARK),
-            hover_color=(Colors.BORDER_LIGHT, Colors.BORDER_DARK),
+            padding=(14, 8),
+            variant="ghost",
         ).pack(side=tk.LEFT, padx=(0, 10))
 
-        ctk.CTkButton(
+        Button(
             quick_body,
             text="⚙   高级设置",
             command=self.open_advanced_settings,
             font=Fonts.body(),
-            height=40,
-            corner_radius=8,
-            width=150,
-            fg_color=(Colors.BG_LIGHT, Colors.BG_DARK),
-            text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
-            border_width=1,
-            border_color=(Colors.BORDER_LIGHT, Colors.BORDER_DARK),
-            hover_color=(Colors.BORDER_LIGHT, Colors.BORDER_DARK),
+            padding=(14, 8),
+            variant="ghost",
         ).pack(side=tk.LEFT)
 
         return page
 
     # 在状态卡片添加一项信息（标签 + 值），返回值标签以便后续更新。
-    def _add_info_item(self, parent: ctk.CTkFrame, label: str, value: str, row: int, col: int) -> ctk.CTkLabel:
-        box = ctk.CTkFrame(parent, fg_color="transparent")
+    def _add_info_item(self, parent: Frame, label: str, value: str, row: int, col: int) -> Label:
+        box = Frame(parent)
         box.grid(row=row, column=col, padx=16, pady=6, sticky="w")
-        ctk.CTkLabel(box, text=label, font=Fonts.small(), text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK)).pack(
-            anchor=tk.W
-        )
-        val = ctk.CTkLabel(
-            box, text=value, font=Fonts.body(bold=True), text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK)
-        )
+        Label(box, text=label, font=Fonts.small(), variant="muted").pack(anchor=tk.W)
+        val = Label(box, text=value, font=Fonts.body(bold=True))
         val.pack(anchor=tk.W)
         return val
 
     # 同步控制台大状态圆点的画布背景色（Canvas 不随主题自动变化）。
     def _sync_big_dot_bg(self) -> None:
         try:
-            mode = ctk.get_appearance_mode().lower()
-            bg = Colors.CARD_DARK if mode == "dark" else Colors.CARD_LIGHT
-            self._big_dot.configure(bg=bg)
+            # 大圆点画在控制台状态卡片（surface）上
+            self._big_dot.configure(bg=self.theme_manager.tokens()["surface"])
         except Exception:
             pass
 
     # ─── 页面：URL 配置 ─────────────────────────────────────
 
     # 构建 URL 配置编辑页（文本编辑器 + 重新读取 / 保存按钮）。
-    def _build_config_page(self, parent: ctk.CTkFrame) -> ctk.CTkFrame:
-        page = ctk.CTkFrame(parent, fg_color="transparent")
+    def _build_config_page(self, parent: Frame) -> Frame:
+        page = Frame(parent)
         page.grid_columnconfigure(0, weight=1)
         page.grid_rowconfigure(0, weight=1)
 
@@ -2192,60 +2132,41 @@ class LiveRecorderGUI:
         card.grid(row=0, column=0, sticky="nsew")
 
         # 编辑器
-        editor_wrap = ctk.CTkFrame(card, fg_color="transparent")
+        editor_wrap = Frame(card)
         editor_wrap.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 6))
 
-        self.config_text = ctk.CTkTextbox(
-            editor_wrap,
-            wrap="none",
-            font=Fonts.mono(),
-            corner_radius=10,
-            border_width=1,
-            border_color=(Colors.BORDER_LIGHT, Colors.BORDER_DARK),
-            activate_scrollbars=True,
-        )
+        self.config_text = EditorText(editor_wrap, tokens=self.theme_manager.tokens(), font=Fonts.mono())
         self.config_text.pack(fill=tk.BOTH, expand=True)
 
         # 提示
-        ctk.CTkLabel(
+        Label(
             card,
             text="每行一个直播链接，支持 # 开头的注释行  │  外部修改文件后将自动重新加载  │  点击窗口关闭按钮将最小化到系统托盘",
             font=Fonts.small(),
-            text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
+            variant="muted",
             anchor=tk.W,
         ).pack(fill=tk.X, padx=18, pady=(4, 4))
 
         # 操作按钮
-        btn_row = ctk.CTkFrame(card, fg_color="transparent")
+        btn_row = Frame(card)
         btn_row.pack(fill=tk.X, padx=14, pady=(4, 14))
 
-        self.reload_btn = ctk.CTkButton(
+        self.reload_btn = Button(
             btn_row,
             text="🔄   重新读取",
             command=self._load_config,
             font=Fonts.body(),
-            height=38,
-            corner_radius=8,
-            width=140,
-            fg_color="transparent",
-            text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
-            border_width=1,
-            border_color=(Colors.BORDER_LIGHT, Colors.BORDER_DARK),
-            hover_color=(Colors.BG_LIGHT, Colors.BG_DARK),
+            padding=(14, 7),
+            variant="ghost",
         )
         self.reload_btn.pack(side=tk.RIGHT, padx=(8, 0))
 
-        self.save_btn = ctk.CTkButton(
+        self.save_btn = Button(
             btn_row,
             text="💾   保存 URL 配置",
             command=self.save_config,
             font=Fonts.body(bold=True),
-            height=38,
-            corner_radius=8,
-            width=160,
-            fg_color=Colors.PRIMARY,
-            hover_color=Colors.PRIMARY_HOVER,
-            text_color="#FFFFFF",
+            padding=(14, 7),
         )
         self.save_btn.pack(side=tk.RIGHT)
 
@@ -2254,109 +2175,83 @@ class LiveRecorderGUI:
     # ─── 页面：运行日志 ─────────────────────────────────────
 
     # 构建运行日志页（终端风格文本框 + 清空日志按钮）。
-    def _build_logs_page(self, parent: ctk.CTkFrame) -> ctk.CTkFrame:
-        page = ctk.CTkFrame(parent, fg_color="transparent")
+    def _build_logs_page(self, parent: Frame) -> Frame:
+        page = Frame(parent)
         page.grid_columnconfigure(0, weight=1)
         page.grid_rowconfigure(0, weight=1)
 
         card = self._create_card(page, "📋  运行日志 (main.py 输出)")
         card.grid(row=0, column=0, sticky="nsew")
 
-        # 终端容器
-        term_wrap = ctk.CTkFrame(card, fg_color=Colors.TERMINAL_BG, corner_radius=10)
-        term_wrap.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 6))
-
-        self.log_text = tk.Text(
-            term_wrap,
-            wrap=tk.WORD,
+        # 终端容器（tk.Frame + tk.Text + ttk 滚动条；配色是刻意的主题无关常量）
+        term_wrap, self.log_text = terminal_text(
+            card,
             font=Fonts.mono(),
             bg=Colors.TERMINAL_BG,
             fg=Colors.TERMINAL_FG,
-            insertbackground="#FFFFFF",
-            relief=tk.FLAT,
-            bd=0,
-            padx=12,
-            pady=10,
-            state=tk.DISABLED,
-            selectbackground=Colors.TERMINAL_SELECT,
-            selectforeground="#FFFFFF",
+            select_bg=Colors.TERMINAL_SELECT,
         )
-        scrollbar = ctk.CTkScrollbar(
-            term_wrap,
-            command=cast("Callable[..., None]", self.log_text.yview),
-            fg_color=Colors.TERMINAL_BG,
-            button_color="#30363D",
-            button_hover_color="#484F58",
-        )
-        self.log_text.configure(yscrollcommand=scrollbar.set)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 4), pady=4)
-        self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        term_wrap.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 6))
 
         self.log_text.tag_config("error", foreground=Colors.TERMINAL_ERROR)
         self.log_text.tag_config("warn", foreground=Colors.TERMINAL_WARN)
 
         # 底部操作栏
-        btn_row = ctk.CTkFrame(card, fg_color="transparent")
+        btn_row = Frame(card)
         btn_row.pack(fill=tk.X, padx=14, pady=(4, 14))
 
-        ctk.CTkButton(
+        Button(
             btn_row,
             text="🗑   清空日志",
             command=self._clear_log,
             font=Fonts.body(),
-            height=36,
-            corner_radius=8,
-            width=130,
-            fg_color="transparent",
-            text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
-            border_width=1,
-            border_color=(Colors.BORDER_LIGHT, Colors.BORDER_DARK),
-            hover_color=(Colors.BG_LIGHT, Colors.BG_DARK),
+            padding=(12, 6),
+            variant="ghost",
         ).pack(side=tk.RIGHT)
 
-        ctk.CTkLabel(
+        Label(
             btn_row,
             text="日志超过 1000 行将自动截断",
             font=Fonts.small(),
-            text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
+            variant="muted",
         ).pack(side=tk.LEFT, padx=6)
 
         return page
 
     # ─── 页面：画质监控 ─────────────────────────────────────
 
-    # 构建画质监控页（统计卡片 + 实时详情列表）。
-    # ── 空状态占位工厂（初始构建与每轮刷新重建共用，禁止两处各写一份文案）──
-    # fill=tk.X 让标签窗口 = 滚动区内部宽（packer 分配），配合 _bind_adaptive_wraplength 在
-    # 窄窗口 / 高 DPI 下自动折行——占位文案较长，定宽布局会被 pack 按 anchor=center 两侧裁切。
+    # 构建画质监控页（统计卡片 + Treeview 实时详情表）。
+    # ── 空状态占位工厂 [阶段4 改为单实例]：占位与表格叠放同格、按行数切换可见性，
+    # 不再「每轮刷新重建」；文案唯一由本工厂与弹幕版各持一份。fill/sticky=ew 让标签
+    # 窗口 = 容器分配宽，配合 _bind_adaptive_wraplength 在窄窗口 / 高 DPI 下自动折行。
 
-    def _make_quality_placeholder(self, parent: tk.Misc) -> ctk.CTkLabel:
-        label = ctk.CTkLabel(
+    def _make_quality_placeholder(self, parent: tk.Misc) -> Label:
+        label = Label(
             parent,
             text="暂无录制中的直播间\n\n启动录制后，将自动检测各直播间的实际画质是否与设置一致",
             font=Fonts.body(),
-            text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
+            variant="muted",
             justify=tk.CENTER,
         )
-        label.pack(fill=tk.X, pady=60)
+        label.grid(row=0, column=0, sticky="ew", pady=60)
         _bind_adaptive_wraplength(label)
         return label
 
-    def _make_danmaku_placeholder(self, parent: tk.Misc) -> ctk.CTkLabel:
-        label = ctk.CTkLabel(
+    def _make_danmaku_placeholder(self, parent: tk.Misc) -> Label:
+        label = Label(
             parent,
             text="暂无弹幕监控数据\n\n启动录制并在 config.ini 开启「是否弹幕监控(是/否)」后，"
             "支持弹幕的平台（斗鱼/B站/虎牙/抖音/Twitch）将显示实时弹幕",
             font=Fonts.body(),
-            text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
+            variant="muted",
             justify=tk.CENTER,
         )
-        label.pack(fill=tk.X, pady=30)
+        label.grid(row=0, column=0, sticky="ew", pady=30)
         _bind_adaptive_wraplength(label)
         return label
 
-    def _build_quality_page(self, parent: ctk.CTkFrame) -> ctk.CTkFrame:
-        page = ctk.CTkFrame(parent, fg_color="transparent")
+    def _build_quality_page(self, parent: Frame) -> Frame:
+        page = Frame(parent)
         page.grid_columnconfigure(0, weight=1)
         page.grid_rowconfigure(1, weight=1)
 
@@ -2364,35 +2259,66 @@ class LiveRecorderGUI:
         summary_card = self._create_card(page)
         summary_card.grid(row=0, column=0, sticky="ew", pady=(0, 14))
 
-        summary_body = ctk.CTkFrame(summary_card, fg_color="transparent")
+        summary_body = Frame(summary_card)
         summary_body.pack(fill=tk.X, padx=18, pady=16)
         summary_body.grid_columnconfigure((0, 1, 2), weight=1)
 
-        self._q_stat_total = self._add_stat_item(summary_body, "录制中", "0", 0, Colors.PRIMARY)
-        self._q_stat_ok = self._add_stat_item(summary_body, "画质正常", "0", 1, Colors.SUCCESS)
-        self._q_stat_down = self._add_stat_item(summary_body, "画质降级", "0", 2, Colors.DANGER)
+        self._q_stat_total = self._add_stat_item(summary_body, "录制中", "0", 0, "primary")
+        self._q_stat_ok = self._add_stat_item(summary_body, "画质正常", "0", 1, "success")
+        self._q_stat_down = self._add_stat_item(summary_body, "画质降级", "0", 2, "danger")
 
         # 详情卡片
         detail_card = self._create_card(page, "🎯  画质监控（实时检测实际画质是否与设置一致）")
         detail_card.grid(row=1, column=0, sticky="nsew")
 
-        inner = ctk.CTkFrame(detail_card, fg_color="transparent")
+        inner = Frame(detail_card)
         inner.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 14))
 
         # 画质可选项与「主播名 → 直播间地址」反查表首次构建时加载一次
         self._refresh_quality_context()
 
-        self._quality_scroll = ctk.CTkScrollableFrame(inner, fg_color="transparent")
-        self._quality_scroll.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
+        # 表格区（Treeview 行级增量更新，取代旧 CTkScrollableFrame 的每轮销毁重建）
+        table_area = Frame(inner)
+        table_area.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
+        table_area.grid_rowconfigure(0, weight=1)
+        table_area.grid_columnconfigure(0, weight=1)
+
+        self._quality_table = DataTable(
+            table_area,
+            [
+                ("name", "主播名称", 3, tk.W),
+                ("set_quality", "设置画质", 1, tk.W),
+                ("actual", "实际画质", 1, tk.W),
+                ("status", "状态", 1, tk.W),
+                ("alert_time", "告警时间", 2, tk.W),
+                ("switch", "切换画质", 2, tk.W),
+            ],
+        )
+        # 行内「切换画质」浮层编辑器：行数据在 sync 时缓存（_quality_row_setq），
+        # 点「切换画质」列在单元格 bbox 上弹 readonly 下拉，选中即走 _on_room_quality_change
+        # （提交前「有未保存编辑先裁决」等逻辑全部复用旧实现，菜单首项语义不变）。
+        self._quality_row_setq = {}
+        self._quality_table.bind_cell_editor(
+            "switch",
+            values_for=lambda name: self._quality_menu_values(self._quality_row_setq.get(name, "")),
+            initial_for=lambda name: self._quality_row_setq.get(name, "") or self._quality_default_label,
+            on_commit=self._on_room_quality_change,
+            font=Fonts.small(),
+        )
+        self._quality_table.tree.grid(row=0, column=0, sticky="nsew")
+
+        # 空态占位与表格叠放同格，按行数切换可见性（grid_remove 保留 grid 配置）
+        self._quality_placeholder = self._make_quality_placeholder(table_area)
+        self._quality_placeholder.grid_remove()
 
         # 定宽 wraplength=1000 在窄窗口下同样会被 pack 两侧裁切（标签请求宽超出容器分配宽），
         # 改为绑容器实宽的自适应折行（2026-09-29 修复）
-        quality_hint_label = ctk.CTkLabel(
+        quality_hint_label = Label(
             inner,
             text="「切换画质」选中非默认画质时，会以「画质,直播间地址」格式写回 config/URL_config.ini，"
             "在下一轮检测循环（默认 120 秒）自动生效；选择「默认画质」则移除该行画质段、回落到全局默认画质。",
             font=Fonts.small(),
-            text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
+            variant="muted",
             anchor=tk.W,
             justify=tk.LEFT,
         )
@@ -2400,19 +2326,28 @@ class LiveRecorderGUI:
         _bind_adaptive_wraplength(quality_hint_label)
 
         # 初始空状态
-        self._make_quality_placeholder(self._quality_scroll)
+        self._show_quality_placeholder(True)
 
         return page
 
+    # 空态占位与表格互斥显示（构建时与每轮刷新共用；grid_remove 不销毁配置）。
+    def _show_quality_placeholder(self, visible: bool) -> None:
+        if visible:
+            self._quality_table.tree.grid_remove()
+            self._quality_placeholder.grid()
+        else:
+            self._quality_placeholder.grid_remove()
+            self._quality_table.tree.grid()
+
     # 在统计卡片添加一项统计（标签 + 值），返回值标签（画质/弹幕监控页共用）。
-    def _add_stat_item(self, parent: ctk.CTkFrame, label: str, value: str, col: int, color: str) -> ctk.CTkLabel:
-        box = ctk.CTkFrame(parent, fg_color="transparent")
+    # color 形参 [阶段4] 从 Colors 常量改为 ui_kit 标签变体名（"primary"/"success"/"danger"），
+    # 颜色由 ui_theme 槽位派生、随主题切换全局重绘。
+    def _add_stat_item(self, parent: Frame, label: str, value: str, col: int, variant: str) -> Label:
+        box = Frame(parent)
         box.grid(row=0, column=col, padx=10, pady=4, sticky="ew")
         box.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(box, text=label, font=Fonts.small(), text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK)).pack(
-            anchor=tk.CENTER
-        )
-        val = ctk.CTkLabel(box, text=value, font=Fonts.title(), text_color=color)
+        Label(box, text=label, font=Fonts.small(), variant="muted").pack(anchor=tk.CENTER)
+        val = Label(box, text=value, font=Fonts.title(), variant=variant)
         val.pack(anchor=tk.CENTER, pady=(2, 0))
         return val
 
@@ -2495,108 +2430,16 @@ class LiveRecorderGUI:
         else:
             self._log(f"「{anchor_name}」画质未发生变化（已是 {selected}）")
 
-    # 添加画质监控详情表的表头行（主播 / 设置 / 实际 / 状态 / 告警时间 / 切换画质）。
-    def _add_quality_header_row(self) -> None:
-        header = ctk.CTkFrame(self._quality_scroll, fg_color="transparent", height=28)
-        header.pack(fill=tk.X, pady=(0, 2))
-        header.pack_propagate(False)
-        header.grid_columnconfigure(0, weight=3)
-        header.grid_columnconfigure(1, weight=1)
-        header.grid_columnconfigure(2, weight=1)
-        header.grid_columnconfigure(3, weight=1)
-        header.grid_columnconfigure(4, weight=2)
-        header.grid_columnconfigure(5, weight=2)
-        for col, text in enumerate(["主播名称", "设置画质", "实际画质", "状态", "告警时间", "切换画质"]):
-            ctk.CTkLabel(
-                header,
-                text=text,
-                font=Fonts.small(bold=True),
-                text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
-                anchor=tk.W,
-            ).grid(row=0, column=col, sticky=tk.W, padx=6, pady=4)
-
-    # 添加一行画质监控数据（按降级状态着色显示）。
-    def _add_quality_data_row(self, name: str, info: dict[str, str | bool | float]) -> None:
-        downgraded = bool(info.get("downgraded", False))
-        # 「设置画质」以 URL_config.ini 的当前画质段为准（用户切换意图即时可见）；
-        # 子进程日志里的画质是本轮录制启动时的快照（录制中的流不重启则恒为旧值），
-        # 若直接用它渲染，表格每轮重建会把已切换的画质"重置"回旧值。仅反查表未命中
-        # （如配置行无主播名）时才回退到日志值。name 与 _quality_data 键同为「序号N 主播名」，
-        # 查表前剥离序号前缀（与 _on_room_quality_change 同一约定）。
-        key = re.sub(r"^序号\d+\s+", "", name).strip()
-        set_q = self._anchor_quality_map.get(key) or str(info.get("set_quality", "—"))
-        actual_q = str(info.get("actual_quality", ""))
-        alert_time = str(info.get("alert_time", ""))
-
-        if downgraded:
-            actual_display = actual_q or "—"
-            status_text = "⚠ 降级"
-            status_color = Colors.DANGER
-            actual_color = Colors.DANGER
-            row_fg: str | tuple[str, str] = ("#FEF2F2", "#2A1518")
-        else:
-            actual_display = "✓ 同等"
-            status_text = "✓ 正常"
-            status_color = Colors.SUCCESS
-            actual_color = Colors.SUCCESS
-            row_fg = "transparent"
-
-        row = ctk.CTkFrame(self._quality_scroll, fg_color=row_fg, corner_radius=6, height=34)
-        row.pack(fill=tk.X, pady=1)
-        row.pack_propagate(False)
-        row.grid_columnconfigure(0, weight=3)
-        row.grid_columnconfigure(1, weight=1)
-        row.grid_columnconfigure(2, weight=1)
-        row.grid_columnconfigure(3, weight=1)
-        row.grid_columnconfigure(4, weight=2)
-        row.grid_columnconfigure(5, weight=2)
-
-        ctk.CTkLabel(
-            row, text=name, font=Fonts.body(), text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK), anchor=tk.W
-        ).grid(row=0, column=0, sticky=tk.W, padx=6, pady=5)
-        ctk.CTkLabel(
-            row, text=set_q, font=Fonts.body(), text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK), anchor=tk.W
-        ).grid(row=0, column=1, sticky=tk.W, padx=4, pady=5)
-        ctk.CTkLabel(
-            row, text=actual_display, font=Fonts.body(bold=downgraded), text_color=actual_color, anchor=tk.W
-        ).grid(row=0, column=2, sticky=tk.W, padx=4, pady=5)
-        ctk.CTkLabel(row, text=status_text, font=Fonts.body(bold=True), text_color=status_color, anchor=tk.W).grid(
-            row=0, column=3, sticky=tk.W, padx=4, pady=5
-        )
-        ctk.CTkLabel(
-            row,
-            text=alert_time if downgraded else "—",
-            font=Fonts.small(),
-            text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
-            anchor=tk.W,
-        ).grid(row=0, column=4, sticky=tk.W, padx=4, pady=5)
-
-        # 「切换画质」菜单：可选项来自 config.ini（与 WEB 端共用），首项为「默认画质」。
-        # 菜单显示当前设置画质；选中即写回 URL_config.ini（见 _on_room_quality_change）。
-        menu = ctk.CTkOptionMenu(
-            row,
-            values=self._quality_menu_values(set_q),
-            command=lambda value, n=name: self._on_room_quality_change(n, value),
-            font=Fonts.small(),
-            corner_radius=6,
-            height=26,
-            fg_color=(Colors.BG_LIGHT, Colors.BG_DARK),
-            button_color=("#D6DAE5", "#2A3040"),
-            button_hover_color=("#C3C9D8", "#343B4E"),
-            text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
-            dropdown_font=Fonts.small(),
-            dynamic_resizing=False,
-            width=120,
-        )
-        menu.set(set_q if set_q else self._quality_default_label)
-        menu.grid(row=0, column=5, sticky=tk.W, padx=4, pady=4)
+    # [2026-10-03 阶段4] 旧「表头行 + 每行重建」的 _add_quality_header_row /
+    # _add_quality_data_row 已删除：表头由 Treeview headings 承担，数据行走
+    # DataTable.sync 的行级增量更新（见 _update_quality_display）。
 
     # ─── 页面：弹幕监控 ─────────────────────────────────────
 
-    # 构建弹幕监控页（统计卡片 + 房间明细表 + 终端风格实时弹幕流）。
-    def _build_danmaku_page(self, parent: ctk.CTkFrame) -> ctk.CTkFrame:
+    # 构建弹幕监控页（统计卡片 + Treeview 房间明细表 + 终端风格实时弹幕流）。
+    def _build_danmaku_page(self, parent: Frame) -> Frame:
         # 弹幕监控页面：数据来自 tail 线程解析 logs/danmaku_monitor.jsonl
-        page = ctk.CTkFrame(parent, fg_color="transparent")
+        page = Frame(parent)
         page.grid_columnconfigure(0, weight=1)
         page.grid_rowconfigure(0, weight=0)
         page.grid_rowconfigure(1, weight=0)
@@ -2606,107 +2449,88 @@ class LiveRecorderGUI:
         summary_card = self._create_card(page)
         summary_card.grid(row=0, column=0, sticky="ew", pady=(0, 14))
 
-        summary_body = ctk.CTkFrame(summary_card, fg_color="transparent")
+        summary_body = Frame(summary_card)
         summary_body.pack(fill=tk.X, padx=18, pady=16)
         summary_body.grid_columnconfigure((0, 1, 2), weight=1)
 
-        self._dm_stat_rooms = self._add_stat_item(summary_body, "监控房间", "0", 0, Colors.PRIMARY)
-        self._dm_stat_connected = self._add_stat_item(summary_body, "已连接", "0", 1, Colors.SUCCESS)
-        self._dm_stat_msgs = self._add_stat_item(summary_body, "累计弹幕", "0", 2, Colors.PRIMARY)
+        self._dm_stat_rooms = self._add_stat_item(summary_body, "监控房间", "0", 0, "primary")
+        self._dm_stat_connected = self._add_stat_item(summary_body, "已连接", "0", 1, "success")
+        self._dm_stat_msgs = self._add_stat_item(summary_body, "累计弹幕", "0", 2, "primary")
 
-        # 房间明细卡片
+        # 房间明细卡片（Treeview 行级增量更新，取代旧 CTkScrollableFrame 每轮销毁重建）
         detail_card = self._create_card(page, "💬  弹幕房间（连接状态 / 累计弹幕 / 速率 / 礼物）")
         detail_card.grid(row=1, column=0, sticky="ew", pady=(0, 14))
 
-        inner = ctk.CTkFrame(detail_card, fg_color="transparent")
+        inner = Frame(detail_card)
         inner.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 14))
+        inner.grid_rowconfigure(0, weight=1)
+        inner.grid_columnconfigure(0, weight=1)
 
-        self._dm_scroll = ctk.CTkScrollableFrame(inner, fg_color="transparent", height=150)
-        self._dm_scroll.pack(fill=tk.BOTH, expand=True)
+        self._dm_table = DataTable(
+            inner,
+            [
+                ("room", "房间", 3, tk.W),
+                ("platform", "平台", 2, tk.W),
+                ("status", "状态", 1, tk.W),
+                ("msg_total", "累计弹幕", 1, tk.E),
+                ("msg_rate", "速率(条/分)", 1, tk.E),
+                ("gift_total", "礼物", 1, tk.E),
+                ("online", "在线", 1, tk.E),
+                ("started_at", "开始时间", 2, tk.W),
+            ],
+        )
+        self._dm_table.tree.grid(row=0, column=0, sticky="nsew")
 
-        self._make_danmaku_placeholder(self._dm_scroll)
+        # 空态占位与表格叠放同格，按行数切换可见性（构建时占位可见）
+        self._dm_placeholder = self._make_danmaku_placeholder(inner)
+        self._show_danmaku_placeholder(True)
 
         # 实时弹幕流卡片
         stream_card = self._create_card(page, "📋  实时弹幕")
         stream_card.grid(row=2, column=0, sticky="nsew")
 
-        stream_inner = ctk.CTkFrame(stream_card, fg_color="transparent")
+        stream_inner = Frame(stream_card)
         stream_inner.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 14))
 
         # 工具栏：房间筛选 + 清空
-        toolbar = ctk.CTkFrame(stream_inner, fg_color="transparent")
+        toolbar = Frame(stream_inner)
         toolbar.pack(fill=tk.X, pady=(0, 8))
 
-        self._dm_filter_menu = ctk.CTkOptionMenu(
+        self._dm_filter_menu = Menu(
             toolbar,
             values=["全部房间"],
             command=self._on_danmaku_filter_change,
             font=Fonts.small(),
-            corner_radius=8,
-            height=30,
-            width=200,
-            fg_color=(Colors.BG_LIGHT, Colors.BG_DARK),
-            button_color=("#D6DAE5", "#2A3040"),
-            button_hover_color=("#C3C9D8", "#343B4E"),
-            text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
-            dropdown_fg_color=(Colors.CARD_LIGHT, Colors.CARD_DARK),
-            dropdown_text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
-            dropdown_hover_color=(Colors.PRIMARY_SOFT_LIGHT, Colors.PRIMARY_SOFT_DARK),
+            width=14,
         )
         self._dm_filter_menu.pack(side=tk.LEFT)
         self._dm_filter_menu.set("全部房间")
 
-        ctk.CTkButton(
+        Button(
             toolbar,
             text="🗑   清空",
             command=self._clear_danmaku,
             font=Fonts.small(),
-            height=30,
-            corner_radius=8,
-            width=90,
-            fg_color="transparent",
-            text_color=(Colors.TEXT_LIGHT, Colors.TEXT_DARK),
-            border_width=1,
-            border_color=(Colors.BORDER_LIGHT, Colors.BORDER_DARK),
-            hover_color=(Colors.BG_LIGHT, Colors.BG_DARK),
+            padding=(10, 5),
+            variant="ghost",
         ).pack(side=tk.RIGHT)
 
-        ctk.CTkLabel(
+        Label(
             toolbar,
             text="高频房间弹幕按每秒 10 条采样展示，统计计数始终精确",
             font=Fonts.small(),
-            text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
+            variant="muted",
         ).pack(side=tk.RIGHT, padx=(0, 12))
 
-        # 终端容器
-        term_wrap = ctk.CTkFrame(stream_inner, fg_color=Colors.TERMINAL_BG, corner_radius=10)
-        term_wrap.pack(fill=tk.BOTH, expand=True)
-
-        self.danmaku_text = tk.Text(
-            term_wrap,
-            wrap=tk.WORD,
+        # 终端容器（tk.Frame + tk.Text + ttk 滚动条；配色是刻意的主题无关常量）
+        term_wrap, self.danmaku_text = terminal_text(
+            stream_inner,
             font=Fonts.mono(),
             bg=Colors.TERMINAL_BG,
             fg=Colors.TERMINAL_FG,
-            insertbackground="#FFFFFF",
-            relief=tk.FLAT,
-            bd=0,
-            padx=12,
-            pady=10,
-            state=tk.DISABLED,
-            selectbackground=Colors.TERMINAL_SELECT,
-            selectforeground="#FFFFFF",
+            select_bg=Colors.TERMINAL_SELECT,
         )
-        dm_scrollbar = ctk.CTkScrollbar(
-            term_wrap,
-            command=cast("Callable[..., None]", self.danmaku_text.yview),
-            fg_color=Colors.TERMINAL_BG,
-            button_color="#30363D",
-            button_hover_color="#484F58",
-        )
-        self.danmaku_text.configure(yscrollcommand=dm_scrollbar.set)
-        dm_scrollbar.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 4), pady=4)
-        self.danmaku_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        term_wrap.pack(fill=tk.BOTH, expand=True)
 
         # 弹幕类型着色：普通弹幕用默认前景，礼物黄色，SC 粉色，采样折叠灰斜体
         self.danmaku_text.tag_config("gift", foreground=Colors.TERMINAL_WARN)
@@ -2715,64 +2539,19 @@ class LiveRecorderGUI:
 
         return page
 
-    # 添加弹幕房间明细表的表头行（房间/平台/状态/累计/速率/礼物/在线/开始时间）。
-    def _add_danmaku_header_row(self) -> None:
-        header = ctk.CTkFrame(self._dm_scroll, fg_color="transparent", height=28)
-        header.pack(fill=tk.X, pady=(0, 2))
-        header.pack_propagate(False)
-        weights = [3, 2, 1, 1, 1, 1, 1, 2]
-        for col, w in enumerate(weights):
-            header.grid_columnconfigure(col, weight=w)
-        for col, text in enumerate(["房间", "平台", "状态", "累计弹幕", "速率(条/分)", "礼物", "在线", "开始时间"]):
-            ctk.CTkLabel(
-                header,
-                text=text,
-                font=Fonts.small(bold=True),
-                text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
-                anchor=tk.W,
-            ).grid(row=0, column=col, sticky=tk.W, padx=6, pady=4)
+    # 空态占位与表格互斥显示（与画质页同款；grid_remove 不销毁配置）。
+    def _show_danmaku_placeholder(self, visible: bool) -> None:
+        if visible:
+            self._dm_table.tree.grid_remove()
+            self._dm_placeholder.grid()
+        else:
+            self._dm_placeholder.grid_remove()
+            self._dm_table.tree.grid()
 
-    # 添加一行弹幕房间数据（断开连接的行整行淡化）。
-    def _add_danmaku_data_row(self, name: str, info: dict[str, str | bool | int]) -> None:
-        connected = bool(info.get("connected", False))
-        weights = [3, 2, 1, 1, 1, 1, 1, 2]
-
-        row = ctk.CTkFrame(
-            self._dm_scroll,
-            fg_color="transparent" if connected else ("#F8FAFC", "#1C2029"),
-            corner_radius=6,
-            height=32,
-        )
-        row.pack(fill=tk.X, pady=1)
-        row.pack_propagate(False)
-        for col, w in enumerate(weights):
-            row.grid_columnconfigure(col, weight=w)
-
-        normal_color = (Colors.TEXT_LIGHT, Colors.TEXT_DARK) if connected else (Colors.MUTED_LIGHT, Colors.MUTED_DARK)
-        cells: list[tuple[str, str | bool | int | float, str, bool]] = [
-            ("房间", name, "normal", True),
-            ("平台", str(info.get("platform", "—")), "normal", False),
-            ("状态", "已连接" if connected else "已断开", "status", False),
-            ("累计弹幕", str(info.get("msg_total", 0)), "normal", False),
-            ("速率(条/分)", str(info.get("msg_rate", 0)), "normal", False),
-            ("礼物", str(info.get("gift_total", 0)), "normal", False),
-            ("在线", str(info.get("online", 0)), "normal", False),
-            ("开始时间", str(info.get("started_at", "—")), "muted", False),
-        ]
-        for col, (_label, value, kind, bold) in enumerate(cells):
-            if kind == "status":
-                color: str | tuple[str, str] = Colors.SUCCESS if connected else Colors.DANGER
-            elif kind == "muted":
-                color = (Colors.MUTED_LIGHT, Colors.MUTED_DARK)
-            else:
-                color = normal_color
-            ctk.CTkLabel(
-                row,
-                text=str(value),
-                font=Fonts.body(bold=bold),
-                text_color=color,
-                anchor=tk.W,
-            ).grid(row=0, column=col, sticky=tk.W, padx=6, pady=4)
+    # [2026-10-03 阶段4] 旧「表头行 + 每行重建」的 _add_danmaku_header_row /
+    # _add_danmaku_data_row 已删除：表头由 Treeview headings 承担，数据行走
+    # DataTable.sync 的行级增量更新（见 _update_danmaku_display）；断连行的整行淡化
+    # 由 "disconnected" 行标记承担（颜色随主题经 _sync_table_tags 配置）。
 
     # 筛选下拉变化：立即重绘弹幕流。
     def _on_danmaku_filter_change(self, choice: str) -> None:
@@ -3037,7 +2816,9 @@ class LiveRecorderGUI:
                 # 窗口已销毁或控件失效：清掉引用，走下方新建路径
                 pass
             self._adv_settings_window = None
-        self._adv_settings_window = AdvancedSettingsWindow(self.root, self.main_config_file, self._log)
+        self._adv_settings_window = AdvancedSettingsWindow(
+            self.root, self.main_config_file, self._log, tokens=self.theme_manager.tokens()
+        )
 
     # 判断 URL_config.ini 是否含至少一个可录制地址（注释行与空行不计）。
     def _has_room_config(self) -> bool:
@@ -3749,7 +3530,7 @@ class LiveRecorderGUI:
 
     # 在 UI 线程刷新画质监控页面与统计（仅限录制中的项）。
     def _update_quality_display(self) -> None:
-        if not hasattr(self, "_quality_scroll"):
+        if not hasattr(self, "_quality_table"):
             return
 
         now = time.time()
@@ -3761,9 +3542,10 @@ class LiveRecorderGUI:
 
             data = {name: dict(info) for name, info in self._quality_data.items() if info.get("recording")}
 
-        # 数据未变化时跳过重建，避免闪烁：比较前须剔除 _QUALITY_NON_DISPLAY_FIELDS（声明见文件顶部），
-        # 否则 last_seen 心跳刷新使比较恒不相等 → 录制期间周期性整表 destroy+重建，
-        # 表现为闪烁与点击落空（鼠标按下与抬起之间行已被销毁）。
+        # 数据未变化时跳过同步：比较前须剔除 _QUALITY_NON_DISPLAY_FIELDS（声明见文件顶部），
+        # 否则 last_seen 心跳刷新使比较恒不相等。[阶段4] DataTable.sync 本身是行级增量
+        # （未变化行零触碰，从结构上消灭「每轮 destroy+重建」的闪烁与点击落空），
+        # 这层比较再把「无变化轮」的同步开销降到零。
         comparable = {
             name: {k: v for k, v in info.items() if k not in _QUALITY_NON_DISPLAY_FIELDS} for name, info in data.items()
         }
@@ -3771,17 +3553,38 @@ class LiveRecorderGUI:
             return
         self._quality_last_displayed = comparable
 
-        # 清除旧行
-        for widget in self._quality_scroll.winfo_children():
-            widget.destroy()
-
-        if not data:
-            self._make_quality_placeholder(self._quality_scroll)
-        else:
-            # 表头 + 数据行
-            self._add_quality_header_row()
-            for name, info in sorted(data.items()):
-                self._add_quality_data_row(name, info)
+        keys = sorted(data)
+        values: dict[str, tuple[str, ...]] = {}
+        tags: dict[str, tuple[str, ...]] = {}
+        for name in keys:
+            info = data[name]
+            downgraded = bool(info.get("downgraded", False))
+            # 「设置画质」以 URL_config.ini 的当前画质段为准（用户切换意图即时可见）；
+            # 子进程日志里的画质是本轮录制启动时的快照（录制中的流不重启则恒为旧值），
+            # 若直接用它渲染，表格会把已切换的画质"重置"回旧值。仅反查表未命中
+            # （如配置行无主播名）时才回退到日志值。name 与 _quality_data 键同为
+            # 「序号N 主播名」，查表前剥离序号前缀（与 _on_room_quality_change 同一约定）。
+            key = re.sub(r"^序号\d+\s+", "", name).strip()
+            set_q = self._anchor_quality_map.get(key) or str(info.get("set_quality", "—"))
+            # 浮层编辑器按行 key 回查当前画质，随 sync 一并刷新（消失行下方一并清缓存）
+            self._quality_row_setq[name] = set_q
+            actual_q = str(info.get("actual_quality", ""))
+            alert_time = str(info.get("alert_time", ""))
+            values[name] = (
+                name,
+                set_q,
+                (actual_q or "—") if downgraded else "✓ 同等",
+                "⚠ 降级" if downgraded else "✓ 正常",
+                alert_time if downgraded else "—",
+            )
+            # 行级标记：降级行整行红字 + 浅红底（颜色由 _sync_table_tags 按 token 配置；
+            # 旧实现「实际/状态列各自着色」的逐格形态在 Treeview 下不可表达——
+            # tag 是行级的，✓/⚠ 字形保留状态语义）
+            tags[name] = ("downgraded",) if downgraded else ("normal",)
+        for gone in set(self._quality_row_setq) - set(keys):
+            del self._quality_row_setq[gone]
+        self._quality_table.sync(keys, values, tags)
+        self._show_quality_placeholder(not data)
 
         # 更新统计
         total = len(data)
@@ -3994,7 +3797,7 @@ class LiveRecorderGUI:
 
     # 在 UI 线程重建弹幕房间统计表与顶部统计（数据未变化时跳过，避免闪烁）。
     def _update_danmaku_display(self) -> None:
-        if not hasattr(self, "_dm_scroll"):
+        if not hasattr(self, "_dm_table"):
             return
         with self._danmaku_lock:
             if not self._danmaku_stats_dirty:
@@ -4030,15 +3833,29 @@ class LiveRecorderGUI:
             return
         self._danmaku_last_stats = rows
 
-        for widget in self._dm_scroll.winfo_children():
-            widget.destroy()
-
-        if not rows:
-            self._make_danmaku_placeholder(self._dm_scroll)
-        else:
-            self._add_danmaku_header_row()
-            for row in sorted(rows, key=lambda r: str(r["room"])):
-                self._add_danmaku_data_row(str(row["room"]), row)
+        # 行级增量同步（未变化行零触碰；「每轮 destroy+重建」的闪烁与点击落空随
+        # 旧 CTkScrollableFrame 实现一并消灭）。断连行整行淡化为 muted——旧实现
+        # 「状态列红绿」的逐格着色在 Treeview 下不可表达（tag 是行级的），
+        # 已连接/已断开的文字语义保留。
+        keys = sorted((str(row["room"]) for row in rows))
+        values: dict[str, tuple[str, ...]] = {}
+        tags: dict[str, tuple[str, ...]] = {}
+        for row in rows:
+            name = str(row["room"])
+            connected = bool(row["connected"])
+            values[name] = (
+                name,
+                str(row["platform"]),
+                "已连接" if connected else "已断开",
+                str(row["msg_total"]),
+                str(row["msg_rate"]),
+                str(row["gift_total"]),
+                str(row["online"]),
+                str(row["started_at"]),
+            )
+            tags[name] = ("normal",) if connected else ("disconnected",)
+        self._dm_table.sync(keys, values, tags)
+        self._show_danmaku_placeholder(not rows)
 
         # 顶部统计与筛选下拉（保持当前选择，房间列表变化时刷新选项）
         try:
@@ -4046,9 +3863,9 @@ class LiveRecorderGUI:
             self._dm_stat_connected.configure(text=str(connected_count))
             self._dm_stat_msgs.configure(text=str(total_msgs))
             current = self._dm_filter_menu.get()
-            values = ["全部房间"] + sorted(rooms_snapshot.keys())
-            self._dm_filter_menu.configure(values=values)
-            if current not in values:
+            values_list = ["全部房间"] + sorted(rooms_snapshot.keys())
+            self._dm_filter_menu.configure(values=values_list)
+            if current not in values_list:
                 self._dm_filter_menu.set("全部房间")
                 # 2026-09-12 审查 6.2：菜单回退到「全部房间」时须同步 _danmaku_filter，
                 # 否则 _render_danmaku_stream 仍按已移除的旧房间名过滤——界面显示
@@ -4391,7 +4208,8 @@ class LiveRecorderGUI:
                 pass
             self._close_dialog = None
 
-        dialog = ctk.CTkToplevel(self.root)
+        # [阶段5] tk.Toplevel 替代 CTkToplevel（底色随主题 token；标题栏跟随系统明暗为可接受边界）
+        dialog = tk.Toplevel(self.root, bg=self.theme_manager.tokens()["surface"])
         self._close_dialog = dialog
         dialog.title("关闭选项")
         dialog.geometry("400x230")
@@ -4404,16 +4222,16 @@ class LiveRecorderGUI:
         y = self.root.winfo_y() + (self.root.winfo_height() - dialog.winfo_height()) // 2
         dialog.geometry(f"+{x}+{y}")
 
-        ctk.CTkLabel(dialog, text="🎬", font=ctk.CTkFont(size=32)).pack(pady=(24, 8))
-        ctk.CTkLabel(dialog, text="请选择关闭方式", font=Fonts.heading()).pack()
-        ctk.CTkLabel(
+        Label(dialog, text="🎬", font=Fonts.get(32)).pack(pady=(24, 8))
+        Label(dialog, text="请选择关闭方式", font=Fonts.heading()).pack()
+        Label(
             dialog,
             text="您可以最小化到系统托盘，或完全退出程序",
             font=Fonts.small(),
-            text_color=(Colors.MUTED_LIGHT, Colors.MUTED_DARK),
+            variant="muted",
         ).pack(pady=(4, 18))
 
-        btn_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        btn_frame = Frame(dialog)
         btn_frame.pack(padx=16, pady=(0, 16))
 
         # 最小化到托盘并关闭关闭选项对话框。
@@ -4426,30 +4244,21 @@ class LiveRecorderGUI:
             self.quit_application()
             dialog.destroy()
 
-        ctk.CTkButton(
+        Button(
             btn_frame,
             text="📥   最小化到托盘",
             command=minimize_to_tray_and_close,
-            width=160,
-            height=40,
-            corner_radius=8,
-            fg_color=Colors.PRIMARY,
-            hover_color=Colors.PRIMARY_HOVER,
-            text_color="#FFFFFF",
             font=Fonts.body(bold=True),
+            padding=(14, 9),
         ).pack(side=tk.LEFT, padx=(0, 10))
 
-        ctk.CTkButton(
+        Button(
             btn_frame,
             text="❌   完全退出",
             command=quit_and_close,
-            width=140,
-            height=40,
-            corner_radius=8,
-            fg_color=Colors.DANGER,
-            hover_color=Colors.DANGER_HOVER,
-            text_color="#FFFFFF",
             font=Fonts.body(bold=True),
+            padding=(14, 9),
+            variant="danger",
         ).pack(side=tk.LEFT)
 
         # 键盘快捷键
@@ -4464,7 +4273,7 @@ class LiveRecorderGUI:
 
     # 安全地为对话框设置模态（容错 grab_set）。
     @staticmethod
-    def _safe_dialog_grab(dialog: ctk.CTkToplevel) -> None:
+    def _safe_dialog_grab(dialog: tk.Toplevel) -> None:
         try:
             dialog.grab_set()
         except Exception:
@@ -4500,10 +4309,7 @@ def _bootstrap_error_sink(exc: BaseException) -> None:
 
 # 程序入口：初始化主窗口与系统托盘，并按平台进入主事件循环。
 def main() -> None:
-    ctk.set_appearance_mode("system")
-    ctk.set_default_color_theme("blue")
-
-    root = ctk.CTk()
+    root = tk.Tk()
     app = LiveRecorderGUI(root)
 
     tray = SystemTray(app)

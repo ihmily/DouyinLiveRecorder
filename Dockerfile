@@ -53,10 +53,12 @@ ARG TZ=Asia/Shanghai
 # 只正则匹配字面 version="${APP_VERSION}"、检不出这类顺序错误，现已同时断言「声明行号 < 使用行号」。
 ARG APP_VERSION
 
-LABEL maintainer="Hmily <ihmily@github>" \
+# 2026-10-04：维护者与项目 URL 统一指向本仓库 y123ao6（与 pyproject.toml [project.urls]/authors 同源）；
+# 上游原作者为 ihmily，署名保留在 README「上游项目」行与 main.py 版权头
+LABEL maintainer="y123ao6 <zmzx0690@agent.qq.com>" \
       version="${APP_VERSION}" \
       description="支持抖音、TikTok、YouTube等60+平台直播录制工具" \
-      url="https://github.com/ihmily/DouyinLiveRecorder"
+      url="https://github.com/y123ao6/DouyinLiveRecorder"
 
 # 运行时行为：无缓冲、不写字节码、UTF-8 输出、时区、彩色终端、venv 入 PATH
 ENV PYTHONUNBUFFERED=1 \

@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import configparser
 import re
+import subprocess
+import sys
 import tkinter as tk
 from pathlib import Path
 from tkinter import ttk
@@ -62,7 +64,7 @@ THEMES: dict[str, dict[str, str]] = {
         "text_muted": "#5D6C84",
         "primary": "#4358E8",
         "primary_hover": "#3247C9",
-        "success": "#16A34A",
+        "success": "#15803D",
         "danger": "#DC2626",
         "warning": "#C2690A",
         "disabled_bg": "#E2E6EE",
@@ -77,7 +79,7 @@ THEMES: dict[str, dict[str, str]] = {
         "text_muted": "#8B93A7",
         "primary": "#4463F0",
         "primary_hover": "#5068F2",
-        "success": "#16A34A",
+        "success": "#15803D",
         "danger": "#DC2626",
         "warning": "#D97706",
         "disabled_bg": "#262B3A",
@@ -105,6 +107,11 @@ THEMES: dict[str, dict[str, str]] = {
 #   3.0 = WCAG 1.4.11 非文本（边框、状态色块、焦点环）+ 禁用态自加压（WCAG 豁免禁用控件，
 #         这里仍取 3.0 自证，避免「禁用即随便灰」漂移）。
 # 新增槽位/组合时先在此登记，再取色——机检是取色的前置门，不是事后核对。
+# 阶段4 新增三对：primary/surface_alt（导航选中态 fg/bg）、on_primary/success、
+# on_primary/danger（Success/Danger.TButton 的标签）。三者一律按正文 4.5 登记：
+# 为此 light/dark 的 success 从 #16A34A 加深到 #15803D（白字 3.30→5.01，同阶段3 把
+# primary 加深的先例；high_contrast 的 success=#4ADE80 配黑字 12.05、danger 两态
+# 白字 4.83 / 黑字 7.57 均天然达标），gui.Colors.SUCCESS 同批同步取值。
 CONTRAST_REQUIREMENTS: tuple[tuple[str, str, float], ...] = (
     ("text", "surface", 4.5),
     ("text", "surface_alt", 4.5),
@@ -113,6 +120,9 @@ CONTRAST_REQUIREMENTS: tuple[tuple[str, str, float], ...] = (
     ("on_primary", "primary", 4.5),
     ("on_primary", "primary_hover", 4.5),
     ("primary", "surface", 3.0),
+    ("primary", "surface_alt", 3.0),
+    ("on_primary", "success", 4.5),
+    ("on_primary", "danger", 4.5),
     ("success", "surface", 3.0),
     ("danger", "surface", 3.0),
     ("warning", "surface", 3.0),
@@ -135,6 +145,39 @@ def is_valid_hex(color: str) -> bool:
     # 严格 #RRGGBB：tk 颜色语法还接受 #RGB / 颜色名，这里刻意收窄——token 只允许
     # 六位十六进制，保证对比度计算与 ttk configure 都拿到确定形态。
     return _HEX_PATTERN.match(color) is not None
+
+
+def detect_system_appearance() -> str:
+    # 探测操作系统明暗偏好，返回主题 id（"light" 或 "dark"）。
+    # [阶段5] CTk 外观模式（set/get_appearance_mode）随 customtkinter 依赖一并退役，
+    # 「跟随系统」的探测依据由本函数承担：Windows 读注册表 AppsUseLightTheme（0=深色），
+    # macOS 走 `defaults read -g AppleInterfaceStyle`（键缺失/命令失败 = 浅色），
+    # 其余平台无统一口径按浅色兜底。任何探测失败一律回 "light"——探测只是
+    # 「跟随系统」的默认值来源，绝不能让 GUI 起不来（无头 CI 也不会走到：仅 GUI 运行期调用）。
+    if sys.platform == "win32":
+        try:
+            import winreg
+
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+            ) as key:
+                value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+            return "light" if int(value) != 0 else "dark"
+        except OSError:
+            # 键不存在 / 权限不足：按浅色兜底（企业策略锁定的机器上注册表读取可能被拒）
+            return "light"
+    if sys.platform == "darwin":
+        try:
+            result = subprocess.run(
+                ["defaults", "read", "-g", "AppleInterfaceStyle"],
+                capture_output=True,
+                timeout=2,
+            )
+            return "dark" if result.returncode == 0 else "light"
+        except OSError, subprocess.TimeoutExpired:
+            return "light"
+    return "light"
 
 
 def _linearize(channel: int) -> float:
@@ -162,6 +205,15 @@ def contrast_ratio(fg: str, bg: str) -> float:
     lighter = max(lum_fg, lum_bg)
     darker = min(lum_fg, lum_bg)
     return (lighter + 0.05) / (darker + 0.05)
+
+
+def _shade(color: str, ratio: float) -> str:
+    # 把 #RRGGBB 向黑色方向压暗 ratio（0..1），返回同形态十六进制。
+    # ttk 变体按钮（Success/Danger.TButton）的悬停色由此从基础槽位派生——
+    # success/danger 没有配对的 *_hover 槽位，手写第二套色值必漂移。
+    raw = color.lstrip("#")
+    r, g, b = int(raw[0:2], 16), int(raw[2:4], 16), int(raw[4:6], 16)
+    return f"#{round(r * (1 - ratio)):02X}{round(g * (1 - ratio)):02X}{round(b * (1 - ratio)):02X}"
 
 
 def load_theme_preference(config_file: str | Path) -> str:
@@ -233,6 +285,12 @@ class ThemeManager:
             # 宽松形状（configure: dict[str, object] / map: list[tuple[str, str]]），cast 收敛给存根
             style.theme_create(name, _TTK_BASE_THEME, settings=cast(Any, self._build_ttk_settings()))
         style.theme_use(name)
+        # ttk Combobox 的下拉弹层是独立的 tk Listbox，不吃 ttk 样式——走全局 option DB
+        # 上色（重复 option_add 幂等）；列表项字体跟随系统默认，只收敛配色。
+        root.option_add("*TCombobox*Listbox.background", THEMES[self._theme_id]["surface"])
+        root.option_add("*TCombobox*Listbox.foreground", THEMES[self._theme_id]["text"])
+        root.option_add("*TCombobox*Listbox.selectBackground", THEMES[self._theme_id]["primary"])
+        root.option_add("*TCombobox*Listbox.selectForeground", THEMES[self._theme_id]["on_primary"])
         return name
 
     def _build_ttk_settings(self) -> dict[str, dict[str, dict[str, object]]]:
@@ -257,7 +315,29 @@ class ThemeManager:
                 }
             },
             "TFrame": {"configure": {"background": t["surface"]}},
+            # 页面背景 / 状态胶囊：surface_alt（gui 的 Colors.BG_* 同槽）
+            "Alt.TFrame": {"configure": {"background": t["surface_alt"]}},
+            # 圆角卡片：surface 底 + border 描边（clam 的 Frame 支持 solid relief 画边）
+            "Card.TFrame": {
+                "configure": {
+                    "background": t["surface"],
+                    "bordercolor": t["border"],
+                    "relief": "solid",
+                    "borderwidth": 1,
+                }
+            },
+            # 主色底（高级设置窗口标题栏），配 OnPrimary.TLabel 反色文字
+            "Primary.TFrame": {"configure": {"background": t["primary"]}},
             "TLabel": {"configure": {"background": t["surface"], "foreground": t["text"]}},
+            # Alt.TLabel：落在 surface_alt 底上的正文标签（状态胶囊内）。
+            "Alt.TLabel": {"configure": {"background": t["surface_alt"], "foreground": t["text"]}},
+            "Muted.TLabel": {"configure": {"background": t["surface"], "foreground": t["text_muted"]}},
+            # 统计值 / 状态文字的着色变体（对比度契约已含 primary/success/danger vs surface 3.0）
+            "Primary.TLabel": {"configure": {"background": t["surface"], "foreground": t["primary"]}},
+            "Success.TLabel": {"configure": {"background": t["surface"], "foreground": t["success"]}},
+            "Danger.TLabel": {"configure": {"background": t["surface"], "foreground": t["danger"]}},
+            # 主色底上的反色标签（高级设置窗口标题栏）
+            "OnPrimary.TLabel": {"configure": {"background": t["primary"], "foreground": t["on_primary"]}},
             "TButton": {
                 "configure": {
                     "background": t["primary"],
@@ -281,6 +361,150 @@ class ThemeManager:
                         ("pressed", t["primary_hover"]),
                         ("active", t["primary_hover"]),
                     ],
+                },
+            },
+            # Success/Danger 变体按钮：开始/停止录制、退出确认。悬停色由 _shade 从基础槽位
+            # 派生（无 *_hover 槽位），白字对比度契约见 CONTRAST_REQUIREMENTS 的阶段4 注。
+            "Success.TButton": {
+                "configure": {
+                    "background": t["success"],
+                    "foreground": t["on_primary"],
+                    "bordercolor": t["success"],
+                    "lightcolor": t["success"],
+                    "darkcolor": t["success"],
+                    "focuscolor": t["on_primary"],
+                    "padding": (10, 5),
+                },
+                "map": {
+                    "background": [
+                        ("disabled", t["disabled_bg"]),
+                        ("pressed", _shade(t["success"], 0.18)),
+                        ("active", _shade(t["success"], 0.18)),
+                    ],
+                    "foreground": [("disabled", t["disabled_fg"])],
+                    "bordercolor": [
+                        ("disabled", t["disabled_bg"]),
+                        ("pressed", _shade(t["success"], 0.18)),
+                        ("active", _shade(t["success"], 0.18)),
+                    ],
+                },
+            },
+            "Danger.TButton": {
+                "configure": {
+                    "background": t["danger"],
+                    "foreground": t["on_primary"],
+                    "bordercolor": t["danger"],
+                    "lightcolor": t["danger"],
+                    "darkcolor": t["danger"],
+                    "focuscolor": t["on_primary"],
+                    "padding": (10, 5),
+                },
+                "map": {
+                    "background": [
+                        ("disabled", t["disabled_bg"]),
+                        ("pressed", _shade(t["danger"], 0.18)),
+                        ("active", _shade(t["danger"], 0.18)),
+                    ],
+                    "foreground": [("disabled", t["disabled_fg"])],
+                    "bordercolor": [
+                        ("disabled", t["disabled_bg"]),
+                        ("pressed", _shade(t["danger"], 0.18)),
+                        ("active", _shade(t["danger"], 0.18)),
+                    ],
+                },
+            },
+            # Ghost 变体：原「fg_color=transparent + border_width=1」的次级按钮
+            # （重新读取 / 打开下载目录 / 取消 / 清空日志等），悬停浮到 surface_alt。
+            "Ghost.TButton": {
+                "configure": {
+                    "background": t["surface"],
+                    "foreground": t["text"],
+                    "bordercolor": t["border"],
+                    "lightcolor": t["surface"],
+                    "darkcolor": t["surface"],
+                    "focuscolor": t["primary"],
+                    "padding": (10, 5),
+                },
+                "map": {
+                    "background": [
+                        ("disabled", t["disabled_bg"]),
+                        ("pressed", t["surface_alt"]),
+                        ("active", t["surface_alt"]),
+                    ],
+                    "foreground": [("disabled", t["disabled_fg"])],
+                    "bordercolor": [("active", t["primary"]), ("disabled", t["disabled_bg"])],
+                },
+            },
+            # 侧边栏导航：未选中 muted 文字、悬停浮 surface_alt；选中态（NavActive）
+            # 用 surface_alt 底 + primary 文字（阶段4 起导航选中不再走 CTk 颜色回写）。
+            # anchor="w" 与 CTkButton(anchor=tk.W) 对齐：导航与侧栏动作按钮一律左对齐。
+            "Nav.TButton": {
+                "configure": {
+                    "background": t["surface"],
+                    "foreground": t["text_muted"],
+                    "bordercolor": t["surface"],
+                    "lightcolor": t["surface"],
+                    "darkcolor": t["surface"],
+                    "anchor": "w",
+                    "focuscolor": t["text_muted"],
+                    "padding": (12, 9),
+                },
+                "map": {
+                    "background": [("pressed", t["surface_alt"]), ("active", t["surface_alt"])],
+                    "foreground": [("disabled", t["disabled_fg"])],
+                },
+            },
+            "NavActive.TButton": {
+                "configure": {
+                    "background": t["surface_alt"],
+                    "foreground": t["primary"],
+                    "bordercolor": t["surface_alt"],
+                    "lightcolor": t["surface_alt"],
+                    "darkcolor": t["surface_alt"],
+                    "anchor": "w",
+                    "focuscolor": t["primary"],
+                    "padding": (12, 9),
+                },
+                "map": {
+                    "background": [("pressed", t["surface_alt"]), ("active", t["surface_alt"])],
+                    "foreground": [("disabled", t["disabled_fg"])],
+                },
+            },
+            "SideGhost.TButton": {
+                "configure": {
+                    "background": t["surface"],
+                    "foreground": t["text"],
+                    "bordercolor": t["border"],
+                    "lightcolor": t["surface"],
+                    "darkcolor": t["surface"],
+                    "anchor": "w",
+                    "focuscolor": t["text"],
+                    "padding": (12, 8),
+                },
+                "map": {
+                    "background": [("pressed", t["surface_alt"]), ("active", t["surface_alt"])],
+                    "foreground": [("disabled", t["disabled_fg"])],
+                    "bordercolor": [("active", t["primary"])],
+                },
+            },
+            "SideDanger.TButton": {
+                "configure": {
+                    "background": t["danger"],
+                    "foreground": t["on_primary"],
+                    "bordercolor": t["danger"],
+                    "lightcolor": t["danger"],
+                    "darkcolor": t["danger"],
+                    "anchor": "w",
+                    "focuscolor": t["on_primary"],
+                    "padding": (12, 8),
+                },
+                "map": {
+                    "background": [
+                        ("disabled", t["disabled_bg"]),
+                        ("pressed", _shade(t["danger"], 0.18)),
+                        ("active", _shade(t["danger"], 0.18)),
+                    ],
+                    "foreground": [("disabled", t["disabled_fg"])],
                 },
             },
             "TEntry": {
@@ -332,6 +556,8 @@ class ThemeManager:
                     "fieldbackground": t["surface_alt"],
                     "foreground": t["text"],
                     "bordercolor": t["border"],
+                    # 行高与旧 34px 行卡的信息密度对齐（默认 ~20px 过挤）
+                    "rowheight": 32,
                 },
                 "map": {
                     # 行选中走 primary 填充 + on_primary 文字（对比度契约已覆盖该对）
@@ -340,7 +566,7 @@ class ThemeManager:
                 },
             },
             "Treeview.Heading": {
-                "configure": {"background": t["surface"], "foreground": t["text_muted"]},
+                "configure": {"background": t["surface"], "foreground": t["text_muted"], "padding": (6, 5)},
                 "map": {"foreground": [("active", t["text"])], "background": [("active", t["surface"])]},
             },
             "Vertical.TScrollbar": {

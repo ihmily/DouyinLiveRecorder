@@ -440,7 +440,7 @@ def test_api_danmaku_endpoint_returns_hub_snapshot(tmp_path: Path, monkeypatch: 
 #      仍要靠下游用例各自的 monkeypatch.delenv（test_log_archive.py /
 #      test_logger_gui_parent.py / test_regression_2026_09_22_infra.py）兜住。
 def _load_gui() -> Any:
-    return pytest.importorskip("gui", reason="customtkinter 未安装时跳过 GUI 无头测试")
+    return pytest.importorskip("gui", reason="gui 导入失败时跳过 GUI 无头测试（阶段5 起 gui 已不依赖 customtkinter)")
 
 
 @pytest.fixture(autouse=True)

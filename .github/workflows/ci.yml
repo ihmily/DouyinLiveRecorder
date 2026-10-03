@@ -66,7 +66,7 @@
 #                              .coveragerc-concurrency（并发测试不设全局覆盖率下限）。
 #     · DOUYIN_SKIP_RUNTIME_CHECK / DOUYIN_LOG_NO_ENQUEUE
 #                           —— 由 tests/conftest.py 自动 setdefault，无需在此声明。
-#     · DISPLAY             —— 由 xvfb-run 注入（build-verify job 的 GUI 冒烟）。
+#     · DISPLAY             —— 由 xvfb-run 注入（test job 的真 Tk 用例 + build-verify job 的 GUI 冒烟）。
 #     · secrets.CODECOV_TOKEN —— 可选：test job 的覆盖率上传步骤仅在「已配置该 secret
 #                              且为最低支持版本」时运行；未配置则自动跳过，不阻断 CI。
 #                              公开仓库也可不配置（Codecov 可从 commit 关联推断），配置后
@@ -158,7 +158,7 @@ jobs:
           {
             echo "black_version=26.5.1"
             echo "isort_version=9.0.1"
-            echo "mypy_version=2.3.1"
+            echo "mypy_version=2.4.0"
             echo "pytest_version=9.1.1"
           } >> "$GITHUB_OUTPUT"
 
@@ -511,14 +511,17 @@ jobs:
             echo "available=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # ffmpeg：部分测试会探测 ffmpeg 可用性；apt 装轻量版即可（非打包用途）
-      - name: Install ffmpeg (apt)
+      # ffmpeg：部分测试会探测 ffmpeg 可用性；xvfb：无头 X server，让真 Tk 集成用例
+      # （test_gui_wrap_hints / test_ui_theme / test_ui_kit 的显示门控用例）在 CI 常态执行
+      # 而非 skip——阶段4/5 实证这类用例能抓到无头测试看不见的真 bug（ttk 无控件级
+      # -font、CTk configure 静默忽略 cnf 字典）。两者均 apt 装轻量版（非打包用途）。
+      - name: Install ffmpeg + xvfb (apt)
         uses: ./.github/actions/retry
         with:
-          label: apt 安装 ffmpeg
+          label: apt 安装 ffmpeg + xvfb
           command: >-
             sudo env DEBIAN_FRONTEND=noninteractive apt-get update -qq -o Acquire::Retries=3
-            && sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg
+            && sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg xvfb
 
       # pytest-asyncio 由 pyproject [tool.pytest.ini_options] asyncio_mode = "auto" 驱动；
       # pytest-cov 必装：scripts/check_coverage.py 依赖其产出的 .coverage 数据文件。
@@ -544,9 +547,16 @@ jobs:
             "isort==${{ needs.setup.outputs.isort_version }}"
             "mypy==${{ needs.setup.outputs.mypy_version }}"
 
+      # MID-2264 同款反 skip 兜底：xvfb 装完即验「Tk 真能开显示」——若 xvfb 失效，
+      # 真窗用例会以 TclError 走 skip 通道（skipped 与 passed 在 ci-summary 里不可区分），
+      # 常态化的真 Tk 用例就会静默消失；本步让那类环境故障当场红而不是假绿。
+      - name: Assert Tk display is available (real-window tests must not skip)
+        run: xvfb-run -a python -c "import tkinter; root = tkinter.Tk(); print('Tk display OK', root.winfo_screenwidth()); root.destroy()"
+
+      # pytest 全程跑在 xvfb 下：非 Tk 用例不受影响（不读 DISPLAY），真窗用例因此真实执行。
       # 全局覆盖率下限 fail_under = 50 由 pyproject [tool.coverage.report] 强制
       - name: Run pytest with coverage
-        run: pytest --cov=src --cov-report=term-missing --cov-report=xml
+        run: xvfb-run -a pytest --cov=src --cov-report=term-missing --cov-report=xml
 
       # 「有告警即失败」pytest 侧（与上方 isort/black 兜底步骤同一形态）：
       # pyproject filterwarnings 已忽略已知第三方告警，理论上 warnings summary 恒为空。
@@ -632,7 +642,10 @@ jobs:
           files: coverage.xml
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
-          slug: ihmily/DouyinLiveRecorder
+          # 2026-10-04：slug 从上游 ihmily 改指本仓库 y123ao6。前置条件：Codecov 须为
+          # y123ao6/DouyinLiveRecorder 建好项目且 CODECOV_TOKEN 对该项目有效——未配置前上报会
+          # 落空（fail_ci_if_error: false 仅保证不反噬 CI 门禁，数据不会被接收）。
+          slug: y123ao6/DouyinLiveRecorder
 
       # ── Web 面板 HTTP 冒烟（运行中的真实服务，非 TestClient）──────────────
       # 动机：pytest 全程用 FastAPI TestClient 且注入了 fake main，从不监听端口——

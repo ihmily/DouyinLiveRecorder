@@ -122,9 +122,13 @@ class FakeLabel:
         return self.value
 
 
-class FakeScroll:
-    def winfo_children(self):
-        return []
+class FakeTable:
+    # [阶段4] DataTable 替身：记录 sync 的行级增量调用，供链路断言与异常注入。
+    def __init__(self):
+        self.synced = []
+
+    def sync(self, keys, values, tags):
+        self.synced.append((list(keys), dict(values), dict(tags)))
 
 
 def base_stub(extra_boom=None):
@@ -137,15 +141,13 @@ def base_stub(extra_boom=None):
     stub._danmaku_stream_dirty = True
     stub._danmaku_last_stats = None
     stub._danmaku_filter = "全部房间"
-    stub._dm_scroll = FakeScroll()
+    stub._dm_table = FakeTable()
     stub._dm_stat_rooms = FakeLabel()
     stub._dm_stat_connected = FakeLabel()
     stub._dm_stat_msgs = FakeLabel()
     stub._dm_filter_menu = FakeLabel()
     stub.danmaku_text = FakeText(extra_boom)
-    stub._add_danmaku_header_row = lambda: None
-    stub._add_danmaku_data_row = lambda room, row: None
-    stub._make_danmaku_placeholder = lambda parent: None
+    stub._show_danmaku_placeholder = lambda visible: None
     stub.log_text = FakeText(extra_boom)
     stub.root = FakeRoot()
     stub._log_lines = []

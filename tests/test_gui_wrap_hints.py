@@ -3,9 +3,14 @@
 # 根因：长文案标签的请求宽超出父容器分配宽时，Tk pack 按默认 anchor=center **两侧对称裁切**
 # （150% DPI 下控制台「启动后将调用 main.py…」提示与弹幕占位提示两侧各缺半个字；画质页说明的
 # 定宽 wraplength=1000 在窄窗口下同样右缘裁切）。
-# 修复（gui.py）：_compute_wraplength 纯函数（设备像素→逻辑值，除以 CTk 控件缩放率）+
-# _bind_adaptive_wraplength（把 wraplength 绑到标签自身窗口宽，要求 pack(fill=tk.X)）+
-# 占位文案收敛到 _make_quality_placeholder / _make_danmaku_placeholder 两个工厂。
+# 修复（gui.py）：_compute_wraplength 纯函数 + _bind_adaptive_wraplength（防抖 + 迟滞地把
+# wraplength 绑到标签自身窗口宽，要求 fill/sticky 拉伸）+ 占位文案收敛到
+# _make_quality_placeholder / _make_danmaku_placeholder 两个工厂（阶段4 起单实例叠放切换）。
+# [2026-10-03 阶段4] 换算公式去掉缩放率除法：标签从 CTkLabel 换成 ttk.Label，
+# ttk 的 wraplength 是原始设备像素、不随 tk scaling 缩放（Tk 9.0 实测探针：
+# scaling×2 后同 wraplength 的 reqwidth 恒定），CTk 时代的 (width-margin)/scale 与
+# ScalingTracker 依赖一并退役；CTk 时代锚点 1584@1.5→1050 在 150% DPI 下与
+# 新公式 1584→1576 视觉等价（1050 逻辑 × 1.5 ≈ 1576 设备）。
 #
 # 三层锁：纯函数单测与 AST 源码锁无头可跑（Linux CI 全量执行）；
 # 真窗用例需要显示器，无显示环境 skip——与 tests/test_ui_theme.py 的 TestApplyTtk 同一口径，
@@ -34,8 +39,8 @@ import sys
 import time
 
 import tkinter as tk
-
-import customtkinter as ctk
+from tkinter import font as tkfont
+from tkinter import ttk
 
 out = {"skipped": None, "ok": False}
 try:
@@ -43,24 +48,26 @@ try:
 
     req = json.loads(sys.stdin.read())
     if req["call"] == "compute":
-        out["result"] = gui._compute_wraplength(req["width"], req["scale"], req.get("margin", 8))
+        out["result"] = gui._compute_wraplength(req["width"], req.get("margin", 8))
         out["ok"] = True
     elif req["call"] == "should_apply":
-        out["result"] = gui._wrap_should_apply(req["current"], req["new"], req["scale_changed"])
+        out["result"] = gui._wrap_should_apply(req["current"], req["new"])
         out["ok"] = True
     elif req["call"] == "window":
-        # 刻意不调 set_widget_scaling：手动缩放覆盖与 CTk 的系统 DPI 追踪在真窗映射时会互相
-        # 触发全量重缩放（实测事件风暴 → update() 永不返回）。系统自身的 DPI 已让
-        # get_widget_scaling 返回真实缩放率，设备像素→逻辑值换算由 compute 分支的锚点锁钉死。
-        root = ctk.CTk()
+        # [阶段5] CTk 摘除后生产面即 ttk/tk：真窗用例改用原生控件 + tkfont 点值字体
+        # （与 gui.Fonts 同款），折行机制判据不变。
+        root = tk.Tk()
         root.geometry("1120x300")
-        body = ctk.CTkFrame(root)
+        body = ttk.Frame(root)
         body.pack(fill=tk.X, padx=18)
-        b1 = ctk.CTkButton(body, text="start", width=200)
+        b1 = ttk.Button(body, text="start", padding=(20, 8))
         b1.pack(side=tk.LEFT, padx=(0, 12))
-        b2 = ctk.CTkButton(body, text="stop", width=200)
+        b2 = ttk.Button(body, text="stop", padding=(20, 8))
         b2.pack(side=tk.LEFT)
-        label = ctk.CTkLabel(body, text=req["text"], font=ctk.CTkFont(size=12), anchor="w", justify="left")
+        label = ttk.Label(
+            body, text=req["text"], font=tkfont.Font(family="Microsoft YaHei UI", size=-9),
+            anchor="w", justify="left",
+        )
         label.pack(side=tk.LEFT, padx=20, fill=tk.X, expand=True)
         gui._bind_adaptive_wraplength(label)
         root.update_idletasks()
@@ -87,10 +94,12 @@ try:
         )
         root.destroy()
     elif req["call"] == "stress":
-        # 2026-09-29 卡死回归锁：DPI 反复翻转（用户跨屏拖拽的真实路径，与 check_dpi_scaling
-        # 同一回调链）。修复前绑定追逐每次瞬时宽度写 wraplength，几何失效喂进 CTk 重缩放的
-        # 递归 idle 泵，队列永不排空（120s 泵不完 = 卡死）；修复后防抖 + 迟滞，必须能排空。
-        root = ctk.CTk()
+        # 2026-09-29 卡死回归锁：DPI 反复翻转（用户跨屏拖拽的真实路径）。修复前绑定追逐
+        # 每次瞬时宽度写 wraplength，几何失效排进 idle 队列使其永不排空（120s 泵不完 =
+        # 卡死）；修复后防抖 + 迟滞，必须能排空。[阶段5] 风暴源改为 `tk scaling` 翻转——
+        # 点值字体随 scaling 重排触发全窗几何失效，等价模拟跨 DPI 拖拽（CTk 的
+        # set_widget_scaling 随依赖摘除退役）。
+        root = tk.Tk()
         app = gui.LiveRecorderGUI(root)
         root.geometry("1120x740")
         root.update_idletasks()
@@ -98,7 +107,7 @@ try:
 
         def find_labels(widget, acc):
             for child in widget.winfo_children():
-                if isinstance(child, ctk.CTkLabel):
+                if isinstance(child, ttk.Label):
                     acc.append(child)
                 find_labels(child, acc)
             return acc
@@ -125,8 +134,9 @@ try:
         for k, lb in targets.items():
             lb.bind("<Configure>", make_cb(k, lb), add="+")
 
-        for s in (1.2, 1.5, 1.2, 1.5, 1.2, 1.5, 1.2, 1.5):
-            ctk.set_widget_scaling(s)
+        base = float(root.tk.call("tk", "scaling"))
+        for s in (base, base * 1.5, base, base * 1.5, base, base * 1.5, base, base * 1.5):
+            root.tk.call("tk", "scaling", s)
             end = time.time() + 0.15
             while time.time() < end:
                 root.update()
@@ -163,37 +173,34 @@ def _wrap_call(call: str, **kwargs: Any) -> dict[str, Any]:
     return result
 
 
-def _compute(width: int, scale: float, margin: int = 8) -> int:
+def _compute(width: int, margin: int = 8) -> int:
     # 经子进程驱动 gui._compute_wraplength 本体（非本地复刻）——测试自实现被测逻辑是假绿
-    out = _wrap_call("compute", width=width, scale=scale, margin=margin)
+    out = _wrap_call("compute", width=width, margin=margin)
     assert out["ok"], out.get("error")
     return int(out["result"])
 
 
 class TestComputeWraplength:
-    # 锚点：(宽-边距)/缩放率 取整。1584 设备像素在 1.5× 下 ≈ 1050 逻辑像素——
-    # 与 2026-09-29 修复探针实测一致，数值固化防止折算公式漂移。
-    def test_device_to_logical_conversion(self) -> None:
-        assert _compute(1584, 1.5) == 1050
-        assert _compute(2008, 1.0) == 2000
-        assert _compute(3008, 2.0) == 1500
+    # 锚点：设备像素 - 边距 取整，下限 120。[阶段4] ttk wraplength = 原始设备像素
+    # （不随 tk scaling 缩放），旧 CTk 换算 (width-margin)/scale 已退役——历史锚点
+    # 1584@1.5→1050 在 150% DPI 下与新锚点 1584→1576 视觉等价（1050×1.5≈1576）。
+    def test_device_pixel_conversion(self) -> None:
+        assert _compute(1584) == 1576
+        assert _compute(2008) == 2000
+        assert _compute(3008) == 3000
 
     def test_floor_at_120(self) -> None:
         # 极窄容器逐字折行也好过 wraplength→0（0 = 不折行 = 回到两侧裁切）
-        assert _compute(50, 1.0) == 120
-        assert _compute(0, 2.0) == 120
-
-    def test_zero_or_negative_scale_treated_as_identity(self) -> None:
-        assert _compute(1008, 0) == 1000
-        assert _compute(1008, -1) == 1000
+        assert _compute(50) == 120
+        assert _compute(0) == 120
 
     def test_monotonic_in_width(self) -> None:
-        values = [_compute(w, 1.5) for w in (200, 400, 800, 1600)]
+        values = [_compute(w) for w in (200, 400, 800, 1600)]
         assert values == sorted(values)
 
 
-def _should_apply(current: int, new: int, scale_changed: bool) -> bool:
-    out = _wrap_call("should_apply", current=current, new=new, scale_changed=scale_changed)
+def _should_apply(current: int, new: int) -> bool:
+    out = _wrap_call("should_apply", current=current, new=new)
     assert out["ok"], out.get("error")
     return bool(out["result"])
 
@@ -203,24 +210,20 @@ class TestWrapShouldApply:
     # 无迟滞时「折行变高→滚动条翻转→宽度变→再折行」在阈值边界无限互振。
 
     def test_first_apply_always(self) -> None:
-        assert _should_apply(0, 300, False) is True
+        assert _should_apply(0, 300) is True
 
     def test_small_delta_suppressed(self) -> None:
-        assert _should_apply(780, 772, False) is False  # 8 ≤ max(12, 15)
-        assert _should_apply(300, 292, False) is False  # 8 ≤ 12
+        assert _should_apply(780, 772) is False  # 8 ≤ max(12, 15)
+        assert _should_apply(300, 292) is False  # 8 ≤ 12
 
     def test_significant_delta_applies(self) -> None:
-        assert _should_apply(780, 760, False) is True  # 20 > 15
-        assert _should_apply(300, 287, False) is True  # 13 > 12
+        assert _should_apply(780, 760) is True  # 20 > 15
+        assert _should_apply(300, 287) is True  # 13 > 12
 
     def test_threshold_is_relative_to_value(self) -> None:
         # 大值用 2%（更宽容），小值用 12px 下限——保证同一像素噪声在不同字号下都被吸收
-        assert _should_apply(1500, 1490, False) is False  # 10 ≤ 30
-        assert _should_apply(1500, 1460, False) is True  # 40 > 30
-
-    def test_scale_change_always_forces(self) -> None:
-        # 跨屏拖拽/系统 DPI 调整后换算基准变了，即便值几乎相同也必须重算一次
-        assert _should_apply(780, 779, True) is True
+        assert _should_apply(1500, 1490) is False  # 10 ≤ 30
+        assert _should_apply(1500, 1460) is True  # 40 > 30
 
 
 class TestSourceLocks:
@@ -270,27 +273,39 @@ class TestSourceLocks:
         ]
         assert not offenders, f"发现定宽 wraplength 调用点: {len(offenders)} 处"
 
-    def test_placeholder_factories_use_fill_and_bind(self) -> None:
-        # fill=tk.X 是自适应换行的前提（窗口宽由 packer 分配、与标签自请求解耦）；
-        # 工厂丢掉 fill 或绑定会让折行静默失效
+    def test_placeholder_factories_use_stretch_and_bind(self) -> None:
+        # fill/sticky=ew 是自适应换行的前提（窗口宽由布局器分配、与标签自请求解耦）；
+        # [阶段4] 占位改 grid 叠放（sticky="ew"），工厂丢掉拉伸或绑定会让折行静默失效
         for fn_name in ("_make_quality_placeholder", "_make_danmaku_placeholder"):
             fn = next(n for n in ast.walk(GUI_TREE) if isinstance(n, ast.FunctionDef) and n.name == fn_name)
             src = ast.get_source_segment(GUI_SOURCE, fn)
             assert src, f"{fn_name} 源码段提取失败"
-            assert "fill=tk.X" in src, f"{fn_name} 缺 fill=tk.X（自适应折行前提）"
+            assert 'sticky="ew"' in src, f"{fn_name} 缺 sticky=ew（自适应折行前提）"
             assert "_bind_adaptive_wraplength" in src, f"{fn_name} 缺自适应绑定"
 
-    def test_placeholder_factories_called_by_build_and_refresh(self) -> None:
-        # 初始构建与刷新重建两条路径都必须走工厂——只改构建路径的话，第一轮刷新后裁切复发
+    def test_placeholder_single_instance_toggled_by_refresh(self) -> None:
+        # [阶段4] 占位收敛为单实例：构建路径经工厂创建一次；刷新路径不再重建占位，
+        # 改为 grid_remove/grid 切换可见性——锁两件事：① 工厂只被构建页调用（文案唯一
+        # 的既有判据不变）② 刷新路径必须经 _show_*_placeholder 切换（占位与表格互斥，
+        # 直接 tree.grid()/grid_remove() 而漏掉占位会让空态文案残留）。
         pairs = {
-            "_make_quality_placeholder": ("_build_quality_page", "_update_quality_display"),
-            "_make_danmaku_placeholder": ("_build_danmaku_page", "_update_danmaku_display"),
+            "_make_quality_placeholder": ("_build_quality_page", "_show_quality_placeholder"),
+            "_make_danmaku_placeholder": ("_build_danmaku_page", "_show_danmaku_placeholder"),
         }
-        for factory, users in pairs.items():
-            for user in users:
-                fn = next(n for n in ast.walk(GUI_TREE) if isinstance(n, ast.FunctionDef) and n.name == user)
-                src = ast.get_source_segment(GUI_SOURCE, fn)
-                assert src and f"self.{factory}(" in src, f"{user} 未复用 {factory}"
+        for factory, (builder, toggler) in pairs.items():
+            build_fn = next(n for n in ast.walk(GUI_TREE) if isinstance(n, ast.FunctionDef) and n.name == builder)
+            build_src = ast.get_source_segment(GUI_SOURCE, build_fn)
+            assert build_src and f"self.{factory}(" in build_src, f"{builder} 未复用 {factory}"
+            # 刷新路径只允许经 toggle 触碰占位/表格可见性
+            refresh_fn = next(n for n in ast.walk(GUI_TREE) if isinstance(n, ast.FunctionDef) and n.name == toggler)
+            refresh_src = ast.get_source_segment(GUI_SOURCE, refresh_fn)
+            assert refresh_src and "grid_remove" in refresh_src and ".grid()" in refresh_src
+            update_fn_name = "_update_quality_display" if "quality" in factory else "_update_danmaku_display"
+            update_fn = next(
+                n for n in ast.walk(GUI_TREE) if isinstance(n, ast.FunctionDef) and n.name == update_fn_name
+            )
+            update_src = ast.get_source_segment(GUI_SOURCE, update_fn)
+            assert update_src and f"self.{toggler}(" in update_src, f"{update_fn_name} 未经 {toggler} 切换空态"
 
 
 class TestRealWindowWrap:

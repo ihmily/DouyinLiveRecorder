@@ -803,6 +803,7 @@
   "重连超过最大次数，与服务器断开连接: {reason}": "Reconnect attempts exceeded the maximum, disconnected from the server: {reason}",
   "钉钉推送失败, 推送地址：{masked_api}, 错误信息: {type_name}: {e}": "DingTalk push failed, push URL: {masked_api}, error: {type_name}: {e}",
   "界面主题": "UI Theme",
+  "跟随系统": "Follow System",
   "浅色": "Light",
   "深色": "Dark",
   "高对比度": "High Contrast",

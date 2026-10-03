@@ -82,7 +82,6 @@ _MUTABLE_MODULE_NAMES = frozenset(
         "aiohttp",
         "websockets",
         "PIL",
-        "customtkinter",
     }
 )
 # 字符串形态 patch("<名>.<路径>") 的判定子集：只取名单里确属标准库的那些名字。

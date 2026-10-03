@@ -59,7 +59,7 @@ exejs>=1.0.1              # PyExecJS 的活跃维护继任者，优先使用（s
 PyExecJS>=1.5.1           # 回退兼容：exejs 未安装时启用（已停止维护，仅作兜底）
 
 # ---------- GUI 图形界面（headless / Web 模式下非必需，但 pip 安装仍会拉取）----------
-customtkinter>=6.0.0      # 现代化 GUI 框架（圆角控件、深浅色主题、DPI 自适应）
+# [2026-10-03 阶段5] customtkinter 已随 UI 现代化阶段4（tkinter.ttk 自研控件层）摘除
 pystray>=0.19.5           # 系统托盘图标（GUI / Web 托盘模式；0.19.5 起 macOS 改用 PNG 替代 TIFF）
 Pillow>=12.3.0            # 图像处理（托盘图标生成 / 缩略图）
 

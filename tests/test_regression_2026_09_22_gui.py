@@ -32,7 +32,9 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 GUI_SOURCE = (ROOT / "gui.py").read_text(encoding="utf-8")
 PENDING_GUI_JSON = ROOT / "_i18n_pending_gui.json"
 
-gui = pytest.importorskip("gui", reason="customtkinter 未安装时跳过 GUI 无头用例（环境限制口径）")
+gui = pytest.importorskip(
+    "gui", reason="gui 导入失败时跳过 GUI 无头用例（环境限制口径；阶段5 起 gui 已不依赖 customtkinter)"
+)
 
 
 # 把 gui 模块里引用的 stdlib 名字换成浅拷贝替身：直接改 `gui.sys` / `gui.ctypes` 的**属性**

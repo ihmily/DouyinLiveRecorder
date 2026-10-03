@@ -2759,6 +2759,9 @@ msgstr "钉钉推送失败, 推送地址：{masked_api}, 错误信息: {type_nam
 msgid "界面主题"
 msgstr "界面主题"
 
+msgid "跟随系统"
+msgstr "跟随系统"
+
 msgid "浅色"
 msgstr "浅色"
 

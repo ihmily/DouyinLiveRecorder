@@ -91,9 +91,9 @@
 
 - **项目名称**: DouyinLiveRecorder (抖音直播录制器)
 - **版本**: 4.5.0
-- **作者**: Hmily
+- **作者**: y123ao6
 - **开源协议**: MIT
-- **项目地址**: [GitHub](https://github.com/ihmily/DouyinLiveRecorder)
+- **项目地址**: [GitHub](https://github.com/y123ao6/DouyinLiveRecorder)
 
 ### 功能特性
 
@@ -143,7 +143,7 @@
 | FFmpeg | 视频录制与转码 |
 | Node.js + exejs/PyExecJS | 运行 JavaScript 签名算法（exejs 优先，PyExecJS 回退） |
 | Loguru | 结构化日志 |
-| CustomTkinter + pystray + Pillow | GUI 图形界面与系统托盘 |
+| tkinter.ttk + pystray + Pillow | GUI 图形界面与系统托盘 |
 | Starlette + uvicorn | Web 管理面板后端 |
 | HTML + CSS + JavaScript | Web 管理面板前端 |
 | Docker | 容器化部署 |
@@ -236,6 +236,7 @@ DouyinLiveRecorder/
 │   ├── web_config.py                   # Web 面板配置读写（不依赖 Web 框架）
 │   ├── web_tray.py                     # Web 模式系统托盘（Windows 最小化到托盘）
 │   ├── ui_theme.py                     # GUI 主题层（语义 token + 多主题 + ttk 注册 + 持久化 + 对比度机检）
+│   ├── ui_kit.py                       # GUI 控件工厂（ttk 变体样式映射 + Treeview 增量表格）
 │   ├── http_config.py                  # HTTP 客户端共享运行时配置（SSL 验证开关）
 │   ├── async_http.py                   # 异步 HTTP 客户端 (httpx)
 │   ├── sync_http.py                    # 同步 HTTP 客户端
@@ -279,7 +280,7 @@ DouyinLiveRecorder/
 ├── ffmpeg/                              # FFmpeg 二进制目录（Windows，git 忽略 exe）
 ├── node/                                # Node.js 二进制目录（Windows，git 忽略）
 ├── main.py                              # 命令行入口
-├── gui.py                               # GUI 图形界面入口（CustomTkinter）
+├── gui.py                               # GUI 图形界面入口（tkinter.ttk + src/ui_kit）
 ├── web.py                               # Web 管理面板入口
 ├── i18n.py                              # 国际化实现（print 翻译包装）
 ├── msg_push.py                          # 消息推送模块
@@ -964,9 +965,7 @@ def host_of(url: str) -> str: ...
 | distro | >=1.9.0 | Linux 发行版检测 |
 | tqdm | >=4.69.0 | 下载进度条 |
 | exejs | >=1.0.1 | JavaScript 执行引擎（PyExecJS 的活跃维护继任者，优先使用） |
-| PyExecJS | >=1.5.1 | JS 执行引擎回退兼容（exejs 未安装时使用） |
-| customtkinter | >=6.0.0 | 现代化 GUI 框架 |
-| pystray | >=0.19.5 | 系统托盘（GUI / Web 托盘模式） |
+| PyExecJS | >=1.5.1 | JS 执行引擎回退兼容（exejs 未安装时使用） || pystray | >=0.19.5 | 系统托盘（GUI / Web 托盘模式） |
 | Pillow | >=12.3.0 | 图像处理（托盘图标生成） |
 | starlette | >=1.3.1 | ASGI 框架（`src/web_api.py` 阶段2 由 FastAPI 迁移为直接依赖 Starlette 驱动；下限 0.49.1→1.0.1→1.3.1 见 CVE/PYSEC 说明） |
 | uvicorn[standard] | >=0.51.0 | ASGI 服务器 |
@@ -1283,7 +1282,7 @@ python build_exe.py --dual       # 同时生成 lite（无运行时）与 full�
 
 **数据文件与隐藏导入**：
 
-- `datas`：`src/javascript`（JS 签名脚本）、`i18n`（翻译）、`web`（前端静态资源），均经 `__file__` 定位，PyInstaller 自动收进 `_internal/`；`collect_data_files('customtkinter')`（主题 JSON）。
+- `datas`：`src/javascript`（JS 签名脚本）、`i18n`（翻译）、`web`（前端静态资源），均经 `__file__` 定位，PyInstaller 自动收进 `_internal/`。
 - `config/` 不进 `_internal`，由 `copy_external_binaries()` 复制到 exe 同级（见目录规范）。
 - `hiddenimports`：`i18n`、`src.async_http`（main.py 经 `__import__` 动态导入）、`h2`（httpx[http2] 懒加载）；`a_web` 额外 `collect_submodules('uvicorn')`（协议模块按字符串导入）。
 - `excludes`：CLI 排除 GUI/Web 库（tkinter/customtkinter/pystray/PIL/fastapi/uvicorn/starlette）；GUI 排除 Web 库；Web 排除 GUI 库；三个入口均额外排除 `brotlicffi`（修复打包后 brotlicffi 模块缺失 `error` 属性的报错，httpx 无 brotli 时自动回退）。
@@ -1306,7 +1305,7 @@ dist/DouyinLiveRecorder/
 ├── downloads/                       # 默认下载目录（config.ini 未指定时位于 exe 同级）
 ├── backup_config/                   # 配置备份目录（exe 同级）
 └── _internal/                       # 依赖包 + src/ 及打包资源统一管理
-    ├── (Crypto/ PIL/ certifi/ h2/ pydantic/ customtkinter/ watchfiles/ websockets/ yaml/ + 运行库 .dll)
+    ├── (Crypto/ PIL/ certifi/ h2/ watchfiles/ websockets/ yaml/ + 运行库 .dll)
     ├── src/            src/javascript/
     ├── i18n/
     └── web/
@@ -1623,6 +1622,48 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 > 脚本直跑时额外输出 `VERIFICATION_RESULT: {"platform":..., "status":..., ...}` 结构化一行供机器解析。
 > 脚本：`tests/test_{bili,douyin,douyu,huya,twitch}_live_collector.py`（`python file.py <URL> [秒数]`，
 > 需活房间 + 外网，默认人工通道）。
+
+### v4.5.0-dev (2026-10-03) — UI 阶段5 收尾：customtkinter 依赖整体摘除 + 打包链清理 + 体积基线 + xvfb 常态化
+
+> 工作包来源：`PROPOSAL_2026-09-29_ui-modernization.md` §6 阶段5 + 工作日志 §2.5；2026-10-03 用户指令启动。范围：依赖摘除（gui.py CTk 残留替代 / requirements / pyproject / typings 存根 / build_exe 收集）、`--smoke` 三入口冒烟、体积复测（补阶段0 基线）、xvfb 评估与落地。
+
+- **gui.py 去 CTk 化（兼容契约保持）**：`root = tk.Tk()`、两处 `CTkToplevel`→`tk.Toplevel`（bg 随主题 token；**标题栏跟随系统明暗为登记在案的观感边界**——自绘暗色标题栏需 dwmapi 额外接入，未纳入）；`CTkFont`→`tkfont.Font` **负数点值**（CTk size 语义 = 100% DPI 逻辑像素，1pt=4/3px@100%，按 3/4 折算逐档等价且随 `tk scaling` 跨 DPI 自动缩放；正数像素值不缩放、高 DPI 偏小，禁用），`Fonts.mono()` 元组同步转 `-8` 点值；`_THEME_CTK_MODE`/`_ctk_mode_to_theme` 退役，「跟随系统」改 `ui_theme.detect_system_appearance()`（win32 读注册表 `AppsUseLightTheme` / darwin 走 `defaults read` / 其余浅色兜底，任何失败回 light 不阻断启动）；新增 `_apply_root_chrome()` 按 token 上 root 底色（承接 CTk root 外观底色职责）。
+- **依赖摘除三处同批**：`requirements.txt`、`pyproject.toml`（运行时清单 + `.[gui]` extra 双处）、`typings/customtkinter/` 存根目录删除（README 双语目录树同步）；`uv.lock`/`DouyinLiveRecorder.egg-info` 经 `sync_metadata.py` 重生成（双侧包名集合回归锁动态比对、无需改锁）。venv 内 customtkinter 本体**未卸载**（批量卸装属用户终端动作，红线口径）——零 import 后对门禁与产物无影响。
+- **build_exe.py**：移除 `collect_data_files('customtkinter')`（无资源可收）；excludes 里的 `'customtkinter'` 条目按 fastapi 同款防御口径**保留**（防 venv 残留回渗打包）。
+- **打包与体积（阶段0 缺失基线补齐）**：`build_exe.py --smoke --no-zip --no-runtime` 三入口（CLI/Web/GUI）冒烟全过（GUI 真窗运行 8s 无 FATAL_MARKERS），`_internal/` 逐项核对**零 CTk 条目**；`report_bundle_size.py` 实跑读数 **91.81 MB / 224 文件**（大头：exe 本体 32.28、numpy 26.29、python314.dll 6.48、libcrypto 5.74、Tcl/Tk 5.28），工具链泄漏检查未发现——读数与历史口径一并落 `docs/agent-reference/measured-evidence.md`。
+- **xvfb 常态化（评估后落地）**：test job 的 apt 步骤加装 xvfb，`Run pytest with coverage` 改为 `xvfb-run -a` 包裹——真 Tk 集成用例（wrap_hints 真窗/压力、ui_theme TestApplyTtk、ui_kit 浮层编辑器）在 CI 从 skip 变为真实执行；按 MID-2264 反 skip 口径加「Tk 开显示」兜底步骤（xvfb 失效当场红，防真窗用例静默消失）。落地依据：阶段4/5 实证真窗用例抓到两个无头不可见的真 bug（ttk 无控件级 `-font`、CTk configure 静默忽略 cnf 字典）。
+- **门禁读数（最终修订之后）**：`run_gates.py` **10/10 全绿**（内置 pytest 兜底 3993 passed / 0 警告）；全量 `pytest --cov` **3993 passed / 14 skipped / 0 警告**（14 条 skip 全为平台条件性，真窗用例本机 0 skip）；`check_coverage.py` **47 模块全部达标**（84.70%）；`mypy` **207 files 0 issues**；`basedpyright` **0/0/0**。
+- **文档同源**：AGENTS.md 四处条目更新（typings 存根现存量①处、`.[gui]` 两包、GUI 两包下限、wraplength 坑位换 ttk 依据）；本文件与 CODE_WIKI_EN 同条目；工作日志 §0/§2.5/§4 收账。
+- **DoD 第 2 步（真机）**：GUI 侧已由冻结产物冒烟（GUI exe 真窗 8s）+ 真窗回归锁覆盖；录制链路本批零改动。CI 首跑验证项（xvfb test job / mypy 2.4.0 consts）交由下一次 push 的 CI 实跑确认。
+
+| UI 阶段5 收尾 | 改动 `gui.py`（root/Toplevel/Fonts/主题回调去 CTk 化 + `_apply_root_chrome`）、`src/ui_theme.py`（+`detect_system_appearance`）、`src/ui_kit.py`（头注释）、`requirements.txt`/`pyproject.toml`（摘 customtkinter ×2 处）、`build_exe.py`（-collect_data_files）、`typings/customtkinter/`（删除）、`README.md`/`README_EN.md`（目录树 -1 行）、`.github/workflows/ci.yml`（xvfb 三步）、`tests/test_gui_wrap_hints.py`（真窗分支转原生控件 + tk scaling 风暴源）、`tests/test_test_hygiene.py`（名单 -1）、`tests/test_danmaku_monitor.py`/`tests/test_regression_2026-09-22_gui.py`（importorskip 理由文案）；生成物 `uv.lock`/`DouyinLiveRecorder.egg-info` 经 `sync_metadata.py` 重生成；文档 `AGENTS.md` ×4、本条目（中英同步）、`measured-evidence.md` +体积读数、工作日志收账。一次性脚本 0 个（打包走既有入口） |
+
+### v4.5.0-dev (2026-10-03) — UI 阶段4 GUI 控件层：CTk → ttk 逐页替换 + `src/ui_kit.py` 工厂 + Treeview 增量表格 + 「界面主题」单入口
+
+> 工作包来源：`PROPOSAL_2026-09-29_ui-modernization.md` §3.3/§5.3（已获批规格），工作日志 §2.4 待办；2026-10-03 用户指令启动。范围：`src/ui_kit.py` 新建 + gui.py 六处（控制台/画质监控/弹幕监控/URL 配置/运行日志/高级设置）+ 侧边栏逐页替换；「外观模式/界面主题」两菜单统一；表格改 Treeview 验「不再闪烁、点击不落空」。兼容契约逐字保持：`LiveRecorderGUI`/`SystemTray`/`AdvancedSettingsWindow`/`Colors`/`Fonts`/`_quality_alert_expired` 符号与签名不变、`import gui` 无头导入、录制链/web_config/调度一行不动。
+
+- **架构落点（颜色不进工厂）**：`src/ui_kit.py`（约 430 行）提供 `Frame`/`Label`/`Button`/`Menu`/`EditorText`/`terminal_text` 六个 CTk 兼容工厂 + `DataTable` 表格封装；**全部配色由 ui_theme 按 token 注册的 ttk 变体样式派生**（`Card.TFrame`/`Alt.TFrame`/`Primary.TFrame`/`Muted.TLabel`/`Success.TButton`/`Ghost.TButton`/`Nav.TButton`/`NavActive.TButton` 等），主题切换由 ttk 全局样式统一重绘，调用方以 `variant=` 字符串选样式、不得直写颜色；`Colors.TERMINAL_*` 是唯一例外（刻意的主题无关终端配色，经 `terminal_text()` 以 tk 控件落地）。ui_theme 同批扩展：`_shade()` 由基础槽位派生悬停色、Treeview `rowheight=32`、Combobox 下拉弹层经 option DB 上色、对比度契约 +3 对（`primary/surface_alt`、`on_primary/success`、`on_primary/danger`，均 4.5）。
+- **两处机制性实测裁定**（探针脚本已删，结论由注释与测试锚点固化）：① **ttk 的 wraplength 是原始设备像素**（Tk 9.0 实测：`tk scaling`×2 后同值 reqwidth 恒定），`_compute_wraplength` 去掉 CTk 时代的缩放率除法（旧锚点 1584@1.5→1050 与新锚点 1584→1576 在 150% DPI 视觉等价），`ScalingTracker` 依赖退役；② **ttk.Button 无控件级 `-font`**（TclError），经 `font_style()` 按「变体样式+字体」缓存派生样式并**显式复制**基础变体的静态配置与状态映射（实测多段样式名的 configure/map 跨段回退不可靠）。
+- **DataTable 行级增量更新**：`sync(keys, values, tags)` 按 key 差异化 `insert/delete/item/move`——未变化行零触碰、顺序错位才 move（不重建行对象），从结构上消灭旧 `CTkScrollableFrame` 每轮 destroy+重建的闪烁与点击落空；行 key 直接用业务键（含空格的「序号N 主播名」，tkinter 参数化调用安全）。每行「切换画质」用 Treeview 单元格 bbox 浮层 readonly Combobox 实现（tkinter 官方 editable-cell recipe）：点击弹出、初值=该行当前画质（`_quality_row_setq` 随 sync 缓存）、选中即走既有 `_on_room_quality_change`（未保存裁决/反查写回全复用），`.set()` 不触发回调的语义与 CTkOptionMenu 一致。旧 `_add_quality_header_row`/`_add_quality_data_row`/`_add_danmaku_header_row`/`_add_danmaku_data_row` 四方法删除，表头由 Treeview headings 承担；行级着色（降级红/断连灰）经 tag 由 `_sync_table_tags()` 按 token 配置——Treeview tag 是行级的，旧「逐格着色」不可表达，✓/⚠ 字形保留状态语义；空态占位改单实例 grid 叠放切换（不再每轮重建）。
+- **菜单统一**：侧边栏「外观模式」（跟随系统/浅色/深色，硬编码中文遗留）移除，「界面主题」成为唯一明暗/对比度入口——新增「跟随系统」选项（i18n 四目录 +1 条，.mo 重编 861 条）：按当前系统明暗落 light/dark，并把 `[GUI] gui_theme` **写空值**（`load_theme_preference` 对空值按「未设置」处理 → 下次启动继续跟随）；三个显式主题即选即持久化。`_on_theme_change` 收编「跟随系统」分支；root/Toplevel 仍是 CTk，`_THEME_CTK_MODE` 继续驱动窗体明暗（依赖摘除归阶段5）；`_sync_theme_extras()` 在主题切换后重上色三类 tk 控件（Canvas 圆点 token 化、两表行标记、两编辑器）。
+- **真机验证（DoD 第 2 步，真窗已执行）**：本机桌面实跑一次性驱动（已删）——完整 GUI 构建、五页切换（`_current_page` 逐页核对 + 导航选中态落带字体的派生样式）、画质表注入两行（降级行 `downgraded` 标记、占位隐藏）、**浮层编辑器点击弹出→初值「原画」→提交「高清」→ URL_config 副本写入「高清,URL,主播A」→ 日志「画质已切换」** 全链成立、弹幕表断连标记、dark 主题持久化（config 副本）、编辑器 fg 跟随 token、跟随系统写空值、空态占位回切。真窗回归锁（`tests/test_gui_wrap_hints.py` 窄容器折行 + DPI 翻转压力）在新 GUI 上 0 skip 全绿；压力采集面扩为 ttk.Label+CTkLabel（共存期）。
+- **门禁读数（最终修订之后）**：`run_gates.py` **10/10 全绿**（内置 pytest 兜底 3993 passed / 0 警告）；全量 `pytest --cov` **3993 passed / 14 skipped / 0 警告**（净增 12 条：`tests/test_ui_kit.py` 11 条——sync 增量六格+空格 key+结构锁+真窗浮层编辑器/派生样式，及 wrap_hints 新锚点）；`check_coverage.py` **47 模块全部达标**（ui_kit 入列，总覆盖 84.90%）；`mypy` **207 files 0 issues**（新文件入扫描面）；`basedpyright` **0/0/0**。**变异验证**：`DataTable.sync` 改回「整表删除重建」→ 行级增量锁 5 条当场转红 → 按字节还原 → 复绿（`MUTATION-UDDT`，驱动落 %TEMP% 已删）。
+- **文档与配置同源**：AGENTS.md「已知坑 · GUI」+1 条（ttk 适配三坑：wraplength 设备像素、Button 无控件级 font、CTk configure 静默忽略 cnf 字典）；本文件与 CODE_WIKI_EN 同条目；工作日志 `PROPOSAL_2026-09-29_ui-modernization-work.md` §2.4 收账。**本批未做**（阶段5 范围）：customtkinter 依赖摘除与 `build_exe.py` 数据收集清理、体积复测、xvfb 常态化评估。
+
+| UI 阶段4 控件层 | 新增 `src/ui_kit.py`（约 430 行）+ `tests/test_ui_kit.py`（11 用例）；改动 `gui.py`（六处页面 + 侧边栏 + 主题回调 + wraplength 公式）、`src/ui_theme.py`（+15 变体样式 + 3 契约对 + option DB + _shade）、`tests/test_gui_wrap_hints.py`（新锚点 + 占位单实例锁 + 压力采集面）、`tests/test_gui_tail_robustness.py`（桩面换 DataTable 接口）、`i18n` 四目录各 +1 条并重编 `zh_CN.mo`（861 条）；文档 `AGENTS.md` +1 条、本条目（中英同步）、工作日志收账。一次性脚本 2 个（真窗冒烟驱动 + 变异验证驱动）均落 `%TEMP%`，收尾已删 |
+
+### v4.5.0-dev (2026-10-03) — `[tool.mypy].exclude` 目录名锚定：修掉裸 `"ffmpeg"`/`"node"` 子串误伤，12 个失明文件首次进无参 mypy 门禁
+
+> 工作包来源：`PROPOSAL_2026-10-03_linux-arm64-ffmpeg-rulings.md` §二.5（R-8，原「待维护者决策」的两项顺手修之一，2026-10-03 获开工指令）。mypy 的 `exclude` 是 `re.search` 对「相对路径 + 正斜杠归一、目录补尾 `/`」的**子串**匹配，裸目录名会把模块名含该词的源码整个排除出门禁；black（只命中目录段）/ isort（按名）/ basedpyright（目录 glob）的同名排除均无此误伤。
+
+- **修复内容**：`pyproject.toml [tool.mypy].exclude` 的 `"node"` → `"(^|/)node/"`、`"ffmpeg"` → `"(^|/)ffmpeg/"`（目录段锚定，跨平台等价——mypy 归一路径恒用正斜杠），并在清单注释写明「新增排除项一律写锚定形态」。逐文件枚举确认修复面：裸 `"ffmpeg"` 误伤 `src/ffmpeg_*` ×4 + `tests/test_ffmpeg_*` ×6 共 **10** 个文件、裸 `"node"` 误伤 `src/node_install.py` + `tests/test_node_install.py` 共 **2** 个（node 误伤属本轮新发现，AGENTS.md 原条目未记录）；其余裸名条目（`downloads`/`recordings`/`logs`/`backup_config`/`typings` 等）经全量枚举无 `.py`/`.pyi` 路径碰撞，维持原样、不扩大 diff。
+- **新暴露的 8 处存量错误（全在测试替身，src/ 侧零错误）**：① 4 处「恒回 False 的 `__exit__` 标注 `-> bool`」触发 mypy `[exit-return]`——改 `-> None`（falsy 语义不变，不抑制异常的行为逐字等价），`tests/test_ffmpeg_install.py` 的 `_Resp`/`_Bar` 与 `tests/test_node_install.py` 的 `_FakeResponse`/`_DummyTqdm`；② 4 处「lambda 消费 `list.append` 返回值」（`LIST.append(x) or False` / `(calls.append(url), resp)[1]` 形态）触发 `[func-returns-value]`——改嵌套 def（`*args: Any, **kwargs: Any` 按转发桩口径注解），行为逐字等价。
+- **回归锁（新增安全不变量，变异验证必做）**：`tests/test_run_gates.py::test_mypy_exclude_never_shadows_source_files`——从 pyproject 解析 `[tool.mypy].files` 扫描面（206 个 `.py`/`.pyi`），断言**任何 exclude 模式都不得子串命中扫描面内源文件**（语义锁，不钉 `^ffmpeg/` 与 `(^|/)ffmpeg/` 的写法差异）；带三重反假绿见证（exclude ≥10 项、扫描面 ≥200 文件、两个曾经的失明家族文件必须在枚举集内）。**变异验证 PASS**：pyproject 改回裸 `"ffmpeg"`（带 `MUTATION-MYPYEXCL` 标记）→ 用例 1 failed；按字节还原（断言 `read_bytes()==原字节`）→ 复跑 1 passed；驱动脚本落 `%TEMP%` 收尾已删。
+- **门禁读数（最终修订之后执行）**：无参 `mypy` 193→**205 source files**（+12 恰为枚举集合）0 issues——本机 venv **mypy 2.4.0** 与 CI 钉定 **2.3.1**（`pip install --target` 装临时目录交叉验证，项目 venv 未动）各跑一遍均全绿，版本差异按「本地门禁外推前提」条目口径完成复核；`run_gates.py` **10/10 全绿**（38.2s，顺带补上 arm64 批次「未端到端复跑」欠账）；`pytest` **3979 passed / 14 skipped / 0 警告**；`check_coverage.py` **46 模块全部达标**（总覆盖 85.02%）；`basedpyright` **0 error / 0 warning / 0 note**。black/isort 对全部改动文件 unchanged。
+- **文档同源**：`AGENTS.md`「已知坑 · 类型检查」对应条目改写为「运行时二进制目录条目必须写目录段锚定形态 `(^|/)<名>/`，禁止裸名」的硬约束（含 `[历史注]` 保留修复前 189/190 source files 实测读数与已退役的「显式传参 + basedpyright」代偿口径）；本条目（中英同步）。
+- **DoD 第 2 步豁免**：本批只动类型门禁配置与测试替身的标注/形态，不涉及录制链路 / 选源 / ffmpeg 参数 / 平台解析的运行时行为。
+
+| mypy exclude 目录名锚定 | 改动 `pyproject.toml`（2 条 exclude + 注释）、`tests/test_ffmpeg_install.py`（5 处替身修复）、`tests/test_node_install.py`（3 处替身修复）、`tests/test_run_gates.py`（+1 语义锁）、`AGENTS.md`（1 条改写）；本条目（中英同步）。一次性脚本 1 个（变异验证驱动）落仓库外 `%TEMP%`，收尾已删 |
 
 ### v4.5.0-dev (2026-10-03) — B站移动端分享短链（b23.tv）接入：纯数字直取归一 + 短码 302 跟随解析（进程内缓存），复用桌面解析链路
 

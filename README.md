@@ -40,7 +40,7 @@
 
 ### 方式一：下载运行包（推荐新手）
 
-1. 进入 [Releases](https://github.com/ihmily/DouyinLiveRecorder/releases) 下载最新发布的 zip 压缩包。
+1. 进入 [Releases](https://github.com/y123ao6/DouyinLiveRecorder/releases) 下载最新发布的 zip 压缩包。
    每个平台各出 **lite**（不含内置 ffmpeg/node，首启时程序尝试自动获取）与 **full**（内置运行时）两包。
    附件名的**平台段**由 `build_exe.make_zip()` 取 `sys.platform` 经 `{"win32": "windows", "darwin": "macos"}`
    归一（其余一律归 `linux`），**架构段**才是 `platform.machine().lower()` 的实际取值：
@@ -215,7 +215,6 @@ DouyinLiveRecorder/
 │   ├── app.js                  # 前端逻辑（API、SSE、渲染）
 │   └── style.css               # 样式表（主题、响应式）
 ├── typings/                    # 第三方库类型存根（静态检查用）
-│   ├── customtkinter/          # customtkinter 存根
 │   ├── execjs/                 # PyExecJS 存根
 │   └── pystray/                # pystray 存根
 ├── scripts/                    # 工程辅助脚本
@@ -726,7 +725,7 @@ docker run -d -v ./config:/app/config -v ./downloads:/app/downloads \
 - 标签形态：`latest` 与 `vX.Y.Z`；`latest` 只随 `v*` tag 产出，不开放手动触发覆盖。
   两个分架构 tag（`:vX.Y.Z-amd64` / `-arm64`）属合成前的中间产物，当前不会自动清理。
 - 匿名拉取要求该 GHCR 包的可见性为 **public**——那是仓库设置层面的一次性人工动作。
-- 与 `docker-compose.yaml` 里的 `image: ihmily/douyin-live-recorder:latest` **刻意不同源**：compose 走
+- 与 `docker-compose.yaml` 里的 `image: y123ao6/douyin-live-recorder:latest` **刻意不同源**：compose 走
   `pull_policy: build` 就地构建（不拉 registry 上的同名镜像），上面「快速启动」的说明保持不变；
   要用 GHCR 预构建镜像请按上面的 `docker run`，arm64 主机走 compose 就地构建同样可行。
 

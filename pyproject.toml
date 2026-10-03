@@ -67,7 +67,7 @@ dependencies = [
     "socksio>=1.0.0",
     "exejs>=1.0.1",
     "PyExecJS>=1.5.1",
-    "customtkinter>=6.0.0",
+    # [2026-10-03 阶段5] customtkinter 已随 UI 现代化阶段4（tkinter.ttk 自研控件层）摘除
     "pystray>=0.19.5",
     "Pillow>=12.3.0",
     # starlette 下限 >=1.3.1：兼顾 CVE-2026-48710（受影响 <=1.0.0）与 PYSEC-2026-2280/2281
@@ -102,7 +102,6 @@ dev = [
     "pre-commit>=3.6.0",
 ]
 gui = [
-    "customtkinter>=6.0.0",
     "pystray>=0.19.5",
     "Pillow>=12.3.0",
 ]
@@ -238,10 +237,14 @@ files = [
     "scripts",
     "tests",
 ]
-# 排除目录（正则子串匹配；本地工具生成目录与 .gitignore/.dockerignore 同源维护）
+# 排除目录（正则 re.search 按「相对路径 + 正斜杠归一 + 目录补尾 /」的子串匹配；本地工具生成目录
+# 与 .gitignore/.dockerignore 同源维护）。运行时二进制目录必须锚定成目录段形态 (^|/)<名>/：
+# 裸名字会按子串命中任何含该名字的模块路径——裸 "ffmpeg" 曾把 src/ffmpeg_*.py 与
+# tests/test_ffmpeg_*.py 共 10 个文件整个排除在无参 mypy 门禁外（2026-10-03 锚定修复），裸 "node"
+# 同理误伤 node_install 两文件。其余条目现无 .py 路径碰撞，维持裸名；新增排除项时一律写锚定形态。
 exclude = [
-    "node",
-    "ffmpeg",
+    "(^|/)node/",
+    "(^|/)ffmpeg/",
     # 运行期产物目录（与 .gitignore/.dockerignore 同源维护）
     "downloads",
     "recordings",

@@ -12,8 +12,8 @@
 | **1 前端动效** | 动效四件套 | ✅ 完成 | ✅ 已验证（前端） | `web/motion.js` + `style.css` 动效段 + `index.html` canvas；`node --test tests/frontend/*.mjs` 65/65 全绿 |
 | **2 后端换框架** | FastAPI → Starlette | ✅ 完成 | ✅ 已验证（运行期全绿） | `run_gates.py` 8/8、pytest 3248 passed/0 警告、覆盖率 83.98% 全达标、basedpyright 0/0；运行期抓出并修复 2 处接线错误（详见 §1.2/§1.3） |
 | **3 GUI 主题层** | 多主题 + 切换 + 持久化 | ✅ 完成 | ✅ 已验证（含真窗冒烟） | `src/ui_theme.py`（13 槽位/3 主题/对比度机检/幂等切换/持久化）+ `gui.py` 主题菜单 + `tests/test_ui_theme.py` 34 用例；详见 §1.4 |
-| **4 GUI 控件层** | CTk → ttk | ⬜ 未启动 | — | `src/ui_kit.py` + 逐页替换（控制台→画质监控→弹幕监控→URL 配置→运行日志→高级设置）待做；统一「外观模式/界面主题」两菜单 |
-| **5 收尾** | 依赖/打包/文档 | ⬜ 未启动 | — | `build_exe.py` 排除项与 `--smoke`、体积复测待做 |
+| **4 GUI 控件层** | CTk → ttk | ✅ 完成 | ✅ 已验证（含真窗冒烟） | `src/ui_kit.py`（工厂+DataTable）+ gui.py 六处逐页替换 + 侧边栏（「界面主题」单入口）+ `tests/test_ui_kit.py` 11 用例；详见 §2.4 |
+| **5 收尾** | 依赖/打包/文档 | ✅ 完成 | ✅ 已验证（打包冒烟 + 体积读数） | customtkinter 摘除（清单/typings/build_exe）、`--smoke` 三入口全过、体积 91.81MB/224 文件（阶段0 基线补齐）、xvfb 常态化；详见 §2.5 |
 
 ---
 
@@ -159,17 +159,25 @@
 
 ~~待做~~ 已交付：`src/ui_theme.py` + `tests/test_ui_theme.py`（34 用例）+ `gui.py` 主题菜单与持久化 + `config/config.ini` 模板 `[GUI]` 节 + README/i18n 同步。
 
-### 2.4 阶段4 — GUI 控件层（未启动）
+### 2.4 阶段4 — GUI 控件层（✅ 已完成，2026-10-03）
 
-- 待做：`src/ui_kit.py`（tkinter.ttk 自研 UI Kit）；按 控制台 → 画质监控 → 弹幕监控 → URL 配置 → 运行日志 → 高级设置 逐页替换 CustomTkinter 控件；表格改 Treeview 后重点验「不再闪烁、点击不落空」。
-- UI Kit 与 CTk 可共存（同为 Tk 控件树），按页切换、任一页可单独回退。
+~~待做~~ 已交付（用户指令启动，单批完成六处替换）：
 
-### 2.5 阶段5 — 收尾（未启动）
+- **`src/ui_kit.py`**（约 430 行）：`Frame`/`Label`/`Button`/`Menu`/`EditorText`/`terminal_text` 六个 CTk 兼容工厂 + `DataTable`（Treeview 行级增量更新 + 单元格浮层编辑器）。颜色一律不进工厂——由 ui_theme 按 token 注册的 15+ 个 ttk 变体样式派生，主题切换经全局样式统一重绘。
+- **gui.py**：控制台/画质监控/弹幕监控/URL 配置/运行日志/高级设置 + 侧边栏全部换 ui_kit；画质/弹幕表头与数据行四方法删除（headings + `sync()` 承担）；占位改单实例叠放；`_compute_wraplength` 去缩放除法（ttk wraplength=设备像素，Tk 9.0 探针实测）、`ScalingTracker` 退役；「外观模式」菜单移除，「界面主题」加「跟随系统」（写空值 = 清显式偏好）；`_sync_theme_extras()` 收编 Canvas/行标记/编辑器的主题跟随。
+- **ui_theme**：+15 变体样式、`_shade()` 悬停派生、Treeview rowheight、Combobox 下拉 option DB、对比度契约 +3 对（light/dark 的 `success` token 随之加深 #16A34A→#15803D，白字达 AA 4.5；`gui.Colors.SUCCESS` 同批统一）。
+- **两处实测裁定**：ttk.Button 无控件级 `-font`（`font_style()` 派生样式解决）；CTk 控件 configure 静默忽略 cnf 位置字典（真窗回归锁抓出，改回命名参数直传）。
+- **验证**：`run_gates.py` 10/10；pytest 3993 passed/0 警告（净增 12 条，含 `tests/test_ui_kit.py` 11 条与真窗压力锁在新 GUI 上 0 skip）；覆盖率 47 模块达标（84.90%）；mypy 207 files / basedpyright 0/0/0；变异验证（sync 改回整表重建 → 5 条锁转红 → 字节还原）；真窗冒烟全链成立（五页切换/降级标记/浮层编辑器提交写回 URL_config/主题持久化/跟随系统写空值）。详见 CODE_WIKI 同日条目。
 
-- ~~依赖集合回归锁复跑~~（`tests/test_regression_2026_09_22_gates.py`）：已随 §1.3 实测通过（删 fastapi/pydantic 后 `uv.lock`/`egg-info` 经 `sync_metadata.py` 重建，两侧相等）。
-- `build_exe.py`：移除 `collect_data_files('customtkinter')` 与 CTk 相关排除项（属阶段4 之后）；`--smoke` 三入口冒烟。
-- `scripts/report_bundle_size.py` 体积复测（补阶段0 缺失读数；本机 `dist/` 当前为空）。
-- `python scripts/run_gates.py` 全绿 + `pytest`（0 警告）作为整体完成判据。
+### 2.5 阶段5 — 收尾（✅ 已完成，2026-10-03）
+
+~~未启动~~ 已交付（用户指令启动，单批完成）：
+
+- **customtkinter 依赖摘除**：requirements.txt、pyproject.toml（运行时 + `.[gui]` 双处）、`typings/customtkinter/` 存根、README 双语目录树；`uv.lock`/egg-info 经 `sync_metadata.py` 重生成。gui.py 的 CTk 残留同批替代：root=`tk.Tk`、Toplevel=`tk.Toplevel`（标题栏跟随系统 = 登记的观感边界）、`CTkFont`→点值 `tkfont.Font`（3/4 折算，随 DPI 自动缩放）、`_THEME_CTK_MODE`/`_ctk_mode_to_theme` 退役、「跟随系统」走 `ui_theme.detect_system_appearance()`（win32 注册表 / darwin defaults / 失败回 light）、`_apply_root_chrome()` 上 root 底色。
+- **build_exe.py**：移除 `collect_data_files('customtkinter')`；excludes 的 customtkinter 条目按 fastapi 防御口径保留。`--smoke --no-zip --no-runtime` 三入口全过，`_internal/` 零 CTk 条目。
+- **体积基线（阶段0 补齐）**：`report_bundle_size.py` 实跑 **91.81 MB / 224 文件**（exe 32.28 / numpy 26.29 / python314.dll 6.48 / libcrypto 5.74 / Tcl/Tk 5.28），工具链泄漏未发现；读数落 `measured-evidence.md`。
+- **xvfb 常态化**：test job apt 加装 xvfb + pytest 包 `xvfb-run -a` + 「Tk 开显示」反 skip 兜底步（MID-2264 口径）——真 Tk 用例在 CI 从 skip 变真实执行。
+- **验证**：`run_gates.py` 10/10；pytest 3993 passed/0 警告（真窗用例本机 0 skip）；覆盖率 47 模块达标（84.70%）；mypy 207 files / basedpyright 0/0/0。CI 首跑验证项（xvfb job / mypy 2.4.0）交下一次 push。
 
 ---
 
@@ -185,6 +193,6 @@
 
 1. ~~用户恢复 venv 后，先跑阶段2 运行期验证（§2.1），确认全绿再继续~~：已完成（§1.3）。
 2. ~~进入阶段3（GUI 主题层）~~：已完成（§1.4）。
-3. **进入阶段4（GUI 控件层）**：`src/ui_kit.py`（CTk 兼容工厂）+ 按 控制台 → 画质监控 → 弹幕监控 → URL 配置 → 运行日志 → 高级设置 逐页替换；表格改 Treeview 重点验「不再闪烁、点击不落空」；统一「外观模式/界面主题」两菜单。
+3. ~~进入阶段4（GUI 控件层）~~：已完成（§2.4）。
 4. 阶段3/4 每阶段独立验证、逐阶段交付确认（遵循提案「每阶段完成判据」）。
-5. 阶段5 收尾时补体积基线读数（`build_exe.py` + `report_bundle_size.py`，复测前卸载 fastapi/pydantic 残留）；评估 test job 加 xvfb 让真 Tk 集成用例在 CI 常态执行。
+5. ~~进入阶段5（收尾）~~：已完成（§2.5）。**UI 现代化五阶段全部收账**（阶段0 的基线取证以阶段5 的 91.81MB 总读数部分补齐；API P50/P95 与首屏字节基线维持豁免）。CI 首跑验证项：xvfb test job、mypy 2.4.0 consts。

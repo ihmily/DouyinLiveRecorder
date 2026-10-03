@@ -38,7 +38,6 @@ Requires-Dist: h2>=4.4.1
 Requires-Dist: socksio>=1.0.0
 Requires-Dist: exejs>=1.0.1
 Requires-Dist: PyExecJS>=1.5.1
-Requires-Dist: customtkinter>=6.0.0
 Requires-Dist: pystray>=0.19.5
 Requires-Dist: Pillow>=12.3.0
 Requires-Dist: starlette>=1.3.1
@@ -57,7 +56,6 @@ Requires-Dist: isort>=5.12.0; extra == "dev"
 Requires-Dist: mypy>=1.5.0; extra == "dev"
 Requires-Dist: pre-commit>=3.6.0; extra == "dev"
 Provides-Extra: gui
-Requires-Dist: customtkinter>=6.0.0; extra == "gui"
 Requires-Dist: pystray>=0.19.5; extra == "gui"
 Requires-Dist: Pillow>=12.3.0; extra == "gui"
 Provides-Extra: build
@@ -70,13 +68,15 @@ Dynamic: license-file
 
 ## 💡 简介
 
-[![Python Version](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
-[![Supported Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS-blue.svg)](https://github.com/y123ao6/DouyinLiveRecorder)
-[![GitHub issues](https://img.shields.io/github/issues/y123ao6/DouyinLiveRecorder.svg)](https://github.com/y123ao6/DouyinLiveRecorder/issues)
+[![Python Version](https://img.shields.io/badge/python-v3.14%2B-blue?logo=python)](https://www.python.org/downloads/)
+[![Node.js Version](https://img.shields.io/badge/node.js-LTS_v24%2B-blue?logo=node.js)](https://nodejs.org/en/download)
+[![FFmpeg Version](https://img.shields.io/badge/ffmpeg-v9.0%2B-blue?logo=ffmpeg)](https://www.ffmpeg.org/download.html)
+[![Supported Platforms](https://img.shields.io/badge/platforms-Windows%7CLinux%7CmacOS-blue)](https://github.com/y123ao6/DouyinLiveRecorder)
+[![GitHub issues](https://img.shields.io/github/issues/y123ao6/DouyinLiveRecorder)](https://github.com/y123ao6/DouyinLiveRecorder/issues)
 [![Latest Release](https://img.shields.io/github/v/release/y123ao6/DouyinLiveRecorder)](https://github.com/y123ao6/DouyinLiveRecorder/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/y123ao6/DouyinLiveRecorder/total)](https://github.com/y123ao6/DouyinLiveRecorder/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Stars](https://img.shields.io/github/stars/y123ao6/DouyinLiveRecorder?style=flat-square)](https://github.com/y123ao6/DouyinLiveRecorder/stargazers)
+[![Stars](https://img.shields.io/github/stars/y123ao6/DouyinLiveRecorder)](https://github.com/y123ao6/DouyinLiveRecorder/stargazers)
 
 一款**简易**的可循环值守的直播录制工具，基于 FFmpeg 实现多平台直播源录制，支持自定义配置录制以及直播状态推送。
 
@@ -104,7 +104,22 @@ Dynamic: license-file
 
 ### 方式一：下载运行包（推荐新手）
 
-1. 进入 [Releases](https://github.com/ihmily/DouyinLiveRecorder/releases) 下载最新发布的 zip 压缩包
+1. 进入 [Releases](https://github.com/ihmily/DouyinLiveRecorder/releases) 下载最新发布的 zip 压缩包。
+   每个平台各出 **lite**（不含内置 ffmpeg/node，首启时程序尝试自动获取）与 **full**（内置运行时）两包。
+   附件名的**平台段**由 `build_exe.make_zip()` 取 `sys.platform` 经 `{"win32": "windows", "darwin": "macos"}`
+   归一（其余一律归 `linux`），**架构段**才是 `platform.machine().lower()` 的实际取值：
+
+   | 运行平台 | 附件名 |
+   | --- | --- |
+   | Windows x64 | `DouyinLiveRecorder-v<版本>-windows-amd64-lite.zip` / `-full.zip` |
+   | Linux x86_64 | `DouyinLiveRecorder-v<版本>-linux-x86_64-lite.zip` / `-full.zip` |
+   | **Linux arm64** | `DouyinLiveRecorder-v<版本>-linux-aarch64-lite.zip` / `-full.zip` |
+   | macOS（Apple Silicon） | `DouyinLiveRecorder-v<版本>-macos-arm64-lite.zip` / `-full.zip` |
+
+   > Linux arm64 的架构段写作 **`aarch64`**——那是 `platform.machine().lower()` 在该架构上的实际取值，
+   > **不是** `arm64`；该包由四平台发布矩阵（`windows` / `linux` / `linux-arm64` / `macos`）产出。
+   > Linux 上 lite 包的自动获取顺序是 `yum` → `apt` → 官方月末构建直下（后者按 GitHub 公布的
+   > asset digest 校验，需 `api.github.com` 可达；全链路都失败时才会提示手动安装）。
 2. 解压后，在 `config` 文件夹内的 `URL_config.ini` 中添加直播间地址
 3. 运行 `DouyinLiveRecorder.exe` 开始录制
 
@@ -145,10 +160,12 @@ docker run -d -v ./config:/app/config -v ./downloads:/app/downloads -v ./logs:/a
 
 > 容器内 FFmpeg 与 Node.js 由镜像自带（apt 安装），无需挂载本地 `ffmpeg/`、`node/` 目录；
 > `config/`、`downloads/`、`logs/`、`backup_config/` 通过卷挂载持久化。
+> 不想本地构建时，可直接拉取 GHCR 上的预构建多架构镜像（`linux/amd64` + `linux/arm64`），
+> 命令见下方「🐋 Docker 部署」的「拉取预构建的多架构镜像（GHCR）」小节。
 
 ### 手动安装 ffmpeg（Windows 用户指南）
 
-Windows 版会在启动时自动从官方源 gyan.dev 下载 ffmpeg——**这是唯一的自动路径**（不设镜像兜底，
+Windows 版会在启动时自动从官方源 gyan.dev 下载 ffmpeg——**这是 Windows 上唯一的自动下载路径**（不设镜像兜底，
 因为镜像产物没有可核对的官方摘要）。自动安装失败时（多为 gyan.dev 不可达、代理/防火墙拦截，
 或 SHA256 基线校验被拒），照下面三步手动安装即可。
 
@@ -176,7 +193,8 @@ Windows 版会在启动时自动从官方源 gyan.dev 下载 ffmpeg——**这�
 让程序按新构建重新记账。（其校验强度等同于该目录的写权限，不是独立的信任根，故不能替代官方摘要文档。）
 
 > 适用范围：**full 版**发布包已内置 ffmpeg，一般无需任何安装；**lite 版**与单文件版不含，需自动安装
-> 或按上文手动安装。macOS / Linux 的自动安装分别走 Homebrew / yum / apt，失败时按各自发行版方式手动安装。
+> 或按上文手动安装。macOS 走 Homebrew；Linux 依次为 `yum` → `apt` → 官方月末构建直下（按 `api.github.com`
+> 公布的 asset digest 校验，需该域名可达）；三条都失败时按各自发行版方式手动安装。
 > Apple Silicon 上「包内那份」与「系统原生那份」的取舍见下方常见问题。
 
 ## 🎈 已支持平台
@@ -190,6 +208,12 @@ Windows 版会在启动时自动从官方源 gyan.dev 下载 ffmpeg——**这�
 **弹幕录制支持（5 个平台）**：抖音直播 | 斗鱼直播 | 虎牙直播 | B站直播 | TwitchTV
 
 **实际画质回采与降级告警（7 个平台）**：抖音 | TikTok | 快手 | 虎牙 | 斗鱼 | B站 | 网易CC
+
+**斗鱼支持的链接形态（两种域名走同一套录制流程）**：`https://www.douyu.com/8751648` | `https://m.douyu.com/8751648`（移动端）。尾斜杠（`.../8751648/`）、查询参数（`...?rid=8751648`、`...?dyshid=...`）、`http://` 协议与附加路径均可识别；字母号与分享链接会先还原为数字房间号再取流。链接缺少房间号或房间号非法时给出明确错误提示（链接入日志前一律脱敏）。
+
+**B站支持的链接形态（两种域名走同一套录制流程）**：`https://live.bilibili.com/22747736` | `https://b23.tv/22747736`（移动端分享短域，纯数字房间号；尾斜杠、查询参数与 `http://` 协议均可识别）。字母短码（如 `https://b23.tv/ZyQrgYf`）会先跟随 302 跳转解析出真实房间号（结果进程内缓存，不重复请求）再取流；跳转落地不是B站直播间、或链接缺少房间号 / 房间号非法时给出明确错误提示（链接入日志前一律脱敏）。
+
+**虎牙支持的链接形态（移动端分享短链与桌面链接走同一套录制流程）**：`https://www.huya.com/30764624` | `https://hy.fan/30764624`（移动端分享域，纯数字路径段即房间号；尾斜杠、查询参数与 `http://` 协议均可识别）。字母短码（如 `https://hy.fan/JbmwoV`）会先跟随 301 跳转解析出真实房间段（结果进程内缓存，不重复请求）再归一为桌面链接取流；跳转落地不是虎牙直播间、或链接缺少房间号 / 房间号非法时给出明确错误提示（链接入日志前一律脱敏）。
 
 ## 📁 项目结构
 
@@ -255,7 +279,6 @@ DouyinLiveRecorder/
 │   ├── app.js                  # 前端逻辑（API、SSE、渲染）
 │   └── style.css               # 样式表（主题、响应式）
 ├── typings/                    # 第三方库类型存根（静态检查用）
-│   ├── customtkinter/          # customtkinter 存根
 │   ├── execjs/                 # PyExecJS 存根
 │   └── pystray/                # pystray 存根
 ├── scripts/                    # 工程辅助脚本
@@ -306,6 +329,9 @@ language =
 是否跳过代理检测(是/否) = 是
 # 是否启用日志文件(是/否)
 是否启用日志文件(是/否) = 是
+# 启动时清理陈旧字节码缓存：仅当版本号或源码内容变化时清一次（源码没变则零动作）；
+# 范围只有程序目录与 src/ 下的 __pycache__，不含 tests/ scripts/ downloads/ 等目录
+是否启动时清理陈旧字节码缓存(是/否) = 是
 # 直播保存路径(不填则默认 downloads/)
 直播保存路径(不填则默认) =
 # 主播改名时自动更新 URL_config.ini 并同步重命名录制目录/文件（默认 是）
@@ -746,6 +772,27 @@ docker compose up -d
 docker compose logs -f
 ```
 
+### 拉取预构建的多架构镜像（GHCR）
+
+发布工作流 `.github/workflows/docker-publish.yml` 在每次推 `v*` tag 时，由原生 amd64 与 arm64 两个 runner
+各构建并推送一层，再按 manifest digest 合成多架构清单——**同一条 `docker pull` 在 x86_64 与 arm64 主机上
+都会拿到本机架构那一层**：
+
+```bash
+# <owner> 换成实际持有该镜像的 GitHub 账号名（GHCR 命名空间一律小写）
+docker pull ghcr.io/<owner>/douyin-live-recorder:latest
+docker run -d -v ./config:/app/config -v ./downloads:/app/downloads \
+  -v ./logs:/app/logs -v ./backup_config:/app/backup_config \
+  ghcr.io/<owner>/douyin-live-recorder:latest
+```
+
+- 标签形态：`latest` 与 `vX.Y.Z`；`latest` 只随 `v*` tag 产出，不开放手动触发覆盖。
+  两个分架构 tag（`:vX.Y.Z-amd64` / `-arm64`）属合成前的中间产物，当前不会自动清理。
+- 匿名拉取要求该 GHCR 包的可见性为 **public**——那是仓库设置层面的一次性人工动作。
+- 与 `docker-compose.yaml` 里的 `image: ihmily/douyin-live-recorder:latest` **刻意不同源**：compose 走
+  `pull_policy: build` 就地构建（不拉 registry 上的同名镜像），上面「快速启动」的说明保持不变；
+  要用 GHCR 预构建镜像请按上面的 `docker run`，arm64 主机走 compose 就地构建同样可行。
+
 ### 切换运行模式
 
 `docker-compose.yaml` 已内置三个服务（recorder / web / gui），通过 profile 切换，无需修改文件：
@@ -808,8 +855,10 @@ ports:
 ### 环境要求
 
 - Python >= 3.14
-- FFmpeg (Linux/macOS 需要手动安装)
-- Node.js (Windows 下自动安装，Linux/macOS 需手动安装)
+- FFmpeg (Windows 版启动时自动从官方源下载；Linux 依次为 `yum` → `apt` → 官方月末构建直下、macOS 走 Homebrew，
+  包管理器路线需 root/管理员，三条都失败时手动安装)
+- Node.js (Windows 下自动下载并解压到程序目录；Linux 按发行版走 `yum`（RHEL 系，需 EPEL）或 `apt`、macOS 走 Homebrew，
+  包管理器路线需 root/管理员，失败时手动安装)
 
 ### 安装开发依赖
 
@@ -995,9 +1044,9 @@ brew install node
 
 ## ⏳ 更新日志
 
-### v4.4.0 (2026-09-29 ~ 2026-10-01) — Web 面板 FastAPI → Starlette 迁移（移除 fastapi/pydantic，24 条路由契约逐字保留）/ Web 前端动效层与移动端适配 / GUI 主题层（阶段3）与长文案自适应折行根除 DPI 卡死 / 两轮全量代码审查与 P0 修复（standalone SSRF 三道防线、ffmpeg 命令日志脱敏等）/ i18n 盲区补录 / 依赖与文档多轮对账
+### v4.4.0 (2026-09-29 ~ 2026-10-01) — Web 面板 FastAPI → Starlette 迁移（移除 fastapi/pydantic，24 条路由契约逐字保留）/ Web 前端动效层与移动端适配 / GUI 主题层（阶段3）与长文案自适应折行根除 DPI 卡死 / 抖音原画 HEVC 房「无可用源」死锁根治与 h265 候选按保存格式放行 / 两轮全量代码审查与 P0 修复（standalone SSRF 三道防线、ffmpeg 命令日志脱敏等）/ i18n 盲区补录 / 依赖与文档多轮对账
 
-> 本版本（v4.4.0，2026-09-29 ~ 10-01）为一次「UI 现代化 + 全量审查修复」周期。三点最值得注意：① **Web 后端从 FastAPI 迁移到 Starlette 直接驱动**——自研路由适配器与零依赖校验层，24 条路由契约与全部安全不变量逐字保留，运行时依赖 23 → 21；② **两轮全量代码审查**（`CODE_REVIEW_2026-09-29_2` 31 编号全落地 + `CODE_REVIEW_2026-09-30` 严重 2 / 中等 51 / 轻微 160、P0 已修）清掉 standalone 独立发行版的 SSRF/本地文件读取链、ffmpeg 命令凭据明文落盘等一批静默失效形态；③ **GUI 主题层（阶段3）** 与 **Web 前端动效层（阶段1）** 落地，GUI 长文案自适应折行根除两侧裁切与 DPI 重缩放卡死。**存在破坏性变更（依赖面）**，见下方专节。详细根因与验证见 [CODE_WIKI.md](CODE_WIKI.md)。
+> 本版本（v4.4.0，2026-09-29 ~ 10-01）为一次「UI 现代化 + 全量审查修复」周期。四点最值得注意：① **Web 后端从 FastAPI 迁移到 Starlette 直接驱动**——自研路由适配器与零依赖校验层，24 条路由契约与全部安全不变量逐字保留，运行时依赖 23 → 21；② **两轮全量代码审查**（`CODE_REVIEW_2026-09-29_2` 31 编号全落地 + `CODE_REVIEW_2026-09-30` 严重 2 / 中等 51 / 轻微 160、P0 已修）清掉 standalone 独立发行版的 SSRF/本地文件读取链、ffmpeg 命令凭据明文落盘等一批静默失效形态；③ **抖音原画 HEVC 房死锁根治**——主播在播却每轮「本轮无可用源」永不录制的死锁（hevc 替换、h265 候选剔除、HLS 静默丢弃三规则叠加）已修复，h265 候选按保存格式（TS/MKV/MP4）放行直拷并新增零源观测告警；④ **GUI 主题层（阶段3）** 与 **Web 前端动效层（阶段1）** 落地，GUI 长文案自适应折行根除两侧裁切与 DPI 重缩放卡死。**存在破坏性变更（依赖面）**，见下方专节。详细根因与验证见 [CODE_WIKI.md](CODE_WIKI.md)。
 
 **✨ 新增功能 / 改进**
 - **GUI 主题层（阶段3）**：新增 `src/ui_theme.py`（零显示依赖、可无头 import）——13 个语义槽位 × 三套主题（浅色 / 深色 / 高对比度），侧边栏「界面主题」菜单运行时切换并持久化到 `config.ini [GUI] gui_theme`；WCAG 对比度机检（正文 4.5 / 非文本与禁用 3.0）由 `tests/test_ui_theme.py`（34 用例）持续回归。
@@ -1006,33 +1055,38 @@ brew install node
 - **`retry` 复合动作新增 `fail_fast_codes` 入参（按退出码分档）**：不传时既有 16 个调用点行为逐字不变；web smoke 调用点传 `"2"`，配置类错误立即失败不进入退避——不得为了流水线变绿退 0 或降级 warning。
 - **两道新测试防线**：R7 真机脚本模板 AST 门禁（`__main__` 守卫 / 收集期零副作用 / argv 两步守卫 / 按平台前缀清理，5 个 live_collector 同批加固）；R8 全仓 `MUTATION-` 残留扫描（变异验证未还原即判红，配套三条硬约束写回 AGENTS.md）。
 - **新增动态路由契约锁** `tests/test_web_api_routes.py`（24 条 method/path 精确集合 + `/web` 挂载点），取代被敏感门禁拦截的静态基线 JSON。
+- **h265 候选按保存格式放行（TS/MKV/MP4 可直拷 HEVC）+ HLS 静默丢弃的零源观测告警**：`_h265_copy_format_supported()` 按 main 热更新的 `video_save_type` 判定容器能否直拷 HEVC——TS/MKV/MP4 放行（h265 主候选进常规探针序列）、FLV（HEVC-in-FLV 属 Enhanced-FLV 扩展）/MP3/M4A/域外取值保守剔除；main.py 的 h265→TS 强制块加同一口径守卫（保存格式已是 TS/MKV/MP4 时不再接管、不再打「use TS format instead」告警）。m3u8 候选被 HLS 配置（全局开关/排除平台）整组静默剔除且本轮最终无可用源时，新增点名成因、候选条数与恢复开关指引的观测告警——补上此前唯一「零日志」的选源成因；选中源的健康轮不打。
 
 **🐛 修复的问题**
+- **抖音原画 HEVC 房「本轮无可用源」死锁根治**：主播在播却每轮跳过录制，状态行累计错误数恒 0（选源失败轮不计错误样本，纯看状态行会误判正常）。根因是三条各自成立的规则叠加——原画请求且接口下发 `hevc_flv_url` 时 h265 FLV **替换** h264 成为唯一 FLV 候选；`select_source_url` 把一切 `codec=h265` 候选在探针前剔除；HLS 采集关闭时 h264 m3u8 组被静默剔除、record_url（`.m3u8`）被联动禁用——过滤后零可用候选。修复：hevc 替换发生前把被替换的 h264 原画地址存入 `flv_url_list`（HLS 关闭/不可达时落到该备选；与 hevc 地址逐字相同或自带 `codec=h265` 标记的条目不收）。真机验证 hevc 原画在播房：HLS 关闭态选中 h264 FLV 备选（修复前该形态恒「本轮无可用源」）→ `E2E_RESULT: CURED`。
 - **standalone 独立发行版孪生漂移（严重 2 项）**：① 探针/录制链 SSRF 与本地文件读取链（默认 `build_opener` 注册 FileHandler + 候选无协议/内网判定 + ffmpeg 缺 `-protocol_whitelist` 三层叠加，`file://` 与云元数据地址可被「探测→放行→录制落盘」完整走通）——补显式 Handler 白名单、`_untrusted_stream_target_reason` 内网判定（含 `2130706433`/`0x7f000001` 等缩写形态）与两处 `-protocol_whitelist`；② 完整 ffmpeg 命令（含 Cookie 头与带 token 流地址）逐轮明文落 `logs/ffmpeg.log`——写入前经 `_mask_ffmpeg_cmd_for_log` 脱敏。
 - **P0 六项**：磁盘满暂停期退出的房间不再永久残留 `running_list`（空间恢复后全部房间不再拉起的根因）；GUI 保存配置改真原子写（POSIX 下不再把 0600 收紧还原成 umask 权限）；Web 口令 strip 三处统一（首尾带空格的口令不再认证自锁 403）；`update_config_line` 移除无引号值行内注释回落启发式（含 ` #` 的配置值不再被静默污染）；header 形态驼峰凭据（`myToken:`/`sessionKey:` 等）恢复脱敏；`replace_url` 改段级精确匹配（URL 前缀重叠的兄弟房间行不再被「地址失效自动注释」整行误伤）。
 - **全量审查修复 31 编号**：Shopee 短链落地页双闸（域族白名单 + 内网判定，不可信即丢弃跳转、剥离 Cookie）；异步 HTTP **逐跳**重定向内网复检；`sync_req` scheme 白名单 opener（不再注册 file/ftp/data handler）；PandaTV/WinkTV 等平台进日志的原始 URL 一律脱敏；快手 did / B站 buvid 跨代理出口不再串用设备指纹；`anchor_name` 为 None 不再崩掉整轮解析；TikTok HLS-only 房间「选流畅实拉原画」且无降级提示的选档缺陷；B站弹幕 host 轮换「假关闭」吞真实断连；Web 认证拒绝文案不再被 stdio 重定向吞掉；`tr()` 二次异常不再顶掉原始异常；前端 reauth 口令改掩码弹窗、三条轮询链代次令牌防失联定时器；GUI 状态行匹配串按语言惰性重算、`after` 自续期链 `try/finally` 防永久断裂、「停止录制/彻底退出」共用单飞入口、tail 线程逐事件容错；真机脚本收集期真连平台/清空输出目录的会话污染（`pytest --collect-only` 20.55 秒 → 0.81 秒）。
 - **同步探针内网收口**：同步探针此前连初始 URL 的内网/回环/云元数据判定都没有（协议形态白名单挡得住 `file://`、挡不住 `http://127.0.0.1:6379`）——`_probe_client()` 单点工厂 + 发请求前初始判定 + `RedirectHopRejected` 收敛；实测公网 HLS 走通、`127.0.0.1:6379`/`169.254.169.254`/`10.0.0.5`/CGNAT 全拒（末位候选也不放行）。
 - **GUI 长文案两侧裁切与 DPI 卡死（同根因两批修复）**：`_bind_adaptive_wraplength` 自适应折行根除 pack 两侧对称裁切（5 处同形态一并修复）；随后把 `<Configure>` 同步追写改为「真防抖（风暴安静 120ms 才结算）+ 迟滞（|Δ| ≤ max(12, 2%) 不写）+ TclError 竞态守护」，根除与 CTk DPI 重缩放递归互泵的事件风暴（整窗卡死 / 文字高频闪烁 / 元素渲染不完整）。
 - **Web 面板移动端适配**：顶栏两行化（固定 56px → min-height + ≤768px 换行）、`viewport-fit=cover` + `env(safe-area-inset-*)` 安全区适配、`100dvh` 动态视口、三张数据表窄屏面板内横向滚动——消除 iPhone 16 Pro Max / Pixel 10 上的顶栏裁切与整页横向滚动。
-- **i18n 盲区补录**：提取器三类盲区（`print_colored` / `messagebox` / 推送正文）的用户可见文案全部 tr 化，四语目录登记 16 条新词条并重编 `.mo`；zh_TW 顺带去重 7 条重复键，四目录键集恢复严格一致（808 键）。
+- **i18n 盲区补录**：提取器三类盲区（`print_colored` / `messagebox` / 推送正文）的用户可见文案全部 tr 化，四语目录登记 16 条新词条并重编 `.mo`；zh_TW 顺带去重 7 条重复键，四目录键集恢复严格一致（808 键；10-01 随 h265 零源观测告警词条再登记 1 条，终态 809 键）。
 
 **⚠️ 破坏性变更 / 行为变化**
 - **移除 `fastapi` / `pydantic` 运行时依赖**（明细见下方「依赖变更」）：Web 面板的 24 条路由、请求/响应形态、安全头与鉴权中间件行为不变；内部请求模型改 `.parse()` 读取，对外部使用方无 API 面变化。仅在面板之外直接 import 这两个包的自定义部署需要自行调整。
 
 **📦 依赖变更**
 - **运行时依赖 23 → 21 条**：删除 `fastapi>=0.140.0` 与 `pydantic>=2.13.4`；`requirements.txt` 与 `pyproject.toml [project.dependencies]` 包名集合逐项相等（回归锁 `tests/test_regression_2026_09_22_gates.py`），`uv.lock` 与 `DouyinLiveRecorder.egg-info` 经 `scripts/sync_metadata.py` 重建（二包零残留）。
+- **`urllib3` 声明下限 2.7.0 → 2.8.0**：CI `deps-audit`「下限复核」实测旧下限自身落在 CVE-2026-97687 / CVE-2026-97688 / CVE-2026-97689 受影响段（修复版本均为 2.8.0）；`requirements.txt` 与 `pyproject.toml [project.dependencies]` 同步抬升（仍 21 条、包名集合不变），`uv.lock` 与 `DouyinLiveRecorder.egg-info` 经 `sync_metadata.py` 重建；本机 venv 已装 2.8.0，解析集合不变。
 - **CI typecheck job 补装固定版本 `pytest==9.1.1`**：`tests/` 的类型检查不再半盲（fixture 与 `pytest.fail()` 的 `NoReturn` 恢复可见）。
 - **文档依赖口径修复**：双语 README「安装开发依赖」pip 行由 5 条（缺 `pytest-cov`，照此装出的环境跑不了覆盖率门禁）改为 `pip install .[dev]` 单源形态（指向 `[project.optional-dependencies].dev` 六条）。
 
 **🛠️ 仓库维护与文档**
 - **两轮全量代码审查**：`docs/worklog/CODE_REVIEW_2026-09-29_2.md`（31 编号按 P0+P1+P2 全落地）与根目录 `CODE_REVIEW_2026-09-30.md`（18 批逐文件深审约 42,000 行生产代码 + 56,200 行测试，严重 2 / 中等 51 / 轻微 160，Mimosa 深扫交叉证据）；P0 已落地，P1/P2 待后续批次，standalone「回灌对齐」建议单独立项。
-- **`AGENTS.md` 多轮对账与精简**：7 项事实同步（用例数 / 符号名 / 调用点数等旧读数更正）+ 信息保真精简 19 处（110,287 → 108,469 字节；门禁 bash 块与全部章节标题逐字未动，三道文档锁 73 passed / 1 skipped 不变）；stop-hook 凭据风险提示经核查为误报后按建议把红线措辞显式化。
+- **`AGENTS.md` 多轮对账与精简**：7 项事实同步（用例数 / 符号名 / 调用点数等旧读数更正）+ 信息保真精简 19 处（110,287 → 108,469 字节；门禁 bash 块与全部章节标题逐字未动，三道文档锁 73 passed / 1 skipped 不变）+ 三条门禁口径修正（质量门禁判定改为引用「格式化命令（门禁唯一基准）」一节、`pyright`/Pylance 定位厘清为非门禁、新增「本地门禁可外推前提：工具版本须与 `ci.yml` 钉定值同值」）；stop-hook 凭据风险提示经核查为误报后按建议把红线措辞显式化。
 - **元数据对账**：15 个文件对照 `pyproject.toml` 全量核对（版本 4.4.0 / 21 条依赖 / 镜像与服务名 / 端口与挂载 / 打包参数），唯一漂移即上述 README dev-deps 行；`pyproject` `filterwarnings` 两条注释归因由「fastapi testclient」更正为 `starlette.testclient` 本体。
+- **两处测试面修复（无生产代码改动）**：`test_gui_stop_exit_singleflight` 在 Linux CI 的 4 条假红系测试替身只桩 win32 信号分支（POSIX 走 `os.kill`），按「stdlib 替身走被测模块命名空间 shim」口径补打桩后，伪造 `sys.platform` 本地复现 POSIX 路径、四场景 25 项判据全过；`test_notify` 超时用例的墙钟余量改由生产常量推导（`taskkill /F /PID` 实测稳定 2.5~3.1s，1s 超时 + ~3s 恰撞 4.0s 手拍余量的机器态误报根除）。
 
 **🧪 测试与验证**
-- 全量 `pytest` **3690 passed / 14 skipped / 0 failed / 0 警告**（2026-10-01 本机实测；14 条 skip 均为平台条件性：符号链接特权缺失、Windows chmod 只读位语义、SIGKILL POSIX 形态、h2 已装致缺依赖分支不可达等）。
-- 覆盖率 44 模块全部达阈（总 85%，coverage.json 实测）；basedpyright 0 error / 0 warning；`run_gates.py` 8/8 全绿。
+- 全量 `pytest` **3721 passed / 14 skipped / 0 failed / 0 警告**（2026-10-01 终态实测；14 条 skip 均为平台条件性：符号链接特权缺失、Windows chmod 只读位语义、SIGKILL POSIX 形态、h2 已装致缺依赖分支不可达等）。
+- 覆盖率 44 模块全部达阈（总 84.9%，coverage.json 实测）；basedpyright 0 error / 0 warning；`run_gates.py` 8/8 全绿。
 - 真机验证（09-29 ~ 09-30）：抖音 PASS（59 条 / SRT 4518 字节）、B站 PASS（9 条 / 678 字节）、虎牙 WARN（连接正常、该时段无弹幕）、Twitch WARN、斗鱼 SKIP(房间未开播，解析链正常)、TikTok SKIP(无出境网络)；standalone `--dry-run` 虎牙真实在播房间 PASS（S-01/S-02 增量验证）；公网 HLS 分片探针走通且四类内网目标全拒。GUI 目视项、斗鱼/TikTok 活房间复跑、打包体积复测等交回动作见 [CODE_WIKI.md](CODE_WIKI.md)。
+- 真机验证（10-01，抖音 hevc 原画在播房「央视网快看」）三态全 PASS：HLS 关 + TS 保存格式 → h265 FLV 主候选被放行并选中（codec=h265 实测探针通过）；HLS 关 + FLV → 落到 h264 原画备选（codec=h264）；摘除备选 → 返回 None 且零源观测告警实弹打出。
 
 ### v4.3.0 (2026-09-16 ~ 2026-09-27) — P0 修复 ffmpeg master 构建下录制 100% 失败（`-thread_queue_size` 被上游收窄为输出专属选项）/ 布尔配置解析口径统一（`true/false` 致 8 项配置静默失效、9 个海外平台无法录制）/ 两轮全量代码审查（62 + 106 项分级修复）/ 供应链加固（官方哈希优先 + GPG 验签 + 删除蓝奏云兜底）/ 发布链四处故障修复（**对外分发的 lite 包一度从未真正存在**）/ Apple Silicon 的 ffmpeg PATH 让位策略 / 日志房间关联字段与 `/health` 探活端点 / 构建产物体积 −21.6% / 覆盖率 73.28% → 82.03%（专项）与 83.91%（09-27 终态）
 

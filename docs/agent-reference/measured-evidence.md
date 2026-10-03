@@ -153,6 +153,8 @@ Flextv/PopkonTV/Twitch/LiveMe/Faceit 共 9 个海外平台的解析分支全部�
 
 [历史注] 其中 `pydantic_core` 一项随 2026-09-29 阶段2 移除 fastapi/pydantic 后不再是固定成本，「合计约 24MB」随之失效；本节留存的是当时的原始读数，新读数由 `scripts/report_bundle_size.py` 本机复测后追加。
 
+2026-10-03 阶段5 复测（同口径，`build_exe.py --smoke --no-zip --no-runtime` 产物，Windows x64，Tk 9.0 / Python 3.14.7；此为阶段0 缺失的**改造后总基线**，此前 dist 一直为空无可比总数）：**总计 91.81 MB / 224 个文件**。按包聚合大头：根目录 4 个 exe 32.28MB、numpy（.libs+包本体）26.29MB、`python314.dll` 6.48MB、`libcrypto-3.dll` 5.74MB、`tcl90.dll`+`tcl9tk90.dll` 5.28MB（Tcl/Tk）、PIL 2.52MB、`libssl-3.dll` 1.25MB、Crypto 1.54MB；`--strict` 式泄漏检查「开发/测试工具链泄漏：未发现」。customtkinter 摘除后产物内**零 CTk 条目**（`_internal/` 逐项核对）；venv 中 fastapi/pydantic 残留未卸载（用户终端动作），但零 import 未进包，读数不受影响。
+
 ## 与根文件的分工
 
 - 根文件保留条目的**约束与结论**并就地链接本文件对应小节；本文件只保留**支撑该结论的原始读数**，一字未改。

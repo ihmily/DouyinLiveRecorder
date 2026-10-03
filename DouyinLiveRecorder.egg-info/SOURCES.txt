@@ -22,6 +22,7 @@ src/config_io.py
 src/cookie_cache.py
 src/danmaku_monitor.py
 src/ffmpeg_install.py
+src/ffmpeg_linux_download.py
 src/ffmpeg_master_download.py
 src/ffmpeg_proc.py
 src/http_config.py
@@ -35,10 +36,12 @@ src/room.py
 src/scheduler.py
 src/spider.py
 src/srt_writer.py
+src/startup_cleanup.py
 src/stream.py
 src/stream_select.py
 src/sync_http.py
 src/ttwid.py
+src/ui_kit.py
 src/ui_theme.py
 src/utils.py
 src/video_postprocess.py
@@ -65,9 +68,11 @@ src/proto/douyin.proto
 src/proto/douyin_pb2.py
 src/proto/douyin_pb2.pyi
 tests/test_ab_sign.py
+tests/test_agent_hook_guard.py
 tests/test_anchor_rename.py
 tests/test_async_http.py
 tests/test_async_http_lock.py
+tests/test_b23_tv_dispatch.py
 tests/test_bili_e2e.py
 tests/test_bili_host_rotation.py
 tests/test_bili_live_collector.py
@@ -77,6 +82,7 @@ tests/test_build_exe.py
 tests/test_check_annotations.py
 tests/test_check_coverage.py
 tests/test_check_runtime_pins.py
+tests/test_ci_frontend_registration.py
 tests/test_ci_retry_action.py
 tests/test_collector.py
 tests/test_concurrency.py
@@ -92,6 +98,7 @@ tests/test_danmaku_offloop.py
 tests/test_danmaku_platform_strip.py
 tests/test_danmaku_wiring.py
 tests/test_decorator_contract.py
+tests/test_docker_publish_workflow.py
 tests/test_douyin_danmaku.py
 tests/test_douyin_live_collector.py
 tests/test_douyin_signature_encoding.py
@@ -99,7 +106,9 @@ tests/test_douyin_url_resolution.py
 tests/test_douyu_danmaku.py
 tests/test_douyu_live_collector.py
 tests/test_douyu_stream_url.py
+tests/test_douyu_url_resolution.py
 tests/test_ffmpeg_install.py
+tests/test_ffmpeg_linux_download.py
 tests/test_ffmpeg_master_download.py
 tests/test_ffmpeg_path_preference.py
 tests/test_ffmpeg_proc.py
@@ -116,6 +125,7 @@ tests/test_http_config.py
 tests/test_huya_danmaku.py
 tests/test_huya_live_collector.py
 tests/test_huya_tars_simple_list.py
+tests/test_hy_fan_dispatch.py
 tests/test_i18n.py
 tests/test_i18n_migration.py
 tests/test_i18n_tr.py
@@ -132,6 +142,7 @@ tests/test_notify_script_guard.py
 tests/test_only_fans_defaults.py
 tests/test_platform_danmaku_offline.py
 tests/test_platform_dispatch.py
+tests/test_pre_commit_config.py
 tests/test_proto_runtime_compat.py
 tests/test_proxy.py
 tests/test_quality_tiers.py
@@ -165,6 +176,7 @@ tests/test_spider_platforms.py
 tests/test_srt_timeline_anchor.py
 tests/test_srt_writer.py
 tests/test_start_record_command_golden.py
+tests/test_startup_cleanup.py
 tests/test_stop_recording_vbs.py
 tests/test_stream.py
 tests/test_stream_select.py
@@ -175,6 +187,7 @@ tests/test_test_hygiene.py
 tests/test_tiktok_hls_quality_index.py
 tests/test_ttwid.py
 tests/test_twitch_live_collector.py
+tests/test_ui_kit.py
 tests/test_ui_theme.py
 tests/test_utils.py
 tests/test_video_postprocess.py

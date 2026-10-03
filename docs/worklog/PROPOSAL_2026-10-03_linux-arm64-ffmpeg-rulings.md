@@ -84,6 +84,9 @@ compose 拉取名不同源是分工，compose 用户走 `pull_policy: build` 就
 
 - **mypy exclude 形态（R-8）**：把 `[tool.mypy].exclude` 的裸 `"ffmpeg"` 锚定成目录形态，收益是全仓
   `ffmpeg_*` 首次进 mypy 门禁，代价是**必然一次性暴露存量错误**。属独立工作包，等你决定要不要开。
+  **[2026-10-03 状态更新] 已开工落地**：`"ffmpeg"` 与 `"node"`（枚举新发现的同族误伤）双双锚定为
+  `(^|/)<名>/`，12 个失明文件进无参门禁、新暴露 8 处存量错误已修，语义回归锁 +
+  变异验证落 `tests/test_run_gates.py`；读数与判据见 CODE_WIKI 同日条目与 AGENTS.md 改写后的对应已知坑。
 - **arm64 full 包体积读数**：`AGENTS.md` 明文「体积结论只以本机实跑为准，不估算」，而本机是 Windows x64，
   产不出也跑不了 arm64 冻结产物 ⇒ 需 CI 首跑后用 `scripts/report_bundle_size.py` 取数再回填文档。
 

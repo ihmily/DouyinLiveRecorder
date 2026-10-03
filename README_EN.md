@@ -40,7 +40,7 @@ Upstream project: [ihmily/DouyinLiveRecorder](https://github.com/ihmily/DouyinLi
 
 ### Method 1: Download the release package (recommended for beginners)
 
-1. Go to [Releases](https://github.com/ihmily/DouyinLiveRecorder/releases) and download the latest released zip archive.
+1. Go to [Releases](https://github.com/y123ao6/DouyinLiveRecorder/releases) and download the latest released zip archive.
    Each platform ships two packages — **lite** (no bundled ffmpeg/node; the app tries to fetch them on first start)
    and **full** (runtime bundled). The **platform** segment of the attachment name is produced by
    `build_exe.make_zip()`, which reads `sys.platform` and normalizes it through
@@ -226,7 +226,6 @@ DouyinLiveRecorder/
 │   ├── app.js                  # frontend logic (API, SSE, rendering)
 │   └── style.css               # stylesheet (theme, responsive)
 ├── typings/                    # third-party lib type stubs (for static checks)
-│   ├── customtkinter/          # customtkinter stub
 │   ├── execjs/                 # PyExecJS stub
 │   └── pystray/                # pystray stub
 ├── scripts/                    # engineering helper scripts
@@ -733,7 +732,7 @@ docker run -d -v ./config:/app/config -v ./downloads:/app/downloads \
   The two per-architecture tags (`:vX.Y.Z-amd64` / `-arm64`) are intermediate products of the merge step and are not
   cleaned up automatically at the moment.
 - Anonymous pulls require the GHCR package visibility to be **public** — a one-off manual action in the repository settings.
-- This is **deliberately a different name** from `image: ihmily/douyin-live-recorder:latest` in `docker-compose.yaml`:
+- This is **deliberately a different name** from `image: y123ao6/douyin-live-recorder:latest` in `docker-compose.yaml`:
   compose goes through `pull_policy: build` and builds in place (it does not pull a same-named registry image), so the
   "Quick start" instructions above stay as they are. Use the `docker run` line above for the GHCR image; on an arm64
   host the in-place compose build works just as well.

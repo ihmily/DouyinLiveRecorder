@@ -585,3 +585,43 @@ def test_check_annotations_scan_face_still_includes_tests_and_src() -> None:
     assert len(files) > 100, f"扫描面异常（{len(files)} 个文件），排除清单可能过宽"
     assert any(p.name == "spider.py" for p in files), "src/spider.py 不在扫描面内"
     assert any(p.suffix == ".js" for p in files), "web/ 前端资源不在扫描面内"
+
+
+# ---------------------------------------------------------------------------
+# [tool.mypy].exclude 失明回归锁（2026-10-03，随「exclude 目录名锚定」批次落地）
+#
+# mypy 的 exclude 是 re.search 对「相对路径 + 正斜杠归一、目录补尾 /」的子串匹配：裸目录名
+# （修复前的 "ffmpeg"/"node"）会把模块名含该词的源码整个排除出门禁。危险之处在于这些文件
+# 后来被修干净了，改回裸名 mypy 照样全绿——失明只会静默复发，靠门禁自身发现不了。
+# 锁的是语义不变量（files 扫描面内任何源文件都不得被任何 exclude 模式命中），不钉具体写法：
+# `^ffmpeg/` 与 `(^|/)ffmpeg/` 等价形态都放行；「exclude 不得覆盖源文件」才是承重判据。
+def test_mypy_exclude_never_shadows_source_files() -> None:
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    mypy_cfg = cast("dict[str, Any]", pyproject["tool"]["mypy"])
+    excludes = cast("list[str]", mypy_cfg["exclude"])
+    scope_entries = cast("list[str]", mypy_cfg["files"])
+    assert len(excludes) >= 10, f"exclude 清单解析异常，只有 {len(excludes)} 项: {excludes}"
+
+    scanned: list[str] = []
+    for entry in scope_entries:
+        base = ROOT / entry
+        if base.is_file():
+            scanned.append(base.relative_to(ROOT).as_posix())
+            continue
+        assert base.is_dir(), f"[tool.mypy].files 条目 {entry} 在仓库内不存在"
+        for path in base.rglob("*"):
+            if path.suffix in (".py", ".pyi"):
+                scanned.append(path.relative_to(ROOT).as_posix())
+
+    # 见证扫描面非空且覆盖到两个曾经的失明家族：枚举口径写坏（如 rglob 被删）时
+    # 「0 文件全不命中」照样全绿，与 AGENTS.md「配置键审计的三个陷阱」同族的假绿形态。
+    assert len(scanned) >= 200, f"mypy 扫描面枚举异常，只收集到 {len(scanned)} 个文件"
+    assert "src/ffmpeg_install.py" in scanned, "枚举漏掉 src/（曾经的 ffmpeg 失明家族不在判定面）"
+    assert "tests/test_node_install.py" in scanned, "枚举漏掉 tests/（曾经的 node 失明家族不在判定面）"
+
+    shadowed = [(pattern, path) for pattern in excludes for path in scanned if re.search(pattern, path)]
+    assert (
+        not shadowed
+    ), "[tool.mypy].exclude 出现子串命中源文件的裸名形态（无参 mypy 将静默漏查这些文件）: " + "; ".join(
+        f"{pattern!r} 命中 {path}" for pattern, path in shadowed[:10]
+    )

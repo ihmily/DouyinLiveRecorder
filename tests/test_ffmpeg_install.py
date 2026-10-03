@@ -433,8 +433,9 @@ class _Resp:
     def __enter__(self) -> "_Resp":
         return self
 
-    def __exit__(self, *args: object) -> bool:
-        return False
+    def __exit__(self, *args: object) -> None:
+        # 返回 None 与 False 同为 falsy（不抑制异常）；恒 False 的 __exit__ 用 bool 标注会被 mypy [exit-return] 拒绝。
+        return None
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
@@ -455,8 +456,8 @@ class _Bar:
     def __enter__(self) -> "_Bar":
         return self
 
-    def __exit__(self, *args: object) -> bool:
-        return False
+    def __exit__(self, *args: object) -> None:
+        return None
 
     def update(self, _n: int) -> None:
         return None
@@ -507,12 +508,16 @@ def win_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(ffmpeg_install, "current_env_path", "C:\\fakebin")
     monkeypatch.setenv("PATH", os.environ.get("PATH", ""))
     monkeypatch.setattr(ffmpeg_install, "tqdm", _Bar)
+
     # SEV-2220 的「哨兵被覆盖即红」用例需要走真 master 代码，但 master 会经 ffmpeg_install
     # 模块级的这个名字调用（不是 master 模块自己的 requests），故覆盖点在这里。
     # 默认实现：记一次名字 + 返回 False（等价于「兜底失败」），绝不真下载。
-    monkeypatch.setattr(
-        ffmpeg_install, "download_ffmpeg_master", lambda *a, **k: (MASTER_CALLS.append(a or k)) or False
-    )
+    def _record_master_call(*args: Any, **kwargs: Any) -> bool:
+        # 不写「lambda: LIST.append(x) or False」形态——list.append 无返回值，mypy [func-returns-value] 拒绝。
+        MASTER_CALLS.append(args or kwargs)
+        return False
+
+    monkeypatch.setattr(ffmpeg_install, "download_ffmpeg_master", _record_master_call)
     return tmp_path
 
 
@@ -733,10 +738,17 @@ class TestWindowsInstallSingleSource:
         # download_ffmpeg_master 这里刻意也换成替身并记录调用：一是让「没走到第二条源」可断言，
         # 二是即便宿主环境把开关打开也不会真去下载（哨兵只拦 requests，不拦这条函数）。
         calls: list[str] = []
-        monkeypatch.setattr(
-            ffmpeg_install, "install_ffmpeg_official_windows", lambda: calls.append("official") or False
-        )
-        monkeypatch.setattr(ffmpeg_install, "download_ffmpeg_master", lambda *a, **k: calls.append("master") or False)
+
+        def _fake_official() -> bool:
+            calls.append("official")
+            return False
+
+        def _fake_master(*args: Any, **kwargs: Any) -> bool:
+            calls.append("master")
+            return False
+
+        monkeypatch.setattr(ffmpeg_install, "install_ffmpeg_official_windows", _fake_official)
+        monkeypatch.setattr(ffmpeg_install, "download_ffmpeg_master", _fake_master)
         assert ffmpeg_install.install_ffmpeg_windows() is False
         assert calls == ["official"], "官方源失败后不得再有第二条下载尝试"
 

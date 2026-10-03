@@ -100,8 +100,9 @@ class _FakeResponse:
     def __enter__(self) -> "_FakeResponse":
         return self
 
-    def __exit__(self, *args: object) -> bool:
-        return False
+    def __exit__(self, *args: object) -> None:
+        # 返回 None 与 False 同为 falsy（不抑制异常）；恒 False 的 __exit__ 用 bool 标注会被 mypy [exit-return] 拒绝。
+        return None
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
@@ -119,8 +120,8 @@ class _DummyTqdm:
     def __enter__(self) -> "_DummyTqdm":
         return self
 
-    def __exit__(self, *args: object) -> bool:
-        return False
+    def __exit__(self, *args: object) -> None:
+        return None
 
     def update(self, _n: int) -> None:
         return None
@@ -748,10 +749,17 @@ class TestNodeFetchOfficialSha256:
         # 镜像自证等于没有校验：文档宿主必须是 nodejs.org 本体。
         calls: list[str] = []
         resp = _FakeResponse(text=_shasums_body(EMPTY_SHA256))
+
+        def _fake_get(url: str, *args: Any, **kwargs: Any) -> _FakeResponse:
+            # 不写「lambda url, *a, **k: (calls.append(url), resp)[1]」形态——list.append 无返回值，
+            # mypy [func-returns-value] 拒绝把它放进取值表达式。
+            calls.append(url)
+            return resp
+
         monkeypatch.setattr(
             node_install,
             "requests",
-            types.SimpleNamespace(get=lambda url, *a, **k: (calls.append(url), resp)[1]),
+            types.SimpleNamespace(get=_fake_get),
         )
         assert node_install._fetch_official_sha256("v22.11.0", ZIP_NAME) == EMPTY_SHA256
         assert calls == [DOC_URL]

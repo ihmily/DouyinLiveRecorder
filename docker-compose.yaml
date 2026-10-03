@@ -18,7 +18,9 @@ services:
   # YAML 锚点 &recorder 被 web / gui 复用，两者只做按需覆盖。
   # ---------------------------------------------------------------
   recorder: &recorder
-    image: ihmily/douyin-live-recorder:latest
+    # 2026-10-04：镜像名归属改为 y123ao6（与 Dockerfile LABEL url、pyproject [project.urls] 同源）；
+    # pull_policy: build 下该名仅作本地 tag 与 compose push 命名，MIN-18 语义不变
+    image: y123ao6/douyin-live-recorder:latest
     container_name: douyin-live-recorder
 
     # MIN-18（2026-09-21）：镜像只从本地 build 取，绝不回退去拉远端 :latest——原配置虽写了 build:，

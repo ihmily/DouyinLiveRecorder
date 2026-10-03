@@ -137,7 +137,7 @@ def i18n_datas_entries() -> list[tuple[str, str]]:
 SPEC_TEMPLATE = """\
 # -*- mode: python ; coding: utf-8 -*-
 # 本文件由 build_exe.py 自动生成，请勿手工编辑（修改请改 build_exe.py）
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_submodules
 
 # 体积优化排除项（清单与每项实测体积见 build_exe.py 的 BLOAT_EXCLUDES）
 excludes_bloat = {bloat_excludes}
@@ -149,8 +149,8 @@ datas = [
 ]
 # 注意：config/ 不在此处（不进 _internal），由 copy_external_binaries 复制到 exe 同级目录，
 # 以便程序在运行时直接读写配置。ffmpeg/ node/ 同理。
-# customtkinter 的主题 JSON 等资源文件
-datas += collect_data_files('customtkinter')
+# [2026-10-03 阶段5] collect_data_files('customtkinter') 已随该依赖摘除而移除（无资源可收）；
+# excludes 里的 'customtkinter' 条目按 fastapi 同款防御口径保留（防 venv 残留回渗打包）。
 
 hidden_common = [
     'i18n',                          # main.py 内部延迟导入

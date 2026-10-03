@@ -269,6 +269,7 @@ Qoder CN 发行版的实际数据根（`.qoder-cn`）不一致，属外部工具
    `tests/test_ffmpeg_*.py` 一并吞出无参 `mypy` 的扫描面（实测加不加这两个文件都是同一个 source files 计数）。
    black/isort/basedpyright 的同名排除只作用于**目录**，所以「同一份清单四个工具」里只有 mypy 会静默失明。
    新增名字含被排除词的模块时，必须显式传参补跑一次 `python -m mypy <那些文件>` 才能宣称类型门禁过。
+   （2026-10-03 已锚定修复、该代偿退役、语义锁进 `tests/test_run_gates.py`——见下节。）
 2. **`docker buildx` 推 GHCR 时 `provenance: false` 是承重取值**：buildx 默认给 push 产物附加 SLSA provenance
    attestation，于是该步 push 出去的是「镜像 + attestation」的 **index**，`steps.*.outputs.digest` 退化成 index digest，
    下游 `imagetools create` 按它合成的对外清单会混入非镜像条目，而整条流水线全绿、只在用户 `docker pull` 时暴露。
@@ -276,3 +277,39 @@ Qoder CN 发行版的实际数据根（`.qoder-cn`）不一致，属外部工具
    取值，漏声明时拿到的是空串 → 合成步骤报无效引用，而两个构建 job 本身全绿（最难归因的一种红）。
 4. **Actions YAML 里以 `!` 开头的 `if:` 标量必须加引号**（`if: "!startsWith(...)"`）：无引号时 YAML 把行首 `!`
    当 tag 指令，解析直接 `ParserError`；GitHub Actions 求值的是引号内那个字符串，语义不变。
+
+## 2026-10-03 — mypy exclude 锚定收尾（R-8 工作包）：失明复发不会被门禁自己发现
+
+- **修干净之后的失明会「静默复发」——回归锁必须锁语义而不是锁读数**：exclude 从裸名改成锚定后，那 12 个
+  文件本来就是干净的，谁改回裸名 `mypy` 照样全绿（只是少查 12 个文件）。所以锁不能断言 source files 计数
+  或钉具体写法，得断言不变量本身：`[tool.mypy].files` 扫描面内任何 `.py`/`.pyi` 路径都不得被任何 exclude
+  模式子串命中（`tests/test_run_gates.py::test_mypy_exclude_never_shadows_source_files`），并带三重反假绿
+  见证（清单非空 / 扫描面 ≥200 / 两个曾经的失明家族必须在枚举集内）。变异验证直接改 pyproject 落盘，
+  驱动脚本写 `%TEMP%`、跑完按字节还原。
+- **「本地绿 ⇒ CI 绿」的版本外推前提，可以不碰项目 venv 就实测闭合**：本地 venv mypy 已 2.4.0、CI 钉 2.3.1
+  （该差距已于同日经用户批准抬 consts 闭合），
+  而新纳入扫描面的 12 个文件从未被 2.3.1 查过。做法：`pip install --target <%TEMP%目录> mypy==2.3.1`
+  （不装进项目 venv、不卸载任何东西），再 `PYTHONPATH=<临时目录> python -m mypy` 让临时副本优先于
+  site-packages，同一命令跑两遍比对。编译 wheel 在 cp314 有现成包，秒级完成；用完删目录。
+  凡本地/CI 工具版本不一致又改了「工具可见面」（门禁配置、exclude、文件集），都值得做这一步而不是只写差异声明。
+- **mypy 两个「测试替身形态」检查项记住即可少一轮修复**：① 恒回 False 的 `__exit__` 标 `-> bool` 报
+  `[exit-return]`（改 `-> None`，falsy 语义不变）；② `LIST.append(x) or False` / `(calls.append(url), resp)[1]`
+  这类「lambda 里消费 append 返回值」报 `[func-returns-value]`（改嵌套 def，`*args: Any, **kwargs: Any`
+  按转发桩口径注解）。mypy 2.3.1 与 2.4.0 行为一致，均为默认开启、非 strict 专属。
+
+## 2026-10-03 — UI 阶段4（CTk→ttk）：三个只有真窗才暴露的 Tk 9.0 形态
+
+- **ttk 的 wraplength 是原始设备像素，不随 `tk scaling` 缩放**：探针把 `tk scaling` ×2 后同 wraplength 的
+  标签 reqwidth 恒定。推论：从 CTkLabel 换 ttk.Label 时，CTk 时代「configure 值×控件缩放率」的换算必须
+  同步去掉——两边各错一半时在 100% DPI 开发机上读数恰好相同，高 DPI 用户才炸。判据：跨 DPI 换算公式
+  改动必须先探针裁定「哪个层的像素」，不能两边各自保留换算。 | `gui.py` `_compute_wraplength`
+- **ttk.Button 没有控件级 `-font`**（TclError: unknown option "-font"；ttk.Label/Combobox 有）：
+  带字体的按钮要走样式级字体。注意多段样式名（`X.Variant.TButton`）的 **configure/map 跨段回退不可靠**
+  （布局可回落、选项未必）——派生样式必须显式复制基础变体的 configure 字典与 map，别赌回退语义。 | `src/ui_kit.py`
+- **CTk 控件的 `configure` 重载只收命名参数，位置 cnf 字典被静默忽略**：`label.configure({"wraplength": x})`
+  不报错、不生效——CTkBaseClass.configure(**kwargs) 接到位置字典直接吞掉。静默无操作比抛错危险得多，
+  本次由真窗回归锁（wraplength 恒 0 断言）抓出、无头跑不到。判据：给 CTk/原生控件双形态调用的
+  helper 换 configure 传参形态时，真窗锁必须重跑。 | `gui.py` `_bind_adaptive_wraplength`
+- **真窗用例在子进程里失败会以 `skipped` 面目出现**：`except tk.TclError → pytest.skip` 的既有口径把
+  「unknown option "-font"」「missing '>' in virtual binding」这类**真 bug** 一并吞成「无显示环境」。
+  判据：本机有显示器时真窗用例 skip 即异常信号，必须 `pytest -rs` 看跳过原因，不能当成已知 skip 面放行。 | `tests/test_gui_wrap_hints.py`
