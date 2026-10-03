@@ -24,15 +24,16 @@ LIVE_DYNAMIC_SEGMENT = "dynpathj5ajT8rr"
 SHORT_CODE = "4NnyJghfl4P"
 
 
-def _rejected(url: str) -> str:
-    # 断言该地址被拒绝，并返回异常文本（供需要区分错误类别的用例比对）。
+def _rejected(url: str) -> XhsUrlError:
+    # 断言该地址被拒绝，并返回结构化异常（供错误类别与脱敏用例比对）。
     with pytest.raises(XhsUrlError) as excinfo:
         parse_xhs_live_url(url)
-    message = str(excinfo.value).strip()
+    error = excinfo.value
+    message = str(error).strip()
     # 「信息清晰」的最低门槛：非空且点名小红书，避免调用方只拿到一个空 ValueError
     assert message, f"拒绝 {url} 时没有给出任何错误信息"
     assert "小红书" in message
-    return message
+    return error
 
 
 # ---------------------------------------------------------------------------
@@ -166,12 +167,13 @@ def test_http_is_upgraded_and_trailing_slash_trimmed(url: str, normalized_url: s
     assert parse_xhs_live_url(url)["normalized_url"] == normalized_url
 
 
-def test_default_port_is_accepted() -> None:
-    # 显式写默认端口（http:80 / https:443）视为同一地址，不做「非默认端口」处理
+def test_default_port_is_accepted_and_removed_from_normalized_url() -> None:
+    # 默认端口（http:80 / https:443）视为同一地址，规范化结果不得继续携带端口
     https_info = parse_xhs_live_url(f"https://www.xiaohongshu.com:443/livestream/{LIVE_ROOM_ID}")
     http_info = parse_xhs_live_url(f"http://www.xiaohongshu.com:80/livestream/{LIVE_ROOM_ID}")
-    assert https_info["room_id"] == LIVE_ROOM_ID
-    assert http_info["room_id"] == LIVE_ROOM_ID
+    expected = f"https://www.xiaohongshu.com/livestream/{LIVE_ROOM_ID}"
+    assert https_info["normalized_url"] == expected
+    assert http_info["normalized_url"] == expected
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +214,10 @@ def test_unsupported_host_is_rejected(url: str) -> None:
         f"https://www.xiaohongshu.com/livestream/a/b/{LIVE_ROOM_ID}",
         "https://xhslink.com/m/4NnyJghfl4P",
         "https://xhslink.com/",
+        "https://xhslink.com/o/..",
+        "https://xhslink.com/o/%2e%2e",
+        "https://www.xiaohongshu.com/user/profile/..",
+        "https://www.xiaohongshu.com/user/profile/%2e%2e",
     ],
 )
 def test_non_live_path_is_rejected(url: str) -> None:
@@ -237,6 +243,10 @@ def test_missing_room_id_is_rejected(url: str) -> None:
         "https://www.xiaohongshu.com/livestream/5704804566788373-66",
         "https://www.xiaohongshu.com/livestream/5704804566.78837366",
         "https://www.xiaohongshu.com/livestream/dynpathj5ajT8rr/570480456678837366x",
+        "https://www.xiaohongshu.com/livestream/５７０４８０４５６６７８８３７３６６",
+        "https://www.xiaohongshu.com/livestream/./570480456678837366",
+        "https://www.xiaohongshu.com/livestream/../570480456678837366",
+        "https://www.xiaohongshu.com/livestream/%2e%2e/570480456678837366",
     ],
 )
 def test_non_numeric_room_id_is_rejected(url: str) -> None:
@@ -279,13 +289,26 @@ def test_malformed_url_is_rejected(url: str) -> None:
 
 
 def test_error_messages_distinguish_categories() -> None:
-    # 「信息清晰」的可机检下限：域名问题与路径问题必须给出**不同**文本，
-    # 否则用户/日志分不清是「填错域名」还是「链接不是直播间」
-    host_msg = _rejected("https://evil.com/livestream/570480456678837366")
-    path_msg = _rejected("https://www.xiaohongshu.com/explore/6748c2d0000000001a01b3d9")
-    room_msg = _rejected("https://www.xiaohongshu.com/livestream/")
-    assert host_msg != path_msg
-    assert path_msg != room_msg
+    # 错误分类必须由稳定 code 表达，不能靠消息里不同的 path 值制造「整句不相等」的假绿
+    host_error = _rejected("https://evil.com/livestream/570480456678837366")
+    path_error = _rejected("https://www.xiaohongshu.com/explore/6748c2d0000000001a01b3d9")
+    room_error = _rejected("https://www.xiaohongshu.com/livestream/")
+    short_error = _rejected("https://xhslink.com/not-live/4NnyJghfl4P")
+    assert host_error.code == "host"
+    assert path_error.code == "non_live_path"
+    assert room_error.code == "room_id"
+    assert short_error.code == "short_path"
+    assert "房间 ID 缺失或非数字" in str(room_error)
+
+
+def test_error_does_not_expose_raw_url_path_or_query_token() -> None:
+    url = "https://www.xiaohongshu.com/explore/SECRET_path?xsec_token=SECRET_token_ABC123"
+    error = _rejected(url)
+    message = str(error)
+    assert error.code == "non_live_path"
+    assert url not in message
+    assert "SECRET_path" not in message
+    assert "SECRET_token_ABC123" not in message
 
 
 def test_parse_is_idempotent() -> None:

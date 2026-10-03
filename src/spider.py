@@ -2457,9 +2457,10 @@ def _xhs_is_allowed_host(url: str) -> bool:
 
 
 class XhsUrlError(ValueError):
-    # 小红书链接不可解析/不受支持的统一异常。继承 ValueError：调用方（分派、配置归一化）
-    # 既有的「ValueError = 用户输入不合格」判定不必改动即可覆盖这一类。
-    pass
+    # code 是稳定的机器可读分类；消息只描述类别，不回显可能携带凭据的原始 URL/path。
+    def __init__(self, code: str, message: str) -> None:
+        self.code = code
+        super().__init__(message)
 
 
 # 主机的**精确**白名单（不做域族后缀匹配）：本函数输出会进配置回写与后续取流请求，
@@ -2475,10 +2476,10 @@ _XHS_QUERY_KEYS = ("host_id", "xsec_token", "xsec_source")
 # 四类受支持路径：标准直播 / 动态段直播（分享页带一段随机前缀）/ 短链 / 作者主页。
 # 房间号一律取路径末段且必须全数字；动态段只认一段——真机出现更多段时先存脱敏样例再扩
 # 规则，不提前放宽（同 PROPOSAL「假设与回滚」）。
-_XHS_LIVE_PATH_RE = re.compile(r"^/livestream/(\d+)/?$")
-_XHS_LIVE_DYNAMIC_PATH_RE = re.compile(r"^/livestream/([^/]+)/(\d+)/?$")
-_XHS_SHORT_PATH_RE = re.compile(r"^/o/([^/]+)/?$")
-_XHS_PROFILE_PATH_RE = re.compile(r"^/user/profile/([^/]+)/?$")
+_XHS_LIVE_PATH_RE = re.compile(r"^/livestream/([0-9]+)/?$")
+_XHS_LIVE_DYNAMIC_PATH_RE = re.compile(r"^/livestream/[A-Za-z0-9_-]+/([0-9]+)/?$")
+_XHS_SHORT_PATH_RE = re.compile(r"^/o/[A-Za-z0-9_-]+/?$")
+_XHS_PROFILE_PATH_RE = re.compile(r"^/user/profile/([A-Za-z0-9_-]+)/?$")
 
 
 def parse_xhs_live_url(url: str) -> dict[str, str]:
@@ -2489,25 +2490,25 @@ def parse_xhs_live_url(url: str) -> dict[str, str]:
     # 免得 https://evil.com/livestream/... 这类伪装地址先被当成合法直播间。
     raw = (url or "").strip()
     if not raw:
-        raise XhsUrlError("小红书链接为空")
+        raise XhsUrlError("format", "小红书链接为空")
     try:
         parsed = urllib.parse.urlparse(raw)
         # .hostname 对畸形 IPv6 字面量、.port 对非数字端口都会抛 ValueError
         host = parsed.hostname or ""
         port = parsed.port
     except ValueError as e:
-        raise XhsUrlError(f"小红书链接格式非法: {e}") from e
+        raise XhsUrlError("format", "小红书链接格式非法") from e
     scheme = parsed.scheme.lower()
     if scheme not in ("http", "https"):
-        raise XhsUrlError(f"小红书链接协议不受支持（只接受 http/https）: {parsed.scheme or '空'}")
+        raise XhsUrlError("scheme", "小红书链接协议不受支持（只接受 http/https）")
     if parsed.username is not None or parsed.password is not None:
         # userinfo 既不是用户手填形态，也常是「@ 之后才是真 host」的伪装载体
-        raise XhsUrlError("小红书链接不允许携带用户信息（userinfo）")
+        raise XhsUrlError("userinfo", "小红书链接不允许携带用户信息（userinfo）")
     if port is not None and port != (443 if scheme == "https" else 80):
-        raise XhsUrlError(f"小红书链接不允许指定非默认端口: {port}")
+        raise XhsUrlError("port", "小红书链接不允许指定非默认端口")
     host = host.lower()
     if host not in (_XHS_MAIN_HOST, _XHS_SHORT_HOST):
-        raise XhsUrlError(f"小红书链接域名不受支持（只接受 {_XHS_MAIN_HOST} 与 {_XHS_SHORT_HOST}）: {host or '空'}")
+        raise XhsUrlError("host", f"小红书链接域名不受支持: {host or '空'}")
 
     # 规范化：scheme 统一 https（XHS 只在 https 下发 xsec_token），尾斜杠去掉，
     # query 只留白名单三项并按固定顺序重建，fragment 直接丢弃。
@@ -2520,7 +2521,7 @@ def parse_xhs_live_url(url: str) -> dict[str, str]:
 
     if host == _XHS_SHORT_HOST:
         if not _XHS_SHORT_PATH_RE.match(path):
-            raise XhsUrlError(f"小红书短链路径必须是 /o/<短码>: {path}")
+            raise XhsUrlError("short_path", "小红书短链路径必须是 /o/<短码>")
         # 短码本身不含房间号，room_id 只能等解重定向后从落地页再解析一次
         return {"kind": "short", "normalized_url": normalized_url, "room_id": "", "user_id": ""}
     profile_match = _XHS_PROFILE_PATH_RE.match(path)
@@ -2533,11 +2534,13 @@ def parse_xhs_live_url(url: str) -> dict[str, str]:
         }
     dynamic_match = _XHS_LIVE_DYNAMIC_PATH_RE.match(path)
     if dynamic_match:
-        room_id = dynamic_match.group(2)
+        room_id = dynamic_match.group(1)
     else:
         live_match = _XHS_LIVE_PATH_RE.match(path)
         if not live_match:
-            raise XhsUrlError(f"小红书链接不是直播间或作者主页地址: {path}")
+            if path == "/livestream" or path.startswith("/livestream/"):
+                raise XhsUrlError("room_id", "小红书直播链接的房间 ID 缺失或非数字")
+            raise XhsUrlError("non_live_path", "小红书链接不是直播间或作者主页地址")
         room_id = live_match.group(1)
     return {
         "kind": "live",
