@@ -3002,3 +3002,510 @@ msgstr "未取得 ffmpeg 官方公布的 SHA256，本次不安装未校验的二
 
 msgid "未取得官方 SHA256，本次为 Linux ffmpeg 首次记录基准（TOFU，等同未校验安装）: {file} = {actual}{stale}"
 msgstr "未取得官方 SHA256，本次为 Linux ffmpeg 首次记录基准（TOFU，等同未校验安装）: {file} = {actual}{stale}"
+
+msgid "    （+{count} 条已省略）\n"
+msgstr "    （+{count} 条已省略）\n"
+
+msgid "# 配置文件不存在，请新建"
+msgstr "# 配置文件不存在，请新建"
+
+msgid "(未知)"
+msgstr "(未知)"
+
+msgid "120秒"
+msgstr "120秒"
+
+msgid "UI 事件回调执行异常（详见运行日志）"
+msgstr "UI 事件回调执行异常（详见运行日志）"
+
+msgid "URL 配置已保存"
+msgstr "URL 配置已保存"
+
+msgid "URL_config.ini 中没有直播间地址，已取消启动录制"
+msgstr "URL_config.ini 中没有直播间地址，已取消启动录制"
+
+msgid "Web 认证未启用，任何能访问本面板的网络均可操控录制配置"
+msgstr "Web 认证未启用，任何能访问本面板的网络均可操控录制配置"
+
+msgid "[礼物] "
+msgstr "[礼物] "
+
+msgid "pkill 执行失败: {type_name}: {err}"
+msgstr "pkill 执行失败: {type_name}: {err}"
+
+msgid "pkill 未能清理 PID {pid} 下的 ffmpeg（返回码 {code}）"
+msgstr "pkill 未能清理 PID {pid} 下的 ffmpeg（返回码 {code}）"
+
+msgid "taskkill 执行失败: {type_name}: {err}"
+msgstr "taskkill 执行失败: {type_name}: {err}"
+
+msgid "taskkill 整树终止失败，回退 terminate: {err}"
+msgstr "taskkill 整树终止失败，回退 terminate: {err}"
+
+msgid "taskkill 未能清理 PID {pid} 的进程树（返回码 {code}）"
+msgstr "taskkill 未能清理 PID {pid} 的进程树（返回码 {code}）"
+
+msgid "web_password 未配置但认证已开启"
+msgstr "web_password 未配置但认证已开启"
+
+msgid "{chain}周期任务异常（本轮已跳过、下轮继续；{seconds}s 内不重复）: {type_name}: {err}"
+msgstr "{chain}周期任务异常（本轮已跳过、下轮继续；{seconds}s 内不重复）: {type_name}: {err}"
+
+msgid "{detail}；原文模板同样不可用"
+msgstr "{detail}；原文模板同样不可用"
+
+msgid "{interval}秒"
+msgstr "{interval}秒"
+
+msgid "{lang} 的翻译目录不可用，已回退为 {effective}（配置同样按 {effective} 写回）"
+msgstr "{lang} 的翻译目录不可用，已回退为 {effective}（配置同样按 {effective} 写回）"
+
+msgid "⏹   停止录制"
+msgstr "⏹   停止录制"
+
+msgid "▶   开始录制"
+msgstr "▶   开始录制"
+
+msgid "⚙   高级设置"
+msgstr "⚙   高级设置"
+
+msgid "⚙  高级设置"
+msgstr "⚙  高级设置"
+
+msgid "⚠ 降级"
+msgstr "⚠ 降级"
+
+msgid "✓ 同等"
+msgstr "✓ 同等"
+
+msgid "✓ 正常"
+msgstr "✓ 正常"
+
+msgid "❌   完全退出"
+msgstr "❌   完全退出"
+
+msgid "❌   彻底退出"
+msgstr "❌   彻底退出"
+
+msgid "「{anchor_name}」画质已切换为 {selected}，将在下一轮检测循环生效"
+msgstr "「{anchor_name}」画质已切换为 {selected}，将在下一轮检测循环生效"
+
+msgid "「{anchor_name}」画质未发生变化（已是 {selected}）"
+msgstr "「{anchor_name}」画质未发生变化（已是 {selected}）"
+
+msgid "「切换画质」选中非默认画质时，会以「画质,直播间地址」格式写回 config/URL_config.ini，在下一轮检测循环（默认 120 秒）自动生效；选择「默认画质」则移除该行画质段、回落到全局默认画质。"
+msgstr "「切换画质」选中非默认画质时，会以「画质,直播间地址」格式写回 config/URL_config.ini，在下一轮检测循环（默认 120 秒）自动生效；选择「默认画质」则移除该行画质段、回落到全局默认画质。"
+
+msgid "上一条弹幕监控 tail 线程尚未退出（其停止标志已置位、会自行结束），本轮另起新线程"
+msgstr "上一条弹幕监控 tail 线程尚未退出（其停止标志已置位、会自行结束），本轮另起新线程"
+
+msgid "不允许关闭 Web 认证"
+msgstr "不允许关闭 Web 认证"
+
+msgid "不允许把 web_host 改写为回环地址"
+msgstr "不允许把 web_host 改写为回环地址"
+
+msgid "不支持的语言: {lang}"
+msgstr "不支持的语言: {lang}"
+
+msgid "主播名称"
+msgstr "主播名称"
+
+msgid "保存配置文件失败: {err}"
+msgstr "保存配置文件失败: {err}"
+
+msgid "修改 Web 认证配置必须复验当前访问口令（reauth_password）"
+msgstr "修改 Web 认证配置必须复验当前访问口令（reauth_password）"
+
+msgid "停止流程收尾异常: {type_name}: {err}"
+msgstr "停止流程收尾异常: {type_name}: {err}"
+
+msgid "停止流程进行中，暂不可启动新录制"
+msgstr "停止流程进行中，暂不可启动新录制"
+
+msgid "全部房间"
+msgstr "全部房间"
+
+msgid "切换「{anchor_name}」画质失败: {err}"
+msgstr "切换「{anchor_name}」画质失败: {err}"
+
+msgid "切换画质"
+msgstr "切换画质"
+
+msgid "加载配置文件失败: {err}"
+msgstr "加载配置文件失败: {err}"
+
+msgid "发送 CTRL_BREAK 失败，整树强制终止（避免 ffmpeg 孤儿化）"
+msgstr "发送 CTRL_BREAK 失败，整树强制终止（避免 ffmpeg 孤儿化）"
+
+msgid "发送 SIGINT 失败，回退 terminate: {err}"
+msgstr "发送 SIGINT 失败，回退 terminate: {err}"
+
+msgid "取消"
+msgstr "取消"
+
+msgid "启动后将调用 main.py 循环监测 URL 配置中的直播间并自动录制"
+msgstr "启动后将调用 main.py 循环监测 URL 配置中的直播间并自动录制"
+
+msgid "启动录制失败: {err}"
+msgstr "启动录制失败: {err}"
+
+msgid "告警时间"
+msgstr "告警时间"
+
+msgid "在线"
+msgstr "在线"
+
+msgid "定时任务重排失败（窗口可能已销毁）: {type_name}: {err}"
+msgstr "定时任务重排失败（窗口可能已销毁）: {type_name}: {err}"
+
+msgid "实际画质"
+msgstr "实际画质"
+
+msgid "密码错误"
+msgstr "密码错误"
+
+msgid "工作目录: {path}"
+msgstr "工作目录: {path}"
+
+msgid "已取消保存：URL_config.ini 的外部改动未被覆盖"
+msgstr "已取消保存：URL_config.ini 的外部改动未被覆盖"
+
+msgid "已取消画质切换：URL 配置编辑器中有未保存的更改"
+msgstr "已取消画质切换：URL 配置编辑器中有未保存的更改"
+
+msgid "已打开下载目录: {path}"
+msgstr "已打开下载目录: {path}"
+
+msgid "已断开"
+msgstr "已断开"
+
+msgid "已有停止流程在途，等待其完成后再收尾（避免并发操作同一子进程控制台）"
+msgstr "已有停止流程在途，等待其完成后再收尾（避免并发操作同一子进程控制台）"
+
+msgid "已连接"
+msgstr "已连接"
+
+msgid "已通过 pkill 清理 PID {pid} 下的 ffmpeg 进程"
+msgstr "已通过 pkill 清理 PID {pid} 下的 ffmpeg 进程"
+
+msgid "已通过 taskkill 清理 PID {pid} 的进程树（含 ffmpeg）"
+msgstr "已通过 taskkill 清理 PID {pid} 的进程树（含 ffmpeg）"
+
+msgid "开启 Web 认证必须同时设置 web_password"
+msgstr "开启 Web 认证必须同时设置 web_password"
+
+msgid "开始时间"
+msgstr "开始时间"
+
+msgid "弹幕 tail 线程本轮异常（下轮继续）: {type_name}: {err}"
+msgstr "弹幕 tail 线程本轮异常（下轮继续）: {type_name}: {err}"
+
+msgid "弹幕事件处理失败 {count} 条已跳过（同批其余事件不受影响）: {detail}"
+msgstr "弹幕事件处理失败 {count} 条已跳过（同批其余事件不受影响）: {detail}"
+
+msgid "弹幕监控刷新"
+msgstr "弹幕监控刷新"
+
+msgid "强制终止失败: {err}"
+msgstr "强制终止失败: {err}"
+
+msgid "录制中"
+msgstr "录制中"
+
+msgid "录制控制"
+msgstr "录制控制"
+
+msgid "录制进程已启动 (PID: {pid})"
+msgstr "录制进程已启动 (PID: {pid})"
+
+msgid "录制进程未运行"
+msgstr "录制进程未运行"
+
+msgid "录制进程运行中 (PID: {pid})"
+msgstr "录制进程运行中 (PID: {pid})"
+
+msgid "待 机"
+msgstr "待 机"
+
+msgid "快捷操作"
+msgstr "快捷操作"
+
+msgid "您可以最小化到系统托盘，或完全退出程序"
+msgstr "您可以最小化到系统托盘，或完全退出程序"
+
+msgid "房间"
+msgstr "房间"
+
+msgid "打开目录失败: {err}"
+msgstr "打开目录失败: {err}"
+
+msgid "执行程序: {path}"
+msgstr "执行程序: {path}"
+
+msgid "改这个键不会让进程收回已监听的地址、只会让配置比现实更乐观（伪安全态）；请先开启 Web 认证，或改完后重启本进程使监听地址与配置一致"
+msgstr "改这个键不会让进程收回已监听的地址、只会让配置比现实更乐观（伪安全态）；请先开启 Web 认证，或改完后重启本进程使监听地址与配置一致"
+
+msgid "敏感配置项不得以掩码值提交：请填入真实值，或保持该项不修改"
+msgstr "敏感配置项不得以掩码值提交：请填入真实值，或保持该项不修改"
+
+msgid "敏感配置项不得清空：如需移除请显式填写占位值并手工编辑 config.ini"
+msgstr "敏感配置项不得清空：如需移除请显式填写占位值并手工编辑 config.ini"
+
+msgid "日志刷新"
+msgstr "日志刷新"
+
+msgid "日志超过 1000 行将自动截断"
+msgstr "日志超过 1000 行将自动截断"
+
+msgid "暂无弹幕数据\n"
+msgstr "暂无弹幕数据\n"
+
+msgid "暂无弹幕监控数据\n\n启动录制并在 config.ini 开启「是否弹幕监控(是/否)」后，支持弹幕的平台（斗鱼/B站/虎牙/抖音/Twitch）将显示实时弹幕"
+msgstr "暂无弹幕监控数据\n\n启动录制并在 config.ini 开启「是否弹幕监控(是/否)」后，支持弹幕的平台（斗鱼/B站/虎牙/抖音/Twitch）将显示实时弹幕"
+
+msgid "暂无录制中的直播间\n\n启动录制后，将自动检测各直播间的实际画质是否与设置一致"
+msgstr "暂无录制中的直播间\n\n启动录制后，将自动检测各直播间的实际画质是否与设置一致"
+
+msgid "未找到 console 解释器 {path}，优雅停止将不可用"
+msgstr "未找到 console 解释器 {path}，优雅停止将不可用"
+
+msgid "未找到原直播间"
+msgstr "未找到原直播间"
+
+msgid "未找到对应的配置项"
+msgstr "未找到对应的配置项"
+
+msgid "未找到录制核心程序: {path}"
+msgstr "未找到录制核心程序: {path}"
+
+msgid "未找到直播间"
+msgstr "未找到直播间"
+
+msgid "未知画质档位: {quality}"
+msgstr "未知画质档位: {quality}"
+
+msgid "未能在 URL_config.ini 中找到「{anchor_name}」对应的直播间地址，画质未修改"
+msgstr "未能在 URL_config.ini 中找到「{anchor_name}」对应的直播间地址，画质未修改"
+
+msgid "检测到新录制会话，跳过旧会话的停止收尾"
+msgstr "检测到新录制会话，跳过旧会话的停止收尾"
+
+msgid "正在停止录制..."
+msgstr "正在停止录制..."
+
+msgid "正在停止录制并清理 ffmpeg 进程，请稍候..."
+msgstr "正在停止录制并清理 ffmpeg 进程，请稍候..."
+
+msgid "正在发送 CTRL_BREAK 信号（触发子进程 safe_exit 清理 ffmpeg）..."
+msgstr "正在发送 CTRL_BREAK 信号（触发子进程 safe_exit 清理 ffmpeg）..."
+
+msgid "正在发送 SIGINT 信号..."
+msgstr "正在发送 SIGINT 信号..."
+
+msgid "每行一个直播链接，支持 # 开头的注释行  │  外部修改文件后将自动重新加载  │  点击窗口关闭按钮将最小化到系统托盘"
+msgstr "每行一个直播链接，支持 # 开头的注释行  │  外部修改文件后将自动重新加载  │  点击窗口关闭按钮将最小化到系统托盘"
+
+msgid "清理 ffmpeg 进程时出错: {type_name}: {err}"
+msgstr "清理 ffmpeg 进程时出错: {type_name}: {err}"
+
+msgid "状态刷新"
+msgstr "状态刷新"
+
+msgid "状态行译文取不到必需占位符，已回退原文模板匹配（请核对 i18n 目录该条译文）"
+msgstr "状态行译文取不到必需占位符，已回退原文模板匹配（请核对 i18n 目录该条译文）"
+
+msgid "画质正常"
+msgstr "画质正常"
+
+msgid "画质监控状态行解析降级: {problem}"
+msgstr "画质监控状态行解析降级: {problem}"
+
+msgid "画质降级"
+msgstr "画质降级"
+
+msgid "界面重译失败（当前语言 {lang}）: {type_name}: {err}"
+msgstr "界面重译失败（当前语言 {lang}）: {type_name}: {err}"
+
+msgid "登录失败次数过多，请稍后再试"
+msgstr "登录失败次数过多，请稍后再试"
+
+msgid "监控房间"
+msgstr "监控房间"
+
+msgid "直播录制"
+msgstr "直播录制"
+
+msgid "直播间已存在"
+msgstr "直播间已存在"
+
+msgid "礼物"
+msgstr "礼物"
+
+msgid "等待子进程退出异常: {err}"
+msgstr "等待子进程退出异常: {err}"
+
+msgid "系统托盘"
+msgstr "系统托盘"
+
+msgid "系统托盘不可用，已改为最小化到任务栏"
+msgstr "系统托盘不可用，已改为最小化到任务栏"
+
+msgid "累计弹幕"
+msgstr "累计弹幕"
+
+msgid "解析 URL 配置失败: {err}"
+msgstr "解析 URL 配置失败: {err}"
+
+msgid "警告：进程可能仍在运行！"
+msgstr "警告：进程可能仍在运行！"
+
+msgid "设置 {set_q}({set_code}) 实际 {actual_q}({actual_code})"
+msgstr "设置 {set_q}({set_code}) 实际 {actual_q}({actual_code})"
+
+msgid "设置画质"
+msgstr "设置画质"
+
+msgid "该配置项不允许通过 Web 修改"
+msgstr "该配置项不允许通过 Web 修改"
+
+msgid "语言 Language"
+msgstr "语言 Language"
+
+msgid "语言已切换: {lang}（录制子进程重启后同步生效）"
+msgstr "语言已切换: {lang}（录制子进程重启后同步生效）"
+
+msgid "语言已切换为 {lang}，但配置写回失败: {err}"
+msgstr "语言已切换为 {lang}，但配置写回失败: {err}"
+
+msgid "语言已切换为 {lang}，但配置写回失败：未找到 language 配置行"
+msgstr "语言已切换为 {lang}，但配置写回失败：未找到 language 配置行"
+
+msgid "语言配置写回失败"
+msgstr "语言配置写回失败"
+
+msgid "请先关闭 Web 认证再清空密码"
+msgstr "请先关闭 Web 认证再清空密码"
+
+msgid "请先在 config.ini 把 web_host 改为 127.0.0.1 并重启本进程（判定以进程实际监听地址为准，只改配置不重启不生效）"
+msgstr "请先在 config.ini 把 web_host 改为 127.0.0.1 并重启本进程（判定以进程实际监听地址为准，只改配置不重启不生效）"
+
+msgid "请求体不是合法 JSON"
+msgstr "请求体不是合法 JSON"
+
+msgid "请求体过大"
+msgstr "请求体过大"
+
+msgid "读取画质选项失败: {err}"
+msgstr "读取画质选项失败: {err}"
+
+msgid "读取输出错误: {err}"
+msgstr "读取输出错误: {err}"
+
+msgid "路径不存在"
+msgstr "路径不存在"
+
+msgid "输出格式"
+msgstr "输出格式"
+
+msgid "输出流已关闭: {err}"
+msgstr "输出流已关闭: {err}"
+
+msgid "进程已优雅退出（ffmpeg 已由子进程清理）"
+msgstr "进程已优雅退出（ffmpeg 已由子进程清理）"
+
+msgid "进程已终止（硬杀路径，ffmpeg 已随进程树终止）"
+msgstr "进程已终止（硬杀路径，ffmpeg 已随进程树终止）"
+
+msgid "进程未能及时退出，整树强制终止..."
+msgstr "进程未能及时退出，整树强制终止..."
+
+msgid "退出清理流程异常: {err}"
+msgstr "退出清理流程异常: {err}"
+
+msgid "速率(条/分)"
+msgstr "速率(条/分)"
+
+msgid "非回环监听地址下不允许关闭 Web 认证"
+msgstr "非回环监听地址下不允许关闭 Web 认证"
+
+msgid "非回环监听地址（当前实际监听 {bind}）下{context}：{action}{tail}"
+msgstr "非回环监听地址（当前实际监听 {bind}）下{context}：{action}{tail}"
+
+msgid "非法路径"
+msgstr "非法路径"
+
+msgid "非法路径或文件不存在"
+msgstr "非法路径或文件不存在"
+
+msgid "高级设置 - config.ini"
+msgstr "高级设置 - config.ini"
+
+msgid "高级设置窗口已打开，已为你切换到该窗口"
+msgstr "高级设置窗口已打开，已为你切换到该窗口"
+
+msgid "高频房间弹幕按每秒 10 条采样展示，统计计数始终精确"
+msgstr "高频房间弹幕按每秒 10 条采样展示，统计计数始终精确"
+
+msgid "默认画质"
+msgstr "默认画质"
+
+msgid "，提示: {hint}"
+msgstr "，提示: {hint}"
+
+msgid "；确需对局域网无认证开放时，请设置环境变量 DOUYIN_WEB_ALLOW_INSECURE=1 后重启本进程"
+msgstr "；确需对局域网无认证开放时，请设置环境变量 DOUYIN_WEB_ALLOW_INSECURE=1 后重启本进程"
+
+msgid "🎯   画质监控"
+msgstr "🎯   画质监控"
+
+msgid "🎯  画质监控（实时检测实际画质是否与设置一致）"
+msgstr "🎯  画质监控（实时检测实际画质是否与设置一致）"
+
+msgid "💬   弹幕监控"
+msgstr "💬   弹幕监控"
+
+msgid "💬  弹幕房间（连接状态 / 累计弹幕 / 速率 / 礼物）"
+msgstr "💬  弹幕房间（连接状态 / 累计弹幕 / 速率 / 礼物）"
+
+msgid "💾   保存 URL 配置"
+msgstr "💾   保存 URL 配置"
+
+msgid "💾  保存配置"
+msgstr "💾  保存配置"
+
+msgid "📂   打开下载目录"
+msgstr "📂   打开下载目录"
+
+msgid "📄 配置文件内容 (config/config.ini)"
+msgstr "📄 配置文件内容 (config/config.ini)"
+
+msgid "📊   控制台"
+msgstr "📊   控制台"
+
+msgid "📋   运行日志"
+msgstr "📋   运行日志"
+
+msgid "📋  实时弹幕"
+msgstr "📋  实时弹幕"
+
+msgid "📋  运行日志 (main.py 输出)"
+msgstr "📋  运行日志 (main.py 输出)"
+
+msgid "📝   URL 配置"
+msgstr "📝   URL 配置"
+
+msgid "📝  URL 配置编辑区 (config/URL_config.ini)"
+msgstr "📝  URL 配置编辑区 (config/URL_config.ini)"
+
+msgid "📥   最小化到托盘"
+msgstr "📥   最小化到托盘"
+
+msgid "🔄   重新读取"
+msgstr "🔄   重新读取"
+
+msgid "🗑   清空"
+msgstr "🗑   清空"
+
+msgid "🗑   清空日志"
+msgstr "🗑   清空日志"

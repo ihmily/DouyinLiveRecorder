@@ -267,3 +267,31 @@ class TestRealWindowWidgets:
             assert name3 != name1
         finally:
             root.destroy()
+
+    def test_translatable_text_registers_and_retranslates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # T()（ui_i18n.Translatable）经工厂「建时查表 + 登记重译」：语言切换后
+        # retranslate_all 回填当前语言值。删掉工厂里的 register 调用本用例必须转红（变异验证）。
+        import tkinter as tk
+
+        import i18n
+        import src.ui_kit as uk
+        from src import ui_i18n
+
+        root = tk.Tk()
+        try:
+            label = uk.Label(root, text=ui_i18n.T("待 机"))
+            button = uk.Button(root, text=ui_i18n.T("开始录制"))
+            assert label.cget("text") == "待 机"
+            assert button.cget("text") == "开始录制"
+            # 非恒等翻译：证明重译走 tr 查表（每次渲染取当前目录），而不是建时定格
+            monkeypatch.setattr(i18n, "_tr", lambda text: f"<<{text}>>")
+            applied = ui_i18n.retranslate_all()
+            assert applied >= 2, "两个控件都必须登记在册"
+            assert label.cget("text") == "<<待 机>>"
+            assert button.cget("text") == "<<开始录制>>"
+            # 普通 str 文本不登记：切语言不得被改写
+            plain = uk.Label(root, text="DouyinLiveRecorder")
+            assert ui_i18n.retranslate_all() >= 2
+            assert plain.cget("text") == "DouyinLiveRecorder"
+        finally:
+            root.destroy()

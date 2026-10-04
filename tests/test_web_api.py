@@ -1413,6 +1413,53 @@ class TestInsecureBindInvariantUsesRealAddress:
         finally:
             client.close()
 
+    def test_update_config_insecure_detail_composed_and_translated(
+        self, tmp_path: Path, fake_main: types.ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # update_config 的 403 走 _insecure_bind_detail 组合模板（非中间件机器码分支）：
+        # 组合四段（bind/context/action/tail）全部经 tr 渲染，断言标记出现在组合结果里。
+        # 把任一段改回裸字面量拼接会让对应断言转红（变异验证）。
+        import i18n
+        from src import web_api as wa
+
+        client = self._client(tmp_path, wa, cfg_host="0.0.0.0", auth="true", bind_host="0.0.0.0", bind_port=8000)
+        try:
+            token = _login(client)
+            headers = {"Authorization": f"Bearer {token}"}
+            monkeypatch.setattr(i18n, "_tr", lambda text: f"<<{text}>>")
+            resp = client.put(
+                "/api/config",
+                json={"section": "Web", "key": "web_auth_enable", "value": "false"},
+                headers=headers,
+            )
+            assert resp.status_code == 403
+            detail = resp.json()["detail"]
+            assert detail.startswith("<<非回环监听地址（当前实际监听 ")
+            assert "<<不允许关闭 Web 认证>>" in detail
+            assert "<<请先在 config.ini 把 web_host 改为 127.0.0.1" in detail
+            assert "<<；确需对局域网无认证开放时" in detail
+        finally:
+            client.close()
+
+    def test_middleware_insecure_bind_message_translated(
+        self, tmp_path: Path, fake_main: types.ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 中间件分支（SEV-04 每请求检查）：配置已「无认证 + 非回环」时 /api/* 被 403 拦截；
+        # detail 是机器码契约（不翻），message 是展示文案（必须翻）。
+        import i18n
+        from src import web_api as wa
+
+        client = self._client(tmp_path, wa, cfg_host="0.0.0.0", auth="false", bind_host="0.0.0.0", bind_port=8000)
+        try:
+            monkeypatch.setattr(i18n, "_tr", lambda text: f"<<{text}>>")
+            resp = client.get("/api/status")
+            assert resp.status_code == 403
+            body = resp.json()
+            assert body["detail"] == "insecure_bind_disabled", "机器码 detail 不得被翻译（前端契约）"
+            assert body["message"] == "<<非回环监听地址下不允许关闭 Web 认证>>"
+        finally:
+            client.close()
+
 
 class TestOriginSameHostAndPort:
     # MID-N42 修复（2026-09-21，CODE_REVIEW_2026-09-21）：Origin 同源判定曾直接复用
@@ -2514,3 +2561,48 @@ class TestQualityOptionsEndpoints:
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 422
+
+
+class TestErrorDetailI18n:
+    # 2026-10-04：面板错误 detail 是用户可见文案（前端 apiError 原样弹 toast），
+    # 全部经 i18n_module.tr 按当前语言渲染；稳定机器码 detail（unauthorized /
+    # rate_limited / host_not_allowed / insecure_bind_disabled）是前端契约，不应被翻译。
+    # 本组用例把 _tr 换成标记函数证明「确实查了目录」——把 detail 改回裸字面量会转红。
+
+    def test_login_failure_detail_translated(
+        self, app_env: types.SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import i18n
+
+        monkeypatch.setattr(i18n, "_tr", lambda text: f"<<{text}>>")
+        resp = app_env.client.post("/api/login", json={"password": "wrong"})
+        assert resp.status_code == 401
+        assert resp.json()["detail"] == "<<密码错误>>"
+
+    def test_files_endpoint_detail_translated(
+        self, app_env: types.SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import i18n
+
+        token = _login(app_env.client)
+        monkeypatch.setattr(i18n, "_tr", lambda text: f"<<{text}>>")
+        resp = app_env.client.get(
+            "/api/files", params={"path": "../outside"}, headers={"Authorization": f"Bearer {token}"}
+        )
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "<<非法路径>>"
+
+    def test_room_not_found_detail_translated(
+        self, app_env: types.SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import i18n
+
+        token = _login(app_env.client)
+        monkeypatch.setattr(i18n, "_tr", lambda text: f"<<{text}>>")
+        resp = app_env.client.delete(
+            "/api/rooms",
+            params={"url": "https://live.douyin.com/999999999"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "<<未找到直播间>>"

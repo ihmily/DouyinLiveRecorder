@@ -184,10 +184,12 @@ os.environ["DLR_GUI_PARENT"] = "1"
 
 # i18n 多语言：GUI 侧边栏语言菜单即时热切换（i18n.set_language 重载翻译目录，
 # 本进程后续 print/日志输出即时换语言）；config 写回经 web_config.update_config_line
-# （与 Web 面板同款行级更新，保留注释）。GUI 自身界面文案为静态中文，不随切换重绘。
+# （与 Web 面板同款行级更新，保留注释）。[历史注 2026-10-04] 「GUI 自身界面文案为静态中文，
+# 不随切换重绘」已随静态标签接入 i18n（ui_i18n.T 登记 + retranslate_all 回填）失效删除。
 import i18n as i18n_module
 from src.config_bool import parse_config_bool
 from src.logger import child_process_env, logger
+from src.ui_i18n import T, Translatable, apply_title, retranslate_all
 from src.ui_kit import (
     NAV_ACTIVE_STYLE,
     NAV_STYLE,
@@ -602,12 +604,33 @@ class SystemTray:
     def _build_icon(self) -> "PystrayIcon":
         import pystray  # 延迟导入：避免 headless 环境在模块顶层即失败
 
-        menu = pystray.Menu(
-            pystray.MenuItem("显示主界面", self.on_show, default=True),
-            pystray.MenuItem("最小化到托盘", self.on_minimize),
-            pystray.MenuItem("退出程序", self.on_exit),
-        )
+        menu = self._build_menu(pystray)
         return pystray.Icon("LiveRecorder", self.create_icon_image(), "LiveRecorder - click to show", menu)
+
+    # 托盘菜单构建单点：_build_icon 与语言切换后的 rebuild_menu 共用，
+    # 菜单项文本在构建期定型，故换语言只能整体重建（retranslate 不适用于 pystray）。
+    # pystray 是延迟导入的动态模块对象（无类型存根），形参/返回用 Any 承接。
+    def _build_menu(self, pystray: Any) -> Any:
+        return pystray.Menu(
+            pystray.MenuItem(i18n_module.tr("显示主界面"), self.on_show, default=True),
+            pystray.MenuItem(i18n_module.tr("最小化到托盘"), self.on_minimize),
+            pystray.MenuItem(i18n_module.tr("退出程序"), self.on_exit),
+        )
+
+    # 语言切换钩子调用：图标在跑则换上新语言菜单；托盘降级（icon 为 None）静默跳过。
+    def rebuild_menu(self) -> None:
+        if self.icon is None:
+            return
+        try:
+            import pystray  # 与 _build_icon 同一延迟导入口径
+
+            # pystray 无类型存根，Icon 的 menu/update_menu 在静态视角下不可见；
+            # 经 Any 局部变量承接动态属性访问（运行期由 pystray 真实对象承担）
+            icon: Any = self.icon
+            icon.menu = self._build_menu(pystray)
+            icon.update_menu()
+        except Exception:
+            pass
 
     # 托盘不可用时优雅降级，避免 GUI 进程因崩溃堆栈退出。
     def _degrade(self, exc: BaseException) -> None:
@@ -682,7 +705,9 @@ class SystemTray:
             self.running = False
 
     # 发送系统通知（仅在托盘图标可用时）。
-    def notify(self, message: str, title: str = "直播录制器") -> None:
+    def notify(self, message: str, title: str | None = None) -> None:
+        # 标题默认值在调用时查表（def 期定型会让通知永远停在构建语言）
+        title = i18n_module.tr("直播录制器") if title is None else title
         if self.icon:
             try:
                 self.icon.notify(message, title)
@@ -776,7 +801,7 @@ class AdvancedSettingsWindow:
         # [阶段5] tk.Toplevel 替代 CTkToplevel：底色随主题 token（标题栏跟随系统明暗，
         # 为可接受的观感边界——自绘暗色标题栏需 dwmapi 额外接入，未纳入本批）。
         self.window = tk.Toplevel(parent, bg=self._tokens["surface"])
-        self.window.title("高级设置 - config.ini")
+        apply_title(self.window, T("高级设置 - config.ini"))
         self.window.geometry("780x560")
         self.window.minsize(560, 400)
         self.window.transient(parent)
@@ -804,7 +829,7 @@ class AdvancedSettingsWindow:
         header = Frame(self.window, variant="primary", height=52)
         header.pack(fill=tk.X)
         header.pack_propagate(False)
-        Label(header, text="⚙  高级设置", font=Fonts.heading(), variant="on_primary").pack(
+        Label(header, text=T("⚙  高级设置"), font=Fonts.heading(), variant="on_primary").pack(
             side=tk.LEFT, padx=20, pady=12
         )
 
@@ -812,7 +837,7 @@ class AdvancedSettingsWindow:
         content = Frame(self.window)
         content.pack(fill=tk.BOTH, expand=True, padx=16, pady=(16, 0))
 
-        Label(content, text="📄 配置文件内容 (config/config.ini)", font=Fonts.body(), anchor=tk.W).pack(
+        Label(content, text=T("📄 配置文件内容 (config/config.ini)"), font=Fonts.body(), anchor=tk.W).pack(
             fill=tk.X, pady=(0, 8)
         )
 
@@ -837,7 +862,7 @@ class AdvancedSettingsWindow:
 
         Button(
             btn_frame,
-            text="取消",
+            text=T("取消"),
             command=self._close,
             font=Fonts.body(),
             padding=(12, 6),
@@ -847,7 +872,7 @@ class AdvancedSettingsWindow:
 
         Button(
             btn_frame,
-            text="💾  保存配置",
+            text=T("💾  保存配置"),
             command=self.save_config,
             font=Fonts.body(bold=True),
             padding=(12, 6),
@@ -866,8 +891,9 @@ class AdvancedSettingsWindow:
             self._disk_snapshot = content
         except FileNotFoundError:
             self.config_text.delete("1.0", tk.END)
-            self.config_text.insert("1.0", "# 配置文件不存在，请新建")
-            self._baseline_content = _normalize_editor_text("# 配置文件不存在，请新建")
+            not_found_hint = i18n_module.tr("# 配置文件不存在，请新建")
+            self.config_text.insert("1.0", not_found_hint)
+            self._baseline_content = _normalize_editor_text(not_found_hint)
             self._disk_snapshot = None
         except Exception as e:
             # MIN-2247 同口径：messagebox 标题与正文一并走 tr（f-string 直传是提取盲区②）
@@ -949,10 +975,10 @@ class AdvancedSettingsWindow:
                 # 编辑器无未保存改动：静默跟随磁盘，否则用户看不到最新值、保存时还会覆盖它
                 self._load_config()
                 if self.log_callback:
-                    self.log_callback("config.ini 已被外部修改，已重新加载到编辑器")
+                    self.log_callback(i18n_module.tr("config.ini 已被外部修改，已重新加载到编辑器"))
             elif not self._conflict_hint_shown:
                 self._conflict_hint_shown = True
-                self._set_hint("⚠ config.ini 已被外部修改，而你有未保存的编辑；保存时会先询问是否覆盖")
+                self._set_hint(i18n_module.tr("⚠ config.ini 已被外部修改，而你有未保存的编辑；保存时会先询问是否覆盖"))
         finally:
             self._schedule_config_watch()
 
@@ -977,7 +1003,7 @@ class AdvancedSettingsWindow:
                     "点击「否」取消保存，可先复制外部改动或重新加载文件。"
                 ),
             ):
-                self._set_hint("已取消保存：外部改动未被覆盖，可重新打开高级设置加载最新内容")
+                self._set_hint(i18n_module.tr("已取消保存：外部改动未被覆盖，可重新打开高级设置加载最新内容"))
                 return
             _save_text_to_file(editor_text, self.config_file)
             self._baseline_content = editor_text
@@ -992,7 +1018,7 @@ class AdvancedSettingsWindow:
             # 「成功」「错误」「警告」「退出确认」四目录已有；正文为本轮新登记词条）。
             messagebox.showinfo(i18n_module.tr("成功"), i18n_module.tr("配置文件已保存！"))
             if self.log_callback:
-                self.log_callback("高级设置配置已保存")
+                self.log_callback(i18n_module.tr("高级设置配置已保存"))
             self._close()
         except Exception as e:
             messagebox.showerror(i18n_module.tr("错误"), i18n_module.tr("保存配置文件失败: {e}", e=e))
@@ -1281,10 +1307,10 @@ def _pattern_from_template(template: str, required: tuple[str, ...]) -> tuple[re
     pattern = _compile_parts(_split_sentinels(_sentinel_text(template, translated=True)), required)
     if pattern is not None:
         return pattern, ()
-    detail = "状态行译文取不到必需占位符，已回退原文模板匹配（请核对 i18n 目录该条译文）"
+    detail = i18n_module.tr("状态行译文取不到必需占位符，已回退原文模板匹配（请核对 i18n 目录该条译文）")
     fallback = _compile_parts(_split_sentinels(_sentinel_text(template, translated=False)), required)
     if fallback is None:
-        return None, (detail + "；原文模板同样不可用",)
+        return None, (i18n_module.tr("{detail}；原文模板同样不可用", detail=detail),)
     return fallback, (detail,)
 
 
@@ -1436,7 +1462,7 @@ class LiveRecorderGUI:
     # 初始化 GUI 主窗口、路径配置、状态与所有后台调度。
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("直播录制控制台")
+        apply_title(root, T("直播录制控制台"))
         self.root.geometry("1120x740")
         self.root.minsize(920, 620)
 
@@ -1560,7 +1586,9 @@ class LiveRecorderGUI:
         # _anchor_url_map 为 主播名 → 直播间地址 的反查表（写回 URL_config.ini 需要 URL）；
         # _anchor_quality_map 为 主播名 → 配置行当前画质 的映射（「设置画质」列的显示来源）。
         self._quality_options: list[str] = []
-        self._quality_default_label = "默认画质"
+        # 哨兵存 tr 后形态（关键约定#13：比较对象一律取 i18n.tr(...) 后形态）；
+        # 语言切换钩子重置本值并重读上下文，比较与菜单展示随之整体换语言
+        self._quality_default_label = i18n_module.tr("默认画质")
         self._anchor_url_map: dict[str, str] = {}
         self._anchor_quality_map: dict[str, str] = {}
 
@@ -1570,7 +1598,8 @@ class LiveRecorderGUI:
         self._danmaku_lock = threading.Lock()
         self._danmaku_rooms: dict[str, dict[str, str | bool | int | float]] = {}
         self._danmaku_msgs: deque[dict[str, Any]] = deque(maxlen=300)
-        self._danmaku_filter = "全部房间"
+        # 哨兵存 tr 后形态（同 _quality_default_label 的口径），语言切换钩子重置后重渲染
+        self._danmaku_filter = i18n_module.tr("全部房间")
         self._danmaku_stats_dirty = True  # 统计表是否有变化待重绘
         self._danmaku_stream_dirty = True  # 弹幕流是否有新消息待重绘
         # 仅缓存上次渲染的 rows 用于比较去重（见 _update_danmaku_display），值不含 float
@@ -1638,7 +1667,7 @@ class LiveRecorderGUI:
                 # 下 sys.stderr 为 None，直接 traceback.print_exc() 会二次崩溃
                 # （AttributeError: 'NoneType' object has no attribute 'write'）；
                 # 改写为程序内日志，保证无控制台环境也可观测且不抛。
-                self._log("UI 事件回调执行异常（详见运行日志）", "error")
+                self._log(i18n_module.tr("UI 事件回调执行异常（详见运行日志）"), "error")
                 self._log(traceback.format_exc(), "error")
 
         if not self._pump_active:
@@ -1706,6 +1735,10 @@ class LiveRecorderGUI:
 
         self._build_content()
         self._show_page("dashboard")
+        # 启动期统一重译：_build_sidebar 里配置语言（set_language）之前构建的少数标签
+        # （品牌/主题菜单初值）按 i18n 导入默认语言定型，此处回填一次保证整窗语言一致；
+        # 之后构建的控件不受影响（登记表回填是幂等的）。
+        retranslate_all()
 
     # 构建左侧导航栏（品牌、状态胶囊、导航按钮、界面主题/语言与退出）。
     # [2026-10-03 阶段4] 控件层换 src.ui_kit 的 ttk 工厂；「外观模式」菜单并入
@@ -1721,7 +1754,7 @@ class LiveRecorderGUI:
         Label(brand, text="🎬", font=Fonts.get(30)).pack(side=tk.LEFT)
         brand_text = Frame(brand)
         brand_text.pack(side=tk.LEFT, padx=(10, 0))
-        Label(brand_text, text="直播录制", font=Fonts.title()).pack(anchor=tk.W)
+        Label(brand_text, text=T("直播录制"), font=Fonts.title()).pack(anchor=tk.W)
         Label(brand_text, text="DouyinLiveRecorder", font=Fonts.small(), variant="muted").pack(anchor=tk.W)
 
         # 状态胶囊（底色 = surface_alt，圆点画布与文字标签底色必须同槽）
@@ -1736,7 +1769,9 @@ class LiveRecorderGUI:
 
         self.sidebar_status_label = Label(
             self.status_pill,
-            text="未运行",
+            # 运行态会被 _update_status_bar 周期改写，不能走 T() 登记（登记重译会把
+            # 状态打回初始值）；建时 tr + 语言切换钩子显式调 _update_status_bar 重渲染
+            text=i18n_module.tr("未运行"),
             font=Fonts.body(bold=True),
             variant="alt",
         )
@@ -1746,11 +1781,11 @@ class LiveRecorderGUI:
         nav = Frame(sidebar)
         nav.pack(fill=tk.X, padx=12, pady=(18, 0))
 
-        self._add_nav_button(nav, "dashboard", "📊   控制台")
-        self._add_nav_button(nav, "quality", "🎯   画质监控")
-        self._add_nav_button(nav, "danmaku", "💬   弹幕监控")
-        self._add_nav_button(nav, "config", "📝   URL 配置")
-        self._add_nav_button(nav, "logs", "📋   运行日志")
+        self._add_nav_button(nav, "dashboard", T("📊   控制台"))
+        self._add_nav_button(nav, "quality", T("🎯   画质监控"))
+        self._add_nav_button(nav, "danmaku", T("💬   弹幕监控"))
+        self._add_nav_button(nav, "config", T("📝   URL 配置"))
+        self._add_nav_button(nav, "logs", T("📋   运行日志"))
 
         # 底部区域
         bottom = Frame(sidebar)
@@ -1778,7 +1813,7 @@ class LiveRecorderGUI:
             self.theme_menu.set(i18n_module.tr(_THEME_LABELS[self.theme_manager.theme_id]))
 
         # 语言切换：显示名 → 语言码映射；选择即热切换本进程翻译目录并写回 config.ini
-        Label(bottom, text="语言 Language", font=Fonts.small(), variant="muted", anchor=tk.W).pack(
+        Label(bottom, text=T("语言 Language"), font=Fonts.small(), variant="muted", anchor=tk.W).pack(
             fill=tk.X, padx=6, pady=(0, 4)
         )
         # MID-53：显示名一律取 i18n.unique_display_names()，不得再在本文件裁剪括注。
@@ -1815,7 +1850,7 @@ class LiveRecorderGUI:
 
         Button(
             bottom,
-            text="📥   最小化到托盘",
+            text=T("📥   最小化到托盘"),
             command=self.minimize_to_tray,
             font=Fonts.body(),
             variant="side_ghost",
@@ -1823,7 +1858,7 @@ class LiveRecorderGUI:
 
         Button(
             bottom,
-            text="❌   彻底退出",
+            text=T("❌   彻底退出"),
             command=self.quit_application,
             font=Fonts.body(bold=True),
             variant="side_danger",
@@ -1832,7 +1867,7 @@ class LiveRecorderGUI:
         return sidebar
 
     # 向侧边栏添加一项导航按钮并绑定页面切换回调。
-    def _add_nav_button(self, parent: Frame, page_id: str, text: str) -> None:
+    def _add_nav_button(self, parent: Frame, page_id: str, text: str | Translatable) -> None:
         btn = Button(parent, text=text, command=lambda: self._show_page(page_id), font=Fonts.body(), variant="nav")
         btn.pack(fill=tk.X, pady=2)
         self._nav_buttons[page_id] = btn
@@ -1900,16 +1935,50 @@ class LiveRecorderGUI:
         # 写回配置与提示都必须用回退后的码：写请求值会让 GUI 与录制子进程各说一种语言
         # （子进程每轮经 resolve_language 重解析 → en_US），且「语言已切换」成为虚假成功。
         effective = i18n_module.set_language(lang_code)
+        # 界面重译：静态标签（T() 登记表）回填当前语言；动态面（状态栏/画质/弹幕/
+        # 筛选哨兵/托盘菜单）重建或重渲染——顺序必须先回填登记表再重置哨兵，
+        # 否则 refresh 用旧语言哨兵比对会立刻把筛选菜单打回旧值
+        try:
+            retranslate_all()
+            self._quality_default_label = i18n_module.tr("默认画质")
+            self._danmaku_filter = i18n_module.tr("全部房间")
+            self._refresh_quality_context()
+            self._update_status_bar()
+            self._update_quality_display()
+            self._update_danmaku_display()
+            if self.system_tray:
+                self.system_tray.rebuild_menu()
+        except Exception as e:
+            # 重译失败不阻断语言切换本身（目录已切换、配置写回在下方）；仅记录现场
+            self._log(
+                i18n_module.tr(
+                    "界面重译失败（当前语言 {lang}）: {type_name}: {err}",
+                    lang=effective,
+                    type_name=type(e).__name__,
+                    err=e,
+                ),
+                "warn",
+            )
         # 写回 config.ini（行级更新保留注释；失败仅告警，不影响内存态切换）
         try:
             if not update_config_line(self.main_config_file, "录制设置", "language", effective):
-                self._log(f"语言已切换为 {effective}，但配置写回失败：未找到 language 配置行", "warn")
+                self._log(
+                    i18n_module.tr("语言已切换为 {lang}，但配置写回失败：未找到 language 配置行", lang=effective),
+                    "warn",
+                )
             elif effective != lang_code:
-                self._log(f"{lang_code} 的翻译目录不可用，已回退为 {effective}（配置同样按 {effective} 写回）", "warn")
+                self._log(
+                    i18n_module.tr(
+                        "{lang} 的翻译目录不可用，已回退为 {effective}（配置同样按 {effective} 写回）",
+                        lang=lang_code,
+                        effective=effective,
+                    ),
+                    "warn",
+                )
             else:
-                self._log(f"语言已切换: {effective}（录制子进程重启后同步生效）")
+                self._log(i18n_module.tr("语言已切换: {lang}（录制子进程重启后同步生效）", lang=effective))
         except Exception as e:
-            self._log(f"语言已切换为 {effective}，但配置写回失败: {e}", "warn")
+            self._log(i18n_module.tr("语言已切换为 {lang}，但配置写回失败: {err}", lang=effective, err=e), "warn")
 
     # 主题切换后同步自绘控件（Canvas 圆点 / Treeview 行标记 / tk.Text 编辑器）。
     # [2026-10-03 阶段4] 圆点底色改从当前主题 token 取值——CTk 外观模式不再是配色事实源
@@ -1985,7 +2054,7 @@ class LiveRecorderGUI:
         )
 
     # 创建带可选标题的圆角卡片容器，返回卡片 Frame。
-    def _create_card(self, parent: Frame, title: str = "") -> Frame:
+    def _create_card(self, parent: Frame, title: str | Translatable = "") -> Frame:
         card = Frame(parent, variant="card")
         if title:
             header = Frame(card, height=46)
@@ -2018,25 +2087,25 @@ class LiveRecorderGUI:
         self._big_dot_item = self._big_dot.create_oval(8, 8, 56, 56, fill=Colors.DANGER, outline="")
         self._sync_big_dot_bg()
 
-        # 中间：状态文字
+        # 中间：状态文字（运行态被 _update_status_bar 周期改写，建时 tr 不登记重译）
         mid = Frame(status_card)
         mid.grid(row=0, column=1, sticky="w", pady=18)
-        self.big_status_label = Label(mid, text="待 机", font=Fonts.big_status())
+        self.big_status_label = Label(mid, text=i18n_module.tr("待 机"), font=Fonts.big_status())
         self.big_status_label.pack(anchor=tk.W)
-        self.big_status_sub = Label(mid, text="录制进程未运行", font=Fonts.body(), variant="muted")
+        self.big_status_sub = Label(mid, text=i18n_module.tr("录制进程未运行"), font=Fonts.body(), variant="muted")
         self.big_status_sub.pack(anchor=tk.W, pady=(2, 0))
 
         # 右侧：信息网格（2 列 x 2 行）
         info = Frame(status_card)
         info.grid(row=0, column=2, padx=24, pady=18, sticky="e")
 
-        self.info_interval = self._add_info_item(info, "循环检测", "-", 0, 0)
-        self.info_format = self._add_info_item(info, "输出格式", "-", 0, 1)
-        self.info_tray = self._add_info_item(info, "系统托盘", "-", 1, 0)
-        self.info_time = self._add_info_item(info, "当前时间", "-", 1, 1)
+        self.info_interval = self._add_info_item(info, T("循环检测"), "-", 0, 0)
+        self.info_format = self._add_info_item(info, T("输出格式"), "-", 0, 1)
+        self.info_tray = self._add_info_item(info, T("系统托盘"), "-", 1, 0)
+        self.info_time = self._add_info_item(info, T("当前时间"), "-", 1, 1)
 
         # ── 录制控制卡片 ──
-        ctrl_card = self._create_card(page, "录制控制")
+        ctrl_card = self._create_card(page, T("录制控制"))
         ctrl_card.grid(row=1, column=0, sticky="ew", pady=(0, 14))
 
         ctrl_body = Frame(ctrl_card)
@@ -2044,7 +2113,7 @@ class LiveRecorderGUI:
 
         self.start_btn = Button(
             ctrl_body,
-            text="▶   开始录制",
+            text=T("▶   开始录制"),
             command=self.start_recording,
             font=Fonts.heading(),
             padding=(24, 11),
@@ -2054,7 +2123,7 @@ class LiveRecorderGUI:
 
         self.stop_btn = Button(
             ctrl_body,
-            text="⏹   停止录制",
+            text=T("⏹   停止录制"),
             command=self.stop_recording,
             font=Fonts.heading(),
             padding=(24, 11),
@@ -2067,7 +2136,7 @@ class LiveRecorderGUI:
         # 窄窗口 / 高 DPI 下放不下时自动折行，不再被 pack 按 anchor=center 两侧对称裁切
         hint_label = Label(
             ctrl_body,
-            text="启动后将调用 main.py 循环监测 URL 配置中的直播间并自动录制",
+            text=T("启动后将调用 main.py 循环监测 URL 配置中的直播间并自动录制"),
             font=Fonts.small(),
             variant="muted",
             anchor=tk.W,
@@ -2077,7 +2146,7 @@ class LiveRecorderGUI:
         _bind_adaptive_wraplength(hint_label)
 
         # ── 快捷操作卡片 ──
-        quick_card = self._create_card(page, "快捷操作")
+        quick_card = self._create_card(page, T("快捷操作"))
         quick_card.grid(row=2, column=0, sticky="new")
 
         quick_body = Frame(quick_card)
@@ -2085,7 +2154,7 @@ class LiveRecorderGUI:
 
         Button(
             quick_body,
-            text="📂   打开下载目录",
+            text=T("📂   打开下载目录"),
             command=self.open_downloads_folder,
             font=Fonts.body(),
             padding=(14, 8),
@@ -2094,7 +2163,7 @@ class LiveRecorderGUI:
 
         Button(
             quick_body,
-            text="⚙   高级设置",
+            text=T("⚙   高级设置"),
             command=self.open_advanced_settings,
             font=Fonts.body(),
             padding=(14, 8),
@@ -2104,7 +2173,7 @@ class LiveRecorderGUI:
         return page
 
     # 在状态卡片添加一项信息（标签 + 值），返回值标签以便后续更新。
-    def _add_info_item(self, parent: Frame, label: str, value: str, row: int, col: int) -> Label:
+    def _add_info_item(self, parent: Frame, label: str | Translatable, value: str, row: int, col: int) -> Label:
         box = Frame(parent)
         box.grid(row=row, column=col, padx=16, pady=6, sticky="w")
         Label(box, text=label, font=Fonts.small(), variant="muted").pack(anchor=tk.W)
@@ -2128,7 +2197,7 @@ class LiveRecorderGUI:
         page.grid_columnconfigure(0, weight=1)
         page.grid_rowconfigure(0, weight=1)
 
-        card = self._create_card(page, "📝  URL 配置编辑区 (config/URL_config.ini)")
+        card = self._create_card(page, T("📝  URL 配置编辑区 (config/URL_config.ini)"))
         card.grid(row=0, column=0, sticky="nsew")
 
         # 编辑器
@@ -2141,7 +2210,9 @@ class LiveRecorderGUI:
         # 提示
         Label(
             card,
-            text="每行一个直播链接，支持 # 开头的注释行  │  外部修改文件后将自动重新加载  │  点击窗口关闭按钮将最小化到系统托盘",
+            text=T(
+                "每行一个直播链接，支持 # 开头的注释行  │  外部修改文件后将自动重新加载  │  点击窗口关闭按钮将最小化到系统托盘"
+            ),
             font=Fonts.small(),
             variant="muted",
             anchor=tk.W,
@@ -2153,7 +2224,7 @@ class LiveRecorderGUI:
 
         self.reload_btn = Button(
             btn_row,
-            text="🔄   重新读取",
+            text=T("🔄   重新读取"),
             command=self._load_config,
             font=Fonts.body(),
             padding=(14, 7),
@@ -2163,7 +2234,7 @@ class LiveRecorderGUI:
 
         self.save_btn = Button(
             btn_row,
-            text="💾   保存 URL 配置",
+            text=T("💾   保存 URL 配置"),
             command=self.save_config,
             font=Fonts.body(bold=True),
             padding=(14, 7),
@@ -2180,7 +2251,7 @@ class LiveRecorderGUI:
         page.grid_columnconfigure(0, weight=1)
         page.grid_rowconfigure(0, weight=1)
 
-        card = self._create_card(page, "📋  运行日志 (main.py 输出)")
+        card = self._create_card(page, T("📋  运行日志 (main.py 输出)"))
         card.grid(row=0, column=0, sticky="nsew")
 
         # 终端容器（tk.Frame + tk.Text + ttk 滚动条；配色是刻意的主题无关常量）
@@ -2202,7 +2273,7 @@ class LiveRecorderGUI:
 
         Button(
             btn_row,
-            text="🗑   清空日志",
+            text=T("🗑   清空日志"),
             command=self._clear_log,
             font=Fonts.body(),
             padding=(12, 6),
@@ -2211,7 +2282,7 @@ class LiveRecorderGUI:
 
         Label(
             btn_row,
-            text="日志超过 1000 行将自动截断",
+            text=T("日志超过 1000 行将自动截断"),
             font=Fonts.small(),
             variant="muted",
         ).pack(side=tk.LEFT, padx=6)
@@ -2228,7 +2299,7 @@ class LiveRecorderGUI:
     def _make_quality_placeholder(self, parent: tk.Misc) -> Label:
         label = Label(
             parent,
-            text="暂无录制中的直播间\n\n启动录制后，将自动检测各直播间的实际画质是否与设置一致",
+            text=T("暂无录制中的直播间\n\n启动录制后，将自动检测各直播间的实际画质是否与设置一致"),
             font=Fonts.body(),
             variant="muted",
             justify=tk.CENTER,
@@ -2240,8 +2311,10 @@ class LiveRecorderGUI:
     def _make_danmaku_placeholder(self, parent: tk.Misc) -> Label:
         label = Label(
             parent,
-            text="暂无弹幕监控数据\n\n启动录制并在 config.ini 开启「是否弹幕监控(是/否)」后，"
-            "支持弹幕的平台（斗鱼/B站/虎牙/抖音/Twitch）将显示实时弹幕",
+            text=T(
+                "暂无弹幕监控数据\n\n启动录制并在 config.ini 开启「是否弹幕监控(是/否)」后，"
+                "支持弹幕的平台（斗鱼/B站/虎牙/抖音/Twitch）将显示实时弹幕"
+            ),
             font=Fonts.body(),
             variant="muted",
             justify=tk.CENTER,
@@ -2263,12 +2336,12 @@ class LiveRecorderGUI:
         summary_body.pack(fill=tk.X, padx=18, pady=16)
         summary_body.grid_columnconfigure((0, 1, 2), weight=1)
 
-        self._q_stat_total = self._add_stat_item(summary_body, "录制中", "0", 0, "primary")
-        self._q_stat_ok = self._add_stat_item(summary_body, "画质正常", "0", 1, "success")
-        self._q_stat_down = self._add_stat_item(summary_body, "画质降级", "0", 2, "danger")
+        self._q_stat_total = self._add_stat_item(summary_body, T("录制中"), "0", 0, "primary")
+        self._q_stat_ok = self._add_stat_item(summary_body, T("画质正常"), "0", 1, "success")
+        self._q_stat_down = self._add_stat_item(summary_body, T("画质降级"), "0", 2, "danger")
 
         # 详情卡片
-        detail_card = self._create_card(page, "🎯  画质监控（实时检测实际画质是否与设置一致）")
+        detail_card = self._create_card(page, T("🎯  画质监控（实时检测实际画质是否与设置一致）"))
         detail_card.grid(row=1, column=0, sticky="nsew")
 
         inner = Frame(detail_card)
@@ -2286,12 +2359,12 @@ class LiveRecorderGUI:
         self._quality_table = DataTable(
             table_area,
             [
-                ("name", "主播名称", 3, tk.W),
-                ("set_quality", "设置画质", 1, tk.W),
-                ("actual", "实际画质", 1, tk.W),
-                ("status", "状态", 1, tk.W),
-                ("alert_time", "告警时间", 2, tk.W),
-                ("switch", "切换画质", 2, tk.W),
+                ("name", T("主播名称"), 3, tk.W),
+                ("set_quality", T("设置画质"), 1, tk.W),
+                ("actual", T("实际画质"), 1, tk.W),
+                ("status", T("状态"), 1, tk.W),
+                ("alert_time", T("告警时间"), 2, tk.W),
+                ("switch", T("切换画质"), 2, tk.W),
             ],
         )
         # 行内「切换画质」浮层编辑器：行数据在 sync 时缓存（_quality_row_setq），
@@ -2315,8 +2388,10 @@ class LiveRecorderGUI:
         # 改为绑容器实宽的自适应折行（2026-09-29 修复）
         quality_hint_label = Label(
             inner,
-            text="「切换画质」选中非默认画质时，会以「画质,直播间地址」格式写回 config/URL_config.ini，"
-            "在下一轮检测循环（默认 120 秒）自动生效；选择「默认画质」则移除该行画质段、回落到全局默认画质。",
+            text=T(
+                "「切换画质」选中非默认画质时，会以「画质,直播间地址」格式写回 config/URL_config.ini，"
+                "在下一轮检测循环（默认 120 秒）自动生效；选择「默认画质」则移除该行画质段、回落到全局默认画质。"
+            ),
             font=Fonts.small(),
             variant="muted",
             anchor=tk.W,
@@ -2342,7 +2417,7 @@ class LiveRecorderGUI:
     # 在统计卡片添加一项统计（标签 + 值），返回值标签（画质/弹幕监控页共用）。
     # color 形参 [阶段4] 从 Colors 常量改为 ui_kit 标签变体名（"primary"/"success"/"danger"），
     # 颜色由 ui_theme 槽位派生、随主题切换全局重绘。
-    def _add_stat_item(self, parent: Frame, label: str, value: str, col: int, variant: str) -> Label:
+    def _add_stat_item(self, parent: Frame, label: str | Translatable, value: str, col: int, variant: str) -> Label:
         box = Frame(parent)
         box.grid(row=0, column=col, padx=10, pady=4, sticky="ew")
         box.grid_columnconfigure(0, weight=1)
@@ -2358,7 +2433,7 @@ class LiveRecorderGUI:
             self._quality_options = read_quality_options(self.main_config_file)
         except Exception as e:
             # 配置读取失败不应阻断页面构建：退化为无可选画质（菜单只剩「默认画质」）
-            self._log(f"读取画质选项失败: {e}", "error")
+            self._log(i18n_module.tr("读取画质选项失败: {err}", err=e), "error")
             self._quality_options = []
         try:
             rooms = parse_url_config(self.url_config_file)
@@ -2366,7 +2441,7 @@ class LiveRecorderGUI:
             self._anchor_url_map = {str(r["name"]).strip(): str(r["url"]) for r in named}
             self._anchor_quality_map = {str(r["name"]).strip(): str(r["quality"]) for r in named}
         except Exception as e:
-            self._log(f"解析 URL 配置失败: {e}", "error")
+            self._log(i18n_module.tr("解析 URL 配置失败: {err}", err=e), "error")
             self._anchor_url_map = {}
             self._anchor_quality_map = {}
 
@@ -2386,7 +2461,12 @@ class LiveRecorderGUI:
         key = re.sub(r"^序号\d+\s+", "", anchor_name).strip()
         url = self._anchor_url_map.get(key, "")
         if not url:
-            self._log(f"未能在 URL_config.ini 中找到「{anchor_name}」对应的直播间地址，画质未修改", "error")
+            self._log(
+                i18n_module.tr(
+                    "未能在 URL_config.ini 中找到「{anchor_name}」对应的直播间地址，画质未修改", anchor_name=anchor_name
+                ),
+                "error",
+            )
             messagebox.showerror(
                 i18n_module.tr("切换画质失败"),
                 i18n_module.tr(
@@ -2408,12 +2488,12 @@ class LiveRecorderGUI:
                 "点击「是」放弃未保存的更改并继续切换画质；\n点击「否」取消本次画质切换。"
             ),
         ):
-            self._log("已取消画质切换：URL 配置编辑器中有未保存的更改", "warn")
+            self._log(i18n_module.tr("已取消画质切换：URL 配置编辑器中有未保存的更改"), "warn")
             return
         try:
             changed = update_room_quality(self.url_config_file, url, new_quality)
         except (OSError, ValueError) as e:
-            self._log(f"切换「{anchor_name}」画质失败: {e}", "error")
+            self._log(i18n_module.tr("切换「{anchor_name}」画质失败: {err}", anchor_name=anchor_name, err=e), "error")
             # MIN-2247 同口径：标题与正文一并走 tr
             messagebox.showerror(
                 i18n_module.tr("切换画质失败"), i18n_module.tr("写入 config/URL_config.ini 失败：{e}", e=e)
@@ -2425,10 +2505,18 @@ class LiveRecorderGUI:
         # 与外部修改（录制子进程写回 / WEB 端操作）的编辑器重载语义一致。
         self._load_config()
         if changed:
-            tip = f"「{anchor_name}」画质已切换为 {selected}，将在下一轮检测循环生效"
+            tip = i18n_module.tr(
+                "「{anchor_name}」画质已切换为 {selected}，将在下一轮检测循环生效",
+                anchor_name=anchor_name,
+                selected=selected,
+            )
             self._log(tip)
         else:
-            self._log(f"「{anchor_name}」画质未发生变化（已是 {selected}）")
+            self._log(
+                i18n_module.tr(
+                    "「{anchor_name}」画质未发生变化（已是 {selected}）", anchor_name=anchor_name, selected=selected
+                )
+            )
 
     # [2026-10-03 阶段4] 旧「表头行 + 每行重建」的 _add_quality_header_row /
     # _add_quality_data_row 已删除：表头由 Treeview headings 承担，数据行走
@@ -2453,12 +2541,12 @@ class LiveRecorderGUI:
         summary_body.pack(fill=tk.X, padx=18, pady=16)
         summary_body.grid_columnconfigure((0, 1, 2), weight=1)
 
-        self._dm_stat_rooms = self._add_stat_item(summary_body, "监控房间", "0", 0, "primary")
-        self._dm_stat_connected = self._add_stat_item(summary_body, "已连接", "0", 1, "success")
-        self._dm_stat_msgs = self._add_stat_item(summary_body, "累计弹幕", "0", 2, "primary")
+        self._dm_stat_rooms = self._add_stat_item(summary_body, T("监控房间"), "0", 0, "primary")
+        self._dm_stat_connected = self._add_stat_item(summary_body, T("已连接"), "0", 1, "success")
+        self._dm_stat_msgs = self._add_stat_item(summary_body, T("累计弹幕"), "0", 2, "primary")
 
         # 房间明细卡片（Treeview 行级增量更新，取代旧 CTkScrollableFrame 每轮销毁重建）
-        detail_card = self._create_card(page, "💬  弹幕房间（连接状态 / 累计弹幕 / 速率 / 礼物）")
+        detail_card = self._create_card(page, T("💬  弹幕房间（连接状态 / 累计弹幕 / 速率 / 礼物）"))
         detail_card.grid(row=1, column=0, sticky="ew", pady=(0, 14))
 
         inner = Frame(detail_card)
@@ -2469,14 +2557,14 @@ class LiveRecorderGUI:
         self._dm_table = DataTable(
             inner,
             [
-                ("room", "房间", 3, tk.W),
-                ("platform", "平台", 2, tk.W),
-                ("status", "状态", 1, tk.W),
-                ("msg_total", "累计弹幕", 1, tk.E),
-                ("msg_rate", "速率(条/分)", 1, tk.E),
-                ("gift_total", "礼物", 1, tk.E),
-                ("online", "在线", 1, tk.E),
-                ("started_at", "开始时间", 2, tk.W),
+                ("room", T("房间"), 3, tk.W),
+                ("platform", T("平台"), 2, tk.W),
+                ("status", T("状态"), 1, tk.W),
+                ("msg_total", T("累计弹幕"), 1, tk.E),
+                ("msg_rate", T("速率(条/分)"), 1, tk.E),
+                ("gift_total", T("礼物"), 1, tk.E),
+                ("online", T("在线"), 1, tk.E),
+                ("started_at", T("开始时间"), 2, tk.W),
             ],
         )
         self._dm_table.tree.grid(row=0, column=0, sticky="nsew")
@@ -2486,7 +2574,7 @@ class LiveRecorderGUI:
         self._show_danmaku_placeholder(True)
 
         # 实时弹幕流卡片
-        stream_card = self._create_card(page, "📋  实时弹幕")
+        stream_card = self._create_card(page, T("📋  实时弹幕"))
         stream_card.grid(row=2, column=0, sticky="nsew")
 
         stream_inner = Frame(stream_card)
@@ -2498,17 +2586,18 @@ class LiveRecorderGUI:
 
         self._dm_filter_menu = Menu(
             toolbar,
-            values=["全部房间"],
+            # 筛选菜单初值走 tr（值列表会被 _update_danmaku_display 周期重建，不登记重译）
+            values=[i18n_module.tr("全部房间")],
             command=self._on_danmaku_filter_change,
             font=Fonts.small(),
             width=14,
         )
         self._dm_filter_menu.pack(side=tk.LEFT)
-        self._dm_filter_menu.set("全部房间")
+        self._dm_filter_menu.set(i18n_module.tr("全部房间"))
 
         Button(
             toolbar,
-            text="🗑   清空",
+            text=T("🗑   清空"),
             command=self._clear_danmaku,
             font=Fonts.small(),
             padding=(10, 5),
@@ -2517,7 +2606,7 @@ class LiveRecorderGUI:
 
         Label(
             toolbar,
-            text="高频房间弹幕按每秒 10 条采样展示，统计计数始终精确",
+            text=T("高频房间弹幕按每秒 10 条采样展示，统计计数始终精确"),
             font=Fonts.small(),
             variant="muted",
         ).pack(side=tk.RIGHT, padx=(0, 12))
@@ -2663,7 +2752,7 @@ class LiveRecorderGUI:
             # 刚从磁盘载入 → 与磁盘一致，记为已保存基线
             self._mark_config_saved()
         except Exception as e:
-            self._log(f"加载配置文件失败: {e}", "error")
+            self._log(i18n_module.tr("加载配置文件失败: {err}", err=e), "error")
 
     # 将编辑器中的 URL 配置写入 URL_config.ini 并提示。
     def save_config(self) -> None:
@@ -2691,7 +2780,7 @@ class LiveRecorderGUI:
                 # 用户拒覆盖：什么都不写，也**不**把 mtime/基线对齐到磁盘——
                 # 保留差异才能在下一次保存时再问一遍；轮询侧的重复弹窗已由
                 # _watch_url_config 的「答否后对齐 mtime」处理过，不会连环打扰。
-                self._log("已取消保存：URL_config.ini 的外部改动未被覆盖", "warn")
+                self._log(i18n_module.tr("已取消保存：URL_config.ini 的外部改动未被覆盖"), "warn")
                 return
             _save_text_widget_to_file(self.config_text, self.url_config_file)
             self._last_url_config_mtime = os.path.getmtime(self.url_config_file)
@@ -2706,17 +2795,17 @@ class LiveRecorderGUI:
             # 可能直接跳过重建，导致刚新增/改名的房间去画质页切换时查不到，
             # 弹出「未能在 URL_config.ini 中找到…画质未修改」。
             self._refresh_quality_context()
-            self._log("URL 配置已保存")
+            self._log(i18n_module.tr("URL 配置已保存"))
             messagebox.showinfo(i18n_module.tr("成功"), i18n_module.tr("URL 配置已保存成功！"))
         except Exception as e:
-            self._log(f"保存配置文件失败: {e}", "error")
+            self._log(i18n_module.tr("保存配置文件失败: {err}", err=e), "error")
             messagebox.showerror(i18n_module.tr("错误"), i18n_module.tr("保存配置文件失败: {e}", e=e))
 
     # ─── 状态信息 ──────────────────────────────────────────
 
     # 从 config.ini 读取循环间隔 / 输出格式与托盘状态（带缓存）。
     def _get_dynamic_status_info(self) -> tuple[str, str, str]:
-        check_interval = "120秒"
+        check_interval = i18n_module.tr("120秒")
         output_format = "ts → mp4"
 
         if not os.path.exists(self.main_config_file):
@@ -2746,7 +2835,7 @@ class LiveRecorderGUI:
 
             if "录制设置" in config:
                 interval = config["录制设置"].get("循环时间(秒)", "120")
-                check_interval = f"{interval}秒"
+                check_interval = i18n_module.tr("{interval}秒", interval=interval)
 
                 fmt = config["录制设置"].get("录制完成后自动转为mp4格式", "否")
                 # 与 main.py / logger.py 共用同一解析口径：原实现只比较 == "是"，
@@ -2790,9 +2879,9 @@ class LiveRecorderGUI:
                 subprocess.Popen(["open", downloads_path])
             else:
                 subprocess.Popen(["xdg-open", downloads_path])
-            self._log(f"已打开下载目录: {downloads_path}")
+            self._log(i18n_module.tr("已打开下载目录: {path}", path=downloads_path))
         except Exception as e:
-            self._log(f"打开目录失败: {e}", "error")
+            self._log(i18n_module.tr("打开目录失败: {err}", err=e), "error")
 
     # 打开高级设置窗口以编辑 config.ini。
     def open_advanced_settings(self) -> None:
@@ -2810,7 +2899,7 @@ class LiveRecorderGUI:
                 if existing.window.winfo_exists():
                     existing.window.lift()
                     existing.window.focus_force()
-                    self._log("高级设置窗口已打开，已为你切换到该窗口")
+                    self._log(i18n_module.tr("高级设置窗口已打开，已为你切换到该窗口"))
                     return
             except Exception:
                 # 窗口已销毁或控件失效：清掉引用，走下方新建路径
@@ -2851,14 +2940,14 @@ class LiveRecorderGUI:
             return
         if self._stopping:
             # 停止流程尚未完成，禁止在此期间启动新录制，避免竞态（双击停止/停止中误点启动）
-            self._log("停止流程进行中，暂不可启动新录制", "warn")
+            self._log(i18n_module.tr("停止流程进行中，暂不可启动新录制"), "warn")
             return
         if self.process is not None:
             messagebox.showwarning(i18n_module.tr("警告"), i18n_module.tr("录制已在运行中！"))
             return
         if not self._has_room_config():
             # 见 _has_room_config：空配置下子进程会卡死在 input()，此处直接给出可行动提示
-            self._log("URL_config.ini 中没有直播间地址，已取消启动录制", "warn")
+            self._log(i18n_module.tr("URL_config.ini 中没有直播间地址，已取消启动录制"), "warn")
             messagebox.showwarning(
                 i18n_module.tr("警告"),
                 i18n_module.tr(
@@ -2882,7 +2971,7 @@ class LiveRecorderGUI:
                     base_dir = os.path.dirname(base_dir)
                 cli_exe = os.path.join(base_dir, cli_name)
                 if not os.path.isfile(cli_exe):
-                    raise FileNotFoundError(f"未找到录制核心程序: {cli_exe}")
+                    raise FileNotFoundError(i18n_module.tr("未找到录制核心程序: {path}", path=cli_exe))
                 record_cmd = [cli_exe]
             else:
                 main_py = os.path.join(self.script_dir, "main.py")
@@ -2896,7 +2985,10 @@ class LiveRecorderGUI:
                     if os.path.isfile(console_exe):
                         exe = console_exe
                     else:
-                        self._log(f"未找到 console 解释器 {console_exe}，优雅停止将不可用", "warn")
+                        self._log(
+                            i18n_module.tr("未找到 console 解释器 {path}，优雅停止将不可用", path=console_exe),
+                            "warn",
+                        )
                 record_cmd = [exe, main_py]
 
             startupinfo = None
@@ -2957,13 +3049,13 @@ class LiveRecorderGUI:
             self._start_danmaku_tail()
 
             self._log("━" * 40)
-            self._log(f"录制进程已启动 (PID: {proc.pid})")
-            self._log(f"执行程序: {record_cmd[0]}")
-            self._log(f"工作目录: {self.script_dir}")
+            self._log(i18n_module.tr("录制进程已启动 (PID: {pid})", pid=proc.pid))
+            self._log(i18n_module.tr("执行程序: {path}", path=record_cmd[0]))
+            self._log(i18n_module.tr("工作目录: {path}", path=self.script_dir))
             self._log("━" * 40)
 
         except Exception as e:
-            self._log(f"启动录制失败: {e}", "error")
+            self._log(i18n_module.tr("启动录制失败: {err}", err=e), "error")
             messagebox.showerror(i18n_module.tr("错误"), i18n_module.tr("启动录制失败: {e}", e=e))
             # 启动失败时重置状态，允许用户重新启动
             self.process = None
@@ -2985,25 +3077,25 @@ class LiveRecorderGUI:
     def _send_stop_signal_and_wait(self, proc: subprocess.Popen[str]) -> bool:
         graceful_signal_sent = False
         if sys.platform == "win32":
-            self._log("正在发送 CTRL_BREAK 信号（触发子进程 safe_exit 清理 ffmpeg）...")
+            self._log(i18n_module.tr("正在发送 CTRL_BREAK 信号（触发子进程 safe_exit 清理 ffmpeg）..."))
             graceful_signal_sent = _send_ctrl_break_to_child(proc.pid)
             if not graceful_signal_sent:
                 # 不能只 proc.terminate()：TerminateProcess 硬杀不会触发 main.py 的
                 # safe_exit / atexit 兜底，其下 ffmpeg（孙进程）会孤儿化继续录制，
                 # 且 wait() 会立即成功、绕过后面的 taskkill /T 兜底分支。
                 # 必须用 taskkill /T 递归终止整棵进程树。
-                self._log("发送 CTRL_BREAK 失败，整树强制终止（避免 ffmpeg 孤儿化）", "warn")
+                self._log(i18n_module.tr("发送 CTRL_BREAK 失败，整树强制终止（避免 ffmpeg 孤儿化）"), "warn")
                 try:
                     subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, timeout=5)
                 except Exception as e:
-                    self._log(f"taskkill 整树终止失败，回退 terminate: {e}")
+                    self._log(i18n_module.tr("taskkill 整树终止失败，回退 terminate: {err}", err=e))
                     proc.terminate()
         else:
-            self._log("正在发送 SIGINT 信号...")
+            self._log(i18n_module.tr("正在发送 SIGINT 信号..."))
             try:
                 os.kill(proc.pid, signal.SIGINT)
             except Exception as e:
-                self._log(f"发送 SIGINT 失败，回退 terminate: {e}")
+                self._log(i18n_module.tr("发送 SIGINT 失败，回退 terminate: {err}", err=e))
                 proc.terminate()
 
         # 先等待子进程自行清理其下所有 ffmpeg，超时再整树强杀
@@ -3012,16 +3104,16 @@ class LiveRecorderGUI:
             proc.wait(timeout=15)
             terminated = True
             if graceful_signal_sent:
-                self._log("进程已优雅退出（ffmpeg 已由子进程清理）")
+                self._log(i18n_module.tr("进程已优雅退出（ffmpeg 已由子进程清理）"))
             else:
                 # 硬杀路径（taskkill /T 或 terminate 兜底）：main.py 的 safe_exit
                 # 没有机会运行，不能宣称"ffmpeg 已由子进程清理"
-                self._log("进程已终止（硬杀路径，ffmpeg 已随进程树终止）")
+                self._log(i18n_module.tr("进程已终止（硬杀路径，ffmpeg 已随进程树终止）"))
         except subprocess.TimeoutExpired:
-            self._log("进程未能及时退出，整树强制终止...")
+            self._log(i18n_module.tr("进程未能及时退出，整树强制终止..."))
         except Exception as e:
             # wait 本身的异常（OSError 等）不应让调用方线程静默死亡导致状态卡死
-            self._log(f"等待子进程退出异常: {e}")
+            self._log(i18n_module.tr("等待子进程退出异常: {err}", err=e))
 
         if not terminated and proc.poll() is None:
             try:
@@ -3032,11 +3124,11 @@ class LiveRecorderGUI:
                     proc.kill()
                     subprocess.run(["pkill", "-P", str(proc.pid), "-x", "ffmpeg"], capture_output=True, timeout=5)
                 proc.wait(timeout=5)
-                self._log("进程已强制终止")
+                self._log(i18n_module.tr("进程已强制终止"))
             except subprocess.TimeoutExpired:
-                self._log("警告：进程可能仍在运行！", "warn")
+                self._log(i18n_module.tr("警告：进程可能仍在运行！"), "warn")
             except Exception as e:
-                self._log(f"强制终止失败: {e}")
+                self._log(i18n_module.tr("强制终止失败: {err}", err=e))
         return graceful_signal_sent
 
     # 登记「正在停止子进程」的在途线程（M-16 单飞）。由 stop_recording / quit_application 在
@@ -3079,7 +3171,7 @@ class LiveRecorderGUI:
         worker = self._current_stop_worker()
         if worker is not None and worker is not threading.current_thread():
             # 复用正在进行的停止线程：等它跑完再收尾，而不是另起一轮控制台操作。
-            self._log("已有停止流程在途，等待其完成后再收尾（避免并发操作同一子进程控制台）")
+            self._log(i18n_module.tr("已有停止流程在途，等待其完成后再收尾（避免并发操作同一子进程控制台）"))
             worker.join(timeout=_STOP_REUSE_JOIN_SECONDS)
         with self._console_stop_lock:
             # 拿锁后必须复核进程状态：在途那轮（或另一条路径）可能已经把子进程终止。
@@ -3103,7 +3195,7 @@ class LiveRecorderGUI:
         self.start_btn.configure(state=tk.DISABLED)
 
         self._log("━" * 40)
-        self._log("正在停止录制...")
+        self._log(i18n_module.tr("正在停止录制..."))
 
         # 优雅退出：让 main.py 的信号处理器自行清理其下的 ffmpeg（孙子进程）。
         # 子进程启动时使用 CREATE_NEW_CONSOLE 隐藏控制台 + 独立进程组，
@@ -3144,7 +3236,7 @@ class LiveRecorderGUI:
                 # [2026-09-20] 复位已整体上移到 finally，「早于会话校验」这一约束仍然成立。
                 self._stopping = False
                 if _session != self._session_id:
-                    self._log("检测到新录制会话，跳过旧会话的停止收尾")
+                    self._log(i18n_module.tr("检测到新录制会话，跳过旧会话的停止收尾"))
                     return
                 self.running = False
                 self.process = None
@@ -3155,7 +3247,10 @@ class LiveRecorderGUI:
             except Exception as e:
                 # 收尾主体抛错不能把用户留在「停止中」假状态里：按钮状态由 UI 线程复位，
                 # 这里只补一条带异常类型的日志（Windows 下部分超时的 str() 为空串）。
-                self._log(f"停止流程收尾异常: {type(e).__name__}: {e}", "error")
+                self._log(
+                    i18n_module.tr("停止流程收尾异常: {type_name}: {err}", type_name=type(e).__name__, err=e),
+                    "error",
+                )
                 self.post_ui(lambda: self._on_recording_stopped(_session))
             finally:
                 # 无论收尾成功、跳过（新会话）还是抛异常，「停止流程进行中」都必须结束
@@ -3180,7 +3275,7 @@ class LiveRecorderGUI:
         self.stop_btn.configure(state=tk.DISABLED)
         self._set_status(Colors.DANGER, False)
         self._update_status_bar()
-        self._log("录制进程已停止")
+        self._log(i18n_module.tr("录制进程已停止"))
         self._log("━" * 40)
         self._flush_log_queue()
 
@@ -3246,7 +3341,7 @@ class LiveRecorderGUI:
             except (ValueError, OSError) as e:
                 error_msg = str(e)
                 flush_batch()
-                self._log_queue.put([(f"输出流已关闭: {error_msg}", "error")])
+                self._log_queue.put([(i18n_module.tr("输出流已关闭: {err}", err=error_msg), "error")])
                 self._log_queue.put((session_id,))
                 with self._log_queue_lock:
                     self._log_queue_has_data = True
@@ -3255,7 +3350,7 @@ class LiveRecorderGUI:
             except Exception as e:
                 error_msg = str(e)
                 flush_batch()
-                self._log_queue.put([(f"读取输出错误: {error_msg}", "error")])
+                self._log_queue.put([(i18n_module.tr("读取输出错误: {err}", err=error_msg), "error")])
                 self._log_queue.put((session_id,))
                 with self._log_queue_lock:
                     self._log_queue_has_data = True
@@ -3275,7 +3370,14 @@ class LiveRecorderGUI:
             return cast(str, self.root.after(delay_ms, callback))
         except Exception as e:
             # 只在真失败时留痕：正常停链（_finalize_quit / 队列排空）走调用方的 None 分支。
-            self._log(f"定时任务重排失败（窗口可能已销毁）: {type(e).__name__}: {e}", "warn")
+            self._log(
+                i18n_module.tr(
+                    "定时任务重排失败（窗口可能已销毁）: {type_name}: {err}",
+                    type_name=type(e).__name__,
+                    err=e,
+                ),
+                "warn",
+            )
             return None
 
     # 周期性回调的异常留痕限频（M-15）：一条链的故障通常是**持续性**的（每 1s / 每 3s 触发
@@ -3292,8 +3394,13 @@ class LiveRecorderGUI:
             return
         warn_at[chain] = now
         self._log(
-            f"{chain}周期任务异常（本轮已跳过、下轮继续；{int(self._CHAIN_WARN_INTERVAL_SECONDS)}s 内不重复）: "
-            f"{type(error).__name__}: {error}",
+            i18n_module.tr(
+                "{chain}周期任务异常（本轮已跳过、下轮继续；{seconds}s 内不重复）: {type_name}: {err}",
+                chain=chain,
+                seconds=int(self._CHAIN_WARN_INTERVAL_SECONDS),
+                type_name=type(error).__name__,
+                err=error,
+            ),
             "warn",
         )
 
@@ -3315,7 +3422,7 @@ class LiveRecorderGUI:
             # 回归锁：tests/test_gui_tail_robustness.py::test_log_flush_chain_rearms_when_render_raises。
             with self._log_queue_lock:
                 self._log_queue_has_data = True
-            self._warn_chain("日志刷新", e)
+            self._warn_chain(i18n_module.tr("日志刷新"), e)
         finally:
             # 「是否继续排期」的判据与改动前逐字保持一致：还有数据才续期，否则置 None
             # ——None 是这条链的**休眠态**（由 _pump_ui_events / _log 按需唤醒），不是断链。
@@ -3414,7 +3521,7 @@ class LiveRecorderGUI:
         self._update_status_bar()
 
         self._log("━" * 40)
-        self._log("录制进程已结束")
+        self._log(i18n_module.tr("录制进程已结束"))
         self._log("━" * 40)
 
     # 线程安全地向日志队列追加一条消息（不触碰 Tk 对象）。
@@ -3465,7 +3572,7 @@ class LiveRecorderGUI:
         if patterns.problems and getattr(self, "_status_pattern_problems", None) != patterns.problems:
             self._status_pattern_problems = patterns.problems
             for problem in patterns.problems:
-                self._log(f"画质监控状态行解析降级: {problem}", "warn")
+                self._log(i18n_module.tr("画质监控状态行解析降级: {problem}", problem=problem), "warn")
 
         # 画质降级告警："{name} 画质降级：设置 {zh}({code}) 实际 {zh}({code})"
         m = patterns.downgrade.search(msg) if patterns.downgrade is not None else None
@@ -3485,7 +3592,13 @@ class LiveRecorderGUI:
                         # 每轮录制启动只要仍在降级就会重打本告警，故这里等价于「续期」，
                         # 迟到的旧告警也不会把新告警提前清掉。
                         "alert_at": time.time(),
-                        "alert_message": f"设置 {set_zh}({set_code}) 实际 {actual_zh}({actual_code})",
+                        "alert_message": i18n_module.tr(
+                            "设置 {set_q}({set_code}) 实际 {actual_q}({actual_code})",
+                            set_q=set_zh,
+                            set_code=set_code,
+                            actual_q=actual_zh,
+                            actual_code=actual_code,
+                        ),
                         "recording": True,
                         "last_seen": time.time(),
                     }
@@ -3573,8 +3686,8 @@ class LiveRecorderGUI:
             values[name] = (
                 name,
                 set_q,
-                (actual_q or "—") if downgraded else "✓ 同等",
-                "⚠ 降级" if downgraded else "✓ 正常",
+                (actual_q or "—") if downgraded else i18n_module.tr("✓ 同等"),
+                i18n_module.tr("⚠ 降级") if downgraded else i18n_module.tr("✓ 正常"),
                 alert_time if downgraded else "—",
             )
             # 行级标记：降级行整行红字 + 浅红底（颜色由 _sync_table_tags 按 token 配置；
@@ -3607,7 +3720,10 @@ class LiveRecorderGUI:
         # 与新线程的短暂并存窗口记一条 warn，供排查计数虚增。
         stale = self._danmaku_tail_thread
         if stale is not None and stale.is_alive():
-            self._log("上一条弹幕监控 tail 线程尚未退出（其停止标志已置位、会自行结束），本轮另起新线程", "warn")
+            self._log(
+                i18n_module.tr("上一条弹幕监控 tail 线程尚未退出（其停止标志已置位、会自行结束），本轮另起新线程"),
+                "warn",
+            )
         with self._danmaku_lock:
             self._danmaku_rooms.clear()
             self._danmaku_msgs.clear()
@@ -3711,7 +3827,14 @@ class LiveRecorderGUI:
                                 # 故带异常类型名（AGENTS「异常日志必须带类型」口径）。
                                 bad_detail = f"{type(e).__name__}: {e}"
                 if bad_events:
-                    self._log(f"弹幕事件处理失败 {bad_events} 条已跳过（同批其余事件不受影响）: {bad_detail}", "warn")
+                    self._log(
+                        i18n_module.tr(
+                            "弹幕事件处理失败 {count} 条已跳过（同批其余事件不受影响）: {detail}",
+                            count=bad_events,
+                            detail=bad_detail,
+                        ),
+                        "warn",
+                    )
             except OSError:
                 # 日志被归档改名 / 句柄未就绪（MID-2250 已知良性路径）：等一轮再试，不刷屏。
                 time.sleep(1.0)
@@ -3722,7 +3845,14 @@ class LiveRecorderGUI:
                 now = time.time()
                 if now - last_warn_at >= self._CHAIN_WARN_INTERVAL_SECONDS:
                     last_warn_at = now
-                    self._log(f"弹幕 tail 线程本轮异常（下轮继续）: {type(e).__name__}: {e}", "warn")
+                    self._log(
+                        i18n_module.tr(
+                            "弹幕 tail 线程本轮异常（下轮继续）: {type_name}: {err}",
+                            type_name=type(e).__name__,
+                            err=e,
+                        ),
+                        "warn",
+                    )
                 time.sleep(1.0)
 
     # 分发一条 JSONL 事件到线程安全缓冲（tail 线程调用，只写锁内数据、不触碰 Tk）。
@@ -3791,7 +3921,7 @@ class LiveRecorderGUI:
             self._update_danmaku_display()
             self._render_danmaku_stream()
         except Exception as e:
-            self._warn_chain("弹幕监控刷新", e)
+            self._warn_chain(i18n_module.tr("弹幕监控刷新"), e)
         finally:
             self._danmaku_refresh_job_id = self._after_retry(1000, self._schedule_danmaku_refresh)
 
@@ -3846,7 +3976,7 @@ class LiveRecorderGUI:
             values[name] = (
                 name,
                 str(row["platform"]),
-                "已连接" if connected else "已断开",
+                i18n_module.tr("已连接") if connected else i18n_module.tr("已断开"),
                 str(row["msg_total"]),
                 str(row["msg_rate"]),
                 str(row["gift_total"]),
@@ -3863,17 +3993,17 @@ class LiveRecorderGUI:
             self._dm_stat_connected.configure(text=str(connected_count))
             self._dm_stat_msgs.configure(text=str(total_msgs))
             current = self._dm_filter_menu.get()
-            values_list = ["全部房间"] + sorted(rooms_snapshot.keys())
+            values_list = [i18n_module.tr("全部房间")] + sorted(rooms_snapshot.keys())
             self._dm_filter_menu.configure(values=values_list)
             if current not in values_list:
-                self._dm_filter_menu.set("全部房间")
+                self._dm_filter_menu.set(i18n_module.tr("全部房间"))
                 # 2026-09-12 审查 6.2：菜单回退到「全部房间」时须同步 _danmaku_filter，
                 # 否则 _render_danmaku_stream 仍按已移除的旧房间名过滤——界面显示
                 # 「全部房间」而弹幕流一片空白（所有消息都被 room != 旧值 滤掉），
                 # 且用户无法自愈（重新选一次才恢复）
                 with self._danmaku_lock:
-                    if self._danmaku_filter != "全部房间":
-                        self._danmaku_filter = "全部房间"
+                    if self._danmaku_filter != i18n_module.tr("全部房间"):
+                        self._danmaku_filter = i18n_module.tr("全部房间")
                         self._danmaku_stream_dirty = True
         except Exception:
             pass
@@ -3899,7 +4029,7 @@ class LiveRecorderGUI:
         shown = 0
         for m in msgs:
             room = str(m.get("room", ""))
-            if filter_value != "全部房间" and room != filter_value:
+            if filter_value != i18n_module.tr("全部房间") and room != filter_value:
                 continue
             mtype = str(m.get("type", "chat"))
             # M-15 的确切触发点：ts 为 null / 非数值时裸 float 抛 TypeError，整条 after 链
@@ -3910,7 +4040,7 @@ class LiveRecorderGUI:
             text = str(m.get("text", ""))
             dropped = m.get("dropped")
             if mtype == "gift":
-                tag, label = "gift", "[礼物] "
+                tag, label = "gift", i18n_module.tr("[礼物] ")
             elif mtype == "superChat":
                 tag, label = "superChat", "[SC] "
             else:
@@ -3918,10 +4048,12 @@ class LiveRecorderGUI:
             line = f"[{tstr}] [{room}] {label}{user}: {text}\n" if user else f"[{tstr}] [{room}] {label}{text}\n"
             self.danmaku_text.insert(tk.END, line, tag)
             if dropped:
-                self.danmaku_text.insert(tk.END, f"    （+{dropped} 条已省略）\n", "dropped")
+                self.danmaku_text.insert(
+                    tk.END, i18n_module.tr("    （+{count} 条已省略）\n", count=dropped), "dropped"
+                )
             shown += 1
         if not shown:
-            self.danmaku_text.insert(tk.END, "暂无弹幕数据\n")
+            self.danmaku_text.insert(tk.END, i18n_module.tr("暂无弹幕数据\n"))
         self.danmaku_text.config(state=tk.DISABLED)
         if at_bottom:
             self.danmaku_text.see(tk.END)
@@ -3941,13 +4073,13 @@ class LiveRecorderGUI:
 
             pid = self.process_pid
             if pid is not None:
-                self.big_status_label.configure(text="录制中")
-                self.big_status_sub.configure(text=f"录制进程运行中 (PID: {pid})")
-                self.sidebar_status_label.configure(text="运行中")
+                self.big_status_label.configure(text=i18n_module.tr("录制中"))
+                self.big_status_sub.configure(text=i18n_module.tr("录制进程运行中 (PID: {pid})", pid=pid))
+                self.sidebar_status_label.configure(text=i18n_module.tr("运行中"))
             else:
-                self.big_status_label.configure(text="待 机")
-                self.big_status_sub.configure(text="录制进程未运行")
-                self.sidebar_status_label.configure(text="未运行")
+                self.big_status_label.configure(text=i18n_module.tr("待 机"))
+                self.big_status_sub.configure(text=i18n_module.tr("录制进程未运行"))
+                self.sidebar_status_label.configure(text=i18n_module.tr("未运行"))
 
             self.info_interval.configure(text=check_interval)
             self.info_format.configure(text=output_format)
@@ -3967,7 +4099,7 @@ class LiveRecorderGUI:
             self._update_quality_display()
             self._watch_url_config()
         except Exception as e:
-            self._warn_chain("状态刷新", e)
+            self._warn_chain(i18n_module.tr("状态刷新"), e)
         finally:
             interval = self._STATUS_REFRESH_INTERVAL_ACTIVE if self.running else self._STATUS_REFRESH_INTERVAL
             self._refresh_job_id = self._after_retry(interval, self._schedule_status_refresh)
@@ -4025,7 +4157,7 @@ class LiveRecorderGUI:
             self.system_tray.notify("程序已最小化到系统托盘，双击托盘图标可恢复窗口")
         else:
             self.root.iconify()
-            self._log("系统托盘不可用，已改为最小化到任务栏", "warn")
+            self._log(i18n_module.tr("系统托盘不可用，已改为最小化到任务栏"), "warn")
 
     # 退出程序：确认后后台停止录制与清理，再销毁窗口（防重入）。
     def quit_application(self) -> None:
@@ -4039,7 +4171,7 @@ class LiveRecorderGUI:
                 return
 
         self._quitting = True
-        self._log("正在停止录制并清理 ffmpeg 进程，请稍候...")
+        self._log(i18n_module.tr("正在停止录制并清理 ffmpeg 进程，请稍候..."))
         # 在后台线程完成「停止录制 + 清理残留 ffmpeg」，完成后再回主线程销毁窗口，
         # 避免窗口先被 destroy 导致清理线程被强杀、ffmpeg 残留。
         quit_worker = threading.Thread(target=self._shutdown_and_quit, name="gui-quit", daemon=True)
@@ -4077,7 +4209,7 @@ class LiveRecorderGUI:
             self._cleanup_zombie_ffmpeg(child_pid)
         except Exception as e:
             # 任何异常都不能阻断 UI 收尾，否则窗口无法销毁、进程无法退出
-            self._log(f"退出清理流程异常: {e}", "warn")
+            self._log(i18n_module.tr("退出清理流程异常: {err}", err=e), "warn")
         finally:
             # M-16：注销本轮登记（只清自己那条，见 _finish_stop_worker）。不注销会让
             # 后续任何停止/退出都白等一次 _STOP_REUSE_JOIN_SECONDS 的 join 预算。
@@ -4155,16 +4287,25 @@ class LiveRecorderGUI:
                         )
                         if proc.returncode == 0:
                             found = True
-                            self._log(f"已通过 taskkill 清理 PID {target_pid} 的进程树（含 ffmpeg）")
+                            self._log(
+                                i18n_module.tr("已通过 taskkill 清理 PID {pid} 的进程树（含 ffmpeg）", pid=target_pid)
+                            )
                         else:
                             hint = _process_kill_hint(proc.stdout, proc.stderr)
                             self._log(
-                                f"taskkill 未能清理 PID {target_pid} 的进程树（返回码 {proc.returncode}）"
-                                + (f"，提示: {hint}" if hint else ""),
+                                i18n_module.tr(
+                                    "taskkill 未能清理 PID {pid} 的进程树（返回码 {code}）",
+                                    pid=target_pid,
+                                    code=proc.returncode,
+                                )
+                                + (i18n_module.tr("，提示: {hint}", hint=hint) if hint else ""),
                                 "warn",
                             )
                     except Exception as e:
-                        self._log(f"taskkill 执行失败: {type(e).__name__}: {e}", "warn")
+                        self._log(
+                            i18n_module.tr("taskkill 执行失败: {type_name}: {err}", type_name=type(e).__name__, err=e),
+                            "warn",
+                        )
                 # [历史注] L-40（2026-10-02）：原此处还有一段「按映像名 + PARENTPID eq GUI 自身
                 # PID」的兜底 taskkill——结构性无法命中：ffmpeg 的父进程恒为 main.py（录制
                 # 子进程），GUI 的直接派生 ffmpeg 不存在，该段只会给「有第二道网」的假象。
@@ -4179,23 +4320,32 @@ class LiveRecorderGUI:
                         )
                         if proc.returncode == 0:
                             found = True
-                            self._log(f"已通过 pkill 清理 PID {target_pid} 下的 ffmpeg 进程")
+                            self._log(i18n_module.tr("已通过 pkill 清理 PID {pid} 下的 ffmpeg 进程", pid=target_pid))
                         else:
                             hint = _process_kill_hint(proc.stdout, proc.stderr)
                             self._log(
-                                f"pkill 未能清理 PID {target_pid} 下的 ffmpeg（返回码 {proc.returncode}）"
-                                + (f"，提示: {hint}" if hint else ""),
+                                i18n_module.tr(
+                                    "pkill 未能清理 PID {pid} 下的 ffmpeg（返回码 {code}）",
+                                    pid=target_pid,
+                                    code=proc.returncode,
+                                )
+                                + (i18n_module.tr("，提示: {hint}", hint=hint) if hint else ""),
                                 "warn",
                             )
                     except Exception as e:
-                        self._log(f"pkill 执行失败: {type(e).__name__}: {e}", "warn")
+                        self._log(
+                            i18n_module.tr("pkill 执行失败: {type_name}: {err}", type_name=type(e).__name__, err=e),
+                            "warn",
+                        )
                 # [历史注] L-40：原此处「pkill -P GUI 自身 PID」的兜底同 Windows 侧注释——
                 # ffmpeg 父进程恒为 main.py，该形态结构性无法命中，已删除。
 
             if not found:
-                self._log("未发现需要清理的 ffmpeg 进程")
+                self._log(i18n_module.tr("未发现需要清理的 ffmpeg 进程"))
         except Exception as e:
-            self._log(f"清理 ffmpeg 进程时出错: {type(e).__name__}: {e}", "warn")
+            self._log(
+                i18n_module.tr("清理 ffmpeg 进程时出错: {type_name}: {err}", type_name=type(e).__name__, err=e), "warn"
+            )
 
     # 窗口关闭事件：弹出「最小化到托盘 / 完全退出」对话框（单例）。
     def on_closing(self) -> None:
@@ -4211,7 +4361,7 @@ class LiveRecorderGUI:
         # [阶段5] tk.Toplevel 替代 CTkToplevel（底色随主题 token；标题栏跟随系统明暗为可接受边界）
         dialog = tk.Toplevel(self.root, bg=self.theme_manager.tokens()["surface"])
         self._close_dialog = dialog
-        dialog.title("关闭选项")
+        apply_title(dialog, T("关闭选项"))
         dialog.geometry("400x230")
         dialog.resizable(False, False)
         dialog.transient(self.root)
@@ -4223,10 +4373,10 @@ class LiveRecorderGUI:
         dialog.geometry(f"+{x}+{y}")
 
         Label(dialog, text="🎬", font=Fonts.get(32)).pack(pady=(24, 8))
-        Label(dialog, text="请选择关闭方式", font=Fonts.heading()).pack()
+        Label(dialog, text=T("请选择关闭方式"), font=Fonts.heading()).pack()
         Label(
             dialog,
-            text="您可以最小化到系统托盘，或完全退出程序",
+            text=T("您可以最小化到系统托盘，或完全退出程序"),
             font=Fonts.small(),
             variant="muted",
         ).pack(pady=(4, 18))
@@ -4246,7 +4396,7 @@ class LiveRecorderGUI:
 
         Button(
             btn_frame,
-            text="📥   最小化到托盘",
+            text=T("📥   最小化到托盘"),
             command=minimize_to_tray_and_close,
             font=Fonts.body(bold=True),
             padding=(14, 9),
@@ -4254,7 +4404,7 @@ class LiveRecorderGUI:
 
         Button(
             btn_frame,
-            text="❌   完全退出",
+            text=T("❌   完全退出"),
             command=quit_and_close,
             font=Fonts.body(bold=True),
             padding=(14, 9),

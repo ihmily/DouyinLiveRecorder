@@ -59,6 +59,9 @@ scan_file = getattr(_EX, "scan_file")
 extract_constant_or_template = getattr(_EX, "extract_constant_or_template")
 # tr() 的模块别名集合取自提取器，避免两处硬编码各自漂移
 TR_CALLER_IDS: set[str] = getattr(_EX, "TR_CALLER_IDS")
+# ui_i18n.T()（静态标签标记）同样取自提取器：T 的首参是 msgid/模板，占位符与 kwargs
+# 也必须一致（gui.py 的 text=T("...") 由工厂建时查表 + 登记重译）。
+T_CALLER_IDS: set[str] = getattr(_EX, "T_CALLER_IDS")
 
 
 def _iter_files() -> list[Path]:
@@ -68,11 +71,14 @@ def _iter_files() -> list[Path]:
 
 
 def _is_tr_call(node: ast.AST) -> TypeGuard[ast.Call]:
-    # tr(模板, **kw) / i18n.tr(...) / i18n_module.tr(...)——别名集合取自提取器，避免两处硬编码。
+    # tr(模板, **kw) / i18n.tr(...) / i18n_module.tr(...) / T(模板)（ui_i18n 静态标签标记）
+    # ——别名集合取自提取器，避免两处硬编码。
     # 用 TypeGuard 而非 bool：调用点要在判定后直接取 node.args，纯 bool 不会收窄类型（mypy attr-defined）
     if not isinstance(node, ast.Call):
         return False
     func = node.func
+    if isinstance(func, ast.Name) and func.id in T_CALLER_IDS:
+        return True
     return (isinstance(func, ast.Name) and func.id == "tr") or (
         isinstance(func, ast.Attribute)
         and func.attr == "tr"
@@ -268,3 +274,19 @@ def test_no_valuable_fstring_in_print_colored_or_messagebox() -> None:
         "color_obj.print_colored('\\n正在安全退出...', c)\n"  # 常量串（translated_print 直查）
     )
     assert _blindspot_fstring_offenders(clean) == [], "误伤：tr 预格式化 / 常量 / 非模板实参不应命中"
+
+
+def test_extractor_sees_T_marker_templates(tmp_path: Path) -> None:
+    # 提取器必须与 tr 同口径认识 ui_i18n.T()（静态标签标记）：T 的首参是 msgid，
+    # 不被 scan_file 收录时「目录覆盖完整」（不变量③）对这批词条退化为假绿——
+    # 缺失检测看不见它们，孤儿/缺词条都不会变红。apply_title 的第二参是 T(...)，
+    # 由 ast.walk 独立访问，不需要特例。
+    probe = tmp_path / "probe_t.py"
+    probe.write_text(
+        "x = T('静态标签探针')\ny = apply_title(win, T('标题探针'))\nz = str('非 T 串不计')\n",
+        encoding="utf-8",
+    )
+    found = scan_file(probe)
+    assert "静态标签探针" in found, "T(...) 首参必须被提取"
+    assert "标题探针" in found, "apply_title 内层 T(...) 必须被提取"
+    assert "非 T 串不计" not in found, "普通字面量不得被提取（防误收）"

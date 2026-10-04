@@ -45,6 +45,12 @@ from tkinter import ttk
 out = {"skipped": None, "ok": False}
 try:
     import gui
+    import i18n as i18n_module
+
+    # 语言钉定：gui 静态标签经 ui_i18n.T 建时查表（2026-10-04 起），译文形态取决于
+    # config.ini 的 language 与宿主 locale（本探针子进程不经过 conftest 的恒等映射）。
+    # stress 分支按简中源文前缀匹配 4 个绑定标签，故这里固定 zh_CN，让断言与宿主语言解耦。
+    i18n_module.set_language("zh_CN")
 
     req = json.loads(sys.stdin.read())
     if req["call"] == "compute":
@@ -101,6 +107,13 @@ try:
         # set_widget_scaling 随依赖摘除退役）。
         root = tk.Tk()
         app = gui.LiveRecorderGUI(root)
+        # gui 构造期会按 config.ini/宿主 locale 重设语言（_build_sidebar 的 set_language），
+        # 本探针宿主解析为 en_US、静态标签因此是英文；下面按简中源文前缀匹配绑定标签，
+        # 故构造后统一切回 zh_CN 并重译静态标签（与用户在语言菜单切回简中同一条路径）。
+        from src import ui_i18n
+
+        i18n_module.set_language("zh_CN")
+        ui_i18n.retranslate_all()
         root.geometry("1120x740")
         root.update_idletasks()
         root.update()

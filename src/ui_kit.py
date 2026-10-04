@@ -27,6 +27,8 @@ from collections.abc import Callable, Sequence
 from tkinter import ttk
 from typing import Any, Final, Literal, cast, final
 
+from src import ui_i18n
+
 # ─── 变体样式名（由 src/ui_theme.ThemeManager._build_ttk_settings 按当前主题 token 注册） ──
 
 FRAME_STYLES: Final[dict[str | None, str]] = {
@@ -82,7 +84,13 @@ class Frame(ttk.Frame):
 class Label(ttk.Label):
     # CTkLabel 替身。variant 见 LABEL_STYLES；font/anchor/justify/wraplength 直传
     # （ttk.Label 的 -font 是控件级选项；wraplength 为设备像素，见 _bind_adaptive_wraplength）。
+    # text 传 Translatable（ui_i18n.T）时：建时查表翻译 + 登记重译（语言热切换后由
+    # retranslate_all 回填）；传普通 str 则原样透传（动态拼接文本不参与重译）。
     def __init__(self, master: tk.Misc, *, variant: str | None = None, **kwargs: Any) -> None:
+        text = kwargs.get("text")
+        if isinstance(text, ui_i18n.Translatable):
+            ui_i18n.register(self, "text", text)
+            kwargs["text"] = text.render()
         super().__init__(master, style=LABEL_STYLES[variant], **kwargs)
 
 
@@ -95,7 +103,12 @@ class Button(ttk.Button):
     # 字体经 font_style() 派生样式注入：ttk.Button 没有控件级 -font（Tk 9.0 实测
     # TclError: unknown option "-font"，ttk.Label/Combobox 则原生支持），按
     # 「变体样式 + 字体」缓存派生一枚样式名，静态配置与状态映射从基础变体显式复制。
+    # text 传 Translatable（ui_i18n.T）时：建时查表翻译 + 登记重译（同 Label 的约定）。
     def __init__(self, master: tk.Misc, *, variant: str | None = None, **kwargs: Any) -> None:
+        text = kwargs.get("text")
+        if isinstance(text, ui_i18n.Translatable):
+            ui_i18n.register(self, "text", text)
+            kwargs["text"] = text.render()
         font = kwargs.pop("font", None)
         base_style = BUTTON_STYLES[variant]
         if font is None:
@@ -255,10 +268,10 @@ class DataTable:
     #
     # 列宽按 weight 比例分配树宽：<Configure> 触发重算（Treeview 不会随窗口等比拉伸列）。
 
-    def __init__(self, master: tk.Misc, columns: Sequence[tuple[str, str, int, str]]) -> None:
-        # columns 元素：(列 id, 表头文案, 宽度权重, 锚点)；行高由 ui_theme 的 Treeview
-        # 样式统一给定（rowheight），不逐实例配置。
-        self._columns: tuple[tuple[str, str, int, str], ...] = tuple(columns)
+    def __init__(self, master: tk.Misc, columns: Sequence[tuple[str, "str | ui_i18n.Translatable", int, str]]) -> None:
+        # columns 元素：(列 id, 表头文案, 宽度权重, 锚点)，表头可为 Translatable（登记重译）；
+        # 行高由 ui_theme 的 Treeview 样式统一给定（rowheight），不逐实例配置。
+        self._columns: tuple[tuple[str, "str | ui_i18n.Translatable", int, str], ...] = tuple(columns)
         self._weights: tuple[int, ...] = tuple(c[2] for c in columns)
         self.tree = ttk.Treeview(
             master,
@@ -268,8 +281,14 @@ class DataTable:
             takefocus=False,
         )
         for col_id, heading, _weight, anchor in columns:
+            # heading 传 Translatable（ui_i18n.T）时：建时查表 + 按 heading:<col_id> 登记重译
+            if isinstance(heading, ui_i18n.Translatable):
+                ui_i18n.register(self.tree, f"heading:{col_id}", heading)
+                heading_value: str = heading.render()
+            else:
+                heading_value = heading
             # anchor 形参用 str 携带（调用方写 "w"/"e"），Treeview 的存根是字面量联合，cast 收敛
-            self.tree.heading(col_id, text=heading, anchor=cast("Any", anchor))
+            self.tree.heading(col_id, text=heading_value, anchor=cast("Any", anchor))
             self.tree.column(col_id, anchor=cast("Any", anchor), stretch=True, width=90)
         self.tree.bind("<Configure>", self._apply_proportional_widths, add="+")
         self._editor: ttk.Combobox | None = None

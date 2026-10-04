@@ -81,6 +81,9 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.staticfiles import StaticFiles
 
+# 错误文案随语言热切换：在产生点按当前目录渲染（tr 调用时查表，模块导入期不定型）。
+# 稳定机器码 detail（如 "unauthorized" / "rate_limited" / "host_not_allowed"）是前端契约，刻意不经 tr。
+import i18n as i18n_module
 from src.web_models import (
     ConfigUpdate,
     LanguageUpdate,
@@ -135,11 +138,11 @@ async def _read_json_body(request: Request) -> object:
     # 的低成本放大面；逐字节读入后的上限由 Starlette 的流式读取与调用方超时兜底。
     content_length = request.headers.get("content-length", "")
     if content_length.isdigit() and int(content_length) > _JSON_BODY_MAX_BYTES:
-        raise HTTPException(status_code=413, detail="请求体过大")
+        raise HTTPException(status_code=413, detail=i18n_module.tr("请求体过大"))
     try:
         return await request.json()
     except Exception:
-        raise HTTPException(status_code=422, detail="请求体不是合法 JSON")
+        raise HTTPException(status_code=422, detail=i18n_module.tr("请求体不是合法 JSON"))
 
 
 def _route(app: Starlette, methods: list[str], path: str) -> Callable[[Callable[..., object]], Callable[..., object]]:
@@ -406,9 +409,13 @@ _INSECURE_BIND_ENV_TAIL = "；确需对局域网无认证开放时，请设置�
 
 
 def _insecure_bind_detail(context: str, action: str, bind_host: str) -> str:
-    return (
-        f"非回环监听地址（当前实际监听 {bind_host.strip() or '(未知)'}）下{context}："
-        f"{action}{_INSECURE_BIND_ENV_TAIL}"
+    # 组合模板经 tr 渲染：bind/context/action/tail 四段均为调用时求值（语言可热切换）
+    return i18n_module.tr(
+        "非回环监听地址（当前实际监听 {bind}）下{context}：{action}{tail}",
+        bind=bind_host.strip() or i18n_module.tr("(未知)"),
+        context=context,
+        action=action,
+        tail=i18n_module.tr(_INSECURE_BIND_ENV_TAIL),
     )
 
 
@@ -578,7 +585,10 @@ def create_app(
             # 「配置自证清白」的判定不成立；现换成 _guard_bind_host 取到的实际绑定地址。
             response = JSONResponse(
                 status_code=403,
-                content={"detail": "insecure_bind_disabled", "message": "非回环监听地址下不允许关闭 Web 认证"},
+                content={
+                    "detail": "insecure_bind_disabled",
+                    "message": i18n_module.tr("非回环监听地址下不允许关闭 Web 认证"),
+                },
             )
         elif request.method not in ("GET", "HEAD", "OPTIONS") and not _is_same_origin(
             request, cfg, _guard_bind_host(app, cfg), _guard_bind_port(app)
@@ -683,7 +693,7 @@ def create_app(
             while _GLOBAL_LOGIN_FAILURES and now - _GLOBAL_LOGIN_FAILURES[0] > _LOGIN_FAILURE_WINDOW:
                 _ = _GLOBAL_LOGIN_FAILURES.popleft()
             if len(_GLOBAL_LOGIN_FAILURES) >= _LOGIN_GLOBAL_MAX_FAILURES:
-                raise HTTPException(429, "登录失败次数过多，请稍后再试")
+                raise HTTPException(429, i18n_module.tr("登录失败次数过多，请稍后再试"))
             # 顺带全表清理窗口外条目（2026-09-12 审查 6.6）：仅成功登录才 pop 的话，
             # IPv6 前缀轮换爆破可让键集合无界增长（内存泄漏面）
             for ip in [ip for ip, ts in _FAILED_LOGINS.items() if not any(now - t < _LOGIN_FAILURE_WINDOW for t in ts)]:
@@ -691,13 +701,13 @@ def create_app(
             failures = [t for t in _FAILED_LOGINS.get(client_ip, []) if now - t < _LOGIN_FAILURE_WINDOW]
             _FAILED_LOGINS[client_ip] = failures
             if len(failures) >= _LOGIN_MAX_FAILURES:
-                raise HTTPException(429, "登录失败次数过多，请稍后再试")
+                raise HTTPException(429, i18n_module.tr("登录失败次数过多，请稍后再试"))
         # 注：_purge_expired_tokens 内部自行持锁（它现在也被中间件直接调用），
         # 此处**不可**再包一层 with _tokens_lock——threading.Lock 非重入，会与
         # 函数内的 acquire 形成自死锁（曾导致所有登录请求挂死）。
         _purge_expired_tokens()
         if not cast(str, cfg["web_password"]):
-            raise HTTPException(500, "web_password 未配置但认证已开启")
+            raise HTTPException(500, i18n_module.tr("web_password 未配置但认证已开启"))
         # 兼容历史明文存储：首次登录时升级为 PBKDF2 哈希，避免明文落盘。
         # M-06（2026-09-30）：升级哈希同样以 strip 后的形态为准——登录比对统一 strip（见下），
         # 存量「首尾带空格」的明文口令才不会被这次升级锁死。
@@ -720,7 +730,7 @@ def create_app(
             with _FAILED_LOGINS_LOCK:
                 _FAILED_LOGINS.setdefault(client_ip, []).append(time.time())
                 _GLOBAL_LOGIN_FAILURES.append(time.time())
-            raise HTTPException(401, "密码错误")
+            raise HTTPException(401, i18n_module.tr("密码错误"))
         # 登录成功：清零该 IP 的失败计数（全局预算不回收——它是「整站口令校验吞吐」的
         # 上限，按成功回收就又给了「拿真实账号登录一次即重置预算」的绕法）
         with _FAILED_LOGINS_LOCK:
@@ -769,7 +779,9 @@ def create_app(
         return {
             "auth_required": auth_enabled,
             # 显式说明关闭状态下无人能保护面板：仅供局域网可信环境使用
-            "warning": None if auth_enabled else "Web 认证未启用，任何能访问本面板的网络均可操控录制配置",
+            "warning": (
+                None if auth_enabled else i18n_module.tr("Web 认证未启用，任何能访问本面板的网络均可操控录制配置")
+            ),
         }
 
     # 探活端点：进程存活 + ASGI/路由已就绪 + 应用版本可读（_APP_VERSION 在模块导入期即从
@@ -868,7 +880,7 @@ def create_app(
         with _rooms_config_lock, _main.file_update_lock:
             existing = parse_url_config(cast(str, app.state.url_config_file))
             if any(r["url"] == url for r in existing):
-                raise HTTPException(409, "直播间已存在")
+                raise HTTPException(409, i18n_module.tr("直播间已存在"))
             # MIN-2242（2026-09-22）：追加前必须补末行换行。旧实现直接 open(...,"a") 写，而
             # URL_config.ini 末行可能无 \n（编辑器删掉尾回车、或 delete_line 后本就无尾换行）——
             # 新房间会粘到上一条之后变成 `https://…111https://…222`，**两个房间同时坏掉**，端点却
@@ -932,7 +944,7 @@ def create_app(
             # 排除 old_url 自身：仅改画质/名字（new_url == old_url）不得被误杀。
             new_url = normalize_url(req.url)
             if any(r["url"] == new_url and r["url"] != old_url for r in old_rooms):
-                raise HTTPException(409, "直播间已存在")
+                raise HTTPException(409, i18n_module.tr("直播间已存在"))
             # 找到匹配行（含注释状态）
             for r in old_rooms:
                 if r["url"] == old_url:
@@ -958,7 +970,7 @@ def create_app(
                     replaced = True
                     break
         if not replaced:
-            raise HTTPException(404, "未找到原直播间")
+            raise HTTPException(404, i18n_module.tr("未找到原直播间"))
         return {"ok": True}
 
     @_route(app, ["DELETE"], "/api/rooms")
@@ -983,7 +995,7 @@ def create_app(
                         _log_internal_error(_ROOM_DELETE_ERROR_CODE)
                         raise HTTPException(500, _ROOM_DELETE_ERROR_CODE)
                     return {"ok": True}
-        raise HTTPException(404, "未找到直播间")
+        raise HTTPException(404, i18n_module.tr("未找到直播间"))
 
     @_route(app, ["POST"], "/api/rooms/toggle")
     def toggle_room(req: RoomToggle) -> dict[str, object]:
@@ -1012,7 +1024,7 @@ def create_app(
                         _log_internal_error(_ROOM_UPDATE_ERROR_CODE)
                         raise HTTPException(500, _ROOM_UPDATE_ERROR_CODE)
                     return {"ok": True, "enabled": req.enable}
-        raise HTTPException(404, "未找到直播间")
+        raise HTTPException(404, i18n_module.tr("未找到直播间"))
 
     # 按房间切换画质：与 GUI 画质监控页「切换画质」菜单共用 update_room_quality 落盘
     # （「画质,URL,主播: 名称」行格式），下一轮检测循环生效；两端的切换互相同步。
@@ -1027,7 +1039,7 @@ def create_app(
         # 白名单校验：与 GUI 下拉一致仅放行内置档位，杜绝写入永远不生效的档位名
         # （SEV-02 后 validate_room_target 内已含同款判定，此处保留以给出本端点的 422 文案）
         if quality and quality not in BUILTIN_QUALITIES:
-            raise HTTPException(422, f"未知画质档位: {quality}")
+            raise HTTPException(422, i18n_module.tr("未知画质档位: {quality}", quality=quality))
         import main as _main
 
         # 持锁与 add_room / 录制主循环的 update_file 互斥，避免「查房间 + 改画质段」的读改写窗口内
@@ -1035,7 +1047,7 @@ def create_app(
         with _rooms_config_lock, _main.file_update_lock:
             rooms = parse_url_config(cast(str, app.state.url_config_file))
             if not any(r["url"] == url for r in rooms):
-                raise HTTPException(404, "未找到直播间")
+                raise HTTPException(404, i18n_module.tr("未找到直播间"))
             changed = update_room_quality(cast(str, app.state.url_config_file), url, quality)
         return {"ok": True, "changed": changed}
 
@@ -1087,7 +1099,7 @@ def create_app(
         is_web_section = section.strip().lower() == "web"
         # 危险配置键（可致远程命令执行）任何认证状态下都禁止修改（casefold：与行匹配的 IGNORECASE 同强度）
         if key.casefold() in _DANGEROUS_CONFIG_KEYS_FOLDED:
-            raise HTTPException(403, "该配置项不允许通过 Web 修改")
+            raise HTTPException(403, i18n_module.tr("该配置项不允许通过 Web 修改"))
         # CR-08：对目标态做整体判定。旧实现只挡了「认证已开启时清空密码」一个方向，反向路径完全敞开
         # ——认证关闭（出厂默认）时任何能访问面板的人都可写入自己掌握的 web_password 再打开
         # web_auth_enable 直接接管面板（且写密码会触发下方 _tokens.clear() 踢掉全部在线会话）；或只把
@@ -1128,9 +1140,11 @@ def create_app(
                         raise HTTPException(
                             403,
                             _insecure_bind_detail(
-                                "不允许把 web_host 改写为回环地址",
-                                "改这个键不会让进程收回已监听的地址、只会让配置比现实更乐观（伪安全态）；"
-                                "请先开启 Web 认证，或改完后重启本进程使监听地址与配置一致",
+                                i18n_module.tr("不允许把 web_host 改写为回环地址"),
+                                i18n_module.tr(
+                                    "改这个键不会让进程收回已监听的地址、只会让配置比现实更乐观（伪安全态）；"
+                                    "请先开启 Web 认证，或改完后重启本进程使监听地址与配置一致"
+                                ),
                                 _bind_host,
                             ),
                         )
@@ -1144,7 +1158,7 @@ def create_app(
                     _target_enabled = _currently_enabled
                     _target_pwd = req.value.strip()
                 if _target_enabled and not _target_pwd:
-                    raise HTTPException(400, "开启 Web 认证必须同时设置 web_password")
+                    raise HTTPException(400, i18n_module.tr("开启 Web 认证必须同时设置 web_password"))
                 # SEV-04：把「认证降级」当作敏感变更拒绝——非回环监听地址下不允许把 web_auth_enable
                 # 写成 false。旧语义下这一个写请求就能把「已开认证的 0.0.0.0 部署」变成「无认证 +
                 # 全网卡监听」且无需重启，/api/config、/api/logs、/api/files、房间写入随之全开。
@@ -1159,9 +1173,11 @@ def create_app(
                             raise HTTPException(
                                 403,
                                 _insecure_bind_detail(
-                                    "不允许关闭 Web 认证",
-                                    "请先在 config.ini 把 web_host 改为 127.0.0.1 并重启本进程"
-                                    "（判定以进程实际监听地址为准，只改配置不重启不生效）",
+                                    i18n_module.tr("不允许关闭 Web 认证"),
+                                    i18n_module.tr(
+                                        "请先在 config.ini 把 web_host 改为 127.0.0.1 并重启本进程"
+                                        "（判定以进程实际监听地址为准，只改配置不重启不生效）"
+                                    ),
                                     _bind,
                                 ),
                             )
@@ -1170,7 +1186,7 @@ def create_app(
             if current_cfg is None:
                 current_cfg = read_web_config(cast(str, app.state.config_file))
             if cast(bool, current_cfg["web_auth_enable"]):
-                raise HTTPException(400, "请先关闭 Web 认证再清空密码")
+                raise HTTPException(400, i18n_module.tr("请先关闭 Web 认证再清空密码"))
         value = req.value
         # MID-2236（2026-09-22）：读写两侧的敏感判据此前**分叉**——读侧 web_config.read_config_safe 判
         # `is_sensitive_item(section, key) or _looks_like_secret_value(value)`，写侧（此处，修复前）只有
@@ -1203,13 +1219,15 @@ def create_app(
             # 于是真实 cookie/token 被空串静默覆盖。与 web_password 同口径：清空敏感凭据必须走
             # 显式路径，不能由一次误操作完成。
             if not value.strip():
-                raise HTTPException(400, "敏感配置项不得清空：如需移除请显式填写占位值并手工编辑 config.ini")
+                raise HTTPException(
+                    400, i18n_module.tr("敏感配置项不得清空：如需移除请显式填写占位值并手工编辑 config.ini")
+                )
             # MID-37 残留（2026-09-21）：掩码 '***' 同样必须被服务端拦住。read_config_safe 对敏感项
             # 回显的就是 SENSITIVE_MASK，前端 saveConfig 虽会跳过原样提交的掩码，但那是**唯一**防线——
             # 任何直接打 PUT /api/config 的调用方（脚本、旧版前端、被改过的页面）都能把真实凭据覆盖成
             # 字面 '***'。后端不接受掩码，才使「跳过掩码」从必要防线降级为纯粹的省一次无谓写入。
             elif value.strip() == SENSITIVE_MASK:
-                raise HTTPException(400, "敏感配置项不得以掩码值提交：请填入真实值，或保持该项不修改")
+                raise HTTPException(400, i18n_module.tr("敏感配置项不得以掩码值提交：请填入真实值，或保持该项不修改"))
         # ─── MID-2241 后端强制复验（2026-09-23 落地）───────────────────────────────
         # 前端 confirm（web/app.js::saveConfig）只挡得住「手滑点保存」，挡不住任何直接打
         # PUT /api/config 的一方（脚本、旧版前端、被改过的页面、拿到 bearer 却没口令的攻击者），
@@ -1235,7 +1253,7 @@ def create_app(
                 if not _reauth or not verify_web_password(_reauth, _stored_pwd):
                     # 只记键名与失败原因，绝不记口令（logs/ 轮转保留多份＝凭据长期落盘）
                     _log_internal_error(f"auth_reauth_denied: key={key_norm}", level="warning")
-                    raise HTTPException(403, "修改 Web 认证配置必须复验当前访问口令（reauth_password）")
+                    raise HTTPException(403, i18n_module.tr("修改 Web 认证配置必须复验当前访问口令（reauth_password）"))
         try:
             validate_config_target(section, key, value)
         except ValueError as e:
@@ -1256,7 +1274,7 @@ def create_app(
         with _main.file_update_lock:
             ok = update_config_line(cast(str, app.state.config_file), section, key, value)
         if not ok:
-            raise HTTPException(404, "未找到对应的配置项")
+            raise HTTPException(404, i18n_module.tr("未找到对应的配置项"))
         # 密码变更后吊销所有现有 token，强制重新登录
         if is_web_section and key_norm == "web_password" and req.value.strip():
             with _tokens_lock:
@@ -1294,7 +1312,7 @@ def create_app(
 
         if not req.language.strip() or not i18n_module.is_recognized_language(req.language):
             # 无法识别的语言值（既非受支持码也非已知别名）→ 400 而非静默回退
-            raise HTTPException(400, f"不支持的语言: {req.language}")
+            raise HTTPException(400, i18n_module.tr("不支持的语言: {lang}", lang=req.language))
         normalized = i18n_module.normalize_language(req.language)
         previous = i18n_module.get_language()
         effective = i18n_module.set_language(normalized)
@@ -1308,7 +1326,7 @@ def create_app(
             # 写回失败必须回滚内存态：否则面板/本进程说 effective、config.ini（以及重启后的
             # 录制子进程）仍说旧码，正是要消灭的「两进程两种语言」形态的另一种达成路径。
             _ = i18n_module.set_language(previous)
-            raise HTTPException(500, "语言配置写回失败")
+            raise HTTPException(500, i18n_module.tr("语言配置写回失败"))
         return {
             "ok": True,
             # language 恒为**生效码**（前端据此更新本地语言状态，不得再按请求值回写）
@@ -1320,7 +1338,11 @@ def create_app(
             "notice": (
                 ""
                 if effective == normalized
-                else f"{normalized} 的翻译目录不可用，已回退为 {effective}（配置同样按 {effective} 写回）"
+                else i18n_module.tr(
+                    "{lang} 的翻译目录不可用，已回退为 {effective}（配置同样按 {effective} 写回）",
+                    lang=normalized,
+                    effective=effective,
+                )
             ),
         }
 
@@ -1331,9 +1353,9 @@ def create_app(
         root = cast(str, app.state.downloads_root)
         target = os.path.realpath(os.path.join(root, path))
         if not _is_within(target, root):
-            raise HTTPException(400, "非法路径")
+            raise HTTPException(400, i18n_module.tr("非法路径"))
         if not os.path.exists(target):
-            raise HTTPException(404, "路径不存在")
+            raise HTTPException(404, i18n_module.tr("路径不存在"))
         if os.path.isfile(target):
             st = os.stat(target)
             return [
@@ -1376,7 +1398,7 @@ def create_app(
         root = cast(str, app.state.downloads_root)
         target = os.path.realpath(os.path.join(root, path))
         if not _is_within(target, root) or not os.path.isfile(target):
-            raise HTTPException(400, "非法路径或文件不存在")
+            raise HTTPException(400, i18n_module.tr("非法路径或文件不存在"))
         return FileResponse(target, filename=os.path.basename(target))
 
     @_route(app, ["GET"], "/api/logs")

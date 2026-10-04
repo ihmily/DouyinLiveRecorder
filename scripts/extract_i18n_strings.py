@@ -96,6 +96,11 @@ def extract_constant_or_template(node: ast.AST, source: str) -> str | None:
 # 否则该调用点会从提取结果消失，缺失检测对它退化为假绿（gui.py 用的是 i18n_module）。
 TR_CALLER_IDS = {"i18n", "i18n_module"}
 
+# ui_i18n.T(...) 的调用形态：裸 T（gui.py 的静态标签标记，src/ui_i18n.py 提供）。
+# i18n 静态标签（按钮/表头/窗口标题）经 T() 建时查表 + 登记重译，其 msgid 与 tr 同族；
+# 不纳入扫描面则这批词条只有人工登记一条路，缺失检测对它们退化为假绿。
+T_CALLER_IDS = {"T"}
+
 
 def scan_file(path: Path) -> set[str]:
     # 单文件扫描：print 的每个实参、logger.* 与 tr 的首参，各按规则 1~5 还原成模板形态。
@@ -132,7 +137,10 @@ def scan_file(path: Path) -> set[str]:
                 and isinstance(func.value, ast.Name)
                 and func.value.id in TR_CALLER_IDS
             )
-            if is_tr:
+            # ui_i18n.T(模板)：静态标签标记，首参同样按规则 5 提取（apply_title 的第二参
+            # 也是 T(...)，内层 T 调用被 ast.walk 独立访问，无需为它写特例）
+            is_t = isinstance(func, ast.Name) and func.id in T_CALLER_IDS
+            if is_tr or is_t:
                 text = extract_constant_or_template(node.args[0], source)
                 if text is not None:
                     found.add(text)
