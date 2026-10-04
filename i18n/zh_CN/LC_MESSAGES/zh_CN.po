@@ -3509,3 +3509,45 @@ msgstr "🗑   清空"
 
 msgid "🗑   清空日志"
 msgstr "🗑   清空日志"
+
+msgid "界面缩放"
+msgstr "界面缩放"
+
+msgid "动效强度"
+msgstr "动效强度"
+
+msgid "自动"
+msgstr "自动"
+
+msgid "{percent}%"
+msgstr "{percent}%"
+
+msgid "界面缩放已调整为 {percent}%"
+msgstr "界面缩放已调整为 {percent}%"
+
+msgid "界面缩放已调整为 {percent}%，但配置写回失败"
+msgstr "界面缩放已调整为 {percent}%，但配置写回失败"
+
+msgid "界面缩放已调整为 {percent}%，但配置写回失败: {type_name}: {err}"
+msgstr "界面缩放已调整为 {percent}%，但配置写回失败: {type_name}: {err}"
+
+msgid "动效已切换为 {motion}"
+msgstr "动效已切换为 {motion}"
+
+msgid "动效已切换为 {motion}，但配置写回失败"
+msgstr "动效已切换为 {motion}，但配置写回失败"
+
+msgid "动效已切换为 {motion}，但配置写回失败: {type_name}: {err}"
+msgstr "动效已切换为 {motion}，但配置写回失败: {type_name}: {err}"
+
+msgid "关闭"
+msgstr "关闭"
+
+msgid "轻微"
+msgstr "轻微"
+
+msgid "完整"
+msgstr "完整"
+
+msgid "系统已关闭动画效果，动效强制为「关闭」"
+msgstr "系统已关闭动画效果，动效强制为「关闭」"

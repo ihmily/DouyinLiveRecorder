@@ -199,8 +199,36 @@ from src.ui_kit import (
     Frame,
     Label,
     Menu,
+    blend,
     font_style,
+    restyle_fonts,
+    scale_in_window,
+    set_scale_percent,
+    slide_in,
     terminal_text,
+)
+from src.ui_motion import (
+    DIALOG_START_SCALE,
+    FOLLOW_SYSTEM_MOTION_ID,
+    MOTION_IDS,
+    PAGE_SLIDE_PX,
+    ROW_HIGHLIGHT_MS,
+    MotionController,
+    detect_system_animations,
+    effective_motion,
+    load_motion_preference,
+    save_motion_preference,
+)
+from src.ui_scale import (
+    AUTO_SCALE_ID,
+    FONT_FAMILY,
+    MONO_FAMILY,
+    SCALE_PRESETS,
+    TYPE_SCALE,
+    ScaleProfile,
+    auto_scale_for_screen,
+    load_scale_preference,
+    save_scale_preference,
 )
 from src.ui_theme import (
     DEFAULT_THEME,
@@ -370,60 +398,142 @@ class Colors:
     TERMINAL_SELECT = "#1F3A5F"
 
 
-# ─── 字体系统（CustomTkinter 自动处理 DPI 缩放） ───────────
+# ─── 字体系统（语义档位 + 全局缩放） ──────────────────────────────────
+#
+# [2026-10-04 阶段6] 由「写死档位 + 换档重建控件」改为「语义 token + 原地改字号」：
+#   · 档位定义收敛到 src/ui_scale.TYPE_SCALE（唯一事实源），本类只做缓存与分发。
+#   · 换缩放时**不重建控件树**：tkfont.Font 是共享对象，已创建控件持有的引用会随
+# configure(size=) 一起变。这条是本阶段能「即时生效」而不闪屏、不丢日志/编辑内容/
+# 表格行的关键——重建控件树会把这三样运行态全部清空（与 CTkScrollableFrame 时代
+# 的整表重建是同一类事故）。
+#   · 字号一律**负数点值**（-N pt）。Tk 的负值 = 点，随 `tk scaling` 跨 DPI 自动缩放；
+#     正数是屏幕像素、不缩放，高 DPI 屏上整窗偏小。[历史注] CTkFont 的 size 语义是
+#     「100% DPI 下的逻辑像素」，迁回 tkfont.Font 时按 3/4 折算保持等价；阶段6 起
+#     档位直接以点值定义，折算关系已并入 TYPE_SCALE 的取值依据，不再二次折算。
 
-_FONT_FAMILY = "Microsoft YaHei UI"
-_MONO_FAMILY = "Cascadia Code"
 
-
-# 字体工厂：按需创建并缓存复用的 CustomTkinter 字体对象。
 @final
 class Fonts:
-    # 常用字体配置（惰性创建，避免在 Tk 初始化前调用失败）
+    # 常用字体配置（惰性创建 + 跨控件共享；换档时原地改 size，见rescale_all）
     _cache: dict[str, tkfont.Font] = {}
+    # 当前尺寸档位。换档时由 rescale_all() 写回，get() 读它算字号。
+    _profile: ScaleProfile = ScaleProfile(100)
 
-    # 按 size/weight/family 获取（并缓存）字体对象。
-    # [阶段5] CTkFont → tk.font.Font：CTk 的 size 语义是「100% DPI 下的逻辑像素」，Tk 原生
-    # 等价物是**负数点值**（1pt = 4/3 px @100%，随 `tk scaling` 跨 DPI 自动缩放）——
-    # size 按 3/4 折算保持各档字号在 100% 下与 CTk 时代逐像素等价；正数像素值不随
-    # DPI 缩放，高 DPI 下会整体偏小，禁用。
     @classmethod
-    def get(cls, size: int, weight: Literal["normal", "bold"] = "normal", family: str = _FONT_FAMILY) -> tkfont.Font:
-        key = f"{family}_{size}_{weight}"
+    def bind_profile(cls, profile: ScaleProfile) -> None:
+        # 绑定尺寸档位。构造期（建第一个字体之前）调用；运行中换档走 rescale_all。
+        cls._profile = profile
+
+    @classmethod
+    def rescale_all(cls, profile: ScaleProfile) -> None:
+        # 换档：改profile 后对**已缓存的全部字体对象**原地 configure(size=)。
+        # 之所以能生效：Tk 字体是具名共享资源，控件 -font 指向的是名字而非快照，
+        # 改一次定义、所有引用者立刻重绘。已创建控件因此无需重建（运行态零损失）。
+        # 未缓存的档位不预建——按需创建，避免启动时把 7 档 × 8 级的字体全实例化。
+        cls._profile = profile
+        for key, font in cls._cache.items():
+            size = cls._resolve_size(key)
+            if size is not None:
+                font.configure(size=size)
+
+    @classmethod
+    def _resolve_size(cls, key: str) -> int | None:
+        # 由缓存键反解出目标字号。键有两种形态：
+        #   "<token>_<weight>"          → 语义档位，键入 TYPE_SCALE 查表
+        #   "px_<weight>_px<N>"          → 显式像素档（品牌/弹窗图标等非正文元素）
+        # 解析不出token 时返回 None（跳过而不是猜——错字号比不改更糟）。
+        parts = key.split("_")
+        if parts[0] == "px" and len(parts) >= 3 and parts[-1].startswith("px"):
+            # 显式像素档：按 3/4 折成点（保持 CTk 时代的观感换算）再随缩放走
+            return -max(7, round(int(parts[-1][2:]) * 3 / 4 * cls._profile._pt_gain))
+        token = parts[0]
+        if token not in TYPE_SCALE:
+            return None
+        return cls._profile.pt(token)
+
+    @classmethod
+    def get(
+        cls,
+        size: int,
+        weight: Literal["normal", "bold"] = "normal",
+        family: str = FONT_FAMILY,
+        *,
+        token: str = "body",
+    ) -> tkfont.Font:
+        # 按语义档位取字体（并缓存）。
+        # [2026-10-03 阶段5] CTkFont → tk.font.Font：CTk 的 size 语义是「100% DPI 下的
+        # 逻辑像素」，Tk 原生等价物是**负数点值**（1pt = 4/3 px @100%，随 `tk scaling`
+        # 跨 DPI 自动缩放）；正数像素值不随 DPI 缩放，高 DPI 下会整体偏小，禁用。
+        # [2026-10-04 阶段6] size 形参保留为「显式像素档」（品牌图标、弹窗图标这类
+        # 非正文元素），随缩放按 3/4 折算同步放大；正文一律走 small/body/heading 等
+        # 具名方法，那些方法直接给 token、由 TYPE_SCALE 定档。
+        key = f"{token}_{weight}_px{size}" if token == "px" else f"{token}_{weight}"
         if key not in cls._cache:
-            cls._cache[key] = tkfont.Font(family=family, size=-round(size * 3 / 4), weight=weight)
+            resolved = cls._resolve_size(key)
+            if resolved is None:
+                raise KeyError(f"未知字号 token: {token!r}（合法值: {tuple(TYPE_SCALE)}）")
+            cls._cache[key] = tkfont.Font(family=family, size=resolved, weight=weight)
         return cls._cache[key]
 
-    # 获取小号（12px）字体，bold 控制是否加粗。
+    # 辅助文字（卡片副标题、列标签、状态说明、提示条、时间戳）
     @classmethod
     def small(cls, bold: bool = False) -> tkfont.Font:
-        return cls.get(12, "bold" if bold else "normal")
+        return cls.get(0, "bold" if bold else "normal", token="caption")
 
-    # 获取正文（13px）字体，bold 控制是否加粗。
+    # 正文（按钮文字、导航项、输入内容、占位文案）
     @classmethod
     def body(cls, bold: bool = False) -> tkfont.Font:
-        return cls.get(13, "bold" if bold else "normal")
+        return cls.get(0, "bold" if bold else "normal", token="body")
 
-    # 获取标题（15px）字体，默认加粗。
+    # 表格/列表行文字（比正文轻一档，让同行的数值更跳）
+    @classmethod
+    def label(cls, bold: bool = False) -> tkfont.Font:
+        return cls.get(0, "bold" if bold else "normal", token="label")
+
+    # 统计数值（与 label 成对使用，比 label 重一档）
+    @classmethod
+    def stat(cls, bold: bool = True) -> tkfont.Font:
+        return cls.get(0, "bold" if bold else "normal", token="stat")
+
+    # 小节标题（卡片标题、弹窗标题）
     @classmethod
     def heading(cls, bold: bool = True) -> tkfont.Font:
-        return cls.get(15, "bold" if bold else "normal")
+        return cls.get(0, "bold" if bold else "normal", token="heading")
 
-    # 获取大标题（20px 加粗）字体。
+    # 页面/品牌标题
     @classmethod
     def title(cls) -> tkfont.Font:
-        return cls.get(20, "bold")
+        return cls.get(0, "bold", token="title")
 
-    # 获取大号状态（26px 加粗）字体。
+    # 大状态文字（控制台的「待 机 / 录制中」）
     @classmethod
     def big_status(cls) -> tkfont.Font:
-        return cls.get(26, "bold")
+        return cls.get(0, "bold", token="display")
 
-    # 获取等宽字体描述元组（字体名, 11）。
+    # 品牌/弹窗图标（emoji 类非文字元素）：走显式像素档，随缩放同步放大
     @classmethod
-    def mono(cls) -> tuple[str, int]:
-        # 负数点值（tk 字体元组同支持）：11 逻辑像素 ≈ -8pt，随 DPI 自动缩放（原正数像素不缩放）
-        return (_MONO_FAMILY, -8)
+    def mark(cls, size: int = 30) -> tkfont.Font:
+        return cls.get(size, "normal", token="px")
+
+    # 等宽字体（日志终端、URL 编辑器、config.ini 编辑器）
+    @classmethod
+    def mono(cls) -> tkfont.Font:
+        # 返回 Font 对象而非元组：元组是快照，换缩放后不会跟着变；Font 对象能被
+        # rescale_all 原地改字号。tk.Text / ttk.Combobox 的 -font 两者都接受，
+        # 但只有后者能跟缩放联动（这是本阶段把返回值从元组换成对象的唯一理由）。
+        key = "mono_normal"
+        if key not in cls._cache:
+            cls._cache[key] = tkfont.Font(family=MONO_FAMILY, size=cls._profile.mono_pt())
+        return cls._cache[key]
+
+    # 等宽斜体（丢弃弹幕标记）。同样返回 Font 对象以参与缩放。
+    @classmethod
+    def mono_italic(cls) -> tkfont.Font:
+        key = "mono_italic"
+        if key not in cls._cache:
+            font = tkfont.Font(family=MONO_FAMILY, size=cls._profile.mono_pt(), slant="italic")
+            cls._cache[key] = font
+        return cls._cache[key]
 
 
 # 将 #RRGGBB 十六进制颜色字符串解析为 (R, G, B) 整数元组。
@@ -449,6 +559,9 @@ _FOLLOW_SYSTEM_ID = "_follow_system_"
 
 # 主题 id → i18n msgid（菜单显示名）。msgid 用简中原文（本仓 msgid 惯例），四语目录同批维护。
 _THEME_LABELS: dict[str, str] = {"light": "浅色", "dark": "深色", "high_contrast": "高对比度"}
+
+# 动效等级 → i18n msgid（[阶段6]）。id 与 src/ui_motion.MOTION_IDS 一一对应。
+_MOTION_LABELS: dict[str, str] = {"off": "关闭", "subtle": "轻微", "full": "完整"}
 
 
 def _compute_wraplength(width_device_px: float, margin: int = 8) -> int:
@@ -1463,16 +1576,6 @@ class LiveRecorderGUI:
     def __init__(self, root: tk.Tk):
         self.root = root
         apply_title(root, T("直播录制控制台"))
-        self.root.geometry("1120x740")
-        self.root.minsize(920, 620)
-
-        # status_pill 由 _build_sidebar 重建并布局；此处先以真实占位实例初始化，
-        # 消除 reportUninitializedInstanceVariable（未打包的 Frame 不会渲染，且
-        # _sidebar_dot 的占位 Canvas 需要一个父容器）。占位样式未过 ThemeManager，
-        # 但它从不显示，_build_sidebar 会以 themed Frame 替换。
-        self.status_pill = Frame(self.root)
-        # _sidebar_dot 等同理：构建方法重建并打包，此处以有类型占位实例初始化。
-        self._sidebar_dot: tk.Canvas = tk.Canvas(self.status_pill)
 
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
         # 冻结后 GUI 模块位于 exe 同级的 _internal/，而 config/ ffmpeg/ node/ downloads/
@@ -1486,12 +1589,34 @@ class LiveRecorderGUI:
         self.main_config_file = os.path.join(self.app_root, "config", "config.ini")
         self.downloads_dir = os.path.join(self.app_root, "downloads")
 
+        # [阶段6] 尺寸档位必须在建任何控件**之前**确定：Fonts 的档位、ttk 的 padding、
+        # 窗口初始几何三者都从它派生，事后改会先建后调（控件先按旧尺寸建再放大，
+        # 用户看到一次跳变）。顺序：读偏好（依赖上面的 main_config_file）→
+        # 「自动」按屏幕可用区现算 → 构造 profile → 绑定 Fonts → 设几何。
+        self.scale_profile = self._resolve_initial_scale()
+        Fonts.bind_profile(self.scale_profile)
+        # 窗口几何按档位放大后再 clamp 到屏幕可用区（低分辨率屏的核心诉求：
+        # 150% 档在 1366x768 上不能开出比屏幕还大的窗口）。
+        _win_w, _win_h, _min_w, _min_h = self.scale_profile.window_size(
+            root.winfo_screenwidth(), root.winfo_screenheight()
+        )
+        self.root.geometry(f"{_win_w}x{_win_h}")
+        self.root.minsize(_min_w, _min_h)
+
+        # status_pill 由 _build_sidebar 重建并布局；此处先以真实占位实例初始化，
+        # 消除 reportUninitializedInstanceVariable（未打包的 Frame 不会渲染，且
+        # _sidebar_dot 的占位 Canvas 需要一个父容器）。占位样式未过 ThemeManager，
+        # 但它从不显示，_build_sidebar 会以 themed Frame 替换。
+        self.status_pill = Frame(self.root)
+        # _sidebar_dot 等同理：构建方法重建并打包，此处以有类型占位实例初始化。
+        self._sidebar_dot: tk.Canvas = tk.Canvas(self.status_pill)
+
         # 阶段3 主题层：ttk 主题注册 + 偏好持久化（[GUI] gui_theme）。未设置（""）时按
         # 明暗落主题——保持升级前「跟随系统」的行为，只有显式选择过的主题才覆盖它。
         # [2026-10-03 阶段4] 全部 ttk 控件配色已由 ThemeManager 的变体样式从 token 派生
         # （本调用即注册）；[阶段5] CTk 外观模式退役，「跟随系统」由
         # detect_system_appearance() 探测，根窗口底色由 _apply_root_chrome() 按 token 上色。
-        self.theme_manager = ThemeManager()
+        self.theme_manager = ThemeManager(self.scale_profile)
         saved_theme = load_theme_preference(self.main_config_file)
         # 「跟随系统」当前是否生效：无显式偏好即跟随（含用户在统一后的主题菜单里选了
         # 「跟随系统」并写回空值的情形）；主题菜单的初始显示值与「跟随系统」选择回调都读它。
@@ -1501,7 +1626,20 @@ class LiveRecorderGUI:
         else:
             self.theme_manager.select(detect_system_appearance())
         self.theme_manager.apply(self.root)
+        set_scale_percent(self.scale_profile.percent)
         self._apply_root_chrome()
+
+        # [阶段6] 动效等级：用户偏好 + 系统「关闭动画」开关合成后的有效等级。
+        # 系统开关优先于用户选择（无障碍），故这里存的是「已合成的有效等级」，
+        # 菜单显示的仍是用户偏好本身——两者不同是正常的，_on_motion_change 里
+        # 会把「系统强制 off」显式落到菜单上，避免用户选了却没反应。
+        self._motion_follow_system = load_motion_preference(self.main_config_file) == ""
+        self.motion = MotionController(
+            effective_motion(
+                "" if self._motion_follow_system else load_motion_preference(self.main_config_file),
+                system_animations=detect_system_animations(),
+            )
+        )
 
         # 进程状态（线程安全访问）
         self._process_lock = threading.Lock()
@@ -1644,6 +1782,22 @@ class LiveRecorderGUI:
         self._danmaku_refresh_job_id = self.root.after(1000, self._schedule_danmaku_refresh)
         self._ui_pump_job_id = self.root.after(100, self._pump_ui_events)
 
+    # 读取配置里的缩放偏好并解析成运行期档位。
+    # 「未设置」与「自动」都按屏幕可用区现算——用户没选过、或选了自动，都不该被
+    # 上次在这台机器上的某个值钉死（换台分辨率不同的机器就再也不对了）。
+    # screen 尺寸取不到（无头/异常）时 auto_scale_for_screen(0, 0) 会落到小屏分支，
+    # 但 ScaleProfile 内部对 <=0 的情形另有兜底（见 window_size 的注释），不会崩。
+    def _resolve_initial_scale(self) -> ScaleProfile:
+        try:
+            screen_w = self.root.winfo_screenwidth()
+            screen_h = self.root.winfo_screenheight()
+        except tk.TclError:
+            screen_w = screen_h = 0
+        preference = load_scale_preference(self.main_config_file)
+        if preference == AUTO_SCALE_ID or not preference:
+            return ScaleProfile(auto_scale_for_screen(screen_w, screen_h))
+        return ScaleProfile(int(preference))
+
     # ─── UI 线程事件泵（线程安全调度） ──────────────────────
 
     # 从任意线程安全地调度回调到 UI 线程执行（仅入队，不触碰 Tk）。
@@ -1729,16 +1883,43 @@ class LiveRecorderGUI:
 
     # 构建主布局（左侧导航栏 + 右侧内容区）并展示默认页。
     def _setup_ui(self) -> None:
-        self.root.grid_columnconfigure(0, minsize=230, weight=0)
+        # [阶段6] 侧栏宽度随档位缩放：导航项文字（10 字）+ 左右留白在 150% 档
+        # 会超出原 230px 而折行，导航项折行后整栏高度跳变、当前项可能被挤出视野。
+        self.root.grid_columnconfigure(0, minsize=self.scale_profile.sidebar_width(), weight=0)
         self.root.grid_columnconfigure(1, weight=1)
         self.root.grid_rowconfigure(0, weight=1)
 
         self._build_content()
         self._show_page("dashboard")
+        # 侧栏是整窗里唯一「高度不随内容伸缩」的列：导航项固定 5 条、底部固定
+        # N 个控件。窗口高小于它的需求高时，pack 会把最后一个控件（彻底退出）
+        # 顶到窗口外——用户表现为「退出按钮只剩一条红边」。故把侧栏的**实测**
+        # 需求高纳入 minsize 下限。
+        self._raise_minsize_to_fit_sidebar()
         # 启动期统一重译：_build_sidebar 里配置语言（set_language）之前构建的少数标签
         # （品牌/主题菜单初值）按 i18n 导入默认语言定型，此处回填一次保证整窗语言一致；
         # 之后构建的控件不受影响（登记表回填是幂等的）。
         retranslate_all()
+
+    # 把窗口最小高度抬到「侧栏实测需求高」，让底部控件不被挤出窗口。
+    # [为什么用实测而不是写死常量] 侧栏高度随档位、随语言（中英文标签高度不同）、
+    # 随 i18n 译文行数变化，写死常量必然在某个组合下失准；winfo_reqheight 是 Tk 自己
+    # 算出的需求值，与实际渲染同源。
+    # [为什么不被屏幕高度卡住] 若屏幕本身装不下，minsize 会被设成超过屏幕的值，
+    # 用户就再也拖不动窗口边角。故仍以当前算出的窗口高为上限——宁可裁掉一点，
+    # 也要保证窗口可操作。
+    def _raise_minsize_to_fit_sidebar(self) -> None:
+        try:
+            self.sidebar.update_idletasks()
+            needed = self.sidebar.winfo_reqheight()
+            _cur_w, _cur_h, min_w, min_h = self.scale_profile.window_size(
+                self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+            )
+        except tk.TclError:
+            return
+        if needed <= min_h:
+            return
+        self.root.minsize(min_w, min(needed, _cur_h))
 
     # 构建左侧导航栏（品牌、状态胶囊、导航按钮、界面主题/语言与退出）。
     # [2026-10-03 阶段4] 控件层换 src.ui_kit 的 ttk 工厂；「外观模式」菜单并入
@@ -1751,7 +1932,7 @@ class LiveRecorderGUI:
         # 品牌区
         brand = Frame(sidebar)
         brand.pack(fill=tk.X, padx=20, pady=(24, 6))
-        Label(brand, text="🎬", font=Fonts.get(30)).pack(side=tk.LEFT)
+        Label(brand, text="🎬", font=Fonts.mark(30)).pack(side=tk.LEFT)
         brand_text = Frame(brand)
         brand_text.pack(side=tk.LEFT, padx=(10, 0))
         Label(brand_text, text=T("直播录制"), font=Fonts.title()).pack(anchor=tk.W)
@@ -1791,31 +1972,89 @@ class LiveRecorderGUI:
         bottom = Frame(sidebar)
         bottom.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=16)
 
+        # [阶段6] 四个偏好设置（主题 / 缩放 / 动效 / 语言）统一排成 2×2 网格。
+        #
+        # [为什么改网格] 阶段5 的形态是「每个设置一个标签 + 一个整宽下拉」竖排四项，
+        # 底部占约 344px；阶段6 增设缩放与动效后若继续竖排要约 470px，在 85% 档
+        # （窗口高 629px、侧栏需求高 662px）会把「彻底退出」顶出窗口。
+        # 2×2 布局把底部压回约 200px，且四个控件的视觉权重一致（都是次级设置），
+        # 比「主题整宽、其余半宽」更整齐。
+        settings = Frame(bottom)
+        settings.pack(fill=tk.X)
+        settings.grid_columnconfigure((0, 1), weight=1, uniform="settings")
+
+        def _setting_label(row: int, col: int, text: "str | Translatable") -> None:
+            # 设置项标签统一 caption 档 + muted 变体：它们是「控件的说明」而非内容，
+            # 视觉权重必须低于下拉本身。
+            Label(settings, text=text, font=Fonts.small(), variant="muted", anchor=tk.W).grid(
+                row=row * 2, column=col, sticky="ew", padx=(4 if col == 0 else 8, 4), pady=(0, 3)
+            )
+
         # 界面主题（阶段4 统一后的唯一明暗/对比度入口）：「跟随系统」= 清空显式偏好并按
         # 系统明暗落 light/dark（下次启动继续跟随）；三个显式主题即选即持久化
         # （config.ini [GUI] gui_theme）。显示名经 i18n；旧「外观模式」菜单连同
-        # 其硬编码中文标签随本批次移除。
-        Label(bottom, text=i18n_module.tr("界面主题"), font=Fonts.small(), variant="muted", anchor=tk.W).pack(
-            fill=tk.X, padx=6, pady=(0, 4)
-        )
+        # 其硬编码中文标签随阶段4 移除。
+        _setting_label(0, 0, i18n_module.tr("界面主题"))
         self._theme_ids_by_display: dict[str, str] = {}
         _theme_values: list[str] = []
         for _tid in (_FOLLOW_SYSTEM_ID, *THEME_IDS):
             _display = i18n_module.tr("跟随系统") if _tid == _FOLLOW_SYSTEM_ID else i18n_module.tr(_THEME_LABELS[_tid])
             self._theme_ids_by_display[_display] = _tid
             _theme_values.append(_display)
-        self.theme_menu = Menu(bottom, values=_theme_values, command=self._on_theme_change, font=Fonts.body())
-        self.theme_menu.pack(fill=tk.X, padx=2, pady=(0, 12))
+        self.theme_menu = Menu(settings, values=_theme_values, command=self._on_theme_change, font=Fonts.small())
+        self.theme_menu.grid(row=1, column=0, sticky="ew", padx=(4, 4), pady=(0, 10))
         # 初始值：跟随系统时不得显示解析后的主题名（用户并未显式选过它）
         if self._theme_follow_system:
             self.theme_menu.set(i18n_module.tr("跟随系统"))
         else:
             self.theme_menu.set(i18n_module.tr(_THEME_LABELS[self.theme_manager.theme_id]))
 
-        # 语言切换：显示名 → 语言码映射；选择即热切换本进程翻译目录并写回 config.ini
-        Label(bottom, text=T("语言 Language"), font=Fonts.small(), variant="muted", anchor=tk.W).pack(
-            fill=tk.X, padx=6, pady=(0, 4)
+        # 界面缩放：档位列表来自 src/ui_scale.SCALE_PRESETS，首项「自动」按屏幕现算。
+        _setting_label(0, 1, T("界面缩放"))
+        self._scale_ids_by_display: dict[str, str] = {}
+        _scale_values: list[str] = []
+        for _pct in (AUTO_SCALE_ID, *(str(p) for p in SCALE_PRESETS)):
+            _display = i18n_module.tr("自动") if _pct == AUTO_SCALE_ID else i18n_module.tr("{percent}%", percent=_pct)
+            self._scale_ids_by_display[_display] = _pct
+            _scale_values.append(_display)
+        self.scale_menu = Menu(settings, values=_scale_values, command=self._on_scale_change, font=Fonts.small())
+        self.scale_menu.grid(row=1, column=1, sticky="ew", padx=(8, 4), pady=(0, 10))
+        # 初始值：显示「自动」而非解析后的档位（未显式选过时不该假装用户选过 100%）
+        _saved_scale = load_scale_preference(self.main_config_file)
+        self._scale_follow_system = _saved_scale in ("", AUTO_SCALE_ID)
+        self.scale_menu.set(
+            i18n_module.tr("自动")
+            if self._scale_follow_system
+            else i18n_module.tr("{percent}%", percent=self.scale_profile.percent)
         )
+
+        # 动效强度：off/subtle/full，首项「跟随系统」读系统的「显示动画」开关。
+        _setting_label(1, 0, T("动效强度"))
+        self._motion_ids_by_display: dict[str, str] = {}
+        _motion_values: list[str] = []
+        for _mid in (FOLLOW_SYSTEM_MOTION_ID, *MOTION_IDS):
+            _display = (
+                i18n_module.tr("跟随系统") if _mid == FOLLOW_SYSTEM_MOTION_ID else i18n_module.tr(_MOTION_LABELS[_mid])
+            )
+            self._motion_ids_by_display[_display] = _mid
+            _motion_values.append(_display)
+        self.motion_menu = Menu(settings, values=_motion_values, command=self._on_motion_change, font=Fonts.small())
+        self.motion_menu.grid(row=3, column=0, sticky="ew", padx=(4, 4), pady=(0, 10))
+        # 初始值：显示用户的显式选择（可能与实际生效等级不同——系统关闭动画时
+        # 实际是 off 而菜单仍显示用户选的值，这是有意的，见 _ensure_motion_feedback）
+        self.motion_menu.set(
+            i18n_module.tr("跟随系统")
+            if self._motion_follow_system
+            else i18n_module.tr(_MOTION_LABELS[self.motion.motion_id])
+        )
+        # 系统关闭动画时把菜单显式落到「关闭」并告知原因——用户选了却没反应
+        # 是最容易被当成 bug 的交互。
+        self._ensure_motion_feedback()
+
+        # 语言切换：显示名 → 语言码映射；选择即热切换本进程翻译目录并写回 config.ini
+        # 排在 2×2 网格的第二行第二列（与前三项同格，标签仍写「语言 Language」——
+        # 中英双语标签是本仓既有惯例，英文界面下用户不必猜这是什么设置）。
+        _setting_label(1, 1, T("语言 Language"))
         # MID-53：显示名一律取 i18n.unique_display_names()，不得再在本文件裁剪括注。
         # 旧写法 `name.split(" (")[0]` 把 "English (US)" / "English (UK)" 折成同一个
         # "English"，于是下面的反向表后写覆盖前写只剩 en_GB —— 用户点任一 English 都写回
@@ -1824,12 +2063,12 @@ class LiveRecorderGUI:
         # 显示名 → 语言码（unique_display_names 已保证值互不相同，故此表无覆盖风险）
         self._language_codes: dict[str, str] = {name: code for code, name in self._language_names.items()}
         self.language_menu = Menu(
-            bottom,
+            settings,
             values=list(self._language_names.values()),
             command=self._on_language_change,
-            font=Fonts.body(),
+            font=Fonts.small(),
         )
-        self.language_menu.pack(fill=tk.X, padx=2, pady=(0, 12))
+        self.language_menu.grid(row=3, column=1, sticky="ew", padx=(8, 4), pady=(0, 10))
         # 初始值：读 config.ini 的 language 键（空 → 系统语言，未识别/目录缺失 → en_US）
         try:
             _cfg = configparser.ConfigParser(interpolation=None)
@@ -1848,13 +2087,15 @@ class LiveRecorderGUI:
             self._language_names.get(_effective_lang, self._language_names[i18n_module.DEFAULT_LANGUAGE])
         )
 
+        # 底部两个动作按钮。放在设置网格**之后** pack，同属 bottom 的顺序排列
+        # （bottom 内部按 pack 顺序自上而下），故它们落在网格下方。
         Button(
             bottom,
             text=T("📥   最小化到托盘"),
             command=self.minimize_to_tray,
             font=Fonts.body(),
             variant="side_ghost",
-        ).pack(fill=tk.X, pady=(0, 8))
+        ).pack(fill=tk.X, pady=(12, 8))
 
         Button(
             bottom,
@@ -1873,16 +2114,147 @@ class LiveRecorderGUI:
         self._nav_buttons[page_id] = btn
 
     # 切换至指定页面并高亮对应的导航按钮。
+    # [阶段6] 页面滑入：offset 由右向左8px 归零。位移用 place 借用，终帧
+    # place_forget 交回 grid（不改变布局语义，只是过渡期借用 place）——
+    # 见 ui_kit.slide_in 的注释。动效关闭时 run_frames 同步落终态，不排 after。
     def _show_page(self, page_id: str) -> None:
         if page_id not in self._pages:
             return
         self._current_page = page_id
-        self._pages[page_id].tkraise()
+        page = self._pages[page_id]
+        page.tkraise()
         for pid, btn in self._nav_buttons.items():
             if pid == page_id:
                 btn.configure(style=font_style(NAV_ACTIVE_STYLE, Fonts.body(bold=True), btn))
             else:
                 btn.configure(style=font_style(NAV_STYLE, Fonts.body(), btn))
+        slide_in(
+            page,
+            self.motion,
+            distance=self.scale_profile.px(PAGE_SLIDE_PX),
+            duration_ms=190,
+            job_key=f"page:{page_id}",
+        )
+
+    # 界面缩放菜单选择回调：换档 → 重建 ttk 主题（新 padding/rowheight）+ 原地改字号
+    # + 调整窗口与侧栏尺寸。即时生效、不重启、不丢运行态。
+    def _on_scale_change(self, choice: str) -> None:
+        raw_id = self._scale_ids_by_display.get(choice, AUTO_SCALE_ID)
+        follow = raw_id == AUTO_SCALE_ID
+        if follow:
+            percent = auto_scale_for_screen(self.root.winfo_screenwidth(), self.root.winfo_screenheight())
+        else:
+            percent = int(raw_id)
+        self._apply_scale(ScaleProfile(percent))
+        try:
+            # 「自动」写哨兵 id 而非空值：与 gui_theme 的「写空=跟随」不同，
+            # 这里保留哨兵是为了让用户下次进菜单仍看到自己选的是「自动」，
+            # 而 gui_theme 的「跟随系统」是靠菜单初值判断的。两者都只影响菜单显示。
+            saved = save_scale_preference(self.main_config_file, AUTO_SCALE_ID if follow else str(percent))
+            if saved:
+                self._log(i18n_module.tr("界面缩放已调整为 {percent}%", percent=percent))
+            else:
+                self._log(i18n_module.tr("界面缩放已调整为 {percent}%，但配置写回失败", percent=percent), "warn")
+        except Exception as e:
+            self._log(
+                i18n_module.tr(
+                    "界面缩放已调整为 {percent}%，但配置写回失败: {type_name}: {err}",
+                    percent=percent,
+                    type_name=type(e).__name__,
+                    err=e,
+                ),
+                "warn",
+            )
+        self._scale_follow_system = follow
+
+    # 把新档位落到运行态。拆成独立方法是为了让「菜单回调」只管偏好与日志，
+    # 档位切换本身（主题重建/字号/几何/侧栏）只有这一处实现。
+    def _apply_scale(self, profile: ScaleProfile) -> None:
+        self.scale_profile = profile
+        # 1) 字号：改已缓存的 tkfont.Font 对象本身，所有引用它的控件自动重绘。
+        #    这是本阶段「即时生效且不丢运行态」的核心——重建控件树会清空日志内容、
+        #    URL 编辑器未保存内容与两张监控表（与阶段4 之前的整表重建同类事故）。
+        Fonts.rescale_all(profile)
+        # 2) ttk：主题名带档位段，重注册才能拿到新 padding/rowheight；
+        #    派生字体样式缓存必须清（其名按旧档位的 padding 生成）。
+        self.theme_manager.set_scale(profile)
+        set_scale_percent(profile.percent)
+        self.theme_manager.apply(self.root)
+        # 3) 带字体的按钮要重新指向按新 padding 派生的样式（派生样式是创建时的快照）
+        restyle_fonts(self.root)
+        # 3) 窗口与侧栏几何：min 尺寸先落，避免 geometry 被旧 minsize 顶回。
+        width, height, min_w, min_h = profile.window_size(self.root.winfo_screenwidth(), self.root.winfo_screenheight())
+        self.root.minsize(min_w, min_h)
+        self.root.geometry(f"{width}x{height}")
+        self.root.grid_columnconfigure(0, minsize=profile.sidebar_width(), weight=0)
+        # 4) tk 自绘件（Canvas 圆点、tk.Text 编辑器）随主题 token 重上色
+        self._sync_theme_extras()
+        # 5) 状态胶囊/卡片头等固定像素高度的 Frame 不会自动跟档，需显式重设
+        self._apply_scaled_geometry()
+        # 6) 长文案的 wraplength 绑的是容器实宽，缩放后要重新结算一次
+        for page in self._pages.values():
+            page.update_idletasks()
+
+    # 固定像素高度的容器随档位重设。ttk.Frame 的 height 只在 pack_propagate(False)
+    # 下生效，缩放后不重设就会出现「大字号被裁 / 小字号留白」两种错位。
+    def _apply_scaled_geometry(self) -> None:
+        s = self.scale_profile
+        for widget, base in (
+            (getattr(self, "status_pill", None), 38),
+            (getattr(self, "close_dialog", None), 0),
+        ):
+            # status_pill 是唯一需要按档缩放高度的固定高容器（其余卡片头高由
+            # pack 内容决定，pack_propagate(False) 只在 status_pill 上开着）
+            if widget is not None and base:
+                try:
+                    widget.configure(height=s.px(base))
+                except tk.TclError:
+                    pass
+
+    # 动效强度菜单选择回调：改内存态等级 + 持久化。写回失败只告警不阻断
+    # （与主题/缩放同一容错口径：界面已按新等级动起来了，配置写不回只是下次
+    # 启动不记住）。
+    def _on_motion_change(self, choice: str) -> None:
+        motion_id = self._motion_ids_by_display.get(choice, FOLLOW_SYSTEM_MOTION_ID)
+        follow = motion_id == FOLLOW_SYSTEM_MOTION_ID
+        effective = self.motion.set_motion(
+            effective_motion(
+                "" if follow else motion_id,
+                system_animations=detect_system_animations(),
+            )
+        )
+        self._motion_follow_system = follow
+        # 关掉动效必须立刻停掉在途的呼吸动画，否则用户关了它圆点还在跳。
+        if effective == "off":
+            self._stop_status_animation()
+        self._ensure_motion_feedback()
+        try:
+            saved = save_motion_preference(self.main_config_file, FOLLOW_SYSTEM_MOTION_ID if follow else motion_id)
+            if saved:
+                self._log(i18n_module.tr("动效已切换为 {motion}", motion=effective))
+            else:
+                self._log(i18n_module.tr("动效已切换为 {motion}，但配置写回失败", motion=effective), "warn")
+        except Exception as e:
+            self._log(
+                i18n_module.tr(
+                    "动效已切换为 {motion}，但配置写回失败: {type_name}: {err}",
+                    motion=effective,
+                    type_name=type(e).__name__,
+                    err=e,
+                ),
+                "warn",
+            )
+
+    # 系统关闭动画时，把菜单显示值与实际生效等级对齐并留一条日志。
+    # [为什么必须有这个反馈] 无障碍用户开了系统「关闭动画」后，界面里选了「完整」
+    # 却毫无反应——没有提示时这几乎必然被当成 bug 报上来。显式说明比沉默更可信。
+    def _ensure_motion_feedback(self) -> None:
+        if self.motion.motion_id != "off" or self._motion_follow_system:
+            return
+        if not detect_system_animations():
+            if self.motion_menu.winfo_exists():
+                self.motion_menu.set(i18n_module.tr(_MOTION_LABELS["off"]))
+            self._log(i18n_module.tr("系统已关闭动画效果，动效强制为「关闭」"), "warn")
 
     # 界面主题菜单选择回调（阶段3 建立，阶段4 统一单入口，阶段5 去 CTk 化）：内存态切换 +
     # ttk 注册 + 持久化（「跟随系统」写空值 = 清空显式偏好）+ 根窗口底色 + 自绘控件重上色。
@@ -1921,6 +2293,9 @@ class LiveRecorderGUI:
                 "warn",
             )
         self._theme_follow_system = follow
+        # 带字体的按钮重新指向派生样式：派生名按 (基础变体, 字体, 档位) 缓存，
+        # 换主题后基础变体的 padding/配色已变，沿用旧派生样式会停留在旧主题的体量上
+        restyle_fonts(self.root)
         # 根窗口底色随主题 token；ttk 控件由全局样式重绘，tk 自绘件见 _sync_theme_extras
         self._apply_root_chrome()
         self._sync_theme_extras()
@@ -2204,7 +2579,13 @@ class LiveRecorderGUI:
         editor_wrap = Frame(card)
         editor_wrap.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 6))
 
-        self.config_text = EditorText(editor_wrap, tokens=self.theme_manager.tokens(), font=Fonts.mono())
+        self.config_text = EditorText(
+            editor_wrap,
+            tokens=self.theme_manager.tokens(),
+            font=Fonts.mono(),
+            pad_x=self.scale_profile.spacing("md"),
+            pad_y=self.scale_profile.spacing("sm"),
+        )
         self.config_text.pack(fill=tk.BOTH, expand=True)
 
         # 提示
@@ -2261,6 +2642,9 @@ class LiveRecorderGUI:
             bg=Colors.TERMINAL_BG,
             fg=Colors.TERMINAL_FG,
             select_bg=Colors.TERMINAL_SELECT,
+            # [阶段6] 内边距随档位：tk.Text 的 padx/pady 是裸像素，不吃 ttk 样式
+            pad_x=self.scale_profile.spacing("md"),
+            pad_y=self.scale_profile.spacing("sm"),
         )
         term_wrap.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 6))
 
@@ -2422,7 +2806,8 @@ class LiveRecorderGUI:
         box.grid(row=0, column=col, padx=10, pady=4, sticky="ew")
         box.grid_columnconfigure(0, weight=1)
         Label(box, text=label, font=Fonts.small(), variant="muted").pack(anchor=tk.CENTER)
-        val = Label(box, text=value, font=Fonts.title(), variant=variant)
+        # [阶段6] 统计数值改用 stat 档（原复用 title 20pt，与控制台大状态 28pt 抢层级）
+        val = Label(box, text=value, font=Fonts.stat(), variant=variant)
         val.pack(anchor=tk.CENTER, pady=(2, 0))
         return val
 
@@ -2618,13 +3003,16 @@ class LiveRecorderGUI:
             bg=Colors.TERMINAL_BG,
             fg=Colors.TERMINAL_FG,
             select_bg=Colors.TERMINAL_SELECT,
+            pad_x=self.scale_profile.spacing("md"),
+            pad_y=self.scale_profile.spacing("sm"),
         )
         term_wrap.pack(fill=tk.BOTH, expand=True)
 
         # 弹幕类型着色：普通弹幕用默认前景，礼物黄色，SC 粉色，采样折叠灰斜体
         self.danmaku_text.tag_config("gift", foreground=Colors.TERMINAL_WARN)
         self.danmaku_text.tag_config("superChat", foreground="#DB61A2")
-        self.danmaku_text.tag_config("dropped", foreground="#8B949E", font=(_MONO_FAMILY, 10, "italic"))
+        # [阶段6] 等宽斜体改用 Font 对象（原元组是快照，不随缩放变）
+        self.danmaku_text.tag_config("dropped", foreground="#8B949E", font=Fonts.mono_italic())
 
         return page
 
@@ -2662,11 +3050,48 @@ class LiveRecorderGUI:
         self.log_text.delete("1.0", tk.END)
         self.log_text.config(state=tk.DISABLED)
 
+    # ─── 表格变化行高亮（[阶段6] 动效） ────────────────────────────
+
+    # 变化行高亮：sync 返回本轮变化的行，逐帧把背景色从「高亮」混回「常态」。
+    # 动效关闭时 run_frames 同步落终态（直接摘 tag），不留高亮残色。
+    # [为什么高亮色用 primary 而不是 success/danger] 高亮表达的是「这一行刚变了」，
+    # 不是「这行是好是坏」——好坏已经由 downgraded/disconnected 两个 tag 表达了，
+    # 复用语义色会让两种含义叠在一起。
+    def _highlight_changed_rows(self, table: DataTable, changed: list[str]) -> None:
+        if not changed:
+            # 无变化轮零开销：不排 after、不动 tag（这是「未变化轮零触碰」的延伸）
+            return
+        tokens = self.theme_manager.tokens()
+        base_color = tokens["surface_alt"]
+        # 高亮取 primary 与 surface_alt 的中间色：既明显可辨，又不与降级红/断连灰撞色
+        highlight_color = blend(tokens["primary"], base_color, 0.78)
+
+        def _apply(frame_keys: list[str], color: str) -> None:
+            table.highlight_rows(frame_keys, tag="flash", colors={"background": color})
+
+        def _clear(_progress: float = 0.0) -> None:
+            # 末帧摘 tag：传空 colors 让 highlight_rows 进入「摘除」分支
+            table.highlight_rows(changed, tag="flash", colors={})
+
+        self.motion.run_frames(
+            self.root,
+            f"rows:{id(table)}",
+            lambda progress: _apply(changed, blend(highlight_color, base_color, progress)),
+            duration_ms=ROW_HIGHLIGHT_MS,
+            frames=5,
+            # 末帧必须显式摘掉 flash tag：末帧颜色已等于常态底色，但 tag 仍在，
+            # 下一轮 sync 改tags 时会因「多了一个 tag」被判成变化而误触高亮，
+            # 形成「每轮都闪一下」的自激循环。
+            on_done=_clear,
+        )
+
     # ─── 状态指示器动画 ─────────────────────────────────────
 
     # 启动大状态圆点的呼吸式动画（若未在运行）。
+    # [阶段6] 动效等级为 off 时不启动：呼吸是 120ms 一帧的常驻after 链，
+    # 是本窗口里唯一「即使界面静止也在持续重绘」的来源，低性能设备上必须可关。
     def _start_status_animation(self) -> None:
-        if self._status_animating:
+        if self._status_animating or not self.motion.enabled:
             return
         self._status_animating = True
         self._status_anim_index = 0
@@ -2712,7 +3137,12 @@ class LiveRecorderGUI:
         else:
             self._stop_status_animation()
             try:
-                self._big_dot.coords(self._big_dot_item, 8, 8, 56, 56)
+                # 动效关闭时圆点停在中间尺寸（呼吸链的起点）而非最小尺寸：
+                # 中间尺寸是「录制中」的静态可读信号，用户仍能一眼看出在跑。
+                _rest = 44 if not self.motion.enabled else 48
+                self._big_dot.coords(
+                    self._big_dot_item, 32 - _rest // 2, 32 - _rest // 2, 32 + _rest // 2, 32 + _rest // 2
+                )
                 self._big_dot.itemconfig(self._big_dot_item, fill=color)
             except Exception:
                 pass
@@ -2907,6 +3337,17 @@ class LiveRecorderGUI:
             self._adv_settings_window = None
         self._adv_settings_window = AdvancedSettingsWindow(
             self.root, self.main_config_file, self._log, tokens=self.theme_manager.tokens()
+        )
+        # [阶段6] 高级设置窗口的缩放落位。放在构造之后（窗口已 update_idletasks、
+        # 拿到真实宽高）而不是构造期传入——AdvancedSettingsWindow 是独立类，
+        # 不该知道动效控制器，动画由宿主在拿到窗口后施加（与主题切换同理：
+        # 窗口自身的 restyle 由宿主驱动）。
+        scale_in_window(
+            self._adv_settings_window.window,
+            self.motion,
+            start_scale=DIALOG_START_SCALE,
+            duration_ms=170,
+            job_key="adv_settings",
         )
 
     # 判断 URL_config.ini 是否含至少一个可录制地址（注释行与空行不计）。
@@ -3696,7 +4137,7 @@ class LiveRecorderGUI:
             tags[name] = ("downgraded",) if downgraded else ("normal",)
         for gone in set(self._quality_row_setq) - set(keys):
             del self._quality_row_setq[gone]
-        self._quality_table.sync(keys, values, tags)
+        self._highlight_changed_rows(self._quality_table, self._quality_table.sync(keys, values, tags))
         self._show_quality_placeholder(not data)
 
         # 更新统计
@@ -3984,7 +4425,7 @@ class LiveRecorderGUI:
                 str(row["started_at"]),
             )
             tags[name] = ("normal",) if connected else ("disconnected",)
-        self._dm_table.sync(keys, values, tags)
+        self._highlight_changed_rows(self._dm_table, self._dm_table.sync(keys, values, tags))
         self._show_danmaku_placeholder(not rows)
 
         # 顶部统计与筛选下拉（保持当前选择，房间列表变化时刷新选项）
@@ -4372,7 +4813,7 @@ class LiveRecorderGUI:
         y = self.root.winfo_y() + (self.root.winfo_height() - dialog.winfo_height()) // 2
         dialog.geometry(f"+{x}+{y}")
 
-        Label(dialog, text="🎬", font=Fonts.get(32)).pack(pady=(24, 8))
+        Label(dialog, text="🎬", font=Fonts.mark(32)).pack(pady=(24, 8))
         Label(dialog, text=T("请选择关闭方式"), font=Fonts.heading()).pack()
         Label(
             dialog,
@@ -4417,6 +4858,10 @@ class LiveRecorderGUI:
             dialog.destroy()
 
         dialog.bind("<Escape>", _on_escape)
+
+        # [阶段6] 弹窗缩放落位。放在 grab 之前：动效期间窗口还在变尺寸，
+        # 先 grab 会让动画期间的点击被吞（用户以为按钮失灵）。
+        scale_in_window(dialog, self.motion, start_scale=DIALOG_START_SCALE, duration_ms=170, job_key="close_dialog")
 
         # 延迟 grab，等待窗口可见
         dialog.after(100, lambda: self._safe_dialog_grab(dialog))

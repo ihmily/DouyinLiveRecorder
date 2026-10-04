@@ -15,6 +15,9 @@
 #     写入经 src/web_config.update_or_append_config_line（缺节/缺键补建 + 行级注释保留 + 原子写），
 #     刻意不使用 config_io.read_config_value——它写回时持 main.file_update_lock，与录制进程耦合，
 #     GUI 进程不该把 [GUI] 键的补写混进录制引擎的锁体系。
+#   · [阶段6] 颜色之外的**尺寸**统一由 src/ui_scale.ScaleProfile 派生：ttk 的 padding、
+#     Treeview 的 rowheight 不再写死像素，而取 scale.px()/scale.padding()/scale.row_height()。
+#     颜色在本模块、尺寸在ui_scale，两边共同遵守「语义 token唯一事实源」这条铁律。
 from __future__ import annotations
 
 import configparser
@@ -26,6 +29,14 @@ from pathlib import Path
 from tkinter import ttk
 from typing import Any, cast, final
 
+from src.ui_scale import (
+    CONTROL_PADDING,
+    CONTROL_PADDING_COMPACT,
+    CONTROL_PADDING_NAV,
+    CONTROL_PADDING_ROW,
+    FONT_FAMILY,
+    ScaleProfile,
+)
 from src.web_config import update_or_append_config_line
 
 # 语义槽位全集：每套主题必须逐槽给出（tests/test_ui_theme.py 的注册表完整性锁强制）。
@@ -249,19 +260,43 @@ _TTK_BASE_THEME = "clam"
 
 @final
 class ThemeManager:
-    # 主题运行时状态：当前主题 id + ttk 主题注册。
+    # 主题运行时状态：当前主题 id + 当前尺寸档位 + ttk 主题注册。
     # select/apply 都幂等：select 对相同 id 短路（不重复写配置、不触发下游重绘），
     # apply 对已注册的 ttk 主题名跳过 theme_create（重复创建抛 TclError）。
-    def __init__(self) -> None:
+    #
+    # [阶段6] 尺寸档位（ScaleProfile）与主题 id 同为 apply 的输入：ttk 主题名带上
+    # 档位段（"dlr-light@115"）。这一条是必需的而非可选——同一主题名下theme_create
+    # 只能成功一次，换档位后若沿用旧名就拿不到新的 padding/rowheight；而 Tk 又没有
+    # 「更新已注册主题」的API，只能换名重注册。旧主题名残留在 style.theme_names()
+    # 里是无害的（Tk 不回收，但一行 settings 的内存占用可忽略）。
+    def __init__(self, scale: "ScaleProfile | None" = None) -> None:
         self._theme_id = DEFAULT_THEME
+        self._scale = scale if scale is not None else ScaleProfile(100)
 
     @property
     def theme_id(self) -> str:
         return self._theme_id
 
+    @property
+    def scale(self) -> "ScaleProfile":
+        # 当前尺寸档位。gui 侧改动字号/间距一律读它，不各自缓存（散落缓存必然漂移）。
+        return self._scale
+
     def tokens(self) -> dict[str, str]:
         # 当前主题的 token 只读视图（拷贝返回，调用方改动不得反灌注册表）。
         return dict(THEMES[self._theme_id])
+
+    def set_scale(self, scale: "ScaleProfile") -> "ScaleProfile":
+        # 切换尺寸档位（内存态），返回新 profile 供调用方触发控件重排。
+        # 不做幂等短路：ScaleProfile 不可变且实现了 __eq__，同值时替换等价于无操作；
+        # apply() 仍需重跑（ttk 主题名带档位段，同名重注册被守卫跳过，无副作用）。
+        self._scale = scale
+        return self._scale
+
+    def ttk_theme_name(self) -> str:
+        # 当前应使用的 ttk 主题名。独立成方法是为了让测试能在不建窗的情况下
+        # 断言「换档位 ⇒ 换名」这条幂等契约（theme_create 对同名第二次调用抛 TclError）。
+        return f"{_TTK_THEME_PREFIX}{self._theme_id}@{self._scale.percent}"
 
     def select(self, theme_id: str) -> str:
         # 切换当前主题（内存态）。未知 id 抛 ValueError——调用链里 id 来自 THEME_IDS
@@ -276,10 +311,10 @@ class ThemeManager:
         return self._theme_id
 
     def apply(self, root: tk.Misc) -> str:
-        # 把当前主题注册为 ttk 主题并启用，返回 ttk 主题名（"dlr-<id>"）。
-        # 幂等：主题名已注册则只切 theme_use；重复 apply 同一主题无害。
+        # 把当前主题注册为 ttk 主题并启用，返回 ttk 主题名（"dlr-<id>@<scale>"）。
+        # 幂等：主题名已注册则只切 theme_use；重复 apply 同一组合无害。
         style = ttk.Style(root)
-        name = _TTK_THEME_PREFIX + self._theme_id
+        name = self.ttk_theme_name()
         if name not in style.theme_names():
             # typeshed 把 settings 收窄成 _ThemeSettingsValue TypedDict；本构造器返回结构等价的
             # 宽松形状（configure: dict[str, object] / map: list[tuple[str, str]]），cast 收敛给存根
@@ -297,7 +332,20 @@ class ThemeManager:
         # 由当前主题 token 派生 ttk 元素配色。三态统一走 map：hover/active/pressed、
         # selected、disabled/readonly——CTk 没有的状态机制正是本次换 ttk 的机制性收益，
         # 新增控件类型时在此登记，禁止在控件创建处散落配色。
+        # [阶段6] padding / rowheight / 表格字体同时经 self._scale 派生，故换档位
+        # 必须重注册主题（见类注释「主题名带档位段」）。
         t = THEMES[self._theme_id]
+        s = self._scale
+        # 表格字体走样式级配置：Treeview 的行文字与表头是唯一需要在样式里定字体的
+        # 两类（其余控件的字体由 ui_kit.font_style 以派生样式注入）。表头比行文字
+        # 重一档 bold —— 表头是分组标签，行文字是数据，视觉权重必须能分开。
+        row_font = (FONT_FAMILY, s.pt("label"), "normal")
+        head_font = (FONT_FAMILY, s.pt("body"), "bold")
+        # 控件体量分档：主按钮常规、ghost 次级按钮紧凑、导航项最大（触控友好）。
+        pad_main = s.padding(CONTROL_PADDING)
+        pad_compact = s.padding(CONTROL_PADDING_COMPACT)
+        pad_nav = s.padding(CONTROL_PADDING_NAV)
+        pad_row = s.padding(CONTROL_PADDING_ROW)
         return {
             # "." 是 ttk 全局兜底：未单独登记的元素从这里继承底色/前景/选区/光标色
             ".": {
@@ -346,7 +394,7 @@ class ThemeManager:
                     "lightcolor": t["primary"],
                     "darkcolor": t["primary"],
                     "focuscolor": t["on_primary"],
-                    "padding": (10, 5),
+                    "padding": pad_main,
                 },
                 "map": {
                     # 悬停与按下共用 hover 深色：clam 的 active 状态同时覆盖鼠标悬停与键盘焦点
@@ -373,7 +421,7 @@ class ThemeManager:
                     "lightcolor": t["success"],
                     "darkcolor": t["success"],
                     "focuscolor": t["on_primary"],
-                    "padding": (10, 5),
+                    "padding": pad_main,
                 },
                 "map": {
                     "background": [
@@ -397,7 +445,7 @@ class ThemeManager:
                     "lightcolor": t["danger"],
                     "darkcolor": t["danger"],
                     "focuscolor": t["on_primary"],
-                    "padding": (10, 5),
+                    "padding": pad_main,
                 },
                 "map": {
                     "background": [
@@ -415,6 +463,7 @@ class ThemeManager:
             },
             # Ghost 变体：原「fg_color=transparent + border_width=1」的次级按钮
             # （重新读取 / 打开下载目录 / 取消 / 清空日志等），悬停浮到 surface_alt。
+            # [阶段6] ghost 是次级动作，体量比主按钮小一档
             "Ghost.TButton": {
                 "configure": {
                     "background": t["surface"],
@@ -423,7 +472,7 @@ class ThemeManager:
                     "lightcolor": t["surface"],
                     "darkcolor": t["surface"],
                     "focuscolor": t["primary"],
-                    "padding": (10, 5),
+                    "padding": pad_compact,
                 },
                 "map": {
                     "background": [
@@ -447,7 +496,7 @@ class ThemeManager:
                     "darkcolor": t["surface"],
                     "anchor": "w",
                     "focuscolor": t["text_muted"],
-                    "padding": (12, 9),
+                    "padding": pad_nav,
                 },
                 "map": {
                     "background": [("pressed", t["surface_alt"]), ("active", t["surface_alt"])],
@@ -463,7 +512,7 @@ class ThemeManager:
                     "darkcolor": t["surface_alt"],
                     "anchor": "w",
                     "focuscolor": t["primary"],
-                    "padding": (12, 9),
+                    "padding": pad_nav,
                 },
                 "map": {
                     "background": [("pressed", t["surface_alt"]), ("active", t["surface_alt"])],
@@ -479,7 +528,7 @@ class ThemeManager:
                     "darkcolor": t["surface"],
                     "anchor": "w",
                     "focuscolor": t["text"],
-                    "padding": (12, 8),
+                    "padding": pad_nav,
                 },
                 "map": {
                     "background": [("pressed", t["surface_alt"]), ("active", t["surface_alt"])],
@@ -496,7 +545,7 @@ class ThemeManager:
                     "darkcolor": t["danger"],
                     "anchor": "w",
                     "focuscolor": t["on_primary"],
-                    "padding": (12, 8),
+                    "padding": pad_nav,
                 },
                 "map": {
                     "background": [
@@ -507,6 +556,7 @@ class ThemeManager:
                     "foreground": [("disabled", t["disabled_fg"])],
                 },
             },
+            # 输入类控件原先无 padding（文字贴边），阶段6 补 pad_row 与行内浮层同档
             "TEntry": {
                 "configure": {
                     "fieldbackground": t["surface_alt"],
@@ -515,6 +565,7 @@ class ThemeManager:
                     "bordercolor": t["border"],
                     "lightcolor": t["surface_alt"],
                     "darkcolor": t["surface_alt"],
+                    "padding": pad_row,
                 },
                 "map": {
                     "fieldbackground": [("disabled", t["disabled_bg"])],
@@ -535,6 +586,7 @@ class ThemeManager:
                     "bordercolor": t["border"],
                     "lightcolor": t["surface_alt"],
                     "darkcolor": t["surface_alt"],
+                    "padding": pad_row,
                 },
                 "map": {
                     "fieldbackground": [("readonly", t["disabled_bg"]), ("disabled", t["disabled_bg"])],
@@ -544,7 +596,11 @@ class ThemeManager:
             },
             "TNotebook": {"configure": {"background": t["surface_alt"], "bordercolor": t["border"]}},
             "TNotebook.Tab": {
-                "configure": {"background": t["surface_alt"], "foreground": t["text_muted"], "padding": (12, 6)},
+                "configure": {
+                    "background": t["surface_alt"],
+                    "foreground": t["text_muted"],
+                    "padding": (s.px(12), s.px(6)),
+                },
                 "map": {
                     "background": [("selected", t["surface"])],
                     "foreground": [("selected", t["text"]), ("active", t["text"])],
@@ -556,8 +612,11 @@ class ThemeManager:
                     "fieldbackground": t["surface_alt"],
                     "foreground": t["text"],
                     "bordercolor": t["border"],
-                    # 行高与旧 34px 行卡的信息密度对齐（默认 ~20px 过挤）
-                    "rowheight": 32,
+                    # 行高与旧 34px 行卡的信息密度对齐（默认 ~20px 过挤）；
+                    # [阶段6] 改由 scale 派生并带下限——行高不同步放大会让大字号
+                    # 文字上下缘贴边（85% 档尤其明显）
+                    "rowheight": s.row_height(),
+                    "font": row_font,
                 },
                 "map": {
                     # 行选中走 primary 填充 + on_primary 文字（对比度契约已覆盖该对）
@@ -566,7 +625,12 @@ class ThemeManager:
                 },
             },
             "Treeview.Heading": {
-                "configure": {"background": t["surface"], "foreground": t["text_muted"], "padding": (6, 5)},
+                "configure": {
+                    "background": t["surface"],
+                    "foreground": t["text_muted"],
+                    "padding": (s.px(6), s.px(5)),
+                    "font": head_font,
+                },
                 "map": {"foreground": [("active", t["text"])], "background": [("active", t["surface"])]},
             },
             "Vertical.TScrollbar": {

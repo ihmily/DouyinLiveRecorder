@@ -1031,5 +1031,19 @@
   "📥   最小化到托盘": "📥   Minimize to Tray",
   "🔄   重新读取": "🔄   Reload",
   "🗑   清空": "🗑   Clear",
-  "🗑   清空日志": "🗑   Clear Logs"
+  "🗑   清空日志": "🗑   Clear Logs",
+  "界面缩放": "UI scale",
+  "动效强度": "Motion",
+  "自动": "Auto",
+  "{percent}%": "{percent}%",
+  "界面缩放已调整为 {percent}%": "UI scale set to {percent}%",
+  "界面缩放已调整为 {percent}%，但配置写回失败": "UI scale set to {percent}%, but the preference could not be saved",
+  "界面缩放已调整为 {percent}%，但配置写回失败: {type_name}: {err}": "UI scale set to {percent}%, but saving failed: {type_name}: {err}",
+  "动效已切换为 {motion}": "Motion set to {motion}",
+  "动效已切换为 {motion}，但配置写回失败": "Motion set to {motion}, but the preference could not be saved",
+  "动效已切换为 {motion}，但配置写回失败: {type_name}: {err}": "Motion set to {motion}, but saving failed: {type_name}: {err}",
+  "关闭": "Off",
+  "轻微": "Subtle",
+  "完整": "Full",
+  "系统已关闭动画效果，动效强制为「关闭」": "System animations are off; motion is forced to Off"
 }

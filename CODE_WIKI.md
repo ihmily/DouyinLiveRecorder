@@ -236,7 +236,9 @@ DouyinLiveRecorder/
 │   ├── web_config.py                   # Web 面板配置读写（不依赖 Web 框架）
 │   ├── web_tray.py                     # Web 模式系统托盘（Windows 最小化到托盘）
 │   ├── ui_theme.py                     # GUI 主题层（语义 token + 多主题 + ttk 注册 + 持久化 + 对比度机检）
-│   ├── ui_kit.py                       # GUI 控件工厂（ttk 变体样式映射 + Treeview 增量表格）
+│   ├── ui_kit.py                       # GUI 控件工厂（ttk 变体样式映射 + Treeview 增量表格 + 过渡动效原语）
+│   ├── ui_scale.py                     # GUI 度量层（语义字号 token + 间距栅格 + 全局缩放档位 + 小屏降档）
+│   ├── ui_motion.py                    # GUI 动效层（off/subtle/full 三档 + 插值原语 + 系统「关闭动画」感知）
 │   ├── http_config.py                  # HTTP 客户端共享运行时配置（SSL 验证开关）
 │   ├── async_http.py                   # 异步 HTTP 客户端 (httpx)
 │   ├── sync_http.py                    # 同步 HTTP 客户端
@@ -1622,6 +1624,28 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 > 脚本直跑时额外输出 `VERIFICATION_RESULT: {"platform":..., "status":..., ...}` 结构化一行供机器解析。
 > 脚本：`tests/test_{bili,douyin,douyu,huya,twitch}_live_collector.py`（`python file.py <URL> [秒数]`，
 > 需活房间 + 外网，默认人工通道）。
+
+### v4.5.0-dev (2026-10-04) — GUI 界面现代化阶段6：字号层级重排 + 全局缩放设置 + 过渡动效（`src/ui_scale.py` / `src/ui_motion.py`）
+
+> 范围：新增 `src/ui_scale.py`（语义字号 token + 间距栅格 + 缩放档位 + 小屏降档 + 持久化）与 `src/ui_motion.py`（off/subtle/full 三档 + 插值原语 + 系统「关闭动画」感知 + 持久化）；`src/ui_theme.py` 的 ttk padding / rowheight / 表格字体改由 ScaleProfile 派生、ttk 主题名带档位段；`src/ui_kit.py` 的字体派生样式缓存键加档位段、补`restyle_fonts` 重指与 `slide_in`/`scale_in_window`/`blend` 过渡原语、`DataTable.sync` 返回变化行供高亮反馈；`gui.py` 的 `Fonts` 改 token 驱动 + 原地改字号、侧栏底部四项偏好重排 2×2、新增缩放/动效两个菜单与回调、窗口与侧栏几何随档位缩放并 clamp 到屏幕；`config/config.ini` 补两个键与注释；四语目录各 +14 条并重编 `.mo`（1048 条）。
+
+- **字号层级重排（本次的起因）**：阶段5 的档位是 12/13/15/20/26逻辑 px，**12 与 13 只差 1px**，视觉上「辅助文字」与「正文」根本分不开——这正是用户截图中侧栏状态文字与导航项糊成一档的原因。新体系按「相邻档位至少差 1.5pt、辅助文字不小于 10pt」重排为 caption 10 / label 11 / body 12 / heading 14 / stat 16 / title 19 / display 28（100% 档位的点值），并把表格/列表这一档显式命名为 `label`、统计数值独立为 `stat`（原先两者都复用 `body`/`title`，表格里数字与正文同重、扫读没有锚点）。
+- **缩放只改字号与间距，不改信息密度**：行高、padding、侧栏宽度随档位线性放大，但表格列数、卡片结构、导航项数量全部不变。否则「放大界面」会退化成「重排信息架构」。
+- **即时生效且不丢运行态（本阶段能成立的关键）**：`tkfont.Font` 是**具名共享资源**，控件 `-font` 指向的是名字而非快照，故`Fonts.rescale_all` 只对已缓存的 Font 对象 `configure(size=...)`，所有引用它的控件自动重绘——**不重建控件树**。重建会清空日志内容、URL 编辑器未保存内容与两张监控表（与阶段4 之前「每轮 destroy + 重建」的整表闪烁是同一类事故）。等宽字体也相应从元组改为 Font 对象（元组是快照，不随缩放变）。
+- **DPI 与缩放是两件事**：DPI 适配由 Tk 的 `tk scaling` + 负数点值天然承担（阶段5 起已是如此，本次未改）；本阶段补的是**低分辨率屏**这一层——`auto_scale_for_screen` 按屏幕可用区给小屏降一档（两个维度取更严的一方，1366x768 与 1920x700 都降），`window_size` 把窗口四值 clamp 到屏幕的 94%，保证 150% 档在 1366x768 上开不出比屏幕还大的窗口。屏幕尺寸读不到时不做 clamp 但也不崩。
+- **点值不按系数线性放大**：点本身已是与 DPI 无关的物理量，再乘一次用户系数会让 150% 档正文达18pt（约 24px @96dpi），行高与卡片全部撑坏。故用 `factor ** 0.6` 的温和增益（150% 档得 1.30倍、85% 档得 0.90 倍）——用户能明确感到变大变小，但布局不被撑坏。等宽再乘 0.9（等宽字符变宽会让一行能装的列数骤减）。
+- **ttk 主题名必须带档位段**：`theme_create` 对同名第二次调用抛 TclError，而 Tk 没有「更新已注册主题」的 API。换档后若沿用 `dlr-light` 这个名字就拿不到新的 padding/rowheight，只能换名重注册（`dlr-light@115`）。旧主题名残留在 `theme_names()` 里无害（Tk 不回收）。
+- **换档后必须 `restyle_fonts` 重指按钮样式**：`font_style` 的派生样式在创建时**拷贝**了基础变体的 configure（含 padding），换档后基础变体已变而已存在的按钮仍指着旧派生样式名——表现为「字号变大了但按钮内边距还是老样子」，85% 档尤其明显（按钮相对文字过大，真机截图复核时发现）。`restyle_fonts` 遍历控件树把带字体的按钮重新指向按新主题派生的样式。
+- **Tk 能力边界（如实说明，不假装能）**：ttk/clam 没有圆角、没有控件级 alpha。因此卡片继续用 1px 描边（扁平风本就如此），「圆角」只落在 Canvas 自绘的大圆点/状态胶囊上；页面切换与弹窗用**位移 + 尺寸插值**（滑入 / 缩放落位），**不做假淡入**——硬做只能靠截图覆盖，既慢又脏。
+- **动效三档 + 无障碍优先**：`off`/`subtle`/`full`，默认 `subtle`。系统「关闭动画」开关（Windows `SPI_GETCLIENTAREAANIMATION`、macOS `reduceMotion`）**优先于**用户在设置里的选择，一律压到 `off`；此时侧栏菜单显式落到「关闭」并落一条日志——用户选了却毫无反应几乎必然被当成 bug 报上来。`off` 档**不排 after、同步落终态**（不落终态就会停在半途位置），且立刻停掉在途的状态点呼吸链（那是本窗口唯一「界面静止也在持续重绘」的来源）。
+- **帧数硬上限**：`MAX_FRAMES=12` 与调用方传入的 frames 取小，`subtle` 档再收一半。这是「流畅克制」的可机检形态，防止用户选 full 就把主线程占满。
+- **表格变化行高亮**：`DataTable.sync` 改为返回本轮真正变化的行（新增 + 值/标记变化），gui 据此挂一个 `flash` tag 并逐帧混回原色。**末帧必须显式摘 tag**：末帧颜色虽已等于常态底色，但 tag 仍在，下一轮 sync 改 tags 时会因「多了一个 tag」被判成变化而误触高亮，形成「每轮都闪一下」的自激循环。高亮色取 primary 与 surface_alt 的中间色而非 success/danger——好坏已由 `downgraded`/`disconnected` 两个 tag 表达，复用语义色会让两种含义叠在一起。
+- **侧栏底部重排 2×2（真机截图暴露的布局缺陷）**：阶段5 是「每项一个标签 + 一个整宽下拉」竖排四项，底部约 344px；加缩放与动效后继续竖排要约 470px，在 85% 档（窗口高 629px、侧栏需求高 662px）会把「彻底退出」顶出窗口——用户表现为「退出按钮只剩一条红边」。2×2 布局把底部压回约 200px。另补 `_raise_minsize_to_fit_sidebar`：把侧栏的**实测** `winfo_reqheight` 纳入 minsize 下限（写死常量必然在某个「档位 × 语言 × 译文行数」组合下失准），但仍以当前窗口高封顶，避免屏幕装不下时窗口拖不动。
+- **页面滑入不能只`place_forget` 收尾（真机发现的真bug）**：`place_forget` 会把控件从**所有**几何管理器里摘掉，页面原本是 grid 排的，forget 之后它既不在 grid 里也不在任何地方，控件直接从窗口上消失。正确做法是过渡前抓一份原布局器的 `grid_info`/`pack_info`、终帧 `place_forget` + 按原布局器写回。
+- **i18n**：新增 14 条文案（`界面缩放`/`动效强度`/`自动`/`关闭`/`轻微`/`完整`/`{percent}%` 及 6 条形参日志、`系统已关闭动画效果…` 提示）四语目录同批登记并重编 `.mo`（1034 → 1048 条）。`en_US.json`/`en_GB.json` 以**文本追加**而非 `json.dumps(sort_keys=True)` 重写：既有键序由提取器的本地化排序决定，重写会造成近千行无意义 diff（门禁校验键集合而非顺序）。
+- **测试与变异验证**：新增 `tests/test_ui_scale.py`（44 用例：档位体系/夹取/字号层级单调性/点值恒负/窗口 clamp/自动降档/解析容错/持久化往返与注释保留）与 `tests/test_ui_motion.py`（38 用例：帧计划不含终帧/帧数上限/无障碍优先/控制器/`blend` 终点精确归位/持久化）；`tests/test_ui_theme.py` 改 2 条断言（主题名带档位段）并新增换档重注册用例。**变异验证四处**：`a11y_priority`（拆掉系统优先）→ `test_system_off_overrides_user_choice` 转红；`include_final`（帧序列含终帧）→ `test_plan_excludes_final_frame` 转红；`frame_cap_all`（拆掉帧数上限）→ `test_frames_capped_by_max` + `test_subtle_is_shorter_than_full` 转红；`off_all_three`（同时拆掉 off 档的三道冗余守卫：表值 / 短路 / `total<=1`）→ `test_off_returns_empty` + `test_off_runs_terminal_state_synchronously` 转红。第四项的必要性：前三处单点变异被 `frame_plan` 里的**冗余守卫**掩盖（拆一个另一个仍兜住），只有同时拆掉三道才能证明不变量本身被测到、不是假绿。
+- **门禁读数**：`pytest`（无 coverage）**4184 passed / 16 skipped / 0 failed**；`check_coverage.py` **50 模块全部达标**（新模块 `src/ui_scale.py` 96.1%、`src/ui_motion.py` 80.9%，`src/ui_theme.py` 85.0%、`src/ui_kit.py` 55.4%）；`mypy` 不带路径 **215 source files / no issues**；`black --check` 216 files unchanged；`isort --check-only` rc=0；`compile_po.py --check` rc=0（1048 条）。`run_gates.py` 的 `check_skill_agents_consistency.py` 一项 rc=2（本worktree 无 `.agents/skills` 目录，属「没跑」而非代码不合格，与本次改动无关），其余 10 项全绿。带 `--cov` 的整轮出现 17 failed + `INTERNALERROR`，根因是 harness `sitecustomize.py` 的 safe-delete 批量守卫在后台线程 spawn node 时 `WinError 6`（句柄无效）——环境拦截、非代码回归，无 coverage 的同轮全绿可对照。
+- **端到端真机验证（DoD 第 2 步）**：**已执行**。真窗起GUI 逐项切换主题×4 / 缩放×5 / 动效×4 / 五个页面 / 关闭对话框 / 高级设置窗口，全部无异常（`ALL_OK`）；并在 85% / 100% / 150% 三档各截图人工复核——上述「按钮内边距不跟随」「侧栏底部溢出」「页面滑入后消失」三个缺陷都是这一步发现的，不是读代码看出来的。
 
 ### v4.5.0-dev (2026-10-04) — CI 工具版本常量对齐本地实装：`isort_version` 9.0.1 → 9.0.2（抬掉「本地全绿不可外推 CI」的最后一处版本差）
 

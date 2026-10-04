@@ -25,6 +25,7 @@ from typing import cast
 
 import pytest
 
+from src.ui_scale import ScaleProfile
 from src.ui_theme import (
     CONTRAST_REQUIREMENTS,
     DEFAULT_THEME,
@@ -287,7 +288,9 @@ class TestApplyTtk:
         manager.select("light")
         name = manager.apply(tk_root)
         style = ttk.Style(tk_root)
-        assert name == "dlr-light"
+        # [阶段6] 主题名带尺寸档位段：theme_create 对同名第二次调用抛 TclError，
+        # 换档位必须换名才能拿到新的 padding/rowheight。100% 是默认档位。
+        assert name == "dlr-light@100"
         assert name in style.theme_names()
         assert style.theme_use() == name
 
@@ -300,7 +303,27 @@ class TestApplyTtk:
         assert sum(1 for n in style.theme_names() if n.startswith("dlr-")) == 1
         manager.select("high_contrast")
         manager.apply(tk_root)
-        assert style.theme_use() == "dlr-high_contrast"
+        assert style.theme_use() == "dlr-high_contrast@100"
+
+    def test_scale_change_reregisters_under_new_name(self, tk_root: tk.Tk) -> None:
+        # 换档位 ⇒ 换 ttk 主题名（这是 apply 能带上新 padding/rowheight 的唯一机制）。
+        # 同时锁住「旧名残留但当前用的是新名」：Tk 不回收旧主题，测试只关心 theme_use。
+        manager = ThemeManager()
+        manager.select("light")
+        base = manager.apply(tk_root)
+        style = ttk.Style(tk_root)
+        manager.set_scale(ScaleProfile(150))
+        scaled = manager.apply(tk_root)
+        assert scaled == "dlr-light@150"
+        assert scaled != base
+        assert style.theme_use() == scaled
+        # 150% 档的行高必须严格大于 100% 档（否则缩放对表格无效）。
+        # 读数走「切回该主题再 lookup 当前主题口径」——ttk 的 lookup 只认当前主题，
+        # 拿主题名当 style 参数传会报 Invalid state name。
+        style.theme_use(base)
+        base_row = int(str(style.lookup("Treeview", "rowheight")))
+        style.theme_use(scaled)
+        assert int(str(style.lookup("Treeview", "rowheight"))) > base_row
 
     def test_button_colors_reach_ttk(self, tk_root: tk.Tk) -> None:
         # 端到端最小验证：token 经 theme_create 真正落到 ttk 查询口径

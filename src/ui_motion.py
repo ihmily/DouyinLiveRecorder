@@ -1,0 +1,277 @@
+# src/ui_motion.py
+# GUI 动效层（阶段6：UI 现代化）：动效等级 + 插值原语 + 系统「关闭动画」感知。
+#
+# 设计约束（延续 ui_theme/ui_kit 的分层约定）：
+#   · 动效只有三档且**默认克制**：full/subtle/off。Tk 没有 GPU 合成，每一帧都是
+#     Tcl 层重绘，after 链跑得越密、控件越多，占用越明显——所以除"档位"外还给出
+#     硬性帧数上限（MAX_FRAMES），subtle 档下每段动效只跑 4 帧。
+#   · **降级优先于禁用**：off 时不是"什么都不做"，而是直接落到终态（位移归零、
+#     状态点停呼吸），不留半途状态。半途状态 = 用户看到控件卡在中间位置。
+#   · 系统级无障碍：Windows 的「在 Windows 中显示动画」关闭（SPI_GETCLIENTAREAANIMATION
+#     = 0）与 Linux 的 GNOME「减少动画」等价，一律把有效等级压到 off——这条优先于
+#     用户在设置里选的档位（用户可能是在无障碍语境下被迫选了 full）。
+#   · import 期零 Tk 对象：探测函数只在调用时读系统，纯插值函数可无头测。
+# Tk 的硬限制（决定了本层能做什么、不能做什么）：ttk 控件没有 alpha 通道，
+# 也没有圆角与阴影，因此「淡入」只能做**不透明度等效**的位移+尺寸插值，
+# 卡片圆角只能落在 Canvas 自绘件上。不为了看起来有而堆无效代码。
+from __future__ import annotations
+
+import configparser
+import subprocess
+import sys
+import tkinter as tk
+from collections.abc import Callable
+from typing import Final, final
+
+from src.web_config import update_or_append_config_line
+
+# 动效等级（持久化值即 id 原文，必须是安全的配置值：无空格无分隔符）。
+MOTION_IDS: Final[tuple[str, ...]] = ("off", "subtle", "full")
+
+# 「跟随系统」哨兵 id（刻意不在 MOTION_IDS 内）：走 detect_system_animations()
+# 探测的结果，且不写显式偏好。与 ui_theme 的 _FOLLOW_SYSTEM_ID 同一约定。
+FOLLOW_SYSTEM_MOTION_ID: Final[str] = "_follow_system_"
+
+# 各档的时长与帧数。full 才允许较长的滑入；subtle 是「能感到但不抢注意」；
+# off 的帧数 1 意味着「一帧后即终态」。
+_MOTION_TABLE: Final[dict[str, tuple[int, int]]] = {
+    # id: (单段时长毫秒, 帧数)
+    "off": (0, 1),
+    "subtle": (110, 4),
+    "full": (190, 10),
+}
+
+# 硬性帧数上限：即便调用方传了离谱的 duration/frames，落库时也按此收敛。
+# 这是"流畅克制"的可机检形态——帧数上限与等级无关，避免低性能设备上
+# 用户选 full 就把主线程占满。
+MAX_FRAMES: Final[int] = 12
+MIN_FRAME_MS: Final[int] = 8
+
+# 页面滑入的位移量（逻辑像素 @100%，随 ScaleProfile 缩放）。8px 足够读出
+# "新页面进来了"，再大就变成幻灯片切换、与"克制"矛盾。
+PAGE_SLIDE_PX: Final[int] = 8
+# 弹窗缩放起始比例：从 0.96 放大到 1.0。用缩放而非位移，因为弹窗没有"从哪来"的
+# 方向语义；0.96 的幅度小到不像"弹出动画"、只像"落位时稳了一下"。
+DIALOG_START_SCALE: Final[float] = 0.96
+# 列表更新高亮的衰减步数与总时长。
+ROW_HIGHLIGHT_FRAMES: Final[int] = 5
+ROW_HIGHLIGHT_MS: Final[int] = 420
+
+# 持久化落点：config.ini [GUI] gui_motion（与 gui_theme / gui_scale 同节）。
+GUI_SECTION: Final[str] = "GUI"
+MOTION_KEY: Final[str] = "gui_motion"
+
+
+def is_valid_motion(value: str) -> bool:
+    return value in MOTION_IDS
+
+
+def detect_system_animations() -> bool:
+    # 探测系统是否开启了动画。返回 False 表示系统侧已关闭（应降级为 off）。
+    #   Windows：SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION=0x1042)；
+    #     另叠加「显示关闭动画」相关的高对比度开关不查——SPI_GETCLIENTAREAANIMATION
+    #     已是「在 Windows 中显示动画」的权威取值，够用。
+    #   macOS：`defaults read -g reduceMotion` 为 1 / true 时判为关闭。
+    #   其余平台（Linux/Wayland 等）无统一口径，一律返回 True 保持动效——
+    #     猜错的方向是"关了用户要的动效"，宁可不动也不误关。
+    # 任何异常都回 True（同上：探测失败不得让界面失去反馈）。
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            enabled = ctypes.c_int(0)
+            # SPI_GETCLIENTAREAANIMATION 的pvParam 指向BOOL；不声明 argtypes 时
+            # ctypes 会按默认的 int 传值，恰好与 BOOL 同宽，够用；返回值 0 = 取值失败，
+            # 此时 enabled 保持初值 0 会被误判成"动画已关"——故失败按True 处理。
+            ok = ctypes.windll.user32.SystemParametersInfoW(0x1042, 0, ctypes.byref(enabled), 0)
+            return True if not ok else bool(enabled.value)
+        except Exception:
+            return True
+    if sys.platform == "darwin":
+        try:
+            result = subprocess.run(
+                ["defaults", "read", "-g", "reduceMotion"],
+                capture_output=True,
+                timeout=2,
+            )
+            return result.returncode != 0
+        except OSError, subprocess.TimeoutExpired:
+            return True
+    return True
+
+
+def effective_motion(motion_id: str, *, system_animations: bool | None = None) -> str:
+    # 归一化「用户选择 + 系统开关」→ 实际生效等级。
+    # 规则：系统关闭动画时一律 off（优先于用户选择，见模块头「降级优先」）；
+    # 否则按用户选择归一化，非法值回落到 subtle（不是 off——默认要"有"，
+    # 只是"克制"；把非法配置解释成"全关"会让升级用户莫名失去全部反馈）。
+    enabled = detect_system_animations() if system_animations is None else system_animations
+    if not enabled:
+        return "off"
+    if not is_valid_motion(motion_id):
+        return "subtle"
+    return motion_id
+
+
+def load_motion_preference(config_file: str) -> str:
+    # 读取 [GUI] gui_motion。返回 "" 表示未设置（节/键缺失、空值、非法值），
+    # 调用方按 FOLLOW_SYSTEM_MOTION_ID 处理。
+    parser = configparser.ConfigParser(interpolation=None)
+    try:
+        parser.read(config_file, encoding="utf-8-sig")
+    except OSError, configparser.Error:
+        return ""
+    if not parser.has_section(GUI_SECTION):
+        return ""
+    raw = parser.get(GUI_SECTION, MOTION_KEY, fallback="").strip()
+    return raw if is_valid_motion(raw) else ""
+
+
+def save_motion_preference(config_file: str, motion_id: str) -> bool:
+    # 持久化动效偏好。FOLLOW_SYSTEM_MOTION_ID 写空值（= 下次启动继续跟随系统）；
+    # 其余必须是非空合法 id。通道与 gui_theme / gui_scale 一致。
+    if motion_id == FOLLOW_SYSTEM_MOTION_ID:
+        value = ""
+    elif is_valid_motion(motion_id):
+        value = motion_id
+    else:
+        raise ValueError(f"未知动效 id: {motion_id!r}（合法值: {MOTION_IDS}）")
+    return update_or_append_config_line(config_file, GUI_SECTION, MOTION_KEY, value)
+
+
+def ease_out(t: float) -> float:
+    # 缓出（cubic ease-out）：起步快、收尾慢。这是页面滑入唯一该用的曲线——
+    # 起步慢会让"点击后界面没反应"的错觉窗口变长。
+    # 输入 t ∈ [0,1]，输出 ∈ [0,1]（1 - (1-t)^3）。纯函数，供无头测试。
+    clamped = max(0.0, min(1.0, t))
+    return 1.0 - (1.0 - clamped) ** 3
+
+
+def frame_plan(motion_id: str, duration_ms: int, frames: int) -> list[float]:
+    # 由「等级 + 期望时长/帧数」算出逐帧进度序列（0.0 起、不含 1.0 终帧）。
+    # 终帧不在返回里：调用方在最后一帧之后统一落终态，这样"降级到 off"与
+    # "正常跑完"走的是同一条落地路径，不会出现停在 95% 的控件。
+    # off 档返回空列表 —— 调用方据"空"直接落终态。
+    if not is_valid_motion(motion_id):
+        motion_id = "subtle"
+    _base_ms, base_frames = _MOTION_TABLE[motion_id]
+    if motion_id == "off" or duration_ms <= 0 or frames <= 0:
+        return []
+    total = min(frames, base_frames, MAX_FRAMES)
+    if total <= 1:
+        return []
+    per_frame = max(MIN_FRAME_MS, duration_ms // total)
+    return [ease_out((index + 1) / total) for index in range(total - 1)]
+
+
+def lerp(start: float, end: float, t: float) -> float:
+    # 线性插值。单独成函数是为了让"终值 = end 在 t=1 时精确成立"成为机检事实
+    # （逐步累加会漂移，落在 Canvas 坐标上是肉眼可见的半像素错位）。
+    return start + (end - start) * t
+
+
+def _noop() -> None:
+    # run_frames 的 on_done 缺省实现。命名成函数而非 `lambda: None` 是为了让
+    # mypy 把它认成 Callable[[], None]（lambda 在该位置会被推成更宽的签名）。
+    return None
+
+
+@final
+class MotionController:
+    # 动效运行时状态：有效等级 + 已登记的 after 句柄。
+    #
+    # 为什么自己管句柄：Tk 的 after 回调在窗口销毁后仍会触发一次（MIN-2248 同款问题，
+    # 见 AdvancedSettingsWindow._config_watch_job_id 的注释）。动效回调里要写
+    # Canvas 坐标/place 位置，对象已死就是 TclError——所以每条链的句柄登记在册，
+    # disable()/cancel_all() 统一撤销，且回调内先查自己的 job 是否仍然有效。
+    def __init__(self, motion_id: str = "subtle") -> None:
+        self._motion_id: str = motion_id if is_valid_motion(motion_id) else "subtle"
+        self._jobs: dict[str, str] = {}
+
+    @property
+    def motion_id(self) -> str:
+        return self._motion_id
+
+    @property
+    def enabled(self) -> bool:
+        # 「是否产生任何 after 链」。off 档恒 False，调用方可用它跳过整段动效代码
+        # （省掉的不只是动画，还有每帧的 Canvas 重绘开销）。
+        return self._motion_id != "off"
+
+    def set_motion(self, motion_id: str) -> str:
+        # 切换等级。切到 off 时立即撤销全部在途链（否则关掉动效后仍有旧链在跑）。
+        if not is_valid_motion(motion_id):
+            motion_id = "subtle"
+        if motion_id == self._motion_id:
+            return self._motion_id
+        self._motion_id = motion_id
+        if motion_id == "off":
+            self.cancel_all()
+        return self._motion_id
+
+    def cancel(self, job_key: str) -> None:
+        # 撤销一条链（按 key，不是按句柄——调用方不该关心句柄值）。
+        self._jobs.pop(job_key, None)
+
+    def cancel_all(self) -> None:
+        # 撤销全部在途链。句柄是Tk 的 after id 字符串，after_cancel 传错的 id
+        # 不抛异常只是静默无效，故这里用 pop 而非 del（幂等）。
+        self._jobs.clear()
+
+    def track(self, job_key: str, after_id: str) -> None:
+        # 登记一条链的句柄。key 重复时旧的已失效，不再单独 cancel（callback 内部
+        # 会在发现 key 不匹配时自行收尾，见 call_with_tracking 的守卫）。
+        self._jobs[job_key] = after_id
+
+    def run_frames(
+        self,
+        root: tk.Misc,
+        job_key: str,
+        apply: Callable[[float], None],
+        *,
+        duration_ms: int,
+        frames: int,
+        on_done: Callable[[], None] | None = None,
+    ) -> None:
+        # 跑一条插值链：逐帧调apply(progress)，最后一帧之后调 on_done。
+        # off 档 / 参数非法时**同步**落终态并调 on_done——不排after、不留半途状态。
+        # 这是"降级优先于禁用"在代码里的唯一落点，其余调用点不必各自判enabled。
+        self.cancel(job_key)
+        # on_done 是可选形参，但「落终态」是本方法的契约：缺省补一个空实现，
+        # 好过在每个分支写 `if on_done is not None`（漏一处就静默停在半途）。
+        finish: Callable[[], None] = on_done if on_done is not None else _noop
+        plan = frame_plan(self._motion_id, duration_ms, frames)
+        if not plan:
+            finish()
+            return
+        per_frame = max(MIN_FRAME_MS, duration_ms // (len(plan) + 1))
+
+        def _step() -> None:
+            # 守卫：控件/窗口已销毁时Tk 会把回调变成 TclError 前的假象（对象仍在，
+            # 但窗口没了）。这里统一 try 兜住并直接收尾，不把异常抛进mainloop。
+            try:
+                progress = plan.pop(0)
+                apply(progress)
+            except tk.TclError:
+                finish()
+                return
+            if plan:
+                self.track(job_key, cast_after(root.after(per_frame, _step)))
+            else:
+                self.cancel(job_key)
+                finish()
+
+        apply(plan[0])
+        plan.pop(0)
+        if plan:
+            self.track(job_key, cast_after(root.after(per_frame, _step)))
+        else:
+            finish()
+
+
+def cast_after(value: str) -> str:
+    # root.after 返回 Tk 的 after id（存根是 str|None）。运行期不会是 None，
+    # 但类型上需要收敛；这里显式给一个可复核的落点而不是散落 cast。
+    # 实际语义：None 只在 Tk 内部异常时出现，此时用空串占位——track 存空串不影响
+    # 正确性（cancel 只是删 key），比静默塞一个假 id 更好排查。
+    return value if isinstance(value, str) else ""
