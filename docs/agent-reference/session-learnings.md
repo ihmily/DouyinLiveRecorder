@@ -313,3 +313,20 @@ Qoder CN 发行版的实际数据根（`.qoder-cn`）不一致，属外部工具
 - **真窗用例在子进程里失败会以 `skipped` 面目出现**：`except tk.TclError → pytest.skip` 的既有口径把
   「unknown option "-font"」「missing '>' in virtual binding」这类**真 bug** 一并吞成「无显示环境」。
   判据：本机有显示器时真窗用例 skip 即异常信号，必须 `pytest -rs` 看跳过原因，不能当成已知 skip 面放行。 | `tests/test_gui_wrap_hints.py`
+
+## 2026-10-04 — 抬 CI 工具版本常量：三处「看起来该跟改、其实不该改」与一处注释还原陷阱
+
+- **`uv.lock` 里 dev-extra 的版本与 `ci.yml` 的版本常量无耦合**：抬 `isort_version` 9.0.1→9.0.2 不需要重算锁——
+  CI 装 isort 走 `pip install "isort==<const>"`，**不走** `uv sync`；锁里的 9.0.1 只是 `[project.optional-dependencies]`
+  的 `isort>=5.12.0` 在上次锁定时的解析产物。判据：只有改 `pyproject.toml` 的依赖/version/包清单才触发
+  `sync_metadata.py` 重算，改 workflow 常量不触发。 | `.github/workflows/ci.yml` consts
+- **抬常量只消除版本差，不等于 CI 实跑已验证**：改完四项常量与本地 `.venv` 逐一同值，可报告的仍是
+  「本机（Windows/GBK）口径」——本机跑法与 CI（ubuntu + step 级 `PYTHONUTF8=1`）的环境差异没有因此消失。
+  AGENTS.md 那条约束的措辞因此补了一句「抬常量只消除版本差」。判据：报告里「同值」与「已在 CI 上验证」
+  必须是两句话，不得合并成「与 CI 一致故 CI 会绿」。 | `AGENTS.md`「格式化命令」可外推前提条目
+- **版本同值核查要拿 `importlib.metadata.version()` 而不是 `--version`**：`python -m isort --version` 在本机
+  输出空行（只有 `--version-number` 给数），据它判「工具缺失」会误装。判据：逐个 `importlib.metadata.version(<pkg>)`
+  取实装版本，与 ci.yml consts 的四个键做集合比对。 | `scripts/run_gates.py` 的子进程调用面
+- **改长注释块时最容易顺手改到既有句子的措辞**（本次把「按真实类型检查」写成「按真实类型结论」）：
+  违反「修改注释只增不改」且 black/mypy/pytest 三面全隐形。判据：只增注释的改动收尾前 `git diff` 逐行看
+  **减号行**，出现非预期的 `-` 即还原。 | `.github/workflows/ci.yml`

@@ -1623,6 +1623,17 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 > 脚本：`tests/test_{bili,douyin,douyu,huya,twitch}_live_collector.py`（`python file.py <URL> [秒数]`，
 > 需活房间 + 外网，默认人工通道）。
 
+### v4.5.0-dev (2026-10-04) — CI 工具版本常量对齐本地实装：`isort_version` 9.0.1 → 9.0.2（抬掉「本地全绿不可外推 CI」的最后一处版本差）
+
+> 范围：只改 `.github/workflows/ci.yml` setup job `consts` 的 `isort_version` 一行 + 三点注释，`AGENTS.md`「格式化命令」可外推前提条目补记本次抬升，本条目（中英同步）。**未**改 `[tool.isort]` 配置、**未**改 `pyproject.toml`/`requirements.txt` 依赖声明、**未**动任何 `.py` 源码或测试。
+
+- **为什么抬 CI 而不是压本地**: 本地 `.venv` 实装 isort 9.0.2（`importlib.metadata.version('isort')` 读数），CI 钉 9.0.1 差一个补丁位。按「格式化命令」条目的口径，这一处差使得 isort 门禁结论只能标注「本地口径，未经 CI 同版本验证」；而本地 9.0.2 已对全仓 212 文件判 `rc=0` 且无 silent-skip，把 CI 抬到实装版本是**放行方向与验证方向一致**的那一侧。反过来把本地压回 9.0.1 需重装 venv 包，按「风险控制（前置）」属用户通道。经用户批准执行（2026-10-04）。
+- **单点改动即全覆盖**: `isort_version` 只有一个登记点（`echo "isort_version=…"`），lint job 与 test job 两处 `pip install` 都经 `${{ needs.setup.outputs.isort_version }}` 消费，不存在第二份副本需要跟改。四值现与本地实装逐一同值：black 26.5.1 / isort 9.0.2 / mypy 2.4.0 / pytest 9.1.1。
+- **抬常量只消除版本差，不等于 CI 实跑已验证**（原注释已把这条例外写进 AGENTS.md 正文）: 本次证据全部来自本机 Windows/GBK locale 跑法，CI 侧 ubuntu + 已 `env: PYTHONUTF8: "1"` 的等价性由既有 MID-63 防线保障，不靠本次外推。
+- **`uv.lock` 仍是 9.0.1，刻意不重生成**: CI 装 isort 走 `pip install "isort==<const>"`，**不经** `uv sync`；`uv.lock` 里 9.0.1 是 `[project.optional-dependencies] dev` 的 `isort>=5.12.0` 在**上次锁定时**的解析产物，与本常量无耦合。`pyproject.toml` 未改 → `sync_metadata.py --check`（static job 与元数据回归锁）判定面不变，无需 `uv lock` 重算。
+- **门禁读数（改后复跑，指向最后一次编辑之后）**: `black --check` **212 files unchanged / rc=0**；`isort --check-only --diff` **rc=0、diff 空、无 `Unable to parse file`**（`Skipped 17 files` 为 `extend_skip` 预期）；`mypy` 不带路径 **211 source files / no issues**，`--platform linux` 与 `--platform win32` 各 0，另用 `--cache-dir` 冷缓存复跑三遍排除陈旧缓存假绿；`basedpyright` **0 errors / 0 warnings**（`filesAnalyzed=212`）；`pyright` 显式传与 `[tool.mypy].files` 同集合路径 **0/0/0**（裸跑扫描面与门禁不同，只作参考）；`pytest` **4095 passed / 14 skipped / 0 failed / warnings summary 空**；`check_coverage.py` **48 模块全部达标（84.89%）**；`scripts/run_gates.py` **10/10 PASS**。14 项跳过全属平台/权限门控（`test_spider_hardening.py:198` 参数化 6 项、符号链接特权 3 项 `WinError 1314`、Windows `os.chmod` 只读位 2 项、环境变量大小写 1 项、SIGKILL 自杀 POSIX 形态 1 项、本机 h2 可用 1 项），非代码回归。
+- **端到端真机验证（DoD 第 2 步）**: **未执行**——本次零录制链路/选源/ffmpeg 参数/平台解析改动（只动 workflow 常量与文档），按该步适用条件豁免；交回用户的动作：无。
+
 ### v4.5.0-dev (2026-10-04) — GUI 静态标签接入 i18n：`src/ui_i18n.py`（T 标记 + 重译登记表）+ 语言切换整窗回填 + web_api 错误 detail 接线
 
 > 范围：新增 `src/ui_i18n.py`（静态标签标记 `T()`、登记表 `register`/`retranslate_all`、窗口标题 `apply_title`）；`src/ui_kit.py` 工厂（Label/Button/DataTable 表头）识别 Translatable；`gui.py` 静态标签逐点接线 + 语言切换钩子重译 + 哨兵值改 tr 后形态 + 托盘菜单重建；`gui.py` 运行时串（`_log`/`_set_hint`/`_warn_chain`/表格单元格/弹幕流）与 `src/web_api.py` 错误 detail 全部经 `i18n_module.tr` 渲染；四语目录各 +169 条并重编 `.mo`（1034 条）。稳定机器码 detail（`unauthorized`/`rate_limited`/`host_not_allowed`/`insecure_bind_disabled`）与配置键、正则、安全黑名单刻意不翻。
