@@ -1,0 +1,73 @@
+name: Export Image Tar
+
+# 把镜像构建好并导出成单个 .tar 文件，作为构建产物提供下载。
+# 用途：群晖访问 ghcr.io 不畅、或不想配置凭据时，直接下载这个 tar，
+# 群晖上走「映像 → 新增 → 从文件添加」导入即可，全程不需要联网拉镜像。
+#
+# 产物在构建详情页最下方的 Artifacts 区域，保留 30 天。
+
+on:
+  push:
+    branches:
+      - '**'
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: '目标架构（群晖绝大多数是 amd64；DS220j/DS120j 这类 ARM 机型填 linux/arm64）'
+        required: false
+        default: 'linux/amd64'
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 构建镜像并加载到本地
+        run: |
+          ARCH="${{ github.event.inputs.platforms || 'linux/amd64' }}"
+          echo "构建架构: $ARCH"
+          docker buildx build \
+            --platform "$ARCH" \
+            --load \
+            -t douyin-live-recorder:latest \
+            .
+
+      - name: 自检（ffmpeg / node 必须都在）
+        run: |
+          docker run --rm douyin-live-recorder:latest sh -c \
+            'ffmpeg -version | head -1; node --version; python --version; fc-match "Microsoft YaHei"'
+
+      - name: 自检（中文弹幕必须真的能画到画面上）
+        run: |
+          docker run --rm douyin-live-recorder:latest sh /app/docker/check_subtitle_render.sh
+
+      - name: 导出为 tar
+        run: |
+          docker save douyin-live-recorder:latest -o douyin-live-recorder.tar
+          ls -lh douyin-live-recorder.tar
+          echo "SIZE_MB=$(du -m douyin-live-recorder.tar | cut -f1)" >> "$GITHUB_ENV"
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: douyin-live-recorder-image
+          path: douyin-live-recorder.tar
+          # 不压缩：docker save 出来的内容本身已不易再压，省下构建时间
+          compression-level: 0
+          retention-days: 30
+
+      - name: 摘要
+        run: |
+          echo "镜像已打包为 douyin-live-recorder.tar（约 ${SIZE_MB} MB）"
+          echo "在构建详情页最下方 Artifacts 区域下载"

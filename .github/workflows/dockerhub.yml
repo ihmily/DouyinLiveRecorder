@@ -1,0 +1,73 @@
+name: Publish to Docker Hub
+
+# 把镜像推到 Docker Hub（docker.io）。推上去之后，群晖 Container Manager 的
+# 「注册表」搜索框就能直接按关键字搜到它——GHCR 不提供检索接口，做不到这点。
+#
+# 手动触发：GitHub 仓库 → Actions → Publish to Docker Hub → Run workflow
+#
+# 前置条件（只需配一次）：
+#   Settings → Secrets and variables → Actions → New repository secret
+#     DOCKERHUB_USERNAME = 你的 Docker Hub 用户名
+#     DOCKERHUB_TOKEN    = Docker Hub 的 Access Token（不是登录密码）
+#                          在 https://hub.docker.com/settings/security 生成，
+#                          权限选 Read & Write
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_name:
+        description: 'Docker Hub 镜像名（用户名/仓库名）'
+        required: true
+        default: 'zltelaii/douyin-live-recorder'
+      platforms:
+        description: '目标架构（群晖绝大多数 amd64；ARM 机型填 linux/arm64）'
+        required: false
+        default: 'linux/amd64'
+      tag:
+        description: '镜像标签'
+        required: false
+        default: 'latest'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 检查 Docker Hub 凭据是否已配置
+        env:
+          DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -z "$DH_USER" ] || [ -z "$DH_TOKEN" ]; then
+            echo "::error::缺少 DOCKERHUB_USERNAME / DOCKERHUB_TOKEN。"
+            echo "::error::请到仓库 Settings → Secrets and variables → Actions 添加这两个 secret。"
+            echo "::error::DOCKERHUB_TOKEN 要用 Docker Hub 的 Access Token（hub.docker.com/settings/security），不是登录密码。"
+            exit 1
+          fi
+          echo "凭据已就绪，将推送到 Docker Hub 用户: $DH_USER"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: ${{ github.event.inputs.platforms || 'linux/amd64' }}
+          tags: |
+            ${{ github.event.inputs.image_name }}:${{ github.event.inputs.tag || 'latest' }}
+            ${{ github.event.inputs.image_name }}:${{ github.sha }}

@@ -1,0 +1,7 @@
+# Shell 脚本必须用 LF：CRLF 在 Linux 容器里会让 shebang 变成 #!/bin/sh^M，
+# 直接报 bad interpreter。Windows 上 git 默认会把 LF 转成 CRLF，这里强制指定。
+*.sh text eol=lf
+Dockerfile text eol=lf
+entrypoint.sh text eol=lf
+# Actions 的 workflow 同样按 LF 存，避免 CRLF 在个别 YAML 解析下出岔子
+.github/workflows/*.yml text eol=lf

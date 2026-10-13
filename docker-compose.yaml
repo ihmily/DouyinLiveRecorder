@@ -2,15 +2,21 @@ version: '3.8'
 
 services:
   app:
-    image: ihmily/douyin-live-recorder:latest
+    # 从 GitHub 容器仓库拉取的预构建镜像
+    image: ghcr.io/zltelaii/douyin-live-recorder:latest
+    # 想自己在本机构建就把下一行的注释去掉，并注释掉上面的 image
+    # build: .
+    container_name: douyin-live-recorder
     environment:
       - TERM=xterm-256color
+      - TZ=Asia/Shanghai
     tty: true
     stdin_open: true
-    #build: .
     volumes:
+      # 配置目录：首次启动会自动生成一份默认 config.ini 和空的 URL_config.ini
       - ./config:/app/config
       - ./logs:/app/logs
       - ./backup_config:/app/backup_config
+      # 录好的视频和弹幕文件都落在这里
       - ./downloads:/app/downloads
     restart: always
