@@ -74,6 +74,7 @@ danmaku_formats = 'json,srt,ass'
 danmaku_burn = False
 danmaku_max_lines = 4
 danmaku_duration = 5.0
+danmaku_font_size = 40
 script_path = os.path.split(os.path.realpath(sys.argv[0]))[0]
 config_file = f'{script_path}/config/config.ini'
 url_config_file = f'{script_path}/config/URL_config.ini'
@@ -87,6 +88,13 @@ os_type = os.name
 clear_command = "cls" if os_type == 'nt' else "clear"
 color_obj = utils.Color()
 os.environ['PATH'] = ffmpeg_path + os.pathsep + current_env_path
+
+# 绿色版（打包成 exe）时，Node 运行时随包放在 exe 同目录的 runtime 子目录里。
+# 弹幕签名要用 PyExecJS 执行 JS，而 execjs 只认 PATH 里的 node.exe，这里补进去；
+# 源码方式运行时没有这个目录，此段无副作用。
+_runtime_dir = os.path.join(script_path, 'runtime')
+if os.path.isdir(_runtime_dir):
+    os.environ['PATH'] = _runtime_dir + os.pathsep + os.environ.get('PATH', '')
 
 
 def signal_handler(_signal, _frame):
@@ -381,6 +389,7 @@ def ass_matching_video(ass_path: str, size: tuple[int, int] | None) -> tuple[str
         written, _dropped = danmaku.render_ass_from_jsonl(
             jsonl_path, temp_path, danmaku_max_lines, danmaku_duration, danmaku_mode, playres,
             types=danmaku_types, gift_min_diamond=danmaku_gift_min_diamond,
+            font_size=danmaku_font_size,
         )
         if written:
             return temp_path, temp_path
@@ -791,6 +800,7 @@ def check_subprocess(record_name: str, record_url: str, ffmpeg_command: list, sa
                     'subtitle_mode': danmaku_mode,
                     'subtitle_types': danmaku_types,
                     'gift_min_diamond': danmaku_gift_min_diamond,
+                    'subtitle_font_size': danmaku_font_size,
                 },
                 name=f'danmaku_start_{record_name}',
                 daemon=True,
@@ -2157,7 +2167,8 @@ def read_config_value(config_parser: configparser.RawConfigParser, section: str,
         -> Any:
     try:
 
-        config_parser.read(config_file, encoding=text_encoding)
+        # 用户可能用记事本把配置存成 GBK，这里按 utf-8-sig/utf-8/gbk 依次尝试
+        config_parser.read_string(utils.read_text_auto(config_file))
         if '录制设置' not in config_parser.sections():
             config_parser.add_section('录制设置')
         if '推送配置' not in config_parser.sections():
@@ -2214,8 +2225,7 @@ while True:
 
         ini_URL_content = ''
         if os.path.isfile(url_config_file):
-            with open(url_config_file, 'r', encoding=text_encoding) as file:
-                ini_URL_content = file.read().strip()
+            ini_URL_content = utils.read_text_auto(url_config_file).strip()
 
         if not ini_URL_content.strip():
             try:
@@ -2279,6 +2289,10 @@ while True:
     except (TypeError, ValueError):
         danmaku_gift_min_diamond = 0.0
     danmaku_mode = '固定' if '固定' in str(read_config_value(config, '录制设置', '弹幕显示方式(滚动/固定)', "滚动")) else '滚动'
+    try:
+        danmaku_font_size = max(12, int(read_config_value(config, '录制设置', '弹幕字号(像素)', "40")))
+    except (TypeError, ValueError):
+        danmaku_font_size = 40
     danmaku_reburn = options.get(read_config_value(
         config, '录制设置', '启动时自动补烧遗漏的弹幕(是/否)', "是"), True)
     if danmaku_enabled:

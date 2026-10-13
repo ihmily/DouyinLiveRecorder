@@ -135,12 +135,29 @@ def remove_emojis(text: str, replace_text: str = '') -> str:
     return emoji_pattern.sub(replace_text, text)
 
 
+def read_text_auto(file_path: str | Path) -> str:
+    """读文本并自动识别编码。
+
+    配置文件是要用户自己拿记事本改的，而记事本「另存为」时很可能存成 ANSI/GBK，
+    硬按 utf-8 读会直接 UnicodeDecodeError 崩在启动阶段。这里依次尝试
+    utf-8-sig / utf-8 / gbk / gb18030，都失败才抛错。
+    """
+    for encoding in ('utf-8-sig', 'utf-8', 'gbk', 'gb18030'):
+        try:
+            with open(file_path, 'r', encoding=encoding) as f:
+                return f.read()
+        except UnicodeDecodeError:
+            continue
+    # 最后兜底：忽略无法解码的字节，宁可少几个字符也不要起不来
+    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+        return f.read()
+
+
 def remove_duplicate_lines(file_path: str | Path) -> None:
     unique_lines = OrderedDict()
     text_encoding = 'utf-8-sig'
-    with open(file_path, 'r', encoding=text_encoding) as input_file:
-        for line in input_file:
-            unique_lines[line.strip()] = None
+    for line in read_text_auto(file_path).splitlines():
+        unique_lines[line.strip()] = None
     with open(file_path, 'w', encoding=text_encoding) as output_file:
         for line in unique_lines:
             output_file.write(line + '\n')

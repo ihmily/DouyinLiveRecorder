@@ -453,7 +453,8 @@ def render_ass(records: list[dict], ass_path: str, max_lines: int = 4, duration:
 def render_ass_from_jsonl(jsonl_path: str, ass_path: str, max_lines: int = 4, duration: float = 5.0,
                           mode: str = 'scroll', playres: tuple[int, int] = (1920, 1080),
                           types: tuple | list | None = None,
-                          gift_min_diamond: float = 0.0) -> tuple[int, int]:
+                          gift_min_diamond: float = 0.0,
+                          font_size: int = SUBTITLE_FONT_SIZE) -> tuple[int, int]:
     """按指定分辨率从 jsonl 重新渲染 ASS。
 
     录像分辨率不一定是 1080p（抖音竖屏直播很常见），对着不分大小写的画面直接套
@@ -475,7 +476,7 @@ def render_ass_from_jsonl(jsonl_path: str, ass_path: str, max_lines: int = 4, du
                     records.append(record)
     records.sort(key=lambda r: r.get('offset', 0))
     return render_ass(records, ass_path, max_lines, duration, mode, playres,
-                      types=allowed, gift_min_diamond=gift_min_diamond)
+                      font_size=font_size, types=allowed, gift_min_diamond=gift_min_diamond)
 
 
 def clean_base_path(save_file_path: str) -> str:
@@ -497,7 +498,8 @@ class DanmakuRecorder:
                  proxy: Optional[str] = None, sync_start: Optional[datetime] = None,
                  subtitle_max_lines: int = 4, subtitle_duration: float = 5.0,
                  subtitle_mode: str = 'scroll', playres: tuple[int, int] = (1920, 1080),
-                 subtitle_types: tuple | list | None = None, gift_min_diamond: float = 0.0):
+                 subtitle_types: tuple | list | None = None, gift_min_diamond: float = 0.0,
+                 subtitle_font_size: int = SUBTITLE_FONT_SIZE):
         self.room_id = str(room_id)
         self.anchor_name = anchor_name or self.room_id
         self.formats = [f.strip().lower() for f in formats if f.strip()] or ['json']
@@ -515,6 +517,10 @@ class DanmakuRecorder:
             self.gift_min_diamond = float(gift_min_diamond or 0)
         except (TypeError, ValueError):
             self.gift_min_diamond = 0.0
+        try:
+            self.subtitle_font_size = max(12, int(subtitle_font_size or SUBTITLE_FONT_SIZE))
+        except (TypeError, ValueError):
+            self.subtitle_font_size = SUBTITLE_FONT_SIZE
         self.base_path = clean_base_path(save_file_path)
 
         self.jsonl_path = f'{self.base_path}.danmaku.jsonl'
@@ -971,6 +977,7 @@ class DanmakuRecorder:
         written, dropped = render_ass(
             records, self.ass_path, self.subtitle_max_lines, self.subtitle_duration,
             self.subtitle_mode, self.playres,
+            font_size=self.subtitle_font_size,
             types=self.subtitle_types, gift_min_diamond=self.gift_min_diamond,
         )
         logger.debug(
@@ -995,14 +1002,15 @@ def start_danmaku(room_id: str, save_file_path: str, anchor_name: str = '',
                   subtitle_max_lines: int = 4, subtitle_duration: float = 5.0,
                   subtitle_mode: str = 'scroll', playres: tuple[int, int] = (1920, 1080),
                   subtitle_types: tuple | list | None = None,
-                  gift_min_diamond: float = 0.0) -> bool:
+                  gift_min_diamond: float = 0.0,
+                  subtitle_font_size: int = SUBTITLE_FONT_SIZE) -> bool:
     key = os.path.abspath(clean_base_path(save_file_path))
     with _sessions_lock:
         if key in _sessions:
             return False
         recorder = DanmakuRecorder(room_id, save_file_path, anchor_name, cookie, formats, proxy, sync_start,
                                    subtitle_max_lines, subtitle_duration, subtitle_mode, playres,
-                                   subtitle_types, gift_min_diamond)
+                                   subtitle_types, gift_min_diamond, subtitle_font_size)
         ok = recorder.start()
         if ok:
             _sessions[key] = recorder
