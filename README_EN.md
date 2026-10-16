@@ -22,7 +22,7 @@ Upstream project: [ihmily/DouyinLiveRecorder](https://github.com/ihmily/DouyinLi
 
 | Feature | Description |
 | --- | --- |
-| 🎯 **Multi-platform support** | Supports 51 platforms including Douyin, TikTok, YouTube, Kuaishou, Huya, Douyu, Bilibili, etc. (marketed as 60+, more being added) |
+| 🎯 **Multi-platform support** | Supports 51 platforms including Douyin, TikTok, YouTube, Kuaishou, Huya, Douyu, Bilibili, etc. (more being added) |
 | 🔄 **Loop monitoring** | Automatically detects live status — starts recording when live and stops when offline |
 | 🎬 **Multiple formats** | Supports TS, MKV, FLV, MP4, MP3, M4A and other output formats |
 | 🖥️ **Three run modes** | CLI mode, GUI mode, and Web management panel mode |
