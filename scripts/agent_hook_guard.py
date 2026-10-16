@@ -284,6 +284,42 @@ def check_bash_command(command: str) -> tuple[str, str] | None:
     return None
 
 
+def _check_runtime_pins_changed(path: Path, segments: list[str]) -> tuple[str, str] | None:
+    # P-RUNTIME-PIN：写入目标命中运行时钉定表所在文件时，即时提醒 agent 收尾跑 check。
+    # 按末尾分段匹配（与 P-MJS-REGISTER 同手法）：tmp_path 不在 ROOT 下时 _relative_segments
+    # 返回完整路径分段，精确全等匹配会失效；末尾分段只判「文件名 + 父目录」，与检出位置无关。
+    if (
+        path.suffix.lower() == ".py"
+        and path.stem == "build_exe"
+        and len(segments) >= 1
+        and segments[-1] == "build_exe.py"
+    ):
+        return (
+            "P-RUNTIME-PIN",
+            "本次写入涉及运行时钉定表（`build_exe.py` 的 `_PINNED_RUNTIME_SHA256` 或"
+            " `scripts/check_runtime_pins.py`）。AGENTS.md 要求收尾时必须执行"
+            " `python scripts/check_runtime_pins.py` 并记录输出，确保钉定表结构完整"
+            "（空表 / 缺平台 / 缺槽位对 black / mypy / 注释检查三面全隐形，SEV-10）。"
+            " 闭合标记：changed-without-check → check-observed。",
+        )
+    if (
+        path.suffix.lower() == ".py"
+        and path.stem == "check_runtime_pins"
+        and len(segments) >= 2
+        and segments[-2] == "scripts"
+        and segments[-1] == "check_runtime_pins.py"
+    ):
+        return (
+            "P-RUNTIME-PIN",
+            "本次写入涉及运行时钉定表（`build_exe.py` 的 `_PINNED_RUNTIME_SHA256` 或"
+            " `scripts/check_runtime_pins.py`）。AGENTS.md 要求收尾时必须执行"
+            " `python scripts/check_runtime_pins.py` 并记录输出，确保钉定表结构完整"
+            "（空表 / 缺平台 / 缺槽位对 black / mypy / 注释检查三面全隐形，SEV-10）。"
+            " 闭合标记：changed-without-check → check-observed。",
+        )
+    return None
+
+
 def resolve_path(raw: str) -> Path:
     # file_path 可能是绝对路径，也可能相对工作区根；统一解析到 ROOT 之下再判定。
     candidate = Path(raw)
@@ -335,6 +371,13 @@ def check_written_file(path: Path) -> tuple[str, str] | None:
                 " 整文件 write_text 会静默转换行尾，对 ast 比对与 black 全隐形。请用 AGENTS.md 的判据"
                 f"（{LINE_ENDING_PROBE}）复核并恢复原本形态：本仓两个读数中原本为 0 的那一项必须仍为 0。",
             )
+
+    # P-RUNTIME-PIN：build_exe.py 的 _PINNED_RUNTIME_SHA256 或 check_runtime_pins.py 自身
+    # 被修改后，收尾必须跑一次 `python scripts/check_runtime_pins.py`——空表 / 缺平台对
+    # black / mypy / 注释检查三面全隐形（SEV-10），只有该脚本自己能兜住。
+    runtime_pin_feedback = _check_runtime_pins_changed(path, segments)
+    if runtime_pin_feedback is not None:
+        return runtime_pin_feedback
 
     # P-MJS-REGISTER：新增 tests/frontend/*.mjs 必须同批登记进 ci.yml 的 node-id 清单，
     # 否则该文件的全部回归锁在正常 CI 中从不执行（M-28 实证）。按**目录结构**（…/tests/frontend/x.mjs）
@@ -412,6 +455,31 @@ def run_self_test() -> int:
         mjs_probe.parent.mkdir(parents=True, exist_ok=True)
         mjs_probe.write_text("// probe\n", encoding="utf-8")
         if _expect_rule(check_written_file(mjs_probe), "P-MJS-REGISTER", ".mjs 未登记 ci.yml"):
+            failed += 1
+        # P-RUNTIME-PIN：修改 build_exe.py 必须触发收尾检查提醒
+        pin_probe = Path(probe_dir) / "build_exe.py"
+        pin_probe.write_text("_PINNED_RUNTIME_SHA256 = {}\n", encoding="utf-8")
+        if _expect_rule(
+            _check_runtime_pins_changed(pin_probe, ["build_exe.py"]),
+            "P-RUNTIME-PIN",
+            "build_exe.py 变更触发 check_runtime_pins.py",
+        ):
+            failed += 1
+        # P-RUNTIME-PIN：修改 scripts/check_runtime_pins.py 同样触发
+        pin_probe2 = Path(probe_dir) / "scripts" / "check_runtime_pins.py"
+        pin_probe2.parent.mkdir(parents=True, exist_ok=True)
+        pin_probe2.write_text("# probe\n", encoding="utf-8")
+        if _expect_rule(
+            _check_runtime_pins_changed(pin_probe2, ["scripts", "check_runtime_pins.py"]),
+            "P-RUNTIME-PIN",
+            "check_runtime_pins.py 变更触发检查",
+        ):
+            failed += 1
+        # P-RUNTIME-PIN：不相关文件不得误触发
+        other_file = Path(probe_dir) / "utils.py"
+        other_file.write_text("x = 1\n", encoding="utf-8")
+        if _check_runtime_pins_changed(other_file, ["utils.py"]) is not None:
+            print("[SELF-TEST FAIL] P-RUNTIME-PIN 误触发：utils.py")
             failed += 1
     finally:
         shutil.rmtree(probe_dir, ignore_errors=True)

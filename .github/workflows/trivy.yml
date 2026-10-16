@@ -15,10 +15,11 @@
 #     且结论依赖 trivy 自身的漏洞库时效。
 # 为什么它**恒绿**（MIN-2264）：下面 trivy-action 未设 `exit-code`，默认 0 ⇒ 命中的
 #   CRITICAL/HIGH 只写进 SARIF、进 GitHub Security 标签页，job 永远 success。
-#   这是**刻意保留的现状**，不是漏配：本 workflow 由 push/PR/每周一 cron 触发，直接改成
-#   `exit-code: 1` 会让 cron 在没有任何人值守的情况下长期变红，且与 ci.yml 的 required
-#   check（ci-summary）无关——它不在 ci-summary.needs 里，所以也**不会**变成阻断合并的门禁。
-#   「要不要把它升级为阻断门禁」属维护者决策（需先确定阈值与忽略口径），不在代理权限内。
+#   这是**刻意保留的现状**，不是漏配：它不在 ci-summary.needs 里，所以也**不会**变成
+#   阻断合并的门禁。
+#   [2026-10-17 更正] 原「cron 无人值守会长期变红」的理由随 cron 移除已失效，但 exit-code
+#   仍**刻意保持默认 0**：阈值与忽略口径未定，且扫描结论依赖 trivy 自身漏洞库时效。是否
+#   升级为阻断门禁属维护者决策，不在代理权限内——本次只改触发方式，**扫描行为未改**。
 # 因此读结论的正确方式：看 GitHub Security → Code scanning alerts，而不是看本 job 的红绿。
 # 双防线分工与升级判据见 AGENTS.md「漏洞审查双防线策略」条目。
 # =============================================================================
@@ -26,15 +27,11 @@
 name: trivy
 
 on:
-  push:
-    # 分支收敛到 main：与 ci.yml / build-release.yml 的触发基线一致。
-    # 原第二条 "保护" 是模板残留（本仓不存在该分支），保留只会让人以为有受保护的镜像分支。
-    branches: [ "main" ]
-  pull_request:
-    # The branches below must be a subset of the branches above
-    branches: [ "main" ]
-  schedule:
-    - cron: '29 6 * * 1'
+  # [2026-10-17 修订] 改为**仅手动触发**：push / pull_request / schedule 三类自动触发全部
+  # 移除（含每周一 06:29 UTC 的 cron）。现在只有人主动点 Run workflow 才会构建镜像并扫描。
+  # 本 workflow 是 advisory-only（不阻断合并，不在 ci-summary.needs 里），自动跑与手动跑的
+  # 门禁价值相同，但 cron 会在无人值守时空烧一次完整 docker build（分钟级 runner 时长）。
+  # [历史注] 原口径为「push/PR 收敛 main + 每周一 cron」，随本次改动作废（2026-10-17）。
   workflow_dispatch:
 
 permissions:
@@ -83,10 +80,11 @@ jobs:
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH'
 
-      # fork PR 下 GitHub 不注入 write 权限 token，SARIF 上传必 403 红 check——
-      # 与代码无关的假失败。push / schedule / workflow_dispatch 与同仓库 PR 不受影响。
+      # [2026-10-17 修订] 原 if 为「非 PR 事件 || 同仓库 PR」，用于规避 fork PR 下 GitHub
+      # 不注入 write 权限 token 导致 SARIF 上传 403 假红。改为仅手动触发后 pull_request 事件
+      # 不存在，该条件恒真、`github.event.pull_request.*` 恒为空，故整条删除（保留会引用
+      # 永远取不到值的上下文，误导后来人以为这里还在防 fork PR）。
       - name: Upload Trivy scan results to GitHub Security tab
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: 'trivy-results.sarif'

@@ -113,7 +113,7 @@
 
 | 资产 | 位置 | 触发条件 | 对应约束条目 |
 | --- | --- | --- | --- |
-| Hook 执行体 | `scripts/agent_hook_guard.py` | `PreToolUse`（Bash）：批量重装 venv 依赖、删除目标命中运行期产物目录或 `scripts/`、无过滤面的递归/通配删除；`PostToolUse`（Write/Edit）：`MUTATION-` 标记残留、`.py` 行尾形态混存、新增 `tests/frontend/*.mjs` 未登记 ci.yml | 「风险控制（前置）」、「CI / workflow 约定」的 venv 分级处置、「测试收尾清理临时脚本」、「变异验证…当轮还原」、「注释检查工具」三个盲点、「测试」的 `.mjs` 登记 |
+| Hook 执行体 | `scripts/agent_hook_guard.py` | `PreToolUse`（Bash）：批量重装 venv 依赖、删除目标命中运行期产物目录或 `scripts/`、无过滤面的递归/通配删除；`PostToolUse`（Write/Edit）：`MUTATION-` 标记残留、`.py` 行尾形态混存、新增 `tests/frontend/*.mjs` 未登记 ci.yml、`build_exe.py` 或 `scripts/check_runtime_pins.py` 变更未跑 `check_runtime_pins.py` | 「风险控制（前置）」、「CI / workflow 约定」的 venv 分级处置、「测试收尾清理临时脚本」、「变异验证…当轮还原」、「注释检查工具」三个盲点、「测试」的 `.mjs` 登记、「项目级 Skill」运行时钉定验证 |
 | Command 入口 | `.qoder/commands/dlr-dod.md` → `/dlr-dod` | 用户显式请求按完成定义逐条验收 | 「完成定义（Definition of Done）」1→6；只引用入口命令，**不得**复制门禁清单 |
 
 - **`.qoder/` 属本地工具目录**（`.gitignore`/`.dockerignore` 已忽略，见「CI / workflow 约定」的 dockerignore / gitignore 同源条目），故这两项资产**不随仓库分发、不得进镜像**；换机器后重建注册：Hook 执行体在 `.qoder/settings.json` 的 `hooks.PreToolUse`（matcher 盖 Bash）与 `hooks.PostToolUse`（matcher 盖 Write/Edit）两个入口，均指向上表脚本。接线与判据的一致性由 `tests/test_agent_hook_guard.py` 钉：受保护目录集合与「运行期产物目录」枚举逐项比对，资产缺失时 skip 而非伪绿。

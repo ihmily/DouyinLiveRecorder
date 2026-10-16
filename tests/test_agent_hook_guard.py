@@ -318,6 +318,59 @@ def test_command_asset_does_not_duplicate_gate_list() -> None:
     assert "--target-version py314" not in text
 
 
+def test_runtime_pin_file_change_triggers_check_reminder(tmp_path: Path) -> None:
+    # SEV-10：_PINNED_RUNTIME_SHA256 或 check_runtime_pins.py 变更后对 black / mypy / 注释检查
+    # 三面全隐形，只有 check_runtime_pins.py 自己能兜住——PostToolUse 必须在写入当下提醒 agent
+    probe = tmp_path / "build_exe.py"
+    probe.write_text("_PINNED_RUNTIME_SHA256 = {}\n", encoding="utf-8")
+    verdict = guard._check_runtime_pins_changed(probe, ["build_exe.py"])
+    assert verdict is not None
+    assert verdict[0] == "P-RUNTIME-PIN"
+    assert "check_runtime_pins.py" in verdict[1]
+
+
+def test_runtime_pin_check_scripts_itself_triggers_reminder(tmp_path: Path) -> None:
+    # check_runtime_pins.py 自身变更同样触发——改判定逻辑后不跑检查 = 「门禁本身失效」无人知
+    probe = tmp_path / "scripts" / "check_runtime_pins.py"
+    probe.parent.mkdir(parents=True, exist_ok=True)
+    probe.write_text("# probe\n", encoding="utf-8")
+    verdict = guard._check_runtime_pins_changed(probe, ["scripts", "check_runtime_pins.py"])
+    assert verdict is not None
+    assert verdict[0] == "P-RUNTIME-PIN"
+
+
+def test_runtime_pin_unrelated_file_does_not_trigger(tmp_path: Path) -> None:
+    # 放行面：不相关文件不得误触发，否则 agent 每次写入都被骚扰会绕过 Hook
+    probe = tmp_path / "utils.py"
+    probe.write_text("x = 1\n", encoding="utf-8")
+    assert guard._check_runtime_pins_changed(probe, ["utils.py"]) is None
+    # 同名测试文件也不得触发（路径段精确匹配）
+    test_probe = tmp_path / "test_build_exe.py"
+    test_probe.write_text("# test\n", encoding="utf-8")
+    assert guard._check_runtime_pins_changed(test_probe, ["tests", "test_build_exe.py"]) is None
+
+
+def test_runtime_pin_via_check_written_file(tmp_path: Path) -> None:
+    # 端到端：通过 check_written_file 主入口触发，证明 PostToolUse 路径真的能回传 feedback
+    probe = tmp_path / "build_exe.py"
+    probe.write_text("_PINNED_RUNTIME_SHA256 = {}\n", encoding="utf-8")
+    verdict = guard.check_written_file(probe)
+    assert verdict is not None
+    assert verdict[0] == "P-RUNTIME-PIN"
+
+
+def test_runtime_pin_via_cli_post_event(tmp_path: Path) -> None:
+    # CLI 契约锁：PostToolUse 事件驱动 build_exe.py 写入 → exit 0 + JSON feedback
+    probe = tmp_path / "build_exe.py"
+    probe.write_text("_PINNED_RUNTIME_SHA256 = {}\n", encoding="utf-8")
+    proc = _run_hook({"hook_event_name": "PostToolUse", "tool_name": "Write", "tool_input": {"file_path": str(probe)}})
+    assert proc.returncode == 0, "Post 分支不得以 exit 2 冒充阻断"
+    payload = json.loads(proc.stdout.decode("utf-8"))
+    specific = payload["hookSpecificOutput"]
+    assert specific["hookEventName"] == "PostToolUse"
+    assert "P-RUNTIME-PIN" in specific["feedback"]
+
+
 def test_mutation_proof_rules_are_load_bearing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # 变异验证（内存改写法，不落盘、不留标记）：逐项拆掉生产判据后，对应的行为锁必须失效，
     # 否则说明用例在自我实现规则而不是测生产实现（AGENTS.md 反假绿判定法）。

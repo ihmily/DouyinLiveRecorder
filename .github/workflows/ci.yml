@@ -80,15 +80,12 @@
 name: CI
 
 on:
-  # 触发范围固定 main：push 与 PR 都收敛到主干，
-  # feature 分支的逐 push 不跑全量门禁（省额度，PR 阶段已覆盖同样的检查）。
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
-  # 允许手动触发（便于在不改代码的情况下复跑全部门禁）
+  # [2026-10-17 修订] 改为**仅手动触发**：push 与 pull_request 两类自动触发已移除，
+  # 现在只有人在 Actions 页面点 Run workflow（或 gh workflow run / REST API）才会执行。
+  # [历史注] 原口径「触发范围固定 main，push 与 PR 都收敛到主干」随本次改动作废（2026-10-17）。
+  # 连带副作用（改完必须同步处理，否则合并会被卡死）：ci-summary 若在分支保护里被勾为
+  # required check，而 CI 不再由 PR 触发，它就永远拿不到本次 PR 的新结果 → 状态停在
+  # pending 或沿用旧结论。请到 Settings → Branches 摘掉该 required check，或改回 PR 触发。
   workflow_dispatch:
 
 # 最小权限：CI 只读仓库内容即可（发布权限在 build-release.yml 中单独授予）
@@ -97,17 +94,20 @@ permissions:
 
 # 同一分支/PR 的新推送会取消尚未完成的旧运行，节省额度并加快反馈
 # （与 build-release.yml 的 cancel-in-progress: false 有意区分：发布流不可半途取消）
+# [2026-10-17 补] 改为仅手动触发后，同一 ref 上重复点 Run workflow 仍会取消上一次未完成
+# 运行——保留该语义是有意的：全量门禁一轮约 20+ 分钟，并发跑两份没有意义。
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # ── 0. 统一常量 + 路径过滤 ────────────────────────────────────────────────
+  # ── 0. 统一常量 ───────────────────────────────────────────────────────────
+  # [2026-10-17] 原小节名「统一常量 + 路径过滤」：路径过滤步骤已移除，此处只声明常量。
   # 版本常量放在 job outputs 而非 workflow env：因为 GitHub Actions 的
   # strategy.matrix **无法引用 env 上下文**，但可以引用 needs 上下文。
   # 这样矩阵与普通步骤共用同一份版本定义，彻底避免版本漂移。
   setup:
-    name: Setup (constants & path filter)
+    name: Setup (constants)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -122,8 +122,8 @@ jobs:
       isort_version: ${{ steps.consts.outputs.isort_version }}
       mypy_version: ${{ steps.consts.outputs.mypy_version }}
       pytest_version: ${{ steps.consts.outputs.pytest_version }}
-      # —— 路径过滤结果 ——
-      filters: ${{ steps.filter.outputs.changes }}
+      # [2026-10-17] 原「—— 路径过滤结果 —— filters: ${{ steps.filter.outputs.changes }}」
+      # 输出随 dorny/paths-filter 一并移除：手动触发场景下该过滤只会制造假绿，理由见下方历史注。
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -165,50 +165,19 @@ jobs:
             echo "pytest_version=9.1.1"
           } >> "$GITHUB_OUTPUT"
 
-      # 仅当 Python 源码 / 测试 / 项目配置 / 翻译目录 / 前端不变量 / 镜像与 workflow 变更时才跑重活；
-      # 纯文档（*.md）变更不触发。
-      # i18n/** 必须触发：static job 的 compile_po --check 是 .po/.mo 同步的唯一 CI 门禁。
-      # web/** 必须触发：web/app.js 的 parseConfigBool + CONFIG_*_TOKENS 与 src/config_bool.py 是跨语言
-      #   布尔口径不变量（AGENTS.md「布尔配置项统一解析口径」条目），改任一侧都须由 test job 触发
-      #   tests/frontend/test_quality_ui.mjs 回归锁（pytest 包装见 tests/test_frontend_quality_ui.py）。
-      #   [2026-09-20 修订] 旧口径「前端静态资源（web/）变更不触发」已被证伪——web/ 并非纯静态资源。
-      # Dockerfile / docker-compose.yaml 必须触发：镜像 Python/Node 版本常量须与 pyproject 同步。
-      # .github/actions/** 必须触发：retry 复合动作被 ci.yml / build-release.yml 全线复用，接口变更波及所有 job。
-      - name: Detect path changes
-        uses: dorny/paths-filter@v4
-        id: filter
-        with:
-          filters: |
-            python:
-              - 'src/**'
-              - 'tests/**'
-              - 'scripts/**'
-              - 'i18n/**'
-              - 'web/**'
-              - 'build_exe.py'
-              - 'main.py'
-              - 'gui.py'
-              - 'web.py'
-              - 'i18n.py'
-              - 'msg_push.py'
-              - 'requirements.txt'
-              - 'pyproject.toml'
-              - 'uv.lock'
-              - 'DouyinLiveRecorder.egg-info/**'
-              - '.coveragerc-concurrency'
-              - 'Dockerfile'
-              - 'docker-compose.yaml'
-              - '.github/workflows/**'
-              - '.github/actions/**'
-              # StopRecording.vbs 变更时也须触发 ubuntu 侧的静态/AST 断言
-              #（编码、映像名清单、杀进程顺序等），行为锁则由 vbs filter 单独控制。
-              - 'StopRecording.vbs'
-            # StopRecording.vbs 单独分组：其 4 条 cscript 行为锁需 Windows runner，
-            # 仅该文件变更时才启动 windows-latest（成本远高于 ubuntu），
-            # 测试文件变更也须触发（验证判据本身改动）。
-            vbs:
-              - 'StopRecording.vbs'
-              - 'tests/test_stop_recording_vbs.py'
+      # [2026-10-17 修订] 原「Detect path changes」步骤（dorny/paths-filter@v4）已整体移除。
+      # 理由：workflow_dispatch 事件没有 push/PR 的 before/after 基线，该动作只能退化为
+      # 「对比上一次成功运行的 SHA」——这个基线与用户点击时手上的代码无关，一旦把 python 组
+      # 判成 unchanged，static / typecheck / test 等 job 会被整片跳过，而 ci-summary 视
+      # skipped 为通过，于是「手动点了全量门禁、实际一个检查都没跑」还显示绿——与 AGENTS.md
+      # 「skipped 与 passed 在汇总里不可区分」同一形态的假绿，必须消灭。手动触发的语义本来
+      # 就是「跑全量」，故不再做路径过滤。
+      # [历史注] 原过滤口径（2026-09-20 定稿）为：src/**、tests/**、scripts/**、i18n/**、
+      # web/**、根五个入口（main/gui/web/i18n/msg_push.py）、requirements.txt、pyproject.toml、
+      # uv.lock、DouyinLiveRecorder.egg-info/**、.coveragerc-concurrency、Dockerfile、
+      # docker-compose.yaml、.github/workflows/**、.github/actions/**、StopRecording.vbs
+      # 归入 python 组；StopRecording.vbs + tests/test_stop_recording_vbs.py 另归 vbs 组，
+      # 单独驱动 windows-latest 上的 cscript 行为锁 job。纯 *.md 文档变更不触发。
 
   # ── 1. 静态检查（格式 / 导入序 / 版本一致性 / 钉定表结构 / 翻译同步 / 注释规范）─
   # 各项检查都是「秒级、零运行时依赖」，合并进同一 job 可省去多次 runner 冷启动
@@ -216,7 +185,6 @@ jobs:
   static:
     name: Static Checks (black / isort / version / pins / i18n / annotations)
     needs: setup
-    if: contains(fromJSON(needs.setup.outputs.filters), 'python')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -332,7 +300,6 @@ jobs:
   deps-audit:
     name: Dependency audit (pip-audit)
     needs: setup
-    if: contains(fromJSON(needs.setup.outputs.filters), 'python')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -416,7 +383,6 @@ jobs:
   typecheck:
     name: Type Check (mypy, py${{ needs.setup.outputs.python_min }})
     needs: setup
-    if: contains(fromJSON(needs.setup.outputs.filters), 'python')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -461,7 +427,6 @@ jobs:
   test:
     name: Test (pytest, py${{ matrix.python-version }})
     needs: setup
-    if: contains(fromJSON(needs.setup.outputs.filters), 'python')
     runs-on: ubuntu-latest
     timeout-minutes: 25
     # MIN-2263：原先此处有 job 级 `env: CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}`，
@@ -705,7 +670,6 @@ jobs:
   concurrency-test:
     name: Concurrency Test (thread safety & rate limit)
     needs: setup
-    if: contains(fromJSON(needs.setup.outputs.filters), 'python')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -762,7 +726,6 @@ jobs:
   integration-verify:
     name: Integration Verify (ffmpeg & node detection)
     needs: setup
-    if: contains(fromJSON(needs.setup.outputs.filters), 'python')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -823,7 +786,6 @@ jobs:
   build-verify:
     name: Build Verify (PyInstaller + smoke)
     needs: setup
-    if: contains(fromJSON(needs.setup.outputs.filters), 'python')
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -873,14 +835,17 @@ jobs:
   # ubuntu runner 上永远 skip。用 paths 过滤只在 VBS 文件变更时启动 Windows runner，
   # 避免每次 PR 付出 Windows 分钟额度（该脚本变更频率极低，通常只在功能迭代时改动）。
   # 静态/AST 类断言（编码、映像名清单、杀进程顺序等）已在 ubuntu test job 覆盖。
+  # [2026-10-17 补] 原「用 paths 过滤只在 VBS 文件变更时启动 Windows runner」的节流手段随
+  # 仅手动触发一并取消：现在每次手动触发都起 windows-latest（约 10 分钟）。该节流的前提是
+  # 「自动触发会高频跑」，手动触发场景下不成立，且同样会掉进「skipped 视为通过」的假绿通道。
   vbs-behavior-test:
     name: VBS Behavior Test (Windows cscript)
     needs: setup
     runs-on: windows-latest
     timeout-minutes: 10
-    # 仅当 StopRecording.vbs 或其测试文件变更时触发；
-    # workflow_dispatch 手动触发时始终执行。其它 PR 自动 skip，ci-summary 视 skip 为通过。
-    if: github.event_name == 'workflow_dispatch' || contains(fromJSON(needs.setup.outputs.filters), 'vbs')
+    # [2026-10-17 修订] 原条件为「github.event_name == 'workflow_dispatch' || vbs 路径命中」。
+    # 改为仅手动触发后前半式恒真、后半式引用的 filters 输出已不存在，故整条 if 删除：
+    # 现在每次手动触发都会执行这 4 条 cscript 行为锁。
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -897,8 +862,11 @@ jobs:
         run: python -m pytest tests/test_stop_recording_vbs.py -v
 
   # ── 8. 汇总门禁 ─────────────────────────────────────────────────────────
-  # 上游 job 会被路径过滤跳过，分支保护若直接勾选它们会「永久 pending」。
-  # 因此对外只暴露本 job 作为唯一 required check：
+  # [2026-10-17 修订] 路径过滤移除后已无 job 会被跳过，「skipped → 通过」通道实际空转；
+  # 判定口径保留，以免将来恢复过滤时本 job 反过来把合法跳过判成失败。
+  # [历史注] 原注「上游 job 会被路径过滤跳过，分支保护若直接勾选它们会『永久 pending』」
+  # 随过滤器移除作废（2026-10-17）。
+  # 对外仍只暴露本 job 作为唯一 required check：
   #   skipped / success → 通过；failure / cancelled → 失败。
   ci-summary:
     name: CI Summary (required check)
@@ -918,7 +886,8 @@ jobs:
     steps:
       # 使用原生对象过滤器 needs.*.result（GitHub 官方推荐写法），
       # 不引入 jq / 内联脚本，避免 shell 引号陷阱。
-      # skipped 视为通过：路径过滤跳过属预期行为。
+      # skipped 视为通过：2026-10-17 起已无 job 会被路径过滤跳过（过滤器已移除），
+      # 该判定保留仅为防将来恢复条件 job 时本 job 把合法跳过反噬成失败。
       - name: Fail if any upstream job failed or was cancelled
         if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         shell: bash
@@ -930,5 +899,5 @@ jobs:
       - name: All checks passed
         shell: bash
         run: |
-          echo "✅ 全部 job 通过（或按路径过滤合法跳过）"
+          echo "✅ 全部 job 通过（或合法跳过）"
           echo "各 job 结果：${{ join(needs.*.result, ', ') }}"
