@@ -13,6 +13,7 @@
 #     python build_exe.py --no-runtime # 跳过 ffmpeg/node 打包（交由用户运行时自动下载，减小分发体积）
 #     python build_exe.py --dual      # 同时生成 lite（无运行时）与 full（下载并打包 ffmpeg+node）两个 zip
 #     python build_exe.py --require-pinned # 运行时二进制缺 SHA256 钉定即终止构建（CI 默认开启，SEV-10 fail-closed）
+#     python build_exe.py --pin-source verify # 拉取官方清单与内置钉定表比对（默认 off：不联网、行为不变）
 #
 # 打包策略（onedir + contents_directory='_internal'）—— 最终产物结构：
 #     dist/DouyinLiveRecorder/
@@ -48,7 +49,7 @@ import time
 import urllib.request
 import zipfile
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 APP_NAME = "DouyinLiveRecorder"
@@ -583,9 +584,11 @@ def _env_pins() -> dict[str, str]:
 
 
 def _pinned_slots() -> dict[str, str]:
-    # 合并内置钉定表（当前运行时键那一段）与环境变量覆盖（环境变量优先，便于 CI 注入）
+    # 合并内置钉定表（当前运行时键那一段）与环境变量覆盖（环境变量优先，便于 CI 注入）。
+    # 在线来源层排在两者之后、且只在被显式开启时才动作（默认 off，见该节头注释）。
     merged = {str(k): str(v).strip().lower() for k, v in _PINNED_RUNTIME_SHA256.get(runtime_slot_key(), {}).items()}
     merged.update(_env_pins())
+    _apply_online_pin_source(merged)
     return merged
 
 
@@ -794,25 +797,45 @@ def _verify_official_signature(dest: Path, slot: str, desc: str) -> None:
         _verify_gpg_artifact(dest, Path(tmp) / "artifact.sig", sig_url, fingerprint, desc)
 
 
-def _verify_gpg_artifact(dest: Path, sig_path: Path, sig_url: str, fingerprint: str, desc: str) -> None:
+def _verify_gpg_artifact(
+    dest: Path, sig_path: Path, sig_url: str, fingerprint: str, desc: str, *, strict: bool = True
+) -> bool:
     # 判据一律来自 --status-fd 的机器行，而不是 gpg 的退出码：退出码 0 只说明「签名能被钥匙环里
     # 某把钥匙验通」，不核对签名者身份时，任意一把可导入的钥匙签过的产物都能蒙过去。
+    # strict=True（默认）= 产物侧的唯一口径。
+    # strict=False = 仅供**在线清单**复核用：那时「验不过」的处置是「不采用这份清单」，而不是终止
+    # 构建——内置钉定表仍在，真正的 fail-closed 闸口在产物下载那一步（见 _unpinned_action）。
+    # 返回 True 只在「GOODSIG + VALIDSIG 且签名钥匙属于钉定指纹那把钥匙」时成立，调用方不得用
+    # 「没抛异常」代替本返回值（下面每一条早返回都是验签未成立）。
+    def _skip_or_fail(msg: str, ci_hint: str) -> bool:
+        # 「取不到签名文件」/「gpg 不可用」属工具或网络缺失：发布路径终止，本地路径留痕后跳过，
+        # 两侧都不许出现「什么都没发生」的形态。
+        if not strict:
+            print(f"[build][warn] {desc} 在线清单验签无法进行，本次不参与判定——{msg}")
+            return False
+        if require_pinned_hashes():
+            raise SystemExit(f"[build][FATAL] {desc} 签名核验失败——{msg}{ci_hint}")
+        print(f"[build][warn] {desc} 签名核验跳过——{msg}；本地构建继续，产物不得发布")
+        return False
+
+    def _hard_fail(msg: str) -> bool:
+        # 判据类失败（指纹不在环内 / BADSIG / 无 VALIDSIG）：**本地与发布路径都终止**，
+        # 因为这类失败说的是「这份产物不可信」，而不是「这次没法验」。
+        if not strict:
+            print(f"[build][warn] {desc} 在线清单验签未通过，本次不参与判定——{msg}")
+            return False
+        raise SystemExit(f"[build][FATAL] {desc} {msg}")
+
     try:
         with urllib.request.urlopen(sig_url, timeout=60) as resp:
             sig_path.write_bytes(resp.read())
     except OSError as e:
-        msg = f"取不到 {sig_url} 的签名文件：{type(e).__name__}: {e}"
-        if require_pinned_hashes():
-            raise SystemExit(f"[build][FATAL] {desc} 签名核验失败——{msg}（发布路径 fail-closed，已终止构建）") from e
-        print(f"[build][warn] {desc} 签名核验跳过——{msg}")
-        return
+        return _skip_or_fail(
+            f"取不到 {sig_url} 的签名文件：{type(e).__name__}: {e}", "（发布路径 fail-closed，已终止构建）"
+        )
 
     if _run_gpg(["--batch", "--quiet", "--keyserver", "hkps://keys.openpgp.org", "--recv-keys", fingerprint]) is None:
-        msg = "gnupg 不可用（未安装或无法启动 gpg）"
-        if require_pinned_hashes():
-            raise SystemExit(f"[build][FATAL] {desc} 签名核验失败——{msg}；CI runner 需先装 gnupg")
-        print(f"[build][warn] {desc} 签名核验跳过——{msg}；本地构建继续，产物不得发布")
-        return
+        return _skip_or_fail("gnupg 不可用（未安装或无法启动 gpg）", "；CI runner 需先装 gnupg")
 
     # 钉定的指纹必须是**导入成功的那把钥匙**的主钥指纹：用 --with-colons 的 fpr 记录核对，
     # 顺带拿到主钥 + 全部子钥的指纹集合（下面判签名者用）。
@@ -825,11 +848,11 @@ def _verify_gpg_artifact(dest: Path, sig_path: Path, sig_url: str, fingerprint: 
             if line.startswith(b"fpr:") and len(line.split(b":")) > 9
         }
     if listed is None or fingerprint.lower().encode("ascii") not in key_fprs:
-        raise SystemExit(f"[build][FATAL] {desc} 无法在钥匙环中确认指纹 {fingerprint}，签名核验终止（不降级放行）")
+        return _hard_fail(f"无法在钥匙环中确认指纹 {fingerprint}，签名核验终止（不降级放行）")
 
     checked = _run_gpg(["--batch", "--quiet", "--status-fd", "1", "--verify", str(sig_path), str(dest)])
     if checked is None:
-        raise SystemExit(f"[build][FATAL] {desc} gpg --verify 无法执行，签名核验终止")
+        return _hard_fail("gpg --verify 无法执行，签名核验终止")
     status = checked.stdout or b""
     # 判据三条同时成立：GOODSIG + VALIDSIG（签名可被环内钥匙验通）、无 ERRSIG/BADSIG、
     # 且**实际签名的那把钥匙属于钉定指纹那把钥匙的主钥/子钥集合**。
@@ -842,11 +865,335 @@ def _verify_gpg_artifact(dest: Path, sig_path: Path, sig_url: str, fingerprint: 
         line.split()[2].lower() for line in lines if line.startswith(b"[GNUPG:] VALIDSIG ") and len(line.split()) >= 3
     }
     if not good or bad or not signer or not signer <= key_fprs:
-        raise SystemExit(
-            f"[build][FATAL] {desc} 签名核验未通过（需 GOODSIG+VALIDSIG，且签名钥匙属于钉定指纹 {fingerprint}）:\n"
-            + status.decode("latin-1")  # 仅用于把状态行原文打进报错供人看，不参与判定
+        # status 仅用于把状态行原文打进报错供人看，不参与判定
+        return _hard_fail(
+            f"签名核验未通过（需 GOODSIG+VALIDSIG，且签名钥匙属于钉定指纹 {fingerprint}）:\n" + status.decode("latin-1")
         )
     print(f"[build] {desc} GPG 签名核验通过（{fingerprint}）")
+    return True
+
+
+# ==================== 运行时钉定的在线来源（2026-10-17 引入，默认关闭） ====================
+#
+# 为什么要有这一层：_PINNED_RUNTIME_SHA256 是「维护者在某时刻从官方渠道抄下来的带外基线」，强度来自
+# 通道独立，代价是上游一发新版本就失配、且只能靠构建失败才被发现。本层补的是「不必等构建失败就知道
+# 上游换了版本」，但**不取代**那张表——两者的分工由下方信任档界定，内置表始终是唯一事实源。
+#
+# 三态开关（--pin-source / DLR_RUNTIME_PIN_SOURCE），默认 off：
+#   off    完全只用内置表，一次网络请求都不发（引入本层前后的构建行为逐字相同）。
+#   verify 拉取官方清单后**只与内置表比对**：一致 = 印证内置表仍有效；不一致 = 上游已发新值，
+#          发布路径终止并打印「请把新值回填内置表」，本地路径告警且继续用内置表。
+#          **永不把拉到的值写进期望值**——这一步存在的意义就是不自动放行。
+#   adopt  在线值升格为本次构建的判据。仅对 trust=signed 且**清单验签通过**的槽位生效
+#          （见 _pin_source_is_adoptable）；其余档位一律拒绝采用并回退内置表。
+PIN_SOURCE_OFF = "off"
+PIN_SOURCE_VERIFY = "verify"
+PIN_SOURCE_ADOPT = "adopt"
+_PIN_SOURCE_MODES: tuple[str, ...] = (PIN_SOURCE_OFF, PIN_SOURCE_VERIFY, PIN_SOURCE_ADOPT)
+
+# 信任档：决定「拉到的这个哈希能不能当判据」。这条是整层的命门，判错了整层就退化成安全剧场。
+#   signed —— 该清单**另有独立认证**：配套发布的分离 GPG 签名 + 已在本条目 fingerprint 里钉住的
+#             完整 40 位主钥指纹。只有这一档允许 adopt，因为判据是「这份清单由那把钥匙签出」，
+#             与「清单自己说什么」无关——通道被劫持时，没有私钥的人签不出能过验签的清单。
+#   advisory —— 清单与产物**同源同服务器**（gyan.dev 的 .sha256 文档就是它自己发的；
+#             api.github.com 的 digest 与产物同在 github.com）。这种值再新也不具备独立性：
+#             中间人换掉 zip 的同时就把 .sha256 一起换了，于是「拉清单 → 当期望值 → 比对产物」
+#             三步恒等通过。故这一档只用于 verify 比对与提示，**绝不作 expected**。
+PIN_TRUST_SIGNED = "signed"
+PIN_TRUST_ADVISORY = "advisory"
+
+# 清单的解析形态（各上游公布的文档格式不同，但形状关只有 _SHA256_PATTERN 一个）：
+#   raw      响应体就是哈希本身，形如 "<64hex>" 或 "<64hex>  <文件名>"（gyan.dev 的 .sha256）。
+#   shasums  多行 "<64hex>  <文件名>"，按文件名取对应那一行（nodejs.org 的 SHASUMS256.txt）。
+#   github   GitHub Release JSON，按 assets[].name 精确匹配后取该资产的 digest（"sha256:<64hex>"）。
+_PIN_KIND_RAW = "raw"
+_PIN_KIND_SHASUMS = "shasums"
+_PIN_KIND_GITHUB = "github"
+
+# {运行时键: {槽位: {字段: 值}}}。**未登记的槽位一律跳过、不拉取**（evermeet 根本不公布哈希，
+# macOS 两槽因此维持「官方签名档」这一档，不会被本层打扰）。
+# url / sig_url 里的 {version} 由 _download_nodejs 解析出的**本次实际版本**代入：node 的下载点是
+# 从 nodejs.org/dist/index.json 选出的最新 LTS，版本每次构建都可能不同，把某个版本硬写进 URL 会
+# 拉到别的版本的清单、恒失配——且失配原因会被误读成「内置表填错了」。
+# asset 只在 shasums / github 两档需要（分别是清单里的文件名与 GitHub 资产名）。
+# fingerprint 只在 signed 档需要：留空 = 未登记 = 该槽**不可 adopt**（见 _pin_source_is_adoptable），
+# 这是有意设计——没钉住钥匙指纹的「signed」等于没验。
+_PIN_SOURCE_TABLE: dict[str, dict[str, dict[str, str]]] = {
+    # "*" = 对所有运行时键生效，与 _env_pins() 接受 "any"/"*" 同一口径：node 的清单 URL 与平台
+    # 无关（同一份 SHASUMS256.txt 里按文件名分列），写五遍只会埋下「改了四个忘了第五个」的漂移。
+    "*": {
+        "node": {
+            "url": "https://nodejs.org/dist/{version}/SHASUMS256.txt",
+            "sig_url": "https://nodejs.org/dist/{version}/SHASUMS256.txt.asc",
+            "trust": PIN_TRUST_SIGNED,
+            "kind": _PIN_KIND_SHASUMS,
+            # 待维护者补：Node.js 发布钥匙的**完整 40 位主钥指纹**。留空 = 该槽不可 adopt，
+            # 在线值在 adopt 模式下会被明确拒绝并回退内置表（fail-closed，不降级）。
+            "fingerprint": "",
+            # asset 留空时按 _download_nodejs 解析出的**本次下载文件名**匹配（见 _pin_asset_name），
+            # 因为文件名里含版本与平台，硬写会随版本漂移。
+            "asset": "{filename}",
+        },
+    },
+    "windows-x64": {
+        "ffmpeg": {
+            "url": "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip.sha256",
+            "trust": PIN_TRUST_ADVISORY,
+            "kind": _PIN_KIND_RAW,
+        },
+    },
+    "linux-x64": {
+        "ffmpeg": {
+            "url": "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/tags/autobuild-2026-08-31-13-27",
+            "trust": PIN_TRUST_ADVISORY,
+            "kind": _PIN_KIND_GITHUB,
+            "asset": "ffmpeg-n9.0.1-11-ge47273f4d9-linux64-gpl-9.0.tar.xz",
+        },
+    },
+    "linux-arm64": {
+        "ffmpeg": {
+            "url": "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/tags/autobuild-2026-08-31-13-27",
+            "trust": PIN_TRUST_ADVISORY,
+            "kind": _PIN_KIND_GITHUB,
+            "asset": "ffmpeg-n9.0.1-11-ge47273f4d9-linuxarm64-gpl-9.0.tar.xz",
+        },
+    },
+}
+
+# --pin-source 的显式覆盖（None = 沿用环境变量/默认），与 _REQUIRE_PINNED_OVERRIDE 同一手法。
+_PIN_SOURCE_OVERRIDE: str | None = None
+
+# 进程内缓存：(运行时键, 槽位) → (取数时刻, 已过形状关的在线值)。
+# 为什么需要：_pinned_slots() 每次下载都要跑一遍，同一槽位在一轮构建里会被问多次，对同一个清单
+# 文件反复请求既慢又容易被上游限流。**只缓存成功值**：一次超时不该把整轮构建的在线核对钉死在
+# 「拉不到」上——失败路径保持可重试，代价只是多一次请求（清单只有几 KB）。
+_PIN_ONLINE_CACHE: dict[tuple[str, str], tuple[float, str]] = {}
+
+# _download_nodejs 解析出的本次版本与下载文件名：node 清单 URL 的 {version} 与 shasums 的
+# 文件名匹配都靠它。置空 = 还没解析，此时含占位符的清单一律跳过（不拼残缺 URL）。
+_NODE_RESOLVED_VERSION = ""
+_NODE_RESOLVED_FILENAME = ""
+
+
+def pin_source_mode() -> str:
+    # 优先级：命令行 > 环境变量 > off。未识别的环境值明确告警后按 off，**绝不猜成别的档**
+    # （"verfiy" 这类拼写错误若被当成 verify，等于在维护者不知情时打开了联网路径）。
+    if _PIN_SOURCE_OVERRIDE is not None:
+        return _PIN_SOURCE_OVERRIDE
+    raw = os.environ.get("DLR_RUNTIME_PIN_SOURCE", "").strip().lower()
+    if not raw:
+        return PIN_SOURCE_OFF
+    if raw not in _PIN_SOURCE_MODES:
+        print(f"[build][warn] DLR_RUNTIME_PIN_SOURCE={raw!r} 不是 {_PIN_SOURCE_MODES} 之一，按 {PIN_SOURCE_OFF} 处理")
+        return PIN_SOURCE_OFF
+    return raw
+
+
+def _pin_env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        print(f"[build][warn] {name}={raw!r} 不是数字，按默认 {default} 处理")
+        return default
+    return value if value >= 0 else default
+
+
+def _pin_cache_ttl() -> float:
+    # 默认 24h：一轮构建远短于此，故进程内缓存实际只在「同一进程多次问同一槽位」时生效。
+    # 设 0 = 每次都重取（排查「上游刚发新版」时有用）；设很大 = 全程只拉一次。
+    return _pin_env_float("DLR_PIN_CACHE_TTL", 86400.0)
+
+
+def _pin_fetch_timeout() -> float:
+    # 清单都是几 KB 的文档，超时给得比产物下载（180s）短得多：在线核对不该拖慢构建。
+    return _pin_env_float("DLR_PIN_FETCH_TIMEOUT", 30.0)
+
+
+def _pin_resolved_node() -> tuple[str, str]:
+    # 本次构建解析出的 (node 版本, 下载文件名)；未解析时两个都是空串。
+    return _NODE_RESOLVED_VERSION, _NODE_RESOLVED_FILENAME
+
+
+def _format_pin_url(template: str, slot: str) -> str:
+    # 代入 {version} / {filename}；模板里没有占位符就原样返回。返回空串 = 无法代入。
+    if "{" not in template:
+        return template
+    version, filename = _pin_resolved_node()
+    if "{version}" in template and not version:
+        # 明确跳过而不是拼出 https://nodejs.org/dist//SHASUMS256.txt 这种残缺 URL：
+        # 它恒 404，而报错会指向「上游挂了」，把真正的原因（版本还没解析）藏起来。
+        print(f"[build][warn] 槽位 {slot} 的在线清单需要 {{version}}，但本次构建尚未解析 node 版本，跳过在线拉取")
+        return ""
+    if "{filename}" in template and not filename:
+        print(f"[build][warn] 槽位 {slot} 的在线清单需要 {{filename}}，但本次构建尚未解析 node 文件名，跳过在线拉取")
+        return ""
+    return template.replace("{version}", version).replace("{filename}", filename)
+
+
+def _parse_online_sha256(payload: str, kind: str, asset: str) -> str:
+    # 从上游清单里抠哈希。**唯一出口**：要么 64 位小写十六进制，要么空串。
+    # 空响应体 / HTML 错误页 / 截断值 / 非 sha256 的算法前缀一律落空串——形状关永远只有
+    # _SHA256_PATTERN 一处，与「已钉定」的判定同口径（本项目对钉定值的定义就只有这一个形状）。
+    token = ""
+    if kind == _PIN_KIND_RAW:
+        parts = payload.split()
+        token = parts[0] if parts else ""
+    elif kind == _PIN_KIND_SHASUMS:
+        for line in payload.splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[1].strip() == asset:
+                token = parts[0]
+                break
+    elif kind == _PIN_KIND_GITHUB:
+        try:
+            data: Any = json.loads(payload)
+        except json.JSONDecodeError:
+            return ""
+        assets = data.get("assets") if isinstance(data, dict) else None
+        if isinstance(assets, list):
+            for item in assets:
+                if isinstance(item, dict) and str(item.get("name", "")) == asset:
+                    token = str(item.get("digest", ""))
+                    break
+    else:
+        # 未知 kind = 配置写错。**不猜格式**：猜错就会把 HTML 页面里的某段文本当成哈希。
+        return ""
+    token = token.strip().lower()
+    if token.startswith("sha256:"):  # GitHub 资产 digest 的前缀形态
+        token = token[len("sha256:") :]
+    return token if _SHA256_PATTERN.fullmatch(token) else ""
+
+
+def _pin_source_is_adoptable(entry: dict[str, str]) -> bool:
+    # adopt 的准入门：trust 必须是 signed **且**指纹已钉（40 位十六进制），缺一即不可采用。
+    # 尤其 fingerprint 留空时：没钉住钥匙就说「走签名档」，等于把验签这一步省掉，adopt 会
+    # 退化成「同源清单说什么就是什么」——正是 PIN_TRUST_ADVISORY 注释里点名的失效形态。
+    if entry.get("trust", "") != PIN_TRUST_SIGNED:
+        return False
+    return bool(_FINGERPRINT_PATTERN.fullmatch(entry.get("fingerprint", "").strip().lower()))
+
+
+def _fetch_online_pin(entry: dict[str, str], slot: str) -> str:
+    # 拉一份官方清单并返回其中的哈希；任何一步不成就返回空串（调用方据此回退内置表）。
+    if not entry:
+        return ""
+    url = _format_pin_url(entry.get("url", ""), slot)
+    asset_tpl = entry.get("asset", "")
+    asset = _format_pin_url(asset_tpl, slot)
+    if not url or (asset_tpl and not asset):
+        return ""
+    try:
+        with urllib.request.urlopen(url, timeout=_pin_fetch_timeout()) as resp:
+            raw = resp.read()
+    # 加括号是 PEP 758 的硬性要求（无括号形式不能带 `as` 绑定），与「统一无括号」的风格约定不冲突：
+    # 本仓约定里「需要 as 绑定时必须回退加括号」正是这一处。
+    except (OSError, ValueError) as e:
+        # 超时 / DNS / TLS / 4xx-5xx 都归到「本次拉不到」：URLError 与 HTTPError 都是 OSError
+        # 子类，故这一条足以覆盖全部网络侧失败，不需要再列 http.client 的异常类型。
+        print(f"[build][warn] 槽位 {slot} 在线清单拉取失败（{type(e).__name__}: {e}），本次不参与判定")
+        return ""
+    value = _parse_online_sha256(raw.decode("utf-8", errors="replace"), entry.get("kind", ""), asset)
+    if not value:
+        print(f"[build][warn] 槽位 {slot} 在线清单未解析出 64 位十六进制值（来源 {url}），本次不参与判定")
+        return ""
+    if entry.get("trust", "") == PIN_TRUST_SIGNED:
+        # signed 档：值可用与否取决于**清单本身的验签结果**，而不是它长得像不像哈希。
+        if not _pin_source_is_adoptable(entry):
+            print(
+                f"[build][warn] 槽位 {slot} 声明为 {PIN_TRUST_SIGNED} 档但未登记 40 位主钥指纹，"
+                f"不采用在线值（没钉住钥匙的「签名档」等于没验）"
+            )
+            return ""
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="dlr-pinman-") as tmp:
+            document = Path(tmp) / "manifest"
+            document.write_bytes(raw)
+            # 判据与产物侧**同一份**（_verify_gpg_artifact），本层不自造第二套验签口径；
+            # strict=False 的语义见该函数：这里是「不采用」，不是「终止构建」。
+            ok = _verify_gpg_artifact(
+                document,
+                Path(tmp) / "manifest.sig",
+                _format_pin_url(entry.get("sig_url", ""), slot),
+                entry.get("fingerprint", "").strip().lower(),
+                f"在线清单 {slot}",
+                strict=False,
+            )
+        if not ok:
+            return ""
+    return value
+
+
+def _online_pin_entry(slot: str) -> dict[str, str]:
+    # 键的优先级与 _env_pins() 同口径：先查本运行时键那一段，再查通配段 "*"。
+    per_key = _PIN_SOURCE_TABLE.get(runtime_slot_key(), {})
+    if slot in per_key:
+        return per_key[slot]
+    return _PIN_SOURCE_TABLE.get("*", {}).get(slot, {})
+
+
+def _online_pin(slot: str) -> str:
+    # 带缓存的在线值；取不到返回空串。进程内缓存的意义见 _PIN_ONLINE_CACHE 注释。
+    key = runtime_slot_key()
+    cached = _PIN_ONLINE_CACHE.get((key, slot))
+    if cached is not None and (time.monotonic() - cached[0]) < _pin_cache_ttl():
+        return cached[1]
+    value = _fetch_online_pin(_online_pin_entry(slot), slot)
+    if value:
+        _PIN_ONLINE_CACHE[(key, slot)] = (time.monotonic(), value)
+    return value
+
+
+def _apply_online_pin_source(merged: dict[str, str]) -> None:
+    # 在线来源层的落点（默认 off，语义见本节头注释）。**只增不改**：在线值要么被采纳、要么只用于
+    # 比对与提示；内置表与 DLR_RUNTIME_SHA256 已经给出的值永不被在线值静默覆盖——否则上游一次
+    # 重传就能改写判据，钉定也就不再是一条独立的证据。
+    mode = pin_source_mode()
+    if mode == PIN_SOURCE_OFF:
+        return
+    key = runtime_slot_key()
+    for slot in runtime_slots_for(key):
+        entry = _online_pin_entry(slot)
+        if not entry:
+            continue  # 该槽没有可拉的官方清单（evermeet 不公布哈希），维持它原有的满足方式
+        online = _online_pin(slot)
+        if not online:
+            continue  # 拉取失败 / 形状非法已在 _fetch_online_pin 里说明，此处不重复打印
+        pinned = merged.get(slot, "")
+        if not pinned:
+            # 内置表这一槽本来就空：在线值只作提示。放行与否仍由 _download_file 的既有闸口决定
+            # （那个闸口按 require_pinned_hashes() 决定终止还是告警），本层不抢它的判定。
+            print(f"[build][warn] 槽位 {key}/{slot} 内置表未钉定，在线清单值 {online} 仅供人工核对，不参与判定")
+            continue
+        if online == pinned:
+            print(f"[build] 槽位 {key}/{slot} 在线清单与内置钉定一致（{online[:12]}…）")
+            continue
+        # 走到这里 = 上游清单与内置表不一致，即上游已发新版本（或内置值需要重新核对）。
+        if mode == PIN_SOURCE_VERIFY:
+            # verify 档**绝不写入**：把它写进期望值就等于跳过「人工回填内置表」这道闸口，
+            # 而那道闸口同时也是「发布前重新确认版本代次 / 体积 / 冒烟」的触发点。
+            shown = pinned if pinned else UNVERIFIED_PIN
+            msg = (
+                f"槽位 {key}/{slot} 的上游清单与内置钉定表不一致：内置 {shown}、在线 {online}。"
+                f"请核对后回填 build_exe.py 的 _PINNED_RUNTIME_SHA256"
+            )
+            if require_pinned_hashes():
+                raise SystemExit(f"[build][FATAL] {msg}。发布路径为 fail-closed，已终止构建，未开始下载。")
+            print(f"[build][warn] {msg}——本地构建继续用内置值，但**该产物不得用于发布**")
+            continue
+        if not _pin_source_is_adoptable(entry):
+            # advisory 档：清单与产物同源同服务器，把它当判据等于把钉定降级成 TOFU。
+            print(
+                f"[build][warn] 槽位 {key}/{slot} 的在线清单属 {PIN_TRUST_ADVISORY} 档"
+                f"（清单与产物同源同服务器，无独立认证），adopt 已跳过、沿用内置值；"
+                f"在线值 {online} 仅供人工核对"
+            )
+            continue
+        print(f"[build] 槽位 {key}/{slot} 采用在线清单值（{online[:12]}…）：清单已过钉定指纹验签")
+        merged[slot] = online
 
 
 # 下载文件到 dest 并打印进度（自动跟随重定向）；完成后按钉定值校验完整性，
@@ -937,6 +1284,11 @@ def _download_nodejs(target_dir: Path) -> bool:
 
         ext = "zip" if IS_WIN else "tar.gz"
         filename = f"node-{version}-{node_plat}-{node_arch}.{ext}"
+        # 供在线钉定来源层代入清单 URL 的 {version} / {filename}：必须在 _download_file 之前写入，
+        # 否则那一层只能跳过（它会明确告警说「版本尚未解析」，而不是拼一条恒 404 的残缺 URL）。
+        global _NODE_RESOLVED_VERSION, _NODE_RESOLVED_FILENAME
+        _NODE_RESOLVED_VERSION = version
+        _NODE_RESOLVED_FILENAME = filename
         url = f"https://nodejs.org/dist/{version}/{filename}"
         archive = target_dir / filename
         _download_file(url, archive, f"Node.js {version}", slot="node")
@@ -1653,7 +2005,7 @@ def _ensure_utf8_streams() -> None:
 
 # 解析命令行参数并驱动打包/可选冒烟/可选压缩的全流程
 def main() -> None:
-    global _REQUIRE_PINNED_OVERRIDE
+    global _PIN_SOURCE_OVERRIDE, _REQUIRE_PINNED_OVERRIDE
     _ensure_utf8_streams()
     parser = argparse.ArgumentParser(description=f"{APP_NAME} 打包脚本")
     _ = parser.add_argument("--smoke", action="store_true", help="打包后运行冒烟测试")
@@ -1676,6 +2028,17 @@ def main() -> None:
         default=False,
         help="仅本地排障：即使在 CI 环境下也对未钉定的运行时二进制只告警不终止（不得用于发布）",
     )
+    # 在线来源层默认关闭：开启后才会联网拉官方清单（语义见「运行时钉定的在线来源」节头注释）。
+    _ = parser.add_argument(
+        "--pin-source",
+        choices=list(_PIN_SOURCE_MODES),
+        default=None,
+        help=(
+            "运行时钉定的在线来源策略：off（默认，只用内置表、不联网）/ "
+            "verify（拉取官方清单后只与内置表比对，不一致即告警或终止）/ "
+            "adopt（仅『清单有独立认证』的槽位可采用在线值作判据）"
+        ),
+    )
     args = parser.parse_args()
     smoke = cast(bool, args.smoke)
     no_zip = cast(bool, args.no_zip)
@@ -1692,11 +2055,13 @@ def main() -> None:
         _REQUIRE_PINNED_OVERRIDE = True
     elif args.allow_unpinned:
         _REQUIRE_PINNED_OVERRIDE = False
+    if args.pin_source:
+        _PIN_SOURCE_OVERRIDE = str(args.pin_source)
 
     version = read_version()
     print(f"[build] 项目版本：v{version}，平台：{sys.platform}/{platform.machine()}")
     strict = "是（缺钉定即终止构建）" if require_pinned_hashes() else "否（仅本地构建，产物不得发布）"
-    print(f"[build] 运行时二进制钉定：槽位 {runtime_slot_key()}，要求钉定={strict}")
+    print(f"[build] 运行时二进制钉定：槽位 {runtime_slot_key()}，要求钉定={strict}，" f"在线来源={pin_source_mode()}")
 
     if dual:
         # --dual：PyInstaller 只跑一次，先产 lite 再产 full，避免重复打包。

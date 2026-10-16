@@ -41,7 +41,10 @@ ROOT = Path(__file__).resolve().parent.parent
 # [2026-09-26] 加入 github.com（Linux ffmpeg 换用 BtbN 的 n9.0 系列资产），同时**移除** johnvansickle.com：
 # 该主机不再出现在来源表里，留在清单内等于给一条已退役的来源保留通行证——将来真要再用，
 # 必须在这里显式改回来并说明理由（本清单就是那道说明的落点）。
-_ALLOWED_HOSTS = frozenset({"www.gyan.dev", "evermeet.ca", "github.com", "nodejs.org"})
+# [2026-10-17] 加入 api.github.com：运行时钉定的**在线清单**来源层要读 GitHub Release 的
+# assets[].digest（见 build_exe._PIN_SOURCE_TABLE）。它与产物下载同属 github.com 这一家的两个端点，
+# 不是新引入的第三方镜像，故并入同一条来源信任边界。
+_ALLOWED_HOSTS = frozenset({"www.gyan.dev", "evermeet.ca", "github.com", "api.github.com", "nodejs.org"})
 
 
 def _load_build_exe() -> Any:
@@ -1537,3 +1540,283 @@ def test_zip_release_dir_prefixes_members_with_app_name(monkeypatch: pytest.Monk
         # 必须是 deflate（体积优化的全部意义）
         info = zf.getinfo(f"{build_exe.APP_NAME}/config/config.ini")
         assert info.compress_type == zipfile.ZIP_DEFLATED
+
+
+# ---------------------------------------------------------------------------
+# 运行时钉定的在线来源层（2026-10-17 引入，**默认 off**）
+#
+# 被测面是「在线值在什么条件下才允许影响判据」。三条核心不变量：
+#   ① off（默认）：一次网络请求都不发，_pinned_slots() 的结果与引入本层前逐字相同；
+#   ② verify 档**永不写入**：在线值只用于比对，写进期望值就等于跳过「人工回填内置表」这道闸口，
+#      而那道闸口同时也是「重新确认版本代次 / 体积门禁 / 冒烟」的触发点；
+#   ③ adopt 只认「清单有独立认证」的槽位：advisory 档（清单与产物同源同服务器）与
+#      「signed 但没钉指纹」一律拒绝采用——前者是 TOFU，后者等于没验。
+# 全程离线：urlopen 与 _run_gpg 一律打桩（桩替换 build_exe 的模块全局名，不改 stdlib 本体）。
+# ---------------------------------------------------------------------------
+
+_BUILTIN_HEX = "a" * 64
+_ONLINE_HEX = "b" * 64
+_MANIFEST_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip.sha256"
+
+
+@pytest.fixture
+def _clean_pin_layer(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 在线层带两个模块级状态（进程内缓存、命令行覆盖）与两个 node 解析结果，不清会串到相邻用例。
+    # 缓存尤其危险：上一条用例拉到的值会被下一条当成「刚拉的」，于是「换桩后仍不生效」的假象
+    # 会把真正的回归藏起来。
+    monkeypatch.setattr(build_exe, "_PIN_ONLINE_CACHE", {})
+    monkeypatch.setattr(build_exe, "_PIN_SOURCE_OVERRIDE", None)
+    monkeypatch.setattr(build_exe, "_NODE_RESOLVED_VERSION", "")
+    monkeypatch.setattr(build_exe, "_NODE_RESOLVED_FILENAME", "")
+
+
+def _pin_layer_env(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    mode: str,
+    key: str = "windows-x64",
+    release: bool = False,
+    table: dict[str, dict[str, dict[str, str]]],
+) -> None:
+    monkeypatch.setattr(build_exe, "runtime_slot_key", lambda: key)
+    monkeypatch.setattr(build_exe, "require_pinned_hashes", lambda: release)
+    monkeypatch.setattr(build_exe, "_PIN_SOURCE_OVERRIDE", mode)
+    monkeypatch.setattr(build_exe, "_PIN_SOURCE_TABLE", table)
+    monkeypatch.setattr(build_exe, "_PINNED_RUNTIME_SHA256", {key: {"ffmpeg": _BUILTIN_HEX, "node": _BUILTIN_HEX}})
+
+
+def _advisory_table() -> dict[str, dict[str, dict[str, str]]]:
+    return {
+        "windows-x64": {
+            "ffmpeg": {
+                "url": _MANIFEST_URL,
+                "trust": build_exe.PIN_TRUST_ADVISORY,
+                "kind": build_exe._PIN_KIND_RAW,
+            }
+        }
+    }
+
+
+def _good_gpg_status() -> bytes:
+    return (
+        b"[GNUPG:] GOODSIG 1234567890ABCDEF someone@example.org\n"
+        b"[GNUPG:] VALIDSIG " + _SIGNING_SUBKEY_FPR.lower().encode("ascii") + b" 1600000000 1600000000 0 4 0 1 22 00\n"
+    )
+
+
+def test_online_layer_is_off_by_default_and_never_touches_network(
+    monkeypatch: pytest.MonkeyPatch, _clean_pin_layer: None
+) -> None:
+    # 默认姿态必须是「完全不联网」：CI 的默认路径不该因为引入本层而多出一个外部依赖点
+    # （上游清单挂掉就会拖垮发布，而内置表本来是不受它影响的）。
+    def explode(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("默认 off 的在线层不得发起任何网络请求")
+
+    monkeypatch.setattr(build_exe, "urllib", types.SimpleNamespace(request=types.SimpleNamespace(urlopen=explode)))
+    monkeypatch.delenv("DLR_RUNTIME_PIN_SOURCE", raising=False)
+    assert build_exe.pin_source_mode() == build_exe.PIN_SOURCE_OFF
+    merged = build_exe._pinned_slots()
+    assert merged["ffmpeg"] == build_exe._PINNED_RUNTIME_SHA256["windows-x64"]["ffmpeg"].lower()
+
+
+def test_unrecognized_pin_source_env_value_falls_back_to_off(
+    monkeypatch: pytest.MonkeyPatch, _clean_pin_layer: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # 拼写错误（"verfiy"）若被当成 verify，等于在维护者不知情时打开了联网路径，故必须告警后按 off。
+    monkeypatch.setenv("DLR_RUNTIME_PIN_SOURCE", "verfiy")
+    assert build_exe.pin_source_mode() == build_exe.PIN_SOURCE_OFF
+    assert "DLR_RUNTIME_PIN_SOURCE" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("release", [True, False], ids=["release", "local"])
+def test_verify_mode_never_writes_the_online_value(
+    monkeypatch: pytest.MonkeyPatch, _clean_pin_layer: None, release: bool, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # verify 的**全部意义**就是「只比对、不写入」：写进去就等于把「人工核对并回填」这道闸口
+    # 换成「上游说什么就是什么」，那还不如直接用 adopt。
+    _pin_layer_env(monkeypatch, mode=build_exe.PIN_SOURCE_VERIFY, release=release, table=_advisory_table())
+    _install_fake_urlopen(monkeypatch, f"{_ONLINE_HEX}  ffmpeg.zip".encode("ascii"))
+    if release:
+        with pytest.raises(SystemExit):
+            build_exe._pinned_slots()
+        return
+    merged = build_exe._pinned_slots()
+    assert merged["ffmpeg"] == _BUILTIN_HEX, "verify 档把在线值写进了期望值，人工回填闸口被绕过"
+    assert _ONLINE_HEX in capsys.readouterr().out, "不一致时没把在线值打出来，维护者无从回填"
+
+
+def test_advisory_source_is_never_adopted(
+    monkeypatch: pytest.MonkeyPatch, _clean_pin_layer: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # advisory 档的清单与产物同源同服务器：把它当判据，「拉清单 → 当期望值 → 比对产物」三步
+    # 恒等通过，钉定等于被降级成 TOFU。故 adopt 必须拒绝并沿用内置值。
+    _pin_layer_env(monkeypatch, mode=build_exe.PIN_SOURCE_ADOPT, table=_advisory_table())
+    _install_fake_urlopen(monkeypatch, f"{_ONLINE_HEX}  ffmpeg.zip".encode("ascii"))
+    assert build_exe._pinned_slots()["ffmpeg"] == _BUILTIN_HEX
+    assert build_exe.PIN_TRUST_ADVISORY in capsys.readouterr().out
+
+
+def test_signed_source_without_pinned_fingerprint_is_never_adopted(
+    monkeypatch: pytest.MonkeyPatch, _clean_pin_layer: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # 声明 signed 却没钉指纹 = 验签这一步根本没东西可比，adopt 会退化成「清单说什么就是什么」。
+    def explode(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("未登记指纹的 signed 槽位不得发起验签")
+
+    _pin_layer_env(
+        monkeypatch,
+        mode=build_exe.PIN_SOURCE_ADOPT,
+        table={
+            "windows-x64": {
+                "ffmpeg": {
+                    "url": _MANIFEST_URL,
+                    "sig_url": f"{_MANIFEST_URL}.asc",
+                    "trust": build_exe.PIN_TRUST_SIGNED,
+                    "kind": build_exe._PIN_KIND_RAW,
+                    "fingerprint": "",
+                }
+            }
+        },
+    )
+    _install_fake_urlopen(monkeypatch, f"{_ONLINE_HEX}  ffmpeg.zip".encode("ascii"))
+    monkeypatch.setattr(build_exe, "_run_gpg", explode)
+    assert build_exe._pinned_slots()["ffmpeg"] == _BUILTIN_HEX
+    assert "未登记 40 位主钥指纹" in capsys.readouterr().out
+
+
+def test_signed_manifest_is_adopted_only_when_its_own_signature_verifies(
+    monkeypatch: pytest.MonkeyPatch, _clean_pin_layer: None
+) -> None:
+    # 同一份清单，验签通过才可采用；验签不过（BADSIG）时必须一个字都不改。
+    table = {
+        "windows-x64": {
+            "ffmpeg": {
+                "url": "https://nodejs.org/dist/{version}/SHASUMS256.txt",
+                "sig_url": "https://nodejs.org/dist/{version}/SHASUMS256.txt.asc",
+                "trust": build_exe.PIN_TRUST_SIGNED,
+                "kind": build_exe._PIN_KIND_SHASUMS,
+                "fingerprint": _PRIMARY_FPR,
+                "asset": "ffmpeg.zip",
+            }
+        }
+    }
+    _pin_layer_env(monkeypatch, mode=build_exe.PIN_SOURCE_ADOPT, table=table)
+    monkeypatch.setattr(build_exe, "_NODE_RESOLVED_VERSION", "v24.21.0")
+    _install_fake_urlopen(monkeypatch, f"{_ONLINE_HEX}  ffmpeg.zip".encode("ascii"))
+    _install_fake_gpg(
+        monkeypatch, keyring=_keyring_record(_PRIMARY_FPR, _SIGNING_SUBKEY_FPR), verify_status=_good_gpg_status()
+    )
+    assert build_exe._pinned_slots()["ffmpeg"] == _ONLINE_HEX
+
+    monkeypatch.setattr(build_exe, "_PIN_ONLINE_CACHE", {})
+    _install_fake_gpg(
+        monkeypatch,
+        keyring=_keyring_record(_PRIMARY_FPR, _SIGNING_SUBKEY_FPR),
+        verify_status=b"[GNUPG:] BADSIG 1234567890ABCDEF someone@example.org\n",
+    )
+    assert build_exe._pinned_slots()["ffmpeg"] == _BUILTIN_HEX
+
+
+def test_manifest_needing_version_is_skipped_instead_of_building_a_broken_url(
+    monkeypatch: pytest.MonkeyPatch, _clean_pin_layer: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # 版本还没解析时拼出的 https://nodejs.org/dist//SHASUMS256.txt 恒 404，报错会指向「上游挂了」，
+    # 把真正的原因藏起来。故必须显式跳过。
+    _pin_layer_env(
+        monkeypatch,
+        mode=build_exe.PIN_SOURCE_ADOPT,
+        table={
+            "windows-x64": {
+                "ffmpeg": {
+                    "url": "https://nodejs.org/dist/{version}/SHASUMS256.txt",
+                    "trust": build_exe.PIN_TRUST_ADVISORY,
+                    "kind": build_exe._PIN_KIND_RAW,
+                }
+            }
+        },
+    )
+    _install_fake_urlopen(monkeypatch, f"{_ONLINE_HEX}  ffmpeg.zip".encode("ascii"))
+    assert build_exe._pinned_slots()["ffmpeg"] == _BUILTIN_HEX
+    assert "尚未解析 node 版本" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"",  # 空响应体（上游 200 但没内容）
+        b"<html><body>404 Not Found</body></html>",  # 错误页被当成清单
+        b"deadbeef  ffmpeg.zip",  # 长度不足
+        (b"z" * 64) + b"  ffmpeg.zip",  # 长度够但不是十六进制
+    ],
+    ids=["empty", "html-error-page", "too-short", "non-hex"],
+)
+def test_online_values_that_fail_the_shape_gate_are_dropped(
+    monkeypatch: pytest.MonkeyPatch, _clean_pin_layer: None, payload: bytes, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # 形状关只有 _SHA256_PATTERN 一处，与「已钉定」的判定同口径。任何不合法的在线值都必须
+    # 按「没拉到」处理，绝不能流进期望值——否则「上游返回了个 HTML」会变成一条假的钉定。
+    _pin_layer_env(monkeypatch, mode=build_exe.PIN_SOURCE_ADOPT, table=_advisory_table())
+    _install_fake_urlopen(monkeypatch, payload)
+    assert build_exe._pinned_slots()["ffmpeg"] == _BUILTIN_HEX
+    assert "未解析出 64 位十六进制值" in capsys.readouterr().out
+
+
+def test_online_manifest_is_fetched_only_once_per_slot(monkeypatch: pytest.MonkeyPatch, _clean_pin_layer: None) -> None:
+    # _pinned_slots() 每次下载都要跑一遍，同一槽位一轮构建会被问多次；对同一份清单反复请求
+    # 既慢又容易被上游限流，故成功值必须进缓存。
+    _pin_layer_env(monkeypatch, mode=build_exe.PIN_SOURCE_VERIFY, table=_advisory_table())
+    seen = _install_fake_urlopen(monkeypatch, f"{_ONLINE_HEX}  ffmpeg.zip".encode("ascii"))
+    build_exe._pinned_slots()
+    build_exe._pinned_slots()
+    assert seen.count(_MANIFEST_URL) == 1, f"在线清单被重复拉取：{seen}"
+
+
+def test_online_fetch_failure_never_changes_the_verdict(
+    monkeypatch: pytest.MonkeyPatch, _clean_pin_layer: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # 拉取失败/超时的处置是「本次不参与判定」而不是「放宽判定」：内置值原样保留，
+    # 放行与否仍由 _download_file 的既有闸口决定（本层不抢它的判定）。
+    _pin_layer_env(monkeypatch, mode=build_exe.PIN_SOURCE_ADOPT, table=_advisory_table())
+    _install_fake_urlopen(monkeypatch, OSError("network down"))
+    assert build_exe._pinned_slots()["ffmpeg"] == _BUILTIN_HEX
+    assert "在线清单拉取失败" in capsys.readouterr().out
+
+
+def test_online_pin_table_only_declares_slots_that_have_a_download_point() -> None:
+    # 给一个没有下载点的槽位登记在线来源，等于凭空造一个永远不会被真实构建路径走到的假闸口。
+    for key, slots in build_exe._PIN_SOURCE_TABLE.items():
+        if key == "*":
+            for slot in slots:
+                assert slot in build_exe.RUNTIME_SLOTS, f"通配段声明了通用槽位之外的 {slot}"
+            continue
+        assert key in build_exe.RELEASE_RUNTIME_KEYS, f"在线来源表出现未登记的运行时键 {key}"
+        for slot in slots:
+            assert slot in build_exe.runtime_slots_for(key), f"{key}/{slot} 没有对应的下载点"
+
+
+def test_every_online_pin_source_url_is_https_on_an_allowlisted_host() -> None:
+    # 与产物下载同一条供应链门槛：明文 http 或新增镜像域都必须显式改进 _ALLOWED_HOSTS 并说明理由。
+    for key, slots in build_exe._PIN_SOURCE_TABLE.items():
+        for slot, entry in slots.items():
+            for field in ("url", "sig_url"):
+                url = entry.get(field, "")
+                if not url:
+                    continue
+                assert url.startswith("https://"), f"{key}/{slot} 的 {field} 非 TLS：{url}"
+                host = url.split("/", 3)[2]
+                assert host in _ALLOWED_HOSTS, f"{key}/{slot} 的 {field} 主机 {host} 不在允许清单内"
+
+
+def test_github_pin_asset_name_matches_the_download_url_basename() -> None:
+    # GitHub 档按 assets[].name 匹配：名字若与 _FFMPEG_DOWNLOAD_URLS 里真正下载的那一份脱钩，
+    # 会拉到同一 release 下**另一个资产**的 digest，恒失配（且失配看起来像「钉定填错了」）。
+    checked = 0
+    for key, slots in build_exe._PIN_SOURCE_TABLE.items():
+        for slot, entry in slots.items():
+            if entry.get("kind") != build_exe._PIN_KIND_GITHUB:
+                continue
+            assert key in build_exe._FFMPEG_DOWNLOAD_URLS, f"{key} 无 ffmpeg 下载点"
+            expected = build_exe._FFMPEG_DOWNLOAD_URLS[key].rsplit("/", 1)[-1]
+            assert entry["asset"] == expected, f"{key}/{slot} 的资产名与下载 URL 脱钩：{entry['asset']} != {expected}"
+            checked += 1
+    assert checked, "没有任何 github 档条目被核对——该档若被整体删掉，本用例会变成空转"

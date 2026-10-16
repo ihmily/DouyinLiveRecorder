@@ -8,7 +8,10 @@
 # 变异验证标记残留与整文件换行符翻转，对 black / mypy / 注释检查三面全不报错，只有用例真跑到
 # 那条分支才现形（AGENTS.md「变异验证的一次性改动必须当轮还原」「注释检查工具·三个盲点」）；
 # 新增 `tests/frontend/*.mjs` 忘登记 ci.yml 同理——`node --test <文件>` 不会顺带发现同级其他
-# `.mjs`，该文件的全部回归锁在 CI 里从不执行（M-28 实证）。判据每次都要执行又容易被忘，正是 Hook
+# `.mjs`，该文件的全部回归锁在 CI 里从不执行（M-28 实证）；运行时钉定表（`build_exe.py` 的
+# `_PINNED_RUNTIME_SHA256` / `scripts/check_runtime_pins.py`）改后不跑 check 同理——空表 /
+# 缺平台 / 缺槽位对 black / mypy / 注释检查三面全隐形，只有 check_runtime_pins.py 自己能兜住
+# （SEV-10）。判据每次都要执行又容易被忘，正是 Hook
 # 的适用面；本文件只做**判定与反馈**，不引入第二套门禁清单。
 #
 # 事实源关系：约束本体仍是 AGENTS.md。下面的目录名集合、命令形态、登记位置都逐字取自对应条目；
@@ -29,6 +32,10 @@
 #     只给规则短 id 与命中的目录名/文件名。
 #   - 脚本自身异常一律放行并打一条 stderr 提示：Hook 坏掉绝不能演变成「agent 什么也做不了」，
 #     那是把工具故障伪装成代码不合格；真正的质量判定仍由 run_gates.py / CI 承担。
+#   - 覆盖边界：PostToolUse 的注册 matcher 是写入类工具（Write|Edit|SearchReplace|MultiEdit），
+#     判定只认 tool_input 的 file_path 类字段；Bash/Shell 命令内的文件写入不经该事件——这是
+#     已知边界而非漏洞：相关约束（运行时钉定、MUTATION 还原等）由收尾门禁（R8 全仓扫描 /
+#     run_gates.py / CI）在入库前兜底，本 Hook 不追求、也做不到覆盖命令级写入。
 #   - UTF-8：拒绝理由与反馈都是中文，中文 Windows（cp936）下写 stderr 会抛 UnicodeEncodeError
 #     炸掉 Hook 进程（与 MID-63 同根因），故 stdout/stderr 都要 reconfigure 并显式给 errors。
 #
@@ -120,6 +127,19 @@ LINE_ENDING_PROBE = (
 # 前端用例登记位置（AGENTS.md「新增 .mjs 必须同批登记进 ci.yml」）：
 # 该步骤用 node-id 精确选取，形态是 tests/frontend/test_x.py::test_x，所以判据取 .py 包装入口。
 _CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+
+# P-RUNTIME-PIN 的反馈文案：两个命中分支共用一份定义，改文案只改这一处（2026-10-17 审查：
+# 原实现两个分支各抄一遍约 6 行消息，单边修改会静默漂移）。命中文件名由调用方拼入——与
+# P-MJS-REGISTER 同口径，且符合模块头「只回显规则短 id 与命中的文件名」的官方 hook 安全约定。
+# 文案里的命令形态逐字取自 AGENTS.md 门禁清单（`python scripts/check_runtime_pins.py`），
+# 不自己发明新命令，避免反馈与实际门禁口径漂移。
+_RUNTIME_PIN_MESSAGE = (
+    "本次写入涉及运行时钉定表（`build_exe.py` 的 `_PINNED_RUNTIME_SHA256` 或"
+    " `scripts/check_runtime_pins.py`）。AGENTS.md 要求收尾时必须执行"
+    " `python scripts/check_runtime_pins.py` 并记录输出，确保钉定表结构完整"
+    "（空表 / 缺平台 / 缺槽位对 black / mypy / 注释检查三面全隐形，SEV-10）。"
+    " 闭合标记：changed-without-check → check-observed。"
+)
 
 # 不参与行尾形态判定的目录名：工具生成目录 + 运行期产物目录 + 第三方运行时。
 # 取「pyproject [tool.isort].extend_skip 有的这里也得有」的保守方向（与
@@ -284,39 +304,38 @@ def check_bash_command(command: str) -> tuple[str, str] | None:
     return None
 
 
-def _check_runtime_pins_changed(path: Path, segments: list[str]) -> tuple[str, str] | None:
-    # P-RUNTIME-PIN：写入目标命中运行时钉定表所在文件时，即时提醒 agent 收尾跑 check。
-    # 按末尾分段匹配（与 P-MJS-REGISTER 同手法）：tmp_path 不在 ROOT 下时 _relative_segments
-    # 返回完整路径分段，精确全等匹配会失效；末尾分段只判「文件名 + 父目录」，与检出位置无关。
+def _check_runtime_pins_changed(
+    path: Path, segments: list[str], anchored: bool | None = None
+) -> tuple[str, str] | None:
+    # P-RUNTIME-PIN：写入目标命中运行时钉定表所在文件时，即时提醒 agent 收尾跑 check
+    # （AGENTS.md「发布链运行时二进制必须 fail-closed 钉定（SEV-10）」第三层防线）。
+    #
+    # 定位策略分两档（2026-10-17 审查 S1 定稿）：
+    #   - 路径在 ROOT 内（anchored=True）按**规范位置**精确锚定：根级 build_exe.py 与
+    #     scripts/check_runtime_pins.py。tests/、docs/ 下的同名文件不是钉定表本体，误报会
+    #     训练 agent 养成忽略反馈的习惯——放行面同样承重，理由见 tests 放行面用例注释。
+    #   - 路径在 ROOT 外（tmp_path、其他检出副本）看不到仓库根在哪，只能退回末尾分段匹配，
+    #     与检出位置无关（与 P-MJS-REGISTER 同手法）。
+    # dist/、build/ 等工具产物目录内的同名文件一律跳过：PyInstaller 产物里出现同名文件不是
+    # 钉定表被改（排除口径与 P-LINE-ENDING 的 _in_skipped_dir 保持一致）。
+    #
+    # 判定只用 segments（_relative_segments 已小写化）做全等匹配：末段同时蕴含文件名与 .py
+    # 后缀，故不再另判 path.stem / path.suffix——stem 未小写化时 `BUILD_EXE.PY` 会漏报，且
+    # 两条判断与 segments[-1] 重复，大小写口径分裂正是原实现的问题根因（审查 S2）。
+    if _in_skipped_dir(path):
+        return None
+    if anchored is None:
+        anchored = _is_inside_root(path)
+    name = segments[-1] if segments else ""
+    if name == "build_exe.py" and (not anchored or len(segments) == 1):
+        return ("P-RUNTIME-PIN", f"写入 `{path.name}`：{_RUNTIME_PIN_MESSAGE}")
     if (
-        path.suffix.lower() == ".py"
-        and path.stem == "build_exe"
-        and len(segments) >= 1
-        and segments[-1] == "build_exe.py"
-    ):
-        return (
-            "P-RUNTIME-PIN",
-            "本次写入涉及运行时钉定表（`build_exe.py` 的 `_PINNED_RUNTIME_SHA256` 或"
-            " `scripts/check_runtime_pins.py`）。AGENTS.md 要求收尾时必须执行"
-            " `python scripts/check_runtime_pins.py` 并记录输出，确保钉定表结构完整"
-            "（空表 / 缺平台 / 缺槽位对 black / mypy / 注释检查三面全隐形，SEV-10）。"
-            " 闭合标记：changed-without-check → check-observed。",
-        )
-    if (
-        path.suffix.lower() == ".py"
-        and path.stem == "check_runtime_pins"
-        and len(segments) >= 2
+        len(segments) >= 2
         and segments[-2] == "scripts"
-        and segments[-1] == "check_runtime_pins.py"
+        and name == "check_runtime_pins.py"
+        and (not anchored or len(segments) == 2)
     ):
-        return (
-            "P-RUNTIME-PIN",
-            "本次写入涉及运行时钉定表（`build_exe.py` 的 `_PINNED_RUNTIME_SHA256` 或"
-            " `scripts/check_runtime_pins.py`）。AGENTS.md 要求收尾时必须执行"
-            " `python scripts/check_runtime_pins.py` 并记录输出，确保钉定表结构完整"
-            "（空表 / 缺平台 / 缺槽位对 black / mypy / 注释检查三面全隐形，SEV-10）。"
-            " 闭合标记：changed-without-check → check-observed。",
-        )
+        return ("P-RUNTIME-PIN", f"写入 `{path.name}`：{_RUNTIME_PIN_MESSAGE}")
     return None
 
 
@@ -333,6 +352,18 @@ def _relative_segments(path: Path) -> list[str]:
     except ValueError:
         return [part.lower() for part in path.parts]
     return [part.lower() for part in rel.parts]
+
+
+def _is_inside_root(path: Path) -> bool:
+    # 路径是否位于 ROOT 之内。判定式与 _relative_segments 逐字同构（resolve + relative_to），
+    # 保证「锚定标志」与「分段形态」永不矛盾：符号链接/Junction 让 resolve 结果落在 ROOT 外时，
+    # 两侧同时落到「根外」分支（分段取完整路径、锚定关闭），不会出现「短分段却未锚定」的中间态
+    # 把根级文件误判成嵌套文件。
+    try:
+        path.resolve().relative_to(ROOT)
+    except ValueError:
+        return False
+    return True
 
 
 def _in_skipped_dir(path: Path) -> bool:
@@ -372,9 +403,10 @@ def check_written_file(path: Path) -> tuple[str, str] | None:
                 f"（{LINE_ENDING_PROBE}）复核并恢复原本形态：本仓两个读数中原本为 0 的那一项必须仍为 0。",
             )
 
-    # P-RUNTIME-PIN：build_exe.py 的 _PINNED_RUNTIME_SHA256 或 check_runtime_pins.py 自身
-    # 被修改后，收尾必须跑一次 `python scripts/check_runtime_pins.py`——空表 / 缺平台对
-    # black / mypy / 注释检查三面全隐形（SEV-10），只有该脚本自己能兜住。
+    # P-RUNTIME-PIN：钉定表所在文件（根级 build_exe.py / scripts/check_runtime_pins.py）被修改后，
+    # 收尾必须跑一次 `python scripts/check_runtime_pins.py`——空表 / 缺平台 / 缺槽位对 black /
+    # mypy / 注释检查三面全隐形（SEV-10），只有该脚本自己能兜住。定位策略（根内精确锚定、
+    # 根外末尾分段、跳过工具产物目录）见 _check_runtime_pins_changed 的注释。
     runtime_pin_feedback = _check_runtime_pins_changed(path, segments)
     if runtime_pin_feedback is not None:
         return runtime_pin_feedback
@@ -456,11 +488,13 @@ def run_self_test() -> int:
         mjs_probe.write_text("// probe\n", encoding="utf-8")
         if _expect_rule(check_written_file(mjs_probe), "P-MJS-REGISTER", ".mjs 未登记 ci.yml"):
             failed += 1
-        # P-RUNTIME-PIN：修改 build_exe.py 必须触发收尾检查提醒
+        # P-RUNTIME-PIN：修改 build_exe.py 必须触发收尾检查提醒。走 check_written_file 主入口
+        # 而非直接喂合成 segments——入口自己算 segments 与锚定标志，私有喂入等于把接线回归
+        # （判定函数被摘掉、调用点被删）挡在自检之外（2026-10-17 审查 S6）。
         pin_probe = Path(probe_dir) / "build_exe.py"
         pin_probe.write_text("_PINNED_RUNTIME_SHA256 = {}\n", encoding="utf-8")
         if _expect_rule(
-            _check_runtime_pins_changed(pin_probe, ["build_exe.py"]),
+            check_written_file(pin_probe),
             "P-RUNTIME-PIN",
             "build_exe.py 变更触发 check_runtime_pins.py",
         ):
@@ -470,7 +504,7 @@ def run_self_test() -> int:
         pin_probe2.parent.mkdir(parents=True, exist_ok=True)
         pin_probe2.write_text("# probe\n", encoding="utf-8")
         if _expect_rule(
-            _check_runtime_pins_changed(pin_probe2, ["scripts", "check_runtime_pins.py"]),
+            check_written_file(pin_probe2),
             "P-RUNTIME-PIN",
             "check_runtime_pins.py 变更触发检查",
         ):
@@ -478,8 +512,19 @@ def run_self_test() -> int:
         # P-RUNTIME-PIN：不相关文件不得误触发
         other_file = Path(probe_dir) / "utils.py"
         other_file.write_text("x = 1\n", encoding="utf-8")
-        if _check_runtime_pins_changed(other_file, ["utils.py"]) is not None:
+        if check_written_file(other_file) is not None:
             print("[SELF-TEST FAIL] P-RUNTIME-PIN 误触发：utils.py")
+            failed += 1
+        # P-RUNTIME-PIN 锚定放行面：probe_dir 充当仓库根时，tests/ 下的同名文件不是钉定表本体，
+        # 不得触发。self-test 不 patch 模块级 ROOT（_CI_WORKFLOW 等导入期常量已按真 ROOT 算好，
+        # patch 会让它们指向不存在的工作流），改为显式传 anchored=True + 按 probe_dir 相对路径
+        # 取 segments——segments 是实测值，不是凭空捏造的合成串。
+        nested_probe = Path(probe_dir) / "tests" / "build_exe.py"
+        nested_probe.parent.mkdir(parents=True, exist_ok=True)
+        nested_probe.write_text("x = 1\n", encoding="utf-8")
+        nested_segments = [part.lower() for part in nested_probe.relative_to(probe_dir).parts]
+        if _check_runtime_pins_changed(nested_probe, nested_segments, anchored=True) is not None:
+            print("[SELF-TEST FAIL] P-RUNTIME-PIN 误触发：tests/build_exe.py（锚定态）")
             failed += 1
     finally:
         shutil.rmtree(probe_dir, ignore_errors=True)

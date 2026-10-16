@@ -1625,6 +1625,21 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 > 脚本：`tests/test_{bili,douyin,douyu,huya,twitch}_live_collector.py`（`python file.py <URL> [秒数]`，
 > 需活房间 + 外网，默认人工通道）。
 
+### v4.5.0-dev (2026-10-17) — 发布链运行时钉定新增「在线来源层」：默认 off，且只在清单有独立认证时才允许采用在线值
+
+> 范围：`build_exe.py` 新增「运行时钉定的在线来源」一节（三态开关 + 信任档 + 来源表 + 缓存 + 落点函数）、`--pin-source` 命令行参数、`_pinned_slots()` 接线、`_download_nodejs` 记录本次解析出的版本/文件名、`_verify_gpg_artifact` 增 `strict` 关键字并改为返回 `bool`；`tests/test_build_exe.py` 新增 17 条用例并把 `api.github.com` 并入来源主机白名单。**`_PINNED_RUNTIME_SHA256` 一个值都没改**，默认行为与引入本层前逐字相同。
+
+- **为什么没有按「把硬编码哈希换成运行时拉取」实现**：那张表是「维护者在某时刻从官方渠道抄下来的带外基线」，强度恰恰来自**通道独立**。改成运行时拉取后，期望值与产物走同一条通道——gyan.dev 的 `.sha256` 文档就是它自己服务器发的，`api.github.com` 的 digest 与产物同在 github.com——中间人换掉归档的同时就把清单一起换了，于是「拉清单 → 当期望值 → 比对产物」三步恒等通过。故本层**默认 off**，并把来源分成 `signed` / `advisory` 两档，而不是统一放行。
+- **三态开关（off / verify / adopt）**：`off`（默认）一次网络请求都不发；`verify` 拉取后**只与内置表比对**，一致即印证内置表仍有效、不一致在发布路径 `SystemExit` 并打印在线值供回填，**永不写入**——写进去就等于跳过「人工回填内置表」这道闸口，而那道闸口同时也是「重新确认版本代次 / 体积门禁 / 冒烟」的触发点；`adopt` 才把在线值升格为判据。环境变量为 `DLR_RUNTIME_PIN_SOURCE`，未识别值（如拼写错的 `verfiy`）告警后按 `off`，绝不猜成别的档。
+- **adopt 的准入门是「清单有独立认证」，不是「清单能拉到」**：只有 `trust=signed`（配套分离 GPG 签名 + 已钉 40 位主钥指纹）且**清单本身验签通过**的槽位可采用。验签复用的就是产物侧那段 `_verify_gpg_artifact`（判据只有一份：`GOODSIG`+`VALIDSIG` 且签名钥匙属于钉定指纹那把钥匙），只把 `strict` 置 False 让它改成「不采用」而不是「终止构建」——真正的 fail-closed 闸口仍在产物下载那一步。`advisory` 档与「signed 但没钉指纹」一律拒绝采用并回退内置值。
+- **`strict` 只改「失败怎么处置」，不改判据**：原语义本来就分两类——「取不到签名 / gpg 不可用」在本地路径是留痕跳过、发布路径终止；「指纹不在环内 / BADSIG / 无 VALIDSIG」两侧都终止。本次把两类分别收进 `_skip_or_fail` / `_hard_fail`，判据与报错文案逐字保留（`test_gpg_tool_or_sig_missing_never_passes_silently` 与 `test_gpg_rejects_every_untrustworthy_shape` 未改一条断言）。
+- **形状关只有一处**：在线值必须过 `_SHA256_PATTERN`（64 位小写十六进制）才可能被采用；空响应体 / HTML 错误页 / 长度不足 / 非十六进制 / GitHub digest 的 `sha256:` 前缀，全部在这一处收敛。解析不出即按「没拉到」处理，且失败值**不进缓存**——一次超时不该把整轮构建的在线核对钉死在「拉不到」上。
+- **缓存与刷新频率**：进程内 `(运行时键, 槽位) → (时刻, 值)`，TTL 默认 24h（`DLR_PIN_CACHE_TTL`，设 0 = 每次重取），拉取超时 `DLR_PIN_FETCH_TIMEOUT` 默认 30s（清单只有几 KB，不该按产物下载的 180s 给）。一轮构建远短于 24h，故它实际只在「同一进程多次问同一槽位」时生效。跨进程磁盘缓存**刻意未做**：那会落一份无人复核的状态文件，反而给「陈旧值被当成刚拉的」留了通道。
+- **node 清单必须按本次实际版本拼 URL**：下载点是从 `nodejs.org/dist/index.json` 选出的最新 LTS，版本每次构建都可能不同。故 `_download_nodejs` 在 `_download_file` 之前把版本与文件名写进 `_NODE_RESOLVED_VERSION` / `_NODE_RESOLVED_FILENAME`，来源表用 `{version}` / `{filename}` 占位；版本尚未解析时**显式跳过**而不是拼一条恒 404 的残缺 URL——那会让报错指向「上游挂了」，把真因藏起来。
+- **待补（本条目明确标注未填）**：`_PIN_SOURCE_TABLE` 里 node 槽的 `fingerprint` 仍是空串 → 该槽**不可 adopt**（有意的 fail-closed）。填 Node.js 发布钥匙的完整 40 位主钥指纹后该槽才会在 `adopt` 下真正生效。macOS 两槽（evermeet 不公布哈希）未登记来源，维持官方签名档，`verify`/`adopt` 都不会去打扰它们。
+- **门禁读数（改后复跑）**：`black --check` 两个改动文件 unchanged；`isort --check-only` rc=0；`mypy` 不带路径 rc=0；`scripts/check_annotations.py` rc=0；`scripts/check_runtime_pins.py` rc=0 且 `--strict` rc=0；`pytest tests/test_build_exe.py tests/test_check_runtime_pins.py` **142 passed**（改动前 125，新增 17 条）。两个改动文件换行形态复核均为纯 CRLF（LF-only 计数 0）。
+- **端到端真机验证（DoD 第 2 步）**：**未执行**——默认 off 路径零行为变化，非默认路径（`--pin-source verify/adopt`）需外网访问 nodejs.org / gyan.dev / api.github.com 且本机需装 gpg；17 条新用例全部离线打桩。交回用户的动作：补齐 node 发布钥匙指纹后，建议在本机实跑一次 `python build_exe.py --pin-source verify --no-zip --no-runtime` 核对日志。
+
 ### v4.5.0-dev (2026-10-04) — GUI 界面现代化阶段6：字号层级重排 + 全局缩放设置 + 过渡动效（`src/ui_scale.py` / `src/ui_motion.py`）
 
 > 范围：新增 `src/ui_scale.py`（语义字号 token + 间距栅格 + 缩放档位 + 小屏降档 + 持久化）与 `src/ui_motion.py`（off/subtle/full 三档 + 插值原语 + 系统「关闭动画」感知 + 持久化）；`src/ui_theme.py` 的 ttk padding / rowheight / 表格字体改由 ScaleProfile 派生、ttk 主题名带档位段；`src/ui_kit.py` 的字体派生样式缓存键加档位段、补`restyle_fonts` 重指与 `slide_in`/`scale_in_window`/`blend` 过渡原语、`DataTable.sync` 返回变化行供高亮反馈；`gui.py` 的 `Fonts` 改 token 驱动 + 原地改字号、侧栏底部四项偏好重排 2×2、新增缩放/动效两个菜单与回调、窗口与侧栏几何随档位缩放并 clamp 到屏幕；`config/config.ini` 补两个键与注释；四语目录各 +14 条并重编 `.mo`（1048 条）。

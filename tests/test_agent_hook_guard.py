@@ -344,7 +344,8 @@ def test_runtime_pin_unrelated_file_does_not_trigger(tmp_path: Path) -> None:
     probe = tmp_path / "utils.py"
     probe.write_text("x = 1\n", encoding="utf-8")
     assert guard._check_runtime_pins_changed(probe, ["utils.py"]) is None
-    # 同名测试文件也不得触发（路径段精确匹配）
+    # 同名测试文件也不得触发：末段是 `test_build_exe.py`，与 `build_exe.py` 不全等
+    # （判据是末段文件名全等，不是「包含 build_exe 字样」的子串匹配）
     test_probe = tmp_path / "test_build_exe.py"
     test_probe.write_text("# test\n", encoding="utf-8")
     assert guard._check_runtime_pins_changed(test_probe, ["tests", "test_build_exe.py"]) is None
@@ -369,6 +370,48 @@ def test_runtime_pin_via_cli_post_event(tmp_path: Path) -> None:
     specific = payload["hookSpecificOutput"]
     assert specific["hookEventName"] == "PostToolUse"
     assert "P-RUNTIME-PIN" in specific["feedback"]
+
+
+def test_runtime_pin_anchored_positions_require_exact_location(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # 锚定放行面（2026-10-17 审查 S1）：把 ROOT 指到 tmp_path 即可在「根内」分支上实测，
+    # 不必往仓库里落探针文件。规范位置（根级 build_exe.py、scripts/check_runtime_pins.py）
+    # 必须命中；tests/、docs/ 下的同名文件、dist/ 产物目录里的同名文件与 .pyi 变体都不是
+    # 钉定表本体，一律放行——误报会训练 agent 忽略反馈，放行面与命中面同样承重。
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    for rel in ("build_exe.py", "scripts/check_runtime_pins.py"):
+        probe = tmp_path / rel
+        probe.parent.mkdir(parents=True, exist_ok=True)
+        probe.write_text("x = 1\n", encoding="utf-8")
+        verdict = guard.check_written_file(probe)
+        assert verdict is not None and verdict[0] == "P-RUNTIME-PIN", rel
+    for rel in ("tests/build_exe.py", "docs/scripts/check_runtime_pins.py", "dist/build_exe.py", "build_exe.pyi"):
+        probe = tmp_path / rel
+        probe.parent.mkdir(parents=True, exist_ok=True)
+        probe.write_text("x = 1\n", encoding="utf-8")
+        assert guard.check_written_file(probe) is None, rel
+
+
+def test_runtime_pin_outside_root_falls_back_to_trailing_match(tmp_path: Path) -> None:
+    # 跨检出位置不失效：根外路径（其他工作副本、临时目录）看不到仓库根，只能退回末尾分段匹配，
+    # 否则换个检出位置 Hook 就静默失效——这正是「与检出位置无关」的本意。
+    for rel in ("build_exe.py", "anywhere/scripts/check_runtime_pins.py", "a/b/c/build_exe.py"):
+        probe = tmp_path / rel
+        probe.parent.mkdir(parents=True, exist_ok=True)
+        probe.write_text("x = 1\n", encoding="utf-8")
+        verdict = guard.check_written_file(probe)
+        assert verdict is not None and verdict[0] == "P-RUNTIME-PIN", rel
+
+
+def test_runtime_pin_matches_filename_case_insensitively(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # 大小写口径（2026-10-17 审查 S2）：segments 已小写化，`BUILD_EXE.PY` 不得再因 stem 未
+    # lower 而漏报；同时 .pyi 变体仍放行（末段全等已蕴含后缀判定，无需另判 suffix）。
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    probe = tmp_path / "BUILD_EXE.PY"
+    probe.write_text("x = 1\n", encoding="utf-8")
+    assert guard.check_written_file(probe) is not None
+    stub = tmp_path / "build_exe.pyi"
+    stub.write_text("x = 1\n", encoding="utf-8")
+    assert guard.check_written_file(stub) is None
 
 
 def test_mutation_proof_rules_are_load_bearing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -396,3 +439,15 @@ def test_mutation_proof_rules_are_load_bearing(tmp_path: Path, monkeypatch: pyte
     assert guard.check_written_file(probe) is not None
     monkeypatch.setattr(guard, "_MUTATION_MARK", "NO-SUCH-MARKER")
     assert guard.check_written_file(probe) is None
+    monkeypatch.undo()
+
+    # ⑤ 根级锚定判据被拆（_is_inside_root 恒 False）→ 嵌套同名文件的放行面锁必须失效，
+    # 否则说明锚定只是装饰（2026-10-17 审查 S1/S7：P-RUNTIME-PIN 的判据同样要可变异证明）
+    monkeypatch.setattr(guard, "ROOT", tmp_path)
+    nested = tmp_path / "tests" / "build_exe.py"
+    nested.parent.mkdir(parents=True)
+    nested.write_text("x = 1\n")
+    assert guard.check_written_file(nested) is None
+    monkeypatch.setattr(guard, "_is_inside_root", lambda path: False)
+    assert guard.check_written_file(nested) is not None
+    monkeypatch.undo()
