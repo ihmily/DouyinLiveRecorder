@@ -7,8 +7,10 @@
 #   · 槽位清单 = 提案 §5.2 十二槽 + on_primary：深色/高对比主题下主按钮填充是亮蓝，按钮标签
 #     需要近黑前景，`surface`（面板底色）在深色主题里兼作按钮前景的语义不成立，故单列一槽。
 #     浅色主题 on_primary == surface（#FFFFFF），该槽在浅色下是中性的。
-#   · 品牌色沿用现有 Colors 的品牌蓝色相：light 的 primary 取 #4358E8（同色相加深）——
-#     原 #4F6DF5 与白色标签对比度实测 4.34:1，低于正文 AA 4.5:1；同 hue 加深后 5.53:1。
+#   · [2026-10-17 视觉改版] 品牌色由蓝转暖赭橙（对齐 docs/gui-redesign 设计语言）：
+#     light primary #B5573A（白字 4.78:1）、dark primary #B85A3F（白字 4.59:1），
+#     深色 hover 取更暗的 #A8502F——深色主题下 hover 若调亮会跌破白字 4.5 契约。
+#     [历史注] 原品牌蓝 #4F6DF5 白字实测 4.34:1 低于正文 AA，曾加深为 #4358E8（5.53:1）。
 #   · 本模块不创建窗口、不依赖显示器：import 期只定义数据与纯函数，Tk 相关工作全部发生在
 #     ThemeManager.apply(root) 调用期（无头 Linux CI 可安全 import，`import gui` 链路不受影响）。
 #   · 持久化走 config.ini [GUI] gui_theme（键名无 configparser 分隔符 `=` / `:`），
@@ -66,35 +68,39 @@ DEFAULT_THEME = "dark"
 # 三套主题的 token 取值。全部取值经 CONTRAST_REQUIREMENTS 机检达标
 # （2026-09-29 迭代定稿，迭代脚本已删；tests/test_ui_theme.py 持续回归）。
 THEMES: dict[str, dict[str, str]] = {
+    # [2026-10-17 视觉改版] 暖中性 + 赭橙主色（设计语言见 docs/gui-redesign）。
+    # border 不得取浅灰：CONTRAST_REQUIREMENTS 强制 border 对两种底 ≥3.0（非文本
+    # WCAG 1.4.11），故浅色主题边框落到暖灰 #7A766F 一档；成功/危险/警告语义色
+    # 沿用原值（对比度契约已锁定，改版只动品牌色与中性色）。
     "light": {
         "surface": "#FFFFFF",
-        "surface_alt": "#F4F6FB",
-        "border": "#848DA0",
+        "surface_alt": "#F7F7F5",
+        "border": "#7A766F",
         "on_primary": "#FFFFFF",
-        "text": "#1E293B",
-        "text_muted": "#5D6C84",
-        "primary": "#4358E8",
-        "primary_hover": "#3247C9",
+        "text": "#1A1A1A",
+        "text_muted": "#5C5C5C",
+        "primary": "#B5573A",
+        "primary_hover": "#9C4A2C",
         "success": "#15803D",
         "danger": "#DC2626",
         "warning": "#C2690A",
-        "disabled_bg": "#E2E6EE",
-        "disabled_fg": "#6E7686",
+        "disabled_bg": "#E8E5E0",
+        "disabled_fg": "#6E6A63",
     },
     "dark": {
-        "surface": "#171A23",
-        "surface_alt": "#0F1117",
-        "border": "#626C84",
+        "surface": "#262624",
+        "surface_alt": "#1B1B19",
+        "border": "#8F8B84",
         "on_primary": "#FFFFFF",
-        "text": "#E2E8F0",
-        "text_muted": "#8B93A7",
-        "primary": "#4463F0",
-        "primary_hover": "#5068F2",
+        "text": "#ECECEA",
+        "text_muted": "#A3A3A0",
+        "primary": "#B85A3F",
+        "primary_hover": "#A8502F",
         "success": "#15803D",
         "danger": "#DC2626",
         "warning": "#D97706",
-        "disabled_bg": "#262B3A",
-        "disabled_fg": "#7E8798",
+        "disabled_bg": "#33322F",
+        "disabled_fg": "#8F8B84",
     },
     "high_contrast": {
         "surface": "#000000",
@@ -246,7 +252,10 @@ def load_theme_preference(config_file: str | Path) -> str:
 def save_theme_preference(config_file: str | Path, theme_id: str) -> bool:
     # 持久化主题偏好。经 update_or_append_config_line：行级替换优先、缺键/缺节补建，
     # 注释与节顺序保留、原子写。False = 文件不存在等不可写情形，调用方告警但不阻断内存态切换。
-    if theme_id not in THEME_IDS:
+    # "" 是「清空显式偏好 = 跟随系统」的哨兵：与 load_theme_preference 返回 ""（未设置）同一口径，
+    # 也与 save_scale_preference 接受 ""（=自动）一致。gui 选「跟随系统」时落空值而非删键，
+    # 既保留注释与节顺序，又让下次启动 load 回退到外观跟随。其余未知 id 仍按编程错误拦截。
+    if theme_id not in ("", *THEME_IDS):
         raise ValueError(f"未知主题 id: {theme_id!r}（合法值: {THEME_IDS}）")
     return update_or_append_config_line(config_file, GUI_SECTION, THEME_KEY, theme_id)
 

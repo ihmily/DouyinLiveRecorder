@@ -169,6 +169,17 @@ class TestPersistence:
         with pytest.raises(ValueError):
             save_theme_preference(cfg, "neon")
 
+    def test_save_empty_clears_preference(self, tmp_path: Path) -> None:
+        # "" 是「跟随系统 / 清空显式偏好」的哨兵：save 必须接受并落空值，
+        # 与 load_theme_preference 返回 ""（未设置）同一口径、与 save_scale_preference
+        # 接受 ""（=自动）一致。gui 选「跟随系统」时走这条路径，历史上因 save 拒绝 "" 而写回失败。
+        cfg = _make_config(tmp_path, "[GUI]\ngui_theme = dark\n")
+        assert save_theme_preference(cfg, "") is True
+        # 读侧把空值按「未设置」处理 → 下次启动回退到外观跟随
+        assert load_theme_preference(cfg) == ""
+        text = cfg.read_text(encoding="utf-8-sig")
+        assert "gui_theme =" in text  # 落空值而非删键，保留键名与节顺序
+
     def test_repeated_save_keeps_single_line(self, tmp_path: Path) -> None:
         # update 优先于 append：重复保存不得堆积重复键（configparser 读到重复 option 抛错）
         cfg = _make_config(tmp_path, "[录制设置]\n")

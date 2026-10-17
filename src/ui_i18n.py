@@ -40,7 +40,8 @@ def T(msgid: str, **kwargs: object) -> Translatable:
 
 
 # 应用模式语义：
-#   "text"            → widget.configure(text=...)（Button/Label 等常规文本选项）
+#   "text"            → Tk: widget.configure(text=...)（Button/Label 等常规文本选项）
+#   "qt"              → Qt: widget.setText(...)（PySide6 窗口层，2026-10-17 新增）
 #   "title"           → widget.title(...)（Tk 窗口标题是方法不是 configure 选项）
 #   "heading:<col_id>" → widget.heading(col_id, text=...)（DataTable 的 Treeview 表头）
 _LOCK = threading.Lock()
@@ -57,9 +58,17 @@ def register(widget: object, mode: str, trans: Translatable) -> None:
 
 
 def apply_title(window: object, trans: Translatable) -> None:
-    # Tk 窗口标题的接线入口（标题是方法不是 configure 选项）：登记 + 立即按当前语言设置。
+    # 窗口标题的接线入口（标题是方法不是 configure/setText 选项）：登记 + 立即设置。
     register(window, "title", trans)
     cast("Any", window).title(trans.render())
+
+
+# Qt 侧（src/gui_qt/*）的文本接线入口：登记 + 立即按当前语言设置。
+# 为什么另开一个 mode 而不是复用 "text"：Tk 是 configure(text=...)、Qt 是 setText(...)，
+# 两个 API 不同形，复用一个 mode 就得在 retranslate_all 里做 isinstance 试探。
+def set_text(widget: object, trans: Translatable) -> None:
+    register(widget, "qt", trans)
+    cast("Any", widget).setText(trans.render())
 
 
 def registered_count() -> int:
@@ -80,15 +89,24 @@ def retranslate_all() -> int:
         widget = ref()
         if widget is None:
             continue
-        alive.append((ref, mode, trans))
         value = trans.render()
-        if mode == "title":
-            # Tk 窗口标题走方法；tk.Wm.title(string=...) 返回值忽略（cast 收敛存根类型）
-            cast("Any", widget).title(value)
-        elif mode.startswith("heading:"):
-            cast("Any", widget).heading(mode.split(":", 1)[1], text=value)
-        else:
-            cast("Any", widget).configure(**{mode: value})
+        try:
+            if mode == "title":
+                cast("Any", widget).title(value)  # type: ignore[attr-defined]
+            elif mode == "qt":
+                cast("Any", widget).setText(value)
+            elif mode.startswith("heading:"):
+                cast("Any", widget).heading(mode.split(":", 1)[1], text=value)
+            else:
+                cast("Any", widget).configure(**{mode: value})
+        except RuntimeError:
+            # Qt 的控件被 C++ 侧销毁后，Python 包装对象**仍然存活**（弱引用不会失效），
+            # 任何属性访问都抛 RuntimeError("Internal C++ object already deleted")。
+            # 这与 Tk 控件「随容器销毁即失活」不同：不接住这个异常，一条死条目就会让
+            # 整轮回填在半途崩掉，剩下的控件全都停在旧语言上（表现为「切完语言一半没变」）。
+            # 判定为死条目并剔除，与 Tk 侧「弱引用失效」走同一条清理路径。
+            continue
+        alive.append((ref, mode, trans))
         applied += 1
     with _LOCK:
         _ENTRIES[:] = alive

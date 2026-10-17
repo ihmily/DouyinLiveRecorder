@@ -155,6 +155,8 @@ Flextv/PopkonTV/Twitch/LiveMe/Faceit 共 9 个海外平台的解析分支全部�
 
 2026-10-03 阶段5 复测（同口径，`build_exe.py --smoke --no-zip --no-runtime` 产物，Windows x64，Tk 9.0 / Python 3.14.7；此为阶段0 缺失的**改造后总基线**，此前 dist 一直为空无可比总数）：**总计 91.81 MB / 224 个文件**。按包聚合大头：根目录 4 个 exe 32.28MB、numpy（.libs+包本体）26.29MB、`python314.dll` 6.48MB、`libcrypto-3.dll` 5.74MB、`tcl90.dll`+`tcl9tk90.dll` 5.28MB（Tcl/Tk）、PIL 2.52MB、`libssl-3.dll` 1.25MB、Crypto 1.54MB；`--strict` 式泄漏检查「开发/测试工具链泄漏：未发现」。customtkinter 摘除后产物内**零 CTk 条目**（`_internal/` 逐项核对）；venv 中 fastapi/pydantic 残留未卸载（用户终端动作），但零 import 未进包，读数不受影响。
 
+2026-10-17 GUI 迁移 PySide6 复测（同口径，`build_exe.py --no-zip --no-runtime` 产物，Windows x64 / Python 3.14.8 / PyInstaller 6.x）：**总计 192.46 MB / 370 个文件 → 剪除 Qt 死重后 153.21 MB / 359 个文件**（较 2026-10-03 基线 +61.4MB，落在方案接受的 +50~70MB 区间）。PySide6 聚合 93.24MB/145 文件 → 53.99MB/134 文件；剪除明细（39.25MB，`build_exe.QT_BLOAT_FILES` 11 项）：`opengl32sw.dll` 19.68MB（Mesa 软件 GL，hook 无条件收）、`Qt6Quick` 6.44 + `Qt6Qml` 5.14 + `Qt6QmlModels` 0.97 + `Qt6QmlMeta` 0.15 + `Qt6QmlWorkerScript` 0.08（链入口 = platforminputcontexts 的 `qtvirtualkeyboardplugin.dll`，一并剪）、`Qt6Pdf` 4.41 + `imageformats/qpdf.dll`（本仓不渲染 PDF）、`Qt6OpenGL` 1.90、`Qt6VirtualKeyboard` 0.40。判据：对 `_internal/PySide6/` 全部 dll/pyd 做链接依赖扫描，剪除项零反向引用、删除后无未解析导入；冻结 GUI exe 实跑 9s 存活且窗口标题正常。`Qt6Network`+`QtNetwork.pyd`（约 2.7MB）被 tls 插件链接、刻意保留；Tcl/Tk 5.28MB 仍在（gui.py 顶层 `import tkinter`——迁移期旧版 LiveRecorderGUI 与崩溃兜底弹窗仍保留在本模块，旧版退役后可再评估）。`--strict` 式泄漏检查「未发现」。
+
 ## 与根文件的分工
 
 - 根文件保留条目的**约束与结论**并就地链接本文件对应小节；本文件只保留**支撑该结论的原始读数**，一字未改。

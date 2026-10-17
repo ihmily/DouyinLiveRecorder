@@ -3599,3 +3599,144 @@ msgstr "自定义字体加载失败，回落到默认字体: {path}"
 
 msgid "选择字体文件"
 msgstr "选择字体文件"
+
+msgid "URL 配置编辑区 (config/URL_config.ini)"
+msgstr "URL 配置编辑区 (config/URL_config.ini)"
+
+msgid "config.ini 已被外部修改，而你有未保存的编辑；保存时会先询问是否覆盖"
+msgstr "config.ini 已被外部修改，而你有未保存的编辑；保存时会先询问是否覆盖"
+
+msgid "config/URL_config.ini 中没有可录制的直播间地址。\n请先在「URL 配置」中添加至少一个地址。"
+msgstr "config/URL_config.ini 中没有可录制的直播间地址。\n请先在「URL 配置」中添加至少一个地址。"
+
+msgid "{lang} 的翻译目录不可用，已回退为 {effective}"
+msgstr "{lang} 的翻译目录不可用，已回退为 {effective}"
+
+msgid "人气"
+msgstr "人气"
+
+msgid "保存配置"
+msgstr "保存配置"
+
+msgid "同等"
+msgstr "同等"
+
+msgid "启动录制后，将自动检测各直播间的实际画质是否与设置一致"
+msgstr "启动录制后，将自动检测各直播间的实际画质是否与设置一致"
+
+msgid "启动录制并在 config.ini 开启「是否弹幕监控(是/否)」后，支持弹幕的平台将显示实时弹幕"
+msgstr "启动录制并在 config.ini 开启「是否弹幕监控(是/否)」后，支持弹幕的平台将显示实时弹幕"
+
+msgid "完全退出"
+msgstr "完全退出"
+
+msgid "实时弹幕"
+msgstr "实时弹幕"
+
+msgid "弹幕总数"
+msgstr "弹幕总数"
+
+msgid "弹幕数"
+msgstr "弹幕数"
+
+msgid "录制直播间"
+msgstr "录制直播间"
+
+msgid "待机"
+msgstr "待机"
+
+msgid "房间统计"
+msgstr "房间统计"
+
+msgid "控制台"
+msgstr "控制台"
+
+msgid "日志超过行数上限将自动截断"
+msgstr "日志超过行数上限将自动截断"
+
+msgid "显示主窗口"
+msgstr "显示主窗口"
+
+msgid "暂无弹幕数据"
+msgstr "暂无弹幕数据"
+
+msgid "暂无弹幕监控数据"
+msgstr "暂无弹幕监控数据"
+
+msgid "暂无录制中的直播间"
+msgstr "暂无录制中的直播间"
+
+msgid "条已省略"
+msgstr "条已省略"
+
+msgid "正常"
+msgstr "正常"
+
+msgid "每行一个直播链接，支持 # 开头的注释行；外部修改文件后将自动重新加载"
+msgstr "每行一个直播链接，支持 # 开头的注释行；外部修改文件后将自动重新加载"
+
+msgid "清空"
+msgstr "清空"
+
+msgid "清空日志"
+msgstr "清空日志"
+
+msgid "画质监控"
+msgstr "画质监控"
+
+msgid "界面主题已切换，但配置写回失败"
+msgstr "界面主题已切换，但配置写回失败"
+
+msgid "界面主题已切换，但配置写回失败: {err}"
+msgstr "界面主题已切换，但配置写回失败: {err}"
+
+msgid "界面字体已调整，但配置写回失败"
+msgstr "界面字体已调整，但配置写回失败"
+
+msgid "界面字体已调整，但配置写回失败: {err}"
+msgstr "界面字体已调整，但配置写回失败: {err}"
+
+msgid "界面缩放已调整，但配置写回失败"
+msgstr "界面缩放已调整，但配置写回失败"
+
+msgid "界面缩放已调整，但配置写回失败: {err}"
+msgstr "界面缩放已调整，但配置写回失败: {err}"
+
+msgid "界面重译失败（当前语言 {lang}）: {err}"
+msgstr "界面重译失败（当前语言 {lang}）: {err}"
+
+msgid "直播录制 · 控制台"
+msgstr "直播录制 · 控制台"
+
+msgid "直播间"
+msgstr "直播间"
+
+msgid "立即刷新"
+msgstr "立即刷新"
+
+msgid "语言已切换为 {lang}，但配置写回失败"
+msgstr "语言已切换为 {lang}，但配置写回失败"
+
+msgid "语言已切换，但配置写回失败: {err}"
+msgstr "语言已切换，但配置写回失败: {err}"
+
+msgid "说明"
+msgstr "说明"
+
+msgid "运行日志 (main.py 输出)"
+msgstr "运行日志 (main.py 输出)"
+
+msgid "速率"
+msgstr "速率"
+
+msgid "配置文件内容 (config/config.ini)"
+msgstr "配置文件内容 (config/config.ini)"
+
+msgid "重新读取"
+msgstr "重新读取"
+
+msgid "降级"
+msgstr "降级"
+
+msgid "降级时刻"
+msgstr "降级时刻"

@@ -378,10 +378,13 @@ else:
 @final
 class Colors:
     # 品牌主色
-    PRIMARY = "#4F6DF5"
-    PRIMARY_HOVER = "#3D5BE0"
-    PRIMARY_SOFT_LIGHT = "#E8EDFE"
-    PRIMARY_SOFT_DARK = "#232B45"
+    # [2026-10-17 视觉改版] 由品牌蓝转暖赭橙（设计语言见 docs/gui-redesign），
+    # 与 src/ui_theme.THEMES 的 primary/primary_hover 同值同源——两处同为品牌色
+    # 落点，改一处必须同改另一处（蓝→橙改版即按此口径成对修改）。
+    PRIMARY = "#B5573A"
+    PRIMARY_HOVER = "#9C4A2C"
+    PRIMARY_SOFT_LIGHT = "#F5E9E4"
+    PRIMARY_SOFT_DARK = "#3A2B25"
     # 语义色
     # [2026-10-03 阶段4] SUCCESS 从 #16A34A 加深到 #15803D：与 ui_theme 的 success token
     # 同批统一——ttk 变体按钮的白字标签要达正文 AA 4.5（白压 #16A34A 实测 3.30），
@@ -392,18 +395,20 @@ class Colors:
     DANGER_HOVER = "#B91C1C"
     WARNING = "#D97706"
     # 中性色（深色模式自动映射）
-    BG_LIGHT = "#F4F6FB"
-    BG_DARK = "#0F1117"
+    # [2026-10-17 视觉改版] 冷灰蓝 → 暖灰系（与 ui_theme 的 surface/surface_alt/
+    # text/text_muted 同批换色）；本组是品牌基调声明，控件实际着色走 ui_theme 槽位。
+    BG_LIGHT = "#F7F7F5"
+    BG_DARK = "#1B1B19"
     CARD_LIGHT = "#FFFFFF"
-    CARD_DARK = "#171A23"
-    SIDEBAR_LIGHT = "#FFFFFF"
-    SIDEBAR_DARK = "#12151D"
-    BORDER_LIGHT = "#E5E8F0"
-    BORDER_DARK = "#262B3A"
-    TEXT_LIGHT = "#1E293B"
-    TEXT_DARK = "#E2E8F0"
-    MUTED_LIGHT = "#64748B"
-    MUTED_DARK = "#8B93A7"
+    CARD_DARK = "#262624"
+    SIDEBAR_LIGHT = "#F0EFEC"
+    SIDEBAR_DARK = "#171716"
+    BORDER_LIGHT = "#E5E2DC"
+    BORDER_DARK = "#33322F"
+    TEXT_LIGHT = "#1A1A1A"
+    TEXT_DARK = "#ECECEA"
+    MUTED_LIGHT = "#5C5C5C"
+    MUTED_DARK = "#A3A3A0"
     # 日志终端（两种主题下均保持深色终端风格）
     TERMINAL_BG = "#0D1117"
     TERMINAL_FG = "#7DA7FF"
@@ -5199,9 +5204,25 @@ def _bootstrap_error_sink(exc: BaseException) -> None:
         pass
 
 
-# 程序入口：初始化主窗口与系统托盘，并按平台进入主事件循环。
+# 程序入口。
+#
+# [2026-10-17 GUI 重设计] 默认入口已切到 src.gui_qt.app.main()（PySide6 窗口层）：
+# 设计稿 docs/gui-redesign/index.html 要求 18/24px 圆角卡片、柔和投影与弹簧动效，
+# ttk 无法原生实现。本文件里的 tkinter 版 LiveRecorderGUI 在**迁移期**保留：
+# tests/test_gui_*.py 的九份用例（停止/退出单飞、状态行 i18n 正则、边缘裁切、
+# 原子保存、tail 健壮性、重译……）都以 AST 静态锁或 subprocess 驱动钉在本模块上，
+# 逐个迁移完成前删除会直接断掉这些回归锁。退役计划见
+# docs/worklog/PROPOSAL_2026-10-17_gui-pyside6-redesign.md §5。
+# 回退方式：把下面两行换成 `root = tk.Tk(); _legacy_main(root)` 即可。
 def main() -> None:
-    root = tk.Tk()
+    from src.gui_qt.app import main as _qt_main
+
+    _qt_main()
+    return
+
+
+# tkinter 版入口（迁移期保留，供回归用例与回退使用）。
+def _legacy_main(root: "tk.Tk") -> None:
     app = LiveRecorderGUI(root)
 
     tray = SystemTray(app)

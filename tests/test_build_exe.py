@@ -1523,6 +1523,43 @@ def test_i18n_datas_skip_po_sources_but_keep_runtime_formats() -> None:
     assert all(dest == "i18n" or dest.startswith("i18n/") for _src, dest in entries)
 
 
+def test_qt_bloat_files_stay_inside_the_pyside6_dir() -> None:
+    # 剪除清单是「按文件名删」，一旦有人写进 `../` 或绝对形态，剪除就会落到 _internal 之外
+    # （甚至仓库里）——体积门禁查不出来，只表现为「构建后某些文件神秘消失」。
+    for rel in build_exe.QT_BLOAT_FILES:
+        assert not rel.startswith(("/", "\\")) and ":" not in rel, f"剪除项不得为绝对路径：{rel!r}"
+        parts = Path(rel).parts
+        assert ".." not in parts, f"剪除项不得含路径穿越：{rel!r}"
+        # 只允许「根目录 DLL」与「plugins/<类型>/<插件>」两种形态：Qt 的插件永远在这两层下，
+        # 更深的路径说明清单写错了（剪不到真正的目标会在体积报告里表现为「剪了但没降」）。
+        assert len(parts) in (1, 3) and (len(parts) == 1 or parts[0] == "plugins"), f"剪除项形态异常：{rel!r}"
+    # 反向：最大的那一项必须在列（删掉它体积会悄悄回弹约 20MB）
+    assert "opengl32sw.dll" in build_exe.QT_BLOAT_FILES
+
+
+def test_prune_qt_bloat_deletes_only_listed_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # 剪除是**文件删除**，比 excludes 危险一档：误删一个真在用的 Qt DLL，冻结产物只在运行时炸。
+    # 故这里钉两件事——命中项必删、未命中项（含同目录其它 DLL）必留。
+    qt = tmp_path / build_exe.APP_NAME / "_internal" / "PySide6"
+    (qt / "plugins" / "imageformats").mkdir(parents=True)
+    listed = []
+    for rel in build_exe.QT_BLOAT_FILES:
+        target = qt / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("x", encoding="utf-8")
+        listed.append(target)
+    keep = qt / "Qt6Widgets.dll"
+    keep.write_text("x", encoding="utf-8")
+    keep_plugin = qt / "plugins" / "imageformats" / "qjpeg.dll"
+    keep_plugin.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(build_exe, "RELEASE_DIR", tmp_path / build_exe.APP_NAME)
+
+    build_exe.prune_qt_bloat()
+
+    assert not any(p.exists() for p in listed), "剪除清单里的文件必须被删掉"
+    assert keep.exists() and keep_plugin.exists(), "未列入清单的文件/插件不得被误删"
+
+
 def test_zip_release_dir_prefixes_members_with_app_name(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # 压缩接缝换成自建 zipfile 后，成员名前缀必须与旧 shutil.make_archive(root_dir=DIST,
     # base_dir=APP_NAME) 同构——_assert_zip_has_no_runtime_artifacts 靠这个前缀判运行期产物，

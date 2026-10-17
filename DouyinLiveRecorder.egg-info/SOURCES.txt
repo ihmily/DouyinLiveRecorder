@@ -41,7 +41,11 @@ src/stream.py
 src/stream_select.py
 src/sync_http.py
 src/ttwid.py
+src/ui_fonts.py
+src/ui_i18n.py
 src/ui_kit.py
+src/ui_motion.py
+src/ui_scale.py
 src/ui_theme.py
 src/utils.py
 src/video_postprocess.py
@@ -115,7 +119,11 @@ tests/test_ffmpeg_proc.py
 tests/test_ffmpeg_reconnect_args.py
 tests/test_frontend_quality_ui.py
 tests/test_frontend_regression_gates.py
+tests/test_gui_language_retranslate.py
 tests/test_gui_monitor.py
+tests/test_gui_qt_theme.py
+tests/test_gui_qt_window.py
+tests/test_gui_right_edge_fit.py
 tests/test_gui_save_atomic.py
 tests/test_gui_status_pattern_i18n.py
 tests/test_gui_stop_exit_singleflight.py
@@ -187,7 +195,11 @@ tests/test_test_hygiene.py
 tests/test_tiktok_hls_quality_index.py
 tests/test_ttwid.py
 tests/test_twitch_live_collector.py
+tests/test_ui_fonts.py
+tests/test_ui_i18n.py
 tests/test_ui_kit.py
+tests/test_ui_motion.py
+tests/test_ui_scale.py
 tests/test_ui_theme.py
 tests/test_utils.py
 tests/test_video_postprocess.py
@@ -200,3 +212,4 @@ tests/test_web_config_locks.py
 tests/test_web_config_secret_mask.py
 tests/test_web_tray.py
 tests/test_ws_client.py
+tests/test_xhs_live_links.py

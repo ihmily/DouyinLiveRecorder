@@ -113,6 +113,37 @@ BLOAT_EXCLUDES: tuple[str, ...] = (
     "pluggy",
 )
 
+# Qt 死重清理（2026-10-17 GUI 迁移 PySide6 后实测）：PyInstaller 的 hook-PySide6.py 按「插件类型
+# 整目录」收集 Qt 插件（hook 只按类型过滤、不逐个判断），插件的链接依赖再被递归带进包，于是
+# 几个用不到的 Qt 模块被间接拖入产物。判据与 BLOAT_EXCLUDES 同源（**能指出它在产物里 + 运行期
+# 不可达**），但 excludes 只对模块生效、管不到 hook 收集的 DLL，故只能在 COLLECT 之后按文件名删。
+# 实测判据：对 _internal/PySide6/ 下全部 dll/pyd 做链接依赖扫描，下列文件**零反向引用**（除彼此
+# 与那两个插件本体之外）；正向扫描确认删掉后不出现任何无法解析的导入。
+QT_BLOAT_FILES: tuple[str, ...] = (
+    # Mesa 软件 OpenGL（19.68MB，产物内最大单文件）：hook 的 collect_extra_binaries 无条件收它
+    # （_collect_all_or_none(['opengl32sw.dll'])），不看应用是否真用 OpenGL。本仓 GUI 是纯
+    # QtWidgets，走 Qt6Gui 的 raster 后端，不创建任何 GL 上下文。
+    "opengl32sw.dll",
+    # Qt VirtualKeyboard 是 Qml/Quick 三个 DLL 进包的唯一入口链：
+    # 插件 qtvirtualkeyboardplugin.dll（platforminputcontexts 整目录收集）→ Qt6VirtualKeyboard
+    # → Qt6Quick → Qt6Qml / Qt6QmlModels / Qt6QmlMeta / Qt6QmlWorkerScript / Qt6OpenGL。
+    # 本仓无虚拟键盘用法，整条链一并剪掉（合计约 15.1MB）。
+    "Qt6VirtualKeyboard.dll",
+    "Qt6Quick.dll",
+    "Qt6Qml.dll",
+    "Qt6QmlModels.dll",
+    "Qt6QmlMeta.dll",
+    "Qt6QmlWorkerScript.dll",
+    # 只被 Qt6Quick 链接（QtWidgets 不链它），1.90MB。
+    "Qt6OpenGL.dll",
+    # 只被 imageformats/qpdf.dll 链接，本仓不渲染 PDF，4.41MB。
+    "Qt6Pdf.dll",
+    # 两个插件本体：删了它们才不会在运行时 dlopen 上面那批 DLL（插件是运行时按目录尝试加载的，
+    # 只删 DLL 不删插件，Qt 仍会去加载插件并因缺依赖报错）。
+    "plugins/imageformats/qpdf.dll",
+    "plugins/platforminputcontexts/qtvirtualkeyboardplugin.dll",
+)
+
 
 # i18n 资源清单（替代整目录拷贝）：运行时只消费 .mo / .json / .yaml（见 i18n.py 的加载优先级），
 # *.po 是翻译源文件、冻结产物里属死重量（0.12MB）。这里按文件逐个列出而非写 ('i18n','i18n')，
@@ -152,6 +183,12 @@ datas = [
 # 以便程序在运行时直接读写配置。ffmpeg/ node/ 同理。
 # [2026-10-03 阶段5] collect_data_files('customtkinter') 已随该依赖摘除而移除（无资源可收）；
 # excludes 里的 'customtkinter' 条目按 fastapi 同款防御口径保留（防 venv 残留回渗打包）。
+#
+# [2026-10-17] GUI 入口改走 PySide6（src/gui_qt/），收集由 PyInstaller 自带的 hook-PySide6.py
+# 完成（Qt6 平台插件 / ANGLE / ICU 等），本 spec **不加任何 collect 调用**：hook 已按「实际
+# 导入的 Qt 模块」逐个收，而 collect_all('PySide6') 会把整个 647MB 的轮子（含 194MB 的
+# Qt6WebEngineCore）拖进产物。同理，'PySide6' 只加在 CLI/Web 两个 Analysis 的 excludes 上
+# ——GUI 必须收它，加了反而会让 GUI exe 起不来。
 
 hidden_common = [
     'i18n',                          # main.py 内部延迟导入
@@ -167,12 +204,13 @@ hidden_web = hidden_common + collect_submodules('uvicorn')
 # 只在某一个 Analysis 上排除没有意义——只要 GUI 收了它，CLI 的产物里照样带着。
 a_cli = Analysis(['main.py'], pathex=[], datas=datas, hiddenimports=hidden_common,
                  excludes=excludes_bloat + ['tkinter', 'customtkinter', 'pystray', 'PIL',
-                           'fastapi', 'uvicorn', 'starlette', 'brotlicffi'],
+                           'fastapi', 'uvicorn', 'starlette', 'brotlicffi', 'PySide6'],
                  noarchive=False)
 a_gui = Analysis(['gui.py'], pathex=[], datas=[], hiddenimports=hidden_common,
                  excludes=excludes_bloat + ['fastapi', 'uvicorn', 'starlette', 'brotlicffi'], noarchive=False)
 a_web = Analysis(['web.py'], pathex=[], datas=[], hiddenimports=hidden_web,
-                 excludes=excludes_bloat + ['tkinter', 'customtkinter', 'pystray', 'brotlicffi'], noarchive=False)
+                 excludes=excludes_bloat + ['tkinter', 'customtkinter', 'pystray', 'brotlicffi',
+                           'PySide6'], noarchive=False)
 
 pyz_cli = PYZ(a_cli.pure)
 pyz_gui = PYZ(a_gui.pure)
@@ -238,6 +276,30 @@ def run_pyinstaller() -> None:
     cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", str(SPEC_PATH)]
     print(f"[build] PyInstaller 命令：\n  {' '.join(cmd)}")
     _ = subprocess.run(cmd, check=True, cwd=PROJECT_ROOT)
+    prune_qt_bloat()
+
+
+# COLLECT 之后按文件名剪除 Qt 死重（清单与每项判据见 QT_BLOAT_FILES）
+def prune_qt_bloat() -> None:
+    # 放在 run_pyinstaller 末尾而不是 main 里：--dual 只跑一次 PyInstaller 就出两个 zip，
+    # 挂在这里才能保证两条路径都剪到；且剪除对象是 COLLECT 的产物，紧邻生成点最不容易漏。
+    qt_dir = RELEASE_DIR / CONTENTS_DIR / "PySide6"
+    if not qt_dir.is_dir():
+        print("[build] 产物内无 PySide6 目录，跳过 Qt 死重剪除")
+        return
+    freed = 0
+    removed = 0
+    for rel in QT_BLOAT_FILES:
+        target = qt_dir / rel
+        if not target.is_file():
+            # 清单里的名字随 Qt/PyInstaller 版本可能变化：跳过而不是报错——
+            # 少剪一项只是体积没降，多报错一次会让整轮构建在别人机器上红掉。
+            continue
+        freed += target.stat().st_size
+        target.unlink()
+        removed += 1
+    if removed:
+        print(f"[build] 已剪除 Qt 死重 {freed / 1048576:.2f}MB（{removed}/{len(QT_BLOAT_FILES)} 项命中）")
 
 
 # 将仓库内 ffmpeg/node/config 复制到发布根目录（exe 同级），运行时可直接读写

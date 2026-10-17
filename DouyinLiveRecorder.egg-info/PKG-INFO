@@ -38,6 +38,7 @@ Requires-Dist: h2>=4.4.1
 Requires-Dist: socksio>=1.0.0
 Requires-Dist: exejs>=1.0.1
 Requires-Dist: PyExecJS>=1.5.1
+Requires-Dist: PySide6>=6.12.0
 Requires-Dist: pystray>=0.19.5
 Requires-Dist: Pillow>=12.3.0
 Requires-Dist: starlette>=1.3.1
@@ -56,6 +57,7 @@ Requires-Dist: isort>=5.12.0; extra == "dev"
 Requires-Dist: mypy>=1.5.0; extra == "dev"
 Requires-Dist: pre-commit>=3.6.0; extra == "dev"
 Provides-Extra: gui
+Requires-Dist: PySide6>=6.12.0; extra == "gui"
 Requires-Dist: pystray>=0.19.5; extra == "gui"
 Requires-Dist: Pillow>=12.3.0; extra == "gui"
 Provides-Extra: build
@@ -86,7 +88,7 @@ Dynamic: license-file
 
 | 功能 | 说明 |
 | --- | --- |
-| 🎯 **多平台支持** | 支持抖音、TikTok、YouTube、快手、虎牙、斗鱼、B站等 **51 个平台**（对外标称 60+，持续添加中） |
+| 🎯 **多平台支持** | 支持抖音、TikTok、YouTube、快手、虎牙、斗鱼、B站等 **51 个平台**（持续添加中） |
 | 🔄 **循环值守** | 自动检测直播状态，开播自动录制，断播自动停止 |
 | 🎬 **多种格式** | 支持 TS、MKV、FLV、MP4、MP3、M4A 等格式输出 |
 | 🖥️ **三模式运行** | 命令行模式、GUI 图形界面模式、Web 管理面板模式 |
@@ -104,7 +106,7 @@ Dynamic: license-file
 
 ### 方式一：下载运行包（推荐新手）
 
-1. 进入 [Releases](https://github.com/ihmily/DouyinLiveRecorder/releases) 下载最新发布的 zip 压缩包。
+1. 进入 [Releases](https://github.com/y123ao6/DouyinLiveRecorder/releases) 下载最新发布的 zip 压缩包。
    每个平台各出 **lite**（不含内置 ffmpeg/node，首启时程序尝试自动获取）与 **full**（内置运行时）两包。
    附件名的**平台段**由 `build_exe.make_zip()` 取 `sys.platform` 经 `{"win32": "windows", "darwin": "macos"}`
    归一（其余一律归 `linux`），**架构段**才是 `platform.machine().lower()` 的实际取值：
@@ -537,7 +539,20 @@ web_allowed_hosts =
 [GUI]
 # 界面主题：light | dark | high_contrast（留空跟随系统外观明暗；GUI 侧边栏「界面主题」菜单选择后自动写回）
 gui_theme = light
+# 界面缩放：自动 | 85 | 100 | 115 | 130 | 150（「自动」按屏幕可用区现算；菜单选择后自动写回）
+gui_scale = 自动
+# 动效强度：跟随系统 | off | subtle | full（系统「关闭动画」优先于用户选择）
+gui_motion = 跟随系统
+# 界面字体：留空 = 系统默认（Microsoft YaHei UI）；填字体族名即用之
+gui_font =
+# 自定义字体文件路径：由侧边栏「导入字体…」写入；字体副本存放在 config/fonts/ 下
+gui_font_file =
 ```
+
+> 字体相关说明：下拉里的预设族按**本机是否已安装**过滤，避免出现「选了没反应」的项；
+> 「导入字体…」支持 `.ttf` / `.otf` / `.ttc`（SFNT 容器），`.woff2` / `.woff` 属网页传输格式、
+> Tk 在 Windows 下经 GDI 取字体认不了，需先转成 ttf/otf；日志终端与 URL 编辑器固定用等宽字体，
+> 不随此项变化（保持字符对齐）。
 
 ### 直播间配置 (config/URL_config.ini)
 
@@ -789,7 +804,7 @@ docker run -d -v ./config:/app/config -v ./downloads:/app/downloads \
 - 标签形态：`latest` 与 `vX.Y.Z`；`latest` 只随 `v*` tag 产出，不开放手动触发覆盖。
   两个分架构 tag（`:vX.Y.Z-amd64` / `-arm64`）属合成前的中间产物，当前不会自动清理。
 - 匿名拉取要求该 GHCR 包的可见性为 **public**——那是仓库设置层面的一次性人工动作。
-- 与 `docker-compose.yaml` 里的 `image: ihmily/douyin-live-recorder:latest` **刻意不同源**：compose 走
+- 与 `docker-compose.yaml` 里的 `image: y123ao6/douyin-live-recorder:latest` **刻意不同源**：compose 走
   `pull_policy: build` 就地构建（不拉 registry 上的同名镜像），上面「快速启动」的说明保持不变；
   要用 GHCR 预构建镜像请按上面的 `docker run`，arm64 主机走 compose 就地构建同样可行。
 

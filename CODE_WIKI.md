@@ -645,6 +645,8 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 
 ### 9. GUI 模块 (`gui.py`)
 
+> **2026-10-17 起窗口层已迁到 PySide6**：本节描述的是迁移期保留的 tkinter 实现（`_legacy_main()`），现行窗口实现见 `src/gui_qt/`（`app.py` 装配 / `theme.py` 设计令牌与 QSS / `widgets.py` Card·Toast·DataTable / `main_window.py` 主窗 / `pages/` 五页 / `recorder.py`·`danmaku_monitor.py` 控制器），视觉事实源 `docs/gui-redesign/index.html`，详见「更新日志」当日条目。
+
 **职责**: 提供现代化图形用户界面
 
 **设计特点**:
@@ -1624,6 +1626,36 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 > 脚本直跑时额外输出 `VERIFICATION_RESULT: {"platform":..., "status":..., ...}` 结构化一行供机器解析。
 > 脚本：`tests/test_{bili,douyin,douyu,huya,twitch}_live_collector.py`（`python file.py <URL> [秒数]`，
 > 需活房间 + 外网，默认人工通道）。
+
+### v4.5.0-dev (2026-10-17) — GUI 窗口层迁移 PySide6：设计稿视觉语言 1:1 落地 + 打包链 Qt 死重剪除（`src/gui_qt/` / `gui.py` / `build_exe.py`）
+
+> 工作包来源：`docs/worklog/PROPOSAL_2026-10-17_gui-pyside6-redesign.md`（2026-10-17 用户批准「无异议，执行」）。范围：新增 `src/gui_qt/`（16 文件 4189 行：`app` / `theme` / `shared` / `widgets` / `main_window` / `tray` / `settings_dialog` / `danmaku_monitor` / `quality_monitor` / `recorder` + `pages/` 五页），`gui.py` 的 `main()` 改为委托 `src.gui_qt.app.main()`（原 tkinter 实现改名 `_legacy_main()` 迁移期保留）；`src/ui_i18n.py` 新增 `"qt"` 模式与 `set_text()`；`build_exe.py` 接入 PySide6 收集并新增 `QT_BLOAT_FILES` 剪除；`pyproject.toml` / `requirements.txt` 双写 `PySide6`；新增 `tests/test_gui_qt_{theme,window,units}.py` 共 42 用例；i18n 四目录各 +47 条并重编 `.mo`（1111 条）。
+
+- **为什么迁移而不是继续 ttk**：设计稿 `docs/gui-redesign/index.html` 的 18/24px 大圆角卡片、三档柔和投影与弹簧动效在 ttk 下无法原生实现（clam 主题没有圆角、没有控件级 alpha），自绘 Canvas 又不参与布局系统的尺寸协商；Qt 的 QSS + `QGraphicsDropShadowEffect` 可 1:1 还原，且 `QTableView` / `QTextEdit` 自带虚拟化与 `maximumBlockCount`，日志/弹幕高吞吐不需要自建渲染节流。用户决策（2026-10-17）：迁移 PySide6，还原范围 = 视觉语言全覆盖 + 空状态引导 / Toast / 卡片悬浮态。
+- **控制器层与 UI 解耦是本次的净收益**：`recorder`（子进程生命周期）、`danmaku_monitor`（tail 边车 JSONL）、`shared`（配置裁决）、`settings_dialog` 都不含 Qt 布局代码，`QT_QPA_PLATFORM=offscreen` 即可离屏单测——旧 tk 版大量逻辑只能在真窗下验证的困境消除。
+- **线程模型整体换轨**：旧 `_ui_event_queue + post_ui` 事件泵 + 5 处 `after` id 守卫 → Qt Signal/Slot（跨线程 Queued 连接）+ `QTimer`。子进程 stdout 读取线程经 Signal 回主线程；周期链（状态刷新 3s / 弹幕 1s）挂 `QTimer`，回调内仍包 try/except + 30s 限频留痕（「异常→静默」的老故障形态显式消掉）。
+- **设计令牌单一事实源在 `theme.py`**：HTML `:root` 的 CSS 变量 → Python token 表（26 键 × 3 主题）→ `build_stylesheet()` 运行时现算 QSS 后整窗 `setStyleSheet` 一次生效；主题切换只换 token 重生成，不重建控件树。QSS 只认 objectName 选择器（`QFrame#card`）——写 `QFrame` 会命中 `QTableView` 的内嵌 frame。
+- **竞态逐条搬运而非重写**（旧版踩过的坑一个不丢）：session_id 迟到回调、`_stopping` 复位放 `finally` 且早于会话校验、停止/退出共用单飞闸门 `_stop_child_once()`（控制台附着是进程全局状态，重复附着会让 pytest 的 stdout 跟着丢）。
+- **打包两道闸，缺一不可**：① spec **不加任何 `collect` 调用**——`collect_all('PySide6')` 会把 647MB 的轮子（含 194MB 的 Qt6WebEngineCore）拖进产物，收集交给 PyInstaller 自带的 `hook-PySide6.py`（按实际导入的 Qt 模块逐个收），`'PySide6'` 只加在 CLI/Web 两个 Analysis 的 excludes 上；② hook 收完**还须剪**：hook 按「插件类型整目录」收插件、插件链接依赖再递带入包——`imageformats` 整目录收进了 `qpdf.dll`（拖入 Qt6Pdf 4.41MB），`platforminputcontexts` 整目录收进了 `qtvirtualkeyboardplugin.dll`（拖入 VirtualKeyboard→Quick→Qml 五件套约 14.3MB），`collect_extra_binaries` 还无条件收 Mesa 软件 GL `opengl32sw.dll` 19.68MB。excludes 管不到 hook 收的 DLL，只能 COLLECT 之后按文件名删：`build_exe.QT_BLOAT_FILES` 11 项 / 39.25MB，判据与 `BLOAT_EXCLUDES` 同源（**能指出它在产物里 + 运行期不可达**），入表判据是对 `_internal/PySide6/` 全部 dll/pyd 做链接依赖扫描（剪除项零反向引用、删除后无未解析导入）+ 冻结 GUI 实跑 9s 存活。剪后读数：91.81MB → 192.46MB → **153.21MB / 359 文件**（较阶段5 基线 +61.4MB，落在方案接受的 +50~70MB 区间），明细与判据落 `docs/agent-reference/measured-evidence.md`；回归锁 `tests/test_build_exe.py` 新增 2 条（剪除项不得含路径穿越/必须全在 PySide6 目录下 + 只删清单命中项）。
+- **测试与门禁抓出的四个真问题**（都是写完才暴露，逐个修掉）：① `main_window._dynamic_status_info` 的 `interval` 在 config.ini 缺 `[录制设置]` 节时未绑定（basedpyright `reportPossiblyUnbound` 抓出）——先落默认值再进 try；② `app.py` 源码运行取 `app_root` 多上一级（落到项目根的父目录，config/ 全错位，装配用例抓出）；③ `pages/logs.py` 撞 `[tool.mypy].exclude` 裸名 `logs` 被无参 mypy 静默漏查（`test_mypy_exclude_never_shadows_source_files` 抓出）→ 改名 `runlog.py`；④ Qt 控件被 C++ 侧销毁后 Python 包装仍存活，`retranslate_all()` 不接 `RuntimeError` 会让一条死条目崩掉整轮回填（`tests/test_ui_i18n.py` 全局条数断言抓出）。
+- **i18n**：47 条运行时模板四语目录同批登记（zh_CN.po 追加并重编 `.mo` 1111 条；en_US/en_GB JSON、zh_TW YAML 文本追加，保持既有键序）；`src/ui_i18n.py` 新增 `"qt"` 模式（`setText`）与 `set_text()` 入口。`tests/test_gui_qt_units.py` 打桩 subprocess 时必须走 `types.SimpleNamespace(**vars(mod))` 浅拷贝 shim——`test_test_hygiene` 的 R1 锁把 `setattr(subprocess, "run", ...)` 判为全进程生效改写。
+- **迁移期并存与退役计划**：`gui.py` 顶层 tkinter 实现保留（九份 `tests/test_gui_*.py` 以 AST 静态锁 / subprocess 钉在本模块），Tcl/Tk 5.28MB 因此仍在产物里；旧版验证后退役（git 历史可回滚）。
+
+**验证**：`python scripts/run_gates.py` 全绿 10/10（black / isort / mypy ×3 平台 238 files / check_annotations / compile_po 1111 条 / check_version / check_runtime_pins / consistency；内置 pytest 兜底 **4301 passed 且 warnings summary 为空**）；`scripts/check_coverage.py` **68 模块全部达标**（总量 82.68%；`src/gui_qt` 全部模块 ≥55%，最低 `pages/danmaku.py` 55.1%）；basedpyright 对 `src/gui_qt` + 新测试文件 0 errors；`scripts/report_bundle_size.py` 实跑 **153.21 MB / 359 文件**、工具链泄漏「未发现」；打包实跑 + 离屏截图（浅/深主题 × 5 页 + 85% 缩放档）布局正常（offscreen 平台无 CJK 字体回退，字形显示为方块属平台限制、非样式缺陷）；冻结 GUI exe 实跑 9s 存活、窗口标题正常。端到端目视确认交回用户：源码运行 `python gui.py` 切主题/缩放/语言目检。
+
+| GUI PySide6 迁移 | 新增 `src/gui_qt/`（16 文件 4189 行）、`tests/test_gui_qt_theme.py`（8 用例）、`tests/test_gui_qt_window.py`（9 用例）、`tests/test_gui_qt_units.py`（25 用例）、`docs/gui-redesign/`（设计原型）、`docs/worklog/PROPOSAL_2026-10-17_gui-pyside6-redesign.md`；改动 `gui.py`（`main()` 委托 + `_legacy_main`）、`src/ui_i18n.py`（qt 模式 + RuntimeError 容错）、`build_exe.py`（spec 注释 + `QT_BLOAT_FILES` + `prune_qt_bloat()`）、`pyproject.toml` / `requirements.txt`（+PySide6 双写）、i18n 四目录各 +47 条并重编 `.mo`、`tests/test_build_exe.py`（+2 剪除回归锁）；生成物 `uv.lock` / `DouyinLiveRecorder.egg-info` 经 `sync_metadata.py` 重生成；文档 `AGENTS.md` ×3、本条目（中英同步）、`measured-evidence.md` +体积读数。一次性脚本 3 个（i18n 补录 / 依赖扫描 / 离屏截图，均落仓库外且已清理） |
+
+### v4.5.0-dev (2026-10-17) — GUI 视觉语言改版：品牌蓝 → 暖赭橙 + 暖灰中性色（`src/ui_theme.py` / `gui.py`）
+
+> 范围：纯表现层换色，零功能逻辑改动。`src/ui_theme.py` 的 THEMES `light`/`dark` 两表换 16 个槽位值（surface_alt / border / text / text_muted / primary / primary_hover / disabled_bg / disabled_fg，各 8 槽）；`gui.py` 的 `Colors` 品牌色组与中性色组同批换值（PRIMARY / PRIMARY_HOVER / PRIMARY_SOFT_* / BG_* / CARD_* / SIDEBAR_* / BORDER_* / TEXT_* / MUTED_*）。刻意未动：`high_contrast` 主题（无障碍主题不随品牌改版）、`TERMINAL_*` 终端配色（主题无关常量）、success / danger / warning / on_primary / surface 槽（对比度契约已锁定的语义色）、`src/ui_scale.py` 字号与间距 token（阶段6 已语义化，本次无可调项）。
+
+- **设计语言来源**：`docs/gui-redesign/index.html`（单文件零依赖原型）定下的暖中性底 + 赭橙点缀；改版只把「色」落到既有主题层，控件结构、布局、字号层级、间距 token 一律沿用阶段4~6 的既有体系。
+- **为什么主色不是原型里的 #C96442**：CONTRAST_REQUIREMENTS 强制 `on_primary`（白字）对 primary ≥ 4.5（正文 AA），#C96442 实测 3.90 不达标；同色相加深到 #B5573A 得 4.78。深色主题取 #B85A3F（4.59）——深色下还要满足 primary 对两种底 ≥3.0，亮度窗口只剩 0.13~0.18，更亮的 #D97757（白字 3.12）与更暗的同色都会越界。
+- **深色主题的 hover 为什么是变暗而不是变亮**：`on_primary` 对 `primary_hover` 同样有 4.5 契约，深色下把 hover 调亮会跌破（#C96A4A 实测 3.72），故取更暗的 #A8502F；浅色主题相反，hover 走加深方向 #9C4A2C。
+- **border 不得取「好看的浅灰」**：契约强制 border 对 surface / surface_alt ≥3.0（WCAG 1.4.11 非文本），浅色边框因此落在暖灰 #7A766F 一档——这是「边框可辨」与「克制配色」之间被机检钉死的下限。
+- **`gui.Colors` 与 `ui_theme.THEMES` 是同值同源的两处落点**：品牌色改动必须成对修改（本次即按此口径执行）；`Colors` 的中性色组是品牌基调声明，控件实际着色全部走 ui_theme 槽位。
+
+**验证**：`python scripts/run_gates.py` 全绿 10/10（black / isort / mypy ×3 平台 / check_annotations / basedpyright 0 错；pytest 4245 passed 0 warnings）；`tests/test_ui_theme.py` 35 passed（对比度机检全过）；`scripts/check_coverage.py` 51 模块全过（84.27%）；两改动文件复核均为纯 CRLF（LF-only 计数 0）；无窗冒烟：三主题 `ThemeManager.apply` 注册切换正常（dlr-light@100 / dlr-dark@100 / dlr-high_contrast@100）。端到端目视确认交回用户：启动 GUI 切换浅色/深色主题目检。
 
 ### v4.5.0-dev (2026-10-17) — GUI 右边框裁切修复 + 自选字体（`src/ui_fonts.py` / `gui.py` / `src/ui_kit.py`）
 
