@@ -29,7 +29,10 @@ repos:
 
   # ── Black（代码格式化）──
   - repo: https://github.com/psf/black-pre-commit-mirror
-    rev: 25.9.0
+    # rev 必须与 ci.yml consts 的 black_version 同值（现 26.10.1）：
+    # hook 自带独立环境，rev 不同 = 本地提交用另一版 black 重排、CI 用又一版判定，
+    # 会出现「pre-commit 改完 CI 仍红」的互擦（2026-10-17 三面收敛，原 rev 25.9.0）。
+    rev: 26.10.1
     hooks:
       - id: black
         # pyproject [tool.black] 提供 line-length / target-version；
@@ -39,7 +42,8 @@ repos:
 
   # ── isort（导入排序）──
   - repo: https://github.com/PyCQA/isort
-    rev: 6.1.0
+    # 同 black：rev 与 ci.yml 的 isort_version（9.0.2）同值，原 6.1.0 是第三套版本。
+    rev: 9.0.2
     hooks:
       - id: isort
         # pyproject [tool.isort] 提供 profile / line_length / known_first_party / extend_skip

@@ -3,7 +3,7 @@
 # This file is distributed under the same license as the DouyinLiveRecorder package.
 #
 # DouyinLiveRecorder 简体中文翻译文件
-# 更新日期: 2026-09-30
+# 更新日期: 2026-10-17
 #
 # 维护说明：
 #   - 本文件是翻译源文本；gettext 运行时只读取同目录编译产物 zh_CN.mo。
@@ -24,7 +24,7 @@ msgstr ""
 "Project-Id-Version: DouyinLiveRecorder\n"
 "MIME-Version: 1.0\n"
 "POT-Creation-Date: 2024-10-20 00:00+0800\n"
-"PO-Revision-Date: 2026-10-01 12:00+0800\n"
+"PO-Revision-Date: 2026-10-17 12:00+0800\n"
 "Last-Translator: Hmily <ihmily@github>\n"
 "Language-Team: Chinese\n"
 "Content-Type: text/plain; charset=UTF-8\n"
@@ -3459,11 +3459,17 @@ msgstr "；确需对局域网无认证开放时，请设置环境变量 DOUYIN_W
 msgid "🎯   画质监控"
 msgstr "🎯   画质监控"
 
+msgid "🎯  画质监控"
+msgstr "🎯  画质监控"
+
 msgid "🎯  画质监控（实时检测实际画质是否与设置一致）"
 msgstr "🎯  画质监控（实时检测实际画质是否与设置一致）"
 
 msgid "💬   弹幕监控"
 msgstr "💬   弹幕监控"
+
+msgid "💬  弹幕监控"
+msgstr "💬  弹幕监控"
 
 msgid "💬  弹幕房间（连接状态 / 累计弹幕 / 速率 / 礼物）"
 msgstr "💬  弹幕房间（连接状态 / 累计弹幕 / 速率 / 礼物）"
@@ -3483,8 +3489,14 @@ msgstr "📄 配置文件内容 (config/config.ini)"
 msgid "📊   控制台"
 msgstr "📊   控制台"
 
+msgid "📊  控制台"
+msgstr "📊  控制台"
+
 msgid "📋   运行日志"
 msgstr "📋   运行日志"
+
+msgid "📋  运行日志"
+msgstr "📋  运行日志"
 
 msgid "📋  实时弹幕"
 msgstr "📋  实时弹幕"
@@ -3494,6 +3506,9 @@ msgstr "📋  运行日志 (main.py 输出)"
 
 msgid "📝   URL 配置"
 msgstr "📝   URL 配置"
+
+msgid "📝  URL 配置"
+msgstr "📝  URL 配置"
 
 msgid "📝  URL 配置编辑区 (config/URL_config.ini)"
 msgstr "📝  URL 配置编辑区 (config/URL_config.ini)"
@@ -3740,3 +3755,54 @@ msgstr "降级"
 
 msgid "降级时刻"
 msgstr "降级时刻"
+
+msgid "URL 无法解析"
+msgstr "URL 无法解析"
+
+msgid "路径为空，缺少房间号"
+msgstr "路径为空，缺少房间号"
+
+msgid "路径含多级目录，不是标准房间链接"
+msgstr "路径含多级目录，不是标准房间链接"
+
+msgid "房间号含非法字符"
+msgstr "房间号含非法字符"
+
+msgid "未获取到跳转地址"
+msgstr "未获取到跳转地址"
+
+msgid "跳转地址不是虎牙直播间"
+msgstr "跳转地址不是虎牙直播间"
+
+msgid "跳转地址不是B站直播间"
+msgstr "跳转地址不是B站直播间"
+
+msgid "TTingLive(原Flextv)登录失败！请在config.ini配置文件中填写正确的TTingLive(原Flextv)平台的账号和密码"
+msgstr "TTingLive(原Flextv)登录失败！请在config.ini配置文件中填写正确的TTingLive(原Flextv)平台的账号和密码"
+
+msgid "无法从链接中解析 TwitCasting 主播 ID: {masked_url}"
+msgstr "无法从链接中解析 TwitCasting 主播 ID: {masked_url}"
+
+msgid "无法从链接中解析微博用户 ID: {masked_url}"
+msgstr "无法从链接中解析微博用户 ID: {masked_url}"
+
+msgid "字段 {field} 必须是字符串"
+msgstr "字段 {field} 必须是字符串"
+
+msgid "字段 {field} 必须是字符串或留空"
+msgstr "字段 {field} 必须是字符串或留空"
+
+msgid "字段 {field} 必须是布尔值"
+msgstr "字段 {field} 必须是布尔值"
+
+msgid "字段 {field} 必须是字符串列表"
+msgstr "字段 {field} 必须是字符串列表"
+
+msgid "字段 {field} 的元素必须是字符串"
+msgstr "字段 {field} 的元素必须是字符串"
+
+msgid "请求体必须是 JSON 对象"
+msgstr "请求体必须是 JSON 对象"
+
+msgid "复制字体文件失败: {name} -> {target} - {type_name}: {err}"
+msgstr "复制字体文件失败: {name} -> {target} - {type_name}: {err}"

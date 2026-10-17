@@ -129,7 +129,19 @@ services:
   # ---------------------------------------------------------------
   gui:
     <<: *recorder
+    # 镜像默认不装 GUI 依赖（见 Dockerfile 阶段1 的 INSTALL_GUI=false：PySide6 解压后本机实测
+    # 647.56MB，而 recorder / web 两个服务在屏蔽它后导入链完整）。本服务需要真窗口，故：
+    #   ① 用独立 tag——build 配置不同的两个服务若共用同一个 image 名，后构建的一方会把另一方
+    #      正在用的 tag 覆盖掉（`up` 过 recorder 再 `--profile gui up --build` 就是一次覆盖）；
+    #   ② 显式传 INSTALL_GUI=true，让阶段1 装全 requirements.txt、阶段2 补装 Qt 运行库。
+    image: y123ao6/douyin-live-recorder:latest-gui
     container_name: douyin-live-recorder-gui
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_VERSION: "${APP_VERSION}"
+        INSTALL_GUI: "true"
     profiles:
       - gui
     entrypoint: ["python", "gui.py"]

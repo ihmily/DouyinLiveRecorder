@@ -59,9 +59,17 @@
 │   ├── web_config.py    # Web 配置
 │   ├── web_tray.py      # Web 托盘
 │   ├── ui_theme.py      # GUI 主题层（token/多主题/ttk 注册/持久化/对比度机检）
+│   ├── ui_kit.py      # GUI 控件工厂（ttk 变体样式 + Treeview 增量表格 + 过渡动效原语）
+│   ├── ui_scale.py    # GUI 度量层（语义字号 token + 间距栅格 + 缩放档位）
+│   ├── ui_motion.py   # GUI 动效层（off/subtle/full 三档 + 系统「关闭动画」感知）
+│   ├── ui_i18n.py     # GUI 静态标签 i18n 接线（T() 标记 + retranslate_all 整窗回填）
+│   ├── ui_fonts.py    # GUI 自选字体（Tk 族名解析判据 + config/fonts/ 副本）
+│   ├── gui_qt/        # GUI 窗口层（PySide6/Qt6：app·theme·widgets·main_window·tray·settings_dialog·recorder + pages 五页）
 │   ├── log_archive.py   # 运行日志归档（停止录制流程收尾：四日志按时间戳改名）
-│   ├── weverse_auth.py  # Weverse 认证
+│   ├── startup_cleanup.py # 启动期陈旧字节码缓存清理（白名单根 + 内容哈希哨兵）
 │   ├── ffmpeg_install.py # FFmpeg 自动安装
+│   ├── ffmpeg_master_download.py # FFmpeg master 构建下载器（Windows 专属，TOFU 默认关闭）
+│   ├── ffmpeg_linux_download.py  # Linux 运行期 ffmpeg 直下（月末不可变标签 + 双趟拷贝）
 │   ├── node_install.py  # Node.js 自动安装
 │   ├── platforms/       # 平台专属实现（douyin/douyu/huya/bilibili/twitch + _xbogus/_tars）
 │   ├── proto/           # protobuf（__init__.py + douyin.proto + douyin_pb2.py + douyin_pb2.pyi 存根）

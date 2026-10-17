@@ -15,11 +15,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+# 这里的「零依赖」指不引 pydantic/fastapi；422 的 detail 是面板直接展示的文本，故走 i18n 查表
+# （i18n 只依赖 stdlib + loguru，不回指 web_* 任何模块，无环）。
+import i18n
+
 
 def _as_str(value: Any, field: str) -> str:
     # 必填字符串字段：缺失或非 str 一律 ValueError，对应 pydantic 的 422。
     if not isinstance(value, str):
-        raise ValueError(f"字段 {field} 必须是字符串")
+        raise ValueError(i18n.tr("字段 {field} 必须是字符串", field=field))
     return value
 
 
@@ -28,24 +32,24 @@ def _as_opt_str(value: Any, field: str) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str):
-        raise ValueError(f"字段 {field} 必须是字符串或留空")
+        raise ValueError(i18n.tr("字段 {field} 必须是字符串或留空", field=field))
     return value
 
 
 def _as_bool(value: Any, field: str) -> bool:
     # 布尔字段：只接受 Python bool，避免 "true"/"1" 这类字符串宽松转换造成的语义漂移。
     if not isinstance(value, bool):
-        raise ValueError(f"字段 {field} 必须是布尔值")
+        raise ValueError(i18n.tr("字段 {field} 必须是布尔值", field=field))
     return value
 
 
 def _as_str_list(value: Any, field: str) -> list[str]:
     # 字符串列表字段：必须是 list 且元素全为 str。
     if not isinstance(value, list):
-        raise ValueError(f"字段 {field} 必须是字符串列表")
+        raise ValueError(i18n.tr("字段 {field} 必须是字符串列表", field=field))
     for item in value:
         if not isinstance(item, str):
-            raise ValueError(f"字段 {field} 的元素必须是字符串")
+            raise ValueError(i18n.tr("字段 {field} 的元素必须是字符串", field=field))
     return list(value)
 
 
@@ -54,7 +58,7 @@ def _require_dict(data: Any) -> dict[str, Any]:
     # 转成 HTTPException(422)，这里再兜一层类型，避免 None / list 透传到字段解析。
     # [历史注] L-27（2026-10-02）：原注释误写 web_api._read_json，符号不存在，已更正。
     if not isinstance(data, dict):
-        raise ValueError("请求体必须是 JSON 对象")
+        raise ValueError(i18n.tr("请求体必须是 JSON 对象"))
     return data
 
 

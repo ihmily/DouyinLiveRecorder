@@ -330,3 +330,75 @@ Qoder CN 发行版的实际数据根（`.qoder-cn`）不一致，属外部工具
 - **改长注释块时最容易顺手改到既有句子的措辞**（本次把「按真实类型检查」写成「按真实类型结论」）：
   违反「修改注释只增不改」且 black/mypy/pytest 三面全隐形。判据：只增注释的改动收尾前 `git diff` 逐行看
   **减号行**，出现非预期的 `-` 即还原。 | `.github/workflows/ci.yml`
+
+- **i18n 目录「孤儿条目 / 源文已变更」判定必须走 AST，不能靠 grep，也不能靠 read_text**（2026-10-17 实测两处）：
+  ① 侧栏导航同一标签在 Qt 实现里是 `📊  控制台`（两空格）、在 Tk 遗留实现里是 `📊   控制台`（三空格），两者都是运行时按键；
+     用 `grep "📊   控制台"` 扫 `gui.py` 恒无命中（非 ASCII + 连续多空格在 Git Bash 的 grep 下静默失配），据此把三空格形态「改名」
+     会当场把 Tk 侧栏译文弄坏——判据：`ast.walk` 比对 `Constant.value` 全集（含 tests/ 与 .workbuddy 备份副本），两种形态各自定位到调用点后再决定并存还是改名。
+  ② 目录四文件全是纯 CRLF，而 `Path.read_text()` 走 universal newlines，`write_bytes(text.encode())` 会**静默整文件转成 LF**；
+     改目录一律 `read_bytes().decode('utf-8')` → 只替换不含行尾的行内容 → `write_bytes`，并在前后各测一次 `(CRLF, bareLF)` 双侧必须相同（AGENTS.md 注释盲点③同源）。
+  ③ 登记条目前先问「这条串有没有查询路径」：被 `set_text(T(...))` 覆盖的构造器字面量、经 `HTTPException(422, str(e))` 原样出面板的 raise 文案，
+     登记进去就是死条目——要么先在产生点接 `tr()`，要么明确记为代码侧待办，不用目录数量冒充覆盖率。
+  | `i18n/zh_CN/LC_MESSAGES/zh_CN.po` / `src/gui_qt/main_window.py` / `gui.py`
+
+- **给「按名传入」的文案接线写机检锁时，两条相邻判据必须能被变异互相隔离**（2026-10-17，`tests/test_i18n_catalog_coverage.py`）：
+  「四目录键集合相等」与「按名 msgid ⊆ 每份目录」看似重复，实则互补——源码 msgid 漂移成一种四侧都没有的形态时，键集合依然逐项相等
+  （⑤-C 绿），只有「候选 ⊆ 每份目录」那条（⑤-A）会红。所以变异要专门造这一格：M3 改源码不动目录 → 期望 A 红 + C 绿；
+  再各造「单侧缺键」的 M1/M2 → 期望两条都红。只跑一次全绿不能证明任何一条锁在工作。
+  另两条实测教训：① 解析「名字→候选 msgid」时 `for a, b in (("dashboard", "📊  控制台"), ...)` 必须**按位置**取元组元素，
+  整体收集会把 `dashboard` 当文案（假红）；小写名不得跨文件合并，UPPER_CASE 标签表才需要跨文件
+  （`THEME_LABELS` 定义在 `theme.py`、取用在 `main_window.py`）。② 不可解析的调用点用**白名单集合相等**而非计数上限：
+  上限只拦「变多」，白名单同时拦「变少没收回」，行号漂移也会当场红。
+  ③ 在按函数遍历的判据里，不要在函数循环内再 `ast.walk(tree)` 一遍——74 个运行期文件下实测 35s/次，调用点预收一次即降到 6s。
+  | `tests/test_i18n_catalog_coverage.py` / `scripts/extract_i18n_strings.py` / `src/gui_qt/main_window.py`
+- **本机没有 Docker 时，容器相关改动用什么替代「跑一遍镜像」**（2026-10-17，Dockerfile 的 GUI 依赖开关）：
+  本轮新增 ARG INSTALL_GUI=false（阶段1 按行首包名剔除 PySide6、阶段2 条件装 Qt 运行库）。没有守护进程就不能声称「镜像能跑」，
+  但可以把结论拆成四件本机可执行的事：① 折叠续行后对每条 RUN 载荷跑 sh -n 与 bash -n（Docker 默认用 /bin/sh，只测 bash 会漏 POSIX 差异）；
+  ② 把 pip 换成 echo 替身逐分支跑 if/else，看它到底装的是哪份清单（顺带暴露「只认精确 true、TRUE 会走 slim」的大小写敏感语义）；
+  ③ 用同一条 grep 表达式对真实 requirements.txt 跑一遍，断言 21→20、仅剔目标包、零误伤，且残留行必须是注释；
+  ④ 用元路径拦截器屏蔽该依赖后 import 真实入口（main / web），证明默认 slim 不 break 容器服务。
+  配套结论：compose 里 build 配置不同的服务必须用不同 image tag，否则后构建的一方覆盖另一方正在使用的 tag（已写成回归锁）。
+  另记一次自伤：把带反引号的中文段落塞进 shell -c 里追加，反引号会被当命令替换执行、静默吃掉行内码（实测 bash 报 ARG: command not found 而文件仍写入成功）。落盘长文本一律用文件写入工具，别走 shell 引号。
+  | Dockerfile / docker-compose.yaml / tests/test_dockerfile_image_gui_arg.py
+- **门禁的「文件数」有两个互不相等的口径，且在仓库内建一次性目录会同时污染两者**（2026-10-17，抬 black 版本常量前的对照实测）：
+  无参 `mypy` 报 `no issues found in 241 source files`，`black --check` 报 `242 files would be left unchanged`——一个是 Python 模块数、
+  一个是被扫描文件数，文档里混用必被后来者当假读数。更要紧的是：为绕开「不动 venv」而把 wheel 解包目录建在**仓库根**时，
+  black 26.5.1 当场报 `28 files would be reformatted`，28 个全是我自己解出来的 vendored 源码，与仓库真实形态无关；
+  改到 `%TEMP%` 后新旧两版各跑全量，同为 242 unchanged，抬常量才只消除版本差、不改变判定。
+  判据：任何「扫全仓」型门禁跑之前先看 `git status --short` 有没有未跟踪目录；产物名与计数一律本机复测后再写进文档。
+  | scripts/run_gates.py / .pre-commit-config.yaml / .github/workflows/ci.yml
+- **测试夹具名里的 `:` 在 Windows 上是「能 stat、不能 copy」的坑**（2026-10-17，唯一一条本机红 / Linux CI 绿）：
+  `font:with|weird*chars?.ttf` 被解析成名为 `font` 的**备用数据流（ADS）**——实测 `iterdir()` 只列出 `font`，
+  `exists()` 与 `is_file()` 都为真（流本身可 stat），但 `shutil.copy2` 抛 `FileNotFoundError [WinError 3]`；
+  生产侧 `except Exception → return None` 再把它压成「没有异常、只有失败」，于是断言面只剩一句「返回 None」。
+  修法不是加 skip，而是**把一个用例的两件事拆开**：字符清洗判定下沉为纯函数用例（不碰文件系统，两端语义一致），
+  文件系统那半边改用两端都能创建但仍需清洗的名字（`"  my font  (v2) ..ttf"`）。生产代码零改动。
+  另记：改这类用例必须当轮变异验证——把 `_safe_filename` 改成恒等函数应让三条用例同时转红（实测 3 failed），按字节还原。
+  | tests/test_ui_fonts.py / src/ui_fonts.py
+- **「Pylance 不能作为门禁证据」的正解是给它一份可复现的扫描面，而不是去驱动 Pylance 本体**（2026-10-17）：
+  本机确实装着 `ms-python.vscode-pylance-2026.4.101` 且 `dist/server.bundle.js` 能被 node 拉起来，但其 LICENSE 明文只授权
+  「在 Visual Studio 系产品内使用」——所以**不写** shell 驱动它的工具，这条禁令已钉进 AGENTS.md。真正治根因的是：
+  本仓原先既无 `[tool.pyright]` 也无 `pyrightconfig.json`，裸跑 pyright 走自带默认范围，IDE 红线与 CLI 结论根本不同源。
+  现新增 `pyrightconfig.json`（include 逐项等于 `[tool.mypy].files`、exclude 覆盖 mypy 与 basedpyright 两份清单、
+  严格度/版本/venv 同 `[tool.basedpyright]`），不带路径跑 `pyright` 即复现 IDE 扫描面（实测 0 errors / 0 warnings / 0 informations）。
+  两条实测细节：① pyright **只接受已知顶层键**，把说明写成 `"//"` 键会报 `Config contains unrecognized setting`，解释文字只能走 JSONC 行注释；
+  ② `"$schema"` 同样不被识别（每次跑吐一行噪声），已挪进注释。basedpyright 那边无此限制，别把两侧容错度当同一条。
+  同源关系由 `tests/test_pyright_config_parity.py`（5 用例）机检，五处变异各自转红后按字节还原。
+  | pyrightconfig.json / tests/test_pyright_config_parity.py
+- **抬版本常量（CI 钉定 / pre-commit rev）的三步自证**（2026-10-17，black 26.5.1→26.10.1、pre-commit isort 6.1.0→9.0.2）：
+  ① 新旧两版各跑一次全量 `--check`，证明「判定不变、只是值对齐」；② rev 存在性走 GitHub API `repos/<org>/<repo>/tags/...` 逐个核实，
+  不凭记忆填 SHA 或 tag；③ `pre-commit validate-config` 只证明 YAML 合法，**不等于**钩子能装起来——本机 clone 被代理拦时，
+  「钩子实际运行过」必须如实写「未验证」，不得用 validate-config 的绿替代。
+  | .github/workflows/ci.yml / .pre-commit-config.yaml / tests/test_pre_commit_config.py
+- **异常消息「登记进目录」之前，必须先确认它是被查表还是被插值**（2026-10-17，C 项 21 站点逐条顺消费链实测）：本仓大量日志写法是 `logger.error(i18n.tr("…: {record_url} - {reason}", reason=str(err)))`，模板查了表、**消息本身从没查**；此时只把原文登记进四目录 = 造死条目，唯一有目录意义的修法是在 **产生点** 包 `raise ValueError(i18n.tr(…))`。反过来的陷阱也存在：`XhsUrlError` 一类「消息 + 稳定 code」双通道异常，消费点（`src/spider.py` 两处 except 与 `main._resolve_xhslink_com`）**一律只读 `e.code`**，message 从不显示——这类站点接 tr() 也无人看，应当进白名单并写明「谁消费它、为什么不需要译」。判据一律用 AST 顺 raise→except→日志/返回值三级，别靠 grep 猜（非 ASCII + 空格形态会静默漏配）。
+  | main.py `_hy_fan_path_segment` / `src/web_models.py::_as_*` / `src/spider.py::parse_xhs_live_url` / `tests/test_i18n_raise_site_tr.py`
+- **「两套文本必须同源」的故障只能用静态结构锁看见**（2026-10-17，9 处 Qt 按钮图标消失）：`action_button("📥  X")` 与 `set_text(btn, T("X"))` 单看任一行都成立，但 `set_text` 建时即回填 + 登记重译，构造期文本会在启动回填和每次 `retranslate_all()` 被打回登记键的形态。修法不是改回填顺序，而是**让两处指向同一个 msgid**，且优先取目录里已存在的键（本轮复用 Tk 遗留的三空格形态 → 四目录零新增）。锁的形态：AST 收集「构造字面量」与「登记键」两张表按属性名配对判等，另配 emoji 下限 + 键必须四目录齐全两条判据；行为侧证据走 `QT_QPA_PLATFORM=offscreen` 真建页面读 `text()`，比断言源码字符串更硬。副作用要预先说明：孤儿裸文本键不会判红，改完必须 AST 复核哪些键就此失去调用点，再决定是否收回目录。
+  | `src/gui_qt/pages/dashboard.py` / `src/ui_i18n.py::set_text` / `tests/test_gui_qt_label_parity.py`
+- **全量 pytest 的用例数会因「按目录参数化的检查」而增长，别把这种增量当成新断言**（2026-10-17）：向 `tests/` 放两个新测试文件，总数从 4331 涨到 4343；其中 +4 是新用例，**+8 来自 `tests/test_test_hygiene.py` 的 4 条 `@pytest.mark.parametrize("path", _test_files())` 检查**各多访问一个文件。归因手法：`pytest --collect-only -q` 加/不加 `--ignore=<新文件>` 各测一次总数，差额即参数化面而非断言面。
+  | `tests/test_test_hygiene.py` / `tests/test_i18n_raise_site_tr.py`
+- **构建 `MainWindow` 的探针脚本不能用普通 `sys.exit` 收尾**（2026-10-17 实测挂满 240s 超时）：窗口构造会起非守护线程/定时器，解释器退出时 join 永不归零的线程 → 整脚本挂死，而控件文本其实早已拿到。探针一律先 `flush()` 再 `os._exit(0)`；另记两条同源坑：`MainWindow.__init__` 自带语言探测，探针里 `set_language()` 之后仍可能被持久化配置改判（读标签前必须钉语言并 `retranslate_all()`）；以及 `import main` 的脚本在解释器退出时会触发既有的 ffmpeg 进程清理 atexit（探针环境须确认无在录任务）。
+  | `src/gui_qt/main_window.py::_build_pages` / `tests/test_gui_qt_window.py`（offscreen 夹具即此先例）
+- **动手前先把「常识性故障」在本机测一遍**（2026-10-17，`CON.ttf` 保留设备名清洗）：按 MSDN 常识我直接给注释写成「copy2 到 `CON.ttf` 会抛 OSError / 写出打不开的文件」，实测却是 `shutil.copy2` **不抛错**、`iterdir()` 列得出 `CON.ttf`、`getsize`=8（`cmd` 重定向同样成功），只有 `\\?\` 扩展前缀那条路反而 `OSError [Errno 22]`。结论不是「这条不用做」，而是**理由必须换**：同一名字在不同 API 路径与不同 Windows 构建下语义不一致，而清洗后的名字会持久化进 `gui_font_file` 跨机器读回 → 保留清洗、把注释与用例说明改写成「可移植性防御 + 本机实测」。判据固化成用例的三形边界：整段基名命中才改（`CON.ttf`→`_CON.ttf`）、`COM10`/`LPT10` 不改、`console`/`NULx`/`myCON` 不改；并配一条「把判定放宽成子串匹配即红」的变异，证明边界断言不是摆设。
+  | src/ui_fonts.py `_WIN_RESERVED_NAMES` / tests/test_ui_fonts.py::test_safe_filename_prefixes_windows_reserved_device_names
+- **`return None` 型收敛必须配一行带类型名的日志，而且日志模板本身是新 msgid**（2026-10-17）：调用方拿 `None` 只能弹分类级提示，现场归因权全在子进程/异常那侧。写法照「异常日志必须带异常类型与上下文」：`i18n.tr(模板, type_name=type(e).__name__, err=e, …)`，`{type_name}` 不可省（Windows 上部分异常 `str()` 是空串，只打 `{err}` 就是空白行）。连带义务有两条：模板要**同批登记进四目录并重编 `.mo`**，否则 `test_runtime_templates_covered_by_catalog` 当场红；测试侧捕获用 `logger.add(level="WARNING")` + `finally: logger.remove(id)`，打桩 `shutil` 一律走被测模块命名空间的 shim（裸赋值共享模块属性会波及同进程其它会话）。
+  | src/ui_fonts.py::install_font_file / tests/test_ui_fonts.py::test_install_font_file_logs_copy_failure_with_reason

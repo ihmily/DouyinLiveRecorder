@@ -10,13 +10,16 @@
 # 真机面（真实 Windows 字体文件 + 私有注册热应用）需要系统字体与 GDI，缺任一即 skip；
 # 纯函数面无头可跑，Linux CI 也会执行（不留跳过口子）。
 
+import shutil
 import struct
+import types
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from src import ui_fonts
+from src.logger import logger
 
 _PROBE_FAMILY = "__dlr_missing_family_probe__"
 
@@ -192,13 +195,88 @@ class TestInstallAndRegister:
         assert ui_fonts.sfnt_family_name(target) == "Custom Face"
 
     def test_filename_is_sanitized(self, tmp_path: Path) -> None:
-        # 文件名来自用户的任意目录，可能带 Windows 非法字符或保留设备名；
-        # 清洗后拼接才能保证复制在冻结 exe 与 cp936 控制台下都不炸。
-        src = tmp_path / "font:with|weird*chars?.ttf"
-        src.write_bytes(_build_sfnt("Weird"))
+        # 文件名来自用户选的任意位置，落进本地字体目录前必须清洗；但**夹具名本身要能在两端都建出来**：
+        # 原夹具用 `font:with|weird*chars?.ttf`，Windows 把 `:` 解析成 `font` 的备用数据流，
+        # 于是 exists()/is_file() 为真而 shutil.copy2 抛 FileNotFoundError [WinError 3] →
+        # 被测函数按设计返回 None，用例变成「本机红、Linux CI 绿」的环境差异噪声（2026-10-17 实测）。
+        # 非法字符那半边改由下面的纯函数用例覆盖——不碰文件系统，两端语义一致。
+        src = tmp_path / "  my font  (v2) ..ttf"
+        src.write_bytes(_build_sfnt("Spaced Face"))
         target = ui_fonts.install_font_file(src, tmp_path / "app")
-        assert target is not None
-        assert ":" not in target.name and "|" not in target.name and "*" not in target.name
+        assert target is not None, "复制合法但名字不整洁的字体文件不该失败"
+        assert target.exists()
+        assert " " not in target.name and "(" not in target.name and ")" not in target.name
+        assert target.suffix == ".ttf"
+        # 复制语义：源文件仍在，且落盘名清洗后仍能解析出同一 family
+        assert src.is_file()
+        assert ui_fonts.sfnt_family_name(target) == "Spaced Face"
+
+    def test_safe_filename_handles_platform_illegal_chars_pure(self) -> None:
+        # 纯函数面：含 `:` `|` `*` `?` 的名字在 Windows 上根本建不出来，只能在字符串层面验清洗结果。
+        # 这条就是上面那条 fs 用例原来想覆盖、但被文件系统拦住的判据。
+        cleaned = ui_fonts._safe_filename("font:with|weird*chars?.ttf")
+        assert cleaned == "font_with_weird_chars_.ttf"
+        for ch in ':|*?"<>\\/':
+            assert ch not in cleaned, f"清洗后仍残留非法字符 {ch!r}"
+        # 幂等：清洗过的名字再过一遍不该变（否则重试/回填会不断改文件名）
+        assert ui_fonts._safe_filename(cleaned) == cleaned
+
+    def test_safe_filename_falls_back_when_name_has_no_content(self) -> None:
+        # 空名与「只剩点和空格」的名字都必须给出可用名，不能让 store / "" 拼出目录路径
+        assert ui_fonts._safe_filename("") == "custom_font.ttf"
+        assert ui_fonts._safe_filename("...") == "custom_font.ttf"
+        assert ui_fonts._safe_filename("  . .  ") == "custom_font.ttf"
+
+    def test_safe_filename_prefixes_windows_reserved_device_names(self) -> None:
+        # 保留设备名必须加前缀避开。注意判据是**字符串形态**、不是「本机一定写不进去」：
+        # 2026-10-17 在 Windows 10.0.26300 实测 CON.ttf/AUX.ttf 经 Python 与 cmd 都能落成普通文件，
+        # 但同一份名字在更早的 Windows 构建 / 资源管理器 / 未走 \\?\ 前缀的 API 下语义不一致，
+        # 而它会被写进 gui_font_file 持久化并跨机器读回（详见 ui_fonts._WIN_RESERVED_NAMES 注释）。
+        # 大小写不敏感、且与扩展名无关：CON.ttf 的基名仍是 CON。
+        for raw, want in (
+            ("CON.ttf", "_CON.ttf"),
+            ("nul.ttf", "_nul.ttf"),
+            ("COM1.otf", "_COM1.otf"),
+            ("LPT9.ttf", "_LPT9.ttf"),
+            ("PRN", "_PRN"),
+            ("AUX.ttf", "_AUX.ttf"),
+        ):
+            got = ui_fonts._safe_filename(raw)
+            assert got == want, f"{raw} 应加下划线前缀避开保留名，实得 {got!r}"
+            assert ui_fonts._safe_filename(got) == got, "前缀必须幂等，不能每次重试都叠一层下划线"
+        # 边界三形：COM10/LPT10 不在保留集合内（MSDN 只保留 1..9，扩到两位数会误改合法文件名），
+        # console/NULx/myCON 只是形似——按整段基名比对，不做子串匹配。
+        for name in ("COM10.ttf", "LPT10.ttf", "console.ttf", "NULx.ttf", "myCON.ttf"):
+            assert ui_fonts._safe_filename(name) == name, f"{name} 不该被改名"
+
+    def test_install_font_file_logs_copy_failure_with_reason(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 钉的是「异常被吞成 None 且日志零行」这一形态：调用方拿 None 只能弹一句分类级提示，
+        # 文件被占用 / 目标目录只读 / 磁盘满在 UI 上完全同形，唯一可归因的现场证据就是这行 warning。
+        src = tmp_path / "good.ttf"
+        src.write_bytes(_build_sfnt("Good Face"))
+
+        def deny(_a: Any, _b: Any) -> None:
+            raise PermissionError(13, "target directory is read-only")
+
+        # 替身走被测模块命名空间的 shim：直接 patch shutil.copy2 会波及同进程其它会话与守护线程
+        shim = types.SimpleNamespace(**vars(shutil))
+        shim.copy2 = deny
+        monkeypatch.setattr(ui_fonts, "shutil", shim)
+
+        captured: list[str] = []
+        handler_id = logger.add(lambda msg: captured.append(str(msg)), level="WARNING")
+        try:
+            assert ui_fonts.install_font_file(src, tmp_path / "app") is None
+        finally:
+            logger.remove(handler_id)
+        joined = "\n".join(captured)
+        assert "复制字体文件失败" in joined, f"失败必须留下一行原因，实得 {captured!r}"
+        assert (
+            "PermissionError" in joined
+        ), "日志须含异常类型名：Windows 下部分异常的 str() 为空串，只打 {err} 会打出空白行"
+        assert "good.ttf" in joined and "target directory is read-only" in joined
 
     def test_register_rejects_non_sfnt(self, tmp_path: Path) -> None:
         bad = tmp_path / "fake.ttf"

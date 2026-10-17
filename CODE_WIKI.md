@@ -143,7 +143,7 @@
 | FFmpeg | 视频录制与转码 |
 | Node.js + exejs/PyExecJS | 运行 JavaScript 签名算法（exejs 优先，PyExecJS 回退） |
 | Loguru | 结构化日志 |
-| tkinter.ttk + pystray + Pillow | GUI 图形界面与系统托盘 |
+| PySide6 (Qt6) + pystray + Pillow | GUI 图形界面与系统托盘（2026-10-17 起窗口层为 `src/gui_qt/`；tkinter.ttk 实现迁移期保留） |
 | Starlette + uvicorn | Web 管理面板后端 |
 | HTML + CSS + JavaScript | Web 管理面板前端 |
 | Docker | 容器化部署 |
@@ -230,6 +230,7 @@ DouyinLiveRecorder/
 │   ├── ab_sign.py                      # 抖音签名算法 (A-Bogus)
 │   ├── node_install.py                # Node.js 自动安装/初始化
 │   ├── ffmpeg_master_download.py       # FFmpeg master 构建下载器（按平台/架构拉取 + 校验，含挑战页识别与 TOFU）
+│   ├── ffmpeg_linux_download.py        # Linux 运行期 ffmpeg 直下（月末不可变标签 + 双趟拷贝，缺件时 dest 零改动）
 │   ├── ttwid.py                        # 抖音访客 ttwid 获取
 │   ├── web_api.py                      # Web 管理面板 Starlette 应用
 │   ├── web_models.py                   # Web 请求体校验层（纯标准库 dataclass + parse，替代 pydantic）
@@ -239,6 +240,9 @@ DouyinLiveRecorder/
 │   ├── ui_kit.py                       # GUI 控件工厂（ttk 变体样式映射 + Treeview 增量表格 + 过渡动效原语）
 │   ├── ui_scale.py                     # GUI 度量层（语义字号 token + 间距栅格 + 全局缩放档位 + 小屏降档）
 │   ├── ui_motion.py                    # GUI 动效层（off/subtle/full 三档 + 插值原语 + 系统「关闭动画」感知）
+│   ├── ui_i18n.py                      # GUI 静态标签 i18n 接线（T() 标记 + 语言切换整窗回填 + Qt/Tk 两种应用模式）
+│   ├── ui_fonts.py                     # GUI 自选字体（Tk 族名解析判据 + 私有字体加载 + config/fonts/ 副本）
+│   ├── gui_qt/                         # GUI 窗口层（PySide6/Qt6：app·theme·widgets·main_window·tray·settings_dialog·recorder·监控 + pages 五页）
 │   ├── http_config.py                  # HTTP 客户端共享运行时配置（SSL 验证开关）
 │   ├── async_http.py                   # 异步 HTTP 客户端 (httpx)
 │   ├── sync_http.py                    # 同步 HTTP 客户端
@@ -264,6 +268,7 @@ DouyinLiveRecorder/
 │   ├── srt_writer.py                    # SRT 字幕分段写入（时间轴对齐 ffmpeg segment）
 │   ├── ws_client.py                     # 弹幕 WebSocket 传输层（各平台弹幕共用，proxy=None 直连）
 │   ├── log_archive.py                   # 运行日志归档（停止录制流程收尾：四日志按时间戳改名）
+│   ├── startup_cleanup.py              # 启动期陈旧字节码缓存清理（白名单根 + 源码内容哈希哨兵）
 │   ├── platforms/                       # 各平台弹幕客户端：Douyin/Douyu/Huya/Bilibili/Twitch + 私有签名 _tars/_xbogus
 │   └── proto/                           # 抖音弹幕 protobuf（douyin.proto + 生成的 douyin_pb2）
 ├── web/                                 # Web 管理面板前端
@@ -282,7 +287,7 @@ DouyinLiveRecorder/
 ├── ffmpeg/                              # FFmpeg 二进制目录（Windows，git 忽略 exe）
 ├── node/                                # Node.js 二进制目录（Windows，git 忽略）
 ├── main.py                              # 命令行入口
-├── gui.py                               # GUI 图形界面入口（tkinter.ttk + src/ui_kit）
+├── gui.py                               # GUI 图形界面入口（委托 src/gui_qt/，PySide6 窗口层；tkinter 实现迁移期保留）
 ├── web.py                               # Web 管理面板入口
 ├── i18n.py                              # 国际化实现（print 翻译包装）
 ├── msg_push.py                          # 消息推送模块
@@ -969,7 +974,9 @@ def host_of(url: str) -> str: ...
 | distro | >=1.9.0 | Linux 发行版检测 |
 | tqdm | >=4.69.0 | 下载进度条 |
 | exejs | >=1.0.1 | JavaScript 执行引擎（PyExecJS 的活跃维护继任者，优先使用） |
-| PyExecJS | >=1.5.1 | JS 执行引擎回退兼容（exejs 未安装时使用） || pystray | >=0.19.5 | 系统托盘（GUI / Web 托盘模式） |
+| PyExecJS | >=1.5.1 | JS 执行引擎回退兼容（exejs 未安装时使用） |
+| PySide6 | >=6.12.0 | GUI 窗口层（`src/gui_qt/`，QSS token 主题 + Qt 控件；下界 6.12 为本机实测支持 Python 3.14.8 的最小版） |
+| pystray | >=0.19.5 | 系统托盘（GUI / Web 托盘模式） |
 | Pillow | >=12.3.0 | 图像处理（托盘图标生成） |
 | starlette | >=1.3.1 | ASGI 框架（`src/web_api.py` 阶段2 由 FastAPI 迁移为直接依赖 Starlette 驱动；下限 0.49.1→1.0.1→1.3.1 见 CVE/PYSEC 说明） |
 | uvicorn[standard] | >=0.51.0 | ASGI 服务器 |
@@ -1221,9 +1228,12 @@ python web.py
 # - 仅安装 build-essential（编译无二进制轮子的依赖）
 # - 创建 Python 虚拟环境 /opt/venv 并安装 requirements.txt
 #   （Node.js 只在运行时需要，builder 阶段不安装）
+# - INSTALL_GUI=false（默认）时按行首包名剔除 PySide6 后再装：镜像只跑 main.py / web.py，
+#   两者在屏蔽 PySide6 后导入链完整；过滤只发生在镜像侧，requirements.txt 仍保留该依赖
 
 # 阶段 2: runtime
 # - 精简基础镜像 + apt 安装 ffmpeg / nodejs(24 LTS) / tzdata / procps
+#   （仅 INSTALL_GUI=true 时追加 Qt 运行库 libegl1/libgl1/…，与 builder 的过滤同开关）
 # - 从 builder 复制 /opt/venv 虚拟环境
 # - 非 root 用户 recorder(uid=1000) 运行
 # - HEALTHCHECK 兼容 main.py 与 web.py 两种模式（pgrep）
@@ -1626,6 +1636,83 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 > 脚本直跑时额外输出 `VERIFICATION_RESULT: {"platform":..., "status":..., ...}` 结构化一行供机器解析。
 > 脚本：`tests/test_{bili,douyin,douyu,huya,twitch}_live_collector.py`（`python file.py <URL> [秒数]`，
 > 需活房间 + 外网，默认人工通道）。
+
+### v4.5.0-dev (2026-10-17) — `src/ui_fonts.py` 两处缺陷修复：字体复制失败不再零日志 + 落盘名清洗 Windows 保留设备名（新增 1 条日志模板 msgid，四目录 1131 → 1132 键；`tests/test_ui_fonts.py` 21 → 23 用例）
+
+> 交回清单里的两项，均为单文件生产修复，不动录制链。
+
+- **① 异常吞成 `None` 且不留日志**：`install_font_file` 的 `except Exception: return None` 现改为一行 `logger.warning(i18n.tr("复制字体文件失败: {name} -> {target} - {type_name}: {err}", …))` 后再返回 `None`。归因必要性在于调用方拿 `None` 只能弹**分类级**提示（`main_window.py:599/606` 的对话框文案不含 OSError 细节），文件被占用 / 目标目录只读 / 磁盘满 / 源文件在复制瞬间被移走这几种成因在 UI 上完全同形。按「异常日志必须带异常类型与上下文」的既有约定，`{type_name}` 与 `{err}` 并列——Windows 上部分异常的 `str()` 为空串，只打 `{err}` 会打出空白行。模板本身是盲区外的常规形态（字面量首参 + 命名占位符），已登记进四目录并重编 `.mo`。`src/ui_fonts.py` 因此新增 `import i18n` 与 `from src.logger import logger`。
+- **② `_safe_filename` 不处理 Windows 保留设备名**：新增 `_WIN_RESERVED_NAMES`（`CON`/`PRN`/`AUX`/`NUL`/`COM1-9`/`LPT1-9`），清洗后按**首个点之前的整段基名**大小写不敏感比对，命中即加 `_` 前缀（幂等：`_CON.ttf` 再过一遍不变）。`COM10`/`LPT10` 刻意不算保留名（MSDN 保留段只到 1..9），`console.ttf`/`NULx.ttf`/`myCON.ttf` 只是形似、不改。该名字会写进 `gui_font_file` 持久化并在下次启动读回，属于跨机器分发的路径。
+  **本条的立论按实测改写**：最初把理由写成「copy 到 `CON.ttf` 会抛 OSError / 写出打不开的文件」，本机实测直接证伪——Windows 10.0.26300 上 `CON.ttf`/`AUX.ttf` 经 Python `open()` 与 `cmd` 重定向**都能落成普通文件**（`iterdir()` 可见、`getsize`=8），而 `\\?\` 扩展前缀写 `AUX.ttf` 反而 `OSError [Errno 22] Invalid argument`。即同一名字在不同 API 路径/不同 Windows 构建下语义不一致，保留它才是风险；注释与用例说明一律改成「可移植性防御 + 实测记录」，不得写成「本机写不进去」。
+- **真机验证（GUI 面，非录制链）**：导入真实系统字体 `C:\Windows\Fonts\cambria.ttc` → 落 `app\config\fonts\cambria.ttc`、`exists()` 为真、**1 792 664 字节**；失败面把源换成不存在的子路径 → 返回 `None` 且日志恰一行 `复制字体文件失败: nofile.ttf -> …\config\fonts\nofile.ttf - FileNotFoundError: [WinError 2] 系统找不到指定的文件。`（含类型名与目标路径，正是修复前会丢的那条信息）。
+- **回归锁与变异**：`tests/test_ui_fonts.py::TestInstallAndRegister::test_install_font_file_logs_copy_failure_with_reason` （`shutil` 按 shim 口径挂到被测模块命名空间 + `logger.add(level="WARNING")` 捕获、`finally` 里 `logger.remove`）与 `…::test_safe_filename_prefixes_windows_reserved_device_names`（6 个保留名 + 幂等 + 5 个边界不改名）。变异 5 项全部符合预期：A1 摘掉 warning → 日志锁红、保留名锁绿；A2 摘掉保留名判定 → 反向（保留名锁红、日志锁绿）；A3 把判定放宽成子串匹配 → 边界用例红（证明 `console.ttf` 那条断言真在咬）。三处变异均按字节还原。
+- **AGENTS.md**：「自选字体」条由三条硬约束扩为**四条**，新增 ④（失败必须留 warning + 保留名清洗，并写明「不得写成本机写不进去」的实测边界）。
+
+**验证**：`run_gates.py` **10/10 全绿 rc=0**（black 244 files unchanged、无参 mypy 243 source files + 两平台增跑、`compile_po --check` 1133 条同步）；全量 `pytest --cov` **4345 passed / 14 skipped / 0 failed / 0 警告**，总覆盖 **83.02% → 83.04%**（新增两条用例覆盖到此前未触达的失败分支），`check_coverage.py` 68 模块达标；basedpyright **0/0/0**、裸跑 `pyright` **0/0/0**；四目录键集合逐项相等（各 1132 键），`.mo` 1133 条 / 149 505 字节（N == 键数 + 1）；`src/ui_fonts.py` 与被改用例文件行尾形态复测未变（各自保持纯 CRLF / 纯 LF）。
+
+### v4.5.0-dev (2026-10-17) — i18n 批准项 B+C 落地：9 处 Qt 按钮图标恢复（复用既有键，零新条目）+ 21 处中文 raise 文案在产生点接 `tr()`（新增 16 条 msgid，四目录 1115 → 1131 键）（`src/gui_qt/main_window.py` / `src/gui_qt/pages/{dashboard,config,runlog}.py` / `main.py` / `src/spider.py` / `src/web_models.py` / 四份目录 + `zh_CN.mo` / 新增 `tests/test_i18n_raise_site_tr.py`、`tests/test_gui_qt_label_parity.py`）
+
+> 本批只落地用户批准的 B、C 两项（A 项目录覆盖锁已于同日第三批完成）。
+
+- **B｜9 处按钮图标的根因**：`action_button("📥  最小化到托盘")` 之后紧跟 `set_text(btn, T("最小化到托盘"))`——`set_text` 建时即回填并登记重译，构造期带 emoji 的标签在启动回填与每次 `retranslate_all()` 都被打回裸文本，图标永久消失；单看任一行都「像是对的」。修法是把两处写成**同一个 msgid**，并取目录里**已存在的 Tk 三空格键**（`▶   开始录制` / `⏹   停止录制` / `⚙   高级设置` / `📂   打开下载目录` / `💾   保存 URL 配置` / `🔄   重新读取` / `🗑   清空日志` / `📥   最小化到托盘` / `❌   彻底退出`），**四目录零新增**。站点分布：侧栏 2（`main_window.py:256-259`）、dashboard 4（`:76-79`、`:104-107`）、config 2（`:55-58`）、runlog 1（`:50-51`）。行为证据走 offscreen 真建控件读 `text()`：三个页面（dashboard/config/logs）7 枚按钮 + `MainWindow` 侧栏 2 枚，在 `zh_CN`/`en_US`/`zh_TW` 下均在 `retranslate_all()` 之后仍带图标（如 `▶   Start Recording`、`🗑   清空日誌`）。顺带实测：`MainWindow` 自带语言探测，探针里 `set_language` 之后仍可能被它按持久化配置改判，读标签前必须钉语言（AGENTS.md 已知坑⑤同源）。
+- **C｜判据不是「有没有中文」而是「消息会不会被显示」**：21 个站点（`main.py` 12 / `src/spider.py` 3 / `src/web_models.py` 6，去重 16 条 msgid）在产生点包 `i18n.tr()`。原因是一条已经 `tr()` 过的日志模板会把异常消息当 `{reason}` 实参插值——**模板查表、消息从不查表**，只登记原文等于造死条目。三条 f-string 站点按不变量① 改写成常量模板 + 命名实参（`无法从链接中解析 TwitCasting 主播 ID: {masked_url}`、`...微博用户 ID: {masked_url}`、`字段 {field} 必须是…` 五条）；`src/web_models.py` 因此新增 `import i18n`（i18n 只依赖 stdlib + loguru，不回指 `web_*`，无环）。`extract_i18n_strings.py` 报**缺失 0 条**，四目录键集合逐项相等（各 1131 键），`.mo` 重编为 1132 条 / 149 357 字节（含头部空 msgid，N == 键数 + 1）。
+  运行时按语言实测（真函数、非桩）：`main._hy_fan_path_segment` 与 `web_models._as_bool/_as_str_list` 在四语下分别给出 `Path is empty, room ID missing` / `欄位 web_auth_enable 必須是布林值` / `房間號含非法字元` 等译文，占位符 `{field}` 由调用方实参填充。
+- **刻意不登记的 10 条（白名单集合相等钉住）**：`XhsUrlError` 九条消息——`src/spider.py` 两处 `except XhsUrlError` 与 `main._resolve_xhslink_com` 一律只读 `e.code`，message 从不显示；以及一条整句英文、只有括号里「原」字是汉字的站点（`TTingLive(原Flextv) login failed`），译它等于把英文再写成英文。`src/spider.py` 的斗鱼三条早已是 `i18n.tr()` 形态，本批未动。
+- **两条新锁 + 13 次变异**：`tests/test_i18n_raise_site_tr.py`（未接 `tr()` 站点走白名单集合相等、已接的 msgid 断言四目录齐全、锚点防空转）与 `tests/test_gui_qt_label_parity.py`（AST 判「构造标签 == 登记键」+ 带 emoji 配对下限 + 键必须四目录齐全）。变异 13 项里 12 项与预期一致；**第 13 项是我的预期写错而不是锁写错**——E2b（同源但整体去图标）我标了「绿」，实得红在 `assert 8 >= 9` 的 emoji 下限分支，正是它该咬的位置；全部变异按字节还原（`read_bytes()` 逐文件比对）。用例数增量口径：全量 `pytest` 4331 → **4343**，其中 +4 是两条新锁的用例，**+8 来自 `tests/test_test_hygiene.py` 的 4 条按 `tests/` 目录参数化的检查各命中两个新文件**（不是新增断言，属采集面变化）。
+- **真机端到端（DoD 第 2 步，受影响平台各跑一条真实房间）**：`python tests/test_huya_live_collector.py https://www.huya.com/660000 20` → **PASS，2 条弹幕 / SRT 206 字节**；`python tests/test_bili_live_collector.py https://live.bilibili.com/545068 20` → **PASS，33 条弹幕 / SRT 2 642 字节**（两份 `.srt` 为本次验证产物，已按收尾口径删除）。本轮改动的 `main.py` 站点在 hy.fan/b23.tv 短链解析的错误分支、`src/spider.py` 站点在 TwitCasting/微博/TTingLive 的畸形链接分支，真实房间走的是成功路径，与错误分支互不重叠——增量跑的意义在于证明导入链与解析链未被改动带偏。
+- **AGENTS.md 两处写回**：关键约定 #14 增「盲区⑤（raise 位文案）」及其准入条件；已知坑「GUI 静态标签走 `T()` 登记表」增第 ⑦ 条（Qt 构造标签与 `T()` 键必须同一 msgid）。**遗留交回**：B 之后 7 条裸文本键（`开始录制`/`停止录制`/`重新读取`/`保存 URL 配置`/`打开下载目录`/`高级设置`/`清空日志`）已无调用点（AST 枚举确认，`最小化到托盘`/`彻底退出` 仍被 `gui.py:782`、`src/gui_qt/tray.py` 用着），孤儿条目无门禁判红、也不在本批范围内，是否从四目录收回由维护者定。
+
+**验证**：`run_gates.py` **10/10 全绿**（无参 mypy 241 source files、black 242 files unchanged、两平台增跑、`compile_po --check` 1132 条同步）；全量 `pytest --cov` **4343 passed / 14 skipped / 0 failed / 0 警告**，总覆盖 **83.02%（与上一轮同值）**、`check_coverage.py` 68 模块达标；basedpyright **0 errors / 0 warnings / 0 notes**、裸跑 `pyright` **0 errors / 0 warnings / 0 informations**；`extract_i18n_strings.py` 缺失 0 条；四目录行尾形态逐文件复测保持原样（`.po`/两份 `.json`/`.yaml` 均纯 CRLF、无 BOM，追加后 bareLF 仍为 0）；`git status` 无杂散临时文件、`MUTATION-` 标记残留 0。未验证边界：`en_GB` 与 `en_US` 这 16 条同值——措辞里不含 `-ise/-ize`、`canceled/cancelled`、`catalog/catalogue` 一类英美分歧词，硬造差异反而破坏目录既有的「仅在真正分歧处分侧」惯例（全仓现有 22 条分歧条目）。
+
+### v4.5.0-dev (2026-10-17) — 测试侧修 Windows 专属红项 + 工具版本三面收敛 + `pyrightconfig.json` 让 IDE 结论可复核 + 覆盖率复跑（`tests/test_ui_fonts.py` / `.github/workflows/ci.yml` / `.pre-commit-config.yaml` / `pyrightconfig.json` / `tests/test_pyright_config_parity.py`）
+
+> 本批是用户对上一轮报告里四项「需人工处理」的批准落地：① 只改测试侧修掉唯一红项；② 解决 black/isort 的三面版本漂移；③ 跑覆盖率；④ 解决「Pylance 无法作为证据」。业务逻辑零改动。
+
+- **① `test_filename_is_sanitized` 的根因与修法（只动 `tests/`）**：夹具名 `font:with|weird*chars?.ttf` 里的 `:` 让 Windows 把它解析成名为 `font` 的**备用数据流（ADS）**——实测 `iterdir()` 只列出 `font`、`exists()/is_file()` 因流可 stat 而为真，但 `shutil.copy2` 抛 `FileNotFoundError [WinError 3]`，被 `src/ui_fonts.py` 的 `except Exception → return None` 收敛，于是「本机红、Linux CI 绿」。修法是把两件事拆开：**非法字符那半边下沉为纯函数用例**（直接断 `_safe_filename(...)`，不碰文件系统，两端语义一致），**fs 那半边换成两端都能创建、但仍需清洗的名字**（`"  my font  (v2) ..ttf"`），并补一条空名/纯点名必须回落 `custom_font.ttf` 的用例。`src/ui_fonts.py` 一行未动。变异验证：把 `_safe_filename` 改成恒等 → 三条用例同时转红（3 failed），按字节还原。
+- **② 三面收敛**：本机实装 black 26.10.1 / isort 9.0.2，CI 钉定 `black_version` 原为 26.5.1，而 `.pre-commit-config.yaml` 的两个 mirror rev 是第三套（black 25.9.0 / isort 6.1.0）。抬 CI `black_version` → 26.10.1、两个 mirror rev → 26.10.1 / 9.0.2，使「本地 venv / CI 钉定 / 提交钩子」只剩一个值。**抬之前先用 26.5.1 与 26.10.1 各跑一次全量 `black --check`**，两者都是 `242 files would be left unchanged`（解包 wheel 到临时目录跑，不动 venv；计数在清掉误建于仓库内的一次性目录之后取得），故这次抬值只消除版本差、不改变判定。两个新 rev 的存在性经 GitHub API 逐个核实（`refs/tags/26.10.1`、`refs/tags/9.0.2` 均 HTTP 200）；`pre-commit validate-config` OK。本机 clone 被代理拦住，所以「钩子真的装起来跑一遍」未经验证。
+- **③ 覆盖率复跑**：`pytest -q --cov=src --cov-report=json` → **4331 passed / 14 skipped / 0 failed**，总覆盖 **82.68% → 83.02%**；`scripts/check_coverage.py` → **68 模块全部达标**（`src/proto/douyin_pb2.py` 为显式豁免的 protoc 生成物）。模块级变化 6 处：`gui_qt/pages/quality.py` 61.62→84.00、`gui_qt/pages/danmaku.py` 55.11→71.75、`gui_qt/widgets.py` 80.81→87.38、`gui_qt/main_window.py` 64.34→65.07 上升，`src/proxy.py` 92.02→84.66、`src/web_api.py` 84.32→83.90 下降——本轮新增的用例把导入闭包拉宽后，先前靠别的用例顺带命中的行不再被覆盖，属**测量面变化而非回归**（两者仍远高于各自阈值）。
+- **④ Pylance 的可复核化**：先证伪一条捷径——本机确实装着 Pylance（`.vscode/extensions/ms-python.vscode-pylance-2026.4.101`，其 `dist/server.bundle.js` 能被 node 拉起来），但它的 LICENSE 明文只授权「在 Visual Studio 系产品内使用」，所以**不写**去 shell 驱动该 bundle 的工具，AGENTS.md 里把这条禁令钉死。改为治根因：IDE 与 CLI 之前没有共用配置（本仓既无 `[tool.pyright]` 也无 `pyrightconfig.json`，裸跑 pyright 走自带默认范围），于是 IDE 的红线本来就无法复现。现新增 `pyrightconfig.json`：include 逐项目等于 `[tool.mypy].files`、exclude 覆盖 mypy 与 basedpyright 两份清单、typeCheckingMode/pythonVersion/venv 同 `[tool.basedpyright]` → **不带路径跑 `pyright` 就是在复现 IDE 的扫描面**，本轮读数 0 errors / 0 warnings。同源关系由 `tests/test_pyright_config_parity.py`（5 用例）机检，五处变异各自转红（include 删一个根入口、typeCheckingMode 改 off、exclude 删项、venv 指错），配置按字节还原。
+  两处实测细节写进了配置注释：① pyright 只接受**已知顶层键**，把说明写成 `"//"` 键会报 `Config contains unrecognized setting`，故说明一律用 JSONC 行注释；② `$schema` 同样不被识别（每次跑都吐一行噪声），已挪进注释。
+- **AGENTS.md 两处随之更新**：「本地门禁可外推的前提」追加三面收敛读数（并保留抬常量 ≠ CI 实跑已验证的原口径）；「`pyright` 与 Pylance 的定位」按新事实改写（原先写「本仓没有 pyright 配置段、要复现就得显式传路径」，现已被这份配置取代），并按 AGENTS.md 自身规则直接改正文而非叠层。
+
+**验证**：`run_gates.py` **10/10 全绿**（无参 mypy 241 source files，black 侧 242 files unchanged + 两平台增跑、`compile_po --check` 1116 条同步）；全量 `pytest --cov` **4331 passed / 14 skipped / 0 failed / 0 警告**；basedpyright **0 errors / 0 warnings / 0 notes**；裸跑 `pyright`（走新配置）**0 errors / 0 warnings / 0 informations**；`check_coverage.py` 68 模块达标；`test_ui_fonts.py` 21 passed（本轮从 20 passed + 1 failed 变全绿）、`test_pyright_config_parity.py` 5 passed、`test_pre_commit_config.py + test_run_gates.py` 合计通过；`MUTATION-` 标记残留双查为 0，`src/ui_fonts.py` 与 `pyrightconfig.json` 改前后按字节断言一致。未容器实测的边界照旧：无 Docker 守护进程、pre-commit 的 clone 被本机代理拦住。
+
+### v4.5.0-dev (2026-10-17) — 元数据同源同步（A1-A8 + B1）+ 镜像默认不装 GUI 依赖（`INSTALL_GUI` 单开关）（`AGENTS.md` / `CODE_WIKI*` / `README*` / `Dockerfile` / `docker-compose.yaml` / `config/config.ini` / `docs/agent-reference/project-structure.md` / 新增 `tests/test_dockerfile_image_gui_arg.py`）
+
+> 基线：HEAD `72d1664` 起的全部工作区改动（含 Qt 会话遗留的 `pyproject.toml` packages 与 `egg-info/SOURCES.txt`）；事实源 `pyproject.toml`：version 4.5.0 / requires-python >=3.14 / 运行期依赖 21 条（含 `PySide6>=6.12.0`）/ extras dev 7·gui 3·build 1 / 三入口 scripts / packages 5 项。
+
+- **机器门禁先复核为绿**（因此本批只改表述，不改取值）：`check_version.py` PASS、`sync_metadata.py --check` OK、`requirements.txt` 21 ↔ pyproject 21 集合相等、`uv.lock` 本包 4.5.0 且锁内 21 条与 pyproject 逐条一致、`PKG-INFO` 运行期 `Requires-Dist` 21 条逐规格相等（protobuf 的 `<8,>=6.33.5` 是 setuptools 规范化形态）、`.coveragerc-concurrency` 的 omit 24↔24 与 exclude_also 4↔4、`.gitignore`/`.dockerignore` 的 19 个同源目录名齐全、compose 三服务 ↔ 三入口、`python_build=3.14`/`node_version=24` 两 workflow 同值。
+- **A1-A3（AGENTS.md 依赖管理段三处漂移）**：运行时依赖条数 20 → **21**（复核日期同步到 2026-10-17，并注明 `PySide6` 随窗口层迁移加入）、`.[gui]` 由「pystray/Pillow」改为「PySide6/pystray/Pillow 三条」、「GUI 两包版本下限」改为**三包**并补 `PySide6>=6.12.0`（历史注按「只增不改」追加，不删原句）。
+- **A4-A8（CODE_WIKI 双语）**：技术栈表 `tkinter.ttk + pystray + Pillow` → `PySide6 (Qt6) + pystray + Pillow`（注明 tkinter 实现为迁移期保留）；Python 依赖表补 `PySide6 >=6.12.0` 行——CN 侧顺带修掉一个**表格断行缺陷**（PyExecJS 与 pystray 两行被挤在同一物理行，markdown 渲染成坏行、且让 CN 比 EN 少一行），两文件现各 21 行且`|` 计数逐行相等；目录树 `gui.py` 入口注改指 `src/gui_qt/`；src 子树补 `gui_qt/` 子包与 `ui_i18n.py`/`ui_fonts.py`/`ffmpeg_linux_download.py`/`startup_cleanup.py` 四条（双语同文本，与本段既有写法一致）。
+- **B1（config.ini 模板补两键）**：README 双语 L481-483/L495-497 已记录、`src/ui_fonts.py` 在读，而基线模板缺 `gui_font` / `gui_font_file` → 按 AGENTS.md「模板默认值须与代码 fallback、README 配置块逐项对账」补入；该文件是 **BOM + 纯 LF**（不是 CRLF），按自身形态写入并复测。对账判据：三处 `[GUI]` 键集合现在两两相等。
+- **C1（外迁目录树明细）**：`docs/agent-reference/project-structure.md` 补 GUI 层 5 模块 + `gui_qt/` + `startup_cleanup.py` + 两个 ffmpeg 下载模块，并删掉 2026-09-23 已整体删除的 `weverse_auth.py` 残留条目；该文件行尾**混存**（CRLF 为主 + 17 处裸 LF），故不走整文件 split/join（那会把 17 行静默转成 CRLF），改用「锚点行 + 其自身行尾」的定点插入。复核：src 实际模块在两份树里已无缺项、无幽灵。
+- **镜像 slim（本轮唯一的行为变更）**：新增 `ARG INSTALL_GUI=false`——阶段1 在 false 时按行首包名剔除 `pyside6` 后再 `pip install`，阶段2 仅在 true 时补装 Qt 运行库（libegl1/libgl1/libglib2.0-0/libfontconfig1/libxkbcommon*/libdbus-1-3/libxcb-*）。依据是实测而非推断：本机 venv 里 PySide6 解压 **647.56MB**；用元路径拦截器屏蔽 PySide6 后 `import main` / `import web` 均成功（`gui.py` 也把窗口层延迟到 `main()` 内，import 期不碰它）。**清单不动**：过滤只发生在镜像侧，`requirements.txt` 与 pyproject 的集合相等锁不受影响（实测 grep 后 21 → 20 条、仅剔 pyside6、零误伤，残留的两行是纯注释、pip 视为注释）。compose 的 `gui` 服务显式传 `INSTALL_GUI: "true"` 并**另用 tag** `:latest-gui`（build 配置不同的服务共用同一 image 名会互相覆盖正在用的 tag）；`docker-publish.yml` 不传该参数，对外镜像保持 slim。
+- **新增回归锁 `tests/test_dockerfile_image_gui_arg.py`（5 用例）**：① 每个引用 `$INSTALL_GUI` 的阶段先声明后使用（ARG 不跨阶段，与 MIN-14 同族；`_stages` 丢弃纯注释的头部桶，否则诊断里的阶段号错一位）＋ 判据自检用例（合成源码喂进同一条判据，证明「使用先于声明」「整段没声明」两种破坏都能被抓到）；② 默认值必须 false + 过滤形态必须是「grep 剔除 + 临时清单」+ 清单里 PySide6 仍在（requirements 与 pyproject 两侧都断言）；③ compose gui 开开关且 tag 与 recorder 不同；④ 发布工作流不得出现 `INSTALL_GUI=true`。
+- **未做与边界（不得当作已验证）**：本机 **没有 Docker 守护进程**，因此「瘦身后的镜像确实能跑」与「GUI=true 分支真能起窗」都**未经容器实测**。已做的替代验证：6 条 RUN 载荷 `sh -n`/`bash -n` 全通过；把 pip 换成 echo 替身跑四条分支轨迹（`true`→整份清单，`false`/`TRUE`/空→临时清单，即大小写敏感、只认精确 `true`）；compose `yaml.safe_load` OK。容器内真窗验证交回有 Docker 的环境。
+
+**验证**：`run_gates.py` 10/10 全绿（无参 mypy 240 文件 + 两平台增跑、`compile_po --check`、`check_skill_agents_consistency`）；新增锁 5 用例 + `test_docker_publish_workflow` + `test_config_io_backup` + `test_web_config` + `test_i18n_catalog_coverage` + `test_regression_2026_09_22_gates` 合计 177/186 passed 无告警；全量 `pytest -q` 见本轮收尾读数；变异验证六项全部按预期转红（阶段2 声明挪后 / 阶段1 默认值改 true / 过滤动作摘成 cat / gui 删开关 / gui 改回同 tag / 发布链塞 true），四文件改前后备份-还原按字节断言一致，`MUTATION-` 残留双查为 0。
+
+### v4.5.0-dev (2026-10-17) — i18n 盲区④由「人工登记」升级为可机检：新增 `tests/test_i18n_catalog_coverage.py`（三条锁 + 变异验证）
+
+- **动因**：同一天的四语目录同步暴露出盲区④完全没有防线——`scripts/extract_i18n_strings.py` 与不变量③只看 `tr()`/`T()` 的**字面量首参**，对 `i18n.tr(msgid)`（msgid 来自元组表）、`tr(THEME_LABELS[k])`、`T(title)`（循环变量）一概看不见；Qt 侧栏正是这种形态，于是「目录缺词条」与「一切正常」在门禁上不可区分（提取器恒报 0 缺失的假绿）。
+- **三条锁**：⑤-A 按名调用点解析出的 msgid 候选必须**四份目录齐全**；⑤-B 解析不出的调用点用**白名单集合相等**判定（比计数上限强：新增即红、已知点被消解后不收回白名单也红），当前白名单只含 `src/ui_i18n.py:34`；⑤-C 四份目录键集合逐项相等（含 `.po` 剔除头部空 msgid 的既有口径）。⑤-A 自带两处锚点断言（`found` 非空、必须解析出含「控制台」的导航 msgid），使「解析器什么都没抓到」不能冒充全绿。
+- **解析器口径**：扫描面直接取提取器的 `SCAN_FILES`（不另建第二份清单，本仓「清单复制即漂移」先例已成把尺子）；名字→候选集合的解析收四类绑定（模块级 UPPER_CASE 常量跨文件合并，用于 `THEME_LABELS` 这类导入表；本文件局部赋值；`for page_id, msgid in ((...))` **按位置**对齐取元素，取错位会把 `dashboard` 这类 id 当文案造成假红；形参位实参），并按 `_INDEX_PASSES=3` 轮迭代收敛两层链（`_pattern_from_template → _sentinel_text`）。小写名**不跨文件**合并，避免同名变量互灌。
+- **性能**：首版在 `_binding_index` 里对每个函数再走一遍 `ast.walk(tree)`，实测单次 35s；把调用点收一次后降到 ~6s，三条用例共用 `functools.lru_cache` 的同一份解析（本文件总耗时 6.5s）。
+- **变异验证**（四条各钉一个咬合点，全部按预期转红/转绿，改前后按字节还原并断言一致）：M1 en_US 用等长标记键替换一条导航键 → ⑤-A 与 ⑤-C 同时红；M2 zh_TW 删一条按名 msgid → 两者红；**M3 源码侧把 `📊  控制台` 改成目录里没有的形态 → 只有 ⑤-A 红、⑤-C 绿**（四侧一致缺失时键集合仍相等，这正是 ⑤-A 独立存在的理由）；M4 把 `tr(self.msgid)` 换成字面量 → ⑤-B 因白名单陈旧而红。
+- **未做**：不改任何生产代码；`main.py`/`src/spider.py`/`src/web_models.py` 里 15 条含中文、去重约 9 条的 raise 位文案仍未接 `tr()`（接了才有目录意义），属下一轮独立改动。
+
+**验证**：`pytest tests/test_i18n_catalog_coverage.py -q` 3 passed；`tests/test_test_hygiene.py + test_i18n_migration.py + 本文件` 合计 604 passed；`run_gates.py` 10/10 全绿（无参 mypy 239 文件、`compile_po --check` 1116 条同步）；全量 `pytest -q` 4303 passed / 14 skipped / 1 failed，唯一红项仍是 `tests/test_ui_fonts.py::TestInstallAndRegister::test_filename_is_sanitized`（本机文件名含 `:` → ADS 解析，与 i18n 无关）。
+
+### v4.5.0-dev (2026-10-17) — i18n 四语目录同步：补 Qt 侧栏导航 5 条「按名 tr()」msgid，四目录键数 1110 → 1115（`i18n/zh_CN/LC_MESSAGES/zh_CN.po|.mo` / `en_US.json` / `en_GB.json` / `zh_TW.yaml`）
+
+- **扫描面**：以 `scripts/extract_i18n_strings.py` 为基线（其 SCAN_FILES 报 0 缺失），另做独立 AST 全量扫描——74 个运行期 `.py`（根 5 入口 + `src/**`，排除 `.venv`/`node`/`ffmpeg`/`__pycache__`/`tests`/`scripts`/`build_exe.py`），逐条过第 14 条四个盲区：① `color_obj.print_colored` 字面量全部已登记；② `messagebox.show*` 与 Qt 文本位（`setText`/`setWindowTitle`/`setToolTip`/`addButton`/`addItem`/`setHorizontalHeaderLabels`）无未登记字面量，残留命中只有品牌名 `DouyinLiveRecorder`、装饰符 `☰`/`🌓` 与 `'-'`；③ `msg_push.py` 未登记的仅 `__main__` 自测样例两处；④ 按名传入 `tr()`/`T()` 的 15 处调用点逐一解引用（`_THEME_LABELS`/`_MOTION_LABELS`/`STATUS_TPL_*`/`_INSECURE_BIND_ENV_TAIL`/dashboard 网格标题）全部命中目录。
+- **唯一真缺口是盲区④的形态漂移**：`src/gui_qt/main_window.py:238-242` 把侧栏 msgid 放在元组里 `i18n.tr(msgid)` 按名传入，Qt 用**两空格**形态（`📊  控制台`），而目录只有 Tk 遗留的**三空格**形态（`📊   控制台`）→ 切 en_US/en_GB/zh_TW 后侧栏与派生页标题（`:380` 的 `text().split("  ")[-1]`）恒回落简中原文。四目录各 +5 条并重编 `.mo`。
+- **两套形态并存是刻意决定，不是重复登记**：`gui.py:2110-2114` 的 `_legacy_main()`（九份 `tests/test_gui_*.py` 以 AST/subprocess 钉在该模块）仍在用三空格形态。首轮按「源文已变更」做了改名，随即被提取器报「5 条缺失」暴露并**撤销改为并存**——改名会同时弄坏 Tk 侧栏译文。判据教训：非 ASCII + 连续多空格的模式在 Git Bash `grep` 下**静默漏配** `gui.py` 的调用点，孤儿判定一律走 AST 常量值比对。
+- **刻意不动的两类**：① `build_exe.py` 的 `[build]` 日志（发布链开发侧输出，不在 i18n 扫描面，47 条）；② `action_button("📥  最小化到托盘")` 等 9 处构造器字面量——下一行 `set_text(..., T("最小化到托盘"))` 立即覆盖，既不进显示也不查目录，登记只会造成死条目。**代码侧待办**：Qt 按钮的 emoji 前缀因此实际丢失。
+- **面板可见但未接 `tr()` 的一类（登记即死条目，本次不登记）**：`src/web_config.py::_check_url_target` 的 ValueError 文案与 `_INTERNAL_TARGET_HINT`（作为 f-string 实参注入，从不查表）、`src/web_models.py` 类型错误文案（经 `HTTPException(422, str(exc))` 原样出面板）、以及 raise 位常量消息共 **115 条**不在目录（`src/spider.py` 87 / `main.py` 12 / 其余 16）。要覆盖须先在产生点接 `tr()`，属代码改动、不在目录同步范围内。
+- **前端与脚本**：`web/app.js` 内嵌四套目录（127 键 × 4 语，与后端四目录不同源、面板点分键不进后端）只读核对两两相等、无漂移；`StopRecording.vbs`（UTF-16 LE）只含进程名标识符，无用户文案。
+
+**验证**：`extract_i18n_strings.py` 缺失 0 条、无「不一致」读数；四目录键数各 1115 且键集合逐项相等；`python scripts/compile_po.py` 生成 `.mo`（1116 条含头部空 msgid，147 743 字节）、`--check` 报同步、`gettext.GNUTranslations` 回读 1116 条；本机 GNU `msgfmt --check` rc=0、与仓库产物 msgid 集合逐项相等（仅头部元信息串形态不同）。进程内复现导航真实链路 `tr(msgid)` → `split("  ")[-1]`：en_US 得 `📊  Console` / `Console`，zh_TW 得 `🎯  畫質監控` / `畫質監控`，未启动 GUI 窗口（不打扰桌面）。`python scripts/run_gates.py` **10/10 全绿**；`pytest -q` **4303 passed / 14 skipped / 1 failed**，唯一红项 `tests/test_ui_fonts.py::TestInstallAndRegister::test_filename_is_sanitized` 与 i18n 无关（用例构造的文件名含 `:`，本机 `shutil.copy2` 失败；`test_ui_fonts.py` 与 `src/ui_fonts.py` 均零 `i18n` 引用，属 Windows 专属、Linux CI 不现）。四份目录行尾形态逐文件复测保持原样（纯 CRLF、无 BOM），`.po` 头部两处日期字段更新为 2026-10-17。真机端到端（第 2 步）：不涉及录制链/选源/ffmpeg/平台解析，未执行。
 
 ### v4.5.0-dev (2026-10-17) — GUI 窗口层迁移 PySide6：设计稿视觉语言 1:1 落地 + 打包链 Qt 死重剪除（`src/gui_qt/` / `gui.py` / `build_exe.py`）
 

@@ -157,9 +157,13 @@ jobs:
           # 版本漂移会直接改变类型结论（与 black / isort 同一「代码未改动却 CI 变红」形态）。
           # 四个值须与本地 .venv 实装版本**逐一同值**（AGENTS.md「格式化命令」的可外推前提），
           # 否则「本地门禁全绿」不等于「CI 会绿」。isort 现 9.0.2 = 本机实装（2026-10-04 抬，
-          # 原 9.0.1 与本地差一个补丁位）。
+          # 原 9.0.1 与本地差一个补丁位）；black 现 26.10.1 = 本机实装（2026-10-17 抬，原 26.5.1）——
+          # 抬之前已用 26.5.1 与 26.10.1 两个版本各自全量跑过一次 --check，两版结论逐字相同
+          # （当时 239 files unchanged，本轮收尾复跑 242），即这次抬值不改变判定，只消除「本地≠CI 版本」的外推缺口。
+          # 同一组版本还写进 .pre-commit-config.yaml 的两个 mirror rev（三面收敛为一面）：
+          # 三处任一处单独抬，就会造出「pre-commit 用 A 版本格式化、CI 用 B 版本判定」的互擦。
           {
-            echo "black_version=26.5.1"
+            echo "black_version=26.10.1"
             echo "isort_version=9.0.2"
             echo "mypy_version=2.4.0"
             echo "pytest_version=9.1.1"

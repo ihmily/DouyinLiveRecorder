@@ -253,10 +253,13 @@ class MainWindow(QMainWindow):
         scroll.setWidget(pane)
         layout.addWidget(scroll, 1)
 
-        self.minimize_btn = action_button("📥  最小化到托盘")
-        set_text(self.minimize_btn, T("最小化到托盘"))
-        self.quit_btn = action_button("❌  彻底退出", "danger")
-        set_text(self.quit_btn, T("彻底退出"))
+        # 构造标签与 T() 必须用同一个 msgid：set_text 在建立后立刻回填，两处写法不一致时
+        # 启动期与每次 retranslate_all() 都会把构造期的带 emoji 标签覆盖成 T() 的裸文本（emoji 丢失）。
+        # 三空格形态是与 Tk 遗留实现共用的既有目录键，不新增条目。
+        self.minimize_btn = action_button("📥   最小化到托盘")
+        set_text(self.minimize_btn, T("📥   最小化到托盘"))
+        self.quit_btn = action_button("❌   彻底退出", "danger")
+        set_text(self.quit_btn, T("❌   彻底退出"))
         connect_click(self.minimize_btn, self.minimize_to_tray)
         connect_click(self.quit_btn, self.quit_application)
         layout.addWidget(self.minimize_btn)

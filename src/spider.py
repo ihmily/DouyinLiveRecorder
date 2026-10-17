@@ -3891,7 +3891,9 @@ async def get_flextv_stream_data(
             )
             if not username or not password or len(username) < 6 or len(password) < 8:
                 raise RuntimeError(
-                    "TTingLive(原Flextv)登录失败！请在config.ini配置文件中填写正确的TTingLive(原Flextv)平台的账号和密码"
+                    i18n.tr(
+                        "TTingLive(原Flextv)登录失败！请在config.ini配置文件中填写正确的TTingLive(原Flextv)平台的账号和密码"
+                    )
                 )
             new_cookies = await login_flextv(username, password, proxy_addr=proxy_addr)
             if new_cookies:
@@ -4520,7 +4522,9 @@ async def get_twitcasting_stream_url(
     # 畸形 URL（无主播 ID 段）：显式报错而非 IndexError
     if len(parts) < 4 or not parts[3].strip():
         # M-3（2026-09-29）：异常消息里的 URL 先过脱敏（同 PandaTV/WinkTV 口径）
-        raise RuntimeError(f"无法从链接中解析 TwitCasting 主播 ID: {utils.mask_credentials(url)}")
+        raise RuntimeError(
+            i18n.tr("无法从链接中解析 TwitCasting 主播 ID: {masked_url}", masked_url=utils.mask_credentials(url))
+        )
     anchor_id = parts[3]
     # 调用方透传 cookie 时优先采用；否则走游客态/自动获取凭据（各平台未登录态取流能力不一，部分更易被风控）
     if cookies:
@@ -4753,7 +4757,9 @@ async def get_weibo_stream_data(
         # 畸形 URL（无 /u/ 用户段）：显式报错而非 IndexError
         if len(parts) < 2 or not parts[1].strip():
             # M-3（2026-09-29）：异常消息里的 URL 先过脱敏（同 TwitCasting 口径）
-            raise RuntimeError(f"无法从链接中解析微博用户 ID: {utils.mask_credentials(url)}")
+            raise RuntimeError(
+                i18n.tr("无法从链接中解析微博用户 ID: {masked_url}", masked_url=utils.mask_credentials(url))
+            )
         uid = parts[1]
         web_api = f"https://weibo.com/ajax/statuses/mymblog?uid={uid}&page=1&feature=0"
         json_str = await async_req(web_api, proxy_addr=proxy_addr, headers=headers)

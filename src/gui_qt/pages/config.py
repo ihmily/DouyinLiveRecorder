@@ -52,10 +52,11 @@ class ConfigPage(QWidget):
 
         btn_row = QHBoxLayout()
         btn_row.addStretch(1)
-        self.reload_btn = action_button("🔄  重新读取")
-        set_text(self.reload_btn, T("重新读取"))
-        self.save_btn = action_button("💾  保存 URL 配置", "primary")
-        set_text(self.save_btn, T("保存 URL 配置"))
+        # 构造标签与 T() 同 msgid（三空格=与 Tk 遗留共用的既有目录键），理由见 main_window 侧栏同名注释。
+        self.reload_btn = action_button("🔄   重新读取")
+        set_text(self.reload_btn, T("🔄   重新读取"))
+        self.save_btn = action_button("💾   保存 URL 配置", "primary")
+        set_text(self.save_btn, T("💾   保存 URL 配置"))
         btn_row.addWidget(self.reload_btn)
         btn_row.addWidget(self.save_btn)
         body.addLayout(btn_row)

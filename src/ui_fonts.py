@@ -29,6 +29,8 @@ from pathlib import Path
 from tkinter import font as tkfont
 from typing import Any, Final
 
+import i18n
+from src.logger import logger
 from src.web_config import update_or_append_config_line
 
 # 持久化落点：config.ini [GUI] gui_font（family 名或空 = 随系统默认）、
@@ -316,15 +318,47 @@ def install_font_file(source: str | Path, app_root: str | Path) -> Path | None:
     target = store / safe_name
     try:
         shutil.copy2(src, target)
-    except Exception:
+    except Exception as e:
+        # [为什么必须留这一行日志] 调用方拿到 None 只会打「导入字体失败」的泛化提示
+        # （main_window 的对话框文案是分类级的，不含 OSError 细节），异常若在此静默收敛，
+        # 现场就只剩「用户复述点了一次没反应」——文件被占用 / 目标目录只读 / 磁盘满 /
+        # 源文件在复制瞬间被移走（2026-10-17 真机实测到的是这条 FileNotFoundError
+        # [WinError 2]）这几种成因在 UI 上完全同形，只有日志能把它们分开。
+        logger.warning(
+            i18n.tr(
+                "复制字体文件失败: {name} -> {target} - {type_name}: {err}",
+                name=src.name,
+                target=str(target),
+                type_name=type(e).__name__,
+                err=e,
+            )
+        )
         return None
     return target
+
+
+# Windows 保留设备名。清洗仍然要挡，但理由不是「本机写不进去」——
+# 2026-10-17 在本机（Windows 10.0.26300）实测 `CON.ttf`/`AUX.ttf` 经 Python open() 与
+# cmd 重定向**都能落成普通文件**（iterdir 可见、getsize 正常），说明新构建的 Win32 名称解析
+# 已放宽。挡它的真正原因是**可移植性**：同一份 config/fonts/CON.ttf 在更早的 Windows 构建、
+# 资源管理器改名/复制、以及未走 \\?\ 前缀的第三方 API 下会被当设备或直接拒名；而这个文件名
+# 还会被写进 gui_font_file 持久化并在下次启动读回，等于把一台机器上「看着没事」的路径
+# 分发到所有机器。COM10/LPT10 刻意不扩——按 MSDN 保留段只到 1..9，扩到两位数会误改合法文件名。
+_WIN_RESERVED_NAMES: Final[frozenset[str]] = frozenset(
+    {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+)
 
 
 def _safe_filename(name: str) -> str:
     cleaned = "".join(ch if ch.isalnum() or ch in "._- " else "_" for ch in name).strip(" .")
     cleaned = cleaned.replace(" ", "_")
-    return cleaned or "custom_font.ttf"
+    if not cleaned:
+        return "custom_font.ttf"
+    # 比对首个点之前的基名、大小写不敏感；加下划线前缀既避开保留名又保持幂等
+    # （再洗一次得到的是同一个名字，不会一路加前缀）。
+    if cleaned.split(".", 1)[0].upper() in _WIN_RESERVED_NAMES:
+        cleaned = f"_{cleaned}"
+    return cleaned
 
 
 # 把字体文件注册为本进程私有字体，返回它对 Tk 开放的 family 名（失败返回 None）。

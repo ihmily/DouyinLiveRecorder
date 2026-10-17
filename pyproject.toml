@@ -136,7 +136,11 @@ build-backend = "setuptools.build_meta"
 # 子包必须显式列出：显式 packages 不会递归发现，漏列会让 `pip install .` 产出的
 # 发行包缺失 src/platforms（各平台弹幕采集器）与 src/proto（抖音弹幕 protobuf），
 # 运行时以 ModuleNotFoundError 形式炸在导入链上（egg-info/SOURCES.txt 可核对）
-packages = ["src", "src.platforms", "src.proto"]
+# [2026-10-17 GUI 重设计] 补 src.gui_qt / src.gui_qt.pages：gui.py:main() 已委托到
+#   src.gui_qt.app.main()，而 main_window.py 又相对导入 .pages.{config,danmaku,dashboard,
+#   quality,runlog}。漏列时任一子包都不进 wheel，`pip install .` 装出的
+#   douyin-recorder-gui 入口在导入链第一段就 ModuleNotFoundError。
+packages = ["src", "src.gui_qt", "src.gui_qt.pages", "src.platforms", "src.proto"]
 # 顶层单文件模块：保证 [project.scripts] 三个入口（main/gui/web）安装后可用
 py-modules = ["main", "web", "gui", "i18n", "msg_push"]
 

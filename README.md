@@ -738,7 +738,7 @@ docker run -d -v ./config:/app/config -v ./downloads:/app/downloads \
 - 标签形态：`latest` 与 `vX.Y.Z`；`latest` 只随 `v*` tag 产出，不开放手动触发覆盖。
   两个分架构 tag（`:vX.Y.Z-amd64` / `-arm64`）属合成前的中间产物，当前不会自动清理。
 - 匿名拉取要求该 GHCR 包的可见性为 **public**——那是仓库设置层面的一次性人工动作。
-- 与 `docker-compose.yaml` 里的 `image: y123ao6/douyin-live-recorder:latest` **刻意不同源**：compose 走
+- 与 `docker-compose.yaml` 里的 `image: y123ao6/douyin-live-recorder:latest` **刻意不同源**（`gui` 服务另用 `:latest-gui`，见下方「切换运行模式」）：compose 走
   `pull_policy: build` 就地构建（不拉 registry 上的同名镜像），上面「快速启动」的说明保持不变；
   要用 GHCR 预构建镜像请按上面的 `docker run`，arm64 主机走 compose 就地构建同样可行。
 
@@ -756,6 +756,11 @@ docker compose --profile web up -d
 # GUI 模式（需 X11 显示环境，先在宿主机执行 xhost +local:）
 docker compose --profile gui up -d
 ```
+
+> ℹ️ 镜像分两种依赖形态：`recorder` / `web` 用的默认镜像**不装** GUI 窗口层依赖（PySide6 解压后
+> 本机实测 647.56MB，而这两个服务在屏蔽它后导入链完整，装进来也用不上）；`--profile gui` 会按
+> `--build-arg INSTALL_GUI=true` **单独构建另一枚 tag**（`...:latest-gui`）并同时补装 Qt 运行库，
+> 因此首次启用 GUI 模式会多一次构建，也不会覆盖 recorder / web 正在使用的镜像。
 
 > ⚠️ Web 模式注意：`web.py` 默认监听 `127.0.0.1`，容器内必须在 `config/config.ini`
 > 的 `[Web]` 节设置 `web_host = 0.0.0.0` 才能从宿主机访问；同时建议开启

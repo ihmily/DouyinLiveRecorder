@@ -1961,18 +1961,18 @@ def _hy_fan_path_segment(record_url: str) -> str:
         path = urlsplit(record_url).path
     except ValueError:
         # 含控制字符 / 非法端口等畸形入参：urlsplit 抛 ValueError，按「无法解析」定因
-        raise ValueError("URL 无法解析")
+        raise ValueError(i18n.tr("URL 无法解析"))
     segments = [seg for seg in path.split("/") if seg]
     if not segments:
-        raise ValueError("路径为空，缺少房间号")
+        raise ValueError(i18n.tr("路径为空，缺少房间号"))
     if len(segments) > 1:
-        raise ValueError("路径含多级目录，不是标准房间链接")
+        raise ValueError(i18n.tr("路径含多级目录，不是标准房间链接"))
     segment = segments[0]
     # isascii 收紧 isalnum 的 Unicode 宽字符误判：全角数字（３０７…）不是合法房间号，
     # 不能流向虎牙接口。与 spider.get_huya_app_stream_url 的 room_id.isdigit() 判定同口径，
     # 这里在入口先挡一层，短码侧同理（base62 短码本身就是 ASCII）。
     if not (segment.isascii() and segment.isalnum()):
-        raise ValueError("房间号含非法字符")
+        raise ValueError(i18n.tr("房间号含非法字符"))
     return segment
 
 
@@ -2016,10 +2016,10 @@ async def _resolve_hy_fan_room_segment(record_url: str, proxy_addr: str | None) 
     # 契约是「成功回最终 URL、失败回空串」（MID-2225）：按既有调用点口径 isinstance+非空收窄，
     # 空串与非 str 一律归为「未获取到跳转地址」。
     if not isinstance(final_url, str) or not final_url:
-        raise ValueError("未获取到跳转地址")
+        raise ValueError(i18n.tr("未获取到跳转地址"))
     segment = _huya_room_segment_from_landing(final_url)
     if not segment:
-        raise ValueError("跳转地址不是虎牙直播间")
+        raise ValueError(i18n.tr("跳转地址不是虎牙直播间"))
     return segment
 
 
@@ -2177,17 +2177,17 @@ def _b23_tv_path_segment(record_url: str) -> str:
         path = urlsplit(record_url).path
     except ValueError:
         # 含控制字符 / 非法端口等畸形入参：urlsplit 抛 ValueError，按「无法解析」定因
-        raise ValueError("URL 无法解析")
+        raise ValueError(i18n.tr("URL 无法解析"))
     segments = [seg for seg in path.split("/") if seg]
     if not segments:
-        raise ValueError("路径为空，缺少房间号")
+        raise ValueError(i18n.tr("路径为空，缺少房间号"))
     if len(segments) > 1:
-        raise ValueError("路径含多级目录，不是标准房间链接")
+        raise ValueError(i18n.tr("路径含多级目录，不是标准房间链接"))
     segment = segments[0]
     # isascii 收紧 isalnum 的 Unicode 宽字符误判：全角数字（２２７…）不是合法房间号/短码，
     # 不能流向B站接口。与 _hy_fan_path_segment 同口径，这里在入口先挡一层
     if not (segment.isascii() and segment.isalnum()):
-        raise ValueError("房间号含非法字符")
+        raise ValueError(i18n.tr("房间号含非法字符"))
     return segment
 
 
@@ -2234,10 +2234,10 @@ async def _resolve_b23_tv_room_segment(record_url: str, proxy_addr: str | None) 
     # 契约是「成功回最终 URL、失败回空串」（MID-2225）：按既有调用点口径 isinstance+非空收窄，
     # 空串与非 str 一律归为「未获取到跳转地址」。
     if not isinstance(final_url, str) or not final_url:
-        raise ValueError("未获取到跳转地址")
+        raise ValueError(i18n.tr("未获取到跳转地址"))
     room_id = _bilibili_room_id_from_landing(final_url)
     if not room_id:
-        raise ValueError("跳转地址不是B站直播间")
+        raise ValueError(i18n.tr("跳转地址不是B站直播间"))
     return room_id
 
 

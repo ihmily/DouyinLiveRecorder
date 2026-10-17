@@ -32,9 +32,23 @@ WORKDIR /build
 # 只先拷依赖声明文件：仅依赖变更才重装，源码变更不打断层缓存
 COPY requirements.txt pyproject.toml ./
 
-# requirements.txt 包含 HTTP / 日志 / 加密 / GUI / Web / 弹幕等全部运行时依赖
+# requirements.txt 包含 HTTP / 日志 / 加密 / GUI / Web / 弹幕等全部运行时依赖。
+# INSTALL_GUI=false（默认）时**不装** PySide6：镜像按设计只跑两个服务——命令行录制（main.py）
+# 与 Web 面板（web.py），本机实测两者在屏蔽 PySide6 后导入链完整（import main / import web 均成功，
+# gui.py 因把窗口层延迟到 main() 内导入，也能 import 成功、但真正起窗才需要它）。而 PySide6 解压后
+# 本机实测 647.56MB，阶段2 的 slim-bookworm 又没有 Qt 运行库（libEGL/libGL/glib/fontconfig/xkbcommon…），
+# 默认装入只会把镜像撑大一倍却仍起不动窗口。需要容器内 GUI 时显式 --build-arg INSTALL_GUI=true，
+# 由阶段2 同条件补装 Qt 运行库（两侧判据必须一起改）。
+# 过滤只发生在镜像侧：requirements.txt 与 pyproject [project.dependencies] 的集合相等锁不受影响。
+ARG INSTALL_GUI=false
 RUN /opt/venv/bin/pip install --upgrade pip \
-    && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
+    && if [ "$INSTALL_GUI" = "true" ]; then \
+           /opt/venv/bin/pip install --no-cache-dir -r requirements.txt; \
+       else \
+           grep -viE '^[[:space:]]*pyside6' requirements.txt > /tmp/requirements.nogui.txt \
+           && echo "[build] INSTALL_GUI=false：已从镜像依赖清单剔除 $(grep -icE '^[[:space:]]*pyside6' requirements.txt) 条 GUI 依赖" \
+           && /opt/venv/bin/pip install --no-cache-dir -r /tmp/requirements.nogui.txt; \
+       fi
 
 # -----------------------------------------------------------------------------
 # 阶段2：运行阶段 - 最小化运行镜像
@@ -97,6 +111,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && dpkg-reconfigure -f noninteractive tzdata \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# 运行阶段的 Qt 系统库：只在 INSTALL_GUI=true 时装。slim-bookworm 默认没有 libEGL/libGL/glib/
+# fontconfig/xkbcommon/xcb 这些 QtWidgets 的链接依赖，缺任一项 `import PySide6.QtWidgets` 即失败，
+# 所以「装不装 PySide6」与「装不装 Qt 库」是同一个开关的两半，必须同条件、同批改（ARG 不跨阶段，
+# 本阶段须重新声明）。默认 false 时本 RUN 只落一个空层，镜像体积不受影响。
+ARG INSTALL_GUI=false
+RUN if [ "$INSTALL_GUI" = "true" ]; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends \
+            libegl1 \
+            libgl1 \
+            libglib2.0-0 \
+            libfontconfig1 \
+            libxkbcommon0 \
+            libxkbcommon-x11-0 \
+            libdbus-1-3 \
+            libxcb-xinerama0 \
+            libxcb-cursor0 \
+        && apt-get clean \
+        && rm -rf /var/lib/apt/lists/*; \
+    fi
 
 # 创建非 root 用户（降低容器被攻破后的影响面；uid/gid=1000 便于卷挂载权限对齐）
 RUN groupadd --gid 1000 recorder \

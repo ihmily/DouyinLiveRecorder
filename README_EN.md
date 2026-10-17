@@ -751,7 +751,7 @@ docker run -d -v ./config:/app/config -v ./downloads:/app/downloads \
   The two per-architecture tags (`:vX.Y.Z-amd64` / `-arm64`) are intermediate products of the merge step and are not
   cleaned up automatically at the moment.
 - Anonymous pulls require the GHCR package visibility to be **public** — a one-off manual action in the repository settings.
-- This is **deliberately a different name** from `image: y123ao6/douyin-live-recorder:latest` in `docker-compose.yaml`:
+- This is **deliberately a different name** from `image: y123ao6/douyin-live-recorder:latest` in `docker-compose.yaml` (the `gui` service uses its own `:latest-gui`, see ‘Switch run mode’ below):
   compose goes through `pull_policy: build` and builds in place (it does not pull a same-named registry image), so the
   "Quick start" instructions above stay as they are. Use the `docker run` line above for the GHCR image; on an arm64
   host the in-place compose build works just as well.
@@ -770,6 +770,12 @@ docker compose --profile web up -d
 # GUI mode (requires an X11 display environment; run xhost +local: on the host first)
 docker compose --profile gui up -d
 ```
+
+> ℹ️ The image ships in two dependency shapes: the default one used by `recorder` / `web` **does not**
+> install the GUI window layer (PySide6 measures 647.56MB unpacked on this host, and both services keep a
+> complete import chain without it, so it would only add weight). `--profile gui` builds **a second image
+> under its own tag** (`...:latest-gui`) with `--build-arg INSTALL_GUI=true` plus the Qt runtime libraries,
+> so the first GUI run costs one extra build and never replaces the image recorder / web are using.
 
 > ⚠️ Web-mode note: `web.py` listens on `127.0.0.1` by default; inside the container you must set `web_host = 0.0.0.0` in the `[Web]` section of `config/config.ini` to access it from the host; it is also recommended to enable `web_auth_enable = true` and set `web_password`.
 
