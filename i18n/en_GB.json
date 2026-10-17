@@ -1045,5 +1045,21 @@
   "关闭": "Off",
   "轻微": "Subtle",
   "完整": "Full",
-  "系统已关闭动画效果，动效强制为「关闭」": "System animations are off; motion is forced to Off"
+  "系统已关闭动画效果，动效强制为「关闭」": "System animations are off; motion is forced to Off",
+  "界面字体": "UI Font",
+  "系统默认": "System Default",
+  "导入字体…": "Import Font…",
+  "选择字体文件": "Select Font File",
+  "字体文件": "Font files",
+  "不支持的字体格式": "Unsupported Font Format",
+  "仅支持 {formats} 字体文件；woff/woff2 是网页传输格式，请先转成 ttf/otf 再导入。": "Only {formats} font files are supported; woff/woff2 are web delivery formats, convert them to ttf/otf first.",
+  "导入字体失败": "Failed to Import Font",
+  "无法读取或复制该字体文件，请确认文件未被占用且可读取。": "The font file could not be read or copied. Make sure it is not locked by another programme and is readable.",
+  "系统无法加载该字体，可能是文件已损坏或系统不支持私有字体装载。": "The system could not load this font. The file may be damaged, or the system may not allow loading a private font.",
+  "自定义字体加载失败，回落到默认字体: {path}": "Failed to load the custom font, falling back to the default font: {path}",
+  "字体不可用，回落到默认字体: {family}": "Font unavailable, falling back to the default font: {family}",
+  "应用字体失败: {type_name}: {err}": "Failed to apply the font: {type_name}: {err}",
+  "界面字体已调整为 {family}，但配置写回失败": "UI font set to {family}, but the preference could not be saved",
+  "界面字体已调整为 {family}，但配置写回失败: {type_name}: {err}": "UI font set to {family}, but saving failed: {type_name}: {err}",
+  "已导入并应用字体: {family}": "Font imported and applied: {family}"
 }

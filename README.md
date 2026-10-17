@@ -473,7 +473,20 @@ web_allowed_hosts =
 [GUI]
 # 界面主题：light | dark | high_contrast（留空跟随系统外观明暗；GUI 侧边栏「界面主题」菜单选择后自动写回）
 gui_theme = light
+# 界面缩放：自动 | 85 | 100 | 115 | 130 | 150（「自动」按屏幕可用区现算；菜单选择后自动写回）
+gui_scale = 自动
+# 动效强度：跟随系统 | off | subtle | full（系统「关闭动画」优先于用户选择）
+gui_motion = 跟随系统
+# 界面字体：留空 = 系统默认（Microsoft YaHei UI）；填字体族名即用之
+gui_font =
+# 自定义字体文件路径：由侧边栏「导入字体…」写入；字体副本存放在 config/fonts/ 下
+gui_font_file =
 ```
+
+> 字体相关说明：下拉里的预设族按**本机是否已安装**过滤，避免出现「选了没反应」的项；
+> 「导入字体…」支持 `.ttf` / `.otf` / `.ttc`（SFNT 容器），`.woff2` / `.woff` 属网页传输格式、
+> Tk 在 Windows 下经 GDI 取字体认不了，需先转成 ttf/otf；日志终端与 URL 编辑器固定用等宽字体，
+> 不随此项变化（保持字符对齐）。
 
 ### 直播间配置 (config/URL_config.ini)
 

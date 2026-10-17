@@ -171,6 +171,8 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
+from tkinter import filedialog
 from tkinter import font as tkfont
 from tkinter import messagebox, ttk
 from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast, final
@@ -189,6 +191,17 @@ os.environ["DLR_GUI_PARENT"] = "1"
 import i18n as i18n_module
 from src.config_bool import parse_config_bool
 from src.logger import child_process_env, logger
+from src.ui_fonts import (
+    SUPPORTED_FONT_SUFFIXES,
+    available_preset_families,
+    family_resolves,
+    install_font_file,
+    is_family_available,
+    load_font_file_preference,
+    load_font_preference,
+    register_private_font,
+    save_font_preference,
+)
 from src.ui_i18n import T, Translatable, apply_title, retranslate_all
 from src.ui_kit import (
     NAV_ACTIVE_STYLE,
@@ -224,6 +237,7 @@ from src.ui_scale import (
     FONT_FAMILY,
     MONO_FAMILY,
     SCALE_PRESETS,
+    SCREEN_FILL_CEILING,
     TYPE_SCALE,
     ScaleProfile,
     auto_scale_for_screen,
@@ -418,11 +432,43 @@ class Fonts:
     _cache: dict[str, tkfont.Font] = {}
     # 当前尺寸档位。换档时由 rescale_all() 写回，get() 读它算字号。
     _profile: ScaleProfile = ScaleProfile(100)
+    # 当前比例字体的族名（自选字体功能的唯一落点）。空 = 未显式选择，用 FONT_FAMILY。
+    # 为什么是类字段：所有构造点必须从同一处取值，分散传参会立刻出现「有的控件换了、
+    # 有的没换」的花脸现象（且很难归因）。
+    _family: str = ""
 
     @classmethod
     def bind_profile(cls, profile: ScaleProfile) -> None:
         # 绑定尺寸档位。构造期（建第一个字体之前）调用；运行中换档走 rescale_all。
         cls._profile = profile
+
+    @classmethod
+    def bind_family(cls, family: str) -> None:
+        # 绑定字体族（构造期调用，必须在任何字体被创建之前——已缓存的对象改用
+        # set_family 走原地 configure）。
+        cls._family = (family or "").strip()
+
+    # 热切换字体族：对**已缓存**的比例字体对象原地 configure(family=)。
+    # 这是「不闪屏」的关键：Tk 字体是具名共享资源，控件持有的是名字而非快照，
+    # 改一次定义所有引用者立即重排重绘；重建控件树会把日志内容、URL 编辑器未保存
+    # 内容与两张监控表全部清空（阶段6「换缩放不重建」的同款约束）。
+    # 等宽链路（mono_*）刻意不动：日志终端与 URL 编辑器靠字符对齐读，换成比例族
+    # 会让「逐列对齐」直接失效。
+    # 返回实际写了一遍的字体对象数（0 表示没有已实例化的比例字体，无需重排）。
+    @classmethod
+    def set_family(cls, family: str) -> int:
+        normalized = (family or "").strip()
+        cls._family = normalized
+        touched = 0
+        for key, font in cls._cache.items():
+            if key.startswith("mono"):
+                continue
+            try:
+                font.configure(family=normalized or FONT_FAMILY)
+            except Exception:
+                continue
+            touched += 1
+        return touched
 
     @classmethod
     def rescale_all(cls, profile: ScaleProfile) -> None:
@@ -451,12 +497,14 @@ class Fonts:
             return None
         return cls._profile.pt(token)
 
+    # 为什么不动家族：家族由 bind_family/set_family 统一裁决（见 _family 的注释），
+    # 这里对空字符串回落到「已选族或默认族」，保证任何新构造点都自动跟随当前选择。
     @classmethod
     def get(
         cls,
         size: int,
         weight: Literal["normal", "bold"] = "normal",
-        family: str = FONT_FAMILY,
+        family: str = "",
         *,
         token: str = "body",
     ) -> tkfont.Font:
@@ -472,7 +520,7 @@ class Fonts:
             resolved = cls._resolve_size(key)
             if resolved is None:
                 raise KeyError(f"未知字号 token: {token!r}（合法值: {tuple(TYPE_SCALE)}）")
-            cls._cache[key] = tkfont.Font(family=family, size=resolved, weight=weight)
+            cls._cache[key] = tkfont.Font(family=family or cls._family or FONT_FAMILY, size=resolved, weight=weight)
         return cls._cache[key]
 
     # 辅助文字（卡片副标题、列标签、状态说明、提示条、时间戳）
@@ -1595,6 +1643,11 @@ class LiveRecorderGUI:
         # 「自动」按屏幕可用区现算 → 构造 profile → 绑定 Fonts → 设几何。
         self.scale_profile = self._resolve_initial_scale()
         Fonts.bind_profile(self.scale_profile)
+        # 自选字体：顺序必须是「注册私有字体 → 绑定族名 → 建任何控件」。
+        # 字体的 family 在建控件时被快照进 tkfont.Font（虽然之后也能 set_family 原地改，
+        # 但启动期一次到位能避免首帧就按默认族排一遍再重排的可见跳动）。
+        self._font_file_pref = load_font_file_preference(self.main_config_file)
+        self._selected_font_family = self._activate_saved_font(load_font_preference(self.main_config_file))
         # 窗口几何按档位放大后再 clamp 到屏幕可用区（低分辨率屏的核心诉求：
         # 150% 档在 1366x768 上不能开出比屏幕还大的窗口）。
         _win_w, _win_h, _min_w, _min_h = self.scale_profile.window_size(
@@ -1896,6 +1949,7 @@ class LiveRecorderGUI:
         # 顶到窗口外——用户表现为「退出按钮只剩一条红边」。故把侧栏的**实测**
         # 需求高纳入 minsize 下限。
         self._raise_minsize_to_fit_sidebar()
+        self._raise_width_to_fit_content()
         # 启动期统一重译：_build_sidebar 里配置语言（set_language）之前构建的少数标签
         # （品牌/主题菜单初值）按 i18n 导入默认语言定型，此处回填一次保证整窗语言一致；
         # 之后构建的控件不受影响（登记表回填是幂等的）。
@@ -1920,6 +1974,92 @@ class LiveRecorderGUI:
         if needed <= min_h:
             return
         self.root.minsize(min_w, min(needed, _cur_h))
+
+    # 把窗口宽抬到「整窗实测需求宽」：Tk grid 对「需求宽 > 分配宽」的列是**裁切**而
+    # 不是收缩——root reqwidth 一旦超过 geometry 宽度，内容列右缘（卡片右边框 +
+    # 20px 右边距）会被整段切掉，且 minsize 不拦用户缩到更窄（2026-10-17 右边框
+    # 裁切的第二层根因；第一层是长提示标签/80 字符 Text 撑爆 reqwidth，已在源头收敛）。
+    # 这里做三件事，缺一都只治标：
+    #   ① 把首窗几何抬到「需求宽」（消掉首帧赤字——赤字期 Tk 直接裁掉右缘，用户截图
+    #      里的「右边框显示不全」就是它）；
+    #   ② 先在窗口首次绘制前把几何压到档位最小宽、读一次需求宽，得到内容的**收缩地板**，
+    #      再把 minsize 宽抬到地板——用户拖窄到此为止，再窄必然裁到那些跟不上宽度变化
+    #      的元素（固定宽的状态信息网格等）。抬 minsize 到底板而不是到需求宽，是为了
+    #      保住「窗口还能拖小」这一可用性；压到最小档这一步在首次绘制前完成，无闪动；
+    #   ③ 所有尺寸 clamp 到屏幕可用区：小屏真的装不下时，宁可裁一点也要保证可操作
+    #      （与 _raise_minsize_to_fit_sidebar 同一口径）。
+    def _raise_width_to_fit_content(self) -> None:
+        try:
+            screen_w = self.root.winfo_screenwidth()
+            cur_h = self.root.winfo_height()
+            needed = self._settled_reqwidth()
+            _w, _h, min_w, _min_h = self.scale_profile.window_size(screen_w, self.root.winfo_screenheight())
+        except tk.TclError:
+            return
+        cap = int(screen_w * SCREEN_FILL_CEILING)
+        fit = min(max(min_w, needed), cap)
+        floor = fit
+        if min_w < fit:
+            try:
+                self.root.geometry(f"{min_w}x{cur_h}")
+                floor = min(max(min_w, self._settled_reqwidth()), cap)
+            except tk.TclError:
+                floor = min_w
+        try:
+            self.root.geometry(f"{fit}x{cur_h}")
+            _cur_min_w, cur_min_h = self.root.minsize()
+            self.root.minsize(floor, cur_min_h)
+        except tk.TclError:
+            return
+
+    # 按偏好恢复字体族（构造期调用，必须在控件创建前）。
+    # 三级回退是刻意的：自定义字体文件（可能被删/损坏）→ 显式选择的系统字体族
+    # （可能随系统重装消失）→ 默认族。任一环节不通过就往下降一级并记日志，
+    # **绝不**让一个失效的偏好把界面渲染成方块或回退到 Tk 内置的丑陋后备。
+    # 返回实际生效的族名（"" = 默认族）。
+    def _activate_saved_font(self, family_pref: str) -> str:
+        file_pref = getattr(self, "_font_file_pref", "") or ""
+        if file_pref and os.path.exists(file_pref):
+            registered = register_private_font(file_pref, self.root)
+            if registered:
+                Fonts.bind_family(registered)
+                return registered
+            # 字体路径可能含用户名 Home 段，按 AGENTS 凭据红线入日志前必须脱敏
+            logger.warning(
+                i18n_module.tr("自定义字体加载失败，回落到默认字体: {path}", path=mask_credentials(file_pref))
+            )
+        if family_pref and is_family_available(family_pref, self.root):
+            Fonts.bind_family(family_pref)
+            return family_pref
+        if family_pref:
+            # 选过但本机已无此字体（系统重装/字体卸载）：降级并明示，避免用户以为界面没变。
+            logger.warning(i18n_module.tr("字体不可用，回落到默认字体: {family}", family=family_pref))
+        Fonts.bind_family("")
+        return ""
+
+    # 热应用字体族并把它与几何收敛在同一 sync 里做完。
+    # [为什么还要重加几何] 换族后字形宽度全变：卡片/状态网格的需求宽随之变，
+    # 不重新结算就会偏到右边框裁切那条老路上（2026-10-17 同一根因的复用面）。
+    def _apply_font_family(self, family: str) -> None:
+        Fonts.set_family(family)
+        self._selected_font_family = family
+        restyle_fonts(self.root)
+        for page in self._pages.values():
+            page.update_idletasks()
+        self._raise_width_to_fit_content()
+        self._raise_minsize_to_fit_sidebar()
+
+    # 读数要迭代到稳定：Treeview 的列宽在 <Configure> 回调里按树宽重算，列宽变了
+    # 需求宽跟着变，单次 update() 拿到的是上一轮的中介值（实测能差 300+px）。
+    def _settled_reqwidth(self, passes: int = 4) -> int:
+        measured = self.root.winfo_reqwidth()
+        for _ in range(passes):
+            self.root.update()
+            current = self.root.winfo_reqwidth()
+            if current == measured:
+                break
+            measured = current
+        return measured
 
     # 构建左侧导航栏（品牌、状态胶囊、导航按钮、界面主题/语言与退出）。
     # [2026-10-03 阶段4] 控件层换 src.ui_kit 的 ttk 工厂；「外观模式」菜单并入
@@ -2087,6 +2227,26 @@ class LiveRecorderGUI:
             self._language_names.get(_effective_lang, self._language_names[i18n_module.DEFAULT_LANGUAGE])
         )
 
+        # 界面字体：[GUI] gui_font / gui_font_file。下拉给「系统默认 + 本机可用的预设族 +
+        # 已导入的自定义字体」，右侧「导入…」按钮另辟一路装载私有字体文件。
+        #
+        # [为什么仍占半宽而不是整行] 侧栏底部每多一行就抬高窗口最小高——2×2 网格本来
+        # 就是为了把它压回约 200px（见上面 grid 的注释），扩成一整行会把「彻底退出」
+        # 重新顶出矮窗口。族名在半宽下拉里会被截断，故设置一个够用的字符宽度并依赖
+        # 「选完即可见」：界面整窗立刻按新字体重排，用户不需要靠名字认。
+        _setting_label(2, 0, T("界面字体"))
+        self._font_menu = Menu(settings, values=[], command=self._on_font_change, font=Fonts.small(), width=14)
+        self._font_menu.grid(row=5, column=0, sticky="ew", padx=(4, 4), pady=(0, 10))
+        Button(
+            settings,
+            text=T("导入字体…"),
+            command=self._on_import_font,
+            font=Fonts.small(),
+            padding=(6, 5),
+            variant="side_ghost",
+        ).grid(row=5, column=1, sticky="ew", padx=(8, 4), pady=(0, 10))
+        self._refresh_font_menu_values()
+
         # 底部两个动作按钮。放在设置网格**之后** pack，同属 bottom 的顺序排列
         # （bottom 内部按 pack 顺序自上而下），故它们落在网格下方。
         Button(
@@ -2106,6 +2266,122 @@ class LiveRecorderGUI:
         ).pack(fill=tk.X)
 
         return sidebar
+
+    # 重建字体下拉的取值并把当前选择回显到控件上。
+    # 取值顺序：系统默认 → 本机可用的预设族 → 本次导入的自定义字体已注册的族。
+    # [为什么协程式重排 values 而不是长表硬编] family 是否可用随机器变化，
+    # 把不可用项留在下拉里，用户选中后 Tk 静默回退到默认族——表现为「选了没反应」，
+    # 是本功能最容易踩的坑（Tk 无异步加载，失败时连一行日志都不会有）。
+    def _refresh_font_menu_values(self) -> None:
+        try:
+            values: list[str] = [i18n_module.tr("系统默认")]
+            for family in available_preset_families(self.root):
+                if family not in values:
+                    values.append(family)
+            current = getattr(self, "_selected_font_family", "") or ""
+            if current and current not in values:
+                values.append(current)
+            self._font_menu.configure(values=values)
+            # 回显用 family_resolves 而不是 is_family_available：私有注册的自定义字体
+            # 不出现在 Tk 的 families() 里（实测，见 ui_fonts.family_resolves 的注释），
+            # 用后者会把已生效的自定义字体显示成「系统默认」。
+            display = values[0]
+            if current and family_resolves(current, self.root):
+                display = current
+            self._font_menu.set(display)
+        except tk.TclError:
+            return
+
+    # 字体下拉选择回调：热应用到整窗 + 持久化。写回失败只告警不阻断（与主题/缩放
+    # 同一口径：界面已经按新字体重绘了，写不回只是下次启动不记住）。
+    def _on_font_change(self, choice: str) -> None:
+        family = "" if choice == i18n_module.tr("系统默认") else choice
+        try:
+            self._apply_font_family(family)
+        except Exception as e:
+            logger.error(
+                i18n_module.tr("应用字体失败: {type_name}: {err}", type_name=type(e).__name__, err=e),
+                "error",
+            )
+            self._refresh_font_menu_values()
+            return
+        saved = False
+        try:
+            saved = save_font_preference(self.main_config_file, family, getattr(self, "_font_file_pref", ""))
+        except Exception as e:
+            logger.warning(
+                i18n_module.tr(
+                    "界面字体已调整为 {family}，但配置写回失败: {type_name}: {err}",
+                    family=family or i18n_module.tr("系统默认"),
+                    type_name=type(e).__name__,
+                    err=e,
+                ),
+                "warn",
+            )
+            return
+        if not saved:
+            logger.warning(
+                i18n_module.tr(
+                    "界面字体已调整为 {family}，但配置写回失败", family=family or i18n_module.tr("系统默认")
+                ),
+                "warn",
+            )
+
+    # 「导入字体…」回调：选文件 → 复制到 config/fonts → 注册为进程私有字体 → 选中它。
+    # woff2/woff 之类的 Web 字体在这里被明确拒绝（不是不支持 Tk，是 GDI 只认 SFNT，
+    # 详见 src/ui_fonts 模块头）——拒绝时给出可读原因，而不是「导入成功但没变化」。
+    def _on_import_font(self) -> None:
+        try:
+            path = filedialog.askopenfilename(
+                parent=self.root,
+                title=i18n_module.tr("选择字体文件"),
+                filetypes=[(i18n_module.tr("字体文件"), " ".join(f"*{s}" for s in SUPPORTED_FONT_SUFFIXES))],
+            )
+        except Exception:
+            path = ""
+        if not path:
+            return
+        if Path(path).suffix.lower() not in SUPPORTED_FONT_SUFFIXES:
+            # 明确拒绝并给出原因：woff2 是网页传输格式、GDI 只认 SFNT（见 ui_fonts 模块头）
+            messagebox.showwarning(
+                i18n_module.tr("不支持的字体格式"),
+                i18n_module.tr(
+                    "仅支持 {formats} 字体文件；woff/woff2 是网页传输格式，请先转成 ttf/otf 再导入。",
+                    formats="/".join(SUPPORTED_FONT_SUFFIXES),
+                ),
+            )
+            return
+        installed = install_font_file(path, self.app_root)
+        if installed is None:
+            messagebox.showwarning(
+                i18n_module.tr("导入字体失败"),
+                i18n_module.tr("无法读取或复制该字体文件，请确认文件未被占用且可读取。"),
+            )
+            return
+        family = register_private_font(installed, self.root)
+        if not family:
+            messagebox.showwarning(
+                i18n_module.tr("导入字体失败"),
+                i18n_module.tr("系统无法加载该字体，可能是文件已损坏或系统不支持私有字体装载。"),
+            )
+            return
+        self._font_file_pref = str(installed)
+        self._apply_font_family(family)
+        self._refresh_font_menu_values()
+        try:
+            save_font_preference(self.main_config_file, family, str(installed))
+        except Exception as e:
+            logger.warning(
+                i18n_module.tr(
+                    "界面字体已调整为 {family}，但配置写回失败: {type_name}: {err}",
+                    family=family,
+                    type_name=type(e).__name__,
+                    err=e,
+                ),
+                "warn",
+            )
+        else:
+            logger.info(i18n_module.tr("已导入并应用字体: {family}", family=family))
 
     # 向侧边栏添加一项导航按钮并绑定页面切换回调。
     def _add_nav_button(self, parent: Frame, page_id: str, text: str | Translatable) -> None:
@@ -2194,6 +2470,9 @@ class LiveRecorderGUI:
         # 6) 长文案的 wraplength 绑的是容器实宽，缩放后要重新结算一次
         for page in self._pages.values():
             page.update_idletasks()
+        # 7) 换档后字号/边距都变了，需求宽随之变：重新抬窗口宽与 minsize 下限，
+        #    否则升档后 root reqwidth 可能已反超 geometry（右边框裁切同根因）。
+        self._raise_width_to_fit_content()
 
     # 固定像素高度的容器随档位重设。ttk.Frame 的 height 只在 pack_propagate(False)
     # 下生效，缩放后不重设就会出现「大字号被裁 / 小字号留白」两种错位。
@@ -2323,6 +2602,11 @@ class LiveRecorderGUI:
             self._update_danmaku_display()
             if self.system_tray:
                 self.system_tray.rebuild_menu()
+            # 字体下拉的首项是「系统默认」这条**译文**，不走 ui_i18n 登记表
+            # （Menu 的 values 是 Combobox 自身的取值），语言切换后必须重建取值与回显，
+            # 否则下拉里混着上一语言的首项、点它却命中不了任何分支。
+            # 排在最后：它是纯回显刷新，失败不得挡住上面已有的状态刷新。
+            self._refresh_font_menu_values()
         except Exception as e:
             # 重译失败不阻断语言切换本身（目录已切换、配置写回在下方）；仅记录现场
             self._log(
@@ -2509,6 +2793,10 @@ class LiveRecorderGUI:
 
         # fill+expand 让标签窗口 = 按钮行右侧全部剩余宽（窗口宽由 packer 分配，是自适应换行的前提）；
         # 窄窗口 / 高 DPI 下放不下时自动折行，不再被 pack 按 anchor=center 两侧对称裁切
+        # [2026-10-17] 初始 wraplength 必须给非零小值：缺省 0 = 不折行，标签按单行全文计入
+        # 窗口 reqwidth（本标签单行 ~725px），叠加其余页面把 root reqwidth 撑过 geometry，
+        # Tk grid 对超宽 slave 裁切而非收缩——卡片右边框连同右边距被整段切掉。
+        # 初值只影响首帧前的需求宽计算，布局分配后由 _bind_adaptive_wraplength 按实宽改写。
         hint_label = Label(
             ctrl_body,
             text=T("启动后将调用 main.py 循环监测 URL 配置中的直播间并自动录制"),
@@ -2516,6 +2804,7 @@ class LiveRecorderGUI:
             variant="muted",
             anchor=tk.W,
             justify=tk.LEFT,
+            wraplength=self.scale_profile.px(320),
         )
         hint_label.pack(side=tk.LEFT, padx=20, fill=tk.X, expand=True)
         _bind_adaptive_wraplength(hint_label)
@@ -2589,7 +2878,9 @@ class LiveRecorderGUI:
         self.config_text.pack(fill=tk.BOTH, expand=True)
 
         # 提示
-        Label(
+        # [2026-10-17] 同控制台/画质提示：初始 wraplength 非零小值 + 自适应绑定，
+        # 否则单行全文（~820px）计入窗口 reqwidth，Tk grid 赤字时裁切页面右缘。
+        config_hint_label = Label(
             card,
             text=T(
                 "每行一个直播链接，支持 # 开头的注释行  │  外部修改文件后将自动重新加载  │  点击窗口关闭按钮将最小化到系统托盘"
@@ -2597,7 +2888,10 @@ class LiveRecorderGUI:
             font=Fonts.small(),
             variant="muted",
             anchor=tk.W,
-        ).pack(fill=tk.X, padx=18, pady=(4, 4))
+            wraplength=self.scale_profile.px(320),
+        )
+        config_hint_label.pack(fill=tk.X, padx=18, pady=(4, 4))
+        _bind_adaptive_wraplength(config_hint_label)
 
         # 操作按钮
         btn_row = Frame(card)
@@ -2780,6 +3074,9 @@ class LiveRecorderGUI:
             variant="muted",
             anchor=tk.W,
             justify=tk.LEFT,
+            # [2026-10-17] 初始 wraplength 非零小值：缺省 0 会把单行全文（~820px）计入
+            # 窗口 reqwidth，撑爆 geometry 后 Tk grid 裁切页面右缘（见控制台提示同款注释）
+            wraplength=self.scale_profile.px(320),
         )
         quality_hint_label.pack(fill=tk.X, pady=(0, 10))
         _bind_adaptive_wraplength(quality_hint_label)

@@ -1625,6 +1625,20 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 > 脚本：`tests/test_{bili,douyin,douyu,huya,twitch}_live_collector.py`（`python file.py <URL> [秒数]`，
 > 需活房间 + 外网，默认人工通道）。
 
+### v4.5.0-dev (2026-10-17) — GUI 右边框裁切修复 + 自选字体（`src/ui_fonts.py` / `gui.py` / `src/ui_kit.py`）
+
+> 范围：`gui.py` 新增 `_raise_width_to_fit_content` / `_settled_reqwidth` / `Fonts.bind_family` / `Fonts.set_family` / `_activate_saved_font` / `_apply_font_family` / `_refresh_font_menu_values` / `_on_font_change` / `_on_import_font`，三条长提示标签补初始 `wraplength`、URL 配置页提示补接 `_bind_adaptive_wraplength`；新增 `src/ui_fonts.py`（SFNT name 表解析 + GDI 私有字体注册 + 偏好读写）；`src/ui_kit.py` 的 `EditorText` / `terminal_text` 加 `width=1` 与行距 `spacing1/spacing3`；新增 `tests/test_gui_right_edge_fit.py`、`tests/test_ui_fonts.py`，`tests/test_gui_wrap_hints.py` 的接线点锁由 4 改 5；i18n 四目录补 16 条 key。
+
+- **右边框裁切的根因是「需求宽赤字 + Tk grid 裁切」两层**：① 三条长提示标签初始 `wraplength=0`（== 不折行，按单行全文 725~820px 计入需求宽）、`ui_kit` 两处 `tk.Text` 用默认 80 字符宽，把 `root.winfo_reqwidth()` 撑到 **1248 > geometry 1120**；② Tk grid 对「需求宽 > 分配宽」的 slave 是**裁切而不是收缩**，赤字从内容列右缘开始切，卡片右边框与 20px 右边距整段消失——与用户截图里「左边框在、右边框没了」完全同形。
+- **为什么不能直接抬 `minsize` 到需求宽**：那会把窗口最小宽锁死在需求宽（本机实测 1389px），用户再也拖不窄，是可用性回退。实现走三段——抬**首窗几何**到需求宽消掉首帧赤字；把几何临时压到档位最小宽再读数，得到内容的**收缩地板**（本机 1108~1151px，随语言/内容变化）并只把 `minsize` 抬到地板；所有尺寸 clamp 到 `SCREEN_FILL_CEILING` 保证小屏仍可操作。
+- **需求宽必须迭代到稳定再读**：Treeview 列宽在 `<Configure>` 回调里按树宽重算，`update_idletasks()` 不处理 Configure 事件——只用 idle 会让读数停在大窗时的旧值（实测差 300+px），`_settled_reqwidth()` 就是为此存在。实测 4 次迭代后 `reqwidth` 稳定，重复调用不会自激放大。
+- **自选字体：为什么不依赖 `tkfont.families()` 判可用**（本次最大的坑，实测结论写进 `ui_fonts.family_resolves` 的注释）：`AddFontResourceExW(FR_PRIVATE)` 返回成功、Tk 也能按该族名排出字形，但 **`families()` 永远列不到它**（Tk 只枚举注册表里已安装的字体）；而字体不存在时 Tk 又**静默回退**到兜底字体、既不报错也不给 Families 提示。于是「在 families() 里」既非必要也非充分，唯一能分辨「真加载了」与「静默回退」的判据是让 Tk 解析一次并与人造缺失族名的兜底结果比对。验证方式：把系统字体副本的全部 `nameID=1` 记录改成同一个标记名，`Font(标记名).actual()["family"]` 确实返回了副本里的姓——证明私有注册这条路走得通。
+- **`woff2` 为什么被明确拒收**：Tk 在 Windows 上经 GDI 取字体，只认 SFNT 容器（`.ttf`/`.otf`/`.ttc`）；woff2 是网页传输格式，引入解压依赖只为收一个 GUI 下拉框不划算，故在导入入口直接挡掉并给出「请先转成 ttf/otf」的可读原因，而不是「导入成功但没变化」。
+- **切热衷于同一次 `configure` 完成，不重建控件树**：`Fonts.set_family()` 对已缓存的比例字体对象原地改 `family=`（Tk 字体是具名共享资源，控件持有名字而非快照），日志内容 / URL 编辑器未保存内容 / 两张监控表零损失；`_apply_font_family` 随后 `restyle_fonts` + 各页 `update_idletasks` + 重跑 `_raise_width_to_fit_content` / `_raise_minsize_to_fit_sidebar`，把「换族后需求宽变化」在同一 sync 里消化，避免偏到右边框裁切那条老路上。等宽链路（`mono_*`）刻意不动——日志终端与 URL 编辑器靠字符对齐读。
+- **字体显示的一致性**：字号/行距仍由 `src/ui_scale.TYPE_SCALE` 的语义档位单一事实源决定（本次只补了 tk.Text 的上下 2px 行余量：中文没有西文那样的降部空间，默认 leading 挤成一片）；抗锯齿由系统 ClearType 决定、非 Fontconfig 配置所能改；中英文混排依赖 Windows 的字体回退链（缺字形按字形级回退），预设列表因此优先列本机命中且带 CJK 字面的族。
+
+**验证**：`python scripts/run_gates.py` 全绿（black/isort/mypy 三平台/check_annotations/basedpyright）；`pytest tests/test_gui_right_edge_fit.py tests/test_ui_fonts.py tests/test_gui_wrap_hints.py tests/test_ui_kit.py tests/test_ui_scale.py tests/test_i18n.py tests/test_gui_language_retranslate.py -q` → 0 warnings passed；真机（1366×768 @133% DPI）几何探针读数由「reqw 1248 < width 1120（裁切）」变为「reqw 1108 ≤ width 1389、`minsize` 宽 1108，各宽度下卡片右缘溢出 0」。
+
 ### v4.5.0-dev (2026-10-17) — 发布链运行时钉定新增「在线来源层」：默认 off，且只在清单有独立认证时才允许采用在线值
 
 > 范围：`build_exe.py` 新增「运行时钉定的在线来源」一节（三态开关 + 信任档 + 来源表 + 缓存 + 落点函数）、`--pin-source` 命令行参数、`_pinned_slots()` 接线、`_download_nodejs` 记录本次解析出的版本/文件名、`_verify_gpg_artifact` 增 `strict` 关键字并改为返回 `bool`；`tests/test_build_exe.py` 新增 17 条用例并把 `api.github.com` 并入来源主机白名单。**`_PINNED_RUNTIME_SHA256` 一个值都没改**，默认行为与引入本层前逐字相同。

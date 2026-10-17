@@ -240,7 +240,7 @@ class TestWrapShouldApply:
 
 
 class TestSourceLocks:
-    def test_bind_helper_defined_once_and_wired_to_four_sites(self) -> None:
+    def test_bind_helper_defined_once_and_wired_to_five_sites(self) -> None:
         defs = [
             n for n in ast.walk(GUI_TREE) if isinstance(n, ast.FunctionDef) and n.name == "_bind_adaptive_wraplength"
         ]
@@ -250,8 +250,10 @@ class TestSourceLocks:
             for n in ast.walk(GUI_TREE)
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "_bind_adaptive_wraplength"
         ]
-        # 4 个接线点：控制台按钮行提示、画质说明、画质占位工厂、弹幕占位工厂
-        assert len(calls) == 4, f"_bind_adaptive_wraplength 接线点应为 4，实际 {len(calls)}"
+        # 5 个接线点：控制台按钮行提示、画质说明、画质占位工厂、弹幕占位工厂、
+        # URL 配置页底部提示（2026-10-17 右边框裁切修复时补接——原单行全文计入
+        # 窗口 reqwidth，是把 root reqwidth 撑过 geometry 的来源之一）
+        assert len(calls) == 5, f"_bind_adaptive_wraplength 接线点应为 5，实际 {len(calls)}"
 
     def test_binding_is_debounced_hysteresis_and_guarded(self) -> None:
         # 2026-09-29 卡死修复锁：绑定必须 ① 防抖（Configure 风暴期零写入——同步追写会喂进

@@ -3551,3 +3551,51 @@ msgstr "完整"
 
 msgid "系统已关闭动画效果，动效强制为「关闭」"
 msgstr "系统已关闭动画效果，动效强制为「关闭」"
+
+msgid "不支持的字体格式"
+msgstr "不支持的字体格式"
+
+msgid "仅支持 {formats} 字体文件；woff/woff2 是网页传输格式，请先转成 ttf/otf 再导入。"
+msgstr "仅支持 {formats} 字体文件；woff/woff2 是网页传输格式，请先转成 ttf/otf 再导入。"
+
+msgid "字体不可用，回落到默认字体: {family}"
+msgstr "字体不可用，回落到默认字体: {family}"
+
+msgid "字体文件"
+msgstr "字体文件"
+
+msgid "导入字体…"
+msgstr "导入字体…"
+
+msgid "导入字体失败"
+msgstr "导入字体失败"
+
+msgid "已导入并应用字体: {family}"
+msgstr "已导入并应用字体: {family}"
+
+msgid "应用字体失败: {type_name}: {err}"
+msgstr "应用字体失败: {type_name}: {err}"
+
+msgid "无法读取或复制该字体文件，请确认文件未被占用且可读取。"
+msgstr "无法读取或复制该字体文件，请确认文件未被占用且可读取。"
+
+msgid "界面字体"
+msgstr "界面字体"
+
+msgid "界面字体已调整为 {family}，但配置写回失败"
+msgstr "界面字体已调整为 {family}，但配置写回失败"
+
+msgid "界面字体已调整为 {family}，但配置写回失败: {type_name}: {err}"
+msgstr "界面字体已调整为 {family}，但配置写回失败: {type_name}: {err}"
+
+msgid "系统无法加载该字体，可能是文件已损坏或系统不支持私有字体装载。"
+msgstr "系统无法加载该字体，可能是文件已损坏或系统不支持私有字体装载。"
+
+msgid "系统默认"
+msgstr "系统默认"
+
+msgid "自定义字体加载失败，回落到默认字体: {path}"
+msgstr "自定义字体加载失败，回落到默认字体: {path}"
+
+msgid "选择字体文件"
+msgstr "选择字体文件"

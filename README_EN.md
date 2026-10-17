@@ -481,7 +481,26 @@ web_allowed_hosts =
 
 > `web_host` is `127.0.0.1` in the repo's default config (localhost access only). For Docker or LAN/public access, change it to `0.0.0.0`, and be sure to also enable `web_auth_enable` and set `web_password`.
 
-### Live-room config (config/URL_config.ini)
+### GUI interface config (config/config.ini)
+
+```ini
+[GUI]
+# UI theme: light | dark | high_contrast (leave empty to follow the system appearance; the sidebar menu writes it back)
+gui_theme = light
+# UI scale: auto | 85 | 100 | 115 | 130 | 150 (auto computes from the usable screen area; the menu writes it back)
+gui_scale = auto
+# Motion level: follow_system | off | subtle | full (the system "turn off animations" switch wins over the user's choice)
+gui_motion = follow_system
+# UI font family: leave empty for the system default (Microsoft YaHei UI)
+gui_font =
+# Custom font file path: written by "Import Font…"; the copy lives under config/fonts/
+gui_font_file =
+```
+
+> Font notes: the preset families in the dropdown are filtered by whether they are **installed on this machine**,
+> so no entry can silently fall back. "Import Font…" accepts `.ttf` / `.otf` / `.ttc` (SFNT containers);
+> `.woff2` / `.woff` are web delivery formats that Tk cannot load through GDI on Windows — convert them
+> to ttf/otf first. The log terminal and URL editor stay on the monospace font regardless of this setting.
 
 Douyin supports the following 5 live-room / profile URL formats (formats for other platforms are shown in the per-platform examples below):
 

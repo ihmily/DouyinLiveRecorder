@@ -265,6 +265,11 @@ class EditorText(tk.Text):
         # 不吃 ttk 样式，写死会在大字号下把文字挤到边框上。
         super().__init__(
             master,
+            # width=1：tk.Text 默认宽 80 字符，等宽字号下请求宽 ~720+ 逻辑像素，
+            # 会把整窗 reqwidth 撑过 geometry——Tk grid 对超宽 slave 是裁切而非收缩，
+            # 卡片右边框与右边距因此整段被切（2026-10-17 右边框裁切根因之一）。
+            # 实际宽度由调用方 pack(fill=BOTH, expand=True) 分配，1 只是请求值地板。
+            width=1,
             wrap=wrap,
             font=font,
             bg=tokens["surface_alt"],
@@ -280,6 +285,12 @@ class EditorText(tk.Text):
             highlightbackground=tokens["border"],
             highlightcolor=tokens["primary"],
             undo=True,
+            # [2026-10-17] spacing1/spacing3：中文没有西文那样的降部空间，
+            # 行距全交给字体默认 leading 时，纯中文日志/URL 行会挤成一片。上下各留 2px
+            # 余量，与 ttk 的 heading/label 档拉开层级；用像素而不用行倍数，是为了让
+            # 85% 与 150% 档下的物理观感一致（倍数会随字号放大过头）。
+            spacing1=2,
+            spacing3=2,
         )
 
     # 主题切换后重上色（槽位取值随主题变化，tk.Text 必须显式跟随）。
@@ -471,6 +482,9 @@ def terminal_text(
     wrap = tk.Frame(master, bg=bg)
     text = tk.Text(
         wrap,
+        # width=1：同 EditorText——默认 80 字符的请求宽会撑爆整窗 reqwidth，
+        # 触发 Tk grid 右侧裁切；实际宽度由 pack(fill=BOTH, expand=True) 分配。
+        width=1,
         wrap=tk.WORD,
         font=font,
         bg=bg,
@@ -483,6 +497,9 @@ def terminal_text(
         state=tk.DISABLED,
         selectbackground=select_bg,
         selectforeground="#FFFFFF",
+        # 同 EditorText：中文行密集成块，日志行的默认行距偏紧，下方留 2px 行间余量
+        # （上方不加：第一行顶部已有容器 pad_y，多给会让首行与标题显得偏离中轴）。
+        spacing3=2,
     )
     scrollbar = ttk.Scrollbar(wrap, command=cast("Callable[..., None]", text.yview))
     text.configure(yscrollcommand=scrollbar.set)
