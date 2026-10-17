@@ -25,7 +25,7 @@ from src.ui_i18n import T, set_text
 
 from ..danmaku_monitor import DanmakuMonitor
 from ..theme import Palette
-from ..widgets import ArrowComboBox, Card, EmptyState, StatTile, action_button, card_layout, connect_click
+from ..widgets import ArrowComboBox, Card, EmptyState, StatTile, action_button, card_layout, connect_click, fixed_font
 
 # 列数必须与 _refresh_stats 里 setHorizontalHeaderLabels 的标签个数相等：
 # 两边不一致时 QStandardItemModel 会静默丢掉多出来的列，是最难发现的一类错位。
@@ -116,10 +116,10 @@ class DanmakuPage(QWidget):
         # NoWrap + 等宽：弹幕行长差异极大，软换行会让时间戳列参差不齐，没法扫读
         self.stream = QTextEdit()
         self.stream.setReadOnly(True)
-        mono = QFont("Consolas, Menlo, Courier New, monospace")
-        mono.setStyleHint(QFont.StyleHint.Monospace)
-        self.stream.setFontFamily("Consolas")
-        self.stream.setFontPointSize(11)
+        # 旧写法在这里同时留了一份「构造完就被丢弃的 mono」和一句硬写死的
+        # setFontFamily("Consolas")——后者才是没装 Consolas 的机器上那两条字体告警的来源之一，
+        # 等宽候选与回退还是一次交回 fixed_font 工厂。
+        self.stream.setFont(fixed_font(11))
         self.stream.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
         stream_body.addWidget(self.stream, 1)
         root.addWidget(stream_card, 2)

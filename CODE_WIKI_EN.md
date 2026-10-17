@@ -22,6 +22,7 @@ English&nbsp;&nbsp;|&nbsp;&nbsp;[**简体中文**](CODE_WIKI.md)
 - [Design Patterns](#design-patterns)
 - [Troubleshooting](#troubleshooting)
 - [Contributing Guide](#contributing-guide)
+- [Change Overview by Module (2026-10-17)](#change-overview-by-module-2026-10-17)
 - [Changelog](#changelog)
 
 ## Document Statistics and Index
@@ -80,8 +81,8 @@ Excluding `.git/`/`.venv/`/`node_modules/`, the workspace contains **106** Markd
 
 | File | Content | Moved from |
 | --- | --- | --- |
-| `code-wiki-history-en.md` | The 164 historical entries of this document's changelog (2026-05-17 ~ 2026-09-24) | `CODE_WIKI_EN.md` "Changelog" |
-| `code-wiki-history-zh.md` | Chinese counterpart of the entries above (164, one-to-one) | `CODE_WIKI.md` "更新日志" |
+| `code-wiki-history-en.md` | The 193 historical entries of this document's changelog (2026-05-17 ~ 2026-10-17; 20 v4.4.0 + 9 v4.3.0-dev entries moved in on 2026-10-18) | `CODE_WIKI_EN.md` "Changelog" |
+| `code-wiki-history-zh.md` | Chinese counterpart of the entries above (193, one-to-one) | `CODE_WIKI.md` "更新日志" |
 | `release-notes-history-en.md` | The 17 earlier release notes of `README_EN.md` (v4.0.0 ~ v4.0.9.4, 2024-07-13 ~ 2026-09-06) | `README_EN.md` "Changelog" |
 | `release-notes-history-zh.md` | Chinese counterpart of the rows above (17) | `README.md` "更新日志" |
 
@@ -261,6 +262,7 @@ DouyinLiveRecorder/
 │   ├── recorder_status.py               # Recording status snapshot and display (extracted from main.py)
 │   ├── config_io.py                     # 配置读写/安全数值转换/备份（抽离自 main.py）
 │   ├── config_bool.py                   # Boolean config parsing (是/否 equals true/false/1/0/yes/no; dependency-free module)
+│   ├── config_read.py                   # Tolerant config read (a duplicated key folds to the last value and is reported; added 2026-10-17)
 │   ├── base.py                          # 弹幕基类与数据结构（DanmakuBase / DanmakuMessage / DanmakuMessageType）
 │   ├── collector.py                     # 弹幕采集器（线程化包装 DanmakuBase，落 SRT + 上报监控枢纽）
 │   ├── cookie_cache.py                  # 按 URL 的访客 Cookie 进程内缓存（防并发重复请求触发风控）
@@ -1610,6 +1612,85 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 3. Add platform identification logic in `main.py`
 4. Update `README.md` and this document
 
+## Change Overview by Module (2026-10-17)
+
+> Scope: baseline `72d1664` (the HEAD when this session started) -> the current worktree (readings taken 2026-10-17 23:00), covering **committed** (`553b036`), **uncommitted** and **index-only** changes. **No files were deleted**; the only removals are the six orphan entries in the i18n catalogs (section 1), and no configuration key was removed.
+>
+> Concurrent work package: `src/config_read.py` and `tests/test_config_read.py` (both untracked) plus the changes in `main.py`, `src/gui_qt/{settings_dialog,widgets,danmaku}.py`, `src/ui_{motion,scale,theme}.py` and `tests/test_config_io.py` are **not this agent's work** and are excluded from the tables below; the template they just added, `config.ini 存在重复配置项，已按最后一次取值读取: {detail}`, was briefly unregistered, which made `tests/test_i18n_migration.py::test_runtime_templates_covered_by_catalog` red for a while (it was then the only missing entry) - that package owns the fix and has since committed the registration.
+>
+> Legend: [breaking] changes an outward contract, image content or installed artefact; [configuration] touches config keys or defaults; [dependency] touches dependencies or version constants; [string contract] changes text that other code may compare literally.
+
+### 1. Localization catalogs (i18n)
+
+- **Modified** · `i18n/zh_CN/LC_MESSAGES/zh_CN.po`, `i18n/en_US.json`, `i18n/en_GB.json`, `i18n/zh_TW.yaml` — Added 5 Qt sidebar navigation msgids (two-space form, passed to `tr()` by name so the extractor cannot see them); the four-catalog key count went 1110 -> 1115
+- **Modified** · The same four catalogs — [string contract] Added 16 raise-site Chinese message msgids (`main.py` 7 / `src/spider.py` 3 / `src/web_models.py` 6); key count 1115 -> 1131
+- **Modified** · The same four catalogs — Added 1 font-copy failure log template msgid with the placeholders `{name}`/`{target}`/`{type_name}`/`{err}`; key count 1131 -> 1132
+- **Modified** · `i18n/zh_CN/LC_MESSAGES/zh_CN.mo` — Recompiled by `scripts/compile_po.py`: 1133 entries / 149 505 bytes (header empty msgid included, N == keys + 1); the four key sets are item-for-item equal; the `.po` header date is now 2026-10-17
+- **Modified** · The same four catalogs — **Retracted 6 orphan bare-text keys** (`停止录制`/`重新读取`/`保存 URL 配置`/`打开下载目录`/`高级设置`/`清空日志`): historical entries left without call sites once the GUI layer moved to icon-bearing keys; an AST sweep over every string constant in the repo found no consumer (`停止录制` occurs only as a **value** inside `web/app.js`'s own embedded catalog, unrelated to the backend keys). Four-catalog key count 1132 -> 1126, `.mo` recompiled to 1127 entries / 149 231 bytes
+- **Note** · `开始录制` (kept in all four catalogs) — Same bare-key shape but **not retracted**: `tests/test_i18n.py::test_load_translations_priority` and `::test_set_language_hot_swaps_translator` use it as the sample msgid that proves the `.mo`-over-JSON/YAML load priority and hot switching, so removing it would redden two mechanism tests. The coupling is now recorded in the `AGENTS.md` blind-spot list
+
+### 2. GUI window layer (`src/gui_qt/`)
+
+- **Modified** · `src/gui_qt/main_window.py`, `src/gui_qt/pages/dashboard.py`, `src/gui_qt/pages/config.py`, `src/gui_qt/pages/runlog.py` — The construction label and the `T()` registered key of 9 buttons were unified on **one existing icon-bearing catalog key** (three-space form), fixing the fault where startup back-fill and every `retranslate_all()` knocked the icon back to bare text; no new catalog entries
+- **Added** · The same 4 files — Added rationale comments at the paired sites that the construction label and the registered key must be the same msgid: the full statement stays in `main_window.py`, the other three files carry a one-line pointer (no second fact source)
+
+### 3. GUI font module (`src/ui_fonts.py`)
+
+- **Modified** · `src/ui_fonts.py::install_font_file` — [dependency] `except Exception: return None` now emits `logger.warning(i18n.tr("复制字体文件失败: {name} -> {target} - {type_name}: {err}", name=src.name, target=str(target), type_name=type(e).__name__, err=e))` first, so the four causes that look identical in the UI (file locked / read-only directory / disk full / source removed mid-copy) become attributable. The module gained `import i18n` and `from src.logger import logger`
+- **Modified** · `src/ui_fonts.py::_safe_filename`, `src/ui_fonts.py::_WIN_RESERVED_NAMES` — [configuration] Added Windows reserved device-name cleaning (`CON`/`PRN`/`AUX`/`NUL`/`COM1-9`/`LPT1-9`: whole base name, case-insensitive, `_` prefix, idempotent; `COM10` deliberately excluded). The rationale is portability across builds and APIs - measured on this host (Windows 10.0.26300) `CON.ttf`/`AUX.ttf` in fact land as ordinary files; the cleaned name is persisted into `gui_font_file` and read back on the next start
+
+### 4. Recording chain and platform parsing (`main.py` / `src/spider.py`)
+
+- **Modified** · `main.py` (`_hy_fan_path_segment`, `_b23_tv_path_segment` and the two short-link resolvers, 12 sites) — [string contract] Chinese raise messages now call `i18n.tr(...)` at the production point: these messages used to be interpolated as the `{reason}` argument of an already-translated log template, so the template looked up while the message never did, which makes the production point the only place a catalog entry has meaning. Success paths untouched
+- **Modified** · `src/spider.py` (TTingLive sign-in, TwitCasting, Weibo, 3 sites) — [string contract] The TTingLive sign-in failure sentence is now wrapped in `tr()`; the TwitCasting/Weibo f-strings were rewritten into a constant template + the named argument `{masked_url}` (masking still evaluated by the caller), matching the existing Douyu shape
+- **Note** · The 9 messages of `src/spider.py::XhsUrlError` — Deliberately **not** wrapped in `tr()` and **not** registered: both `except XhsUrlError` handlers in `src/spider.py` and `main._resolve_xhslink_com` read only `e.code`, the message never displays, so registering it would only add dead entries. Pinned by the allowlist set equality in `tests/test_i18n_raise_site_tr.py`
+
+### 5. Web panel backend (`src/web_models.py`)
+
+- **Modified** · `src/web_models.py` (`_as_str`/`_as_opt_str`/`_as_bool`/`_as_str_list`/`_require_dict`, 6 sites) — [string contract] The 422 validation messages now go through `tr()`, f-strings rewritten into a constant template + the named argument `field=` (invariant 1: the template must be a literal and placeholders must be bare identifiers)
+- **Modified** · the import block of `src/web_models.py` — [dependency] Added `import i18n` (that module's "zero dependency" meant no pydantic/fastapi; `i18n` depends only on stdlib + loguru and never points back at `web_*`, so there is no cycle). The panel reads error text from the `detail` **key** and never matched the wording, so the frontend contract is unaffected
+
+### 6. Container and deployment (`Dockerfile` / `docker-compose.yaml`)
+
+- **Modified** · `Dockerfile` (one `ARG INSTALL_GUI=false` per stage) — [breaking] [configuration] The image's GUI dependency is now gated by one switch: stage 1 filters PySide6 out of the requirements list by default, stage 2 installs the Qt runtime libraries (`libEGL`/`libGL`/glib/fontconfig/xkbcommon, etc.) only when the switch is true. Default false keeps the whole wheel out of images that only run `main.py`/`web.py`
+- **Modified** · `docker-compose.yaml` (the `gui` service) — [configuration] The `gui` service now passes `INSTALL_GUI: "true"` explicitly and uses its own tag `:latest-gui` - when services with different build configs share one image name, whichever builds later overwrites the tag the other is using
+- **Note** · `.github/workflows/docker-publish.yml` — The release chain must **not** pass true, keeping published images slim (that file was not changed this round and is recorded here as the other half of the constraint)
+
+### 7. CI and gate toolchain (`ci.yml` / `.pre-commit-config.yaml` / `pyrightconfig.json`)
+
+- **Modified** · `.github/workflows/ci.yml` — [dependency] `black_version` 26.5.1 -> 26.10.1 to match the installed build; before the bump both versions ran a full `black --check` and reached identical verdicts (that is the actual criterion) - raising the constant removes a version gap, it is not evidence that CI ran
+- **Modified** · `.pre-commit-config.yaml` — [dependency] black mirror rev 25.9.0 -> 26.10.1 and isort 6.1.0 -> 9.0.2 so the local venv, the CI pin and the commit hooks share one version; both revs were confirmed via the GitHub API and `pre-commit validate-config` passes, but cloning is blocked by this host's proxy, so "the hooks actually install and run" remains unverified
+- **Added** · `pyrightconfig.json` — [configuration] Configuration shared by the IDE language server and the `pyright` CLI: include equals `[tool.mypy].files` item for item, exclude covers both the mypy and basedpyright lists, and typeCheckingMode/pythonVersion/venv match `[tool.basedpyright]`. Running `pyright` with no paths now reproduces the IDE surface; Pylance itself cannot be shell-driven under its license, so this is the real fix for "IDE findings must be checkable"
+
+### 8. Package metadata and derived artefacts (`pyproject.toml` / `egg-info` / `coverage.json`)
+
+- **Modified** · `pyproject.toml` (`packages` under `[tool.setuptools]`) — [breaking] [dependency] Added `src.gui_qt` and `src.gui_qt.pages`: explicit `packages` does not discover recursively, so omitting them leaves both sub-packages out of `pip install .` and the `douyin-recorder-gui` entry dies with `ModuleNotFoundError` at the first import
+- **Modified** · `DouyinLiveRecorder.egg-info/SOURCES.txt` — [dependency] Derived artefact rebuilt after the entry above (`python scripts/sync_metadata.py`). `uv.lock` and egg-info are derived consumers of pyproject and must never be hand-edited for version fields; `sync_metadata.py --check` re-verified consistency
+- **Modified** · `coverage.json` — Regenerated by `pytest --cov=src --cov-report=json`: total coverage 83.02% -> 83.04%; `scripts/check_coverage.py` reports all 68 modules meeting their threshold (`src/proto/douyin_pb2.py` stays an explicit protoc-generated exemption)
+
+### 9. Configuration baseline (`config/config.ini`)
+
+- **Modified** · `config/config.ini` (committed part) — [configuration] Default keys completed and reconciled against the `README.md`/`README_EN.md` configuration blocks and the code fallbacks. This file is the **tracked redacted baseline template**; `.gitignore` does not apply to it, so real cookies / proxies / panel passwords filled in locally must never be committed
+- **Pending action** · `config/config.ini` (a line that exists only in the index) — [breaking] [configuration] The staged copy contains a duplicated key inside one section - `是否启动时清理陈旧字节码缓存(是/否)` on both line 5 and line 44 of `[录制设置]` - which makes `RawConfigParser()` (default `strict=True`) raise `DuplicateOptionError` on the next `read()`, i.e. the baseline config becomes unreadable. The worktree was restored to match HEAD; **the index copy was left untouched** and the cleanup `git restore --staged config/config.ini` is handed back to the maintainer. The writer-side root cause is not located (one read + write-back run changes nothing, `config_parser.write()` emits the key exactly once, and a full `run_gates.py` re-run did not reproduce it either), so this round claims no fix; the hazard and its reproduction test are recorded in `AGENTS.md`
+
+### 10. Tests (`tests/`)
+
+- **Added** · `tests/test_i18n_catalog_coverage.py` (3 cases) — Turns i18n blind spot 4 from manual registration into a machine check: msgid candidates passed to `tr()`/`T()` by name must be present in all four catalogs, the four key sets must be item-for-item equal, and unresolvable call sites are governed by allowlist set equality (a new one reddens it, and a resolved one left in the list reddens it too)
+- **Added** · `tests/test_i18n_raise_site_tr.py` (2 cases) — Blind spot 5: unwrapped Chinese raise sites are governed by allowlist set equality (10 entries today), wrapped msgids must appear in all four catalogs, and anchors guard against a vacuous pass when the parse returns nothing
+- **Added** · `tests/test_gui_qt_label_parity.py` (2 cases) — An AST pass builds tables of construction labels and registered keys and compares them per widget attribute, plus an emoji-pair floor (9) and a catalog-membership check on the registered key; behavioural evidence comes from building real offscreen widgets and reading `text()`
+- **Added** · `tests/test_dockerfile_image_gui_arg.py` (5 cases) — Structural locks for the image GUI switch: `ARG` declared before use (split per Docker stage since ARGs do not cross stages), the filter expression really selects PySide6 with no collateral matches, the two compose services use different tags, the release workflow must not pass true, plus a self-check of the criterion itself
+- **Added** · `tests/test_pyright_config_parity.py` (5 cases) — Pins the parity between `pyrightconfig.json` and `[tool.mypy].files` / the basedpyright lists (include equal item for item, exclude covering both lists, matching strictness/version/venv, reverse witness on the three root entries) and forbids treating Pylance as gate evidence
+- **Modified** · `tests/test_ui_fonts.py` (21 -> 23 cases) — The Windows-only red case fixed on the test side: a `:` in the fixture name resolves to an alternate data stream of a file called `font` (`exists()` true, `shutil.copy2` raising WinError 3), so the character-cleaning half moved into a pure-function case and the filesystem case uses a name both platforms can create that still needs cleaning; two more cases cover reserved device names and "a failure must write one warning line naming the exception type"
+- **Note** · The full `pytest` run — 4345 passed / 14 skipped / 0 failed with an empty warnings summary. The total grew by 12 over the previous round: +4 are the two new locks' cases and **+8 come from `tests/test_test_hygiene.py`'s four checks parametrized over the files in `tests/`**, each now visiting the two new files - a collection-surface change, not new assertions
+
+### 11. Documentation and knowledge assets (`AGENTS.md` / `CODE_WIKI*` / `README*` / `docs/agent-reference/`)
+
+- **Modified** · `AGENTS.md` — Four registrations added: i18n blind spot 5 (raise-site messages must be wrapped at the production point), clause 7 that a Qt construction label and its `T()` key must be the same msgid, the fourth custom-font hard constraint (failure must log a warning + reserved device name cleaning), and missing-key write-back must stay idempotent; plus a new convention that code references use anchors rather than `file:line`
+- **Modified** · `AGENTS.md` — Six factual corrections: design tokens 26 -> **25** keys x 3 themes, `record_danmaku_args` 52 -> **60** assignments, three dead `file:line` references replaced by anchors (`main.py:3595`, `Dockerfile:112`, `src/ffmpeg_install.py:583`), and black/mypy file counts no longer cited as constants (the two measures are never equal)
+- **Modified** · `AGENTS.md`, `docs/agent-reference/measured-evidence.md` — Trimming used relocation and merging instead of deletion: five groups of one-off measured readings moved verbatim into the reference document (19 341 -> 24 042 B) leaving constraint plus pointer behind; two bullets sharing one heading were re-titled to their real subjects, DoD step 5 became a pointer, and two `[历史注]` clauses were compressed to single lines. Root file 157 364 -> 158 266 B (net growth, because two durable conventions were added in the same round)
+- **Modified** · `README.md`, `README_EN.md` — [configuration] Configuration-block defaults reconciled item-for-item against `config/config.ini` and the code fallbacks; version entries kept in one-to-one bilingual correspondence
+- **Modified** · `docs/agent-reference/project-structure.md`, `docs/agent-reference/session-learnings.md` — The directory tree synced with the new modules and test files; lessons appended (the ADS fixture, the reserved-name measurement, the case-count attribution, the offscreen probe exit shape, measuring redundancy before editing, anchors over line numbers, and duplicate keys under `strict=True`)
+- **Added** · `CODE_WIKI.md`, `CODE_WIKI_EN.md` — This module-classified change overview section (identical bilingual structure, matching entry counts, one-to-one correspondence), plus the per-batch changelog entries appended alongside each change and kept in one-to-one bilingual correspondence
 ## Changelog
 
 > **Live-verification retention convention** (same source as `AGENTS.md` DoD step 2): for changes
@@ -1625,6 +1706,43 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 > (`python file.py <URL> [seconds]`; requires a live room + network; manual channel by default).
 > **Rolling archive**: this section keeps only the current release window; older entries live verbatim in [`docs/changelog/code-wiki-history-en.md`](docs/changelog/code-wiki-history-en.md) (rule stated in the "Changelog Archive Index" above).
 
+### v4.5.0-dev (2026-10-18) — the four root documents synced to the real state + slimmed: v4.4.0 and earlier rolled into the archive, the v4.5.0 release notes compressed, `src/config_read.py` added to every tree
+
+- **Measured before acting**: baselines were `README.md` 125,120 B / `README_EN.md` 142,725 B / `CODE_WIKI.md` 480,656 B / `CODE_WIKI_EN.md` 542,868 B. Measured redundancy: 3 / 6 / 4 / 6 fully duplicated long sentences, 0 / 0 / 2 / 2 consecutive blank lines, zero useless formatting markers (rules / empty bold / `<br>`). The real bulk is the **changelog** (31.8% / 55.6% / 42.2% of each file).
+- **Synced to the real state (from the worktree changes)**: all four directory trees gained `src/config_read.py` (the tolerant-read layer added on 2026-10-17); both READMEs gained a one-line note under the basic-config section stating the real behavior - a duplicated key inside one section no longer voids the file, it reads as the last value and logs one warning naming section / key / line.
+- **Three slimming moves**: ① rolling archive - per the root documents' own stated policy, the 29 v4.4.0 + v4.3.0-dev entries of `CODE_WIKI` and the 2 v4.2.0 / v4.1.0 entries of both READMEs were moved **verbatim** into the matching `docs/changelog/` volumes (written to the archive first, then verified line by line, and only then deleted from the root; `code-wiki-history` volumes went 164 -> 193 entries, `release-notes-history` volumes 17 -> 19, with both index tables corrected); ② the 37 bullets of the v4.5.0 entry in both READMEs were compressed (Chinese 18,928 -> 12,733 B, English 22,333 -> 15,228 B) with every criterion, reading and live-device conclusion preserved, the detail still living in the matching entries of this file; ③ the duplicated environment-variable table between "Configuration" and "Docker Deployment" in both READMEs was reduced to a pointer, and 2 consecutive blank lines each were merged in CODE_WIKI both languages.
+- **Pitfall worth reusing**: `pathlib.Path.read_text()` performs **universal newline translation** (`\r\n` -> `\n`), so reading a pure-CRLF document with it and writing it back silently turns the whole file into LF - both READMEs lost their CRLF this way mid-round (CRLF down to 53, bare LF 1,165 / 1,182) and were repaired by re-reading via `read_bytes()` and normalising. Batch edits to these four documents must always go through byte-level `\r\n`.
+- **Re-checked**: all four documents remain pure CRLF (0 bare LF); both READMEs align on 14 level-2 headings and 3 release entries, CODE_WIKI both languages on 16 level-2 headings and 35 changelog entries one-to-one; the three doc locks `test_run_gates.py` + `test_regression_2026_09_22_gates.py` + `test_check_annotations.py` give 74 passed / 1 skipped; `check_version.py` PASS.
+
+
+### v4.5.0-dev (2026-10-18) — version-doc sync: the 4.5.0-dev changelog in CODE_WIKI distilled into the bilingual v4.5.0 README entry (`README.md` / `README_EN.md`)
+
+- **How it was distilled**: the 34 `v4.5.0-dev` entries in the `CODE_WIKI.md` changelog (2026-10-02 ~ 10-17) were sorted into the six subsections the README release entries already use - 9 under New Features / Improvements, 9 under Fixes, 5 under Breaking Changes / Behavior Changes, 4 under Dependency Changes, 5 under Repo Maintenance & Docs and 5 under Tests & Verification; the two languages match section by section in count, heading and order, all inherited from the v4.4.0 entry.
+- **Version numbering (executed after the conflict was handed back)**: the instruction read "4.5.0-dev -> 4.4.0, written into README's 4.5.0 entry", which collides with the fact that README already carries a released v4.4.0 entry (2026-09-29 ~ 10-01). After confirmation it was executed as **a new `### v4.5.0 (2026-10-02 ~ 2026-10-17)` entry inserted above v4.4.0**, leaving the existing v4.4.0 entry untouched.
+- **Distilled, not embellished**: the body is taken strictly from the CODE_WIKI source - the size (153.21MB / 359 files), coverage (83.10% / 69 modules) and live readings (Huya 660000 / Bilibili 545068 / b23.tv 22747736, etc.) are all numbers already present in the log, with no conclusion added that the log does not contain. The net effect of removing `customtkinter` and adding `PySide6` is stated as its two log readings actually say - "20 -> 21 entries" (20 after the removal, 21 after PySide6) - rather than collapsed into a vague "21".
+- **Verification**: both files remain pure CRLF (`README.md` 1221 / `README_EN.md` 1238 CRLF, 0 bare LF); `scripts/check_version.py` PASS and `scripts/sync_metadata.py --check` OK re-run green.
+
+### v4.5.0-dev (2026-10-17) — metadata parity re-scan: 15 target files checked against `pyproject.toml` as the fact source, three documentation drifts fixed (`README.md` / `README_EN.md` / `CODE_WIKI_EN.md`)
+
+- **Fact source values**: `version = 4.5.0` / `requires-python = ">=3.14"` / 21 runtime dependencies / extras dev 7, gui 3, build 1 / three console scripts `douyin-recorder{,-gui,-web}` / 5 `packages` (including `src.gui_qt` and `src.gui_qt.pages`).
+- **Machine gates re-verified green first** (so this round only fixes wording, never values): `scripts/check_version.py` PASS, `scripts/sync_metadata.py --check` OK, `requirements.txt` 21 vs pyproject 21 with both set differences empty, `PKG-INFO` runtime `Requires-Dist` equal spec for spec over 21 entries, `uv.lock` root package at 4.5.0 with the same 21 dependencies, `.coveragerc-concurrency` omit 24 vs 24 and `exclude_also` 4 vs 4, and `egg-info/SOURCES.txt` already carrying `src/gui_qt` plus `src/gui_qt/pages`.
+- **Three actual edits**: (1) the `README_EN.md` structure tree still annotated `web_api.py` as "FastAPI app" - `fastapi` was removed in v4.4.0 phase 2, so it now reads `Starlette app`, which is what the Chinese side already said at the same position; (2) the `src/ui_fonts.py` entry heading in `CODE_WIKI_EN.md` had been rendered twice, one copy with no body, leaving the EN changelog at 63 entries against the Chinese 62 - the empty copy is deleted and both sides return to 62 vs 62; (3) both README structure trees gained `src/gui_qt/` (`app.py` / `main_window.py` / `theme.py` / `pages/`) - the package is declared by `[tool.setuptools].packages` and `gui.py:main()` delegates to it, so its absence left the GUI entry point with no documented landing place.
+- **Carried along (not pyproject-derived, changed after confirmation)**: the `zh_CN.po` key counts in both README trees (780/781) were stale and now read 1127 keys / 1128 entries including the header (1127 keys per catalog, `.mo` N = keys + 1).
+- **Unchanged**: `AGENTS.md`, `requirements.txt`, `Dockerfile`, `docker-compose.yaml`, `.gitignore`, `.dockerignore`, `.coveragerc-concurrency`, `config/config.ini`, `DouyinLiveRecorder.egg-info`, `uv.lock` and `build_exe.py` - eleven files checked item by item with no drift.
+- **Verification**: after the edits all four documents remain pure CRLF (`README.md` 1168 / `README_EN.md` 1185 / `CODE_WIKI.md` 3010 / `CODE_WIKI_EN.md` 3111 CRLF, 0 bare LF); `check_version.py` and `sync_metadata.py --check` re-run green.
+
+### v4.5.0-dev (2026-10-17) — a duplicated config.ini option no longer voids the whole file: new `src/config_read.py` tolerant-read layer + a Qt monospace family factory (attribution and fix for the three warnings in the user's log)
+
+- **Trigger (user pasted a runtime log)**: in `D:\LiveRecorder\config\config.ini` the option `是否启动时清理陈旧字节码缓存(是/否)` appeared **twice inside `[录制设置]`** - line 5 and line 44, byte-for-byte identical (line-wise diff). configparser defaults to `strict=True`, so the next read raises `DuplicateOptionError` and **not a single key survives the read**: ① `main.py`'s unguarded module-level read makes the recording core die during `import main` (on site, `logs/` contained only `gui.log`, no `streamget.log`); ② the GUI status bar emitted "failed to read config.ini, using defaults" every 10 s.
+- **Changes**: ① new `src/config_read.py` (stdlib + i18n + logger only, so the GUI can import it without walking the `config_io` → `main` engine-lock chain): `tolerant_config_parser(preserve_case=)` (`strict=False` + `interpolation=None`, optional identity `optionxform` reproducing the GUI-local closure it replaces), `find_duplicate_options(text)` (mirrors configparser's own reading rules - full-line comments, section headers, both `=` and `:` delimiters, case-insensitive option names), `warn_duplicate_options(path)` (one warning per path+mtime naming section / option / line numbers; the memory set is capped at 32 entries and cleared rather than silently dropping reports). ② Ten read sites wired: `main.py`'s module-level `config` and `_hot_reload_config`; `src/gui_qt/main_window.py`'s `_dynamic_status_info` (together with the now-redundant local closure and the `import configparser` it orphaned) and `_read_config_value`; the preference readers in `src/ui_theme.py` / `src/ui_scale.py` / `src/ui_motion.py`; two sites in `src/ui_fonts.py` (with their in-function `import configparser`). ③ Qt monospace fonts: new `src/gui_qt/widgets.py::fixed_font(point_size=None)` returns the first candidate family actually installed (`_FIXED_FONT_CANDIDATES`), falling back to `QFontDatabase.systemFont(FixedFont)` when none is present; replaced four occurrences of `QFont("Consolas, Menlo, Courier New, monospace")` (`widgets.TerminalText`, `settings_dialog`, `pages/config`, `pages/danmaku`) and removed, in `pages/danmaku.py`, both the "built-then-discarded" `mono` object and the hard-coded `setFontFamily("Consolas")`.
+- **Attribution of the two Qt warnings (measured, not inferred)**: `QFont`'s family slot takes a **single** family name. On a machine with Consolas the old string happened to resolve (`QFontInfo` reads back `Consolas`); on the reporter's machine Qt fell through its legacy alias table to `Terminal` because of `styleHint=Monospace` (measured enum value 7 here, matching `styleHint=7` in the user's log), which produced `CreateFontFaceFromHDC() failed ... Family="Terminal"` plus the immediately following `QFont::setPointSize: Point size <= 0 (-1)`. After the fix, constructing a real `TerminalText` under the Windows platform plugin captured **0** Qt messages.
+- **End-to-end real-machine verification**: this change touches the config-read layer and the GUI font layer, not the recording chain / source selection / ffmpeg args / platform parsing, so DoD step 2 is exempt by its own rule. Live-side evidence instead: after deleting line 44 from `D:\LiveRecorder\config\config.ini` (pre-change backup kept as `config.ini.bak-dup`; the diff is exactly one line) the strict parser reads the file, `[录制设置]` yields 42 keys, and the duplicated option count returns to 1.
+- **Regression locks and mutations**: new `tests/test_config_read.py` (11 cases); `TestMissingKeyWritebackIdempotency` in `tests/test_config_io.py` (2 cases); 3 `fixed_font` cases in `tests/test_gui_qt_units.py` (stubbing `QFontDatabase.families` / `systemFont` so nothing depends on the host font table). Five mutations, all restoring files byte-for-byte: M1 `strict=False→True` → 2 failed; M2 removing the dedupe guard → 1 failed; M3 reverting `main` to `RawConfigParser()` → 1 failed; M4 turning the write-back into an append-style write → 1 failed (**this one only reddened after hardening** - counting occurrences of the key alone cannot catch a whole section being appended twice, hence the added "the write-back product must still be fully readable by a strict parser" criterion); M5 making `fixed_font` return the comma string → 2 failed.
+- **i18n**: one new log-template msgid, `config.ini 存在重复配置项，已按最后一次取值读取: {detail}`, registered in all four catalogs and `zh_CN.mo` recompiled (1128 entries).
+- **Boundaries left open (handed back)**: ① the repo's **index copy** of `config/config.ini` still holds the duplicated-option version (`git status` shows `MM`) - committing it would ship a self-breaking baseline template, so the user needs to run `git restore --staged config/config.ini`; ② the remaining strict parsers were deliberately left out of this round: `src/web_config.py`×3, `src/utils.py`×2, `gui.py`×2, `build_exe.py`×2, `src/web_api.py`, `src/ttwid.py`, `src/logger.py`, and the twin copy `scripts/douyin_live_recorder_standalone.py` - under a duplicated key they degrade silently through their own `except` clauses and are not crash sites; ③ `D:\LiveRecorder` on the user's machine is an independent source copy, so this fix only takes effect there once the files are synced.
+- **Verification**: `scripts/run_gates.py` **10/10 green, rc=0** (black 246 files unchanged; bare `mypy` 245 source files plus the `--platform linux` / `--platform win32` re-runs; `check_annotations.py`; `compile_po --check` in sync at 1128 entries; `check_version` / `check_runtime_pins` / `check_skill_agents_consistency` all OK; the embedded full `pytest` run **4365 passed / 14 skipped / 0 failed with an empty warnings summary**); `pytest --cov=src` total coverage **83.10%** and `scripts/check_coverage.py` **all 69 modules meet threshold** (`src/config_read.py`: 49 statements / 1 miss = **98%**); `basedpyright` **0 errors / 0 warnings / 0 notes**. Line-ending forms re-measured unchanged after editing (still pure CRLF for `main.py`, `src/gui_qt/main_window.py`, `src/ui_theme|ui_scale|ui_motion.py`, `tests/test_gui_qt_units.py`; still pure LF for `src/config_read.py`, `src/gui_qt/widgets.py`, `src/ui_fonts.py`, `src/gui_qt/pages/config.py`, `tests/test_config_read.py`, `tests/test_config_io.py`). All five mutations (M1-M5) reddened their locks and every file was restored byte-for-byte; a closing `grep -rn MUTATION-` sweep returned nothing. `run_gates.py` was re-run once more after these documentation entries as the final-state evidence.
+- **AGENTS.md**: the "缺键补写必须幂等" entry now also states the tolerance layer and names the regression locks.
+
 ### v4.5.0-dev (2026-10-17) — two `src/ui_fonts.py` defects fixed: font copy failures no longer log nothing, and copy targets are cleaned of Windows reserved device names (1 new log-template msgid, catalogs 1131 -> 1132 keys; `tests/test_ui_fonts.py` 21 -> 23 cases)
 
 > Both items came off the handed-back list; single-file production fix, recording chain untouched.
@@ -1636,6 +1754,26 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 - **AGENTS.md**: the "custom font" entry grew from three to **four** hard constraints, adding ④ (failure must log a warning + reserved-name cleaning, with the measured boundary spelled out so nobody re-writes it as "this host cannot write it").
 
 **Verification**: `run_gates.py` **10/10 green rc=0** (black 244 files unchanged, bare mypy 243 source files plus both platform targets, `compile_po --check` in sync at 1133 entries); full `pytest --cov` **4345 passed / 14 skipped / 0 failed / 0 warnings**, total coverage **83.02% -> 83.04%** (the two new cases reach failure branches nothing had executed before), `check_coverage.py` 68 modules pass; basedpyright **0/0/0**; bare `pyright` **0/0/0**; the four catalogs' key sets remain item-for-item equal (1132 keys each) and `.mo` is 1133 entries / 149 505 bytes (N == keys + 1); line-ending forms of `src/ui_fonts.py` and the edited test file re-measured unchanged (each still pure CRLF / pure LF).
+
+### v4.5.0-dev (2026-10-17) — 6 orphan bare-text keys retracted from the i18n catalogs (four catalogs 1132 -> 1126 keys) + a new module-classified change overview section in CODE_WIKI (`i18n/zh_CN/LC_MESSAGES/zh_CN.po|.mo` / `en_US.json` / `en_GB.json` / `zh_TW.yaml` / `AGENTS.md` / `CODE_WIKI*.md`)
+
+- **Every consumer was disproved before retracting anything** (no blanket "no production call site" rule): an AST sweep over **all string constants** in `main.py`/`gui.py`/`web.py`/`i18n.py`/`msg_push.py`/`src/`/`scripts/`/`tests/`/`web/` - not just the first argument of `T()`/`tr()` - left 5 keys with zero consumers, `停止录制` appearing only as a **value** in `web/app.js`'s own embedded catalog (unrelated to the backend keys), and `开始录制` with 12 consumers, all inside `tests/test_i18n.py`, where `test_load_translations_priority` and `test_set_language_hot_swaps_translator` use it as the sample msgid proving the `.mo`-over-JSON/YAML load priority and hot switching. **So six went, one stayed**: `停止录制`/`重新读取`/`保存 URL 配置`/`打开下载目录`/`高级设置`/`清空日志` were deleted and `开始录制` kept. That coupling is now written into the AGENTS.md blind-spot list so the next pass does not delete it as an orphan.
+- **Each catalogue file needed its own removal shape, with syntax validated before writing**: the `.po` loses its `msgid`+`msgstr` block plus the following blank line; the two JSON files need line removal **and** comma normalisation inside the entry region only (no comma on the last entry, commas elsewhere - deleting the final entry would otherwise leave the previous line without its comma and make the JSON illegal), verified by `json.loads` before writing, asserting "keys == original keys - 6" and that the retained `开始录制` value was untouched; `zh_TW.yaml` mixes single- and double-quoted keys (body uses `'key': 'value'`, the tail uses `"key": "value"`), so matching only double quotes would have deleted 2 of 6 - an assertion caught it on the spot (2 != 6). Immediate reading after the retraction: 1126 keys per catalog with item-for-item equal key sets, `.mo` at 1127 entries / 149 231 bytes (N == keys + 1), and `extract_i18n_strings.py`'s "suspected redundant" list fell from 247 to 241; the concurrent package then registered its own template, so the current state is 1127 keys per catalog and `.mo` N=1128 / 149 399 bytes.
+- **New module-classified change overview section in CODE_WIKI** (one section per language, placed before the changelog with a matching TOC anchor): 11 module subsections, each entry recording type / paths / description plus [breaking] [configuration] [dependency] [string contract] tags. The scope line states the baseline `72d1664` (HEAD at session start) -> current worktree, covering committed (`553b036`, committed by someone else mid-session), uncommitted and index-only changes; no files were deleted, the only removals being those six catalogue entries. **Both languages render from one shared data table**, with built-in self-checks: matching subsection counts, per-section entry counts and numbering order, no CJK left in the English text outside code spans, and no `TODO`/placeholder/ellipsis - and the checks did catch two of my own defects (the English tags once rendered in Chinese as `[依赖]`, and an ellipsis left inside a code sample); both are fixed.
+- **A concurrent work package is not this agent's and was excluded honestly**: `src/config_read.py` and `tests/test_config_read.py` (both untracked) plus edits to `main.py`, `src/gui_qt/{settings_dialog,widgets,danmaku}.py`, `src/ui_{motion,scale,theme}.py` and `tests/test_config_io.py` landed while this round ran. The template it adds, `config.ini 存在重复配置项，已按最后一次取值读取: {detail}`, **was briefly unregistered**, which made `tests/test_i18n_migration.py::test_runtime_templates_covered_by_catalog` red for a while (it was then the extractor's only reported miss). This agent did not file it on their behalf, since the wording may still change and a pre-filled entry would just become another orphan; that package registered it itself afterwards, and the re-check reports 0 missing.
+
+**Verification**: after the retraction `scripts/compile_po.py --check` reports `.mo` in sync with `.po` (1127 entries); the locks relevant to this agent's work - `tests/test_i18n.py`, `test_i18n_catalog_coverage.py`, `test_ui_fonts.py`, `test_gui_qt_label_parity.py` - give **67 passed**; all four catalogues re-measured unchanged in line ending and BOM (pure CRLF, no BOM). The one transient red point belonged to the concurrent package's then-unregistered template and was unrelated to this retraction; that package has since registered it.
+
+### v4.5.0-dev (2026-10-17) — AGENTS.md re-verified and trimmed: 6 claims corrected against measurement, 3 `file:line` references turned into anchors, one-off readings relocated (`AGENTS.md` / `docs/agent-reference/measured-evidence.md`)
+
+> The request was "scan the workspace, sync AGENTS.md to the changes, then slim it". One fact reframes the first half: **a commit landed mid-session (`553b036`, 22:13:55, not made by this agent)** that already contains everything done earlier in the session, so the measured change set since HEAD is a single file - `config/config.ini` +1 line - and that line is corrupt.
+- **The duplicated key in `config/config.ini` (measured, restored)**: `是否启动时清理陈旧字节码缓存(是/否)` appeared on both line 5 and line 44, inside `[录制设置]`. The consequence is not cosmetic: the repo parses config with `configparser.RawConfigParser()` (default `strict=True`), and reading the file raised `DuplicateOptionError: ... option '...' in section '录制设置' already exists` - i.e. the tracked baseline had become unreadable. The duplicate line was removed and the worktree re-verified equal to HEAD. **The writer-side root cause is NOT located and no claim of a fix is made here**: running `read_config_bool` against a present key writes nothing, and `config_parser.write()` emits the key exactly once, so the shape is "two writers holding different snapshots", not "the append path always duplicates". A full `run_gates.py` re-run afterwards did not reproduce it either (key count still 1), which is consistent with a race rather than a deterministic path. The staged copy in the index was left untouched (whether to run `git restore --staged config/config.ini` is the user's call). The hazard itself is now recorded in AGENTS.md's config section.
+- **Claims audit: 69 machine checks, 6 corrections.** The script compares pyproject/requirements, symbol existence, collected case counts, and path/anchor existence. Corrections: (1) design tokens **26 -> 25 keys x 3 themes** (AST count over `_LIGHT`/`_DARK`/`_HIGH_CONTRAST`, identical key sets); (2) `ctx.record_danmaku_args` assignments **52 -> 60** (`grep -c 'record_danmaku_args = ' main.py`); (3)(4)(5) three `file:line` references had all gone stale and are now anchors - the danmaku call site `main.py:3595` (really `comment_end = check_subprocess(...)` at 3952), `Dockerfile:112` `COPY . ./` (really `COPY --chown=recorder:recorder . ./` at 149, the literal itself had changed too), and `src/ffmpeg_install.py:583` (really 594); (6) counts that move with the number of files (black `239/242 files`, mypy `241 source files`) are no longer cited as constants - black counts scanned files, mypy counts Python modules, and the two are never equal. Two apparent drifts were disproved on the spot: `MAX_FRAMES=12`/`MONO_SCALE_FACTOR=0.9` exist with `Final[...]` annotations (my regex missed them), and the "8 cells" in `tests/test_ci_retry_action.py` means the 8 entries of `_BEHAVIOUR_CASES`; its collected count of 12 is 8 behaviour + 4 structure locks.
+- **Two new durable conventions added** (registration, not trimming): code references should use anchors (symbol or unique statement fragment) rather than `file:line`, because one audit round alone turned up three dead coordinates; and missing-key write-back must stay idempotent, with a reproduction test (run read + write-back twice over the same file and assert the key still occurs once).
+- **Trimming used relocation and merging, not deletion**, matching the "与根文件的分工" section of the reference doc: five groups of one-off readings moved verbatim into `docs/agent-reference/measured-evidence.md` (19 341 -> 24 042 B) leaving constraint + pointer behind (right-edge-fit pixel readings, the `sync_http` reuse gain, PySide6/`Qt6WebEngineCore`/`QT_BLOAT_FILES` sizes, gate file counts, the version-alignment timeline and the exclude-anchoring before/after readings). Four merges/compressions: two bullets that shared one heading were re-titled to their actual subjects (the `Tkinter after` self-renewing chain and the stop/exit single-flight gate - a migration-era copy-paste of the heading, not duplicated content), DoD step 5 now points at the cleanup section, two `[历史注]` clauses became single lines, and the falsified collector one-liner lost its duplicated code. **Size reported straight: root file 157 364 -> 158 266 B (+902)**, because this round added two constraints while the trims only moved readings out. The remaining candidates (the MID-63 incident chain, the Starlette ⑥⑦ verification note, the `.superpowers` registration history) are all "why" content - squeezing them further would delete judgement text, so they are handed back as levers with their cost instead of being cut.
+- **Redundancy measured before editing**: 547 lines / 93 696 characters, 0 trailing-whitespace lines, 0 multi-blank runs, only 6 exactly duplicated lines and all of them structural (``` , ```bash , >), and just 3 pairs of >120-character bullets above 0.45 similarity - one is the Black/isort "取值" sub-heading (false positive), one was DoD step 5 vs the cleanup section (now a pointer), one was the 3.14 breaking-change list vs the concurrency section's `get_event_loop()` detail (now registered in one place). Re-measured after trimming: duplicate bold openings are back to zero apart from the structural "取值", and 2 high-similarity pairs remain, both justified.
+
+**Verification**: `run_gates.py` **10/10 green rc=0** (black 244 files unchanged, bare mypy 243 source files plus both platform targets, `compile_po --check` in sync at 1133 entries, its embedded pytest **4345 passed** with an empty warnings summary); AGENTS.md's three real readers checked separately - the gate bash block `scripts/run_gates.py` parses was not touched, `scripts/check_skill_agents_consistency.py` rc=0, and `tests/test_agent_hook_guard.py + test_run_gates.py + test_regression_2026_09_22_gates.py + test_ci_frontend_registration.py` give **118 passed / 1 skipped**; both edited docs re-measured as pure CRLF (bare-LF 0). Being a documentation-only change, DoD exemptions apply: gates + doc parity + log + scratch cleanup, with the live end-to-end step not applicable.
 
 ### v4.5.0-dev (2026-10-17) — approved i18n items B+C: 9 Qt button icons restored (existing keys reused, zero new entries) + 21 Chinese raise messages wired to `tr()` at the production point (16 new msgids, catalogs 1115 -> 1131 keys) (`src/gui_qt/main_window.py` / `src/gui_qt/pages/{dashboard,config,runlog}.py` / `main.py` / `src/spider.py` / `src/web_models.py` / four catalogs + `zh_CN.mo` / new `tests/test_i18n_raise_site_tr.py`, `tests/test_gui_qt_label_parity.py`)
 
@@ -2017,983 +2155,4 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 - **Artifacts**: `uv.lock` and `DouyinLiveRecorder.egg-info` regenerated via `python scripts/sync_metadata.py`, no hand edits: uv.lock root 4.5.0 + dev extra gains pre-commit 4.6.2 (current resolution, satisfies the >=3.6.0 floor) plus 7 transitive packages (cfgv 3.5.0 / distlib 0.4.3 / filelock 4.0.8 / identify 2.6.20 / nodeenv 1.11.0 / python-discovery 1.6.1 / virtualenv 21.14.2), with zero changes to existing pins; egg-info PKG-INFO, besides version and the dev extra, also absorbed the current README long-description (empty `language =`, loop interval 60, HLS-exclusion example 虎牙, https-recording/danmaku example values, etc. — README had been edited earlier while the old PKG-INFO was never regenerated; `sync_metadata --check` only compares version and the dependency list, not the long description, so the previous reconciliation could not see it).
 - **Verification**: `sync_metadata.py --check` OK (uv.lock / egg-info both 4.5.0); `check_version.py` PASS (all dynamic consumers OK: main / web_api / Dockerfile); `pytest tests/test_regression_2026_09_22_gates.py` 27 passed; `git diff` review confirms uv.lock changes are only the root version + new package nodes, no drift in existing pins.
 
-### v4.4.0 (2026-10-01) — admit h265 candidates by save format (TS/MKV/MP4 can stream-copy HEVC) + zero-source observability for the silent HLS config drop
-
-- **Trigger**: the two deferred candidate improvements from the same-day previous entry (origin-HEVC-room deadlock root cure); the user approved both ("relax + observe").
-- **Change**: ① `src/stream_select.py` adds `_h265_copy_format_supported()` — it reads main's hot-reloaded global `video_save_type` and decides whether the configured container can stream-copy HEVC: TS(mpegts)/MKV(matroska)/MP4 muxers support it (the same fact as main.py forcing record_save_type=TS when an h265 address gets selected); FLV (HEVC-in-FLV is an Enhanced-FLV extension, unsupported by the repo's stance), MP3/M4A audio-only formats (no video track), out-of-domain/missing values all conservatively count as unsupported. The h265 filter narrows from "drop unconditionally" to "drop only when stream copy is unsupported", so TS users now get the h265 origin FLV primary candidate into the regular sequence for probing; the falsified blanket wording "h265 cannot be copy-recorded" in the `_is_h265` and sequence-construction comments is corrected in place with a dated history note per the comment convention. ② `main.py`'s h265→TS forcing block gains the same-predicate guard: when the save format is already TS/MKV/MP4 it no longer takes over nor logs "use TS format instead" (otherwise TS users would get one misleading warning per round); FLV/audio formats keep the original forcing semantics. ③ Before the no-source conclusion, a new observability warning fires when m3u8 candidates were dropped as a whole by the HLS config (global switch / exclusion list) AND the round ends with no usable source — naming the cause, the candidate count and the recovery switches; this was the only "zero-log" source-selection cause (the 2026-10-01 deadlock-room blind spot: with an FLV fallback present the early-exit warning never fired and the sequence showed no trace of the m3u8); it stays silent on rounds where a source is found. All four i18n catalogs register the 1 new msgid (zh_CN.po tail section + bumped PO-Revision-Date; en/en_GB corner brackets to double quotes; zh_TW terminology aligned 採集/清單/丟棄) and zh_CN.mo is recompiled (810 records = 809 keys + header).
-- **Regression locks**: `tests/test_stream_select.py` gains the h265×save-format dual matrix (TS/ts/MKV/MP4 admit and select the h265 primary first; FLV/MP3/M4A音频/webm/empty drop it onto the h264 fallback, both asserting zero probes on h265), the `_h265_copy_format_supported` decision matrix (11 cells incl. case/whitespace/out-of-domain/None/int) plus the missing-global conservative fallback, and 2 observability cases (the warning fires exactly once on the failing round and never on a healthy round); `tests/test_main_fixes.py`'s two h265 source-selection cases pin the save format explicitly with history notes as the semantics narrow; `test_excluded_platform_h265_flv_not_switched_to_hls` pins FLV the same way. Mutation verification: inverting the predicate (MUTATION-H265RELAX) turned 24 cases red, force-disabling the observability condition (MUTATION-HLSOBS) turned the positive case red; both restored byte-exact with zero marker residue.
-- **Verification**: `pytest --cov=src` 3720 passed / 14 skipped / 1 failed — `tests/test_notify.py::test_run_script_timeout_kills_process` hit the 4.0s assertion margin at 4.04s; attributed at the time to "session-sandbox environment state", **an attribution the user's normal-PowerShell rerun later disproved** (see the correction below).
-- **Follow-up correction (2026-10-02 00:41, after the user-terminal reproduction)**: the same case still failed in the user's normal terminal (elapsed=4.01s) → a control experiment re-characterized it: `proc.kill()` (direct Popen kill) 0.01s, PowerShell `Stop-Process` 0.71s, `taskkill /?` 0.10s, while `taskkill /F /PID` terminating a real process takes a steady **2.5~3.1s** (rc=0, CPU at 6%) — what is slow is taskkill.exe's own implementation path (WMI signature), not the process-termination action and even less this repo's code; the 1s test timeout plus ~3s taskkill lands exactly on the hand-tuned 4.0s margin. Fix: the case's wall-clock bound is now **derived from the production constants** (`_SCRIPT_TIMEOUT_SECONDS + _TREE_KILL_TIMEOUT_SECONDS + 2.0`, ≈8s) — taskkill consuming its own full 5s budget no longer false-alarms, while "unbounded blocking / tree-kill over budget / hung pipe reaping" still trips the bound red; the original "does not occupy the calling thread after timeout" intent is unchanged, and the per-behavior locks remain in `tests/test_notify_script_guard.py`. The machine-state root cause (why taskkill/WMI takes ~3s) is an OS-layer matter outside this repo's scope. Lesson: a test's time margin should be derived from the tested path's production constants, never hand-tuned — a hand-picked value silently assumes "external tools in their healthy state", which both false-alarms and defies attribution when machine state shifts.
-- **Verification (final, after correction)**: `pytest --cov=src` **3721 passed / 14 skipped / 0 warnings**, `check_coverage.py` all 44 modules meet threshold, basedpyright 0 error / 0 warning, `compile_po --check` in sync, `run_gates.py` all 8 gates green. Live verification (live HEVC-origin room 127453393722 央视网快看, inline source-selection script): HLS off + ts → **the h265 FLV primary was admitted and selected** (codec=h265, probe passed for real); HLS off + FLV → fell onto the h264 origin fallback (codec=h264); HLS off + FLV with the fallback stripped → None with the new observability warning fired for real (English catalog form with recovery switches and the anchor name) → all three states PASS.
-
-### v4.4.0 (2026-10-01) — root cure for the douyin HEVC-origin-room "no usable source this round" deadlock: keep the replaced h264 origin FLV in `flv_url_list` when substituting hevc
-
-- **Trigger**: user's running-instance log — two douyin origin-quality rooms (H131-好几百个八 / newly added 大山摩旅中国) logged `h265 codec candidate cannot be recorded with stream copy, skipping` → `选源结论: platform=抖音直播 本轮无可用源` → skipped recording every round while the streamers were live; the status line's cumulative error count stayed 0 (source-selection failure rounds do not feed error samples, so the status line alone looks healthy).
-- **Root cause**: three individually-correct rules composing a deadlock. ① `src/stream.py::get_douyin_stream_url` replaces the h264 FLV with the h265 FLV as the **only** FLV candidate when the origin tier is requested (quality_index==0) and the API publishes `hevc_flv_url` (triggered only when m3u8 is not h265); ② `select_source_url` drops every `codec=h265` candidate before probing (h265 never enters the regular candidate sequence; only the record_url last-resort channel can carry it); ③ with HLS collection disabled in the running instance, the h264 m3u8 group is dropped **silently** (the "HLS not enabled" warning fires only when there is no FLV/record_url fallback), and record_url (douyin = `m3u8_url or flv_url`) is disabled in tandem because it is an `.m3u8` — leaving zero usable candidates after the h265 filter. Log-reading evidence: "h265 warning → source conclusion" within the same millisecond = zero probes emitted after filtering; absence of the `record_url has h265 codec` English warning = record_url was the m3u8 (i.e. the m3u8 existed every round rather than being absent).
-- **Change**: `src/stream.py::get_douyin_stream_url` now stores the replaced h264 origin URL into `flv_url_list` (new result key; `select_source_url`'s existing consumption point appends it after the primary candidate) before the hevc substitution — with HLS enabled the m3u8 still leads; with HLS off/unreachable the h264 FLV takes over. Defensive filtering: an `flv_pull_url` entry identical to the hevc URL, or one already carrying the `codec=h265` marker (per the pinning convention that parameter belongs on hevc_flv_url only), is not collected — it would be filtered out anyway and only add warning noise. The `record_url` contract is unchanged. The other two candidate improvements (a warning when the silent HLS drop leaves zero usable candidates, relaxing the h265 filter by save format) were intentionally not done in this round, pending the user's decision.
-- **Regression locks**: `tests/test_stream.py::TestGetDouyinStreamUrl` gains 6 cases (substitution keeps the h264 fallback, the fallback survives the m3u8-probe-failure downgrade, non-origin requests do not substitute, hevc-only with no flv_pull_url keeps the fallback empty, byte-identical URL is not duplicated, an h265-marked entry is not collected); `tests/test_stream_select.py` gains 2 cases (with HLS off the h264 fallback from `flv_url_list` is selected and the h265 primary never gets probed; the control case — h265-only without a fallback — stays None probe-free). Mutation verification: removing the append (marker MUTATION-H265FB) turned both stream-side locks red; byte-exact restore returned them green.
-- **Verification**: `run_gates.py` all 8 gates green (embedded full pytest 3698 passed / 0 warnings); after `pytest --cov=src` 3698 passed / 14 skipped, `check_coverage.py` all 44 modules meet threshold; basedpyright 0 error / 0 warning. Live verification (inline script reusing `tests/test_douyin_live_collector.py`'s web path and 3-level cookie fallback):
-  `[2026-10-01] douyin | https://live.douyin.com/127453393722 (央视网快看) | inline source-selection script (web path) | PASS | status=2, h265 primary + h264 fallback, SELECT hls_off → h264 FLV`
-  The room happened to be a live HEVC-origin room (same shape as the user's deadlocked rooms): the API published an h265 FLV primary (`pull-f3.douyinliving.com/…codec=h265`, one filter warning per select run) plus the retained h264 origin FLV fallback (`pull-flv-f1.douyinliving.com/…codec=h264`); with HLS on the m3u8(h264) was selected (priority unchanged), with HLS **off the h264 FLV fallback was selected** (pre-fix this shape was always "no usable source this round") → `E2E_RESULT: CURED`. Also tried 656722643531 (大山摩旅中国) and 699394970561, both `SKIP(room offline)`; confirming the HLS switch state on the user's running instance is handed back to the user.
-
-### v4.4.0 (2026-10-01) — fix 4 false-red results of test_gui_stop_exit_singleflight on Linux CI: missing stub for the POSIX signal branch
-
-- **Trigger**: CI `test` job (ubuntu) 4 failed / 3679 passed — all four scenarios of `tests/test_gui_stop_exit_singleflight.py` observed 0 console attaches (`attaches: []`) against the "exactly one attach" assertion, and scenario A's `reuse_logged` was False at the same time; locally on Windows the full suite is green.
-- **Root cause**: `gui._send_stop_signal_and_wait` branches by platform — win32 calls `_send_ctrl_break_to_child` (the original stub point), POSIX calls `os.kill(proc.pid, SIGINT)`. The subprocess script stubbed only the win32 side, so the accounting spy never fires on Linux; knock-on effect: the stop chain loses its 0.35s simulated duration and finishes instantly, so after scenario A's `sleep(0.05)` the in-flight thread has already ended and `_current_stop_worker()` returns None — the "reuse the in-flight stop thread" criterion falls through too. The CI readings (empty attaches / wait_calls=1 / reuse_logged False) match the single cause "missing stub" exactly; not a concurrency defect.
-- **Changes** (test file only, no production code): the subprocess script now installs, on non-win32, a namespace shim per the AGENTS "stdlib stand-ins go through the tested module's namespace" rule — `gui.os` replaced by a `SimpleNamespace(**vars(os))` copy with only `kill` overridden by the same accounting spy (restored in finally); `make_attach_spy` gained a `sig=None` parameter to accept the `os.kill(pid, sig)` call shape; scenario D swaps both sides' spies to the 0.05s short-duration version; the header comment's falsified "single external side-effect point" statement was corrected with a dated history note. AGENTS "Mandatory test-writing conventions" gained an entry: stub points must cover every branch of a platform-branched path.
-- **Verification**: Windows full `pytest --cov=src` 3690 passed / 14 skipped / 0 warnings, `check_coverage.py` all 44 modules pass; `run_gates.py` all 8 gates green; basedpyright 0 errors / 0 warnings. Locally reproduced the POSIX path by faking `sys.platform="linux"` — all 25 criteria of the four scenarios pass (technique: change `sys.platform` **after** `import gui`; changing it before import makes loguru's `enqueue=True` initialize multiprocessing the posix way, hitting `No module named '_posixsubprocess'` on Windows). Mutation verification: with the single-flight gate removed (reuse decision and `_console_stop_lock` torn out), 3 behavioral locks + 1 structural lock all went red, and `gui.py` was restored byte-identical. Live verification exempt (test-only change, no recording pipeline involved).
-
-### v4.4.0 (2026-10-01) — deps-audit "floor re-check" catches three new CVEs in urllib3 2.7.0; declared floor raised to 2.8.0
-
-- **Trigger**: the `Audit declared floors against OSV (no resolution)` step of the CI `deps-audit` job failed with rc=1 — when every floor is pinned as `==` and audited one by one, `urllib3==2.7.0` reports three advisories, CVE-2026-97687 / CVE-2026-97688 / CVE-2026-97689, all fixed in 2.8.0; the old floor itself sits inside the affected band (same pattern as the starlette / protobuf / h2 floor re-checks; resolution mode is blind to this shape).
-- **Changes**: `urllib3>=2.7.0` → `>=2.8.0` in `requirements.txt` and `pyproject.toml [project.dependencies]` (still 21 entries, package-name sets unchanged on both sides); the requirements.txt comment gained a dated re-check record following the h2 precedent; `python scripts/sync_metadata.py` regenerated `uv.lock` (locked version 2.7.0 → 2.8.0, specifier in sync) and `DouyinLiveRecorder.egg-info/requires.txt`. The local venv already had 2.8.0 installed, so raising the floor changes neither the resolved set nor the installed environment.
-- **Verification**: re-ran both audit steps locally with the exact CI logic — resolution mode and the `==`-pinned `--no-deps` floor mode both returned `No known vulnerabilities found` (rc=0, 21 floors); `run_gates.py` all 8 gates green (with the embedded full pytest 3690 passed / 0 warnings fallback); after `pytest --cov=src` (3690 passed / 14 skipped), `check_coverage.py` passes on all 44 modules; basedpyright 0 errors / 0 warnings. No production-code changes; live verification not applicable (exempt).
-- **Docs**: the `AGENTS.md` "Dependency Management · Security floors" entry and the `urllib3` row of both dependency tables updated in the same batch.
-
-### v4.4.0 (2026-10-01) — Session changes archived by module: AGENTS.md fidelity-preserving slim-down (−1,818 B / −21 lines, 19 places) + stop-hook red-line wording hardening; no production-code changes and no file additions/removals in this session
-
-- **Scope statement**: every change in this session landed in repo conventions and user docs — **no new features, no production-code changes (`src/` / root entry points / `build_exe.py` / `scripts/`), no files added or removed**; the "deletions" are only redundant text inside AGENTS.md (table below). Zero runtime-behavior impact, hence no live-verification item.
-- **Per-module change list**:
-
-| Module | File | Type | Change |
-| --- | --- | --- | --- |
-| Repo conventions | `AGENTS.md` | modified | Fidelity-preserving slim-down in 19 places: 2 redundant removals (the mypy pointer bullet in the gate-command section, the duplicated PowerShell cleanup command embedded in the safe-delete bullet); 4 merge groups (comment conventions "why + three layers", the two ConcurrencyScheduler bullets in the scheduler hub, cleanup "scope + pre-check", Python-version ↔ known-pitfall PEP 758 dedup); 8 compressions of superseded archaeology/stale readings (the 21-dependency recheck chain, superseded lower-bound ranges, stale regression-test counts, the danmaku-wiring `[historical note]`, the old gate-bullet paraphrase, M-28 counts, the rate-limit rewrite note, etc.); 5 wording tightenings (M-26, wraplength, the Web-backend tail note, skipif, config-key audit). The gate-command bash block and every `##`/`###`/`####` heading stayed byte-identical; all 37 "回归锁" (regression-lock) references and measured readings preserved verbatim. 110,287 → 108,364 bytes (−1,818 B), 519 → 498 lines, pure CRLF kept |
-| Repo conventions | `AGENTS.md` (CI/workflow · config-key audit bullet) | modified | Mimosa stop-hook disposition: the bullet was flagged by the scanner as a "sensitive file + external send" combination; assessed as a false positive (the line is a prohibitive red line against leakage, and the audit target is key names in a sanitized template, not credential values), then hardened per the suggestion to "**禁止**把真实凭据写入提交或以任何形式外传" — i.e. committing or externally transmitting real credentials in any form is prohibited (red line: see 风险控制（前置）·凭据与敏感配置红线). Semantics unchanged, prohibitive intent made explicit (108,364 → 108,469 bytes) |
-| User docs | `README.md` / `README_EN.md` | modified | The "Install dev dependencies" pip line `pip install pytest pytest-asyncio black isort mypy` (5 packages, missing `pytest-cov`; an environment set up this way cannot run the coverage gate) → `pip install .[dev]` (single-sourced from the six entries of `[project.optional-dependencies].dev`, matching AGENTS.md dependency management); details in the previous same-day entry (metadata reconciliation) |
-| Changelog | `CODE_WIKI.md` / `CODE_WIKI_EN.md` | modified | The two same-day entries (metadata reconciliation + this one) registered in both CN/EN |
-
-- **Verification**: `run_gates.py --list` parses all 8 gate commands from the slimmed AGENTS.md in the original order; `tests/test_run_gates.py`+`tests/test_regression_2026_09_22_gates.py`+`tests/test_check_annotations.py` = **73 passed / 1 skipped** (matching the 2026-09-30 baseline); `tests/test_regression_2026_09_22_gates.py` (including the "parse gate list from AGENTS.md" source lock) re-run alone = **27 passed**; heading diff HEAD vs new version = **ALL HEADINGS IDENTICAL**; EOL audit: every file touched in this batch stays pure CRLF (AGENTS.md 498 lines, both READMEs 1049/1050 lines, both CODE_WIKIs in the same form).
-
-### v4.4.0 (2026-10-01) — Metadata reconciliation (15 files vs `pyproject.toml`): a single drift in the README dev-dependency instructions, zero changes elsewhere
-
-- **Scope**: `AGENTS.md` / `docker-compose.yaml` / `requirements.txt` / `Dockerfile` / `.gitignore` / `.dockerignore` / `.coveragerc-concurrency` / `config/config.ini` / `CODE_WIKI.md` / `CODE_WIKI_EN.md` / `README.md` / `README_EN.md` / `DouyinLiveRecorder.egg-info` / `build_exe.py` / `uv.lock`, checked against `pyproject.toml` as the single source of truth: version 4.4.0, project name & three entry points, Python >= 3.14, the 21 runtime dependencies and floors, image / service names, port 8000 and the four mounted directories, and `build_exe.py` packaging parameters.
-- **Only change**: the "Install dev dependencies" pip line in `README.md` / `README_EN.md` — `pip install pytest pytest-asyncio black isort mypy` (5 packages, missing `pytest-cov`; an environment set up this way cannot run the coverage gate `pytest --cov=src`) — replaced with the canonical `pip install .[dev]` (single-sourced from the six entries of `[project.optional-dependencies].dev`, matching the `AGENTS.md` dependency-management convention; future extras changes no longer need doc edits).
-- **Evidence**: `sync_metadata.py --check` OK (uv.lock / egg-info both 4.4.0), `check_version.py` PASS; egg-info `Requires-Dist` matches the 21 runtime deps plus dev/gui/build extras item by item (setuptools normalizes the `protobuf` spec to `<8,>=6.33.5` — ordering is not a drift), no fastapi/pydantic residue in `uv.lock`; `.coveragerc-concurrency` omit (23) + `exclude_also` (4) identical to pyproject entry by entry; the README edit is a single-line replacement and both files remain pure CRLF.
-- Documentation-only change: no recording-chain involvement, no live-verification item; per DoD exemption only the affected gate surface was run.
-
-### v4.4.0 (2026-09-30) — i18n blind-spot backfill batch: tr-ified user-visible text in extractor blind spots ①②③ + 16 entries registered across all four catalogs + zh_CN.mo recompiled
-
-**Call-site tr conversion (lookup before interpolation, eliminating "entry exists in the catalog but can never be matched at runtime")**
-
-- **print_colored (blind spot ①)**: two sites in `main.py` (download interrupted / thread exiting) and two in `src/notify.py` (push failure / removed from recording list) — f-strings passed straight in are now pre-formatted via `i18n.tr(constant template, **kw)` (same shape as MIN-2233).
-- **messagebox (blind spot ②)**: 10 sites in `gui.py` — 6 error bodies tr-ified (load/save config file failed, failed to start recording, failed to write URL_config.ini, room URL not found) plus 7 titles tr-ified (Error ×4 call sites, Failed to switch quality ×2, Success, Configuration file changed ×2, GUI startup failed), aligning with the MIN-2247 rule "titles and bodies both go through tr".
-- **Push text (blind spot ③)**: the push-title fallback `直播间状态更新通知` in `src/notify.py` goes through tr; the SMTP CRLF guard in `msg_push.py` now raises `tr("{kind} 含换行符，禁止用于邮件头", kind=tr(kind))` (the 4 kind labels are translated at the call sites); 6 push-failure `errmsg` fallbacks (`未知错误`) go through tr.
-
-**Four-catalog registration (16 new msgids)**: zh_CN identity (new section at the po tail + updated header dates); en_US/en_GB share the same English text (「」converted to double quotes); zh_TW traditional with terminology aligned to existing entries (配置文件→設定檔, 线程→線程, 消息→訊息, 注释→註釋). zh_TW also had **7 duplicated theme-section keys removed** (values identical; `界面主题` and 6 more were registered twice as a whole block; the earlier copy dropped) — all four catalogs are strictly key-set equal again (808 keys).
-
-**Regression lock**: `tests/test_i18n_migration.py` gains invariant ④ `test_no_valuable_fstring_in_print_colored_or_messagebox` — repo-wide scan banning interpolated f-strings in blind-spot argument positions + predicate self-check (tr pre-formatting / constants / dynamic non-template args must not be flagged); mutation-verified: reverting one site to an f-string turns the test red, then restored byte-for-byte with no residue.
-
-**Verification**
-
-- Gates: `run_gates.py` 8/8 green; full pytest 3690 passed / 14 skipped / 0 warnings; `check_coverage.py` all 44 modules meet thresholds (84.76%); basedpyright 0 error / 0 warning; `compile_po.py --check` .po/.mo in sync (.mo header N=809, i.e. 808 keys + 1).
-- i18n chain end-to-end: hot-switched through all four languages with `set_language`; all 16 new entries match via `.mo` (zh_CN) / JSON (en) / YAML (zh_TW), including a bilingual check of the SMTP-guard exception text (en_US/zh_TW). This batch only touches message plumbing — no recording-chain / source-selection / ffmpeg-argument / platform-resolver behaviour — so no live-room verification is required.
-
-### v4.4.0 (2026-09-30) — P0 fix batch: landed `CODE_REVIEW_2026-09-30.md` Critical 2 + P0 six-pack (each with a regression lock)
-
-> Executed per the report's chapter 8 "P0 (fix immediately)"; P1 (install chain / HTTP bounds / test-line restoration) and P2 remain for later batches.
-
-**Critical (standalone twin drift)**
-
-- **S-01**: `scripts/douyin_live_recorder_standalone.py` gains three defenses — ① `_build_opener` rebuilt as an explicit handler whitelist (no longer via `build_opener`; file/ftp/data handlers no longer registered; isomorphic to the mainline `sync_http` design, keeping `UnknownHandler` as the uniform rejection gate for non-whitelisted schemes); ② new `_untrusted_stream_target_reason` (scheme whitelist + IP literals incl. inet_aton shorthand `2130706433`/`0x7f000001`/`0177.0.0.1`/`127.1` + IPv4-mapped + CGNAT + internal-purpose hostnames, zero-DNS offline judgement, the offline subset of mainline `web_config._internal_ip_reason`), wired into the `validate_stream_url` entry (hard reject even for last_resort — "warn-and-allow the last candidate" targets CDN-rejection false kills only) and `select_source_url` candidate filtering (per-candidate logged for attribution); ③ `-protocol_whitelist` added to both ffmpeg command definition sites (verbatim-equal to `main.py:3472`, placed before `-i`).
-- **S-02**: ffmpeg command log masking — `run_ffmpeg` now routes the log line through `_mask_ffmpeg_cmd_for_log` before writing `logs/ffmpeg.log` (`-headers` value replaced with a `<headers:N chars>` placeholder, `-i` value via `strip_query` keeping the path); platform cookies and anti-leech tokens no longer land in plaintext (the log is append-only, unrotated).
-
-**Medium (P0 group)**
-
-- **M-01**: `notify.remove_room_from_running` no longer skips cleanup when `exit_recording=True` (a disk-full pause is not process exit; cleanup is idempotent under `record_state_lock`, and one extra call during real exit is harmless) — rooms that exited during the pause no longer stay in `running_list`, so the relaunch condition holds again once space recovers and the recovery log matches reality.
-- **M-02**: `gui._save_text_to_file` delegates to `src.utils.atomic_write_text` (the repo's single hardened implementation: flush+fsync + preserving the target's original mode before replace; utils does not import main, avoiding the config_io side effect), removing the SEV-2211-family gap where each GUI save restored a 0600 tightening back to umask permissions on POSIX; failure semantics unchanged (False re-raised as OSError for the error dialog).
-- **M-06**: the web password strip convention unified across three sites — write side strips before hashing, login compares stripped, legacy-plaintext upgrade hashes the stripped form; setting a password with leading/trailing spaces no longer locks every subsequent reauth into permanent 403 (panel-level self-lockout of the auth config).
-- **M-07**: `web_config.update_config_line` drops the unquoted-value `" #"`/`" ;"` inline-comment fallback heuristic (the reader-side configparser never enabled inline_comment_prefixes, so a ` #` inside the old value is part of the value; splicing it back silently corrupts the new value); quoted values still take comments only **after the closing quote** (F-23 semantics kept, `key = "a #b"` no longer re-polluted by the fallback).
-- **M-17**: `utils._SECRET_HEADER_RE` camel branch loses its permanently-dead guard (mutually exclusive with `(?<=[a-z])` at the same position, branch never matched) — header-form camelCase compound keys (`myToken:`/`sessionKey:` etc.) are masked again; two guardrails recorded: the plain branch must NOT gain a quote exclusion (the shell command form `--header "Authorization: Bearer X"` has a quote right before the key; excluding it re-opens the leak — the whole `tests/test_notify_script_guard.py` group proves it), and the old "guard prevents https: masking" claim is falsified under the current key list (no key can match `https:`).
-- **M-18**: `utils.replace_url` switched to segment-exact matching — the matcher moved down to `utils.rewrite_line_by_segment` (`config_io._rewrite_line_by_match` is now a thin delegating wrapper, one implementation kills the twin drift), so prefix-overlapping sibling room lines (`…/l/123456` vs `…/l/1234567`) are no longer whole-line corrupted by HuyaLive's dead-URL auto-commenting.
-
-**Verification**
-
-- `[2026-09-30] Huya | https://www.huya.com/660002 | scripts/douyin_live_recorder_standalone.py --dry-run | PASS | real live room parsed as "王者荣耀赛事", all candidates passed the new guard, probe 403 retry recovered→tx line 200, stream URL selected (incremental verification of S-01's three defenses + S-02)`.
-- Gates: `run_gates.py` 8/8 green; full pytest 3689 passed / 14 skipped / 0 warnings; `check_coverage.py` all 44 modules above threshold; basedpyright 0 error / 0 warning. The M-18 regression lock was mutation-verified (red under the old substring implementation, byte-exact restore, line-ending shapes untouched).
-- Regression locks: `tests/test_regression_2026_09_22_standalone.py` (TestUntrustedStreamTargetGuard / TestWhitelistOpener / TestFfmpegCommandHardening / TestFfmpegCommandLogMasking), `tests/test_regression_2026_09_22_utils.py` (header-form camelCase compound keys + quoted header), `tests/test_web_api.py::TestPasswordManagement::test_password_with_surrounding_whitespace_not_self_locking`, `tests/test_web_config.py::TestUpdateConfigLine::test_hash_in_value_reads_back_as_new_value`, `tests/test_utils.py::TestReplaceUrl::test_prefix_overlapping_sibling_line_untouched`, `tests/test_regression_2026_09_22_main.py::TestDiskFullPauseCleanupStillRuns`, `tests/test_gui_save_atomic.py`.
-
-### v4.4.0 (2026-09-30) — Full-workspace code review (producing `CODE_REVIEW_2026-09-30.md`): 18 per-file deep-audit batches plus Mimosa deep-scan cross evidence — Critical 2 / Medium 51 / Minor 160
-
-> User's brief: comprehensively review all source code in the workspace (Python/JavaScript/Node.js/HTML/CSS/CI, excluding third-party dependency directories such as node_modules and build artefacts such as dist/build), focusing on code quality, latent defects, security vulnerabilities and logic errors; record findings per file and classify them by severity into a formal report. The report landed as [`CODE_REVIEW_2026-09-30.md`](CODE_REVIEW_2026-09-30.md) in the repository root.
-
-| Item | Content |
-| --- | --- |
-| Method and coverage | 18 independent deep-audit batches grouped by module (12 production + 6 test), each reading every assigned file line by line, each carrying an "established-conventions anti-false-positive list plus per-area anchor points"; coverage ≈42,000 lines of production code (`main.py` 5,465 / `gui.py` 4,526 / `src/spider.py` 7,100 / Web layer 3,439 / source-selection & scheduler 3,498 / danmaku chain 2,743 / HTTP infrastructure 2,084 / tooling 3,524 / install & post-process 2,600 / front-end & signing JS 4,805 / build-gate CI ≈8,000 / standalone 2,261) and ≈56,200 lines of tests (124 `tests/*.py` files + 8 `tests/frontend` files); excluded `typings/`, `src/proto/douyin_pb2.py` (protoc-generated) and `src/javascript/crypto-js.min.js` (tamper special-check only: full-file pattern scan shows no network egress / dynamic construction / system-capability calls — judged to be an unmodified standard crypto-js 4.x build). Before the report was written, the lead reviewer re-verified the 2 Critical and 5 representative Medium findings at line level; all confirmed |
-| The 2 Critical findings (both in `scripts/douyin_live_recorder_standalone.py`, twin drift) | ① SSRF + local-file-read chain in the probe/record path (`:180-187/:746-756/:1456-1494`): default `build_opener` ships FileHandler + platform candidates accepted without protocol/internal-host checks + the ffmpeg command lacks `-protocol_whitelist` (the mainline has it at `main.py:3466`) — three layers stack into a complete chain where `file://` and `169.254.169.254` reach "probe → accept → ffmpeg records to disk"; ② the full ffmpeg command (including the Cookie header and token-bearing stream URLs) is written verbatim per round into `logs/ffmpeg.log` with no rotation (`:1543/:1552`), in direct conflict with the "no credentials to disk" red line |
-| Distribution and representatives of the 51 Medium findings | Production 37: standalone 4 (MID-49 Douyu POST not back-ported, probe exceptions carry full URLs, GBK config crashes at startup, Windows terminate() hard-kills and truncates mp4); install chain 6 (TOFU baseline unread → fail-open, new zip recorded without archive-shape validation, version string unvalidated, direct unzip into the app root, import-time concurrent `check_node` install race, `check_node` exceptions can crash `import src`); tooling 4 (`_SECRET_HEADER_RE` camel branch has two mutually exclusive lookbehinds and can never match — camelCase compound keys in header form are not masked; `replace_url` substring fallback silently comments out sibling rooms with overlapping ID prefixes; logger dual-sink partial-failure leak; `run_node_script_async` lacks the wait_for double budget and can hang a room thread forever); Web 3 (no request-body size limit, three inconsistent password-strip call sites can permanently self-lock auth config, inline-comment preservation silently corrupts values containing ` #`); HTTP 4 (sync_http same-scheme internal-redirect gap / unbounded HTTPError body / data-vs-json branch divergence; async_http hop guard does a synchronous getaddrinfo inside the event loop); danmaku 3 (singleflight failure log unmasked, in-flight registrations never reaped on waiter timeout, SRT open failures are silent and both existing alert chains miss); source selection 2 (`_PRIVATE_HOST_PATTERN` literal-only gap; room.py bare AsyncClient follows redirects); spider 2 (LangLive/Inke/JD still require both FLV+HLS, MID-2212 family residue; xhs session sid forwarded across redirects); main 1 (after a disk-full pause recovers, `running_list` residue permanently blocks all rooms from relaunching); GUI 1 (`_save_text_to_file` weakened atomic write restores 0600 on POSIX — SEV-2211 family); build/CI 6 (softprops/action-gh-release and dorny/paths-filter floating refs × highest permissions, check_annotations home-dir guard direction inverted, smoke tests never drain the PIPE / never assert liveness, one-off script ROOT hardcoded); front-end 1 (switching language wipes the rendered config form). Tests 14: always-true assertions (`test_http_config:153`, `test_proxy:149`), stubs landing on process-wide module bodies (configparser/ctypes/time.sleep/httpx/loguru), three front-end wrappers missing the node-side skipped check (`{skip:true}` goes green end-to-end), sandbox without sessionStorage leaves the `_tokenStore` main path at zero coverage, MID-2253/2238 text locks escapeable |
-| Machine-scan cross evidence (Mimosa) | scanId `scan-2026-09-30T02-25-56.161Z-3255898c38d0`, seal `sha256:5350da9801cb…d78a1`, depth deep, evidence boundary static_only, status **inconclusive** (198/198 files parsed, threatModel incomplete, validation phase investigated=0 — all 41 findings are unvalidated static hits): HIGH command-injection 3 / hardcoded-credentials 3 / path-traversal 11 / SSRF 7, plus LOW weak-randomness 17. Human triage: 0 findings constitute an exploitable vulnerability unseen by the manual audit (2 corroborate manual findings — the unvalidated node version string and the sync_http internal-redirect gap; the rest are pattern false positives or by-design public client identifiers); the scan's selection did not cover standalone — the two Critical findings came out of the manual audit |
-| Report structure and actions | The report contains overview / scope / statistics matrix / item-by-item detail for the 2 Critical and 51 Medium findings (problem + impact analysis + fix suggestion) / 160 Minor findings as per-area tables / the machine-scan triage table / P0–P2 fix priorities / process recommendations (a proposed "twin back-port" hard rule, adding configparser to the R1 list and registering the ctypes stub in `_SANCTIONED`, a standalone back-port alignment project) / conclusions; 10+ findings are marked "to be confirmed" and need real-device or environment-specific reproduction before final grading |
-| Documentation and gates | Documentation-only batch: new `CODE_REVIEW_2026-09-30.md` in the repo root (`.dockerignore` already carries the `CODE_REVIEW_*.md` wildcard, so it never enters the image) plus this entry (CN/EN synchronised); zero code changes. DoD waivers: step 1 gates not applicable (no `.py`/front-end asset changes), step 2 real-device verification not applicable (no recording-chain / source-selection / ffmpeg-argument changes), steps 3/5 not applicable (no regression-lock changes, no one-off scripts produced) |
-| Handed back to the user | The five P0 fix queues are in report chapter 8 (standalone twin back-port, the masking dead branch, Web auth self-lock and config-value corruption, `replace_url` collateral damage and the disk-recovery relaunch, GUI atomic write); the standalone back-port alignment deserves its own dedicated project |
-
-### v4.4.0 (2026-09-30) — `AGENTS.md` reconciled with workspace state (7 fact corrections) plus information-preserving slimming only, after measuring redundancy: net +529 bytes this batch (slimming operations −170 B, fact sync +699 B)
-
-> User's brief: scan the workspace → identify adds/modifies/deletes since the last commit via `git status`/`git diff` → write the affected `AGENTS.md` configuration back → then slim the file.
-> Workspace as measured: `git status --porcelain` shows exactly 5 `M` entries (`AGENTS.md` / `CODE_WIKI.md` / `CODE_WIKI_EN.md` / `docs/agent-reference/session-learnings.md` / `pyproject.toml`),
-> **0 additions, 0 deletions, 0 untracked** (`filter.lfs.*` is configured and does not suppress status collection); reconciliation baseline is HEAD `046bb73`.
-> This round's `pyproject.toml` change touches only the **attribution comments** of two `[tool.pytest.ini_options].filterwarnings` entries with zero value changes, so `AGENTS.md` needed no follow-on (runtime dependencies verified at 21 on both sides, identical name sets to `requirements.txt`).
-
-| Item | Content |
-| --- | --- |
-| 7 fact corrections (each with a measurable basis) | ① "dev / build / GUI dependencies": `.[dev]` expanded from "pytest/black/isort/mypy" to the **six** entries actually declared (`pytest-asyncio` and `pytest-cov` were missing); ② `tests/test_scheduler.py` "16 tests" → **29** and `tests/test_record_failure_feedback.py` "5 tests" → **8** (`pytest --collect-only -q`); ③ the symbol `_allow_sleep` quoted in the pitfalls section **does not exist** — `src/scheduler.py` defines module-level `_sleep` (:531) and `_now()` (:525); ④ "6 `check_subprocess(...)` call sites" → **1** (`main.py:3595`; after the F-01 convergence each platform branch only fills `ctx.record_danmaku_args`, now 52 assignments by `grep -c`); ⑤ `_loads_dict` "about 40 call sites" → **103** (`grep -c '_loads_dict(' src/spider.py` = 104 lines including 1 definition); ⑥ in the bundle-size section, `pydantic_core` 4.93 MB and "≈24 MB total" were falsified by `046bb73` removing fastapi/pydantic and there is no local `dist/` to re-measure, so the readings moved out and the root file keeps only the "three fixed costs" constraint; ⑦ readings re-verified as **correct** and left untouched: `BARE_JSON_LOADS_CEILING = 1`, the 8-cell real-bash behaviour grid in `tests/test_ci_retry_action.py`, the 9-cell `test_twin_agrees_on_every_criterion_combination` matrix, 24 web_api routes, `_FFMPEG_FAST_FAIL_SECONDS = 20.0`, `_PROBE_LEASE_SECONDS = 60.0`, `_PROBE_BACKOFF_PLATFORMS`/`_FLV_FIRST_PLATFORMS = ("虎牙直播",)`, the ci.yml consts (black 26.5.1 / isort 9.0.1 / mypy 2.3.1 / pytest 9.1.1 / Python 3.14 / Node 24), actions v7, `release-guard`, rules R7/R8, the two metadata regression locks, the `\r?\n\r?\n` anchor in `MIN-2241`, and the 5 locks in `test_motion.mjs` |
-| Redundancy measured before editing | Sizes are **raw file bytes in CRLF form**: HEAD `046bb73` 515 lines / 107,227 B → at the start of this session 517 lines / 109,009 B (including the previous batch's three uncommitted gate-wording entries) → at the end of this batch **518 lines / 109,538 B**. Measured split of the two operation groups: slimming **−170 B** (merging the two `PYTHONUTF8` entries −39 B; merging "`main.py` subprocess" with `FakePopen` **+33 B** — the merge added the causal framing "`__class_getitem__` cannot be omitted", so it grew and is reported as such; merging the two live-collector entries −175 B; relocating the bundle-size readings −137 B from the root file; the two new pointer definitions +148 B), and the fact sync **+699 B** (the 7 measured readings plus their `[历史注]` lines). Machine counts: trailing whitespace **0** lines, verbatim duplicate lines **1** (the same `Where-Object` clause legitimately appearing in both the PowerShell and POSIX cleanup snippets), repeated bold lead-ins **0**, blank runs **8** (all ≤3 lines), and of the 113 bullets longer than 200 characters **0** share >50% of their 25-char shingles with `CODE_WIKI.md`+`CODE_WIKI_EN.md`, **0** bullet pairs share >40% with each other. **Conclusion: there is no "redundant repeated wording" left to delete** — roughly 41% of the file's bytes are the regression-lock and constraint register, i.e. the source of truth itself. Any further size cut can only come from compressing correction archaeology or relocating more readings, both of which change the information's form rather than remove duplication and therefore need the user's go-ahead |
-| The only information-preserving moves available | Merged same-topic bullets in **3 places**: the "`PYTHONUTF8=1` + fail-on-warning" entry and the "parent-process forwarding / `errors=\"replace\"`" entry became one (MID-63, "re-implemented in 6 places", `run_gates.ensure_utf8_streams()`, `_guard_stdio_encoding_policy` and `gui._install_crash_sink()` all retained); "patch `main.py`'s subprocess" merged with "`FakePopen` must define `__class_getitem__`"; and the dual-mode collector's two-step `int(sys.argv)` guard merged with "the body must sit inside `__main__`" — the four template constraints are now numbered ①②③④ with the three readings (20.55 s / exit code 5 / 4 errors during collection) kept verbatim |
-| Relocation + broken-pointer repair | The per-file MB readings and the `pydantic_core` falsification history moved into a new section "产物体积大头读数" (bundle-size readings) of `docs/agent-reference/measured-evidence.md`, whose own admission rule (no imperative constraint may appear in a relocated sentence) was checked. Also fixed **two sub-docs the root file had lost sight of**: `measured-evidence.md` and `lock-classification.md` had long been relocated out but carried no pointer in `AGENTS.md` (only `project-structure.md` was still linked); each now has a reference-style link (`[体积读数]`, `[锁分类快照]`) |
-| Zero-loss proof | Compared class by class against HEAD, with `measured-evidence.md` counted as retained: `test_*` identifiers **69 → 69 (0 lost)**, MID/SEV/MIN/CVE/PYSEC/GHSA labels **19 → 19 (0 lost)**, `UPPER_SNAKE` constants **77 → 77 (0 lost)**. The 5 backtick spans that disappeared are all rewrites of the same thing: `_now`→`_now()`, `libcrypto/libssl`→`libcrypto`/`libssl`, `record_danmaku_args`→`ctx.record_danmaku_args`, `basedpyright tests/` (the wrong baseline the previous batch already removed), and `__main__` folded into the full `if __name__ == "__main__": main()` form |
-| Gates | `python scripts/run_gates.py` → **8/8 green (41.1 s)** plus its trailing backstop **3653 passed with an empty warnings summary (194.5 s)**, exit code 0; `run_gates.py --list` still parses **8** commands with the first one byte-identical to `python -m black --check --diff --line-length 120 --target-version py314 .` (section heading, fence and the line-start `PYTHONUTF8=1` prefix all untouched); the three document locks `tests/test_run_gates.py` + `tests/test_regression_2026_09_22_gates.py` + `tests/test_check_annotations.py` = **73 passed / 1 skipped / 0 warnings (36.57 s)**; `AGENTS.md` line endings **CRLF 518 / bare LF 0**, `measured-evidence.md` still pure CRLF, `session-learnings.md` still pure LF. One side effect recorded: after the full gate run (including its trailing pytest) `git status --porcelain` also listed the **tracked** `config/config.ini` — a blank line before `[GUI]` had been swallowed by a config write-back path. That is a test artefact, not an intended change of this batch; restoring a tracked file is the user's call, so it was left as-is and logged as N-4 |
-| Not re-run, and why | `scripts/check_coverage.py` and `basedpyright` were **not** re-run this batch: zero `.py` or front-end asset changes (`.md` only), so their same-day readings stand (44 modules above threshold / 191 files with 0 errors and 0 warnings). Additionally `check_coverage.py` needs coverage data from `pytest --cov=src`, while `run_gates.py`'s backstop runs pytest without `--cov`, so re-running it now would only produce a false "no data, rc=2" signal |
-| Real-device verification | **Not executed**: this batch touches no recording chain / source selection / ffmpeg arguments / platform parsing, so DoD step 2 is waived; only steps 1 (affected parts) / 4 / 6 were performed |
-| Still for the user to decide (numbered) | **N-1** three stale comments still say "FastAPI": `.github/workflows/ci.yml:6`, `.github/workflows/ci.yml:606`, `docker-compose.yaml:100` — fastapi left the tree in `046bb73` and the panel is Starlette-driven; comment-only, left alone to stay inside the "change `AGENTS.md`" mandate. **N-2** `scripts/compile_po.py:136-137` calls `reconfigure(encoding="utf-8")` **without `errors`**, contradicting this repository's own rule that every `reconfigure` states `errors` (omitting it resets the handler to `strict` — the MID-63 failure family); landing a fix needs a regression lock, so the maintenance script was not touched. **N-3** the two derived-metadata questions carried in from the previous batch remain open: whether `src/proto/douyin_pb2.pyi` belongs in `[tool.setuptools.package-data]`, and whether the `.[dev]` lower bounds should be raised to the CI-pinned versions |
-
-### v4.4.0 (2026-09-30) — Full quality-gate re-audit (191 source files / 3653 tests): code side clean, three `AGENTS.md` gate-wording corrections
-
-> The user asked for a complete code-quality and test run over all Python code in the workspace. Result: **black / isort / mypy (host plus `--platform linux`) / basedpyright / pyright / pytest / per-module coverage — all seven green, zero production-code changes**; the only repository change this round is three gate-wording entries in `AGENTS.md`.
-
-| Item | Content |
-| --- | --- |
-| Gate readings | `python scripts/run_gates.py` → 8/8 PASS (45.3 s) plus its trailing pytest backstop "3653 passed, warnings summary empty" (190.5 s), cross-checked against a standalone `pytest --cov=src -q` run (3653 passed / 14 skipped); `scripts/check_coverage.py` → all 44 modules above threshold (84.69% total; `src/proto/douyin_pb2.py` at 8.7% is the explicitly exempted protoc artefact); `basedpyright` with no path → 191 files, 0 errors / 0 warnings (the older `basedpyright tests/` form, 126 files, also 0/0); `pyright` 1.1.414 with the explicit `[tool.mypy].files` path set → 191 files, 0/0, and a bare `pyright` → 205 files (the extra 14 are `typings/` stubs) also 0/0 |
-| `AGENTS.md` correction 1 | "Testing → quality gates (must be kept)" used to say "the three black/isort/mypy commands with paths replaced by `tests/`", which contradicts this file's own "`mypy` takes no path arguments" rule — passing paths overrides `[tool.mypy].files` and shrinks coverage. It now points at the "Formatting commands (sole gate baseline)" section; the pass criteria (0 warnings / all green / 0 errors 0 warnings) are unchanged verbatim |
-| `AGENTS.md` correction 2 | The "basedpyright (local supplementary gate, not run in CI)" section now states where `pyright` and Pylance belong: `pyright` is only the engine underneath basedpyright and is **not a third gate**; Pylance has no command-line entry, so "Pylance was checked" may never be presented as gate evidence; this repository has no `[tool.pyright]` section, so a bare `pyright` scan is wider than the `[tool.basedpyright]` exclusion set |
-| `AGENTS.md` addition | The gate section gains a transferability precondition: local black/isort/mypy/pytest versions must equal the pinned `ci.yml` consts, otherwise the report must be labelled "local readings, not verified against the CI toolchain version". Measured divergence, one item: **local isort 9.0.2 versus the CI pin of 9.0.1** (black 26.5.1 / mypy 2.3.1 / pytest 9.1.1 all match). Workflow constants were not touched and venv dependencies were not reinstalled (the latter is a user-channel action per "Risk controls (preface)") |
-| Attribution of the 14 skips | All are environment-shape limits, not failures: Windows semantics 4 (`tests/test_proxy.py:199`, `tests/test_regression_2026_09_22_utils.py:178`, `tests/test_utils.py:574`, `tests/test_run_gates.py:218`); missing symlink privilege 3 (`tests/test_ffmpeg_path_preference.py:262`, `tests/test_web_api.py:2137`/`:2157`, WinError 1314); local `h2` present so the missing-dependency construction branch is unreachable 1 (`tests/test_regression_2026_09_22_net.py:681`); platform has no documented offline shape 6 (`tests/test_spider_hardening.py:198`) |
-| Live end-to-end verification | **Not executed**: zero code changes this round (documentation only), so the Definition of Done exemption keeps steps 1/4/6; the recording chain was not touched |
-| Doc-lock self-check | After editing `AGENTS.md`, the three document locks that read it were re-run — `tests/test_run_gates.py` + `tests/test_regression_2026_09_22_gates.py` + `tests/test_check_annotations.py` = 73 passed / 1 skipped; the "Formatting commands" bash block still parses with the same command count (new bullets sit outside the fence); `AGENTS.md` line endings re-measured as CRLF 517 / bare LF 0, the same shape as HEAD |
-
-### v4.4.0 (2026-09-30) — `pyproject.toml` reconciled against workspace changes (dependencies / derived metadata / package list / exclusion list): no value changes, only the attribution in two `filterwarnings` comments corrected
-
-**Context**: re-audited under the "scan the workspace → identify adds/mods/deletes since the last commit → write back the affected `pyproject.toml` configuration" brief. The working tree was clean against `HEAD`, so the reconciliation baseline became the unpushed `046bb73` (the batch that dropped fastapi / pydantic).
-
-| Item | Evidence (measured locally) | Outcome |
-| --- | --- | --- |
-| Runtime dependency set | `pyproject [project.dependencies]` = 21 entries ↔ `requirements.txt` = 21 after stripping inline comments; `tests/test_regression_2026_09_22_gates.py` 27 passed | Already synced by `046bb73`; no change |
-| Derived artefacts | `python scripts/sync_metadata.py --check` | OK: `uv.lock` carries no fastapi/pydantic node any more, egg-info version and requirements both match |
-| Third-party imports with no declaration | AST walk over all 243 `.py` files in the repo collecting top-level import roots (script fed via stdin, nothing written to disk) | No gap in product code; `fastapi`/`pydantic` survive only inside the `.workbuddy/tmp/` stale backup snapshot, a directory already excluded by every tool's exclusion list |
-| Package list | `src/` still has exactly `platforms` / `proto` as sub-packages; all 6 root `.py` files are listed in `py-modules` and `[tool.mypy].files`; this batch's new files land in `src/`, `tests/`, `web/`, `docs/worklog/` | `packages` / `py-modules` / `package-data` all need no change |
-| Exclusion-list single-sourcing | black / isort / mypy / coverage / basedpyright omit entries match `.coveragerc-concurrency` item by item; no new `.py`-bearing asset directory under `tests/`, `docs/`, `web/` | No change |
-
-**Actual change (comments only)**: the two `[tool.pytest.ini_options].filterwarnings` attributions corrected —
-
-- Entry 1 is **load-bearing**: running `tests/test_web_api.py` with `-W default::UserWarning` puts exactly one line in the warnings summary, emitted by `starlette/testclient.py` itself (category `StarletteDeprecationWarning`, a `UserWarning` subclass). The old comment blamed "an internal import inside fastapi's testclient", which `046bb73` falsified.
-- Entry 2 **does not fire on the installed combination** (starlette 1.7.0 + anyio 4.15.1): with `-W always::DeprecationWarning` (a command-line `-W` overrides the ini filter) `test_web_api.py` + `test_web_api_routes.py` give 163 passed and an empty summary, because all three starlette references now go through `anyio.from_thread.BlockingPortal`. Kept rather than deleted — the shape across the declared `starlette>=1.3.1` lower-bound range was not verified locally.
-
-**Gates**: `check_version.py` PASS, `sync_metadata.py --check` OK, `pytest tests/test_regression_2026_09_22_gates.py tests/test_web_api.py` = 190 passed / 2 skipped / 0 warnings; TOML parses and the whole file stays within 120 columns.
-**Live end-to-end verification**: **not executed** — this batch touches no recording chain / source selection / ffmpeg arguments / platform resolver, so the Definition of Done step-2 exemption applies.
-**Deliberately left for the user**: (1) `src/proto/douyin_pb2.pyi` (present since 2026-08-18) is not listed in `[tool.setuptools.package-data]`; whether wheels include it was **not** measured (no installed distribution and no `.whl` on this machine to inspect) and needs a real build to decide. (2) `[project.optional-dependencies].dev` floors (pytest>=7.0.0 / mypy>=1.5.0 / pytest-asyncio>=0.21.0) sit far below the pinned `ci.yml` consts (pytest 9.1.1 / mypy 2.3.1 / black 26.5.1); raising them to CI parity is undecided.
-
-**Same-day follow-up (separately approved by the user)**: `AGENTS.md` "Dependency management" read "23 entries", a figure falsified by `046bb73` (the fastapi/pydantic removal). It was initially left alone because the file was under parallel edit; once the user issued the explicit instruction it was corrected to "21 entries, re-checked 2026-09-30: 23→21 after the stage-2 removal", with the earlier 2026-09-26 21→23 reading recast as an explicit "superseded by that removal" historical note rather than deleted (constant names and dates kept verbatim). Re-measured after the edit: `AGENTS.md` line-ending shape unchanged at CRLF 517 / bare LF 0, and the three document locks that parse it — `tests/test_run_gates.py` + `tests/test_regression_2026_09_22_gates.py` + `tests/test_check_annotations.py` = 73 passed / 1 skipped / 0 warnings (the "Formatting commands" bash block still parses with the same command count; this edit sits outside the fence).
-
-### v4.4.0 (2026-09-30) — Three hand-back items from the review report landed (1-A sync-probe internal guard / 2-A retry exit-code buckets / 3-A live-script template gate) plus a new machine check against unrestored mutations
-
-> The previous batch left three items for the user to decide. All three were approved and landed as
-> 1-A / 2-A / 3-A. During the work an actual incident was found and turned into a machine check (new rule R8).
-
-**1. 1-A — internal-target guard for the synchronous probe (`src/stream_select.py`, `src/async_http.py`)**
-
-The previous batch only wired the per-hop re-check into the asynchronous side, and I described the gap as
-"the synchronous probe has the same shape but is un-wired (per-hop level)". Re-reading the code
-**corrects that premise**: the only call site of the internal-target judgement in the whole repository was
-`async_http.get_response_status`, so the synchronous probe had **no internal/loopback/cloud-metadata check even for
-the initial URL** — it only had the `_is_recordable_url` scheme-shape whitelist, which blocks `file://`/`concat:`
-but not `http://127.0.0.1:6379`. A hijacked platform API returning an internal stream address was enough to hit it.
-
-| Item | Content |
-| --- | --- |
-| Single factory | Both self-built `httpx.Client` sites now go through `_probe_client()`, which attaches the synchronous response hook (`build_sync_hop_guard`); the judgement reuses the one implementation in `async_http` — **no second copy in stream_select** |
-| Import cycle | The hook factory is imported **inside the function**, following the technique documented at `async_http.py:518-521` (this module has a module-level `import main`, so a module-level outgoing edge would change initialisation order) |
-| Initial check | `_validate_stream_url` runs `internal_stream_target_reason` before the first request; it deliberately does not reuse the variant that carries a scheme whitelist, because the protocol dimension is already gated by `_is_recordable_url` — the two guards do not substitute for each other |
-| Exception convergence | `RedirectHopRejected` (extending `httpx.HTTPError`, not `RuntimeError`) becomes the same `False` as "this candidate failed validation" inside `_validate_stream_url` and **never escapes**; the "treat the list as reachable" fallbacks in `_confirm_get_ok` / `_probe_hls_segment` must `raise` — otherwise the last candidate returns `True` and hands an internal address to `ffmpeg -i` |
-| Not regressed | Probe client scope stays single-selection, no `(proxy, verify)` module-level cache, keepalive not disabled, `utils.handle_proxy_addr` normalisation not moved |
-| Locks | `tests/test_sync_probe_internal_guard.py` (includes AST structure locks: one construction site, `event_hooks` argument must come from the synchronous factory, both call sites pass the initial check); the asynchronous lock file stays green |
-
-**2. 2-A — the retry composite action supports exit-code buckets (`.github/actions/retry/action.yml`, `.github/workflows/ci.yml`)**
-
-| Item | Content |
-| --- | --- |
-| New optional input | `fail_fast_codes`, `required: false`, `default: ""`; **when unset the behaviour of existing call sites is unchanged verbatim** (backoff arithmetic, both message texts, final `exit 1`) |
-| Hit semantics | The branch sits **before** the backoff `sleep`, prints `::error:: … configuration-class error … retrying is pointless` and `exit "$rc"` keeping the original code; it must never exit 0 nor degrade to a warning (that would be a false green) |
-| Parsing | `IFS=", "` + `set -f` + `case ''|*[!0-9]*`: space/comma mixes parse, illegal entries are ignored with a `::warning::`, and matching uses a space-padded string so a list containing `2` does not match rc=12; strictly POSIX, no bash-only associative arrays |
-| Wiring | Only the web smoke call site passes `"2"`, closing M-32(2)'s "a broken config must not be retried" |
-| Premise corrected | The work order said "10 call sites"; measurement found **16** (11 in ci.yml, 5 in build-release.yml) — earlier batches had already migrated more install steps into this action. The structure lock therefore pins 16 as a lower bound (only-decrease semantics) and asserts "regex count == YAML structural count" so a drift in the `uses` form cannot silently disable AGENTS' own grep gate |
-| Locks | `tests/test_ci_retry_action.py`: 4 structural locks + 8 real-`bash` behaviour cells (they run the production script extracted from `action.yml`, no copy, so deleting the production branch must redden); when bash is missing the test **fails explicitly instead of skipping** |
-
-**3. 3-A — live-script template gate R7 (`tests/test_test_hygiene.py` + the five `test_*_live_collector.py`)**
-
-Four AST criteria, each named individually: ① an `__main__` guard that really calls `main()`; ② no module-level
-collection-time side effects (only imports / constant assignment / the sanctioned `sys.path` injection are allowed);
-③ the argv numeric guard; ④ output-directory cleanup must filter by platform prefix and check the entry type first.
-The reverse witness was extended as required: each criterion is fed its worst-case form (must redden) and a compliant
-source (must not false-positive), plus four new cases that mutate the real scripts and demand that only the
-corresponding criterion reddens.
-
-**4. Two documented premises that turned out to be wrong**
-
-1. **AGENTS' own argv-guard sample was falsified by measurement**: the documented one-liner
-   `SECONDS = int(sys.argv[2]) if len(sys.argv) > 2 and not sys.argv[2].startswith("-") else N` breaks under
-   `pytest a.py b.py`, where `sys.argv[2]` is the **next test file's path** — it carries no `-` prefix, passes the
-   non-option test, and `int(path)` raises ValueError, erroring that module's collection outright
-   (measured: 4 errors during collection). All five scripts now use the two-step form
-   `_SECONDS_RAW = …` → `int(_SECONDS_RAW) if _SECONDS_RAW.isdigit() else N`; R7③ machine-checks it and the AGENTS
-   entry body was corrected (falsified statements get rewritten in place).
-2. **The report's finding about blind directory clearing was real**: `test_bili_live_collector.py` /
-   `test_huya_live_collector.py` used `for f in os.listdir(base_dir): os.remove(...)` (no prefix filter, no type
-   check), which throws when a subdirectory is present and deletes other platforms' artefacts under parallel runs.
-   Now filtered by platform prefix + `isfile`, keeping the original intent of starting from a clean directory.
-3. **AGENTS' "the retry action is rc-agnostic, rc=2 cannot actually stop early (pending decision)" was closed by 2-A**
-   and the entry body was updated accordingly.
-
-**5. The incident and the new machine check R8 (guarding against unrestored mutations)**
-
-A parallel work package mutated the HLS segment branch in `src/stream_select.py` to prove a lock was not fake
-(removing `except RedirectHopRejected: raise`), hit its turn limit, and left `pass  # MUTATION-M4c …` **in the
-production file**. The consequence is not a missing comment: `seg_resp` was left unassigned → `UnboundLocalError`
-swallowed by the outer `except Exception` as a "probe error" → the last candidate returned `True` →
-**an internal address was handed to `ffmpeg -i`**. This shape is invisible to black / mypy / the annotation checker
-(syntactically valid, type-clean, and it even adds comments); only a test that actually executes that branch catches
-it — which is exactly what the new synchronous-probe case did.
-
-R8 now scans source files repository-wide and reddens if a `MUTATION-` marker survives; three hard constraints were
-written back into AGENTS' "mandatory test-writing conventions" (in-memory backup + byte-exact restore in `finally`;
-markers must be left during the mutation; when taking over an interrupted work package, the first step is to scan for
-residue rather than assume the implementation is complete). The guard protects itself three ways: the marker literal
-is built by concatenation (otherwise the gate would flag its own source), it asserts the traversal covers >200 files
-(a wrong scan root would otherwise spin silently), and the reverse witness covers all three legs.
-
-**6. Verification**
-
-| Item | Reading |
-| --- | --- |
-| 1-A real outbound probe | Public HLS (walking the playlist **and the segment-probe branch** that held the residue) `test-streams.mux.dev/x36xhzz/x36xhzz.m3u8` → **True** (no false rejection); `http://127.0.0.1:6379/`, `http://169.254.169.254/latest/meta-data/`, `http://10.0.0.5/live.m3u8`, `http://100.64.0.1/live.m3u8` → all **False**; internal target with `last_resort=True` → **False** (the last candidate is not handed an internal address); `file:///etc/passwd` → **False** (shape whitelist intact) |
-| Real "public → internal" redirect chain | **SKIP(no usable public redirector)**: httpbingo.org returns 403 to this host and no public endpoint 302s into a private address; covered via `httpx.MockTransport`, no fabricated readings |
-| 2-A | `pytest tests/test_ci_retry_action.py` alone → **12 passed / 0 warnings** (4 structural + 8 real-bash cells); end-to-end wiring check with the real ci.yml `with` values and the GitHub-filled default → `runs=1 / rc=2 / 0.23s` (a real backoff with `backoff=5` would take ≥5s); three mutation runs: delete branch `4 failed, 8 passed`, `default` → `"2"` `1 failed, 11 passed`, branch moved after `sleep` `4 failed, 8 passed`; all restored byte-identical |
-| 3-A / R8 | `pytest tests/test_test_hygiene.py` → **507 passed**; R8's disk path proven with a one-shot probe file: adding `tests/_tmp_r8_probe.py` (containing a marker) → `AssertionError: tests/_tmp_r8_probe.py:7`, removing it → green; probe deleted |
-| Live recording chain | Douyin room `live.douyin.com/699394970561` → SKIP(room offline at run time); the affected path is the source-selection validator, whose real outbound evidence is the row above |
-| Full gates | `python scripts/run_gates.py` 8/8 green with an empty pytest warnings summary (readings in the delivery reply) |
-
-**7. Still open**
-
-- The `inputs → env` expansion happens on the GitHub runner; locally we only proved the script behaves correctly once
-  the default is filled the GitHub way. After merging, check that the first failing web-smoke log shows
-  `exit code 2 is a configuration error … not retried`.
-- The five `build-release.yml` call sites deliberately do not pass `fail_fast_codes` (they install via choco/apt/brew/pip,
-  where no "configuration-class" exit code exists; passing one would only weaken retry on network flakiness). A
-  structure lock pins "nobody passes it" instead of letting that drift.
-- The hook still fires after the hop's response has been received (what is closed is "no further following and no
-  leakage", not "no connection"); intercepting before connect would need a request hook (two checks and two
-  `getaddrinfo` calls per hop), and the DNS-rebinding window is not closed at this layer — all recorded as residual
-  risk in the source comments and here.
-- The previous batch's eyeball items and live gaps are unchanged (M-14/M-16/M-18/M-22 visual checks, M-11 needs an
-  outbound route for TikTok, no live Douyu room at the time, `basedpyright` not installed locally).
-
-### v4.4.0 (2026-09-29) — Fix batch for the full-repository review report CODE_REVIEW_2026-09-29_2 (P0+P1+P2, 31 numbered items)
-
-> Implemented per `docs/worklog/CODE_REVIEW_2026-09-29_2.md`, within the scope the user approved: P0+P1+P2
-> (31 numbered IDs / 33 distinct issues). Deliberately out of this batch: minor items 43-47 (front-end a11y),
-> the P3 items M-6 (tighten the VBS match surface) / M-7 (migu wasm SRI) / M-20 (frozen-bundle i18n measurement),
-> and every item the report flagged "to be confirmed". Every fix ships with a regression lock; security
-> invariants additionally got mutation verification.
-
-**1. Security hardening (S-1, M-1 ~ M-5)**
-
-| ID | Where | What |
-| --- | --- | --- |
-| S-1 | `src/spider.py:140-174`, `112-121`, `6183-6254` | The Shopee short-link landing page now passes the **same two gates** that XHS SEV-2214 introduced: host-family allowlist (via `urlparse().hostname`, exact-or-`.`-suffix, userinfo rejected) plus `web_config._host_internal_reason` for internal/loopback/cloud-metadata targets. An untrusted landing page is discarded, the user-entered URL is kept and the Cookie header is stripped. The constructed `api_host` is re-checked against the allowlist (so a poisoned `host_suffix` cannot leak), and `_shopee_host_suffix` moved from raw string splitting to hostname parsing |
-| M-1 | `src/async_http.py:87`, `460`, `532-588`, `679` | **Per-hop** redirect re-validation for the probe and every `async_req` branch: one `event_hooks` response hook wired at the single `_build_client` site re-runs `_internal_stream_target_reason` on each hop's landing URL, stopping the chain and returning the existing "unreachable" semantics. The DNS-rebinding window is registered as residual risk (judgement results are deliberately not cached) |
-| M-2 | `src/sync_http.py:56-140`, `309`, `375` | `sync_req` gains a scheme allowlist (reusing `utils.is_safe_http_url` rather than a second implementation) and its opener is built from an explicit protocol whitelist that no longer registers FileHandler/FTPHandler/DataHandler; the abroad branch, which uses the process-global `urlopen`, gets a post-landing re-check |
-| M-3 | `src/spider.py:716-720`, `911`, `1126`, `1289`, `1848`, `3324`, `3490`, `4279`, `4512`, `5137` and more | Raw URLs entering `raise`/log calls now pass `utils.mask_credentials` first (the primary case was the PandaTV/WinkTV private-room `pwd` landing in rotated logs; Douyin / TwitCasting / Weibo closed on the same standard) |
-| M-4 | `src/spider.py:3908-3920` | `login_popkontv` — the only production httpx request in the file that bypasses `async_req` — masks the exception text and adds `type_name`, so proxy `user:pass@` cannot reach the logs |
-| M-5 | `src/notify.py:92-98`, `113-155`, `173-187`, `203-205` | All four post-record custom-script failure branches mask the command text; the second `communicate()` after a timeout is now bounded; process-tree reclamation uses `start_new_session` + `killpg` on POSIX and `taskkill /T /F` on Windows (argv list, never shell=True), degrading to the original `kill` on any failure |
-
-**2. Recording and resolver correctness (M-8 ~ M-13)**
-
-| ID | Where | What |
-| --- | --- | --- |
-| M-8 | `src/spider.py:207-324` | The module-global fast path for the Kuaishou `did` and Bilibili `buvid3` caches now compares the proxy context, so a fingerprint obtained via proxy A is no longer reused by rooms on proxy B (mirrors the already-fixed ttwid MIN-2220). Lock types and the cross-await semantics untouched |
-| M-9 | `src/spider.py:723`, `914`, `1173`, `1370`, `1610`, `3200` | Remaining `anchor_name`-can-be-None sites unified on `_dig_str` / `isinstance(v, str)`, eliminating the `clean_name(None)` crash that used to knock out the whole parsing round |
-| M-10 | `src/spider.py:4325-4331` | The TwitCasting restricted-room login fallback now also catches `ValueError` (PEP 758 parenthes-free form); the promised "parse failure → login retry" path was previously unreachable |
-| M-11 | `src/stream.py:654-691` | TikTok quality selection no longer writes the FLV-clamped index back into the shared variable: the original requested index is kept and FLV/HLS are clamped independently against their own list lengths (same standard as the Douyin branch in the same file); the fallback base was fixed in the same pass. HLS-only rooms asking for the lowest tier no longer silently pull the top tier without a downgrade warning |
-| M-12 | `main.py:4950-4959` | The danmaku platform list becomes a list comprehension with `strip()` and empty-item filtering, matching the HLS exclusion list in the same function; `"斗鱼直播, B站直播"` no longer never matches |
-| M-13 | `src/platforms/bilibili.py:55-159` | A `_report_close` gate was added to Bilibili host rotation: while candidates remain untried the event is an intermediate state (routed through `_on_reconnect` for tracing), and only exhaustion or the `_stopped` terminal state reports — exactly once. `_hosts_left` is zeroed when rotation ends, otherwise real disconnects mid-session get swallowed. Not pushed down into WsClient, the `backup_url` primary/backup rotation was not merged, and `src/ws_client.py` is untouched |
-
-**3. Web / i18n / front-end (M-18, M-19, M-21 ~ M-23, M-26)**
-
-| ID | Where | What |
-| --- | --- | --- |
-| M-18 | `web.py:199-239`, `258-262` | The "authentication disabled must not bind beyond loopback" gate was moved **above** `_enter_background_mode`, so the refusal text is no longer swallowed by the stdio redirect; the falsified "refuse = zero-side-effect exit" comment was corrected per the AGENTS exception clause and compressed into a one-line dated note |
-| M-19 | `i18n.py:399-414` | Both `tr()` except layers now include `AttributeError, TypeError` (measured: `{x.y}` with `x=None` raises AttributeError, `{x:d}` raises TypeError), honouring the "never raises" promise; `translated_print` was reviewed and has no equivalent gap (it never calls `.format`) |
-| M-21 | `web/app.js:753-870` | All three polling chains (SSE / log / danmaku) renew through one shared `makePollChain()` generation token: both `halt()` and `begin()` advance the generation, so an in-flight callback whose generation is stale is dropped and never re-schedules orphaned timer chains |
-| M-22 | `web/app.js:1498-1560`, `web/index.html:176-190`, `web/style.css` | The auth re-verification password is collected in a `type="password"` modal instead of `window.prompt`'s cleartext; all four exits funnel through `_settleReauth()` which clears the input node immediately; `reauth_password` is attached only to the two authentication keys' PUTs and no longer rides along on every other config key of the same save pass |
-| M-23 | `web/app.js:1107-1117` | The collapsed-danmaku counter `m.dropped` now goes through `esc()`, restoring this file's "every concatenation path is escaped" invariant |
-| M-26 | `tests/frontend/test_regression_2026_09_22_gates.mjs` | Removed two `doesNotMatch` text locks pinned to outdated source literals (the backend does enforce re-verification and the literal drifted, so the assertions passed vacuously and contradicted the new Python-side contract); replaced with a positive behavioural lock on "the authentication-key path really collects and sends `reauth_password`". Test count 32 → 36 |
-
-**4. GUI robustness (M-14 ~ M-17, M-24, M-31)**
-
-| ID | Where | What |
-| --- | --- | --- |
-| M-14 | `gui.py:1110-1360`, `3627`, `3684` | The quality-monitoring match patterns are now derived from **`i18n.tr()` results using the same msgid as the producer** (escaped then assembled) and recomputed lazily per language; hard-coded Simplified-Chinese constants removed. The one `src/recorder_status.py` literal that is **not** run through `tr()` continues to match verbatim, with the reason stated in the comment. The `#DLRQ` structured status protocol was **deliberately not introduced** — AGENTS key convention #13 lists it as a pending-approval long-term plan. A self-audit during wrap-up also fixed a defect this batch introduced itself: the per-language cache now only commits after re-verifying the language code is unchanged — the build reads `tr()` six times while the recording thread and the UI thread can switch language concurrently, so an unconditional write would freeze a **mixed-language** pattern set in place (lock: `test_mid_build_language_switch_is_not_cached`) |
-| M-15 | around `gui.py:1466`, `3519`, `3667`, `3132` plus `gui.py:1599-1612` | The renewal `after()` of the self-renewing chains moved into `try/finally` so it is re-armed unconditionally; external numeric fields such as `ts` go through one shared tolerance helper (a `null` record can no longer break the timer chain). Wrap-up added the **fourth chain of the same family**, `_pump_ui_events` (the UI event pump): its renewal sat on the last statement while the preceding "activate the log flush chain on demand" can raise during a window-destroy race — a broken pump means queued `post_ui` callbacks such as `_on_recording_stopped`/`_finalize_quit` never run (the window cannot be closed). The `_CHAINS` structural lock was extended to name all four |
-| M-16 | `gui.py:3226-3352`, `4175-4189` | New single-flight entry `_stop_child_once` shared by "stop recording" and "quit": quitting reuses an in-flight stop thread instead of a second concurrent console attach/detach sequence (console attachment is process-global state); both registration and deregistration sit on unconditional paths |
-| M-17 | `gui.py:3801-3844` | The tail thread's try/except was pushed down to **each event** (bad record → continue), so one malformed event no longer discards the intact events that follow it in the same chunk; the outermost handler now leaves a rate-limited warning |
-| M-24 | `tests/test_danmaku_monitor.py:562-599` | The tail test sets **the Event it actually passed in** and adds `assert not t.is_alive()` — "it stops after rotation" is verified for the first time (previously the daemon thread lingered until process exit) |
-| M-31 | `tests/test_gui_monitor.py:79-85`, `tests/test_danmaku_monitor.py:429` | The child process gets `PYTHONUTF8`/`PYTHONIOENCODING` explicitly; `import gui` moved out of collection time into the test body with an autouse fixture restoring `DLR_GUI_PARENT` in pairs (`patch.dict(os.environ)` forbidden) |
-
-**5. Test system and maintenance scripts (S-2, M-25, M-27 ~ M-30, M-32)**
-
-| ID | Where | What |
-| --- | --- | --- |
-| S-2 | `tests/test_twitch_live_collector.py:42`, `109`, structural lock `118-190` | The whole body moved into `def main()` + `if __name__ == "__main__": main()`, making it homogeneous with the four sibling live scripts. Evidence: `pytest --collect-only` went from **20.55 s / no tests collected / exit code 5** to **0.81 s / 1 test collected**; the collection-time live connection, `sleep 20`, `tests/_out_live` purge and session-killing `sys.exit(1)` are all gone |
-| M-25 | `tests/test_huya_danmaku.py:121` | The bare assignment `spider.async_req = fake` replaced by `monkeypatch.setattr` (the old form never restored and used an incomplete signature, poisoning the whole pytest session) |
-| M-27 | `tests/test_config_io_backup.py:20-26`, `tests/test_log_archive.py:114`, `tests/test_anchor_rename.py:15-20` | Patches of process-global `os.remove`/`os.rename` now go through a `SimpleNamespace(**vars(os))` shim installed on the module under test's own `os` reference (loguru and other background threads are no longer affected during the window) |
-| M-28 | `tests/frontend/test_motion.py` (new), `.github/workflows/ci.yml` | The five `test_motion.mjs` cases gained a Python wrapper and were added to the CI "Gate frontend tests not skipped" node-id list (`node --test <file>` only runs the named file and never discovers its siblings, so those degradation/cleanup locks never executed in normal CI). This batch also registers WP-G's new `tests/frontend/test_auth_reauth.py::test_auth_reauth` in the same list |
-| M-29 | `tests/test_machine_validation_fixes.py` | The heartbeat-timeout case now records the **timestamp and origin** of every `close()` and attributes per entry point, asserting the first close happens at the timeout point and before the deliberate stop (the old `len(close_called) >= 1` was blind to deleting the timeout branch); the "all three call sites timed out" aggregate count in the same file was tightened to per-entry attribution |
-| M-30 | `tests/test_notify.py:27`, `63`, `74` | Child-process commands use `sys.executable` instead of the literal `python` (images that ship only `python3` always failed these, while the local Windows box was always green) |
-| M-32 | `scripts/sync_metadata.py:112-158`, `scripts/smoke_test.py:87-192`, `214-218` | (1) `shutil.which` early return plus `OSError` catching: with uv missing the WARN branch is reachable and the egg-info rebuild still runs (the read-only `--check` path spawns no subprocess, pinned by a tripwire case). (2) `load_config` is the single validation point and malformed headers/checks shapes exit rc=2 (previously `.items()` raised AttributeError → rc=1, breaking the contract `_ci_web_smoke.sh` uses to tell "panel failure, retryable" from "config problem") |
-
-**6. i18n catalogue synchronisation (new strings from S-1/M-4)**
-
-- Four new msgids (three Shopee gate messages + the popkontv exception carrying `type_name`) were added to all four catalogues
-  (`zh_CN.po`, `en_US.json`, `en_GB.json`, `zh_TW.yaml`) and the `.mo` was regenerated; the collision-avoidance intermediate
-  `_i18n_pending_wpa.json` was deleted after the central merge, per AGENTS key convention #14.
-- Entry counts under both accepted measures (read locally on 2026-09-29, not estimated): JSON key count **791**;
-  `.mo` header N **792** (the header's empty msgid is counted, so N = key count + 1). Command used:
-  `python -c "import struct;print(struct.unpack('<6I', open('i18n/zh_CN/LC_MESSAGES/zh_CN.mo','rb').read(24))[2])"`;
-  `python scripts/compile_po.py --check` self-reports the same 792 (.po/.mo in sync);
-  `python scripts/extract_i18n_strings.py` reports 0 missing.
-
-**7. Verification (real devices, per AGENTS Definition of Done step 2)**
-
-| Date | Platform | Room address (masked) | Script | Result | Readable evidence |
-| --- | --- | --- | --- | --- | --- |
-| 2026-09-29 | Douyin | live.douyin.com/699394970561 | `tests/test_douyin_live_collector.py` | PASS | 59 messages / SRT 4518 bytes |
-| 2026-09-29 | Bilibili | live.bilibili.com/21452505 | `tests/test_bili_live_collector.py` | PASS | 9 messages / SRT 678 bytes, no "fake close" under the `_report_close` gate |
-| 2026-09-29 | Huya | www.huya.com/660000 | `tests/test_huya_live_collector.py` | WARN | 0 messages, connection healthy, no danmaku in that window (SRT produced) |
-| 2026-09-29 | Twitch | twitch.tv/forsen | `tests/test_twitch_live_collector.py` | WARN | 0 messages; the guarded script still runs standalone (live evidence for S-2) |
-| 2026-09-29 | Shopee | shp.ee/**** (invalid short link) | in-process probe `spider.get_shopee_stream_url` | live interception evidence | The landing-derived `api_host=https://live.shopee.ee` was blocked by the family allowlist gate with a warning and returned as not live — real outbound evidence for S-1 |
-| 2026-09-29 | Douyu | www.douyu.com/1, /23059, /9235411 | `tests/test_douyu_live_collector.py` | SKIP(room offline) | Anchor names still resolved correctly ("斗鱼官方视频号", "注意前方猪妖"), so the resolver chain is intact; re-run when a room is live |
-| 2026-09-29 | TikTok | www.tiktok.com/@tiktok | in-process probe | SKIP(no outbound route) | `ConnectTimeout` plus the built-in guest-cookie expiry warning; M-11 needs the user to re-run a real room with quality set to the lowest tier and confirm `logs/PlayURL.log` picks a non-first m3u8 |
-
-**8. Residual gaps and actions handed back to the user**
-
-- **GUI eyeball checks**: headless verification does not replace observation for M-14/M-15/M-16/M-17 — switch to English, restart recording, and confirm the quality page still shows recording lines / downgrade warnings / empty-state clearing; for M-22 confirm the password modal masks input and that the field is cleared on cancel.
-- **M-18**: the refusal text now reaches un-redirected stdout/stderr plus one warning, but double-clicking `python web.py` on a desktop still destroys the console window when `sys.exit(1)` runs; eliminating the "flash" entirely is a product decision (pause or banner before refusing).
-- **Three boundaries of the per-hop re-check (M-1)**: the synchronous probe in `src/stream_select.py` builds its own `httpx.Client` and does not go through `_build_client`, so that shape is still un-wired; the response hook fires only after that hop's response headers arrived (what is closed is "no further following and no leakage", not "no connection"); the DNS-rebinding window cannot be eliminated at this layer.
-- **The retry action is rc-agnostic**: `.github/actions/retry` retries on any non-zero exit code alike, so M-32(2)'s "rc=2 means a config problem, stop immediately" is currently only visible in the step log; at job level 1 and 2 remain indistinguishable — decide whether the retry action should gain an exit-code bucket input.
-- **Proposed new gate not implemented**: templating/lint checks for the live scripts (mandatory `__main__` guard, platform-prefixed cleanup) were kept as a recommendation, not added unilaterally.
-- **P3 / to-be-confirmed items untouched**: M-6, M-7, M-20 and the minor items flagged as needing measurement.
-
-### v4.4.0 (2026-09-29) — GUI freeze fix: adaptive wraplength reworked to true debounce + hysteresis, eliminating the event-storm oscillation during DPI rescale
-
-> Observed by the user: text flickering at high frequency → some UI elements rendered incompletely → the whole window freezing unresponsive. The root cause is the **previous fix (adaptive wraplength) writing synchronously inside `<Configure>`**, oscillating with CTk's DPI-rescale machinery. The trigger is dragging the window to a monitor with a different scale factor (or a system DPI change) — the same mechanism as the dev-time stress probe hang, through two different entrances.
-
-**1. Root-cause chain (all empirically verified)**
-
-1. CTk's DPI-change handling runs `ScalingTracker.update_scaling_callbacks_* → widget _set_scaling → _draw → _update_dimensions_event → update_idletasks` — a **mutually recursive pump** (nested frames visible deep in ctk_scrollbar.py).
-2. During rescale the internal label's width swings violently (probe measured 350↔1566 device px; at identical widths the wraplength got chased into `334→1038→190→858→…`).
-3. The old binding called `label.configure(wraplength=…)` synchronously on every Configure — each write re-invalidates geometry into the same idle queue, which then never drains: **`update()`/mainloop never returns = freeze**; the high-frequency relayout = flicker; starved paints = missing elements.
-4. Decisive control: under the same 10-flip DPI stress (via `set_widget_scaling`, the same callback chain as `check_dpi_scaling`) — with the binding active the loop never drained (killed at 120s = freeze reproduced); with the binding no-op'd the run **completed in 9.2s**.
-
-**2. Fix (gui.py)**
-
-| Item | Content |
-| --- | --- |
-| True debounce | `<Configure>` only resets a timer (`after_cancel` + `after(120ms)`); while the storm lasts **not a single write** happens — structurally impossible to feed geometry invalidation back into the recursion. Deliberately not "throttle to one write per 120ms" (a mid-storm write can re-ignite the recursion via the scrollbar threshold) |
-| Hysteresis | `_wrap_should_apply(current, new, scale_changed)` pure function: skip when `|new−current| ≤ max(12, 2%)` and the scale is unchanged. The ±~11-logical-px wobble of a scrollbar appearing/disappearing is absorbed; first apply (current==0) and any scale change (the conversion basis moved) always apply |
-| Race guard | `_run` is TclError-guarded throughout — the danmaku/quality placeholders are rebuilt every 2s, so a debounced callback can race destruction |
-| Startup shaping | if a real width already exists at bind time (winfo_width>1) apply once synchronously so the first frame wraps; later changes go through the debounce |
-
-**3. Verification**
-
-- Stress regression lock (`tests/test_gui_wrap_hints.py::TestRealWindowWrap::test_dpi_flip_stress_*`, real window, skips headless): full GUI build + 8 DPI flips must drain the event loop (the pre-fix equivalent times out) with ≤24 wraplength writes per label (measured ~1 per flip).
-- End-to-end real-window final check (1120×740, 150% system scaling): all four long hints unclipped; after simulated 1.2↔1.0 DPI flips everything converges to the correct wrapping with zero freezing.
-- 5 headless pure-function cases for the hysteresis + AST source locks for debounce/guards; `run_gates.py` 8/8, pytest 3308 passed / 0 warnings, basedpyright 0/0/0.
-
-**4. Known micro-edge**
-
-- For ~120ms after startup a long hint may render one unwrapped frame before the first debounced settle — an imperceptible trade for structurally safe zero writes during storms.
-
-### v4.4.0 (2026-09-29) — GUI text-clipping fix: adaptive wrapping for long hints (`_bind_adaptive_wraplength`), eliminating symmetric pack clipping on both sides
-
-> Observed on user screenshots (150% DPI, default 1120×740 window): the console hint "启动后将调用 main.py…" lost half of its first and last characters, and the danmaku empty-state hint was clipped at the right edge. The root cause is one family: **when a label's requested width exceeds the width its parent allocates, Tk pack centers it (default anchor=center) and clips symmetrically on both sides**; the quality page's fixed `wraplength=1000` is a variant of the same failure under narrow windows (right-edge clip). A repo-wide sweep found 5 sites of the same shape — all fixed together.
-
-**1. Changes by module**
-
-| Module | Nature | Key files | Key change / criterion |
-| --- | --- | --- | --- |
-| Adaptive wrapping | Added | `gui.py` | `_compute_wraplength(width_device_px, scale, margin)` pure function (device px → logical: CTk scales wraplength by `_widget_scaling` on configure (`ctk_label.py`), while `<Configure>` reports device pixels, so divide by `ScalingTracker.get_widget_scaling`; floor 120 prevents wraplength→0 from silently re-enabling clipping); `_bind_adaptive_wraplength(label)` binds the label's **own** window width (requires `pack(fill=tk.X)`: window width is packer-allocated, decoupled from the label's request — no wraplength→request→width feedback loop; sets an initial value from the current width because a re-pack with unchanged geometry fires no Configure); `ScalingTracker` imported from its definition path `customtkinter.windows.widgets.scaling.scaling_tracker` (the top-level namespace does not export it — reportAttributeAccessIssue) |
-| Wiring | Modified | `gui.py` | console hint now `pack(fill=tk.X, expand=True)` + binding; quality hint drops fixed `wraplength=1000` for the binding; the quality/danmaku empty-state labels consolidated into `_make_quality_placeholder` / `_make_danmaku_placeholder` factories (parameter `tk.Misc` — CTk 6.0's CTkScrollableFrame is not a CTkFrame subclass), shared by initial build and every refresh rebuild; duplicate copies of the copy reduced from 4 to 1 each |
-| Tests | Added | `tests/test_gui_wrap_hints.py` | three layers: subprocess unit tests of the pure function (conversion anchors 1584@1.5→1050 pinned, 120 floor, zero/negative scale, monotonicity); AST source locks (helper defined once with exactly 4 wiring points, each placeholder copy appears exactly once, no constant wraplength kwargs anywhere, factories must keep fill=tk.X + binding, both build and refresh paths must call the factories); a real-window case (fill=X label wraps without clipping in a narrow container, wraplength grows when widened; skips without a display — the only skip surface) |
-
-**2. Root causes & design points**
-
-1. **Why half-characters missing on both sides**: pack's default anchor=center centers an oversized child in its (too narrow) parcel, so the overflow is clipped equally left and right — "启" half-missing at the left and "制" half-missing at the right is the fingerprint of requested > allocated width.
-2. **Why binding the label's own width is safe**: under `fill=tk.X` the window width is entirely packer-allocated; changing wraplength only changes the requested height, never the window width, so oscillation is structurally impossible. Binding the parent's width would instead require subtracting sibling widgets (the button row) — more fragile.
-3. **The real-window case deliberately avoids `set_widget_scaling`**: a manual scaling override fights CTk's system-DPI tracking during real window mapping (measured event storm → `update()` never returns). The system's own DPI already exercises the conversion for real, and the formula is pinned by the pure-function anchors.
-4. **Two CTk 6.0.0 facts** (verified from source): `configure(wraplength=...)` multiplies by `_widget_scaling` internally while `cget("wraplength")` returns the logical value; `CTkScrollableFrame`'s MRO does not contain `CTkFrame` (they share only the `CTkBaseClass` ancestor).
-
-**3. Verification**
-
-- End-to-end measurement (this Windows machine, 150% system scaling, full `LiveRecorderGUI` built in a subprocess at the screenshot's 1120×740): before the fix the console hint measured reqwidth 768 > actual ~520 (symmetric clip) and the danmaku hint 1564 > 1538; after the fix all four long hints (console hint / danmaku placeholder / quality placeholder / quality hint) satisfy "requested ≤ allocated with wraplength active" (540≥519, 1196≥1092, 1196≥540, 1230≥986), the console hint wrapping onto two lines.
-- `run_gates.py` 8/8 green; full pytest 3300 passed / 14 skipped / 0 warnings; coverage all 44 modules above threshold; basedpyright 0 errors / 0 warnings / 0 notes; the real-window case passed three consecutive runs in ~8s each.
-- Regression locks: `tests/test_gui_wrap_hints.py` (10 cases); mutation check — removing either factory's `_bind_adaptive_wraplength` call or dropping fill=tk.X turns the AST locks red immediately.
-
-### v4.4.0 (2026-09-29) — GUI theme layer (Phase 3): 3 semantic-token themes + runtime switching + `[GUI] gui_theme` persistence + WCAG contrast machine-checks
-
-> Module-level overview of this change. Phase 3 (UI modernization · GUI theme layer) adds `src/ui_theme.py`
-> (zero display dependency, safe to import headless); the `gui.py` sidebar gains a "UI Theme" menu
-> (Light / Dark / High contrast) whose choice is written back to `config.ini [GUI] gui_theme` and registered
-> as a ttk theme (`dlr-<id>`, clam base). The `Colors` / `Fonts` facades and every existing symbol signature
-> are unchanged.
-
-**1. Changes by module (added / modified + file paths)**
-
-| Module | Nature | Key files | Key change / criterion |
-| --- | --- | --- | --- |
-| Theme engine | Added | `src/ui_theme.py` | 13 semantic slots (proposal §5.2's twelve + `on_primary`: in dark/high-contrast themes the primary button is a bright-blue fill whose label needs a near-black foreground — `surface` doubling as button text fails on dark); `THEMES` with three sets (light / dark / high_contrast); `contrast_ratio` per WCAG relative luminance; `CONTRAST_REQUIREMENTS` contract (body text 4.5 / non-text & disabled 3.0); `ThemeManager` (idempotent select/apply, guard against duplicate `theme_create`); `load/save_theme_preference` via `update_or_append_config_line` (creates missing section/key, preserves comments, atomic write) — deliberately not `config_io.read_config_value`, whose write-back holds `main.file_update_lock` (recorder lock system) |
-| GUI wiring | Modified | `gui.py` | imports `src.ui_theme`; `__init__` reads `[GUI] gui_theme` — an explicit preference syncs the CTk appearance mode to the theme's family, otherwise follow the system appearance (pre-upgrade behavior kept); sidebar "UI Theme" `CTkOptionMenu` (i18n display names) + `_on_theme_change` (select → apply → persist → appearance mapping → appearance-menu display sync → `_sync_canvas_bg`); `_THEME_CTK_MODE` / `_THEME_LABELS` module constants; `Colors`/`Fonts`/`LiveRecorderGUI`/`SystemTray`/`AdvancedSettingsWindow`/`_quality_alert_expired` symbols and signatures untouched |
-| Template & docs | Modified | `config/config.ini`, `README.md` | template gains `[GUI] gui_theme =` (empty = follow appearance); README config block documents the GUI section |
-| i18n | Synced | `zh_CN.po`(+`.mo`), `en_US.json`, `en_GB.json`, `zh_TW.yaml` | 7 new entries: UI theme label, three theme names, switch success and two write-failure messages (`{theme}`/`{type_name}`/`{err}` placeholders). Four-catalog key-set equality holds (i18n test locks green); `web/app.js` needs no sync — the theme menu is GUI-only copy with no web surface |
-| Tests | Added | `tests/test_ui_theme.py` | 34 cases: contrast-math anchors (black/white 21:1, white-on-#4F6DF5 pinned at 4.34), registry integrity (every slot, strict #RRGGBB), contrast contract parameterized across all pairs × themes, persistence (missing/invalid/round-trip/comment preservation/single-line on repeated save), switch idempotency (same-id short-circuit + byte-identical config), ttk-settings pure-data assertions + real-Tk integration (skips without a display — the only such case) |
-
-**2. Root causes & design points**
-
-1. **Contrast first**: all three themes' tokens were iterated to compliance (body 4.5 / non-text 3.0) with a scratch script before the values were baked into the module; light's `primary` is `#4358E8` (brand hue, deepened) — the original `#4F6DF5` measures 4.34:1 with a white label, below AA. The scratch script is deleted; `tests/test_ui_theme.py` keeps regressing the numbers.
-2. **The cost of 3:1 borders**: WCAG 1.4.11 non-text contrast pushes light's border to `#848DA0` (darker than common light borders) — the machine-checked contract wins over visual habit.
-3. **Visible effect boundary of Phase 3**: CTk widget colors are taken over by tokens in Phase 4 (ui_kit); for now a theme switch maps to the CTk appearance mode (high_contrast → dark) plus ttk element colors (effective once Phase-4 widgets land). The "Appearance mode" menu stays (it owns system-follow); Phase 4 unifies the two controls.
-4. **Idempotency in three places**: `select` short-circuits on the same id (no redundant config writes), `save` keeps a single line on repeated saves (update before append), `apply` guards duplicate registration (`theme_create` raises TclError on an existing theme name).
-
-**3. Verification**
-
-- `pytest tests/test_ui_theme.py` → 34 passed (locally including 3 real-Tk integration cases; on headless CI those 3 skip while the other 31 run).
-- Real-window smoke (this Windows machine, full `LiveRecorderGUI` built in a subprocess): with no preference the theme follows the system appearance to `light`; menu display names localized correctly; a simulated click on "High contrast" flipped `theme_manager.theme_id == "high_contrast"`, wrote `[GUI] gui_theme` into a temp copy, switched ttk to `dlr-high_contrast`, mapped CTk to Dark, and synced the appearance menu's display to "深色"; the real `config.ini` was never written (write path redirected).
-- `python scripts/run_gates.py` → 8/8 green; full pytest 3286 passed / 14 skipped / 0 warnings; coverage 84.07% (all 44 modules above threshold); basedpyright 0 errors / 0 warnings / 0 notes; `import gui` headless-import succeeds (compatibility contract).
-
-**4. Known edges & hand-back**
-
-- The real-Tk integration cases skip on headless CI (no X server on ubuntu runners); to run them in CI regularly, add xvfb to the test job (deferred to Phase 5 evaluation).
-- Coexisting "Appearance mode" and "UI Theme" menus are a Phase-3 transitional shape (the former owns CTk light/dark incl. system-follow, the latter owns token themes plus persistence); they get unified during the Phase-4 widget replacement.
-
-### v4.4.0 (2026-09-29) — Web backend FastAPI → Starlette migration: self-built route adapter + zero-dependency validation layer; all 24 route contracts and security invariants preserved verbatim
-
-> Module-level overview of this change. Phase 2 (UI modernization · framework replacement) migrates the Web admin panel backend
-> from FastAPI to Starlette directly: removes the `fastapi` / `pydantic` dependencies, adds `src/web_models.py`
-> (a pure-stdlib dataclass validation layer) and the `_route` adapter inside `src/web_api.py` (replicating FastAPI's
-> model-argument parsing / Query clamping / dict→JSON serialization / sync-endpoint threadpool dispatch). All 24 route
-> handlers are untouched; business logic and every security invariant (MID-*/SEV-*) are preserved verbatim. New
-> `tests/test_web_api_routes.py` dynamically asserts the route contract, replacing the static baseline
-> `web_api_routes_baseline.json` that tripped the sensitive-content gate.
-
-**1. Changes by module (added / modified / deleted + file paths)**
-
-| Module | Nature | Key files | Key change / criterion |
-| --- | --- | --- | --- |
-| Web backend framework | Migration (dependency removal) | `src/web_api.py` | `FastAPI()` → `Starlette()`; the 24 `@app.post/get/...` decorators replaced with `@_route(app, [METHOD], path)`; 5 `Query(...)` params de-decorated to plain defaults; `cast(FastAPI, request.app)` → `cast(Starlette, ...)`; auth middleware rewired as `app.add_middleware(BaseHTTPMiddleware, dispatch=auth_middleware)` [corrected 2026-09-29 runtime verification]: the initial draft wrongly claimed `@app.middleware("http")` was Starlette-native and kept verbatim — Starlette has no such decorator method and the import would raise AttributeError (mypy attr-defined agrees); FastAPI's decorator is exactly `add_middleware(BaseHTTPMiddleware, dispatch=...)` underneath; additionally a JSON `HTTPException` handler is registered (Starlette's built-in handler replies with a PlainTextResponse, dropping the `{"detail": ...}` error contract) |
-| Request model validation | Added (zero-dependency) | `src/web_models.py` | 9 dataclasses (LoginRequest / RoomCreate / RoomUpdate / RoomToggle / RoomQualityUpdate / QualityOptionsUpdate / RecordingToggle / ConfigUpdate / LanguageUpdate) use a `.parse(data)` classmethod instead of pydantic `BaseModel`; missing field / wrong type → ValueError; bool accepts only real Python bool; extra fields ignored |
-| Route adapter layer | Added | `src/web_api.py` | `_route` decorator factory: `inspect.signature`-driven classification (model arg / Query arg / request); JSON body parsed via `_read_json_body`, invalid body → 422; Query clamped by `_QUERY_DEFAULTS` default and bounds; sync `def` endpoints dispatched via `run_in_threadpool` (matches FastAPI, avoids blocking the event loop); non-Response returns wrapped in JSONResponse |
-| Tests | Migration + added | `tests/test_web_api.py`, `tests/test_web_config_locks.py`, `tests/test_danmaku_monitor.py`, `tests/test_regression_2026_09_22_web_g.py`, `tests/test_web_api_routes.py` | 5 `TestClient` imports switched to `starlette.testclient`; new dynamic route-contract test asserts the exact set of 24 route method/path pairs + the `/web` mount; deleted `tests/web_api_routes_baseline.json` |
-| Dependency manifests | Synced deletion | `requirements.txt`, `pyproject.toml` | Removed `fastapi>=0.140.0` and `pydantic>=2.13.4`; kept `starlette>=1.3.1` / `uvicorn` / `python-multipart`; name-set equality verified by `tests/test_regression_2026_09_22_gates.py` |
-
-**2. Root-cause details**
-
-1. **Performance & size**: FastAPI pulls in pydantic + pydantic_core, one of the Web panel's major size contributors; driving Starlette directly drops both, shrinking the bundle and startup overhead (size pending local re-measure with `scripts/report_bundle_size.py`).
-2. **Wiring semantics preserved**: Starlette, unlike FastAPI, does not auto-dispatch `def` sync endpoints to a threadpool nor auto-parse JSON bodies; missing either blocks the event loop or changes 422 behavior — the `_route` adapter restores each equivalent behavior, leaving handler bodies untouched.
-3. **422 contract deviation (known)**: the old field-level pydantic 422 `detail` is now a string `detail` (`str(ValueError)`); the frontend `apiError()` only reads the `detail` text, so behavior stays compatible.
-
-**3. Verification (2026-09-29 runtime re-run, venv restored)**
-
-- `python scripts/run_gates.py` → **8/8 green** (black / isort / mypy / annotation conventions / compile_po / check_version / check_runtime_pins / pytest backstop).
-- `pytest` → **3248 passed, 14 skipped, 0 failed, empty warnings summary**; with `--cov=src`, `scripts/check_coverage.py` reports all 43 modules above threshold (total coverage 83.98%); `basedpyright` 0 errors / 0 warnings / 0 notes.
-- `pytest tests/test_web_api.py tests/test_web_api_routes.py -q` → 165 passed, 2 skipped, 0 warnings.
-- Runtime verification caught and fixed two wiring errors the earlier static-only pass could not see:
-  1. `@app.middleware("http")` raises AttributeError at import time on Starlette (P0, panel unusable) → replaced with `add_middleware(BaseHTTPMiddleware, dispatch=auth_middleware)`;
-  2. `raise HTTPException` inside endpoints came back with a plain-text body under Starlette's built-in handler — the `{"detail": ...}` JSON contract drifted (a batch of security tests went red) → registered a FastAPI-equivalent JSON handler (headers passthrough keeps Retry-After usage).
-- Companion fixes: `scripts/check_version.py`'s web_api version check retargeted from `FastAPI(version=)` to the importlib.metadata dynamic-read shape (MIN-2262 fail-closed semantics kept; all three branches mutation-verified); the MID-2241 field-scan anchor in `tests/frontend/test_regression_2026_09_22_gates.mjs` moved to `src/web_models.py` and the endpoint-slice anchor to `@_route(app, ["GET"], "/api/language")`; the `/health` version assertion in `test_web_api.py` now reads the same-source `_APP_VERSION`; `uv.lock`/`egg-info` regenerated via `sync_metadata.py` (requires.txt free of fastapi/pydantic).
-
-**4. Not verified & hand-back (closed)**
-
-- ~~Gate green and runtime verification~~: done (see "3. Verification").
-- Still handed to a later phase: the bundle-size re-measure `python scripts/report_bundle_size.py dist/DouyinLiveRecorder` requires one `build_exe.py` run first (local `dist/` is empty; a phase-5 closing item). Note the local venv still has fastapi/pydantic leftovers from the removed manifest (`pip install -r requirements.txt` does not uninstall removed packages); gates and tests are unaffected, but the user should run `pip uninstall fastapi pydantic` in a normal terminal before the bundle re-measure to keep the environment in sync with the manifest.
-
-**5. Breaking changes**
-
-- Removed the `fastapi` / `pydantic` runtime dependencies; `src/web_models` models are read via `.parse()` instead of the pydantic API (internal use, no impact on external plugins). All other routes, request/response shapes, security headers, and the auth middleware behave unchanged.
-
-### v4.4.0 (2026-09-29) — Web front-end motion layer (Phase 1): scroll reveal / parallax particles / reduced-motion degradation, zero dependencies and zero build
-
-> Module-level overview: Phase 1 (UI modernization · front-end motion) adds `web/motion.js` (223 lines, zero-dependency IIFE mounting `window.__dlrMotion`), adds the `<canvas id="bg-canvas">` background layer and script reference to `web/index.html`, and adds motion tokens plus full `prefers-reduced-motion` coverage to `web/style.css`. **Motion only adds classes, never wrapper elements** — the `tbody.innerHTML` fragment assertions in `tests/frontend/*.mjs` regression locks are unaffected; dynamically rendered table rows do not participate in the reveal animation.
-
-**1. Changes by module (added / modified + file paths)**
-
-| Module | Nature | Key files | Key change / criterion |
-| --- | --- | --- | --- |
-| Motion engine | Added | `web/motion.js` | single rAF loop, IntersectionObserver reveal (threshold 0.15, rootMargin `0px 0px -8% 0px`, stagger `min(index*40, 240)ms`, one-shot unobserve on hit), DPR capped at 2, pauses on `document.hidden`, full degradation under `prefers-reduced-motion: reduce`, `destroy()` leaves no timers; particle count `clamp(18, floor(viewport area/22000), 64)`, halved when viewport <768px or `hardwareConcurrency ≤ 4` |
-| Page wiring | Modified | `web/index.html` | `<canvas id="bg-canvas" aria-hidden="true">` as the first child of `<body>` (pointer-events:none, z-index -1); `<script src="/web/motion.js">` appended at the end (defer, non-blocking) |
-| Motion styles | Modified | `web/style.css` | `#bg-canvas` fixed layer, `.reveal`/`.is-revealed` transitions, `:focus-visible` ring, full `@media (prefers-reduced-motion: reduce)` coverage (motion section ≈ lines 508–547); transitions only touch transform/opacity/border-color/box-shadow, never layout properties |
-| Tests | Added | `tests/frontend/test_motion.mjs` | 5 cases (node:test + node:vm sandbox driving motion.js: degradation gate / reveal / particle parameters / hidden pause / destroy cleanup), zero npm dependencies |
-
-**2. Verification & known deviation**
-
-- `node --test tests/frontend/*.mjs` → **65/65 green** (existing regression locks + 5 new); `tbody.innerHTML` fragment assertions intact.
-- **Known deviation**: motion.js measures 9449 bytes (≈9.2KB), about 15% over the ≤8KB performance budget in proposal §5.1 — defer loading, single rAF and read/write separation all hold; the size deviation is deferred to Phase 5 evaluation (minify or split; no functional impact).
-
-### v4.4.0 (2026-09-29) — Web panel mobile fix: two-row top bar + safe-area / `dvh` adaptation + in-panel table scrolling, removing clipping and horizontal page scroll on iPhone 16 Pro Max and Pixel 10
-
-> This section is the **module-level overview** of this change (module table + root-cause detail + verification
-> readings). Only the Web frontend static assets are touched (`web/index.html` + `web/style.css`); the Python side
-> is unchanged and **nothing was deleted** - no rule, element or file was removed, existing comments are all
-> preserved under the "add only, never rewrite" convention, and this round only adds rules and rewrites existing
-> declarations.
-
-**1. Changes classified by module (added / modified / removed + file paths)**
-
-| Module | Nature of change | Main files | Key change / judgement |
-| --- | --- | --- | --- |
-| Web page skeleton | Modified, 1 place | `web/index.html` | viewport meta gains `viewport-fit=cover` - without it `env(safe-area-inset-*)` is always 0, so safe-area adaptation cannot take effect at all |
-| Web styles: top bar | Modified (layout constraints rewritten) | `web/style.css` | `height:56px` -> `min-height:56px`; padding on all four sides becomes `max(20px, env(safe-area-inset-*))`; `.tabs` gains `min-width:0`; under the <=768px breakpoint it wraps into two rows (row 1: brand + language/theme, row 2: tabs on a full-width horizontal scroller) |
-| Web styles: main content | Modified + added | `web/style.css` | `.view` left/right padding routed through the safe-area insets; `body` gains `min-height:100dvh` (the original `100vh` stays as fallback) and `text-size-adjust:100%` against landscape font inflation |
-| Web styles: data tables | Added | `web/style.css` | Under the <=768px breakpoint `.panel{overflow-x:auto}` plus `min-width:540px` for the dashboard / danmaku / files tables - headers are no longer squeezed into vertical single-character columns, they scroll inside the panel instead |
-| Web styles: control bar / toolbars / toast | Modified | `web/style.css` | `.recording-control`, `.danmaku-toolbar` and `.file-header` gain `flex-wrap:wrap`; `.toast` positioning becomes `max(24px, env(safe-area-inset-bottom/right))`; `.inline-form input[type="text"]` becomes a shrinkable `flex:1 1 160px; min-width:0` |
-| Web frontend logic and tests | **Untouched** | `web/app.js`, `tests/frontend/*.mjs` | CSS/HTML-only change with no JS behavioural surface; the existing frontend suite needs no new case (no new DOM contract) |
-| Python side (recording chain / Web backend / config / i18n) | **Untouched** | none | No `.py` file, dependency list, config file or catalog was touched this round |
-
-**2. Root-cause detail (numbered; each comes from comparing the two device screenshots against the stylesheet)**
-
-1. **Top-bar overflow (the main cause, present on both devices)**: `.topbar` had a fixed `height:56px` and a single
-   non-wrapping flex row while `.brand` also carried `white-space:nowrap`, so the minimum content width of
-   "brand + five tabs + language select + theme button" exceeded both viewports. The flex children were squeezed -
-   in the screenshots "仪表盘" broke into vertical characters and the right-hand theme button was clipped off screen -
-   and the whole top bar overflowed, producing page-level horizontal scrolling. Fix: row 2 of the module table.
-2. **Missing safe-area adaptation**: no `viewport-fit=cover` in the viewport meta and no `env(safe-area-inset-*)`
-   anywhere in the styles, so the Dynamic Island, the rounded corners and the Home Indicator obscured top-bar content
-   and the bottom-right toast, and landscape clipped both sides.
-3. **`100vh` viewport height**: `body{min-height:100vh}` does not follow the dynamic viewport when the mobile address
-   bar collapses or expands, which shows up as the bottom being covered by the browser toolbar or the layout jumping;
-   replaced with `100dvh` (old browsers fall back to the `100vh` line above it).
-4. **No scroll fallback for the dashboard "now recording" table**: a five-column auto layout breaks out of `.panel`
-   at min-content width on narrow screens, so the "设置画质 / 实际画质" headers collapse into vertical characters and
-   row heights diverge. Fix is in-panel scrolling plus a minimum width, which **coexists** with the existing
-   `table-layout:fixed` scheme of `#rooms-view` - the latter's scope is still strictly `#rooms-view` and its comment
-   constraint (3) was not relaxed.
-5. **Control bar / toolbars do not wrap**: the state text plus two buttons in `.recording-control`, and the heading
-   plus filter select in `.danmaku-toolbar`, squeezed each other on narrow screens; `flex-wrap:wrap` makes them wrap
-   instead of compress, keeping touch targets intact.
-
-**3. Verification**
-
-- `node --test tests/frontend/*.mjs` -> **60 passed / 0 failed** (the 60 existing cases including the MIN-2241 root
-  `index.html` integrity / crossorigin lock and the frontend `parseConfigBool` consistency lock; no case added or removed).
-- Line-ending check (measured after the change): `web/style.css` CRLF=0 / LF-only=506 (still pure LF),
-  `web/index.html` CRLF=175 / LF-only=0 (still pure CRLF) - on both files the side that was 0 is still 0 afterwards,
-  with no opposite-form lines mixed in.
-- The Python side is unchanged, so this round did not run the `pytest` / mypy / black / isort gate set;
-  `scripts/check_annotations.py` does not apply (no Python file touched).
-
-**4. Not measured and handed back (honest boundary)**
-
-- Live-device verification column: `SKIP(no physical device / no remote debugging channel)`. The two viewport
-  readings (iPhone 16 Pro Max 440x956 CSS px at DPR 3; Pixel 10 about 412 CSS px wide at DPR ~2.6) come from device
-  specifications and the screenshots; no Safari/Chrome remote debugging or on-device re-screenshot was performed here.
-- Hand-back action: after a hard refresh (Ctrl+F5) confirm four points on a real device or device emulator - the two-row
-  top bar is fully visible and the tabs scroll horizontally, the page as a whole has no horizontal scrollbar, the
-  Dynamic Island / Home Indicator do not cover the top bar or the toast, and the three data tables can be scrolled
-  horizontally inside their panel to see every column.
-- Step 2 of the Definition of Done (live-device verification) does not apply to a CSS-only frontend change (no
-  recording chain / source selection / ffmpeg arguments / platform resolver involved), but the four points above must be
-  confirmed on a real device by the user before this change counts as closed.
-
-### v4.3.0-dev (2026-09-27) — Today's changes classified by module: four release-chain fixes + findings 4/5/6 + the four-doc size pass + the AGENTS.md trim + metadata and consistency sync
-
-> This section is the **module-level overview** of everything changed on 2026-09-27 (summary table plus the readings that
-> justify each verdict). The path-level detail follows today's documentation policy and lives where the other 73
-> historical inventories live; the four same-day detail entries (three release-chain faults, findings 4/5/6 plus the doc
-> size pass, and the `AGENTS.md` trim) sit below and cross-verify this one.
-
-| Module | Nature of change | Main files | Key reading / judgement |
-| --- | --- | --- | --- |
-| Packaging and release chain | `make_zip` naming and guards modified, Linux ffmpeg source and eight pins corrected; **added** `_clean_stale_release_zips` / `_drop_stale_release_zips` / `_assert_dual_zips_are_two_files` plus the `--dual` vs `--no-zip` exclusion | `build_exe.py` | No function or download source deleted; artifact names are `DouyinLiveRecorder-v4.3.0-windows-amd64-{lite,full}.zip` |
-| CI and release workflow | **Added** the `release-guard` job and the `Verify dist contains both lite & full zips` step | `.github/workflows/build-release.yml` | `gh release delete` keeps tags by default; `fail_on_unmatched_files: true` not relaxed; the 08:14 edit by another actor was untouched here (logged) |
-| Tests | **Added** 9 cases (10 assertion units), reworked `_stub_build_steps`, corrected two comments | `tests/test_build_exe.py` | Single file 100 -> **105 passed**; four mutations each reddened only their own lock; `DIST_DIR` repointed to `tmp_path` so tests cannot delete real artifacts |
-| Root conventions | `make_zip` item gained judgements (4) and (5) plus the nine lock names; protobuf range corrected to `>=6.33.5,<8`; volume pass | `AGENTS.md` | 97,034 -> **95,715 B** (-1.4%); token audit: 0 lost among `test_` names, CVE codes and `UPPER_SNAKE` identifiers |
-| CN/EN wikis | **Added** four detail entries plus this overview; 73 inventories relocated; 109 (zh) / 181 (EN) truncated table cells restored; statistics and index sections rewritten; step 4 of "Packaging and Release" corrected | `CODE_WIKI.md`, `CODE_WIKI_EN.md` | `^### v` 169 -> **173 = 173**; dangling-code-span paragraphs 26/18 -> **0**; both files pure CRLF |
-| User-facing docs | **Version-entry sync in a later step the same day** (09-26 ~ 09-27 changes folded into the `v4.3.0` entry, the date range extended to 09-27, and the stale test readings plus the "permanently red on this host" note corrected) | `README.md` (104,040 -> 109,648 B), `README_EN.md` (123,017 -> 129,644 B) | All five subsections match one-to-one in count (🐛 9 / ✨ 12 / ⚠️ 9 / 🛠️ 7 / 🧪 4) and order; `^### v` 20 = 20; both files still pure CRLF. They genuinely needed no update during the consistency audit; this step **adds** content and still does not compress the README changelog |
-| Reference sub-docs and local records | **Added** two inventory appendices; session learnings and work log appended | `docs/agent-reference/changelog-file-inventories.md` (130,064 -> 139,024 B), `-en.md` (98,458 -> 107,897 B), `session-learnings.md`, `.workbuddy/memory/2026-09-27.md` | 41 (zh) / 32 (EN) historical inventories plus this block; every pointer resolves; 0 orphaned table headers |
-| Build-artifact metadata | **Rebuilt** egg-info, fixing two real drifts | `DouyinLiveRecorder.egg-info/` (gitignored + dockerignored) | `PKG-INFO`'s `Requires-Dist: h2` `>=4.3.0` -> `>=4.4.1`; embedded README gained the v4.3.0 section; the other four files byte-identical |
-| Dependencies / versions / ignore lists / config / i18n | **One comment repair only; the rest verified as needing no update** | `requirements.txt` (inline comment completed), `pyproject.toml`, `Dockerfile`, `docker-compose.yaml`, `.gitignore`, `.dockerignore`, `.coveragerc-concurrency`, `config/config.ini`, the four catalogs | The `websockets>=14.0` inline comment was cut at "…14.0+ API," (a trailing comment cannot continue onto the next line, so this was a real truncation); completed against the matching `pyproject.toml` comment as "12/13.x makes `connect()` raise TypeError immediately and the reconnect loop swallows it, so danmaku never connects". **No specifier changed**: 23 vs 23 package-name sets still equal, `tests/test_regression_2026_09_22_gates.py` 25 passed, the file stays pure LF. Everything else: `python 3.14` / `node 24` identical across workflows; tool pins match what is installed; no gaps in the four exclude sets; `config.ini` has 6 sections / 143 keys and today added no key; four catalogs equal at 780 keys, `.mo` in sync at 781 entries, extractor reports 0 missing |
-
-- **Consistency readings (measured this round, all recomputable)**: `grep -c '^### v' CODE_WIKI.md CODE_WIKI_EN.md` -> 173 = 173;
-  `importlib.metadata.version('DouyinLiveRecorder')` -> 4.3.0; `scripts/check_version.py` PASS;
-  `scripts/compile_po.py --check` in sync at 781 entries; `scripts/extract_i18n_strings.py` 0 missing;
-  `pytest tests/test_i18n.py -k "keyset or sync or catalogs"` -> 6 passed;
-  `pytest tests/test_proto_runtime_compat.py tests/test_i18n.py` -> 43 passed.
-- **Deliberately not done (honest boundary)**: no dependency added to `requirements.txt` or `pyproject.toml` (nothing required one);
-  `config/config.ini` not written (it holds credentials, is ignored, and no new key was needed); `README*.md` untouched per the
-  user's 09-27 decision; `docs/agent-reference/session-learnings.md` remains the only LF-only file in that directory
-  (finding 7, out of scope this round).
-
-> The path-level inventory was moved verbatim to [docs/agent-reference/changelog-file-inventories-en.md](docs/agent-reference/changelog-file-inventories-en.md) (entry: v4.3.0-dev (2026-09-27) — Today's changes classified by module: four release-chain fixes + findings 4/5/6 + the four-doc size pass + the AGENTS.md trim + metadata and consistency sync | section: Today's change inventory by module (added / modified / removed + file paths)).
-
-### v4.3.0-dev (2026-09-27) — `AGENTS.md` size pass: three real duplications removed and relocated readings turned into pointers; measured conclusion is that the root file is already at its constraint-density floor
-
-- **Motivation**: the user asked to shrink `AGENTS.md` while keeping every core instruction and key constraint.
-  Measure the redundancy classes first, then choose the method.
-- **What the measurement showed**: the relocatable one-off readings had already been relocated correctly.
-  `BtbN 126,600,656 B / 108,761,296 B`, `johnvansickle 41,888,096 B`, `autobuild-2024-10-31`, the `latest`
-  republish at 2026-09-26T13:22:38Z, the ~two-week retention of daily `autobuild-*` tags (only
-  `09-13~09-26`, 15 entries) and `api.github.com` `assets[].digest` all exist **verbatim** in
-  `docs/agent-reference/measured-evidence.md` under "Runtime upstream integrity artifacts", yet `AGENTS.md`
-  copied them again. Those numbers in the SEV-10 item and in the "three places to change per source" item are now
-  pointers to that section, with an explicit note that the root file no longer duplicates values.
-- **Three genuine duplications removed** (the file's own "no second source of truth" rule): (1) key convention 14
-  and the 已知坑/i18n extractor-blindspot item overlapped - merged into 14 (absorbing the four catalog filenames and
-  the "reports 0 missing, falsely green" consequence) and deleted the latter; (2) the version line in "Project
-  overview" restated key convention 1 wholesale - compressed to a pointer; (3) two routing bullets in "Risk control"
-  re-quoted the command and the forbidden directory list owned by their detail sections - kept only the judgement
-  plus the pointer (the command `pip install --ignore-installed --no-deps -r requirements.txt` and the
-  `downloads/`/`logs/`/`backup_config/` prohibition are still word-for-word in "CI / workflow conventions" and
-  "temp-script cleanup"). The two same-cause items about parent-process `PYTHONUTF8` and
-  `reconfigure(errors="replace")` in "Gate commands" were merged into one.
-- **Reading**: `AGENTS.md` 97,034 -> **95,715 B** (-1,319, -1.4%), 496 lines, pure CRLF (LF-only count 0).
-- **Why only 1.4% (a conclusion for later sessions)**: the file has **224 top-level items averaging 383 B**
-  (command: `python -c "import pathlib,re; t=pathlib.Path('AGENTS.md').read_text(encoding='utf-8'); top=[x for x in t.splitlines() if re.match(r'^([-*] |[0-9]+[.] )', x)]; print(len(top), sum(len(x.encode()) for x in top)//len(top))"`),
-  and item by item each one is an incompressible payload of judgement + constant name + test name + error code.
-  Preservation audit: of the 997 code spans in the original, only 15 no longer appear in their old form, and each was
-  checked: (a) 9 were `::test_...` fragments rewritten as "file name once, then bare test names" - all **55 test
-  identifiers still present**; (b) 6 were readings that live on in the wiki / measured-evidence. Loss counts for
-  `test_` identifiers, CVE/PYSEC/GHSA and MIN/SEV/MID codes, and `UPPER_SNAKE` constants and environment variables
-  are all **0** (only three byte readings now exist solely in measured-evidence, by design). So under the current
-  architecture the volume is near its floor; going materially lower requires an architecture change (move 已知坑
-  detail into per-topic sub-docs, leaving the root file as index plus hard rules), which contradicts the file's own
-  opening rule that "已知坑 constraint sentences stay in the root file" and therefore **needs the user's approval**;
-  not attempted in this pass.
-- **Verification**: `scripts/run_gates.py --list` still parses 8 gates (the parser reads the fenced bash block of the
-  "Gate commands" section, which this pass did not touch);
-  `pytest tests/test_run_gates.py tests/test_regression_2026_09_22_gates.py` -> **67 passed / 1 skipped**, including
-  the three source locks ("first command must be the verbatim black gate line", "the `PYTHONUTF8=1` prefix must
-  parse into env", "renaming the section must return an empty list"). Line-ending form unchanged. Docs-only change,
-  so step 2 of the Definition of Done (live-device verification) does not apply.
-
-### v4.3.0-dev (2026-09-27) — Fourth release-chain hardening: `--dual` now validates both return paths after packaging and prunes stale `dist/` zips before packaging; four docs slimmed by relocating 73 historical file inventories and restoring `…`-truncated table cells
-
-- **Motivation**: the closing review of the previous entry produced findings 1-8; the user approved the already-fixed
-  1/2/3 and asked for 4/5/6 plus a documentation size pass. (4) `make_zip`'s return value was discarded with `_ =`
-  in the `--dual` branch, so nothing locally checked that the two variants really differ and both exist on disk, and
-  `dist/` was never cleaned, so leftovers got swept in by `path: dist/*.zip`; (5) the artifact-name example still read
-  `windows-x64` (Windows actually yields `amd64`; `x64` only exists as the runtime key after `_NODE_ARCH_MAP`
-  normalization); (6) "both pre-existing tests assert *only* `zip_path.is_file()`" was imprecise -
-  `test_make_zip_aborts_when_archive_still_contains_logs` asserts the `SystemExit` text.
-- **Changes (`build_exe.py`, three)**: (1) `_assert_dual_zips_are_two_files(lite_zip, full_zip)` - identical names
-  raise `SystemExit` (`zipfile` `"w"` truncates in place without an error, and a single-call guard cannot see two
-  calls landing on one file), and a missing variant raises `SystemExit` too; (2)
-  `_clean_stale_release_zips()` + `_drop_stale_release_zips()` - delete only `{APP_NAME}-v*.zip`, only when a zip is
-  actually being produced, and print the removed list (silent deletion is as bad as not deleting); the `--no-zip`
-  path never cleans. The call must sit **before the first** zip: inside `make_zip` the second call would delete the
-  first one's artifact. (3) The non-`--dual` path keeps `make_zip`'s return value and prints the real artifact name.
-- **Same-family corrections**: the truncation-incident comment in `tests/test_build_exe.py` rewritten to the true
-  artifact name plus the precise per-test judgement; step 4 of "Packaging and Release" claimed "smoke tests run on
-  the lite version", which the MID-2254 ordering change already disproved - it now says smoke runs after **both**
-  zips against the release directory that holds the runtimes, and records the pruning plus the post-hoc check; the
-  same line carried a stale exception name (`ChallengePageError` was removed on 2026-09-23 under MIN-2267; only
-  `IntegrityError` / `NetworkError` remain) and a `…` that cut a code span in half.
-- **Regression locks (5 new cases in `tests/test_build_exe.py`, all mutation-verified)**:
-  `test_dual_build_aborts_when_both_variants_land_on_one_zip`,
-  `test_dual_build_aborts_when_a_variant_zip_is_missing`,
-  `test_dual_build_prunes_stale_zips_before_first_zip`,
-  `test_no_zip_build_keeps_existing_dist_zips` (inverse lock: no packaging means no deletion),
-  `test_clean_stale_release_zips_only_touches_own_artifacts` (includes the "missing `dist/` is a no-op" case and
-  idempotency). `_stub_build_steps`'s `make_zip` stub now **returns a name derived from `suffix` and really writes
-  the file**: the old constant `stub.zip` would turn all three `--dual` cases falsely red once the new check landed;
-  `DIST_DIR` is also redirected to `tmp_path`, otherwise the tests would delete the user's real `dist/` artifacts.
-  Mutation readings: cleaner made a no-op -> 2 red; `--dual` wiring removed -> 1 red; whole post-hoc check disabled
-  -> 1 red; existence check only disabled -> 1 red. Each mutation reddened exactly its own lock, and
-  `build_exe.py` came back byte-identical to its backup.
-- **Doc size pass (policy: relocate, never delete)**: measured first, and the redundancy the request assumed was
-  mostly not there - 0 trailing-whitespace lines, 0 multi-blank runs, and only 1 README line duplicated verbatim from
-  `CODE_WIKI`; all the weight is body text. What genuinely moved is 73 historical "Files involved (classified by
-  module)" inventories (41 zh blocks / 32 EN blocks) into
-  `docs/agent-reference/changelog-file-inventories.md` / `-en.md`, each original spot keeping its section heading plus
-  a one-line "entry | section" pointer. The pass also repaired a silent information loss from the 2026-09-25
-  compression: 109 (zh) / 181 (EN) table cells truncated with `…` were restored from `.workbuddy/docold` by unique
-  prefix match (+18,439 B / +33,117 B; 2 ambiguous matches were deliberately skipped).
-  Readings (**before this entry was written**; `README*` are byte-identical to the originals):
-  `CODE_WIKI.md` 638,616 -> 552,368 B (-86,248, -13.5%), `CODE_WIKI_EN.md` 692,281 -> 649,906 B (-42,375, -6.1%),
-  `README.md` 104,040 B and `README_EN.md` 123,017 B unchanged; new appendices 130,064 B / 98,458 B.
-  Confirmed scope: the README changelog is user-facing release notes and is not compressed.
-- **Self-proof (recomputable)**: `grep -c '^### v'` is still **170 = 170**; a line-by-line reconciliation shows every
-  non-empty original line still lives either in its document or in the appendix (only the 109/181 restored table rows
-  vanished in their truncated form); all 41/32 pointers resolve to an existing file **and** to a real
-  "entry + section" pair inside it; 0 orphaned table headers; dangling-code-span paragraphs dropped from 26 (zh) /
-  18 (EN) to 0; every relocated block ends at a heading or a 验证/Impact/Conclusion-class label, so no table header
-  was separated from its body; all four documents plus both appendices are pure CRLF (LF-only count 0).
-- **Doc drift fixed on the way**: the "Document Statistics and Index" section claimed **285** Markdown files with no
-  command attached, which cannot be recomputed; it now carries the command plus today's reading (**100**), the review
-  reports are listed at their real home `docs/worklog/` (9 files), and a `docs/agent-reference/` row plus a new
-  "Reference Sub-Document Index" section were added. Nine Chinese comment lines inside EN fenced command blocks were
-  translated. Known and left undone: 162 Chinese lines remain inside EN code fences (the architecture diagram and the
-  directory tree labels); that is translation work, not size redundancy, and is deferred to its own pass.
-- **Verification**: `scripts/run_gates.py` 8/8 rc=0 (incl. `check_annotations.py` PASS at 23.8% mean comment density,
-  `compile_po.py --check` in sync at 781 entries, `check_version.py`, `check_runtime_pins.py` fully pinned);
-  its built-in full-suite fallback **3240 passed with an empty warnings summary** (up from 3235 = the 5 cases added
-  here); `pytest --cov=src` -> 3240 passed / 14 skipped, total coverage **83.91%**, and `scripts/check_coverage.py`
-  **PASSED: all 42 modules meet their threshold** (`src/proto/douyin_pb2.py` explicitly exempt);
-  `basedpyright` (no path) 0 errors / 0 warnings / 0 notes; `mypy` (no path) Success; black and isort report both
-  touched files unchanged; `python -m pytest tests/test_build_exe.py` alone -> **105 passed** (was 100).
-- **Not measured / handed back**: (1) `python build_exe.py --smoke --dual` was **not** run locally (full PyInstaller
-  build plus ~300MB upstream download), so the real "prune, then both zips land in `dist/`" path is still confirmed
-  by CI's `Verify dist contains both lite & full zips` on its first run; (2) this is a docs-only change with no
-  recording-chain / source-selection / ffmpeg-argument / platform-parsing touch point, so step 2 of the Definition of
-  Done does not apply; (3) restored cells reflect the `.workbuddy/docold` snapshot (pre-2026-09-25), so any wording
-  changed before that snapshot comes back in its snapshot form; (4) to reject the relocation, delete this entry's two
-  artifacts: the two appendix files plus the 73 pointer lines.
-
-### v4.3.0-dev (2026-09-27) — Third release-chain fault: `make_zip` truncated the artifact name via `Path.with_suffix(".zip")`, so lite was overwritten in place by full
-
-- **Symptom**: this `Build & Release` run **passed** the pin verification and
-  `Build executables + smoke test`, then reddened on the next step
-  `Verify dist contains both lite & full zips`: `Found 0 lite zip(s) and 0 full zip(s)`,
-  `Error: Expected both *-lite.zip and *-full.zip in dist/, but missing one or both.`, while
-  `Full listing:` shows exactly one file, `dist/DouyinLiveRecorder-v4.3.zip` at 160,298,993 B.
-  So the artifact **did exist** — what had vanished from both variant names were the `-lite`/`-full`
-  segments together with `-<os>-<arch>`. Same family as the two earlier reds
-  (`Pattern 'dist/*-lite.zip' does not match any files`), different cause, and one step further along.
-- **Root cause**: `build_exe.make_zip()` built `zip_base = DIST_DIR / f"{APP_NAME}-v{version}-{os}-{arch}{suffix}"`
-  and then `zip_path = zip_base.with_suffix(".zip")`. `Path.with_suffix` splits the extension at the
-  **last dot**, and the version itself contains dots: measured locally on the real per-platform names —
-  `Path('DouyinLiveRecorder-v4.3.0-windows-amd64-lite').suffix == '.0-windows-amd64-lite'`, so
-  `with_suffix('.zip')` yields `DouyinLiveRecorder-v4.3.zip` (`-full` resolves to the **same** name, and so
-  does `linux-x86_64`). Both `make_zip` calls of `--dual` therefore wrote one and the same path: the second
-  (full) truncated and rewrote the first (lite) through zipfile's `"w"` mode, leaving full's content on disk
-  under a name carrying neither variant nor platform.
-- **Why it stayed invisible**: neither pre-existing `make_zip` test says anything about the **name** (one
-  only asserts `zip_path.is_file()`, the other only the `SystemExit` text) — name drift is completely
-  invisible to "does a file exist". The only name-aware judgement in the repo is the CI `dist/*-lite.zip`
-  glob, so only a real `--dual` run could redden. The non-`--dual` path (`ci.yml` build-verify uses
-  `--no-zip`) never exposed the missing platform segment either.
-- **Fix (three parts, all in `build_exe.py`)**: (1) `.zip` is now concatenated inside the same f-string,
-  keeping naming a single definition point, with a comment recording why `with_suffix` is banned;
-  (2) a new structural invariant — the composed `zip_path.parent` must still be `DIST_DIR`, otherwise
-  `SystemExit` (when `version`/`suffix` contain a path separator the f-string produces a **sub-path** and
-  the artifact silently lands outside `dist/`; on Windows pathlib treats `\` as a separator too);
-  (3) `--dual` and `--no-zip` are now mutually exclusive and fail fast — the `--dual` branch never reads
-  `no_zip`, so `--dual --no-zip` used to **silently ignore** the flag the user explicitly typed and emit
-  both large zips anyway (a contradictory combination must either error out or honour it, not half-run).
-- **Regression locks (`tests/test_build_exe.py`, four functions / five cases, all mutation-verified)**:
-  `test_make_zip_name_keeps_dotted_version_and_variant_suffix` (structural regex: full `v4.3.0` +
-  `<os>-<arch>` + `-lite`/`-full` + `.zip`; the real Windows name looks like
-  `DouyinLiveRecorder-v4.3.0-windows-amd64-lite.zip`),
-  `test_dual_suffixes_do_not_collide_on_one_zip` (two `make_zip` calls must yield two distinct files),
-  `test_make_zip_refuses_name_containing_path_separator` (runs **both** argument positions — `version` and
-  `suffix` — with `'/'` rather than `os.sep` so the refusal branch really executes on both platforms),
-  `test_dual_and_no_zip_are_mutually_exclusive` (asserts `order == []`, locking "the judgement precedes
-  every build step").
-  Mutation readings: reverting the implementation to `with_suffix(".zip")` reddened the first two while the
-  pre-existing `make_zip` tests stayed green (disproving the old assertion standard); forcing the two new
-  guards to `if False:` reddened the last two — the guard-(2) one via `FileNotFoundError`, which proves its
-  assertions are actually reached.
-- **Verification**: `pytest tests/test_build_exe.py` **100 passed**; `basedpyright build_exe.py tests/test_build_exe.py`
-  0 errors / 0 warnings / 0 notes; `mypy` (no path arguments) Success over 158 files;
-  `black --check` / `isort --check-only` report both files unchanged; `check_annotations.py` passes;
-  line-ending form of every touched file unchanged (`build_exe.py` and `AGENTS.md` pure CRLF,
-  `tests/test_build_exe.py` pure LF).
-- **Not measured / handed back**: (1) `python build_exe.py --smoke --dual` was **not** run locally (it needs a
-  full PyInstaller build plus ~300 MB of upstream downloads), so "lite + full both present in dist/" can only
-  be confirmed by the first CI run of `Verify dist contains both lite & full zips`; (2) the failed Release
-  record is reclaimed by `release-guard` (`needs.build.result != 'success'`) and the tag is kept, so a
-  re-run republishes; (3) any historical asset named `DouyinLiveRecorder-v<major>.<minor>.zip` is a product
-  of this defect — its lite half was never actually distributed, and a re-run is what yields correctly
-  named per-platform variants.
-
-### v4.3.0-dev (2026-09-27) — Release-chain fix: Linux ffmpeg pins now point at an immutable month-end release tag, plus a `release-guard` job that rewinds the empty Release left behind by a failed build
-
-- **Background**: a tag-triggered `Build & Release` run died in the Linux build job's ffmpeg download step with
-  `[build][FATAL] _ffmpeg_temp.tar.xz SHA256 不匹配（期望 87de0900…，实际 0cfb2146…），已终止构建`, and the
-  very next step (`softprops/action-gh-release`) then reported
-  `⚠️ Pattern 'dist/*-lite.zip' does not match any files` (`fail_on_unmatched_files: true`). The second message
-  is a **downstream symptom** of "dist/ has no artefacts", not a separate fault — turning
-  `fail_on_unmatched_files` off would erase the only visible signal.
-- **Root cause**: both Linux slots of `_FFMPEG_DOWNLOAD_URLS` pointed at BtbN's
-  `releases/download/latest/...`. `latest` is a **rolling alias**: the same asset name is re-uploaded over and
-  over, so its digest keeps changing — tag `latest` was republished at `2026-09-26T13:22:38Z`, which invalidated
-  the pin value `87de0900…` taken earlier the same day; the arm64 pin `30774c8f…` was stale too (now `f2fe35e9…`).
-- **Chosen route (per the user: "switch to an immutable month-end tag")**: both slots now pin the **month-end**
-  autobuild tag `autobuild-2026-08-31-13-27` (assets
-  `ffmpeg-n9.0.1-11-ge47273f4d9-linux{64,arm64}-gpl-9.0.tar.xz`), with pin values taken from
-  `api.github.com/repos/BtbN/FFmpeg-Builds/releases/tags/<tag>` → `assets[].digest`
-  (linux64 `182c1b50…`, linuxarm64 `e2dd447c…`). Why month-end specifically: the repo holds only **38 releases**;
-  daily `autobuild-*` tags survive only about two weeks (only 09-13…09-26, 15 of them, were left), so pinning a
-  daily tag is planting a guaranteed 404, while month-end tags reach back to `autobuild-2024-10-31` — the only
-  combination where both URL and digest are immutable. Cost: the bundled ffmpeg lags `latest` (n9.0.2) and now
-  sits at n9.0.1-11-ge47273f4d9; upgrading means editing the tag **and** the pin by hand, which is exactly the
-  SEV-10 manual gate — deliberately not replaced by auto-fetching the current hash.
-- **Second item, the guardrail**: `build-release.yml` gains a `release-guard` job
-  (`needs: [prepare, build]`, `if: always() && release path && needs.build.result != 'success'`) that runs
-  `gh release delete` on the empty/partial Release pre-created by `release-create` (tag is **kept**) and emits a
-  `::warning::`. Why: `release-create` deliberately pre-allocates the Release before build to avoid three build
-  jobs racing to create it, but when a build fails the finalizing `release` job is skipped by `needs: build`, so
-  an empty Release stays in the repo with zero downloadable assets.
-- **Files touched**: `build_exe.py` (two URLs + two pin cells + three comment/maintenance corrections);
-  `tests/test_build_exe.py` (new `test_linux_ffmpeg_urls_pin_an_immutable_release_tag`: forbids
-  `/releases/download/latest/`, forbids the `n9.0-latest-` asset-name form, requires one shared tag across both
-  arches); `.github/workflows/build-release.yml` (new `release-guard` job only — matrix/cache/build/upload logic
-  untouched); `AGENTS.md` (SEV-10 entry gains the "month-end tag" rule and its regression lock; a new
-  empty-Release guardrail bullet under CI/workflow conventions; volume readings refreshed);
-  `docs/agent-reference/measured-evidence.md` (2026-09-27 re-measurement table).
-- **Measured (2026-09-27)**: `releases/latest` → linux64 150,999,836 B / `0cfb2146…`, linuxarm64 127,395,868 B /
-  `f2fe35e9…` (neither equals the old pins); `releases?per_page=100` → 38 releases total; month-end tag assets →
-  linux64 126,600,656 B / `182c1b50…`, linuxarm64 108,761,296 B / `e2dd447c…` (a `checksums.sha256` asset is
-  also published, usable as a second cross-check); gyan.dev Windows `.sha256` still `60f46726…` (no drift);
-  nodejs.org's first `lts` entry still `v24.21.0` (no drift). A prefix fetch confirmed the month-end asset is a
-  valid xz (magic `fd377a585a00`) whose top-level directory is
-  `ffmpeg-n9.0.1-11-ge47273f4d9-linux64-gpl-9.0/`.
-- **Verification**: `pytest tests/test_build_exe.py tests/test_check_runtime_pins.py` → **115 passed**; full
-  `pytest` → 3229 passed / 14 skipped with an empty warnings summary (the single failure,
-  `test_web_config.py::TestFormatUrlLine::test_normal_line`, is the sandbox failing to resolve
-  `live.douyin.com`; re-run alone it is **1 passed**, unrelated to this change); `mypy` (no args) → Success over
-  158 files; `basedpyright tests/test_build_exe.py` → 0 errors / 0 warnings / 0 notes; `black --check` and
-  `isort --check-only` unchanged; `check_annotations.py` passes; `check_runtime_pins.py --strict` still rc=0;
-  `yaml.safe_load` on the workflow parses with jobs in the order prepare / release-create / build /
-  release-guard / release. Line endings unchanged (`build_exe.py`, `AGENTS.md`, `CODE_WIKI*.md`,
-  `measured-evidence.md` stay pure CRLF; the test file and the workflow stay pure LF).
-- **Not yet verified / handed back**: ① `github.com` direct links are reset on this box (prefix fetch → http=000,
-  full fetch died at 5.4 MB), so "download from the new URL and compare against the pin" can only be confirmed by
-  the first GitHub runner run; ② `bin/ffmpeg` / `bin/ffprobe` inside the month-end archive were not directly
-  confirmed by this prefix (5.4 MB only covered `doc/`) — we rely on the 09-26 measurement for the same asset
-  family; if they are missing, `_extract_linux_ffmpeg_binaries()` raises `SystemExit` rather than degrading to a
-  silent empty package; ③ Linux full-package size changes with the new tag (126,600,656 B / 108,761,296 B) and
-  must be re-checked against CI artefacts via `scripts/report_bundle_size.py` before touching any platform
-  threshold.
-
-### v4.3.0-dev (2026-09-27) — Second release-chain fault fixed: eight slots of `_PINNED_RUNTIME_SHA256` had been rewritten to the official-signature marker; hashes re-pinned from the official channels
-
-- **Symptom**: the pasted log only carried the last two lines `Run softprops/action-gh-release@v3` /
-  `⚠️ Pattern 'dist/*-lite.zip' does not match any files`. It is read the same way as the entry above
-  (`fail_on_unmatched_files: true` is the only visible signal of a missing artefact and must stay on).
-  Re-computing locally exposed a **second fault in the current working tree that fires even earlier**:
-  eight slot values in `build_exe.py`'s `_PINNED_RUNTIME_SHA256` had been replaced wholesale with
-  `OFFICIAL_SIGNATURE_PIN` (file mtime 07:58, i.e. after the 01:45 wrap-up of the previous entry), which
-  moves the break point of the release chain from the build job forward to the prepare job.
-- **Root cause**: the signature mode only applies to slots whose upstream really publishes no hash *and*
-  which are registered in `_RUNTIME_GPG_SIGNATURES` with a signature URL plus the full 40-hex primary
-  fingerprint — in this repo that is only the four macOS ffmpeg/ffprobe slots. The five node slots
-  (nodejs.org `SHASUMS256.txt`), `windows-x64/ffmpeg` (gyan.dev `.sha256`) and the two Linux ffmpeg slots
-  (BtbN `assets[].digest`) all have officially published values; once turned into the marker,
-  `_is_signature_satisfied` returns False because the slot is unregistered → all three disjuncts of
-  `_slot_is_gated` are False. Two consequences: `scripts/check_runtime_pins.py --strict` returned **rc=1**
-  (the prepare job's fail-closed step goes red) and
-  `tests/test_build_exe.py::test_table_never_declares_signature_mode_without_satisfaction` **failed** —
-  that lock exists precisely to catch this rewrite.
-- **Action**: all eight values re-derived from the **official channels** named in the AGENTS.md /
-  `build_exe.py` maintenance notes, never from locally downloaded self-computed digests:
-  `curl -sS https://nodejs.org/dist/v24.21.0/SHASUMS256.txt` (win-x64 `.zip`, linux/macos `.tar.gz` — the
-  five asset names `_download_nodejs` actually fetches);
-  `curl -sSL https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip.sha256` → `60f46726…47ba`
-  (no drift);
-  `curl -sS https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/tags/autobuild-2026-08-31-13-27`
-  → linux64 `182c1b50…` / linuxarm64 `e2dd447c…` (byte-identical to what measured-evidence.md records; a
-  month-end tag's digest is immutable); plus confirmation that the first `lts` entry of `dist/index.json`
-  is still `v24.21.0` (Krypton). The macOS ffmpeg/ffprobe slots keep the signature mode untouched.
-- **Scope**: `build_exe.py` only (8 pin values + one `[2026-09-27 restore]` note above the table + a
-  per-node-line source asset name). Logic, the URL table, the predicates, tests and workflows untouched.
-- **Verification**: before the change `check_runtime_pins.py --strict` was **rc=1** and
-  `test_table_never_declares_signature_mode_without_satisfaction` FAILED (8 offenders named per slot);
-  afterwards both `--strict` and the structural mode return **rc=0**, `pytest tests/test_build_exe.py`
-  **95 passed**, `python scripts/run_gates.py` **8/8 green rc=0**, full `pytest` **3230 passed /
-  14 skipped** with an empty warnings summary, `basedpyright build_exe.py` 0 errors / 0 warnings / 0 notes,
-  and `black --check` / `isort --check-only` / `py_compile` pass. End-of-line shape unchanged (build_exe.py
-  pure CRLF: 1686 CRLF / 0 bare LF).
-- **Not measured / handed back**: ① "download in full and compare against the pinned value" still only
-  runs on a GitHub runner first — `github.com` direct links are reset on this machine, only
-  `api.github.com`, `nodejs.org` and `gyan.dev` are reachable; ② during this session `build-release.yml`
-  was modified **concurrently** at 08:14 (a new `Verify dist contains both lite & full zips` step and
-  `| tee build_exe.log` on the build command). That file is neither changed nor reviewed by this entry;
-  under `pipefail` the `tee` does not swallow `SystemExit`, but its author should confirm before releasing.
-
-### v4.3.0-dev (2026-09-26) — Release-chain integrity gate gains an "official signature" mode and Linux ffmpeg moves to BtbN: `build-release.yml` prepare goes from rc=1 to rc=0 without loosening SEV-10's fail-closed semantics
-
-- **Background**: the prepare job failed at `Verify runtime binary SHA256 pins (fail-closed)` with
-  `Error: Process completed with exit code 1.`, and the log body is literally the output of
-  `scripts/check_runtime_pins.py --strict`: two in-matrix slots (`linux-x64/ffmpeg`, `macos-arm64/ffmpeg`) still
-  carry the placeholder marker. Located precisely at `.github/workflows/build-release.yml:141-149`; rc=1 comes from
-  the `--strict` branch of the checker. This is not a defect — the gate stopped the release exactly as designed
-  (both the `build_exe.py` pin-table comment and the `AGENTS.md` SEV-10 entry say: if upstream publishes no hash,
-  the release chain stays red).
-- **Why deleting the gate was not the fix**: the pin table does not live in the workflow (source of truth is
-  `build_exe._PINNED_RUNTIME_SHA256`; the YAML only passes values through via `DLR_RUNTIME_SHA256`). And
-  `require_pinned_hashes()` is auto-true under `GITHUB_ACTIONS=true`, so removing the prepare step would only move
-  the same failure into the three build jobs (each after a full pip install, still aborting before any download) —
-  zero artefacts either way.
-- **Chosen route (per the user's "grade integrity criteria by what each upstream actually publishes")**: class ①
-  "release-time runtime binaries" gains a second satisfaction mode **behind the single predicate**
-  `build_exe._slot_is_gated()` — the **official signature mode**: table value = `OFFICIAL_SIGNATURE_PIN`, and the
-  slot must actually be registered in `_RUNTIME_GPG_SIGNATURES` with a 40-hex fingerprint. The marker alone never
-  grants passage (same anti-"easier-to-fill marker = free pass" wall as the 4th class `SOURCE_BUILD_PROVENANCE`).
-  macOS's two slots take this mode (evermeet publishes `/sig`, no hash); the Linux slots moved to BtbN's n9.0-series
-  assets, pinning the `assets[].digest` SHA256 published by `api.github.com`, so no MD5 downgrade mode was needed.
-- **SEV-2221 fixed on the way**: `_download_file()`'s pre-download gate only accepted `_is_pinned()`, while the
-  signature check sat after the download inside the "hash already matched" branch — so a placeholder-valued macOS
-  slot never reached the download and the P-2 verification had **never executed** on the real build path. The gate
-  now accepts both modes, and a signature-mode slot **must** pass verification after download (BADSIG / signer not
-  in the pinned key's primary-or-subkey set / missing gpg or unreachable signature on the release path all
-  `SystemExit`); the observed SHA256 is logged as the audit trail for the rolling alias.
-- **Scope**: `build_exe.py` (new constant + predicates, `_download_file` dispatch, `_unpinned_action` naming the
-  exact reason a signature declaration is unsatisfied, the two Linux rows of `_FFMPEG_DOWNLOAD_URLS`, four pin-table
-  cells, and Linux extraction pulled out into the layout-agnostic `_extract_linux_ffmpeg_binaries()`);
-  `scripts/check_runtime_pins.py` (per-mode `[NOTE]` announcement, judgement still delegated);
-  `tests/test_build_exe.py` (+12 cases: signature-mode truth table, case-insensitive marker, fingerprint shape gate,
-  table/registration stay-in-sync invariant, the SEV-2221 reachability lock, abort-on-bad-signature and
-  abort-when-gpg-missing, unregistered marker must not download, both archive layouts plus abort-on-missing-binary;
-  `_ALLOWED_HOSTS` gains `github.com` and drops `johnvansickle.com`; `_FakeResponse` gains `headers` and drains per
-  read); `tests/test_check_runtime_pins.py` (`_fake_module` exposes the new symbols + 2 routing cases);
-  `.github/workflows/build-release.yml` — **comments only** (4 spots: the `DLR_RUNTIME_SHA256` legend, the prepare
-  step explanation, the source-host list, and the gnupg step noting verification is now the sole criterion);
-  matrix / caching / build / upload / release logic untouched. Plus `AGENTS.md` and
-  `docs/agent-reference/measured-evidence.md` (every retrieval command and reading from this round).
-- **Measured (2026-09-26)**: `evermeet.ca/ffmpeg/getrelease/zip/sig` → 200 / `application/pgp-signature` / 594 B
-  binary OpenPGP packet, landing on `e.deolaha.ca:4242/pub/ffmpeg/ffmpeg-9.0.2.zip.sig`; keyserver lookup of
-  `0x476C4B611A660874` → 200, UID `static FFmpeg binaries (signing key)`, server-echoed fingerprint equal to the
-  pinned value (**a second, independent channel** — this closes R-2's "fingerprint never corroborated");
-  `johnvansickle ...amd64-static.tar.xz.md5` → 200 with the same value as 2026-09-22, `.sha256` → 404; BtbN
-  `linux64-gpl-9.0` = 150,998,508 B / `linuxarm64-gpl-9.0` = 127,417,700 B, and a ranged prefix fetch + `tar -tJf`
-  confirms the binaries sit at `bin/ffmpeg` and `bin/ffprobe`.
-- **Verification**: `scripts/run_gates.py` 8/8 green; full `pytest` **3220 passed, empty warnings summary**;
-  `pytest tests/test_build_exe.py tests/test_check_runtime_pins.py` → 105 passed; `check_runtime_pins.py --strict`
-  went rc=1 → **rc=0**, announcing the two macOS slots as "signature mode" rather than "pinned"; all five mutations
-  reddened (gate omits the new mode / SEV-2221 reverted / marker alone satisfies / `bin/` layout hardcoded /
-  missing binary no longer aborts).
-- **Not yet verified, handed back**: ① the direct `github.com/.../releases/download/...` link resets on this box, so
-  "download in full and compare against the pin" can only be proven by the first GitHub runner run; ② evermeet
-  verification on the real build path executes for the first time in the macOS CI job (the keyserver probe shows
-  `--recv-keys` will resolve, but no local gpg run happened); ③ the Linux full zip grows sharply with the source
-  switch, and `report_bundle_size.py` could not be run locally (no Linux, blocked direct link) — re-check the size
-  gate from CI artefacts before adjusting any threshold. A rolling alias pins *who signed*, not *which version*: a
-  new evermeet build flows through without reddening the gate. That is this mode's inherent boundary; the logged
-  observed SHA256 is what makes it auditable afterwards.
-
-### v4.3.0-dev (2026-09-26) — CI typecheck gate: install a pinned pytest and fix the `[return]` false positive in `tests/test_proto_runtime_compat.py`, removing the "green locally, red in CI" coverage drift (CI / test-only change, zero runtime impact)
-
-- **Background**: the CI `typecheck` job reported `tests/test_proto_runtime_compat.py:33: error: Missing return statement  [return]` (checked 159 files), while a local `mypy` run was fully green on 158 files and could not reproduce it at all.
-- **Root cause**: that job installs only `requirements.txt + mypy` — **no pytest** — so `import pytest` resolves to `Any`, the `NoReturn` annotation of `pytest.fail()` is lost, and mypy concludes that `_declared_protobuf_specifier() -> str` may fall off the end. This is an environment difference, not a code defect; the same cause also meant that every `pytest.*` in `tests/` (fixtures / `MonkeyPatch` / `raises`) was previously **unchecked** — the gate was effectively half-blind. Local reproduction: `mypy --no-site-packages` (hides installed packages and reproduces the exact error; the 5 extra `no-any-return` reports in that mode are over-stripping noise).
-- **Nature of change**: CI workflow + one test helper + `AGENTS.md` only. `src/`, `main.py`, `gui.py`, `web.py`, `web/app.js`, `requirements.txt` / `pyproject.toml` untouched; no dependency added or removed (pytest is installed only inside the typecheck job, never into the runtime list).
-
-**Files touched (grouped by module)**:
-
-> Inventory moved verbatim to [docs/agent-reference/changelog-file-inventories-en.md](docs/agent-reference/changelog-file-inventories-en.md) (entry: v4.3.0-dev (2026-09-26) — CI typecheck gate: install a pinned pytest and fix the `[return]` false positive in `tests/test_proto_runtime_compat.py`, removing the "green locally, red in CI" coverage drift (CI / test-only change, zero runtime impact) | section: Files touched (grouped by module)).
-
-**Verification**: `mypy` (no args) and `mypy --platform linux` both succeed on 158 files (local pytest is 9.1.1, the same version CI now pins); under `mypy --no-site-packages` the original `[return]` is gone and only the 5 stripping-noise reports remain; `basedpyright tests/test_proto_runtime_compat.py` reports 0 errors / 0 warnings / 0 notes; `black --check` unchanged; `pytest tests/test_proto_runtime_compat.py` → 4 passed; `yaml.safe_load` parses `ci.yml` with the expected outputs / steps; line endings of the edited files are unchanged (`ci.yml` pure LF; `AGENTS.md` and the test file pure CRLF).
-
-**Leftover observation**: that CI run reported `checked 159 source files` while the local count under `[tool.mypy].files` is 158 `.py` files — one unaccounted file (likely an extra file on the commit of that run), unrelated to this fix.
-
-### v4.3.0-dev (2026-09-26) — Repo metadata & doc sync: aligned the dependency tables / structure trees / egg-info / ignore lists and cleaned up leftover records of the deleted `weverse_auth` module (metadata & docs only, zero runtime code change)
-
-- **Background**: a full-repo read-through cross-checking the four shared-source families (version / dependencies / structure trees / ignore lists) surfaced several stale spots: the `CODE_WIKI*.md` dependency tables still listed only 16 entries with `starlette` lower bound `>=0.49.1`; the structure trees still listed `src/weverse_auth.py` and `tests/test_weverse_auth.py`, both deleted on 2026-09-23; `DouyinLiveRecorder.egg-info/requires.txt` was missing `h2`/`socksio` (added 2026-09-23); `AGENTS.md` still said "21 runtime dependencies".
-- **Nature of change**: docs / metadata / ignore lists only, plus a regenerated `egg-info`. `src/`, `main.py`, `gui.py`, `web.py` and `web/app.js` untouched; the runtime dependency set is unchanged (23 entries on each side, identical package-name sets).
-
-**Files touched (grouped by module)**:
-
-> Inventory moved verbatim to [docs/agent-reference/changelog-file-inventories-en.md](docs/agent-reference/changelog-file-inventories-en.md) (entry: v4.3.0-dev (2026-09-26) — Repo metadata & doc sync: aligned the dependency tables / structure trees / egg-info / ignore lists and cleaned up leftover records of the deleted `weverse_auth` module (metadata & docs only, zero runtime code change) | section: Files touched (grouped by module)).
-
-**Verification**: `scripts/check_version.py` rc=0 (`pyproject.toml` is the single source of truth; all four consumers read it dynamically); `scripts/check_runtime_pins.py` rc=0; `pytest tests/test_regression_2026_09_22_gates.py tests/test_build_exe.py` all green (including the "requirements.txt and pyproject package-name sets are equal" lock); `pytest tests/test_i18n.py tests/test_i18n_migration.py tests/test_i18n_tr.py tests/test_frontend_*.py` 56 passed; `node --test tests/frontend/*.mjs` green.
-
-**Handed back to the user (needs a decision)**: `config/config.ini` currently has `禁用SSL证书验证的平台(逗号分隔) = 虎牙直播,B站直播,抖音直播`, while the code's enforced set `main.SSL_DISABLE_REQUIRED_PLATFORMS` contains only `虎牙直播` / `B站直播` and the README default is the same two. The extra `抖音直播` entry is a legacy exemption that disables certificate verification for Douyin streams; whether to remove it is left to the user — this pass did not touch a security-relevant toggle on its own.
-
-### Earlier entries (archived)
-
-164 day-by-day development entries from 2026-05-17 to 2026-09-24 were moved verbatim to [code-wiki-history-en.md](docs/changelog/code-wiki-history-en.md) on 2026-09-28; that volume also restores the short `…` / mid-sentence tails left by the previous trimming pass against the `.workbuddy/docold` baseline (exact rule in its header).
-Reason: the changelog alone took 72.9% of this file's characters (472,669 of 648,535). The root document now keeps only the current release window plus this pointer, which is what makes the rest of the document readable.
+> **Rolling archive**: v4.4.0 and every earlier entry has been moved as a whole into [docs/changelog/code-wiki-history-en.md](docs/changelog/code-wiki-history-en.md); this section keeps only the current release cycle.

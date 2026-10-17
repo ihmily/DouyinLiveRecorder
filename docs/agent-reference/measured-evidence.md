@@ -157,6 +157,28 @@ Flextv/PopkonTV/Twitch/LiveMe/Faceit 共 9 个海外平台的解析分支全部�
 
 2026-10-17 GUI 迁移 PySide6 复测（同口径，`build_exe.py --no-zip --no-runtime` 产物，Windows x64 / Python 3.14.8 / PyInstaller 6.x）：**总计 192.46 MB / 370 个文件 → 剪除 Qt 死重后 153.21 MB / 359 个文件**（较 2026-10-03 基线 +61.4MB，落在方案接受的 +50~70MB 区间）。PySide6 聚合 93.24MB/145 文件 → 53.99MB/134 文件；剪除明细（39.25MB，`build_exe.QT_BLOAT_FILES` 11 项）：`opengl32sw.dll` 19.68MB（Mesa 软件 GL，hook 无条件收）、`Qt6Quick` 6.44 + `Qt6Qml` 5.14 + `Qt6QmlModels` 0.97 + `Qt6QmlMeta` 0.15 + `Qt6QmlWorkerScript` 0.08（链入口 = platforminputcontexts 的 `qtvirtualkeyboardplugin.dll`，一并剪）、`Qt6Pdf` 4.41 + `imageformats/qpdf.dll`（本仓不渲染 PDF）、`Qt6OpenGL` 1.90、`Qt6VirtualKeyboard` 0.40。判据：对 `_internal/PySide6/` 全部 dll/pyd 做链接依赖扫描，剪除项零反向引用、删除后无未解析导入；冻结 GUI exe 实跑 9s 存活且窗口标题正常。`Qt6Network`+`QtNetwork.pyd`（约 2.7MB）被 tls 插件链接、刻意保留；Tcl/Tk 5.28MB 仍在（gui.py 顶层 `import tkinter`——迁移期旧版 LiveRecorderGUI 与崩溃兜底弹窗仍保留在本模块，旧版退役后可再评估）。`--strict` 式泄漏检查「未发现」。
 
+## 打包与镜像体积读数（2026-10-17 追加，从根文件外迁）
+
+PySide6 轮子本机解压尺寸 **647.56MB**（`pip show` 口径，镜像默认不装它的直接原因）；`build_exe.py` 打包面记录的两个数：轮子内含 **194MB 的 `Qt6WebEngineCore`**（故禁止 `collect_all('PySide6')`），hook 收完再剪的 Qt 死重清单 **11 项 / 39.25MB**（明细见上一节 2026-10-17 复测段）。compose 的 `gui` 服务与发布链的 slim 镜像差异即由这组读数决定：只跑 `main.py`/`web.py` 的镜像在屏蔽 PySide6 后导入链完整（本机以元路径拦截器实测）。
+
+## 门禁扫描面的文件计数读数（2026-10-17 追加，从根文件外迁）
+
+抬 `black_version` 常量前的同判据实测：**black 26.5.1 与 26.10.1 各跑一次全量 `--check`，两版结论逐字相同**（这才是「抬值只消除版本差、不改变判定」的判据）。当时的文件计数随仓库文件数变动，不是常量：2026-10-17 上午 239 files unchanged → 同日新增 3 个 `tests/*.py` 后 242 → 再加 2 个后 **244 files would be left unchanged**；无参 `mypy` 同期 `241 source files` → **243 source files**（mypy 计 Python 模块数、black 计被扫文件数，两个口径互不相等，引用时不得混用）。
+
+## GUI 右边框裁切的几何读数（2026-10-17 追加，从根文件外迁）
+
+本机实测（默认档、简中）：长提示标签初始 `wraplength=0` 时单行需求宽 **725~820px**；`root.winfo_reqwidth()` 实测 **1248 > geometry 1120**（赤字从内容列右缘开始被裁）；把几何临时压到档位最小宽后读到的内容收缩地板为 **1108~1151px**（随语言/字体变化）；若直接把 `minsize` 抬到需求宽则锁死在 **1389px**，用户再也拖不窄。判据本体（迭代到稳定再读、只抬到地板、clamp 到 `SCREEN_FILL_CEILING`）留在根文件。
+
+## `sync_http` 线程级 Session 复用的收益读数（2026-10-17 追加，从根文件外迁）
+
+改回每次新建 Session 时，单次出站多出「一次 TCP + 一次 TLS 握手」，本机实测 **11.9ms → 1.47ms（约 8×）**。根文件只保留「必须线程级复用」这条约束与该读数的指针；另记该模块当前无生产 importer（`sync_req` 调用点现只剩 tests/），故「已经吃到这个收益」的表述不得再写。
+## 门禁工具版本与 exclude 锚定的历史读数（2026-10-17 追加，从根文件外迁）
+
+**版本面历次对齐读数**（根文件条目：「本地门禁可外推的前提」）：2026-09-30 全量核查 black 26.5.1 / mypy 2.3.1 / pytest 9.1.1 与 CI 同值，isort 本机 9.0.2 对 CI 钉定 9.0.1 差一个补丁位；2026-10-03 经用户批准把 CI 的 `mypy_version` 抬到 2.4.0 与本机同值；2026-10-04 经用户批准把 `isort_version` 抬到 9.0.2 与本机同值；2026-10-17 经用户批准把 CI 的 `black_version` 抬到 26.10.1 与本机同值，并把 `.pre-commit-config.yaml` 的 black / isort 两个 mirror rev 对齐到同一组值。抬 `black_version` 前用 26.5.1 与 26.10.1 各跑一次全量 `black --check`，两版结论逐字相同；同日 `.pre-commit` rev 的存在性经 GitHub API `refs/tags/26.10.1`、`refs/tags/9.0.2` 逐个核实（均 HTTP 200），`pre-commit validate-config` OK，但本机 clone 被代理拦住，所以「钩子真的装起来跑一遍」仍未经验证。
+
+**`[tool.mypy].exclude` 裸名→锚定修复的前后读数**（根文件条目：「exclude 的运行时二进制目录条目必须写目录段锚定形态」）：裸 `"ffmpeg"` 使 `src/ffmpeg_*` 与 `tests/test_ffmpeg_*` 共 10 个文件、裸 `"node"` 使 `src/node_install.py`/`tests/test_node_install.py` 对无参 mypy 失明。锚定修复实测：无参 `mypy` 读数 193→205 source files（+12 恰为逐文件枚举集合），新暴露 8 处存量错误当场修复——4 处恒回 False 的 `__exit__` 由 `-> bool` 改 `-> None`（falsy 语义不变，bool 标注触发 `[exit-return]`）、4 处「lambda 消费 `list.append` 返回值」改嵌套 def（`[func-returns-value]`）；本机 venv mypy 2.4.0 与 CI 钉定 2.3.1（`pip install --target` 临时目录交叉验证）各跑一遍均 `Success: no issues found in 205 source files`。
+[历史注] 修复前的判据形态：新增 `src/ffmpeg_linux_download.py` 前后无参 mypy 同为 189 source files、加一个不含 ffmpeg 的测试文件后为 190；当时的代偿口径「显式传参 `python -m mypy src/ffmpeg_<x>.py tests/test_ffmpeg_<x>.py` + basedpyright」随本次锚定一并退役，「mypy 全绿不得当作 ffmpeg 系文件类型门禁证据」的禁令同步失效。
+
 ## 与根文件的分工
 
 - 根文件保留条目的**约束与结论**并就地链接本文件对应小节；本文件只保留**支撑该结论的原始读数**，一字未改。

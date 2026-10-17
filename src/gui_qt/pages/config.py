@@ -14,7 +14,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, 
 from src.ui_i18n import T, set_text
 
 from ..theme import Palette
-from ..widgets import Card, action_button, card_layout, connect_click
+from ..widgets import Card, action_button, card_layout, connect_click, fixed_font
 
 
 class ConfigPage(QWidget):
@@ -36,10 +36,7 @@ class ConfigPage(QWidget):
         body.addWidget(self.card_title)
 
         self.editor = QPlainTextEdit()
-        mono = QFont("Consolas, Menlo, Courier New, monospace")
-        mono.setStyleHint(QFont.StyleHint.Monospace)
-        mono.setPointSize(11)
-        self.editor.setFont(mono)
+        self.editor.setFont(fixed_font(11))
         # 不换行：URL 行被软换行后再保存，会引入实际不存在的换行符语义。
         self.editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         body.addWidget(self.editor, 1)

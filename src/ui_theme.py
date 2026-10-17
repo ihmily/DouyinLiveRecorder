@@ -31,6 +31,7 @@ from pathlib import Path
 from tkinter import ttk
 from typing import Any, cast, final
 
+from src.config_read import tolerant_config_parser
 from src.ui_scale import (
     CONTROL_PADDING,
     CONTROL_PADDING_COMPACT,
@@ -237,7 +238,7 @@ def load_theme_preference(config_file: str | Path) -> str:
     # 读取 [GUI] gui_theme。返回 "" 表示「未设置」（节/键缺失、值为空、值不在 THEME_IDS），
     # 调用方应回退到外观跟随（CTk appearance mode）而非 DEFAULT_THEME——用户没选过主题时
     # 保持升级前的跟随系统行为，只有显式选择过的偏好才覆盖它。
-    parser = configparser.ConfigParser(interpolation=None)
+    parser = tolerant_config_parser()
     try:
         parser.read(config_file, encoding="utf-8-sig")
     except OSError, configparser.Error:

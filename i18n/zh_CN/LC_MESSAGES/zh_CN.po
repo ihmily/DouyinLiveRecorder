@@ -525,9 +525,6 @@ msgid "开始录制"
 msgstr "开始录制"
 
 #: gui.py
-msgid "停止录制"
-msgstr "停止录制"
-
 #: gui.py
 msgid "运行中"
 msgstr "运行中"
@@ -545,21 +542,12 @@ msgid "彻底退出"
 msgstr "彻底退出"
 
 #: gui.py
-msgid "打开下载目录"
-msgstr "打开下载目录"
-
 #: gui.py
-msgid "高级设置"
-msgstr "高级设置"
-
 #: gui.py
 msgid "URL 配置编辑区"
 msgstr "URL 配置编辑区"
 
 #: gui.py
-msgid "保存 URL 配置"
-msgstr "保存 URL 配置"
-
 #: gui.py
 msgid "重新读取配置"
 msgstr "重新读取配置"
@@ -3693,9 +3681,6 @@ msgstr "每行一个直播链接，支持 # 开头的注释行；外部修改文
 msgid "清空"
 msgstr "清空"
 
-msgid "清空日志"
-msgstr "清空日志"
-
 msgid "画质监控"
 msgstr "画质监控"
 
@@ -3746,9 +3731,6 @@ msgstr "速率"
 
 msgid "配置文件内容 (config/config.ini)"
 msgstr "配置文件内容 (config/config.ini)"
-
-msgid "重新读取"
-msgstr "重新读取"
 
 msgid "降级"
 msgstr "降级"
@@ -3806,3 +3788,6 @@ msgstr "请求体必须是 JSON 对象"
 
 msgid "复制字体文件失败: {name} -> {target} - {type_name}: {err}"
 msgstr "复制字体文件失败: {name} -> {target} - {type_name}: {err}"
+
+msgid "config.ini 存在重复配置项，已按最后一次取值读取: {detail}"
+msgstr "config.ini 存在重复配置项，已按最后一次取值读取: {detail}"

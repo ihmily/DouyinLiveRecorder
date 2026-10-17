@@ -117,6 +117,7 @@ from src.config_io import (
     update_anchor_name,
     update_file,
 )
+from src.config_read import tolerant_config_parser, warn_duplicate_options
 from src.ffmpeg_install import check_ffmpeg, ffmpeg_path, should_prepend_bundled_ffmpeg_dir
 
 # ---- 重构：以下函数已抽离至 src 子模块，此处重新导出以保持 main.<name> 命名空间兼容 ----
@@ -5002,10 +5003,16 @@ t3.start()
 # options.get 的兜底实参，无告警无日志——实测致 8 项配置生效值漂移，其中
 # 「是否跳过代理检测 = true」被判为 False 后 global_proxy=False，9 个海外平台的解析分支
 # 直接走 else，100% 无法录制。
-config: configparser.RawConfigParser = configparser.RawConfigParser()
+config: configparser.RawConfigParser = tolerant_config_parser()
 
 
 _config_read_result = config.read(config_file, encoding=text_encoding)
+
+# 重复键点名（2026-10-17 事故：同节两行同名键让 strict=True 的默认解析器抛
+# DuplicateOptionError，上方那次 config.read() 正是「录制核心 import 即崩」的第一现场）。
+# 容错读取把重复项折叠成最后一次取值，必须把折叠了哪几处说出来，
+# 否则用户只看到「某个设置没生效」而无从归因。
+warn_duplicate_options(config_file, text_encoding)
 
 
 # 把 config.ini 重新解析进一个**全新**的 RawConfigParser 并整体替换模块全局（MID-09）。
@@ -5018,7 +5025,9 @@ _config_read_result = config.read(config_file, encoding=text_encoding)
 # read_config_value 的补写路径可重入安全）。
 def _hot_reload_config() -> bool:
     global config
-    fresh = configparser.RawConfigParser()
+    # 容错解析器（同上）：热加载此前遇到重复键会走 except 分支「保留旧配置」，
+    # 于是用户在配置文件里加了一行也永远读不到、且只在日志里留一行泛化告警。
+    fresh = tolerant_config_parser()
     try:
         with file_update_lock:
             with open(config_file, "r", encoding=text_encoding) as fp:
@@ -5026,6 +5035,7 @@ def _hot_reload_config() -> bool:
             if not fresh.sections():
                 return False
             config = fresh
+        warn_duplicate_options(config_file, text_encoding)
     except (OSError, UnicodeDecodeError, configparser.Error) as e:
         # 只记一行、保留旧配置：热加载失败绝不能中断录制主循环，也不得清空内存态
         # （沿用目录既有 msgid，异常类型作为实参预先求值传入，避免为本行日志新增四语条目）

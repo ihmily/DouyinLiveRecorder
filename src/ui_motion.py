@@ -23,6 +23,7 @@ import tkinter as tk
 from collections.abc import Callable
 from typing import Final, final
 
+from src.config_read import tolerant_config_parser
 from src.web_config import update_or_append_config_line
 
 # 动效等级（持久化值即 id 原文，必须是安全的配置值：无空格无分隔符）。
@@ -116,7 +117,7 @@ def effective_motion(motion_id: str, *, system_animations: bool | None = None) -
 def load_motion_preference(config_file: str) -> str:
     # 读取 [GUI] gui_motion。返回 "" 表示未设置（节/键缺失、空值、非法值），
     # 调用方按 FOLLOW_SYSTEM_MOTION_ID 处理。
-    parser = configparser.ConfigParser(interpolation=None)
+    parser = tolerant_config_parser()
     try:
         parser.read(config_file, encoding="utf-8-sig")
     except OSError, configparser.Error:

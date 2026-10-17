@@ -10,10 +10,19 @@
 # 违反不报 cross-thread warning 而是直接 UB/崩溃），跨线程一律走 Signal。
 from __future__ import annotations
 
-from typing import Callable
+from typing import Callable, Final
 
 from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QSize, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QPainter, QResizeEvent, QSyntaxHighlighter, QTextCharFormat, QTextDocument
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QFontDatabase,
+    QPainter,
+    QResizeEvent,
+    QSyntaxHighlighter,
+    QTextCharFormat,
+    QTextDocument,
+)
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -288,6 +297,39 @@ class _LogHighlighter(QSyntaxHighlighter):
                 index = text.find(marker, index + len(marker))
 
 
+# 等宽字体工厂：QFont 的族名位只接受**单个** family，把 CSS 式的
+# "Consolas, Menlo, Courier New, monospace" 整串塞进去等于请求一个不存在的族名。
+# [实测 2026-10-17] 装了 Consolas 的机器上 Qt 侥幸命中（QFontInfo 回读 'Consolas'）；
+# 没装的那台机器上，Qt 按 styleHint=Monospace（枚举值 7，与用户日志里的 styleHint=7 对上）
+# 落进它遗留别名表里的 "Terminal"，于是一轮构造打出两条告警：
+#   qt.qpa.fonts: DirectWrite: CreateFontFaceFromHDC() failed ... QFontDef(Family="Terminal", ...)
+#   QFont::setPointSize: Point size <= 0 (-1)
+# 唯一写法是按候选顺序取第一个本机真实存在的族名；候选全缺时不再猜名字，交回平台的
+# 系统固定宽度字体（QFontDatabase.FixedFont 保证本机可用）。
+# styleHint(Monospace) 只在候选命中后设置，作为族名匹配的最后一道校正。
+# point_size 留 None 的站点是刻意不设定值、继续继承 QSS 的 px 字号（缩放档位要吃它）。
+_FIXED_FONT_CANDIDATES: Final[tuple[str, ...]] = (
+    "Consolas",
+    "Menlo",
+    "DejaVu Sans Mono",
+    "Liberation Mono",
+    "Courier New",
+)
+
+
+def fixed_font(point_size: int | None = None) -> QFont:
+    installed = {name.casefold() for name in QFontDatabase.families()}
+    matched = next((name for name in _FIXED_FONT_CANDIDATES if name.casefold() in installed), "")
+    if matched:
+        font = QFont(matched)
+        font.setStyleHint(QFont.StyleHint.Monospace)
+    else:
+        font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+    if point_size is not None:
+        font.setPointSize(point_size)
+    return font
+
+
 class TerminalText(QPlainTextEdit):
     # 终端只读框：等宽字 + 终端配色 + 行级着色 + 上限行自动截断。
     #
@@ -300,10 +342,7 @@ class TerminalText(QPlainTextEdit):
         self.setReadOnly(True)
         self.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.setMaximumBlockCount(1000)
-        font = QFont("Consolas, Menlo, Courier New, monospace")
-        font.setStyleHint(QFont.StyleHint.Monospace)
-        font.setPointSize(11)
-        self.setFont(font)
+        self.setFont(fixed_font(11))
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
     def apply_highlighter(self, palette: Palette) -> None:

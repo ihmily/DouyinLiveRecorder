@@ -8,7 +8,6 @@
 # 本轮的分法是「单窗口协调器 + 纯 widget 页面」。
 from __future__ import annotations
 
-import configparser
 import os
 import subprocess
 import sys
@@ -36,6 +35,7 @@ from PySide6.QtWidgets import (
 
 import i18n
 from src.config_bool import parse_config_bool
+from src.config_read import tolerant_config_parser, warn_duplicate_options
 from src.logger import logger
 from src.ui_fonts import (
     SUPPORTED_FONT_SUFFIXES,
@@ -795,15 +795,12 @@ class MainWindow(QMainWindow):
             file_mtime = os.path.getmtime(self.main_config_file)
             if self._status_cache is not None and file_mtime == self._status_cache_mtime:
                 return self._status_cache
-            config = configparser.ConfigParser(interpolation=None)
-
-            # 键名保持原样（不转小写）以匹配中文配置节名；mypy 不允许直接给
-            # optionxform 赋值，用 setattr 绕过该误报。
-            def _preserve_case(optionstr: str) -> str:
-                return optionstr
-
-            setattr(config, "optionxform", _preserve_case)
+            config = tolerant_config_parser(preserve_case=True)
             config.read(self.main_config_file, encoding="utf-8-sig")
+            # 重复键容错读取后必须点名（同进程内按 路径+mtime 去重，不会每 10s 刷一条）：
+            # 此前正是这条链路把 DuplicateOptionError 打成「状态栏读不到配置、用默认值」的
+            # 静默降级，用户看不出配置坏在哪一行。
+            warn_duplicate_options(self.main_config_file)
             if "录制设置" in config:
                 raw_interval = config["录制设置"].get("循环时间(秒)", "120")
                 interval = i18n.tr("{interval}秒", interval=raw_interval)
@@ -828,7 +825,7 @@ class MainWindow(QMainWindow):
         # 只读 [录制设置] 一节：GUI 的偏好也写在这一节里，
         # 缺文件/缺节/缺键一律回落空串（调用方各自有默认值）。
         try:
-            config = configparser.ConfigParser(interpolation=None)
+            config = tolerant_config_parser()
             config.read(self.main_config_file, encoding="utf-8-sig")
         except Exception:
             return ""

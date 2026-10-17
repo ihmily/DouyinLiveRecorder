@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 import i18n
 
 from .shared import config_change_verdict, normalize_editor_text, read_config_snapshot, save_text_to_file
+from .widgets import fixed_font
 
 # 5s 一次：录制进程写 config.ini（补键 / 回写凭据）不是高频动作，
 # 再密就是纯空转，再疏则会让「外部已改」的提示迟到到用户已经改完。
@@ -65,9 +66,8 @@ class AdvancedSettingsDialog(QDialog):
 
         self.editor = QPlainTextEdit()
         self.editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        mono = QFont("Consolas, Menlo, Courier New, monospace")
-        mono.setStyleHint(QFont.StyleHint.Monospace)
-        self.editor.setFont(mono)
+        # 刻意不传 point_size：此处原本就没有设定值，字号继续由 QSS 的 px 供给（缩放档位要吃它）
+        self.editor.setFont(fixed_font())
         root.addWidget(self.editor, 1)
 
         btn_row = QHBoxLayout()

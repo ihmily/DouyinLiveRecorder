@@ -11,6 +11,8 @@
 #   · danmaku_monitor：逐事件防护（一条脏事件不得吃掉同批其余事件）+ stop_event 随线程新建；
 #   · recorder：session_id 迟到回调、_stopping 复位早于会话校验、停止/退出共用单飞闸门；
 #   · settings_dialog：外部改动后「有未保存编辑」与「无编辑」走两条不同路径。
+#   · widgets.fixed_font：等宽族名只能是**单个** family、按候选取本机第一个命中的，
+#     候选全缺时交回系统固定宽度字体（2026-10-17 用户日志的两条字体告警即出自旧写法）。
 
 import json
 import os
@@ -29,6 +31,7 @@ pytest.importorskip("PySide6", reason="PySide6 未安装时跳过 Qt 窗口层�
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtGui import QFont, QFontDatabase  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
 import i18n  # noqa: E402
@@ -38,6 +41,7 @@ from src.gui_qt import shared  # noqa: E402
 from src.gui_qt.danmaku_monitor import DanmakuMonitor  # noqa: E402
 from src.gui_qt.recorder import RecorderController  # noqa: E402
 from src.gui_qt.settings_dialog import AdvancedSettingsDialog  # noqa: E402
+from src.gui_qt.widgets import fixed_font  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -550,3 +554,42 @@ def test_crash_sink_writes_file_and_does_not_raise(monkeypatch: pytest.MonkeyPat
     assert os.path.isfile(log_path)
     with open(log_path, "r", encoding="utf-8") as f:
         assert "boom-for-crash-sink" in f.read()
+
+
+# ─── widgets.fixed_font：等宽族名 ─────────────────────────────────────────
+# 判据一律走「打桩后的 QFontDatabase」：真实字体表随机变化（装了 Consolas 的机器上旧写法
+# QFont("Consolas, Menlo, Courier New, monospace") 侥幸命中，没装的那台机器上 Qt 按
+# styleHint=Monospace（枚举值 7，与用户日志里 styleHint=7 对上）落进遗留别名表里的
+# "Terminal"，打出 DirectWrite 创建失败 + QFont::setPointSize: Point size <= 0 (-1) 两条告警）。
+# 不打桩的用例在 CI 上既可能全绿也可能全红，钉不住任何东西。
+
+
+def test_fixed_font_uses_one_family_and_first_hit(qt_app: QApplication, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(QFontDatabase, "families", staticmethod(lambda: ["Menlo", "Noto Mono"]))
+    font = fixed_font(11)
+    # 本机没有 Consolas 才轮到候选表第二项 Menlo；族名位始终是**单个** family
+    assert font.family() == "Menlo"
+    assert "," not in font.family()
+    assert font.styleHint() == QFont.StyleHint.Monospace
+    assert font.pointSize() == 11
+
+
+def test_fixed_font_family_match_is_case_insensitive(qt_app: QApplication, monkeypatch: pytest.MonkeyPatch) -> None:
+    # 字体表里的大小写随平台/字体而异，匹配须忽略大小写，而返回的仍是候选表里的规范拼写
+    monkeypatch.setattr(QFontDatabase, "families", staticmethod(lambda: ["consolas"]))
+    assert fixed_font().family() == "Consolas"
+    # 不传 point_size 的站点刻意不设值：字号继续跟着 app/QSS 走（界面缩放档位要吃这条）。
+    # 判据与「同族名、未经工厂处理」的裸 QFont 对照，避免把 Qt 自身的默认值写进断言里
+    # （那会随平台字体表变化而红）。
+    assert fixed_font().pointSize() == QFont("Consolas").pointSize()
+    assert fixed_font(11).pointSize() == 11
+
+
+def test_fixed_font_falls_back_to_system_fixed_font(qt_app: QApplication, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(QFontDatabase, "families", staticmethod(lambda: ["Zzz Not A Match"]))
+    marker = QFont("DlrMarkerMono")
+    monkeypatch.setattr(QFontDatabase, "systemFont", staticmethod(lambda _font: marker))
+    got = fixed_font(9)
+    # 候选全缺时不再猜名字（旧写法正是在这一步落到 "Terminal"），改交平台的系统固定宽度字体
+    assert got.family() == "DlrMarkerMono"
+    assert got.pointSize() == 9

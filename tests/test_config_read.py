@@ -1,0 +1,182 @@
+# tests/test_config_read.py — src/config_read.py 的回归锁：重复键容错读取与「点名一次」告警。
+#
+# 锁什么（2026-10-17 现场：config.ini 的 [录制设置] 内落出两行同名键）：
+#   · 反向见证——strict=True 的默认解析器在同一份文件上确实**整份读不出**（证明本文件真的
+#     在测那条故障形态，而不是测一个造不出来的场景）；
+#   · tolerant_config_parser 读出全部其余键、重复键按「最后一次取值」；
+#   · find_duplicate_options 点名到 节/键/行号，且「注释行」「跨节同名键」两种形态不误报；
+#   · warn_duplicate_options 同一文件形态只落一条 warning（状态链每 10s 读一次配置，
+#     不去重会把同一条刷满日志），文件一改写就重新点名；缓存封顶后仍能继续点名；
+#   · preserve_case 的键名形态与被它替换掉的 GUI 侧 optionxform 闭包一致；
+#   · main.py 的模块级 config 必须是容错解析器（那条裸读是「录制核心 import 即崩」的第一现场）。
+#
+# 全部写入 tmp_path，绝不碰仓库里的 config/config.ini（那是已跟踪的脱敏基线模板）。
+
+import os
+import time
+from pathlib import Path
+
+import pytest
+from loguru import logger
+from pytest import MonkeyPatch
+
+import main  # noqa: E402  (config_read 不依赖 main，但本文件要核对 main 的模块级解析器接线)
+from src import config_read
+from src.config_read import find_duplicate_options, tolerant_config_parser, warn_duplicate_options
+
+# 一份「同节内重复 + 注释里出现同名键 + 跨节同名键」三态并存的样本：
+# 第 4 行与第 7 行是 [录制设置] 内的真重复；第 6 行是注释（不得误报）；
+# [推送配置] 里的同名键属于另一节（不得误报）。
+_DUP_INI = """[录制设置]
+language =
+循环时间(秒) = 60
+是否启动时清理陈旧字节码缓存(是/否) = 否
+视频保存格式ts|mkv|flv|mp4|mp3音频|m4a音频 = flv
+# 手工抄写时最容易踩的形态：把键名连同说明再写一遍 —— 注释不得参与重复判定
+是否启动时清理陈旧字节码缓存(是/否) = 是
+
+[推送配置]
+是否启动时清理陈旧字节码缓存(是/否) = 是
+"""
+
+_CLEAN_INI = "[录制设置]\n循环时间(秒) = 60\n\n[推送配置]\nx = 1\n"
+
+
+@pytest.fixture
+def dup_ini(tmp_path: Path) -> Path:
+    path = tmp_path / "config.ini"
+    path.write_text(_DUP_INI, encoding="utf-8")
+    return path
+
+
+@pytest.fixture(autouse=True)
+def _isolate_warn_cache(monkeypatch: MonkeyPatch) -> None:
+    # 点名记忆集是模块级全局：不隔离的话用例之间会互相吃掉告警（第 2 条用例先看同一份形态
+    # 就把第 1 条的告警判成「已报过」）。
+    monkeypatch.setattr(config_read, "_DUP_WARNED", set())
+
+
+def _capture_warnings() -> tuple[list[str], int]:
+    # 返回 (消息列表, handler id)；调用方负责在 finally 里 logger.remove。
+    captured: list[str] = []
+    handler_id = logger.add(lambda msg: captured.append(str(msg)), level="WARNING")
+    return captured, handler_id
+
+
+def test_default_strict_parser_cannot_read_any_key(dup_ini: Path) -> None:
+    # 反向见证：旧形态（configparser 默认 strict=True）在重复键上抛 DuplicateOptionError，
+    # 且**一个键都读不出来**——这正是录制核心 import 即崩的成因。删掉容错读取即本条转红。
+    import configparser
+
+    strict = configparser.ConfigParser(interpolation=None)
+    with pytest.raises(configparser.DuplicateOptionError) as excinfo:
+        strict.read(str(dup_ini), encoding="utf-8-sig")
+    assert excinfo.value.section == "录制设置"
+    assert excinfo.value.option == "是否启动时清理陈旧字节码缓存(是/否)"
+    assert excinfo.value.lineno == 7
+
+
+def test_tolerant_parser_reads_every_key_and_keeps_last_value(dup_ini: Path) -> None:
+    parser = tolerant_config_parser()
+    parser.read(str(dup_ini), encoding="utf-8-sig")
+    assert parser.get("录制设置", "循环时间(秒)") == "60"
+    assert parser.get("录制设置", "视频保存格式ts|mkv|flv|mp4|mp3音频|m4a音频") == "flv"
+    # 重复键取最后一次（与 configparser 内存态的 dict 覆盖语义一致）
+    assert parser.get("录制设置", "是否启动时清理陈旧字节码缓存(是/否)") == "是"
+    # 跨节同名键不受影响：另一节里的它仍是它自己
+    assert parser.get("推送配置", "是否启动时清理陈旧字节码缓存(是/否)") == "是"
+
+
+def test_find_duplicate_options_names_section_option_and_lines(dup_ini: Path) -> None:
+    found = find_duplicate_options(dup_ini.read_text(encoding="utf-8"))
+    # 只有一处真重复：注释行与 [推送配置] 里的那两行都不算
+    assert found == [("录制设置", "是否启动时清理陈旧字节码缓存(是/否)", (4, 7))]
+
+
+def test_find_duplicate_options_accepts_colon_delimiter_and_ignores_case() -> None:
+    # configparser 的默认 delimiters 是 ('=', ':')，默认 optionxform 会转小写——
+    # 扫描器的判据必须与「解析器实际看到的键集合」一致，否则会漏报真重复、误报假重复。
+    assert find_duplicate_options("[s]\nLanguage = zh\nlanguage: en\n") == [("s", "Language", (2, 3))]
+
+
+def test_find_duplicate_options_is_empty_for_clean_file() -> None:
+    assert find_duplicate_options(_CLEAN_INI) == []
+
+
+def test_warn_duplicate_options_logs_once_per_file_version(dup_ini: Path) -> None:
+    captured, handler_id = _capture_warnings()
+    try:
+        assert warn_duplicate_options(dup_ini) == 1
+        assert warn_duplicate_options(dup_ini) == 1
+        assert len(captured) == 1, "同一文件形态只允许落一条（状态链每 10s 读一次）"
+        assert "录制设置" in captured[0]
+        assert "是否启动时清理陈旧字节码缓存(是/否)" in captured[0]
+        assert "4, 7" in captured[0], captured[0]
+
+        # 文件被改写（mtime 变）→ 必须重新点名一次，否则用户改完配置看不到最新形态
+        future = time.time() + 5
+        os.utime(str(dup_ini), (future, future))
+        assert warn_duplicate_options(dup_ini) == 1
+        assert len(captured) == 2
+    finally:
+        logger.remove(handler_id)
+
+
+def test_warn_duplicate_options_stays_silent_and_zero_when_clean(tmp_path: Path) -> None:
+    clean = tmp_path / "config.ini"
+    clean.write_text(_CLEAN_INI, encoding="utf-8")
+    captured, handler_id = _capture_warnings()
+    try:
+        assert warn_duplicate_options(clean) == 0
+        # 读不出内容（文件不存在）也返回 0 且不抛：解析结论由调用方的读取路径给出
+        assert warn_duplicate_options(tmp_path / "missing.ini") == 0
+    finally:
+        logger.remove(handler_id)
+    assert captured == []
+
+
+def test_warn_duplicate_options_capped_cache_still_reports(dup_ini: Path, monkeypatch: MonkeyPatch) -> None:
+    # 缓存被填满时不得「因为放不下而不再点名」——清空重记才是本函数的语义
+    monkeypatch.setattr(
+        config_read, "_DUP_WARNED", {(f"stale-{i}.ini", 1.0) for i in range(config_read._DUP_WARN_CACHE_MAX)}
+    )
+    captured, handler_id = _capture_warnings()
+    try:
+        assert warn_duplicate_options(dup_ini) == 1
+    finally:
+        logger.remove(handler_id)
+    assert len(captured) == 1
+    assert len(config_read._DUP_WARNED) == 1
+
+
+def test_tolerant_parser_preserve_case_keeps_key_case(tmp_path: Path) -> None:
+    # GUI 侧此前用本地闭包把 optionxform 置为恒等；工厂必须复刻同一形态，
+    # 否则 [GUI] 里的大小写混排键会在换实现后悄悄读不到。
+    path = tmp_path / "config.ini"
+    path.write_text("[GUI]\nGui_Font = ABC\nlanguage = en_US\n", encoding="utf-8")
+    preserved = tolerant_config_parser(preserve_case=True)
+    preserved.read(str(path), encoding="utf-8-sig")
+    assert preserved.has_option("GUI", "Gui_Font")
+    assert not preserved.has_option("GUI", "gui_font")
+
+    lowered = tolerant_config_parser()
+    lowered.read(str(path), encoding="utf-8-sig")
+    assert lowered.has_option("GUI", "gui_font")
+
+
+def test_tolerant_parser_disables_interpolation(tmp_path: Path) -> None:
+    # 配置值里出现 % 是常见形态（百分比、脚本模板）；插值开启时 read 直接抛
+    # InterpolationSyntaxError，与本次要消灭的「整份读不出」同族。
+    path = tmp_path / "config.ini"
+    path.write_text("[录制设置]\n自定义脚本执行命令 = echo 100%%done\n", encoding="utf-8")
+    parser = tolerant_config_parser()
+    parser.read(str(path), encoding="utf-8-sig")
+    assert parser.get("录制设置", "自定义脚本执行命令") == "echo 100%%done"
+
+
+def test_main_module_level_parser_is_duplicate_tolerant() -> None:
+    # 接线锁：main.py 的模块级 config 必须是容错解析器。configparser 把 strict 实参只存成
+    # 私有字段 _strict（默认解析器为 True、strict=False 构造出来的为 False），没有公开读回入口；
+    # 该字段若随 CPython 改名，本条以 AttributeError 当场失败，不会静默放行。
+    # 判据走 getattr 三参形态：_strict 是 CPython 私有字段，mypy 在公开类型上看不见
+    assert getattr(main.config, "_strict", None) is False, "main.py 的模块级 config 必须是容错解析器"

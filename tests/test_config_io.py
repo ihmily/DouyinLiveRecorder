@@ -15,6 +15,7 @@ from pytest import MonkeyPatch
 
 import main  # noqa: E402  (config_io 通过 import main 惰性读取模块全局，须先加载)
 from src import config_io  # noqa: E402
+from src.config_read import tolerant_config_parser  # noqa: E402
 
 
 class _RecordingLock:
@@ -153,6 +154,60 @@ class TestDeleteLineWriteContract:
         assert config_io.delete_line(str(target), "https://a.example/1\n") is True
         # 快照更新为「已落盘内容」，供 update_file 的异常恢复基线使用
         assert main.ini_URL_content == "https://a.example/2\r\n"
+
+
+class TestMissingKeyWritebackIdempotency:
+    # 「缺键补写必须幂等」的最小自证（AGENTS.md 已知坑，2026-10-17 事故）：
+    # 同一份文件连续跑两轮「读取 + 缺键补写」，该键出现次数必须仍为 1——一旦落出两行同名键，
+    # strict=True 的解析器在**下一次读取**就抛 DuplicateOptionError，整份配置失效、
+    # 录制核心 import 即崩（现场：config.ini 的 [录制设置] 内同名键同时出现在第 5 与第 44 行）。
+    _KEY = "是否启动时清理陈旧字节码缓存(是/否)"
+
+    def _assert_strict_readable(self, target: Path) -> None:
+        # 写回产物必须仍能被「默认 strict=True 的解析器」整份读出。容错读取是我们的兜底，
+        # 不是把损坏形态留给外部编辑器/其它程序的理由——而它们一律按 strict 判。
+        # 变异验证实测：只数「该键出现几次」挡不住「整节被重复追加」（补写改成追加式写盘时
+        # 键计数仍为 1），这条才是那条形态的判据。
+        import configparser
+
+        strict = configparser.ConfigParser(interpolation=None)
+        strict.read(str(target), encoding=main.text_encoding)
+        assert strict.get("录制设置", self._KEY) in ("是", "否")
+
+    def test_two_rounds_of_bool_writeback_leave_exactly_one_line(
+        self, tmp_path: Path, monkeypatch: MonkeyPatch
+    ) -> None:
+        target = tmp_path / "config.ini"
+        _write_lines(target, ["[录制设置]\n", "循环时间(秒) = 60\n"])
+        monkeypatch.setattr(main, "config_file", str(target))
+        parser = tolerant_config_parser()
+        parser.read(str(target), encoding=main.text_encoding)
+
+        for _ in range(2):
+            assert config_io.read_config_bool(parser, "录制设置", self._KEY, True) is True
+
+        written = target.read_text(encoding="utf-8-sig")
+        assert written.count(self._KEY) == 1, written
+        # 补写后的文件必须能被「下一次读取」原样解析——那才是当时真正的崩口
+        self._assert_strict_readable(target)
+        again = tolerant_config_parser()
+        again.read(str(target), encoding=main.text_encoding)
+        assert again.get("录制设置", self._KEY) == "是"
+
+    def test_existing_key_is_never_appended_again(self, tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+        # 键已存在时 read_config_bool 只读取、不得再补写一次（补写的唯一判据是 NoOptionError）；
+        # 用户显式写的「否」也不能被默认值覆盖。
+        target = tmp_path / "config.ini"
+        _write_lines(target, ["[录制设置]\n", f"{self._KEY} = 否\n"])
+        monkeypatch.setattr(main, "config_file", str(target))
+        parser = tolerant_config_parser()
+        parser.read(str(target), encoding=main.text_encoding)
+
+        for _ in range(2):
+            assert config_io.read_config_bool(parser, "录制设置", self._KEY, True) is False
+
+        assert target.read_text(encoding="utf-8-sig").count(self._KEY) == 1
+        self._assert_strict_readable(target)
 
 
 if __name__ == "__main__":  # pragma: no cover - 仅手工单文件调试入口

@@ -30,6 +30,7 @@ from tkinter import font as tkfont
 from typing import Any, Final
 
 import i18n
+from src.config_read import tolerant_config_parser
 from src.logger import logger
 from src.web_config import update_or_append_config_line
 
@@ -81,9 +82,7 @@ _MISSING_FAMILY_PROBE: Final[str] = "__dlr_missing_family_probe__"
 # 容错口径同 ui_theme.load_theme_preference：配置损坏绝不能让 GUI 起不来。
 def load_font_preference(config_file: str | Path) -> str:
     try:
-        import configparser
-
-        cfg = configparser.ConfigParser(interpolation=None)
+        cfg = tolerant_config_parser()
         cfg.read(config_file, encoding="utf-8-sig")
         if cfg.has_option(GUI_SECTION, FONT_KEY):
             return cfg.get(GUI_SECTION, FONT_KEY, fallback="").strip()
@@ -95,9 +94,7 @@ def load_font_preference(config_file: str | Path) -> str:
 # 读取自定义字体文件路径（空串 = 只用系统字体）。
 def load_font_file_preference(config_file: str | Path) -> str:
     try:
-        import configparser
-
-        cfg = configparser.ConfigParser(interpolation=None)
+        cfg = tolerant_config_parser()
         cfg.read(config_file, encoding="utf-8-sig")
         if cfg.has_option(GUI_SECTION, FONT_FILE_KEY):
             return cfg.get(GUI_SECTION, FONT_FILE_KEY, fallback="").strip()

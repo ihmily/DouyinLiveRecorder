@@ -24,6 +24,7 @@ import configparser
 import math
 from typing import Final, final
 
+from src.config_read import tolerant_config_parser
 from src.web_config import update_or_append_config_line
 
 # ─── 字号体系（逻辑像素，100% 档位的基准） ────────────────────────────────
@@ -169,7 +170,7 @@ def load_scale_preference(config_file: str) -> str:
     # 读取 [GUI] gui_scale。返回 "" 表示「未设置」（节/键缺失、值为空、值非法），
     # 调用方按「自动」处理——用户没选过时保持按屏幕现算，而不是钉死某个百分数
     # （换台分辨率不同的机器就再也不对了）。
-    parser = configparser.ConfigParser(interpolation=None)
+    parser = tolerant_config_parser()
     try:
         parser.read(config_file, encoding="utf-8-sig")
     except OSError, configparser.Error:

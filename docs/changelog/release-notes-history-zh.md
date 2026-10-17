@@ -395,3 +395,72 @@
 ### v4.0.0 (2024-07-13)
 
 - 新增映客直播录制
+
+---
+
+> 以下条目由根文档滚动归档迁入（2026-10-18），内容与迁入前逐字一致。
+
+### v4.2.0 (2026-09-12 ~ 2026-09-15) — 代码审查全量修复（~120 项·安全/并发/平台）+ 斗鱼「只出 SRT 无视频」根因定位与 HLS 分片层假绿探针 + 选源加固 + start_record 命令构造/平台分派单一定义点重构 + 仓库元数据同源同步与四语本地化一致性修复 + mypy 门禁扩面（范围下沉 `[tool.mypy].files`）与 6 处类型缺陷修复 + Linux CI 只读用例修复
+
+> 本版本（v4.2.0，2026-09-12 ~ 09-15）为一次覆盖安全、并发、平台层与门禁的综合性修复与加固周期。核心修复：① 定位并修复斗鱼等平台「仅生成弹幕 SRT、无视频文件」——HLS 播放列表层恒返 200，但边缘节点媒体分片全 404，ffmpeg 零媒体段产出；弹幕链路仅依赖 `room_id` 与视频解耦，故 SRT 照常写出。新增 HLS 分片层探针 `_probe_hls_segment`（把「列表 200」与「可录制」解耦）与三方向选源加固（配置兜底 / 观测增强 / 同源 FLV 候选回退）。② 收敛 `start_record` 五路 ffmpeg 命令构造为单一定义点、平台分派由 53 层 `elif` 改为分发表驱动，行为零差异（黄金快照 + 分派快照逐字节/逐项比对）。③ 完成 `CODE_REVIEW_FIX_1`（F-01~F-25，22 项落地 + 3 项暂缓）与 09-12 代码审查全量修复（约 120 项：SHA256 钉定、原子写、解压炸弹防护、singleflight 并发、斗鱼粘包 / B站看门狗 / Shopee 等平台修复）。④ 仓库元数据（pyproject 排除目录 / .gitignore / .dockerignore / AGENTS.md）同源同步，并修复 en_GB 目录 21 条误填繁体中文，四语目录重校准至 594 条一致。⑤ mypy 门禁范围下沉到 `pyproject.toml [tool.mypy].files` 单一事实源（`src/` → 全量代码含根入口 / `build_exe.py` / `scripts` / `tests`），并修复 6 处此前长期逃逸的类型缺陷——其中 `gui.py` 子进程自然结束后的 UI 收尾路径**必抛 `NameError`**（除该收尾路径外无功能行为改动）；另修复 Linux CI 上「只读配置」用例因原子写 `os.replace` 只校验目录权限而失效的问题。**无破坏性变更**（运行时语义全部保持）。详细根因与验证见 [CODE_WIKI.md](CODE_WIKI.md)。
+
+**🐛 修复的问题**
+- **斗鱼「只出 SRT、无视频」根因定位 + HLS 分片层假绿探针**：HLS 播放列表层恒返 200，但媒体分片落在另一边缘节点且全 404 → ffmpeg 拉到零媒体段、零字节产出；弹幕链路仅依赖 `room_id` 与视频解耦，SRT 照常写出。新增 `_probe_hls_segment()`（列表层 GET → 跟随 master 变体 → 对**末行分片**发 `Range bytes=0-0` 探测；分片 4xx/5xx 明确拒→不可达的「假绿」，200/206→可达；解析不出分片时**保守放行**），接入 `_validate_stream_url`，把「列表 200」与「可录制」解耦。
+- **选源加固（配置兜底 / 观测增强 / 同源候选）**：`_hls_selection_config()`（经 `getattr(main, "hls_collection_enabled"/"hls_collection_exclude_platforms", 默认)` 读取，默认可达、容忍逗号字符串、缺失/类型异常不再 `AttributeError` 中断选源）；`_same_origin_flv()`（按 `?` 前路径比对、`.m3u8`↔`.flv` 互认，识别同 token FLV 供 HLS 分片全死后回退）；`_log_source_choice()`（「选源结论」单行日志，覆盖回退/命中/无可用源三路径）。
+- **代码审查全量修复（09-12，约 120 项）**：H-1 SHA256 钉定（`ffmpeg_install`/`node_install` `_sha256_of_file`/`_check_or_record_zip_sha256`，蓝奏云 `FFMPEG_LANZOU_SHA256`）；C-1 Web 黑名单绕过（`req.key.strip()` + `_DANGEROUS_CONFIG_KEYS_FOLDED`）；utils 解压炸弹防护（单文件 4GB / 累计 8GB / 压缩比 100x）；H-2 singleflight 隔离锁内 await + GUI 6.2 全修（SMTP 头注入 `_reject_smtp_newline`、会话代号、画质表去重）；URL scheme 白名单 `is_safe_http_url`、JS/子进程走 `run_js_async`/`run_node_script_async`；C-2 斗鱼粘包 `offset+=full_len+4`；C-3 only_fans=False；H-4 B站看门狗 `spawn_danmaku_task(self._auth_watchdog(self._ws))`；H-5 Shopee 清除路径 finally `_not_record_prefix`；H-3 `websockets>=14.0`；H-6 原子写（`config_io._atomic_write_text` + `web_config._config_write_lock`）；standalone 两级终止（terminate→wait(3s)→kill）；6 处 ffmpeg 路径补 `record_finished=True` 触发 30s 快检；`data={}` 视为有效请求体。
+- **CODE_REVIEW_FIX_1 批量修复（F-01~F-25）**：main.py F-02 移除死 import（`converts_m4a`/`segment_video` 函数保留于 `video_postprocess.py`）、F-03 直下流 `finally` 仅当零字节才清理残留；gui.py F-04~F-09 会话代号闭环 / 画质表去重 / crash sink 禁 `import src` / 本地原子写（不 import `src.config_io` 以免触发 GUI 进程内 main 初始化）；msg_push.py F-24 ntfy 真实推送加守卫；spider.py F-10 `_read_tiktok_guest_cookie` 须插在 `@trace_error_decorator` 之上（往「@decorator+def」间插代码会劫持装饰器归属）、F-11 多参 print 改 logger 拼接、F-19 ab_sign 默认真随机；web_config.py F-23 行内注释引号优先 + 原子写；utils.py F-16 `read_ini_value` 不写回 + F-25 JS 签名脚本哈希钉定（`_JS_SHA256_EXPECTED`，7 脚本，默认告警、`DLR_JS_STRICT_HASH=1` 拒绝）。
+- **F-13 抖音 signature 保持不编码**：对照上游 `dart_simple_live` 确认其直接字符串拼接、不 `encodeComponent`，与本仓逐字一致；贸然加 `quote()` 会让本端成为全网唯一异类指纹。用 `tests/test_douyin_signature_encoding.py`（4 例）锁定「原样拼接、无百分号编码」契约。
+- **F-12 sync_http SSL 作用域收窄**：`CERT_NONE` 上下文与 opener 由 import 期常驻改为惰性构造；新增 `sync_req(..., ssl_verify=None)` 单次覆盖（透传 urllib 与 requests 两路径）。修正原风险描述——`sync_req` 调用点全部位于 `src/spider.py`，生产链路无任何 `set_ssl_verify(False)`，CERT_NONE 路径在生产不可达。
+- **check_annotations 违规修复**：`tests/test_start_record_command_golden.py` 的 `class _Cap:` 三引号 docstring 改为 `#` 行注释（符合「禁 docstring」约束）；并修一处 `main.py` 只监测不录制分支误写 `main.recording_enabled`（模块级 `main` 是入口函数非模块对象，必抛 `AttributeError`）。
+- **mypy 门禁扩面 + 6 处类型缺陷修复（09-15）**：起于 CI typecheck 的 3 个报错，进而发现门禁只覆盖 `src/`，根目录入口与 `tests/` 从未被检查。修复：`src/platforms/huya.py` 补 `import i18n`（原 `except` 分支调用 `i18n.tr()` 却漏导入，帧解析异常时抛 `NameError` 掩盖真因）；`src/async_http.py` `_get_client` 复用分支改为在临界区内直接保存 `reused` 实例以完成类型收窄；`src/spider.py` liveme `lm_s_sign` 补 `str()`（`sign_data` 为 `dict[str, object]`）；`gui.py` 3 处——补 `from src.logger import child_process_env, logger`、`_has_unsaved_config_edits` 返回 `bool(...)`，以及**子进程自然结束后的 UI 收尾路径必抛 `NameError`**（`_process_ended(session_id)` 的 `session_id` 未定义）：修复未简单删参数（那会丢掉「丢弃旧会话迟到回调」的保护），而是把日志队列结束哨兵由裸 `None` 改为携带会话代号 `(session_id,)`，UI 线程取出后交 `_process_ended` 校验。
+- **Linux CI 只读用例修复（09-15，仅测试与文档改动）**：`test_read_config_value_missing_key_readonly_ok` 原用 `cfg.chmod(0o444)` 制造「不可写」，但 `read_config_value` 的写回已改为 `_atomic_write_text`（同目录临时文件 + `os.replace`）——`os.replace` 只校验目标**所在目录**的写权限、与目标文件权限位无关（root 还会整体绕过权限位），故 Linux 上写回照样成功；而 Windows 的目标文件只读属性会让 `replace` 直接失败，于是「本地 Windows 过、Linux CI 挂」。改为 `monkeypatch.setattr(config_io.os, "replace", _deny_replace)` 仅对目标配置路径抛 `PermissionError`、其余调用透传，跨平台稳定复现「写回被拒 → 记 warning + 返回默认值 + 原文件不被写入」降级分支；`AGENTS.md` 同步新增「只读用例不得只靠 `chmod`」约定，并区分 `config_io`（原子写）与 `utils.update_config`（直写）两种写回路径的用例写法。
+
+**✨ 新增功能 / 改进**
+- **start_record 命令构造与平台分派单一定义点（F-01）**：五路内联 `command=[]` 收敛为模块级 `_build_ffmpeg_output_args` / `_build_ffmpeg_input_args` / `_build_record_output_path` / `_ffmpeg_network_tuning`，容器映射全查 `SEGMENT_FORMAT_BY_SUFFIX`（零裸字面量）；`_resolve_platform_stream` 的 53 层 `elif` 改为 `_PLATFORM_RESOLVERS` 分发表（52 个平台各抽 `_resolve_<host>()`，共享 `_PlatformResolveContext`），新平台接入 = 追加一个处理函数 + 一条表项。附带修正两处行为漂移（TS 非分段无条件转 MP4、准备提示打印非分段文件名）。
+- **JS 签名脚本哈希钉定（F-25）**：`get_compiled_js` 读原始字节比对 `_JS_SHA256_EXPECTED` 基线，默认告警不阻断、`DLR_JS_STRICT_HASH=1` 拒绝执行，收敛签名脚本被篡改的运行期面。
+- **F-14 protobuf 兼容护栏**：本环境无 protoc，不重新生成 `douyin_pb2.py`（生成物 DO NOT EDIT）；改为 CI 前置 `tests/test_proto_runtime_compat.py` 断言「声明区间含上限 / runtime 满足区间 / runtime 不早于 gencode / 可 import 且 PushFrame 往返正常」，升到 8.x 立即变红提示先用同代 protoc 重新生成。
+- **mypy 门禁范围下沉为单一事实源（09-15）**：`pyproject.toml [tool.mypy].files` 固化为 `src` + 根入口（main / gui / web / i18n / msg_push）+ `build_exe.py` + `scripts` + `tests`；`ci.yml` typecheck 由 `mypy src/` 改为**无参数 `mypy`**，本地与 CI 跑同一条命令（显式传参会覆盖 `files`，只能排障收窄用，门禁结论以无参跑法为准）。同步补齐 `tests/` 15 处已漂移注解（含 `test_start_record_command_golden.py` 12 处缺注解、generator fixture 返回类型 `Iterator`→`Generator`、type ignore 需同时压制 mypy `assignment` 与 basedpyright `method-assign` 两种码）。
+
+**🛠️ 仓库维护与质量门禁**
+- **pyproject 排除目录同源补全**：`logs`/`backup_config` 原先只进部分工具——现已补齐到 black `.exclude`、isort `extend_skip`、mypy `exclude`、basedpyright `exclude`、coverage `omit`，五处统一「运行期产物目录（与 .gitignore/.dockerignore 同源维护）」注释。`.coveragerc-concurrency` 的 omit 一并对齐。
+- **.gitignore / .dockerignore 通配化**：移除已不存在的 `PERF_REVIEW_2026-08-28.md` 等逐文件名条目，改为 `PERF_REVIEW_*.md`/`CODE_REVIEW_*.md`/`DIAGNOSIS_*.md` 三组通配；.dockerignore 新增 `*.jsonl`。AGENTS.md 补 `.gitignore`/`.dockerignore` 两个条目与 `logs/`/`downloads/`/`backup_config/` 运行期目录、根文档 `CODE_REVIEW_FIX_1.md`。
+- **四语本地化一致性修复**：修复 `i18n/en_GB.json` 21 条值误填繁体中文（弹幕解析异常 7 条 + ffmpeg/Node 安装 SHA256 提示 14 条），按「en_GB 与 en_US 差异仅限拼写」回填英式英语；复核 `zh_CN(.mo)`/`en_US`/`en_GB`/`zh_TW` 四目录均 **594 条**键集两两零差异，en_US/en_GB 无中文残留、zh_TW 无未译；`zh_CN.mo` 重编译（595 条），`scripts/compile_po.py --check` 字节级同步通过。
+- **仓库元数据同步**：`AGENTS.md` / `docker-compose.yaml` 示例版本 `4.1.0`→`4.2.0`；`config/config.ini` 在 `[Cookie]` 节新增 `tiktok_guest_cookie = `（F-10 配置覆盖键槽）；requirements.txt 与 pyproject 依赖逐条核对一致（含 `protobuf>=6.31.1,<8` 上限与 `websockets>=14.0`）。
+
+**🧪 测试与验证**
+- 全量 `pytest` **974 passed / 2 skipped / 0 failed**（909→929→944→974 递增）；前端 `node --test tests/frontend/*.mjs` 6 passed；`tests/test_stream_select.py` 新增 15 例（分片探针 + 加固）、`tests/test_platform_dispatch.py` 16 例、`test_douyin_signature_encoding.py` 4 例、黄金快照 `test_start_record_command_golden.py` 20 例。
+- `black --check --line-length 120 --target-version py314 .` 134 文件全绿；`isort --check-only` 全绿；`scripts/check_annotations.py` 0 违规（平均密度 22.1%）；`scripts/compile_po.py --check` 同步；`scripts/extract_i18n_strings.py` 运行时缺失 0 条；`scripts/check_version.py` PASS；mypy/basedpyright 改动文件 0 error。
+- 09-15 门禁扩面后：无参数 `mypy` **115 files 0 问题**（覆盖 src + 根入口 + `build_exe.py` + `scripts` + `tests`）；`pytest -q` 仍为 **974 passed / 2 skipped**；`pytest tests/test_config_io_readonly.py` 15 passed（CI 976 collected 一致）；Linux CI 由 1 failed / 975 passed 恢复全绿。
+
+### v4.1.0 (2026-09-10 ~ 2026-09-11) — P0 修复 ffmpeg `-reconnect*` 缺值与 HLS 无限重连（直播只出字幕无视频）/ 代码审查 28 项修复 / 遗留 8+4 项推进 / i18n 形参日志 242 处全量迁移 / Web 面板窄视口修复 / 四语本地化补全
+
+> 本版本（v4.1.0，2026-09-10 ~ 09-11）修复两处 P0 录制链路缺陷：① ffmpeg `-reconnect*` 选项移入 `-i` 之前时丢失布尔值 `1`，真实录制输入未打开即退出（返回码 -22）；② `-reconnect_at_eof 1` 对 HLS(m3u8) 输入在**播放列表层无限重连**，hls demuxer 永远拉不到媒体段——直播表现为「只产出了弹幕 SRT、无视频文件」。同期推进代码审查 28 项修复、遗留 8+4 项（hls.js 钉版 / TLS 拆流 / 音频容器对齐 / `gui_legacy.py` 删除 / 弹幕落盘移出事件循环 / i18n `tr()` 接口等）、242 处形参日志 f-string → `i18n.tr` 全量迁移、Web 面板窄视口错位修复，并完成八文件元数据同源同步与四语本地化补全（521 → 539 → 544 键）。**无破坏性变更**（录制/弹幕/网络/推送运行时语义全部保持）。详细根因与验证见 [CODE_WIKI.md](CODE_WIKI.md)。
+
+**🐛 修复的问题**
+- **P0 ffmpeg `-reconnect*` 缺值 → 录制启动即 -22（EINVAL）**：09-10 审查重构把 `-reconnect_delay_max 60 / -reconnect_streamed / -reconnect_at_eof` 从 `-i` 之后移至之前时，后两个选项的布尔值 `1` 丢失，ffmpeg 把下一个选项名当作取值（`Unable to parse ... as boolean`）、输入未打开即退出；`-reconnect_delay_max 60` 因带值幸免。已在 `main.py` 补回取值，并同步修正 `_FFMPEG_ERRNO_HINTS[-22]` 文案（容器错配之外新增「输入选项解析失败」成因）。
+- **P0 HLS(m3u8) 输入禁用 `-reconnect_at_eof` → 直播只出字幕无视频**：m3u8 播放列表文件本身的 HTTP 响应结束即 EOF，该选项令 http 层在列表下载完处无限重连（实测特征：连续 `Will reconnect at <size> in N second(s), error=End of file`，1/3/7/15/31s 指数退避、无次数上限），hls demuxer 永远停在「待列表」阶段、一个媒体段都拉不到——ffmpeg 常驻不退出、视频零字节（`-loglevel error` 下无任何报错）。**受影响的正是抖音/斗鱼等 HLS 优先选源的房间**（虎牙走 FLV-first 不受影响）。修复：m3u8 输入在命令构造处移除该参数对（`main.py` 与 `scripts/douyin_live_recorder_standalone.py` 三处定义点同步），FLV 输入保留（CDN 掐断长连接时在 EOF 处重连续写同一文件）。对照实验：同命令加 `-t 10` 限时 60s 仍不退出且零字节产物；去掉该选项后 10s 录制 9MB 正常退出。
+- **代码审查 28 项修复（2026-09-10）**：ffmpeg 命令 `-reconnect*` 确立「位于 `-i` 之前且每个选项紧跟取值」；录制信号量先于 `Popen` 获取、启动段纳入 `try/finally` 防槽位泄漏；`process.wait(timeout=30)` 超时补 `kill()` 兜底；弹幕 SRT 文本注入转义（`_sanitize_srt_text`：`\n`→空格、`-->`→`->`，杜绝伪造时间轴）；弹幕采集器 `stop()/_run()` 握手顺序与 `_shutdown` 限时（防线程与 SRT 句柄双泄漏）；敏感配置掩码（`web_config.py` 键名正则 + `web/app.js` 密码框 + `utils.mask_credentials`）；探针末位候选放行语义对齐；`data={}` 空字典视为有效请求体；`src/ttwid.py` 非阻塞失败改串行重取；覆盖率门禁「模块查不到」改判失败等。
+- **Web 面板直播间列表窄视口错位**：`table-layout: fixed` + 地址/名称列单行省略（悬停可见全 URL）+ ≤768px 横向滚动兜底，消除窄窗/高 DPI 下表头竖排、按钮溢出卡片、长 URL 折行三种错位。
+
+**✨ 新增功能**
+- **i18n `tr()` 形参接口 + 242 处全量迁移**：`i18n.tr(template, **kw)` 先查表再插值——修复 f-string 在查表**之前**完成插值、目录里含占位符键永远匹配不上、翻译静默退化为原文的根因；27 个文件 242 处形参日志改写为 `tr()`，四语目录占位符同步统一（键集 539 → 544）。
+- **Web API 鉴权加固**：中间件统一注入 `X-Content-Type-Options: nosniff` / `X-Frame-Options: DENY`；新增公开端点 `GET /api/auth/status` 暴露认证开关与警告文案。
+- **hls.js 钉版 1.7.2**：`index.html` 的 `hls.js@latest` 钉到具体版本（jsdelivr CDN 供应链风险收敛，与 flv.js 钉版惯例对齐）。
+
+**🛠️ 仓库维护与质量门禁**
+- **遗留 8+4 项推进**：8 项决策类全部实施——hls.js 钉版、`http_config` TLS 校验拆「拉流专用 / 控制面通用」两路径、纯音频平台扩展名/容器/编码三方对齐（`.m4a`+aac+ipod / `.ts`+aac+mpegts）、notify 脚本 300s 超时 `kill` 兜底、Web 鉴权模型文档化、删除 `gui_legacy.py`、弹幕 SRT 落盘移出事件循环（`queue.SimpleQueue` + 独立写盘线程）、i18n `tr()` 接口；4 项真机验证类保守实施并补桩测试（`spider._safe_loads`JSON 安全解析 + URL scheme 白名单、`ws_client` 心跳超时兜底、`proxy` IPv6 字面量、`video_postprocess` 超时分类型告警）。
+- **元数据同源同步**：`uv.lock` 项目版本对齐 4.1.0（73 包依赖图未动）、`DouyinLiveRecorder.egg-info` 重新生成、`AGENTS.md` / `docker-compose.yaml` 等八文件版本与依赖核对无漂移、`scripts/check_version.py` PASS。
+- **四语本地化补全**：经 `extract_i18n_strings.py` 补入修复期新增串，四目录键集合完全一致（各 544 条），`zh_CN.mo` 重编译（545 条含头部空 msgid，`--check` 字节级同步通过）。
+
+**🧪 测试与验证**
+- 全量 `pytest` **907 passed / 2 skipped / 0 warnings**（870 → 899 → 902 → 907 递增）；`tests/test_ffmpeg_reconnect_args.py` 新增第三个不变量类（AST 断言 m3u8 守卫存在于 main.py + standalone 全部定义点）。
+- `scripts/extract_i18n_strings.py` 缺失 0 条、四语目录零差异；`scripts/compile_po.py --check` 与 `.po` 同步（545 条）；`mypy` / `basedpyright` 0 error；`black --check` / `isort --check-only` / `scripts/check_annotations.py` / `scripts/check_version.py` 全绿。
+
+### 更早的更新日志（已归档）
+
+17 条 2024-07-13 ~ 2026-09-06（v4.0.0 ~ v4.0.9.4）的发布说明条目已于 2026-09-28 逐字迁出至 [release-notes-history-zh.md](docs/changelog/release-notes-history-zh.md)；该卷同时按 `.workbuddy/docold` 基线回补了上一轮粗剪留下的行尾 `…` / 句中截断（口径见其卷首）。
+迁出原因：仅「更新日志」一节就占本文件 33.2% 的字符数（21,181 / 63,742）。根文档只保留最近正式发布 + 本指针，正文才恢复可读。[2026-10-01 更正：收录 v4.4.0 起为四个（v4.4.0/v4.3.0/v4.2.0/v4.1.0），原口径为「最近三个」]
+
+## 💬 有问题或者需求可以向我提 Issue，欢迎 Star 与 Fork
+
+[![Star History Chart](https://api.star-history.com/svg?repos=y123ao6/DouyinLiveRecorder&type=Timeline)](https://star-history.com/#y123ao6/DouyinLiveRecorder&Timeline)
