@@ -42,6 +42,7 @@ Every event contains:
 
 - `timestamp` — UTC timestamp in ISO 8601 format / UTC ISO 8601 格式时间戳
 - `event` — semantic event name / 语义事件名称
+- `runtime_events_version` — runtime-event producer interface version (`2.0`), independent of recorder release version / 运行时事件输出接口版本（`2.0`），独立于录制器发行版本
 
 Event writing is best-effort. Failure to create the log directory or write an event is ignored and does not alter recorder operation.
 
@@ -59,6 +60,10 @@ Additional fields / 附加字段:
 
 - `version`
 - `runtime_pid` — DouyinLiveRecorder's operating-system process ID / DouyinLiveRecorder 主进程的操作系统进程 ID
+
+A process ID is useful for correlating runtime events with a recorder process, but it is **not proof of executable ownership**. Process managers must also verify executable paths, and account for PID reuse.
+
+进程 ID 可用于关联运行时事件与录制器进程，但**不能单独证明可执行文件的归属**。进程管理程序还须验证可执行文件路径，并考虑进程 ID 可能被重复使用。
 
 ---
 
@@ -204,6 +209,6 @@ The event bridge is intended as a generic integration mechanism. It can be used 
 
 该事件桥接旨在作为通用集成机制，可供图形界面、Web 接口、监控工具、自动化程序或其他外部程序使用。
 
-No schema version is currently defined. Consumers should ignore unknown fields and unknown event names so that the event stream can be extended in the future.
+Producer version `2.0` includes `runtime_pid` in `runtime_started`, and `backend_pid` for FFmpeg recording events. The producer version is not the upstream recorder version and does not authenticate the executable. Consumers should ignore unknown fields and unknown event names, but explicitly validate the producer version when specific fields are required. The new version marker still needs testing in a rebuilt Windows executable.
 
-目前尚未定义事件架构版本。使用方应忽略未知字段和未知事件名称，以便将来可以扩展事件流。
+输出接口版本 `2.0` 在 `runtime_started` 中包含 `runtime_pid`，并在 FFmpeg 录制事件中包含 `backend_pid`。输出接口版本不是上游录制器版本，也不用于验证可执行文件身份。使用方应忽略未知字段及事件名称；若依赖特定字段，则需验证接口版本。新版本标识仍需在重新构建的 Windows 可执行文件中测试。

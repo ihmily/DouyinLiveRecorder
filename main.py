@@ -76,11 +76,6 @@ default_path = f'{script_path}/downloads'
 os.makedirs(default_path, exist_ok=True)
 file_update_lock = threading.Lock()
 os_type = os.name
-# On Windows, invoke only the FFmpeg bundled with this installation.
-bundled_ffmpeg_executable = (
-    os.path.join(ffmpeg_path, 'ffmpeg.exe')
-    if os_type == 'nt' else 'ffmpeg'
-)
 clear_command = "cls" if os_type == 'nt' else "clear"
 color_obj = utils.Color()
 os.environ['PATH'] = ffmpeg_path + os.pathsep + current_env_path
@@ -197,7 +192,7 @@ def segment_video(converts_file_path: str, segment_save_file_path: str, segment_
     try:
         if os.path.exists(converts_file_path) and os.path.getsize(converts_file_path) > 0:
             ffmpeg_command = [
-                bundled_ffmpeg_executable,
+                "ffmpeg",
                 "-i", converts_file_path,
                 "-c:v", "copy",
                 "-c:a", "copy",
@@ -228,7 +223,7 @@ def converts_mp4(converts_file_path: str, is_original_delete: bool = True) -> No
             if converts_to_h264:
                 color_obj.print_colored("正在转码为MP4格式并重新编码为h264\n", color_obj.YELLOW)
                 ffmpeg_command = [
-                    bundled_ffmpeg_executable, "-i", converts_file_path,
+                    "ffmpeg", "-i", converts_file_path,
                     "-c:v", "libx264",
                     "-preset", "veryfast",
                     "-crf", "23",
@@ -239,7 +234,7 @@ def converts_mp4(converts_file_path: str, is_original_delete: bool = True) -> No
             else:
                 color_obj.print_colored("正在转码为MP4格式\n", color_obj.YELLOW)
                 ffmpeg_command = [
-                    bundled_ffmpeg_executable, "-i", converts_file_path,
+                    "ffmpeg", "-i", converts_file_path,
                     "-c:v", "copy",
                     "-c:a", "copy",
                     "-f", "mp4", converts_file_path.rsplit('.', maxsplit=1)[0] + ".mp4",
@@ -261,7 +256,7 @@ def converts_m4a(converts_file_path: str, is_original_delete: bool = True) -> No
     try:
         if os.path.exists(converts_file_path) and os.path.getsize(converts_file_path) > 0:
             _output = subprocess.check_output([
-                bundled_ffmpeg_executable, "-i", converts_file_path,
+                "ffmpeg", "-i", converts_file_path,
                 "-n", "-vn",
                 "-c:a", "aac", "-bsf:a", "aac_adtstoasc", "-ab", "320k",
                 converts_file_path.rsplit('.', maxsplit=1)[0] + ".m4a",
@@ -1272,7 +1267,7 @@ def start_record(url_data: tuple, count_variable: int = -1) -> None:
                                         break
 
                                 ffmpeg_command = [
-                                    bundled_ffmpeg_executable, "-y",
+                                    'ffmpeg', "-y",
                                     "-v", "verbose",
                                     "-rw_timeout", rw_timeout,
                                     "-loglevel", "error",
@@ -1809,35 +1804,22 @@ def backup_file_start() -> None:
 
 
 def check_ffmpeg_existence() -> bool:
-    # The first launch may need to download FFmpeg into the DLR folder.
-    # Let Hmily's installer run, but never accept a system-wide executable.
-    if os_type == 'nt' and not os.path.isfile(bundled_ffmpeg_executable):
-        logger.warning(
-            f"Bundled FFmpeg not found; attempting the DLR installer: "
-            f"{bundled_ffmpeg_executable}"
-        )
-        if not check_ffmpeg():
-            logger.error("Bundled FFmpeg download/installation failed.")
-            return False
-
     try:
-        result = subprocess.run(
-            [bundled_ffmpeg_executable, '-version'],
-            check=True, capture_output=True, text=True
-        )
-        lines = result.stdout.splitlines()
-        if lines:
-            print(lines[0])
-        if len(lines) > 1:
-            print(lines[1])
-        return True
-    except (subprocess.CalledProcessError, FileNotFoundError, OSError) as exc:
-        logger.error(f"FFmpeg startup check failed: {exc}")
-
-    # Keep upstream installer behavior for non-Windows platforms.
-    if os_type != 'nt' and check_ffmpeg():
-        time.sleep(1)
-        return True
+        result = subprocess.run(['ffmpeg', '-version'], check=True, capture_output=True, text=True)
+        if result.returncode == 0:
+            lines = result.stdout.splitlines()
+            version_line = lines[0]
+            built_line = lines[1]
+            print(version_line)
+            print(built_line)
+    except subprocess.CalledProcessError as e:
+        logger.error(e)
+    except FileNotFoundError:
+        pass
+    finally:
+        if check_ffmpeg():
+            time.sleep(1)
+            return True
     return False
 
 

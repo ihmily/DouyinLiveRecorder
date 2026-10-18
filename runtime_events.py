@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 
-# Version 2 introduces recorder/FFmpeg PID support for DLR_UI.
+# Version 2 adds recorder/FFmpeg PIDs for external integrations.
 # Increment when the runtime-event producer contract changes.
 RUNTIME_EVENTS_VERSION = "2.0"
 

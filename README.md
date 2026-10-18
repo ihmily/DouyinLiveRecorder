@@ -12,6 +12,14 @@
 
 </div>
 
+## Runtime-event integration / 运行时事件集成
+
+DouyinLiveRecorder can emit passive JSON Lines (JSONL) events for external GUIs, web frontends, monitoring tools, and automation. Events can include the recorder process ID (`runtime_pid`) and the FFmpeg subprocess ID (`backend_pid`), allowing consumers to correlate state changes with running processes. The interface is read-only; it does not provide a control channel. The producer interface version is independent of the recorder release version.
+
+DouyinLiveRecorder 可输出被动式 JSON Lines（JSONL）运行时事件，供外部图形界面、Web 前端、监控工具和自动化程序使用。事件可包含录制器进程 ID（`runtime_pid`）以及 FFmpeg 子进程 ID（`backend_pid`），便于将状态变化与运行进程关联。该接口是只读的，不提供控制通道。事件输出接口版本独立于录制器发行版本。
+
+See [Runtime Events / 运行时事件](RUNTIME_EVENTS.md) for the event definitions, fields, compatibility guidance, privacy considerations, and testing status.
+
 ## 😺已支持平台
 
 - [x] 抖音

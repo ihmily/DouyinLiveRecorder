@@ -85,17 +85,12 @@ def install_ffmpeg_windows():
 
             unzip_file(zip_file_path, execute_dir)
             os.environ['PATH'] = ffmpeg_path + os.pathsep + current_env_path
-            # Never confuse an unrelated system-wide FFmpeg with our download.
-            bundled_ffmpeg = os.path.join(ffmpeg_path, 'ffmpeg.exe')
-            if not os.path.isfile(bundled_ffmpeg):
-                logger.error(f"Downloaded FFmpeg not found at: {bundled_ffmpeg}")
-                return False
-            result = subprocess.run([bundled_ffmpeg, "-version"], capture_output=True)
+            result = subprocess.run(["ffmpeg", "-version"], capture_output=True)
             if result.returncode == 0:
-                logger.debug('bundled ffmpeg installation was successful')
-                return True
-            logger.error('bundled ffmpeg installation failed its version check')
-            return False
+                logger.debug('ffmpeg installation was successful')
+            else:
+                logger.error('ffmpeg installation failed. Please manually install ffmpeg by yourself')
+            return True
         else:
             logger.error("Please manually install ffmpeg by yourself")
     except Exception as e:
@@ -178,12 +173,8 @@ def install_ffmpeg() -> bool:
 
 def ensure_ffmpeg_installed(func):
     def wrapper(*args, **kwargs):
-        executable = (
-            os.path.join(ffmpeg_path, 'ffmpeg.exe')
-            if current_platform == "Windows" else 'ffmpeg'
-        )
         try:
-            result = subprocess.run([executable, '-version'], capture_output=True)
+            result = subprocess.run(['ffmpeg', '-version'], capture_output=True)
             version = result.stdout.strip()
             if result.returncode == 0 and version:
                 return func(*args, **kwargs)
@@ -209,13 +200,8 @@ def ensure_ffmpeg_installed(func):
 
 
 def check_ffmpeg_installed() -> bool:
-    # Windows DLR_UI builds must not accept an unrelated system FFmpeg.
-    executable = (
-        os.path.join(ffmpeg_path, 'ffmpeg.exe')
-        if current_platform == "Windows" else 'ffmpeg'
-    )
     try:
-        result = subprocess.run([executable, '-version'], capture_output=True)
+        result = subprocess.run(['ffmpeg', '-version'], capture_output=True)
         version = result.stdout.strip()
         if result.returncode == 0 and version:
             return True
