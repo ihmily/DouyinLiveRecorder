@@ -558,40 +558,50 @@ OFFICIAL_SIGNATURE_PIN = "PINNED-OFFICIAL-GPG-SIGNATURE"
 # 上方维护方式的**官方通道**重新核对（非本地下载自算）：nodejs.org SHASUMS256.txt、
 # gyan.dev .sha256、api.github.com releases/tags/<月末标签> → assets[].digest，读数时刻见
 # docs/agent-reference/measured-evidence.md。
+# [2026-10-18 重钉 v24.22.0] 上游 node 于 2026-10-14 发布 v24.22.0（Krypton），dist/index.json 首条
+#   lts 即换成它，于是发布链四个平台（win-x64 / linux-x64 / linux-arm64 / macos-arm64）同时以
+#   「SHA256 不匹配」终止：期望 158f7685…/6e1db87e…/724282c3…/bed7eea5…（= v24.21.0 的取值）、
+#   实际 f9683a19…/28ea0a43…/b7e7991d…/6a9724d9…。这正是上方「上游一发新 LTS 本段即失配」的
+#   预期行为，不是完整性告警——按维护方式走官方通道重取：nodejs.org/dist/v24.22.0/SHASUMS256.txt
+#   （34 行）与同版本 SHASUMS256.txt.asc 的明文本体逐条复核完全一致（仍是**未验签**，与 2026-09-22
+#   同一口径；该槽在 _PIN_SOURCE_TABLE 里的 fingerprint 仍为空，故在线层不 adopt 它）。核对结果与
+#   CI 报出的 4 条实测值逐位相同，可作为「值本身没错、只是版本漂移」的独立佐证。macos-x64 本次
+#   矩阵未报错，但同属一套取值来源，一并不留旧版本（否则下次 mac 构建才红）。
+#   上段 2026-09-22 的 v24.21.0 读数为当时实测记录，保留不动。
 _PINNED_RUNTIME_SHA256: dict[str, dict[str, str]] = {
-    # node 各段取值均来自 https://nodejs.org/dist/v24.21.0/SHASUMS256.txt（来源与复核方式见上方注释）
+    # node 各段取值均来自 https://nodejs.org/dist/v24.22.0/SHASUMS256.txt（来源与复核方式见上方注释）
     "windows-x64": {
         # gyan.dev ffmpeg-release-essentials.zip.sha256（= ffmpeg 9.0.2 essentials_build，2026-09-22）
         "ffmpeg": "60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba",
-        # node-v24.21.0-win-x64.zip（_download_nodejs 在 Windows 下取 .zip）
-        "node": "158f7685b44de51f6c0df1d153526cbcd3e1bc739a8dfc607721cef75de9e541",
+        # node-v24.22.0-win-x64.zip（_download_nodejs 在 Windows 下取 .zip）
+        "node": "f9683a19877e12a9b167305c8db71040d812876359de21f0d2e97c3f321f80c3",
     },
     "linux-x64": {
         # BtbN autobuild-2026-08-31-13-27 的 ffmpeg-n9.0.1-11-ge47273f4d9-linux64-gpl-9.0.tar.xz
         # （api.github.com releases/tags/<标签> → assets[].digest，2026-09-27）
         "ffmpeg": "182c1b509720e939bb47bfb47dc29cc0c298640401128e3dce8627d10707eb5a",
-        # node-v24.21.0-linux-x64.tar.gz（非 .tar.xz：_download_nodejs 统一取 tar.gz）
-        "node": "6e1db87ef58b8819e5d5402eff1536491b18edd8eb7bee5ef7897876e88dc5ff",
+        # node-v24.22.0-linux-x64.tar.gz（非 .tar.xz：_download_nodejs 统一取 tar.gz）
+        "node": "28ea0a438de9a13bd7891fd758eee6c7819ee8af5442dfd8d45bd65e56d4228c",
     },
     "linux-arm64": {
         # 同一标签的 linuxarm64 资产；与上一条同一次取数（2026-09-27）
         "ffmpeg": "e2dd447c8a47849c5812d87e54a47b20ae0f3603d38989440f4a5fe1af8755b1",
-        "node": "724282c3b43aec998aa9527380465b45d229e021b58035f5f4f63095eabfe5d5",
+        "node": "b7e7991d5407815adfa74a2a9cd4db683552c8ce32ff4a295c22e972849c3f5d",
     },
     "macos-x64": {
         # evermeet getrelease/zip：官方只给 GPG 签名（追加 /sig），无 SHA256 → 走官方签名档
         "ffmpeg": OFFICIAL_SIGNATURE_PIN,
         "ffprobe": OFFICIAL_SIGNATURE_PIN,
-        # node-v24.21.0-darwin-x64.tar.gz
-        "node": "1462cb3b3046b815cf8ea436d3da450ec1a9f11dac7e5a46b0ada5305d7e8097",
+        # node-v24.22.0-darwin-x64.tar.gz
+        "node": "495e3f273c645f3c4677d438304cdfc701729ea5dec5728f5c8e76a2dece4b91",
     },
     "macos-arm64": {
         # 与 macos-x64 同一份 evermeet 构建（上游不发布 arm64，见 _FFMPEG_DOWNLOAD_URLS 注释）：
         # 同一来源 → 同一档；两槽的取值必须保持相等（tests/test_build_exe.py 锁此项）
         "ffmpeg": OFFICIAL_SIGNATURE_PIN,
         "ffprobe": OFFICIAL_SIGNATURE_PIN,
-        # node-v24.21.0-darwin-arm64.tar.gz
-        "node": "bed7eea5325e1108f32ce5228ddd6a5f0f08a499ee42aa7442aea583702f6057",
+        # node-v24.22.0-darwin-arm64.tar.gz
+        "node": "6a9724d9b50a5f22b4816cded441b5a8d9ddae546191a5e5b7efa5a5e2ee26d5",
     },
 }
 

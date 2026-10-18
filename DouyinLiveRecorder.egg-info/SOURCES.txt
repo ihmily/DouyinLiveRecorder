@@ -19,6 +19,7 @@ src/base.py
 src/collector.py
 src/config_bool.py
 src/config_io.py
+src/config_read.py
 src/cookie_cache.py
 src/danmaku_monitor.py
 src/ffmpeg_install.py
@@ -104,6 +105,7 @@ tests/test_check_annotations.py
 tests/test_check_coverage.py
 tests/test_check_runtime_pins.py
 tests/test_ci_frontend_registration.py
+tests/test_ci_pytest_env_parity.py
 tests/test_ci_retry_action.py
 tests/test_collector.py
 tests/test_concurrency.py
@@ -113,6 +115,7 @@ tests/test_config_io.py
 tests/test_config_io_backup.py
 tests/test_config_io_readonly.py
 tests/test_config_io_update_file.py
+tests/test_config_read.py
 tests/test_cookie_cache.py
 tests/test_danmaku_monitor.py
 tests/test_danmaku_offloop.py
@@ -120,6 +123,7 @@ tests/test_danmaku_platform_strip.py
 tests/test_danmaku_wiring.py
 tests/test_decorator_contract.py
 tests/test_docker_publish_workflow.py
+tests/test_dockerfile_image_gui_arg.py
 tests/test_douyin_danmaku.py
 tests/test_douyin_live_collector.py
 tests/test_douyin_signature_encoding.py
@@ -138,6 +142,7 @@ tests/test_frontend_quality_ui.py
 tests/test_frontend_regression_gates.py
 tests/test_gui_language_retranslate.py
 tests/test_gui_monitor.py
+tests/test_gui_qt_label_parity.py
 tests/test_gui_qt_theme.py
 tests/test_gui_qt_units.py
 tests/test_gui_qt_window.py
@@ -153,7 +158,9 @@ tests/test_huya_live_collector.py
 tests/test_huya_tars_simple_list.py
 tests/test_hy_fan_dispatch.py
 tests/test_i18n.py
+tests/test_i18n_catalog_coverage.py
 tests/test_i18n_migration.py
+tests/test_i18n_raise_site_tr.py
 tests/test_i18n_tr.py
 tests/test_log_archive.py
 tests/test_logger_console_sink.py
@@ -171,6 +178,7 @@ tests/test_platform_dispatch.py
 tests/test_pre_commit_config.py
 tests/test_proto_runtime_compat.py
 tests/test_proxy.py
+tests/test_pyright_config_parity.py
 tests/test_quality_tiers.py
 tests/test_record_container.py
 tests/test_record_failure_feedback.py
@@ -194,6 +202,7 @@ tests/test_run_gates.py
 tests/test_scheduler.py
 tests/test_scripts_error_paths.py
 tests/test_shopee_landing_guard.py
+tests/test_skill_agents_consistency.py
 tests/test_spider.py
 tests/test_spider_fixes.py
 tests/test_spider_hardening.py

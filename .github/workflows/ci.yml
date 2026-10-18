@@ -487,13 +487,25 @@ jobs:
       # （test_gui_wrap_hints / test_ui_theme / test_ui_kit 的显示门控用例）在 CI 常态执行
       # 而非 skip——阶段4/5 实证这类用例能抓到无头测试看不见的真 bug（ttk 无控件级
       # -font、CTk configure 静默忽略 cnf 字典）。两者均 apt 装轻量版（非打包用途）。
-      - name: Install ffmpeg + xvfb (apt)
+      # Qt 运行库（libegl1 及其 GL/xcb 同族）：GUI 窗口层 2026-10-17 迁 PySide6 后已进入
+      # 运行时清单（requirements.txt），pip 装得到 wheel 自带的 Qt .so，但那些 .so 仍 dlopen
+      # 一组**系统库**——ubuntu runner 缺 libEGL.so.1 时 `from PySide6.QtGui import ...` 抛
+      # ImportError，两个 Qt 测试模块以 collection error 形态把整轮 pytest 打断
+      # （2026-10-18 实测：4337 collected / 2 errors → Interrupted，exit code 2，其余用例
+      # 一条没跑，覆盖率 xml 与逐模块门禁全部拿不到数据）。装这组库是让窗口层真跑起来的前提，
+      # 而不是让它在 CI 上安静地 skip（见下方两道反 skip 闸门）。
+      - name: Install ffmpeg + xvfb + Qt runtime libs (apt)
         uses: ./.github/actions/retry
         with:
-          label: apt 安装 ffmpeg + xvfb
+          label: apt 安装 ffmpeg + xvfb + Qt 运行库
           command: >-
             sudo env DEBIAN_FRONTEND=noninteractive apt-get update -qq -o Acquire::Retries=3
-            && sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg xvfb
+            && sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends
+            ffmpeg xvfb
+            libegl1 libgl1 libglx-mesa0 libgl1-mesa-dri
+            libxkbcommon-x11-0 libdbus-1-3 libglib2.0-0 libfontconfig1
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0
+            libxcb-render-util0 libxcb-shape0 libxcb-xinerama0
 
       # pytest-asyncio 由 pyproject [tool.pytest.ini_options] asyncio_mode = "auto" 驱动；
       # pytest-cov 必装：scripts/check_coverage.py 依赖其产出的 .coverage 数据文件。
@@ -524,6 +536,19 @@ jobs:
       # 常态化的真 Tk 用例就会静默消失；本步让那类环境故障当场红而不是假绿。
       - name: Assert Tk display is available (real-window tests must not skip)
         run: xvfb-run -a python -c "import tkinter; root = tkinter.Tk(); print('Tk display OK', root.winfo_screenwidth()); root.destroy()"
+
+      # Qt 侧的同形兜底（2026-10-18）：两个 Qt 测试模块靠 pytest.importorskip 降级到 skip，
+      # 而 ci-summary 分不清 skipped 与 passed —— 一旦上面那组 apt 包被换镜像 / 换源削弱，
+      # 窗口层用例会整片 skip 而汇总仍绿，**这正是本次事故想避免的假绿**（事故原始形态是
+      # 直接 collection error 中断整轮，用 skip 掩盖它只会更糟）。本步在 pytest 之前先手验证
+      # QtGui/QtWidgets 能加载、且离屏后端真能起 QApplication（平台插件缺失时 Qt 在此即 fatal
+      # abort），让环境故障当场红在明确的步骤名上。
+      # QT_QPA_PLATFORM=offscreen 与 tests/test_gui_qt_*.py 内部的 setdefault 同口径（那两处
+      # 用 setdefault 是为了不覆盖外部指定，此处行内写死是为了让本步自身不依赖 xvfb）。
+      - name: Assert Qt offscreen platform is usable (GUI window tests must not skip)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -c "from PySide6.QtWidgets import QApplication; app = QApplication([]); print('Qt offscreen OK', app.platformName())"
 
       # pytest 全程跑在 xvfb 下：非 Tk 用例不受影响（不读 DISPLAY），真窗用例因此真实执行。
       # 全局覆盖率下限 fail_under = 50 由 pyproject [tool.coverage.report] 强制
@@ -586,6 +611,34 @@ jobs:
             exit 1
           fi
           echo "前端用例已执行且无跳过"
+
+      # Qt 窗口层的第二道防线（2026-10-18 补，与上方前端闸门同形）：上面的
+      # 「Assert Qt offscreen platform is usable」只在 pytest **之前**证明 Qt 能 import；
+      # 而 importorskip 是模块级生效——若依赖链在别处断掉（换 wheel / 换 runner 镜像），
+      # 两个模块会整片 skip 而 pytest rc 仍为 0，ci-summary 照样给绿。这里补一道收集侧闸门。
+      # 为什么判在 **collect-only** 而不是把两个模块再跑一遍：
+      #   · 要关的洞是「模块级 importorskip 生效 → 整份文件一条用例都不进」，
+      #     这正是 `--co` 唯一会报的形态（2026-10-18 用假 PySide6 对照实测：正常 →
+      #     "42 tests collected"；缺 Qt → "no tests collected" + 两条 SKIPPED 行）；
+      #   · 改成运行态断言「有 skip 即红」会被函数级 skip 误伤——
+      #     tests/test_gui_qt_window.py 的 test_language_switch_retranslates 在语言目录
+      #     未装载时属**合法降级**而 skip，把它顶成假红没有意义（与上方前端清单刻意避开
+      #     Windows-only 用例是同一考虑）。运行结果本身由上面的全量 pytest 步骤把关，
+      #     本步只负责「这两个模块的断言不得整片消失」。
+      - name: Gate Qt GUI tests are collected (modules must not skip)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! out=$(python -m pytest tests/test_gui_qt_units.py tests/test_gui_qt_window.py --co -q -rs 2>&1); then
+            printf '::error::Qt GUI 用例收集失败：\n%s\n' "$out"
+            exit 1
+          fi
+          printf '%s\n' "$out"
+          if printf '%s' "$out" | grep -qE '[0-9]+ skipped|no tests collected'; then
+            printf '::error::Qt GUI 模块整片 skip（Qt 系统库缺失），窗口层断言不会执行：\n%s\n' "$out"
+            exit 1
+          fi
+          echo "Qt GUI 模块已收集用例，无模块级 skip"
 
       # 逐模块门禁（spider/stream/utils/ttwid/ab_sign/proxy）只需跑一次，
       # 固定在最低支持版本上执行，避免矩阵内重复且结论歧义。
@@ -812,14 +865,22 @@ jobs:
         with:
           node-version: ${{ needs.setup.outputs.node_version }}
 
-      # xvfb：GUI（tkinter/pystray）冒烟需要虚拟显示
-      - name: Install ffmpeg + xvfb (apt)
+      # xvfb：GUI（Qt/pystray）冒烟需要虚拟显示。
+      # Qt 运行库与 test job 同一组：smoke_gui() 起的正是带 PySide6 窗口层的打包产物，
+      # 缺 libEGL.so.1 时进程一起来就崩（与 test job 那次 collection error 同源故障面），
+      # 而 build_exe.py 的冒烟对「产物打出来了但跑不起来」是宽松的，故在环境侧先补齐。
+      - name: Install ffmpeg + xvfb + Qt runtime libs (apt)
         uses: ./.github/actions/retry
         with:
-          label: apt 安装 ffmpeg/xvfb
+          label: apt 安装 ffmpeg/xvfb/Qt 运行库
           command: >-
             sudo env DEBIAN_FRONTEND=noninteractive apt-get update -qq -o Acquire::Retries=3
-            && sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg xvfb
+            && sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends
+            ffmpeg xvfb
+            libegl1 libgl1 libglx-mesa0 libgl1-mesa-dri
+            libxkbcommon-x11-0 libdbus-1-3 libglib2.0-0 libfontconfig1
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0
+            libxcb-render-util0 libxcb-shape0 libxcb-xinerama0
 
       # PyInstaller 由 pyproject [project.optional-dependencies].build 声明
       - name: Install dependencies
@@ -841,12 +902,26 @@ jobs:
   # 静态/AST 类断言（编码、映像名清单、杀进程顺序等）已在 ubuntu test job 覆盖。
   # [2026-10-17 补] 原「用 paths 过滤只在 VBS 文件变更时启动 Windows runner」的节流手段随
   # 仅手动触发一并取消：现在每次手动触发都起 windows-latest（约 10 分钟）。该节流的前提是
-  # 「自动触发会高频跑」，手动触发场景下不成立，且同样会掉进「skipped 视为通过」的假绿通道。
+  # [2026-10-18 补] 本 job 原先只装 pytest（`pip install pytest`），2026-10-18 手动触发实测
+  #   11 条用例在 setup 阶段全数 ERROR：`ModuleNotFoundError: No module named 'distro'`。
+  #   被测文件 tests/test_stop_recording_vbs.py 本身只 import 标准库 + pytest，但
+  #   tests/conftest.py 的三个 **autouse** fixture 会在每条用例前 import 被测面：
+  #     · _clean_credential_caches → `from src import spider` → src/__init__.py →
+  #       src/node_install.py 顶层 `import distro`；
+  #     · _hermetic_danmaku_hub → `import src.danmaku_monitor`（同一条 src 导入链）；
+  #     · _pin_identity_translation → `import i18n` → i18n.py 顶层 `from loguru import logger`。
+  #   即「跑仓库里任何一条 pytest」的门槛是**整份运行时依赖**，而不是被测文件自己的 import。
+  #   两条可选修法里选「装齐依赖」而非「给 fixture 加 skip 通道」：后者正是 MIN-2264 反复
+  #   拦过的形态（fixture 静默不生效，污染类用例退化成「单独跑通过、整包跑失败」）。
+  #   体积代价可接受：本工作流已改为仅手动触发，且 build-release.yml 的 Windows 构建 job
+  #   本来就在同一个 runner 镜像上装同一份 requirements.txt。
   vbs-behavior-test:
     name: VBS Behavior Test (Windows cscript)
     needs: setup
     runs-on: windows-latest
-    timeout-minutes: 10
+    # 10 → 20：装整份 requirements（含 PySide6 这种大 wheel）比只装 pytest 多出数分钟，
+    # 超时太紧会把「依赖装到一半」伪装成本 job 的失败。
+    timeout-minutes: 20
     # [2026-10-17 修订] 原条件为「github.event_name == 'workflow_dispatch' || vbs 路径命中」。
     # 改为仅手动触发后前半式恒真、后半式引用的 filters 输出已不存在，故整条 if 删除：
     # 现在每次手动触发都会执行这 4 条 cscript 行为锁。
@@ -859,8 +934,17 @@ jobs:
         with:
           python-version: '3.14'
 
-      - name: Install pytest
-        run: python -m pip install --upgrade pip && pip install pytest
+      # 与其它 job 同一口径：装 requirements.txt（conftest 的 autouse fixture 会 import src / i18n，
+      #   详见本 job 头部注释）。pytest-asyncio 同装：pyproject 的 asyncio_mode = "auto" 由它提供，
+      #   缺装时每次 pytest 启动都会打 PytestConfigWarning: Unknown config option: asyncio_mode
+      #   （2026-10-18 实测该 job 的 warnings summary 里就有这一条）。
+      - name: Install dependencies
+        uses: ./.github/actions/retry
+        with:
+          label: pip 安装依赖（requirements + pytest）
+          command: >-
+            python -m pip install --upgrade pip
+            && pip install -r requirements.txt pytest pytest-asyncio
 
       - name: Run VBS behavior tests (cscript)
         run: python -m pytest tests/test_stop_recording_vbs.py -v

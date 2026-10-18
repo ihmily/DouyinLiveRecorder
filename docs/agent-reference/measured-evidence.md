@@ -103,6 +103,14 @@ Node 运行时以 24.19.0 实测为准（全部 JS 签名脚本 + migu.js 通过
 | `curl -sSL https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip.sha256` | 仍 `60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba`（windows-x64 钉定未漂移） |
 | `curl -sS https://nodejs.org/dist/index.json` | 首个 `lts` 项仍 `v24.21.0`（Krypton，2026-09-07）→ node × 5 槽钉定未漂移 |
 
+**2026-10-18 复测**（起因：发布链四个平台同时报 `node-v24.22.0-*` SHA256 不匹配）：
+
+| 探针 | 读数 |
+| --- | --- |
+| `curl -sS https://nodejs.org/dist/index.json` | 首个 `lts` 项变为 **`v24.22.0`**（Krypton，2026-10-14）→ node × 5 槽钉定漂移；`_download_nodejs` 取「首条 lts」，故实际下载名从 `v24.21.0` 换成 `v24.22.0` |
+| `curl -sS https://nodejs.org/dist/v24.22.0/SHASUMS256.txt` 与同版本 `SHASUMS256.txt.asc` 的明文本体 | 两处 34 行逐条**完全相同**（仅取值一致性复核，**未验签**，与 2026-09-22 同口径）：`node-v24.22.0-win-x64.zip` `f9683a19877e12a9b167305c8db71040d812876359de21f0d2e97c3f321f80c3` / `linux-x64.tar.gz` `28ea0a438de9a13bd7891fd758eee6c7819ee8af5442dfd8d45bd65e56d4228c` / `linux-arm64.tar.gz` `b7e7991d5407815adfa74a2a9cd4db683552c8ce32ff4a295c22e972849c3f5d` / `darwin-x64.tar.gz` `495e3f273c645f3c4677d438304cdfc701729ea5dec5728f5c8e76a2dece4b91` / `darwin-arm64.tar.gz` `6a9724d9b50a5f22b4816cded441b5a8d9ddae546191a5e5b7efa5a5e2ee26d5`（签名档 `Hash: SHA256`，签名者密钥 `C82FA3AE1CBEDC6BE46B9360C43CEC45C17AB93C`，签名时间 2026-10-14 23:10:38） |
+| 实下载 `node-v24.22.0-win-x64.zip` 并自算 SHA256 | 37,733,703 B / `f9683a19877e12a9b167305c8db71040d812876359de21f0d2e97c3f321f80c3`，与上一条官方公布值逐位相同（属事后核验，钉定值仍取官方公布页而非本地自算）；CI 报出的另外三条「实际」值亦与官方公布值逐位相同 → 失配纯属版本漂移，非完整性告警 |
+
 本机网络边界（决定可复现范围）：`github.com/.../releases/download/...` 直链在本机 `Connection was reset`（`http=000`），只有 `api.github.com` 的 octet-stream 通道可用；因此「按来源表 URL 全量下载并比对钉定值」这最后一步只能由 GitHub runner 首次实跑验证，本机只能验到 asset 存在、大小、digest 与前缀成员布局。
 
 ## 虎牙 FLV-first 冷启动采样

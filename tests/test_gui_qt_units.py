@@ -27,7 +27,22 @@ from typing import Callable, Iterator
 
 import pytest
 
-pytest.importorskip("PySide6", reason="PySide6 未安装时跳过 Qt 窗口层用例（环境限制口径）")
+# 为什么是「按子模块探测 + 显式放宽 exc_type」（2026-10-18 CI 实测事故）：
+# pytest 9.1 起 importorskip 的 exc_type 缺省值由 ImportError 改为 ModuleNotFoundError
+# （见 _pytest.outcomes.importorskip 的 docstring：`Defaults to ModuleNotFoundError when not
+# given`），而 PySide6 缺 Qt 系统库时失败发生在 **QtGui / QtWidgets 子模块的 dlopen**
+# （ubuntu runner 无 libEGL.so.1），顶层 `import PySide6` 照样成功。于是只看顶层包时这一行
+# 恒成立，紧随其后的 `from PySide6.QtGui import ...` 抛 ImportError —— 模块级 import 期异常
+# 会被 pytest 计为 collection error 并 **中断整轮**（实测 4337 collected / 2 errors →
+# Interrupted，exit code 2，其余用例一条没跑、覆盖率与逐模块门禁全部拿不到数据）。
+# 故此处直接探测真正要 import 的子模块，并把 exc_type 放宽到 ImportError：环境真的没有 Qt
+# 时应走 skip 通道，而不是把整轮 pytest 打成 Interrupted。
+pytest.importorskip(
+    "PySide6.QtGui", exc_type=ImportError, reason="PySide6 / Qt 系统库不可用时跳过 Qt 窗口层用例（环境限制口径）"
+)
+pytest.importorskip(
+    "PySide6.QtWidgets", exc_type=ImportError, reason="PySide6 / Qt 系统库不可用时跳过 Qt 窗口层用例（环境限制口径）"
+)
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 

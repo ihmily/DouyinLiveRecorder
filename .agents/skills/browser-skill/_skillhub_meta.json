@@ -1,0 +1,13 @@
+{
+  "name": "BrowserSkill",
+  "installedAt": 1790670383951,
+  "source": "marketplace",
+  "version": "1.0.3",
+  "skillId": "skill_2089620392925700096",
+  "description_zh": "BrowserSkill 是腾讯开源的一个智能浏览器自动化工具，让 WorkBuddy 能够像人一样操作网页——自动填表、点击、翻页、截图，完成任何需要浏览器的复杂任务。",
+  "description_en": "Use when the user asks to automate their logged-in Chromium browser: visit\nand read pages, fill forms, scrape data, click through flows, regression-test\na PR's UI, validate a deployed page, or operate a tab they identify. Requires\nthe bsk CLI and browser extension.",
+  "iconSource": "https://openplatform-cdn.codebuddy.cn/public/common/capability_cover/29dcbb98-4213-4c26-a677-108dc47f7f86/ebdc7ef4-5981-4079-9d08-27cd045090a2.png",
+  "installedContentHash": "sha256:6b6e296cb03da063799b14f560fa79be21fca4b0b71bb88f3aa36a2a763438e9",
+  "iconLocalPath": "C:\\Users\\58421\\.workbuddy\\skills\\browser-skill\\_icon.png",
+  "iconDownloadedFrom": "https://openplatform-cdn.codebuddy.cn/public/common/capability_cover/29dcbb98-4213-4c26-a677-108dc47f7f86/ebdc7ef4-5981-4079-9d08-27cd045090a2.png"
+}

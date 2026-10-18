@@ -1718,6 +1718,38 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 > 脚本：`tests/test_{bili,douyin,douyu,huya,twitch}_live_collector.py`（`python file.py <URL> [秒数]`，
 > 需活房间 + 外网，默认人工通道）。
 
+### v4.5.0-dev (2026-10-18) — CI 修复：vbs-behavior-test job 只装 pytest，11 条用例全数 ERROR（ModuleNotFoundError: No module named 'distro'）
+
+- **现象**：手动触发 CI 时 `vbs-behavior-test`（windows-latest）红，`tests/test_stop_recording_vbs.py` 的 11 条用例全部 ERROR 在 setup 阶段，栈顶 `src/node_install.py:10: import distro`；另有 1 warning（`Unknown config option: asyncio_mode`，缺 pytest-asyncio）。
+- **归因（不是被测文件的问题）**：被测文件只 import 标准库 + pytest，故障来自 `tests/conftest.py` 的三个 **autouse** fixture——`_clean_credential_caches`（`from src import spider` → `src/__init__.py` → `src/node_install.py` 顶层 `import distro`）、`_hermetic_danmaku_hub`（`import src.danmaku_monitor`，同一条 src 导入链）、`_pin_identity_translation`（`import i18n` → 顶层 `from loguru import logger`）。即「跑仓库里任何一条 pytest」的门槛是**整份 requirements.txt**，与被测文件自己的 import 无关；单点跑一个不依赖 src 的用例同理。
+- **处置（选环境对齐，而非给 fixture 加 skip 通道）**：该 job 的安装步骤改走 `.github/actions/retry` 装 `requirements.txt pytest pytest-asyncio`，`timeout-minutes` 10 → 20（装 PySide6 这类大 wheel 比只装 pytest 多出数分钟）。反面选项「fixture 在模块未加载时静默跳过」会重开 MIN-2264 那类「fixture 静默不生效、污染类用例退化成单独跑通过整包跑失败」的假绿面，未采纳。体积代价可接受：本工作流已改为仅手动触发，且 build-release.yml 的 Windows 构建 job 本就在同一 runner 镜像上装同一份清单。
+- **回归锁（新增 `tests/test_ci_pytest_env_parity.py`，7 条）**：任何出现 pytest（执行或安装）的 job 必须另有 `pip install -r requirements.txt`。双向钉——已知 pytest job（`test` / `concurrency-test` / `vbs-behavior-test`）必须被检测出；`setup` / `static` / `deps-audit` / `integration-verify` / `build-verify` 五个 job 不得被误判（setup 只 echo `pytest_version=9.1.1`）。检测器只收 `run` 与 `with.command` 并剥掉 bash 注释行：否则 setup 常量步骤里那段 `# pytest 同属此类…` 注释会把「提到 pytest」当成「执行 pytest」，判据随即被稀释。
+- **变异验证两项**：① 该 job 的 command 去掉 `-r requirements.txt` → 主判据红并点名 `vbs-behavior-test`；② 检测器放宽成裸子串 `pytest` → setup 误判格红。两项均按字节还原（备份文件比对），复跑 7 passed。
+- **验证**：`pytest tests/test_ci_pytest_env_parity.py + test_ci_retry_action.py + test_ci_frontend_registration.py + test_stop_recording_vbs.py` **35 passed / 0 warning**；`mypy`（无参）Success 247 文件；`black --check` / `isort --check-only` / `scripts/check_annotations.py` 均 rc=0；`ci.yml` 行尾复测仍纯 CRLF（991 条，裸 LF 0）。
+- **端到端真机验证（DoD 第 2 步）**：不适用——纯 CI 工程改动，不触碰录制链路 / 选源 / ffmpeg 参数。**交回用户的动作**：提交并推送后手动触发一次 CI，确认 `vbs-behavior-test` 由红转绿。
+
+### v4.5.0-dev (2026-10-18) — 运行时钉定随上游 node v24.22.0 重钉：发布链四平台同时红的归因与处置
+
+- **现象**：发布链四个平台（`windows-x64` / `linux-x64` / `linux-arm64` / `macos-arm64`）同时以 `[build][FATAL] node-v24.22.0-*.zip|tar.gz SHA256 不匹配` 终止，期望值仍是 `v24.21.0` 的五条哈希。
+- **归因（不是完整性告警）**：`_download_nodejs` 取 `https://nodejs.org/dist/index.json` 的**首条 `lts`**，上游 2026-10-14 发布 `v24.22.0`（Krypton）后它即顶替 `v24.21.0`，故下载名换成 `node-v24.22.0-*` 而钉定表里仍是旧版本的值。这正是 `_PINNED_RUNTIME_SHA256` 注释写明的「上游一发新 LTS 本段即失配」人工闸口，不是构建机中毒。
+- **取数（官方通道，非本地自算）**：`https://nodejs.org/dist/v24.22.0/SHASUMS256.txt` 与同版本 `SHASUMS256.txt.asc` 的明文本体逐条比对**34 行完全相同**（与 2026-09-22 同口径，**未验签**；该槽在 `_PIN_SOURCE_TABLE` 的 `fingerprint` 仍为空，在线层不 adopt 它）。所得五值与 CI 报出的四条「实际」值**逐位相同**，可作「值本身没错、只是版本漂移」的独立佐证。
+- **改动**：`build_exe._PINNED_RUNTIME_SHA256` 的 node × 5 槽换成 `v24.22.0` 官方公布值（`macos-x64` 本次矩阵未报错，但同属一套来源，一并不留旧版本，否则下次 mac 构建才红）；槽位注释的版本号与来源 URL 同步改正，2026-09-22 的旧读数作为历史记录保留。
+- **未采取的处置**：① 不把 CI 报出的实测值当基线回填（那会把「构建机已中毒」固化成基线）；② 不把 `_download_nodejs` 的「最新 LTS」改成写死版本号——那会让版本漂移这道闸门整体失效。
+- **验证**：`check_runtime_pins.py --strict` rc=0（5 个运行时键全绿，macOS 四槽仍走官方签名档）；`pytest tests/test_build_exe.py` **124 passed**、0 warning；端到端实下载 `node-v24.22.0-win-x64.zip`（37,733,703 B）自算 SHA256 = `f9683a19…`，与钉定值逐位相同。远端发布链需重跑确认（本机无法代跑）。
+
+### v4.5.0-dev (2026-10-18) — SR-06 收口：`.agents/skills/` 纳入 git 跟踪（28 文件入库）+ 新增 `tests/test_skill_agents_consistency.py`（12 条回归锁），CI required check 不再在干净检出上必红
+
+- **根因**：`.gitignore` 整目录排除 `.agents/`，而 `.agents/skills/` 从未入库（`git ls-files .agents` 为空）→ `scripts/check_skill_agents_consistency.py` 把「目录缺失」判为退 2（门禁自身失效）；它又是 required check `ci-summary` 的 `needs` 之一，于是远端 CI 每次全链红（审查 `docs/worklog/CODE_REVIEW_2026-10-04.md` SR-06，远端实测已红）。维护者本机有该目录 → 本地恒绿、干净检出恒红。
+- **两条路的取舍（已交回用户确认后执行）**：选「资产入库」而非「资产缺失就 skip 退 0」——后者会让这条 required check 在 CI 上**永远不真正执行**，把「长期红」改成「长期空转」，与本仓「失败信号不得降级」相悖；前者则让判定在每次合并边界真实发生。
+- **写法必须是「排除内容物 + 反选子目录」**：`.agents/*` + `!.agents/skills/`。写成目录级 `.agents/` 时 git 不再下钻该目录、反选逐字失效——本机实测：改回 `.agents/` 后 `git status --untracked-files=all .agents` 从 **28 条掉到 0 条**（正是 SR-06 的原状）。该形态已由 `test_gitignore_reincludes_skills_dir_but_not_sibling_dirs` 锁死，`.agents/` 字面量不得再出现。
+- **`.dockerignore` 仍整目录排除 `.agents/`**：镜像不需要 Skill，与「入库」不矛盾，AGENTS.md 已注明二者分工。
+- **新增 `.agents/skills/.gitattributes` 钉 `*.sh text eol=lf`**：仓库 `core.autocrlf=true` 会在 Windows 检出时把 LF 翻成 CRLF，`start-server.sh` / `stop-server.sh` 的 shebang 随之变成 `bash\r`，Git Bash 下 `/usr/bin/env` 找不到该解释器。属性文件只作用于该子树，不动仓库其余 `.sh` 的既有形态；`git check-attr` 实测两条 `text: set` / `eol: lf`，索引内 shebang 行字节为 `bash\n`。
+- **回归锁 12 条**（新增 `tests/test_skill_agents_consistency.py`）：目录缺失退 2 / AGENTS.md 缺失退 2 / 表格条目指向不存在路径退 1 / 目录缺 `SKILL.md` 退 1 / frontmatter name 与目录名不一致退 1 / 未声明 AGENTS.md 为约束事实源退 1 / 引用不存在的 AGENTS.md 章节退 1 / 外部工具技能豁免 / 一致面退 0 / 未登记目录至少产出 WARN / ignore 写法锁 / 真实仓库面自证。**核心是分档**：「目录缺失＝门禁自身失效（2）」与「条目指错＝一致性不合格（1）」不得互相吞掉。
+- **已知未收口**：「目录存在但表格未登记」方向目前只进 warnings、rc 仍 0（同批审查第 3.2 节已列为缺口）。本轮用例只锁「WARN 可见」，**不锁退出码**，留待该缺口收口时再收紧——现在锁 0 等于把已知缺陷固化成契约。
+- **变异验证两项**：M1 反选改回目录级 `.agents/` → `test_gitignore_reincludes_skills_dir_but_not_sibling_dirs` 转红（同时 git 可见文件数实测 28 → 0）；M2 脚本「目录缺失」退 2 改 0 → `test_missing_skills_dir_is_rc2_not_silent_pass` 转红。两次均按字节还原（`git diff --stat scripts/check_skill_agents_consistency.py` 为空），全仓 `MUTATION-` 残留扫描 0。
+- **验证**：`pytest tests/test_skill_agents_consistency.py + test_pre_commit_config.py + test_run_gates.py + test_agent_hook_guard.py` **105 passed / 1 skipped**（新增文件 12 passed、0 警告）；`python scripts/check_skill_agents_consistency.py` rc=0（5 个 Skill 条目一致）；`black` 对新测试文件实排后复检 unchanged、`isort --check-only` rc=0、`mypy` 该 2 文件 0 issues；`scripts/check_annotations.py` rc=0。`scripts/check_skill_agents_consistency.py` **逻辑一行未改**且仍纯 CRLF（269 条），新测试文件与 `.gitignore` 仍纯 LF、AGENTS.md 仍纯 CRLF（548 → 550）。
+- **端到端真机验证（DoD 第 2 步）**：不适用——纯工程资产与门禁改动，不触碰录制链路 / 选源 / ffmpeg 参数。**交回用户的动作**：本条目需提交并推送后复核远端 `CI` 的 `static` job 由红转绿。
+
 ### v4.5.0-dev (2026-10-18) — 四份根文档同步真实状态 + 精简：滚动归档 v4.4.0 及更早条目、v4.5.0 发布说明压缩表述、目录树补 `src/config_read.py`
 
 - **先量化再动手**：四份文档基线 `README.md` 125,120 B / `README_EN.md` 142,725 B / `CODE_WIKI.md` 480,656 B / `CODE_WIKI_EN.md` 542,868 B。冗余形态实测：完全重复长句 3 / 6 / 4 / 6 条、连续空行 0 / 0 / 2 / 2 处、无用格式标记（分隔线 / 空粗体 / `<br>`）0；真正的大头是**更新日志**（分别占 31.8% / 55.6% / 42.2%）。

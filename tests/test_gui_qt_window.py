@@ -17,7 +17,15 @@ from typing import Iterator
 
 import pytest
 
-pytest.importorskip("PySide6", reason="PySide6 未安装时跳过 Qt 窗口层用例（环境限制口径）")
+# 为什么探测子模块而不是顶层包 + 为什么放宽 exc_type（2026-10-18 CI 实测事故）：
+# pytest 9.1 起 importorskip 的 exc_type 缺省为 ModuleNotFoundError，而 PySide6 缺 Qt 系统库
+# （ubuntu runner 无 libEGL.so.1）时失败发生在 **QtWidgets 子模块的 dlopen**，顶层
+# `import PySide6` 仍然成功 → 只探测顶层包时这一行恒成立，紧随其后的 import 抛 ImportError，
+# 以 collection error 形态中断整轮 pytest（test_gui_qt_units.py 头部注释里有完整读数）。
+# 判据：环境没有 Qt 只该 skip 本模块，不该把另外 4337 条用例一起带走。
+pytest.importorskip(
+    "PySide6.QtWidgets", exc_type=ImportError, reason="PySide6 / Qt 系统库不可用时跳过 Qt 窗口层用例（环境限制口径）"
+)
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 

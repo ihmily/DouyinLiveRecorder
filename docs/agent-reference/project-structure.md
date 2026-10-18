@@ -105,6 +105,10 @@
 │   ├── execjs/          # PyExecJS 类型存根（多个 .pyi）
 │   └── pystray/         # pystray 类型存根（__init__.pyi）
 │
+├── .agents/             # 项目级 Skill 资产（**已入库**：.gitignore 以 .agents/* + !.agents/skills/ 反选，其余内容物仍忽略）
+│   └── skills/          # 5 个 Skill 目录：dlr-dev-playbook / ffmpeg-command-construction / platform-source-selection / runtime-pin-verification / browser-skill（外部工具技能）
+│       └── .gitattributes # *.sh text eol=lf（仓库 core.autocrlf=true 会把 shebang 翻成 bash\r，限定在本子树生效）
+│
 ├── scripts/             # 维护脚本与独立工具（CI 门禁、i18n 工具、单文件整合版；运行时链路不引用）
 │   ├── check_coverage.py       # 逐模块覆盖率门禁（阈值见 MODULE_THRESHOLDS）
 │   ├── check_version.py        # 版本「动态化、未写死」状态校验
