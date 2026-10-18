@@ -1809,12 +1809,16 @@ def backup_file_start() -> None:
 
 
 def check_ffmpeg_existence() -> bool:
-    # On Windows, do not fall back to FFmpeg from the system PATH.
+    # The first launch may need to download FFmpeg into the DLR folder.
+    # Let Hmily's installer run, but never accept a system-wide executable.
     if os_type == 'nt' and not os.path.isfile(bundled_ffmpeg_executable):
-        logger.error(
-            f"Required bundled FFmpeg was not found: {bundled_ffmpeg_executable}"
+        logger.warning(
+            f"Bundled FFmpeg not found; attempting the DLR installer: "
+            f"{bundled_ffmpeg_executable}"
         )
-        return False
+        if not check_ffmpeg():
+            logger.error("Bundled FFmpeg download/installation failed.")
+            return False
 
     try:
         result = subprocess.run(
