@@ -35,6 +35,14 @@ class TestClientCacheConcurrency:
         with ah._client_cache_lock:
             ah._client_cache.clear()
 
+    def teardown_method(self) -> None:
+        # LT-06（与 setup 对称的收尾清理）：本文件的用例往模块级缓存塞的全是 FakeAsyncClient，
+        # 原先只在 setup 清——最后一个用例（以及任何中途失败的用例）留下的条目会跨文件滞留
+        # 整个 pytest 会话，后续按「缓存里是什么类型」推断的其它文件可能被这类替身污染。
+        # 清理持同一把锁，与 setup 同口径。
+        with ah._client_cache_lock:
+            ah._client_cache.clear()
+
     # 守护行为：8 个线程各自 asyncio.run（即 8 个独立事件循环）并发取客户端，不应抛异常。
     # 这是本项目真实并发模型的复现——每个直播间一个线程、各自 asyncio.run，
     # 旧实现用模块级 asyncio.Lock 单例，锁会惰性绑定到首个事件循环，后续循环 await 时
@@ -61,6 +69,11 @@ class TestClientCacheConcurrency:
             for t in threads:
                 t.join(timeout=15)
         assert errors == []
+        # LT-01（2026-10-18 审查）：join(timeout=15) **返回**不等于线程已退出——被测逻辑挂死时
+        # join 超时静默返回、errors 仍为空，本用例照绿（假绿本体：线程永不退出恰是本文件要防的
+        # 跨循环锁死形态）。必须逐线程断言 is_alive 已为 False，才真正钉住「8 线程全部跑完」。
+        for t in threads:
+            assert not t.is_alive(), "join 超时后线程仍存活：被测逻辑挂死，不得判绿"
 
     # 守护行为：同一事件循环内两次取客户端应命中缓存（连接复用的前提）。
     # 若此处返回不同实例，意味着每次请求都新建连接池，长连接与 TLS 握手开销将成倍放大。

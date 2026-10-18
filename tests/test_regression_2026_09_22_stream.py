@@ -12,7 +12,8 @@
 #
 # 全部离线：网络探针用 AsyncMock 桩掉，HTTP 客户端用记录型假对象替换。
 
-from typing import cast
+from collections.abc import Iterator
+from typing import Literal, cast
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -336,6 +337,20 @@ class _Resp:
         self.status_code = status_code
         self.text = text
         self.headers: dict[str, str] = {}
+        # L-11（2026-10-19，CODE_REVIEW_2026-10-18）：探针读取正文改走 _bounded_probe_get 的
+        # 流式形态，本桩因此要能当「流式响应」用（上下文协议 + iter_bytes + encoding）。
+        # 刻意整段一次交出、不在桩里重实现「读满上限即断」的上界行为（那条不变量由
+        # tests/test_stream_select.py 用真实 httpx + MockTransport 的两条用例钉）。
+        self.encoding = "utf-8"
+
+    def __enter__(self) -> _Resp:
+        return self
+
+    def __exit__(self, *_args: object) -> Literal[False]:
+        return False
+
+    def iter_bytes(self, _chunk_size: int | None = None) -> Iterator[bytes]:
+        yield (self.text or "").encode("utf-8")
 
 
 class _RecordingClient:
@@ -348,6 +363,18 @@ class _RecordingClient:
     def get(self, url: str, headers: dict[str, str] | None = None, follow_redirects: bool = True) -> _Resp:
         self.calls.append((url, dict(headers or {})))
         return _Resp(self.default_status, self.bodies.get(url, ""))
+
+    def stream(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        follow_redirects: bool = True,
+    ) -> _Resp:
+        # L-11：生产的探针读取统一走 client.stream(...)，本方法把既有 get 的语义原样暴露成
+        # 流式形态——同一份正文、同一个 calls 记录，因此「哪些地址被请求过」的断言逐字不变。
+        assert method == "GET", method
+        return self.get(url, headers=headers, follow_redirects=follow_redirects)
 
     def headers_for(self, fragment: str) -> dict[str, str] | None:
         for url, headers in self.calls:

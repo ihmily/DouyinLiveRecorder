@@ -243,12 +243,15 @@ _MAX_DECOMPRESSED_BYTES = 32 * 1024 * 1024  # gzip 解压后的产出上限
 _READ_CHUNK_BYTES = 64 * 1024
 
 
-def _read_capped(resp: http.client.HTTPResponse, limit: int, kind: str) -> bytes:
+def _read_capped(resp: "http.client.HTTPResponse | urllib.error.HTTPError", limit: int, kind: str) -> bytes:
     # 单次带 amt 的 read：HTTPResponse.read(amt) 至多返回 amt 字节，故「读进内存的量」
     # 天然被钉在 limit+1 之内；读完仍满额即判超限并拒绝该响应。
     # **刻意不写成 while 累加循环**：本仓 tests/test_sync_http.py 的响应替身是 MagicMock，
     # 其 read() 无论传什么参数都返回同一个非空串——「读到空块才退出」的循环在测试里会变成
     # 死循环（且全量 pytest 表现为零输出挂死）。单次带 amt 的读法对该替身同样成立。
+    # M-03（2026-10-18 审查）：形参扩到 urllib.error.HTTPError——400 分支的错误体读取同样走本函数
+    # （HTTPError 的 read(amt)/close() 与 HTTPResponse 同形，fp 即错误体流），否则「仅 400 例外」
+    # 那条支路绕过本模块的读取上限。
     data = resp.read(limit + 1)
     if len(data) > limit:
         raise ValueError(f"响应体超过{kind}上限 {limit} 字节，已拒绝该响应")
@@ -396,7 +399,16 @@ def sync_req(
                 # 其余状态码继续上抛，交给下面的统一失败分支
                 try:
                     if e.code == 400:
-                        resp_str = e.read().decode(content_encoding)
+                        # M-03（2026-10-18 审查）：本分支原先是无参 `e.read()` 全量读取——与
+                        # 成功路径改前的老形态同构的「对端给多少就申请多少」，超大 400 错误体
+                        # 可直接威胁进程内存（MemoryError 连统一失败兜底都兜不住）。现与成功路径
+                        # 同走 _read_capped。为何只需**一道**上限（成功路径 gzip 分支是两道）：
+                        # 本分支从不解压 400 错误体（调用方拿原文），没有解压动作就没有
+                        # 「解压产出」这个暴露面；若在此补 gzip 解压反而改变既有透传契约，超出
+                        # 本次收口范围。超限抛 ValueError → 内层 finally 照常 e.close() 归还句柄
+                        # → 外层通用 except 记一条脱敏 error 日志并返回空串（sync_req 既有失败
+                        # 契约「失败一律空串」不变，异常不穿透给调用方）。
+                        resp_str = _read_capped(e, _MAX_RESPONSE_BYTES, "400 错误响应体").decode(content_encoding)
                     else:
                         raise
                 finally:

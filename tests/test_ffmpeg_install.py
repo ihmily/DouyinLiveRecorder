@@ -44,6 +44,7 @@ import importlib
 import io
 import os
 import subprocess
+import sys
 import types
 import zipfile
 from collections.abc import Iterator
@@ -55,6 +56,7 @@ import pytest
 import requests
 
 import src.ffmpeg_install as ffmpeg_install
+import src.ffmpeg_master_download as ffmpeg_master_download
 
 # 一份与真实构建无关的假 zip 内容：只用其字节摘要
 ZIP_A = b"fake-ffmpeg-build-A"
@@ -89,6 +91,11 @@ def _download_module_files() -> set[str]:
 
 # win_env 里 ffmpeg_install.download_ffmpeg_master 替身的调用记录。
 # 由 _no_real_egress 逐用例清空（跨用例串味会让「有没有走第二条源」的断言失真）。
+# [2026-10-18 LT-11] 上面这两句此前**失实**：fixture 并不清空它，全仓也没有任何断言读它，
+# 于是它是一个「注释声称有生命周期管理、实际只累加」的孤儿累加器。现已补齐两侧：
+# ① _no_real_egress 逐用例 MASTER_CALLS.clear()；② TestMasterCallLedger 两条用例真读
+# （负例＝默认开关下不触达、正例＝开启后恰好触达一次且 arch 实参正确）。清空因此是真需求：
+# 正例留下的那一条若不清空，紧随其后的负例就会假红——「不清空也行」从此不成立。
 MASTER_CALLS: list[Any] = []
 
 
@@ -115,6 +122,10 @@ class _EgressTripwire:
 
 @pytest.fixture(autouse=True)
 def _no_real_egress(monkeypatch: pytest.MonkeyPatch) -> None:
+    # LT-11（2026-10-18）：兑现 MASTER_CALLS 头部注释的「逐用例清空」。放在本 autouse fixture 里
+    # 而不是各用例自己清，是因为它是**模块级**累加器：win_env 的替身会往里 append，而用例顺序
+    # 一变（-k、--lf、新增文件）就会让「数次数」的断言随顺序失真。
+    MASTER_CALLS.clear()
     # 先把每个下载模块的出站层换成哨兵，再保证「第二条源默认关」不被宿主环境翻牌：
     # FFMPEG_MASTER_ALLOWED 若在本机 shell 里被设成 是/1，全部默认分支用例都会走错路，
     # 故逐用例显式 delenv（仓内约定：环境变量一律 monkeypatch.setenv/delenv，禁 patch.dict）。
@@ -514,7 +525,10 @@ def win_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # 默认实现：记一次名字 + 返回 False（等价于「兜底失败」），绝不真下载。
     def _record_master_call(*args: Any, **kwargs: Any) -> bool:
         # 不写「lambda: LIST.append(x) or False」形态——list.append 无返回值，mypy [func-returns-value] 拒绝。
-        MASTER_CALLS.append(args or kwargs)
+        # [2026-10-18 LT-11] 原来记的是 `args or kwargs`：实参位有值时 kwargs 整个被丢弃，
+        # 而 install_ffmpeg_windows 恰好以 (execute_dir, arch=...) 调用——arch 这个「走没走对架构」
+        # 的判据永远记不到。改成两个都留，正例断言才既能数次数、也能看实参。
+        MASTER_CALLS.append({"args": args, "kwargs": kwargs})
         return False
 
     monkeypatch.setattr(ffmpeg_install, "download_ffmpeg_master", _record_master_call)
@@ -619,6 +633,65 @@ class TestOfficialDownload:
             raise requests.RequestException("connection reset")
 
         monkeypatch.setattr(ffmpeg_install, "requests", self._requests(boom))
+        assert ffmpeg_install.download_ffmpeg_official("https://x/ffmpeg.zip", str(win_env)) is False
+        # L-13：异常出口同样必须清掉临时包（旧实现在这一支漏删，几百 MB 长期残留）。
+        assert not (win_env / "ffmpeg_official_temp.zip").exists()
+
+    def test_interrupted_download_unlinks_temp_zip(self, win_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # L-13 出口①：下载**写到一半**才断（CDN 截断 / 连接重置落在 iter_content 里）。
+        # 此前 requests 与 OSError 两类异常出口都直接 return False、不删包，于是程序目录里
+        # 长期留下一个「名字看起来就是下载完成的那份」的半截 ffmpeg_official_temp.zip。
+        class _MidStreamFail(_Resp):
+            def iter_content(self, chunk_size: int = 1024) -> Iterator[bytes]:
+                yield b"half-a-zip"
+                raise requests.ConnectionError("stream cut mid-download")
+
+        def fake_get(url: str, *a: Any, **k: Any) -> _Resp:
+            if url.endswith(".sha256"):
+                return _Resp(text="")
+            return _MidStreamFail(content=b"ignored")
+
+        monkeypatch.setattr(
+            ffmpeg_install, "requests", types.SimpleNamespace(get=fake_get, RequestException=requests.RequestException)
+        )
+        assert ffmpeg_install.download_ffmpeg_official("https://x/ffmpeg.zip", str(win_env)) is False
+        assert not (win_env / "ffmpeg_official_temp.zip").exists()
+
+    def test_unzip_failure_unlinks_temp_zip(self, win_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # L-13 出口②：形态校验与哈希都过了、解压才炸（解压炸弹防护 / Zip Slip / 中央目录损坏）。
+        # 清理语句原本排在整个 with 块之后，异常一抛就永远走不到。
+        payload = _zip_with_bin()
+        monkeypatch.setattr(ffmpeg_install, "requests", self._requests(lambda *a, **k: _Resp(content=payload)))
+
+        def explode(*a: object, **k: object) -> None:
+            raise RuntimeError("zip bomb guard tripped")
+
+        monkeypatch.setattr(ffmpeg_install, "unzip_file", explode)
+        assert ffmpeg_install.download_ffmpeg_official("https://x/ffmpeg.zip", str(win_env)) is False
+        assert not (win_env / "ffmpeg_official_temp.zip").exists()
+
+    def test_missing_bin_dir_unlinks_temp_zip(self, win_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # L-13 出口③：包内找不到 ffmpeg.exe 时是**直接 return False**（在 with TemporaryDirectory
+        # 块内），报告只点名了「下载中断」与「解压异常」两条，实测这条与 copytree/复核抛错同样漏删，
+        # 故 finally 统一覆盖；本条把第三支单独钉住，防止「只在 except 里补 unlink」的半截修法。
+        payload = _zip_with_bin(members=("bin/ffprobe.exe",))
+        calls: list[str] = []
+        monkeypatch.setattr(ffmpeg_install, "requests", self._requests(lambda *a, **k: _Resp(content=payload)))
+        monkeypatch.setattr(ffmpeg_install, "subprocess", _proc_shim({}, calls))
+        assert ffmpeg_install.download_ffmpeg_official("https://x/ffmpeg.zip", str(win_env)) is False
+        assert not (win_env / "ffmpeg_official_temp.zip").exists()
+
+    def test_uncleanable_temp_zip_does_not_escape(self, win_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # finally 里的清理动作本身失败时，不得把「安装失败」升级成异常穿出（契约见模块头「设计取舍」）。
+        # 形态用「临时包路径上先放一个同名目录」构造：open(...,"wb") 与 Path.unlink() 都真抛
+        # IsADirectoryError（OSError 子类），走的是文件系统语义而不是替身。
+        # **不得**改成 monkeypatch.setattr(Path, "unlink", ...)——那是全进程共享的 stdlib 类属性，
+        # 窗口内 loguru 的轮转删除与其它后台线程的 unlink 一并被换掉（AGENTS M-27 同一族禁令）。
+        (win_env / "ffmpeg_official_temp.zip").mkdir()
+        payload = _zip_with_bin()
+        monkeypatch.setattr(ffmpeg_install, "requests", self._requests(lambda *a, **k: _Resp(content=payload)))
+        calls: list[str] = []
+        monkeypatch.setattr(ffmpeg_install, "subprocess", _proc_shim({}, calls))
         assert ffmpeg_install.download_ffmpeg_official("https://x/ffmpeg.zip", str(win_env)) is False
 
     def test_unexpected_error_is_reported_as_failure(self, win_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1076,22 +1149,30 @@ class TestLinuxExtraBranches:
     # 上方原有类 TestLinuxPackageFallback 已锁住「yum 失败仍试 apt」；本类补它没走到
     # 的四条旁支：yum 探测抛非 FileNotFoundError、apt update 失败、apt 不存在、
     # apt 安装本身失败。这四条共同决成「请手动安装」的文案，走错一条就是直接放弃。
-    def test_yum_probe_crash_keeps_rhs_semantics(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # yum 探测抛非 FileNotFoundError 时 is_RHS 保持 True（不再试 apt）——既有语义，
-        # 用例钉住它，避免后续「顺手改成回退」造成行为漂移。
-        state: dict[str, int] = {"n": 0}
+    # [2026-10-18 L-14] 第一条的判据被反转：原先「yum 抛异常 → 不试 apt」正是「直接放弃」
+    # 那一支，与函数末尾「两条包管理器路径都试过之后才落直下兜底」的顺序判据冲突，已修为必须试 apt。
+    def test_yum_probe_crash_still_tries_apt(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # L-14（2026-10-18 行为变更）：yum 在位但 run() 抛非 FileNotFoundError 异常时也必须继续试 apt。
+        # 本用例原名 test_yum_probe_crash_keeps_rhs_semantics，钉的是「is_RHS 保持 True、apt 不被
+        # 触达」这一**缺陷**（当时的注释称其为「既有语义」）：install_ffmpeg_linux 函数末尾的顺序
+        # 判据自述「直下兜底只能在 yum、apt 两条包管理器路径都试过且都没装上之后进行」，而异常那一支
+        # 跳过 apt 直接落兜底，与判据正相反（MIN-24④ 只补了 returncode!=0 支，异常支是同族漏网）。
+        # 现按修复后的契约改判：yum 抛错 → apt update 仍被调用；两支都没装上 → 整体 False。
+        # apt 两支都返非零（而非 rc=0），否则 apt install 会成功并提前 return True，
+        # 本条想测的「异常支是否把 apt 让了过去」就又被返回值掩盖了。
+        calls: list[str] = []
 
         def fake_run(cmd: list[str], *a: object, **k: object) -> Any:
-            state["n"] += 1
+            calls.append(" ".join(cmd))
             if cmd[0] == "yum":
                 raise ValueError("yum blew up")
-            return types.SimpleNamespace(returncode=0, stderr=b"")
+            return types.SimpleNamespace(returncode=1, stderr=b"")
 
         shim = types.SimpleNamespace(**vars(subprocess))
         shim.run = fake_run
         monkeypatch.setattr(ffmpeg_install, "subprocess", shim)
         assert ffmpeg_install.install_ffmpeg_linux() is False
-        assert state["n"] == 1
+        assert calls == ["yum install -y ffmpeg", "apt update"], "yum 异常后不得跳过 apt 分支"
 
     def test_apt_update_failure_returns_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
         calls: list[str] = []
@@ -1580,3 +1661,266 @@ class TestOfficialDownloadAuthorityWiring:
         monkeypatch.setattr(ffmpeg_install, "subprocess", _proc_shim({("ffmpeg", "-version"): 0}, proc_calls))
         assert ffmpeg_install.download_ffmpeg_official(ZIP_URL, str(win_env)) is True
         assert any("TOFU" in m or "首次信任" in m for m in captured), "降级必须写进日志（不得静默）"
+
+
+# ==========================================================================
+# 2026-10-18 评审修复包（M-06 / L-12 / LT-11 / L-15）
+# ==========================================================================
+
+# master 源候选 URL 之一（只作日志脱敏的输入，不发起请求：_probe 与 _stream_download 全部桩掉）。
+MASTER_GITHUB_URL = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+
+# 会被 read_text(encoding="ascii") 判成非法字节序列的基准正文（M-06 / L-12 的触发形态）：
+# 用户手工编辑基准、或同步盘/压缩工具把它转成 UTF-8 都会落在这里。
+BAD_BASELINE_BYTES = "这不是十六进制哈希".encode("utf-8")
+
+
+class TestMasterBaselineDecodeGuard:
+    # M-06（CODE_REVIEW_2026-10-18）：TOFU 基准是**磁盘上可被外部改写的输入**——用户手工编辑、
+    # 同步盘/压缩工具把它转成 UTF-8，都会让 read_text(encoding="ascii") 抛 UnicodeDecodeError
+    # （ValueError 子类，**不是** OSError）。旧实现只捕 OSError，于是该异常既不被
+    # _tofu_verify_or_record 接住、也不被 download_ffmpeg_master 的 `except (IntegrityError, OSError)`
+    # 接住，穿出「失败一律返回 False 不抛」的顶层契约直达启动流程（install_ffmpeg_windows 全程无 try）。
+    # 姊妹模块 src/ffmpeg_linux_download.py::_verify_archive 是同一形态**已修**的版本（其回归锁
+    # ::test_non_ascii_baseline_refuses_without_raising），本包注释口径与它一致；官方 gyan.dev 侧
+    # 的同形缺陷见 L-12（TestOfficialBaselineDecodeGuard）。
+    def test_non_ascii_baseline_becomes_integrity_error_and_discards_zip(self, tmp_path: Path) -> None:
+        zip_path = tmp_path / "ffmpeg_master_win64_temp.zip"
+        zip_path.write_bytes(ZIP_A)
+        baseline = tmp_path / "_ffmpeg_master.win64.zip.sha256"
+        baseline.write_bytes(BAD_BASELINE_BYTES)
+        # pytest.raises(IntegrityError) 本身就是「不再是 UnicodeDecodeError」的断言：
+        # 后者会原样穿出并让本用例以 error 形态失败，而不是以「断言不满足」失败。
+        with pytest.raises(ffmpeg_master_download.IntegrityError):
+            ffmpeg_master_download._tofu_verify_or_record(zip_path, baseline, MASTER_GITHUB_URL)
+        # 删包必须真的发生：旧形态里删包就写在 except 分支内，异常穿出时连这一步都一起被跳过。
+        assert not zip_path.exists()
+        # 拒装轮不得把篡改产物的哈希写成新基准（基准仍是那份坏文件，等人工处置）。
+        assert baseline.read_bytes() == BAD_BASELINE_BYTES
+
+    def test_entrypoint_normalises_non_ascii_baseline_to_false(
+        self, win_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 入口层锁：契约是「失败一律返回 False 不抛」。只测单元层会漏掉调用方 except 元组这一环
+        # ——M-06 的穿透恰好发生在「内部抛了 IntegrityError 之外的类型、而调用方按类型收窄」的缝隙上。
+        md = ffmpeg_master_download
+        payload = _zip_with_bin()
+        monkeypatch.setattr(md, "_probe", lambda url: ("ok", None))
+
+        def fake_stream(url: str, zip_path: Path) -> tuple[str, int, dict[str, str]]:
+            zip_path.write_bytes(payload)
+            # build_id 返空串 → 基准落到旧名 _ffmpeg_master.win64.zip.sha256，用例好定位（走的是
+            # MID-59「无可用头时退回旧命名」那条既有分支，不是测试自造的形状）。
+            return "", len(payload), {}
+
+        monkeypatch.setattr(md, "_stream_download", fake_stream)
+        baseline = win_env / f"{md._HASH_PREFIX}.win64{md._HASH_SUFFIX}"
+        baseline.write_bytes(BAD_BASELINE_BYTES)
+        proc_calls: list[str] = []
+        monkeypatch.setattr(md, "subprocess", _proc_shim({}, proc_calls))
+
+        assert md.download_ffmpeg_master(str(win_env), arch="win64") is False
+        assert not (win_env / "ffmpeg_master_win64_temp.zip").exists()
+        assert proc_calls == [], "拒装轮不得执行刚下载的二进制"
+
+
+class TestOfficialBaselineDecodeGuard:
+    # L-12（与 M-06 同形态，官方 gyan.dev 侧）：这里的异常不会穿到启动流程——download_ffmpeg_official
+    # 有 catch-all `except Exception`——但代价同样具体：fail-closed 分支（删包 + 点名「删除
+    # {hash_file} 后重试」的自救指引）整个被跳过，用户只看到一句泛化的「安装失败」，
+    # 且几百 MB 的临时包不删。两条锁分别钉「单元回 False」与「入口带指引失败」。
+    def test_non_ascii_baseline_refuses_and_unlinks(self, tmp_path: Path) -> None:
+        zip_path = _write_zip(tmp_path, ZIP_A)
+        build_id = "a" * 12
+        sidecar = zip_path.parent / ffmpeg_install._hash_file_name(build_id)
+        sidecar.write_bytes(BAD_BASELINE_BYTES)
+        # official_hash="" ⇒ 进 TOFU 降级分支（正是旁路基准参与判定的那一支）。
+        assert ffmpeg_install._check_or_record_zip_sha256(zip_path, build_id, "") is False
+        assert not zip_path.exists(), "fail-closed 分支必须删包（异常穿出时这一步被一并跳过）"
+        assert sidecar.read_bytes() == BAD_BASELINE_BYTES, "拒装轮不得改写基准"
+
+    def test_entrypoint_keeps_the_actionable_guidance(self, win_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        payload = _zip_with_bin()
+        stub, _calls = _doc_and_zip_requests(doc_status=404, payload=payload)
+        monkeypatch.setattr(ffmpeg_install, "requests", stub)
+        proc_calls: list[str] = []
+        monkeypatch.setattr(ffmpeg_install, "subprocess", _proc_shim({("ffmpeg", "-version"): 0}, proc_calls))
+        # 首跑：官方文档 404 → TOFU 记账并装成功，把基准留在 win_env 里。
+        assert ffmpeg_install.download_ffmpeg_official(ZIP_URL, str(win_env)) is True
+        recorded = sorted(win_env.glob(f"_ffmpeg_official*{ffmpeg_install._HASH_SUFFIX}"))
+        assert len(recorded) == 1
+        recorded[0].write_bytes(BAD_BASELINE_BYTES)
+
+        errors: list[str] = []
+        monkeypatch.setattr(ffmpeg_install.logger, "error", lambda msg, *a, **k: errors.append(str(msg)))
+        proc_calls.clear()
+        # 次跑：同一构建标识、基准已坏 ⇒ 必须落 fail-closed 那一支。
+        assert ffmpeg_install.download_ffmpeg_official(ZIP_URL, str(win_env)) is False
+        joined = " ".join(errors)
+        assert "UnicodeDecodeError" in joined, f"失败必须带异常类型（旧形态只剩泛化的安装失败一句）：{joined}"
+        assert "后重试" in joined, f"必须点名「删除基准后重试」的自救指引：{joined}"
+        assert not (win_env / "ffmpeg_official_temp.zip").exists()
+        assert proc_calls == [], "拒装轮不得执行刚下载的二进制"
+
+
+class TestMasterCallLedger:
+    # LT-11：win_env 的 download_ffmpeg_master 替身往模块级 MASTER_CALLS 记调用，但自 4.3 起
+    # 既无人清空也无人读取，而它的头部注释自称「由 fixture 逐用例清空」——注释失实 + 孤儿累加器。
+    # 处置取「补齐两侧」而不是删掉：正例本身是「第二条源确实经 ffmpeg_install 的模块级名字触达」
+    # 的接线锁（SEV-2220 的哨兵只拦 requests，拦不住这条函数边界），而逐用例清空是正/负两条用例
+    # 互不串味的前提。
+    # [定义顺序即刻意] 正例在前、负例在后：pytest 按定义顺序跑，负例因此在**默认（未摘 clear）**
+    # 形态下看到的是「上一条正例刚留下的那一条」，靠 fixture 的 clear() 才成立。摘掉 clear() 后
+    # 负例转红——「清空是真需求」由此成为可机检形态，而不是一句防御性冗余。
+    def test_enabled_touches_the_ledger_once_with_the_right_arch(
+        self, win_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(ffmpeg_install._FFMPEG_MASTER_ENV, "是")
+        monkeypatch.setattr(ffmpeg_install, "platform", _platform_shim("AMD64"))
+        assert ffmpeg_install.install_ffmpeg_windows() is False
+        assert len(MASTER_CALLS) == 1, f"开启后 master 源应恰好触达一次：{MASTER_CALLS}"
+        # 实参也要断：只数次数挡不住「传错目录 / 传错架构」这类半截接线。
+        assert MASTER_CALLS[0]["args"] == (str(win_env),)
+        assert MASTER_CALLS[0]["kwargs"].get("arch") == "win64"
+
+    def test_default_off_leaves_the_ledger_empty(self, win_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv(ffmpeg_install._FFMPEG_MASTER_ENV, raising=False)
+        monkeypatch.setattr(ffmpeg_install, "platform", _platform_shim("AMD64"))
+        assert ffmpeg_install.install_ffmpeg_windows() is False
+        assert MASTER_CALLS == [], f"未开启开关时不得触达 master 源：{MASTER_CALLS}"
+
+
+def _fake_video_postprocess(monkeypatch: pytest.MonkeyPatch, sentinel: object, seen: list[str]) -> None:
+    # 用最小假模块占住 sys.modules['src.video_postprocess']：真模块顶层 `import main`，在测试里会把
+    # 整条录制引擎（含导入期 SetConsoleOutputCP 等副作用）牵进来；本类锁的是「三处调用点是否把
+    # startupinfo 委托到 get_startup_info」这一**接线**事实，get_startup_info 自身的平台分支已由
+    # tests/test_video_postprocess_paths.py 覆盖，不在这里重测一遍（测试不得自实现被测逻辑）。
+    fake = types.ModuleType("src.video_postprocess")
+
+    def _fake_get_startup_info(system_type: str) -> object:
+        seen.append(system_type)
+        return sentinel
+
+    setattr(fake, "get_startup_info", _fake_get_startup_info)
+    monkeypatch.setitem(sys.modules, "src.video_postprocess", fake)
+
+
+def _kwargs_shim(returncode: int = 0) -> tuple[types.SimpleNamespace, list[dict[str, Any]]]:
+    # 与 _proc_shim 同一族形态（浅拷贝换 run，绝不改 stdlib 本体），只是这里要捕获的是**关键字实参**
+    # 而不是退出码表。stdout 给 str：check_ffmpeg_installed 走 text=True 并对 stdout 调 .strip()。
+    captured: list[dict[str, Any]] = []
+
+    class _R:
+        def __init__(self) -> None:
+            self.returncode = returncode
+            self.stdout = "ffmpeg version n7.1"
+            self.stderr = b""
+
+    def fake_run(cmd: list[str], *args: Any, **kwargs: Any) -> _R:
+        captured.append(dict(kwargs))
+        return _R()
+
+    shim = types.SimpleNamespace(**vars(subprocess))
+    shim.run = fake_run
+    return cast(types.SimpleNamespace, shim), captured
+
+
+class TestChildConsoleStartupInfo:
+    # L-15（CODE_REVIEW_2026-10-18）：三处 `subprocess.run(["ffmpeg", "-version"])` 不带 STARTUPINFO，
+    # 于是 Windows 无控制台形态（pythonw.exe 跑 gui.py、冻结 console=False 的 exe）下每次探测都闪出
+    # 一个黑色控制台窗口。锁四件事：① 该实参在**所有**平台都存在（删掉即红——captured[0]["startupinfo"]
+    # 对缺键直接 KeyError）；② 门控为假时恒传 None，且这条早返回路径不得去 import video_postprocess
+    # （那会把 main 的整条导入链牵进探测）；③ 门控为真时两份孪生实现都真委托给
+    # src.video_postprocess.get_startup_info 并按 os.name 取值；④ 三处调用点各自把结果透传给 subprocess。
+    # ②③都在 Linux CI 上强制走进 win32 分支来测（AGENTS「平台专属分支的测试不得靠 skipif 让 CI 跳过」，
+    # 与 src/ffmpeg_proc.py 的 _QUIT_VIA_STDIN 同法），判据常量 _HIDE_CHILD_CONSOLE 因此才存在。
+    def test_delegation_is_skipped_when_the_import_would_be_circular(
+        self, win_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 2026-10-18 实测坑（本类首版就是被它打红的）：首次 import src.video_postprocess 会执行它的
+        # 顶层 `import main` → main → src.notify 的模块级 `from src.video_postprocess import
+        # get_startup_info` 命中半初始化的 video_postprocess → ImportError，且失败的导入还会
+        # 半程跑一遍 main 的模块体（SetConsoleOutputCP(65001) 之类的进程级副作用照做）。
+        # 故 helper 只在那条环已解开（main 已加载）或已有假模块占位时才委托；否则退回改动前的
+        # 行为（闪窗），绝不为装饰性加固把探测/安装打成失败。
+        # 两条 delitem 保证本条与「谁先 import main」无关：整包跑与单文件跑同一结论。
+        monkeypatch.setattr(ffmpeg_install, "_HIDE_CHILD_CONSOLE", True)
+        monkeypatch.delitem(sys.modules, "src.video_postprocess", raising=False)
+        monkeypatch.delitem(sys.modules, "main", raising=False)
+        assert ffmpeg_install._win_startup_info() is None
+        assert "src.video_postprocess" not in sys.modules, "不该为取 startupinfo 触发那次循环导入"
+        shim, captured = _kwargs_shim()
+        monkeypatch.setattr(ffmpeg_install, "subprocess", shim)
+        assert ffmpeg_install.check_ffmpeg_installed() is True
+        assert captured[0]["startupinfo"] is None
+
+    def test_gate_off_passes_none_and_never_imports_video_postprocess(
+        self, win_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(ffmpeg_install, "_HIDE_CHILD_CONSOLE", False)
+        monkeypatch.setattr(ffmpeg_master_download, "_HIDE_CHILD_CONSOLE", False)
+        seen: list[str] = []
+        _fake_video_postprocess(monkeypatch, object(), seen)
+        shim, captured = _kwargs_shim()
+        monkeypatch.setattr(ffmpeg_install, "subprocess", shim)
+        assert ffmpeg_install.check_ffmpeg_installed() is True
+        assert captured[0]["startupinfo"] is None
+        assert seen == [], "非 Windows 早返回路径不得触达 video_postprocess（那条链顶层 import main）"
+
+    def test_twin_helpers_agree_on_both_gate_states(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 孪生实现的行为等价性（与 tests/test_ffmpeg_path_preference.py::TestTwinEquivalence 同一口径）：
+        # 两处 _win_startup_info 因循环导入无法收敛到单点，故「两边同时改」必须由机检兜住。
+        # seen 记的是委托次数：门控为真时两侧各调一次 get_startup_info，为假时一次都不该调。
+        for gate in (True, False):
+            monkeypatch.setattr(ffmpeg_install, "_HIDE_CHILD_CONSOLE", gate)
+            monkeypatch.setattr(ffmpeg_master_download, "_HIDE_CHILD_CONSOLE", gate)
+            seen: list[str] = []
+            sentinel = object()
+            _fake_video_postprocess(monkeypatch, sentinel, seen)
+            assert ffmpeg_install._win_startup_info() is ffmpeg_master_download._win_startup_info()
+            assert seen == [os.name] * (2 if gate else 0), f"门控 {gate} 下的委托次数/入参不符：{seen}"
+
+    def test_check_ffmpeg_installed_forwards_startup_info(self, win_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(ffmpeg_install, "_HIDE_CHILD_CONSOLE", True)
+        seen: list[str] = []
+        sentinel = object()
+        _fake_video_postprocess(monkeypatch, sentinel, seen)
+        shim, captured = _kwargs_shim()
+        monkeypatch.setattr(ffmpeg_install, "subprocess", shim)
+        assert ffmpeg_install.check_ffmpeg_installed() is True
+        assert captured[0]["startupinfo"] is sentinel
+
+    def test_official_verify_run_forwards_startup_info(self, win_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(ffmpeg_install, "_HIDE_CHILD_CONSOLE", True)
+        seen: list[str] = []
+        sentinel = object()
+        _fake_video_postprocess(monkeypatch, sentinel, seen)
+        payload = _zip_with_bin()
+        stub, _calls = _doc_and_zip_requests(doc_text=_sha256(payload), payload=payload)
+        monkeypatch.setattr(ffmpeg_install, "requests", stub)
+        shim, captured = _kwargs_shim()
+        monkeypatch.setattr(ffmpeg_install, "subprocess", shim)
+        assert ffmpeg_install.download_ffmpeg_official(ZIP_URL, str(win_env)) is True
+        assert captured and captured[0]["startupinfo"] is sentinel
+        # L-13 顺带见证：成功出口同样不留临时包。
+        assert not (win_env / "ffmpeg_official_temp.zip").exists()
+
+    def test_master_verify_run_forwards_startup_info(self, win_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(ffmpeg_master_download, "_HIDE_CHILD_CONSOLE", True)
+        seen: list[str] = []
+        sentinel = object()
+        _fake_video_postprocess(monkeypatch, sentinel, seen)
+        payload = _zip_with_bin()
+        md = ffmpeg_master_download
+        monkeypatch.setattr(md, "_probe", lambda url: ("ok", None))
+
+        def fake_stream(url: str, zip_path: Path) -> tuple[str, int, dict[str, str]]:
+            zip_path.write_bytes(payload)
+            return "b" * 12, len(payload), {}
+
+        monkeypatch.setattr(md, "_stream_download", fake_stream)
+        shim, captured = _kwargs_shim()
+        monkeypatch.setattr(md, "subprocess", shim)
+        assert md.download_ffmpeg_master(str(win_env), arch="win64") is True
+        assert captured and captured[0]["startupinfo"] is sentinel
+        assert not (win_env / "ffmpeg_master_win64_temp.zip").exists()

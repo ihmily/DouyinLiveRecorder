@@ -46,6 +46,52 @@ _SIDECAR_QUEUE_MAXSIZE = 20000
 # 超时只告警降级（慢盘/网络盘掉线时归档会跳过该文件），绝不无限阻塞停止流程。
 _SIDECAR_DRAIN_SECONDS = 5.0
 
+# L-18（2026-10-18）：边车轮转失败的退避周期（秒）。判据来自一个必然复发的形态：
+# `.1` 备份被第三方进程占用 / 目标跨卷时 os.replace 必失败，而失败后仍以追加模式重开、
+# fh.tell() 依旧 >= _ROTATE_BYTES，于是**此后每一条**事件都会重走一遍
+# close → replace → open（80 房间 × 10 条/秒的采样上限下即每秒数百次注定失败的 rename + 重开）。
+# 现按路径记一个退避窗口：期内直接跳过轮转、照常追加。两条边界不得越过去：
+# ① 这不是「把轮转整体关掉」——标记带过期时间（_rotate_in_backoff 到期即回收并重试），
+#    占用恢复后下一轮正常轮转；
+# ② 这与归档链路无关——改名前关句柄走的是 close 指令与 suspend/resume 窗口，本标记不参与，
+#    close_file() 的归档语义（排空 + 关句柄）逐字不变。
+_ROTATE_RETRY_BACKOFF_SECONDS = 300.0
+
+
+# ── 轮转退避记忆（按路径）──────────────────────────────────
+_rotate_backoff_until: dict[str, float] = {}
+_rotate_backoff_lock = threading.Lock()
+
+
+# 该路径是否处于轮转退避期内；顺带回收已到期条目，避免字典随历史路径数无界增长。
+def _rotate_in_backoff(path: str) -> bool:
+    with _rotate_backoff_lock:
+        until = _rotate_backoff_until.get(path)
+        if until is None:
+            return False
+        if time.monotonic() >= until:
+            _rotate_backoff_until.pop(path, None)
+            return False
+        return True
+
+
+# 记一次轮转失败：置退避标记 + 留一条 warning（带异常类型与原文，用来区分「.1 被占用」与「跨卷」）。
+# 限频不需要额外计数：退避期内 _append_sidecar_line 根本不会再走到 replace，
+# 故每条 warning 之间至少相隔一个 _ROTATE_RETRY_BACKOFF_SECONDS。
+# msgid 复用四目录既有的「[弹幕监控]{where} 处理失败(忽略)」模板（where=rotate 是标识符、不翻译，
+# 与同文件 where="sidecar"/"stats_loop" 的既有用法同形态）。
+def _note_rotate_failure(path: str, err: OSError) -> None:
+    with _rotate_backoff_lock:
+        _rotate_backoff_until[path] = time.monotonic() + _ROTATE_RETRY_BACKOFF_SECONDS
+    logger.warning(
+        i18n.tr(
+            "[弹幕监控]{where} 处理失败(忽略): {type_name}: {e}",
+            where="rotate",
+            type_name=type(err).__name__,
+            e=err,
+        )
+    )
+
 
 # ── JSONL 边车落盘（进程级单写线程，MID-25）──────────────────
 #
@@ -62,6 +108,7 @@ _SIDECAR_DRAIN_SECONDS = 5.0
 # 把一行 JSON 追加到边车文件并按需轮转（保留一代 .1 备份）。独立成模块级函数是**给测试留的注入口**：
 # MID-25 的回归锁（tests/test_danmaku_monitor.py、tests/test_regression_2026_09_22_infra.py）把它
 # 换成慢速写，以此证明「写盘期间不持有 hub._lock」。写失败静默重置该路径句柄，下一条事件重新打开。
+# L-18（2026-10-18）：轮转失败另按路径记一个退避窗口（见 _note_rotate_failure），期内跳过轮转但仍照常追加。
 def _append_sidecar_line(files: dict[str, TextIO], path: str, line: str) -> None:
     fh: Optional[TextIO] = None
     try:
@@ -69,15 +116,21 @@ def _append_sidecar_line(files: dict[str, TextIO], path: str, line: str) -> None
         if fh is None:
             fh = files[path] = open(path, "a", encoding="utf-8")
         # 轮转判定用当前句柄的真实大小，避免长期运行下误差累积
-        if fh.tell() >= _ROTATE_BYTES:
+        # L-18：`and not _rotate_in_backoff(path)` 是唯一新增条件——轮转刚失败过的一整个退避周期内
+        # 不再重走 close → replace → open（那条路径每条事件都要做三次注定失败的磁盘操作），
+        # 但**照常追加写入**，既不丢监控流也不把轮转永久关掉。
+        if fh.tell() >= _ROTATE_BYTES and not _rotate_in_backoff(path):
             fh.close()
             files.pop(path, None)
             try:
                 os.replace(path, path + ".1")
-            except OSError:
+            except OSError as e:
                 # 吞没即正确：轮转失败（.1 被占用 / 跨卷）只是没有备份，
                 # 随后仍以追加模式继续写，绝不因一次改名失败丢掉整段监控流
-                pass
+                # L-18：吞没之外补「退避标记 + 一条 warning」，见 _note_rotate_failure
+                _note_rotate_failure(path, e)
+            # 成功一侧不另设「清除标记」分支：能走到这里就说明 _rotate_in_backoff 已把过期条目
+            # 弹出（未过期根本进不来），字典此刻对本路径本就是空的，写清除等于留一条永不为真的死分支
             fh = files[path] = open(path, "a", encoding="utf-8")
         fh.write(line + "\n")
         fh.flush()

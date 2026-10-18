@@ -8,6 +8,8 @@
 # - TestQualityOptions：选项过滤、缺键回退、行级更新、换行注入防护
 # - TestUpdateRoomQuality：行级改写 + URL 归一化匹配 + 注释前缀保留 + 幂等性 + 原子写
 # - TestFindRoomUrlByAnchorName：主播名反查 URL，GUI 画质切换写回依赖此入口
+# - TestSensitiveItemCaseInsensitive（L-21，2026-10-18）：敏感节比对统一 casefold，变体节名不得明文回显
+# - TestRoomUrlCommaRejectedOnWrite（L-22，2026-10-18）：写侧拒绝 URL 段含逗号 + 读取侧向后兼容
 
 import configparser
 from pathlib import Path
@@ -16,6 +18,7 @@ import pytest
 
 from src.web_config import (
     BUILTIN_QUALITIES,
+    SENSITIVE_MASK,
     clamp_pbkdf2_iterations,
     find_room_url_by_anchor_name,
     format_url_line,
@@ -24,7 +27,10 @@ from src.web_config import (
     is_host_allowed,
     is_loopback_bind_host,
     is_origin_allowed,
+    is_sensitive_item,
     normalize_quality_options,
+    parse_url_config,
+    read_config_safe,
     read_quality_options,
     read_web_config,
     update_config_line,
@@ -701,3 +707,88 @@ class TestFindRoomUrlByAnchorName:
         url_cfg.write_text("https://live.douyin.com/1,主播: A\n", encoding="utf-8-sig")
         assert find_room_url_by_anchor_name(url_cfg, "不存在") == ""
         assert find_room_url_by_anchor_name(url_cfg, "") == ""
+
+
+class TestSensitiveItemCaseInsensitive:
+    # L-21（2026-10-18）：「节白名单 + 键名正则」两道判定的强度必须同档——键名侧带
+    # re.IGNORECASE，节名侧此前是大小写敏感的精确比较，于是把 [Cookie] 写成 [cookie]
+    # 就整节跳出白名单（节内键名又不含凭据关键词、值也不是 URL 形态，两道兜底同时落空），
+    # 凭据以明文回显给面板并进备份副本。判据取行为（值确实被掩码），不钉源码字面量。
+
+    def test_variant_case_sections_are_sensitive(self) -> None:
+        for section in ("cookie", "COOKIE", "Cookie", "cOoKiE", "authorization", "AUTHORIZATION"):
+            assert is_sensitive_item(section, "douyin") is True, section
+        # 中文节名 casefold 幂等，一并钉住「收紧口径」没有把它挤出判定
+        assert is_sensitive_item("账号密码", "kuaishou") is True
+
+    def test_non_sensitive_section_unchanged(self) -> None:
+        # 反向边界（不得把收紧做成「整份配置都掩码」）：非白名单节 + 无凭据关键词的键仍明文可编辑；
+        # 反向例外表（expiry/timeout/有效期/过期）也不得被节名口径牵连。
+        assert is_sensitive_item("Web", "web_port") is False
+        assert is_sensitive_item("web", "web_host") is False
+        assert is_sensitive_item("录制设置", "推送超时时间") is False
+        assert is_sensitive_item("Web", "web_token_expiry") is False
+
+    def test_read_config_safe_masks_variant_sections(self, tmp_path: Path) -> None:
+        # 端到端：面板读配置走的就是 read_config_safe，变体节名下的凭据必须回显为掩码。
+        # 取值一律用脱敏样例（真实 cookie/口令不得出现在仓库里）。
+        cfg = tmp_path / "config.ini"
+        cfg.write_text(
+            "[cookie]\ndouyin = sample-cookie-value\n[账号密码]\nkuaishou = sample-pw\n[Web]\nweb_port = 8000\n",
+            encoding="utf-8",
+        )
+        safe = read_config_safe(cfg)
+        assert safe["cookie"]["douyin"] == SENSITIVE_MASK
+        assert safe["账号密码"]["kuaishou"] == SENSITIVE_MASK
+        assert safe["Web"]["web_port"] == "8000"
+
+
+class TestRoomUrlCommaRejectedOnWrite:
+    # L-22（2026-10-18）：写侧拒绝 URL 段含逗号（半角或全角）。两个读取侧（本模块 parse_url_config
+    # 与 main.py 的房间行解析）都是 `re.split("[,，]")` **先切段再判形**，含逗号的地址一律在首个逗号
+    # 处被截断后才进录制链——写侧放行等于「录入一条、生效另一条」，且 DELETE / PUT quality 按规范化
+    # URL 精确匹配行，用户既看不出截断也改不动那一行。判据取 ValueError（与既有换行注入同形态）。
+
+    def test_comma_in_url_rejected_by_validator(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # DNS 一律桩住：_validate_room_url_target 对「无法解析的域名」同样抛 ValueError，
+        # 不桩时本用例会被那条无关的第二 raiser 判成通过（变异验证实测：摘掉逗号守卫后
+        # 三条用例仍全绿，正是这种假绿）。桩住后唯一 raiser 就是逗号守卫。
+        _stub_offline_dns(monkeypatch)
+        with pytest.raises(ValueError):
+            validate_room_target("https://live.example.com/1?a=1,2")
+        with pytest.raises(ValueError):
+            validate_room_target("https://live.example.com/1?a=1，2")
+
+    def test_comma_in_url_rejected_by_formatter(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 唯一写入口的第二道：调用方漏调 validate_room_target 也写不出被截断的行（SEV-02 同一理由）
+        _stub_offline_dns(monkeypatch)
+        with pytest.raises(ValueError):
+            format_url_line("https://live.example.com/1?a=1,2")
+
+    def test_comma_rejected_before_outbound_target_check(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 判据次序锁（同时是上面两条的归因见证）：把该域名解析写死成 OSError，
+        # 若逗号裁决不在 DNS 之前，这里得到的就是「无法解析」文案而不是「含逗号」——
+        # 两条 ValueError 靠文案区分，谁也不会替谁背锅。
+        _stub_offline_dns(monkeypatch, {"live.example.com": OSError("unresolved")})
+        with pytest.raises(ValueError, match="含逗号"):
+            validate_room_target("https://live.example.com/1?a=1,2")
+
+    def test_percent_encoded_comma_still_allowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 反向边界（不得把收紧做成「查询串里不许有逗号」）：URL 编码形态 %2C 不含裸逗号，
+        # 照常写出且 normalize_url 不改动它
+        _stub_offline_dns(monkeypatch)
+        assert (
+            format_url_line("https://live.example.com/1?a=1%2C2", "超清") == "超清,https://live.example.com/1?a=1%2C2"
+        )
+
+    def test_historical_comma_line_still_parses(self, tmp_path: Path) -> None:
+        # 向后兼容：本轮**没有**改读取侧——老配置里已存在的含逗号行仍按旧的截断语义解析出来，
+        # 既不抛异常也不整行丢弃（收紧只发生在新的写入上）。这条锁住「别顺手把读侧改成报错」，
+        # 并把截断事实本身钉在测试里（name 段就是被切下来的尾段）。
+        url_cfg = tmp_path / "URL_config.ini"
+        url_cfg.write_text("https://live.example.com/7?a=1,2\n", encoding="utf-8-sig")
+        rooms = parse_url_config(url_cfg)
+        assert len(rooms) == 1
+        assert rooms[0]["url"] == "https://live.example.com/7?a=1"
+        assert rooms[0]["name"] == "2"
+        assert rooms[0]["enabled"] is True

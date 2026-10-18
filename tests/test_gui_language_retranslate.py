@@ -7,17 +7,48 @@
 # 全部经「无头桩实例」（object.__new__ 跳过 __init__，只注入本链路所需属性）——
 # 与 tests/test_gui_monitor.py 的桩口径一致，不建真实 Tk 窗口。
 
+import ast
 import configparser
+import importlib
+from collections.abc import Iterator
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import pytest
 
-import gui
 import i18n
 
+# gui.py 的两条导入期副作用（本文件唯一需要隔离的面）：模块级写 os.environ["DLR_GUI_PARENT"]="1"，
+# 以及 _fix_encoding() 就地 reconfigure 宿主进程的 stdout/stderr 编码策略。
+_GUI_PARENT_ENV = "DLR_GUI_PARENT"
 
-def _make_stub(tmp_path: Path, calls: list[str]) -> Any:
+
+@pytest.fixture(scope="session", autouse=True)
+def gui() -> Iterator[ModuleType]:
+    # MT-05（2026-10-18 审查）：旧写法把 `import gui` 放在本文件模块顶层，于是 gui.py 的那条
+    # os.environ["DLR_GUI_PARENT"] = "1" 发生在 pytest **收集期**且永不还原——子集运行时，凡在本
+    # 文件之后才第一次导入 src.logger 的文件都会整会话进入 GUI 父进程模式（不再创建
+    # streamget.log / PlayURL.log），并随 env 泄入本会话拉起的每一个子进程。
+    # tests/test_gui_monitor.py 文件头把同一个污染源定性为「为什么不在本进程 import gui」。
+    # 现改为「导入挪进会话级夹具 + 导入完立刻还原标记」。src.logger 的归属判定只在导入期读一次
+    # （AGENTS「GUI 父进程绝不持有录制日志文件句柄」），conftest 的 autouse 夹具又早已导入过 src，
+    # 故本改动不触及任何 reload 形态的同构用例（tests/test_logger_gui_parent.py 自己逐例
+    # setenv/delenv），只切断本文件的泄漏面。
+    # 为什么是**会话级**而不是逐例：gui._fix_encoding() 会就地 reconfigure 宿主 stdio，落在函数级
+    # 夹具里会被 conftest 的 _guard_stdio_encoding_policy（函数级快照）当场判成「用例改动了宿主进程
+    # 的编码策略」——2026-10-18 实测该形态报 1 error（3 passed, 1 error）；会话级夹具跑在任何函数级
+    # 快照之前，这条副作用因此归位到它本来的位置「导入期」，逐例快照前后同值。
+    # 还原为什么走 context + setenv 占位而不是 delenv：monkeypatch.delenv 只登记「删除前已存在的值」
+    # 并在 undo 时原样写回——恰好是要清掉的 "1"；先 setenv 空串才会登记 NOTSET，让 context 退出时的
+    # undo 走 del 分支，键才真的从进程环境里消失（上游若已污染则按原值还原，不归本文件管）。
+    with pytest.MonkeyPatch.context() as patcher:
+        patcher.setenv(_GUI_PARENT_ENV, "")
+        module = importlib.import_module("gui")
+    yield module
+
+
+def _make_stub(tmp_path: Path, calls: list[str], gui: ModuleType) -> Any:
     # 桩：只注入 _on_language_change 触及的属性/方法；所有可观测行为记进 calls
     app = object.__new__(gui.LiveRecorderGUI)
     cfg = tmp_path / "config.ini"
@@ -35,9 +66,11 @@ def _make_stub(tmp_path: Path, calls: list[str]) -> Any:
     return app
 
 
-def test_language_change_retranslates_and_resets_sentinels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_language_change_retranslates_and_resets_sentinels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, gui: ModuleType
+) -> None:
     calls: list[str] = []
-    app = _make_stub(tmp_path, calls)
+    app = _make_stub(tmp_path, calls, gui)
 
     # 语言切换回调里必须调 retranslate_all（登记表回填入口）；间谍记录调用并返回计数 0
     def _spy_retranslate() -> int:
@@ -68,9 +101,11 @@ def test_language_change_retranslates_and_resets_sentinels(tmp_path: Path, monke
     assert cfg["录制设置"]["language"] == "en_US"
 
 
-def test_language_change_triggers_tray_menu_rebuild(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_language_change_triggers_tray_menu_rebuild(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, gui: ModuleType
+) -> None:
     calls: list[str] = []
-    app = _make_stub(tmp_path, calls)
+    app = _make_stub(tmp_path, calls, gui)
 
     class _Tray:
         def rebuild_menu(self) -> None:
@@ -86,10 +121,12 @@ def test_language_change_triggers_tray_menu_rebuild(tmp_path: Path, monkeypatch:
     assert "tray_rebuild" in calls, "托盘菜单文本构建期定型，语言切换后必须整体重建"
 
 
-def test_retranslate_failure_does_not_block_language_writeback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_retranslate_failure_does_not_block_language_writeback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, gui: ModuleType
+) -> None:
     # 重译异常不得吞掉 config 写回（两段 try 相互独立）；仅留一条 warn 日志
     calls: list[str] = []
-    app = _make_stub(tmp_path, calls)
+    app = _make_stub(tmp_path, calls, gui)
 
     def _boom() -> int:
         raise RuntimeError("retranslate boom")
@@ -104,3 +141,22 @@ def test_retranslate_failure_does_not_block_language_writeback(tmp_path: Path, m
     cfg.read(app.main_config_file, encoding="utf-8-sig")
     assert cfg["录制设置"]["language"] == "en_US"
     assert any(str(c).startswith("log:") for c in calls), "重译失败必须留痕（不得静默）"
+
+
+def test_gui_is_not_imported_at_module_level() -> None:
+    # MT-05 的自锁：本文件一旦把 `import gui` 放回模块顶层，那条 os.environ["DLR_GUI_PARENT"]="1"
+    # 就又回到 **收集期**（会话级夹具记录的「进入前形态」届时已被写脏，行为面判据反而看不出来），
+    # 而三条行为用例对此完全无感——只能由这条 AST 锁当场点名。判据只问「顶层有没有 gui 的 import
+    # 语句」这一不变量，不钉任何变量名或文案，改写法（as / from）仍在判据内。
+    tree = ast.parse(Path(__file__).resolve().read_text(encoding="utf-8"), filename=str(__file__))
+    top_level = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Import | ast.ImportFrom)
+        and any(alias.name.split(".")[0] == "gui" for alias in node.names)
+    ]
+    assert not top_level, (
+        f"本文件模块顶层出现了 gui 的 import（第 {[node.lineno for node in top_level]} 行）："
+        "gui.py 会在收集期就把 DLR_GUI_PARENT 写进整个会话（见 gui fixture 的 MT-05 说明），"
+        "必须保持「导入只发生在会话级夹具内」"
+    )

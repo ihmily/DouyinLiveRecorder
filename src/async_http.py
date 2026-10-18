@@ -2,9 +2,10 @@
 # 异步 HTTP 客户端模块 - 提供高效的异步 HTTP 请求功能
 
 import asyncio
+import contextlib
 import re
 import threading
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from typing import cast
 from urllib.parse import urlparse
 
@@ -544,6 +545,72 @@ def _internal_stream_target_reason(url: str, proxy_addr: OptionalStr) -> str | N
     return web_config._host_internal_reason(host)
 
 
+# ── M-04（2026-10-18 审查）：async 出站响应体读取上限 ──────────────────────────────
+# 为什么必须有：async_req 的四条分支都是非流式全量读取（client.get/post 在 send 内部 aread()），
+# 而 httpx 自动解压 gzip/brotli/zstd **没有任何上限**——中间人/被劫持的平台只需下发一小份高压缩比
+# 响应，就能让房间线程在解压时申请数 GB 内存；本进程 OOM 不是「这一房间失败」而是整个录制进程被带走
+# （80+ 房间与 Web 面板同进程）。同步侧 SEV-2226 已收口同款风险（见 src/sync_http.py
+# _MAX_RESPONSE_BYTES 上方的整段说明），异步侧才是平台解析的实际在用路径，暴露面真实存在。
+# 取值与同步侧逐字同值（「平台页面/JSON/m3u8 真实量级比上限低至少一个数量级、宁可放宽不误杀」的
+# 论证两侧完全一致；B站/抖音现有大 JSON 与 m3u8 均为 KB~MB 级，现有测试无依赖 >8MB 原文或
+# >32MB 解压产物的用例）。**不 import sync_http 的两个常量**而是同值各存一份，理由如实写：
+#   ① 该模块头明示「当前无生产 importer」，且 src/stream_select.py 的取证锚点是「grep sync_http」
+#      的实测结果——async_http 一旦 import 它，requests/urllib 会顺着异步主链进入每个冻结产物与
+#      每个房间线程，改变一条与被修问题无关的实现决策；
+#   ② 两个整数不值得为其新增第四个共享常量模块（又多一处要同步的事实源）。
+# 硬约束：改任一侧取值必须同批改另一侧，并同步本注释。
+_MAX_RESPONSE_BYTES = 8 * 1024 * 1024  # 未压缩响应体读入上限（与 sync_http 同值）
+_MAX_DECOMPRESSED_BYTES = 32 * 1024 * 1024  # 解压后产出上限（解压炸弹形态，与 sync_http 同值）
+
+
+async def _bounded_response_read(response: httpx.Response) -> None:
+    # response 事件钩子（_build_hop_guard）承担的第二职责：在 httpx 内部 aread() 之前把本跳响应体
+    # 全量物化、带上限，并把结果回填进 Response——随后 send() 收尾的 aread() 见「已装载」即短路。
+    # 为什么落点在钩子而不是 async_req 请求段：httpx 对 response 钩子的调用发生在
+    # _send_handling_redirects 每一跳「响应头已收到、响应体尚未读取」之际（晚于钩子的才是
+    # stream=False 的 aread），这是**不改 client.get/post 调用面**就能限定「读进多少字节」的唯一
+    # 公开接缝。改成 client.send(stream=True) 自建请求会把「跟随重定向/逐请求头合并」等既有调用面
+    # 形态迁出既有回归锁（tests/test_regression_2026_09_22_net.py 的 RecordingClient 按 get/post
+    # 关键字实参断言 follow_redirects），属改契约的大动作，未取。
+    # 上限选择：未压缩时 decoded == raw，沿用 _MAX_RESPONSE_BYTES（8MB，与同步侧「未压缩响应体」
+    # 同值）；带任意 Content-Encoding 时按 _MAX_DECOMPRESSED_BYTES（32MB，防解压炸弹）。
+    # aiter_bytes 走的是 httpx 自带的解码管线（gzip/br/deflate/zstd），本函数**不**重写解压规则
+    # （判定与实现只留一份事实源）。峰值内存 = 累计解码产出 + 一个块，与同步侧「压缩上限 + 一个块」
+    # 同量级；压缩态字节随到随弃、不整段驻留内存。
+    # 超限时抛 ValueError → send() 的 except 先 aclose 本响应再原样上抛 → async_req 既有通用 except
+    # （debug 日志 + _failure_result 空值契约）/ get_response_status 判不可达。**不新增穿透异常形态**，
+    # 也不得降级为「截断放行」——半截响应会被上游当有效数据解析（与同步侧同一口径）。
+    if hasattr(response, "_content") or response.has_redirect_location:
+        # _content 已在 = 构造期即全量装载的替身/MockTransport 形态响应，无流可限，原样放行；
+        # 3xx 带 Location 的中间跳由 httpx 直接丢弃、从来不会物化响应体，在此处「顺手读掉」反而
+        # 引入生产路径原本没有的新形态，故同样跳过。
+        return
+    content_encoding = (response.headers.get("Content-Encoding") or "").strip().lower()
+    limit = _MAX_DECOMPRESSED_BYTES if content_encoding else _MAX_RESPONSE_BYTES
+    kind = "解压后响应体" if content_encoding else "响应体"
+    collected: list[bytes] = []
+    total = 0
+    # aclosing：超限时先在**同一循环内**确定性关闭被中断的外层生成器，再让异常继续传播——
+    # 本仓吃过「生成器滞留到 GC 终帧 / 跨循环调度」甩出 "never awaited"·"Task was destroyed"
+    # 级联 flaky 告警的亏（见 _get_client 内 2026-09-04 决策段）；pytest 0 警告口径下这是必须项。
+    # aiter_bytes 的声明返回类型是 AsyncIterator（非 AsyncGenerator），aclosing 的类型约束收不下，
+    # 故 cast 收窄——运行时它本就是异步生成器（aclosing 只依赖 aclose）。
+    async with contextlib.aclosing(cast("AsyncGenerator[bytes, None]", response.aiter_bytes())) as byte_chunks:
+        async for chunk in byte_chunks:
+            total += len(chunk)
+            if total > limit:
+                raise ValueError(f"async 出站{kind}超过上限 {limit} 字节，已拒绝该响应")
+            collected.append(chunk)
+    body = b"".join(collected)
+    response._content = body
+    # 漂移守卫：若未来 httpx 改掉 _content 这个私有名，上面的回填就成悬空属性——其 aread() 会在
+    # 已被本函数耗尽的流上重读得到 b''，把「响应体凭空为空 = 疑似风控」这一本仓列为最难归因的静默
+    # 形态重新引入。公开 .content 属性与 aread() 走同一条内部判定，读一次即可把「回填未生效」
+    # 转成显式失败（ValueError 落既有失败出口），拒绝静默截断留给调用方。
+    if response.content is not body:
+        raise ValueError("httpx Response 装载形态与本模块回填约定不再一致（_content 漂移），已拒绝该响应")
+
+
 class _RedirectHopRejected(httpx.HTTPError):
     # M-1（2026-09-29 审查 WP-B）：逐跳复检命中时抛出的**内部控制流异常**，唯一用途是中止 httpx
     # 的 3xx 跟随链，绝不穿透给调用方——它总落在 async_req / get_response_status 既有的失败分支
@@ -599,10 +666,22 @@ def _build_hop_guard(proxy_addr: OptionalStr) -> Callable[[httpx.Response], Awai
     #     改动范围」，该陈述已被证伪并改正；但「探针已经全栈收口」仍然不成立——DNS 重绑定窗口、
     #     跳转那一跳已发生的连接、以及 stream_select 内 _is_derived_hop_allowed 那份只认字面量的
     #     派生地址闸门（MID-2231，不做 DNS）都不在本层。
+    # M-04（2026-10-18 审查）追加第二职责：判定放行后、在该跳响应体被 httpx 物化之前，由
+    # _bounded_response_read 带上限地读完并回填（上限取值与超限失败语义见该函数上方整段说明）。
+    # 为什么并进本钩子而不是新挂一支：response 钩子的挂载点只有 _build_client 一处（M-1 的接线
+    # 契约），而既有结构锁 tests/test_regression_2026_09_29_wp_b_netguard.py::
+    # test_guard_is_installed_on_every_built_client 断言「每支客户端恰好一支 response 钩子」——
+    # 拆成两支会让那条不可改的锁当场变红；顺序也因此固定为「先定罪、后读体」，被拒的一跳
+    # 连响应体都不会被读（与 MIN-2219「该跳 status_code/content-type/响应体一律不外流」一致）。
+    # 附带效果（如实登记）：get_response_status 的 HEAD 与 m3u8 Range-GET 探针同样经这支钩子，
+    # 其响应体读取自此也带上限——服务器无视 Range 整文件回传 >8MB 时探针按既有口径判不可达。
+    # 同步侧 build_sync_hop_guard **不**跟进该职责：同步钩子无法 await 分块读，且同步探针
+    # (HEAD/bytes=0-0) 的读取上限属另一工作包（L-11）的范围，勿在此顺手扩面。
     async def _guard(response: httpx.Response) -> None:
         hop_url = str(response.url)
         reason = _redirect_hop_rejection_reason(hop_url, proxy_addr)
         if reason is None:
+            await _bounded_response_read(response)
             return
         raise _RedirectHopRejected(hop_url, reason)
 

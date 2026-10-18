@@ -113,6 +113,62 @@ _fix_encoding()
 
 # 进入后台模式：把 stdout/stderr 重定向到 logs/web_console.log，
 # Windows 下另隐藏控制台窗口（SW_HIDE）、其他平台仅重定向输出；程序可经 Web 面板或任务管理器管理。
+
+# web_console.log 的启动侧大小上限（L-01，2026-10-18 审查）。
+# 为什么做在「启动侧」而不是「每次写入侧」：本文件与 src/log_archive.py 的
+# `_rebind_web_console()` 共同维护的是**一只普通文件流**（追加 + 行缓冲），
+# print() 与 loguru 的控制台 sink（`rebind_console_sink()` 绑定的就是 sys.stderr 这个对象）都写它。
+# 改成写入侧轮转意味着换掉这只流对象，而 `log_archive._streams_bound_to()` 按
+# 「sys.stdout/sys.stderr 的 .name 指向该文件」找句柄——换成包装对象或另开一只 loguru 文件 sink
+# 都会让「停止录制时 flush+close+改名」那条链路认不出句柄（AGENTS「停止录制流程日志归档」硬约束），
+# 故写入侧轮转需要 src/log_archive.py 同批改，不在本次范围。
+# 为什么 loguru 的 rotation= 也救不了：loguru 0.7.3 实测对**流对象 sink** 直接抛
+# `TypeError: add() got an unexpected keyword argument 'rotation'`（rotation 只对路径型 sink 生效），
+# 而换成路径型 sink 会让 print 与 loguru 各持一只句柄、改名时必抛 PermissionError。
+# 真正无界的形态因此只剩这一条：崩溃 / 强杀 / 断电等没走到 atexit 归档的退出把上一轮内容整份
+# 留在原地，下一次后台化以 "a" 打开即在其后继续追加，归档链路对此完全无感。
+# 上限取 2 MB、保留末尾 512 KB：本仓 loguru 文件 sink 的 rotation 量级是 300 KB，
+# web_console 另要装 print 与 uvicorn 的访问输出，故取一个数量级更大的固定上限。
+_WEB_CONSOLE_MAX_BYTES = 2 * 1024 * 1024
+_WEB_CONSOLE_KEEP_BYTES = 512 * 1024
+
+
+# 超限则把 web_console.log 就地截断为末尾若干 KB，返回丢弃的字节数（0 = 无需处理）。
+# 只在 `open(log_path, "a")` **之前**调用：此刻 sys.stdout/stderr 还是真实控制台、
+# loguru 控制台 sink 也尚未 rebind，没有任何句柄握着这个文件——Windows 下对句柄未关的文件
+# 做截断/改名必抛 PermissionError（AGENTS「停止录制流程日志归档」条）。
+# 因此本函数的调用点不得挪到重定向之后，也不得顺手改上面那只流的打开参数
+# （与 log_archive._rebind_web_console() 是「同参数」契约，那边只管归档后的重开）。
+def _cap_web_console_log(log_path: str) -> int:
+    try:
+        size = os.path.getsize(log_path)
+    except OSError:
+        # 文件不存在（首次后台化）或取不到大小：按原样追加，与修复前逐字一致
+        return 0
+    if size <= _WEB_CONSOLE_MAX_BYTES:
+        return 0
+    try:
+        with open(log_path, "r+b") as handle:
+            _ = handle.seek(max(0, size - _WEB_CONSOLE_KEEP_BYTES))
+            tail = handle.read()
+            # 起点必须对齐到整行首：截断落在某行中间会留下一条半行——事后按行匹配的排查脚本
+            # 读到的头一行是残缺内容，且半行也可能是被切断的多字节 UTF-8 序列。
+            newline_at = tail.find(b"\n")
+            if newline_at >= 0:
+                tail = tail[newline_at + 1 :]
+            else:
+                # 末块连一个换行都没有（单条超长 print）：整块丢弃，上限优先于留痕
+                tail = b""
+            handle.seek(0)
+            handle.truncate()
+            _ = handle.write(tail)
+        return size - len(tail)
+    except OSError as e:
+        # 截断失败绝不阻断后台化：日志继续追加也远好过面板起不来，但要留下一条可见告警
+        print(i18n.tr("[web] web_console.log 超限截断失败: {type_name}: {e}", type_name=type(e).__name__, e=e))
+        return 0
+
+
 def _enter_background_mode(logs_dir: str, host: str, port: int) -> None:
     log_path = os.path.join(logs_dir, "web_console.log")
 
@@ -123,6 +179,17 @@ def _enter_background_mode(logs_dir: str, host: str, port: int) -> None:
     _flush = getattr(sys.stdout, "flush", None)
     if callable(_flush):
         _ = _flush()
+
+    # L-01：先按上限收拢历史，再开追加流（调用点顺序即判据，见 _cap_web_console_log）
+    _dropped = _cap_web_console_log(log_path)
+    if _dropped > 0:
+        print(
+            i18n.tr(
+                "[web] web_console.log 已超过 {max_mb} MB 上限，丢弃最早的 {dropped_kb} KB",
+                max_mb=_WEB_CONSOLE_MAX_BYTES // (1024 * 1024),
+                dropped_kb=_dropped // 1024,
+            )
+        )
 
     # 重定向输出到日志文件（buffering=1 行缓冲，确保日志实时写入）
     log_stream = open(log_path, "a", encoding="utf-8", buffering=1)
@@ -334,6 +401,19 @@ def main() -> None:
     finally:
         # 优雅关闭：serve() 正常返回或抛异常（如端口被占用）都执行清理，
         # 主动终止 ffmpeg 子进程并释放 HTTP 连接池，杜绝退出后残留孤儿进程。
+        # M-01（2026-10-18 审查）：录后转码线程池的显式收尾必须排在 ffmpeg / 连接池清理**之前**，
+        # 与本文件之外的两条既有退出链（main.safe_exit、main 磁盘满退出）同一口径、同一顺序。
+        # 机理见 main.py::_shutdown_postprocess_executor 上方注释（ThreadPoolExecutor 的 worker
+        # 是非守护线程，threading._register_atexit(_python_exit) 又晚于本仓三个 atexit 钩子登记，
+        # 于是「池内 join」恒早于 ffmpeg 清理与日志归档，单个转封装任务上限 3600s）：Web 面板
+        # 退出不经 safe_exit，此前完全没有人替主进程把顺序拿回来，表现为「点了退出长时间无响应、
+        # 录制中的 ffmpeg 在这一小时里不被终止」。
+        try:
+            main._shutdown_postprocess_executor()
+        except Exception as e:
+            # 逐字复用 main.py::_shutdown_postprocess_executor 内部那条 msgid（不带 [web] 前缀、
+            # 四目录已备译文）：退出链的同一件事不得各写一份文案，多一个键就多一处四目录漂移面
+            print(i18n.tr("后处理线程池收尾失败: {type_name}: {e}", type_name=type(e).__name__, e=e))
         try:
             main.cleanup_all_ffmpeg_processes()
         except Exception as e:

@@ -121,6 +121,19 @@
     var dmLastSeq = 0;
     var dmMessages = [];
     var DM_MAX_MESSAGES = 300;
+    // M-19（2026-10-18）：上一次写进 #danmaku-room-filter 的 option 集合原文（null = 尚未写过）。
+    // 用途见 renderDanmaku 的筛选下拉段——只有它变化才重建 innerHTML。
+    var dmRoomFilterOpts = null;
+
+    // M-18（2026-10-18）：三条**按需**加载链（loadRooms / loadConfig / loadFiles）的代次载体。
+    // 复用 10b 的 makePollChain() 而不是另发明第二套「自增序号」——它要的判据完全相同
+    // （「落地时证明自己仍是最新一代，否则丢弃」），差别只在**用法子集**：这三条是一次性拉取，
+    // 没有节拍，所以既不调 begin() 也不调 renew()（那两个是 setTimeout 排期专用，链内 timer 恒为
+    // null、halt() 里的 clearTimeout 分支走不到），只用 halt() 顶代次 + isCurrent() 复核。
+    // 因此不需要为「不是轮询链」而新写一份实现；若将来某条改成周期轮询，同一实例直接补 begin 即可。
+    var roomsChain = makePollChain();
+    var configChain = makePollChain();
+    var filesChain = makePollChain();
 
     // 画质选项状态：qualityOptions 为用户已选档位（渲染下拉与 chips），
     // qualityBuiltin 为引擎支持的全部内置档位（渲染「添加画质」候选项）。
@@ -1191,6 +1204,13 @@
             }
         }
         // 房间筛选下拉：保留当前选择，选项随房间列表刷新
+        // M-19（2026-10-18）：**只在 option 集合本身变化时才重建 innerHTML**。原形态是每 2s 轮询成功后
+        // 无条件 sel.innerHTML = opts，而浏览器在 option 集合被替换时会关掉已展开的下拉列表——用户点开
+        // 筛选想选房间时，最近的那一轮轮询正好把列表收起，选择几乎无法完成（轮询节拍 2s，一次点选动作
+        // 通常不止 2s）。比较用「上一次写入的 option 串原文」（dmRoomFilterOpts）而非读 DOM 现值：
+        // 真实浏览器会把 innerHTML 归一化（属性引号、布尔属性形态），拿生成串去比 DOM 现值会恒不等、
+        // 退回每轮都重建；串里已含 t('danmaku.allRooms') 标签，故切换语言必然判为变化、照常重建一次，
+        // 「全部房间」文案不会冻结在旧语言。重建后仍按原口径把选中项复位（房间消失则回落「全部房间」）。
         var sel = $('danmaku-room-filter');
         if (sel) {
             var cur = sel.value;
@@ -1198,12 +1218,15 @@
             for (var j = 0; j < rooms.length; j++) {
                 opts += '<option value="' + esc(rooms[j].name) + '">' + esc(rooms[j].name) + '</option>';
             }
-            sel.innerHTML = opts;
-            var found = false;
-            for (var k = 0; k < sel.options.length; k++) {
-                if (sel.options[k].value === cur) { found = true; break; }
+            if (opts !== dmRoomFilterOpts) {
+                sel.innerHTML = opts;
+                dmRoomFilterOpts = opts;
+                var found = false;
+                for (var k = 0; k < sel.options.length; k++) {
+                    if (sel.options[k].value === cur) { found = true; break; }
+                }
+                sel.value = found ? cur : '';
             }
-            sel.value = found ? cur : '';
         }
         // 增量消息：追加到本地缓冲（截断标记说明中间有遗漏，补一条提示行）
         var msgs = data.messages || [];
@@ -1227,6 +1250,11 @@
     // 行内开关/删除按钮靠 data-url 透传，点击由 rooms-tbody 上的事件委托转发到 toggleRoom/deleteRoom。
     // 画质列为行内下拉（选项 = 默认画质 + qualityOptions + 当前值兜底），change 委托转发 changeRoomQuality。
     // 注意：url 直接拼进 data-url 与 title，已用 esc() 转义防止属性注入；del 失败会回拉一次列表恢复 UI。
+    // M-18（2026-10-18）竞态防护：每次进入本函数先顶一代（roomsChain.halt()），await 回来只有在
+    // 自己仍是最新一代时才落地 DOM。原形态下「快速切走再切回直播间」「addRoom/toggleRoom/changeRoomQuality
+    // 成功后各自回拉」会并发两支 GET /api/rooms，先发后到的那支会把 tbody 整体覆盖回旧列表——
+    // 用户看到的是「刚加的房间又消失了」，而 api() 的超时上限是 10s，窗口真实存在。
+    // catch 分支同样要过代次校验：旧一代的网络失败不得把新一代刚渲染好的列表打成「加载失败」。
     function buildRoomQualitySelect(url, current) {
         // 当前值可能不在选项列表（如用户已从画质选项中移除该档位），追加为候选项防止显示错位
         var opts = [''].concat(qualityOptions.slice());
@@ -1242,8 +1270,10 @@
 
     async function loadRooms() {
         var tbody = $('rooms-tbody');
+        var myGen = roomsChain.halt();
         try {
             var rooms = await api('/api/rooms');
+            if (!roomsChain.isCurrent(myGen)) return;
             if (!rooms.length) {
                 tbody.innerHTML = '<tr><td colspan="6" class="empty">' + esc(t('rooms.empty')) + '</td></tr>';
                 return;
@@ -1264,6 +1294,7 @@
             }
             tbody.innerHTML = html;
         } catch (e) {
+            if (!roomsChain.isCurrent(myGen)) return;
             tbody.innerHTML = '<tr><td colspan="6" class="empty">' + esc(t('loadFailed')) + '</td></tr>';
         }
     }
@@ -1487,8 +1518,14 @@
 
     async function loadConfig() {
         var container = $('config-container');
+        // M-18（2026-10-18）：与 loadRooms 同一代次判据（机制说明见状态区 roomsChain 处）。
+        // 本条额外要紧的是「未保存修改」：saveConfig 失败分支会 await loadConfig() 回拉服务端真值，
+        // 用户也可能在保存回拉尚未落地时又切走/切回配置页；两支 GET /api/config 乱序落地时，
+        // 旧一代那份 HTML 会把新一代（含用户已填的框）整体覆盖掉。
+        var myGen = configChain.halt();
         try {
             var cfg = await api('/api/config');
+            if (!configChain.isCurrent(myGen)) return;
             configBackup = JSON.parse(JSON.stringify(cfg));
             var html = '';
             for (var section in cfg) {
@@ -1538,6 +1575,8 @@
                 }
             }
         } catch (e) {
+            // M-18：旧一代的失败不得覆盖新一代已渲染的表单（同 loadRooms 的 catch 口径）
+            if (!configChain.isCurrent(myGen)) return;
             container.textContent = t('loadFailed');
         }
     }
@@ -1784,12 +1823,18 @@
     // 19. loadFiles —— GET /api/files?path=，按路径取目录项渲染表格，并据 path 切分重构面包屑
     // （根目录 + 逐级累积路径）。dir 行渲染「进入」按钮（事件委托转发 loadFiles 下钻），
     // file 行渲染「下载」按钮（转 downloadFile）。path 经 encodeURIComponent 编码，防分隔符/中文破坏路由。
+    // M-18（2026-10-18）：本条是三条按需链里竞态最显眼的一支——目录项一多，「进入」/面包屑连点或
+    // 「下钻后立刻点上级」会并发两支 GET /api/files，先发后到的旧响应把 #file-breadcrumb 与 tbody
+    // **整体**覆盖回上一级目录（用户看到的是一下子退回去了、点进去又弹回来），且两者必须同源落地，
+    // 否则面包屑停在 A 而表格是 B 更糟。代次判据同 loadRooms（机制说明见状态区 roomsChain 处）。
     async function loadFiles(path) {
         path = path || '';
+        var myGen = filesChain.halt();
         var tbody = $('files-tbody');
         var crumb = $('file-breadcrumb');
         try {
             var items = await api('/api/files?path=' + encodeURIComponent(path));
+            if (!filesChain.isCurrent(myGen)) return;
             // 面包屑：根目录 + 逐级路径
             var crumbHtml = '';
             crumbHtml += '<a data-path="">' + esc(t('files.root')) + '</a>';
@@ -1827,6 +1872,7 @@
             }
             tbody.innerHTML = html;
         } catch (e) {
+            if (!filesChain.isCurrent(myGen)) return;
             tbody.innerHTML = '<tr><td colspan="5" class="empty">' + esc(t('loadFailed')) + '</td></tr>';
         }
     }

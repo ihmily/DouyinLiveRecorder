@@ -195,8 +195,16 @@ def _reject_list_separator(kind: str, value: str) -> None:
     # parse_url_config 的 3+ 段分支），猜出来的名字还会与写入时的原文不同（并列名被拆成
     # 多段后以「，」重连）。与其让两端各猜一次，不如在唯一写入口直接拒绝，
     # 把「同一行在两处解析成不同房间」这条缝隙从源头堵掉。
-    # 只挡主播名：URL 段的逗号由 normalize_url/查询串承载（?a=1,2 是合法地址形态），
-    # 画质段是白名单值、本就无逗号，放宽它们等于无谓地砍掉可用房间。
+    # L-22（2026-10-18）：URL 段一并拒绝逗号。旧结论「放宽 URL 段」已被两个读取侧同时证伪——
+    # 本模块 parse_url_config 与 main.py 的房间行解析都是 `re.split("[,，]", line)` **先切段再判形**，
+    # 于是 https://live.example.com/a?b=1,2 在两侧都只取到 `?b=1`（尾段被当成主播名/画质段丢弃），
+    # 「地址里带逗号」从来没能按录入值生效过；写侧继续放行只会让面板显示一条与实际拉流地址
+    # 不一致的房间，而 DELETE / PUT quality 按规范化 URL 精确匹配行，用户既看不出也改不动。
+    # 现改为入口即拒（422 + 可行动文案），比「静默截断后录错地址」更可归因。
+    # 画质段是 BUILTIN_QUALITIES 白名单值、本就无逗号，不在此列；读取侧对**历史已存在**的含逗号行
+    # 维持原解析行为不改（老配置只会按旧的截断语义继续跑，不会因本条写侧收紧而读不出/崩）。
+    # [历史注] 本条原文为「只挡主播名：URL 段的逗号由 normalize_url/查询串承载（?a=1,2 是合法地址
+    # 形态），画质段是白名单值、本就无逗号，放宽它们等于无谓地砍掉可用房间。」（2026-10-18 证伪并改正）。
     if value and ("," in value or "，" in value):
         raise ValueError(f"{kind} 含逗号（半角或全角），逗号是配置行的字段分隔符，请改用其他写法")
 
@@ -219,6 +227,8 @@ def format_url_line(url: str, quality: str | None = None, name: str | None = Non
     # MID-2235：与 validate_room_target 同一判据的第二道（本函数是 URL_config.ini 唯一写入口，
     # 与 SEV-02 把校验下沉到这里是同一个理由：任何调用方漏调一次都不该写出坏行）
     _reject_list_separator("主播名", name or "")
+    # L-22：URL 段的第二道，同上——「先 validate 再自行拼行」的调用方同样不该写出被读取侧截断的行
+    _reject_list_separator("URL", url)
     url = normalize_url(url)
     parts: list[str] = []
     q = (quality or "").strip()
@@ -554,6 +564,10 @@ def validate_room_target(url: str, quality: str | None = None, name: str | None 
     # 的调用方（不经过 format_url_line）仍能写出含逗号的主播名。判据必须落在**公共入口**上才成立：
     # 这里补上后两处调用点各自都挡得住（幂等，不会重复报错）。
     _reject_list_separator("主播名", name or "")
+    # L-22（2026-10-18）：URL 段并入同一判据。读取侧（本模块 parse_url_config 与 main.py 行解析）
+    # 都以逗号切段，含逗号的地址一律在首个逗号处被截断后才进 ffmpeg——写侧不挡就等于「录入一条、
+    # 生效另一条」。判据落在公共入口而不是各端点，与上面主播名那条同理（见 _reject_list_separator）。
+    _reject_list_separator("URL", url)
     # CR-09：追加 scheme 与目标网段校验（见 _validate_room_url_target 说明）
     _validate_room_url_target(url)
     # SEV-02：画质白名单从 change_room_quality 上移到公共校验入口——
@@ -871,6 +885,14 @@ def read_web_config(config_file: str | Path) -> dict[str, str | int | bool]:
 
 
 SENSITIVE_SECTIONS = {"Cookie", "账号密码", "Authorization"}
+# L-21（2026-10-18）：节名的 casefold 视图。configparser 的 **section 大小写敏感**（原样保留），
+# 而键名判定走的 _SENSITIVE_KEY_PATTERN 带 re.IGNORECASE，两套强度不一致：用户把节写成
+# [cookie] / [COOKIE]（手改 config.ini、或从别处复制粘贴时很常见）即整节跳出白名单，
+# 而节内键名（如 douyin_cookie=、bilibili=）不含「令牌|密码|token|password…」任一关键词，
+# 值形态兜底 _looks_like_secret_value 又只对 URL 形态生效（无 scheme 的 cookie 串判不出来），
+# 于是凭据以明文回显给面板、并以明文进备份副本（build_exe / config_io 复用同一入口，一并覆盖）。
+# 白名单集合本身不得改动（新增节名一律改 SENSITIVE_SECTIONS，本视图由它派生），比对统一走 casefold。
+_SENSITIVE_SECTIONS_FOLDED = frozenset(name.casefold() for name in SENSITIVE_SECTIONS)
 SENSITIVE_MASK = "***"
 
 # ─── MID-36：Host / Origin 允许名单（防 DNS 重绑定穿透 SOP + CSRF） ───────────
@@ -1107,7 +1129,10 @@ def is_sensitive_key(key: str) -> bool:
 def is_sensitive_item(section: str, key: str) -> bool:
     # 敏感判定的唯一入口：节白名单命中 **或** 键名模式命中（后者覆盖「推送配置」等非白名单节内的
     # 独立凭据）。读写两侧都必须走它——web_api 的写侧守卫即直接复用本函数与 _looks_like_secret_value。
-    return section in SENSITIVE_SECTIONS or is_sensitive_key(key)
+    # L-21（2026-10-18）：节名比对统一 casefold，与键名侧的 re.IGNORECASE 收到同一强度
+    # （失效形态与判据见 _SENSITIVE_SECTIONS_FOLDED 上方注释）。白名单集合本身未动，只收紧比对口径；
+    # 中文节名（账号密码）casefold 幂等，故本轮只对 ASCII 族（Cookie/Authorization）产生实际差异。
+    return section.casefold() in _SENSITIVE_SECTIONS_FOLDED or is_sensitive_key(key)
 
 
 def read_config_safe(config_file: str | Path) -> dict[str, dict[str, str]]:

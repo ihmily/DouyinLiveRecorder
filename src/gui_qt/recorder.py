@@ -39,7 +39,14 @@ _READ_BATCH_SIZE: int = 10
 class RecorderController(QObject):
     # 向主线程投递的信号；Qt 的跨线程自动队列（AutoConnection）使这三条天然线程安全，
     # 取代旧 tkinter 版的 _ui_event_queue + post_ui 事件泵。
-    linesReceived = Signal(object)  # list[tuple[str, str]]
+    # S-01（2026-10-18 审查）：这里原先挂着 linesReceived = Signal(object)（设计成把日志批次
+    # 直接送到主线程），但全仓从未 emit，而唯一的消费口 drain() 也没有任何生产调用方，
+    # 于是「读线程 → 队列 → 界面」整条通路断路。现改为「队列存一份 + 唤醒信号」单通道形态，
+    # 刻意不让信号携带数据本体：批次只在 _read_queue 存一份，由主线程 drain() 取空。
+    # 若让信号直接带批次而队列继续留一份，同一批日志会被消费两遍（界面出现重复行）；
+    # 若取消队列只发信号，drain()/has_queue_data() 这条既有语义与批次节流
+    # （见 _READ_BATCH_SIZE）就双双失去落点。
+    outputReady = Signal()  # 队列里有了新内容（日志批次或结束哨兵），请主线程来 drain()
     ended = Signal(object)  # session_id（自然 EOF / 读取异常）
     logRequested = Signal(str, str)  # message, level
     started = Signal(int)  # pid
@@ -89,6 +96,7 @@ class RecorderController(QObject):
             return self._read_has_data or not self._read_queue.empty()
 
     # 取出当前积累的全部日志批次与“进程结束”标记（主线程调用）。
+    # 生产调用方是 main_window._pump_recorder_queue（由 outputReady 唤醒），不是轮询定时器。
     def drain(self) -> tuple[list[tuple[str, str]], bool, int | None]:
         messages: list[tuple[str, str]] = []
         ended = False
@@ -106,6 +114,17 @@ class RecorderController(QObject):
         with self._read_queue_lock:
             self._read_has_data = False
         return messages, ended, ended_session
+
+    # 自然 EOF（子进程自己退出，不是用户点停止）的进程句柄回收，由主线程消费结束哨兵后调用。
+    # 为什么不由读线程顺手清：_process 同时是 start() 的 already_running 闸门与
+    # stop_async() 取进程对象的依据，读线程只置 _running；句柄清理一律只有两处出口
+    # （_stop_worker_body 的停止收尾 + 本方法的 EOF 收尾），第三处会让「停止在途」出现
+    # 拿不到进程对象的窗口。不清这一处的后果即 S-01 影响 ③：界面回到待机后再点
+    # 「开始录制」恒报 already_running。
+    def reclaim_after_natural_end(self, session_id: int | None) -> None:
+        if session_id is not None and session_id != self._session_id:
+            return  # 旧会话的迟到哨兵不得清掉新会话刚建立的句柄（与 _stop_worker_body 同判据）
+        self._clear_process()
 
     # ─── 启动 ───
 
@@ -405,6 +424,10 @@ class RecorderController(QObject):
         self._read_queue.put(payload)
         with self._read_queue_lock:
             self._read_has_data = True
+        # 顺序必须是「先入队、后发唤醒」：反过来就存在「主线程被叫醒时这条数据还没进队列，
+        # 于是 drain() 取到空、而它此后再也没有第二次唤醒」的丢单窗口（S-01 的修复点）。
+        # emit 本身线程安全：接收方（主窗口）线程亲和性在主线程，Qt 自动降级为 Queued。
+        self.outputReady.emit()
 
     def _log(self, message: str, level: str = "info") -> None:
         # 全部诊断一律以 Signal 投给 UI 的日志页：控制器不知道「该不该写文件」，

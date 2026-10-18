@@ -108,9 +108,18 @@ if [[ -z "$OWNER_PID" || "$OWNER_PID" == "1" ]]; then
 fi
 
 # Foreground mode for environments that reap detached/background processes.
+# L-35: 旧形态把 `$$`（本脚本自身 bash）写进 server.pid。node 是脚本的子进程
+# （pid 不同），脚本只是同步阻塞等它：node 先退（空闲超时/被杀）后脚本随即退出，
+# 陈旧 pid 文件留下的 shell pid 被 OS 复用后，stop-server.sh 会误杀无关进程。
+# 实测（修复前）：服务存续期间按 stop-server 口径 kill $$ 只杀掉了 shell，
+# node 成孤儿仍在监听并响应 200，而它自报 "stopped"。
+# 改法与后台分支的 nohup+$! 同形态：`&` 后用 $! 记录 node 真实子进程 pid，
+# `wait` 保持前台阻塞语义（Ctrl+C 仍直达整个前台进程组）。
 if [[ "$FOREGROUND" == "true" ]]; then
-  echo "$$" > "$PID_FILE"
-  env BRAINSTORM_DIR="$SESSION_DIR" BRAINSTORM_HOST="$BIND_HOST" BRAINSTORM_URL_HOST="$URL_HOST" BRAINSTORM_OWNER_PID="$OWNER_PID" node server.cjs
+  env BRAINSTORM_DIR="$SESSION_DIR" BRAINSTORM_HOST="$BIND_HOST" BRAINSTORM_URL_HOST="$URL_HOST" BRAINSTORM_OWNER_PID="$OWNER_PID" node server.cjs &
+  SERVER_PID=$!
+  echo "$SERVER_PID" > "$PID_FILE"
+  wait "$SERVER_PID"
   exit $?
 fi
 

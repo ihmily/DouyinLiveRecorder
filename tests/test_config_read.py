@@ -5,6 +5,8 @@
 #     在测那条故障形态，而不是测一个造不出来的场景）；
 #   · tolerant_config_parser 读出全部其余键、重复键按「最后一次取值」；
 #   · find_duplicate_options 点名到 节/键/行号，且「注释行」「跨节同名键」两种形态不误报；
+#     [L-17 2026-10-19 补] 再加一类不误报形态：**多行值的续行**（configparser 把它并入上一条
+#     键的值，它不是键）；并以「真重复混在续行之间仍被报出」作反向见证，防止一删了之。
 #   · warn_duplicate_options 同一文件形态只落一条 warning（状态链每 10s 读一次配置，
 #     不去重会把同一条刷满日志），文件一改写就重新点名；缓存封顶后仍能继续点名；
 #   · preserve_case 的键名形态与被它替换掉的 GUI 侧 optionxform 闭包一致；
@@ -97,6 +99,29 @@ def test_find_duplicate_options_accepts_colon_delimiter_and_ignores_case() -> No
     # configparser 的默认 delimiters 是 ('=', ':')，默认 optionxform 会转小写——
     # 扫描器的判据必须与「解析器实际看到的键集合」一致，否则会漏报真重复、误报假重复。
     assert find_duplicate_options("[s]\nLanguage = zh\nlanguage: en\n") == [("s", "Language", (2, 3))]
+
+
+def test_find_duplicate_options_ignores_multiline_value_continuation_lines() -> None:
+    # L-17（2026-10-19）：缩进的续行会被 configparser 并入**上一条键的值**，它根本不是键。
+    # 旧实现先 strip 掉缩进再把整行当独立键统计，于是每份带多行值的配置都被点名成
+    # 「重复配置项」（两条续行文本相同即命中），虚假告警把真重复淹没在同一条文案里。
+    text = "[s]\nkey = 第一段\n    第二段 相同文本\nother = 1\n    第二段 相同文本\n"
+    assert find_duplicate_options(text) == []
+    # 反向见证：这几行在解析器里确实是**值**而不是键（值里带着拼接后的续行）
+    parser = tolerant_config_parser()
+    parser.read_string(text)
+    assert parser.get("s", "key") == "第一段\n第二段 相同文本"
+    assert parser.get("s", "other") == "1\n第二段 相同文本"
+    assert set(parser["s"]) == {"key", "other"}
+
+
+def test_find_duplicate_options_still_reports_real_duplicates_beside_continuations() -> None:
+    # 同一条跳过判据不得把真重复也放过：混在多行值之间的两行 `k = v` 必须仍被报出，
+    # 且行号按出现顺序给全（变异验证短 id L17：把 `continue` 去掉后本条转红）。
+    text = "[s]\nk = v1\n    续行文本\nother = 2\nK = v3\n"
+    assert find_duplicate_options(text) == [("s", "k", (2, 5))]
+    # 无分隔符的裸行同样不算键（allow_no_value 从未开启，这种行 configparser 自己判解析错误）
+    assert find_duplicate_options("[s]\nbareline\nanother-bareline\n") == []
 
 
 def test_find_duplicate_options_is_empty_for_clean_file() -> None:

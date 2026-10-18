@@ -1243,6 +1243,24 @@ async def get_kuaishou_stream_data(
     return result
 
 
+# 从快手直播链接里取备用接口要的 eid（路径 /u/<eid> 的那一段），取不到返回空串由调用方报错。
+# 口径与 extract_douyu_room_id 一致（同一条历史教训）：一律 urlsplit 取 path，天然剥掉
+# query / fragment / 尾斜杠且与 scheme 无关；**不得**再用整串 split 或 re.search 抠参数
+# （整串形态会把分享链接的 ?from=… 一并带进房间号/eid）。无 scheme 时补 https://——
+# 否则 urlsplit 会把 "live.kuaishou.com/u/xxx" 整串当成 path，首段取到的是主机名。
+def extract_kuaishou_eid(url: str) -> str:
+    try:
+        path = urllib.parse.urlsplit(url if "://" in url else f"https://{url}").path
+    except ValueError:
+        # 端口非数字/非法字符等：urlsplit 直接抛 ValueError，按「解析不出 eid」降级给调用方
+        return ""
+    segments = [seg for seg in path.split("/") if seg]
+    if "u" not in segments:
+        return ""
+    idx = segments.index("u")
+    return segments[idx + 1] if idx + 1 < len(segments) else ""
+
+
 @trace_error_decorator
 async def get_kuaishou_stream_data2(
     url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None
@@ -1262,9 +1280,12 @@ async def get_kuaishou_stream_data2(
         headers["Cookie"] = await _ensure_kuaishou_did(proxy_addr)
     try:
         # 快手 URL 形如 https://live.kuaishou.com/u/xxxx，提取 u/ 后的部分作为 eid
-        if "/u/" in url:
-            eid = url.split("/u/")[1].strip()
-        else:
+        # L-09（2026-10-19）：eid 一律取「路径里 u/ 的那一段」，不再用整串 split——
+        # `url.split("/u/")[1].strip()` 拿到的其实是「/u/ 之后的整串」，分享链接常见的
+        # ?from=…/&shareToken=…/#… 会被一并拼进 eid，byUser 接口收到坏 eid 只会回
+        # 「房间不存在」，用户看到的是误导性的解析失败（且回退链会重复解析一次）。
+        eid = extract_kuaishou_eid(url)
+        if not eid:
             raise ValueError("Failed to extract eid from kuaishou URL")
         data: dict[str, object] = {"source": 5, "eid": eid, "shareMethod": "card", "clientType": "WEB_OUTSIDE_SHARE_H5"}
         # 走的不是快手官方域名，而是 chenzhongtech 的第三方聚合接口（kpn=GAME_ZONE 为固定包名标识），
@@ -2180,6 +2201,21 @@ def _take_cached_bili_buvid(proxy_addr: OptionalStr) -> str:
     return _bili_buvid_cached
 
 
+# buvid3 进日志的唯一形态：只留「前缀 4 位 + 长度」指纹，整值一律不落盘（L-08，2026-10-19，
+# CODE_REVIEW_2026-10-18）。buvid3 是 B 站设备级标识、弹幕 AUTH 的凭据成分，而 logs/ 按大小轮转
+# 保留多份（AGENTS「凭据不入轮转日志」红线，与关键约定 #11 同源）。
+# 为什么不是交给 utils.mask_credentials：那套黑名单只认 key=value / 头形态的串，这里传的是
+# **裸值**（从 cookie 里抠出的 b_3、首页 Set-Cookie 的值），没有键名可锚定 → 原样返回、挡不住。
+# 为什么不是干脆不打：排查「弹幕 AUTH 被软拒绝」时必须能判断「这一轮进房用的是哪一枚标识、
+# 跨轮是不是同一枚」（出口串用、spi/首页两条来源的区分全靠这条 debug）。真实 buvid3 长 37~70
+# 字符、主体随机，4 位前缀 + 长度不可还原，够归因、不构成凭据。
+def _buvid_log_form(buvid: str) -> str:
+    text = str(buvid or "")
+    if not text:
+        return ""
+    return f"{text[:4]} len={len(text)}"
+
+
 def invalidate_bili_buvid_cache(proxy_addr: OptionalStr = None) -> None:
     # 使进程内 buvid 缓存失效（不清 cookie_cache 的首页 Set-Cookie TTL 缓存——那里存的
     # 是真实注册标识，可继续复用）。触发方为弹幕 AUTH 被拒：兜底 UUID 被服务器拒绝后
@@ -2294,7 +2330,7 @@ async def get_bilibili_danmaku_info(
             _m = re.search(r"buvid3=([^;\s]+)", str(cookies))
             if _m and _m.group(1).strip():
                 b = _m.group(1).strip()
-                logger.debug(i18n.tr("[B站直播]使用 cookie 中的 buvid3: {buvid}", buvid=b))
+                logger.debug(i18n.tr("[B站直播]使用 cookie 中的 buvid3: {buvid}", buvid=_buvid_log_form(b)))
         if not b:
             # MIN-2203 修复（2026-09-22）：原实现两次请求**零间隔**连击同一路径（对 CDN 探针有
             # _throttle_probe，对 spi 没有）；且 on-exception 的 except 分支在风控主形态下**永不执行**
@@ -2344,7 +2380,9 @@ async def get_bilibili_danmaku_info(
                 )
                 b = str(home_cookies.get("buvid3", "")).strip()
                 if b:
-                    logger.debug(i18n.tr("[B站直播]spi 失败，从首页 Set-Cookie 获取 buvid3: {buvid}", buvid=b))
+                    logger.debug(
+                        i18n.tr("[B站直播]spi 失败，从首页 Set-Cookie 获取 buvid3: {buvid}", buvid=_buvid_log_form(b))
+                    )
             except Exception as e:
                 logger.debug(
                     i18n.tr(

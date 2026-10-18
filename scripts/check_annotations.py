@@ -406,8 +406,8 @@ def _reject_dangerous_baseline(baseline: Path) -> str | None:
         home = Path.home().resolve()
     except OSError, RuntimeError:
         home = None
-    if home is not None and (resolved == home or home in resolved.parents):
-        return f"拒绝：基线目录位于用户主目录内 -> {resolved}"
+    if home is not None and (resolved == home or resolved.parent == home):
+        return f"拒绝：基线目录是用户主目录或其直接层级 -> {resolved}"
     # 当前工作目录与其祖先（含仓库根）：快照目录应是其子目录而非祖先
     try:
         cwd = Path.cwd().resolve()
@@ -415,6 +415,20 @@ def _reject_dangerous_baseline(baseline: Path) -> str | None:
         cwd = None
     if cwd is not None and (resolved == cwd or resolved in cwd.parents):
         return f"拒绝：基线目录是当前工作目录或其祖先 -> {resolved}"
+    # M-23（2026-10-18 审查）改这两处判据的原因：原 `home in resolved.parents` 拒绝主目录下
+    # **一切**路径，而本仓的常见布局正是检出在家目录里（Windows `C:\Users\<you>\...`、Linux `~\...`），
+    # 于是连工具自己提示的工作区子目录（`.workbuddy/ast-baseline`）也被误拒——2026-10-04 审查的
+    # `_reject_dangerous_baseline` 探针已实测到同一形态（那条记录的就是当时的本机读数）。
+    # 防呆目的逐条保住：① 家目录本体与被直接当基线传进来的第一层子目录（Documents/AppData/Temp
+    # 这些「一个人全部数据」的入口）仍一律拒绝；② 文件系统根、cwd 本体及其祖先仍先于放行判定；
+    # ③ 放行只覆盖「严格位于当前工作目录之下」的目录——那是用户自己 cd 进来的仓库子目录，
+    # rmtree 它正是 --snapshot 的既定用法。cwd 本身是家目录时不放行（否则等于把整棵家目录树
+    # 声明成「工作区」，把上面两条防线一次让掉）。
+    # 位置也必须在这里而不是并入 home 那条：Windows 侧的 system_roots 含 `C:\Users`，
+    # 检出在 `C:\Users\<you>\repo` 时其下的快照目录会先被那条 `sr in resolved.parents` 误拒，
+    # 与家目录那条是同一族过度收紧。
+    if cwd is not None and (home is None or cwd != home) and cwd in resolved.parents:
+        return None
     # 系统目录（Windows / POSIX 常见）。刻意不含 Path(os.sep)——在 Windows 上
     # Path("\\").resolve() 会得到「当前盘符根」（如 D:\），任何绝对路径都在其下，
     # 会把 .workbuddy/ast-baseline 这类合法的工作区子目录一并误拒（首次实现踩过）。

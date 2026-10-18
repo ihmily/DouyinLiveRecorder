@@ -8,6 +8,7 @@ import re
 import sys
 from dataclasses import dataclass, field
 from typing import cast
+from urllib.parse import quote
 
 # loguru 的 logger 为模块级单例，src.logger 对其做过的配置在此同样生效；
 # 直接从此处导入可避免基于 basedpyright 的 "未从 src.utils 导出" 告警。
@@ -59,9 +60,21 @@ class ProxyInfo:
     def proxy_url(self) -> str:
         # 还原可直接交给 requests/httpx 的代理地址（含凭据、保留原协议）；无 ip 时返回空串。
         # 与 utils.handle_proxy_addr 的语义一致：来源未给协议时补 http://。
+        # 本函数**只负责拼 URL**，不做地址归一——归一点仍唯一留在 utils.handle_proxy_addr
+        # （构造客户端之前那一处），不得在这里再补一遍前缀或改大小写。
         if not self.ip:
             return ""
-        auth = f"{self.user}:{self.password}@" if self.user else ""
+        # L-10：user/password 必须 percent 编码再拼进 userinfo。原先直拼，密码含保留字符时
+        # 生成的是**结构错位**的代理 URL：实测 http://u:p#ss@10.0.0.1:8080 被 urlsplit 判成
+        # host='ss' + fragment、pa/ss 被切成 path、pa?ss 被切成 query，下游 httpx 直接抛
+        # InvalidURL（"Invalid port: 'pa'"）——表现为「配了认证代理却全平台连不上」，
+        # 而 ProxyInfo 的 repr 不带凭据，日志里看不出是编码问题。
+        # safe="" 的取值判据是「分隔结构一律不能被动过」：userinfo 段里 @ : / ? # 与 % 全部
+        # 转义。本模块的契约是 user/password 存**字面原文**（_split_host_port 从不 unquote），
+        # 实测 8 种取值（p@ss / p%40ss / pa/ss / pa#ss / pa?ss / 50%off / p:ss / p%）经
+        # safe="" 编码后，httpx 解出来的 password 与原文逐字相等（无损）；而 safe="%" 会让
+        # 形如 %40 的字面口令被当成转义序列解掉（httpx 交出 'p@ss'，原文是 'p%40ss'）。
+        auth = f"{quote(self.user, safe='')}:{quote(self.password, safe='')}@" if self.user else ""
         # IPv6 必须包方括号，否则 "http://::1:8080" 是非法 authority（下游按 InvalidURL 失败）
         host = self.ip if self.ip.startswith("[") or ":" not in self.ip else f"[{self.ip}]"
         prefix = f"{self.scheme}://" if self.scheme else "http://"

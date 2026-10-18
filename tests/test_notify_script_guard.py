@@ -37,10 +37,21 @@ import pytest
 from loguru import logger
 
 # src.notify 通过 `import main` 读写运行时全局；必须先引入 main 才能加载 src.notify
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-import main  # noqa: E402  必须在 src.notify 之前（本文件不直接用其成员，仅为导入顺序）
-import src.notify as notify  # noqa: E402
+# [LT-07 2026-10-18] 注入只为下面两行的**导入期**服务，用完当场摘回（完整理由与摘回口径见
+# tests/test_notify.py 的同名注释：旧形态把仓库根永久留在 sys.path[0]、从不还原，而 fixture 又晚于
+# 模块级 import、搬不进去）。本文件不直接用 main 的成员，main/src.notify 之后由 sys.modules 兜住。
+_REPO_ROOT = str(Path(__file__).resolve().parent.parent)
+_PATH_BASELINE = sys.path.count(_REPO_ROOT)  # 注入前的条目数（各调用形态下都实测为 0 或 1）
+sys.path.insert(0, _REPO_ROOT)
+try:
+    import main  # noqa: E402  必须在 src.notify 之前（本文件不直接用其成员，仅为导入顺序）
+    import src.notify as notify  # noqa: E402
+finally:
+    if _REPO_ROOT in sys.path:
+        sys.path.remove(_REPO_ROOT)
+# LT-07 泄漏判据：「注入 → 导入 → 摘回」三步必须把 sys.path 归还成注入前的条目数（按计数比，不按整表
+# 相等——别的库正当注册自己的搜索路径不该被本文件判红）。与 tests/test_notify.py 末尾同一条守卫。
+assert sys.path.count(_REPO_ROOT) == _PATH_BASELINE, "仓库根被永久留在 sys.path：注入未归还，状态泄漏"
 
 # 四类真实凭据形态，全部落在 utils.mask_credentials 的五条模式覆盖范围内（写用例前逐条实测）：
 # 裸 user:pass@host、scheme://user:pass@host、请求头 Authorization、命令行 --password=。

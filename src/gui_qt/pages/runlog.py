@@ -61,5 +61,8 @@ class LogsPage(QWidget):
         self.terminal.clear()
 
     def apply_palette(self, palette: Palette) -> None:
-        # 终端色是固定的一套 token，主题切换后重建 highlighter 让新插入行按新色渲染。
+        # 终端色是固定的一套 token，主题切换后让既有的高亮器按新色重刷当前与后续的行。
+        # [历史注] 原写「重建 highlighter」——每次新建挂同一 document 而旧实例不销毁，
+        # 即 CODE_REVIEW_2026-10-18 M-16 的泄漏本体；现由 TerminalText.apply_highlighter
+        # 单实例复用、只更新色表 + rehighlight。
         self.terminal.apply_highlighter(palette)

@@ -39,16 +39,34 @@ const INDEX_HTML = readFileSync(new URL('../../web/index.html', import.meta.url)
 
 // —— DOM 桩 ——————————————————————————————————————————————
 
-// 极简元素桩：只实现 app.js 触及的接口。innerHTML/value/textContent 为纯属性赋值，
-// 断言直接读字符串；事件经 _listeners 记录、由测试手动派发。
+// 极简元素桩：只实现 app.js 触及的接口。事件经 _listeners 记录、由测试手动派发。
+//
+// 【2026-10-18 为 M-17 / M-19 补的两条 DOM 语义（字符串属性模型测不到，缺一条回归锁就恒绿）】
+//   ① 给 textContent 赋值会**替换全部子节点**。M-17 的破坏面正是「applyTranslations 往带
+//      data-i18n 的动态容器上覆写 textContent → 已渲染的整张配置表单被清成一行占位文本」；
+//      若 textContent 与 innerHTML 是两个互不相干的字符串，该形态在桩里完全隐形、断言必绿。
+//   ② 给 innerHTML 赋值会重建子节点，select 的 options 集合与选中态随之重置。M-19 断言
+//      「房间集合未变时不重建、选中项保留」，生产代码重建后要读 sel.options 复位选中态，
+//      故 options 必须按 innerHTML 里的 <option value> 解析出来（值形态是 esc() 后的实体，
+//      本文件的用例只用无特殊字符的房间名，不做二次解码）。
+// _innerHTMLWrites 记录 ② 的实际发生次数，是 M-19 「未重建」的计数判据。
+function parseOptionValues(html) {
+    return (html.match(/<option\b[^>]*>/g) || []).map(tag => {
+        const m = tag.match(/\bvalue="([^"]*)"/);
+        return { value: m ? m[1] : '' };
+    });
+}
+
 function makeElement(id) {
     const listeners = {};
     const attrs = {};
-    return {
+    const el = {
         id,
         _listeners: listeners,
-        innerHTML: '',
-        textContent: '',
+        _innerHTML: '',
+        _innerHTMLWrites: 0,
+        _text: '',
+        options: [],
         value: '',
         className: '',
         disabled: false,
@@ -63,7 +81,46 @@ function makeElement(id) {
         closest() { return null; },
         matches() { return false; },
     };
+    Object.defineProperty(el, 'innerHTML', {
+        get() { return el._innerHTML; },
+        set(v) {
+            el._innerHTML = String(v);
+            el._innerHTMLWrites += 1;
+            el.options = parseOptionValues(el._innerHTML);
+            // 子节点整体替换 ⇒ 原选中态丢失，真实 select 复位到首个 option
+            el.value = el.options.length ? el.options[0].value : '';
+        },
+    });
+    Object.defineProperty(el, 'textContent', {
+        get() { return el._text; },
+        set(v) {
+            el._text = String(v);
+            // 覆写文本 = 换掉全部子节点（不计入 _innerHTMLWrites：那是「重建 option 集合」的计数）
+            el._innerHTML = el._text;
+            el.options = [];
+            el.value = '';
+        },
+    });
+    return el;
 }
+
+// index.html 的静态 data-i18n* 属性按 **id** 还原进桩（不另抄一份清单：M-17 的判据正是
+// 「真实首屏 DOM 里这个容器带不带该属性」，抄一份就等于把被测契约写进测试自己）。
+function attrsByIdFromHtml(html) {
+    const map = new Map();
+    for (const m of html.matchAll(/<[a-zA-Z][\w-]*\b([^>]*)>/g)) {
+        const idM = m[1].match(/\bid="([^"]+)"/);
+        if (!idM) continue;
+        const attrs = {};
+        for (const a of m[1].matchAll(/\b(data-i18n(?:-placeholder|-title)?)="([^"]*)"/g)) attrs[a[1]] = a[2];
+        if (Object.keys(attrs).length) map.set(idM[1], attrs);
+    }
+    assert.ok(map.size >= 10, `未从 index.html 还原到足够的带 id 静态属性（${map.size}），解析已漂移`);
+    assert.ok(map.has('logout-btn'), 'index.html 解析应命中 #logout-btn 的 data-i18n');
+    return map;
+}
+
+const HTML_STATIC_ATTRS = attrsByIdFromHtml(INDEX_HTML);
 
 function makeClassList() {
     const set = new Set();
@@ -78,6 +135,8 @@ function makeClassList() {
 // fetch 路由桩：routes 以 "METHOD path" 为键，值为 {status?, json?|text?} 或 (callIndex) => 同构对象
 // （text 表示非 JSON 响应体，见 makeResponse）。
 // 响应恒带 json 或 html 头（api() 按它决定 JSON.parse），全部请求记录进 log 供断言。
+// 【2026-10-18 扩展】路由函数也可返回 **Promise**（同构对象的 Promise），桩会 await 它——
+// M-18 需要「先发的请求后落地」这种可控交错：不控制 resolve 时机就造不出乱序，竞态锁等于没锁。
 function makeFetch(routes, log) {
     return async (path, init) => {
         init = init || {};
@@ -87,7 +146,7 @@ function makeFetch(routes, log) {
         if (!route) {
             return makeResponse(404, { detail: 'no test route for ' + method + ' ' + path });
         }
-        const spec = typeof route === 'function' ? route(log.length) : route;
+        const spec = await (typeof route === 'function' ? route(log.length) : route);
         return makeResponse(spec.status || 200, spec.json || {}, spec.text);
     };
 }
@@ -137,11 +196,13 @@ async function bootApp({ lang, routes, confirm = () => true, injectToken = true,
         return el;
     });
     const docListeners = {};
-    // index.html 里带 class 的元素（如 #logout-btn 的 hidden）需在桩内还原，否则显隐断言失去前提
+    // index.html 里带 class 的元素（如 #logout-btn 的 hidden）需在桩内还原，否则显隐断言失去前提；
+    // 静态 data-i18n* 属性同样按 index.html 原样还原（见 HTML_STATIC_ATTRS），两者的判据都来自真实 HTML。
     function getOrCreate(id) {
         if (!elements.has(id)) {
             const el = makeElement(id);
             (seedClasses[id] || []).forEach(c => el.classList.add(c));
+            for (const [k, v] of Object.entries(HTML_STATIC_ATTRS.get(id) || {})) el.setAttribute(k, v);
             elements.set(id, el);
         }
         return elements.get(id);
@@ -157,6 +218,12 @@ async function bootApp({ lang, routes, confirm = () => true, injectToken = true,
         querySelectorAll(sel) {
             if (sel === '.tab') return tabs;
             if (sel === '#config-container input') return configInputs();
+            // applyTranslations() 的三类静态扫描：按「已还原的静态属性」如实返回，
+            // M-17 的锁全靠这里与真实首屏 DOM 同源（返回空数组等于该函数从不执行）。
+            if (/^\[(data-i18n(?:-placeholder|-title)?)\]$/.test(sel)) {
+                const attr = sel.slice(1, -1);
+                return [...elements.values()].filter(el => el.getAttribute(attr) !== null);
+            }
             return [];
         },
         // renderRecordingControl 走 class 选择器取状态标签；桩不建模 class 树，返回 null 即
@@ -172,6 +239,13 @@ async function bootApp({ lang, routes, confirm = () => true, injectToken = true,
         setItem: (k, v) => storage.set(k, String(v)),
         removeItem: k => storage.delete(k),
     };
+    // 定时器桩：原为纯 no-op（toast 自动隐藏/轮询递归都不执行，测试确定性）。
+    // 【2026-10-18 扩展】改成「排队但不自跑」——对既有用例与 no-op 逐字等价（没人调用 runTimers
+    // 就一条回调都不会执行），但 M-19 需要驱动弹幕轮询：renderDanmaku 只由 dmChain 的 poll 经
+    // setTimeout 进入，纯 no-op 形态下那条链永不落地、筛选下拉的竞态与重建根本碰不到。
+    // id 用队列下标 +1（0 是 falsy，与 app.js 里 `if (toastTimer)`、`if (timer)` 的判空口径兼容），
+    // clearTimeout 把该位置 null 而非移出数组，故 id 与槽位始终对齐。
+    const timerQueue = [];
     const sandbox = {
         document,
         localStorage,
@@ -181,9 +255,8 @@ async function bootApp({ lang, routes, confirm = () => true, injectToken = true,
             'GET /api/status': { status: 401, json: { detail: 'unauthorized' } },
             ...routes,
         }, fetchLog),
-        // no-op 定时器：toast 自动隐藏/轮询递归不执行，测试确定性（见模块头注释）
-        setTimeout() { return 0; },
-        clearTimeout() {},
+        setTimeout(fn) { timerQueue.push(fn); return timerQueue.length; },
+        clearTimeout(id) { if (id) timerQueue[id - 1] = null; },
         confirm(...args) { confirmCalls.push(args[0]); return confirm(...args); },
         EventSource: class { constructor() {} close() {} addEventListener() {} },
     };
@@ -195,7 +268,16 @@ async function bootApp({ lang, routes, confirm = () => true, injectToken = true,
     await flush();
     // 401 引导已清空 token（api() 的 401 分支 setToken('')），注入测试 token 供鉴权头断言
     if (injectToken) localStorage.setItem('dlr_token', 'tok-test');
-    return { sandbox, elements, tabs, fetchLog, localStorage, confirmCalls, configInputs };
+    // 手动执行当前已排期的定时器回调（一轮只跑「进队时已在队列里」的那些，跑完再排新的一轮），
+    // 使轮询节拍由用例掌握而不是由真实时钟掌握。
+    async function runTimers() {
+        const due = timerQueue.splice(0, timerQueue.length);
+        for (const fn of due) {
+            if (fn) fn();
+        }
+        await flush();
+    }
+    return { sandbox, elements, tabs, fetchLog, localStorage, confirmCalls, configInputs, runTimers, timerQueue };
 }
 
 // 派发「直播间」tab 点击：showView('rooms') → 拉画质选项 → 渲染房间列表
@@ -697,7 +779,221 @@ test('无 token 的正常启动（认证关闭）不显示登出入口', async (
     assert.ok(ctx.elements.get('logout-btn').classList.contains('hidden'), '无 bearer 可吊销时不该显示登出');
 });
 
+// —— M-17 / M-18 / M-19：动态容器的翻译覆写、按需加载代次、筛选下拉重建（CODE_REVIEW_2026-10-18）———
+//
+// 三条都是**行为锁**，不钉源码字面量：
+//   · M-17 靠「index.html 还原进桩的静态属性 + textContent 写会替换子节点 + [data-i18n] 扫描面」
+//     复现真实破坏链（切语言 → applyTranslations 覆写动态容器文本），把 data-i18n 加回容器即转红；
+//   · M-18 靠可控 resolve 时机造出「先发后到」的乱序（fetch 路由允许返回 Promise），
+//     删掉任一处 isCurrent 复核即转红；
+//   · M-19 靠 _innerHTMLWrites 计数（innerHTML 每被赋值一次记一笔）+ 手动 runTimers 驱动轮询，
+//     退回「每轮无条件重建」即第二轮的写入次数变 2 而转红。
+
+// 可控 resolve：用例握住 promise 不放手，先让新一代落地、再放开旧一代，乱序由此造出。
+function deferred() {
+    let resolve;
+    let reject;
+    const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+    return { promise, resolve, reject };
+}
+
+// 派发任意导航 tab 的点击（showView(data-view)）
+async function gotoView(ctx, name) {
+    const tab = ctx.tabs.find(t => t.getAttribute('data-view') === name);
+    tab._listeners.click[0].call(tab);
+    await flush();
+}
+
+test('M-17：配置表单装载后切换语言，表单与未保存修改不得被清成一行占位文本', async () => {
+    const ctx = await bootConfigView(MASKED_CONFIG, {
+        routes: { 'PUT /api/language': { json: { language: 'en_US', fallback: false, notice: '' } } },
+    });
+    const inp = findInput(ctx, '输出格式');
+    assert.ok(inp, '配置表单未渲染（本用例前提失效）');
+    inp.value = 'mkv'; // 用户改了但还没保存
+    const sel = ctx.elements.get('language-select');
+    sel.value = 'en_US';
+    sel._listeners.change[0].call(sel);
+    await flush();
+
+    // setLanguage 成功分支会调 applyTranslations()：它扫 [data-i18n] 覆写 textContent。
+    // 容器若带该属性，textContent 一写就换掉全部子节点 → 整张表单（含上面那个未保存的 mkv）消失。
+    const after = ctx.configInputs();
+    assert.ok(after.length > 0, '切语言后配置容器被子节点清空：动态容器不得带 data-i18n（M-17 回归）');
+    const kept = after.find(i => i.getAttribute('data-key') === '输出格式');
+    assert.ok(kept, '输出格式这一行被清掉了');
+    assert.equal(kept.value, 'mkv', '未保存的修改被语言切换抹掉');
+    // 静态文案仍在该翻的位置上翻（防止「把 applyTranslations 整个跳过」这种假修）
+    assert.equal(
+        ctx.elements.get('config-save-btn').textContent,
+        I18N.en_US['config.save'],
+        '切语言后保存按钮文案未更新，说明静态翻译被一并跳过了'
+    );
+});
+
+test('M-17 前提自检：index.html 的动态容器不得带 data-i18n，静态叶子才允许', () => {
+    // 上一条是行为锁；这条把「同类病灶」的判据也机械化：凡是 app.js 里用 innerHTML 整体重建的
+    // 容器（id 清单取自本文件实际驱动的这几张表/框），自身都不得挂 data-i18n*——
+    // 挂在**会被一起替换掉的子节点**上才安全（那些键随重建消失，不会留下覆写父节点文本的属性）。
+    const rebuiltContainers = ['config-container', 'rooms-tbody', 'files-tbody', 'danmaku-room-filter'];
+    const offenders = [];
+    for (const m of INDEX_HTML.matchAll(/<[a-zA-Z][\w-]*\b([^>]*)>/g)) {
+        const idM = m[1].match(/\bid="([^"]+)"/);
+        if (!idM || !rebuiltContainers.includes(idM[1])) continue;
+        for (const a of m[1].matchAll(/\b(data-i18n(?:-placeholder|-title)?)="([^"]*)"/g)) {
+            offenders.push(`#${idM[1]} 带 ${a[1]}="${a[2]}"`);
+        }
+    }
+    assert.deepEqual(offenders, [], '动态重建的容器自身带上了静态翻译属性（applyTranslations 会清掉整棵子树）');
+    // 反向见证：属性确实是从 HTML 解析出来的，不是空集自证
+    assert.ok(/id="rooms-tbody"/.test(INDEX_HTML), 'index.html 解析前提失效');
+});
+
+test('M-18：文件浏览快速连点两跳，先发后到的旧响应不得覆盖最新目录', async () => {
+    const older = deferred();
+    const newer = deferred();
+    const ctx = await bootApp({
+        routes: {
+            'GET /api/files?path=a': () => older.promise,
+            'GET /api/files?path=b': () => newer.promise,
+        },
+    });
+    ctx.sandbox.loadFiles('a');
+    ctx.sandbox.loadFiles('b');
+    await flush();
+    newer.resolve({ json: [{ name: 'new.ts', type: 'file', size: 1, mtime: 0, path: 'b/new.ts' }] });
+    await flush();
+    older.resolve({ json: [{ name: 'old.ts', type: 'file', size: 1, mtime: 0, path: 'a/old.ts' }] });
+    await flush();
+
+    const crumb = ctx.elements.get('file-breadcrumb').innerHTML;
+    const tbody = ctx.elements.get('files-tbody').innerHTML;
+    assert.ok(crumb.includes('data-path="b"'), '面包屑被旧一代覆盖回上一级目录: ' + crumb);
+    assert.ok(!crumb.includes('data-path="a"'), '旧一代的面包屑仍落了地: ' + crumb);
+    assert.ok(tbody.includes('new.ts'), '文件列表未按最新一代渲染');
+    assert.ok(!tbody.includes('old.ts'), '旧一代的行覆盖了最新目录');
+});
+
+test('M-18：旧一代的请求失败也不得把最新目录打成「加载失败」', async () => {
+    const older = deferred();
+    const newer = deferred();
+    const ctx = await bootApp({
+        routes: {
+            'GET /api/files?path=a': () => older.promise,
+            'GET /api/files?path=b': () => newer.promise,
+        },
+    });
+    ctx.sandbox.loadFiles('a');
+    ctx.sandbox.loadFiles('b');
+    await flush();
+    newer.resolve({ json: [{ name: 'ok.ts', type: 'file', size: 1, mtime: 0, path: 'b/ok.ts' }] });
+    await flush();
+    older.resolve({ status: 500, json: { detail: 'boom' } }); // 旧一代这次是失败
+    await flush();
+    const tbody = ctx.elements.get('files-tbody').innerHTML;
+    assert.ok(tbody.includes('ok.ts'), '旧一代的失败分支覆盖了最新列表: ' + tbody);
+    assert.ok(!tbody.includes('加载失败'), '失败文案来自已被取代的那一代');
+});
+
+test('M-18：直播间列表连点两代，只有最新一代落地', async () => {
+    let hits = 0;
+    const older = deferred();
+    const newer = deferred();
+    const ctx = await bootApp({
+        routes: {
+            'GET /api/rooms/qualities': { json: { options: ['原画'], builtin: [] } },
+            'GET /api/rooms': () => (++hits === 1 ? older.promise : newer.promise),
+        },
+    });
+    await gotoView(ctx, 'rooms'); // 第一代：path 恒定，两次点击发两支请求
+    await gotoView(ctx, 'rooms'); // 第二代
+    assert.equal(hits, 2, '未发出两代 GET /api/rooms（本用例前提失效）');
+    newer.resolve({ json: [{ url: 'https://live.douyin.com/new', quality: '原画', name: 'NEW', enabled: true, recording: false }] });
+    await flush();
+    older.resolve({ json: [{ url: 'https://live.douyin.com/old', quality: '原画', name: 'OLD', enabled: true, recording: false }] });
+    await flush();
+    const tbody = ctx.elements.get('rooms-tbody').innerHTML;
+    assert.ok(tbody.includes('https://live.douyin.com/new'), '列表未按最新一代渲染: ' + tbody);
+    assert.ok(!tbody.includes('/old'), '旧一代把列表整体覆盖回了旧数据: ' + tbody);
+});
+
+test('M-18：配置页连点两代，旧一代不得覆盖已渲染表单', async () => {
+    let hits = 0;
+    const older = deferred();
+    const newer = deferred();
+    const ctx = await bootApp({
+        routes: {
+            'PUT /api/config': { json: { ok: true } },
+            'GET /api/config': () => (++hits === 1 ? older.promise : newer.promise),
+        },
+    });
+    await gotoView(ctx, 'config');
+    await gotoView(ctx, 'config');
+    assert.equal(hits, 2, '未发出两代 GET /api/config（本用例前提失效）');
+    newer.resolve({ json: { 录制设置: { key_new: 'n' } } });
+    await flush();
+    older.resolve({ json: { 录制设置: { key_old: 'o' } } });
+    await flush();
+    const html = ctx.elements.get('config-container').innerHTML;
+    assert.ok(html.includes('data-key="key_new"'), '表单未按最新一代渲染: ' + html);
+    assert.ok(!html.includes('key_old'), '旧一代覆盖了配置表单: ' + html);
+    // configBackup（saveConfig 的变更判定基线）在 loadConfig 里于代次复核**之后**才赋值，
+    // 所以旧一代不会把基线带回保存前的那份——DOM 覆盖被挡住即等价于基线也没被污染。
+    await clickSaveConfig(ctx);
+    assert.deepEqual(putBodies(ctx), [], '基线被旧一代改写后，saveConfig 会凭空提交出不存在的变更');
+});
+
+test('M-19：房间集合未变的连续两轮轮询不得重建筛选下拉，选中项保持', async () => {
+    let roomsNow = [
+        { name: '房A', platform: 'bilibili', connected: true, msg_total: 1, msg_rate: 0, gift_total: 0, online: 1, started_at: '2026-10-18' },
+    ];
+    const ctx = await bootApp({
+        routes: {
+            'GET /api/danmaku?since=0': () => ({ json: { rooms: roomsNow, messages: [], last_seq: 0, truncated: false } }),
+        },
+    });
+    await gotoView(ctx, 'danmaku');
+    await ctx.runTimers(); // 第一轮 poll 落地
+
+    const sel = ctx.elements.get('danmaku-room-filter');
+    assert.equal(sel._innerHTMLWrites, 1, '首轮应重建一次 option 集合');
+    sel.value = '房A'; // 用户展开下拉选中（此时下拉是展开态，重建会被浏览器关掉）
+
+    await ctx.runTimers(); // 第二轮：房间集合与语言都没变
+    assert.equal(sel._innerHTMLWrites, 1, '房间集合未变仍重建了下拉（展开的选择框会被关掉，M-19 回归）');
+    assert.equal(sel.value, '房A', '未重建路径把用户选中项重置了');
+
+    roomsNow = [
+        ...roomsNow,
+        { name: '房B', platform: 'douyu', connected: true, msg_total: 2, msg_rate: 1, gift_total: 0, online: 2, started_at: '2026-10-18' },
+    ];
+    await ctx.runTimers(); // 第三轮：新增房间 → 必须重建
+    assert.equal(sel._innerHTMLWrites, 2, '房间集合变化后未重建下拉（新房间永远进不了筛选）');
+    assert.ok(sel.innerHTML.includes('value="房B"'), '新增房间未出现在选项里: ' + sel.innerHTML);
+    assert.equal(sel.value, '房A', '重建后未把选中项复位到用户原选择');
+});
+
+test('M-19：房间消失后重建下拉，选中项回落「全部房间」而不是残留在空气里', async () => {
+    let roomsNow = [
+        { name: '房A', platform: 'bilibili', connected: true, msg_total: 1, msg_rate: 0, gift_total: 0, online: 1, started_at: '2026-10-18' },
+    ];
+    const ctx = await bootApp({
+        routes: {
+            'GET /api/danmaku?since=0': () => ({ json: { rooms: roomsNow, messages: [], last_seq: 0, truncated: false } }),
+        },
+    });
+    await gotoView(ctx, 'danmaku');
+    await ctx.runTimers();
+    const sel = ctx.elements.get('danmaku-room-filter');
+    sel.value = '房A';
+    roomsNow = [];
+    await ctx.runTimers();
+    assert.equal(sel._innerHTMLWrites, 2, '房间集合变空未重建');
+    assert.equal(sel.value, '', '已消失的房间仍被当作选中项（筛选会恒无匹配）');
+});
+
 // —— MIN-10：前端内嵌四语目录的机械化门禁 ————————————————————————
+
 //
 // web/app.js 自带一套与后端 i18n/ 完全独立的四语目录（面板文案），仓库约定「新增/修改翻译串
 // 须同步五处」过去只靠人记。本段把该约定变成门禁：目录键集与后端语言集合对齐、index.html 的

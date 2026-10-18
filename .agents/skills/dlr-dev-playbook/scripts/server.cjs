@@ -118,8 +118,15 @@ function getNewestScreen() {
     .filter(f => f.endsWith('.html'))
     .map(f => {
       const fp = path.join(CONTENT_DIR, f);
-      return { path: fp, mtime: fs.statSync(fp).mtime.getTime() };
+      // L-32: statSync 与 readdir 之间存在竞态窗口（屏文件被清理脚本/agent 删除时
+      // 抛 ENOENT）。单个文件取不到 mtime 只该从候选中剔除，不得让整个请求链崩掉。
+      try {
+        return { path: fp, mtime: fs.statSync(fp).mtime.getTime() };
+      } catch (e) {
+        return null;
+      }
     })
+    .filter(entry => entry !== null)
     .sort((a, b) => b.mtime - a.mtime);
   return files.length > 0 ? files[0].path : null;
 }
@@ -127,6 +134,23 @@ function getNewestScreen() {
 // ========== HTTP Request Handler ==========
 
 function handleRequest(req, res) {
+  try {
+    handleRequestInner(req, res);
+  } catch (e) {
+    // L-32: http 回调里的同步抛出（如 screen 文件在 readdir 与 readFileSync
+    // 之间被删导致的 ENOENT）会穿透到 uncaughtException 直接掀掉整个进程。
+    // 单个请求失败只回 500，服务必须继续存活。
+    console.error('Request handling failed:', e.message);
+    try {
+      res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Internal server error');
+    } catch (ignored) {
+      // 响应头已发出或 socket 已断开，放弃本次回复。
+    }
+  }
+}
+
+function handleRequestInner(req, res) {
   touchActivity();
   if (req.method === 'GET' && req.url === '/') {
     const screenFile = getNewestScreen();
@@ -164,7 +188,43 @@ function handleRequest(req, res) {
 
 const clients = new Set();
 
+// L-33: 浏览器对 ws:// 连接不施加同源策略，任意网页都能连本机 127.0.0.1 的
+// 伴侣服务伪造 user-event/choice。浏览器发起的 WS 握手必带 Origin，故 Origin
+// 存在且不匹配一律 403 拒绝；Origin 缺失视为非浏览器本地客户端（脚本探测），
+// 本地开发工具场景放行。端口比对用实际监听端口 Number(PORT)（BRAINSTORM_PORT
+// 是字符串形态），不得放过「同名主机不同端口」或任意端口的来源。
+function isAllowedUpgradeOrigin(req) {
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  let parsed;
+  try {
+    parsed = new URL(origin);
+  } catch (e) {
+    return false;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+  if (Number(parsed.port) !== Number(PORT)) return false;
+  const hostname = parsed.hostname; // URL 已小写化并剥掉 IPv6 方括号
+  if (hostname === 'localhost' || hostname === '127.0.0.1') return true;
+  // 显式声明过的绑定/展示主机（--host、--url-host，远程或容器环境用）放行；
+  // 通配绑定 0.0.0.0 不代表放行任意主机名，远程访问须以 --url-host 点名实际打开的主机。
+  if (HOST && HOST !== '0.0.0.0' && HOST !== '::' && hostname === HOST.toLowerCase()) return true;
+  if (URL_HOST && hostname === URL_HOST.toLowerCase()) return true;
+  return false;
+}
+
 function handleUpgrade(req, socket) {
+  if (!isAllowedUpgradeOrigin(req)) {
+    console.error('Rejected WebSocket upgrade from origin: ' + req.headers.origin);
+    try {
+      socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+    } catch (e) {
+      // socket 已断开时写失败可忽略，销毁即可。
+    }
+    socket.destroy();
+    return;
+  }
+
   const key = req.headers['sec-websocket-key'];
   if (!key) { socket.destroy(); return; }
 
@@ -272,6 +332,13 @@ function startServer() {
 
   const server = http.createServer(handleRequest);
   server.on('upgrade', handleUpgrade);
+  // L-32 配套：listen 失败（端口被占、绑定地址不可用）默认以未处理的 'error'
+  // 事件升级为 uncaughtException 崩进程；启动期失败带原因干净退出。
+  // 已进入 listening 之后的偶发 socket 错误不足以推翻整个服务，仅记日志。
+  server.on('error', (err) => {
+    console.error(JSON.stringify({ type: 'server-error', code: err.code || null, message: err.message }));
+    if (!server.listening) process.exit(1);
+  });
 
   const watcher = fs.watch(CONTENT_DIR, (eventType, filename) => {
     if (!filename || !filename.endsWith('.html')) return;
@@ -308,6 +375,15 @@ function startServer() {
     );
     watcher.close();
     clearInterval(lifecycleCheck);
+    // L-34: server.close 的回调要等「存量连接全部释放」才触发——已升级为
+    // WebSocket 的裸 socket 与 HTTP keep-alive 连接都不会自己关，回调永不触发、
+    // 进程挂住（日志已打出 server-stopped 却不退出）。先销毁登记在册的 WS 客户端，
+    // 再用 closeAllConnections 清掉其余活跃/保活连接，close 回调必然落地。
+    for (const socket of clients) {
+      try { socket.destroy(); } catch (e) { /* 已断开/已销毁的 socket 不阻塞退出 */ }
+    }
+    clients.clear();
+    if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
     server.close(() => process.exit(0));
   }
 

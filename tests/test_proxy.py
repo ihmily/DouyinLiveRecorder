@@ -1,6 +1,9 @@
 # Tests for src/proxy.py module - 代理检测模块.
+# 2026-10-18 CODE_REVIEW 追加 L-10：ProxyInfo.proxy_url 的 userinfo 必须 percent 编码，
+# 否则密码含保留字符时拼出的是结构错位的代理 URL（authority 被切成 path/query/fragment）。
 
 import sys
+from urllib.parse import unquote, urlsplit
 
 import pytest
 from pytest import MonkeyPatch
@@ -308,3 +311,69 @@ class TestSplitHostPort:
         assert "secret-pass" not in repr(info)
         assert "user" not in repr(info)
         assert info.proxy_url == "http://user:secret-pass@10.0.0.1:8080"
+
+
+# ── L-10：proxy_url 的 userinfo 必须 percent 编码 ──────────────────────────────
+# 凭据按字面原文存进 ProxyInfo（_split_host_port 从不 unquote），直拼进 URL 时
+# 保留字符会重排 URL 结构：'#' 起 fragment、'?' 起 query、'/' 起 path，authority
+# 整段被丢掉——实测 urlsplit('http://u:p#ss@10.0.0.1:8080') 交出 host='ss'、
+# port=None，httpx 更直接 InvalidURL。判据是「解回来的用户名/口令与原文逐字相等，
+# 且 host/port 不受凭据字符影响」，不是「字符串里出现了 %」。
+class TestProxyUrlPercentEncodesCredentials:
+    @pytest.mark.parametrize(
+        ("user", "password"),
+        [
+            ("u", "p@ss"),  # '@'：靠最后一个 @ 切分侥幸能用，仍属非法形态
+            ("u", "pa/ss"),  # '/'：authority 之后被当 path
+            ("u", "pa?ss"),  # '?'：被当 query
+            ("u", "pa#ss"),  # '#'：被当 fragment
+            ("bob", "p%40ss"),  # 字面 %40（safe='' 下不得被当转义序列）
+            ("50%off", "50%off"),  # 用户名位同样含保留字符
+            ("u ser", "a b"),  # 空白
+            ("u:x", "x:y"),  # 冒号
+        ],
+    )
+    def test_reserved_chars_survive_round_trip(self, user: str, password: str) -> None:
+        info = ProxyInfo("10.0.0.1", "8080", user, password)
+        url = info.proxy_url
+        parts = urlsplit(url)
+        assert parts.hostname == "10.0.0.1", f"host 被凭据里的保留字符带跑：{url}"
+        assert parts.port == 8080
+        assert not parts.path and not parts.query and not parts.fragment
+        assert unquote(parts.username or "") == user
+        assert unquote(parts.password or "") == password
+
+    def test_reserved_chars_do_not_reach_the_authority_delimiters(self) -> None:
+        # 分隔结构不能被动过：整条 URL 只允许出现一个 '@'（userinfo 与 host 的分界）
+        url = ProxyInfo("proxy.example.com", "3128", "u", "p@ss/w#?%").proxy_url
+        assert url.count("@") == 1
+        assert url == "http://u:p%40ss%2Fw%23%3F%25@proxy.example.com:3128"
+
+    def test_downstream_httpx_accepts_encoded_credentials(self) -> None:
+        # 交付面实测：修复前 httpx.URL 对 'pa/ss' 直接抛 InvalidURL（'Invalid port: pa'）
+        try:
+            import httpx
+        except ImportError:  # pragma: no cover - httpx 在运行时清单内
+            pytest.skip("httpx 未安装")
+        info = ProxyInfo("10.0.0.1", "8080", "u", "pa/ss?k#p%40")
+        url = httpx.URL(info.proxy_url)
+        assert url.host == "10.0.0.1"
+        assert url.port == 8080
+        assert url.password == "pa/ss?k#p%40"
+
+    def test_env_var_with_reserved_chars_end_to_end(self, monkeypatch: MonkeyPatch) -> None:
+        # 端到端：环境变量里字面写出的口令（含 '@'）经解析→还原，凭据仍能被正确解出
+        _clear_proxy_env(monkeypatch)
+        monkeypatch.setenv("http_proxy", "http://u:p@ss@proxy.example.com:3128")
+        info = ProxyDetector._get_proxy_info_linux()
+        assert (info.ip, info.port, info.user, info.password) == ("proxy.example.com", "3128", "u", "p@ss")
+        assert info.proxy_url == "http://u:p%40ss@proxy.example.com:3128"
+        assert unquote(urlsplit(info.proxy_url).password or "") == "p@ss"
+
+    def test_no_credentials_url_shape_unchanged(self) -> None:
+        # 无凭据形态不得被顺手改写（本仓另有 6 处用例逐字钉住 proxy_url 的字面形状）
+        assert ProxyInfo("10.0.0.1", "8080").proxy_url == "http://10.0.0.1:8080"
+        # 无 ip 才是「没有代理」；ip 空 + port 非空是 __post_init__ 刻意拒绝的半填形态
+        assert ProxyInfo().proxy_url == ""
+        with pytest.raises(ValueError, match="IP or port"):
+            ProxyInfo("", "8080")

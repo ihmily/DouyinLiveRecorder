@@ -13,6 +13,12 @@
 #   · settings_dialog：外部改动后「有未保存编辑」与「无编辑」走两条不同路径。
 #   · widgets.fixed_font：等宽族名只能是**单个** family、按候选取本机第一个命中的，
 #     候选全缺时交回系统固定宽度字体（2026-10-17 用户日志的两条字体告警即出自旧写法）。
+#   · widgets.TerminalText.apply_highlighter：高亮器对同一 document 单实例复用（M-16）。
+#   · 真窗语言热切换（M-13/M-14）：本文件头注「不靠真窗」口径的**刻意例外**——
+#     「登记表回填把运行态打回初值」「静态标签原地停旧语言」两类形态只有真控件树 +
+#     真翻译目录才测得出来，假控件对象走不了 set_text→setText 的 Qt 面；
+#     夹具与 tests/test_gui_qt_window.py 同源（登记表按用例快照还原，防存活条目
+#     留给按全局条数断言的 tests/test_ui_i18n.py）。
 
 import json
 import os
@@ -46,17 +52,22 @@ pytest.importorskip(
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtGui import QFont, QFontDatabase  # noqa: E402
-from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
+from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QSyntaxHighlighter  # noqa: E402
+from PySide6.QtWidgets import QApplication, QLabel, QMessageBox  # noqa: E402
 
 import i18n  # noqa: E402
+from src import ui_i18n  # noqa: E402
 from src.gui_qt import app as app_module  # noqa: E402
 from src.gui_qt import recorder as recorder_module  # noqa: E402
 from src.gui_qt import shared  # noqa: E402
+from src.gui_qt import theme as theme_module  # noqa: E402
+from src.gui_qt import widgets as widgets_module  # noqa: E402
 from src.gui_qt.danmaku_monitor import DanmakuMonitor  # noqa: E402
+from src.gui_qt.main_window import MainWindow  # noqa: E402
 from src.gui_qt.recorder import RecorderController  # noqa: E402
 from src.gui_qt.settings_dialog import AdvancedSettingsDialog  # noqa: E402
-from src.gui_qt.widgets import fixed_font  # noqa: E402
+from src.gui_qt.widgets import TerminalText, fixed_font  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -243,11 +254,17 @@ def test_danmaku_tail_loop_reads_file_and_survives_dirty_events(tmp_path: Path) 
             time.sleep(0.05)
         messages = monitor.messages_snapshot()
         assert [m.get("text") for m in messages] == ["第一条", "第二条"], "脏事件不得吃掉同批其余事件"
-        # 坏 JSON 行与空行都被跳过，不留痕
-        _write_jsonl(jsonl, [{"ev": "msg", "room": "A", "user": "u3", "text": "第三条", "type": "chat"}])
+        # 坏 JSON 行与空行都被跳过、不留痕。写入顺序刻意把坏行放在「第三条」之前：
+        # tail 线程按文件顺序消费，「第三条」能落到末位，本身就是坏行已被跳过且线程
+        # 仍活着的**行为见证**——不再用固定 sleep 赌时序（MT-06：轮询周期 0.3s 配
+        # sleep(0.5) 在 CI 高负载下余量不足，偶发假红）。等待改用本文件上半段同款
+        # 的 deadline 轮询（5s 上限），不另发明第二套等待工具。
         with jsonl.open("a", encoding="utf-8") as f:
             f.write("{not json}\n\n")
-        time.sleep(0.5)
+        _write_jsonl(jsonl, [{"ev": "msg", "room": "A", "user": "u3", "text": "第三条", "type": "chat"}])
+        deadline = time.time() + 5.0
+        while time.time() < deadline and monitor.messages_snapshot()[-1].get("text") != "第三条":
+            time.sleep(0.05)
         assert monitor.messages_snapshot()[-1].get("text") == "第三条"
     finally:
         monitor.stop()
@@ -608,3 +625,205 @@ def test_fixed_font_falls_back_to_system_fixed_font(qt_app: QApplication, monkey
     # 候选全缺时不再猜名字（旧写法正是在这一步落到 "Terminal"），改交平台的系统固定宽度字体
     assert got.family() == "DlrMarkerMono"
     assert got.pointSize() == 9
+
+
+# ─── widgets.TerminalText.apply_highlighter：单实例复用（M-16） ───────────
+
+
+def test_apply_highlighter_attaches_once_and_only_recolors(
+    qt_app: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # M-16 行为锁：主题/缩放/字体切换每次都走 apply_highlighter，旧实现在此处新建
+    # _LogHighlighter 挂同一 document——QSyntaxHighlighter 以 document 为父对象，
+    # 旧实例永不销毁且继续参与高亮：切 N 次叠 N 个，旧行被旧配色反复重着色、
+    # 全文档重复高亮 N 份开销。取证面是 document 的 children 里 QSyntaxHighlighter
+    # 的个数（Qt 没有公开的「列出全部高亮器」API，父子关系是唯一可机检形态）。
+    term = TerminalText()
+    rehighlighted: list[int] = []
+    # 桩在类层而不是实例层（PySide6 对象上逐实例改写 C++ 方法不可靠）；monkeypatch 还原。
+    monkeypatch.setattr(widgets_module._LogHighlighter, "rehighlight", lambda self: rehighlighted.append(1))
+    light = theme_module.palette(theme_module.THEME_LIGHT, 1.0)
+    dark = theme_module.palette(theme_module.THEME_DARK, 1.0)
+    term.apply_highlighter(light)
+    assert term._highlighter is not None  # noqa: SLF001 - 白盒确认首建已挂载
+    term.append_line("[ERROR] 旧行留在文档里\n")
+    term.apply_highlighter(dark)
+    term.apply_highlighter(light)
+    term.apply_highlighter(dark)
+    stacked = [child for child in term.document().children() if isinstance(child, QSyntaxHighlighter)]
+    assert len(stacked) == 1, f"切了 4 次主题后 document 上挂着 {len(stacked)} 个高亮器（M-16 回归：旧实例未复用）"
+    assert stacked[0] is term._highlighter  # noqa: SLF001 - 复用中的实例就是自持的那一个
+    # 复用不得停在首建配色：色表必须跟随最新 palette（否则「主题切换对终端永久失效」，
+    # 而且颜色必须仍取自 theme.py 令牌而不是控件上写死的十六进制）。
+    expected = QColor(dark.token("terminal_error")).name()
+    assert term._highlighter._formats["error"].foreground().color().name() == expected  # noqa: SLF001
+    # 首建不重刷（空文档重刷等于白扫），此后每次 set_palette 恰好一次 rehighlight（旧行重着色）。
+    assert rehighlighted == [
+        1,
+        1,
+        1,
+    ], "每次切换主题必须且只能触发一次 rehighlight：去掉它旧行停在旧配色，多触发是重复开销"
+
+
+# ─── M-13/M-14：真窗语言热切换的整窗回填 ─────────────────────────────────
+
+
+def _fail_fast_box(*_args: object, **_kwargs: object) -> int:
+    # 用例期间任何预期外的模态弹窗都会把离屏用例钉死，一律快速失败而不是放行。
+    raise AssertionError("用例期间出现了预期外的模态弹窗")
+
+
+@pytest.fixture()
+def lang_window(qt_app: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[MainWindow]:
+    # 夹具与 tests/test_gui_qt_window.py 的 window 同源：登记表按用例快照还原
+    # （Qt 顶层窗口在 QApplication 存活期不释放，不还原会把存活条目留给
+    # 按全局条数断言的 tests/test_ui_i18n.py）。启动语言钉成 zh_CN：
+    # 解析缺省会跟随宿主系统语言，用例结论不能随机器漂移。
+    registry_snapshot = list(ui_i18n._ENTRIES)  # noqa: SLF001 - 测试还原全局登记表，与生产同模块
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    url_file = config_dir / "URL_config.ini"
+    url_file.write_text("https://live.douyin.com/1234 原画 主播A\n", encoding="utf-8-sig")
+    main_file = config_dir / "config.ini"
+    main_file.write_text("[录制设置]\nlanguage = zh_CN\n循环时间(秒) = 60\n", encoding="utf-8-sig")
+    monkeypatch.setattr(QMessageBox, "warning", _fail_fast_box)
+    monkeypatch.setattr(QMessageBox, "critical", _fail_fast_box)
+    saved_language = i18n.get_language()
+    win = MainWindow(
+        app_root=str(tmp_path),
+        script_dir=str(tmp_path),
+        url_config_file=str(url_file),
+        main_config_file=str(main_file),
+        downloads_dir=str(tmp_path / "downloads"),
+    )
+    win.apply_palette()
+    assert i18n.get_language() == "zh_CN"
+    yield win
+    win._finalize_quit()  # noqa: SLF001 - 夹具收尾走生产退出序列（停三条链、关弹幕尾线程）
+    win.deleteLater()
+    qt_app.processEvents()
+    i18n.set_language(saved_language)
+    ui_i18n._ENTRIES[:] = registry_snapshot  # noqa: SLF001 - 同上
+
+
+def _switch_to_en_us(win: MainWindow) -> None:
+    index = win.language_combo.findData("en_US")
+    assert index >= 0, "语言下拉必须含 en_US，否则本组判据失去取证面"
+    win.language_combo.setCurrentIndex(index)
+    assert i18n.get_language() == "en_US"
+
+
+def test_running_status_text_survives_retranslate_and_follows_language(
+    qt_app: QApplication, lang_window: MainWindow
+) -> None:
+    # M-13 行为锁：状态标题/副标题是运行态文案，既不能被 retranslate_all() 的回填打回
+    # 登记初值「待机」，也必须随语言切换按当前 recorder 状态重驱（四处投影一致）。
+    win = lang_window
+    # 进入「录制中」形态：白盒置 _running 让 is_running() 为真即可——本判据考的是切换钩子
+    # 的重驱通路，与真子进程无关。只调 _set_running_ui(True) 不够：切换钩子会**重读**
+    # is_running() 决定形态，真实态为 False 时被重驱回「待机」，那反而是正确的生产行为。
+    win.recorder._running = True  # noqa: SLF001 - 单元测试直接置位，与生产同模块
+    win._set_running_ui(True)  # noqa: SLF001 - 直接驱动唯一运行态出口
+    title_zh = win.dashboard.status_title.text()
+    assert title_zh == i18n.tr("录制中")
+    # 判据一：单纯回填不得动运行态文案——旧实现把 status_title 登记进表，这一步就会把它
+    # 打回「待机」（与侧栏/托盘矛盾的确切形态）。
+    ui_i18n.retranslate_all()
+    assert (
+        win.dashboard.status_title.text() == title_zh
+    ), "运行态状态标题被登记进了重译表：retranslate_all() 会把「录制中」打回登记初值「待机」（M-13）"
+    # 判据二：切语言后运行态按当前 recorder 状态重驱（recorder 未真起进程，但 _running
+    # 由 _set_running_ui 的入参驱动，这里保持「录制中」投影不变即可取证）。
+    _switch_to_en_us(win)
+    assert win.dashboard.status_title.text() == i18n.tr("录制中") != title_zh
+    assert win.dashboard.status_sub.text() == i18n.tr("录制进程运行中 (PID: {pid})", pid=win.recorder.pid())
+    assert win.sidebar_status.text() == i18n.tr("运行中") != "运行中"
+    assert win.status_chip.text() == i18n.tr("运行中")
+    if win.tray is not None:
+        # 托盘状态项同属运行态（走 set_running 而不是登记表）；离屏/无 XDG Session 的
+        # 机器上 _setup_tray 可能退化为 None，此处按可用性取证、不做伪绿。
+        assert win.tray.status_action.text() == i18n.tr("录制中") != "录制中"
+
+
+def test_static_labels_and_derived_title_follow_language_switch(qt_app: QApplication, lang_window: MainWindow) -> None:
+    # M-14 行为锁：offscreen 真建页面读 text()——导航按钮（带 emoji 键）、品牌副标题、
+    # 偏好说明标签、导入字体按钮、两张监控页的统计标题/空态/按钮，以及由导航文本派生的
+    # 顶栏页标题，切语言后全部必须按当前目录重取；登记遗漏的形态是「原地停在旧语言」。
+    win = lang_window
+    before = {
+        "nav_quality": win._nav_buttons["quality"].text(),  # noqa: SLF001 - 白盒读取导航按钮
+        "nav_dashboard": win._nav_buttons["dashboard"].text(),  # noqa: SLF001
+        "brand": win.brand_sub.text(),
+        "import_font": win.import_font_btn.text(),
+        "page_title": win.page_title.text(),
+        "stat_total": win.quality_page.stat_total.title.text(),
+        "stat_ok": win.quality_page.stat_ok.title.text(),
+        "stat_down": win.quality_page.stat_down.title.text(),
+        "empty_title": win.quality_page.empty.title.text(),
+        "empty_desc": win.quality_page.empty.description.text(),
+        "refresh": win.quality_page.refresh_btn.text(),
+        "stat_rooms": win.danmaku_page.stat_rooms.title.text(),
+        "stat_connected": win.danmaku_page.stat_connected.title.text(),
+        "stat_msgs": win.danmaku_page.stat_msgs.title.text(),
+        "dm_empty_title": win.danmaku_page.empty.title.text(),
+        "dm_empty_desc": win.danmaku_page.empty.description.text(),
+        "clear": win.danmaku_page.clear_btn.text(),
+    }
+    # 取证面自检：zh_CN 下这些文本就是源文；若宿主目录意外恒等，切换后「不变」无法区分
+    # 「登记有效」与「根本没生效」——先证明英文目录对这些键确有译文。
+    _switch_to_en_us(win)
+    assert i18n.tr("🎯  画质监控") != before["nav_quality"], "英文目录未生效，本用例的区分力失效"
+    assert win._nav_buttons["quality"].text() == i18n.tr("🎯  画质监控") != before["nav_quality"]  # noqa: SLF001
+    assert win.brand_sub.text() == i18n.tr("直播录制 · 控制台") != before["brand"]
+    assert win.import_font_btn.text() == i18n.tr("导入字体…") != before["import_font"]
+    # 顶栏页标题是派生面（不进登记表）：必须等于「当前激活导航项」去掉 emoji 前缀后的形态。
+    assert (
+        win.page_title.text() == win._nav_buttons["dashboard"].text().split("  ")[-1] != before["page_title"]
+    )  # noqa: SLF001
+    assert win.quality_page.stat_total.title.text() == i18n.tr("录制直播间") != before["stat_total"]
+    assert win.quality_page.stat_ok.title.text() == i18n.tr("画质正常") != before["stat_ok"]
+    assert win.quality_page.stat_down.title.text() == i18n.tr("画质降级") != before["stat_down"]
+    assert win.quality_page.empty.title.text() == i18n.tr("暂无录制中的直播间") != before["empty_title"]
+    assert (
+        win.quality_page.empty.description.text()
+        == i18n.tr("启动录制后，将自动检测各直播间的实际画质是否与设置一致")
+        != before["empty_desc"]
+    )
+    assert win.quality_page.refresh_btn.text() == i18n.tr("立即刷新") != before["refresh"]
+    assert win.danmaku_page.stat_rooms.title.text() == i18n.tr("监控房间") != before["stat_rooms"]
+    assert win.danmaku_page.stat_connected.title.text() == i18n.tr("已连接") != before["stat_connected"]
+    assert win.danmaku_page.stat_msgs.title.text() == i18n.tr("弹幕总数") != before["stat_msgs"]
+    assert win.danmaku_page.empty.title.text() == i18n.tr("暂无弹幕监控数据") != before["dm_empty_title"]
+    assert (
+        win.danmaku_page.empty.description.text()
+        == i18n.tr("启动录制并在 config.ini 开启「是否弹幕监控(是/否)」后，支持弹幕的平台将显示实时弹幕")
+        != before["dm_empty_desc"]
+    )
+    assert win.danmaku_page.clear_btn.text() == i18n.tr("清空") != before["clear"]
+    # 侧栏偏好说明标签（objectName=dim，add_setting 建时定型）：四组 caption 整体换语言。
+    dim_texts = {lb.text() for lb in win.findChildren(QLabel) if lb.objectName() == "dim"}
+    assert dim_texts == {
+        i18n.tr("界面主题"),
+        i18n.tr("界面缩放"),
+        i18n.tr("语言 Language"),
+        i18n.tr("界面字体"),
+    }, "侧栏偏好说明标签必须随重译登记表换语言（M-14）"
+    if win.tray is not None:
+        assert win.tray.show_action.text() == i18n.tr("显示主窗口")
+        assert win.tray.quit_action.text() == i18n.tr("彻底退出")
+
+
+def test_monitor_table_headers_and_filter_sentinel_follow_language_switch(
+    qt_app: QApplication, lang_window: MainWindow
+) -> None:
+    # M-14 运行态重刷锁：两张监控表的表头与「全部房间」哨兵都在产生点 tr()，
+    # refresh 对行内容等值时短路返回——语言切换后若不清上一轮缓存强制重画，旧语言原地常驻。
+    win = lang_window
+    assert win.danmaku_page.filter_combo.itemText(0) == "全部房间"
+    _switch_to_en_us(win)
+    assert str(win.danmaku_page.filter_combo.itemText(0)) == i18n.tr("全部房间") != "全部房间"
+    # 表头随当前语言（model 层取证，不依赖控件可见性）。
+    dm_header0 = str(win.danmaku_page._model.headerData(0, Qt.Orientation.Horizontal))  # noqa: SLF001
+    assert dm_header0 == i18n.tr("房间") != "房间"
+    qm_header0 = str(win.quality_page._model.headerData(0, Qt.Orientation.Horizontal))  # noqa: SLF001
+    assert qm_header0 == i18n.tr("直播间") != "直播间"

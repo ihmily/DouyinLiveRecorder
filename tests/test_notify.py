@@ -19,10 +19,27 @@ from loguru import logger
 
 # 通知模块的 run_script 通过 import main 读写运行时全局；
 # 测试需先把 main 引入，才能加载 src.notify
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-import main  # noqa: E402  必须在 src.notify 之前
-import src.notify as notify  # noqa: E402
+# [LT-07 2026-10-18] 这条 sys.path 注入只为下面两行**导入期**服务，用完当场摘回：旧形态把仓库根永久
+# 留在 sys.path[0] 且从不还原（状态泄漏：仓库根被顶到搜索路径最前直到会话结束，同会话其它包的模块
+# 解析顺序被本文件单方面改写；多个用例文件各插一次时这条重复项还会一路累积在最前面）。
+# 不搬进 fixture 的理由：`import main` 就在模块级、pytest 收集期即执行，而 fixture 要等用例开跑才运行，
+# 搬进去等于打一个永不被读的桩（AGENTS「例外情形」同一判据）。
+# 摘回按值 remove 首个同名条目：tests/__init__.py 使仓库根成为 pytest（prepend 导入模式）的导入基准、
+# 那里本来就登记过一条时，被移除的是我们自己插的那条、既有那条原地保留，注入前后 sys.path 逐字相同；
+# main / src.notify 此后由 sys.modules 兜住，任何用例内的再次 import 都不依赖这条路径。
+_REPO_ROOT = str(Path(__file__).resolve().parent.parent)
+_PATH_BASELINE = sys.path.count(_REPO_ROOT)  # 注入前的条目数（各调用形态下都实测为 0 或 1）
+sys.path.insert(0, _REPO_ROOT)
+try:
+    import main  # noqa: E402  必须在 src.notify 之前
+    import src.notify as notify  # noqa: E402
+finally:
+    if _REPO_ROOT in sys.path:
+        sys.path.remove(_REPO_ROOT)
+# LT-07 泄漏判据：「注入 → 导入 → 摘回」三步必须把 sys.path 归还成注入前的条目数。按计数比而不按
+# 整表相等——别的库若在导入期正当注册自己的搜索路径，不该被本文件判红；生产代码不碰 sys.path
+# （grep 实测 main.py / src/*.py / i18n.py / msg_push.py 零处），故这条判据在任意调用形态下都确定。
+assert sys.path.count(_REPO_ROOT) == _PATH_BASELINE, "仓库根被永久留在 sys.path：注入未归还，状态泄漏"
 
 # M-30：命令一律用 sys.executable，不再写死字面量 `python`。
 # 生产 run_script 以 shell=False + shlex.split 在 PATH 里查找可执行文件，而 Linux/CI 镜像常

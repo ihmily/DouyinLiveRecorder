@@ -15,6 +15,7 @@
 
 import configparser
 import os
+import shutil
 import threading
 import types
 from pathlib import Path
@@ -36,11 +37,17 @@ from src import config_io  # noqa: E402
 # update_file：noop 短路与「不得抢锁」/ 快照前进时机 / 读取失败回滚 / 原子写
 #   失败时快照不得前进。最后两条是同一枚硬币的两面：快照只能追上「已落盘」
 #   的内容，追快了就会把写失败伪装成写成功。
+#   [M-07 2026-10-19 补] 第五类失败形态「old_str 未命中任何行」同属不得前进快照的一类，
+#   且必须**不落盘**（旧实现落盘并返回 new_str，与替换成功同形）；另加一条正向锁：
+#   命中但内容逐字不变的注释路径仍必须落盘，防止把判据从「是否命中」写成「是否变化」。
 # update_anchor_name：幂等（已是目标名要返 False，否则每轮重录都回写一次磁盘）、
 #   单层 # 前缀保留、全角冒号归一为半角（与 main.py 的行解析约定同源）。
 # 备份脱敏（CR-07）：默认对凭据段打 ***；DLR_BACKUP_KEEP_SECRETS=1 时原样复制；
 #   脱敏自身报错时回退原样复制。最后一条的降级方向是「宁可留明文也不能没备份」，
 #   不要误改成「脱敏失败则不备份」——那会把可用性换成了不存在的安心感。
+#   [M-10 / MT-01 2026-10-19 补] 备份循环另有一类锁：backup_file 返回 False 时 MD5 基线
+#   **不得推进**（否则一次写入失败就让那版配置永久没有备份），且循环必须真跑到第二轮，
+#   「内容未变 → 不重复备份」这条去重分支才算被覆盖（首轮就抛停的桩形同没测）。
 
 
 URL_A = "https://live.douyin.com/1111111111"
@@ -171,6 +178,36 @@ class TestUpdateFile:
         assert config_io.update_file(str(url_config), URL_A, URL_B) == URL_A
         assert _read_text(url_config) == f"{URL_A}\n"
         assert main.ini_URL_content == "", "写失败时快照不得前进"
+
+    def test_no_match_writes_nothing_and_returns_old_string(self, url_config: Path, monkeypatch: MonkeyPatch) -> None:
+        # M-07（2026-10-19）：old_str 一行都没命中 → **不落盘** + 返回 old_str。
+        # 变异验证（短 id M07，改动行当时带盘上标记、跑完已按字节还原）实测：把 `if not matched: return old_str` 摘掉后
+        # 本用例三条断言全红（返回 new_str、写了一次、快照前进），说明锁真的落在那条分支上。
+        _write_text(url_config, f"{URL_A}\n{URL_B}\n")
+        write_calls: list[str] = []
+        real_write = config_io._atomic_write_text
+
+        def spy_write(file_path: str, text: str) -> bool:
+            write_calls.append(file_path)
+            return real_write(file_path, text)
+
+        monkeypatch.setattr(config_io, "_atomic_write_text", spy_write)
+        assert config_io.update_file(str(url_config), "https://live.douyin.com/88888888", URL_B) == (
+            "https://live.douyin.com/88888888"
+        ), "未命中必须与「替换成功」可区分（返回 old_str 是 web_api MIN-2243 负信号契约的唯一来源）"
+        assert write_calls == [], "未命中不得整文件重写（无谓刷新 mtime 会牵动热加载与备份触发判据）"
+        assert _read_text(url_config) == f"{URL_A}\n{URL_B}\n"
+        assert main.ini_URL_content == "", "未命中时快照不得前进"
+
+    def test_comment_only_rewrite_still_lands_when_content_is_identical(
+        self, url_config: Path, monkeypatch: MonkeyPatch
+    ) -> None:
+        # 判据是「是否命中」而不是「内容是否变了」：main.py 注释未知链接那条路径传的是
+        # old_str == new_str + start_str="#"，落盘内容与被替换行逐字相同（只是加了前缀），
+        # 用「文本是否变化」当判据会让这条路径永久 no-op。
+        _write_text(url_config, f"{URL_A}\n")
+        assert config_io.update_file(str(url_config), URL_A, URL_A, start_str="#") == URL_A
+        assert _read_text(url_config) == f"#{URL_A}\n"
 
 
 class TestUpdateAnchorName:
@@ -315,9 +352,38 @@ class TestBackupSecretHandling:
         monkeypatch.delenv("DLR_BACKUP_KEEP_SECRETS", raising=False)
         captured: list[str] = []
         monkeypatch.setattr(config_io.logger, "error", lambda msg, *a, **k: captured.append(str(msg)))
-        config_io.backup_file(str(tmp_path / "missing.ini"), str(tmp_path / "backup"))
+        assert config_io.backup_file(str(tmp_path / "missing.ini"), str(tmp_path / "backup")) is False
         assert any("备份配置文件" in m for m in captured)
         assert capsys.readouterr().out == ""
+
+    def test_write_failure_returns_false_with_type_bearing_warning(
+        self, tmp_path: Path, monkeypatch: MonkeyPatch
+    ) -> None:
+        # M-10（2026-10-19）：备份必须**把成败交回调用方**——旧签名 `-> None` 全吞异常，
+        # backup_file_start 因此无条件推进 MD5 基线，一次磁盘满/文件占用就让这份内容的版本
+        # 永久失去备份。这里让 copy2 抛错（DLR_BACKUP_KEEP_SECRETS=1 那条直复制的分支，
+        # 失败点唯一、不会被脱敏回退路径掩盖），断言三件事实：返回 False、副本没落盘、
+        # 告警带异常类型（AGENTS「异常日志必须带异常类型与上下文」）。
+        src = tmp_path / "config.ini"
+        _write_text(src, "[Cookie]\ndouyin_cookie = top-secret\n")
+        monkeypatch.setenv("DLR_BACKUP_KEEP_SECRETS", "1")
+        monkeypatch.setattr(main, "text_encoding", "utf-8-sig")
+        backup_dir = tmp_path / "backup"
+
+        def deny(*args: object, **kwargs: object) -> None:
+            raise OSError("disk full")
+
+        # 按仓内约定走浅拷贝 shim：setattr(shutil, "copy2", ...) 改的是全进程唯一的 stdlib 本体
+        shim = types.SimpleNamespace(**vars(shutil))
+        shim.copy2 = deny
+        monkeypatch.setattr(config_io, "shutil", shim)
+        warnings: list[str] = []
+        monkeypatch.setattr(config_io.logger, "warning", lambda msg, *a, **k: warnings.append(str(msg)))
+
+        assert config_io.backup_file(str(src), str(backup_dir)) is False
+        assert not backup_dir.exists() or list(backup_dir.iterdir()) == [], "失败的备份不得留下任何副本"
+        assert any("OSError" in m and "disk full" in m for m in warnings), warnings
+        assert any("下轮将重试" in m for m in warnings), "失败日志要写清后续动作，不能只记现象"
 
 
 class _StopBackupLoop(BaseException):
@@ -338,27 +404,71 @@ class TestBackupLoop:
         monkeypatch.delenv("DLR_BACKUP_KEEP_SECRETS", raising=False)
         monkeypatch.setattr(main, "text_encoding", "utf-8")
 
-        loops: list[int] = []
+        # MT-01（2026-10-19）：旧桩在**首轮** sleep 就抛，循环只跑一轮，
+        # 「MD5 未变 → 不重复备份」那条分支从未被执行——删掉 `if new_md5 != md5` 去重判断
+        # 本用例照样绿（假绿）。现放行第一轮、第二轮才停，第二轮就是那条去重分支的真覆盖。
+        rounds: list[float] = []
 
-        def stop(_seconds: float) -> None:
-            loops.append(1)
-            raise _StopBackupLoop
+        def sleep_twice(seconds: float) -> None:
+            rounds.append(seconds)
+            if len(rounds) >= 2:
+                raise _StopBackupLoop
 
-        monkeypatch.setattr(config_io, "time", types.SimpleNamespace(sleep=stop))
+        monkeypatch.setattr(config_io, "time", types.SimpleNamespace(sleep=sleep_twice))
 
-        # 第一轮：两份配置各备份一次；第二轮在 sleep 处终止（MD5 未变 → 不重复备份）
+        # 第一轮：两份配置各备份一次；第二轮：MD5 未变 → 不得再备份
         backed_up: list[str] = []
         original_backup = config_io.backup_file
 
-        def spy_backup(file_path: str, backup_dir_path: str, limit_counts: int = 6) -> None:
+        def spy_backup(file_path: str, backup_dir_path: str, limit_counts: int = 6) -> bool:
+            # M-10 后 backup_file 返回 bool，而 backup_file_start 的基线推进**只看这个返回值**：
+            # 替身若返回 None（falsy）基线就永不前进、第二轮会重复备份、本用例当场转红。
+            # 故这里必须原样透传真实返回值——它同时也是「替身没有替被测逻辑作假」的见证。
             backed_up.append(Path(file_path).name)
-            original_backup(file_path, backup_dir_path, limit_counts)
+            return original_backup(file_path, backup_dir_path, limit_counts)
 
         monkeypatch.setattr(config_io, "backup_file", spy_backup)
         with pytest.raises(_StopBackupLoop):
             config_io.backup_file_start()
-        assert backed_up == ["config.ini", "URL_config.ini"]
+        assert backed_up == ["config.ini", "URL_config.ini"], "第二轮内容未变化时不得再备份（去重分支必须被走到）"
+        assert len(rounds) == 2
         assert (tmp_path / "backup").is_dir()
+
+    def test_failed_backup_keeps_baseline_and_retries_next_round(
+        self, tmp_path: Path, monkeypatch: MonkeyPatch
+    ) -> None:
+        # M-10（2026-10-19）的回归锁：备份写入失败 → 基线**不推进** → 下一轮同一份内容仍会重试。
+        # 变异验证实测（短 id M10，改动行当时带盘上标记、跑完已按字节还原）：把 `if backup_file(...):` 还原成
+        # 「无条件调用 + 无条件推进基线」的旧形态后，本用例的 attempts 断言立刻变成
+        # ["config.ini"]（只试过一次）而转红。
+        cfg = tmp_path / "config.ini"
+        _write_text(cfg, "[Cookie]\ndouyin_cookie = top-secret\n")
+        monkeypatch.setattr(main, "config_file", str(cfg))
+        monkeypatch.setattr(main, "url_config_file", str(tmp_path / "no-url-config.ini"))
+        monkeypatch.setattr(main, "backup_dir", str(tmp_path / "backup"))
+        monkeypatch.setattr(main, "text_encoding", "utf-8")
+
+        outcomes = [False, True]  # 第一轮失败、第二轮成功
+        attempts: list[str] = []
+
+        def fake_backup(file_path: str, backup_dir_path: str, limit_counts: int = 6) -> bool:
+            attempts.append(Path(file_path).name)
+            return outcomes.pop(0) if outcomes else True
+
+        monkeypatch.setattr(config_io, "backup_file", fake_backup)
+        rounds: list[float] = []
+
+        def sleep_thrice(seconds: float) -> None:
+            rounds.append(seconds)
+            if len(rounds) >= 3:
+                raise _StopBackupLoop
+
+        monkeypatch.setattr(config_io, "time", types.SimpleNamespace(sleep=sleep_thrice))
+        with pytest.raises(_StopBackupLoop):
+            config_io.backup_file_start()
+        # 第一轮失败 → 第二轮重试；第二轮成功 → 第三轮内容未变、不再备份
+        assert attempts == ["config.ini", "config.ini"], attempts
+        assert len(rounds) == 3
 
     def test_md5_failure_is_reported_and_loop_continues(self, tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
         cfg = tmp_path / "config.ini"

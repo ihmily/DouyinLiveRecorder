@@ -10,12 +10,17 @@
 #   MIN-2236③ SrtWriter.close() 无终态位 → 节流重开以追加模式把块号归 0（块号回卷）
 #   MIN-2236② ffmpeg 清理的注册表复核与「未确认」告警用两套互斥事实 + 预算配不平
 #
+# 2026-10-18 追加（CODE_REVIEW_2026-10-18，同文件同口径，不另建第二份基础设施锁清单）：
+#   L-18      边车轮转 os.replace 失败被静默吞掉且无记忆 → 此后每条事件重走 close/replace/open
+#   MT-11     test_window_is_closed_even_when_rename_fails 的 rename 替身改落 la 命名空间（M-27 同形态）
+#
 # 全部离线：不启动真实 ffmpeg、不联网，文件 IO 只落在 tmp_path。
 
 import os
 import sys
 import threading
 import time
+import types
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
@@ -210,7 +215,14 @@ class TestSidecarArchiveWindow:
                 raise PermissionError(32, "模拟改名失败")
             real_rename(src, dst)
 
-        monkeypatch.setattr(os, "rename", _deny_sidecar_rename)
+        # MT-11（2026-10-18）：原写法 `monkeypatch.setattr(os, "rename", ...)` 改的是**全进程唯一**
+        # 的 os 模块本体（M-27 同形态，仓库已定性为跨用例竞态源并修过 test_log_archive.py 的同款）——
+        # 替身窗口内 loguru 的文件轮转改名、弹幕边车、GUI/录制后台线程的 rename 一并命中
+        # 「遇 danmaku_monitor.jsonl 就抛 PermissionError」。现按仓库口径收口：浅拷贝 + 只覆盖所需
+        # 属性 + 落进被测模块命名空间（本文件对 _STATS_INTERVAL、la.open 早已是同一形态）。
+        monkeypatch.setattr(la, "os", types.SimpleNamespace(**{**vars(os), "rename": _deny_sidecar_rename}))
+        # 反向见证：替身只落进 src.log_archive 的命名空间，进程全局 os.rename 必须仍是真实现
+        assert os.rename is real_rename
         try:
             assert la.archive_runtime_logs(reopen_streams=False) == []
             assert hub.writes_suspended() is False, "改名失败后抑制标记未复位"
@@ -234,6 +246,130 @@ class TestSidecarArchiveWindow:
             assert any("归档窗口内丢弃" in m for m in captured), captured
         finally:
             _silence_hub(hub)
+
+
+# ─── L-18：边车轮转失败的按路径退避（不再每条事件重试） ───────────
+
+
+class TestSidecarRotateBackoff:
+    # 三条锁都直接驱动 _append_sidecar_line（MID-25 起它既是生产实现也是给测试留的注入口），
+    # 不经 hub/写线程：轮转只在句柄 tell() 越阈值时发生，用真线程反而要把队列排空时机
+    # 也钉进断言里。os.replace 替身按 M-27/MT-11 口径只落进 src.danmaku_monitor 的命名空间。
+    @staticmethod
+    def _close_all(files: dict[str, Any]) -> None:
+        for fh in files.values():
+            if not fh.closed:
+                fh.close()
+
+    def test_rotate_failure_backs_off_warns_and_still_appends(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # L-18：`.1` 被占用 / 跨卷时 os.replace 必失败，旧实现在 except OSError 里 pass 且不留任何
+        # 记忆，而失败后重开的句柄 tell() 依旧 >= _ROTATE_BYTES，于是此后**每一条**事件都会重走
+        # close → replace → open（80 房间 × 10 条/秒的采样上限下即每秒数百次注定失败的磁盘操作）。
+        # 现按路径记一个退避窗口：期内跳过轮转、**照常追加**，并留一条 warning。
+        path = str(tmp_path / "dm.jsonl")
+        monkeypatch.setattr(dm, "_ROTATE_BYTES", 8)
+        attempts: list[str] = []
+        real_replace = os.replace
+
+        def _boom(src: str, dst: str) -> None:
+            # 只对**本用例自己那只文件**制造失败：`dm.os` 是进程唯一的模块命名空间，其它用例的边车
+            # 写线程会在本用例的 monkeypatch 窗口内走进同一支替身（2026-10-18 全量 pytest 实测：
+            # 别家 tmp_path 的 dm.jsonl 混进 attempts，断言由 1 变 5；反向还会把别人的轮转打坏）。
+            # 其余调用一律透传真实 os.replace，与本文件 MT-11 的 shim 口径同构。
+            if src != path:
+                real_replace(src, dst)
+                return
+            attempts.append(src)
+            raise PermissionError(32, "模拟 .1 备份被占用")
+
+        monkeypatch.setattr(dm, "os", types.SimpleNamespace(**{**vars(os), "replace": _boom}))
+        files: dict[str, Any] = {}
+        captured, handler_id = _capture_logs(level="WARNING")
+        try:
+            for i in range(6):
+                dm._append_sidecar_line(files, path, f"line-{i}")
+            assert len(attempts) == 1, f"轮转失败后仍在每条事件上重试: {len(attempts)} 次"
+            warns = [m for m in captured if "rotate" in m and "处理失败" in m]
+            assert len(warns) == 1, f"轮转失败缺少可归因的告警（或重复刷屏）: {warns}"
+            # 「跳过轮转」不等于「丢掉数据」：六行必须一条不少地还在原文件里
+            assert Path(path).read_text(encoding="utf-8").splitlines() == [f"line-{i}" for i in range(6)]
+        finally:
+            logger.remove(handler_id)
+            self._close_all(files)
+
+    def test_rotate_backoff_expires_and_retries(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 反向锁：退避**不是**把轮转永久关掉。周期压成负数 = 「下一条即过期」，
+        # 于是每条超阈值事件都会再试一次；若实现被改成一次性永久标记，本用例的 attempts 会停在 1。
+        path = str(tmp_path / "dm.jsonl")
+        monkeypatch.setattr(dm, "_ROTATE_BYTES", 8)
+        monkeypatch.setattr(dm, "_ROTATE_RETRY_BACKOFF_SECONDS", -1.0)
+        attempts: list[str] = []
+        real_replace = os.replace
+
+        def _boom(src: str, dst: str) -> None:
+            # 同上一条：只 sabotage 本用例自己的路径，别家线程的轮转透传真实实现（跨用例竞态防线）。
+            if src != path:
+                real_replace(src, dst)
+                return
+            attempts.append(src)
+            raise PermissionError(32, "模拟 .1 备份被占用")
+
+        monkeypatch.setattr(dm, "os", types.SimpleNamespace(**{**vars(os), "replace": _boom}))
+        files: dict[str, Any] = {}
+        captured, handler_id = _capture_logs(level="WARNING")
+        try:
+            for i in range(4):
+                dm._append_sidecar_line(files, path, f"line-{i}")
+            # 断言用「>=2」而不是精确次数：越过阈值的具体那一轮取决于 TextIOWrapper.tell() 的
+            # cookie 形态，写死会把用例变成字节算术锁；这里要钉的只是「过期后确实会再试」——
+            # 实现若被改成一次性永久标记，attempts 会停在 1。
+            assert len(attempts) >= 2, f"退避到期后未重试轮转: {attempts}"
+            warns = [m for m in captured if "rotate" in m and "处理失败" in m]
+            assert len(warns) == len(attempts), "每次重试失败都应留下一条 warning"
+        finally:
+            logger.remove(handler_id)
+            self._close_all(files)
+
+    def test_rotation_recovers_and_clears_backoff_after_success(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 占用恢复后必须回到正常节奏：失败→置标记→标记过期→重试成功→历史进 .1，
+        # 且过期条目由 _rotate_in_backoff 就地弹出（字典不留僵尸键，成功一侧无需再写清除分支）。
+        path = str(tmp_path / "dm.jsonl")
+        monkeypatch.setattr(dm, "_ROTATE_BYTES", 8)
+        monkeypatch.setattr(dm, "_ROTATE_RETRY_BACKOFF_SECONDS", 0.05)
+        attempts: list[str] = []
+        state = {"boom": True}
+        real_replace = os.replace
+
+        def _maybe_boom(src: str, dst: str) -> None:
+            # 同族跨用例竞态防线：别家路径不记账、不破坏，直接透传（否则 attempts 会被别的
+            # 边车写线程喂脏，本用例的「失败 1 次 → 过期 → 重试成功」计数不再成立）。
+            if src != path:
+                real_replace(src, dst)
+                return
+            attempts.append(src)
+            if state["boom"]:
+                raise PermissionError(32, "模拟 .1 备份被占用")
+            real_replace(src, dst)
+
+        monkeypatch.setattr(dm, "os", types.SimpleNamespace(**{**vars(os), "replace": _maybe_boom}))
+        files: dict[str, Any] = {}
+        try:
+            for i in range(3):
+                dm._append_sidecar_line(files, path, f"line-{i}")
+            assert len(attempts) == 1
+            assert path in dm._rotate_backoff_until, "轮转失败后未置退避标记"
+            state["boom"] = False
+            time.sleep(0.08)
+            dm._append_sidecar_line(files, path, "line-3")
+            assert len(attempts) == 2, "退避到期后未重试"
+            assert path not in dm._rotate_backoff_until, "轮转成功后未清除退避标记"
+            assert (tmp_path / "dm.jsonl.1").is_file(), "重试成功却没有产生 .1 备份"
+        finally:
+            self._close_all(files)
 
 
 # ─── MIN-2236④：stats 线程自注销 + room_message 侧兜底拉起 ────────

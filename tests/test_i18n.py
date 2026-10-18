@@ -16,9 +16,27 @@ MO_PATH = ROOT / "i18n" / "zh_CN" / "LC_MESSAGES" / "zh_CN.mo"
 
 
 class TestInitGettext:
-    def test_no_lang_env_pollution(self) -> None:
-        # 原实现导入即写死 LANG=zh_CN.utf8（macOS 非法 locale），并传染子进程
-        assert os.environ.get("LANG") != "zh_CN.utf8"
+    def test_no_lang_env_pollution(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 原实现导入即写死 LANG=zh_CN.utf8（macOS 非法 locale），并传染子进程。
+        # LT-09（2026-10-18 审查）：旧断言拿**宿主环境此刻的取值**当判据，本机就设了
+        # LANG=zh_CN.utf8 的开发者会看到一条恒红的用例（i18n 其实什么都没写）；而宿主
+        # 恰好没设该变量时，「导入过程到底改没改环境变量」这一真判据从未被检验过。
+        # 改为「执行模块体前后取值对比」，且基线必须先把这一族变量清空再取：本文件顶部的
+        # `import i18n` 已经跑过一次模块体，基线若在那之后取，「导入期写 LANG」会被基线
+        # 一并吸收（变异实测：不清空时把写入语句加回模块体，用例仍恒绿＝典型假绿）。
+        # 不用 importlib.reload：那会把线上模块的 _tr / original_print 换成第二份快照，
+        # 同会话其它用例（本文件的目录断言、GUI 无头用例）持有的引用随之漂移。
+        for key in [k for k in os.environ if k.startswith(("LANG", "LC_"))]:
+            monkeypatch.delenv(key, raising=False)
+        before = {k: v for k, v in os.environ.items() if k.startswith(("LANG", "LC_"))}
+        spec = importlib.util.spec_from_file_location("i18n_body_probe", ROOT / "i18n.py")
+        assert spec is not None and spec.loader is not None
+        probe = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(probe)
+        after = {k: v for k, v in os.environ.items() if k.startswith(("LANG", "LC_"))}
+        assert after == before, f"i18n 导入期改写了语言相关环境变量: 前={before} 后={after}"
+        # 反向见证：模块体确实执行到了（拿到 locale_path 才算跑过，否则上面两条空集合也相等）
+        assert Path(probe.locale_path).exists()
 
     def test_locale_path_exists(self) -> None:
         assert Path(i18n.locale_path).exists()
@@ -73,6 +91,16 @@ class TestTranslatedPrint:
 
     def test_should_translate_foreign_files(self) -> None:
         assert i18n._should_translate("C:/somewhere/else/file.py") is False
+
+    def test_should_requires_separator_boundary(self) -> None:
+        # L-03（2026-10-18 审查）：与项目根「同名前缀的兄弟目录」不是项目源码。
+        # 裸 startswith(_project_root) 下 /proj-evil/x.py 会被 /proj 命中，
+        # 第三方目录里的 print 于是也被翻译；补上分隔符边界后必须判 False。
+        sibling = f"{i18n._project_root}-evil{os.sep}evil.py"
+        assert i18n._should_translate(sibling) is False
+        # 反向护栏：真实子路径仍必须判 True（不得把边界补成「只认相等」而整体失明）
+        child = os.path.join(i18n._project_root, "src", "spider.py")
+        assert i18n._should_translate(child) is True
 
 
 # 多格式翻译目录：gettext .mo（zh_CN）+ JSON（en_US/en_GB）+ YAML（zh_TW）。

@@ -258,6 +258,108 @@ def test_run_command_missing_gate_cwd_raises_not_silently_zero(tmp_path: Path, m
         run_gates.run_command("python -c pass")
 
 
+# ---------------------------------------------------------------------------
+# L-30（2026-10-18 审查）：门禁命令的执行形态
+#
+# 缺陷面：shell=True 时 Python 把整条命令再包一层引号并把内层引号转义成 `\"`，交 cmd.exe /c；
+# cmd 对 /c 后面那段有「首尾引号成对就剥一层」的规则，于是 _rebind_interpreter 拼出的
+# `"C:\My Tools\venv\Scripts\python.exe" -m black ...` 能否解析，取决于引号层数与 cmd 的
+# 实现细节（venv 装在带空格路径上是常态，本机实测虽未复现失败，但这条依赖本身不可复核）。
+# 修法是能按参数列表表达的命令一律 shell=False；拆不了的（含 shell 结构符、行首是 .bat/.cmd）
+# 退回原形态，判定口径逐字不变。两侧用例都不靠 skipif：Linux CI 与 Windows 本机跑同一份断言。
+# ---------------------------------------------------------------------------
+
+
+def _stub_popen(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Any, dict[str, Any]]]:
+    # 记录 run_command 真正交给子进程 API 的东西；不真起进程，故与本机装了什么工具无关。
+    # Popen 替身必须是**类**：run_command 之后还要读 .stderr / 调 .wait() / 取 .returncode；
+    # 同时给 __class_getitem__，免掉「按 Popen[bytes] 形态注解」时的求值崩口（AGENTS.md 约定）。
+    calls: list[tuple[Any, dict[str, Any]]] = []
+
+    class _CapturingPopen:
+        def __class_getitem__(cls, item: object) -> type:
+            return cls
+
+        def __init__(self, args: Any, **kwargs: Any) -> None:
+            calls.append((args, kwargs))
+            self.stderr = io.StringIO("")
+            self.returncode: int | None = 0
+
+        def wait(self, *args: Any, **kwargs: Any) -> int:
+            return 0
+
+    shim = types.SimpleNamespace(**vars(subprocess))
+    shim.Popen = _CapturingPopen
+    monkeypatch.setattr(run_gates, "subprocess", shim)
+    return calls
+
+
+def test_run_command_uses_argv_list_for_plain_commands(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _stub_popen(monkeypatch)
+    run_gates.run_command("python -m black --check --line-length 120 .")
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert kwargs.get("shell") is False, "普通门禁命令仍经 cmd.exe/sh 二次解释 = L-30 的引号层还在"
+    assert isinstance(args, list), f"应传参数列表，实际 {type(args).__name__}: {args!r}"
+    assert args[0] == sys.executable, "行首解释器必须仍是当前解释器（换绑语义不得随形态改动丢失）"
+    assert all('"' not in token for token in args), f"argv 里不该再有任何引号层：{args}"
+    assert args[1:] == ["-m", "black", "--check", "--line-length", "120", "."]
+
+
+def test_run_command_falls_back_to_shell_only_when_needed(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 退回 shell 的两类合法形态必须退回（否则等于把 shell 语义悄悄删掉）：
+    #   ① 含 shell 结构符：参数列表无法等价表达，硬拆会把 `>` 当字面参数传给工具；
+    #   ② 行首解析到 .bat/.cmd：Windows 的 CreateProcess 不执行批处理。
+    calls = _stub_popen(monkeypatch)
+    run_gates.run_command("python -m black --check . > out.txt")
+    args, kwargs = calls[0]
+    assert kwargs.get("shell") is True and isinstance(args, str), "含重定向的命令必须仍走 shell"
+    assert ">" in args, f"shell 形态应把原命令串交给 shell：{args!r}"
+
+    shutil_shim = types.SimpleNamespace(**vars(run_gates.shutil))
+    shutil_shim.which = lambda name: "/fake/Scripts/black.cmd"
+    monkeypatch.setattr(run_gates, "shutil", shutil_shim)
+    assert run_gates.build_gate_argv("black --check .") is None, "批处理入口被拆成 argv = Windows 上必起不来"
+
+
+def test_build_gate_argv_keeps_backslashes_and_quotes_stripped() -> None:
+    # posix=False 的意义就在这里：默认模式会把反斜杠当转义吃掉，Windows 绝对路径被切成
+    # `C:venvScriptspython.exe`（argv[0] 不存在，门禁会「跑不起来却报成通过」）。
+    argv = run_gates.build_gate_argv(r'python -m black --exclude "C:\path\to\x" .')
+    assert argv is not None
+    assert r"C:\path\to\x" in argv, f"反斜杠被吃掉或引号没剥净：{argv}"
+    assert all('"' not in token for token in argv)
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "python scripts/check_annotations.py",
+        "mypy",
+        "mypy --platform linux",
+        "python -m isort --check-only --profile black --line-length 120 .",
+    ],
+)
+def test_every_gate_command_shape_is_argv_executable(cmd: str) -> None:
+    # 回路锁：AGENTS.md 门禁块里的每一条形态都必须能按参数列表跑起来（拆不出来即说明改动
+    # 让某条门禁静默退回旧形态，本机看不出来、换机器才发现）。
+    assert run_gates.build_gate_argv(cmd) is not None, f"{cmd!r} 拆不出 argv：门禁仍要走 cmd.exe 引号层"
+
+
+def test_run_command_drives_spaced_script_path_without_shell(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # 端到端形态：脚本路径本身带空格（venv 装在带空格目录属同一机制）。改前这条要靠
+    # cmd.exe 的引号剥层规则解析，改后是纯 argv——空格不得再是判定面的一部分。
+    spaced_dir = tmp_path / "gate space dir"
+    spaced_dir.mkdir()
+    script = _child_script(spaced_dir, "ok.py", "import sys\nsys.stderr.write('spaced line\\n')\n")
+    rc, _dur, hits = run_gates.run_command(_gate_cmd(script))
+    assert rc == 0, f"带空格路径的门禁命令被判成 {rc}（cmd.exe 引号剥层形态回归）"
+    assert hits == []
+    assert "spaced line" in capsys.readouterr().out, "argv 形态下 stderr 仍须逐行原样转发（MID-63）"
+
+
 @pytest.mark.parametrize("stream_factory", ["no_reconfigure", "value_error", "os_error"], ids=lambda v: v)
 def test_ensure_utf8_streams_never_raises(monkeypatch: pytest.MonkeyPatch, stream_factory: str) -> None:
     # 崩溃恢复分支：本函数只改善输出、不参与判定。三种「改不动」的形态都必须静默放过，

@@ -85,6 +85,38 @@ def _load_build_exe() -> Any:
     return module
 
 
+# 本门禁从 build_exe 取用的全部属性（判定口径一项都不许缺）。
+# 为什么要点名清单：这些是 build_exe 的私有符号，改名/删除在 build_exe 侧不会有任何提示，
+# 而本脚本直取属性时以 AttributeError 崩溃栈出场 = rc=1，与文件头「结构缺陷 / 取不到表 → rc=2」
+# 的分级契约冲突（rc=1 会被读成「发布链查出了问题」，而真相是「门禁自己没查」）。
+# 清单必须与 check()/emit_env() 的取用点同源；新增取用点同批登记，否则探测形同虚设。
+_REQUIRED_BUILD_EXE_ATTRS: tuple[str, ...] = (
+    "_PINNED_RUNTIME_SHA256",
+    "RUNTIME_SLOTS",
+    "RELEASE_RUNTIME_KEYS",
+    "runtime_slots_for",
+    "_slot_is_gated",
+    "_is_source_build_marker",
+    "_is_signature_marker",
+    "_is_signature_satisfied",
+    "UNVERIFIED_PIN",
+    "SOURCE_BUILD_PROVENANCE",
+    "OFFICIAL_SIGNATURE_PIN",
+)
+
+
+def _require_build_exe_attrs(module: Any) -> None:
+    # 一次性探测并整批点名缺失项：只探第一个缺失符号的话，修一处还得再跑一次才见到下一处
+    missing = [name for name in _REQUIRED_BUILD_EXE_ATTRS if not hasattr(module, name)]
+    if missing:
+        print(
+            f"ERROR: {ROOT / 'build_exe.py'} 缺少发布链门禁依赖的属性 {missing}"
+            "——属「门禁本身失效」，按 rc=2 处理；请先恢复/改名该属性，不要把它读成钉定表有问题",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+
 def _runtime_matrix_keys() -> list[str]:
     # 从 build-release.yml 的 matrix.include 里解析出实际参与发布的 runner 标签，
     # 映射为运行时键。解析失败即报「门禁本身失效」，绝不退化成「无平台可查 → 通过」。
@@ -110,6 +142,10 @@ def _runtime_matrix_keys() -> list[str]:
 def check(strict: bool) -> int:
     # 返回 0 通过 / 1 发布级失败（--strict 下存在未钉定项）/ 2 结构缺陷。
     module = _load_build_exe()
+    # L-29：属性缺失（含被改名/删除）一律走 rc=2，不留 AttributeError 崩溃栈的 rc=1。
+    # 探测必须在这里做、而不是逐处 getattr 兜底：下面的判定口径全部取自 build_exe，缺一项
+    # 就等于「没查」，而「没查」与「查过且通过」在 CI 里必须分得开（同 MID-63 口径）。
+    _require_build_exe_attrs(module)
     table = cast("dict[str, dict[str, str]]", module._PINNED_RUNTIME_SHA256)
     slots = cast("tuple[str, ...]", module.RUNTIME_SLOTS)
     # 按运行时键查「该平台实际有几个槽」：macOS 的 ffprobe 是独立归档、需要自己的钉定项，
@@ -253,6 +289,9 @@ def emit_env() -> int:
     # 占位值原样导出：build_exe 侧仍按形状判定为未钉定，因此这条通道不会把
     # 「没填」伪装成「已填」。
     module = _load_build_exe()
+    # 同 check()：--emit-env 是 CI 注入钉定值的通道，属性缺失时也必须 rc=2（门禁自己没跑成），
+    # 而不是 rc=1 崩溃栈——build job 会把「拿不到表」读成「表里有未钉定项」。
+    _require_build_exe_attrs(module)
     table = cast("dict[str, dict[str, str]]", module._PINNED_RUNTIME_SHA256)
     print(json.dumps(table, ensure_ascii=False, sort_keys=True))
     return 0

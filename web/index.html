@@ -145,11 +145,21 @@
          #config-save-btn 触发 saveConfig() 仅 PUT 有变更的键。HTTPS 开关输入会实时联动 #ssl-platform-hint。
          #config-save-status（MIN-2239）在保存中途失败时常驻显示「已应用 n 项 / 第 m 项失败 / 其余未提交」，
          失败行另加 .row-failed 标红——不能只靠 toast：toast 会被下一条覆盖且自动消失，
-         用户看到输入框仍是自己填的样子就会误以为已保存。 -->
+         用户看到输入框仍是自己填的样子就会误以为已保存。
+         M-17（CODE_REVIEW_2026-10-18）：本容器**不得**带 data-i18n* 属性。applyTranslations() 是「扫
+         [data-i18n] → 覆写 textContent」的通用形态，覆写 textContent 会连带清掉全部子节点；而 loadConfig()
+         只重建子节点、属性仍留在容器上，于是任意一次语言切换都会把整张已渲染的表单（含用户未保存的修改）
+         压成一行「加载中...」占位文本。静态首屏文案交给 loadConfig()/loadRooms()/loadFiles() 各自的
+         t() 分支产出，容器自身不参与静态翻译。
+         （删掉该属性不会留下「英文界面看到中文加载中」的可见残留：#config-view 初始带 .hidden，
+         而让它可见的 showView('config') 同一步就调用 loadConfig()，初始文本在用户能看到它之前
+         就已被服务端数据整段替换。）
+         （#rooms-tbody / #files-tbody / #recording-tbody / #danmaku-room-filter 内的 data-i18n="loading"
+         一类键都挂在**会被 innerHTML 整体替换掉的子节点**上，重建即随之消失，故无同病。） -->
     <main id="config-view" class="view hidden">
         <section class="panel">
             <h3 data-i18n="config.title">录制与推送配置</h3>
-            <div id="config-container" data-i18n="loading">加载中...</div>
+            <div id="config-container">加载中...</div>
             <div id="config-save-status" class="save-status hidden" role="status" aria-live="polite"></div>
             <button id="config-save-btn" class="primary" data-i18n="config.save">保存配置</button>
         </section>

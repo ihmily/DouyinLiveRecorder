@@ -7,9 +7,10 @@
 # ③ proxy.py：ProxyInfo 接受 IPv6 主机（[::1] / ::1）
 # ④ video_postprocess.py：_run_ffmpeg_checked 超时分类型（不再被 unknown error 吞）
 
+import asyncio
 import json
+import selectors
 import subprocess
-import time
 import types
 from pathlib import Path
 from typing import Any, cast
@@ -53,6 +54,84 @@ def test_spider_is_safe_http_url_whitelist() -> None:
 # ======================================================================
 
 
+# MT-08（2026-10-18 审查）：本用例原先整体押在**真实挂钟**上——超时 close 必须落在 ≈1.1s 且早于
+# 3.0s 的外部停止，CI 上一次 >1.9s 的调度停顿就能把「超时先于外部停止」这条时刻归因翻案（假红）；
+# 而「放大停止余量」只把概率压低（要把余量抬到分钟级才谈得上稳）、同时把墙钟耗时一并抬上去，
+# 等于用运行时长换不稳定。故换成**可控虚拟时钟**：事件循环的取时与推进都在本类手里，
+# 1.05s 的 wait_for 超时、3.0s 的外部停止、60s 的读帧挂起全部在微秒级墙钟内按确定次序发生。
+# 五条不放宽被测语义的关键设计（去掉任一条都会让判据失真或把挂死伪装成通过）：
+#   ① 只推进到「最早到期的定时任务」，不加固定步长——时刻读数因此仍是各定时器真正的到期点，
+#      1.10s vs 3.00s 这类比较与真实挂钟版本逐字同值；
+#   ② 仅在「无就绪回调且循环未收到停止信号」时推进（有就绪回调时循环本就不等，推进反而会把
+#      到期时刻挪到就绪批之后；`_stopping` 期间同理，super 自己按 timeout=0 收尾）；
+#   ③ 到期时刻取不到即直接判失败：CPython 3.14 的 TimerHandle 到期字段是 `_when`（3.7~3.13 为
+#      `_run_at`），写错名字的后果不是报错而是**静默不推进**——super 会按真实剩余时间去 select，
+#      于是同一到期点被反复真等（2026-10-18 本机实测：误用 `_run_at` 时本文件跑了 306s 才撞步数
+#      上限），所以这里必须显式失败而不是回退；
+#   ④ 步数硬上限：虚拟时钟下「while + await asyncio.sleep(小值)」型死循环会**在墙钟里无限自旋**
+#      （真实时钟靠耗时暴露它，这里没有耗时可言），超限即抛，把挂死换成可读失败；
+#   ⑤ 「无就绪、无定时任务且尚未停止」同样直接判失败：真事件循环此刻会永久阻塞在 select 上，
+#      本用例没有任何「靠外部 I/O 才能继续」的合法形态，走到这里只能是等待对象本身丢了定时器。
+# 基类经 Any 转一手：`_run_once` 是 asyncio 的内部方法、typeshed 未收，直接继承具体类会被
+# mypy 判成「覆写了父类不存在的方法」[misc]。取 Any 而不是 `# type: ignore[misc]`：忽略注释要按
+# 各自的 code 写（mypy/basedpyright 不同码），且在「哪天 typeshed 收了这方法」之后会变成
+# unused-ignore 反向报错；Any 基类只是让这条内部方法的覆写不产生判定，两平台结论一致。
+_LoopBase: Any = asyncio.SelectorEventLoop
+
+
+class _VirtualClockLoop(_LoopBase):
+    _MAX_STEPS = 5000
+
+    def __init__(self) -> None:
+        super().__init__(selectors.DefaultSelector())
+        self._virtual_time = 0.0
+        self._steps = 0
+
+    def time(self) -> float:
+        # 循环的一切定时计算都走这里：asyncio.sleep / wait_for / call_later 的到期判定，
+        # 以及本用例的时刻读数，全部落在同一条虚拟时间轴上（起点 0.0，故 time() 直接就是 elapsed）。
+        return self._virtual_time
+
+    @staticmethod
+    def _deadline(handle: object) -> float | None:
+        # 设计③：两个版本字段名都试；都取不到返回 None，由调用方判失败（绝不静默放行）
+        for attr in ("_when", "_run_at"):
+            value = getattr(handle, attr, None)
+            if isinstance(value, float):
+                return value
+        return None
+
+    def _run_once(self) -> None:
+        self._steps += 1
+        if self._steps > self._MAX_STEPS:
+            raise RuntimeError(
+                f"虚拟时钟已推进 {self._steps} 步仍未收敛：被测链里存在不收敛的「循环 + asyncio.sleep」"
+                "形态（真实时钟下它表现为耗时，虚拟时钟下它会无限自旋），按失败终止而非挂死整个会话"
+            )
+        if cast("Any", getattr(self, "_ready", None)) or cast("Any", getattr(self, "_stopping", False)):
+            # 设计②：本轮循环本来就不打算等，推及时刻反而会让到期点落到就绪批之后
+            pass
+        else:
+            scheduled = cast("Any", getattr(self, "_scheduled", None))
+            if not scheduled:
+                raise RuntimeError(
+                    "虚拟时钟既无就绪回调也无定时任务、循环又尚未收到停止信号："
+                    "真事件循环此刻会永久阻塞在 select 上（等待对象丢了定时器），按失败终止"
+                )
+            earliest = self._deadline(scheduled[0])
+            if earliest is None:
+                raise RuntimeError(
+                    f"取不到定时句柄的到期时刻（句柄类型 {type(scheduled[0]).__name__}，已试 _when / _run_at）："
+                    "静默不推进会让循环反复真等同一个到期点，见设计③"
+                )
+            if earliest > self._virtual_time:
+                # 设计①：一步推到最早到期时刻。堆顶即最小 `_when`，故推进它绝不会越过任何在途定时器；
+                # 堆顶是「已取消但尚未被 super 摘掉」的句柄时同样安全——它的 `_when` 最小，
+                # 推到它不会把别的定时器提前触发，下一轮 super 摘掉后再推到真正的下一个到期点。
+                self._virtual_time = earliest
+        super()._run_once()
+
+
 def test_ws_heartbeat_timeout_closes_connection(monkeypatch: pytest.MonkeyPatch) -> None:
     # 心跳回调 hang 住超过 _HEARTBEAT_TIMEOUT_SECONDS 时，循环应主动关连接退出，
     # 让外层 connect() 进入重连路径而非永远等待。
@@ -86,10 +165,26 @@ def test_ws_heartbeat_timeout_closes_connection(monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setattr(i18n, "_tr", lambda text: text)
 
-    _started_at = time.monotonic()
+    # MT-08：时刻读数取事件循环时钟（本用例即 _VirtualClockLoop 的虚拟时钟；它从 0.0 起算，
+    # 故 time() 直接就是 elapsed），三个阈值常量与四条归因判据一个都不放宽、一个值都不改。
+    _loops: list[_VirtualClockLoop] = []
+
+    def _loop_factory() -> _VirtualClockLoop:
+        loop = _VirtualClockLoop()
+        _loops.append(loop)
+        return loop
+
+    def _now() -> float:
+        # 读数点全在协程内（循环必然已建立）。循环尚未建立就被调用属用例被改坏，直接判失败：
+        # 回退真实挂钟等于两种时钟混用，「超时早于外部停止」这条时刻归因会重新失去意义。
+        assert _loops, "时刻读数早于事件循环建立，虚拟时钟链路已被改动"
+        return _loops[-1].time()
+
     # 超时阈值 = max(1.0, heartbeat_interval + 1.0)（_HEARTBEAT_TIMEOUT_SECONDS 是 _heartbeat_loop
     # 的局部常量、无法 monkeypatch），故心跳 hang 8s 必然大于阈值；外部停止安排在 3.0s——
     # 既晚于超时点（≈1.1s）、又早于心跳自身返回（8s），「超时先于外部停止」才是可判定的。
+    # MT-08（2026-10-18）：以上三个时刻现在跑在虚拟时钟上（超时 close 恒落在 1.10s、外部停止恒落在
+    # 3.00s），不再依赖真实挂钟，也就不再有「CI 停顿 >1.9s 即假红」这一失效面。
     _STOP_AFTER_SECONDS = 3.0
     _HEARTBEAT_HANG_SECONDS = 8.0
     _TIMEOUT_FLOOR_SECONDS = 1.0
@@ -114,7 +209,7 @@ def test_ws_heartbeat_timeout_closes_connection(monkeypatch: pytest.MonkeyPatch)
             closes.append(
                 {
                     "source": source,
-                    "elapsed": time.monotonic() - _started_at,
+                    "elapsed": _now(),
                     "stopped": client._stopped,
                 }
             )
@@ -140,7 +235,7 @@ def test_ws_heartbeat_timeout_closes_connection(monkeypatch: pytest.MonkeyPatch)
         return _FakeConnectCtx()
 
     async def slow_heartbeat() -> None:
-        heartbeat_calls.append(time.monotonic() - _started_at)
+        heartbeat_calls.append(_now())
         # 心跳 hang 远超 max(1.0, heartbeat_interval+1.0) 阈值，必然触发超时分支
         await asyncio.sleep(_HEARTBEAT_HANG_SECONDS)
 
@@ -161,14 +256,16 @@ def test_ws_heartbeat_timeout_closes_connection(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(ws_client, "websockets", _ws_shim)
 
     logged: list[tuple[float, str]] = []
-    sink_id = logger.add(lambda msg: logged.append((time.monotonic() - _started_at, str(msg))), level="WARNING")
+    # MT-08：告警发出时刻同样取虚拟时钟（loguru 的 callable sink 在发出线程内同步执行，
+    # 此刻事件循环正在跑，读数与 closes/stop_requested_at 严格同轴）
+    sink_id = logger.add(lambda msg: logged.append((_now(), str(msg))), level="WARNING")
 
     async def run_and_stop() -> None:
         t = asyncio.create_task(client.connect())
         # 先等到「心跳被挂起 + wait_for 超时 + 超时分支主动 close」全部发生，再请求外部停止：
         # 停止时刻因此成为一条硬上界，第一次 close 若来自超时分支必然早于它。
         await asyncio.sleep(_STOP_AFTER_SECONDS)
-        stop_requested_at.append(time.monotonic() - _started_at)
+        stop_requested_at.append(_now())
         await client.close()
         try:
             await asyncio.wait_for(t, timeout=0.5)
@@ -178,7 +275,11 @@ def test_ws_heartbeat_timeout_closes_connection(monkeypatch: pytest.MonkeyPatch)
             t.cancel()
 
     try:
-        asyncio.run(run_and_stop())
+        # 为什么走 Runner(loop_factory=...) 而不是 asyncio.run：两者都能接 loop_factory，
+        # 但 Runner 的该形参在 typeshed 里更早登记、mypy 覆盖面稳定；Runner 退出时同样做
+        # 「取消剩余任务 + 关闭 asyncgen + 关循环」这套 asyncio.run 的收尾，不留悬空任务。
+        with asyncio.Runner(loop_factory=_loop_factory) as runner:
+            runner.run(run_and_stop())
     finally:
         logger.remove(sink_id)
 

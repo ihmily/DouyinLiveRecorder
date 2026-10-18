@@ -225,10 +225,17 @@ class BilibiliDanmaku(DanmakuBase):
     # connect() 的两条 `if self._stopped: break` 出口都不回调 on_close，于是 collector 侧与
     # room_connected 配对的 hub.room_closed() 永不发出，Web 弹幕监控页会把该房间永久停在
     # 「已连接 / 0 条」——即本文件要消灭的「静默零弹幕无线索」。
+    # L-26（2026-10-19，CODE_REVIEW_2026-10-18）：投递关停协程一律走 spawn_danmaku_task，不再用裸
+    # asyncio.ensure_future。本文件 `_on_ws_ready`（进房协程投递处）已把「裸 ensure_future 的后台协程
+    # 异常只在 GC 时以 'Task exception was never retrieved' 打到 stderr、现场完全无日志」立为禁止形态，
+    # 而这里原是同一形态的漏网点：fail() 里 `_on_close`（hub.room_closed / 边车落盘）抛错时无人回收，
+    # 房间既没重连也没有关闭事件，表现为「监控页停在已连接 / 0 条」的同款观感。spawn_danmaku_task 的
+    # 完成回调会把异常按「[弹幕]后台协程异常: {type_name}: {exc}」落一条 warning（既有键，四语目录已
+    # 登记，不新造 msgid）。回归锁：tests/test_bilibili_danmaku.py::test_reject_auth_dispatches_through_spawned_task。
     def _reject_auth(self) -> None:
         self._stopped = True
         if self._ws is not None:
-            asyncio.ensure_future(self._ws.fail(i18n.tr("进房认证被拒（AUTH_REPLY 非 0 或超时未回应）")))
+            spawn_danmaku_task(self._ws.fail(i18n.tr("进房认证被拒（AUTH_REPLY 非 0 或超时未回应）")))
         try:
             from src import spider  # 懒加载：避免 platforms <-> spider 循环导入
 

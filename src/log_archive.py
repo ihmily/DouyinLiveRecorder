@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+import io
 import os
 import sys
 import threading
@@ -30,11 +31,14 @@ from src.logger import (
 # 归档全程不抛异常：单文件失败（如句柄被第三方进程占用）仅告警跳过，绝不中断停止录制流程；
 # 归档后日志链路立即恢复（loguru 重新 add 即创建全新同名文件），不影响现有日志写入逻辑。
 #
-# 两条 2026-09-22 补的失败形态（各自的细则见对应函数注释）：
+# 三条已知失败形态（各自的细则见对应函数注释；前两条 2026-09-22 补，第三条 2026-10-18 补）：
 # - MID-2243：弹幕边车改名期间套一层「归档窗口抑制」（suspend_monitor_writes /
 #   resume_monitor_writes），否则延迟事件会把句柄抢回来、改名必然抛 PermissionError；
 # - MID-2258：web_console 改名后重开失败时回退到 os.devnull 并置 pending 标记，
 #   既不能让 print() 往已关闭对象上写，也要保证下一轮归档会把链路接回真实文件。
+# - M-09（2026-10-18）：web_console 改名前先由 _ConsoleBridge 接管 sys.stdout/sys.stderr，
+#   关旧句柄与改名全程标准流都指向一个可写对象——旧顺序下「窗口期内其它线程 print() 即抛
+#   ValueError」的中间态被整体消掉，窗口期的行缓存后并入新文件（判据与实测见 _ConsoleBridge）。
 
 
 # 参与归档的运行日志文件名（logs 目录下固定 ASCII 名，不含空格与非法字符）
@@ -84,6 +88,107 @@ def _streams_bound_to(path: str) -> list[TextIO]:
     return bound
 
 
+# 归档窗口内标准流替身的缓冲上限（字符数）。窗口正常只有毫秒级、几十行，设上限只为
+# 「改名被杀软扫描/慢盘拖成秒级且各线程持续输出」的极端形态兜底：超限后丢弃新写入
+# （宁可丢几行控制台输出，也不无界吃内存），已缓存部分照常并入新文件。
+_BRIDGE_BUFFER_LIMIT = 65536
+
+
+# 归档窗口内的 sys.stdout/sys.stderr 替身（M-09，2026-10-18）。
+# 为什么需要它：旧实现是「flush+close 指向 web_console.log 的旧句柄 → os.rename → 重建句柄」，
+# 而 sys.stdout/sys.stderr 在整个改名+重建期间**仍指向那个已关闭对象**，其它线程（Web 请求线程
+# 的 print、录后脚本输出、loguru 的错误回显）在这段窗口里 print() 即抛
+# ValueError: I/O operation on closed file；Windows 慢盘/杀软扫描会把窗口从微秒放大到秒级。
+# 审查建议的「先建新句柄接管标准流、再关旧流并改名」在本平台走不通：改名要求该路径上
+# **一个句柄都不剩**——2026-10-18 本机实测，同进程还持有 web_console.log 的追加句柄时
+# os.rename 直接 PermissionError [WinError 32]，关掉后才成功（这正是本模块「先关后改」存在的理由，
+# 见文件头注释）。新句柄只能等改名之后再建。
+# 故改为「先用替身接管标准流 → 关旧句柄 → 改名 → 建真实新句柄，再把窗口期内容并入」：
+# 窗口内标准流始终指向一个可写对象，print() 不抛，落进来的行也不丢（缓存到上限）。
+class _ConsoleBridge(io.TextIOBase):
+    def __init__(self) -> None:
+        super().__init__()
+        self._chunks: list[str] = []
+        self._size = 0
+        self._dropped = 0
+        self._buf_lock = threading.Lock()
+
+    # 替身不对应任何文件路径，且该 name 必须与 logs/web_console.log 不同：
+    # _streams_bound_to() 按 abspath 比对 sys.stdout/sys.stderr，给出一个「像文件名」的 name
+    # 会让下一轮归档把这个内存对象当成绑定本文件的活动句柄去 flush+close。
+    @property
+    def name(self) -> str:
+        return "<dlr-log-archive-bridge>"
+
+    # 必须显式覆写：io.TextIOBase 的 writable() 默认返回 False，
+    # 而消费方（web.py 的 print 路径、第三方库）会先问一句 writable 再写。
+    def writable(self) -> bool:
+        return True
+
+    # 恒 False：替身不是终端。src/logger.py 的 _console_colorize() 走同样的 isatty 口径，
+    # 若这里返回 True，归档窗口内的日志会带 ANSI 转义序列被缓存进新文件。
+    def isatty(self) -> bool:
+        return False
+
+    def write(self, text: str) -> int:
+        # 返回值一律是 len(text)：报短会被 print()/loguru 当成写失败再抛一次，
+        # 而「不抛」正是本替身存在的唯一目的
+        with self._buf_lock:
+            if self._size < _BRIDGE_BUFFER_LIMIT:
+                self._chunks.append(text)
+                self._size += len(text)
+            else:
+                self._dropped += 1
+        return len(text)
+
+    def flush(self) -> None:
+        # 内存对象无系统缓冲可刷；print(flush=True) 与 src/recorder_status.py 的
+        # sys.stdout.flush() 都会走到这里，必须是 no-op 而不是抛错
+        return None
+
+    # 取出窗口期内缓存的全部输出（取出即清空）。只应在标准流已交回真实句柄后调用。
+    def take(self) -> str:
+        with self._buf_lock:
+            content = "".join(self._chunks)
+            self._chunks.clear()
+            self._size = 0
+        return content
+
+
+# 第一步（M-09）：用替身接管标准流，并把 loguru 控制台 sink 一并改绑到它。
+# 控制台 sink 也要跟着换，是因为它在 add() 时绑定的就是那个旧句柄对象（loguru 不随
+# sys.stderr 被替换而改道，见 src/logger.py::rebind_console_sink 的说明）；不改绑则窗口期内
+# 每条记录都往已关闭句柄写，被 loguru 的 catch 兜成一串「Logging error in Loguru Handler」噪声。
+# remove() 会先把 enqueue 队列刷进旧句柄再关闭 worker，此刻旧句柄尚未关闭，不会丢行。
+def _install_console_bridge() -> _ConsoleBridge:
+    bridge = _ConsoleBridge()
+    sys.stdout = bridge
+    sys.stderr = bridge
+    rebind_console_sink()
+    return bridge
+
+
+# 收尾（M-09）：把替身期间缓存的输出并入新句柄。这些行本该落在被归档的那份文件里，
+# 与其丢弃不如追加到全新同名文件的开头——对调用方而言归档链路依然「一条都没少」。
+# 仅在标准流已交回真实句柄（_rebind_web_console 之后）时调用；此时 bridge 不再是 sys.stdout，
+# 那个 `is not bridge` 守卫用来兜住「连 os.devnull 都打不开、标准流仍留在替身上」的绝境分支：
+# 守卫必须在 take() **之前**判掉，否则会把唯一可写的兜底对象掏空。
+def _merge_bridge_output(bridge: _ConsoleBridge | None) -> None:
+    if bridge is None:
+        return
+    stream = sys.stdout
+    if stream is None or stream is bridge:
+        return
+    try:
+        content = bridge.take()
+        if content:
+            stream.write(content)
+    except Exception:
+        # 吞没即正确：这一步只是补写窗口期缓存，失败（磁盘满等）意味着新句柄本身也已不可写，
+        # 那件事由 _rebind_web_console 与本模块的归档告警交代，这里不重复留痕也不外抛
+        pass
+
+
 # 重建 web_console.log 句柄并重新接管 sys.stdout/sys.stderr 与 loguru 控制台 sink
 # （与 web.py::_enter_background_mode 同参数：追加写 + 行缓冲，保证后台日志实时落盘）。
 def _rebind_web_console(path: str) -> None:
@@ -99,6 +204,9 @@ def _rebind_web_console(path: str) -> None:
         # file（表现为「点一次停止录制之后随机崩、Web 面板日志从此不再更新」）。
         # 回退到 os.devnull 保证标准流一定可写，控制台 sink 照常重建（写丢弃但不抛），
         # 同时置位 pending，由下一轮归档继续尝试把链路接回真实文件。
+        # [历史注 M-09，2026-10-18] 上段「标准流仍指向已关闭对象」是旧顺序（先关句柄→改名→重建）
+        # 下的事实；现在改名前先用 _ConsoleBridge 接管了标准流，该形态不再无条件成立，本回退兜的是
+        # 「重开失败后标准流无处可去」这一半——不回退就会把内存替身永久留在 sys.stdout 上。
         _web_console_rebind_pending = True
         try:
             stream = open(os.devnull, "w", encoding="utf-8")
@@ -115,6 +223,8 @@ def _rebind_web_console(path: str) -> None:
 # 归档 web_console.log（仅 Web 后台模式下被重定向为 sys.stdout/sys.stderr、且为同一对象）。
 # 改名后立即重建句柄，后续输出写往全新同名文件，避免线程向已关闭句柄写入；
 # 文件存在但未绑定标准流（历史遗留）时仅改名、绝不劫持当前 stdout。
+# M-09 接管顺序（2026-10-18）：替身接管标准流 → 关旧句柄 → 改名 → 真实新句柄接管 + 并入窗口期缓存；
+# 「改名前必须先把该路径上的句柄一个不剩地关掉」这条平台约束没变，变的是关句柄前标准流去了哪里。
 def _archive_web_console(logs_dir: str, ts: str, archived: list[str]) -> None:
     path = os.path.join(logs_dir, "web_console.log")
     if _web_console_rebind_pending and not os.path.isfile(path):
@@ -125,6 +235,12 @@ def _archive_web_console(logs_dir: str, ts: str, archived: list[str]) -> None:
     if not os.path.isfile(path):
         return
     bound = _streams_bound_to(path)
+    bridge: _ConsoleBridge | None = None
+    if bound:
+        # M-09：先用替身接管标准流（含 loguru 控制台 sink），**之后**才允许关旧句柄——
+        # 旧顺序（先关后改名、改名后才重建）让 sys.stdout/stderr 在整个改名+重建期间指向已关闭对象。
+        # 无绑定句柄的遗留文件（bound 为空）不需要也不允许接管：那条路径绝不劫持当前 stdout。
+        bridge = _install_console_bridge()
     for stream in bound:
         try:
             stream.flush()
@@ -142,11 +258,13 @@ def _archive_web_console(logs_dir: str, ts: str, archived: list[str]) -> None:
         )
         if bound or _web_console_rebind_pending:
             _rebind_web_console(path)
+            _merge_bridge_output(bridge)
         return
     if bound or _web_console_rebind_pending:
         # 除「标准流确实被我们关过」外，额外允许 pending 分支：上一轮重开失败时标准流落在
         # devnull 上、_streams_bound_to 匹配不到本文件，此处若不重建就成了永久黑洞。
         _rebind_web_console(path)
+        _merge_bridge_output(bridge)
 
 
 # 单文件归档：文件不存在则跳过；改名失败仅告警（Windows 下句柄被第三方进程占用时会发生），

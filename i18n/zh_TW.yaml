@@ -1290,3 +1290,8 @@
 "请求体必须是 JSON 对象": "請求內容必須是 JSON 物件"
 "复制字体文件失败: {name} -> {target} - {type_name}: {err}": "複製字體檔案失敗: {name} -> {target} - {type_name}: {err}"
 "config.ini 存在重复配置项，已按最后一次取值读取: {detail}": "config.ini 存在重複設定項，已依最後一次取值讀取: {detail}"
+"[web] web_console.log 超限截断失败: {type_name}: {e}": "[web] web_console.log 超限截斷失敗: {type_name}: {e}"
+"[web] web_console.log 已超过 {max_mb} MB 上限，丢弃最早的 {dropped_kb} KB": "[web] web_console.log 已超過 {max_mb} MB 上限，丟棄最早的 {dropped_kb} KB"
+"PID {pid} 现由 {image} 占用（录制核心映像名为 {expected}），已跳过整树强杀": "PID {pid} 現由 {image} 占用（錄製核心映像名為 {expected}），已跳過整樹強殺"
+"回收 node 签名子进程树失败: {script} - {type_name}: {e}": "回收 node 簽名子進程樹失敗: {script} - {type_name}: {e}"
+"配置文件备份未成功，本轮不更新备份基线（下轮将重试）: {file_path} - {type_name}: {e}": "設定檔備份未成功，本輪不更新備份基線（下輪將重試）: {file_path} - {type_name}: {e}"

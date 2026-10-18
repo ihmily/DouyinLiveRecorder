@@ -93,6 +93,10 @@ class MainWindow(QMainWindow):
     # 退出清理完成后请求销毁窗口：回调来自工作线程，必须经 Signal 回到主线程
     # （Qt 的 wiped signal QUEUE 封送由框架保证，旧版需要自管事件泵）。
     shutdownFinished = Signal()
+    # M-11：任意线程都能往日志缓冲里追加，但「启动刷新定时器」这一步只能在主线程做
+    # （QTimer 跨线程 start() 会被 Qt 拒绝：Timers cannot be started from another thread）。
+    # 于是本信号承担「有新日志」的投递，槽函数在主线程里启表。
+    logQueued = Signal()
 
     def __init__(
         self,
@@ -129,6 +133,12 @@ class MainWindow(QMainWindow):
         self._status_cache_mtime = 0.0
         self._url_disk_snapshot: str | None = None
         self._url_last_mtime = 0.0
+        # M-12：冲突框是模态的，模态事件循环期间状态链定时器照旧触发，
+        # 这个重入守卫保证「一次外部改动最多问一次」。
+        self._url_conflict_asked = False
+        # S-01：结束动作有两条投递通道（停止工作线程的 ended 信号 + 读线程的 EOF 哨兵），
+        # 手动停止时两条都会到达，按会话号去重才不会打两遍结束日志。
+        self._finish_handled_session: int | None = None
         self._config_baseline = ""
         self.tray: TrayIcon | None = None
 
@@ -199,6 +209,9 @@ class MainWindow(QMainWindow):
         brand_font.setWeight(QFont.Weight.DemiBold)
         self.brand_name.setFont(brand_font)
         self.brand_sub = QLabel(i18n.tr("直播录制 · 控制台"))
+        # M-14：副标题是构建期定型的静态标签（品牌名 DouyinLiveRecorder 是专有名词、不译），
+        # 登记键与构造标签同一 msgid，切语言后由 retranslate_all() 回填。
+        set_text(self.brand_sub, T("直播录制 · 控制台"))
         self.brand_sub.setObjectName("muted")
         brand_text.addWidget(self.brand_name)
         brand_text.addWidget(self.brand_sub)
@@ -242,6 +255,10 @@ class MainWindow(QMainWindow):
             ("logs", "📋  运行日志"),
         ):
             btn = nav_button(i18n.tr(msgid))
+            # M-14：导航按钮是构建期定型的静态标签，此前只在建时 tr() 一次，切语言后停在旧语言。
+            # 登记键与构造标签同一 msgid（构造值就是 T(msgid) 的当前语言渲染），两处不漂移；
+            # 顶栏页标题按这里的 text() 派生，重定向登记后由 _repopulate_static_texts 重取。
+            set_text(btn, T(msgid))
             btn.clicked.connect(lambda _checked=False, pid=page_id: self.show_page(pid))
             pane_layout.addWidget(btn)
             self._nav_buttons[page_id] = btn
@@ -272,7 +289,11 @@ class MainWindow(QMainWindow):
         grid.setSpacing(6)
 
         def add_setting(caption: str, combo: QComboBox) -> None:
-            label = QLabel(caption)
+            # M-14：说明标签是构建期定型的静态标签——caption 收**源 msgid**（调用点不再预 tr），
+            # 由 set_text 建时查表 + 登记重译；下拉里的选项文本属哨兵/动态面，
+            # 由 _repopulate_static_texts 按当前语言重建（那里有注释说明为什么不进登记表）。
+            label = QLabel()
+            set_text(label, T(caption))
             label.setObjectName("dim")
             font = QFont(label.font())
             font.setPointSize(9)
@@ -294,26 +315,28 @@ class MainWindow(QMainWindow):
         for theme_id in THEME_IDS:
             self.theme_combo.addItem(i18n.tr(THEME_LABELS[theme_id]), theme_id)
         self.theme_combo.currentIndexChanged.connect(lambda: self.on_theme_change())
-        add_setting(i18n.tr("界面主题"), self.theme_combo)
+        add_setting("界面主题", self.theme_combo)
 
         self.scale_combo = ArrowComboBox()
         self.scale_combo.addItem(i18n.tr("自动"), AUTO_SCALE_ID)
         for percent in SCALE_PRESETS:
             self.scale_combo.addItem(i18n.tr("{percent}%", percent=percent), str(percent))
         self.scale_combo.currentIndexChanged.connect(lambda: self.on_scale_change())
-        add_setting(i18n.tr("界面缩放"), self.scale_combo)
+        add_setting("界面缩放", self.scale_combo)
 
         self.language_combo = ArrowComboBox()
         self._language_names = i18n.unique_display_names()
         for code, name in self._language_names.items():
             self.language_combo.addItem(name, code)
         self.language_combo.currentIndexChanged.connect(lambda: self.on_language_change())
-        add_setting(i18n.tr("语言 Language"), self.language_combo)
+        add_setting("语言 Language", self.language_combo)
 
         self.font_combo = ArrowComboBox()
         self.font_combo.currentTextChanged.connect(lambda text: self.on_font_change(text))
-        add_setting(i18n.tr("界面字体"), self.font_combo)
+        add_setting("界面字体", self.font_combo)
         self.import_font_btn = action_button(i18n.tr("导入字体…"))
+        # M-14：按钮文案是构建期定型的静态标签，登记键与构造标签同一 msgid。
+        set_text(self.import_font_btn, T("导入字体…"))
         connect_click(self.import_font_btn, self.on_import_font)
         grid.addWidget(self.import_font_btn)
         self._refresh_font_menu_values()
@@ -530,6 +553,22 @@ class MainWindow(QMainWindow):
         if self.tray is not None:
             self.tray.retranslate()
         self.refresh_status()
+        # ── 运行态面重驱（M-13/M-14，2026-10-18）──
+        # 顶栏页标题由激活导航按钮的 text() 派生（split("  ")[-1]），**不进登记表**：
+        # 登记表没有「当前页」概念，登记会让回填无条件把标题打回初值「控制台」（用户在
+        # 弹幕页时也会被改）。retranslate_all() 已把导航按钮回填成新语言，这里重取即可。
+        active_btn = next((btn for btn in self._nav_buttons.values() if btn.isChecked()), None)
+        if active_btn is not None:
+            self.page_title.setText(active_btn.text().split("  ")[-1])
+        # 状态四处投影（控制台大状态点+副标题、侧栏胶囊、顶栏胶囊、托盘状态项）都是运行态
+        # 文案、刻意不进登记表（登记后 retranslate_all() 会把「录制中」打回初值「待机」，
+        # 即 M-13 的故障形态），切换语言后必须按当前 recorder 状态主动重调唯一出口。
+        self._set_running_ui(self.recorder.is_running())
+        # 两张监控表的表头/单元格状态 token 与「全部房间」哨兵都在产生点 tr()，
+        # 但各自的 refresh 对行内容等值时短路返回、数据不变时旧语言原地常驻——
+        # 由页面清掉上一轮缓存强制整表重画（见 pages/quality.py、pages/danmaku.py）。
+        self.quality_page.retranslate_runtime()
+        self.danmaku_page.retranslate_runtime()
 
     def _refresh_font_menu_values(self) -> None:
         # 重建期间必须 blockSignals：clear()/addItems() 会触发 currentTextChanged，
@@ -622,13 +661,37 @@ class MainWindow(QMainWindow):
     # ─── 子进程接线 ───
 
     def _wire_recorder(self) -> None:
-        # Qt 的跨线程连接（AutoConnection → Queued）保证下面三个槽只在主线程跑，
+        # Qt 的跨线程连接（AutoConnection → Queued）保证下面几条槽只在主线程跑，
         # 取代旧 tkinter 版手写的 _ui_event_queue + post_ui 事件泵。
-        self.recorder.linesReceived.connect(self._on_lines_received)
+        # [计数修正 2026-10-18] 原写「三个槽」，S-01/M-11 修复后此处接线增至五条，按实际条数改述。
+        # S-01：outputReady 取代原先从未 emit 的 linesReceived——队列里每落一批新内容就被
+        # 唤醒一次，由 _pump_recorder_queue 在主线程取空。刻意不接回「带数据的信号」，
+        # 理由见 recorder.RecorderController 类头注释（单通道消费，否则重复或泄漏）。
+        self.recorder.outputReady.connect(self._pump_recorder_queue)
         self.recorder.logRequested.connect(self._queue_log)
         self.recorder.started.connect(self._on_recorder_started)
         self.recorder.ended.connect(self._on_recorder_ended)
+        self.logQueued.connect(self._ensure_log_timer_running)
         self.shutdownFinished.connect(self._finalize_quit)
+
+    # 读线程 → 队列 → 主线程的唯一消费口（S-01 的落点）。
+    def _pump_recorder_queue(self) -> None:
+        # 与旧 tkinter 版 _schedule_log_flush 同构：一次取空、成批处理、结束哨兵单独交
+        # _on_recorder_ended 校验会话。异常只留痕不外抛——本槽由信号投递触发，
+        # 抛出会中断这一轮事件派发，而队列已被 drain 取空的内容（含已弹出的 messages）
+        # 随异常丢失，与旧版 L-39 记录的「抛错轮次少最后几行」同义，界面保持可用优先。
+        try:
+            messages, ended, ended_session = self.recorder.drain()
+            if messages:
+                self._on_lines_received(messages)
+                # _on_lines_received 是直接往缓冲追加、不走 _queue_log，故这里补一次唤醒：
+                # 「子进程输出」这一路不得依赖别的日志源恰好把刷新链带起来。
+                # 本槽由跨线程信号投递而来，必然在主线程，直接启表是安全的（M-11 的同一条判据）。
+                self._ensure_log_timer_running()
+            if ended:
+                self._on_recorder_ended(ended_session)
+        except Exception as e:
+            self._warn_chain("recorder-output", e)
 
     def _on_lines_received(self, payload: object) -> None:
         if not isinstance(payload, list):
@@ -651,7 +714,8 @@ class MainWindow(QMainWindow):
 
     def _on_recorder_ended(self, session_id: object) -> None:
         # 会话校验：旧会话的迟到 EOF 不得把新会话的状态打回未运行。
-        if session_id is not None and int(str(session_id)) != self.recorder.session_id():
+        session = None if session_id is None else int(str(session_id))
+        if session is not None and session != self.recorder.session_id():
             return
         if self._quitting:
             # 退出收尾期间短路：UI 生命周期由 _finalize_quit 统一收尾。
@@ -659,6 +723,15 @@ class MainWindow(QMainWindow):
         if self.recorder.is_stopping():
             # 手动停止流程进行中，由其自身（_on_recorder_ended 的同源收尾）统一收尾。
             return
+        # S-01：结束动作现在真的有两个来源（停止工作线程 emit 的 ended、读线程投进队列的
+        # EOF 哨兵），手动停止时两条都会到达且时序取决于事件循环，不去重就是两遍
+        # 「录制进程已结束」+ 两次 danmaku.stop()。按会话号去重（会话号单调递增）。
+        if session is not None and self._finish_handled_session == session:
+            return
+        self._finish_handled_session = session
+        # 自然 EOF 的句柄回收：读线程只置 _running，_process 留在这里清，
+        # 否则界面回到待机后再点「开始录制」恒报 already_running。
+        self.recorder.reclaim_after_natural_end(session)
         if self.recorder.output_thread_alive():
             self.recorder.note_finish_skip()
         self.danmaku.stop()
@@ -696,6 +769,9 @@ class MainWindow(QMainWindow):
         self._log_timer = QTimer(self)
         self._log_timer.setInterval(_LOG_FLUSH_INTERVAL)
         self._log_timer.timeout.connect(self._flush_pending_lines)
+        # _log_timer 刻意不在这里 start：它是「按需激活」的休眠态链（与旧版 _log_flush_job_id
+        # 的 None=休眠同义），由 _ensure_log_timer_running 在真有日志入队时启表。
+        # M-11：启表的入口只能是主线程，所以入口挂在 logQueued 信号上。
         self._status_timer = QTimer(self)
         self._status_timer.setInterval(_STATUS_INTERVAL_IDLE)
         self._status_timer.timeout.connect(self._status_tick)
@@ -708,17 +784,23 @@ class MainWindow(QMainWindow):
     def _flush_pending_lines(self) -> None:
         # 成批刷入而非逐行 append：录制峰值每秒上百行，
         # 逐行走一次事件循环会把主线程拖慢到肉眼可见的卡顿。
+        # 回调内包 try/except + 限频留痕是周期链的统一口径（见 _warn_chain）：Qt 的 timer
+        # 不会因回调抛错而永久停掉，但不接住异常就等于「这一批已经出队的行随异常消失、
+        # 日志页从此不再更新却一条线索都没有」——旧 tkinter 版 M-15/L-39 事故的同族形态。
         if not self._pending_log_lines:
             return
         batch = self._pending_log_lines
         self._pending_log_lines = []
-        for line, level in batch:
-            if level == "error":
-                self.logs_page.terminal.append_line(f"[{self._timestamp()}] [ERROR] {line}")
-            elif level == "warn":
-                self.logs_page.terminal.append_line(f"[{self._timestamp()}] [WARN] {line}")
-            else:
-                self.logs_page.terminal.append_line(f"[{self._timestamp()}] {line}")
+        try:
+            for line, level in batch:
+                if level == "error":
+                    self.logs_page.terminal.append_line(f"[{self._timestamp()}] [ERROR] {line}")
+                elif level == "warn":
+                    self.logs_page.terminal.append_line(f"[{self._timestamp()}] [WARN] {line}")
+                else:
+                    self.logs_page.terminal.append_line(f"[{self._timestamp()}] {line}")
+        except Exception as e:
+            self._warn_chain("log-flush", e)
 
     def _status_tick(self) -> None:
         # 录制中收紧到 3s（要看 PID、目录、格式变化），空闲放宽到 10s 少做无用磁盘读取。
@@ -762,6 +844,17 @@ class MainWindow(QMainWindow):
     # 线程安全的日志入口（可被任意线程调用：只 append 到主线程消费的缓冲）。
     def _queue_log(self, message: str, level: str = "info") -> None:
         self._pending_log_lines.append((message, level))
+        # M-11：这里**不能**直接 self._log_timer.start()。弹幕 tail 线程
+        # （src/gui_qt/danmaku_monitor.py 的 _tail_loop 留痕分支）与画质解析链都会在
+        # 非 GUI 线程里调本方法，而 QTimer 只能在拥有它的线程启停——跨线程 start() 被 Qt
+        # 拒绝（stderr 打印 "Timers cannot be started from another thread"、不抛 Python 异常），
+        # 于是这一批弹幕/告警日志一直滞留到下一次**主线程**入队才刷出，界面更新延迟完全不确定。
+        # 改经信号投递：主线程调用是 Direct（同轮立即启表，行为不变），其它线程由 Qt 排队，
+        # 启表这一步因此必然发生在主线程。
+        self.logQueued.emit()
+
+    # 日志刷新链的启动口（只在主线程执行：本槽由 logQueued 投递）。
+    def _ensure_log_timer_running(self) -> None:
         if not self._log_timer.isActive():
             self._log_timer.start()
 
@@ -896,16 +989,31 @@ class MainWindow(QMainWindow):
                 return
             # 有未保存编辑时先问，否则用户正在编辑的内容会被外部改动静默覆盖。
             if self._has_unsaved_config_edits():
-                answer = QMessageBox.question(
-                    self,
-                    i18n.tr("配置文件已变更"),
-                    i18n.tr(
-                        "URL_config.ini 已被外部修改，但编辑器中有未保存的更改。\n\n"
-                        "点击「是」放弃未保存的更改并重新加载；\n点击「否」保留当前编辑内容（稍后可手动保存）。"
-                    ),
-                )
+                # M-12：本方法由 _status_tick 的定时器链驱动，而 QMessageBox.question 是**模态**
+                # 的——它内部跑自己的事件循环，期间状态链照旧每 3s 触发一次本方法。
+                # 因此必须先过守卫、再把 mtime 前置落位并置守卫，然后才弹窗。
+                # 顺序很关键：守卫排在 mtime 前置**之后**时，询问期间若文件又变一次，
+                # 那一拍的 mtime 会被就地吃掉，用户答完后这条新改动就再也问不到了；
+                # 排在最前面则整段挂起（既不更新 mtime、也不叠框），答完后下一拍照常再问。
+                if self._url_conflict_asked:
+                    return
+                # 弹窗前置位：不先落 mtime，每一拍都会叠一个新的冲突框（用户视角=弹窗无限堆积）。
+                self._url_last_mtime = current_mtime
+                self._url_conflict_asked = True
+                try:
+                    answer = QMessageBox.question(
+                        self,
+                        i18n.tr("配置文件已变更"),
+                        i18n.tr(
+                            "URL_config.ini 已被外部修改，但编辑器中有未保存的更改。\n\n"
+                            "点击「是」放弃未保存的更改并重新加载；\n点击「否」保留当前编辑内容（稍后可手动保存）。"
+                        ),
+                    )
+                finally:
+                    # 复位必须无条件：抛错或提前 return 都把守卫钉死，之后任何外部改动都不再询问
+                    # （静默覆盖用户未保存的编辑，正是这条检测要防的事）。
+                    self._url_conflict_asked = False
                 if answer != QMessageBox.StandardButton.Yes:
-                    self._url_last_mtime = current_mtime
                     return
             self.load_url_config()
         except OSError:

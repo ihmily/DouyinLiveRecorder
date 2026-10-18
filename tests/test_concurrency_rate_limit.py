@@ -72,6 +72,12 @@ class TestTtwidConcurrentDedup:
             t.start()
         for t in threads:
             t.join(timeout=15)
+        # LT-03（2026-10-18 审查）：join(timeout=15) **返回**不等于线程已退出——去重逻辑挂死时
+        # join 只是超时静默返回，errors 仍为空、fetch_calls 仍为 1，本用例照样判绿。
+        # 必须逐线程确认 is_alive 为 False，才真正钉住「8 线程全部跑完」（口径同
+        # tests/test_async_http_lock.py 的 LT-01）。
+        for t in threads:
+            assert not t.is_alive(), "join 超时后线程仍存活：跨线程去重逻辑挂死，不得判绿"
 
         assert not errors, f"并发调用抛出异常: {errors}"
         assert len(fetch_calls) == 1, f"并发去重失效: _fetch_ttwid 被调用 {len(fetch_calls)} 次（期望 1）"
@@ -106,6 +112,11 @@ class TestTtwidConcurrentDedup:
             t.start()
         for t in threads:
             t.join(timeout=15)
+        # LT-03（2026-10-18 审查）：同上——本用例的「串行接管」判据（concurrent_peak == 1）
+        # 对「线程根本没退出」完全隐形：等待者全挂死时峰值同样只记到 1。
+        # 逐线程断言 is_alive 已为 False，才真正钉住「5 线程全部跑完」。
+        for t in threads:
+            assert not t.is_alive(), "join 超时后线程仍存活：等待者接管链挂死，不得判绿"
 
         assert fetch_calls, "owner 失败后等待者未接管重试，用例前提不成立"
         assert concurrent_peak == 1, f"拉取出现并发（峰值 {concurrent_peak}），等待者应串行接管"

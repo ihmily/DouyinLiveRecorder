@@ -316,10 +316,75 @@ def _get_gui_kernel32() -> ctypes.CDLL | None:
         dll.SetConsoleOutputCP.restype = ctypes.c_int
         dll.SetConsoleCP.argtypes = [ctypes.c_uint]
         dll.SetConsoleCP.restype = ctypes.c_int
+        # L-02（2026-10-18 审查）新增：退出链在整树强杀前要能读出「这个 PID 现在是谁」。
+        # OpenProcess 只取 PROCESS_QUERY_LIMITED_INFORMATION（0x1000），不请求任何写/终止权限，
+        # 因此对别的用户的进程同样拿不到——那种情形由调用方按「无法判定」退回原形态。
+        dll.OpenProcess.argtypes = [ctypes.c_uint, ctypes.c_int, ctypes.c_uint]
+        dll.OpenProcess.restype = ctypes.c_void_p
+        dll.QueryFullProcessImageNameW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.c_void_p]
+        dll.QueryFullProcessImageNameW.restype = ctypes.c_int
+        dll.CloseHandle.argtypes = [ctypes.c_void_p]
+        dll.CloseHandle.restype = ctypes.c_int
         _GUI_KERNEL32 = dll
         return dll
     except Exception:
         return None
+
+
+# OpenProcess 的权限位：只查进程映像路径与基本退出信息（Vista+）。
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+# QueryFullProcessImageNameW 的缓冲区字符数：路径可超 MAX_PATH，留足余量，
+# 免得截断后的基名与真实基名不一致反而判成「PID 已被复用」。
+_PID_IMAGE_NAME_BUFFER_CHARS = 4096
+
+
+# 读出指定 PID 当前的映像基名（小写）。取不到一律返回空串，由调用方按「无法判定」处理
+# （L-02，2026-10-18 审查）：
+#   - 非 Windows / kernel32 不可用：本判据不存在；
+#   - OpenProcess 失败（进程已不存在，实测 last_error=87，或权限不足）：本来就没有可误杀的
+#     活对象，继续交给 taskkill 返回 128、由 MIN-2249 的口径如实记「未能清理」；
+# 真正要拦的只有一种：映像名**确实读到了、且不是我们启动的那个程序**，即 PID 已进入复用窗口、
+# 接手者是一个无关进程。故「判据失效即放行」不是偷懒，而是保证本兜底不会因判据而失去清理能力。
+def _win_pid_image_name(pid: int) -> str:
+    if sys.platform != "win32":
+        return ""
+    k32 = _get_gui_kernel32()
+    if k32 is None:
+        return ""
+    handle = None
+    try:
+        handle = k32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, 0, pid)
+        if not handle:
+            return ""
+        buffer = ctypes.create_unicode_buffer(_PID_IMAGE_NAME_BUFFER_CHARS)
+        size = ctypes.c_uint(len(buffer))
+        if not k32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+            return ""
+        return os.path.basename(str(buffer.value)).lower()
+    except Exception:
+        return ""
+    finally:
+        # 句柄必须关掉：退出链上每次漏一只没有道理（该权限位不持有进程对象，
+        # 但留下只会让「GUI 进程句柄数」随退出次数增长）
+        if handle:
+            try:
+                _ = k32.CloseHandle(handle)
+            except Exception:
+                pass
+
+
+# 判定「已捕获的 PID 是否已被别的映像接手」：确证复用时返回 (当前映像名, 期望映像名)，
+# 否则返回 None（= 按原有无条件强杀形态继续）。
+# 期望映像名缺席时**不判定**：本判据只为收窄「子进程已退出 → PID 进入复用池 → taskkill /T
+# 打到接手者」这一段窗口；从未启动过录制核心（或测试桩实例不跑 __init__）本就没有该窗口。
+def _reused_pid_image_pair(recorded_image: str, pid: int) -> tuple[str, str] | None:
+    expected = recorded_image.strip().lower()
+    if not expected:
+        return None
+    current = _win_pid_image_name(pid)
+    if not current or current == expected:
+        return None
+    return current, expected
 
 
 # 强制标准流以 UTF-8 输出（窗口化 exe 的 stdout/stderr 可能为 None，已做保护）。
@@ -1703,6 +1768,11 @@ class LiveRecorderGUI:
         self._process_lock = threading.Lock()
         self._process: subprocess.Popen[str] | None = None
         self._process_pid: int | None = None
+        # L-02（2026-10-18 审查）：本次录制核心子进程的映像基名（小写），在 start_recording
+        # 成功拉起时登记。退出兜底的 `taskkill /F /T /PID <先前捕获的 pid>` 打的是**号码**，
+        # 而 Windows 的 PID 在进程退出后即进入复用池；记下基名才可能在动手前读出「这个号现在
+        # 是谁」。空串 = 从未启动过子进程（也就没有需要收窄的复用窗口）。
+        self._child_image_name: str = ""
         self._running = False
         self._stopping = False  # 停止进行中标志：阻塞启动/重复停止，消除停止竞态窗口
         # 录制会话代号（2026-09-12 审查 6.2）：每次成功启动子进程时自增。
@@ -3594,7 +3664,11 @@ class LiveRecorderGUI:
 
     # 返回系统托盘是否启用的中文状态字符串。
     def _tray_status_str(self) -> str:
-        return "启用" if self.system_tray and self.system_tray.running else "未启动"
+        # L-04（2026-10-18 审查，与 minimize_to_tray 的托盘通知同一条修复）：本串是状态栏的
+        # **展示值**（唯一消费点 _update_status_bar 的 info_tray.configure(text=…)），
+        # 裸中文在非简中语言下不译。「启用」/「未启动」两个键四目录早已备齐译文，
+        # 此处只补查表、不新增 msgid。
+        return i18n_module.tr("启用") if self.system_tray and self.system_tray.running else i18n_module.tr("未启动")
 
     # ─── 子进程管理 ────────────────────────────────────────
 
@@ -3768,6 +3842,11 @@ class LiveRecorderGUI:
 
             self.process = proc
             self.process_pid = proc.pid
+            # L-02：与 process_pid 同批登记映像基名（冻结态是 DouyinLiveRecorder.exe，
+            # 源码态是 python.exe/pythonw.exe）——两者都取自我们亲手拼出的 argv[0]，
+            # 不从系统反查，反查只用在「动手杀之前」那一次比对上。
+            # 读到旧值也只会退回修复前形态（同为录制核心映像名），不会造成误杀，故不加锁。
+            self._child_image_name = os.path.basename(record_cmd[0]).lower()
             self.running = True
             # 新会话开始：自增代号，使所有旧会话的在途收尾回调失效
             self._session_id += 1
@@ -4897,7 +4976,11 @@ class LiveRecorderGUI:
         # 最小化到托盘；托盘不可用（如 Linux 无 X11）时降级为普通最小化，避免窗口无法恢复
         if self.system_tray and self.system_tray.running:
             self.root.withdraw()
-            self.system_tray.notify("程序已最小化到系统托盘，双击托盘图标可恢复窗口")
+            # L-04（2026-10-18 审查）：pystray 的 notify() 正文属 i18n 提取器盲区（AGENTS
+            # 「i18n 扫描盲区清单」），裸中文在非简中语言下原样弹出。键「程序已最小化到系统托盘，
+            # 双击托盘图标可恢复窗口」四目录早已备齐译文（与 _tray_status_str 的托盘状态串同属
+            # 「译文已备、查表没调」），此处只补查表、不新增 msgid。
+            self.system_tray.notify(i18n_module.tr("程序已最小化到系统托盘，双击托盘图标可恢复窗口"))
         else:
             self.root.iconify()
             self._log(i18n_module.tr("系统托盘不可用，已改为最小化到任务栏"), "warn")
@@ -5022,6 +5105,30 @@ class LiveRecorderGUI:
         found = False
 
         try:
+            # L-02（2026-10-18 审查）：taskkill /F /T 打的是**号码**，而本函数的调用点
+            # （_shutdown_and_quit）传的是停止链之前捕获的 child_pid——子进程此刻已经退出，
+            # 该号码已进入 Windows 的 PID 复用池，接手者可能是任何进程，/T 还会把它的整棵子树
+            # 一起强杀。动手前先读一次当前映像名，只有「确证不是我们启动的那个程序」才收手；
+            # 判据本身取不到时按原有无条件形态继续（见 _win_pid_image_name 注释）。
+            # 用 getattr 而不是直接读 self._child_image_name：本函数被既有回归锁以不跑
+            # __init__ 的桩实例驱动（tests/test_regression_2026_09_22_gui.py 的 _LogSpy），
+            # 直接访问会抛 AttributeError 并被本函数的 except 吞掉，连一次 taskkill 都不发。
+            if target_pid is not None:
+                reused = _reused_pid_image_pair(cast(str, getattr(self, "_child_image_name", "")), target_pid)
+                if reused is not None:
+                    current_image, expected_image = reused
+                    self._log(
+                        i18n_module.tr(
+                            "PID {pid} 现由 {image} 占用（录制核心映像名为 {expected}），已跳过整树强杀",
+                            pid=target_pid,
+                            image=current_image,
+                            expected=expected_image,
+                        ),
+                        "warn",
+                    )
+                    # 置空号码即让下面两个平台分支都不再动手，并照常落到「未发现需要清理的
+                    # ffmpeg 进程」那条结论；不得直接 return——那会让日志只剩一句 warn。
+                    target_pid = None
             if sys.platform == "win32":
                 if target_pid is not None:
                     try:

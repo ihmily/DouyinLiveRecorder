@@ -42,6 +42,7 @@ import os
 import platform
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from collections.abc import Mapping
@@ -286,13 +287,44 @@ def _discard_master_zip(zip_path: Path) -> None:
             pass
 
 
+# 子进程控制台窗口抑制（L-15，2026-10-18）：与 src/ffmpeg_install._win_startup_info 同一语义的
+# 孪生副本。本模块**不得**改为 import 那边那个函数——ffmpeg_install 在模块级
+# `from src.ffmpeg_master_download import download_ffmpeg_master`，反向引用即构成循环导入
+# （与本模块不 import ffmpeg_install、以及 ffmpeg_linux_download 的 master_allowed 由调用方
+# 传参是同一族规避手法，见 ffmpeg_install 模块头「Linux 原生 ffmpeg 直下」那段注释）。
+# 两份实现必须逐字同语义：改判据要同时改两处，等价性由
+# tests/test_ffmpeg_install.py::TestChildConsoleStartupInfo::test_twin_helpers_agree_on_both_gate_states
+# 在两个门控取值下逐一对齐（与 tests/test_ffmpeg_path_preference.py::TestTwinEquivalence 同一口径）。
+# 平台门控取 `sys.platform == "win32"` 字面量并抽成模块级常量（Linux CI 可 monkeypatch 强制
+# 走进 win32 分支，见 ffmpeg_install 侧同处的完整理由）；函数体不引用任何 Windows 专属符号，
+# 故不需要 `# type: ignore`。
+_HIDE_CHILD_CONSOLE = sys.platform == "win32"
+
+
+def _win_startup_info() -> object | None:
+    # 非 Windows 恒 None：subprocess 收到 startupinfo=None 等价于不传该实参，行为逐字不变。
+    if not _HIDE_CHILD_CONSOLE:
+        return None
+    # 委托前置条件与孪生处逐字相同，理由完整写在 src/ffmpeg_install.py::_win_startup_info 头上
+    # （直接首次 import video_postprocess 会撞 video_postprocess → main → src.notify →
+    # video_postprocess 的循环导入并半程执行 main 的模块体；拿不到就退回改动前的闪窗行为）。
+    # 本模块更极端：ffmpeg_install 在模块级 `from src.ffmpeg_master_download import
+    # download_ffmpeg_master`，所以连「模块级 import video_postprocess」都不可能是选项——
+    # 那条环在导入本模块的那一刻就会闭合。
+    if "src.video_postprocess" not in sys.modules and "main" not in sys.modules:
+        return None
+    from src.video_postprocess import get_startup_info
+
+    return get_startup_info(os.name)
+
+
 def _tofu_verify_or_record(zip_path: Path, hash_file: Path, source_url: str) -> None:
     current = sha256_of_file(zip_path)
     masked = utils.mask_credentials(source_url)
     if hash_file.exists():
         try:
             expected = hash_file.read_text(encoding="ascii").strip().lower()
-        except OSError as e:
+        except (OSError, UnicodeDecodeError) as e:
             # SEV-2222：基准**存在**却读不出来 = 本机那份可信基准处于不可信状态，
             # 必须拒装。旧实现只 warning 后 return，调用方把 None 当成校验通过，于是
             # 「唯一一道完整性检查在磁盘异常时静默失效」（与本仓 MID-63/MID-68/MIN-19
@@ -301,6 +333,21 @@ def _tofu_verify_or_record(zip_path: Path, hash_file: Path, source_url: str) -> 
             # 「刻意不同」（理由：那边前面还有官方哈希一道）——L-44（2026-10-02）复核认为
             # 该理由对降级分支不成立（官方文档不可达时那边 TOFU 同样是最后一道），两侧已
             # 统一收紧为拒装，不再存在口径分叉。
+            # [为什么必须并捕 UnicodeDecodeError（M-06，2026-10-18）] 基准是**磁盘上可被外部
+            # 改写的输入**：用户手工编辑、同步盘/压缩工具把它转成 UTF-8，都会让
+            # read_text(encoding="ascii") 抛 UnicodeDecodeError（ValueError 子类，**不是** OSError），
+            # 只捕 OSError 接不住。本模块接不住的代价比 Linux 姊妹侧更硬：顶层入口承诺「失败一律
+            # 返回 False 不抛」，而调用方 download_ffmpeg_master 只并捕 (IntegrityError, OSError)，
+            # 于是该异常会穿出 download_ffmpeg_master → install_ffmpeg_windows → check_ffmpeg
+            # 直达启动流程（install_ffmpeg_windows 全程无 try），把「装不上」升级成「起不来」。
+            # 归一成 IntegrityError 后走的就是本分支既有的「删包 + 拒装」路径，失败方向不变，
+            # 只是让它按 SEV-2222 的口径**带着「请人工核对或删除 {hash_file} 后重试」指引**失败。
+            # 姊妹形态的同口径修法见 src/ffmpeg_linux_download.py::_verify_archive 与
+            # src/ffmpeg_install.py::_check_or_record_zip_sha256（L-12，与本条一并修、注释互相点名）。
+            # 需要 as 绑定取 type(e)/e，故按 AGENTS 的 except 约定回退加括号形态。
+            # 回归锁：tests/test_ffmpeg_install.py::TestMasterBaselineDecodeGuard
+            # ::test_non_ascii_baseline_becomes_integrity_error_and_discards_zip（单元层）与
+            # ::test_entrypoint_normalises_non_ascii_baseline_to_false（入口层，钉「返 False 而非抛」）。
             _discard_master_zip(zip_path)
             raise IntegrityError(
                 i18n.tr(
@@ -449,7 +496,9 @@ def download_ffmpeg_master(dest_dir: str, arch: str | None = None) -> bool:
     # 不会与 W6 的 PATH 优先级判据冲突（W6 在 main.py 侧、注入前取快照，本处注入在其之后）。
     os.environ["PATH"] = str(target) + os.pathsep + (os.environ.get("PATH") or "")
     try:
-        rc = subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=30)
+        # L-15：本行真跑刚下载的 ffmpeg.exe，Windows 无控制台形态（pythonw / 冻结 console=False）
+        # 下不传 startupinfo 会闪出一个控制台窗口；判据见 _win_startup_info。
+        rc = subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=30, startupinfo=_win_startup_info())
     except Exception as e:
         logger.error(i18n.tr("ffmpeg master 安装后验证失败: {type_name}: {e}", type_name=type(e).__name__, e=e))
         return False

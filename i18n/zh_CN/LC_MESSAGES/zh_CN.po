@@ -3,7 +3,7 @@
 # This file is distributed under the same license as the DouyinLiveRecorder package.
 #
 # DouyinLiveRecorder 简体中文翻译文件
-# 更新日期: 2026-10-17
+# 更新日期: 2026-10-18
 #
 # 维护说明：
 #   - 本文件是翻译源文本；gettext 运行时只读取同目录编译产物 zh_CN.mo。
@@ -24,7 +24,7 @@ msgstr ""
 "Project-Id-Version: DouyinLiveRecorder\n"
 "MIME-Version: 1.0\n"
 "POT-Creation-Date: 2024-10-20 00:00+0800\n"
-"PO-Revision-Date: 2026-10-17 12:00+0800\n"
+"PO-Revision-Date: 2026-10-18 12:00+0800\n"
 "Last-Translator: Hmily <ihmily@github>\n"
 "Language-Team: Chinese\n"
 "Content-Type: text/plain; charset=UTF-8\n"
@@ -3791,3 +3791,17 @@ msgstr "复制字体文件失败: {name} -> {target} - {type_name}: {err}"
 
 msgid "config.ini 存在重复配置项，已按最后一次取值读取: {detail}"
 msgstr "config.ini 存在重复配置项，已按最后一次取值读取: {detail}"
+
+msgid "[web] web_console.log 超限截断失败: {type_name}: {e}"
+msgstr "[web] web_console.log 超限截断失败: {type_name}: {e}"
+
+msgid "[web] web_console.log 已超过 {max_mb} MB 上限，丢弃最早的 {dropped_kb} KB"
+msgstr "[web] web_console.log 已超过 {max_mb} MB 上限，丢弃最早的 {dropped_kb} KB"
+
+msgid "PID {pid} 现由 {image} 占用（录制核心映像名为 {expected}），已跳过整树强杀"
+msgstr "PID {pid} 现由 {image} 占用（录制核心映像名为 {expected}），已跳过整树强杀"
+msgid "回收 node 签名子进程树失败: {script} - {type_name}: {e}"
+msgstr "回收 node 签名子进程树失败: {script} - {type_name}: {e}"
+
+msgid "配置文件备份未成功，本轮不更新备份基线（下轮将重试）: {file_path} - {type_name}: {e}"
+msgstr "配置文件备份未成功，本轮不更新备份基线（下轮将重试）: {file_path} - {type_name}: {e}"

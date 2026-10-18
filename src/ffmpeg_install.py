@@ -112,6 +112,48 @@ def _is_valid_zip(path: str | Path) -> bool:
     return utils.is_valid_zip(path)
 
 
+# 子进程控制台窗口抑制（L-15，2026-10-18）：`ffmpeg -version` 这类探测在 Windows 的无控制台形态
+#   （pythonw.exe 跑 gui.py、冻结 console=False 的 exe）下每次都会闪出一个黑色控制台窗口——
+#   子进程默认继承"创建控制台"的行为，而本模块的探测发生在启动期，用户看到的就是"一闪而过的窗口"。
+#   判据与实现一律复用 src/video_postprocess.get_startup_info（STARTUPINFO + STARTF_USESHOWWINDOW，
+#   录制链的 ffmpeg 调用早已用它），**不得**在本模块再写一份 STARTUPINFO 构造（F-01 同族：
+#   同一件事只允许一个定义点；孪生的第二份在 src/ffmpeg_master_download.py，见该处注释）。
+# 平台门控形态：判据抽成模块级常量 `_HIDE_CHILD_CONSOLE` 而不是就地写 `if sys.platform != "win32"`，
+#   是为了让 Linux CI 也能**真走进** win32 分支（AGENTS「平台专属分支的测试不得靠 skipif 让 CI 跳过」，
+#   与 src/ffmpeg_proc.py 的 `_QUIT_VIA_STDIN` 同一手法）；常量值本身仍是 sys.platform 字面量比较，
+#   mypy 各平台目标下都只会把它当普通 bool——本函数不引用任何 Windows 专属符号（STARTUPINFO 藏在
+#   get_startup_info 内部，其返回型已是跨平台的 object | None），故**不需要** `# type: ignore`
+#   （加了反而在另一侧触发 basedpyright reportUnnecessaryTypeIgnoreComment）。
+# 回归锁（tests/test_ffmpeg_install.py::TestChildConsoleStartupInfo）：
+#   ::test_gate_off_passes_none_and_never_imports_video_postprocess（门控假 ⇒ 传 None 且不触达那条链）、
+#   ::test_delegation_is_skipped_when_the_import_would_be_circular（下面那段前置条件的锁）、
+#   ::test_twin_helpers_agree_on_both_gate_states（与 master 孪生副本的行为等价性）、
+#   ::test_check_ffmpeg_installed_forwards_startup_info / ::test_official_verify_run_forwards_startup_info
+#   （本模块两处调用点的透传）。缺键即 KeyError，故「删掉 startupinfo 实参」这一变异必然转红。
+_HIDE_CHILD_CONSOLE = sys.platform == "win32"
+
+
+def _win_startup_info() -> object | None:
+    # 非 Windows 恒返回 None（subprocess 收到 startupinfo=None 等价于不传，行为逐字不变）。
+    if not _HIDE_CHILD_CONSOLE:
+        return None
+    # 委托前置条件：① src.video_postprocess 已在 sys.modules（它的模块体已跑完，或被测试用假模块占位），
+    # 或 ② main 已在 sys.modules（正常入口顺序——main.py 在模块级就 `from src.video_postprocess import (...)`）。
+    # 两者都不成立时**必须**直接返 None：那时这句 from-import 会**首次**执行 video_postprocess，而它顶层
+    # `import main` → main → src.notify 的模块级 `from src.video_postprocess import get_startup_info`
+    # 命中尚未跑完的 video_postprocess → ImportError（2026-10-18 由本文件 TestChildConsoleStartupInfo
+    # 实测抓出，形态 "cannot import name 'get_startup_info' from partially initialized module"，
+    # 7 条既有 download/探测用例当场变红）。除了报错，那次失败的导入还会**半程执行 main 的模块体**
+    # （含 SetConsoleOutputCP(65001)），污染整个宿主进程。本模块对「可选加固不得打断主流程」早有口径
+    # （见 _fetch_official_sha256：一次网络故障不得把安装打成异常），同一条判据落在这里：
+    # 拿不到就退回改动前的行为（闪一个控制台窗口），绝不让探测/安装失败。
+    if "src.video_postprocess" not in sys.modules and "main" not in sys.modules:
+        return None
+    from src.video_postprocess import get_startup_info
+
+    return get_startup_info(os.name)
+
+
 # 校验已下载 zip 的 SHA256（trust-on-first-use 模型）：
 # - 首次下载完成后把哈希写到旁路文件
 # - 再次下载/校验时若旁路文件存在则比对，不一致则拒绝安装
@@ -276,7 +318,20 @@ def _check_or_record_zip_sha256(
     if hash_file.exists():
         try:
             expected = hash_file.read_text(encoding="ascii").strip().lower()
-        except OSError as e:
+        # [为什么必须并捕 UnicodeDecodeError（L-12，2026-10-18）] 与 M-06
+        # （src/ffmpeg_master_download.py::_tofu_verify_or_record）同一形态：基准是磁盘上可被
+        # 外部改写的输入，用户手工编辑或同步盘把它转成 UTF-8 后，read_text(encoding="ascii")
+        # 抛的是 UnicodeDecodeError（ValueError 子类，**不是** OSError），只捕 OSError 接不住。
+        # 本模块的代价与 master 侧不同但同样是「检查失效」：异常穿出后被 download_ffmpeg_official
+        # 的 catch-all `except Exception` 归成一句泛化的「安装失败」，于是 ① 下面那条 fail-closed
+        # 分支（删包 + 点名「请人工核对或删除 {hash_file} 后重试」）整个被跳过，用户失去自救入口；
+        # ② 几百 MB 的 ffmpeg_official_temp.zip 不会被删（该分支的 unlink 同样被跳过）。
+        # 姊妹模块 ffmpeg_linux_download.py::_verify_archive 的同一修法（含「为什么保留 .lower()」
+        # 的强度说明）见其 except 元组处的注释；master 侧见 M-06。三处一律并捕，不再分叉。
+        # 需要 as 绑定取 type(e)/e，故按 AGENTS 的 except 约定回退加括号形态。
+        # 回归锁：tests/test_ffmpeg_install.py::TestOfficialBaselineDecodeGuard
+        # ::test_non_ascii_baseline_refuses_and_unlinks。
+        except (OSError, UnicodeDecodeError) as e:
             # L-44（2026-10-02，对齐 ffmpeg_master_download 的 SEV-2222 口径）：基准**存在**
             # 却读不出来 = 本机那份可信基准处于不可信状态，必须拒装（fail-closed）。旧实现
             # warning 后 return True 放行——唯一一道完整性检查在磁盘异常时静默失效（官方
@@ -316,11 +371,32 @@ def _check_or_record_zip_sha256(
     return True
 
 
+# 删除本次下载的临时压缩包（L-13，2026-10-18）。幂等：不存在即什么都不做。
+# 为什么删不掉要**静默吞掉** OSError、不留日志：本函数的唯一场景是「系统 PATH 里没有 ffmpeg」时的
+#   自动安装，删不掉临时包属清理失败而不是安装失败——升级成异常会穿出「安装失败只返回 False、不抛」
+#   的既有契约（见模块头「设计取舍」），升级成 warning 则会在磁盘只读/文件被占用的机器上每轮启动
+#   刷一条与结果无关的噪音，还要为它新增一条四目录 msgid。形态与同目录内的 `_discard_master_zip`
+#   （src/ffmpeg_master_download.py）以及本函数内三条既有内联 unlink 逐字一致（那边同样是
+#   `except OSError: pass`），三类实现不并列第二套口径。
+# 真正的风险是**残留**：gyan.dev 的 essentials 包约 90MB、BtbN master 约 190MB，下载中断或解压抛错
+#   后若不删，程序目录就长期躺着一个「看着像已下载完成」的半截包——与本仓「残缺/非压缩包不得留在
+#   目录里被后续运行当成已下载」的既有口径冲突（见 download_ffmpeg_official 里的形态守卫段注释）。
+def _discard_official_zip(zip_path: Path) -> None:
+    if not zip_path.exists():
+        return
+    try:
+        zip_path.unlink()
+    except OSError:
+        pass
+
+
 def download_ffmpeg_official(url: str, dest_dir: str) -> bool:
     # 从官方源下载并安装 FFmpeg (Windows)
+    # L-13（2026-10-18）：临时包路径必须先于 try 求值，函数末尾的 finally 才能在**所有**出口
+    # （含两个 except 分支）引用到它；原先它写在 try 的第一行，finally 里直接读会撞 UnboundLocalError
+    # 风险（dest_dir 拼接本身不会抛，但把它放在 try 内就等于「异常出口可能没有这个名字」）。
+    zip_file_path = Path(dest_dir) / "ffmpeg_official_temp.zip"
     try:
-        zip_file_path = Path(dest_dir) / "ffmpeg_official_temp.zip"
-
         # P-1：下载**前**先取官方公布的期望哈希。放在前面而不是后面，是为了在上游文档已不可达 /
         # 已被替换时少拉一次几百 MB；比对对象仍是同一 URL 的当前构建（上游版本轮转的窗口
         # 在两种顺序下都存在，区别只是「白下载一次」与「白等一次」）。
@@ -404,8 +480,11 @@ def download_ffmpeg_official(url: str, dest_dir: str) -> bool:
         # 更新 PATH 并验证安装
         # 把 ffmpeg 目录前置注入 PATH，本进程及子进程后续 `ffmpeg` 调用都命中新装文件（覆盖系统其它同名项）。
         # 先注入再校验，校验失败也保留注入——无副作用（该目录即安装产物）。
+        # L-15：本行刚装完就真跑一次 ffmpeg.exe，Windows 无控制台形态下不传 startupinfo 会闪窗。
         os.environ["PATH"] = ffmpeg_path + os.pathsep + (current_env_path or "")
-        result = subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=30)
+        result = subprocess.run(
+            ["ffmpeg", "-version"], capture_output=True, timeout=30, startupinfo=_win_startup_info()
+        )
         if result.returncode == 0:
             logger.debug("ffmpeg (official) installation was successful")
             return True
@@ -419,6 +498,19 @@ def download_ffmpeg_official(url: str, dest_dir: str) -> bool:
     except Exception as e:
         logger.error(i18n.tr("Official ffmpeg installation failed: {type_name} - {e}", type_name=type(e).__name__, e=e))
         return False
+    finally:
+        # L-13（2026-10-18）：出口统一清理。此前只有三条「判定失败」出口各自内联 unlink
+        # （非压缩包 / 哈希不符 / 成功后清临时文件），而**异常**出口一条都没删：
+        # ① 下载中断（requests 读取期抛错，或写盘 OSError）→ except 分支返 False、半截包留下；
+        # ② unzip_file 抛解压炸弹/损坏 → 同上；另有 ③ bin 目录里找不到 ffmpeg.exe 的 return False
+        #   （在 with TemporaryDirectory 块内直接返回，跳过后面的清理）与 ④ copytree/复核抛错。
+        #   报告点名的是 ①②两条，实测共四条出口漏删（gyan.dev 包约 90MB、master 约 190MB）。
+        # finally 覆盖全部路径且与三条既有内联 unlink 幂等共存（那三条刻意保留：它们各自绑着
+        # 「为什么这一支必须立刻删」的说明，见上方形态守卫段），存在即删、不存在即 no-op。
+        # 回归锁：tests/test_ffmpeg_install.py::TestOfficialDownload
+        # ::test_interrupted_download_unlinks_temp_zip / ::test_unzip_failure_unlinks_temp_zip
+        # ::test_missing_bin_dir_unlinks_temp_zip。
+        _discard_official_zip(zip_file_path)
 
 
 def install_ffmpeg_official_windows() -> bool:
@@ -559,6 +651,23 @@ def install_ffmpeg_linux() -> bool:
         is_RHS = False
     except Exception as e:
         logger.error(i18n.tr("An error occurred while trying to install ffmpeg using yum: {e}", e=e))
+        # L-14（2026-10-18）：本分支原先只打日志、不改 is_RHS，于是「yum 在位但 run() 抛非
+        # FileNotFoundError 异常」（TimeoutExpired——yum 挂在仓库同步上；PermissionError——非 root
+        # 却试图写 yum 缓存；以及 result.stderr 形态异常带来的 AttributeError 等）会跳过 apt 分支、
+        # 直接落到函数末尾的直下兜底，与该处自述的顺序判据「直下兜底**只能在** yum、apt 两条包
+        # 管理器路径都试过且都没装上之后进行」正相反（MIN-24④ 只把回退补在 returncode!=0 那一支，
+        # 异常这一支是同族漏网）。is_RHS 的语义就是「还要不要试 apt」，异常轮同样属「没装上」，
+        # 故一并置 False。代价可控：RHEL 系上 apt 本就不存在，只会多一条「apt command not found」
+        # 的既有 error 日志，随后照旧落直下兜底/手动提示，不会静默成功。
+        # [行为变更] 本分支此前被 tests/test_ffmpeg_install.py::TestLinuxExtraBranches
+        # ::test_yum_probe_crash_keeps_rhs_semantics 当作「既有语义」钉住（断言 apt 不被触达）；
+        # 该断言锁的是本条要修的缺陷本身，已随 L-14 改判为「yum 抛错后必须仍试 apt」。
+        # 副作用说明：改完后走到 `if not is_RHS:` 时该标志恒为 False（yum 成功那一支已 return），
+        # 守卫成为形式上的恒真判断——刻意保留而不删，它仍是「两条包管理器路径」这一结构的落点，
+        # 将来若在 yum 块再增出口，该守卫会继续生效。
+        # 回归锁：tests/test_ffmpeg_install.py::TestLinuxExtraBranches
+        # ::test_yum_probe_crash_still_tries_apt。
+        is_RHS = False
 
     # 尝试 apt (Debian/Ubuntu)
     if not is_RHS:
@@ -705,7 +814,11 @@ def check_ffmpeg_installed() -> bool:
         # （PATH 命中损坏/被占用的 ffmpeg、网络文件系统上的可执行档、杀毒软件
         # 拦截扫描等）subprocess.run 会无限阻塞，把整个启动流程挂死。
         # 版本探测是毫秒级操作，给 15 秒已远超正常耗时。
-        result = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True, timeout=15)
+        # L-15：startupinfo 用来抑制 Windows 无控制台形态下每次探测闪出的子进程窗口（判据见
+        # _win_startup_info；本行是本模块被启动流程调用最频繁的一处探测）。
+        result = subprocess.run(
+            ["ffmpeg", "-version"], capture_output=True, text=True, timeout=15, startupinfo=_win_startup_info()
+        )
         version = result.stdout.strip()
         if result.returncode == 0 and version:
             return True

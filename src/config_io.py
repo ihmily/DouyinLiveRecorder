@@ -42,6 +42,8 @@ def _rewrite_line_by_match(text_line: str, old_str: str, new_str: str) -> str | 
 
 # 把 file_path 中所有 old_str 替换为 new_str（start_str 非空时给命中行加该前缀，如 "#" 注释掉），
 # 顺带去重相同行；返回实际生效的字符串（失败时返回 old_str）
+# [M-07 2026-10-19 补] 「失败」含「old_str 未命中任何行」：此时不落盘、返回 old_str。
+# 旧实现未命中也照样整文件重写并返回 new_str，与「替换成功」同形，依赖负信号的调用方会拿到假成功。
 def update_file(file_path: str, old_str: str, new_str: str, start_str: str | None = None) -> str | None:
     if old_str == new_str and start_str is None:
         return old_str
@@ -50,6 +52,11 @@ def update_file(file_path: str, old_str: str, new_str: str, start_str: str | Non
         # 2026-09-12 审查（低危 6.1）：原先用 list 做成员判定是 O(n)，80+ 房间时退化为 O(N²)；
         # 换 set 后仍是 O(1)，且「只记录是否见过」的用法天然保持首次出现顺序
         seen: set[str] = set()
+        # M-07（2026-10-19）：是否真的命中过至少一行。必须与 file_data 分开记——去重会让
+        # 「一行没命中但内容被重写」这件事在结果文本上完全看不出来，而调用方（main.py 的
+        # `update_file(...) or url`、web_api 的 MIN-2243「失败返回 old_str」负信号契约）
+        # 只认返回值，区分不了「未命中」与「替换成功」两种形态。
+        matched = False
         try:
             # newline=""：读写均不做换行符翻译，保留文件原有的 \n / \r\n 风格，
             # 配合下方原子写实现字节级 round-trip（Windows 的 CRLF 不会被 universal newlines 改成 LF）
@@ -57,6 +64,7 @@ def update_file(file_path: str, old_str: str, new_str: str, start_str: str | Non
                 for text_line in f:
                     rewritten = _rewrite_line_by_match(text_line, old_str, new_str)
                     if rewritten is not None:
+                        matched = True
                         text_line = f"{start_str}{rewritten}" if start_str else rewritten
                     if text_line not in seen:
                         seen.add(text_line)
@@ -81,6 +89,18 @@ def update_file(file_path: str, old_str: str, new_str: str, start_str: str | Non
                 return old_str
             return old_str
         if not file_data:
+            return old_str
+        # M-07（2026-10-19）：old_str 在文件里一行都没命中 → **不落盘**并返回 old_str。
+        # 旧实现此处会把「原样读回来的内容」再原子重写一遍并返回 new_str，两个后果：
+        #   ① 调用方（main.py 的 `url = update_file(...) or url`、web_api 端点按 MIN-2243
+        #      「失败返回 old_str」做的负信号裁决）把「没改到任何东西」读成「已写入」，
+        #      面板回报成功而配置行其实还是旧的；
+        #   ② 无谓地刷新配置文件 mtime、并把 main.ini_URL_content 快照推进到一份「其实没发生
+        #      变化」的内容，而 mtime 正是 GUI/主循环热加载与备份线程的触发判据。
+        # 与同文件 delete_line 的「未命中不写文件」（SEV-05）保持同一口径。
+        # 注意本判据只看「段级/整行是否命中」，不看内容是否真的变了：`old_str == new_str` 配
+        # `start_str="#"` 的注释形态（main.py 的未知链接注释路径）内容逐字不变但必须落盘。
+        if not matched:
             return old_str
         joined = "".join(file_data)
         # 2026-09-12 审查 6.1：原 open(..., "w") 是 truncate+write 的非原子写，读方（主循环、GUI）
@@ -376,8 +396,11 @@ def _harden_permissions(path: str) -> None:
         pass
 
 
-# 备份配置文件到 backup_config 目录；异常内部吞掉，无返回值
-def backup_file(file_path: str, backup_dir_path: str, limit_counts: int = 6) -> None:
+# 备份配置文件到 backup_config 目录；返回是否真的落成了备份（False = 建目录/写入/复制任一环节抛错）。
+# [M-10 2026-10-19 补] 旧签名是 `-> None` 且异常全吞，backup_file_start 因此无条件推进 MD5 基线：
+# 某一次写入失败（磁盘满 / 目标被占用 / 只读挂载）后，那份内容的版本就**永久**没有备份，
+# 而基线已把它记成「已备份」——正是备份机制要避免的形态。现在失败一律返回 False 交调用方决定重试。
+def backup_file(file_path: str, backup_dir_path: str, limit_counts: int = 6) -> bool:
     try:
         if not os.path.exists(backup_dir_path):
             os.makedirs(backup_dir_path)
@@ -416,8 +439,25 @@ def backup_file(file_path: str, backup_dir_path: str, limit_counts: int = 6) -> 
                 break
             _files = _files[1:]
 
+        # M-10：走到这里说明本次副本已经落盘（旋转删除失败只是多留一份旧备份，不影响本次备份成立，
+        # 故上面那圈刻意只 warning + break、不改成 return False）
+        return True
+
     except Exception as e:
         logger.error(i18n.tr("\r备份配置文件 {file_path} 失败：{e}", file_path=file_path, e=e))
+        # 第二条不是重复劳动：上面那条只记「现象 + {e}」（模板是既有的，动它会在四语目录里留下
+        # 孤儿键），这条记的是 M-10 新增的**后果与后续动作**——本轮不推进基线、下一轮同一份内容
+        # 还会再试一次；并按 AGENTS「异常日志必须带异常类型与上下文」补齐异常类型
+        # （中文 Windows 下部分异常 str() 为空，只打 {e} 会落成一条空白行）。
+        logger.warning(
+            i18n.tr(
+                "配置文件备份未成功，本轮不更新备份基线（下轮将重试）: {file_path} - {type_name}: {e}",
+                file_path=file_path,
+                type_name=type(e).__name__,
+                e=e,
+            )
+        )
+        return False
 
 
 # 守护线程主体：每 10 分钟比对 config.ini / URL_config.ini 的 MD5，仅在内容变化时备份
@@ -431,14 +471,18 @@ def backup_file_start() -> None:
             if os.path.exists(main.config_file):
                 new_config_md5 = utils.check_md5(main.config_file)
                 if new_config_md5 != config_md5:
-                    backup_file(main.config_file, main.backup_dir)
-                    config_md5 = new_config_md5
+                    # M-10（2026-10-19）：基线只在备份**真的落盘**后才推进。旧写法无条件推进，
+                    # 于是一次磁盘满/文件占用就让这份配置内容永久失去备份——基线已记成「备份过了」，
+                    # 之后内容不再变化就再也不会重试。不推进则下一轮（10 分钟后）仍会再试一次。
+                    if backup_file(main.config_file, main.backup_dir):
+                        config_md5 = new_config_md5
 
             if os.path.exists(main.url_config_file):
                 new_url_config_md5 = utils.check_md5(main.url_config_file)
                 if new_url_config_md5 != url_config_md5:
-                    backup_file(main.url_config_file, main.backup_dir)
-                    url_config_md5 = new_url_config_md5
+                    # 同上：URL_config.ini 侧同一条契约
+                    if backup_file(main.url_config_file, main.backup_dir):
+                        url_config_md5 = new_url_config_md5
         except Exception as e:
             logger.error(i18n.tr("备份配置文件失败, 错误信息: {e}", e=e))
         # sleep 必须在 try 外：否则 check_md5/backup 持续失败时异常分支不等待，

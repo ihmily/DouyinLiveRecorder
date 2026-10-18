@@ -2,10 +2,16 @@ var closeGeetest = !1, _a123 = "haija1c7", _b2x = "xiuhc2a6", _c3y = "anchc3a5",
 let CryptoJS = null;
 function EnmoliParamter() {
 
-    this._a123 = eval("_hf_constants1"),
-    this._b2x = eval("_hf_constants2"),
-    this._c3y = eval("_hf_constants3"),
-    this._dx34 = eval("_hf_constants4"),
+    // L-25（2026-10-19，CODE_REVIEW_2026-10-18）：原写法为 `this._a123 = eval("_hf_constants1")` 等四处 eval。
+    // 被求值的四个名字是本文件第 1 行 var 声明的同作用域静态字符串常量（非动态拼出的名字、也不依赖
+    // 运行期注入），直接引用与 eval 逐字等价（`node --check` 通过，且 sign() 对同一入参的输出前后一致），
+    // 而 eval 面在本仓属「签名脚本可对外分发」的无必要攻击面（源码里任何字符串都进得了求值器），故摘除。
+    // 本文件其余混淆形态（属性名 _a123 与常量名 _hf_constants1 刻意错位、aa/ad/ae… 单字母方法名）
+    // 属站方原样拷贝、参与签名链 bsq→pf→as→brm→cls→pt 的取值语义，一律不动。
+    this._a123 = _hf_constants1,
+    this._b2x = _hf_constants2,
+    this._c3y = _hf_constants3,
+    this._dx34 = _hf_constants4,
     this.getA123 = function() {
         return this._a123
     }

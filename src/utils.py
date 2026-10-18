@@ -10,6 +10,7 @@ import os
 import random
 import re
 import shutil
+import signal
 import stat
 import string
 import subprocess
@@ -91,8 +92,14 @@ _JS_SHA256_EXPECTED: dict[str, str] = {
     # haixiu.js 2026-09-21 重算（MIN-N39）：尾部注释样例换成 <REDACTED> 占位 + 删除引用 jQuery $
     # 的 bnu/bn 死代码（均为注释/死代码级改动，签名链路 bsq→pf→as→brm→cls→pt 未动），旧值作废。
     # 口径同下。
-    "haixiu.js": "20814a32fd9efa5e6f05490d1cf79b5258004918d2a204f7c1617822b8d79cd8",
-    "liveme.js": "48f75bfac464afa0469ddde4a5281db72274dcb57b21b8b3e59a8980cf7b91c5",
+    # 2026-10-18 两值再次作废并重算（CODE_REVIEW_2026-10-18 L-24/L-25，均为非行为改动）：
+    # liveme.js 把注释里随源码分发的真实抓包素材（tongdun_black_box/lm_s_id/lm_s_str/vali/result）
+    # 换成 <REDACTED> 占位；haixiu.js 把构造器里 4 处 eval("<静态常量名>") 改为直接引用变量
+    # （逐个核实被 eval 的名字都是首行 var 声明的同作用域字符串字面量，非动态拼名、非运行期注入）。
+    # 两文件均经生产 execjs 入口对 HEAD 版与改后版实跑比对，返回键集合与签名值逐项相同。旧值作废：
+    # haixiu 20814a32…、liveme 48f75bfa…。口径与本表校验侧一致 = 对 .js 的**原始字节**求 SHA256。
+    "haixiu.js": "e6ad6ce966868c56e08f3ae78056467ecdba38060692e47d536ad2210ac354c5",
+    "liveme.js": "7fad3e96f646f118877c6f3e4ae5bd3c2571c02fb5580952c2edd67aba6dde38",
     # migu.js 2026-09-21 重算：已按补-03/补-04 之后的 wasm 接口重写，旧值 01bf22bd… 不再匹配。
     # 口径与本表校验侧一致 = 对 *.js 的**原始字节**求 SHA256（rb 读取，不受 CRLF/LF 转换影响）
     "migu.js": "65d9ebedad8a7ddd830175c989440c2d5b3770bc3913f965af6930d2a9e2c39a",
@@ -216,9 +223,91 @@ async def run_js_async(js_path: str, func_name: str, *args: object, timeout: flo
     return await asyncio.wait_for(asyncio.to_thread(_sync_call), timeout=timeout)
 
 
+# ── node 子进程超时后的进程树回收（L-19，2026-10-19）────────────────
+# 与 src/notify.py 的 _kill_process_tree 同一套口径（POSIX: start_new_session + killpg；
+# Windows: taskkill /T /F 一律 argv 列表、禁 shell=True；任一步失败退化到 kill 直接子进程）。
+# **刻意不 import notify 那份实现**：notify 顶层 `import main`（要用 main.os_type / 推送配置），
+# 而 utils 位于依赖链最底层，反向依赖会把整套录制引擎锁体系带进只读工具层。两份实现同构但各自
+# 独立（不是 AGENTS 意义上的「孪生副本」——那种副本指的是 scripts/douyin_live_recorder_standalone.py），
+# 因此改这里的回收判据时**须一并核对 src/notify.py 的对应分支**，两边注释互相点名。
+# 平台判定做成模块级常量而不是函数里就地读 os.name：用例可
+# monkeypatch.setattr(utils_module, "_NODE_TREE_KILL_VIA_TASKKILL", True) 让 Windows 分支
+# 在 Linux CI 上真实执行（AGENTS「平台专属分支的测试不得靠 skipif 让 CI 跳过」）。
+_NODE_TREE_KILL_VIA_TASKKILL = os.name == "nt"
+
+# taskkill 自身的时限（秒）：不得让「回收进程树」变成第二个挂起点（与 notify 同值）。
+_NODE_TREE_KILL_TIMEOUT_SECONDS = 5.0
+
+# 超时后收尸的时限（秒）。必须收尸：Popen.__del__ 见到 returncode 仍为 None 就发
+# ResourceWarning("subprocess ... is still running")，本仓测试门禁是「pytest 0 警告」，
+# 挂死一次就多一条无法归因的告警；但等待一律带上限——无界等待正是本次要消灭的形态。
+_NODE_REAP_TIMEOUT_SECONDS = 5.0
+
+
+# POSIX 进程组回收：node 以 start_new_session=True 启动 ⇒ 自成会话，进程组 ID == 子进程 PID，
+# killpg 一次收掉脚本 + 它起的全部孙进程（只 kill 直接子进程会留下握着管道写端的孙进程）。
+# os.killpg/os.getpgid 与 signal.SIGKILL 都是 POSIX-only 符号（typeshed 在 win32 下不导出它们），
+# 必须用 sys.platform **字面量**早返回门控，本机 mypy（win32）与 `mypy --platform linux` /
+# `mypy --platform win32` 才都能过；门控方向写反静态检查发现不了，由
+# tests/test_utils.py::TestRunNodeScriptTimeoutBudget::test_posix_gate_direction_is_locked_in_source
+# 断言「早返回行在 killpg 行之前且比较的是 == "win32"」锁住（与 notify 同型）。
+def _kill_posix_process_group(pid: int) -> None:
+    if sys.platform == "win32":
+        return
+    os.killpg(os.getpgid(pid), signal.SIGKILL)
+
+
+# 超时后回收**整棵进程树**并收尸；任何失败一律退化到只杀直接子进程，绝不向调用方抛出——
+# 本函数的职责只是清理，超时语义由此后调用方继续上抛的 TimeoutExpired 决定。
+def _kill_node_process_tree(process: subprocess.Popen[bytes], script_name: str) -> None:
+    try:
+        if _NODE_TREE_KILL_VIA_TASKKILL:
+            # Windows：taskkill /T（递归子树）/F（强制）。argv 列表调用、禁 shell=True；
+            # 输出不参与判定，capture_output 后按字节原样丢弃、**不做解码**（中文 Windows 上
+            # taskkill 按 GBK 码页回显本地化消息，AGENTS「探测子进程输出一律按字节比较」同源）。
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(process.pid)],
+                capture_output=True,
+                timeout=_NODE_TREE_KILL_TIMEOUT_SECONDS,
+                check=False,
+            )
+        else:
+            _kill_posix_process_group(process.pid)
+    except Exception as e:
+        # 典型落点：Linux CI 上被强制走 Windows 分支时压根没有 taskkill（FileNotFoundError）、
+        # taskkill 自身超时、孙进程已自行退出（ProcessLookupError）。留痕但不改写结果——
+        # 下面 finally 仍会 kill + wait 直接子进程。script_name 只传 basename，路径里可能带的
+        # 用户目录名不进日志（凭据红线同源的窄化做法，无需再过 mask_credentials）。
+        logger.warning(
+            i18n.tr(
+                "回收 node 签名子进程树失败: {script} - {type_name}: {e}",
+                script=script_name,
+                type_name=type(e).__name__,
+                e=e,
+            )
+        )
+    finally:
+        try:
+            process.kill()
+        except OSError:
+            # 进程已自行退出（ProcessLookupError 是 OSError 子类）正是期望结果，无需上报
+            pass
+        # 只 wait、**绝不再读一次管道**：subprocess.run 的超时分支正是在 kill 后又调了一次
+        # 不带超时的 communicate() 才永久挂住的（L-19 的根因）。
+        try:
+            process.wait(timeout=_NODE_REAP_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            # SIGKILL 尚未生效（不可中断睡眠 / 任务管理器挂住）：在这里继续等就等于把一次
+            # 挂死换成另一次挂死，故按上限放手，交给 CPython 的活跃子进程回收机制兜底。
+            pass
+
+
 async def run_node_script_async(script_path: str, *args: str, timeout: float = 30.0) -> str:
     # 异步执行 node 脚本（subprocess.run 阻塞段丢线程池，事件循环不被冻结）；咪咕签名等
     # 「整段脚本 + 命令行参数」形态走此入口。
+    # [L-19 2026-10-19 更正] 本行原文说的 subprocess.run 已换成自管 Popen + communicate(timeout)：
+    # run 的 timeout 分支在 Windows 上 kill 直接子进程后还会调一次**不带超时**的 communicate()，
+    # 孙进程握着管道写端时那次读取永远等不到 EOF——即本函数自述要防的那类静默挂死。
     #
     # MI-25：本入口同样做脚本哈希校验。原先 _check_js_hash 只在 get_compiled_js（execjs 编译
     # 路径）内被调用，而 migu.js 是唯一走本入口的脚本——即「整段脚本直接交给 node 执行」这
@@ -237,18 +326,48 @@ async def run_node_script_async(script_path: str, *args: str, timeout: float = 3
         with open(script_path, "rb") as f:
             raw = f.read()
         _check_js_hash(script_path, raw)
-        # input=bytes 与 text=True 互斥，故这里按字节捕获再显式解码 UTF-8
-        proc = subprocess.run(
-            ["node", "-", *args],
-            input=raw,
-            capture_output=True,
-            check=True,
-            timeout=timeout,
-        )
-        stdout: bytes = proc.stdout or b""
-        return stdout.decode("utf-8").strip()
+        argv = ["node", "-", *args]
+        if _NODE_TREE_KILL_VIA_TASKKILL:
+            # Windows：不传 start_new_session（CPython 的 Windows 侧那是
+            # unused_start_new_session，传了零收益还引入 POSIX 语义），进程树一律交 taskkill /T。
+            proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        else:
+            # POSIX：让 node 自成会话/进程组 ⇒ _kill_posix_process_group 的 killpg 能一次收掉
+            # 整棵树（孙进程继承着 stdout 管道的写端，只 kill 直接子进程时永远读不到 EOF）。
+            proc = subprocess.Popen(
+                argv,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+            )
+        try:
+            stdout, _stderr = proc.communicate(input=raw, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # 回收整棵树后**原样上抛**：与 run_js_async 一致，本函数不吞超时（吞了会让熔断器
+            # 看不到坏线路），超时语义交调用方（spider._get_dd_calcu 一律转 ProgramError）。
+            _kill_node_process_tree(proc, os.path.basename(script_path))
+            raise
+        if proc.returncode != 0:
+            # 与旧实现 subprocess.run(check=True) 同契约：非零退出抛 CalledProcessError，
+            # 由调用方转成平台错误（不得在这里静默返回空串，那会被下游当成「签名为空」的
+            # 另一种故障形态）。
+            raise subprocess.CalledProcessError(proc.returncode, argv)
+        # input=bytes 与 text=True 互斥，故这里按字节捕获再显式解码 UTF-8（与旧实现同口径）
+        out: bytes = stdout or b""
+        return out.decode("utf-8").strip()
 
-    return await asyncio.to_thread(_sync_run)
+    # L-19：超时预算双保险，形态与本文件 run_js_async 逐字对齐（两层缺一即留洞）——
+    #   ① 内层 communicate(timeout=) 是唯一能真正回收 node 进程树的一层，但它只管子进程与
+    #      本线程，管不到本协程；
+    #   ② 外层 asyncio.wait_for 管 await 侧：阻塞段跑在 asyncio.to_thread 的线程里，而**线程
+    #      不可取消**，① 一旦不生效（管道被孙进程拖住、未来有人把执行方式改回不带超时的形态、
+    #      甚至 Popen 构造本身阻塞）await 就永久挂住。本仓房间线程模型是「每房间一个线程 +
+    #      各自 asyncio.run 逐轮驱动」，挂死即该轮永不返回、且**不归还网络信号量**（main.py 侧
+    #      `with semaphore: asyncio.run(...)`），单个房间就能把调度容量永久吃掉一格。
+    # 外层预算刻意与内层同值（不额外加宽限）：调用方拿到的最坏等待就是 timeout。
+    # 两类超时异常（asyncio.TimeoutError / 内层 TimeoutExpired）一律**上抛**，不在本函数里降级。
+    return await asyncio.wait_for(asyncio.to_thread(_sync_run), timeout=timeout)
 
 
 # 优先使用 exejs（PyExecJS 的活跃维护继任者），未安装时回退到 PyExecJS
@@ -456,16 +575,41 @@ def dict_to_cookie_str(cookies_dict: Mapping[str, object]) -> str:
     return cookie_str
 
 
+# ini 解析器的唯一构造入口：M-08（2026-10-19）起 read_ini_value 与 update_config 都改由它取。
+# 为什么必须是 src/config_read.py::tolerant_config_parser（strict=False + interpolation=None），
+# 而不是就地写 configparser.ConfigParser(interpolation=None)：后者 strict 默认 True，遇到
+# 「同一节内落出两行同名键」（2026-10-17 在本仓 config/config.ini 的 [录制设置] 实测到过）时在
+# read() 里就抛 DuplicateOptionError，于是——
+#   · read_ini_value 把它吞成一条 warning 后返回 None（调用方以为「键不存在」）；
+#   · update_config 更早退，**整份写回流程终止**。
+# 后果是 [Cookie]/[Authorization] 的 cookie/token 刷新在这种配置形态下**永远写不回**，用户只看到
+# 一条「Error occurred while reading the configuration file」。读取侧的容错层早已收敛到
+# config_read（AGENTS「配置键名、布尔口径与 SSL 验证」），这两处正是那份「尚未纳入」清单里的
+# src/utils.py×2，本次沿既有路线把它纳入。
+# preserve_case 取默认 False（而不是 GUI 侧的恒等 optionxform）：这两处历史上用的就是默认
+# optionxform（键名一律转小写），`read_ini_value(..., "GUI", "Gui_Font")` 这类大小写混排入参靠的
+# 正是「转小写后比较」；改成保留大小写会把键匹配口径从大小写不敏感变成敏感，属行为变更、不在本次范围。
+# **延迟导入是硬约束**：src/config_read → src/web_config → src/utils 是既有依赖链（web_config 顶层
+# `from src.utils import atomic_write_text`），把 config_read 提到本模块顶层 import 会构成导入环
+# （环里 utils 只执行到一半，atomic_write_text 尚未定义 → ImportError）。函数内 import 首次解析后
+# 即进 sys.modules 缓存，后续调用只是一次字典查找，成本可忽略。
+def _tolerant_ini_parser() -> configparser.ConfigParser:
+    from src.config_read import tolerant_config_parser
+
+    return tolerant_config_parser()
+
+
 def read_ini_value(file_path: str | Path, section: str, key: str) -> str | None:
     # 按**文件路径**读取 ini 配置项，每次调用重新解析文件、不写回、缺键返回 None。
     # 关闭插值：值中的裸 %（如 cookie、时间格式）不应触发 InterpolationSyntaxError。
+    # M-08（2026-10-19）：解析器改为 _tolerant_ini_parser()，同节重复键不再让整份文件读不出。
     #
     # 2026-09-12 重命名（CODE_REVIEW_FIX_1 F-16）：原名 `read_config_value`，与
     # `src/config_io.read_config_value(config_parser, section, option, default_value)`
     # **同名但签名与语义都不同**——后者接收已解析的 parser、缺键会补写默认值回配置文件并返回
     # str。两个同名函数在 main.py（约 70 处调用 config_io 版）与 spider.py 间混用，极易传错参数
     # （kwargs 数量与首个参数类型都不同）。因 config_io 版调用点过多，改本侧（仅 spider.py 一处）。
-    config = configparser.ConfigParser(interpolation=None)
+    config = _tolerant_ini_parser()
 
     try:
         _ = config.read(file_path, encoding="utf-8-sig")
@@ -620,7 +764,12 @@ def update_config(file_path: str | Path, section: str, key: str, new_value: str)
     #   [历史注] AGENTS 里「utils.update_config 仍是 open(path,"w") 直写、其只读用例可沿用
     #   chmod 断言失败」的表述针对 WD-15 之前的实现，现已不成立，不得据此互推 config_io。
     with _url_config_write_lock():
-        config = configparser.ConfigParser(interpolation=None)
+        # M-08（2026-10-19）：解析器换成 _tolerant_ini_parser()。原先的 strict=True 形态下，
+        # 同节重复键让 read() 直接抛 DuplicateOptionError → 被下面的 except 吞成 warning 并
+        # return，**cookie/token 的刷新永远写不回**；容错读取后重复键按「最后一次取值」折叠进
+        # 内存态，写回产物因此每键只剩一行，仍能被 strict 解析器整份读出（回归锁见
+        # tests/test_utils.py::TestDuplicateKeyWriteback）。
+        config = _tolerant_ini_parser()
 
         try:
             _ = config.read(file_path, encoding="utf-8-sig")

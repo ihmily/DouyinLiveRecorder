@@ -384,6 +384,63 @@ def _probe_client(timeout: int, proxy_addr: str | None, verify: bool) -> httpx.C
     )
 
 
+# ── L-11（2026-10-19，CODE_REVIEW_2026-10-18）：探针读取响应体必须有上限，且是唯一入口 ──
+# 本模块四处探针（_probe_hls_segment 的播放列表 GET / 变体列表 GET / 媒体分片 Range-GET，
+# _validate_stream_url 的 m3u8 Range-GET）此前一律走 client.get()：httpx 会把响应体**一次性读满**
+# 才返回，而四处里只有前两处真的要看正文（解析分片行），后两处只看状态码——正文一个字节都不需要。
+# 风险面不是「列表有点大」而是 Range 只是请求：不遵守 Range 的边缘节点（2026-09-13 斗鱼 hw 事故
+# 注记里同一批 f19c*.livehwc4 节点形态）会把 .ts 当整段流媒体一直发，于是每个房间线程每轮选源
+# 都能吃进任意大的 body，80+ 房间并发时是无界内存，且日志上一条都看不出来。
+# 真实播放列表正文远小于 64 KB（斗鱼/虎牙实测单行分片列表约 2~8 KB），取满即截断也够解析末行分片。
+_PROBE_BODY_LIMIT = 65_536
+
+
+class _ProbeResponse:
+    # 探针读取结果：只暴露判定与日志要用的三个字段。刻意不直接返回 httpx.Response——
+    # 那会让调用方以为正文是全量（本函数的 text 可能是被上限截断过的）。
+    def __init__(self, status_code: int, headers: Mapping[str, str], text: str) -> None:
+        self.status_code = status_code
+        self.headers = headers
+        self.text = text
+
+
+def _bounded_probe_get(
+    client: httpx.Client,
+    url: str,
+    headers: Mapping[str, str],
+    *,
+    read_body: bool = True,
+    body_limit: int = _PROBE_BODY_LIMIT,
+) -> _ProbeResponse:
+    # 流式打开、最多读 body_limit 字节即断开。判定所需的 status_code / headers 与 client.get()
+    # 完全一致，**不改任何判定分支**（HEAD→Range-GET 的 200/206 基线、401/403 原样重试一次再定罪、
+    # 末位候选仅告警放行、退避与节流一律留在调用点）。三条必须成立的接线形态：
+    # ① 逐跳内网复检：response 钩子在**响应头到达时**触发（httpx 的 _send_handling_redirects 里
+    #    钩子早于任何正文读取），所以 RedirectHopRejected 仍从本函数原样抛到调用点既有的
+    #    except RedirectHopRejected 分支——本函数**刻意不接任何异常**，接了一次就等于把内部控制流
+    #    异常喂给「维持可达」的兜底（WP-J 登记的原始事故形态）。
+    # ② 客户端仍是调用方手里那一支：不新建第三处客户端、不按 (proxy, verify) 升级为模块级缓存、
+    #    复用作用域仍是单次选源（AGENTS「HTTP 客户端复用与连接管理」）。
+    # ③ 提前断开的那条连接由 httpcore 直接丢弃，keepalive 配置一字未动；「只读状态码不读正文」
+    #    这一形态在本模块已由 _confirm_get_ok 的流式复核跑在生产链路上，不是新引入的赌注。
+    with client.stream("GET", url, headers=dict(headers), follow_redirects=True) as resp:
+        if not read_body:
+            return _ProbeResponse(resp.status_code, resp.headers, "")
+        chunks: list[bytes] = []
+        total = 0
+        for chunk in resp.iter_bytes():
+            chunks.append(chunk)
+            total += len(chunk)
+            if total >= body_limit:
+                break
+        raw = b"".join(chunks)[:body_limit]
+        if not raw:
+            return _ProbeResponse(resp.status_code, resp.headers, "")
+        # 解码口径与改前读的 httpx Response.text 一致：charset 头优先、否则 utf-8、errors=replace
+        encoding = resp.encoding or "utf-8"
+        return _ProbeResponse(resp.status_code, resp.headers, raw.decode(encoding, errors="replace"))
+
+
 # ── 正文派生的第二跳请求（变体列表 / 媒体分片）的边界（MID-2231，2026-09-22）──
 # urljoin 对**绝对** URL 会整体丢弃 base，于是播放列表正文里的一行就能把下一跳指到任意 host；
 # 而 headers 里带着 get_record_headers(platform, url, cookies=…) 注入的用户 Cookie。httpx 只在
@@ -516,10 +573,12 @@ def _probe_hls_segment(
     from src.async_http import RedirectHopRejected
 
     try:
-        resp = client.get(playlist_url, headers=dict(headers), follow_redirects=True)
+        resp = _bounded_probe_get(client, playlist_url, headers)
         if resp.status_code != 200:
             return True  # 列表 GET 失败（HEAD/Range-GET 已通过）——不据此推翻，交由 ffmpeg
         text = resp.text or ""
+        # L-11：正文经 _bounded_probe_get 的有界读取（真实列表远小于上限），解析不出分片时仍走
+        # 下方既有的「保守维持列表可达」分支，判定结论与改前逐字一致
         # master playlist：跟随带宽最高的变体（见 _pick_master_variant），最多两层，
         # 覆盖「变体→子列表」的嵌套形态如斗鱼 hw
         for _ in range(2):
@@ -540,10 +599,10 @@ def _probe_hls_segment(
                 # 内网地址经播放列表正文交给 ffmpeg -i（与下方 RedirectHopRejected 分支同一判据），
                 # 候选判失败、回退下一候选。
                 return False
-            sub = client.get(
+            sub = _bounded_probe_get(
+                client,
                 variant_url,
-                headers=_headers_for_derived_hop(playlist_url, variant_url, headers),
-                follow_redirects=True,
+                _headers_for_derived_hop(playlist_url, variant_url, headers),
             )
             if sub.status_code != 200:
                 return True  # 子列表取不到——保守，不下分片结论
@@ -592,7 +651,7 @@ def _probe_hls_segment(
         # 多房间并发下对同一边缘 host 的分片探测同样存在毫秒级连击风控面
         _throttle_probe(seg_url)
         try:
-            seg_resp = client.get(seg_url, headers={**seg_headers, "Range": "bytes=0-0"}, follow_redirects=True)
+            seg_resp = _bounded_probe_get(client, seg_url, {**seg_headers, "Range": "bytes=0-0"}, read_body=False)
         except RedirectHopRejected:
             # WP-J：同上——分片探测的「按列表可达处理」兜底也不得吞掉内部控制流异常
             # （函数级说明见本文件上方 _probe_hls_segment 第一条 except RedirectHopRejected）。
@@ -861,11 +920,13 @@ def _validate_stream_url(
             # Range-GET 401/403 先隔 _recheck_delay() 原样重试一次再定罪（与 _confirm_get_ok 同语义：
             # 连击偶发 403、片刻后重试即 200，属探针误杀）。HLS 须尽力救回——斗鱼游客态 FLV 长连接
             # 约 70 秒被 CDN 掐断，HLS 逐段拉取免疫。
-            probe: httpx.Response | None = None  # 失败路径（last_resort/告警）需 Range-GET 结果；先置 None 避免未绑定
+            probe: _ProbeResponse | None = None  # 失败路径（last_resort/告警）需 Range-GET 结果；先置 None 避免未绑定
             for attempt in range(2):
                 # 显式合并 headers 与 Range（与 async_http.py 同语义）：客户端在候选间复用，
                 # Range 只能作为请求级头附加，不能覆盖录制所需的 UA/Referer/Cookie
-                probe = probe_client.get(url, headers={**headers, "Range": "bytes=0-0"}, follow_redirects=True)
+                # L-11：本跳只是可达性判定，正文一个字节都不需要（read_body=False），
+                # 不遵守 Range 的节点回多大的 body 都不会被读进内存；状态码/头的判定路径逐字未变
+                probe = _bounded_probe_get(probe_client, url, {**headers, "Range": "bytes=0-0"}, read_body=False)
                 if probe.status_code in (200, 206):
                     if attempt:
                         logger.debug(

@@ -43,9 +43,15 @@ class QualityPage(QWidget):
         stats_card = Card(shadow=False)
         stats_row = QHBoxLayout(stats_card)
         stats_row.setContentsMargins(8, 8, 8, 8)
+        # 三块统计标题是构建期定型的静态标签：M-14（2026-10-18）此前只在建时 tr() 一次，
+        # 切语言后停在旧语言。改走 set_text + T() 登记（构造标签与登记键同一 msgid），
+        # retranslate_all() 回填时按当前语言重设；数值面（set_value）是运行态、不进登记。
         self.stat_total = StatTile(i18n.tr("录制直播间"))
+        set_text(self.stat_total.title, T("录制直播间"))
         self.stat_ok = StatTile(i18n.tr("画质正常"))
+        set_text(self.stat_ok.title, T("画质正常"))
         self.stat_down = StatTile(i18n.tr("画质降级"))
+        set_text(self.stat_down.title, T("画质降级"))
         for tile in (self.stat_total, self.stat_ok, self.stat_down):
             stats_row.addWidget(tile)
         root.addWidget(stats_card)
@@ -76,11 +82,16 @@ class QualityPage(QWidget):
             i18n.tr("暂无录制中的直播间"),
             i18n.tr("启动录制后，将自动检测各直播间的实际画质是否与设置一致"),
         )
+        # 空态标题/描述同样是构建期定型的静态标签（M-14）：登记进重译表，切语言后回填。
+        set_text(self.empty.title, T("暂无录制中的直播间"))
+        set_text(self.empty.description, T("启动录制后，将自动检测各直播间的实际画质是否与设置一致"))
         # 与表格互斥且各自吃满剩余高度：空状态无 stretch 时只拿到 sizeHint 高度，
         # wordWrap 描述仍会被压到单行（EmptyState 内已固定宽，这里补齐垂直空间）。
         body.addWidget(self.empty, 1)
 
         self.refresh_btn = action_button(i18n.tr("立即刷新"))
+        # 按钮文案是静态标签：登记重译（M-14），构造标签与登记键同一 msgid。
+        set_text(self.refresh_btn, T("立即刷新"))
         action_row = QHBoxLayout()
         action_row.addStretch(1)
         action_row.addWidget(self.refresh_btn)
@@ -93,6 +104,13 @@ class QualityPage(QWidget):
     def bind_actions(self, on_refresh: Callable[[], None]) -> None:
         # 立即刷新 = 强制走一次 refresh()：解析是同步的，不需要等下一个状态周期
         connect_click(self.refresh_btn, on_refresh)
+
+    def retranslate_runtime(self) -> None:
+        # 语言切换后的运行态重刷（M-14）：表头与「同等/降级/正常」单元格在产生点 tr()，
+        # 但 refresh() 对行内容等值时短路返回——数据不变（多半就是不变）时旧语言会原地
+        # 常驻。清掉上一轮缓存强制走一次全量重建即可（统计数值面本就与语言无关）。
+        self._last_rows = None
+        self.refresh()
 
     def refresh(self) -> None:
         data = self._monitor.snapshot()

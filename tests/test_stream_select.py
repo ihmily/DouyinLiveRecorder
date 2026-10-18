@@ -32,8 +32,10 @@ from __future__ import annotations
 
 import ast
 import time
+import types
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Iterator, Literal, TypeGuard
+from typing import Any, Iterator, Literal, TypeGuard, cast
 from unittest.mock import patch
 
 import httpx
@@ -104,6 +106,36 @@ class _FakeResponse:
         # HLS 分片层探测需要读取播放列表正文（_probe_hls_segment 解析分片行）；
         # 缺省空串使未显式给出正文的旧用例落回「解析不出分片→保守放行」语义。
         self.text = text
+        # L-11（2026-10-19，CODE_REVIEW_2026-10-18）：探针读取正文改走 _bounded_probe_get 的
+        # 流式形态（带字节上限），本桩因此要能当「流式响应」用（上下文协议 + iter_bytes）。
+        # 刻意把正文**整段一次**交出、不在本桩里重实现「读满上限即断」的上界行为——
+        # 那条不变量由下方两条 _ChunkCountingStream / 真实 httpx + MockTransport 用例钉
+        # （测试不得自实现被测逻辑）。
+        self.encoding = "utf-8"
+
+    def __enter__(self) -> _FakeResponse:
+        return self
+
+    def __exit__(self, *_args: object) -> Literal[False]:
+        return False
+
+    def iter_bytes(self, _chunk_size: int | None = None) -> Iterator[bytes]:
+        yield (self.text or "").encode("utf-8")
+
+
+class _StreamAsGet:
+    # L-11：生产侧四处探针读取统一走 client.stream(...)（见 src/stream_select.py 的
+    # _bounded_probe_get）。假客户端用本 mixin 把**既有 get 的语义**原样暴露成流式形态——
+    # 同一份状态码/头/正文、同一个调用计数器与同一份请求头记录，因此旧用例里
+    # 「GET 调了几次 / 带了什么头」的断言逐字不变（改的只是调用入口的形态，不是判定）。
+    def get(self, url: str, headers: dict | None = None, follow_redirects: bool = True) -> _FakeResponse:
+        raise NotImplementedError  # 由混入方实现
+
+    def stream(
+        self, method: str, url: str, headers: dict | None = None, follow_redirects: bool = True
+    ) -> _FakeResponse:
+        assert method == "GET", method
+        return self.get(url, headers=headers, follow_redirects=follow_redirects)
 
 
 class _M3u8ProbeClient:
@@ -183,7 +215,7 @@ def test_non_last_resort_odd_status_rejected() -> None:
 def _m3u8_client_cls(get_statuses: list[int], get_types: list[str]) -> type[_M3u8ProbeClient]:
     # 构造 HEAD=405+text/html、Range-GET 按序返回预设状态码的假客户端；
     # get_calls 为类级计数器，供断言重试次数
-    class _C(_M3u8ProbeClient):
+    class _C(_M3u8ProbeClient, _StreamAsGet):
         get_calls = 0
 
         def __init__(self, *args: object, **kwargs: object) -> None:
@@ -284,7 +316,7 @@ class _FakeStream:
 def _hls_segment_client_cls(segment_status: int, media_body: str = _HLS_MEDIA_BODY) -> type:
     # 假客户端：HEAD 恒 200+mpegurl（进 m3u8 分片探测分支），播放列表按 URL 返回
     # master/媒体正文，媒体分片返回预设状态码（404=事故形态 / 200=健康）。
-    class _C:
+    class _C(_StreamAsGet):
         def __init__(self, *args: object, **kwargs: object) -> None:
             pass
 
@@ -338,12 +370,12 @@ def test_hls_empty_media_playlist_conservative_pass() -> None:
         assert _validate_stream_url(_M3U8_URL, last_resort=False) is True
 
 
-class _HlsDeadFlvLiveClient:
+class _HlsDeadFlvLiveClient(_StreamAsGet):
     # 端到端选源假客户端：m3u8 分片 404（事故形态），FLV 的 HEAD/GET 均 200（可用）
     def __init__(self, *args: object, **kwargs: object) -> None:
         pass
 
-    def __enter__(self) -> "_HlsDeadFlvLiveClient":
+    def __enter__(self) -> _HlsDeadFlvLiveClient:
         return self
 
     def __exit__(self, *_args: object) -> Literal[False]:
@@ -362,10 +394,12 @@ class _HlsDeadFlvLiveClient:
             return _FakeResponse(200, "application/vnd.apple.mpegurl", text=_HLS_MASTER_BODY)
         if "sub_m3u8" in url:
             return _FakeResponse(200, "application/vnd.apple.mpegurl", text=_HLS_MEDIA_BODY)
+        # L-11 之后 _confirm_get_ok（FLV GET 复核）与 m3u8 Range-GET 都经 stream()→本方法：
+        # FLV 必须与类注释一致地回 200（可用），否则「HLS 死、FLV 活」这条端到端锁会被
+        # 假客户端自己的形态打弯。分片（.ts）保持 404 = 事故形态。
+        if ".flv" in url.lower():
+            return _FakeResponse(200, "video/x-flv")
         return _FakeResponse(404, "video/mp2t")
-
-    def stream(self, method: str, url: str, headers: dict | None = None, follow_redirects: bool = True) -> _FakeStream:
-        return _FakeStream(200)
 
 
 def test_select_source_url_falls_back_to_flv_when_hls_segments_dead() -> None:
@@ -731,7 +765,7 @@ def test_select_source_url_shares_one_client_and_sends_headers_per_request() -> 
     # 单候选约 0.77ms vs 新建 Client + 单次探针约 15.9ms。
     # 配套前提：客户端复用后 UA / Referer / Cookie 不能再挂 client 级（否则各候选互相污染），
     # 必须逐请求下发——本例同时断言每个请求都带齐录制所需的三个头。
-    class _CountingClient:
+    class _CountingClient(_StreamAsGet):
         instantiated = 0
         close_calls = 0
 
@@ -1411,7 +1445,7 @@ class _PlaylistProbeClient:
 def _media_playlist_client(seg_status: int, playlist_text: str = _HLS_MEDIA_BODY) -> type[_PlaylistProbeClient]:
     # HEAD 恒 200+mpegurl；顶层播放列表返回 playlist_text，其下的 .m3u8（master 变体 /
     # 子列表）一律返回媒体列表正文；非 .m3u8（即分片）返回给定状态码
-    class _C(_PlaylistProbeClient):
+    class _C(_PlaylistProbeClient, _StreamAsGet):
         def __init__(self, *args: object, **kwargs: object) -> None:
             pass
 
@@ -1494,6 +1528,139 @@ def test_master_playlist_probes_highest_bandwidth_variant() -> None:
     assert not any("360.m3u8" in u for u in cls.requested), "最低档变体不应被探测"
     # 分片探测落在所选高档变体目录下
     assert any(u.startswith("https://high.example.com/") and ".ts?" in u for u in cls.requested)
+
+
+# ---------------------------------------------------------------------------
+# L-11 探针读取响应体必须有上限（2026-10-19，CODE_REVIEW_2026-10-18）
+# 事故形态：四处探针此前一律走 client.get()，httpx 会把响应体**一次性读满**才返回。
+# Range: bytes=0-0 只是「请求」，不遵守 Range 的边缘节点会把 .ts 当整段流媒体一直发，
+# 于是每个房间线程每轮选源都能吃进任意大的 body（80+ 房间并发＝无界内存，且零日志线索）。
+# 现统一走 src/stream_select._bounded_probe_get：流式打开、状态码/头照旧，
+# · 两跳 Range-GET（可达性判定）正文一个字节都不读；
+# · 播放列表/变体列表两跳只读到 _PROBE_BODY_LIMIT 即断。
+# 这三条用例一律用**真实 httpx + MockTransport**（打桩口径同
+# tests/test_sync_probe_internal_guard.py::_install_mock_transport：客户端仍由生产工厂
+# _probe_client 造出来、只把最底层 transport 换掉），因为「读到上限即断开」对假客户端
+# 没有可观测后果——假响应的正文是一次交出的整块。测试不重写任何判定规则。
+# ---------------------------------------------------------------------------
+
+_L11_CHUNK = b"z" * 4096
+_L11_ENDLESS_CHUNKS = 4000  # ≈16 MB：模拟「不遵守 Range、永不到头」的边缘节点形态
+
+
+class _CountingStream(httpx.SyncByteStream):
+    # 分块递送的大 body，并记下**被拉走**的字节数。生产侧早断 → 这个数就停在上限附近；
+    # 摘掉上界的那次变异（把 break 换成 no-op）会让它一路逼近 16 MB —— 这条尺子就是那把锁。
+    def __init__(self, first_chunk: bytes | None = None) -> None:
+        self.pulled = 0
+        self._first = first_chunk
+
+    def __iter__(self) -> Iterator[bytes]:
+        if self._first is not None:
+            self.pulled += len(self._first)
+            yield self._first
+        for _ in range(_L11_ENDLESS_CHUNKS):
+            self.pulled += len(_L11_CHUNK)
+            yield _L11_CHUNK
+
+    def close(self) -> None:
+        return None
+
+
+def _l11_install_transport(monkeypatch: pytest.MonkeyPatch, handler: Callable[[httpx.Request], httpx.Response]) -> None:
+    # 浅拷贝 httpx 成 shim、只替换被测模块命名空间里的引用（R1：禁改第三方/stdlib 模块本体）
+    httpx_shim = types.SimpleNamespace(**vars(httpx))
+
+    def _factory(*args: Any, **kwargs: Any) -> httpx.Client:
+        client = _REAL_SYNC_CLIENT(*args, **kwargs)
+        # 传了 proxy 时 httpx 会把代理传输装进 _mounts；清空让每一跳都落到 MockTransport 上
+        client._mounts = {}
+        client._transport = httpx.MockTransport(handler)
+        return client
+
+    httpx_shim.Client = _factory
+    monkeypatch.setattr(ss, "httpx", httpx_shim)
+
+
+def test_probe_range_get_never_reads_an_oversized_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 判定不变式：两跳 Range-GET（m3u8 列表本身 + 媒体分片）拿到的 body 从 8 字节变成 16 MB，
+    # 校验结论必须逐字相同（都判可达）；且这一体**根本没被读过**。
+    pulled: dict[str, _CountingStream] = {}
+
+    def _make_handler(oversize: bool) -> Callable[[httpx.Request], httpx.Response]:
+        def _handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "HEAD":
+                # 斗鱼 hw CDN 的真实形态：禁用 HEAD（405 + 错误页 content-type）→ 走 Range-GET 探测，
+                # 于是「列表 Range-GET」这一跳真的会被发出（HEAD 直接 200 时该跳会被整段绕过）
+                return httpx.Response(405, headers={"content-type": "text/html"})
+            if request.headers.get("range") == "bytes=0-0":
+                role = "playlist_range" if str(request.url) == _M3U8_URL else "segment"
+                if oversize:
+                    stream = _CountingStream()
+                    pulled[role] = stream
+                    return httpx.Response(200, headers={"content-type": "video/mp2t"}, stream=stream)
+                return httpx.Response(200, headers={"content-type": "video/mp2t"}, text="ok")
+            # 播放列表一跳恒给正常正文（本条只管 Range-GET 这一族的读取形态）
+            return httpx.Response(200, headers={"content-type": "application/vnd.apple.mpegurl"}, text=_HLS_MEDIA_BODY)
+
+        return _handler
+
+    verdicts: list[bool] = []
+    for oversize in (False, True):
+        pulled.clear()
+        _l11_install_transport(monkeypatch, _make_handler(oversize))
+        verdicts.append(_validate_stream_url(_M3U8_URL, last_resort=False))
+        if oversize:
+            assert set(pulled) == {"playlist_range", "segment"}, pulled
+            assert pulled["playlist_range"].pulled == 0, "列表 Range-GET 这一跳仍在读正文"
+            assert pulled["segment"].pulled == 0, "分片 Range-GET 这一跳仍在读正文"
+    assert verdicts == [True, True], verdicts
+
+
+def test_probe_playlist_read_stops_at_the_body_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 播放列表一跳要读正文解析分片行，但真实列表远小于上限：读到 _PROBE_BODY_LIMIT 即断开，
+    # 之后一节都不再拉。把上界换成 no-op 的那次变异会让 pulled 逼近 16 MB，本条转红。
+    pulled: dict[str, _CountingStream] = {}
+    header = _HLS_MEDIA_BODY.encode("utf-8")
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "HEAD":
+            return httpx.Response(200, headers={"content-type": "application/vnd.apple.mpegurl"})
+        if request.headers.get("range") == "bytes=0-0":
+            return httpx.Response(200, headers={"content-type": "video/mp2t"}, text="ok")
+        stream = _CountingStream(header)
+        pulled["playlist"] = stream
+        return httpx.Response(200, headers={"content-type": "application/vnd.apple.mpegurl"}, stream=stream)
+
+    _l11_install_transport(monkeypatch, _handler)
+    # 超限正文的判定结论与小正文一致（可达）：上界只截掉解析用不到的尾部
+    assert _validate_stream_url(_M3U8_URL, last_resort=False) is True
+    limit = ss._PROBE_BODY_LIMIT
+    assert limit <= pulled["playlist"].pulled <= limit + len(_L11_CHUNK), pulled["playlist"].pulled
+
+
+def test_bounded_probe_get_contract_with_fake_client() -> None:
+    # helper 自身的最小契约（不走网络）：read_body=False 时正文恒为空串、状态码与头原样带回；
+    # read_body=True 时正文按上限截断。两跳 Range-GET 的「不读正文」由此钉死，
+    # 不依赖上面两条真传输用例的分支顺序。
+    body = "#EXTM3U\n" + "a" * 5000
+
+    class _Client:
+        def stream(self, method: str, url: str, headers: dict | None = None, follow_redirects: bool = True) -> Any:
+            assert method == "GET" and url == "https://x/y.m3u8"
+            return _FakeResponse(206, "application/vnd.apple.mpegurl", text=body)
+
+    got = ss._bounded_probe_get(
+        cast(httpx.Client, _Client()), "https://x/y.m3u8", {"Range": "bytes=0-0"}, read_body=False
+    )
+    assert got.status_code == 206 and got.text == ""
+    assert got.headers.get("content-type") == "application/vnd.apple.mpegurl"
+
+    full = ss._bounded_probe_get(cast(httpx.Client, _Client()), "https://x/y.m3u8", {}, body_limit=1024)
+    assert full.text == body[:1024], len(full.text)
+    assert full.status_code == 206
 
 
 # ---------------------------------------------------------------------------
@@ -1601,7 +1768,7 @@ _REAL_SYNC_CLIENT = httpx.Client
 _REAL_ASYNC_CLIENT = httpx.AsyncClient
 
 
-class _ProxyContractClient:
+class _ProxyContractClient(_StreamAsGet):
     # 记录每支探针客户端收到的 proxy 实参，并立刻交给真实 httpx 判一次契约（构造后即关闭）。
     # HEAD 200 + mpegurl、正文为空 → _probe_hls_segment 解析不出分片、保守放行，故首候选即通过。
     # WP-J（2026-09-30）：形参签名必须跟住 src/stream_select.py 的 _probe_client —— 它现在多传一个
@@ -1811,6 +1978,27 @@ def _is_probe_client_call(node: ast.AST) -> bool:
     return isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_probe_client"
 
 
+# 本模块「发出一次探针请求」的全部形态。
+# L-11（2026-10-19，CODE_REVIEW_2026-10-18）新增 _bounded_probe_get：探针读取正文统一收进
+# 这个带字节上限的流式入口之后，「发探针」在 AST 里不再只表现为 client.head/get/stream 三种
+# 属性调用。判据本体必须跟着形态走——否则下面 (b)/(d) 两条结构锁的扫描面会静默变空
+# （(d) 自带「判据没扫到任何 try 即失效」的反向见证，正是为这种漂移准备的）。
+_PROBE_CLIENT_METHODS = {"head", "get", "stream"}
+
+
+def _is_probe_emit(node: ast.AST) -> TypeGuard[ast.Call]:
+    # 返回 TypeGuard 而非 bool：下面 (b) 的 min(n.lineno ...) 需要 ast.Call 收窄，
+    # 写 bool 会让产物退化成 list[AST] 并当场 mypy attr-defined（判据多出一份可漂移形态）。
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+        return (
+            node.func.attr in _PROBE_CLIENT_METHODS
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in {"client", "probe_client"}
+        )
+    # 函数形态：_bounded_probe_get(client, url, …)
+    return isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_bounded_probe_get"
+
+
 def _probe_client_proxy_argument(call: ast.Call) -> ast.expr | None:
     # 取 _probe_client 调用点的 proxy 实参：本模块两处都按**位置**传（第 2 个形参 proxy_addr），
     # 但关键字传法同样合法，两种都得认——只按 keyword 找会让位置实参悄悄逃过门禁（假绿）。
@@ -1936,10 +2124,10 @@ def test_probe_client_wiring_and_gate_coverage() -> None:
     ), "response 钩子必须出自 async_http 的同步工厂 build_sync_hop_guard（判定只有一份事实源）"
 
     # (b) 两处使用 client 的路径都在**发出第一个请求之前**过了初始 URL 内网判定：
-    #     · 自建分支（_validate_stream_url）：判定早于本函数内的第一次 client.head/get/stream
+    #     · 自建分支（_validate_stream_url）：判定早于本函数内的第一次探针发出
+    #       （形态见 _is_probe_emit：client.head/get/stream 与 _bounded_probe_get 都算）
     #     · 复用分支（select_source_url）：判定早于第一次把地址交给探针/ffmpeg 的 _validate_stream_url
     #       与 _accept_source 调用点
-    _CLIENT_METHODS = {"head", "get", "stream"}
     for name in ("_validate_stream_url", "select_source_url"):
         body = funcs[name]
         judged = [
@@ -1950,15 +2138,7 @@ def test_probe_client_wiring_and_gate_coverage() -> None:
             and n.func.id in ("internal_stream_target_reason", "redirect_hop_rejection_reason")
         ]
         assert judged, f"{name} 内没有初始 URL 内网判定（internal_stream_target_reason）"
-        emitted = [
-            n
-            for n in ast.walk(body)
-            if isinstance(n, ast.Call)
-            and isinstance(n.func, ast.Attribute)
-            and n.func.attr in _CLIENT_METHODS
-            and isinstance(n.func.value, ast.Name)
-            and n.func.value.id in {"client", "probe_client"}
-        ] + [
+        emitted = [n for n in ast.walk(body) if _is_probe_emit(n)] + [
             n
             for n in ast.walk(body)
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "_validate_stream_url"
@@ -1987,16 +2167,7 @@ def test_probe_client_wiring_and_gate_coverage() -> None:
     for name in ("_validate_stream_url", "_confirm_get_ok", "_probe_hls_segment"):
         guarded = 0
         for tr in [n for n in ast.walk(funcs[name]) if isinstance(n, ast.Try)]:
-            emits = [
-                n
-                for stmt in tr.body
-                for n in ast.walk(stmt)
-                if isinstance(n, ast.Call)
-                and isinstance(n.func, ast.Attribute)
-                and n.func.attr in _CLIENT_METHODS
-                and isinstance(n.func.value, ast.Name)
-                and n.func.value.id in {"client", "probe_client"}
-            ]
+            emits = [n for stmt in tr.body for n in ast.walk(stmt) if _is_probe_emit(n)]
             kinds = [
                 h.type.id if isinstance(h.type, ast.Name) else "?"
                 for h in tr.handlers

@@ -11,6 +11,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
+import i18n
 from src.ui_i18n import T, set_text
 
 from ..theme import Palette
@@ -45,14 +46,19 @@ class DashboardPage(QWidget):
         status.addWidget(self.dot, 0, Qt.AlignmentFlag.AlignVCenter)
         text_col = QVBoxLayout()
         text_col.setSpacing(2)
-        self.status_title = QLabel()
-        set_text(self.status_title, T("待机"))
+        # 状态标题/副标题是**运行态文案**（由窗口 _set_running_ui 经 set_status 按录制状态写入），
+        # 刻意不进重译登记表（M-13，2026-10-18）：登记后 retranslate_all() 会把录制中界面里的
+        # 「录制中」打回登记初值「待机」，控制台页与侧栏/托盘互相矛盾——这正是报告实测的症状。
+        # 「运行态会被周期性改写的标签不进登记表」是仓库既有约定（关键约定#16 / i18n 已知坑），
+        # 建时 tr() 取初值即可；切换语言后由 _repopulate_static_texts 按 recorder.is_running()
+        # 重驱 _set_running_ui，产生点的 tr() 自然按当前语言取词。
+        self.status_title = QLabel(i18n.tr("待机"))
         title_font = self.status_title.font()
         title_font.setPointSize(20)
         title_font.setWeight(QFont.Weight.DemiBold)
         self.status_title.setFont(title_font)
-        self.status_sub = QLabel("录制进程未运行")
-        set_text(self.status_sub, T("录制进程未运行"))
+        # 副标题同理：运行态文案，不进登记表（与下方 set_status 的注释同一判据）。
+        self.status_sub = QLabel(i18n.tr("录制进程未运行"))
         self.status_sub.setObjectName("muted")
         text_col.addWidget(self.status_title)
         text_col.addWidget(self.status_sub)

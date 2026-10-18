@@ -52,6 +52,12 @@ def tolerant_config_parser(preserve_case: bool = False) -> configparser.ConfigPa
 # 解析器实际看到的键集合（本仓键多为中文，这条只对 language / gui_* 这类 ASCII 键有意义）。
 # 无节头的裸键归到空节名下——那种文件 configparser 自己会先抛 MissingSectionHeaderError，
 # 本函数只是归因辅助，不重复做格式裁判。
+# L-17（2026-10-19）补第三条跳过判据：**整行没有 = 也没有 : 的一律不算键**。configparser 把
+# 这种行当**续行**并入上一条键的值（多行值形态：`key = 第一段\n  第二段`），旧实现先 strip 掉
+# 缩进、再把整行当独立键统计，于是每一份带多行值的配置都会被点名成「重复配置项」——虚假告警
+# 会把 warn_duplicate_options 的「同一形态只报一次」耗尽，真重复反而被淹没在同一条文案里。
+# 放过它不会漏报真重复：allow_no_value 在本仓从未开启（tolerant_config_parser 用默认值），
+# 没有分隔符的行根本不会被解析成键，因此**不可能**成为重复键的一方。
 def find_duplicate_options(text: str) -> list[tuple[str, str, tuple[int, ...]]]:
     buckets: dict[tuple[str, str], list[tuple[int, str]]] = {}
     section = ""
@@ -61,6 +67,11 @@ def find_duplicate_options(text: str) -> list[tuple[str, str, tuple[int, ...]]]:
             continue
         if line.startswith("[") and line.endswith("]"):
             section = line[1:-1].strip()
+            continue
+        # 与 configparser 的默认 delimiters ('=', ':') 同集合，故这里也写字面两个字符；
+        # 判据必须用「整行里有没有分隔符」，不能用 split 后的 head 是否为空——无分隔符的行
+        # split 出来 head == line（非空），会被当成键名继续统计。
+        if not any(delimiter in line for delimiter in ("=", ":")):
             continue
         head = line.split("=", 1)[0].split(":", 1)[0].strip()
         if not head:

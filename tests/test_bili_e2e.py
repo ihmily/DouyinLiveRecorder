@@ -88,22 +88,43 @@ def _run_end_to_end(out_dir: str) -> None:
     asyncio.set_event_loop(loop)
     got = []
 
-    class Capt(BilibiliDanmaku):
-        def _emit(self, msg: DanmakuMessage) -> None:
-            # 子类重写 _emit 拦截解析结果(on_message 仅透传),改为收集到 got,
-            # 便于对解析出的 message/user_name 做精确断言,验证字段映射正确性。
-            got.append(msg)
+    try:
 
-    c = Capt(on_message=lambda m: None, on_close=lambda r: None, on_ready=lambda: None)
-    frames = build_frame([danmu_msg("测试弹幕内容!", "测试用户")], proto_ver=0)
-    # 直接喂整帧字节(跳过实时 WS 接收),decode_message 内部按帧头切分并回调 _emit,
-    # 此处验证单帧能被正确解码为 DanmakuMessage。
-    c.decode_message(frames)
-    assert len(got) == 1, f"解析出 {len(got)} 条"
-    assert got[0].message == "测试弹幕内容!"
-    assert got[0].user_name == "测试用户"
-    print(f"=== 帧解析通过: {got[0].user_name}: {got[0].message} ===")
-    loop.close()
+        class Capt(BilibiliDanmaku):
+            def _emit(self, msg: DanmakuMessage) -> None:
+                # 子类重写 _emit 拦截解析结果(on_message 仅透传),改为收集到 got,
+                # 便于对解析出的 message/user_name 做精确断言,验证字段映射正确性。
+                got.append(msg)
+
+        c = Capt(on_message=lambda m: None, on_close=lambda r: None, on_ready=lambda: None)
+        frames = build_frame([danmu_msg("测试弹幕内容!", "测试用户")], proto_ver=0)
+        # 直接喂整帧字节(跳过实时 WS 接收),decode_message 内部按帧头切分并回调 _emit,
+        # 此处验证单帧能被正确解码为 DanmakuMessage。
+        c.decode_message(frames)
+        assert len(got) == 1, f"解析出 {len(got)} 条"
+        assert got[0].message == "测试弹幕内容!"
+        assert got[0].user_name == "测试用户"
+        print(f"=== 帧解析通过: {got[0].user_name}: {got[0].message} ===")
+    finally:
+        # LT-05（2026-10-18 审查）：旧形态只有顺序执行的 loop.close()——① 中间任一条断言转红时
+        # 循环既不关闭也不复位，② 即便跑到底也只 close 不 set_event_loop(None)，于是「一支已经
+        # 关闭的循环」被留在当前线程的 policy 上跨用例残留（后续任何取当前循环的代码拿到的都是
+        # 死循环，报错形态与被测逻辑毫无关系）。3.14 起 get_event_loop() 不再隐式新建循环，
+        # 复位成 None 才是诚实状态：本文件其余链路只走显式 new_event_loop/asyncio.run，
+        # 不依赖隐式循环（单独跑绿 + 合跑绿即证明复位没把后面的用例打挂）。
+        loop.close()
+        asyncio.set_event_loop(None)
+
+    # 复位是否真到位，用公开 API 复核（判据刻意放在 try/finally **之外**：写在 finally 里，
+    # 本条一旦转红会把用例真正的失败顶掉——与 msg_push MID-2252「finally 里的异常替换结论」同族）。
+    # 3.14 的语义是「当前线程无循环 → RuntimeError」（AGENTS「3.14 破坏性变更基线」登记的正是这条）；
+    # 不碰 policy 的私有属性（如 _local._loop），那会让判据随 CPython 内部实现漂移。
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("当前线程仍绑着事件循环：LT-05 复位失效，跨用例残留未消除")
 
 
 def test_bili_frame_to_srt_end_to_end(tmp_path: Path) -> None:

@@ -34,6 +34,18 @@ from src import spider as sp
 WAF_HTML = "<html><head><title>Access Protected</title></head><body>cf-browser-verification</body></html>"
 
 
+def _asyncio_shim(**overrides: Any) -> types.SimpleNamespace:
+    # MT-09（CODE_REVIEW_2026-10-18）：旧写法 patch.object(sp.asyncio, "sleep", 替身) 的容器是
+    # 全进程唯一的 asyncio **模块本体**（spider.py 顶层 `import asyncio`），替身窗口内 loguru 边车、
+    # pytest-asyncio 自身驱动本用例的循环以及同会话其它协程的 sleep 会一并被换掉（M-27 同族事故，
+    # tests/test_test_hygiene.py R1 第一形态）。按仓库口径改为浅拷贝命名空间 + 只覆盖所需属性，
+    # 再把替身绑到**被测模块（spider）自己的 asyncio 引用**上；其余符号逐字取真模块，语义不变。
+    shim = types.SimpleNamespace(**vars(asyncio))
+    for name, value in overrides.items():
+        setattr(shim, name, value)
+    return shim
+
+
 def _fake_logger() -> types.SimpleNamespace:
     # 捕获 sp.logger.<level>(msg) 的文本（warning 是本文件「留线索」的判据级别）。
     msgs: list[str] = []
@@ -407,7 +419,6 @@ class TestSingleStreamSource:
             result = await sp.get_looklive_stream_url("https://look.163.com/live?id=32108888")
         assert result["is_live"] is True
         assert result["record_url"] == "http://lookcdn/a.m3u8"
-        assert result["record_url"] == "http://lookcdn/a.m3u8"
 
     @pytest.mark.asyncio
     async def test_look_flv_only_is_live(self) -> None:
@@ -573,18 +584,24 @@ class TestBiliSpiRetryBackoff:
         payloads = {"room_init": body_room, "nav": body_nav, "finger/spi": ""}
 
         slept: list[float] = []
-        real_sleep = asyncio.sleep
+        real_sleep = asyncio.sleep  # 反向见证基准：替身窗口结束后 stdlib 本体必须仍是这一支
 
         async def _rec_sleep(delay: float, *a: object, **k: object) -> None:
             slept.append(float(delay))
             # 不真的睡，避免拖慢用例；记录参数即可判定「有退避」
             return None
 
+        # [MT-09 2026-10-18] 落点由 sp.asyncio 改成 sp 命名空间里的 asyncio 引用位（shim 见文件头）。
+        # 旧形态 patch.object(sp.asyncio, "sleep", …) 的宿主是全进程唯一的 asyncio 模块本体，
+        # 窗口内 loguru 边车、驱动本用例的 pytest-asyncio 循环以及任何其它协程的 sleep 一并被换桩。
         with (
             patch.object(sp, "async_req", new=_fake_req(payloads)),
             patch.object(sp, "_cache_fetch_cookies", new=AsyncMock(return_value={})),
-            patch.object(sp.asyncio, "sleep", _rec_sleep),
+            patch.object(sp, "asyncio", new=_asyncio_shim(sleep=_rec_sleep)),
         ):
+            # 反向见证必须落在窗口**内**才有判定力：此刻 sp.asyncio 是 shim、而 stdlib asyncio
+            # 本体的 sleep 仍要是真实现。旧写法（容器为 sp.asyncio）在这一行必红——它改的正是本体。
+            assert asyncio.sleep is real_sleep, "asyncio 本体被替换：shim 形态失效，泄漏面回到全进程协程"
             await sp.get_bilibili_danmaku_info("https://live.bilibili.com/462")
 
         # 至少一次正数退避（抖动区间 0.5~1.0），证明不是零间隔连击

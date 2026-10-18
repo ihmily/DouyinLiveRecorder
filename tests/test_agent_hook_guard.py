@@ -217,16 +217,23 @@ def _run_hook(event: Mapping[str, Any]) -> subprocess.CompletedProcess[bytes]:
 
 def test_cli_contract_blocks_with_exit_code_2() -> None:
     # PreToolUse 是唯一可阻断站：exit 2 + stderr 回给 agent，阻断声明与实际能力一致
+    # MT-03（2026-10-18 审查）：原断言查的是 `--no-cache-dir`，而这条命令里根本没有该子串，
+    # 于是「拒绝消息不得回显命令原文」这条锁恒真、从未判过任何东西（M-26 同族的空洞文本锁）。
+    # 现取命令中**确实存在**的实参位作判据，再另加一条只出现在命令里的哨兵：
+    # 「把命令原文拼进拒绝理由」的任意实现都会同时打红这两条，而理由文案自身的正常改动不会
+    # （实参位与哨兵都不属于文案，改文案不动这两条）。
+    sentinel = "--sentinel-never-echo-4f9a"
     event = {
         "hook_event_name": "PreToolUse",
         "tool_name": "Bash",
-        "tool_input": {"command": "pip install --force-reinstall -r requirements.txt"},
+        "tool_input": {"command": f"pip install --force-reinstall -r requirements.txt {sentinel}"},
     }
     proc = _run_hook(event)
     assert proc.returncode == 2
     assert b"R-PIP-BULK" in proc.stderr
     # 拒绝消息不得回显完整命令原文（官方 hook 安全口径）
-    assert b"--no-cache-dir" not in proc.stderr
+    assert b"--force-reinstall" not in proc.stderr
+    assert sentinel.encode() not in proc.stderr
 
 
 def test_cli_contract_post_tool_use_reports_via_json_feedback(tmp_path: Path) -> None:

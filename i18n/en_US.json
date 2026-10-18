@@ -1125,5 +1125,9 @@
   "字段 {field} 的元素必须是字符串": "Each item in field {field} must be a string",
   "请求体必须是 JSON 对象": "The request body must be a JSON object",
   "复制字体文件失败: {name} -> {target} - {type_name}: {err}": "Failed to copy the font file: {name} -> {target} - {type_name}: {err}",
-  "config.ini 存在重复配置项，已按最后一次取值读取: {detail}": "Duplicate options found in config.ini, keeping the value read last: {detail}"
-}
+  "config.ini 存在重复配置项，已按最后一次取值读取: {detail}": "Duplicate options found in config.ini, keeping the value read last: {detail}",
+  "[web] web_console.log 超限截断失败: {type_name}: {e}": "[web] Failed to trim the oversized web_console.log: {type_name}: {e}",
+  "[web] web_console.log 已超过 {max_mb} MB 上限，丢弃最早的 {dropped_kb} KB": "[web] web_console.log exceeded the {max_mb} MB limit, discarded the oldest {dropped_kb} KB",
+  "PID {pid} 现由 {image} 占用（录制核心映像名为 {expected}），已跳过整树强杀": "PID {pid} is now held by {image} (the recorder core image is {expected}); skipped the whole-tree kill",
+    "回收 node 签名子进程树失败: {script} - {type_name}: {e}": "Failed to reclaim the node signing child-process tree: {script} - {type_name}: {e}",
+    "配置文件备份未成功，本轮不更新备份基线（下轮将重试）: {file_path} - {type_name}: {e}": "Configuration backup failed, so the backup baseline is not updated this round (it will be retried next round): {file_path} - {type_name}: {e}"}

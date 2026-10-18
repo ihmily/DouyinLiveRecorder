@@ -20,11 +20,13 @@
 import asyncio
 import builtins
 import inspect
+import smtplib
 import ssl
 import stat
 import sys
 import threading
 import time
+import types
 from pathlib import Path
 from typing import IO, Any, cast
 
@@ -276,6 +278,25 @@ class _FakeSMTP:
 
 _SSL_CALLS: list[ssl.SSLContext | None] = []
 _STARTTLS_CALLS: list[ssl.SSLContext | None] = []
+# 反向见证基准：在**任何替身窗口之前**（模块导入期）记下 stdlib 本体里这两个建连类的原对象。
+# 只能这样取——旧写法（容器为 msg_push.smtplib，即本体）会把它们就地换掉，而替身换成 shim 之后
+# msg_push.smtplib 与 smtplib 已是两个对象，只比「当前引用位上是什么」看不见本体侧的漂移。
+_REAL_SMTP_CLS = smtplib.SMTP
+_REAL_SMTP_SSL_CLS = smtplib.SMTP_SSL
+
+
+def _smtplib_shim(**overrides: Any) -> types.SimpleNamespace:
+    # MT-10（CODE_REVIEW_2026-10-18）：msg_push.py 顶层 `import smtplib`，所以 `msg_push.smtplib`
+    # 就是全进程唯一的 **stdlib 模块本体**——旧写法 monkeypatch.setattr(msg_push.smtplib, "SMTP", 替身)
+    # 改的正是这个本体，替身窗口内同会话其它线程/库（loguru 边车、别的推送渠道）拿到的 SMTP/SMTP_SSL
+    # 会被一并换掉（AGENTS M-27 同族事故 / tests/test_test_hygiene.py R1 第一形态）。
+    # 按仓库 shim 口径：浅拷贝命名空间（SMTPException 等其余符号按**原对象**复制，故生产代码
+    # `except smtplib.SMTPException` 的异常类同一性不变）、只覆盖建连用的两个类，再把替身绑到
+    # 被测模块（msg_push）自己的 smtplib 引用上——作用域收敛到 msg_push 内的读取点。
+    shim = types.SimpleNamespace(**vars(smtplib))
+    for name, value in overrides.items():
+        setattr(shim, name, value)
+    return shim
 
 
 @pytest.fixture(autouse=True)
@@ -286,16 +307,23 @@ def _no_real_network(monkeypatch: pytest.MonkeyPatch) -> None:
         raise AssertionError("测试不得发起真实网络请求")
 
     monkeypatch.setattr(msg_push.opener, "open", _deny)
-    monkeypatch.setattr(msg_push.smtplib, "SMTP_SSL", _deny)
-    monkeypatch.setattr(msg_push.smtplib, "SMTP", _deny)
+    monkeypatch.setattr(msg_push, "smtplib", _smtplib_shim(SMTP_SSL=_deny, SMTP=_deny))
+    # 反向见证（窗口**内**才有判定力）：stdlib 本体的两个建连类必须仍是导入期记下的原对象。
+    assert smtplib.SMTP is _REAL_SMTP_CLS, "smtplib.SMTP 本体被替换：shim 形态失效，泄漏面回到全进程"
+    assert smtplib.SMTP_SSL is _REAL_SMTP_SSL_CLS, "smtplib.SMTP_SSL 本体被替换：本体侧泄漏"
 
 
 def _send(monkeypatch: pytest.MonkeyPatch, *, open_ssl: bool, port: str) -> None:
     _SSL_CALLS.clear()
     _STARTTLS_CALLS.clear()
     # 只替换 msg_push 模块内的 smtplib 引用（不碰 stdlib 模块对象本身）
-    monkeypatch.setattr(msg_push.smtplib, "SMTP_SSL", _FakeSMTPSSL)
-    monkeypatch.setattr(msg_push.smtplib, "SMTP", _FakeSMTP)
+    # [历史注] 本句在 2026-10-18 之前与实现相反：当时两处 setattr 的容器是 msg_push.smtplib
+    # （即 stdlib 本体）。MT-10 改走 _smtplib_shim 后注释才与实现一致。
+    monkeypatch.setattr(msg_push, "smtplib", _smtplib_shim(SMTP_SSL=_FakeSMTPSSL, SMTP=_FakeSMTP))
+    # 反向见证：打桩只落在 msg_push 的引用位上——stdlib 本体必须逐字仍是导入期记下的那两个原类。
+    # 判据取「与导入期原对象同一」而不是「不是本次的替身」：后者看不见本体被别处换过（变异实测）。
+    assert smtplib.SMTP is _REAL_SMTP_CLS, "smtplib.SMTP 本体被替换：shim 形态失效，泄漏面回到全进程"
+    assert smtplib.SMTP_SSL is _REAL_SMTP_SSL_CLS, "smtplib.SMTP_SSL 本体被替换：本体侧泄漏"
     _ = msg_push.send_email(
         email_host="smtp.example.com",
         login_email="a@example.com",
@@ -394,8 +422,7 @@ class TestMsgPushMaskingAndCleanup:
             def quit(self) -> tuple[int, bytes]:
                 raise TimeoutError("timed out waiting for 221")
 
-        monkeypatch.setattr(msg_push.smtplib, "SMTP_SSL", _QuitTimeoutSSL)
-        monkeypatch.setattr(msg_push.smtplib, "SMTP", _FakeSMTP)
+        monkeypatch.setattr(msg_push, "smtplib", _smtplib_shim(SMTP_SSL=_QuitTimeoutSSL, SMTP=_FakeSMTP))
         result = msg_push.send_email(
             email_host="smtp.example.com",
             login_email="a@example.com",

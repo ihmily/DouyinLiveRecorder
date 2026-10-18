@@ -1,12 +1,17 @@
 # Tests for src/utils.py - utility function tests for coverage improvement.
 
+import ast
 import builtins
+import configparser
+import inspect
 import os
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import zipfile
 from collections.abc import Generator
 from pathlib import Path
@@ -181,6 +186,85 @@ class TestUpdateConfig:
         config_file.write_text("[section1]\nkey1 = value1\n", encoding="utf-8-sig")
         update_config(config_file, "missing_section", "key1", "new_value")
         assert any("does not exist" in m for m in log_capture)
+
+
+class TestDuplicateKeyWriteback:
+    # M-08（2026-10-19）：src/utils.py 的两处解析器改走 config_read.tolerant_config_parser。
+    # 旧形态 configparser.ConfigParser(interpolation=None) 的 strict 默认为 True，遇到「同一节内
+    # 两行同名键」（2026-10-17 在本仓 config/config.ini 的 [录制设置] 实测到过）时在 read() 就抛
+    # DuplicateOptionError → read_ini_value 吞成 warning 返 None、update_config 更早退，
+    # [Cookie]/[Authorization] 的刷新在这种形态下**永远写不回**。
+    # 三条自证缺一不可：① 重复键输入下仍能写回；② 写回产物必须能被 **strict** 解析器整份读出
+    # （否则就是在制造「缺键补写幂等」事故的第二半——把坏形态留给外部编辑器与其它程序）；
+    # ③ 键匹配的大小写口径不变（两处历来用默认 optionxform＝转小写后比较，不得顺手改成保留大小写）。
+
+    _DUP_TEXT = "[Cookie]\nbili_cookie = fresh-from-api\nbili_cookie = stale-value\n[录制设置]\nlanguage = zh_CN\n"
+
+    def test_strict_parser_is_the_reverse_witness(self, tmp_path: Path) -> None:
+        # 反向见证：本类测的故障形态真造得出来——strict 解析器在这份文件上**一个键都读不出**。
+        # 若哪天 configparser 默认改成不严格，这条会红，提醒下面两条锁的前提已不存在。
+        cfg = tmp_path / "config.ini"
+        cfg.write_text(self._DUP_TEXT, encoding="utf-8-sig")
+        strict = configparser.ConfigParser(interpolation=None)
+        with pytest.raises(configparser.DuplicateOptionError):
+            strict.read(str(cfg), encoding="utf-8-sig")
+
+    def test_update_config_writes_back_under_duplicate_key(self, tmp_path: Path) -> None:
+        cfg = tmp_path / "config.ini"
+        cfg.write_text(self._DUP_TEXT, encoding="utf-8-sig")
+        update_config(cfg, "Cookie", "bili_cookie", "refreshed-value")
+        assert read_ini_value(cfg, "Cookie", "bili_cookie") == "refreshed-value"
+
+    def test_writeback_product_is_strict_readable(self, tmp_path: Path) -> None:
+        # 判据②：容错读进来、按内存态写出去后，同节重复键被折叠成一行，产物必须仍能被
+        # strict 解析器**整份**读出（逐节取值而不是「读一次不抛错」，防止只测一半）。
+        cfg = tmp_path / "config.ini"
+        cfg.write_text(self._DUP_TEXT, encoding="utf-8-sig")
+        update_config(cfg, "Cookie", "bili_cookie", "refreshed-value")
+        strict = configparser.ConfigParser(interpolation=None)
+        strict.read(str(cfg), encoding="utf-8-sig")
+        assert strict.get("Cookie", "bili_cookie") == "refreshed-value"
+        assert strict.get("录制设置", "language") == "zh_CN"
+        written = cfg.read_text(encoding="utf-8-sig")
+        assert written.count("bili_cookie") == 1, written
+
+    def test_key_matching_stays_case_insensitive(self, tmp_path: Path) -> None:
+        # 判据③：大小写口径与改前一致——入参大写、文件小写仍要能命中（configparser 的
+        # optionxform 转小写行为），preserve_case 若被误开，这里会退化成「找不到键」。
+        cfg = tmp_path / "config.ini"
+        cfg.write_text("[section1]\nkey1 = v1\n", encoding="utf-8-sig")
+        assert read_ini_value(cfg, "section1", "KEY1") == "v1"
+        update_config(cfg, "section1", "KEY1", "v2")
+        assert read_ini_value(cfg, "section1", "key1") == "v2"
+
+    def test_read_ini_value_keeps_last_value_with_duplicate_key(self, tmp_path: Path, log_capture: list[str]) -> None:
+        # 读侧同病同治：strict 形态下这份文件读不出任何键（返回 None + 一条「读取异常」warning），
+        # 容错后按「最后一次取值」返回，与 tolerant_config_parser 的语义一致。
+        cfg = tmp_path / "config.ini"
+        cfg.write_text("[s]\nk = first\nk = second\n", encoding="utf-8-sig")
+        assert read_ini_value(cfg, "s", "k") == "second"
+        assert not any("Error occurred while reading" in m for m in log_capture), log_capture
+
+    def test_update_config_does_not_import_config_read_at_module_level(self) -> None:
+        # 结构锁：utils 位于依赖链最底层，而 src/config_read → src/web_config → src/utils 是既有链，
+        # 把 config_read 提到 utils 顶层 import 会构成导入环（环里 atomic_write_text 尚未定义）。
+        # 判据取「源码里 config_read 只出现在函数体内」——AST 级、随重构自动失效，不会像
+        # 文本匹配那样被注释里的同名提及骗到。
+        tree = ast.parse(inspect.getsource(utils_module))
+        # ast.Import 没有 level 属性（只有 ImportFrom 有），统一用 getattr 取，缺省按绝对导入算
+        top_level = [
+            node
+            for node in tree.body
+            if isinstance(node, (ast.Import, ast.ImportFrom)) and getattr(node, "level", 0) == 0
+        ]
+        imported: list[str] = []
+        for node in top_level:
+            if isinstance(node, ast.ImportFrom):
+                imported.append(node.module or "")
+            else:
+                imported.extend(alias.name for alias in node.names)
+        assert "src.config_read" not in imported, "config_read 必须在函数内延迟导入，否则 utils 成环"
+        assert "src.utils" not in imported
 
 
 class TestGetFilePaths:
@@ -751,19 +835,35 @@ class TestRunNodeScriptNoToctou:
         # 旧实现「读文件算哈希 → 把**路径**交给 node」：node 会独立二次读盘，
         # 两步之间换掉文件内容即绕过钉定表（check-then-use）。
         # 现改为把校验过的那一份字节经 stdin 交给 node（argv 位置保持不变）。
+        # [L-19 2026-10-19 适配] 执行原语从 subprocess.run 换成自管 Popen + communicate(input=…)，
+        # 「把校验过的字节交给 node」这条契约因此落在 communicate 的 input 实参上（旧形态落在
+        # run 的 input 关键字上），argv 与篡改时序的断言逐字保留、不改松。
         script = tmp_path / "sign.js"
         original = b"console.log('orig')"
         _ = script.write_bytes(original)
         captured: dict[str, object] = {}
 
-        def _fake_run(cmd: list[str], **kwargs: object) -> object:
-            captured["cmd"] = cmd
-            captured.update(kwargs)
-            return SimpleNamespace(stdout=b"  ok\n", stderr=b"", returncode=0)
+        class _FakePopen:
+            def __init__(self, argv: list[str], **kwargs: Any) -> None:
+                captured["cmd"] = argv
+                captured["spawn_kwargs"] = kwargs
+                # 正常路径的退出码：run_node_script_async 用 proc.returncode 复刻 check=True 契约
+                self.returncode: int | None = 0
+
+            def communicate(self, *_args: Any, **kwargs: Any) -> tuple[bytes, bytes]:
+                captured["input"] = kwargs.get("input")
+                captured["timeout"] = kwargs.get("timeout")
+                return b"  ok\n", b""
+
+            def kill(self) -> None:
+                raise AssertionError("正常路径不该走到进程树回收")
+
+            def wait(self, timeout: Any = None) -> int:
+                raise AssertionError("正常路径不该走到收尸")
 
         # subprocess 是 stdlib 模块本体，不得就地改属性（AGENTS 测试约定）→ 浅拷贝 shim 替换
         shim = SimpleNamespace(**vars(subprocess))
-        shim.run = _fake_run
+        shim.Popen = _FakePopen
         monkeypatch.setattr(utils_module, "subprocess", shim)
         checked: list[bytes] = []
         real_check = utils_module._check_js_hash
@@ -779,6 +879,7 @@ class TestRunNodeScriptNoToctou:
         assert result == "ok"
         assert captured["cmd"] == ["node", "-", "https://example/x"]
         assert captured["input"] == original, "交给 node 的不是校验过的那份字节（TOCTOU 回归）"
+        assert captured["timeout"] == 5, "内层超时预算必须真的传给了 communicate（缺了它 node 卡住即整轮挂死）"
         assert checked == [original]
 
     def test_pinned_node_script_does_not_rely_on_its_own_path(self) -> None:
@@ -794,6 +895,226 @@ class TestRunNodeScriptNoToctou:
         assert "__filename" not in text
         assert "__dirname" not in text
         assert "require(" not in text
+
+
+# ── L-19（2026-10-19）：run_node_script_async 的超时预算与进程树回收 ──
+# 锁两层，缺一层就退化成「静默挂死」：
+#   ① 内层 communicate(timeout=) —— 唯一能真正回收 node 进程树的一层；超时后必须收**整棵树**
+#      （POSIX start_new_session + killpg / Windows taskkill /T /F），且**绝不再读一次管道**
+#      （subprocess.run 的超时分支正是栽在 kill 后又调一次不带超时的 communicate 上）；
+#   ② 外层 asyncio.wait_for —— 管 await 侧：阻塞段在 to_thread 的线程里，而线程不可取消，
+#      ① 不生效时协程就永久 await，房间线程不归还网络信号量（AGENTS「并发与事件循环」最忌形态）。
+# 平台分支由模块级常量 _NODE_TREE_KILL_VIA_TASKKILL 选择，用例强制置位，
+# 让 Windows 回收链在 Linux CI 上真实执行（AGENTS「平台专属分支的测试不得靠 skipif」）。
+class _HangingPopen:
+    # communicate 永不返回（模拟孙进程握着 stdout 管道写端）；调用方给 input 是为了与真实形态一致。
+    def __init__(self, argv: list[str], **kwargs: Any) -> None:
+        self.pid = 4242
+        self.returncode: int | None = None
+
+    def communicate(self, *_args: Any, **kwargs: Any) -> tuple[bytes, bytes]:
+        threading.Event().wait(0.6)
+        return b"", b""
+
+    def kill(self) -> None:
+        self.returncode = -9
+
+    def wait(self, timeout: Any = None) -> int:
+        return -9
+
+
+class _TimeoutPopen:
+    # communicate 按真实语义在预算到点时抛 TimeoutExpired；顺带记账「有没有被二次调用」
+    # ——再读一次管道就是 subprocess.run 的挂死形态，必须只发生一次。
+    instances: list["_TimeoutPopen"] = []
+
+    def __init__(self, argv: list[str], **kwargs: Any) -> None:
+        self.pid = 4242
+        self.returncode: int | None = None
+        self.communicate_calls = 0
+        self.kill_calls = 0
+        self.wait_timeouts: list[Any] = []
+        _TimeoutPopen.instances.append(self)
+
+    def communicate(self, *_args: Any, **kwargs: Any) -> tuple[bytes, bytes]:
+        self.communicate_calls += 1
+        raise subprocess.TimeoutExpired(["node", "-"], cast("float", kwargs.get("timeout", 1.0)))
+
+    def kill(self) -> None:
+        self.kill_calls += 1
+
+    def wait(self, timeout: Any = None) -> int:
+        self.wait_timeouts.append(timeout)
+        self.returncode = -9
+        return -9
+
+
+@pytest.fixture(autouse=True)
+def _reset_node_poppen_registry() -> Generator[None, None, None]:
+    _TimeoutPopen.instances = []
+    yield
+    _TimeoutPopen.instances = []
+
+
+def _node_subprocess_shim(popen_cls: type) -> SimpleNamespace:
+    # vars(subprocess) 浅拷贝保留 PIPE / TimeoutExpired / CalledProcessError 等常量，只换 Popen
+    shim = SimpleNamespace(**vars(subprocess))
+    shim.Popen = popen_cls
+    return shim
+
+
+class TestRunNodeScriptTimeoutBudget:
+    def test_signature_exposes_a_positive_timeout(self) -> None:
+        # 与姊妹函数 run_js_async 同口径：预算存在、可关键字覆盖、默认值为正
+        param = inspect.signature(utils_module.run_node_script_async).parameters["timeout"]
+        assert param.kind is inspect.Parameter.KEYWORD_ONLY
+        assert isinstance(param.default, (int, float))
+        assert cast("float", param.default) > 0
+
+    @pytest.mark.asyncio
+    async def test_coroutine_returns_at_budget_even_when_the_worker_thread_hangs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 判据②的正面锁：删掉外层 wait_for（回到 `return await asyncio.to_thread(_sync_run)`）
+        # 本用例就永久 await 到超时被 pytest-asyncio 掐掉而转红。
+        script = tmp_path / "sign.js"
+        script.write_bytes(b"console.log(1)")
+        utils_module._js_unpinned_warned.add("sign.js")  # 不打「未登记」告警，保持 0 警告口径
+        monkeypatch.setattr(utils_module, "subprocess", _node_subprocess_shim(_HangingPopen))
+        started = time.monotonic()
+        with pytest.raises(TimeoutError):
+            await run_node_script_async(str(script), "u", timeout=0.2)
+        assert time.monotonic() - started < 0.5, "外层预算必须与内层同值，不得额外加宽限"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("via_taskkill", [True, False], ids=["windows-taskkill", "posix-killpg"])
+    async def test_communicate_timeout_reaps_the_whole_process_tree(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, via_taskkill: bool
+    ) -> None:
+        script = tmp_path / "sign.js"
+        script.write_bytes(b"console.log(1)")
+        utils_module._js_unpinned_warned.add("sign.js")
+        run_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+        shim = _node_subprocess_shim(_TimeoutPopen)
+
+        def fake_run(argv: object, **kwargs: object) -> SimpleNamespace:
+            run_calls.append((cast("tuple", tuple(argv) if isinstance(argv, list) else (argv,)), kwargs))
+            return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+
+        shim.run = fake_run
+        monkeypatch.setattr(utils_module, "subprocess", shim)
+        monkeypatch.setattr(utils_module, "_NODE_TREE_KILL_VIA_TASKKILL", via_taskkill)
+        posix_calls: list[int] = []
+        monkeypatch.setattr(utils_module, "_kill_posix_process_group", lambda pid: posix_calls.append(pid))
+
+        with pytest.raises(subprocess.TimeoutExpired):
+            await run_node_script_async(str(script), "u", timeout=1.0)
+
+        proc = _TimeoutPopen.instances[0]
+        assert proc.communicate_calls == 1, "超时后不得再读一次管道（那正是 subprocess.run 的挂死点）"
+        assert proc.kill_calls == 1, "回收必须退化到杀直接子进程"
+        assert proc.wait_timeouts, "必须收尸（Popen.__del__ 见 returncode 为 None 会发 ResourceWarning）"
+        assert proc.wait_timeouts[0] is not None, "收尸必须带上限，无界等待正是本次要消灭的形态"
+        if via_taskkill:
+            assert posix_calls == [], "Windows 分支不该再去碰 killpg"
+            assert run_calls, "Windows 分支必须发 taskkill"
+            argv, kwargs = run_calls[0]
+            assert list(argv) == ["taskkill", "/T", "/F", "/PID", "4242"], argv
+            # argv 列表 + check=False + **禁 shell=True**：参数位是 pid，交给 cmd 解释等于把
+            # 「不用 shell」的前提推倒（AGENTS 录后脚本回收同口径）
+            assert kwargs.get("shell") is not True and "shell" not in kwargs, kwargs
+            assert kwargs.get("check") is False, kwargs
+        else:
+            assert posix_calls == [4242], "POSIX 分支必须 killpg 整个进程组"
+            assert run_calls == [], "POSIX 分支不该去起 taskkill（本机没有该命令）"
+
+    @pytest.mark.asyncio
+    async def test_tree_kill_failure_still_kills_child_and_reraises(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 「任一步失败退化到 kill()」：Linux CI 上被强制走 Windows 分支时压根没有 taskkill
+        # （FileNotFoundError），回收失败**不得**改写超时语义——异常必须照原样上抛。
+        script = tmp_path / "sign.js"
+        script.write_bytes(b"console.log(1)")
+        utils_module._js_unpinned_warned.add("sign.js")
+        shim = _node_subprocess_shim(_TimeoutPopen)
+
+        def deny(*args: object, **kwargs: object) -> None:
+            raise FileNotFoundError("taskkill not found")
+
+        shim.run = deny
+        monkeypatch.setattr(utils_module, "subprocess", shim)
+        monkeypatch.setattr(utils_module, "_NODE_TREE_KILL_VIA_TASKKILL", True)
+        captured: list[str] = []
+        sink_id = logger.add(lambda msg: captured.append(str(msg)), format="{message}", level="WARNING")
+        try:
+            with pytest.raises(subprocess.TimeoutExpired):
+                await run_node_script_async(str(script), "u", timeout=1.0)
+        finally:
+            logger.remove(sink_id)
+        proc = _TimeoutPopen.instances[0]
+        assert proc.kill_calls == 1
+        assert any("回收 node 签名子进程树失败" in m and "FileNotFoundError" in m for m in captured), captured
+
+    @pytest.mark.asyncio
+    async def test_spawn_kwargs_match_the_platform_contract(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # start_new_session 只属于 POSIX：Windows 侧那是 unused_start_new_session（传了零收益、
+        # 还把 POSIX 语义塞进进程创建参数），本仓实测过一次偶发 WinError 50。
+        # killpg 只有让子进程自成会话才收得到整棵树，故 POSIX 分支必须带上它。
+        script = tmp_path / "sign.js"
+        script.write_bytes(b"console.log(1)")
+        utils_module._js_unpinned_warned.add("sign.js")
+        seen: list[dict[str, object]] = []
+
+        class _RecordingPopen(_HangingPopen):
+            def __init__(self, argv: list[str], **kwargs: Any) -> None:
+                super().__init__(argv, **kwargs)
+                seen.append(kwargs)
+
+        monkeypatch.setattr(utils_module, "subprocess", _node_subprocess_shim(_RecordingPopen))
+        for via_taskkill, expected in ((True, False), (False, True)):
+            monkeypatch.setattr(utils_module, "_NODE_TREE_KILL_VIA_TASKKILL", via_taskkill)
+            with pytest.raises(TimeoutError):
+                await run_node_script_async(str(script), "u", timeout=0.2)
+            # 判据取**值**而不是「键在不在」：只判 in 的话 `start_new_session=False` 这种
+            # 「POSIX 忘了开独立会话」的变异会带着键一起通过（变异短 id L19C 实测如此）。
+            assert bool(seen[-1].get("start_new_session", False)) is expected, seen[-1]
+
+    def test_posix_gate_direction_is_locked_in_source(self) -> None:
+        # ③ 的门控方向锁：os.killpg/os.getpgid/signal.SIGKILL 是 POSIX-only 符号（typeshed 在
+        # win32 不导出它们），必须用 sys.platform **字面量**早返回门控，否则本机 mypy（win32）红；
+        # 门控条件写反（!= "win32"）静态检查发现不了、Windows 上会真去调 killpg。
+        # 剥掉注释行：函数上方的解释性注释里也写了 sys.platform/win32，不剥会被自己的注释误判。
+        src = inspect.getsource(utils_module._kill_posix_process_group)
+        body = "\n".join(line for line in src.splitlines() if not line.strip().startswith("#"))
+        assert 'if sys.platform == "win32":' in body, body
+        assert 'sys.platform != "win32"' not in body, "门控条件写反＝Windows 上真去调 killpg"
+        assert body.index('if sys.platform == "win32":') < body.index("os.killpg("), "早返回排在 killpg 之后＝门控无效"
+
+    def test_kill_posix_process_group_is_a_noop_on_windows(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 行为侧证据：本机若真是 win32，绝不允许真发 SIGKILL（Linux 上 getpgid(真 PID)+killpg
+        # 会把跑测试的进程自己打死，两种平台形态一起断言才不会「只在某一侧被验过」）。
+        calls: list[tuple[int, int]] = []
+        os_shim = SimpleNamespace(**vars(os))
+        os_shim.getpgid = lambda pid: int(pid) + 1
+        os_shim.killpg = lambda pgid, sig: calls.append((pgid, int(sig)))
+        monkeypatch.setattr(utils_module, "os", os_shim)
+        utils_module._kill_posix_process_group(4242)
+        if sys.platform == "win32":
+            assert calls == [], "win32 门控失效：Windows 上真去调了 killpg"
+        else:
+            assert calls == [(4243, int(signal.SIGKILL))], calls
+
+    def test_node_execution_does_not_use_subprocess_run(self) -> None:
+        # 结构锁：subprocess.run 的超时分支会在 kill 后再调一次不带超时的 communicate()——
+        # 那是 L-19 的根因，不得被「顺手改回 run」的重构复活。run 只允许出现在回收 taskkill 那一处。
+        src = inspect.getsource(utils_module.run_node_script_async)
+        body = "\n".join(line for line in src.splitlines() if not line.strip().startswith("#"))
+        assert "subprocess.run" not in body, "run_node_script_async 本体不得再用 subprocess.run 执行 node"
+        assert "proc.communicate(" in body and "timeout=timeout" in body, body
 
 
 # ── 补-03 / 补-04：钉定表只覆盖在用的签名脚本 ───────────────────

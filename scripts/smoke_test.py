@@ -19,6 +19,10 @@
 #      再重试一轮：配置写坏了重试多少次都不会变好，只是把排障方向带偏、把 job 时间翻倍。
 #      校验点唯一在 load_config，绝不允许「先打了几个请求才第 N 条炸」的半执行状态。
 #      回归锁：tests/test_scripts_error_paths.py::TestSmokeConfigMalformed。）
+#      [2026-10-18 L-31 补] 覆盖面再下一层：容器形态对、**元素**形态错同样属畸形——
+#      "expect_contains": ["ok", 200] 里 run_check 的 `token in content` 对数字抛 TypeError，
+#      穿透 main()（那里只接 OSError/ValueError）→ rc=1 + 崩溃栈。现由 _validate_check_item
+#      逐元素校验并抛 ValueError，与上面同一出口、同一码（仍是一条请求都不发）。
 #
 # 用法：
 #   python smoke_test.py --config smoke_targets.json
@@ -132,6 +136,22 @@ def _validate_check_item(item: object, index: int, path: str) -> CheckConfig:
             continue
         if not isinstance(value, allowed):
             raise ValueError(f"冒烟配置 {label} 的 {key!r} 是 {_json_type(value)}，期望 {expect_shape}: {path}")
+    # L-31（2026-10-18 审查）：容器类型对上**不等于**元素类型对上。run_check 对 expect_contains 是
+    # `for token in expect_contains: if token in content`（AND 语义），元素写成数字/对象时
+    # `in <string>` 直接抛 TypeError 并穿透 main()（那里只接 OSError/ValueError）：
+    # rc=1 + 满屏崩溃栈，被 scripts/_ci_web_smoke.sh 与 .github/actions/retry 读成「面板接口挂了」
+    # 再重试一轮——配置写坏了重试多少次都不会变好，只是把排障方向从「改配置」错判成「查面板」。
+    # 因此它属「配置/输入畸形」而非脚本自身缺陷（判定依据：同一份配置在形态合法时能正常出结论），
+    # 与上面三条同点、同码：在 load_config 前置拒绝 → main 退 2，且一条请求都不发。
+    # headers 不必同检：run_check 侧对值统一 `str(v)`，数字/布尔值会被转成字符串头，不崩。
+    contains = typed.get("expect_contains")
+    if isinstance(contains, list):
+        for idx, token in enumerate(cast(list[object], contains)):
+            if not isinstance(token, str):
+                raise ValueError(
+                    f"冒烟配置 {label} 的 'expect_contains[{idx}]' 是 {_json_type(token)}，"
+                    f'期望 array 的元素必须是 JSON string（如 {{"expect_contains": ["欢迎", "在线"]}}）: {path}'
+                )
     return typed
 
 

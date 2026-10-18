@@ -263,6 +263,12 @@ MALFORMED_CONFIGS: list[tuple[object, str, str]] = [
     ({"checks": [{"path": "/", "headers": ["Referer"]}]}, "headers", "object"),
     ({"checks": [{"path": "/", "expect_json": ["status"]}]}, "expect_json", "object"),
     ({"checks": [{"path": "/", "expect_contains": "欢迎"}]}, "expect_contains", "array"),
+    # L-31（2026-10-18）：容器形态对、元素形态错同样属畸形。run_check 的 `token in content`
+    # 对数字/对象元素抛 TypeError 并穿透 main()（只接 OSError/ValueError）→ rc=1 崩溃栈，
+    # 被 .github/actions/retry 读成「面板接口挂了」。needle 带下标，定位到具体那一个元素。
+    ({"checks": [{"path": "/", "expect_contains": ["ok", 200]}]}, "expect_contains[1]", "string"),
+    ({"checks": [{"path": "/", "expect_contains": [{"k": "v"}]}]}, "expect_contains[0]", "string"),
+    ({"checks": [{"path": "/", "expect_contains": [None]}]}, "expect_contains[0]", "string"),
     ({"checks": [{"path": "/"}], "base_url": 8000}, "base_url", "string"),
 ]
 
@@ -405,6 +411,20 @@ class TestSmokeConfigMalformed:
         )
         assert _call_main(monkeypatch, cfg) == 2
         assert seen == []
+
+    def test_bad_element_in_expect_contains_exits_two_before_any_request(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # L-31 的进程边界形态：元素级畸形必须同样落 rc=2（配置问题），而不是 run_check 抛
+        # TypeError 的 rc=1（接口问题）。这两档在 scripts/_ci_web_smoke.sh 里处置相反——
+        # 前者直接停、后者还会退避重试，混同等于把「配置写坏了」重跑一遍。
+        seen = _install_fake_urlopen(monkeypatch, _FakeResponse(200, "ok"))
+        cfg = _write_cfg(
+            tmp_path,
+            {"base_url": "http://127.0.0.1:9", "checks": [{"path": "/", "expect_contains": ["ok", 200]}]},
+        )
+        assert _call_main(monkeypatch, cfg) == 2
+        assert seen == [], "畸形元素仍发出了请求 = 半执行状态回来了"
 
 
 class TestSmokeConfigValid:

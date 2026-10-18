@@ -1,6 +1,7 @@
 # Tests for src/spider.py module - 抖音平台流地址解析路径.
 
 import ast
+import asyncio
 import json
 import pathlib
 import time
@@ -19,6 +20,7 @@ from src.spider import (
     _loads_dict,
     _safe_extract_id,
     extract_douyin_hevc_flv_url,
+    extract_kuaishou_eid,
     get_bilibili_room_info,
     get_bilibili_stream_data,
     get_douyin_web_stream_data,
@@ -1075,3 +1077,159 @@ class TestTwitCastingParseFailureLoginFallback:
         raw = _unwrap(sp.get_twitcasting_stream_url)
         with pytest.raises(RuntimeError):
             await raw("https://twitcasting.tv/tcuser")
+
+
+class TestL09KuaishouEidExtraction:
+    # L-09（2026-10-19，CODE_REVIEW_2026-10-18）：get_kuaishou_stream_data2 备用接口的 eid 此前用
+    # `url.split("/u/")[1].strip()` 取「/u/ 之后的**整串**」，分享链接常见的 ?from=…/&shareToken=…/#…
+    # 会被一并拼进 eid → byUser 接口只回「房间不存在」这类误导性结果，且 anchor_name 为空还会
+    # 再走一遍网页路径（重复解析）。现与 extract_douyu_room_id 的既有教训同口径：urlsplit 取路径段。
+
+    @pytest.mark.parametrize(
+        ("url", "expected"),
+        [
+            ("https://live.kuaishou.com/u/3gxyh7gnanb7fdh", "3gxyh7gnanb7fdh"),
+            # 分享链接最常见的形态：query 不得进 eid
+            ("https://live.kuaishou.com/u/3gxyh7gnanb7fdh?from=live&shareToken=ST.foo", "3gxyh7gnanb7fdh"),
+            # 尾斜杠 / fragment 同样不得留下（斗鱼同型事故：房间号带尾斜杠 → 接口拿不到 room）
+            ("https://live.kuaishou.com/u/3gxyh7gnanb7fdh/", "3gxyh7gnanb7fdh"),
+            ("https://live.kuaishou.com/u/3gxyh7gnanb7fdh#comment", "3gxyh7gnanb7fdh"),
+            # 无 scheme 形态（用户手填常见）：补 https:// 后首段仍是 u，而不是主机名
+            ("live.kuaishou.com/u/3gxyh7gnanb7fdh?from=wc", "3gxyh7gnanb7fdh"),
+            # 形态不合规一律空串（调用方据此报错并回退网页路径），不得把主机名/空段当 eid
+            ("https://live.kuaishou.com/profile/abc", ""),
+            ("https://live.kuaishou.com/u/", ""),
+            ("https://live.kuaishou.com/u", ""),
+            ("http://[oops/u/1", ""),
+        ],
+    )
+    def test_eid_is_the_path_segment_after_u(self, url: str, expected: str) -> None:
+        assert extract_kuaishou_eid(url) == expected
+
+    @pytest.mark.asyncio
+    async def test_share_link_sends_clean_eid_to_backup_api(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 行为锁（不是只钉 helper）：真正发往 byUser 接口的 data["eid"] 必须是干净那一段。
+        # 整串 split 的旧形态在这里会得到 "3gxyh7gnanb7fdh?from=live&shareToken=x" → 本条转红。
+        sent: list[dict[str, object]] = []
+
+        async def fake_req(*args: object, **kwargs: object) -> str:
+            sent.append({"url": str(kwargs.get("url") or (args[0] if args else "")), "data": kwargs.get("data")})
+            return '{"code":0,"data":{"liveStream":{}}}'
+
+        monkeypatch.setattr(sp, "async_req", fake_req)
+        monkeypatch.setattr(sp, "_ensure_kuaishou_did", AsyncMock(return_value="did=abc"))
+        fallback = AsyncMock(return_value={"is_live": False})
+        monkeypatch.setattr(sp, "get_kuaishou_stream_data", fallback)
+
+        result = await sp.get_kuaishou_stream_data2(
+            "https://live.kuaishou.com/u/3gxyh7gnanb7fdh?from=live&shareToken=x"
+        )
+
+        assert len(sent) == 1, sent
+        data = cast(dict[str, object], sent[0]["data"])
+        assert data["eid"] == "3gxyh7gnanb7fdh", data
+        # liveStream 里没有 user → anchor_name 为空 → 按既有语义回退网页路径解析一次
+        assert fallback.await_count == 1, result
+
+
+class TestL08BiliBuvidNeverLoggedInClear:
+    # L-08（2026-10-19，CODE_REVIEW_2026-10-18）：B 站 buvid3 是设备级标识、弹幕 AUTH 的凭据成分，
+    # 而 logs/ 按大小轮转保留多份（AGENTS「凭据不入轮转日志」红线）。_fetch_buvid 的两条 debug
+    # （cookie 提取、首页 Set-Cookie 兜底）此前整值打印。判据按关键约定 #11 的口径写成
+    # 「值确实消失」，而不是「调用了 mask_credentials」；同时反向钉住「凭据照旧按原值取用」
+    # （只改日志形态，进房/AUTH 的语义一律不许动）。
+
+    _COOKIE_BUVID = "XYAA11223344556677889900AABBCCDD35187infoc"
+    _HOME_BUVID = "BBBB00001111222233334444555566667777infoc"
+
+    @staticmethod
+    def _fake_req(spi_body: str) -> Any:
+        # 只造 room_init / nav / spi / getDanmuInfo 四条响应体，不做任何 buvid 判定
+        # （判定与被测的日志形态都在真实 get_bilibili_danmaku_info 里跑）
+        nav_resp = (
+            '{"code":0,"data":{"wbi_img":{"img_url":"https://i0.hdslb.com/bfs/wbi/'
+            "1234567890abcdef1234567890abcdef.png"
+            '","sub_url":"https://i0.hdslb.com/bfs/wbi/'
+            "fedcba0987654321fedcba0987654321.png"
+            '"}}}'
+        )
+        danmu_resp = (
+            '{"code":0,"data":{"token":"TOKEN123","host_list":'
+            '[{"host":"broadcastlv.chat.bilibili.com","port":2243,"ws_port":2244,"wss_port":443}]}}'
+        )
+
+        async def fake_req(*args: object, **kwargs: object) -> str:
+            url = str(kwargs.get("url") or (args[0] if args else ""))
+            if "finger/spi" in url:
+                return spi_body
+            if "room_init" in url:
+                return '{"code":0,"data":{"room_id":763679,"uid":12345}}'
+            if "/nav" in url:
+                return nav_resp
+            if "getDanmuInfo" in url:
+                return danmu_resp
+            return ""
+
+        return fake_req
+
+    @pytest.fixture(autouse=True)
+    def _empty_buvid_cache(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 进程级设备标识缓存跨用例存活会让获取链整段短路（快路命中即不打任何日志），
+        # 于是三条断言全部空转。逐用例清成「未缓存」再跑。
+        monkeypatch.setattr(sp, "_bili_buvid_cached", "")
+        monkeypatch.setattr(sp, "_bili_buvid_cached_proxy", "")
+        monkeypatch.setattr(sp, "_bili_buvid_is_fallback", False)
+
+    def test_log_form_keeps_attribution_without_the_value(self) -> None:
+        # 归因面必须留下（「是哪一枚、多长」是排查 AUTH 被软拒绝、出口串用的唯一线索），
+        # 但除 4 位前缀外的主体不得出现在日志形态里。
+        form = sp._buvid_log_form(self._COOKIE_BUVID)
+        assert form == "XYAA len=42", form
+        assert self._COOKIE_BUVID[4:] not in form
+        assert sp._buvid_log_form("") == ""
+
+    @pytest.mark.asyncio
+    async def test_cookie_buvid_debug_line_has_no_plaintext(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        spy = _LogSpy()
+        monkeypatch.setattr(sp, "logger", spy)
+        monkeypatch.setattr(sp, "async_req", self._fake_req('{"code":0,"data":{"b_3":"SHOULD-NOT-BE-USED"}}'))
+
+        info = await sp.get_bilibili_danmaku_info(
+            "https://live.bilibili.com/462", cookies=f"buvid3={self._COOKIE_BUVID};SESSDATA=rawsess"
+        )
+
+        assert info is not None and info["buvid"] == self._COOKIE_BUVID, info
+        joined = "".join(spy.texts())
+        assert self._COOKIE_BUVID not in joined, f"cookie 里的 buvid3 整值仍进日志: {joined}"
+        assert "rawsess" not in joined, f"整串 Cookie 仍进日志: {joined}"
+        assert "XYAA len=42" in joined, f"脱敏把归因面一起抹掉了: {joined}"
+
+    @pytest.mark.asyncio
+    async def test_home_set_cookie_buvid_debug_line_has_no_plaintext(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        secret = self._HOME_BUVID
+
+        async def _no_sleep(_delay: float) -> None:
+            return None
+
+        # 打桩口径（AGENTS「替身禁止裸赋值共享模块属性」）：asyncio 是全进程唯一的 stdlib 模块本体，
+        # 直接把 asyncio.sleep 换成 no-op 会波及同窗口内其它协程/后台线程 → 浅拷贝成 shim 只覆盖
+        # sleep 一个属性，再挂到被测模块的命名空间。
+        shim = types.SimpleNamespace(**vars(asyncio))
+        shim.sleep = _no_sleep
+        monkeypatch.setattr(sp, "asyncio", shim)
+
+        async def fake_home_cookies(*args: object, **kwargs: object) -> dict[str, str]:
+            return {"buvid3": secret}
+
+        monkeypatch.setattr(sp, "_cache_fetch_cookies", fake_home_cookies)
+        spy = _LogSpy()
+        monkeypatch.setattr(sp, "logger", spy)
+        # spi 两跳皆空（风控 200+空 body 的主形态）→ 落到首页 Set-Cookie 兜底那条 debug
+        monkeypatch.setattr(sp, "async_req", self._fake_req('{"code":0,"data":{}}'))
+
+        info = await sp.get_bilibili_danmaku_info("https://live.bilibili.com/462")
+
+        assert info is not None and info["buvid"] == secret, info
+        joined = "".join(spy.texts())
+        assert secret not in joined, f"首页 Set-Cookie 取到的 buvid3 整值仍进日志: {joined}"
+        assert "BBBB len=41" in joined, f"兜底来源的归因面被一起抹掉了: {joined}"

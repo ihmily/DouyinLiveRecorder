@@ -456,15 +456,69 @@ def _actual_of(case: dict[str, Any], cap: _Cap) -> dict[str, Any]:
     return dict(cap.commands[0])
 
 
+# LT-13（2026-10-18 审查）：GOLDEN_REGEN=1 与 `-k` / 单条 node id / `--lf` 组合时只跑部分用例，
+# 而 _REGEN_DICT 装的正是「本轮跑到的那几条」——旧实现无条件整份覆写基准 JSON，于是 20 条的黄金
+# 基准当场退化成「一条命令的快照」：此后其余 19 条比对全绿却什么都不证明（黄金快照自证失效，
+# 与 MIN-2265 的「基准被当前实现覆盖后一切错位都成新基准」同一失效面）。
+# 判据抽成纯函数是为了让「拒绝部分覆盖」本身有用例可跑（见 test_regen_coverage_guard_*），
+# 而不是只在人工变异验证里有效。
+def _regen_write_block(recorded: dict[str, Any], cases: list[dict[str, Any]]) -> str | None:
+    # 返回 None = 覆盖度足够、允许写盘；否则返回拒绝原因（不落盘、让会话以失败收尾）。
+    # 期望集直接取 _CASES 的 id 全集——它与参数化 ids 同源，故新增用例天然进判据，不建第二份清单。
+    expected = {str(case["id"]) for case in cases}
+    if len(expected) != len(cases):
+        # id 重复会让「覆盖 20 条」这类计数判据虚高（少跑一条也凑够数），先钉住清单本身
+        return f"用例 id 存在重复（{len(cases)} 条用例只有 {len(expected)} 个唯一 id），拒绝写盘"
+    got = set(recorded)
+    missing = sorted(expected - got)
+    unexpected = sorted(got - expected)
+    if missing or unexpected:
+        return (
+            f"GOLDEN_REGEN 拒绝覆写基准：本轮只记录到 {len(got)}/{len(expected)} 条快照。"
+            + (f" 缺失用例 {missing}；" if missing else "")
+            + (f" 清单外 id {unexpected}；" if unexpected else "")
+            + "多为 `-k` / 单条 node id / `--lf` 只跑了子集所致——"
+            f"请整文件重跑：GOLDEN_REGEN=1 python -m pytest {Path(__file__).name} -q（基准 {_GOLDEN_PATH} 保持原样）"
+        )
+    return None
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _write_golden(request: pytest.FixtureRequest) -> Generator[None]:
     yield
     if _REGEN:
+        # 写盘前唯一的一道闸：覆盖度不足即拒绝（见 _regen_write_block 的 LT-13 说明）
+        reason = _regen_write_block(_REGEN_DICT, _CASES)
+        if reason is not None:
+            pytest.fail(reason)
         _GOLDEN_PATH.parent.mkdir(parents=True, exist_ok=True)
         _GOLDEN_PATH.write_text(json.dumps(_REGEN_DICT, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 _REGEN_DICT: dict = {}
+
+
+def test_regen_coverage_guard_refuses_partial_and_accepts_full() -> None:
+    # LT-13 的行为锁（三条各判一个方向，缺任一条都留下盲区）：少一条必拒、全量放行、清单外 id 必拒
+    partial: dict[str, Any] = {str(case["id"]): {} for case in _CASES[:-1]}
+    reason = _regen_write_block(partial, _CASES)
+    assert reason is not None, "少一条用例仍允许写盘 = 黄金基准会被部分快照覆写（LT-13 复现）"
+    assert str(_CASES[-1]["id"]) in reason, f"拒绝原因未点名缺失的那条用例: {reason}"
+    assert _regen_write_block({str(case["id"]): {} for case in _CASES}, _CASES) is None, "全量覆盖被误拒"
+    extra: dict[str, Any] = {str(case["id"]): {} for case in _CASES}
+    extra["__not_a_case__"] = {}
+    assert _regen_write_block(extra, _CASES) is not None, "清单外 id 会让写出的基准立刻与用例集不一致"
+    # 反向见证：判据不能对空 recorded 放行（-k 一条没跑中也会走到这里）
+    empty_reason = _regen_write_block({}, _CASES)
+    assert empty_reason is not None and f"{len(_CASES)}" in empty_reason, f"空快照未被拒绝: {empty_reason}"
+
+
+def test_regen_coverage_guard_refuses_duplicated_case_ids() -> None:
+    # 计数判据的前提是 id 唯一：重复 id 会让「覆盖数够了」虚高（少跑一条也凑够 20），
+    # 故清单本身不自洽时必须拒绝写盘，而不是按 id 集合放行
+    duplicated = _CASES + [_CASES[0]]
+    reason = _regen_write_block({str(case["id"]): {} for case in _CASES}, duplicated)
+    assert reason is not None, "用例 id 重复时判据不得放行"
 
 
 @pytest.mark.parametrize("case", _CASES, ids=_GOLDEN_IDS)

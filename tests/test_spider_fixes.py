@@ -24,15 +24,70 @@ def _unwrap(func: object) -> Any:
     return cast(Any, getattr(func, "__wrapped__"))
 
 
-def _subprocess_shim(run: Any) -> types.SimpleNamespace:
+def _subprocess_shim(run: Any = None, popen: Any = None) -> types.SimpleNamespace:
     # SEV-2225 迁移：把 subprocess 替身装进 **src/utils** 的命名空间，不再改写 stdlib 模块本体。
     # 旧写法 patch("subprocess.run") 的容器是全进程唯一的 stdlib 模块对象，with 窗口内同进程的
     # harness safe-delete 守卫线程（其 subprocess.run 依赖真 Popen 的上下文管理协议，否则报
     # SAFE_DELETE_BULK_GUARD_ERROR）、loguru enqueue 线程、coverage 全部拿到假实现。
     # vars(subprocess) 浅拷贝保留 PIPE / STDOUT / TimeoutExpired / CalledProcessError 等常量，仅换 run。
+    # [2026-10-19 补] L-19 把 run_node_script_async 的执行原语从 subprocess.run 换成自管
+    # Popen + communicate(input=…, timeout=…)（外层再包 asyncio.wait_for，超时回收整棵进程树），
+    # 于是本 shim 的「需要换掉的那一位」从 run 变成 Popen；run 位保留给超时回收支路
+    # （_kill_node_process_tree 在 Windows 上仍调 subprocess.run 起 taskkill），两者都可选。
     shim = types.SimpleNamespace(**vars(subprocess))
-    shim.run = run
+    if run is not None:
+        shim.run = run
+    if popen is not None:
+        shim.Popen = popen
     return shim
+
+
+def _fake_popen_class(
+    stdout: bytes = b"",
+    *,
+    returncode: int = 0,
+    captured: dict[str, Any] | None = None,
+    calls: list[str] | None = None,
+) -> Any:
+    # 造一个 **Popen 替身类**（不是实例）：src/utils.run_node_script_async 里 `subprocess.Popen(argv, …)`
+    # 是构造调用，而 `subprocess.Popen[bytes]` 这类注解在 def 求值期就要 `__class_getitem__`
+    # （AGENTS「FakePopen 必须是类并定义 __class_getitem__」的既有口径，缺一样都起不来）。
+    # 四个成员各自对应被测实现的一个调用点：communicate（读 stdout/交 stdin/带超时）、
+    # returncode（非零即由实现自己转 CalledProcessError，不再由桩代抛）、kill + wait
+    # （超时后的进程树回收与收尸）——缺任何一个，超时路径的替身就会以 AttributeError 形态假失败。
+    # captured / calls 两个账本由用例传入：前者记实参（超时预算、经 stdin 交给 node 的字节），
+    # 后者记调用序列，二者共同构成「替身真被走到」的反向见证（不记就会退回起真实 node 进程的假绿）。
+    class _FakePopen:
+        def __class_getitem__(cls, item: object) -> Any:
+            return cls
+
+        def __init__(self, argv: list[str], **kwargs: Any) -> None:
+            if calls is not None:
+                calls.append("spawn")
+            if captured is not None:
+                captured["argv"] = list(argv)
+                captured["spawn_kwargs"] = dict(kwargs)
+            self.returncode = returncode
+
+        def communicate(self, *args: Any, **kwargs: Any) -> tuple[bytes, bytes]:
+            if calls is not None:
+                calls.append("communicate")
+            if captured is not None:
+                # L-19 后「脚本字节经 stdin 交给 node」与「内层超时预算」都落在这两个关键字实参上
+                captured["input"] = kwargs.get("input")
+                captured["timeout"] = kwargs.get("timeout")
+            return stdout, b""
+
+        def kill(self) -> None:
+            if calls is not None:
+                calls.append("kill")
+
+        def wait(self, timeout: Any = None) -> int:
+            if calls is not None:
+                calls.append("wait")
+            return self.returncode
+
+    return _FakePopen
 
 
 # vvxqiu 解析：房间号缺失/播放列表空须判未直播，出现 m3u8 即判开播
@@ -94,12 +149,13 @@ class TestMigu:
     # node 脚本执行失败（CalledProcessError）须转 domain ProgramError 而非抛出原始异常，且 subprocess 带 30s 超时防止 migu.js 卡死拖垮轮询
     async def test_subprocess_failure_converts_to_program_error(self) -> None:
         # 此前 CalledProcessError 未被捕获；现转为 ProgramError 且 subprocess 带 30s 超时
-        captured: dict[str, object] = {}
+        captured: dict[str, Any] = {}
 
-        def fake_run(*args: object, **kwargs: object) -> types.SimpleNamespace:
-            captured.update(kwargs)
-            raise subprocess.CalledProcessError(1, ["node"])
-
+        # [2026-10-19 改写：L-19 换了执行原语，替身也得跟着换]
+        # 旧写法把 CalledProcessError 由 `subprocess.run` 替身直接抛出；而 run_node_script_async 现已是
+        # 「自管 Popen + communicate(input=…, timeout=…)」，非零退出码由**被测实现自己**转成
+        # CalledProcessError（复刻旧 check=True 契约，见 src/utils.py 的 `if proc.returncode != 0`），
+        # 所以替身只需把 returncode 置成 1，异常由生产代码产生——这才是要钉住的那条链。
         raw = _unwrap(sp.get_migu_stream_url)
         with (
             patch.object(sp, "async_req", new=AsyncMock(return_value=self._basic_json())),
@@ -110,7 +166,9 @@ class TestMigu:
             # [2026-09-23 修订：此处旧注释论证「改打标准库模块本身……与原先打 sp.subprocess.run
             # 语义等价」——对被测面成立、对影响面不成立（SEV-2225），且 sp 根本没有 subprocess
             # 属性（实测 hasattr(sp, "subprocess") 为 False），该论证已就地删除。]
-            patch.object(u, "subprocess", _subprocess_shim(fake_run)),
+            # [2026-10-19 补] 该见证仍然成立、只是换了落账位置：timeout 现由 communicate 的关键字
+            # 实参传入（旧形态由 run 传入），_fake_popen_class 把这两个 kwargs 一并记进 captured。
+            patch.object(u, "subprocess", _subprocess_shim(popen=_fake_popen_class(returncode=1, captured=captured))),
         ):
             with pytest.raises(sp.ProgramError):
                 await raw("https://x/123")
@@ -124,16 +182,20 @@ class TestMigu:
                 return ""  # 重定向失败
             return self._basic_json()
 
-        def fake_run(*args: object, **kwargs: object) -> types.SimpleNamespace:
-            # migu.js（2026-08 重写版）输出带 ddCalcu/sv 参数的完整地址（而非仅 ddCalcu 值）
-            # 2026-09-20 随 MID-62 适配：utils.run_node_script_async 改为「脚本经 stdin 交给
-            # node -」且按字节捕获输出（无 text=True），桩须返回 bytes stdout 而非 str。
-            return types.SimpleNamespace(stdout=b"https://x.miguvideo.com/abc.m3u8&ddCalcu=dd&sv=119\n")
-
+        # [2026-10-19 补] 本条曾是**假绿**：is_live/record_url 两个断言只依赖 fake_req，替身没被走到
+        # 也照样通过，于是 L-19 换掉执行原语后它一路「绿」着起了真实 node 进程（migu.js 真经 stdin
+        # 交给 node、真发一次网络请求）。现补 hits 反向见证：Popen 替身必须被构造并被 communicate。
+        # [2026-10-19 注] 原先这里是一个 `def fake_run(...)` 返回 SimpleNamespace(stdout=b"…m3u8…")
+        # ——migu.js（2026-08 重写版）的输出契约是「带 ddCalcu/sv 参数的完整地址」而非只有 ddCalcu 值，
+        # 且 MID-62 后按字节捕获（无 text=True）；L-19 把 run 位摘掉后该桩不再被调用，stdout 改由
+        # 下方 Popen 替身的 communicate() 以 (bytes, bytes) 元组给出，契约本身一字未变。
+        hits: list[str] = []
         raw = _unwrap(sp.get_migu_stream_url)
         # 替身装在 src/utils 上（见 _subprocess_shim），理由同 TestMigu 首条用例
-        with patch.object(sp, "async_req", new=fake_req), patch.object(u, "subprocess", _subprocess_shim(fake_run)):
+        stub = _fake_popen_class(stdout=b"https://x.miguvideo.com/abc.m3u8&ddCalcu=dd&sv=119\n", calls=hits)
+        with patch.object(sp, "async_req", new=fake_req), patch.object(u, "subprocess", _subprocess_shim(popen=stub)):
             result = await raw("https://x/123")
+        assert hits == ["spawn", "communicate"], f"Popen 替身未被走到（真起了 node 进程？）: {hits}"
         # 重定向解析失败（拿不到最终 m3u8 地址）→ 判未直播，不产出 record_url
         assert result["is_live"] is False
         assert "record_url" not in result
@@ -158,17 +220,17 @@ class TestMigu:
 
         calls: list[str] = []
 
-        def fake_run(*args: object, **kwargs: object) -> types.SimpleNamespace:
-            # 同 TestMigu 其它用例：run_node_script_async 现按字节捕获 stdout（MID-62 stdin 形态）
-            calls.append("run")
-            return types.SimpleNamespace(stdout=b"dd\n")
+        # [2026-10-19 改写] 原此处是一个 `def fake_run(...)`（往 calls 里 append "run"、返回
+        # SimpleNamespace(stdout=b"dd\n")）：run_node_script_async 按字节捕获 stdout 的口径（MID-62
+        # stdin 形态）不变，只是 L-19 后 stdout 由 Popen.communicate() 给出，故把 witness 迁到替身类上。
+        stub = _fake_popen_class(stdout=b"dd\n", calls=calls)
 
         raw = _unwrap(sp.get_migu_stream_url)
         # 替身装在 src/utils 上（见 _subprocess_shim）。calls 非空即「替身真被走到」的见证：
         # 本条的 is_live/anchor_name 断言只依赖 fake_req，装错命名空间时会静默假绿，故补这条。
-        with patch.object(sp, "async_req", new=fake_req), patch.object(u, "subprocess", _subprocess_shim(fake_run)):
+        with patch.object(sp, "async_req", new=fake_req), patch.object(u, "subprocess", _subprocess_shim(popen=stub)):
             result = await raw("https://x/123")
-        assert calls, "subprocess.run 替身未被调用：patch 目标命名空间错位（真正的执行点在 src/utils.py）"
+        assert calls, "subprocess 替身未被调用：patch 目标命名空间错位（真正的执行点在 src/utils.py）"
         assert result["is_live"] is True
         assert result["anchor_name"] == ""  # title 为 None 时不再 TypeError
 

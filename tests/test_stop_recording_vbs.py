@@ -43,6 +43,10 @@ def _vbs_text() -> str:
     assert raw[:2] == b"\xff\xfe", "StopRecording.vbs 必须是 UTF-16 LE 且带 FF FE BOM（不得存成 UTF-8）"
     text = raw.decode("utf-16-le")
     assert text.startswith("\ufeff"), "BOM 解码后应为 U+FEFF 首字符"
+    # M-02（2026-10-19 审查修复）：BOM 必须恰好一支——WSH 只剥离流首一个 BOM，第二个 U+FEFF
+    # 会落在语句位置（其后才是注释符 '），cscript/wscript 直接报 800A408「无效字符」，
+    # 紧急停录兜底脚本必然解析失败。上一轮双 BOM 事故（ff fe ff fe …）正是只查 raw[:2] 漏掉的。
+    assert not text[1:].startswith("\ufeff"), "StopRecording.vbs 不得出现双重 BOM（第二支会打成 Invalid character）"
     # 全部换行必须是 CRLF：LF 计数等于 CRLF 计数即不存在孤立 LF
     assert text.count("\n") == text.count("\r\n"), "StopRecording.vbs 必须全量 CRLF，不得出现孤立 LF"
     return text[1:]

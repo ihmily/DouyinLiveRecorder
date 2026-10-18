@@ -284,10 +284,24 @@ class _LogHighlighter(QSyntaxHighlighter):
     def __init__(self, document: QTextDocument, palette: Palette) -> None:
         super().__init__(document)
         self._formats: dict[str, QTextCharFormat] = {}
+        self._apply_tokens(palette)
+
+    def _apply_tokens(self, palette: Palette) -> None:
+        # 颜色一律取自 src/gui_qt/theme.py 的令牌（terminal_error/terminal_warn），
+        # 不得在这里写死十六进制——整窗配色的事实源只有一处（Qt 硬约束①）。
+        formats: dict[str, QTextCharFormat] = {}
         for level, key in (("error", "terminal_error"), ("warn", "terminal_warn")):
             fmt = QTextCharFormat()
             fmt.setForeground(QColor(palette.token(key)))
-            self._formats[level] = fmt
+            formats[level] = fmt
+        self._formats = formats
+
+    def set_palette(self, palette: Palette) -> None:
+        # 主题/缩放/字体切换后只换色表并重刷既有条目（M-16）：不新建实例——
+        # QSyntaxHighlighter 以 document 为父对象，新建的旧实例永不销毁、且仍参与高亮，
+        # 切 N 次就叠 N 个（旧行被旧配色反复重着色、全文档重复高亮 N 份开销）。
+        self._apply_tokens(palette)
+        self.rehighlight()
 
     def highlightBlock(self, text: str) -> None:
         for marker, level in self._LEVELS:
@@ -344,9 +358,19 @@ class TerminalText(QPlainTextEdit):
         self.setMaximumBlockCount(1000)
         self.setFont(fixed_font(11))
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        # 同一 document 只挂一个高亮器（M-16）：apply_highlighter 每次主题/缩放/字体切换
+        # 都会被调到，这里持引用、首建之后一律走 set_palette 复用。
+        self._highlighter: _LogHighlighter | None = None
 
     def apply_highlighter(self, palette: Palette) -> None:
-        self._highlighter = _LogHighlighter(self.document(), palette)
+        # [历史注] 旧实现每次调用都 _LogHighlighter(self.document(), palette) 新建——
+        # QSyntaxHighlighter 以 document 为父对象、旧实例从不销毁，切 N 次主题叠 N 个高亮器，
+        # 旧行被旧配色反复重着色（颜色错乱）且全文档重复高亮 N 份开销（CODE_REVIEW_2026-10-18 M-16）。
+        # 现只建一次，后续仅更新色表并 rehighlight() 让既有条目按新主题重刷。
+        if self._highlighter is None:
+            self._highlighter = _LogHighlighter(self.document(), palette)
+        else:
+            self._highlighter.set_palette(palette)
 
     def append_line(self, text: str) -> None:
         # 走光标在末尾插入而不是 appendPlainText：后者会强制新建段落并额外补一个换行，

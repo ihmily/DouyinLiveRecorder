@@ -117,6 +117,11 @@ class TestThreadSafeCredential:
             t.start()
         for t in threads:
             t.join(timeout=20)
+        # LT-04（2026-10-18 审查）：join(timeout=20) **返回**不等于线程已退出——去重链挂死时 join
+        # 超时静默返回，本用例只能靠「结果条数」间接兜住，而线程卡在临界区、恰好把已收集的结果
+        # 凑齐的形态仍会落进通过侧。逐线程断言 is_alive 为 False 才真正钉住「10 线程全部跑完」。
+        for t in threads:
+            assert not t.is_alive(), "join 超时后线程仍存活：跨线程去重链挂死，不得判绿"
 
         assert not errors, f"并发取凭据抛出异常: {errors}"
         assert len(results) == 10, "有线程没拿到结果：去重等待者被饿死或超时"
@@ -186,6 +191,10 @@ class TestRateLimit:
             t.start()
         for t in threads:
             t.join(timeout=20)
+        # LT-04（2026-10-18 审查）：同上一条口径——join 超时返回时线程可能还卡在 douyin_rate_lock
+        # 里，`len(stamps) == 5` 只是间接证据；逐线程断言已退出才挡住「死锁但判绿」。
+        for t in threads:
+            assert not t.is_alive(), "join 超时后线程仍存活：限流临界区死锁，不得判绿"
 
         assert len(stamps) == 5, f"有线程未走完限流临界区: {stamps}"
         ordered = sorted(stamps)
@@ -231,6 +240,11 @@ class TestCredentialSharing:
             t.start()
         for t in threads:
             t.join(timeout=20)
+        # LT-04（2026-10-18 审查）：singleflight 的跨循环交付若挂住，等待者线程永不退出，
+        # 而 join(timeout=20) 只是超时返回、不报错——必须逐线程断言已退出，否则「死锁」会
+        # 以「值不齐」的间接形态出现，且被后面第一条断言的措辞误导成「缓存没生效」。
+        for t in threads:
+            assert not t.is_alive(), "join 超时后线程仍存活：singleflight 临界区死锁，不得判绿"
 
         assert len(values) == 5, f"有消费者没拿到凭据: {values}"
         assert all(v == {"did": "abc", "didv": "def"} for v in values), f"各模块拿到的凭据不一致: {values}"

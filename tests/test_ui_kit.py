@@ -9,6 +9,8 @@
 # Treeview 协议（get_children/insert/delete/item/move），不模拟其余行为。
 
 import ast
+import tkinter as tk
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
@@ -190,6 +192,26 @@ class TestSourceLocks:
 class TestRealWindowWidgets:
     # 真窗用例（无显示环境 skip，与本文件唯一 skip 面）：浮层编辑器与派生样式
     # 依赖真实 Tcl 事件循环，无头环境无法等价驱动。
+    # [MT-12 2026-10-18] 上面这句声明此前是空头承诺：三条用例都在函数体里裸 `tk.Tk()`，
+    # 没有显示器时抛的是 TclError → 用例以 ERROR 形态进门禁，把「这台机器没显示设备」
+    # 伪装成「代码回归」。现补与本仓范本同构的 tk_root fixture（形态取
+    # tests/test_ui_theme.py::TestApplyTtk.tk_root）。
+    # 与 AGENTS「平台专属分支的测试不得靠 skipif 让 CI 跳过」不冲突：那条禁的是按
+    # sys.platform 跳过**代码分支**（Windows/POSIX 两侧逻辑都得在 CI 真跑），本处缺的是
+    # **显示设备**本身；CI 侧仍由 xvfb-run 提供虚拟显示让这些用例常态执行（见 ci.yml 的
+    # 「Install ffmpeg + xvfb + Qt runtime libs (apt)」与「pytest 全程跑在 xvfb 下」两步，
+    # 其注释已把 test_ui_kit 的真窗用例列为常态执行面），skip 只兜无 xvfb 的裸环境。
+    # 与范本的唯一差异：**不 withdraw**——bbox 取单元格几何、event_generate 打真实事件，
+    # 都要求窗体真正映射过；隐藏根窗后 winfo 宽度退化为 1，用例会以「目标单元格不可见」误红。
+    @pytest.fixture()
+    def tk_root(self) -> Generator[tk.Tk, None, None]:
+        try:
+            root = tk.Tk()
+        except tk.TclError as e:
+            pytest.skip(f"无显示环境，跳过 Tk 真窗用例: {e}")
+        yield root
+        root.destroy()
+
     _COLUMNS_GUI = [
         ("name", "主播名称", 3, "w"),
         ("set_quality", "设置画质", 1, "w"),
@@ -212,86 +234,71 @@ class TestRealWindowWidgets:
         root.update()  # type: ignore[attr-defined]
         return table, commits
 
-    def test_cell_editor_opens_and_commits(self) -> None:
+    def test_cell_editor_opens_and_commits(self, tk_root: tk.Tk) -> None:
         # 点击「切换画质」列 → 单元格 bbox 上浮 readonly 下拉，初值 = 该行当前画质；
         # 选中即按 (行, 选中值) 提交并销毁；这两步合起来锁「点击不落空」的新实现面
-        import tkinter as tk
+        table, commits = self._build(tk_root)
+        table.sync(
+            ["A", "B"],
+            {"A": ("主播A", "高清", ""), "B": ("主播B", "原画", "")},
+            {"A": ("normal",), "B": ("normal",)},
+        )
+        tk_root.update()
+        bbox = table.tree.bbox("A", "#3")
+        assert bbox, "目标单元格不可见，无法驱动浮层编辑器"
+        x, y = bbox[0] + bbox[2] // 2, bbox[1] + bbox[3] // 2
+        table.tree.event_generate("<Button-1>", x=x, y=y)
+        tk_root.update()
+        assert table._editor is not None, "点击「切换画质」列未弹出浮层编辑器"
+        assert table._editor.get() == "高清", "浮层编辑器初值应为该行当前画质"
+        # 选中即提交并销毁（模拟用户在下拉里选「原画」）
+        table._editor.set("原画")
+        table._editor.event_generate("<<ComboboxSelected>>")
+        tk_root.update()
+        assert commits == [("A", "原画")], f"提交回调未按 (行, 选中值) 触发: {commits}"
+        assert table._editor is None, "选中后浮层编辑器应销毁"
 
-        root = tk.Tk()
-        try:
-            table, commits = self._build(root)
-            table.sync(
-                ["A", "B"],
-                {"A": ("主播A", "高清", ""), "B": ("主播B", "原画", "")},
-                {"A": ("normal",), "B": ("normal",)},
-            )
-            root.update()
-            bbox = table.tree.bbox("A", "#3")
-            assert bbox, "目标单元格不可见，无法驱动浮层编辑器"
-            x, y = bbox[0] + bbox[2] // 2, bbox[1] + bbox[3] // 2
-            table.tree.event_generate("<Button-1>", x=x, y=y)
-            root.update()
-            assert table._editor is not None, "点击「切换画质」列未弹出浮层编辑器"
-            assert table._editor.get() == "高清", "浮层编辑器初值应为该行当前画质"
-            # 选中即提交并销毁（模拟用户在下拉里选「原画」）
-            table._editor.set("原画")
-            table._editor.event_generate("<<ComboboxSelected>>")
-            root.update()
-            assert commits == [("A", "原画")], f"提交回调未按 (行, 选中值) 触发: {commits}"
-            assert table._editor is None, "选中后浮层编辑器应销毁"
-        finally:
-            root.destroy()
-
-    def test_font_style_derives_and_caches(self) -> None:
-        import tkinter as tk
+    def test_font_style_derives_and_caches(self, tk_root: tk.Tk) -> None:
         from tkinter import ttk
 
         import src.ui_kit as uk
 
-        root = tk.Tk()
-        try:
-            style = ttk.Style(root)
-            style.configure("Prov.TButton", background="#123456")
-            style.map("Prov.TButton", background=[("active", "#234567")])
-            name1 = uk.font_style("Prov.TButton", ("Arial", 20), root)
-            name2 = uk.font_style("Prov.TButton", ("Arial", 20), root)
-            assert name1 == name2, "同 (变体, 字体) 必须复用同一派生样式"
-            assert name1.endswith(".Prov.TButton")
-            derived_cfg = style.configure(name1)
-            assert derived_cfg is not None and "font" in derived_cfg, "派生样式必须注入字体"
-            assert derived_cfg.get("background") == "#123456", "派生样式必须继承基础变体静态配置"
-            derived_map = style.map(name1)
-            assert derived_map.get("background") == [("active", "#234567")], "派生样式必须继承基础变体状态映射"
-            # 与基础变体不同字体的另一枚派生样式
-            name3 = uk.font_style("Prov.TButton", ("Arial", 12), root)
-            assert name3 != name1
-        finally:
-            root.destroy()
+        style = ttk.Style(tk_root)
+        style.configure("Prov.TButton", background="#123456")
+        style.map("Prov.TButton", background=[("active", "#234567")])
+        name1 = uk.font_style("Prov.TButton", ("Arial", 20), tk_root)
+        name2 = uk.font_style("Prov.TButton", ("Arial", 20), tk_root)
+        assert name1 == name2, "同 (变体, 字体) 必须复用同一派生样式"
+        assert name1.endswith(".Prov.TButton")
+        derived_cfg = style.configure(name1)
+        assert derived_cfg is not None and "font" in derived_cfg, "派生样式必须注入字体"
+        assert derived_cfg.get("background") == "#123456", "派生样式必须继承基础变体静态配置"
+        derived_map = style.map(name1)
+        assert derived_map.get("background") == [("active", "#234567")], "派生样式必须继承基础变体状态映射"
+        # 与基础变体不同字体的另一枚派生样式
+        name3 = uk.font_style("Prov.TButton", ("Arial", 12), tk_root)
+        assert name3 != name1
 
-    def test_translatable_text_registers_and_retranslates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_translatable_text_registers_and_retranslates(
+        self, tk_root: tk.Tk, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         # T()（ui_i18n.Translatable）经工厂「建时查表 + 登记重译」：语言切换后
         # retranslate_all 回填当前语言值。删掉工厂里的 register 调用本用例必须转红（变异验证）。
-        import tkinter as tk
-
         import i18n
         import src.ui_kit as uk
         from src import ui_i18n
 
-        root = tk.Tk()
-        try:
-            label = uk.Label(root, text=ui_i18n.T("待 机"))
-            button = uk.Button(root, text=ui_i18n.T("开始录制"))
-            assert label.cget("text") == "待 机"
-            assert button.cget("text") == "开始录制"
-            # 非恒等翻译：证明重译走 tr 查表（每次渲染取当前目录），而不是建时定格
-            monkeypatch.setattr(i18n, "_tr", lambda text: f"<<{text}>>")
-            applied = ui_i18n.retranslate_all()
-            assert applied >= 2, "两个控件都必须登记在册"
-            assert label.cget("text") == "<<待 机>>"
-            assert button.cget("text") == "<<开始录制>>"
-            # 普通 str 文本不登记：切语言不得被改写
-            plain = uk.Label(root, text="DouyinLiveRecorder")
-            assert ui_i18n.retranslate_all() >= 2
-            assert plain.cget("text") == "DouyinLiveRecorder"
-        finally:
-            root.destroy()
+        label = uk.Label(tk_root, text=ui_i18n.T("待 机"))
+        button = uk.Button(tk_root, text=ui_i18n.T("开始录制"))
+        assert label.cget("text") == "待 机"
+        assert button.cget("text") == "开始录制"
+        # 非恒等翻译：证明重译走 tr 查表（每次渲染取当前目录），而不是建时定格
+        monkeypatch.setattr(i18n, "_tr", lambda text: f"<<{text}>>")
+        applied = ui_i18n.retranslate_all()
+        assert applied >= 2, "两个控件都必须登记在册"
+        assert label.cget("text") == "<<待 机>>"
+        assert button.cget("text") == "<<开始录制>>"
+        # 普通 str 文本不登记：切语言不得被改写
+        plain = uk.Label(tk_root, text="DouyinLiveRecorder")
+        assert ui_i18n.retranslate_all() >= 2
+        assert plain.cget("text") == "DouyinLiveRecorder"

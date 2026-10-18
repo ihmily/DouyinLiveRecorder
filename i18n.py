@@ -194,7 +194,12 @@ _project_root = os.path.normpath(str(module_dir))
 def _should_translate(caller_file: str) -> bool:
     caller_norm = os.path.normpath(caller_file)
     # 在项目根目录下即为项目源码（含 src/ 及 main.py/web.py/gui.py 等）
-    return caller_norm.startswith(_project_root)
+    # L-03（2026-10-18 审查）：前缀比对必须带路径分隔符边界。裸 startswith 将「与项目根
+    # 同名前缀的兄弟目录」（根为 /proj 时的 /proj-evil/xxx.py）一并判成本项目源码，
+    # 于是第三方目录里的 print 也被翻译——判定语义是「谁在本项目内」，不是「谁像本项目」。
+    # 两形态归一后完全相等（把项目根当文件传进来的调用方）仍算在内，不得反过来收紧成
+    # 「只认严格子路径」而把相等情形漏掉。
+    return caller_norm == _project_root or caller_norm.startswith(_project_root + os.sep)
 
 
 # 从 JSON 文件加载「原文 → 译文」映射；文件不存在或解析失败时返回 None

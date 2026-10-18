@@ -13,6 +13,8 @@ import importlib
 import os
 import re
 import sys
+import threading
+import time
 import types
 from pathlib import Path
 from typing import Iterator
@@ -196,6 +198,79 @@ class TestWebConsoleRotation:
         assert sys.stdout is original_stdout
         assert not fake_sink_ops["rebind"]
 
+    def test_concurrent_print_inside_archive_window_does_not_raise(
+        self, logs_dir: Path, fake_sink_ops: dict[str, list[str]], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # M-09（CODE_REVIEW_2026-10-18）回归锁：改名窗口内其它线程 print() 不得抛
+        # ValueError: I/O operation on closed file。
+        # 旧顺序是「flush+close 旧句柄 → os.rename → _rebind_web_console」，而 sys.stdout/sys.stderr
+        # 在整个改名+重建期间仍指向那个**已关闭对象**；Windows 慢盘/杀软扫描会把这段窗口从
+        # 微秒放大到秒级，Web 模式下请求线程的 print() 正好落在里面就崩。
+        # 取证手法：把 os.rename 换成「先睡 0.3s、再打一条、最后真改名」的替身——
+        # 睡眠段就是被人为放大的归档窗口（旧顺序下此刻标准流已关闭、替身尚未接管），
+        # 替身自身的那条打印必然落在窗口内，另起一支线程整窗口持续 print()。
+        # 两条判据：① 两支打印都不许抛；② 窗口内那条输出最终并入重建后的新文件（替身不是黑洞）。
+        # 按 M-27/MT-11 口径，rename 替身只落进 src.log_archive 命名空间，不改全进程唯一的 os 本体。
+        path = logs_dir / "web_console.log"
+        real_rename = os.rename
+        marker = "窗口内主线程打印的一行\n"
+
+        def _slow_rename(src: str, dst: str) -> None:
+            time.sleep(0.3)
+            print(marker, end="")
+            real_rename(src, dst)
+
+        monkeypatch.setattr(la, "os", types.SimpleNamespace(**{**vars(os), "rename": _slow_rename}))
+        assert os.rename is real_rename  # 反向见证：替身没有污染进程全局
+
+        errors: list[str] = []
+        stop = threading.Event()
+
+        def _hammer() -> None:
+            # 一支「其它线程」在归档全程持续 print；命中已关闭标准流时 ValueError 会被记下来
+            while not stop.is_set():
+                try:
+                    print("并发输出\n", end="")
+                except Exception as e:
+                    # 本线程的职责就是把「窗口内 print() 是否抛」原样带回主线程断言；
+                    # 记下第一条即退出，避免旧形态下每条都抛同一异常刷满 errors
+                    errors.append(f"{type(e).__name__}: {e}")
+                    return
+                time.sleep(0.002)
+
+        handle = open(path, "a", encoding="utf-8", buffering=1)
+        hammer = threading.Thread(target=_hammer, name="dlr-archive-print-hammer")
+        try:
+            handle.write("before-stop\n")
+            handle.flush()
+            monkeypatch.setattr(sys, "stdout", handle)
+            monkeypatch.setattr(sys, "stderr", handle)
+            hammer.start()
+            try:
+                archived = la.archive_runtime_logs(reopen_streams=False)
+            finally:
+                stop.set()
+                hammer.join(timeout=5)
+            assert not hammer.is_alive(), "打印线程未退出（很可能卡在已关闭的标准流上）"
+            assert errors == [], f"归档窗口内 print() 抛异常: {errors}"
+            assert any(os.path.basename(p).startswith("web_console_") for p in archived), archived
+            assert handle.closed, "改名前未关闭原句柄（Windows 下 rename 必失败）"
+            stream = sys.stdout
+            assert stream is not handle and not stream.closed
+            assert stream.name == str(path)
+            assert fake_sink_ops["rebind"]
+            stream.flush()
+            assert marker in path.read_text(encoding="utf-8"), "窗口期内经替身缓存的输出未并入新文件"
+        finally:
+            stop.set()
+            if hammer.is_alive():
+                hammer.join(timeout=5)
+            stream = sys.stdout
+            if stream is not None and not stream.closed and stream is not handle:
+                stream.close()
+            if not handle.closed:
+                handle.close()
+
 
 class TestMonitorHubCloseFile:
     def test_close_file_then_lazy_reopen(self, tmp_path: Path) -> None:
@@ -204,12 +279,21 @@ class TestMonitorHubCloseFile:
         path = tmp_path / "danmaku_monitor.jsonl"
         try:
             hub.room_message("roomA", "chat", "用户", "第一条")
+            # MT-07（2026-10-18）：MID-25 之后落盘在独立边车写线程，任何「读磁盘 / 读句柄登记表」
+            # 之前必须先排空队列。`hub._file` 属性内部虽然也会 drain()，但那条 drain **不带断言**：
+            # 超时（慢盘 / 队列被别用占满）即返回 None，于是「首条事件尚未落盘」会表现为
+            # size_before=0 或 _file is None 的随机假红。显式 `assert hub.flush()` 把
+            # 「队列没排空」与「行为真的错了」两种故障分开——口径同
+            # tests/test_regression_2026_09_22_infra.py::TestSidecarArchiveWindow（每步断言前一次）。
+            assert hub.flush()
             assert hub._file is not None
             size_before = path.stat().st_size
             hub.close_file()
+            assert hub.flush()
             assert hub._file is None
             assert path.stat().st_size == size_before
             hub.room_message("roomA", "chat", "用户", "第二条")
+            assert hub.flush()
             assert hub._file is not None
             assert path.stat().st_size > size_before
         finally:

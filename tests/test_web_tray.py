@@ -11,6 +11,8 @@
 #
 # Mock 口径：pystray 用 sys.modules 桩替换（避免真实托盘）；Win32 DLL 句柄用
 # SimpleNamespace 桩替换 _get_kernel32/_get_user32 的返回值，不触碰真窗口。
+# 生产侧「函数内 import」的 stdlib（ctypes / os）一律经 _imported_module_shim 换 sys.modules 条目，
+# 不改模块本体（MT-13 / LT-12，2026-10-18）。
 
 # 分支地图（上边已给出三条不可反向漂移的边界，此处补“哪个用例管哪条”）：
 #   DLL 句柄缓存的三个入口：已缓存直返 / 非 win32 早返回 / WinDLL 加载失败返 None。
@@ -73,6 +75,23 @@ class _FakePystray(types.ModuleType):
         return icon
 
 
+def _imported_module_shim(name: str, **overrides: Any) -> types.SimpleNamespace:
+    # MT-13 / LT-12（2026-10-18）：本模块要替的两个 stdlib 符号都处在**函数内 import** 的位置
+    # （src/web_tray.py 的 _get_kernel32/_get_user32 里 `import ctypes`、_on_exit 里 `import os`），
+    # 所以 web_tray 命名空间内根本没有可替换的模块引用：仓库常规的
+    # `monkeypatch.setattr(<被测模块>, "os", shim)` 在这里打不上，写成 raising=False 更糟——
+    # 会落一个永不被读的模块属性，用例静默假绿。生产侧配合（把 import 提到模块级）属另一回事，
+    # 本轮不动生产代码。
+    # 唯一真实接线点是 sys.modules 条目：函数内 `import x` 命中缓存即绑定该对象。
+    # 浅拷贝保留真模块的全部符号（ctypes 的 c_void_p/c_long/c_int、os 的其余函数），
+    # 只覆盖需要的那一个，于是 stdlib 模块本体在整个用例窗口内逐字不变，
+    # 同窗口里其它线程/库拿到的仍是真实现（改本体的旧写法会把它们一并换掉）。
+    shim = types.SimpleNamespace(**vars(sys.modules[name]))
+    for attr, value in overrides.items():
+        setattr(shim, attr, value)
+    return shim
+
+
 @pytest.fixture
 def reset_dll_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     # 模块级 DLL 句柄是进程级单例，跨用例残留会让「None → 加载」分支永远走不到。
@@ -122,12 +141,24 @@ class TestDllAccessors:
         if sys.platform != "win32":
             pytest.skip("仅在 Windows 下 _get_* 会真的尝试加载 DLL")
 
+        calls: list[tuple[object, ...]] = []
+
         def boom(*args: object, **kwargs: object) -> None:
+            calls.append(args)
             raise OSError("kernel32 unavailable")
 
-        monkeypatch.setattr(ctypes, "WinDLL", boom)
+        # MT-13（2026-10-18）：旧写法 `monkeypatch.setattr(ctypes, "WinDLL", boom)` 改的是全进程唯一的
+        # ctypes 本体——替身窗口内任何其它线程/库的 WinDLL 调用都会一起炸。按 _imported_module_shim
+        # 的口径走 sys.modules 条目（生产侧是函数内 import，无模块级引用可绑）。
+        real_windll = ctypes.WinDLL
+        monkeypatch.setitem(sys.modules, "ctypes", _imported_module_shim("ctypes", WinDLL=boom))
         assert web_tray._get_kernel32() is None
         assert web_tray._get_user32() is None
+        # 反向见证两条：① 真模块本体从未被改写（本用例要防的正是「替身漏进全进程」）；
+        # ② boom 确实被调用过两次——若将来生产侧把 import 提到模块级、sys.modules 条目不再被读到，
+        # 这条会先红并给出「shim 未接上」的归因，而不是让「返回 None」被判成捕获逻辑的胜利。
+        assert ctypes.WinDLL is real_windll
+        assert len(calls) == 2, f"shim 未接上：WinDLL 替身被调用 {len(calls)} 次（应为 kernel32+user32 各一次）"
 
 
 def _recorder(sink: list[Any], label: Any, result: int) -> Any:
@@ -342,12 +373,20 @@ class TestMenuCallbacks:
 
     def test_on_exit_without_server_hard_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
         codes: list[int] = []
-        # _on_exit 内部是 `import os; os._exit(0)`，打的必须是真 os 模块上的这个符号；
-        # _exit 不会被 harness 守护线程使用，且 monkeypatch 会还原，故不违反「不改 stdlib 本体」约定。
-        monkeypatch.setattr(os, "_exit", lambda code: codes.append(code))
+        # LT-12（2026-10-18）：旧写法 `monkeypatch.setattr(os, "_exit", ...)` 改的是全进程唯一的 os 本体，
+        # 同窗口内任何线程的删除/重命名/退出都会走进这个只记账的替身。生产侧 `_on_exit` 是函数内
+        # `import os`，故按 _imported_module_shim 的口径换 sys.modules 条目：真 os 本体逐字不变，
+        # 只有本用例窗口内的 import 绑定到替身。
+        # [历史注] 旧注释称「_exit 不会被 harness 守护线程使用，且 monkeypatch 会还原，故不违反
+        # 「不改 stdlib 本体」约定」——「会还原」只保证事后，不保证窗口内，2026-10-18 按仓库
+        # 「测试编写强制约定」改正。
+        real_exit = os._exit
+        monkeypatch.setitem(sys.modules, "os", _imported_module_shim("os", _exit=lambda code: codes.append(code)))
         tray = web_tray.WebConsoleTray("127.0.0.1", 8000, server=None)
         tray._on_exit()
         assert codes == [0]
+        # 反向见证：真 os 本体从未被换掉（_exit 一旦泄漏进本体，退出路径会在全进程静默失效）
+        assert os._exit is real_exit
 
     def test_on_exit_swallows_icon_stop_errors(self) -> None:
         class _Angry:

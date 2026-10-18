@@ -1988,7 +1988,13 @@ def run_ffmpeg(
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=logf,
-            text=True,
+            # M-20（2026-10-19 审查修复）：stdin 必须是二进制管道——本文件 terminate_all_ffmpeg
+            # 按主线 src/ffmpeg_proc.py::_terminate_ffmpeg_process 口径写 b"q"，而 text=True 时
+            # stdin 是 TextIOWrapper、写 bytes 必抛 TypeError 并被写 q 处的 except 吞没，
+            # 「写 q 优雅收尾补 moov」一级恒失效，Windows 下退化为 TerminateProcess 硬杀。
+            # 该 Popen 的 stdout=DEVNULL、stderr=文件句柄，副本内无 communicate()/读 stdout 的点，
+            # 去掉 text 形态无其它消费方受影响。回归锁：tests/test_regression_2026_09_22_standalone.py
+            # ::TestStandaloneGracefulQuitChain。
             shell=False,
         )
     except FileNotFoundError:

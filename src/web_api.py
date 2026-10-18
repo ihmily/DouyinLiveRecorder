@@ -610,6 +610,14 @@ def create_app(
             or path == "/health"
             or path == "/"
             or path.startswith("/web/")
+            # L-20（2026-10-18）：无尾斜杠的 `/web` 也必须免鉴权。本中间件由 BaseHTTPMiddleware 包在
+            # StaticFiles **之外**，StaticFiles 自己那条「/web → /web/」的 307 还没机会执行就被这里判死，
+            # 于是认证开启时 GET /web 拿到的是 401 {"detail":"unauthorized"}（实测三档：auth=true 无
+            # token → 401；auth=true 带 token → 307；auth=false → 307；/web/ 恒 200。取数形态见
+            # tests/test_web_api.py::TestAuthMiddleware::test_static_panel_reachable_without_trailing_slash）。
+            # 症状是「新开标签输 http://<host>:8000/web 只见一串 unauthorized、登录页根本打不开」，
+            # 且极易被误读成认证坏了。放行它不新增信息面：这一跳最终送出的正是已恒公开的 /web/ 静态首页。
+            or path == "/web"
             or path == "/favicon.ico"
         ):
             # MIN-2245：免鉴权端点里「会读盘/解析」的那两个（/api/auth/status、/health）先过 per-IP
@@ -1282,7 +1290,21 @@ def create_app(
         # 认证状态变更后必须让中间件的配置缓存失效：缓存按 mtime+size 失效，
         # 极端情况下同一秒内的等长改写不会改变 mtime（Windows FAT/粗精度时间戳），
         # 于是「关掉认证」这一安全相关的写入要到下一次改写才生效。显式失效，不留窗口。
-        if is_web_section and key_norm in ("web_auth_enable", "web_password", "web_host"):
+        # L-23（2026-10-18）：清单补齐另外两个**安全判定**键，判据与上面完全同源。
+        # `web_allowed_hosts` 经 _is_same_origin→is_origin_allowed 决定哪些 Host/Origin 能驱动写接口
+        # （MID-36 的 DNS 重绑定防线），`web_trusted_proxy` 决定 X-Forwarded-For 是否可信
+        # （MID-35 的登录限流按此分桶，可信代理配错等于限流整体失效）。二者都只从这份带缓存的
+        # cfg 里取，于是「把 allowed_hosts 从 evil.tld 改成自家域名」这类**收紧**动作在同秒等长改写
+        # 下不会即时生效——判定键的变更不该依赖一次巧合的文件元数据变化。
+        # 反向边界（不得扩到全部 Web 键）：web_port/web_token_expiry/web_show_console 等不参与安全
+        # 判定，多失效一次只会让下一个请求重读磁盘，收益为零；本清单只登记「判定会因此改变」的键。
+        if is_web_section and key_norm in (
+            "web_auth_enable",
+            "web_password",
+            "web_host",
+            "web_allowed_hosts",
+            "web_trusted_proxy",
+        ):
             _invalidate_web_cfg_cache()
         return {"ok": True}
 

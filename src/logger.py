@@ -107,6 +107,16 @@ custom_format = "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: 
 _console_sink_id: int | None = None
 
 
+# 控制台该不该着色：判定口径单点收敛到这里，导入期注册与 rebind_console_sink() 共用一份实现
+# （L-16，2026-10-18）。原形态是两处各写一份、导入期那份硬编码 colorize=True，于是 stderr 已被
+# 重定向到文件时（web.py 后台模式接走 logs/web_console.log、或 `python main.py > x.log` 之类
+# 手工重定向）ANSI 转义序列照样落进日志文件污染内容，而排障恰恰要看这个文件。
+# getattr 兜底：无 isatty 的重定向流（测试里的 StringIO、自定义转发对象）一律按非 tty 处理，
+# 不得改成裸 `sys.stderr.isatty()`——那会在同类对象上抛 AttributeError。
+def _console_colorize() -> bool:
+    return bool(getattr(sys.stderr, "isatty", lambda: False)())
+
+
 # 按当前 sys.stderr 建立/重建控制台 sink。
 # loguru 的 sink 在 add() 时即绑定具体对象，**不会**因之后 sys.stderr 被替换而跟着变。
 # Web 后台模式（web.py::_enter_background_mode）在本模块导入之后才把 sys.stdout/sys.stderr
@@ -125,8 +135,10 @@ def rebind_console_sink() -> None:
     if sys.stderr is None:
         return
     # 重定向到文件后不再着色：ANSI 转义序列会污染日志文本
-    is_tty = bool(getattr(sys.stderr, "isatty", lambda: False)())
-    _console_sink_id = logger.add(sink=sys.stderr, format=custom_format, level="DEBUG", colorize=is_tty, enqueue=True)
+    # 判定改为调用 _console_colorize()（L-16）：与导入期那处共用同一实现，两处口径不会再各自漂移
+    _console_sink_id = logger.add(
+        sink=sys.stderr, format=custom_format, level="DEBUG", colorize=_console_colorize(), enqueue=True
+    )
 
 
 # 构造录制子进程的启动环境：剔除 GUI 父进程标记（否则子进程同样被判为 GUI、不写录制日志
@@ -147,7 +159,12 @@ def child_process_env(base: dict[str, str] | None = None) -> dict[str, str]:
 # src.web_config → src.__init__ → node_install → logger 传导）在 import 期静默死亡——
 # 窗口化运行既无窗口也无报错。故此处先判空，无控制台时跳过、由下方文件 sink 兜底。
 if sys.stderr is not None:
-    _console_sink_id = logger.add(sink=sys.stderr, format=custom_format, level="DEBUG", colorize=True, enqueue=True)
+    # colorize 走 _console_colorize()（L-16）：导入期同样可能发生在 stderr 已被重定向之后
+    # （例如被 `> file` 启动、或上层入口先重定向再 import src.logger），硬编码 True 会把
+    # ANSI 转义序列写进日志文件。判空守卫（sys.stderr is None 时不加 sink）不得移除。
+    _console_sink_id = logger.add(
+        sink=sys.stderr, format=custom_format, level="DEBUG", colorize=_console_colorize(), enqueue=True
+    )
 
 # 运行时资源根目录（exe 同级：config/ logs/ downloads/ 等），
 # 与 _app_root() 保持一致；冻结后指向 exe 父目录而非 _internal。

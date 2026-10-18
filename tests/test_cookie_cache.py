@@ -1,14 +1,23 @@
 # Tests for src/cookie_cache.py - 统一 cookie 缓存模块的单元测试。
 # 覆盖：key 归一化、命中/未命中、TTL 失效、失败不缓存、跨线程并发去重、
 #       字符串拼接、失效/清空，以及与调用方（ttwid/spider）约定一致的 fetcher 透传。
+# 2026-10-18 CODE_REVIEW 追加三组不变量（任意一组被改回旧形态即应变红）：
+#   M-05  失败日志的异常文本必须过 mask_credentials（凭据不随轮转日志长期落盘）；
+#   L-06  在途登记表只回收「拉取者所在循环已关闭」的孤儿登记，且必须唤醒其等待者、
+#         不得摘掉仍活着的拉取者登记、不得让迟到的拉取者抢走接管者的登记位；
+#   L-07  条目寿命由写入方按自己的 ttl 折成失效时刻，两个读取方（get_cached /
+#         fetch_cookies 与 singleflight）一律按记录的失效时刻判定。
 
 import asyncio
+import io
 import threading
 import time
+import types
 from collections.abc import Iterator
 from typing import Any
 
 import pytest
+from loguru import logger
 
 import src.cookie_cache as cc
 from src.cookie_cache import (
@@ -21,6 +30,14 @@ from src.cookie_cache import (
     invalidate,
 )
 
+# 一条真实形态的失败异常文本：查询串挂 token、代理地址挂 user:pass。
+# 两类都落在 utils.mask_credentials 的五条模式覆盖范围内（写用例前逐条实测），
+# 断言口径是「密钥字符串确实从日志文本里消失」，不是「调用过 mask_credentials」
+# （AGENTS 关键约定 #11：后者即使删掉生产实现里的那次调用照样全绿）。
+_SECRET_TOKEN = "AbcDef0123456789TOKENVALUE"
+_SECRET_PROXY_PASS = "Sup3rPr0xyPassw0rd"
+_SECRET_URL = f"https://push.example.com/api?token={_SECRET_TOKEN} via pusher:{_SECRET_PROXY_PASS}@proxy.internal:8080"
+
 
 @pytest.fixture(autouse=True)
 def _clean_cache() -> Iterator[None]:
@@ -28,6 +45,40 @@ def _clean_cache() -> Iterator[None]:
     clear()
     yield
     clear()
+
+
+@pytest.fixture
+def log_capture() -> Iterator[io.StringIO]:
+    # 内存 sink 直接接管 loguru：本仓不把 loguru 桥接到 stdlib logging，caplog 抓不到。
+    buf = io.StringIO()
+    sink_id = logger.add(buf, format="{level} {message}", level="DEBUG")
+    try:
+        yield buf
+    finally:
+        try:
+            logger.remove(sink_id)
+        except ValueError:
+            pass
+
+
+@pytest.fixture
+def fake_clock(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[float]]:
+    # TTL 用例需要把时钟推过条目寿命，但绝不允许真 sleep（整包跑时既慢又不稳）。
+    # 按 AGENTS「进程级 stdlib 替身必须走被测模块命名空间的 shim」：真 time 模块本体
+    # 一个字节都不动，同会话其它用例与 loguru 的取时不受牵连。
+    holder = [1000.0]
+    shim = types.SimpleNamespace(**vars(time))
+    shim.monotonic = lambda: holder[0]
+    monkeypatch.setattr(cc, "time", shim)
+    yield holder
+
+
+def _dead_loop() -> asyncio.AbstractEventLoop:
+    # 造一个「拉取者所在线程已被硬杀」的循环对象：is_closed() 为真，
+    # 这是 L-06 里孤儿登记唯一的可证明判据。
+    loop = asyncio.new_event_loop()
+    loop.close()
+    return loop
 
 
 class TestMakeKey:
@@ -126,23 +177,56 @@ class TestFetchCookies:
         await fetch_cookies("https://live.example.com/", ttl=0, fetcher=fake_fetcher)
         assert calls == 2
 
-    async def test_ttl_param_overrides_default_lifetime(self) -> None:
-        # 缓存条目的 expire_ts 早于 DEFAULT_TTL，但晚于本次传入的 ttl=3600，
-        # 此时 fetch_cookies 仍应命中（get_cached 用 DEFAULT_TTL 则判为过期）。
+    # 每条 entry 记下自己的失效时刻，两个读取方都只认这条时刻（L-07）。
+    # 原用例断言的是修复前的分裂口径——「同一条目 get_cached 判过期、fetch_cookies 按调用方
+    # 传入的更大 ttl 判命中」，那正是本条缺陷的形态，故整条按新契约重写。
+    async def test_recorded_ttl_governs_both_readers(self, fake_clock: list[float]) -> None:
+        calls = 0
+
         async def fake_fetcher(**kwargs: Any) -> dict[str, Any]:
+            nonlocal calls
+            calls += 1
             return {"a": "1"}
 
-        await fetch_cookies("https://live.example.com/", fetcher=fake_fetcher)
-        with cc._cache_lock:
-            _, _expire = cc._cookie_cache[_make_key("https://live.example.com/", None)]
-            cc._cookie_cache[_make_key("https://live.example.com/", None)] = (
-                {"a": "1"},
-                _expire - (DEFAULT_TTL + 100),
-            )
-        stale = get_cached("https://live.example.com/")
-        assert stale is None
-        hit = await fetch_cookies("https://live.example.com/", ttl=DEFAULT_TTL + 1000, fetcher=fake_fetcher)
-        assert hit == {"a": "1"}
+        # 短寿命凭据：以 ttl=60 写入，越过 60 秒后 get_cached 必须判 miss
+        # （旧实现下 60 与 1800 无关，100 秒后仍返回这份已被写入方判死的凭据）
+        await fetch_cookies("https://short.example.com/", ttl=60, fetcher=fake_fetcher)
+        fake_clock[0] += 61
+        assert get_cached("https://short.example.com/") is None, "写入侧的短 ttl 被读取侧的 DEFAULT_TTL 覆盖"
+
+        # 长寿命凭据：以 ttl=DEFAULT_TTL+600 写入，越过 DEFAULT_TTL 后 get_cached 仍须命中，
+        # 而 fetch_cookies 带着**更小**的 ttl 去读也不得因此提前重新拉取（读取方无权续命也无权判死）
+        await fetch_cookies("https://long.example.com/", ttl=DEFAULT_TTL + 600, fetcher=fake_fetcher)
+        fake_clock[0] += DEFAULT_TTL + 1
+        assert get_cached("https://long.example.com/") == {"a": "1"}, "长寿命条目被 get_cached 按 30 分钟判死"
+        assert await fetch_cookies("https://long.example.com/", ttl=30, fetcher=fake_fetcher) == {"a": "1"}
+        assert calls == 2, "读取方传的 ttl 不该决定条目寿命（多拉一次就是一次风控触发）"
+        # 越过条目自己记录的寿命（DEFAULT_TTL+600）后才失效
+        fake_clock[0] += 600
+        assert get_cached("https://long.example.com/") is None
+        assert await fetch_cookies("https://long.example.com/", fetcher=fake_fetcher) == {"a": "1"}
+        assert calls == 3
+
+    # 通用 singleflight 层与 cookie 层同口径：ttl 由写入方折进条目，读取方传的 ttl 不改变命中判定。
+    async def test_singleflight_recorded_ttl_governs_readers(self, fake_clock: list[float]) -> None:
+        calls = 0
+
+        async def _factory() -> str:
+            nonlocal calls
+            calls += 1
+            return "v"
+
+        assert await cc.singleflight("k-ttl", factory=_factory, ttl=60, timeout=2) == "v"
+        fake_clock[0] += 61
+        # 条目自己的 60 秒已过：即使调用方传更大的 ttl 也必须重新拉取
+        assert await cc.singleflight("k-ttl", factory=_factory, ttl=DEFAULT_TTL, timeout=2) == "v"
+        assert calls == 2, "singleflight 侧仍按调用方 ttl 判新鲜（短寿命凭据被续命）"
+        # 反向：条目按 DEFAULT_TTL+600 写入后（第 3 次拉取），调用方传更小的 ttl 不得再拉一次
+        assert await cc.singleflight("k-long", factory=_factory, ttl=DEFAULT_TTL + 600, timeout=2) == "v"
+        assert calls == 3
+        fake_clock[0] += DEFAULT_TTL + 1
+        assert await cc.singleflight("k-long", factory=_factory, ttl=30, timeout=2) == "v"
+        assert calls == 3, "读取方传的 ttl 不该决定条目寿命"
 
     # 代理与直连虽访问同房间，但键不同 → 各 fetch 一次（calls==[None, proxy]），
     # 验证代理地址正确透传 fetcher 且两类用户互不串用 cookie
@@ -236,6 +320,10 @@ class TestFetchCookies:
         call_lock = threading.Lock()
         barrier = threading.Barrier(4)  # 4 个线程模拟 4 个 room 线程并发首帧；Barrier 同步起跑以放大竞态窗口
         results: list[dict[str, Any]] = []
+        # MT-04：barrier.wait()/join() 原先都不带超时——本用例正是「被测代码死锁就整轮挂死」的
+        # 形态（单条用例卡住会拖垮整个 pytest 会话与 CI job，且日志里看不出是谁）。两处都带上限，
+        # 并把「线程是否真的退出了」写成断言：死锁时这里必须当场判红而不是无声等待。
+        _JOIN_TIMEOUT_SECONDS = 15.0
 
         async def fake_fetcher(**kwargs: Any) -> dict[str, Any]:
             nonlocal call_count
@@ -245,7 +333,7 @@ class TestFetchCookies:
             return {"did": "shared"}
 
         def worker() -> None:
-            barrier.wait()
+            barrier.wait(timeout=_JOIN_TIMEOUT_SECONDS)
 
             async def _run() -> dict[str, Any]:
                 return await fetch_cookies("https://live.kuaishou.com/", fetcher=fake_fetcher)
@@ -256,7 +344,9 @@ class TestFetchCookies:
         for t in threads:
             t.start()
         for t in threads:
-            t.join()
+            t.join(timeout=_JOIN_TIMEOUT_SECONDS)
+        alive = [t.name for t in threads if t.is_alive()]
+        assert not alive, f"线程未在 {_JOIN_TIMEOUT_SECONDS}s 内退出（疑似死锁）：{alive}"
 
         assert call_count == 1
         assert all(r == {"did": "shared"} for r in results)
@@ -434,3 +524,217 @@ def _make_counting_factory() -> Any:
         return "fresh-value"
 
     return _factory
+
+
+# ── M-05：失败日志的异常文本必须脱敏 ────────────────────────────────────────────
+# singleflight 的拉取失败日志原先直接 `e=e`（fetch_cookies 同位置早已按 WD-01 脱敏）：
+# factory 内部走 async_req/sync_req，异常文本常内嵌带签名/鉴权查询串的完整请求 URL 与
+# 代理凭据，而 logs/ 按 rotation 保留多份 ⇒ 原文入日志等于凭据长期落盘。
+class TestFailureLogMasksCredentials:
+    async def test_singleflight_failure_log_masks_exception_text(self, log_capture: io.StringIO) -> None:
+        async def _boom() -> str:
+            raise ConnectionError(_SECRET_URL)
+
+        assert await cc.singleflight("mask_probe|", factory=_boom, timeout=2) is None
+        text = log_capture.getvalue()
+        # 「值确实消失」而非「调用过 mask_credentials」；同时要求脱敏痕迹与异常类型都在，
+        # 前者防「整行被抹空也算通过」，后者防「脱敏顺手把归因信息一起删掉」。
+        assert _SECRET_TOKEN not in text, "签名/token 参数随异常文本落进轮转日志"
+        assert _SECRET_PROXY_PASS not in text, "代理口令随异常文本落进轮转日志"
+        assert "***" in text
+        assert "ConnectionError" in text
+        assert "凭据拉取失败" in text
+
+    # fetch_cookies 一侧本已正确（WD-01），此处一并钉住，防两侧再漂移
+    async def test_fetch_cookies_failure_log_masks_exception_text(self, log_capture: io.StringIO) -> None:
+        async def _boom(**kwargs: Any) -> dict[str, Any]:
+            raise ConnectionError(_SECRET_URL)
+
+        assert await fetch_cookies("https://mask.example.com/", fetcher=_boom) == {}
+        text = log_capture.getvalue()
+        assert _SECRET_TOKEN not in text and _SECRET_PROXY_PASS not in text
+        assert "***" in text and "ConnectionError" in text
+
+    # 行为锁挡不住「新加一条漏抹」（且新加的日志点没人写用例就完全无人核对），故再钉一条 AST 结构锁：
+    # 本模块每个 logger.<level>(i18n.tr(模板, **kw)) 里，凡实参名是 e / err / url / masked_url 的，
+    # 其表达式必须包含 mask_credentials(...)——异常类型位 type(e).__name__ 本身不含凭据，放行。
+    # 判据形态注意两点：① 关键字实参挂在**内层 i18n.tr(...) 调用**上，不在 logger 调用上
+    # （只遍历 logger 节点的 keywords 会恒为空、锁恒真，2026-10-18 写这条时实测踩到）；
+    # ② 必须同时断言「扫到的受检点位数量」，否则模板形态一改（如改成 f-string 实参）这条锁
+    # 会静默变成空集通过——正是 AGENTS「恒真断言使安全锁失效」点名的形态。
+    def test_every_credential_bearing_log_arg_is_masked(self) -> None:
+        import ast
+        from pathlib import Path
+
+        tree = ast.parse(Path(cc.__file__).read_text(encoding="utf-8"))
+        offenders: list[str] = []
+        inspected = 0
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                continue
+            if node.func.attr not in {"warning", "error", "debug", "info"}:
+                continue
+            if not node.args:
+                continue
+            template_call = node.args[0]
+            if not (isinstance(template_call, ast.Call) and isinstance(template_call.func, ast.Attribute)):
+                continue
+            if template_call.func.attr != "tr":
+                continue
+            for kw in template_call.keywords:
+                if kw.arg not in {"e", "err", "url", "masked_url"}:
+                    continue
+                inspected += 1
+                src = ast.unparse(kw.value)
+                if "mask_credentials" in src or "__name__" in src:
+                    continue
+                offenders.append(f"line {kw.lineno or node.lineno}: {kw.arg}={src}")
+        # 现存量受检点位（2026-10-18 实测）：fetch_cookies 与 singleflight 各一处 e= 加一处 url=，
+        # 两处超时告警的 masked_key 不计入本集合；下限取 3 留一点余量，上限不钉（新增日志点应当更多）
+        assert inspected >= 3, f"受检点位只剩 {inspected} 个：日志模板形态可能已变更，本锁已失效"
+        assert not offenders, "以下日志实参未经 utils.mask_credentials 脱敏：\n" + "\n".join(offenders)
+
+
+# ── L-06：在途登记表的孤儿回收 ─────────────────────────────────────────────────
+# 拉取线程被硬杀时（本模块注释里明确承认的场景），_inflight / _generic_inflight 里的登记
+# 既不会有人交付也不会被摘除；原实现的 invalidate()/clear() 只清结果字典，于是这个 key
+# 从此每次都走「等待 timeout+余量 → 空结果」，永不自愈（已实测复现恒返回 {} 直到进程重启）。
+# 修复口径：只回收 owner 循环已关闭的登记（活拉取者的登记一律不动，否则连带丢掉它的等待者、
+# 还会让同 key 并发重发请求），并唤醒被回收登记的等待者，令其立刻拿空结果而不是白等。
+class TestInflightOrphanReclaim:
+    async def test_clear_reclaims_dead_registration_and_wakes_waiters(self) -> None:
+        loop = asyncio.get_running_loop()
+        key = _make_key("https://orphan.example.com/", None)
+        waiter = loop.create_future()
+        with cc._cache_lock:
+            cc._inflight[key] = cc._Inflight(owner_loop=_dead_loop(), waiters=[(loop, waiter)])
+        clear()
+        with cc._cache_lock:
+            assert key not in cc._inflight, "clear() 没回收已失主的在途登记"
+        # 等待者被就地唤醒并拿到空结果（等价于它本会走到的超时结局，只是不再白等）
+        assert await asyncio.wait_for(waiter, timeout=5) == {}
+
+    async def test_invalidate_reclaims_dead_generic_registration(self) -> None:
+        loop = asyncio.get_running_loop()
+        key = "kuaishou_did|orphan"
+        waiter: asyncio.Future[Any] = loop.create_future()
+        waiter2: asyncio.Future[Any] = loop.create_future()
+        with cc._cache_lock:
+            cc._generic_inflight[key] = cc._Inflight(owner_loop=_dead_loop(), waiters=[(loop, waiter), (loop, waiter2)])
+        cc.invalidate_generic(key)
+        with cc._cache_lock:
+            assert key not in cc._generic_inflight, "invalidate_generic() 没回收已失主的在途登记"
+        assert await asyncio.wait_for(waiter, timeout=5) is None
+        assert await asyncio.wait_for(waiter2, timeout=5) is None
+
+    async def test_dead_registration_self_heals_on_next_fetch(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 不等任何人调用 invalidate/clear：下一次取用就自愈——否则「恒走等待超时→空结果」
+        monkeypatch.setattr(cc, "_INFLIGHT_WAIT_MARGIN", 0.05)
+        key = _make_key("https://orphan2.example.com/", None)
+        with cc._cache_lock:
+            cc._inflight[key] = cc._Inflight(owner_loop=_dead_loop(), waiters=[])
+        calls = 0
+
+        async def fake_fetcher(**kwargs: Any) -> dict[str, Any]:
+            nonlocal calls
+            calls += 1
+            return {"did": "fresh"}
+
+        got = await fetch_cookies("https://orphan2.example.com/", timeout=0, fetcher=fake_fetcher)
+        assert calls == 1, "死登记没被接管：调用方挂在了一个永不交付的拉取上"
+        assert got == {"did": "fresh"}
+
+    async def test_takeover_also_wakes_waiters_of_the_dead_registration(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 接管时不能只顾自己：挂在死登记上的等待者原本要各自等满 timeout+余量，必须就地交付空结果
+        monkeypatch.setattr(cc, "_INFLIGHT_WAIT_MARGIN", 30.0)
+        loop = asyncio.get_running_loop()
+        key = _make_key("https://orphan3.example.com/", None)
+        stranded_waiter: asyncio.Future[Any] = loop.create_future()
+        with cc._cache_lock:
+            cc._inflight[key] = cc._Inflight(owner_loop=_dead_loop(), waiters=[(loop, stranded_waiter)])
+        calls = 0
+
+        async def fake_fetcher(**kwargs: Any) -> dict[str, Any]:
+            nonlocal calls
+            calls += 1
+            return {"did": "fresh"}
+
+        async def _probe() -> None:
+            assert await asyncio.wait_for(stranded_waiter, timeout=5) == {}
+
+        probe = asyncio.create_task(_probe())
+        got = await fetch_cookies("https://orphan3.example.com/", timeout=1, fetcher=fake_fetcher)
+        await asyncio.wait_for(probe, timeout=5)
+        assert got == {"did": "fresh"} and calls == 1
+
+    async def test_waking_waiters_of_a_closed_loop_does_not_raise(self) -> None:
+        # 等待者自己的循环也关了（其线程同批死亡）：唤醒必须静默丢弃，
+        # 不得让 clear()/invalidate() 这个同步入口抛 RuntimeError——那会把「清理缓存」
+        # 打成「调用方崩」，而 invalidate_ttwid 正是平台拒绝路径上调用的。
+        loop = asyncio.get_running_loop()
+        key = _make_key("https://orphan4.example.com/", None)
+        with cc._cache_lock:
+            cc._inflight[key] = cc._Inflight(owner_loop=_dead_loop(), waiters=[(_dead_loop(), loop.create_future())])
+        clear()  # 不得抛
+        with cc._cache_lock:
+            assert key not in cc._inflight
+
+    async def test_clear_keeps_registration_of_a_live_fetcher(self) -> None:
+        # 反向锁：活着的拉取者登记**不得**被 clear() 摘掉（摘了它的等待者就没人交付，
+        # 同 key 还会并发重发一次请求——正是本模块要消灭的风控触发源）
+        gate = asyncio.Event()
+
+        async def fake_fetcher(**kwargs: Any) -> dict[str, Any]:
+            await gate.wait()
+            return {"did": "shared"}
+
+        key = _make_key("https://live.example.com/", None)
+        fetcher_task = asyncio.create_task(fetch_cookies("https://live.example.com/", fetcher=fake_fetcher))
+        for _ in range(200):
+            if key in cc._inflight:
+                break
+            await asyncio.sleep(0.01)
+        assert key in cc._inflight, "拉取者没登记在途（用例前提不成立）"
+        waiter_task = asyncio.create_task(fetch_cookies("https://live.example.com/", fetcher=fake_fetcher))
+        for _ in range(200):
+            if len(cc._inflight[key].waiters) == 1:
+                break
+            await asyncio.sleep(0.01)
+
+        clear()
+        with cc._cache_lock:
+            assert key in cc._inflight, "clear() 误摘仍活着的拉取者登记"
+
+        gate.set()
+        value = {"did": "shared"}
+        assert await asyncio.wait_for(fetcher_task, timeout=5) == value
+        # 等待者仍由活着的拉取者交付本次值（MI-12 的既有口径：世代比对只挡回填缓存）
+        assert await asyncio.wait_for(waiter_task, timeout=5) == value
+        with cc._cache_lock:
+            assert key not in cc._inflight, "拉取者收尾没归还登记位"
+
+    async def test_late_finisher_does_not_steal_takeover_registration(self) -> None:
+        # 原实现「pop(key) 不认归属」，在被回收后由后来者重新占位的窗口里会连带摘掉新登记，
+        # 让新拉取者的等待者无人交付。此处手工换掉登记位，验证收尾只归还自己那一格。
+        gate = asyncio.Event()
+        mine_key = _make_key("https://steal.example.com/", None)
+
+        async def fake_fetcher(**kwargs: Any) -> dict[str, Any]:
+            await gate.wait()
+            return {"did": "late"}
+
+        fetcher_task = asyncio.create_task(fetch_cookies("https://steal.example.com/", fetcher=fake_fetcher))
+        for _ in range(200):
+            if mine_key in cc._inflight:
+                break
+            await asyncio.sleep(0.01)
+        takeover = cc._Inflight(owner_loop=asyncio.get_running_loop())
+        takeover_waiter: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+        takeover.waiters.append((asyncio.get_running_loop(), takeover_waiter))
+        with cc._cache_lock:
+            cc._inflight[mine_key] = takeover  # 模拟本登记被回收、同 key 已由他人占位
+        gate.set()
+        await asyncio.wait_for(fetcher_task, timeout=5)
+        with cc._cache_lock:
+            assert cc._inflight.get(mine_key) is takeover, "迟到的拉取者摘走了接管者的登记位"
+        cc._inflight.pop(mine_key, None)

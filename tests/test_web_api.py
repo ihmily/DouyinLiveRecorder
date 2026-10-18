@@ -175,6 +175,27 @@ class TestAuthMiddleware:
         resp = app_env.client.get("/api/rooms")
         assert resp.status_code == 401
 
+    def test_static_panel_reachable_without_trailing_slash(self, app_env: types.SimpleNamespace) -> None:
+        # L-20（2026-10-18）行为锁：认证开启时 GET `/web`（无尾斜杠）不得被鉴权拦成 401。
+        # 中间件由 BaseHTTPMiddleware 包在 StaticFiles **之外**，StaticFiles 自己那条「/web → /web/」
+        # 的 307 要等中间件判完才有机会执行，所以 401 落在第一跳而非跳转之后（2026-10-18 实测：
+        # auth=true 无 token → /web 直接 401 {"detail":"unauthorized"}；带 token 或 auth=false → 307；
+        # /web/ 三种形态一律 200）。用户侧症状是「新标签输 http://<host>:8000/web 只见一串
+        # unauthorized、登录页根本打不开」，极易被误判成认证坏了。
+        # 断言取「跳转语义 + 跟随后拿到首页」两级行为，不钉源码里的路径字面量：
+        # 白名单换成任何等价实现都仍应通过，删掉这条放行则两级同时转红。
+        strict_client = TestClient(app_env.app, base_url=_BASE_URL, follow_redirects=False)
+        try:
+            resp = strict_client.get("/web")
+            assert resp.status_code == 307, f"/web 被鉴权拦在跳转之前: {resp.status_code} {resp.text}"
+            assert str(resp.headers.get("location", "")).endswith("/web/"), dict(resp.headers)
+        finally:
+            strict_client.close()
+        assert app_env.client.get("/web").status_code == 200
+        # 反向边界（不得把这条修成「/web 开头一律免鉴权、顺手放宽接口面」）：
+        # 接口仍 401，登录页之外的公开路径也不受本条影响。
+        assert app_env.client.get("/api/rooms").status_code == 401
+
 
 class TestSecurityHeaders:
     # 守护安全响应头中间件：放行/拒绝两条路径均须附加 nosniff + DENY 帧选项。
@@ -1097,6 +1118,109 @@ class TestAuthDowngradeRejected:
         client = self._env(tmp_path, fake_main, wa, host="0.0.0.0", auth="false")
         try:
             assert client.get("/api/rooms").status_code == 200
+        finally:
+            client.close()
+
+
+class TestSecurityConfigCacheInvalidation:
+    # L-23（2026-10-18）：安全判定键的写入必须让中间件的配置缓存**即时**失效。
+    # 缓存本会按 mtime+size 自然失效，本类把这条物理前提冻住（web_api 命名空间里的 os.stat 换成
+    # 恒返同一 (mtime, size) 的替身），等价于「同秒等长改写 + 粗精度时间戳」那一档病态场景；
+    # 于是「改完立刻生效」只剩写侧 _invalidate_web_cfg_cache() 一条路——失效清单里漏掉该键即红。
+    # 打桩口径按仓库约定：浅拷贝 os 命名空间、只覆盖 stat，再把替身绑到**被测模块**的 os 引用上，
+    # 不改 stdlib 本体（web_api 里 os.stat 的唯一消费点就是 _read_web_config_cached，
+    # /api/files 那两个 stat 调用不在本用例路径上）。
+
+    def _frozen_client(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wa: types.ModuleType) -> TestClient:
+        # [Web] 里预置两个待验证的安全键（update_config_line 只改已存在的键，缺键会退 404）
+        cfg = tmp_path / "config.ini"
+        cfg.write_text(
+            "\n".join(
+                [
+                    "[Web]",
+                    "web_host = 127.0.0.1",
+                    "web_port = 8000",
+                    "web_auth_enable = true",
+                    f"web_password = {cast('types.ModuleType', wa).hash_web_password('secret123')}",
+                    "web_trusted_proxy = ",
+                    "web_allowed_hosts = ",
+                ]
+            )
+            + "\n",
+            encoding="utf-8-sig",
+        )
+        _reset_web_api_state(cast("types.ModuleType", wa))
+        frozen = types.SimpleNamespace(st_mtime=1_000.0, st_size=1_000)
+        os_shim = types.SimpleNamespace(**vars(os))
+        os_shim.stat = lambda _path: frozen
+        monkeypatch.setattr(wa, "os", cast("object", os_shim))
+        app = cast("types.ModuleType", wa).create_app(
+            config_file=str(cfg),
+            url_config_file=str(tmp_path / "u.ini"),
+            downloads_root=str(tmp_path),
+            logs_dir=str(tmp_path),
+        )
+        return TestClient(app, base_url=_BASE_URL)
+
+    def test_allowed_hosts_change_takes_effect_without_mtime_change(
+        self, tmp_path: Path, fake_main: types.ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 端到端锁：Host 允许名单（MID-36 的 DNS 重绑定防线）只从这份带缓存的 cfg 里取，
+        # 所以「把名单改宽/改窄」是否即时生效，直接 observable 在带 Host 头的请求上。
+        # 三段顺序本身就是判据：改宽前 400（证明用例不恒真）→ 改宽后 200 → 改窄后重新 400
+        # （证明失效是双向的，而不是「第一次读了盘之后就一直对」）。
+        from src import web_api as wa
+
+        client = self._frozen_client(tmp_path, monkeypatch, wa)
+        try:
+            token = client.post("/api/login", json={"password": "secret123"}).json()["token"]
+            headers = {"Authorization": f"Bearer {token}"}
+            panel_host = {"Host": "panel.example.com:8000"}
+            assert client.get("/api/rooms", headers=panel_host).status_code == 400, "名单未含该域名却已放行：判据恒真"
+            resp = client.put(
+                "/api/config",
+                json={"section": "Web", "key": "web_allowed_hosts", "value": "panel.example.com"},
+                headers=headers,
+            )
+            assert resp.status_code == 200, resp.text
+            got = client.get("/api/rooms", headers={**panel_host, "Authorization": f"Bearer {token}"})
+            assert got.status_code == 200, f"改宽名单后缓存仍按旧值判 Host: {got.status_code} {got.text}"
+            resp = client.put(
+                "/api/config",
+                json={"section": "Web", "key": "web_allowed_hosts", "value": "other.example.com"},
+                headers=headers,
+            )
+            assert resp.status_code == 200, resp.text
+            assert client.get("/api/rooms", headers=panel_host).status_code == 400, "收紧名单同样必须即时生效"
+        finally:
+            client.close()
+
+    def test_trusted_proxy_change_takes_effect_without_mtime_change(
+        self, tmp_path: Path, fake_main: types.ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 第二条安全键（web_trusted_proxy → X-Forwarded-For 是否可信 → 登录限流按哪个地址分桶）。
+        # 判据完全走行为：无可信代理时 5 次不同伪造 XFF 全记在直连对端（testclient）同一个窗口里，
+        # 第 6 次 429；把该直连对端登记为可信代理后，同一个第 6 次请求应换成按 XFF 分桶的新窗口 → 401。
+        # 缓存未按清单失效时，中间件与 login 仍持旧的空名单 → 依旧 429（用例转红）。
+        # 顺序契约：成功登录必须在**填桶之前**——login 成功会清零该桶的失败计数（见
+        # test_successful_login_resets_failures），把拿 token 挪到 5 次失败之后会让第 6 次
+        # 无条件 401，用例退化成恒真。
+        from src import web_api as wa
+
+        client = self._frozen_client(tmp_path, monkeypatch, wa)
+        try:
+            token = client.post("/api/login", json={"password": "secret123"}).json()["token"]
+            for i in range(5):
+                resp = client.post("/api/login", json={"password": "wrong"}, headers={"X-Forwarded-For": f"1.2.3.{i}"})
+                assert resp.status_code == 401, resp.text
+            resp = client.put(
+                "/api/config",
+                json={"section": "Web", "key": "web_trusted_proxy", "value": "testclient"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+            assert resp.status_code == 200, resp.text
+            after = client.post("/api/login", json={"password": "wrong"}, headers={"X-Forwarded-For": "9.9.9.9"})
+            assert after.status_code == 401, f"可信代理名单变更后仍按旧桶限流: {after.status_code} {after.text}"
         finally:
             client.close()
 

@@ -282,6 +282,32 @@ class TestSyncReq:
 
     @patch("src.sync_http.config")
     @patch("src.sync_http._get_opener")
+    def test_http_error_400_oversized_body_hits_read_cap(
+        self, mock_opener_fn: MagicMock, mock_config: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # M-03（2026-10-18 审查）回归锁：400 分支必须与成功路径同走 _read_capped——
+        # 原实现 `e.read()` 无参全量读，超大 400 错误体直接威胁进程内存（对端给多少申请多少）。
+        # 超限后的失败语义按既有契约收敛为空串 + 脱敏 error 日志（不得抛穿、不得截断放行）。
+        # 上限经 monkeypatch 压低（不构造 8MB 真体）；变异验证（把 _read_capped 退回 e.read()）
+        # 本用例必须转红。
+        mock_config.ssl_verify = True
+        monkeypatch.setattr("src.sync_http._MAX_RESPONSE_BYTES", 16)
+
+        import urllib.error
+
+        mock_opener = MagicMock()
+        mock_opener.open.side_effect = urllib.error.HTTPError(
+            "http://example.com", 400, "Bad Request", http.client.HTTPMessage(), BytesIO(b"x" * 100)
+        )
+        mock_opener_fn.return_value = mock_opener
+
+        with patch("src.sync_http.logger") as mock_logger:
+            result = sync_req("http://example.com")
+        assert result == ""
+        assert any("sync_req 请求失败" in str(c.args) for c in mock_logger.error.call_args_list)
+
+    @patch("src.sync_http.config")
+    @patch("src.sync_http._get_opener")
     # URLError 不再伪装为响应体：返回空串并记录 warning/error 日志
     def test_url_error_returns_empty_and_logs(self, mock_opener_fn: MagicMock, mock_config: MagicMock) -> None:
         # URLError 不再伪装为响应体：返回空串并记录错误日志.

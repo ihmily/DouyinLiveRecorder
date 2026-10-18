@@ -22,6 +22,10 @@
 #   - **本进程自己的** stdout/stderr 也必须是 UTF-8：子进程的两路输出最终都落在本进程的 stdout
 #     上，中文 Windows（cp936）下 black 成功行的 `✨` 会让那次写入抛 UnicodeEncodeError
 #     而炸掉门禁进程本身。见 ensure_utf8_streams()。
+#   - [2026-10-18 L-30] 执行形态：能按参数列表表达的命令走 shell=False（见 build_gate_argv），
+#     只有含 shell 结构符、或行首要执行 .bat/.cmd 时才退回原 shell=True 字符串形态。
+#     这条与上面「清单不进脚本复制」并不冲突：清单事实源仍是 AGENTS.md 那一章，改变的只是
+#     把解析出来的那一行**怎么交给操作系统**，参数与判定口径逐字不变。
 #
 # 用法：
 #   python scripts/run_gates.py                          # 全量门禁（在仓库根目录执行）
@@ -85,6 +89,17 @@ FATAL_STDERR_PATTERNS: tuple[str, ...] = (
 
 # bash 风格的行首环境变量前缀：`NAME=value` 后必须跟空白，且值不含空格（门禁命令均为如此）
 _ENV_PREFIX_PATTERN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(\S*)\s+")
+
+# 只有「这条命令确实要靠 shell 解释」时才退回 shell=True 的字符串形态（L-30 的兜底面）。
+# 判据取 shell 结构符而不是「整条命令是否简单」：出现任一结构符就无法按参数列表等价表达，
+# 硬拆成 argv 会把管道/重定向当字面参数传给工具（比原来的失败更难看懂）。
+# `$( `/`${ ` 是命令替换与变量展开，反引号同；`&` 同时覆盖后台与 &&。
+_SHELL_STRUCTURES: tuple[str, ...] = ("|", "&", ">", "<", "`", "$(", "${")
+
+# Windows 上 CreateProcess 不能直接执行批处理（只认 .exe，PATH 搜索也只补 .exe），
+# 必须由 cmd.exe 解释；行首解析到这两种扩展名时保持 shell 形态，绝不改成 argv 后
+# 把「找不到可执行文件」伪装成门禁失败（同 rc=3「工具没装」与 rc=1「代码不合格」必须分档的口径）。
+_BATCH_SUFFIXES: tuple[str, ...] = (".bat", ".cmd")
 
 
 def ensure_utf8_streams() -> None:
@@ -257,6 +272,11 @@ def run_command(cmd: str, extra_env: dict[str, str] | None = None) -> tuple[int,
     # 不存在需要二次解释的复杂结构。清单里的 `python` 统一换绑到当前解释器（见
     # _rebind_interpreter）：Windows 上 python / py 启动器与 venv 可能混用，不换绑就会让门禁跑在
     # 与 pytest 不同的解释器上——「本地绿、CI 红」的成因即此。
+    # [2026-10-18 L-30 修订] shell=True 不再是默认形态：能按参数列表表达的命令一律 shell=False，
+    # 只有 build_gate_argv 明确判「这条要靠 shell 解释」时才退回。原因见该函数注释——字符串形态
+    # 经由 cmd.exe /c 时，解释器路径含空格的 venv 能否跑起来取决于 cmd 的引号剥层实现，
+    # 属「换台机器才知道红不红」的隐性依赖；参数列表把引号这一层整个消掉。
+    # 两路的 stdout/stderr 分工与退出码语义逐字不变（stdout 继承、stderr 逐行转发+扫描、rc!=0 判失败）。
     t0 = time.monotonic()
     # stdin=DEVNULL：门禁子进程不得继承调用方的 stdin。管道/IDE harness 下父进程的 stdin
     # 可能已关闭，子进程（含 site 初始化）碰它即抛 OSError WinError 6（本地实测：pytest 经
@@ -265,9 +285,10 @@ def run_command(cmd: str, extra_env: dict[str, str] | None = None) -> tuple[int,
     child_env.update(GATE_CHILD_ENV)
     if extra_env:
         child_env.update(extra_env)
+    argv = build_gate_argv(cmd)
     proc = subprocess.Popen(
-        _rebind_interpreter(cmd),
-        shell=True,
+        argv if argv is not None else _rebind_interpreter(cmd),
+        shell=argv is None,
         cwd=ROOT,
         stdin=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
@@ -301,6 +322,51 @@ def _rebind_interpreter(cmd: str) -> str:
     if head and "\\" not in head and "/" not in head and shutil.which(head) is None:
         return f'"{sys.executable}" -m {cmd}'
     return cmd
+
+
+def build_gate_argv(cmd: str) -> list[str] | None:
+    # L-30（2026-10-18 审查）：能按参数列表执行的命令拆成 argv 交 shell=False，拆不了的回 None
+    # 由调用方退回原 shell 形态。
+    # 为什么优先 argv 而不是「把整条命令再包一层引号」：shell=True 时 Python 实际执行的是
+    # [cmd.exe, "/c", 整串]，再经 list2cmdline 给整串加外层引号并把内层引号转义成 `\"`；
+    # 而 cmd.exe 对 /c 后面那段有「首尾引号成对就再剥一层」的既有规则——于是解释器路径含空格
+    # 的 venv 上门禁命令能不能跑，取决于引号层数与 cmd 的实现细节（同一份代码换一台机器、
+    # 换一个 venv 安装位置就可能变红，且失败信息是 cmd 的一句「命令语法不正确」）。
+    # argv 形态不产生任何引号层，空格由进程 API 按数组边界处理；Windows 与 POSIX 走同一条代码，
+    # 不再出现「本地一套引号语义、CI 另一套」的分叉。
+    try:
+        # posix=False：默认模式会把反斜杠当转义符吃掉，Windows 绝对路径 `C:\venv\Scripts\python.exe`
+        # 会被切成 `C:venvScriptspython.exe`（argv[0] 根本不存在，整条门禁退化成「工具没跑」）。
+        # 代价是 token 保留外层引号，故随后逐 token 手工剥一层。
+        raw_tokens = shlex.split(cmd, posix=False)
+    except ValueError:
+        return None
+    argv: list[str] = []
+    for token in raw_tokens:
+        if len(token) >= 2 and token[0] == token[-1] and token[0] in "\"'":
+            token = token[1:-1]
+        argv.append(token)
+    if not argv:
+        return None
+    if any(any(struct in token for struct in _SHELL_STRUCTURES) for token in argv):
+        # 含 shell 结构：参数列表无法等价表达，保持原形态（绝不静默把 `|` 当字面参数传下去）
+        return None
+    head, rest = argv[0], argv[1:]
+    if head in ("python", "python3", "py"):
+        # 与 _rebind_interpreter 同一语义：行首解释器一律换成**当前解释器**，参数原样保留
+        return [sys.executable, *rest]
+    resolved = shutil.which(head)
+    if resolved is None:
+        if "/" in head or "\\" in head:
+            # 带路径分隔符却找不到 → 交回 shell 形态让它报「命令不存在」（rc=127/1），
+            # 不在这里换成 FileNotFoundError 崩栈（同 AGENTS.md M-32①：按名字起子进程必须能降级）
+            return None
+        # 裸 console-script 不在 PATH 时退化为 `-m <name>`（与 _rebind_interpreter 同一退化口径）
+        return [sys.executable, "-m", head, *rest]
+    if resolved.lower().endswith(_BATCH_SUFFIXES):
+        # CreateProcess 不执行批处理（PATH 搜索也只补 .exe），这一支必须留 shell 形态
+        return None
+    return [resolved, *rest]
 
 
 def check_executables(cmds: list[str]) -> list[str]:

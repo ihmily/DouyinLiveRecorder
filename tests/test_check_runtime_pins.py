@@ -309,6 +309,46 @@ def test_missing_slot_is_a_structural_failure_not_a_data_gap(monkeypatch: pytest
     assert _run(monkeypatch, {}, strict=False) == 2, "空表必须硬失败（CR-11 的原始形态）"
 
 
+def test_missing_build_exe_attribute_exits_two_instead_of_crashing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # L-29（2026-10-18 审查）：本门禁取的是 build_exe 的**私有**符号，改名/删除在 build_exe 侧
+    # 没有任何提示。旧写法 `module._PINNED_RUNTIME_SHA256` 直取 → AttributeError 崩溃栈 → rc=1，
+    # 而 rc=1 在本脚本的契约里专指「--strict 查到未钉定项」，于是「门禁自己没跑成」会被
+    # 读成「发布链有未钉定的二进制」。缺失一律 rc=2（同「空表 / 取不到表」那一档）。
+    fake = _fake_module(_pinned_table())
+    del fake._PINNED_RUNTIME_SHA256
+    monkeypatch.setattr(checker, "_load_build_exe", lambda: fake)
+    with pytest.raises(SystemExit) as excinfo:
+        checker.check(strict=False)
+    assert excinfo.value.code == 2, "属性缺失被退成崩溃栈/rc=1：门禁失效与发布失败混同"
+    err = capsys.readouterr().err
+    assert "_PINNED_RUNTIME_SHA256" in err, f"报错须点名缺失的属性，否则无从恢复：{err}"
+
+
+def test_emit_env_missing_attribute_exits_two_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    # --emit-env 是 CI 把钉定值透传给 build job 的唯一通道，同一条属性缺失在这里也必须 rc=2：
+    # 退 1 时 build-release.yml 的 prepare job 会把「取不到表」当成「表里有未钉定项」。
+    fake = _fake_module(_pinned_table())
+    del fake._PINNED_RUNTIME_SHA256
+    monkeypatch.setattr(checker, "_load_build_exe", lambda: fake)
+    with pytest.raises(SystemExit) as excinfo:
+        checker.emit_env()
+    assert excinfo.value.code == 2
+
+
+def test_required_attr_inventory_covers_both_the_fake_and_the_real_build_exe() -> None:
+    # 防空转：探测清单本身是「取用点」的镜像，清单为空或漏项时上面两条用例一律不会触发。
+    # ① 清单非空；② 本文件的替身模块提供齐这些符号（否则替身会被门禁自己判成缺失）；
+    # ③ 真 build_exe.py 也提供齐这些符号（漏一个就是 check() 立刻 rc=2，CI 当场红）。
+    required = list(checker._REQUIRED_BUILD_EXE_ATTRS)
+    assert required, "探测清单为空 = L-29 的防线没装上"
+    fake = _fake_module(_pinned_table())
+    assert [name for name in required if not hasattr(fake, name)] == []
+    real = _load_build_exe()
+    assert [name for name in required if not hasattr(real, name)] == []
+
+
 def test_matrix_key_missing_from_table_is_structural(monkeypatch: pytest.MonkeyPatch) -> None:
     table = _pinned_table()
     del table["macos-arm64"]

@@ -57,9 +57,15 @@ class DanmakuPage(QWidget):
         stats_card = Card(shadow=False)
         stats_row = QHBoxLayout(stats_card)
         stats_row.setContentsMargins(8, 8, 8, 8)
+        # 三块统计标题是构建期定型的静态标签：M-14（2026-10-18）此前只在建时 tr() 一次，
+        # 切语言后停在旧语言。改走 set_text + T() 登记（构造标签与登记键同一 msgid），
+        # retranslate_all() 回填时按当前语言重设；数值面（set_value）是运行态、不进登记。
         self.stat_rooms = StatTile(i18n.tr("监控房间"))
+        set_text(self.stat_rooms.title, T("监控房间"))
         self.stat_connected = StatTile(i18n.tr("已连接"))
+        set_text(self.stat_connected.title, T("已连接"))
         self.stat_msgs = StatTile(i18n.tr("弹幕总数"))
+        set_text(self.stat_msgs.title, T("弹幕总数"))
         for tile in (self.stat_rooms, self.stat_connected, self.stat_msgs):
             stats_row.addWidget(tile)
         root.addWidget(stats_card)
@@ -88,6 +94,12 @@ class DanmakuPage(QWidget):
             i18n.tr("暂无弹幕监控数据"),
             i18n.tr("启动录制并在 config.ini 开启「是否弹幕监控(是/否)」后，支持弹幕的平台将显示实时弹幕"),
         )
+        # 空态标题/描述是构建期定型的静态标签（M-14）：登记进重译表，切语言后回填。
+        set_text(self.empty.title, T("暂无弹幕监控数据"))
+        set_text(
+            self.empty.description,
+            T("启动录制并在 config.ini 开启「是否弹幕监控(是/否)」后，支持弹幕的平台将显示实时弹幕"),
+        )
         table_body.addWidget(self.empty, 1)
         # 3:2 的高度配比与设计稿一致（房间统计在上、弹幕流在下）：
         # 不给 stretch 时两张卡按 sizeHint 抢空间，无数据时房间卡会被压到 200px 左右，
@@ -110,6 +122,8 @@ class DanmakuPage(QWidget):
         self.filter_combo.currentTextChanged.connect(self._on_filter_changed)
         head_row.addWidget(self.filter_combo)
         self.clear_btn = action_button(i18n.tr("清空"))
+        # 按钮文案是静态标签：登记重译（M-14），构造标签与登记键同一 msgid。
+        set_text(self.clear_btn, T("清空"))
         head_row.addWidget(self.clear_btn)
         stream_body.addLayout(head_row)
 
@@ -130,6 +144,17 @@ class DanmakuPage(QWidget):
     def bind_actions(self, on_clear: Callable[[], None]) -> None:
         # 清空动作由主窗口注入（要连带清 monitor 缓冲），页面自己只认回调
         connect_click(self.clear_btn, on_clear)
+
+    def retranslate_runtime(self) -> None:
+        # 语言切换后的运行态重刷（M-14）：表头、「已连接/已断开」单元格与筛选下拉的
+        # 「全部房间」哨兵都在产生点 tr()，但 _refresh_stats 对行内容等值时短路返回，
+        # 数据不变时旧语言原地常驻。清掉上一轮缓存强制整表重画即可——
+        # _sync_filter_options 发现旧哨兵不在 wanted 集合里，会把它换成新语言形态；
+        # 选中具体房间名时原样保留（房间名是不译数据）。弹幕流行内标签（[礼物] 等）
+        # 也是产生点 tr() 的存量文本，一并重绘。
+        self._last_stats = None
+        self._refresh_stats()
+        self._render_stream()
 
     def _on_filter_changed(self, value: str) -> None:
         self._filter = "" if value == i18n.tr("全部房间") else value

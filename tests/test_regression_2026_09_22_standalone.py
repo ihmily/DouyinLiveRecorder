@@ -515,3 +515,86 @@ class TestFfmpegCommandLogMasking:
         assert "COOKIESECRET" not in text, "平台 Cookie 明文落盘"
         assert "<headers:" in text, "headers 占位符缺失"
         assert "http://cdn.example/live/a.flv" in text, "路径须保留以便归因"
+
+
+class TestStandaloneGracefulQuitChain:
+    # M-20（2026-10-19 审查修复）：run_ffmpeg 的 Popen 原带 text=True，stdin 是 TextIOWrapper，
+    # 而 terminate_all_ffmpeg 按主线 src/ffmpeg_proc.py 口径写 b"q"——必抛 TypeError 被写 q 处
+    # 的 except 吞没，「写 q 优雅收尾补 moov」一级恒失效（Windows 下退化为 TerminateProcess
+    # 硬杀，可能产出缺 moov 的不可播放文件）。行为锁走真实链路：run_ffmpeg 建进程 → 登记表 →
+    # terminate_all_ffmpeg 写 q；替身只仿真「管道类型严格性」（text 形态拒 bytes、二进制拒 str），
+    # 终止链本身不在测试里重写（AGENTS「测试不得自实现被测逻辑」）。
+
+    def test_terminate_writes_b_q_into_run_ffmpeg_binary_stdin(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        events: dict[str, Any] = {}
+
+        class _FakeStdin:
+            def __init__(self, text_mode: bool) -> None:
+                self.text_mode = text_mode
+                self.writes: list[Any] = []
+
+            def write(self, data: Any) -> None:
+                # 复刻真实管道语义：TextIOWrapper.write(bytes) 抛 TypeError，
+                # 二进制 BufferedWriter.write(str) 同样抛 TypeError。
+                if self.text_mode != isinstance(data, str):
+                    raise TypeError("write() argument must be " + ("str" if self.text_mode else "bytes-like object"))
+                self.writes.append(data)
+
+            def flush(self) -> None:
+                pass
+
+            def close(self) -> None:
+                events["stdin_closed"] = True
+
+        class _FakePopen:
+            def __class_getitem__(cls, item: Any) -> type["_FakePopen"]:
+                return cls
+
+            def __init__(self, args: list[str], **kwargs: Any) -> None:
+                self.args = args
+                self.pid = 4242
+                self.returncode: int | None = None
+                # 按真实 subprocess 的 text/universal_newlines 口径决定 stdin 类型严格性
+                self.stdin = _FakeStdin(bool(kwargs.get("text") or kwargs.get("universal_newlines")))
+                events["proc"] = self
+
+            def poll(self) -> int | None:
+                return self.returncode
+
+            def wait(self, timeout: float | None = None) -> int:
+                # 无 timeout 的首次 wait 来自 run_ffmpeg 主循环：此刻进程已在登记表内，
+                # 借这个时机驱动真实的 terminate_all_ffmpeg；带 timeout 的 wait 是终止链
+                # 自己的宽限回收，直接返回避免递归。
+                if timeout is None and "killed" not in events:
+                    events["killed"] = SA.terminate_all_ffmpeg()
+                return 0
+
+            def terminate(self) -> None:
+                self.returncode = -15
+
+            def kill(self) -> None:
+                self.returncode = -9
+
+        shim = types.SimpleNamespace(**vars(subprocess))
+        shim.Popen = _FakePopen
+        monkeypatch.setattr(SA, "subprocess", shim)
+        rc, err = SA.run_ffmpeg(
+            "ffmpeg",
+            "https://cdn.example/live/a.flv",
+            str(tmp_path / "out.flv"),
+            "斗鱼直播",
+            "",
+            0,
+            "flv",
+            str(tmp_path / "ffmpeg.log"),
+        )
+        assert rc == 0, err
+        assert events.get("killed") == 1, f"登记表未命中在途进程: {events}"
+        stdin_obj = events["proc"].stdin
+        assert stdin_obj.writes == [b"q"], f"写 q 一级未真正落进 stdin（类型不匹配会被吞没）: {stdin_obj.writes}"
+        # 钉死口径方向：修复必须落在「二进制管道 + 写 b"q"」侧（与主线一致），
+        # 不得反向改成 text 管道 + 写 "q"——那是另一种可行实现，但不是本副本与主线的共同口径。
+        assert stdin_obj.text_mode is False, "run_ffmpeg 的 stdin 必须是二进制管道（主线 ffmpeg_proc.py 同口径）"
+        assert events.get("stdin_closed") is True, "写完 q（无论成败）必须关闭 stdin：部分构建要读到 EOF 才处理 q"

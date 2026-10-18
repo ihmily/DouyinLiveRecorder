@@ -521,16 +521,42 @@ def _interruptible_sleep(seconds: float, record_url: str | None = None) -> None:
 # 让退出顺序回到主进程手里；池已 drain 后 _python_exit 再跑就是空转，顺序问题自然消解。
 # shutdown_postprocess_executor(wait, cancel_futures) 由 K 组在 src/video_postprocess.py 暴露；
 # 该函数尚未落地时用 getattr 安全跳过——不得因这一个钩子阻塞或打断退出流程。
+# [2026-10-18 M-01 补充] 上面那句「尚未落地即跳过」在 Web 面板退出链上等价于**这条收尾从未存在过**：
+# 实测 `grep -rn shutdown_postprocess_executor src/` 在 src/video_postprocess.py 里零命中（该模块
+# 只有 `_MAX_CONVERT_TIMEOUT` 等函数、不持池），而池子本体就在本文件的模块级
+# `_postprocess_executor` / `_get_postprocess_executor`（按锚点引用，行号随文件增删漂移），
+# 模块侧永远拿不到它。故这里补一段 **自持回退**：模块函数缺席时直接收本文件自己那只池，
+# 参数与模块侧约定逐字同值
+# （wait=True、cancel_futures=False，理由见本注释块开头——drain 的顺序价值在于「先排空、
+# 再让 ffmpeg 清理与日志归档落到其后」，改成 wait=False 会把在途转码的产物留在半截）。
+# 该回退刻意做成「模块侧函数一落地就自动失效」的形态：K 组补上 `shutdown_postprocess_executor`
+# 后本分支不再进入，届时本文件这段只是历史说明，不得反过来删模块侧接口来复用回退。
+# 池未创建过（`_postprocess_executor is None`，即本轮从未提交转码）时零动作，不产生任何 I/O。
 def _shutdown_postprocess_executor() -> None:
     try:
         from src import video_postprocess as _vp
     except Exception:
+        _shutdown_own_postprocess_pool()
         return
     _shutdown = getattr(_vp, "shutdown_postprocess_executor", None)
     if _shutdown is None:
+        _shutdown_own_postprocess_pool()
         return
     try:
         _shutdown(wait=True, cancel_futures=False)
+    except Exception as e:
+        logger.warning(i18n.tr("后处理线程池收尾失败: {type_name}: {e}", type_name=type(e).__name__, e=e))
+
+
+# 自持回退的实现体：关闭本文件的 `_postprocess_executor`（M-01，2026-10-18）。
+# 独立成函数而不内联，是为了让「模块侧接口缺席」这一分支在测试里可被单独驱动。
+def _shutdown_own_postprocess_pool() -> None:
+    with _postprocess_executor_lock:
+        pool = _postprocess_executor
+    if pool is None:
+        return
+    try:
+        pool.shutdown(wait=True, cancel_futures=False)
     except Exception as e:
         logger.warning(i18n.tr("后处理线程池收尾失败: {type_name}: {e}", type_name=type(e).__name__, e=e))
 
@@ -4566,7 +4592,15 @@ def start_record(
                                     and codec[0] == "h265"
                                     and record_save_type.upper() not in ("TS", "MKV", "MP4")
                                 ):
-                                    logger.warning("FLV is not supported for h265 codec, use TS format instead")
+                                    # L-05（2026-10-18 审查）：loguru sink 不经 builtins.print
+                                    # 包装，裸英文字面量作首参在非简中语言下原样输出（与 CODE_REVIEW
+                                    # _2026-10-04 LR-03 同一条：译文早在四目录备好、只是查表没调）。
+                                    # 键「FLV is not supported for h265 codec, use TS format instead」
+                                    # 四目录齐全，只补 tr()、不新增 msgid，也不动文案本体
+                                    # （AGENTS「h265 候选按保存格式放行」条按原文锚注了这条告警）。
+                                    logger.warning(
+                                        i18n.tr("FLV is not supported for h265 codec, use TS format instead")
+                                    )
                                     record_save_type = "TS"
 
                             if only_audio_record or any(i in record_save_type for i in ["MP3", "M4A"]):

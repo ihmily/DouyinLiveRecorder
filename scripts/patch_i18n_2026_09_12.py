@@ -20,7 +20,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path("D:/DouyinLiveRecorder-dev")
+# ROOT 由硬编码的旧开发机路径改为「本文件所在仓库根」（M-22，2026-10-18 审查）：
+# 原值 Path("D:/DouyinLiveRecorder-dev") 只在那台机器上成立，在本仓运行会在 append_po()
+# 的第一次 read_text 就抛 FileNotFoundError（连一条目录都没补上就崩栈），使这个「可幂等重跑」
+# 的补齐件完全不可用；按 __file__ 定位与 src/javascript/*.js 的同款惯例（AGENTS.md 关键约定 #5）。
+ROOT = Path(__file__).resolve().parent.parent
 PO_PATH = ROOT / "i18n" / "zh_CN" / "LC_MESSAGES" / "zh_CN.po"
 EN_US = ROOT / "i18n" / "en_US.json"
 EN_GB = ROOT / "i18n" / "en_GB.json"
@@ -225,12 +229,19 @@ def main() -> int:
     print(f"Appended: po={n_po} en_US={n_en} en_GB={n_gb} zh_TW={n_tw}")
     # 重编译 .mo：与 zh_CN.po 同步——CI 用 compile_po.py --check 强制 .mo 与 .po 字节级一致，
     # 此处直接调脚本以跑标准编译流程而不是手工编译（避免编码/字节序等边角差异）
-    res = subprocess.run(["python", "scripts/compile_po.py"], cwd=str(ROOT), capture_output=True, text=True)
+    # 解释器一律取 sys.executable 而不是按名字起 `python`（L-29/M-22 同族坑）：① PATH 无 `python`
+    # 时 subprocess.run 抛 FileNotFoundError 而非回非零码，本脚本会以崩溃栈退出；② 系统 python 与
+    # 项目 venv 混用时，3.13 解释器会对 PEP 758 无括号 except 语法误报 SyntaxError（AGENTS.md「Python 版本」）。
+    res = subprocess.run(
+        [sys.executable, "scripts/compile_po.py"], cwd=str(ROOT), capture_output=True, text=True, check=False
+    )
     print("compile_po stdout:", res.stdout)
     print("compile_po stderr:", res.stderr)
     print("compile_po returncode:", res.returncode)
     # returncode 非零透传给上层（CI 可见）；append 阶段无显式 return，由 0 兜底
-    return 0
+    # M-21（2026-10-18 审查）：上一行注释描述的就是本函数的契约，但旧实现在此无条件 return 0，
+    # 于是 .mo 编译失败（compile_po 退非 0）在 CI 完全不可见——翻译产物缺失却被报成成功。
+    return int(res.returncode)
 
 
 if __name__ == "__main__":

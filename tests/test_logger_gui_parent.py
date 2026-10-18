@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import importlib
+import io
 import sys
 from pathlib import Path
 from typing import Iterator
@@ -28,7 +29,14 @@ def reload_logger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[P
     yield tmp_path
     logger.complete()
     logger.remove()
+    # LT-08（2026-10-18）：三个 sink id 都要复位。重载会往真·全局 loguru 注册文件 sink，
+    # 只清 _console_sink_id 时两个录制 sink 的 id 会带着 tmp_path 里已随会话清理的句柄留给
+    # 下一个用例——remove_file_sinks()/add_file_sinks() 后续对着死 id 走幂等分支，
+    # 而「归档后重建 sink」这类用例判的就是这两个 id，跨文件状态泄漏会让它假绿或假红。
+    # 与同构 fixture tests/test_log_archive.py::TestLoggerFileSinkOps.reload_logger 保持一致。
     logger_mod._console_sink_id = None
+    logger_mod._streamget_sink_id = None
+    logger_mod._playurl_sink_id = None
 
 
 def _write_config(tmp_path: Path, enabled: str) -> None:
@@ -63,6 +71,46 @@ def test_gui_parent_respects_log_file_disabled(reload_logger: Path, monkeypatch:
     _write_config(reload_logger, "否")
     importlib.reload(logger_mod)
     assert not (reload_logger / "logs" / "gui.log").exists()
+
+
+def test_import_time_console_sink_colorize_follows_isatty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # L-16（CODE_REVIEW_2026-10-18）回归锁：导入期控制台 sink 的 colorize 必须按 isatty 判定，
+    # 并与 rebind_console_sink() 共用 src/logger.py::_console_colorize 这一份实现。
+    # 旧形态在导入期硬编码 colorize=True，于是 stderr 被重定向到文件/管道时（web.py 后台模式
+    # 接走 logs/web_console.log、或 `python main.py > x.log`）ANSI 转义序列照样写进日志内容，
+    # 而排障恰恰要看这个文件。两侧都钉：非 tty 不得有 ESC、真 tty 仍须有 ESC
+    # （后者防住「干脆恒 False」这种把彩色终端一起弄没的退化改法）。
+    # 关掉文件 sink（配置「否」），本用例只观察控制台这一路，也不往 tmp_path 外落文件。
+    monkeypatch.delenv(logger_mod.GUI_PARENT_ENV, raising=False)
+    monkeypatch.setattr(sys, "argv", [str(tmp_path / "main.py")])
+    _write_config(tmp_path, "否")
+    redirected = io.StringIO()  # StringIO.isatty() 恒 False = 重定向形态
+    monkeypatch.setattr(sys, "stderr", redirected)
+    try:
+        importlib.reload(logger_mod)
+        logger.info("着色判定")
+        logger.complete()
+        assert "\x1b" not in redirected.getvalue(), repr(redirected.getvalue())
+        assert "着色判定" in redirected.getvalue(), "控制台 sink 根本没注册上，上一条断言是假绿"
+
+        class _TtyStringIO(io.StringIO):
+            # 真终端形态：只有 isatty() 这一处不同
+            def isatty(self) -> bool:
+                return True
+
+        terminal = _TtyStringIO()
+        monkeypatch.setattr(sys, "stderr", terminal)
+        importlib.reload(logger_mod)
+        logger.info("着色判定")
+        logger.complete()
+        assert "\x1b" in terminal.getvalue(), "tty 形态被一并关掉着色（判据恒 False）"
+    finally:
+        # 与 reload_logger fixture 同款复位：三个 sink id 都要清，tmp 句柄不留给后续用例
+        logger.complete()
+        logger.remove()
+        logger_mod._console_sink_id = None
+        logger_mod._streamget_sink_id = None
+        logger_mod._playurl_sink_id = None
 
 
 def test_child_process_env_strips_marker(monkeypatch: pytest.MonkeyPatch) -> None:

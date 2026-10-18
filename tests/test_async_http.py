@@ -1,7 +1,9 @@
 # Tests for src/async_http.py module — 客户端管理 + 核心请求路径。
 
 import asyncio
+import gzip
 import threading
+from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -139,6 +141,11 @@ class TestClientCacheLock:
         for t in threads:
             t.join(timeout=15)
         assert errors == []
+        # LT-02（2026-10-18 审查，与 tests/test_async_http_lock.py 的 LT-01 同口径）：
+        # join 带超时返回不代表线程已退出——挂死形态下 errors 仍为空、用例假绿。
+        # 必须逐线程断言 is_alive 为 False，才钉住「8 线程全部跑完」。
+        for t in threads:
+            assert not t.is_alive(), "join 超时后线程仍存活：被测逻辑挂死，不得判绿"
         with _client_cache_lock:
             _client_cache.clear()
 
@@ -832,3 +839,179 @@ class TestGetResponseStatus:
 
         assert result is False
         mock_client.get.assert_not_called()
+
+
+# ────────────────────────────────────────────────────────────
+# M-04（2026-10-18 审查）：async 出站响应体读取上限（压缩炸弹 / 超大响应防线）
+# ────────────────────────────────────────────────────────────
+
+
+class _ChunkedStream(httpx.AsyncByteStream):
+    # 替身传输层：按块吐原始字节，模拟「响应体尚未物化」的真流形态（httpx 的 aiter_raw 迭代
+    # response.stream）。刻意不是预装载 Response——MockTransport 默认回的 Response 在构造期就
+    # 带 _content，钩子会按「已装载」直接放行，上限逻辑根本不被执行（假绿面）。
+    # 继承 AsyncByteStream 是必须的：AsyncClient._send_single_request 对 stream 有一道
+    # isinstance 断言；异步生成器形态的 __aiter__ 与 httpx 基类签名同构。
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = chunks
+        self.yielded = 0
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for chunk in self._chunks:
+            self.yielded += 1
+            yield chunk
+
+
+def _stream_response(
+    chunks: list[bytes],
+    *,
+    headers: dict[str, str] | None = None,
+    status_code: int = 200,
+    url: str = "https://example.com/api",
+) -> tuple[httpx.Response, _ChunkedStream]:
+    stream = _ChunkedStream(chunks)
+    response = httpx.Response(status_code, headers=headers, stream=stream, request=httpx.Request("GET", url))
+    return response, stream
+
+
+class TestBoundedResponseRead:
+    # _bounded_response_read：读上限、回填语义、超限失败形态（M-04 的核心不变量）。
+
+    @pytest.mark.asyncio
+    async def test_plain_body_over_cap_raises_value_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 未压缩：decoded == raw，按 _MAX_RESPONSE_BYTES 定罪；超限必须是 ValueError
+        # （落 async_req 既有通用 except 的空值契约），不是截断返回。
+        monkeypatch.setattr(async_http, "_MAX_RESPONSE_BYTES", 64)
+        response, stream = _stream_response([b"a" * 40, b"a" * 40])
+        with pytest.raises(ValueError, match="响应体"):
+            await async_http._bounded_response_read(response)
+        # 超限判定必须在「读入超过上限的那一块」当场生效：第三块根本不该被拉取
+        assert stream.yielded == 2
+
+    @pytest.mark.asyncio
+    async def test_within_cap_loads_body_for_public_readers(self) -> None:
+        # 未超限：物化+回填后 .content/.text 全部走公开读径与既有契约一致（async_req 的
+        # response.text、get_response_status 的 status 判定都不许感知到「半途流」）。
+        response, _stream = _stream_response([b'{"a": 1}', b" tail"])
+        await async_http._bounded_response_read(response)
+        assert response.content == b'{"a": 1} tail'
+        assert response.text == '{"a": 1} tail'
+
+    @pytest.mark.asyncio
+    async def test_gzip_bomb_over_decompressed_cap_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 解压炸弹形态（M-04 的攻击主体）：压缩体很小、解压产出超限——只限压缩体挡不住，
+        # 必须按 _MAX_DECOMPRESSED_BYTES 在解码产出侧当场拒绝。
+        monkeypatch.setattr(async_http, "_MAX_DECOMPRESSED_BYTES", 64)
+        compressed = gzip.compress(b"a" * 4096)
+        assert len(compressed) < 64, "构造失效：压缩体本身已超上限，会走成压缩侧定罪"
+        response, _stream = _stream_response([compressed], headers={"content-encoding": "gzip"})
+        with pytest.raises(ValueError, match="解压后响应体"):
+            await async_http._bounded_response_read(response)
+
+    @pytest.mark.asyncio
+    async def test_gzip_body_within_cap_is_decoded_by_httpx_pipeline(self) -> None:
+        # 反向锁（防「上限顺手把正常 gzip 大 JSON 误杀」与「回填绕过解码管线导致 text 是密文」）：
+        # 未超限的 gzip 响应必须经 httpx 自带解码器还原成明文并由 .text 直读。
+        compressed = gzip.compress(b"hello gzip")
+        response, _stream = _stream_response([compressed], headers={"content-encoding": "gzip"})
+        await async_http._bounded_response_read(response)
+        assert response.text == "hello gzip"
+
+    @pytest.mark.asyncio
+    async def test_redirect_hop_body_is_not_read(self) -> None:
+        # 中间 3xx 跳维持 httpx 既有的「丢弃不物化」形态：本函数不得顺手把它们读进内存
+        # （读了反而引入生产路径原本没有的新形态，且逐跳判定在更早的钩子段已完成）。
+        response, stream = _stream_response(
+            [b"redirect body"], status_code=302, headers={"location": "https://next.example.com/x"}
+        )
+        await async_http._bounded_response_read(response)
+        assert stream.yielded == 0
+
+    @pytest.mark.asyncio
+    async def test_preloaded_response_is_left_untouched(self) -> None:
+        # 构造期已装载（content= 形态 / 替身客户端）的响应没有流可限：原样放行，
+        # 这条早退让既有按 MagicMock 响应打桩的用例不被波及。
+        response = httpx.Response(200, content=b"preloaded", request=httpx.Request("GET", "https://example.com"))
+        await async_http._bounded_response_read(response)
+        assert response.content == b"preloaded"
+
+    @pytest.mark.asyncio
+    async def test_caps_match_the_sync_side_baseline(self) -> None:
+        # 「与 sync_http 同一口径」的同值锁：任一侧抬数、另一侧不同批抬即红
+        # （两份事实源的漂移正是本仓反复点名的缺口形态，注释承诺必须有机检兜底）。
+        from src import sync_http
+
+        assert async_http._MAX_RESPONSE_BYTES == sync_http._MAX_RESPONSE_BYTES
+        assert async_http._MAX_DECOMPRESSED_BYTES == sync_http._MAX_DECOMPRESSED_BYTES
+
+
+class TestAsyncReqCapEndToEnd:
+    # 全链路锁：上限必须经**真实** _build_client 挂的 response 钩子生效在 async_req 主路径上——
+    # 本类用例只把最底层 transport 换成 MockTransport（wp_b_netguard 同法），钩子与被测读取链
+    # 全部走真实代码；把 _get_client 整个打桩就验不到「钩子真的接线」这半条不变量。
+
+    @pytest.mark.asyncio
+    async def test_async_req_oversized_stream_body_fails_with_empty_contract(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(async_http, "_MAX_RESPONSE_BYTES", 64)
+        client = async_http._build_client(None, 10, True, False)
+        client._mounts = {}  # 与 wp_b_netguard 同法：让每一跳都落到 MockTransport 上
+        client._transport = httpx.MockTransport(
+            lambda request: httpx.Response(200, stream=_ChunkedStream([b"a" * 40, b"a" * 40]))
+        )
+
+        async def _provide(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
+            return client
+
+        monkeypatch.setattr(async_http, "_get_client", _provide)
+        monkeypatch.setattr(async_http.utils, "handle_proxy_addr", lambda x: None)
+        try:
+            # 超限 = 既有失败语义（空串），不得穿透 ValueError、不得返回半截响应
+            assert await async_req("https://example.com/api") == ""
+        finally:
+            await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_async_req_normal_body_flows_through_the_hook(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 反向锁：经钩子物化+回填的正常小响应，async_req 的文本契约逐字不变
+        # （若回填形态与 httpx 的「已装载」判定脱钩，这里会拿到空串/ResponseNotRead）。
+        client = async_http._build_client(None, 10, True, False)
+        client._mounts = {}
+        client._transport = httpx.MockTransport(
+            lambda request: httpx.Response(200, stream=_ChunkedStream([b"part1", b"part2"]))
+        )
+
+        async def _provide(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
+            return client
+
+        monkeypatch.setattr(async_http, "_get_client", _provide)
+        monkeypatch.setattr(async_http.utils, "handle_proxy_addr", lambda x: None)
+        try:
+            assert await async_req("https://example.com/api") == "part1part2"
+        finally:
+            await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_stateful_login_client_is_capped_too(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # return_cookies=True 走 _build_client 的独占分支：同一支工厂 → 同一道上限。
+        # 漏了这条就等于「登录/取 cookie 路径的响应体无人设防」。
+        monkeypatch.setattr(async_http, "_MAX_RESPONSE_BYTES", 64)
+        monkeypatch.setattr(async_http.utils, "handle_proxy_addr", lambda x: None)
+        seen: list[httpx.AsyncClient] = []
+        real_build = async_http._build_client
+
+        def _build(proxy_addr: str | None, timeout: int, verify: bool, http2: bool) -> httpx.AsyncClient:
+            client = real_build(proxy_addr, timeout, verify, http2)
+            client._mounts = {}
+            client._transport = httpx.MockTransport(
+                lambda request: httpx.Response(200, stream=_ChunkedStream([b"b" * 40, b"b" * 40]))
+            )
+            seen.append(client)
+            return client
+
+        monkeypatch.setattr(async_http, "_build_client", _build)
+        # include_cookies=True 的失败契约是 ("", {})：超限必须落回这个形状而不是抛穿
+        assert await async_req("https://example.com/login", return_cookies=True, include_cookies=True) == ("", {})
+        for client in seen:
+            await client.aclose()
