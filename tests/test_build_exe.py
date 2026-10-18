@@ -79,7 +79,31 @@ def test_macos_arm64_resolves_to_the_same_evermeet_build_as_x64(monkeypatch: pyt
     monkeypatch.setattr(build_exe, "runtime_slot_key", lambda: "macos-arm64")
     url = build_exe._ffmpeg_source_url()
     assert url == build_exe._FFMPEG_DOWNLOAD_URLS["macos-x64"], "两架构必须共用同一份 evermeet 构建"
-    assert url.endswith("/ffmpeg/getrelease/zip"), url
+    assert re.fullmatch(r"https://evermeet\.ca/ffmpeg/ffmpeg-\d+\.\d+\.\d+\.zip", url), url
+
+
+def test_macos_ffmpeg_urls_point_at_immutable_artifacts() -> None:
+    # [2026-10-18] evermeet 的 Download API（getrelease[/…]/zip[/sig]）被上游以「exorbitant abuse」
+    # 为由整体下架（实测 410 + JSON {"code":410}），且它本来就是滚动别名——签名只钉得住「谁签的」，
+    # 钉不住「哪个版本」。与 Linux 的月末标签同源，macOS 两支归档一律钉**版本化直链**：
+    # URL 与签名对象双双不可变，上游发新版不会自动跟进，属刻意的人工闸口。
+    urls: dict[str, str] = {}
+    for key in ("macos-x64", "macos-arm64"):
+        for slot, url in (
+            ("ffmpeg", build_exe._FFMPEG_DOWNLOAD_URLS[key]),
+            ("ffprobe", build_exe._EXTRA_EXECUTABLE_URLS[key]["ffprobe"]),
+        ):
+            assert "getrelease" not in url, f"{key}/{slot} 仍指向上游已 410 下架的别名端点：{url}"
+            assert re.fullmatch(rf"https://evermeet\.ca/ffmpeg/{slot}-(\d+\.\d+\.\d+)\.zip", url), url
+            urls[slot] = url
+    # 两架构逐槽相等：分头钉成两个版本等于让 x64/arm64 拉两条不同代次的 ffmpeg
+    assert build_exe._FFMPEG_DOWNLOAD_URLS["macos-x64"] == build_exe._FFMPEG_DOWNLOAD_URLS["macos-arm64"]
+    assert build_exe._EXTRA_EXECUTABLE_URLS["macos-x64"] == build_exe._EXTRA_EXECUTABLE_URLS["macos-arm64"]
+    # 同一次抬版必须两支一起抬：只挪 ffmpeg 会让 full 包里 ffmpeg 与 ffprobe 跨代次共存
+    ffmpeg_ver = re.search(r"-(\d+\.\d+\.\d+)\.zip", urls["ffmpeg"])
+    ffprobe_ver = re.search(r"-(\d+\.\d+\.\d+)\.zip", urls["ffprobe"])
+    assert ffmpeg_ver is not None and ffprobe_ver is not None, urls
+    assert ffmpeg_ver.group(1) == ffprobe_ver.group(1), f"macOS 两支归档版本不一致：{urls}"
 
 
 def test_linux_ffmpeg_urls_pin_an_immutable_release_tag() -> None:
@@ -166,9 +190,9 @@ def test_runtime_slots_cover_both_pinnable_components() -> None:
 
 
 def test_ffprobe_is_a_separate_download_point_only_on_macos() -> None:
-    # evermeet 的 getrelease/zip 里**只有 ffmpeg**（2026-09-26 macOS 日志：自检报「找不到非空的
-    # ffprobe 可执行文件」却报 ffmpeg 可执行），所以 macOS 的 ffprobe 必须是一个独立槽位；
-    # 而 gyan.dev / BtbN 的归档里两件同包，给它另立槽位等于凭空造一个没有公布值的假闸口。
+    # evermeet 的 ffmpeg 归档里**只有 ffmpeg**（2026-09-26 macOS 日志：当时取数端点为 getrelease/zip，
+    # 自检报「找不到非空的 ffprobe 可执行文件」却报 ffmpeg 可执行），所以 macOS 的 ffprobe 必须是一个
+    # 独立槽位；而 gyan.dev / BtbN 的归档里两件同包，给它另立槽位等于凭空造一个没有公布值的假闸口。
     # 三张表的键集合必须互相推出，缺任一处都会让「有来源没钉定」或「有钉定没来源」半边静默。
     macos_keys = {k for k in build_exe.RELEASE_RUNTIME_KEYS if k.startswith("macos-")}
     assert set(build_exe._EXTRA_EXECUTABLE_URLS) == macos_keys, "独立归档件的登记面与 macOS 运行时键不同步"
@@ -184,7 +208,7 @@ def test_macos_ffprobe_signature_entry_matches_its_artifact_url() -> None:
     # 钉的是「谁签的」，登记错了签名 URL 就等于这一档从未真正管住过。两架构同一份产物 → 同值。
     for key in ("macos-x64", "macos-arm64"):
         sig_url, fingerprint = build_exe._RUNTIME_GPG_SIGNATURES[key]["ffprobe"]
-        assert sig_url == f"{build_exe._EXTRA_EXECUTABLE_URLS[key]['ffprobe']}/sig", sig_url
+        assert sig_url == f"{build_exe._EXTRA_EXECUTABLE_URLS[key]['ffprobe']}.sig", sig_url
         assert (
             fingerprint == build_exe._RUNTIME_GPG_SIGNATURES[key]["ffmpeg"][1]
         ), "ffprobe 与 ffmpeg 同页同钥，另立指纹等于引入第二把未核实的钥匙"
@@ -299,7 +323,7 @@ def _macos_release_env(monkeypatch: pytest.MonkeyPatch, *, release: bool) -> Non
 def _artifact_url_for_slot(key: str, slot: str) -> str:
     # 签名 URL 的同构校验要先拿到「该槽的产物 URL」。ffprobe 不在 _FFMPEG_DOWNLOAD_URLS 里，
     # 它在 _EXTRA_EXECUTABLE_URLS（依据见该表注释），查不到就该 KeyError 而不是回空串——
-    # 回空串会让下面 `sig_url == f"{artifact}/sig"` 变成和 "/sig" 比，永远红或永远假绿。
+    # 回空串会让下面 `sig_url == f"{artifact}.sig"` 变成和 ".sig" 比，永远红或永远假绿。
     # build_exe 是按路径动态加载的 Any，故这里显式 cast 收窄（warn_return_any 不容 Any 直返）。
     if slot == "ffmpeg":
         return cast(str, build_exe._FFMPEG_DOWNLOAD_URLS[key])
@@ -307,15 +331,16 @@ def _artifact_url_for_slot(key: str, slot: str) -> str:
 
 
 def test_gpg_config_shape_and_source_consistency() -> None:
-    # 只登记「上游确实公布 detached 签名」的槽位；且签名 URL 必须是产物 URL + "/sig"
-    # （evermeet 的既定约定），否则改了产物来源却忘了改签名来源，验签会长期假失败。
+    # 只登记「上游确实公布 detached 签名」的槽位；且签名 URL 必须是产物 URL + ".sig"
+    # （evermeet 2026-10-18 起的形态；旧约定「产物 URL + /sig」随 Download API 一起 410 下架），
+    # 否则改了产物来源却忘了改签名来源，验签会长期假失败。
     for key, slots in build_exe._RUNTIME_GPG_SIGNATURES.items():
         assert key in build_exe._FFMPEG_DOWNLOAD_URLS, f"签名配置指向了不存在的运行时键 {key}"
         for slot, (sig_url, fingerprint) in slots.items():
             assert slot in build_exe.runtime_slots_for(key)
             assert re.fullmatch(r"[0-9a-fA-F]{40}", fingerprint), f"{key}/{slot} 指纹不是 40 位十六进制"
             artifact = _artifact_url_for_slot(key, slot)
-            assert sig_url == f"{artifact}/sig", f"{key}/{slot} 签名 URL 与产物 URL 脱钩: {sig_url}"
+            assert sig_url == f"{artifact}.sig", f"{key}/{slot} 签名 URL 与产物 URL 脱钩: {sig_url}"
 
 
 def test_gpg_verification_is_skipped_for_slots_without_official_sig(
@@ -937,13 +962,17 @@ def test_macos_ffmpeg_branch_fetches_both_archives_and_verifies(
     _make_zip(ffmpeg_zip, {"ffmpeg": (b"MachO-ffmpeg", 0o755)})
     ffprobe_zip = tmp_path / "src_ffprobe.zip"
     _make_zip(ffprobe_zip, {"ffprobe": (b"MachO-ffprobe", 0o755)})
+    # payload 键取自**生产来源表本身**而不是复写一遍 URL：这条锁要证的是「darwin 分支按表取两支归档、
+    # 并对每支按其登记的签名 URL 验签」，把 URL 抄进用例就等于同时锁住了两个可能各自漂移的事实源。
+    ffmpeg_url = _artifact_url_for_slot("macos-arm64", "ffmpeg")
+    ffprobe_url = _artifact_url_for_slot("macos-arm64", "ffprobe")
     seen = _install_routed_urlopen(
         monkeypatch,
         {
-            "/getrelease/ffprobe/zip/sig": b"sig-ffprobe",
-            "/getrelease/zip/sig": b"sig-ffmpeg",
-            "/getrelease/ffprobe/zip": ffprobe_zip.read_bytes(),
-            "/getrelease/zip": ffmpeg_zip.read_bytes(),
+            f"{ffprobe_url}.sig": b"sig-ffprobe",
+            f"{ffmpeg_url}.sig": b"sig-ffmpeg",
+            ffprobe_url: ffprobe_zip.read_bytes(),
+            ffmpeg_url: ffmpeg_zip.read_bytes(),
         },
     )
     _install_fake_gpg(monkeypatch, keyring=_keyring_record(_PRIMARY_FPR), verify_status=_GOOD_VERIFY_STATUS)
@@ -956,8 +985,8 @@ def test_macos_ffmpeg_branch_fetches_both_archives_and_verifies(
     # 两个可执行件都补了执行位（归档本身是 zip，Windows 开发机上也能按 chmod 调用记录判定）
     assert sorted(os.path.basename(p) for p, _ in chmod_calls) == ["ffmpeg", "ffprobe"], chmod_calls
     # 归档与签名都取过，且**没有**落到 target_dir（会被 make_zip 打进对外分发包）
-    assert sum(1 for url in seen if url.endswith("/sig")) == 2, seen
-    assert any("getrelease/ffprobe/zip" in url for url in seen), seen
+    assert sum(1 for url in seen if url.endswith(".sig")) == 2, seen
+    assert ffprobe_url in seen, seen
     # 临时归档必须解包后即删：留在 target_dir 里会被 make_zip 一起打进对外分发包
     assert not list(tmp_path.glob("_*temp.zip")), "临时归档残留在发布目录里"
 

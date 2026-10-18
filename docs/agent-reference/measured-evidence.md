@@ -113,6 +113,18 @@ Node 运行时以 24.19.0 实测为准（全部 JS 签名脚本 + migu.js 通过
 
 本机网络边界（决定可复现范围）：`github.com/.../releases/download/...` 直链在本机 `Connection was reset`（`http=000`），只有 `api.github.com` 的 octet-stream 通道可用；因此「按来源表 URL 全量下载并比对钉定值」这最后一步只能由 GitHub runner 首次实跑验证，本机只能验到 asset 存在、大小、digest 与前缀成员布局。
 
+**2026-10-18 复测 · evermeet macOS 取数端点整体下架**（起因：`macos` 构建作业报 `full 包产物自检：…/ffmpeg 内找不到非空的 ffmpeg / ffprobe 可执行文件`，node 槽同轮正常）：
+
+| 探针 | 读数 |
+| --- | --- |
+| `curl -sSI -L https://evermeet.ca/ffmpeg/getrelease/zip` | 重定向落点 `evermeet.cx`，**410**，`application/json`，86 B：`{"status":"error","message":"API endpoint removed due to exorbitant abuse","code":410}`；`…/getrelease/zip/sig` 与 `…/getrelease/ffprobe/zip` 同样 410（旧形态的归档与签名两支一起没了） |
+| `curl -sSL https://evermeet.cx/ffmpeg/` | 200 / `text/html` / 78,590 B。「APIs → Download API」段落原文写明 `This endpoint has been removed due to exorbitant abuse.`；页面上改为直接列出**版本化直链**：`ffmpeg-9.0.2.zip`、`ffprobe-9.0.2.zip`、`ffmpeg-127602-g2d49d0e6243.zip`（快照）与各自的 `.zip.sig`；另出现 `./apple-silicon-arm` 条目，**是否已有原生 arm64 产物未实测**，「只有 x86_64」的结论维持不变 |
+| `curl -sSI -L https://evermeet.cx/ffmpeg/ffmpeg-9.0.2.zip` | 200 / `application/zip` / `Content-Length: 26,198,325`，重定向真实落点 `e.deolaha.ca:4242/pub/ffmpeg/ffmpeg-9.0.2.zip` |
+| `curl -sSL https://evermeet.cx/ffmpeg/ffmpeg-9.0.2.zip.sig` | 200 / `application/pgp-signature` / **594 B**，落点 `e.deolaha.ca:4242/pub/ffmpeg/ffmpeg-9.0.2.zip.sig` —— 与 2026-09-26 经旧 `getrelease/zip/sig` 实测的落点**同一个对象**，故 `_RUNTIME_GPG_SIGNATURES` 的钉定主钥指纹无需重取 |
+| `curl -sSL -r 0-0 https://evermeet.cx/ffmpeg/ffprobe-9.0.2.zip` | 206 / `application/zip`，落点 `e.deolaha.ca:4242/pub/ffprobe/ffprobe-9.0.2.zip` |
+| 源站限速（同一时间窗内的副作用实测） | 连发请求对 `e.deolaha.ca:4242` 得到 **429** / `text/plain` / 30 B body；26 MB 全量拉取本机只跑到约 45 KB/s 且中途被断。**结论：`_download_file` 无重试，「整包下载 + 真跑 gpg 验签」这一步本机未复现，仍只能由 macOS runner 首跑验证** |
+| 429 错误体污染归档的后果核对 | 429 的 30 B 响应体被 `-o` 原样落盘（等价于 `_download_file` 的行为），此时签名档分支会拿这份非 zip 数据去 `gpg --verify` → `_hard_fail`/非 zip 异常 → 发布路径终止，**不会**静默出包。防线成立的前提是「签名档以验签为判据」，故不得为绕过 429 而改成「下载失败即跳过验签」 |
+
 ## 虎牙 FLV-first 冷启动采样
 
 依据：2026-08-28/29 三轮真机两房间复现——虎牙 HLS 三条 CDN 线路（hs/tx/al）冷启动探针假绿（探针 200/206、ffmpeg 打开即 403，返回码 3436169992），TX/AL 次轮探针也稳定 403；FLV 每轮稳定可用（最长连录 6 分钟）。

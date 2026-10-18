@@ -531,12 +531,21 @@ OFFICIAL_SIGNATURE_PIN = "PINNED-OFFICIAL-GPG-SIGNATURE"
 #     ffmpeg-release-essentials.zip.sha256 与重定向目标 packages/ffmpeg-9.0.2-essentials_build.zip
 #     .sha256），对应版本 ffmpeg 9.0.2。滚动别名意味着**每次上游发新版本都会失配**，需重新核对后回填。
 #   · macos-x64 / macos-arm64 的 ffmpeg 取值 = OFFICIAL_SIGNATURE_PIN（官方签名档，判据见该常量注释）：
-#     evermeet 页面只写「任意文件追加 /sig 取 GPG 签名」、无 sha256 文档（2026-09-26 实测 /sig → 200
-#     application/pgp-signature、594 B 二进制 OpenPGP 包，重定向真实落点 e.deolaha.ca:4242/pub/ffmpeg/
-#     ffmpeg-9.0.2.zip.sig）；_RUNTIME_GPG_SIGNATURES 已登记该槽的签名 URL 与完整主钥指纹，指纹同日经
-#     keys.openpgp.org 这一**独立**通道回显印证（UID "static FFmpeg binaries (signing key)"）。
+#     evermeet 不公布 sha256 文档，签名文件与产物**同名追加 .sig**（2026-10-18 实测
+#     ffmpeg-9.0.2.zip.sig → 200 application/pgp-signature、594 B 二进制 OpenPGP 包，重定向真实落点
+#     e.deolaha.ca:4242/pub/ffmpeg/ffmpeg-9.0.2.zip.sig）；_RUNTIME_GPG_SIGNATURES 已登记该槽的签名 URL
+#     与完整主钥指纹，指纹经 keys.openpgp.org 这一**独立**通道回显印证（UID "static FFmpeg binaries
+#     (signing key)"）。
 #     两槽是同一份 x86_64 产物（原 arm64 下载点 getrelease-arm64/zip 上游从不存在、恒 404，2026-09-22
 #     已把两架构统一为 x86_64 构建，见 _FFMPEG_DOWNLOAD_URLS 注释）。
+#     [2026-10-18 换端点] 旧取数形态（页面写「任意文件追加 /sig」的 Download API，
+#     getrelease[/ffprobe]/zip[/sig]）已被上游**整体下架**：页面明示 "This endpoint has been removed
+#     due to exorbitant abuse"，实测 `https://evermeet.ca/ffmpeg/getrelease/zip` 经重定向到 evermeet.cx
+#     后回 410 + JSON `{"code":410}`（curl 与 urllib 同判，签名端点 /sig 同样 410）。macOS 构建因此
+#     在 `_download_ffmpeg` 的 `except Exception` 处收成一行 warning、ffmpeg/ 留空目录，最终由出包前
+#     自检判为缺件终止。取数端点改为页面上的**版本化直链** ffmpeg-9.0.2.zip / ffprobe-9.0.2.zip，
+#     与 Linux 月末标签同构：URL 与签名对象双双不可变，签名档从「只钉住谁签的」升级为「同时钉住版本」，
+#     代价与 Linux 一致——上游发新版不会自动跟进，需人工抬版本号并重核指纹。
 #   · linux-x64 / linux-arm64 的 ffmpeg 已换用**公布 SHA256 的上游**（BtbN FFmpeg-Builds 的 n9.0 系列
 #     资产，2026-09-26）：下表取值取自 api.github.com 该 release asset 的 digest 字段——属平台公布的哈希
 #     文档，不是本地下载自算，故仍是常规 64 位十六进制钉定，不需要新开完整性档。
@@ -589,7 +598,7 @@ _PINNED_RUNTIME_SHA256: dict[str, dict[str, str]] = {
         "node": "b7e7991d5407815adfa74a2a9cd4db683552c8ce32ff4a295c22e972849c3f5d",
     },
     "macos-x64": {
-        # evermeet getrelease/zip：官方只给 GPG 签名（追加 /sig），无 SHA256 → 走官方签名档
+        # evermeet 版本化直链 ffmpeg-9.0.2.zip：官方只给同名 .sig 的 GPG 签名，无 SHA256 → 走官方签名档
         "ffmpeg": OFFICIAL_SIGNATURE_PIN,
         "ffprobe": OFFICIAL_SIGNATURE_PIN,
         # node-v24.22.0-darwin-x64.tar.gz
@@ -796,8 +805,9 @@ def _unpinned_action(
 # 它**自身不带来源认证**——期望值与实际产物是从同一个 HTTPS 通道取回的，域名/CDN 被劫持时
 # 两者会被一起换掉；签名核验补的正是「这份产物确实由那把钥匙签出」，且公钥按**完整 40 位指纹**
 # 导入而不是 key id（key id 只有 16 位十六进制，可碰撞、可仿冒）。
-# 只登记**上游确实公布 detached 签名**的槽位，没公布的留空即跳过：evermeet（macOS 两架构）页面
-# 明示「任意文件追加 /sig 取其 GPG 签名」；gyan.dev / johnvansickle 实测不公布签名文件，
+# 只登记**上游确实公布 detached 签名**的槽位，没公布的留空即跳过：evermeet（macOS 两架构）为每份
+# 产物发布**同名追加 .sig** 的 detached 签名（2026-09-26 的「任意文件追加 /sig」API 已于 2026-10-18
+# 被上游下架，见 _FFMPEG_DOWNLOAD_URLS 上方注释）；gyan.dev / johnvansickle 实测不公布签名文件，
 # **不得**为了「看起来全都验了」伪造配置。
 # [2026-09-26] macOS 两槽的 _PINNED_RUNTIME_SHA256 取值改为本表的官方签名档，于是「登记了签名」从
 # 锦上添花升格为**判据本体**：该表若缺某槽条目，_is_signature_satisfied 直接判未管住（--strict 红），
@@ -807,7 +817,7 @@ def _unpinned_action(
 _RUNTIME_GPG_SIGNATURES: dict[str, dict[str, tuple[str, str]]] = {
     "macos-x64": {
         "ffmpeg": (
-            "https://evermeet.ca/ffmpeg/getrelease/zip/sig",
+            "https://evermeet.ca/ffmpeg/ffmpeg-9.0.2.zip.sig",
             "20F6EA3E0CFD6B4C53447A73476C4B611A660874",
         ),
         # ffprobe 归档与 ffmpeg 归档同页同钥：实测两份 .sig 的签发者都是主钥
@@ -815,18 +825,18 @@ _RUNTIME_GPG_SIGNATURES: dict[str, dict[str, tuple[str, str]]] = {
         # （RSA-4096 / SHA-512，2026-09-18 签），_verify_gpg_artifact 按「主钥+子钥指纹集合」判归属，
         # 故沿用同一个已钉主钥指纹，不需要另立第 4 把钥匙。
         "ffprobe": (
-            "https://evermeet.ca/ffmpeg/getrelease/ffprobe/zip/sig",
+            "https://evermeet.ca/ffmpeg/ffprobe-9.0.2.zip.sig",
             "20F6EA3E0CFD6B4C53447A73476C4B611A660874",
         ),
     },
     "macos-arm64": {
         # 与 macos-x64 同一份产物、同一把钥匙（见 _FFMPEG_DOWNLOAD_URLS 注释）
         "ffmpeg": (
-            "https://evermeet.ca/ffmpeg/getrelease/zip/sig",
+            "https://evermeet.ca/ffmpeg/ffmpeg-9.0.2.zip.sig",
             "20F6EA3E0CFD6B4C53447A73476C4B611A660874",
         ),
         "ffprobe": (
-            "https://evermeet.ca/ffmpeg/getrelease/ffprobe/zip/sig",
+            "https://evermeet.ca/ffmpeg/ffprobe-9.0.2.zip.sig",
             "20F6EA3E0CFD6B4C53447A73476C4B611A660874",
         ),
     },
@@ -1326,8 +1336,10 @@ def _download_file(url: str, dest: Path, desc: str, *, slot: str) -> None:
         # 「gpg 不可用」与「取不到签名文件」同样 SystemExit，因此控制流能走到下一行
         # 就等于这份产物已由钉定指纹那把钥匙（或其子钥）签出并被 GnuPG 判为 GOOD。
         _verify_official_signature(dest, slot, desc)
-        # evermeet 的 getrelease/zip 是滚动别名：签名钉住「谁签的」，钉不住「哪个版本」。
-        # 把实测哈希留在构建日志里作事后审计线索（发布产物版本异常时唯一的可比对记录）。
+        # 签名档没有可比对的公布哈希：把实测哈希留在构建日志里作事后审计线索（发布产物版本异常时
+        # 唯一的可比对记录）。[历史注] 本分支原写「evermeet 的 getrelease/zip 是滚动别名，签名钉住
+        # 「谁签的」钉不住「哪个版本」」——2026-10-18 该别名端点 410 下架后取数已换成版本化直链
+        # ffmpeg-9.0.2.zip，URL 本身即钉住版本，故那句限制随之不再成立。
         print(f"[build] {desc} 官方签名核验通过（{slot}），实测 SHA256={actual}")
     else:
         # 仅本地路径可达（发布路径已在下载前终止）：打出实际哈希，供人工核对官方值后钉定
@@ -1402,7 +1414,14 @@ def _download_nodejs(target_dir: Path) -> bool:
 #             **只有 x86_64**——实测 getrelease-arm64/zip 恒 404、页面亦无 arm64 产物，故 Apple
 #             Silicon 复用同一份 x86_64 构建、经 Rosetta 2 执行。旧实现按 arm64 拼出一条从不存在的
 #             URL，下载失败被 except 吞成一行 warning，于是 Apple Silicon 的 full zip **静默不含
-#             ffmpeg**——本次修的就是这个。不公布 SHA256，只给 `/sig` GPG 签名。
+#             ffmpeg**——本次修的就是这个。不公布 SHA256，只给与产物同名追加 `.sig` 的 GPG 签名。
+#             [2026-10-18] 本页曾经的 Download API（getrelease[/…]/zip[/sig]）已被上游整体下架，页面
+#             写明 "This endpoint has been removed due to exorbitant abuse"、实测 410 + JSON `{"code":
+#             410}`；本表因此改为页面上直接列出的**版本化直链**（ffmpeg-9.0.2.zip，实测 Content-Length
+#             26,198,325 B）。它与 Linux 月末标签同构：URL 与签名对象双双不可变，代价是上游发新版
+#             不会自动跟进，升级要人工换版本号 + 重核签名，同属刻意的人工闸口。
+#             [2026-10-18] 页面另列 `./apple-silicon-arm` 条目，是否已有原生 arm64 构建**未实测**，
+#             在实测前上方「只有 x86_64」的结论维持不变。
 #             刻意不用 Homebrew bottle 作 arm64 来源：其 ffmpeg bottle 的 11 个 runtime_deps（dav1d/
 #             lame/libvmaf/libvpx/openssl@3/opus/sdl2-compat/svt-av1/x264/x265/xz）的 dylib 位于
 #             Homebrew 前缀下的**其他 formulae**、不在 bottle tarball 内，直接打进分发包只会得到
@@ -1428,8 +1447,8 @@ def _download_nodejs(target_dir: Path) -> bool:
 #   平台 digest + 人工核后写入常量，运行期自动安装拿不到那份带外核对）。
 _FFMPEG_DOWNLOAD_URLS: dict[str, str] = {
     "windows-x64": "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip",
-    "macos-x64": "https://evermeet.ca/ffmpeg/getrelease/zip",
-    "macos-arm64": "https://evermeet.ca/ffmpeg/getrelease/zip",
+    "macos-x64": "https://evermeet.ca/ffmpeg/ffmpeg-9.0.2.zip",
+    "macos-arm64": "https://evermeet.ca/ffmpeg/ffmpeg-9.0.2.zip",
     "linux-x64": (
         "https://github.com/BtbN/FFmpeg-Builds/releases/download/"
         "autobuild-2026-08-31-13-27/ffmpeg-n9.0.1-11-ge47273f4d9-linux64-gpl-9.0.tar.xz"
@@ -1457,16 +1476,17 @@ def _ffmpeg_source_url() -> str:
 
 
 # 「与 ffmpeg 分家发布」的第二可执行件：{运行时键: {槽位: 归档 URL}}。
-# 目前只有 macOS 一支：evermeet 的 getrelease/zip 里**只有 ffmpeg**，ffprobe 要在同页面另下一份
-# （getrelease/ffprobe/zip，2026-09-26 实测真实落点 e.deolaha.ca:4242/pub/ffprobe/ffprobe-9.0.2.zip、
-# 26,104,193 B，且 .sig 存在、与 ffmpeg 同为已钉主钥的子钥 4E7BEC998E920EE1 签出）。
+# 目前只有 macOS 一支：evermeet 的 ffmpeg-9.0.2.zip 里**只有 ffmpeg**，ffprobe 要在同页面另下一份
+# （ffprobe-9.0.2.zip，2026-09-26 经旧 getrelease 别名实测真实落点 e.deolaha.ca:4242/pub/ffprobe/
+# ffprobe-9.0.2.zip、26,104,193 B，且 .sig 存在、与 ffmpeg 同为已钉主钥的子钥 4E7BEC998E920EE1 签出；
+# 2026-10-18 该别名 410 后改用这条版本化直链，落点未变）。
 # gyan.dev 与 BtbN 的归档里 ffmpeg+ffprobe 同包，其完整性已由该平台的 ffmpeg 槽一并覆盖，
 # 故本表**不含**windows/linux 键——给同包成员另立一个没有独立公布值的钉定槽，等于凭空造一个假闸口。
 # 本表的键集合就是「哪些运行时键多一个下载槽位」的唯一事实源：runtime_slots_for() 与
 # scripts/check_runtime_pins.py 的槽位覆盖面都由它推导，不得在第二处再列一遍槽位名。
 _EXTRA_EXECUTABLE_URLS: dict[str, dict[str, str]] = {
-    "macos-x64": {"ffprobe": "https://evermeet.ca/ffmpeg/getrelease/ffprobe/zip"},
-    "macos-arm64": {"ffprobe": "https://evermeet.ca/ffmpeg/getrelease/ffprobe/zip"},
+    "macos-x64": {"ffprobe": "https://evermeet.ca/ffmpeg/ffprobe-9.0.2.zip"},
+    "macos-arm64": {"ffprobe": "https://evermeet.ca/ffmpeg/ffprobe-9.0.2.zip"},
 }
 
 
