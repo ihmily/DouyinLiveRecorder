@@ -6,6 +6,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 
+# Version 2 introduces recorder/FFmpeg PID support for DLR_UI.
+# Increment when the runtime-event producer contract changes.
+RUNTIME_EVENTS_VERSION = "2.0"
+
 _event_lock = threading.Lock()
 
 
@@ -22,6 +26,7 @@ def emit_runtime_event(event: str, **fields: Any) -> None:
             **fields,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "event": event,
+            "runtime_events_version": RUNTIME_EVENTS_VERSION,
         }
 
         log_directory = os.path.join(
