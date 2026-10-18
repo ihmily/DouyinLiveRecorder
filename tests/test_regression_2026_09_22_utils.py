@@ -229,6 +229,10 @@ class TestWebConfigDelegatesToUtilsAtomicWrite:
             t.start()
         for t in threads:
             t.join(timeout=10)
+        # 审查 7.11（2026-10-18）：join(timeout=10) 超时是静默返回的，此时目标文件可能恰好还留着
+        # 上一轮的完整内容，下一条「读回来 in payloads」照样通过——挂死的写线程根本不会被发现。
+        alive = [t.name for t in threads if t.is_alive()]
+        assert not alive, f"原子写线程未在 10s 内退出（疑似 os.replace/mkstemp 链挂死）：{alive}"
         assert target.read_text(encoding="utf-8-sig") in payloads
 
 

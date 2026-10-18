@@ -371,7 +371,12 @@ def test_hub_thread_safety_under_concurrent_feed(tmp_path: Path) -> None:
     for t in threads:
         t.start()
     for t in threads:
-        t.join()
+        # 审查 7.11（2026-10-18）：裸 join() 在 hub 内部锁互锁时会把整轮 pytest 挂死（本用例
+        # 正是「四线程并发灌同一 hub」的形态）。带上限把挂死变成判红，再用 is_alive 收口——
+        # join 超时静默返回时下面的 snapshot 断言仍可能全绿，那是假绿。
+        t.join(timeout=10)
+    alive = [t.name for t in threads if t.is_alive()]
+    assert not alive, f"并发灌入线程未在 10s 内退出（疑似 hub 锁竞争死锁）：{alive}"
 
     snap = hub.snapshot(0)
     assert len(snap["rooms"]) == 4

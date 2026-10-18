@@ -375,7 +375,11 @@ class TestGetStatus:
 
         dead = threading.Thread(target=lambda: None)
         dead.start()
-        dead.join()
+        # 审查 7.11（2026-10-18）：裸 join() 不带上限会在替身线程挂住时永久挂死；更关键的是本用例
+        # 的前提就是「引擎线程已退出」（engine_alive 判据读的正是它的 is_alive 形态），join 超时
+        # 返回不等于已退出——不显式断言，快照里 engine_alive=True 也可能被后面的断言放过。
+        dead.join(timeout=10)
+        assert not dead.is_alive(), "替身线程未在 10s 内退出：dead 前提不成立，不得判绿"
         pinned_main._recorder_thread = dead
         pinned_main.process_start_time = __import__("datetime").datetime.now() - __import__("datetime").timedelta(
             hours=1, minutes=2

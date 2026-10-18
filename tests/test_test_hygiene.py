@@ -5,9 +5,11 @@
 # 抛出的告警逸出到任意后续用例），靠人眼 grep 一定会漏。本文件不 import 任何被测模块，
 # 只读源码文本 + ast.parse，因此自身零副作用、秒级完成。
 #
-# 六条规则（R1–R4 + R6 + R7；R5 全仓无定义，是跳号而非漏实现——2026-09-23 按 grep 核对）：
+# 九条规则（R1–R4 + R6–R10；R5 全仓无定义，是跳号而非漏实现——2026-09-23 按 grep 核对）：
 #   [历史注] 本行原写「五条规则（R1–R4 + R6…）」，2026-09-30 新增 R7 后该计数已被证伪，按
 #   AGENTS.md「注释约定」的「被证伪的事实性陈述改正正文」例外改正为六条，并另起一行记沿革。
+#   [历史注二] 2026-10-18 补 R9/R10 时实测本行仍写「六条」而 R8（同日 09-30 新增）已存在，
+#   即上次改正漏计一条；现按实际规则数改正为九条，R8 的缺登记一并在此条内说明。
 #   R1 禁止改写 stdlib / 第三方模块本体（两种形态同罪，SEV-2225 补齐第二种）：
 #      a) 经「别的模块的命名空间」拿到模块对象再 setattr：monkeypatch.setattr(main.time, "sleep", ...)
 #         改的是全进程唯一的那个 time 模块本体，loguru enqueue 线程 / harness 守护线程 / coverage
@@ -1324,3 +1326,246 @@ def test_guard_r8_red_when_marker_survives() -> None:
     assert not _r8_marker_offenders(clean, "mem://snippet.py"), "R8 误报：无标记的普通分支被拦"
     own = Path(__file__).resolve().read_text(encoding="utf-8")
     assert not _r8_marker_offenders(own, "tests/test_test_hygiene.py"), "R8 自指：守卫自己含完整标记字面量"
+
+
+# ─── R9（2026-10-18 新增）：名为 test_*.py 的文件必须至少产出一条可收集用例 ──────────
+# 立规背景：同轮审查的 MT-02——tests/test_bilibili_danmaku.py 全文没有任何 test_ 函数，
+# pytest 收集 0 条，文件里那些真机断言（token / WS 连通）永不自动执行，可以无限腐烂而不报错。
+# 「整轮全绿」在这里的真实含义是「这个文件什么都没跑」，与假绿同级，且比假绿更难发现——
+# 假绿至少有条用例名出现在报告里，0 收集只剩一行 `no tests collected`，混在几百行输出中。
+# 判据取 AST 而不是真跑 `--collect-only`：后者要 import 每个测试模块，而本仓 tests/conftest.py
+# 的三个 autouse fixture 会拉起整份运行时依赖（AGENTS.md「跑 pytest 的 job 必须装齐
+# requirements.txt」即此坑），代价与副作用都高；「模块里有没有 test_ 前缀的可调用定义」
+# 是纯结构事实，与 pyproject 的 python_functions=["test_*"] / python_classes=["Test*"] 同源。
+# 例外表**双向相等**：新增 0 收集文件必须先入表并给理由；已补上用例的文件若还赖在表里同样判红
+# （否则表会退化成一堵谁都能跨、且没人回来拆的墙）。
+_R9_ZERO_COLLECTION_SANCTIONED: dict[str, str] = {
+    "test_bili_live_collector.py": (
+        "双模真机采集脚本：按 `python <文件> <URL> [秒]` 独立跑，模块级零副作用 + __main__ 守卫由 R7 逐条机检，"
+        "收集 0 条是该形态的必然结果。AGENTS.md「真机 collector 脚本」的取证口径句写的是 collected ≥ 1，"
+        "与 2026-10-18 实测（--collect-only -q → no tests collected）不符，已交回用户定夺"
+        "（给每个脚本补一条离线收集型用例，或改正该句）；本表按实测登记。"
+    ),
+    "test_douyin_live_collector.py": "同上（双模真机采集脚本）",
+    "test_douyu_live_collector.py": "同上（双模真机采集脚本）",
+    "test_huya_live_collector.py": "同上（双模真机采集脚本）",
+    "test_douyu_danmaku.py": (
+        "文件头自述「手动验证脚本而非 pytest 用例」，须真连斗鱼接口验证弹幕握手与 STT 编解码。"
+        "与 5 个 collector 同形但不在 AGENTS 的 collector 清单内；改造为离线收集型用例"
+        "（参照 MT-02 定稿后的 tests/test_bilibili_danmaku.py 形态）是后续动作，不得长期赖在本表。"
+    ),
+    "test_douyu_stream_url.py": "同上（斗鱼签名链手动验证脚本，待改造为离线收集型用例）",
+}
+
+
+def _r9_collectible_count(tree: ast.Module) -> int:
+    # 与 pyproject 的收集口径一致：模块级/嵌套的 test_* 函数，或 Test* 类内的 test_* 方法。
+    # 必须先去重再计数：ast.walk 会同时命中类与类内方法，直接两条分支累加会把一个方法数成两次
+    # （本条由 test_guard_r9 的 classed 反向见证在 2026-10-18 实测抓出）。
+    parents: dict[ast.AST, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[child] = node
+    loose = 0
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or not node.name.startswith("test_"):
+            continue
+        owner = parents.get(node)
+        if isinstance(owner, ast.ClassDef) and owner.name.startswith("Test"):
+            continue
+        loose += 1
+    in_class = 0
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+            in_class += sum(
+                1
+                for item in node.body
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name.startswith("test_")
+            )
+    return loose + in_class
+
+
+def _r9_zero_collection_modules() -> list[str]:
+    offenders: list[str] = []
+    for path in sorted(_TESTS_DIR.rglob("test_*.py")):
+        if path.name == Path(__file__).name:
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError as exc:
+            raise AssertionError(f"{path.name} 解析失败，R9 无法自证覆盖: {exc.msg}@{exc.lineno}") from exc
+        if _r9_collectible_count(tree) == 0:
+            offenders.append(path.name)
+    return offenders
+
+
+def test_every_test_module_is_collectible_or_registered() -> None:
+    offenders = _r9_zero_collection_modules()
+    unregistered = sorted(set(offenders) - set(_R9_ZERO_COLLECTION_SANCTIONED))
+    stale = sorted(set(_R9_ZERO_COLLECTION_SANCTIONED) - set(offenders))
+    assert (
+        not unregistered
+    ), f"以下 test_*.py 收集 0 条用例且未登记理由（MT-02 同形态：全绿=什么都没跑）: {unregistered}"
+    assert not stale, f"以下文件已产出可收集用例，必须从 R9 例外表删行: {stale}"
+
+
+def test_guard_r9_red_for_a_module_without_cases() -> None:
+    # 反向见证：① 判据必须真的在扫描（本仓绝大多数测试文件都产出用例，若枚举数异常小说明目录写错）；
+    # ② 内存里造一段「只有辅助函数、没有 test_ 函数」的模块，判据必须判它 0 收集。
+    total = sum(1 for _ in _TESTS_DIR.rglob("test_*.py"))
+    assert total > 100, f"R9 遍历面异常（{total} 个 test_*.py），判据即将空转：检查 _TESTS_DIR 口径"
+    hollow = ast.parse("def _helper():\n    return 1\n\n\nclass Runner:\n    def run(self):\n        return 2\n")
+    assert _r9_collectible_count(hollow) == 0, "R9 失效：无 test_ 函数的模块未被判为 0 收集"
+    filled = ast.parse("def test_real():\n    assert True\n")
+    assert _r9_collectible_count(filled) == 1, "R9 失效：普通 test_ 函数未被计入"
+    classed = ast.parse("class TestThing:\n    def test_a(self):\n        assert True\n")
+    assert _r9_collectible_count(classed) == 1, "R9 失效：Test* 类内方法未被计入（与 pyproject 口径脱钩）"
+
+
+# ─── R10（2026-10-18 新增）：线程 join 之后必须断言该线程已退出 ────────────────────
+# 立规背景：同轮审查的 LT-01/02/03/04 与 MT-04——`t.join(timeout=15)` 既不看返回值也不查
+# is_alive，被测逻辑真死锁时 join 超时返回、收集到的 errors 为空，用例照样全绿；而「死锁」
+# 恰恰是这批并发用例唯一要防的东西。本仓已按同口径修过 5 批（async_http / cookie_cache /
+# concurrency 系），R10 把它固化成零容忍，18 处存量违例于 2026-10-18 全部补齐。
+# 判据粒度取「函数」而不是「文件」：join 与 is_alive 必须落在同一个函数体内，否则别处的一句
+# 断言会替它遮丑（本仓出现过同文件另一条用例里有 is_alive 的形态）。
+# 线程对象识别刻意保守：只认 ① `X = threading.Thread(...)` 直接绑定 ② 由 Thread 构造填充的
+# 容器被 `for X in <容器>` 迭代。识别不到的 join（跨文件传进来的线程句柄等）漏报——
+# 宁可漏报也不把 `"\n".join(lines)` 与 `queue.Queue.join()` 报成违例，那才是真正会让门禁
+# 被静音的噪声源（MID-2264 同族：判据一旦天天误报，人就把它设成 skip）。
+_R10_FACTORY = "Thread"
+
+
+def _r10_thread_names(tree: ast.Module) -> set[str]:
+    names: set[str] = set()
+    containers: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+            func = node.value.func
+            if (getattr(func, "attr", "") or getattr(func, "id", "")) == _R10_FACTORY:
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        names.add(target.id)
+        elif isinstance(node, ast.Assign) and isinstance(node.value, (ast.List, ast.ListComp)):
+            # 容器形态：threads = [Thread(...) for ...] 或 threads = [Thread(...), ...]
+            if any(
+                isinstance(c, ast.Call) and (getattr(c.func, "attr", "") or getattr(c.func, "id", "")) == _R10_FACTORY
+                for c in ast.walk(node.value)
+            ):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        containers.add(target.id)
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "append":
+            recv = getattr(node.func.value, "id", "")
+            if recv and any(
+                isinstance(c, ast.Call) and (getattr(c.func, "attr", "") or getattr(c.func, "id", "")) == _R10_FACTORY
+                for c in node.args
+            ):
+                containers.add(recv)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.For) and isinstance(node.iter, ast.Name) and node.iter.id in containers:
+            if isinstance(node.target, ast.Name):
+                names.add(node.target.id)
+    return names
+
+
+def _r10_offenders(path: Path) -> list[str]:
+    text = path.read_text(encoding="utf-8")
+    try:
+        tree = ast.parse(text)
+    except SyntaxError as exc:
+        raise AssertionError(f"{path.name} 解析失败，R10 无法自证覆盖: {exc.msg}@{exc.lineno}") from exc
+    thread_names = _r10_thread_names(tree)
+    if not thread_names:
+        return []
+    rel = path.name
+    out: list[str] = []
+    for func in ast.walk(tree):
+        if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        joins = [
+            node.lineno
+            for node in ast.walk(func)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "join"
+            and (
+                getattr(node.func.value, "id", "") in thread_names
+                or getattr(node.func.value, "attr", "") in thread_names
+            )
+        ]
+        if not joins:
+            continue
+        alive = [node for node in ast.walk(func) if isinstance(node, ast.Attribute) and node.attr == "is_alive"]
+        if len(alive) < len(joins):
+            out.append(f"{rel}::{func.name}(join@{joins} 仅 {len(alive)} 处 is_alive)")
+    return out
+
+
+def test_thread_joins_assert_thread_exit() -> None:
+    offenders: list[str] = []
+    for path in sorted(_TESTS_DIR.rglob("test_*.py")):
+        offenders.extend(_r10_offenders(path))
+    assert not offenders, f"以下并发用例 join 后未断言线程退出（死锁时会假绿）: {offenders}"
+
+
+def test_guard_r10_red_when_join_has_no_exit_check() -> None:
+    # 反向见证三条：① 判据必须真的看到合规站点（否则「零违例」是空转）；
+    # ② 内存里造「join 无 is_alive」必须判红；③ 同段补上断言后必须转干净，
+    #    且字符串 join / queue.join 不得被误报。
+    compliant = 0
+    for path in sorted(_TESTS_DIR.rglob("test_*.py")):
+        names = _r10_thread_names(ast.parse(path.read_text(encoding="utf-8")))
+        if names:
+            compliant += 1
+    assert compliant >= 10, f"R10 附着面异常（仅 {compliant} 个文件构造线程），判据即将空转"
+
+    bad = ast.parse(
+        "import threading\n"
+        "def test_wait():\n"
+        "    t = threading.Thread(target=lambda: None)\n"
+        "    t.start()\n"
+        "    t.join(timeout=5)\n"
+    )
+    assert _r10_offenders_from_tree(bad, "mem://x.py"), "R10 失效：join 后无 is_alive 未被发现"
+    good = ast.parse(
+        "import threading\n"
+        "def test_wait():\n"
+        "    t = threading.Thread(target=lambda: None)\n"
+        "    t.start()\n"
+        "    t.join(timeout=5)\n"
+        "    assert not t.is_alive()\n"
+    )
+    assert not _r10_offenders_from_tree(good, "mem://x.py"), "R10 误报：已断言线程退出的站点被拦"
+    noise = ast.parse(
+        "import queue\n"
+        "def test_strings():\n"
+        "    q = queue.Queue()\n"
+        "    q.join()\n"
+        "    return '\\n'.join(['a'])\n"
+    )
+    assert not _r10_offenders_from_tree(noise, "mem://x.py"), "R10 误报：queue.join / 字符串 join 被当成线程 join"
+
+
+def _r10_offenders_from_tree(tree: ast.Module, label: str) -> list[str]:
+    # 与 _r10_offenders 同判据的「已解析树」入口，专供上面的反向见证喂内存样例（不落盘，见铁律 1）。
+    thread_names = _r10_thread_names(tree)
+    if not thread_names:
+        return []
+    out: list[str] = []
+    for func in ast.walk(tree):
+        if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        joins = [
+            node.lineno
+            for node in ast.walk(func)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "join"
+            and getattr(node.func.value, "id", "") in thread_names
+        ]
+        if joins and len([n for n in ast.walk(func) if isinstance(n, ast.Attribute) and n.attr == "is_alive"]) < len(
+            joins
+        ):
+            out.append(f"{label}::{func.name}")
+    return out

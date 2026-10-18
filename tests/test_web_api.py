@@ -706,6 +706,11 @@ class TestRoomEndpoints:
             t.start()
         for t in threads:
             t.join(timeout=20)
+        # 审查 7.11（2026-10-18）：join(timeout=20) 静默返回时线程可能还卡在 add_room 的锁上；
+        # 此时 results 已够 n 条（append 在 post 之后）却仍有线程未收尾，「仅一条 200」的判据
+        # 会被半截状态满足。逐线程确认退出，才钉住 TOCTOU 竞态窗口真的被并发跑满。
+        alive = [t.name for t in threads if t.is_alive()]
+        assert not alive, f"8 条并发添加线程未在 20s 内退出（疑似房间锁死锁）：{alive}"
         assert len(results) == n
         assert results.count(200) == 1
         assert results.count(409) == n - 1

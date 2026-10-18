@@ -237,6 +237,12 @@ class TestClientCacheLoopDimension:
                 t.join(timeout=20)
             with _client_cache_lock:
                 _client_cache.clear()
+            # 审查 7.11（2026-10-18，与 LT-01/LT-02 同口径）：join(timeout=20) **返回**不等于
+            # 线程已退出。keep_alive 置位后四个房间线程理应各自 wait 返回、close 自己的循环并结束；
+            # 若某个线程卡在 run_until_complete/循环收尾里，上面的缓存断言早已做完，收尾这条
+            # is_alive 判据是唯一能看出「线程挂死」的地方（缺失即假绿 + 非守护线程拖住解释器退出）。
+            alive = [t.name for t in threads if t.is_alive()]
+            assert not alive, f"keep_alive 置位后房间线程仍未退出（疑似挂死）：{alive}"
 
     def test_sweep_drops_references_but_never_closes_cross_loop(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # 超阈值触发清扫时：已关闭循环的条目只丢引用，**绝不**为其创建 aclose 协程

@@ -121,6 +121,11 @@ class TestClientCacheConcurrency:
             loop_a.call_soon_threadsafe(loop_a.stop)
             thread_a.join(timeout=15)
             loop_a.close()
+            # 审查 7.11（2026-10-18，与本文件 LT-01 同口径）：stop() 已投递、join 也已返回，
+            # 但「join 返回」不等于「run_forever 真的退出了」——循环若没停下来，thread_a 会一直
+            # 活着，本用例仍会假绿并把一个在跑的循环留给后续用例。断言放在 loop_a.close() 之后，
+            # 判红时资源回收已经完成，不会因这条断言再漏关一个循环。
+            assert not thread_a.is_alive(), "loop_a.stop() 后 thread_a 仍未退出：run_forever 没停，不得判绿"
 
     # 守护行为：旧循环已停止但未关闭（asyncio.run 收尾窗口的形态：run_until_complete
     # 已返回、close() 尚未执行）时，同样不创建 aclose 协程——排入停止循环的回调永不执行，

@@ -690,6 +690,10 @@ class TestAtomicWriteTextDurability:
             t.start()
         for t in threads:
             t.join(timeout=10)
+        # 审查 7.11（2026-10-18）：join 超时是静默返回的，seen 收满 4 条也不代表 4 条写线程都跑完
+        # （replace 之后还有返回/清理路径），挂死形态必须显式判出来而不是留给下一条断言碰运气。
+        alive = [t.name for t in threads if t.is_alive()]
+        assert not alive, f"4 条并发写线程未在 10s 内退出（疑似原子写链挂死）：{alive}"
         assert len(seen) == 4
         assert len(set(seen)) == 4, "同进程并发写入共用了同一个临时文件"
         assert all(c in payloads for c in contents), "临时文件被其它线程截断/交错写入"

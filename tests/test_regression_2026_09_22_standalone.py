@@ -68,7 +68,11 @@ def _report_from_other_thread(breaker: Any, success: bool) -> None:
     # current_thread() 等于把被测逻辑搬进测试自实现，故这里走真实线程。
     worker = threading.Thread(target=lambda: breaker.record(success))
     worker.start()
-    worker.join()
+    # 审查 7.11（2026-10-18）：裸 join() 会在 record() 卡在锁上时永久挂死整轮 pytest；带上限后
+    # 这条 is_alive 断言才是「回报确实已落进窗口」的凭据——join 超时静默返回时样本可能尚未 append，
+    # 调用方 len(breaker._samples)==9 只会以随机形态复现，判据本身也不成立。
+    worker.join(timeout=10)
+    assert not worker.is_alive(), "回报线程未在 10s 内退出：breaker.record() 挂死，不得判绿"
 
 
 class TestStandaloneBreakerProbeGate:
@@ -98,7 +102,11 @@ class TestStandaloneBreakerProbeGate:
         regrant: dict[str, object] = {}
         new_holder = threading.Thread(target=lambda: regrant.__setitem__("granted", breaker.allow()))
         new_holder.start()
-        new_holder.join()
+        # 审查 7.11（2026-10-18，同上一条口径）：join(timeout=10) 返回不等于线程已退出。线程挂在
+        # allow() 里时 regrant 尚未写入，下一条断言只会以「键缺失」的形态报错，看不出是死锁；
+        # 这条 is_alive 判据把「第二线程确实跑完并重授予」这一前提直接钉住。
+        new_holder.join(timeout=10)
+        assert not new_holder.is_alive(), "重授予线程未在 10s 内退出：breaker.allow() 挂死，不得判绿"
         assert regrant.get("granted") is True, regrant
         assert breaker.state == "half-open", breaker.state
         breaker.record(True)  # 第 1 代持有者（本线程）的陈旧回报

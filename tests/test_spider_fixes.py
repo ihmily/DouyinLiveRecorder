@@ -376,6 +376,10 @@ class TestCacheLocks:
                 t.start()
             for t in threads:
                 t.join(timeout=10)  # timeout=10 远大于 fake 的 0.05s 睡眠，仅作防死锁兜底
+            # 审查 7.11（2026-10-18）：兜底超时返回不等于线程已退出——挂死时 call_count 停在 1、
+            # 下一条断言反而「恰好通过」，正是本规则要防的假绿形态。
+            alive = [t.name for t in threads if t.is_alive()]
+            assert not alive, f"5 条 did 拉取线程未在 10s 内退出（疑似去重锁死锁）：{alive}"
         assert call_count == 1
         assert sp._cached_kuaishou_did == "did=abc; didv=def"
 
@@ -400,5 +404,9 @@ class TestCacheLocks:
                 t.start()
             for t in threads:
                 t.join(timeout=10)
+            # 审查 7.11（2026-10-18，同上一条 did 用例口径）：client_id 走的是同一把跨 await 的
+            # RLock 去重链，挂死时 call_count 同样停在 1 而假绿，必须逐线程确认已退出。
+            alive = [t.name for t in threads if t.is_alive()]
+            assert not alive, f"5 条 client_id 拉取线程未在 10s 内退出（疑似去重锁死锁）：{alive}"
         assert call_count == 1
         assert sp._cached_twitch_client_id == "abcdefghijklmnopqrstuv"

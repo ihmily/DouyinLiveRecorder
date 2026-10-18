@@ -58,6 +58,11 @@ def test_resizable_semaphore_set_value_notifies_waiters_while_holders_exist() ->
     assert acquired == []  # 容量已被持有者占满，应阻塞
     sem.set_value(2)  # 扩到 2，空闲 = 2 - 1 = 1 → 唤醒一个
     t.join(timeout=2)
+    # 审查 7.11（2026-10-18，与本文件 test_scheduler_real_concurrency_bounded_while_recompute_runs
+    # 收尾的 alive 判据同口径）：join 超时是静默返回的，等待者仍挂在 sem.acquire() 里时 acquired
+    # 是空列表、下一条断言只是「没唤醒」的间接信号；显式判线程退出才能区分「唤醒链坏了」与
+    # 「唤醒后线程自己没跑完」。
+    assert not t.is_alive(), "等待者线程未在 2s 内退出：扩容后唤醒链或 acquire 收尾挂死，不得判绿"
     assert acquired == [True]
     assert sem.capacity == 2
     assert sem.value == 0  # 两个持有者、零空闲
@@ -94,6 +99,10 @@ def test_resizable_semaphore_set_zero_blocks_and_resume_wakes() -> None:
     assert acquired == []
     sem.set_value(1)
     t.join(timeout=2)
+    # 审查 7.11（2026-10-18，同上一条口径）：暂停态恢复容量这条链一旦失去唤醒，等待者线程永不退出；
+    # join 超时静默返回时 acquired 为空、失败原因会被读成「没唤醒」而不是「线程挂死」，
+    # 而线程挂死与非守护线程残留本身就是要防的形态。
+    assert not t.is_alive(), "等待者线程未在 2s 内退出：恢复容量后唤醒链挂死，不得判绿"
     assert acquired == [True]
     assert sem.value == 0
 
@@ -120,6 +129,10 @@ def test_resizable_semaphore_set_value_wakes_waiters() -> None:
     assert acquired == []  # 容量为 0，应阻塞
     sem.set_value(1)
     t.join(timeout=1)
+    # 审查 7.11（2026-10-18，同上一条口径）：本用例的 worker 走的是**无超时** acquire()，
+    # 唤醒失败时线程会永久阻塞；不判 is_alive 就只能靠 acquired==[True] 间接反映，
+    # 而线程残留（非守护）会拖住解释器退出，表现为整轮 pytest 挂死而非本条判红。
+    assert not t.is_alive(), "等待者线程未在 1s 内退出：acquire() 没被唤醒，不得判绿"
     assert acquired == [True]
     assert sem.value == 0
 
@@ -430,6 +443,10 @@ def _run_in_thread(fn: Callable[[], Any]) -> None:
     t = threading.Thread(target=target)
     t.start()
     t.join(timeout=5)
+    # 审查 7.11（2026-10-18，同本文件三条 ResizableSemaphore 用例的口径）：helper 被多条熔断器
+    # 归属用例复用，join 超时返回时 done 可能已写入而线程仍卡在锁里，调用方拿到的「第二线程已回报」
+    # 其实是半截状态；helper 里收口一次，所有调用点同时受益。
+    assert not t.is_alive(), "第二线程未在 5s 内退出：被测的 allow()/record() 挂死，不得判绿"
     assert done == [True]
 
 

@@ -89,7 +89,12 @@ def test_two_rooms_can_be_split_by_room_field(recorder_logger: Path) -> None:
     for t in threads:
         t.start()
     for t in threads:
-        t.join()
+        # 审查 7.11（2026-10-18）：裸 join() 会在一房线程卡在 barrier 时永久挂住整轮 pytest；
+        # 带上限后 join 会返回，随后这条 is_alive 判据才是「两线程确实跑完各自的 _PROBE_COUNT 行」
+        # 的真凭据——缺它时下面的行数断言可能拿半截日志误判（假绿）。
+        t.join(timeout=10)
+    alive = [t.name for t in threads if t.is_alive()]
+    assert not alive, f"房间线程未在 10s 内退出（疑似 barrier 卡死）：{alive}"
 
     # 两线程的 append 顺序取决于调度，故排序后比较（每条记录的 (设入值, 读出值) 必须自洽）
     assert sorted(seen) == [(_ROOM_A, _ROOM_A), (_ROOM_B, _ROOM_B)], "房间字段未做到线程隔离"

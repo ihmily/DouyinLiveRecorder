@@ -13,7 +13,6 @@
     --warning: #D97706;
     --bg: #F4F6FB;
     --card: #FFFFFF;
-    --sidebar: #FFFFFF;
     --border: #E5E8F0;
     --text: #1E293B;
     --muted: #64748B;
@@ -32,7 +31,6 @@
     --warning: #D97706;
     --bg: #0F1117;
     --card: #171A23;
-    --sidebar: #12151D;
     --border: #262B3A;
     --text: #E2E8F0;
     --muted: #8B93A7;
@@ -402,13 +400,11 @@ button.small { background: var(--primary-soft); color: var(--primary); border: n
 }
 .danmaku-terminal { height: 340px; line-height: 1.7; }
 .danmaku-terminal .dm-line { display: block; }
-.danmaku-terminal .dm-time { color: var(--muted); opacity: 0.7; }
 .danmaku-terminal .dm-room { color: #56D364; }
 .danmaku-terminal .dm-user { color: var(--terminal-fg); font-weight: 600; }
 .danmaku-terminal .dm-gift .dm-user { color: var(--terminal-warn); }
 .danmaku-terminal .dm-sc .dm-user { color: #DB61A2; }
 .danmaku-terminal .dm-dropped { color: var(--muted); opacity: 0.7; font-style: italic; }
-.danmaku-terminal .dm-empty { color: var(--muted); opacity: 0.7; }
 .danmaku-hint {
     color: var(--muted);
     font-size: 12px;

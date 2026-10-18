@@ -727,6 +727,10 @@ class TestMin2217CloseAllClientsOwnership:
             thread.start()
             assert ready.wait(timeout=15)
             thread.join(timeout=15)
+            # 审查 7.11（2026-10-18）：join(timeout=15) 返回不等于线程已退出。本用例后面几条判据
+            # 读的是「线程 A 建的那份客户端有没有被主线程 await 关闭」，线程挂死时 holder 里已有值、
+            # 断言照样全绿（假绿），且 daemon 线程会带着未结束的 run_until_complete 活到进程结束。
+            assert not thread.is_alive(), "线程 A 未在 15s 内退出：客户端创建链挂死，不得判绿"
             foreign: _FakeClient = holder["client"]
             assert foreign.aclose_calls == 0, "前置条件：创建时不该顺手关闭"
             try:
