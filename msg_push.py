@@ -23,8 +23,57 @@ import i18n
 
 # 配置 HTTP 客户端（不使用代理，防止本地推送被代理干扰）
 no_proxy_handler: urllib.request.ProxyHandler = urllib.request.ProxyHandler({})
-opener: urllib.request.OpenerDirector = urllib.request.build_opener(no_proxy_handler)
+# M-07（2026-10-19）：opener 改按**协议白名单手工组装**，不能再用 build_opener。
+# `build_opener(no_proxy_handler)` 得到的是「默认 handler 集合 + 指定 ProxyHandler」，
+# 默认集合里含 FileHandler / FTPHandler / DataHandler：推送地址来自 config.ini，而 Web 面板
+# 可写全部配置，于是把地址写成 `file:///C:/Users/x/.ssh/id_rsa` 就能让本模块读本地文件——
+# 读到的内容随后会经 ntfy 分支的 error 键原样进日志（logs/ 按轮转保留多份，求助时常整包上传）。
+# 白名单形态与 scripts/douyin_live_recorder_standalone.py 的 _build_opener 同源：只注册
+# http/https 所需的处理器，file/ftp/data 三类协议入口彻底不存在。
+_PUSH_HTTP_HANDLERS: tuple[type[urllib.request.BaseHandler], ...] = (
+    urllib.request.UnknownHandler,
+    urllib.request.HTTPHandler,
+    urllib.request.HTTPDefaultErrorHandler,
+    urllib.request.HTTPRedirectHandler,
+    urllib.request.HTTPErrorProcessor,
+)
+
+
+def _build_push_opener() -> urllib.request.OpenerDirector:
+    built = urllib.request.OpenerDirector()
+    built.add_handler(no_proxy_handler)
+    for klass in _PUSH_HTTP_HANDLERS:
+        built.add_handler(klass())
+    built.add_handler(urllib.request.HTTPSHandler())
+    return built
+
+
+opener: urllib.request.OpenerDirector = _build_push_opener()
 headers: dict[str, str] = {"Content-Type": "application/json"}
+
+
+# 推送地址的准入校验（M-07，2026-10-19）：只放行 http/https，且拒绝「内部用途名字」。
+# 为什么不拒绝回环与 RFC1918：自建 ntfy / Bark 反代跑在局域网或本机是**合规配置**，
+# 拦掉会把真实用户的推送打哑；真正有攻击面的是「非 HTTP 协议」与「云元数据 / 内部 DNS 名」
+# 这两类——前者能读本地文件，后者能把推送变成内网探测。故走
+# web_config._host_internal_reason 的 allow_local_targets 形态（放行私网、仍拦 metadata/*.internal）。
+# 校验失败抛 ValueError，由各渠道既有的 `except Exception` 收敛成「本条推送失败」，
+# 不影响同批其它地址（旁路通知不阻断录制的既有语义）。
+def _checked_push_url(url: str) -> str:
+    from urllib.parse import urlsplit
+
+    from src.web_config import _host_internal_reason
+
+    parts = urlsplit(url.strip())
+    if parts.scheme.lower() not in ("http", "https"):
+        raise ValueError(i18n.tr("推送地址协议不受支持（仅允许 http/https）: {scheme}", scheme=parts.scheme or "-"))
+    host = parts.hostname or ""
+    if not host:
+        raise ValueError(i18n.tr("推送地址缺少主机名"))
+    reason = _host_internal_reason(host, allow_local_targets=True)
+    if reason is not None:
+        raise ValueError(i18n.tr("推送地址指向内部目标，已拒绝: {reason}", reason=reason))
+    return url
 
 
 # 脱敏密钥：保留前后各 2 位，其余以 * 遮挡，防日志泄露
@@ -89,6 +138,7 @@ def dingtalk(url: str, content: str, number: str | None = None, is_atall: bool =
             "at": at_payload,
         }
         try:
+            _ = _checked_push_url(api)
             data = json.dumps(json_data).encode("utf-8")
             req = urllib.request.Request(api, data=data, headers=headers)
             with cast(http.client.HTTPResponse, opener.open(req, timeout=10)) as response:
@@ -132,6 +182,7 @@ def xizhi(url: str, title: str, content: str) -> dict[str, list[str | int]]:
     for api in api_list:
         json_data = {"title": title, "content": content}
         try:
+            _ = _checked_push_url(api)
             data = json.dumps(json_data).encode("utf-8")
             req = urllib.request.Request(api, data=data, headers=headers)
             with cast(http.client.HTTPResponse, opener.open(req, timeout=10)) as response:
@@ -362,6 +413,7 @@ def bark(
             "url": url,
         }
         try:
+            _ = _checked_push_url(_api)
             data = json.dumps(json_data).encode("utf-8")
             req = urllib.request.Request(_api, data=data, headers=headers)
             with cast(http.client.HTTPResponse, opener.open(req, timeout=10)) as response:
@@ -440,6 +492,7 @@ def ntfy(
 
             # ensure_ascii=False 保留中文原文，否则 ntfy 收到 \uXXXX 转义会显示成乱码/编码体；
             # 推文/标题含中文时必须如此。
+            _ = _checked_push_url(server)
             data = json.dumps(json_data, ensure_ascii=False).encode("utf-8")
             req = urllib.request.Request(server, data=data, headers=headers)
             with cast(http.client.HTTPResponse, opener.open(req, timeout=10)) as response:

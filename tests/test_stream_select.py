@@ -370,6 +370,34 @@ def test_hls_empty_media_playlist_conservative_pass() -> None:
         assert _validate_stream_url(_M3U8_URL, last_resort=False) is True
 
 
+# ---- S-04（2026-10-19）：正文派生地址的安全拒绝不得被末位放行/同址复用翻回 ----
+# 事故形态：被劫持或被 MITM 的播放列表正文写 `http://127.0.0.1:6379/x.ts`（或云元数据地址），
+# 旧实现把安全闸拒绝编码成 `return False`，与「分片 404 不可达」不可区分，于是被两处兜底翻回 True：
+#   ① `_validate_stream_url` 的 last_resort 分支（末位候选「仍交由 ffmpeg 尝试」）；
+#   ② `select_source_url` 的 record_url 同址复用分支（只要探过就交付，不看结论）。
+# 修法是把安全拒绝改成内部控制流异常 + 单独的 security_rejected 集合，两条用例各锁一条。
+_INTERNAL_SEGMENT_BODY = "#EXTM3U\n" "#EXT-X-VERSION:3\n" "#EXTINF:4.000,\n" "http://127.0.0.1:6379/x.ts\n"
+
+
+def test_internal_segment_rejects_even_at_last_resort() -> None:
+    # ① 末位候选（last_resort=True）不得把「正文分片指向内网」翻回可达
+    cls = _hls_segment_client_cls(200, media_body=_INTERNAL_SEGMENT_BODY)
+    with patch("src.stream_select.httpx.Client", cls):
+        assert _validate_stream_url(_M3U8_URL, last_resort=True) is False
+
+
+def test_select_source_url_rejects_record_url_same_as_internal_m3u8() -> None:
+    # ② record_url 与 m3u8_url 同址（抖音 / TikTok / 网易CC 的常态形态）且正文分片指向内网：
+    # 同址复用分支必须拒绝交付，整轮判定为无可用源。
+    cls = _hls_segment_client_cls(200, media_body=_INTERNAL_SEGMENT_BODY)
+    stream_info = {"m3u8_url": _M3U8_URL, "flv_url": "", "record_url": _M3U8_URL}
+    with (
+        patch.object(main, "hls_collection_enabled", True),
+        patch("src.stream_select.httpx.Client", cls),
+    ):
+        assert select_source_url(stream_info, platform="斗鱼直播") is None
+
+
 class _HlsDeadFlvLiveClient(_StreamAsGet):
     # 端到端选源假客户端：m3u8 分片 404（事故形态），FLV 的 HEAD/GET 均 200（可用）
     def __init__(self, *args: object, **kwargs: object) -> None:

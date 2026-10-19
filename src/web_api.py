@@ -84,6 +84,7 @@ from starlette.staticfiles import StaticFiles
 # 错误文案随语言热切换：在产生点按当前目录渲染（tr 调用时查表，模块导入期不定型）。
 # 稳定机器码 detail（如 "unauthorized" / "rate_limited" / "host_not_allowed"）是前端契约，刻意不经 tr。
 import i18n as i18n_module
+from src.logger import logger
 from src.web_models import (
     ConfigUpdate,
     LanguageUpdate,
@@ -851,21 +852,37 @@ def create_app(
         return {"ok": True, "recording_enabled": req.enable}
 
     @_route(app, ["GET"], "/api/rooms")
-    def list_rooms() -> list[dict[str, str | bool]]:
+    def list_rooms() -> list[dict[str, object]]:
         # MID-34：同步 def（走 FastAPI 线程池）——整文件读 + 抢 record_state_lock。
-        rooms = parse_url_config(cast(str, app.state.url_config_file))
+        rooms: list[dict[str, object]] = cast(
+            list[dict[str, object]], parse_url_config(cast(str, app.state.url_config_file))
+        )
+        running: list[str] | None
         try:
             import main
 
             with main.record_state_lock:
                 running = list(main.running_list)
-        except Exception:
-            running = []
+        except Exception as e:
+            # M-32（2026-10-19）：原实现 `running = []` 把任何瞬时异常（导入失败、锁竞争、
+            # 属性缺失）静默降级成「全部房间未在录制」——与 /api/status 已采用的
+            # error / stale 真实信号口径相反，用户据此停止或重启录制，等于被假阴性推着做错事。
+            # 现在把「取不到」与「确实没在录」区分开：recording 写 None（不是 False），
+            # 并在服务端留一条带异常类型的告警。前端按 falsy 处理 null，显示效果与原来一致，
+            # 但响应体与日志不再宣称「确定没在录制」。
+            running = None
+            logger.warning(
+                i18n_module.tr(
+                    "读取录制状态失败，房间列表中的录制态标记为未知: {type_name}: {e}",
+                    type_name=type(e).__name__,
+                    e=e,
+                )
+            )
         for r in rooms:
             # running_list 存正在录制的 URL；recording 集合存的是 "序号N 主播名" 而非 URL，
             # 故仅按 running_list 判定。且必须精确匹配：前缀子串匹配会把短 URL 的录制状态
             # 错误地套到长 URL 上（I3）
-            r["recording"] = any(r["url"] == u for u in running)
+            r["recording"] = None if running is None else any(r["url"] == u for u in running)
         return rooms
 
     @_route(app, ["POST"], "/api/rooms")
@@ -1081,6 +1098,14 @@ def create_app(
 
         with _main.file_update_lock:
             options = write_quality_options(cast(str, app.state.config_file), req.options)
+        # M-30（2026-10-19）：写失败不能再返回 {"ok": true}。write_quality_options 现在在
+        # config.ini 缺失 / 节缺失 / 原子写失败时返回 None——旧实现丢弃写结果，前端据此刷新
+        # 下拉并显示成「已保存」，磁盘上却什么都没变。
+        if options is None:
+            raise HTTPException(
+                500,
+                i18n_module.tr("写入配置文件失败（已保留原文件）: {err}", err=cast(str, app.state.config_file)),
+            )
         return {"ok": True, "options": options}
 
     @_route(app, ["GET"], "/api/config")
@@ -1285,6 +1310,13 @@ def create_app(
             raise HTTPException(404, i18n_module.tr("未找到对应的配置项"))
         # 密码变更后吊销所有现有 token，强制重新登录
         if is_web_section and key_norm == "web_password" and req.value.strip():
+            with _tokens_lock:
+                _tokens.clear()
+        # M-31（2026-10-19）：`web_auth_enable` 的**任一**变更同样要吊销令牌。原实现只在写
+        # web_password 时清，于是「关认证 → 再开认证」这条最常见的应急操作无法切断此前签发的
+        # bearer（最长 7 天）——重新打开认证本应等价于「切断所有既有访问」，泄漏令牌的有效期
+        # 窗口因此被拉长到原样。与密码分支同一把锁、同一语义（强制重新登录）。
+        if is_web_section and key_norm == "web_auth_enable":
             with _tokens_lock:
                 _tokens.clear()
         # 认证状态变更后必须让中间件的配置缓存失效：缓存按 mtime+size 失效，

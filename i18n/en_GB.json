@@ -1130,4 +1130,17 @@
   "[web] web_console.log 已超过 {max_mb} MB 上限，丢弃最早的 {dropped_kb} KB": "[web] web_console.log exceeded the {max_mb} MB limit, discarded the oldest {dropped_kb} KB",
   "PID {pid} 现由 {image} 占用（录制核心映像名为 {expected}），已跳过整树强杀": "PID {pid} is now held by {image} (the recorder core image is {expected}); skipped the whole-tree kill",
     "回收 node 签名子进程树失败: {script} - {type_name}: {e}": "Failed to reclaim the node signing child-process tree: {script} - {type_name}: {e}",
-    "配置文件备份未成功，本轮不更新备份基线（下轮将重试）: {file_path} - {type_name}: {e}": "Configuration backup failed, so the backup baseline is not updated this round (it will be retried next round): {file_path} - {type_name}: {e}"}
+    "配置文件备份未成功，本轮不更新备份基线（下轮将重试）: {file_path} - {type_name}: {e}": "Configuration backup failed, so the backup baseline is not updated this round (it will be retried next round): {file_path} - {type_name}: {e}",
+  "JS 执行环境异常（Node.js 缺失或签名脚本执行失败）: 类型: {type_name}, {masked} in function {func_name}": "JS runtime failure (Node.js missing or signature script failed): type: {type_name}, {masked} in function {func_name}",
+  "PID {pid} 的进程创建时间与录制核心不符（同映像名但已被复用），已跳过整树强杀": "PID {pid} creation time does not match the recording core (same image name but reused), skipped killing the process tree",
+  "创建默认下载目录失败: {type_name}: {e}": "Failed to create the default download directory: {type_name}: {e}",
+  "后处理线程池排空超过 {budget} 秒，已放弃等待并继续退出（在途转封装可能留下半截产物）": "Post-processing pool did not drain within {budget}s; continuing shutdown (in-flight conversions may leave partial output)",
+  "弹幕筛选刷新": "Danmaku filter refresh",
+  "推送地址协议不受支持（仅允许 http/https）: {scheme}": "Unsupported push URL scheme (only http/https allowed): {scheme}",
+  "推送地址指向内部目标，已拒绝: {reason}": "Push URL points to an internal target, rejected: {reason}",
+  "推送地址缺少主机名": "Push URL is missing a host name",
+  "淘宝 cookie 回写配置失败（已忽略）: {type_name}: {e}": "Failed to write back Taobao cookie to config (ignored): {type_name}: {e}",
+  "状态栏刷新": "Status bar refresh",
+  "画质统计刷新": "Quality statistics refresh",
+  "读取录制状态失败，房间列表中的录制态标记为未知: {type_name}: {e}": "Failed to read recording state; room recording flags marked unknown: {type_name}: {e}",
+  "配置备份未能脱敏（解析失败：{e}），本次副本可能包含明文凭据，请勿外传": "Config backup could not be redacted (parse failed: {e}); this copy may contain plaintext credentials, do not share it"}

@@ -465,6 +465,22 @@ def _is_derived_hop_allowed(url: str) -> bool:
     return not _PRIVATE_HOST_PATTERN.match(host)
 
 
+# 播放列表正文派生的地址命中安全闸时抛出的**内部控制流异常**（S-04，2026-10-19）。
+#
+# 为什么必须是异常而不是 `return False`：`_probe_hls_segment` 的 bool 返回值同时承载
+# 「分片 404 不可达」与「安全闸拒绝」两种语义，而调用方对前者的既有处理是「末位候选
+# (last_resort) 仍交由 ffmpeg 尝试」——把安全拒绝编码成 False，就等于让它继承末位放行的
+# 语义，内网地址最终仍被交给 ffmpeg -i。异常与控制流分开后，安全结论不再参与
+# 「可达/不可达」的推断，也就不会被任何兜底分支翻回 True。
+# 与 async_http.RedirectHopRejected 同族（那是**重定向链**上的逐跳复检），本类只覆盖
+# **正文派生**的第二跳请求；两者都不穿透给最终调用方，只用于在本模块内定级。
+class _DerivedHopRejected(Exception):
+    def __init__(self, hop_url: str, reason: str) -> None:
+        super().__init__(f"{reason}: {hop_url}")
+        self.hop_url = hop_url
+        self.reason = reason
+
+
 # 取主机名的近似注册域（末两段：a.b.example.com → example.com）。
 # 单段/双段主机名与 IPv4 字面量返回 ""：双段时「同域与否」已由 host 全等比较覆盖，
 # 此时返回有效值只会让 example.com 与 evil.com 这类不同域被误判为同域。
@@ -598,7 +614,9 @@ def _probe_hls_segment(
                 # SR-01：安全闸拒绝是确定性失败，不是「解析不出分片」的保守兜底——维持可达等于把
                 # 内网地址经播放列表正文交给 ffmpeg -i（与下方 RedirectHopRejected 分支同一判据），
                 # 候选判失败、回退下一候选。
-                return False
+                # S-04（2026-10-19）：改为抛内部控制流异常。原 `return False` 会被调用方的
+                # last_resort 分支翻回「仍交由 ffmpeg 尝试」，安全结论因此形同虚设。
+                raise _DerivedHopRejected(variant_url, "变体列表地址形态不合规/指向内网")
             sub = _bounded_probe_get(
                 client,
                 variant_url,
@@ -628,8 +646,13 @@ def _probe_hls_segment(
                 )
             )
             # SR-01：与变体派生跳同判据——安全闸拒绝判候选失败，不得维持可达
-            return False
+            # S-04（2026-10-19）：同上方，改抛内部控制流异常以脱离 last_resort 的放行语义
+            raise _DerivedHopRejected(seg_url, "媒体分片地址形态不合规/指向内网")
         seg_headers = _headers_for_derived_hop(playlist_url, seg_url, headers)
+    except _DerivedHopRejected:
+        # S-04：安全拒绝必须先于通用兜底上抛——下面的 `except Exception` 会把它当「探测异常」
+        # 并按「列表可达」处理（return True），正是本条要消灭的形态。
+        raise
     except RedirectHopRejected:
         # WP-J：本函数每一条「保守维持列表可达」的兜底都不得吞掉内部控制流异常——在内网落地目标面前，
         # 维持可达就等于把内网地址交给 ffmpeg（调用方末位候选还会 return True 放行）。原样上抛，
@@ -806,6 +829,10 @@ def _confirm_get_ok(
 #    实现，本模块不另写 urlparse/内网名单。命中一律回 False（本候选校验失败）且**不享受末位放行**：
 #    last_resort 的语义边界是「网络 / CDN 拒绝」（MID-19），内网目标不是「CDN 拒绝」，放行等于把 ffmpeg
 #    指向内网。返回契约仍是 bool，异常绝不穿透给调用方。
+# 7) S-04（2026-10-19）：正文派生跳（变体列表 / 媒体分片）命中安全闸时，_probe_hls_segment 抛
+#    _DerivedHopRejected 而非返回 False；本函数把它收敛成与口径 6 相同的 False，并（可选地）
+#    把该 URL 记进调用方的 security_rejected 集合——select_source_url 的「本轮已探过就复用结论」
+#    分支据此拒绝交付，否则安全拒绝会在那里被当成普通探针失败再次放行。
 def _validate_stream_url(
     url: str,
     proxy_addr: str | None = None,
@@ -815,6 +842,7 @@ def _validate_stream_url(
     cookies: str | None = None,
     last_resort: bool = False,
     client: httpx.Client | None = None,
+    security_rejected: set[str] | None = None,
 ) -> bool:
     # 函数内 import 的理由见 _probe_client（沿 async_http.py:518-521 的同一手法，模块级出边会改变
     # 本模块与 main 的初始化顺序）。RedirectHopRejected 必须是 except 可见的名字，故也在此取。
@@ -841,6 +869,10 @@ def _validate_stream_url(
                 reason=internal_reason,
             )
         )
+        # S-04：把安全结论回传给调用方——「本轮已探过就复用结论」那条分支只看 probed 的真假，
+        # 分不出「CDN 拒绝」与「安全拒绝」，必须靠这个集合另行把关。
+        if security_rejected is not None:
+            security_rejected.add(url)
         return False
     # verify 仍按原规则解析（供自建 client 时使用）；传入 client 时其值被忽略
     if verify is None:
@@ -1032,6 +1064,21 @@ def _validate_stream_url(
                 content_type=content_type,
             )
         )
+        return False
+    except _DerivedHopRejected as e:
+        # S-04（2026-10-19）：正文派生的变体/分片地址命中安全闸。与上方 WP-J 的两条内网防线同口径
+        # ——warning 级、URL 脱敏、**不享受末位放行**。这里绝不能被 `except Exception` 接住：
+        # 那条分支在 last_resort 时 return True，正好是「安全拒绝被翻回可达」的原形态。
+        # 复用已登记的同一模板（「探针拒绝内网/保留目标…」），避免为同一语义新增第二种措辞。
+        logger.warning(
+            i18n.tr(
+                "探针拒绝内网/保留目标（疑似被篡改的流地址）: {masked_url} - {reason}",
+                masked_url=utils.mask_credentials(e.hop_url),
+                reason=f"播放列表正文派生跳命中: {e.reason}（初始地址 {utils.mask_credentials(url)}）",
+            )
+        )
+        if security_rejected is not None:
+            security_rejected.add(url)
         return False
     except RedirectHopRejected as e:
         # WP-J：3xx 落地跳命中内网/保留目标（或非白名单协议）。与 async_http.get_response_status 的
@@ -1360,6 +1407,10 @@ def select_source_url(
         # 与主 FLV 候选逐字相同、斗鱼亦然，旧实现在选源结束前把同一地址完整再探一次，
         # 正面消耗该 CDN 的连接预算（正是探针退避机制要消除的行为）。
         probed: dict[str, bool] = {}
+        # S-04（2026-10-19）：本轮因**安全闸**被拒的地址。与 probed 分开建模的理由：
+        # probed 的 False 同时表示「CDN 拒绝」与「安全拒绝」，而 record_url 复用分支对前者的
+        # 既有语义是「探针拒绝 ≠ ffmpeg 不可拉流，照常交付」——安全拒绝绝不能继承这条语义。
+        security_rejected: set[str] = set()
         prev_kind: bool | None = None
         for idx, (cand, is_hls) in enumerate(usable):
             if prev_kind is not None and is_hls != prev_kind:
@@ -1377,6 +1428,7 @@ def select_source_url(
                 cookies=cookies,
                 last_resort=is_last and not record_url_enabled,
                 client=probe_client,
+                security_rejected=security_rejected,
             )
             probed[cand] = reachable
             if reachable:
@@ -1404,7 +1456,12 @@ def select_source_url(
         if record_url_enabled:
             if _is_h265(record_url_str):
                 logger.warning(i18n.tr("record_url 含 h265 编码，且无 HLS/FLV 兜底可用"))
-            if record_url_str in probed:
+            # S-04（2026-10-19）：`not in security_rejected` 这个前置条件把安全拒绝挡在两条交付
+            # 路径之外。原实现在复用分支只判 `record_url_str in probed`，于是「同址探过、结论
+            # False」会被无条件交付；而抖音 / TikTok / 网易CC 的 record_url 恒等于 m3u8_url 或
+            # flv_url，该分支极易命中——安全闸的拒绝实际上形同没有。
+            # 不额外打日志：拒绝原因已由 _validate_stream_url 按同一模版发过一条 warning。
+            if record_url_str in probed and record_url_str not in security_rejected:
                 # MID-18：同一地址本轮已探过——复用结论、零新增探针。record_url 是末位档，
                 # 沿用「探针拒绝 ≠ ffmpeg 不可拉流」的既有语义：即便上一轮探针判失败，
                 # 也照常交由 ffmpeg 定夺（与旧实现「再探一次 + 末位放行」结果一致，
@@ -1420,13 +1477,14 @@ def select_source_url(
                 if accepted:
                     return accepted
             # record_url 是最后一档候选，恒为 last_resort：稳定拒绝也放行给 ffmpeg 定夺
-            elif _validate_stream_url(
+            elif record_url_str not in security_rejected and _validate_stream_url(
                 record_url_str,
                 proxy_addr=proxy_addr,
                 platform=platform,
                 cookies=cookies,
                 last_resort=True,
                 client=probe_client,
+                security_rejected=security_rejected,
             ):
                 accepted = _accept_source(record_url_str, "record_url")
                 if accepted:

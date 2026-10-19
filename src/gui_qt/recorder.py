@@ -344,6 +344,14 @@ class RecorderController(QObject):
         except Exception as e:
             self._stopping = False
             self._log(f"停止流程收尾异常: {type(e).__name__}: {e}", "error")
+            # M-33（2026-10-19）：原实现只复位 _stopping 就 return，**没有**清理 _process 也没有
+            # emit ended。而 main_window.stop_recording 在发起停止时就把两个按钮禁用了、并约定
+            # 「由 _on_recorder_ended 统一恢复」——异常路径不投递 ended，按钮就永久禁用，
+            # 用户既不能启动也不能再点停止，只能重启整个 GUI。收尾失败也必须走与成功路径相同的
+            # 出口：清掉进程句柄（否则 is_running() 仍为真、start() 的闸门继续拦）并投递结束事件。
+            # 会话号同样要带上——新会话已起时这次迟到事件必须被 _on_recorder_ended 丢弃。
+            self._clear_process()
+            self.ended.emit(session)
 
     def _shutdown_worker_body(self) -> None:
         proc = self._process

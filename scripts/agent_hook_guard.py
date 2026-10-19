@@ -70,13 +70,23 @@ PROTECTED_MAINTENANCE_DIR = "scripts"
 
 # 删除动作的动词面：PowerShell / cmd / POSIX shell / Python 单行写法都要覆盖。
 # 只认动词，不认「出现 delete 字样」——`git status`、`ls` 之类不在此列，避免把只读命令拦下。
+# [历史注] 2026-10-19 审查 S-01：`ri`（Remove-Item 的 PowerShell 别名）、`os.removedirs` 与
+# `Clear-*`（Clear-Content 等 PowerShell 清空动词）原先不在表内，属可直接落地的删除入口。
+# 注意 `os.removedirs` 必须显式列出：原有 `os\.remove` 带 `\b` 收尾，其后的 `d` 是词字符，
+# 边界不成立 → 旧表对 `os.removedirs` 实际零命中。
 _DELETE_VERB_RE = re.compile(
-    r"\b(Remove-Item|Rm|Del|Erase|Rd|Rmdir|shutil\.rmtree|os\.remove|os\.unlink|unlink|find)\b",
+    r"\b(Remove-Item|Rm|Del|Erase|Rd|Rmdir|ri|shutil\.rmtree|os\.remove|os\.unlink|os\.removedirs"
+    r"|unlink|find|Clear-\w+)\b",
     re.IGNORECASE,
 )
 
 # `find` 只有在带 -delete / -exec rm 时才是删除；`find . -name x` 是只读查询，不得拦。
 _FIND_DELETE_RE = re.compile(r"-delete\b|-exec\s+rm\b", re.IGNORECASE)
+
+# 受保护目录名之后的合法边界字符：路径分隔符、引号、空白与常见闭合符；空串（语句结尾）同样算边界。
+# 与 `_protected_hit` 的历史注同因：把「目录名后必须是分隔符」收紧成「必须是边界字符」才能覆盖
+# 引号与尾随空格形态。不含 `;`/`&`/`|`——那些已被 `_statements` 切成独立语句，留在此处无意义。
+_PROTECTED_TAIL_BOUNDARY: frozenset[str] = frozenset({"/", "\\", '"', "'", " ", "\t", "`", ")", "]", "}"})
 
 # 过滤面标记：出现任一即认为这条删除命令带了「按名字/路径挑文件」的白名单，
 # AGENTS.md 给出的两条收尾清理命令（-Include *_tmp_*.py / -name '*_tmp_*.py'）都属这一类。
@@ -100,16 +110,24 @@ _PIP_IGNORE_INSTALLED_REQ_RE = re.compile(
 _GIT_CLEAN_RE = re.compile(r"\bgit\s+clean\b[^\n]*-[a-zA-Z]*f", re.IGNORECASE)
 
 # 递归+强制删除的开关组合（rm -rf / Remove-Item -Recurse -Force / rd /s /q）。
+# 后两组是**分写形态**：shell 下 `-r -f` 与 `-rf` 完全等价、`--recursive --force` 与
+# `-Recurse -Force` 同义，只认连写会让最常见的分写绕过守卫（2026-10-19 审查 S-01 实测
+# `rm -r -f .` 放行）。每个开关后都加 `(?=\s|$)` 断言，避免把 `-File`（PowerShell 常见参数）
+# 当成 `-f`——放行面误伤会训练使用者绕过 Hook。
 _RECURSIVE_FORCE_RE = re.compile(
     r"(?:^|\s)-{1,2}(?:Recurse)[^\n]*(?:^|\s)-{1,2}(?:Force)"
     r"|(?:^|\s)-{1,2}(?:Force)[^\n]*(?:^|\s)-{1,2}(?:Recurse)"
     r"|(?:^|\s)-[rRfF]{2,}(?:\s|$)"
+    r"|(?:^|\s)-{1,2}(?:[rR]|recursive)(?=\s|$)[^\n]*(?:^|\s)-{1,2}(?:[fF]|force)(?=\s|$)"
+    r"|(?:^|\s)-{1,2}(?:[fF]|force)(?=\s|$)[^\n]*(?:^|\s)-{1,2}(?:[rR]|recursive)(?=\s|$)"
     r"|(?:^|\s)/[sS](?:\s|$)[^\n]*(?:^|\s)/[qQ]",
 )
 
 # 「裸大范围目标」token：`.` / `*` / `./` 这类没有落到具体文件名的删除目标。
 # 用整词相等判定而不是正则，避免把 `*_tmp_*.py` 这种带过滤语义的通配误判成裸 `*`。
-_BARE_WIDE_TOKENS: frozenset[str] = frozenset({".", "./", ".\\", "*", "./*", ".\\*", "*", "$PWD", "%CD%", ".", "\\"})
+# [历史注] 2026-10-19 审查 L-77：原字面量里 `"."` 与 `"*"` 各重复一次；frozenset 会自行去重，
+# 故不影响判定，但重复项会让「覆盖面清单」看起来比实际更长，掩盖真正缺失的形态，已去掉。
+_BARE_WIDE_TOKENS: frozenset[str] = frozenset({".", "./", ".\\", "*", "./*", ".\\*", "$PWD", "%CD%", "\\"})
 
 # 变异验证标记（AGENTS.md「变异验证的一次性改动必须当轮还原，并给改动行加变异标记」那条）。
 # R8 全仓扫描是**事后**兜底；本 Hook 在写入当下就报，避免残留活到下一次门禁。
@@ -238,11 +256,17 @@ def _statements(command: str) -> list[str]:
 
 def _protected_hit(statement: str, name: str) -> bool:
     # 判定受保护目录是否以**目录形态**出现在这条语句里：
-    # 后接 / \ 或以该名字结尾（`Remove-Item -Recurse logs`），且前面不是更长标识符的一部分
-    # （避免 `download_logs_table` 这类名字被误命中）。
+    # 目录名后面的那一字节必须是「边界」——路径分隔符、引号、空白、闭合括号或语句结尾，
+    # 且前面不是更长标识符的一部分（避免 `download_logs_table` 这类名字被误命中）。
+    #
+    # [历史注] 2026-10-19 审查 S-01：旧判据只接受 `/`、`\` 与结尾，于是
+    # `rm -rf "logs"`（引号）、`rm -rf logs `（尾随空格）、`find logs -type f -delete`（空白）
+    # 这三种**最自然的书写形态**会让命中被整条 `continue` 跳过——守卫恰好在最该拦的输入上失效。
+    # 引号与尾随空格不是刻意构造的变形，因此边界集合必须把它们纳入；只认分隔符等于把守卫
+    # 建在「命令必须写成理想形态」的假设上。
     for match in re.finditer(rf"(?<![\w.\-]){re.escape(name)}(?![\w.\-])", statement, re.IGNORECASE):
         tail = statement[match.end() : match.end() + 1]
-        if tail and tail not in "/\\":
+        if tail and tail not in _PROTECTED_TAIL_BOUNDARY:
             continue
         head = statement[max(0, match.start() - 60) : match.start()]
         if _EXCLUSION_RE.search(head):
@@ -435,11 +459,24 @@ def check_written_file(path: Path) -> tuple[str, str] | None:
 
 def run_self_test() -> int:
     # 内置样例自检：证明规则真的会拦、且放行面不误伤——不依赖 IDE 是否已加载 Hook。
-    block_cases: dict[str, str] = {
-        "R-PIP-BULK": "pip install --force-reinstall -r requirements.txt",
-        "R-CLEAN-SCOPE": "Remove-Item -Recurse -Force ./downloads/",
-        "R-WIPE-SCOPE": "rm -rf .",
-    }
+    # 变形语料（2026-10-19 审查 S-01）：旧自检的 3 条全是「干净形态」，只证明了理想输入能拦住，
+    # 而实测放行的是引号、尾随空格、参数分写、find -delete 这些日常书写形态。守卫强度必须靠
+    # 变形语料保持——改正则而语料不变，等于允许「覆盖面回退」不被发现。
+    # 形态用 tuple 列表而非 dict：同一规则要有多条语料，dict 的键唯一性会逼着删掉其中一条。
+    block_cases: list[tuple[str, str]] = [
+        ("R-PIP-BULK", "pip install --force-reinstall -r requirements.txt"),
+        ("R-CLEAN-SCOPE", "Remove-Item -Recurse -Force ./downloads/"),
+        ("R-WIPE-SCOPE", "rm -rf ."),
+        # —— 以下为 S-01 实测放行的变形语料，逐条固化 ——
+        ("R-CLEAN-SCOPE", "rm -rf logs "),  # 尾随空格
+        ("R-CLEAN-SCOPE", 'rm -rf "logs"'),  # 双引号
+        ("R-CLEAN-SCOPE", "rm -rf 'logs'"),  # 单引号
+        ("R-CLEAN-SCOPE", "find logs -type f -delete"),  # find 删除且目标后接空格
+        ("R-WIPE-SCOPE", "rm -r -f ."),  # 参数分写（等价于 -rf）
+        ("R-CLEAN-SCOPE", "ri -r -fo downloads"),  # PowerShell 别名 ri + 分写
+        ("R-CLEAN-SCOPE", "python -c \"import os;os.removedirs('recordings')\""),  # os.removedirs
+        ("R-CLEAN-SCOPE", "Clear-Content -Path .\\logs\\* -Force"),  # PowerShell 清空动词
+    ]
     allow_cases: list[str] = [
         # AGENTS.md 给出的两条收尾清理命令形态必须放行
         "Get-ChildItem -Recurse -File -Include *_tmp_*.py,tmp_*.py | Where-Object { $_.FullName -notmatch "
@@ -451,7 +488,7 @@ def run_self_test() -> int:
         "python -m pytest tests/test_agent_hook_guard.py -q",
     ]
     failed = 0
-    for expected_rule, command in block_cases.items():
+    for expected_rule, command in block_cases:
         got = check_bash_command(command)
         if got is None or got[0] != expected_rule:
             print(f"[SELF-TEST FAIL] 应拦未拦：{expected_rule} <- {command}")

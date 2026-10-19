@@ -96,9 +96,9 @@ import types
 import uuid
 from collections import deque
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Callable, cast
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 import httpx
@@ -122,7 +122,6 @@ from src.ffmpeg_install import check_ffmpeg, ffmpeg_path, should_prepend_bundled
 
 # ---- 重构：以下函数已抽离至 src 子模块，此处重新导出以保持 main.<name> 命名空间兼容 ----
 from src.ffmpeg_proc import (
-    _cleanup_single_ffmpeg_process,
     _get_error_line,
     _terminate_ffmpeg_process,
     cleanup_all_ffmpeg_processes,
@@ -169,6 +168,10 @@ from src.stream_select import (
 # 删掉会让该用例 AttributeError，故保留导入。
 # 判据：只有「生产代码零引用**且**无测试依赖」才算可摘的死引用。
 #   [历史注] 2026-09-12 F-15 摘 converts_m4a / segment_video；2026-09-22 MIN-2224 摘 shlex / Mapping。
+#   [L-02/L-03 2026-10-19] 按同一判据补摘 main 侧的 `as_completed` 与 `_cleanup_single_ffmpeg_process`
+#   （生产零引用、测试零依赖）；`error_threshold` 同为遗留空壳，一并删除。
+#   `_validate_stream_url` 虽在本文件零调用，但 tests/test_main_fixes.py 有 9 处经 `main._validate_stream_url`
+#   直调（末位放行/分片假绿等主锁），删除会让它们 AttributeError——**不符合上述判据，保留**。
 from src.video_postprocess import (
     _run_ffmpeg_checked,
     converts_mp4,
@@ -231,7 +234,8 @@ max_request: int = 3  # 同一时间访问网络的线程数（由 main() 读取
 max_request_lock: threading.Lock = threading.Lock()  # 最大请求数的线程锁
 error_window_size: int = 10  # 错误窗口大小
 error_window: deque[int] = deque(maxlen=error_window_size)  # 错误窗口（deque maxlen 自动裁剪，避免无界增长）
-error_threshold: float = 0.5  # 错误率阈值（0-1），错误率超过后降低并发
+# [L-03 2026-10-19] 此处原有 `error_threshold = 0.5`（错误率阈值），全仓零引用——并发压制已由
+# src/scheduler.ConcurrencyScheduler 自适应接管，该常量只是遗留的名义开关，留着会让人以为调它有用。
 
 # URL 和配置管理
 url_tuples_list: list[tuple[str, str, str]] = []  # 解析后的 URL 配置列表（格式：(画质, URL, 主播名)
@@ -304,7 +308,11 @@ rstr: str = r"[\/\\\:\*\？?\"\<\>\|&#.。,， ~！·% ]"  # 文件名字符过
 # 实测对照：含 `%` 的分段模板与含孤立 `%d` 的模板一律 rc=-22；干净模板与非分段形态含 `%` 均成功。
 # 回归锁：tests/test_regression_2026_09_22_main.py::test_segment_template_has_single_percent_placeholder
 default_path: str = f"{script_path}/downloads"  # 默认下载目录
-os.makedirs(default_path, exist_ok=True)
+# [L-07 2026-10-19] 此处原有模块级 `os.makedirs(default_path, exist_ok=True)`，与本文件
+# 「import 不应触发磁盘副作用」的自述（见 purge_stale_bytecode_caches 附近的说明）相悖：
+# 任何 `import main`（GUI / Web / 测试 / 文档脚本）都会在宿主机上凭空建出 downloads/。
+# 目录改由 main() 入口与录制路径各自按需创建（下方 `os.makedirs(check_path, ...)` 已覆盖
+# 录制侧；入口处补一次，保证 main() 之外的早退分支看到的行为与旧版一致）。
 # RLock：主循环持锁读取配置期间可能再次进入 read_config_value 的写入路径，可重入避免同线程死锁
 file_update_lock: threading.RLock = threading.RLock()  # 文件更新锁（防止多线程写入冲突
 
@@ -341,7 +349,9 @@ douyin_min_interval: float = 3.0  # 两次抖音请求的最小间隔（秒）
 
 # 录制与文件
 video_save_path: str = ""
-check_path: str = ""
+# [L-03 2026-10-19] `check_path` 原为模块级全局，但全仓只在 main() 的循环体内赋值并随即使用
+# （磁盘余量检查），没有任何跨函数/跨轮读取——声明成全局只会让后来者去猜「谁会改它」。
+# 现改为 main() 内的局部变量，并同步去掉 `global check_path` 声明。
 # MID-07：单次录制时长上限（秒），由 main() 每轮从「录制设置」读取；0/负值表示不限制，
 # 分段开/关均参与判定（见 check_subprocess 的 _record_limit_seconds）。
 # 此处的字面默认值与下方看门狗小节的 _MAX_RECORD_SECONDS 保持同值——模块级语句顺序执行，
@@ -498,15 +508,23 @@ _recorder_thread = None  # 由 web.py 设置，用于 get_status() 检测存活
 # 「停止录制」却仍有线程在拉流，或退出信号来了却要等满 N 秒。改为每秒醒来一次重新求值
 # 模块全局（晚绑定，天然看到别的线程/Web 面板改动后的最新值）即可立即跳出。
 # record_url 非空时追加第三个条件「该 URL 已被注释」（与房间线程循环顶的三条件同构）。
-def _interruptible_sleep(seconds: float, record_url: str | None = None) -> None:
+#
+# [S-05 2026-10-19] 返回值 = 「是否被提前中断」。调用方**必须**处理它：本函数被中断时是
+# **零耗时**返回（一秒都不睡），而两处 `continue` 分支恰好跳过了主循环末尾的 `time.sleep(3)`。
+# Web 模式下 `web.py` 启动即置 recording_enabled=False，此时「面板刚起、用户还没填 URL」这个
+# **默认状态**会让循环体一路 continue 并零间隔空转：打满一个核、每轮重复 config.ini 解析与
+# URL_config.ini 全量读取、磁盘持续被读写，且日志无任何异常可供排查。
+# 故被中断时调用方要补一个固定时长的退避，让「快速响应退出信号」与「不空转」两个目标同时成立。
+def _interruptible_sleep(seconds: float, record_url: str | None = None) -> bool:
     _remaining = int(seconds) if seconds > 0 else 0
     while _remaining > 0:
         if exit_recording or not recording_enabled:
-            break
+            return True
         if record_url is not None and record_url in url_comments:
-            break
+            return True
         time.sleep(1)
         _remaining -= 1
+    return False
 
 
 # 后处理线程池的显式收尾（SEV-2207，2026-09-22，main.py 侧）。
@@ -542,10 +560,51 @@ def _shutdown_postprocess_executor() -> None:
     if _shutdown is None:
         _shutdown_own_postprocess_pool()
         return
-    try:
-        _shutdown(wait=True, cancel_futures=False)
-    except Exception as e:
-        logger.warning(i18n.tr("后处理线程池收尾失败: {type_name}: {e}", type_name=type(e).__name__, e=e))
+    if not _run_bounded_drain(lambda: _shutdown(wait=True, cancel_futures=False)):
+        # 超预算：再补一次「取消未开始的任务」。ThreadPoolExecutor.shutdown 可重入，
+        # 第二次 wait=False 立即返回，把排队中的转封装任务撤掉。
+        try:
+            _shutdown(wait=False, cancel_futures=True)
+        except Exception as e:
+            logger.warning(i18n.tr("后处理线程池收尾失败: {type_name}: {e}", type_name=type(e).__name__, e=e))
+
+
+# 单次转封装最长占 _MAX_CONVERT_TIMEOUT（3600s），而 M-03（2026-10-19）指出的正是「信号处理器里
+# 做无预算 drain」：safe_exit 会在主线程里等满最坏情况的整小时，期间 ffmpeg 清理、连接池关闭、
+# 日志归档、sys.exit 全部排在后面，用户看到的就是「Ctrl+C 之后卡死十几分钟、第二次中断也没反应」。
+# 预算只约束「等多久」，不改变 drain 的**顺序价值**（先排空、再让清理与归档落到其后）：
+# 预算内排空仍走 wait=True + cancel_futures=False；超预算才由调用方退化为取消未开始的任务。
+# 15 秒取的是「正常收尾够用、异常收尾不至于让用户以为挂了」的经验值，不走配置项——它是
+# 退出路径的兜底，不该再引入一个可能被填坏的外部开关。
+_POSTPROCESS_DRAIN_BUDGET_SECONDS = 15.0
+
+
+def _run_bounded_drain(drain: Callable[[], None], budget: float = _POSTPROCESS_DRAIN_BUDGET_SECONDS) -> bool:
+    # 在守护线程里执行 drain，主线程只等 budget 秒：shutdown(wait=True) 一旦碰上卡死的
+    # 转封装任务就没有任何中断手段，只能靠「不等了」脱身。超时后**不 join** 那个线程
+    # （它仍阻塞在 wait=True 上），因此必须 daemon=True，否则解释器退出时反而被它钉住。
+    # 返回 True = 预算内已排空；False = 超预算，调用方决定是否取消剩余任务。
+    done = threading.Event()
+
+    def _target() -> None:
+        try:
+            drain()
+        except Exception as e:
+            logger.warning(i18n.tr("后处理线程池收尾失败: {type_name}: {e}", type_name=type(e).__name__, e=e))
+        finally:
+            done.set()
+
+    worker = threading.Thread(target=_target, name="postprocess-drain", daemon=True)
+    worker.start()
+    if done.wait(budget):
+        return True
+    logger.warning(
+        i18n.tr(
+            "后处理线程池排空超过 {budget} 秒，已放弃等待并继续退出（在途转封装可能留下半截产物）",
+            budget=int(budget),
+        )
+    )
+    return False
 
 
 # 自持回退的实现体：关闭本文件的 `_postprocess_executor`（M-01，2026-10-18）。
@@ -555,8 +614,13 @@ def _shutdown_own_postprocess_pool() -> None:
         pool = _postprocess_executor
     if pool is None:
         return
+    if _run_bounded_drain(lambda: pool.shutdown(wait=True, cancel_futures=False)):
+        return
+    # 超预算后再补一次「取消未开始的任务」：第一次 shutdown 已在守护线程里阻塞在 wait=True，
+    # 这里 wait=False + cancel_futures=True 立即返回，把排队的转封装任务取消掉，
+    # 避免它们在本进程余下的退出步骤里继续抢占 ffmpeg 与磁盘。
     try:
-        pool.shutdown(wait=True, cancel_futures=False)
+        pool.shutdown(wait=False, cancel_futures=True)
     except Exception as e:
         logger.warning(i18n.tr("后处理线程池收尾失败: {type_name}: {e}", type_name=type(e).__name__, e=e))
 
@@ -786,9 +850,12 @@ def direct_download_stream(
             # tests/test_regression_2026_09_22_main.py::test_direct_download_always_sends_ua
             headers["User-Agent"] = get_record_user_agent(platform) or MOBILE_UA
 
-            with httpx.Client(
-                timeout=30, verify=_http_config.get_effective_ssl_verify(platform), headers=headers
-            ) as client:
+            # L-10（2026-10-19）：同一份 headers 原先既挂 client 级、又逐请求再传一遍。
+            # httpx 的合并口径是「client 头为底、请求头覆盖」，两处同值时行为不变、但多一份
+            # 隐式状态：client 级头会跟随**每一个**经该 client 发出的请求（含重定向跳），
+            # 后续若有人在这里复用 client 拉别的地址，就会带着录制的 Referer/Cookie 静默外泄。
+            # 只保留逐请求传（与 src/stream_select.py 的探针同口径）。
+            with httpx.Client(timeout=30, verify=_http_config.get_effective_ssl_verify(platform)) as client:
                 with client.stream("GET", source_url, headers=headers, follow_redirects=True) as response:
                     if response.status_code != 200:
                         logger.error(
@@ -1220,16 +1287,23 @@ def check_subprocess(
                         if create_var.get(subs_thread_name) is threading.current_thread():
                             create_var.pop(subs_thread_name, None)
 
-            create_var[subs_thread_name] = threading.Thread(
-                target=_subtitle_thread_target, name=subs_thread_name, daemon=True
-            )
-            # L-02（2026-10-02）：start() 抛 RuntimeError（can't start new thread）时 target 未运行、
-            # finally 清理不执行，create_var 条目缓慢累积；失败即移除登记。
-            try:
-                create_var[subs_thread_name].start()
-            except RuntimeError:
-                create_var.pop(subs_thread_name, None)
-                raise
+            # L-08（2026-10-19）：登记与启动一并收进 record_state_lock。回收侧（上面的 finally、
+            # 下面的 RuntimeError 回滚）本来都在锁内，只有写入侧在锁外——同名房间并发时
+            # 「写条目 → 读条目 → start()」不是原子序列，另一线程的 finally 可能在中途把条目 pop 掉，
+            # 于是本线程把一个已不属于自己的 Thread 对象启动起来、且条目永久残留（其 finally
+            # 归属校验会失败，因为 dict 里已经没有它）。start() 放在锁内是必要的：它只做线程创建，
+            # 不等待 target 执行，持有锁的时间是常数级。
+            with record_state_lock:
+                create_var[subs_thread_name] = threading.Thread(
+                    target=_subtitle_thread_target, name=subs_thread_name, daemon=True
+                )
+                # L-02（2026-10-02）：start() 抛 RuntimeError（can't start new thread）时 target 未运行、
+                # finally 清理不执行，create_var 条目缓慢累积；失败即移除登记。
+                try:
+                    create_var[subs_thread_name].start()
+                except RuntimeError:
+                    create_var.pop(subs_thread_name, None)
+                    raise
 
         # 内部包装：转调模块级 _terminate_ffmpeg_process（复用公共终止逻辑，避免在此重复实现
         # 导致逻辑漂移），timeout 为总等待秒数，返回是否已退出
@@ -4407,6 +4481,12 @@ def start_record(
                             # 依赖条件块内赋值的局部变量（basedpyright 判定 possibly unbound，
                             # 亦属「录制链不得嵌套于条件内」反模式），故移除。
                             now = datetime.datetime.today().strftime("%y%m%d_%H%M%S")
+                            # M-01（2026-10-19）：目录用的「日期」必须单独取，不能切 now。
+                            # now 是 13 字符的 `%y%m%d_%H%M%S`，旧代码的 `now[:10]` 只切到
+                            # `251019_123`——日期后面粘了小时两位与分钟十位，于是「按时间分目录」
+                            # 每约 10 分钟就换一个目录，一天的录制被打散到上百个文件夹。
+                            # 单独取一次 strftime 同时消掉了「切片长度随格式变化而静默失配」这个根因。
+                            date_dir = datetime.datetime.today().strftime("%y%m%d")
                             live_title = cast(str, port_info.get("title", ""))
                             title_in_name = ""
                             if live_title:
@@ -4424,12 +4504,12 @@ def start_record(
                                 if folder_by_author:
                                     full_path = f"{full_path}/{anchor_name}"
                                 if folder_by_time:
-                                    full_path = f"{full_path}/{now[:10]}"
+                                    full_path = f"{full_path}/{date_dir}"
                                 if folder_by_title and port_info.get("title"):
                                     if folder_by_time:
                                         full_path = f"{full_path}/{live_title}_{anchor_name}"
                                     else:
-                                        full_path = f"{full_path}/{now[:10]}_{live_title}"
+                                        full_path = f"{full_path}/{date_dir}_{live_title}"
                                 os.makedirs(full_path, exist_ok=True)
                             except Exception as e:
                                 logger.error(
@@ -4740,12 +4820,22 @@ def start_record(
                                                         ):
                                                             create_var.pop(subs_thread_name, None)
 
-                                            create_var[subs_thread_name] = threading.Thread(
-                                                target=_subtitle_thread_target_direct,
-                                                name=subs_thread_name,
-                                                daemon=True,
-                                            )
-                                            create_var[subs_thread_name].start()
+                                            # L-08（2026-10-19）：与 check_subprocess 内的字幕线程登记
+                                            # 同因——写入与启动一并收进 record_state_lock，回收侧
+                                            # 本来就在锁内，写入侧在锁外会让「写 → start」与别的线程
+                                            # 的 finally pop 交错，留下无法回收的条目。
+                                            # L-02（2026-10-02）同族：start() 抛 RuntimeError 时
+                                            # target 不运行、其 finally 清理不执行，故失败即回滚登记。
+                                            with record_state_lock:
+                                                create_var[subs_thread_name] = threading.Thread(
+                                                    target=_subtitle_thread_target_direct,
+                                                    name=subs_thread_name,
+                                                    daemon=True,
+                                                )
+                                                try:
+                                                    create_var[subs_thread_name].start()
+                                                except RuntimeError:
+                                                    create_var.pop(subs_thread_name, None)
 
                                         download_success = direct_download_stream(
                                             flv_url,
@@ -4855,7 +4945,12 @@ def start_record(
                                 # MKV / MP4 已是成品容器，历史行为即不转码，保持原样，故此处仅 FLV 真调用。
                                 # 复核判据：tests/test_regression_2026_09_22_main.py 断言本分支
                                 # FLV + comment_end 时 _convert_after_record 被调用而 MKV/MP4 不被调用。
-                                _convert_if_flv = record_save_type == "FLV"
+                                # L-01（2026-10-19）：加上 `started`。ffmpeg 起不来（Popen 抛
+                                # OSError / 二进制缺失 / 命令被拒）时断言里既无产物也没有可转的
+                                # .flv，旧判据只按容器类型判断，仍会提交一次转码——转码器对不
+                                # 存在的输入报错，把「本来就已失败」的一轮再包装成一条转码错误，
+                                # 真正原因（ffmpeg 未起来）反而被后一条日志盖住。
+                                _convert_if_flv = started and record_save_type == "FLV"
                                 if comment_end:
                                     if _convert_if_flv:
                                         _convert_after_record(save_file_path, split_video_by_time)
@@ -4943,8 +5038,12 @@ def start_record(
 
                 # 正常循环等待：逐秒递减，且停止录制时立即打断剩余等待、回到循环顶检测退出标志
                 # （否则空闲房间线程会残留最长一个完整循环周期才退出）
-                # L-01（2026-10-02）：等待条件补齐三信号（与上方主循环顶部 1061 行及
-                # disable_record 等待同口径）——原只查 recording_enabled，URL 被注释/移除
+                # L-01（2026-10-02）：等待条件补齐三信号（与主循环顶部那处三条件判据——即
+                # main() 的 while 循环里 `if not ini_URL_content.strip():` 之前的退出判定——
+                # 及 disable_record 等待同口径）
+                # [L-09 2026-10-19] 原写法把该判据点名成「1061 行」，行号早已漂移；按 AGENTS.md
+                # 「引用代码位置优先写锚点、不写 file:line」改为按锚点描述。
+                # ——原只查 recording_enabled，URL 被注释/移除
                 # 或进程退出标志已置时，线程仍要把剩余等待耗完才回到循环顶。
                 while x:
                     if record_url in url_comments or exit_recording or not recording_enabled:
@@ -4983,7 +5082,11 @@ def start_record(
 def check_ffmpeg_existence() -> bool:
     ffmpeg_exists = False
     try:
-        result = subprocess.run(["ffmpeg", "-version"], check=True, capture_output=True, text=True)
+        # L-06（2026-10-19）：text=True 按 locale 解码（中文 Windows 是 cp936），ffmpeg 版本行里
+        # 一旦出现非 GBK 可解码字节就抛 UnicodeDecodeError——它不是 OSError/CalledProcessError，
+        # 会穿透本函数（版本检查于是变成启动期崩溃）。errors="replace" 让解码永不失败，
+        # 版本信息本身就是给人看的诊断输出，个别替换字符无碍。
+        result = subprocess.run(["ffmpeg", "-version"], check=True, capture_output=True, text=True, errors="replace")
         # check=True 已保证 returncode==0，直接打印版本信息
         lines = result.stdout.splitlines()
         version_line = lines[0] if lines else "unknown"
@@ -5214,7 +5317,7 @@ except Exception as err:
 # non_interactive=True 时 URL 配置为空不阻塞等待 input（供 Web 模式使用）；无返回值
 def main(non_interactive: bool = False) -> None:
     global a, acfun_cookie, args, auto_update_anchor_name, baidu_cookie, bark_msg_api, bark_msg_level, bark_msg_ring, begin_push_message_text, begin_show_push, bigo_cookie, bili_cookie, blued_cookie
-    global changliao_cookie, check_path, chzzk_cookie, clean_emoji, converts_to_h264, converts_to_mp4, create_time_file, custom_script, delay_default, delete_origin_file, dingtalk_api_url, danmaku_platforms, danmaku_split_time, enable_danmaku, enable_danmaku_monitor
+    global changliao_cookie, chzzk_cookie, clean_emoji, converts_to_h264, converts_to_mp4, create_time_file, custom_script, delay_default, delete_origin_file, dingtalk_api_url, danmaku_platforms, danmaku_split_time, enable_danmaku, enable_danmaku_monitor
     global dingtalk_is_atall, dingtalk_phone_num, disable_record, disk_limited, disk_space_limit, douyu_cookie, dy_cookie, email_host, email_password, enable_https_recording, enable_proxy_platform, enable_proxy_platform_list, exit_recording
     global extra_enable_proxy, extra_enable_proxy_platform_list, faceit_cookie, filename_by_title, first_run, first_start, flextv_cookie, flextv_password, flextv_username, folder_by_author, folder_by_time, folder_by_title
     global haixiu_cookie, hls_collection_enabled, hls_collection_exclude_platforms, host_id, huajiao_cookie, huamao_cookie, hy_cookie, ini_URL_content, input_url, is_comment_line, is_run_script, jd_cookie, ks_cookie, kugou_cookie
@@ -5242,6 +5345,15 @@ def main(non_interactive: bool = False) -> None:
     # 启动时清理 URL_config.ini 重复行（原为模块级副作用，移入入口处执行）
     if os.path.isfile(url_config_file):
         utils.remove_duplicate_lines(url_config_file)
+
+    # L-07：默认下载目录从模块级副作用改为入口处创建——import main 不再产生磁盘写入，
+    # 而 main() 之后的每条录制路径仍能看到目录已存在（与旧行为一致）。
+    try:
+        os.makedirs(default_path, exist_ok=True)
+    except OSError as e:
+        # 建不出来不算致命：录制侧还会按 check_path 再建一次并在那里报出真实原因，
+        # 这里提前失败反而会把「无权限/磁盘满」变成启动即崩。
+        logger.debug(i18n.tr("创建默认下载目录失败: {type_name}: {e}", type_name=type(e).__name__, e=e))
 
     # 启动期陈旧字节码缓存清理（判定基线与被删范围见 src/startup_cleanup.py）。放在此处而非模块顶部：
     # 此刻 src.* 已 import 完毕，本轮启动不受影响，只有源码/版本真的变化时下一次启动才付重编译成本。
@@ -5273,13 +5385,21 @@ def main(non_interactive: bool = False) -> None:
 
             ini_URL_content = ""
             if os.path.isfile(url_config_file):
-                with open(url_config_file, "r", encoding=text_encoding) as file:
+                # L-05（2026-10-19）：这里原缺 errors 参数，文件被外部编辑器存成非 text_encoding
+                # 编码时 `file.read()` 抛 UnicodeDecodeError（ValueError 子类），而本 try 的 except
+                # 只有 EOFError 与 (OSError, configparser.Error)——异常会穿透整个主循环。
+                # _hot_reload_config 早已覆盖该异常，同一轮里两处读取口径不该分叉；
+                # 取值与下方逐行解析处（readlines 那次）一致用 ignore，避免把替换字符塞进 URL。
+                with open(url_config_file, "r", encoding=text_encoding, errors="ignore") as file:
                     ini_URL_content = file.read().strip()
 
             if not ini_URL_content.strip():
                 if non_interactive:
                     # 非交互模式（如 web.py 守护线程）：跳过阻塞，等待 Web API 写入 URL
-                    _interruptible_sleep(5)
+                    # S-05：被中断（= 本函数立刻返回、未消耗任何等待时间）时补固定退避，
+                    # 否则 continue 会跳过循环末尾的 time.sleep(3)，主循环退化成零延迟忙循环。
+                    if _interruptible_sleep(5):
+                        time.sleep(3)
                     continue
                 input_url = input("请输入要录制的主播直播间网址（尽量使用PC网页端的直播间地址）:\n")
                 with open(url_config_file, "w", encoding=text_encoding) as file:
@@ -5290,7 +5410,9 @@ def main(non_interactive: bool = False) -> None:
             # 进程带栈退出——GUI 侧表现为「一点开始录制就没了」且无任何提示。
             # 与 non_interactive 同策略：退化为轮询等待外部写入 URL，而不是崩掉。
             logger.error(i18n.tr("无法从控制台读取直播间网址（无可用标准输入），等待配置文件写入"))
-            _interruptible_sleep(5)
+            # S-05：同上一分支，被中断时补退避
+            if _interruptible_sleep(5):
+                time.sleep(3)
             continue
         except (OSError, configparser.Error) as err:
             logger.error(i18n.tr("发生 I/O 或配置解析错误: {err}", err=err))
@@ -5662,10 +5784,12 @@ def main(non_interactive: bool = False) -> None:
                     # 抛 ValueError（"too many values to unpack"），且该异常不在行内捕获，会
                     # 冒泡终止整个 for 循环——坏行之后的所有直播间此后每一轮都处理不到。
                     # 改为「前两段为画质+URL、其余全部合并为主播名」，结构上不可能抛异常。
-                    if len(split_line) == 1:
-                        url = split_line[0]
-                        quality, name = [video_record_quality, ""]
-                    elif len(split_line) == 2:
+                    # [L-04 2026-10-19] 此处原有一条 `if len(split_line) == 1:` 分支（取整行当 URL），
+                    # 结构上不可达：split_line 只来自上面两处——`re.split("[,，]", line)` 的输入已确认
+                    # 含分隔符（≥2 段），else 分支固定 2 段。留着一个永不执行的「无分隔符形态」分支
+                    # 会让读者以为单段行是受支持输入，实际它在上方 `len(line) < 18` 与分隔符判据处
+                    # 早就不成立。删掉不改变任何可达路径的行为。
+                    if len(split_line) == 2:
                         if contains_url(split_line[0]):
                             quality = video_record_quality
                             url, name = split_line

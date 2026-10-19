@@ -346,9 +346,11 @@ async def async_req(
     verify: bool | None = None,
     http2: bool = True,
 ) -> str | dict[str, str] | tuple[str, dict[str, str]]:
-    # 异步 HTTP 请求：支持 GET/POST、代理、Cookie。abroad / content_encoding 仅为与 sync_req
-    # 保持签名兼容，异步实现无需显式使用。
-    _ = (abroad, content_encoding)
+    # 异步 HTTP 请求：支持 GET/POST、代理、Cookie。
+    # `abroad` 是同步侧才有的语义（「海外请求」要不要走 CERT_NONE 分支）——异步侧一律用
+    # httpx 的 verify 参数表达，故此处仅为签名兼容而接收，并在下面显式丢弃。
+    # `content_encoding` **不是**空转参数：它在响应解码处兜底生效（L-25，2026-10-19）。
+    _ = abroad
     if headers is None:
         headers = {}
     # 2026-09-12 审查 6.3：请求入口接入 scheme 白名单（SSRF 防线接线）。is_safe_http_url 先前
@@ -438,6 +440,18 @@ async def async_req(
                 response = await client.get(url, headers=headers, follow_redirects=True, timeout=timeout)
 
             # 结果分支必须在 try 块内访问 response——异常时 response 尚未定义
+            # L-25（2026-10-19）：`content_encoding` 不再被忽略。httpx 的 response.text 走
+            # charset 头优先、`response.encoding` 兜底的解码链；同步侧 sync_req 用的是
+            # `decode(content_encoding)`。两处默认值同为 utf-8，但当调用方显式传了非 utf-8 的
+            # 编码（GBK 页面等）时，旧实现会静默用错编码解出乱码，而调用方以为「按我给的编码解过了」。
+            # 显式赋值等价于同步侧的行为，且不影响「charset 头优先」这条既有判定。
+            # 用 getattr 取 charset_encoding：真实 httpx.Response 恒有该属性，但本仓多处探针用例
+            # 用最小替身驱动 async_req，替身未必实现它——为一条「兜底编码」逻辑把替身全部补齐不值当。
+            charset = getattr(response, "charset_encoding", None)
+            if content_encoding and not charset:
+                # 只在响应**没有**声明 charset 时兜底：有 charset 头时 httpx 的优先序更高，
+                # 抢过来会与同步侧（同样让 charset 头优先）分叉。
+                response.encoding = content_encoding
             if redirect_url:
                 return str(response.url)
             elif return_cookies:
@@ -541,7 +555,11 @@ def _internal_stream_target_reason(url: str, proxy_addr: OptionalStr) -> str | N
     if not host:
         return "流地址缺少主机名"
     if proxy_addr and web_config._parse_ip_literal(host) is None:
-        return None
+        # M-21（2026-10-19）：经代理出站时不做 DNS 判定（理由见上方 ①②），但原实现是**整条放行**
+        # ——`http://metadata.google.internal/…` / `http://redis.internal/…` 在开代理时全部通过，
+        # 构成稳定的内网端口/服务观测口。此处补一条不依赖解析的离线判定：IP 字面量与
+        # 「内部用途域名」（metadata*、*.internal、*.local）与 DNS 结果无关，经代理照样可达。
+        return web_config.offline_internal_reason(host)
     return web_config._host_internal_reason(host)
 
 
@@ -561,6 +579,11 @@ def _internal_stream_target_reason(url: str, proxy_addr: OptionalStr) -> str | N
 # 硬约束：改任一侧取值必须同批改另一侧，并同步本注释。
 _MAX_RESPONSE_BYTES = 8 * 1024 * 1024  # 未压缩响应体读入上限（与 sync_http 同值）
 _MAX_DECOMPRESSED_BYTES = 32 * 1024 * 1024  # 解压后产出上限（解压炸弹形态，与 sync_http 同值）
+# M-17（2026-10-19）：单块解码产出的上限。httpx 的 aiter_bytes(chunk_size=None) 会把**一个原始
+# 数据块的全部解码输出**整段交出——实测 64KB 原始块可解出 64.3MB 单块，于是「先物化整块、再判
+# 累计上限」的名义 32MB 上限实际被打到 146.9MB（约 4.6 倍）。给出 64KB 后 ByteChunker 会按
+# **产出**切块，超限检查因此作用在「已切好的小块」上，峰值 = 上限 + 一个块。
+_RESPONSE_CHUNK_SIZE = 64 * 1024
 
 
 async def _bounded_response_read(response: httpx.Response) -> None:
@@ -580,11 +603,15 @@ async def _bounded_response_read(response: httpx.Response) -> None:
     # 超限时抛 ValueError → send() 的 except 先 aclose 本响应再原样上抛 → async_req 既有通用 except
     # （debug 日志 + _failure_result 空值契约）/ get_response_status 判不可达。**不新增穿透异常形态**，
     # 也不得降级为「截断放行」——半截响应会被上游当有效数据解析（与同步侧同一口径）。
-    if hasattr(response, "_content") or response.has_redirect_location:
-        # _content 已在 = 构造期即全量装载的替身/MockTransport 形态响应，无流可限，原样放行；
-        # 3xx 带 Location 的中间跳由 httpx 直接丢弃、从来不会物化响应体，在此处「顺手读掉」反而
-        # 引入生产路径原本没有的新形态，故同样跳过。
+    if hasattr(response, "_content"):
+        # _content 已在 = 构造期即全量装载的替身/MockTransport 形态响应，无流可限，原样放行。
         return
+    # M-16（2026-10-19）：**不再对 3xx 中间跳跳过读取**。原实现里 `has_redirect_location` 直接
+    # return，理由是「httpx 从来不会物化中间跳响应体」——实测相反：钩子返回后、跟随重定向前，
+    # httpx 仍会对该跳执行一次**无上限且自动解压**的 aread()，并把带完整正文的 Response 存进
+    # history。于是「302 + Location + 超大 gzip 正文」（实测压缩 203KB → 解压 200MB、峰值 405MB）
+    # 可以完全绕过本函数。现在 3xx 跳与其它跳走同一条有界读取，读满即判失败；
+    # 代价是跟随重定向前会真读一次跳转页正文（通常为几十字节），换来的是上限对所有跳都成立。
     content_encoding = (response.headers.get("Content-Encoding") or "").strip().lower()
     limit = _MAX_DECOMPRESSED_BYTES if content_encoding else _MAX_RESPONSE_BYTES
     kind = "解压后响应体" if content_encoding else "响应体"
@@ -595,7 +622,10 @@ async def _bounded_response_read(response: httpx.Response) -> None:
     # 级联 flaky 告警的亏（见 _get_client 内 2026-09-04 决策段）；pytest 0 警告口径下这是必须项。
     # aiter_bytes 的声明返回类型是 AsyncIterator（非 AsyncGenerator），aclosing 的类型约束收不下，
     # 故 cast 收窄——运行时它本就是异步生成器（aclosing 只依赖 aclose）。
-    async with contextlib.aclosing(cast("AsyncGenerator[bytes, None]", response.aiter_bytes())) as byte_chunks:
+    # M-17：chunk_size 必须显式给（理由见 _RESPONSE_CHUNK_SIZE 的注释）。
+    async with contextlib.aclosing(
+        cast("AsyncGenerator[bytes, None]", response.aiter_bytes(_RESPONSE_CHUNK_SIZE))
+    ) as byte_chunks:
         async for chunk in byte_chunks:
             total += len(chunk)
             if total > limit:

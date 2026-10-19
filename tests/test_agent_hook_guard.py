@@ -117,6 +117,30 @@ def test_cleanup_reaching_protected_dirs_is_blocked(target: str) -> None:
     assert guard.check_bash_command(f"rm -rf ./{target}") is not None
 
 
+@pytest.mark.parametrize(
+    ("command", "expected_rule"),
+    [
+        # 2026-10-19 审查 S-01 实测放行的变形语料：守卫按文本形态匹配，引号、尾随空格、
+        # 参数分写、find -delete 与 PowerShell 别名/清空动词都能让旧判据整条跳过。
+        # 这些不是刻意构造的攻击串，而是日常书写形态，因此必须逐条钉住。
+        ("rm -rf logs ", "R-CLEAN-SCOPE"),
+        ('rm -rf "logs"', "R-CLEAN-SCOPE"),
+        ("rm -rf 'logs'", "R-CLEAN-SCOPE"),
+        ("find logs -type f -delete", "R-CLEAN-SCOPE"),
+        ("rm -r -f .", "R-WIPE-SCOPE"),
+        ("ri -r -fo downloads", "R-CLEAN-SCOPE"),
+        ("python -c \"import os;os.removedirs('recordings')\"", "R-CLEAN-SCOPE"),
+        ("Clear-Content -Path .\\logs\\* -Force", "R-CLEAN-SCOPE"),
+    ],
+)
+def test_delete_guard_catches_deformed_command_forms(command: str, expected_rule: str) -> None:
+    # 变形形态的覆盖面锁：改正则而语料不变 = 允许覆盖面回退不被发现，故这里与
+    # run_self_test() 的 block_cases 同形，两侧任一侧被裁都会让另一侧仍能独立判红。
+    verdict = guard.check_bash_command(command)
+    assert verdict is not None, f"变形形态未被拦下：{command!r}"
+    assert verdict[0] == expected_rule
+
+
 def test_agents_md_cleanup_commands_are_allowed() -> None:
     # AGENTS.md「测试收尾清理临时脚本」逐字给出的两条命令必须放行——它们是约定的正规收尾动作，
     # 其中 PowerShell 那条还把 .venv 写在 -notmatch 排除式里，不得被当成删除目标

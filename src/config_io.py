@@ -351,7 +351,11 @@ def _safe_float(value: str | None, default: float) -> float:
 # 默认在副本里把敏感值替换为 ***（配置项仍在、便于对照排查；恢复时需重新填入凭据）。
 # 需要「备份含真实凭据」以完整还原的用户可设 DLR_BACKUP_KEEP_SECRETS=1 显式放行。
 def _backup_mask_secrets() -> bool:
-    return os.environ.get("DLR_BACKUP_KEEP_SECRETS", "").strip().lower() not in ("1", "true", "yes")
+    # L-55（2026-10-19）：此处原为手写 `not in ("1", "true", "yes")`，与全仓唯一入口
+    # src.config_bool.parse_config_bool 的 token 集合不一致——用户写 `on`/`t`/`y` 想保留明文备份时，
+    # 旧判据把它们读成「不保留」，静默按脱敏处理（开与关写反却无任何提示）。
+    # 缺省/空串 default=False（= 不保留明文）→ 取反后仍是「脱敏」，与旧行为逐值等价且覆盖面更全。
+    return not parse_config_bool(os.environ.get("DLR_BACKUP_KEEP_SECRETS", ""), False)
 
 
 # 备份内容的凭据脱敏：按「节/键名命中 **或** 值本身形如凭据」两道判据把敏感值替换为 ***。
@@ -364,15 +368,33 @@ def _backup_mask_secrets() -> bool:
 # 进 backup_config/ 并常驻 6 份副本。
 # _looks_like_secret_value 必须从 src.web_config **同源导入**（勿复制第二份判据）：web_config 只依赖
 # stdlib 与 src.config_bool，且这里是函数内延迟导入，不构成导入环。
+#
+# [S-02 2026-10-19] 解析器必须是 **tolerant_config_parser（strict=False）**，不能用
+# `configparser.ConfigParser(interpolation=None)`：该构造默认 strict=True，config.ini 一旦出现
+# 「同一节内两行同名键」就抛 DuplicateOptionError，被下面的 except 接住后**返回未脱敏原文**，
+# 于是含明文 [Cookie]/[Authorization]/账号密码 的整份配置被写进 backup_config/ 并保留 6 份。
+# 这不是假想形态——src/config_read.py 的注释记载 2026-10-17 在本仓 config/config.ini 的
+# [录制设置] 实测到过重复键，即「恰恰是真实发生过的那一种配置损坏形态会让脱敏整条链路静默失效」。
+# 解析**仍**失败时（如 URL_config.ini 全篇注释 → MissingSectionHeaderError）保留原文以保证
+# 备份不丢，但必须显式告警——旧实现静默返回原文，用户以为默认是脱敏备份、实际拿到明文。
 def _redact_ini_secrets(text: str) -> str:
     try:
+        from src.config_read import tolerant_config_parser
         from src.web_config import _looks_like_secret_value, is_sensitive_item
     except ImportError:
         return text
-    parser = configparser.ConfigParser(interpolation=None)
+    parser = tolerant_config_parser()
     try:
         parser.read_string(text)
-    except configparser.Error:
+    except configparser.Error as e:
+        # 未脱敏即落盘是本仓凭据红线的例外，只能发生在「这份内容根本不是 ini」的形态上，
+        # 因此必须点名到类型与文件性质，不能像旧实现那样静默放行。
+        logger.warning(
+            i18n.tr(
+                "配置备份未能脱敏（解析失败：{e}），本次副本可能包含明文凭据，请勿外传",
+                e=type(e).__name__,
+            )
+        )
         return text
     out = io.StringIO()
     for section in parser.sections():
@@ -427,7 +449,15 @@ def backup_file(file_path: str, backup_dir_path: str, limit_counts: int = 6) -> 
 
         files = os.listdir(backup_dir_path)
         _files = [f for f in files if f.startswith(os.path.basename(file_path))]
-        _files.sort(key=lambda x: os.path.getmtime(os.path.join(backup_dir_path, x)))
+        # L-54（2026-10-19）：getmtime 在「listdir 之后、stat 之前文件被别的进程删掉」时抛
+        # FileNotFoundError（OSError 子类）。旧实现让它穿到外层 except，于是**本次副本明明已落盘**
+        # 却被判成备份失败（假失败），backup_file_start 因此不推进基线、下一轮重复备份同一份内容。
+        # 排序只是挑「最旧的那份来删」，退化为按名排序（备份名含时间戳、字典序即时间序）不会
+        # 删错目标，故此处按尽力而为处理。
+        try:
+            _files.sort(key=lambda x: os.path.getmtime(os.path.join(backup_dir_path, x)))
+        except OSError:
+            _files.sort()
 
         while len(_files) > limit_counts:
             oldest_file = _files[0]

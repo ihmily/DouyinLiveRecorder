@@ -456,6 +456,24 @@ def _resolve_host_ips(host: str) -> list[str]:
     return [_strip_host_port(cast(str, info[4][0])) for info in infos]
 
 
+def offline_internal_reason(host: str) -> str | None:
+    # 只做「离线即可定罪」的内网判定：IP 字面量 + 内部用途域名后缀，**不解析 DNS**。
+    # 供无法使用本机解析结论的调用方复用（M-21 2026-10-19）：async_http 在「经代理出站」时
+    # 不能按本机 DNS 结果拒绝（境外域名本机查不到是常态、代理却可解析），但「metadata、
+    # *.internal、*.local」这类名字从来不是合法流地址，与解析结果无关，必须照样拦。
+    # 返回 None 只表示「本层无法定罪」，不代表可放行——调用方自行决定后续口径。
+    # 名字表与 _host_internal_reason 共用同一组常量，不另建第二份清单。
+    literal = _parse_ip_literal(host)
+    if literal is not None:
+        return _internal_ip_reason(literal)
+    name = _strip_host_port(host)
+    if not name:
+        return "缺少主机名"
+    if name in _INTERNAL_NAME_EXACT or any(name.endswith(suffix) for suffix in _INTERNAL_NAME_SUFFIXES):
+        return f"本机/内部用途域名: {name}"
+    return None
+
+
 def _host_internal_reason(host: str, *, allow_local_targets: bool = False) -> str | None:
     # 判定主机名是否指向本机/内网/保留目标，返回拒绝理由或 None（可放行）。
     #
@@ -702,8 +720,8 @@ def read_quality_options(config_file: str | Path) -> list[str]:
     return normalize_quality_options(_split_multi_value(raw))
 
 
-# 写回画质选项（行级更新，保留注释与节顺序）；返回实际落盘的规范化列表
-def write_quality_options(config_file: str | Path, options: Iterable[str]) -> list[str]:
+# 写回画质选项（行级更新，保留注释与节顺序）；返回实际落盘的规范化列表，写失败返回 None
+def write_quality_options(config_file: str | Path, options: Iterable[str]) -> list[str] | None:
     # 换行注入防护必须在 normalize 之前做：normalize 会把含换行的项静默丢掉，
     # 那时再校验就感知不到了（C3 与 format_url_line 同款）
     raw_list = list(options)
@@ -714,8 +732,11 @@ def write_quality_options(config_file: str | Path, options: Iterable[str]) -> li
     _reject_newline("画质选项", value)
     # 键缺失（历史 config.ini 无此项）时补建到目标节内，不改其余内容；
     # 替换/补建两步经 update_or_append_config_line 持锁原子化，防并发补建重复行
-    _ = update_or_append_config_line(config_file, QUALITY_OPTIONS_SECTION, QUALITY_OPTIONS_KEY, value)
-    return normalized
+    # M-30（2026-10-19）：写失败必须回报。返回值从「规范化列表」改为「规范化列表 或 None
+    # （写失败）」——原实现丢弃 update_or_append_config_line 的布尔值，于是 config.ini 缺失 /
+    # 节缺失 / 原子写失败时 PUT /api/rooms/qualities 仍返回 {"ok": true}，而磁盘上什么都没变。
+    ok = update_or_append_config_line(config_file, QUALITY_OPTIONS_SECTION, QUALITY_OPTIONS_KEY, value)
+    return normalized if ok else None
 
 
 # ─── URL_config.ini 房间画质保序改写 ──────────────────────────────────────
@@ -817,8 +838,11 @@ def update_room_quality(url_config_file: str | Path, url: str, quality: str | No
             return False
 
         joined = "".join(out_lines)
-        _atomic_write_text(path, joined)
-    return True
+        # M-30（2026-10-19）：原为丢弃返回值的裸调用 + `return True`。`_atomic_write_text` 在
+        # 临时文件创建 / os.replace 失败时明确返回 False，丢弃它等于把「磁盘里什么都没变」
+        # 报成「已改成新画质」——PUT /api/rooms/quality 会返回 changed: true 而磁盘未变，
+        # 与 update_room / toggle_room 已采用的「负信号 + 重新解析裁决」口径相反。
+        return _atomic_write_text(path, joined)
 
 
 # 原子写文本：同目录临时文件写完后 os.replace 覆盖，读方只会看到旧/新完整内容。
@@ -1237,7 +1261,12 @@ def update_config_line(config_file: str | Path, section: str, key: str, value: s
             return False
         # 2026-09-12 审查 H-6：write_text 为 truncate+write 非原子，与引擎热加载的持锁读
         # 竞态时可读到空/半写文件；改同目录临时文件 + os.replace 原子写（读方只见旧/新完整内容）
-        _atomic_write_text(path, "".join(new_lines))
+        # M-29（2026-10-19）：必须**返回**原子写的结果。原实现丢弃 `_atomic_write_text` 的布尔值
+        # 并 `return True`，而它在 mkstemp/os.replace 抛 OSError 时明确返回 False——于是磁盘满 /
+        # 临时文件创建失败时 PUT /api/config 仍走成功分支返回 {"ok": true}，set_language 的回滚
+        # 也不触发（出现「进程已切语言、config.ini 仍是旧码」）。受影响面含 web_auth_enable /
+        # web_password 这类安全键，假成功的代价是用户以为密码已改。
+        return _atomic_write_text(path, "".join(new_lines))
     return True
 
 

@@ -6,9 +6,11 @@
 # 这些常量/表值任何一个改动都会导致签名被拒。
 import math
 import os
-import random
+import secrets
 import time
 from typing import cast
+
+from src.config_bool import parse_config_bool
 
 
 def rc4_encrypt(plaintext: str, key: str) -> str:
@@ -299,10 +301,15 @@ def generate_random_str() -> str:
     # 回退开关：个别平台若对「随机段」有值域/一致性校验导致签名被拒，可设
     # 环境变量 DLR_AB_SIGN_FIXED_RANDOM=1 回退到固定值（保持旧行为），便于
     # 定位问题；默认真随机。
-    if os.environ.get("DLR_AB_SIGN_FIXED_RANDOM", "").strip().lower() in ("1", "true", "yes"):
+    # L-24（2026-10-19）：真随机改走 secrets。`random.random()` 是 Mersenne Twister，观测约
+    # 624 个 32-bit 输出即可恢复内部状态并预测后续前缀——而本函数的目的正是「让服务端无法把
+    # 同前缀签名聚成一类流量」，可预测的前缀等于把这条防线交还对方。取值域仍是 [0,1) 浮点，
+    # 下游 ×10000 取整与位合并逐字不变，签名格式兼容性不受影响。
+    # L-55 同族：布尔开关也一并回落到全仓唯一入口 parse_config_bool（原手写 token 集合不认 on/t/y）。
+    if parse_config_bool(os.environ.get("DLR_AB_SIGN_FIXED_RANDOM", ""), False):
         random_values = [0.123456789, 0.987654321, 0.555555555]
     else:
-        random_values = [random.random() for _ in range(3)]
+        random_values = [secrets.randbelow(10**9) / 1e9 for _ in range(3)]
 
     # 生成三组随机字节并合并
     random_bytes: list[int] = []

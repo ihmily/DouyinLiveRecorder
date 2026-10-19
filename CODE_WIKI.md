@@ -1718,6 +1718,21 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 > 脚本：`tests/test_{bili,douyin,douyu,huya,twitch}_live_collector.py`（`python file.py <URL> [秒数]`，
 > 需活房间 + 外网，默认人工通道）。
 
+### v4.6.0-dev (2026-10-19) — 2026-10-19 审查报告批：5 项严重问题全修 + M/L 级中低危收敛
+
+- **用户指令**：逐条提取 `CODE_REVIEW_2026-10-19.md` 的问题项、定位后逐一修复，不做超出审查范围的重构；模糊项说明原因不猜测性修改；改完跑门禁并输出汇总。
+- **S 级（5/5 已修）**：
+  · **S-01** `scripts/agent_hook_guard.py`：`_protected_hit` 的 tail 判据由「只认路径分隔符」放宽为「边界字符集」（引号/空白/闭合符/结尾），`_RECURSIVE_FORCE_RE` 增补 `-r -f` 分写与 `--recursive/--force`，动词表补 `ri`/`os.removedirs`/`Clear-*`，`_BARE_WIDE_TOKENS` 去重。变形语料固化进 `run_self_test()` 的 `block_cases`（dict→tuple 列表，同规则可挂多条）与 `tests/test_agent_hook_guard.py`。
+  · **S-02** `src/config_io.py::_redact_ini_secrets`：改用 `tolerant_config_parser`（strict=False），消除「同节重复键 → DuplicateOptionError → 返回明文」这条真实发生过的 fail-open；仍失败时补 `logger.warning` 明确告知未脱敏。
+  · **S-03** `src/gui_qt/main_window.py::_finalize_quit`：末尾补 `QApplication.instance().quit()`（`setQuitOnLastWindowClosed(False)` 下 close() 不会让事件循环返回，退出后进程残留）。
+  · **S-04** `src/stream_select.py`：派生地址安全拒绝改抛内部控制流异常 `_DerivedHopRejected`（照 `RedirectHopRejected` 先例），`_validate_stream_url` 新增 `security_rejected` 出参并在 `select_source_url` 的 record_url 复用分支前判否——两处「末位放行 / 同址复用」不再能把内网目标翻回可达。回归锁两条（末位放行 + 同址复用各一）。
+  · **S-05** `main.py::_interruptible_sleep` 返回「是否被中断」，两处 `continue` 分支被中断时补固定 `time.sleep(3)`，消除 Web 空 URL 时的零延迟忙循环。
+- **M 级（30/48 已修，其余交回）**：M-01 时间目录切片错配（改独立 `date_dir`）、M-03 drain 总预算（`_run_bounded_drain`，15s 超时后转 `cancel_futures=True`）、M-06 三处 `except: pass` 改走 `_warn_chain`、M-08 ORIGIN 注入抽 `_inject_origin_urls` 并逐路判空、M-09 补 `ValueError`、M-10 快手 did 三元组整组入锁、M-11/M-12 单路地址与空地址判据、M-13 Bigo 用 `urlsplit` 取 `h`、M-14 B站 v2 段 `_dig` 收口、M-15 淘宝回写宽 except + warning、M-16/M-17 3xx 中间跳同样有界读取 + `aiter_bytes(chunk_size)`、M-18 代理分支 `stream=True` + 分块计数、M-21 代理下补离线内网域名判定、M-22 JS 阻塞段改自有线程池、M-23/M-24 `ProgramError` 归因补齐 + 兜底 dict 改工厂、M-27 推送失败异常脱敏、M-28 `UnicodeDecodeError`、M-29/M-30 写结果不再丢弃、M-31 `web_auth_enable` 变更吊销令牌、M-32 `list_rooms` 区分「取不到」与「未在录」、M-33 停止异常路径补 `_clear_process`+`ended.emit`、M-34 停止按钮禁用态自愈、M-35 高级设置对话框复用 + `WA_DeleteOnClose`。
+- **L 级（25/81 已修；报告章节标题写「55 项」，但编号实到 L-81，按编号为准）**：L-01 `started and _convert_if_flv`、L-02/L-03 死引用按判据摘除（`_validate_stream_url` 因测试依赖保留）、L-04 不可达分支、L-05/L-06 解码异常、L-07 模块级 `makedirs` 移入 `main()`、L-08 字幕线程登记入锁、L-09 行号引用改锚点、L-10 client 级头去重、L-11 空转项、L-12 双臂排期、L-13 空 tag、L-14 PID 复用补创建时间判据、L-15 Popen 后台收割、L-16~L-17 待办见汇总、L-21/L-22 见汇总、L-24 签名前缀改 `secrets`、L-25 `content_encoding` 生效、L-26 编码按 `,` 取最外层、L-27 单次失败单条日志、L-28 退避只在确认失败后、L-47 `UnicodeError`、L-48 死代码、L-54 轮转尽力而为、L-55 布尔口径统一、L-77 同 S-01。
+- **i18n**：新增 13 条 msgid 同步登记四语目录（`zh_CN.po` / `en_US.json` / `en_GB.json` / `zh_TW.yaml`），`scripts/extract_i18n_strings.py` 缺失 0 条，`scripts/compile_po.py` 重编 `.mo`（1146 条）。
+- **验证**：`scripts/run_gates.py` 十项门禁全绿（black / isort / mypy ×3 平台 / 注释检查 / 覆盖率 / pytest 全量 0 警告）；`tests/test_i18n*.py` 49 passed；`tests/test_agent_hook_guard.py` 51 passed；`tests/test_stream_select.py` 103 passed；`tests/test_async_http.py` 50 passed；`tests/test_sync_http.py` 30 passed；`tests/test_web_api.py` 173 passed。
+- **未完成 / 交回用户的判断**：见同轮汇总答复的「遗留项」表——M-02（凭据进 argv，需本地转发代理，属架构改动）、M-19/M-20/M-26（供应链校验策略改档）、M-25、M-36（tkinter 模块级导入）、M-37~M-44（前端/脚本）、M-45~M-48 与 LT 组（测试有效性与 R1 判据扩展）、L-16~L-23 / L-29~L-53 / L-56~L-81 的剩余条目。理由分三类：需设计决策、需真机/多平台验证、属跨模块重构超出本次审查范围。
+
 ### v4.6.0-dev (2026-10-18) — 审查整改后续批：死代码删除 + §7.11 三条机制性门禁落地（R9/R10 + 两个新锁文件）
 
 - **用户指令**：`L-27`/`L-28` 死代码删除、`scripts/patch_i18n_2026_09_12.py` 删除、报告第 7.11 节的机制性门禁建议落地。前两项是上一轮「按仓库约定交回用户决策」的事项，本轮由用户裁定。

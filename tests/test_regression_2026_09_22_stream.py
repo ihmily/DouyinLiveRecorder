@@ -448,7 +448,10 @@ class TestDerivedHopScope:
             {_PLAYLIST: "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000\nhttp://127.0.0.1:8080/x.m3u8\n"}
         )
         with patch("src.stream_select.logger.warning") as warn:
-            assert ss._probe_hls_segment(cast(object, client), _PLAYLIST, _HEADERS) is False  # type: ignore[arg-type]
+            # S-04（2026-10-19）：安全拒绝改抛内部控制流异常（原先 return False）——
+            # False 与「分片 404 不可达」不可区分，会被调用方的 last_resort / 同址复用翻回可达。
+            with pytest.raises(ss._DerivedHopRejected):
+                _ = ss._probe_hls_segment(cast(object, client), _PLAYLIST, _HEADERS)  # type: ignore[arg-type]
         assert [url for url, _ in client.calls] == [_PLAYLIST]
         assert any("形态不合规" in str(c.args[0]) for c in warn.call_args_list)
 
@@ -456,7 +459,9 @@ class TestDerivedHopScope:
         # 形态不合规变体（file://）：同 SR-01 判据，候选判失败而非维持可达
         client = _RecordingClient({_PLAYLIST: "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000\nfile:///etc/passwd\n"})
         with patch("src.stream_select.logger.warning"):
-            assert ss._probe_hls_segment(cast(object, client), _PLAYLIST, _HEADERS) is False  # type: ignore[arg-type]
+            # S-04（2026-10-19）：同 test_internal_target_is_not_requested，改判内部控制流异常
+            with pytest.raises(ss._DerivedHopRejected):
+                _ = ss._probe_hls_segment(cast(object, client), _PLAYLIST, _HEADERS)  # type: ignore[arg-type]
         assert [url for url, _ in client.calls] == [_PLAYLIST]
 
     def test_internal_segment_target_rejects_candidate(self) -> None:
@@ -466,7 +471,9 @@ class TestDerivedHopScope:
         # 对照：修复前该形态维持可达，逐跳钩子拦不住（正文请求不走客户端钩子）。
         client = _RecordingClient({_PLAYLIST: "#EXTM3U\n#EXTINF:4.0,\nhttp://127.0.0.1:6379/seg.ts\n"})
         with patch("src.stream_select.logger.warning") as warn:
-            assert ss._probe_hls_segment(cast(object, client), _PLAYLIST, _HEADERS) is False  # type: ignore[arg-type]
+            # S-04（2026-10-19）：改判内部控制流异常（详见 tests/test_stream_select.py 的同名锁）
+            with pytest.raises(ss._DerivedHopRejected):
+                _ = ss._probe_hls_segment(cast(object, client), _PLAYLIST, _HEADERS)  # type: ignore[arg-type]
         assert [url for url, _ in client.calls] == [_PLAYLIST]
         assert any("形态不合规" in str(c.args[0]) for c in warn.call_args_list)
 

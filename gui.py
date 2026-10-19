@@ -325,6 +325,18 @@ def _get_gui_kernel32() -> ctypes.CDLL | None:
         dll.QueryFullProcessImageNameW.restype = ctypes.c_int
         dll.CloseHandle.argtypes = [ctypes.c_void_p]
         dll.CloseHandle.restype = ctypes.c_int
+        # L-14（2026-10-19）：PID 复用收窄的第二道判据——进程创建时间。映像名只能挡住
+        # 「换了别的程序接手这个号码」，挡不住「另一个同名进程接手」（源码态下录制核心与
+        # 任何 python.exe 同名，这是最常见的一种）。GetProcessTimes 同样只需
+        # PROCESS_QUERY_LIMITED_INFORMATION，不请求任何终止权限。
+        dll.GetProcessTimes.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+        ]
+        dll.GetProcessTimes.restype = ctypes.c_int
         _GUI_KERNEL32 = dll
         return dll
     except Exception:
@@ -385,6 +397,54 @@ def _reused_pid_image_pair(recorded_image: str, pid: int) -> tuple[str, str] | N
     if not current or current == expected:
         return None
     return current, expected
+
+
+# 读出指定 PID 的创建时间（FILETIME 的 100ns 计数，作为不透明比较值）。
+# 取不到一律返回 None，语义与 _win_pid_image_name 的「无法判定即放行」同口径：
+# 本判据只用于**收窄**误杀窗口，判据本身失效时不得让清理兜底失去清理能力。
+def _win_pid_creation_stamp(pid: int) -> int | None:
+    if sys.platform != "win32":
+        return None
+    k32 = _get_gui_kernel32()
+    if k32 is None:
+        return None
+    handle = None
+    try:
+        handle = k32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, 0, pid)
+        if not handle:
+            return None
+        created = ctypes.c_uint64(0)
+        exited = ctypes.c_uint64(0)
+        kernel = ctypes.c_uint64(0)
+        user = ctypes.c_uint64(0)
+        ok = k32.GetProcessTimes(
+            handle,
+            ctypes.byref(created),
+            ctypes.byref(exited),
+            ctypes.byref(kernel),
+            ctypes.byref(user),
+        )
+        if not ok:
+            return None
+        return int(created.value)
+    except Exception:
+        return None
+    finally:
+        if handle:
+            try:
+                _ = k32.CloseHandle(handle)
+            except Exception:
+                pass
+
+
+# 判定「已捕获的 PID 是否已被**同名**进程接手」（L-14，2026-10-19）：映像名相同、
+# 但创建时间与登记值不同 → 确证复用。
+# 期望值为空/读不到（非 Windows、桩实例、权限不足）时一律不判定——理由同 _reused_pid_image_pair。
+def _reused_pid_same_image(recorded_stamp: int | None, pid: int) -> bool:
+    if recorded_stamp is None:
+        return False
+    current = _win_pid_creation_stamp(pid)
+    return current is not None and current != recorded_stamp
 
 
 # 强制标准流以 UTF-8 输出（窗口化 exe 的 stdout/stderr 可能为 None，已做保护）。
@@ -565,6 +625,13 @@ class Fonts:
         token = parts[0]
         if token not in TYPE_SCALE:
             return None
+        # M-04（2026-10-19）：等宽档必须走 mono_pt()。创建路径（Fonts.get）用的是
+        # `_profile.mono_pt()`（含 MONO_SCALE_FACTOR=0.9 收敛），而换档路径原本落到这里
+        # 走通用的 `pt("mono")`——0.9 系数丢失，于是启动时等宽区是 10pt，换一次缩放档
+        # （含换回原档）后变成 11pt 且再也回不去，违背 src/ui_scale.py 对等宽档的设计口径
+        # （等宽字符宽，放大后一行可容列数骤减）。两个入口共用同一个换算才是唯一事实源。
+        if token == "mono":
+            return cls._profile.mono_pt()
         return cls._profile.pt(token)
 
     # 为什么不动家族：家族由 bind_family/set_family 统一裁决（见 _family 的注释），
@@ -1285,8 +1352,32 @@ def _save_text_widget_to_file(text_widget: tk.Text, file_path: str) -> None:
     _save_text_to_file(str(text_widget.get("1.0", tk.END)), file_path)
 
 
-# 把 taskkill / pkill 的输出解成一行可入日志的提示（MIN-2249）。
+# 启动一个外部程序并**在后台**回收它（L-15，2026-10-19）。
 #
+# 为什么不能直接 `subprocess.Popen([...])` 了事：POSIX 上子进程退出后会留僵尸，直到解释器
+# 退出时由 subprocess 的 _active 表统一回收——GUI 是常驻进程，反复点「打开目录」就会持续堆积。
+# 为什么不能在 UI 线程里同步 wait()：xdg-open 在「没有默认处理程序」的桌面环境里能挂很久，
+# 那会把界面卡死（本函数的调用点正是按钮回调）。
+# 折中：wait 放进守护线程并给上限——超时只表示「这个外部程序还没退」，不需要为此保留任何状态，
+# 也不需要打扰用户（打开目录成败的真实信号是 Popen 本身就成功与否）。
+_DETACHED_REAP_TIMEOUT_SECONDS = 5.0
+
+
+def _spawn_detached(argv: list[str]) -> subprocess.Popen[bytes]:
+    proc = subprocess.Popen(list(argv), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def _reap() -> None:
+        try:
+            _ = proc.wait(timeout=_DETACHED_REAP_TIMEOUT_SECONDS)
+        except Exception:
+            # 超时/已被回收都不影响调用方：本线程的唯一职责就是不让僵尸留在进程表里。
+            pass
+
+    threading.Thread(target=_reap, name="gui-spawn-reap", daemon=True).start()
+    return proc
+
+
+# 把 taskkill / pkill 的输出解成一行可入日志的提示（MIN-2249）。
 # 为什么按码页而不是按 UTF-8：Windows 系统工具输出的是**跟随控制台码页本地化**的消息
 # （中文 Windows 上 taskkill 的「信息: 没有运行的任务…」是 GBK 字节），而本仓门禁口径要求
 # PYTHONUTF8=1、POSIX 侧默认 UTF-8 —— 统一按 utf-8 解码会把提示解成一串替换符，等于白取。
@@ -1813,6 +1904,11 @@ class LiveRecorderGUI:
         self.tray_thread: threading.Thread | None = None
 
         self._last_url_config_mtime = 0.0
+        # M-05（2026-10-19）：外部改动确认框的「已弹出」标志。Tk 的 messagebox 是**嵌套事件循环**，
+        # 把它放进 after 链里的后果是：用户还没点按钮，下一轮定时器照常触发，于是每 3 秒再叠一个
+        # 一模一样的确认框（录制子进程每轮回写 URL_config.ini 时 mtime 持续变化，正好喂饱这条链）。
+        # 等待应答期间直接返回，等用户作答后由下一轮重新判定。
+        self._url_config_prompt_open = False
         # 编辑器内容的「已保存」基线（2026-09-12 审查 6.2）：用于判断是否存在未保存
         # 编辑，避免外部 mtime 变化触发的自动重载把用户正在编辑的内容静默覆盖
         self._config_baseline_content = ""
@@ -2553,10 +2649,12 @@ class LiveRecorderGUI:
     # 下生效，缩放后不重设就会出现「大字号被裁 / 小字号留白」两种错位。
     def _apply_scaled_geometry(self) -> None:
         s = self.scale_profile
-        for widget, base in (
-            (getattr(self, "status_pill", None), 38),
-            (getattr(self, "close_dialog", None), 0),
-        ):
+        # L-11（2026-10-19）：此处原还有一项 `(getattr(self, "close_dialog", None), 0)`。
+        # 它是空转的：① 真实属性名是 `_close_dialog`（见 __init__ 的声明），少了前导下划线
+        # 恒取到 None；② 即便改名也仍然不生效——基准值写的是 0，下方 `and base` 直接短路
+        # （按 0 缩放高度没有意义）。关闭确认框的高度由内容 pack 决定，不该在这里设定，
+        # 故整项删除而不是「把名字改对」。
+        for widget, base in ((getattr(self, "status_pill", None), 38),):
             # status_pill 是唯一需要按档缩放高度的固定高容器（其余卡片头高由
             # pack 内容决定，pack_propagate(False) 只在 status_pill 上开着）
             if widget is not None and base:
@@ -3682,9 +3780,9 @@ class LiveRecorderGUI:
             if sys.platform == "win32":
                 os.startfile(downloads_path)
             elif sys.platform == "darwin":
-                subprocess.Popen(["open", downloads_path])
+                _ = _spawn_detached(["open", downloads_path])
             else:
-                subprocess.Popen(["xdg-open", downloads_path])
+                _ = _spawn_detached(["xdg-open", downloads_path])
             self._log(i18n_module.tr("已打开下载目录: {path}", path=downloads_path))
         except Exception as e:
             self._log(i18n_module.tr("打开目录失败: {err}", err=e), "error")
@@ -3847,6 +3945,11 @@ class LiveRecorderGUI:
             # 不从系统反查，反查只用在「动手杀之前」那一次比对上。
             # 读到旧值也只会退回修复前形态（同为录制核心映像名），不会造成误杀，故不加锁。
             self._child_image_name = os.path.basename(record_cmd[0]).lower()
+            # L-14（2026-10-19）：与映像名同批登记创建时间。映像名只在「接手者换了程序」时有效，
+            # 源码态下任何 python.exe 都与录制核心同名，此时只有创建时间能区分「还是那个进程」
+            # 与「号码被另一个同名进程接管」。取不到（非 Windows / 权限不足）登记 None，
+            # 比对侧按「无法判定即不拦」处理，不改变原有清理能力。
+            self._child_creation_stamp: int | None = _win_pid_creation_stamp(proc.pid)
             self.running = True
             # 新会话开始：自增代号，使所有旧会话的在途收尾回调失效
             self._session_id += 1
@@ -4365,11 +4468,12 @@ class LiveRecorderGUI:
             except Exception:
                 pass
             self._log_flush_job_id = None
+        # L-12（2026-10-19）：此处原在 `_schedule_log_flush()` 之后再排一条 after 并覆盖
+        # `_log_flush_job_id`。双臂排期的后果不是「多跑一次」这么轻：第一条 job 的 id 被覆盖后
+        # 再也无法 after_cancel，它会与第二条各自续期，两条链互相独立地取队列 → 每调一次
+        # _flush_log_queue 就多一条永不停止的刷新链，日志页刷新频率成倍增长。
+        # 排期与「还有没有数据」的判定都已收敛在 _schedule_log_flush 的 finally 里，这里只调用它。
         self._schedule_log_flush()
-        with self._log_queue_lock:
-            has_data = self._log_queue_has_data
-        if has_data or not self._log_queue.empty():
-            self._log_flush_job_id = self.root.after(self._LOG_FLUSH_INTERVAL, self._schedule_log_flush)
 
     # ─── 画质监控 ──────────────────────────────────────────
 
@@ -4529,8 +4633,11 @@ class LiveRecorderGUI:
             self._q_stat_total.configure(text=str(total))
             self._q_stat_ok.configure(text=str(ok_count))
             self._q_stat_down.configure(text=str(down_count))
-        except Exception:
-            pass
+        except Exception as e:
+            # M-06（2026-10-19）：原为 `pass`。三条周期链都已建立「异常留痕 + 30s 限频」
+            # 口径，唯独内层这几处 `pass` 把它架空——控件被销毁 / 属性缺失这类**持续性**
+            # 故障的表现是「统计数字永久停在旧值、日志零线索」，外层 _warn_chain 永远等不到。
+            self._warn_chain(i18n_module.tr("画质统计刷新"), e)
 
     # ─── 弹幕监控（tail 边车 JSONL 文件） ──────────────────
 
@@ -4827,8 +4934,10 @@ class LiveRecorderGUI:
                     if self._danmaku_filter != i18n_module.tr("全部房间"):
                         self._danmaku_filter = i18n_module.tr("全部房间")
                         self._danmaku_stream_dirty = True
-        except Exception:
-            pass
+        except Exception as e:
+            # M-06（2026-10-19）：同 _update_quality_display 的理由——`pass` 会让
+            # 「筛选项永久停在已消失的房间、弹幕流一片空白」变成一条线索都没有的静默故障。
+            self._warn_chain(i18n_module.tr("弹幕筛选刷新"), e)
 
     # 在 UI 线程重绘弹幕流文本框（脏标记跳过；用户上滚查看历史时不强制拉到底）。
     def _render_danmaku_stream(self) -> None:
@@ -4868,7 +4977,13 @@ class LiveRecorderGUI:
             else:
                 tag, label = "", ""
             line = f"[{tstr}] [{room}] {label}{user}: {text}\n" if user else f"[{tstr}] [{room}] {label}{text}\n"
-            self.danmaku_text.insert(tk.END, line, tag)
+            # L-13（2026-10-19）：普通聊天行的 tag 是空串，旧写法把 "" 当作 tag 名传给 insert。
+            # Tk 的 insert 第 3 个位置起全是 tag 名，空串会落成一个名为 "" 的匿名 tag
+            # （轻则无意义，重则在部分 Tk 版本上触发 TclError），而这里的语义本来就是「无 tag」。
+            if tag:
+                self.danmaku_text.insert(tk.END, line, tag)
+            else:
+                self.danmaku_text.insert(tk.END, line)
             if dropped:
                 self.danmaku_text.insert(
                     tk.END, i18n_module.tr("    （+{count} 条已省略）\n", count=dropped), "dropped"
@@ -4907,8 +5022,11 @@ class LiveRecorderGUI:
             self.info_format.configure(text=output_format)
             self.info_tray.configure(text=tray_status)
             self.info_time.configure(text=timestamp)
-        except Exception:
-            pass
+        except Exception as e:
+            # M-06（2026-10-19）：本处 `pass` 是「内层宽 except 架空留痕」的典型——
+            # 外层 _schedule_status_refresh 早就包了 try/_warn_chain，但内部先把异常吞掉，
+            # 于是状态栏永久停在旧值而日志一条不留。改用同一限频留痕入口。
+            self._warn_chain(i18n_module.tr("状态栏刷新"), e)
 
     # 周期性刷新状态栏、画质显示并监控 URL 配置变化。
     def _schedule_status_refresh(self) -> None:
@@ -4930,6 +5048,11 @@ class LiveRecorderGUI:
     def _watch_url_config(self) -> None:
         if not os.path.exists(self.url_config_file):
             return
+        # M-05（2026-10-19）：上一个确认框还没被应答就不再排新的。理由见 __init__ 里
+        # _url_config_prompt_open 的注释——放在 try 之外，避免把「正在等待应答」误当成
+        # 状态刷新链的异常。
+        if self._url_config_prompt_open:
+            return
         try:
             current_mtime = os.path.getmtime(self.url_config_file)
             if current_mtime == self._last_url_config_mtime:
@@ -4939,13 +5062,20 @@ class LiveRecorderGUI:
             # 用户可能正在编辑另一处）。改为脏检查：仅当编辑器内容仍是「上次加载
             # /保存时的内容」才自动重载；已有未保存编辑则弹确认，由用户决定。
             if self._has_unsaved_config_edits():
-                if not messagebox.askyesno(
-                    i18n_module.tr("配置文件已变更"),
-                    i18n_module.tr(
-                        "URL_config.ini 已被外部修改，但编辑器中有未保存的更改。\n\n"
-                        "点击「是」放弃未保存的更改并重新加载；\n点击「否」保留当前编辑内容（稍后可手动保存）。"
-                    ),
-                ):
+                self._url_config_prompt_open = True
+                try:
+                    confirmed = messagebox.askyesno(
+                        i18n_module.tr("配置文件已变更"),
+                        i18n_module.tr(
+                            "URL_config.ini 已被外部修改，但编辑器中有未保存的更改。\n\n"
+                            "点击「是」放弃未保存的更改并重新加载；\n点击「否」保留当前编辑内容（稍后可手动保存）。"
+                        ),
+                    )
+                finally:
+                    # finally 而不是 if 分支：askyesno 可能抛 TclError（窗口销毁竞态），
+                    # 标志留在 True 会让「自动重载外部改动」这条功能永久停摆。
+                    self._url_config_prompt_open = False
+                if not confirmed:
                     # 保留用户编辑：仅把 mtime 对齐到当前，避免每轮都弹窗
                     self._last_url_config_mtime = current_mtime
                     return
@@ -5128,6 +5258,18 @@ class LiveRecorderGUI:
                     )
                     # 置空号码即让下面两个平台分支都不再动手，并照常落到「未发现需要清理的
                     # ffmpeg 进程」那条结论；不得直接 return——那会让日志只剩一句 warn。
+                    target_pid = None
+                elif _reused_pid_same_image(getattr(self, "_child_creation_stamp", None), target_pid):
+                    # L-14（2026-10-19）：映像名相同但创建时间对不上 = 号码已被**同名**进程接管。
+                    # 源码态下录制核心就叫 python.exe，与任何别的 python 进程同名，映像名判据
+                    # 在这一形态上完全失效；创建时间是每个进程独有的，能可靠区分。
+                    self._log(
+                        i18n_module.tr(
+                            "PID {pid} 的进程创建时间与录制核心不符（同映像名但已被复用），已跳过整树强杀",
+                            pid=target_pid,
+                        ),
+                        "warn",
+                    )
                     target_pid = None
             if sys.platform == "win32":
                 if target_pid is not None:

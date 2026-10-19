@@ -21,6 +21,7 @@ import traceback
 import zipfile
 from collections import OrderedDict
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable, ParamSpec, TypeVar, cast
 from urllib.parse import parse_qs, urlparse
@@ -220,7 +221,32 @@ async def run_js_async(js_path: str, func_name: str, *args: object, timeout: flo
         kwargs: dict[str, float] = {"timeout": timeout} if _js_runtime_accepts_timeout(call_fn) else {}
         return cast(object, call_fn(func_name, *args, **kwargs))
 
-    return await asyncio.wait_for(asyncio.to_thread(_sync_call), timeout=timeout)
+    return await asyncio.wait_for(
+        asyncio.get_running_loop().run_in_executor(_js_executor(), _sync_call), timeout=timeout
+    )
+
+
+# M-22（2026-10-19）：JS 阻塞段**不能**再丢进 `asyncio.to_thread` 的默认线程池。
+# 默认池由 asyncio 自己管：`asyncio.run()` 收尾时会 `shutdown_default_executor()`，
+# 而它给的是 **300 秒** join 超时——正好对上「内层超时语义失效 → 工作线程永久阻塞」这条
+# 已被文件注释列出的可达形态（PyExecJS 1.5.1 不收 timeout；execjs 在 kill 后又调一次不带
+# 超时的 communicate）。后果是房间线程整整停摆 5 分钟，且超时后线程被弃而未被 join。
+# 改自有池后 `asyncio.run` 不再等它，房间线程只受本函数的 `timeout` 约束。
+# 上限 4 个 worker：JS 签名调用是短任务，池只是「别冻结事件循环」的载体，堆大只会放大
+# 「一堆线程同时挂死」时的资源占用；线程在池内复用，不按次新建。
+# 残余风险（如实登记）：本池的 worker 仍是非守护线程，解释器退出时 threading._register_atexit
+# 的 _python_exit 仍会 join 它们——真正闭合要靠与 run_node_script_async 同构的自管 Popen
+# + communicate(timeout) + 进程树 kill，那是一套独立的签名执行链，不在本次修复范围。
+_JS_EXECUTOR: object | None = None
+_JS_EXECUTOR_LOCK = threading.Lock()
+
+
+def _js_executor() -> "ThreadPoolExecutor":
+    global _JS_EXECUTOR
+    with _JS_EXECUTOR_LOCK:
+        if _JS_EXECUTOR is None:
+            _JS_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="js-call")
+        return cast("ThreadPoolExecutor", _JS_EXECUTOR)
 
 
 # ── node 子进程超时后的进程树回收（L-19，2026-10-19）────────────────
@@ -430,18 +456,36 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
-def _make_trace_error_guard(func: Callable[P, R], fallback: R) -> Callable[P, R]:
+def _make_trace_error_guard(func: Callable[P, R], fallback_factory: Callable[[], R]) -> Callable[P, R]:
     # 错误追踪装饰器的共用实现（同步/异步两支）：吞掉异常并返回 fallback，日志同时标注函数名
     # 与兜底值类型，便于定位「错误被伪装成正常结果」的现场。两支除 await 外逻辑一致。
+    #
+    # M-24（2026-10-19）：fallback 由「一个值」改成「一个工厂」。原先装饰时只构造一次
+    # `{"is_live": False}`，76 处平台解析函数返回的是**同一个 dict 实例**——任何调用方对返回值
+    # 写入（补 anchor_name、缓存派生键、pop）都会污染全局兜底，污染持续到进程结束并跨房间、
+    # 跨轮次串数据。改成每次调用新建，这类「偶发脏数据」从结构上不再可能。
+    # 兜底值类型名仍在装饰时算一次（它只用于日志文案，不需要每次求值）。
+    fallback_type_name = type(fallback_factory()).__name__
     if inspect.iscoroutinefunction(func):
 
         @functools.wraps(func)
         async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
             try:
                 return cast(R, await func(*args, **kwargs))
-            except ProgramError:
-                logger.warning("Failed to execute JS code. Please check if the Node.js environment")
-                return fallback
+            except ProgramError as e:
+                # M-23（2026-10-19）：原实现只打一句硬编码英文、不含函数名/异常类型/异常内容，
+                # 与紧邻的 generic 分支口径完全不一致。后果两层：① 环境级故障（Node 缺失 /
+                # 签名脚本执行失败）被静默降级成「未开播」，用户看不到签名链已坏；② 非中文语言下
+                # 混入英文且无归因线索。现补齐 type/func/masked message 并走 i18n。
+                logger.warning(
+                    i18n.tr(
+                        "JS 执行环境异常（Node.js 缺失或签名脚本执行失败）: 类型: {type_name}, {masked} in function {func_name}",
+                        type_name=type(e).__name__,
+                        masked=mask_credentials(str(e)),
+                        func_name=func.__name__,
+                    )
+                )
+                return fallback_factory()
             except Exception as e:
                 tb = traceback.extract_tb(e.__traceback__) if e.__traceback__ else None
                 error_line = tb[-1].lineno if tb else "unknown"
@@ -451,10 +495,10 @@ def _make_trace_error_guard(func: Callable[P, R], fallback: R) -> Callable[P, R]
                 # 未来新增路径。
                 error_info = (
                     f"message: type: {type(e).__name__}, {mask_credentials(str(e))} in function {func.__name__}"
-                    f" at line: {error_line}, fallback type: {type(fallback).__name__}"
+                    f" at line: {error_line}, fallback type: {fallback_type_name}"
                 )
                 logger.error(error_info)
-                return fallback
+                return fallback_factory()
 
         return cast(Callable[P, R], async_wrapper)
 
@@ -462,19 +506,27 @@ def _make_trace_error_guard(func: Callable[P, R], fallback: R) -> Callable[P, R]
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
         try:
             return func(*args, **kwargs)
-        except ProgramError:
-            logger.warning("Failed to execute JS code. Please check if the Node.js environment")
-            return fallback
+        except ProgramError as e:
+            # M-23：与 async_wrapper 同口径（补齐归因 + i18n）
+            logger.warning(
+                i18n.tr(
+                    "JS 执行环境异常（Node.js 缺失或签名脚本执行失败）: 类型: {type_name}, {masked} in function {func_name}",
+                    type_name=type(e).__name__,
+                    masked=mask_credentials(str(e)),
+                    func_name=func.__name__,
+                )
+            )
+            return fallback_factory()
         except Exception as e:
             tb = traceback.extract_tb(e.__traceback__) if e.__traceback__ else None
             error_line = tb[-1].lineno if tb else "unknown"
             # L-32：同 async_wrapper——异常文本过码后再落日志
             error_info = (
                 f"message: type: {type(e).__name__}, {mask_credentials(str(e))} in function {func.__name__}"
-                f" at line: {error_line}, fallback type: {type(fallback).__name__}"
+                f" at line: {error_line}, fallback type: {fallback_type_name}"
             )
             logger.error(error_info)
-            return fallback
+            return fallback_factory()
 
     return wrapper
 
@@ -484,13 +536,14 @@ def trace_error_decorator(func: Callable[P, R]) -> Callable[P, R]:
     # get_xxx_stream_data）返回含 is_live 键的 dict，调用方据其判定未开播。返回 str/tuple/None
     # 的函数必须改用 trace_error_decorator_or_none，否则调用方会静默拿到一个 dict，把错误伪装成
     # 正常结果（解包时抛 ValueError 又被这层兜底二次吞掉，根因彻底丢失）。
-    return _make_trace_error_guard(func, cast(R, {"is_live": False}))
+    # M-24：传工厂而非共享实例（理由见 _make_trace_error_guard 的注释）。
+    return _make_trace_error_guard(func, lambda: cast(R, {"is_live": False}))
 
 
 def trace_error_decorator_or_none(func: Callable[P, R]) -> Callable[P, R]:
     # trace_error_decorator 的类型匹配变体：出错返回 None，供返回 str/tuple 等类型的函数
     # （login_*、get_*_info、get_*_tk）使用，调用方按 falsy 处理失败、判空后再解包。
-    return _make_trace_error_guard(func, cast(R, None))
+    return _make_trace_error_guard(func, lambda: cast(R, None))
 
 
 def check_md5(file_path: str | Path) -> str:
@@ -519,8 +572,8 @@ def sha256_of_file(path: str | Path) -> str:
 # 会被当成「已下载」并把错误哈希固化成基线、此后永久失败且不自愈。收敛到 utils 后两条安装路径
 # 共用同一判据。
 def is_valid_zip(path: str | Path) -> bool:
-    import zipfile
-
+    # L-48（2026-10-19）：删掉函数内重复的 `import zipfile`——模块顶已导入，函数内再导一次
+    # 除了制造「这里是不是有延迟导入理由」的疑问外没有任何作用（本函数不是导入期敏感的路径）。
     try:
         return bool(zipfile.is_zipfile(path))
     except OSError, ValueError:
@@ -629,9 +682,10 @@ def read_ini_value(file_path: str | Path, section: str, key: str) -> str | None:
     return None
 
 
-# F-16 兼容别名：保留旧名以免外部脚本/插件突然失效；新代码请用 read_ini_value。
-def read_config_value(file_path: str | Path, section: str, key: str) -> str | None:
-    return read_ini_value(file_path, section, key)
+# [L-48 2026-10-19] 此处原有 F-16 的兼容别名 `read_config_value = read_ini_value`（三参路径形态）。
+# 全仓核查后确认零调用点（main.py 的 100+ 处 `read_config_value(config, 节, 键, 默认)` 全部指向
+# src.config_io 的同名函数，签名不同），保留它只会让 F-16 想消除的「同名不同义」混淆继续存在。
+# 已删除；`utils.read_ini_value` 是唯一入口。
 
 
 # ── 原子写的可注入落盘原语（测试缝）─────────────────────────────
@@ -714,7 +768,11 @@ def atomic_write_text(file_path: str | Path, text: str, encoding: str = "utf-8-s
             except OSError:
                 pass
         _replace(tmp, path_str)
-    except OSError as e:
+    except (OSError, UnicodeError) as e:
+        # L-47（2026-10-19）：补 UnicodeError。原只接 OSError，而 `f.write(text)` 在 text 含
+        # 目标编码无法表示的字符时抛的是 UnicodeEncodeError（ValueError 子类）——它会穿出本函数，
+        # 且 `*.tmp` 已由 mkstemp 建好却没人删，留下一个半写的临时文件在配置目录里
+        # （备份/打包/云同步都会带上它）。清理与告警走与 OSError 完全相同的路径。
         logger.warning(i18n.tr("写入配置文件失败（已保留原文件）: {err}", err=e))
         try:
             os.remove(tmp)

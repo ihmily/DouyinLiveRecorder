@@ -82,8 +82,13 @@ def push_message(record_name: str, live_url: str, content: str) -> None:
                 )
             except Exception as e:
                 # f-string 直传 print_colored 提取器扫不到（盲区①），先查表后插值
+                # M-27（2026-10-19）：{e} 必须过 mask_credentials。推送渠道的 API URL 本身就是
+                # 凭据载体（息知 https://xizhi.qq.com/<key>、Bark https://api.day.app/<key>/…、
+                # TG .../bot<token>/sendMessage），而 urllib/requests 异常的 str() 常规把完整
+                # URL 连同 path 拼进消息——直传等于把密钥明文写进 logs/ 并按轮转保留多份。
+                # 同文件 run_script 的三处异常日志早已统一走 mask_credentials，此处是漏网点。
                 main.color_obj.print_colored(
-                    i18n.tr("直播消息推送到{platform}失败: {e}", platform=platform, e=e),
+                    i18n.tr("直播消息推送到{platform}失败: {e}", platform=platform, e=utils.mask_credentials(str(e))),
                     main.color_obj.RED,
                 )
 

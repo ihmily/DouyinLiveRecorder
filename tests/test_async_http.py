@@ -924,14 +924,28 @@ class TestBoundedResponseRead:
         assert response.text == "hello gzip"
 
     @pytest.mark.asyncio
-    async def test_redirect_hop_body_is_not_read(self) -> None:
-        # 中间 3xx 跳维持 httpx 既有的「丢弃不物化」形态：本函数不得顺手把它们读进内存
-        # （读了反而引入生产路径原本没有的新形态，且逐跳判定在更早的钩子段已完成）。
+    async def test_redirect_hop_body_is_bounded_like_any_other_hop(self) -> None:
+        # M-16（2026-10-19）：本用例原先锁的是「3xx 中间跳一律不读」（断言 stream.yielded == 0）。
+        # 那條契约的前提是「httpx 从不会物化中间跳正文」，实测不成立：钩子返回后、跟随重定向前，
+        # httpx 仍会对该跳执行一次**无上限且自动解压**的 aread()，并把带完整正文的 Response
+        # 存进 history——「302 + 超大 gzip 正文」因此完全绕过本上限（实测峰值 405MB）。
+        # 现改为锁「3xx 跳与其它跳同一条有界读取」：必须真的读、且读到上限后立刻判失败。
         response, stream = _stream_response(
             [b"redirect body"], status_code=302, headers={"location": "https://next.example.com/x"}
         )
         await async_http._bounded_response_read(response)
-        assert stream.yielded == 0
+        assert stream.yielded == 1
+        assert response.content == b"redirect body"
+
+    @pytest.mark.asyncio
+    async def test_redirect_hop_body_over_cap_is_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # M-16 的攻击形态：超大 3xx 正文不得因为「这是中间跳」而被跳过上限检查
+        monkeypatch.setattr(async_http, "_MAX_RESPONSE_BYTES", 8)
+        response, _stream = _stream_response(
+            [b"x" * 64], status_code=302, headers={"location": "https://next.example.com/x"}
+        )
+        with pytest.raises(ValueError, match="响应体"):
+            await async_http._bounded_response_read(response)
 
     @pytest.mark.asyncio
     async def test_preloaded_response_is_left_untouched(self) -> None:

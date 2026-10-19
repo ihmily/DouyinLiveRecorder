@@ -223,7 +223,7 @@ class TestFlvConvertBeforeCommentEnd:
         assert target is not None, "main.py 中找不到 _convert_if_flv 分支（MIN-2235 修复形态已丢失）"
         return target
 
-    def _drive(self, save_type: str) -> list[str]:
+    def _drive(self, save_type: str, started: bool = True) -> list[str]:
         stmts = self._branch_stmts()
         # 分支语句里含 `return`（comment_end 早退），必须包在函数体里才能编译
         fn = ast.FunctionDef(
@@ -241,7 +241,11 @@ class TestFlvConvertBeforeCommentEnd:
         mod = ast.Module(body=[fn], type_ignores=[])
         src = ast.unparse(ast.fix_missing_locations(mod))
         calls: list[str] = []
+        # L-01（2026-10-19）：分支判据现在含 `started`（ffmpeg 是否真的起来了）。
+        # 本用例执行的是生产源码的**真实语句块**，故必须把它一并注入命名空间——
+        # 默认真值（= 正常拉起）保持原断言语义不变；`started=False` 由下一条用例单独钉住。
         namespace: dict[str, Any] = {
+            "started": started,
             "record_save_type": save_type,
             "save_file_path": f"D:/rec/a.{save_type.lower()}",
             "split_video_by_time": False,
@@ -261,6 +265,13 @@ class TestFlvConvertBeforeCommentEnd:
         assert (
             len(calls) == expected
         ), f"{save_type} 在 comment_end 路径上转码调用次数应为 {expected}，实为 {len(calls)}"
+
+    @pytest.mark.parametrize("save_type", ["FLV", "MKV", "MP4"])
+    def test_not_started_never_converts(self, save_type: str) -> None:
+        # L-01（2026-10-19）：ffmpeg 起不来时（Popen 抛 OSError / 二进制缺失）断言里既无产物
+        # 也没有可转的文件，任何容器类型都不得提交转码——旧判据只看容器类型，仍会转一次，
+        # 把「本来就已失败」的一轮再包装成一条转码错误，真正原因被后一条日志盖住。
+        assert self._drive(save_type, started=False) == []
 
 
 # ────────────────────────────────────────────────────────────

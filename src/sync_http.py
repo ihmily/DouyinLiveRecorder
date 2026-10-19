@@ -258,6 +258,35 @@ def _read_capped(resp: "http.client.HTTPResponse | urllib.error.HTTPError", limi
     return data
 
 
+# Content-Encoding 的最外层编码（L-26，2026-10-19）：多值按 `,` 拆分后取最后一段并小写。
+# 「最外层」是 HTTP 语义里最后被施加、因此也最先需要被解掉的编码；取值大小写不敏感。
+def _outermost_content_encoding(raw: str | None) -> str:
+    if not raw:
+        return ""
+    tokens = [token.strip().lower() for token in raw.split(",") if token.strip()]
+    return tokens[-1] if tokens else ""
+
+
+def _read_capped_session(response: "requests.Response", encoding: str) -> str:
+    # M-18（2026-10-19）：代理分支的带上限读取。requests 的 iter_content 默认 decode_content=True，
+    # 因此累计到的是**解码后**字节——一次即同时覆盖「压缩体上限」与「解压炸弹」（产出必然 ≥ 压缩体
+    # 时才可能超限，此时先被本上限挡住）。上限取两道中较宽的那道：带 Content-Encoding 时用
+    # _MAX_DECOMPRESSED_BYTES，否则 _MAX_RESPONSE_BYTES，与直连路径同一取值口径。
+    # 超限抛 ValueError → sync_req 既有通用 except 记脱敏日志并返回空串（失败契约不变）。
+    compressed = bool((response.headers.get("Content-Encoding") or "").strip())
+    limit = _MAX_DECOMPRESSED_BYTES if compressed else _MAX_RESPONSE_BYTES
+    chunks: list[bytes] = []
+    total = 0
+    for chunk in response.iter_content(chunk_size=_READ_CHUNK_BYTES):
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > limit:
+            raise ValueError(f"响应体超过响应体上限 {limit} 字节，已拒绝该响应")
+        chunks.append(chunk)
+    return b"".join(chunks).decode(encoding)
+
+
 def _gunzip_capped(data: bytes, limit: int) -> bytes:
     # 分块解压：GzipFile 每次 read() 只解压够数的量，因此峰值内存受 limit 约束；
     # 用 gzip.decompress(data) 做不到这一点——它一次性把整棵树展开成完整字节。
@@ -313,6 +342,13 @@ def sync_req(
         if proxy_addr:
             # 使用代理的请求
             proxies = {"http": proxy_addr, "https": proxy_addr}
+            # M-18（2026-10-19）：代理分支原先不传 stream，`response.text` 由 requests/urllib3
+            # 自行解压 gzip/deflate/br，两道字节上限对它完全不生效——一小份高压缩比响应就能让
+            # 进程申请数 GB 内存。改 stream=True + 手工分块计数：requests 的 iter_content 默认
+            # 已按 Content-Encoding 解码，因此累计的是**解压后**字节，一次即覆盖两种形态
+            # （压缩体上限由累计产出上限顺带覆盖：产出 ≤ 压缩体时也不会有额外暴露面）。
+            # redirect_url 分支改读 response.url（requests 在 stream=True 下同样已完成重定向、
+            # 不物化正文），不再经过 .content。
             if data is not None or json_data is not None:
                 # POST 请求（带代理）
                 response = _session().post(
@@ -323,19 +359,16 @@ def sync_req(
                     proxies=proxies,
                     timeout=timeout,
                     verify=verify,
+                    stream=True,
                 )
             else:
                 # GET 请求（带代理）
-                response = _session().get(url, headers=headers, proxies=proxies, timeout=timeout, verify=verify)
+                response = _session().get(
+                    url, headers=headers, proxies=proxies, timeout=timeout, verify=verify, stream=True
+                )
             if redirect_url:
                 return response.url
-            # 已知残留缺口（如实写明，不假装闭合）：本分支的 `response.text` 由 requests/urllib3 自行
-            # 解码 gzip，**不受**上面两个上限保护（上限只对无代理的 urllib 路径生效）。补法要么改成
-            # stream=True + 手工分块（会让失败语义从「空串」变成「半途截断」，且打死
-            # tests/test_sync_http.py 对 Session 替身的既有契约），要么给 Session 挂 HTTPAdapter/max_size
-            # 钩子（requests 无此原生能力）。2026-09-23 那轮只收口了无代理 urllib 路径，代理侧同一风险随
-            # 「无生产 importer」一并交回维护者决策——不在无人调用的路径上顺手大改。
-            resp_str = response.text
+            resp_str = _read_capped_session(response, content_encoding)
         else:
             # 2026-09-12 审查 6.3：请求体的判定由真值（`if data and ...`）改为 `is not None`。
             # 原写法与上方代理分支（`data is not None or json_data is not None`）语义相反——
@@ -349,6 +382,15 @@ def sync_req(
             if json_data is not None and isinstance(json_data, (dict, list)):
                 data = json.dumps(json_data).encode(content_encoding)
 
+            # L-26（2026-10-19）：两条收紧。
+            # ① 显式声明 `Accept-Encoding: identity`（调用方没自己给时）——urllib 不会自动解压，
+            #    而服务器默认很可能回 gzip/deflate/br；让服务器别压是最省事也最省内存的做法。
+            # ② 编码识别按 `,` 拆分并取**最外层**（最后一段）。原实现只认 `== "gzip"`：
+            #    `gzip, br` 这类多值、或大小写变体都会落到 else 分支，把压缩字节当明文解码，
+            #    产出一串乱码交给调用方当有效响应解析（本仓最难归因的静默失败形态之一）。
+            #    仍只解 gzip：deflate 之外的 br/zstd 在 stdlib 侧没有解码器，显式判失败优于静默乱码。
+            if not any(key.lower() == "accept-encoding" for key in headers):
+                headers = {**headers, "Accept-Encoding": "identity"}
             req = urllib.request.Request(url, data=cast("bytes | None", data), headers=headers)
 
             try:
@@ -382,15 +424,18 @@ def sync_req(
                     # 响应编码与 gzip 解压：两个上限（读入 / 解压产出）都必需，
                     # 理由与取值口径见 _MAX_RESPONSE_BYTES 上方的整段说明——无上限时
                     # 一个被 MITM 的小响应就足以把整个录制进程打成 OOM。
-                    resp_encoding = _resp.headers.get("Content-Encoding")
+                    resp_encoding = _outermost_content_encoding(_resp.headers.get("Content-Encoding"))
                     if resp_encoding == "gzip":
                         resp_bytes = _gunzip_capped(
                             _read_capped(_resp, _MAX_RESPONSE_BYTES, "压缩响应体"), _MAX_DECOMPRESSED_BYTES
                         )
                         resp_str = resp_bytes.decode(content_encoding)
-                    else:
+                    elif resp_encoding in ("", "identity"):
                         # 未压缩时同一条读入上限即已足够
                         resp_str = _read_capped(_resp, _MAX_RESPONSE_BYTES, "响应体").decode(content_encoding)
+                    else:
+                        # L-26：不支持的编码（deflate/br/zstd/多段叠加）显式失败，不把压缩字节当明文解码
+                        raise ValueError(f"不支持的响应内容编码: {resp_encoding}")
                 finally:
                     _resp.close()
 
@@ -413,18 +458,11 @@ def sync_req(
                         raise
                 finally:
                     e.close()
-            except urllib.error.URLError as e:
-                # WD-01：URLError 的文本内嵌完整请求 URL（含签名/鉴权查询串），必须脱敏
-                logger.warning(i18n.tr("URL Error: {e}", e=utils.mask_credentials(str(e))))
-                raise
-            except Exception as e:
-                # 2026-09-12 审查（低危）：异常文本统一经 mask_credentials 脱敏——
-                # URLError/OSError 的文本常内嵌完整 URL（含 signature/token 查询串），
-                # 直连日志轮转保留多份＝凭据长期落盘（与 async_req 的脱敏口径对齐）。
-                logger.error(
-                    i18n.tr("An error occurred: {masked}", masked=utils.mask_credentials(f"{type(e).__name__}: {e}"))
-                )
-                raise
+            # L-27（2026-10-19）：此处原有 `except URLError`（warning + raise）与 `except Exception`
+            # （error + raise）两级再上抛，而最外层还有一个统一失败分支——同一次请求失败固定落
+            # 三条日志（两条 error、一条 warning），把轮转日志的有效容量浪费掉，排查时还要先分辨
+            # 三条里哪条是「真原因」。两级都只是「记一条 + 原样上抛」，外层已经做了同一件事
+            # （且带 type_name 与脱敏 URL），故整体删除、只留外层那一条。
 
     except Exception as e:
         # 请求失败统一记日志并返回空串：错误文本若伪装成响应体会被上游当有效数据解析。

@@ -116,6 +116,12 @@ class AdvancedSettingsDialog(QDialog):
         if not self._watch_timer.isActive():
             self._watch_timer.start()
 
+    def reload_from_disk(self) -> None:
+        # M-35（2026-10-19）：窗口被复用时（关闭后再次打开）必须重新读盘。复用实例而不重载
+        # 会把上次打开时那份快照继续显示出来——用户以为看到的是当前 config.ini，实际是旧内容，
+        # 保存时还会把中间的磁盘改动静默覆盖掉。
+        self._load_config()
+
     def _load_config(self) -> None:
         import os
 

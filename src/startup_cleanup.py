@@ -95,7 +95,11 @@ def _read_stamp(app_root: Path) -> tuple[str, str] | None:
     # 保守动作是清一次（只付一轮重编译），而不是静默放弃整个功能。
     try:
         text = _stamp_path(app_root).read_text(encoding="utf-8")
-    except OSError:
+    except OSError, UnicodeDecodeError:
+        # M-28（2026-10-19）：补 UnicodeDecodeError。Path.read_text(encoding="utf-8") 在基线
+        # 文件被写坏 / 被同步工具转成非 UTF-8 时抛的是 UnicodeDecodeError（ValueError 子类），
+        # 不属 OSError——它会穿透本函数。而本模块头的硬约束是「全程不抛：任何异常都不得让
+        # 录制主流程起不来」，一份损坏的 logs/.pyc_stamp 不该有能力卡死启动。
         return None
     version, separator, digest = text.strip().partition(_STAMP_SEPARATOR)
     if not separator or not version or not digest:
@@ -217,8 +221,10 @@ def purge_stale_bytecode_caches(app_root: str | Path, version: str, enabled: boo
         return PurgeResult(triggered=False, removed_dirs=0, freed_bytes=0, errors=0)
     try:
         return _purge(Path(app_root), version)
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:
         # 兜住遍历/哈希本身（含覆盖进行中的读文件竞态）：外围功能不得把一次 I/O 故障升级成启动失败
+        # M-28（2026-10-19）：补 UnicodeDecodeError——它是 ValueError 子类、不属 OSError，
+        # 基线文件编码损坏时会从这里穿到 main() 的启动路径（模块头的「全程不抛」是硬约束）。
         logger.warning(
             i18n.tr(
                 "字节码缓存清理未完成(忽略): {type_name}: {err}",

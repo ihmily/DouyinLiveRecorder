@@ -3805,3 +3805,41 @@ msgstr "回收 node 签名子进程树失败: {script} - {type_name}: {e}"
 
 msgid "配置文件备份未成功，本轮不更新备份基线（下轮将重试）: {file_path} - {type_name}: {e}"
 msgstr "配置文件备份未成功，本轮不更新备份基线（下轮将重试）: {file_path} - {type_name}: {e}"
+msgid "JS 执行环境异常（Node.js 缺失或签名脚本执行失败）: 类型: {type_name}, {masked} in function {func_name}"
+msgstr "JS 执行环境异常（Node.js 缺失或签名脚本执行失败）: 类型: {type_name}, {masked} in function {func_name}"
+
+msgid "PID {pid} 的进程创建时间与录制核心不符（同映像名但已被复用），已跳过整树强杀"
+msgstr "PID {pid} 的进程创建时间与录制核心不符（同映像名但已被复用），已跳过整树强杀"
+
+msgid "创建默认下载目录失败: {type_name}: {e}"
+msgstr "创建默认下载目录失败: {type_name}: {e}"
+
+msgid "后处理线程池排空超过 {budget} 秒，已放弃等待并继续退出（在途转封装可能留下半截产物）"
+msgstr "后处理线程池排空超过 {budget} 秒，已放弃等待并继续退出（在途转封装可能留下半截产物）"
+
+msgid "弹幕筛选刷新"
+msgstr "弹幕筛选刷新"
+
+msgid "推送地址协议不受支持（仅允许 http/https）: {scheme}"
+msgstr "推送地址协议不受支持（仅允许 http/https）: {scheme}"
+
+msgid "推送地址指向内部目标，已拒绝: {reason}"
+msgstr "推送地址指向内部目标，已拒绝: {reason}"
+
+msgid "推送地址缺少主机名"
+msgstr "推送地址缺少主机名"
+
+msgid "淘宝 cookie 回写配置失败（已忽略）: {type_name}: {e}"
+msgstr "淘宝 cookie 回写配置失败（已忽略）: {type_name}: {e}"
+
+msgid "状态栏刷新"
+msgstr "状态栏刷新"
+
+msgid "画质统计刷新"
+msgstr "画质统计刷新"
+
+msgid "读取录制状态失败，房间列表中的录制态标记为未知: {type_name}: {e}"
+msgstr "读取录制状态失败，房间列表中的录制态标记为未知: {type_name}: {e}"
+
+msgid "配置备份未能脱敏（解析失败：{e}），本次副本可能包含明文凭据，请勿外传"
+msgstr "配置备份未能脱敏（解析失败：{e}），本次副本可能包含明文凭据，请勿外传"

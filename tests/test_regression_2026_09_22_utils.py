@@ -593,7 +593,11 @@ class TestRunJsAsyncTimeoutBudget:
             for node in ast.walk(tree)
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
         }
-        assert {"wait_for", "to_thread"} <= attrs, "超时双保险被拆成单层"
+        # M-22（2026-10-19）：阻塞段不再走 asyncio.to_thread 的**默认**线程池——默认池由 asyncio
+        # 自己管，asyncio.run 收尾会 shutdown_default_executor() 并给 300 秒 join 超时，
+        # 内层超时失效时房间线程整整停摆 5 分钟。改为自有 _js_executor() + run_in_executor，
+        # 因此这里的判据从「必须有 to_thread」改成「必须是 wait_for + run_in_executor」。
+        assert {"wait_for", "run_in_executor"} <= attrs, "超时双保险被拆成单层"
         assert not any(isinstance(node, ast.Try) for node in ast.walk(tree)), "run_js_async 不得自行吞异常"
 
 

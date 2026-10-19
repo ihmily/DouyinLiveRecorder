@@ -1069,6 +1069,12 @@ class MainWindow(QMainWindow):
         # 停止是异步的（发 CTRL_BREAK 后还要等进程收尾），期间把两个按钮都禁用，
         # 由 _on_recorder_ended 统一恢复，避免连点触发第二次停止。
         if not self.recorder.is_running():
+            # M-34（2026-10-19）：这里不只是「没什么可停」，更是**按钮禁用态的唯一自救入口**。
+            # 若某次停止流程没投递结束事件（M-33 修复前的形态、或事件在投递途中丢失），
+            # 两个按钮会停在禁用态且界面无任何出口。既然此刻事实已判定为「未运行」，
+            # 就顺手把 UI 收敛回待机（_set_running_ui → dashboard.set_status 会重新启用开始按钮），
+            # 再告诉用户。仅弹框不动状态等于把「状态与事实不符」永久留在界面上。
+            self._set_running_ui(False)
             QMessageBox.warning(self, i18n.tr("警告"), i18n.tr("没有正在运行的录制进程！"))
             return
         self.recorder.stop_async()
@@ -1099,8 +1105,28 @@ class MainWindow(QMainWindow):
             dialog.set_focus()
             self._queue_log(i18n.tr("高级设置窗口已打开，已为你切换到该窗口"))
             return
-        self._advanced_dialog = AdvancedSettingsDialog(self, self.main_config_file, lambda msg: self._queue_log(msg))
-        self._advanced_dialog.show()
+        # M-35（2026-10-19）：旧实现在「旧实例不可见」时直接 new 一个覆盖引用，旧实例既没有
+        # WA_DeleteOnClose 也没有 deleteLater()，且 parent 是主窗口 → C++ 对象与它内部的
+        # QPlainTextEdit（含整份 config 文本）一直存活。开/关 N 轮即累积 N 份。
+        # 修法两条并用：已存在则复用（重新加载磁盘内容，避免显示上次的旧快照），
+        # 并置 WA_DeleteOnClose，让「关掉就不再占内存」成为属性层面的保证；
+        # 引用在 destroyed 里清空，避免留下指向已析构对象的悬空属性。
+        if dialog is not None:
+            dialog.reload_from_disk()
+            self._advanced_dialog = dialog
+            dialog.show()
+            dialog.set_focus()
+            return
+        dialog = AdvancedSettingsDialog(self, self.main_config_file, lambda msg: self._queue_log(msg))
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        dialog.destroyed.connect(self._on_advanced_dialog_destroyed)
+        self._advanced_dialog = dialog
+        dialog.show()
+
+    def _on_advanced_dialog_destroyed(self) -> None:
+        # M-35：destroyed 是 C++ 对象析构的最后一个信号，此时必须把 Python 侧引用清掉，
+        # 否则下次 open_advanced_settings 会拿到一个已析构的包装对象（访问即 RuntimeError）。
+        self._advanced_dialog = None
 
     # ─── 托盘 / 退出 ───
 
@@ -1162,6 +1188,14 @@ class MainWindow(QMainWindow):
         if self.tray is not None:
             self.tray.hide()
         self.close()
+        # S-03（2026-10-19）：`setQuitOnLastWindowClosed(False)`（app.py 为托盘语义必须关掉）之后，
+        # `close()` 只是销毁窗口、**不会**让 Qt 事件循环返回——旧实现到此结束，于是「彻底退出」
+        # 只关掉界面，进程留在后台（托盘图标已 hide、任务栏无窗口，用户只能去任务管理器杀）。
+        # 必须显式 quit() 才能让事件循环退出、装配函数返回。
+        # 取 instance() 而不是持有 app 引用：本类在离屏测试里也实例化，未必有 QApplication。
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt 的重写点必须这个名
         # 标题栏 X：给「最小化到托盘 / 完全退出」两条路径，与旧版 close dialog 同义。

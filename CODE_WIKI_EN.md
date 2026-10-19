@@ -1706,6 +1706,21 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 > (`python file.py <URL> [seconds]`; requires a live room + network; manual channel by default).
 > **Rolling archive**: this section keeps only the current release window; older entries live verbatim in [`docs/changelog/code-wiki-history-en.md`](docs/changelog/code-wiki-history-en.md) (rule stated in the "Changelog Archive Index" above).
 
+### v4.6.0-dev (2026-10-19) — 2026-10-19 review batch: all five severe issues fixed plus medium/low-severity convergence
+
+- **Instruction**: extract every issue from `CODE_REVIEW_2026-10-19.md`, locate and fix each one without refactoring beyond the review scope; explain rather than guess on ambiguous items; run the gates afterwards and report.
+- **Severe (5/5 fixed)**:
+  · **S-01** `scripts/agent_hook_guard.py`: the `tail` predicate in `_protected_hit` now accepts a boundary-character set (quotes/whitespace/closing brackets/end-of-string) instead of only path separators; `_RECURSIVE_FORCE_RE` gained split `-r -f` and long-option forms; the verb table gained `ri`/`os.removedirs`/`Clear-*`; `_BARE_WIDE_TOKENS` de-duplicated. Deformed corpora are pinned in `run_self_test()` (dict → list of tuples so one rule can carry several cases) and in `tests/test_agent_hook_guard.py`.
+  · **S-02** `src/config_io.py::_redact_ini_secrets`: switched to `tolerant_config_parser` (strict=False), removing the real-world fail-open where a duplicate key in a section raised `DuplicateOptionError` and returned unredacted text; a parse failure now logs an explicit warning.
+  · **S-03** `src/gui_qt/main_window.py::_finalize_quit`: `QApplication.instance().quit()` added at the end (with `setQuitOnLastWindowClosed(False)`, `close()` alone never returns from the event loop, leaving a zombie process).
+  · **S-04** `src/stream_select.py`: a security rejection on a body-derived hop now raises the internal control-flow exception `_DerivedHopRejected` (same pattern as `RedirectHopRejected`); `_validate_stream_url` gained a `security_rejected` out-param and `select_source_url` consults it before the `record_url` reuse branch — neither "last-resort release" nor "same-address reuse" can flip an internal target back to reachable. Two regression locks added.
+  · **S-05** `main.py::_interruptible_sleep` now returns whether it was interrupted, and both `continue` branches add a fixed `time.sleep(3)` when interrupted, removing the zero-delay busy loop in Web mode with an empty URL list.
+- **Medium (30/48 fixed, rest handed back)**: M-01, M-03, M-06, M-08, M-09, M-10, M-11, M-12, M-13, M-14, M-15, M-16, M-17, M-18, M-21, M-22, M-23, M-24, M-27, M-28, M-29, M-30, M-31, M-32, M-33, M-34, M-35 (details mirrored from the Chinese entry).
+- **Low (25/81 fixed; the report section heading says "55 items" but numbering runs to L-81 — numbering is authoritative)**: L-01~L-15, L-24~L-28, L-47, L-48, L-54, L-55, L-77 (details mirrored from the Chinese entry).
+- **i18n**: 13 new msgids registered in all four catalogs (`zh_CN.po` / `en_US.json` / `en_GB.json` / `zh_TW.yaml`); `scripts/extract_i18n_strings.py` reports 0 missing; `scripts/compile_po.py` regenerated the `.mo` (1146 entries).
+- **Verification**: all ten `scripts/run_gates.py` steps green (black / isort / mypy on three platforms / annotation check / coverage / full pytest with 0 warnings).
+- **Not completed / handed back**: see the "remaining items" table in the same-round summary reply; reasons fall into three classes — needs a design decision, needs real-device / cross-platform verification, or is a cross-module refactor beyond the review scope.
+
 ### v4.6.0-dev (2026-10-18) — Review follow-up: dead-code removal + the three §7.11 mechanized gates (R9/R10 plus two new lock files)
 
 - **Instruction**: delete `L-27`/`L-28` dead code, delete `scripts/patch_i18n_2026_09_12.py`, and land the report's §7.11 mechanized-gate suggestions. The first two were items handed back last round under "do not delete existing dead code"; the user has now decided.

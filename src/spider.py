@@ -319,15 +319,21 @@ async def _ensure_kuaishou_did(proxy_addr: OptionalStr = None) -> str:
     # M-8（2026-09-29）本轮没拿到新值的两条出口。全局留着的是**别的出口**的 did 时，既不能把它
     # 递给本次调用（那正是快路漏判 proxy 的那条泄漏路径，失败分支同样要走一遍），也不能清掉它
     # （对它自己的出口仍有效）。
-    if _cached_kuaishou_did and _cached_kuaishou_did_proxy != (proxy_addr or ""):
-        return ""
-    if _cached_kuaishou_did and (time.monotonic() - _cached_kuaishou_did_ts) >= _CREDENTIAL_TTL:
-        # TTL 已过期且本轮重取失败：旧值不再返回（原行为是永久返回旧值），回空串交调用方下轮重试
-        # 代理记录随值一并清空，保持「值非空 ⟺ 出口记录有效」这一对写入/清空同点的不变量。
-        _cached_kuaishou_did = ""
-        _cached_kuaishou_did_ts = 0.0
-        _cached_kuaishou_did_proxy = ""
-    return _cached_kuaishou_did
+    # M-10（2026-10-19）：整个「读三元组 → 判定 → 清三元组」必须在一把锁里完成。原实现在锁外读、
+    # 锁外写，与上方 314-318 的注释自相矛盾（那段明确要求三元组整组在锁内写，对称的
+    # _ensure_twitch_client_id 也确实持锁）：两个不同代理的房间并发走到这条清空路径时，
+    # 「值」与「出口记录」会交错写入，得到 proxy=A 的调用者拿到 proxy=B 的判定结果——
+    # 表现为间歇性 200 + 空 body 的风控症状。临界区零 await，可安全持锁。
+    with _kuaishou_did_lock:
+        if _cached_kuaishou_did and _cached_kuaishou_did_proxy != (proxy_addr or ""):
+            return ""
+        if _cached_kuaishou_did and (time.monotonic() - _cached_kuaishou_did_ts) >= _CREDENTIAL_TTL:
+            # TTL 已过期且本轮重取失败：旧值不再返回（原行为是永久返回旧值），回空串交调用方下轮重试
+            # 代理记录随值一并清空，保持「值非空 ⟺ 出口记录有效」这一对写入/清空同点的不变量。
+            _cached_kuaishou_did = ""
+            _cached_kuaishou_did_ts = 0.0
+            _cached_kuaishou_did_proxy = ""
+        return _cached_kuaishou_did
 
 
 async def _ensure_twitch_client_id(proxy_addr: OptionalStr = None) -> str:
@@ -458,6 +464,24 @@ def _dig_list(data: object, *keys: str | int) -> list[object]:
     return cast(list[object], value) if isinstance(value, list) else []
 
 
+# B站清晰度档位的排序键（M-14，2026-10-19）：current_qn 在实际响应里是 int，但风控页/
+# 降级响应可能给字符串或干脆缺键。原实现用 `itemgetter("current_qn")`，缺键即 KeyError、
+# 混杂 str/int 即 TypeError，两者都会被装饰器吞成「未开播」。统一折算成 int，取不到按 0，
+# 使「解析不出档位」只影响该元素排序，不影响整轮。
+def _qn_sort_key(item: object) -> int:
+    value = _dig(item, "current_qn")
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            return 0
+    return 0
+
+
 def _warn_api_abnormal(json_str: str, api_name: str, field: str, data: dict[str, object]) -> None:
     # MID-48：把「接口响应不符合预期」的成因分开落日志，替代原先「静默 KeyError → 未开播」。
     # ① 空响应：async_req 失败/被风控时归一为 ""（见 _get_str_response 注释）→ 网络或风控信号；
@@ -575,6 +599,37 @@ async def get_play_url_list(
     return play_url_list
 
 
+# 把抖音 ORIGIN（原画）线路注入 stream 段的候选表（M-08，2026-10-19）。
+#
+# 为什么必须逐路判空：三条注入路径原本都以 `if origin_url_list:` 作为「能注入」的依据，
+# 但 origin.main 非空**不代表**它的 hls / flv 键是非空字符串——真实响应里常见
+# `{"sdk_params": "..."}`（只带编码参数）或只下发单路。此时旧代码仍拼出
+# `"ORIGIN": "&codec="` 并合进候选表：ORIGIN 是原画首位候选，于是每轮先烧一次必败探针；
+# 上层若只取首选，还会以空地址起 ffmpeg，表现为「在播却漏录 / 反复重试」。
+# 三条路径（web 内联脚本、web 接口、app 接口）的 sdk_params 形态不同（一处已是 dict、
+# 另两处是 JSON 串），本函数两种都接；抽成一处也让三份逐字重复的实现不再各自漂移。
+def _inject_origin_urls(stream_section: dict[str, object], origin_url_list: dict[str, object]) -> None:
+    sdk_raw = origin_url_list.get("sdk_params", "")
+    if isinstance(sdk_raw, dict):
+        sdk_params = cast(dict[str, object], sdk_raw)
+    else:
+        sdk_params = _loads_dict(sdk_raw if isinstance(sdk_raw, str) else "")
+    vcodec = sdk_params.get("VCodec")
+    origin_hls_codec = vcodec if isinstance(vcodec, str) else ""
+
+    hls_v = origin_url_list.get("hls", "")
+    flv_v = origin_url_list.get("flv", "")
+    hls_s = hls_v if isinstance(hls_v, str) else ""
+    flv_s = flv_v if isinstance(flv_v, str) else ""
+    # 把 VCodec 拼进地址的 &codec= 查询参数，供后续 h265 判定与 ffmpeg 选流使用
+    if hls_s:
+        hls_pull_url_map = cast(dict[str, object], stream_section.get("hls_pull_url_map") or {})
+        stream_section["hls_pull_url_map"] = {"ORIGIN": hls_s + "&codec=" + origin_hls_codec, **hls_pull_url_map}
+    if flv_s:
+        flv_pull_url = cast(dict[str, object], stream_section.get("flv_pull_url") or {})
+        stream_section["flv_pull_url"] = {"ORIGIN": flv_s + "&codec=" + origin_hls_codec, **flv_pull_url}
+
+
 def _extract_room_data_from_html(html_str: str) -> dict[str, object]:
     # 从抖音直播间HTML页面提取房间数据（作为API失败时的回退方案）
     # 这是 web/enter 接口彻底失败后的兜底：HTML 内联了状态 JSON，但其结构随页面改版极不稳定，
@@ -634,21 +689,9 @@ def _extract_room_data_from_html(html_str: str) -> dict[str, object]:
                 # 这里只补 1 个右花括号：该片段在 "dash" 前被切断，结构比上面更浅一层。
                 origin_url_list = _loads_dict(match_json_str3.group(1) + "}")
         if origin_url_list:
-            sdk_params_field = cast(dict[str, object], origin_url_list.get("sdk_params") or {})
-            vcodec = sdk_params_field.get("VCodec")
-            origin_hls_codec = vcodec if isinstance(vcodec, str) else ""
-            hls_v = origin_url_list.get("hls", "")
-            flv_v = origin_url_list.get("flv", "")
-            hls_s = hls_v if isinstance(hls_v, str) else ""
-            flv_s = flv_v if isinstance(flv_v, str) else ""
-            # 把 VCodec 拼进地址的 &codec= 查询参数，供后续 h265 判定与 ffmpeg 选流使用；
-            # 再把 ORIGIN 线路合并到已有的 hls_pull_url_map / flv_pull_url 之前，优先于其它线路。
-            origin_m3u8 = {"ORIGIN": hls_s + "&codec=" + origin_hls_codec}
-            origin_flv = {"ORIGIN": flv_s + "&codec=" + origin_hls_codec}
-            hls_pull_url_map = cast(dict[str, object], stream_url_field.get("hls_pull_url_map") or {})
-            flv_pull_url = cast(dict[str, object], stream_url_field.get("flv_pull_url") or {})
-            stream_url_field["hls_pull_url_map"] = {**origin_m3u8, **hls_pull_url_map}
-            stream_url_field["flv_pull_url"] = {**origin_flv, **flv_pull_url}
+            # M-08（2026-10-19）：注入逻辑抽成 _inject_origin_urls，逐路判空后再进候选表
+            # （详见该函数的模块级说明：空 hls/flv 会产出 `"ORIGIN": "&codec="` 坏条目）。
+            _inject_origin_urls(stream_url_field, origin_url_list)
             hevc_flv_url = extract_douyin_hevc_flv_url(html_str)
             if hevc_flv_url:
                 stream_url_field["hevc_flv_url"] = hevc_flv_url
@@ -857,21 +900,8 @@ async def get_douyin_web_stream_data(
                             dict[str, object], cast(dict[str, object], parsed_data["origin"]).get("main") or {}
                         )
                         if origin_url_list:
-                            sdk_raw = origin_url_list.get("sdk_params", "")
-                            sdk_params = _loads_dict(sdk_raw if isinstance(sdk_raw, str) else "")
-                            vcodec = sdk_params.get("VCodec")
-                            origin_hls_codec = vcodec if isinstance(vcodec, str) else ""
-
-                            hls_v = origin_url_list.get("hls", "")
-                            flv_v = origin_url_list.get("flv", "")
-                            hls_s = hls_v if isinstance(hls_v, str) else ""
-                            flv_s = flv_v if isinstance(flv_v, str) else ""
-                            origin_m3u8 = {"ORIGIN": hls_s + "&codec=" + origin_hls_codec}
-                            origin_flv = {"ORIGIN": flv_s + "&codec=" + origin_hls_codec}
-                            hls_pull_url_map = cast(dict[str, object], stream_url.get("hls_pull_url_map") or {})
-                            flv_pull_url = cast(dict[str, object], stream_url.get("flv_pull_url") or {})
-                            stream_url["hls_pull_url_map"] = {**origin_m3u8, **hls_pull_url_map}
-                            stream_url["flv_pull_url"] = {**origin_flv, **flv_pull_url}
+                            # M-08（2026-10-19）：注入抽成 _inject_origin_urls，逐路判空后再进候选表
+                            _inject_origin_urls(stream_url, origin_url_list)
                     if hevc_flv_url:
                         stream_url["hevc_flv_url"] = hevc_flv_url
     # 任何解析异常都吞掉并回 {"anchor_name": ""}：不让单房间解析崩溃主循环，
@@ -1002,23 +1032,8 @@ async def get_douyin_app_stream_data(
                         origin_url_list = cast(
                             dict[str, object], cast(dict[str, object], parsed_data["origin"]).get("main") or {}
                         )
-                        sdk_raw = origin_url_list.get("sdk_params", "")
-                        sdk_params = _loads_dict(sdk_raw if isinstance(sdk_raw, str) else "")
-                        vcodec = sdk_params.get("VCodec")
-                        origin_hls_codec = vcodec if isinstance(vcodec, str) else ""
-
-                        hls_v = origin_url_list.get("hls", "")
-                        flv_v = origin_url_list.get("flv", "")
-                        hls_s = hls_v if isinstance(hls_v, str) else ""
-                        flv_s = flv_v if isinstance(flv_v, str) else ""
-                        # 把 VCodec 拼进地址的 &codec= 查询参数，供后续 h265 判定与 ffmpeg 选流使用；
-                        # ORIGIN 线路合并到已有线路之前、优先于其它线路（与 web 端实现同语义）。
-                        origin_m3u8 = {"ORIGIN": hls_s + "&codec=" + origin_hls_codec}
-                        origin_flv = {"ORIGIN": flv_s + "&codec=" + origin_hls_codec}
-                        hls_pull_url_map = cast(dict[str, object], stream_url.get("hls_pull_url_map") or {})
-                        flv_pull_url = cast(dict[str, object], stream_url.get("flv_pull_url") or {})
-                        stream_url["hls_pull_url_map"] = {**origin_m3u8, **hls_pull_url_map}
-                        stream_url["flv_pull_url"] = {**origin_flv, **flv_pull_url}
+                        # M-08（2026-10-19）：注入抽成 _inject_origin_urls，逐路判空后再进候选表
+                        _inject_origin_urls(stream_url, origin_url_list)
     # 任何解析异常都吞掉并回 {"anchor_name": ""}：不让单房间解析崩溃主循环，
     # 但副作用是「解析失败」与「未开播」被上游同样视作「需重试的不可录」，可能空转。
     except Exception as e:
@@ -1088,12 +1103,14 @@ async def get_tiktok_stream_data(
     }
 
     # 最多重试 3 次：TikTok 偶发返回半截 HTML（含 UNEXPECTED_EOF_WHILE_READING 截断标记），
-    # 这种脏响应解析必失败，所以先 sleep 1s 再重试，而不是立即报错终止。
-    for _ in range(3):
+    # 这种脏响应解析必失败，所以要退避 1s 再重试，而不是立即报错终止。
+    # L-28（2026-10-19）：退避只在「确认这一轮失败、且还有下一轮」时执行。原实现把
+    # `await asyncio.sleep(1)` 放在请求之后**无条件**执行——成功路径白等 1 秒（多房间并发时
+    # 直接摊在监控轮次上），最后一次失败也白等。
+    for _attempt in range(3):
         html_str = _get_str_response(
             await async_req(url=url, proxy_addr=proxy_addr, headers=headers, abroad=True, http2=False)
         )
-        await asyncio.sleep(1)  # 异步休眠，避免阻塞事件循环
         # 命中「该节点地区已停止运营 TikTok」公告页：属于代理节点地域被墙，必须抛错让用户换节点，
         # 而不是当成「未开播」静默放过。
         if "We regret to inform you that we have discontinued operating TikTok" in html_str:
@@ -1116,6 +1133,10 @@ async def get_tiktok_stream_data(
                 _warn_if_builtin_guest()
                 raise ConnectionError("Please check if your network can access the TikTok website normally")
             return _loads_dict(json_str)
+
+        # L-28：走到这里说明本轮是截断脏响应——**确认失败**，退避后再试；最后一轮不再等。
+        if _attempt < 2:
+            await asyncio.sleep(1)
 
     _warn_if_builtin_guest()
     raise ConnectionError(
@@ -1165,9 +1186,14 @@ async def get_kuaishou_stream_data(
             raise ValueError("Failed to find liveStream")
         # 内联串在 "gameInfo" 前被截断，补 1 个右花括号平衡结构。
         play_list = _loads_dict(play_list_matches[0] + "}")
-    except (AttributeError, IndexError, json.JSONDecodeError) as e:
+    except (ValueError, AttributeError, IndexError, json.JSONDecodeError) as e:
         # 只捕获「结构解析」类异常（页面改版/字段缺失/JSON 坏），按未开播返回；
         # 其它异常（如超时已由上层兜住）不在此吞掉，避免把非解析错误也误判成未开播而静默丢失根因。
+        # M-09（2026-10-19）：原元组漏了 ValueError，而 try 块内**主动抛出**的正是 ValueError
+        # （「找不到 __INITIAL_STATE__」「找不到 liveStream」两处），于是注释承诺的
+        # 「结构解析失败 → 记 Failed to parse JSON data 并按未开播返回」这条分支是死的：
+        # 页面改版时异常直穿装饰器，与「主播真未开播」在日志上完全同形。
+        # 元组里的 json.JSONDecodeError 保留（_loads_dict 若改变吞异常行为仍应被此处接住）。
         logger.error(i18n.tr("Failed to parse JSON data from {url}. Error: {e}", url=utils.mask_credentials(url), e=e))
         return {"type": 1, "is_live": False}
 
@@ -2036,17 +2062,28 @@ async def get_bilibili_stream_data(
         # stream_list 字段缺失即无可用流，返回 None
         if not stream_list:
             return None
-        format_list = stream_list[0].get("format", [])
+        # M-14（2026-10-19）：本段原先在 `_loads_dict` 之后回到裸下标与裸 itemgetter——
+        # `stream_list[0].get(...)` 假定元素是 dict、`itemgetter("current_qn")` 假定键必在、
+        # `stream_data["base_url"]` 假定键必在。整条函数其余部分已按 MID-48 用 _dig 收口，
+        # 这一段是缺口：B站改版或风控降级响应会在这些点抛 KeyError/TypeError，
+        # 再被装饰器吞成「未开播」，与真未开播完全同形。
+        format_list = _dig_list(stream_list, 0, "format")
         # format_list 字段缺失即无可用流，返回 None
         if not format_list:
             return None
-        stream_data_list = format_list[0].get("codec", [])
+        stream_data_list = _dig_list(format_list, 0, "codec")
         # stream_data_list 为空即无可用流，返回 None
         if not stream_data_list:
             return None
+        # 排序键同样收口：取不到 current_qn 的元素按 0 排到最后，而不是让整轮解析抛 KeyError。
+        # 非 dict 元素直接剔除——下游全是 `.get` 调用，留着它只会在更晚的地方炸。
         sorted_stream_list: list[dict[str, object]] = sorted(
-            stream_data_list, key=itemgetter("current_qn"), reverse=True
+            (cast(dict[str, object], item) for item in stream_data_list if isinstance(item, dict)),
+            key=_qn_sort_key,
+            reverse=True,
         )
+        if not sorted_stream_list:
+            return None
         # qn 字符串到「选择下标」的映射：10000=原画、400=蓝光、250=超清、150=高清、80=流畅。
         # MIN-2201 修复（2026-09-22）：原注释写「回退到**最高**可用清晰度」，但 min(映射值, qn_count-1)
         # 的实际语义是**就近向下取档**——sorted_stream_list 已按 current_qn 降序，映射下标越大档位越低，
@@ -2067,8 +2104,10 @@ async def get_bilibili_stream_data(
                 )
             )
         stream_data: dict[str, object] = sorted_stream_list[select_stream_index]
-        base_url = cast(str, stream_data["base_url"])
-        url_info = stream_data.get("url_info", [])
+        # M-14：裸下标改 _dig_str——`base_url` 缺失时返回空串，下游拼出的地址会在选源阶段
+        # 被形态闸判掉，而不是在这里抛 KeyError 把整轮解析变成「未开播」。
+        base_url = _dig_str(stream_data, "base_url")
+        url_info = _dig_list(stream_data, "url_info")
         # url_info 字段缺失即无可用流，返回 None
         if not url_info:
             return None
@@ -2858,7 +2897,16 @@ async def get_bigo_stream_url(
         if not web_url_match:
             raise ValueError("Failed to find web url")
         web_url = web_url_match.group(1)
-        room_id = web_url.split("&amp;h=")[-1]
+        # M-13（2026-10-19）：原为 `web_url.split("&amp;h=")[-1]`，未校验分隔符是否存在——
+        # og:url 不含该串时 room_id 会变成**整条 URL**，再被当作 siteId 提交；
+        # 且 &amp; 是 HTML 实体，先反转义再按 query 解析才是真实形态。
+        # 取不到 h 时退回路径末段（与下方 bigo.tv 直链分支同一优先级：query 的 h 更可靠）。
+        web_url = web_url.replace("&amp;", "&")
+        room_id = urllib.parse.parse_qs(urllib.parse.urlsplit(web_url).query).get("h", [""])[0]
+        if not room_id:
+            room_id = urllib.parse.urlsplit(web_url).path.rstrip("/").rsplit("/", maxsplit=1)[-1]
+        if not room_id:
+            raise ValueError("Failed to extract bigo room id from web url")
     else:
         if "&h=" in url:
             room_id = url.split("&h=")[-1]
@@ -2894,8 +2942,14 @@ async def get_bigo_stream_url(
         result |= {"title": live_title, "is_live": True, "m3u8_url": m3u8_url, "record_url": m3u8_url}
     # 未开播且接口没返回昵称时，退回抓房间页从 <title>/og:title 抠主播名（仅补全信息，不影响录制判定）。
     elif result["anchor_name"] == "":
+        # M-13（2026-10-19）：原为 `url.split("/")[3]`——`https://host`（三段）形态抛 IndexError，
+        # `https://host/` 形态取到空串并拼出 `//<room_id>`。分享/第三方落地页里这两种形态都真实存在，
+        # 而补名只是「不影响录制判定」的旁路功能，不该让它把整个解析拖红。
+        # 取路径段第 1 段（host 之后的第一段），缺失 / 为空串时退回 "bigo" 这一通用入口段。
+        url_path_segments = [seg for seg in urllib.parse.urlsplit(url).path.split("/") if seg]
+        site_segment = url_path_segments[0] if url_path_segments else "bigo"
         html_str = await async_req(
-            url=f'https://www.bigo.tv/{url.split("/")[3]}/{room_id}', proxy_addr=proxy_addr, headers=headers
+            url=f"https://www.bigo.tv/{site_segment}/{room_id}", proxy_addr=proxy_addr, headers=headers
         )
         html_str = _get_str_response(html_str)
         match_anchor_name = re.search("<title>欢迎来到(.*?)的直播间</title>", html_str, re.DOTALL)
@@ -3519,13 +3573,22 @@ async def get_qiandurebo_stream_data(
 
         # 离线/被封房间页会渲染 `common-text-center" style="display:block` 的占位提示，
         # 此串存在即视为未开播，避免把占位页里抽到的空 play_url 当成有效流录制。
-        if len(play_url) > 0 and 'common-text-center" style="display:block' not in html_str:
+        # M-12（2026-10-19）：`len(play_url) > 0` 校验的是**正则结果列表的长度**，不是地址串
+        # 是否非空——页面渲染出 `"play_url": ""` 时列表长度为 1、判据成立，于是返回
+        # 「is_live=True 且 record_url 为空串」的壳结果：上层每轮白烧一次探针，熔断统计还把这轮
+        # 记成解析成功样本。同型问题在 ShowRoom（MIN-2215）已按「取到真地址才算在播」修过，
+        # 这里是漏网点，口径对齐：确实拿不到地址就按异常告警 + 未开播返回。
+        play_url_value = play_url[0].strip() if play_url else ""
+        if play_url_value and 'common-text-center" style="display:block' not in html_str:
             result |= {
                 "anchor_name": anchor_name[0],
                 "is_live": True,
-                "flv_url": play_url[0],
-                "record_url": play_url[0],
+                "flv_url": play_url_value,
+                "record_url": play_url_value,
             }
+        elif play_url and not play_url_value:
+            # 字段存在但为空：按「响应不符合预期」归因，不返回 is_live=True 的壳结果
+            _warn_api_abnormal(data, "千度热播 user.play_url", "play_url", {})
     return result
 
 
@@ -5861,7 +5924,11 @@ async def get_yingke_stream_url(
         first_addr = _dig(live_data, "live_addr", 0)
         m3u8_url = _dig_str(first_addr, "hls_stream_addr")
         flv_url = _dig_str(first_addr, "stream_addr")
-        if not m3u8_url or not flv_url:
+        # M-11（2026-10-19）：必须「两路皆空」才判无源。原写法 `not m3u8_url or not flv_url` 要求
+        # HLS 与 FLV **同时存在**，于是只下发单路的房间被判 is_live=False；而「未开播」轮次在
+        # 上层是刻意静默的，结果是「在播却漏录且日志无任何线索」。口径与 MID-2212 在 Look / 微博 /
+        # LiveMe 定下的一致（那三处写的是 `and`，此处与浪 Live 是漏网点）。
+        if not m3u8_url and not flv_url:
             # 已判开播但地址列表为空/字段改名：与「未开播」区分，按无源返回
             _warn_api_abnormal(json_str, "映客 live_share_pc", "data.live_addr[0].hls_stream_addr", json_data)
             return result
@@ -6323,7 +6390,9 @@ async def get_langlive_stream_url(
     if live_status == 1:
         flv_url = _dig_str(live_info, "liveurl")
         m3u8_url = _dig_str(live_info, "liveurl_hls")
-        if not flv_url or not m3u8_url:
+        # M-11（2026-10-19）：同映客——「两路皆空」才判无源。原 `or` 要求两路同时存在，
+        # 只下发单路的房间会被判 is_live=False，而「未开播」轮次刻意静默 → 在播却漏录且无日志。
+        if not flv_url and not m3u8_url:
             # 已判开播却拿不到两路地址（改版/风控降级）：按无源返回并留线索
             _warn_api_abnormal(json_str, "浪Live room/liveinfo", "data.live_info.liveurl", json_data)
             return result
@@ -6846,8 +6915,20 @@ async def get_taobao_stream_url(
                             section="Cookie",
                         )
                     )
-            except (ImportError, OSError) as e:
-                logger.debug(i18n.tr("淘宝 cookie 回写配置失败（已忽略）: {type_name}", type_name=type(e).__name__))
+            except Exception as e:
+                # M-15（2026-10-19）：原只接 (ImportError, OSError)。utils.update_config /
+                # read_ini_value 抛出的其它类型（configparser 相关异常、编码异常、锁内重入错误等）
+                # 会穿透这两轮重试循环，把**已经拿到 SUCCESS 的取流结果**一起作废——
+                # 即「票据存不下来」反而导致本轮不录。回写是旁路动作，不该有这种权力。
+                # 级别同时从 debug 提到 warning：常规日志级别下看不到「票据每轮重刷」的成因，
+                # 用户只会看到反复走登录式刷新却查不出为什么。值仍然一律不落日志。
+                logger.warning(
+                    i18n.tr(
+                        "淘宝 cookie 回写配置失败（已忽略）: {type_name}: {e}",
+                        type_name=type(e).__name__,
+                        e=utils.mask_credentials(str(e)),
+                    )
+                )
 
         # ret 字段存在才进入解析；否则走循环重试换 token
         if json_data and "ret" in json_data:
@@ -7031,7 +7112,9 @@ async def get_jd_stream_url(url: str, proxy_addr: OptionalStr = None, cookies: O
 
         flv_url = _dig_str(json_data, "data", "videoUrl")
         m3u8_url = _dig_str(json_data, "data", "h5VideoUrl")
-        if not flv_url or not m3u8_url:
+        # M-11（2026-10-19）：与映客/浪Live 同型的漏网点（审查只点名了那两处，这里是同判据的第三处，
+        # 一并改正）：`or` 要求两路同时存在，只下发单路时会被判无源，而「未开播」轮次刻意静默。
+        if not flv_url and not m3u8_url:
             # status 已报开播却无地址：风控降级/字段改名，不是「未开播」
             _warn_api_abnormal(json_str, "京东 getImmediatePlayToM", "data.videoUrl / data.h5VideoUrl", json_data)
             return result

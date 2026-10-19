@@ -152,7 +152,11 @@ class TestSyncReq:
         mock_session = MagicMock()
         mock_session_fn.return_value = mock_session
         mock_response = MagicMock()
-        mock_response.text = "proxy response"
+        # M-18（2026-10-19）：代理分支改为 stream=True + iter_content 分块计数，响应体不再取
+        # .text（requests 会先无上限地全量解码）。替身因此要给 iter_content 供块、并给出
+        # headers（上限选择依赖 Content-Encoding）。
+        mock_response.headers = {}
+        mock_response.iter_content.return_value = [b"proxy response"]
         mock_response.url = "http://example.com"
         mock_session.get.return_value = mock_response
 
@@ -168,7 +172,9 @@ class TestSyncReq:
         mock_session = MagicMock()
         mock_session_fn.return_value = mock_session
         mock_response = MagicMock()
-        mock_response.text = "post response"
+        # M-18（同 test_proxy_get_request）：体走 iter_content 分块交付
+        mock_response.headers = {}
+        mock_response.iter_content.return_value = [b"post response"]
         mock_response.url = "http://example.com"
         mock_session.post.return_value = mock_response
 
@@ -199,7 +205,9 @@ class TestSyncReq:
         mock_session = MagicMock()
         mock_session_fn.return_value = mock_session
         mock_response = MagicMock()
-        mock_response.text = "json response"
+        # M-18（同 test_proxy_get_request）：体走 iter_content 分块交付
+        mock_response.headers = {}
+        mock_response.iter_content.return_value = [b"json response"]
         mock_response.url = "http://example.com"
         mock_session.post.return_value = mock_response
 
@@ -321,8 +329,10 @@ class TestSyncReq:
 
         with patch("src.sync_http.logger") as mock_logger:
             result = sync_req("http://example.com")
-            # 错误被记录（原 URLError 已 warning 级），且结果不再包含错误文本
-            mock_logger.warning.assert_called_once()
+            # L-27（2026-10-19）：同一次失败现在只落**一条** error（最外层统一失败分支）。
+            # 原实现在内层还有两条「记一条 + 原样上抛」，于是同一次请求固定产生
+            # warning + error + error 三条日志；三条都只描述同一件事，纯属浪费轮转容量。
+            mock_logger.warning.assert_not_called()
             mock_logger.error.assert_called_once()
         assert result == ""
         assert "connection refused" not in result
