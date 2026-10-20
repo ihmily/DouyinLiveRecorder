@@ -207,6 +207,7 @@ from src.ui_i18n import T, Translatable, apply_title, retranslate_all
 from src.ui_kit import (
     NAV_ACTIVE_STYLE,
     NAV_STYLE,
+    TAG_NORMAL,
     Button,
     DataTable,
     EditorText,
@@ -2656,7 +2657,7 @@ class LiveRecorderGUI:
         soft_danger = _mix(tokens["danger"], tokens["surface"], 0.9)
         self._quality_table.restyle_tags(
             {
-                "normal": {"foreground": tokens["text"], "background": tokens["surface_alt"]},
+                TAG_NORMAL: {"foreground": tokens["text"], "background": tokens["surface_alt"]},
                 "downgraded": {
                     "foreground": tokens["danger"],
                     "background": soft_danger,
@@ -2666,7 +2667,7 @@ class LiveRecorderGUI:
         )
         self._dm_table.restyle_tags(
             {
-                "normal": {"foreground": tokens["text"], "background": tokens["surface_alt"]},
+                TAG_NORMAL: {"foreground": tokens["text"], "background": tokens["surface_alt"]},
                 "disconnected": {"foreground": tokens["text_muted"], "background": tokens["surface_alt"]},
             }
         )
@@ -4184,7 +4185,7 @@ class LiveRecorderGUI:
                     tag = "warn"
                 else:
                     display_text = f"[{timestamp}] {message}\n"
-                    tag = "normal"
+                    tag = TAG_NORMAL
 
                 self.log_text.insert(tk.END, display_text, tag)
 
@@ -4408,7 +4409,7 @@ class LiveRecorderGUI:
             # 行级标记：降级行整行红字 + 浅红底（颜色由 _sync_table_tags 按 token 配置；
             # 旧实现「实际/状态列各自着色」的逐格形态在 Treeview 下不可表达——
             # tag 是行级的，✓/⚠ 字形保留状态语义）
-            tags[name] = ("downgraded",) if downgraded else ("normal",)
+            tags[name] = ("downgraded",) if downgraded else (TAG_NORMAL,)
         for gone in set(self._quality_row_setq) - set(keys):
             del self._quality_row_setq[gone]
         self._highlight_changed_rows(self._quality_table, self._quality_table.sync(keys, values, tags))
@@ -4701,7 +4702,7 @@ class LiveRecorderGUI:
                 str(row["online"]),
                 str(row["started_at"]),
             )
-            tags[name] = ("normal",) if connected else ("disconnected",)
+            tags[name] = (TAG_NORMAL,) if connected else ("disconnected",)
         self._highlight_changed_rows(self._dm_table, self._dm_table.sync(keys, values, tags))
         self._show_danmaku_placeholder(not rows)
 

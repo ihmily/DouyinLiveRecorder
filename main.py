@@ -87,7 +87,6 @@ import configparser
 import datetime
 import random
 import re
-import shutil
 import signal
 import subprocess
 import threading
@@ -476,7 +475,6 @@ host_id: re.Match[str] | None = None
 input_url: str = ""
 is_comment_line: bool = False
 line: str = ""
-line_list: set[str] = set()  # 主循环内用于检测重复配置行，只做成员检测，用 set 保证 O(1)
 line_spilt: list[str] = []
 middle: str = ""
 name: str = ""
@@ -494,7 +492,6 @@ t: threading.Thread | None = None
 t2: threading.Thread | None = None
 url: str = ""
 url_host: str = ""
-url_line_list: set[str] = set()  # 主循环内已解析的 URL，只做成员检测，用 set 保证 O(1)
 url_tuple: tuple[str, ...] = ()
 
 _recorder_thread = None  # 由 web.py 设置，用于 get_status() 检测存活
@@ -2199,7 +2196,6 @@ def _resolve_douyu_com(ctx: _PlatformResolveContext) -> None:
 def _resolve_yy_com(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
     proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
     platform = "未知平台"
     port_info: dict[str, Any] = {}
     record_danmaku_args: dict[str, Any] | None = None
@@ -2385,7 +2381,6 @@ def _resolve_b23_tv(ctx: _PlatformResolveContext) -> None:
 def _resolve_xhslink_com(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
     proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
     platform = "未知平台"
     port_info: dict[str, Any] = {}
     record_danmaku_args: dict[str, Any] | None = None
@@ -2420,7 +2415,6 @@ def _resolve_xhslink_com(ctx: _PlatformResolveContext) -> None:
 def _resolve_bigo_tv(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
     proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
     platform = "未知平台"
     port_info: dict[str, Any] = {}
     record_danmaku_args: dict[str, Any] | None = None
@@ -2437,7 +2431,6 @@ def _resolve_bigo_tv(ctx: _PlatformResolveContext) -> None:
 def _resolve_app_blued_cn(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
     proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
     platform = "未知平台"
     port_info: dict[str, Any] = {}
     record_danmaku_args: dict[str, Any] | None = None
@@ -2524,7 +2517,6 @@ def _resolve_cc_163_com(ctx: _PlatformResolveContext) -> None:
 def _resolve_qiandurebo_com(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
     proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
     platform = "未知平台"
     port_info: dict[str, Any] = {}
     record_danmaku_args: dict[str, Any] | None = None
@@ -2566,7 +2558,6 @@ def _resolve_pandalive_co_kr(ctx: _PlatformResolveContext) -> None:
 def _resolve_fm_missevan_com(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
     proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
     platform = "未知平台"
     port_info: dict[str, Any] = {}
     record_danmaku_args: dict[str, Any] | None = None
@@ -2657,7 +2648,6 @@ def _resolve_flextv_co_kr(ctx: _PlatformResolveContext) -> None:
 def _resolve_look_163_com(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
     proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
     platform = "未知平台"
     port_info: dict[str, Any] = {}
     record_danmaku_args: dict[str, Any] | None = None
@@ -2676,7 +2666,6 @@ def _resolve_look_163_com(ctx: _PlatformResolveContext) -> None:
 def _resolve_popkontv_com(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
     proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
     platform = "未知平台"
     port_info: dict[str, Any] = {}
     record_danmaku_args: dict[str, Any] | None = None
@@ -2816,7 +2805,6 @@ def _resolve_weibo_com(ctx: _PlatformResolveContext) -> None:
 def _resolve_kugou_com(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
     proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
     platform = "未知平台"
     port_info: dict[str, Any] = {}
     record_danmaku_args: dict[str, Any] | None = None
@@ -2875,7 +2863,6 @@ def _resolve_twitch_tv(ctx: _PlatformResolveContext) -> None:
 def _resolve_liveme_com(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
     proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
     platform = "未知平台"
     port_info: dict[str, Any] = {}
     record_danmaku_args: dict[str, Any] | None = None
@@ -2897,7 +2884,6 @@ def _resolve_liveme_com(ctx: _PlatformResolveContext) -> None:
 def _resolve_huajiao_com(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
     proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
     platform = "未知平台"
     port_info: dict[str, Any] = {}
     record_danmaku_args: dict[str, Any] | None = None
@@ -2916,7 +2902,6 @@ def _resolve_huajiao_com(ctx: _PlatformResolveContext) -> None:
 def _resolve_n7u66_com(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
     proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
     platform = "未知平台"
     port_info: dict[str, Any] = {}
     record_danmaku_args: dict[str, Any] | None = None
@@ -2975,7 +2960,6 @@ def _resolve_live_acfun_cn(ctx: _PlatformResolveContext) -> None:
 def _resolve_live_tlclw_com(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
     proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
     platform = "未知平台"
     port_info: dict[str, Any] = {}
     record_danmaku_args: dict[str, Any] | None = None
@@ -2994,7 +2978,6 @@ def _resolve_live_tlclw_com(ctx: _PlatformResolveContext) -> None:
 def _resolve_ybw1666_com(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
     proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
     platform = "未知平台"
     port_info: dict[str, Any] = {}
     record_danmaku_args: dict[str, Any] | None = None
@@ -3013,7 +2996,6 @@ def _resolve_ybw1666_com(ctx: _PlatformResolveContext) -> None:
 def _resolve_inke_cn(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
     proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
     platform = "未知平台"
     port_info: dict[str, Any] = {}
     record_danmaku_args: dict[str, Any] | None = None
@@ -3032,7 +3014,6 @@ def _resolve_inke_cn(ctx: _PlatformResolveContext) -> None:
 def _resolve_zhihu_com(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
     proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
     platform = "未知平台"
     port_info: dict[str, Any] = {}
     record_danmaku_args: dict[str, Any] | None = None
@@ -3071,7 +3052,6 @@ def _resolve_chzzk_naver_com(ctx: _PlatformResolveContext) -> None:
 def _resolve_haixiutv_com(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
     proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
     platform = "未知平台"
     port_info: dict[str, Any] = {}
     record_danmaku_args: dict[str, Any] | None = None
@@ -3090,7 +3070,6 @@ def _resolve_haixiutv_com(ctx: _PlatformResolveContext) -> None:
 def _resolve_vvxqiu_com(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
     proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
     platform = "未知平台"
     port_info: dict[str, Any] = {}
     record_danmaku_args: dict[str, Any] | None = None
@@ -3109,7 +3088,6 @@ def _resolve_vvxqiu_com(ctx: _PlatformResolveContext) -> None:
 def _resolve_n17_live(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
     proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
     platform = "未知平台"
     port_info: dict[str, Any] = {}
     record_danmaku_args: dict[str, Any] | None = None
@@ -3128,7 +3106,6 @@ def _resolve_n17_live(ctx: _PlatformResolveContext) -> None:
 def _resolve_lang_live(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
     proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
     platform = "未知平台"
     port_info: dict[str, Any] = {}
     record_danmaku_args: dict[str, Any] | None = None
@@ -3147,7 +3124,6 @@ def _resolve_lang_live(ctx: _PlatformResolveContext) -> None:
 def _resolve_m_pp_weimipopo_com(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
     proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
     platform = "未知平台"
     port_info: dict[str, Any] = {}
     record_danmaku_args: dict[str, Any] | None = None
@@ -3166,7 +3142,6 @@ def _resolve_m_pp_weimipopo_com(ctx: _PlatformResolveContext) -> None:
 def _resolve_n6_cn(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
     proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
     platform = "未知平台"
     port_info: dict[str, Any] = {}
     record_danmaku_args: dict[str, Any] | None = None
@@ -3185,7 +3160,6 @@ def _resolve_n6_cn(ctx: _PlatformResolveContext) -> None:
 def _resolve_lehaitv_com(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
     proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
     platform = "未知平台"
     port_info: dict[str, Any] = {}
     record_danmaku_args: dict[str, Any] | None = None
@@ -3204,7 +3178,6 @@ def _resolve_lehaitv_com(ctx: _PlatformResolveContext) -> None:
 def _resolve_h_catshow168_com(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
     proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
     platform = "未知平台"
     port_info: dict[str, Any] = {}
     record_danmaku_args: dict[str, Any] | None = None
@@ -3258,7 +3231,6 @@ def _build_shopee_record_url(record_url: str, uid: str) -> str:
 def _resolve_live_shopee(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
     proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
     platform = "未知平台"
     port_info: dict[str, Any] = {}
     record_danmaku_args: dict[str, Any] | None = None
@@ -3329,7 +3301,6 @@ def _resolve_tb_cn(ctx: _PlatformResolveContext) -> None:
 def _resolve_n3_cn(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
     proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
     platform = "未知平台"
     port_info: dict[str, Any] = {}
     record_danmaku_args: dict[str, Any] | None = None
@@ -3369,7 +3340,6 @@ def _resolve_faceit_com(ctx: _PlatformResolveContext) -> None:
 def _resolve_miguvideo_com(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
     proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
     platform = "未知平台"
     port_info: dict[str, Any] = {}
     record_danmaku_args: dict[str, Any] | None = None
@@ -3388,7 +3358,6 @@ def _resolve_miguvideo_com(ctx: _PlatformResolveContext) -> None:
 def _resolve_show_lailianjie_com(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
     proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
     platform = "未知平台"
     port_info: dict[str, Any] = {}
     record_danmaku_args: dict[str, Any] | None = None
@@ -3407,7 +3376,6 @@ def _resolve_show_lailianjie_com(ctx: _PlatformResolveContext) -> None:
 def _resolve_imkktv_com(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
     proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
     platform = "未知平台"
     port_info: dict[str, Any] = {}
     record_danmaku_args: dict[str, Any] | None = None
@@ -3426,7 +3394,6 @@ def _resolve_imkktv_com(ctx: _PlatformResolveContext) -> None:
 def _resolve_picarto_tv(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
     proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
     platform = "未知平台"
     port_info: dict[str, Any] = {}
     record_danmaku_args: dict[str, Any] | None = None
@@ -3444,8 +3411,6 @@ def _resolve_picarto_tv(ctx: _PlatformResolveContext) -> None:
 
 def _resolve_custom_stream(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
-    proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
     platform = "未知平台"
     port_info: dict[str, Any] = {}
     record_danmaku_args: dict[str, Any] | None = None
@@ -3470,12 +3435,6 @@ def _resolve_custom_stream(ctx: _PlatformResolveContext) -> None:
 
 def _resolve_unrecognized(ctx: _PlatformResolveContext) -> None:
     record_url = ctx.record_url
-    proxy_address = ctx.proxy_address
-    record_quality = ctx.record_quality
-    platform = "未知平台"
-    port_info: dict[str, Any] = {}
-    record_danmaku_args: dict[str, Any] | None = None
-    new_record_url = ""
     logger.error(
         i18n.tr(
             "无法识别的直播地址，本轮跳过: {record_url}",
@@ -5139,7 +5098,7 @@ t3.start()
 config: configparser.RawConfigParser = tolerant_config_parser()
 
 
-_config_read_result = config.read(config_file, encoding=text_encoding)
+config.read(config_file, encoding=text_encoding)
 
 # 重复键点名（2026-10-17 事故：同节两行同名键让 strict=True 的默认解析器抛
 # DuplicateOptionError，上方那次 config.read() 正是「录制核心 import 即崩」的第一现场）。
@@ -5317,7 +5276,7 @@ def main(non_interactive: bool = False) -> None:
     global dingtalk_is_atall, dingtalk_phone_num, disable_record, disk_limited, disk_space_limit, douyu_cookie, dy_cookie, email_host, email_password, enable_https_recording, enable_proxy_platform, enable_proxy_platform_list, exit_recording
     global extra_enable_proxy, extra_enable_proxy_platform_list, faceit_cookie, filename_by_title, first_run, first_start, flextv_cookie, flextv_password, flextv_username, folder_by_author, folder_by_time, folder_by_title
     global haixiu_cookie, hls_collection_enabled, hls_collection_exclude_platforms, host_id, huajiao_cookie, huamao_cookie, hy_cookie, ini_URL_content, input_url, is_comment_line, is_run_script, jd_cookie, ks_cookie, kugou_cookie
-    global laixiu_cookie, langlive_cookie, language, lehaitv_cookie, lianjie_cookie, line, line_list, line_spilt, liuxing_cookie, live_status_push, liveme_cookie, local_delay_default, login_email
+    global laixiu_cookie, langlive_cookie, language, lehaitv_cookie, lianjie_cookie, line, line_spilt, liuxing_cookie, live_status_push, liveme_cookie, local_delay_default, login_email
     global look_cookie, loop_time, maoerfm_cookie, max_request, middle, migu_cookie, monitoring, name, netease_cookie, new_line, new_url, new_word
     global ntfy_api, ntfy_email, ntfy_tags, open_smtp_ssl, origin_line, over_push_message_text, over_show_push, pandatv_cookie, picarto_cookie, popkontv_access_token, popkontv_partner_code, popkontv_password
     global popkontv_username, pplive_cookie, proxy_addr, proxy_addr_bak, push_check_seconds, push_message_title, pushplus_token, qiandurebo_cookie, quality, replace_words, running_snapshot, running_url
@@ -5327,7 +5286,7 @@ def main(non_interactive: bool = False) -> None:
     # 上一次原始配置值，用于「值变化时才重跑」的幂等判定）
     global max_record_seconds, _last_ssl_disable_platforms_raw
     global split_line, split_time, split_video_by_time, start_with, t, t2, taobao_cookie, text_no_repeat_url, tg_chat_id, tg_token, tiktok_cookie, to_email
-    global twitcasting_account_type, twitcasting_cookie, twitcasting_password, twitcasting_username, twitch_cookie, url, url_comments, url_host, url_line_list, url_tuple, url_tuples_list, use_proxy
+    global twitcasting_account_type, twitcasting_cookie, twitcasting_password, twitcasting_username, twitch_cookie, url, url_comments, url_host, url_tuple, url_tuples_list, use_proxy
     global video_record_quality, video_save_path, video_save_type, video_save_type_list, vvxqiu_cookie, weibo_cookie, winktv_cookie, xhs_cookie, xizhi_api_url, yinbo_cookie, yingke_cookie, yiqilive_cookie
     global youtube_cookie, yy_cookie, zhihu_cookie
 
@@ -5713,9 +5672,9 @@ def main(non_interactive: bool = False) -> None:
             # 三者均只用于成员检测：原为 list，导致本循环内每行的 `in` 都是 O(N) 线性扫描，
             # 80+ 房间时退化成 O(N²)；改 set 后为 O(1)，且消除下方 url_comments 的整表重建。
             # MID-2203 修复（2026-09-22）：解析过程先写**局部**集合，整轮解析成功后
-            # （本 try 末尾）再整体替换全局。原写法在解析开始前就把 url_comments /
-            # line_list / url_line_list / seen_urls 逐个重绑成空 set，而房间线程与主循环
-            # 全程都在读这几个全局集合：
+            # （本 try 末尾）再整体替换全局 url_comments。原写法在解析开始前就把
+            # url_comments 与当时的 line_list / url_line_list / seen_urls 逐个重绑成空 set，
+            # 而房间线程与主循环全程都在读 url_comments：
             #   ① 解析窗口内 url_comments 恒空 → 用户刚注释掉的房间被判定为「未注释」，
             #      本轮又被拉起，出现「注释了却还在录」；
             #   ② 解析中途抛错（文件被占用 / 正则回溯 / 写回失败）走外层 except，全局集合
@@ -5912,14 +5871,12 @@ def main(non_interactive: bool = False) -> None:
                     _url_comments.add(running_url)
 
             # MID-2203（2026-09-22）：整轮解析（含上面 running_snapshot 归并）走完且未抛错，
-            # 此刻才把三个集合整体换位。解析中途抛错时全局集合保持上一轮的值，
-            # 房间线程看到的始终是「一份完整、自洽的注释/去重状态」，而不是空集。
-            # L-05（2026-10-02）：换位项由四项减为三项——模块级 seen_urls 全局是「只写不读」的死
-            # 变量（去重实际消费的是局部 _seen_urls），删全局声明后本行只会绑定一个无人读取的
-            # 函数局部名，一并删除。
+            # 此刻才把全局注释集合整体换位。解析中途抛错时全局集合保持上一轮的值，
+            # 房间线程看到的始终是「一份完整、自洽的注释状态」，而不是空集。
+            # L-05（2026-10-02）已删去只写不读的模块级 seen_urls；本轮复核又确认
+            # line_list / url_line_list 同样只写不读（局部 _line_list / _url_line_list 才是消费者），
+            # 故换位项只剩 url_comments。
             url_comments = _url_comments
-            line_list = _line_list
-            url_line_list = _url_line_list
 
             # 原为 list(set(...))：去重的同时把配置顺序打乱，导致每轮启动/新增房间的顺序随机
             # （日志与「序号N」提示随之抖动）。dict.fromkeys 保序去重，且同为 O(N)。

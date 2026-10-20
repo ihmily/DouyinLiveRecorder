@@ -194,18 +194,6 @@ def session() -> requests.Session:
     return _session()
 
 
-def close_session() -> None:
-    # 关闭当前线程的 Session 并释放其连接池（房间线程退出路径可显式调用）。
-    # 关闭后下次 _session() 会重建，不影响后续请求
-    session: requests.Session | None = getattr(_thread_local, "session", None)
-    if session is not None:
-        _thread_local.session = None
-        try:
-            session.close()
-        except Exception:
-            pass
-
-
 def close_all_sessions() -> None:
     # 进程退出时统一关闭所有线程（含主线程）的 Session 连接池，由 atexit 调用；
     # WeakSet 快照迭代受 _IterationGuard 保护，期间条目被 GC 移除也安全

@@ -13,10 +13,8 @@ import asyncio
 import json
 import re
 import struct
-import zlib
 from typing import Any, Union
 
-import brotli
 from loguru import logger
 
 import i18n

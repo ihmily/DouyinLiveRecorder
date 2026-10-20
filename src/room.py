@@ -8,19 +8,12 @@ import re
 import threading
 import time
 import urllib.parse
-
-import i18n
-from src.logger import logger
-
-# 优先使用 exejs（PyExecJS 的活跃维护继任者），未安装时回退到 PyExecJS
-try:
-    import exejs as execjs
-except ImportError:
-    import execjs  # type: ignore[no-redef]
-
 from typing import cast
 
 import httpx
+
+import i18n
+from src.logger import logger
 
 from . import JS_SCRIPT_PATH, http_config, utils
 from .ttwid import get_ttwid as _shared_get_ttwid

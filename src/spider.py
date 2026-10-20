@@ -1505,7 +1505,6 @@ async def get_huya_app_stream_url(
         ordered = sorted(play_url_list, key=_rank)
         selected_item = ordered[0]
 
-        selected_cdn_type = selected_item.get("cdn_type")
         selected_m3u8 = selected_item.get("m3u8_url")
         selected_flv = selected_item.get("flv_url")
         selected_m3u8_url: str | None = selected_m3u8 if isinstance(selected_m3u8, str) else None

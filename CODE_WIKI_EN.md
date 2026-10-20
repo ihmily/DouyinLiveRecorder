@@ -735,7 +735,7 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 - Cookie support
 - Redirect tracking
 - **SSL verification**: uniformly controlled by the global config `src/http_config.py`, and overridable **per single call** via the `ssl_verify` parameter (see below)
-- **Session lifecycle management (2026-09-02)**: the thread-local `requests.Session` is registered through a module-level `WeakSet` (entries are reclaimed automatically once a thread dies, GC is never blocked); `atexit` registers `close_all_sessions()` to shut down every still-live connection pool gracefully at process exit (80+ rooms running for a long time); `close_session()` additionally lets a room thread release its own Session explicitly on the exit path, and the next `_session()` call rebuilds it automatically
+- **Session lifecycle management (2026-09-02; updated in the 2026-10-20 cleanup round)**: the thread-local `requests.Session` is registered through a module-level `WeakSet` (entries are reclaimed automatically once a thread dies, GC is never blocked); `atexit` registers `close_all_sessions()` to shut down every still-live connection pool gracefully at process exit (80+ rooms running for a long time). The former `close_session()` was removed — it had zero callers repo-wide; process-exit shutdown is centralized in `close_all_sessions()`, and `_session()` rebuilds on demand for later requests
 - **Opener construction shape (after F-12; this subsection recalibrated 2026-09-24)**: only `_opener_secure` (proxy disabled, certificate verification kept) is pre-built at module level; the non-verifying `SSLContext` and its opener are always built **lazily on demand** (`_get_insecure_context()` / `_get_insecure_opener()`) — the 2026-09-12 review item 6.7 pointed out that a non-verifying context existing at import time equals a silent process-wide downgrade surface, so reverting to module-level residency is forbidden
 - **`ssl_verify` per-call override (F-12)**: `sync_req(..., ssl_verify=None/True/False)` is decided by `_resolve_ssl_verify()` (`None` = follow the `http_config.ssl_verify` global switch; an explicit value wins for that call), and the same decision must be **passed through both the urllib and the requests (proxy) paths** — credential-carrying call sites can force verification instead of being dragged down by the global switch
 - **Public accessor for the thread-level Session (MIN-08)**: `session()` serves call sites that must read the status code / response headers and therefore cannot use `sync_req` (whose failure contract collapses everything into an empty string) while still reusing the same connection pool; the patch target remains `_session` (test convention)
@@ -1557,17 +1557,17 @@ This fix uniformly takes effect for **all platforms** (Bilibili/Douyu/Huya/Douyi
 
 ### Testing and Coverage
 
-- Run tests: `pytest` (`asyncio_mode = "auto"`, async cases need no explicit marker); currently 3690 passed / 14 skipped, total coverage 85% (from coverage.json)
+- Run tests: `pytest` (`asyncio_mode = "auto"`, async cases need no explicit marker); currently 4590 passed / 14 skipped, total coverage 83.75% (from coverage.json, 2026-10-20 cleanup round)
 - Coverage config is centralized in `pyproject.toml`: `source = ["src"]`, global gate `fail_under = 50`
 - High-frequency-change core modules have independent coverage gates (recorded in `pyproject.toml` comments, checked in CI via `--cov-fail-under` or a script):
 
 | Module | Gate | Current Coverage |
 | --- | --- | --- |
-| `spider.py` | ≥50% | 50% |
-| `stream.py` | ≥70% | 70% |
-| `utils.py` | ≥80% | 82% |
-| `ttwid.py` | ≥85% | 85% |
-| `proxy.py` | ≥50% | 51% |
+| `spider.py` | ≥50% | 76.1% |
+| `stream.py` | ≥70% | 95.5% |
+| `utils.py` | ≥80% | 87.9% |
+| `ttwid.py` | ≥85% | 100.0% |
+| `proxy.py` | ≥50% | 84.8% |
 
 - Concurrency-specific tests (`test_concurrency.py` / `test_concurrency_rate_limit.py`) use the dedicated config `.coveragerc-concurrency` (no global threshold), verifying the correctness of `threading.Lock` de-duplication and Douyin rate limiting under multi-threaded environments
 
@@ -1693,6 +1693,17 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 > Scripts: `tests/test_{bili,douyin,douyu,huya,twitch}_live_collector.py`
 > (`python file.py <URL> [seconds]`; requires a live room + network; manual channel by default).
 > **Rolling archive**: this section keeps only the current release window; older entries live verbatim in [`docs/changelog/code-wiki-history-en.md`](docs/changelog/code-wiki-history-en.md) (rule stated in the "Changelog Archive Index" above).
+
+### v4.6.0-dev (2026-10-20) — Second repo-wide cleanup: unused imports, write-only variables, two zero-reference functions and 38 unread locals cleared; TAG_NORMAL and motion tokens wired
+
+- **User instruction / method**: re-scanned the current HEAD on top of the previous audit (251 tracked `.py` files: 6 at root / 15 in `scripts/` / 69 in `src/` / 161 in `tests/`), listing only repo-wide zero-reference symbols as deletion candidates; dynamic imports, aliases, `getattr` strings, build scripts and test locks were cross-checked. **No unused dependencies were found**: all 18 runtime packages have real references; `urllib3` / `h2` / `socksio` stay as transport-layer runtime/CVE floors and `PyExecJS` as the `exejs` fallback.
+- **Unused imports (4 groups)**: `main.py::shutil` (only mentioned in a comment), `src/platforms/bilibili.py::{zlib,brotli}` (decompression goes through the bounded helpers in `src/ws_client`), and the `exejs as execjs` / `execjs` conditional import in `src/room.py` (signing goes through `utils.run_js_async`). The exejs / brotli comments in `requirements.txt` were repointed accordingly.
+- **Dead variables / functions**: removed `main.py`'s `line_list` / `url_line_list` (write-only; the loop actually consumes `_line_list` / `_url_line_list`), `_config_read_result` (the `config.read()` return value is never read), `src/sync_http.py::close_session()` (zero callers) and `src/ui_fonts.py::describe_font_file()` (zero callers, no i18n consumer); the collection counts in the MID-2203 / L-05 comments were corrected in the same batch.
+- **Unread locals (38 lines / 32 functions)**: unused assignments in `main.py`'s `_resolve_*` for `record_quality` / `proxy_address` / `platform` / `port_info` / `record_danmaku_args` / `new_record_url`; `src/spider.py::selected_cdn_type`; `scripts/check_skill_agents_consistency.py::{child_fm,total_issues}`; and `s` in `src/gui_qt/theme.py::build_stylesheet`. Every item was verified by AST scope analysis as "assigned but never read"; behaviour is unchanged.
+- **Wiring (not deletion)**: `src/ui_kit.TAG_NORMAL` now feeds the five row-tag sites in `gui.py` (three assignments + two restyle keys); `DUR_MED` / `EASE_SPRING` now feed `src/gui_qt/widgets.py::Toast`'s duration/easing; the consumer-less `RADIUS_XL` / `CONTENT_MAX_WIDTH` / `DUR_FAST` / `EASE_OUT` were deleted and the design-token comments updated.
+- **Verification (runs made after the last edits)**: `scripts/run_gates.py` 10/10 PASS; its embedded `pytest` **4590 passed / 14 skipped / 0 warnings**; `pytest --cov=src --cov-report=json` total coverage **83.75%**, `check_coverage.py` all 68 modules above threshold (`douyin_pb2.py` is the explicit exemption); `basedpyright` **0 errors / 0 warnings / 0 notes**; `build_exe.py --smoke --no-runtime --no-zip` built successfully and the CLI / Web / GUI smoke tests all passed. CRLF/LF forms were re-measured per edited file: `main.py` / `gui.py` / `src/spider.py` / `src/platforms/bilibili.py` / `src/sync_http.py` / `scripts/check_skill_agents_consistency.py` remain pure CRLF, while `src/room.py` / `src/ui_fonts.py` / `src/gui_qt/theme.py` / `src/gui_qt/widgets.py` remain pure LF.
+- **Retained**: the `src/sync_http.py` module (explicitly retained by AGENTS.md), the legacy tkinter stack in `gui.py`, `get_huajiao_sn`, `get_kuaishou_stream_data2`, `get_xbogus` + `x-bogus.js`, `SW_SHOW`, and test-only tool APIs were left untouched; `per_frame` in `src/ui_motion.frame_plan` is unread but looks like a latent pacing defect, so it was flagged separately rather than deleted as dead code.
+- **DoD step 2**: `SKIP(no recording-chain / source-selection / ffmpeg-parameter / platform-parser change)`; this round only touched GUI tokens, imports, dead variables and dead functions.
 
 ### v4.6.0-dev (2026-10-20) — Repo-wide dependency and dead-code audit: python-multipart dropped, the dead module src/ab_sign.py deleted, 18 unused imports cleared
 

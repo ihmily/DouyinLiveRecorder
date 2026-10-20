@@ -55,7 +55,7 @@ distro>=1.9.0             # Linux 发行版识别（自动选择下载源 / 给�
 tqdm>=4.69.0              # 下载进度条显示（命令行录制模式）
 
 # ---------- JavaScript 执行引擎（运行各平台 JS 签名脚本，需 Node.js 运行时）----------
-exejs>=1.0.1              # PyExecJS 的活跃维护继任者，优先使用（src/room.py、src/spider.py、src/utils.py 导入）
+exejs>=1.0.1              # PyExecJS 的活跃维护继任者，优先使用（src/spider.py、src/utils.py 导入）
 PyExecJS>=1.5.1           # 回退兼容：exejs 未安装时启用（已停止维护，仅作兜底）
 
 # ---------- GUI 图形界面（headless / Web 模式下非必需，但 pip 安装仍会拉取）----------
@@ -103,7 +103,7 @@ websockets>=14.0          # 弹幕 WebSocket 客户端（src/ws_client.py）：a
 # 上限 <8 保持不动（F-14）：src/proto/douyin_pb2.py 由 protoc 25.x（gencode 4.25.3）产出，跨大版本升级
 #   runtime 存在 gencode 兼容窗口外突然失效的风险（FIX_1 F-14）；升级 runtime 前须先用同代 protoc 重新生成并回归弹幕用例。
 protobuf>=6.33.5,<8       # 抖音弹幕协议解码（src/proto/douyin_pb2.py，protoc 生成模块）
-brotli>=1.2.0             # B站弹幕解压（src/platforms/bilibili.py，protover=3 需 brotli 解压）
+brotli>=1.2.0             # B站弹幕解压（src/ws_client.py 的限长解压助手，protover=3）
 
 # ---------- 国际化（i18n）----------
 PyYAML>=6.0.3             # YAML 翻译目录支持（i18n.py 加载 i18n/zh_TW.yaml；缺失仅损失 YAML 格式）

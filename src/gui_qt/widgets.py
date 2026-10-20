@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .theme import Palette
+from .theme import DUR_MED, EASE_SPRING, Palette
 
 
 class Card(QFrame):
@@ -213,8 +213,8 @@ class Toast(QFrame):
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self.hide)
         self._anim = QPropertyAnimation(self, b"pos", self)
-        self._anim.setDuration(280)
-        self._anim.setEasingCurve(QEasingCurve.Type.OutBack)
+        self._anim.setDuration(DUR_MED)
+        self._anim.setEasingCurve(QEasingCurve.Type[EASE_SPRING])
 
     def show_message(self, message: str, parent_rect_height: int, parent_width: int) -> None:
         self._label.setText(message)

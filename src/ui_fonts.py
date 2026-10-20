@@ -378,13 +378,3 @@ def register_private_font(path: str | Path, root: Any = None) -> str | None:
     if added <= 0:
         return None
     return family if family_resolves(family, root) else None
-
-
-# 解释导入失败原因（给 GUI 用的一句话）。
-def describe_font_file(path: str | Path) -> str:
-    suffix = Path(path).suffix.lower()
-    if suffix in SUPPORTED_FONT_SUFFIXES:
-        return ""
-    if suffix in REJECTED_FONT_SUFFIXES:
-        return "rejected_format"
-    return "unsupported_format"

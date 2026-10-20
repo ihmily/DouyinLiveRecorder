@@ -242,7 +242,6 @@ def main() -> int:
             if child_rel.rstrip("/") not in referenced_dirs:
                 # 读 frontmatter 判断是否是项目级 Skill（排除第三方/ marketplace 安装的）
                 child_text = child_skill_md.read_text(encoding="utf-8")
-                child_fm = _parse_frontmatter(child_text)
                 # 如果 SKILL.md 内引用了 AGENTS.md 作为事实源，说明它是项目级 Skill
                 if "约束事实源" in child_text and "AGENTS.md" in child_text:
                     warnings.append(f"[WARN] 项目级 Skill 目录存在但未在 AGENTS.md 表格登记: " f"{child_rel}")
@@ -253,7 +252,6 @@ def main() -> int:
     for e in errors:
         print(e)
 
-    total_issues = len(errors) + len(warnings)
     if errors:
         print(f"\n✗ 发现 {len(errors)} 个错误、{len(warnings)} 个警告")
         return 1

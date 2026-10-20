@@ -38,30 +38,21 @@ THEME_LABELS: Final[dict[str, str]] = {
     THEME_HIGH_CONTRAST: "高对比度",
 }
 
-# 圆角档位（设计稿 --radius-s/m/l/xl：8 / 12 / 18 / 24）
+# 圆角档位（设计稿 --radius-s/m/l：8 / 12 / 18）
 RADIUS_SM: Final[int] = 8
 RADIUS_MD: Final[int] = 12
 RADIUS_LG: Final[int] = 18
-RADIUS_XL: Final[int] = 24
 
 # 侧边栏与顶栏基准尺寸（设计稿 --sidebar-w: 272px / topbar 52px）
 SIDEBAR_WIDTH: Final[int] = 272
 TOPBAR_HEIGHT: Final[int] = 52
 
-# 布局基准：设计稿 .chat-col 是 760px 居中内容列，这里用作页面的最大内容宽，
-# 宽屏下避免统计卡片被拉得过长、表格列视觉失衡。
-# 只作为上限使用（不强行居中）：桌面窗口的可用宽多数达不到两列布局的最低要求。
-CONTENT_MAX_WIDTH: Final[int] = 760
-
-# 动效时长（毫秒）：设计稿 --dur-fast .16s / --dur-med .28s
-DUR_FAST: Final[int] = 160
+# 动效时长（毫秒）：设计稿 --dur-med .28s
 DUR_MED: Final[int] = 280
-# 缓动曲线：设计稿 spring cubic-bezier(.34,1.4,.44,1) 与 out cubic-bezier(.22,.8,.36,1)。
-# 之所以做成字符串而不是直接引 QEasingCurve：本模块刻意不 import PySide6，
-# 「纯数据 token 层」可被测试直接导入，不必先起一个 QApplication。
-# QEasingCurve 不能直接吃 CSS 贝塞尔，用 Qt 提供的近似曲线（OutBack ≈ 回弹感，
-# OutCubic ≈ 减速），并在 _EASING_BACK 里保留原曲线控制点注释供将来精确化。
-EASE_OUT: Final[str] = "OutCubic"
+# 缓动曲线：设计稿 spring cubic-bezier(.34,1.4,.44,1)。之所以做成字符串而不是直接引
+# QEasingCurve：本模块刻意不 import PySide6，「纯数据 token 层」可被测试直接导入，
+# 不必先起一个 QApplication。QEasingCurve 不能直接吃 CSS 贝塞尔，取 Qt 提供的
+# OutBack（≈ 回弹感）作为近似曲线。
 EASE_SPRING: Final[str] = "OutBack"
 
 # 令牌完整键集：新增令牌必须三份主题同时补齐，缺键会被

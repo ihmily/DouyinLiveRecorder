@@ -496,7 +496,7 @@ find . -name "*.isorted" -delete
 
 ### 热路径性能（数据结构 / 正则）
 
-- **`main.py` 主循环去重容器必须为 `set`，禁止退化成 list/O(N²)**: `url_comments`/`line_list`/`url_line_list` 均 `set` 做成员检测，移除用 `.discard()` 而非列表重建，`text_no_repeat_url` 用 `dict.fromkeys` 保序去重。80+ 房间时 list 实现退化 O(N²)。`need_update_line_list` 仍 `list`（要保序 append+pop）。
+- **`main.py` 主循环去重容器必须为 `set`，禁止退化成 list/O(N²)**: `url_comments` 与循环内的 `_line_list`/`_url_line_list` 均用 `set` 做成员检测，移除用 `.discard()` 而非列表重建，`text_no_repeat_url` 用 `dict.fromkeys` 保序去重。80+ 房间时 list 实现退化 O(N²)。`need_update_line_list` 仍 `list`（要保序 append+pop）。
 - **高频正则提模块级常量、按 key 缓存，禁止函数内 `re.compile`**: `_EMOJI_PATTERN`/`_URL_PATTERN`/`_BANDWIDTH_PATTERN`/`_DOUYIN_HEVC_FLV_PATTERN` 提模块级编译；`update_config_line` 按 key 编译的正经 `functools.lru_cache(maxsize=128)` 缓存。
 
 ### 构建产物、依赖与运行时基线

@@ -736,7 +736,7 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 - Cookie 支持
 - 重定向跟踪
 - **SSL 验证**: 由全局配置 `src/http_config.py` 统一控制，并可经 `ssl_verify` 参数做**单次覆盖**（见下）
-- **Session 生命周期管理（2026-09-02）**: thread-local `requests.Session` 经模块级 `WeakSet` 弱引用登记（线程销毁后条目自动回收、不阻止 GC）；`atexit` 注册 `close_all_sessions()` 在进程退出时统一优雅关闭全部存活连接池（80+ 房间长跑场景）；另提供 `close_session()` 供房间线程退出路径显式释放当前线程 Session，关闭后下次 `_session()` 自动重建
+- **Session 生命周期管理（2026-09-02；2026-10-20 清理轮更新）**: thread-local `requests.Session` 经模块级 `WeakSet` 弱引用登记（线程销毁后条目自动回收、不阻止 GC）；`atexit` 注册 `close_all_sessions()` 在进程退出时统一优雅关闭全部存活连接池（80+ 房间长跑场景）。原 `close_session()` 已删除——全仓零调用方，进程退出统一收口由 `close_all_sessions()` 承担，下次请求时 `_session()` 会按需重建
 - **Opener 构造形态（F-12 落地后，2026-09-24 校准本小节）**: 仅 `_opener_secure`（禁用代理 + 保留证书验证）在模块级预构建；不校验证书的 `SSLContext` 与 opener 一律**按需惰性构造**（`_get_insecure_context()` / `_get_insecure_opener()`）——2026-09-12 审查 6.7 指出「import 期即存在不校验上下文」等于给全进程开静默降级面，故禁止改回常驻
 - **`ssl_verify` 单次覆盖（F-12）**: `sync_req(..., ssl_verify=None/True/False)` 由 `_resolve_ssl_verify()` 裁决（`None` = 跟随 `http_config.ssl_verify` 全局开关，显式传值以本次调用为准），且该次裁决必须**同时透传 urllib 与 requests(代理) 两条路径**，凭据类调用点可显式强制校验而不被全局降级拖下水
 - **线程级 Session 公开出口（MIN-08）**: `session()` 供「必须拿状态码 / 响应头、无法走 `sync_req`（其失败契约是一律返回空串）」的调用点复用同一份连接池；打桩目标仍是 `_session`（测试约定）
@@ -1572,17 +1572,17 @@ async with websockets.connect(
 
 ### 测试与覆盖率
 
-- 运行测试: `pytest`（`asyncio_mode = "auto"`，异步用例无需显式标记）；当前 3690 passed / 14 skipped，总覆盖率 85%（coverage.json 实测）
+- 运行测试: `pytest`（`asyncio_mode = "auto"`，异步用例无需显式标记）；当前 4590 passed / 14 skipped，总覆盖率 83.75%（coverage.json 实测，2026-10-20 清理轮）
 - 覆盖率配置集中在 `pyproject.toml`：`source = ["src"]`，全局门禁 `fail_under = 50`
 - 高频变更核心模块设独立覆盖率门禁（记录于 `pyproject.toml` 注释，CI 中通过 `--cov-fail-under` 或脚本检查）：
 
 | 模块 | 门禁 | 当前覆盖 |
 | --- | --- | --- |
-| `spider.py` | ≥50% | 50% |
-| `stream.py` | ≥70% | 70% |
-| `utils.py` | ≥80% | 82% |
-| `ttwid.py` | ≥85% | 85% |
-| `proxy.py` | ≥50% | 51% |
+| `spider.py` | ≥50% | 76.1% |
+| `stream.py` | ≥70% | 95.5% |
+| `utils.py` | ≥80% | 87.9% |
+| `ttwid.py` | ≥85% | 100.0% |
+| `proxy.py` | ≥50% | 84.8% |
 
 - 并发专项测试（`test_concurrency.py` / `test_concurrency_rate_limit.py`）使用专用配置 `.coveragerc-concurrency`（不设全局阈值），验证 `threading.Lock` 去重与抖音速率限制在多线程环境下的正确性
 
@@ -1705,6 +1705,17 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 > 脚本直跑时额外输出 `VERIFICATION_RESULT: {"platform":..., "status":..., ...}` 结构化一行供机器解析。
 > 脚本：`tests/test_{bili,douyin,douyu,huya,twitch}_live_collector.py`（`python file.py <URL> [秒数]`，
 > 需活房间 + 外网，默认人工通道）。
+
+### v4.6.0-dev (2026-10-20) — 全仓清理第二轮：未用 import / 只写变量 / 零引用函数与 38 处未读局部变量清零，TAG_NORMAL 与动效 token 接线
+
+- **用户指令 / 口径**：在上一轮清点基础上重扫当前 HEAD（251 个已跟踪 `.py`：根 6 / `scripts/` 15 / `src/` 69 / `tests/` 161），只把「全仓零引用」列为删除候选；动态导入、别名、`getattr` 字符串、构建脚本与测试锁全部交叉核对。**本轮未发现未使用依赖**：18 个运行时包全部有真实引用；`urllib3` / `h2` / `socksio` 保留为传递层运行期/CVE 下限，`PyExecJS` 保留为 `exejs` 兜底。
+- **未用 import（4 组）**：`main.py::shutil`（仅注释提及）、`src/platforms/bilibili.py::{zlib,brotli}`（解压走 `src/ws_client` 的限长助手）、`src/room.py` 的 `exejs as execjs` / `execjs` 条件导入（签名统一走 `utils.run_js_async`）。同步更正 `requirements.txt` 的 exejs / brotli 注释指向。
+- **死变量 / 死函数**：删 `main.py` 的 `line_list` / `url_line_list`（只写不读；循环实际消费 `_line_list` / `_url_line_list`）与 `_config_read_result`（`config.read()` 返回值无人读取）、`src/sync_http.py::close_session()`（零调用）、`src/ui_fonts.py::describe_font_file()`（零调用、无 i18n 消费点）；同步修正 MID-2203 / L-05 注释中的集合计数。
+- **未读局部变量（38 行 / 32 个函数）**：`main.py` 的 `_resolve_*` 中未使用的 `record_quality` / `proxy_address` / `platform` / `port_info` / `record_danmaku_args` / `new_record_url` 赋值；`src/spider.py::selected_cdn_type`、`scripts/check_skill_agents_consistency.py::{child_fm,total_issues}`、`src/gui_qt/theme.py::build_stylesheet` 的 `s`。全部为 AST 作用域实测「赋值后无读取」，行为零变化。
+- **接线（不是删除）**：`src/ui_kit.TAG_NORMAL` 接入 `gui.py` 的 5 处行 tag（3 处赋值 + 2 处 restyle 键）；`DUR_MED` / `EASE_SPRING` 接入 `src/gui_qt/widgets.py::Toast` 的动画时长/缓动；删除无消费者的 `RADIUS_XL` / `CONTENT_MAX_WIDTH` / `DUR_FAST` / `EASE_OUT`，并同步设计 token 注释。
+- **验证（最后一次编辑后的运行）**：`scripts/run_gates.py` 10/10 PASS；内置 `pytest` **4590 passed / 14 skipped / 0 warnings**；`pytest --cov=src --cov-report=json` 总覆盖率 **83.75%**，`check_coverage.py` 68 个模块全部达标（`douyin_pb2.py` 为显式豁免）；`basedpyright` **0 errors / 0 warnings / 0 notes**；`build_exe.py --smoke --no-runtime --no-zip` 构建成功，CLI / Web / GUI 三个冒烟全通过。改动文件的 CRLF/LF 形态逐文件复核：`main.py` / `gui.py` / `src/spider.py` / `src/platforms/bilibili.py` / `src/sync_http.py` / `scripts/check_skill_agents_consistency.py` 仍纯 CRLF，`src/room.py` / `src/ui_fonts.py` / `src/gui_qt/theme.py` / `src/gui_qt/widgets.py` 仍纯 LF。
+- **保留项**：`src/sync_http.py` 模块（AGENTS 明示保留）、`gui.py` 遗留 tkinter 栈、`get_huajiao_sn`、`get_kuaishou_stream_data2`、`get_xbogus` + `x-bogus.js`、`SW_SHOW`、测试专用工具 API 均未改动；`src/ui_motion.frame_plan` 的 `per_frame` 虽未读取，但疑似潜在节奏缺陷，已单独标记、未按死代码删除。
+- **DoD 第 2 步**：`SKIP(不涉及录制链路 / 选源 / ffmpeg 参数 / 平台解析)`；本次仅 GUI token、导入、死变量与死函数清理。
 
 ### v4.6.0-dev (2026-10-20) — 全仓依赖与死代码清点：摘除 python-multipart、删除死模块 src/ab_sign.py、18 个未使用 import 清零
 
