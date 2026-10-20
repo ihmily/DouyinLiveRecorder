@@ -1,21 +1,19 @@
 # src/ui_scale.py
-# GUI 度量层（阶段6：UI 现代化）：语义字号 token + 间距 token + 全局缩放档位 + 偏好持久化。
+# GUI 度量层：语义字号 token + 间距 token + 全局缩放档位 + 偏好持久化。
 #
-# 设计约束（延续 PROPOSAL_2026-09-29_ui-modernization §5.2 的「一切走语义槽位」铁律，
-# 颜色那一半落在 src/ui_theme.py，本模块管的是**尺寸**那一半）：
+# 设计约束（延续「一切走语义槽位」铁律；颜色那一半在 src/ui_theme.py，本模块管尺寸）：
 #   · 字体只用**负数点值**（-N pt）：正数是屏幕像素、不随 `tk scaling` 跨 DPI 缩放，
-#     高 DPI 屏上整窗偏小；点值由 Tk 按 scaling 换算，DPI 适配天然成立。本模块的
-#     pt() 是唯一允许产出字号的入口，正数字号在本仓视为 bug（阶段5 从 CTkFont 迁回
-#     tkfont.Font 时定的口径，Fonts.get 的注释里逐字保留）。
-#   · 缩放**只改字号与间距，不改控件数量与信息密度**——行高、padding、圆角随档位线性放大，
-#     但表格列数、卡片结构、导航项全部不变。否则「放大界面」会退化成「重排信息架构」。
-#   · DPI 与缩放是两件事，不可互相替代：`tk scaling` 只解决「同一物理大小在不同 DPI 下
-#     看起来一样大」，缩放解决「用户主动要更大/更小」。本模块只管后者，但会读
-#     `tk scaling` 参与**小屏降档**判断（见 auto_scale_for_screen）。
+#     高 DPI 屏上整窗偏小；点值由 Tk 按 scaling 换算，DPI 适配天然成立。pt() 是唯一
+#     允许产出字号的入口，正数字号在本仓视为 bug。
+#   · 缩放只改字号与间距，不改控件数量与信息密度——行高、padding、圆角随档位线性放大，
+#     但表格列数、卡片结构、导航项全部不变，否则「放大界面」会退化成「重排信息架构」。
+#   · DPI 与缩放是两件事：`tk scaling` 解决「同一物理大小在不同 DPI 下看起来一样大」，
+#     缩放解决「用户主动要更大/更小」。本模块只管后者，但会读 `tk scaling` 参与小屏
+#     降档判断（见 auto_scale_for_screen）。
 #   · 持久化落 config.ini [GUI] gui_scale，通道与 ui_theme 的 gui_theme 一致
-#     （update_or_append_config_line：行级替换 + 缺节补建 + 原子写），**刻意不用**
-#     config_io.read_config_value——它写回时持 main.file_update_lock，GUI 进程不该把
-#     [GUI] 键的补写混进录制引擎的锁体系。
+#     （update_or_append_config_line：行级替换 + 缺节补建 + 原子写），刻意不用
+#     config_io.read_config_value——它写回时持 main.file_update_lock，GUI 进程不应
+#     把 [GUI] 键的补写混进录制引擎的锁体系。
 #   · import 期零 Tk 对象（本模块甚至不 import tkinter）：无头 Linux CI 可安全 import，
 #     `import gui` 链路不受影响；一切 Tk 相关只在调用方传入 root 后发生。
 from __future__ import annotations
@@ -27,16 +25,13 @@ from typing import Final, final
 from src.config_read import tolerant_config_parser
 from src.web_config import update_or_append_config_line
 
-# ─── 字号体系（逻辑像素，100% 档位的基准） ────────────────────────────────
+# ─── 字号体系（100% 档位下的目标点值 pt） ───────────────────────────────
 #
-# 为什么重排：阶段5 之前的档位是 12/13/15/20/26（逻辑 px），12 与 13 只差 1px，
-# 视觉上根本分不出「辅助文字」与「正文」——截图里侧栏状态文字和导航项糊成一档，
-# 就是这个原因。新体系按「相邻档位至少差 1.5pt、且辅助文字不得小于 10pt」重排，
-# 并把表格/列表这一档显式命名为 label（原先复用 body，表格里数字与正文同重、
+# 取值依据：相邻档位至少差 1.5pt、辅助文字不得小于 10pt。原先 12/13 两档只差 1px，侧栏
+# 状态文字与导航项糊成一档；表格/列表另立 label 档（原先复用 body，表格数字与正文同重、
 # 扫读时没有锚点）。
 #
-# 单位说明：这里的数值是**100% 档位下的目标点值**（pt），不是像素。Tk 的
-# 1pt = 1.333px @96dpi，字号看起来比数字大（约 1.33 倍），换算已含在 Tk 内部。
+# 单位是点值而非像素：Tk 的 1pt = 1.333px @96dpi，换算已含在 Tk 内部。
 TYPE_SCALE: Final[dict[str, int]] = {
     # 辅助文字：卡片副标题、列标签、状态说明、时间戳、提示条
     "caption": 10,
@@ -56,9 +51,9 @@ TYPE_SCALE: Final[dict[str, int]] = {
     "mono": 11,
 }
 
-# 等宽字体单独一档：日志/配置是等宽语义，不能跟着比例字体的档位一起放大到读不动，
-# 也不该小到看不清。取 11pt 与 label 同档，缩放时按 0.9 系数跟随（等宽字符宽，
-# 放大 1.3 倍后一行能装的列数骤减，行内信息密度损失比比例字体大）。
+# 等宽字体单独一档：日志/配置是等宽语义，不能跟着比例字体一起放大到读不动。取 11pt
+# 与 label 同档，缩放时按 0.9 系数跟随（等宽字符宽，放大后一行能装的列数骤减、行内
+# 信息密度损失比比例字体大）。
 MONO_SCALE_FACTOR: Final[float] = 0.9
 
 # 字体族。比例字体沿用微软雅黑 UI（Windows 观感最稳），等宽沿用 Cascadia Code；
@@ -85,8 +80,8 @@ CONTROL_PADDING_COMPACT: Final[tuple[int, int]] = (10, 5)  # 紧凑按钮（工�
 CONTROL_PADDING_NAV: Final[tuple[int, int]] = (14, 10)  # 侧栏导航（体量最大，触控友好）
 CONTROL_PADDING_ROW: Final[tuple[int, int]] = (6, 6)  # 表格行内浮层编辑器
 
-# 表格行高（像素）。阶段4 从默认 ~20 提到 32 对齐旧行卡密度；这里再给一个下限
-# 32——低于它单行文字上下缘贴边，长表格滚动时行与行之间没有分隔感。
+# 表格行高（像素）：基准 32，缩放后不得低于 TREE_ROW_HEIGHT_MIN（30）——再低单行
+# 文字上下缘贴边，长表格滚动时行与行之间没有分隔感。
 TREE_ROW_HEIGHT: Final[int] = 32
 TREE_ROW_HEIGHT_MIN: Final[int] = 30
 
@@ -135,8 +130,8 @@ def clamp_scale(value: int) -> int:
 
 
 def is_valid_scale(value: int) -> bool:
-    # 菜单展示用：只认SCALE_PRESETS 里的档位，其余（70/200 这些应急夹取区间）
-    # 仍可用于渲染但不会出现在下拉里，避免用户面对一串没意义的百分比。
+    # 菜单展示用：只认 SCALE_PRESETS 里的档位；70/200 这些应急夹取区间仍可用于渲染，
+    # 但不会出现在下拉里，避免用户面对一串没意义的百分比。
     return value in SCALE_PRESETS
 
 
@@ -181,9 +176,9 @@ def load_scale_preference(config_file: str) -> str:
 
 
 def save_scale_preference(config_file: str, scale: str) -> bool:
-    # 持久化缩放偏好。scale 取parse_scale 的归一化形态（百分比串或 AUTO_SCALE_ID）
-    # 或 ""（清空显式偏好 = 回到自动）。False = 文件不存在等不可写情形，
-    # 调用方告警但不阻断内存态切换（与 gui_theme 同一容错口径）。
+    # 持久化缩放偏好。scale 取 parse_scale 的归一化形态（百分比串或 AUTO_SCALE_ID）或 ""
+    # （清空显式偏好 = 回到自动）。False = 文件不存在等不可写情形，调用方告警但不阻断
+    # 内存态切换（与 gui_theme 同一容错口径）。
     normalized = scale if scale == AUTO_SCALE_ID else parse_scale(scale)
     return update_or_append_config_line(config_file, GUI_SECTION, SCALE_KEY, normalized)
 
@@ -192,13 +187,12 @@ def save_scale_preference(config_file: str, scale: str) -> bool:
 class ScaleProfile:
     # 一次解析出来的「当前缩放上下文」：档位 + 由此派生的字号/间距/尺寸。
     #
-    # 为什么是对象而不是散落的模块级全局：Fonts（gui.py）、ui_theme、ui_kit 三处
-    # 都要读同一份缩放态，散落全局变量必然出现「改了一半忘了另一处」的中间态，
-    # 而中间态在 ttk 上表现为部分控件字号错乱——比全错更难查。对象让「读同一份」
-    # 成为类型层面的事实。
+    # 为什么是对象而不是散落的模块级全局：Fonts（gui.py）、ui_theme、ui_kit 三处都要读
+    # 同一份缩放态，散落全局必然出现「改了一半忘了另一处」的中间态，而在 ttk 上表现为
+    # 部分控件字号错乱——比全错更难查。对象让「读同一份」成为类型层面的事实。
     #
-    # 不可变：所有派生值在构造期一次算完。运行中改档位一律新建 profile 整体替换
-    # （guifont 缓存随profile 一起换 key），不做「就地改字段」。
+    # 不可变：所有派生值在构造期一次算完；运行中改档位一律新建 profile 整体替换（字体缓存
+    # 随 profile 一起换 key），不做「就地改字段」。
     def __init__(self, percent: int) -> None:
         # percent 是百分比（100 = 基准）。夹取在这里做，构造出的对象永远合法，
         # 下游的 pt()/px() 不必各自防守。
@@ -224,10 +218,10 @@ class ScaleProfile:
         return max(1, round(base * self.factor))
 
     def pt(self, token: str) -> int:
-        # 字号档位 → tk 字号（**负数点值**）。点值不随 factor 线性放大：
-        # 点本身已是与 DPI 无关的物理量，再乘一次用户系数会让 150% 档的正文
-        # 达到 18pt（约 24px @96dpi），行高与卡片全部撑爆——这不是"更清晰"，
-        # 是布局失效。折中做法是点值乘 sqrt 级别的温和系数，见 _PT_GAIN。
+        # 字号档位 → tk 字号（**负数点值**）。点值不随 factor 线性放大：点本身已是与 DPI
+        # 无关的物理量，再乘一次用户系数会让 150% 档的正文达到 18pt（约 24px @96dpi），
+        # 行高与卡片全部撑爆——这不是「更清晰」，是布局失效。折中是乘 sqrt 级别的温和
+        # 系数，见 _pt_gain。
         if token not in TYPE_SCALE:
             raise KeyError(f"未知字号 token: {token!r}（合法值: {tuple(TYPE_SCALE)}）")
         return -max(7, round(TYPE_SCALE[token] * self._pt_gain))
@@ -278,12 +272,12 @@ class ScaleProfile:
     def sidebar_width(self) -> int:
         return self.px(SIDEBAR_WIDTH)
 
-    # 字号档位相对 100% 的温和增益：点值是物理量，直接乘 factor 太激进，
-    # 用 (factor)^0.6 让 150% 档得1.30倍、85% 档得 0.90 倍——
-    # 用户能明确感到「变大了/变小了」，但布局（行高/卡片）不会被撑坏。
+    # 字号档位相对 100% 的温和增益：点值是物理量，直接乘 factor 太激进，用 (factor)^0.6
+    # 让 150% 档得 1.30 倍、85% 档得 0.90 倍——用户能明确感到「变大了/变小了」，但布局
+    # （行高/卡片）不会被撑坏。
     @property
     def _pt_gain(self) -> float:
-        # 用 math.pow 而非 `factor ** 0.6`：typeshed 对 float.__pow__ 的重载在
-        # 「指数为 float」时不覆盖、返回推成 Any（no-any-return 报错）。
-        # math.pow 的返回类型是明确的 float，不依赖运算符重载的推断。
+        # 用 math.pow 而非 `factor ** 0.6`：typeshed 对 float.__pow__ 的重载在「指数为
+        # float」时不覆盖、返回推成 Any（no-any-return 报错）；math.pow 的返回类型明确，
+        # 不依赖运算符重载的推断。
         return math.pow(self.factor, 0.6)

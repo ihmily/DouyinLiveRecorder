@@ -1,4 +1,4 @@
-# Tests for src/spider.py module - 抖音平台流地址解析路径.
+# src/spider.py 回归测试：抖音（Web/APP）流地址解析路径，及各平台解析函数与容错归一化入口的行为契约。
 
 import ast
 import asyncio
@@ -36,7 +36,7 @@ from src.spider import (
 
 
 class TestGetStrResponse:
-    # Test _get_str_response helper.
+    # _get_str_response：归一化 async_req 返回值（str / (body, headers) 元组 / None → 一律取字符串）。
 
     # _get_str_response 是 async_req 返回值的归一化入口：真实请求可能返回纯文本，也可能返回
     # (响应体, 响应头) 元组（主流程靠元组透传 cookie）。下游一律按字符串处理，故须统一抽取。
@@ -59,7 +59,7 @@ class TestGetStrResponse:
 
 
 class TestLoadsDict:
-    # Test _loads_dict helper.
+    # _loads_dict：容错 JSON 解析，失败或非 dict 一律回 {}。
 
     # _loads_dict 是「解析优先、失败即空 dict」的容错解析器。下游普遍依赖
     # "解析失败 => {}" 不变量来跳过脏数据，而非区分"无数据"与"解析异常"。
@@ -89,7 +89,7 @@ class TestLoadsDict:
 
 
 class TestExtractDouyinHevcFlvUrl:
-    # Test extract_douyin_hevc_flv_url - 从HTML提取HEVC FLV流地址.
+    # extract_douyin_hevc_flv_url：从 HTML 提取 HEVC FLV 流地址。
 
     def test_normal_extraction(self) -> None:
         # 正常路径：HTML包含有效HEVC FLV流地址，正确提取并清理。
@@ -126,7 +126,7 @@ class TestExtractDouyinHevcFlvUrl:
 
 
 class TestGetDouyinWebStreamData:
-    # Test get_douyin_web_stream_data - 抖音网页端API获取直播数据.
+    # get_douyin_web_stream_data：抖音网页端 API 获取直播数据。
 
     @pytest.mark.asyncio
     async def test_normal_api_response(self) -> None:
@@ -237,7 +237,7 @@ class TestGetDouyinWebStreamData:
 
 
 class TestGetDouyinAppStreamData:
-    # Test get_douyin_app_stream_data - 抖音APP端接口获取直播数据.
+    # get_douyin_app_stream_data：抖音 APP 端接口获取直播数据。
 
     @pytest.mark.asyncio
     async def test_live_douyin_url_delegates_to_web(self) -> None:
@@ -302,7 +302,7 @@ class TestGetDouyinAppStreamData:
 
 
 class TestExtractRoomDataFromHtml:
-    # Test _extract_room_data_from_html - HTML回退解析.
+    # _extract_room_data_from_html：HTML 回退解析房间数据。
 
     def test_empty_html(self) -> None:
         # 异常路径：空HTML返回空字典。
@@ -314,7 +314,7 @@ class TestExtractRoomDataFromHtml:
 
 
 class TestSafeExtractId:
-    # Test _safe_extract_id - URL安全提取路径ID.
+    # _safe_extract_id：从 URL 安全提取路径 ID。
 
     def test_basic_url(self) -> None:
         assert _safe_extract_id("https://example.com/path/12345") == "12345"
@@ -339,7 +339,7 @@ class TestSafeExtractId:
 
 
 class TestGetParams:
-    # Test get_params - URL参数提取.
+    # get_params：从 URL 提取指定查询参数。
 
     def test_existing_param(self) -> None:
         assert get_params("https://example.com?foo=bar&baz=qux", "foo") == "bar"
@@ -355,7 +355,7 @@ class TestGetParams:
 
 
 class TestMd5:
-    # Test md5 - MD5哈希计算.
+    # md5：计算签名用的 MD5 摘要。
 
     # md5 用于签名参数（如快手/抖音请求体）。断言钉死标准 MD5 摘要值，防止算法被误改。
 
@@ -373,7 +373,7 @@ class TestMd5:
 
 
 class TestGetPlayUrlList:
-    # Test get_play_url_list - M3U8播放列表解析.
+    # get_play_url_list：解析 M3U8 播放列表。
 
     @pytest.mark.asyncio
     async def test_https_urls(self) -> None:
@@ -420,7 +420,7 @@ class TestGetPlayUrlList:
 
 
 class TestKuaishouStreamData:
-    # Test get_kuaishou_stream_data - 快手直播数据.
+    # get_kuaishou_stream_data：快手直播数据解析。
 
     @pytest.mark.asyncio
     async def test_network_error_returns_not_live(self) -> None:
@@ -438,7 +438,7 @@ class TestKuaishouStreamData:
 
 
 class TestHuyaStreamData:
-    # Test get_huya_stream_data - 虎牙直播数据.
+    # get_huya_stream_data：虎牙直播数据解析。
 
     @pytest.mark.asyncio
     async def test_no_stream_data_returns_empty(self) -> None:
@@ -457,7 +457,7 @@ class TestHuyaStreamData:
 
 
 class TestDouyuInfoData:
-    # Test get_douyu_info_data - 斗鱼直播间信息.
+    # get_douyu_info_data：斗鱼直播间信息解析。
 
     @pytest.mark.asyncio
     async def test_rid_from_url(self) -> None:
@@ -498,7 +498,7 @@ class TestDouyuInfoData:
 
 
 class TestNeteaseStreamData:
-    # Test get_netease_stream_data - 网易CC直播数据.
+    # get_netease_stream_data：网易 CC 直播数据解析。
 
     @pytest.mark.asyncio
     async def test_no_next_data_returns_empty(self) -> None:
@@ -535,7 +535,7 @@ class TestNeteaseStreamData:
 
 
 class TestQiandureboStreamData:
-    # Test get_qiandurebo_stream_data - 千度热播直播数据.
+    # get_qiandurebo_stream_data：千度热播直播数据解析。
 
     @pytest.mark.asyncio
     async def test_no_user_data(self) -> None:
@@ -564,7 +564,7 @@ class TestQiandureboStreamData:
 
 
 class TestBilibiliRoomInfo:
-    # Test get_bilibili_room_info - B站直播间信息.
+    # get_bilibili_room_info：B 站直播间信息解析。
 
     @pytest.mark.asyncio
     async def test_error_returns_empty(self) -> None:
@@ -593,7 +593,7 @@ class TestBilibiliRoomInfo:
 
 
 class TestBilibiliStreamData:
-    # Test get_bilibili_stream_data - B站直播流数据.
+    # get_bilibili_stream_data：B 站直播流数据解析。
 
     @pytest.mark.asyncio
     async def test_play_url_success(self) -> None:

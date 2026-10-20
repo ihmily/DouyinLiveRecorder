@@ -1,10 +1,9 @@
-# Tests for src/config_io.py — delete_line 的行尾归一与返回值（SEV-05 回归锁），
-# 以及写入锁/快照同步等既有契约不被改坏。
+# src/config_io.py 回归锁：delete_line 的行尾归一与返回值（SEV-05），
+# 以及「持锁写入 + 原子写 + URL 配置快照同步」等既有契约不被改坏。
 #
-# 中文：本文件的存在理由是 SEV-05——delete_line 按 MI-11 用 newline="" 读原文（文件行带
-# \r\n），而所有调用方传进来的行都经 universal newlines 归一为 \n 结尾，整行精确比较在
-# CRLF 文件上恒不成立 → 面板点「删除」永久静默 no-op 却回报成功。CI 在 Linux（天然 LF）
-# 跑，结构上发现不了，故必须补显式的 CRLF 用例。
+# 存在理由（SEV-05）：delete_line 按 MI-11 用 newline="" 读原文（行尾带 \r\n），调用方传入的
+# 却是 universal newlines 归一后的 \n 结尾行，整行精确比较在 CRLF 文件上恒不成立 → 面板点
+# 「删除」静默 no-op 却回报成功。CI 跑 Linux（天然 LF）结构上发现不了，故须显式构造 CRLF 用例。
 
 from pathlib import Path
 from types import TracebackType
@@ -38,16 +37,15 @@ class _RecordingLock:
 
 
 def _write_lines(path: Path, lines: list[str], encoding: str = "utf-8-sig") -> None:
-    # newline="" 写入：不做换行符翻译，逐字保留 \r\n（Windows 上 URL_config.ini 的真实形态）
-    # 用默认换行写会得到 LF，那正是本缺陷在 CI（Linux）上看不见的原因——CI 天然 LF，
-    # 只有显式构造 CRLF 文件才能把「读侧行尾不匹配」这条路径暴露出来。
+    # newline="" 写入：不做换行翻译，逐字保留 \r\n（Windows 上 URL_config.ini 的真实形态）。
+    # 用默认换行写只会得到 LF，而 CI 恰是天然 LF——只有显式构造 CRLF 才能暴露「读侧行尾不匹配」。
     with open(path, "w", encoding=encoding, newline="") as f:
         _ = f.write("".join(lines))
 
 
 def _read_raw(path: Path, encoding: str = "utf-8-sig") -> list[str]:
-    # 同样按 newline="" 读回：断言的是「文件字节形态」，而不是被 universal newlines
-    # 修饰过的视图——否则「行尾是否被改成 LF」这一子问题永远断不出来。
+    # 同样按 newline="" 读回：断言「文件字节形态」而非 universal newlines 修饰后的视图，
+    # 否则「行尾是否被改成 LF」这一子问题永远断不出来。
     with open(path, "r", encoding=encoding, newline="") as f:
         return f.readlines()
 
@@ -157,17 +155,15 @@ class TestDeleteLineWriteContract:
 
 
 class TestMissingKeyWritebackIdempotency:
-    # 「缺键补写必须幂等」的最小自证（AGENTS.md 已知坑，2026-10-17 事故）：
-    # 同一份文件连续跑两轮「读取 + 缺键补写」，该键出现次数必须仍为 1——一旦落出两行同名键，
-    # strict=True 的解析器在**下一次读取**就抛 DuplicateOptionError，整份配置失效、
-    # 录制核心 import 即崩（现场：config.ini 的 [录制设置] 内同名键同时出现在第 5 与第 44 行）。
+    # 「缺键补写必须幂等」（AGENTS 已知坑，2026-10-17 事故）：同一份文件连续两轮「读取 + 缺键补写」，
+    # 该键出现次数必须仍为 1——落出两行同名键后，strict=True 的解析器在下一次读取即抛
+    # DuplicateOptionError，整份配置失效、录制核心 import 即崩（现场：同名键在第 5 与第 44 行）。
     _KEY = "是否启动时清理陈旧字节码缓存(是/否)"
 
     def _assert_strict_readable(self, target: Path) -> None:
-        # 写回产物必须仍能被「默认 strict=True 的解析器」整份读出。容错读取是我们的兜底，
-        # 不是把损坏形态留给外部编辑器/其它程序的理由——而它们一律按 strict 判。
-        # 变异验证实测：只数「该键出现几次」挡不住「整节被重复追加」（补写改成追加式写盘时
-        # 键计数仍为 1），这条才是那条形态的判据。
+        # 写回产物必须仍能被默认 strict=True 的解析器整份读出：容错读取是兜底，不是把损坏形态
+        # 留给按 strict 判的外部程序。变异验证实测：只数「该键出现几次」挡不住「整节被重复追加」
+        # （补写改成追加式写盘时键计数仍为 1），整份严格解析才是那条形态的判据。
         import configparser
 
         strict = configparser.ConfigParser(interpolation=None)
@@ -188,14 +184,14 @@ class TestMissingKeyWritebackIdempotency:
 
         written = target.read_text(encoding="utf-8-sig")
         assert written.count(self._KEY) == 1, written
-        # 补写后的文件必须能被「下一次读取」原样解析——那才是当时真正的崩口
+        # 补写后的文件必须能被下一次读取原样解析——那才是当时真正的崩口
         self._assert_strict_readable(target)
         again = tolerant_config_parser()
         again.read(str(target), encoding=main.text_encoding)
         assert again.get("录制设置", self._KEY) == "是"
 
     def test_existing_key_is_never_appended_again(self, tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
-        # 键已存在时 read_config_bool 只读取、不得再补写一次（补写的唯一判据是 NoOptionError）；
+        # 键已存在时只读取、不得再补写（补写的唯一判据是 NoOptionError），
         # 用户显式写的「否」也不能被默认值覆盖。
         target = tmp_path / "config.ini"
         _write_lines(target, ["[录制设置]\n", f"{self._KEY} = 否\n"])

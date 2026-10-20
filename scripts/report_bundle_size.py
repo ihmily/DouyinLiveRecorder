@@ -85,8 +85,8 @@ def _mb(size: int) -> float:
 
 def collect(release: Path) -> BundleReport:
     # 遍历发布目录，产出「总量 / 按包聚合 / 最大单文件 / 泄漏清单」四份数据。
-    # 单文件清单只保留 top 40：全量落 JSON 会让报告文件比产物清单还大，而体积分析
-    # 永远只看头部那几十项（尾部是数量众多的小文件，没有可操作空间）。
+    # 单文件清单只保留 top 40：全量落 JSON 会让报告文件比产物清单还大，而体积分析永远只看
+    # 头部那几十项（尾部是大量小文件，没有可操作空间）。
     total = 0
     count = 0
     per_pkg: dict[str, int] = defaultdict(int)

@@ -3,13 +3,12 @@
 #
 # 鉴权模型总览（web_api 与 web/ 前端共用）：
 # ① 认证开关：config.ini [Web].web_auth_enable=true 时开启；关闭时所有 /api/* 公开访问（局域网用）
-# ② 密码存储：首次登录时明文密码自动升级为 PBKDF2-HMAC-SHA256 哈希（盐随机，迭代次数 200k）
+# ② 密码存储：首次登录时明文自动升级为 PBKDF2-HMAC-SHA256 哈希（盐随机，迭代 200k）
 # ③ Token：secrets.token_urlsafe(32) 生成 256-bit bearer，过期时间由 web_token_expiry 控制
-#    （出厂默认 86400 秒 = 24 小时，取值以 config.ini 与 WEB_DEFAULTS 为准；改它会影响所有既有
-#     部署的登录频率）
-#    [历史注] 2026-09-19 前本条误写作「默认 1 小时」
+#    （出厂默认 86400 秒 = 24 小时，以 config.ini 与 WEB_DEFAULTS 为准；改它会影响所有既有部署的
+#     登录频率）
 # ④ 登录限流：单 IP 滑动窗口 5 次失败/300 秒即 429；仅信任 web_trusted_proxy 列表内代理的 XFF。
-#    另有与来源键无关的全局失败预算 40 次/300 秒（MID-35）与免鉴权端点的 per-IP 预算（MIN-2245）
+#    另有与来源键无关的全局失败预算 40 次/300 秒，以及免鉴权端点的 per-IP 预算（MIN-2245）。
 # ⑤ 密码变更：吊销全部 token，强制重登；认证开启时禁止清空密码（防自锁）。Web 节敏感键
 #    （web_auth_enable / web_password）做目标态对称校验——开启认证必须有非空密码，否则面板会被
 #    锁死（详见 update_config 内注释）
@@ -17,45 +16,33 @@
 # ⑦ 认证开关为**唯一**分流依据：关闭时全放行；开启时只有白名单路径放行，其余一律需 Bearer，
 #    **与 HTTP method 无关**——读接口同样拦，跨源读取也能拉走配置与日志。
 #    白名单（见中间件 elif 分支，逐条枚举）：/api/login、/api/logout、/api/auth/status、
-#    /health、/、/web/*、/favicon.ico。
-#    [历史注] 2026-09-22 前写作「写接口需 Bearer；读接口/静态资源放行」，按它评估泄露面结论相反
+#    /health、/、/web、/web/*、/favicon.ico。
 # ⑧ 非幂等请求校验 Origin 同源（防无认证时的跨站写）；/api/logout 支持单点吊销当前 bearer；
 #    配置读取带 mtime+size 缓存（避免每请求全量解析 config.ini）
 # ⑨ 响应头：X-Content-Type-Options: nosniff（防 MIME 嗅探）、X-Frame-Options: DENY（防点击劫持）、
 #    CSP（见中间件末尾）；GET /api/status 在认证关闭时返回 auth_required=false 与告警供前端提示
-# ⑩ 2026-09-20（CODE_REVIEW_2026-09-20）新增的不变量：
+# ⑩ 安全不变量（改动时逐条核对）：
 #    · 房间写入口裁决唯一：校验下沉到 web_config.format_url_line（URL_config.ini 唯一写入口），
-#      add/update/quality 三个接口不可能再次分叉（SEV-02/03）；
-#    · Host/Origin 白名单：同源判定不再信任请求自带的 Host，改由服务端配置推导允许名单，
-#      并在**每个请求**上重跑「非回环 + 无认证」不变量（SEV-04、MID-36）；
-#    · 端点不占事件循环：阻塞的磁盘 IO / 跨线程锁 / 日志归档一律走线程池（同步 def 端点即
-#      由 FastAPI 派发到 anyio 线程池），状态快照另加 TTL 缓存 + 单飞 + 超时回陈旧值（MID-34/35）；
-#    · 对外不回显内部异常：绝对路径 / Errno 细节只写日志，响应里只给固定 error code（MID-39）；
-#    · 敏感配置写入三重拒绝（MID-37 后端半边 + 2026-09-21 掩码补口）：命中 is_sensitive_item 的键
-#      既不接受空值、也不接受面板回显用的字面掩码 '***'——前端跳过掩码只是省事，不得当唯一防线；
-#    · 语言切换按**生效码**落盘（MID-52）：PUT /api/language 先 i18n.set_language() 再写 config.ini，
-#      写的是目录可用性判定后的生效码，保证面板进程与录制子进程不会各说一种语言。
-# ⑪ 2026-09-21（CODE_REVIEW_2026-09-21）安全侧新增的三条不变量：
-#    · 监听地址基准只能来自进程（SEV-N03）：「非回环 + 无认证」与 Origin 同源判定一律用
-#      create_app(bind_host/bind_port) 传入的**实际绑定地址**，不再读可被 PUT /api/config 改写的
-#      web_host/web_port；同时对「把 web_host 写成回环值」这一步加目标态校验（两步旁路都拦）。
-#    · Origin 与 Host 是**两套名单**（MID-N42）：Host 沿用 web_config.is_host_allowed
-#      （放行 IP 字面量 / 无点单标签名、忽略端口），Origin 改判 web_config.is_origin_allowed——
-#      host 与端口都要命中「实际绑定 host:port + 回环族 + web_allowed_hosts 显式登记的 host[:port]」。
-#    · 会被本进程发出去的 config 值一律收口（MID-N45）：推送接口链接 / ntfy 地址 / 代理地址 /
-#      SMTP 服务器的 scheme 与目标网段校验挂在 validate_config_target（config.ini 写侧唯一入口）
-#      上，与房间地址共用同一份判定内核，多目标逗号分隔须逐段过判。
-# ⑫ 2026-09-23（组 G 收尾）新增/收敛的三条：
-#    · 认证两键的写入必须复验口令（MID-2241 后端半边）：认证已开启时 PUT /api/config 写
-#      [Web] web_auth_enable / web_password 未携带可验过的 reauth_password 即 403——bearer 只
-#      证明「已登录」，不再单独证明「知道口令」（细则见 update_config 内同名段）。
-#    · 免鉴权端点有 per-IP 预算（MIN-2245）：/api/auth/status 与 /health 超窗即 429，
-#      且 /api/login、/api/auth/status 的配置读取改走 _read_web_config_cached（磁盘 IO 不再按
-#      请求放大）。反向边界：PUT /api/config 的口令/认证守卫**不得**用该缓存，必须读磁盘现值
-#      （同一轮走过弯路，判据见 update_config 内「判定基准」段）。
-#    · `main_loop_alive` 从 /api/status 契约里**撤下**（SEV-2221/SEV-2228 后半）：该键恒不下发、
-#      是一条曾被测试当作已覆盖的死路径；面板改由 error/stale 两个真实信号承担「取证失败」，
-#      取舍理由与接线点见 _read_engine_status 上方说明。
+#      add/update/quality 三个接口不可能再次分叉；
+#    · Host/Origin 白名单：同源判定不信任请求自带的 Host，改由服务端配置推导允许名单，并在
+#      **每个请求**上重跑「非回环 + 无认证」不变量；判定基准取 create_app(bind_host/bind_port)
+#      传入的实际绑定值，不读可被 PUT /api/config 改写的 web_host/web_port；Host 与 Origin 是
+#      两套名单（Host 放行 IP 字面量 / 无点单标签名，Origin 要 host 与端口双命中）；
+#    · 端点不占事件循环：阻塞的磁盘 IO / 跨线程锁 / 日志归档一律走线程池，状态快照另加 TTL 缓存
+#      + 单飞 + 超时回陈旧值；
+#    · 对外不回显内部异常：绝对路径 / Errno 细节只写日志，响应里只给固定 error code；
+#    · 敏感配置写入三重拒绝：命中 is_sensitive_item 的键既不接受空值、也不接受面板回显用的
+#      字面掩码 '***'——前端跳过掩码只是省事，不得当唯一防线；
+#    · 会被本进程发出去的 config 值一律收口：推送接口链接 / ntfy 地址 / 代理地址 / SMTP 服务器的
+#      scheme 与目标网段校验挂在 validate_config_target（config.ini 写侧唯一入口）上，多目标
+#      逗号分隔须逐段过判；
+#    · 认证两键的写入必须复验口令：认证已开启时写 web_auth_enable / web_password 未携带可验过的
+#      reauth_password 即 403——bearer 只证明「已登录」，不证明「知道口令」。该守卫**不得**用
+#      _read_web_config_cached，必须读磁盘现值；
+#    · 语言切换按**生效码**落盘：PUT /api/language 先 i18n.set_language() 再写 config.ini，保证
+#      面板进程与录制子进程不会各说一种语言；
+#    · main_loop_alive 已从 /api/status 契约里撤下（恒不下发，曾是被测试当作已覆盖的死路径），
+#      面板改由 error/stale 两个真实信号承担「取证失败」（见 _read_engine_status 上方说明）。
 # pyright: reportUnusedFunction=none, reportCallInDefaultInitializer=none
 from __future__ import annotations
 
@@ -126,9 +113,9 @@ _QUERY_DEFAULTS: dict[str, dict[str, tuple[object, int | None, int | None]]] = {
 }
 
 
-# L-30（2026-10-02）：JSON 请求体大小上限。认证关闭（出厂默认）时局域网任一主机可单请求
-# 超大 JSON 耗内存（json.loads 全量物化后才谈得上校验），解析前先按 Content-Length 拒绝。
-# 面板全部请求体（登录口令/房间/配置节）远小于该值，不影响正常使用。
+# L-30：JSON 请求体大小上限。认证关闭（出厂默认）时局域网任一主机可单请求超大 JSON 耗内存
+# （json.loads 全量物化后才谈得上校验），解析前先按 Content-Length 拒绝。面板全部请求体
+# （登录口令/房间/配置节）远小于该值。
 _JSON_BODY_MAX_BYTES = 1 * 1024 * 1024
 
 
@@ -261,14 +248,12 @@ _LOGIN_FAILURE_WINDOW = 300.0
 _GLOBAL_LOGIN_FAILURES: deque[float] = deque(maxlen=512)
 _LOGIN_GLOBAL_MAX_FAILURES = 40
 
-# ─── MIN-2245（2026-09-23）：免鉴权端点的 per-IP 预算 ─────────────────────────
-# 上面的限流只管 /api/login 的**失败**计数，而白名单里的 /api/auth/status 与 /health 无论认证开关
-# 如何都恒可访问、此前毫无预算：能访问端口 = 能零成本、无限次地驱动面板的读路径（/api/auth/status
-# 在改走 _read_web_config_cached 之前每请求都是一趟全量 configparser 解析，放大面正好落在这条无人
-# 看守的入口上）。阈值刻意放宽到「正常使用远够不到」：面板启动只拉一次本端点，探活/CI 是秒级
-# 个位数，而 240 次/分钟 ≈ 4 次/秒已足以把「无限放大」压成「有界成本」。
-# 刻意**不**给全局预算：这两个端点极便宜（缓存命中即一次 os.stat），按 IP 封顶只为挡住单点放大；
-# Docker 端口映射下所有真实用户收敛到同一网关地址，全局预算会集体误伤（MID-35 已记过）。
+# ─── MIN-2245：免鉴权端点的 per-IP 预算 ─────────────────────────
+# 上面的限流只管 /api/login 的**失败**计数，而白名单里的 /api/auth/status 与 /health 恒可访问、
+# 此前毫无预算：能访问端口 = 能零成本、无限次地驱动面板的读路径。阈值刻意放宽到「正常使用远
+# 够不到」：面板启动只拉一次，探活/CI 是秒级个位数，240 次/分钟 ≈ 4 次/秒已足以把「无限放大」
+# 压成「有界成本」。刻意**不**给全局预算：这两个端点极便宜（缓存命中即一次 os.stat），按 IP
+# 封顶只为挡单点放大；Docker 端口映射下所有真实用户收敛到同一网关地址，全局预算会集体误伤。
 _PUBLIC_BUDGET_WINDOW = 60.0
 _PUBLIC_BUDGET_MAX = 240
 _PUBLIC_BUDGET_PATHS = frozenset(("/api/auth/status", "/health"))
@@ -298,8 +283,8 @@ def _public_endpoint_over_budget(client_ip: str) -> bool:
 
 # 危险配置键黑名单：允许通过 Web 修改等价于远程命令执行，任何认证状态下都禁止写入
 _DANGEROUS_CONFIG_KEYS = {"自定义脚本执行命令"}
-# casefold 后的黑名单（2026-09-12 审查 C-1 加固）：行匹配大小写不敏感（re.IGNORECASE），
-# 黑名单判定须同等强度，防止 ASCII 危险键的大小写变体绕过（当前集合为中文键，casefold 幂等）
+# casefold 后的黑名单（C-1 加固）：行匹配大小写不敏感（re.IGNORECASE），黑名单判定须同等强度，
+# 防止 ASCII 危险键的大小写变体绕过（当前集合为中文键，casefold 幂等）
 _DANGEROUS_CONFIG_KEYS_FOLDED = {k.casefold() for k in _DANGEROUS_CONFIG_KEYS}
 
 # 房间列表写入互斥锁：序列化「查重 + 追加」的 TOCTOU 窗口，
@@ -307,9 +292,9 @@ _DANGEROUS_CONFIG_KEYS_FOLDED = {k.casefold() for k in _DANGEROUS_CONFIG_KEYS}
 _rooms_config_lock = threading.Lock()
 
 # ─── MID-39：对外错误契约 ─────────────────────────────────────────────────────
-# 内部异常原文（Windows 绝对路径、Errno 13、loguru 句柄冲突细节）曾被直接塞进
-# {"detail": ...} / {"error": ...} 并被前端原样弹成 toast，等于向任何能访问面板的人
-# 泄露安装路径与 OS 细节（认证关闭时对局域网可见）。现在对外只给固定 code，细节进日志。
+# 内部异常原文（Windows 绝对路径、Errno 13、loguru 句柄冲突细节）曾被直接塞进 {"detail": ...}
+# 并被前端原样弹成 toast，等于向任何能访问面板的人泄露安装路径与 OS 细节（认证关闭时对局域网
+# 可见）。现在对外只给固定 code，细节进日志。
 _STATUS_ERROR_CODE = "status_unavailable"
 _LOGS_ERROR_CODE = "logs_unavailable"
 _DANMAKU_ERROR_CODE = "danmaku_unavailable"
@@ -320,12 +305,11 @@ _HOST_DENIED_DETAIL = "host_not_allowed"
 # ─── MID-2234：web_token_expiry 的目标态夹取 ─────────────────────────────────
 # 该键经 PUT /api/config 可写，且因命中 _KEY_NOT_SECRET_PATTERN 的 expiry 例外而**不受敏感键守卫**，
 # 于是既无上下界也无「不得清空」保护。两条真实失效形态：
-#   ① 写成 0/负数 → 每次登录拿到的 exp = now + 0，中间件判 exp > time.time() 立即为假 →
-#      所有 /api/*（**含再次 PUT 修正自身**）一律 401，用户只能手工编辑 config.ini 恢复，
-#      与本文件头注释 ⑤「禁止清空密码（防自锁）」是同一防线却漏了它。
+#   ① 写成 0/负数 → 每次登录拿到的 exp = now，中间件判 exp > time.time() 立即为假 → 所有 /api/*
+#      （**含再次 PUT 修正自身**）一律 401，用户只能手工编辑 config.ini 恢复；
 #   ② 写成超大值 → 令牌实际永不过期，且 _tokens 只增不减（内存无界），泄露的 bearer 成为永久凭据。
-# 夹取而非拒绝：配置里留一个越界值本身无意义，登录时按边界生效最符合直觉，也不会把面板写成 401。
-# 下界 60s（够一次正常会话交互，不至于「刚登录就过期」），上界 7 天（与默认 86400s 同量级放宽）。
+# 夹取而非拒绝：越界值本身无意义，登录时按边界生效最符合直觉，也不会把面板写成 401。
+# 下界 60s（不至于「刚登录就过期」），上界 7 天（与默认 86400s 同量级放宽）。
 _TOKEN_EXPIRY_MIN_SECONDS = 60.0
 _TOKEN_EXPIRY_MAX_SECONDS = 7 * 86400.0
 
@@ -344,12 +328,11 @@ def _clamp_token_expiry(raw: object) -> float:
 
 
 # ─── MID-34：状态快照的 TTL 缓存 + 单飞 ───────────────────────────────────────
-# get_status() 在录制进程里持 record_state_lock / max_request_lock，并调
-# utils.check_disk_capacity → shutil.disk_usage：录制盘是 UNC/网络盘/可移动盘且已挂起时
-# 该调用可达数十秒。旧实现把它放在 async def 里直接执行 → 一次挂起即停摆整个面板
-# （含前端 2s 轮询与 SSE）。现在：① 采样在专用线程里跑；② 结果按 TTL 复用（磁盘容量
-# 本就是秒级变化，2s 窗口对展示无损）；③ 同一时刻只允许一个采样在飞（单飞门），
-# 超时方立即回陈旧快照并置 stale:true，从而把「慢」限制在数据新鲜度上而非可用性上。
+# get_status() 在录制进程里持 record_state_lock / max_request_lock，并调 check_disk_capacity →
+# shutil.disk_usage：录制盘是 UNC/网络盘/可移动盘且已挂起时该调用可达数十秒。旧实现把它放在
+# async def 里直接执行 → 一次挂起即停摆整个面板。现在：① 采样在专用线程里跑；② 结果按 TTL 复用；
+# ③ 同一时刻只允许一个采样在飞，超时方立即回陈旧快照并置 stale:true，从而把「慢」限制在数据
+# 新鲜度上而非可用性上。
 _STATUS_TTL_SECONDS = 2.0
 _STATUS_WAIT_SECONDS = 3.0
 # 单飞门的租约：采样线程若被彻底卡死（磁盘 IO 永不返回），标记不能永久霸住，
@@ -505,19 +488,17 @@ def create_app(
     # 创建 Starlette 应用。参数显式传入（而非读全局），便于测试时指向临时文件；
     # version 由 _APP_VERSION 在运行时从 pyproject.toml 动态提供，避免硬编码。
     #
-    # SEV-N03（2026-09-21）：bind_host / bind_port = **进程实际监听**的地址与端口，由 web.py 把它
-    # 已经知道的那个 host/port 传进来。「非回环 + 无认证」不变量与 Origin 同源判定此前都读
-    # config.ini 里的 web_host/web_port，而 web_host 自身可经同一个 PUT /api/config 改写（既不敏感
-    # 也不在危险键黑名单里），于是「先写 web_host=127.0.0.1、再写 web_auth_enable=false」两步即可
-    # 让仍监听 0.0.0.0 的进程变成「无认证 + 全网卡」——判定基准由请求方可写，防线形同不存在
-    # （详见 web_config 的 MID-N42 段）。判定一律以本处传入的实际绑定地址为准；config 里的
-    # web_host 只在「调用方未接线」时作回落值，理由见 _guard_bind_host。
+    # SEV-N03：bind_host / bind_port = **进程实际监听**的地址与端口，由 web.py 把已知道的 host/port
+    # 传进来。「非回环 + 无认证」不变量与 Origin 同源判定此前都读 config.ini 的 web_host/web_port，
+    # 而 web_host 自身可经同一个 PUT /api/config 改写，于是「先写 web_host=127.0.0.1、再写
+    # web_auth_enable=false」两步即可让仍监听 0.0.0.0 的进程变成「无认证 + 全网卡」。判定一律以
+    # 本处传入的实际绑定地址为准；config 里的 web_host 只在「调用方未接线」时作回落值。
     app = Starlette()
 
     # FastAPI 对端点内 raise HTTPException 的默认响应是 JSONResponse({"detail": ...})，而 Starlette
-    # 的内建 handler 回 PlainTextResponse(detail)——正文变成裸字符串，前端 apiError() 读不到
-    # detail 键，24 条路由的错误契约随之漂移。这里按 FastAPI 语义显式注册 JSON handler；
-    # headers 透传保留 raise 时附带的 Retry-After 等（WebAuth 限流路径在用）。
+    # 内建 handler 回 PlainTextResponse(detail)——正文变成裸字符串，前端 apiError() 读不到 detail
+    # 键，路由错误契约随之漂移。这里按 FastAPI 语义显式注册 JSON handler；headers 透传保留 raise 时
+    # 附带的 Retry-After（限流路径在用）。
     async def _http_exception_to_json(request: Request, exc: Exception) -> JSONResponse:
         # Starlette 异常处理协议要求形参收宽为 Exception；按注册键分发，运行期必为 HTTPException
         http_exc = cast(HTTPException, exc)
@@ -680,17 +661,13 @@ def create_app(
 
     @_route(app, ["POST"], "/api/login")
     def login(req: LoginRequest, request: Request) -> dict[str, object]:
-        # MID-34/35：本端点刻意声明为**同步 def**——FastAPI 会把同步端点派发到 anyio 线程池，于是下面的
-        # read_web_config（磁盘）、PBKDF2 校验（约 150ms CPU）、首次登录的哈希升级写盘（持
-        # file_update_lock + os.replace）全都不在事件循环里执行。旧实现是 async def：一次登录即把整个
-        # 面板（含 2s 轮询与 SSE）按住 150ms，而成本可被 config.ini 里的迭代次数放大 → 面板级 CPU DoS
-        # （迭代上界另见 web_config.clamp_pbkdf2_iterations）。
-        # MIN-2245（2026-09-23）：改走 WD-06 的 mtime+size 缓存——本端点免鉴权，旧写法让「能访问端口」
-        # 就等价于「每请求一次全量 configparser 解析」，与 /api/auth/status 同一失效形态。
-        # 每次登录重新读取配置，保证面板内修改密码即时生效。
-        # **必须 dict(...) 浅拷贝**：下面的明文→哈希升级会写 `cfg["web_password"] = hashed`，直接改缓存
-        # 里的共享 dict 会让中间件与后续请求读到「内存已升级、磁盘还没升级」的混合态（升级写盘失败时
-        # 尤其明显：缓存被污染成磁盘上并不存在的哈希值）。
+        # MID-34/35：本端点刻意声明为**同步 def**——FastAPI 会把同步端点派发到 anyio 线程池，于是
+        # read_web_config（磁盘）、PBKDF2 校验（约 150ms CPU）、首次登录的哈希升级写盘全都不在事件
+        # 循环里执行。旧实现是 async def：一次登录即把整个面板按住 150ms，而成本可被 config.ini 里的
+        # 迭代次数放大 → 面板级 CPU DoS（迭代上界见 web_config.clamp_pbkdf2_iterations）。
+        # 配置读取走 WD-06 的缓存：本端点免鉴权，旧写法让「能访问端口」等价于「每请求一次全量解析」。
+        # **必须 dict(...) 浅拷贝**：下面的明文→哈希升级会写 cfg["web_password"]，直接改缓存里的共享
+        # dict 会让中间件与后续请求读到「内存已升级、磁盘还没升级」的混合态。
         cfg = dict(_read_web_config_cached(cast(str, app.state.config_file)))
         if not cast(bool, cfg["web_auth_enable"]):
             return {"token": "", "expires_in": 0, "auth_required": False}
@@ -774,15 +751,14 @@ def create_app(
             return {**snapshot, "stale": True}
         return snapshot
 
-    # 公开端点：暴露 Web 认证状态，供前端在登录前提示「当前面板未启用认证，所有接口可公开访问」
-    # （/api/login 在认证关闭时也会经此契约告知前端放行）。故意不走 Bearer 校验——登录前拿不到 token。
-    # MID-34：同步 def —— read_web_config 是全量 configparser.read（磁盘 IO），async def 下它会在
-    # 事件循环线程里执行，与 /api/status 同属一类停摆源。
+    # 公开端点：暴露 Web 认证状态，供前端在登录前提示「当前面板未启用认证」
+    # （故意不走 Bearer 校验——登录前拿不到 token）。MID-34：同步 def——read_web_config 是全量
+    # configparser.read（磁盘 IO），async def 下它会在事件循环线程里执行。MIN-2245：改走缓存，
+    # 否则「能访问端口」即可低成本把读盘放大成磁盘 IO 压力。
     @_route(app, ["GET"], "/api/auth/status")
     def auth_status() -> dict[str, object]:
-        # MIN-2245（2026-09-22）：本端点免鉴权，旧写法仍每请求做一次全量 configparser 解析（WD-06 的
-        # mtime+size 缓存当时只挂在中间件上）→ 能访问端口即可低成本把读盘放大为磁盘 IO 压力，而这正是
-        # WD-06 加缓存的理由。改为走同一份缓存；写侧 _invalidate_web_cfg_cache 已兜底失效。
+        # MIN-2245：本端点免鉴权，旧写法仍每请求做一次全量 configparser 解析（缓存当时只挂在中间件）
+        # → 能访问端口即可把读盘放大为磁盘 IO 压力。改为走同一份缓存；写侧已兜底失效。
         cfg = _read_web_config_cached(cast(str, app.state.config_file))
         auth_enabled = cast(bool, cfg["web_auth_enable"])
         return {
@@ -804,11 +780,9 @@ def create_app(
 
     @_route(app, ["GET"], "/api/status/stream")
     async def status_stream(request: Request) -> StreamingResponse:
-        # 2026-09-12 修复（CODE_REVIEW_FIX_1 F-20）：消除「慢速占用面」。原实现 `while True` 无客户端
-        # 断开检测——连接一旦建立就永不释放，每 2 秒轮询一次 main.get_status()（内含锁与字典拷贝）；
-        # 误开标签页、爬虫或恶意连接可无限累积常驻协程，缓慢吃满线程池/内存。端点本身已文档化于
-        # README（对外契约），故保留并修好而非删除：① 每轮开头检测客户端是否断开（ASGI
-        # http.disconnect）后退出；② 连续失败达上限即终止，避免「错误流」也无限推送。
+        # F-20：消除「慢速占用面」。原实现 `while True` 无断开检测——连接一旦建立就永不释放，
+        # 误开标签页、爬虫或恶意连接可无限累积常驻协程。端点已文档化于 README（对外契约），
+        # 故保留并修好：① 每轮检测客户端断开（http.disconnect）后退出；② 连续失败达上限即终止。
         _MAX_CONSECUTIVE_ERRORS = 5
 
         async def event_gen() -> AsyncGenerator[str, None]:
@@ -927,16 +901,10 @@ def create_app(
             except OSError:
                 # 被锁/权限异常：交给下面的写入本身报错，此处不改变语义、也不猜 BOM
                 pass
-            # MIN-2242 后半（2026-09-23 实测收敛）：BOM 只在「文件为空/尚不存在」时写一次，追加改用
-            # 不带 sig 的 utf-8。实测 incremental encoder 每次首 encode 都吐 BOM
-            # （`codecs.lookup('utf-8-sig').incrementalencoder().encode('abc')` → b'\xef\xbb\xbfabc'），
-            # 但 TextIOWrapper 在 "a" 模式下只有**写位为 0** 时才真落下它：先
-            # `open(p,'w').write('abc')` 再 `open(p,'a',encoding='utf-8-sig').write('xyz')` 得
-            # b'abcxyz'（无 BOM），只有空/新建文件得 b'\xef\xbb\xbfxyz'——报告担心的「首写先落 BOM
-            # 再补 \n」在既有内容上并不成立。仍显式改写，是因为那份行为依赖 CPython TextIOWrapper 的
-            # seek-to-end 细节（未文档化保证），而本仓 .ini 编码约定（web_config.TEXT_ENCODING /
-            # main.py 的 text_encoding = utf-8-sig）以「文件头一个 BOM、行内零 BOM」为准；显式化后
-            # 判据自证、回归锁可精确钉住（见 tests/test_web_api.py::TestRoomEndpoints）。
+            # MIN-2242：BOM 只在「文件为空/尚不存在」时写一次，追加改用不带 sig 的 utf-8。
+            # TextIOWrapper 在 "a" 模式下只有写位为 0 时才真落下 BOM，但该行为依赖 CPython 的
+            # seek-to-end 细节（未文档化）；本仓 .ini 约定是「文件头一个 BOM、行内零 BOM」，
+            # 显式化后判据自证、回归锁可精确钉住（tests/test_web_api.py::TestRoomEndpoints）。
             with open(_url_cfg_path, "a", encoding="utf-8") as f:
                 if _is_fresh_file:
                     # utf-8 编码下 U+FEFF 逐字节即 BOM；只在文件为空/新建时写这一份
@@ -946,9 +914,9 @@ def create_app(
 
     @_route(app, ["PUT"], "/api/rooms")
     def update_room(req: RoomUpdate) -> dict[str, object]:
-        # SEV-02 主修复：本端点此前**完全不做**房间校验（POST 与 PUT/quality 都做），于是它成为绕过
-        # SSRF/任意 scheme/画质白名单的第二条写入口。校验现已下沉进 format_url_line（唯一写入口），
-        # 这里再显式调用一次，使「起手即校验」的顺序与其它写端点一致，并让 ValueError 统一转 422。
+        # SEV-02 主修复：本端点此前**完全不做**房间校验（POST 与 PUT/quality 都做），于是成为绕过
+        # SSRF/任意 scheme/画质白名单的第二条写入口。校验已下沉进 format_url_line（唯一写入口），
+        # 这里再显式调用一次，使顺序与其它写端点一致，并让 ValueError 统一转 422。
         old_url = normalize_url(req.old_url)
         try:
             validate_room_target(req.url, req.quality, req.name)
@@ -964,9 +932,8 @@ def create_app(
         replaced = False
         with _rooms_config_lock, _main.file_update_lock:
             old_rooms = parse_url_config(cast(str, app.state.url_config_file))
-            # L-29（2026-10-02）：与新 URL 查重（POST /api/rooms 有 409 查重，PUT 此前漏检）——
-            # 查重缺失时成功保存后配置出现重复 URL 行，删除/画质操作命中不确定。
-            # 排除 old_url 自身：仅改画质/名字（new_url == old_url）不得被误杀。
+            # L-29：与新 URL 查重（POST 已 409，PUT 此前漏检）——查重缺失时保存后配置出现重复
+            # URL 行，删除/画质操作命中不确定。排除 old_url 自身：仅改画质/名字不得被误杀。
             new_url = normalize_url(req.url)
             if any(r["url"] == new_url and r["url"] != old_url for r in old_rooms):
                 raise HTTPException(409, i18n_module.tr("直播间已存在"))
@@ -976,12 +943,10 @@ def create_app(
                     old_raw = cast(str, r["raw_line"]).rstrip("\n").rstrip("\r")
                     prefix = "# " if not r["enabled"] else ""
                     new_raw = (prefix + new_line) if prefix else new_line
-                    # MIN-2243（2026-09-22）：update_file 的契约是「失败时返回 old_str」
-                    # （config_io.update_file 读取失败/未写入分支的 `return old_str`）。旧实现丢弃
-                    # 返回值并无条件 {"ok": True}——日志/配置目录只读、文件被占用或磁盘满时面板
-                    # 提示「已保存」而文件字节未变。
-                    # 与 SEV-05 的 delete_room 同口径：返回值只作**负信号**（返回 old_str 即失败），
-                    # 最终裁决以**重新解析文件**为准（目标 URL 的行内容真的变了才算成功）。
+                    # MIN-2243：update_file 的契约是「失败时返回 old_str」，旧实现丢弃返回值并无条件
+                    # {"ok": True}——目录只读/文件被占/磁盘满时面板提示「已保存」而字节未变。
+                    # 与 SEV-05 的 delete_room 同口径：返回值只作**负信号**，最终裁决以**重新解析文件**
+                    # 为准（目标 URL 的行内容真的变了才算成功）。
                     _ = _main.update_file(
                         cast(str, app.state.url_config_file),
                         old_str=old_raw,
@@ -1008,11 +973,10 @@ def create_app(
             rooms = parse_url_config(cast(str, app.state.url_config_file))
             for r in rooms:
                 if r["url"] == url:
-                    # SEV-05 调用侧（协调契约）：config_io.delete_line 现在返回 bool
-                    # （True = 真的删掉了一行）。旧实现丢弃返回值、无条件回报 {"ok": true}，而它在
-                    # CRLF 文件上因整行精确比较失配而静默 no-op —— Windows 主平台必然发生：面板提示
-                    # 删除成功、房间继续录制并占盘占并发槽，故障完全不可观测。负信号 + 重新解析裁决
-                    # 的口径与 update_room 的 MIN-2243 完全一致。
+                    # SEV-05：delete_line 现在返回 bool（True = 真的删掉了一行）。旧实现丢弃返回值、
+                    # 无条件回报 {"ok": true}，而它在 CRLF 文件上因整行精确比较失配而静默 no-op——
+                    # Windows 主平台必然发生：面板提示删除成功、房间继续录制并占盘。
+                    # 负信号 + 重新解析裁决的口径与 update_room 的 MIN-2243 一致。
                     removed = _main.delete_line(cast(str, app.state.url_config_file), cast(str, r["raw_line"]))
                     remaining = parse_url_config(cast(str, app.state.url_config_file))
                     still_there = any(rr["url"] == url for rr in remaining)
@@ -1035,9 +999,8 @@ def create_app(
                     old_raw = cast(str, r["raw_line"]).rstrip("\n").rstrip("\r")
                     content = old_raw.lstrip("#").strip()
                     new_raw = content if req.enable else "# " + content
-                    # MIN-2243（2026-09-22）：与 update_room 同款——不再无条件回报成功。写入失败
-                    # （只读/占用/磁盘满）时旧实现仍回 {"ok": true, "enabled": ...}，面板显示状态翻转
-                    # 而文件字节未变，房间继续按旧状态录制（占并发槽与磁盘）。
+                    # MIN-2243：与 update_room 同款——不再无条件回报成功。写入失败（只读/占用/
+                    # 磁盘满）时旧实现仍回 {"ok": true}，面板显示状态翻转而文件字节未变。
                     _ = _main.update_file(
                         cast(str, app.state.url_config_file),
                         old_str=old_raw,
@@ -1098,9 +1061,8 @@ def create_app(
 
         with _main.file_update_lock:
             options = write_quality_options(cast(str, app.state.config_file), req.options)
-        # M-30（2026-10-19）：写失败不能再返回 {"ok": true}。write_quality_options 现在在
-        # config.ini 缺失 / 节缺失 / 原子写失败时返回 None——旧实现丢弃写结果，前端据此刷新
-        # 下拉并显示成「已保存」，磁盘上却什么都没变。
+        # M-30：写失败不能再返回 {"ok": true}。write_quality_options 在 config.ini 缺失 / 节缺失 /
+        # 原子写失败时返回 None——旧实现丢弃写结果，前端显示「已保存」而磁盘未变。
         if options is None:
             raise HTTPException(
                 500,
@@ -1115,17 +1077,15 @@ def create_app(
 
     @_route(app, ["PUT"], "/api/config")
     def update_config(req: ConfigUpdate) -> dict[str, object]:
-        # 2026-09-12 审查 C-1：Pydantic 默认不 strip 字段，key 首尾空白可绕过黑名单的精确匹配、而
-        # web_config 行匹配正则的 \s* 仍命中真实配置行（前缀捕获含尾空白），构成未认证 RCE；判定与
-        # 写入前统一规范化（str.strip 覆盖半角/全角空格等 Unicode 空白），并用规范化后的值写入，
-        # 保证黑名单判定与行匹配共用同一 key。
+        # C-1：Pydantic 默认不 strip 字段，key 首尾空白可绕过黑名单的精确匹配、而 web_config 行匹配
+        # 正则的 \s* 仍命中真实配置行，构成未认证 RCE；判定与写入前统一规范化，保证两者共用同一 key。
         key = req.key.strip()
         section = req.section.strip()
         # SEV-04 主修复：入口处**一次**归一，Web 节的**全部**判定都用它。旧代码只对危险键黑名单做
-        # casefold，而 CR-08 的防锁死/防清空、口令哈希化、改密吊销 token 三处守卫全是大小写敏感的
-        # 精确比较。configparser 的 option 本就大小写不敏感（且 _key_line_pattern 带 IGNORECASE），
-        # 于是写入 WEB_PASSWORD 命中**同一行配置**却跳过全部三项守卫：明文密码落盘、旧 token 不失效
-        # （「改密踢人」这一泄露兜底失效）、以及用 WEB_AUTH_ENABLE 绕开目标态判定开关认证 → 面板接管。
+        # casefold，而防锁死/防清空、口令哈希化、改密吊销 token 三处守卫全是大小写敏感的精确比较。
+        # configparser 的 option 本就大小写不敏感（且 _key_line_pattern 带 IGNORECASE），于是写入
+        # WEB_PASSWORD 命中**同一行配置**却跳过全部三项守卫：明文密码落盘、旧 token 不失效、以及用
+        # WEB_AUTH_ENABLE 绕开目标态判定开关认证 → 面板接管。
         key_norm = key.strip().lower()
         # 节名：configparser 的 section 大小写敏感，但写错大小写的节本就命中不了 [Web] 行
         # （update_config_line 走精确比较后返回 False），故此处按不敏感处理只会更严不会更松。
@@ -1133,40 +1093,30 @@ def create_app(
         # 危险配置键（可致远程命令执行）任何认证状态下都禁止修改（casefold：与行匹配的 IGNORECASE 同强度）
         if key.casefold() in _DANGEROUS_CONFIG_KEYS_FOLDED:
             raise HTTPException(403, i18n_module.tr("该配置项不允许通过 Web 修改"))
-        # CR-08：对目标态做整体判定。旧实现只挡了「认证已开启时清空密码」一个方向，反向路径完全敞开
-        # ——认证关闭（出厂默认）时任何能访问面板的人都可写入自己掌握的 web_password 再打开
-        # web_auth_enable 直接接管面板（且写密码会触发下方 _tokens.clear() 踢掉全部在线会话）；或只把
-        # web_auth_enable 置 true 而密码为空，使全部 /api/* 返回 401、/api/login 直接 500，面板被
-        # 永久锁死，只能手工编辑 config.ini 恢复。
+        # CR-08：对目标态做整体判定。旧实现只挡了「认证已开启时清空密码」一个方向，反向路径完全
+        # 敞开——认证关闭（出厂默认）时任何能访问面板的人都可写入自己掌握的 web_password 再打开
+        # web_auth_enable 直接接管面板；或只把 web_auth_enable 置 true 而密码为空，使全部 /api/*
+        # 返回 401、面板被永久锁死。
         current_cfg: dict[str, str | int | bool] | None = None
         if is_web_section and key_norm in ("web_auth_enable", "web_password", "web_host"):
             # 判定基准必须是**磁盘现值**（read_web_config），不能用 _read_web_config_cached：两端读同
-            # 一份缓存时，「缓存 ≠ 现实」这一前提在写侧根本无从显现，下面两道守卫会变成死分支。
-            # [历史注] 2026-09-23 MIN-2245 曾把 /api/login 的缓存顺手接到这里，实测期望 403 实得 200
-            # （tests/test_web_api.py::TestInsecureBindInvariantUsesRealAddress
-            # ::test_loopback_web_host_write_blocked_when_config_cache_says_auth_on 转红）。
-            # 性能理由也不成立：缓存是为每请求都走的中间件准备的，这里是低频写接口——宁可多读一次盘，
-            # 也不依据可能被陈旧缓存说服的乐观态放口令/认证/监听面过去（同 SEV-N03/MID-2241 取向）。
+            # 一份缓存时，「缓存 ≠ 现实」这一前提在写侧无从显现，下面两道守卫会变成死分支。
+            # [历史注] MIN-2245 曾把缓存接到这里，实测期望 403 实得 200（回归锁
+            # tests/test_web_api.py::TestInsecureBindInvariantUsesRealAddress）。性能理由也不成立：
+            # 缓存是为每请求都走的中间件准备的，这里是低频写接口——宁可多读一次盘。
             current_cfg = dict(read_web_config(cast(str, app.state.config_file)))
             _currently_enabled = cast(bool, current_cfg["web_auth_enable"])
-            # `_current_pwd` 的求值点从本行下移到下面的消费处（else 分支）：它只被 web_auth_enable /
-            # web_password 的目标态判定消费，写在 if 之前会让**写 web_host 这条从不关心口令的路径**
-            # 依赖「配置视图里存在 web_password 键」。该依赖 2026-09-23 确实炸过一次（同一用例以
-            # KeyError: 'web_password' 转红，本应 403 的写入变成 500）；现基准已换回 read_web_config、
-            # 键必然存在，但不回收这个惰性求值——「不消费的值不该出现在会抛异常的路径上」与基准选
-            # 哪个无关。
+            # `_current_pwd` 只在下面的 else 分支求值：写在 if 之前会让**写 web_host 这条从不关心
+            # 口令的路径**依赖「配置视图里存在 web_password 键」（曾以 KeyError 炸成 500）。
+            # 「不消费的值不该出现在会抛异常的路径上」与基准选哪个无关。
             if key_norm == "web_host":
-                # SEV-N03（2026-09-21）：对**可写的判定基准本身**施加目标态校验。web_host 既不命中
-                # is_sensitive_item 也不在危险键黑名单里，于是不变量可被两步写入旁路：① 写
-                # web_host=127.0.0.1（无守卫）② 写 web_auth_enable=false（旧判定看的是刚写进去的
-                # 假回环值 → 放行）。中间件那半已改为只认实际绑定地址（本条不能再旁路它），这里补
-                # 第二道是为了不把「配置比现实乐观」的状态放出去：认证已关闭时把监听地址改写成与真实
-                # 绑定不同类的回环值，等于给下一次重启预置一个「无认证 + 看起来安全」的配置，而下次
-                # 重启前用户看到的仍是被 403 的面板——两边都对不上账。
-                # 只判这一个方向（配置比现实乐观）。反向（实际绑回环、配置写 0.0.0.0）不拦：中间件按
-                # 现实（回环）判定、没有旁路可言，且下一次重启时 web.py 的启动检查会拒绝「无认证 +
-                # 非回环」这一配置组合，不会静默开放。放开这一侧是为了不打死「本机调试时预填 0.0.0.0、
-                # 准备下次开放」这类正常编辑。
+                # SEV-N03：对**可写的判定基准本身**施加目标态校验。web_host 既不命中 is_sensitive_item
+                # 也不在危险键黑名单里，于是不变量可被两步写入旁路：① 写 web_host=127.0.0.1（无守卫）
+                # ② 写 web_auth_enable=false（旧判定看刚写进去的假回环值 → 放行）。中间件已改为只认实际
+                # 绑定地址（本条不能再旁路它），这里补第二道是为了不把「配置比现实乐观」的状态放出去。
+                # 只判这一个方向：反向（实际绑回环、配置写 0.0.0.0）不拦——中间件按现实判定、无旁路，
+                # 且重启时 web.py 的启动检查会拒绝这一组合，放开这一侧是为了不打死「本机调试时预填
+                # 0.0.0.0」这类正常编辑。
                 _bind_host = _guard_bind_host(app, current_cfg)
                 if not _currently_enabled and not _insecure_bind_allowed():
                     if is_loopback_bind_host(req.value) and not is_loopback_bind_host(_bind_host):
@@ -1193,12 +1143,9 @@ def create_app(
                 if _target_enabled and not _target_pwd:
                     raise HTTPException(400, i18n_module.tr("开启 Web 认证必须同时设置 web_password"))
                 # SEV-04：把「认证降级」当作敏感变更拒绝——非回环监听地址下不允许把 web_auth_enable
-                # 写成 false。旧语义下这一个写请求就能把「已开认证的 0.0.0.0 部署」变成「无认证 +
-                # 全网卡监听」且无需重启，/api/config、/api/logs、/api/files、房间写入随之全开。
-                # 中间件另有每请求的同一不变量兜底，这里先给 403 是为了让调用方拿到**可行动的**原因，
-                # 而不是事后一串 403。破例仍走 web.py 的 DOUYIN_WEB_ALLOW_INSECURE=1（与启动检查同源）。
-                # [历史注] SEV-N03（2026-09-21）前判定基准是 current_cfg["web_host"]，现换成
-                # _guard_bind_host(app, ...) = 进程实际绑定地址，并在文案里报出该地址。
+                # 写成 false（旧语义下这一个写请求就能把「已开认证的 0.0.0.0 部署」变成「无认证 +
+                # 全网卡监听」且无需重启）。中间件另有每请求的同一不变量兜底，这里先给 403 是为了让
+                # 调用方拿到**可行动的**原因。破例仍走 DOUYIN_WEB_ALLOW_INSECURE=1（与启动检查同源）。
                 if key_norm == "web_auth_enable" and not _target_enabled:
                     _bind = _guard_bind_host(app, current_cfg)
                     if not is_loopback_bind_host(_bind):
@@ -1221,22 +1168,15 @@ def create_app(
             if cast(bool, current_cfg["web_auth_enable"]):
                 raise HTTPException(400, i18n_module.tr("请先关闭 Web 认证再清空密码"))
         value = req.value
-        # MID-2236（2026-09-22）：读写两侧的敏感判据此前**分叉**——读侧 web_config.read_config_safe 判
-        # `is_sensitive_item(section, key) or _looks_like_secret_value(value)`，写侧（此处，修复前）只有
-        # 前一半。后果：键名不含凭据关键词、但值本身是凭据的项（推送接口链接 ?key=xxx、带账密的代理
-        # 地址 http://user:pass@host、bark 设备地址…）在面板上是 '***' 掩码，后端却**不认**它是敏感项
-        # → 用户把掩码删空提交（或脚本直接 PUT 空串/字面 '***'）会被当作普通配置写入，把真实凭据覆盖
-        # 成空/掩码，而备份副本已按 CR-07 脱敏、无从恢复。修法：写侧复用**同一份**读侧判据（唯一事实
-        # 来源在 web_config，不在此复制第二份实现），并对「掩码/空值」两种情况都生效。
-        # 值形态判定只作用于**非空**入参（空值没有 URL 形态可判），故下面的 old_value 回退是必要的：
-        # 否则「把值型凭据清空」这一步仍能从缝里溜过——那正是本条要堵的洞。
-        # [历史注] old_value 最初取自 read_config_safe，实测**失效**：值型凭据回显的正是 SENSITIVE_MASK
-        # → old_value == '***' → _looks_like_secret_value('***') 恒为 False，本分支在真实 PUT 路径上被
-        # 整条放行（期望 400 实得 200 {"ok":true}、真实凭据被 '   ' 覆盖）。回归锁
-        # tests/test_regression_2026_09_22_web_g.py::TestWriteSideSensitiveParity
-        # ::test_blank_write_to_value_shaped_secret_rejected。现改为从 configparser 直接读**未脱敏**
-        # 原始值：判据要的是「这一格原本是不是凭据」，脱敏后的副本恰恰丢掉该信息。读取失败（文件缺失/
-        # 损坏）时降级为空串、不改变写入语义——后续 update_config_line 本就会返回 False 并给出 404。
+        # MID-2236：读写两侧的敏感判据此前**分叉**——读侧是 `is_sensitive_item(section, key) or
+        # _looks_like_secret_value(value)`，写侧只有前一半。后果：键名不含凭据关键词、但值本身是
+        # 凭据的项（推送接口链接 ?key=xxx、带账密的代理地址、bark 设备地址…）在面板上是 '***'，
+        # 后端却不认为它是敏感项 → 用户把掩码删空提交会被当作普通配置写入，把真实凭据覆盖成空/
+        # 掩码。修法：写侧复用**同一份**读侧判据（唯一事实来源在 web_config），并对「掩码/空值」都生效。
+        # old_value 回退是必要的：否则「把值型凭据清空」仍能溜过（空值没有 URL 形态可判）。
+        # [历史注] old_value 最初取自 read_config_safe，实测失效——回显的正是 SENSITIVE_MASK，
+        # 于是 _looks_like_secret_value('***') 恒为 False，本分支被整条放行。现改为从 configparser
+        # 直接读**未脱敏**原始值；读取失败时降级为空串、不改变写入语义。
         old_value = ""
         try:
             _raw_parser = configparser.ConfigParser(interpolation=None)
@@ -1247,36 +1187,31 @@ def create_app(
             # 配置不可读时静默降级即可（不吞掉任何安全判定），理由已在上方注释说明
             old_value = ""
         if is_sensitive_item(section, key) or _looks_like_secret_value(value) or _looks_like_secret_value(old_value):
-            # MID-37（后端半边）：敏感键**不得被空值覆盖**。面板对敏感项回显的是 '***' 掩码，
-            # 旧的前端只挡「原样提交 ***」，用户全选删空后提交 '' 既 ≠ '***' 也 ≠ 旧值，
-            # 于是真实 cookie/token 被空串静默覆盖。与 web_password 同口径：清空敏感凭据必须走
-            # 显式路径，不能由一次误操作完成。
+            # MID-37：敏感键**不得被空值覆盖**。面板对敏感项回显 '***'，旧前端只挡「原样提交 ***」，
+            # 用户全选删空后提交 '' 既 ≠ '***' 也 ≠ 旧值，于是真实 cookie/token 被空串静默覆盖。
+            # 与 web_password 同口径：清空敏感凭据必须走显式路径，不能由一次误操作完成。
             if not value.strip():
                 raise HTTPException(
                     400, i18n_module.tr("敏感配置项不得清空：如需移除请显式填写占位值并手工编辑 config.ini")
                 )
-            # MID-37 残留（2026-09-21）：掩码 '***' 同样必须被服务端拦住。read_config_safe 对敏感项
-            # 回显的就是 SENSITIVE_MASK，前端 saveConfig 虽会跳过原样提交的掩码，但那是**唯一**防线——
-            # 任何直接打 PUT /api/config 的调用方（脚本、旧版前端、被改过的页面）都能把真实凭据覆盖成
-            # 字面 '***'。后端不接受掩码，才使「跳过掩码」从必要防线降级为纯粹的省一次无谓写入。
+            # MID-37 残留：掩码 '***' 同样必须被服务端拦住。read_config_safe 回显的就是 SENSITIVE_MASK，
+            # 前端 saveConfig 虽会跳过原样提交的掩码，但那是**唯一**防线——任何直接打 PUT /api/config
+            # 的调用方都能把真实凭据覆盖成字面 '***'。后端不接受掩码，才使「跳过掩码」降级为省一次写入。
             elif value.strip() == SENSITIVE_MASK:
                 raise HTTPException(400, i18n_module.tr("敏感配置项不得以掩码值提交：请填入真实值，或保持该项不修改"))
-        # ─── MID-2241 后端强制复验（2026-09-23 落地）───────────────────────────────
-        # 前端 confirm（web/app.js::saveConfig）只挡得住「手滑点保存」，挡不住任何直接打
-        # PUT /api/config 的一方（脚本、旧版前端、被改过的页面、拿到 bearer 却没口令的攻击者），
-        # 故复验必须在服务端做：**认证当前开启**时写入 `[Web] web_auth_enable` / `web_password`
-        # 必须携带能过 verify_web_password 的 reauth_password，否则 403——bearer 自此只证明
-        # 「这是一个已登录会话」，不再单独证明「操作者知道口令」（关认证与改口令都是能力降级）。
-        # 三条判据的取舍（各对应一种会被误伤的真实场景，改动前先读完）：
-        # · **只在认证已开启时要求**：认证关闭（出厂默认）时面板对任何能访问端口的人都全开，bearer
-        #   本身不构成防线、也没有可信的「当前口令」可验（web_password 通常为空），此时强复验只会把
-        #   「本机用户按提示收紧/放开配置」打死；非回环绑定下的关闭态另有 SEV-04 的每请求不变量兜底。
-        # · **排在敏感空值/掩码守卫之后**：`web_password='***'` 或空值属「值形态非法」，裁决必须是
-        #   400 + 可行动文案（tests/test_web_api.py::TestSensitiveValueBlankRejected 钉着），让 403
-        #   抢在前面会把「不要把掩码写回去」这一提示降级成笼统的权限错误。
+        # ─── MID-2241 后端强制复验 ───────────────────────────────────────
+        # 前端 confirm 只挡得住「手滑点保存」，挡不住任何直接打 PUT /api/config 的一方（脚本、旧版
+        # 前端、拿到 bearer 却没口令的攻击者），故复验必须在服务端做：**认证当前开启**时写入
+        # web_auth_enable / web_password 必须携带能过 verify_web_password 的 reauth_password，否则
+        # 403——bearer 只证明「这是个已登录会话」，不证明「操作者知道口令」。
+        # 三条判据的取舍（各对应一种会被误伤的真实场景）：
+        # · **只在认证已开启时要求**：认证关闭（出厂默认）时面板对任何能访问端口的人都全开，也没有
+        #   可信的「当前口令」可验，强复验只会把「本机用户按提示收紧配置」打死；
+        # · **排在敏感空值/掩码守卫之后**：web_password='***' 或空值属「值形态非法」，裁决必须是
+        #   400 + 可行动文案（tests/test_web_api.py::TestSensitiveValueBlankRejected 钉着）；
         # · **口令比对失败不回显任何口令线索**：只回固定 detail，细节走 _log_internal_error。
-        # 反向边界（不得扩到的范围）：其余 Web 键（web_host/web_port/web_allowed_hosts…）与其他节的
-        # 键一律不受本条影响，否则「改个端口也要复验」会逼人绕过面板手改文件。
+        # 反向边界：其余 Web 键（web_host/web_port/web_allowed_hosts…）与其他节的键一律不受本条
+        # 影响，否则「改个端口也要复验」会逼人绕过面板手改文件。
         if is_web_section and key_norm in ("web_auth_enable", "web_password"):
             if current_cfg is None:
                 current_cfg = dict(_read_web_config_cached(cast(str, app.state.config_file)))
@@ -1291,10 +1226,9 @@ def create_app(
             validate_config_target(section, key, value)
         except ValueError as e:
             raise HTTPException(422, str(e)) from e
-        # 密码统一以 PBKDF2 哈希存储，避免明文落盘。
-        # M-06（2026-09-30）：哈希前先 strip——reauth 复验用的是 strip 后的值（MID-2241），
-        # 登录比对也已统一 strip；写入侧若用原文哈希，设置「首尾带空格」的口令（粘贴/输入法
-        # 尾随空格是常见来源）后所有 reauth 永远 403，认证配置经面板永久自锁、只能手改文件。
+        # 密码统一以 PBKDF2 哈希存储，避免明文落盘。哈希前先 strip：reauth 复验与登录比对都用
+        # strip 后的值；写入侧若用原文哈希，设置「首尾带空格」的口令后所有 reauth 永远 403，
+        # 认证配置经面板永久自锁、只能手改文件。
         if is_web_section and key_norm == "web_password" and value.strip():
             normalized_password = value.strip()
             if not is_hashed_web_password(normalized_password):
@@ -1312,24 +1246,18 @@ def create_app(
         if is_web_section and key_norm == "web_password" and req.value.strip():
             with _tokens_lock:
                 _tokens.clear()
-        # M-31（2026-10-19）：`web_auth_enable` 的**任一**变更同样要吊销令牌。原实现只在写
-        # web_password 时清，于是「关认证 → 再开认证」这条最常见的应急操作无法切断此前签发的
-        # bearer（最长 7 天）——重新打开认证本应等价于「切断所有既有访问」，泄漏令牌的有效期
-        # 窗口因此被拉长到原样。与密码分支同一把锁、同一语义（强制重新登录）。
+        # M-31：web_auth_enable 的**任一**变更同样要吊销令牌。原实现只在写 web_password 时清，
+        # 于是「关认证 → 再开认证」无法切断此前签发的 bearer（最长 7 天）——重新打开认证本应等价于
+        # 「切断所有既有访问」。与密码分支同一把锁、同一语义。
         if is_web_section and key_norm == "web_auth_enable":
             with _tokens_lock:
                 _tokens.clear()
-        # 认证状态变更后必须让中间件的配置缓存失效：缓存按 mtime+size 失效，
-        # 极端情况下同一秒内的等长改写不会改变 mtime（Windows FAT/粗精度时间戳），
-        # 于是「关掉认证」这一安全相关的写入要到下一次改写才生效。显式失效，不留窗口。
-        # L-23（2026-10-18）：清单补齐另外两个**安全判定**键，判据与上面完全同源。
-        # `web_allowed_hosts` 经 _is_same_origin→is_origin_allowed 决定哪些 Host/Origin 能驱动写接口
-        # （MID-36 的 DNS 重绑定防线），`web_trusted_proxy` 决定 X-Forwarded-For 是否可信
-        # （MID-35 的登录限流按此分桶，可信代理配错等于限流整体失效）。二者都只从这份带缓存的
-        # cfg 里取，于是「把 allowed_hosts 从 evil.tld 改成自家域名」这类**收紧**动作在同秒等长改写
-        # 下不会即时生效——判定键的变更不该依赖一次巧合的文件元数据变化。
-        # 反向边界（不得扩到全部 Web 键）：web_port/web_token_expiry/web_show_console 等不参与安全
-        # 判定，多失效一次只会让下一个请求重读磁盘，收益为零；本清单只登记「判定会因此改变」的键。
+        # 安全判定键变更后必须显式失效中间件的配置缓存：缓存按 mtime+size 失效，而同一秒内的
+        # 等长改写可能不改变 mtime（Windows FAT/粗精度时间戳），于是「关掉认证」这类写入要到
+        # 下一次改写才生效。清单只登记「判定会因此改变」的键：web_allowed_hosts 决定哪些
+        # Host/Origin 能驱动写接口（DNS 重绑定防线），web_trusted_proxy 决定 XFF 是否可信（登录
+        # 限流按此分桶，配错等于限流整体失效）。反向边界：web_port/web_token_expiry 等不参与安全
+        # 判定，多失效一次只会让下一个请求重读磁盘。
         if is_web_section and key_norm in (
             "web_auth_enable",
             "web_password",
@@ -1352,16 +1280,10 @@ def create_app(
 
     @_route(app, ["PUT"], "/api/language")
     def set_language(req: LanguageUpdate) -> dict[str, object]:
-        # 即时切换语言：归一化校验 → **先**热切换本进程翻译目录 → 按**实际生效**的语言码写回 config.ini。
-        # 本进程（uvicorn 与录制守护线程同进程）后续控制台/日志输出即时使用新语言；
-        # main() 主循环每轮也会按配置重同步，两者一致。
-        #
-        # MID-52（Web 半边，2026-09-21）：旧顺序是「normalize_language → 写 config.ini → set_language」，
-        # 而 i18n.set_language() 现在返回的是**实际生效**语言码（内部经 has_catalog/resolve_language 口径，
-        # 目录缺失时回退，例如 PyYAML 未装则 zh_TW.yaml 加载不了 → en_US）。写请求值会把一个
-        # 「本进程根本装载不到译文」的码落盘：录制子进程每轮经 resolve_language 重解析落到 en_US，
-        # 于是同一部署的 GUI/面板与录制进程各说一种语言，且响应里的 language 是虚假成功。
-        # 现改为「切换 → 落盘生效码 → 按生效码应答 + 回退提示」。
+        # MID-52：旧顺序是「normalize → 写 config.ini → set_language」，而 set_language() 返回的是
+        # **实际生效**语言码（目录缺失时回退，如 PyYAML 未装则 zh_TW 回退 en_US）。写请求值会把一个
+        # 「本进程装载不到译文」的码落盘：录制子进程重解析后落到 en_US，两进程各说一种语言，
+        # 且响应里的 language 是虚假成功。现改为「先热切换 → 按生效码落盘 → 按生效码应答 + 回退提示」。
         import i18n as i18n_module
 
         if not req.language.strip() or not i18n_module.is_recognized_language(req.language):
@@ -1465,10 +1387,8 @@ def create_app(
                 tail = deque(f, maxlen=lines)
             return {"lines": list(tail)}
         except Exception as e:
-            # MID-39：日志文件被占用/权限异常时 str(e) 形如
-            # "[Errno 13] Permission denied: 'D:\\...\\logs\\streamget.log'"，
-            # 旧实现把它塞进 detail 并被前端原样弹成 toast —— 对局域网泄露安装绝对路径。
-            # 对外只给固定 code，细节进日志（行为仍可观测：面板显示失败并能在日志里查到）。
+            # MID-39：日志文件被占用/权限异常时 str(e) 带安装绝对路径，旧实现把它塞进 detail 并被
+            # 前端弹成 toast——对局域网泄露路径。对外只给固定 code，细节进日志（面板仍能看到失败）。
             _log_internal_error(_LOGS_ERROR_CODE, e)
             raise HTTPException(500, _LOGS_ERROR_CODE) from e
 
@@ -1507,26 +1427,17 @@ def _purge_expired_tokens() -> None:
             _ = _tokens.pop(t, None)
 
 
-# SEV-2221 / SEV-2228（2026-09-23 收敛）：**`main_loop_alive` 已从 /api/status 契约里撤下。**
-# 撤下而不是留着：那版探针读的是 `main.main_loop_ticks`，而该名字在 main.py 里**从未定义、也从未
-# 自增**（取证：`grep -rn main_loop_ticks main.py src/` 只命中 web_api.py 自身与 tests/），于是探针
-# 恒走「计数器缺失 → 返回 None」分支、该键永不下发，前端 `s.main_loop_alive === false` 是一条
-# **永不成立**的判定。更糟的是 `tests/frontend/*.mjs` 与 `tests/test_regression_2026_09_22_web_g.py`
-# 都在锁这条死路径，其中两条用例（推进单调时钟后期望 False）2026-09-23 实测就已红——探针的时钟 shim
-# 会永久留在 web_api 模块上（setattr 而非 monkeypatch），跨用例串扰。「有一个永不生效的存活信号」比
-# 「没有该信号」更危险：它让后续排障以为停摆已被覆盖。
-# 为什么不用「已真实存在的可观察量」替代（任务书允许的另一条路，实测逐个判过）：
-#   · `main._recorder_thread.is_alive()` 已被 `engine_alive` 占用，再包一层是同一个量冒充两个证据；
-#   · `main.monitoring` / `main.error_count` / `main.running_list` 只在房间增减或出错时变化，
-#     「零变化」既可能是停摆也可能是安静运行 → 用它判活必然假红；
-#   · `main.config` 的对象身份每轮被 `_hot_reload_config()` 整体替换，看着最接近「轮次进展」，但热
-#     加载失败（OSError / 空配置）时它**保持不变**而主循环照旧推进——磁盘抖动即误报停摆；
-#   · `display_info` / `adjust_max_request` 的节拍量都在**另外的守护线程**里，它们前进不能证明录制
-#     主循环在推进（正是本条要区分的故障形态）。
-# 真正的停摆判据必须来自 main 自己的轮次计数（一行 `main_loop_ticks += 1` 放在 while True 顶部），
-# 而 main.py 不在本次改动所有权内 → 撤下该键并把接线点留给主会话。撤下后面板侧的「取证失败」改由两个
-# **真实存在**的信号承担：`error`（采样抛错）与 `stale`（快照超时回退），见 _status_worker /
-# _get_status_snapshot 与 web/app.js::updateStatusWarning。
+# ─── main_loop_alive 已从 /api/status 契约里撤下（SEV-2221 / SEV-2228）───
+# 原先它读 main.main_loop_ticks，而该名字在 main.py 里**从未定义、也从未自增**（取证：
+# `grep -rn main_loop_ticks main.py src/` 只命中 web_api.py 自身与 tests/），于是探针恒走「计数器
+# 缺失 → 返回 None」分支、该键永不下发，前端 `s.main_loop_alive === false` 是一条**永不成立**的判定；
+# 而 tests/ 里多条用例在锁这条死路径。「有一个永不生效的存活信号」比「没有该信号」更危险：它让
+# 后续排障以为停摆已被覆盖。不用其他可观察量替代的理由：engine_alive 已占 _recorder_thread；
+# monitoring/error_count/running_list 只在变化时动，「零变化」可能是停摆也可能是安静运行；main.config
+# 热加载失败时对象不变而主循环照旧推进（磁盘抖动即误报）；节拍量都在另外的守护线程里。
+# 真正的判据必须来自 main 自己的轮次计数（while True 顶部一行 main_loop_ticks += 1），而 main.py 不在
+# 本次改动所有权内 → 撤下该键。面板侧的「取证失败」改由 error（采样抛错）与 stale（快照超时回退）
+# 两个**真实存在**的信号承担，见 _status_worker / _get_status_snapshot 与 web/app.js::updateStatusWarning。
 def _read_engine_status() -> dict[str, object]:
     # 状态采样的唯一 seam：保留本函数而不是内联进 _status_worker，就是给未来的轮次探针留接线点——
     # 一旦 main.py 侧补上轮次计数，在此按「非 None 才挂键」的口径重新接上，并同时恢复前端
@@ -1537,12 +1448,10 @@ def _read_engine_status() -> dict[str, object]:
 
 
 def _status_worker(fetch_since: float) -> dict[str, object]:
-    # 线程体：采样 + 写缓存 + 清「进行中」标记。**任何异常都在本函数内消化**，
-    # 绝不把内部异常原文（绝对路径 / Errno）带到响应里（MID-39）。
-    # 「进行中」标记必须在线程自己的 finally 里清，不能在等待方清：
-    # asyncio.wait_for 超时只会取消「等待」，取消不了已经跑起来的线程——
-    # 若由等待方清标记，下一个 2s 轮询又会起一条线程去撞同一块挂起的盘，线程无界增长。
-    # 只在自己的租约仍是当前租约时才清（超时后可能已有第二次采样接管了门）。
+    # 线程体：采样 + 写缓存 + 清「进行中」标记。**任何异常都在本函数内消化**（MID-39）。
+    # 「进行中」标记必须在线程自己的 finally 里清：asyncio.wait_for 超时只取消「等待」，取消不了
+    # 已跑起来的线程——若由等待方清标记，下一个 2s 轮询又会起一条线程去撞同一块挂起的盘。
+    # 且只在自己的租约仍是当前租约时才清（超时后可能已有第二次采样接管了门）。
     global _status_inflight, _status_inflight_since, _status_cache, _status_cache_at
     try:
         try:
@@ -1561,14 +1470,12 @@ def _status_worker(fetch_since: float) -> dict[str, object]:
 
 
 async def _get_status_snapshot() -> tuple[dict[str, object], bool]:
-    # 返回 (状态快照, 是否为陈旧值)。
-    # MID-34 的三层配合：
-    # ① TTL 内直接复用缓存 —— 磁盘容量/错误数这类展示值本就是秒级变化，2s 窗口对面板无损，
-    #    却把「每 2s 一次 shutil.disk_usage + 两把跨线程锁」从事件循环上彻底摘掉；
-    # ② 单飞门 —— 已有一次采样在飞（可能正卡在挂起的网络盘上）时立即回陈旧值，
-    #    绝不叠第二条线程，否则每个轮询/每个 SSE 连接都会再撞一次；
-    # ③ wait_for 超时 —— 超时只让**等待**结束，线程照旧跑完并写缓存，
-    #    于是「慢」体现在数据新鲜度（stale:true）而不是整个面板无响应。
+    # 返回 (状态快照, 是否为陈旧值)。MID-34 的三层配合：
+    # ① TTL 内直接复用缓存——展示值本就是秒级变化，2s 窗口对面板无损，却把「每 2s 一次
+    #    disk_usage + 两把跨线程锁」从事件循环上彻底摘掉；
+    # ② 单飞门——已有一次采样在飞（可能卡在挂起的网络盘上）时立即回陈旧值，绝不叠第二条线程；
+    # ③ wait_for 超时——超时只让**等待**结束，线程照旧跑完并写缓存，于是「慢」体现在数据新鲜度
+    #    （stale:true）而不是整个面板无响应。
     # 注：3.11 起 asyncio.TimeoutError 即内建 TimeoutError，故只捕一个（本仓下限 3.14）。
     global _status_inflight, _status_inflight_since
     now = time.monotonic()
@@ -1638,23 +1545,20 @@ def _is_same_origin(
     bind_host: str,
     bind_port: int,
 ) -> bool:
-    # WD-08：判断非幂等请求是否同源。无 Origin 头（curl/脚本/同源导航）放行——浏览器对跨域写请求
-    # 必带 Origin，缺失即非浏览器场景，不属于本轮要拦的 CSRF 面。
+    # WD-08：判断非幂等请求是否同源。无 Origin 头（curl/脚本/同源导航）放行——浏览器对跨域写
+    # 请求必带 Origin，缺失即非浏览器场景。
     #
     # MID-36：期望值改由**服务端配置**推导，不再拿请求自带的 Host 当基准。旧实现
-    # `origin in (f"http://{host}", f"https://{host}")` 的 host 取自 Host 头，于是 DNS 重绑定下
-    # （attacker.tld → 127.0.0.1）Origin 与 Host 必然相等，判定形同不存在。另外 Sec-Fetch-Site 由
-    # 浏览器强制覆盖、跨站页面无法伪装成 same-origin，故显式 cross-site 直接判否（缺该头不作为
-    # 放行依据，避免非浏览器场景被误伤）。
+    # `origin in (f"http://{host}", ...)` 的 host 取自 Host 头，DNS 重绑定下（attacker.tld →
+    # 127.0.0.1）Origin 与 Host 必然相等，判定形同不存在。Sec-Fetch-Site 由浏览器强制覆盖，
+    # 故显式 cross-site 直接判否（缺该头不作为放行依据，避免非浏览器场景被误伤）。
     #
-    # MID-N42（2026-09-21）：Origin 不再复用为 Host 头设计的 web_config.is_host_allowed。那套规则
-    # 放行「任何 IP 字面量」与「任何无点单标签名」，且 _strip_host_port 会把端口丢掉——对 Host 头
-    # 成立（重绑定需要注册域名、以 IP 访问面板是常态），对 Origin 不成立：http://192.168.1.47/
-    # （局域网里另一台设备的页面）与 http://localhost:3000/（本机任意 dev server）都会被判同源，
-    # 而认证关闭（出厂默认）时这条判定是写接口唯一防线。现改判**host 与端口都命中服务端推导的期望
-    # 集合**（实际绑定 host:实际端口 + 回环族 + web_allowed_hosts 显式登记的 host[:port]），判定本体
-    # 在 web_config.is_origin_allowed；Host 头那条继续用 is_host_allowed、行为不变（两套装进一个函数
-    # 就会有一侧退化，MID-36 那条防线不能让 Origin 修复顺带砍掉）。
+    # MID-N42：Origin 不再复用为 Host 头设计的 is_host_allowed。那套规则放行「任何 IP 字面量」与
+    # 「任何无点单标签名」、且丢掉端口——对 Host 成立，对 Origin 不成立：http://192.168.1.47/
+    # （局域网里另一台设备的页面）与 http://localhost:3000/（本机 dev server）都会被判同源，而
+    # 认证关闭（出厂默认）时这条判定是写接口唯一防线。现改判**host 与端口都命中服务端推导的期望
+    # 集合**（判定本体在 web_config.is_origin_allowed）；Host 头那条继续用 is_host_allowed、行为
+    # 不变（两套装进一个函数就会有一侧退化）。
     if request.headers.get("Sec-Fetch-Site", "").strip().lower() == "cross-site":
         return False
     origin = request.headers.get("Origin")
@@ -1664,14 +1568,11 @@ def _is_same_origin(
 
 
 def _api_locked_out_by_insecure_bind(cfg: dict[str, str | int | bool], path: str, bind_host: str) -> bool:
-    # SEV-04：/api/* 的「非回环 + 无认证」不变量（每请求判定）。
-    # 只作用于 API：静态页与 /health 仍放行，否则运维既打不开面板也看不到告警，
-    # 只能靠改文件恢复——那正是本仓多处「只能手工编辑 config.ini 恢复」的成因。
-    #
-    # SEV-N03 修复（2026-09-21，CODE_REVIEW_2026-09-21）：第三个参数 bind_host 是**进程实际
-    # 绑定地址**（调用侧经 _guard_bind_host 取值），不再读 cfg["web_host"]——后者可经
-    # PUT /api/config 改写，两步写入即可旁路整条不变量。
-    # 本函数只在内部做判定、不加锁也不改状态；调用方（鉴权中间件）负责每请求传新 cfg。
+    # SEV-04：/api/* 的「非回环 + 无认证」不变量（每请求判定）。只作用于 API：静态页与 /health
+    # 仍放行，否则运维既打不开面板也看不到告警，只能靠改文件恢复。
+    # bind_host 是**进程实际绑定地址**（调用侧经 _guard_bind_host 取值），不再读 cfg["web_host"]
+    # ——后者可经 PUT /api/config 改写，两步写入即可旁路整条不变量。
+    # 本函数只判定、不加锁不改状态；调用方（鉴权中间件）负责每请求传新 cfg。
     if not path.startswith("/api/"):
         return False
     if cast(bool, cfg["web_auth_enable"]) or _insecure_bind_allowed():

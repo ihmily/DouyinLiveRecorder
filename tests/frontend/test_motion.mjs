@@ -1,14 +1,14 @@
-// web/motion.js 的单元测试（Node 内置 node:test，零 npm 依赖）。
+// web/motion.js（背景粒子 + 滚动入场）的单元测试，Node 内置 node:test，零 npm 依赖。
 //
-// 与 test_quality_ui.mjs 同源思路：在 node:vm 沙箱里加载生产脚本，用最小 DOM/window 桩驱动，
-// 断言动效层的关键不变量——不改造生产代码、覆盖真实接线而非孤立函数。
+// 与 test_quality_ui.mjs 同源：node:vm 沙箱加载生产脚本、最小 DOM/window 桩驱动真实接线，
+// 不改造生产代码，也不把函数抽出来孤立测试。
 //
-// 重点守护的不变量（防止「好看但失控」）：
+// 守护的不变量：
 //   1) computeParticleCount 的边界与移动端/低核数减半（纯函数，可复算）；
-//   2) prefers-reduced-motion 命中时完全不创建 canvas、不启动动画循环；
-//   3) 正常模式下创建背景 canvas 并启动单 rAF 循环，粒子数恒定在 [18,64]；
-//   4) destroy() 停止循环、断开观察器、移除自建 canvas、清空粒子；
-//   5) 滚动入场：进入视口的 .panel / .stat-card 被加上 reveal/is-revealed。
+//   2) prefers-reduced-motion 命中时不创建 canvas、不启动动画循环；
+//   3) 正常模式创建背景 canvas 并启动单 rAF 循环，粒子数落在 [18,64]；
+//   4) destroy() 停循环、断观察器、移除自建 canvas、清空粒子；
+//   5) 滚动入场给进入视口的 .panel / .stat-card 加 reveal / is-revealed。
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -91,13 +91,13 @@ function makeDocument({ reduced, panels = [], statCards = [], reveals = [] }) {
 }
 
 // 观察器桩：observe 时立即回调「已进入视口」，驱动入场逻辑。
-// 必须用 class（可构造），不能写对象方法简写 `IntersectionObserver(cb){}` —— 方法简写不可 new，
-// 会令 motion.js 的 `new Observer(cb)` 在沙箱里抛 "not a constructor"（浏览器里它是 class，合法）。
+// 必须用 class（可构造），不能写方法简写 `IntersectionObserver(cb){}` —— 方法简写不可 new，
+// 会让 motion.js 的 `new Observer(cb)` 抛 "not a constructor"。
 class FakeIntersectionObserver {
     constructor(cb) {
         this.cb = cb;
-        // 必须传第二个参数（观察器实例自身），与真实 IntersectionObserver 一致：
-        // motion.js 的回调用 `observer.unobserve(...)` 解绑，漏传会 undefined.unobserve 报错。
+        // 第二个参数必须传观察器实例：motion.js 的回调要调 `observer.unobserve(...)` 解绑，
+        // 漏传会变成 undefined.unobserve。
         this.observe = (el) => cb([{ isIntersecting: true, target: el }], this);
         this.unobserve = () => {};
         this.disconnect = () => {};
@@ -123,9 +123,9 @@ function loadMotion(opts) {
     const document = makeDocument(opts);
     const window = makeWindow(opts);
     const sandbox = { document, window, navigator: {}, setTimeout() {}, clearTimeout() {}, console };
-    // motion.js 经全局 window.xxx 访问（浏览器里 window 即全局）；window 须是带 matchMedia /
-    // innerWidth / IntersectionObserver 的桩对象，不能被 sandbox 自身顶替，否则 prefersReduced()
-    // 与入场观察器全部退化。Motion 最终挂在 window.__dlrMotion 上。
+    // motion.js 经全局 window 访问能力（matchMedia / innerWidth / IntersectionObserver），
+    // 故 window 必须是桩对象而非 sandbox 自身，否则降级判定与入场观察器全部退化。
+    // Motion 最终挂在 window.__dlrMotion 上。
     vm.createContext(sandbox);
     vm.runInContext(MOTION_JS, sandbox, { filename: 'web/motion.js' });
     return { sandbox, document, window, Motion: window.__dlrMotion };

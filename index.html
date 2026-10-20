@@ -1,8 +1,6 @@
 <!--
-    Project: DouyinLiveRecorder
-    Author: Hmily
-    Build: 2023.08.14 - 20:24:05
-    GitHub Project URL: https://github.com/ihmily/DouyinLiveRecorder
+    Project: DouyinLiveRecorder（上游仓库：https://github.com/ihmily/DouyinLiveRecorder）
+    Author: Hmily / Build: 2023.08.14 - 20:24:05
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -14,11 +12,11 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&amp;display=swap" rel="stylesheet">
-    <!-- 钉定版本：@latest 会随上游发布漂移（breaking change / 供应链风险），与下方 flv.js 的钉版惯例一致 -->
-    <!-- MIN-2241（2026-09-22）：钉版本 ≠ 钉内容——jsdelivr 上同名同版本文件仍可被替换，故必须补 SRI。
-         本页是本地双击打开的独立播放器，不经 web_api 的 CSP/nosniff 中间件，又是唯一把用户输入的任意
-         流地址喂给 hls.js/flv.js 的页面。integrity 不符时浏览器拒执行（fail-closed）；crossorigin 是 SRI
-         生效前提。哈希取 sha384，已用 jsdelivr + unpkg 两条 CDN 比对一致。升级版本须同步重算这两行，否则整段静默失效。 -->
+    <!-- 依赖钉版 + SRI（MIN-2241）：@latest 会随上游发布漂移；而钉版本 ≠ 钉内容——jsdelivr 上
+         同名同版本文件仍可被替换。本页是本地双击打开的独立播放器，不经 web_api 的 CSP/nosniff
+         中间件，又是唯一把用户输入的任意流地址喂给 hls.js/flv.js 的页面，故必须带 integrity：
+         不符时浏览器拒执行（fail-closed），crossorigin 是 SRI 生效前提。哈希取 sha384，已用
+         jsdelivr + unpkg 两条 CDN 比对一致；升级版本须同步重算下面两行，否则整段静默失效。 -->
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1.7.2/dist/hls.min.js"
             integrity="sha384-xZKOEqJSfUEI1E4N6MG1+KjnKYM1R1v2WKpyaS0c+ksIxRi5PB8MAkyEdX48MX2/"
             crossorigin="anonymous"></script>

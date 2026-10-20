@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
 # 主窗口：侧边栏 + 顶栏 + 五个页面 + Toast。
 #
-# 为什么全部逻辑都在这里而不是分散到页面：页面只管 widget 与渲染，
-# 跨切面（子进程生命周期、配置文件的跨进程冲突、主题/语言/缩放的运行态切换、退出序列）
-# 必须有一个唯一的拥有者，否则「同一件事在两处各实现一遍」会随时间漂移——
-# 旧 tkinter 版 gui.py 单类 5243 行正是因为它同时承担了这两件事；
-# 本轮的分法是「单窗口协调器 + 纯 widget 页面」。
+# 为什么跨切面逻辑都在这里：页面只管 widget 与渲染，子进程生命周期、配置文件的跨进程冲突、
+# 主题/语言/缩放的运行态切换、退出序列必须有唯一拥有者，否则同一件事在两处各实现一遍会随
+# 时间漂移。分法是「单窗口协调器 + 纯 widget 页面」。
 from __future__ import annotations
 
 import os
@@ -90,8 +88,8 @@ _CHAIN_WARN_INTERVAL_SECONDS = 30.0
 
 
 class MainWindow(QMainWindow):
-    # 退出清理完成后请求销毁窗口：回调来自工作线程，必须经 Signal 回到主线程
-    # （Qt 的 wiped signal QUEUE 封送由框架保证，旧版需要自管事件泵）。
+    # 退出清理完成后请求销毁窗口：回调来自工作线程，必须经 Signal 回到主线程，
+    # 跨线程排队封送由 Qt 框架保证（旧版需要自管事件泵）。
     shutdownFinished = Signal()
     # M-11：任意线程都能往日志缓冲里追加，但「启动刷新定时器」这一步只能在主线程做
     # （QTimer 跨线程 start() 会被 Qt 拒绝：Timers cannot be started from another thread）。
@@ -232,11 +230,9 @@ class MainWindow(QMainWindow):
         layout.addWidget(pill)
 
         layout.addSpacing(6)
-        # 导航与偏好设置放进滚动区：两者合计的最小高度实测 719px，而窗口最小高度
-        # 允许 620px。不设滚动时 QVBoxLayout 会把品牌区与「导入字体…」按钮一起压扁
-        # （2026-10-17 截图：品牌名贴住标题栏、导入按钮只剩半高）。滚动区自身的
-        # minimumSizeHint 很小，于是高度不足由它吸收，其余区段保持设计尺寸。
-        # 品牌区与底部两个按钮留在滚动区外，任何窗口高度下都完整可见。
+        # 导航与偏好设置放进滚动区：两者合计最小高度实测 719px，而窗口最小高度允许 620px，
+        # 不设滚动时 QVBoxLayout 会把品牌区与「导入字体…」按钮一起压扁（2026-10-17 截图）。
+        # 滚动区自身 minimumSizeHint 很小，高度不足由它吸收；品牌区与底部按钮留在区外。
         scroll = QScrollArea()
         scroll.setObjectName("sidebarScroll")
         scroll.setWidgetResizable(True)
@@ -298,10 +294,9 @@ class MainWindow(QMainWindow):
             font = QFont(label.font())
             font.setPointSize(9)
             label.setFont(font)
-            # 下拉的最小宽度必须与「最长选项文本」解耦：语言项里的
-            # 「简体中文 (Simplified Chinese)」会把 minimumSizeHint 撑到 302px，
-            # 滚动区 setWidgetResizable 时整块内容被撑宽、右侧 54px 被水平裁掉。
-            # 固定按 8 个字符算最小宽度，超长项由 QComboBox 自己省略显示。
+            # 下拉最小宽度必须与「最长选项文本」解耦：「简体中文 (Simplified Chinese)」会把
+            # minimumSizeHint 撑到 302px，滚动区 setWidgetResizable 时整块内容被撑宽、右侧
+            # 54px 被水平裁掉。固定按 8 个字符算，超长项由 QComboBox 自己省略显示。
             combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             combo.setMinimumContentsLength(8)
             # 组间 4px 呼吸：grid.setSpacing(6) 对「说明→下拉」和「下拉→下一组说明」
@@ -662,11 +657,9 @@ class MainWindow(QMainWindow):
 
     def _wire_recorder(self) -> None:
         # Qt 的跨线程连接（AutoConnection → Queued）保证下面几条槽只在主线程跑，
-        # 取代旧 tkinter 版手写的 _ui_event_queue + post_ui 事件泵。
-        # [计数修正 2026-10-18] 原写「三个槽」，S-01/M-11 修复后此处接线增至五条，按实际条数改述。
-        # S-01：outputReady 取代原先从未 emit 的 linesReceived——队列里每落一批新内容就被
-        # 唤醒一次，由 _pump_recorder_queue 在主线程取空。刻意不接回「带数据的信号」，
-        # 理由见 recorder.RecorderController 类头注释（单通道消费，否则重复或泄漏）。
+        # 取代旧版手写的 _ui_event_queue + post_ui 事件泵。
+        # outputReady 取代原先从未 emit 的 linesReceived（S-01）：队列里每落一批新内容就被唤醒
+        # 一次，由 _pump_recorder_queue 在主线程取空；刻意不接回带数据的信号（理由见 recorder）。
         self.recorder.outputReady.connect(self._pump_recorder_queue)
         self.recorder.logRequested.connect(self._queue_log)
         self.recorder.started.connect(self._on_recorder_started)
@@ -674,19 +667,17 @@ class MainWindow(QMainWindow):
         self.logQueued.connect(self._ensure_log_timer_running)
         self.shutdownFinished.connect(self._finalize_quit)
 
-    # 读线程 → 队列 → 主线程的唯一消费口（S-01 的落点）。
+    # 读线程 → 队列 → 主线程的唯一消费口（S-01）。
     def _pump_recorder_queue(self) -> None:
-        # 与旧 tkinter 版 _schedule_log_flush 同构：一次取空、成批处理、结束哨兵单独交
-        # _on_recorder_ended 校验会话。异常只留痕不外抛——本槽由信号投递触发，
-        # 抛出会中断这一轮事件派发，而队列已被 drain 取空的内容（含已弹出的 messages）
-        # 随异常丢失，与旧版 L-39 记录的「抛错轮次少最后几行」同义，界面保持可用优先。
+        # 一次取空、成批处理，结束哨兵单独交 _on_recorder_ended 校验会话。异常只留痕不外抛：
+        # 本槽由信号投递触发，抛出会中断这一轮事件派发，已 drain 出的 messages 随之丢失，
+        # 界面可用优先。
         try:
             messages, ended, ended_session = self.recorder.drain()
             if messages:
                 self._on_lines_received(messages)
-                # _on_lines_received 是直接往缓冲追加、不走 _queue_log，故这里补一次唤醒：
-                # 「子进程输出」这一路不得依赖别的日志源恰好把刷新链带起来。
-                # 本槽由跨线程信号投递而来，必然在主线程，直接启表是安全的（M-11 的同一条判据）。
+                # _on_lines_received 直接往缓冲追加、不走 _queue_log，故这里补一次唤醒：
+                # 本槽由跨线程信号投递而来、必然在主线程，直接启表安全（M-11 同一条判据）。
                 self._ensure_log_timer_running()
             if ended:
                 self._on_recorder_ended(ended_session)
@@ -763,15 +754,13 @@ class MainWindow(QMainWindow):
     # ─── 周期链 ───
 
     def _start_timers(self) -> None:
-        # 三条链一律用 QTimer 且**自续期**（Qt 的 timer 不因回调抛错而停），
-        # 但回调内部仍包 try/except + 限频留痕：旧版「写在函数尾部的下一次 after
-        # 因异常没注册 → 整条链永久静默」的故障形态要在这里显式消掉。
+        # 三条链一律用 QTimer 且**自续期**（Qt 的 timer 不因回调抛错而停），但回调内部仍包
+        # try/except + 限频留痕：旧版「下一次 after 因异常没注册 → 整条链永久静默」要显式消掉。
         self._log_timer = QTimer(self)
         self._log_timer.setInterval(_LOG_FLUSH_INTERVAL)
         self._log_timer.timeout.connect(self._flush_pending_lines)
-        # _log_timer 刻意不在这里 start：它是「按需激活」的休眠态链（与旧版 _log_flush_job_id
-        # 的 None=休眠同义），由 _ensure_log_timer_running 在真有日志入队时启表。
-        # M-11：启表的入口只能是主线程，所以入口挂在 logQueued 信号上。
+        # _log_timer 刻意不在这里 start：它是「按需激活」的休眠态链，由 _ensure_log_timer_running
+        # 在真有日志入队时启表。启表入口只能是主线程（M-11），故入口挂在 logQueued 信号上。
         self._status_timer = QTimer(self)
         self._status_timer.setInterval(_STATUS_INTERVAL_IDLE)
         self._status_timer.timeout.connect(self._status_tick)
@@ -782,11 +771,9 @@ class MainWindow(QMainWindow):
         self._danmaku_timer.start()
 
     def _flush_pending_lines(self) -> None:
-        # 成批刷入而非逐行 append：录制峰值每秒上百行，
-        # 逐行走一次事件循环会把主线程拖慢到肉眼可见的卡顿。
-        # 回调内包 try/except + 限频留痕是周期链的统一口径（见 _warn_chain）：Qt 的 timer
-        # 不会因回调抛错而永久停掉，但不接住异常就等于「这一批已经出队的行随异常消失、
-        # 日志页从此不再更新却一条线索都没有」——旧 tkinter 版 M-15/L-39 事故的同族形态。
+        # 成批刷入而非逐行 append：录制峰值每秒上百行，逐行走一次事件循环会把主线程拖慢到
+        # 肉眼可见的卡顿。回调内包 try/except + 限频留痕是周期链的统一口径（见 _warn_chain）：
+        # 不接住异常就等于这一批已出队的行随异常消失、日志页从此不再更新却无一条线索。
         if not self._pending_log_lines:
             return
         batch = self._pending_log_lines
@@ -844,13 +831,10 @@ class MainWindow(QMainWindow):
     # 线程安全的日志入口（可被任意线程调用：只 append 到主线程消费的缓冲）。
     def _queue_log(self, message: str, level: str = "info") -> None:
         self._pending_log_lines.append((message, level))
-        # M-11：这里**不能**直接 self._log_timer.start()。弹幕 tail 线程
-        # （src/gui_qt/danmaku_monitor.py 的 _tail_loop 留痕分支）与画质解析链都会在
-        # 非 GUI 线程里调本方法，而 QTimer 只能在拥有它的线程启停——跨线程 start() 被 Qt
-        # 拒绝（stderr 打印 "Timers cannot be started from another thread"、不抛 Python 异常），
-        # 于是这一批弹幕/告警日志一直滞留到下一次**主线程**入队才刷出，界面更新延迟完全不确定。
-        # 改经信号投递：主线程调用是 Direct（同轮立即启表，行为不变），其它线程由 Qt 排队，
-        # 启表这一步因此必然发生在主线程。
+        # M-11：这里**不能**直接 self._log_timer.start()。弹幕 tail 线程与画质解析链都会在
+        # 非 GUI 线程调本方法，而 QTimer 只能在拥有它的线程启停——跨线程 start() 会被 Qt 拒绝
+        # （stderr 打印 "Timers cannot be started from another thread"，不抛 Python 异常），
+        # 那一批日志会滞留到下一次主线程入队才刷出。改经信号投递后启表必在主线程。
         self.logQueued.emit()
 
     # 日志刷新链的启动口（只在主线程执行：本槽由 logQueued 投递）。
@@ -878,9 +862,8 @@ class MainWindow(QMainWindow):
         # 用 mtime 而不是内容 hash，是因为配置只会被整文件重写。
         default_interval = i18n.tr("{interval}秒", interval="120")
         output_format = "ts → mp4"
-        # 先落默认值再进 try：文件存在但没有 [录制设置] 节时（用户手删/旧版本残留）
-        # 走不到赋值分支，未预置会让下面的 (interval, output_format) 抛 NameError，
-        # 表现为状态链每 3s 抛一次、每 30s 落一条告警。
+        # 先落默认值再进 try：文件存在但没有 [录制设置] 节时（用户手删/旧版本残留）走不到赋值
+        # 分支，未预置会让下面的返回抛 NameError，表现为状态链每 3s 抛一次、每 30s 落一条告警。
         interval = default_interval
         if not os.path.exists(self.main_config_file):
             return default_interval, output_format
@@ -891,8 +874,7 @@ class MainWindow(QMainWindow):
             config = tolerant_config_parser(preserve_case=True)
             config.read(self.main_config_file, encoding="utf-8-sig")
             # 重复键容错读取后必须点名（同进程内按 路径+mtime 去重，不会每 10s 刷一条）：
-            # 此前正是这条链路把 DuplicateOptionError 打成「状态栏读不到配置、用默认值」的
-            # 静默降级，用户看不出配置坏在哪一行。
+            # 否则该链路会把 DuplicateOptionError 打成静默降级，用户看不出配置坏在哪一行。
             warn_duplicate_options(self.main_config_file)
             if "录制设置" in config:
                 raw_interval = config["录制设置"].get("循环时间(秒)", "120")
@@ -991,10 +973,9 @@ class MainWindow(QMainWindow):
             if self._has_unsaved_config_edits():
                 # M-12：本方法由 _status_tick 的定时器链驱动，而 QMessageBox.question 是**模态**
                 # 的——它内部跑自己的事件循环，期间状态链照旧每 3s 触发一次本方法。
-                # 因此必须先过守卫、再把 mtime 前置落位并置守卫，然后才弹窗。
-                # 顺序很关键：守卫排在 mtime 前置**之后**时，询问期间若文件又变一次，
-                # 那一拍的 mtime 会被就地吃掉，用户答完后这条新改动就再也问不到了；
-                # 排在最前面则整段挂起（既不更新 mtime、也不叠框），答完后下一拍照常再问。
+                # 顺序很关键：守卫必须排在 mtime 前置**之前**；排在之后时，询问期间若文件又变
+                # 一次，那一拍的 mtime 会被就地吃掉，用户答完后这条新改动就再也问不到了。
+                # 排在最前则整段挂起（既不更新 mtime、也不叠框），答完后下一拍照常再问。
                 if self._url_conflict_asked:
                     return
                 # 弹窗前置位：不先落 mtime，每一拍都会叠一个新的冲突框（用户视角=弹窗无限堆积）。
@@ -1069,11 +1050,9 @@ class MainWindow(QMainWindow):
         # 停止是异步的（发 CTRL_BREAK 后还要等进程收尾），期间把两个按钮都禁用，
         # 由 _on_recorder_ended 统一恢复，避免连点触发第二次停止。
         if not self.recorder.is_running():
-            # M-34（2026-10-19）：这里不只是「没什么可停」，更是**按钮禁用态的唯一自救入口**。
-            # 若某次停止流程没投递结束事件（M-33 修复前的形态、或事件在投递途中丢失），
-            # 两个按钮会停在禁用态且界面无任何出口。既然此刻事实已判定为「未运行」，
-            # 就顺手把 UI 收敛回待机（_set_running_ui → dashboard.set_status 会重新启用开始按钮），
-            # 再告诉用户。仅弹框不动状态等于把「状态与事实不符」永久留在界面上。
+            # M-34：这里不只是「没什么可停」，更是**按钮禁用态的唯一自救入口**——某次停止流程
+            # 没投递结束事件时两个按钮会停在禁用态且界面无出口；既然事实已判定为未运行，就把 UI
+            # 收敛回待机（_set_running_ui 会重新启用开始按钮）再告知用户。
             self._set_running_ui(False)
             QMessageBox.warning(self, i18n.tr("警告"), i18n.tr("没有正在运行的录制进程！"))
             return
@@ -1105,11 +1084,9 @@ class MainWindow(QMainWindow):
             dialog.set_focus()
             self._queue_log(i18n.tr("高级设置窗口已打开，已为你切换到该窗口"))
             return
-        # M-35（2026-10-19）：旧实现在「旧实例不可见」时直接 new 一个覆盖引用，旧实例既没有
-        # WA_DeleteOnClose 也没有 deleteLater()，且 parent 是主窗口 → C++ 对象与它内部的
-        # QPlainTextEdit（含整份 config 文本）一直存活。开/关 N 轮即累积 N 份。
-        # 修法两条并用：已存在则复用（重新加载磁盘内容，避免显示上次的旧快照），
-        # 并置 WA_DeleteOnClose，让「关掉就不再占内存」成为属性层面的保证；
+        # M-35：旧实现在「旧实例不可见」时直接 new 一个覆盖引用，旧实例既无 WA_DeleteOnClose
+        # 也无 deleteLater()、parent 又是主窗口 → C++ 对象与其 QPlainTextEdit（含整份 config
+        # 文本）一直存活。现改为：已存在则复用（先重载磁盘内容）+ 置 WA_DeleteOnClose，
         # 引用在 destroyed 里清空，避免留下指向已析构对象的悬空属性。
         if dialog is not None:
             dialog.reload_from_disk()
@@ -1131,8 +1108,7 @@ class MainWindow(QMainWindow):
     # ─── 托盘 / 退出 ───
 
     def _setup_tray(self) -> None:
-        # 托盘不可用时（部分 Linux 桌面环境、被组策略禁用）不抛错，
-        # 退化为最小化到任务栏——这是旧版 pystray 路径上已经验证过的行为。
+        # 托盘不可用时（部分 Linux 桌面环境、被组策略禁用）不抛错，退化为最小化到任务栏。
         candidate = TrayIcon(self, self._palette.tokens)
         if not candidate.is_available():
             self._queue_log(i18n.tr("系统托盘不可用，已改为最小化到任务栏"), "warn")
@@ -1175,8 +1151,6 @@ class MainWindow(QMainWindow):
                 return
         self._quitting = True
         self._queue_log(i18n.tr("正在停止录制并清理 ffmpeg 进程，请稍候..."))
-        # 后台线程完成「停止录制 + 清理残留 ffmpeg」，完成后经 Signal 回主线程销毁窗口，
-        # 避免窗口先被销毁导致清理线程被强杀、ffmpeg 残留。
         self.recorder.shutdown_async(on_finished=lambda: self.shutdownFinished.emit())
 
     def _finalize_quit(self) -> None:
@@ -1203,7 +1177,7 @@ class MainWindow(QMainWindow):
             app.quit()
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt 的重写点必须这个名
-        # 标题栏 X：给「最小化到托盘 / 完全退出」两条路径，与旧版 close dialog 同义。
+        # 标题栏 X：给「最小化到托盘 / 完全退出」两条路径。
         if self._quitting:
             event.accept()
             return

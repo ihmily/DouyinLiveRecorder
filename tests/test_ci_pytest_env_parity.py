@@ -1,51 +1,35 @@
-# ci.yml「跑 pytest 的 job 必须装齐运行时依赖」的回归锁。
+# ci.yml「跑 pytest 的 job 必须装齐运行时依赖」与「Qt 窗口层 job 必须装 Qt 运行库」的回归锁。
 #
-# 事故（2026-10-18 手动触发 CI 实测）：vbs-behavior-test job 只装了 pytest，于是
+# 事故一（2026-10-18 手动触发 CI 实测）：vbs-behavior-test job 只装了 pytest，
 #   tests/test_stop_recording_vbs.py 的 11 条用例在 setup 阶段全数 ERROR——
-#   `ModuleNotFoundError: No module named 'distro'`。而被测文件本身只 import 标准库 + pytest，
+#   `ModuleNotFoundError: No module named 'distro'`。被测文件本身只 import 标准库 + pytest，
 #   故障来自 tests/conftest.py 的三个 **autouse** fixture：
-#     · _clean_credential_caches → `from src import spider` → src/__init__.py →
-#       src/node_install.py 顶层 `import distro`；
+#     · _clean_credential_caches → `from src import spider` → src/node_install.py 顶层 `import distro`；
 #     · _hermetic_danmaku_hub → `import src.danmaku_monitor`（同一条 src 导入链）；
 #     · _pin_identity_translation → `import i18n` → i18n.py 顶层 `from loguru import logger`。
-#   即「跑仓库里任何一条 pytest」的真实门槛是**整份 requirements.txt**，与被测文件自己的
-#   import 无关——单点跑一个文件的场景同样适用（本机单跑不依赖 src 的用例也因此必须装依赖）。
+#   即「跑仓库里任何一条 pytest」的真实门槛是**整份 requirements.txt**，与被测文件自己的 import 无关。
 #
-# 本锁把这条判据压成机检：任何出现 pytest（执行或安装）的 job，其步骤里必须另有
-#   `pip install -r requirements.txt`。新增「轻量 job」时会被当场拦下，而不是等一次
-#   手动触发 CI 才在 ERROR 里发现。
+# 判据：任何出现 pytest（执行或安装）的 job，其步骤里必须另有 `pip install -r requirements.txt`。
+#   新增「轻量 job」时会被当场拦下，而不是等一次手动触发 CI 才在 ERROR 里发现。
+#
+# 事故二（同日）：test job 的 apt 只装了 ffmpeg + xvfb，而 GUI 窗口层已迁 PySide6：ubuntu runner 缺
+#   libEGL.so.1 时 `from PySide6.QtGui import ...` 抛 ImportError，两个 Qt 测试模块以 collection error
+#   形态**中断整轮**（4337 collected / 2 errors → Interrupted，rc=2，覆盖率与逐模块门禁全部拿不到数据）。
+#   故再钉两条：
+#     · apt 侧必须装 Qt 运行库（锚点 libegl1，见 _QT_RUNTIME_LIB_RE）——系统库不属于 pip 的兜底面；
+#     · test job 必须有一道 collect-only 闸门拦「整模块 skip 而 rc 仍为 0」的假绿。
 #
 # 事实源关系：判据对象只有 ci.yml 本体，本文件只**读取**它（与 tests/test_ci_retry_action.py
 #   同口径：按 YAML 结构取步骤，不按行号、不按全文正则，步骤挪动或换 job 都不该让锁失效）。
 #
 # 双向钉（对齐 tests/test_ci_frontend_registration.py 的「清单 ↔ 配置」口径）：
-#   正向——每个 pytest job 都必须装 requirements.txt（漏装即红，正是本次事故形态）；
+#   正向——每个 pytest job 都必须装 requirements.txt（漏装即红，正是事故一形态）；
 #   反向——检测器必须**认得出**已知的 pytest job、且**认不出** setup job（后者只 echo 版本
 #         常量字符串 `pytest_version=9.1.1`；认错说明正则退化成子串匹配，正向判据随即失真）。
 #
-# 变异验证记录（2026-10-18 实跑，均已恢复后全绿）：
-#   ① 把 vbs-behavior-test 的 command 改回 `pip install pytest`（去掉 -r requirements.txt）
-#      → test_every_pytest_job_installs_runtime_requirements 红（点名 vbs-behavior-test）；
-#   ② 把检测器放宽成裸子串 `pytest`（去掉前后边界）
-#      → test_setup_job_is_not_mistaken_for_a_pytest_job 红（setup 被误判成 pytest job）。
-#   ③ 摘掉 apt 步骤里的 `libegl1`（模拟有人精简 Qt 运行库）
-#      → test_qt_window_layer_jobs_install_qt_runtime_libs 红（点名 test / build-verify）；
-#   ④ 去掉收集闸门的 `--co`（模拟闸门退化成普通运行）
-#      → test_test_job_gates_qt_gui_collection 红。
-#   ③④ 均已在当轮按字节还原（ci.yml 是纯 CRLF，改完复跑 CRLF=991 / 裸 LF=0）。
-#
-# [2026-10-18 第二次事故，同在本文件加锁] 当天手动触发 CI 的**另一条**故障面：test job 的 apt
-#   只装了 ffmpeg + xvfb，而 GUI 窗口层已于 2026-10-17 迁 PySide6（进运行时清单），Qt 的 .so
-#   仍要 dlopen 一组系统库 —— ubuntu runner 缺 libEGL.so.1 时
-#   `from PySide6.QtGui import ...` 抛 ImportError，两个 Qt 测试模块以 collection error
-#   形态**中断整轮**（4337 collected / 2 errors → Interrupted，rc=2，其余用例一条没跑，
-#   覆盖率 xml 与逐模块门禁全部拿不到数据）。故本节再钉两条：
-#     · apt 侧必须装 Qt 运行库（锚点 libegl1，见 _QT_RUNTIME_LIB_RE）——pip 装得到 wheel，
-#       系统库不属于 pip 的兜底面，漏了它就只能靠缺席或中断暴露；
-#     · test job 必须有一道 collect-only 闸门拦「整模块 skip 而 rc 仍为 0」的假绿
-#       （判据见 test_test_job_gates_qt_gui_collection）。
-#   两侧防线互相补充：测试侧已同步改为按子模块探测 + exc_type=ImportError（AGENTS.md
-#   「测试编写强制约定」已登记写法），CI 侧靠本节两条锁保证它们**真的被执行**而不仅是降级。
+# 变异验证（2026-10-18 实跑，均已当轮还原）：① vbs-behavior-test 改回 `pip install pytest` →
+#   正向判据红；② 检测器放宽成裸子串 `pytest` → 反向判据红；③ 摘掉 `libegl1` → Qt 运行库判据红
+#   （点名 test / build-verify）；④ 去掉收集闸门的 `--co` → collect-only 判据红。
 
 from __future__ import annotations
 
@@ -74,7 +58,8 @@ _REQUIREMENTS_INSTALL_RE = re.compile(r"pip install\b[^\n|&;]*-r requirements\.t
 # 会让覆盖面悄悄缩水，必须拦。
 _KNOWN_PYTEST_JOBS = ("test", "concurrency-test", "vbs-behavior-test")
 
-# 检测器精度守卫：setup job 只 echo 版本常量，不得被当成 pytest job。
+# 检测器精度守卫：这些 job 不得被认成 pytest job。`setup` 是最关键的一格——它只 echo 版本常量
+# （`pytest_version=9.1.1`），裸子串匹配会命中它，于是正向判据会被一个从不跑 pytest 的 job 稀释。
 _KNOWN_NON_PYTEST_JOBS = ("setup", "static", "deps-audit", "integration-verify", "build-verify")
 
 

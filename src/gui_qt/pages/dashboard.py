@@ -24,16 +24,15 @@ class DashboardPage(QWidget):
     INFO_KEYS: tuple[str, ...] = ("interval", "format", "tray", "time")
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        # 三张卡（状态 / 控制 / 快捷操作）自上而下，全部靠 root 的 AlignTop 顶对齐；
-        # 不用 stretch 撑开，是为了窗口拉高时卡片不跟着散开（设计稿是固定密度的列表）。
+        # 三张卡（状态 / 控制 / 快捷操作）自上而下堆叠，卡片本身不给 stretch：
+        # 窗口拉高时卡片不跟着散开（设计稿是固定密度的列表）。
         super().__init__(parent)
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 24, 24, 20)
         root.setSpacing(14)
-        # 不用 setAlignment(AlignTop)：对齐标志会让布局按首轮 sizeHint 定高，
-        # 而信息网格/提示行的 sizeHint 会随可用宽度变化，第二轮就可能比首轮更矮，
-        # 表现为卡片底部吃掉按钮 1~2px（截图里「快捷操作」按钮被卡片边线压住）。
-        # 末尾 addStretch 表达同一「顶部堆叠」语义，但把多余空间交还给布局而不是钉死高度。
+        # 顶对齐不用 setAlignment(AlignTop)：对齐标志让布局按首轮 sizeHint 定高，而信息网格 /
+        # 提示行的 sizeHint 随可用宽度变化，第二轮可能更矮，表现为卡片底部压住按钮 1~2px。
+        # 末尾 addStretch 表达同一「顶部堆叠」语义，但把多余空间交还布局而不是钉死高度。
 
         # ── 状态总览卡 ──
         self.status_card = Card()
@@ -46,12 +45,11 @@ class DashboardPage(QWidget):
         status.addWidget(self.dot, 0, Qt.AlignmentFlag.AlignVCenter)
         text_col = QVBoxLayout()
         text_col.setSpacing(2)
-        # 状态标题/副标题是**运行态文案**（由窗口 _set_running_ui 经 set_status 按录制状态写入），
-        # 刻意不进重译登记表（M-13，2026-10-18）：登记后 retranslate_all() 会把录制中界面里的
-        # 「录制中」打回登记初值「待机」，控制台页与侧栏/托盘互相矛盾——这正是报告实测的症状。
-        # 「运行态会被周期性改写的标签不进登记表」是仓库既有约定（关键约定#16 / i18n 已知坑），
-        # 建时 tr() 取初值即可；切换语言后由 _repopulate_static_texts 按 recorder.is_running()
-        # 重驱 _set_running_ui，产生点的 tr() 自然按当前语言取词。
+        # 状态标题/副标题是运行态文案（窗口 _set_running_ui 经 set_status 按录制状态写入），
+        # 刻意不进重译登记表（M-13，2026-10-18）：登记后 retranslate_all() 会把「录制中」打回
+        # 初值「待机」，与侧栏/托盘互相矛盾。运行态标签不进登记表是仓库既有约定
+        # （关键约定#16 / i18n 已知坑）；建时 tr() 取初值即可，切语言后由 _repopulate_static_texts
+        # 按 recorder.is_running() 重驱 _set_running_ui，产生点的 tr() 自然取当前语言。
         self.status_title = QLabel(i18n.tr("待机"))
         title_font = self.status_title.font()
         title_font.setPointSize(20)
@@ -168,7 +166,7 @@ class DashboardPage(QWidget):
     def set_status(self, running: bool, palette: Palette, status_title: str, status_sub: str) -> None:
         self.start_btn.setEnabled(not running)
         self.stop_btn.setEnabled(running)
-        # 运行态标题/副标题由窗口按 Tr dynamic 值写入，不走登记（会被 retranslate 打回初值）
+        # 运行态标题/副标题由窗口按当前录制状态写入，不进登记表（否则会被 retranslate 打回初值）
         self.status_title.setText(status_title)
         self.status_sub.setText(status_sub)
         self._paint_dot(running, palette)

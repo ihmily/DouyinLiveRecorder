@@ -1,18 +1,17 @@
-# build_exe.py 发布链「运行时二进制来源」的回归用例（2026-09-22 新增）。
+# build_exe.py 发布链「运行时二进制来源」的回归用例。
 #
 # 被测面：_FFMPEG_DOWNLOAD_URLS / _ffmpeg_source_url 与 _PINNED_RUNTIME_SHA256 的**键同构**，
 # 以及 macOS arm64 下载点缺陷的形态锁。全程离线——不发起网络请求、不下载任何二进制，
-# 故「某条 URL 当下是否 200」不进本文件（那属真机验证，实测记录见 CODE_WIKI 更新日志）。
+# 故「某条 URL 当下是否 200」不进本文件（那属真机验证，读数见 CODE_WIKI 更新日志）。
 #
-# 为什么值得单独锁（本仓缺失的一类失效）：旧实现的 macOS arm64 分支按 `machine` 现场拼 URL
-# （`getrelease-arm64/zip`，上游根本没有这个产物），请求 404 → 被 _download_ffmpeg 外层的
-# `except Exception` 吞成一行 warning → Apple Silicon 的 full zip **静默不含 ffmpeg**，
-# 而构建流程照样报成功、`--dual` 照常出包。三层叠加才让它不可见：
+# 为什么值得单独锁：旧 macOS arm64 分支按 `machine` 现场拼 URL（`getrelease-arm64/zip`，上游
+# 根本没有这个产物），请求 404 → 被 _download_ffmpeg 外层的 `except Exception` 吞成一行 warning
+# → Apple Silicon 的 full zip **静默不含 ffmpeg**，而构建流程照样报成功、`--dual` 照常出包。
+# 三层叠加才让它不可见：
 #   ① URL 不在任何清单里（拼出来的，静态检查看不出它指向不存在的端点）；
 #   ② 失败被宽泛 except 捕获后只返回 False（组件级降级，不参与总判定）；
 #   ③ 发布链没有对「full 包必须含 ffmpeg」做事后校验。
-# 本文件锁 ①（URL 只能来自按运行时键分列的表）与表/钉定表的同构关系；②③ 的处置见
-# 同日信任策略评审结论，属需审批的生产改动，未在此顺手改。
+# 本文件锁 ①（URL 只能来自按运行时键分列的表）与表/钉定表的同构关系；②③ 属需审批的生产改动。
 
 from __future__ import annotations
 
@@ -38,12 +37,9 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # evermeet / gyan.dev / BtbN(github) 三家 + nodejs.org 官方 dist：来源清单与
 # _FFMPEG_DOWNLOAD_URLS / _download_nodejs 的拼接主机一一对应。
-# [2026-09-26] 加入 github.com（Linux ffmpeg 换用 BtbN 的 n9.0 系列资产），同时**移除** johnvansickle.com：
-# 该主机不再出现在来源表里，留在清单内等于给一条已退役的来源保留通行证——将来真要再用，
-# 必须在这里显式改回来并说明理由（本清单就是那道说明的落点）。
-# [2026-10-17] 加入 api.github.com：运行时钉定的**在线清单**来源层要读 GitHub Release 的
-# assets[].digest（见 build_exe._PIN_SOURCE_TABLE）。它与产物下载同属 github.com 这一家的两个端点，
-# 不是新引入的第三方镜像，故并入同一条来源信任边界。
+# 退役来源（johnvansickle.com）必须同步移出清单——留在清单内等于给一条已退役的来源保留通行证；
+# 真要再用必须在这里显式加回并说明理由。api.github.com 用于读 GitHub Release 的 assets[].digest
+# （见 build_exe._PIN_SOURCE_TABLE），与产物下载同属 github.com 一家的两个端点，不是新引入的第三方。
 _ALLOWED_HOSTS = frozenset({"www.gyan.dev", "evermeet.ca", "github.com", "api.github.com", "nodejs.org"})
 
 
@@ -83,10 +79,10 @@ def test_macos_arm64_resolves_to_the_same_evermeet_build_as_x64(monkeypatch: pyt
 
 
 def test_macos_ffmpeg_urls_point_at_immutable_artifacts() -> None:
-    # [2026-10-18] evermeet 的 Download API（getrelease[/…]/zip[/sig]）被上游以「exorbitant abuse」
-    # 为由整体下架（实测 410 + JSON {"code":410}），且它本来就是滚动别名——签名只钉得住「谁签的」，
-    # 钉不住「哪个版本」。与 Linux 的月末标签同源，macOS 两支归档一律钉**版本化直链**：
-    # URL 与签名对象双双不可变，上游发新版不会自动跟进，属刻意的人工闸口。
+    # evermeet 的 Download API（getrelease[/…]/zip[/sig]）被上游以「exorbitant abuse」为由整体下架
+    # （实测 410 + JSON {"code":410}），且它本来就是滚动别名——签名只钉得住「谁签的」，钉不住
+    # 「哪个版本」。故 macOS 两支归档一律钉**版本化直链**：URL 与签名对象双双不可变，
+    # 上游发新版不会自动跟进，属刻意的人工闸口。
     urls: dict[str, str] = {}
     for key in ("macos-x64", "macos-arm64"):
         for slot, url in (
@@ -107,12 +103,11 @@ def test_macos_ffmpeg_urls_point_at_immutable_artifacts() -> None:
 
 
 def test_linux_ffmpeg_urls_pin_an_immutable_release_tag() -> None:
-    # [2026-09-27] 发布链曾红在「钉了会变的来源」上：BtbN 的 `releases/download/latest/...` 是滚动
-    # 别名，同名资产被上游反复重传——实测 2026-09-26 当天取的 digest 在同日 13:22 重发后即失配，
-    # 构建在 SHA256 校验处 SystemExit → dist/ 无 zip → 上传步骤报 `Pattern 'dist/*-lite.zip' does
-    # not match any files`。日更 autobuild 标签也不能钉：上游只保留最近约两周（实测仅剩 09-13~
-    # 09-26 共 15 条），钉它等于预埋一次 404。只有**月末 autobuild 标签**（实测保留到
-    # autobuild-2024-10-31）能让 URL 与 digest 双双不可变，钉定才成立。
+    # 发布链曾红在「钉了会变的来源」上：BtbN 的 `releases/download/latest/...` 是滚动别名，同名资产
+    # 被上游反复重传——当天取的 digest 在同日重发后即失配，构建在 SHA256 校验处 SystemExit，
+    # 上传步骤报 `Pattern 'dist/*-lite.zip' does not match any files`。日更 autobuild 标签也不能钉
+    # （上游只保留最近约两周，钉它等于预埋一次 404）。只有**月末 autobuild 标签**能让 URL 与
+    # digest 双双不可变，钉定才成立。
     tags: set[str] = set()
     for key in ("linux-x64", "linux-arm64"):
         url = build_exe._FFMPEG_DOWNLOAD_URLS[key]
@@ -190,10 +185,10 @@ def test_runtime_slots_cover_both_pinnable_components() -> None:
 
 
 def test_ffprobe_is_a_separate_download_point_only_on_macos() -> None:
-    # evermeet 的 ffmpeg 归档里**只有 ffmpeg**（2026-09-26 macOS 日志：当时取数端点为 getrelease/zip，
-    # 自检报「找不到非空的 ffprobe 可执行文件」却报 ffmpeg 可执行），所以 macOS 的 ffprobe 必须是一个
-    # 独立槽位；而 gyan.dev / BtbN 的归档里两件同包，给它另立槽位等于凭空造一个没有公布值的假闸口。
-    # 三张表的键集合必须互相推出，缺任一处都会让「有来源没钉定」或「有钉定没来源」半边静默。
+    # evermeet 的 ffmpeg 归档里**只有 ffmpeg**（自检报「找不到非空的 ffprobe 可执行文件」却报
+    # ffmpeg 可执行），所以 macOS 的 ffprobe 必须是一个独立槽位；而 gyan.dev / BtbN 的归档里两件
+    # 同包，给它另立槽位等于凭空造一个没有公布值的假闸口。三张表的键集合必须互相推出，
+    # 缺任一处都会让「有来源没钉定」或「有钉定没来源」半边静默。
     macos_keys = {k for k in build_exe.RELEASE_RUNTIME_KEYS if k.startswith("macos-")}
     assert set(build_exe._EXTRA_EXECUTABLE_URLS) == macos_keys, "独立归档件的登记面与 macOS 运行时键不同步"
     assert set(build_exe.runtime_slots_for("macos-x64")) == {"ffmpeg", "node", "ffprobe"}
@@ -323,8 +318,8 @@ def _macos_release_env(monkeypatch: pytest.MonkeyPatch, *, release: bool) -> Non
 def _artifact_url_for_slot(key: str, slot: str) -> str:
     # 签名 URL 的同构校验要先拿到「该槽的产物 URL」。ffprobe 不在 _FFMPEG_DOWNLOAD_URLS 里，
     # 它在 _EXTRA_EXECUTABLE_URLS（依据见该表注释），查不到就该 KeyError 而不是回空串——
-    # 回空串会让下面 `sig_url == f"{artifact}.sig"` 变成和 ".sig" 比，永远红或永远假绿。
-    # build_exe 是按路径动态加载的 Any，故这里显式 cast 收窄（warn_return_any 不容 Any 直返）。
+    # 回空串会让 `sig_url == f"{artifact}.sig"` 变成和 ".sig" 比，永远红或永远假绿。
+    # build_exe 是动态加载的 Any，须显式 cast 收窄以满足 warn_return_any。
     if slot == "ffmpeg":
         return cast(str, build_exe._FFMPEG_DOWNLOAD_URLS[key])
     return cast(str, build_exe._EXTRA_EXECUTABLE_URLS[key][slot])
@@ -346,7 +341,7 @@ def test_gpg_config_shape_and_source_consistency() -> None:
 def test_gpg_verification_is_skipped_for_slots_without_official_sig(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    # gyan.dev / johnvansickle 不公布签名：未登记的槽位必须**一次网络与进程都不碰**，
+    # gyan.dev / BtbN 不公布签名：未登记的槽位必须**一次网络与进程都不碰**，
     # 而不是「试一下失败后放行」——后者会把「无物可验」伪装成「验过了」。
     def explode(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("未登记签名的槽位不得发起核验")
@@ -491,12 +486,10 @@ def test_unrunnable_binary_is_reported_with_upstream_reason(monkeypatch: pytest.
 
 
 def test_version_probe_arg_is_per_component(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    # 2026-09-26 三平台 build-release 同因红的回归锁：探针取值曾对三件套共用 `-version`，
-    # 而 node 的 CLI 解析器把 `-version` 判成非法选项（`bad option: -version` + 返回码 1），
-    # 于是**每一支 full 包**都卡在产物自检上出不来。
-    # 反向「统一改成 --version」同样是错的，故这里锁的是**逐件取值**而不是某个统一值：
-    # 实测 `ffmpeg --version` 返回码 8、`ffmpeg -version` 返回码 0（本机 ffmpeg 9.0.x 实跑），
-    # `node --version` 返回码 0、`node -version` 非法选项。谁把两者并成一个常量，本用例即红。
+    # 三平台 build-release 曾同因红：探针取值对三件套共用 `-version`，而 node 的 CLI 解析器把
+    # `-version` 判成非法选项（`bad option: -version` + 返回码 1），**每一支 full 包**都卡在产物自检上。
+    # 反向「统一改成 --version」同样是错的（实测 `ffmpeg --version` 返回码 8，`ffmpeg -version` 返回码 0），
+    # 故这里锁的是**逐件取值**：node --version 合规、node -version 非法。并成一个常量，本用例即红。
     for rel in ("ffmpeg/ffmpeg", "ffmpeg/ffprobe", "node/node"):
         path = tmp_path / rel
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -829,8 +822,8 @@ def test_linux_ffmpeg_extraction_aborts_when_binary_absent(monkeypatch: pytest.M
 
 # ---------------------------------------------------------------------------
 # 2026-09-26 macOS full 包两处产物缺陷：zip 解包丢可执行位 + ffprobe 从未被下载。
-# 两条都不是「CI 恰好红」：前者让 ffmpeg 落盘即不可执行（自检 PermissionError [Errno 13]），
-# 后者让 macOS 的 full 包结构上就缺件（evermeet 的 ffmpeg 归档里只有 ffmpeg）。
+# 前者让 ffmpeg 落盘即不可执行（自检 PermissionError [Errno 13]），后者让 macOS 的 full 包
+# 结构上就缺件（evermeet 的 ffmpeg 归档里只有 ffmpeg）。
 # 全程离线：归档由用例自己造，网络与 gpg 走本文件既有的桩。
 # ---------------------------------------------------------------------------
 
@@ -905,8 +898,8 @@ def test_zip_install_aborts_when_required_member_absent(tmp_path: Path) -> None:
 def test_zip_install_never_writes_outside_dest_dir(tmp_path: Path) -> None:
     # CR-11 的取件面锁：成员名取自压缩包自述、可含 `../../` 或 `x/bin/../../y`。本函数一律先取
     # basename 再与白名单比，于是「逃逸形态的成员名」最坏只会命中同名 basename 写到 dest_dir 内，
-    # 绝不会被写到外面——这条断言的就是那个「绝不会」，删掉 basename 归一（改成直接用 member 作路径）
-    # 即红。realpath 前缀校验是第二道闸，只在白名单里出现带目录分隔的名字时才可能触发。
+    # 绝不会被写到外面——删掉 basename 归一（改成直接用 member 作路径）即红。
+    # realpath 前缀校验是第二道闸，只在白名单里出现带目录分隔的名字时才可能触发。
     archive = tmp_path / "evil.zip"
     _make_zip(
         archive,
@@ -951,8 +944,7 @@ def test_macos_ffmpeg_branch_fetches_both_archives_and_verifies(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     # darwin 分支的端到端锁，且**不靠 skipif**：IS_WIN / sys.platform / runtime_slot_key 三处
-    # 一起强制，让这条只在 macOS runner 上真实执行的分支在 Windows 开发机与 Linux CI 上都跑到
-    # （AGENTS.md「平台专属分支的测试不得靠 skipif 让 CI 跳过」同源）。
+    # 一起强制，让这条只在 macOS runner 上真实执行的分支在 Windows 开发机与 Linux CI 上都跑到。
     _macos_release_env(monkeypatch, release=True)
     monkeypatch.setattr(build_exe, "IS_WIN", False)
     sys_shim = types.SimpleNamespace(**vars(sys))
@@ -995,9 +987,8 @@ def test_macos_ffmpeg_branch_fetches_both_archives_and_verifies(
 # MID-2254：发布 zip 与冒烟解耦 + 「运行期产物不得进包」
 # 冒烟以 cwd=RELEASE_DIR 连跑 CLI 25s / Web 90s / GUI 8s，src/logger.py 会在包内落
 # streamget.log / PlayURL.log / web_console.log（含 runner 绝对路径、用户名、告警堆栈），
-# 「缺键补写」还会改写包内 config.ini。旧顺序把冒烟排在 full 压缩之前，等于把这些
-# 打进对外分发的 zip。下面几条分别锁：顺序、清理、实物断言。
-# 全程桩掉 PyInstaller / 下载 / 压缩 / 起进程，不执行真实打包。
+# 「缺键补写」还会改写包内 config.ini。旧顺序把冒烟排在 full 压缩之前，等于把这些打进对外分发的 zip。
+# 下面几条分别锁：顺序、清理、实物断言。全程桩掉 PyInstaller / 下载 / 压缩 / 起进程，不执行真实打包。
 # ---------------------------------------------------------------------------
 
 
@@ -1108,10 +1099,9 @@ def test_no_zip_build_still_smokes(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
 
 
 def test_ensure_utf8_streams_keeps_replace_error_policy() -> None:
-    # 回归锁（2026-09-23 故障）：_ensure_utf8_streams 一旦退回裸 reconfigure(encoding="utf-8")，
-    # 就会把 pytest fd 捕获包装器（EncodedFile）的 errors 从 replace 就地翻成 strict，而代价
-    # 不在当场——要等几十个用例之后会话收尾读捕获时才以 UnicodeDecodeError 炸出来，
-    # 且往往先嫁祸给无关用例（见 DIAGNOSIS_2026-09-23_pytest-teardown-crash.md）。
+    # 回归锁：_ensure_utf8_streams 一旦退回裸 reconfigure(encoding="utf-8")，就会把 pytest fd 捕获
+    # 包装器（EncodedFile）的 errors 从 replace 就地翻成 strict——代价不在当场，要等会话收尾
+    # 读捕获时才以 UnicodeDecodeError 炸出来，且往往先嫁祸给无关用例。
     # 这里在**真实的 pytest 捕获**下调用它，要求两侧流的错误策略一字不变。
     before = (getattr(sys.stdout, "errors", None), getattr(sys.stderr, "errors", None))
     build_exe._ensure_utf8_streams()
@@ -1192,10 +1182,9 @@ def test_zip_member_runtime_artifact_predicate(member: str, expected: bool) -> N
 
 
 def _fake_archive_with(members: list[str]) -> Any:
-    # 桩掉 `_zip_release_dir`（make_zip 内部的压缩动作）而不是 shutil.make_archive：
-    # 2026-09-24 体积优化后 make_zip 改为自建 zipfile（为指定 compresslevel=9），
-    # 压缩这一步的**唯一接缝**就是该函数。桩在这里，两条用例的语义原样保留——
-    # 「实物断言独立成立，不靠上游先删干净」。
+    # 桩掉 `_zip_release_dir`（make_zip 内部的压缩动作）而不是 shutil.make_archive：体积优化后
+    # make_zip 改为自建 zipfile（为指定 compresslevel=9），压缩这一步的**唯一接缝**就是该函数。
+    # 桩在这里，两条用例的「实物断言独立成立，不靠上游先删干净」语义原样保留。
     def _fake(zip_path: Path) -> None:
         with zipfile.ZipFile(zip_path, "w") as zf:
             for member in members:
@@ -1240,12 +1229,10 @@ def test_make_zip_accepts_clean_archive(monkeypatch: pytest.MonkeyPatch, tmp_pat
 # 版本号带点（如 4.3.0）时 with_suffix 从**最后一个点**起把尾巴整段当旧扩展名丢弃，
 # DouyinLiveRecorder-v4.3.0-windows-amd64-{lite,full} 双双变成 DouyinLiveRecorder-v4.3.zip
 # （架构段写 amd64：那是 platform.machine().lower() 在 Windows 上的实际取值，x64 只是
-# _NODE_ARCH_MAP 归一后的运行时键名，从不出现在产物名里）。
-# 于是 full 静默覆盖 lite、dist/ 只剩一个 zip，build-release.yml 的「lite+full 齐全」校验
-# 与 dist/*-lite.zip 上传通配同时落空。上方两条既有 make_zip 用例对**名字**都不设判据
-# （test_make_zip_aborts_when_archive_still_contains_logs 只断言 SystemExit 的文本、
-# test_make_zip_accepts_clean_archive 只断言 zip_path.is_file()），名称漂移对它们完全隐形
-# —— 本组用例锁的正是名称形态与「两个 zip 互不覆盖」。
+# _NODE_ARCH_MAP 归一后的运行时键名，从不出现在产物名里）。于是 full 静默覆盖 lite、dist/ 只剩
+# 一个 zip，build-release.yml 的「lite+full 齐全」校验与 dist/*-lite.zip 上传通配同时落空。
+# 上方两条既有 make_zip 用例对**名字**都不设判据，名称漂移对它们完全隐形——本组用例锁的
+# 正是名称形态与「两个 zip 互不覆盖」。
 # ---------------------------------------------------------------------------
 
 
@@ -1472,13 +1459,13 @@ def test_smoke_load_config_still_reads_valid_checks(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 产物体积优化（2026-09-24）：排除清单与资源清单的回归锁
+# 产物体积优化：排除清单与资源清单的回归锁
 #
-# 为什么值得锁：这些排除项**在源码里看不出代价**——排除一个模块在本地 Windows 上可能毫无
-# 变化（如 uvloop 只在 POSIX 安装），排除错了却会在某个平台/某条分支上以
-# ModuleNotFoundError 的形态在**冻结产物运行时**炸出来，而单测跑的是源码、覆盖不到。
-# 因此这里锁三件事：① 清单不含「生产代码真的导入了」的模块；② 三个入口都挂上清单
-# （COLLECT 合并去重，只挂一个等于没排）；③ i18n 资源不含 .po 但含运行时真正读的格式。
+# 为什么值得锁：这些排除项**在源码里看不出代价**——排除一个模块在本地 Windows 上可能毫无变化
+# （如 uvloop 只在 POSIX 安装），排除错了却会在某个平台/分支上以 ModuleNotFoundError 的形态在
+# **冻结产物运行时**炸出来，而单测跑的是源码、覆盖不到。故锁三件事：① 清单不含「生产代码真的
+# 导入了」的模块；② 三个入口都挂上清单（COLLECT 合并去重，只挂一个等于没排）；
+# ③ i18n 资源不含 .po 但含运行时真正读的格式。
 # ---------------------------------------------------------------------------
 
 
@@ -1609,7 +1596,7 @@ def test_zip_release_dir_prefixes_members_with_app_name(monkeypatch: pytest.Monk
 
 
 # ---------------------------------------------------------------------------
-# 运行时钉定的在线来源层（2026-10-17 引入，**默认 off**）
+# 运行时钉定的在线来源层（**默认 off**）
 #
 # 被测面是「在线值在什么条件下才允许影响判据」。三条核心不变量：
 #   ① off（默认）：一次网络请求都不发，_pinned_slots() 的结果与引入本层前逐字相同；

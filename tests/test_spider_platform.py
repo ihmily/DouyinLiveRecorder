@@ -148,7 +148,7 @@ class TestEnsureTwitchClientId:
 
 
 class TestTiktokStreamData:
-    # Test get_tiktok_stream_data.
+    # get_tiktok_stream_data：TikTok 直播流地址解析。
 
     @pytest.mark.asyncio
     async def test_successful_parse(self) -> None:
@@ -231,7 +231,7 @@ class TestPandatvStreamData:
 
 
 class TestBaiduStreamData:
-    # Test get_baidu_stream_data.
+    # get_baidu_stream_data：百度直播数据解析。
 
     @pytest.mark.asyncio
     async def test_empty_data_returns_not_live(self) -> None:
@@ -349,7 +349,7 @@ class TestChzzkStreamData:
 
 
 class TestPpliveStreamUrl:
-    # Test get_pplive_stream_url.
+    # get_pplive_stream_url：飘飘直播流地址解析。
     # 守护飘飘直播：living 字段为真/假映射在线/离线，pullUrl 即流地址；覆盖两种状态码分支。
 
     @pytest.mark.asyncio
@@ -376,7 +376,7 @@ class TestPpliveStreamUrl:
 
 
 class Test6roomStreamUrl:
-    # Test get_6room_stream_url.
+    # get_6room_stream_url：6room 直播流地址解析。
 
     @pytest.mark.asyncio
     async def test_live(self) -> None:
@@ -408,7 +408,7 @@ class Test6roomStreamUrl:
 
 
 class TestYoutubeStreamUrl:
-    # Test get_youtube_stream_url.
+    # get_youtube_stream_url：YouTube 直播流地址解析。
 
     @pytest.mark.asyncio
     async def test_no_player_response_raises(self) -> None:
@@ -435,7 +435,7 @@ class TestYoutubeStreamUrl:
 
 
 class TestShowroomStreamData:
-    # Test get_showroom_stream_data.
+    # get_showroom_stream_data：Showroom 直播数据解析。
 
     @pytest.mark.asyncio
     async def test_not_live(self) -> None:
@@ -476,7 +476,7 @@ class TestLookliveSecretData:
 
 
 class TestKugouStreamUrl:
-    # Test get_kugou_stream_url.
+    # get_kugou_stream_url：酷狗直播流地址解析。
 
     @pytest.mark.asyncio
     async def test_not_live(self) -> None:
@@ -509,7 +509,7 @@ class TestJdStreamUrl:
 
 
 class TestFaceitStreamData:
-    # Test get_faceit_stream_data.
+    # get_faceit_stream_data：Faceit 直播数据解析。
     # 守护 Faceit 解析：platform 非 twitch 时不视为直播；锁住「非目标平台 → 离线」契约。
 
     @pytest.mark.asyncio
@@ -600,7 +600,7 @@ class TestLangliveStreamUrl:
 
 
 class Test17LiveStreamUrl:
-    # Test get_17live_stream_url.
+    # get_17live_stream_url：17Live 直播流地址解析。
 
     @pytest.mark.asyncio
     async def test_not_live(self) -> None:
@@ -615,7 +615,7 @@ class Test17LiveStreamUrl:
 
 
 class TestVvxqiuStreamUrl:
-    # Test get_vvxqiu_stream_url.
+    # get_vvxqiu_stream_url：vvxqiu 直播流地址解析。
 
     @pytest.mark.asyncio
     async def test_not_live(self) -> None:
@@ -629,7 +629,7 @@ class TestVvxqiuStreamUrl:
 
 
 class TestPicartoStreamUrl:
-    # Test get_picarto_stream_url.
+    # get_picarto_stream_url：Picarto 直播流地址解析。
 
     @pytest.mark.asyncio
     async def test_not_live(self) -> None:
@@ -649,7 +649,7 @@ class TestPicartoStreamUrl:
 
 
 class TestChangliaoStreamUrl:
-    # Test get_changliao_stream_url.
+    # get_changliao_stream_url：畅聊直播流地址解析。
 
     @pytest.mark.asyncio
     async def test_not_live(self) -> None:
@@ -663,7 +663,7 @@ class TestChangliaoStreamUrl:
 
 
 class TestYinboStreamUrl:
-    # Test get_yinbo_stream_url.
+    # get_yinbo_stream_url：音播直播流地址解析。
 
     @pytest.mark.asyncio
     async def test_not_live(self) -> None:
@@ -677,7 +677,7 @@ class TestYinboStreamUrl:
 
 
 class TestZhihuStreamUrl:
-    # Test get_zhihu_stream_url.
+    # get_zhihu_stream_url：知乎直播流地址解析。
     # 守护知乎直播：页面无初始数据无法定位直播信息 → 装饰器兜底 {is_live:False}；锁住缺数据离线契约。
 
     @pytest.mark.asyncio
@@ -691,7 +691,7 @@ class TestZhihuStreamUrl:
 
 
 class TestLianjieStreamUrl:
-    # Test get_lianjie_stream_url.
+    # get_lianjie_stream_url：连接（来连麦）直播流地址解析。
     # 守护连接直播：isonline=0 离线但仍解析 nickname；锁住 isonline 字段分支契约。
 
     @pytest.mark.asyncio
@@ -718,7 +718,7 @@ class TestLaixiuStreamUrl:
 
 
 class TestHuajiaoStreamUrlApp:
-    # Test get_huajiao_stream_url_app.
+    # get_huajiao_stream_url_app：花椒 APP 端流地址解析。
 
     @pytest.mark.asyncio
     async def test_error_returns_none(self) -> None:
@@ -756,7 +756,7 @@ class TestHuajiaoUserInfo:
 
 
 class TestAcfunStreamData:
-    # Test get_acfun_stream_data.
+    # get_acfun_stream_data：AcFun（A 站）直播数据解析。
     # 守护 A 站直播：无 live 状态字段时离线但仍解析 profile.name；锁住字段契约。
 
     @pytest.mark.asyncio
@@ -783,7 +783,7 @@ class TestMaoerfmStreamUrl:
 
 
 class TestMaoerfmStreamUrlLive:
-    # Test get_maoerfm_stream_url with live data.
+    # get_maoerfm_stream_url：猫耳 FM 直播流地址解析（有直播数据）。
 
     @pytest.mark.asyncio
     async def test_not_live(self) -> None:
@@ -804,7 +804,7 @@ class TestMaoerfmStreamUrlLive:
 
 
 class TestBilibiliRoomInfoH5:
-    # Test get_bilibili_room_info_h5.
+    # get_bilibili_room_info_h5：B 站房间信息 H5 接口解析。
 
     @pytest.mark.asyncio
     async def test_returns_title(self) -> None:
@@ -817,7 +817,7 @@ class TestBilibiliRoomInfoH5:
 
 
 class TestHuajiaoStreamUrl:
-    # Test get_huajiao_stream_url.
+    # get_huajiao_stream_url：花椒直播流地址解析。
     # 守护花椒 web 接口：user/ 路径无 cookie 时无法拉流 → 返回空主播名+离线，验证鉴权前置短路。
 
     @pytest.mark.asyncio
@@ -858,7 +858,7 @@ class TestKuaishouStreamData2:
 
 
 class TestBigoStreamUrl:
-    # Test get_bigo_stream_url.
+    # get_bigo_stream_url：Bigo 直播流地址解析。
     # 守护 Bigo 解析：alive 字段映射在线/离线，alive=1 时 hls_src 即 m3u8_url；网络异常兜底
     # {is_live:False}。
 
@@ -935,7 +935,7 @@ class TestBluedStreamUrl:
 
 
 class TestSoopHeaders:
-    # Test get_soop_headers.
+    # get_soop_headers：构造 SoopLive 请求头。
 
     def test_without_cookies(self) -> None:
         # 无 cookie 时仅下发 client-id/user-agent，不得带 cookie 字段；
@@ -951,7 +951,7 @@ class TestSoopHeaders:
 
 
 class TestSoopliveCdnUrl:
-    # Test get_sooplive_cdn_url.
+    # get_sooplive_cdn_url：SoopLive CDN 地址解析。
     # 守护 Soop CDN 地址解析：接口返回 view_url 原样透传；网络异常兜底 {is_live:False}。
 
     @pytest.mark.asyncio
@@ -1215,7 +1215,7 @@ class TestXhsStreamUrl:
 
 
 class TestTokenJs:
-    # Test get_token_js.
+    # get_token_js：经 node 脚本获取平台 token。
 
     @pytest.mark.asyncio
     async def test_success(self) -> None:
@@ -1249,7 +1249,7 @@ class TestTokenJs:
 
 
 class TestDouyuInfoData:
-    # Test get_douyu_info_data.
+    # get_douyu_info_data：斗鱼直播间信息解析。
     # 守护斗鱼房间信息：show_status 映射在线/离线，在线须清洗 HTML 实体标题；网络异常兜底
     # {is_live:False}。
 
@@ -1295,7 +1295,7 @@ class TestDouyuInfoData:
 
 
 class TestAcfunSignParams:
-    # Test get_acfun_sign_params.
+    # get_acfun_sign_params：AcFun 签名参数获取。
     # 守护 A 站访问凭据获取：返回 (userId, ..., visitor_st) 元组；拉取异常兜底 {is_live:False}。
 
     @pytest.mark.asyncio
@@ -1319,7 +1319,7 @@ class TestAcfunSignParams:
 
 
 class TestDouyuStreamData:
-    # Test get_douyu_stream_data.
+    # get_douyu_stream_data：斗鱼直播流数据解析。
 
     @pytest.mark.asyncio
     async def test_success(self) -> None:
@@ -1342,7 +1342,7 @@ class TestDouyuStreamData:
 
 
 class TestSoopliveStreamData:
-    # Test get_sooplive_stream_data.
+    # get_sooplive_stream_data：SoopLive 直播数据解析。
 
     @pytest.mark.asyncio
     async def test_error_returns_false(self) -> None:
@@ -1352,7 +1352,7 @@ class TestSoopliveStreamData:
 
 
 class TestLoginSooplive:
-    # Test login_sooplive.
+    # login_sooplive：SoopLive 登录取凭据。
 
     @pytest.mark.asyncio
     async def test_short_username_raises(self) -> None:
@@ -1371,7 +1371,7 @@ class TestLoginSooplive:
 
 
 class TestBilibiliStreamData:
-    # Test get_bilibili_stream_data.
+    # get_bilibili_stream_data：B 站直播流数据解析。
 
     @pytest.mark.asyncio
     async def test_code_zero_with_durl(self) -> None:
@@ -1452,7 +1452,7 @@ class TestBilibiliStreamData:
 
 
 class TestNeteaseStreamDataLive:
-    # Test get_netease_stream_data live path.
+    # get_netease_stream_data：网易 CC 直播（在线路径）解析。
     # 守护网易 CC 直播：从 __NEXT_DATA__ 提取 live.status 映射在线/离线，在线解析 nickname/title
     # 与 quickplay/sharefile 流地址；离线分支不携带流地址。
 
@@ -1509,7 +1509,7 @@ class TestNeteaseStreamDataLive:
 
 
 class TestBilibiliRoomInfo:
-    # Test get_bilibili_room_info.
+    # get_bilibili_room_info：B 站房间信息多接口聚合解析。
     # 守护 B 站房间信息多接口聚合：uid/live_status/uname/title 三段请求合并；网络异常兜底
     # 空主播名+离线。
 
@@ -1535,7 +1535,7 @@ class TestBilibiliRoomInfo:
 
 
 class TestLoginFlexTv:
-    # Test login_flextv.
+    # login_flextv：FlexTV 登录取凭据。
     # 守护 FlexTV 登录：成功固化 cookie 串格式（"; " 分隔全条目）；无 access 字段或网络异常返回
     # None（类型匹配兜底），旧 dict 兜底会被 if 误判登录成功。
 

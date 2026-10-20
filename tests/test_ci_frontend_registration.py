@@ -1,28 +1,24 @@
 # ci.yml「Gate frontend tests not skipped」的 node-id 清单 ↔ `tests/frontend/*.mjs` 的完备性回归锁。
 #
-# 治理症状：AGENTS.md「测试」明写「新增 `.mjs` 必须同批登记进 ci.yml 的 node-id 清单」，成因是 M-28
-# 实测事故——`test_motion.mjs` 有用例本体、`node --test <文件>` 又只跑被点名的那一个文件、不会顺带
-# 发现同级其他 `.mjs`，于是不进清单就等于该文件的全部回归锁在正常 CI 中从不执行，CI 依旧全绿。
-# 这条约束此前只有两处载体：AGENTS.md 的文字，与 `scripts/agent_hook_guard.py` 的 PostToolUse 规则
-# P-MJS-REGISTER。后者位于 `.qoder/` 本地工具目录（AGENTS.md「项目级 Hooks / Commands」：不随仓库
-# 分发、不得进镜像），所以它只对装了这套 Hook 的本机生效——**对其它贡献者与 CI 本身都不成立**，
-# 漏登记仍会漂回仓库。本文件把同一条判据压成随仓库分发的机检锁：枚举目录下的用例本体与清单点名的
-# 入口求差集，差集非空即红。
+# 治理症状（M-28）：`node --test <文件>` 只跑被点名的那一个文件、不会顺带发现同级其他 `.mjs`，
+# 于是不进清单就等于该文件的全部回归锁在正常 CI 中从不执行，CI 依旧全绿。这条约束原先只有
+# AGENTS.md 的文字与 `scripts/agent_hook_guard.py` 的 PostToolUse 规则两处载体；后者在 `.qoder/`
+# 本地工具目录（不随仓库分发、不得进镜像），对其它贡献者与 CI 本身都不成立，漏登记仍会漂回仓库。
+# 本文件把同一判据压成随仓库分发的机检锁：枚举目录下的用例本体与清单点名的入口求差集，非空即红。
 #
-# 事实源关系：清单本体仍在 ci.yml，本文件只**读取**它，不另抄一份「哪些入口该登记」的副本
-# （AGENTS.md「禁止另建并行清单」；定位方式与 tests/test_ci_retry_action.py 同口径——按 YAML 结构
-# 取步骤，不按行号、不按全文正则，步骤在文件里挪动或换 job 都不该让本锁失效）。
+# 事实源关系：清单本体仍在 ci.yml，本文件只**读取**它，不另抄一份副本（定位方式与
+# tests/test_ci_retry_action.py 同口径——按 YAML 结构取步骤，不按行号、不按全文正则）。
 #
-# 为什么不照抄 Hook 的判据：Hook 认的是「同目录同名 `.py` 包装」，而现存四个包装里有两位于
-# tests/ 顶层且与 `.mjs` 不同名（`test_frontend_quality_ui.py` 驱动 `test_quality_ui.mjs`、
-# `test_frontend_regression_gates.py` 驱动组 G 那份），照它写会把既有合法形态判红。本文件改按
-# 「已登记的包装实际引用了哪个用例本体」建立映射，映射取自包装源码里的路径常量，不靠命名巧合。
+# 为什么不照抄 Hook 的判据：Hook 认「同目录同名 `.py` 包装」，而现存包装里有两位于 tests/ 顶层
+# 且与 `.mjs` 不同名（`test_frontend_quality_ui.py`、`test_frontend_regression_gates.py` 各驱动
+# 一份），照它写会把既有合法形态判红。本文件改按「已登记的包装实际引用了哪个用例本体」
+# 建立映射，映射取自包装源码里的路径常量，不靠命名巧合。
 #
 # 双向钉（对齐 tests/test_pre_commit_config.py 的「清单 ↔ 配置」口径）：
 #   正向——目录里每个用例本体都必须被某个**已登记**的包装引用到（漏登记即红）；
 #   反向——清单点名的包装必须存在、点名的用例函数必须真的定义、包装引用的文件必须还在盘上
 #         （改名或删除后清单忘了同步 = 悬空入口，`node --test` 跑不到任何东西却仍然绿）。
-# 两侧各带 fail-closed 前置守卫：解析不到步骤、解析不到入口、目录枚举为空都会显式失败，
+# 两侧各带 fail-closed 前置守卫：解析不到步骤 / 入口或目录枚举为空都会显式失败，
 # 否则「扫不到东西的绿灯」会让本锁在被掏空的那一刻反而显示通过。
 
 from __future__ import annotations
@@ -222,9 +218,8 @@ def _synthetic_case(stem: str) -> str:
 
 def test_diff_logic_actually_reports_violations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # 上面四条读的是真实仓库，跑绿只能证明「此刻没有漂移」，证明不了判据有抓漂移的能力；
-    # 而真去改 ci.yml 做盘上变异会波及同会话其它用例（AGENTS「变异验证的一次性改动必须当轮还原」）。
-    # 故在 tmp_path 合成一份最小仓库、只换本模块的三个路径全局，喂给同一批 helper
-    # 口径同 tests/test_test_hygiene.py::test_guard_actually_catches_the_patterns。
+    # 而真去改 ci.yml 做盘上变异会波及同会话其它用例（变异验证的一次性改动必须当轮还原）。
+    # 故在 tmp_path 合成一份最小仓库、只换本模块的三个路径全局，喂给同一批 helper。
     frontend = tmp_path / "tests" / "frontend"
     frontend.mkdir(parents=True)
     registered_case = _synthetic_case("registered")

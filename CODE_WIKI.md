@@ -1706,6 +1706,22 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 > 脚本：`tests/test_{bili,douyin,douyu,huya,twitch}_live_collector.py`（`python file.py <URL> [秒数]`，
 > 需活房间 + 外网，默认人工通道）。
 
+### v4.6.0-dev (2026-10-20) — 九个录制链路模块注释精简：删考古、折重复，逻辑零改动
+
+- **用户指令**：精简 `src/{scheduler,room,srt_writer,startup_cleanup,spider,stream,sync_http,stream_select,recorder_status}.py` 的注释，不改任何可执行代码、常量值、导入、函数签名、调用顺序、线程模型、日志重定向、安全闸门顺序与优雅退出收尾逻辑。
+- **保留的承重信息**：`import main` 惰性读取避免循环导入与 `__main__` 二次执行；`ResizableSemaphore` 的 capacity/used 分离与 `recompute()` 必须比较 capacity；`PlatformBreaker` 的探针代数/租约与「只接受当前持有线程回报」；`record_state_lock` / `max_request_lock` 的持锁快照与 `display_info` 的异常退避；SRT 终态位、块号单调不回卷、打开失败节流重试与 close 带超时；启动期字节码清理的「内容哈希基线 / 正向白名单 / 全程不抛」；抖音/TikTok/虎牙/斗鱼/快手等平台的状态码语义、UA/SSL/代理一致性、`_dig` 安全下钻与空响应归因；`stream_select` 的探针节流/退避/末位放行边界、安全闸「拒绝必须早于背景化」、`record_url` 复用结论与 `security_rejected` 分离；`sync_http` 的协议白名单 opener、惰性 CERT_NONE、双道上限与「失败一律空串」契约；`stream.py` 的档位映射、就近降级、h265 备选与 HLS/FLV 字段语义。
+- **压缩方式**：多层 `[历史注]` / 工单编号段落压为「当前状态 + 必要原因」；重复的「调用方透传 cookie 时优先采用」类模板保留语义但不再逐段展开；实测读数、协议/主机名、常量名、环境变量名、错误码与回归锁用例名逐字保留；删除仅复述函数名或与代码相反的陈旧注释（如 `get_live_room_id` 已删除说明、重复的 `_inject_origin_urls` 调用点注记）。
+- **验证**：`scripts/check_annotations.py --baseline` **253 个文件全部等价**（9 个目标文件逐项等价）；`black --check` 9 files unchanged；`isort --check-only`（`PYTHONUTF8=1`）rc=0；`mypy`（无参）251 files 无问题；行尾形态逐文件复核：`recorder_status` / `sync_http` / `spider` / `scheduler` 仍纯 CRLF，`stream_select` / `stream` / `startup_cleanup` / `srt_writer` / `room` 仍纯 LF；注释密度仍全部 ≥13%（最低 `stream.py` 18.9%）。
+- **DoD 第 2 步**：`SKIP(不涉及录制链路 / 选源 / ffmpeg 参数 / 平台解析的行为改动)`；本批仅删除/压缩注释，未改任何可执行语句。
+
+### v4.6.0-dev (2026-10-20) — 十个运行时模块注释精简：删考古、压重复，逻辑零改动
+
+- **用户指令**：精简 `src/{proxy,notify,node_install,logger,log_archive,http_config,ffmpeg_proc,ffmpeg_master_download,ffmpeg_linux_download,ffmpeg_install}.py` 的注释，不改任何可执行代码、常量、导入、函数签名、调用顺序、线程模型、日志重定向与安全闸门顺序。
+- **保留的承重信息**：凭据必须过 `mask_credentials` 才进日志；`safe=""` 的 userinfo 转义判据；`ftp_proxy` 刻意不在候选集；GUI 父进程不持录制日志句柄（WinError 32 轮转失败）；`{extra[room]}` 默认值不可删；stdio 重定向后必须 `rebind_console_sink()`；归档「替身接管标准流 → 关旧句柄 → 改名 → 建新句柄」顺序与 pending 回填；三段式 ffmpeg 终止与总预算配平；`_QUIT_VIA_STDIN` / `_HIDE_CHILD_CONSOLE` 的平台门控可测性；TOFU / 官方哈希的强度边界与「基准存在却读不出即拒装」；候选源顺序与「非 200 不采信载荷」；`should_prepend_bundled_ffmpeg_dir` 的五条判据。
+- **压缩方式**：多层修订段落压为「当前状态 + 一行 `[历史注]`」，实测读数（`streamget.log` 卡在 300031 字节、2026-10-18 WinError 32 实测）、URL / 主机名（gyan.dev、fyhub.cn、nodejs.org/dist）、常量名、环境变量名、错误码与回归锁用例名逐字保留；删除仅复述函数名的空泛注释（如 `set_platform_ssl_verify`）。
+- **验证**：`scripts/check_annotations.py --baseline` **253 个文件全部等价**（对 10 个目标文件再做逐文件 `ast.dump` 复核，10/10 equal）；`black --check` 10 files unchanged；`isort --check-only` rc=0；`mypy`（无参）251 files 无问题；定向 `pytest` **429 passed / 2 skipped / 0 warnings**；行尾形态逐文件复核：`proxy` / `logger` / `ffmpeg_master_download` / `ffmpeg_linux_download` 仍纯 LF，`notify` / `node_install` / `log_archive` / `http_config` / `ffmpeg_proc` / `ffmpeg_install` 仍纯 CRLF。
+- **DoD 第 2 步**：`SKIP(不涉及录制链路 / 选源 / ffmpeg 参数 / 平台解析)`；注释密度整体下降但全部模块仍高于 13% 阈值（`check_annotations.py` rc=0）。
+
 ### v4.6.0-dev (2026-10-20) — 全仓清理第二轮：未用 import / 只写变量 / 零引用函数与 38 处未读局部变量清零，TAG_NORMAL 与动效 token 接线
 
 - **用户指令 / 口径**：在上一轮清点基础上重扫当前 HEAD（251 个已跟踪 `.py`：根 6 / `scripts/` 15 / `src/` 69 / `tests/` 161），只把「全仓零引用」列为删除候选；动态导入、别名、`getattr` 字符串、构建脚本与测试锁全部交叉核对。**本轮未发现未使用依赖**：18 个运行时包全部有真实引用；`urllib3` / `h2` / `socksio` 保留为传递层运行期/CVE 下限，`PyExecJS` 保留为 `exejs` 兜底。

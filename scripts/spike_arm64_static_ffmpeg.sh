@@ -3,20 +3,19 @@
 # 并产出可判定「路线 A 是否可行」的验收证据。脚本只到 spike 为止——**不接入 build-release.yml**
 # （那属 W3，需单独批准）。
 #
-# 为什么要做这个 spike（背景见 PROPOSAL_2026-09-22_binary-trust-policy.md 第五节）：
-#   · ffmpeg.org 官方 macOS 条目只有 evermeet 的 x86_64「Static builds for macOS 64-bit」，
-#     上游不发布 arm64 产物 → full 包里的 macOS ffmpeg 在 Apple Silicon 上走 Rosetta 转译；
-#   · Homebrew bottle 不能当分发源（11 个 runtime_deps 的 dylib 在别的 formulae 里）；
-#   · W1 已落的第 4 类「源码可复现构建」要求**输入可钉定 + 过程可追溯**，本脚本就是来实测
-#     这三件证据到底取不取得到（官方源码 tarball 校验值 / configure 配方哈希 / 产出凭据）。
+# 背景（PROPOSAL_2026-09-22_binary-trust-policy.md 第五节）：ffmpeg.org 官方 macOS 条目只有
+# evermeet 的 x86_64 静态构建，上游不发 arm64 → full 包里的 macOS ffmpeg 在 Apple Silicon 上走
+# Rosetta 转译；Homebrew bottle 又不能当分发源（11 个 runtime_deps 的 dylib 在别的 formulae 里）。
+# W1 已落的第 4 类「源码可复现构建」要求**输入可钉定 + 过程可追溯**，本脚本就是来实测三件证据
+# 取不取得到（官方源码 tarball 校验值 / configure 配方哈希 / 产出凭据）。
 #
-# 本脚本刻意只做三件事：① 验证「能不能拿到官方公布的 tarball 摘要」——拿不到就直接失败并把
-# 事实打出来（这是 W3 的阻塞点，不能糊过去）；② 用一组**固定且可复现**的 configure 参数产出
-# arm64 静态单文件；③ 用 lipo / otool 判定「自包含」与「架构」，而不是靠 `--enable-static` 写了
-# 就当成立（最常见的假自包含是 brew 的 dylib 被静默链进来，故必须实测 otool）。
+# 只做三件事：① 验证能否拿到官方公布的 tarball 摘要——拿不到即失败并把事实打出来（W3 的阻塞点，
+# 不能糊过去）；② 用一组**固定且可复现**的 configure 参数产出 arm64 静态单文件；③ 用 lipo/otool
+# 判定「自包含」与「架构」，而不是 `--enable-static` 写了就当成立（最常见的假自包含是 brew 的
+# dylib 被静默链进来，必须实测 otool）。
 #
-# 在 Windows / Linux 上怎么读它：`bash scripts/spike_arm64_static_ffmpeg.sh --print-only`
-# 会把将要执行的全部命令与常量打印出来，不执行任何外部程序（我就是这样在无 mac 环境下评审的）。
+# 无 macOS 时：`bash scripts/spike_arm64_static_ffmpeg.sh --print-only` 打印将要执行的全部命令与
+# 常量、不执行任何外部程序，评审据此复核。
 #
 # 用法（macOS）：
 #   bash scripts/spike_arm64_static_ffmpeg.sh                 # 全流程（约 20~45 min，装依赖需 brew）
@@ -69,9 +68,8 @@ log() { printf '[spike] %s\n' "$*"; }
 fail_pre() { printf '[spike][PRECONDITION-FAIL] %s\n' "$*" >&2; exit 2; }
 fail_check() { printf '[spike][CHECK-FAIL] %s\n' "$*" >&2; exit 1; }
 
-# --print-only 时把命令原样打出来（**不执行**）。这是给非 macOS 的评审者看的，
-# 也是本 spike 唯一能在 Windows 上真跑起来的路径 —— 所以它必须真的存在于脚本里，
-# 而不是注释里的「你应该这么跑」。
+# --print-only 时把命令原样打出来（**不执行**）：这是非 macOS 评审的唯一可行路径，
+# 也是本 spike 唯一能在 Windows 上真跑起来的分支，所以它必须真的存在而不是注释里的「你应该这么跑」。
 run() {
     if [ "$PRINT_ONLY" -eq 1 ]; then
         printf '    + %s\n' "$*"
@@ -122,8 +120,8 @@ fi
 pick_version() {
     local index_html="$1"
     # 只要 ffmpeg-<主>.<次>[.<修>].tar.xz，排除 ffmpeg-release / ffmpeg-git 之类滚动名。
-    # 不用 `sort -V`：macOS 自带的是 FreeBSD sort，旧版不认 -V，写了会在这里直接失败而非排序出错，
-    # 但为了让脚本在 Linux 评审机上同样可跑，改成显式数值键排序（三段：主.次.修，缺修补 0）。
+    # 不用 `sort -V`：macOS 自带 FreeBSD sort，旧版不认 -V；改成显式数值键排序（主.次.修，缺修补 0），
+    # 以便脚本在 Linux 评审机上同样可跑。
     grep -oE 'ffmpeg-[0-9]+\.[0-9]+(\.[0-9]+)?\.tar\.xz' <<<"$index_html" \
         | sed -E 's/ffmpeg-([0-9]+)\.([0-9]+)(\.([0-9]+))?\.tar\.xz/\1 \2 \4/' \
         | awk '{ printf "%d %d %d\n", $1, $2, ($3 == "" ? 0 : $3) }' \
@@ -132,9 +130,9 @@ pick_version() {
         | awk '{ if ($3 == 0) printf "%s.%s\n", $1, $2; else printf "%s.%s.%s\n", $1, $2, $3 }'
 }
 
-# 从「一行摘要」里取出摘要本身：官方文件常见形态是 "<hex>  ffmpeg-x.y.tar.xz"，
-# 也有纯 hex 一行。必须先按字段切、再校验长度 —— 直接对整行做 anchored 正则会永不匹配，
-# 而用 tr -d '[:space:]' 拼成一坨会让 SHA512(128) 的尾巴被当成 SHA256(64) 用。
+# 从「一行摘要」里取出摘要本身：官方文件常见形态是 "<hex>  ffmpeg-x.y.tar.xz"，也有纯 hex 一行。
+# 必须先按字段切、再校验长度——直接对整行做 anchored 正则会永不匹配，而用 tr -d '[:space:]'
+# 拼成一坨会让 SHA512(128) 的尾巴被当成 SHA256(64) 用。
 first_field_hex() {
     local text="$1"
     awk 'NF { print $1; exit }' <<<"$text" | tr 'A-Z' 'a-z'
@@ -144,9 +142,9 @@ fetch_official_sha256() {
     local ver="$1" url base_url suffix raw digest
     base_url="${RELEASE_INDEX%/}/ffmpeg-${ver}.tar.xz"
     # 候选端点按「能直接喂给第 4 类 source_sha256 字段」的强度排序：先 .sha256，再 .sha512
-    # （取到 SHA512 只算**事实登记**，不拿来当 SHA256 用 —— 见下面的 fail_pre）。
-    # 刻意不静默降级成「自己算一个」：W1 第 4 类的口径就是不得把构建机自算值当基线，
-    # 拿不到官方摘要时正确行为是**失败并把端点打出来**，交人工核对。
+    # （SHA512 只算**事实登记**，不拿来当 SHA256 用，见下面的 fail_pre）。
+    # 刻意不静默降级成「自己算一个」：第 4 类的口径就是不得把构建机自算值当基线，拿不到官方
+    # 摘要时正确行为是**失败并把端点打出来**，交人工核对。
     for suffix in .sha256 .sha512; do
         url="${base_url}${suffix}"
         log "尝试官方摘要端点：$url"
@@ -226,11 +224,11 @@ else
     log "SKIP_DEPS=1：跳过 brew install，假设 nasm/pkg-config/x264/lame 已就绪"
 fi
 
-# 显式把 brew 前缀喂给 pkg-config：Apple Silicon 是 /opt/homebrew、Intel 是 /usr/local，
-# 不写死靠探测。--pkg-config-flags=--static 才是「链 .a 而不是 .dylib」的关键，
-# 但它只影响 pkg-config 输出的 flag，仍可能有库被 --disable-autodetect 之外的路径拽进来 —— 故下面必验 otool。
-# 三个 .pc 位置都要给：x264 与 lame 各自 opt 目录下有一份，brew 的聚合 lib/pkgconfig 又有一份，
-# 少给一处就会看到「--enable-libx264 被 configure 静默忽略」这种假自包含前兆。
+# 显式把 brew 前缀喂给 pkg-config（Apple Silicon 是 /opt/homebrew、Intel 是 /usr/local，不写死）。
+# --pkg-config-flags=--static 才是「链 .a 而不是 .dylib」的关键，但它只影响 pkg-config 输出的 flag，
+# 仍可能有库经 --disable-autodetect 之外的路径被拽进来——故下面必验 otool。三个 .pc 位置都要给：
+# x264 与 lame 各自 opt 目录下一份、brew 的聚合 lib/pkgconfig 又一份；少给一处就会出现
+# 「--enable-libx264 被 configure 静默忽略」这种假自包含前兆。
 BREW_PREFIX="$(brew --prefix)"
 export PKG_CONFIG_PATH="${BREW_PREFIX}/opt/x264/lib/pkgconfig:${BREW_PREFIX}/opt/lame/lib/pkgconfig:${BREW_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 

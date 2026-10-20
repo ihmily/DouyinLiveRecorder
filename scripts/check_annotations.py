@@ -20,14 +20,14 @@
 #   右侧时短路还会遮住它，肉眼极易误判成「纯静态问题」。该检查把「引用了全仓都没有绑定
 #   的名字」变成门禁里的一条明确违规（细则见 check_dangling_symbols）。
 #
-# 为什么用 ast.dump 而不是逐行 diff：注释不进入抽象语法树，而三引号 docstring
-# 会作为 Expr 节点进入 AST。因此 AST 全等可同时证明两件事——
-#   ① 可执行逻辑一字未动；② 没有误插 docstring。
+# 为什么用 ast.dump 而不是逐行 diff：注释不进抽象语法树，而三引号 docstring 会作为 Expr 节点
+# 进入 AST。因此 AST 全等可同时证明：① 可执行逻辑一字未动；② 没有误插 docstring。
 #
 # 已知盲点（AST 校验发现不了，须另行检查）：
-#   - `except A, B:`（PEP 758）与 `except (A, B):` 的 AST 完全相同，
-#     故「无括号写法被改成带括号」不会被本工具发现，需 grep 计数核对。
-#   - 注释缩进错误不影响 AST，只有 black 能发现。故本工具应与 black 配套使用。
+#   - `except A, B:`（PEP 758）与 `except (A, B):` 的 AST 完全相同，故「无括号写法被改成带
+#     括号」不会被本工具发现，需 grep 计数核对。
+#   - 注释缩进错误不影响 AST，只有 black 能发现；换行符形态变化对两者都隐形，须按字节复核。
+#     故本工具应与 black 配套使用。
 #
 # 用法示例：
 #   python scripts/check_annotations.py                       # 规范检查
@@ -59,13 +59,12 @@ MODULE_HEADER_SCAN_LINES = 30
 # 不参与检查的目录：必须覆盖 .gitignore / pyproject 各工具（black exclude / isort extend_skip /
 # coverage omit）排除掉的每一个目录名。锁的方向只做「那边有、这里也得有」，比那边更严是保守侧。
 #
-# 为什么这份清单承重：它同时是 check_dangling_symbols() 经 iter_source_files 聚合「全仓绑定名」
-# 的扫描面。**任何一个未排除的第三方目录里出现同名绑定，就会让「被删符号的残留调用点」被判成
+# 这份清单承重：它同时是 check_dangling_symbols() 经 iter_source_files 聚合「全仓绑定名」的
+# 扫描面。**任何一个未排除的第三方目录里出现同名绑定，就会让「被删符号的残留调用点」被判成
 # 「全仓有绑定」而漏报**——悬空符号门禁就此静默失效。
 # 跨文件回归锁见 tests/test_run_gates.py：
 #   ::test_check_annotations_exclude_dirs_cover_pyproject_excludes（逐名比对 pyproject 三处清单）
 #   ::test_check_annotations_scan_face_still_includes_tests_and_src（反向兜底：src/tests/scripts/web 不得被排掉）
-#   [历史注] 2026-09-23 MID-2256 补齐前本清单落后三处清单；当时那些目录恰好 0 个 .py，属潜伏缺陷。
 EXCLUDE_DIRS = (
     "__pycache__",
     ".git",
@@ -103,12 +102,9 @@ EXCLUDE_DIRS = (
     ".superpowers",
 )
 
-# 不参与检查的文件：protoc 生成物（自带 docstring 且标注 DO NOT EDIT）、
-# 以及按项目决策跳过的历史遗留单文件版 standalone。
-# 加条目前先想清楚后果：这里排除掉的文件同样不在悬空符号检查的扫描面内
-#   （为什么这份清单承重，见上方 EXCLUDE_DIRS 的同名说明）。
-#   [历史注] 原第三项 gui_legacy.py 已随 v4.1.0-dev 于 2026-09-10 删除，
-#            2026-09-21 清掉该陈旧引用——留着会让后来者误以为它仍是入口之一。
+# 不参与检查的文件：protoc 生成物（自带 docstring 且标注 DO NOT EDIT）、以及按项目决策跳过的
+# 历史遗留单文件版 standalone。加条目前先想清楚后果：这里排除掉的文件同样不在悬空符号检查的
+# 扫描面内（为什么这份清单承重，见上方 EXCLUDE_DIRS 的同名说明）。
 EXCLUDE_FILES = frozenset(
     {
         "douyin_pb2.py",
@@ -393,10 +389,9 @@ def check_conventions(root: Path, min_density: float) -> int:
 
 
 def _reject_dangerous_baseline(baseline: Path) -> str | None:
-    # 2026-09-12 审查 6.7：--snapshot 会先 shutil.rmtree(baseline) 再重建。
-    # 误传系统根目录 / 用户主目录 / 仓库根 / 祖先目录时，rmtree 会先递归删除
-    # 整个目录树——不可逆数据丢失，且发生在本函数「建立快照」这一看似只读的
-    # 动作里，用户极难预期。这里做防呆：命中即拒绝执行并返回错误说明。
+    # --snapshot 会先 shutil.rmtree(baseline) 再重建。误传系统根 / 主目录 / 仓库根 / 祖先目录
+    # 时，rmtree 会先递归删掉整个目录树——不可逆数据丢失，且发生在一个看似只读的
+    # 「建立快照」动作里，用户极难预期。命中即拒绝执行并返回错误说明。
     resolved = baseline.resolve()
     # 文件系统根与各盘符根（Windows: C:\ 等）
     if resolved == resolved.parent:
@@ -415,18 +410,15 @@ def _reject_dangerous_baseline(baseline: Path) -> str | None:
         cwd = None
     if cwd is not None and (resolved == cwd or resolved in cwd.parents):
         return f"拒绝：基线目录是当前工作目录或其祖先 -> {resolved}"
-    # M-23（2026-10-18 审查）改这两处判据的原因：原 `home in resolved.parents` 拒绝主目录下
-    # **一切**路径，而本仓的常见布局正是检出在家目录里（Windows `C:\Users\<you>\...`、Linux `~\...`），
-    # 于是连工具自己提示的工作区子目录（`.workbuddy/ast-baseline`）也被误拒——2026-10-04 审查的
-    # `_reject_dangerous_baseline` 探针已实测到同一形态（那条记录的就是当时的本机读数）。
-    # 防呆目的逐条保住：① 家目录本体与被直接当基线传进来的第一层子目录（Documents/AppData/Temp
-    # 这些「一个人全部数据」的入口）仍一律拒绝；② 文件系统根、cwd 本体及其祖先仍先于放行判定；
-    # ③ 放行只覆盖「严格位于当前工作目录之下」的目录——那是用户自己 cd 进来的仓库子目录，
-    # rmtree 它正是 --snapshot 的既定用法。cwd 本身是家目录时不放行（否则等于把整棵家目录树
-    # 声明成「工作区」，把上面两条防线一次让掉）。
-    # 位置也必须在这里而不是并入 home 那条：Windows 侧的 system_roots 含 `C:\Users`，
-    # 检出在 `C:\Users\<you>\repo` 时其下的快照目录会先被那条 `sr in resolved.parents` 误拒，
-    # 与家目录那条是同一族过度收紧。
+    # M-23：原判据 `home in resolved.parents` 拒绝主目录下**一切**路径，而本仓常见布局正是检出在
+    # 家目录里（Windows `C:\Users\<you>\...`、Linux `~\...`），连工具自己提示的工作区子目录
+    # （`.workbuddy/ast-baseline`）也被误拒。防呆目的逐条保住：① 家目录本体与被直接当基线传进来
+    # 的第一层子目录（Documents/AppData/Temp 这些「一个人全部数据」的入口）仍一律拒绝；② 文件
+    # 系统根、cwd 本体及其祖先仍先于放行判定；③ 放行只覆盖「严格位于当前工作目录之下」的目录——
+    # 那是用户自己 cd 进来的仓库子目录，rmtree 它正是 --snapshot 的既定用法。cwd 本身是家目录时
+    # 不放行（否则等于把整棵家目录树声明成「工作区」，把上面两条防线一次让掉）。
+    # 位置必须在这里而不是并入 home 那条：Windows 侧的 system_roots 含 `C:\Users`，检出在
+    # `C:\Users\<you>\repo` 时其下的快照目录会先被那条 `sr in resolved.parents` 误拒。
     if cwd is not None and (home is None or cwd != home) and cwd in resolved.parents:
         return None
     # 系统目录（Windows / POSIX 常见）。刻意不含 Path(os.sep)——在 Windows 上

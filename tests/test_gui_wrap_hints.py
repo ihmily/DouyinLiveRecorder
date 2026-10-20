@@ -1,20 +1,15 @@
-# tests/test_gui_wrap_hints.py — 长提示文案自适应折行回归锁（2026-09-29 文字截断修复）。
+# tests/test_gui_wrap_hints.py — 长提示文案自适应折行回归锁。
 #
 # 根因：长文案标签的请求宽超出父容器分配宽时，Tk pack 按默认 anchor=center **两侧对称裁切**
-# （150% DPI 下控制台「启动后将调用 main.py…」提示与弹幕占位提示两侧各缺半个字；画质页说明的
-# 定宽 wraplength=1000 在窄窗口下同样右缘裁切）。
+# （150% DPI 下控制台提示与弹幕占位提示两侧各缺半个字；定宽 wraplength=1000 在窄窗口
+# 下同样右缘裁切）。
 # 修复（gui.py）：_compute_wraplength 纯函数 + _bind_adaptive_wraplength（防抖 + 迟滞地把
-# wraplength 绑到标签自身窗口宽，要求 fill/sticky 拉伸）+ 占位文案收敛到
-# _make_quality_placeholder / _make_danmaku_placeholder 两个工厂（阶段4 起单实例叠放切换）。
-# [2026-10-03 阶段4] 换算公式去掉缩放率除法：标签从 CTkLabel 换成 ttk.Label，
-# ttk 的 wraplength 是原始设备像素、不随 tk scaling 缩放（Tk 9.0 实测探针：
-# scaling×2 后同 wraplength 的 reqwidth 恒定），CTk 时代的 (width-margin)/scale 与
-# ScalingTracker 依赖一并退役；CTk 时代锚点 1584@1.5→1050 在 150% DPI 下与
-# 新公式 1584→1576 视觉等价（1050 逻辑 × 1.5 ≈ 1576 设备）。
+# wraplength 绑到标签自身窗口宽，要求 fill/sticky 拉伸）+ 占位文案收敛到两个工厂。
+# 平台事实：ttk 的 wraplength 是原始设备像素、不随 tk scaling 缩放（Tk 9.0 探针实测），
+# 故换算不除缩放率；历史锚点 1584@1.5→1050 与新锚点 1584→1576 在 150% DPI 下视觉等价。
 #
-# 三层锁：纯函数单测与 AST 源码锁无头可跑（Linux CI 全量执行）；
-# 真窗用例需要显示器，无显示环境 skip——与 tests/test_ui_theme.py 的 TestApplyTtk 同一口径，
-# 是本文件唯一 skip 面。
+# 三层锁：纯函数单测与 AST 源码锁无头可跑（Linux CI 全量执行）；真窗用例需要显示器，
+# 无显示环境 skip——与 tests/test_ui_theme.py 的 TestApplyTtk 同一口径。
 
 import ast
 import json
@@ -32,7 +27,7 @@ GUI_TREE = ast.parse(GUI_SOURCE)
 _MARKER = "\n@@WRAP@@ "
 
 # 子进程驱动真实 gui 代码（不在 pytest 进程 import gui：DLR_GUI_PARENT 会跨用例污染 src.logger）。
-# compute：纯函数，无窗口；window：真窗验证 fill=X 标签在窄容器自动折行、加宽后 wraplength 增长。
+# compute/should_apply：纯函数；window：真窗验证 fill=X 标签窄容器自动折行、加宽后 wraplength 增长。
 _SCRIPT = r"""
 import json
 import sys
@@ -168,8 +163,8 @@ sys.stdout.write("\n@@WRAP@@ " + json.dumps(out, ensure_ascii=True))
 
 
 def _wrap_call(call: str, **kwargs: Any) -> dict[str, Any]:
-    # 结果用带前缀的单行 JSON 回传：CTk/自定义脚本可能向 stdout 混出杂散行，
-    # 前缀标记让解析与杂散输出解耦；回传侧 ensure_ascii=True 免受控制台码页影响。
+    # 结果用带前缀的单行 JSON 回传：GUI 可能向 stdout 混出杂散行，前缀标记让解析与杂散
+    # 输出解耦；回传侧 ensure_ascii=True 免受控制台码页影响。
     payload = json.dumps({"call": call, **kwargs}, ensure_ascii=False)
     proc = subprocess.run(
         [sys.executable, "-c", _SCRIPT],
@@ -194,9 +189,9 @@ def _compute(width: int, margin: int = 8) -> int:
 
 
 class TestComputeWraplength:
-    # 锚点：设备像素 - 边距 取整，下限 120。[阶段4] ttk wraplength = 原始设备像素
-    # （不随 tk scaling 缩放），旧 CTk 换算 (width-margin)/scale 已退役——历史锚点
-    # 1584@1.5→1050 在 150% DPI 下与新锚点 1584→1576 视觉等价（1050×1.5≈1576）。
+    # 锚点：设备像素 - 边距 取整，下限 120。ttk wraplength = 原始设备像素（不随 tk scaling
+    # 缩放），旧 CTk 换算 (width-margin)/scale 已退役——历史锚点 1584@1.5→1050 与
+    # 新锚点 1584→1576 在 150% DPI 下视觉等价（1050×1.5≈1576）。
     def test_device_pixel_conversion(self) -> None:
         assert _compute(1584) == 1576
         assert _compute(2008) == 2000
@@ -251,13 +246,12 @@ class TestSourceLocks:
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "_bind_adaptive_wraplength"
         ]
         # 5 个接线点：控制台按钮行提示、画质说明、画质占位工厂、弹幕占位工厂、
-        # URL 配置页底部提示（2026-10-17 右边框裁切修复时补接——原单行全文计入
-        # 窗口 reqwidth，是把 root reqwidth 撑过 geometry 的来源之一）
+        # URL 配置页底部提示（右边框裁切修复时补接——原单行全文计入窗口 reqwidth）。
         assert len(calls) == 5, f"_bind_adaptive_wraplength 接线点应为 5，实际 {len(calls)}"
 
     def test_binding_is_debounced_hysteresis_and_guarded(self) -> None:
-        # 2026-09-29 卡死修复锁：绑定必须 ① 防抖（Configure 风暴期零写入——同步追写会喂进
-        # CTk 重缩放的递归 idle 泵，队列永不排空）② 迟滞判据 ③ 销毁竞态 TclError 守卫
+        # 卡死修复锁：绑定必须 ① 防抖（Configure 风暴期零写入——同步追写会喂进重缩放的
+        # 递归 idle 泵，队列永不排空）② 迟滞判据 ③ 销毁竞态 TclError 守卫
         fn = next(
             n for n in ast.walk(GUI_TREE) if isinstance(n, ast.FunctionDef) and n.name == "_bind_adaptive_wraplength"
         )
@@ -289,8 +283,7 @@ class TestSourceLocks:
         assert not offenders, f"发现定宽 wraplength 调用点: {len(offenders)} 处"
 
     def test_placeholder_factories_use_stretch_and_bind(self) -> None:
-        # fill/sticky=ew 是自适应换行的前提（窗口宽由布局器分配、与标签自请求解耦）；
-        # [阶段4] 占位改 grid 叠放（sticky="ew"），工厂丢掉拉伸或绑定会让折行静默失效
+        # 占位改 grid 叠放（sticky="ew"）：工厂丢掉拉伸或绑定会让折行静默失效
         for fn_name in ("_make_quality_placeholder", "_make_danmaku_placeholder"):
             fn = next(n for n in ast.walk(GUI_TREE) if isinstance(n, ast.FunctionDef) and n.name == fn_name)
             src = ast.get_source_segment(GUI_SOURCE, fn)
@@ -299,10 +292,9 @@ class TestSourceLocks:
             assert "_bind_adaptive_wraplength" in src, f"{fn_name} 缺自适应绑定"
 
     def test_placeholder_single_instance_toggled_by_refresh(self) -> None:
-        # [阶段4] 占位收敛为单实例：构建路径经工厂创建一次；刷新路径不再重建占位，
-        # 改为 grid_remove/grid 切换可见性——锁两件事：① 工厂只被构建页调用（文案唯一
-        # 的既有判据不变）② 刷新路径必须经 _show_*_placeholder 切换（占位与表格互斥，
-        # 直接 tree.grid()/grid_remove() 而漏掉占位会让空态文案残留）。
+        # 占位收敛为单实例：构建路径经工厂创建一次；刷新路径不再重建占位，改为
+        # grid_remove/grid 切换可见性——锁两件事：① 工厂只被构建页调用；② 刷新路径必须经
+        # _show_*_placeholder 切换（直接 tree.grid() 而漏掉占位会让空态文案残留）。
         pairs = {
             "_make_quality_placeholder": ("_build_quality_page", "_show_quality_placeholder"),
             "_make_danmaku_placeholder": ("_build_danmaku_page", "_show_danmaku_placeholder"),
@@ -342,9 +334,9 @@ class TestRealWindowWrap:
         ), f"加宽后 wraplength 未增长: narrow={result['narrow_wrap']} wide={result['wide_wrap']}"
 
     def test_dpi_flip_stress_drains_event_loop_with_bounded_writes(self) -> None:
-        # 2026-09-29 卡死回归锁：DPI 反复翻转（用户跨屏拖拽走 check_dpi_scaling 同一回调链）下，
-        # 事件循环必须能排空（修复前绑定追逐每次瞬时宽度写 wraplength，几何失效喂进 CTk 重缩放
-        # 的递归 idle 泵，update() 永不返回，子进程直接超时）；且 wraplength 写入有界。
+        # 卡死回归锁：DPI 反复翻转（用户跨屏拖拽走 check_dpi_scaling 同一回调链）下，
+        # 事件循环必须能排空（修复前绑定追逐每次瞬时宽度写 wraplength，几何失效喂进
+        # 递归 idle 泵，update() 永不返回，子进程直接超时）；且 wraplength 写入有界。
         result = _wrap_call("stress")
         if result.get("skipped"):
             pytest.skip(f"无显示环境，跳过真窗用例: {result['skipped']}")

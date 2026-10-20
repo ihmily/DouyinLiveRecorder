@@ -1,27 +1,21 @@
-// 认证复验口令链（CODE_REVIEW_2026-09-29_2 的 M-22）的前端行为回归锁。
+// 认证复验口令链（M-22 / M-26）的前端行为回归锁。
 //
-// 【为什么单独开一个文件】M-22 要证的是**交互结果**（口令窗是否弹出、口令随哪些请求下发、
-// 取消/留空是否真的不提交、DOM 里是否残留），而不是源码形状。既有的
-// tests/frontend/test_regression_2026_09_22_gates.mjs 那条 MID-2241 用例是源码级断言，
-// 正是「钉字面量 → 契约反转时空过」的形态（M-26 的实证），本文件按 M-26 的结论补上行为侧：
-// 以 node:vm 沙箱驱动真实 web/app.js，走真实事件链路（tab 点击 → GET /api/config 渲染 →
-// 改 input → 点保存 → confirm → 口令窗 → PUT），断言真实请求体与真实 toast 文案。
+// 【为何单独成文件】M-22 要证的是**交互结果**（口令窗是否弹出、口令随哪些请求下发、取消/留空
+// 是否真的不提交、DOM 是否残留），而非源码形状。test_regression_2026_09_22_gates.mjs 里
+// MID-2241 那条是源码级断言，正是 M-26 实证的「钉字面量 → 契约反转时空过」形态，故在此补行为侧。
 //
-// 【与后端契约同源】src/web_api.py::update_config 的 MID-2241 段：认证当前开启时写
-// [Web] web_auth_enable / web_password **必须**带能过 verify_web_password 的 reauth_password，
-// 否则 403；其余 Web 键与其他节一律不受影响。本文件因此锁三条前端行为：
-//   ① 认证两键的 PUT 必须携带 reauth_password（缺了就是必然 403）；
-//   ② 其余键的 PUT 必须**不带**该字段（M-22 修的正是「循环外粘变量把口令复制进本次保存的
-//      每一个请求」）；
-//   ③ 空口令/取消一律不提交（不去撞那条 403，也不给后端留一条必然失败的 auth_reauth_denied 告警）。
-// 后端自身的判定行为**不在这里复制**——已由 tests/test_regression_2026_09_22_web_g.py 的
-// TestAuthKeyReauth 与 tests/test_web_api.py::TestAuthDowngradeRejected 用真实端点 E2E 锁住。
+// 【与后端契约同源】src/web_api.py::update_config 的 MID-2241 段：认证当前开启时写 [Web]
+// web_auth_enable / web_password 必须带能过 verify_web_password 的 reauth_password，否则 403；
+// 其余键不受影响。本文件锁三条前端行为：① 认证两键的 PUT 携带 reauth_password（缺了必然 403）；
+// ② 其余键的 PUT 不带该字段（M-22 修的正是循环外粘变量把口令复制进本次保存的每个请求）；
+// ③ 空口令/取消一律不提交（不白撞 403，也不留必然失败的 auth_reauth_denied 告警）。
+// 后端自身判定不在此复制，已由 tests/test_regression_2026_09_22_web_g.py 的 TestAuthKeyReauth
+// 与 tests/test_web_api.py::TestAuthDowngradeRejected 用真实端点 E2E 锁住。
 //
-// 【桩的最小集合】与 test_quality_ui.mjs 同源：DOM/fetch/confirm 桩 + no-op 定时器
-// （toast 自动隐藏与轮询递归不执行，保证用例确定性）；#config-container 的 input 按
-// innerHTML 里的 <input> 标签还原成元素桩（app.js 用 innerHTML 拼行、再 querySelectorAll 读回）。
-// 沙箱里没有 window.prompt 桩：**这正是本文件的第一条断言**——生产代码若还用 prompt 采集口令，
-// 用例会以 ReferenceError 直接变红，而不是被一个「返回固定字符串」的桩悄悄放过。
+// 【桩的最小集合】与 test_quality_ui.mjs 同源：DOM/fetch/confirm 桩 + no-op 定时器；
+// #config-container 的 input 按 innerHTML 里的 <input> 标签还原（app.js 用 innerHTML 拼行、
+// 再 querySelectorAll 读回）。沙箱刻意没有 window.prompt：生产若退回 prompt 采集口令，用例会以
+// ReferenceError 直接变红，而不是被「返回固定串」的桩悄悄放过——这是本文件的第一条断言。
 //
 // 由 tests/frontend/test_auth_reauth.py 以子进程 `node --test` 调用（Node 缺失时该包装 skip）。
 import { readFileSync } from 'node:fs';
@@ -76,7 +70,7 @@ function makeElement(id) {
     };
 }
 
-// 响应恒带 json 头（api() 按它决定 JSON.parse）；全部请求记录进 log 供逐请求断言 body。
+// 响应恒带 json 头（api() 据此决定 JSON.parse）；全部请求记进 log 供逐请求断言 body。
 function makeFetch(routes, log) {
     return async (path, init) => {
         init = init || {};
@@ -99,8 +93,8 @@ function makeResponse(status, data) {
     };
 }
 
-// #config-container 的 input 还原：与 test_quality_ui.mjs 同型——app.js 用 innerHTML 拼配置行、
-// 再用 querySelectorAll 取回，桩必须按**当前 innerHTML** 缓存解析结果，测试改动的才是
+// #config-container 的 input 还原（与 test_quality_ui.mjs 同型）：app.js 用 innerHTML 拼配置行、
+// 再用 querySelectorAll 取回，故桩按**当前 innerHTML** 缓存解析结果，测试改动的才是
 // saveConfig 真正读到的那批对象。
 function parseConfigInputs(html) {
     const inputs = [];
@@ -120,13 +114,12 @@ async function flush(rounds) {
     }
 }
 
-// index.html 的初值还原：#reauth-modal 默认带 .hidden（口令窗只在认证键路径上被摘掉），
-// 与同目录用例给 #logout-btn 打 seedClasses 同一手法。
+// index.html 的初值还原：#reauth-modal 默认带 .hidden（口令窗只在认证键路径上被摘掉）。
 const SEED_MODAL = { 'reauth-modal': ['hidden'] };
 
-// 启动并进入配置视图：GET /api/config 渲染输入行 + 写入 configBackup（saveConfig 的 diff 基线）。
-// seedClasses 按 index.html 的初始 class 还原元素（桩里 getElementById 是「惰性建一个空元素」，
-// 不还原初值就会把「默认隐藏的 #reauth-modal」看成可见，反向边界断言随之失真）。
+// 启动并进入配置视图：GET /api/config 渲染输入行并写入 configBackup（saveConfig 的 diff 基线）。
+// seedClasses 按 index.html 的初始 class 还原元素——桩里 getElementById 惰性建空元素，不还原初值
+// 会把「默认隐藏的 #reauth-modal」看成可见，反向边界断言随之失真。
 async function bootConfigView(cfg, { routes = {}, confirm = () => true, seedClasses = SEED_MODAL } = {}) {
     const fetchLog = [];
     const confirmCalls = [];
@@ -247,7 +240,7 @@ function putFor(ctx, key) {
     return putBodies(ctx).find(b => b.key === key);
 }
 
-// [Web] 三个键 + 一个普通键：web_password 的现值刻意留空（非掩码），使它「改成新值」即可判定为脏。
+// [Web] 三个键 + 一个普通键：web_password 现值刻意留空（非掩码），「改成新值」即可判定为脏。
 const AUTH_CONFIG = {
     Web: { web_host: '127.0.0.1', web_auth_enable: 'true', web_password: '' },
     录制设置: { 循环时间: '10' },
@@ -267,10 +260,9 @@ test('M-22 前提：index.html 的口令窗用 type="password" 且默认隐藏',
 });
 
 test('M-22：app.js 全文件不存在 window.prompt 形态的口令采集（剥注释后判定）', () => {
-    // 失效形态：复验口令用 window.prompt 采集——它是面板唯一**明文回显**的口令输入框，
-    // 且原生弹窗无法指定 type/autocomplete，口令会进浏览器自动填充候选。
-    // 判据剥掉行注释：沿革注释里写着「采集形态由 window.prompt 换成 askReauthPassword」，
-    // 不剥会把注释里的旧形态名当成代码命中。
+    // 失效形态：用 window.prompt 采集复验口令——面板唯一**明文回显**的口令输入框，且原生弹窗
+    // 无法指定 type/autocomplete，口令会进自动填充候选。判据先剥行注释：沿革注释里写着旧形态名，
+    // 不剥会把注释当成代码命中。
     const code = APP_JS.split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
     assert.ok(!/window\.prompt\s*\(/.test(code), '仍存在 window.prompt 调用');
     assert.ok(!/[^.\w]prompt\s*\(/.test(code), '仍存在裸 prompt 调用（同为明文采集形态）');
@@ -297,8 +289,8 @@ test('M-22：改认证键弹口令窗，其 PUT 携带 reauth_password（缺了�
 });
 
 test('M-22：同轮保存的普通配置键**不得**被 reauth_password 污染（本次保存逐请求断言）', async () => {
-    // 失效形态：authReauth 是循环外的粘变量，认证行一旦赋值，之后**每个**有改动的键的 PUT 体
-    // 都带 reauth_password——口令被复制进本次保存的全部请求（代理日志/浏览器扩展/抓包都能记下）。
+    // 失效形态：authReauth 是循环外的粘变量，认证行一旦赋值，之后**每个**有改动的键的 PUT 都带
+    // reauth_password——口令被复制进本次保存的全部请求（代理日志/扩展/抓包都能记下）。
     const ctx = await bootConfigView(AUTH_CONFIG);
     findInput(ctx, '循环时间').value = '30';        // 排在 Web 之后：旧形态正是被它捎带
     findInput(ctx, 'web_auth_enable').value = 'false';
@@ -315,7 +307,7 @@ test('M-22：同轮保存的普通配置键**不得**被 reauth_password 污染�
 });
 
 test('M-22 反向边界：只改普通 Web 键不弹口令窗、不发口令（复验范围不得扩大）', async () => {
-    // 后端注释写明的反向边界：其余 Web 键（web_host/web_port…）一律不受强复验影响，
+    // 反向边界（与后端一致）：其余 Web 键（web_host/web_port…）不受强复验影响，
     // 否则「改个端口也要复验」会逼人绕过面板手改文件。
     const ctx = await bootConfigView(AUTH_CONFIG);
     findInput(ctx, 'web_host').value = '0.0.0.0';
@@ -326,8 +318,8 @@ test('M-22 反向边界：只改普通 Web 键不弹口令窗、不发口令（�
 });
 
 test('M-22：两个认证键共用一次采集（每轮保存最多弹一次口令窗）', async () => {
-    // 若第二次采集仍在（旧形态是每个认证键各 prompt 一次），第二个 PUT 会因为 Promise 永不
-    // 落地而根本不发生——本用例不点第二次确认，因此「两个键都提交成功」即「只问了一次」的证明。
+    // 若第二次采集仍在，第二个 PUT 会因 Promise 永不落地而根本不发生——本用例不点第二次确认，
+    // 因此「两个键都提交成功」就是「只问了一次」的证明。
     const ctx = await bootConfigView(AUTH_CONFIG);
     findInput(ctx, 'web_auth_enable').value = 'false';
     findInput(ctx, 'web_password').value = 'new-secret';
@@ -342,9 +334,9 @@ test('M-22：两个认证键共用一次采集（每轮保存最多弹一次口�
 });
 
 test('M-22 反向边界：认证当前关闭时启用认证不采口令（否则第一次收紧配置被口令窗死锁）', async () => {
-    // 判据与后端同源：src/web_api.py::update_config 的 MID-2241 段**只在 web_auth_enable 现为真**时
-    // 要求 reauth_password（认证关闭时磁盘上没有可信的「当前口令」可验）。前端若无条件弹窗口令，
-    // 「第一次打开认证」这条路就永远走不通：用户没有旧口令可填 → 留空即放弃 → 键被跳过。
+    // 判据与后端同源：update_config 的 MID-2241 段**只在 web_auth_enable 现为真**时要求
+    // reauth_password（认证关闭时没有可信的「当前口令」可验）。前端若无条件弹窗，「第一次打开
+    // 认证」就永远走不通：用户没有旧口令可填 → 留空即放弃 → 键被跳过。
     const ctx = await bootConfigView({
         Web: { web_host: '127.0.0.1', web_auth_enable: 'false', web_password: '' },
     });
@@ -370,9 +362,8 @@ test('M-22：取消口令窗 → 认证键不提交并计入「已跳过 N 项�
 });
 
 test('M-22：取消认证键不得卡住同一轮里的普通配置键', async () => {
-    // 取消只作用于认证两键；普通键照旧提交。注意本轮末尾的 toast 是「已保存 1 项」而不是
-    // 「已跳过 1 项认证相关改动」——saveConfig 末尾的优先级是 count>0 先于 skippedAuth
-    // （既有口径，非本次改动，故这里按请求集合断言而不是断言文案）。
+    // 取消只作用于认证两键，普通键照旧提交。末尾 toast 是「已保存 1 项」而非「已跳过…」——
+    // saveConfig 的优先级是 count>0 先于 skippedAuth（既有口径），故这里按请求集合断言。
     const ctx = await bootConfigView(AUTH_CONFIG);
     findInput(ctx, 'web_auth_enable').value = 'false';
     findInput(ctx, '循环时间').value = '20';
@@ -384,8 +375,8 @@ test('M-22：取消认证键不得卡住同一轮里的普通配置键', async (
 });
 
 test('M-22：留空提交即放弃本次认证改动，绝不发出不带 reauth_password 的认证键 PUT', async () => {
-    // 后端契约：认证已开启时**空/缺** reauth_password 都是 403。旧形态让 prompt 返回的空串
-    // 照样走 PUT（白撞一次 403、并在日志里留一条 auth_reauth_denied），现在前端就地跳过。
+    // 后端契约：认证已开启时空/缺 reauth_password 都是 403。旧形态让 prompt 的空串照样走 PUT
+    // （白撞一次 403、日志里留一条 auth_reauth_denied），现在前端就地跳过。
     const ctx = await bootConfigView(AUTH_CONFIG);
     findInput(ctx, 'web_auth_enable').value = 'false';
     clickSave(ctx);
@@ -416,7 +407,7 @@ test('M-22：Enter 等同确认，且确认后输入节点立即被清空（DOM 
     const ctx = await bootConfigView(AUTH_CONFIG);
     findInput(ctx, 'web_auth_enable').value = 'false';
     clickSave(ctx);
-    // 非阻塞弹窗必须把重入入口关掉（原 window.prompt 是阻塞的，第二次点击进不来）
+    // 非阻塞弹窗必须关掉重入入口（原 window.prompt 是阻塞的，第二次点击进不来）
     assert.equal(ctx.elements.get('config-save-btn').disabled, true, '口令窗打开时「保存配置」未禁用（可重入两条 saveConfig）');
     ctx.elements.get('reauth-password').value = 'current-pw';
     fireReauthKey(ctx, 'Enter');
@@ -447,7 +438,7 @@ test('M-22：后端因复验失败回 403 时走既有善后（标红 + 常驻�
     clickReauthConfirm(ctx);
     await flush();
     assert.equal(putFor(ctx, 'web_auth_enable').reauth_password, 'wrong-pw', '用例前提失效：未携带复验口令');
-    // {"detail": ...} 的 JSON 错误契约不得因前端改动漂移：toast 只显示 detail
+    // JSON 错误契约不得漂移：toast 只显示 detail
     assert.match(ctx.elements.get('toast').textContent, /必须复验当前访问口令/);
     assert.ok(!ctx.elements.get('toast').textContent.includes('"detail"'), 'toast 不得回显原始 JSON');
     assert.ok(!ctx.elements.get('config-save-status').classList.contains('hidden'),
@@ -455,7 +446,7 @@ test('M-22：后端因复验失败回 403 时走既有善后（标红 + 常驻�
     assert.ok(reloads > reloadsBefore, '失败后未回拉服务端真值，界面停留在「看起来已保存」的假象');
 });
 
-// —— 轻微项 41 顺手：登录框口令残留（不扩大为重构登录流程）——————————
+// —— 登录框口令残留（不扩大为重构登录流程）——————————————————
 
 test('M-22 配套：登录成功后清空 #login-password，失败时保留原文', async () => {
     const ok = await bootConfigView(AUTH_CONFIG, {

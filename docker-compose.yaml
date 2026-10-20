@@ -3,12 +3,13 @@
 # 三种模式：recorder（默认，命令行录制）/ web（--profile web，管理面板）/ gui（--profile gui，需 X11）
 #
 # 同目录 .env 可覆盖默认变量（compose 自动加载；仓库不含、已被 .gitignore 忽略，首次使用需自建）：
-#   TZ=America/New_York 改时区；APP_VERSION=4.5.0 固定镜像 LABEL 版本（须与 pyproject.toml 的
-#   [project].version 一致；不设则 LABEL version 为空，镜像内版本仍由 main.py / src/web_api.py
-#   经 importlib.metadata 在运行时读取）。
+#   TZ=America/New_York 改时区；APP_VERSION=4.6.0 固定镜像 LABEL 版本（须与 pyproject.toml
+#   的 [project].version 一致；不设则 LABEL version 为空，镜像内版本仍由 main.py /
+#   src/web_api.py 经 importlib.metadata 在运行时读取）。
 # 四个宿主机目录 config / downloads / logs / backup_config 首次 `docker compose up` 由 Docker
-#   自动创建，且均已在 .gitignore 与 .dockerignore 忽略（config/*.ini 含 Cookie / 代理 / Web
-#   密码等凭据，不得入库或打入镜像）；容器侧同名目录由 Dockerfile 的
+#   自动创建。downloads / logs / backup_config 已被 .gitignore 与 .dockerignore 忽略；config/ 下
+#   唯一入库的文件是脱敏后的 config.ini 基线模板，本机填入的 Cookie / 代理 / Web 密码不得提交，
+#   且 config/*.ini 已被 .dockerignore 排除、不进镜像。容器侧同名目录由 Dockerfile 的
 #   `mkdir -p logs downloads backup_config` 预建并归属 recorder。
 # =============================================================================
 
@@ -18,15 +19,15 @@ services:
   # YAML 锚点 &recorder 被 web / gui 复用，两者只做按需覆盖。
   # ---------------------------------------------------------------
   recorder: &recorder
-    # 2026-10-04：镜像名归属改为 y123ao6（与 Dockerfile LABEL url、pyproject [project.urls] 同源）；
-    # pull_policy: build 下该名仅作本地 tag 与 compose push 命名，MIN-18 语义不变
+    # 镜像名与 Dockerfile LABEL url、pyproject [project.urls] 同源（y123ao6）；pull_policy: build
+    # 下它只作本地 tag 与 compose push 命名，MIN-18 语义不变
     image: y123ao6/douyin-live-recorder:latest
     container_name: douyin-live-recorder
 
-    # MIN-18（2026-09-21）：镜像只从本地 build 取，绝不回退去拉远端 :latest——原配置虽写了 build:，
-    # 但未先 build 就 `docker compose up` 时 Compose 会按 image 名去 registry 拉一个 :latest，
-    # 版本漂移且可能是他人上传的同名镜像。pull_policy: build 让「未构建就 up」变成「就地构建」，
-    # 本地构建路径不变；需要显式重建照旧 `docker compose build` / `up --build`。
+    # MIN-18（2026-09-21）：镜像只从本地 build 取，绝不回退去拉远端 :latest——只写 build: 时，
+    # 未构建就 `docker compose up` 会让 Compose 按 image 名去 registry 拉 :latest，版本漂移且可能
+    # 是他人上传的同名镜像。pull_policy: build 把「未构建就 up」变成「就地构建」，显式重建照旧
+    # `docker compose build` / `up --build`。
     pull_policy: build
 
     build:
@@ -101,9 +102,9 @@ services:
   # ---------------------------------------------------------------
   # Web 管理面板模式（web.py = 录制引擎守护线程 + Starlette/uvicorn）
   # 启动：docker compose --profile web up -d
-  # 重要：web.py 默认监听 127.0.0.1:8000，容器内必须在 config/config.ini 的 [Web] 节
-  #   设置 web_host = 0.0.0.0，宿主机才能经 http://localhost:8000 访问面板；
-  #   一旦监听 0.0.0.0，强烈建议同时设置 web_auth_enable = true 并配置密码。
+  # 重要：web.py 默认监听 127.0.0.1:8000，容器内必须在 config/config.ini 的 [Web] 节设置
+  #   web_host = 0.0.0.0，宿主机才能经 http://localhost:8000 访问面板；一旦监听 0.0.0.0，
+  #   强烈建议同时设 web_auth_enable = true 并配置密码。
   # ---------------------------------------------------------------
   web:
     <<: *recorder
@@ -112,11 +113,10 @@ services:
       - web
     entrypoint: ["python", "web.py"]
     # 端口映射仅 Web 模式需要（宿主机:容器），与 Dockerfile EXPOSE 8000 对应。
-    # 2026-09-12 审查（低危）：原为 "8000:8000"，等价于 "0.0.0.0:8000:8000"——把面板绑到宿主机
-    # **所有**网卡（含公网/局域网），而 web_auth_enable 默认 false，组合后果是「无认证的面板
-    # 直接暴露到网络」，与 web.py 那条「检测到不安全绑定」启动告警同源。
-    # 默认收敛为仅本机回环：需要局域网/公网访问时显式改成 "0.0.0.0:8000:8000" 并同步开启
-    # web_auth_enable（有意暴露 = 显式动作，而非默认行为）。
+    # 默认只绑本机回环："8000:8000" 等价于 "0.0.0.0:8000:8000"，会把面板暴露到宿主机**所有**
+    # 网卡，而 web_auth_enable 默认 false，组合后果是「无认证面板直接上网」（与 web.py 那条
+    # 「检测到不安全绑定」启动告警同源）。需要局域网/公网访问时显式改成 "0.0.0.0:8000:8000"
+    # 并同步开启 web_auth_enable——有意暴露必须是显式动作。
     ports:
       - "127.0.0.1:8000:8000"
 
@@ -129,10 +129,10 @@ services:
   # ---------------------------------------------------------------
   gui:
     <<: *recorder
-    # 镜像默认不装 GUI 依赖（见 Dockerfile 阶段1 的 INSTALL_GUI=false：PySide6 解压后本机实测
-    # 647.56MB，而 recorder / web 两个服务在屏蔽它后导入链完整）。本服务需要真窗口，故：
-    #   ① 用独立 tag——build 配置不同的两个服务若共用同一个 image 名，后构建的一方会把另一方
-    #      正在用的 tag 覆盖掉（`up` 过 recorder 再 `--profile gui up --build` 就是一次覆盖）；
+    # 镜像默认不装 GUI 依赖（Dockerfile 阶段1 的 INSTALL_GUI=false：PySide6 解压后本机实测
+    # 647.56MB，而 recorder / web 屏蔽它后导入链完整）。本服务需要真窗口，故：
+    #   ① 用独立 tag——build 配置不同的服务共用同一个 image 名时，后构建的一方会覆盖另一方
+    #      正在用的 tag（`up` 过 recorder 再 `--profile gui up --build` 即一次覆盖）；
     #   ② 显式传 INSTALL_GUI=true，让阶段1 装全 requirements.txt、阶段2 补装 Qt 运行库。
     image: y123ao6/douyin-live-recorder:latest-gui
     container_name: douyin-live-recorder-gui

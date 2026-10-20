@@ -1,26 +1,19 @@
 #!/usr/bin/env python3
 # -*- encoding: utf-8 -*-
 
-# DouyinLiveRecorder 主程序入口 - 命令行版
+# DouyinLiveRecorder 主程序入口（CLI 录制 + Web 录制引擎）
 #
-# 这是直播录制工具的核心模块，负责：
-# - 配置文件的读取和解析
-# - 多平台直播流的获取和解析
-# - FFmpeg 录制进程的管理
-# - 多线程并发录制控制
-# - 错误处理和自动重试
-# - 直播状态通知推送
+# 职责：读取配置 → 平台分派 → 取流选源 → ffmpeg 录制或直下 → 守护收尾；
+# 并管理并发调度、错误重试、状态推送与运行日志归档。
 #
-# 支持平台：60+ 国内外直播平台（详见下文）
+# 主链路：
+#     URL_config.ini → 平台识别 → 取流选源 → ffmpeg/直下 → 状态监控 → 转码/推送
 #
-# 架构流程：
-#     URL配置 → 平台识别 → 获取直播数据 → 解析流地址 → FFmpeg录制 → 状态监控
-#
-# 对外主要函数：
-# - main(non_interactive)：录制主循环入口（CLI 直跑与 web.py 守护线程共用）
-# - start_record(url_data, count_variable)：单个直播间的录制线程主体
+# 对外入口与可观测面：
+# - main(non_interactive)：录制主循环；CLI 直跑与 web.py 守护线程共用
+# - start_record(url_data, count_variable, room_state)：单个直播间的录制线程主体
 # - check_subprocess(...)：启动并守护一次 ffmpeg 录制子进程
-# - get_status()：录制引擎运行状态快照，供 Web API 读取
+# - get_status()：录制引擎状态快照，供 Web API 读取
 #
 # Author: Hmily
 # GitHub: https://github.com/ihmily
@@ -28,22 +21,20 @@
 # Update: 2025-10-23 19:48:05
 # Copyright (c) 2023-2025 by Hmily, All Rights Reserved.
 
-# 强制标准流以 UTF-8 输出。
-# 原因：冻结后的 exe 作为 GUI 子进程（stdout 是管道而非真实控制台）时，
-# Python 会回退到 GBK 区域编码写输出；而 GUI 父进程按 UTF-8 读取该管道，
-# 导致中文乱码（如「自动获取 Cookie ttwid 成功」变成「�Զ���ȡ����」）。
-# 必须在导入任何会写日志/控制台的模块（如 src.logger）之前执行。
+# stdout/stderr 必须最先统一为 UTF-8：冻结后的 exe 作为 GUI/Web 子进程时 stdout 是管道，
+# Python 会回退到 GBK 区域编码，而父进程按 UTF-8 读取 → 中文乱码。
+# 必须先于任何日志/控制台模块导入（如 src.logger）：loguru 的 sink 一旦按旧编码绑定，
+# 后续 reconfigure 不会重绑，整轮运行的日志编码就此定型。
 import os
 import sys
 
-# 当以 `python main.py` 直接运行时，本模块被加载为 `__main__` 而非 `main`；
-# 若 src 子模块 `import main`，会再次执行整个 main.py（双重初始化、配置被重读）。
-# 这里一次性把 `main` 指向当前 `__main__` 模块，避免重执行。
+# `python main.py` 时本模块叫 `__main__`；src 子模块若 `import main` 会再次执行整个文件
+# （双重初始化、配置重读）。先把 `main` 指向当前模块，避免重执行。
 if sys.modules.get("main") is None:
     sys.modules["main"] = sys.modules["__main__"]
 
 
-# 把 stdout/stderr 统一重配置为 UTF-8（Windows 额外把控制台代码页切到 65001）；无入参，无返回值
+# 把 stdout/stderr 重配置为 UTF-8；Windows 另外切控制台代码页，否则 UTF-8 字节在 GBK 控制台仍乱码
 def _fix_encoding() -> None:
     import io
     from typing import cast
@@ -59,8 +50,7 @@ def _fix_encoding() -> None:
                     _s.reconfigure(encoding="utf-8", errors="replace")
                 except Exception:
                     pass
-        # 把控制台代码页切到 UTF-8，否则即使 Python 输出 UTF-8 字节，
-        # GBK 控制台也无法正确渲染。无控制台（窗口化/管道）时调用会失败，可忽略。
+        # 无控制台（窗口化/管道）时 SetConsole* 会失败，忽略即可
         try:
             import ctypes
 
@@ -157,18 +147,10 @@ from src.stream_select import (
     select_source_url,
 )
 
-# 本 import 列表刻意不含 converts_m4a / segment_video / shlex / collections.abc.Mapping：
-# 生产代码零调用，留着会让静态检查报警、并让后来者误以为「音频直出 m4a / 分段转码」链路已接通
-# （函数本身仍在 src/video_postprocess.py，有单测、是完整工具 API，将来接该配置项可直接启用）。
-# 唯一例外是 _run_ffmpeg_checked：本文件确实无调用点，但它是 tests/test_main_fixes.py 的
-# patch / 直调目标（该用例经 `main_mod._run_ffmpeg_checked(...)` 断言超时终止与退出码处理），
-# 删掉会让该用例 AttributeError，故保留导入。
-# 判据：只有「生产代码零引用**且**无测试依赖」才算可摘的死引用。
-#   [历史注] 2026-09-12 F-15 摘 converts_m4a / segment_video；2026-09-22 MIN-2224 摘 shlex / Mapping。
-#   [L-02/L-03 2026-10-19] 按同一判据补摘 main 侧的 `as_completed` 与 `_cleanup_single_ffmpeg_process`
-#   （生产零引用、测试零依赖）；`error_threshold` 同为遗留空壳，一并删除。
-#   `_validate_stream_url` 虽在本文件零调用，但 tests/test_main_fixes.py 有 9 处经 `main._validate_stream_url`
-#   直调（末位放行/分片假绿等主锁），删除会让它们 AttributeError——**不符合上述判据，保留**。
+# 死引用的唯一判据：生产代码零引用**且**测试零依赖。本列表刻意不含 converts_m4a / segment_video /
+# shlex / Mapping（生产零引用，留着会让人误以为「音频直出 / 分段转码」链路已接通）；
+# _run_ffmpeg_checked 与 _validate_stream_url 虽在本文件无调用点，但分别是 tests/test_main_fixes.py
+# 的 patch 目标与 9 处直调锁（末位放行 / 分片假绿），删除会让用例 AttributeError，故保留。
 from src.video_postprocess import (
     _run_ffmpeg_checked,
     converts_mp4,
@@ -177,10 +159,9 @@ from src.video_postprocess import (
 )
 
 
-# 获取当前程序版本号；无入参，返回形如 "v1.2.3" 的字符串（都取不到时回退 "v0.0.0"）
+# 版本号唯一事实源是 pyproject.toml；解析失败时回退 v0.0.0
+# 已安装发行包时走 importlib.metadata；源码直跑取不到包名，只能自行解析 pyproject.toml
 def _read_version_from_pyproject() -> str:
-    # 两条路径的分工：已安装为发行包时 importlib.metadata 直接命中；源码直跑（未 pip install）
-    # 时它取不到包名，只能自己解析 pyproject.toml（版本号的唯一事实源）。
     try:
         from importlib.metadata import version as get_version
 
@@ -196,7 +177,7 @@ def _read_version_from_pyproject() -> str:
     return "v0.0.0"  # 最终回退
 
 
-# 版本信息和支持的平台列表（从 pyproject.toml 读取）
+# 版本号取自 pyproject.toml；平台清单仅用于 banner 展示，准入判据以 PLATFORM_HOST 为准
 version: str = _read_version_from_pyproject()
 platforms: str = (
     "\n国内站点：抖音|快手|虎牙|斗鱼|YY|B站|小红书|bigo|blued|网易CC|千度热播|猫耳FM|Look直播|TwitCasting|百度|微博|"
@@ -211,14 +192,12 @@ platforms: str = (
 recording: set[str] = set()  # 正在录制的直播间集合
 monitoring: int = 0  # 正在监控的直播间数量
 running_list: list[str] = []  # 正在运行的 URL 列表
-recording_time_list: dict[str, list[datetime.datetime | str]] = {}  # 记录每个直播间的开始录制时间
+recording_time_list: dict[str, list[datetime.datetime | str]] = {}  # [开始时间, 设置画质, 实际画质]
 exit_recording: bool = False  # 退出标志
-# 磁盘空间不足导致的「录制暂停」标志（SEV-2206，2026-09-22）。
-# 与 exit_recording 的区别：exit_recording 是**进程级**退出意图（信号 / 未捕获异常 / 磁盘满
-# 最终退出都不复位，仅下面 else 分支的空间恢复路径会清它一次）；disk_limited 表达的是**可逆的
-# 资源约束**——磁盘腾出空间后必须复位，否则主循环与房间线程会永远停在「暂停」态。
-# 二者在「空间不足」期间同步置位（房间线程因此停止拉流），恢复时同步复位。
-# 可复核判据：tests/test_regression_2026_09_22_main.py::test_disk_limited_is_recoverable
+# 磁盘空间不足导致的「录制暂停」标志：与 exit_recording（进程级退出意图，不复位）不同，
+# disk_limited 表达可逆的资源约束——空间腾出后必须复位，否则主循环与房间线程永远停在暂停态。
+# 空间不足期间两者同步置位，恢复时同步复位；判据见
+# tests/test_regression_2026_09_22_main.py::test_disk_limited_is_recoverable
 disk_limited: bool = False
 # Web 模式录制开关：False 时主循环不拉起新房间线程，既有房间线程终止 ffmpeg/下载后退出。
 # CLI/GUI 直跑保持 True（行为不变）；web.py 启动录制引擎前置 False，由 Web 面板
@@ -231,17 +210,16 @@ max_request: int = 3  # 同一时间访问网络的线程数（由 main() 读取
 max_request_lock: threading.Lock = threading.Lock()  # 最大请求数的线程锁
 error_window_size: int = 10  # 错误窗口大小
 error_window: deque[int] = deque(maxlen=error_window_size)  # 错误窗口（deque maxlen 自动裁剪，避免无界增长）
-# [L-03 2026-10-19] 此处原有 `error_threshold = 0.5`（错误率阈值），全仓零引用——并发压制已由
-# src/scheduler.ConcurrencyScheduler 自适应接管，该常量只是遗留的名义开关，留着会让人以为调它有用。
+# [历史注] 此处原有的 error_threshold（错误率阈值）全仓零引用：并发压制已由
+# src/scheduler.ConcurrencyScheduler 自适应接管，保留常量只会让人误以为调它有用。
 
 # URL 和配置管理
-url_tuples_list: list[tuple[str, str, str]] = []  # 解析后的 URL 配置列表（格式：(画质, URL, 主播名)
-# 被注释掉的 URL 集合：主循环与 check_subprocess/start_record 均只做成员检测，
-# 用 set 保证 O(1)（见下方主循环注释）。
+url_tuples_list: list[tuple[str, str, str]] = []  # 解析后的 URL 配置项（画质, URL, 主播名）
+# 被注释掉的 URL 集合：主循环与 check_subprocess/start_record 只做成员检测，用 set 保证 O(1)
 url_comments: set[str] = set()
-text_no_repeat_url: list[tuple[str, str, str]] = []  # 去重后的 URL 文本
+text_no_repeat_url: list[tuple[str, str, str]] = []  # 保序去重后的 URL 配置项
 need_update_line_list: list[str] = []  # 需要更新的配置行
-not_record_list: list[str] = []  # 不录制的直播间列表
+not_record_list: list[str] = []  # 本轮需跳过的规范 URL（Shopee uid 回写后）
 ini_URL_content: str = ""  # URL 配置文件初始内容（用于 update_file 异常恢复）
 
 # 标志变量
@@ -249,13 +227,10 @@ first_start: bool = True  # 首次启动标志
 first_run: bool = True  # 首次运行标志
 global_proxy: bool = False  # 全局代理启用标志
 use_proxy: bool = False  # 是否使用代理 IP（由 main() 读取配置后覆盖）
-create_var: dict[str, threading.Thread] = {}  # 动态变量创建（用于字幕线程
+create_var: dict[str, threading.Thread] = {}  # 动态创建的线程登记表（字幕线程 / 房间线程）
 start_display_time: "datetime.datetime" = datetime.datetime.now()  # 显示信息开始时间
-# MI-09：进程启动时刻，专供 uptime 计算。start_display_time 会被 display_info 每 5 秒
-# 改写为「当前时刻」（注释掉的「本软件已运行」打印留下的历史行为），
-# 而 recorder_status.get_status 仍按 now - start_display_time 算 uptime，
-# 结果只要有过一次录制，面板上的运行时长就恒在 0~5 秒之间跳变，
-# 运维据「是否需要重启」判断的依据失效。两者语义必须分离。
+# 进程启动时刻，专供 uptime 计算。上报展示用的 start_display_time 会被 display_info 周期改写，
+# 若 uptime 也用它，面板运行时长会恒在 0~5 秒之间跳变，运维据此判断「是否需重启」的依据失效。
 process_start_time: "datetime.datetime" = datetime.datetime.now()
 
 # 录制配置（由 main() 读取 config.ini 后覆盖，此处给默认值供 display_info 等函数引用）
@@ -279,39 +254,30 @@ danmaku_platforms: list[str] = []  # 弹幕录制平台列表
 # ==================== 路径和配置 ====================
 
 
-# 计算应用根目录；无入参，返回 exe 同级目录（源码运行时为主脚本所在目录）的绝对路径字符串
+# 应用根目录：源码运行时是主脚本目录；冻结运行（onedir + _internal）时是 exe 同级目录——
+# config/ ffmpeg/ node/ 等运行时资源在 exe 同级，而 src/ 及依赖在 exe_dir/_internal/。
 def _app_root() -> str:
-    # 应用程序根目录（exe 同级目录）。
-    #
-    #     源码运行返回主脚本目录；冻结运行（onedir + _internal）下 exe 与其同级的
-    #     config/ ffmpeg/ node/ 等运行时资源位于 exe_dir，而 src/ 及依赖在
-    #     exe_dir/_internal/，故此处返回 exe 同级目录，供定位 config/ffmpeg/node。
-    #
+    # 供定位 config/ffmpeg/node，不能用 _internal/ 内的模块路径
     if getattr(sys, "frozen", False):
         return os.path.dirname(os.path.realpath(sys.executable))
     return os.path.split(os.path.realpath(sys.argv[0]))[0]
 
 
-script_path: str = _app_root()  # 脚本所在目录（冻结后指向 _internal/）
+script_path: str = _app_root()  # 脚本所在目录（冻结后为 exe 同级目录）
 config_file: str = f"{script_path}/config/config.ini"  # 主配置文件路径
 url_config_file: str = f"{script_path}/config/URL_config.ini"  # URL 配置文件路径
 backup_dir: str = f"{script_path}/backup_config"  # 配置备份目录
-text_encoding: str = "utf-8-sig"  # 文本文件编码（支持 BOM
+text_encoding: str = "utf-8-sig"  # 文本文件编码（兼容 BOM）
 rstr: str = r"[\/\\\:\*\？?\"\<\>\|&#.。,， ~！·% ]"  # 文件名字符过滤正则
-# ↑ 2026-09-22 补 `%`（SEV-2202，本机 ffmpeg/ffmpeg.exe 实测）：输出路径整串会作为 ffmpeg 的
-# 文件名模板解释，主播名/标题里的裸 `%` 会与分段模板末位的 `_%03d` 一起构成非法占位符，
-# ffmpeg 以 -22(EINVAL) 秒退；退出码又被 _describe_return_code 解释成「容器/编码不匹配」，
-# 再落进「CDN 快速失败」判定，把健康线路记进探针退避并按 host 推熔断。
-# 实测对照：含 `%` 的分段模板与含孤立 `%d` 的模板一律 rc=-22；干净模板与非分段形态含 `%` 均成功。
+# `%` 必须在名单内：输出路径会被 ffmpeg 当作 printf 文件名模板解析，
+# 主播名/标题里的裸 `%` 会与分段占位符 `_%03d` 冲突，ffmpeg 以 -22 秒退，
+# 随后被误判成「CDN 快速失败」而拉黑健康线路。
 # 回归锁：tests/test_regression_2026_09_22_main.py::test_segment_template_has_single_percent_placeholder
 default_path: str = f"{script_path}/downloads"  # 默认下载目录
-# [L-07 2026-10-19] 此处原有模块级 `os.makedirs(default_path, exist_ok=True)`，与本文件
-# 「import 不应触发磁盘副作用」的自述（见 purge_stale_bytecode_caches 附近的说明）相悖：
-# 任何 `import main`（GUI / Web / 测试 / 文档脚本）都会在宿主机上凭空建出 downloads/。
-# 目录改由 main() 入口与录制路径各自按需创建（下方 `os.makedirs(check_path, ...)` 已覆盖
-# 录制侧；入口处补一次，保证 main() 之外的早退分支看到的行为与旧版一致）。
-# RLock：主循环持锁读取配置期间可能再次进入 read_config_value 的写入路径，可重入避免同线程死锁
-file_update_lock: threading.RLock = threading.RLock()  # 文件更新锁（防止多线程写入冲突
+# 模块导入不建目录：任何 `import main`（GUI / Web / 测试）都不应在宿主机产生磁盘副作用。
+# 下载目录由 main() 入口与录制路径按需创建。
+# RLock：主循环持锁读配置期间可能再次进入 read_config_value 的写入路径，可重入避免同线程死锁
+file_update_lock: threading.RLock = threading.RLock()  # 配置文件读写锁（防多线程写入冲突）
 
 # 录制状态全局锁（保护 recording/running_list/monitoring/recording_time_list）
 record_state_lock: threading.Lock = threading.Lock()
@@ -346,13 +312,9 @@ douyin_min_interval: float = 3.0  # 两次抖音请求的最小间隔（秒）
 
 # 录制与文件
 video_save_path: str = ""
-# [L-03 2026-10-19] `check_path` 原为模块级全局，但全仓只在 main() 的循环体内赋值并随即使用
-# （磁盘余量检查），没有任何跨函数/跨轮读取——声明成全局只会让后来者去猜「谁会改它」。
-# 现改为 main() 内的局部变量，并同步去掉 `global check_path` 声明。
-# MID-07：单次录制时长上限（秒），由 main() 每轮从「录制设置」读取；0/负值表示不限制，
-# 分段开/关均参与判定（见 check_subprocess 的 _record_limit_seconds）。
-# 此处的字面默认值与下方看门狗小节的 _MAX_RECORD_SECONDS 保持同值——模块级语句顺序执行，
-# 该常量在本行之后才定义，不能在此直接引用（main() 读取配置时以该常量为兜底默认）。
+# 单次录制时长上限（秒），由 main() 每轮热加载；0/负值表示不限制，分段开/关均参与判定
+# （见 check_subprocess 的 _record_limit_seconds）。
+# 字面默认值与 _MAX_RECORD_SECONDS 同值：后者定义在本行之后，模块级语句不能前向引用。
 max_record_seconds: int = 6 * 60 * 60
 clean_emoji: bool = True
 filename_by_title: bool = False
@@ -497,19 +459,14 @@ url_tuple: tuple[str, ...] = ()
 _recorder_thread = None  # 由 web.py 设置，用于 get_status() 检测存活
 
 
-# 可中断等待（MIN-2226，2026-09-22）：把散落各处的一次性 time.sleep(n) 收敛成逐秒 tick。
-# 约定理由：本文件里所有「退出/停止录制/URL 被注释」的判定都只能在**循环顶**发生，
-# 一次性 sleep 会让房间线程或主循环在最坏情况下滞留整个等待周期才响应——Web 面板点了
-# 「停止录制」却仍有线程在拉流，或退出信号来了却要等满 N 秒。改为每秒醒来一次重新求值
-# 模块全局（晚绑定，天然看到别的线程/Web 面板改动后的最新值）即可立即跳出。
-# record_url 非空时追加第三个条件「该 URL 已被注释」（与房间线程循环顶的三条件同构）。
+# 可中断等待：把一次性 time.sleep(n) 收敛为逐秒 tick，使「退出 / 停止录制 / URL 被注释」
+# 在 1 秒内得到响应（这些判定只发生在循环顶；一次性 sleep 会让线程滞留整个等待周期）。
+# 每秒重新求值模块全局即晚绑定，能看到其他线程与 Web 面板的最新改动。
 #
-# [S-05 2026-10-19] 返回值 = 「是否被提前中断」。调用方**必须**处理它：本函数被中断时是
-# **零耗时**返回（一秒都不睡），而两处 `continue` 分支恰好跳过了主循环末尾的 `time.sleep(3)`。
-# Web 模式下 `web.py` 启动即置 recording_enabled=False，此时「面板刚起、用户还没填 URL」这个
-# **默认状态**会让循环体一路 continue 并零间隔空转：打满一个核、每轮重复 config.ini 解析与
-# URL_config.ini 全量读取、磁盘持续被读写，且日志无任何异常可供排查。
-# 故被中断时调用方要补一个固定时长的退避，让「快速响应退出信号」与「不空转」两个目标同时成立。
+# 返回值 = 是否被提前中断。调用方必须处理：中断时本函数零耗时返回，而两处 continue 分支
+# 恰好跳过主循环末尾的 time.sleep(3)。Web 模式启动即置 recording_enabled=False，
+# 「面板刚起、用户还没填 URL」的默认状态会让循环零间隔空转（打满一核、反复解析配置与
+# URL 文件），故中断时调用方要补一个固定退避，兼顾快速退出与不空转。
 def _interruptible_sleep(seconds: float, record_url: str | None = None) -> bool:
     _remaining = int(seconds) if seconds > 0 else 0
     while _remaining > 0:
@@ -522,29 +479,14 @@ def _interruptible_sleep(seconds: float, record_url: str | None = None) -> bool:
     return False
 
 
-# 后处理线程池的显式收尾（SEV-2207，2026-09-22，main.py 侧）。
-# 不能把收尾留给解释器退出时的线程汇合：3.14 的 concurrent.futures.thread 是经
-# threading._register_atexit(_python_exit) 登记的，而 threading._shutdown() 在 atexit 回调
-# **之前**执行（Py_FinalizeEx 先 wait_for_thread_shutdown 再 call_py_exitfuncs）。于是
-# 「池内 worker 的 join」恒早于本文件注册的 archive_runtime_logs /
-# cleanup_all_ffmpeg_processes / close_all_clients_sync 三个钩子——转封装任务最长要占
-# _MAX_CONVERT_TIMEOUT（src/video_postprocess.py:31，3600s），这期间 ffmpeg 子进程无人终止、
-# 运行日志无人归档，表现为「点了退出却卡住，且事后查不到日志」。
-# 本侧的修法是在**我们自己的退出路径**（safe_exit / 磁盘满退出）先显式 drain，
-# 让退出顺序回到主进程手里；池已 drain 后 _python_exit 再跑就是空转，顺序问题自然消解。
-# shutdown_postprocess_executor(wait, cancel_futures) 由 K 组在 src/video_postprocess.py 暴露；
-# 该函数尚未落地时用 getattr 安全跳过——不得因这一个钩子阻塞或打断退出流程。
-# [2026-10-18 M-01 补充] 上面那句「尚未落地即跳过」在 Web 面板退出链上等价于**这条收尾从未存在过**：
-# 实测 `grep -rn shutdown_postprocess_executor src/` 在 src/video_postprocess.py 里零命中（该模块
-# 只有 `_MAX_CONVERT_TIMEOUT` 等函数、不持池），而池子本体就在本文件的模块级
-# `_postprocess_executor` / `_get_postprocess_executor`（按锚点引用，行号随文件增删漂移），
-# 模块侧永远拿不到它。故这里补一段 **自持回退**：模块函数缺席时直接收本文件自己那只池，
-# 参数与模块侧约定逐字同值
-# （wait=True、cancel_futures=False，理由见本注释块开头——drain 的顺序价值在于「先排空、
-# 再让 ffmpeg 清理与日志归档落到其后」，改成 wait=False 会把在途转码的产物留在半截）。
-# 该回退刻意做成「模块侧函数一落地就自动失效」的形态：K 组补上 `shutdown_postprocess_executor`
-# 后本分支不再进入，届时本文件这段只是历史说明，不得反过来删模块侧接口来复用回退。
-# 池未创建过（`_postprocess_executor is None`，即本轮从未提交转码）时零动作，不产生任何 I/O。
+# 后处理线程池必须在**我们自己的退出路径**上显式排空（safe_exit / 磁盘满退出）。
+# 解释器退出时 threading._shutdown() 先于 atexit 回调执行，池内 worker 的 join 会早于
+# archive_runtime_logs / cleanup_all_ffmpeg_processes / close_all_clients_sync；
+# 转封装最长可占 3600s，期间 ffmpeg 无人终止、日志无人归档，表现为「退出卡住、事后查不到日志」。
+# 先 drain 让顺序回到主进程手里，之后 _python_exit 再跑即为空转。
+# 模块侧若无 shutdown_postprocess_executor 则退回收本文件自己的池；池未创建过时零动作。
+# 排空参数固定 wait=True、cancel_futures=False：顺序价值在于先排空、再让 ffmpeg 清理与
+# 日志归档落到其后；改成 wait=False 会把在途转码的产物留在半截。
 def _shutdown_postprocess_executor() -> None:
     try:
         from src import video_postprocess as _vp
@@ -564,21 +506,17 @@ def _shutdown_postprocess_executor() -> None:
             logger.warning(i18n.tr("后处理线程池收尾失败: {type_name}: {e}", type_name=type(e).__name__, e=e))
 
 
-# 单次转封装最长占 _MAX_CONVERT_TIMEOUT（3600s），而 M-03（2026-10-19）指出的正是「信号处理器里
-# 做无预算 drain」：safe_exit 会在主线程里等满最坏情况的整小时，期间 ffmpeg 清理、连接池关闭、
-# 日志归档、sys.exit 全部排在后面，用户看到的就是「Ctrl+C 之后卡死十几分钟、第二次中断也没反应」。
-# 预算只约束「等多久」，不改变 drain 的**顺序价值**（先排空、再让清理与归档落到其后）：
-# 预算内排空仍走 wait=True + cancel_futures=False；超预算才由调用方退化为取消未开始的任务。
-# 15 秒取的是「正常收尾够用、异常收尾不至于让用户以为挂了」的经验值，不走配置项——它是
-# 退出路径的兜底，不该再引入一个可能被填坏的外部开关。
+# 排空预算：单次转封装最长可占 3600s，信号处理器里无预算 drain 会让 Ctrl+C 卡住整小时，
+# ffmpeg 清理、连接关闭、日志归档与 sys.exit 全部排在后面。
+# 预算只约束等待时长，不改变排空顺序；超预算由调用方取消未开始的任务。
+# 取 15s 是「正常收尾够用、异常收尾不像挂死」的经验值，不走配置项（退出兜底不应再引入外部开关）。
 _POSTPROCESS_DRAIN_BUDGET_SECONDS = 15.0
 
 
 def _run_bounded_drain(drain: Callable[[], None], budget: float = _POSTPROCESS_DRAIN_BUDGET_SECONDS) -> bool:
-    # 在守护线程里执行 drain，主线程只等 budget 秒：shutdown(wait=True) 一旦碰上卡死的
-    # 转封装任务就没有任何中断手段，只能靠「不等了」脱身。超时后**不 join** 那个线程
-    # （它仍阻塞在 wait=True 上），因此必须 daemon=True，否则解释器退出时反而被它钉住。
-    # 返回 True = 预算内已排空；False = 超预算，调用方决定是否取消剩余任务。
+    # drain 在守护线程里执行，主线程只等 budget 秒：shutdown(wait=True) 遇到卡死的转封装
+    # 任务无法中断，只能「不等了」。超时后不 join（它仍阻塞在 wait=True），故必须 daemon=True。
+    # 返回 True = 预算内已排空；False = 超预算，由调用方决定是否取消剩余任务。
     done = threading.Event()
 
     def _target() -> None:
@@ -602,8 +540,7 @@ def _run_bounded_drain(drain: Callable[[], None], budget: float = _POSTPROCESS_D
     return False
 
 
-# 自持回退的实现体：关闭本文件的 `_postprocess_executor`（M-01，2026-10-18）。
-# 独立成函数而不内联，是为了让「模块侧接口缺席」这一分支在测试里可被单独驱动。
+# 自持回退：关闭本文件的 `_postprocess_executor`。独立成函数便于测试单独驱动该分支。
 def _shutdown_own_postprocess_pool() -> None:
     with _postprocess_executor_lock:
         pool = _postprocess_executor
@@ -620,12 +557,12 @@ def _shutdown_own_postprocess_pool() -> None:
         logger.warning(i18n.tr("后处理线程池收尾失败: {type_name}: {e}", type_name=type(e).__name__, e=e))
 
 
-# 信号处理器：置退出标志、清理 ffmpeg 进程与 HTTP 连接池后退出进程；_signum/_frame 为信号回调形参（未使用），不返回
+# 信号处理器：置退出标志 → 排空后处理池 → 清理 ffmpeg 与 HTTP 连接池 → 退出进程
 def safe_exit(_signum: int, _frame: types.FrameType | None) -> None:
     global exit_recording
     exit_recording = True
     color_obj.print_colored("\n正在安全退出...", color_obj.YELLOW)
-    # SEV-2207：先排空后处理线程池，再做 ffmpeg / HTTP 连接池清理（理由见函数上方注释）
+    # 先排空后处理线程池，再做 ffmpeg / HTTP 连接池清理（理由见 _shutdown_postprocess_executor 上方注释）
     _shutdown_postprocess_executor()
     cleanup_all_ffmpeg_processes()
     from src.async_http import close_all_clients_sync
@@ -640,14 +577,13 @@ _ = signal.signal(signal.SIGTERM, safe_exit)
 if hasattr(signal, "SIGBREAK"):
     _ = signal.signal(signal.SIGBREAK, safe_exit)
 
-# 进程异常退出时兜底清理 ffmpeg 与 HTTP 连接池（覆盖硬杀 / 未捕获异常等非优雅退出路径）
-# 注意注册顺序：atexit 为 LIFO，归档必须先于两个 cleanup 注册——
-# 进程退出（信号 safe_exit / 磁盘满 / 未捕获异常 / web 面板退出）时把 ffmpeg 清理等
-# 收尾日志一并收进归档文件，四个运行日志统一按「原名_YYYYMMDD_HHMMSS.扩展名」改名
+# 进程退出兜底（硬杀 / 未捕获异常 / Web 面板退出等非优雅路径）。
+# atexit 为 LIFO：archive_runtime_logs 必须先注册，才会最后执行——四份运行日志按
+# 「原名_YYYYMMDD_HHMMSS.扩展名」归档时，才能把前面 ffmpeg / 连接池清理产生的收尾日志一并收进去。
 _atexit_result_0 = atexit.register(archive_runtime_logs, reopen_streams=False)
 _atexit_result_1 = atexit.register(cleanup_all_ffmpeg_processes)
 # async_req 供 _resolve_hy_fan_room_segment 解析虎牙移动端短链（redirect_url=True 契约）；
-# 与 close_all_clients_sync 同源：src.async_http 本就是 main 的直接依赖，无新增导入环。
+# 与 close_all_clients_sync 同源，不新增导入环。
 from src.async_http import async_req, close_all_clients_sync
 
 _atexit_result_2 = atexit.register(close_all_clients_sync)
@@ -655,13 +591,9 @@ _atexit_result_2 = atexit.register(close_all_clients_sync)
 
 os_type: str = os.name
 color_obj: "utils.Color" = utils.Color()
-# 将 ffmpeg 目录前置到当前 PATH：使用实时 os.environ（而非 import 时快照），
-# 避免丢弃 import 之后对其余 PATH 条目的追加修改；并跳过重复插入。
-# 前置还要过一道「Apple Silicon 让位」判据（W6，2026-09-22）：包内 macOS ffmpeg 是 evermeet 的
-# x86_64 静态构建（上游不发布 arm64 构建），无条件前置会遮蔽用户已装的原生 arm64 ffmpeg
-# 并强制走 Rosetta 转译。判据本身**不在这里写**——收敛到
-# src/ffmpeg_install.should_prepend_bundled_ffmpeg_dir（唯一事实源，可在 Windows 上单测
-# 「非 darwin 恒前置」分支），本文件只保留原有的「重复插入跳过」守卫。
+# 把 ffmpeg 目录前置到 PATH：读实时 os.environ（不是 import 时快照），并跳过重复插入。
+# 「是否前置」由 src/ffmpeg_install.should_prepend_bundled_ffmpeg_dir 统一裁决——Apple Silicon
+# 上包内 x86_64 静态 ffmpeg 会遮蔽用户已装的原生 arm64 构建并强制走 Rosetta，判据不在此复制。
 _current_path = os.environ.get("PATH", "")
 ffmpeg_path_norm = os.path.normpath(ffmpeg_path)
 if (
@@ -679,32 +611,22 @@ PLATFORM_HOST = [
     "www.douyin.com",
     "live.kuaishou.com",
     "www.huya.com",
-    # 虎牙移动端分享短链 host（https://hy.fan/JbmwoV）：路径段为纯数字时即房间号，
-    # 否则是短码、需跟随 301 跳转解析出真实房间段；两种形态都由 _resolve_hy_fan 归一成
-    # www.huya.com 房间链接后复用桌面解析链路。与 m.douyu.com 同理：准入按
-    # `url_host in PLATFORM_HOST` 精确匹配，缺此项时短链在读取 URL 配置阶段就被判
-    # 「本行包含未知链接.此条跳过」并注释掉，根本走不到解析。
+    # 虎牙移动端分享短链：数字段即房间号，其余为短码，由 _resolve_hy_fan 归一成
+    # www.huya.com 后复用桌面链路。准入按 url_host 精确匹配，缺此项会在读取配置阶段
+    # 被判「未知链接」并注释掉，走不到解析。
     "hy.fan",
     "www.douyu.com",
-    # 斗鱼移动端页面 host（https://m.douyu.com/8751648）：房间信息与取流接口只认数字 rid、
-    # 与来源域名无关，故与 www 共用 _resolve_douyu_com（详见 spider.get_douyu_info_data 注释）。
-    # 准入侧按 `url_host in PLATFORM_HOST` 精确匹配，缺此项时移动端链接在读取 URL 配置阶段
-    # 就被判「本行包含未知链接.此条跳过」并注释掉，根本走不到解析。
+    # 斗鱼移动端页面：接口只认数字 rid，与来源域名无关，与 www 共用 _resolve_douyu_com。
+    # 准入按 url_host 精确匹配，缺此项会在配置读取阶段被判「未知链接」。
     "m.douyu.com",
     "www.yy.com",
     "live.bilibili.com",
-    # B站移动端分享短链 host（https://b23.tv/ZyQrgYf）：路径段为纯数字时即房间号，
-    # 否则是短码、需跟随 302 跳转解析出真实房间号；两种形态都由 _resolve_b23_tv 归一成
-    # live.bilibili.com 房间链接后复用桌面解析链路。与 hy.fan / m.douyu.com 同理：准入按
-    # `url_host in PLATFORM_HOST` 精确匹配，缺此项时短链在读取 URL 配置阶段就被判
-    # 「本行包含未知链接.此条跳过」并注释掉，根本走不到解析。
+    # B站移动端分享短链：数字段即房间号，其余为短码，由 _resolve_b23_tv 归一成
+    # live.bilibili.com 后复用桌面链路。准入按 url_host 精确匹配，缺此项走不到解析。
     "b23.tv",
-    # MID-04 修复（2026-09-20）：摘除 www.redelight.cn —— 该 host 无任何解析入口
-    # （spider/stream/JS 签名脚本全仓零引用，平台清单亦无对应平台名），留着只会让用户配一个
-    # 「每轮一条 error、永不录制、也不记 record_error」的地址：房间线程走 _resolve_unrecognized
-    # → sleep → 无限空转，白占监控位；摘除后主循环按「包含未知链接」把它注释掉，与其它未知地址一致。
-    # 同类审计回归锁见 tests/test_platform_dispatch.py
-    # （「PLATFORM_HOST 每项必被某个 resolver 匹配片段命中」）。
+    # www.redelight.cn 已摘除：全仓无解析入口，留着只会让用户配出一个每轮报错、永不录制、
+    # 也不计失败样本的空转房间。不变式见 tests/test_platform_dispatch.py：
+    # PLATFORM_HOST 每项必须被某个 resolver 片段命中。
     "www.xiaohongshu.com",
     "xhslink.com",
     "www.bigo.tv",
@@ -811,14 +733,10 @@ CLEAN_URL_HOST_LIST = (
 )
 
 
-# 用 httpx 流式把 source_url（FLV 直链）直接写入 save_path，不经 ffmpeg；请求头/cookie/UA
-# 与 ffmpeg 录制路径保持一致；record_name/live_url 用于中断判断与状态清理，platform 用于补
-# 对应平台请求头；返回是否下载完成。
-# 失败时只清理**零字节**残留（F-03，2026-09-12）：open(save_path, "wb") 一进入就创建了文件，
-# HTTP 非 200 时原实现直接 return False，把 0 字节的 .flv 留在保存目录——它会被归档/转码链路
-# 当成有效产物处理，用户看到「录到了文件但打不开」却查不到原因。
-# 已下载到内容时（主播下播、CDN 掐断、主动停止）一律保留，与 ffmpeg 录制路径语义一致
-# （不替用户丢弃可能有价值的部分内容）。
+# httpx 流式直下 FLV（不经 ffmpeg）：请求头/cookie/UA 与 ffmpeg 路径同源；
+# record_name/live_url 用于中断判断与状态清理，platform 用于补平台请求头；返回是否下载完成。
+# 失败只清理**零字节**残留：open(..., "wb") 一进入就建文件，非 200 直 return 会留下 0 字节 .flv，
+# 被归档/转码链路当成有效产物。已下载到内容时（下播、CDN 掐断、主动停止）一律保留。
 def direct_download_stream(
     source_url: str,
     save_path: str,
@@ -834,31 +752,21 @@ def direct_download_stream(
             header_params = get_record_headers(platform, live_url, cookies=cookies)
             if header_params:
                 headers.update(header_params)
-            # MID-2209 修复（2026-09-22）：取不到平台专属 UA 时一律回落到同一个 MOBILE_UA
-            # （与 ffmpeg 路径同一常量）。原写法 `if ua:` 恒不成立——get_record_user_agent 只对
-            # 虎牙/B站返回非空（src/stream_select.py 的 _DESKTOP_UA_PLATFORMS），而强制直下的
-            # 平台是 shopee / 花椒直播，于是 headers 里根本没有 User-Agent，httpx 以其默认
-            # `python-httpx/<版本>` 发请求；CDN 侧普遍按 UA 分流/风控，校验探针用移动端 UA
-            # 探活通过、真正下载却被风控拒（403/非 200），而失败只按 host 记错误样本，
-            # 日志上看不出是 UA 问题——「与 ffmpeg 录制路径保持一致」当时是假的。
-            # 回归锁（行为用例，真调 direct_download_stream 捕获 httpx 请求头）：
+            # UA 取平台专属值，取不到则回落 MOBILE_UA（与 ffmpeg 路径同一常量）。
+            # 直下平台（shopee / 花椒）没有专属 UA，缺省会让 httpx 发 python-httpx 默认 UA，
+            # CDN 按 UA 风控时会「探针通过、下载 403」。回归锁：
             # tests/test_regression_2026_09_22_main.py::test_direct_download_always_sends_ua
             headers["User-Agent"] = get_record_user_agent(platform) or MOBILE_UA
 
-            # L-10（2026-10-19）：同一份 headers 原先既挂 client 级、又逐请求再传一遍。
-            # httpx 的合并口径是「client 头为底、请求头覆盖」，两处同值时行为不变、但多一份
-            # 隐式状态：client 级头会跟随**每一个**经该 client 发出的请求（含重定向跳），
-            # 后续若有人在这里复用 client 拉别的地址，就会带着录制的 Referer/Cookie 静默外泄。
-            # 只保留逐请求传（与 src/stream_select.py 的探针同口径）。
+            # headers 只逐请求传，不挂 client 级：client 头会跟随经该 client 的每一个请求
+            # （含重定向），一旦复用就会带出录制的 Referer/Cookie（与 src/stream_select.py 探针同口径）。
             with httpx.Client(timeout=30, verify=_http_config.get_effective_ssl_verify(platform)) as client:
                 with client.stream("GET", source_url, headers=headers, follow_redirects=True) as response:
                     if response.status_code != 200:
                         logger.error(
                             i18n.tr(
                                 "请求直播流失败: {source_url} - 状态码: {status_code}",
-                                # MID-28 修复（2026-09-20）：拉流地址带签名参数（wsSecret/txSecret/
-                                # signature 等），必须先过 mask_credentials 再入日志。占位符名沿用
-                                # 目录既有 msgid（改名等于新增四语条目，须由 i18n 侧统一收口）。
+                                # 拉流地址带签名参数，必须先脱敏再入日志（占位符名沿用既有 msgid）
                                 source_url=utils.mask_credentials(source_url),
                                 status_code=response.status_code,
                             )
@@ -884,12 +792,9 @@ def direct_download_stream(
                             downloaded += len(chunk)
                             _downloaded = downloaded
                     print()
-                    # MID-06 修复（2026-09-20）：HTTP 200 + 空/极小响应体不是成功。
-                    # 原实现在此无条件 return True：调用方（start_record 直下分支）据此打印
-                    # 「直播录制完成」并记 record_success(record_host)，而 finally 已把 0 字节
-                    # 文件删掉——这正是 CR-06 在 ffmpeg 路径专门修掉的形态，在直下路径
-                    # （shopee/花椒）仍存，且坏线路不记任何失败样本、绕开按 host 熔断统计。
-                    # 口径与 check_subprocess 的 `0 <= _produced_bytes < _MIN_VALID_RECORD_BYTES` 统一。
+                    # HTTP 200 + 空/极小响应体不算成功：否则调用方会打印「录制完成」并记成功样本，
+                    # 而文件已被 finally 删掉，坏线路也绕开按 host 熔断统计。
+                    # 口径与 check_subprocess 的 `0 <= _produced_bytes < _MIN_VALID_RECORD_BYTES` 一致。
                     if _downloaded < _MIN_VALID_RECORD_BYTES:
                         logger.error(
                             i18n.tr(
@@ -904,7 +809,7 @@ def direct_download_stream(
         logger.error(
             i18n.tr(
                 "FLV下载错误: {source_url} - {type_name}: {e} 发生错误的行数: {get_error_line}",
-                # MID-28 修复（2026-09-20）：同上方非 200 分支，入日志前先脱敏。
+                # 同上：入日志前先脱敏
                 source_url=utils.mask_credentials(source_url),
                 type_name=type(e).__name__,
                 e=e,
@@ -913,7 +818,7 @@ def direct_download_stream(
         )
         return False
     finally:
-        # 仅在「open 已创建文件但一个字节都没写」时删除（判据与理由见函数头 F-03 注释）
+        # 仅在「open 已创建文件但一个字节都没写」时删除（判据与理由见函数头注释）
         if _downloaded == 0:
             try:
                 os.remove(save_path)
@@ -922,13 +827,9 @@ def direct_download_stream(
                 pass
 
 
-# 分段录制的「输出扩展名 → segment 内层容器」映射：容器必须与输出文件的扩展名严格一致，
-# 否则会产出「容器与扩展名不符」的文件——轻则播放器拒绝，重则直接封装失败。
-# 历史回归（2026-09-04）：TS 分支误用 ipod、M4A 分支误用 mpegts（两个值被互换），
-# 导致 HEVC 原画 copy 进 ipod 时 AVERROR(EINVAL) 退出（Windows 上退出码显示为 4294967274），
-# 而 H.264 虽不报错却把 MP4 内容写进 .ts 文件名（静默损坏，比报错更难排查）。
-# 收敛为单一映射表后，新增分支只能查表取值，配合 tests/test_record_container.py 的断言，
-# 杜绝「容器 ↔ 扩展名」再次错位。
+# 输出扩展名 → segment 内层容器：必须严格一致，否则轻则播放器拒绝，重则封装失败。
+# [历史注] 2026-09-04 曾把 TS 与 M4A 的两个值互换：HEVC 拷进 ipod 直接 -22 退出，
+# H.264 则把 MP4 内容写进 .ts（静默损坏），回归锁 tests/test_record_container.py。
 SEGMENT_FORMAT_BY_SUFFIX: dict[str, str] = {
     ".ts": "mpegts",
     ".flv": "flv",
@@ -941,50 +842,37 @@ SEGMENT_FORMAT_BY_SUFFIX: dict[str, str] = {
 }
 
 
-# ffmpeg「快速失败」判定阈值（秒）：进程存活不超过该值即退出，视为输入打开被 CDN 拒绝
-# 的签名（实测虎牙 HS 线路探针 200 后 ffmpeg 立即 403，约 1 秒退出）；拉流中断/重连耗尽
-# （-reconnect_delay_max 60）通常远超该值，不属此类。模块级常量便于测试注入。
+# 「快速失败」阈值（秒）：进程存活不超过该值即退出，视为输入打开被 CDN 拒绝的签名
+# （实测虎牙 HS 线路探针 200、ffmpeg 约 1 秒 403）；重连耗尽通常远超此值。模块级常量便于测试注入。
 _FFMPEG_FAST_FAIL_SECONDS = 20.0
 
-# 等待录制槽位时的轮询间隔（秒）：见 check_subprocess 中 acquire(timeout=...) 的说明。
-# 取 1 秒——既保证「停止录制」在 1 秒内被排队房间感知，又不至于让 80+ 房间的
-# 等待线程每秒集体唤醒造成明显调度开销。
+# 等待录制槽位的轮询间隔：1 秒内可感知「停止录制」，又不至于让 80+ 房间每秒集体唤醒。
 _SEM_WAIT_TICK = 1.0
 
-# CR-05 修复：录制看门狗的两个阈值。守护循环若只有「进程自己退出 / 用户停止或注释」两个出口，
-# 而 FLV 输入侧刻意保留了 -reconnect* 系列（HLS 已移除），CDN 掐断长连接时 ffmpeg 会按
-# 1/3/7/…/60s 指数退避无限重连、永不退出；挂起的 ffmpeg 一直持有录制槽位（acquire 在 Popen
-# 之前），槽位被逐条耗尽后所有房间录制饿死，且无法自愈。
-# ① 单次录制时长上限 _MAX_RECORD_SECONDS：可配置，默认 6 小时、0 为不限制（SEV-08 / MID-07，
-#    2026-09-20）——24 小时轮播/官方电台房间（B站/斗鱼/抖音的 CCTV 型直播间）超过 6 小时是
-#    常态而非挂起。分段开/关均生效（MID-N04，2026-09-21 修正 MID-07 的「只认分段」半修）；
-#    命中上限按「正常录完」收尾，不再记失败样本。
-# ② 停滞窗口 _RECORD_STALL_SECONDS：输出文件连续 10 分钟毫无增长即判定停滞。基准是「最后一次
-#    观测到增长的时刻」（见 check_subprocess::_stall_since），不是进程起跑时刻——旧写法配 30s
-#    采样间隔，实际容忍窗口只有 30s（满 10 分钟后的任意一次无增长采样即杀进程）。
+# 录制看门狗的两个阈值。FLV 输入保留 -reconnect*，CDN 掐断长连接时 ffmpeg 会按 1/3/…/60s
+# 指数退避无限重连、永不退出；而它一直持有录制槽位（acquire 在 Popen 之前），槽位耗尽后
+# 所有房间饿死且无法自愈。
+# ① 单次录制时长上限：可配置，默认 6 小时、0 为不限制——24 小时轮播/官方电台房间超过 6 小时
+#    是常态。分段开/关均生效；命中上限按「正常录完」收尾（成功样本 + 转码 + 撤销退避）。
+# ② 停滞窗口：输出文件连续 10 分钟无增长即判停滞。基准是「最后一次观测到增长的时刻」
+#    （见 check_subprocess::_stall_since），不是起跑时刻。
 _MAX_RECORD_SECONDS = 6 * 60 * 60  # 「单次录制时长上限(秒)」的配置默认值
 _RECORD_STALL_SECONDS = 10 * 60
 # 停滞检测的文件大小采样间隔（秒）：每次采样都要 stat 一次，无需每轮都做。
 _RECORD_STALL_PROBE_INTERVAL = 30.0
-# 看门狗「单轮可信推进量」的上界（MID-2208，2026-09-23）：守护循环每轮 time.sleep(1)，
-# 正常情况下两次取时之间的增量就是 1s 量级。取 300s 是为 80+ 房间并发下的 GIL 竞争、
-# 满载磁盘 IO、以及单次 stat 慢盘留足余量；超过该上界的增量（或任何倒退）只可能是
-# 挂钟被 NTP 校时/手动改表/挂起恢复拨动，一律按名义 1s 计，见 check_subprocess::_watch_seconds。
+# 看门狗「单轮可信推进量」上界：守护循环每轮 sleep(1)，正常增量是 1s 量级；
+# 300s 为 GIL 竞争、满载 IO 与慢盘 stat 留余量。超过上界或倒退只可能是 NTP 校时/改表/挂起恢复，
+# 一律按名义 1s 计（见 check_subprocess::_watch_seconds）。
 _WATCH_TICK_MAX_SECONDS = 300.0
 _WATCH_TICK_NOMINAL_SECONDS = 1.0
 
-# CR-06 修复：判定「录制产物有效」的最小字节数。HLS 播放列表返回 200 但分片全 404 时，
-# ffmpeg 在 -loglevel error 下零输出、零字节产出、退出码仍为 0；旧实现只看退出码，
-# 于是把空文件当成成功，还会撤销上一轮刚写入的线路退避，形成无法自愈的零字节闭环。
+# 录制产物有效的最小字节数：播放列表 200 但分片全 404 时，ffmpeg 零输出、零字节、rc=0；
+# 只看退出码会把空文件当成功并撤销线路退避，形成无法自愈的零字节闭环。
 _MIN_VALID_RECORD_BYTES = 1024
 
-# WD-12 修复：录后转码的专用线程池。
-# 录制侧有 recording_semaphore 做并发治理，但录后处理原来完全没有——每产生一个分段就
-# threading.Thread(...).start() 一次，线程数随「房间数 × 分段数」线性增长；开启
-# converts_to_h264 时每个线程跑一路 libx264 重编码（单个 ffmpeg 最长存活 600s）。
-# 80+ 房间 + 短分段场景下会瞬时堆出数十条 CPU 密集进程，与正在录制的 ffmpeg 争抢
-# CPU/磁盘 IO，直接诱发录制丢帧与 -max_muxing_queue_size 溢出。
-# 改为固定容量线程池：队列无上限但并发受控，产物只会延后转码，不会与录制抢资源。
+# 录后转码专用线程池：原实现每个分段起一条线程，开启转 H.264 时每条跑一路 libx264，
+# 80+ 房间 + 短分段会堆出数十条 CPU 密集进程，与录制争抢 CPU/磁盘并诱发丢帧。
+# 改为固定容量池：队列无上限、并发受控，产物只会延后转码。
 _POSTPROCESS_WORKERS = max(2, min(4, (os.cpu_count() or 4) // 2))
 _postprocess_executor: ThreadPoolExecutor | None = None
 _postprocess_executor_lock = threading.Lock()
@@ -1017,12 +905,9 @@ def _submit_postprocess(func: Callable[..., Any], path: str, delete_origin: bool
         )
 
 
-# ffmpeg 退出码的 errno 语义提示：Windows 上 subprocess 拿到的是无符号 32 位值
-# （如 -22 呈现为 4294967274），直接打印原值无法定位问题方向。仅收录本仓实测出现过
-# 或语义明确可指路的取值，未知值返回空串，避免给日志堆噪音。
-# 2026-09-11 补充：-22 除容器/编码错配外，还有「输入选项解析失败」一类（-reconnect*
-# 缺值导致 reconnect_streamed 把下一个选项名当作值），EINVAL 提示需同时覆盖两类成因，
-# 否则会把排查方向误导到容器问题上。
+# ffmpeg 退出码的 errno 语义提示：Windows 上拿到的是无符号 32 位值（-22 → 4294967274），
+# 直接打印无法定位方向。只收录实测出现过或语义明确的取值，未知值返回空串。
+# -22 同时覆盖「容器/编码错配」与「输入选项解析失败」两类成因（如 -reconnect* 缺值）。
 _FFMPEG_ERRNO_HINTS: dict[int, str] = {
     -22: " (EINVAL：无效参数，常见于容器/编码不匹配（如 HEVC 写进 ipod 容器）或输入选项解析失败)",
     -11: " (EAGAIN：输出写入被阻塞，多为磁盘 IO 或管道背压)",
@@ -1034,37 +919,25 @@ _FFMPEG_ERRNO_HINTS: dict[int, str] = {
 }
 
 
-# 把 ffmpeg 退出码归一化为有符号 errno 并附语义提示：4294967274 → -22 (EINVAL…)。
-# 仅当值超出 32 位有符号正区间时才做补码换算，正常小退出码原样返回。
+# 退出码归一化为有符号 errno：仅超出 32 位有符号正区间时做补码换算，正常小退出码原样返回。
 def _describe_return_code(return_code: int) -> str:
     signed_rc = return_code - (1 << 32) if return_code > 0x7FFFFFFF else return_code
     return f"{signed_rc}{_FFMPEG_ERRNO_HINTS.get(signed_rc, '')}"
 
 
-# 「输出侧本地失败」的豁免判据只有一条：输出父目录当前不存在（判定点见 check_subprocess
-# 失败分支的同编号注释，MID-02）。曾设想过第二条判据（MID-N01）——读 ffmpeg 已缓冲输出、
-# 按写侧特征归因（_FFMPEG_OUTPUT_FAILURE_MARKERS / _ffmpeg_reported_output_failure），
-# 但 Popen 从未设 stdout=PIPE（stdin=PIPE + stderr=STDOUT，ffmpeg 输出直接进父控制台），
-# proc.stdout 恒为 None → 恒返回 False；补 PIPE 又需在守护循环内持续消费，否则管道写满会
-# 卡死 ffmpeg、比现状更糟——为一个二级豁免判据引入守护级复杂度不划算，故已整体删除。
-#   [历史注] 2026-09-21 提出、2026-09-22 才落地：上一轮只删定义、留下调用点，mypy /
-#   basedpyright / pytest 三面同时转红；该调用点在 `and` 右侧，只在「父目录不存在」这条分支上
-#   真抛 NameError（Linux CI 的 /tmp 存在、短路不炸，Windows 本机必炸），是延迟爆炸的运行期
-#   缺陷而非纯静态噪音。删除模块级符号前必须 grep 全部调用点，现已由 scripts/check_annotations.py
-#   的符号可达性检查固化成门禁动作。
+# 输出侧本地失败只有一条判据：输出父目录当前不存在（判定点见 check_subprocess 失败分支）。
+# 曾经设想的「读 ffmpeg 输出按写侧特征归因」不可行：Popen 只设 stdin=PIPE + stderr=STDOUT，
+# proc.stdout 恒为 None；补 PIPE 又需在守护循环持续消费，否则管道写满会卡死 ffmpeg。
 
 
-# 分段产物的「序号后缀」形状：`_<数字>.<扩展名>`，出现在字符串末尾。
-# 刻意不用定长 `???` glob —— ffmpeg 的 `%03d` 在段号超过 999 时会输出 4 位，
-# 定长模式会静默漏计这部分文件（_convert_after_record 同一口径）。
+# 分段序号后缀形状 `_<数字>.<扩展名>`（位于字符串末尾）。不用定长 `???` glob：
+# ffmpeg 的 %03d 在段号超过 999 时输出 4 位，定长模式会静默漏计。
 _SEG_INDEX_RE = re.compile(r"_\d+\.[A-Za-z0-9]+$")
 
-# 分段输出**模板**的形状：`..._%03d.ts` / `..._%02d.m4a`（含 ffmpeg 的 %d 占位符）。
-# MID-08 修复：check_subprocess 判定「是否分段」一律由已冻结的命令输出模板推导，
-# 不再读模块全局 split_video_by_time——主循环每 3s 热加载配置，录制中途在面板切换
-# 「分段录制是否开启」会让收尾校验按另一种形状 glob（恒返回 -1，零字节保护静默失效），
-# 或对含 %03d 的字面路径提交注定失败的转码，并破坏 _000.srt ↔ _000.ts 的对应不变量。
-# 只匹配「扩展名之前的序号占位符」，避免把标题里恰好含 %d 的文件名误判成分段模板。
+# 分段输出模板形状 `..._%03d.ts` / `..._%02d.m4a`。「是否分段」一律由已冻结的命令输出模板
+# 推导，不读模块全局 split_video_by_time——主循环每 3s 热加载，录制中途切换开关会让收尾校验
+# 按错误形状枚举（零字节保护静默失效）或提交注定失败的转码，并破坏 _000.srt ↔ _000.ts 的对应。
+# 只匹配扩展名前的序号占位符，避免把标题里恰好含 %d 的文件名误判。
 _SEGMENT_TEMPLATE_RE = re.compile(r"_%0?\dd\.[A-Za-z0-9]+$")
 
 
@@ -1073,17 +946,13 @@ def _is_segmented_output(save_file_path: str) -> bool:
     return _SEGMENT_TEMPLATE_RE.search(save_file_path) is not None
 
 
-# 分段模板 → 实际落盘的分段文件（纯字符串前缀/后缀 + 序号正则，**绝不走 glob/fnmatch**）。
-# 2026-09-22 实测（MID-2207 + MIN-2227）：rstr 里的 `[` `]` 只是字符类定界符、从不被清洗，
-# 是合法文件名字符；而 Path.glob 经 fnmatch.translate 会把 `主播[A组]_..._*.ts` 译成字符类
-# → 恒返回空 → 分段求和恒 -1（健康分段录制满 10 分钟即被看门狗判停滞杀掉）、
-# 转码永远「未找到分段文件」。故三处枚举统一收敛到本函数：os.scandir + startswith + endswith。
-# 三态返回（MID-2207 后半，2026-09-23），两种结果**不得**再压成同一种：
-#   - None = 目录不可读（不存在 / 权限 / 网络盘抖动 / 目录被转码进程临时替换）→ 观测失败，对产物一无所知；
-#   - []   = 目录可读但无任何匹配分段 → 「确实还没有产物」，是真实的零增长观测。
-# 二者曾同返 []，于是一次偶发的 scandir 失败就能让**健康的分段录制满 10 分钟被终止**，并向
-# 调度器投一条假的 record_error（污染按 host 的熔断统计、把好线路拉进探针退避）。调用方在观测
-# 失败时不得刷新停滞基准、不得判停滞（见 _watchdog_hit 与
+# 分段模板 → 实际落盘的分段文件：纯字符串前缀/后缀 + 序号正则，**绝不用 glob/fnmatch**。
+# 主播名里的 `[` `]` 是合法文件名字符，但 Path.glob 会把 `主播[A组]_*` 译成字符类而恒返回空，
+# 导致分段求和恒 -1（健康录制满 10 分钟被判停滞）与「未找到分段文件」。三处枚举统一走本函数。
+# 三态返回，None 与 [] 不得合并：
+#   None = 目录不可读（不存在 / 权限 / 网络盘抖动 / 被转码临时替换）→ 观测失败，对产物一无所知；
+#   []   = 目录可读但无匹配分段 → 真实的零增长观测。
+# 观测失败时不得刷新停滞基准、不得判停滞（见 _watchdog_hit 与
 # tests/test_regression_2026_09_22_main.py::test_segment_observation_failure_is_not_stall）。
 def _segment_files(save_file_path: str) -> list[str] | None:
     directory = os.path.dirname(save_file_path)
@@ -1104,25 +973,19 @@ def _segment_files(save_file_path: str) -> list[str] | None:
     return matched
 
 
-# CR-06 修复：统计本次录制实际落盘字节数。分段录制时 save_file_path 是含 %03d 的输出模板，
-# 直接 stat 恒失败，须按 ffmpeg 实际的 _000/_001… 序号文件求和；单文件录制则直接取大小。
-# 三态返回（MID-2207 后半，2026-09-23）：>=0 实际字节数；-1 路径/分段确实不存在（尚无产物）；
-# None 观测失败（目录不可读）。调用方必须把 None 与 -1 分开处理——前者不得据此判停滞。
-#
-# MID-05 修复（2026-09-20）：分段的扩展名必须由模板推导、枚举走 _segment_files，不能写死 `.ts`。
-# 早期的两种 glob 写法（`{base_stem}_???.ts` 与 `{base_stem}_*.ts`）都写死了 `.ts`，
-# 对分段 FLV/MKV/MP4/音频恒不命中 → 恒返回 -1 →
-# check_subprocess 的 `0 <= _produced_bytes < _MIN_VALID_RECORD_BYTES` 永不成立，
-# 于是 CR-06 修掉的「零字节记成功、撤销线路退避」闭环在所有非 TS 分段形态上原样复发
-# ——而分段 FLV 恰是虎牙/斗鱼的常见形态；且 glob 把 `[...]` 当字符类，
-# 主播名含方括号时连 TS 形态都恒不命中、健康录制被误杀（MIN-2227）。
+# 统计本次录制实际落盘字节数：分段模板含 %03d，直接 stat 恒失败，须按 _000/_001… 求和；
+# 单文件录制直接取大小。
+# 三态：>=0 实际字节数；-1 路径/分段确实不存在；None 观测失败（目录不可读）。
+# 调用方必须分开处理 None 与 -1——前者不得据此判停滞。
+# 扩展名由模板推导、枚举走 _segment_files，不写死 .ts：否则分段 FLV/MKV/MP4/音频恒返回 -1，
+# 「零字节记成功、撤销退避」的闭环会在非 TS 形态复发（分段 FLV 是虎牙/斗鱼常见形态）。
 def _record_output_bytes(save_file_path: str, split_video_by_time: bool) -> int | None:
     if not split_video_by_time:
         try:
             return os.path.getsize(save_file_path)
         except OSError:
             # 非分段形态没有「目录可读但无产物」的中间态：文件不存在即「本轮还没写出产物」，
-            # 正是 MID-N04 要判停滞的那类真实零产物信号，故保持 -1 而不是 None。
+            # 这正是要判停滞的真实零产物信号，故保持 -1 而不是 None。
             return -1
     seg_paths = _segment_files(save_file_path)
     if seg_paths is None:
@@ -1138,10 +1001,10 @@ def _record_output_bytes(save_file_path: str, split_video_by_time: bool) -> int 
     return total if found else -1
 
 
-# 启动并全程守护一次 ffmpeg 录制：ffmpeg_command 为已拼好的完整命令（末位为输出路径），
-# save_type 决定是否转 mp4/是否跳过弹幕与字幕，script_command 为录后自定义脚本，
-# platform + danmaku_args 用于同步启停弹幕采集；
-# 返回 True 表示因该地址被注释或收到退出标志而提前中断（调用方应结束线程），False 表示本次录制自然结束
+# 启动并守护一次 ffmpeg 录制：ffmpeg_command 末位为输出路径；save_type 决定转码与弹幕/字幕；
+# platform + danmaku_args 用于同步启停弹幕采集。
+# 返回 True = 因地址被注释 / 收到退出标志 / 停止录制而提前中断（调用方应结束线程）；
+# False = 本次录制自然结束。
 def check_subprocess(
     record_name: str,
     record_url: str,
@@ -1151,17 +1014,10 @@ def check_subprocess(
     platform: str | None = None,
     danmaku_args: Any = None,
 ) -> bool:
-    # 录制并发软上限（资源治理）：限制同时进行的 ffmpeg 录制数，防 80+ 任务同时录制拖垮
-    # CPU/磁盘/带宽。recording_limit=0 时 recording_semaphore 容量极高，acquire 不阻塞（等同不限制）。
-    # 必须在 Popen 之前占槽：若先起进程再 acquire，并发上限根本约束不到 ffmpeg 进程数——
-    # N 个房间仍会同时拉起 N 个 ffmpeg 拉流写盘（正是要防的资源耗尽），被阻塞的只是房间线程，
-    # 且阻塞期间不检查注释/停止标志，无法及时退出。
-    #
-    # acquire 带超时轮询（2026-09-12）：原为无限阻塞，排队期间完全不看退出标志——Web 点
-    # 「停止录制」或 URL 被注释后，排在队里的房间线程仍会干等到拿到槽位才继续（最坏等满一个
-    # 完整录制周期），之后才在收包循环里发现该退出——表现为「点了停止，几十秒后仍有房间在起 ffmpeg」。
-    # 每 _SEM_WAIT_TICK 秒检查一次退出条件，命中即放弃本轮录制（返回 True，与下方
-    # 「被注释/已停止」语义一致：调用方据此 return 退出本房间线程）。
+    # 录制并发软上限：limit=0 时信号量容量极高，acquire 不阻塞（等同不限制）。
+    # 必须在 Popen 之前占槽——先起进程再 acquire 约束不到 ffmpeg 进程数，被阻塞的只是房间线程。
+    # acquire 带超时轮询：排队期间每 _SEM_WAIT_TICK 秒检查退出条件，命中即放弃本轮并返回 True，
+    # 避免「点了停止，几十秒后仍有房间在起 ffmpeg」。
     _rec_sem = recording_semaphore
     while not _rec_sem.acquire(timeout=_SEM_WAIT_TICK):
         if record_url in url_comments or exit_recording or not recording_enabled:
@@ -1171,40 +1027,29 @@ def check_subprocess(
                     record_name=record_name,
                 )
             )
-            # MID-01 修复：放弃本轮录制前必须回收录制状态。登记（recording / recording_time_list）
-            # 早在 start_record 的录制链里完成，此处原样 return True 会留下幽灵「录制中」条目：
-            #   ① 面板/CLI 永久显示该房间在录制；
-            #   ② 磁盘满退出判定 `if not recording:` 恒假 → 已置 exit_recording 却永不退出、主循环空转；
-            #   ③ 调用方把 True 一律解读为「录制中断」，TS 分支因此对从未创建的输出路径提交一次转码。
-            # 与同函数下方「被注释/停止」分支的清理保持同构。
+            # 放弃本轮前必须回收录制状态：登记早已在 start_record 完成，直接 return 会留下幽灵条目
+            # （面板恒显录制中、磁盘满判定恒假、调用方对从未创建的输出路径提交转码）。
+            # 与下方「被注释/停止」分支同构。
             clear_record_info(record_name, record_url)
             return True
-    # MID-12 修复：process 提前置 None，令 finally 的统一回收能区分「Popen 之前就抛错」与
-    # 「进程已起、但守护段（弹幕启动/字幕线程 start）抛错」——后者会留下无人守护的孤儿 ffmpeg
+    # process 提前置 None：finally 才能区分「Popen 前就抛错」与「进程已起、守护段抛错」，
+    # 后者会留下无人守护的孤儿 ffmpeg。
     process: subprocess.Popen[bytes] | None = None
-    # SEV-N01（2026-09-21）+ SEV-2208（2026-09-22）：弹幕采集器的声明提到 try 之前，使 finally
-    # 能安全引用它（原声明在 try 内，try 内任一处抛错即无从停止），并在 finally 内**无条件**
-    # stop()——此前的 stop 真身一直在 try/finally 之后，异常穿出 try 时采集器不被停止。
-    # finally 里的 unregister / clear_record_info 也与 terminate 解耦，不再共用
-    # `process.poll() is None`（进程自然退出时原写法的三个收尾动作全部跳过）。可复核判据：
-    # tests/test_regression_2026_09_22_main.py
+    # 弹幕采集器声明在 try 之前，finally 才能安全引用；finally 内无条件 stop()（stop 自带幂等）。
+    # unregister / clear_record_info 与 terminate 解耦，进程自然退出时同样执行。
+    # 判据：tests/test_regression_2026_09_22_main.py
     #   ::test_danmaku_collector_stopped_when_guard_section_raises
     #   ::test_finally_clears_state_when_process_already_exited
     danmaku_collector: Any = None
     _converged = False
     try:
         save_file_path = ffmpeg_command[-1]
-        # MID-08：本函数后续所有「产物形状」判定一律取自已冻结的命令输出模板，不再读模块全局
+        # 产物形状判定一律取自已冻结的命令输出模板，不读模块全局
         _split_output = _is_segmented_output(save_file_path)
-        # MID-2208（2026-09-22）：「快速失败」是**时长**判定，必须走单调钟。
-        # 系统时钟被 NTP 校时/手动改表/虚拟机挂起恢复拨动时，time.time() 的差值可以是任意值：
-        # 向前跳 7 小时会让一次 0.5 秒的秒退看起来跑了 7 小时 → 逃过快速失败判定 → 坏线路
-        # 不被记入探针退避（房间无限重撞同一条死线路）；向后跳则相反，把正常的长录制判成秒退。
-        # 展示用时间戳（stop_time）仍走挂钟，只有判据换单调钟。
-        # 看门狗的两处时长判据（停滞窗口 / 单次上限）同属此族，见下方 _watch_seconds 的
-        # 「挂钟增量累加」实现与理由（不能直接套 monotonic 的原因写在那段注释里）。
-        # 回归锁：tests/test_regression_2026_09_22_main.py
-        #   ::test_fast_fail_judgement_ignores_wall_clock_jump
+        # 「快速失败」是时长判定，必须走单调钟：NTP 校时 / 改表 / 挂起恢复会让 time.time() 差值
+        # 任意跳动——向前跳会逃过快速失败（坏线路不入探针退避），向后跳会把长录制判成秒退。
+        # 展示用 stop_time 仍走挂钟。看门狗的时长判据见 _watch_seconds（同类问题、不同解法）。
+        # 回归锁：tests/test_regression_2026_09_22_main.py::test_fast_fail_judgement_ignores_wall_clock_jump
         _proc_started_mono = time.monotonic()
         process = subprocess.Popen(
             ffmpeg_command, stdin=subprocess.PIPE, stderr=subprocess.STDOUT, startupinfo=get_startup_info(os_type)
@@ -1214,16 +1059,13 @@ def check_subprocess(
 
         subs_file_path = save_file_path.rsplit(".", maxsplit=1)[0]
 
-        # 分段录制时 save_file_path 是 ffmpeg 输出模板(含 %03d 占位符),实际落盘为 _000/_001…
-        # SRT 前缀须与真实文件名对齐,去掉占位符,由 SrtWriter 自行追加 _000 分片号;
-        # 占位符有 _%03d(视频分段)与 _%02d(音频分段)两种,统一剥离(replace 未命中为空操作)
+        # SRT 前缀须与真实文件名对齐：剥离 _%03d / _%02d 占位符（未命中即空操作），
+        # 分片号由 SrtWriter 自行追加 _000。
         for _seg_placeholder in ("_%02d", "_%03d"):
             subs_file_path = subs_file_path.replace(_seg_placeholder, "")
 
-        # 弹幕采集：与 ffmpeg 同起同停，SRT 前缀与录像同前缀同目录。
-        # 录制弹幕与弹幕监控共用同一采集器/连接：任一开启即连接；
-        # 仅监控（录制弹幕关）时不落 SRT（write_srt=False）；失败不影响录像。
-        # SEV-N01：本变量的声明已提到 try 之前（见函数体开头），每轮进函数即重置的语义不变。
+        # 弹幕与 ffmpeg 同起同停，SRT 前缀与录像一致。录制弹幕/弹幕监控共用同一采集器：
+        # 任一开启即连接，仅监控时不落 SRT；启动失败不影响录像。
         _danmaku_active = enable_danmaku or enable_danmaku_monitor
         if _danmaku_active and platform is not None and platform in danmaku_platforms and "音频" not in save_type:
             if not danmaku_args:
@@ -1255,83 +1097,59 @@ def check_subprocess(
                             e=e,
                         )
                     )
-                    # MIN-2242 修复（2026-09-22）：DanmakuCollector.start() 非原子
-                    # （_started=True → SrtWriter 已开句柄 → 起 srt_writer 线程 → hub.room_started()
-                    #  → 起采集线程），中途任一步抛错都会留下「半启动」对象。原实现直接把唯一
-                    # 引用置 None，那些线程与句柄再无人可停止（只能等进程退出）。先幂等 stop 再丢引用。
-                    # MIN-2223：异常类型一并入日志——asyncio.TimeoutError 的 str() 是 "()"、
-                    # socket.timeout 是空串，只写 {e} 的日志无法定位。
+                    # start() 非原子（句柄/线程/hub 注册分步进行），中途抛错会留下半启动对象；
+                    # 先幂等 stop 再丢引用，否则线程与句柄无人可停。
+                    # 日志带 type_name：asyncio.TimeoutError 的 str() 为 "()"、socket.timeout 为空串。
                     if danmaku_collector is not None:
                         danmaku_collector.stop()
                     danmaku_collector = None
 
         subs_thread_name = f"subs_{Path(subs_file_path).name}"
         if create_time_file and not _split_output and "音频" not in save_type:
-            # 2026-09-12 审查 6.1：原写法启动后 create_var 条目永不清理。generate_subtitles 是
-            # 死循环（直到 recording 移除 record_name 才 return），线程与录制同生命周期、
-            # daemon=True 在进程退出时自动回收，故不泄漏线程本身，但 dict 条目（key + Thread
-            # 对象引用）在长生命周期场景下持续累积。故在 finally 里 pop，与 _room_thread_target
-            # 的 finally pop 模式一致；graceful 退不出的极端情况（daemon 被信号杀）由进程退出兜底。
+            # 字幕线程与录制同生命周期（generate_subtitles 直到 record_name 移出 recording 才返回），
+            # 线程本身由 daemon 兜底；但 create_var 的条目会长期累积，故在 finally 里 pop。
             def _subtitle_thread_target() -> None:
                 try:
                     generate_subtitles(record_name, subs_file_path)
                 finally:
                     with record_state_lock:
-                        # MIN-01 同族防护：键由输出文件名推导，跨房间/跨轮可能重名，
-                        # 只有登记的仍是本线程时才回收，否则会把别人的条目 pop 掉
+                        # 键由输出文件名推导，跨房间/跨轮可能重名：只有登记的仍是本线程时才回收
                         if create_var.get(subs_thread_name) is threading.current_thread():
                             create_var.pop(subs_thread_name, None)
 
-            # L-08（2026-10-19）：登记与启动一并收进 record_state_lock。回收侧（上面的 finally、
-            # 下面的 RuntimeError 回滚）本来都在锁内，只有写入侧在锁外——同名房间并发时
-            # 「写条目 → 读条目 → start()」不是原子序列，另一线程的 finally 可能在中途把条目 pop 掉，
-            # 于是本线程把一个已不属于自己的 Thread 对象启动起来、且条目永久残留（其 finally
-            # 归属校验会失败，因为 dict 里已经没有它）。start() 放在锁内是必要的：它只做线程创建，
-            # 不等待 target 执行，持有锁的时间是常数级。
+            # 登记与 start() 一并收进 lock：回收侧本来就在锁内，写入侧在锁外会让「写 → start」
+            # 与别的线程的 finally pop 交错，启动一个已不归属自己的线程且条目永久残留。
+            # start() 只做线程创建、不等待 target，持锁时间是常数级。
             with record_state_lock:
                 create_var[subs_thread_name] = threading.Thread(
                     target=_subtitle_thread_target, name=subs_thread_name, daemon=True
                 )
-                # L-02（2026-10-02）：start() 抛 RuntimeError（can't start new thread）时 target 未运行、
-                # finally 清理不执行，create_var 条目缓慢累积；失败即移除登记。
+                # start() 抛 RuntimeError 时 target 不运行、finally 清理不执行，失败即回滚登记。
                 try:
                     create_var[subs_thread_name].start()
                 except RuntimeError:
                     create_var.pop(subs_thread_name, None)
                     raise
 
-        # 内部包装：转调模块级 _terminate_ffmpeg_process（复用公共终止逻辑，避免在此重复实现
-        # 导致逻辑漂移），timeout 为总等待秒数，返回是否已退出
+        # 转调模块级 _terminate_ffmpeg_process，避免终止逻辑在此重复实现而漂移
         def terminate_ffmpeg_process(proc: subprocess.Popen[bytes], timeout: int = 30) -> bool:
             return _terminate_ffmpeg_process(proc, timeout)
 
-        # CR-05 修复：看门狗状态。_stall_last_size = -1 表示「目录可读但确实还没有任何产物」
-        # （MID-2207 后半：目录不可读时 _record_output_bytes 返 None，不落在 -1 上）。
+        # 看门狗状态：_stall_last_size = -1 表示「目录可读但确实还没有任何产物」
+        # （目录不可读时 _record_output_bytes 返 None，不会落到 -1）。
+        # 停滞基准 _stall_since 取「最后一次观测到增长的时刻」，初始为起跑时刻。以起跑时刻
+        # 直接判 `now - start > 窗口` 会变成「满 10 分钟后任意一次无增长采样就杀」，与日志
+        # 宣称的「连续 10 分钟无增长」不符；而 FLV 的 -reconnect_delay_max 60（1/3/7/15/31s
+        # 退避期间零写入）、主播暂停推流、CDN 短抖都是合法无增长窗口。
+        # 误杀代价：record_error(host) 把健康线路计入熔断样本，且不走 rc==0 分支 →
+        # 转码与 clear_ffmpeg_reject 双双跳过。
         #
-        # SEV-08 修复（2026-09-20）：停滞判据的基准必须是「最后一次观测到增长的时刻」
-        # _stall_since（以进程起跑时刻起步 = 「尚未观测到任何增长」的初始态），而不是起跑时刻
-        # 本身。旧判据 `now - 起跑时刻 > _RECORD_STALL_SECONDS` 配上 30s 的采样间隔，实际含义是
-        # 「满 10 分钟后，任意一次相邻采样之间字节数不变就立刻杀进程」——与日志宣称的
-        # 「连续 10 分钟无增长」不符。
-        # 合法无增长窗口在本仓真实存在：FLV 输入刻意保留 -reconnect_delay_max 60
-        # （1/3/7/15/31s 指数退避，期间一个字节都不写）、主播暂停推流、CDN 短抖同理。
-        # 误杀的代价链：走 record_error(host) 把健康线路计入按 host 的熔断失败样本，
-        # 且不走 rc==0 分支 → converts_to_mp4 与 clear_ffmpeg_reject 双双跳过。
-        #
-        # MID-2208（2026-09-23）：停滞窗口与单次时长上限都是**时长**判定，原实现直接吃挂钟，
-        # 于是 NTP 校时 / 手动改表 / 虚拟机挂起恢复会把健康的分段录制立刻判成停滞并终止
-        # （顺带向调度器投一条假 record_error、把好线路拉进探针退避），反向跳变则让时长上限
-        # 永不命中、房间长期占着录制槽位。
-        # 为什么不照抄上方快速失败的 time.monotonic()：那会让本仓的受控时钟失去抓手——
-        # tests/test_record_watchdog.py::_Clock 只替换 time/sleep（monotonic 仍是真实实现），
-        # 而它的「11 分钟停滞」「达到时长上限」两条用例把 ffmpeg 寿命设为 alive_at=inf、
-        # 唯一出口就是看门狗；换成裸 monotonic 后这两条用例变成忙等挂死（2026-09-23 实测：
-        # 改动后 `pytest tests/test_record_watchdog.py` 45s 不退出，改前 0.48s 全绿）。
-        # 该文件不在本轮 main.py 所有权内，故这里改用**挂钟增量累加**（见 _watch_seconds）
-        # 拿到同样的跳变免疫：每轮只把「合理范围内」的增量计入累计秒数，越界/倒退按名义
-        # sleep 时长计。误差方向安全：漏算只会**推迟**停滞与上限判定（宁慢勿误杀）。
-        # 回归锁：tests/test_regression_2026_09_22_main.py
-        #   ::test_watchdog_elapsed_ignores_wall_clock_jump
+        # 时长判定不直接吃挂钟：NTP 校时/改表/挂起恢复会误判停滞或让上限永不命中。
+        # 也不能直接换 time.monotonic()——tests/test_record_watchdog.py::_Clock 只替换
+        # time/sleep，其「11 分钟停滞」「达到时长上限」用例依赖受控时钟，换裸单调钟会忙等挂死。
+        # 故采用挂钟增量累加（见 _watch_seconds）：只累计合理范围内的增量，越界/倒退按名义
+        # sleep 计；漏算只会推迟判定（宁慢勿误杀）。
+        # 回归锁：tests/test_regression_2026_09_22_main.py::test_watchdog_elapsed_ignores_wall_clock_jump
         _watch_prev_wall = time.time()
         _watch_elapsed = 0.0
 
@@ -1353,27 +1171,19 @@ def check_subprocess(
         _stall_last_size = -1
         _stall_since = _proc_started_watch
 
-        # 单次录制时长上限：取「录制设置」的「单次录制时长上限(秒,0为不限制)」热加载值，
-        # 0 或负值表示不限制，分段开/关均生效。命中上限走 _watchdog_hit 的 "limit" 出口
-        # = 与 rc==0 同一条正常收尾链路（成功样本 + 转码 + 撤销探针退避），不伪造 CDN 失败。
-        # 24 小时轮播/官方电台房间（B站/斗鱼/抖音的 CCTV 型直播间）超过 6 小时是常态，
-        # 故上限由配置侧适配：调大或设 0 即不限制。
-        #   [历史注] MID-07（2026-09-20）曾把上限限死为「只在分段模式下生效」，MID-N04
-        #   （2026-09-21，CODE_REVIEW_2026-09-21）改为两种形态均参与——否则非分段恒 0，
-        #   「产物文件从未出现」形态（见下方 _watchdog_hit 的 MID-N04 注释）承诺的
-        #   「交给时长上限兜底」在落地上不存在，房间会永久持有录制槽位。
+        # 单次录制时长上限取热加载值：0/负值不限制，分段开/关均生效。命中上限走 _watchdog_hit
+        # 的 "limit" 出口，与 rc==0 共用正常收尾链路（成功样本 + 转码 + 撤销探针退避）。
+        # 非分段形态也必须参与：否则「产物从未出现」的房间会永久持有录制槽位。
         _record_limit_seconds = max_record_seconds
 
         def _watchdog_hit() -> str:
             # 返回 "" 表示一切正常；"stall"＝输出停滞（按失败终止）；
             # "limit"＝达到单次录制时长上限（正常收尾，与 rc==0 共用成功路径）
             nonlocal _stall_last_probe, _stall_last_size, _stall_since
-            # 本函数所有时刻量统一取「可信已跑秒数」（MID-2208，理由见上方 _watch_seconds 段）
+            # 时刻量统一取「可信已跑秒数」（理由见上方 _watch_seconds 段）
             now = _watch_seconds()
             if _record_limit_seconds > 0 and now - _proc_started_watch > _record_limit_seconds:
-                # MIN-2225 修复（2026-09-22）：原文案恒说「分段续录」，而分段关闭时下一轮产出的是
-                # 另一个**独立文件**（用户显式选择单文件长录）。按 _split_output 二选一措辞，
-                # 两条 msgid 已登记进 _i18n_pending.json。
+                # 分段关时下一轮产出的是另一个独立文件，措辞按 _split_output 二选一
                 if _split_output:
                     logger.warning(
                         i18n.tr(
@@ -1394,22 +1204,13 @@ def check_subprocess(
             if now - _stall_last_probe < _RECORD_STALL_PROBE_INTERVAL:
                 return ""
             _stall_last_probe = now
-            # MID-N04 修复（2026-09-21，CODE_REVIEW_2026-09-21）：采样改用 _record_output_bytes，
-            # 不再裸 stat 模板路径。旧实现把「分段模板 stat 恒失败」与「产物文件从未出现」混为
-            # 同一个 OSError 直接放行，且判定又要求 _stall_last_size >= 0——于是
-            # 「ffmpeg 打开输入后迟迟不创建输出（或输出被外部删除）」形态永不判停滞，
-            # 房间无限持有录制槽位；注释承诺的「交给时长上限兜底」在旧的非分段形态恒为 0。
-            # 现在：size < 0（尚无任何产物文件/分段可观测）时，自最后一次观测到增长的时刻
-            # （初始即起跑时刻，SEV-08 基准不回退）越过停滞窗口即判停滞；
-            # 分段形态自此也获得真实的「无增长」观测能力（求和 _000/_001… 实际序号文件）。
+            # 采样走 _record_output_bytes，不裸 stat 模板：后者对分段恒失败，会把「从未创建输出」
+            # 与「分段模板」混为同一个 OSError 而永不判停滞，房间无限持有槽位。
+            # size < 0（尚无任何产物）时，自最后一次增长（初始为起跑时刻）越过窗口即判停滞。
             size = _record_output_bytes(save_file_path, _split_output)
             if size is None:
-                # MID-2207 后半修复（2026-09-23）：None = 目录不可读（scandir 抛 OSError），
-                # 属**观测失败**而非「产物不存在」。此时对有没有增长一无所知：
-                # 既不能刷新停滞基准（会把窗口推到错误时刻、变相延长停滞判定），更不能判停滞
-                # ——一次偶发的 scandir 失败（网络盘抖动 / 目录被转码进程临时替换）就会
-                # 杀掉健康的分段录制并投一条假 record_error。本直接放行本轮采样，
-                # 交给下一次观测或单次时长上限兜底。
+                # None = 目录不可读，属观测失败而非「产物不存在」：既不能刷新停滞基准，
+                # 也不能判停滞——一次偶发 scandir 失败就会杀掉健康录制并投假失败样本。
                 return ""
             if size < 0:
                 if now - _stall_since > _RECORD_STALL_SECONDS:
@@ -1437,16 +1238,14 @@ def check_subprocess(
                 return "stall"
             return ""
 
-        # 「达到时长上限」标志：True 时本轮不按挂起/失败处理，而按「正常录完」收尾。
-        # 旧实现每 6 小时就往熔断窗口里塞一条失败样本，多房间同 host 时足以把
-        # PlatformBreaker 推向 open（收尾链路见上方 _record_limit_seconds 注释）。
+        # 「达到时长上限」标志：True 时按「正常录完」收尾，不往熔断窗口塞失败样本
         _reached_record_limit = False
 
         while process.poll() is None:
-            # CR-05：守护循环每 1s 轮询一次，看门狗与「注释/停止」检查同轮进行
+            # 守护循环每 1s 轮询一次，看门狗与「注释/停止」检查同轮进行
             _watchdog = _watchdog_hit()
             if _watchdog == "stall":
-                # 本分支自带终止与注销，标记已收敛以免 finally 再回收一次（MID-12）
+                # 本分支自带终止与注销，标记已收敛以免 finally 二次处理
                 _converged = True
                 if danmaku_collector is not None:
                     danmaku_collector.stop()
@@ -1458,8 +1257,8 @@ def check_subprocess(
                 record_error(host_of(record_url))
                 return False
             if _watchdog == "limit":
-                # 结束守护循环但**不**返回：终止 ffmpeg 后落到下方与 rc==0 相同的收尾链路。
-                # 弹幕采集器交给循环外那一次 stop()（整个录制周期仅一次，避免重复停止）
+                # 结束守护循环但不返回：终止 ffmpeg 后落到与 rc==0 相同的收尾链路。
+                # 弹幕采集器交给循环外那一次 stop()，整个周期只停一次。
                 _converged = True
                 _ = terminate_ffmpeg_process(process)
                 unregister_ffmpeg_process(process)
@@ -1489,47 +1288,34 @@ def check_subprocess(
                 return True
             time.sleep(1)
     finally:
-        # 无论正常结束还是提前中断/异常，均释放录制并发槽，避免槽位泄漏导致后续录制饿死。
-        # 覆盖范围含 Popen 之前的注册/弹幕启动段：该段一旦抛错，槽位同样必须归还，
-        # 否则泄漏累积到上限后所有后续录制永久饿死。
+        # 无论正常结束、提前中断还是异常，都必须归还录制槽位；泄漏累积到上限会让所有后续录制饿死。
         _rec_sem.release()
-        # 无条件停止弹幕采集器（SEV-2208，背景见函数体开头同名注释）：DanmakuCollector.stop()
-        # 自带 _stop_called 幂等，与守护循环内各早退分支的调用重复安全。
+        # 无条件停采集器；stop() 自带 _stop_called 幂等，与各早退分支重复调用安全。
         if danmaku_collector is not None:
             danmaku_collector.stop()
-        # MID-12（2026-09-20）+ SEV-2208（2026-09-22）：Popen 成功之后仍有未被包装的抛错点
-        # （最现实的是弹幕采集线程/字幕线程 Thread.start() —— 80+ 房间各自持线程时
-        # RuntimeError: can't start new thread 可达）。异常路径必须与「被注释/停滞」等早退路径
-        # 同样收敛：终止 + 注销 + 清录制状态；否则孤儿 ffmpeg 继续拉流写盘、不进守护循环
-        # （用户点停止/注释都杀不到它）、进程注册表只增不清、recording 残留幽灵条目
-        # （面板恒显「录制中」、磁盘满退出判定 `if not recording:` 恒假），
-        # 而房间线程睡一轮后又在同一目录起第二路。
+        # Popen 之后仍有未包装的抛错点（弹幕/字幕线程 start() 的 RuntimeError 在 80+ 房间时可达）。
+        # 异常路径必须与早退路径同样收敛：终止 + 注销 + 清录制状态；否则孤儿 ffmpeg 不进守护循环，
+        # 用户点停止/注释都杀不到它，注册表只增不清、recording 留下幽灵条目。
         # 存活判定只留给 _terminate_ffmpeg_process；unregister / clear_record_info 在
-        # `not _converged` 时无条件执行（原写法把三个动作全挂在 `process.poll() is None` 上，
-        # 「ffmpeg 已自然退出 + 守护段抛错」时三者都不执行）。_converged 保证已自行收尾的
-        # 分支不被二次处理（否则会多一次 terminate 调用）。
+        # `not _converged` 时无条件执行，_converged 防止已自行收尾的分支被二次 terminate。
         if process is not None and not _converged:
             if process.poll() is None:
                 _ = _terminate_ffmpeg_process(process)
             unregister_ffmpeg_process(process)
             clear_record_info(record_name, record_url)
 
-    # MID-12 把 process 的声明改成 Popen[bytes] | None（用于区分「Popen 之前就抛错」），但
-    # Popen 抛错时异常已穿过 finally 向上传播、不可能落到本行之后 —— 这里做一次显式收窄，
-    # 让静态检查可判定（AGENTS 口径：确需收窄时用 cast，不新增运行期分支）。
-    # 类型必须写成字符串：测试会把 main.subprocess 换成 SimpleNamespace 替身（本仓约定），
-    # 裸写下标会在运行期去订阅替身的 Popen 而抛 TypeError。
+    # 显式收窄供静态检查（Popen 抛错时异常已向上传播，不会落到本行之后）。
+    # 类型必须写成字符串：测试把 main.subprocess 换成 SimpleNamespace 替身，裸下标会抛 TypeError。
     proc = cast("subprocess.Popen[bytes]", process)
 
-    # 弹幕采集器的停止已由上面的 finally 单点保证（SEV-2208），此处不再重复调用。
+    # 采集器已由上面的 finally 单点停止，此处不再重复调用。
 
-    # 确保子进程资源被回收，避免僵尸进程/句柄滞留（尤其在 Web 常驻模式下）
+    # 回收子进程资源，避免僵尸进程/句柄滞留（Web 常驻模式下尤其重要）
     try:
         _ = proc.wait(timeout=30)
     except subprocess.TimeoutExpired:
-        # 超时说明 ffmpeg 未被回收：显式补杀并告警。原实现用 except Exception: pass
-        # 静默吞掉，随后直接用可能为 None 的 returncode 判成败（并据此写探针退避），
-        # 会把「回收失败」当成「录制失败」。
+        # 超时说明 ffmpeg 未被回收：补杀并告警。静默吞掉会让后续 None 的 returncode 判成败，
+        # 把「回收失败」当成「录制失败」并据此写探针退避。
         logger.warning(i18n.tr("[{record_name}] ffmpeg 进程 30 秒内未退出，强制终止", record_name=record_name))
         try:
             proc.kill()
@@ -1545,21 +1331,16 @@ def check_subprocess(
             )
     return_code = proc.returncode
     if return_code is None:
-        # 兜底：kill 后仍拿不到退出码时用 -1 作「未知失败」哨兵，
-        # 避免下游 _describe_return_code(None) 抛 TypeError。
+        # kill 后仍无退出码时用 -1 作「未知失败」哨兵，避免 _describe_return_code(None) 抛 TypeError
         logger.warning(i18n.tr("[{record_name}] 无法获取 ffmpeg 退出码，按失败处理", record_name=record_name))
         return_code = -1
     stop_time = time.strftime("%Y-%m-%d %H:%M:%S")
     if return_code == 0 or _reached_record_limit:
-        # CR-06：退出码为 0 不等于录到了东西（形态与后果见 _MIN_VALID_RECORD_BYTES 上方注释）。
-        # 产物过小即按失败处理：记失败样本、保留退避（不撤销 clear_ffmpeg_reject）。
-        # 达到单次录制时长上限的一轮也走这里——那是长直播的正常收尾，旧实现把它当挂起、
-        # 单独 return，转码/成功样本/撤销退避三条收尾全跳过。
+        # rc==0 不等于录到了东西（见 _MIN_VALID_RECORD_BYTES）：产物过小按失败处理，保留退避。
+        # 达到时长上限的一轮也走这里，按正常收尾（转码 + 成功样本 + 撤销退避）。
         _produced_bytes = _record_output_bytes(save_file_path, _split_output)
         if _produced_bytes is None:
-            # MID-2207 后半（2026-09-23）：None = 分段目录不可读（观测失败），与「找不到分段」
-            # 一样按 -1 处理——零字节校验的目的是把「rc==0 但一个字节没写」判失败，
-            # 而观测失败提供不了这个证据，按失败处理会凭空投一条假 record_error 样本。
+            # None = 分段目录不可读：与「找不到分段」一样按 -1 处理，避免凭空投假失败样本。
             _produced_bytes = -1
         if 0 <= _produced_bytes < _MIN_VALID_RECORD_BYTES:
             logger.warning(
@@ -1570,10 +1351,8 @@ def check_subprocess(
                 )
             )
             record_error(host_of(record_url))
-            # SEV-2208（2026-09-22）：本分支原样 return False，早于函数末尾的
-            # recording.discard + unregister_ffmpeg_process → _ffmpeg_processes 只增不清、
-            # recording 留下幽灵条目（面板恒显「录制中」、磁盘满判定 `if not recording:` 恒假）。
-            # 改为「先收尾后 return」；函数末尾的同样动作对已清空的集合是幂等的。
+            # 先收尾后 return：否则进程注册表只增不清、recording 留下幽灵条目。
+            # 函数末尾的同样动作对已清空的集合是幂等的。
             with record_state_lock:
                 recording.discard(record_name)
                 recording_time_list.pop(record_name, None)
@@ -1581,15 +1360,10 @@ def check_subprocess(
             return False
         if converts_to_mp4 and save_type == "TS":
             if _split_output:
-                # 2026-09-12 审查 6.1：原 utils.get_file_paths(目录) 递归扫描 + 子串匹配会把同目录下
-                # 历史残留 .srt / 已转好的 .mp4 / 早期段产物误送给 ffmpeg，再叠加 converts_mp4 缺 -n，
-                # 每条误匹配文件都触发 600s 超时挂死。现按「前缀 + _<数字序号>.<ext>」精确匹配
-                # （与 ffmpeg 分段输出 _000/_001… 对齐），序号用 _SEG_INDEX_RE 而非定长 ???
-                # （%03d 超过 999 段会输出 4 位），枚举统一走 _segment_files（MIN-2227：
-                # glob 把方括号当字符类，主播名含 `[` 时恒返回空、用户开了「自动转 mp4」
-                # 却永远拿不到 MP4，日志只说「未找到分段文件」，排查方向被彻底带偏）。
-                # MID-2207 后半：None（目录不可读）在此按「本轮无可转文件」处理——转码本身也读不到
-                # 该目录，静默跳过比抛 TypeError 丢掉整条成功收尾链路更克制。
+                # 按「前缀 + _<数字序号>.<ext>」精确匹配，不递归扫描目录：否则历史 .srt / 已转好的
+                # .mp4 会被误送 ffmpeg，每条都触发超时挂死。序号用 _SEG_INDEX_RE、枚举走 _segment_files
+                # （glob 会把方括号当字符类，主播名含 `[` 时恒返回空）。
+                # None（目录不可读）按「本轮无可转文件」处理，静默跳过而非丢掉整条成功收尾链路。
                 _ts_segments = _segment_files(save_file_path)
                 if _ts_segments is None:
                     logger.warning(
@@ -1625,10 +1399,8 @@ def check_subprocess(
             script_command = script_command.strip() + " " + " ".join(params)
             run_script(script_command)
             logger.debug("脚本命令执行结束!")
-        # 流正常结束（主播下线）＝平台健康：按房间 host 记一次成功样本（与下方失败分支配对）
+        # 流正常结束 = 平台健康：按 host 记成功样本，并撤销该源地址的探针退避（与失败分支配对）
         record_success(host_of(record_url))
-        # 与下方失败分支的 mark_ffmpeg_reject 配对：本地址实际拉流成功，撤销先前记入的
-        # 探针退避，避免窗口内明明已恢复的线路继续被跳过、白白回退到次优线路。
         try:
             clear_ffmpeg_reject(ffmpeg_command[ffmpeg_command.index("-i") + 1], platform)
         except ValueError:
@@ -1637,11 +1409,8 @@ def check_subprocess(
             )
 
     else:
-        # 退出码经 _describe_return_code 换算回有符号并附 errno 语义（Windows 上 ffmpeg 以无符号
-        # 32 位呈现，EINVAL 显示为 4294967274 而非 -22；详见 _FFMPEG_ERRNO_HINTS 上方注释），
-        # 一眼可判断是「容器/参数不匹配」还是「网络/路径」问题。
-        # MIN-2233 修复（2026-09-22）：f-string 直接传给 print_colored 时提取器扫不到本串
-        # （既非 print 首参也非 logger/tr 首参）。改为常量模板 + tr 预格式化后整体传入。
+        # 退出码先归一化并附 errno 语义，便于区分容器/参数错配与网络/路径问题。
+        # 用 tr 预格式化后整体传给 print_colored：f-string 直传时 i18n 提取器扫不到。
         color_obj.print_colored(
             i18n.tr(
                 "\n{record_name} {stop_time} 直播录制出错,返回码: {return_code}\n",
@@ -1651,23 +1420,17 @@ def check_subprocess(
             ),
             color_obj.RED,
         )
-        # —— 录制失败反馈调度器（2026-08-23 实测定稿）：
-        # ① 按房间 host 记失败样本，驱动按平台熔断与全局背压——此前录制失败不上报，
-        #   轮末还会无条件记成功样本，多房间同 host 时失败率被稀释、熔断永不触发
-        #   （实测虎牙房间秒级 403 失败循环，www.huya.com 熔断器始终 closed）；
-        # ② 快速失败（≤20s，输入打开被 CDN 拒绝的签名；拉流中断/重连耗尽通常 >60s）时，
-        #   把 ffmpeg 实际拉流地址记入探针退避：下一轮 select_source_url 跳过该线路探针、
-        #   直接尝试下一 CDN 候选。「探针 200 → ffmpeg 403」的假绿只在录制侧可观测，
-        #   不标记则房间会无限循环撞同一条死线路（实测 hs.hls.huya.com）。——
+        # 录制失败反馈调度器：
+        # ① 按 host 记失败样本，驱动平台熔断与全局背压；不上报会让多房间同 host 的失败率被稀释，
+        #    熔断永不触发（实测虎牙秒级 403 循环时 www.huya.com 熔断器始终 closed）。
+        # ② 快速失败（≤20s，输入打开被 CDN 拒绝）时把实际拉流地址记入探针退避，下一轮
+        #    select_source_url 跳过该线路。「探针 200 → ffmpeg 403」的假绿只在录制侧可见，
+        #    不标记则房间会无限重撞同一条死线路（实测 hs.hls.huya.com）。
         record_error(host_of(record_url))
-        # MID-02 修复（2026-09-20）：输出侧本地 IO 失败不得归因成「CDN 快速失败」。
-        # 输出目录不可用（权限/只读挂载/路径过长/录制途中被外部删除）时 ffmpeg 打不开输出即秒退
-        # （rc != 0），若按快速失败处理，会把一条**健康**流地址记进探针退避、并计入按 host 的
-        # 熔断失败样本，每轮重复污染统计，用户只看到「网络异常」类日志。
-        # 判据（2026-09-22 定稿）只看「输出父目录当前不存在」这一条，目录存在即判定到此结束、
-        # 不读管道（上层 start_record 已对建目录失败打 error 并跳过本轮）。父目录不存在时 ffmpeg
-        # 根本写不出任何产物，与「拉流被 CDN 拒」互斥，故这一条足以定性为本地 IO 失败；
-        # 曾设想的第二条判据（读 ffmpeg 自报的写侧特征）不可得，见模块级 MID-N01 注释。
+        # 输出侧本地 IO 失败不得归因成「CDN 快速失败」：输出目录不可用（权限/只读/路径过长/
+        # 途中被删）时 ffmpeg 打不开输出即秒退，按快速失败处理会把一条健康流地址记进探针退避，
+        # 每轮重复污染按 host 的统计。判据只看「输出父目录当前不存在」——此时 ffmpeg 写不出
+        # 任何产物，与拉流被拒互斥；上层已对建目录失败打 error 并跳过本轮。
         _output_side_failure = not os.path.isdir(os.path.dirname(save_file_path) or ".")
         if time.monotonic() - _proc_started_mono <= _FFMPEG_FAST_FAIL_SECONDS and not _output_side_failure:
             try:
@@ -1685,11 +1448,9 @@ def check_subprocess(
     return False
 
 
-# 主播名变更后同步重命名保存目录及历史录制文件：把 {保存路径}/{platform}/{old_name} 目录
-# 重命名为 {new_name}（目标已存在则逐项合并移入），并把目录树内以 "{old_name}_" 开头的录制
-# 文件（含弹幕 SRT/时间字幕等同前缀产物）与以 "_{old_name}" 结尾的标题子目录批量改名，
-# 保证文件系统命名与配置文件中的主播名一致；返回目录级操作是否成功（目录不存在视为成功，
-# 从未录制过），失败返回 False 由调用方下轮轮询重试
+# 主播名变更后同步文件系统：把 {保存路径}/{platform}/{old_name} 改名为 new_name（目标已存在
+# 则逐项合并），并批量改名以 "{old_name}_" 开头的录制文件与以 "_{old_name}" 结尾的标题子目录。
+# 返回目录级操作是否成功（目录不存在视为成功）；失败由调用方下轮重试。
 def rename_anchor_directory(old_name: str, new_name: str, platform: str) -> bool:
     if not old_name or not new_name or old_name == new_name:
         return True
@@ -1786,15 +1547,13 @@ def _rename_prefixed_entries(base_dir: str, old_name: str, new_name: str) -> Non
             )
 
 
-# 平台分派解析：把直播间地址按域名路由到对应平台的爬虫与流地址解析模块，得到本轮 port_info。
-# 自 start_record 原样搬移（原内联 if/elif 链约 700 行，超出 basedpyright 单函数条件路径
-# 复杂度上限），分支体语义未变；cookie/代理等配置项仍按模块级全局变量即时读取。
+# 平台分派：按域名把直播间地址路由到对应平台的爬虫与取流模块（原 700 行 elif 链因条件路径
+# 复杂度上限拆出）。cookie/代理等仍按模块级全局即时读取。
 # 返回 (platform, port_info, record_danmaku_args, new_record_url)：
-# - record_danmaku_args 为弹幕参数(平台相关)，进房失败为 None，由调用方传入 check_subprocess 启停弹幕；
-# - new_record_url 为「解析后需要回写配置的规范地址」：Shopee 用它落带 uid 的完整 URL，
-#   小红书用它把短链/动态路径解析出的最终直播地址写回 URL_config.ini（2026-10-04）；
-# - 无法识别的直播地址返回 None，由调用方 break 进入延迟后重试而非直接结束线程。
-# 平台解析上下文（F-01c）：承载迁移前 _resolve_platform_stream 的函数局部变量。
+# - record_danmaku_args：平台相关弹幕参数，进房失败为 None，交给 check_subprocess 启停采集；
+# - new_record_url：需回写配置的规范地址（Shopee 带 uid 的 URL、小红书短链解出的长链）；
+# - 无法识别返回 None，由调用方延迟重试而非结束线程。
+# 平台解析上下文：替代迁移前 _resolve_platform_stream 的函数局部变量
 # 60+ 平台 elif 链改成分发表后，各平台处理函数需要显式载体读写这四个结果字段。
 class _PlatformResolveContext:
     def __init__(self, record_url: str, proxy_address: str | None, record_quality: str) -> None:
@@ -1812,17 +1571,12 @@ class _PlatformResolveContext:
         self.unrecognized = False
 
 
-# 平台匹配器工厂：语义与迁移前的 `record_url.find(片段) > -1` 完全一致，多片段为 or。
+# 平台匹配器工厂：多片段为 or。
 def _match_host(*fragments: str) -> Callable[[str], bool]:
-    # M-03（2026-10-02）：匹配对象从「整串子串」收窄为「scheme://host/ 归一串」。旧写法
-    # url.find(frag) 是整串子串匹配，https://attacker.com/xhslink.com/x 会在**路径**里命中
-    # xhslink.com/ 而被路由进小红书解析（并在解析函数入口白名单校验之前，就以带凭据的
-    # headers 请求攻击者 host）。按 urlsplit 解析出的 hostname 归一后，fragment 只能与真实
-    # host 匹配，路径/query 里出现的域名词不再参与平台路由。fragment 形态（host 或其子域
-    # 后缀 + 可选尾部斜杠）在归一串上的命中语义与旧实现对全部合法输入一致：
-    #   https://live.douyin.com/1  -> https://live.douyin.com/  命中 douyin.com/
-    #   http://www.xiaohongshu.com/1 -> http://www.xiaohongshu.com/ 命中 www.xiaohongshu.com/
-    # 无 scheme 输入（准入侧未补齐的极端形态）scheme 段为空串，host 命中语义不变。
+    # 只匹配 urlsplit 解析出的 host，不匹配整串子串：否则
+    # https://attacker.com/xhslink.com/x 会在路径里命中而路由进小红书解析，
+    # 以带凭据的 headers 请求攻击者 host（SSRF）。
+    # fragment 是 host/子域后缀，与 scheme://host/ 归一串比较；无 scheme 输入同样可按 host 命中。
     def _m(url: str) -> bool:
         try:
             parts = urlsplit(url)
@@ -1837,12 +1591,9 @@ def _match_host(*fragments: str) -> Callable[[str], bool]:
     return _m
 
 
-# 取 URL **路径部分**的小写扩展名（含点），无扩展名/畸形地址返回空串。
-# SEV-03 后续（2026-09-20）：自定义流判定必须只看 path，不能看整串子串——
-# 旧写法 `".flv" in url.lower()` 让任意地址只要在 query 里塞 `?a=.flv` 就能命中自定义流分支，
-# 于是面板写入的 http://127.0.0.1:8000/x?a=.flv 会被原样送进 ffmpeg 的 -i（SSRF 投递通道）。
-# 只看 path 同时保留全部合法形态：path 以 .m3u8/.flv 结尾、后面可带任意 query/fragment
-# （如 https://cdn/x/playlist.m3u8?wsSecret=... 与 http://cdn/x/live.FLV 均照常命中）。
+# 取 URL 路径部分的小写扩展名（含点）；无扩展名或畸形地址返回空串。
+# 必须只看 path：整串子串匹配会让 ?a=.flv 形态的内网地址命中自定义流分支，
+# 被原样送进 ffmpeg 的 -i（SSRF 投递通道）。只看 path 仍兼容带 query/fragment 的合法地址。
 def _stream_path_suffix(url: str) -> str:
     try:
         path = urlsplit(url).path
@@ -1862,9 +1613,9 @@ def _match_stream_suffix(*suffixes: str) -> Callable[[str], bool]:
     return _m
 
 
-# -------------------------- 平台处理函数（F-01c 分发表条目）--------------------------
-# 每个函数对应原 elif 链的一个分支体：读 ctx 入参、写 ctx 结果字段，不再共享隐式局部变量。
-# 函数体与迁移前逐字等价（仅缩进与末尾四行回写不同），新增平台在此追加即可。
+# -------------------------- 平台处理函数（分发表条目）--------------------------
+# 每个函数对应原 elif 链的一个分支：读 ctx 入参、写 ctx 结果字段，不共享隐式局部变量。
+# 新增平台在此追加，并在 _PLATFORM_RESOLVERS 登记。
 
 
 def _resolve_douyin_com(ctx: _PlatformResolveContext) -> None:
@@ -1876,13 +1627,9 @@ def _resolve_douyin_com(ctx: _PlatformResolveContext) -> None:
     record_danmaku_args: dict[str, Any] | None = None
     new_record_url = ""
     platform = "抖音直播"
-    # WD-11 修复：限速等待必须在占用网络并发槽**之前**完成。
-    # 原写法把 _douyin_rate_limit()（内部 time.sleep 最长 douyin_min_interval=3s）放在
-    # `with semaphore:` 内部，于是 N 个抖音房间排队时，每个等待线程都占着一个网络并发槽
-    # 原地睡眠：单轮解析总耗时 ≥ 3×N 秒（80 个抖音房间即 ≥240s，远超 delay_default=120s），
-    # 表现为「开播后要等好几分钟才被检测到」，同时抵消了调度器自适应扩容的收益。
-    # 移出后仍由 douyin_rate_lock 保证「两次请求起点间隔 ≥ 3s」，风控保护不受影响
-    # （semaphore 带来的额外排队只会拉大间隔，不会缩小）。
+    # 限速等待必须在占用网络并发槽之前：放在 `with semaphore` 内会让 N 个抖音房间各占一个槽
+    # 原地睡眠（单轮 ≥3×N 秒），抵消调度器扩容收益。移出后仍由 douyin_rate_lock 保证
+    # 「两次请求起点间隔 ≥ 3s」，并发槽的额外排队只会拉大间隔。
     _douyin_rate_limit()
     with semaphore:
         if "v.douyin.com" not in record_url and "/user/" not in record_url:
@@ -1992,8 +1739,7 @@ def _resolve_huya_com(ctx: _PlatformResolveContext) -> None:
                         "subSid": int(_subSid),
                     }
             except Exception as e:
-                # MIN-2223（2026-09-22）：补 type_name —— asyncio.TimeoutError 的 str() 是 "()"、
-                # socket.timeout 是空串，只写 {e} 的日志退化成没有原因的一行。
+                # 带 type_name：部分异常 str() 为空串，只写 {e} 无法定位
                 logger.warning(i18n.tr("[虎牙直播]弹幕参数提取失败: {type_name}: {e}", type_name=type(e).__name__, e=e))
         else:
             # OD/BD/UHD 走 app 路径(profileRoom):yyid/lChannelId/lSubChannelId 由 spider 返回
@@ -2021,7 +1767,7 @@ def _resolve_huya_com(ctx: _PlatformResolveContext) -> None:
                         )
                     )
             except Exception as e:
-                # MIN-2223（2026-09-22）：同上，补 type_name
+                # 带 type_name：部分异常 str() 为空串
                 logger.warning(
                     i18n.tr(
                         "[虎牙直播]OD/BD/UHD app路径弹幕参数提取失败: {type_name}: {e}",
@@ -2036,23 +1782,17 @@ def _resolve_huya_com(ctx: _PlatformResolveContext) -> None:
 
 
 # ---------------------- 虎牙移动端分享短链（hy.fan）----------------------
-# hy.fan 是虎牙移动端分享域：路径段为纯数字时即房间号，否则是短码（如 JbmwoV），
-# 需跟随 301 跳转解析出真实房间段。两种形态都归一成 https://www.huya.com/<房间段>
-# 后委托 _resolve_huya_com —— 拉流/画质/弹幕/录制与桌面链接走同一条链路，不新增分支。
-# 刻意不在准入层改写配置行：跳转解析依赖网络，放主循环准入会把一次网络抖动放大成
-# 「配置行被注释/改写」；放解析函数内每轮重试天然兜住瞬态故障，成功结果由下方缓存摊薄。
-# 布局注记：本节函数置于 _resolve_huya_com 之后、分发表之前，与「新增平台在此追加」的
-# F-01c 约定一致；表项登记见 _PLATFORM_RESOLVERS（虎牙条目之后）。
+# 数字段即房间号，其余为短码，需跟随 301 解析；两种形态都归一成 www.huya.com/<段> 后
+# 委托 _resolve_huya_com，复用桌面链路。不在准入层改写配置行：跳转依赖网络，一次抖动
+# 会变成「配置行被注释」，放在解析函数内每轮重试更稳，结果由下方缓存摊薄。
 
-# 短码 → 房间段解析结果缓存：短链与房间的映射是稳定事实，进程内缓存避免每个监测轮都
-# 多发一次 301 跟随请求。dict 单键读写受 GIL 保护且同键写入值幂等，最坏并发后果只是
-# 重复解析一次，无需加锁；条目上界是配置里的 hy.fan 行数（含历史变体），无淘汰必要。
+# 短码 → 房间段缓存：映射稳定，进程内缓存避免每轮多发一次 301。
+# dict 单键读写受 GIL 保护且同键写入幂等，最坏只是重复解析一次，无需加锁。
 _HY_FAN_ROOM_CACHE: dict[str, str] = {}
 
 
 def _hy_fan_path_segment(record_url: str) -> str:
-    # 取 hy.fan 链接的唯一路径段（房间号或短码）；形态不合法抛 ValueError，
-    # 消息即用户日志里的失败原因——错误提示必须点名「缺什么 / 为什么不合法」。
+    # 取 hy.fan 的唯一路径段（房间号或短码）；不合法抛 ValueError，消息直接作为用户可见原因。
     try:
         path = urlsplit(record_url).path
     except ValueError:
@@ -2064,19 +1804,16 @@ def _hy_fan_path_segment(record_url: str) -> str:
     if len(segments) > 1:
         raise ValueError(i18n.tr("路径含多级目录，不是标准房间链接"))
     segment = segments[0]
-    # isascii 收紧 isalnum 的 Unicode 宽字符误判：全角数字（３０７…）不是合法房间号，
-    # 不能流向虎牙接口。与 spider.get_huya_app_stream_url 的 room_id.isdigit() 判定同口径，
-    # 这里在入口先挡一层，短码侧同理（base62 短码本身就是 ASCII）。
+    # isascii 收紧 isalnum：全角数字不是合法房间号，与下游 room_id.isdigit() 同口径，
+    # 在入口先挡一层（base62 短码本身即 ASCII）。
     if not (segment.isascii() and segment.isalnum()):
         raise ValueError(i18n.tr("房间号含非法字符"))
     return segment
 
 
 def _huya_room_segment_from_landing(final_url: str) -> str:
-    # 从短链跳转落地页提取虎牙房间段；非虎牙域 / 形态不符一律返回空串（本函数只做
-    # 「能不能提取」的判定，失败原因由调用方统一表述）。接受字母段：主播自定义号
-    # www.huya.com/<字母号> 本就是合法房间形态，下游 app 路径已有 ProfileRoom 反查
-    # 数字房间号的既有链路（spider.get_huya_app_stream_url），不在此重复实现。
+    # 从落地页提取房间段；非虎牙域 / 形态不符返回空串（只判「能否提取」，原因由调用方表述）。
+    # 接受字母段：自定义号 www.huya.com/<字母号> 是合法形态，数字房间号由下游 ProfileRoom 反查。
     try:
         parts = urlsplit(final_url)
     except ValueError:
@@ -2094,12 +1831,9 @@ def _huya_room_segment_from_landing(final_url: str) -> str:
 
 
 async def _resolve_hy_fan_room_segment(record_url: str, proxy_addr: str | None) -> str:
-    # 短码 → 真实房间段：走 async_req(redirect_url=True)，与 xhslink.com 短链解析同一契约——
-    # 成功回最终落地 URL（httpx 已跟随重定向，逐跳 SSRF 复检由 async_http 的响应钩子承担，
-    # 本函数只解析、不请求落地页）；失败回空串（网络异常 / 内网跳转拒绝已在 async_req
-    # 内部记日志），这里统一转成带原因的 ValueError 交调用方写用户日志。
-    # UA 取与 spider.get_huya_stream_data 同值的桌面 Firefox UA；不动 MOBILE_UA 那组
-    # 四处同步约定（那是虎牙流地址侧的另一条 UA）。
+    # 短码 → 房间段：走 async_req(redirect_url=True)，与 xhslink.com 同一契约——成功回最终 URL
+    # （逐跳 SSRF 复检由 async_http 响应钩子承担，本函数只解析、不请求落地页），失败回空串。
+    # UA 取与 spider.get_huya_stream_data 同值的桌面 Firefox UA，不动 MOBILE_UA 那组约定。
     final_url = await async_req(
         url=record_url,
         proxy_addr=proxy_addr,
@@ -2108,9 +1842,7 @@ async def _resolve_hy_fan_room_segment(record_url: str, proxy_addr: str | None) 
         },
         redirect_url=True,
     )
-    # async_req 声明返回是覆盖 redirect_url/cookies 组合的联合类型，redirect_url=True 的运行时
-    # 契约是「成功回最终 URL、失败回空串」（MID-2225）：按既有调用点口径 isinstance+非空收窄，
-    # 空串与非 str 一律归为「未获取到跳转地址」。
+    # 联合返回类型需按运行时契约收窄：redirect_url=True 时成功回最终 URL、失败回空串。
     if not isinstance(final_url, str) or not final_url:
         raise ValueError(i18n.tr("未获取到跳转地址"))
     segment = _huya_room_segment_from_landing(final_url)
@@ -2120,12 +1852,9 @@ async def _resolve_hy_fan_room_segment(record_url: str, proxy_addr: str | None) 
 
 
 def _resolve_hy_fan(ctx: _PlatformResolveContext) -> None:
-    # hy.fan 入口：归一为桌面链接后委托 _resolve_huya_com 回写 ctx 四字段（platform /
-    # port_info / 弹幕参数 / new_record_url），本函数不重复赋值。表项置于虎牙之后：
-    # test_resolver_table_priority_head 钉死前五项为迁移前 elif 链顺序，且 hy.fan 与
-    # www.huya.com 的匹配片段互不重叠，先后不产生遮蔽。房间线程侧 record_host 仍是
-    # hy.fan——按 host 隔离的熔断桶把「短链解析失败」与桌面链接的取流失败分开计数，
-    # 语义反而更准，不需要回填成 www.huya.com。
+    # 归一为桌面链接后委托 _resolve_huya_com 回写 ctx 四字段，本函数不重复赋值。
+    # 表项在虎牙之后：test_resolver_table_priority_head 钉死前五项顺序，且两片段不重叠。
+    # record_host 仍是 hy.fan：按 host 隔离的熔断桶把「短链解析失败」与「取流失败」分开计数。
     try:
         segment = _hy_fan_path_segment(ctx.record_url)
     except ValueError as err:
@@ -2147,7 +1876,7 @@ def _resolve_hy_fan(ctx: _PlatformResolveContext) -> None:
             try:
                 room_segment = asyncio.run(_resolve_hy_fan_room_segment(ctx.record_url, ctx.proxy_address))
             except Exception as err:
-                # reason 统一带异常类型：与 MIN-2223 口径一致（str() 为空的异常类型也要可见）
+                # reason 统一带异常类型：str() 为空的异常类型也要可见
                 logger.error(
                     i18n.tr(
                         "虎牙移动端短链解析失败，本轮跳过: {record_url} - {reason}",
@@ -2240,7 +1969,7 @@ def _resolve_live_bilibili_com(ctx: _PlatformResolveContext) -> None:
                     spider.get_bilibili_danmaku_info(url=record_url, proxy_addr=proxy_address, cookies=bili_cookie)
                 )
             except Exception as e:
-                # MIN-2223（2026-09-22）：同上，补 type_name
+                # 带 type_name：部分异常 str() 为空串
                 logger.warning(i18n.tr("[B站直播]弹幕信息获取失败: {type_name}: {e}", type_name=type(e).__name__, e=e))
                 record_danmaku_args = None
     ctx.platform = platform
@@ -2250,24 +1979,16 @@ def _resolve_live_bilibili_com(ctx: _PlatformResolveContext) -> None:
 
 
 # ---------------------- B站移动端分享短链（b23.tv）----------------------
-# b23.tv 是B站移动端分享域：路径段为纯数字时即房间号（标准 / 尾斜杠 / 带 query / http 四种
-# 形态），否则是短码（如 ZyQrgYf），需跟随 302 跳转解析出真实房间号。两种形态都归一成
-# https://live.bilibili.com/<房间号> 后委托 _resolve_live_bilibili_com —— 拉流/画质/弹幕/录制
-# 与桌面链接走同一条链路，不新增分支。与 hy.fan 同款布局：刻意不在准入层改写配置行
-# （跳转解析依赖网络，放主循环准入会把一次网络抖动放大成「配置行被注释/改写」），放解析
-# 函数内每轮重试天然兜住瞬态故障，成功结果由下方缓存摊薄。
-# 布局注记：本节函数置于 _resolve_live_bilibili_com 之后、分发表之前，与「新增平台在此追加」
-# 的 F-01c 约定一致；表项登记见 _PLATFORM_RESOLVERS（B站条目之后）。
+# 数字段即房间号，其余为短码，需跟随 302 解析；两种形态都归一成 live.bilibili.com/<房间号>
+# 后委托 _resolve_live_bilibili_com，复用桌面链路。不在准入层改写配置行（同 hy.fan）。
 
-# 短码 → 房间号解析结果缓存：短链与房间的映射是稳定事实，进程内缓存避免每个监测轮都
-# 多发一次 302 跟随请求。dict 单键读写受 GIL 保护且同键写入值幂等，最坏并发后果只是
-# 重复解析一次，无需加锁；条目上界是配置里的 b23.tv 行数（含历史变体），无淘汰必要。
+# 短码 → 房间号缓存：映射稳定，进程内缓存避免每轮多发一次 302。
+# dict 单键读写受 GIL 保护且同键写入幂等，最坏只是重复解析一次，无需加锁。
 _B23_TV_ROOM_CACHE: dict[str, str] = {}
 
 
 def _b23_tv_path_segment(record_url: str) -> str:
-    # 取 b23.tv 链接的唯一路径段（房间号或短码）；形态不合法抛 ValueError，
-    # 消息即用户日志里的失败原因——错误提示必须点名「缺什么 / 为什么不合法」。
+    # 取 b23.tv 的唯一路径段（房间号或短码）；不合法抛 ValueError，消息直接作为用户可见原因。
     try:
         path = urlsplit(record_url).path
     except ValueError:
@@ -2279,18 +2000,16 @@ def _b23_tv_path_segment(record_url: str) -> str:
     if len(segments) > 1:
         raise ValueError(i18n.tr("路径含多级目录，不是标准房间链接"))
     segment = segments[0]
-    # isascii 收紧 isalnum 的 Unicode 宽字符误判：全角数字（２２７…）不是合法房间号/短码，
-    # 不能流向B站接口。与 _hy_fan_path_segment 同口径，这里在入口先挡一层
+    # isascii 收紧 isalnum：全角数字不是合法房间号/短码，与 _hy_fan_path_segment 同口径。
     if not (segment.isascii() and segment.isalnum()):
         raise ValueError(i18n.tr("房间号含非法字符"))
     return segment
 
 
 def _bilibili_room_id_from_landing(final_url: str) -> str:
-    # 从 b23.tv 短链跳转落地页提取B站房间号；非B站直播域 / 形态不符一律返回空串（本函数只做
-    # 「能不能提取」的判定，失败原因由调用方统一表述）。与虎牙不同，live.bilibili.com 的房间号
-    # 只有纯数字形态（短号也是数字），故这里必须 isdigit；移动端落地页还存在 /h5/<房间号>
-    # 形态，一并接受。落地 query（share_session_id 等分享参数）不参与判定。
+    # 从落地页提取房间号；非B站直播域 / 形态不符返回空串（只判「能否提取」）。
+    # live.bilibili.com 的房间号只有纯数字形态（短号也是数字），另接受移动端 /h5/<房间号>；
+    # 落地 query（share_session_id 等）不参与判定。
     try:
         parts = urlsplit(final_url)
     except ValueError:
@@ -2311,12 +2030,8 @@ def _bilibili_room_id_from_landing(final_url: str) -> str:
 
 
 async def _resolve_b23_tv_room_segment(record_url: str, proxy_addr: str | None) -> str:
-    # 短码 → 真实房间号：走 async_req(redirect_url=True)，与 hy.fan / xhslink.com 短链解析
-    # 同一契约——成功回最终落地 URL（httpx 已跟随重定向，逐跳 SSRF 复检由 async_http 的
-    # 响应钩子承担，本函数只解析、不请求落地页）；失败回空串（网络异常 / 内网跳转拒绝已在
-    # async_req 内部记日志），这里统一转成带原因的 ValueError 交调用方写用户日志。
-    # UA 取与 spider.get_bilibili_room_info 同值的桌面 Firefox UA；b23.tv 是纯 302 跳转服务，
-    # 不校验 UA。
+    # 短码 → 房间号：走 async_req(redirect_url=True)，与 hy.fan 同一契约（只解析、不请求落地页）。
+    # UA 取与 spider.get_bilibili_room_info 同值的桌面 Firefox UA；b23.tv 是纯 302 服务、不校验 UA。
     final_url = await async_req(
         url=record_url,
         proxy_addr=proxy_addr,
@@ -2325,9 +2040,7 @@ async def _resolve_b23_tv_room_segment(record_url: str, proxy_addr: str | None) 
         },
         redirect_url=True,
     )
-    # async_req 声明返回是覆盖 redirect_url/cookies 组合的联合类型，redirect_url=True 的运行时
-    # 契约是「成功回最终 URL、失败回空串」（MID-2225）：按既有调用点口径 isinstance+非空收窄，
-    # 空串与非 str 一律归为「未获取到跳转地址」。
+    # 联合返回类型需按运行时契约收窄：redirect_url=True 时成功回最终 URL、失败回空串。
     if not isinstance(final_url, str) or not final_url:
         raise ValueError(i18n.tr("未获取到跳转地址"))
     room_id = _bilibili_room_id_from_landing(final_url)
@@ -2337,11 +2050,9 @@ async def _resolve_b23_tv_room_segment(record_url: str, proxy_addr: str | None) 
 
 
 def _resolve_b23_tv(ctx: _PlatformResolveContext) -> None:
-    # b23.tv 入口：归一为桌面链接后委托 _resolve_live_bilibili_com 回写 ctx 四字段（platform /
-    # port_info / 弹幕参数 / new_record_url），本函数不重复赋值。表项置于B站之后：两者匹配
-    # 片段互不重叠，先后不产生遮蔽。房间线程侧 record_host 仍是 b23.tv——按 host 隔离的
-    # 熔断桶把「短链解析失败」与桌面链接的取流失败分开计数，语义反而更准，不需要回填成
-    # live.bilibili.com（与 _resolve_hy_fan 同判据）。
+    # 归一为桌面链接后委托 _resolve_live_bilibili_com 回写 ctx 四字段，本函数不重复赋值。
+    # 表项在B站之后：两片段不重叠，先后不产生遮蔽。record_host 仍是 b23.tv——按 host 隔离的
+    # 熔断桶把「短链解析失败」与「取流失败」分开计数。
     try:
         segment = _b23_tv_path_segment(ctx.record_url)
     except ValueError as err:
@@ -2363,7 +2074,7 @@ def _resolve_b23_tv(ctx: _PlatformResolveContext) -> None:
             try:
                 room_id = asyncio.run(_resolve_b23_tv_room_segment(ctx.record_url, ctx.proxy_address))
             except Exception as err:
-                # reason 统一带异常类型：与 MIN-2223 口径一致（str() 为空的异常类型也要可见）
+                # reason 统一带异常类型：str() 为空的异常类型也要可见
                 logger.error(
                     i18n.tr(
                         "B站移动端短链解析失败，本轮跳过: {record_url} - {reason}",
@@ -2388,9 +2099,8 @@ def _resolve_xhslink_com(ctx: _PlatformResolveContext) -> None:
     platform = "小红书直播"
     with semaphore:
         port_info = asyncio.run(spider.get_xhs_stream_url(record_url, proxy_addr=proxy_address, cookies=xhs_cookie))
-    # 2026-10-04 小红书链接归一化批次：解析器给出结构化错误类别（链接不是直播/非官方域/短链
-    # 重定向失败等），这些都不是「主播没开播」，必须在分派侧按未识别处理并留一条可检索告警——
-    # 否则 start_record 会把它们当正常离线轮空转，只看到「等待直播」，永远指不到链接本身有问题。
+    # 解析器返回结构化错误（非直播/非官方域/短链重定向失败）时按未识别处理并告警：
+    # 否则会被当成正常离线轮空转，只看到「等待直播」，指不到链接本身的问题。
     _error = str(port_info.get("error") or "")
     if _error:
         logger.warning(
@@ -2401,8 +2111,7 @@ def _resolve_xhslink_com(ctx: _PlatformResolveContext) -> None:
             )
         )
         ctx.unrecognized = True
-    # 规范地址回写：短链/动态路径解析出的最终直播地址经 new_record_url 落回 URL_config.ini
-    # （沿用 Shopee 的既有回写通道），后续轮次直接用长链，省掉每轮一次短链跳转请求。
+    # 规范地址经 new_record_url 落回 URL_config.ini，后续轮次直接用长链，省掉每轮一次跳转。
     _normalized = str(port_info.get("normalized_url") or "")
     if _normalized and _normalized != record_url:
         new_record_url = _normalized
@@ -2474,7 +2183,7 @@ def _resolve_sooplive_co_kr(ctx: _PlatformResolveContext) -> None:
                             cast(str, json_data["new_cookies"]),
                         )
                 except (configparser.Error, OSError) as e:
-                    # MIN-2229（2026-09-22）：同上，回写失败只告警（统一口径见 _resolve_platform_stream）
+                    # 回写失败只告警（统一口径见 _resolve_platform_stream）
                     logger.warning(
                         i18n.tr(
                             "凭据回写失败（不影响本轮录制）: {type_name}: {e}",
@@ -2501,9 +2210,7 @@ def _resolve_cc_163_com(ctx: _PlatformResolveContext) -> None:
     new_record_url = ""
     platform = "网易CC直播"
     with semaphore:
-        # MIN-2228 修复（2026-09-22）：补透传 proxy_address —— 本解析器是全表唯一不传代理的
-        # （spider.get_netease_stream_data 的签名接受 proxy_addr，隔壁所有平台都传），
-        # 用户配了代理时网易 CC 仍走本机直连，取不到网址内容。
+        # 必须透传 proxy_address：否则用户配了代理时网易 CC 仍走本机直连，取不到内容。
         json_data = asyncio.run(
             spider.get_netease_stream_data(url=record_url, proxy_addr=proxy_address, cookies=netease_cookie)
         )
@@ -2617,10 +2324,8 @@ def _resolve_flextv_co_kr(ctx: _PlatformResolveContext) -> None:
                 )
             )
             if json_data and json_data.get("new_cookies"):
-                # MIN-2229 补漏（2026-09-23）：popkontv / sooplive / twitcasting 四条同源回写里，
-                # 本条此前没包异常（统一口径见 _resolve_platform_stream 的 MIN-2229 注释）——
-                # 写盘失败会冒到那里的通用 except，把已拿到的流地址整轮丢弃并计入按 host 的
-                # 熔断失败样本。回归锁：tests/test_regression_2026_09_22_main.py
+                # 回写失败只告警：冒到外层会把已拿到的流地址整轮丢弃，并计入按 host 的熔断样本。
+                # 回归锁：tests/test_regression_2026_09_22_main.py
                 #   ::test_flextv_cookie_writeback_failure_keeps_stream_url
                 try:
                     with file_update_lock:  # 与主循环 config.read/其他写入方互斥，防止半写
@@ -2684,7 +2389,7 @@ def _resolve_popkontv_com(ctx: _PlatformResolveContext) -> None:
                 )
             )
             if port_info and port_info.get("new_token"):
-                # MIN-2229（2026-09-22）：回写是缓存优化，失败不得连累本轮已拿到的流地址
+                # 回写是缓存优化，失败不得连累本轮已拿到的流地址
                 try:
                     with file_update_lock:  # 与主循环 config.read/其他写入方互斥，防止半写
                         utils.update_config(
@@ -2732,11 +2437,8 @@ def _resolve_twitcasting_tv(ctx: _PlatformResolveContext) -> None:
         )
         port_info = asyncio.run(stream.get_stream_url(json_data, record_quality, spec=False))
 
-        # MID-2213 修复（2026-09-22）：回写源由 port_info 改为 json_data。
-        # stream.get_stream_url 在真正取到流时**新建** dict（只有 anchor_name/is_live/record_url
-        # 等键），`new_cookies` 只存在于 spider 返回的 json_data 上；读 port_info 意味着
-        # 「恰好在播时永不落盘」→ 每 30-120s 重跑一次 login_twitcasting 明文账密 POST。
-        # 同函数群的 SOOP / Flextv 读的就是 json_data，此处对齐同构。
+        # 回写源必须是 json_data：stream.get_stream_url 取到流时会新建 dict，new_cookies 只存在
+        # 于 spider 返回值上；读 port_info 会导致「恰好在播时永不落盘」，反复重跑账密登录。
         # 回归锁：tests/test_regression_2026_09_22_main.py::test_twitcasting_persists_cookie_when_live
         if json_data and json_data.get("new_cookies"):
             try:
@@ -2748,7 +2450,7 @@ def _resolve_twitcasting_tv(ctx: _PlatformResolveContext) -> None:
                         new_value=cast(str, json_data["new_cookies"]),
                     )
             except (configparser.Error, OSError) as e:
-                # MIN-2229（2026-09-22）：回写失败不得丢弃本轮已拿到的流地址
+                # 回写失败不得丢弃本轮已拿到的流地址
                 logger.warning(
                     i18n.tr(
                         "凭据回写失败（不影响本轮录制）: {type_name}: {e}",
@@ -3193,12 +2895,10 @@ def _resolve_h_catshow168_com(ctx: _PlatformResolveContext) -> None:
     ctx.new_record_url = new_record_url
 
 
-# Shopee「带 uid 的完整 URL」构造（MID-2226）：base 取原地址 `?` 之前的部分，
-# uid 段取自接口响应（session_uid 是响应值），属半可信输入 —— 产物会经 need_update_line_list
-# 落进 URL_config.ini，而主循环用 `|` 分行、用 `,` / `，` 分字段、用换行分行：含 `|` 会截断
-# 本行、含换行/CR 会**往配置文件追加任意新行**（把接口返回值升级成配置注入面）。
-# 故做两道断言：① uid 段字符集白名单；② 拼好的 URL 与 base 同源（host 不变）。
-# 任一不过 → 返回空串，调用方据此不回填 uid 段（本轮按原 record_url 处理，与「未拿到 uid」一致）。
+# Shopee 带 uid 的 URL 构造：uid 来自接口响应（半可信），且会经 need_update_line_list 落进
+# URL_config.ini（`|` 分行、`,`/`，` 分字段、换行分行）。含 `|` 会截断本行、含换行会追加
+# 任意新行，等于把接口返回值升级成配置注入面。故做两道断言：① uid 字符集白名单；
+# ② 拼好的 URL 与 base 同源（host 不变）。任一不过返回空串，本轮按原 record_url 处理。
 # 回归锁：tests/test_regression_2026_09_22_main.py::test_shopee_new_record_url_is_sanitized
 _SHOPEE_UID_SAFE_RE = re.compile(r"^[A-Za-z0-9_\-&=%./:]+$")
 
@@ -3241,8 +2941,7 @@ def _resolve_live_shopee(ctx: _PlatformResolveContext) -> None:
             spider.get_shopee_stream_url(url=record_url, proxy_addr=proxy_address, cookies=shopee_cookie)
         )
         if port_info.get("uid"):
-            # MID-2226 修复（2026-09-22）：拼前做同源 + 字符集断言，不合格就丢弃 uid 段
-            # （返回空串 → 本轮不回填配置）。判据与理由见 _build_shopee_record_url 上方注释。
+            # 拼前做同源 + 字符集断言，不合格就丢弃 uid 段（返回空串 → 本轮不回填配置）
             new_record_url = _build_shopee_record_url(record_url, str(port_info["uid"]))
     ctx.platform = platform
     ctx.port_info = port_info
@@ -3421,8 +3120,7 @@ def _resolve_custom_stream(ctx: _PlatformResolveContext) -> None:
         "is_live": True,
         "record_url": record_url,
     }
-    # SEV-03 后续：流地址键的归属与匹配器同一判据（路径扩展名），不再用整串子串——
-    # 否则 https://cdn/x.m3u8?f=.flv 会被写进 flv_url，把 HLS 清单当 FLV 直下。
+    # 流地址键的归属与匹配器同一判据（路径扩展名）：否则 ?f=.flv 会让 HLS 清单被写进 flv_url。
     if _stream_path_suffix(record_url) == ".flv":
         port_info["flv_url"] = record_url
     else:
@@ -3438,49 +3136,32 @@ def _resolve_unrecognized(ctx: _PlatformResolveContext) -> None:
     logger.error(
         i18n.tr(
             "无法识别的直播地址，本轮跳过: {record_url}",
-            # MIN-2231 修复（2026-09-22）：这里入日志的是**原始 URL**，而自定义流地址可以写成
-            # `https://u:p@host/x.m3u8`（userinfo 段），凭据会明文进 PlayURL.log /
-            # streamget.log（300KB 轮转、保留多份）。入日志前一律脱敏。
+            # 自定义流地址可带 user:pass@，入 PlayURL.log / streamget.log 前必须脱敏（轮转文件长期保留）。
             record_url=utils.mask_credentials(record_url),
         )
     )
     ctx.unrecognized = True
 
 
-# 平台分发表（F-01c）：（匹配器, 处理函数）按优先级排列，替代原 60+ 层 elif 链。
-# 迁移收益：①新平台接入 = 追加一个处理函数 + 一条表项，不再往 600 行链里插分支；
-# ②处理函数可单独 import 与单测；③匹配顺序显式、可断言（见 tests）。
-# 注意：表项顺序即优先级，与迁移前 elif 链完全一致，调整顺序等于调整平台判定优先级。
+# 平台分发表：（匹配器, 处理函数）按优先级排列，替代原 60+ 层 elif 链。
+# 新增平台 = 追加处理函数 + 一条表项；表项顺序即优先级，调整顺序等于调整平台判定优先级。
 _PLATFORM_RESOLVERS: tuple[tuple[Callable[[str], bool], Callable[[_PlatformResolveContext], None]], ...] = (
     (_match_host("douyin.com/"), _resolve_douyin_com),
-    # ↓ SEV-2203 修复（2026-09-22）：以下 7 条原本钉死 `https://` 前缀（如 "https://www.douyu.com/"），
-    # 而准入侧只在 URL **完全没有** `://` 时才补 scheme（`"https://" + url if "://" not in url else url`），
-    # 匹配器又是纯子串 `any(url.find(frag) > -1 ...)`。于是用户写 `http://www.douyu.com/9422371` 时
-    # host 命中 PLATFORM_HOST → 起线程 → 7 条钉死 https 的表项全不命中 → 落到 _resolve_unrecognized
-    # → sleep + continue 无限空转（永不录制、不记 record_error、白占监控位）。
-    # 同表 `douyin.com/` / `kugou.com/` 等表项本就不带 scheme，证明「scheme 无关匹配」才是本意。
+    # 片段一律 scheme 无关：准入侧只在 URL 完全没有 `://` 时补 scheme，写死 https:// 会让
+    # http:// 形态命中白名单却落不到解析器，无限空转（不录制、不计失败样本）。
     # 回归锁：tests/test_regression_2026_09_22_main.py::test_every_platform_host_matches_without_scheme
     (_match_host("www.tiktok.com/"), _resolve_tiktok_com),
     (_match_host("live.kuaishou.com/"), _resolve_live_kuaishou_com),
     (_match_host("www.huya.com/"), _resolve_huya_com),
-    # 虎牙移动端分享短链：路径段是房间号或短码，短码先经 301 跳转解析出真实房间段，
-    # 再归一成 www.huya.com 链接委托 _resolve_huya_com（与斗鱼 m.douyu.com「同 resolver」
-    # 思路同源，只是多了短码解析一步，见 _resolve_hy_fan）。PLATFORM_HOST 已同批登记
-    # hy.fan（MID-04 契约：白名单每项必被某个 resolver 片段命中）。
+    # 虎牙移动端短链：先解析短码再归一为桌面链接，见 _resolve_hy_fan。白名单已登记 hy.fan。
     (_match_host("hy.fan/"), _resolve_hy_fan),
-    # 斗鱼移动端域名与 www 同表项：二者只影响 URL 形态，解析与取流链路完全一致
-    # （同一个 _resolve_douyu_com），不新增分支。
+    # 斗鱼移动端与 www 共用 _resolve_douyu_com，只影响 URL 形态。
     (_match_host("www.douyu.com/", "m.douyu.com/"), _resolve_douyu_com),
     (_match_host("www.yy.com/"), _resolve_yy_com),
     (_match_host("live.bilibili.com/"), _resolve_live_bilibili_com),
-    # B站移动端分享短链：与桌面链路同源，只是多了短码解析一步，见 _resolve_b23_tv。
-    # PLATFORM_HOST 已同批登记 b23.tv（MID-04 契约：白名单每项必被某个 resolver 片段命中）。
+    # B站移动端短链：与桌面链路同源，见 _resolve_b23_tv。白名单已登记 b23.tv。
     (_match_host("b23.tv/"), _resolve_b23_tv),
-    # MID-04（2026-09-20）+ SEV-2203 残留（2026-09-23）：两个片段一律 scheme 无关。
-    # 白名单里的 xhslink.com 不限协议、get_xhs_note_info 侧判据也是 "xhslink.com" in url，
-    # 而本表项曾写死 http://、第二个片段曾留着 https:// —— 于是 https://xhslink.com/... 与
-    # http://www.xiaohongshu.com/1 都能被准入却落不到解析器上、无限空转。
-    # 准入只按 host，分派不得按协议（两种协议由回归锁各自覆盖）。
+    # 两个片段均 scheme 无关：准入只按 host，分派不得按协议（两种协议均有回归覆盖）。
     (_match_host("xhslink.com/", "www.xiaohongshu.com/"), _resolve_xhslink_com),
     (_match_host("www.bigo.tv/", "slink.bigovideo.tv/"), _resolve_bigo_tv),
     (_match_host("app.blued.cn/"), _resolve_app_blued_cn),
@@ -3503,10 +3184,7 @@ _PLATFORM_RESOLVERS: tuple[tuple[Callable[[str], bool], Callable[[_PlatformResol
     (_match_host("7u66.com/"), _resolve_n7u66_com),
     (_match_host("showroom-live.com/"), _resolve_showroom_live_com),
     (_match_host("live.acfun.cn/", "m.acfun.cn/"), _resolve_live_acfun_cn),
-    # MID-04 修复（2026-09-20）：白名单同时列了 live.tlclw.com 与 wap.tlclw.com，
-    # 而表项只写 live 子域 → wap 形态永久空转。解析侧 get_changliao_stream_url 只取
-    # URL 末段的房间号、API 域名固定为 wap.tlclw.com，两个子域都是合法入参
-    # （与 7u66.com / ybw1666.com 两条表项的宽松写法同口径）。
+    # 白名单含 live/wap 两个子域，解析侧只取末段房间号，故片段放宽到 tlclw.com/。
     (_match_host("tlclw.com/"), _resolve_live_tlclw_com),
     (_match_host("ybw1666.com/"), _resolve_ybw1666_com),
     (_match_host("www.inke.cn/"), _resolve_inke_cn),
@@ -3522,9 +3200,7 @@ _PLATFORM_RESOLVERS: tuple[tuple[Callable[[str], bool], Callable[[_PlatformResol
     (_match_host("h.catshow168.com/"), _resolve_h_catshow168_com),
     (_match_host("live.shopee", "shp.ee/"), _resolve_live_shopee),
     (_match_host("www.youtube.com/", "youtu.be/"), _resolve_youtube_com),
-    # MID-04 修复（2026-09-20）：补 huodong.m.taobao.com —— 它是 PLATFORM_HOST 白名单里的
-    # 淘宝直播分享页 host（get_taobao_stream_url 的 Referer 即该域名，README 亦列淘宝为支持平台），
-    # 但表项只写了 tb.cn / tbzb.taobao.com，于是用户按白名单配置的这类地址永远落不到解析器上。
+    # 补 huodong.m.taobao.com：它是白名单里的淘宝分享页 host，也是取流 Referer。
     (_match_host("tb.cn", "tbzb.taobao.com", "huodong.m.taobao.com"), _resolve_tb_cn),
     (_match_host("3.cn", "m.jd.com"), _resolve_n3_cn),
     (_match_host("faceit.com/"), _resolve_faceit_com),
@@ -3536,19 +3212,16 @@ _PLATFORM_RESOLVERS: tuple[tuple[Callable[[str], bool], Callable[[_PlatformResol
 )
 
 
-# 按直播间地址分派到对应平台解析：返回 (平台名, 流信息, 弹幕参数, Shopee 更新用 URL)；
-# 地址无法识别时返回 None（调用方延迟重试）
+# 按地址分派到平台解析；无法识别返回 None（调用方延迟重试）
 def _resolve_platform_stream(
     record_url: str, proxy_address: str | None, record_quality: str
 ) -> tuple[str, dict[str, Any], dict[str, Any] | None, str] | None:
     ctx = _PlatformResolveContext(record_url, proxy_address, record_quality)
     for matcher, handler in _PLATFORM_RESOLVERS:
         if matcher(record_url):
-            # MIN-2229 修复（2026-09-22）：handler 不再「裸调」。平台解析函数内部会做
-            # cookie / token 回写（sooplive / twitcasting / popkontv 等），回写走 utils.update_config
-            # → config.write(buf) 未包异常；Python 3.13+ 含分隔符的键名会抛 InvalidWriteError。
-            # 一次本地写盘失败就把**已经拿到的流地址**整轮丢弃，并在调用方记 record_error(record_host)
-            # ——把磁盘/权限问题计入按 host 的网络熔断样本。回写只是缓存优化，失败只告警。
+            # handler 必须包异常：内部 cookie/token 回写会走 utils.update_config（未包异常）。
+            # 一次写盘失败就会把已拿到的流地址整轮丢弃，并把磁盘/权限问题计入按 host 的熔断样本。
+            # 回写只是缓存优化，失败只告警。
             try:
                 handler(ctx)
             except Exception as e:
@@ -3563,13 +3236,9 @@ def _resolve_platform_stream(
                 ctx.unrecognized = True
             break
     else:
-        # 本分支的真实语义是「准入 host 命中 PLATFORM_HOST，但无任何匹配解析器」——并非不可达：
-        # 准入按 `url_host in PLATFORM_HOST` 精确 host，分派按子串，两者口径不同，任何
-        # 「host 在白名单、但所有表项片段都不命中」的地址都会落到这里（历史实例：表项钉死
-        # https:// 时遇 http:// 形态；xhslink.com / wap.tlclw.com / huodong.m.taobao.com 亦然）。
-        # SEV-2203（2026-09-22）同步静态锁见
-        # tests/test_regression_2026_09_22_main.py::test_every_platform_host_matches_without_scheme。
-        # 返回 None 由调用方延迟后重试
+        # 准入按精确 host、分派按片段，口径不同：白名单命中但无解析器的地址会落到这里
+        # （历史上有 http:// 遇 https:// 钉死、xhslink.com、wap.tlclw.com 等）。
+        # 静态锁：tests/test_regression_2026_09_22_main.py::test_every_platform_host_matches_without_scheme
         _resolve_unrecognized(ctx)
     if ctx.unrecognized:
         return None
@@ -3583,14 +3252,11 @@ def _build_ffmpeg_output_args(
     split_time: str,
     is_audio: bool = False,
 ) -> list[str]:
-    # 统一 5 条原本散落各分支的 ffmpeg「输出侧」参数构造逻辑（音频 MP3/M4A + 视频 TS/FLV/MKV/MP4）。
-    # 输入级选项（-reconnect*/-headers/-tls_verify/-http_proxy）与 save_file_path / 时间戳 now
-    # 的构造仍留在 start_record 内，本函数纯做「输出参数」拼装，可独立测试且行为可逆。
-    # 容器映射统一查 SEGMENT_FORMAT_BY_SUFFIX，杜绝历史上「.mp3 装进 MP4 / .ts 装进 ipod」
-    # 的静默错封装（CODE_REVIEW P0 事故根因：5 份复制粘贴，改一处漏四处）。
+    # 输出侧参数统一在此拼装（音频 MP3/M4A + 视频 TS/FLV/MKV/MP4）；输入级选项与文件名/时间戳
+    # 仍由 start_record 负责。容器一律查 SEGMENT_FORMAT_BY_SUFFIX，杜绝「.mp3 装进 MP4 /
+    # .ts 装进 ipod」这类静默错封装（历史上 5 份复制粘贴，改一处漏四处）。
     if is_audio:
-        # 纯音频：record_save_type 含 MP3 → libmp3lame + mp3；其余（M4A / 纯音频平台默认）
-        # → aac + aac_adtstoasc + ipod。扩展名由调用方按同条件推导，三方一致。
+        # 纯音频：含 MP3 → libmp3lame + mp3；其余（M4A / 纯音频平台）→ aac + aac_adtstoasc + ipod
         if "MP3" in record_save_type:
             if split_video_by_time:
                 return [
@@ -3646,7 +3312,7 @@ def _build_ffmpeg_output_args(
             save_file_path,
         ]
 
-    # 视频容器：默认 TS（含 record_save_type 为 TS / 其他未知值）
+    # 视频容器：FLV / MKV / MP4 显式分支，其余（TS 或未知值）走默认 TS
     if record_save_type == "FLV":
         if split_video_by_time:
             return [
@@ -3761,13 +3427,11 @@ def _build_ffmpeg_output_args(
     return ["-c:v", "copy", "-c:a", "copy", "-map", "0", "-f", "mpegts", save_file_path]
 
 
-# 输出文件名各维度差异的单一定义点（F-01）。
-# 历史教训：文件名 / 时间戳格式 / 分段序号曾在 5 条保存类型分支里各写一份，
-# 任何一处调整都要人工比对 5 份复制粘贴（CODE_REVIEW 的 `-segment_format`
-# 两处互换 P0 事故即源于此）。此处把差异收敛成三张查表，分支只负责查表。
+# 输出文件名差异的单一定义点：扩展名与分段时戳格式各一张查表，分支只负责查表。
+# [历史注] 这两项曾在 5 条保存类型分支里各写一份，`-segment_format` 两处互换的 P0 事故即源于此。
 _EXTENSION_BY_SAVE_TYPE: dict[str, str] = {"FLV": "flv", "MKV": "mkv", "MP4": "mp4"}
-# 分段文件名的时间戳格式：FLV 沿用历史 %y%m%d_%H%M%S，其余用 %Y-%m-%d_%H-%M-%S。
-# 二者仅影响文件名观感（非分段沿用外层 now，格式恒为 %y%m%d_%H%M%S）。
+# 分段文件名时戳格式：FLV 沿用历史 %y%m%d_%H%M%S，其余 %Y-%m-%d_%H-%M-%S；
+# 非分段沿用外层 now，格式恒为 %y%m%d_%H%M%S。
 _SEGMENT_NOW_FORMAT_BY_SAVE_TYPE: dict[str, str] = {
     "FLV": "%y%m%d_%H%M%S",
     "MKV": "%Y-%m-%d_%H-%M-%S",
@@ -3777,13 +3441,9 @@ _SEGMENT_NOW_FORMAT_BY_SAVE_TYPE: dict[str, str] = {
 _DEFAULT_SEGMENT_NOW_FORMAT = "%Y-%m-%d_%H-%M-%S"
 
 
-# 输出文件名模板的 `%` 兜底清洗（SEV-2202，2026-09-22）：ffmpeg 的 segment muxer 会把
-# 输出路径当成 printf 风格模板解析——除末尾的序号占位符（`_%03d` / `_%02d`）之外还残留裸 `%`
-# 时，ffmpeg 直接以「Invalid argument」退出（本机 ffmpeg/ffmpeg.exe 实测 rc=-22），分段录制
-# 100% 失败；且失败码会被 _describe_return_code 误判为「容器/编码器不匹配」，进而落入
-# _FFMPEG_FAST_FAIL_SECONDS 的「CDN 快速失败」，把一条健康的线路拉黑并触发 host 级熔断。
-# rstr 已把 `%` 纳入过滤（见其上方注释），但昵称/标题还可能来自旧配置、手工改名或平台原样
-# 返回值，故在拼进模板前再剥一层，并留一条可检索的告警。
+# 输出文件名模板的 `%` 兜底清洗：segment muxer 把输出路径当 printf 模板，除末尾 `_%03d`/
+# `_%02d` 外残留裸 `%` 会直接 rc=-22，且被误判成容器不匹配 → CDN 快速失败 → 健康线路被拉黑。
+# rstr 已过滤 `%`，但昵称/标题还可能来自旧配置、手工改名或平台原样返回，故拼模板前再剥一层。
 # 回归锁：tests/test_regression_2026_09_22_main.py::test_segment_template_has_single_percent_placeholder
 def _sanitize_output_name_base(base: str) -> str:
     if "%" not in base:
@@ -3793,9 +3453,8 @@ def _sanitize_output_name_base(base: str) -> str:
     return cleaned
 
 
-# 输出文件路径构造（F-01）：把 5 条分支各自的 filename/save_file_path 拼装收敛为单一实现。
-# is_audio 时扩展名与序号占位符走音频口径（.mp3/.m4a、_%02d/_00）；
-# 视频按保存类型查表，未知类型回落 ts（与 _build_ffmpeg_output_args 的容器裁决一致）。
+# 输出文件路径构造：音频走 .mp3/.m4a 与 _%02d/_00，视频按保存类型查表、未知值回落 ts
+# （与 _build_ffmpeg_output_args 的容器裁决一致）。
 def _build_record_output_path(
     full_path: str,
     anchor_name: str,
@@ -3806,11 +3465,10 @@ def _build_record_output_path(
     is_audio: bool = False,
 ) -> str:
     if is_audio:
-        # 扩展名必须与 _build_ffmpeg_output_args 实际选用的编码器 / 容器一致，
-        # 否则出现「.mp3 文件里装 AAC/MP4」这类三方错配（播放器按扩展名解复用必失败）
+        # 扩展名必须与 _build_ffmpeg_output_args 选用的编码器/容器一致，否则出现「.mp3 里装 AAC/MP4」
         extension = "mp3" if "MP3" in record_save_type else "m4a"
         name_format = "_%02d" if split_video_by_time else "_00"
-        # SEV-2202（2026-09-22）：模板里只允许保留 `name_format` 这一个占位符。
+        # 模板里只允许保留 name_format 这一个占位符
         base_name = _sanitize_output_name_base(f"{anchor_name}_{title_in_name}{now}")
         return f"{full_path}/{base_name}{name_format}.{extension}"
 
@@ -3819,19 +3477,17 @@ def _build_record_output_path(
         seg_now = time.strftime(
             _SEGMENT_NOW_FORMAT_BY_SAVE_TYPE.get(record_save_type, _DEFAULT_SEGMENT_NOW_FORMAT), time.localtime()
         )
-        # SEV-2202（2026-09-22）：分段模板里只允许保留下面这一个 `_%03d`，其余 `%` 一律剥掉。
+        # 分段模板只允许保留 _%03d，其余 % 一律剥掉
         base_name = _sanitize_output_name_base(f"{anchor_name}_{title_in_name}{seg_now}")
         return f"{full_path}/{base_name}_%03d.{extension}"
     # 非分段：FLV 保留历史 _00 序号后缀（与直下 FLV 命名对齐），其余保存类型无该后缀
     plain_suffix = "_00" if record_save_type == "FLV" else ""
-    # 非分段落盘不经过 segment muxer，但仍走同一清洗：文件名里带 `%` 会让后续
-    # 转封装 / 合并步骤（同样按模板语义解析）在别的环节再炸一次（SEV-2202）。
+    # 非分段不经过 segment muxer，但仍走同一清洗：带 % 会让后续转封装/合并在别的环节再炸一次
     base_name = _sanitize_output_name_base(f"{anchor_name}_{title_in_name}{now}")
     return f"{full_path}/{base_name}{plain_suffix}.{extension}"
 
 
-# ffmpeg 网络 / 缓冲参数取值（F-01）：海外平台 CDN 往返延迟高、GOP 探测更慢，
-# 统一放大超时与探测窗口，避免 ffmpeg 在握手阶段就判超时退出。
+# 海外平台 CDN 往返延迟高、GOP 探测更慢，统一放大超时与探测窗口，避免握手阶段超时退出。
 def _ffmpeg_network_tuning(is_overseas: bool) -> dict[str, str]:
     if is_overseas:
         return {
@@ -3850,11 +3506,8 @@ def _ffmpeg_network_tuning(is_overseas: bool) -> dict[str, str]:
     }
 
 
-# ffmpeg「输入侧」参数构造（F-01 第二阶段）：与 _build_ffmpeg_output_args 配套，
-# 把散落在 start_record 内联的 -reconnect* / -headers / -tls_verify / -http_proxy
-# 拼装收敛为纯函数，可独立测试且行为可逆。
-# 参数顺序敏感：选项增删会移动后续下标，故全部按锚点（`-i` 下标 / 列表头插入）定位，
-# 不用裸数字下标（F-02 已修过一处由此静默插错位置的问题）。
+# ffmpeg 输入侧参数构造：把 -reconnect* / -headers / -tls_verify / -http_proxy 收敛为纯函数。
+# 参数顺序敏感，一律按锚点（`-i` 下标 / 列表头插入）定位，不用裸数字下标。
 def _build_ffmpeg_input_args(
     real_url: str,
     user_agent: str,
@@ -3863,12 +3516,8 @@ def _build_ffmpeg_input_args(
     tls_verify: bool = True,
     proxy_address: str | None = None,
 ) -> list[str]:
-    # FFmpeg 9.0 兼容说明：
-    # - 9.0 移除的 CLI 参数（-vsync/-top/-qphist/-filter_complex_script/
-    #   -adrift_threshold）本命令均未使用；所列参数在 9.0 全部保留。
-    # - 9.0 起 TLS 证书验证默认开启：是否插入 -tls_verify 0 由调用方按
-    #   get_effective_ssl_verify(platform) 裁决后经 tls_verify 传入。
-    # - 原命令中冗余的「-v verbose」已移除：其后的 -loglevel error 会覆盖之，属死参数。
+    # FFmpeg 9.0 兼容：未使用 9.0 移除的 CLI 参数；TLS 校验默认开启，是否插 -tls_verify 0
+    # 由调用方按 get_effective_ssl_verify(platform) 裁决；冗余的 -v verbose 已移除。
     command = [
         "ffmpeg",
         "-y",
@@ -3879,11 +3528,8 @@ def _build_ffmpeg_input_args(
         "-hide_banner",
         "-user_agent",
         user_agent,
-        # 2026-09-12 审查（低危）：移除 file 协议。
-        # 本项目输入恒为 http(s)/rtmp 直播流，file 从不使用；
-        # 放行它意味着「URL 可控」时 ffmpeg 可读写本地文件
-        # （自定义流地址来自用户配置/平台返回，属不可信输入面）。
-        # 按最小权限收敛；crypto 需保留（HLS 分片解密）。
+        # 协议白名单按最小权限收敛：输入恒为 http(s)/rtmp 直播流，放行 file 会让可控 URL
+        # 读写本地文件；crypto 必须保留（HLS 分片解密）。
         "-protocol_whitelist",
         "rtmp,crypto,http,https,tcp,tls,udp,rtp,httpproxy",
         "-analyzeduration",
@@ -3892,18 +3538,13 @@ def _build_ffmpeg_input_args(
         tuning["probesize"],
         "-fflags",
         "+discardcorrupt",
-        # -reconnect* 属 input 级(HTTP 协议)选项，必须位于 -i 之前。
-        # 曾置于 -i 之后：ffmpeg 会把它当作输出选项静默接受——实测无任何
-        # 警告、退出码仍为 0，输入侧从未应用，重连完全失效且无可见症状；
-        # 而失败判定（「慢速失败=重连耗尽」）全建立在其生效之上。
+        # -reconnect* 是 input 级（HTTP 协议）选项，必须位于 -i 之前：放到 -i 之后会被
+        # 当作输出选项静默接受（无警告、rc=0、重连完全失效），而失败判定全建立在其生效之上。
         "-reconnect_delay_max",
         "60",
-        # 2026-09-11 事故：上一次把这三个选项移到 -i 之前时，丢失了
-        # -reconnect_streamed / -reconnect_at_eof 的布尔值 "1"，ffmpeg
-        # 把下一个选项名当作值 → 「Unable to parse ... as boolean」 →
-        # Invalid argument，输入未打开即退出（-22）。每个 -reconnect*
-        # 必须紧跟其取值，tests/test_ffmpeg_reconnect_args.py 有 AST
-        # 断言同时锁定「带值」与「位于 -i 之前」两个不变量。
+        # 每个 -reconnect* 必须紧跟其取值：缺值会让 ffmpeg 把下一个选项名当值，
+        # 报「Unable to parse ... as boolean」并以 -22 退出。
+        # tests/test_ffmpeg_reconnect_args.py 用 AST 同时锁定「带值」与「位于 -i 之前」。
         "-reconnect_streamed",
         "1",
         "-reconnect_at_eof",
@@ -3915,16 +3556,10 @@ def _build_ffmpeg_input_args(
         tuning["bufsize"],
         "-sn",
         "-dn",
-        # -thread_queue_size 只能放在 -i 之后（2026-09-23 事故，抖音 HLS 录制返回码 -22）：
-        # 它原本挂在输入侧。上游 ffmpeg 已把该选项收窄为**输出专属**（doc/ffmpeg.texi：
-        # 6.1/7.1/8.0/9.0.2 标 (input/output)，master 标 (output)；本机 master 构建
-        # N-126755-g52f05ac780-20260922 的 -h full 把它列在
-        # "Advanced per-file options (output-only)" 段）。放在 -i 之前不再是「静默不生效」
-        # 而是拒绝打开输入，实测逐字报错：
-        #   Option thread_queue_size (… per stream on the muxer) cannot be applied to
-        #   input url … Error opening input files: Invalid argument
-        # 输出侧位置对 6.1 起的 release 与 master 全部合法，是本仓支持面内唯一可用位置；
-        # 代价：≤9.0.2 上「强制独立输入读取线程」的效果随之失去（master 已无此机制）。
+        # -thread_queue_size 只能放在 -i 之后：上游已将其收窄为输出专属（6.1 起 release 标
+        # input/output、master 仅 output）。放在 -i 前不是「静默不生效」而是拒绝打开输入：
+        #   Option thread_queue_size ... cannot be applied to input url ... Invalid argument
+        # 代价：≤9.0.2 上失去「强制独立输入读取线程」效果（master 已无此机制）。
         # 回归锁：tests/test_ffmpeg_reconnect_args.py::TestOutputOnlyOptionsFollowInputFlag
         "-thread_queue_size",
         "1024",
@@ -3936,23 +3571,13 @@ def _build_ffmpeg_input_args(
         "1",
     ]
 
-    # HLS(m3u8) 输入禁用 -reconnect_at_eof（2026-09-11 事故沉淀）：
-    # hls demuxer 依赖播放列表读到 EOF 才完成解析、开始拉取媒体段；开启该选项后 http 层在
-    # 播放列表 EOF 处无限重连（-report 实测特征：连续「Will reconnect at <size> in N second(s),
-    # error=End of file」，1/3/7/15/31/60s 指数退避、永不放弃）——媒体段一个都拉不到、视频数据
-    # 零字节产出、进程永不退出（-loglevel error 下零输出零报错，check_subprocess 守护循环只见
-    # 进程存活）。对照实验：同命令带 -t 10 限时，60 秒仍不退出且无产物；仅去掉该选项后 10 秒
-    # 录制 9MB 正常退出。FLV 输入保留该选项：CDN 掐断长连接时在 EOF 处重连续写同一文件
-    # （斗鱼游客态 FLV ~70s 被掐的既有缓解手段）。删除经 del 而非置 "0"，保证命令行干净。
-    # 判据一律「小写 + 只看 path」（2026-09-12 补小写、MIN-2230 补 path，2026-09-22），
-    # 两种误判方向都会复现事故：
-    #   ① 整串子串匹配时，FLV 的 query 里带 .m3u8（如 `...flv?x=.m3u8`）→ 误删该选项，
-    #      CDN 掐断长连接时丢 EOF 重连（斗鱼游客态 FLV ~70s 被掐的缓解手段失效）；
-    #   ② 大小写敏感时 .M3U8 / .M3u8 落空 → 保留该选项，复现「播放列表 EOF 无限重连、
-    #      零字节产出、进程永不退出」。
-    # 孪生副本 scripts/douyin_live_recorder_standalone.py 同处仍是 `".m3u8" in url.lower()`
-    # （该文件不 import src/、没有 _stream_path_suffix），两侧在「query 带 .m3u8 的 FLV」这一格
-    # 上已漂移，改判据时须一并核对。
+    # HLS 输入禁用 -reconnect_at_eof：hls demuxer 需读到播放列表 EOF 才拉媒体段，
+    # 开启后 http 层会在 EOF 处无限重连（1/3/7/…/60s 退避），媒体段一个拉不到、零字节、
+    # 进程永不退出。FLV 必须保留：CDN 掐断长连接时在 EOF 处重连续写同一文件（斗鱼游客态缓解）。
+    # 判据必须「小写 + 只看 path」：整串匹配会把 query 带 .m3u8 的 FLV 误删；大小写敏感
+    # 会让 .M3U8 漏配。删除用 del 而非置 "0"，保证命令行干净。
+    # 孪生副本 scripts/douyin_live_recorder_standalone.py 仍是 `".m3u8" in url.lower()`，
+    # 改判据时须一并核对。
     if _stream_path_suffix(real_url) == ".m3u8":
         _eof_idx = command.index("-reconnect_at_eof")
         del command[_eof_idx : _eof_idx + 2]
@@ -3961,24 +3586,15 @@ def _build_ffmpeg_input_args(
         # ffmpeg 的 -headers 支持多行（\r\n 分隔）多个头；
         # 合并 referer/origin 与 cookie，与校验探针保持一致。
         header_blob = "\r\n".join(f"{k}:{v}" for k, v in headers.items())
-        # 2026-09-12 修复（CODE_REVIEW_FIX_1 F-02）：按 `-i` 锚点定位，
-        # 不再用裸下标 11/12。`-headers` 是**输入选项**，必须位于
-        # `-i` 之前；而命令前段会随选项增删而变长变短——上方
-        # `-reconnect_at_eof` 的 del 就删掉了两个元素，调整
-        # `-reconnect*` 顺序同样会移动位置。写死下标会在这些改动后
-        # 把 -headers 插到输入之后（ffmpeg 报 "Option headers not
-        # found" 或更糟：静默插到输出选项区，头不生效）。
+        # -headers 是输入选项，必须按 `-i` 锚点插入：上方 del 与选项增删都会移动下标，
+        # 写死下标会把头插到输入之后（报 "Option headers not found" 或静默落到输出区）。
         _i_idx = command.index("-i")
         command[_i_idx:_i_idx] = ["-headers", header_blob]
 
-    # 证书校验：ffmpeg 默认即校验（安全优先）。tls_verify=False 时插入
-    # -tls_verify 0，绕过虎牙 TX CDN 等证书主机名不匹配问题。
-    # 注意：-tls_verify 是 tls 协议私有选项，仅 https 流有 tls 组件消费它；
-    # 对 http 流插入会报 "Option tls_verify not found" 直接录制失败
-    # （虎牙 http FLV 实测），故仅 https 地址才插入。
+    # 默认校验证书；tls_verify=False 时插 -tls_verify 0（绕过虎牙 TX CDN 等主机名不匹配）。
+    # -tls_verify 是 tls 私有选项，对 http 流插入会报 "Option tls_verify not found"，故仅 https。
     if not tls_verify and (real_url or "").startswith("https://"):
-        # 下标 1 = 紧跟可执行档之后：全局选项必须位于 `-i` 之前，
-        # 插在最前最稳（多次插入时后插者在前，同为全局选项不影响语义）
+        # 下标 1 = 紧跟可执行档之后：全局选项必须在 -i 之前，插最前最稳（多次插入时后插者在前）
         command.insert(1, "-tls_verify")
         command.insert(2, "0")
 
@@ -3989,10 +3605,7 @@ def _build_ffmpeg_input_args(
     return command
 
 
-# 五条保存类型分支共用的「起一次 ffmpeg 录制」执行骨架（F-01 第三阶段）。
-# 原实现在音频 / FLV / MKV / MP4 / TS 五处各写一份 try/except OSError +
-# check_subprocess + record_finished 置位，任何一侧的修复（如启动失败时
-# 清幽灵 recording 条目）都要人工同步五份。
+# 五条保存类型分支共用的「起一次 ffmpeg 录制」执行骨架（原为五份复制粘贴）。
 # 返回 (started, comment_end)：
 #   started=False —— ffmpeg 未启动（OSError），调用方不应置 record_finished；
 #   comment_end=True —— 地址被注释 / 收到退出标志，调用方应结束本房间线程。
@@ -4017,9 +3630,8 @@ def _run_ffmpeg_record(
             danmaku_args=record_danmaku_args,
         )
     except OSError as e:
-        # ffmpeg 启动失败抛 FileNotFoundError / PermissionError 等 OSError 子类；
-        # subprocess.CalledProcessError 仅在 subprocess.run(check=True) 时触发，
-        # ffmpeg Popen 流程下永不会抛——原写法（2026-09-12 审查 6.1）是死代码。
+        # ffmpeg 启动失败只抛 OSError 子类；CalledProcessError 仅在 run(check=True) 时出现，
+        # Popen 流程下不会抛。
         logger.error(
             i18n.tr(
                 "错误信息: {type_name}: {e} 发生错误的行数: {get_error_line}",
@@ -4040,11 +3652,8 @@ def _run_ffmpeg_record(
     return True, comment_end
 
 
-# 录后转 MP4 统一出口（F-01）：原 TS 分段 / TS 非分段 / FLV 三条路径各写一份
-# 遍历与起线程逻辑，其中 TS 非分段漏了 converts_to_mp4 判断（用户关闭转码
-# 仍会转），FLV 用 `_*.flv` 宽匹配（会误伤同目录同名前缀的历史文件）。
-# 统一为：关闭转码直接返回；分段按「前缀 + _<数字序号>.<ext>」正则精确匹配；
-# 非分段直接转单个文件。
+# 录后转 MP4 统一出口：关闭转码直接返回；分段按「前缀 + _<数字序号>.<ext>」精确匹配；
+# 非分段直接转单个文件（不使用 `_*.flv` 宽匹配，避免误伤同名前缀的历史文件）。
 def _convert_after_record(save_file_path: str, split_video_by_time: bool) -> None:
     if not converts_to_mp4:
         return
@@ -4054,9 +3663,8 @@ def _convert_after_record(save_file_path: str, split_video_by_time: bool) -> Non
             _submit_postprocess(converts_mp4, save_file_path, delete_origin_file)
             return
         extension = os.path.basename(save_file_path).rsplit(".", maxsplit=1)[-1]
-        # 枚举走 _segment_files（不再 glob，理由见其函数头）。MID-2207 后半（2026-09-23）：
-        # None（目录不可读）必须与 []（确实没有分段）分开报，否则日志只说「未找到分段文件」，
-        # 把权限/网络盘这类本地故障误导成「ffmpeg 没产出」。
+        # 枚举走 _segment_files（理由见其函数头）。None（目录不可读）必须与 [] 分开报，
+        # 否则会把权限/网络盘故障误导成「ffmpeg 没产出」。
         _seg_paths = _segment_files(save_file_path)
         if _seg_paths is None:
             logger.warning(
@@ -4068,9 +3676,7 @@ def _convert_after_record(save_file_path: str, split_video_by_time: bool) -> Non
             return
         seg_files = sorted(_seg_paths)
         if not seg_files:
-            # MIN-2234 修复（2026-09-22）：原文案写死「FLV」，而本出口被 TS/MKV/MP4 音频等
-            # 所有分段形态复用（seg_pattern 里明明是 `_*.ts`），排查被引向错误方向。
-            # 改为带扩展名的中性措辞；新 msgid 已登记进 _i18n_pending.json。
+            # 文案带扩展名：本出口被 TS/MKV/MP4/音频等所有分段形态复用，写死「FLV」会把排查引向错误方向。
             logger.warning(
                 i18n.tr(
                     "未找到分段文件（{extension}），跳过转换: {seg_pattern}",
@@ -4084,23 +3690,18 @@ def _convert_after_record(save_file_path: str, split_video_by_time: bool) -> Non
         logger.error(i18n.tr("转码失败: {type_name}: {e} ", type_name=type(e).__name__, e=e))
 
 
-# 单个直播间的录制线程主体：循环「解析平台 → 选源 → 起 ffmpeg / 直下」直到该 URL 被注释、
-# 收到退出标志或录制停止开关关闭后返回（由主循环按配置重新拉起）。
-# room_state：调用方（_room_thread_target）传入的可变字典，用于把「本轮录制名」带回线程出口，
-# 使弹幕监控房间清理只在线程退出时执行一次（MID-30）；直接调用本函数时可不传。
+# 单个直播间的录制线程主体：循环「解析平台 → 选源 → ffmpeg/直下」，直到 URL 被注释、
+# 收到退出标志或停止录制开关关闭。room_state 用于把本轮录制名带回线程出口，
+# 使弹幕监控清理只在线程退出时执行一次；直接调用时可不传。
 def start_record(
     url_data: tuple[str, str, str], count_variable: int = -1, room_state: dict[str, str] | None = None
 ) -> None:
-    # 房间日志关联字段在线程入口即绑定：首轮解析成功前 record_name 仍为空，而退出标志 /
-    # 注释退出 / 解析失败 / 熔断退避这些日志已经产生，先用「序号N」占位保证本线程每一行
-    # 日志都能归属到房间（解析出主播名后再升级为完整 record_name）。为何用 ContextVar
-    # 而非逐处 logger.bind()：见 src/logger.py::ROOM_FIELD 与 AGENTS.md「已知坑」。
+    # 日志关联字段在线程入口即绑定：首轮解析前 record_name 为空，但退出/注释/解析失败等日志
+    # 已经产生，先用「序号N」占位，解析出主播名后再升级（原因见 src/logger.py::ROOM_FIELD）。
     set_room_context(f"序号{count_variable}")
     while True:
-        # record_name / record_host 都置于外层 try 之前：最外层 except 与 finally 都要引用它们，
-        # 放在 try 内会在「首语句前抛异常」时未绑定（并以 NameError 掩盖原始异常）。
-        # record_host 是熔断 key（本直播间 host，用于按平台隔离并发与错误预算）；默认空串在
-        # 异常早退分支被 record_error 视为 falsy，仅计入全局错误预算、不触发按 key 熔断。
+        # 两者都置于外层 try 之前：最外层 except/finally 都要引用，放 try 内会在首语句抛错时
+        # 未绑定。record_host 是熔断 key；空串在 record_error 中视为 falsy，只计全局预算。
         record_name = ""
         record_host = ""
         try:
@@ -4137,15 +3738,12 @@ def start_record(
                             proxy_address = proxy_addr_bak or None
 
             while True:
-                # 弹幕参数每个监测轮先归零再分派（AGENTS.md 约定）：绝不沿用上一轮录制遗留的旧参数，
-                # 防御未来把解析短路/复用旧值的改动重新引入陈旧 danmaku_args 到 check_subprocess
+                # 每轮先归零再分派：绝不沿用上一轮遗留的弹幕参数，防止解析短路时把旧值带进录制
                 record_danmaku_args = None
                 if exit_recording:
-                    # MIN-2231（2026-09-23）：房间地址可以是「自定义流地址」，用户写成
-                    # `https://u:p@host/x.m3u8` 时凭据会原样进 PlayURL.log / streamget.log
-                    # （300KB 轮转、保留多份）→ 入日志前一律脱敏，msgid 保持不变。
-                    # 静态锁：tests/test_regression_2026_09_22_main.py
-                    #   ::test_room_and_breaker_logs_mask_credentials（按调用点判定实参是否过码）
+                    # 自定义流地址可写成 `https://u:p@host/x.m3u8`，入日志前必须脱敏
+                    # （PlayURL.log / streamget.log 轮转保留多份）。静态锁：
+                    # tests/test_regression_2026_09_22_main.py::test_room_and_breaker_logs_mask_credentials
                     logger.debug(
                         i18n.tr(
                             "检测到退出标志，录制线程退出: {record_url}",
@@ -4153,8 +3751,7 @@ def start_record(
                         )
                     )
                     return
-                # 停止录制（Web 面板开关关闭）：本房间线程退出，运行列表清理由
-                # _room_thread_target 的 finally 兜底（保证重新开始后能再次拉起）
+                # 停止录制：线程退出，运行列表由 _room_thread_target 的 finally 兜底
                 if not recording_enabled:
                     logger.debug(
                         i18n.tr(
@@ -4163,9 +3760,8 @@ def start_record(
                         )
                     )
                     return
-                # 配置实时性：URL 被注释/移除后立即退出，不等本轮解析结果——
-                # 原检查点位于解析成功之后，解析持续失败（平台接口异常）时永远走不到，
-                # 线程滞留并占用监控位，URL_config.ini 的变更迟迟不生效
+                # URL 被注释/移除立即退出，不等解析结果：解析持续失败时后者永远走不到，
+                # 线程会一直占着监控位，配置变更迟迟不生效。
                 if record_url in url_comments:
                     print(
                         i18n.tr(
@@ -4175,17 +3771,14 @@ def start_record(
                     )
                     clear_record_info(record_name, record_url)
                     return
-                # —— 并发熔断预检：该平台(host)连续失败达阈值时跳过本轮网络探测并退避，
-                # 释放全局并发槽给其他平台，避免单平台抖动拖垮整体（降级应对连锁报错）——
+                # 熔断预检：该 host 连续失败达阈值时跳过本轮探测并退避，把并发槽让给其他平台。
                 if scheduler is not None and not scheduler.allow(record_host):
                     _backoff = scheduler.backoff_seconds(record_host)
                     _backoff = min(_backoff, max(30.0, float(delay_default)))
                     logger.debug(
                         i18n.tr(
                             "[{record_host}] 并发熔断中，跳过本轮探测，退避 {_backoff}s",
-                            # MIN-2231（2026-09-23）：record_host 取自 host_of(record_url)。
-                            # scheduler.host_of 现已剥去 `user:pass@`（凭据不再进熔断 key 与日志），
-                            # 这里再过一次 mask_credentials 兜住任何非 host_of 来源的凭据形态。
+                            # host_of 已剥去 `user:pass@`；再过一次 mask 兜住非 host_of 来源的凭据形态
                             record_host=utils.mask_credentials(record_host),
                             _backoff=f"{_backoff:.0f}",
                         )
@@ -4193,13 +3786,11 @@ def start_record(
                     _interruptible_sleep(_backoff, record_url)
                     continue
                 try:
-                    # 平台分派解析（复杂度控制已抽取为 _resolve_platform_stream）：
-                    # 返回 (platform, port_info, 弹幕参数, Shopee新URL)；无法识别的地址返回 None
+                    # 平台分派；无法识别返回 None，走延迟重试
                     _resolved = _resolve_platform_stream(record_url, proxy_address, record_quality)
                     if _resolved is None:
-                        # 无法识别的地址：延迟一轮后重试而非直接结束线程。原 `break` 跳出
-                        # 内层循环会绕过位于循环体末尾的轮末延迟，导致无间隔刷请求刷日志
-                        # （~100ms/轮）；sleep+continue 同时保留每轮预检（退出/注释/熔断）
+                        # 无法识别：延迟一轮重试而非结束线程。直接 break 会绕过轮末延迟，
+                        # 变成 ~100ms/轮的空转刷请求；sleep+continue 同时保留每轮预检。
                         _interruptible_sleep(max(30.0, float(delay_default)), record_url)
                         continue
                     platform, port_info, record_danmaku_args, new_record_url = _resolved
@@ -4219,42 +3810,29 @@ def start_record(
                             i18n.tr(
                                 "序号{count_variable} 网址内容获取失败,进行重试中...获取失败的地址是:{url_data}",
                                 count_variable=count_variable,
-                                # M-02（2026-10-02）：自定义流地址可能带 user:pass@ 凭据，print 进
-                                # 控制台与 web_console.log（后者不轮转），实参必须过码。
-                                # 过码对象取 str(tuple) 而非元组本身：mask_credentials 只接受 str
-                                # （内部全是 re.sub），直接把 (画质, url, 主播名) 元组递进去会抛
-                                # TypeError，把这条「获取失败重试」print 变成穿透到外层 except 的异常。
-                                # 目录里该 msgid 的占位符就是 {url_data}，故只换实参、不动模板。
+                                # 自定义流地址可能带 user:pass@，实参必须过码（控制台与不轮转的
+                                # web_console.log）。mask_credentials 只接受 str，故传 str(tuple)；
+                                # 占位符沿用目录里既有的 {url_data}。
                                 url_data=utils.mask_credentials(str(url_data)),
                             )
                         )
                         record_error(record_host)
-                        # MID-2204 修复（2026-09-22）：本轮没拿到 anchor_name 就是「无状态轮」，
-                        # 必须显式结束本轮。原写法不 continue，而是继续往下走进共享的轮末等待，
-                        # 语义上把失败轮当成了正常收尾轮；而开播/下播推送的状态机（start_pushed
-                        # 的置位与复位）整体位于下面的 else 成功分支内，失败轮本不该有机会推进它。
-                        # 显式 continue 后，「状态机只在拿到真实直播状态时前进」成为结构性保证，
-                        # 不会再出现「本轮压根没解析成功，下一轮却按已翻转的状态重复推送开播通知」。
-                        # 等待沿用可中断口径（MIN-2226），与 `_resolved is None` 分支同构。
+                        # 拿不到 anchor_name 就是「无状态轮」，必须显式 continue：下面的开播/下播
+                        # 状态机只在解析成功分支内推进，失败轮不应有机会翻转推送状态。
+                        # 等待与 `_resolved is None` 分支同构，保持可中断。
                         _interruptible_sleep(max(30.0, float(delay_default)), record_url)
                         continue
                     else:
-                        # —— 解析成功即上报成功样本：half-open 探针依赖本轮结果闭环——
-                        # 此前成功样本仅在 ffmpeg 退出(rc==0)时上报，探针房间进入长时间
-                        # 录制期间，同 host 其余房间持续熔断饿死；主播未开播等正常轮次
-                        # 则完全无样本，探针 _probing 永不复位（靠调度器租约超时兜底自愈）。
-                        # 与上方解析失败分支的 record_error 对称，仅解析真正成功才上报。
+                        # 解析成功即上报成功样本：half-open 探针依赖本轮结果闭环。只在 ffmpeg
+                        # 退出时上报会让长时间录制期间同 host 其余房间持续熔断饿死，未开播轮又
+                        # 完全无样本。与上方失败分支的 record_error 对称。
                         record_success(record_host)
                         anchor_name = clean_name(anchor_name)
 
-                        # —— 主播名自动同步：平台最新名与当前使用名不一致时，先重命名历史
-                        # 录制目录/文件，成功后再更新 URL_config.ini 与本轮使用名 ——
-                        # 时机安全性：本线程此刻必然不在录制中（录制期间阻塞在
-                        # check_subprocess 内，检测点位于每轮解析之后、录制启动之前），
-                        # 重命名不会触碰 ffmpeg 正在写入的文件；后台转码/字幕线程占用的
-                        # 个别文件改名失败仅告警，目录级失败则本轮放弃、下轮轮询重试。
-                        # 自定义流地址的 anchor_name 含随机 UUID（每轮都不同），跳过以防
-                        # 反复触发改名。
+                        # 主播名自动同步：最新名与当前使用名不一致时，先改历史录制目录/文件，
+                        # 成功后再更新 URL_config.ini 与本轮使用名。此刻必然不在录制中（录制期间
+                        # 阻塞在 check_subprocess），不会触碰 ffmpeg 正在写入的文件；个别文件被
+                        # 转码/字幕占用时只告警。自定义流地址的 anchor_name 含随机 UUID，跳过。
                         latest_anchor_name = clean_name(cast(str, port_info.get("anchor_name", "")))
                         if (
                             auto_update_anchor_name
@@ -4264,8 +3842,8 @@ def start_record(
                             and latest_anchor_name != "空白昵称"
                             and anchor_name != latest_anchor_name
                         ):
-                            # 文件系统与配置全部同步成功才切换本轮使用名；任一失败则保持
-                            # 旧名，下一轮轮询重试整个同步（rename 对已改名的目录幂等）
+                            # 文件系统与配置都成功才切换本轮使用名，否则保持旧名、下轮重试
+                            # （rename 对已改名的目录幂等）
                             if rename_anchor_directory(
                                 anchor_name, latest_anchor_name, platform
                             ) and update_anchor_name(record_url, latest_anchor_name):
@@ -4276,21 +3854,16 @@ def start_record(
                                         latest_anchor_name=latest_anchor_name,
                                     )
                                 )
-                                # 清理旧名残留的录制状态（正常路径录制结束即清理，此处兜底
-                                # 异常残留，防止状态列表长期挂旧名条目）
+                                # 清理旧名残留的录制状态（兜底异常残留，防状态列表长期挂旧名）
                                 _stale_record_name = f"序号{count_variable} {anchor_name}"
                                 anchor_name = latest_anchor_name
                                 with record_state_lock:
                                     recording.discard(_stale_record_name)
                                     recording_time_list.pop(_stale_record_name, None)
-                                # MID-2205 修复（2026-09-22）：改名成功后还要把**旧名**从弹幕监控
-                                # 枢纽里摘掉。枢纽按房间名（= record_name，见 src/collector.py 的
-                                # hub.room_started(self._room_name)）登记，旧名条目只有在「房间线程
-                                # 退出」时经 _room_thread_target 的 room_stopped 才会消失；而改名发生
-                                # 在房间线程**内部**、线程还能继续跑几百轮，于是旧名永久挂在监控页
-                                # 与 JSONL 边车里（主播改几次名就多几条永不结束的假房间）。
-                                # 此处用改名**之前**算好的 _stale_record_name（上面 anchor_name
-                                # 已被覆写为新名）。监控为旁路功能，失败静默——不得因此打断录制。
+                                # 改名后要把旧名从弹幕监控枢纽摘掉：枢纽按房间名登记，旧名只在
+                                # 线程退出时才会经 room_stopped 清除；改名发生在线程内部，线程还能
+                                # 跑几百轮，旧名会永久挂在监控页与 JSONL 边车里。用改名前的
+                                # _stale_record_name；监控为旁路，失败静默、不得打断录制。
                                 try:
                                     from src.danmaku_monitor import get_hub
 
@@ -4298,8 +3871,7 @@ def start_record(
                                 except Exception:
                                     pass
                         record_name = f"序号{count_variable} {anchor_name}"
-                        # 关联字段升级为可读房间名：record_name 每轮重算，主播改名后同步刷新
-                        # （与文件 sink 的 {extra[room]} 列共用同一值，见 src/logger.py）
+                        # 关联字段升级为可读房间名：每轮重算，主播改名后同步刷新（与文件 sink 的 {extra[room]} 同值）
                         set_room_context(record_name)
 
                         if record_url in url_comments:
@@ -4324,11 +3896,8 @@ def start_record(
 
                             if start_pushed:
                                 if over_show_push:
-                                    # MIN-2232 修复（2026-09-22）：原裸字面量既不过 tr() 也不是
-                                    # print/logger 首参，extract_i18n_strings.py 三条提取规则全部
-                                    # 扫不到 → 非 zh_CN 语言下推送正文仍是简体中文。包 tr() 后
-                                    # 该 msgid 进入提取集合（复核：grep -n '直播间状态更新' main.py）。
-                                    # 占位符是方括号字面量而非 {name}，故不传 kw、仍走下方 .replace 链。
+                                    # 裸字面量必须包 tr() 才会进入 i18n 提取集合，否则非简中下
+                                    # 推送正文仍是中文；占位符是方括号，故仍走下面的 .replace 链。
                                     push_content = i18n.tr("直播间状态更新：[直播间名称] 直播已结束！时间：[时间]")
                                     if over_push_message_text:
                                         push_content = over_push_message_text
@@ -4344,14 +3913,12 @@ def start_record(
                                 start_pushed = False
 
                         else:
-                            # MIN-2233 修复（2026-09-22）：原先把 f-string 提到 content 变量再 print，
-                            # 提取器的 print 规则只认「首参为常量/f-string」，变量引用扫不到 → 四语
-                            # 目录中「正在直播中」零命中。改为在打印点直接 tr 插值。
+                            # 在打印点直接 tr 插值：提取器只认「首参为常量/f-string」，变量引用扫不到
                             print(i18n.tr("\r{record_name} 正在直播中...", record_name=record_name))
 
                             if live_status_push and not start_pushed:
                                 if begin_show_push:
-                                    # MIN-2232 修复（2026-09-22）：同上条，裸字面量补 tr() 包裹
+                                    # 同上：裸字面量补 tr() 包裹
                                     push_content = i18n.tr("直播间状态更新：[直播间名称] 正在直播中，时间：[时间]")
                                     if begin_push_message_text:
                                         push_content = begin_push_message_text
@@ -4367,14 +3934,9 @@ def start_record(
                                 start_pushed = True
 
                             if disable_record:
-                                # 2026-09-12 审查 6.1：原 time.sleep(push_check_seconds) 一次性阻塞整段
-                                # 时间，Web「停止录制」后此线程最坏滞留 push_check_seconds 秒才退出。
-                                # 改为逐秒 sleep + 每秒重查三个条件，中断时立即回到外层 while 顶；
-                                # 直接引用模块全局即晚绑定（每轮重新求值，天然看到其它线程 / Web
-                                # 面板改动后的最新值）。2026-09-14 修掉的形态是 `main.recording_enabled`
-                                # ——本文件模块级 `main` 是入口函数 `main()` 而非模块对象，那样写
-                                # 在「只监测不录制 + 推送检测间隔>0」时必抛 AttributeError
-                                # （mypy 亦报 attr-defined）。
+                                # 逐秒 sleep + 每秒重查三条件：一次性 sleep(push_check_seconds)
+                                # 会让线程在「停止录制」后滞留整段间隔。直接引用模块全局即晚绑定；
+                                # 注意 `main` 在本文件是入口函数而非模块对象，不能写 main.recording_enabled。
                                 _sleep_remaining = push_check_seconds
                                 while _sleep_remaining > 0:
                                     if not recording_enabled or exit_recording or record_url in url_comments:
@@ -4408,39 +3970,28 @@ def start_record(
                                 "微博直播": weibo_cookie,
                                 "酷狗直播": kugou_cookie,
                                 "LiveMe": liveme_cookie,
-                                # L-04（2026-10-02）：补齐两个「强制直下」平台（only_flv_platform_list =
-                                # shopee / 花椒直播）。二者的 [Cookie] 配置项在本文件已有读取点并透传给
-                                # 解析函数（get_shopee_stream_url / get_huajiao_stream_url），却不进本表，
-                                # 于是同一份用户 Cookie 在「解析」与「探针 / ffmpeg 录制头 / 直下」两条路上
-                                # 口径不一——直下路径拿不到登录态，CDN 按游客态钳制或 403。
-                                # 其余 25 个已声明却未入表的 *_cookie 不在本批补：逐平台是否需要登录态
-                                # 取流未经现网抓包确认，盲加等于改变 25 个平台的出站请求头。
+                                # 强制直下平台（shopee / 花椒）必须入表：解析函数已用同一份 Cookie，
+                                # 不入表会让直下路径拿不到登录态，CDN 按游客态钳制或 403。
+                                # 其余已声明未入表的 *_cookie 不盲加：是否需登录态未经现网确认。
                                 "shopee": shopee_cookie,
                                 "花椒直播": huajiao_cookie,
                             }.get(platform, "")
 
                             real_url = select_source_url(port_info, proxy_address, platform, cookies=platform_cookie)
                             if not real_url:
-                                # 三级候选（HLS/FLV/record_url）本轮均校验失败且无末位放行：本轮放弃录制。
-                                # 录制链（ffmpeg_command/title_in_name 等）假定 real_url 非空，强制进入会触发
-                                # 未绑定变量异常（title_in_name）或复用上一轮残留的 ffmpeg 命令；
-                                # 按常规监测间隔等待，下一轮重新解析校验。
+                                # 三级候选全部校验失败：本轮放弃。录制链假定 real_url 非空，强进会
+                                # 抛未绑定变量或复用上一轮残留命令；等一轮后重新解析。
                                 logger.warning(
                                     i18n.tr("{anchor_name} 本轮未获取到可用流地址，跳过录制", anchor_name=anchor_name)
                                 )
                                 _interruptible_sleep(max(random.randint(-5, 5) + delay_default, 0), record_url)
                                 continue
                             full_path = f"{default_path}/{platform}"
-                            # real_url 非空已由上方「if not real_url: continue」保证：时间戳/标题
-                            # 前缀在此无条件构造。原「if real_url:」包装为恒真条件，且使录制链
-                            # 依赖条件块内赋值的局部变量（basedpyright 判定 possibly unbound，
-                            # 亦属「录制链不得嵌套于条件内」反模式），故移除。
+                            # real_url 非空已由上方 continue 保证，时间戳/标题前缀无条件构造
+                            # （不要把录制链再嵌进条件块，否则局部变量可能未绑定）。
                             now = datetime.datetime.today().strftime("%y%m%d_%H%M%S")
-                            # M-01（2026-10-19）：目录用的「日期」必须单独取，不能切 now。
-                            # now 是 13 字符的 `%y%m%d_%H%M%S`，旧代码的 `now[:10]` 只切到
-                            # `251019_123`——日期后面粘了小时两位与分钟十位，于是「按时间分目录」
-                            # 每约 10 分钟就换一个目录，一天的录制被打散到上百个文件夹。
-                            # 单独取一次 strftime 同时消掉了「切片长度随格式变化而静默失配」这个根因。
+                            # 日期目录单独取，不能切 now：`%y%m%d_%H%M%S` 的 now[:10] 会粘上
+                            # 小时与分钟位，导致每约 10 分钟换一个目录。
                             date_dir = datetime.datetime.today().strftime("%y%m%d")
                             live_title = cast(str, port_info.get("title", ""))
                             title_in_name = ""
@@ -4475,47 +4026,35 @@ def start_record(
                                         get_error_line=_get_error_line(e),
                                     )
                                 )
-                                # MID-02 修复（2026-09-20）：输出目录建不出来时**不得**继续起 ffmpeg。
-                                # 原写法只记一条 error 就往下走完整录制链，ffmpeg 打不开输出即秒退
-                                # （rc != 0），随后被 check_subprocess 判成「CDN 快速失败」→
-                                # 给一条健康流地址记探针退避 + record_error，每轮重复污染熔断统计，
-                                # 用户只看到「网络异常」类日志。此处按常规监测间隔等一轮再试
-                                # （与上方「本轮未获取到可用流地址」的降级口径同构）。
+                                # 目录建不出来不得继续起 ffmpeg：ffmpeg 打不开输出即秒退，会被
+                                # 判成「CDN 快速失败」，给健康流地址记探针退避并污染熔断统计。
+                                # 等一轮再试（与上方「无可用流地址」同口径）。
                                 _interruptible_sleep(max(random.randint(-5, 5) + delay_default, 0), record_url)
                                 continue
 
                             if platform not in ("自定义录制直播", "虎牙直播"):
                                 if enable_https_recording and real_url.startswith("http://"):
-                                    # HTTPS 录制模式：升级为 https 拉流（证书验证已在全局禁用）
+                                    # HTTPS 录制模式：升级为 https 拉流（拉流侧证书校验按开关收紧/豁免）
                                     real_url = real_url.replace("http://", "https://")
                                 elif not enable_https_recording and real_url.startswith("https://"):
-                                    # HTTP 录制模式：降级为 http 拉流（无 TLS，不涉及证书验证）。
-                                    # 海外平台（TikTok/YouTube 等）CDN 多为 https-only，强转 http
-                                    # 必然拉流失败，检测到海外 host 时保持原样放行。
+                                    # HTTP 录制模式：降级为 http 拉流。海外 CDN 多为 https-only，
+                                    # 强转必然失败，海外 host 保持原样。
                                     if not any(pt_host in record_url for pt_host in OVERSEAS_PLATFORM_HOST):
                                         real_url = real_url.replace("https://", "http://")
 
-                                # MID-03 修复（2026-09-20）：列表元素必须是 resolver 回写的**平台名**，
-                                # 不是 host 片段。原第二项写成 "migu"，而 _resolve_miguvideo_com 回写的是
-                                # "咪咕直播" → 该项恒不命中，咪咕「强制走 http 拉流」的既有语义静默失效
-                                # （同列表首项 "shopee" 恰好等于 _resolve_live_shopee 回写的平台名，
-                                # 才让这条错配一直没人发现）。回归锁见 tests/test_platform_dispatch.py。
+                                # 列表元素是 resolver 回写的平台名，不是 host 片段
+                                # （"咪咕直播" 曾误写为 "migu" 而静默失效）。回归锁见 tests/test_platform_dispatch.py。
                                 http_record_list = ["shopee", "咪咕直播"]
                                 if platform in http_record_list:
                                     real_url = real_url.replace("https://", "http://")
 
-                            # 默认移动端 UA；虎牙/B站 等国内 CDN 拒绝移动端 UA，改用桌面 Chrome，
-                            # 且与校验探针共用同一 UA（get_record_user_agent）避免校验“假绿”。
-                            # 必须与 stream_select.MOBILE_UA 保持一字不差（校验与录制两端一致）。
-                            # MID-2209 修复（2026-09-22）：默认 UA 直接引用 stream_select.MOBILE_UA，
-                            # 不再在本地复制字面量。原写法把整串 UA 抄在本文件里，与唯一事实源
-                            # 分处两地——校验探针与 ffmpeg 录制两端只要有一端改了，另一端就会静默
-                            # 漂移到不同 UA（CDN 侧表现为「校验通过但录制 403」）。
+                            # 默认移动端 UA；虎牙/B站等国内 CDN 拒绝移动端，改用桌面 UA。
+                            # 必须引用 stream_select.MOBILE_UA 唯一事实源：与校验探针共用，
+                            # 抄字面量会让两端静默漂移（表现为「校验通过但录制 403」）。
                             # 静态锁：tests/test_platform_dispatch.py::test_record_ua_uses_single_source
                             user_agent = get_record_user_agent(platform) or MOBILE_UA
 
-                            # F-01：网络/缓冲参数与「输入侧」命令行构造全部下沉到纯函数，
-                            # 此处只做「取参数 → 组装」两步，分支内不再出现裸选项列表。
+                            # 网络/缓冲参数与输入侧命令行全部下沉到纯函数，此处只做「取参数 → 组装」
                             is_overseas = any(pt_host in record_url for pt_host in OVERSEAS_PLATFORM_HOST)
                             tuning = _ffmpeg_network_tuning(is_overseas)
                             headers = get_record_headers(platform, record_url, cookies=platform_cookie)
@@ -4532,17 +4071,9 @@ def start_record(
                                 proxy_address=proxy_address,
                             )
 
-                            # SEV-09 修复（2026-09-20）：强制直下（only_flv）平台的录制状态登记
-                            # 下移到「确认拿到 flv_url」之后（见同文件该分支），此处只为 ffmpeg 路径登记。
-                            # 原写法在分支判定之前无条件 recording.add，而 only_flv 的「未找到 FLV」
-                            # 分支既不调 clear_record_info 也不 discard：
-                            #   ① recording / recording_time_list 留下永久幽灵条目（磁盘满退出判定
-                            #      `if not recording:` 恒假、面板状态失真、TS 分支提交注定失败的转码）；
-                            #   ② 时间字幕线程 generate_subtitles 是 while True 每秒追加一条 SRT，
-                            #      唯一退出条件就是 `record_name not in main.recording` ——
-                            #      幽灵条目让它永不退出，且房间线程每轮（默认 120s）再起一条，
-                            #      线程数与 .srt 体积无界增长。
-                            # 平台判定因此提到登记之前（只读 platform，与分支顺序无耦合）。
+                            # 录制状态登记只给 ffmpeg 路径（强制直下在确认拿到 flv_url 后再登记）：
+                            # 无条件 add 会让「未找到 FLV」分支留下幽灵条目（磁盘满判定恒假、
+                            # 字幕线程永不退出且每轮再起一条）。
                             only_flv_record = False
                             only_flv_platform_list = ["shopee", "花椒直播"]
                             if platform in only_flv_platform_list:
@@ -4575,20 +4106,14 @@ def start_record(
                                         record_quality_zh,
                                         actual_quality_zh,
                                     ]
-                            # MIN-2233 修复（2026-09-22）：原先把含自然语言的 f-string 提到 rec_info
-                            # 变量再在多处 print(f"{rec_info}/...")，提取器的 print 规则只认首参为
-                            # 常量/f-string 的形态，变量引用扫不到「准备开始录制视频」→ 四语目录零命中。
-                            # 此处只保留可插值的原始字段，实际打印点各自 tr 插值（见本分支三处 print）。
+                            # 只保留可插值的原始字段，打印点各自 tr 插值：含自然语言的 f-string
+                            # 若先提到变量再 print，i18n 提取器扫不到。
                             rec_info_anchor_name = anchor_name
                             rec_info_full_path = full_path
                             if show_url:
                                 re_plat = ("WinkTV", "PandaTV", "ShowRoom", "CHZZK", "YouTube")
-                                # MID-28 修复（2026-09-20）：直播源地址带签名参数
-                                # （wsSecret / txSecret / signature / ttwid 等），此前在本文件内
-                                # **零**处过 mask_credentials，明文写进 300KB 轮转、保留多份的
-                                # PlayURL.log / streamget.log 等于凭据长期落盘。
-                                # 占位符名沿用目录里既有的 {m3u8_url}/{real_url}（改占位符名等于
-                                # 新增四语 msgid，须由 i18n 侧统一收口），值一律先脱敏再传入。
+                                # 直播源地址带签名参数（wsSecret/txSecret/ttwid 等），入 PlayURL.log /
+                                # streamget.log 前必须脱敏（轮转文件会长期保留）。占位符名沿用目录既有。
                                 if platform in re_plat:
                                     logger.info(
                                         i18n.tr(
@@ -4617,32 +4142,24 @@ def start_record(
 
                             if real_url == port_info.get("flv_url") and port_info.get("flv_url"):
                                 codec = utils.get_query_params(cast(str, port_info["flv_url"]), "codec")
-                                # h265 地址已在保存格式为 TS/MKV/MP4 时放行进常规序列
-                                # （stream_select._h265_copy_format_supported），此处仅在当前容器
-                                # 装不下 HEVC 直拷（FLV/纯音频）时才接管转 TS——否则 TS 用户选中
-                                # h265 原画后会每轮收到一条误导性的「use TS format instead」告警
+                                # TS/MKV/MP4 已放行 h265 直拷（stream_select._h265_copy_format_supported），
+                                # 只在当前容器装不下 HEVC 时才转 TS，避免 TS 用户每轮收到误导性告警。
                                 if (
                                     isinstance(codec, list)
                                     and bool(codec)
                                     and codec[0] == "h265"
                                     and record_save_type.upper() not in ("TS", "MKV", "MP4")
                                 ):
-                                    # L-05（2026-10-18 审查）：loguru sink 不经 builtins.print
-                                    # 包装，裸英文字面量作首参在非简中语言下原样输出（与 CODE_REVIEW
-                                    # _2026-10-04 LR-03 同一条：译文早在四目录备好、只是查表没调）。
-                                    # 键「FLV is not supported for h265 codec, use TS format instead」
-                                    # 四目录齐全，只补 tr()、不新增 msgid，也不动文案本体
-                                    # （AGENTS「h265 候选按保存格式放行」条按原文锚注了这条告警）。
+                                    # loguru sink 不经过 builtins.print 包装，裸英文串必须包 tr()，
+                                    # 否则非简中下原样输出（四语译文早已存在，只是没查表）。
                                     logger.warning(
                                         i18n.tr("FLV is not supported for h265 codec, use TS format instead")
                                     )
                                     record_save_type = "TS"
 
                             if only_audio_record or any(i in record_save_type for i in ["MP3", "M4A"]):
-                                # 扩展名 / 路径 / 执行骨架三项全部走统一实现（F-01）：
-                                # 原分支内按 "MP3" in record_save_type 二次分叉出 4 处
-                                # 完全相同的 _build_ffmpeg_output_args 调用（复制粘贴残留），
-                                # 编码器与容器的实际裁决本就在该函数内部按同一条件完成。
+                                # 扩展名/路径/执行骨架统一走既有实现：编码器与容器的裁决在
+                                # _build_ffmpeg_output_args 内部按同一条件完成，无需二次分叉。
                                 save_file_path = _build_record_output_path(
                                     full_path,
                                     anchor_name,
@@ -4676,9 +4193,7 @@ def start_record(
                                     record_danmaku_args,
                                 )
                                 if started:
-                                    # ffmpeg 子进程自然结束（rc==0 / 被注释退出）：与直下 FLV 路径
-                                    # 的 record_finished = True 对齐（2026-09-12 审查 6.1），
-                                    # 触发「录后 30s 快检」语义——主播下播速重开时不会等一整轮周期
+                                    # 触发「录后 30s 快检」，与直下路径对齐：下播速重开不必等一整轮
                                     record_finished = True
                                 if comment_end:
                                     return
@@ -4687,13 +4202,11 @@ def start_record(
                                 logger.info(
                                     i18n.tr(
                                         "Use Direct Downloader to Download FLV Stream: {record_url}",
-                                        # MIN-2231（2026-09-23）：直下分支的地址可来自「自定义流地址」
-                                        # （含 `https://u:p@host/x.flv` 形态），INFO 级会进 PlayURL.log
+                                        # 地址可能是带 user:pass@ 的自定义流，INFO 级会进 PlayURL.log
                                         record_url=utils.mask_credentials(record_url),
                                     )
                                 )
-                                # MI-05：title_in_name 为空（未勾选标题入文件名）时原写法产生双下划线；
-                                # 与视频分支 _build_record_output_path 同构拼接。
+                                # 与视频分支同构拼接：title_in_name 为空时不会产生双下划线
                                 filename = f"{anchor_name}_{title_in_name}{now}_00.flv"
                                 save_file_path = f"{full_path}/{filename}"
                                 print(
@@ -4711,16 +4224,10 @@ def start_record(
                                 try:
                                     flv_url = port_info.get("flv_url")
                                     if isinstance(flv_url, str) and flv_url:
-                                        # MID-2202 修复（2026-09-22）：录制状态登记必须在字幕线程**之前**。
-                                        # 原顺序是「先起字幕线程 → 再持锁登记」，与 ffmpeg 路径
-                                        # （先 Popen/先登记，再起字幕）相反，也与本分支自己上方那条
-                                        # SEV-09 注释的时序约定自相矛盾：generate_subtitles 是 while True，
-                                        # 唯一退出条件是 `record_name not in main.recording`，登记晚于线程
-                                        # 启动就存在「线程已跑、recording 里还没有」的窗口——此时若下载
-                                        # 侧抛错走 except 的 clear_record_info，该房间会被判为已停止，
-                                        # 字幕线程却已在运行；反过来，若登记前就返回，字幕线程会一直空转等
-                                        # 一个永不出现的条目。登记是纯内存操作、无失败路径，理应先做。
-                                        # 先持锁写入录制状态，再启动字幕线程与阻塞式下载（避免持锁期间长时间阻塞迭代共享状态的其他线程）
+                                        # 录制状态登记必须在字幕线程之前：generate_subtitles 的唯一退出
+                                        # 条件是 record_name 移出 recording，登记晚于线程启动会出现
+                                        # 「线程已跑、recording 里还没有」的窗口（下载抛错后字幕空转）。
+                                        # 登记是纯内存操作、无失败路径，先持锁写状态再起线程与下载。
                                         with record_state_lock:
                                             recording.add(record_name)
                                             start_record_time = datetime.datetime.now()
@@ -4735,9 +4242,8 @@ def start_record(
                                                 record_quality, actual_quality_code
                                             ):
                                                 logger.warning(
-                                                    # 与 ffmpeg 分支同一条 msgid（MID-68）：两条录制路径
-                                                    # （ffmpeg 拉流 / 强制直下）都要在画质被服务端钳制时告警，
-                                                    # 复用同一模板可避免为同一语义再登记一份待翻译串
+                                                    # 与 ffmpeg 分支复用同一 msgid：两条路径都要在画质被
+                                                    # 服务端钳制时告警，避免重复登记翻译串
                                                     i18n.tr(
                                                         "{record_name} 画质降级：设置 {record_quality_zh}({record_quality})"
                                                         " 实际 {actual_quality_zh}({actual_quality_code})",
@@ -4754,13 +4260,9 @@ def start_record(
                                                 actual_quality_zh,
                                             ]
 
-                                        # SEV-09 修复（2026-09-20）：字幕线程只在 flv_url 校验通过之后
-                                        # 启动（与 ffmpeg 路径「先起 ffmpeg 再起字幕」对齐）——原写法在
-                                        # 校验之前启动，配合下面未命中的 else 分支不清理，正好踩中上方
-                                        # MID-2202 说的「永不退出」窗口。
-                                        # MI-03：线程结束时从 create_var 清理自身条目（与 check_subprocess
-                                        # 内的写法对齐）；旧写法只加不删，GUI/Web 常驻模式下花椒/shopee
-                                        # 这类强制直下平台每轮录制都会泄漏一条 dict 条目 + Thread 对象引用。
+                                        # 字幕线程只在 flv_url 校验通过后启动（与 ffmpeg 路径「先起录制
+                                        # 再起字幕」对齐）；线程结束从 create_var 清理自身条目，否则
+                                        # 常驻模式下每轮都泄漏一条。
                                         if create_time_file:
 
                                             def _subtitle_thread_target_direct() -> None:
@@ -4768,19 +4270,15 @@ def start_record(
                                                     generate_subtitles(record_name, subs_file_path)
                                                 finally:
                                                     with record_state_lock:
-                                                        # MIN-01 同族防护：只在登记的仍是本线程时回收
+                                                        # 只在登记的仍是本线程时回收
                                                         if (
                                                             create_var.get(subs_thread_name)
                                                             is threading.current_thread()
                                                         ):
                                                             create_var.pop(subs_thread_name, None)
 
-                                            # L-08（2026-10-19）：与 check_subprocess 内的字幕线程登记
-                                            # 同因——写入与启动一并收进 record_state_lock，回收侧
-                                            # 本来就在锁内，写入侧在锁外会让「写 → start」与别的线程
-                                            # 的 finally pop 交错，留下无法回收的条目。
-                                            # L-02（2026-10-02）同族：start() 抛 RuntimeError 时
-                                            # target 不运行、其 finally 清理不执行，故失败即回滚登记。
+                                            # 写入与 start() 一并收进锁，防止与别的线程的 finally pop
+                                            # 交错；start() 抛错时 target 不运行，失败即回滚登记。
                                             with record_state_lock:
                                                 create_var[subs_thread_name] = threading.Thread(
                                                     target=_subtitle_thread_target_direct,
@@ -4810,38 +4308,27 @@ def start_record(
                                                     strftime=time.strftime("%Y-%m-%d %H:%M:%S"),
                                                 )
                                             )
-                                            # 直下路径无 check_subprocess 退出码反馈：成功按 host 补样本，
-                                            # 与 ffmpeg 路径语义对齐
+                                            # 直下路径无退出码反馈：成功按 host 补样本，与 ffmpeg 路径对齐
                                             record_success(record_host)
                                         elif (
                                             record_url not in url_comments and not exit_recording and recording_enabled
                                         ):
-                                            # 真-失败（CDN 拒绝非 200 / 网络异常在函数内部已消化成 False，
-                                            # 走不到外层 except 的 record_error）必须在此上报，否则坏线路
-                                            # 绕开按 host 熔断统计被无限重撞；被注释/退出标志/停止录制
-                                            # 的中断不计样本（非网络故障，不应污染错误窗口）
+                                            # 真失败（非 200 / 网络异常已在函数内消化成 False）必须在此
+                                            # 上报，否则坏线路绕开熔断统计；被注释/退出/停止不算样本。
                                             record_error(record_host)
 
-                                        # MIN-07 修复（2026-09-20）：统一走 clear_record_info 收尾。
-                                        # 原写法是裸 recording.discard + recording_time_list.pop，
-                                        # 绕过了 clear_record_info 里「URL 已被注释 → 同步移出
-                                        # running_list 并递减 monitoring」这一步，监控计数在
-                                        # 异常收尾路径上永不回落。clear_record_info 自带
-                                        # record_state_lock（非重入），故此处不得再包一层 with。
+                                        # 统一走 clear_record_info：它还会在 URL 被注释时移出 running_list、
+                                        # 递减 monitoring。该函数自带非重入锁，此处不得再包一层 with。
                                         clear_record_info(record_name, record_url)
                                     else:
-                                        # SEV-09 修复（2026-09-20）：未拿到 flv_url 也必须回收状态。
-                                        # 原分支只打一条 debug 就什么也不做，registration 留下的
-                                        # 幽灵条目会让时间字幕线程永不退出（见上方同条目注释）。
-                                        # shopee/花椒只回了 m3u8、或接口未下发 flv_url（游客态、
-                                        # 下播瞬间、接口结构变更）都会命中这里。
+                                        # 未拿到 flv_url 也必须回收状态：否则幽灵条目会让字幕线程
+                                        # 永不退出（shopee/花椒只回 m3u8、游客态、下播瞬间都会命中）。
                                         logger.debug(i18n.tr("未找到FLV直播流，跳过录制"))
                                         clear_record_info(record_name, record_url)
                                 except Exception as e:
                                     clear_record_info(record_name, record_url)
                                     color_obj.print_colored(
-                                        # MIN-2233 修复（2026-09-22）：同上，f-string 直传 print_colored
-                                        # 提取器扫不到「直播录制出错」，改为 tr 预格式化后整体传入。
+                                        # 用 tr 预格式化后整体传入：f-string 直传 print_colored 时提取器扫不到
                                         i18n.tr(
                                             "\n{anchor_name} {strftime} 直播录制出错,请检查网络\n",
                                             anchor_name=anchor_name,
@@ -4860,9 +4347,8 @@ def start_record(
                                     record_error(record_host)
 
                             elif record_save_type in ("FLV", "MKV", "MP4"):
-                                # F-01：FLV / MKV / MP4 三条分支的「路径构造 + 命令构造 +
-                                # 执行骨架」完全一致，差异只在 _build_record_output_path 与
-                                # _build_ffmpeg_output_args 内部按保存类型查表，故合并为一条。
+                                # FLV/MKV/MP4 三条分支的路径、命令与执行骨架完全一致，差异在
+                                # 两个 _build_* 函数内部按保存类型查表，故合并为一条。
                                 save_file_path = _build_record_output_path(
                                     full_path, anchor_name, title_in_name, now, record_save_type, split_video_by_time
                                 )
@@ -4890,21 +4376,13 @@ def start_record(
                                     record_danmaku_args,
                                 )
                                 if started:
-                                    # ffmpeg 自然结束触发「录后 30s 快检」（详见同位置注释）
+                                    # 触发「录后 30s 快检」：下播速重开不必等一整轮
                                     record_finished = True
-                                # MIN-2235 修复（2026-09-22）：转码必须在 comment_end 早退**之前**发起。
-                                # 原顺序是「if comment_end: return」在前、FLV 转码在后（且只在 FLV 分支），
-                                # 于是「地址被注释 / 收到停止录制」导致的提前结束会直接 return，已录到的
-                                # .flv 永不转 mp4——用户开了「自动转 mp4」也拿不到 MP4，且无任何告警
-                                # （静默丢失）。分段枚举由 _segment_files 精确匹配，早退前调用不会误伤。
-                                # MKV / MP4 已是成品容器，历史行为即不转码，保持原样，故此处仅 FLV 真调用。
-                                # 复核判据：tests/test_regression_2026_09_22_main.py 断言本分支
-                                # FLV + comment_end 时 _convert_after_record 被调用而 MKV/MP4 不被调用。
-                                # L-01（2026-10-19）：加上 `started`。ffmpeg 起不来（Popen 抛
-                                # OSError / 二进制缺失 / 命令被拒）时断言里既无产物也没有可转的
-                                # .flv，旧判据只按容器类型判断，仍会提交一次转码——转码器对不
-                                # 存在的输入报错，把「本来就已失败」的一轮再包装成一条转码错误，
-                                # 真正原因（ffmpeg 未起来）反而被后一条日志盖住。
+                                # 转码必须在 comment_end 早退之前发起：否则「被注释/停止录制」
+                                # 提前结束会直接 return，已录到的 .flv 静默丢失。
+                                # 仅 FLV 需要转码（MKV/MP4 已是成品容器），且必须 started——
+                                # ffmpeg 根本没起来时提交转码只会用转码错误盖住真实原因。
+                                # 复核：FLV + comment_end 调 _convert_after_record，MKV/MP4 不调。
                                 _convert_if_flv = started and record_save_type == "FLV"
                                 if comment_end:
                                     if _convert_if_flv:
@@ -4942,24 +4420,17 @@ def start_record(
                                     record_danmaku_args,
                                 )
                                 if started:
-                                    # ffmpeg 自然结束触发「录后 30s 快检」（详见同位置注释）
+                                    # 触发「录后 30s 快检」：下播速重开不必等一整轮
                                     record_finished = True
                                 if comment_end:
-                                    # 被注释 / 停止录制导致的提前结束：check_subprocess 在
-                                    # return True 之前走不到 rc==0 的转码分支，故在此补转
-                                    # 已录到的部分。
-                                    # 2026-09-14 统一修正：原 TS 非分段路径在此**无条件**
-                                    # 起线程转码，无视用户「是否录制完成后转为MP4格式」设置，
-                                    # 与 TS 分段路径、check_subprocess 自然结束路径的口径
-                                    # 均不一致（F-01 五份复制粘贴造成的典型行为漂移）。
+                                    # 提前结束走不到 rc==0 的转码分支，在此补转已录到的部分；
+                                    # _convert_after_record 内部会先检查用户是否开启转码。
                                     _convert_after_record(save_file_path, split_video_by_time)
                                     return
 
                             count_time = time.time()
-                            # 样本改由各录制路径按实际结果上报（check_subprocess 按退出码记成功/失败，
-                            # 直下路径按下载结果记）：旧的「轮末无条件记成功」会把 ffmpeg 失败轮
-                            # （如 CDN 403 秒退）也记成成功样本，稀释按 host 熔断统计——多房间
-                            # 同 host 时失败率永远到不了熔断阈值，坏线路被无限重撞。
+                            # 样本由各录制路径按实际结果上报；轮末无条件记成功会稀释按 host 的
+                            # 熔断统计（失败轮也变成功），坏线路永远撞不到阈值。
 
                 except Exception as e:
                     logger.error(
@@ -4981,25 +4452,16 @@ def start_record(
                     x = x + 60
                     color_obj.print_colored("\r瞬时错误太多,延迟加60秒", color_obj.YELLOW)
 
-                # 这里是.如果录制结束后,循环时间会暂时变成30s后检测一遍. 这样一定程度上防止主播卡顿造成少录
-                # 当30秒过后检测一遍后. 会回归正常设置的循环秒数
+                # 录制结束后 30 秒内快速复检一次，减少卡顿/短暂重开造成的漏录，之后回归配置间隔
                 if record_finished:
                     count_time_end = time.time() - count_time
                     if count_time_end < 60:
                         x = 30
                     record_finished = False
-                # 「else: x = num」分支已删除（2026-09-12 审查 6.1）：它无条件把 x 重置回 num，
-                # 让上面的 +60s 退避永远不生效；删掉后 record_finished 未触发时 x 自然保留退避值。
+                # 不要在此把 x 重置回 num：那会让上面的 +60s 退避永远不生效
 
-                # 正常循环等待：逐秒递减，且停止录制时立即打断剩余等待、回到循环顶检测退出标志
-                # （否则空闲房间线程会残留最长一个完整循环周期才退出）
-                # L-01（2026-10-02）：等待条件补齐三信号（与主循环顶部那处三条件判据——即
-                # main() 的 while 循环里 `if not ini_URL_content.strip():` 之前的退出判定——
-                # 及 disable_record 等待同口径）
-                # [L-09 2026-10-19] 原写法把该判据点名成「1061 行」，行号早已漂移；按 AGENTS.md
-                # 「引用代码位置优先写锚点、不写 file:line」改为按锚点描述。
-                # ——原只查 recording_enabled，URL 被注释/移除
-                # 或进程退出标志已置时，线程仍要把剩余等待耗完才回到循环顶。
+                # 逐秒递减等待，三信号（URL 被注释 / 退出标志 / 停止录制）任一命中即打断，
+                # 立即回到循环顶；只查 recording_enabled 会让线程耗完整个周期才响应。
                 while x:
                     if record_url in url_comments or exit_recording or not recording_enabled:
                         break
@@ -5021,26 +4483,19 @@ def start_record(
             record_error(record_host)
             time.sleep(2)
         finally:
-            # MID-30 修复（2026-09-20）：这里原本直接调 get_hub().room_stopped(...)，
-            # 但本 finally 与 while True 同层、**每轮**都执行一次，于是每轮监测都会把
-            # 正在监控的房间从枢纽里弹出、向 JSONL 边车写一条假「房间已停止监控」事件、
-            # 并把统计清零（监控页只在录制那段时间显示房间，下轮开播才由 room_started
-            # 重新注册）。真正的清理时机是房间线程退出——故此处只把本轮录制名回传给
-            # 调用方持有的 room_state，由 _room_thread_target 的 finally 在线程出口调用
-            # room_stopped 一次。「URL 被移除/注释后仍要清理」的行为保持不变
-            # （那三条 return 同样经线程出口）。监控为旁路功能，故未取到录制名时什么都不做。
+            # 本 finally 与 while True 同层，每轮都会执行：不能在此调 room_stopped，
+            # 否则每轮都会把房间弹出枢纽、写一条假的「停止监控」事件。真正的清理时机是
+            # 线程退出，故只回传本轮录制名，由 _room_thread_target 的 finally 调一次。
             if room_state is not None and record_name:
                 room_state["name"] = record_name
 
 
-# 打印本机 ffmpeg 版本信息并检测其可用性（缺失时由 check_ffmpeg 触发下载安装）；无入参，返回 ffmpeg 是否可用
+# 打印 ffmpeg 版本并检测可用性（缺失时触发下载安装）；返回是否可用
 def check_ffmpeg_existence() -> bool:
     ffmpeg_exists = False
     try:
-        # L-06（2026-10-19）：text=True 按 locale 解码（中文 Windows 是 cp936），ffmpeg 版本行里
-        # 一旦出现非 GBK 可解码字节就抛 UnicodeDecodeError——它不是 OSError/CalledProcessError，
-        # 会穿透本函数（版本检查于是变成启动期崩溃）。errors="replace" 让解码永不失败，
-        # 版本信息本身就是给人看的诊断输出，个别替换字符无碍。
+        # text=True 按 locale 解码（中文 Windows 是 cp936），版本行出现非 GBK 字节会抛
+        # UnicodeDecodeError（不属 OSError，会穿透成启动期崩溃）；errors="replace" 保证解码不失败。
         result = subprocess.run(["ffmpeg", "-version"], check=True, capture_output=True, text=True, errors="replace")
         # check=True 已保证 returncode==0，直接打印版本信息
         lines = result.stdout.splitlines()
@@ -5050,8 +4505,7 @@ def check_ffmpeg_existence() -> bool:
         if built_line:
             print(built_line)
     except subprocess.CalledProcessError as e:
-        # L-03（2026-10-02）：裸 logger.error(e) 在 CalledProcessError 的 str 为空（部分场景
-        # 只含 returncode）或异常 str() 语义不明时无法归因，改为 i18n 模板带 type_name
+        # 带 type_name：CalledProcessError 的 str 可能为空或语义不明
         logger.error(
             i18n.tr(
                 "ffmpeg 版本检查命令执行失败: {type_name}: {e}",
@@ -5067,9 +4521,8 @@ def check_ffmpeg_existence() -> bool:
 
 
 # --------------------------初始化程序-------------------------------------
-# import i18n 必须早于下方 banner 的 i18n.tr（模块级顺序执行，晚于此处的 import
-# 对已执行的 print 无效）；此处 i18n._tr 仍为默认 zh_CN 目录，banner 保持中文原文，
-# 与迁移前「banner 先于语言解析打印」的行为一致。
+# i18n 必须先于 banner 的 tr 导入（模块级顺序执行）；此时仍是默认 zh_CN 目录，
+# banner 保持中文原文，与「banner 先于语言解析打印」的既有行为一致。
 import i18n
 
 print("-----------------------------------------------------")
@@ -5080,45 +4533,34 @@ print(i18n.tr("版本号: {version}", version=version))
 print("GitHub: https://github.com/ihmily/DouyinLiveRecorder")
 print(i18n.tr("支持平台: {platforms}", platforms=platforms))
 print(".....................................................")
-# 不再在模块级执行 check_ffmpeg_existence()：import main（web.py/gui.py/测试/工具）不应触发
-# 111MB 的 FFmpeg 下载副作用。安装检查统一由各真实入口的 main() 完成（CLI/Web 录制线程）。
+# 模块级不执行 check_ffmpeg_existence()：import main（web.py/gui.py/测试）不应触发
+# FFmpeg 下载副作用；安装检查统一由各真实入口的 main() 完成。
 os.makedirs(os.path.dirname(config_file), exist_ok=True)
 t3 = threading.Thread(target=backup_file_start, args=(), daemon=True)
 t3.start()
 # URL_config.ini 去重已移入 main() 入口执行：import main 不应改写用户配置文件
 
 
-# 布尔配置项统一经 src.config_io.read_config_bool 解析，识别 是/否、true/false、1/0、
-# yes/no、on/off（大小写不敏感）。2026-09-17 移除了原
-# `options: dict[str, bool] = {"是": True, "否": False}` 字典查表实现：该实现只在值恰为
-# 「是/否」时命中字典，其余写法（含 Web 面板/外部编辑器写入的 true/false）会**静默**回落到
-# options.get 的兜底实参，无告警无日志——实测致 8 项配置生效值漂移，其中
-# 「是否跳过代理检测 = true」被判为 False 后 global_proxy=False，9 个海外平台的解析分支
-# 直接走 else，100% 无法录制。
+# 布尔配置统一经 src.config_io.read_config_bool：识别 是/否、true/false、1/0、yes/no、on/off
+# （大小写不敏感）。不要退回「是/否」字典查表：其余写法会静默落到兜底实参，
+# 实测曾致 8 项配置漂移（含「跳过代理检测 = true」被判 False，9 个海外平台无法录制）。
 config: configparser.RawConfigParser = tolerant_config_parser()
 
 
 config.read(config_file, encoding=text_encoding)
 
-# 重复键点名（2026-10-17 事故：同节两行同名键让 strict=True 的默认解析器抛
-# DuplicateOptionError，上方那次 config.read() 正是「录制核心 import 即崩」的第一现场）。
-# 容错读取把重复项折叠成最后一次取值，必须把折叠了哪几处说出来，
-# 否则用户只看到「某个设置没生效」而无从归因。
+# 重复键点名：容错解析器会把重复项折叠成最后一次取值（strict 解析器则会抛
+# DuplicateOptionError，曾有「import 即崩」事故），必须把折叠位置说出来，否则无从归因。
 warn_duplicate_options(config_file, text_encoding)
 
 
-# 把 config.ini 重新解析进一个**全新**的 RawConfigParser 并整体替换模块全局（MID-09）。
-# 返回是否发生了替换。两处保守条件缺一不可：
-#   ① 解析失败 / 文件打不开时保持既有内存态——configparser.read() 对打不开的文件是静默
-#      跳过的，若先 clear 再 read，一次瞬时失败会让所有键以「缺键」被默认值写回，
-#      等于把用户配置抹平成出厂默认值；
-#   ② 解析结果为空（空文件）时同样不替换，避免把内存态清成零键后触发自愈补写。
-# 与录制线程的写入统一在 file_update_lock 下互斥（该锁是 RLock，读侧持锁期间
-# read_config_value 的补写路径可重入安全）。
+# 把 config.ini 解析进全新的 RawConfigParser 并整体替换模块全局；返回是否替换。
+# 两处保守条件缺一不可：① 解析失败/打不开时保留内存态（否则瞬时失败会把所有键按缺键
+# 写回默认值，等于抹平用户配置）；② 结果为空时不替换，避免清成零键触发自愈补写。
+# 与录制线程的写入统一由 file_update_lock（RLock）互斥。
 def _hot_reload_config() -> bool:
     global config
-    # 容错解析器（同上）：热加载此前遇到重复键会走 except 分支「保留旧配置」，
-    # 于是用户在配置文件里加了一行也永远读不到、且只在日志里留一行泛化告警。
+    # 用容错解析器：否则遇到重复键会走 except 保留旧配置，用户改的键永远读不到
     fresh = tolerant_config_parser()
     try:
         with file_update_lock:
@@ -5129,24 +4571,20 @@ def _hot_reload_config() -> bool:
             config = fresh
         warn_duplicate_options(config_file, text_encoding)
     except (OSError, UnicodeDecodeError, configparser.Error) as e:
-        # 只记一行、保留旧配置：热加载失败绝不能中断录制主循环，也不得清空内存态
-        # （沿用目录既有 msgid，异常类型作为实参预先求值传入，避免为本行日志新增四语条目）
+        # 只记一行、保留旧配置：热加载失败不得中断录制主循环，也不得清空内存态
         logger.warning(i18n.tr("发生 I/O 或配置解析错误: {err}", err=f"{type(e).__name__}: {e}"))
         return False
     return True
 
 
-# 读取语言配置键 language：值留空则「跟随系统语言」，由 i18n.resolve_language 兜底
-# 返回原始配置值；不可识别或语言目录文件缺失的兜底由 i18n 统一处理。
+# 读取 language 原始值；空 → 跟随系统语言，不可识别/目录缺失由 i18n.resolve_language 兜底。
 def _read_language_config(config_parser: configparser.RawConfigParser) -> str:
     return read_config_value(config_parser, "录制设置", "language", "")
 
 
 language = _read_language_config(config)
 
-# i18n 多语言初始化：resolve_language 统一解析——空 → 系统语言；键值不可识别或
-# 语言目录文件缺失 → en_US 回退；随后加载对应翻译目录（gettext .mo / JSON / YAML，
-# 见 i18n.py），后续输出即时按该语言翻译
+# i18n 初始化：空 → 系统语言；不可识别/目录缺失 → en_US；随后加载翻译目录并即时生效。
 from i18n import resolve_language as _i18n_resolve
 from i18n import set_language as _i18n_set_language
 
@@ -5156,13 +4594,9 @@ skip_proxy_check = read_config_bool(config, "录制设置", "是否跳过代理�
 
 
 def _read_https_recording_config(config_parser: configparser.RawConfigParser) -> bool:
-    # 读取「是否启用https录制」（整合语义见下方 enable_https_recording 的注释）三级继承：
-    # 1) 新键存在 → 直接取值；
-    # 2) 新键缺失、旧键「是否强制启用https录制」存在 → 继承旧键值，并把该值
-    #    迁移写回新键（保证 Web 配置页可见可编辑）；旧键本身只读、绝不重建；
-    # 3) 两者皆无 → read_config_value 补写新键默认值「否」（保持配置自愈）。
-    # 三处统一走 read_config_bool（见 config 定义上方的布尔解析总注）：旧实现用 options 字典
-    # 查表，「是否启用https录制 = true」曾被静默判为「否」→ 拉流被降级为 http。
+    # 三级继承：新键存在直接取值；否则旧键「是否强制启用https录制」存在则继承并写回新键
+    # （旧键只读、不重建）；两者皆无则由 read_config_value 补写默认「否」。
+    # 统一走 read_config_bool，避免 true 被静默判成「否」。
     if config_parser.has_option("录制设置", "是否启用https录制"):
         return read_config_bool(config_parser, "录制设置", "是否启用https录制", False)
     if config_parser.has_option("录制设置", "是否强制启用https录制"):
@@ -5171,15 +4605,11 @@ def _read_https_recording_config(config_parser: configparser.RawConfigParser) ->
     return read_config_bool(config_parser, "录制设置", "是否启用https录制", False)
 
 
-# SSL/HTTPS 整合开关：「是否启用https录制」合并原「是否强制启用https录制」（协议强转）
-# 与「是否禁用SSL证书验证(是/否)」（证书校验）两个配置项，统一为单一二元语义：
-# 开启 = 流地址升级 https 拉流，并禁用**拉流侧** SSL 证书验证（保证 https 录制不被
-#        CDN 证书主机名不匹配等问题阻断，即原「是否禁用SSL证书验证=是」的功能）；
-# 关闭 = 流地址降级 http 拉流（无 TLS 不涉及证书验证），拉流侧恢复默认严格校验。
-# 证书豁免仅作用于拉流侧（http_config.stream_ssl_verify）：控制面（登录 / 取 Cookie /
-# 推送 token / 平台 API，http_config.ssl_verify）恒为严格校验，不再被本开关关闭——
-# 旧实现会让一个拉流选项顺带关掉全站 TLS 校验，属安全缺陷。
-# 该开关由 main() 主循环每轮读取配置后同步（热更新）。
+# SSL/HTTPS 整合开关（合并原「强制启用 https」与「禁用 SSL 证书验证」两项）：
+# 开启 = 流地址升级 https，并禁用**拉流侧**证书校验；关闭 = 降级 http，拉流侧恢复严格校验。
+# 证书豁免只作用于拉流侧（http_config.stream_ssl_verify）：控制面（登录/取 Cookie/推送/
+# 平台 API，http_config.ssl_verify）恒严格校验——拉流开关不得顺带关掉全站 TLS。
+# main() 每轮读取后同步，支持热更新。
 from src import http_config as _http_config
 
 enable_https_recording = _read_https_recording_config(config)
@@ -5189,20 +4619,14 @@ _http_config.set_https_recording(enable_https_recording)
 if config.has_option("录制设置", "是否禁用SSL证书验证(是/否)"):
     if read_config_bool(config, "录制设置", "是否禁用SSL证书验证(是/否)", False):
         print("提示: 「是否禁用SSL证书验证(是/否)」已整合进「是否启用https录制」，旧配置项不再生效")
-# 平台级 SSL 覆盖：「禁用SSL证书验证的平台(逗号分隔)」列表。
-# FFmpeg 9.0 起 TLS 证书验证默认开启（8.0 预告、9.0 落地），http 录制模式下
-# https-only 流地址也会被默认校验证书——该列表经 http_config.get_effective_ssl_verify
-# 仅在全局需要证书校验（ssl_verify=True）时生效，让证书异常平台跳过校验仍可拉流。
-# 需禁用 SSL 验证的平台（分析全部可监控录制平台的流/接口证书得出）：
-# - 虎牙直播：hw/TX CDN 流地址证书与拉流域名主机名不匹配（原独立配置键
-#   「虎牙是否禁用SSL证书验证(是/否)」的存在原因），严格校验直接拉流失败；
-# - B站直播：部分 CDN 节点证书链异常。
-# 启动时自动把缺失项追加至配置键值（只追加、绝不移除用户手填的平台）。
+# 平台级 SSL 豁免列表：FFmpeg 9.0 起默认校验证书，http 模式下 https-only 源也会被校验；
+# 该列表经 http_config.get_effective_ssl_verify 生效（仅在控制面仍需校验时）。
+# 虎牙：hw/TX CDN 证书与拉流域名不匹配，严格校验直接失败；B站：部分节点证书链异常。
+# 启动时自动追加缺失项，只追加、不移除用户手填的平台。
 SSL_DISABLE_REQUIRED_PLATFORMS: tuple[str, ...] = ("虎牙直播", "B站直播")
 
 
-# 分析可监控的录制平台网址、识别需禁用 SSL 验证的平台并自动追加至该键值；
-# 入参为已读取的配置解析器，返回合并后的平台集合（含用户原有手填项）
+# 解析「禁用SSL证书验证的平台」并自动追加必需项；返回合并后的集合
 def _sync_ssl_disable_platforms(config_parser: configparser.RawConfigParser) -> set[str]:
     # 读取现值（键缺失时 read_config_value 会补写空默认值，保证键存在）
     raw = read_config_value(config_parser, "录制设置", "禁用SSL证书验证的平台(逗号分隔)", "")
@@ -5226,15 +4650,11 @@ def _sync_ssl_disable_platforms(config_parser: configparser.RawConfigParser) -> 
     return set(kept + appended)
 
 
-# 把「需禁用 SSL 证书验证的平台」解析出来并落到 http_config（幂等、只追加不移除）。
-# 抽出为函数是为了两个调用点共用同一份语义：① 模块 import 时（进程首启）；
-# ② main() 主循环在配置值变化时重跑（MID-10 热更新）。
-# 返回本次生效的平台集合，便于调用方/测试观察。
+# 解析平台豁免并落到 http_config（幂等、只追加不移除）；两个调用点共用：
+# 模块 import 首启，以及 main() 在配置值变化时重跑。返回本次生效的平台集合。
 def _apply_ssl_platform_exempt(config_parser: configparser.RawConfigParser) -> set[str]:
     platforms = _sync_ssl_disable_platforms(config_parser)
-    # 兼容旧版单列配置：虎牙是否禁用SSL证书验证(是/否)=是 → 等价于把「虎牙直播」加入列表。
-    # 注意：仅当旧键实际存在时才读取，绝不写回——旧键只应被读、不应被自动重建，
-    # 否则迁移后的配置旧键缺失反而触发「缺键→写回→不可写→崩溃」的坏兼容。
+    # 旧单列配置兼容：仅当旧键存在时读取，绝不写回（自动重建旧键会触发「缺键→写回→崩溃」）。
     if config_parser.has_option("录制设置", "虎牙是否禁用SSL证书验证(是/否)"):
         if read_config_bool(config_parser, "录制设置", "虎牙是否禁用SSL证书验证(是/否)", False):
             platforms.add("虎牙直播")
@@ -5244,11 +4664,9 @@ def _apply_ssl_platform_exempt(config_parser: configparser.RawConfigParser) -> s
 
 
 _ssl_disable_platforms = _apply_ssl_platform_exempt(config)
-# MID-10：热加载时用于判定「禁用SSL证书验证的平台」是否变化，初值取 import 时的内存态
+# 热加载时判定「禁用SSL证书验证的平台」是否变化，初值取 import 时的内存态
 _last_ssl_disable_platforms_raw = ",".join(sorted(_ssl_disable_platforms))
-# 翻译包装不再按语言门控：任何语言下都安装 translated_print——
-# zh_CN/zh_TW 把英文常量串译为中文；en_US/en_GB 把中文串译为英文；
-# 未知串恒等返回，无额外代价。语言经 i18n.set_language 热切换（Web/GUI 即时生效）。
+# translated_print 在所有语言下安装：中英互译，未知串恒等返回；语言经 set_language 热切换。
 from i18n import translated_print
 
 builtins.print = translated_print  # type: ignore[assignment]
@@ -5267,9 +4685,9 @@ except Exception as err:
     print("An unexpected error occurred:", err)
 
 
-# 程序主入口（CLI 直跑与 web.py 守护线程共用）：先校验 ffmpeg，随后死循环「热加载 config.ini →
-# 检查磁盘余量 → 解析并清理 URL_config.ini → 为每个新增直播间拉起 start_record 线程」；
-# non_interactive=True 时 URL 配置为空不阻塞等待 input（供 Web 模式使用）；无返回值
+# 程序主入口（CLI 直跑与 web.py 守护线程共用）：校验 ffmpeg 后死循环「热加载 config.ini →
+# 检查磁盘余量 → 解析清理 URL_config.ini → 为新增房间拉起 start_record 线程」。
+# non_interactive=True 时 URL 配置为空不阻塞 input（Web 模式）。
 def main(non_interactive: bool = False) -> None:
     global a, acfun_cookie, args, auto_update_anchor_name, baidu_cookie, bark_msg_api, bark_msg_level, bark_msg_ring, begin_push_message_text, begin_show_push, bigo_cookie, bili_cookie, blued_cookie
     global changliao_cookie, chzzk_cookie, clean_emoji, converts_to_h264, converts_to_mp4, create_time_file, custom_script, delay_default, delete_origin_file, dingtalk_api_url, danmaku_platforms, danmaku_split_time, enable_danmaku, enable_danmaku_monitor
@@ -5282,17 +4700,15 @@ def main(non_interactive: bool = False) -> None:
     global popkontv_username, pplive_cookie, proxy_addr, proxy_addr_bak, push_check_seconds, push_message_title, pushplus_token, qiandurebo_cookie, quality, replace_words, running_snapshot, running_url
     global semaphore, sender_email, sender_name, shopee_cookie, show_url, showroom_cookie, six_room_cookie, smtp_port, sooplive_cookie, sooplive_password, sooplive_username
     global scheduler, recording_semaphore
-    # MID-07 / MID-10：主循环热加载写回的两个模块全局（单次录制时长上限、SSL 豁免平台的
-    # 上一次原始配置值，用于「值变化时才重跑」的幂等判定）
+    # 热加载写回的两个全局：单次录制时长上限、SSL 豁免平台的上一次原始值（用于变更判定）
     global max_record_seconds, _last_ssl_disable_platforms_raw
     global split_line, split_time, split_video_by_time, start_with, t, t2, taobao_cookie, text_no_repeat_url, tg_chat_id, tg_token, tiktok_cookie, to_email
     global twitcasting_account_type, twitcasting_cookie, twitcasting_password, twitcasting_username, twitch_cookie, url, url_comments, url_host, url_tuple, url_tuples_list, use_proxy
     global video_record_quality, video_save_path, video_save_type, video_save_type_list, vvxqiu_cookie, weibo_cookie, winktv_cookie, xhs_cookie, xizhi_api_url, yinbo_cookie, yingke_cookie, yiqilive_cookie
     global youtube_cookie, yy_cookie, zhihu_cookie
 
-    # FFmpeg 网关：原模块级 sys.exit(1) 会在 import main 时杀死 uvicorn（I7），
-    # 故移到 main() 入口；缺失时打印警告并 return，守护线程干净退出，Web 面板继续服务。
-    # 直接运行 `python main.py` 时同样从这里退出而非 sys.exit，避免硬退出。
+    # FFmpeg 网关放在 main() 入口：模块级 sys.exit(1) 会在 import main 时杀死 uvicorn。
+    # 缺失时告警并 return，录制引擎线程干净退出而 Web 面板继续服务；CLI 也从这里退出，避免硬退。
     if not check_ffmpeg_existence():
         logger.error("缺少ffmpeg无法进行录制，程序退出")
         return
@@ -5301,23 +4717,21 @@ def main(non_interactive: bool = False) -> None:
     if os.path.isfile(url_config_file):
         utils.remove_duplicate_lines(url_config_file)
 
-    # L-07：默认下载目录从模块级副作用改为入口处创建——import main 不再产生磁盘写入，
-    # 而 main() 之后的每条录制路径仍能看到目录已存在（与旧行为一致）。
+    # 默认下载目录在入口创建（模块 import 不再产生磁盘写入）；录制路径仍能看到目录已存在。
     try:
         os.makedirs(default_path, exist_ok=True)
     except OSError as e:
-        # 建不出来不算致命：录制侧还会按 check_path 再建一次并在那里报出真实原因，
-        # 这里提前失败反而会把「无权限/磁盘满」变成启动即崩。
+        # 建不出来不致命：录制侧会按 check_path 再建并报出真实原因，
+        # 此处提前崩会把「无权限/磁盘满」变成启动失败。
         logger.debug(i18n.tr("创建默认下载目录失败: {type_name}: {e}", type_name=type(e).__name__, e=e))
 
-    # 启动期陈旧字节码缓存清理（判定基线与被删范围见 src/startup_cleanup.py）。放在此处而非模块顶部：
-    # 此刻 src.* 已 import 完毕，本轮启动不受影响，只有源码/版本真的变化时下一次启动才付重编译成本。
+    # 陈旧字节码缓存清理放在此而非模块顶部：src.* 已 import 完毕，本轮启动不受影响；
+    # 只有源码/版本真的变化时下一次启动才付重编译成本。
     purge_stale_bytecode_caches(
         script_path, version, read_config_bool(config, "录制设置", "是否启动时清理陈旧字节码缓存(是/否)", True)
     )
 
-    # 初始化并发调度器（自适应全局容量 + 按平台熔断降级 + 可选录制并发软上限）。
-    # 在 while 循环前创建，确保 start_record 线程启动前 scheduler/semaphore 已就绪。
+    # 并发调度器在 while 前创建，确保 start_record 线程启动前 scheduler/semaphore 已就绪
     if scheduler is None:
         scheduler = ConcurrencyScheduler(configured_limit=max_request)
         semaphore = scheduler.network_semaphore
@@ -5330,29 +4744,23 @@ def main(non_interactive: bool = False) -> None:
                 with open(config_file, "w", encoding=text_encoding) as file:
                     pass
 
-            # 每轮重新读取配置文件，支持运行期间热更新；持锁读取避免与录制线程的
-            # update_config 并发读到半写文件。
-            # MID-09 修复（2026-09-20）：必须换成「读入全新解析器后整体替换」——
-            # RawConfigParser.read() 是**合并**语义（不清空既有 section/option），用户手删的键
-            # 在内存里会永久保留旧值，且 read_config_value 的「缺键补写」自愈永不触发
-            # （has_option 恒真），热加载实际只是增量合并。保守条件见 _hot_reload_config。
+            # 每轮热加载配置；持锁读取避免与录制线程的 update_config 读到半写文件。
+            # 必须「读入全新解析器后整体替换」：RawConfigParser.read() 是合并语义，用户手删的键
+            # 会永久保留旧值，缺键补写自愈也永不触发。保守条件见 _hot_reload_config。
             _ = _hot_reload_config()
 
             ini_URL_content = ""
             if os.path.isfile(url_config_file):
-                # L-05（2026-10-19）：这里原缺 errors 参数，文件被外部编辑器存成非 text_encoding
-                # 编码时 `file.read()` 抛 UnicodeDecodeError（ValueError 子类），而本 try 的 except
-                # 只有 EOFError 与 (OSError, configparser.Error)——异常会穿透整个主循环。
-                # _hot_reload_config 早已覆盖该异常，同一轮里两处读取口径不该分叉；
-                # 取值与下方逐行解析处（readlines 那次）一致用 ignore，避免把替换字符塞进 URL。
+                # errors="ignore"：外部编辑器存成非 text_encoding 时 read() 会抛
+                # UnicodeDecodeError（ValueError 子类），而本 try 只捕 EOFError/OSError/配置错误，
+                # 异常会穿透主循环。与下方 readlines 处保持一致，避免把替换字符塞进 URL。
                 with open(url_config_file, "r", encoding=text_encoding, errors="ignore") as file:
                     ini_URL_content = file.read().strip()
 
             if not ini_URL_content.strip():
                 if non_interactive:
-                    # 非交互模式（如 web.py 守护线程）：跳过阻塞，等待 Web API 写入 URL
-                    # S-05：被中断（= 本函数立刻返回、未消耗任何等待时间）时补固定退避，
-                    # 否则 continue 会跳过循环末尾的 time.sleep(3)，主循环退化成零延迟忙循环。
+                    # 非交互模式：跳过阻塞等待 Web API 写入 URL；被中断时补固定退避，
+                    # 否则 continue 会跳过循环末尾的 sleep(3)，退化成零延迟忙循环。
                     if _interruptible_sleep(5):
                         time.sleep(3)
                     continue
@@ -5360,12 +4768,10 @@ def main(non_interactive: bool = False) -> None:
                 with open(url_config_file, "w", encoding=text_encoding) as file:
                     _ = file.write(input_url)
         except EOFError:
-            # CR-01 修复：无可用标准输入时 input() 抛 EOFError（窗口化启动、stdin 被重定向
-            # 到 nul 等）。旧实现只捕获 OSError/configparser.Error，该异常会穿透出去，
-            # 进程带栈退出——GUI 侧表现为「一点开始录制就没了」且无任何提示。
-            # 与 non_interactive 同策略：退化为轮询等待外部写入 URL，而不是崩掉。
+            # 无可用 stdin 时 input() 抛 EOFError（窗口化 / stdin 被重定向）：不能让它穿透，
+            # 否则进程带栈退出（GUI 表现为「一点开始录制就没了」）。退化为轮询等待配置写入。
             logger.error(i18n.tr("无法从控制台读取直播间网址（无可用标准输入），等待配置文件写入"))
-            # S-05：同上一分支，被中断时补退避
+            # 同上：被中断时补退避
             if _interruptible_sleep(5):
                 time.sleep(3)
             continue
@@ -5394,41 +4800,31 @@ def main(non_interactive: bool = False) -> None:
         use_proxy = read_config_bool(config, "录制设置", "是否使用代理ip(是/否)", True)
         proxy_addr_bak = read_config_value(config, "录制设置", "代理地址", "")
         proxy_addr = None if not use_proxy else proxy_addr_bak
-        # 仅在配置值变化时更新并发调度器：该值在动态模式下作为容量下限之一（容量随活跃任务数
-        # 缩放、带安全下限），固定模式下即并发限制本身（见下方并发模式解析）；
-        # 不再每轮重建信号量（旧逻辑会因实例替换导致并发计数失效、上限形同虚设）
+        # 仅在配置值变化时更新调度器：动态模式下它是容量下限之一，固定模式下即并发限制本身；
+        # 不要每轮重建信号量（实例替换会让并发计数失效、上限形同虚设）
         new_max_request = _safe_int(read_config_value(config, "录制设置", "同一时间访问网络的线程数", 3), 3)
         if new_max_request != max_request:
             max_request = new_max_request
             if scheduler is not None:
                 scheduler.set_configured_limit(new_max_request)
             logger.debug(i18n.tr("并发线程数配置更新为 {max_request}", max_request=max_request))
-        # 录制并发软上限（资源治理）：0=不限制；>0 时限制同时 ffmpeg 录制数，防资源耗尽。
-        # 键名不得含 = / : 等 configparser 分隔符：读取会在首个分隔符处截断（永远查不到键），
-        # 写回会抛 InvalidWriteError（Python 3.13+ 禁止键名含分隔符）——曾致启动即崩溃
+        # 录制并发软上限：0=不限制。键名不得含 = / : 等 configparser 分隔符——读取会在首个
+        # 分隔符处截断、写回会抛 InvalidWriteError（曾有启动即崩事故）。
         new_recording_limit = _safe_int(read_config_value(config, "录制设置", "最大同时录制数(0为不限制)", 0), 0)
         if scheduler is not None and new_recording_limit != scheduler.recording_limit:
             scheduler.set_recording_limit(new_recording_limit)
-        # 并发模式解析：该配置项兼作模式开关——为 0 时启用动态调速器（网络容量随活跃任务数自适应，
-        # 带安全上下限）；非 0 时忽略动态调速器，固定使用「同一时间访问网络的线程数」作为并发限制
-        # （最小 1 个槽位）。set_dynamic_mode 内部幂等（模式未变不重复播报），可每轮安全调用；
-        # 同时录制上限语义不变（仍由上方 set_recording_limit 管控 ffmpeg 数量）
+        # 非 0 时忽略动态调速器，固定使用「同一时间访问网络的线程数」；0 时启用动态调速
+        # （容量随活跃任务数缩放）。set_dynamic_mode 幂等，可每轮调用。
         if scheduler is not None:
             scheduler.set_dynamic_mode(new_recording_limit == 0)
-        # MID-2206 修复（2026-09-22）：轮询类时间配置必须有下界。
-        # 与 split_time / max_record_seconds 同口径——那两处早已做了 `<=0 回落默认值`，
-        # 唯独循环时间没有：填 0 / 负数 / 极小值会原样生效，主循环与房间线程随即退化成
-        # 无间隔轮询（每轮一次平台解析 + 一次 ffmpeg 拉取判定），表现为本机 CPU 打满、
-        # 平台侧被全速撞接口（触发限流甚至封 IP），而日志上只是一堆重复的「获取失败」。
-        # 30s 与同文件其它退避口径（`max(30.0, float(delay_default))`）保持一致。
+        # 轮询类时间配置必须有下界：填 0/负数会让主循环与房间线程退化成无间隔轮询
+        # （CPU 打满、平台接口被全速撞），日志上只是重复的「获取失败」。
         delay_default = max(30, _safe_int(read_config_value(config, "录制设置", "循环时间(秒)", 120), 120))
         # 排队读取网址的间隔语义上是 0 = 不等待，故只夹下界到 0，不允许负值
         local_delay_default = max(0, _safe_int(read_config_value(config, "录制设置", "排队读取网址时间(秒)", 0), 0))
         loop_time = read_config_bool(config, "录制设置", "是否显示循环秒数", False)
         show_url = read_config_bool(config, "录制设置", "是否显示直播源地址", False)
-        # 语言热切换：配置变化时即时重载翻译目录（Web 面板/GUI 改语言后下轮循环生效），
-        # 无需重启进程；录制中的 ffmpeg 子进程不受影响，仅影响新产生的控制台输出。
-        # 空/未识别/语言目录缺失经 resolve_language 统一兜底（与启动初始化同语义）
+        # 语言热切换：配置变化时即时重载翻译目录（下轮生效，无需重启）；录制中的 ffmpeg 不受影响。
         _new_language = _i18n_resolve(read_config_value(config, "录制设置", "language", ""))
         if _new_language != language:
             language = _new_language
@@ -5436,30 +4832,21 @@ def main(non_interactive: bool = False) -> None:
             print(i18n.tr("语言已切换: {_new_language}", _new_language=_new_language))
         split_video_by_time = read_config_bool(config, "录制设置", "分段录制是否开启", False)
         enable_https_recording = _read_https_recording_config(config)
-        # 与模块级初始化同语义（二元联动口径见 enable_https_recording 上方注释）；
-        # 每轮同步以支持运行期间热更新（Web 面板改配置后下轮循环即生效）。
+        # 每轮同步 https 开关，支持热更新（二元联动口径见 enable_https_recording 上方注释）
         _http_config.set_https_recording(enable_https_recording)
-        # MID-10 修复（2026-09-20）：「禁用SSL证书验证的平台」原本只在模块 import 时同步一次
-        # （_sync_ssl_disable_platforms + set_platform_ssl_verify 都写在模块级），运行期增删豁免
-        # 平台必须重启进程——而相邻的 HLS 开关、https 开关都是每轮热生效，用户无从区分；
-        # 录制启动后新出现证书异常的平台也不会被自动追加（而「启动时自动追加」正是本仓既定行为）。
-        # 现按「配置值变化时」重跑：_sync_ssl_disable_platforms 幂等且只追加、绝不移除用户手填项，
-        # set_platform_ssl_verify 重复设置同一 (平台, False) 亦为幂等。
+        # SSL 豁免平台按「配置值变化时」重跑（与相邻 HLS/https 开关一样热生效）：
+        # _sync_ssl_disable_platforms 幂等且只追加不删；重复设置同一 (平台, False) 亦幂等。
         _ssl_disable_raw = read_config_value(config, "录制设置", "禁用SSL证书验证的平台(逗号分隔)", "")
         if _ssl_disable_raw != _last_ssl_disable_platforms_raw:
             _last_ssl_disable_platforms_raw = _ssl_disable_raw
             _apply_ssl_platform_exempt(config)
         disk_space_limit = _safe_float(read_config_value(config, "录制设置", "录制空间剩余阈值(gb)", 1.0), 1.0)
-        # MID-11 修复（2026-09-20）：与相邻的时间类配置同口径做数值归一（原来只 str()）。
-        # 空值（面板清空输入框即可产出）或非数字会直接进到命令行 → `-segment_time ""` /
-        # `-segment_time abc` → ffmpeg 以 -22 在启动阶段秒退，又被判成「CDN 快速失败」，
-        # 给一条健康流地址记探针退避（与 MID-02 同类归因错误）。<=0 同样按默认值处理。
+        # 分段时间做数值归一：空值/非数字会进命令行（`-segment_time ""`）让 ffmpeg 秒退，
+        # 又被误判成 CDN 快速失败；<=0 同样回落默认值。
         _split_time_raw = _safe_int(read_config_value(config, "录制设置", "视频分段时间(秒)", 1800), 1800)
         split_time = str(_split_time_raw if _split_time_raw > 0 else 1800)
-        # MID-07 修复（2026-09-20）：单次录制时长上限改为可配置（0 = 不限制）。
-        # 24 小时轮播/官方电台房间超过 6 小时是常态，旧的硬上限每 6 小时制造一条
-        # record_error 失败样本（把按 host 熔断推向 open）并跳过转码/清退避。
-        # 生效范围（分段开/关均判定）见 _MAX_RECORD_SECONDS 上方的小节注释。
+        # 单次录制时长上限可配置（0 = 不限制）：24 小时轮播是常态，硬上限会每 6 小时
+        # 制造一条失败样本并跳过转码/清退避。生效范围见 _MAX_RECORD_SECONDS 上方注释。
         _max_record_raw = _safe_int(
             read_config_value(config, "录制设置", "单次录制时长上限(秒,0为不限制)", _MAX_RECORD_SECONDS),
             _MAX_RECORD_SECONDS,
@@ -5483,11 +4870,8 @@ def main(non_interactive: bool = False) -> None:
         danmaku_platforms_str = read_config_value(
             config, "录制设置", "弹幕录制平台(逗号分隔)", "斗鱼直播,B站直播,虎牙直播,抖音直播,TwitchTV"
         )
-        # M-12 修复（2026-09-29 审查）：分割后逐项 strip 并丢弃空项，口径与上方「HLS采集排除平台」
-        # （hls_collection_exclude_platforms）完全一致。原写法 replace 全角逗号后直接 split(",")，
-        # 用户在面板/GUI 里最常见的 `"斗鱼直播, B站直播"` 会得到 `" B站直播"`，而匹配点
-        # `platform in danmaku_platforms`（见本文件 _danmaku_active 分支）按平台名精确比较 → 恒不命中，
-        # 该平台弹幕被**静默**关闭（无一条日志），表现为「配置勾了却没弹幕」。
+        # 分割后逐项 strip 并丢弃空项（与 HLS 排除平台同口径）：否则 "斗鱼直播, B站直播"
+        # 会得到 " B站直播"，而匹配点按平台名精确比较 → 弹幕被静默关闭。
         danmaku_platforms = (
             [p.strip() for p in danmaku_platforms_str.replace("，", ",").split(",") if p.strip()]
             if danmaku_platforms_str
@@ -5526,9 +4910,8 @@ def main(non_interactive: bool = False) -> None:
         begin_push_message_text = read_config_value(config, "推送配置", "自定义开播推送内容", "")
         over_push_message_text = read_config_value(config, "推送配置", "自定义关播推送内容", "")
         disable_record = read_config_bool(config, "推送配置", "只推送通知不录制(是/否)", False)
-        # MID-2206 修复（2026-09-22）：同 delay_default，推送检测频率也必须夹下界。
-        # 填 0 时上面「只推送不录制」分支的逐秒等待退化为 while 0 > 0 立即穿透，
-        # 房间线程变成每轮一次全速解析 + 一次推送，接口被全速重撞。
+        # 推送检测频率同样夹下界：填 0 会让「只推送不录制」的逐秒等待立即穿透，
+        # 房间线程变成全速解析 + 全速推送。
         push_check_seconds = max(
             30, _safe_int(read_config_value(config, "推送配置", "直播推送检测频率(秒)", 1800), 1800)
         )
@@ -5612,17 +4995,10 @@ def main(non_interactive: bool = False) -> None:
                 i18n.tr("磁盘空间检测失败（跳过限制检查）: {type_name}: {e}", type_name=type(e).__name__, e=e)
             )
             disk_free_gb = float("inf")
-        # SEV-2206（2026-09-22）：磁盘满只应是**可逆暂停**。exit_recording 除下面 else 分支外
-        # 全文件无处复位，拿它表达资源约束的结果是「磁盘满过一次」之后哪怕用户清出空间，主循环的
-        # 拉起条件 `not exit_recording` 也恒假：引擎活着、房间线程活着、一条录制都不起，
-        # 且不再有任何提示。故引入 disk_limited：进入限制时同步置位两者（房间线程据此停流），
-        # 空间恢复后同步复位并显式告知（下面 else 分支）。
-        # 只在**状态跃迁**时打日志：主循环每 3s 跑到这里，无条件打会刷屏。
-        # 检测失败路径上面已把 disk_free_gb 置 inf，故这里无需再判 None。
-        #   [历史注] 2026-09-23 回归修正：上一轮引入 disk_limited 时误把进入条件
-        #   `disk_free_gb < disk_space_limit` 整条删掉、只剩 `if not disk_limited`，于是首轮
-        #   必进该分支并置 exit_recording=True，启动瞬间 recording 为空即 sys.exit(-1)/return
-        #   ——任何磁盘空间下程序都在主循环第一轮自行退出。
+        # 磁盘满只应是可逆暂停：exit_recording 全文件只在空间恢复分支复位，拿它表达
+        # 资源约束会让「满过一次」之后永久不再拉起。故引入 disk_limited：进入限制时同步
+        # 置位两者（房间线程据此停流），恢复时同步复位。
+        # 只在状态跃迁时打日志（主循环每 3s 跑到这里）；检测失败已置 inf，无需再判 None。
         if disk_free_gb < disk_space_limit:
             if not disk_limited:
                 disk_limited = True
@@ -5641,24 +5017,18 @@ def main(non_interactive: bool = False) -> None:
                             disk_space_limit=disk_space_limit,
                         )
                     )
-                    # 2026-09-12 审查（低危）：Web 模式下 main() 跑在 uvicorn 起的守护线程里
-                    # （web.py: `Thread(target=main.main, kwargs={"non_interactive": True})`）。
-                    # sys.exit(-1) 只向**该线程**抛 SystemExit——线程死了，但 uvicorn 与
-                    # 面板仍在运行，用户看到「面板一切正常、录制永不恢复」且无任何提示，
-                    # 只能靠翻 web 日志才发现磁盘满。按运行模式分流：
-                    #   - Web（non_interactive=True）→ 置标志并 return，让线程干净退出，
-                    #     面板继续服务；用户可在面板看到状态并自行处理磁盘。
-                    #   - CLI / GUI → 保留 sys.exit(-1)（进程就该退出）。
-                    # SEV-2207（2026-09-22）：退出前先排空后处理线程池，避免转封装 worker 的
-                    # join 抢在 ffmpeg 清理与日志归档之前（详见 _shutdown_postprocess_executor 注释）
+                    # Web 模式下 main() 跑在 uvicorn 的守护线程里（web.py: recorder-engine）：
+                    # sys.exit(-1) 只杀该线程，面板继续运行且用户看不到任何提示。
+                    # 故 Web（non_interactive=True）置标志并 return；CLI/GUI 保留 sys.exit(-1)。
+                    # 退出前先排空后处理池（理由见 _shutdown_postprocess_executor）。
                     _shutdown_postprocess_executor()
                     if non_interactive:
                         logger.warning("Web 模式：录制引擎已因磁盘空间不足停止，Web 面板继续服务")
                         return
                     sys.exit(-1)
         elif disk_limited:
-            # 空间已回到阈值之上：两个标志一起复位。只清 disk_limited 不够——房间线程与主循环
-            # 真正读的是 exit_recording，不清就等于「暂停」永远不解除（引擎活着但零录制、零提示）。
+            # 空间恢复：两个标志一起复位。房间线程与主循环真正读的是 exit_recording，
+            # 只清 disk_limited 等于暂停永不解除。
             disk_limited = False
             exit_recording = False
             logger.warning(
@@ -5669,42 +5039,26 @@ def main(non_interactive: bool = False) -> None:
             )
 
         try:
-            # 三者均只用于成员检测：原为 list，导致本循环内每行的 `in` 都是 O(N) 线性扫描，
-            # 80+ 房间时退化成 O(N²)；改 set 后为 O(1)，且消除下方 url_comments 的整表重建。
-            # MID-2203 修复（2026-09-22）：解析过程先写**局部**集合，整轮解析成功后
-            # （本 try 末尾）再整体替换全局 url_comments。原写法在解析开始前就把
-            # url_comments 与当时的 line_list / url_line_list / seen_urls 逐个重绑成空 set，
-            # 而房间线程与主循环全程都在读 url_comments：
-            #   ① 解析窗口内 url_comments 恒空 → 用户刚注释掉的房间被判定为「未注释」，
-            #      本轮又被拉起，出现「注释了却还在录」；
-            #   ② 解析中途抛错（文件被占用 / 正则回溯 / 写回失败）走外层 except，全局集合
-            #      停在被清空的那一版 → 整轮状态丢失，直到下一轮重读文件才恢复。
-            # 局部变量名统一加下划线前缀，避免与全局名混淆。
+            # 集合只用于成员检测（set 保证 O(1)，避免 80+ 房间时 O(N²)）。
+            # 解析过程先写局部集合，整轮成功后（本 try 末尾）再整体替换全局 url_comments：
+            # 边解析边清空会让房间线程在窗口内把「刚注释掉的房间」判成未注释，
+            # 中途抛错时全局集合还会停在半空状态。局部变量统一加下划线前缀。
             _url_comments: set[str] = set()
             _line_list: set[str] = set()
             _url_line_list: set[str] = set()
             _seen_urls: set[str] = set()
-            # L-06（2026-10-02）：清空移到每轮解析开始处——原在 try 尾部（拉起循环之后）才清，
-            # 解析中途抛错走外层 except 时旧条目残留，下一轮解析结果叠加其上（幽灵拉起）。
-            # 拉起循环消费的 text_no_repeat_url 已先取了快照，此处提前清空不影响本轮。
+            # 清空放在解析开始处：放在 try 尾部（拉起循环之后）时，中途抛错会留下旧条目，
+            # 下一轮结果叠加其上形成幽灵拉起。拉起循环已先取快照，提前清空不影响本轮。
             url_tuples_list = []
-            # 2026-09-12 审查 6.1：原代码在此迭代同一文件，循环体内调 delete_line / update_file
-            # （两者均 truncate 重写整个 URL_config.ini）。文件较大（>8KB）时迭代器底层
-            # 文件指针已被 truncate，for origin_line in file: 漏读后半段；此外重复 I/O
-            # 把 N 个重复行变成 N 次全文件读写。改为先 readlines 一次性物化为 list，
-            # 再迭代去重与更新——file handle 全程关闭，update_file/delete_line 写入
-            # 的临时文件不会被本 for 句柄持有，可正常 replace 落盘
+            # 先 readlines 物化为 list 再迭代：循环体内会 truncate 重写整个 URL_config.ini，
+            # 边读边写会漏读被截断的后半段；一次性物化也能把 N 次全文件读写降为一次。
             with open(url_config_file, "r", encoding=text_encoding, errors="ignore") as file:
                 _url_lines = file.readlines()
             for origin_line in _url_lines:
                 try:
                     if origin_line in _line_list:
-                        # SEV-05 调用侧修复（2026-09-20）：delete_line 现返回 bool
-                        # （True 仅当真的删掉了一行；两侧先 rstrip 行尾再比较，CRLF 文件不再
-                        # 静默 no-op）。原调用点丢弃返回值，删除失败时整轮去重退化为永久 no-op
-                        # 且完全不可观测——重复 URL 每轮重复起线程。此处按 False 告警。
-                        # `is False` 而非 `not ...`：兼容「尚未返回 bool」的旧实现（返回 None
-                        # 时不得误报失败）。
+                        # delete_line 返回 bool，失败时告警：丢弃返回值会让去重退化为永久
+                        # no-op 且不可观测。`is False` 兼容返回 None 的旧实现（不误报）。
                         if delete_line(url_config_file, origin_line) is False:
                             logger.warning(
                                 i18n.tr(
@@ -5735,15 +5089,8 @@ def main(non_interactive: bool = False) -> None:
                     else:
                         split_line = [line, ""]
 
-                    # CR-02 修复：旧写法在元素个数 >3 时执行 `quality, url, name = split_line`
-                    # 抛 ValueError（"too many values to unpack"），且该异常不在行内捕获，会
-                    # 冒泡终止整个 for 循环——坏行之后的所有直播间此后每一轮都处理不到。
-                    # 改为「前两段为画质+URL、其余全部合并为主播名」，结构上不可能抛异常。
-                    # [L-04 2026-10-19] 此处原有一条 `if len(split_line) == 1:` 分支（取整行当 URL），
-                    # 结构上不可达：split_line 只来自上面两处——`re.split("[,，]", line)` 的输入已确认
-                    # 含分隔符（≥2 段），else 分支固定 2 段。留着一个永不执行的「无分隔符形态」分支
-                    # 会让读者以为单段行是受支持输入，实际它在上方 `len(line) < 18` 与分隔符判据处
-                    # 早就不成立。删掉不改变任何可达路径的行为。
+                    # 前两段为画质+URL、其余全部合并为主播名：直接解包在 >3 段时会抛 ValueError，
+                    # 且异常不在行内捕获，会终止整个 for，坏行之后的房间永远处理不到。
                     if len(split_line) == 2:
                         if contains_url(split_line[0]):
                             quality = video_record_quality
@@ -5753,7 +5100,6 @@ def main(non_interactive: bool = False) -> None:
                             name = ""
                     elif contains_url(split_line[0]):
                         # 3 段以上且首段是 URL：未写画质，第二段起全是主播名
-                        # （旧写法会把 URL 当成 quality、把主播名当成 url，拼出非法地址后被自动注释掉）
                         quality = video_record_quality
                         url = split_line[0]
                         name = "，".join(split_line[1:])
@@ -5776,7 +5122,7 @@ def main(non_interactive: bool = False) -> None:
                         quality = "原画"
 
                     if url in _url_line_list:
-                        # SEV-05 调用侧修复：同上，按返回值告警（URL 归一后重复，但文件里删不掉）
+                        # 同上：按返回值告警（URL 归一后重复，但文件里删不掉）
                         if delete_line(url_config_file, origin_line) is False:
                             logger.warning(
                                 i18n.tr(
@@ -5793,25 +5139,17 @@ def main(non_interactive: bool = False) -> None:
                     if "live.shopee." in url_host or ".shp.ee" in url_host:
                         url_host = "live.shopee." if "live.shopee." in url_host else ".shp.ee"
 
-                    # SEV-03 后续（2026-09-20）：准入白名单与分派表必须同一判据——一律走
-                    # _stream_path_suffix（按 path 取**小写**扩展名，2026-09-12 补的小写判定
-                    # 也在该函数内）。这里原先是整串子串包含，于是 ?a=.flv 形态的内网地址能
-                    # 通过准入、却因 _match_stream_suffix 改判 path 而落到「无法识别」分支空转；
-                    # 而大小写敏感时大写 .M3U8 / .FLV 会被判成「未知链接」直接注释掉。现两端无隙。
+                    # 准入与分派必须同一判据（_stream_path_suffix：按 path 取小写扩展名）：
+                    # 整串包含会让 ?a=.flv 通过准入却落不到解析器，大小写敏感会误判 .M3U8。
                     if url_host in PLATFORM_HOST or _stream_path_suffix(url) in (".flv", ".m3u8"):
                         if url_host in CLEAN_URL_HOST_LIST:
                             url = update_file(url_config_file, old_str=url, new_str=url.split("?")[0]) or url
 
                         if url_host == "www.xiaohongshu.com":
-                            # 2026-10-04：改走统一解析器 spider.parse_xhs_live_url。旧写法
-                            # `re.search("&host_id=(.*?)(?=&|$)")` 有三个洞：① `&` 前缀使
-                            # `?host_id=...`（首个参数）整条落空，等于没归一化；② 只留 host_id，
-                            # 把页面鉴权用的 xsec_token/xsec_source 一并剥掉；③ 判据与解析器
-                            # 各写一份，路径形态一变就漂移。归一化失败（非直播/非主页路径）时
-                            # 保留原始地址，交由解析侧给出明确错误，不在这里把行注释掉。
-                            # 短链不在此归一化：解跳转要发网络请求，准入阶段做会因一次抖动
-                            # 就改写用户配置；短链的规范地址由 _resolve_xhslink_com 经
-                            # new_record_url 通道在首轮解析成功后回写。
+                            # 统一走 spider.parse_xhs_live_url：它保留鉴权参数（xsec_token 等），
+                            # 失败时保留原始地址交由解析侧报错，不在此注释整行。
+                            # 短链不在此解跳转（准入阶段发网络请求会因抖动改写用户配置），
+                            # 由 _resolve_xhslink_com 经 new_record_url 在首轮成功后回写。
                             try:
                                 normalized = spider.parse_xhs_live_url(url)["normalized_url"]
                             except spider.XhsUrlError:
@@ -5819,10 +5157,7 @@ def main(non_interactive: bool = False) -> None:
                             if normalized != url:
                                 url = update_file(url_config_file, old_str=url, new_str=normalized) or url
                         _seen_urls.add(url)
-                        # 原实现为 `[i for i in url_comments if url not in i]`：每解析一行都重建
-                        # 整个列表（O(N²) 次比较与内存分配），且子串匹配会误删「以该 URL 为前缀」
-                        # 的其它 URL（如 .../1 与 .../12）。集合元素均为规范化后的完整 URL，
-                        # 精确 discard 语义更准确，且为 O(1)。
+                        # 精确 discard（O(1)）：子串匹配会误删以该 URL 为前缀的其它房间（.../1 与 .../12）
                         _url_comments.discard(url)
                         if is_comment_line:
                             _url_comments.add(url)
@@ -5831,9 +5166,8 @@ def main(non_interactive: bool = False) -> None:
                             url_tuples_list.append(new_line)
                     else:
                         if not origin_line.startswith("#"):
-                            # MIN-2233 修复（2026-09-22）：原 f-string 直接传给 print_colored，既非
-                            # print 首参也非 logger/tr 首参 → 提取器扫不到「本行包含未知链接」。
-                            # 改为常量模板 tr 预格式化后整体传入（print_colored 第二参是颜色，不可传 kw）。
+                            # 常量模板 + tr 预格式化后整体传入：f-string 直传 print_colored 时
+                            # i18n 提取器扫不到；第二参是颜色，不可传 kw。
                             color_obj.print_colored(
                                 i18n.tr(
                                     "\r{line} 本行包含未知链接.此条跳过",
@@ -5844,8 +5178,7 @@ def main(non_interactive: bool = False) -> None:
                             _ = update_file(url_config_file, old_str=origin_line, new_str=origin_line, start_str="#")
 
                 except Exception as err:
-                    # CR-02 修复：单行脏数据不得中断整轮解析（旧形态的后果见上方 unpack 处注释）；
-                    # 且报错文案须带上该行内容与真实原因，否则无法自查。
+                    # 单行脏数据不得中断整轮解析；报错须带该行内容与真实原因。
                     logger.error(
                         i18n.tr(
                             "直播间配置行解析失败（已跳过该行）: {line} - {err}",
@@ -5870,16 +5203,11 @@ def main(non_interactive: bool = False) -> None:
                 if running_url not in _seen_urls and running_url not in _url_comments:
                     _url_comments.add(running_url)
 
-            # MID-2203（2026-09-22）：整轮解析（含上面 running_snapshot 归并）走完且未抛错，
-            # 此刻才把全局注释集合整体换位。解析中途抛错时全局集合保持上一轮的值，
-            # 房间线程看到的始终是「一份完整、自洽的注释状态」，而不是空集。
-            # L-05（2026-10-02）已删去只写不读的模块级 seen_urls；本轮复核又确认
-            # line_list / url_line_list 同样只写不读（局部 _line_list / _url_line_list 才是消费者），
-            # 故换位项只剩 url_comments。
+            # 整轮解析（含 running_snapshot 归并）成功后才整体换位 url_comments：
+            # 中途抛错时全局集合保持上一轮值，房间线程始终看到完整自洽的注释状态。
             url_comments = _url_comments
 
-            # 原为 list(set(...))：去重的同时把配置顺序打乱，导致每轮启动/新增房间的顺序随机
-            # （日志与「序号N」提示随之抖动）。dict.fromkeys 保序去重，且同为 O(N)。
+            # dict.fromkeys 保序去重（list(set(...)) 会打乱房间顺序），同为 O(N)。
             text_no_repeat_url = list(dict.fromkeys(url_tuples_list))
 
             if len(text_no_repeat_url) > 0:
@@ -5890,11 +5218,8 @@ def main(non_interactive: bool = False) -> None:
                     if url_tuple[1] in not_record_list:
                         continue
 
-                    # 录制开关关闭（Web 面板「停止录制」）时不拉起新房间线程；
-                    # 已退出的房间线程由 remove_room_from_running 清理运行列表，
-                    # 重新开启后本循环会按配置再次拉起
-                    # SEV-2206（2026-09-22）：disk_limited 与 exit_recording 同步置位/复位，
-                    # 这里显式再判一次——空间不足期间即便 exit_recording 被别处清零也不该拉起新房间。
+                    # 停止录制时不拉起新线程；disk_limited 需单独再判一次——空间不足期间
+                    # 即使 exit_recording 被别处清零也不应拉起。
                     if (
                         url_tuple[1] not in running_list
                         and not exit_recording
@@ -5912,46 +5237,31 @@ def main(non_interactive: bool = False) -> None:
                             monitoring += 1
                             running_list.append(url_tuple[1])
                             args = (url_tuple, monitoring)
-                        # MIN-01：thread_key 不再由 monitoring（= len(running_list)+1）推导，
-                        # 见下方赋值处的说明；此处只保留「序号」语义的 monitoring 计数
+                        # monitoring 只保留「序号」语义；thread_key 用 uuid，见下方
 
-                        # 房间录制线程入口：_key 为该线程在 create_var 中的注册键，
-                        # _args 为传给 start_record 的参数元组（tuple[tuple[str,str,str], int]）。
-                        # 通过 Thread(args=...) 在创建线程时绑定当前循环值，规避闭包晚期绑定陷阱；无返回值。
-                        # _room_state：跨「线程退出」边界把本轮录制名带回本函数，
-                        # 供 finally 做弹幕监控房间清理（MID-30，见该条注释）。
+                        # 线程入口：_key 是 create_var 注册键，_args 是 start_record 参数元组，
+                        # _room_state 把本轮录制名带回线程出口供弹幕监控清理。
+                        # 参数经 Thread(args=...) 绑定当前循环值，规避闭包晚期绑定。
                         def _room_thread_target(
                             _key: str, _args: tuple[tuple[str, str, str], int], _room_state: dict[str, str]
                         ) -> None:
                             try:
                                 start_record(*_args, room_state=_room_state)
                             finally:
-                                # 房间线程退出兜底：从运行列表移除该房间 URL（幂等，注释退出
-                                # 路径已由 clear_record_info 清理）。覆盖「停止录制」退出路径——
-                                # 不清理则主循环误判「仍在运行」，重新开始后该房间永不重启
+                                # 线程退出兜底：从运行列表移除该 URL（幂等）。不清理会让主循环
+                                # 误判「仍在运行」，重新开始后该房间永不重启。
                                 remove_room_from_running(_args[0][1])
-                                # H-5 修复：Shopee 平台 URL 更新（带 uid 的 new_record_url 注入
-                                # not_record_list 跳过本轮）后无清除路径，旧线程持有的旧 URL 已
-                                # 不在配置中而注释退出——该直播间从监控中永久消失（直到重启进程）。
-                                # 即使 uid 未变同样触发。线程退出（任何原因）时按 base URL + "?"
-                                # 起始精确匹配本线程登记的条目并移除，避免前缀相似 URL 误伤
-                                # （Shopee 注入格式：new_record_url = record_url.split("?")[0]
-                                #  + "?<uid>"，故按 base + "?" 前缀可唯一定位本线程条目）。
-                                # 不带锁是因为 not_record_list 是 list 而非 set，长度极短，
-                                # 与主循环本端写入竞争窗口极窄——此处接受偶发漏清（下轮 Shopee
-                                # 重新解析时会再次 append，相当于自然重置）
+                                # Shopee 的 new_record_url 会进 not_record_list 跳过本轮，
+                                # 线程退出时须按 base + "?" 前缀移除本线程条目，否则该房间永久消失。
+                                # 列表极短、竞争窗口窄，不加锁；偶发漏清下轮会重新 append。
                                 if _args[0][1]:
                                     _not_record_prefix = _args[0][1].split("?", 1)[0] + "?"
                                     # 长度守恒：清不到不抛错
                                     not_record_list[:] = [
                                         u for u in not_record_list if not u.startswith(_not_record_prefix)
                                     ]
-                                # MID-30 修复（2026-09-20）：弹幕监控房间清理的时机是「线程退出」，
-                                # 故由 start_record 每轮回填 room_state、在这里调一次（为什么不能
-                                # 留在 start_record 的 finally：见那里的 MID-30 注释）。
-                                # 清理也不能简单删除：删掉会回归「已失效房间永久残留」（AGENTS 约定）；
-                                # 同房间重新录制时由 collector.start() 的 room_started 重新注册。
-                                # 监控为旁路功能，清理失败静默（吞没即正确：不得因旁路中断录制收尾）。
+                                # 弹幕监控清理的时机是线程退出：start_record 回填 room_state，
+                                # 这里调一次 room_stopped。清理失败静默（旁路功能不得中断收尾）。
                                 if _room_state.get("name"):
                                     try:
                                         from src.danmaku_monitor import get_hub
@@ -5960,17 +5270,12 @@ def main(non_interactive: bool = False) -> None:
                                     except Exception:
                                         pass
                                 with record_state_lock:
-                                    # MIN-01 修复（2026-09-20）：只在登记的确实是本线程时才 pop。
-                                    # 键原为 f"thread_{len(running_list)}"，随房间退出而回落，
-                                    # 新房间会复用仍存活线程的键 → 覆盖注册，旧线程退出时
-                                    # 把别人的条目 pop 掉（任何「按 create_var 枚举房间线程」
-                                    # 的后续改动都会立刻踩坑）。键已改为生命周期无关的唯一值，
-                                    # 这里的归属校验是第二道防线（字幕线程同键族也走同一模式）。
+                                    # 只在登记的确实是本线程时才 pop：键若按房间数量推导会被
+                                    # 新房间复用，旧线程退出时会误删别人的条目。归属校验是第二道防线。
                                     if create_var.get(_key) is threading.current_thread():
                                         create_var.pop(_key, None)
 
-                        # MIN-01 修复：键与房间数量/序号解耦——uuid4 片段全局唯一，
-                        # 不会与新拉起或仍在收尾的其它房间线程重名
+                        # 键与房间数量/序号解耦：uuid4 片段全局唯一，不会与仍在收尾的线程重名
                         thread_key = f"thread-{uuid.uuid4().hex[:12]}"
                         room_state: dict[str, str] = {"name": ""}
                         create_var[thread_key] = threading.Thread(
@@ -5979,11 +5284,8 @@ def main(non_interactive: bool = False) -> None:
                             args=(thread_key, args, room_state),
                         )
                         create_var[thread_key].daemon = True
-                        # MID-2201（2026-09-22）：running_list.append / monitoring += 1 发生在
-                        # start() **之前**，而 start() 是会抛异常的（线程数打满时 RuntimeError:
-                        # can't start new thread）。原写法一旦抛错：该 URL 永久留在 running_list
-                        # 里，主循环的「未在 running_list 中」判定恒假 → 这个房间从此再也不会被
-                        # 拉起（重启进程才好），且没有任何告警。此处就地回滚登记并跳过本轮。
+                        # start() 会抛 RuntimeError（线程数打满）：登记发生在前，抛错必须
+                        # 就地回滚，否则该 URL 永远留在 running_list、房间再也不会被拉起。
                         try:
                             create_var[thread_key].start()
                         except RuntimeError as e:
@@ -5999,7 +5301,7 @@ def main(non_interactive: bool = False) -> None:
                             )
                             continue
                         _interruptible_sleep(local_delay_default)
-            # 上报当前活跃监控数，供调度器自适应全局并发容量（解除多任务排队瓶颈）
+            # 上报活跃监控数，供调度器自适应并发容量
             if scheduler is not None:
                 scheduler.set_active_count(monitoring)
             first_start = False

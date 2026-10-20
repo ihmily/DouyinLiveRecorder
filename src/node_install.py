@@ -31,15 +31,13 @@ from .utils import is_valid_zip, unzip_file
 #   使同进程后续 `node` 调用直接命中。所有路径最后 `node -v` 校验 returncode==0 才认成功。
 # 设计取舍：安装失败只返 False、不抛异常，交由调用方提示用户手动安装，避免中断主程序启动。
 #
-# 完整性模型（P-1，2026-09-22 起）：**权威哈希来自 nodejs.org 上游本体，npmmirror 只当加速镜像**。
-#   版本号取自 nodejs.cn 页面，但 zip 的期望哈希一律取
-#   https://nodejs.org/dist/<version>/SHASUMS256.txt 里对应文件名的那条记录；
-#   取不到该文档时才退回旁路基准 TOFU，并把降级显式写进 warning 日志。
-#   为什么必须换宿主取文档：让 npmmirror 自己出 SHASUMS 等于「镜像自证」——它能替换 zip
-#   就能替换它自己的清单，校验归零。分离后镜像只影响速度、不影响信任判定。
-#   为什么是「取文档」而不是钉哈希常量：装的是页面当前推荐的版本（会随上游发版轮转），
-#   钉常量会在下一版永久失败（历史坑 MID-59 的形态）。
-#   本模块属 AGENTS.md「三类钉定/校验」的第②类（运行期自动安装，单机面）。
+# 完整性模型：**权威哈希来自 nodejs.org 上游本体，npmmirror 只当加速镜像**。版本号取自
+#   nodejs.cn 页面，但 zip 的期望哈希一律取 https://nodejs.org/dist/<version>/SHASUMS256.txt
+#   里对应文件名的那条记录；取不到该文档才退回旁路基准 TOFU，并把降级显式写进 warning 日志。
+#   必须换宿主取文档：让 npmmirror 自己出 SHASUMS 等于「镜像自证」——它能替换 zip 就能替换
+#   自己的清单，校验归零；分离后镜像只影响速度、不影响信任判定。
+#   取文档而非钉哈希常量：装的是页面当前推荐的版本（随上游发版轮转），钉常量会在下一版永久
+#   失败（历史坑 MID-59 的形态）。本模块属 AGENTS.md「三类钉定/校验」的第②类（运行期安装）。
 
 
 current_platform = platform.system()
@@ -47,8 +45,7 @@ execute_dir = script_path  # 冻结后指向 _internal/，与 __file__ 定位的
 current_env_path = os.environ.get("PATH", "")
 
 
-# 分块计算文件 SHA256（二进制下载完整性校验用）。2026-09-18 审查 CR-11：实现已下沉到
-# src.utils.sha256_of_file，本函数保留为薄封装。
+# 分块计算文件 SHA256（二进制下载完整性校验用）。实现已下沉到 src.utils.sha256_of_file，此处为薄封装。
 def _sha256_of_file(path: str | Path) -> str:
     return utils.sha256_of_file(path)
 
@@ -56,7 +53,7 @@ def _sha256_of_file(path: str | Path) -> str:
 _NODE_HASH_SUFFIX = ".sha256"
 
 # 权威哈希文档：nodejs.org 每个版本目录都发布 SHASUMS256.txt（每行 `<sha256>  <文件名>`）。
-# 刻意**不**从 npmmirror 取这份文档——见模块头「完整性模型」：同源校验不构成校验。
+# 刻意**不**从 npmmirror 取这份文档：镜像能替换 zip 就能替换自己的清单，同源校验不构成校验。
 _NODE_DIST_BASE = "https://nodejs.org/dist/"
 _NODE_SHASUMS_NAME = "SHASUMS256.txt"
 # 文档只有几 KB，与几百 MB 的 zip 共用 30s 超时会在上游故障时把启动拖慢；拿不到即降级。
@@ -66,10 +63,9 @@ _OFFICIAL_DOC_TIMEOUT_SECONDS = 15
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 
-# 版本号归一为 nodejs.org/dist 的目录形态（带 v 前缀）。
-# 当前上游页面的正则已把 `v` 锚进捕获组，所以本函数在常态下是恒等的；
-# 它防的是「页面改版 → 捕获到 22.11.0 这类裸形态」：那种形态拼 npmmirror URL 会 404，
-# 拼权威文档 URL 同样 404，两条一起坏且报错落在「取不到官方哈希」上，极易误判成上游故障。
+# 版本号归一为 nodejs.org/dist 的目录形态（带 v 前缀）。当前页面的正则已把 `v` 锚进捕获组，
+# 常态下本函数恒等；它防的是「页面改版 → 捕获到 22.11.0 这类裸形态」：那种形态拼 npmmirror
+# 与权威文档 URL 都 404，两条一起坏且报错落在「取不到官方哈希」上，极易误判成上游故障。
 # 在源头归一一次，两个下游共用同一个形态。
 def _normalize_node_version(raw: str) -> str:
     value = raw.strip()
@@ -188,23 +184,20 @@ def install_nodejs_windows() -> bool:
     try:
         logger.warning("Node.js is not installed.")
         logger.debug("Installing the stable version of Node.js for Windows...")
-        # 两处下载响应均以 with 管理（页面 + zip 流式下载），关闭连接不泄漏
-        # （与 ffmpeg_install 的写法保持一致）
+        # 两处下载响应均以 with 管理（页面 + zip 流式下载），关闭连接不泄漏（与 ffmpeg_install 同写法）。
         with requests.get("https://nodejs.cn/download/", timeout=30) as response:
             if response.status_code != 200:
                 logger.error("Failed to retrieve the Node.js version page")
                 return False
-            # 从 nodejs.cn 下载页正则抠出 npmmirror 镜像直链；该页面 HTML 结构一旦变动，match 为空即安装失败，
-            # 依赖上游文案稳定（魔改字符串来源）。
+            # 从 nodejs.cn 下载页正则抠出 npmmirror 镜像直链：页面 HTML 结构一旦变动，match 为空即安装失败。
             match = re.search("https://npmmirror.com/mirrors/node/(v.*?)/node-(v.*?)-x64.msi", response.text)
         if not match:
             logger.error("Failed to retrieve the download URL for the latest version of Node.js...")
             return False
         version = _normalize_node_version(match.group(1))
-        # 2026-09-12 审查（低危）：原以 machine 是否含 "32" 判架构——
-        # Windows on ARM 的 machine 为 "ARM64"（不含 "32"）会被误判成 x64，
-        # 下载 x64 构建在 ARM 机器上无法运行（且错误表现为「装完仍找不到 node」，
-        # 极难归因）。改为显式识别 arm64，其余按位宽回落。
+        # 原以 machine 是否含 "32" 判架构：Windows on ARM 的 machine 为 "ARM64"（不含 "32"）会被
+        # 误判成 x64，下载 x64 构建在 ARM 上无法运行，且错误表现为「装完仍找不到 node」，极难归因。
+        # 改为显式识别 arm64，其余按位宽回落。
         _machine = platform.machine().upper()
         if "ARM" in _machine or "AARCH" in _machine:
             system_bit = "arm64"
@@ -222,11 +215,10 @@ def install_nodejs_windows() -> bool:
         # 注意文档宿主与下载宿主**刻意不同**（镜像只加速、不背书，见模块头）。
         official_hash = _fetch_official_sha256(version, full_file_name)
 
-        # 2026-09-18 审查 CR-11：原只判 exists()，中断下载留下的残缺 zip 会被当成
-        # 「已下载」，随后 _check_or_record_zip_sha256 把**错误哈希固化为基线**，
-        # 解压再抛 BadZipFile 被外层 except 吞掉；下次运行 zip 仍在且「哈希匹配」，
-        # 再次失败 —— 永久失败且不自愈（用户只能手工删目录）。与 ffmpeg_install 的
-        # _is_valid_zip 判据对齐：非有效 zip 即删除重下。
+        # 原只判 exists()：中断下载留下的残缺 zip 会被当成「已下载」，随后
+        # _check_or_record_zip_sha256 把**错误哈希固化为基线**，解压再抛 BadZipFile 被外层
+        # except 吞掉；下次运行 zip 仍在且「哈希匹配」→ 永久失败且不自愈（只能手工删目录）。
+        # 与 ffmpeg_install 的 _is_valid_zip 判据对齐：非有效 zip 即删除重下。
         if Path(zip_file_path).exists() and is_valid_zip(zip_file_path):
             logger.debug("Node.js installation file already exists, start install...")
         else:
@@ -311,7 +303,6 @@ def install_nodejs_centos() -> bool:
 
 
 def install_nodejs_ubuntu() -> bool:
-    # 在 Ubuntu/Debian 系统上通过 apt 安装 Node.js
     # Ubuntu/Debian：直接 apt 装 nodejs（未先 apt update，依赖已就新的包索引；装失败即返 False 提示手动）。
     try:
         logger.warning("Node.js is not installed.")
@@ -341,8 +332,7 @@ def install_nodejs_mac() -> bool:
         else:
             logger.error("Node.js installation failed")
             return False
-    # L-43（2026-10-02）：原在此处的 except subprocess.CalledProcessError 不可达——
-    # subprocess.run 未传 check=True 永不抛该异常，删除；通用兜底分支保留。
+    # [历史注] 此处原有 except subprocess.CalledProcessError 不可达：run 未传 check=True 永不抛该异常。
     except Exception as e:
         logger.error(i18n.tr("An unexpected error occurred: {e}", e=e))
         return False
@@ -382,12 +372,11 @@ def install_nodejs() -> bool:
 
 
 def check_nodejs_installed() -> bool:
-    # 仅校验 `node` 命令存在即视为已安装；不检查 npm。若 Node 存在但 npm 缺失，
-    # 依赖 npm 的下游功能仍会失败，此处不感知（false positive）。
-    # M-15（2026-10-02）：异常集必须补 TimeoutExpired/OSError——`node -v` 卡死（杀毒软件
-    # 拦截扫描、残缺安装）抛 TimeoutExpired、二进制损坏抛 OSError，此前直接穿出本函数；
-    # 本函数经 check_node() 在 import src 导入期被调用（仅测试开关豁免），抛穿即 CLI/GUI/Web
-    # 三入口启动崩溃。对齐 check_ffmpeg_installed 的既有硬化口径（同族场景已留注释）。
+    # 仅校验 `node` 命令存在即视为已安装，不检查 npm：Node 存在但 npm 缺失时，依赖 npm 的下游
+    # 功能仍会失败，此处不感知（false positive）。
+    # 异常集必须含 TimeoutExpired/OSError：`node -v` 卡死（杀毒软件拦截扫描、残缺安装）抛
+    # TimeoutExpired、二进制损坏抛 OSError。本函数经 check_node() 在 import src 导入期被调用
+    # （仅测试开关豁免），抛穿即 CLI/GUI/Web 三入口启动崩溃；口径对齐 check_ffmpeg_installed。
     try:
         result = subprocess.run(["node", "-v"], capture_output=True, timeout=15)
         version = result.stdout.strip()

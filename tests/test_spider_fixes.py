@@ -1,4 +1,4 @@
-# Tests for src/spider.py 批次4修复 - 平台解析健壮性回归测试.
+# src/spider.py 批次4修复：平台解析健壮性回归测试。
 # 多数用例直接调用装饰器的 __wrapped__ 原函数，以便断言精确返回/异常，
 # 不被 trace_error_decorator 的「吞异常返回未直播」掩盖。
 # 单测聚焦「解析失败/边界输入不得崩溃或误判开播」，覆盖 vvxqiu/migu/faceit/shopee/zhihu/weibo/twitcasting/lianjie 及并发取凭据。
@@ -91,9 +91,7 @@ def _fake_popen_class(
 
 
 # vvxqiu 解析：房间号缺失/播放列表空须判未直播，出现 m3u8 即判开播
-# vvxqiu 解析：房间号缺失/播放列表空须判未直播，出现 m3u8 即判开播
 class TestVvxqiu:
-    # vvxqiu 解析：房间号缺失/播放列表空须判未直播，出现 m3u8 即判开播
     # 空播放列表响应（仅 anchorName 无 m3u8）须判未直播且不产出 record_url，避免误判开播
     async def test_empty_playlist_response_not_live(self) -> None:
         raw = _unwrap(sp.get_vvxqiu_stream_url)
@@ -102,9 +100,7 @@ class TestVvxqiu:
         assert result["is_live"] is False
         assert "record_url" not in result
 
-    # 房间号缺失时直接判未直播，且不得再发 m3u8 探测请求（省一次网络）
-    # roomId 缺失时 vvxqiu 不应对空房间号发起第二次 m3u8 探测：省一次网络也避免对无效房间误判开播
-    # roomId 缺失时 vvxqiu 不应对空房间号发起第二次 m3u8 探测：省一次网络也避免对无效房间误判开播
+    # 房间号缺失时直接判未直播，且不得再发 m3u8 探测请求（省一次网络，也避免对无效房间误判开播）
     async def test_missing_room_id_not_live_no_extra_request(self) -> None:
         raw = _unwrap(sp.get_vvxqiu_stream_url)
         with patch.object(sp, "async_req", new=AsyncMock(return_value='{"data": {"anchorName": "N"}}')) as mock:
@@ -112,9 +108,7 @@ class TestVvxqiu:
         assert result["is_live"] is False
         assert mock.await_count == 1  # 房间号缺失时不再请求 m3u8
 
-    # 播放列表出现 m3u8 即判开播，并产出 m3u8_url 供后续选源
-    # 出现 m3u8 即视为有效直播源；该用例守护「播放列表解析→开播判定」的映射不遗漏
-    # 出现 m3u8 即视为有效直播源；该用例守护「播放列表解析→开播判定」的映射不遗漏
+    # 出现 m3u8 即视为有效直播源，判开播并产出 m3u8_url 供后续选源（守护「播放列表解析→开播判定」映射）
     async def test_live_when_playlist_found(self) -> None:
         raw = _unwrap(sp.get_vvxqiu_stream_url)
         with patch.object(
@@ -123,12 +117,10 @@ class TestVvxqiu:
             new=AsyncMock(side_effect=['{"data": {"anchorName": "N"}}', "#EXTM3U\nhttps://cdn/x.m3u8"]),
         ):
             result = await raw("https://x/?roomId=123456")
-        # 播放列表出现 m3u8 即判定开播，并产出 m3u8_url 供后续选源
         assert result["is_live"] is True
         assert result["m3u8_url"]
 
 
-# migu 解析：node 脚本取重定向地址，须屏蔽 CalledProcessError、重定向失败判未直播、title 为 None 不崩
 # migu 解析：node 脚本取重定向地址，须屏蔽 CalledProcessError、重定向失败判未直播、title 为 None 不崩
 class TestMigu:
     @staticmethod
@@ -146,16 +138,11 @@ class TestMigu:
         )
 
     # node 脚本执行失败（CalledProcessError）须转 domain ProgramError 而非抛出原始异常，且 subprocess 带 30s 超时防止 migu.js 卡死拖垮轮询
-    # node 脚本执行失败（CalledProcessError）须转 domain ProgramError 而非抛出原始异常，且 subprocess 带 30s 超时防止 migu.js 卡死拖垮轮询
     async def test_subprocess_failure_converts_to_program_error(self) -> None:
-        # 此前 CalledProcessError 未被捕获；现转为 ProgramError 且 subprocess 带 30s 超时
         captured: dict[str, Any] = {}
 
-        # [2026-10-19 改写：L-19 换了执行原语，替身也得跟着换]
-        # 旧写法把 CalledProcessError 由 `subprocess.run` 替身直接抛出；而 run_node_script_async 现已是
-        # 「自管 Popen + communicate(input=…, timeout=…)」，非零退出码由**被测实现自己**转成
-        # CalledProcessError（复刻旧 check=True 契约，见 src/utils.py 的 `if proc.returncode != 0`），
-        # 所以替身只需把 returncode 置成 1，异常由生产代码产生——这才是要钉住的那条链。
+        # [L-19] run_node_script_async 现走自管 Popen+communicate，非零退出码由**被测实现**自己转成
+        # CalledProcessError（复刻旧 check=True 契约，见 src/utils.py 的 `if proc.returncode != 0`），故替身只置 returncode。
         raw = _unwrap(sp.get_migu_stream_url)
         with (
             patch.object(sp, "async_req", new=AsyncMock(return_value=self._basic_json())),
@@ -163,11 +150,6 @@ class TestMigu:
             # subprocess.run 的是 src/utils.py，故替身装在 utils 命名空间上。
             # 末尾的 captured["timeout"] == 30 同时是「替身确实被走到」的见证：装错命名空间就会
             # 去起真实 node 进程、captured 保持为空而变红，不会静默假绿。
-            # [2026-09-23 修订：此处旧注释论证「改打标准库模块本身……与原先打 sp.subprocess.run
-            # 语义等价」——对被测面成立、对影响面不成立（SEV-2225），且 sp 根本没有 subprocess
-            # 属性（实测 hasattr(sp, "subprocess") 为 False），该论证已就地删除。]
-            # [2026-10-19 补] 该见证仍然成立、只是换了落账位置：timeout 现由 communicate 的关键字
-            # 实参传入（旧形态由 run 传入），_fake_popen_class 把这两个 kwargs 一并记进 captured。
             patch.object(u, "subprocess", _subprocess_shim(popen=_fake_popen_class(returncode=1, captured=captured))),
         ):
             with pytest.raises(sp.ProgramError):
@@ -175,20 +157,15 @@ class TestMigu:
         assert captured.get("timeout") == 30
 
     # migu.js 重定向解析失败（拿不到最终 m3u8 地址）→ 判未直播，不产出 record_url
-    # migu.js 重定向解析失败（拿不到最终 m3u8 地址）→ 判未直播，不产出 record_url
     async def test_redirect_failure_returns_not_live(self) -> None:
         async def fake_req(url: str, **kwargs: object) -> str:
             if kwargs.get("redirect_url"):
                 return ""  # 重定向失败
             return self._basic_json()
 
-        # [2026-10-19 补] 本条曾是**假绿**：is_live/record_url 两个断言只依赖 fake_req，替身没被走到
-        # 也照样通过，于是 L-19 换掉执行原语后它一路「绿」着起了真实 node 进程（migu.js 真经 stdin
-        # 交给 node、真发一次网络请求）。现补 hits 反向见证：Popen 替身必须被构造并被 communicate。
-        # [2026-10-19 注] 原先这里是一个 `def fake_run(...)` 返回 SimpleNamespace(stdout=b"…m3u8…")
-        # ——migu.js（2026-08 重写版）的输出契约是「带 ddCalcu/sv 参数的完整地址」而非只有 ddCalcu 值，
-        # 且 MID-62 后按字节捕获（无 text=True）；L-19 把 run 位摘掉后该桩不再被调用，stdout 改由
-        # 下方 Popen 替身的 communicate() 以 (bytes, bytes) 元组给出，契约本身一字未变。
+        # 反向见证：is_live/record_url 只依赖 fake_req，不记 hits 则 Popen 替身没被走到也照样绿
+        # （L-19 换执行原语后曾长期起真实 node 进程），hits 必须记到 spawn+communicate。
+        # migu.js（2026-08 重写版）输出契约：带 ddCalcu/sv 参数的完整地址，按字节捕获（MID-62，无 text=True）。
         hits: list[str] = []
         raw = _unwrap(sp.get_migu_stream_url)
         # 替身装在 src/utils 上（见 _subprocess_shim），理由同 TestMigu 首条用例
@@ -196,11 +173,9 @@ class TestMigu:
         with patch.object(sp, "async_req", new=fake_req), patch.object(u, "subprocess", _subprocess_shim(popen=stub)):
             result = await raw("https://x/123")
         assert hits == ["spawn", "communicate"], f"Popen 替身未被走到（真起了 node 进程？）: {hits}"
-        # 重定向解析失败（拿不到最终 m3u8 地址）→ 判未直播，不产出 record_url
         assert result["is_live"] is False
         assert "record_url" not in result
 
-    # body 缺 title 字段时不得 TypeError：title 当空串处理，守护「主播名可选」的逆向兼容
     # body 缺 title 字段时不得 TypeError：title 当空串处理，守护「主播名可选」的逆向兼容
     async def test_title_none_no_crash(self) -> None:
         body_without_title = json.dumps(
@@ -220,9 +195,6 @@ class TestMigu:
 
         calls: list[str] = []
 
-        # [2026-10-19 改写] 原此处是一个 `def fake_run(...)`（往 calls 里 append "run"、返回
-        # SimpleNamespace(stdout=b"dd\n")）：run_node_script_async 按字节捕获 stdout 的口径（MID-62
-        # stdin 形态）不变，只是 L-19 后 stdout 由 Popen.communicate() 给出，故把 witness 迁到替身类上。
         stub = _fake_popen_class(stdout=b"dd\n", calls=calls)
 
         raw = _unwrap(sp.get_migu_stream_url)
@@ -314,7 +286,6 @@ class TestZhihu:
 
 
 # weibo 解析：畸形 URL 必须抛 RuntimeError 而非静默返回，交由上层跳过
-# weibo 解析：畸形 URL 必须抛 RuntimeError 而非静默返回，交由上层跳过
 class TestWeibo:
     async def test_malformed_url_raises(self) -> None:
         raw = _unwrap(sp.get_weibo_stream_data)
@@ -326,7 +297,6 @@ class TestTwitcasting:
     # 非法 twitcasting URL（缺用户路径段）必须抛 RuntimeError 而非静默返回
     async def test_malformed_url_raises(self) -> None:
         raw = _unwrap(sp.get_twitcasting_stream_url)
-        # 非法 twitcasting URL（缺用户路径段）必须抛 RuntimeError 而非静默返回
         with pytest.raises(RuntimeError):
             await raw("https://twitcasting.tv")
 
@@ -341,18 +311,14 @@ class TestLianjie:
         with patch.object(sp, "async_req", new=AsyncMock(return_value=room_json)):
             result = await raw("https://show.lailianjie.com/room1")
         assert result["is_live"] is False
-        # WebRTC 房间但 videoUrl 为非流地址（plain）须判未直播，而非尝试用该地址拉流
         assert "record_url" not in result
 
 
 # 并发取凭据：快手 did / twitch client_id 在多线程首轮须各只拉取一次（锁二次检查）。
 # 守卫统一 cookie 缓存接入后的并发去重不回退。
 class TestCacheLocks:
-    # 快手 did 经统一 cookie 缓存从主页拉取：并发首轮须仅一次网络，回归锁二次检查
-    # 快手 did 经统一 cookie 缓存从主页拉取：并发首轮须仅一次网络，回归锁二次检查
-    # 快手 did 经统一 cookie 缓存从主页拉取：并发首轮须仅一次网络，回归锁二次检查
+    # 快手 did 经统一 cookie 缓存从主页拉取：多线程并发首轮须仅拉取一次（锁二次检查回归）
     def test_kuaishou_did_fetched_once_under_concurrency(self) -> None:
-        # 多线程并发首轮请求只拉取一次（锁二次检查回归）
         sp._cached_kuaishou_did = ""
         clear_cookie_cache()  # 隔离统一 cookie 缓存单例，确保本测试真正发起拉取
         call_count = 0

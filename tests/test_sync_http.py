@@ -1,4 +1,4 @@
-# Tests for src/sync_http.py module - 同步 HTTP 客户端.
+# src/sync_http.py 同步 HTTP 客户端的回归锁。
 # 全程 mock 底层 opener / 线程内 Session / urlopen，不触网；按 ssl_verify 与是否走代理分流两条实现路径，
 # 断言覆盖编码分支（dict→表单 / 字符串 / json）、gzip 解压、重定向取 URL、错误返回空串且记日志等契约。
 # 非代理路径 patch _get_opener，代理路径 patch 线程内 Session 工厂 _session，避免触网且精准命中实现层。
@@ -43,8 +43,6 @@ def _opener_https_context(opener: urllib.request.OpenerDirector) -> ssl.SSLConte
 
 
 class TestGetOpener:
-    # Test opener 选择逻辑.
-    #
     # MID-2266 附带核对：两条用例原先只 `assert opener is not None`——把 _get_opener 的
     # 两个分支合并成「恒返回 insecure opener」也会同时全绿，等于没锁「按 ssl_verify 分流」
     # 这条安全不变量（F-12 的惰性降级面）。现按**对象同一性**断言命中的是哪一支 opener，
@@ -53,8 +51,6 @@ class TestGetOpener:
     @patch("src.sync_http.config")
     # ssl_verify=True 须返回标准安全 opener，与默认生产环境一致
     def test_ssl_verify_true_returns_secure_opener(self, mock_config: MagicMock) -> None:
-        # 开启证书校验（ssl_verify=True）须返回标准安全 opener，与默认生产环境一致
-        # ssl_verify=True 时使用安全 opener.
         mock_config.ssl_verify = True
         assert _get_opener() is _opener_secure, "全局要求校验证书时必须用安全 opener"
         context = _opener_https_context(_opener_secure)
@@ -63,7 +59,6 @@ class TestGetOpener:
 
     @patch("src.sync_http.config")
     def test_ssl_verify_false_returns_insecure_opener(self, mock_config: MagicMock) -> None:
-        # ssl_verify=False 时使用不安全 opener.
         mock_config.ssl_verify = False
         opener = _get_opener()
         assert opener is _get_insecure_opener(), "降级分支必须命中惰性构造的那一支（不得每次新建）"
@@ -84,14 +79,10 @@ class TestGetOpener:
 # sync_req 同步请求入口：按 ssl_verify 与是否走代理分流两条实现路径。
 # 守卫编码分支、gzip 解压、重定向取 URL、错误返回空串且记日志等契约。
 class TestSyncReq:
-    # Test sync_req 同步请求函数.
-
     @patch("src.sync_http.config")
     @patch("src.sync_http._get_opener")
     # 正常 GET 路径：解码响应体返回字符串，且用后必须 close 一次释放连接
     def test_basic_get_request(self, mock_opener_fn: MagicMock, mock_config: MagicMock) -> None:
-        # 正常 GET 路径：解码响应体返回字符串，且用后必须 close 一次以释放连接
-        # 基本 GET 请求.
         mock_config.ssl_verify = True
         mock_response = MagicMock()
         mock_response.headers = {"Content-Encoding": ""}
@@ -130,7 +121,7 @@ class TestSyncReq:
     @patch("src.sync_http.config")
     @patch("src.sync_http._get_opener")
     def test_redirect_url_returns_url(self, mock_opener_fn: MagicMock, mock_config: MagicMock) -> None:
-        # redirect_url=True 返回重定向后的 URL.
+        # redirect_url=True 时返回重定向后的最终 URL
         mock_config.ssl_verify = True
         mock_response = MagicMock()
         mock_response.url = "http://redirected.com"
@@ -147,7 +138,6 @@ class TestSyncReq:
     @patch("src.sync_http.config")
     def test_proxy_get_request(self, mock_config: MagicMock, mock_session_fn: MagicMock) -> None:
         # 经 _session 工厂拿线程内 Session，断言 session.get 被调用一次且返回其 text
-        # 带代理的 GET 请求.
         mock_config.ssl_verify = True
         mock_session = MagicMock()
         mock_session_fn.return_value = mock_session
@@ -167,7 +157,7 @@ class TestSyncReq:
     @patch("src.sync_http._session")
     @patch("src.sync_http.config")
     def test_proxy_post_request(self, mock_config: MagicMock, mock_session_fn: MagicMock) -> None:
-        # 带代理的 POST 请求.
+        # 同 test_proxy_get_request 经 _session 工厂，断言 session.post 被调用一次并返回其内容
         mock_config.ssl_verify = True
         mock_session = MagicMock()
         mock_session_fn.return_value = mock_session
@@ -186,7 +176,6 @@ class TestSyncReq:
     @patch("src.sync_http.config")
     # 代理 + redirect_url：返回重定向后的最终 URL
     def test_proxy_redirect_url(self, mock_config: MagicMock, mock_session_fn: MagicMock) -> None:
-        # 带代理的 redirect_url 返回 URL.
         mock_config.ssl_verify = True
         mock_session = MagicMock()
         mock_session_fn.return_value = mock_session
@@ -340,7 +329,7 @@ class TestSyncReq:
     @patch("src.sync_http.config")
     @patch("src.sync_http._get_opener")
     def test_abroad_request(self, mock_opener_fn: MagicMock, mock_config: MagicMock) -> None:
-        # abroad=True 使用 urlopen.
+        # abroad=True 走 urlopen 分支
         mock_config.ssl_verify = True
         mock_response = MagicMock()
         mock_response.headers = {"Content-Encoding": ""}
@@ -355,7 +344,7 @@ class TestSyncReq:
     @patch("src.sync_http.config")
     @patch("src.sync_http._get_opener")
     def test_abroad_redirect_url(self, mock_opener_fn: MagicMock, mock_config: MagicMock) -> None:
-        # abroad=True + redirect_url=True.
+        # abroad=True 且 redirect_url=True：走 urlopen 并返回重定向后的 URL
         mock_config.ssl_verify = True
         mock_response = MagicMock()
         mock_response.url = "http://redirected.com"

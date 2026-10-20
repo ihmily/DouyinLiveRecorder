@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# 斗鱼真实房间端到端验证:get_douyu_info_data(不依赖 get_token_js)取 room_id → collector(DouyuDanmaku) → SRT 产出。
+# 斗鱼真实房间端到端验证:get_douyu_info_data(免 get_token_js)取 room_id → DouyuDanmaku → SRT 产出。
 #
 # 用法:python tests/test_douyu_live_collector.py [房间URL] [秒数]
 # 与 main.py 一致:record_danmaku_args = {'room_id': json_data['room_id']}。
@@ -16,12 +16,12 @@ from src import spider
 from src.collector import DanmakuCollector
 from src.platforms.douyu import DouyuDanmaku
 
-# 斗鱼弹幕走自有 WebSocket 协议;本脚本用 get_douyu_info_data(免 get_token_js 的
-# 简化路径)取 room_id,不依赖 JS 令牌,适合自动化,但同样需主播真实在播才能验证。
+# 斗鱼弹幕走自有 WebSocket 协议;本脚本用 get_douyu_info_data(免 JS 令牌的简化路径)取
+# room_id,适合自动化,但同样需主播真实在播才能验证。
 URL = sys.argv[1] if len(sys.argv) > 1 else "https://www.douyu.com/88080"
 # 双模式参数守卫（与其余真机脚本同构）：pytest 传进来的 sys.argv[2] 可能是 `-q` 之类的选项，
-# 只判非选项还不够——一次点多个文件时它是下一个测试文件的路径，int(路径) 会当场 ValueError
-# 让本模块收集 ERROR（R7③，2026-09-30 实测）。故再补 isdigit 数值性回落；真机用法不变。
+# 也可能是下一个测试文件的路径——只判非选项会让 int(路径) 抛 ValueError 使本模块收集 ERROR
+# （R7③，2026-09-30 实测），故再补 isdigit 数值性回落；真机用法不变。
 _SECONDS_RAW = sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith("-") else ""
 SECONDS = int(_SECONDS_RAW) if _SECONDS_RAW.isdigit() else 20
 
@@ -44,19 +44,19 @@ def main() -> None:
         )
         sys.exit(1)
 
-    # 斗鱼弹幕仅需 room_id（rid）：走 websocket 弹幕协议，无需额外签名/令牌，
-    # 与 main.py record_danmaku_args 约定一致（str 化避免 int 类型告警）。
+    # 斗鱼弹幕仅需 room_id(rid):走 websocket 弹幕协议,无需额外签名/令牌;
+    # str 化与 main.py record_danmaku_args 约定一致(避免 int 类型告警)。
     danmaku_args = {"room_id": str(info["room_id"])}
     print(f"[OK] danmaku_args: {danmaku_args}")
 
     base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_out_live")
     os.makedirs(base_dir, exist_ok=True)
     for f in os.listdir(base_dir):
-        # 仅删 Douyu 前缀文件而非整目录,与抖音一致,避免清掉并行其他平台验证产物。
+        # 仅删 Douyu 前缀文件而非整目录,避免清掉并行验证的其他平台产物。
         if f.startswith("Douyu弹幕验证"):
             stale = os.path.join(base_dir, f)
-            # R7④（2026-09-30）补 isfile 判定：listdir 里混进子目录时 os.remove 直接抛
-            # IsADirectoryError/PermissionError，真机验证会卡在清理阶段；前缀过滤原本已有、语义不变。
+            # 先判 isfile:listdir 混进子目录时 os.remove 会抛 IsADirectoryError/PermissionError,
+            # 真机验证会卡在清理阶段(R7④,2026-09-30)。
             if os.path.isfile(stale):
                 os.remove(stale)
 
@@ -71,7 +71,7 @@ def main() -> None:
     collector.start()
     print(f"[OK] collector 已启动,监听 {SECONDS}s...")
     # SECONDS=20 覆盖斗鱼 WS 握手 + 进房(login req) + 心跳(gtk)往返;斗鱼要求
-    # 周期性心跳保活,时长不足会导致连接被服务端静默断开。stop() 在计数后触发落盘。
+    # 周期性心跳保活,时长不足会被服务端静默断开。stop() 在计数后触发落盘。
     time.sleep(SECONDS)
     count = collector.message_count
     collector.stop()

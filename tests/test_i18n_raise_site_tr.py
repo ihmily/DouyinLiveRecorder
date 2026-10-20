@@ -1,10 +1,9 @@
-# tests/test_i18n_raise_site_tr.py
-# 盲区锁：raise 位的中文文案必须「在产生点接 tr()」且四目录齐全。
+# 盲区锁：raise 位的中文文案必须在「产生点」接 tr()，且四语目录齐全。
 #
 # 为什么必须锁在产生点：这些消息大多作为 `{reason}` 实参插进一条已经 tr() 过的日志模板
 # （main._resolve_hy_fan / _resolve_b23_tv、src/utils._make_trace_error_guard 的 str(e) 分支），
-# 模板查了表、**消息本身从没被查过**。于是登记原文只会造出死条目，唯有 raise 点包上 tr()
-# 才让目录里的译文真的出现在用户面前（2026-10-17 逐条顺消费链实测）。
+# 模板查了表、**消息本身从没被查过**——只在目录里登记原文只会造出永不生效的死条目
+# （2026-10-17 逐条顺消费链实测）。
 #
 # 白名单用「集合相等」而非计数上限：上限只拦新增，消解掉一处却不收回白名单同样会让
 # 「这条已不需要照顾」的判断长期失真（与 test_i18n_catalog_coverage 的 ⑤-B 同口径）。
@@ -20,8 +19,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCAN_FILES = ("main.py", "src/spider.py", "src/web_models.py")
 _HAS_CN = re.compile(r"[一-鿿]")
 
-# 刻意不接 tr() 的站点，键为「相对路径|消息里第一个中文常量」。
-# 每条都必须写明「为什么不接」与「谁在管它」，否则该条目本身就是问题。
+# 刻意不接 tr() 的站点，键为「相对路径|消息里第一个中文常量」；每条须写明「为什么不接、谁在管」。
 ALLOWED_UNTRANSLATED_RAISES = {
     # XhsUrlError 携带稳定 code（format/scheme/userinfo/port/host/short_path/room_id/non_live_path），
     # 消费点（src/spider.py 的 except XhsUrlError 两处与 main._resolve_xhslink_com）一律只读 e.code，
@@ -39,7 +37,7 @@ ALLOWED_UNTRANSLATED_RAISES = {
     "src/spider.py|TTingLive(原Flextv) login failed",
 }
 
-# 反向见证的锚点：判据若整体失效（解析返回空），「0 缺失」就是假绿。
+# 反向见证锚点：解析整体失效（返回空）时「0 缺失」就是假绿。
 # 按名传入的 tr() 不在本文件范围内，这里只钉字面量形态的既有站点。
 ANCHOR_MSGIDS = frozenset(
     {
@@ -79,8 +77,8 @@ def collect_raise_sites(rel_paths: tuple[str, ...] = SCAN_FILES) -> tuple[set[st
         for node in ast.walk(tree):
             if not isinstance(node, ast.Raise) or node.exc is None:
                 continue
-            # isinstance(s.value, str) 必须显式写在这里：mypy 无法经 _cn() 的属性表达式收窄，
-            # 少了它下面的 f-string 会因元素类型是 object（可能是 bytes）报 str-bytes-safe。
+            # isinstance(s.value, str) 不可省：mypy 无法经 _cn() 收窄，缺了它下面的 f-string
+            # 会因元素类型是 object（可能是 bytes）报 str-bytes-safe。
             cn_consts = [
                 s.value
                 for s in ast.walk(node.exc)
@@ -113,7 +111,7 @@ def test_untranslated_chinese_raise_sites_match_allowlist() -> None:
 
 
 def test_tr_wrapped_raise_msgids_are_covered_by_all_catalogs() -> None:
-    # 「接了 tr() 但忘登记」的形态：运行时静默回退原文，四语界面看不出问题，只有这里能判红。
+    # 「接了 tr() 但忘登记」：运行时静默回退原文、四语界面看不出问题，只有这里能判红。
     _untranslated, translated = collect_raise_sites()
     assert ANCHOR_MSGIDS <= translated, f"解析结果为空或漏站点，判据失效（缺锚点 {sorted(ANCHOR_MSGIDS - translated)}）"
     key_sets = _cached_catalog_key_sets()

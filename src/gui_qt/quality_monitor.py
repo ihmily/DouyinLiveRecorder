@@ -1,10 +1,8 @@
 # -*- coding: utf-8 -*-
 # 画质监控数据模型：解析录制子进程的状态行，维护「主播 → 画质/降级」表。
 #
-# 主线程约定：解析**不再跑在输出线程**（旧 tkinter 版跑在 _read_output 线程里，因此那边的
-# 数据要用一把锁保护）。Qt 版让 stdout 批次经 Signal 回到主线程后才解析，数据只由主线程触碰，
-# 因此本类**刻意不加锁**——加锁反而会暗示「可以跨线程用」，而 `_update_*` 里充满了
-# 非原子的多步读写。
+# 主线程约定：stdout 批次经 Signal 回到主线程后才解析，数据只由主线程触碰，因此本类
+# **刻意不加锁**——加锁反而会暗示「可以跨线程用」，而 `_update_*` 里充满了非原子的多步读写。
 from __future__ import annotations
 
 import time
@@ -43,8 +41,7 @@ class QualityMonitor:
                 msg = msg[dash_idx + 3 :]
 
         patterns = status_patterns()
-        # M-14 留痕：译稿写坏导致某条模板拼不出可用正则时，按 problems 变化去重，
-        # 避免每行日志刷一条。
+        # 译稿写坏导致某条模板拼不出可用正则时，按 problems 变化去重，避免每行日志刷一条（M-14）。
         if patterns.problems and self._problems != patterns.problems:
             self._problems = patterns.problems
             for problem in patterns.problems:

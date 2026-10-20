@@ -1,16 +1,12 @@
 # 录制结果反馈调度的回归测试（离线，不依赖网络/真实 ffmpeg）。
 #
-# 背景（2026-08-23 GUI 79 房间实测日志定稿）：
-# - 虎牙房间 ffmpeg 秒级 403（探针 200/206 通过后紧随被拒），此前录制失败既不记
-#   熔断失败样本、轮末还无条件记成功样本 → 按 host 熔断统计被稀释、永不触发，
-#   房间无限重撞同一条死线路。
-# - 修复：check_subprocess 按退出码上报（rc==0→record_success / rc!=0→record_error），
-#   且快速失败（输入打开被拒的签名）时把 ffmpeg 实际拉流地址经 mark_ffmpeg_reject
-#   记入探针退避——下一轮 select_source_url 跳过该线路探针、改试下一 CDN 候选。
-# - 直下下载路径（direct_download_stream，shopee/花椒直播专用）无 ffmpeg 退出码：
-#   非 200 / 网络异常在函数内部消化成 False，调用方按「未被注释且无退出标志」判定
-#   为真-失败并记 record_error，否则坏线路绕开熔断统计被无限重撞。
-# - 控制台并发容量显示调度器实时自适应值（旧实现显示配置值，实测容量 12 显示 3）。
+# 背景（2026-08-23 GUI 79 房间实测日志定稿）：虎牙房间 ffmpeg 秒级 403（探针 200/206 通过后紧随
+# 被拒），此前录制失败既不记熔断失败样本、轮末还无条件记成功样本 → 按 host 的熔断统计被稀释、
+# 永不触发，房间无限重撞同一条死线路。修复后 check_subprocess 按退出码上报（rc==0→record_success /
+# rc!=0→record_error），快速失败时把实际拉流地址经 mark_ffmpeg_reject 记入探针退避。
+# 直下路径（direct_download_stream，shopee/花椒直播专用）无 ffmpeg 退出码：非 200 / 网络异常在函数
+# 内部消化成 False，调用方按「未被注释且无退出标志」判为真-失败并记 record_error，否则坏线路绕开
+# 熔断统计被无限重撞。控制台并发容量显示调度器实时自适应值（旧实现显示配置值，实测 12 显示 3）。
 
 import subprocess
 import sys
@@ -25,11 +21,10 @@ from typing import Any
 import httpx
 import pytest
 
-# ffmpeg 输出路径必须落在**真实存在**的目录里：check_subprocess 的失败分支以「输出父目录不存在」
-# 判定输出侧本地 IO 失败并据此豁免探针退避（MID-02 引入、MID-N01 于 2026-09-22 收敛为单判据）。
-# 旧写法 "/tmp/out.ts" 在 Linux 上父目录存在、在 Windows 上不存在——同一条用例在两侧语义相反，
-# 「快速失败必须记退避」的断言会在 Windows 被豁免分支静默吞掉。取 tempfile.gettempdir() 后
-# 两侧都是「健康可写目录」，断言语义与平台无关。
+# ffmpeg 输出路径必须落在**真实存在**的目录里：check_subprocess 以「输出父目录不存在」判定输出侧
+# 本地 IO 失败并豁免探针退避（MID-02 引入、MID-N01 于 2026-09-22 收敛为单判据）。旧写法 "/tmp/out.ts"
+# 在 Linux 父目录存在、Windows 不存在，同一条用例两侧语义相反；取 tempfile.gettempdir() 后两侧
+# 都是健康可写目录，断言语义与平台无关。
 _OUT_TS = str(Path(tempfile.gettempdir()) / "dvr_probe_out.ts")
 
 
@@ -48,18 +43,16 @@ def main_mod() -> Generator[Any, None, None]:
 
 
 def _module_shim(module: ModuleType) -> types.SimpleNamespace:
-    # MID-66：把 stdlib / 第三方模块浅拷贝成替身，只替换 **main 命名空间里的全局名**，
-    # 绝不 setattr 到模块本体——time/os/httpx 是全进程唯一对象，loguru 的 enqueue 线程、
-    # harness 守护线程、coverage 都在同一进程里跑，会被假实现波及（本文件原先的
-    # monkeypatch.setattr(main.time, "sleep", ...) 即属此类）。
-    # 与同文件 _make_subprocess_shim 的 subprocess 写法同源，也是 AGENTS.md 规定的模式。
+    # MID-66：把 stdlib / 第三方模块浅拷贝成替身，只替换 **main 命名空间里的全局名**，绝不 setattr
+    # 到模块本体——time/os/httpx 是全进程唯一对象，loguru 的 enqueue 线程、harness 守护线程与
+    # coverage 都在同一进程里跑，会被假实现波及。与 _make_subprocess_shim 同源，即 AGENTS.md 规定的模式。
     return types.SimpleNamespace(**vars(module))
 
 
 def _make_subprocess_shim(returncode: int) -> types.SimpleNamespace:
     # 构造 main 模块级 subprocess 引用的替身（只换 main.subprocess 全局引用，不污染 stdlib——
     # 直接 patch stdlib Popen 会波及同进程 harness 守护线程）。Popen 必须是类且定义
-    # __class_getitem__：check_subprocess 内层函数注解 subprocess.Popen[bytes] 在 def 时求值。
+    # __class_getitem__：check_subprocess 内层注解 subprocess.Popen[bytes] 在 def 时求值。
     # poll 首次返回 None（模拟运行一拍），随后返回退出码，循环退出。
 
     class _FakePopen:

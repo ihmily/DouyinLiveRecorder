@@ -1,12 +1,12 @@
 # SRT 字幕写入器。
 #
 # 按固定时长（segment_seconds）分片输出 SRT 文件，文件名与录像分片对齐：
-#  {base}_{seg:03d}.srt  （对应录像 {base}_{seg:03d}.flv）
-# 单文件模式（segment_seconds<=0 或 None）输出 {base}.srt。
+#  {base}_{seg:03d}.srt（对应录像 {base}_{seg:03d}.flv）；单文件模式（segment_seconds<=0
+#  或 None）输出 {base}.srt。
 #
-# 时间轴基准：默认以 start() 锚定时刻（collector 启动 ≈ 录像起点）为 T0，
-# 并立即创建 SRT 文件；未调 start() 时兜底以首条弹幕到达为 T0。每片内时间轴
-# 重置为 0，保证与 ffmpeg segment + reset_timestamps 的视频 PTS 对齐（秒级）。
+# 时间轴基准：默认以 start() 锚定时刻（collector 启动 ≈ 录像起点）为 T0 并立即建文件；
+# 未调 start() 时兜底以首条弹幕到达为 T0。每片内时间轴重置为 0，保证与 ffmpeg segment +
+# reset_timestamps 的视频 PTS 对齐（秒级）。
 
 from __future__ import annotations
 
@@ -18,13 +18,13 @@ from typing import Optional, TextIO
 import i18n
 from src.logger import logger
 
-# WD-03：SRT 文件句柄打开失败后的重试间隔（秒）。目录被删/磁盘满等瞬时故障恢复后
-# 需要自愈，否则本片（默认 30 分钟）内的弹幕会被静默丢弃。
+# SRT 句柄打开失败后的重试间隔（秒）：目录被删/磁盘满等瞬时故障恢复后需自愈，
+# 否则本片（默认 30 分钟）内的弹幕会被静默丢弃。
 _OPEN_RETRY_INTERVAL = 10.0
-# WD-03：close() 等待写锁的超时（秒）。见 close() 说明。
+# close() 等待写锁的超时（秒），原因见 close()。
 _CLOSE_LOCK_TIMEOUT = 5.0
-# MIN-2236③：close() 成功后写入器进入终态（self._closed），此后到达的弹幕一律丢弃、
-# 不再重开句柄。终态判定放在唯一的开句柄入口 _open_segment()，原因见该处注释。
+# close() 成功后写入器进入终态 self._closed，此后到达的弹幕一律丢弃、不再重开句柄；
+# 终态判定放在唯一开句柄入口 _open_segment()，原因见该处注释。
 
 
 # 把相对秒数 seconds 格式化为 SRT 时间戳字符串 "HH:MM:SS,mmm"；负数按 0 处理，毫秒四舍五入并逐级进位。
@@ -47,23 +47,23 @@ def _format_ts(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
-# L-19（2026-10-02）：按 Unicode 行界切分的解析器会把 U+2028/U+2029、U+0085 视为换行、
-# \x0b/\x0c/NUL 同样破坏 SRT 块结构——清洗集对齐 clean_name 的控制字符口径，把这些
-# 字符统一替换为空格（\r\n 与 "-->" 仍由 _sanitize_srt_text 单独处理）。
+# 按 Unicode 行界切分的解析器会把 U+2028/U+2029、U+0085 视为换行，\x0b/\x0c/NUL 同样破坏
+# SRT 块结构——这些字符统一替换为空格（清洗集对齐 clean_name 的控制字符口径）；
+# \r\n 与 "-->" 由 _sanitize_srt_text 单独处理。
 _SRT_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\u0085\u2028\u2029]")
 
 
 # 清洗弹幕文本，避免污染 SRT 结构：user_name/message 均为外部可控输入，换行会截断字幕块、
-# "-->" 会被解析器当成新的时间轴行（可伪造任意字幕）；替换为可见字符而非直接删除，保留可读性。
+# "-->" 会被当成新的时间轴行（可伪造任意字幕）；替换为可见字符而非删除，保留可读性。
 def _sanitize_srt_text(text: str) -> str:
     return _SRT_CONTROL_CHARS_RE.sub(" ", text).replace("\r", " ").replace("\n", " ").replace("-->", "->")
 
 
 # SRT 字幕写入器：线程安全地按分片时长切换输出文件，并把弹幕按片内相对时间写成 SRT 条目。
 class SrtWriter:
-    # 初始化写入器：base_filename 为录像文件去掉扩展名后的前缀（如 .../主播名_2026-08-12_21-00-00），
-    # segment_seconds 为分片时长（<=0/None 为单文件模式），display_duration 为单条弹幕最小显示秒数
-    # （避免播放器瞬闪）；只做字段与锁初始化，不创建文件。
+    # 初始化写入器：base_filename 为录像文件去扩展名前缀（如 .../主播名_2026-08-12_21-00-00），
+    # segment_seconds 为分片时长（<=0/None 为单文件模式），display_duration 为单条弹幕最小
+    # 显示秒数（避免播放器瞬闪）；只做字段与锁初始化，不创建文件。
     def __init__(
         self,
         base_filename: str,
@@ -109,15 +109,13 @@ class SrtWriter:
             self._index = 0
             self._open_segment(0)
 
-    # 以追加模式打开第 seg 片 SRT 文件（UTF-8），并重置片内序号与上一条结束时间，无返回值。
-    # WD-03：失败时不再向上抛（见 write 中的节流重试），故此处捕获 OSError 并保持 _fp 为 None。
+    # 以追加模式打开第 seg 片 SRT 文件（UTF-8），并重置片内序号与上一条结束时间。
+    # 失败时不向上抛（见 write 中的节流重试），捕获 OSError 并保持 _fp 为 None。
     def _open_segment(self, seg: int) -> None:
-        # MIN-2236③：终态位判定放在这个**唯一的开句柄入口**，而不是只放在 write() 里——
-        # 三条路径（start() / 分片切换 / WD-03 的节流重试）全部在此收口。
-        # close() 之后重开同一文件的后果不是「写坏了字幕」而是**块号回卷**：
-        # 本方法会把 self._index 归 0，而文件以追加模式打开、旧内容还在，
-        # 于是同一个 .srt 里出现 1,2,…,N,1,2,… —— 直接违反 MIN-24① 确立的
-        # 「块号单调不回卷」不变量（SRT 规范要求块序号递增，播放器会错乱/截断）。
+        # 终态位判定放在这个唯一的开句柄入口，而不是只放在 write() 里——start()、分片切换、
+        # 节流重试三条路径全部在此收口。close() 之后重开同一文件会导致块号回卷：本方法把
+        # self._index 归 0，而文件以追加模式打开、旧内容还在，同一个 .srt 里会出现
+        # 1,2,…,N,1,2,…，违反 SRT 块号单调递增的规范（播放器会错乱/截断）。
         if self._closed:
             self._fp = None
             return
@@ -127,11 +125,10 @@ class SrtWriter:
             self._fp = open(path, "a", encoding="utf-8")
             self._last_open_error = ""
         except OSError as e:
-            # 目录被删/权限不足/磁盘满：保持 _fp 为 None，由 write() 按间隔重试。原实现让异常冒泡到
-            # 调用方，而 _open_segment 只在分片切换时被调用——于是本片剩余时间（默认 1800s）内再不
-            # 会重试，write 里的 `if self._fp is not None` 把整片弹幕静默跳过，且只在首次失败时有 1 条 warning。
-            # L-18：记录失败原因供 write() 的节流重试失败时留痕（否则 SRT 目录被删/磁盘满时
-            # 弹幕永久全丢且静默，与 WD-03「自愈」目标矛盾）。
+            # 目录被删/权限不足/磁盘满：保持 _fp 为 None，由 write() 按间隔重试。若让异常冒泡，
+            # 本方法只在分片切换时被调用，本片剩余时间（默认 1800s）内不会再重试，write 里的
+            # `if self._fp is not None` 会把整片弹幕静默跳过，且只在首次失败时有一条 warning。
+            # 记录失败原因，供 write() 的重试失败告警留痕。
             self._last_open_error = type(e).__name__
             self._fp = None
         self._index = 0
@@ -145,13 +142,13 @@ class SrtWriter:
         return f"{self._base}_{seg:03d}.srt"
 
     # 写入一条弹幕 "user_name: message"：按 now（monotonic，缺省内部取）算出片号并按需切片，
-    # 生成片内起止时间戳后立即 flush 落盘；全程持锁保证多线程安全，无返回值。
+    # 生成片内起止时间戳后立即 flush 落盘；全程持锁保证多线程安全。
     def write(self, user_name: str, message: str, now: Optional[float] = None) -> None:
         if now is None:
             now = time.monotonic()
         with self._lock:
             if self._closed:
-                # MIN-2236③：close() 之后再写一律丢弃（终态判定与块号回卷后果见 _open_segment）。
+                # close() 之后再写一律丢弃（终态判定与块号回卷后果见 _open_segment）。
                 # 只 debug 不外抛：调用方是采集线程的 on_message 回调，抛出会污染录制主流程。
                 self._discarded_after_count += 1
                 if self._discarded_after_count == 1:
@@ -170,22 +167,20 @@ class SrtWriter:
             else:
                 start = rel
 
-            # MIN-24① 修复：句柄缺失时的「节流重试开片」必须发生在**生成条目之前**——_open_segment()
-            # 会把片内状态清零（_index=0 / _last_end=None），旧顺序是先自增 _index 并拼好 line、再重试
-            # 开片 → 计数被清零而已拼好的行仍带着清零前的序号，同一个 .srt 内因此出现重复块号与非单调
-            # 时间轴（SRT 规范要求块序号递增）。前置后：重试成功 → 本片首条从 1 开始；重试仍失败 →
-            # 本条按原逻辑丢弃（_fp 为 None 时不写），序号也不会被凭空跳大。
+            # 句柄缺失时的「节流重试开片」必须发生在生成条目之前：_open_segment() 会清零片内状态
+            # （_index=0 / _last_end=None），旧顺序先自增 _index 并拼好 line、再重试开片，会让同一个
+            # .srt 内出现重复块号与非单调时间轴。前置后：重试成功则本片首条从 1 开始；重试仍失败
+            # 则本条按原逻辑丢弃（_fp 为 None 时不写），序号也不会被凭空跳大。
             if self._fp is None:
-                # WD-03：句柄缺失（首次 open 失败 / 写入中被关闭）时按间隔重试打开，否则本片剩下的
-                # 弹幕会被静默丢弃且无任何提示。
+                # 句柄缺失（首次 open 失败 / 写入中被关闭）时按间隔重试打开，否则本片剩余弹幕会被
+                # 静默丢弃且无任何提示。
                 _now = time.monotonic()
                 if _now - self._last_open_attempt >= _OPEN_RETRY_INTERVAL:
                     self._last_open_attempt = _now
                     self._open_segment(self._current_seg)
                     if self._fp is None:
-                        # L-18（2026-10-02）：重试仍失败补 warning——原实现重试失败零日志，
-                        # SRT 目录被删/磁盘满时弹幕永久全丢且静默。告警与重试同频（每
-                        # _OPEN_RETRY_INTERVAL 至多一条），不刷屏。
+                        # 重试仍失败补 warning：告警与重试同频（每 _OPEN_RETRY_INTERVAL 至多一条），
+                        # 不刷屏。
                         logger.warning(
                             i18n.tr(
                                 "SRT 字幕文件打开失败（弹幕暂时无法落盘，将按间隔重试）: {path} - {type_name}",
@@ -230,10 +225,10 @@ class SrtWriter:
                 pass
             self._fp = None
 
-    # 对外关闭接口：加锁后落盘并关闭当前 SRT 文件，可重复调用，无返回值。
-    # WD-03：加锁带超时。调用方是录制线程（collector.stop）；若写线程正持锁卡在
-    # 阻塞式 flush()（网络盘/USB 掉线等），无超时的 acquire 会把录制线程无限期挂住——
-    # 那比丢几条弹幕严重得多。超时即放弃本轮关闭（句柄由进程结束回收），并留一条告警。
+    # 对外关闭接口：加锁后落盘并关闭当前 SRT 文件，可重复调用。
+    # 加锁带超时：调用方是录制线程（collector.stop）；若写线程正持锁卡在阻塞式 flush()
+    # （网络盘/USB 掉线等），无超时 acquire 会把录制线程无限期挂住，比丢几条弹幕严重得多。
+    # 超时即放弃本轮关闭（句柄由进程结束回收）并留一条告警。
     def close(self) -> None:
         if not self._lock.acquire(timeout=_CLOSE_LOCK_TIMEOUT):
             logger.warning(
@@ -245,9 +240,8 @@ class SrtWriter:
             return
         try:
             self._close_locked()
-            # MIN-2236③：只有真正拿到锁、完成关闭的那一轮才置终态位。
-            # 上面的超时分支刻意不置位——那次关闭作废（句柄仍被写线程持有），
-            # 调用方仍可再次 close()，「可重复调用」的既有契约不变。
+            # 只有真正拿到锁、完成关闭的那一轮才置终态位；超时分支刻意不置位——那次关闭作废
+            # （句柄仍被写线程持有），调用方仍可再次 close()，「可重复调用」的契约不变。
             self._closed = True
         finally:
             self._lock.release()

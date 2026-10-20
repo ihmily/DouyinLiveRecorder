@@ -1,16 +1,13 @@
-# tests/test_gui_right_edge_fit.py — 右侧边框裁切回归锁（2026-10-17 修复）。
+# tests/test_gui_right_edge_fit.py — 右侧边框裁切回归锁。
 #
-# 根因（两层）：
-#   ① 源头：三条长提示标签初始 wraplength=0（不折行，按单行全文计入需求宽，单行 ~725-820px）
-#      与 ui_kit 两处 tk.Text 默认 width=80 字符，把 root reqwidth 撑到 1248 > geometry 1120；
-#   ② 机制：Tk grid 对「需求宽 > 分配宽」的 slave 是**裁切**而非收缩——页面右缘（卡片右边框
-#      + 20px 右边距）被整段切掉，表现为用户截图里的「右边框显示不全」。
-# 修复：gui.py 三标签初始 wraplength=scale_profile.px(320) + config 页提示补接
-# _bind_adaptive_wraplength；ui_kit.EditorText/terminal_text 的 tk.Text 加 width=1；
-# gui._raise_width_to_fit_content 把窗口宽与 minsize 宽抬到实测需求宽（clamp 屏幕可用区）。
+# 根因：长提示标签初始 wraplength=0（按单行全文计入需求宽）与 tk.Text 默认 width=80 字符
+# 把 root reqwidth 撑过 geometry（实测 1248 > 1120）；Tk grid 对「需求宽 > 分配宽」的
+# slave 是**裁切**而非收缩，于是卡片右边框被整段切掉。
+# 修复（gui.py）：三标签初始 wraplength=scale_profile.px(320) 且接入 _bind_adaptive_wraplength；
+# ui_kit 的 tk.Text 加 width=1；_raise_width_to_fit_content 把窗口宽与 minsize 抬到实测需求宽。
 #
-# 锁两层：源码锁（无头可跑）钉住三处修复点不回退；真窗用例断言「整窗需求宽 ≤ 实际宽」
-# 且每张卡片右缘都在页面实宽内——后者需要显示器，无显示环境 skip（与 test_ui_theme 同口径）。
+# 锁两层：源码锁（无头可跑）钉住三处修复点；真窗用例断言整窗需求宽 ≤ 实际宽且每张卡片
+# 右缘在页面实宽内——后者需要显示器，无显示环境 skip（与 test_ui_theme 同口径）。
 
 import ast
 import json
@@ -88,8 +85,8 @@ def _fit_probe() -> dict[str, Any]:
 class TestSourceLocks:
     def test_text_widgets_request_minimal_width(self) -> None:
         # tk.Text 默认宽 80 字符是撑爆 root reqwidth 的源头之一；两处工厂都必须显式 width=1
-        # （实际宽度由 pack fill+expand 分配，1 只是请求值地板）。
-        # EditorText 走 super().__init__、terminal_text 走 tk.Text(...)，统一按关键字实参判定。
+        # （实际宽度由 pack fill+expand 分配，1 只是请求值地板）。EditorText 走
+        # super().__init__、terminal_text 走 tk.Text(...)，统一按关键字实参判定。
         tree = ast.parse(UI_KIT_SOURCE)
         hits = [
             n
@@ -103,7 +100,7 @@ class TestSourceLocks:
 
     def test_root_width_raised_to_fit_content(self) -> None:
         # _raise_width_to_fit_content 必须存在且在 _setup_ui 与 _apply_scale 两条路径都被调用——
-        # 缺后者会在升档后字号变大、reqwidth 反超 geometry 时复发裁切
+        # 缺后者会在升档后字号变大、reqwidth 反超 geometry 时复发裁切。
         defs = [
             n for n in ast.walk(GUI_TREE) if isinstance(n, ast.FunctionDef) and n.name == "_raise_width_to_fit_content"
         ]

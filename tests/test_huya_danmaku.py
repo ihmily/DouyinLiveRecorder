@@ -1,9 +1,8 @@
 # 虎牙弹幕离线测试(不依赖直播间/网络)。
 #
-# 覆盖内容:
-# 1. _tars.py write_int int64 分支: 超 int32 的值写 INT8(>q), 回读一致; 边界值仍写 INT4
-# 2. spider.get_huya_app_stream_url: monkeypatch async_req 返回 profileRoom JSON,
-#   断言返回 dict 含弹幕所需 yyid/lChannelId/lSubChannelId(供 OD/BD/UHD main.py 补填)
+# 覆盖：_tars.write_int 的 int64 分支（超 int32 写 INT8、边界值仍写 INT4）回读一致；
+# get_huya_app_stream_url 从 profileRoom 响应解析出弹幕所需的
+# yyid/lChannelId/lSubChannelId（OD/BD/UHD 录制路径据此补填）。
 #
 # 用法: .venv/bin/python tests/test_huya_danmaku.py
 
@@ -108,16 +107,14 @@ def test_profileRoom_fields(monkeypatch: pytest.MonkeyPatch) -> None:
         verify: bool | None = None,
         http2: bool = True,
     ) -> str:
-        # 形参集合与生产 src/async_http.py::async_req 逐项对齐（含 data= / json_data= / timeout= /
-        # verify= 等）：残缺签名会让本用例只覆盖「虎牙这一条调用链」，而同会话里任何
-        # 带 data= 的 spider 调用一旦落到这只替身就抛 TypeError——M-25 修的就是这类漂移。
+        # 形参必须与 src/async_http.py::async_req 逐项对齐：残缺签名会让带
+        # data=/json_data=/timeout= 的 spider 调用落到替身时抛 TypeError。
         # 数值型 roomid 不触发 html 抓取, 直接返回 profileRoom JSON
         requested.append(url)
         return json.dumps(PROFILEROOM_SAMPLE)
 
-    # M-25（CODE_REVIEW_2026-09-29_2）：原写法 `spider.async_req = fake_async_req` 是对模块本体
-    # 的裸赋值、且**没有还原**——同 pytest 进程里后续所有 spider 用例都会拿到这只虎牙固定 JSON
-    # 替身（表现为「单独跑绿、整包跑红」的跨文件假失败）。monkeypatch.setattr 逐属性登记还原。
+    # 必须经 monkeypatch.setattr 逐属性登记还原：裸赋值不还原会让同进程后续用例拿到
+    # 这只固定 JSON 替身（单独跑绿、整包跑红）。
     monkeypatch.setattr(spider, "async_req", fake_async_req)
     result = asyncio.run(
         spider.get_huya_app_stream_url(
@@ -150,8 +147,8 @@ def test_profileRoom_fields(monkeypatch: pytest.MonkeyPatch) -> None:
 if __name__ == "__main__":
     test_int64_branch()
     test_join_data_ayyuid_overflow()
-    # 脚本形态没有 pytest fixture：用 MonkeyPatch.context() 提供同一个 monkeypatch，
-    # 退出 with 即逐属性 undo（R6 口径：手工 MonkeyPatch 实例必须配对还原，context() 自带）。
+    # 脚本形态无 fixture：MonkeyPatch.context() 退出即逐属性 undo
+    # （R6：手工 MonkeyPatch 实例必须配对还原）。
     with pytest.MonkeyPatch.context() as _mp:
         test_profileRoom_fields(_mp)
     print("test_huya_danmaku.py: all passed")

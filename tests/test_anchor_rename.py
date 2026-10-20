@@ -1,6 +1,6 @@
-# Tests for 主播名自动同步（anchor name auto-rename）:
-# - src/config_io.update_anchor_name: URL_config.ini 主播名字段更新
-# - main.rename_anchor_directory: 主播改名后录制目录/文件同步重命名
+# 主播名自动同步（anchor name auto-rename）回归用例：
+# - src/config_io.update_anchor_name：URL_config.ini 主播名字段更新
+# - main.rename_anchor_directory：主播改名后录制目录/文件同步重命名
 
 import os
 import sys
@@ -13,10 +13,10 @@ import pytest
 
 
 def _os_shim(**overrides: Any) -> types.SimpleNamespace:
-    # M-27（CODE_REVIEW_2026-09-29_2）：`monkeypatch.setattr(os, "rename", 替身)` 解析到的是全进程
-    # 唯一的 os 模块本体，替身窗口内 loguru 轮转、弹幕边车、其他录制/转码线程的改名会一并被换掉。
-    # 按仓库约定（AGENTS「测试编写强制约定」/ tests/test_test_hygiene.py R1 的正确写法）：浅拷贝命名
-    # 空间 + 只覆盖需要的那一个属性，再把替身绑到**被测模块（main）自己的 os 引用**上。
+    # M-27（CODE_REVIEW_2026-09-29_2）：`monkeypatch.setattr(os, "rename", 替身)` 改的是全进程唯一
+    # 的 os 模块本体，窗口内 loguru 轮转、弹幕边车、其他录制/转码线程的改名会一并被换掉。
+    # 按 AGENTS「测试编写强制约定」/ test_test_hygiene.py R1：浅拷贝命名空间 + 只覆盖所需属性，
+    # 再把替身绑到**被测模块（main）自己的 os 引用**上。
     shim = types.SimpleNamespace(**vars(os))
     for name, value in overrides.items():
         setattr(shim, name, value)
@@ -26,7 +26,7 @@ def _os_shim(**overrides: Any) -> types.SimpleNamespace:
 @pytest.fixture(scope="module")
 def main_mod() -> ModuleType:
     # main.py 的 _app_root() 基于 sys.argv[0] 定位 config/，pytest 下 argv[0] 指向 pytest 自身，
-    # 需在导入前修正为项目 main.py（与 test_main_fixes.py 相同的处理）
+    # 需在导入前修正为项目 main.py（与 test_main_fixes.py 同法）。
     old_argv = sys.argv[:]
     sys.argv = [str(Path(__file__).resolve().parent.parent / "main.py")]
     try:
@@ -67,12 +67,10 @@ class TestUpdateAnchorName:
         assert update_anchor_name("https://live.bilibili.com/123", "新名字") is True
         assert url_config.read_text(encoding="utf-8-sig") == "超清,https://live.bilibili.com/123,主播: 新名字\n"
 
-    # 注释行（# 前缀）须整行跳过不误改：否则会把用户禁用的条目误激活
-    # 误改注释行会把用户临时禁用的房间重新激活，造成重复录制或风控
+    # 注释行（# 前缀）须整行跳过不误改：误激活用户临时禁用的房间会造成重复录制或风控
     def test_preserves_comment_prefix(self, url_config: Path) -> None:
         from src.config_io import update_anchor_name
 
-        # 注释行（# 开头）须整行跳过、不误改，否则会把禁用条目误激活
         url_config.write_text("#https://live.douyin.com/9,主播: 旧名字\n", encoding="utf-8-sig")
         assert update_anchor_name("https://live.douyin.com/9", "新名字") is True
         assert url_config.read_text(encoding="utf-8-sig") == "#https://live.douyin.com/9,主播: 新名字\n"
@@ -81,7 +79,6 @@ class TestUpdateAnchorName:
     def test_appends_when_field_missing(self, url_config: Path) -> None:
         from src.config_io import update_anchor_name
 
-        # 列表项仅有 URL 无主播字段时补全 ",主播: X"；空行不处理，避免产生空主播名条目
         url_config.write_text("https://live.douyin.com/2\n超清,https://live.douyin.com/3\n", encoding="utf-8-sig")
         assert update_anchor_name("https://live.douyin.com/2", "小明") is True
         assert update_anchor_name("https://live.douyin.com/3", "小红") is True
@@ -95,7 +92,6 @@ class TestUpdateAnchorName:
 
         url_config.write_text("https://live.douyin.com/4,主播：旧名字\n", encoding="utf-8-sig")
         assert update_anchor_name("https://live.douyin.com/4", "新名字") is True
-        # 统一重写为半角冒号格式（与 main.py 行解析一致）
         assert url_config.read_text(encoding="utf-8-sig") == "https://live.douyin.com/4,主播: 新名字\n"
 
     # 已是新名字时返回 False 且不改写：幂等，避免每轮轮询都无谓写盘
@@ -106,10 +102,8 @@ class TestUpdateAnchorName:
         assert update_anchor_name("https://live.douyin.com/5", "新名字") is False
         assert url_config.read_text(encoding="utf-8-sig") == "https://live.douyin.com/5,主播: 新名字\n"
 
-    # 回归：URL 前缀相似（/1 与 /12）时不得误改他行，须段级匹配而非子串匹配
-    # 段级（逗号分隔）匹配而非子串，防止 /1 误伤 /12、/10 误伤 /100
+    # 回归：URL 前缀相似（/1 与 /12、/10 与 /100）时不得误改他行——段级（逗号分隔）匹配而非子串
     def test_url_prefix_not_mismatched(self, url_config: Path) -> None:
-        # 回归：URL 前缀相似（/1 与 /12）时不得误改他行（段级匹配而非子串匹配）
         from src.config_io import update_anchor_name
 
         url_config.write_text(
@@ -170,9 +164,9 @@ def save_root(tmp_path: Path, main_mod: ModuleType, monkeypatch: pytest.MonkeyPa
 
 
 class TestRenameAnchorDirectory:
-    # folder_by_author 默认布局：重命名主播目录，并将目录下文件名前缀同步为新名
+    # folder_by_author（默认开启）布局 {platform}/{主播名}/日期/录制文件（含 SRT）：
+    # 重命名主播目录，并把目录下文件名前缀同步为新名
     def test_renames_author_dir_and_prefixed_files(self, save_root: Path, main_mod: ModuleType) -> None:
-        # folder_by_author（默认开启）结构：{platform}/{主播名}/日期/录制文件（含 SRT）
         anchor_dir = save_root / "抖音直播" / "旧名字"
         date_dir = anchor_dir / "260101"
         date_dir.mkdir(parents=True)
@@ -231,10 +225,9 @@ class TestRenameAnchorDirectory:
         assert (date_dir / "新名字_260102_000000.srt").exists()
         assert (platform_dir / "别人_260102.ts").exists()
 
-        # 标题含主播名，改名须同步刷新子目录名，否则旧标题目录残留导致文件散落
-
     def test_renames_title_anchor_subdir(self, save_root: Path, main_mod: ModuleType) -> None:
-        # folder_by_title + folder_by_time 组合：子目录名形如 "{标题}_{主播名}"
+        # folder_by_title + folder_by_time 组合：子目录名形如 "{标题}_{主播名}"，改名须同步
+        # 刷新子目录名，否则旧标题目录残留导致文件散落
         anchor_dir = save_root / "抖音直播" / "旧名字"
         title_dir = anchor_dir / "演唱会_旧名字"
         title_dir.mkdir(parents=True)
@@ -275,12 +268,10 @@ class TestRenameAnchorDirectory:
         assert (new_dir / "旧名字_locked.ts").exists()  # 占用文件保留旧名
         assert (new_dir / "新名字_free.ts").exists()
 
-    # 目录级失败（整目录被占用）：返回 False，调用方下轮重试且不更新配置
-    # 目录级失败（整目录被占用）：返回 False，调用方下轮重试、不更新配置
+    # 目录级失败（整目录被占用/权限）：返回 False，调用方下轮重试且不更新配置
     def test_directory_rename_failure_returns_false(
         self, save_root: Path, main_mod: ModuleType, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # 目录级失败（如整目录被占用/权限）：返回 False，调用方下轮重试、不更新配置
         anchor_dir = save_root / "抖音直播" / "旧名字"
         anchor_dir.mkdir(parents=True)
         (anchor_dir / "旧名字_260104.ts").write_text("v")
@@ -306,14 +297,12 @@ class TestRenameAnchorDirectory:
 # ============================ 端到端：配置 + 文件系统一致性 ============================
 
 
-# 端到端：先改文件系统（失败则中止）成功后再更新配置，保证两者一致。
 class TestAnchorRenameEndToEnd:
-    # 模拟 start_record 同步顺序：文件系统与配置文件须一致使用新名，其他房间不受影响
-    # 端到端：先改文件系统（失败则中止）成功后再更新配置，两者一致使用新名、其他房间不受影响
+    # 模拟 start_record 内的同步顺序：先改文件系统（失败则中止）成功后再更新配置，
+    # 两者一致使用新名、其他房间不受影响。
     def test_config_and_filesystem_stay_consistent(
         self, url_config: Path, save_root: Path, main_mod: ModuleType
     ) -> None:
-        # 模拟 start_record 内的同步顺序：先改文件系统（失败则中止），成功后再更新配置
         from src.config_io import update_anchor_name
 
         url_config.write_text(

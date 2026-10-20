@@ -1,17 +1,16 @@
-# tests/test_node_install.py - src/node_install.py 的行为锁。
+# src/node_install.py 的行为锁。
 #
-# 该模块此前只有 15% 覆盖：全部安装分支（Windows 下载→校验→解压→改名→PATH 注入→
-# node -v 复核、Linux yum/apt、macOS brew）都只在「真缺 node 的机器首次启动」时才跑，
-# 属于典型的「平时代码不发版、一发版就没人验证」的路径。补测的意义不是覆盖率本身，
-# 而是把两条已被踩过一次的坑固化下来：
+# 安装分支（Windows 下载→校验→解压→改名→PATH 注入→node -v 复核、Linux yum/apt、macOS brew）
+# 只在「真缺 node 的机器首次启动」时才跑，属典型的「平时代码不发版、一发版就没人验证」路径。
+# 补测的意义不是覆盖率本身，而是固化两条已被踩过的坑：
 #   1) CR-11：残缺 zip 缓存必须删除重下，否则错误哈希会被固化成基线 → 永久失败且不自愈；
 #   2) H-1：SHA256 基准不一致必须硬拒绝，且拒绝时要清掉坏包（否则下次仍读到它）。
 #
 # Mock 口径（与 tests/test_ffmpeg_install.py 一致）：
-#   - 只替换模块全局引用（requests / subprocess / distro / tqdm / execute_dir），
-#     绝不改 stdlib 本体（subprocess 用 types.SimpleNamespace 浅拷贝做 shim）；
-#   - zip 用真 zipfile 生成，让 is_valid_zip / unzip_file 走真实实现，
-#     顺带锁住「node_install 与 utils.unzip_file 的落点约定」（解压目录名 = zip 去扩展名）。
+#   - 只替换模块全局引用（requests / subprocess / distro / tqdm / execute_dir），绝不改 stdlib
+#     本体（subprocess 用 types.SimpleNamespace 浅拷贝做 shim）；
+#   - zip 用真 zipfile 生成，让 is_valid_zip / unzip_file 走真实实现，顺带锁住「node_install 与
+#     utils.unzip_file 的落点约定」（解压目录名 = zip 去扩展名）。
 
 import hashlib
 import io
@@ -30,48 +29,22 @@ ZIP_A = b"fake-node-build-A"
 PAGE_HTML_OK = "<html>download https://npmmirror.com/mirrors/node/v22.11.0/" "node-v22.11.0-x64.msi</html>"
 NODE_ZIP_BASE = "node-v22.11.0-win-x64"
 
-# 三个模块级常量的作用域差异，是本文件能「只测映射、不测上游」的前提：
-# PAGE_HTML_OK 只负责能被上游那条正则抠中（抠中即进入下载分支），本身不参与断言；
-# NODE_ZIP_BASE 同时担任「zip 文件名」与「解压后目录名」两个角色，所以改名分支
-# 不需要额外 mock 就能跑到；ZIP_A 只用它的字节摘要，当「任意非 zip 内容」用。
+# 三个模块级常量的作用域差异，是本文件能「只测映射、不测上游」的前提：PAGE_HTML_OK 只负责被
+# 上游正则抠中（即进入下载分支），本身不参与断言；NODE_ZIP_BASE 同时是「zip 文件名」与
+# 「解压后目录名」，改名分支因此无需额外 mock；ZIP_A 只用其字节摘要，当「任意非 zip 内容」用。
 
 
-# 分支 → 用例 对照表（供后续改动人快速判断「新分支是否要补测」，也防止用例
-# 被误删后无人发现。左列是被测行为，右列是承担该贵任的用例名）。
+# 每个失败点各有独立用例（页面/结构变动/下载/校验/解压改名/复核），避免一个用例兼管多分支而
+# 定位不明；新增分支必须补对应用例。全部失败路径的共同契约是「返 False 不抛异常」——调用方
+# check_node() 据此提示用户手动安装，抛出去会直接中断主程序启动。
 #
-# _check_or_record_zip_sha256（基准文件的四种形态，缺一即退化成「无校验」或「误拒」）：
-#   首次下载无基准 → 记录并放行 .............. test_first_download_records_baseline
-#   已有基准且一致 → 比对通过 ................ test_second_run_with_same_content_passes
-#   已有基准但不一致 → 硬拒（篡改形态）...... test_content_drift_is_refused
-#   基准不可读（同名目录）→ 降级放行 ........ test_unreadable_sidecar_degrades_to_pass
-#   基准不可写（只读盘）→ 不阻断安装 ........ test_unwritable_sidecar_does_not_fail_install
+# Linux / macOS 安装器：只验证「命令序列与退出码 → 返回值」的映射；包管理器本身是否可用不在
+# 本仓职责内（yum 失败短路、apt 直装、brew 两类异常各自分叉）。
 #
-# install_nodejs_windows（按失败点逐条拆分，避免一个用例兼管十行分支而定位不明）：
-#   下载页非 200 ................................. test_page_fetch_failure_returns_false
-#   HTML 结构变动、抠不到直链 ................. test_version_not_found_in_html_returns_false
-#   下载→校验→解压→改名→node -v 全链路 .. test_full_install_renames_and_verifies
-#   改名后复核失败（装了但跑不起来）...... test_install_fails_when_node_not_runnable
-#   Windows on ARM 误判为 x64（架构识别修复） test_arm_machine_selects_arm64_artifact
-#   32 位机器 .................................... test_32bit_machine_selects_x86_artifact
-#   有效缓存命中（不重下）...................... test_valid_cached_zip_skips_download
-#   残缺缓存删除重下（CR-11 回归锁）.......... test_corrupt_cached_zip_is_deleted_and_redownloaded
-#   删不掉残缺包也不能停摆 .................... test_unlink_failure_on_corrupt_cache_is_swallowed
-#   哈希不一致 → 删包 + 拒装 .................. test_sha_mismatch_unlinks_zip_and_returns_false
-#   删不掉时仍须返回 False（不掩盖真实原因） test_sha_mismatch_survives_unlinkable_zip
-#   已有 node/ 只复核不重复改名 ................ test_existing_node_dir_is_verified_without_rename
-#   已有 node/ 但不可用 .......................... test_existing_node_dir_but_broken_returns_false
-#   解压产物目录名不符合预期 .................. test_rename_branch_when_no_extracted_dir_returns_false
-#   任何意外异常不得外溢（中断启动）.......... test_unexpected_exception_is_swallowed_to_false
+# install_nodejs / check_node：平台分发与「已装则不重复安装」的短路。未支持平台必须返回 False
+# 而不是抛异常，否则打包产物在非三大平台上启动即崩。
 #
-# Linux / macOS 安装器：只验证「命令序列与退出码 → 返回值」的映射；包管理器
-# 本身是否可用不在本仓职责内（yum 失败短路、apt 直装、brew 两类异常各自分叉）。
-#
-# install_nodejs / check_node：平台分发与「已装则不重复安装」的短路。未支持平台
-# 必须返回 False 而不是抛异常，否则打包产物在非三大平台上启动即崩。
-#
-# [2026-09-22 P-1 追加] 权威哈希（nodejs.org 的 SHASUMS256.txt）优先、TOFU 降级为兜底后，
-# 新增下面三段用例（TestNodeVersionNormalization / TestNodeShasumsParsing /
-# TestNodeOfficialAuthorityWiring 等），锁住四条不变量：
+# 权威哈希（nodejs.org 的 SHASUMS256.txt）优先、TOFU 降级为兜底后，锁住四条不变量：
 #   ① 期望值取自 nodejs.org 而不是 npmmirror（否则镜像可自证，校验归零）；
 #   ② 「有官方期望值且不符」= 硬拒 + 删包 + 不执行，且绝不降级去记新基准；
 #   ③ 官方校验通过时旁路基准不得否决它（否则版本轮转仍能造成永久拒装）；
@@ -185,8 +158,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
 class TestCheckOrRecordZipSha256:
     # trust-on-first-use 基准文件的四种形态：首次记录 / 重复比对 / 内容漂移 / 基准不可读。
-    # 本类的价值在于「拒绝条」与「放行条」的边界不能被混为一谈：
-    # 只有「基准存在且不一致」才硬拒，其余（缺基准/读不动/写不进）一律不阻断安装。
+    # 边界不可混：只有「基准存在且不一致」才硬拒，其余（缺基准/读不动/写不进）一律不阻断安装。
     def test_first_download_records_baseline(self, tmp_path: Path) -> None:
         zip_path = tmp_path / "node.zip"
         zip_path.write_bytes(ZIP_A)
@@ -201,8 +173,7 @@ class TestCheckOrRecordZipSha256:
         assert node_install._check_or_record_zip_sha256(zip_path) is True
         assert node_install._check_or_record_zip_sha256(zip_path) is True
 
-    # 第二次进来走的是「比对分支」而不是重复记录——若实现退化成无条件覆写基准，
-    # 篡改检测形同虚设，故此处必须让两条路径在行为上可区分。
+    # 第二次进来走「比对分支」而非重复记录——实现若退化成无条件覆写基准，篡改检测形同虚设。
     def test_content_drift_is_refused(self, tmp_path: Path) -> None:
         # 与 ffmpeg 侧「同一构建标识下内容变了」同构：node 的基准不按构建轮转，
         # 因此任何不一致都按篡改处理，必须 False（调用方据此删包）。
@@ -212,8 +183,7 @@ class TestCheckOrRecordZipSha256:
         zip_path.write_bytes(b"different")
         assert node_install._check_or_record_zip_sha256(zip_path) is False
 
-    # node 侧基准不按构建轮转（与 ffmpeg 的 _build_identity 不同），因此任何不一致
-    # 都按篡改处理。把这一条写成独立用例：放宽成「不一致只告警」会在此变红。
+    # 基准不一致一律按篡改处理：写成独立用例，放宽成「不一致只告警」会在此变红。
     def test_unreadable_sidecar_degrades_to_pass(self, tmp_path: Path) -> None:
         zip_path = tmp_path / "node.zip"
         zip_path.write_bytes(ZIP_A)
@@ -340,6 +310,7 @@ class TestInstallNodejsWindows:
         assert "win-x86.zip" in seen["zip"]
 
     def test_valid_cached_zip_skips_download(self, env: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+        # 有效缓存（is_valid_zip 通过）命中即跳过下载，只取页面与复核
         tmp_path: Path = env["tmp"]
         cached = tmp_path / f"{NODE_ZIP_BASE}.zip"
         cached.write_bytes(_make_node_zip())
@@ -396,6 +367,7 @@ class TestInstallNodejsWindows:
     def test_sha_mismatch_unlinks_zip_and_returns_false(
         self, env: dict[str, Any], monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # 基准预置为全 0（必然与产物不符）：断言删包 + 返 False，避免下次直接复用被篡改内容
         tmp_path: Path = env["tmp"]
         zip_path = tmp_path / f"{NODE_ZIP_BASE}.zip"
         zip_path.write_bytes(_make_node_zip())
@@ -478,6 +450,7 @@ class TestInstallNodejsWindows:
     def test_unexpected_exception_is_swallowed_to_false(
         self, env: dict[str, Any], monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # 顶层兜底：未预期异常不得外溢（否则首次启动即崩，用户也看不到安装失败的提示）
         def boom(*args: object, **kwargs: object) -> None:
             raise RuntimeError("network down")
 
@@ -486,6 +459,8 @@ class TestInstallNodejsWindows:
 
 
 class TestInstallNodejsLinux:
+    # Linux 两条分支：yum（先 epel-release，失败短路）与 apt 直装；包管理器缺失
+    # （FileNotFoundError/OSError）一律返 False 不抛。
     def test_centos_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
         calls: list[str] = []
         monkeypatch.setattr(node_install, "subprocess", _subprocess_stub({}, calls))
@@ -540,6 +515,8 @@ class TestInstallNodejsLinux:
 
 
 class TestInstallNodejsMac:
+    # macOS 只有 brew 一条路径：非零退出码、CalledProcessError 与其它意外异常三种失败形态
+    # 都必须返 False（不能抛给启动流程）。
     def test_brew_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
         calls: list[str] = []
         monkeypatch.setattr(node_install, "subprocess", _subprocess_stub({}, calls))
@@ -571,6 +548,8 @@ class TestInstallNodejsMac:
 
 
 class TestPackageManagerDispatch:
+    # distro.id 白名单 → 包管理器族（RHS=yum 系 / DBS=apt 系）；未列入白名单的发行版不得被
+    # 静默当成 DBS。
     @pytest.mark.parametrize(
         "dist_id,expected",
         [
@@ -683,6 +662,8 @@ class TestNodeVersionNormalization:
 
 
 class TestNodeShasumsParsing:
+    # SHASUMS256.txt 只认「64 位十六进制 + 两个空格 + 文件名」的行，且文件名字段逐字相等；
+    # 大小写摘要归一，其它文件条目与非规范行一律返回空串。
     def test_known_hash_shasums_line_is_parsed_verbatim(self) -> None:
         assert node_install._parse_shasums256(_shasums_body(EMPTY_SHA256), ZIP_NAME) == EMPTY_SHA256
 

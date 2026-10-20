@@ -1,12 +1,11 @@
-# Tests for msg_push.py 批次5修复 - 凭证脱敏与钉钉载荷回归测试.
-# 中文：守护三类行为——(1) 凭证脱敏 _mask_secret/_mask_url 不再因「长度门槛」漏遮蔽
-# （短密钥、8 位 Bark key、Telegram bot token 此前会落入日志）；(2) 钉钉载荷按 number
-# 是否存在决定是否带 atMobiles 字段；(3) MID-58：「密钥即路径末段」的渠道（Bark / Server酱 /
-# 息知）无条件遮蔽末段，不再按 day.app 主机名白名单——自建 / 反代 Bark 的 device key
-# 同样不得进轮转日志。
-# Mock 设计：钉钉用例 patch msg_push.opener.open（urllib 层）拦截真实 HTTP，捕获请求体
-# 后断言 JSON 载荷，避免触网且精确校验发出字段；Bark 用例另挂一个 loguru sink，
-# 断言**实际写进日志的那一行**不含明文 key（只测 _mask_url 会漏掉「调用点忘传参数」）。
+# 凭证脱敏与钉钉载荷回归。
+# 守护三类行为：(1) _mask_secret/_mask_url 不再因「长度门槛」漏遮蔽（短密钥、8 位 Bark key、
+# Telegram bot token 此前会落入日志）；(2) 钉钉载荷按 number 是否存在决定带不带 atMobiles；
+# (3) MID-58：「密钥即路径末段」的渠道（Bark / Server酱 / 息知）无条件遮蔽末段，不按 day.app
+# 主机名白名单——自建 / 反代 Bark 的 device key 同样不得进轮转日志。
+# Mock 设计：钉钉用例 patch msg_push.opener.open（urllib 层）拦截真实 HTTP，捕获请求体后断言
+# JSON 载荷；Bark 用例另挂 loguru sink，断言**实际写进日志的那一行**不含明文 key（只测
+# _mask_url 会漏掉「调用点忘传参数」）。
 
 from collections.abc import Callable
 from typing import cast
@@ -43,8 +42,8 @@ class TestMaskUrl:
         assert "AbCd1234" not in masked
 
     # MID-58 回归锁：Bark 的密钥位置是「路径最后一段」，与主机名无关。旧实现靠
-    # hostname.endswith("day.app") 白名单命中，自建 / 反代 Bark 因此整串明文进轮转日志
-    # （拿到即可向用户手机无限推送）。现由调用方按渠道声明 mask_last_segment。
+    # hostname.endswith("day.app") 白名单命中，自建 / 反代 Bark 的密钥因此整串明文进轮转日志
+    # （拿到即可向用户手机无限推送）；现由调用方按渠道声明 mask_last_segment。
     def test_self_hosted_bark_key_masked(self) -> None:
         masked = _mask_url("https://bark.example.com/AbCdEfGh", mask_last_segment=True)
         assert "AbCdEfGh" not in masked

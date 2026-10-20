@@ -1,19 +1,14 @@
 # tests/test_ffmpeg_linux_download.py —— src/ffmpeg_linux_download.py 的回归锁。
 #
-# 组织方式：按「删掉哪条判据就该变红」分组（分流 / URL 反解 / 真值表 / 失败不抛 / 两处副本一致性）。
+# 组织方式：按「删掉哪条判据就该变红」分组（分流 / URL 反解 / 真值表 / 失败不抛 / 两处副本一致性），
+#   另含评审 I-1/I-3/I-4 补齐的分组：载荷形态、归档形态闸门、TOFU 基准比对（含基准读不出）、
+#   归档取件布局与缺件、_download 重试与退避、安装后验证探针的三态（抛异常 / 零字节空壳）。
 # 全部离线：requests / subprocess / 落盘目录三面被打桩或收敛到 tmp_path，
 #   绝不真下 ~110MB 产物，也不写程序目录（AGENTS.md「测试产物一律走 tmp_path」）。
 # 替身口径：stdlib 与第三方模块一律走**被测模块命名空间的 shim**
 #   （types.SimpleNamespace(**vars(真身)) 浅拷贝后只覆盖所需属性，再 monkeypatch.setattr(fld, ...)）；
 #   直接 monkeypatch.setattr(fld.platform, "machine", ...) 改的是全进程 platform 本体，
 #   窗口内其它模块（loguru / 后台线程）的 machine() 调用一并被换——AGENTS.md M-27 明令禁止该形态。
-# [Fix round 1 追加的分组] 评审 I-1/I-3/I-4 点名的判据此前零锁，另起六组按同一组织方式落：
-#   载荷形态（_payload_assets / 非 200 不采信）/ 归档形态闸门 / TOFU 基准比对（含基准读不出）/
-#   归档取件布局与缺件 / _download 重试与退避策略。requests 替身全部改回 shim 形态。
-# [最终全分支评审 I-1 追加的两格] 安装后验证那段独立 try（探针 subprocess.run）此前整段零锁：
-#   「探针抛异常」与「落位件是零字节空壳」两种输入落进 TestFailureIsNeverAnException，
-#   判据都是「回 False 且不抛出」，取证见该组头注。_stub_egress 为此新增 run_raises 可选实参
-#   （默认 None → 既有全部用例逐字同形）。
 
 import hashlib
 import io
@@ -301,12 +296,11 @@ class TestFailureIsNeverAnException:
         _stub_backoff(monkeypatch)
         assert fld.install_ffmpeg_linux_native(str(tmp_path), "linuxarm64", master_allowed=True) is False
 
-    # [评审 I-1 补的两格] 上面那条只证明过「**装之前**的环节抛异常会被归一」；`src/ffmpeg_linux_download.py`
-    # 里安装后验证那段独立 try（`subprocess.run(["ffmpeg", "-version"], …, timeout=30)` 起）此前一次都没
-    # 执行过——本机 `--cov` 实测 Missing=456-465，把整个 except 摘掉后 46 条用例仍全绿。
+    # [评审 I-1 补的两格] 上面那条只证明过「**装之前**的环节抛异常会被归一」；安装后验证那段独立 try
+    # 此前一次都没执行过（实测把整个 except 摘掉后 46 条用例仍全绿）。
     # 后果不是「少一条 error 日志」：TimeoutExpired / OSError(ENOEXEC) 会穿出 install_ffmpeg_linux_native
-    # → install_ffmpeg_linux（src/ffmpeg_install.py:583 处无 try）→ install_ffmpeg → check_ffmpeg
-    # （src/ffmpeg_install.py 无 try）→ main.py 启动路径，正是本组头注承诺「绝不抛出」要防的那件事。
+    # → install_ffmpeg_linux（无 try）→ install_ffmpeg → check_ffmpeg → main.py 启动路径，
+    # 正是本组头注承诺「绝不抛出」要防的那件事。
     def test_post_install_probe_timeout_is_never_an_exception(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

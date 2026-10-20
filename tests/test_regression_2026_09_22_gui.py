@@ -1,20 +1,18 @@
 # tests/test_regression_2026_09_22_gui.py — 2026-09-22 批次（GUI / i18n / 推送）回归锁。
 #
 # 覆盖本轮「行为可见」修复的**失效形态**（编号见 CODE_REVIEW_2026-09-22.md 4.7 / 5.4）：
-#   MID-2248  i18n.has_catalog 的判据必须是「真的装载得出非空映射」，不是「文件存在」；
-#             PyYAML 缺失那条降级还要落一条 warning，否则用户视角是「切了繁体没生效且无提示」。
+#   MID-2248  i18n.has_catalog 的判据必须是「真的装载得出非空映射」而非「文件存在」；PyYAML 缺失
+#             的降级还要落一条 warning，否则用户视角是「切了繁体没生效且无提示」。
 #   MID-2249  旧会话线程不得把**新会话**的 running 打成 False（自然 EOF 是三条收尾里最常走的一条，
 #             此前唯独它裸写 self.running = False，竞态后永不回正且零日志）。
 #   MID-2252  URL 页整文件写回前必须先读盘并与基线裁决（与高级设置窗口的 MID-55 同源）。
-#   MIN-2247  messagebox 正文这类「提取器扫不到」的文案必须逐条登记 pending，
-#             否则四语目录永远缺键、面板上只出简中（AGENTS「i18n 提取器扫不到对话框」条）。
+#   MIN-2247  messagebox 正文这类「提取器扫不到」的文案必须逐条登记，否则四语目录永远缺键。
 #   MIN-2249  _cleanup_zombie_ffmpeg 判 returncode，非 0 不得记「已清理」。
-#   MIN-2250  kernel32 一律 ctypes.WinDLL + 显式 argtypes/restype；恢复控制台失败须带 GetLastError 落告警。
+#   MIN-2250  kernel32 一律 ctypes.WinDLL + 显式 argtypes/restype；恢复控制台失败须带 GetLastError。
 #
 # 为什么多数用例走**行为注入**而不是起真界面：LiveRecorderGUI 依赖 Tk 主循环，无头环境跑不了；
-# 沿用 tests/test_danmaku_monitor.py 的 `object.__new__` 桩 + 真实方法驱动（桩只补状态字段、
-# 不重新实现判定逻辑），结构性约束另行以 AST 静态锁读取源码（同 test_gui_monitor.py 手法）。
-# customtkinter 缺失时按本仓既有口径 importorskip（属环境限制，不是失败）。
+# 沿用 tests/test_danmaku_monitor.py 的 `object.__new__` 桩 + 真实方法驱动（桩只补状态字段、不重新
+# 实现判定逻辑），结构性约束另以 AST 静态锁读取源码（同 test_gui_monitor.py 手法）。
 
 import ast
 import json
@@ -102,8 +100,7 @@ class TestStaleSessionCannotStopNewOne:
 
     def test_read_output_has_no_bare_running_assignment(self) -> None:
         # 静态锁：_read_output 的三条收尾（自然 EOF + 两个 except）必须同构地经
-        # _mark_session_stopped(session_id)，函数体内不得再出现裸 self.running = False——
-        # 自然 EOF 恰是最常走的那条，漏一处就回到竞态原样（MID-2249 的失效形态）。
+        # _mark_session_stopped(session_id)，体内不得再出现裸 self.running = False（自然 EOF 最常见）。
         tree = ast.parse(GUI_SOURCE)
         fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_read_output")
         bare = [
@@ -141,10 +138,9 @@ def restore_language_state() -> Any:
 @pytest.mark.usefixtures("restore_language_state")
 class TestCatalogMustBeLoadable:
     def test_missing_pyyaml_makes_zh_tw_have_no_catalog(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # 旧判据是 (zh_TW.yaml).is_file() —— PyYAML 未装时文件在、目录装不出来，
-        # has_catalog 仍返回 True → _effective_language 不回退 → GUI 的
-        # 「{lang} 的翻译目录不可用，已回退为 …」告警恒不触发（gui.py::_on_language_change
-        # 的唯一判据就是 effective != lang_code），日志打「语言已切换: zh_TW」而界面全是简中原文。
+        # 旧判据是 (zh_TW.yaml).is_file() —— PyYAML 未装时文件在、目录装不出来，has_catalog 仍返回
+        # True → _effective_language 不回退 → GUI 的「目录不可用，已回退」告警恒不触发（gui.py::
+        # _on_language_change 的唯一判据就是 effective != lang_code），界面全是简中原文。
         i18n._YAML_MISSING_WARNED.clear()
         monkeypatch.setattr(i18n, "yaml", None)
         assert i18n.has_catalog("zh_TW") is False
@@ -233,9 +229,8 @@ class TestZombieCleanupJudgesReturnCode:
         assert gui._process_kill_hint(b"\n\n  \n") == ""
 
     def test_no_kill_call_reads_output_as_text(self) -> None:
-        # 静态锁：本函数内所有 subprocess.run 一律按字节捕获（AGENTS「探测子进程输出一律
-        # 按字节比较」）——中文 Windows 的 GBK 本地化消息在 PYTHONUTF8=1 下会让 text=True 的
-        # reader 线程解码抛错、判定语句直接 TypeError。
+        # 静态锁：本函数内所有 subprocess.run 一律按字节捕获（探测子进程输出口径）——中文 Windows
+        # 的 GBK 本地化消息在 PYTHONUTF8=1 下会让 text=True 的 reader 线程解码抛错、判定语句 TypeError。
         tree = ast.parse(GUI_SOURCE)
         fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_cleanup_zombie_ffmpeg")
         runs = [
@@ -243,11 +238,10 @@ class TestZombieCleanupJudgesReturnCode:
             for n in ast.walk(fn)
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "run"
         ]
-        # [历史注] 原断言 `len(runs) == 4`：L-40（CODE_REVIEW_2026-10-02）删掉两段结构性无法
-        # 命中的兜底过滤器（Windows PARENTPID / POSIX pkill -P 都只匹配 GUI 直接派生的 ffmpeg，
-        # 而 ffmpeg 的父进程恒为 main.py），扫描面随之从 4 降到 2。写死条数只会跟着每次合法增删
-        # 漂移、不表达任何判据，故改为「非空反向见证 + 逐个断言」：0 处（扫描口径失效）即红，
-        # 新增的第 N+1 处 run 会被 ast.walk 自动纳入并由下方逐条断言检查。
+        # [历史注] 原断言 `len(runs) == 4`：L-40（CODE_REVIEW_2026-10-02）删掉两段结构性无法命中的
+        # 兜底过滤器（Windows PARENTPID / POSIX pkill -P 都只匹配 GUI 直接派生的 ffmpeg，而 ffmpeg
+        # 的父进程恒为 main.py），扫描面从 4 降到 2。写死条数不表达任何判据，改为「非空反向见证 +
+        # 逐个断言」：0 处即红，新增的第 N+1 处 run 由 ast.walk 自动纳入。
         assert runs, "未在 _cleanup_zombie_ffmpeg 内找到任何 subprocess.run（扫描口径失效即假绿）"
         for run in runs:
             keywords = {k.arg for k in run.keywords}
@@ -390,9 +384,9 @@ class TestKernel32DeclaredAndConsoleRestoreWarns:
 # ─── MID-2252：URL 页整文件写回前的冲突裁决 ──────────────────
 class TestUrlSaveChecksDiskBeforeWriting:
     def test_url_save_config_goes_through_verdict(self) -> None:
-        # 静态锁：录制子进程运行期确实在写 URL_config.ini（回写主播名 / 归一 URL /
-        # 注释掉风控房间），而 GUI 与它是两个进程，跨进程只剩「原子替换不会半写」这一条保护。
-        # 「丢失更新」无法靠锁避免，只能落盘前显式检测 + 交用户裁决，故接线不得回退成直接写文件。
+        # 静态锁：录制子进程运行期确实在写 URL_config.ini（回写主播名 / 归一 URL / 注释风控房间），
+        # 而 GUI 与它是两个进程，跨进程只剩「原子替换不会半写」。「丢失更新」只能落盘前显式检测 +
+        # 交用户裁决，故接线不得回退成直接写文件。
         tree = ast.parse(GUI_SOURCE)
         saves = [
             n
@@ -468,11 +462,10 @@ def _four_catalogs() -> dict[str, dict[str, str]]:
 
 class TestDialogStringsRegistered:
     def test_every_messagebox_template_is_registered(self) -> None:
-        # 漏登记 = 假绿：门禁全绿、extract_i18n_strings 报「0 缺失」，但英文用户在
-        # 「彻底退出 / 没有直播间地址 / 冲突裁决」这些最需要看得懂的界面上只拿到简中。
-        # 判据对象是四语目录本身，不是 _i18n_pending_gui.json——袋子只是并行修复期防撞车的
-        # 一次性中转袋，中央合并后按 AGENTS 收尾约定删除；以袋为准会让「袋子写过、目录没合」
-        # 这种最真实的漏网形态一路绿到底。
+        # 漏登记 = 假绿：门禁全绿、extract_i18n_strings 报「0 缺失」，但英文用户在「彻底退出 /
+        # 没有直播间地址 / 冲突裁决」这些最需要看得懂的界面上只拿到简中。判据对象是四语目录本身，
+        # 不是 _i18n_pending_gui.json——袋子只是并行修复期防撞车的一次性中转，以袋为准会让
+        # 「袋子写过、目录没合」这种最真实的漏网形态一路绿到底。
         templates = _messagebox_tr_templates()
         assert templates, "未抽到任何 messagebox 模板，说明抽取判据已失效（勿改成恒真）"
         cats = _four_catalogs()
@@ -487,11 +480,11 @@ class TestDialogStringsRegistered:
                 assert cats[lang][msgid].strip(), f"{lang} 译文为空：{msgid[:40]!r}"
 
     def test_catalog_translations_keep_placeholders_and_line_counts(self) -> None:
-        # MIN-2253：占位符对账此前只有「模板 vs 关键字实参」一条（源码侧），**没有任何一条**
-        # 比较四份译文内部——本仓出过 zh_TW 把 {msg} 写成 {msg_2} 而调用方传 msg= 的事故，
-        # 繁体下钉钉/微信/Bark/PushPlus 的失败告警整条 KeyError 崩掉。MI-23 改成回退原文后，
-        # 同类漂移只会表现为「繁体用户看到的仍是简体」，与「该键本来没译」完全同形。
-        # 这里是全量目录级锁（780 键 × 3 语言，2026-09-26 清理 Weverse 孤儿条目后由 783 降为 780），不依赖任何 pending 袋子是否存在。
+        # MIN-2253：占位符对账此前只有「模板 vs 关键字实参」一条（源码侧），**没有任何一条**比较四
+        # 份译文内部——本仓出过 zh_TW 把 {msg} 写成 {msg_2} 而调用方传 msg= 的事故，繁体下钉钉/微信/
+        # Bark/PushPlus 的失败告警整条 KeyError 崩掉。MI-23 改成回退原文后，同类漂移只表现为「繁体
+        # 用户看到的仍是简体」，与「该键本来没译」完全同形。全量目录级锁 780 键 × 3 语言
+        # （2026-09-26 清理 Weverse 孤儿条目后由 783 降为 780），不依赖 pending 袋子是否存在。
         cats = _four_catalogs()
         keys = set(cats["zh_CN"]) & set(cats["en_US"]) & set(cats["en_GB"]) & set(cats["zh_TW"])
         assert keys, "四语目录键集为空"

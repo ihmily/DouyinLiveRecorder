@@ -3,39 +3,35 @@
 # 落到工具生命周期上的确定性检查点。
 #
 # 为什么需要 Hook（而不是只靠 AGENTS.md 文字）：那几条约束原本是「prose + 每次人工执行」的形态，
-# 而两种后果都不可接受——① 不可逆：批量重装 venv 依赖时沙箱拦截发生在 pip 已开始卸载之后、包目录
-# 被清空（AGENTS.md「venv 依赖修复分级处置」）；收尾清理越界会连运行期产物一起删。② 隐形：
-# 变异验证标记残留与整文件换行符翻转，对 black / mypy / 注释检查三面全不报错，只有用例真跑到
-# 那条分支才现形（AGENTS.md「变异验证的一次性改动必须当轮还原」「注释检查工具·三个盲点」）；
-# 新增 `tests/frontend/*.mjs` 忘登记 ci.yml 同理——`node --test <文件>` 不会顺带发现同级其他
-# `.mjs`，该文件的全部回归锁在 CI 里从不执行（M-28 实证）；运行时钉定表（`build_exe.py` 的
-# `_PINNED_RUNTIME_SHA256` / `scripts/check_runtime_pins.py`）改后不跑 check 同理——空表 /
-# 缺平台 / 缺槽位对 black / mypy / 注释检查三面全隐形，只有 check_runtime_pins.py 自己能兜住
-# （SEV-10）。判据每次都要执行又容易被忘，正是 Hook
-# 的适用面；本文件只做**判定与反馈**，不引入第二套门禁清单。
+# 两种后果都不可接受——① 不可逆：批量重装 venv 依赖时沙箱拦截发生在 pip 已开始卸载之后、包目录
+# 被清空；收尾清理越界会连运行期产物一起删。② 隐形：变异验证标记残留与整文件换行符翻转，对
+# black / mypy / 注释检查三面全不报错；新增 `tests/frontend/*.mjs` 忘登记 ci.yml 同理
+# （`node --test <文件>` 不会顺带发现同级其他 .mjs）；运行时钉定表（`build_exe.py` 的
+# `_PINNED_RUNTIME_SHA256` / `scripts/check_runtime_pins.py`）改后不跑 check 同理（SEV-10）。
+# 这类判据每次都要执行又容易被忘，正是 Hook 的适用面；本文件只做**判定与反馈**，不引入第二套
+# 门禁清单。
 #
 # 事实源关系：约束本体仍是 AGENTS.md。下面的目录名集合、命令形态、登记位置都逐字取自对应条目；
 # 改判据时先改 AGENTS.md，再由 tests/test_agent_hook_guard.py 把两侧一致性钉成回归锁
 # （受保护目录集合必须与 AGENTS.md「运行期产物目录」口径逐项相等，漂移即红）。
 #
-# 事件与出口约定（Qoder 官方 Hooks 文档 https://docs.qoder.com/extensions/hooks，2026-10-02 复核）：
+# 事件与出口约定（Qoder 官方 Hooks 文档 https://docs.qoder.com/extensions/hooks）：
 #   - stdin 收一个 JSON 事件上下文（PreToolUse / PostToolUse），不是命令行参数。
 #   - 出口能力由事件的 Blockable 决定，两条通道不同：
-#   - PreToolUse 可阻断：exit 2 阻止命令执行，stderr 作为错误回给 agent（真正的「拦」只在这一站）。
-#   - PostToolUse 非阻断：写入已发生、不可撤销；官方退出码表注明 exit 2 的 stderr 注入
-#     「only for blockable events」，对本事件不构成可靠通道，故走文档化出口——
-#     exit 0 + stdout JSON `hookSpecificOutput.feedback` 即时回传，让 agent 当场修。
-#     [历史注] 旧版对 Pre/Post 统一声明「exit 2 = 拦截当前动作」，经 provider 文档证伪后改为上述双轨。
-#   - 「当轮还原」的真正切断点因此不在本 Hook 的 Post 一站，而在仍可判红的收尾门禁
-#     （tests/test_test_hygiene.py R8 全仓扫描、run_gates.py / CI）——feedback 被忽略时由它们兜住入库前最后一道闸。
+#     PreToolUse 可阻断——exit 2 阻止命令执行，stderr 作为错误回给 agent（真正的「拦」只在这一站）。
+#     PostToolUse 非阻断——写入已发生、不可撤销；官方退出码表注明 exit 2 的 stderr 注入
+#     「only for blockable events」，故走文档化出口：exit 0 + stdout JSON
+#     `hookSpecificOutput.feedback` 即时回传，让 agent 当场修。
+#   - 「当轮还原」的真正切断点因此不在 Post 一站，而在仍可判红的收尾门禁
+#     （tests/test_test_hygiene.py R8 全仓扫描、run_gates.py / CI）——feedback 被忽略时由它们兜住。
 #   - 拒绝/反馈消息**不得**回显完整命令原文、prompt 或环境变量值（官方 hook 安全口径），
 #     只给规则短 id 与命中的目录名/文件名。
 #   - 脚本自身异常一律放行并打一条 stderr 提示：Hook 坏掉绝不能演变成「agent 什么也做不了」，
-#     那是把工具故障伪装成代码不合格；真正的质量判定仍由 run_gates.py / CI 承担。
-#   - 覆盖边界：PostToolUse 的注册 matcher 是写入类工具（Write|Edit|SearchReplace|MultiEdit），
-#     判定只认 tool_input 的 file_path 类字段；Bash/Shell 命令内的文件写入不经该事件——这是
-#     已知边界而非漏洞：相关约束（运行时钉定、MUTATION 还原等）由收尾门禁（R8 全仓扫描 /
-#     run_gates.py / CI）在入库前兜底，本 Hook 不追求、也做不到覆盖命令级写入。
+#     那是把工具故障伪装成代码不合格；事件形态不认识时同样放行（fail-open）。真正的质量判定
+#     仍由 run_gates.py / CI 承担。
+#   - 覆盖边界：PostToolUse 的 matcher 是写入类工具（Write|Edit|SearchReplace|MultiEdit），判定
+#     只认 tool_input 的 file_path 类字段；Bash/Shell 内的文件写入不经该事件——已知边界而非漏洞，
+#     相关约束由收尾门禁（R8 全仓扫描 / run_gates.py / CI）在入库前兜底。
 #   - UTF-8：拒绝理由与反馈都是中文，中文 Windows（cp936）下写 stderr 会抛 UnicodeEncodeError
 #     炸掉 Hook 进程（与 MID-63 同根因），故 stdout/stderr 都要 reconfigure 并显式给 errors。
 #
@@ -70,10 +66,8 @@ PROTECTED_MAINTENANCE_DIR = "scripts"
 
 # 删除动作的动词面：PowerShell / cmd / POSIX shell / Python 单行写法都要覆盖。
 # 只认动词，不认「出现 delete 字样」——`git status`、`ls` 之类不在此列，避免把只读命令拦下。
-# [历史注] 2026-10-19 审查 S-01：`ri`（Remove-Item 的 PowerShell 别名）、`os.removedirs` 与
-# `Clear-*`（Clear-Content 等 PowerShell 清空动词）原先不在表内，属可直接落地的删除入口。
-# 注意 `os.removedirs` 必须显式列出：原有 `os\.remove` 带 `\b` 收尾，其后的 `d` 是词字符，
-# 边界不成立 → 旧表对 `os.removedirs` 实际零命中。
+# `ri`（Remove-Item 别名）、`os.removedirs` 与 `Clear-*` 必须显式列出：`os\.remove` 带 `\b` 收尾，
+# 其后的 `d` 是词字符，边界不成立 → 不写就会对 `os.removedirs` 零命中。
 _DELETE_VERB_RE = re.compile(
     r"\b(Remove-Item|Rm|Del|Erase|Rd|Rmdir|ri|shutil\.rmtree|os\.remove|os\.unlink|os\.removedirs"
     r"|unlink|find|Clear-\w+)\b",
@@ -125,8 +119,6 @@ _RECURSIVE_FORCE_RE = re.compile(
 
 # 「裸大范围目标」token：`.` / `*` / `./` 这类没有落到具体文件名的删除目标。
 # 用整词相等判定而不是正则，避免把 `*_tmp_*.py` 这种带过滤语义的通配误判成裸 `*`。
-# [历史注] 2026-10-19 审查 L-77：原字面量里 `"."` 与 `"*"` 各重复一次；frozenset 会自行去重，
-# 故不影响判定，但重复项会让「覆盖面清单」看起来比实际更长，掩盖真正缺失的形态，已去掉。
 _BARE_WIDE_TOKENS: frozenset[str] = frozenset({".", "./", ".\\", "*", "./*", ".\\*", "$PWD", "%CD%", "\\"})
 
 # 变异验证标记（AGENTS.md「变异验证的一次性改动必须当轮还原，并给改动行加变异标记」那条）。
@@ -255,15 +247,11 @@ def _statements(command: str) -> list[str]:
 
 
 def _protected_hit(statement: str, name: str) -> bool:
-    # 判定受保护目录是否以**目录形态**出现在这条语句里：
-    # 目录名后面的那一字节必须是「边界」——路径分隔符、引号、空白、闭合括号或语句结尾，
-    # 且前面不是更长标识符的一部分（避免 `download_logs_table` 这类名字被误命中）。
-    #
-    # [历史注] 2026-10-19 审查 S-01：旧判据只接受 `/`、`\` 与结尾，于是
-    # `rm -rf "logs"`（引号）、`rm -rf logs `（尾随空格）、`find logs -type f -delete`（空白）
-    # 这三种**最自然的书写形态**会让命中被整条 `continue` 跳过——守卫恰好在最该拦的输入上失效。
-    # 引号与尾随空格不是刻意构造的变形，因此边界集合必须把它们纳入；只认分隔符等于把守卫
-    # 建在「命令必须写成理想形态」的假设上。
+    # 判定受保护目录是否以**目录形态**出现在这条语句里：目录名后的那一字节必须是「边界」
+    # （路径分隔符、引号、空白、闭合括号或语句结尾），且前面不是更长标识符的一部分
+    # （避免 `download_logs_table` 这类名字被误命中）。**边界集合必须纳入引号与尾随空格**：
+    # `rm -rf "logs"` / `rm -rf logs ` / `find logs -type f -delete` 都是最自然的书写形态，
+    # 只认分隔符等于把守卫建在「命令必须写成理想形态」的假设上，恰在最该拦的输入上失效。
     for match in re.finditer(rf"(?<![\w.\-]){re.escape(name)}(?![\w.\-])", statement, re.IGNORECASE):
         tail = statement[match.end() : match.end() + 1]
         if tail and tail not in _PROTECTED_TAIL_BOUNDARY:
@@ -334,18 +322,17 @@ def _check_runtime_pins_changed(
     # P-RUNTIME-PIN：写入目标命中运行时钉定表所在文件时，即时提醒 agent 收尾跑 check
     # （AGENTS.md「发布链运行时二进制必须 fail-closed 钉定（SEV-10）」第三层防线）。
     #
-    # 定位策略分两档（2026-10-17 审查 S1 定稿）：
+    # 定位策略分两档：
     #   - 路径在 ROOT 内（anchored=True）按**规范位置**精确锚定：根级 build_exe.py 与
     #     scripts/check_runtime_pins.py。tests/、docs/ 下的同名文件不是钉定表本体，误报会
-    #     训练 agent 养成忽略反馈的习惯——放行面同样承重，理由见 tests 放行面用例注释。
+    #     训练 agent 养成忽略反馈的习惯——放行面同样承重。
     #   - 路径在 ROOT 外（tmp_path、其他检出副本）看不到仓库根在哪，只能退回末尾分段匹配，
     #     与检出位置无关（与 P-MJS-REGISTER 同手法）。
-    # dist/、build/ 等工具产物目录内的同名文件一律跳过：PyInstaller 产物里出现同名文件不是
-    # 钉定表被改（排除口径与 P-LINE-ENDING 的 _in_skipped_dir 保持一致）。
-    #
-    # 判定只用 segments（_relative_segments 已小写化）做全等匹配：末段同时蕴含文件名与 .py
-    # 后缀，故不再另判 path.stem / path.suffix——stem 未小写化时 `BUILD_EXE.PY` 会漏报，且
-    # 两条判断与 segments[-1] 重复，大小写口径分裂正是原实现的问题根因（审查 S2）。
+    # dist/、build/ 等工具产物目录内的同名文件一律跳过：PyInstaller 产物里出现同名文件不是钉定表
+    # 被改（排除口径与 P-LINE-ENDING 的 _in_skipped_dir 保持一致）。
+    # 判定只用 segments（已小写化）做全等匹配：末段同时蕴含文件名与 .py 后缀，故不再另判
+    # path.stem / path.suffix——stem 未小写化时 `BUILD_EXE.PY` 会漏报，且大小写口径分裂正是
+    # 原实现的问题根因。
     if _in_skipped_dir(path):
         return None
     if anchored is None:
@@ -459,9 +446,8 @@ def check_written_file(path: Path) -> tuple[str, str] | None:
 
 def run_self_test() -> int:
     # 内置样例自检：证明规则真的会拦、且放行面不误伤——不依赖 IDE 是否已加载 Hook。
-    # 变形语料（2026-10-19 审查 S-01）：旧自检的 3 条全是「干净形态」，只证明了理想输入能拦住，
-    # 而实测放行的是引号、尾随空格、参数分写、find -delete 这些日常书写形态。守卫强度必须靠
-    # 变形语料保持——改正则而语料不变，等于允许「覆盖面回退」不被发现。
+    # 变形语料必须保留：旧自检全是「干净形态」，只证明了理想输入能拦住，而实测放行的是引号、
+    # 尾随空格、参数分写、find -delete 这些日常书写形态——改正则而语料不变，等于允许覆盖面回退。
     # 形态用 tuple 列表而非 dict：同一规则要有多条语料，dict 的键唯一性会逼着删掉其中一条。
     block_cases: list[tuple[str, str]] = [
         ("R-PIP-BULK", "pip install --force-reinstall -r requirements.txt"),
@@ -527,7 +513,7 @@ def run_self_test() -> int:
             failed += 1
         # P-RUNTIME-PIN：修改 build_exe.py 必须触发收尾检查提醒。走 check_written_file 主入口
         # 而非直接喂合成 segments——入口自己算 segments 与锚定标志，私有喂入等于把接线回归
-        # （判定函数被摘掉、调用点被删）挡在自检之外（2026-10-17 审查 S6）。
+        # （判定函数被摘掉、调用点被删）挡在自检之外。
         pin_probe = Path(probe_dir) / "build_exe.py"
         pin_probe.write_text("_PINNED_RUNTIME_SHA256 = {}\n", encoding="utf-8")
         if _expect_rule(
@@ -555,7 +541,7 @@ def run_self_test() -> int:
         # P-RUNTIME-PIN 锚定放行面：probe_dir 充当仓库根时，tests/ 下的同名文件不是钉定表本体，
         # 不得触发。self-test 不 patch 模块级 ROOT（_CI_WORKFLOW 等导入期常量已按真 ROOT 算好，
         # patch 会让它们指向不存在的工作流），改为显式传 anchored=True + 按 probe_dir 相对路径
-        # 取 segments——segments 是实测值，不是凭空捏造的合成串。
+        # 取 segments（实测值，不是凭空捏造的合成串）。
         nested_probe = Path(probe_dir) / "tests" / "build_exe.py"
         nested_probe.parent.mkdir(parents=True, exist_ok=True)
         nested_probe.write_text("x = 1\n", encoding="utf-8")

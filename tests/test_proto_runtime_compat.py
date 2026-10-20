@@ -1,16 +1,13 @@
 # F-14 护栏：protobuf「gencode / runtime 组合」回归用例。
 #
-# src/proto/douyin_pb2.py 是 protoc 25.x（gencode 4.25.3）的生成物，文件头标注
-# DO NOT EDIT——本环境无 protoc / grpcio-tools，无法用同代 protoc 重新生成。
-# 可落地的护栏因此是三件事：
-#   1. requirements.txt / pyproject.toml 给 runtime 加 `<8` 上限（已做）；
-#   2. 本用例断言「已安装的 runtime 满足声明区间」且「不早于 gencode 版本」，
-#      这样把 runtime 升到窗口外时 CI 立刻变红，而不是等到线上弹幕解码时才炸；
-#   3. 断言 douyin_pb2 能 import 并完成一次往返编解码——gencode 与 runtime 不兼容的
-#      典型症状（`AttributeError` / 序列化异常 / 字段静默丢失）会在这里被捕获。
-#
-# 升级 runtime 的正确姿势：先用**同代 protoc**重新生成 *_pb2.py，再放开版本上限，
-# 并回归本文件与 tests/ 下的弹幕用例。
+# src/proto/douyin_pb2.py 是 protoc 25.x（gencode 4.25.3）生成物、标注 DO NOT EDIT，本环境无
+# protoc / grpcio-tools 无法重新生成，因此护栏落在三件事：
+#   1. requirements.txt / pyproject.toml 给 runtime 加 `<8` 上限；
+#   2. 断言已安装 runtime 满足声明区间且不早于 gencode 版本——升到窗口外时 CI 立刻变红，
+#      而不是等到线上弹幕解码时才炸；
+#   3. 断言 douyin_pb2 能 import 并完成一次往返编解码（不兼容的典型症状：AttributeError /
+#      序列化异常 / 字段静默丢失）。
+# 升级 runtime 的正确姿势：先用**同代 protoc**重新生成 *_pb2.py，再放开上限，并回归本文件。
 
 import re
 from pathlib import Path
@@ -37,9 +34,8 @@ def _declared_protobuf_specifier() -> str:
         if stripped.startswith("protobuf"):
             return stripped[len("protobuf") :].strip()
     # 这里刻意用 raise 而非 pytest.fail()：CI 的 typecheck job 只装 requirements.txt + mypy，
-    # 未安装 pytest 时 `import pytest` 解析为 Any，pytest.fail() 的 NoReturn 标注丢失，
-    # mypy 会认为本函数可能隐式返回 None 而报 [return]（本机装了 pytest 则完全看不到）。
-    # raise 是天然的 NoReturn，与「是否装了 pytest」无关，两种环境结论一致。
+    # 未装 pytest 时 `import pytest` 解析为 Any，pytest.fail() 的 NoReturn 丢失，mypy 会认为
+    # 本函数可能隐式返回 None 而报 [return]（本机装了 pytest 则看不到）。raise 与是否装 pytest 无关。
     raise AssertionError("requirements.txt 中未找到 protobuf 声明")
 
 

@@ -1,33 +1,26 @@
-// WEB 端「按房间切换画质」前端功能的单元测试（Node 内置 node:test，零 npm 依赖）。
+// web/app.js 面板前端用例的统一入口（Node 内置 node:test，零 npm 依赖）。
 //
 // 【为什么用 node:vm 沙箱而非 jsdom】仓库无 package.json / 前端构建链，为一个 IIFE 页面脚本
-// 引入 jsdom 测试栈会带来整条 npm 依赖树，与「纯 Python 仓库 + 运行时自带 Node」的定位不符。
-// app.js 全部状态封闭在 IIFE 私有作用域内（仅 window.toggleRoom 等少数导出），画质切换的
-// buildRoomQualitySelect / changeRoomQuality / 事件委托均为私有函数——沙箱内以 DOM/fetch 桩
-// 手动触发 DOMContentLoaded 后，通过真实的事件委托链路驱动（tab 点击 → showView('rooms') →
-// 渲染下拉 → change 委托 → PUT /api/rooms/quality → toast/回拉），既不改动生产代码，也覆盖
-// 真实接线而非孤立函数。
+// 引入 jsdom 会带来整条 npm 依赖树，与「纯 Python 仓库 + 运行时自带 Node」的定位不符。app.js
+// 状态全部封闭在 IIFE 内（仅 window.toggleRoom 等少数导出），沙箱以 DOM/fetch 桩手动触发
+// DOMContentLoaded，经真实事件委托链路驱动（tab → showView → 渲染 → 事件 → PUT → toast/回拉），
+// 既不改生产代码，也覆盖真实接线而非孤立函数。
 //
-// 【桩的最小集合】app.js 加载期零副作用（IIFE 尾部仅注册 DOMContentLoaded），初始化触及的
-// 全局仅有：document（getElementById/querySelectorAll/addEventListener/body.dataset/
-// documentElement）、window（自身赋值）、localStorage、fetch、setTimeout/clearTimeout、
-// confirm、EventSource（SSE 路径，本测试不进入）。setTimeout 桩为 no-op：toast 自动隐藏与
-// 轮询递归全部依赖它，不执行可让测试完全确定性（无真实定时器竞态），Promise 微任务不受影响。
+// 【桩的最小集合】app.js 加载期零副作用，初始化只触及 document / window / localStorage / fetch /
+// setTimeout / clearTimeout / confirm / EventSource（SSE 路径，本测试不进入）。setTimeout 桩为
+// 「排队但不自跑」：toast 自动隐藏与轮询递归都不执行，用例完全确定；需要驱动弹幕轮询的用例显式
+// 调 runTimers。Promise 微任务不受影响。
 //
-// 【启动引导走向】GET /api/status 固定回 401：api() 的 401 分支走 showLogin（不构造
-// EventSource、不启动仪表盘轮询），得到一个静止的登录态应用；随后注入测试 token、点击
-// 「直播间」tab 进入被测视图。语言由 GET /api/language 响应控制（initLanguage 依据它设置
-// currentLang），四语文案用同一链路行为级断言，而非源码静态扫描。
+// 【启动引导走向】GET /api/status 固定回 401：api() 走 showLogin（不构造 EventSource、不启动
+// 仪表盘轮询），得到静止的登录态应用；随后注入测试 token、点击目标 tab。语言由
+// GET /api/language 控制，四语文案走行为级断言而非源码静态扫描。
 //
-// 由 tests/test_frontend_quality_ui.py 以子进程运行（node 缺失时该 pytest 用例 skip）。
+// 覆盖范围：画质切换（本文件起点）、MID-37 掩码凭据、MID-38 登出入口、MID-39 错误体解析、
+// MID-2263 前后端布尔解析不变量、M-17/M-18/M-19 动态容器与代次竞态、MIN-10 四语目录门禁。
+// 新增用例沿用同一 harness，不另开 .mjs——另开会脱离 tests/test_frontend_quality_ui.py 的
+// 单文件驱动与 ci.yml 的 node 清单，导致 CI 静默漏跑。
 //
-// 【2026-09-20 范围扩展】本文件已从「画质切换」扩为 web/app.js 面板前端用例的统一入口，另覆盖：
-//   MID-37 掩码凭据的空值保护（loadConfig 打标 + saveConfig 确认门槛 + 服务端 400 文案）；
-//   MID-38 登出入口显隐（登录可见 / 点击吊销 token / 登录页与无 token 部署隐藏）；
-//   MID-39 后端错误体解析（toast 只显示 detail，不把原始 JSON 弹成消息）；
-//   MIN-10 前端内嵌四语目录的机械门禁（键集一致 + index.html 静态文案全部入目录）。
-// 新增用例仍需要本文件的 DOM/fetch 桩，故沿用同一 harness 而不是另开 .mjs——另开会脱离
-// tests/test_frontend_quality_ui.py 的单文件驱动、CI 静默漏跑。
+// 由 tests/test_frontend_quality_ui.py 以子进程运行（Node 缺失时该 pytest 用例 skip）。
 import { readFileSync, readdirSync } from 'node:fs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -41,15 +34,13 @@ const INDEX_HTML = readFileSync(new URL('../../web/index.html', import.meta.url)
 
 // 极简元素桩：只实现 app.js 触及的接口。事件经 _listeners 记录、由测试手动派发。
 //
-// 【2026-10-18 为 M-17 / M-19 补的两条 DOM 语义（字符串属性模型测不到，缺一条回归锁就恒绿）】
-//   ① 给 textContent 赋值会**替换全部子节点**。M-17 的破坏面正是「applyTranslations 往带
-//      data-i18n 的动态容器上覆写 textContent → 已渲染的整张配置表单被清成一行占位文本」；
-//      若 textContent 与 innerHTML 是两个互不相干的字符串，该形态在桩里完全隐形、断言必绿。
-//   ② 给 innerHTML 赋值会重建子节点，select 的 options 集合与选中态随之重置。M-19 断言
-//      「房间集合未变时不重建、选中项保留」，生产代码重建后要读 sel.options 复位选中态，
-//      故 options 必须按 innerHTML 里的 <option value> 解析出来（值形态是 esc() 后的实体，
-//      本文件的用例只用无特殊字符的房间名，不做二次解码）。
-// _innerHTMLWrites 记录 ② 的实际发生次数，是 M-19 「未重建」的计数判据。
+// 两条真实 DOM 语义必须建模，否则整类回归锁恒绿：
+//   ① textContent 赋值会**替换全部子节点**——M-17 的破坏面正是 applyTranslations 覆写动态容器，
+//      把已渲染的配置表单清成一行占位文本；两个互不相干的字符串属性会让该形态完全隐形。
+//   ② innerHTML 赋值会重建子节点，select.options 与选中态随之重置——M-19 断言「房间集合未变
+//      不重建」，生产重建后要读 sel.options 复位，故 options 按 innerHTML 里的 <option value>
+//      解析（值形态是 esc() 后的实体，本文件用例只用无特殊字符的房间名，不做二次解码）。
+// _innerHTMLWrites 记录 ② 的发生次数，是 M-19「未重建」的计数判据。
 function parseOptionValues(html) {
     return (html.match(/<option\b[^>]*>/g) || []).map(tag => {
         const m = tag.match(/\bvalue="([^"]*)"/);
@@ -104,8 +95,8 @@ function makeElement(id) {
     return el;
 }
 
-// index.html 的静态 data-i18n* 属性按 **id** 还原进桩（不另抄一份清单：M-17 的判据正是
-// 「真实首屏 DOM 里这个容器带不带该属性」，抄一份就等于把被测契约写进测试自己）。
+// index.html 的静态 data-i18n* 属性按 **id** 还原进桩，不另抄清单：M-17 的判据正是「真实首屏
+// DOM 里这个容器带不带该属性」，抄一份等于把被测契约写进测试自己。
 function attrsByIdFromHtml(html) {
     const map = new Map();
     for (const m of html.matchAll(/<[a-zA-Z][\w-]*\b([^>]*)>/g)) {
@@ -132,11 +123,10 @@ function makeClassList() {
     };
 }
 
-// fetch 路由桩：routes 以 "METHOD path" 为键，值为 {status?, json?|text?} 或 (callIndex) => 同构对象
-// （text 表示非 JSON 响应体，见 makeResponse）。
-// 响应恒带 json 或 html 头（api() 按它决定 JSON.parse），全部请求记录进 log 供断言。
-// 【2026-10-18 扩展】路由函数也可返回 **Promise**（同构对象的 Promise），桩会 await 它——
-// M-18 需要「先发的请求后落地」这种可控交错：不控制 resolve 时机就造不出乱序，竞态锁等于没锁。
+// fetch 路由桩：routes 键为 "METHOD path"，值为 {status?, json?|text?} 或 (callIndex) => 同构对象；
+// text 表示非 JSON 响应体（见 makeResponse）。响应恒带 json 或 html 头（api() 据此决定
+// JSON.parse），全部请求记进 log 供断言。路由函数也可返回其 Promise，桩会 await——M-18 需要
+// 「先发的请求后落地」这种可控交错，不控制 resolve 时机就造不出乱序，竞态锁等于没锁。
 function makeFetch(routes, log) {
     return async (path, init) => {
         init = init || {};
@@ -164,12 +154,10 @@ function makeResponse(status, data, rawText) {
 
 // —— 应用启动 ————————————————————————————————————————————
 
-// —— 应用启动 ————————————————————————————————————————————
-
-// #config-container 的 input 还原：app.js 用 innerHTML 拼配置行、再用
-// querySelectorAll('#config-container input') 取回节点，而 DOM 桩不解析 HTML。
-// 这里按属性把 <input> 标签还原成元素桩，并**按 innerHTML 缓存**——测试改动的必须正是
-// saveConfig 读到的同一批对象（重新渲染后 innerHTML 变化才会重解析，语义与真实 DOM 一致）。
+// #config-container 的 input 还原：app.js 用 innerHTML 拼配置行、再按
+// querySelectorAll('#config-container input') 取回，而 DOM 桩不解析 HTML。这里按属性把
+// <input> 标签还原成元素桩并**按 innerHTML 缓存**，测试改动的才是 saveConfig 读到的同一批
+// 对象（重新渲染后 innerHTML 变化才重解析，语义与真实 DOM 一致）。
 function parseConfigInputs(html) {
     const inputs = [];
     for (const tag of html.match(/<input\b[^>]*>/g) || []) {
@@ -183,7 +171,7 @@ function parseConfigInputs(html) {
 }
 
 // 在沙箱中加载 app.js 并完成 DOMContentLoaded 初始化（语言/主题/事件绑定/启动引导）。
-// lang 控制初始语言；routes 补充被测视图所需接口（房间列表与画质选项须由用例提供）。
+// lang 控制初始语言；routes 补充被测视图所需接口。
 async function bootApp({ lang, routes, confirm = () => true, injectToken = true, seedClasses = {} } = {}) {
     const lang_ = lang || 'zh_CN';
     const fetchLog = [];
@@ -196,8 +184,8 @@ async function bootApp({ lang, routes, confirm = () => true, injectToken = true,
         return el;
     });
     const docListeners = {};
-    // index.html 里带 class 的元素（如 #logout-btn 的 hidden）需在桩内还原，否则显隐断言失去前提；
-    // 静态 data-i18n* 属性同样按 index.html 原样还原（见 HTML_STATIC_ATTRS），两者的判据都来自真实 HTML。
+    // index.html 的初始 class（如 #logout-btn 的 hidden）与静态 data-i18n* 属性都按真实 HTML
+    // 还原，否则显隐断言失去前提（判据见 HTML_STATIC_ATTRS）。
     function getOrCreate(id) {
         if (!elements.has(id)) {
             const el = makeElement(id);
@@ -239,12 +227,10 @@ async function bootApp({ lang, routes, confirm = () => true, injectToken = true,
         setItem: (k, v) => storage.set(k, String(v)),
         removeItem: k => storage.delete(k),
     };
-    // 定时器桩：原为纯 no-op（toast 自动隐藏/轮询递归都不执行，测试确定性）。
-    // 【2026-10-18 扩展】改成「排队但不自跑」——对既有用例与 no-op 逐字等价（没人调用 runTimers
-    // 就一条回调都不会执行），但 M-19 需要驱动弹幕轮询：renderDanmaku 只由 dmChain 的 poll 经
-    // setTimeout 进入，纯 no-op 形态下那条链永不落地、筛选下拉的竞态与重建根本碰不到。
-    // id 用队列下标 +1（0 是 falsy，与 app.js 里 `if (toastTimer)`、`if (timer)` 的判空口径兼容），
-    // clearTimeout 把该位置 null 而非移出数组，故 id 与槽位始终对齐。
+    // 定时器桩：排队但不自跑——没人调 runTimers 就一条回调也不执行（与纯 no-op 等价），
+    // 但 M-19 需要它驱动弹幕轮询：renderDanmaku 只经 dmChain 的 poll + setTimeout 进入，
+    // no-op 形态下那条链永不落地。id 用队列下标 +1（0 是 falsy，兼容 app.js 的 `if (toastTimer)`
+    // 判空口径），clearTimeout 把槽位置 null 而非移出数组，故 id 与槽位始终对齐。
     const timerQueue = [];
     const sandbox = {
         document,
@@ -457,11 +443,10 @@ test('四语切换成功文案行为级断言（toast 按当前语言渲染）',
 
 // —— 布尔配置解析口径（app.js 的 parseConfigBool） ——————————————————
 //
-// app.js 是单个 IIFE，只把 toggleRoom / deleteRoom / loadFiles / downloadFile 挂到 window 上
-// （刻意保持极小的全局面）。布尔解析属私有实现，故这里从源码中按大括号配对抽出
-// 「token 集 + parseConfigBool」片段单独求值，而不是为了测试去扩大生产代码的导出面。
-// 后半段用行为级断言兜住「内部确实用 parseConfigBool 判定」——只测片段会漏掉
-// httpsRecordingEnabled 又改回 `=== '是'` 的情况。
+// app.js 是单个 IIFE，只导出少数函数（刻意保持极小的全局面）。布尔解析属私有实现，故按大括号
+// 配对从源码抽出「token 集 + parseConfigBool」片段单独求值，不为测试扩大生产导出面。
+// 后半段另有行为级断言兜住「内部确实用 parseConfigBool」——只测片段会漏掉
+// httpsRecordingEnabled 改回 `=== '是'` 的情况。
 
 function extractParseBoolSource() {
     const start = APP_JS.indexOf('var CONFIG_TRUE_TOKENS');
@@ -494,11 +479,10 @@ const boolSandbox = { Object };
 vm.createContext(boolSandbox);
 vm.runInContext(extractParseBoolSource(), boolSandbox, { filename: 'app.js#parseConfigBool' });
 
-// MID-2263（2026-09-22）：断言基准**必须**取自两端源码，不得在测试里内联字面量清单。
-// 旧写法把 token 表抄进用例，于是从 `src/config_bool.py::TRUE_TOKENS` 删掉 "on" 后
-// 「后端回落 default、前端仍显示为『是』」这一分叉两侧都绿——跨语言不变量只靠人记。
-// 现在：JS 侧从 app.js 抠 CONFIG_*_TOKENS 键集合，Python 侧从 src/config_bool.py 抠
-// TRUE_TOKENS/FALSE_TOKENS，逐 token 双向断言「两端解析同一布尔」。
+// MID-2263：断言基准**必须**取自两端源码，不得在测试里内联字面量清单——旧写法把 token 表
+// 抄进用例，两侧同时删/改也全绿（「后端回落 default、前端仍显示为『是』」的分叉只能靠人记）。
+// 现在 JS 侧抠 CONFIG_*_TOKENS，Python 侧抠 src/config_bool.py 的 TRUE/FALSE_TOKENS，
+// 逐 token 双向断言两端解析同一布尔。
 const CONFIG_BOOL_PY = readFileSync(new URL('../../src/config_bool.py', import.meta.url), 'utf8');
 
 function extractJsTokenSet(name) {
@@ -547,8 +531,8 @@ test('SEV-2210：同一组输入串在前端 parseConfigBool 与后端 parse_con
     const parse = boolSandbox.parseConfigBool;
     const pyTrue = extractPyTokenSet('TRUE_TOKENS');
     const pyFalse = extractPyTokenSet('FALSE_TOKENS');
-    // 输入集由**后端源码里的 token 集合**驱动（大小写与首尾空白变体一并覆），
-    // 外加两端都必须回落 default 的空值/未识别值。
+    // 输入集由**后端源码里的 token 集合**驱动（含大小写与首尾空白变体），外加两端都必须
+    // 回落 default 的空值/未识别值。
     const trueInputs = [];
     const falseInputs = [];
     for (const t of pyTrue) trueInputs.push(t, t.toUpperCase(), '  ' + t + '  ');
@@ -567,10 +551,8 @@ test('SEV-2210：同一组输入串在前端 parseConfigBool 与后端 parse_con
 });
 
 test('SEV-2210：全文件不得残留 === / == 直比「是」「否」的旧形态', () => {
-    // 「== \"是\"」是 SEV-2210 的历史坑（旧实现只认「是」一种写法）。仅锁 httpsRecordingEnabled
-    // 会漏掉任何**新增**的同类判定，故改为全文件扫描（注释行里作为历史说明出现的形态已由
-    // app.js 自身写成 `=== '是'：` 的散文形式，不构成比较表达式；此处按「含 == 或 === 且
-    // 右侧为是/否字面量」判定是否存在真实比较）。
+    // 「== \"是\"」是 SEV-2210 的历史坑（旧实现只认「是」）。仅锁 httpsRecordingEnabled 会漏掉
+    // 新增的同类判定，故全文件扫描；注释行里的散文形态先剥掉，不算比较表达式。
     const offenders = [];
     const lines = APP_JS.split('\n');
     for (let i = 0; i < lines.length; i++) {
@@ -591,9 +573,8 @@ test('httpsRecordingEnabled 经 parseConfigBool 判定，不得退回直比「�
 
 // —— MID-37 / MID-39：掩码凭据的空值保护与后端错误体解析 ——————————————————
 //
-// app.js 的 loadConfig 用 innerHTML 拼配置行，saveConfig 再经 querySelectorAll 读回，
-// 故本段用 bootConfigView 走完整渲染链路（tab 点击 → GET /api/config → 渲染 → 点保存 →
-// 逐项 PUT），断言的是真实请求与真实 toast 文案，而不是孤立函数。
+// app.js 的 loadConfig 用 innerHTML 拼配置行、saveConfig 再读回，故本段走完整渲染链路
+// （tab → GET /api/config → 渲染 → 保存 → 逐项 PUT），断言真实请求与真实 toast 文案。
 const MASKED_CONFIG = {
     Cookie: { douyin_cookie: '***' },
     推送配置: { tgapi令牌: '***', 邮件服务器地址: 'smtp.qq.com' },
@@ -708,9 +689,9 @@ test('MID-39：非 JSON 错误体回退本地化通用文案，安装路径不�
 
 // —— MID-38：登出入口显隐与 bearer 吊销 ————————————————————————————
 //
-// index.html 的 #logout-btn 带 class="hidden"（style.css 为 display:none!important），
-// 改动前全仓无任何代码移除它 → WD-09 补的 POST /api/logout 在 UI 上不可达。桩按 HTML 初值
-// 还原该 class（seedClasses），于是「登录后必须可见」的断言与真实首屏一致。
+// index.html 的 #logout-btn 带 class="hidden"（style.css 为 display:none!important）；
+// 改动前全仓无代码移除它 → WD-09 的 POST /api/logout 在 UI 上不可达。桩按 HTML 初值还原
+// 该 class（seedClasses），「登录后必须可见」的断言才与真实首屏一致。
 const LOGOUT_SEED = { 'logout-btn': ['hidden'] };
 
 test('MID-38 前提：index.html 的 #logout-btn 默认带 hidden（未登录不显示）', () => {
@@ -779,15 +760,14 @@ test('无 token 的正常启动（认证关闭）不显示登出入口', async (
     assert.ok(ctx.elements.get('logout-btn').classList.contains('hidden'), '无 bearer 可吊销时不该显示登出');
 });
 
-// —— M-17 / M-18 / M-19：动态容器的翻译覆写、按需加载代次、筛选下拉重建（CODE_REVIEW_2026-10-18）———
+// —— M-17 / M-18 / M-19：动态容器的翻译覆写、按需加载代次、筛选下拉重建 ————————
 //
 // 三条都是**行为锁**，不钉源码字面量：
-//   · M-17 靠「index.html 还原进桩的静态属性 + textContent 写会替换子节点 + [data-i18n] 扫描面」
-//     复现真实破坏链（切语言 → applyTranslations 覆写动态容器文本），把 data-i18n 加回容器即转红；
-//   · M-18 靠可控 resolve 时机造出「先发后到」的乱序（fetch 路由允许返回 Promise），
+//   · M-17：index.html 静态属性还原进桩 + textContent 写会替换子节点 + [data-i18n] 扫描面，
+//     复现「切语言 → applyTranslations 覆写动态容器」，把 data-i18n 加回容器即转红；
+//   · M-18：可控 resolve 造出「先发后到」的乱序（fetch 路由可返回 Promise），
 //     删掉任一处 isCurrent 复核即转红；
-//   · M-19 靠 _innerHTMLWrites 计数（innerHTML 每被赋值一次记一笔）+ 手动 runTimers 驱动轮询，
-//     退回「每轮无条件重建」即第二轮的写入次数变 2 而转红。
+//   · M-19：_innerHTMLWrites 计数 + 手动 runTimers 驱动轮询，退回「每轮无条件重建」即转红。
 
 // 可控 resolve：用例握住 promise 不放手，先让新一代落地、再放开旧一代，乱序由此造出。
 function deferred() {
@@ -995,11 +975,10 @@ test('M-19：房间消失后重建下拉，选中项回落「全部房间」而�
 // —— MIN-10：前端内嵌四语目录的机械化门禁 ————————————————————————
 
 //
-// web/app.js 自带一套与后端 i18n/ 完全独立的四语目录（面板文案），仓库约定「新增/修改翻译串
-// 须同步五处」过去只靠人记。本段把该约定变成门禁：目录键集与后端语言集合对齐、index.html 的
-// 每个 data-i18n* 键与 app.js 的每个 t('字面量') 键都在四目录内、四目录键集逐一相等、
-// 无空值/无键名回显、同模板四语占位符一致、HTML 里不存在未入目录的硬编码中文。
-// 目录直接从 app.js 源码里截取字面量求值（不复制第二份清单，删掉生产目录就测不到东西）。
+// web/app.js 自带一套与后端 i18n/ 独立的四语目录（面板文案）。本段把「新增/修改翻译串须同步
+// 多处」的人记约定变成门禁：前端语言集合 == 后端 i18n 实测集合、四目录键集逐一相等、
+// index.html 的 data-i18n* 与 app.js 的 t('字面量') 键全部命中、无空值/键名回显、同模板占位符
+// 一致、HTML 无未入目录的硬编码中文。目录直接从 app.js 源码截取字面量求值，不复制第二份清单。
 function extractI18nCatalogs() {
     const start = APP_JS.indexOf('var I18N = {');
     assert.ok(start >= 0, 'app.js 未找到 var I18N 定义');
@@ -1023,8 +1002,8 @@ function extractI18nCatalogs() {
     return box.I18N;
 }
 
-// 后端语言集合由 i18n/ 目录实测得出（en_US.json / en_GB.json / zh_TW.yaml + zh_CN/LC_MESSAGES/*.mo），
-// 避免把语言清单在测试里再抄一遍——新增语言时前端内嵌目录漏补会被这条直接拦下。
+// 后端语言集合由 i18n/ 目录实测得出，避免在测试里再抄一份语言清单——新增语言时前端内嵌
+// 目录漏补会被这条直接拦下。
 function backendLanguages() {
     const dir = new URL('../../i18n/', import.meta.url);
     const langs = new Set();
@@ -1040,11 +1019,9 @@ function backendLanguages() {
 
 const I18N = extractI18nCatalogs();
 const FRONTEND_LANGS = Object.keys(I18N);
-// CJK 判定用显式码位区间（扩展 A / 基本区 / 兼容表意文字），不用字面字符写范围，
-// 以免编辑器把端点替换成形近字后 🌙 这类符号被误判为中文。
-// CJK 判定按码位区间用十六进制字面量写（扩展 A / 基本区 / 兼容表意文字），并且逐码位比较。
-// 不用字面汉字写区间端点（编辑器的形近字归一化会改掉码位，实测连 emoji 的 UTF-16 代理项都被
-// 判进区间），也不用 \u 转义（测试文件里再放一份转义只增加读噪声）。
+// CJK 判定按码位区间（扩展 A / 基本区 / 兼容表意文字）用十六进制字面量逐码位比较：
+// 不用字面汉字写端点（编辑器形近字归一化会改码位，实测连 emoji 的 UTF-16 代理项都被判进
+// 区间），也不用 \u 转义（测试文件里再放一份转义只增加读噪声）。
 function hasCjk(text) {
     for (const ch of String(text)) {
         const cp = ch.codePointAt(0);

@@ -1,20 +1,16 @@
-# Tests for WP-B（docs/worklog/CODE_REVIEW_2026-09-29_2.md 的 M-1 / M-2）网络出站层回归锁。
+# WP-B（docs/worklog/CODE_REVIEW_2026-09-29_2.md 的 M-1 / M-2）网络出站层回归锁。
 #
-# M-1 src/async_http.py：探针与 async_req 全线 follow_redirects=True，而内网/保留目标判定原先
-#     只作用于**初始 URL**（MIN-2219 只堵了直连形态）。被攻陷/被 MITM 的平台可以先回一个过得
-#     去校验的公网地址、再 302 到 http://127.0.0.1:6379/ 或 http://169.254.169.254/，探针照样
-#     访问内网，并把跳转后响应的 status_code / content-type 写进 debug 日志——内网端口观测口的
-#     跳转版形态。现由 _build_client 给每支 AsyncClient 挂 response 事件钩子，逐跳复检
-#     response.url（判定仍走既有的 _internal_stream_target_reason，不在钩子里复制第二份规则）。
-# M-2 src/sync_http.py：sync_req 原先没有 scheme 白名单（async 侧早就有），而 urllib 默认 opener
-#     注册着 FileHandler，于是 sync_req("file:///etc/passwd") 把本地文件当响应体返回；默认重定向
-#     处理器也不限制 http→file 的跨 scheme 跳转。现入口过 utils.is_safe_http_url、两支 opener 按
-#     http/https 白名单显式构造，abroad 分支（经进程全局默认 opener）补落地地址复核。
+# M-1 src/async_http.py：探针与 async_req 全线 follow_redirects=True，而内网/保留目标判定原先只作用于
+#     **初始 URL**（MIN-2219 只堵了直连形态）。被攻陷/被 MITM 的平台可先回一个过得了校验的公网地址、
+#     再 302 到 http://127.0.0.1:6379/ 或 http://169.254.169.254/，探针照样访问内网并把跳转后响应的
+#     status_code / content-type 写进 debug 日志。现由 _build_client 给每支 AsyncClient 挂 response
+#     事件钩子，逐跳复检 response.url（判定仍走 _internal_stream_target_reason，不复制第二份规则）。
+# M-2 src/sync_http.py：sync_req 原先没有 scheme 白名单（async 侧早就有），而 urllib 默认 opener 注册着
+#     FileHandler，于是 sync_req("file:///etc/passwd") 把本地文件当响应体返回。现入口过
+#     utils.is_safe_http_url、两支 opener 按 http/https 白名单显式构造，abroad 分支补落地地址复核。
 #
-# 打桩边界（AGENTS「测试不得自实现被测逻辑（假绿）」）：只替换网络层与 DNS seam——httpx 用
-# MockTransport 造重定向链、urllib 的读盘入口只做**观测**（原样调用真实实现）。协议判定、
-# 内网判定、逐跳钩子、opener 的 handler 集合一律走真实代码，本文件不重写任何判定规则。
-# 变异验证（删掉生产实现用例应变红）逐条做过，结论见交付报告。
+# 打桩边界：只替换网络层与 DNS seam——httpx 用 MockTransport 造重定向链、urllib 的读盘入口只做
+# 观测（原样调用真实实现）。协议判定、内网判定、逐跳钩子、opener 的 handler 集合一律走真实代码。
 
 import urllib.error
 import urllib.request
@@ -32,10 +28,9 @@ import src.async_http as async_http
 import src.sync_http as sync_http
 from src import web_config
 
-# 与 tests/test_async_http.py / tests/test_regression_2026_09_22_net.py 同一个 DNS seam：
-# MIN-2219 起探针会按「本机解析结果」给直连目标定罪，用例必须与该 seam 隔离，否则无外网/无 DNS
-# 的环境里「公网源可达」类用例会随机转红，而且用例会把真实解析结果当成被测行为来断言。
-# 内网目标一律写成 IP 字面量——判定不依赖解析，也就不受本桩影响。
+# 与 tests/test_async_http.py / tests/test_regression_2026_09_22_net.py 同一个 DNS seam：MIN-2219
+# 起探针会按「本机解析结果」给直连目标定罪，用例必须与该 seam 隔离，否则无 DNS 环境下「公网源可达」
+# 类用例会随机转红。内网目标一律写成 IP 字面量——判定不依赖解析，也就不受本桩影响。
 _PUBLIC_IP = "93.184.216.34"
 # 代理环境变量键（大小写各一份，与 tests/test_proxy.py 的 _PROXY_ENV_KEYS 同族写法）
 _PROXY_ENV_KEYS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
@@ -43,12 +38,10 @@ _PROXY_ENV_KEYS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "http
 
 @pytest.fixture(autouse=True)
 def _hermetic_net(monkeypatch: pytest.MonkeyPatch) -> None:
-    # ① DNS 钉成公网 IP。
-    # ② NO_PROXY=* 而不只是逐个 delenv：httpx 的 get_environment_proxies() 走
-    #    urllib.request.getproxies()，Windows 上 env 为空时会**回落到注册表**读系统代理。
-    #    代理一旦挂进 client._mounts，_transport_for_url 就不走 _transport，MockTransport 会被
-    #    静默绕过——用例照跑照绿，纯假绿。NO_PROXY=* 让 env 结果非空（不查注册表）且 httpx 见到
-    #    "*" 直接返回空代理表。逐个 delenv 同样保留，防本机把代理写在 env 里。
+    # ① DNS 钉成公网 IP。② NO_PROXY=* 而不只是逐个 delenv：httpx 的 get_environment_proxies() 走
+    #    urllib.request.getproxies()，Windows 上 env 为空时会**回落到注册表**读系统代理；代理一旦挂进
+    #    client._mounts，_transport_for_url 就不走 _transport，MockTransport 被静默绕过（纯假绿）。
+    #    NO_PROXY=* 让 env 结果非空且 httpx 直接返回空代理表；逐个 delenv 同样保留。
     monkeypatch.setattr(web_config, "_resolve_host_ips", lambda host: [_PUBLIC_IP])
     for key in _PROXY_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
@@ -65,10 +58,9 @@ def _capture_logs() -> tuple[list[str], int]:
 def _install_mock_transport(
     monkeypatch: pytest.MonkeyPatch, handler: Callable[[httpx.Request], httpx.Response]
 ) -> list[str]:
-    # 返回「实际发出的请求 URL 列表」（按跳顺序）。
-    # 为什么绕这一圈：钩子是 _build_client 挂上去的，所以客户端必须由**真实的 _build_client**
-    # 造出来，只把最底层的 transport 换成 MockTransport——有人删掉 event_hooks 那一行，
-    # 本文件 M-1 的用例必须全部变红（自建 AsyncClient 会把被测接线一起绕过，等于假绿）。
+    # 返回「实际发出的请求 URL 列表」（按跳顺序）。钩子是 _build_client 挂上去的，所以客户端必须由
+    # **真实的 _build_client** 造出来，只把最底层 transport 换成 MockTransport——有人删掉 event_hooks
+    # 那一行，本文件 M-1 的用例必须全部变红（自建 AsyncClient 会把被测接线一起绕过，等于假绿）。
     seen: list[str] = []
 
     def _record(request: httpx.Request) -> httpx.Response:
@@ -79,10 +71,8 @@ def _install_mock_transport(
 
     def _build(proxy_addr: str | None, timeout: int, verify: bool, http2: bool) -> httpx.AsyncClient:
         client = real_build(proxy_addr, timeout, verify, http2)
-        # typeshed 未声明、也无公开 setter（httpx 只允许构造期注入 transport，而 _build_client
-        # 不接受该参数）。传了 proxy 时 httpx 会把代理传输装进 _mounts，_transport_for_url
-        # 就不走 _transport；本文件只验判定链，代理装配属 httpx 自身职责，清空 mounts 让
-        # 每一跳都落到 MockTransport 上。
+        # typeshed 未声明、也无公开 setter。传了 proxy 时 httpx 会把代理传输装进 _mounts，
+        # _transport_for_url 就不走 _transport；本文件只验判定链，故清空 mounts 让每跳落 MockTransport。
         client._mounts = {}
         client._transport = httpx.MockTransport(_record)
         return client
@@ -138,9 +128,9 @@ class TestM1RedirectHopGuard:
         assert "https://after.example.com/x.m3u8" not in seen, "被拒之后仍继续跟随重定向"
 
     async def test_hop_rejection_logs_warning_with_masked_landing_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # 逐跳命中是**安全判定**，必须与 MIN-2219 的初始地址同级别（warning）留线索，不能沉进
-        # 「这个 CDN 节点不通」那条 debug；同时落地 URL 里的凭据必须被抹掉——httpx 把 Location 的
-        # user:pass 原样带进 response.url，而 logs 会轮转保留多份（＝凭据长期落盘）。
+        # 逐跳命中是**安全判定**，必须与 MIN-2219 初始地址同级别（warning）留线索，不能沉进「这个
+        # CDN 节点不通」那条 debug；同时落地 URL 里的凭据必须被抹掉——httpx 把 Location 的 user:pass
+        # 原样带进 response.url，而 logs 会轮转保留多份（＝凭据长期落盘）。
         lines, handler_id = _capture_logs()
         try:
             _install_mock_transport(monkeypatch, _redirect_chain("http://probe:s3cret@127.0.0.1:6379/"))
@@ -182,31 +172,28 @@ class TestM1RedirectHopGuard:
         assert seen[-1] == "http://169.254.169.254/"
 
     async def test_stateful_client_carries_the_guard_as_well(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # return_cookies=True 走 _acquire_client 的独占分支（每次自建、不进缓存），那条分支
-        # 同样调 _build_client → 钩子必须在。漏掉它等于给登录/取 token 路径留一个无人看守的
-        # 重定向面（MID-22 的账号隔离与 M-1 是两条独立不变量，别以为换掉缓存就自动安全）。
+        # return_cookies=True 走 _acquire_client 的独占分支（每次自建、不进缓存），那条分支同样调
+        # _build_client → 钩子必须在。漏掉它等于给登录/取 token 路径留一个无人看守的重定向面。
         seen = _install_mock_transport(monkeypatch, _redirect_chain("http://127.0.0.1:6379/"))
         assert await async_http.async_req("https://edge.example.com/login", return_cookies=True) == {}
         assert seen[-1] == "http://127.0.0.1:6379/"
 
     async def test_guard_is_installed_on_every_built_client(self) -> None:
-        # 接线点结构锁：钩子出自 _build_client（探针与 async_req 唯一的客户端来源）。
-        # 这条与「探针客户端复用作用域仍是单次选源 / 不做模块级全局 client 缓存 / 不关
-        # keepalive / _get_client_lock 随循环重建」等既有约束互不冲突——本行只钉
-        # 「每支构造出来的客户端都带着一个 response 钩子」，不改任何复用形态。
+        # 接线点结构锁：钩子出自 _build_client（探针与 async_req 唯一的客户端来源）。这条与既有
+        # 「单次选源复用 / 不做模块级全局 client 缓存 / 不关 keepalive / _get_client_lock 随循环重建」
+        # 等约束互不冲突——只钉「每支构造出来的客户端都带着一个 response 钩子」。
         client = async_http._build_client(None, 10, True, False)
         try:
             assert len(client.event_hooks["response"]) == 1
-            # request 钩子刻意不挂：本层的逐跳复检口径是 response.url（见 _build_hop_guard 的
-            # 残余风险登记）。多挂一支 request 钩子=每跳两次判定/两次 getaddrinfo，未取。
+            # request 钩子刻意不挂：本层逐跳复检口径是 response.url（见 _build_hop_guard 的残余风险
+            # 登记）。多挂一支 request 钩子 = 每跳两次判定/两次 getaddrinfo，未取。
             assert client.event_hooks["request"] == []
         finally:
             await client.aclose()
 
     async def test_proxied_chain_still_judges_ip_literal_landing(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # 经代理出站时域名不按本机 DNS 定罪（MIN-2219 的既有豁免，逐跳复检必须继承同一豁免，
-        # 否则会把「境外域名本机被污染、代理却能解析」的合法流全部误杀）；但落地地址是
-        # IP 字面量时两种情况都判——http 代理按绝对 URI 转发，回环/元数据经代理照样可达。
+        # 经代理出站时域名不按本机 DNS 定罪（MIN-2219 的既有豁免，逐跳复检必须继承，否则会把
+        # 「境外域名本机被污染、代理却能解析」的合法流误杀）；但落地是 IP 字面量时两种情况都判。
         dns_calls: list[str] = []
 
         def _record_dns(host: str) -> list[str]:
@@ -233,9 +220,8 @@ def _file_url_of(tmp_path: Path) -> str:
 
 
 def _spy_file_handler_reads(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    # 观测 urllib 的读盘入口（FileHandler.file_open，3.14 里它就是 open_local_file）。
-    # **原样调用真实实现**、只登记被请求的路径：防线被摘掉时这里会记下真实路径、用例立刻变红，
-    # 而不是靠「返回空串」间接推断到底有没有读盘。
+    # 观测 urllib 的读盘入口（FileHandler.file_open，3.14 里它就是 open_local_file），**原样调用真实
+    # 实现**、只登记被请求的路径：防线被摘掉时这里会记下真实路径、用例立刻变红。
     opened: list[str] = []
     real_file_open = urllib.request.FileHandler.file_open
 
@@ -270,9 +256,8 @@ class TestM2SchemeWhitelistOnSyncReq:
         urlopen_spy.assert_not_called()
 
     def test_entry_guard_runs_before_any_handler(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # 守卫顺序锁：把 opener 整个换成「什么都返回 200 + 文件内容」的替身，模拟
-        # 「handler 白名单被摘掉」的形态。此时唯一还在起作用的防线就是入口 scheme 白名单，
-        # 本用例因此只对它敏感（摘掉 _reject_unsafe_scheme(url, "入口") 这一行即变红）。
+        # 守卫顺序锁：把 opener 整个换成「什么都返回 200 + 文件内容」的替身，模拟「handler 白名单被
+        # 摘掉」的形态。此时唯一还在起作用的防线就是入口 scheme 白名单。
         fake_resp = MagicMock()
         fake_resp.headers = {"Content-Encoding": ""}
         fake_resp.read.return_value = b"TOPSECRET-CONTENT"
@@ -328,11 +313,10 @@ class TestM2OpenerHandlerWhitelist:
         "HTTPDefaultErrorHandler",
         "HTTPRedirectHandler",
         "HTTPErrorProcessor",
-        # 注意 ProxyHandler({})「不出现在 handlers 里」不是遗漏：CPython 的
-        # OpenerDirector.add_handler 只登记「贡献了某条协议方法链」的 handler，而空代理表的
-        # ProxyHandler 只有 proxy_open（add_handler 里被当作 coincidental match 跳过）。
-        # 旧写法 build_opener(no_proxy_handler) 同样是这个形态——正因为没有任何 proxy handler
-        # 被登记，本地请求才不走系统代理。改构造方式时这条没动过，行为与改前逐字一致。
+        # 注意 ProxyHandler({})「不出现在 handlers 里」不是遗漏：CPython 的 OpenerDirector.add_handler
+        # 只登记「贡献了某条协议方法链」的 handler，而空代理表的 ProxyHandler 只有 proxy_open（被当作
+        # coincidental match 跳过）。旧写法 build_opener(no_proxy_handler) 同样是这个形态——正因没有
+        # 任何 proxy handler 被登记，本地请求才不走系统代理。
     }
 
     @pytest.mark.parametrize("factory", [lambda: sync_http._opener_secure, sync_http._get_insecure_opener])
@@ -345,10 +329,8 @@ class TestM2OpenerHandlerWhitelist:
         assert {type(h).__name__ for h in handlers} == self._ALLOWED_HANDLER_NAMES
 
     def test_file_ftp_data_urls_refused_before_reading(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        # 行为锁（不只是「集合里没有」）：真实的 _opener_secure 遇到 file/ftp/data 协议必须抛
-        # URLError('unknown url type')，一步都不读。跨 scheme 跳转走的正是这条同一入口
-        # （HTTPRedirectHandler 把 Location 交给同一个 opener），所以摘掉 handler 就等于
-        # 在**发出之前**拒掉跳转落地。
+        # 行为锁（不只是「集合里没有」）：真实的 _opener_secure 遇到 file/ftp/data 必须抛
+        # URLError('unknown url type')，一步都不读。跨 scheme 跳转走的正是这条同一入口。
         opened = _spy_file_handler_reads(monkeypatch)
         file_url = _file_url_of(tmp_path)
         for url in (file_url, "ftp://example.com/pub/x", "data:text/plain;base64,AAAA"):
@@ -358,9 +340,8 @@ class TestM2OpenerHandlerWhitelist:
         assert opened == [], f"file:// 仍被读到磁盘: {opened}"
 
     def test_abroad_landing_on_file_url_is_discarded(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # abroad 分支的落地复核（该分支唯一可用的防线）：替身 urlopen 模拟「默认 opener 已经
-        # 把 /etc/passwd 读回来了」的形态，sync_req 必须在把响应体交给调用方之前就丢掉它，
-        # 并且关掉句柄（拒绝路径落进 finally，不能漏）。
+        # abroad 分支的落地复核（该分支唯一可用的防线）：替身 urlopen 模拟「默认 opener 已经把
+        # /etc/passwd 读回来了」的形态，sync_req 必须在把响应体交给调用方之前丢掉它，并关掉句柄。
         resp = MagicMock()
         resp.url = "file:///etc/passwd"
         resp.headers = {"Content-Encoding": ""}

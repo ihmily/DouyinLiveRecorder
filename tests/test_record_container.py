@@ -1,13 +1,12 @@
 # 分段录制「容器 ↔ 扩展名」一致性回归测试（2026-09-04 P0 事故沉淀）。
 #
-# 背景：main.py 的 TS 分段分支曾把 -segment_format 写成 ipod（应为 mpegts），
-# M4A 分段分支写成 mpegts（应为 ipod）——两个值被互换。ipod 是「iPod H.264 MP4」
-# 子集封装器，codec tag 表里没有 HEVC 条目：HEVC 原画 copy 进去直接
-# AVERROR(EINVAL) 退出（Windows 上退出码以无符号呈现为 4294967274），
-# 而 H.264 并不报错、只是把 MP4 内容写进 .ts 文件名（静默损坏，比报错更难排查）。
+# 背景：main.py 的 TS 分段分支曾把 -segment_format 写成 ipod（应为 mpegts），M4A 分支写成
+# mpegts（应为 ipod）。ipod 是 iPod H.264 MP4 子集封装器，codec tag 表无 HEVC 条目：HEVC 原画
+# copy 进去直接 AVERROR(EINVAL)（Windows 退出码呈现为 4294967274）；H.264 则不报错、只是把
+# MP4 内容写进 .ts 文件名（静默损坏，比报错更难排查）。
 #
-# 本文件把「扩展名 → 容器」映射固化为断言，并禁止再出现裸字面量取值——
-# 字面量错位能通过格式检查、类型检查与 AST 等价性校验，只有这类语义断言能拦住。
+# 本文件把「扩展名 → 容器」映射固化为断言，并禁止裸字面量取值——字面量错位能通过格式、类型与
+# AST 等价性校验，只有这类语义断言能拦住。
 
 import ast
 import sys
@@ -38,9 +37,8 @@ def main_mod() -> Any:
         sys.argv = old_argv
 
 
-# 从 main.py 的 AST 中取出所有 "-segment_format" 后紧跟的取值节点：
-# ffmpeg 命令是函数内的 list 字面量，取值节点的类型即「是否走了映射表」的唯一判据。
-# path 缺省为 main.py；传入 _POSTPROCESS_PATH 可扫描另一处定义点。
+# 从 main.py 的 AST 中取出所有 "-segment_format" 后紧跟的取值节点：ffmpeg 命令是函数内的 list
+# 字面量，取值节点的类型即「是否走了映射表」的唯一判据。path 缺省 main.py，可传入第二处定义点。
 def _segment_format_nodes(path: Path = _MAIN_PATH) -> list[ast.expr]:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     nodes: list[ast.expr] = []
@@ -79,9 +77,9 @@ class TestSegmentFormatMapping:
 
 
 class TestSegmentFormatSecondDefinitionPoint:
-    # src/video_postprocess.py 是同类回归的第二处定义点。该处取值来自函数参数（Name），
-    # 而非裸字面量；容器值由调用方经 SEGMENT_FORMAT_BY_SUFFIX 传入。
-    # 裸字面量互换正是 2026-09-04 事故的根因，故此处至少必须禁止字面量。
+    # src/video_postprocess.py 是同类回归的第二处定义点：该处取值来自函数参数（Name），容器值由
+    # 调用方经 SEGMENT_FORMAT_BY_SUFFIX 传入。裸字面量互换正是 2026-09-04 事故的根因，故此处
+    # 至少必须禁止字面量。
 
     def test_definition_point_still_exists(self) -> None:
         nodes = _segment_format_nodes(_POSTPROCESS_PATH)
@@ -98,10 +96,9 @@ class TestNoBareSegmentFormatLiteral:
     # 取值来源：必须查表，禁止裸字面量（本次事故的根因就是两处裸字面量被互换）
 
     def test_scan_finds_all_branches(self) -> None:
-        # 扫描本身必须命中 6 处（FLV/MKV/MP4/TS 视频 + 音频 M4A + 音频 MP3），
-        # 否则下面的断言会退化成空跑的假绿。
-        # MP3 分支于 2026-09-10 补齐：此前 MP3 分段没有显式 -segment_format，
-        # 容器靠 ffmpeg 按扩展名猜测，属「扩展名 ↔ 容器」错配的同类隐患。
+        # 扫描本身必须命中 6 处（FLV/MKV/MP4/TS 视频 + 音频 M4A + 音频 MP3），否则下面的断言会
+        # 退化成空跑假绿。MP3 分支于 2026-09-10 补齐：此前 MP3 分段无显式 -segment_format，容器
+        # 靠 ffmpeg 按扩展名猜测，属「扩展名 ↔ 容器」错配的同类隐患。
         assert len(_segment_format_nodes(_MAIN_PATH)) == 6
 
     def test_every_value_comes_from_mapping(self) -> None:
@@ -124,11 +121,9 @@ class TestNoBareSegmentFormatLiteral:
             assert key.value in main_mod.SEGMENT_FORMAT_BY_SUFFIX, f"扩展名未注册: {ast.unparse(key)}"
 
     def test_no_get_fallback_masks_missing_key(self) -> None:
-        # 回归防线（2026-09-10）：音频分支曾用 SEGMENT_FORMAT_BY_SUFFIX.get("." + extension, "ipod")。
-        # 该兜底会把「查表落空」静默掩盖成一个错误容器——纯音频平台（猫耳FM / Look）
-        # 在默认保存类型下产出 .mp3 却装 AAC/MP4，正是本次修复的错配。
-        # 现在 extension 与编码器由同一条件推导、键值确定，一律直接下标取值：
-        # 缺键以 KeyError 暴露，而不是静默产出错误容器。
+        # 回归防线（2026-09-10）：音频分支曾用 SEGMENT_FORMAT_BY_SUFFIX.get("." + extension, "ipod")，
+        # 兜底会把「查表落空」静默掩盖成错误容器（纯音频平台在默认保存类型下产出 .mp3 却装 AAC/MP4）。
+        # 现在 extension 与编码器同源推导、键值确定，一律直接下标取值，缺键以 KeyError 暴露。
         calls = [n for n in _segment_format_nodes(_MAIN_PATH) if isinstance(n, ast.Call)]
         assert not calls, f"-segment_format 不得再使用 .get 兜底: {[ast.unparse(c) for c in calls]}"
 
@@ -140,9 +135,8 @@ class TestNoBareSegmentFormatLiteral:
 
 
 class TestHevcFlvUrlCarriesCodecMarker:
-    # hevc_flv_url 从直播间 HTML 正则抠出，此前不带 codec 参数，
-    # 导致 _is_h265() 与 main.py 的 h265 兜底判定全部漏判，
-    # HEVC 源伪装成普通 FLV 通过全部校验、直接进 -c copy。
+    # hevc_flv_url 从直播间 HTML 正则抠出，此前不带 codec 参数，导致 _is_h265() 与 main.py 的
+    # h265 兜底判定全部漏判：HEVC 源伪装成普通 FLV 通过校验、直接进 -c copy。
 
     def test_appends_codec_marker(self) -> None:
         html = (
@@ -184,11 +178,10 @@ class TestHevcFlvUrlCarriesCodecMarker:
 
 
 class TestRecordOutputBytesSegmentShape:
-    # MID-05（CODE_REVIEW_2026-09-20）：分段产物求和必须按**模板自身的扩展名**去匹配。
-    # 原实现把 `.ts` 写死在 glob 里 → 分段 FLV/MKV/MP4/音频恒不命中 → 恒返回 -1 →
-    # check_subprocess 的 `0 <= _produced_bytes < _MIN_VALID_RECORD_BYTES` 永不成立，
-    # CR-06 的「零字节不得记成功」闭环在所有非 TS 分段形态上静默缺失（分段 FLV 恰是
-    # 虎牙/斗鱼的常见形态）；且定长 `???` 漏计序号超过 999 的段。
+    # MID-05（CODE_REVIEW_2026-09-20）：分段产物求和必须按**模板自身的扩展名**匹配。原实现把
+    # `.ts` 写死在 glob 里 → 分段 FLV/MKV/MP4/音频恒不命中 → 恒返回 -1 → check_subprocess 的
+    # 「零字节不得记成功」闭环在所有非 TS 分段形态上静默缺失（分段 FLV 恰是虎牙/斗鱼的常见形态）；
+    # 且定长 `???` 漏计序号超过 999 的段。
 
     def test_segmented_flv_is_summed(self, main_mod: Any, tmp_path: Path) -> None:
         for index in (0, 1, 2):

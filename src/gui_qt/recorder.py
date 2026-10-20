@@ -1,16 +1,15 @@
 # -*- coding: utf-8 -*-
-# 录制子进程生命周期控制器（Unix socket 无关、不触碰任何 Qt 控件）。
+# 录制子进程生命周期控制器（不触碰任何 Qt 控件）。
 #
-# 为什么和窗口分离：录制的启停**必然跨线程**（发信号后要 wait 最长 15s + taskkill 5s），
-# 旧 tkinter 版把这段逻辑与 UI 控件写在同一个类里，只能在真 Tk 主循环下驱动；
-# 迁移到 Qt 后改成 Signal 向主线程投消息，控制器本身只操作进程与状态标志，
-# 因此可以在 pytest 的离屏模式（QT_QPA_PLATFORM=offscreen）里直接实例化并驱动。
+# 为什么和窗口分离：录制的启停**必然跨线程**（发信号后要 wait 最长 15s + taskkill 5s）。
+# 控制器只操作进程与状态标志、经 Signal 向主线程投消息，因此可以在 pytest 的离屏模式
+# （QT_QPA_PLATFORM=offscreen）里直接实例化并驱动。
 #
-# 竞态处理（旧实现八年 Recorder 行为的逐条搬运，不是重写）：
-#   · session_id    —— 「停止 → 立即启动」场景中旧会话的迟到回调会把新会话的 UI 打回未运行；
-#   · _stopping     —— 停止窗口内禁止再次启动；复位必须放 finally 且早于会话校验（MI-08）；
-#   · 单飞闸门      —— attach 控制台是**进程全局**状态，两条路径（停止录制 / 彻底退出）
-#                      并发时 CTRL_BREAK 会错投或丢失，退化成 taskkill 硬杀。
+# 竞态处理：
+#   · session_id —— 「停止 → 立即启动」时旧会话的迟到回调会把新会话 UI 打回未运行；
+#   · _stopping  —— 停止窗口内禁止再次启动；复位必须放 finally 且早于会话校验（MI-08）；
+#   · 单飞闸门   —— attach 控制台是**进程全局**状态，两条路径（停止录制 / 彻底退出）
+#                  并发时 CTRL_BREAK 会错投或丢失，退化成 taskkill 硬杀。
 from __future__ import annotations
 
 import os
@@ -29,23 +28,17 @@ from src.logger import child_process_env
 
 from .shared import ANSI_ESCAPE_PATTERN, STOP_REUSE_JOIN_SECONDS, cleanup_process_tree, send_ctrl_break_to_child
 
-# 读线程的批次大小：10 行一批入队再做一次跨线程投递。
-# 为什么是 10：ffmpeg 报错时单行突发很密（实测一串能连绵 200+ 行警告），逐行 emit 会让
-# 主线程事件队列积压；批量后 UI 侧的 flush 定时器每 200ms 排一次最近积累的多行，
-# 主线程每 200ms 只做一次光标定位而不是 200 次。
+# 读线程的批次大小：10 行一批入队再做一次跨线程投递。ffmpeg 报错时单行突发很密（实测一串
+# 能连绵 200+ 行警告），逐行 emit 会让主线程事件队列积压；批量后 UI 侧每 200ms 只做一次
+# 光标定位而不是 200 次。
 _READ_BATCH_SIZE: int = 10
 
 
 class RecorderController(QObject):
-    # 向主线程投递的信号；Qt 的跨线程自动队列（AutoConnection）使这三条天然线程安全，
-    # 取代旧 tkinter 版的 _ui_event_queue + post_ui 事件泵。
-    # S-01（2026-10-18 审查）：这里原先挂着 linesReceived = Signal(object)（设计成把日志批次
-    # 直接送到主线程），但全仓从未 emit，而唯一的消费口 drain() 也没有任何生产调用方，
-    # 于是「读线程 → 队列 → 界面」整条通路断路。现改为「队列存一份 + 唤醒信号」单通道形态，
-    # 刻意不让信号携带数据本体：批次只在 _read_queue 存一份，由主线程 drain() 取空。
-    # 若让信号直接带批次而队列继续留一份，同一批日志会被消费两遍（界面出现重复行）；
-    # 若取消队列只发信号，drain()/has_queue_data() 这条既有语义与批次节流
-    # （见 _READ_BATCH_SIZE）就双双失去落点。
+    # 向主线程投递的信号；Qt 的跨线程自动队列（AutoConnection）使这几条天然线程安全，
+    # 取代旧版的 _ui_event_queue + post_ui 事件泵。
+    # outputReady 刻意不携带数据本体（S-01）：批次只在 _read_queue 存一份、由主线程 drain()
+    # 取空。信号带批次会让同一批日志被消费两遍，只发信号又会让节流批次失去落点。
     outputReady = Signal()  # 队列里有了新内容（日志批次或结束哨兵），请主线程来 drain()
     ended = Signal(object)  # session_id（自然 EOF / 读取异常）
     logRequested = Signal(str, str)  # message, level
@@ -116,11 +109,9 @@ class RecorderController(QObject):
         return messages, ended, ended_session
 
     # 自然 EOF（子进程自己退出，不是用户点停止）的进程句柄回收，由主线程消费结束哨兵后调用。
-    # 为什么不由读线程顺手清：_process 同时是 start() 的 already_running 闸门与
-    # stop_async() 取进程对象的依据，读线程只置 _running；句柄清理一律只有两处出口
-    # （_stop_worker_body 的停止收尾 + 本方法的 EOF 收尾），第三处会让「停止在途」出现
-    # 拿不到进程对象的窗口。不清这一处的后果即 S-01 影响 ③：界面回到待机后再点
-    # 「开始录制」恒报 already_running。
+    # 不由读线程顺手清：_process 同时是 start() 的 already_running 闸门与 stop_async() 取进程
+    # 对象的依据，句柄清理只允许两处出口（停止收尾 + 本方法）。不清则界面回到待机后再点
+    # 「开始录制」恒报 already_running（S-01 影响 ③）。
     def reclaim_after_natural_end(self, session_id: int | None) -> None:
         if session_id is not None and session_id != self._session_id:
             return  # 旧会话的迟到哨兵不得清掉新会话刚建立的句柄（与 _stop_worker_body 同判据）
@@ -344,12 +335,10 @@ class RecorderController(QObject):
         except Exception as e:
             self._stopping = False
             self._log(f"停止流程收尾异常: {type(e).__name__}: {e}", "error")
-            # M-33（2026-10-19）：原实现只复位 _stopping 就 return，**没有**清理 _process 也没有
-            # emit ended。而 main_window.stop_recording 在发起停止时就把两个按钮禁用了、并约定
-            # 「由 _on_recorder_ended 统一恢复」——异常路径不投递 ended，按钮就永久禁用，
-            # 用户既不能启动也不能再点停止，只能重启整个 GUI。收尾失败也必须走与成功路径相同的
-            # 出口：清掉进程句柄（否则 is_running() 仍为真、start() 的闸门继续拦）并投递结束事件。
-            # 会话号同样要带上——新会话已起时这次迟到事件必须被 _on_recorder_ended 丢弃。
+            # M-33：异常路径必须走与成功路径相同的出口——main_window.stop_recording 在发起停止时
+            # 就禁用了两个按钮并约定「由 _on_recorder_ended 统一恢复」，不 emit ended 会让按钮
+            # 永久禁用、只能重启 GUI；不清进程句柄则 is_running() 仍为真、start() 的闸门继续拦。
+            # 会话号同样要带上：新会话已起时这次迟到事件必须被 _on_recorder_ended 丢弃。
             self._clear_process()
             self.ended.emit(session)
 

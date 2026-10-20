@@ -1,8 +1,8 @@
-# 验证控制台 sink 的重建语义（Web 后台模式日志可见性的根因）：
-# loguru 的 sink 在 add() 时即绑定具体对象，不会因 sys.stderr 被重新赋值而跟着变。
+# 控制台 sink 的重建语义（Web 后台模式日志可见性的根因）：
+# loguru 的 sink 在 add() 时即绑定具体对象，不会随 sys.stderr 被重新赋值而变化。
 # web.py::_enter_background_mode 在 src.logger 导入之后才把 sys.stderr 重定向到
-# logs/web_console.log 并 SW_HIDE 隐藏控制台窗口——若不重建 sink，DEBUG/WARNING
-# 日志会全部写往被隐藏的控制台，web_console.log 里只剩 print 输出。
+# logs/web_console.log 并 SW_HIDE 隐藏控制台窗口——不重建 sink，DEBUG/WARNING 会全部写往
+# 被隐藏的控制台，web_console.log 里只剩 print 输出。
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ import src.logger as logger_mod
 
 @pytest.fixture()
 def restore_sinks() -> Iterator[None]:
-    # 用例内会 remove 并重建 sink，退出时还原一个指向真实 stderr 的 sink，
+    # 用例内会 remove 并重建 sink；退出时还一个指向真实 stderr 的 sink，
     # 避免把「无任何 sink」的状态泄漏给后续用例
     original = sys.stderr
     yield
@@ -47,8 +47,8 @@ def test_rebind_console_sink_follows_current_stderr(restore_sinks: None, monkeyp
 
 
 def test_rebind_console_sink_removes_previous_sink(restore_sinks: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    # 重建必须是「替换」而非「追加」：否则每次重建都会多一份 sink，
-    # 同一条日志被重复写入，且旧 sink 仍指向失效对象
+    # 重建必须是「替换」而非「追加」：否则每次重建多一份 sink，同一条日志被重复写入，
+    # 且旧 sink 仍指向失效对象
     first = io.StringIO()
     second = io.StringIO()
     monkeypatch.setattr(sys, "stderr", first)

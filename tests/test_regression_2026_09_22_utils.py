@@ -1,21 +1,17 @@
 # -*- coding: utf-8 -*-
-# 2026-09-22 审查报告 / 组 C（src/utils.py + src/web_config.py + src/config_io.py + msg_push.py）修复的回归锁。
+# 2026-09-22 审查报告 / 组 C（src/utils.py + src/web_config.py + src/config_io.py + msg_push.py）回归锁。
 #
 # 判据一律落在「失效形态本身」，而不是「调用了某个函数」：
-#   SEV-2210  mask_credentials() 对 camelCase / 全小写复合凭据键必须让**原值消失**；
-#             并给出变异判据（删掉驼峰边界分支后用例必须变红）；
-#   SEV-2211  面板配置写入必须与 src.utils.atomic_write_text 是**同一份实现**，
-#             且整文件重写保留原文件 mode（Windows 条件跳过）；
-#   SEV-2212  send_email 的 SSL 与 STARTTLS 两条路径都必须收到「校验证书」的 context。
-#
-# 同批追加（2026-09-23，同为 src/utils.py）：
-#   SEV-2209  run_js_async 必须有超时预算——运行时侧 timeout= 与外层 asyncio.wait_for
-#             双保险（to_thread 的工作线程不可取消，只靠运行时侧会永久挂住 await）；
+#   SEV-2210  mask_credentials() 对 camelCase / 全小写复合凭据键必须让**原值消失**，并给出变异判据；
+#   SEV-2211  面板配置写入必须与 src.utils.atomic_write_text 是**同一份实现**，且整文件重写保留原
+#             mode（Windows 条件跳过）；
+#   SEV-2212  send_email 的 SSL 与 STARTTLS 两条路径都必须收到「校验证书」的 context；
+#   SEV-2209  run_js_async 必须有超时预算——运行时侧 timeout= 与外层 asyncio.wait_for 双保险
+#             （to_thread 的工作线程不可取消，只靠运行时侧会永久挂住 await）；
 #   MIN-2244  remove_duplicate_lines 不得改写 CRLF 行尾、不得因 strip() 误删仅差空格的行、
 #             编码回退分支不得使用宿主 locale。
 #
-# 全部离线：SMTP 用记录型假类替换（不发任何真实连接）；JS 运行时用桩上下文替换
-# （不启动 node 子进程）。
+# 全部离线：SMTP 用记录型假类替换（不发真实连接）；JS 运行时用桩上下文替换（不启动 node）。
 
 import asyncio
 import builtins
@@ -72,9 +68,8 @@ _CAMEL_LEAK_CASES: list[tuple[str, str]] = [
     # M-17 配套边界（2026-09-30）：shell 命令串里的带引号 header——键名前恰是引号，
     # 独立参数分支不得加 quote 排除（排除即此形态重新漏抹，tests/test_notify_script_guard.py 全组同证）
     ('--header "Authorization: Bearer LEAKQUOTEDBEARER"', "LEAKQUOTEDBEARER"),
-    # JSON 体形态的驼峰键：键名整体被引号包裹、边界由闭合引号给出，故该形态不需要驼峰边界分支
-    # （(?i) 下 "accessToken" 与 "accesstoken" 同形）——与下面 _PUBLIC_UNTOUCHED 的
-    # design/presigned 反向棘轮分属两条判据，改任一形态须两边同看。
+    # JSON 体形态的驼峰键：键名整体被引号包裹、边界由闭合引号给出（(?i) 下 "accessToken" 与
+    # "accesstoken" 同形）——与下面 _PUBLIC_UNTOUCHED 的反向棘轮分属两条判据，改任一侧须两边同看。
     ('{"accessToken": "LEAKJSONCAMEL", "expires_in": 7200}', "LEAKJSONCAMEL"),
     ('{"msToken":"LEAKJSONMS","keep":"ok"}', "LEAKJSONMS"),
 ]
@@ -123,8 +118,7 @@ class TestCamelCaseCredentialLeak:
 
     def test_short_key_does_not_truncate_long_key(self) -> None:
         # 长名优先排序不得因新增短键（tk）被破坏：access_token 须整体成键，不得被切成 token。
-        # 位置断言不可靠（短名 tk 天生排在末位，而 token 位置由其它同长键决定），
-        # 故直接断言匹配语义：访问令牌的值必须整体消失，且不得残留 `word=ACCESS...` 的半截。
+        # 位置断言不可靠（短名 tk 天生排末位），故直接断言匹配语义：值必须整体消失、不残留半截。
         masked = mask_credentials("https://p.example/a.flv?access_token=LONGSECRETVALUE&t=1")
         assert "LONGSECRETVALUE" not in masked
         assert "***" in masked
@@ -147,9 +141,9 @@ class TestCamelCaseCredentialLeak:
 
 class TestWebConfigDelegatesToUtilsAtomicWrite:
     def test_web_config_write_is_the_same_implementation(self) -> None:
-        # 失效形态：web_config 曾持有「第二份独立实现」（mkstemp 之外的自造 tmp + open("w")），
-        # 它没有 mode 回填/fsync/唯一临时名/失败清理四项加固。判据是**实现同一性**：
-        # 用 monkeypatch 换掉 utils 的符号，web_config 的写入必须跟着换（证明它真的在调用）。
+        # 失效形态：web_config 曾持有「第二份独立实现」（自造 tmp + open("w")），没有 mode 回填 /
+        # fsync / 唯一临时名 / 失败清理四项加固。判据是**实现同一性**：用 monkeypatch 换掉 utils
+        # 的符号，web_config 的写入必须跟着换（证明它真的在调用）。
         import src.web_config as wc
 
         called: list[tuple[str, str, str]] = []
@@ -169,8 +163,7 @@ class TestWebConfigDelegatesToUtilsAtomicWrite:
             wc.atomic_write_text = original  # type: ignore[assignment]
         assert called == [(str(target), "payload", wc.TEXT_ENCODING)]
         # 且 web_config 内不得再有第二份 mkstemp 实体：只看可执行调用点（AST 摘 attr 名），
-        # 文本匹配会命中文档性注释里的旧实现字样而假红。跨模块的完整版判据见
-        # test_no_second_mkstemp_implementation_across_owned_files。
+        # 文本匹配会命中文档性注释里的旧实现字样而假红。
         import ast
 
         tree = ast.parse(inspect.getsource(wc))
@@ -199,11 +192,9 @@ class TestWebConfigDelegatesToUtilsAtomicWrite:
             assert target.read_text(encoding="utf-8-sig") == "[A]\nk = new\n"
 
     def test_no_second_mkstemp_implementation_across_owned_files(self) -> None:
-        # 报告要求的可复核判据（grep -rn "mkstemp" src/ 仅 utils 命中）以 AST 形式锁死。
-        # 文本匹配会命中文档性注释（SEV-2211 的修复注释本身就提到旧实现），故只看可执行调用点。
-        #
-        # 注意：main 必须先导入——直接 `import src.config_io` 会在其 `import main` 处触发
-        # 「partially initialized module」循环导入（config_io ← main ← config_io）。
+        # 报告要求的可复核判据（grep -rn "mkstemp" src/ 仅 utils 命中）以 AST 形式锁死——文本匹配
+        # 会命中文档性注释（SEV-2211 的修复注释本身就提到旧实现），故只看可执行调用点。
+        # 注意：main 必须先导入——直接 `import src.config_io` 会在其 `import main` 处触发循环导入。
         import ast
 
         import main  # noqa: F401  先完整初始化 main，打破 config_io<->main 的循环导入
@@ -283,20 +274,18 @@ class _FakeSMTP:
 _SSL_CALLS: list[ssl.SSLContext | None] = []
 _STARTTLS_CALLS: list[ssl.SSLContext | None] = []
 # 反向见证基准：在**任何替身窗口之前**（模块导入期）记下 stdlib 本体里这两个建连类的原对象。
-# 只能这样取——旧写法（容器为 msg_push.smtplib，即本体）会把它们就地换掉，而替身换成 shim 之后
-# msg_push.smtplib 与 smtplib 已是两个对象，只比「当前引用位上是什么」看不见本体侧的漂移。
+# 旧写法（容器为 msg_push.smtplib 即本体）会把它们就地换掉；shim 之后两者已不同对象，
+# 只比「当前引用位上是什么」看不见本体侧的漂移。
 _REAL_SMTP_CLS = smtplib.SMTP
 _REAL_SMTP_SSL_CLS = smtplib.SMTP_SSL
 
 
 def _smtplib_shim(**overrides: Any) -> types.SimpleNamespace:
-    # MT-10（CODE_REVIEW_2026-10-18）：msg_push.py 顶层 `import smtplib`，所以 `msg_push.smtplib`
-    # 就是全进程唯一的 **stdlib 模块本体**——旧写法 monkeypatch.setattr(msg_push.smtplib, "SMTP", 替身)
-    # 改的正是这个本体，替身窗口内同会话其它线程/库（loguru 边车、别的推送渠道）拿到的 SMTP/SMTP_SSL
-    # 会被一并换掉（AGENTS M-27 同族事故 / tests/test_test_hygiene.py R1 第一形态）。
-    # 按仓库 shim 口径：浅拷贝命名空间（SMTPException 等其余符号按**原对象**复制，故生产代码
-    # `except smtplib.SMTPException` 的异常类同一性不变）、只覆盖建连用的两个类，再把替身绑到
-    # 被测模块（msg_push）自己的 smtplib 引用上——作用域收敛到 msg_push 内的读取点。
+    # MT-10（CODE_REVIEW_2026-10-18）：msg_push.py 顶层 `import smtplib`，故 `msg_push.smtplib` 就是
+    # 全进程唯一的 stdlib 模块本体——旧写法改的正是本体，替身窗口内同会话其它线程/库（loguru 边车、
+    # 别的推送渠道）拿到的 SMTP/SMTP_SSL 会被一并换掉。按 shim 口径：浅拷贝命名空间（其余符号按
+    # **原对象**复制，故 `except smtplib.SMTPException` 的异常类同一性不变）、只覆盖建连的两个类，
+    # 再把替身绑到 msg_push 自己的 smtplib 引用上。
     shim = types.SimpleNamespace(**vars(smtplib))
     for name, value in overrides.items():
         setattr(shim, name, value)
@@ -320,9 +309,8 @@ def _no_real_network(monkeypatch: pytest.MonkeyPatch) -> None:
 def _send(monkeypatch: pytest.MonkeyPatch, *, open_ssl: bool, port: str) -> None:
     _SSL_CALLS.clear()
     _STARTTLS_CALLS.clear()
-    # 只替换 msg_push 模块内的 smtplib 引用（不碰 stdlib 模块对象本身）
-    # [历史注] 本句在 2026-10-18 之前与实现相反：当时两处 setattr 的容器是 msg_push.smtplib
-    # （即 stdlib 本体）。MT-10 改走 _smtplib_shim 后注释才与实现一致。
+    # 只替换 msg_push 模块内的 smtplib 引用（不碰 stdlib 模块对象本身）。[历史注] 2026-10-18 之前
+    # 本句与实现相反：当时两处 setattr 的容器是 msg_push.smtplib（即 stdlib 本体）。
     monkeypatch.setattr(msg_push, "smtplib", _smtplib_shim(SMTP_SSL=_FakeSMTPSSL, SMTP=_FakeSMTP))
     # 反向见证：打桩只落在 msg_push 的引用位上——stdlib 本体必须逐字仍是导入期记下的那两个原类。
     # 判据取「与导入期原对象同一」而不是「不是本次的替身」：后者看不见本体被别处换过（变异实测）。
@@ -396,9 +384,8 @@ class TestMsgPushMaskingAndCleanup:
     def test_ntfy_failure_log_masks_last_segment(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # MIN-2251：ntfy 的 topic 在路径末段，`https://ntfy.sh/<topic>` 的 topic 即频道口令
         # （拿到即可收通知/抢先发假消息）。钉钉/Bark/微信三处已传 mask_last_segment=True，ntfy 漏了。
-        #
-        # 判据落在「**最终进日志的整条文本**」而非 kwarg 形态或脱敏函数返回值：
-        # 只有把 logger.warning 收到的那一行拿来看，才真正等价于「用户求助时上传的日志里有没有 topic」。
+        # 判据落在「**最终进日志的整条文本**」而非 kwarg 形态或脱敏函数返回值：只有把 logger.warning
+        # 收到的那一行拿来看，才真正等价于「用户求助时上传的日志里有没有 topic」。
         logged: list[str] = []
         monkeypatch.setattr(msg_push.logger, "warning", lambda msg, *a, **k: logged.append(str(msg)))
 
@@ -419,9 +406,8 @@ class TestMsgPushMaskingAndCleanup:
         assert "mytopic" in msg_push._mask_url("https://ntfy.sh/mytopic", mask_last_segment=False)
 
     def test_send_email_quit_timeout_does_not_replace_result(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # MID-2252：finally 只吞 SMTPException，而 quit() 等 221 响应超时抛 socket.timeout
-        # （OSError 子类，不是 SMTPException）→ 在 finally 里抛出会替换掉已算好的成功返回值，
-        # 上层 push_message 拿不到成功清单，用户重复收到同一封通知。
+        # MID-2252：finally 只吞 SMTPException，而 quit() 等 221 响应超时抛 socket.timeout（OSError
+        # 子类）→ 在 finally 里抛出会替换掉已算好的成功返回值，用户重复收到同一封通知。
         class _QuitTimeoutSSL(_FakeSMTPSSL):
             def quit(self) -> tuple[int, bytes]:
                 raise TimeoutError("timed out waiting for 221")
@@ -464,9 +450,8 @@ class TestMsgPushMaskingAndCleanup:
 
 
 class _JsCtxAcceptingTimeout:
-    # 桩 exejs（requirements 首选）与新版 PyExecJS 的运行时上下文：
-    # 前者的签名是 call(key, *args, timeout=None)，后者是 call(*args, **kwargs)，
-    # 两者都会把 timeout 透传给子进程等待逻辑。
+    # 桩 exejs（requirements 首选）与新版 PyExecJS 的运行时上下文：前者签名是
+    # call(key, *args, timeout=None)，后者是 call(*args, **kwargs)，两者都会把 timeout 透传给子进程。
     def __init__(self, delay: float = 0.0, raise_after: float = 0.0) -> None:
         self.kwargs: dict[str, Any] = {}
         self._delay = delay
@@ -488,9 +473,9 @@ class _JsCtxAcceptingTimeout:
 
 
 class _JsCtxLegacyPyExecJS:
-    # 桩「PyExecJS 1.5.1」形态：AbstractRuntimeContext.call(self, name, *args) 不接受任何
-    # 关键字参数。utils 顶部 `except ImportError` 的回退分支拿到的就是这份签名——无条件
-    # 透传 timeout 会让该环境下全部 JS 签名平台（抖音 xbogus / LiveMe / 嗨秀）以 TypeError 全废。
+    # 桩「PyExecJS 1.5.1」形态：AbstractRuntimeContext.call(self, name, *args) 不接受任何关键字参数。
+    # utils 顶部 `except ImportError` 回退分支拿到的就是这份签名——无条件透传 timeout 会让该环境下
+    # 全部 JS 签名平台（抖音 xbogus / LiveMe / 嗨秀）以 TypeError 全废。
     def __init__(self) -> None:
         self.args: tuple[object, ...] = ()
 
@@ -521,9 +506,8 @@ class TestRunJsAsyncTimeoutBudget:
 
     @pytest.mark.asyncio
     async def test_hanging_runtime_is_still_bounded_by_wait_for(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # 判据③：运行时侧完全不生效（桩忽略 timeout）时，await 侧仍必须在预算内脱身。
-        # 这里刻意让桩睡到 delay（> 预算）：少了 wait_for 就是「睡满 delay 后正常返回」，
-        # 用 pytest.raises 直接变红；多了 wait_for 则在预算处抛 TimeoutError。
+        # 判据③：运行时侧完全不生效（桩忽略 timeout）时，await 侧仍必须在预算内脱身。这里刻意让桩
+        # 睡到 delay（> 预算）：少了 wait_for 就是「睡满 delay 后正常返回」，多了则在预算处抛 TimeoutError。
         ctx = _JsCtxAcceptingTimeout(delay=1.0)
         monkeypatch.setattr(utils_module, "get_compiled_js", lambda _js_path: ctx)
         started = time.monotonic()
@@ -538,10 +522,9 @@ class TestRunJsAsyncTimeoutBudget:
     async def test_abandoned_thread_failing_later_does_not_leak_a_loop_error(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # 外层预算先到位、execjs 侧稍后才失败（两条 timeout 竞态的常见形态）时，异常落在
-        # 一支已无人等待的 future 上。不主动取用的话，asyncio 会在该 future 被 GC 时向事件
-        # 循环报 "Future exception was never retrieved" —— 本仓「pytest 0 警告」门禁与用户
-        # 日志都会被这条噪音污染（且真正的归因被埋掉）。
+        # 外层预算先到位、execjs 侧稍后才失败（两条 timeout 竞态的常见形态）时，异常落在一支已无人
+        # 等待的 future 上。不主动取用的话，asyncio 会在该 future 被 GC 时向事件循环报 "Future
+        # exception was never retrieved"——污染「pytest 0 警告」门禁与用户日志，且真正归因被埋掉。
         ctx = _JsCtxAcceptingTimeout(raise_after=0.4)
         monkeypatch.setattr(utils_module, "get_compiled_js", lambda _js_path: ctx)
         loop = asyncio.get_running_loop()
@@ -594,9 +577,8 @@ class TestRunJsAsyncTimeoutBudget:
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
         }
         # M-22（2026-10-19）：阻塞段不再走 asyncio.to_thread 的**默认**线程池——默认池由 asyncio
-        # 自己管，asyncio.run 收尾会 shutdown_default_executor() 并给 300 秒 join 超时，
-        # 内层超时失效时房间线程整整停摆 5 分钟。改为自有 _js_executor() + run_in_executor，
-        # 因此这里的判据从「必须有 to_thread」改成「必须是 wait_for + run_in_executor」。
+        # 自己管，asyncio.run 收尾会 shutdown_default_executor() 并给 300 秒 join 超时，内层超时
+        # 失效时房间线程整整停摆 5 分钟。改为自有 _js_executor() + run_in_executor。
         assert {"wait_for", "run_in_executor"} <= attrs, "超时双保险被拆成单层"
         assert not any(isinstance(node, ast.Try) for node in ast.walk(tree)), "run_js_async 不得自行吞异常"
 
@@ -607,10 +589,9 @@ class TestRunJsAsyncTimeoutBudget:
 
 
 class TestRemoveDuplicateLinesByteFidelity:
-    # MIN-2244①②③ 一次锁死。失效面之所以严重：只要 URL_config.ini 存在，main() 启动期就会
-    # 调用本函数一次（`if os.path.isfile(...)` 后直接去重，用户设置无法关闭），于是三处失真会在
-    # 每个 Windows 用户开机那一刻静默写进真实的 URL_config.ini——整表行尾 CRLF→LF、
-    # 仅差一个空格的房间行被判重复删掉、行首缩进丢失，用户视角只是「我配的 URL 自己少了一条」。
+    # MIN-2244①②③ 一次锁死。失效面之严重：只要 URL_config.ini 存在，main() 启动期就会调用本函数
+    # 一次（用户设置无法关闭），于是三处失真会在每个 Windows 用户开机那一刻静默写进真实配置——
+    # 整表行尾 CRLF→LF、仅差一个空格的房间行被判重复删掉、行首缩进丢失。
     def test_crlf_indent_and_whitespace_twin_survive(self, tmp_path: Path) -> None:
         target = tmp_path / "URL_config.ini"
         payload = (
@@ -657,10 +638,9 @@ class TestRemoveDuplicateLinesByteFidelity:
         assert target.read_bytes() == b"\xef\xbb\xbfa\r\nb\n"
 
     def test_non_utf8_bytes_round_trip_unchanged(self, tmp_path: Path) -> None:
-        # 真实非 UTF-8 字节（GBK 的「测试」= b2 e2 ca d4，在 UTF-8 下非法 → 必走回退轮）。
-        # 旧实现回退轮按宿主 locale 读、按 utf-8-sig 写 = 一次静默转码（GBK 机器上内容
-        # 变成另一套字节，UTF-8 CI 上直接抛）；现走 surrogateescape，内容字节原样落盘，
-        # 故本用例不依赖宿主 locale，跨平台稳定。
+        # 真实非 UTF-8 字节（GBK 的「测试」= b2 e2 ca d4，在 UTF-8 下非法 → 必走回退轮）。旧实现
+        # 回退轮按宿主 locale 读、按 utf-8-sig 写 = 一次静默转码；现走 surrogateescape，内容字节原样
+        # 落盘，故本用例不依赖宿主 locale，跨平台稳定。
         target = tmp_path / "URL_config.ini"
         _ = target.write_bytes(b"https://x.example/1\n\xb2\xe2\xca\xd4\n\xb2\xe2\xca\xd4\n")
         utils_module.remove_duplicate_lines(target)

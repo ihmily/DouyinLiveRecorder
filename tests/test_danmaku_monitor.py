@@ -1,14 +1,12 @@
-# 弹幕监控测试（离线，不依赖网络/真实弹幕 WS）。
-#
-# 覆盖：
-# 1. DanmakuMonitorHub：统计精确性（计数不受采样影响）、展示流采样折叠、
-#    礼物/在线处理、seq 增量游标、连接状态生命周期、JSONL 合法性与轮转
-# 2. DanmakuCollector 双模式：write_srt=False 不落 SRT、全类型消息上报、连接状态上报
-# 3. get_danmaku_collector 工厂透传 room_name / write_srt
-# 4. Web API /api/danmaku 端点返回枢纽快照
-# 5. GUI 弹幕监控（无头）：JSONL 事件分发到线程安全状态、边车文件 tail（含轮转回绕）
-#    （2026-09-29 审查 M-24：tail 用例的停止信号必须发给**传入线程的那只 Event** 并断言线程
-#     已退出；M-31②：gui 改在**用例内**导入，配套 autouse fixture 成对还原 DLR_GUI_PARENT）
+# 弹幕监控测试（离线，不依赖网络 / 真实弹幕 WS）。覆盖：
+# 1. DanmakuMonitorHub：统计精确性（不受采样影响）、展示流采样折叠、礼物/在线处理、
+#    seq 增量游标、连接状态生命周期、JSONL 合法性与轮转；
+# 2. DanmakuCollector 双模式：write_srt=False 不落 SRT、全类型消息上报、连接状态上报；
+# 3. get_danmaku_collector 工厂透传 room_name / write_srt；
+# 4. Web API /api/danmaku 端点返回枢纽快照；
+# 5. GUI 弹幕监控（无头）：JSONL 事件分发到线程安全状态、边车文件 tail（含轮转回绕）。
+#    M-24：tail 用例的停止信号必须发给**传入线程的那只 Event** 并断言线程已退出；
+#    M-31②：gui 在**用例内**导入，配套 autouse fixture 成对还原 DLR_GUI_PARENT。
 
 import asyncio
 import json
@@ -26,12 +24,10 @@ from src.collector import DanmakuCollector
 from src.danmaku_monitor import DanmakuMonitorHub
 
 
-# 可长期阻塞的弹幕客户端替身：start() 睡眠模拟常驻连接，stop 由
-# collector 的 loop.stop() 中断（run_until_complete 抛 RuntimeError 被 _run 捕获）。
+# 可长期阻塞的弹幕客户端替身：start() 长睡眠模拟常驻连接，collector 经 loop.stop() 中断
+# （run_until_complete 抛 RuntimeError 被 _run 捕获），从而可无网络验证采集线程生命周期。
 class _BlockingDanmaku(DanmakuBase):
     async def start(self, args: Any) -> None:
-        # 常驻 3600s 睡眠模拟直播连接；collector 经 loop.stop() 中断（run_until_complete 抛
-        # RuntimeError 由 _run 捕获），从而可无网络验证采集线程生命周期。
         await asyncio.sleep(3600)
 
     async def stop(self) -> None:
@@ -55,11 +51,9 @@ def _feed_chat(hub: DanmakuMonitorHub, room: str, count: int, prefix: str = "m")
 
 
 def test_msg_total_exact_while_stream_sampled(tmp_path: Path) -> None:
-    # 统计精确、流式采样：25 条同秒弹幕 → msg_total=25（精确），
-    # 展示流仅保留 10 条（每秒采样上限）。
+    # 统计精确、流式采样：25 条同秒弹幕 → msg_total=25（精确），展示流仅保留 10 条（每秒采样上限）。
     hub = DanmakuMonitorHub(log_path=str(tmp_path / "dm.jsonl"))
     hub.room_started("房间A", "抖音直播")
-    # 25 条同秒弹幕：msg_total 精确计满 25，展示流按每秒采样上限仅留 10 条（其余仅入统计）。
     _feed_chat(hub, "房间A", 25)
 
     snap = hub.snapshot(0)
@@ -69,10 +63,9 @@ def test_msg_total_exact_while_stream_sampled(tmp_path: Path) -> None:
 
 
 def test_rate_counts_all_messages_in_window(tmp_path: Path) -> None:
-    # 速率口径：60 秒窗口内全部计数（30 条快速弹幕 → 30 条/分），不受采样影响。
+    # 速率口径：60 秒窗口内全部计数（30 条快速弹幕 → 30 条/分），不受展示流采样影响。
     hub = DanmakuMonitorHub(log_path=str(tmp_path / "dm.jsonl"))
     hub.room_started("房间A", "抖音直播")
-    # 30 条一次性灌入（窗口 60s 内）：速率口径计全部 30 条 = 30/分，不受展示流采样影响。
     _feed_chat(hub, "房间A", 30)
 
     snap = hub.snapshot(0)
@@ -81,10 +74,9 @@ def test_rate_counts_all_messages_in_window(tmp_path: Path) -> None:
 
 
 def test_gift_counted_and_not_sampled(tmp_path: Path) -> None:
-    # 礼物为低频高价值事件：不参与采样，全部进入展示流并计入礼物数。
+    # 礼物为低频高价值事件：不参与采样，全部进入展示流并计入 gift_total。
     hub = DanmakuMonitorHub(log_path=str(tmp_path / "dm.jsonl"))
     hub.room_started("房间A", "B站直播")
-    # 15 条礼物：低频高价值，全部进入展示流并计入 gift_total（不采样丢弃）。
     for i in range(15):
         hub.room_message("房间A", "gift", f"老板{i}", "送出 小心心×1")
 
@@ -97,16 +89,14 @@ def test_gift_counted_and_not_sampled(tmp_path: Path) -> None:
 
 
 def test_online_updates_state_not_stream(tmp_path: Path) -> None:
-    # 在线人数仅更新房间状态，不进入展示流。
+    # 在线人数仅更新房间状态，不进入展示流（避免高频数字刷屏）。
     hub = DanmakuMonitorHub(log_path=str(tmp_path / "dm.jsonl"))
     hub.room_started("房间A", "抖音直播")
-    # 在线人数 1234 仅更新房间状态，不进展示流（避免高频数字刷屏）。
     hub.room_message("房间A", "online", "", "1234")
 
     snap = hub.snapshot(0)
     room = next(r for r in snap["rooms"] if r["name"] == "房间A")
     assert room["online"] == 1234
-    # 在线人数不入展示流：messages 为空，避免高频数字刷屏干扰 UI。
     assert snap["messages"] == []
 
 
@@ -114,7 +104,6 @@ def test_seq_cursor_incremental(tmp_path: Path) -> None:
     # seq 增量游标：snapshot(since=last_seq) 只返回新消息，不丢不重。
     hub = DanmakuMonitorHub(log_path=str(tmp_path / "dm.jsonl"))
     hub.room_started("房间A", "抖音直播")
-    # 先灌 5 条得 last_seq 游标，再灌 3 条（前缀 n）用 since=last_seq 只取新 3 条。
     _feed_chat(hub, "房间A", 5)
     first = hub.snapshot(0)
     assert first["last_seq"] > 0
@@ -122,7 +111,6 @@ def test_seq_cursor_incremental(tmp_path: Path) -> None:
     _feed_chat(hub, "房间A", 3, prefix="n")
     second = hub.snapshot(int(first["last_seq"]))
     assert len(second["messages"]) == 3
-    # 增量游标只回传新消息（前缀 n），不丢不重。
     assert all(str(m["text"]).startswith("n") for m in second["messages"])
 
 
@@ -148,13 +136,11 @@ def test_conn_lifecycle_and_restart_resets(tmp_path: Path) -> None:
 
 
 def test_room_stopped_removes_room_and_logs_event(tmp_path: Path) -> None:
-    # 房间停止监控（URL 移除/注释、录制线程退出）：条目从快照移除，JSONL 记录
-    # stopped 事件（GUI 据此删行）；未注册房间为无操作——否则监控页会一直残留
-    # 已失效直播间及其旧弹幕数据。
+    # 房间停止监控（URL 移除/注释、录制线程退出）：条目从快照移除、JSONL 记录 stopped 事件
+    # （GUI 据此删行）；未注册房间为无操作——否则监控页会一直残留已失效直播间及其旧数据。
     hub = DanmakuMonitorHub(log_path=str(tmp_path / "dm.jsonl"))
     hub.room_started("房间A", "虎牙直播")
     _feed_chat(hub, "房间A", 3)
-    # 房间停止监控：条目从快照移除，JSONL 写入 stopped 事件（GUI 据此删行）。
     hub.room_stopped("房间A")
 
     snap = hub.snapshot(0)
@@ -171,8 +157,7 @@ def test_room_stopped_removes_room_and_logs_event(tmp_path: Path) -> None:
 
 
 def test_jsonl_lines_valid_and_rotation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # JSONL 每行均为合法 JSON；超过轮转阈值后产生 .1 备份。
-    # 将轮转阈值压到 512 字节、灌 30 条长消息触发超阈值；验证每行合法 JSON 且产生 .1 备份。
+    # JSONL 每行均为合法 JSON；把轮转阈值压到 512 字节并灌 30 条长消息，超过后应产生 .1 备份。
     monkeypatch.setattr(dm, "_ROTATE_BYTES", 512)
     hub = DanmakuMonitorHub(log_path=str(tmp_path / "dm.jsonl"))
     hub.room_started("房间A", "抖音直播")
@@ -190,11 +175,9 @@ def test_jsonl_lines_valid_and_rotation(tmp_path: Path, monkeypatch: pytest.Monk
 
 
 def test_sidecar_write_does_not_hold_hub_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # MID-25 主用例：磁盘 IO 不得发生在 hub._lock 内。
-    # 旧实现 open/write/flush 全在锁里，80 房间 × 10 条/秒 ≈ 800 次带 flush 的串行落盘，
-    # 一次被慢盘拖住的 flush 会让所有房间的 ws 收包/心跳协程一起停摆（协议层 ping 超时
-    # → 断连风暴），snapshot() 也抢同一把锁。
-    # 做法：把真正的写函数换成「持锁观察期内一直不返回」的慢版本，再从另一线程抢锁。
+    # MID-25 主用例：磁盘 IO 不得发生在 hub._lock 内。旧实现 open/write/flush 全在锁里，
+    # 一次被慢盘拖住的 flush 会让所有房间的 ws 收包/心跳协程一起停摆（协议层 ping 超时 →
+    # 断连风暴），snapshot() 也抢同一把锁。做法：把真实写函数换成一直不返回的慢版本，再从另一线程抢锁。
     started = threading.Event()
     release = threading.Event()
 
@@ -229,9 +212,9 @@ def test_sidecar_write_does_not_hold_hub_lock(tmp_path: Path, monkeypatch: pytes
 
 
 def test_close_file_waits_for_pending_writes_before_closing(tmp_path: Path) -> None:
-    # close_file() 处于「停止录制 → 日志归档改名」链路上：Windows 下句柄未关的文件
-    # rename 必抛 PermissionError，故它必须等已入队事件真正落盘后再关句柄；
-    # MID-25 把写盘挪进独立线程后，「已 accept 的事件一条都不能丢」变得只能靠这次排空保证。
+    # close_file() 处于「停止录制 → 日志归档改名」链路上：Windows 下句柄未关的文件 rename 必抛
+    # PermissionError，故必须等已入队事件真正落盘后再关；MID-25 把写盘挪进独立线程后，
+    # 「已 accept 的事件一条都不能丢」只能靠这次排空保证。
     hub = DanmakuMonitorHub(log_path=str(tmp_path / "dm.jsonl"))
     log_file = tmp_path / "dm.jsonl"
     hub.room_started("房间A", "抖音直播")
@@ -431,19 +414,13 @@ def test_api_danmaku_endpoint_returns_hub_snapshot(tmp_path: Path, monkeypatch: 
 # ─── GUI 弹幕监控（无头，不创建 Tk 窗口） ───────────────────
 
 
-# M-31②（2026-09-29 审查）：本文件此前在模块级 `gui = pytest.importorskip("gui")`，
-# 于是 **pytest 收集期**就把 DLR_GUI_PARENT=1 注进了整个会话（gui.py 的
-# os.environ["DLR_GUI_PARENT"]="1" 在 import 期执行），与 AGENTS/tests 既有约定
-# 「不在 pytest 进程 import gui」（tests/test_gui_monitor.py 文件头写明同一理由）冲突。
-# 现改为用例内经 _load_gui() 取模块，并由下面的 autouse fixture 成对还原该环境变量。
-# 残余风险（如实记录，不得当作已彻底解决）：
-#   ① sys.modules 里的 gui 不会随用例结束消失，本文件之后的用例再 import gui 仍是命中缓存
-#      （不再重复写 env，因此不会二次污染）；
-#   ② src/logger.py 的「GUI 父进程」判定只在**导入期**读一次该环境变量。本文件的模块级
-#      `from src.collector import DanmakuCollector` 早于任何用例内的 gui 导入，因此
-#      logger 落定的判定仍是「非 GUI 父进程」；但若某个会话让别的文件先 import gui，
-#      仍要靠下游用例各自的 monkeypatch.delenv（test_log_archive.py /
-#      test_logger_gui_parent.py / test_regression_2026_09_22_infra.py）兜住。
+# M-31②（2026-09-29 审查）：本文件此前在模块级 `gui = pytest.importorskip("gui")`，于是收集期就
+# 把 DLR_GUI_PARENT=1 注进整个会话（gui.py 在 import 期写入该变量），与「不在 pytest 进程 import
+# gui」的既定约定冲突。现改为用例内经 _load_gui() 取模块，并由下面的 autouse fixture 成对还原。
+# 残余风险（如实记录，不得当作已彻底解决）：① sys.modules 里的 gui 不会随用例结束消失，后续用例
+# 再 import 仍是命中缓存（不再重复写 env，无二次污染）；② src/logger.py 的「GUI 父进程」判定只在
+# 导入期读一次该变量，本文件模块级 import 早于任何用例内的 gui 导入，故 logger 落定的仍是「非 GUI
+# 父进程」；若某个会话让别的文件先 import gui，靠下游用例各自的 monkeypatch.delenv 兜住。
 def _load_gui() -> Any:
     return pytest.importorskip("gui", reason="gui 导入失败时跳过 GUI 无头测试（阶段5 起 gui 已不依赖 customtkinter)")
 
@@ -461,7 +438,6 @@ def _isolate_gui_parent_env_marker(monkeypatch: pytest.MonkeyPatch) -> None:
 # 构造仅含弹幕监控状态字段的 LiveRecorderGUI 桩实例（object.__new__ 跳过 Tk 初始化），
 # 供 _danmaku_dispatch / _danmaku_tail_loop 无头驱动。
 def _make_gui_stub(app_root: Path, gui: Any) -> Any:
-    # object.__new__ 跳过 Tk 初始化（无头）：仅挂弹幕监控相关状态字段，供方法无头驱动。
     stub = object.__new__(gui.LiveRecorderGUI)
     stub._danmaku_lock = threading.Lock()
     stub._danmaku_rooms = {}
@@ -560,13 +536,11 @@ def test_gui_tail_reads_jsonl_and_handles_rotation(tmp_path: Any) -> None:
     )
 
     stub = _make_gui_stub(tmp_path, gui)
-    # MID-2250 连带修正：_danmaku_tail_loop 的退出标志已改为**逐次创建的局部 Event 形参**
-    # （原读共享的 self._danmaku_tail_stop，会被新一轮 clear() 抹掉退出信号 → 线程永不退出），
-    # 故这里必须把它作为第二个实参传入，不能再按旧签名只给 stub。
-    # M-24（2026-09-29 审查，严重假绿）：这只 Event 必须落到**局部变量**并在末尾 set 它。
-    # 此前它是个匿名实参、用例 set 的却是 stub._danmaku_tail_stop（生产签名根本不读它），
-    # join(timeout=3) 于是必然等满、又缺 is_alive 断言 → 「轮转后能停」从未被验证过，
-    # tail 线程完全不响应 stop_event 的回归在这里照样全绿。
+    # MID-2250 连带修正：_danmaku_tail_loop 的退出标志是**逐次创建的局部 Event 形参**（原读
+    # 共享的 self._danmaku_tail_stop，会被新一轮 clear() 抹掉退出信号 → 线程永不退出），故必须
+    # 作为第二个实参传入。M-24（严重假绿）：这只 Event 必须落到**局部变量**并在末尾 set 它——
+    # 旧写法 set 的是 stub._danmaku_tail_stop（生产签名根本不读），join 必然等满又缺 is_alive 断言，
+    # 「轮转后能停」从未被验证过。
     stop = threading.Event()
     t = threading.Thread(target=gui.LiveRecorderGUI._danmaku_tail_loop, args=(stub, stop), daemon=True)
     t.start()

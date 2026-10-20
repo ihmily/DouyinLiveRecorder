@@ -1,41 +1,24 @@
 # .github/workflows/docker-publish.yml 的结构锁（GHCR 多架构发布链）。
 #
-# 为什么要有：多架构发布链的正确性全靠几个「看起来像细节」的约束——只在 tag 上推 latest、
-#   两个构建 job 的 runner 与 --platform 必须一一对应、凭据只能是自动 GITHUB_TOKEN、
-#   分架构 digest 必须提升为 job 级 output——而工作流文件不在任何门禁的判据面里：
-#   改坏它不会有任何测试红，只会在下一次发版时炸（且多半炸成「build 全绿、清单合成报无效引用」
-#   这种最难归因的形态）。规格依据：docs/worklog/PROPOSAL_2026-10-02_linux-arm64-ffmpeg.md §五.1、
-#   测试面 T-8；取值口径（触发面 / 动作 ref / compose 不改名）见同文 §二.4 与 §二.5。
+# 为什么要有：多架构发布链的正确性全靠几个「看起来像细节」的约束——只在 tag 上推 latest、两个
+# 构建 job 的 runner 与 --platform 一一对应、凭据只能是自动 GITHUB_TOKEN、分架构 digest 必须提升
+# 为 job 级 output——而工作流文件不在任何门禁的判据面里：改坏它不会有测试红，只会在下一次发版时
+# 炸成「build 全绿、清单合成报无效引用」这种最难归因的形态。规格依据：
+# docs/worklog/PROPOSAL_2026-10-02_linux-arm64-ffmpeg.md §五.1、测试面 T-8。
 #
-# YAML 1.1 陷阱：`on:` 会被 PyYAML 解析成布尔 True 键（on/off/yes/no 都是 YAML 1.1 布尔字面量），
-#   本文件按 data[True] 取值，写代码的人容易在这里写下「KeyError: 'on'」然后误判成「工作流没触发条件」。
-#   取值一律经 _triggers()，它对「两种键形态都找不到」显式失败——「触发面读空」在本锁里不是绿灯。
+# 纯静态结构锁而非行为锁：本机既无 docker 也无推送权限，端到端只能在 CI 首跑时验证，故判据全取
+# 「谁被调用、带不带凭据、引用了哪个 output」这类不变量，不钉行号也不钉排版。
 #
-# 为什么是纯静态结构锁而不是行为锁：本机既无 docker 也无推送权限，端到端只能在 CI 首跑时验证
-#   （交回用户项，见 unit-6-report.md 的「假设与遗留」）。因此本锁的判据全部取「谁被调用、
-#   带不带凭据、引用了哪个 output」这类不变量，不钉行号也不钉排版。
+# YAML 1.1 陷阱：`on:` 会被 PyYAML 解析成布尔 True 键（on/off/yes/no 都是布尔字面量），取值一律
+# 经 _triggers()；它对「两种键形态都找不到」显式失败——「触发面读空」在本锁里不是绿灯。
 #
-# 变异取证（2026-10-03 实跑，三项均按「内存/临时副本改写→跑→还原」执行，仓库零残留）：
-#   ① 给工作流加 `workflow_dispatch:` 触发
-#     → test_only_tag_push_can_publish_latest 红（触发面集合不再是 {"push"}）；
-#   ② 把 arm64 job 的 `runs-on` 改成 ubuntu-latest
-#     → test_arch_jobs_run_on_matching_native_runners 红（runner 与 platform 失去对应，
-#        等价于退回 QEMU 模拟 aarch64）；
-#   ③ 删掉 docker-build-amd64 的 `outputs: digest:` 声明
-#     → 同一条锁红（needs.docker-build-amd64.outputs.digest 会变空串，merge 步骤报无效引用）。
-#   —— 以下为评审 2026-10-03（unit-6-review.md）的三个 Important 补锁，三条变异取证同上式：
-#   ④ 删掉任一 `provenance: false`（I-1）
-#     → test_provenance_is_disabled_on_both_arch_builds_and_absent_from_merge 红；
-#   ⑤ 把 merge 的 `IMAGE@<digest>` 改成分架构 tag 引用（I-2）
-#     → test_manifest_merge_inputs_are_digest_refs_not_arch_tags 红；
-#   ⑥ 往 docker-build-amd64 的 tags 追加 `:latest`（I-3）
-#     → test_arch_build_tags_are_temp_only_and_latest_appears_once_in_merge 红。
-#   —— 以下为**最终全分支评审**（final-review.md）I-2 的补锁，取证同式（临时改写→跑→按字节还原）：
-#   ⑦ 单侧改：arm64 job 的 `runs-on` 改成清单外标签 ubuntu-24.04-arm64
-#     → test_arch_jobs_run_on_matching_native_runners 红（两处断言同时落：与本表不等 + 未登记）。
-#   ⑦b 两侧同改（真实漂移形态）：workflow 的 `runs-on` 与本文件的 ARCH_JOBS 一起换成同一支
-#     未登记标签 → 只红在「未登记」那条断言上；这一格才证明 I-2 的断言不是 `runs-on == runner`
-#     的冗余重复（⑦ 单侧改则两条都能抓）。
+# 变异取证（2026-10-03 实跑，按「临时改写 → 跑 → 还原」执行，仓库零残留）：加 workflow_dispatch
+# → only_tag_push_can_publish_latest 红；arm64 的 runs-on 改成 ubuntu-latest →
+# arch_jobs_run_on_matching_native_runners 红；删掉 outputs.digest → 同一条红；删 provenance: false
+# → provenance_disabled 红；merge 改按分架构 tag 引用 → digest_refs 红；amd64 的 tags 追加 :latest
+# → temp_only 红；runs-on 换成清单外标签 ubuntu-24.04-arm64 → matching_native_runners 红（单侧改时
+# 两处断言同时落）；两侧同改（workflow 与本表的 ARCH_JOBS 一起换成同一支未登记标签）则只红在
+# 「未登记」那条断言——这一格才证明 I-2 的断言不是 runs-on == runner 的冗余重复。
 
 from __future__ import annotations
 
@@ -55,10 +38,9 @@ WORKFLOW = ROOT / ".github" / "workflows" / "docker-publish.yml"
 # 「platforms 里出现两个平台」：build-release.yml 的发布矩阵已用 ubuntu-24.04-arm（并由
 # scripts/check_runtime_pins.py 的 RUNNER_TO_RUNTIME_KEY 登记为 linux-arm64），本表与之同口径。
 # [评审 I-2 补的机检] 上面那句「同口径」此前只是评论：本表把标签又硬编了一份，而唯一登记点
-#   RUNNER_TO_RUNTIME_KEY 只被 check_runtime_pins.py 拿去解析 build-release.yml，从不与本工作流比对
-#   ——「workflow 换标签 + 本表跟着改」两侧同改仍全绿，而新标签从未登记（正是本仓为 .mjs 登记
-#   立规所针对的「写了但不进清单」形态）。同源断言落在 test_arch_jobs_run_on_matching_native_runners，
-#   登记表**按文件路径动态加载**、不在本文件复述标签清单（复述即第二份事实源）。
+# RUNNER_TO_RUNTIME_KEY 从不与本工作流比对——「workflow 换标签 + 本表跟着改」两侧同改仍全绿，
+# 而新标签从未登记。同源断言落在 test_arch_jobs_run_on_matching_native_runners，登记表按文件
+# 路径动态加载、不在本文件复述标签清单（复述即第二份事实源）。
 ARCH_JOBS: dict[str, tuple[str, str]] = {
     "docker-build-amd64": ("ubuntu-latest", "linux/amd64"),
     "docker-build-arm64": ("ubuntu-24.04-arm", "linux/arm64"),
@@ -75,14 +57,13 @@ BUILD_STEP_ID = "build"
 INSTALL_ANCHORS = ("apt-get install", "pip install", "choco install", "brew install")
 
 # —— 评审 I-1/I-2/I-3 三条补锁的判据常量 ——
-# 三条共同的取舍：判定一律先落到「解析后的结构」（YAML 取值 + shell 词法单元），再对结构断言。
-# 拿整段 run 原文写一把正则等于把排版当契约，M-26 的教训是契约一反转这种锁就静默空洞成立。
-# 另有三处「刻意的唯一形态约束」（①with.tags 只认标量串 ②provenance 只认布尔 False
-# ③实参解析只认 `-t/--tag <值>` 这一种带值选项），红点各自写在对应锁的上方并标了序号。
-# 共同理由一句：放宽这三种语义等价的写法要在 shell 词法之外再引入「选项语义」解析（哪个选项带值、
-# 列表与标量同义、布尔与字符串在 action 入参处同形），复杂度与收益不匹配；本链唯一对外产物是
-# latest 清单，宁可让改写者显式适配这三种形态，也不把判定面摊成第二套 shell 实现——
-# 因此这三处的红是**误报方向**（改写者被迫改锁），不是假绿方向。
+# 共同取舍：判定先落到「解析后的结构」（YAML 取值 + shell 词法单元），再对结构断言；拿整段 run
+# 原文写正则等于把排版当契约（M-26 的教训：契约一反转这种锁就静默空洞成立）。另有三处刻意的
+# 唯一形态约束（①with.tags 只认标量串 ②provenance 只认布尔 False ③实参解析只认 `-t/--tag <值>`），
+# 红点各自写在对应锁的上方并标了序号：放宽它们要在 shell 词法之外再引入「选项语义」解析（哪个
+# 选项带值、列表与标量同义、布尔与字符串在 action 入参处同形），复杂度与收益不匹配——本链唯一
+# 对外产物是 latest 清单，宁可让改写者显式适配这三种形态。三处的红是误报方向（改写者被迫改锁），
+# 不是假绿方向。
 LATEST_TAG = ":latest"
 
 # 分架构 job ↔ 临时 tag 应有的架构后缀。与 ARCH_JOBS 同源但判据不同：那张管 runner↔platform
@@ -123,11 +104,10 @@ def data() -> dict[Any, Any]:
 
 def _runner_registry() -> dict[str, str]:
     # runner 标签 ↔ 运行时键的唯一登记点（scripts/check_runtime_pins.py::RUNNER_TO_RUNTIME_KEY），
-    # 按文件路径动态加载取常量，**不在本文件复制一份标签清单**——复制即造出第二份事实源，
-    # 与 AGENTS.md「门禁唯一基准 / 不另建并行清单」同族。加载先例取同仓既有两处：
-    # check_runtime_pins._load_build_exe 与 tests/test_check_runtime_pins._load_checker
-    # （scripts/ 不在包路径内，只能按路径 spec_from_file_location；该脚本的 main() 受 __name__ 守卫，
-    # 模块级只有常量定义，import 期零副作用、零联网）。
+    # 按文件路径动态加载取常量，**不在本文件复制一份标签清单**——复制即造出第二份事实源。
+    # 加载先例取同仓既有两处：check_runtime_pins._load_build_exe 与 tests/test_check_runtime_pins.
+    # _load_checker（scripts/ 不在包路径内，只能 spec_from_file_location；该脚本 main() 受 __name__
+    # 守卫，模块级只有常量定义，import 期零副作用、零联网）。
     # 「读不到就显式失败」而非返回空 dict：空表会让下面的成员断言在真空里成立（假绿），
     # 而登记表本身失效属「门禁坏了」档，与 check_runtime_pins 走 sys.exit(2) 的口径一致。
     path = ROOT / "scripts" / "check_runtime_pins.py"
@@ -232,11 +212,9 @@ def _split_create_args(args: list[str]) -> tuple[list[str], list[str], list[str]
             index += 2
             continue
         if token.startswith("-"):
-            # 刻意的唯一形态约束③：本解析只认 `-t/--tag <值>` 这一种「带值选项」，其余以 - 开头的词
-            #   一律按「自身即完整」记账，其后那个词仍按位置实参处理。所以给合成命令加一个
-            #   --builder NAME 时，NAME 会被当成输入项、在 I-2 锁的「没有 @ 即红」处判红（而
-            #   imagetools create 的 --builder 确实带值）。要放行它就得把 GNU 选项语义表搬进锁，
-            #   共同理由见文件上方常量段那一句；方向同样是误报，不是假绿。
+            # 刻意的唯一形态约束③：本解析只认 `-t/--tag <值>` 这一种带值选项，其余以 - 开头的词
+            # 一律按「自身即完整」记账，其后那个词仍按位置实参处理。故给合成命令加 --builder NAME
+            # 时，NAME 会被当成输入项、在 I-2 锁的「没有 @ 即红」处判红（方向同样是误报，不是假绿）。
             options.append(token)
             index += 1
             continue
@@ -348,20 +326,18 @@ def test_image_name_is_derived_from_the_running_owner(data: dict[Any, Any]) -> N
 
 def test_provenance_is_disabled_on_both_arch_builds_and_absent_from_merge(data: dict[Any, Any]) -> None:
     # I-1：`provenance: false` 是承重取值，删掉它 CI 三步全绿、只在用户 docker pull 时暴露。
-    # 因果链取证（2026-10-03 只读请求，读数见 unit-6-report.md 的 Fix round 1）：
-    # docker/build-push-action v6 与 v7 的 action.yml 里 provenance 入参只有 description 与
-    # required=False，**没有 default 键**——不显式写就交给 buildx；docker/docs 的
-    # build/attestations 原文「Provenance attestations with the mode=min level are added to
-    # images by default」，同页与 buildkit 的 attestation-storage 都写明 attestation 是
-    # 「attach to images as a manifest in the image index」（platform 记为 unknown/unknown）。
-    # 于是 push 出去的顶层对象不再是单架构 manifest 而是 index，steps.build.outputs.digest
-    # 随之退化成 index digest，merge 按它合成的对外清单里就混入非镜像条目。
+    # 因果链（2026-10-03 取证）：docker/build-push-action v6/v7 的 action.yml 里 provenance 入参
+    # 没有 default 键，不显式写就交给 buildx；docker/docs 写明「Provenance attestations with the
+    # mode=min level are added to images by default」，attestation 被 attach 成 image index 里的
+    # 一个 manifest（platform 记为 unknown/unknown）。于是 push 出去的顶层对象不再是单架构
+    # manifest 而是 index，steps.build.outputs.digest 退化成 index digest，merge 合成的对外清单
+    # 里就混入非镜像条目。
     for name in ARCH_TAG_SUFFIX:
         build = _build_step(_job(data, name), name)
         # 取 .get() 而不是 ["provenance"]：「删掉这一行」与「改成 true」都要红，且消息可读。
-        # 刻意的唯一形态约束②：只认 YAML 布尔 False。写成字符串 "false" 行为等价——GitHub 把 with:
-        #   的值一律转成文本再交给动作，provenance 经 core.getInput 读到的都是 "false" 这个串；
-        #   但 `is False` 对它判红。方向是误报而非假绿，共同理由见文件上方常量段那一句。
+        # 刻意的唯一形态约束②：只认 YAML 布尔 False。写成字符串 "false" 行为等价（GitHub 把 with:
+        # 的值一律转成文本，provenance 经 core.getInput 读到的都是 "false"），但 `is False` 判红；
+        # 方向是误报而非假绿，共同理由见文件上方常量段。
         assert build["with"].get("provenance") is False, f"{name} 必须显式 provenance: false（承重取值，见上方注释）"
     # merge 侧：合成命令里不得出现 attestation/provenance 类入参。imagetools create 只做清单合成，
     # 在这里补一个「attestation 参数」既救不了 digest 契约，又把同一条契约摊到两处、再也无法一起核对。
@@ -372,12 +348,11 @@ def test_provenance_is_disabled_on_both_arch_builds_and_absent_from_merge(data: 
 
 
 def test_manifest_merge_inputs_are_digest_refs_not_arch_tags(data: dict[Any, Any]) -> None:
-    # I-2：合成清单的输入项必须是「镜像名 @ 该架构 job output 的 digest」。既有锁只查
-    # needs.docker-build-<arch>.outputs.digest 这个**子串**出现在 run 原文里，于是
-    # `IMAGE@<digest>` 写成 `IMAGE:<tag>`（退回可变分架构 tag）或干脆丢掉 `@` 都能全绿——
-    # 而本文件自己的注释正警告着「digest 引用不依赖分架构临时 tag 长期存在」。
-    # 丢掉 @ 的后果：imagetools create 收到无效引用直接 rc=1，两个 build job 已推成功、
-    # 临时 tag 已落 registry，只剩最后一步红（最难归因的那种）。
+    # I-2：合成清单的输入项必须是「镜像名 @ 该架构 job output 的 digest」。旧锁只查
+    # needs.docker-build-<arch>.outputs.digest 这个子串是否出现在 run 原文，于是 `IMAGE@<digest>`
+    # 写成 `IMAGE:<tag>`（退回可变分架构 tag）或干脆丢掉 `@` 都能全绿。丢 @ 的后果：imagetools
+    # create 收到无效引用直接 rc=1，而两个 build job 已推成功、临时 tag 已落 registry，只剩最后
+    # 一步红（最难归因的那种）。
     merge = _job(data, "docker-manifest")
     command = _run_containing(merge, "docker-manifest", "imagetools create")
     _tags, sources, _options = _split_create_args(_create_args(command))
@@ -399,18 +374,16 @@ def test_manifest_merge_inputs_are_digest_refs_not_arch_tags(data: dict[Any, Any
 
 
 def test_arch_build_tags_are_temp_only_and_latest_appears_once_in_merge(data: dict[Any, Any]) -> None:
-    # I-3：分架构 build job 只推「一行、带自己架构后缀、不含 :latest」的临时 tag；
-    # 对外 :latest 在整个工作流里只允许出现一次且落在 merge 的合成命令里（规格 §二.5
-    # 「latest 只由不可变 tag、经 merge 单点合成」的否定面）。评审实测：往 amd64 的 tags
-    # 追加 :latest 时旧锁全绿，真实后果是 latest 退化成单架构层——arm64 主机拉 latest
-    # 拿到 amd64 层（靠模拟起或起不来），且 merge 之后仍可能被后续半发覆盖。
+    # I-3：分架构 build job 只推「一行、带自己架构后缀、不含 :latest」的临时 tag；对外 :latest
+    # 在整个工作流里只允许出现一次且落在 merge 的合成命令里（规格 §二.5「latest 只由不可变 tag、
+    # 经 merge 单点合成」的否定面）。评审实测：往 amd64 的 tags 追加 :latest 时旧锁全绿，真实后果是
+    # latest 退化成单架构层（arm64 主机拉 latest 拿到 amd64 层），且 merge 之后仍可能被后续半发覆盖。
     for name, arch in ARCH_TAG_SUFFIX.items():
         build = _build_step(_job(data, name), name)
         # 刻意的唯一形态约束①：with.tags 只认**标量串**（串里可以多行，逐行判）。改成语义等价的
-        #   YAML 列表形态（tags: 下面一个 "- <image>:v…-amd64"）时，str() 拿到的是 "['…']" 这个
-        #   repr、行尾多出引号与方括号，于是 endswith(f"-{arch}") 判红（实测红点即那句「必须以
-        #   -amd64 结尾」；行数与 :latest 计数两条不受此形态影响，红点只落在 endswith 这一条上）。
-        #   方向是误报而非假绿：列表与标量同义这条要多一层 YAML 类型语义才认得，共同理由见上方常量段。
+        # YAML 列表形态（tags: 下一个 "- <image>:v…-amd64"）时，str() 拿到的是 "['…']" 这个 repr，
+        # endswith(f"-{arch}") 于是判红（行数与 :latest 计数两条不受影响）。方向是误报而非假绿：
+        # 列表与标量同义要多一层 YAML 类型语义才认得，共同理由见上方常量段。
         lines = [line.strip() for line in str(build["with"]["tags"]).splitlines() if line.strip()]
         assert len(lines) == 1, f"{name} 的 tags 应只有一行临时 tag，实测 {len(lines)} 行：{lines!r}"
         tag = lines[0]

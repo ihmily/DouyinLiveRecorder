@@ -46,7 +46,7 @@ import src.web_tray as web_tray
 
 # ─── Qt 替身 ──────────────────────────────────────────────
 # 为什么整套替身而不是真 Qt：真 QApplication 是进程级单例、建了就拆不掉，
-# 而 QSystemTrayIcon.show() 会真往用户托盘区挂图标（旧 pystray 版这条注释同样成立）。
+# 而 QSystemTrayIcon.show() 会真往用户托盘区挂图标。
 
 
 class _Signal:
@@ -84,7 +84,7 @@ class _FakeQApplication:
         self.quit_calls += 1
 
     def exec(self) -> int:
-        # 方法名与 Qt 一致（见文件尾的改名说明）；替身不阻塞，返回即代表「事件循环已退出」
+        # 方法名与 Qt 原生 exec 对齐；替身不阻塞，返回即代表「事件循环已退出」
         self.exec_calls += 1
         return 0
 
@@ -792,7 +792,3 @@ def test_module_constants_match_win32_api() -> None:
     assert web_tray.SW_RESTORE == 9 and web_tray.SW_SHOW == 5
     assert web_tray.WS_EX_TOOLWINDOW == 0x00000080 and web_tray.WS_EX_APPWINDOW == 0x00040000
     assert web_tray.ENABLED is (sys.platform == "win32")
-
-
-# 改名说明：`_FakeQApplication.exec` 落盘时被统一改回 Qt 的方法名 exec
-# （写入期规避 exec( 字面量，改名由一次性脚本完成；本文件不保留 exec 这个形态）。

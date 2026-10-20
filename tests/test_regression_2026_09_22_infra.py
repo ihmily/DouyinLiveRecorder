@@ -1,18 +1,16 @@
 # 组「基础设施/旁路链路」（2026-09-22）回归锁：弹幕边车归档窗口、stats 线程自注销、
 # web_console 重开失败回退、SRT 终态位、ffmpeg 清理事实同源。
 #
-# 与既有同名单元文件的分工：test_danmaku_monitor.py / test_log_archive.py /
-# test_srt_writer.py / test_ffmpeg_proc.py 覆盖各模块**既有契约**；本文件只放本轮五条
-# 整改对应的**失效形态**锁（修复前必红、修复后必绿），不重复既有断言。
+# 与既有同名单元文件的分工：test_danmaku_monitor.py / test_log_archive.py / test_srt_writer.py /
+# test_ffmpeg_proc.py 覆盖各模块**既有契约**；本文件只放本轮整改对应的**失效形态**锁
+# （修复前必红、修复后必绿），不重复既有断言。
 #   MID-2243  边车 close_file() 之后的惰性重开顶穿日志归档的改名窗口
 #   MIN-2236④ stats 线程退出不自注销 + 唯一调用点在 room_started → 统计永久冻结
 #   MID-2258  web_console 重开失败即 return，把已关闭对象留在 sys.stdout 上
 #   MIN-2236③ SrtWriter.close() 无终态位 → 节流重开以追加模式把块号归 0（块号回卷）
 #   MIN-2236② ffmpeg 清理的注册表复核与「未确认」告警用两套互斥事实 + 预算配不平
-#
-# 2026-10-18 追加（CODE_REVIEW_2026-10-18，同文件同口径，不另建第二份基础设施锁清单）：
-#   L-18      边车轮转 os.replace 失败被静默吞掉且无记忆 → 此后每条事件重走 close/replace/open
-#   MT-11     test_window_is_closed_even_when_rename_fails 的 rename 替身改落 la 命名空间（M-27 同形态）
+#   L-18（2026-10-18）边车轮转 os.replace 失败被静默吞掉且无记忆 → 此后每条事件重走 close/replace/open
+#   MT-11（同批）test_window_is_closed_even_when_rename_fails 的 rename 替身改落 la 命名空间（M-27 同形态）
 #
 # 全部离线：不启动真实 ffmpeg、不联网，文件 IO 只落在 tmp_path。
 
@@ -75,9 +73,9 @@ def _silence_hub(hub: DanmakuMonitorHub) -> None:
 
 class TestSidecarArchiveWindow:
     def test_suspend_window_drops_events_and_resume_reopens(self, tmp_path: Path) -> None:
-        # 抑制期内到达的事件一律丢弃、且不重新持有句柄；解除抑制后自动重开继续落盘。
-        # 修复前：close_file() 只关一次，之后任何一条延迟事件都会把文件重新打开，
-        # 而归档改名与 close 之间没有任何同步点 → Windows 下改名必抛 PermissionError。
+        # 抑制期内到达的事件一律丢弃、且不重新持有句柄；解除抑制后自动重开。修复前 close_file()
+        # 只关一次，之后任何延迟事件都会重开文件，而归档改名与 close 之间没有同步点 → Windows 下
+        # 改名必抛 PermissionError。
         path = tmp_path / "danmaku_monitor.jsonl"
         hub = DanmakuMonitorHub(log_path=str(path))
         try:
@@ -109,8 +107,8 @@ class TestSidecarArchiveWindow:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # 「置位之前就已入队」的指令也必须丢弃——这是 MID-2243 的关键一半：只挡新入队的话，
-        # 慢盘期间排进队列的事件仍会在 drain 返回那一刻把文件重新打开，是否重开就又交回了
-        # 调度时序。做法：让首条写盘真正卡住（写线程被占住），期间排进 5 条，再置位、放行。
+        # 慢盘期间排进队列的事件仍会在 drain 返回那刻重开文件，是否重开就又交回了调度时序。
+        # 做法：让首条写盘真正卡住，期间排进 5 条，再置位、放行。
         path = tmp_path / "danmaku_monitor.jsonl"
         started = threading.Event()
         release = threading.Event()
@@ -216,10 +214,9 @@ class TestSidecarArchiveWindow:
             real_rename(src, dst)
 
         # MT-11（2026-10-18）：原写法 `monkeypatch.setattr(os, "rename", ...)` 改的是**全进程唯一**
-        # 的 os 模块本体（M-27 同形态，仓库已定性为跨用例竞态源并修过 test_log_archive.py 的同款）——
-        # 替身窗口内 loguru 的文件轮转改名、弹幕边车、GUI/录制后台线程的 rename 一并命中
-        # 「遇 danmaku_monitor.jsonl 就抛 PermissionError」。现按仓库口径收口：浅拷贝 + 只覆盖所需
-        # 属性 + 落进被测模块命名空间（本文件对 _STATS_INTERVAL、la.open 早已是同一形态）。
+        # 的 os 模块本体（M-27 同形态，仓库已定性为跨用例竞态源）——替身窗口内 loguru 的文件轮转、
+        # 弹幕边车、GUI/录制后台线程的 rename 一并命中「遇 danmaku_monitor.jsonl 就抛 PermissionError」。
+        # 现按仓库口径：浅拷贝 + 只覆盖所需属性 + 落进被测模块命名空间。
         monkeypatch.setattr(la, "os", types.SimpleNamespace(**{**vars(os), "rename": _deny_sidecar_rename}))
         # 反向见证：替身只落进 src.log_archive 的命名空间，进程全局 os.rename 必须仍是真实现
         assert os.rename is real_rename
@@ -252,9 +249,9 @@ class TestSidecarArchiveWindow:
 
 
 class TestSidecarRotateBackoff:
-    # 三条锁都直接驱动 _append_sidecar_line（MID-25 起它既是生产实现也是给测试留的注入口），
-    # 不经 hub/写线程：轮转只在句柄 tell() 越阈值时发生，用真线程反而要把队列排空时机
-    # 也钉进断言里。os.replace 替身按 M-27/MT-11 口径只落进 src.danmaku_monitor 的命名空间。
+    # 三条锁都直接驱动 _append_sidecar_line（MID-25 起它既是生产实现也是给测试留的注入口），不经
+    # hub/写线程：轮转只在句柄 tell() 越阈值时发生，用真线程反而要把队列排空时机也钉进断言。
+    # os.replace 替身按 M-27/MT-11 口径只落进 src.danmaku_monitor 的命名空间。
     @staticmethod
     def _close_all(files: dict[str, Any]) -> None:
         for fh in files.values():
@@ -266,7 +263,7 @@ class TestSidecarRotateBackoff:
     ) -> None:
         # L-18：`.1` 被占用 / 跨卷时 os.replace 必失败，旧实现在 except OSError 里 pass 且不留任何
         # 记忆，而失败后重开的句柄 tell() 依旧 >= _ROTATE_BYTES，于是此后**每一条**事件都会重走
-        # close → replace → open（80 房间 × 10 条/秒的采样上限下即每秒数百次注定失败的磁盘操作）。
+        # close → replace → open（80 房间 × 10 条/秒下即每秒数百次注定失败的磁盘操作）。
         # 现按路径记一个退避窗口：期内跳过轮转、**照常追加**，并留一条 warning。
         path = str(tmp_path / "dm.jsonl")
         monkeypatch.setattr(dm, "_ROTATE_BYTES", 8)
@@ -275,9 +272,8 @@ class TestSidecarRotateBackoff:
 
         def _boom(src: str, dst: str) -> None:
             # 只对**本用例自己那只文件**制造失败：`dm.os` 是进程唯一的模块命名空间，其它用例的边车
-            # 写线程会在本用例的 monkeypatch 窗口内走进同一支替身（2026-10-18 全量 pytest 实测：
-            # 别家 tmp_path 的 dm.jsonl 混进 attempts，断言由 1 变 5；反向还会把别人的轮转打坏）。
-            # 其余调用一律透传真实 os.replace，与本文件 MT-11 的 shim 口径同构。
+            # 写线程会在本窗口内走进同一支替身（2026-10-18 全量 pytest 实测：别家 tmp_path 的 dm.jsonl
+            # 混进 attempts，断言由 1 变 5；反向还会把别人的轮转打坏）。其余调用透传真实实现。
             if src != path:
                 real_replace(src, dst)
                 return
@@ -322,9 +318,8 @@ class TestSidecarRotateBackoff:
         try:
             for i in range(4):
                 dm._append_sidecar_line(files, path, f"line-{i}")
-            # 断言用「>=2」而不是精确次数：越过阈值的具体那一轮取决于 TextIOWrapper.tell() 的
-            # cookie 形态，写死会把用例变成字节算术锁；这里要钉的只是「过期后确实会再试」——
-            # 实现若被改成一次性永久标记，attempts 会停在 1。
+            # 断言用「>=2」而非精确次数：越过阈值的具体那一轮取决于 TextIOWrapper.tell() 的 cookie
+            # 形态，写死会把用例变成字节算术锁；这里只钉「过期后确实会再试」。
             assert len(attempts) >= 2, f"退避到期后未重试轮转: {attempts}"
             warns = [m for m in captured if "rotate" in m and "处理失败" in m]
             assert len(warns) == len(attempts), "每次重试失败都应留下一条 warning"
@@ -376,18 +371,16 @@ class TestSidecarRotateBackoff:
 
 
 class _BoomStopEvent(threading.Event):
-    # 注入「stats 线程在 while 条件处异常退出」这一形态。
-    # 继承 threading.Event 而不是拿裸对象顶替，是为了让 hub._stats_stop 的声明类型仍成立
-    # （本仓 mypy 连 tests/ 一起查）。
+    # 注入「stats 线程在 while 条件处异常退出」这一形态。继承 threading.Event 而非拿裸对象顶替，
+    # 是为了让 hub._stats_stop 的声明类型仍成立（本仓 mypy 连 tests/ 一起查）。
     def wait(self, timeout: float | None = None) -> bool:
         raise RuntimeError("模拟 stats 线程异常退出")
 
 
 class TestStatsThreadLifecycle:
     def test_room_message_also_starts_stats_thread(self, tmp_path: Path) -> None:
-        # 未经 room_started 隐式注册的房间（room_message 里 get→setdefault 那条分支）也得
-        # 把周期统计线程拉起来：修复前唯一调用点在 room_started，这类房间的
-        # msg_rate/online 永不刷新，而且没有任何线索。
+        # 未经 room_started 隐式注册的房间（room_message 里 get→setdefault 那条分支）也得把周期
+        # 统计线程拉起来：修复前唯一调用点在 room_started，这类房间的 msg_rate/online 永不刷新。
         hub = DanmakuMonitorHub(log_path=str(tmp_path / "dm.jsonl"))
         try:
             assert hub._stats_thread is None
@@ -529,9 +522,9 @@ def _srt_block_numbers(content: str) -> list[int]:
 
 class TestSrtTerminalState:
     def test_write_after_close_never_reopens_or_rewinds_block_numbers(self, tmp_path: Path) -> None:
-        # close() 之后再喂一条「已远超重试间隔」的消息：修复前会走 WD-03 的节流重开分支
-        # （write → _open_segment），以追加模式重开同一个 .srt 并把 _index 归 0，
-        # 块号于是变成 1,2,1 —— 直接违反 MIN-24① 确立的「块号单调不回卷」。
+        # close() 之后再喂一条「已远超重试间隔」的消息：修复前会走 WD-03 的节流重开分支（write →
+        # _open_segment），以追加模式重开同一个 .srt 并把 _index 归 0，块号于是变成 1,2,1——
+        # 直接违反 MIN-24① 确立的「块号单调不回卷」。
         base = str(tmp_path / "live")
         writer = SrtWriter(base_filename=base, segment_seconds=None)
         writer.start(now=0.0)
@@ -552,10 +545,10 @@ class TestSrtTerminalState:
         assert path.read_text(encoding="utf-8") == content_before, "close() 之后文件被追加过"
 
     def test_segment_switch_after_close_does_not_create_new_segment_file(self, tmp_path: Path) -> None:
-        # 终态位放在唯一的开句柄入口 _open_segment()：分片切换这条路径同样不得重开——
-        # 录制已收尾（close 已调用）后才迟到的弹幕，若把 seg 片文件新建出来，就会在
-        # 已封盘的分片序列尾部多出一个「视频不存在、字幕块号从 1 开始」的孤儿 .srt。
-        # 修复前该形态必然出现：write 里 seg 变化 → _close_locked() + _open_segment(seg)。
+        # 终态位放在唯一的开句柄入口 _open_segment()：分片切换同样不得重开——录制已收尾后才迟到
+        # 的弹幕若把 seg 片新建出来，就会在已封盘的分片序列尾部多出一个「视频不存在、块号从 1
+        # 开始」的孤儿 .srt。修复前该形态必然出现：write 里 seg 变化 → _close_locked() +
+        # _open_segment(seg)。
         base = str(tmp_path / "late")
         writer = SrtWriter(base_filename=base, segment_seconds=1.0)
         writer.start(now=0.0)
@@ -569,9 +562,9 @@ class TestSrtTerminalState:
         assert _srt_block_numbers((tmp_path / "late_000.srt").read_text(encoding="utf-8")) == [1]
 
     def test_close_before_start_does_not_create_file(self, tmp_path: Path) -> None:
-        # 专测 _open_segment() 那一层守卫（write() 的早返回挡不到它）：采集器
-        # 「stop 先于 start 落地」的极端时序下，start() 会直接走 _open_segment(0)。
-        # 修复前它会以追加模式创建 {base}.srt —— 录制已经收尾却凭空多出一个空字幕文件。
+        # 专测 _open_segment() 那一层守卫（write() 的早返回挡不到它）：采集器「stop 先于 start
+        # 落地」的极端时序下，start() 会直接走 _open_segment(0)。修复前它会以追加模式创建
+        # {base}.srt —— 录制已经收尾却凭空多出一个空字幕文件。
         base = str(tmp_path / "never")
         writer = SrtWriter(base_filename=base, segment_seconds=None)
         writer.close()
@@ -659,9 +652,9 @@ def test_cleanup_wait_budget_scales_with_group_serial_depth(monkeypatch: pytest.
 
 
 def test_slow_terminate_is_not_reported_as_unable_to_kill(monkeypatch: pytest.MonkeyPatch) -> None:
-    # 「慢终止」样本：三级终止确实在跑（10s 后成功）。第一轮总预算被收窄到 1s，
-    # 此时注册表复核若另用 poll() 作判据，就会把「正在终止」谎报成「未能终止」；
-    # 而 worker 稍后真的把进程终止了也没人来注销 → 死对象永久留在注册表里。
+    # 「慢终止」样本：三级终止确实在跑（10s 后成功）。第一轮总预算收窄到 1s，此时注册表复核
+    # 若另用 poll() 作判据，就会把「正在终止」谎报成「未能终止」；而 worker 稍后真把进程终止了
+    # 也没人注销 → 死对象永久留在注册表。
     slow = _FakeProcOnly()
 
     def _slow_terminate(proc: Any, timeout: int = 30) -> bool:
@@ -699,10 +692,9 @@ def test_slow_terminate_is_not_reported_as_unable_to_kill(monkeypatch: pytest.Mo
 
 
 def test_unconfirmed_entry_is_never_dropped_by_the_second_fact(monkeypatch: pytest.MonkeyPatch) -> None:
-    # 注册表复核与「未确认」告警必须读同一处事实的反证：worker 还卡在三级终止里
-    # （事件未置位），而进程此刻自己退出了（poll() 已非 None）。
-    # 旧写法在这里会把条目静默移出注册表，同时却又宣告「未在总预算内确认、已放弃等待」——
-    # 同一轮清理留下两条互相矛盾的事实，用户无从判断该不该手动去杀。
+    # 注册表复核与「未确认」告警必须读同一处事实的反证：worker 还卡在三级终止里（事件未置位），
+    # 而进程此刻自己退出了（poll() 已非 None）。旧写法会在这里把条目静默移出注册表，同时却又
+    # 宣告「未在总预算内确认、已放弃等待」——同一轮留下两条互相矛盾的事实。
     self_exited = _SelfExitingProc()
 
     def _wedged(proc: Any, timeout: int = 30) -> bool:
@@ -751,9 +743,8 @@ def test_confirmed_surviving_process_is_reported_as_failed(monkeypatch: pytest.M
 
 
 def test_registry_recheck_reads_the_same_fact_as_the_warning() -> None:
-    # 结构锁：注册表复核处不得再出现 poll() 这第二套事实
-    # （「未确认」告警读 event、复核读 poll() 正是 MIN-2236② 的根因形态）。
-    # 只看有效代码行：本轮修复的注释里必然要提到旧写法，按整段文本判定会自打。
+    # 结构锁：注册表复核处不得再出现 poll() 这第二套事实（「未确认」告警读 event、复核读 poll()
+    # 正是 MIN-2236② 的根因形态）。只看有效代码行：本轮修复的注释里必然要提到旧写法。
     source = (Path(__file__).resolve().parents[1] / "src" / "ffmpeg_proc.py").read_text(encoding="utf-8")
     tail = source[source.rindex("with _processes_lock:") :]
     code = "\n".join(ln.split("#", 1)[0] for ln in tail.splitlines())

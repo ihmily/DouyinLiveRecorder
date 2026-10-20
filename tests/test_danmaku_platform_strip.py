@@ -1,15 +1,15 @@
-# M-12 回归锁（2026-09-29 审查）：main.py 的「弹幕录制平台(逗号分隔)」解析必须逐项 strip 并丢弃空项。
+# M-12 回归锁（2026-09-29 审查）：main.py 的「弹幕录制平台(逗号分隔)」解析必须逐项 strip
+# 并丢弃空项。
 #
 # 被测生产实现：main.py::main() 每轮配置重读里的
-#   danmaku_platforms = [p.strip() for p in danmaku_platforms_str.replace("，", ",").split(",") if p.strip()] ...
+#   danmaku_platforms = [p.strip() for p in ...split(",") if p.strip()]
 # 匹配点：main.py 的 `platform in danmaku_platforms`（_danmaku_active 分支，弹幕采集接线）。
 #
-# 为什么不在这里 import main 驱动：该读取点内联在录制主循环的 try 块里、没有可注入的函数边界，
-# 为一条配置读取去重构 main() 会把整条录制链/线程模型牵进来（AGENTS「录制链与房间线程主循环」），
-# 且 `import main` 在导入期会切整个进程的控制台码页。故沿用本仓既有手法：按 AST 取出 main.py 里
-# **那一条生产赋值语句原文**、编译执行（同族做法见 tests/test_regression_2026_09_22_main.py::
-# TestFlvConvertBeforeCommentEnd）。执行的是生产源码而非测试自写的等价逻辑——把生产那行的
-# .strip() 删掉，本文件立即变红（已实跑变异验证）。
+# 为什么不 import main 驱动：该读取点内联在录制主循环的 try 块里、没有可注入的函数边界，为一条
+# 配置读取重构 main() 会牵进整条录制链/线程模型，且 `import main` 在导入期会切整个进程的控制台码页。
+# 故沿用本仓既有手法：按 AST 取出 main.py 里**那一条生产赋值语句原文**编译执行（同族做法见
+# tests/test_regression_2026_09_22_main.py::TestFlvConvertBeforeCommentEnd）。执行的是生产源码而非
+# 测试自写的等价逻辑——把生产那行的 .strip() 删掉，本文件立即变红（已实跑变异验证）。
 
 import ast
 import configparser
@@ -97,7 +97,7 @@ class TestProductionExpressionStrips:
         assert _parse(default) == default.split(",")
 
     def test_shipped_config_ini_value_parses_cleanly(self) -> None:
-        # 真机输入：仓库随附的 config/config.ini 里那一行实际值（用户面板/GUI 就是往这里写）。
+        # 真机输入：仓库随附的 config/config.ini 里那一行的实际值（面板/GUI 就是往这里写）。
         # 读法与 CI 配置键审计同口径（utf-8-sig 剥 BOM、键名先归一小写）。
         parser = configparser.ConfigParser()
         parser.read(str(CONFIG_FILE), encoding="utf-8-sig")
@@ -105,7 +105,7 @@ class TestProductionExpressionStrips:
         assert raw, f"{CONFIG_FILE.name} 里缺少「弹幕录制平台(逗号分隔)」键，本锁的观察点失效"
         parsed = _parse(raw)
         assert parsed and all(item == item.strip() and item for item in parsed), parsed
-        # 基线模板应覆盖五个可采集弹幕的平台（数量随模板演进，这里只锁「解析非空且无空白项」）。
+        # 基线模板应覆盖多个可采集弹幕的平台（数量随模板演进，这里只锁「解析非空且无空白项」）。
         assert len(parsed) == len(raw.replace("，", ",").split(",")), f"解析丢项/多出空项: {raw!r} -> {parsed}"
 
     def test_no_item_keeps_surrounding_whitespace(self) -> None:

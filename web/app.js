@@ -1,27 +1,20 @@
 // DouyinLiveRecorder Web 管理面板前端逻辑：把 UI 绑定到 src/web_api.py 暴露的 REST API，
-// 覆盖仪表盘（状态轮询/日志）、弹幕监控（增量游标轮询）、直播间、配置、文件五块。
+// 覆盖仪表盘（状态/日志轮询）、弹幕监控（增量游标轮询）、直播间、配置、文件五块。
 //
-// 【整体架构】整个前端包在一个 IIFE 里（见下方 (function(){...})()），状态与函数都封闭在私有
-// 作用域，仅把 window.toggleRoom / window.deleteRoom / window.loadFiles / window.downloadFile
-// 暴露给内联与事件委托调用——既避免污染全局，也避免每次重渲染表格时重新解析内联 onclick
-// （表格行由 innerHTML 拼接，已改用 rooms-tbody 上的事件委托）。
-// 状态组织：一组模块级闭包变量（sseWanted/sseStopped/sseSource 仪表盘轮询、dm* 弹幕轮询与缓冲、
-// configBackup 配置快照供 diff、toastTimer 提示定时器），不引入框架或状态机。
-// [M-21 2026-09-29 补充] 上一行的 sseSource / dmTimer / logTimer 三个裸 timer 变量已被三个
-// makePollChain() 控制器（sseChain/dmChain/logsChain）取代：单变量只能记住「已排期」的那一个
-// 定时器，记不住在途请求，导致「停止→立即重启」会漏出一条无人回收的轮询链。见 10b 节。
-// 与后端交互：统一经 api() 包装 fetch——自动带 Bearer Token、JSON 序列化、401 跳登录、按
-// content-type 决定返回 JSON 还是纯文本；二进制下载刻意绕过 api()（它返回 text，会破坏 blob），
-// 直接 fetch + blob。轮询全部用 setTimeout 递归（非真 SSE/WebSocket），每轮结束后若未被停止才排
-// 下一轮；切视图/离屏经 stop* 清定时器，避免多视图同时轮询造成请求堆积。
-// [M-21 2026-09-29 补充] 「清定时器」清不掉**在途**请求，所以三条链的续期一律经 makePollChain()
-// 比对代次：被 stop*/start* 取代的旧轮次落地后既不续期、也不写回任何链状态。
-// 安全要点：所有动态文本（房间名、弹幕、文件名、配置值、日志）渲染前一律经 esc() 转义；敏感段的
-// 输入框用 password 类型。掩码凭据的三条防线（MID-37）以 saveConfig 的头注释为唯一事实源，其中
-// 「原样看到 '***' 即跳过提交」是**写入侧唯一防线**，删掉它掩码就会被回写、覆盖后端真实凭据。
-// [2026-09-29 补充] 上句「一律经 esc()」此前有漏网：弹幕折叠计数 m.dropped 是裸插值（M-23，已修）。
-// 「敏感段的输入框用 password 类型」此前也有一处例外：认证复验口令走 window.prompt 明文采集
-// （M-22，已改为 #reauth-modal 的 type="password" 输入框，且口令只随认证两键的 PUT 下发）。
+// 【结构】整体包在 IIFE 内，状态与函数封闭在私有作用域，只把 window.toggleRoom / deleteRoom /
+// loadFiles / downloadFile 暴露给内联调用与事件委托（表格行由 innerHTML 拼接，一律走委托，
+// 不在重渲染时重新解析内联 onclick）。状态是一组模块级闭包变量（sse*/dm* 轮询、configBackup
+// 配置快照供 diff、toastTimer），不引入框架或状态机。
+//
+// 【与后端交互】统一经 api()：自动带 Bearer Token、JSON 序列化、401 跳登录、按 content-type
+// 返回 JSON 或纯文本；二进制下载绕过 api()（它返回 text 会破坏 blob）直接 fetch + blob。
+// 轮询全部是 setTimeout 递归（非真 SSE/WebSocket），每轮结束且未被停止才续期；切视图/离屏经
+// stop* 停掉，避免多视图并发请求。「停止→立即重启」清不掉在途请求，故三条链的续期与落地一律
+// 经 makePollChain() 比对代次（见 10b）：被取代的旧轮次既不续期、也不写回任何链状态。
+//
+// 【安全不变量】① 所有动态文本（房间名、弹幕、文件名、配置值、日志）进 innerHTML 前一律经 esc()；
+// ② 敏感段输入框用 password 类型；③ 掩码凭据三条防线以 saveConfig 头注释为唯一事实源，其中
+// 「原样看到 *** 即跳过提交」是**写入侧唯一防线**，删掉它掩码就会被回写、覆盖后端真实凭据。
 (function () {
     'use strict';
 
@@ -42,11 +35,10 @@
         return null;
     }
 
-    // MID-2238（2026-09-22）：主题与语言的持久化原先是**裸** localStorage 访问——MI-27 已在本文件
-    // 写下上方那条「storage 访问会抛异常」的结论，却只为 token 建了兜底。而 initTheme() 是
-    // DOMContentLoaded 回调的第一条语句，它一抛异常，后面的 initLanguage、五个 tab 绑定、登录/登出
-    // 按钮、事件委托、启动引导监听器一个都不注册：面板退化成静态页且无任何报错。
-    // 故 theme/lang 一律走下面这对安全存取口，两个 init 内部各自 try/catch，前一个失败不带走后续绑定。
+    // MID-2238：initTheme() 是 DOMContentLoaded 回调的第一条语句，裸 storage 访问一旦抛异常，
+    // 后面的 initLanguage、tab 绑定、登录/登出、事件委托、启动引导一个都不注册——面板退化成静态页
+    // 且无任何报错。故 theme/lang 一律走这对安全存取口，两个 init 内部各自 try/catch，前一个失败
+    // 不带走后续绑定。
     function safeGetItem(key) {
         try {
             var store = _tokenStore();
@@ -63,7 +55,7 @@
         } catch (e) { /* 写入被拒（配额/隐私模式）：偏好本次生效、不持久化即可 */ }
     }
 
-    // 敏感项走「节白名单 + 键名正则」双重口径（与后端 web_config.is_sensitive_key /
+    // 敏感项判定走「节白名单 + 键名正则」双重口径（与后端 web_config.is_sensitive_key /
     // _SENSITIVE_KEY_PATTERN 同步，新增配置键时须确认它是否落入正则）：仅靠节名会漏掉「推送配置」节内的
     // tgapi令牌/发件人密码(授权码)/pushplus推送token，以及各平台节内的 popkontv_token 等独立凭据
     // ——它们在 DOM 里会被渲染成明文 text 输入框。
@@ -89,48 +81,41 @@
     }
 
     function isSensitiveField(section, key) {
-        // MIN-2237（2026-09-22）：判定顺序必须与后端 is_sensitive_item 逐字对齐——后端的例外表
-        // 只在键名分支内部生效，即「敏感节」优先级高于例外。原前端把例外表提到最前短路，于是
-        // [Cookie] 抖音cookie有效期 这类「敏感节 + 含有效期」的键后端脱敏、前端判非敏感并渲染成
-        // 明文 text 输入框（值虽仍是掩码，但用户会误读成「这项没被保护」）。
+        // MIN-2237：判定顺序必须与后端 is_sensitive_item 逐字对齐——后端的例外表只在键名分支内部
+        // 生效，即「敏感节」优先于例外。反例：[Cookie] 抖音cookie有效期 这类「敏感节 + 含有效期」的键
+        // 后端脱敏、前端若先短路例外则渲染成明文 text 框（值仍是掩码，但用户会误读成「这项没被保护」）。
         if (SENSITIVE_SECTIONS[section]) return true;
         if (NOT_SECRET_KEY_RE.test(key)) return false;
         return SENSITIVE_KEY_RE.test(key);
     }
 
-    // M-21（2026-09-29）：裸变量 sseSource 由 sseChain 取代——一个 timer id 记不住两条链，
-    // 「停止→立即重启」时在途请求落地会把自己那一条重新排期并顶掉这里的 id，旧链从此失联。
-    // 控制器定义与选型理由见下方 10b 的 makePollChain()（函数声明提升，故状态区可先实例化）。
+    // M-21：裸 timer 变量由 sseChain 取代——一个 id 记不住两条链，「停止→立即重启」时在途请求落地
+    // 会把自己那一条重新排期并顶掉这里的 id，旧链从此失联（控制器见 10b）。
     var sseChain = makePollChain();
     var sseStopped = true;
-    // SEV-2227：把「想要轮询」与「轮询已停」拆成两个状态（本文件该拆分的唯一完整说明，其余
-    // 各处只引用不重述）。原实现只有一个 sseStopped：隐藏时 stopSSE() 把它置 true，回到前台却判断
-    // 「sseStopped 为假则启」——该判断在隐藏之后**恒假**，轮询永不恢复：用户切走一次标签页再切回来，
-    // 监控数/错误数/磁盘/录制列表全部冻结在切走前那一帧，连「引擎已停止」这类假绿/假红结论都再无数据可刷新。
-    // 现在 sseWanted 表达用户意图（进仪表盘即 true），sseStopped 只表达「当前有没有在飞的定时器」，
-    // 恢复条件为 sseWanted && sseStopped。
+    // SEV-2227：把「想要轮询」与「轮询已停」拆成两个状态（本文件唯一完整说明，其余各处只引用）。
+    // sseWanted 表达用户意图（进仪表盘即 true），sseStopped 只表达「当前有没有在飞的定时器」，
+    // 恢复条件为 sseWanted && sseStopped。原实现只有一个 sseStopped：隐藏时置 true、恢复分支却判断
+    // 「为假则启」，切走一次标签页后轮询永不恢复，面板数据冻结在切走前那一帧。
     var sseWanted = false;
     var configBackup = null;
     var toastTimer = null;
 
-    // 弹幕监控状态：dmTimer/dmStopped 控制轮询；dmLastSeq 为增量游标；
-    // dmMessages 为前端保留的近期消息（最多 300 条），切筛选时全量重绘。
-    // [M-21 2026-09-29] dmTimer 已由 dmChain 承载（同上，控制器定义见 10b），dmStopped 语义不变。
+    // 弹幕监控状态：dmChain/dmStopped 控制轮询，dmLastSeq 为增量游标，dmMessages 为前端保留的近期
+    // 消息（最多 DM_MAX_MESSAGES 条），切筛选时全量重绘。
     var dmChain = makePollChain();
     var dmStopped = true;
     var dmLastSeq = 0;
     var dmMessages = [];
     var DM_MAX_MESSAGES = 300;
-    // M-19（2026-10-18）：上一次写进 #danmaku-room-filter 的 option 集合原文（null = 尚未写过）。
-    // 用途见 renderDanmaku 的筛选下拉段——只有它变化才重建 innerHTML。
+    // M-19：上一次写进 #danmaku-room-filter 的 option 集合原文（null = 尚未写过）。
+    // 只有它变化才重建 innerHTML（判据见 renderDanmaku 的筛选下拉段）。
     var dmRoomFilterOpts = null;
 
-    // M-18（2026-10-18）：三条**按需**加载链（loadRooms / loadConfig / loadFiles）的代次载体。
-    // 复用 10b 的 makePollChain() 而不是另发明第二套「自增序号」——它要的判据完全相同
-    // （「落地时证明自己仍是最新一代，否则丢弃」），差别只在**用法子集**：这三条是一次性拉取，
-    // 没有节拍，所以既不调 begin() 也不调 renew()（那两个是 setTimeout 排期专用，链内 timer 恒为
-    // null、halt() 里的 clearTimeout 分支走不到），只用 halt() 顶代次 + isCurrent() 复核。
-    // 因此不需要为「不是轮询链」而新写一份实现；若将来某条改成周期轮询，同一实例直接补 begin 即可。
+    // M-18：三条**按需**加载链（loadRooms / loadConfig / loadFiles）的代次载体。复用 makePollChain()
+    // 的同一判据（落地时证明自己仍是最新一代，否则丢弃），但只用 halt() 顶代次 + isCurrent() 复核：
+    // 一次性拉取没有节拍，故既不调 begin() 也不调 renew()（链内 timer 恒为 null）。将来某条改成周期
+    // 轮询，同一实例补 begin 即可。
     var roomsChain = makePollChain();
     var configChain = makePollChain();
     var filesChain = makePollChain();
@@ -140,17 +125,16 @@
     var qualityOptions = [];
     var qualityBuiltin = [];
 
-    // ===== API 接口契约速查（路径/方法/关键参数/返回/前后端处理）=====
+    // ===== API 接口契约速查（路径/方法/关键参数/返回）=====
     // 所有请求经 api() 自动带 Bearer Token；401 统一清 Token 并跳登录；非 2xx 抛错由调用方 catch。
     // GET  /api/status → 仪表盘快照 {engine_alive, recording_enabled, monitoring, recording_count,
     //      error_count, recent_errors, disk_free_gb, recording:[{name,quality,actual_quality,start_time,duration}]}
-    //      可选 stale:true（超时回退的陈旧快照）；error:"status_unavailable" 表示采样失败（HTTP 仍为 200，
-    //      不得当成功渲染）。[2026-09-23] 契约里已无 main_loop_alive：它读的 main.main_loop_ticks 从未在
-    //      main.py 定义、该键永不下发；判据与撤下过程见 src/web_api.py::_read_engine_status
+    //      可能带 stale:true（超时回退的陈旧快照）；error:"status_unavailable" 表示采样失败（HTTP 仍为
+    //      200，不得当成功渲染）。[历史注] 契约里没有 main_loop_alive，该键从未在 main.py 定义、永不下发。
     // POST /api/recording/toggle body{enable:bool} → 切换引擎录制开关，成功即回拉 /api/status 同步按钮
     // GET  /api/logs?lines=100 → {lines:[...]} 纯文本日志行，拼到 #log-stream
-    // GET  /api/danmaku?since=<seq> → {rooms:[...], messages:[...], last_seq, truncated}；增量游标：首次
-    //      since=0，之后用返回 last_seq 续拉避免重复。error:"danmaku_unavailable" = 本次采样失败（仍是 200），
+    // GET  /api/danmaku?since=<seq> → {rooms:[...], messages:[...], last_seq, truncated}；首次 since=0，
+    //      之后用返回 last_seq 续拉避免重复。error:"danmaku_unavailable" = 本次采样失败（仍是 200），
     //      renderDanmaku 保留上一轮表与缓冲、只提示取不到
     // GET/PUT /api/language → {language}；PUT body{language} 热切换（后端控制台/日志同步翻译）
     // POST /api/login body{password} → {token}；失败抛错显示到 #login-error
@@ -163,9 +147,9 @@
     // GET  /api/files?path= → [{name,type,path,size?,mtime?}]；下载绕过 api() 直接 blob 流
     function $(id) { return document.getElementById(id); }
 
-    // 1. Token helpers —— MI-27：一律经 _tokenStore() 存取。语义变化：token 由 localStorage 移到
-    // sessionStorage，正常浏览器下关闭标签页即失效，配合 /api/logout 吊销服务端 bearer 收窄泄露窗口；
-    // 仅 sessionStorage 不可用时才回退 localStorage（隐私模式的让步，此时「关标签页即失效」并不成立）。
+    // 1. Token helpers —— MI-27：一律经 _tokenStore() 存取。token 由 localStorage 移到 sessionStorage，
+    // 正常浏览器下关闭标签页即失效，配合 /api/logout 吊销服务端 bearer 收窄泄露窗口；仅 sessionStorage
+    // 不可用时才回退 localStorage（隐私模式的让步，此时「关标签页即失效」并不成立）。
     function getToken() {
         var st = _tokenStore();
         return st ? (st.getItem(TOKEN_KEY) || '') : '';
@@ -181,16 +165,12 @@
     }
 
     // 2. api fetch wrapper
-    // WD-10：加请求超时。原实现未传 signal 也无 Promise.race，服务端若在
-    // main.get_status() 里卡住（它要与录制主循环抢 record_state_lock），前端 await fetch
-    // 会无限期 pending；而下一轮 setTimeout 排在 .then() 之后，于是轮询链**就此停止**，
-    // 界面停在最后一次数据、且 .catch 把错误吞掉——运维最不该失真的时刻反而静默失准。
-    // 2b. 后端错误体解析（MID-39）：非 2xx 的响应体通常是 FastAPI 的 {"detail": "..."}，
-    // 旧实现 `throw new Error(text)` 把整段原始响应体当消息抛出，于是 toast 上出现的是
-    // `{"detail":"..."}` 甚至 422 的 pydantic 嵌套结构与 Windows 绝对路径（认证关闭时对局域网可见）。
-    // 现只取 detail 字符串作为用户可见消息；识别不出结构时回退本地化的通用文案（**不回显原文**，
-    // 纯文本/HTML 错误页同样可能带路径与栈）。诊断线索不丢：状态码与原始响应体挂在 err.status /
-    // err.rawBody 上并写一条 console.warn，排障时看控制台即可拿到全文。
+    // WD-10：必须加超时。服务端若在 main.get_status() 里卡住（要与录制主循环抢 record_state_lock），
+    // 无 signal 的 await fetch 会无限期 pending，而下一轮 setTimeout 排在 .then() 之后——轮询链就此
+    // 停止，界面停在最后一帧且错误被 .catch 吞掉。超时与网络失败统一抛可识别错误，由调用方退避。
+    // 2b. 后端错误体解析（MID-39）：非 2xx 的响应体通常是 FastAPI 的 {"detail": "..."}，只取 detail 作为
+    // 用户可见消息；识别不出结构时回退本地化的通用文案，**不回显原文**（纯文本/HTML 错误页同样可能带
+    // 路径与栈）。诊断线索不丢：状态码与原始响应体挂在 err.status / err.rawBody 上并写一条 console.warn。
     function apiError(status, text, path, fallback) {
         var detail = '';
         try {
@@ -289,9 +269,9 @@
         return d.toLocaleString('zh-CN', { hour12: false });
     }
 
-    // 6. esc HTML 转义：所有外部可控文本进 innerHTML 前必须过这里。五个替换里 & < > 防标签/实体注入，
-    // 两个引号防属性注入——本文件的表格行与配置行都是字符串拼接（value="…"、data-url="…"、title="…"），
-    // 漏转义引号即可从属性里逃出并挂上事件处理器。走 textContent 的位置不经它，但拼接路径一律不得裸插值。
+    // 6. esc HTML 转义：所有外部可控文本进 innerHTML 前必须过这里。& < > 防标签/实体注入，两个引号防
+    // 属性注入——表格行与配置行都是字符串拼接（value="…"、data-url="…"），漏转义引号即可从属性里
+    // 逃出并挂上事件处理器。走 textContent 的位置不经它，但拼接路径一律不得裸插值。
     function esc(s) {
         if (s == null) return '';
         return String(s)
@@ -303,21 +283,15 @@
     }
 
     // 6b. 前端 i18n：界面文案字典（语言集与后端 i18n.py 一致：zh_CN / en_US / en_GB / zh_TW）。
-    // 后端负责控制台/日志输出翻译（GET/PUT /api/language 即时热切换），前端负责静态界面文案：
+    // 后端负责控制台/日志输出翻译（GET/PUT /api/language 即时热切换），前端只负责静态界面文案：
     // data-i18n / data-i18n-placeholder / data-i18n-title 属性 + t() 动态拼接。
-    // 下面四套目录是**字符串数据**（等同代码），键与值都不可随手改：
-    //   ① 与后端四份目录（i18n/zh_CN.po、en_US.json、en_GB.json、zh_TW.yaml）构成「五处同改」的
-    //      文档化同步点——新增/修改一条翻译串须五处齐改，少一处面板就渲染出未翻译或空白文案；
-    //   ② 四套键集必须逐一相等、且须覆盖 index.html 的每个 data-i18n* 键与本文件每个 t() 字面量键
-    //      ——该不变量由 tests/frontend/test_quality_ui.mjs 的 MIN-10 段机检（它按字面量截取本文件的
-    //      I18N 声明求值，故声明行与四套键名不可重排或改名）。
-    //   [2026-09-29 实测补充，M-22 新增 common.cancel 时核对] ① 那句「五处齐改」对本面板的点分键
-    //   （config.save / common.cancel / danmaku.* 等）实际不成立：后端四份 gettext 目录按**中文源串**
-    //   作 msgid，只服务控制台/GUI/推送正文，面板键一条都不在里面（判据：grep -c 录制与推送配置
-    //   i18n/en_US.json i18n/zh_TW.yaml 均为 0，而内嵌目录里有该键）。故新增**仅面板可见**的文案时
-    //   同步范围是下面这四套内嵌目录；往 zh_CN.po/en_US.json 里塞面板键只会得到无人 import 的孤儿
-    //   msgid（compile_po.py --check 与 extract_i18n_strings.py 都不报，需人工回查）。
-    //   真正需要五处同改的是控制台/GUI/推送侧的中文源串（见 AGENTS.md「i18n 扫描盲区清单」）。
+    // 下面四套目录是**字符串数据**（等同代码），键与值都不可随手改：四套键集必须逐一相等，且覆盖
+    // index.html 的每个 data-i18n* 键与本文件每个 t() 字面量键——由 tests/frontend/test_quality_ui.mjs
+    // 的 MIN-10 段机检（它从声明处按大括号配平截取本字典再求值，故声明行与键名不可重排或改名）。
+    // 同步范围（实测）：面板点分键（config.save / common.cancel / danmaku.* 等）只进下面四套内嵌目录
+    // ——后端 i18n/ 下的 gettext 目录按**中文源串**作 msgid、只服务控制台/GUI/推送，往里塞面板键只会
+    // 得到无人 import 的孤儿 msgid（compile_po.py --check 与 extract_i18n_strings.py 都不报）。其余
+    // 用户可见文案仍「五处同改」（四份 i18n 目录 + 本文件），见 AGENTS.md 的 i18n 扫描盲区清单。
     var LANG_KEY = 'dlr_lang';
     var currentLang = 'zh_CN';
     var I18N = {
@@ -599,8 +573,7 @@
     }
 
     // 应用静态文案：data-i18n → textContent；data-i18n-placeholder → placeholder；
-    // data-i18n-title → title 悬浮提示（MIN-10：原本 index.html 的两处 title 是硬编码中文，
-    // 切到英文界面仍是中文；用独立属性而不是 data-i18n，避免把 #theme-toggle 的 🌙/☀️ 文本覆盖掉）。
+    // data-i18n-title → title 悬浮提示（用独立属性而非 data-i18n，避免覆写 #theme-toggle 的 🌙/☀️ 文本）。
     function applyTranslations() {
         var nodes = document.querySelectorAll('[data-i18n]');
         for (var i = 0; i < nodes.length; i++) {
@@ -643,11 +616,9 @@
         });
     }
 
-    // MID-2239（2026-09-22）：PUT /api/language 的响应契约（language/fallback/notice）此前整体未消费——
-    // 形参被丢掉、恒按**请求值**本地切换。后端刻意改为「先 set_language() 拿生效码、按生效码落盘、再把
-    // 三字段回给调用方」，并明写「前端据此更新，不得再按请求值回写」。典型失效：PyYAML 缺失使 zh_TW
-    // 装载不到 → 用户选繁體中文、后端实际生效并落盘 en_US，前端却仍把界面切成内嵌 zh_TW 并把偏好写成
-    // zh_TW，回退说明一次都不显示——正是 MID-52 要消灭的「面板与录制进程各说一种语言」。
+    // MID-2239：PUT /api/language 的响应（language/fallback/notice）必须被消费，并按**生效码**更新，
+    // 不得按请求值回写。典型失效：PyYAML 缺失使 zh_TW 装载不到 → 后端实际生效并落盘 en_US，前端却
+    // 切成内嵌 zh_TW 并把偏好写成 zh_TW、回退说明一次都不显示（即 MID-52 的「面板与进程各说一种语言」）。
     function setLanguage(target) {
         api('/api/language', { method: 'PUT', body: { language: target } }).then(function (res) {
             // 以**生效码**为准：后端回什么就切什么、就持久化什么
@@ -674,10 +645,10 @@
         }
     }
 
-    // 7b. 登出按钮显隐（MID-38）：#logout-btn 在 index.html 里带 class="hidden"（style.css 的 .hidden
-    // 为 display:none !important），而改动前全仓只有一处 addEventListener、**没有任何代码移除该 class**
-    // ——于是 WD-09 专门补的 POST /api/logout（泄露 token 的唯一吊销入口，token 默认有效 86400s）在
-    // 界面上根本点不到。登录成功 / 进入任意面板视图即显示，回到登录页即收起。
+    // 7b. 登出按钮显隐（MID-38）：#logout-btn 在 index.html 里带 class="hidden"（.hidden 为
+    // display:none !important），而原本没有任何代码移除该 class——WD-09 补的 POST /api/logout（泄露
+    // token 的唯一吊销入口，token 默认有效 86400s）在界面上根本点不到。登录成功/进入任意视图即显示，
+    // 回到登录页即收起。
     function setLogoutVisible(visible) {
         var btn = $('logout-btn');
         if (!btn) return;
@@ -691,10 +662,9 @@
     // 8. showView
     function showView(name) {
         stopDanmakuPolling();
-        // 切视图先停掉上一视图的轮询：原先只在最后的 else 分支调用 stopSSE，导致切到
-        // rooms/config/files/danmaku 后 /api/status 仍每 2s 轮询并渲染隐藏 DOM。统一的「先停后按需
-        // 启」与上方 stopDanmakuPolling 保持同一语义。MID-2240：日志轮询必须一并停掉——否则切到
-        // 配置/文件/弹幕视图后 /api/logs 仍在每 5s 读一次日志文件（纯浪费），且它不会被下面的分支重新判断。
+        // 切视图先停掉上一视图的轮询：原本只在最后的 else 分支停 SSE，切到 rooms/config/files/danmaku
+        // 后 /api/status 仍每 2s 轮询并渲染隐藏 DOM。MID-2240：日志轮询必须一并停——否则 /api/logs 仍在
+        // 每 5s 读一次日志文件（纯浪费），且它不会被下面的分支重新判断。
         stopSSE();
         stopLogsPolling();
         hideAllViews();
@@ -712,8 +682,8 @@
             }
         }
         if (name === 'rooms') {
-            // 先拉画质选项再渲染房间列表：行内画质下拉的选项来自 qualityOptions，
-            // 顺序颠倒会导致首屏下拉只有「默认画质」+ 当前值（选项未就绪）
+            // 先拉画质选项再渲染房间列表：行内画质下拉的选项来自 qualityOptions，顺序颠倒会让首屏
+            // 下拉只剩「默认画质」+ 当前值（选项未就绪）。
             loadQualityOptions().finally(loadRooms);
         } else if (name === 'config') {
             loadConfig();
@@ -723,8 +693,7 @@
             startDanmakuPolling();
         } else if (name === 'dashboard') {
             startSSE();
-            // MID-2240：日志只在切到仪表盘时拉一次，长期停在仪表盘上就永远看不到新日志
-            // （用户切走后日志不再刷新，回到仪表盘也只在那一刻拉一次）。交给轮询同步刷新。
+            // MID-2240：loadLogs 只在切到仪表盘时拉一次，长期停留就永远看不到新日志，故交给轮询续期。
             loadLogs();
             startLogsPolling();
         }
@@ -742,19 +711,17 @@
         stopLogsPolling();
     }
 
-    // 10. doLogin —— 调 POST /api/login，成功即经 setToken() 存好返回的 token 并进入仪表盘；失败（含 401）
-    // 在 #login-error 显示后端报错文案。密码仅此一次明文发送，之后一律用 Token。
-    // 注：MID-2238 后语言/主题偏好同样走 _tokenStore()，故正常浏览器下也落在 sessionStorage、**不再跨
-    // 浏览器重启持久化**——这是「隐私模式下不抛异常」换来的取舍，别把它当 localStorage 依赖。
+    // 10. doLogin —— POST /api/login，成功即 setToken() 存好返回的 token 并进入仪表盘；失败（含 401）
+    // 在 #login-error 显示后端文案。密码仅此一次明文发送，之后一律用 Token。MID-2238 后语言/主题偏好
+    // 同样落在 sessionStorage（「隐私模式下不抛异常」换来的取舍），故不再跨浏览器重启持久化。
     async function doLogin() {
         var pw = $('login-password').value;
         try {
             var data = await api('/api/login', { method: 'POST', body: { password: pw } });
             setToken(data.token || '');
             $('login-error').textContent = '';
-            // M-22 配套（轻微项 41 的同类形态）：登录成功后口令不再需要，却仍留在 #login-password 里
-            // ——视图只是被 .hidden 隐藏、value 一个字符都没少，DevTools/浏览器扩展/自动填充快照都拿得到。
-            // 失败分支刻意**不清**：口令输错时用户要改一两个字符重登，清空等于逼他重打。
+            // 登录成功后口令不再需要，随即清空：视图只是被 .hidden 隐藏、value 一个字符都没少，
+            // DevTools/扩展/自动填充快照都拿得到。失败分支刻意不清，方便改一两个字符重登。
             var pwEl = $('login-password');
             if (pwEl) pwEl.value = '';
             showView('dashboard');
@@ -763,26 +730,16 @@
         }
     }
 
-    // 10b. makePollChain —— M-21（2026-09-29）：三条轮询链唯一共用的一份「代次」实现。
-    // 失效形态：stop*/pause* 只能 clearTimeout 掉**已排期**的定时器，取消不了**在途**请求；而旧请求
-    // 落地后的续期回调只看一个布尔标志（sseStopped/logStopped/dmStopped）。「停止 → 立即重启」（快速
-    // 切标签页、切视图、或 visibilitychange 的隐藏/恢复紧邻发生）会把标志重新置回「在跑」，于是旧链在
-    // 自己的回调里再排一次 setTimeout，并把模块级 timer 变量顶掉——两条链只剩一条能被 stop* 回收，
-    // 另一条从此失联、按节拍持续发请求并渲染隐藏 DOM，直到下一次完整 stop 才自愈。状态接口超时上限
-    // API_TIMEOUT_MS=10s（api()），请求发出后有整整 10 秒的窗口能被这次重启「认领」，窗口真实存在。
-    // 机制：每次 halt/begin 都把代次 +1；每一轮 poll 带着自己那一代的代次回来，续期前必须证明
-    // 「我仍是当前这一代」（renew），否则自行消失；响应分支用 isCurrent 同样过滤，过期轮次既不渲染
-    // 也不改动链状态（退避计数、增量游标）。
-    // 取舍（文档给的另一个选项是重启时 AbortController.abort() 在途请求，此处不选，三条理由）：
-    //   ① api() 内部自建 AbortController、只把 signal 交给 fetch，外部拿不到句柄；要 abort 就得给 api()
-    //     增加可选取消参数并改全部调用点，还会牵动 401 跳登录 / 10s 超时 / 失败退避的既有语义，
-    //     侵入面与回归风险远大于本条要修的竞态。
-    //   ② 本条要的是「旧链不得再排期、不得再产生副作用」，代次已经足够；abort 只省掉被顶替那一轮的
-    //     响应体下载，换来的是接口契约变更。
-    //   ③ abort 后 fetch 抛 AbortError，会落进三条链各自的 catch：SSE 侧把「自己主动取消」记成一次
-    //     网络失败（sseFailCount++ → 触发 2→5→10→30s 退避并弹「状态数据获取失败」横幅），面板行为
-    //     反而比修复前更坏。
-    // 代价（知情接受）：被顶替的在途请求仍会把当轮响应下载完（最长 10s）再丢弃，本条不做真取消。
+    // 10b. makePollChain —— M-21：三条轮询链唯一共用的一份「代次」实现。
+    // 失效形态：stop*/pause* 只能 clearTimeout 掉**已排期**的定时器，取消不了**在途**请求；而旧请求落地
+    // 后的续期回调只看一个布尔标志，「停止→立即重启」把标志置回「在跑」后，旧链会再排一次 setTimeout
+    // 并顶掉模块级 timer——两条链只剩一条能被回收，另一条从此失联、按节拍继续发请求并渲染隐藏 DOM。
+    // 机制：每次 halt/begin 把代次 +1；每轮 poll 带着自己那一代的代次回来，续期前必须证明「我仍是当前
+    // 这一代」（renew），响应分支用 isCurrent 同样过滤——过期轮次既不渲染，也不改动链状态（退避计数、
+    // 增量游标）。
+    // 代价（知情接受）：被顶替的在途请求仍会把当轮响应下载完（最长 API_TIMEOUT_MS=10s）再丢弃。未选
+    // abort：api() 内部自建 AbortController、外部拿不到句柄；且 AbortError 会落进三条链各自的 catch，
+    // 把「主动取消」记成一次网络失败（触发退避并弹横幅），比修复前更坏。
     function makePollChain() {
         var timer = null;
         var gen = 0;
@@ -819,11 +776,9 @@
     }
 
     // 11. startSSE / stopSSE / pauseSSE（轮询实现，非真实 SSE）
-    // WD-10：失败退避 + 页面可见性感知。原实现固定 2 秒一发——服务端 500/断网时仍严格 2s 重试
-    // （叠加后端每请求读配置的开销），且无 visibilitychange 处理，后台标签页/最小化窗口持续发请求。
-    // 现为「正常 2s，连续失败按 2→5→10→30s 退避」，页面隐藏时停轮询、可见时立即拉一次。
-    // 三个入口的分工即上方 SEV-2227 的两态拆分：startSSE=想要轮询、stopSSE=不要轮询（连意图一起清）、
-    // pauseSSE=只清定时器并保留意图（仅供 visibilitychange 的隐藏侧使用，别在切视图时误用）。
+    // WD-10：失败退避 + 页面可见性感知。「正常 2s，连续失败按 2→5→10→30s 退避」，页面隐藏时停轮询、
+    // 可见时立即拉一次。三个入口的分工即上方 SEV-2227 的两态拆分：startSSE=想要轮询、stopSSE=不要
+    // 轮询（连意图一起清）、pauseSSE=只清定时器并保留意图（仅供 visibilitychange 隐藏侧，切视图别用）。
     var SSE_OK_INTERVAL = 2000;
     var SSE_BACKOFF_STEPS = [2000, 5000, 10000, 30000];
     var sseFailCount = 0;
@@ -892,9 +847,8 @@
         }
     }
 
-    // WD-10：把「已断开」显式呈现给用户，而不是让面板停在陈旧数据上。MID-2237：这里写的
-    // #danmaku-stream 只存在于弹幕视图里，后端不可达时仪表盘上没有任何提示（元素在 DOM 中但所属视图
-    // 隐藏），等于白写；但弹幕视图下它确实有效，故保留该写入，仪表盘侧由 showStatusWarning 独立承担。
+    // WD-10：把「已断开」显式呈现给用户，而不是让面板停在陈旧数据上。此处写的 #danmaku-stream 只
+    // 存在于弹幕视图内，仪表盘侧由 showStatusWarning 独立承担（MID-2237）。
     function markBackendUnreachable(flag) {
         var el = $('danmaku-stream');
         if (!el) return;
@@ -903,12 +857,11 @@
         }
     }
 
-    // SEV-2221 / SEV-2228：告警优先级即下面的判定顺序：先报「拿不到 / 不新鲜」，再报「引擎死」。存活
-    // 判定一律用 === false 而非真假值：字段缺失（后端未接线）视为健康，否则未接线的后端会把所有面板
-    // 刷成红色告警——修复自己变成假告警源。
+    // SEV-2221 / SEV-2228：告警优先级即下面的判定顺序——先报「拿不到 / 不新鲜」，再报「引擎死」。
+    // 存活判定一律用 === false 而非真假值：字段缺失（后端未接线）视为健康，否则未接线的后端会把所有
+    // 面板刷成红色告警——修复自己变成假告警源。
     // [历史注 2026-09-23] 此处曾有一条「已撤下的主循环探针键 === false」分支：它读的计数字段从未在
-    // main.py 定义、键永不下发 → 分支永不成立（判据与撤下过程见 src/web_api.py::_read_engine_status）；
-    // 「取证失败」改由下面两个真实信号承担：error（采样抛错）与 stale（超时回退）。
+    // main.py 定义、键永不下发，分支永不成立；「取证失败」改由两个真实信号承担：error 与 stale。
     function updateStatusWarning(s) {
         if (!s || s.error === 'status_unavailable') {
             showStatusWarning(t('dashboard.statusUnavailable'));
@@ -930,9 +883,9 @@
     // renderRecordingControl），放到任一调用方都会让另外两条入口的口径分叉。
     function renderStatus(s) {
         if (!s) s = {};
-        // SEV-2228：HTTP 200 也可能带 {"error":"status_unavailable"}——采样失败时后端不再回 5xx，为的是
-        // 让面板继续响应。旧实现不看 error，直接把监测数/录制数/磁盘画成「-」当作成功，用户看到的是
-        // 「一切正常但数字全是横杠」。这里统一裁决告警，并把陈旧值显式标注出来。
+        // SEV-2228：HTTP 200 也可能带 error:"status_unavailable"——采样失败时后端不再回 5xx，为的是
+        // 让面板继续响应。旧实现不看 error，把监测数/录制数/磁盘画成「-」当作成功，用户看到的是「一切
+        // 正常但数字全是横杠」。这里统一裁决告警，并把陈旧值显式标注出来。
         updateStatusWarning(s);
         renderRecordingControl(s);
         var warnEl = $('engine-warning');
@@ -954,8 +907,8 @@
         var tbody = $('recording-tbody');
         var rec = unavailable ? [] : (s.recording || []);
         if (!rec.length) {
-            // 失败/陈旧时用「取证失败」而非「暂无录制」——后者会让用户以为录制真的空了。
-            // 明文经 esc() 后再拼（与上方既有写法同型），文案全部来自本地四语目录。
+            // 失败/陈旧时用「取证失败」而非「暂无录制」——后者会让用户以为录制真的空了。文案来自本地
+            // 四语目录、经 esc() 后再拼（与上方同型）。
             var emptyText = esc(unavailable ? t('dashboard.statusUnavailable') : t('empty.noRecording'));
             tbody.innerHTML = '<tr><td colspan="5" class="empty">' + emptyText + '</td></tr>';
             return;
@@ -981,17 +934,17 @@
     }
 
     // 12b. 录制控制条：按状态快照同步「开始/停止录制」按钮与状态标签。recording_enabled 为引擎级录制
-    // 开关（后端 get_status 暴露）：开启时禁用「开始」并启用「停止」，关闭时反之；引擎线程死亡时两按钮
-    // 均禁用（切换开关已无意义，页面顶部另有引擎告警横幅）。状态标签用三 span + hidden 切换
-    // （on/off/probe），文案交给 data-i18n 静态翻译（语言切换即时生效，无需等下一次轮询）。
+    // 开关：开启时禁用「开始」并启用「停止」，关闭时反之；引擎线程死亡时两按钮均禁用（切换已无意义，
+    // 页面顶部另有引擎告警横幅）。状态标签用三 span + hidden 切换（on/off/probe），文案交给 data-i18n
+    // 静态翻译（语言切换即时生效，无需等下一次轮询）。
     function renderRecordingControl(s) {
         var enabled = s.recording_enabled === true;
         // SEV-2228 后半：`engine_alive !== false` 只挡得住「后端明说引擎已死」。采样失败回的是 HTTP 200 +
-        // {"error":"status_unavailable"}、超时回退则是 stale:true，两种形态**都不带 engine_alive 键** →
-        // undefined !== false 判成「活着」，于是面板在完全不知道引擎死活的状态下仍放行开始/停止：点下去只会
-        // 在 POST /api/recording/toggle 上撞一个用户看不懂的错误，而「停止录制」这条兜底路径尤其不该在取证
-        // 失败时被当成可用。故 error/stale 一律按「未知」处理（两键禁用 + 标签切「取证失败」），与仪表盘
-        // 横幅同口径——renderStatus 已在报这条。
+        // error:status_unavailable、超时回退则是 stale:true，两种形态**都不带 engine_alive 键** →
+        // undefined !== false 判成「活着」，面板在完全不知道引擎死活时仍放行开始/停止：点下去只会在
+        // POST /api/recording/toggle 上撞一个用户看不懂的错误，而「停止录制」这条兜底路径尤其不该在取证
+        // 失败时被当成可用。故 error/stale 一律按「未知」处理（两键禁用 + 标签切「取证失败」），与
+        // 仪表盘横幅同口径。
         var unknown = s.error != null || s.stale === true;
         var engineAlive = s.engine_alive !== false && !unknown;
         // 状态标签容器是 class（index.html 的 span.recording-state），勿用 #id 选择器
@@ -1028,11 +981,9 @@
         } catch (e) { /* 忽略 */ }
     }
 
-    // 13. loadLogs —— GET /api/logs?lines=100，取最近 100 行纯文本日志拼到 #log-stream
-    // 并滚动到底部；错误被静默忽略（仪表盘轮询期间偶发失败不应闪烁界面）。
-    // M-21：isActive 由日志轮询链传入「本轮代次是否仍然有效」的判据，过期轮次直接丢弃、不写
-    // #log-stream（视图已切走时把上一视图的旧日志刷进隐藏面板没有意义）；直接调用（showView 首次
-    // 进仪表盘）不传该参数，按恒有效处理。
+    // 13. loadLogs —— GET /api/logs?lines=100，取最近 100 行纯文本日志拼到 #log-stream 并滚到底部。
+    // isActive 是日志轮询链传入的「本轮代次是否仍有效」判据：过期轮次直接丢弃、不写 #log-stream
+    // （视图已切走时把旧日志刷进隐藏面板没有意义）；showView 首次进仪表盘时不传，按恒有效处理。
     async function loadLogs(isActive) {
         var check = typeof isActive === 'function' ? isActive : null;
         try {
@@ -1048,10 +999,8 @@
     }
 
     // 13a. 仪表盘日志轮询（MID-2240）：loadLogs 原先只在切到仪表盘那一刻调一次，用户长时间停留时
-    // #log-stream 永远是打开页面时那 100 行，「实时日志」名不副实，排查「录制为什么没起来」时看到的是
-    // 几十分钟前的旧内容。节拍取 5s：日志面板本身不是秒级指标，而 /api/logs 是读文件、比 /api/status
-    // 更重，没必要跟状态轮询（2s）同频。可见性感知与弹幕轮询同型：页面隐藏即停。
-    // [M-21 2026-09-29] logTimer 裸变量改为 logsChain 承载（代次机制与选型理由见 10b）。
+    // 「实时日志」名不副实。节拍取 5s：日志不是秒级指标，而 /api/logs 是读文件、比 /api/status 更重，
+    // 没必要同频。可见性感知与弹幕轮询同型：页面隐藏即停。logTimer 已由 logsChain 承载（机制见 10b）。
     var logsChain = makePollChain();
     var logStopped = true;
     var LOGS_POLL_INTERVAL = 5000;
@@ -1073,12 +1022,10 @@
         logsChain.halt();
     }
 
-    // 13b. 弹幕监控：轮询 + 渲染（增量游标 since=seq，2 秒一次）
-    // 游标只前进（last_seq 大于 dmLastSeq 才赋值）：失败轮回的是原 since，用它覆盖会让已取到的序号倒退、
-    // 下一轮重复拉同一段消息。轮询只随进入/离开弹幕视图起停，与仪表盘两条轮询互不牵连。
-    // [M-21 2026-09-29] 与状态/日志两条链同机制（makePollChain，见 10b）：旧一代的请求落地后
-    // 既不再排期、也不再 renderDanmaku——后者会推进 dmLastSeq 增量游标，让一条本该作废的轮次
-    // 改动新链的续拉位置。
+    // 13b. 弹幕监控：轮询 + 渲染（增量游标 since=seq，2 秒一次）。
+    // 游标只前进（last_seq 大于 dmLastSeq 才赋值）：失败轮回的是原 since，用它覆盖会让已取到的序号
+    // 倒退、下一轮重复拉同一段。轮询只随进入/离开弹幕视图起停，与仪表盘两条互不牵连。旧一代的请求
+    // 落地后既不续期也不 renderDanmaku——后者会推进游标，改动新链的续拉位置（机制见 10b）。
     function startDanmakuPolling() {
         stopDanmakuPolling();
         dmStopped = false;
@@ -1117,13 +1064,9 @@
         }
         var cls = m.type === 'gift' ? ' dm-gift' : (m.type === 'superChat' ? ' dm-sc' : '');
         var label = m.type === 'gift' ? t('danmaku.gift') : (m.type === 'superChat' ? t('danmaku.sc') : '');
-        // M-23（2026-09-29）：dropped 也必须过 esc()。后端当前把折叠计数写成 int
-        //（src/danmaku_monitor.py 的 sampled/dropped 聚合），现网不可利用，但它是本函数唯一的裸插值，
-        // 违反本文件自定义的「拼接路径一律转义」不变量——契约一变（计数改成带标记的可读串、或换成
-        // 服务端拼接的文案）这里就是弹幕流里的存储型注入点，而同函数的 user/room/text 全都过了 esc()。
-        // 在「parseInt(m.dropped, 10) + NaN 兜底」与「过 esc()」之间选后者：parseInt 会把「12 条」这类
-        // 未来的可读文案静默截成 12（丢信息且无人报错），而 esc() 对 int 与字符串同时成立，
-        // 与同函数其余字段的口径一致，不需要再补 NaN 分支。
+        // M-23：dropped 也必须过 esc()。它是本函数唯一的裸插值，违反「拼接路径一律转义」不变量；后端
+        // 当前把折叠计数写成 int、现网不可利用，但契约一变（改成带标记的可读串或服务端文案）这里就是
+        // 弹幕流里的存储型注入点。选 esc() 而非 parseInt：后者会把「12 条」这类文案静默截成 12。
         var dropped = m.dropped ? ' <span class="dm-dropped">(+' + esc(m.dropped) + t('danmaku.dropped') + '</span>' : '';
         var userPart = m.user ? '<span class="dm-user">' + esc(m.user) + '</span>: ' : '';
         return '<span class="dm-line' + cls + '">[' + dmFmtTime(m.ts) + '] <span class="dm-room">['
@@ -1145,8 +1088,8 @@
             shown++;
         }
         if (!shown) {
-            // 2026-09-12 修复（CODE_REVIEW_FIX_1 F-21）：原在有消息但筛选不匹配时把区域清空（''）——
-            // 用户分不清「筛选条件选错了」和「真的没弹幕」，只能逐个切换筛选去试。改为给出明确的「无匹配」提示。
+            // F-21：有消息但筛选不匹配时给出明确「无匹配」提示，而不是清空区域——否则用户分不清
+            // 「筛选选错了」和「真的没弹幕」，只能逐个切换筛选去试。
             el.textContent = dmMessages.length ? t('danmaku.noMatch') : t('danmaku.noData');
             return;
         }
@@ -1159,11 +1102,10 @@
     // 渲染一次 /api/danmaku 响应：房间表 + 筛选下拉 + 增量消息
     function renderDanmaku(data) {
         if (!data) data = {};
-        // SEV-2228 后半：/api/danmaku 采样失败时后端回 HTTP 200 + {"rooms": [], "messages": [],
-        // "last_seq": <原 since>, "error": "danmaku_unavailable"}（见 src/web_api.py 的 _DANMAKU_ERROR_CODE）。
-        // 旧实现不看 error：空 rooms 会把房间表刷成「暂无监控数据」、筛选下拉重建为只剩「全部房间」并静默
-        // 丢掉当前选择——用户以为监控真断了或自己筛错了房间，真实原因却是一次内部异常。这里保留上一轮的表
-        // 与缓冲、只在消息流上说明取不到，也不推进游标（last_seq 本就等于 since，推进反而会跳过失败期间的消息）。
+        // SEV-2228 后半：/api/danmaku 采样失败时后端回 HTTP 200 + 空 rooms/messages、last_seq 等于原
+        // since、error:"danmaku_unavailable"。若照常渲染，空 rooms 会把房间表刷成「暂无监控数据」、筛选
+        // 下拉重建为只剩「全部房间」并丢掉当前选择。故保留上一轮的表与缓冲、只在消息流上说明取不到，
+        // 也不推进游标（last_seq 本就等于 since，推进反而会跳过失败期间的消息）。
         if (data.error === 'danmaku_unavailable') {
             var streamEl = $('danmaku-stream');
             if (streamEl) streamEl.textContent = t('danmaku.unavailable');
@@ -1203,14 +1145,11 @@
                 hint.classList.remove('hidden');
             }
         }
-        // 房间筛选下拉：保留当前选择，选项随房间列表刷新
-        // M-19（2026-10-18）：**只在 option 集合本身变化时才重建 innerHTML**。原形态是每 2s 轮询成功后
-        // 无条件 sel.innerHTML = opts，而浏览器在 option 集合被替换时会关掉已展开的下拉列表——用户点开
-        // 筛选想选房间时，最近的那一轮轮询正好把列表收起，选择几乎无法完成（轮询节拍 2s，一次点选动作
-        // 通常不止 2s）。比较用「上一次写入的 option 串原文」（dmRoomFilterOpts）而非读 DOM 现值：
-        // 真实浏览器会把 innerHTML 归一化（属性引号、布尔属性形态），拿生成串去比 DOM 现值会恒不等、
-        // 退回每轮都重建；串里已含 t('danmaku.allRooms') 标签，故切换语言必然判为变化、照常重建一次，
-        // 「全部房间」文案不会冻结在旧语言。重建后仍按原口径把选中项复位（房间消失则回落「全部房间」）。
+        // 房间筛选下拉：保留当前选择，选项随房间列表刷新。M-19：只在 option 集合本身变化时才重建
+        // innerHTML——浏览器在 option 集合被替换时会收起已展开的下拉，而轮询 2s 一轮，用户几乎没机会完成
+        // 选择。比较用「上一次写入的串原文」而非读 DOM 现值：真实浏览器会归一化 innerHTML，拿生成串比
+        // DOM 现值会恒不等、退回每轮重建。串里已含 allRooms 标签，故切换语言必判为变化、照常重建一次
+        // （「全部房间」不会冻结在旧语言）。重建后仍按原口径把选中项复位（房间消失则回落「全部房间」）。
         var sel = $('danmaku-room-filter');
         if (sel) {
             var cur = sel.value;
@@ -1247,14 +1186,13 @@
     }
 
     // 14. loadRooms —— GET /api/rooms 拉全量直播间，按 enabled 渲染开关、按 recording 渲染录制中；
-    // 行内开关/删除按钮靠 data-url 透传，点击由 rooms-tbody 上的事件委托转发到 toggleRoom/deleteRoom。
-    // 画质列为行内下拉（选项 = 默认画质 + qualityOptions + 当前值兜底），change 委托转发 changeRoomQuality。
-    // 注意：url 直接拼进 data-url 与 title，已用 esc() 转义防止属性注入；del 失败会回拉一次列表恢复 UI。
-    // M-18（2026-10-18）竞态防护：每次进入本函数先顶一代（roomsChain.halt()），await 回来只有在
-    // 自己仍是最新一代时才落地 DOM。原形态下「快速切走再切回直播间」「addRoom/toggleRoom/changeRoomQuality
-    // 成功后各自回拉」会并发两支 GET /api/rooms，先发后到的那支会把 tbody 整体覆盖回旧列表——
-    // 用户看到的是「刚加的房间又消失了」，而 api() 的超时上限是 10s，窗口真实存在。
-    // catch 分支同样要过代次校验：旧一代的网络失败不得把新一代刚渲染好的列表打成「加载失败」。
+    // 行内开关/删除按钮靠 data-url 透传，由 rooms-tbody 的事件委托转发 toggleRoom/deleteRoom；画质列为
+    // 行内下拉（选项 = 默认画质 + qualityOptions + 当前值兜底）。url 拼进 data-url 与 title 前已 esc()；
+    // 删除失败会回拉一次列表恢复 UI。
+    // M-18 竞态防护：进函数先 halt() 顶一代，await 回来只有在仍是最新一代时才落地 DOM——否则「快速切走
+    // 再切回」「addRoom/toggleRoom/changeRoomQuality 成功后各自回拉」会并发两支 GET /api/rooms，先发后到
+    // 的那支把 tbody 覆盖回旧列表（用户看到「刚加的房间又消失了」）。catch 分支同样要过代次校验：旧一代的
+    // 网络失败不得把新一代刚渲染好的列表打成「加载失败」。
     function buildRoomQualitySelect(url, current) {
         // 当前值可能不在选项列表（如用户已从画质选项中移除该档位），追加为候选项防止显示错位
         var opts = [''].concat(qualityOptions.slice());
@@ -1299,9 +1237,9 @@
         }
     }
 
-    // 14b. 画质选项（WEB 直播间设置的下拉项 + 桌面端画质切换菜单共用一份 config.ini 配置）。
-    // qualityOptions = 用户已选档位（下拉项 + chips）；qualityBuiltin = 引擎支持的全部内置档位，
-    // 两者差值即「添加画质」的候选项。增删后 PUT /api/rooms/qualities 回写，本地同步重渲染。
+    // 14b. 画质选项（WEB 直播间设置的下拉项 + 桌面端画质切换菜单共用一份 config.ini 配置）：
+    // qualityBuiltin 与 qualityOptions 的差值即「添加画质」的候选项。增删后 PUT 回写，以后端返回的
+    // 规范化列表为准（非法项由后端剔除）。
     async function loadQualityOptions() {
         try {
             var data = await api('/api/rooms/qualities');
@@ -1468,12 +1406,12 @@
     }
 
     // 17. loadConfig —— GET /api/config 取 {section:{key:value}}，逐段逐键渲染为 input（敏感项用
-    // password 类型、废弃旧键置灰只读、HTTPS 键与 SSL 平台列表键附动态提示）。渲染后把整份配置深拷贝进
-    // configBackup，供 saveConfig 做「仅提交变更键」的 diff 比较，避免无谓回写。
-    // SSL/HTTPS 整合：「是否启用https录制」已合并原「是否强制启用https录制」与「是否禁用SSL证书验证(是/否)」
-    // ——开启 = https 拉流并跳过证书校验，关闭 = http 拉流并恢复默认证书校验；旧键只读置灰并在界面明示
-    // 整合去向。FFmpeg 9.0 起 TLS 证书验证默认开启，故「禁用SSL证书验证的平台」只在 HTTP 模式（默认校验）
-    // 下生效，HTTPS 模式已全局跳过、该列表冗余（后端同一口径见 src/http_config.py::get_effective_ssl_verify）。
+    // password 类型、废弃旧键只读置灰、HTTPS 键与 SSL 平台列表键附动态提示）。渲染后把整份配置深拷贝进
+    // configBackup，供 saveConfig 做「仅提交变更键」的 diff。
+    // SSL/HTTPS 整合：「是否启用https录制」合并了原「是否强制启用https录制」与「是否禁用SSL证书验证
+    // (是/否)」——开启 = https 拉流并跳过证书校验，关闭 = http 拉流并恢复默认证书校验；旧键只读置灰并
+    // 明示整合去向。FFmpeg 9.0 起 TLS 验证默认开启，故「禁用SSL证书验证的平台」只在 HTTP 模式生效，
+    // HTTPS 模式已全局跳过、该列表冗余（后端同一口径见 src/http_config.py::get_effective_ssl_verify）。
     var HTTPS_RECORD_KEY = '是否启用https录制';
     var DEPRECATED_CONFIG_KEYS = {
         '是否强制启用https录制': 'config.deprecated',
@@ -1483,10 +1421,9 @@
     var SSL_PLATFORM_KEY = '禁用SSL证书验证的平台(逗号分隔)';
 
     // 布尔配置值 token 集，与后端 src/config_bool.py 的 TRUE_TOKENS/FALSE_TOKENS 同一口径（比较前 trim +
-    // 小写），两份集合必须同步改：跨语言相等性由 tests/frontend/test_quality_ui.mjs 的 MID-2263 用例逐
-    // token 双向断言，读取侧一律经 parseConfigBool 解析。
-    // [历史注 SEV-2210] 旧实现只比较 === '是'，用户按界面提示把值改成 true/false 后开关判定会静默翻转
-    // ——「是否启用https录制 = true」被判为「关」，SSL 提示文案与实际拉流协议相反。
+    // 小写），两份集合必须同步改：跨语言相等性由 tests/frontend/test_quality_ui.mjs 的 MID-2263 逐 token
+    // 双向断言，读取侧一律经 parseConfigBool 解析。
+    // [历史注 SEV-2210] 旧实现只比较「是」，用户按界面提示把值改成 true/false 后开关判定会静默翻转。
     var CONFIG_TRUE_TOKENS = { '是': 1, 'true': 1, 't': 1, 'yes': 1, 'y': 1, 'on': 1, '1': 1 };
     var CONFIG_FALSE_TOKENS = { '否': 1, 'false': 1, 'f': 1, 'no': 1, 'n': 1, 'off': 1, '0': 1 };
 
@@ -1582,15 +1519,14 @@
     }
 
     // 18. saveConfig
-    // 提交口径三条（缺一不可，MID-37 / 2026-09-20）：
-    //   ① 原样提交掩码 '***' → 视为未改动直接跳过（**写入侧唯一防线**，不得移除：否则掩码会覆盖真实凭据）；
+    // 提交口径三条（缺一不可，MID-37）：
+    //   ① 原样提交掩码 *** → 视为未改动直接跳过（**写入侧唯一防线**，不得移除：否则掩码会覆盖真实凭据）；
     //   ② 掩码字段被改成空串 → 必须经显式确认才提交（否则一次全选删除就静默抹掉 cookie/token，而
     //      backup_config 副本本身已脱敏，没有回滚路径）；服务端此时也会回 400 兜底（见
     //      src/web_api.py::update_config，其 detail 须原样显示给用户）；
-    //   ③ 单项写入失败即中止后续写入（半份配置落盘比整体失败更难排查），400 单独给「服务端拒绝」文案，
-    //      与网络类失败区分开，用户能直接看懂是被哪条规则挡住、下一步做什么。
-    // MIN-2239 配套：把保存失败的那一行标出来（含行内说明），并在回拉前统计还有多少行「改了没提交」；
-    // 两者都只依赖 DOM 结构（input 的 data-section/data-key 与 configBackup 快照），不引入新状态。
+    //   ③ 单项写入失败即中止后续写入（半份配置落盘比整体失败更难排查），400 单独给「服务端拒绝」文案。
+    // MIN-2239 配套：标记失败行，并在回拉前统计还有多少行「改了没提交」；两者都只依赖 DOM 结构
+    // （input 的 data-section/data-key 与 configBackup 快照），不引入新状态。
     function markRowFailed(inp) {
         var row = inp.closest ? inp.closest('.config-row') : null;
         if (!row) return;
@@ -1627,28 +1563,20 @@
         return n;
     }
 
-    // 18b. M-22（2026-09-29）：认证复验口令的采集弹窗，替代原 window.prompt。
-    // 为什么必须换掉 prompt：
-    //   ① 它是**明文回显**的输入框——本文件其它任何口令形态（登录框 #login-password、配置页敏感项、
-    //     新增的房间 Cookie）都是 type="password"，唯独这里肩屏/截图/旁观可见；
-    //   ② 原生弹窗无法指定 type/autocomplete，口令会进浏览器的自动填充与历史候选；
-    //   ③ 它是同步阻塞 UI 线程的对话框，在 async saveConfig 里把整条提交链挂在浏览器弹窗上。
-    // 改成 index.html 里的静态节点 #reauth-modal（type="password" + autocomplete="off"）+ style.css 的
-    // .modal-* 遮罩样式：本面板没有对话框组件，登录卡片/告警横幅都是「静态节点 + .hidden 切换」，
-    // 沿用同一形态，不引入新框架、也不在运行时 createElement（那会让前端 .mjs 沙箱用例无法驱动）。
-    // 出口一律经 _settleReauth 收敛：确认取走输入值、取消/Esc/点遮罩回空串，四个出口都会立刻清空
-    // 输入节点并重新挂上 .hidden（轻微项 41 记的是「口令残留在隐藏视图里」）。
-    // 空串 = 放弃本次认证改动（与 t('config.authChangeReauth') 的「留空或取消即放弃本次改动」一致）。
-    // 开窗口期间必须禁用 #config-save-btn：window.prompt 是**阻塞**的，第二次点击根本进不来；
-    // 换成非阻塞弹窗后 saveConfig 可以被重复进入，两条链会各自走到这里互相作废 resolver
-    // （上一条 Promise 被以空串结算 → 那一轮认证键被跳过）。口令不会因此外泄（空串一律不提交），
-    // 但界面会给出「改成功了却没生效」的假象，故在源头把重入入口关掉，不靠结算顺序兜底。
-    // 与后端契约对齐（**先读 src/web_api.py::update_config 的 MID-2241 段**）：认证当前处于开启状态时，
-    // 写 [Web] web_auth_enable / web_password 必须携带能过 verify_web_password 的 reauth_password，
-    // 否则 403。所以这里不再允许「空串照常提交」——空串在前端就地跳过，不去撞那条 403，
-    // 也不给后端 _log_internal_error 留下一条必然失败的 auth_reauth_denied 告警。
-    // 反向半边（与后端同判据，见 saveConfig 的 authRecheckRequired）：认证**当前关闭**时后端不做这条
-    // 判定，前端也就该照常提交、不采口令——否则第一次启用认证的人没有旧口令可填，会被本窗口死锁。
+    // 18b. M-22：认证复验口令的采集弹窗，替代原 window.prompt——后者明文回显（本文件其它口令形态都是
+    // type="password"）、无法指定 type/autocomplete（口令会进自动填充与历史候选）、且同步阻塞 UI 线程。
+    // 形态：index.html 的静态节点 #reauth-modal（type="password" + autocomplete="off"）+ .modal-* 遮罩。
+    // 本面板没有对话框组件，登录卡片/告警横幅都是「静态节点 + .hidden 切换」，沿用同一形态，也不在运行时
+    // createElement（那会让前端 .mjs 沙箱用例无法驱动）。
+    // 出口一律经 _settleReauth 收敛：确认取走输入值、取消/Esc/点遮罩回空串，四个出口都立刻清空输入节点
+    // 并重新挂上 .hidden（口令不残留在隐藏视图里）。空串 = 放弃本次认证改动。
+    // 开窗期间必须禁用 #config-save-btn：window.prompt 是阻塞的、第二次点击进不来；换成非阻塞弹窗后
+    // saveConfig 可被重复进入，两条链会各自走到这里互相作废 resolver（上一轮被以空串结算 → 那一轮认证键
+    // 被跳过），口令不外泄但界面会显示「改成功了却没生效」，故在源头关掉重入入口。
+    // 后端契约（src/web_api.py::update_config 的 MID-2241 段）：认证当前开启时，写 [Web] web_auth_enable /
+    // web_password 必须带能过 verify_web_password 的 reauth_password，否则 403；故空串在前端就地跳过，
+    // 不去撞 403。认证**当前关闭**时后端不做该判定，前端也就不采口令——否则第一次启用认证的人没有旧口令
+    // 可填，会被本窗口死锁。
     var _reauthResolver = null;
 
     function _settleReauth(value) {
@@ -1697,14 +1625,10 @@
         var count = 0;
         var skippedBlank = 0;
         var skippedAuth = 0;
-        // M-22：复验口令改为**本轮局部**状态，两个变量各有职责——
-        //   authAsked：本轮是否已经弹过口令窗（每轮保存最多采集一次，两个认证键共用同一次输入，
-        //              用户不必为「关认证 + 改口令」输两遍当前口令）；
-        //   authReauth：采集到的口令原文（'' = 取消或留空，视为放弃本次认证改动）。
-        // 原实现只有循环外的一个 authReauth：它一旦被赋值就一路留到循环结束，之后**每个**有改动的
-        // 普通配置键的 PUT 体都带 reauth_password，把口令复制进本次保存的全部请求
-        //（代理日志、浏览器扩展、后台抓包都能记下）。现在只在认证两键的请求上携带，
-        // 其余键的请求体与改动前逐字段一致（既有回归锁按整体 deepEqual 断言 body 形状）。
+        // M-22：复验口令是本轮局部状态——authAsked 记录本轮是否已弹过窗（两个认证键共用一次输入，用户
+        // 不必为「关认证 + 改口令」输两遍当前口令），authReauth 是采集到的原文（'' = 取消/留空 = 放弃）。
+        // 口令只能挂在认证两键的请求上：先前用循环外的一个变量，认证行赋值之后每个键的 PUT 都会捎带
+        // reauth_password（代理日志/扩展/抓包都能记下）。其余请求的 body 必须与改动前逐字段一致。
         var authAsked = false;
         var authReauth = '';
         for (var i = 0; i < inputs.length; i++) {
@@ -1722,33 +1646,20 @@
             }
             var oldVal = (configBackup && configBackup[section]) ? configBackup[section][key] : undefined;
             if (newVal === oldVal) continue;
-            // MID-2241（2026-09-22）：web_auth_enable / web_password 此前走与「循环时间(秒)」完全相同的普通
-            // 写入通道，前后端都无二次确认——一次 PUT 即可关掉认证（回环监听下 SEV-04 不拦）或改口令（连带
-            // _tokens.clear() 踢掉全部会话）。前端对删除房间、清空掩码凭据都弹确认，唯独这两项零确认：持有
-            //（或被窃）bearer 的一方能把「需要凭据的面板」降级成「本机任意进程可操控的面板」，且该降级在 token
-            // 吊销后依然留存。这里补上确认步骤：文案点明后果，未确认即跳过并计入 skippedAuth，末尾单独提示
-            // 「已跳过 N 项认证相关改动」（不静默吞掉）。
+            // MID-2241：web_auth_enable / web_password 原本走普通写入通道、零二次确认——一次 PUT 即可关掉
+            // 认证（回环监听下 SEV-04 不拦）或改口令（连带清空全部 token），且该降级在 token 吊销后依然留存。
+            // 故先点明后果要确认；未确认即跳过并计入 skippedAuth，末尾单独提示（不静默吞掉）。
             var isAuthKey = section === 'Web' && (key === 'web_auth_enable' || key === 'web_password');
             if (isAuthKey) {
                 if (!confirm(t('config.authChangeConfirm').replace('{k}', String(key)))) {
                     skippedAuth++;
                     continue;
                 }
-                // MID-2241 后半（2026-09-23 定稿）：此处即时问一次口令并放进请求体 reauth_password，后端**已据
-                // 它做准入判定**——认证当前开启时，写 [Web] web_auth_enable / web_password 不带可验过的
-                // reauth_password 即 403（判据见 src/web_api.py::update_config 的 MID-2241 段）。故这里的 confirm
-                // + prompt 只挡手滑、不是唯一防线，但仍保留：直连接口的调用方由 403 挡住。取消（null）视为放弃。
-                // [历史注 2026-09-22 版曾写「后端不据它做准入判定、强复验已回退」，该状态已被推翻。]
-                // [M-22 2026-09-29] 采集形态由 window.prompt 换成 askReauthPassword() 的 password 弹窗；
-                // 「取消视为放弃」的结论不变，只是取消的返回值从 null 收敛为空串（见 18b）。
-                // 每轮保存最多采集一次：两个认证键共用同一次输入（同一份「当前口令」），
-                // 用户取消则两个键一起跳过，不再重复弹窗骚扰。
-                // 采集与否的判据必须与后端**同一条**：src/web_api.py::update_config 只在
-                // 「认证当前已开启」时强制复验（它写明的理由——认证关闭时面板对任何能访问端口的人都全开、
-                // 根本没有可信的「当前口令」可验，强复验只会把「按提示收紧配置」打死）。
-                // 前端若无条件要求非空口令，就正好复刻那个死锁：第一次打开认证时磁盘上没有旧口令可填，
-                // 留空 = 放弃 → web_auth_enable 永远改不出去。判据取 configBackup（= 服务端真值快照），
-                // 布尔解析走本文件既有的 parseConfigBool（与后端 config_bool 同 token 集合）。
+                // 后端据 reauth_password 做准入判定（src/web_api.py::update_config 的 MID-2241 段）：认证
+                // 当前开启时，这两个键不带可验过的口令即 403。故 confirm + 口令窗只挡手滑，不是唯一防线。
+                // 采集判据必须与后端同一条：只判 configBackup（服务端真值快照）里认证**当前是否开启**——
+                // 认证关闭时面板对任何能访问端口的人都全开、没有可信的「当前口令」可验，强复验会把「按提示
+                // 收紧配置」打死。布尔解析走 parseConfigBool（与后端 config_bool 同 token 集合）。
                 var authRecheckRequired = parseConfigBool(
                     (configBackup && configBackup.Web) ? configBackup.Web.web_auth_enable : '', false
                 );
@@ -1764,12 +1675,9 @@
                 }
             }
             try {
-                // MID-2241：按需附加 reauth_password —— 只在认证两键被确认后才带上，
-                // 其余配置键的请求体保持与改动前**逐字段一致**（既有回归锁按整体 deepEqual 断言请求体）。
-                // M-22 收紧：判据从「authReauth 非空」改成「这一行本身就是认证键」——原写法是循环外的
-                // 粘变量，认证行赋值之后每个键都被捎带上传口令，deepEqual 锁不住这种泄漏（键集合本身
-                // 变了才算红，而这里是**多余字段**出现在别的请求上；该形态已由
-                // tests/frontend/test_auth_reauth.mjs 的行为用例逐请求断言）。
+                // 只在认证两键被确认后才附加 reauth_password：判据是「这一行本身就是认证键」，不能用
+                // 「口令非空」——后者会让口令捎带到后续每个键的请求上，而既有回归锁按整体 deepEqual 断言
+                // body 形状，键集合没变时锁不住这种多余字段（由 test_auth_reauth.mjs 逐请求断言）。
                 var body = { section: section, key: key, value: newVal };
                 if (isAuthKey && authReauth) body.reauth_password = authReauth;
                 await api('/api/config', {
@@ -1783,14 +1691,10 @@
                 } else {
                     toast(t('toast.saveFailed') + (e.message || ''), 'error');
                 }
-                // MIN-2239（2026-09-22）：此处原先直接 return，跳过头注释专门要防的「半份配置落盘更难排查」
-                // 的善后——后续行**保持用户刚输入的值、无任何未保存标记**，configBackup 停留在保存前快照。用户
-                // 看到「配置页仍是我填的样子」极可能直接切走，于是生效配置与界面显示长期不一致（例如分段时长写
-                // 进去了、认证开关没写进去）。现在：失败行标红 + #config-save-status 常驻明细（已应用 n / 第 m 项
-                // 失败 / 其余未提交），并回拉服务端真值，让界面必然回到磁盘上的真实状态。
-                // 注意**不额外 toast**：400 与非 400 那两条文案各有回归锁（tests/frontend/test_quality_ui.mjs 的
-                // 「服务端 400 的 detail 明确显示」与「MID-39：非 JSON 错误体回退本地化通用文案」两条用例钉住），
-                // 且 toast 是单槽位、会被下一条覆盖并自动消失，承担不了「常驻提醒」的职责。
+                // MIN-2239：不能在这里直接 return 就算完——失败行之后的输入仍保持用户填的值、无任何未保存
+                // 标记，configBackup 也停在保存前快照，用户看到「配置页还是我填的样子」就会以为已生效。故：
+                // 失败行标红 + #config-save-status 常驻明细（已应用 n / 第 m 项失败 / 其余未提交）+ 回拉服务端
+                // 真值。不额外 toast：400 与非 400 的文案各有回归锁，且 toast 承担不了常驻提醒。
                 markRowFailed(inp);
                 var pending = countRemainingDirty(inputs, i + 1);
                 showSaveStatus(t('config.partialSaved').replace('{n}', String(count)).replace('{m}', String(pending + 1)));
@@ -1805,8 +1709,7 @@
         if (count > 0) {
             toast(t('config.saved').replace('{n}', String(count)), 'success');
         } else if (skippedAuth > 0) {
-            // MID-2241：认证相关键被用户取消确认（优先级高于「掩码空值跳过」的说明——
-            // 关认证/改口令是能力降级，比「有一项没动」更需要被看见）
+            // MID-2241：认证键被取消确认时优先报这条——关认证/改口令是能力降级，比「有一项没动」更需要被看见
             toast(t('config.authChangeSkipped').replace('{n}', String(skippedAuth)), 'info');
         } else if (skippedBlank > 0) {
             toast(t('config.secretSkipped').replace('{n}', String(skippedBlank)), 'info');
@@ -1820,13 +1723,12 @@
         }
     }
 
-    // 19. loadFiles —— GET /api/files?path=，按路径取目录项渲染表格，并据 path 切分重构面包屑
-    // （根目录 + 逐级累积路径）。dir 行渲染「进入」按钮（事件委托转发 loadFiles 下钻），
-    // file 行渲染「下载」按钮（转 downloadFile）。path 经 encodeURIComponent 编码，防分隔符/中文破坏路由。
-    // M-18（2026-10-18）：本条是三条按需链里竞态最显眼的一支——目录项一多，「进入」/面包屑连点或
-    // 「下钻后立刻点上级」会并发两支 GET /api/files，先发后到的旧响应把 #file-breadcrumb 与 tbody
-    // **整体**覆盖回上一级目录（用户看到的是一下子退回去了、点进去又弹回来），且两者必须同源落地，
-    // 否则面包屑停在 A 而表格是 B 更糟。代次判据同 loadRooms（机制说明见状态区 roomsChain 处）。
+    // 19. loadFiles —— GET /api/files?path=，按路径取目录项渲染表格，并据 path 切分重构面包屑（根目录 +
+    // 逐级累积路径）。dir 行「进入」/file 行「下载」按钮经事件委托转发 loadFiles/downloadFile；path 经
+    // encodeURIComponent 编码，防分隔符/中文破坏路由。
+    // M-18：本条是三条按需链里竞态最显眼的一支——连点「进入」/面包屑或「下钻后立即点上级」会并发两支
+    // GET /api/files，先发后到的旧响应把面包屑与 tbody **整体**覆盖回上一级（两者必须同源落地，否则
+    // 面包屑停在 A 而表格是 B 更糟）。代次判据同 loadRooms（机制见状态区 roomsChain 处）。
     async function loadFiles(path) {
         path = path || '';
         var myGen = filesChain.halt();
@@ -1878,11 +1780,10 @@
     }
     window.loadFiles = loadFiles;
 
-    // 19b. downloadFile — 走认证头拉取二进制并触发下载（I1）：直接 fetch + .blob()，不经过 api() 包装
-    //（api() 返回 res.text() 会破坏二进制）。MIN-2238（2026-09-22）：失败分支原先 `throw new Error(res.statusText)`
-    //——现代浏览器（HTTP/2 下连 HTTP/1.1 的 reason phrase 都不再收到）对 statusText 恒给空串，toast 渲染成
-    //「下载失败: 」，用户既不知是权限、路径还是文件被删，也拿不到可报障信息。改为与 api() 同源的 apiError：
-    // 先把错误体读成文本再解析 detail（成功分支仍是 blob）。
+    // 19b. downloadFile —— 走认证头拉二进制并触发下载（I1）：直接 fetch + .blob()，不经过 api()（它返回
+    // res.text()，会破坏二进制）。MIN-2238：失败分支曾用 res.statusText，而现代浏览器（HTTP/2 下连
+    // reason phrase 都不再收到）对 statusText 恒给空串，toast 只能渲染成「下载失败: 」。改用 apiError 解析
+    // 错误体的 detail（成功分支仍是 blob）。
     window.downloadFile = function (path) {
         var headers = {};
         var token = getToken();
@@ -1944,8 +1845,7 @@
 
     // 21. initTheme
     function initTheme() {
-        // MID-2238：整段包 try/catch —— 它是 DOMContentLoaded 的第一条语句，
-        // 任何异常都会让后续所有监听器注册被跳过（面板变静态页）。
+        // MID-2238：它是 DOMContentLoaded 的第一条语句，任何异常都会让后续所有监听器注册被跳过（面板变静态页）。
         try {
             var theme = safeGetItem(THEME_KEY) || 'light';
             document.body.dataset.theme = theme;
@@ -1987,8 +1887,8 @@
             }
         });
         $('logout-btn').addEventListener('click', function () {
-            // WD-09：调用服务端注销端点吊销当前 bearer（原实现只清 localStorage，服务端 token 在有效期
-            //（默认 24 小时）内依旧完全有效）。注销失败也必须清本地并回到登录页，不能把用户卡在面板里。
+            // WD-09：调服务端注销端点吊销当前 bearer（原实现只清 localStorage，服务端 token 在有效期（默认
+            // 24 小时）内依旧完全有效）。注销失败也必须清本地并回到登录页，不能把用户卡在面板里。
             api('/api/logout', { method: 'POST' })
                 .catch(function () {})
                 .then(function () {
@@ -2078,9 +1978,9 @@
             }
         });
 
-        // WD-10：页面可见性感知。隐藏时停掉状态/日志/弹幕三条轮询（后台标签页与最小化窗口原本会持续
-        // 请求），回到前台立即恢复并补拉一次，避免用户看到陈旧数据。SEV-2227：隐藏侧必须用 pauseSSE（保留
-        // sseWanted 意图）而不是 stopSSE——后者会把意图一起清掉；恢复分支则按「意图 && 当前已停」判断。
+        // WD-10 / SEV-2227：页面可见性感知。隐藏时停掉状态/日志/弹幕三条轮询（后台标签页与最小化窗口原本
+        // 会持续请求）；回到前台按「意图 && 当前已停」恢复并补拉一次。隐藏侧必须用 pauseSSE（保留 sseWanted
+        // 意图）而不是 stopSSE——后者会把意图一起清掉。
         document.addEventListener('visibilitychange', function () {
             if (document.hidden) {
                 pauseSSE();
@@ -2097,9 +1997,8 @@
             }
         });
 
-        // F-09 / WD-07：把「未启用认证」的风险显式呈现给用户。后端 /api/auth/status 一直返回 warning 字段
-        // 并专门为此放行了该端点，但前端从未消费——用户在无认证状态下使用面板时界面上没有任何提示，错失了
-        // 唯一的「让用户自己去打开认证」引导时机。
+        // F-09 / WD-07：把「未启用认证」的风险显式呈现给用户——后端 /api/auth/status 一直返回 warning 并
+        // 为此端点放行，前端若不消费，用户无认证使用面板时看不到任何提示，错失「自己去打开认证」的引导时机。
         api('/api/auth/status')
             .then(function (st) {
                 if (st && st.auth_required === false) {
@@ -2120,8 +2019,8 @@
         })();
     });
 
-    // F-09：在顶栏下方插入一条风险横幅（仅在无认证时出现，随登录页一起隐去）。
-    // 纯文本赋值（textContent）+ 固定位置插入，不引入 XSS 面，也不影响既有事件委托。
+    // F-09：在顶栏下方插入风险横幅（仅无认证时出现，随登录页一起隐去）。textContent 赋值 + 固定位置插入，
+    // 不引入 XSS 面，也不影响既有事件委托。
     function showAuthWarning(text) {
         if (document.getElementById('auth-warning-banner')) return;
         var topbar = document.querySelector('.topbar');

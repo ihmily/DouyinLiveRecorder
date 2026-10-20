@@ -1,13 +1,12 @@
-# Tests for 2026-09-22/23 网络与代理层回归锁（MID-2233 / MIN-2216~2222）。
+# 2026-09-22/23 网络与代理层回归锁（MID-2233 / MIN-2216~2222）。
 #
-# 覆盖面（每条都对应一个「实测确认未修」的条目）：
-#   src/proxy.py      MID-2233 ①②③④ + 附带断言补齐
-#   src/ttwid.py      MIN-2220（ttwid 跨出口串用）+ MIN-2222（空异常文本）
-#   src/async_http.py MIN-2216(async 侧) / MIN-2217 / MIN-2218 / MIN-2219 / MIN-2221
+# 覆盖面（每条都对应一个「实测确认未修」的条目）：src/proxy.py 的 MID-2233 ①②③④；
+# src/ttwid.py 的 MIN-2220（ttwid 跨出口串用）/ MIN-2222（空异常文本）；src/async_http.py 的
+# MIN-2216(async 侧) / MIN-2217 / MIN-2218 / MIN-2219 / MIN-2221。
 #
-# 打桩边界：只替换网络层与依赖构造（httpx 客户端 / _build_client / DNS seam / winreg），
-# 判定逻辑（分桶缓存、内网定罪、warn-once、锁重入）一律走真实代码——AGENTS「测试不得
-# 自实现被测逻辑」。每条锁都做过「删掉生产实现就该失败」的变异验证，结论见交付报告。
+# 打桩边界：只替换网络层与依赖构造（httpx 客户端 / _build_client / DNS seam / winreg），判定逻辑
+# （分桶缓存、内网定罪、warn-once、锁重入）一律走真实代码。每条锁都做过「删掉生产实现就该失败」
+# 的变异验证。
 import asyncio
 import gc
 import pathlib
@@ -218,10 +217,9 @@ class TestMid2233Scheme:
         assert "s3cret" not in repr(info) and "bob" not in repr(info)
 
     def test_unknown_scheme_is_stripped_not_turned_into_a_protocol(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # "foo://bar" 旧实现剥掉前缀后得 ip="bar"、port="" → 该候选被 `if ip and port` 跳过。
-        # 新实现若把它当协议、或原样留着前缀，_split_host_port 会切成 port="//bar" →
-        # ProxyInfo 校验抛 ValueError → 整个系统代理检测被 main.py 的 except 吞掉
-        # （MIN-20① 的老形态），故必须保持「宽容剥掉、继续看下一个变量」。
+        # "foo://bar" 旧实现剥掉前缀后得 ip="bar"、port="" → 该候选被跳过。新实现若把它当协议、
+        # 或原样留着前缀，_split_host_port 会切成 port="//bar" → ProxyInfo 抛 ValueError → 整个系统
+        # 代理检测被 main.py 的 except 吞掉，故必须保持「宽容剥掉、继续看下一个变量」。
         scheme, hostport = ProxyDetector._split_scheme("foo://bar")
         assert scheme == "" and hostport == "bar"
         _clear_proxy_env(monkeypatch)
@@ -297,8 +295,8 @@ class TestMid2233BareIpv6:
 class TestMid2233ResidualRegistered:
     def test_module_registers_the_no_consumer_residual(self) -> None:
         # 源码级锁：src/proxy.py 必须显式写明「user/password/scheme/proxy_url 无生产消费点」，
-        # 且不得再出现「MIN-20③ 已修好认证代理」这类被证伪的陈述。
-        # 判据用「必须出现登记语」而不是「必须不出现某个词」，避免误伤历史注。
+        # 且不得再出现「MIN-20③ 已修好认证代理」这类被证伪的陈述。判据用「必须出现登记语」而非
+        # 「必须不出现某个词」，避免误伤历史注。
         text = (pathlib.Path(__file__).resolve().parents[1] / "src" / "proxy.py").read_text(encoding="utf-8")
         assert "没有任何生产消费点" in text, "MID-2233④ 的残留登记被删除：会重新出现「已修」的错误陈述"
         assert "代理地址" in text, "登记里必须写明真正下发的是 config.ini「代理地址」这条独立链路"
@@ -428,9 +426,9 @@ class TestMin2220PerProxyCache:
     async def test_stale_bucket_is_dropped_and_refetched(
         self, _clean_ttwid: None, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # MID-33 的 TTL 判定现在按出口各算各的：陈旧桶必须被**删除**并向下走，
-        # 而不是「非空即返回」。这里只验本层的可观察行为（桶被删 + 又填回新时刻），
-        # 下层 singleflight 的过期联动由 tests/test_ttwid.py 既有用例覆盖。
+        # MID-33 的 TTL 判定按出口各算各的：陈旧桶必须被**删除**并向下走，而不是「非空即返回」。
+        # 这里只验本层可观察行为（桶被删 + 又填回新时刻），下层 singleflight 的过期联动由
+        # tests/test_ttwid.py 既有用例覆盖。
         import time as _time
 
         calls: list[int] = []
@@ -441,8 +439,7 @@ class TestMin2220PerProxyCache:
 
         _patch_fetch(monkeypatch, _fetch)
         stale_at = _time.monotonic() - ttwid_module._TTWID_TTL_SECONDS - 1
-        # 直接构造「桶里有一个过期值」的前置态（_cached_ttwid 镜像由 _clean_ttwid 的
-        # monkeypatch 托管，用例结束自动还原）
+        # 直接构造「桶里有一个过期值」的前置态（_cached_ttwid 镜像由 _clean_ttwid 托管并自动还原）
         ttwid_module._cached_ttwid_by_proxy[""] = ("ttwid=stale", stale_at)
         monkeypatch.setattr(ttwid_module, "_cached_ttwid", "ttwid=stale")
         await ttwid_module.get_ttwid()
@@ -469,8 +466,8 @@ class TestMin2220PerProxyCache:
     async def test_external_mirror_reset_disables_fast_path(
         self, _clean_ttwid: None, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # tests/conftest.py 的逐用例重置只写 `_cached_ttwid = ""`，不提供清桶的入口。
-        # 镜像为空必须能挡住快路，否则上一个用例的桶值会串进下一个用例（跨用例串号）。
+        # tests/conftest.py 的逐用例重置只写 `_cached_ttwid = ""`，不提供清桶的入口。镜像为空必须
+        # 能挡住快路，否则上一个用例的桶值会串进下一个用例（跨用例串号）。
         async def _fetch(proxy_addr: str | None = None) -> str:
             return "ttwid=fresh"
 
@@ -671,9 +668,8 @@ class TestMin2216DependencyMissing:
 
     @pytest.mark.asyncio
     async def test_real_httpx_h2_absence_is_loud(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # 端到端：本机 venv 的 h2 处于「dist-info 在、包目录空」的破损态（pip list 报 None、
-        # find_spec 返回 None），因此本用例在开发机与 CI 上都会真的走到新分支。
-        # 不打桩 _build_client，让真 httpx 自己报错，验「生产链路真的被捕获并升 warning」。
+        # 端到端：本机 venv 的 h2 处于「dist-info 在、包目录空」的破损态（find_spec 返 None），
+        # 故开发机与 CI 都会真的走到新分支。不打桩 _build_client，让真 httpx 自己报错。
         import importlib.util
 
         spec = importlib.util.find_spec("h2")
@@ -727,9 +723,9 @@ class TestMin2217CloseAllClientsOwnership:
             thread.start()
             assert ready.wait(timeout=15)
             thread.join(timeout=15)
-            # 审查 7.11（2026-10-18）：join(timeout=15) 返回不等于线程已退出。本用例后面几条判据
-            # 读的是「线程 A 建的那份客户端有没有被主线程 await 关闭」，线程挂死时 holder 里已有值、
-            # 断言照样全绿（假绿），且 daemon 线程会带着未结束的 run_until_complete 活到进程结束。
+            # 审查 7.11（2026-10-18）：join(timeout=15) 返回不等于线程已退出。本用例后面几条判据读的
+            # 是「线程 A 建的那份客户端有没有被主线程 await 关闭」，线程挂死时 holder 里已有值、断言
+            # 照样全绿，且 daemon 线程会带着未结束的 run_until_complete 活到进程结束。
             assert not thread.is_alive(), "线程 A 未在 15s 内退出：客户端创建链挂死，不得判绿"
             foreign: _FakeClient = holder["client"]
             assert foreign.aclose_calls == 0, "前置条件：创建时不该顺手关闭"
@@ -778,9 +774,8 @@ class TestMin2217CloseAllClientsOwnership:
         assert first is not second
 
     def test_no_unraisable_never_awaited_warning(self) -> None:
-        # 「改了可能引入告警」这条的取证：捕获 sys.unraisablehook，
-        # 任何 "was never awaited" / "Task was destroyed" 都算回归（pytest 的
-        # warnings summary 也会展出，但那依赖 GC 时机；这里做确定性断言）。
+        # 「改了可能引入告警」这条的取证：捕获 sys.unraisablehook，任何 "was never awaited" /
+        # "Task was destroyed" 都算回归（pytest 的 warnings summary 依赖 GC 时机，这里做确定性断言）。
         records: list[Any] = []
         old_hook = sys.unraisablehook
         sys.unraisablehook = records.append
@@ -811,10 +806,9 @@ class TestMin2217CloseAllClientsOwnership:
 
 class TestMin2221LockReentrancy:
     def test_close_all_clients_sync_is_safe_inside_the_lock(self) -> None:
-        # 复现「主线程正持有 _client_cache_lock 时收到 SIGINT → safe_exit →
-        # close_all_clients_sync 再取同一把锁」：非重入锁下即同线程自死锁
-        # （表现为 Ctrl+C 后既不退出也不报错）。放独立线程 + join 超时来验，
-        # 超时即判失败——绝不在主线程死等。
+        # 复现「主线程正持有 _client_cache_lock 时收到 SIGINT → safe_exit → close_all_clients_sync
+        # 再取同一把锁」：非重入锁下即同线程自死锁（Ctrl+C 后既不退出也不报错）。放独立线程 +
+        # join 超时来验，超时即判失败——绝不在主线程死等。
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr("httpx.AsyncClient", _FakeClient)
             with _client_cache_lock:
@@ -884,9 +878,8 @@ class TestMin2219InternalTargetGuard:
 
     @pytest.mark.asyncio
     async def test_proxied_domain_is_not_judged_by_local_dns(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # 反向锁（本条刻意保留的唯一差异）：走代理时本机解析与落地目标无关。
-        # 若也按本机 DNS 定罪，「本机 DNS 被污染/查不到、代理却能解析」的境外流会被
-        # 整批判不可达 —— 正是 AGENTS「探针误杀可用源」那条形态。
+        # 反向锁（本条刻意保留的唯一差异）：走代理时本机解析与落地目标无关。若也按本机 DNS 定罪，
+        # 「本机 DNS 被污染/查不到、代理却能解析」的境外流会被整批判不可达——即「探针误杀可用源」。
         monkeypatch.setattr(web_config, "_resolve_host_ips", lambda host: ["127.0.0.1"])
         client = RecordingClient()
         with pytest.MonkeyPatch.context() as mp:
@@ -927,11 +920,10 @@ class TestMin2219InternalTargetGuard:
         try:
             assert await get_response_status(url) is False
         finally:
-            # 必须成对撤销：本文件用的是 `pytest.MonkeyPatch()` 手工实例（不是 monkeypatch 夹具），
-            # pytest **不会**自动还原它。漏掉 undo() 时，这里对 `handle_proxy_addr` 的空返回补丁会
-            # 永久留在进程里——`async_http.utils` 与 `src/sync_http.py` 用的是同一个 src.utils 模块
-            # 对象，于是同会话后续的 sync_http 代理用例拿不到 proxy_addr、静默落到 urllib 直连分支，
-            # 真的向 example.com 发出请求（表现为跨文件「假失败」，且是一次未打桩的出站）。
+            # 必须成对撤销：本文件用的是 `pytest.MonkeyPatch()` 手工实例（不是夹具），pytest 不会
+            # 自动还原它。漏掉 undo() 时，这里对 `handle_proxy_addr` 的空返回补丁会永久留在进程里——
+            # async_http.utils 与 src/sync_http.py 共用同一个 src.utils，同会话后续的 sync_http 代理
+            # 用例会拿不到 proxy_addr、静默落到 urllib 直连分支，真的向 example.com 发出未打桩请求。
             monkeypatch.undo()
             logger.remove(handler_id)
         assert lines, "内网定罪属安全判定，必须留 warning（debug 级会被当成普通不可达）"

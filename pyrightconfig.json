@@ -1,16 +1,16 @@
-// pyright / Pylance 的共用配置。它存在的理由不是「再多一条门禁」，而是让 IDE 里的红线可复核：
-// Pylance 没有命令行入口，过去「IDE 里看着没问题」是一句无出处可追的话（AGENTS.md 因此禁止把它当门禁证据）。
-// 有了这份 include / exclude / typeCheckingMode，IDE 语言服务器与 `pyright` CLI 读同一套口径，
-// IDE 看到的每一条都能由 CLI 复现。
+// pyright / Pylance 共用配置。存在的理由不是「再多一条门禁」，而是让 IDE 红线可复核：Pylance 没有
+// 命令行入口，「IDE 里看着没问题」曾是一句无出处可追的话（AGENTS.md 因此禁止把它当门禁证据）；
+// 有了这份 include / exclude / typeCheckingMode，IDE 语言服务器与 `pyright` CLI 读同一套口径。
 //
-// 口径来源（改任一条都要同时看那边，勿在此另立事实源）：
+// 口径来源（改任一条都要同时改那边，勿在此另立事实源）：
 //   include           == pyproject [tool.mypy].files（CI mypy / 本地 mypy / IDE+pyright 扫同一批文件）
 //   exclude           == pyproject [tool.basedpyright].exclude 与 [tool.mypy].exclude 的目录名并集
 //   typeCheckingMode / pythonVersion / venvPath / venv / reportMissingModuleSource == [tool.basedpyright]
+// schema（供编辑器补全；pyright 不认这个键，故只留链接于此）: https://raw.githubusercontent.com/microsoft/pyright/main/packages/vscode-pyright/schemas/pyrightconfig.schema.json
+//
 // 三条不得退让：① 不得把 include 收窄成 src/（三个根入口 main.py / gui.py / web.py 会再度分叉）；
 // ② 不得放开 typings/ 手写存根（pyproject 侧同样排除，其质量非本项目职责）；
 // ③ 门禁裁决仍以 CI 的 mypy 为准，pyright / IDE 结果是本地补充证据，不得替代 CI 结论。
-// schema（供编辑器补全，pyright 不认这个键故只留链接于此）: https://raw.githubusercontent.com/microsoft/pyright/main/packages/vscode-pyright/schemas/pyrightconfig.schema.json
 // 一致性由 tests/test_pyright_config_parity.py 机检（include 逐项相等、exclude 覆盖两份清单、严格度同值）。
 {
   "include": [

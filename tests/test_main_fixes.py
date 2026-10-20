@@ -1,6 +1,6 @@
-# Tests for main.py 批次2修复 - 并发/配置/录制路径回归测试.
-# 注意: import main 放到 fixture 中延迟执行——本环境在 pytest 收集阶段 spawn
-# 子进程（src/__init__ 的 node 检查）偶发 WinError 6/50，测试阶段执行则稳定.
+# main.py 并发 / 配置 / 录制路径回归。
+# 注意：import main 放到 fixture 中延迟执行——收集阶段会因 src/__init__ 的 node 检查 spawn 子进程
+# 而偶发 WinError 6/50，用例执行阶段则稳定。
 
 import subprocess
 import sys
@@ -44,14 +44,12 @@ class TestSafeNumberParsers:
 
     def test_safe_int_invalid_falls_back(self, main_mod: Any) -> None:
         # 非数字/None/空串等脏配置值一律回落默认 3，防止主循环用 None 做算术而崩
-        # 覆盖 abc / None / "" 三类典型脏值，证明解析失败一律安全兜底。
         assert main_mod._safe_int("abc", 3) == 3
         assert main_mod._safe_int(None, 3) == 3
         assert main_mod._safe_int("", 3) == 3
 
     def test_safe_float_invalid_falls_back(self, main_mod: Any) -> None:
-        # 同上：float 解析失败回落默认 1.5，合法值 2.5 优先于默认 1.0
-        # 验证合法值 2.5 不被默认 1.0 覆盖（解析成功路径与 int 对称）。
+        # 同上：float 解析失败回落默认；解析成功路径与 int 对称
         assert main_mod._safe_float("x", 1.5) == 1.5
         assert main_mod._safe_float("2.5", 1.0) == 2.5
 
@@ -66,7 +64,7 @@ class TestErrorWindow:
         main.error_window.clear()
 
     def test_window_mixes_success_and_error(self, main_mod: Any) -> None:
-        # 混合 0/1 采样：此前只记 1 导致错误率只能降不能升；本例 [1,0,0] 验证升降皆可。
+        # 混合 0/1 采样：旧实现只记 1 导致错误率只能降不能升；[1,0,0] 验证升降皆可。
         main_mod.record_error()
         main_mod.record_success()
         main_mod.record_success()
@@ -74,9 +72,8 @@ class TestErrorWindow:
         assert sum(main_mod.error_window) / len(main_mod.error_window) == pytest.approx(1 / 3)
 
     def test_window_bounded(self, main_mod: Any) -> None:
-        # 连续写入 20 条（远超窗口容量）：验证旧样本被丢弃，长度恒等于 error_window_size
+        # 写入 20 条（远超窗口容量）：旧样本被丢弃，长度恒等于 error_window_size
         # （否则无限增长会拖慢错误率计算并污染长期统计）
-        # 20 > error_window_size：写入后应被裁剪回窗口容量，证明滑动窗口生效。
         for _ in range(20):
             main_mod.record_error()
         assert len(main_mod.error_window) == main_mod.error_window_size
@@ -90,10 +87,9 @@ class TestErrorWindow:
 
 class TestFileUpdateLock:
     def test_file_update_lock_is_reentrant(self, main_mod: Any) -> None:
-        # RLock：主循环持锁读配置期间可重入 read_config_value 的写入路径。
-        # 行为化验证：同一线程连续两次 acquire 不阻塞（普通 Lock 会死锁）。
+        # RLock：主循环持锁读配置期间可重入 read_config_value 的写入路径；
+        # 同一线程连续两次非阻塞 acquire 都成功（普通 Lock 第二次会死锁）。
         lock = main_mod.file_update_lock
-        # 非阻塞 acquire 连续两次成功（普通 Lock 第二次会死锁），证明 RLock 可重入。
         assert lock.acquire(blocking=False)
         try:
             assert lock.acquire(blocking=False)
@@ -107,15 +103,13 @@ class TestSelectSourceUrl:
 
     @pytest.fixture(autouse=True)
     def _stub_dns_public(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # WP-J（2026-09-30，方案 1-A）之后，select_source_url 在把地址交给 ffmpeg -i 之前过一次
-        # 「内网/保留目标」落地复核（src/stream_select.py 的 _accept_source），它对**非字面量**主机名
-        # 走 DNS seam web_config._resolve_host_ips。本类用例把 _validate_stream_url 整体 mock 掉、
-        # 地址又是合成域名 cdn.example.com，真解析在无外网/无 DNS 的环境会 NXDOMAIN → 落地复核定罪
-        # 「主机名无法解析」→ 选源返回 None（用例假失败，且把「本机有没有 DNS」当成被测行为）。
-        # 打桩口径沿用 src/async_http.py 的 _internal_stream_target_reason 注释里写明的唯一 seam
-        # （同 tests/test_stream_select.py 的 _stub_dns_public、
-        # tests/test_sync_probe_internal_guard.py 的 _hermetic_probe_env）。
-        # 落地复核自身的行为锁在 tests/test_sync_probe_internal_guard.py::TestSourceUrlHandoff。
+        # WP-J（方案 1-A）后，select_source_url 把地址交给 ffmpeg -i 之前要过一次「内网/保留目标」
+        # 落地复核（src/stream_select.py 的 _accept_source），非字面量主机名走 DNS seam
+        # web_config._resolve_host_ips。本类用例 mock 了 _validate_stream_url、地址又是合成域名
+        # cdn.example.com，真解析在无外网环境会 NXDOMAIN → 复核定罪「主机名无法解析」→ 选源返回
+        # None（用例假失败，且把「本机有没有 DNS」当成被测行为）。打桩口径沿用
+        # src/async_http.py 的 _internal_stream_target_reason 注释里写明的唯一 seam；落地复核自身
+        # 的行为锁在 tests/test_sync_probe_internal_guard.py::TestSourceUrlHandoff。
         monkeypatch.setattr(web_config, "_resolve_host_ips", lambda host: [_PUBLIC_DNS_IP])
 
     def test_h265_flv_uses_hls_when_enabled_and_valid(self, main_mod: Any) -> None:
@@ -170,7 +164,7 @@ class TestSelectSourceUrl:
 class FakeProcess:
     # 模拟 subprocess.Popen：验证 _run_ffmpeg_checked 的超时终止与退出码处理
     def __init__(self, returncode: int = 0, out: bytes = b"", timeout_on_communicate: bool = False) -> None:
-        # returncode/out 模拟 ffmpeg 退出码与输出；timeout_on_communicate 模拟首次 communicate 超时。
+        # timeout_on_communicate 模拟首次 communicate 超时（供 kill 后重读）。
         self.returncode = returncode
         self.out = out
         self.timeout_on_communicate = timeout_on_communicate
@@ -194,11 +188,11 @@ class FakeProcess:
 
 
 def _popen_class_returning(proc: FakeProcess) -> type[Any]:
-    # SEV-2225 迁移：Popen 替身必须是**类**且定义 __class_getitem__ —— 本仓 main.check_subprocess
-    # 的内层函数注解 subprocess.Popen[bytes] 在 def 时即求值，lambda / 不带该钩子的普通类分别报
+    # SEV-2225 迁移：Popen 替身必须是**类**且定义 __class_getitem__——本仓 main.check_subprocess
+    # 的内层函数注解 subprocess.Popen[bytes] 在 def 时即求值，lambda / 缺该钩子的普通类分别报
     # 'function' object is not subscriptable / type 'X' is not subscriptable（AGENTS.md 硬约定）。
-    # __new__ 直接返回预置实例，于是 with subprocess.Popen(...) as process 拿到的就是它；
-    # 每次调用的实参记进 popen_calls，替代旧写法的 mock_popen.call_count（断言能力不降）。
+    # __new__ 直接返回预置实例（with subprocess.Popen(...) 拿到的就是它）；每次调用的实参记进
+    # popen_calls，替代旧写法的 mock_popen.call_count（断言能力不降）。
     calls: list[tuple[Any, ...]] = []
 
     class _Popen:
@@ -228,11 +222,10 @@ def _install_subprocess_shim(module_globals: dict[str, Any], monkeypatch: pytest
 @pytest.fixture
 def ffmpeg_checked_globals(main_mod: Any) -> dict[str, Any]:
     # 替身必须装进 src.video_postprocess 的模块字典，**不是** main 的：`_run_ffmpeg_checked` 定义在
-    # src/video_postprocess.py，main.py 只是 re-export，函数的 __globals__ 指向前者。
-    # 若照搬成 monkeypatch.setattr(main, "subprocess", shim) 就是**静默 no-op**（假绿）：三条用例
-    # 会去起真实 ffmpeg 进程——机器上有 ffmpeg 时靠退出码蒙断言、没有时 FileNotFoundError。
-    # 故这里按 __globals__ 取容器并核对归属（2026-09-23 实测 __name__ == "src.video_postprocess"），
-    # 归属一旦变化当场变红而不是悄悄失效。
+    # src/video_postprocess.py，main.py 只是 re-export，函数的 __globals__ 指向前者。照搬成
+    # monkeypatch.setattr(main, "subprocess", shim) 就是**静默 no-op**（假绿）：三条用例会去起真
+    # ffmpeg 进程——有 ffmpeg 时靠退出码蒙断言、没有时 FileNotFoundError。故按 __globals__ 取容器
+    # 并核对归属，归属一旦变化当场变红而不是悄悄失效。
     module_globals: dict[str, Any] = main_mod._run_ffmpeg_checked.__globals__
     assert module_globals.get("__name__") == "src.video_postprocess"
     return module_globals
@@ -259,10 +252,9 @@ class TestRunFfmpegChecked:
         _install_subprocess_shim(ffmpeg_checked_globals, monkeypatch, popen)
         with pytest.raises(subprocess.CalledProcessError):
             main_mod._run_ffmpeg_checked(["ffmpeg", "-this-flag-does-not-exist"])
-        # 必须断言替身真被走到：本机的真实 ffmpeg 对一个不存在的参数同样回非零码，
-        # 于是「shim 装错命名空间 → 起了真进程」也会让上面那条 raise 通过（2026-09-23 变异验证：
-        # 未补本条断言时，故意把 shim 装到 main 命名空间后另两条变红、本条仍绿；补上后三条全红）。
-        # 这条计数断言就是把「静默 no-op」形态摁住的那一半。
+        # 必须断言替身真被走到：本机真实 ffmpeg 对不存在的参数同样回非零码，于是「shim 装错命名
+        # 空间 → 起了真进程」也会让上面那条 raise 通过（变异验证：故意把 shim 装到 main 命名空间时，
+        # 另两条变红而本条仍绿；补上这条计数断言后三条全红）。
         assert len(popen.popen_calls) == 1
 
     def test_timeout_kills_process(
@@ -485,7 +477,7 @@ class TestSelectSourceUrlEmpty:
     # 旧逻辑静默 None → 房间永远“正在直播中...”却不录制且无诊断线索。
 
     def test_all_urls_empty_returns_none_with_warning(self, main_mod: Any) -> None:
-        # 回归：三类 URL 全空仍 is_live=True 时，旧逻辑静默 None → 房间“正在直播”却不录制。
+        # 告警文案须能让运维定位（三类 URL 全空 / HLS 采集未启用）
         info: Mapping[str, object] = {"anchor_name": "王者荣耀官方赛事", "is_live": True}
         with patch.object(main_mod, "hls_collection_enabled", True), patch("src.stream_select.logger.warning") as warn:
             result = main_mod.select_source_url(info)
@@ -493,7 +485,7 @@ class TestSelectSourceUrlEmpty:
         assert any("均为空" in str(c.args[0]) for c in warn.call_args_list)
 
     def test_hls_present_but_collection_disabled_no_fallback_warns(self, main_mod: Any) -> None:
-        # 回归：m3u8 存在但 HLS 采集关闭、且无 flv/record_url 回退 → 此前静默 None。
+        # m3u8 存在但 HLS 采集关闭、且无 flv/record_url 回退 → 此前静默 None
         info: Mapping[str, object] = {"anchor_name": "坤记喜事多", "is_live": True, "m3u8_url": "https://x/abc.m3u8"}
         with patch.object(main_mod, "hls_collection_enabled", False), patch("src.stream_select.logger.warning") as warn:
             result = main_mod.select_source_url(info)

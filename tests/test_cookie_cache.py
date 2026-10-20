@@ -1,12 +1,12 @@
-# Tests for src/cookie_cache.py - 统一 cookie 缓存模块的单元测试。
-# 覆盖：key 归一化、命中/未命中、TTL 失效、失败不缓存、跨线程并发去重、
-#       字符串拼接、失效/清空，以及与调用方（ttwid/spider）约定一致的 fetcher 透传。
-# 2026-10-18 CODE_REVIEW 追加三组不变量（任意一组被改回旧形态即应变红）：
+# src/cookie_cache.py 单元测试：key 归一化、命中/未命中、TTL 失效、失败不缓存、跨线程并发
+# 去重、字符串拼接、失效/清空，以及与 ttwid/spider 约定一致的 fetcher 透传。
+#
+# 2026-10-18 CODE_REVIEW 追加的三组不变量（改回旧形态即应转红）：
 #   M-05  失败日志的异常文本必须过 mask_credentials（凭据不随轮转日志长期落盘）；
-#   L-06  在途登记表只回收「拉取者所在循环已关闭」的孤儿登记，且必须唤醒其等待者、
-#         不得摘掉仍活着的拉取者登记、不得让迟到的拉取者抢走接管者的登记位；
-#   L-07  条目寿命由写入方按自己的 ttl 折成失效时刻，两个读取方（get_cached /
-#         fetch_cookies 与 singleflight）一律按记录的失效时刻判定。
+#   L-06  在途登记表只回收「拉取者所在循环已关闭」的孤儿登记，且须唤醒其等待者、不得摘掉
+#         仍活着的登记、不得让迟到的拉取者抢走接管者的登记位；
+#   L-07  条目寿命由写入方按自己的 ttl 折成失效时刻，两个读取方（get_cached / fetch_cookies
+#         与 singleflight）一律按记录的失效时刻判定。
 
 import asyncio
 import io
@@ -30,10 +30,9 @@ from src.cookie_cache import (
     invalidate,
 )
 
-# 一条真实形态的失败异常文本：查询串挂 token、代理地址挂 user:pass。
-# 两类都落在 utils.mask_credentials 的五条模式覆盖范围内（写用例前逐条实测），
-# 断言口径是「密钥字符串确实从日志文本里消失」，不是「调用过 mask_credentials」
-# （AGENTS 关键约定 #11：后者即使删掉生产实现里的那次调用照样全绿）。
+# 真实形态的失败异常文本：查询串挂 token、代理地址挂 user:pass，两类都落在 utils.mask_credentials
+# 的模式覆盖内（写用例前逐条实测）。断言口径是「密钥字符串确实从日志里消失」，不是「调用过
+# mask_credentials」——后者在删掉生产实现那次调用后照样全绿（AGENTS 关键约定 #11）。
 _SECRET_TOKEN = "AbcDef0123456789TOKENVALUE"
 _SECRET_PROXY_PASS = "Sup3rPr0xyPassw0rd"
 _SECRET_URL = f"https://push.example.com/api?token={_SECRET_TOKEN} via pusher:{_SECRET_PROXY_PASS}@proxy.internal:8080"
@@ -63,9 +62,9 @@ def log_capture() -> Iterator[io.StringIO]:
 
 @pytest.fixture
 def fake_clock(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[float]]:
-    # TTL 用例需要把时钟推过条目寿命，但绝不允许真 sleep（整包跑时既慢又不稳）。
-    # 按 AGENTS「进程级 stdlib 替身必须走被测模块命名空间的 shim」：真 time 模块本体
-    # 一个字节都不动，同会话其它用例与 loguru 的取时不受牵连。
+    # TTL 用例需把时钟推过条目寿命，但绝不允许真 sleep（整包跑既慢又不稳）。按 AGENTS「进程级
+    # stdlib 替身走被测模块命名空间 shim」：真 time 模块本体一字节不动，同会话其它用例与 loguru
+    # 的取时不受牵连。
     holder = [1000.0]
     shim = types.SimpleNamespace(**vars(time))
     shim.monotonic = lambda: holder[0]
@@ -84,21 +83,18 @@ def _dead_loop() -> asyncio.AbstractEventLoop:
 class TestMakeKey:
     # 缓存键的归一化规则。
 
-    # 丢弃 query 可避免同一主播不同房间参数（分享/回放）被当不同 key 各拉一次风控凭据
-    # 归一化键丢弃 query 与尾斜杠：同路径不同 query 的房间须共享一条缓存，避免重复拉风控凭据
     def test_strips_query_and_trailing_slash(self) -> None:
-        # 丢弃 query 可避免同一主播不同房间参数（分享/回放）被当不同 key 各拉一次风控凭据
-        # 归一化键丢弃 query 与尾斜杠：同路径不同 query 的房间须共享一条缓存，避免重复拉取风控凭据
+        # 丢弃 query 与尾斜杠：同路径不同房间参数（分享/回放）须共享一条缓存，
+        # 否则同一主播会被当成不同 key 各拉一次风控凭据。
         assert _make_key("https://live.example.com/path/?a=1&b=2", None) == "https://live.example.com/path|"
 
-    # 代理地址须纳入键：同房间走代理 vs 直连拿到的是不同风控凭据，须分别缓存而非共享
+    # 代理地址须纳入键：同房间走代理与直连拿到的是不同风控凭据，必须分别缓存
     def test_includes_proxy_addr(self) -> None:
         proxy = "http://127.0.0.1:8080"
         assert _make_key("https://live.example.com/", proxy) == f"https://live.example.com|{proxy}"
 
     def test_proxy_and_direct_are_distinct(self) -> None:
-        # 直连与代理网络路径不同，抖音按环境下发不同风控 cookie，混用会触发二次验证
-        # 键级隔离，防止代理用户的 cookie 泄漏给直连用户（反之亦然）
+        # 混用会触发二次验证，故直连与代理的键必须不相等；键级隔离也防止两侧 cookie 互相泄漏。
         direct = _make_key("https://live.example.com/", None)
         proxied = _make_key("https://live.example.com/", "http://127.0.0.1:8080")
         assert direct != proxied
@@ -107,10 +103,8 @@ class TestMakeKey:
 # 统一读取入口 fetch_cookies：首次拉取写入、命中复用、TTL 失效、失败/空值不缓存。
 # 并发维度（同循环 reentrant、跨线程）是 singleflight 去重与跨循环交付的关键回归点。
 class TestFetchCookies:
-    # 统一读取入口。
-
-    # 首次拉取即写入并返回；并通过断言 fetcher 透传参数，锁定与 ttwid/spider 调用方一致的调用约定
     async def test_first_fetch_caches_and_returns(self) -> None:
+        # 首次拉取即写入；同时锁住 fetcher 透传参数（与 ttwid/spider 的调用约定一致）。
         calls: list[dict[str, Any]] = []
 
         async def fake_fetcher(**kwargs: Any) -> dict[str, Any]:
@@ -120,16 +114,15 @@ class TestFetchCookies:
         result = await fetch_cookies("https://live.example.com/", fetcher=fake_fetcher)
         assert result == {"ttwid": "abc", "passport": "yes"}
         assert len(calls) == 1
-        # 透传约定参数（与 ttwid/spider 的调用方式一致）
         kwargs = calls[0]
         assert kwargs["url"] == "https://live.example.com/"
         assert kwargs["return_cookies"] is True
-        # 默认超时 10s 透传给 async_req：网络拉取 cookie 的普遍超时预算，过短易误判风控、过长拖慢首帧
+        # 10s 是网络拉 cookie 的普遍超时预算：过短易误判风控，过长拖慢首帧
         assert kwargs["timeout"] == 10
-        # 默认禁用 HTTP/2：旧版 curl_cffi 在部分平台对 HTTP/2 支持不稳，须与调用方约定保持一致
+        # 默认禁用 HTTP/2：旧版 curl_cffi 在部分平台对 HTTP/2 支持不稳，须与调用方约定一致
         assert kwargs["http2"] is False
 
-    # 命中缓存后不应再次调用 fetcher（calls==1），守护 singleflight"只拉一次"核心不变量
+    # 命中缓存后不得再次调用 fetcher（calls==1）：守护 singleflight「只拉一次」核心不变量
     async def test_cache_hit_does_not_refetch(self) -> None:
         calls = 0
 
@@ -143,8 +136,6 @@ class TestFetchCookies:
         assert first == second == {"did": "d1", "didv": "d2"}
         assert calls == 1
 
-        # int/float 不转 str 会拼出 'a=1 ' 等非法头，导致下游请求被拒
-
     # 非字符串 cookie 值须强制为 str：下游拼 Cookie 头要求 str，int/float 不得泄漏
     async def test_values_are_str_coerced(self) -> None:
         async def fake_fetcher(**kwargs: Any) -> dict[str, Any]:
@@ -153,18 +144,15 @@ class TestFetchCookies:
         result = await fetch_cookies("https://live.example.com/", fetcher=fake_fetcher)
         assert result == {"a": "1", "b": "1.5"}
 
-    # async_req(return_cookies=True) 另一成功形态 (其他数据, cookie_dict)：须正确解包出 cookie 字典
+    # async_req(return_cookies=True) 的另一种成功形态 (其他数据, cookie_dict)：须解包第二个元素
     async def test_tuple_result_compat(self) -> None:
-        # async_req(return_cookies=True) 的另一种成功返回形态 (其他数据, cookie_dict)
-        # 兼容旧版 async_req 的 (ok, cookie_dict) 双元素返回：须解包第二元素，回归早期结构
         async def fake_fetcher(**kwargs: Any) -> tuple[bool, dict[str, Any]]:
             return (True, {"k": "v"})
 
         result = await fetch_cookies("https://live.example.com/", fetcher=fake_fetcher)
         assert result == {"k": "v"}
 
-    # ttl=0 即「每次都过期」：连续两次 fetch 各拉一次（calls==2），验证 TTL 真正生效
-    # 而非被命中短路，防止默认 TTL 把临时失败也长期缓存
+    # ttl=0 即「每次都过期」：连续两次 fetch 各拉一次（calls==2），证明 TTL 判定生效而非被命中短路。
     async def test_ttl_zero_refetches_every_time(self) -> None:
         calls = 0
 
@@ -177,9 +165,8 @@ class TestFetchCookies:
         await fetch_cookies("https://live.example.com/", ttl=0, fetcher=fake_fetcher)
         assert calls == 2
 
-    # 每条 entry 记下自己的失效时刻，两个读取方都只认这条时刻（L-07）。
-    # 原用例断言的是修复前的分裂口径——「同一条目 get_cached 判过期、fetch_cookies 按调用方
-    # 传入的更大 ttl 判命中」，那正是本条缺陷的形态，故整条按新契约重写。
+    # 每条 entry 记下自己的失效时刻，两个读取方都只认这条时刻（L-07）：短 ttl 写入的条目
+    # 不得被读取侧的 DEFAULT_TTL 续命，长 ttl 写入的也不得被更小的 ttl 提前判死。
     async def test_recorded_ttl_governs_both_readers(self, fake_clock: list[float]) -> None:
         calls = 0
 
@@ -189,7 +176,6 @@ class TestFetchCookies:
             return {"a": "1"}
 
         # 短寿命凭据：以 ttl=60 写入，越过 60 秒后 get_cached 必须判 miss
-        # （旧实现下 60 与 1800 无关，100 秒后仍返回这份已被写入方判死的凭据）
         await fetch_cookies("https://short.example.com/", ttl=60, fetcher=fake_fetcher)
         fake_clock[0] += 61
         assert get_cached("https://short.example.com/") is None, "写入侧的短 ttl 被读取侧的 DEFAULT_TTL 覆盖"
@@ -207,7 +193,7 @@ class TestFetchCookies:
         assert await fetch_cookies("https://long.example.com/", fetcher=fake_fetcher) == {"a": "1"}
         assert calls == 3
 
-    # 通用 singleflight 层与 cookie 层同口径：ttl 由写入方折进条目，读取方传的 ttl 不改变命中判定。
+    # singleflight 层与 cookie 层同口径（L-07）：读取方传的 ttl 不改变命中判定。
     async def test_singleflight_recorded_ttl_governs_readers(self, fake_clock: list[float]) -> None:
         calls = 0
 
@@ -257,7 +243,6 @@ class TestFetchCookies:
 
         first = await fetch_cookies("https://live.example.com/", fetcher=fake_fetcher)
         assert first == {}
-        # 失败未固化为缓存：下一次访问会重新拉取
         second = await fetch_cookies("https://live.example.com/", fetcher=fake_fetcher)
         assert second == {"ok": "1"}
         assert calls == 2
@@ -287,9 +272,7 @@ class TestFetchCookies:
             seen["url"] = url
             return {"ttwid": "from_async_req"}
 
-            # 须打在模块全局引用上：fetch_cookies 经 cc.async_req 调用，patch import 名无效
-
-        # patch cc.async_req 而非 import 级名：fetch_cookies 通过模块全局引用 cc.async_req，必须打在模块属性上
+        # patch cc.async_req 而非 import 级名：fetch_cookies 走模块全局引用 cc.async_req，必须打在模块属性上
         monkeypatch.setattr(cc, "async_req", fake_async_req)
         result = await fetch_cookies("https://live.example.com/")
         assert result == {"ttwid": "from_async_req"}
@@ -353,13 +336,11 @@ class TestFetchCookies:
 
 
 class TestGetCached:
-    # 同步只读查询（不触发网络请求）。
+    # 同步只读查询：命中就返回值、未命中/过期就 None，任何情况都不触发网络（与 fetch 路径解耦）。
 
-    # 任何未预热 key 的同步查询必须返回 None，且不得触发网络（与 fetch 路径解耦）
     def test_miss_returns_none(self) -> None:
         assert get_cached("https://live.example.com/") is None
 
-    # 预热后同步查询直接返回已缓存 cookie，不触发任何网络（与 fetch 路径解耦）
     async def test_hit_returns_cookies(self) -> None:
         async def fake_fetcher(**kwargs: Any) -> dict[str, Any]:
             return {"ttwid": "abc"}
@@ -408,11 +389,8 @@ class TestGetCookieStr:
         assert result == ""
 
 
-# 失效入口：按 key 精准失效单条，或按无参清空整份缓存。
-# 守护"精准失效不误伤其它房间"与"无参清空"两条语义。
+# 失效入口：按 key 精准失效单条，或按无参清空整份缓存（「不误伤其它房间」是本组的语义本体）。
 class TestInvalidate:
-    # 失效指定条目或整份缓存。
-
     async def test_removes_single_entry(self) -> None:
         calls = 0
 
@@ -427,7 +405,7 @@ class TestInvalidate:
         await fetch_cookies("https://live.example.com/", fetcher=fake_fetcher)
         assert calls == 2
 
-    # 失效 a 不影响 b：守护「精准失效不误伤」语义，避免一键清空式的退化
+    # 失效 a 不影响 b：防止退化成一键清空式。
     async def test_other_entries_kept(self) -> None:
         async def fake_fetcher(**kwargs: Any) -> dict[str, Any]:
             return {"a": "1"}
@@ -453,10 +431,9 @@ class TestInvalidate:
         invalidate("https://never-fetched.example.com/")
 
 
-# 整份缓存清空入口：清空后所有 key 均 miss，语义与 invalidate() 无参对齐。
-# 常用于测试 fixture 复位，避免用例间缓存状态泄漏。
+# 整份缓存清空入口：clear 后缓存字典清空、所有 key miss，语义与 invalidate() 无参对齐；
+# 也是本文件的 fixture 复位手段，避免用例间状态泄漏。
 class TestClear:
-    # clear 后进程级缓存字典清空且所有 key miss：常用 fixture 复位，防用例间状态泄漏
     async def test_clears_all_entries(self) -> None:
         async def fake_fetcher(**kwargs: Any) -> dict[str, Any]:
             return {"a": "1"}
@@ -468,12 +445,11 @@ class TestClear:
         assert get_cached("https://a.example.com/") is None
 
 
-# ── MID-40：通用 singleflight 必须与 fetch_cookies 一样有世代比对 ──────────────
-# fetch_cookies 早在 MI-12 就补了「写回前比对 _cache_generation」，而 singleflight
-# 一直缺这半条：拉取期间被 invalidate_generic()/clear() 作废过的结果仍被无条件回填，
-# 于是「凭据被平台拒绝 → 失效」只能等 TTL（30 分钟）自然过期，自愈链断在半路。
+# ── MID-40：通用 singleflight 必须与 fetch_cookies 一样做世代比对 ──────────────
+# fetch_cookies 早在 MI-12 就补了「写回前比对 _cache_generation」，singleflight 缺这半条时，
+# 拉取期间被 invalidate_generic()/clear() 作废的结果仍被无条件回填，「凭据被平台拒绝 → 失效」
+# 只能等 30 分钟 TTL 自然过期，自愈链断在半路。
 class TestSingleflightGeneration:
-    # 在途拉取期间被 invalidate_generic 作废 → 本次结果不得回填缓存
     async def test_invalidate_during_inflight_fetch_is_not_resurrected(self) -> None:
         gate = asyncio.Event()
         calls = 0
@@ -498,11 +474,11 @@ class TestSingleflightGeneration:
         assert await task == "rejected-value"
         assert "rejected-value" not in [v for v, _ts in cc._generic_cache.values()], "被作废的凭据又被回填"
 
-        # 下一次调用必须重新拉取，而不是命中那份被拒的值
+        # 再取一次必须走新拉取，而不是命中那份被拒的值（第二调用的是另一个 factory）
         cc.invalidate_generic("bili_buvid3|")
         second = await cc.singleflight("bili_buvid3|", factory=_make_counting_factory(), timeout=2)
         assert second == "fresh-value"
-        assert calls == 1  # 第一次的 factory 未被再次执行，说明走的是新拉取而非缓存命中
+        assert calls == 1  # 故 calls 仍为 1：第一次的 factory 没被再执行
 
     # 未被作废时结果照常缓存（不得把缓存写没，否则去重意义全无）
     async def test_normal_fetch_still_cached(self) -> None:
@@ -527,9 +503,8 @@ def _make_counting_factory() -> Any:
 
 
 # ── M-05：失败日志的异常文本必须脱敏 ────────────────────────────────────────────
-# singleflight 的拉取失败日志原先直接 `e=e`（fetch_cookies 同位置早已按 WD-01 脱敏）：
-# factory 内部走 async_req/sync_req，异常文本常内嵌带签名/鉴权查询串的完整请求 URL 与
-# 代理凭据，而 logs/ 按 rotation 保留多份 ⇒ 原文入日志等于凭据长期落盘。
+# factory 内部走 async_req/sync_req，异常文本常内嵌带签名/鉴权查询串的完整 URL 与代理凭据，
+# 而 logs/ 按 rotation 保留多份 ⇒ 原文入日志等于凭据长期落盘（fetch_cookies 侧早已按 WD-01 脱敏）。
 class TestFailureLogMasksCredentials:
     async def test_singleflight_failure_log_masks_exception_text(self, log_capture: io.StringIO) -> None:
         async def _boom() -> str:
@@ -555,13 +530,11 @@ class TestFailureLogMasksCredentials:
         assert _SECRET_TOKEN not in text and _SECRET_PROXY_PASS not in text
         assert "***" in text and "ConnectionError" in text
 
-    # 行为锁挡不住「新加一条漏抹」（且新加的日志点没人写用例就完全无人核对），故再钉一条 AST 结构锁：
-    # 本模块每个 logger.<level>(i18n.tr(模板, **kw)) 里，凡实参名是 e / err / url / masked_url 的，
-    # 其表达式必须包含 mask_credentials(...)——异常类型位 type(e).__name__ 本身不含凭据，放行。
-    # 判据形态注意两点：① 关键字实参挂在**内层 i18n.tr(...) 调用**上，不在 logger 调用上
-    # （只遍历 logger 节点的 keywords 会恒为空、锁恒真，2026-10-18 写这条时实测踩到）；
-    # ② 必须同时断言「扫到的受检点位数量」，否则模板形态一改（如改成 f-string 实参）这条锁
-    # 会静默变成空集通过——正是 AGENTS「恒真断言使安全锁失效」点名的形态。
+    # 行为锁挡不住「新加一条漏抹」（新日志点没人写用例就无人核对），故再钉一条 AST 结构锁：
+    # 本模块每个 logger.<level>(i18n.tr(模板, **kw)) 里，实参名为 e / err / url / masked_url 的
+    # 表达式必须含 mask_credentials(...)；异常类型位 type(e).__name__ 不含凭据，放行。
+    # 两个易踩点：① 关键字实参挂在内层 i18n.tr(...) 上而非 logger 调用上，只遍历 logger 节点会
+    # 恒为空、锁恒真；② 必须同时断言受检点位数，否则模板形态一改（如变 f-string）即成空集通过。
     def test_every_credential_bearing_log_arg_is_masked(self) -> None:
         import ast
         from pathlib import Path
@@ -596,11 +569,10 @@ class TestFailureLogMasksCredentials:
 
 
 # ── L-06：在途登记表的孤儿回收 ─────────────────────────────────────────────────
-# 拉取线程被硬杀时（本模块注释里明确承认的场景），_inflight / _generic_inflight 里的登记
-# 既不会有人交付也不会被摘除；原实现的 invalidate()/clear() 只清结果字典，于是这个 key
-# 从此每次都走「等待 timeout+余量 → 空结果」，永不自愈（已实测复现恒返回 {} 直到进程重启）。
-# 修复口径：只回收 owner 循环已关闭的登记（活拉取者的登记一律不动，否则连带丢掉它的等待者、
-# 还会让同 key 并发重发请求），并唤醒被回收登记的等待者，令其立刻拿空结果而不是白等。
+# 拉取线程被硬杀时，_inflight / _generic_inflight 的登记既不会有人交付也不会被摘除；原实现的
+# invalidate()/clear() 只清结果字典，于是该 key 从此每次都走「等待 timeout+余量 → 空结果」，
+# 永不自愈。修复口径：只回收 owner 循环已关闭的登记（活拉取者一律不动，否则会连带丢掉它的
+# 等待者并让同 key 并发重发请求），并唤醒被回收登记的等待者，令其立刻拿空结果而不是白等。
 class TestInflightOrphanReclaim:
     async def test_clear_reclaims_dead_registration_and_wakes_waiters(self) -> None:
         loop = asyncio.get_running_loop()
@@ -680,8 +652,6 @@ class TestInflightOrphanReclaim:
             assert key not in cc._inflight
 
     async def test_clear_keeps_registration_of_a_live_fetcher(self) -> None:
-        # 反向锁：活着的拉取者登记**不得**被 clear() 摘掉（摘了它的等待者就没人交付，
-        # 同 key 还会并发重发一次请求——正是本模块要消灭的风控触发源）
         gate = asyncio.Event()
 
         async def fake_fetcher(**kwargs: Any) -> dict[str, Any]:

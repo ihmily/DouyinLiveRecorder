@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
-# http_config SSL 校验开关测试：整合开关「是否启用https录制」联动语义 + 平台级覆盖机制
-# 语义要点（安全修复后）：证书豁免只作用于拉流侧 stream_ssl_verify；
-# 控制面 ssl_verify（登录 / 取 Cookie / 推送 token / 平台 API）恒为严格校验，
-# 不再被「是否启用https录制」联动关闭。
+# http_config SSL 校验开关测试：「是否启用https录制」的整合联动 + 平台级覆盖。
+# 安全边界：证书豁免只作用于拉流侧 stream_ssl_verify；控制面 ssl_verify
+# （登录 / 取 Cookie / 推送 token / 平台 API）恒为严格校验，不受该开关影响。
 from collections.abc import Generator
 
 import pytest
@@ -30,8 +29,8 @@ def _reset_state() -> Generator[None, None, None]:
 
 
 def _apply_integrated_switch(enabled: bool) -> None:
-    # 复刻 main.py 的整合联动调用：安全修复后只调用 set_https_recording，
-    # 由其内部联动拉流侧 stream_ssl_verify；控制面 ssl_verify 不再被联动。
+    # 复刻 main.py 的整合联动：只调 set_https_recording，由其内部联动拉流侧；
+    # 控制面 ssl_verify 不受联动。
     http_config.set_https_recording(enabled)
 
 
@@ -39,7 +38,7 @@ def _apply_integrated_switch(enabled: bool) -> None:
 
 
 def test_integrated_https_on_relaxes_stream_verify_only() -> None:
-    # 整合：开启 https 录制 → 拉流侧豁免证书校验，但控制面保持严格校验
+    # 开启 https 录制 → 拉流侧豁免证书校验，控制面保持严格校验
     _apply_integrated_switch(True)
     assert http_config.stream_ssl_verify is False
     assert http_config.get_effective_ssl_verify() is False
@@ -50,7 +49,7 @@ def test_integrated_https_on_relaxes_stream_verify_only() -> None:
 
 
 def test_integrated_https_off_restores_stream_verify() -> None:
-    # 整合：关闭（http 录制）→ 拉流侧恢复默认严格校验
+    # 关闭（http 录制）→ 拉流侧恢复默认严格校验
     _apply_integrated_switch(False)
     assert http_config.stream_ssl_verify is True
     assert http_config.get_effective_ssl_verify() is True
@@ -59,15 +58,15 @@ def test_integrated_https_off_restores_stream_verify() -> None:
 
 
 def test_control_plane_verify_never_disabled_by_https_toggle() -> None:
-    # 安全回归防线：无论 https 录制开关如何翻转，控制面 ssl_verify 恒为 True。
-    # 旧实现用 set_ssl_verify(not enabled) 让拉流开关关掉全站 TLS 校验（缺陷）。
+    # 安全回归防线：https 录制开关任意翻转，控制面 ssl_verify 恒为 True。
+    # 旧实现曾用 set_ssl_verify(not enabled) 让拉流开关关掉全站 TLS 校验。
     for enabled in (True, False, True):
         _apply_integrated_switch(enabled)
         assert http_config.ssl_verify is True
 
 
 def test_integrated_toggle_roundtrip() -> None:
-    # 整合：开↔关热切换（Web 面板改配置后主循环每轮同步）行为正确翻转
+    # 开↔关热切换（Web 面板改配置后主循环每轮同步）行为正确翻转
     _apply_integrated_switch(True)
     assert http_config.get_effective_ssl_verify("B站直播") is False
     _apply_integrated_switch(False)
@@ -77,7 +76,7 @@ def test_integrated_toggle_roundtrip() -> None:
 
 
 def test_integrated_platform_override_inert_under_https() -> None:
-    # https 模式拉流侧已全局豁免：平台级列表无额外意义，列表内/外平台一致均为不校验
+    # https 模式拉流侧已全局豁免：平台列表无额外意义，列表内外一律不校验
     _apply_integrated_switch(True)
     http_config.set_platform_ssl_verify("虎牙直播", False)
     assert http_config.get_effective_ssl_verify("虎牙直播") is False
@@ -85,9 +84,8 @@ def test_integrated_platform_override_inert_under_https() -> None:
 
 
 def test_integrated_http_mode_platform_override_takes_effect() -> None:
-    # http 模式（拉流侧恢复严格校验）：「禁用SSL证书验证的平台」生效——
-    # 列表内平台跳过证书校验（FFmpeg 9.0 默认验证 TLS 证书后证书异常平台仍可拉流），
-    # 列表外平台保持严格校验
+    # http 模式：「禁用SSL证书验证的平台」生效——列表内跳过证书校验
+    # （FFmpeg 9.0 起默认验证 TLS 证书，证书异常平台仍可拉流），列表外严格校验。
     _apply_integrated_switch(False)
     http_config.set_platform_ssl_verify("虎牙直播", False)
     assert http_config.get_effective_ssl_verify("虎牙直播") is False
@@ -131,8 +129,7 @@ def test_platform_override_isolated() -> None:
 
 
 def test_platform_override_ignored_when_stream_disabled() -> None:
-    # 平台覆盖仅在「拉流侧需要证书校验」时生效：拉流已全局豁免
-    # （stream_ssl_verify=False，https 录制模式）时覆盖无额外意义，一律继承 False
+    # 拉流已全局豁免（https 录制模式）时覆盖无额外意义，一律继承 False
     http_config.set_stream_ssl_verify(False)
     http_config.set_https_recording(True)
     http_config.set_platform_ssl_verify("虎牙直播", True)
@@ -141,8 +138,7 @@ def test_platform_override_ignored_when_stream_disabled() -> None:
 
 
 def test_platform_override_effective_when_verification_needed() -> None:
-    # 「拉流侧需要验证」时（stream_ssl_verify=True）平台覆盖生效：
-    # 禁用列表内平台返回 False（跳过校验），列表外平台保持 True（严格校验）
+    # 拉流侧需要验证时平台覆盖生效：禁用列表内返回 False，列表外保持 True
     http_config.set_stream_ssl_verify(True)
     http_config.set_https_recording(False)
     http_config.set_platform_ssl_verify("虎牙直播", False)

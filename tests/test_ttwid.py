@@ -1,4 +1,4 @@
-# Tests for src/ttwid.py - ttwid module tests for coverage improvement.
+# src/ttwid.py 的回归锁：出口分列的 TTL 缓存、配置预置 ttwid 读取、拉取拼装、singleflight 并发去重与预热。
 
 import asyncio
 import configparser
@@ -49,8 +49,6 @@ def _prime_bucket(
 # _app_root 定位配置根目录：普通运行取脚本旁 config/，frozen 运行取可执行文件目录。
 # 正确解析是后续所有配置读取的基础。
 class TestAppRoot:
-    # Test _app_root.
-
     def test_returns_string(self) -> None:
         result = _app_root()
         assert isinstance(result, str)
@@ -60,9 +58,6 @@ class TestAppRoot:
 # _read_config_ttwid 从 config.ini 读取预置 ttwid：须正确处理前缀、空值、缺失配置。
 # 守卫"不写出空/重复前缀 ttwid"的脏数据。
 class TestReadConfigTtwid:
-    # Test _read_config_ttwid.
-
-    # 配置目录不存在时须返回空串而非抛异常（首次运行/未填 ttwid 配置的常态）
     def test_no_config_returns_empty(self) -> None:
         # 配置目录不存在时须返回空串而非抛异常（首次运行 / 未填 ttwid 配置的常态）
         with patch("src.ttwid._app_root", return_value="/nonexistent/path"):
@@ -100,8 +95,6 @@ class TestReadConfigTtwid:
 
 
 class TestFetchTtwid:
-    # Test _fetch_ttwid.
-
     @pytest.mark.asyncio
     async def test_success(self) -> None:
         ttwid_module._cached_ttwid = ""
@@ -136,8 +129,6 @@ class TestFetchTtwid:
 
 
 class TestGetTtwid:
-    # Test get_ttwid.
-
     @pytest.mark.asyncio
     async def test_cached_returns_directly(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # MID-33 后「非空」不再等于「永久有效」：命中必须同时满足「未过 TTL」，
@@ -171,14 +162,10 @@ class TestGetTtwid:
 
 
 class TestWarmupTtwid:
-    # Test warmup_ttwid.
-
     def test_success(self) -> None:
         ttwid_module._cached_ttwid = ""
         clear_cookie_cache()
         # warmup 在程序启动时预取并缓存 ttwid，避免首帧录制才拉取造成开播延迟
-        # warmup_ttwid calls asyncio.run(get_ttwid()), which internally calls _fetch_ttwid
-        # and sets _cached_ttwid. We mock async_req to control _fetch_ttwid's behavior.
         cookies = {"ttwid": "warm_value"}
         with (
             patch("src.ttwid.async_req", new_callable=AsyncMock, return_value=cookies),
@@ -190,7 +177,7 @@ class TestWarmupTtwid:
 
     def test_exception_handled(self) -> None:
         with patch("src.ttwid.get_ttwid", new_callable=AsyncMock, side_effect=Exception("fail")):
-            # Should not raise
+            # get_ttwid 抛异常时 warmup 必须吞掉、不得冒泡
             warmup_ttwid()
 
 
@@ -236,15 +223,12 @@ class TestFetchTtwidException:
         ttwid_module._cached_ttwid = ""
 
 
-# get_ttwid 的并发去重语义（2026-09-12 审查 H-2 后改写）
-#
-# 旧设计：_ttwid_lock 跨越 await 持有，用假锁（acquire 恒 False）模拟"锁被其他线程
-#   持有"来覆盖兜底分支。新设计改用 cookie_cache.singleflight（锁内零 await、
-#   等待者经 future 复用结果），"锁竞争"场景已不存在，该用例的旧断言随之失效。
-#
-# 新用例覆盖的才是新设计的核心不变量：并发 N 个 get_ttwid 只打一次 _fetch_ttwid，
-#   且所有调用方拿到同一份结果——这正是原实现用锁想保证（但会跨房间阻塞事件循环）
-#   的性质。若 singleflight 退化成各自拉取，fetch 次数会 >1，用例失败。
+# get_ttwid 的并发去重语义：cookie_cache.singleflight（锁内零 await、等待者经 future
+#   复用结果）保证并发 N 个 get_ttwid 只打一次 _fetch_ttwid、且所有调用方拿到同一份结果
+#   （原实现用 _ttwid_lock 跨 await 持锁达到同一效果，代价是跨房间阻塞事件循环）。
+#   若 singleflight 退化成各自拉取，fetch 次数会 >1，用例失败。
+# [历史注 2026-09-12 审查 H-2] 早先以「假锁 acquire 恒 False」模拟锁竞争来覆盖兜底分支，
+#   改用 singleflight 后「锁竞争」场景不存在、该旧断言已随之移除。
 class TestGetTtwidSingleflight:
     @pytest.mark.asyncio
     async def test_concurrent_calls_fetch_once(self) -> None:

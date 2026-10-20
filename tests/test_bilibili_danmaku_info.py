@@ -1,5 +1,5 @@
-# 验证 B站弹幕参数获取 get_bilibili_danmaku_info：
-# - wbi 签名（nav 取 wbi_img -> mixinKey -> w_rid）注入到 getDanmuInfo 请求
+# B站弹幕参数获取 get_bilibili_danmaku_info 的字段/分支锁：
+# - wbi 签名（nav 取 wbi_img → mixinKey → w_rid）注入 getDanmuInfo 请求
 # - room_init 短号转真实 room_id
 # - 返回 BilibiliDanmaku.start 所需的参数字段
 # 全程 mock async_req，不触网。
@@ -96,10 +96,9 @@ def test_get_bilibili_danmaku_info_happy_path() -> None:
 
 
 def test_get_bilibili_danmaku_info_spi_empty_uses_fallback_buvid() -> None:
-    # 回归：spi 端点风控返回空响应体（200 + 空 body，_loads_dict 得 {}），
-    # 旧逻辑会让 buvid 静默为空 -> 进房包带空 buvid -> 弹幕服务器硬断连。
-    # 修复后：重试一次仍空则生成兜底 buvid3（uuid），保证非空。
-    # 兜底 buvid 走 uuid 生成：需校验结果非空且为合法 uuid 格式（未注册标识也会被弹幕服务器软拒绝）。
+    # 回归：spi 端点风控返回空响应体（200 + 空 body，_loads_dict 得 {}）时，旧逻辑让 buvid 静默
+    # 为空 → 进房包带空 buvid → 弹幕服务器硬断连。修复后重试一次仍空则生成兜底 buvid3（uuid），
+    # 需校验结果非空且为合法 uuid 格式（未注册标识也会被服务器软拒绝）。
     import uuid as _uuid
 
     responses = {
@@ -122,10 +121,10 @@ def test_get_bilibili_danmaku_info_spi_empty_uses_fallback_buvid() -> None:
         return ""
 
     # 同时 mock 首页 Set-Cookie 备取（返回空）与冻结时间；spi 两跳空走 uuid 兜底路径。
-    # MID-65：async_req 是 `async def`，patch 虽会自动选 AsyncMock，但那是隐式行为——
-    # 一旦有人把它换成普通 Mock，side_effect 返回的协程就没人 await，GC 时抛
-    # 「coroutine was never awaited」的 RuntimeWarning（本仓明令禁止用 filterwarnings 压制）。
-    # 故显式写 new_callable=AsyncMock，把「驱动 async 路径必须用 awaitable 桩」钉成可读契约。
+    # MID-65：async_req 是 `async def`，patch 自动选 AsyncMock 属隐式行为——换成普通 Mock 后
+    # side_effect 返回的协程无人 await，GC 时抛「coroutine was never awaited」RuntimeWarning
+    # （本仓禁止用 filterwarnings 压制）。故显式写 new_callable=AsyncMock，把「驱动 async 路径
+    # 必须用 awaitable 桩」钉成可读契约。
     with (
         patch("src.spider.async_req", new_callable=AsyncMock, side_effect=fake_req),
         patch("src.spider._cache_fetch_cookies", new_callable=AsyncMock, return_value={}) as home_mock,
@@ -156,7 +155,7 @@ def test_get_bilibili_danmaku_info_empty_danmu_returns_none() -> None:
         "getDanmuInfo": '{"code":-352,"message":"风控","data":null}',
     }
 
-    # 路由同 happy_path；本例 getDanmuInfo 返回 code=-352（风控），data 为 null 触发空值分支。
+    # getDanmuInfo 返回 code=-352（风控）、data 为 null，触发空值分支。
     async def fake_req(url: str, *args: object, **kwargs: object) -> str:
         for key in ("room_init", "nav", "finger/sp", "getDanmuInfo"):
             if key in url:
@@ -336,7 +335,6 @@ def test_buvid_prefers_cookie_over_spi() -> None:
             return danmu_resp
         return ""
 
-    # cookie 携带真实注册 buvid3：必须优先提取并跳过 spi，避免用未注册 uuid 被 AUTH 软拒绝。
     cookie = "SESSDATA=x; buvid3=REAL-BUVID3-123; other=1"
     with patch("src.spider.async_req", new_callable=AsyncMock, side_effect=fake_req), patch("src.spider.time") as t:
         t.time.return_value = 1700000000
@@ -352,12 +350,12 @@ def test_buvid_prefers_cookie_over_spi() -> None:
 
 class _FakeAuthWs:
     # 捕获断开调用的假 WebSocket 客户端。
-    # MID-2245 后生产代码从 `self._ws.close()` 改走 `self._ws.fail(reason)`——语义差别是
-    # 「调用方主动停止」 vs 「连接不可用且要回调 on_close」（用 close 会让 collector 侧与
-    # room_connected 配对的 hub.room_closed() 永不发出，监控页永久停在「已连接 / 0 条」）。
-    # 因此本替身必须实现 fail()：置 closed 并记下 reason，否则 ensure_future 起的协程会在
-    # 无人持有引用的情况下抛 AttributeError —— 断言只会表现为「closed 仍为 False」的假因，
-    # 并额外漏出一条 "Task exception was never retrieved" 告警（本仓 pytest 口径为 0 警告）。
+    # MID-2245 后生产代码从 `self._ws.close()` 改走 `self._ws.fail(reason)`：前者语义是「调用方
+    # 主动停止」，后者才能回调 on_close（用 close 会让 collector 侧与 room_connected 配对的
+    # hub.room_closed() 永不发出，监控页永久停在「已连接 / 0 条」）。故替身必须实现 fail()：
+    # 置 closed 并记下 reason，否则 ensure_future 起的协程会在无人持引用时抛 AttributeError，
+    # 断言只表现为「closed 仍为 False」的假因，并额外漏出 "Task exception was never retrieved"
+    # 告警（本仓 pytest 口径为 0 警告）。
     def __init__(self) -> None:
         self.closed = False
         self.fail_reasons: list[str] = []
@@ -379,9 +377,9 @@ def _decode_auth_reply(payload: bytes) -> tuple[Any, Any]:
     client = BilibiliDanmaku(on_message=lambda m: None, on_close=lambda r: None, on_ready=lambda: None)
     ws = _FakeAuthWs()
     client._ws = ws  # type: ignore[assignment]
-    # 手工拼一条 B站弹幕协议帧：头部 >IHHII = (包长, 头长16, 协议版本1, operation=8 即 AUTH_REPLY,
-    # 序列号1) + JSON 载荷。operation=8 是进房认证回包，用真帧喂 decode_message 才能走到认证分支。
-    # 大端 > 与 B站 WS 协议严格一致；头长恒 16，载荷为 JSON 文本。
+    # 手工拼一条协议帧：头部 >IHHII = (包长, 头长 16, 协议版本 1, operation=8 即 AUTH_REPLY,
+    # 序列号 1) + JSON 载荷。用真帧喂 decode_message 才能走到认证分支；大端 > 与 B站 WS 协议
+    # 严格一致，头长恒 16。
     frame = struct.pack(">IHHII", 16 + len(payload), 16, 1, 8, 1) + payload
 
     async def _run() -> None:
@@ -393,24 +391,23 @@ def _decode_auth_reply(payload: bytes) -> tuple[Any, Any]:
 
 
 def test_auth_reply_ok_keeps_connection() -> None:
-    # code=0 认证成功：不置停止标志、不断开连接
-    # （对照组：验证失败路径才主动断开，成功路径不得误杀连接）
+    # code=0 认证成功：不置停止标志、不断开连接（对照组：失败路径才主动断开，
+    # 成功路径不得误杀连接）
     client, ws = _decode_auth_reply(b'{"code":0}')
     assert client._stopped is False
     assert ws.closed is False
 
 
 def test_auth_reply_failure_closes_connection() -> None:
-    # code!=0 软拒绝：此前连接保持却不推弹幕且无任何感知；修复后主动断开并带原因退出，
-    # 同时使 spider 侧 buvid 缓存失效（兜底 UUID 被拒后不可复用，下一轮重新获取）
-    # AUTH 被拒：断言缓存失效钩子被调用一次（兜底 UUID 被软拒绝后不可复用，下一轮重新获取）。
+    # code!=0 软拒绝：此前连接保持却不推弹幕且无任何感知；修复后主动断开并带原因退出，同时使
+    # spider 侧 buvid 缓存失效（兜底 UUID 被拒后不可复用，下一轮重新获取）。
     with patch("src.spider.invalidate_bili_buvid_cache") as inv:
         client, ws = _decode_auth_reply(b'{"code":-101,"message":"auth failed"}')
     assert client._stopped is True
     assert ws.closed is True
-    # MID-2245 的真实不变量不是「连接被关」而是「走的是会被上报的 fail() 出口」：
-    # 只断言 closed 会让「退回 close()」这一实现照样通过（close 同样置 closed），
-    # 于是监控页残留「已连接 / 0 条」的原始缺陷可以无声回归。
+    # MID-2245 的真实不变量不是「连接被关」而是「走的是会被上报的 fail() 出口」：只断言 closed
+    # 会让「退回 close()」照样通过（close 同样置 closed），监控页「已连接 / 0 条」的原始缺陷
+    # 可以无声回归。
     assert ws.fail_reasons and ws.fail_reasons[0], "认证被拒未走 WsClient.fail()，on_close 不会上报"
     inv.assert_called_once()
 
@@ -490,8 +487,8 @@ def test_auth_watchdog_fires_without_reply() -> None:
 
     client, ws = _watchdog_client()
 
-    # 将 _AUTH_TIMEOUT 压到 0.01s 加速触发看门狗（真实超时较长，单测不可等）；
-    # 未收到任何 AUTH_REPLY 即按被拒处理。
+    # 把 _AUTH_TIMEOUT 压到 0.01s 加速触发（真实超时较长，单测不可等）；未收到任何
+    # AUTH_REPLY 即按被拒处理。
     async def _run() -> None:
         with patch.object(BilibiliDanmaku, "_AUTH_TIMEOUT", 0.01):
             await client._auth_watchdog(ws)
@@ -502,16 +499,15 @@ def test_auth_watchdog_fires_without_reply() -> None:
     # 软拒绝路径：连接被标记停止并主动断开，buvid 缓存失效钩子恰好调用一次。
     assert client._stopped is True
     assert ws.closed is True
-    # MID-2245 的真实不变量不是「连接被关」而是「走的是会被上报的 fail() 出口」：
-    # 只断言 closed 会让「退回 close()」这一实现照样通过（close 同样置 closed），
-    # 于是监控页残留「已连接 / 0 条」的原始缺陷可以无声回归。
+    # 同上：MID-2245 的真实不变量是「走会被上报的 fail() 出口」。只断言 closed 会让「退回
+    # close()」照样通过（close 同样置 closed），监控页「已连接 / 0 条」的缺陷可无声回归。
     assert ws.fail_reasons and ws.fail_reasons[0], "认证被拒未走 WsClient.fail()，on_close 不会上报"
     inv.assert_called_once()
 
 
 def test_auth_watchdog_noop_after_ok_reply() -> None:
-    # 已收到 code=0 回应（_auth_ok=True）：看门狗不动作
-    # （守护 _auth_ok 标志，防止成功进房后看门狗误触发断开）
+    # 已收到 code=0 回应（_auth_ok=True）：看门狗不动作（守护 _auth_ok 标志，
+    # 防止成功进房后看门狗误触发断开）
     from src.platforms.bilibili import BilibiliDanmaku
 
     client, ws = _watchdog_client()

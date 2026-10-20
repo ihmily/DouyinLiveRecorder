@@ -3,23 +3,23 @@
 # =============================================================================
 # DouyinLiveRecorder 单文件整合版 (standalone)
 # =============================================================================
-# 本文件从工作区 D:\DouyinLiveRecorder-dev 的 42 个源模块(约 2.1 万行)中抽取并整合
-# 核心录制主链路，合并为一个**开箱即用**的单文件脚本。
+# 本文件从工作区的源模块(约 2.1 万行)中抽取并整合核心录制主链路，合并为一个**开箱即用**
+# 的单文件脚本。
 #
 # 设计取舍
 # -----------------------------------------------------------------------------
 # * **零第三方依赖**：只使用 Python 标准库(urllib/math/subprocess/threading 等)，
-#   无需 pip install 任何包即可运行(录制本身仍需 ffmpeg 可执行文件)。
-# * **本文件是被整合模块的独立副本，不是薄封装**：src/scheduler.py 的并发实现、
-#   src/spider.py 的部分平台解析、src/stream_select.py 的探针/退避、src/ffmpeg_install.py
-#   的包内 ffmpeg 判据，以及 ffmpeg 命令构造(本文件有**两处**定义点，main.py 只有一处)都在
-#   此各有一份拷贝。副本的通病是「单边修改 → 语义漂移」，故改判据必须两处同改、两边注释
-#   互相点名；并发两份实现的**等价性并不完整**，逐条差异见 PlatformBreaker 类注释。
-#   核对漂移的机检面：tests/test_regression_2026_09_22_standalone.py、
-#   tests/test_ffmpeg_reconnect_args.py、tests/test_ffmpeg_path_preference.py。
-# * **语法基线 Python >= 3.14**：本仓统一使用 PEP 758 无括号多异常写法
-#   (except A, B:)，该语法 3.14 起才合法——请勿用 3.13 及以下版本运行本文件。
-# * **保留原工程的核心正确性约定**(这些是原工程踩坑后的结论，单文件版一律继承)：
+#   无需 pip install 即可运行(录制本身仍需 ffmpeg 可执行文件)。
+# * **本文件是被整合模块的独立副本，不是薄封装**：src/scheduler.py 的并发实现、src/spider.py
+#   的部分平台解析、src/stream_select.py 的探针/退避、src/ffmpeg_install.py 的包内 ffmpeg 判据，
+#   以及 ffmpeg 命令构造(本文件有**两处**定义点，main.py 只有一处)都在此各有一份拷贝。副本的
+#   通病是「单边修改 → 语义漂移」，故改判据必须两处同改、两边注释互相点名；并发两份实现的
+#   **等价性并不完整**，逐条差异见 PlatformBreaker 类注释。漂移的机检面：
+#   tests/test_regression_2026_09_22_standalone.py、tests/test_ffmpeg_reconnect_args.py、
+#   tests/test_ffmpeg_path_preference.py。
+# * **语法基线 Python >= 3.14**：本仓统一使用 PEP 758 无括号多异常写法(except A, B:)，
+#   该语法 3.14 起才合法——请勿用 3.13 及以下版本运行本文件。
+# * **保留原工程的核心正确性约定**(原工程踩坑后的结论，单文件版一律继承)：
 #   1. 校验探针与 ffmpeg 录制必须共用同一 UA / Referer / Cookie(record_headers 单点构造)，
 #      否则出现「探针 200、ffmpeg 403」的假绿。
 #   2. m3u8 的 HEAD 常被 CDN 返回 4xx(405/404) 而 GET 可正常拉流，
@@ -36,16 +36,14 @@
 #
 # 支持的平台
 # -----------------------------------------------------------------------------
-# * 抖音 live.douyin.com            —— 完整支持(webcast room/web/enter，web_rid 同时
-#                                      接受数字房间号与抖音号，不做重定向解析)
-# * 虎牙 www.huya.com               —— 完整支持(HTML stream 解析 + 微信小程序接口兜底，
-#                                      房间别名经 ProfileRoom 字段还原数字房间号)
-# * B站 live.bilibili.com           —— 完整支持(room_init 判开播 → playUrl 取流
-#                                      → Master/info 取主播名 → getH5InfoByRoom 取标题)
-# * 斗鱼 www.douyu.com              —— 完整支持(betard 房间信息 + getEncryption 签名
-#                                      + getH5PlayV1 取流)。签名是纯 MD5 链式算法，
-#                                      **不需要 Node.js**，经 RFC 1321 纯 Python 实现
-#                                      直接完成(见 _md5_hex 的实现说明)。
+# * 抖音 live.douyin.com       —— webcast room/web/enter；web_rid 同时接受数字房间号与抖音号，
+#                                不做重定向解析。
+# * 虎牙 www.huya.com          —— HTML stream 解析 + 微信小程序接口兜底，房间别名经 ProfileRoom
+#                                字段还原数字房间号。
+# * B站 live.bilibili.com      —— room_init 判开播 → playUrl 取流 → Master/info 取主播名 →
+#                                getH5InfoByRoom 取标题。
+# * 斗鱼 www.douyu.com         —— betard 房间信息 + getEncryption 签名 + getH5PlayV1 取流；签名
+#                                是纯 MD5 链式算法（RFC 1321 纯 Python 实现，**不需要 Node.js**）。
 #
 # 使用
 # -----------------------------------------------------------------------------
@@ -680,31 +678,22 @@ class ResizableSemaphore:
 
 class PlatformBreaker:
     # 按 key(host) 的熔断器：closed(放行) → open(熔断) → half-open(放一个探针)。
-    # 探针带租约：授予后超过 lease 秒仍未上报样本(如主播未开播的等待轮)时
-    # 重新授予，否则 _probing 永不复位 → 该 key 永久熔断直到进程重启。
-    # half-open 的回报必须经 _probing/_probe_owner/_probe_seq 门控：只有「当前代探针的持有
-    # 线程」的回报才允许驱动状态迁移，其余回报只入窗口。缺门控时后果不是"统计略偏"而是
-    # 行为相反：一条在熔断前就已放行、此刻才收尾的普通轮次 record_success 会直接 clear()
-    # 样本窗口并置 closed → 坏 CDN 立刻重新拿到全部房间流量；租约重授予后那条陈旧探针的
-    # 回报同样能关掉新探针。
-    # [历史注] 2026-09-23 MID-2257 才把该门控自 src 回灌，此前副本的 half-open 分支无条件
-    #   把任何回报当探针结果(回归锁 tests/test_regression_2026_09_22_standalone.py)。
-    # 同源副本：src/scheduler.py::PlatformBreaker(本类按设计不 import src/)。
-    # **两份实现并不等价**，且方法集合会随单边改动漂移，故不在此抄快照 —— 要下结论就现场跑
-    #   grep -n "^    def " src/scheduler.py 与本源文件、逐方法 diff 后再显式决定同步方向。
-    # 已知的刻意保留差异(逐条显式决定，不是漏同步)：
-    #   1. 时间源用 time.monotonic() 而非 src 的 _now() 间接层——_now() 在 src 里只是
-    #      「可被测试 patch」的 seam(见 scheduler.py::_now 注释)，standalone 无该测试面，
-    #      且同文件 ResizableSemaphore 亦直接用 time.monotonic()，副本内保持一致更可读。
-    #   2. 探针归属比对用 threading.current_thread() 对象身份(与 src 同判据)，不用
-    #      get_ident()——ident 会被已死线程复用，对象身份不会。
-    #   3. min_samples 取 src 的默认值 8，但不做成构造参数：本副本的构造点只有一处
-    #      (Scheduler._breaker，全用默认值)，加参数只会多一个永不使用的旋钮。
-    #   4. 租约时长以类属性 LEASE_SECONDS 表达(src 是模块级 _PROBE_LEASE_SECONDS)，
-    #      数值同为 60.0；改任一侧须同步另一侧。
-    #   5. 仍缺 src 的两个诊断方法 error_rate / backoff_seconds(副本的退避由调用方固定
-    #      间隔实现，不读冷却剩余量)，且样本入队函数名为 _push 而非 src 的 _push_sample
-    #      —— 属**已登记**的行为无关差异，不是待回灌项。
+    # 探针带租约：授予后超过 lease 秒仍未上报样本(如主播未开播的等待轮)时重新授予，否则 _probing
+    # 永不复位 → 该 key 永久熔断直到进程重启。
+    # half-open 的回报必须经 _probing/_probe_owner/_probe_seq 门控：只有「当前代探针的持有线程」
+    # 的回报才允许驱动状态迁移，其余回报只入窗口。缺门控的后果不是「统计略偏」而是行为相反：
+    # 熔断前已放行、此刻才收尾的普通轮次 record_success 会直接 clear() 样本窗口并置 closed →
+    # 坏 CDN 立刻重新拿到全部房间流量；租约重授予后那条陈旧探针的回报同样能关掉新探针。
+    # 同源副本：src/scheduler.py::PlatformBreaker(本类按设计不 import src/)。**两份实现并不等价**，
+    # 且方法集合会随单边改动漂移，故不在此抄快照 —— 要下结论就现场跑 `grep -n "^    def "`
+    # 逐方法 diff 后再显式决定同步方向。
+    # 已知的刻意保留差异(逐条显式决定，不是漏同步)：① 时间源用 time.monotonic() 而非 src 的
+    # _now() 间接层(那是给测试 patch 的 seam，副本无该测试面)；② 探针归属比对用
+    # threading.current_thread() 对象身份而非 get_ident()(ident 会被已死线程复用)；③ min_samples
+    # 取 src 默认值 8 但不做构造参数(本副本构造点只有一处)；④ 租约时长以类属性 LEASE_SECONDS
+    # 表达(src 是模块级 _PROBE_LEASE_SECONDS)，数值同为 60.0，改一侧须同步另一侧；⑤ 仍缺 src 的
+    # error_rate / backoff_seconds，样本入队函数名为 _push 而非 _push_sample —— 属**已登记**的
+    # 行为无关差异，不是待回灌项。
     LEASE_SECONDS = 60.0
     MIN_SAMPLES = 8  # 与 src/scheduler.py::PlatformBreaker 的 min_samples 默认值同值
 

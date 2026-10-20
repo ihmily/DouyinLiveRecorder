@@ -143,12 +143,10 @@ class TestStartupInfo:
     def test_windows_builds_hidden_console_startupinfo(self) -> None:
         info = vp.get_startup_info("nt")
         assert info is not None
-        # get_startup_info 的返回型是 object | None（跨平台类型，见函数上的注释），
-        # 这里按 Windows 实际型取 dwFlags。不用 subprocess.STARTUPINFO 作 cast 目标：
-        # 该符号在 Linux/macOS 的 typeshed 里不存在，会把本用例变成「只在 Windows 能过」的门禁。
-        # 同理 STARTF_USESHOWWINDOW 也只存在于 Windows typeshed——门禁含 `mypy --platform linux`
-        # 这一路（AGENTS「平台符号双跑」），裸引用会让全仓门禁红在 Linux 侧（本用例本身已
-        # 由 skipif 保证只在 win32 运行，缺的只是静态可见性），故取 getattr + 1（该常量真实值）。
+        # 返回型是 object | None（跨平台），此处按 Windows 实际型取 dwFlags。STARTUPINFO 与
+        # STARTF_USESHOWWINDOW 只存在于 Windows typeshed，裸引用会让 `mypy --platform linux`
+        # 这一路门禁红在 Linux 侧（AGENTS「平台符号双跑」），故常量取 getattr + 1（真实值）、
+        # cast 也不以 STARTUPINFO 为目标；用例本身已由 skipif 保证只在 win32 运行。
         assert cast(Any, info).dwFlags & getattr(subprocess, "STARTF_USESHOWWINDOW", 1)
 
     def test_nt_on_non_win32_platform_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:

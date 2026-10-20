@@ -1,14 +1,13 @@
 # tests/test_regression_2026_10_18_gui_output_chain.py — CODE_REVIEW_2026-10-18 的 S-01/M-11/M-12 行为锁。
 #
-# 为什么单独成文件而不是并进 test_gui_qt_units.py / test_gui_qt_window.py：
-# 那两份钉的是「模块单元」与「窗口外观/接线」，而这三条都是**跨线程投递与模态重入**的通路锁，
-# 必须同时持有真窗（MainWindow）与真子进程（假录制核心），且要能被单独运行来复现「断路」。
-# S-01 的教训正在于此：旧用例只直调 controller.drain()，于是「信号从未 emit、drain 无生产调用方」
-# 这种整条链断开的形态在满屏绿色里过去了 —— 本文件一律从**入口**（start_recording /
-# 后台线程调 _queue_log / 定时器链调 _watch_url_config）驱动，断在任何一环都会红。
+# 为什么单独成文件：test_gui_qt_units.py / test_gui_qt_window.py 钉的是「模块单元」与「窗口外观/
+# 接线」，而这三条都是**跨线程投递与模态重入**的通路锁，必须同时持有真窗（MainWindow）与真子进程。
+# S-01 的教训正在于此：旧用例只直调 controller.drain()，「信号从未 emit、drain 无生产调用方」这种
+# 整条链断开的形态在满屏绿色里过去了——本文件一律从**入口**（start_recording / 后台线程调
+# _queue_log / 定时器链调 _watch_url_config）驱动，断在任何一环都会红。
 #
-# 变异验证（一次性改动当轮按字节还原并复跑本文件；2026-10-18 本机实测读数如下，
-# 六处变异全部转红、还原后本文件 6 条 + test_gui_qt_settings_dialog.py 2 条全绿）：
+# 变异验证（一次性改动当轮按字节还原并复跑本文件；2026-10-18 本机实测读数，六处变异全部转红、
+# 还原后本文件 6 条 + test_gui_qt_settings_dialog.py 2 条全绿）：
 #   · 拆掉 recorder._push 的 outputReady.emit → 2 failed, 4 passed（两条 S-01 用例同时红）；
 #   · 跳过 _on_recorder_ended 的 reclaim_after_natural_end → 1 failed（EOF 用例：句柄未回收）；
 #   · 把 _queue_log 改回直接 _log_timer.start() → 1 failed（M-11 用例：尾线程入队永不刷出）；
@@ -55,9 +54,8 @@ def app() -> QApplication:
 
 @pytest.fixture()
 def window(app: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[MainWindow]:
-    # 登记表还原与 test_gui_qt_window.py 的 window 夹具同源：Qt 顶层窗口在 QApplication 存活期间
-    # 不会被释放（app.topLevelWidgets() 仍持有），弱引用不失效，条目会一路残留到后续测试文件，
-    # 而 tests/test_ui_i18n.py 是按「全局条数」断言的。
+    # 登记表还原与 test_gui_qt_window.py 的 window 夹具同源：Qt 顶层窗口在 QApplication 存活期间不会
+    # 被释放，条目会一路残留到后续测试文件，而 tests/test_ui_i18n.py 是按「全局条数」断言的。
     from src import ui_i18n
 
     registry_snapshot = list(ui_i18n._ENTRIES)  # noqa: SLF001 - 测试还原全局登记表，与生产同模块
@@ -111,11 +109,10 @@ def test_recorder_child_output_reaches_terminal_window(app: QApplication, window
 
 
 def test_natural_eof_is_observed_and_process_handle_reclaimed(app: QApplication, window: MainWindow) -> None:
-    # 自然 EOF（主播下播 / 子进程自行退出）必须：① 日志页打出结束行；
-    # ② 界面回到待机（start 按钮重新可用）；③ 进程句柄被回收，能再次开始录制。
-    # 结束行按 i18n.tr() 后的形态比对（关键约定 #13）：MainWindow.__init__ 会调
-    # i18n.set_language() **热替换** i18n._tr，把 conftest 的恒等映射顶掉，
-    # 于是宿主语言为英文时这行落进终端的是 "Recording process ended"，钉原文必红。
+    # 自然 EOF（主播下播 / 子进程自行退出）必须：① 日志页打出结束行；② 界面回到待机；
+    # ③ 进程句柄被回收，能再次开始录制。结束行按 i18n.tr() 后的形态比对：MainWindow.__init__ 会调
+    # i18n.set_language() **热替换** i18n._tr，把 conftest 的恒等映射顶掉，于是宿主语言为英文时
+    # 这行落进终端的是 "Recording process ended"，钉原文必红。
     window.recorder.build_record_command = lambda: [sys.executable, "-c", "print('bye-from-child')"]  # type: ignore[method-assign]
     window.start_recording()
     end_line = i18n.tr("录制进程已结束")
@@ -136,9 +133,8 @@ def test_natural_eof_is_observed_and_process_handle_reclaimed(app: QApplication,
 
 
 def test_queue_log_from_worker_thread_flushes_by_itself(app: QApplication, window: MainWindow) -> None:
-    # 生产里这条路径来自弹幕 tail 线程（danmaku_monitor._tail_loop 的留痕分支）与画质解析：
-    # 只有工作线程入队、主线程不再入队的情况下日志仍要刷出，否则「这一批永远滞留」。
-    # 先把刷新链打回休眠态（夹具构建窗口时托盘那条告警已经把它启起来了）。
+    # 生产里这条路径来自弹幕 tail 线程与画质解析：只有工作线程入队、主线程不再入队时日志仍要刷出，
+    # 否则「这一批永远滞留」。先把刷新链打回休眠态（夹具构建窗口时托盘那条告警已把它启起来了）。
     window._log_timer.stop()  # noqa: SLF001 - 复现「主线程这一轮不启表」的生产形态
     window._pending_log_lines.clear()  # noqa: SLF001 - 同上，避免夹具残留批次替本用例刷出
     assert window._log_timer.isActive() is False, "日志刷新链是按需激活的休眠态"
@@ -153,9 +149,9 @@ def test_queue_log_from_worker_thread_flushes_by_itself(app: QApplication, windo
     thread = threading.Thread(target=_worker, name="worker-queue-log")
     thread.start()
     thread.join(timeout=5.0)
-    # 审查 7.11（2026-10-18）：join(timeout=5.0) 返回不等于线程已退出。本用例锁的正是
-    # 「工作线程只入队、不跨线程动 QTimer」——入队路径若改成同步等待主线程，线程会挂在 _queue_log
-    # 里，而 caught 仍为空、后面的 flush 判据也可能被主线程别的路径替它满足，形成假绿。
+    # 审查 7.11（2026-10-18）：join(timeout=5.0) 返回不等于线程已退出。本用例锁的正是「工作线程只
+    # 入队、不跨线程动 QTimer」——入队路径若改成同步等待主线程，线程会挂在 _queue_log 里，而 caught
+    # 仍为空、后面的 flush 判据也可能被主线程别的路径替它满足，形成假绿。
     assert not thread.is_alive(), "worker-queue-log 未在 5s 内退出：_queue_log 阻塞在非 GUI 线程上，不得判绿"
     assert not caught, f"非 GUI 线程调用 _queue_log 不得抛错：{caught}"
     flushed = _pump_until(app, lambda: "来自尾线程的一行日志" in window.logs_page.terminal.toPlainText())
@@ -181,9 +177,8 @@ def _stacking_probe(
     on_enter: Callable[[], None] | None = None,
 ) -> Callable[..., int]:
     # 替身在被调用时就地再走一次本链，等价于「模态事件循环期间 _status_tick 又触发了一拍」。
-    # 重入守卫失效时这里会一路递归下去（深度由 asked 上限兜住，别把解释器栈打爆）；
-    # 守卫生效时第二次进入在弹窗之前就 return，asked 只会有一条。
-    # on_enter 用来模拟「弹窗期间录制进程又写了一次文件」，判据见第三条用例。
+    # 重入守卫失效时这里会一路递归下去（深度由 asked 上限兜住，别把解释器栈打爆）；守卫生效时
+    # 第二次进入在弹窗之前就 return，asked 只会有一条。on_enter 用来模拟「弹窗期间又写了一次文件」。
     def _question(*_args: object, **_kwargs: object) -> int:
         asked.append(1)
         if on_enter is not None:
@@ -214,9 +209,9 @@ def test_url_config_conflict_asks_once_and_keeps_watching(window: MainWindow, mo
 def test_url_config_change_during_modal_is_still_asked_after_answer(
     window: MainWindow, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # 挂起检测不等于吃掉检测：弹窗期间录制进程又写了一次文件时，那一拍必须只被「挡住」
-    # 而不被「确认」。守卫排在 mtime 前置之后的写法会把新 mtime 就地落进 _url_last_mtime，
-    # 用户答完之后这条改动再也问不到 —— 正是本条要拦的形态（改回那个顺序本条转红）。
+    # 挂起检测不等于吃掉检测：弹窗期间录制进程又写了一次文件时，那一拍必须只被「挡住」而不被
+    # 「确认」。守卫排在 mtime 前置之后的写法会把新 mtime 就地落进 _url_last_mtime，用户答完之后
+    # 这条改动再也问不到——正是本条要拦的形态（改回那个顺序本条转红）。
     asked: list[int] = []
     _external_url_change(window, "https://live.douyin.com/5555 原画 主播V\n", 1)
     monkeypatch.setattr(

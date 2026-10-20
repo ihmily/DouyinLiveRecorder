@@ -1,15 +1,12 @@
 # tests/test_gui_qt_settings_dialog.py — 高级设置对话框「轮询随可见性启停」的行为锁（M-15）。
 #
-# 为什么单独成文件：settings_dialog 的其余用例（加载/保存/外部改动两条裁决路径）在
-# tests/test_gui_qt_units.py 里，本文件的判据是**窗口关闭之后不再有磁盘轮询**，
-# 需要真实 show/hide 事件、属于对话框生命周期而不是编辑器逻辑，硬塞进那一份会把它
-# 的「不靠真窗也能驱动」定位打散（且那份本轮由并行工作包占用）。
+# 单独成文件：settings_dialog 的加载/保存/外部改动两条裁决路径在 tests/test_gui_qt_units.py，
+# 本文件的判据是「窗口关闭之后不再有磁盘轮询」，需要真实 show/hide 事件，属对话框生命周期。
 #
-# 断链后果（修复前）：对话框带 parent，close/accept/reject 只 hide、不销毁 C++ 对象，
-# 于是 _watch_timer 在窗口已不可见后仍每 5s 读一遍 config.ini，
-# 而主窗口每次打开都 new 一个新实例（见 main_window.open_advanced_settings），
-# 开/关 N 轮就积累 N 个幽灵定时器——无谓 IO + 对不可见窗口弹 QMessageBox 的日志噪声。
-# 变异验证（拆掉 hideEvent 停表）本文件两条判据同时转红。
+# 断链后果：对话框带 parent，close/accept/reject 只 hide、不销毁 C++ 对象，_watch_timer 在
+# 窗口不可见后仍每 5s 读一遍 config.ini；主窗口每次打开都 new 一个实例
+# （main_window.open_advanced_settings），开关 N 轮即积累 N 个幽灵定时器——无谓 IO + 日志噪声。
+# 变异验证：拆掉 hideEvent 停表，本文件两条判据同时转红。
 
 import os
 import time
@@ -18,7 +15,8 @@ from typing import Iterator
 
 import pytest
 
-# 探测真正要 import 的子模块并显式放宽 exc_type（AGENTS.md「测试」节的 2026-10-18 CI 事故口径）。
+# 探测真正要 import 的子模块并放宽 exc_type：PySide6 缺 Qt 系统库时失败发生在子模块 dlopen，
+# 顶层包仍可导入，否则整轮 pytest 会以 collection error 中断（详见 test_gui_qt_units.py 头部）。
 pytest.importorskip(
     "PySide6.QtWidgets", exc_type=ImportError, reason="PySide6 / Qt 系统库不可用时跳过设置对话框用例（环境限制口径）"
 )
@@ -79,8 +77,8 @@ def test_watch_timer_follows_dialog_visibility(app: QApplication, tmp_path: Path
 
 
 def test_closed_dialog_stops_polling_the_config_file(app: QApplication, tmp_path: Path) -> None:
-    # reject()/accept()（取消按钮 / 保存成功）只走到 hide，停表必须落在那条公共路径上；
-    # 停表之后按一个「比间隔长得多的窗口」确认触发次数为零（修复前每 50ms 触发一次）。
+    # reject()/accept()（取消 / 保存成功）只走到 hide，停表必须落在该公共路径上；
+    # 随后用远长于间隔的窗口确认触发次数为零（修复前每 50ms 触发一次）。
     dialog = _dialog(tmp_path)
     try:
         dialog.show()

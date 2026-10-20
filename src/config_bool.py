@@ -2,20 +2,14 @@
 #
 # 背景：规范写法是「是/否」（config.ini 模板、README 配置块、Web 面板提示均按此文档化），但落盘值来自
 # 多个写入方（Web 面板文本框 / GUI / 用户手改 / 外部编辑器 / 配置迁移脚本），故 true/false（大小写不一）、
-# 1/0、yes/no、on/off 都会出现。
+# 1/0、yes/no、on/off 都会出现。此前各模块各写一套判据且口径互不相同（main.py 字典查表、
+# logger.py `!= "否"`、web/app.js `== "是"`），同一份 config.ini 因而含义各异；2026-09-17 实测把
+# 「是/否」批量改成 true/false 后 8 项配置生效值全部漂移（其中「是否跳过代理检测」漂移导致
+# 9 个海外平台的解析分支直接走 else，100% 无法录制）。
 #
-# 旧实现把「取值」与「解析」混在一处且**四处口径互不相同**：
-#   - main.py：`options = {"是": True, "否": False}` 字典查表，值不在字典里即
-#     **静默**回落到 `options.get(raw, 兜底)` 的第二参数——无告警、无日志，
-#     2026-09-17 实测把 config.ini 的「是/否」批量改成 true/false 后，8 项配置
-#     的生效值全部漂移（其中「是否跳过代理检测」漂移导致 9 个海外平台的解析
-#     分支直接走 else，100% 无法录制）；
-#   - logger.py：`!= "否"`——false / 0 / no 全被当成「开启」，与上者语义相反；
-#   - web_config.py：`in ("true", "1", "yes", "是")`——只认这四种；
-#   - web/app.js 与 gui.py：`== "是"`——只认「是」一种。
-# 同一份 config.ini 因此在不同模块里含义各异。本模块只做「字符串 → bool」的纯解析：无 I/O、不 import
-# 任何本仓模块，好让加载极早的 logger.py 可直接引用而不构成循环导入（logger 早于 main 执行、且
-# src.utils → src.logger 已有依赖链，故不能放进 utils / config_io）。「读取 + 缺键补写」见 config_io.read_config_bool。
+# 本模块只做「字符串 → bool」的纯解析：无 I/O、不 import 任何本仓模块，好让加载极早的 logger.py 可直接引用
+# 而不构成循环导入（logger 早于 main 执行、且 src.utils → src.logger 已有依赖链，故不能放进 utils / config_io）。
+# 「读取 + 缺键补写」见 config_io.read_config_bool。
 
 from __future__ import annotations
 
@@ -33,8 +27,8 @@ FALSE_TOKENS: frozenset[str] = frozenset({"否", "false", "f", "no", "n", "off",
 # 不在此复述以免漂移）；空值与无法识别的值一律返回 default。调用方必须传该配置项
 # 的文档默认值，而不要传「上一次的取值」——否则非法输入会静默沿用旧值而不报警。
 def parse_config_bool(raw: str | bool | int | None, default: bool) -> bool:
-    # 已是 Python bool 时短路返回：调用方可能混入 API/测试传入的 bool，走 str() 分支
-    # 会得到 "True"（小写后仍能命中 token，但属无谓转换）。
+    # bool 短路返回：调用方可能混入 API/测试传入的 bool，走 str() 分支会得到 "True"
+    # （小写后仍命中 token，但属无谓转换）。
     if isinstance(raw, bool):
         return raw
     if raw is None:

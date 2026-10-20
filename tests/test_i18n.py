@@ -1,4 +1,4 @@
-# Tests for i18n.py 批次5修复 - 环境变量污染与翻译环境回归测试.
+# i18n.py 回归：环境变量污染与翻译加载环境。
 
 import importlib.util
 import os
@@ -18,14 +18,12 @@ MO_PATH = ROOT / "i18n" / "zh_CN" / "LC_MESSAGES" / "zh_CN.mo"
 class TestInitGettext:
     def test_no_lang_env_pollution(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # 原实现导入即写死 LANG=zh_CN.utf8（macOS 非法 locale），并传染子进程。
-        # LT-09（2026-10-18 审查）：旧断言拿**宿主环境此刻的取值**当判据，本机就设了
-        # LANG=zh_CN.utf8 的开发者会看到一条恒红的用例（i18n 其实什么都没写）；而宿主
-        # 恰好没设该变量时，「导入过程到底改没改环境变量」这一真判据从未被检验过。
-        # 改为「执行模块体前后取值对比」，且基线必须先把这一族变量清空再取：本文件顶部的
-        # `import i18n` 已经跑过一次模块体，基线若在那之后取，「导入期写 LANG」会被基线
-        # 一并吸收（变异实测：不清空时把写入语句加回模块体，用例仍恒绿＝典型假绿）。
+        # LT-09（2026-10-18 审查）：判据改为「执行模块体前后取值对比」，旧断言拿**宿主此刻
+        # 的取值**当判据——设了 LANG=zh_CN.utf8 的开发机会恒红，宿主未设时又从未检验过真判据。
+        # 基线必须先把这一族变量清空再取：本文件顶部的 `import i18n` 已跑过一次模块体，
+        # 基线若在那之后取，「导入期写 LANG」会被一并吸收（变异实测：不清空时加回写入语句仍恒绿）。
         # 不用 importlib.reload：那会把线上模块的 _tr / original_print 换成第二份快照，
-        # 同会话其它用例（本文件的目录断言、GUI 无头用例）持有的引用随之漂移。
+        # 同会话其它用例持有的引用随之漂移。
         for key in [k for k in os.environ if k.startswith(("LANG", "LC_"))]:
             monkeypatch.delenv(key, raising=False)
         before = {k: v for k, v in os.environ.items() if k.startswith(("LANG", "LC_"))}
@@ -41,9 +39,8 @@ class TestInitGettext:
     def test_locale_path_exists(self) -> None:
         assert Path(i18n.locale_path).exists()
 
-    # MIN-2254（2026-09-23）：原 `test_init_gettext_returns_callable` 随 `i18n.init_gettext()`
-    # 一并删除——该函数返回绑死 locale_name 的 gettext、不随 set_language 重读 `_tr`，
-    # 与本模块「热切换」契约相反且生产零调用，留着等于给下一个改动留陷阱。
+    # [历史注] MIN-2254 删除了 `i18n.init_gettext()` 及其用例：该函数返回绑死 locale_name
+    # 的 gettext、不随 set_language 重读 `_tr`，与本模块热切换契约相反且生产零调用。
 
 
 class TestMoCatalog:
@@ -52,13 +49,12 @@ class TestMoCatalog:
         assert MO_PATH.exists() and MO_PATH.stat().st_size > 0
 
     def test_translation_works_without_lang_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # Windows 客户端普遍不设置 LANG/LC_* 环境变量；翻译加载不得依赖它们。
-        # 清空这些变量后直接走本模块的 .mo 加载器做一次查表：若实现回退成
-        # 按环境变量查找的全局 gettext.gettext，这里会查不到而失败。
-        # MIN-2254 后改驱 `_load_mo_catalog`：原用例经已删除的 `init_gettext()` 走全局
-        # gettext（进程级副作用 + 不随 set_language 生效），意图不变、换更直接的入口。
-        # 必须用 monkeypatch 逐键删除：patch.dict(os.environ) 会整体快照并回写环境，
-        # harness 注入的超长变量会撞上 Windows 32767 字符上限（见 AGENTS.md 已知坑）。
+        # Windows 客户端普遍不设 LANG/LC_*，翻译加载不得依赖它们：清空后直接走本模块的
+        # .mo 加载器查表，若实现回退成按环境变量查找的全局 gettext，这里会查不到而失败。
+        # [历史注] MIN-2254 前本用例经已删除的 `init_gettext()` 走全局 gettext（进程级副作用
+        # 且不随 set_language 生效），意图不变、现改驱 `_load_mo_catalog`。
+        # 必须用 monkeypatch 逐键删除：patch.dict(os.environ) 整体快照写回会撞 Windows
+        # 32767 字符上限（见 AGENTS.md 已知坑）。
         for key in [k for k in os.environ if k.startswith(("LANG", "LC_"))]:
             monkeypatch.delenv(key, raising=False)
         catalog = i18n._load_mo_catalog(i18n.locale_path, "zh_CN")
@@ -93,9 +89,8 @@ class TestTranslatedPrint:
         assert i18n._should_translate("C:/somewhere/else/file.py") is False
 
     def test_should_requires_separator_boundary(self) -> None:
-        # L-03（2026-10-18 审查）：与项目根「同名前缀的兄弟目录」不是项目源码。
-        # 裸 startswith(_project_root) 下 /proj-evil/x.py 会被 /proj 命中，
-        # 第三方目录里的 print 于是也被翻译；补上分隔符边界后必须判 False。
+        # L-03：与项目根「同名前缀的兄弟目录」不是项目源码。裸 startswith(_project_root)
+        # 下 /proj-evil/x.py 会被 /proj 命中，第三方目录的 print 也被翻译；补分隔符边界后必须判 False。
         sibling = f"{i18n._project_root}-evil{os.sep}evil.py"
         assert i18n._should_translate(sibling) is False
         # 反向护栏：真实子路径仍必须判 True（不得把边界补成「只认相等」而整体失明）
@@ -178,8 +173,8 @@ class TestLanguageSwitching:
         assert i18n.get_language() == "en_US"
 
     # MID-52 回归锁：语言目录缺失时不得安装「恒等映射 + 仍回报请求码」的组合。
-    # 旧实现在此会让 GUI 打印「语言已切换」、把请求码写进 config.ini，而录制子进程按
-    # resolve_language 落到 en_US —— 同一部署两个进程两种语言。
+    # 旧实现会让 GUI 打印「语言已切换」、把请求码写进 config.ini，而录制子进程按
+    # resolve_language 落到 en_US——同一部署两个进程两种语言。
     def test_set_language_falls_back_when_catalog_missing(self) -> None:
         original_tr = i18n._tr
         try:

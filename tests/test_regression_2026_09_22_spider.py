@@ -2,24 +2,20 @@
 # 2026-09-22 审查报告 / 组 E（src/spider.py + src/platforms/bilibili.py）修复的回归锁。
 #
 # 判据一律落在「失效形态本身」而不是「调用了某个函数」：
-#   SEV-2204  快手 playUrls 只含 h265 / "h264": null 时必须仍判开播并给出 h265 候选
-#             （旧实现分别落入失效死分支与 TypeError → 静默未开播）；
-#   SEV-2205  畅聊/音播 liveID 为 int 必须拼出正确地址、缺失必须判无源且留线索
-#             （旧实现用 _dig_str → int 变空串 → 只带域名的坏地址 + 无条件 is_live=True）；
+#   SEV-2204  快手 playUrls 只含 h265 / "h264": null 时必须仍判开播并给出 h265 候选；
+#   SEV-2205  畅聊/音播 liveID 为 int 必须拼出正确地址、缺失必须判无源且留线索；
 #   SEV-2214  小红书 xhslink 跳转到外部 host 时不得携带 Cookie / xy-common-params；
 #   SEV-2215  getDanmuInfo 返回 evil.example.com 时不得建连、且不发 Cookie；
 #   MID-2212  微博 / Look 只给 HLS 或只给 FLV 时必须判开播且 record_url 为该路；
-#   MID-2214  斗鱼 betard 告警必须是 i18n.tr 模板：AST 判据 = logger.warning 的首参为 tr(常量串) 调用
-#             且串内含「斗鱼 betard」与 {rid}；拼接(BinOp)形态提取器看不见，判据细节见用例内注释；
-#   MID-2215  斗鱼签名：enc_time="2" 解析为 2；enc_time 上界一律夹到 32（用例取 1000 而非 10**9，
-#             好让「漏夹上界」表现为可判定的红而不是把用例挂死，理由见该用例内注释）；
+#   MID-2214  斗鱼 betard 告警必须是 i18n.tr 模板（拼接形态提取器看不见，判据见用例内注释）；
+#   MID-2215  斗鱼签名：enc_time="2" 解析为 2；上界一律夹到 32（用例取 1000 让「漏夹」可判定而不挂死）；
 #             缺 rand_str / key 时返回 {} 并留 warning；
 #   MIN-2202  抖音 HTML 兜底成功后不得对同一 url 二次抓取；
 #   MIN-2203  buvid spi 空结果重试前必须有一次 await sleep（零间隔连击被判红）；
 #   MIN-2222  百度 data 取稳定键名 room_id 而非首个键。
 #
-# 原则（AGENTS「测试不得自实现被测逻辑」）：只打桩传输层（spider.async_req / WsClient），
-# _loads_dict、_dig 系列、_warn_api_abnormal 与各平台解析逻辑一律走真实代码。
+# 原则：只打桩传输层（spider.async_req / WsClient），_loads_dict、_dig 系列、_warn_api_abnormal
+# 与各平台解析逻辑一律走真实代码。
 
 import asyncio
 import contextlib
@@ -35,11 +31,9 @@ WAF_HTML = "<html><head><title>Access Protected</title></head><body>cf-browser-v
 
 
 def _asyncio_shim(**overrides: Any) -> types.SimpleNamespace:
-    # MT-09（CODE_REVIEW_2026-10-18）：旧写法 patch.object(sp.asyncio, "sleep", 替身) 的容器是
-    # 全进程唯一的 asyncio **模块本体**（spider.py 顶层 `import asyncio`），替身窗口内 loguru 边车、
-    # pytest-asyncio 自身驱动本用例的循环以及同会话其它协程的 sleep 会一并被换掉（M-27 同族事故，
-    # tests/test_test_hygiene.py R1 第一形态）。按仓库口径改为浅拷贝命名空间 + 只覆盖所需属性，
-    # 再把替身绑到**被测模块（spider）自己的 asyncio 引用**上；其余符号逐字取真模块，语义不变。
+    # MT-09（CODE_REVIEW_2026-10-18）：旧写法 patch.object(sp.asyncio, "sleep", …) 的容器是全进程唯一
+    # 的 asyncio **模块本体**，替身窗口内 loguru 边车、pytest-asyncio 循环与其它协程的 sleep 一并被换掉。
+    # 按仓库口径改为浅拷贝命名空间 + 只覆盖所需属性，再绑到**被测模块自己的 asyncio 引用**上。
     shim = types.SimpleNamespace(**vars(asyncio))
     for name, value in overrides.items():
         setattr(shim, name, value)
@@ -251,9 +245,9 @@ class TestXhsRedirectCredentialContainment:
 
     @pytest.mark.asyncio
     async def test_allowlisted_host_that_resolves_internal_is_rejected(self) -> None:
-        # 失效形态：落地页 host 通过了「域族后缀」这一道闸，但 DNS 解析到内网/回环/云元数据
-        # （如 xiaohongshu.com→127.0.0.1，或伪装成白名单域的劫持 DNS）。仅查后缀会放行，
-        # 于是把用户 Cookie 送给内网目标。修复后必须再过一次 web_config._host_internal_reason。
+        # 失效形态：落地页 host 通过了「域族后缀」这一道闸，但 DNS 解析到内网/回环/云元数据（如
+        # xiaohongshu.com→127.0.0.1）。仅查后缀会放行，于是把用户 Cookie 送给内网目标；修复后
+        # 必须再过一次 web_config._host_internal_reason。
         sent: list[dict[str, object]] = []
 
         async def _req(*args: object, **kwargs: object) -> Any:
@@ -499,9 +493,8 @@ class TestDouyuSignHardening:
 
     @pytest.mark.asyncio
     async def test_enc_time_huge_clamped_to_32(self) -> None:
-        # 失效形态：enc_time 是响应驱动的无上界值 → 无上限 md5 链阻塞房间事件循环。
-        # 取值 1000（而非 10**9）是为了让「漏夹上界」表现为可判定的红（1001 次调用）
-        # 而不是把用例挂死；上界语义（>32 一律夹到 32）与 10**9 完全一致。
+        # 失效形态：enc_time 是响应驱动的无上界值 → 无上限 md5 链阻塞房间事件循环。取值 1000
+        # （而非 10**9）是为了让「漏夹上界」表现为可判定的红（1001 次调用）而不是把用例挂死。
         calls = {"n": 0}
         real_md5 = sp.md5
 
@@ -573,12 +566,10 @@ class TestDouyinNoDuplicateFetch:
 class TestBiliSpiRetryBackoff:
     @pytest.mark.asyncio
     async def test_spi_empty_retry_sleeps_between_attempts(self) -> None:
-        # 失效形态：两次请求**零间隔**连击 spi —— CDN 探针侧有 stream_select._throttle_probe 限速，
-        # spi 这一路没有，固定节奏本身就是风控指纹；更要命的是风控主形态「200 + 空 body」下
-        # async_req 与 _loads_dict 都不抛，旧代码挂在 except 分支上的重试/告警永不执行，
-        # 真正需要归因的「两跳皆空」反而零日志（见 src/spider.py 的 MIN-2203 注释）。
+        # 失效形态：两次请求**零间隔**连击 spi —— CDN 探针侧有 _throttle_probe 限速，spi 这一路
+        # 没有，固定节奏本身就是风控指纹；且「200 + 空 body」下 async_req 与 _loads_dict 都不抛，
+        # 旧代码挂在 except 上的重试/告警永不执行，真正需要归因的「两跳皆空」反而零日志。
         # 判据：空结果重试前必须 await asyncio.sleep（>0；生产取 0.5~1.0 的抖动区间）。
-        # 直接观察 get_bilibili_danmaku_info 内部对 asyncio.sleep 的调用。
         body_room = '{"code":0,"data":{"room_id":1,"uid":2}}'
         body_nav = '{"code":0,"data":{"wbi_img":{"img_url":"https://i0.hdslb.com/x/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png","sub_url":"https://i0.hdslb.com/x/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.png"}}}'
         payloads = {"room_init": body_room, "nav": body_nav, "finger/spi": ""}
@@ -591,9 +582,8 @@ class TestBiliSpiRetryBackoff:
             # 不真的睡，避免拖慢用例；记录参数即可判定「有退避」
             return None
 
-        # [MT-09 2026-10-18] 落点由 sp.asyncio 改成 sp 命名空间里的 asyncio 引用位（shim 见文件头）。
-        # 旧形态 patch.object(sp.asyncio, "sleep", …) 的宿主是全进程唯一的 asyncio 模块本体，
-        # 窗口内 loguru 边车、驱动本用例的 pytest-asyncio 循环以及任何其它协程的 sleep 一并被换桩。
+        # [MT-09 2026-10-18] 落点由 sp.asyncio 改成 sp 命名空间里的 asyncio 引用位（shim 见文件头）：
+        # 旧形态的宿主是全进程唯一的 asyncio 本体，窗口内 loguru 边车与任何其它协程的 sleep 一并被换桩。
         with (
             patch.object(sp, "async_req", new=_fake_req(payloads)),
             patch.object(sp, "_cache_fetch_cookies", new=AsyncMock(return_value={})),
@@ -644,16 +634,16 @@ class TestBaiduStableKey:
 
 
 # ────────────────────────────────────────────────────────────
-# 2026-09-23 追加：CODE_REVIEW_2026-09-22.md §5.1「平台解析与网络层」轻微项。
-# （与上文 09-22 组 E 的同号条目来自不同分组，故每条在类注释里写明报告出处与失效形态。）
+# 2026-09-23 追加：CODE_REVIEW_2026-09-22.md §5.1「平台解析与网络层」轻微项（与上文同号条目
+# 来自不同分组，故每条在类注释里写明报告出处与失效形态）：
 #   MIN-2201  虎牙字母房间号反查须剥引号 + 判 isdigit，非数字一律早抛「请用数字房间号」；
 #   MIN-2202  虎牙候选：HLS 地址不得由 FLV 票据裁决（只下发 HLS 票据的房间须给出 HLS 候选）；
 #   MIN-2204  斗鱼 websec：enc_time 缺失/非数值须与 rand_str/key 同走 warning + return {}；
 #   MIN-2210  SOOP bj_id 三处共用 _soop_bj_id_from_url（/play/<bj> 形态不得取到 "play"）；
 #   MIN-2211  Shopee 无 session 时不得请求 /session/None，更不得每轮刷 ERROR；
-#   MIN-2212  连接直播 videoUrl 不带查询串时归因 + 按未开播返回（不得产出三个同址无扩展字段）；
+#   MIN-2212  连接直播 videoUrl 不带查询串时归因 + 按未开播返回；
 #   MIN-2213  Faceit 缺 /stream 段须抛可读 ValueError 而非 IndexError；
-#   MIN-2214  淘宝 SUCCESS 改判前缀 + data 走 _dig（MID-48 口径在本文件的最后一处裸索引）；
+#   MIN-2214  淘宝 SUCCESS 改判前缀 + data 走 _dig；
 #   MIN-2215  ShowRoom 命中 hls_all 但 url 为空不得返回 {is_live: True, m3u8_url: ""}。
 # ────────────────────────────────────────────────────────────
 
@@ -665,9 +655,8 @@ def _raw(func: object) -> Any:
 
 
 def _recording_req(bodies: dict[str, str], seen: list[str], default: str = "") -> AsyncMock:
-    # 与 _fake_req 同一路由口径，但**记录每次请求的完整 URL**：MIN-2201/2210/2211 的判据
-    # 都在「发出去的 URL/表单取值」上，只看返回值无法区分 roomid=6030242 与 %226030242%22
-    # （两种都回空房间），也无法区分「发了一次 None 会话请求」与「没发」。
+    # 与 _fake_req 同一路由口径，但**记录每次请求的完整 URL**：MIN-2201/2210/2211 的判据都在
+    # 「发出去的 URL/表单取值」上，只看返回值无法区分 roomid=6030242 与 %226030242%22。
     async def _req(*args: object, **kwargs: object) -> str:
         url = str(kwargs.get("url") or (args[0] if args else ""))
         seen.append(url)
@@ -759,9 +748,9 @@ class TestHuyaLetterRoomId:
         assert seen and "roomid=6030242" in seen[0], seen
 
     def test_letter_room_regex_matches_twin_copy(self) -> None:
-        # 反向漂移防线：主实现的正则串与孪生副本 scripts/douyin_live_recorder_standalone.py
-        # 的 _HUYA_PROFILE_ROOM_RE 必须逐字一致（副本此前已带引号锚点、主实现没有）。
-        # 用 AST 取字符串常量而不是扫源码文本：两处的引号/转义形态不同，文本比对会自欺。
+        # 反向漂移防线：主实现的正则串与孪生副本 scripts/douyin_live_recorder_standalone.py 的
+        # _HUYA_PROFILE_ROOM_RE 必须逐字一致。用 AST 取字符串常量而非扫源码文本（两处的引号/转义
+        # 形态不同，文本比对会自欺）。
         import ast
         from pathlib import Path
 
@@ -784,9 +773,8 @@ class TestHuyaLetterRoomId:
 class TestHuyaHlsOnlyCandidate:
     @pytest.mark.asyncio
     async def test_hls_only_ticket_still_yields_hls_candidate(self) -> None:
-        # 失效形态：整条 entry 的有效性由 **FLV 票据** 裁决，而 HLS 地址只依赖
-        # sHlsUrl + sHlsAntiCode → 只下发 HLS 票据（或该线路不承载 FLV）的房间连 HLS 候选
-        # 都被砍掉，全部线路如此即「在播但零候选」，与虎牙 FLV-first + HLS 回退相悖。
+        # 失效形态：整条 entry 的有效性由 **FLV 票据** 裁决，而 HLS 地址只依赖 sHlsUrl +
+        # sHlsAntiCode → 只下发 HLS 票据的房间连 HLS 候选都被砍掉，全部线路如此即「在播但零候选」。
         entries = '{"sCdnType":"AL","sStreamName":"n1","sHlsUrl":"http://al.hls.example.com","sHlsAntiCode":"a=1"}'
         with patch.object(sp, "async_req", new=_huya_req("", _huya_on(entries), [])):
             result = await sp.get_huya_app_stream_url("https://www.huya.com/12345")
@@ -828,9 +816,9 @@ class TestDouyuWebsecEncTime:
 
     @pytest.mark.asyncio
     async def test_missing_enc_time_warns_and_returns_empty(self) -> None:
-        # 失效形态：原 `enc_key.get("enc_time", 0)` + `except: enc_time = 0` 让「缺字段」
-        # 静默退化成 0 次迭代——产出的 auth 必被服务端拒，调用方只见「无流」，
-        # 与本函数注释承诺的「三字段任一缺失即 warning 并 return {}」相反。
+        # 失效形态：原 `enc_key.get("enc_time", 0)` + `except: enc_time = 0` 让「缺字段」静默退化成 0
+        # 次迭代——产出的 auth 必被服务端拒，调用方只见「无流」，与函数注释承诺的「三字段任一缺失
+        # 即 warning 并 return {}」相反。
         logger = _fake_logger()
         body = '{"rand_str":"RS","key":"K","enc_data":"ED"}'
         with self._patch(body), patch.object(sp, "logger", logger):
@@ -921,9 +909,9 @@ class TestSoopBjIdFromUrl:
 class TestShopeeMissingSession:
     @pytest.mark.asyncio
     async def test_no_session_sends_no_request_and_logs_nothing(self) -> None:
-        # 失效形态：session_id 为 None 时照发 /api/v1/session/None（白发一次请求），
-        # 随后每轮（默认 120s）输出一条 **ERROR** 叫用户「更换房间地址」——
-        # 地址没问题、只是没开播，正踩「正常轮次刻意静默，否则真线索被淹掉」的口径。
+        # 失效形态：session_id 为 None 时照发 /api/v1/session/None（白发一次请求），随后每轮（默认
+        # 120s）输出一条 **ERROR** 叫用户「更换房间地址」——地址没问题、只是没开播，正踩「正常轮次
+        # 刻意静默，否则真线索被淹掉」的口径。
         seen: list[str] = []
         logger = _fake_logger()
         with (
@@ -975,9 +963,9 @@ class TestLianjieQuerylessVideoUrl:
 
     @pytest.mark.asyncio
     async def test_queryless_webrtc_returns_not_live_with_clue(self) -> None:
-        # 失效形态：flv/m3u8 全靠 `replace("?", ".flv?")` 插后缀，videoUrl 不带 ? 时
-        # 三个地址字段同指原始无扩展路径 → stream_select 无从判容器、ffmpeg 每轮失败，
-        # 而 is_live=True 把这一轮记成**成功解析样本**，熔断统计看不出线路已坏。
+        # 失效形态：flv/m3u8 全靠 `replace("?", ".flv?")` 插后缀，videoUrl 不带 ? 时三个地址字段
+        # 同指原始无扩展路径 → stream_select 无从判容器、ffmpeg 每轮失败，而 is_live=True 把这一轮
+        # 记成**成功解析样本**，熔断统计看不出线路已坏。
         logger = _fake_logger()
         with (
             patch.object(sp, "async_req", new=_fake_req({"getRoomInfo": self._body("webrtc://cdn/live/r1")})),
@@ -1011,9 +999,9 @@ class TestLianjieQuerylessVideoUrl:
 class TestFaceitNicknameExtraction:
     @pytest.mark.asyncio
     async def test_profile_page_without_stream_raises_readable_error(self) -> None:
-        # 用户粘贴不带 /stream 的资料页：旧写法 findall(...)[0] 抛 IndexError，
-        # 日志只剩一行 "IndexError … in get_faceit_stream_data"，与本文件其余
-        # 「if not m: raise ValueError("Failed to find …")」的可读线索不同。
+        # 用户粘贴不带 /stream 的资料页：旧写法 findall(...)[0] 抛 IndexError，日志只剩一行
+        # "IndexError … in get_faceit_stream_data"，与本文件其余「if not m: raise ValueError(...)」
+        # 的可读线索不同。
         seen: list[str] = []
         with patch.object(sp, "async_req", new=_recording_req({}, seen)):
             with pytest.raises(ValueError, match="Failed to find faceit nickname"):
@@ -1116,9 +1104,8 @@ class TestShowroomHlsAllEmptyUrl:
 
     @pytest.mark.asyncio
     async def test_hls_all_with_empty_url_is_not_live(self) -> None:
-        # 失效形态：is_live 在 live_status==2 处已无条件置 True，而 m3u8_url 先于判空被赋值
-        # → 返回 {is_live: True, m3u8_url: ""}（无 play_url_list/record_url），
-        # 坏候选进选源、每轮白烧探针，且与同批「已判开播却拿不到任何线路 → 归因 + False」矛盾。
+        # 失效形态：is_live 在 live_status==2 处已无条件置 True，而 m3u8_url 先于判空被赋值 →
+        # 返回 {is_live: True, m3u8_url: ""}，坏候选进选源、每轮白烧探针。
         result = await self._call(self._streams('{"type": "hls_all", "url": ""}'), _fake_logger())
         assert result["is_live"] is False, result
         assert "m3u8_url" not in result, result

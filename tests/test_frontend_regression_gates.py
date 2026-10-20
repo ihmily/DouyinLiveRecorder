@@ -3,16 +3,14 @@
 # 该 .mjs 是「组 G（2026-09-22）前端回归锁」的用例本体（SEV-2221 / SEV-2227 / SEV-2228 /
 # MID-2237 / MID-2240 / MID-2241 / MID-2253 / MIN-2237~2241 等），以 node:vm 沙箱驱动
 # web/app.js（IIFE 加载期零副作用），DOM/fetch/定时器桩手工触发事件、经真实事件委托链路断言，
-# 零 npm 依赖。此前它只有 .mjs、缺 .py 包装，于是整组锁游离在 pytest / CI 回路之外，违反
-# AGENTS.md「.mjs 真用例 + .py 包装」双文件结构。本包装补上这条入口，让它随 test job 的
+# 零 npm 依赖。按 AGENTS.md「.mjs 真用例 + .py 包装」双文件结构，本包装让整组锁随 test job 的
 # 全量 pytest 一起被收集、执行。
 #
 # 不重复实现子进程驱动：node --test 的「挂死 + GBK 解码」两类坑（MID-64）已在
-# tests/test_frontend_quality_ui.py 里沉淀成经过回归锁的 _run_node（输出重定向到临时文件、
-# 超时回收整棵进程树、一律二进制捕获后显式 UTF-8 解码）与 _parse_node_summary。且 _run_node 的
-# cwd 取 tests/frontend/，与本 .mjs 同目录。直接复用可避免出现第二份「改了这份、忘改那份」的
-# 子进程硬化代码——改一处即两处生效；若上游重构掉这些符号，import 会立即报错而非静默退化成
-# 「管道形态挂死 / text=True 崩码页」的老问题。
+# tests/test_frontend_quality_ui.py 里沉淀成 _run_node（输出重定向到临时文件、超时回收整棵
+# 进程树、一律二进制捕获后显式 UTF-8 解码）与 _parse_node_summary（cwd 取 tests/frontend/）。
+# 直接复用避免第二份「改了这份、忘改那份」的子进程硬化代码；上游重构掉这些符号时 import 会立即
+# 报错，而不是静默退化成「管道形态挂死 / text=True 崩码页」的老问题。
 #
 # Node 缺失时整体 skip（环境限制口径，不是失败），与同目录另一前端包装保持一致。
 from pathlib import Path

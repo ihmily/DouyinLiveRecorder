@@ -1,14 +1,13 @@
 # 异步 WebSocket 客户端封装（对标 dart simple_live_core 的 WebScoketUtils）。
 #
-# 提供心跳定时、断线重连（最多 max_reconnect 次，间隔 reconnect_interval 秒）。
+# 提供心跳定时与断线重连（最多 max_reconnect 次，间隔 reconnect_interval 秒，指数退避 + 抖动）。
 # 所有平台弹幕共用此客户端。
 #
-# 约定（SEV-2217，2026-09-22 定稿）：**交给 on_close / on_reconnect 回调的文案必须已脱敏**。
-# 这两条回调是全模块把「异常文本」送出去的唯一出口，而消费端（src/collector.py 的
-# _on_close）会把 reason 原样写进 loguru 文件 sink（logs/ 按 300KB 轮转保留多份 = 长期落盘）
-# 与弹幕监控枢纽（进而显示到 Web/GUI 面板）。websockets 的 InvalidProxy 文本自带代理原串
-# （`f"{self.proxy} isn't a valid proxy: {self.msg}"`，含 user:pass@host），故所有出口一律
-# 先过 utils.mask_credentials；新增回调参数时同样适用，不得把裸 str(e) 传出去。
+# 约定（SEV-2217）：**交给 on_close / on_reconnect 回调的文案必须已脱敏**。这两条回调是把
+# 异常文本送出去的唯一出口，消费端（src/collector.py 的 _on_close）会把 reason 原样写进
+# loguru 文件 sink（logs/ 按 300KB 轮转保留多份 = 长期落盘）与弹幕监控枢纽（进而显示到
+# Web/GUI 面板）。websockets 的 InvalidProxy 文本自带代理原串（含 user:pass@host），故所有
+# 出口一律先过 utils.mask_credentials；新增回调参数同样适用，不得把裸 str(e) 传出去。
 
 from __future__ import annotations
 
@@ -31,9 +30,9 @@ from .logger import logger
 # 超出后只记一次汇总，避免同型异常把日志刷满、掩盖其它真实问题。
 _POISON_LOG_LIMIT = 5
 
-# MIN-13：send_nowait 在途任务堆积上限。心跳/进房/ack 均为秒级小帧，正常在途数量 < 5；
-# 上限只在 _send_lock 被 WD-04 的 5s 超时长期占住时才会触顶——触顶即丢弃新任务并告警，
-# 而不是让任务数随断连时长无界增长（旧实现裸 ensure_future，既无引用也无上限）。
+# MIN-13：send_nowait 在途任务堆积上限。心跳/进房/ack 均为秒级小帧，正常在途 < 5；
+# 上限只在 _send_lock 被 WD-04 的 5s 超时长期占住时触顶——触顶即丢弃并告警，而不是让
+# 任务数随断连时长无界增长（旧实现裸 ensure_future，既无引用也无上限）。
 _MAX_PENDING_SENDS = 64
 
 # WD-04：协议层 ping 参数。各平台自带应用级心跳（只发不收），无法感知 TCP 半开；
@@ -48,13 +47,12 @@ _MAX_FRAME_BYTES = 8 * 1024 * 1024
 # 无超时会让 _send_lock 永久不释放，此后每次心跳都堆积一个等待任务。
 _SEND_TIMEOUT = 5.0
 
-# WD-05：记录最后一次重连退避（供测试与日志观察）
+# 重连退避倍数的上限：base * 2^(n-1) 封顶于此倍数。
 _BACKOFF_MAX_MULTIPLIER = 16
 
 # MID-2232：判定「这条连接已真健康到可把重连计数归零」所需的最短存活秒数 = 2 × reconnect_interval。
-# 倍数的意义：一次「握手成功即被服务端关掉」的抖动存活时长远小于一个重连周期，若连这个长度都没
-# 活过就归零计数，max_reconnect 永不耗尽（判据见 _reset_count_if_healthy）。取 2 倍是给
-# 「连上后正常收了几秒弹幕再断」留余量——那种形态由「收到应用层帧」这条判据单独覆盖。
+# 一次「握手成功即被服务端关掉」的抖动存活时长远小于一个重连周期，若连这个长度都没活过就归零，
+# max_reconnect 永不耗尽；取 2 倍是给「连上后正常收了几秒弹幕再断」留余量。
 _HEALTHY_CONNECTION_FACTOR = 2
 # 同上的下限（秒）：reconnect_interval 被压得很小（测试/激进配置）时，若健康窗口也跟着缩到
 # 毫秒级，任何一次慢断开都会白白归零计数，等于回到「连上即重置」的老问题。
@@ -91,14 +89,10 @@ def decompress_limited(data: bytes, limit: int = _MAX_DECOMPRESSED_BYTES, wbits:
     return out + tail
 
 
-# 带输出上限的 brotli 解压（MI-01）：brotli 的 Python 绑定没有 max_output_size 参数
-# （decompress(data) 仅接一个参数），故改用 Decompressor 分块喂入并在累计输出超限时抛错。
-# [历史注] M-08（2026-10-02）更正失实声明：原注释称「把总内存收敛到 limit + 单块膨胀量」
-# ——不成立。brotli.Decompressor.process() 无输出上限形参，`out += obj.process(chunk)` 会
-# 先把该块的全部输出物化后才做 len(out) 检查，复制链允许极小输入膨胀出 MB~GB 级单块输出；
-# 本函数对 brotli 路径只是**事后检测**（消费侧最多多付一块的瞬时内存，不会累积），不与
-# decompress_limited（zlib max_length 在 C 层硬截断）的真上限同强度。根治需换支持输出上限
-# 的 brotli 绑定或对 brotli 帧单独收紧 _MAX_FRAME_BYTES，均超出本轮范围。
+# 带输出上限的 brotli 解压（MI-01）：brotli 的 Python 绑定没有 max_output_size 参数，
+# 故改用 Decompressor 分块喂入并在累计输出超限时抛错。注意这只是**事后检测**：单块输出会
+# 先物化再检查，消费侧最多少付一块的瞬时内存，不与 decompress_limited（zlib 在 C 层硬截断）
+# 的真上限同强度；根治需换支持输出上限的绑定，超出本层职责。
 def decompress_brotli_limited(data: bytes, limit: int = _MAX_DECOMPRESSED_BYTES, chunk: int = 4096) -> bytes:
     import brotli
 
@@ -113,10 +107,10 @@ def decompress_brotli_limited(data: bytes, limit: int = _MAX_DECOMPRESSED_BYTES,
     return bytes(out)
 
 
-# 根据 url 生成默认 SSL 上下文：wss:// 返回放宽到 @SECLEVEL=1 的 SSLContext 以兼容老套件，ws:// 返回 None。
+# 根据 url 生成默认 SSL 上下文：wss:// 返回放宽到 @SECLEVEL=1 的 SSLContext，ws:// 返回 None。
 def _default_ssl_context(url: str) -> Optional[ssl.SSLContext]:
-    # 某些直播平台的弹幕服务（如斗鱼 danmuproxy:8506）使用旧 RSA 密钥交换套件，
-    # OpenSSL 3.x 在默认 SECLEVEL 之上会拒绝握手，故 wss 降级到 @SECLEVEL=1 兼容。
+    # 某些直播平台的弹幕服务（如斗鱼 danmuproxy:8506）用旧 RSA 密钥交换套件，
+    # OpenSSL 3.x 在默认 SECLEVEL 之上会拒绝握手，故 wss 降级兼容。
     if not url.startswith("wss://"):
         return None
     ctx = ssl.create_default_context()
@@ -128,11 +122,9 @@ def _default_ssl_context(url: str) -> Optional[ssl.SSLContext]:
 
 
 # 判断连接是否仍可用于发送（MIN-12 的第二道防线）：websockets 的协议对象带 `state`，
-# 连接关闭后即便引用未清空也不会是 OPEN。桩对象/旧版本没有 state 时返回 True
-# （乐观放行），保持既有打桩用例的行为不变。
-# 形参用 object 注解：本函数只经 getattr 取 state，不需要（也拿不到）稳定的协议类型名
-# ——`websockets.WebSocketClientProtocol` 在不同 websockets 版本下是否导出并不一致
-# （见 __init__ 里为该注解额外挂的 name-defined 忽略）。
+# 连接关闭后即便引用未清空也不会是 OPEN。桩对象/旧版本没有 state 时返回 True（乐观放行），
+# 保持既有打桩用例的行为不变。形参用 object 注解：本函数只经 getattr 取 state，而
+# `websockets.WebSocketClientProtocol` 在不同版本下是否导出并不一致。
 def _conn_is_open(ws: object) -> bool:
     state = getattr(ws, "state", None)
     if state is None:
@@ -142,9 +134,9 @@ def _conn_is_open(ws: object) -> bool:
 
 # 各平台弹幕共用的异步 WebSocket 客户端：负责连接、收包分发、定时心跳、断线重连与主动关闭。
 class WsClient:
-    # 初始化客户端：url/backup_url 为主备地址，on_message/on_ready/on_heartbeat/on_close/on_reconnect 为回调，
-    # heartbeat_interval、max_reconnect、reconnect_interval、connect_timeout 控制心跳与重连策略，
-    # headers/proxy/ssl_context 为连接参数（ssl_context 未传时按 url 自动生成）；仅保存配置，不发起连接。
+    # 初始化客户端：url/backup_url 为主备地址，各 on_* 为回调，heartbeat_interval /
+    # max_reconnect / reconnect_interval / connect_timeout 控制心跳与重连策略，
+    # headers/proxy/ssl_context 为连接参数（ssl_context 未传时按 url 自动生成）；不发起连接。
     def __init__(
         self,
         url: str,
@@ -174,8 +166,8 @@ class WsClient:
         self.max_reconnect = max_reconnect
         self.reconnect_interval = reconnect_interval
         self.connect_timeout = connect_timeout
-        # 代理：默认 None = 直连，**不得改成跟随系统代理**（AGENTS「弹幕 WS 连接必须显式 proxy=None」
-        # 是已记录的回归坑）——一旦跟随系统代理，B站/斗鱼会报
+        # 代理：默认 None = 直连，**不得改成跟随系统代理**（AGENTS「弹幕 WS 连接必须显式
+        # proxy=None」是已记录的回归坑）——跟随系统代理后 B站/斗鱼会报
         # `connecting through a SOCKS proxy requires python-socks` 且连接即断。
         # 只有 Twitch 等海外平台在调用点显式传入自己的代理。
         self._proxy = proxy
@@ -206,10 +198,10 @@ class WsClient:
             # 重连时切换备用地址（如有）
             if self._reconnect_count > 0 and self._backup_url:
                 url = self._backup_url
-            # 本次连接内的"毒消息"计数（每次成功建连重置：换地址/重连后重新计数，
+            # 本次连接内的「毒消息」计数（每次成功建连重置：换地址/重连后重新计数，
             # 避免一次历史风暴永久压制后续真实告警的日志可见性）
             _poison_count = 0
-            # MID-2232：本轮连接的「健康度」观测点——握手成功的时刻 / 是否收到过应用层帧。
+            # MID-2232：本轮连接的「健康度」观测点——握手成功的时刻 / 是否收到过应用层帧，
             # 两者共同决定退出本轮时要不要把 _reconnect_count 归零（见 _reset_count_if_healthy）。
             _connected_at: Optional[float] = None
             _got_frame = False
@@ -218,24 +210,24 @@ class WsClient:
                     url,
                     additional_headers=self._headers,
                     open_timeout=self.connect_timeout,
-                    # WD-04：原为 ping_interval=None（完全关闭协议层 ping）。各平台的应用级心跳只做
-                    # **发送**，感知不到 TCP 半开（断网 / NAT 老化 / 对端静默）——连接被判定为「正常」、
-                    # 永不进重连路径，表现为断网恢复后弹幕永久 0 条而监控仍显示「已连接」。
-                    # 协议层 ping/pong 才能主动断开并触发重连（参数取值理由见 _PING_INTERVAL）。
+                    # WD-04：原为 ping_interval=None（完全关闭协议层 ping）。各平台的应用级心跳
+                    # 只做**发送**，感知不到 TCP 半开（断网 / NAT 老化 / 对端静默）——连接被判为
+                    # 「正常」、永不进重连，表现为断网恢复后弹幕永久 0 条而监控仍显示「已连接」。
+                    # 协议层 ping/pong 才能主动断开并触发重连（取值理由见 _PING_INTERVAL）。
                     ping_interval=_PING_INTERVAL,
                     ping_timeout=_PING_TIMEOUT,
-                    # WD-04/E-07：原为 None（取消 1MiB 默认帧限制），单帧可任意大；
-                    # 帧内还有 gzip/zlib/brotli 无上限解压，构成内存放大面。设合理上限。
+                    # WD-04/E-07：原为 None（取消 1MiB 默认帧限制），单帧可任意大，帧内还有
+                    # gzip/zlib/brotli 无上限解压，构成内存放大面。设合理上限。
                     max_size=_MAX_FRAME_BYTES,
                     ssl=self._ssl_context,
                     proxy=self._proxy,  # None=直连(B站/虎牙等);Twitch 等海外平台可传显式代理
                 ) as ws:
                     self._ws = ws
-                    # MID-2232：原为 `self._reconnect_count = 0`（连上即重置）。握手成功不等于会话健康——
-                    # 房间结束、被踢、鉴权软拒绝、B站 uid 用错的 1006 硬断连都属「连上即断」，于是每轮
-                    # 从 1 加起、下一轮又归零：max_reconnect 永不耗尽，文件头声明的「耗尽则回调 on_close」
-                    # 契约失效（监控页以为还在连），且每 ~5s 一次握手 + 进房包构成对平台的持续连击。
-                    # 现改为记录时刻，由 _reset_count_if_healthy 在两条重连出口处判定是否真健康。
+                    # MID-2232：握手成功不等于会话健康——房间结束、被踢、鉴权软拒绝、uid 用错
+                    # 的 1006 硬断连都属「连上即断」，若连上就归零，则每轮从 1 加起、下一轮又
+                    # 归零：max_reconnect 永不耗尽，文件头声明的「耗尽则回调 on_close」契约失效
+                    # （监控页以为还在连），且每轮握手 + 进房包构成对平台的持续连击。
+                    # 故只记录时刻，由 _reset_count_if_healthy 在两条重连出口处判定是否真健康。
                     _connected_at = time.monotonic()
                     if self._on_ready:
                         self._on_ready()
@@ -246,11 +238,11 @@ class WsClient:
                                 break
                             # MID-2232：收到首个应用层帧 = 这条连接确实推过数据，算健康
                             _got_frame = True
-                            # 2026-09-12 审查（低危）：单条"毒消息"隔离。原实现让 _on_message 的异常
-                            # 直接冒泡到外层 except → 触发整条连接重建；若某条消息恒定解析失败（平台协议
-                            # 变体、畸形帧），重连后服务端重放同一条 → 无限重连风暴（max_reconnect 快速
-                            # 耗尽、CPU 与日志被刷满、弹幕永久不可用）。现只丢该帧并记日志、连接保持——
-                            # 与各平台 decode_message 内部的 debug 兜底构成两级防御。
+                            # 单条「毒消息」隔离：若让 _on_message 的异常冒泡到外层 except，将触发
+                            # 整条连接重建；而恒定解析失败的帧（平台协议变体、畸形帧）在重连后会被
+                            # 服务端重放——无限重连风暴（max_reconnect 快速耗尽、日志被刷满）。
+                            # 故只丢该帧并记日志、连接保持，与各平台 decode_message 内部的 debug 兜底
+                            # 构成两级防御。
                             try:
                                 self._on_message(data)
                             except Exception as e:
@@ -277,28 +269,23 @@ class WsClient:
                         try:
                             await hb_task
                         except asyncio.CancelledError:
-                            # hb_task 按预期被取消（回收心跳任务）属正常路径，吞掉即可；
-                            # 若系本协程自身被取消（hb_task 并未处于 cancelled 态），
-                            # 不得吞掉取消信号，原样上抛交由外层统一退出
+                            # hb_task 按预期被取消（回收心跳任务）属正常路径，吞掉即可；若系本协程
+                            # 自身被取消（hb_task 并未处于 cancelled 态），不得吞掉取消信号，原样上抛
+                            # 交由外层统一退出。
                             if not hb_task.cancelled():
                                 raise
                         except Exception:
-                            # 吞没即正确：这里是「回收心跳任务」的收尾，回收失败不应掩盖
-                            # 真正的连接异常（CancelledError 非继承 Exception，取消信号
-                            # 已在上面显式放行）
+                            # 吞没即正确：这里是「回收心跳任务」的收尾，回收失败不应掩盖真正的
+                            # 连接异常（CancelledError 非继承 Exception，已在上面显式放行）
                             pass
             except asyncio.CancelledError:
-                # MIN-12：三条出口都要摘引用，且必须**在退避 sleep 之前**。原先清理块写在
-                # try/except/else **之后**、循环体末尾，而四条出口全是 break/continue → 它是不可达
-                # 死代码。后果：断线后、重连退避 `await asyncio.sleep(...)` 期间（最长
-                # base×16×1.3 ≈ 上百秒）`self._ws` 仍指向上一条**已关闭**连接，而 send()/send_nowait()
-                # 只判 `is None` → 进房包与心跳全打在死连接上、异常被吞成一条 debug，表现为
-                # 「重连成功却再也不推弹幕」且没有线索。
-                # 为什么不能挂在外层 try 的 finally：finally 要等 except 子句**整个执行完**才跑，
-                # 而退避 sleep 就在 except 子句里——悬挂窗口原样存在。回归锁
+                # MIN-12：三条出口都要在这里摘引用，且必须**在退避 sleep 之前**。把清理挂在
+                # 外层 finally 不行——finally 要等 except 子句整个执行完才跑，而退避 sleep 就在
+                # except 里，悬挂窗口原样存在。窗口内 `self._ws` 仍指向上一条**已关闭**连接，
+                # 而 send()/send_nowait() 只判 `is None`，进房包与心跳全打在死连接上、异常被
+                # 吞成一条 debug，表现为「重连成功却再也不推弹幕」且无任何线索。回归锁：
                 # tests/test_ws_client.py::test_ws_reference_cleared_before_reconnect_backoff
-                # 把观察点放在 on_reconnect（恰在 sleep 之前），正是靠这一点把 finally 方案判红。
-                # 关闭动作由 `async with` 负责，这里只摘引用。
+                # （观察点放在 on_reconnect，恰在 sleep 之前）。关闭动作由 `async with` 负责。
                 self._ws = None
                 break
             except Exception as e:
@@ -329,7 +316,7 @@ class WsClient:
                 self._reconnect_count += 1
                 if self._reconnect_count <= self.max_reconnect:
                     if self._on_reconnect:
-                        # L-24（2026-10-02）：reason 文案经 i18n——面板非中文语言下混入简中
+                        # L-24：reason 文案经 i18n——面板非中文语言下不得混入简中
                         self._on_reconnect(i18n.tr("连接已关闭，正在尝试重连"))
                     # WD-05：同上，指数退避 + 抖动
                     await asyncio.sleep(_backoff_delay(self.reconnect_interval, self._reconnect_count))
@@ -338,12 +325,10 @@ class WsClient:
                 break
 
     # MID-2232：本轮连接若「已证明健康」则把重连计数归零（在 ++ 之前调用，故归零后本轮计 1）。
-    # 健康判据两选一：
-    #   ① 本轮收到过至少一个应用层帧（这条连接真在推弹幕）；
-    #   ② 从握手成功算起存活时长 > _healthy_lifetime_seconds（= 2 × reconnect_interval）。
-    # 两条都不成立即视为「握手成功即被断开」——计数继续累计，直到 max_reconnect 耗尽、
-    # 由 _report_close 上报 on_close。注意 connected_at 为 None 表示本轮根本没连上
-    # （纯连接失败），同样不重置计数；旧实现把「连上」当成「健康」，才让该出口永不可达。
+    # 判据二选一：① 本轮收到过至少一个应用层帧；② 从握手成功算起存活时长 >
+    # _healthy_lifetime_seconds。都不成立即视为「握手成功即被断开」，计数继续累计直到
+    # max_reconnect 耗尽、由 _report_close 上报 on_close。connected_at 为 None 表示本轮
+    # 根本没连上（纯连接失败），同样不重置——旧实现把「连上」当「健康」，才让该出口永不可达。
     def _reset_count_if_healthy(self, connected_at: Optional[float], got_frame: bool) -> None:
         if got_frame:
             self._reconnect_count = 0
@@ -351,10 +336,10 @@ class WsClient:
         if connected_at is not None and (time.monotonic() - connected_at) > self._healthy_lifetime_seconds:
             self._reconnect_count = 0
 
-    # MID-2245：on_close 的唯一出口（一个客户端生命周期内只发一次）。
-    # 为什么要有标记：connect() 的耗尽分支与 fail() 可能在同一客户端上先后触达，而消费端
-    # （collector._on_close → hub.room_closed）把它当作「房间已结束」的配对信号，重复投递
-    # 会让监控枢纽多出一条无主的 closed 事件。reason 在此再过一道掩码，与文件头约定一致。
+    # MID-2245：on_close 的唯一出口（一个客户端生命周期内只发一次）：connect() 的耗尽分支
+    # 与 fail() 可能先后触达，而消费端（collector._on_close → hub.room_closed）把它当作「房间
+    # 已结束」的配对信号，重复投递会让监控枢纽多出一条无主的 closed 事件。
+    # reason 在此再过一道掩码，与文件头约定一致。
     def _report_close(self, reason: str) -> None:
         if self._close_reported:
             return
@@ -374,9 +359,9 @@ class WsClient:
             return
         async with self._send_lock:
             try:
-                # WD-04：加超时。半开连接上 await send 会一直缓冲而不抛异常，
-                # 无超时会让 _send_lock 永久不释放，此后每次心跳/ack/进房都 ensure_future
-                # 出一个新任务堆在锁上（任务数与内存无上限增长），而心跳实际再也发不出去。
+                # WD-04：加超时。半开连接上 await send 会一直缓冲而不抛异常，无超时会让
+                # _send_lock 永久不释放，此后每次心跳/ack/进房都派一个新任务堆在锁上（任务数
+                # 与内存无上限增长），而心跳实际再也发不出去。
                 await asyncio.wait_for(ws.send(data), timeout=_SEND_TIMEOUT)
             except asyncio.TimeoutError:
                 # 超时说明连接已不可用：主动关闭以触发重连，而不是继续在死连接上堆积
@@ -384,16 +369,15 @@ class WsClient:
                 try:
                     await ws.close()
                 except Exception:
-                    # 吞没即正确：关不上也要 return——外层 connect() 的 async for 会因
-                    # 连接不可用而抛错并进入重连；在此重抛只会把「发送超时」升级成
-                    # 「收包协程异常」，反而更晚恢复。
+                    # 吞没即正确：关不上也要 return——外层 connect() 的 async for 会因连接不可用
+                    # 而抛错并进入重连；在此重抛只会把「发送超时」升级成「收包协程异常」，反而
+                    # 更晚恢复。
                     pass
                 return
             except Exception as e:
-                # 2026-09-12 审查（低危）：原为裸 except: pass——发送失败（连接已断、
-                # 帧过大被拒、编码错误）完全无声，表现为「进房包发了但永远收不到弹幕」
-                # 且无任何线索可查。至少留一条 debug；不重抛是刻意的——send 多由
-                # on_ready 等同步回调经 _send_nowait 触发，重抛会打断收包主循环。
+                # 不重抛是刻意的（原为裸 except: pass，发送失败完全无声，表现为「进房包发了
+                # 但永远收不到弹幕」且无线索）：send 多由 on_ready 等同步回调经 send_nowait
+                # 触发，重抛会打断收包主循环，故至少留一条 debug。
                 logger.debug(i18n.tr("弹幕数据发送失败（已忽略）: {type_name}: {e}", type_name=type(e).__name__, e=e))
 
     # 同步版发送：把 send(data) 作为任务丢进事件循环，立即返回不等待结果（供 on_ready 等同步回调使用）。
@@ -401,11 +385,10 @@ class WsClient:
         ws = self._ws
         if ws is None or not _conn_is_open(ws):
             return
-        # MIN-13：原为裸 `asyncio.ensure_future(self.send(data))` —— src/base.py 的注释把这条坑写死了
-        # （任务只被 asyncio 弱引用，可能在回调前被 GC；异常无人取走、只在任务被回收时打一行 stderr），
-        # 而这里恰是全项目最核心的进房/心跳发送口。现改用 spawn_danmaku_task（完成回调里落盘异常）+
-        # self._pending 持强引用（done_callback 里 discard 回收）；在途任务的上界由 _MAX_PENDING_SENDS
-        # 兜住（触发条件是 _send_lock 被 5s 超时长期占住），而不是随断连时长无界增长。
+        # MIN-13：不用裸 `asyncio.ensure_future(self.send(data))`——任务只被 asyncio 弱引用，
+        # 可能在回调前被 GC，异常无人取走（详见 src/base.py 同名注释），而这里恰是全项目最核心
+        # 的进房/心跳发送口。现由 spawn_danmaku_task（完成回调里落盘异常）+ self._pending 持强
+        # 引用（done_callback 里 discard 回收）；在途上界由 _MAX_PENDING_SENDS 兜住。
         if len(self._pending) >= _MAX_PENDING_SENDS:
             logger.warning(i18n.tr("弹幕发送后台任务堆积超过 {count} 个，本次发送已丢弃", count=_MAX_PENDING_SENDS))
             return
@@ -413,11 +396,10 @@ class WsClient:
         self._pending.add(task)
         task.add_done_callback(self._pending.discard)
 
-    # 心跳循环任务：每隔 heartbeat_interval 秒调用 on_heartbeat（同步或协程均支持），
-    # 已停止或连接为空时退出；单次心跳加 asyncio.wait_for 兜底——心跳回调若因网络阻塞
-    # 永久挂起（无 asyncio.TimeoutError 出口），后续心跳将永远无法被调度，连接「无心跳
-    # 被服务端主动切断」时也误判为正常关闭。timeout 取 heartbeat_interval + 1s 缓冲：
-    # 心跳正常 1 秒内必返回，超时即视为本轮失败但仍让连接继续走重连路径。
+    # 心跳循环任务：每隔 heartbeat_interval 秒调 on_heartbeat（同步或协程均支持），已停止或
+    # 连接为空时退出。单次心跳加 asyncio.wait_for 兜底——心跳回调若因网络阻塞永久挂起，后续
+    # 心跳将永远无法被调度。timeout 取 heartbeat_interval + 1s 缓冲：心跳正常 1 秒内必返回，
+    # 超时即视为本轮失败（关连接让外层 connect 走重连）。
     async def _heartbeat_loop(self) -> None:
         _HEARTBEAT_TIMEOUT_SECONDS = max(1.0, self.heartbeat_interval + 1.0)
         while not self._stopped:
@@ -428,19 +410,16 @@ class WsClient:
                 try:
                     result = self._on_heartbeat()
                     if inspect.isawaitable(result):
-                        # 协程型心跳加 wait_for 兜底：超时即关连接、退出心跳循环
-                        # 让外层 connect 走重连；非协程型（同步回调）则原样调用、不加超时
-                        # ——同步回调阻塞本协程属于「调用方违反契约」,此处无法挽救。
+                        # 协程型心跳加 wait_for 兜底：超时即关连接、退出心跳循环，让外层 connect
+                        # 走重连；非协程型（同步回调）原样调用、不加超时——同步回调阻塞本协程属
+                        # 「调用方违反契约」，此处无法挽救。
                         try:
                             await asyncio.wait_for(cast(Awaitable[None], result), timeout=_HEARTBEAT_TIMEOUT_SECONDS)
                         except TimeoutError:
-                            # MID-2247：统一用本文件已有的项目 logger + i18n.tr，格式说明符按
-                            # 约定②在调用方先求值。
-                            #   [历史注] 此处原为 `from loguru import logger as _log` + f-string——全仓
-                            #   唯一的「别名 logger + f-string」组合，两个后果：① f-string 在查目录前完成
-                            #   插值，这条文案永远无法翻译；② i18n 门禁（tests/test_i18n_migration.py）的
-                            #   判据是 `node.func.value.id == "logger"`，别名形态对它完全隐形，「门禁全绿」
-                            #   不等于「这一层没有漏网」。
+                            # MID-2247：统一用项目 logger + i18n.tr，格式说明符按约定在调用方先
+                            # 求值。不得换回「别名 logger + f-string」：f-string 在查目录前完成
+                            # 插值，文案永远无法翻译；而 i18n 门禁（tests/test_i18n_migration.py）
+                            # 的判据是 `node.func.value.id == "logger"`，别名形态对它完全隐形。
                             logger.warning(
                                 i18n.tr(
                                     "[ws_client] 心跳回调超时 ({seconds}s),关闭连接以触发重连",
@@ -451,9 +430,8 @@ class WsClient:
                                 if self._ws is not None:
                                     await self._ws.close()
                             except Exception:
-                                # 吞没即正确：关不上也要 break 出心跳循环让外层 connect() 走重连，
-                                # 这里重抛只会把「心跳超时」升级为「心跳协程异常退出」，
-                                # 连接反而更晚被回收。
+                                # 吞没即正确：关不上也要 break 出心跳循环让外层 connect() 走重连；
+                                # 重抛只会把「心跳超时」升级为「心跳协程异常退出」，连接反而更晚回收。
                                 pass
                             break
                 except Exception:
@@ -468,17 +446,16 @@ class WsClient:
             try:
                 await self._ws.close()
             except Exception:
-                # 吞没即正确：close() 是「调用方要求停止」的收尾动作，连接可能已被对端
-                # 关掉（重复 close 抛 ConnectionClosed 属正常），重抛会让录制线程看到
-                # 一条与停止无关的异常。
+                # 吞没即正确：close() 是「调用方要求停止」的收尾动作，连接可能已被对端关掉
+                # （重复 close 抛 ConnectionClosed 属正常），重抛会让录制线程看到一条与停止
+                # 无关的异常。
                 pass
 
     # MID-2245：显式「失败出口」——与 close() 一样终止重连与心跳，但**仍然**回调 on_close(reason)。
-    # 为什么不能复用 close()：close() 的语义是「调用方主动停止」，而 connect() 里两条
+    # 为什么不能复用 close()：close() 语义是「调用方主动停止」，connect() 里两条
     # `if self._stopped: break` 出口都不触发 _on_close。B站的 _reject_auth（AUTH_REPLY 非 0
     # 的软拒绝、8 秒看门狗超时）走的正是 close()，于是 collector 侧与 room_connected 配对的
-    # hub.room_closed() 永不发出，Web 弹幕监控页会把该房间永久停在「已连接 / 0 条」——
-    # 恰好是 AGENTS「连接就绪但 0 弹幕且无线索」那一族观感，只是换了触发点。
+    # hub.room_closed() 永不发出，Web 弹幕监控页把该房间永久停在「已连接 / 0 条」。
     # reason 由调用方给出可读文案；本方法负责脱敏后经 _report_close 投递（约定见文件头）。
     async def fail(self, reason: str = "") -> None:
         self._stopped = True
@@ -487,6 +464,6 @@ class WsClient:
                 await self._ws.close()
             except Exception:
                 # 吞没即正确：同 close()——对端可能已关，重复 close 抛 ConnectionClosed 属正常，
-                # 在这里重抛只会把「判定连接不可用」升级成调用方（同步回调）的异常源。
+                # 重抛只会把「判定连接不可用」升级成调用方（同步回调）的异常源。
                 pass
         self._report_close(reason)

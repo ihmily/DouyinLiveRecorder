@@ -1,21 +1,18 @@
-# DanmakuCollector 生命周期回归（CODE_REVIEW_2026-09-20 的 MID-23 / MID-24 / MIN-23）。
+# DanmakuCollector 生命周期回归（CODE_REVIEW_2026-09-20 的 MID-23 / MID-24 / MIN-23，及 MID-2242）。
 #
 # 全部离线：平台弹幕客户端用桩替代，不触网、不起真实 WS。
 #
-# 覆盖三条不变量：
-#   ① MID-23：stop() 不得在「_loop 已发布、尚未 run_until_complete」的窗口丢停止信号
-#      （两条相反顺序的反向序握手原样保留，此处只补投递时机）；
+# 覆盖的不变量：
+#   ① MID-23：stop() 不得在「_loop 已发布、尚未 run_until_complete」的窗口丢停止信号；
 #   ② MID-24：SRT sentinel 一律非阻塞投递，队列满时由写线程自检退出，
 #      且 sentinel 失败绝不阻断 srt.close()（否则录制并发槽在 try 内路径上永久泄漏）；
 #   ③ MIN-23：停 loop 前先 cancel danmaku.start() 任务并让取消传播，
-#      使平台 start() 的 finally 清理链真的跑完。
+#      使平台 start() 的 finally 清理链真的跑完；
+#   ④ MID-2242：start() 非原子——任一步抛错（实测可达形态 RuntimeError: can't start new thread）
+#      后不得留在「半启动」状态；stop() 里两处 join 绝不能因为「线程从未成功 start()」就抛错、
+#      跳过末尾的 self._srt.close()（SRT 句柄泄漏，Windows 上该 .srt 在 GC 前无法改名，会打挂改名逻辑）。
 #
 # 另附 MID-24 的写线程侧：get() 带超时 + _srt_stop 自检，队列空时能自行退出。
-#
-# 2026-09-22 追加 MID-2242（CODE_REVIEW_2026-09-22）：start() 非原子——任一步抛错
-# （实测可达形态 RuntimeError: can't start new thread）后不得留在「半启动」状态，
-# 且 stop() 里两处 join 绝不能因为「线程从未成功 start()」就抛错、跳过末尾的
-# self._srt.close()（SRT 句柄泄漏，Windows 上该 .srt 在 GC 前无法改名，会打挂改名逻辑）。
 
 import asyncio
 import queue
@@ -311,18 +308,17 @@ def test_stop_is_idempotent(tmp_path: Path, as_stop_arg: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 2026-09-22 追加：MID-2242（start() 半启动回滚 + stop() 的 join 不得阻断 srt.close()）
+# MID-2242：start() 半启动回滚 + stop() 的 join 不得阻断 srt.close()
 # ---------------------------------------------------------------------------
 
 
 def _make_thread_start_fail(monkeypatch: pytest.MonkeyPatch, victim_prefix: str, created: list) -> None:
     # 让名字以 victim_prefix 开头的线程 start() 抛 RuntimeError("can't start new thread")
-    # ——AGENTS 自陈的现实形态（80+ 房间 + 线程数触顶），其余线程照常起。
-    # MID-66 同款口径：绝不 patch stdlib 模块本体（会波及同进程 harness 守护线程），
-    # 只把 collector 命名空间里的全局名 threading 换成浅拷贝替身。
-    # 基类直接写 threading.Thread（不用 `real_thread = threading.Thread` 再当基类——mypy 禁止
-    # 变量作基类，需 TypeAlias 才能表达同一语义）：本函数只替换 collector_module.threading，
-    # 从不替换本测试模块的全局 threading，故此处取到的必然是未被替换的 stdlib 真身。
+    # ——80+ 房间 + 线程数触顶时的现实形态，其余线程照常起。
+    # 绝不 patch stdlib 模块本体（会波及同进程 harness 守护线程），只把 collector 命名空间里的
+    # 全局名 threading 换成浅拷贝替身。基类直接写 threading.Thread：本函数只替换
+    # collector_module.threading，从不替换本测试模块的全局 threading，故这里取到的必是 stdlib 真身
+    # （不先存 `real_thread = threading.Thread` 再当基类，是因为 mypy 禁止变量作基类）。
     class _NoStartThread(threading.Thread):
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             super().__init__(*args, **kwargs)

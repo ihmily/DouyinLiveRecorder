@@ -1,20 +1,16 @@
 # -*- coding: utf-8 -*-
-# 验证 B站 wbi 签名修复:get_bilibili_danmaku_info 返回 token,并能连 WS 收到弹幕。
+# B站 wbi 签名修复的串联锁：get_bilibili_danmaku_info 返回 token，并能连 WS 收到弹幕。
 #
-# MT-02（2026-10-19，CODE_REVIEW_2026-10-18）：本文件原是一个「只有 main()、没有任何 test_ 函数」的
-# 真机脚本——pytest 收集到 0 用例，token / server_host / WS 存活那三条断言永不自动执行、可以静默腐烂，
-# 而文件名仍在向读者 advertise「B站弹幕已验证」。这与同仓 tests/test_bili_e2e.py（MIN-2266 ②）修掉的是
-# 同一反模式，故照它的形态改造：
-#   - 主体拆成**离线收集型**用例：只打桩网络层（spider.async_req 的四端点 + bilibili.WsClient），
-#     「info 解析链 → start 建连 → 进房包 → AUTH_REPLY → 弹幕分发」整条串联走的是真实代码；
-#   - 真机通道保留在 `if __name__ == "__main__"` 之后（`python tests/test_bilibili_danmaku.py [房间URL]
-#     [存活秒数]`），并按 AGENTS「live collector 双模模板」补齐守卫：执行体全在守卫之下、模块级零副
-#     作用、argv 数值判定两步式。
-# 与同目录既有用例的分工（不另建第二份字段级断言）：
-#   - tests/test_bilibili_danmaku_info.py：spi 端点 URL、buvid 来源优先级、看门狗三态等**字段/分支**锁；
-#   - tests/test_platform_danmaku_offline.py：三平台**帧编解码**分支锁；
-#   - 本文件锁上面那条**串联**（历史上只在人工脚本里跑过，正是会腐烂的那一段），并钉住 L-26：
-#     _reject_auth 的关停协程必须经 spawn_danmaku_task 投递，异常有人回收、不留孤儿 future。
+# MT-02（2026-10-19，CODE_REVIEW_2026-10-18）：本文件原是「只有 main()、没有任何 test_ 函数」的
+# 真机脚本——pytest 收集到 0 用例，token / server_host / WS 存活三条断言永不自动执行、可静默腐烂，
+# 而文件名仍在向读者 advertise「B站弹幕已验证」。照 tests/test_bili_e2e.py（MIN-2266 ②）的形态改造：
+# 主体拆成**离线收集型**用例，只打桩网络层（spider.async_req 的四端点 + bilibili.WsClient），
+# 「info 解析链 → start 建连 → 进房包 → AUTH_REPLY → 弹幕分发」整条串联走真实代码；真机通道留在
+# `if __name__ == "__main__"` 之后（`python tests/test_bilibili_danmaku.py [房间URL] [存活秒数]`），
+# 按 AGENTS「live collector 双模模板」补齐守卫（执行体全在守卫之下、模块级零副作用、argv 两步式）。
+# 分工（不另建第二份字段级断言）：test_bilibili_danmaku_info.py 锁 spi 端点 URL、buvid 来源优先级、
+# 看门狗三态等字段/分支；test_platform_danmaku_offline.py 锁三平台帧编解码；本文件锁上面那条串联，
+# 并钉住 L-26：_reject_auth 的关停协程必须经 spawn_danmaku_task 投递，异常有人回收、不留孤儿 future。
 # 判据（改完复跑，两条都必须成立）：
 #   PYTHONUTF8=1 python -m pytest tests/test_bilibili_danmaku.py --collect-only -q   # collected >= 1 且秒级
 #   PYTHONUTF8=1 python -m pytest tests/test_bilibili_danmaku.py -q                  # 全绿 0 警告且**不联网**
@@ -35,18 +31,15 @@ from src.base import DanmakuMessage
 from src.platforms import bilibili
 from src.platforms.bilibili import BilibiliDanmaku
 
-# [2026-10-19] 原文件在此处还 `import main`（同 test_bilibili_danmaku_info.py 的破环写法），实测本模块
-# 的用例只需要 src.spider / src.platforms.bilibili（离线用例把网络层整段桩住），而 import main 会把
-# 「进程退出时清理 ffmpeg」的 atexit 钩子带进 pytest 会话，收尾时对已关闭的 stderr 刷一长串
-# loguru "Logging error"。故不再导入 main。
+# 这里刻意不导入 main：本模块只需 src.spider / src.platforms.bilibili（离线用例把网络层整段桩住），
+# 而 import main 会把「进程退出时清理 ffmpeg」的 atexit 钩子带进 pytest 会话，收尾时对已关闭的
+# stderr 刷一长串 loguru "Logging error"。[历史注 2026-10-19] 原文件在此还 `import main`。
 
 URL = "https://live.bilibili.com/3428783"
-# NEW_ROOM 仅作「是否带命令行参数」的开关占位（此处恒 False）：本脚本固定用内置房间验证
-# wbi 签名修复，未启用动态房间切换。
+# NEW_ROOM 只记录「是否带命令行参数」，本文件从未读取；房间覆盖由真机段的 LIVE_URL 承担
+# （见 _LIVE_URL_RAW），内置房间 URL 仍是默认值。
+# [历史注 2026-10-19] 原注释称此处「恒 False」，与 `len(sys.argv) > 1` 的事实不符，已改正。
 NEW_ROOM = len(sys.argv) > 1
-# [2026-10-19 更正] 上面两句经实测与代码不符，保留原文以便对账：argv 带一个参数时 `len(sys.argv) > 1`
-# 为真（并非恒 False），只是 NEW_ROOM 这个布尔在本文件里从未被读取；房间覆盖现由下方真机段的
-# LIVE_URL 承担（见 _LIVE_URL_RAW），内置房间 URL 仍是默认值。
 
 # ── 离线用例的固定响应（wbi 签名链需要 nav 的两枚 key，取 32 位 hex 形态即可，不参与断言）──
 _STUB_IMG_KEY = "abcdefghijklmnopqrstuvwxyz012345"
@@ -219,9 +212,9 @@ async def test_danmaku_info_to_ws_chain_delivers_message(monkeypatch: pytest.Mon
 
 async def test_reject_auth_dispatches_through_spawned_task(monkeypatch: pytest.MonkeyPatch) -> None:
     # L-26 回归锁①：_reject_auth 的关停协程必须经 spawn_danmaku_task 投递（带异常落盘的托管调度），
-    # 不得退回裸 asyncio.ensure_future——那种写法下 fail() 抛出的异常只在任务被 GC 时以
-    # "Task exception was never retrieved" 打到 stderr，现场零日志（本仓 2026-09-12 审查已在
-    # _on_ws_ready 一侧把同一形态立为禁止）。把投递替身换成记账器后，退回裸 ensure_future 一条都记不到。
+    # 不得退回裸 asyncio.ensure_future——那种写法下 fail() 的异常只在任务被 GC 时以
+    # "Task exception was never retrieved" 打到 stderr，现场零日志（2026-09-12 审查已在 _on_ws_ready
+    # 一侧把同一形态立为禁止）。投递替身换成记账器后，退回裸 ensure_future 一条都记不到。
     recorded: list[Any] = []
 
     def _record(coro: Any) -> None:
@@ -249,9 +242,9 @@ async def test_reject_auth_dispatches_through_spawned_task(monkeypatch: pytest.M
 
 async def test_reject_auth_close_failure_is_reclaimed_and_logged(monkeypatch: pytest.MonkeyPatch) -> None:
     # L-26 回归锁②：关闭协程自己抛错时必须「被回收并留痕」，而不是成为无人认领的孤儿 future。
-    # 这里刻意**不**打桩 spawn_danmaku_task，走 src/base.py 的真实托管：其完成回调把异常按既有的
+    # 这里刻意**不**打桩 spawn_danmaku_task，走 src/base.py 的真实托管：其完成回调按既有的
     # 「[弹幕]后台协程异常: {type_name}: {exc}」模板落一条 warning（既有键，四语目录已登记，不新造
-    # msgid）。退回裸 ensure_future 时这条 warning 一条都不会出现，本用例即红。
+    # msgid）。退回裸 ensure_future 时这条 warning 不会出现，本用例即红。
     class _BoomWs:
         async def fail(self, reason: str = "") -> None:
             raise RuntimeError("close-boom")
@@ -281,8 +274,8 @@ async def test_reject_auth_close_failure_is_reclaimed_and_logged(monkeypatch: py
 _LIVE_URL_RAW = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("-") else ""
 # 房间 URL 只认 http(s) 形态：pytest 一次点多个文件时 argv[1] 是下一个测试文件的路径，不能当 URL 用。
 LIVE_URL = _LIVE_URL_RAW if _LIVE_URL_RAW.startswith("http") else URL
-# 存活秒数走「先取原文、再判是否数值」两步式（AGENTS 双模模板③，2026-09-30 实测：单行式会放行
-# 下一个测试文件的路径参数，int(路径) 当场 ValueError 让本模块收集 ERROR）
+# 存活秒数走「先取原文、再判是否数值」两步式（AGENTS 双模模板③：单行式会放行下一个测试文件的
+# 路径参数，int(路径) 当场 ValueError 让本模块收集 ERROR，2026-09-30 实测）
 _SECONDS_RAW = sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith("-") else ""
 LIVE_SECONDS = float(int(_SECONDS_RAW)) if _SECONDS_RAW.isdigit() else 30.0
 
@@ -298,21 +291,21 @@ async def _live_probe(url: str, seconds: float) -> None:
     assert info.get("token"), f"token 为空: {info}"
     assert info.get("server_host"), f"server_host 为空: {info}"
     assert info.get("room_id"), f"room_id 为空: {info}"
-    # 字段收窄为 str:info 是 dict[str, object],直接切片/取长度会因 object 类型报错;
-    # buvid 未在前序断言校验,缺失时兜底为空串,避免 KeyError/TypeError。
+    # 字段收窄为 str：info 是 dict[str, object]，直接切片/取长度会因 object 类型报错；
+    # buvid 未在前序断言校验，缺失时兜底为空串，避免 KeyError/TypeError。
     token = info["token"]
     assert isinstance(token, str), f"token 类型异常: {type(token)!r}"
     buvid = str(info.get("buvid", ""))
     print(
         f"OK danmaku_info: room_id={info['room_id']} host={info['server_host']} buvid={buvid[:12]}... token_len={len(token)}"
     )
-    # cookie 未在前序断言校验,缺失时兜底为空串,避免 KeyError。
+    # cookie 未在前序断言校验，缺失时兜底为空串，避免 KeyError。
     print(f"OK cookie: {info.get('cookie', '')}")
 
     got: list[DanmakuMessage] = []
 
     class CaptureDanmaku(BilibiliDanmaku):
-        # 仅覆写 _emit 捕获弹幕;__init__ 无需覆写,自动继承 BilibiliDanmaku。
+        # 仅覆写 _emit 捕获弹幕；__init__ 无需覆写，自动继承 BilibiliDanmaku。
         def _emit(self, msg: DanmakuMessage) -> None:
             got.append(msg)
             print(
@@ -322,9 +315,8 @@ async def _live_probe(url: str, seconds: float) -> None:
             )
 
     client = CaptureDanmaku(on_message=lambda m: None, on_close=lambda r: None, on_ready=lambda: None)
-    # 30s 存活探针：验证 wbi 签名修复后能拿到 token 并成功建连 WS、持续收弹幕不崩溃；
-    # 超时即视为连接稳定（等待弹幕或正常保活），不判失败。
-    # [2026-10-19 补充] 存活时长现可经 argv[2] 覆盖（默认仍是 30s，见上方 LIVE_SECONDS）。
+    # 存活探针：验证 wbi 签名修复后能拿到 token、成功建连 WS 并持续收弹幕不崩溃；超时即视为
+    # 连接稳定（等待弹幕或正常保活），不判失败。时长可经 argv[2] 覆盖（默认 30s，见 LIVE_SECONDS）。
     try:
         await asyncio.wait_for(client.start(info), timeout=seconds)
     except asyncio.TimeoutError:
@@ -334,7 +326,7 @@ async def _live_probe(url: str, seconds: float) -> None:
 
 def _live_main() -> None:
     # 人工通道入口（不进 pytest：模块里没有任何 test_* 调用它）。
-    # [2026-10-19] 原名 main，与顶部 `import main`（项目入口模块）同名相冲，MT-02 改造时改名，语义不变。
+    # [历史注 2026-10-19] 原名 main，与当时的 `import main`（项目入口模块）同名相冲，MT-02 改造时改名。
     asyncio.run(_live_probe(LIVE_URL, LIVE_SECONDS))
 
 

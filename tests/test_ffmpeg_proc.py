@@ -3,12 +3,9 @@
 # 全部离线：不启动真实 ffmpeg，进程对象用桩替代。
 #
 # 锁定的不变量：
-#   ① cleanup_all_ffmpeg_processes() 必须有**总预算**，一个卡死的 worker 不得挂住
-#      整条退出链路（它由 atexit 与面板「停止录制」两处调用）；旧实现
-#      `for f in as_completed(futures)` 的 f.result(timeout=10) 是死代码，且
-#      ThreadPoolExecutor 的 worker 非守护、`with` 退出即 shutdown(wait=True)；
-#   ② 三段终止等待按剩余预算分摊且**永不为 0**（timeout<3 时 timeout//3 == 0
-#      等于跳过优雅退出，MP4 丢 moov）；
+#   ① cleanup_all_ffmpeg_processes() 必须有总预算：一个卡死的 worker 不得挂住整条退出链路
+#      （它由 atexit 与面板「停止录制」两处调用）；未确认的进程必须留在注册表，清理线程必须是守护线程；
+#   ② 三段终止等待按剩余预算分摊且永不为 0（timeout//3 == 0 等于跳过优雅退出，MP4 丢 moov）；
 #   ③ Windows 下 stdin 写完即关闭（写失败也要关）。
 #
 # ③ 是 Windows 专属形态（POSIX 侧发 SIGINT、根本不碰 stdin，原因见 src/ffmpeg_proc.py
@@ -135,9 +132,8 @@ def test_stdin_closed_even_when_write_fails(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_cleanup_returns_within_budget_when_worker_wedges(monkeypatch: pytest.MonkeyPatch) -> None:
-    # MID-32 主用例：一个「卡在终止阶段」的进程不得挂住整个清理函数。
-    # 旧实现：as_completed 无超时 → 循环本身无限阻塞，f.result(timeout=10) 永不触发；
-    # 且 with ThreadPoolExecutor 退出即 shutdown(wait=True)。
+    # MID-32 主用例：一个「卡在终止阶段」的进程不得挂住整个清理函数
+    # （旧实现 as_completed 无超时、且 with ThreadPoolExecutor 退出即 shutdown(wait=True)）。
     wedged = _FakeProc(exits_on=None)
     release = threading.Event()
 
@@ -178,7 +174,7 @@ def test_cleanup_confirmed_processes_are_unregistered(monkeypatch: pytest.Monkey
 
 
 def test_single_process_cleanup_sets_event_even_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    # worker 抛错也必须置位「已处理完」事件：否则总预算等待方只能干等到超时，
+    # worker 抛错也必须置位「已处理完」事件，否则总预算等待方只能干等到超时，
     # 把一次「已处理完」误报成「未确认清理」
     boom = _FakeProc(exits_on="terminate")
 

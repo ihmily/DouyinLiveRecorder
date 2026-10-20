@@ -1,26 +1,24 @@
-# tests/test_ffmpeg_master_download.py — src/ffmpeg_master_download.py 的首批回归锁。
+# tests/test_ffmpeg_master_download.py — src/ffmpeg_master_download.py 的回归锁。
 #
-# 背景（MID-2259 的同类缺口）：该模块被 src/ffmpeg_install.py 模块级 import 并进主链
-#   （install_ffmpeg_windows → 显式开关 FFMPEG_MASTER_ALLOWED → download_ffmpeg_master），
-#   但 tests/ 内此前对它**零直接引用**——test_ffmpeg_install.py 只把它塞进「无真实出站」哨兵与
-#   下载源白名单，模块自身的选源顺序、探针判据、TOFU 记账与「失败不抛」契约从来没有锁。
-#   本文件按「删掉哪条判据就该变红」组织用例，全部离线：requests / subprocess / 落盘目录
-#   三面被打桩或收敛到 tmp_path，绝不真下 ~190MB 产物，也不写程序目录。
+# 该模块被 src/ffmpeg_install.py 模块级 import 并进主链（install_ffmpeg_windows →
+#   FFMPEG_MASTER_ALLOWED 显式开关 → download_ffmpeg_master），模块自身的选源顺序、探针判据、
+#   TOFU 记账与「失败不抛」契约由本文件直接锁住。用例按「删掉哪条判据就该变红」组织，
+#   全部离线：requests / subprocess / 落盘目录三面被打桩或收敛到 tmp_path，绝不真下 ~190MB 产物。
 #
 # 锁住的行为（编号对应本轮审查记录）：
-#   A) SEV-2218：候选源**顺序**即优先级——BtbN 权威上游必须排在 fyhub 镜像之前
+#   A) SEV-2218：候选源顺序即优先级——BtbN 权威上游必须排在 fyhub 镜像之前
 #      （镜像既能替换产物就能替换它自己的元数据，权威性严格弱于上游，只配当兜底项）；
-#   B) SEV-2222：TOFU 基准**存在却读不出来**一律拒装（本模块 TOFU 是唯一一道完整性检查，
+#   B) SEV-2222：TOFU 基准存在却读不出来一律拒装（本模块 TOFU 是唯一一道完整性检查，
 #      没有「降级后仍可安装」的余量）；
-#   C) 与 P-1 同口径：首次记账必须落 **warning**（不得降成 debug），并修剪同前缀陈旧基准
+#   C) 与 P-1 同口径：首次记账必须落 warning（不得降成 debug），并修剪同前缀陈旧基准
 #      （master-latest 是滚动别名，不修剪即让程序目录无界增长）；
-#   D) CR-11/P-1 同族：非压缩包产物（镜像站 200 + text/html 的人机验证页）必须**先于**
+#   D) CR-11/P-1 同族：非压缩包产物（镜像站 200 + text/html 的人机验证页）必须先于
 #      哈希记账被拒，且不进入解压、不执行刚下载的二进制；
-#   E) MIN-2267：_looks_like_html 的**读失败**判「内容不可信」（True），不得当「不是 HTML」放行；
-#   F) MIN-2266⑤：OSError（写盘失败 / 磁盘满 / 路径失效）不得穿出「失败一律返回 False、不抛」的契约。
+#   E) MIN-2267：_looks_like_html 的读失败判「内容不可信」（True），不得当「不是 HTML」放行；
+#   F) MIN-2266⑤：OSError（写盘失败 / 磁盘满 / 路径失效）不得穿出「失败一律返回 False、不抛」契约。
 #
-# Mock 口径：只替换「模块自己的 requests 名字」与 subprocess 的**模块全局引用**
-#   （types.SimpleNamespace(**vars(subprocess)) 浅拷贝，绝不动 stdlib 本体），
+# Mock 口径：只替换「模块自己的 requests 名字」与 subprocess 的模块全局引用
+#   （types.SimpleNamespace(**vars(...)) 浅拷贝，绝不动 stdlib 本体），
 #   判定分支（顺序、探针三态、形态守卫、TOFU 记账/比对、异常归一）一律走真实实现。
 
 import ast

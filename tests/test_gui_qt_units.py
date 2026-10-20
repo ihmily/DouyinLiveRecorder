@@ -1,24 +1,16 @@
-# tests/test_gui_qt_units.py — src/gui_qt 里「不靠真窗也能驱动」的四个模块的单元锁。
+# tests/test_gui_qt_units.py — src/gui_qt 里「不靠真窗也能驱动」的模块单元锁。
 #
-# 为什么单独成文件而不是并进 test_gui_qt_window.py：那一份走的是「离屏真窗 + 行为断言」，
-# 建一个 MainWindow 约 0.6s；而 shared / danmaku_monitor / recorder 的大部分是纯函数与
-# 线程/进程逻辑，用假进程与假 JSONL 驱动更快也更能钉住边界（超时、脏数据、单飞闸门）。
-# 逐模块覆盖率门禁（scripts/check_coverage.py）对 src/ 下新模块按 50% 下限判定，
-# 本文件是 shared / danmaku_monitor / recorder / settings_dialog / app 五处读数的主要来源。
+# 与 test_gui_qt_window.py 分工：那份走离屏真窗行为断言（建窗约 0.6s）；本文件用假进程与
+# 假 JSONL 驱动 shared / danmaku_monitor / recorder / settings_dialog / app，更快且能钉住
+# 超时、脏数据、单飞闸门等边界。scripts/check_coverage.py 对 src/ 新模块按 50% 下限判定，
+# 本文件是上述五处读数的主要来源。
 #
-# 锁什么（都是旧 tkinter 版踩过、迁移期最容易丢的判据）：
-#   · shared：外部数值容错、跨进程配置变更裁决（conflict/reload/unchanged 三态）；
-#   · danmaku_monitor：逐事件防护（一条脏事件不得吃掉同批其余事件）+ stop_event 随线程新建；
-#   · recorder：session_id 迟到回调、_stopping 复位早于会话校验、停止/退出共用单飞闸门；
-#   · settings_dialog：外部改动后「有未保存编辑」与「无编辑」走两条不同路径。
-#   · widgets.fixed_font：等宽族名只能是**单个** family、按候选取本机第一个命中的，
-#     候选全缺时交回系统固定宽度字体（2026-10-17 用户日志的两条字体告警即出自旧写法）。
-#   · widgets.TerminalText.apply_highlighter：高亮器对同一 document 单实例复用（M-16）。
-#   · 真窗语言热切换（M-13/M-14）：本文件头注「不靠真窗」口径的**刻意例外**——
-#     「登记表回填把运行态打回初值」「静态标签原地停旧语言」两类形态只有真控件树 +
-#     真翻译目录才测得出来，假控件对象走不了 set_text→setText 的 Qt 面；
-#     夹具与 tests/test_gui_qt_window.py 同源（登记表按用例快照还原，防存活条目
-#     留给按全局条数断言的 tests/test_ui_i18n.py）。
+# 锁：shared 的数值容错与配置裁决三态；danmaku_monitor 的逐事件防护与 stop_event 随线程
+# 新建；recorder 的 session_id 迟到回调、_stopping 复位早于会话校验、停止/退出单飞；
+# settings_dialog 的 reload/conflict 两条路径；widgets.fixed_font 的单个 family 与首个
+# 命中；TerminalText 高亮器单实例复用（M-16）；M-13/M-14 的真窗语言热切换——本文件
+# 「不靠真窗」口径的刻意例外：登记表回填与「原地停旧语言」只有真控件树 + 真翻译目录
+# 才测得出来（夹具与 test_gui_qt_window.py 同源，登记表按用例快照还原）。
 
 import json
 import os
@@ -33,16 +25,10 @@ from typing import Callable, Iterator
 
 import pytest
 
-# 为什么是「按子模块探测 + 显式放宽 exc_type」（2026-10-18 CI 实测事故）：
-# pytest 9.1 起 importorskip 的 exc_type 缺省值由 ImportError 改为 ModuleNotFoundError
-# （见 _pytest.outcomes.importorskip 的 docstring：`Defaults to ModuleNotFoundError when not
-# given`），而 PySide6 缺 Qt 系统库时失败发生在 **QtGui / QtWidgets 子模块的 dlopen**
-# （ubuntu runner 无 libEGL.so.1），顶层 `import PySide6` 照样成功。于是只看顶层包时这一行
-# 恒成立，紧随其后的 `from PySide6.QtGui import ...` 抛 ImportError —— 模块级 import 期异常
-# 会被 pytest 计为 collection error 并 **中断整轮**（实测 4337 collected / 2 errors →
-# Interrupted，exit code 2，其余用例一条没跑、覆盖率与逐模块门禁全部拿不到数据）。
-# 故此处直接探测真正要 import 的子模块，并把 exc_type 放宽到 ImportError：环境真的没有 Qt
-# 时应走 skip 通道，而不是把整轮 pytest 打成 Interrupted。
+# 按子模块探测并放宽 exc_type（2026-10-18 CI 实测）：pytest 9.1 起 importorskip 的 exc_type
+# 缺省为 ModuleNotFoundError，而缺 Qt 系统库时失败发生在 QtGui/QtWidgets 的 dlopen、顶层
+# `import PySide6` 仍成功；紧随其后的 import 抛 ImportError 会被计为 collection error 并
+# 中断整轮（实测 4337 collected / 2 errors）。环境没有 Qt 应走 skip，不该带走其余用例。
 pytest.importorskip(
     "PySide6.QtGui", exc_type=ImportError, reason="PySide6 / Qt 系统库不可用时跳过 Qt 窗口层用例（环境限制口径）"
 )
@@ -256,10 +242,8 @@ def test_danmaku_tail_loop_reads_file_and_survives_dirty_events(tmp_path: Path) 
         messages = monitor.messages_snapshot()
         assert [m.get("text") for m in messages] == ["第一条", "第二条"], "脏事件不得吃掉同批其余事件"
         # 坏 JSON 行与空行都被跳过、不留痕。写入顺序刻意把坏行放在「第三条」之前：
-        # tail 线程按文件顺序消费，「第三条」能落到末位，本身就是坏行已被跳过且线程
-        # 仍活着的**行为见证**——不再用固定 sleep 赌时序（MT-06：轮询周期 0.3s 配
-        # sleep(0.5) 在 CI 高负载下余量不足，偶发假红）。等待改用本文件上半段同款
-        # 的 deadline 轮询（5s 上限），不另发明第二套等待工具。
+        # tail 线程按文件顺序消费，「第三条」能落到末位即坏行已被跳过的行为见证。
+        # 等待用 deadline 轮询而不是固定 sleep（MT-06：固定余量在 CI 高负载下会假红）。
         with jsonl.open("a", encoding="utf-8") as f:
             f.write("{not json}\n\n")
         _write_jsonl(jsonl, [{"ev": "msg", "room": "A", "user": "u3", "text": "第三条", "type": "chat"}])
@@ -343,8 +327,8 @@ def test_recorder_stop_resets_flags_and_emits_ended(
     monkeypatch.setattr(recorder_module, "send_ctrl_break_to_child", _fake_ctrl_break)
     assert controller.stop_async() is True
     deadline = time.time() + 20.0
-    # 必须泵事件循环：ended 由工作线程 emit，跨线程连接是 Queued，
-    # 没有事件循环运行时槽函数永远不会被投递（离屏测试里最容易误判成「没 emit」）。
+    # 必须泵事件循环：ended 由工作线程 emit，跨线程连接是 Queued，没有事件循环时槽函数
+    # 永不被投递（离屏测试里最容易误判成「没 emit」）。
     while time.time() < deadline and (controller.is_stopping() or controller.is_running() or not seen_sessions):
         qt_app.processEvents()
         time.sleep(0.05)
@@ -355,8 +339,8 @@ def test_recorder_stop_resets_flags_and_emits_ended(
 
 
 def test_start_rejected_while_stopping_in_flight(qt_app: QApplication, tmp_path: Path) -> None:
-    # 停止窗口内禁止再次启动：直接置位断言（白盒但确定性）——用真线程抢这个窗口会写出
-    # 时快时慢的用例，而这里要锁的是「闸门存在」而不是「时序」。
+    # 停止窗口内禁止再次启动：直接置位断言（白盒但确定性）——真线程抢窗口会写出时快时慢
+    # 的用例，而这里要锁的是「闸门存在」而不是「时序」。
     controller = _controller(tmp_path)
     controller._stopping = True  # noqa: SLF001 - 单元测试直接置位，与生产同模块
     ok, pid, reason = controller.start()
@@ -397,8 +381,7 @@ def test_send_stop_signal_and_wait_hard_kill_path(
         stderr = b""
 
     # 只替换被测模块里的 subprocess 名字（浅拷贝 shim），不改写 stdlib 模块本体：
-    # test_test_hygiene 的 R1 锁把 monkeypatch.setattr(subprocess, "run", ...) 判为全进程生效的改写
-    # （loguru enqueue 线程 / coverage 都会吃到假 run），必须走 shim 形态。
+    # test_test_hygiene 的 R1 锁会把全进程生效的改写判红（loguru/coverage 也会吃到假 run）。
     subprocess_shim = types.SimpleNamespace(**vars(recorder_module.subprocess))
     subprocess_shim.run = lambda *a, **k: _Result()
     monkeypatch.setattr(recorder_module, "subprocess", subprocess_shim)
@@ -468,9 +451,9 @@ def test_advanced_settings_dialog_loads_saves_and_follows_disk(
 
 
 def _run_main_with_stubs(monkeypatch: pytest.MonkeyPatch) -> tuple[dict[str, object], dict[str, object]]:
-    # main() 的终点是 Qt 的事件循环入口（测试进程里真调即阻塞到退出），
-    # 故把 QApplication 与 MainWindow 换成替身，锁的是**装配顺序与接线**而不是 Qt 行为：
-    # 「最后一个窗口关闭即退出」必须关掉（托盘模式下窗口是隐藏的），崩溃钩子必须装上。
+    # main() 的终点是 Qt 事件循环入口（测试进程里真调会阻塞到退出），故替换 QApplication
+    # 与 MainWindow，锁的是**装配顺序与接线**：「最后一个窗口关闭即退出」必须关掉
+    # （托盘模式下窗口是隐藏的），崩溃钩子必须装上。
     class _FakeApp:
         def __init__(self, argv: list[str]) -> None:
             self.argv = list(argv)
@@ -590,10 +573,9 @@ def test_crash_sink_writes_file_and_does_not_raise(monkeypatch: pytest.MonkeyPat
 
 
 # ─── widgets.fixed_font：等宽族名 ─────────────────────────────────────────
-# 判据一律走「打桩后的 QFontDatabase」：真实字体表随机变化（装了 Consolas 的机器上旧写法
-# QFont("Consolas, Menlo, Courier New, monospace") 侥幸命中，没装的那台机器上 Qt 按
-# styleHint=Monospace（枚举值 7，与用户日志里 styleHint=7 对上）落进遗留别名表里的
-# "Terminal"，打出 DirectWrite 创建失败 + QFont::setPointSize: Point size <= 0 (-1) 两条告警）。
+# 判据一律走「打桩后的 QFontDatabase」：真实字体表随机器变化。旧写法把候选串整体塞进
+# QFont("Consolas, Menlo, ...")，没装 Consolas 的机器上 Qt 按 styleHint=Monospace 落进
+# 遗留别名 "Terminal"，打出 DirectWrite 创建失败 + Point size <= 0 两条告警。
 # 不打桩的用例在 CI 上既可能全绿也可能全红，钉不住任何东西。
 
 
@@ -635,10 +617,9 @@ def test_apply_highlighter_attaches_once_and_only_recolors(
     qt_app: QApplication, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # M-16 行为锁：主题/缩放/字体切换每次都走 apply_highlighter，旧实现在此处新建
-    # _LogHighlighter 挂同一 document——QSyntaxHighlighter 以 document 为父对象，
-    # 旧实例永不销毁且继续参与高亮：切 N 次叠 N 个，旧行被旧配色反复重着色、
-    # 全文档重复高亮 N 份开销。取证面是 document 的 children 里 QSyntaxHighlighter
-    # 的个数（Qt 没有公开的「列出全部高亮器」API，父子关系是唯一可机检形态）。
+    # _LogHighlighter 挂同一 document（QSyntaxHighlighter 以 document 为父对象，旧实例永不
+    # 销毁）：切 N 次叠 N 个，旧行被反复重着色。取证面是 document 的 children 里
+    # QSyntaxHighlighter 的个数（Qt 没有公开的「列出全部高亮器」API，父子关系是唯一可机检形态）。
     term = TerminalText()
     rehighlighted: list[int] = []
     # 桩在类层而不是实例层（PySide6 对象上逐实例改写 C++ 方法不可靠）；monkeypatch 还原。
@@ -676,10 +657,9 @@ def _fail_fast_box(*_args: object, **_kwargs: object) -> int:
 
 @pytest.fixture()
 def lang_window(qt_app: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[MainWindow]:
-    # 夹具与 tests/test_gui_qt_window.py 的 window 同源：登记表按用例快照还原
-    # （Qt 顶层窗口在 QApplication 存活期不释放，不还原会把存活条目留给
-    # 按全局条数断言的 tests/test_ui_i18n.py）。启动语言钉成 zh_CN：
-    # 解析缺省会跟随宿主系统语言，用例结论不能随机器漂移。
+    # 夹具与 tests/test_gui_qt_window.py 的 window 同源：登记表按用例快照还原（Qt 顶层
+    # 窗口在 QApplication 存活期不释放，存活条目会顶翻按全局条数断言的 tests/test_ui_i18n.py）。
+    # 启动语言钉成 zh_CN：缺省跟随宿主系统语言，用例结论不能随机器漂移。
     registry_snapshot = list(ui_i18n._ENTRIES)  # noqa: SLF001 - 测试还原全局登记表，与生产同模块
     config_dir = tmp_path / "config"
     config_dir.mkdir()
@@ -717,12 +697,12 @@ def _switch_to_en_us(win: MainWindow) -> None:
 def test_running_status_text_survives_retranslate_and_follows_language(
     qt_app: QApplication, lang_window: MainWindow
 ) -> None:
-    # M-13 行为锁：状态标题/副标题是运行态文案，既不能被 retranslate_all() 的回填打回
-    # 登记初值「待机」，也必须随语言切换按当前 recorder 状态重驱（四处投影一致）。
+    # M-13 行为锁：状态标题/副标题是运行态文案，不能被 retranslate_all() 的回填打回
+    # 登记初值「待机」，且必须随语言切换按当前 recorder 状态重驱（四处投影一致）。
     win = lang_window
     # 进入「录制中」形态：白盒置 _running 让 is_running() 为真即可——本判据考的是切换钩子
-    # 的重驱通路，与真子进程无关。只调 _set_running_ui(True) 不够：切换钩子会**重读**
-    # is_running() 决定形态，真实态为 False 时被重驱回「待机」，那反而是正确的生产行为。
+    # 的重驱通路，与真子进程无关。只调 _set_running_ui(True) 不够：切换钩子会重读
+    # is_running()，真实态为 False 时被重驱回「待机」——那反而是正确的生产行为。
     win.recorder._running = True  # noqa: SLF001 - 单元测试直接置位，与生产同模块
     win._set_running_ui(True)  # noqa: SLF001 - 直接驱动唯一运行态出口
     title_zh = win.dashboard.status_title.text()
@@ -741,8 +721,8 @@ def test_running_status_text_survives_retranslate_and_follows_language(
     assert win.sidebar_status.text() == i18n.tr("运行中") != "运行中"
     assert win.status_chip.text() == i18n.tr("运行中")
     if win.tray is not None:
-        # 托盘状态项同属运行态（走 set_running 而不是登记表）；离屏/无 XDG Session 的
-        # 机器上 _setup_tray 可能退化为 None，此处按可用性取证、不做伪绿。
+        # 托盘状态项同属运行态（走 set_running 而不是登记表）；离屏/无 XDG Session
+        # 时 _setup_tray 可能退化为 None，按可用性取证、不做伪绿。
         assert win.tray.status_action.text() == i18n.tr("录制中") != "录制中"
 
 
@@ -810,9 +790,9 @@ def test_static_labels_and_derived_title_follow_language_switch(qt_app: QApplica
         i18n.tr("界面字体"),
     }, "侧栏偏好说明标签必须随重译登记表换语言（M-14）"
     if win.tray is not None:
-        # 托盘菜单四条动作项随语言切换重取（旧 pystray 版靠 rebuild_menu 整体重建菜单，
-        # Qt 版走 TrayIcon.retranslate）；2026-10-20 补齐的「隐藏主窗口」「设置」同在此列。
-        # 右侧写死 msgid 字面量：只比 i18n.tr() 会在「目录未生效」时同侧等值而失去区分力。
+        # 托盘菜单四条动作项随语言切换重取（Qt 版走 TrayIcon.retranslate；2026-10-20 补齐的
+        # 「隐藏主窗口」「设置」同在此列）。右侧写死 msgid 字面量：只比 i18n.tr() 会在「目录
+        # 未生效」时同侧等值而失去区分力。
         assert win.tray.show_action.text() == i18n.tr("显示主窗口") != "显示主窗口"
         assert win.tray.hide_action.text() == i18n.tr("隐藏主窗口") != "隐藏主窗口"
         assert win.tray.settings_action.text() == i18n.tr("设置") != "设置"
@@ -820,13 +800,11 @@ def test_static_labels_and_derived_title_follow_language_switch(qt_app: QApplica
 
 
 def test_tray_menu_action_items_are_wired_and_fire_in_menu_order(qt_app: QApplication) -> None:
-    # 「隐藏主窗口」「设置」是 2026-10-20 相对旧 pystray 托盘补齐的两项（旧版菜单只有
-    # 显示主界面 / 最小化到托盘 / 退出程序）。只断言 QAction 存在属伪绿——建了却不 connect
-    # 的形态就是「点了没反应」，必须逐项 trigger() 看回调真被调到、且与菜单顺序一致。
+    # 「隐藏主窗口」「设置」是 2026-10-20 相对旧托盘补齐的两项。只断言 QAction 存在属伪绿：
+    # 建了却不 connect 就是「点了没反应」，必须逐项 trigger() 看回调真被调到、且与菜单顺序一致。
     #
     # 直接构造 TrayIcon 而不是走 MainWindow._setup_tray()：后者在 isSystemTrayAvailable()
-    # 为假（离屏 / 无 XDG Session）时把 tray 置成 None，那样本用例会退化成空跑，
-    # 正是本仓反对的假绿面。
+    # 为假（离屏 / 无 XDG Session）时把 tray 置成 None，那样本用例会退化成空跑。
     tokens = theme_module.palette("light").tokens
     tray = TrayIcon(qt_app, tokens)
     fired: list[str] = []
@@ -850,7 +828,7 @@ def test_tray_menu_action_items_are_wired_and_fire_in_menu_order(qt_app: QApplic
     assert fired == ["show", "hide", "settings", "quit"]
 
     # 左键单击 / 双击同归「显示主窗口」；右键（Context）交给上下文菜单，在这里一并处理
-    # 会让右键也弹一次窗口（旧版 pystray 的 MenuItem(default=True) 即同一语义）。
+    # 会让右键也弹一次窗口。
     fired.clear()
     tray._on_activated(QSystemTrayIcon.ActivationReason.Trigger)  # noqa: SLF001 - 单元锁直驱私有回调
     tray._on_activated(QSystemTrayIcon.ActivationReason.DoubleClick)  # noqa: SLF001
@@ -875,12 +853,10 @@ def test_monitor_table_headers_and_filter_sentinel_follow_language_switch(
 
 
 def test_config_page_saved_buttons_exposes_both_control_buttons(qt_app: QApplication) -> None:
-    # saved_buttons() 原注释声称「供测试断言按钮可用性（停止流程会禁用控制按钮）」，但 Qt 窗口层
-    # 的停止流程只禁用 dashboard 的 start/stop 两键（src/gui_qt/main_window.py 的
-    # `self.dashboard.start_btn.setEnabled(False)` 一段），从不触碰本页的 reload/save —— 按原注释
-    # 写断言必然失败，于是该访问器长期零调用方（2026-10-20 死代码清点实测）。注释已按 AGENTS.md
-    # 关键约定 #12 改成如实描述，本用例锁**真实存在**的契约：按 (reload, save) 顺序原样交出页面
-    # 自己持有的那两个按钮对象——顺序反转、或换成另建的等价控件，都会让身份断言变红。
+    # saved_buttons() 的原注释声称「供测试断言按钮可用性（停止流程会禁用控制按钮）」，但 Qt
+    # 窗口层的停止流程只禁用 dashboard 的 start/stop，从不触碰本页 reload/save——按原注释
+    # 写断言必然失败，该访问器因此长期零调用方（2026-10-20 死代码清点实测）。注释已改为
+    # 如实描述，本用例锁**真实存在**的契约：按 (reload, save) 顺序交出页面自己持有的按钮对象。
     from src.gui_qt.pages.config import ConfigPage
 
     # 建过 Qt 控件的测试文件必须还原 ui_i18n 登记表：ConfigPage 经 set_text 登记 4 条静态标签，

@@ -1,15 +1,7 @@
-# Tests for src/web_config.py - Web 面板配置纯函数模块（安全回归）.
-# 中文：本文件守护 Web 面板配置纯函数的安全不变量——换行注入防护（C3/C7）、
-# 密钥哈希往返与明文兼容、原子写不残留临时文件、默认值含受信代理字段、
-# 画质选项的规范化/持久化、URL_config.ini 房间画质保序改写与主播名反查 URL。
+# tests/test_web_config.py - src/web_config.py 纯函数模块的安全不变量回归。
+# 守护：换行注入防护（C3/C7）、密钥哈希往返与明文兼容、原子写不残留临时文件、
+# 默认值含受信代理字段、画质选项的规范化/持久化、URL_config.ini 房间画质保序改写与主播名反查 URL。
 # 全程纯函数 + tmp_path，不触网、不依赖全局 config。
-#
-# 本次新增（按需滚动追加）：
-# - TestQualityOptions：选项过滤、缺键回退、行级更新、换行注入防护
-# - TestUpdateRoomQuality：行级改写 + URL 归一化匹配 + 注释前缀保留 + 幂等性 + 原子写
-# - TestFindRoomUrlByAnchorName：主播名反查 URL，GUI 画质切换写回依赖此入口
-# - TestSensitiveItemCaseInsensitive（L-21，2026-10-18）：敏感节比对统一 casefold，变体节名不得明文回显
-# - TestRoomUrlCommaRejectedOnWrite（L-22，2026-10-18）：写侧拒绝 URL 段含逗号 + 读取侧向后兼容
 
 import configparser
 from pathlib import Path

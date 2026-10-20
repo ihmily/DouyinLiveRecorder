@@ -1,15 +1,13 @@
 # -*- coding: utf-8 -*-
 # DanmakuCollector 内部 SRT 写盘线程解耦回归。
 #
-# 旧实现：_on_message 在 asyncio 事件循环里同步调 srt.write。文件 I/O（特别在 Windows
-# 上偶发的杀软索引、句柄释放）会阻塞 ws_recv，导致心跳超时、对端误判断连。
-# 新实现：_on_message 只做 O(1) 入队，独立守护线程消费队列并落盘。
+# 旧实现：_on_message 在事件循环里同步调 srt.write，文件 I/O（Windows 上偶发的杀软索引、
+# 句柄释放）会阻塞 ws_recv → 心跳超时、对端误判断连。新实现：_on_message 只做 O(1) 入队，
+# 独立守护线程消费队列并落盘。
 #
-# 守护：
-# ① 写线程确实存在且 daemon=True
-# ② stop() 顺序：sentinel 发出 → 写线程 join → srt.close（与「srt.close 兜底刷尾」一致）
-# ③ 端到端：start() → 推送弹幕 → stop() → SRT 文件落盘且内容正确（不被事件循环阻塞）
-# ④ 仅监控模式（write_srt=False）不创建写线程、不创建队列写入
+# 守护：① 写线程存在且 daemon=True；② stop() 顺序为「sentinel → join 写线程 → srt.close」
+# （与「srt.close 兜底刷尾」一致）；③ 端到端 start → 推送 → stop 后 SRT 落盘且内容正确；
+# ④ 仅监控模式（write_srt=False）不创建写线程与队列写入。
 
 import time
 from pathlib import Path
@@ -95,7 +93,7 @@ def test_stop_drains_queue_and_writes_srt(tmp_path: Path) -> None:
         segment_seconds=None,
     )
     collector.start()
-    # 给写线程一点点启动时间（不严格必要：start 已 start()，但保险起见）
+    # 给写线程一点启动时间（start 已拉起线程，这里只是保险）
     time.sleep(0.05)
     for i in range(5):
         collector._on_message(DanmakuMessage(type=DanmakuMessageType.CHAT, user_name=f"用户{i}", message=f"弹幕{i}"))
@@ -134,9 +132,8 @@ def test_stop_calls_srt_close_exactly_once(tmp_path: Path) -> None:
 
 
 def test_on_message_does_not_block_event_loop(tmp_path: Path) -> None:
-    # 关键回归：_on_message 调用本身应在亚毫秒内返回（仅入队 O(1)），
-    # 不再因 srt.write 的文件 I/O 阻塞。模拟一个慢速 srt.write：写线程卡住 200ms 时，
-    # _on_message 仍能在 10ms 内返回。
+    # 关键回归：_on_message 本身应在亚毫秒内返回（仅 O(1) 入队），不再被 srt.write 的文件 I/O
+    # 阻塞。模拟慢速 srt.write：写线程卡住 200ms 时，_on_message 仍须在 10ms 内返回。
     collector = DanmakuCollector(
         danmaku_cls=cast(Any, _FakeDanmaku),
         danmaku_args={},
@@ -145,14 +142,13 @@ def test_on_message_does_not_block_event_loop(tmp_path: Path) -> None:
     )
     collector.start()
     time.sleep(0.05)
-    # 替换 _srt.write 为慢速版（200ms），写线程消费时被卡，
-    # 但 _on_message 的入队不应被这次卡住影响
+    # 替换 _srt.write 为慢速版（200ms）：写线程消费时被卡住，但入队不应受它影响
     srt = collector._srt
     assert srt is not None
 
     def slow_write(user: str, msg: str, now: Any = None) -> None:
         time.sleep(0.2)
-        # 用原 write 落盘（其实 srt.write 本身已够快，这里只是演示 200ms 的「慢」）
+        # 仍用原 write 落盘，200ms 只是人为放大写线程的阻塞窗口
         cast(Any, SrtWriter.write)(srt, user, msg, now=now)
 
     # mypy 报 assignment（写实例属性）、basedpyright 报 method-assign，两种码都要压制

@@ -1,32 +1,21 @@
-# .github/actions/retry 复合动作「按退出码分档」的回归用例（方案 2-A）。
+# .github/actions/retry 复合动作「按退出码分档」的回归用例。
 #
 # 被测面两块，互不替代：
-#   1) 结构锁（无条件执行、纯静态）：action.yml 的 inputs / env / run 三段形态——
-#      fail_fast_codes 必须存在且 default 为空串（「默认零行为变化」的声明面）、
-#      fail-fast 分支必须带**原退出码**退出并位于退避 sleep **之前**、
-#      兜底路径必须仍以「重试到上限 + ::error:: + exit 1」收尾、
-#      两个 workflow 的既有 retry 调用点除 web smoke 一处外无人传 fail_fast_codes。
-#   2) 行为锁（真起 bash）：把 action.yml 的 run 脚本体**原样**抽出、在 tmp_path 下真跑，
-#      用计数器文件数「命令实际被执行了几次」。只有真跑才能证明
-#      「不传该 input = 与旧版逐字一致」与「命中列表 = 一次都不重试、且保留原 rc」；
-#      静态锁对「分支位置写反」「列表解析漏 case」完全失明。
+#   1) 结构锁（无条件执行、纯静态）：fail_fast_codes 必须存在且 default 为空串（「默认零行为变化」的
+#      声明面）、fail-fast 分支必须以**原退出码**退出并位于退避 sleep **之前**、兜底路径仍以
+#      「重试到上限 + ::error:: + exit 1」收尾、两个 workflow 的既有调用点除 web smoke 外无人传参。
+#   2) 行为锁（真起 bash）：把 action.yml 的 run 脚本体**原样**抽出、在 tmp_path 下真跑，用计数器
+#      文件数「命令实际被执行了几次」。只有真跑才能证明「不传该 input = 与旧版逐字一致」与
+#      「命中列表 = 一次都不重试、且保留原 rc」；静态锁对「分支位置写反」「列表解析漏 case」失明。
 #
-# 为什么没有 skipif：bash 在 CI（ubuntu）与本机（Windows + Git Bash）两侧都存在，
-# 缺 bash 时按 AGENTS「平台专属分支的测试不得靠 skipif 让 CI 静默跳过」一律**显式失败**——
-# 行为锁是本文件唯一的自证手段，静默 skip 等于「门禁没跑却报绿」（MID-2264 同族）。
+# 为什么没有 skipif：bash 在 CI（ubuntu）与本机（Windows + Git Bash）两侧都存在，缺 bash 时一律
+# **显式失败**——行为锁是本文件唯一的自证手段，静默 skip 等于「门禁没跑却报绿」。
 #
 # 判据一律按字节比较（不传 text=True/encoding=）：脚本体 UTF-8 落盘、bash 原样 echo，
-# 期望串在断言处 .encode("utf-8")，与宿主控制台码页彻底解耦
-# （AGENTS「探测子进程输出一律按字节比较」）。
+# 期望串在断言处 .encode("utf-8")，与宿主控制台码页彻底解耦。
 #
-# 变异验证记录（2026-09-30 实跑，本文件即其证据；三项均已恢复后全绿）：
-#   ① 删掉 fail-fast 分支（连 `exit "$rc"` 一起）
-#      → test_fail_fast_branch_exits_with_original_rc_before_backoff 红、
-#        行为锁「codes=2 → 只跑 1 次、rc=2」两格同时红；
-#   ② inputs.fail_fast_codes.default 由 "" 改成 "2"
-#      → test_fail_fast_codes_input_declared_with_empty_default 红；
-#   ③ fail-fast 分支挪到退避 sleep 之后
-#      → 同上结构锁的顺序判据红，行为锁该格 runs 由 1 变 2 亦红。
+# 变异验证（2026-09-30 实跑，三项均已当轮还原）：① 删掉 fail-fast 分支 → 结构锁与行为锁两格红；
+# ② default 由 "" 改成 "2" → 声明面判据红；③ 分支挪到 sleep 之后 → 顺序判据与 runs 计数红。
 
 from __future__ import annotations
 
@@ -50,7 +39,7 @@ BUILD_FILE = ROOT / ".github" / "workflows" / "build-release.yml"
 RETRY_USES_VALUE = "./.github/actions/retry"
 RETRY_USES_RE = re.compile(r"uses:\s*\./\.github/actions/retry\b")
 
-# retry 调用点数量下限。2026-09-30 实测读数：ci.yml 11 处 + build-release.yml 5 处 = 16 处。
+# retry 调用点数量下限（实测 2026-10-20：ci.yml 12 处 + build-release.yml 5 处 = 17 处，下限取 16）。
 # 用 >= 而非 ==：新增调用点属放宽、不该弄红本用例；**减少**说明有人把重试内联回 job 里，
 # 违反 AGENTS「网络安装重试统一走 .github/actions/retry」，必须拦。
 MIN_RETRY_CALL_SITES = 16

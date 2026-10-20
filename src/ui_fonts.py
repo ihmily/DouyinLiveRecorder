@@ -3,23 +3,20 @@
 #
 # 与 ui_theme / ui_scale 同一套约定：偏好落在 config.ini [GUI] 段、读写经
 # src/web_config.update_or_append_config_line（行级替换 + 缺节补建 + 原子写），
-# **刻意不用** configparser 覆写整文件（会把用户手写注释连带冲掉）。
+# 刻意不用 configparser 覆写整文件（会把用户手写注释连带冲掉）。
 #
-# [为什么禁 woff2] Tk 在 Windows 上经 GDI 取字体，只认 SFNT 容器（.ttf/.otf/.ttc），
-# woff2 是为其设计的传输格式、需解压后才能交给 GDI。引入解压依赖只为收尾一个 GUI
-# 下拉框不划算，故导入环节直接把 woff2 挡在门外并给出明确原因——比「选了没反应」
-# 好。用户在浏览器/系统里装好的字体（含 woff2 转 ttf 后的成品）只要在系统字体表里
-# 出现，就能从这里选中。
+# [为什么禁 woff2] Tk 在 Windows 上经 GDI 取字体，只认 SFNT 容器（.ttf/.otf/.ttc）；woff2
+# 需先解压才能交给 GDI，为收尾一个下拉框引入解压依赖不划算，故导入环节直接把 woff2 挡在
+# 门外并给出明确原因——比「选了没反应」好。系统字体表里已装好的字体（含 woff2 转 ttf 后的
+# 成品）仍可从下拉框选中。
 #
-# [为什么写「family 名」而不是文件路径到 Tk] Tk 的字号单位是点、字体标识
-# 是 family 名（-font 字符串的三元组首项）。把文件注册成进程私有字体后，GDI 会把它
-# 并入系统字体枚举，Tk 就能按 family 名取到它；此后 Fonts 侧的切换只有一次
-# configure(family=...)，不涉及任何路径解析。
+# [为什么写「family 名」而不是文件路径给 Tk] Tk 的字体标识是 family 名（-font 字符串的三
+# 元组首项）。文件注册成进程私有字体后 GDI 会把它并入字体枚举，Tk 就能按 family 名取到；
+# 此后 Fonts 侧切换只做一次 configure(family=...)，不涉及路径解析。
 #
-# [回退策略] Tk 的 family 名不被识别时**静默回退**到默认字体族（不报错、不弹窗、
-# 也不存在 font-display 那样的异步加载期——GDI 注册是同步的）。这条既是优点
-# （不会出现 FOIT/FOUT 闪烁）也是坑（选错了看不出来），故本模块要求调用方在
-# 「注册后查 family 是否真的进入 Tk 的 families()」才允许选中——这是唯一的鉴别手段。
+# [回退策略] Tk 的 family 名不被识别时静默回退到默认字体族（不报错不弹窗；GDI 注册是同步的，
+# 没有 font-display 那样的异步加载期）。优点是不会 FOIT/FOUT 闪烁，坑是选错了看不出来——
+# 故调用方必须先确认「注册后 family 真能被 Tk 解析」（family_resolves）才允许选中。
 
 import os
 import shutil
@@ -108,7 +105,7 @@ def save_font_preference(config_file: str | Path, family: str, font_file: str = 
     return bool(written_family and written_file)
 
 
-# 当前进程可用的字体族名（小写集合 comparisons 用）。
+# 当前进程可用的字体族名（集合；大小写按 Tk 原样保留，比对时各自 casefold）。
 def _installed_families(root: Any = None) -> frozenset[str]:
     try:
         return frozenset(tkfont.families(root))
@@ -130,9 +127,9 @@ def available_preset_families(root: Any = None) -> list[str]:
     return picked
 
 
-# 某字体族在本机是否可用（区分大小写经 frozenset 精确匹配后，再退一层宽容匹配：
-# Tk 在 Windows 上偶有把「Microsoft YaHei UI」枚举成别名的情况）。
-# 判据只覆盖**注册表里已安装**的字体——私有注册进来的人并不会出现在这里（见下）。
+# 某字体族在本机是否可用：先用 frozenset 精确匹配，再退一层大小写宽容匹配
+# （Tk 在 Windows 上偶有把「Microsoft YaHei UI」枚举成别名的情况）。
+# 判据只覆盖**注册表里已安装**的字体——进程私有注册进来的不会出现在这里（见 family_resolves）。
 def is_family_available(family: str, root: Any = None) -> bool:
     if not family:
         return False
@@ -145,13 +142,11 @@ def is_family_available(family: str, root: Any = None) -> bool:
 
 # Tk 能否真的用这个族名取到一款**独立**字体。
 #
-# [为什么必须有这第二个判据] 实测（2026-10-17）：AddFontResourceExW(FR_PRIVATE)
-# 返回成功、Tk 也确实能按该名字把字形排出来——但 tkfont.families() **永远列不到它**
-# （Tk 只枚举注册表里已安装的字体）。于是「族名在 families() 里」既不是必要条件
-# （私有字体不在），也不是充分的「能用」证明（缺字体时 Tk 静默回退到兜底字体，
-# 同样不在列表里却不报错）。唯一能区分「真加载了」与「静默回退」的办法是拿 Tk 自己
-# 解析一次，把它和一个必然不存在的族名所得的**兜底族名**比对：两者不同 = 这个名字
-# 确实指向了某个特定字体（无论是私有注册还是系统安装）。
+# [为什么需要这第二个判据] AddFontResourceExW(FR_PRIVATE) 成功后 Tk 能按该名字排出字形，
+# 但 tkfont.families() 永远列不到它（Tk 只枚举注册表里已安装的字体）；而缺字体时 Tk 又
+# 静默回退到兜底字体、同样不在列表里且不报错——所以「族名在 families() 里」既非必要也不
+# 充分。唯一能区分「真加载」与「静默回退」的办法：让 Tk 自己解析一次，与必然不存在的族名
+# 所得的兜底族名比对，两者不同即说明该名字确实指向了某个特定字体。
 def family_resolves(family: str, root: Any = None) -> bool:
     if not family:
         return False
@@ -167,9 +162,9 @@ def family_resolves(family: str, root: Any = None) -> bool:
 
 # ─── SFNT 解析：从字体文件里读出 family 名 ─────────────────────────────────
 #
-# 不引入 fontTools 这类依赖：我们只需要 name 表里的一条记录，而手上已经有字节流。
+# 不引入 fontTools 这类依赖：只需要 name 表里的一条记录，而手上已经有字节流。
 # 布局：sfnt 版本(4B) + numTables(2B) + ...，随后每张表 16B 目录项（tag/checksum/offset/length）。
-# 'ttc' 容器是 ttcf 头 + 各字体表目录偏移数组，这里取第一个字体（谁也没选多路标）。
+# 'ttc' 容器是 ttcf 头 + 各字体表目录偏移数组，这里取第一个字体（无多路标可选）。
 
 
 def _iter_table_dirs(data: bytes) -> tuple[int, int] | None:
@@ -220,8 +215,8 @@ def sfnt_family_name(path: str | Path) -> str | None:
     if entry is None:
         return None
     table_offset, table_len = entry
-    # 表目录项的 offset 相对「表目录起点」（ttc 里它是容器内的偏移，不是文件偏移），
-    # 故必须加上目录偏移——不加的话 ttc 分支读到的是目录自身而非 name 表内容。
+    # 表目录项的 offset 相对「表目录起点」（ttc 里是容器内偏移而非文件偏移），故必须加上
+    # 目录偏移——否则 ttc 分支读到的是目录自身而非 name 表内容。
     table_offset += dir_offset
     if table_offset + 6 > len(data) or table_len < 6:
         return None
@@ -265,9 +260,9 @@ _FR_PRIVATE: Final[int] = 0x10
 _GDI32: Any | None = None
 
 
-# 加载并声明 gdi32。返回 None 表示拿不到（非 Windows / 被策略限制）——调用方必须
-# 显式判空。平台专属符号（WinDLL 只存在于 Windows typeshed）必须先按 sys.platform
-# 字面量早返回，否则 mypy --platform linux 报 attr-defined（AGENTS 门控条）。
+# 加载并声明 gdi32。返回 None 表示拿不到（非 Windows / 被策略限制），调用方必须显式判空。
+# 平台专属符号（WinDLL 只存在于 Windows typeshed）必须先按 sys.platform 字面量早返回，
+# 否则 mypy --platform linux 报 attr-defined。
 def _get_gdi32() -> Any | None:
     global _GDI32
     if _GDI32 is not None:
@@ -313,10 +308,10 @@ def install_font_file(source: str | Path, app_root: str | Path) -> Path | None:
         shutil.copy2(src, target)
     except Exception as e:
         # [为什么必须留这一行日志] 调用方拿到 None 只会打「导入字体失败」的泛化提示
-        # （main_window 的对话框文案是分类级的，不含 OSError 细节），异常若在此静默收敛，
-        # 现场就只剩「用户复述点了一次没反应」——文件被占用 / 目标目录只读 / 磁盘满 /
-        # 源文件在复制瞬间被移走（2026-10-17 真机实测到的是这条 FileNotFoundError
-        # [WinError 2]）这几种成因在 UI 上完全同形，只有日志能把它们分开。
+        # （main_window 的对话框文案是分类级的，不含 OSError 细节）。异常若在此静默收敛，
+        # 现场就只剩「用户复述点了一次没反应」——文件被占用 / 目录只读 / 磁盘满 / 源文件
+        # 在复制瞬间被移走（实测到的 FileNotFoundError [WinError 2]）在 UI 上完全同形，
+        # 只有日志能把它们分开。
         logger.warning(
             i18n.tr(
                 "复制字体文件失败: {name} -> {target} - {type_name}: {err}",
@@ -330,13 +325,12 @@ def install_font_file(source: str | Path, app_root: str | Path) -> Path | None:
     return target
 
 
-# Windows 保留设备名。清洗仍然要挡，但理由不是「本机写不进去」——
-# 2026-10-17 在本机（Windows 10.0.26300）实测 `CON.ttf`/`AUX.ttf` 经 Python open() 与
-# cmd 重定向**都能落成普通文件**（iterdir 可见、getsize 正常），说明新构建的 Win32 名称解析
-# 已放宽。挡它的真正原因是**可移植性**：同一份 config/fonts/CON.ttf 在更早的 Windows 构建、
-# 资源管理器改名/复制、以及未走 \\?\ 前缀的第三方 API 下会被当设备或直接拒名；而这个文件名
-# 还会被写进 gui_font_file 持久化并在下次启动读回，等于把一台机器上「看着没事」的路径
-# 分发到所有机器。COM10/LPT10 刻意不扩——按 MSDN 保留段只到 1..9，扩到两位数会误改合法文件名。
+# Windows 保留设备名。挡它的理由不是「本机写不进去」——新构建的 Win32 名称解析已放宽，
+# CON.ttf/AUX.ttf 经 open() 也能落成普通文件；真正原因是**可移植性**：同一份
+# config/fonts/CON.ttf 在更早的 Windows 构建、资源管理器改名/复制、以及未走 \\?\ 前缀的
+# 第三方 API 下会被当设备或直接拒名，而这个文件名还会被写进 gui_font_file 持久化并在下次
+# 启动读回，等于把一台机器上「看着没事」的路径分发到所有机器。COM10/LPT10 刻意不扩——
+# MSDN 保留段只到 1..9，扩到两位数会误改合法文件名。
 _WIN_RESERVED_NAMES: Final[frozenset[str]] = frozenset(
     {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
 )

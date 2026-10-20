@@ -6,20 +6,19 @@
 #   有 ffmpeg 包。aarch64 上的轻量发行版/容器/无 root 部署正好同时缺这两条，于是「未装 ffmpeg」
 #   在 Linux 上只剩「请手动安装」一句死路。
 #
-# 为什么默认路径必须已校验：AGENTS.md ② 的红线是「TOFU 不得成为默认路径」。本模块的期望值来自
-#   api.github.com 上该 release asset 的 digest 字段，而下载 URL 里的标签是**月末 autobuild**
+# 为什么默认路径必须已校验：AGENTS.md ② 的红线是「TOFU 不得成为默认路径」。期望值来自
+#   api.github.com 上该 release asset 的 digest 字段，下载 URL 里的标签是**月末 autobuild**
 #   （与 build_exe._FFMPEG_DOWNLOAD_URLS 同一份，一致性由 tests/test_ffmpeg_linux_download.py 的
 #   TestUrlParityWithBuildExe 锁住）——标签不可变，期望值不会随上游重发漂移。
-#   [口径] 它与产物同属 GitHub 平台但**异服务**（API 域 ↔ 对象存储域），属
-#   「同源一致性校验而非来源认证」，与 gyan.dev 的 .sha256 同级（MIN-2258 同一措辞），
-#   **不得**在注释或日志里写成「已认证来源」。
+#   [口径] 它与产物同属 GitHub 平台但**异服务**（API 域 ↔ 对象存储域），属「同源一致性校验而非
+#   来源认证」，与 gyan.dev 的 .sha256 同级，**不得**写成「已认证来源」。
 #
-# 为什么降级档仍要开关：GitHub API 不可达 / 403 限流时拿不到 digest，此时唯一可选项是首次信任。
-#   那一条与 Windows 的 master 源同强度，故复用同一个默认关闭的开关 FFMPEG_MASTER_ALLOWED，
-#   并由**调用方传入** master_allowed（本模块反向 import ffmpeg_install 会构成循环依赖）。
+# 为什么降级档仍要开关：GitHub API 不可达 / 403 限流时拿不到 digest，唯一可选项是首次信任，与
+#   Windows 的 master 源同强度，故复用同一个默认关闭的开关 FFMPEG_MASTER_ALLOWED，并由**调用方
+#   传入** master_allowed（本模块反向 import ffmpeg_install 会构成循环依赖）。
 #
-# 为什么单独成模块：ffmpeg_master_download.py 的语义是「master 滚动别名 + 只有 TOFU 一档 + 只认 zip」，
-#   把「不可变标签 + 官方 digest + tar.xz」塞进去会让两个完整性档在同模块内互相打脸。
+# 为什么单独成模块：ffmpeg_master_download.py 的语义是「master 滚动别名 + 只有 TOFU 一档 + 只认
+#   zip」，把「不可变标签 + 官方 digest + tar.xz」塞进去会让两个完整性档在同模块内互相打脸。
 
 import os
 import platform
@@ -100,12 +99,12 @@ def _mask(url: str) -> str:
 
 
 def _digest_from_assets(assets: list[Any], want_name: str) -> str:
-    # 从 release 的 assets 列表里取本资产的 digest；形状非法（截断/大写/未剥净前缀）与「没有该项」同级回 ""。
-    # want_name 必须是实参，不得在本函数里回头调 _asset_name(_asset_url(_linux_arch()))：
-    # 那会让这个纯判定函数依赖宿主架构，而同文件的分流用例正靠 monkeypatch machine 跑——结果会随机器漂。
-    # [为什么这里绝不 .lower()] 形状关与 build_exe._is_pinned 逐字同判据（64 位**小写**十六进制），
-    # 先 lower 再比对等于把「大写形态」放行——而 GitHub 的 asset.digest 恒为小写 `sha256:<64hex>`，
-    # 出现大写只可能是响应被改写过或解析错位，正是这道关要拦的对象（放宽它等于自废形状判定）。
+    # 从 release 的 assets 列表里取本资产的 digest；形状非法（截断/大写/未剥净前缀）与「没有该项」
+    # 同级回 ""。want_name 必须是实参，不得在函数里回头调 _asset_name(_asset_url(_linux_arch()))：
+    # 那会让这个纯判定函数依赖宿主架构，而同文件的分流用例正靠 monkeypatch machine 跑——结果随机器漂。
+    # 绝不 .lower()：形状关与 build_exe._is_pinned 逐字同判据（64 位**小写**十六进制），先 lower 再比对
+    # 等于放行「大写形态」——GitHub 的 asset.digest 恒为小写 `sha256:<64hex>`，出现大写只可能是响应被
+    # 改写过或解析错位，正是这道关要拦的对象。
     for asset in assets:
         if not isinstance(asset, dict) or str(asset.get("name") or "") != want_name:
             continue
@@ -117,22 +116,18 @@ def _digest_from_assets(assets: list[Any], want_name: str) -> str:
 
 
 def _payload_assets(payload: Any) -> list[Any]:
-    # 载荷形态由远端决定，本模块一行都不可以相信：GitHub API 正常回 dict，但前置网关/错误页/被改写
-    # 的应答常见地回数组、null 或字符串，直接 payload.get("assets") 即抛 AttributeError。
-    # 归一成 [] 而不是抛，是规格 4.2「取不到官方哈希」这条降级语义的地基——所以判定必须是**返回值**
-    # （空列表 = 取不到），不得改写成「靠调用点的 try 兜住异常」：那样这条函数就没有可锁的判据了，
-    # 而且异常形态会被入口的 catch-all 归成「直下安装异常」，用户既看不到 FFMPEG_MASTER_ALLOWED
-    # 指引、也拿不到本该发生的降级安装（回归锁：tests/test_ffmpeg_linux_download.py
-    # ::TestDigestPayloadShape::test_non_dict_payload_yields_no_assets）。
+    # 载荷形态由远端决定，本模块一行都不可以相信：GitHub API 正常回 dict，但前置网关/错误页/被改写的
+    # 应答常见地回数组、null 或字符串，直接 payload.get("assets") 即抛 AttributeError。归一成 [] 而不是
+    # 抛，是「取不到官方哈希」这条降级语义的地基——判定必须是**返回值**（空列表 = 取不到），不得改写成
+    # 「靠调用点的 try 兜住异常」：那样异常形态会被入口的 catch-all 归成「直下安装异常」，用户既看不到
+    # FFMPEG_MASTER_ALLOWED 指引、也拿不到本该发生的降级安装。
+    # 回归锁：tests/test_ffmpeg_linux_download.py::TestDigestPayloadShape::test_non_dict_payload_yields_no_assets。
     if isinstance(payload, dict):
         assets = payload.get("assets")
         if isinstance(assets, list):
             return assets
-    # {"assets": null} 与「键缺失」同级：dict.get 的默认值只在键缺失时生效，显式 null 会原样返回，
-    # 所以下游 `or []` 的容错不能替代这里判类型。
-    # [为什么这里不再用 cast("dict[str, Any]", ...)] 形态判定已由 isinstance 在运行时做完，
-    # 再挂 cast 等于向 mypy 声明「一定是 dict」的假前提——而数组/null 载荷恰恰不是，留着它会把
-    # 这条真实分支的类型面擦掉（原 _fetch_asset_digest 里的 cast 就是本次修复要拆掉的东西）。
+    # {"assets": null} 与「键缺失」同级：dict.get 的默认值只在键缺失时生效，故下游 `or []` 不能替代
+    # 这里判类型。形态判定已由 isinstance 做完，再挂 cast 等于向 mypy 声明「一定是 dict」的假前提。
     return []
 
 
@@ -148,11 +143,10 @@ def _fetch_asset_digest(asset_url: str) -> str:
             timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT),
         )
         if response.status_code != 200:
-            # 403（限流）与 404 都在此归一成「取不到」——本模块的降级路径就是为此而设计，
-            # 把它当错误中断安装只会让用户在 GitHub API 限流时完全装不上 ffmpeg。
-            # 非 200 一律不采信载荷：201/500 的响应体里同样可能带 assets 数组，闸门摘掉就等于
-            # 拿错误页的 digest 当官方期望值。回归锁：tests/test_ffmpeg_linux_download.py
-            # ::TestApiStatusGate::test_non_200_status_never_trusts_payload。
+            # 403（限流）与 404 都在此归一成「取不到」——本模块的降级路径就是为此而设计，把它当错误
+            # 中断安装只会让用户在 GitHub API 限流时完全装不上 ffmpeg。非 200 一律不采信载荷：201/500
+            # 的响应体里同样可能带 assets 数组，闸门摘掉就等于拿错误页的 digest 当官方期望值。
+            # 回归锁：tests/test_ffmpeg_linux_download.py::TestApiStatusGate::test_non_200_status_never_trusts_payload。
             logger.debug(
                 i18n.tr(
                     "未取得 ffmpeg 官方 SHA256（API 返回 {status}）: {masked_url}",
@@ -161,10 +155,9 @@ def _fetch_asset_digest(asset_url: str) -> str:
                 )
             )
             return ""
-        # 取 assets 这步必须留在 try 内，且形态归一交给 _payload_assets：
-        # 原实现把 payload.get("assets") 放在 try **之外**，于是「API 以 200 回数组载荷」这条
-        # 真实可发生的畸形形态会抛 AttributeError 穿出本函数，被入口 catch-all 归成
-        # 「直下安装异常」，规格 4.2 承诺的「任何异常一律回 ""（= 走降级）」在此被偷换成 fatal。
+        # 取 assets 这步必须留在 try 内，且形态归一交给 _payload_assets：原实现把 payload.get("assets")
+        # 放在 try **之外**，于是「API 以 200 回数组载荷」这条真实可发生的畸形形态会抛 AttributeError
+        # 穿出本函数，被入口 catch-all 归成「直下安装异常」，而「任何异常一律回 ""（= 走降级）」被偷换成 fatal。
         return _digest_from_assets(_payload_assets(response.json()), _asset_name(asset_url))
     except Exception as e:
         logger.debug(
@@ -205,11 +198,11 @@ def _prune_stale_baselines(dest_dir: Path, keep: Path) -> list[str]:
 
 
 def _verify_archive(archive: Path, official: str, dest_dir: Path, source_url: str, master_allowed: bool) -> bool:
-    # 判序（形态 → 哈希 → 解压）与 ffmpeg_install.download_ffmpeg_official 同口径：
-    # 三者校验的都是同一个产物文件，颠倒会让挑战页/错误页的哈希被当成基准写下去。
-    # 这条形态关是「基准不被污染」的唯一前置：200 + HTML 错误页照样能算出哈希，若先算哈希再判形态，
-    # TOFU 档就会把错误页的哈希记成可信基准（回归锁：tests/test_ffmpeg_linux_download.py
-    # ::TestArchiveShapeGate::test_non_tar_archive_refuses_before_hashing）。
+    # 判序（形态 → 哈希 → 解压）与 ffmpeg_install.download_ffmpeg_official 同口径：三者校验的都是
+    # 同一个产物文件，颠倒会让挑战页/错误页的哈希被当成基准写下去。这条形态关是「基准不被污染」的
+    # 唯一前置：200 + HTML 错误页照样能算出哈希，若先算哈希再判形态，TOFU 档就会把错误页的哈希记成
+    # 可信基准。回归锁：tests/test_ffmpeg_linux_download.py
+    # ::TestArchiveShapeGate::test_non_tar_archive_refuses_before_hashing。
     if not tarfile.is_tarfile(str(archive)):
         logger.error(
             i18n.tr(
@@ -250,21 +243,19 @@ def _verify_archive(archive: Path, official: str, dest_dir: Path, source_url: st
     # ::test_second_run_with_different_bytes_refuses（首跑记账、换字节重跑必须拒且基准不被改写）。
     if hash_file.exists():
         try:
-            # [为什么这里保留 .lower()、与 _digest_from_assets 的严格形状关刻意不同强度]
-            # 基准是本模块自己 write_text(current) 写下的**自产物**（恒为小写十六进制），lower 只为
-            # 容忍用户手工改过大小写后仍能对上；_digest_from_assets 管的是**外来的** API 应答，
-            # 大写在那里只可能是响应被改写/解析错位，必须拒绝。两侧强度差不是口径分叉。
+            # [这里保留 .lower()、与 _digest_from_assets 的严格形状关刻意不同强度] 基准是本模块自己
+            # write_text(current) 写下的**自产物**（恒为小写十六进制），lower 只为容忍用户手工改过
+            # 大小写后仍能对上；_digest_from_assets 管的是**外来的** API 应答，大写在那里只可能是
+            # 响应被改写/解析错位，必须拒绝。两侧强度差不是口径分叉。
             expected = hash_file.read_text(encoding="ascii").strip().lower()
-        # [为什么必须并捕 UnicodeDecodeError] 基准文件是**磁盘上可被外部改写的输入**：用户手工编辑、
-        # 同步盘/压缩工具把它转成 UTF-8、或上一版实现写入非 ASCII 字节，read_text(encoding="ascii")
-        # 抛的是 UnicodeDecodeError（ValueError 子类，**不是** OSError），只捕 OSError 接不住。
-        # 接不住的实际代价不是「装不上」而是「说不清为什么装不上」——异常穿出 _verify_archive、被入口
-        # catch-all 归成一句泛化的「直下安装异常」，而这条分支唯一那条带「请人工核对或删除 {file} 后
-        # 重试」行动指引的 error 日志永不打印，用户失去自救入口（本分支存在的全部意义）。
-        # 拒装方向不变，只是让它按 SEV-2222 的口径**带着指引**失败。
-        # 需要 as 绑定取 type(e)/err，故按 AGENTS 的 except 约定回退加括号形态。
-        # 回归锁：tests/test_ffmpeg_linux_download.py::TestTofuBaselineCompare
-        # ::test_non_ascii_baseline_refuses_without_raising（直调 _verify_archive，钉「回 False 而非抛」）。
+        # 必须并捕 UnicodeDecodeError：基准文件是**磁盘上可被外部改写的输入**（用户手工编辑、同步盘/
+        # 压缩工具把它转成 UTF-8、或上一版实现写入非 ASCII 字节），read_text(encoding="ascii") 抛的是
+        # UnicodeDecodeError（ValueError 子类，**不是** OSError），只捕 OSError 接不住。接不住的代价不是
+        # 「装不上」而是「说不清为什么装不上」：异常穿出 _verify_archive、被入口 catch-all 归成一句泛化的
+        # 「直下安装异常」，而本分支唯一那条带「请人工核对或删除 {file} 后重试」指引的 error 日志永不打印。
+        # 拒装方向不变，只是让它按 SEV-2222 的口径**带着指引**失败。需要 as 绑定取 type(e)/err，故按
+        # AGENTS 的 except 约定回退加括号形态。回归锁：tests/test_ffmpeg_linux_download.py
+        # ::TestTofuBaselineCompare::test_non_ascii_baseline_refuses_without_raising。
         except (OSError, UnicodeDecodeError) as e:
             # SEV-2222 同口径：基准存在却读不出 = 本机唯一一道检查处于不可信状态，必须拒装。
             logger.error(
@@ -370,10 +361,9 @@ def _download(archive_url: str, archive: Path) -> bool:
 
 def _install_binaries(archive: Path, ffmpeg_dir: Path) -> list[str]:
     # 递归按名取件（与 build_exe._extract_linux_ffmpeg_binaries 同一判据）：BtbN 顶层目录名带构建号，
-    # 写死 <顶层>/bin/ 会让「解包成功但一件没拷」重新变成一行 warning。
-    # [为什么分「先全量定位 / 后统一落位」两趟] 入口把 missing 非空判成整次安装作废，若边找边拷，
-    # 则 ffmpeg 已落进 dest/ffmpeg/ 而 ffprobe 缺席——半截目录会一直留到下一次运行，且 dest/ffmpeg/
-    # 这个空壳本身也是「装过了」的假证据（mkdir 同样挪到定位成功之后，缺一件时 dest 侧零改动）。
+    # 写死 <顶层>/bin/ 会让「解包成功但一件没拷」重新变成一行 warning。分「先全量定位 / 后统一落位」
+    # 两趟：入口把 missing 非空判成整次安装作废，若边找边拷，则 ffmpeg 已落进 dest/ffmpeg/ 而 ffprobe
+    # 缺席——半截目录会留到下一次运行，且该空壳本身也是「装过了」的假证据（mkdir 同样挪到定位成功之后）。
     # 回归锁：tests/test_ffmpeg_linux_download.py::TestBinaryLayoutDiscovery
     # ::test_missing_companion_leaves_no_half_install。
     missing: list[str] = []

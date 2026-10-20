@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-# 抖音真实房间端到端验证:web 路径取 room_id → collector(DouyinDanmaku) → SRT 产出。
+# 抖音真实房间端到端验证：web 路径取 room_id → collector(DouyinDanmaku) → SRT 产出。
 #
-# 用法:python tests/test_douyin_live_collector.py [房间URL] [秒数] [cookie(可选)]
-# 与 main.py web 路径一致:get_douyin_web_stream_data → id_str 作为 room_id,
-# 随机 12 位 user_id,cookie 复用录制 cookie(默认空)。
+# 用法：python tests/test_douyin_live_collector.py [房间URL] [秒数] [cookie(可选)]
+# 与 main.py 的 web 路径一致：get_douyin_web_stream_data → id_str 作为 room_id，
+# 随机 12 位 user_id，cookie 复用录制 cookie（默认空）。
 
 import json
 import os
@@ -18,18 +18,18 @@ from src.collector import DanmakuCollector
 from src.platforms.douyin import DouyinDanmaku
 from src.ttwid import get_ttwid
 
-# 抖音弹幕对风控极敏感,故 resolve_cookie 按「命令行 > config 抖音cookie > 动态 ttwid」
-# 三级回退;游客态配合随机 user_id 多数房间可订阅,失败多在受限房间,属可接受验证边界。
+# 抖音弹幕对风控极敏感，故 resolve_cookie 按「命令行 > config 抖音cookie > 动态 ttwid」三级回退；
+# 游客态配合随机 user_id 多数房间可订阅，失败多在受限房间，属可接受的验证边界。
 URL = sys.argv[1] if len(sys.argv) > 1 else "https://live.douyin.com/699394970561"
-# 双模式参数守卫（与其余真机脚本同构）：pytest 传进来的 sys.argv[2] 可能是 `-q` 之类的选项，
-# 只判非选项还不够——一次点多个文件时它是下一个测试文件的路径，int(路径) 会当场 ValueError
-# 让本模块收集 ERROR（R7③，2026-09-30 实测）。故再补 isdigit 数值性回落；真机用法不变。
+# 双模式参数守卫（与其余真机脚本同构）：pytest 下 sys.argv[2] 可能是 `-q` 之类的选项，也可能是
+# 下一个测试文件的路径（一次点多个文件时）——int(路径) 会让本模块收集 ERROR（R7③，2026-09-30 实测）。
+# 故再补 isdigit 数值性回落；真机用法不变。
 _SECONDS_RAW = sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith("-") else ""
 SECONDS = int(_SECONDS_RAW) if _SECONDS_RAW.isdigit() else 25
 
 
 def resolve_cookie() -> str:
-    # cookie 解析:命令行参数 > config 抖音cookie(与 main.py 一致) > 动态获取 ttwid。
+    # cookie 解析：命令行参数 > config 抖音cookie（与 main.py 一致）> 动态获取 ttwid。
     if len(sys.argv) > 3 and sys.argv[3]:
         return sys.argv[3]
     from configparser import ConfigParser
@@ -53,8 +53,8 @@ def main() -> None:
     import asyncio
 
     cookie = resolve_cookie()
-    # 走 web 路径(与 main.py 一致):从 room 页 HTML 提取签名参数,proxy=None 直连;
-    # 该接口风控敏感,故优先用录制 cookie 而非匿名游客。
+    # 走 web 路径（与 main.py 一致）：从 room 页 HTML 提取签名参数，proxy=None 直连；
+    # 该接口风控敏感，故优先用录制 cookie 而非匿名游客。
     room_data = asyncio.run(spider.get_douyin_web_stream_data(url=URL, proxy_addr=None, cookies=cookie))
     if not isinstance(room_data, dict) or not room_data.get("id_str"):
         print(f"[FAIL] 房间信息获取失败: {str(room_data)[:200]}")
@@ -72,8 +72,8 @@ def main() -> None:
         )
         sys.exit(1)
 
-    # room_id 取 web 路径的 id_str；user_id 为随机 12 位游客标识（10**11~10**12-1，
-    # 抖音协议要求非零 12 位，规避固定游客 id 被风控识别）；cookie 复用录制 cookie。
+    # room_id 取 web 路径的 id_str；user_id 为随机 12 位游客标识（10**11~10**12-1，抖音协议要求
+    # 非零 12 位，规避固定游客 id 被风控识别）；cookie 复用录制 cookie。
     danmaku_args = {
         "room_id": str(room_data.get("id_str")),
         "user_id": str(random.randint(10**11, 10**12 - 1)),
@@ -87,13 +87,13 @@ def main() -> None:
         if f.startswith("Douyin弹幕验证"):
             stale = os.path.join(base_dir, f)
             # R7④（2026-09-30）补 isfile 判定：listdir 里混进子目录时 os.remove 直接抛
-            # IsADirectoryError/PermissionError，真机验证会卡在清理阶段；前缀过滤原本已有、语义不变。
+            # IsADirectoryError/PermissionError，真机验证会卡在清理阶段。
             if os.path.isfile(stale):
                 os.remove(stale)
 
     base = os.path.join(base_dir, "Douyin弹幕验证_699394970561")
-    # segment_seconds=None 不按时间分片:短时验证只需单文件 SRT,开启分片会
-    # 额外产生 _001/_002 后缀,增加结果判定复杂度。
+    # segment_seconds=None 不按时间分片：短时验证只需单文件 SRT，开启分片会额外产生
+    # _001/_002 后缀，增加结果判定复杂度。
     collector = DanmakuCollector(
         danmaku_cls=DouyinDanmaku,
         danmaku_args=danmaku_args,
@@ -107,17 +107,17 @@ def main() -> None:
     collector.stop()
     print(f"[OK] 收到弹幕消息数: {count}")
 
-    # SRT 文件名即 base + ".srt":collector.stop() 内部由 SrtWriter 落盘,
+    # SRT 文件名即 base + ".srt"：collector.stop() 内部由 SrtWriter 落盘，
     # 此处用 isfile 判定验证「连接 → 解析 → 写盘」整链路确实产出文件。
     srt_file = base + ".srt"
     if os.path.isfile(srt_file):
         with open(srt_file, encoding="utf-8") as fh:
             content = fh.read()
-        # 仅打印前 20 行用于人工核对,避免长时段弹幕刷屏;完整内容判定由下方断言负责。
+        # 仅打印前 20 行用于人工核对，避免长时段弹幕刷屏；完整内容判定由下方断言负责。
         print("=== SRT 内容(前 20 行) ===")
         print("\n".join(content.splitlines()[:20]))
-        # count==0 不判失败:SRT 已生成即连接与协议握手成功,仅该时段无人发言;
-        # 真正失败是 SRT 未生成(exit 1),二者语义必须区分,不可把冷场当断连。
+        # count==0 不判失败：SRT 已生成即连接与协议握手成功，仅该时段无人发言；真正失败是 SRT 未
+        # 生成（exit 1），二者语义必须区分，不可把冷场当断连。
         if count > 0:
             print("[PASS] 端到端:抖音真实弹幕已写入 SRT")
         else:

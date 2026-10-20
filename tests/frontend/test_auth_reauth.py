@@ -1,18 +1,14 @@
 # tests/frontend/test_auth_reauth.mjs 的 pytest 驱动入口（与 test_frontend_regression_gates.py 同构）。
 #
-# 用例本体是 CODE_REVIEW_2026-09-29_2 的 M-22/M-26 前端行为锁：以 node:vm 沙箱驱动真实
-# web/app.js，走真实事件链路（tab 点击 → GET /api/config → 改 input → 点保存 → confirm →
-# 口令窗 → PUT），断言真实请求体与真实 toast 文案，零 npm 依赖。本包装把它接进 pytest / CI 回路
-# （AGENTS「.mjs 真用例 + .py 包装」双文件结构），否则该文件只在手跑 node 时执行、CI 静默漏跑
-# （同 M-28 给 test_motion.mjs 记的那条风险）。
+# 被驱动的 .mjs 是 CODE_REVIEW_2026-09-29_2 的 M-22/M-26 前端行为锁：node:vm 沙箱驱动真实
+# web/app.js，走真实事件链路（tab → GET /api/config → 改 input → 保存 → confirm → 口令窗 → PUT），
+# 断言真实请求体与 toast 文案，零 npm 依赖。包装把它接进 pytest / CI 回路（AGENTS「.mjs 真用例
+# + .py 包装」双文件结构），否则只在手跑 node 时执行、CI 静默漏跑。
 #
-# 不重复实现子进程驱动：node --test 的「管道形态挂死 + GBK 码页崩解码器」两类坑（MID-64）已在
-# tests/test_frontend_quality_ui.py 里沉淀成经过回归锁的 _run_node（输出重定向到临时文件、
-# 超时回收整棵进程树、一律二进制捕获后显式 UTF-8 解码）与 _parse_node_summary，直接复用。
-#
-# Node 缺失时整体 skip（环境限制口径，不是失败），与同目录另两个前端包装保持一致；
-# CI 侧由 .github/workflows/ci.yml 的「Gate frontend tests not skipped」步骤兜住「被跳过」——
-# 该步骤按 node-id 点名各前端入口，新增入口须同步补进那条列表（ci.yml 不由本工作包改）。
+# 子进程驱动复用 tests/test_frontend_quality_ui.py 的 _run_node / _parse_node_summary
+# （MID-64 的管道挂死与 GBK 解码坑已在那侧沉淀），不复制第二份。Node 缺失时整体 skip
+# （环境限制，不是失败），CI 侧由 ci.yml「Gate frontend tests not skipped」按 node-id 点名兜住。
+# 新增前端入口须同步补进那条列表。
 from pathlib import Path
 
 import pytest

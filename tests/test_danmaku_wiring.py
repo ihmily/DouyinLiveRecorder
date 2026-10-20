@@ -1,12 +1,10 @@
-# 弹幕录制集成测试（离线，不依赖网络/真实 ffmpeg）。
-#
-# 覆盖 danmaku_check.md 审查报告的修复回归：
-# 1. check_subprocess 收到 platform/danmaku_args 并按预期启停弹幕采集器（接线回归）
-# 2. ffmpeg 正常退出时 stop() 在轮询循环外恰好执行一次（非每次迭代）
-# 3. SRT 基名剥离 _%02d/_%03d 占位符，分片文件名与 ffmpeg 三位宽度对齐
-# 4. 提前中断（URL 被注释）场景弹幕正确停止并终止 ffmpeg
-# 5. DanmakuCollector.stop() 幂等（防重入）
-# 6. 抖音弹幕空 cookie 时经 get_ttwid 动态获取（不再硬编码过期凭据）
+# 弹幕录制集成测试（离线，不依赖网络 / 真实 ffmpeg），覆盖 danmaku_check.md 修复项的回归：
+# 1. check_subprocess 收到 platform/danmaku_args 并按预期启停采集器（接线回归）；
+# 2. ffmpeg 正常退出时 stop() 在轮询循环外恰好执行一次（非每次迭代）；
+# 3. SRT 基名剥离 _%02d/_%03d 占位符，分片宽度与 ffmpeg 三位对齐；
+# 4. 提前中断（URL 被注释）时弹幕正确停止并终止 ffmpeg；
+# 5. DanmakuCollector.stop() 幂等（防重入）；
+# 6. 抖音弹幕空 cookie 时经 get_ttwid 动态获取（不再硬编码过期凭据）。
 
 import subprocess
 import sys
@@ -37,11 +35,10 @@ def main_mod() -> Generator[Any, None, None]:
 
 
 def _make_subprocess_shim(poll_results: list[int | None]) -> types.SimpleNamespace:
-    # 构造 main 模块级 subprocess 引用的替身（只换 main.subprocess 全局引用，不污染 stdlib——
-    # 直接 patch stdlib Popen 会波及同进程 harness 守护线程的 subprocess.run）。
-    # AGENTS.md 约定：patch main.py 的 subprocess 必须替换 main 的全局引用，不能改 stdlib 模块本体。
-    # Popen 必须是类：check_subprocess 内层函数注解 subprocess.Popen[bytes] 在 def 时求值，
-    # 故需 __class_getitem__；poll 按给定序列返回，耗尽后视为已退出（返回 0）。
+    # 构造 main 模块级 subprocess 引用的替身：只换 main.subprocess 全局引用，不污染 stdlib
+    # （直接 patch stdlib Popen 会波及同进程 harness 守护线程的 subprocess.run）。
+    # Popen 必须是类：check_subprocess 内层注解 subprocess.Popen[bytes] 在 def 时求值，故需
+    # __class_getitem__；poll 按给定序列返回，耗尽后视为已退出（返回 0）。
 
     class _FakePopen:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -67,18 +64,16 @@ def _make_subprocess_shim(poll_results: list[int | None]) -> types.SimpleNamespa
 
 
 def _setup_common(monkeypatch: pytest.MonkeyPatch, main: Any, poll_results: list) -> MagicMock:
-    # 装配 check_subprocess 运行所需的全部外部依赖 mock，返回弹幕工厂 Mock。
-    # poll_results 是 FakePopen.poll() 的逐次返回值序列：None 表示「还在录」（循环继续），
-    # 0 表示 ffmpeg 已退出（结束录制）。如 [None, None, None, 0] 模拟 3 轮轮询后自然结束，
-    # [0] 模拟启动即退，[None] 模拟一直录（配合 url_comments 触发提前中断）。
-    # 默认开录制弹幕、关监控；平台仅抖音直播，便于各用例按需覆写开关验证分支。
+    # 装配 check_subprocess 运行所需的外部依赖 mock，返回弹幕工厂 Mock。
+    # poll_results 是 FakePopen.poll() 的逐次返回值：None=还在录（循环继续），0=ffmpeg 已退出；
+    # [None, None, None, 0] 为 3 轮后自然结束，[0] 为启动即退，[None] 配合 url_comments 触发提前中断。
+    # 默认开录制弹幕、关监控、平台仅抖音直播，便于各用例按需覆写开关验证分支。
     monkeypatch.setattr(main, "enable_danmaku", True)
     monkeypatch.setattr(main, "enable_danmaku_monitor", False)
     monkeypatch.setattr(main, "danmaku_platforms", ["抖音直播"])
-    # 1800.0 = 默认 30 分钟分段阈值：决定采集器是否启用按时间分片（segment_seconds 非 None）。
-    # 该值经 _setup_common 注入后，会原样透传给 get_danmaku_collector 的 segment_seconds 参数。
+    # 1800.0 = 默认 30 分钟分段阈值，决定采集器是否启用按时间分片，原样透传给 segment_seconds
     monkeypatch.setattr(main, "danmaku_split_time", 1800.0)
-    # 关闭时间文件/转 mp4/退出录制等副作用开关，聚焦弹幕接线而非后处理；url_comments 置空（无提前中断）。
+    # 关闭时间文件/转 mp4/退出录制等副作用开关，聚焦弹幕接线；url_comments 置空（无提前中断）
     monkeypatch.setattr(main, "create_time_file", False)
     monkeypatch.setattr(main, "converts_to_mp4", False)
     monkeypatch.setattr(main, "exit_recording", False)
@@ -86,10 +81,9 @@ def _setup_common(monkeypatch: pytest.MonkeyPatch, main: Any, poll_results: list
     # 注册/注销 ffmpeg 进程为无操作（真实实现会写入全局守护列表，测试无需）。
     monkeypatch.setattr(main, "register_ffmpeg_process", lambda proc: None)
     monkeypatch.setattr(main, "unregister_ffmpeg_process", lambda proc: None)
-    # 只替换 main 命名空间内的 time 引用，避免污染 stdlib time 模块本体：
-    # main.time 就是 stdlib time 模块，直接 patch 它的 sleep 会把**全进程**的 sleep
-    # 换成 no-op（含其它用例与后台线程），在 -p xdist 下会互相污染。
-    # 与下方 subprocess shim 同一思路：浅拷贝真实模块属性，只覆盖 sleep。
+    # 只替换 main 命名空间内的 time 引用：main.time 就是 stdlib time 模块，直接 patch 它的 sleep
+    # 会把全进程的 sleep 换成 no-op（含其它用例与后台线程，在 -p xdist 下互相污染）。
+    # 与 subprocess shim 同一思路：浅拷贝真实模块属性，只覆盖 sleep。
     _time_shim = types.SimpleNamespace(**{k: getattr(main.time, k) for k in dir(main.time) if not k.startswith("_")})
     _time_shim.sleep = lambda seconds: None  # 轮询不等真实 1 秒
     monkeypatch.setattr(main, "time", _time_shim)
@@ -252,11 +246,9 @@ def test_early_interrupt_stops_danmaku_and_terminates(main_mod: Any, monkeypatch
 
     assert result is True
     collector = factory.return_value
-    # SEV-2208 把 stop() 无条件移进 finally 之后，早退路径上必然出现两次调用：
-    # 分支内一次（保证「立即」停止）+ finally 一次（保证异常穿出时也不漏）。
-    # DanmakuCollector.stop() 自带 _stop_called 幂等，重复调用安全（生产注释已写明）。
-    # 因此这里断言的是**恰为 2**：=1 说明 finally 那半又被拿掉（SEV-N01 的原始缺陷回归），
-    # >2 说明收尾被重复触发。只写 >=1 会同时放过这两种形态。
+    # SEV-2208 把 stop() 无条件移进 finally 后，早退路径必然出现两次调用：分支内一次（保证
+    # 「立即」停止）+ finally 一次（保证异常穿出时也不漏）。stop() 自带 _stop_called 幂等，重复
+    # 调用安全，故断言恰为 2：=1 说明 finally 那半又被拿掉（SEV-N01 原始缺陷），>2 说明收尾被重复触发。
     assert collector.stop.call_count == 2, "提前中断应为『分支立即停止 + finally 兜底停止』共两次"
     assert terminate.call_count == 1
 

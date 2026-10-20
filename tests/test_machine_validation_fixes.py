@@ -54,28 +54,20 @@ def test_spider_is_safe_http_url_whitelist() -> None:
 # ======================================================================
 
 
-# MT-08（2026-10-18 审查）：本用例原先整体押在**真实挂钟**上——超时 close 必须落在 ≈1.1s 且早于
-# 3.0s 的外部停止，CI 上一次 >1.9s 的调度停顿就能把「超时先于外部停止」这条时刻归因翻案（假红）；
-# 而「放大停止余量」只把概率压低（要把余量抬到分钟级才谈得上稳）、同时把墙钟耗时一并抬上去，
-# 等于用运行时长换不稳定。故换成**可控虚拟时钟**：事件循环的取时与推进都在本类手里，
-# 1.05s 的 wait_for 超时、3.0s 的外部停止、60s 的读帧挂起全部在微秒级墙钟内按确定次序发生。
-# 五条不放宽被测语义的关键设计（去掉任一条都会让判据失真或把挂死伪装成通过）：
-#   ① 只推进到「最早到期的定时任务」，不加固定步长——时刻读数因此仍是各定时器真正的到期点，
-#      1.10s vs 3.00s 这类比较与真实挂钟版本逐字同值；
-#   ② 仅在「无就绪回调且循环未收到停止信号」时推进（有就绪回调时循环本就不等，推进反而会把
-#      到期时刻挪到就绪批之后；`_stopping` 期间同理，super 自己按 timeout=0 收尾）；
-#   ③ 到期时刻取不到即直接判失败：CPython 3.14 的 TimerHandle 到期字段是 `_when`（3.7~3.13 为
-#      `_run_at`），写错名字的后果不是报错而是**静默不推进**——super 会按真实剩余时间去 select，
-#      于是同一到期点被反复真等（2026-10-18 本机实测：误用 `_run_at` 时本文件跑了 306s 才撞步数
-#      上限），所以这里必须显式失败而不是回退；
-#   ④ 步数硬上限：虚拟时钟下「while + await asyncio.sleep(小值)」型死循环会**在墙钟里无限自旋**
-#      （真实时钟靠耗时暴露它，这里没有耗时可言），超限即抛，把挂死换成可读失败；
-#   ⑤ 「无就绪、无定时任务且尚未停止」同样直接判失败：真事件循环此刻会永久阻塞在 select 上，
-#      本用例没有任何「靠外部 I/O 才能继续」的合法形态，走到这里只能是等待对象本身丢了定时器。
-# 基类经 Any 转一手：`_run_once` 是 asyncio 的内部方法、typeshed 未收，直接继承具体类会被
-# mypy 判成「覆写了父类不存在的方法」[misc]。取 Any 而不是 `# type: ignore[misc]`：忽略注释要按
-# 各自的 code 写（mypy/basedpyright 不同码），且在「哪天 typeshed 收了这方法」之后会变成
-# unused-ignore 反向报错；Any 基类只是让这条内部方法的覆写不产生判定，两平台结论一致。
+# MT-08：本用例原先整体押在**真实挂钟**上——超时 close 须落在 ≈1.1s 且早于 3.0s 的外部停止，
+# CI 上一次 >1.9s 的调度停顿就能把「超时先于外部停止」这条时刻归因翻案（假红）。故换成**可控虚拟
+# 时钟**：事件循环的取时与推进都在本类手里，1.05s 超时、3.0s 外部停止、60s 读帧挂起全部在微秒级
+# 墙钟内按确定次序发生。五条不放宽被测语义的关键设计（去掉任一条都会让判据失真或把挂死伪装成通过）：
+#   ① 只推进到「最早到期的定时任务」，不加固定步长——时刻读数因此仍是各定时器真正的到期点；
+#   ② 仅在「无就绪回调且循环未收到停止信号」时推进（有就绪回调时推进会把到期点挪到就绪批之后）；
+#   ③ 到期时刻取不到即直接判失败：CPython 3.14 的 TimerHandle 字段是 `_when`（3.7~3.13 为
+#      `_run_at`），写错名字不会报错而是**静默不推进**（实测误用 `_run_at` 时本文件跑了 306s）；
+#   ④ 步数硬上限：虚拟时钟下「while + await asyncio.sleep(小值)」型死循环会在墙钟里无限自旋，
+#      超限即抛，把挂死换成可读失败；
+#   ⑤ 「无就绪、无定时任务且尚未停止」同样直接判失败：真事件循环此刻会永久阻塞在 select 上。
+# 基类经 Any 转一手：`_run_once` 是 asyncio 内部方法、typeshed 未收，直接继承具体类会被 mypy 判
+# [misc]；取 Any 而不是 `# type: ignore[misc]`，因为忽略注释要按各自 code 写（mypy/basedpyright
+# 不同码），且 typeshed 收录后还会变成 unused-ignore 反向报错。
 _LoopBase: Any = asyncio.SelectorEventLoop
 
 
@@ -181,10 +173,8 @@ def test_ws_heartbeat_timeout_closes_connection(monkeypatch: pytest.MonkeyPatch)
         return _loops[-1].time()
 
     # 超时阈值 = max(1.0, heartbeat_interval + 1.0)（_HEARTBEAT_TIMEOUT_SECONDS 是 _heartbeat_loop
-    # 的局部常量、无法 monkeypatch），故心跳 hang 8s 必然大于阈值；外部停止安排在 3.0s——
-    # 既晚于超时点（≈1.1s）、又早于心跳自身返回（8s），「超时先于外部停止」才是可判定的。
-    # MT-08（2026-10-18）：以上三个时刻现在跑在虚拟时钟上（超时 close 恒落在 1.10s、外部停止恒落在
-    # 3.00s），不再依赖真实挂钟，也就不再有「CI 停顿 >1.9s 即假红」这一失效面。
+    # 的局部常量、无法 monkeypatch），故心跳 hang 8s 必然大于阈值；外部停止安排在 3.0s——既晚于
+    # 超时点（虚拟时钟下恒落 1.10s）、又早于心跳自身返回（8s），「超时先于外部停止」才可判定。
     _STOP_AFTER_SECONDS = 3.0
     _HEARTBEAT_HANG_SECONDS = 8.0
     _TIMEOUT_FLOOR_SECONDS = 1.0
@@ -245,12 +235,10 @@ def test_ws_heartbeat_timeout_closes_connection(monkeypatch: pytest.MonkeyPatch)
         on_heartbeat=slow_heartbeat,
         heartbeat_interval=0.05,  # 极短间隔
     )
-    # 把超时阈值也调小（heartbeat_interval+1 = 1.05s），用 monkeypatch 改常量
-    # 因为 _HEARTBEAT_TIMEOUT_SECONDS 是 _heartbeat_loop 内的局部变量，
-    # 这里改不了，直接靠 hang 时长大于默认 1.05s 触发
-    # MID-66（tests/test_test_hygiene.py R1 规则）：websockets 是三方模块本体，
-    # setattr 到它上面等于全进程换掉 connect——同会话其它用例的真实/打桩连接都会吃到假实现。
-    # 正确写法是浅拷贝替身，只替换 ws_client 命名空间里的全局名（与 subprocess/httpx 同源）。
+    # 超时阈值是 _heartbeat_loop 内的局部变量、无法 monkeypatch，靠 hang 时长大于默认 1.05s 触发。
+    # MID-66（tests/test_test_hygiene.py R1）：websockets 是三方模块本体，setattr 到它上面等于全进程
+    # 换掉 connect——同会话其它用例的连接都会吃到假实现；正确写法是浅拷贝替身，只替换 ws_client
+    # 命名空间里的全局名。
     _ws_shim = types.SimpleNamespace(**vars(ws_client.websockets))
     _ws_shim.connect = fake_connect
     monkeypatch.setattr(ws_client, "websockets", _ws_shim)
@@ -365,12 +353,10 @@ def test_video_postprocess_timeout_logged_as_timeout(tmp_path: Path, monkeypatch
     import main  # noqa: F401
     from src import video_postprocess
 
-    # 恒等映射必须打在 `import main` **之后**：main.py 模块级会调 i18n.set_language(language)
-    # 把 i18n._tr 重绑成真目录（宿主中文 Windows 上探测出 en_US），于是「按简中模板断言日志文本」
-    # 的口径当场失效——2026-09-29 本机实测本用例正是被这条重绑打红的（日志变成
-    # "ffmpeg remux/transcode timed out"）。本用例锁的是「异常被分到超时分支而非 unknown error
-    # 分支」这一**分类语义**，与目录语言无关，故在用例内钉死恒等，把断言与宿主语言/导入顺序解耦
-    # （同文件 ② 心跳用例采用同一手法）。
+    # 恒等映射必须打在 `import main` **之后**：main.py 模块级会调 i18n.set_language(language)，把
+    # i18n._tr 重绑成真目录（宿主中文 Windows 上探测出 en_US），「按简中模板断言日志文本」当场失效
+    # （2026-09-29 本机实测本用例即被这条重绑打红）。本用例锁的是「异常被分到超时分支而非
+    # unknown error 分支」这一分类语义，与目录语言无关，故在用例内钉死恒等（同文件 ② 同一手法）。
     monkeypatch.setattr(i18n, "_tr", lambda text: text)
 
     buf = io.StringIO()
@@ -392,13 +378,11 @@ def test_video_postprocess_timeout_logged_as_timeout(tmp_path: Path, monkeypatch
         text = buf.getvalue()
         # 三处都应在日志里出现「超时」字样（不再被「unknown error」吞）
         assert text.count("超时") >= 3, f"超时未被分类: {text}"
-        # M-29 同族收紧（CODE_REVIEW_2026-09-29_2 的「三处都超时」聚合计数无法归因）：
-        # 上面那条只数「超时」出现几次——一个入口多打两行同样凑够 3，而某个入口真退化成
-        # unknown error 时，另两个入口照样把计数顶起来，聚合计数对「哪一条丢了」全盲。
-        # 现按三个入口各自的专属文案逐条归因（锚点与 src/video_postprocess.py 里三个
-        # except subprocess.TimeoutExpired 分支一一对应：segment_video / converts_mp4 /
-        # converts_m4a），并反向钉死「本用例三次调用没有任何一次落到 unknown error 兜底分支」。
-        # 改生产文案须同步改这三条锚点——聚合计数做不到这件事，所以才不算冗余。
+        # M-29 同族收紧：上面只数「超时」出现几次——某个入口真退化成 unknown error 时，另两个入口
+        # 照样把计数顶起来，聚合计数对「哪一条丢了」全盲。现按三个入口各自的专属文案逐条归因
+        # （锚点与 src/video_postprocess.py 里三个 except subprocess.TimeoutExpired 分支一一对应：
+        # segment_video / converts_mp4 / converts_m4a），并反向钉死三次调用没有任何一次落到
+        # unknown error 兜底分支。改生产文案须同步改这三条锚点。
         assert "ffmpeg 转封装/转码超时" in text, f"segment_video 的超时分支未被单独归因: {text}"
         assert "ffmpeg 转 MP4 超时" in text, f"converts_mp4 的超时分支未被单独归因: {text}"
         assert "ffmpeg 抽音频超时" in text, f"converts_m4a 的超时分支未被单独归因: {text}"

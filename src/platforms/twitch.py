@@ -1,9 +1,9 @@
 # Twitch 弹幕实现，移植自 dart simple_live_core 的 twitch_danmaku.dart。
 #
 # 协议：wss://irc-ws.chat.twitch.tv 纯 IRC 文本，匿名登录，PING/PONG 心跳。
-# args: {"channel": "房间名", "proxy": "http://127.0.0.1:7890"} 或房间名字符串。
-# 代理：Twitch 需海外网络；优先用 main 传入的 proxy(录制所用 proxy_address)，
-# 否则跟随系统代理(urllib getproxies，与录制 abroad 路径一致)，无代理则直连。
+# args：{"channel": "房间名", "proxy": "http://127.0.0.1:7890"} 或直接房间名字符串。
+# 代理：Twitch 需海外网络，优先用 main 传入的 proxy（录制所用 proxy_address），否则跟随系统代理
+# （urllib getproxies，与录制 abroad 路径一致），无代理则直连。
 
 from __future__ import annotations
 
@@ -27,15 +27,14 @@ _COLOR_RE = re.compile(r"color=#([a-zA-Z0-9]{6});")
 class TwitchDanmaku(DanmakuBase):
     heartbeat_interval = 40.0  # IRC 侧无服务端心跳，靠本端按时发 PONG 保活
 
-    # 初始化：记录频道名与 WebSocket 客户端占位（真正连接在 start 中建立）。
+    # 记录频道名与 WS 客户端占位；真正建连在 start()。
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._channel: str = ""
         self._ws: WsClient | None = None
         self._line_buf = ""  # MI-21：跨帧半行缓冲（见 decode_message）
 
-    # 启动弹幕监听：args 支持 {"channel","proxy"} 字典或直接房间名字符串；
-    # 解析频道名 -> 确定代理 -> 建立 WebSocket 长连接。无频道名时回调 on_close 并返回。
+    # 启动监听：解析频道名 → 确定代理 → 建立 WebSocket 长连接；无频道名时回调 on_close 并返回。
     async def start(self, args: Any) -> None:
         proxy = None
         if isinstance(args, dict):
@@ -49,7 +48,6 @@ class TwitchDanmaku(DanmakuBase):
                 self._on_close("缺少 channel")
             return
 
-        # 代理：优先显式 proxy(录制 proxy_address)，否则跟随系统代理(与录制 abroad 路径一致)
         proxy_addr = handle_proxy_addr(proxy)
         if not proxy_addr:
             for _scheme in ("https", "http"):
@@ -110,10 +108,9 @@ class TwitchDanmaku(DanmakuBase):
         else:
             text = data
 
-        # MI-21 修复：按行缓冲，跨帧的半行要拼回下帧再解析。
-        # WebSocket 的边界是**消息**而非行：高流量频道批量下发时服务端完全可能把一条
-        # IRC 消息切成两帧，原实现每帧独立 split("\n")，前半行与后半行各被当成独立行，
-        # _PRIVMSG_RE / _NAME_RE 双双匹配失败 → 弹幕静默丢失（连 debug 日志都没有）。
+        # MI-21：按行缓冲，跨帧的半行要拼回下帧再解析——WebSocket 的边界是**消息**而非行，
+        # 高流量频道下服务端会把一条 IRC 消息切成两帧；逐帧独立 split 会把前后半行当独立行，
+        # 正则双双失配 → 弹幕静默丢失（且无日志）。
         text = self._line_buf + text
         _parts = text.split("\n")
         self._line_buf = _parts.pop()  # 末段可能不完整，留到下帧
@@ -125,8 +122,8 @@ class TwitchDanmaku(DanmakuBase):
             content_match = _PRIVMSG_RE.search(line)
             name_match = _NAME_RE.search(line)
             color_match = _COLOR_RE.search(line)
-            # color 标签是可选项：观众未设置颜色时 Twitch 下发 "color=;"（无 hex 值），
-            # 原实现要求三标签全部命中，未设颜色的观众整条弹幕被静默丢弃（2026-09-12 审查）
+            # color 是可选标签：观众未设置颜色时下发 "color=;"（无 hex 值）。故只要求 PRIVMSG +
+            # display-name 命中——要求三标签全中会让未设颜色观众的整条弹幕被静默丢弃。
             if content_match and name_match:
                 color = "#FFFFFF"
                 color_int = 0

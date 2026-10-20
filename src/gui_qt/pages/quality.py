@@ -2,9 +2,9 @@
 # 画质监控页：三块统计（总 / 正常 / 降级）+ 实时详情表 + 空状态。
 #
 # 表格选 QTableView + QStandardItemModel 而不是 QTableWidget：后者每格一个 item 控件，
-# 画质页每秒可能同步几十行；model/view 下「未变化行不碰、只改内容」更容易做到零重建。
-# 降级整行着色走 item.setForeground（等价于旧 tkinter 版 Treeview 的行级 tag 语义，
-# 按格着色在两种控件下都不可表达，故状态语义保留在「状态」列的 ✓/⚠ 字形上）。
+# 画质页每轮可能同步几十行；model/view 下「未变化行不碰、只改内容」更容易做到零重建。
+# 降级整行着色走逐 item 的 setForeground（等价于旧 tkinter 版 Treeview 的行级 tag 语义）；
+# 「状态」列另用文字承载语义，不依赖颜色——深色主题与色弱场景下颜色不足以为凭。
 from __future__ import annotations
 
 from typing import Callable
@@ -43,9 +43,9 @@ class QualityPage(QWidget):
         stats_card = Card(shadow=False)
         stats_row = QHBoxLayout(stats_card)
         stats_row.setContentsMargins(8, 8, 8, 8)
-        # 三块统计标题是构建期定型的静态标签：M-14（2026-10-18）此前只在建时 tr() 一次，
-        # 切语言后停在旧语言。改走 set_text + T() 登记（构造标签与登记键同一 msgid），
-        # retranslate_all() 回填时按当前语言重设；数值面（set_value）是运行态、不进登记。
+        # 三块统计标题是构建期定型的静态标签，必须走 set_text + T() 登记（构造标签与登记键
+        # 同一 msgid），retranslate_all() 才按当前语言回填；数值面（set_value）是运行态、不进登记。
+        # [历史注] 原只在建时 tr() 一次，切语言后停在旧语言（M-14，2026-10-18）。
         self.stat_total = StatTile(i18n.tr("录制直播间"))
         set_text(self.stat_total.title, T("录制直播间"))
         self.stat_ok = StatTile(i18n.tr("画质正常"))
@@ -76,7 +76,7 @@ class QualityPage(QWidget):
         self.table.verticalHeader().setVisible(False)
         body.addWidget(self.table, 1)
 
-        # 空状态与表格叠放同容器、按需切换可见性：数据为空/非空每秒都可能翻转，
+        # 空状态与表格叠放同容器、按需切换可见性：数据为空/非空每轮都可能翻转，
         # 走 QStackedWidget 切 index 会触发布局重算，setVisible 是更轻的形态。
         self.empty = EmptyState(
             i18n.tr("暂无录制中的直播间"),
@@ -107,8 +107,7 @@ class QualityPage(QWidget):
 
     def retranslate_runtime(self) -> None:
         # 语言切换后的运行态重刷（M-14）：表头与「同等/降级/正常」单元格在产生点 tr()，
-        # 但 refresh() 对行内容等值时短路返回——数据不变（多半就是不变）时旧语言会原地
-        # 常驻。清掉上一轮缓存强制走一次全量重建即可（统计数值面本就与语言无关）。
+        # 但 refresh() 等值短路会让旧语言原地常驻——清掉缓存强制全量重建（统计数值与语言无关）。
         self._last_rows = None
         self.refresh()
 
@@ -128,7 +127,7 @@ class QualityPage(QWidget):
                 alert_time if downgraded else "—",
                 str(info.get("alert_message", "")) or "—",
             )
-        # 未变化则完全返回：每秒一轮的同步在未变化时不该触碰任何 item（避免闪烁与选中丢失）。
+        # 未变化则完全返回：每轮同步在未变化时不该触碰任何 item（避免闪烁与选中丢失）。
         # 首轮（_last_rows is None）不参与短路，否则空数据下永远进不到可见性切换。
         if self._last_rows is not None and rows == self._last_rows:
             return

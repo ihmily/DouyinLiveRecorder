@@ -1,18 +1,17 @@
 # -*- coding: utf-8 -*-
-# 虎牙 Tars SIMPLE_LIST 长度字段回归测试。
+# 虎牙 Tars SIMPLE_LIST 长度字段回归。
 #
-# 背景: _tars.py 曾把 Tars 字节数组 SIMPLE_LIST 的长度写成/读成**固定 4 字节 int32**，
-# 而官方 Tars(以及可正常收弹幕的 dart_simple_live tars_dart)把长度编码为
-# **自描述整数域**(头字节 BYTE/SHORT/INT/LONG + 对应 1/2/4/8 字节)。
-# 这导致: join 注册报文的 iCmdData 长度被服务端读成 0(zero 注册,无推送)，
-# 推送报文的长度也读错(弹幕全丢)。
+# 背景：_tars.py 曾把 Tars 字节数组 SIMPLE_LIST 的长度写成/读成**固定 4 字节 int32**，而官方 Tars
+# （以及可正常收弹幕的 dart_simple_live tars_dart）把长度编码为**自描述整数域**（头字节
+# BYTE/SHORT/INT/LONG + 对应 1/2/4/8 字节）。后果：join 注册报文的 iCmdData 长度被服务端读成 0
+# （zero 注册、无推送），推送报文的长度也读错（弹幕全丢）。
 #
-# 本测试的断言**独立于生产实现**:
-# - 解码: 喂官方编码(服务端实际格式)的弹幕推送 hex,断言能解出 nick/content/uri
-#  (修复前必失败: uri=0, nick=None, content 空)。
-# - 编码: 断言 join 输出符合官方布局(长度域含头字节),并用独立解析器回读语义。
+# 断言**独立于生产实现**：
+# - 解码：喂官方编码（服务端实际格式）的弹幕推送 hex，断言能解出 nick/content/uri
+#   （修复前必失败：uri=0、nick=None、content 空）。
+# - 编码：断言 join 输出符合官方布局（长度域含头字节），并用独立解析器回读语义。
 #
-# 用法: .venv/bin/python tests/test_huya_tars_simple_list.py
+# 用法：.venv/bin/python tests/test_huya_tars_simple_list.py
 
 import sys
 from pathlib import Path
@@ -21,9 +20,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.platforms._tars import TarsInputStream  # noqa: E402
 
-# 官方编码的一条弹幕推送(WSCmd iCmdType=7 -> HYPushMessage uri=1400 -> HYMessage)。
-# 由 tars_dart 语义手工构造: Bytearray 长度均按"头+变宽值"布局,非固定4字节。
-# 内含: nick="测试用户", content="你好呀", fontColor=0xFFFFFF。
+# 官方编码的一条弹幕推送（WSCmd iCmdType=7 -> HYPushMessage uri=1400 -> HYMessage）。
+# 由 tars_dart 语义手工构造：Bytearray 长度均按「头+变宽值」布局，非固定 4 字节。
+# 内含：nick="测试用户", content="你好呀", fontColor=0xFFFFFF。
 OFFICIAL_CHAT_PUSH = bytes.fromhex(
     "0007"
     "1d00002d"  # SIMPLE_LIST tag1 + 元素类型头 + 长度(头00 + 值2d=45)
@@ -42,9 +41,9 @@ OFFICIAL_CHAT_PUSH = bytes.fromhex(
     "0b"  # HYBulletFormat STRUCT_END
 )
 
-# 同上,但 bulletFormat(tag6) 内含 LIST(tag6, size=1) —— 覆盖 LIST 的 size 用
-# 自描述整数域(00 01)的回归: 若按固定 4 字节读 size,后面会错位解析出 type 15 抛异常。
-# nick="测试用户", content="你好呀", fontColor=0x00FF00(绿色, INT 值 0000ff00)。
+# 同上，但 bulletFormat(tag6) 内含 LIST(tag6, size=1)：覆盖 LIST 的 size 用自描述整数域
+# （00 01）的回归——若按固定 4 字节读 size，后面会错位解析出 type 15 抛异常。
+# nick="测试用户", content="你好呀", fontColor=0x00FF00（绿色, INT 值 0000ff00）。
 OFFICIAL_CHAT_PUSH_WITH_LIST = bytes.fromhex(
     "0007"
     "1d000032"  # SIMPLE_LIST tag1 + 元素头 + 长度(00 32=50)
@@ -66,7 +65,7 @@ OFFICIAL_CHAT_PUSH_WITH_LIST = bytes.fromhex(
 )
 
 
-# 独立官方语义解析器(模仿 tars_dart "字段=头+值/长度自描述域"),用于编码回归判读。
+# 独立官方语义解析器（模仿 tars_dart「字段=头+值/长度自描述域」），用于编码回归判读。
 def official_join_parse(bs: bytes) -> dict:
     p = [0]
 
@@ -132,9 +131,8 @@ def official_join_parse(bs: bytes) -> dict:
 
 def test_decode_official_chat_push() -> None:
     # 官方编码的弹幕推送走生产 HuyaDanmaku.decode_message 能解出 nick/content/uri。
-    #
-    #    HYMessage 是平铺字段(tag0=userInfo, tag3=内容)，此处喂完整外层帧验证生产解码,
-    #    曾因 _decode_chat 多包一层 read_struct(0,...) 而全部读空。
+    # HYMessage 是平铺字段（tag0=userInfo, tag3=内容），此处喂完整外层帧——生产解码曾因
+    # _decode_chat 多包一层 read_struct(0,...) 而全部读空。
     from src.base import DanmakuMessageType
     from src.platforms.huya import HuyaDanmaku
 
@@ -152,10 +150,9 @@ def test_decode_official_chat_push() -> None:
 
 
 def test_decode_official_chat_push_with_list() -> None:
-    # bulletFormat 内含 LIST(size=自描述整数域) 的弹幕推送也能正确解码。
-    #
-    #    防回归: _skip 曾把 LIST/MAP 的 size 读成固定 int32, 真实数据错位后解析出
-    #    type 15 抛异常被吞。修复为 read_int(0) 后此帧应解出 nick/content/color。
+    # bulletFormat 内含 LIST（size=自描述整数域）的弹幕推送也能正确解码。
+    # 防回归：_skip 曾把 LIST/MAP 的 size 读成固定 int32，真实数据错位后解析出 type 15
+    # 抛异常被吞；修复为 read_int(0) 后此帧应解出 nick/content/color。
     from src.base import DanmakuMessageType
     from src.platforms.huya import HuyaDanmaku
 
@@ -173,14 +170,14 @@ def test_decode_official_chat_push_with_list() -> None:
 
 
 def test_encode_join_official_layout() -> None:
-    # join 输出符合官方布局(长度域含头字节),且被独立官方语义解析器判读为合法注册。
+    # join 输出符合官方布局（长度域含头字节），且被独立官方语义解析器判读为合法注册。
     from src.platforms.huya import HuyaDanmaku
 
     inst = HuyaDanmaku()
     inst._args = {"ayyuid": 1486578378, "topSid": 1346609715, "subSid": 1346609715}
     data = inst._make_join_data()
 
-    # 长度域布局标记: 外层 SIMPLE_LIST(1d) + 元素类型头(00) + 长度头 INT(02) + 长度(00000017=23)
+    # 长度域布局标记：外层 SIMPLE_LIST(1d) + 元素类型头(00) + 长度头 INT(02) + 长度(00000017=23)
     assert bytes.fromhex("1d000200000017") in data, data.hex()
 
     r = official_join_parse(data)

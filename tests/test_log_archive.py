@@ -100,12 +100,11 @@ class TestArchiveRuntimeLogs:
     def test_single_rename_failure_does_not_interrupt(
         self, logs_dir: Path, fake_sink_ops: dict[str, list[str]], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # 单文件改名失败（如句柄被第三方进程占用）仅告警跳过，其余文件照常归档且不抛异常
-        # M-27（CODE_REVIEW_2026-09-29_2）：原写法 `monkeypatch.setattr(os, "rename", ...)` 改的是
-        # **全进程唯一**的 os 模块本体——替身窗口内 loguru 的文件轮转改名、弹幕边车、GUI/录制后台
-        # 线程的 rename 全部一并命中「遇 PlayURL.log 就抛 PermissionError」这条规则，属跨用例竞态源。
-        # 本文件对 datetime 早已采用「浅拷贝 + 只换被测模块命名空间引用」的正确形态（见
-        # test_target_conflict_appends_sequence），os 按同一口径收口。
+        # 单文件改名失败（如句柄被第三方进程占用）仅告警跳过，其余文件照常归档且不抛异常。
+        # M-27：`monkeypatch.setattr(os, "rename", ...)` 改的是**全进程唯一**的 os 模块本体，
+        # 窗口内 loguru 文件轮转、弹幕边车、GUI/录制后台线程的 rename 会一并命中「遇 PlayURL.log
+        # 就抛 PermissionError」这条规则，属跨用例竞态源。与本文件对 datetime 的处置同口径：
+        # 替身只落进被测模块命名空间。
         real_rename = os.rename
 
         def fake_rename(src: str, dst: str) -> None:
@@ -201,16 +200,13 @@ class TestWebConsoleRotation:
     def test_concurrent_print_inside_archive_window_does_not_raise(
         self, logs_dir: Path, fake_sink_ops: dict[str, list[str]], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # M-09（CODE_REVIEW_2026-10-18）回归锁：改名窗口内其它线程 print() 不得抛
-        # ValueError: I/O operation on closed file。
-        # 旧顺序是「flush+close 旧句柄 → os.rename → _rebind_web_console」，而 sys.stdout/sys.stderr
-        # 在整个改名+重建期间仍指向那个**已关闭对象**；Windows 慢盘/杀软扫描会把这段窗口从
-        # 微秒放大到秒级，Web 模式下请求线程的 print() 正好落在里面就崩。
-        # 取证手法：把 os.rename 换成「先睡 0.3s、再打一条、最后真改名」的替身——
-        # 睡眠段就是被人为放大的归档窗口（旧顺序下此刻标准流已关闭、替身尚未接管），
-        # 替身自身的那条打印必然落在窗口内，另起一支线程整窗口持续 print()。
-        # 两条判据：① 两支打印都不许抛；② 窗口内那条输出最终并入重建后的新文件（替身不是黑洞）。
-        # 按 M-27/MT-11 口径，rename 替身只落进 src.log_archive 命名空间，不改全进程唯一的 os 本体。
+        # M-09 回归锁：改名窗口内其它线程 print() 不得抛 ValueError: I/O operation on closed file。
+        # 旧顺序「flush+close → os.rename → _rebind_web_console」期间 sys.stdout/sys.stderr 仍指向
+        # **已关闭对象**，Windows 慢盘/杀软扫描会把窗口从微秒放大到秒级，Web 请求线程的 print()
+        # 落在里面就崩。取证手法：os.rename 换成「先睡 0.3s、再打一条、最后真改名」的替身，
+        # 睡眠段即被人为放大的归档窗口（旧顺序下此刻标准流已关、替身尚未接管），另起一支线程
+        # 整窗口持续 print()。判据：① 两支打印都不许抛；② 窗口内那条输出最终并入重建后的新文件
+        # （替身不是黑洞）。按 M-27/MT-11 口径，替身只落进 src.log_archive 命名空间。
         path = logs_dir / "web_console.log"
         real_rename = os.rename
         marker = "窗口内主线程打印的一行\n"
@@ -279,12 +275,11 @@ class TestMonitorHubCloseFile:
         path = tmp_path / "danmaku_monitor.jsonl"
         try:
             hub.room_message("roomA", "chat", "用户", "第一条")
-            # MT-07（2026-10-18）：MID-25 之后落盘在独立边车写线程，任何「读磁盘 / 读句柄登记表」
-            # 之前必须先排空队列。`hub._file` 属性内部虽然也会 drain()，但那条 drain **不带断言**：
-            # 超时（慢盘 / 队列被别用占满）即返回 None，于是「首条事件尚未落盘」会表现为
-            # size_before=0 或 _file is None 的随机假红。显式 `assert hub.flush()` 把
-            # 「队列没排空」与「行为真的错了」两种故障分开——口径同
-            # tests/test_regression_2026_09_22_infra.py::TestSidecarArchiveWindow（每步断言前一次）。
+            # MT-07：MID-25 之后落盘在独立边车写线程，任何「读磁盘 / 读句柄登记表」之前必须先
+            # 排空队列。`hub._file` 内部的 drain **不带断言**，超时（慢盘 / 队列被占满）即返回 None，
+            # 于是「首条事件尚未落盘」会表现为 size_before=0 或 _file is None 的随机假红；
+            # 显式 `assert hub.flush()` 把「队列没排空」与「行为真的错了」两种故障分开（口径同
+            # tests/test_regression_2026_09_22_infra.py::TestSidecarArchiveWindow）。
             assert hub.flush()
             assert hub._file is not None
             size_before = path.stat().st_size

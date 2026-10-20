@@ -1,19 +1,16 @@
 # src/ui_motion.py
-# GUI 动效层（阶段6：UI 现代化）：动效等级 + 插值原语 + 系统「关闭动画」感知。
+# GUI 动效层：动效等级 + 插值原语 + 系统「关闭动画」感知。
 #
 # 设计约束（延续 ui_theme/ui_kit 的分层约定）：
-#   · 动效只有三档且**默认克制**：full/subtle/off。Tk 没有 GPU 合成，每一帧都是
-#     Tcl 层重绘，after 链跑得越密、控件越多，占用越明显——所以除"档位"外还给出
-#     硬性帧数上限（MAX_FRAMES），subtle 档下每段动效只跑 4 帧。
-#   · **降级优先于禁用**：off 时不是"什么都不做"，而是直接落到终态（位移归零、
-#     状态点停呼吸），不留半途状态。半途状态 = 用户看到控件卡在中间位置。
-#   · 系统级无障碍：Windows 的「在 Windows 中显示动画」关闭（SPI_GETCLIENTAREAANIMATION
-#     = 0）与 Linux 的 GNOME「减少动画」等价，一律把有效等级压到 off——这条优先于
-#     用户在设置里选的档位（用户可能是在无障碍语境下被迫选了 full）。
+#   · 只有三档且默认克制：full/subtle/off。Tk 没有 GPU 合成，每帧都是 Tcl 层重绘，
+#     after 链越密、控件越多占用越明显，故除档位外还设硬性帧数上限（MAX_FRAMES）。
+#   · 降级优先于禁用：off 不是「什么都不做」，而是直接落到终态（位移归零、状态点停呼吸），
+#     不留半途状态——半途状态就是用户看到控件卡在中间位置。
+#   · 系统级无障碍优先于用户档位：Windows「在 Windows 中显示动画」关闭
+#     （SPI_GETCLIENTAREAANIMATION = 0）与 Linux GNOME「减少动画」等价，一律压到 off。
 #   · import 期零 Tk 对象：探测函数只在调用时读系统，纯插值函数可无头测。
-# Tk 的硬限制（决定了本层能做什么、不能做什么）：ttk 控件没有 alpha 通道，
-# 也没有圆角与阴影，因此「淡入」只能做**不透明度等效**的位移+尺寸插值，
-# 卡片圆角只能落在 Canvas 自绘件上。不为了看起来有而堆无效代码。
+# Tk 的硬限制：ttk 控件没有 alpha 通道、没有圆角与阴影，故「淡入」只能做不透明度等效的
+# 位移+尺寸插值，卡片圆角只能落在 Canvas 自绘件上；不为「看起来有」堆无效代码。
 from __future__ import annotations
 
 import configparser
@@ -68,22 +65,21 @@ def is_valid_motion(value: str) -> bool:
 
 
 def detect_system_animations() -> bool:
-    # 探测系统是否开启了动画。返回 False 表示系统侧已关闭（应降级为 off）。
-    #   Windows：SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION=0x1042)；
-    #     另叠加「显示关闭动画」相关的高对比度开关不查——SPI_GETCLIENTAREAANIMATION
-    #     已是「在 Windows 中显示动画」的权威取值，够用。
+    # 探测系统是否开了动画。False 表示系统侧已关闭（应降级为 off）。
+    #   Windows：SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION=0x1042)，它已是「在 Windows
+    #     中显示动画」的权威取值，不再叠加高对比度等开关。
     #   macOS：`defaults read -g reduceMotion` 为 1 / true 时判为关闭。
-    #   其余平台（Linux/Wayland 等）无统一口径，一律返回 True 保持动效——
-    #     猜错的方向是"关了用户要的动效"，宁可不动也不误关。
-    # 任何异常都回 True（同上：探测失败不得让界面失去反馈）。
+    #   其余平台（Linux/Wayland 等）无统一口径，一律返回 True——猜错的方向是「关掉用户要的
+    #     动效」，宁可不动也不误关。
+    # 任何异常都回 True：探测失败不得让界面失去反馈。
     if sys.platform == "win32":
         try:
             import ctypes
 
             enabled = ctypes.c_int(0)
-            # SPI_GETCLIENTAREAANIMATION 的pvParam 指向BOOL；不声明 argtypes 时
-            # ctypes 会按默认的 int 传值，恰好与 BOOL 同宽，够用；返回值 0 = 取值失败，
-            # 此时 enabled 保持初值 0 会被误判成"动画已关"——故失败按True 处理。
+            # SPI_GETCLIENTAREAANIMATION 的 pvParam 指向 BOOL；不声明 argtypes 时 ctypes 按
+            # 默认 int 传值，恰好与 BOOL 同宽。返回值 0 = 取值失败，此时 enabled 仍是初值 0，
+            # 会被误判成「动画已关」——故失败按 True 处理。
             ok = ctypes.windll.user32.SystemParametersInfoW(0x1042, 0, ctypes.byref(enabled), 0)
             return True if not ok else bool(enabled.value)
         except Exception:
@@ -103,9 +99,9 @@ def detect_system_animations() -> bool:
 
 def effective_motion(motion_id: str, *, system_animations: bool | None = None) -> str:
     # 归一化「用户选择 + 系统开关」→ 实际生效等级。
-    # 规则：系统关闭动画时一律 off（优先于用户选择，见模块头「降级优先」）；
-    # 否则按用户选择归一化，非法值回落到 subtle（不是 off——默认要"有"，
-    # 只是"克制"；把非法配置解释成"全关"会让升级用户莫名失去全部反馈）。
+    # 系统关闭动画时一律 off（优先于用户选择）；否则按用户选择归一化，非法值回落到
+    # subtle 而非 off——默认要「有」只是「克制」，把非法配置解释成「全关」会让升级用户
+    # 莫名失去全部反馈。
     enabled = detect_system_animations() if system_animations is None else system_animations
     if not enabled:
         return "off"
@@ -150,9 +146,8 @@ def ease_out(t: float) -> float:
 
 def frame_plan(motion_id: str, duration_ms: int, frames: int) -> list[float]:
     # 由「等级 + 期望时长/帧数」算出逐帧进度序列（0.0 起、不含 1.0 终帧）。
-    # 终帧不在返回里：调用方在最后一帧之后统一落终态，这样"降级到 off"与
-    # "正常跑完"走的是同一条落地路径，不会出现停在 95% 的控件。
-    # off 档返回空列表 —— 调用方据"空"直接落终态。
+    # 终帧不入返回：调用方在最后一帧后统一落终态，使「降级到 off」与「正常跑完」走同一条
+    # 落地路径，不会出现停在 95% 的控件。off 档返回空列表，调用方据「空」直接落终态。
     if not is_valid_motion(motion_id):
         motion_id = "subtle"
     _base_ms, base_frames = _MOTION_TABLE[motion_id]
@@ -181,9 +176,8 @@ def _noop() -> None:
 class MotionController:
     # 动效运行时状态：有效等级 + 已登记的 after 句柄。
     #
-    # 为什么自己管句柄：Tk 的 after 回调在窗口销毁后仍会触发一次（MIN-2248 同款问题，
-    # 见 AdvancedSettingsWindow._config_watch_job_id 的注释）。动效回调里要写
-    # Canvas 坐标/place 位置，对象已死就是 TclError——所以每条链的句柄登记在册，
+    # 为什么自己管句柄：Tk 的 after 回调在窗口销毁后仍会触发一次，而动效回调里要写
+    # Canvas 坐标/place 位置，对象已死就是 TclError。故每条链的句柄登记在册，
     # disable()/cancel_all() 统一撤销，且回调内先查自己的 job 是否仍然有效。
     def __init__(self, motion_id: str = "subtle") -> None:
         self._motion_id: str = motion_id if is_valid_motion(motion_id) else "subtle"
@@ -215,8 +209,8 @@ class MotionController:
         self._jobs.pop(job_key, None)
 
     def cancel_all(self) -> None:
-        # 撤销全部在途链。句柄是Tk 的 after id 字符串，after_cancel 传错的 id
-        # 不抛异常只是静默无效，故这里用 pop 而非 del（幂等）。
+        # 撤销全部在途链。句柄是 Tk 的 after id 字符串，after_cancel 传错的 id 不抛
+        # 异常只是静默无效，故用 clear 而非逐个 del（幂等）。
         self._jobs.clear()
 
     def track(self, job_key: str, after_id: str) -> None:
@@ -234,9 +228,9 @@ class MotionController:
         frames: int,
         on_done: Callable[[], None] | None = None,
     ) -> None:
-        # 跑一条插值链：逐帧调apply(progress)，最后一帧之后调 on_done。
-        # off 档 / 参数非法时**同步**落终态并调 on_done——不排after、不留半途状态。
-        # 这是"降级优先于禁用"在代码里的唯一落点，其余调用点不必各自判enabled。
+        # 跑一条插值链：逐帧调 apply(progress)，最后一帧之后调 on_done。
+        # off 档 / 参数非法时**同步**落终态并调 on_done——不排 after、不留半途状态。
+        # 这是「降级优先于禁用」在代码里的唯一落点，其余调用点不必各自判 enabled。
         self.cancel(job_key)
         # on_done 是可选形参，但「落终态」是本方法的契约：缺省补一个空实现，
         # 好过在每个分支写 `if on_done is not None`（漏一处就静默停在半途）。
@@ -248,8 +242,8 @@ class MotionController:
         per_frame = max(MIN_FRAME_MS, duration_ms // (len(plan) + 1))
 
         def _step() -> None:
-            # 守卫：控件/窗口已销毁时Tk 会把回调变成 TclError 前的假象（对象仍在，
-            # 但窗口没了）。这里统一 try 兜住并直接收尾，不把异常抛进mainloop。
+            # 守卫：窗口已销毁时 Tk 仍会调回调，写坐标即 TclError。这里统一兜住并直接
+            # 收尾，不把异常抛进 mainloop。
             try:
                 progress = plan.pop(0)
                 apply(progress)
@@ -271,8 +265,7 @@ class MotionController:
 
 
 def cast_after(value: str) -> str:
-    # root.after 返回 Tk 的 after id（存根是 str|None）。运行期不会是 None，
-    # 但类型上需要收敛；这里显式给一个可复核的落点而不是散落 cast。
-    # 实际语义：None 只在 Tk 内部异常时出现，此时用空串占位——track 存空串不影响
-    # 正确性（cancel 只是删 key），比静默塞一个假 id 更好排查。
+    # root.after 返回 Tk 的 after id（存根是 str|None）。运行期不会是 None，但类型上需要
+    # 收敛；这里显式给一个可复核的落点而不是散落 cast。None 只在 Tk 内部异常时出现，用空串
+    # 占位即可（track 存空串不影响正确性，cancel 只是删 key），比塞一个假 id 更好排查。
     return value if isinstance(value, str) else ""

@@ -1,17 +1,17 @@
 # tests/test_config_io_update_file.py - src/config_io.py 的**写侧**行为锁。
 #
-# 已有的 config_io 用例集中在 delete_line 的行尾归一（SEV-05）、只读降级
-# （test_config_io_readonly.py）与备份轮换（test_config_io_backup.py）；
-# update_file / update_anchor_name / 备份脱敏这三条「会把用户配置写坏」的路径
-# 长期没有回归防护。本文件补齐：
+# 已有用例集中在 delete_line 的行尾归一（SEV-05）、只读降级（test_config_io_readonly.py）
+# 与备份轮换（test_config_io_backup.py）；update_file / update_anchor_name / 备份脱敏这三条
+# 「会把用户配置写坏」的路径此前长期没有回归防护。本文件补齐：
 #   1) update_file 的段级精确替换：URL 前缀重叠（/1 与 /12）时不得误改他行；
 #      读取失败必须用 ini_URL_content 快照回滚，而不是留下空文件；
 #   2) update_anchor_name 的幂等与注释前缀/画质段保留；
 #   3) CR-07 备份脱敏：[Cookie]/[Authorization]/[账号密码] 的值不得进备份目录，
 #      且 DLR_BACKUP_KEEP_SECRETS=1 时原样复制（用户显式放行的语义）。
 #
-# 沿用 tests/test_config_io.py 的 newline="" 读写口径：断言的是**文件字节形态**
-# （含 CRLF），否则「行尾被顺手改成 LF」这类永久破坏看不出来。
+# 沿用 tests/test_config_io.py 的 newline="" 读写口径：断言的是**文件字节形态**（含 CRLF），
+# 否则「行尾被顺手改成 LF」这类永久破坏看不出来。
+# 各分支的判据与失效形态见下方 import 之后的对照表。
 
 import configparser
 import os
@@ -30,24 +30,19 @@ from src import config_io  # noqa: E402
 # 分支 → 用例 对照表（本文件只管写侧；读侧/只读降级见 test_config_io_readonly.py，
 # 备份轮换见 test_config_io_backup.py）。
 #
-# _rewrite_line_by_match：所代批改进段级精确替换的四个方向——
-#   整行命中 / 段命中 / 全角逗号分隔 / 相似前缀不误伤。最后一个是 6.1 的
-#   真缺陷形态（旧实现用 str.replace，.../1 会顺带改坏 .../12），必须单独
-#   一条用例盯住，否则任何「改回 substring 匹配」的重构都能静默过闸。
-# update_file：noop 短路与「不得抢锁」/ 快照前进时机 / 读取失败回滚 / 原子写
-#   失败时快照不得前进。最后两条是同一枚硬币的两面：快照只能追上「已落盘」
-#   的内容，追快了就会把写失败伪装成写成功。
-#   [M-07 2026-10-19 补] 第五类失败形态「old_str 未命中任何行」同属不得前进快照的一类，
-#   且必须**不落盘**（旧实现落盘并返回 new_str，与替换成功同形）；另加一条正向锁：
-#   命中但内容逐字不变的注释路径仍必须落盘，防止把判据从「是否命中」写成「是否变化」。
-# update_anchor_name：幂等（已是目标名要返 False，否则每轮重录都回写一次磁盘）、
-#   单层 # 前缀保留、全角冒号归一为半角（与 main.py 的行解析约定同源）。
-# 备份脱敏（CR-07）：默认对凭据段打 ***；DLR_BACKUP_KEEP_SECRETS=1 时原样复制；
-#   脱敏自身报错时回退原样复制。最后一条的降级方向是「宁可留明文也不能没备份」，
-#   不要误改成「脱敏失败则不备份」——那会把可用性换成了不存在的安心感。
-#   [M-10 / MT-01 2026-10-19 补] 备份循环另有一类锁：backup_file 返回 False 时 MD5 基线
-#   **不得推进**（否则一次写入失败就让那版配置永久没有备份），且循环必须真跑到第二轮，
-#   「内容未变 → 不重复备份」这条去重分支才算被覆盖（首轮就抛停的桩形同没测）。
+# _rewrite_line_by_match：整行命中 / 段命中 / 全角逗号分隔 / 相似前缀不误伤。最后一个是 6.1 的
+#   真缺陷形态（旧实现用 str.replace，.../1 会顺带改坏 .../12），必须单独一条用例盯住，否则任何
+#   「改回 substring 匹配」的重构都能静默过闸。
+# update_file：noop 短路（不抢锁）/ 读取失败（快照回滚）/ 无命中与原子写失败（快照不得前进）。
+#   快照只能追上「已落盘」的内容，追快了就会把写失败伪装成写成功。M-07 另钉：old_str 未命中
+#   任何行必须**不落盘**（旧实现落盘并返回 new_str，与替换成功同形），而「命中但内容逐字不变」
+#   的注释路径仍必须落盘——判据是「是否命中」而不是「是否变化」。
+# update_anchor_name：幂等（已是目标名返回 False，否则每轮重录都回写磁盘）、单层 # 前缀保留、
+#   全角冒号归一为半角（与 main.py 的行解析约定同源）。
+# 备份脱敏（CR-07）：脱敏自身报错时回退原样复制——降级方向是「宁可留明文也不能没备份」，
+#   不要误改成「脱敏失败则不备份」。M-10 / MT-01：backup_file 返回 False 时 MD5 基线
+#   **不得推进**，且循环必须真跑到第二轮，「内容未变 → 不重复备份」这条去重分支才算被覆盖
+#   （首轮就抛停的桩形同没测）。
 
 
 URL_A = "https://live.douyin.com/1111111111"
@@ -110,10 +105,8 @@ class TestRewriteLineByMatch:
 
 
 class TestUpdateFile:
-    # update_file 的四类失败必须彼此可区分：noop 短路（不该抢锁）、读取失败（要用快照
-    # 回滚）、无命中（不该前进快照）、原子写失败（快照更不能前进）。
-    # 前三类都是「不写盘」，最后一类是「差点写坏盘」——只有返回値无法区分它们，
-    # 所以断言必须落回到「盘上内容 + 快照内容」两件事实上。
+    # 四类失败必须彼此可区分（判据与失效形态见上方对照表）：noop 短路、读取失败、无命中、
+    # 原子写失败。只有返回值无法区分它们，所以断言必须落回到「盘上内容 + 快照内容」两件事实上。
     def test_noop_when_old_equals_new(self, url_config: Path, monkeypatch: MonkeyPatch) -> None:
         _write_text(url_config, f"{URL_A}\n")
         entered = 0

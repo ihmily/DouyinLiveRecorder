@@ -1,25 +1,21 @@
 # src/ui_kit.py
-# GUI 控件层（阶段4：UI 现代化）：CTk 兼容工厂 → tkinter.ttk 映射 + Treeview 增量更新表格。
+# GUI 控件层：tkinter.ttk 控件工厂 + Treeview 增量更新表格。
 #
-# 设计约束（提案 PROPOSAL_2026-09-29_ui-modernization §3.3/§5.3 + 工作日志 §2.4）：
+# 设计约束（与 ui_theme / ui_scale 同一条铁律）：
 #   · **颜色一律不进工厂**：全部配色由 src/ui_theme.ThemeManager 注册的 ttk 变体样式
 #     （Card.TFrame / Alt.TFrame / Success.TButton / Muted.TLabel / NavActive.TButton …）
-#     从语义槽位派生，主题切换时由 ttk 全局样式统一重绘——任何控件不得绕过槽位直写颜色
-#     （与 ui_theme 头注释同一条铁律）。调用方以 variant 字符串选择样式。
+#     从语义槽位派生，主题切换时由 ttk 全局样式统一重绘——任何控件不得绕过槽位直写颜色。
+#     调用方以 variant 字符串选择样式。
 #   · 终端配色是唯一例外：gui.Colors.TERMINAL_* 是刻意的主题无关常量（两种主题下均保持
 #     深色终端风格），由 terminal_text() 以 tk 控件落地、调用方传色，不进槽位体系。
-#   · 工厂签名对齐 CustomTkinter 惯用形态（text/command/font/values/set/get/
-#     configure(values=)），但**不收 fg_color/hover_color 等 CTk 颜色参数**；
-#     CTkOptionMenu.set() 「只改显示值、不触发 command」的语义由 readonly Combobox
-#     的 <<ComboboxSelected>> 绑定逐字保留（表格重建回设画质不会误写配置）。
+#   · 工厂签名对齐旧 CTk 惯用形态（text/command/font/values/set/get/configure(values=)），
+#     但**不收 fg_color/hover_color 等颜色参数**；Menu.set()「只改显示值、不触发 command」的
+#     语义由 readonly Combobox 的 <<ComboboxSelected>> 绑定保留（表格重建回设画质不会误写配置）。
 #   · 监控表格用 DataTable 包 ttk.Treeview：按 key 差异化 insert()/delete()/item()/move()
-#     的行级增量更新，取代旧 CTkScrollableFrame「每轮 destroy + 重建」的整表闪烁与点击落空
-#     （提案 §3.3 的机制性收益）；每行「切换画质」下拉用单元格 bbox 浮层 Combobox 实现
-#     （tkinter 官方 editable-cell recipe，Treeview 本身不支持内嵌控件）。
-#   · [阶段5] customtkinter 依赖已整体摘除：本模块与 gui.py 均只依赖 tkinter/ttk，
-#     零 CTk 引用（历史注：阶段4 期间与 CTk 共存过，逐页回退能力随摘除终止）。
-#   · import 期零 Tk 对象（只有类定义与纯函数）：无头 Linux CI 可安全 import，
-#     `import gui` 链路不受影响。
+#     的行级增量更新，取代旧实现「每轮 destroy + 重建」的整表闪烁与点击落空；每行「切换
+#     画质」下拉用单元格 bbox 浮层 Combobox 实现（Treeview 本身不支持内嵌控件）。
+#   · 只依赖 tkinter/ttk，零 customtkinter 引用；import 期零 Tk 对象（只有类定义与纯函数），
+#     无头 Linux CI 可安全 import，`import gui` 链路不受影响。
 from __future__ import annotations
 
 import tkinter as tk
@@ -69,9 +65,9 @@ NAV_STYLE: Final[str] = "Nav.TButton"
 NAV_ACTIVE_STYLE: Final[str] = "NavActive.TButton"
 
 # font_style() 的派生样式缓存：键 (基础变体样式名, 字体键, 尺寸档位)。
-# [阶段6] 键里必须带档位段：换缩放后同名 Font 对象的 actual('size') 会变，但派生样式
-# 名若只按 (base, 字体三元组) 缓存，就会在新档位下命中按旧 padding 配置出来的样式——
-# 表现为「字号变大了但按钮内边距还是老样子」。档位由 set_scale_percent() 登记。
+# 键里必须带档位段：换缩放后同名 Font 对象的 actual('size') 会变，但派生样式名若只按
+# (base, 字体三元组) 缓存，就会在新档位下命中按旧 padding 配置出来的样式——表现为
+# 「字号变大了但按钮内边距还是老样子」。档位由 set_scale_percent() 登记。
 _FONT_STYLE_CACHE: dict[tuple[str, str, int], str] = {}
 
 # 当前尺寸档位（百分比）。模块级单值而非参数传递：见 set_scale_percent 的注释。
@@ -102,9 +98,9 @@ class Label(ttk.Label):
 
 @final
 class Button(ttk.Button):
-    # CTkButton 替身。variant 见 BUTTON_STYLES；CTk 的 fg_color/hover_color/text_color/
-    # border_* 全部并入样式（主题切换自动跟随）。ttk 无像素级 height/width（前者由
-    # padding 撑起、后者按文本宽度自适应），调用方以 padding 控制体量。
+    # CTkButton 替身。variant 见 BUTTON_STYLES；旧 CTk 的 fg_color/hover_color/text_color/
+    # border_* 全部并入样式（主题切换自动跟随）。ttk 无像素级 height/width（前者由 padding
+    # 撑起、后者按文本宽度自适应），调用方以 padding 控制体量。
     #
     # 字体经 font_style() 派生样式注入：ttk.Button 没有控件级 -font（Tk 9.0 实测
     # TclError: unknown option "-font"，ttk.Label/Combobox 则原生支持），按
@@ -132,10 +128,8 @@ class Button(ttk.Button):
 def font_style(base: str, font: Any, widget: tk.Misc) -> str:
     # 返回「基础变体样式 + 字体 + 尺寸档位」的派生样式名（同字体同变体同档位共用）。
     # 派生名显式复制基础变体的静态配置与状态映射——不依赖 ttk 的点分回退语义
-    # （实测 Tk 9.0 上 style.configure/map 跨段回退行为不可靠，布局可回落、选项未必）。
-    # [阶段6] 键含档位：换缩放后基础变体的 padding 已变，沿用旧派生样式会让内边距与
-    # 字号脱节。基础变体是「当前 ttk 主题」下的名字，档位由 style 自身反查不可靠，
-    # 故显式由调用方（gui）经 _current_scale_percent 传入。
+    # （实测 Tk 9.0 上 style.configure/map 跨段回退不可靠：布局可回落、选项未必）。
+    # 键含档位：换缩放后基础变体的 padding 已变，沿用旧派生样式会让内边距与字号脱节。
     key = (base, _font_key(font), current_scale_percent())
     name = _FONT_STYLE_CACHE.get(key)
     if name is not None:
@@ -152,10 +146,10 @@ def font_style(base: str, font: Any, widget: tk.Misc) -> str:
 
 
 def clear_font_style_cache() -> None:
-    # 清空派生样式缓存。gui 在换缩放档位时调用：已存在的派生样式名是按旧档位
-    # 生成的，继续复用会让新档位的按钮内边距停留在旧值。
-    # [为什么不删 ttk 侧的旧样式] Tk 没有 theme/style 的删除 API，残留样式只占内存、
-    # 不会被 theme_use 选中，代价可忽略；强行用「唯一名递增」绕开只会让样式表无限增长。
+    # 清空派生样式缓存。gui 在换缩放档位时调用：已存在的派生样式名是按旧档位生成的，
+    # 继续复用会让新档位的按钮内边距停留在旧值。
+    # 不删 ttk 侧旧样式：Tk 没有 theme/style 的删除 API，残留样式只占内存、不会被
+    # theme_use 选中；强行用「唯一名递增」绕开只会让样式表无限增长。
     _FONT_STYLE_CACHE.clear()
 
 
@@ -175,16 +169,12 @@ def current_scale_percent() -> int:
 
 def restyle_fonts(root: tk.Misc) -> int:
     # 换缩放/换主题后，把所有「带字体的按钮」重新指向按**当前** ttk 主题派生的样式。
-    # 返回重设的控件数（供测试断言，不为0 即表示确实走到了这些控件）。
+    # 返回重设的控件数（供测试断言，不为 0 即表示确实走到了这些控件）。
     #
-    # [为什么必须显式重设，而不是靠 set_scale_percent 清缓存就够了]
-    # font_style 的派生样式在创建时**拷贝**了基础变体的 configure（含 padding）。
-    # 换档后基础变体（TButton 等）的 padding 变了，但已存在的按钮仍指着旧派生样式名，
-    # 表现为「字号变大了、按钮内边距还是老样子」——85% 档尤其明显（按钮相对文字过大）。
-    # Tk 没有「样式内容变了自动刷新引用者」这回事，只能逐控件重指。
-    #
-    # [遍历范围] 从 root 递归找 Button 实例。控件树在换档时必然是活的（换档不重建
-    # 控件树），故这里不需要处理「遍历中途控件被销毁」——真发生了由 TclError 兜住。
+    # 为什么必须逐控件重指：font_style 的派生样式在创建时**拷贝**了基础变体的 configure
+    # （含 padding），换档后基础变体变了而按钮仍指着旧派生样式名，表现为「字号变大了、
+    # 按钮内边距还是老样子」（85% 档尤其明显）。Tk 不会自动刷新引用者。
+    # 遍历范围从 root 递归找 Button 实例；换档不重建控件树，不处理「中途被销毁」（TclError 兜住）。
     count = 0
     stack: list[tk.Misc] = [root]
     while stack:
@@ -209,7 +199,7 @@ def restyle_fonts(root: tk.Misc) -> int:
 
 
 def _font_key(font: Any) -> str:
-    # 字体的缓存键：tk.font.Font（含 CTkFont）取实际三元组，元组字体逐项拼接。
+    # 字体的缓存键：tk.font.Font 取实际三元组，元组字体逐项拼接。
     if isinstance(font, tuple):
         return "|".join(str(part) for part in font)
     try:
@@ -222,7 +212,7 @@ def _font_key(font: Any) -> str:
 class Menu(ttk.Combobox):
     # CTkOptionMenu 替身：readonly Combobox（不可键入，仅下拉选择）。
     # 命令经 <<ComboboxSelected>> 绑定并回传**选中值**（对齐 CTkOptionMenu 的 command 签名）；
-    # 继承的 .set() 只改显示值、不触发该虚拟事件——与 CTkOptionMenu.set() 语义一致。
+    # 继承的 .set() 只改显示值、不触发该虚拟事件——与旧 CTkOptionMenu.set() 语义一致。
     def __init__(
         self,
         master: tk.Misc,
@@ -261,14 +251,13 @@ class EditorText(tk.Text):
         pad_x: int = 10,
         pad_y: int = 8,
     ) -> None:
-        # [阶段6] padx/pady 由调用方按缩放档位传入：tk.Text 的内边距是裸像素，
-        # 不吃 ttk 样式，写死会在大字号下把文字挤到边框上。
+        # [阶段6] padx/pady 由调用方按缩放档位传入：tk.Text 的内边距是裸像素、不吃 ttk
+        # 样式，写死会在大字号下把文字挤到边框上。
         super().__init__(
             master,
-            # width=1：tk.Text 默认宽 80 字符，等宽字号下请求宽 ~720+ 逻辑像素，
-            # 会把整窗 reqwidth 撑过 geometry——Tk grid 对超宽 slave 是裁切而非收缩，
-            # 卡片右边框与右边距因此整段被切（2026-10-17 右边框裁切根因之一）。
-            # 实际宽度由调用方 pack(fill=BOTH, expand=True) 分配，1 只是请求值地板。
+            # width=1：tk.Text 默认宽 80 字符，等宽字号下请求宽 ~720+ 逻辑像素，会把整窗
+            # reqwidth 撑过 geometry——Tk grid 对超宽 slave 是裁切而非收缩，卡片右边框与
+            # 右边距因此整段被切。实际宽度由调用方 pack(fill=BOTH, expand=True) 分配。
             width=1,
             wrap=wrap,
             font=font,
@@ -285,9 +274,8 @@ class EditorText(tk.Text):
             highlightbackground=tokens["border"],
             highlightcolor=tokens["primary"],
             undo=True,
-            # [2026-10-17] spacing1/spacing3：中文没有西文那样的降部空间，
-            # 行距全交给字体默认 leading 时，纯中文日志/URL 行会挤成一片。上下各留 2px
-            # 余量，与 ttk 的 heading/label 档拉开层级；用像素而不用行倍数，是为了让
+            # spacing1/spacing3：中文没有西文那样的降部空间，行距全交给字体默认 leading 时，
+            # 纯中文日志/URL 行会挤成一片。上下各留 2px 余量；用像素而不用行倍数，是为了让
             # 85% 与 150% 档下的物理观感一致（倍数会随字号放大过头）。
             spacing1=2,
             spacing3=2,
@@ -311,9 +299,8 @@ class EditorText(tk.Text):
 # Tk 没有 alpha 通道、没有圆角、没有阴影。本节只做 Tk 真正支持的两件事：
 #   · 位移（place/geometry 插值）→ 页面滑入、弹窗缩放落位；
 #   · 颜色插值（tag/Canvas 逐帧混色）→ 列表变化行高亮衰减。
-# 不做的事：假装能淡入（ttk 控件无 alpha，硬做只能靠截图覆盖，既慢又脏）。
-# 帧驱动一律经 src/ui_motion.MotionController.run_frames，off 档下这些函数
-# 直接落终态、不排 after。
+# 不做「假装能淡入」：ttk 控件无 alpha，硬做只能靠截图覆盖，既慢又脏。
+# 帧驱动一律经 src/ui_motion.MotionController.run_frames，off 档下这些函数直接落终态、不排 after。
 
 
 def blend(color_a: str, color_b: str, ratio: float) -> str:
@@ -338,14 +325,10 @@ def slide_in(
 ) -> None:
     # 页面滑入：先按 distance 偏移 place 到一侧，再逐帧插值回 0。
     #
-    # [为什么用 place] grid/pack 的位置由布局器决定、不可逐步改；place 允许直接写 x。
-    #
-    # [为什么终帧必须还原原布局信息，而不是 place_forget] place_forget 会把控件
-    # 从**所有**几何管理器里摘掉——页面原本是 grid 排的，forget 之后它既不在 grid
-    # 里也不在任何地方，控件直接从窗口上消失（tkraise 只会把它提到最上层，
-    # 不给它任何位置）。正确做法是过渡前抓一份原布局器的信息、终帧原样还原。
-    # 这里的还原是「读widget 当前的 grid/pack 信息 → 过渡结束写回」，对两种布局器
-    # 都成立；两者都没有（如 place 管理的控件）则保持 place 终态。
+    # 为什么用 place：grid/pack 的位置由布局器决定、不可逐步改，place 允许直接写 x。
+    # 为什么终帧必须还原原布局信息而不是 place_forget：place_forget 把控件从**所有**几何
+    # 管理器里摘掉——原本 grid 排的页面会直接消失（tkraise 只提层级、不给位置）。故过渡前
+    # 抓一份原布局器信息、终帧原样写回；两者都没有（place 管理的控件）则保持 place 终态。
     saved = _capture_geometry(widget)
 
     def _settle() -> None:
@@ -376,12 +359,10 @@ _GeometryInfo = dict[str, Any]
 
 
 def _capture_geometry(widget: tk.Misc) -> tuple[str, _GeometryInfo]:
-    # 抓当前生效的几何管理器及其配置。返回 ("none", {}) 表示控件不由任何布局器
-    # 管理（调用方自己place 的场景），此时 _restore_geometry 什么都不做。
-    # [为什么要 dict(info) 强转] grid_info/pack_info 的返回是 typeshed 的
-    # TypedDict（_GridInfo / _PackInfo），带**全部键为必填**的约束；而 Tk 实际
-    # 只返回用过的那些键。cast 到宽 dict 是「按运行期事实断言」，不是掩盖真错误
-    # ——后续 grid_configure(**info) 读的也正是 Tk 给回来的这些键。
+    # 抓当前生效的几何管理器及其配置。返回 ("none", {}) 表示控件不由任何布局器管理
+    # （调用方自己 place 的场景），此时 _restore_geometry 什么都不做。
+    # 为什么要 cast 成宽 dict：grid_info/pack_info 的存根是「全部键必填」的 TypedDict，
+    # 而 Tk 实际只返回用过的键；后续 grid_configure(**info) 读的也正是这些键。
     try:
         grid = cast("dict[str, Any]", cast(tk.Widget, widget).grid_info())
     except tk.TclError:
@@ -424,10 +405,9 @@ def scale_in_window(
     job_key: str,
 ) -> None:
     # 弹窗落位：从 start_scale 放大到 1.0（围绕窗口中心）。
-    # [为什么不做 alpha 淡入] 见本节头「Tk 能力边界」——Toplevel 的 -alpha 只在
-    # 部分平台/窗口管理器下有效，跨平台不可靠；缩放落位是三平台一致的表现。
-    # [尺寸取update_idletasks 后的真实值] 窗口刚建时 winfo_width 可能还是 1，
-    # 拿它当基准会把弹窗缩成一条线。
+    # 不做 alpha 淡入：Toplevel 的 -alpha 只在部分平台/窗口管理器下有效，跨平台不可靠。
+    # 尺寸取 update_idletasks 后的真实值：窗口刚建时 winfo_width 可能还是 1，拿它当基准
+    # 会把弹窗缩成一条线。
     try:
         window.update_idletasks()
         base_w = window.winfo_width()
@@ -476,9 +456,8 @@ def terminal_text(
 ) -> tuple[tk.Frame, tk.Text]:
     # 终端风格日志区工厂（运行日志 / 实时弹幕流共用，替换两处逐字重复的构建段）。
     # 配色由调用方传入 gui.Colors.TERMINAL_*——刻意主题无关（见模块头「唯一例外」）。
-    # 返回 (容器, 文本控件)：容器承载右侧 ttk 滚动条 + 左侧 Text，整体由调用方 pack/grid。
-    # [阶段6] 内边距由调用方按缩放档位传入：tk.Text 的 padx/pady 是裸像素、
-    # 不吃 ttk 样式也不会随缩放变，写死会让大字号下文字贴边。
+    # 返回 (容器, 文本控件)：整体由调用方 pack/grid。内边距同样由调用方按缩放档位传入
+    # （tk.Text 的 padx/pady 是裸像素、不吃 ttk 样式）。
     wrap = tk.Frame(master, bg=bg)
     text = tk.Text(
         wrap,
@@ -519,13 +498,12 @@ TAG_NORMAL: Final[str] = "normal"
 class DataTable:
     # ttk.Treeview 增量更新表格（画质 / 弹幕监控页共用）。
     #
-    # 为什么不是 destroy+重建：旧 CTkScrollableFrame 实现每轮数据变化整表销毁重建，
-    # 鼠标按下与抬起之间行被销毁 → 点击落空；重建期整表闪烁。Treeview 行是持久的
-    # Tk item，sync() 按 key 差异化 insert/delete/item/move，未变化的行零触碰。
+    # 为什么不是 destroy+重建：旧实现每轮数据变化整表销毁重建，鼠标按下与抬起之间行被
+    # 销毁 → 点击落空，且重建期整表闪烁。Treeview 行是持久 Tk item，sync() 按 key 差异化
+    # insert/delete/item/move，未变化的行零触碰。
     #
-    # 行 id 直接用业务 key（主播名 / 房间名）：diff 与浮层编辑器都按它定位；
-    # tkinter 经 Tcl 参数化调用传递，含空格的 key 安全（不得自行拼字符串进 Tcl）。
-    #
+    # 行 id 直接用业务 key（主播名 / 房间名）：diff 与浮层编辑器都按它定位；tkinter 经 Tcl
+    # 参数化调用传递，含空格的 key 安全（不得自行拼字符串进 Tcl）。
     # 列宽按 weight 比例分配树宽：<Configure> 触发重算（Treeview 不会随窗口等比拉伸列）。
 
     def __init__(self, master: tk.Misc, columns: Sequence[tuple[str, "str | ui_i18n.Translatable", int, str]]) -> None:
@@ -615,14 +593,12 @@ class DataTable:
     def highlight_rows(self, keys: Sequence[str], *, tag: str, colors: dict[str, Any]) -> None:
         # 「变化行高亮衰减」的单步：给指定行套上（或摘掉）一个临时背景色 tag。
         #
-        # [为什么由调用方决定颜色与节奏] DataTable 按设计不持有主题 token
-        # （它是无主题的纯表格容器，tag 配色由 gui 经 restyle_tags 给），因此
-        # 「高亮成什么色、闪几帧、怎么衰减」三件事都在调用方；本方法只提供
-        # 「把颜色套到这些行上」这一条最小能力。衰减终点必须精确回到原色，
-        # 否则行上会留一层永久色偏（这是本方法存在的全部理由）。
-        #
-        # tag_configure 对不存在的 tag 是幂等的（先 configure 再逐行挂），
-        # 故每帧重复调用无副作用；调用方在末帧传 colors={} 即可摘除。
+        # 颜色与节奏由调用方决定：DataTable 按设计不持有主题 token（tag 配色由 gui 经
+        # restyle_tags 给），故「高亮成什么色、闪几帧、怎么衰减」都在调用方；本方法只提供
+        # 「把颜色套到这些行上」这一条最小能力。衰减终点必须精确回到原色，否则行上会留一层
+        # 永久色偏——这是本方法存在的全部理由。
+        # tag_configure 对不存在的 tag 幂等（先 configure 再逐行挂），故每帧重复调用无副作用；
+        # 调用方在末帧传 colors={} 即可摘除。
         self.tree.tag_configure(tag, **colors)
         for key in keys:
             if colors:

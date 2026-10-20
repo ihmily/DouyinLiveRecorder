@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 # Qt 应用装配与崩溃兜底。
 #
-# 为什么保留 tkinter 版那套「落盘 + 弹窗」的崩溃 sink：窗口化运行（pythonw / PyInstaller
-# console=False）下 stderr 可能是 None，未捕获异常会被静默吞掉，
-# 表现为「启动后无窗口、无报错」——用户完全无从反馈。
+# 崩溃 sink 走「落盘 + 弹窗」两条出口：窗口化运行（pythonw / PyInstaller console=False）
+# 下 stderr 可能是 None，未捕获异常会被静默吞掉，表现为「启动后无窗口、无报错」。
 from __future__ import annotations
 
 import os

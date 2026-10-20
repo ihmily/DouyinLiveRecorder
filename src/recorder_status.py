@@ -11,22 +11,20 @@ import main
 from src import utils
 from src.ffmpeg_proc import _get_error_line
 
-# 录制状态快照与控制台信息展示（独立模块）
+# 录制状态快照与控制台显示（独立模块）
 #
-# 负责：
-# - 汇总录制引擎运行状态快照，供 Web API 读取（get_status）
-# - 后台守护线程定时刷新控制台状态显示（display_info）
+# - get_status()：汇总运行状态快照，供 Web API 读取
+# - display_info()：后台守护线程定时刷新控制台状态
 #
-# 需要读取 main 的大量运行时全局变量（监控数、录制集合、错误窗口、磁盘路径、引擎线程句柄等），
-# 通过 `import main` 在运行时惰性读取，避免循环导入与 __main__ 二次执行问题。
+# 通过 `import main` 在运行时惰性读取 main 的全局变量（监控数、录制集合、错误窗口、磁盘路径、
+# 引擎线程句柄等），避免循环导入与 __main__ 二次执行。
 
 
-# 汇总录制引擎运行状态快照（版本号、监控数、正在录制列表及时长/画质、累计与窗口错误数、
-# 磁盘剩余空间、运行时长、引擎线程是否存活）；无入参，返回可直接 JSON 序列化的字典
+# 汇总运行状态快照（版本、监控数、正在录制列表及时长/画质、累计与窗口错误数、磁盘剩余、
+# 运行时长、引擎线程存活），返回可直接 JSON 序列化的字典。
 def get_status() -> dict[str, object]:
-    # MI-10：原「5 次重试 + 失败兜底」依据「部分路径未持 record_state_lock 改 recording /
-    # recording_time_list」；核查全部写入点（main.py 录制增删、src/notify.py 计数更新）均在
-    # with main.record_state_lock 内 → 死逻辑，改为单次持锁快照；except 保留作无锁写入留痕。
+    # 录制集合的写入点均持 record_state_lock（main.py 录制增删、src/notify.py 计数更新），
+    # 故单次持锁快照即可；except 保留：一旦触发说明新增了无锁写入路径，必须留痕。
     now = datetime.datetime.now()
     recording_snapshot: list[str] = []
     recording_times: dict[str, dict[str, str]] = {}
@@ -59,7 +57,7 @@ def get_status() -> dict[str, object]:
             monitoring_val = main.monitoring
             running_val = list(main.running_list)
             error_val = main.error_count
-    # 注：需要绑定异常对象时不能省括号（`except A, B as e:` 非法），此处保留括号写法
+    # 绑定异常对象时必须保留括号（`except A, B as e:` 非法）
     except (RuntimeError, IndexError) as e:
         # 理论上不可达（写入点均已持锁）；一旦出现说明有新增路径漏锁，必须留痕
         logger.warning(
@@ -72,15 +70,15 @@ def get_status() -> dict[str, object]:
         disk_free_gb = utils.check_disk_capacity(main.default_path)
     except Exception:
         disk_free_gb = -1.0
-    # engine_alive: 录制引擎守护线程是否存活。None 表示未运行于 Web 模式（CLI 直跑，视作存活）。
+    # engine_alive：录制引擎守护线程是否存活；None 表示非 Web 模式（CLI 直跑，视作存活）
     if main._recorder_thread is None:
         engine_alive = True
     else:
         engine_alive = main._recorder_thread.is_alive()
-    # MI-09：用 process_start_time（进程启动即固定）而非 start_display_time——
-    # 后者被 display_info 每 5 秒重置为当前时刻，会让 uptime 恒定在 0~5 秒之间。
-    # L-31（2026-10-02）：模块级已声明属性直接访问（同文件对 main.scheduler 已是正确形态）；
-    # 三参 getattr 返回 Any，warn_return_any 下泄漏类型且属性链检查全部失效。
+    # uptime 取 process_start_time（进程启动即固定）；start_display_time 每 5 秒被
+    # display_info 重置为当前时刻，用它算 uptime 会恒在 0~5 秒之间。
+    # 直接属性访问而非三参 getattr：后者返回 Any，既丢类型检查又触发 warn_return_any；
+    # main.process_start_time 有模块级声明，属性必然存在。
     _proc_start = main.process_start_time
     uptime = str(now - _proc_start).split(".")[0] if _proc_start else "0:00:00"
     return {
@@ -110,56 +108,49 @@ def get_status() -> dict[str, object]:
     }
 
 
-# 当前网络并发容量的实时值：调度器就绪时取自适应容量（随活跃任务数缩放、错误率温和降容），
+# 当前网络并发容量：调度器就绪时取自适应容量（随活跃任务数缩放、错误率温和降容），
 # 未就绪（main() 尚未初始化调度器，如极早期启动/测试环境）时回退配置值。
-# 2026-08-23 定稿：实际并发槽由 ConcurrencyScheduler 动态决定，配置值「同一时间访问网络的
-# 线程数」只是容量下限之一——控制台直接显示配置值会严重误导（实测容量 12/20 而显示 3，
-# 高并发优化形同「未生效」）。
+# 配置值「同一时间访问网络的线程数」只是容量下限，直接显示会让人误以为高并发优化未生效。
 def _live_network_capacity() -> int:
-    # 直接属性访问而非三参 getattr：mypy 不对三参 getattr 做字面量名解析（返回 Any），
-    # 既触发 no-any-return 又丢失属性类型检查；main.scheduler 有模块级声明
-    # （ConcurrencyScheduler | None，main.py），属性必然存在，无需 getattr 兜底。
+    # 直接属性访问而非三参 getattr：后者返回 Any，既丢类型检查又触发 no-any-return；
+    # main.scheduler 有模块级声明（ConcurrencyScheduler | None），属性必然存在。
     scheduler = main.scheduler
     if scheduler is not None:
-        # 读 capacity（并发上限）而不是 value（剩余可用许可）：SEV-01 修复后二者分离，
-        # 有房间持槽时 value 会随瞬时占用下跌，显示出来就成了「空闲槽数」，同样误导——
-        # 用户要看到的是调度器设定的并发上限本身。
+        # 读 capacity（并发上限）而非 value（剩余许可）：有房间持槽时 value 会随瞬时占用
+        # 下跌，显示出来是「空闲槽数」，同样误导。
         return scheduler.network_semaphore.capacity
     return main.max_request
 
 
-# display_info 的刷新节拍与异常退避（MID-31）：正常每 _DISPLAY_INTERVAL_SECONDS 秒刷一次，
-# 连续失败按 2^n 指数退避、封顶 _DISPLAY_BACKOFF_MAX_SECONDS（原实现唯一 sleep 在 try 体内、
-# except 无退避 → 异常路径零间隔重入，单核跑满 + 秒级灌满日志）。
+# display_info 的刷新节拍与异常退避：正常 5s 一次；连续失败按 2^n 退避并封顶 300s。
+# 原实现唯一的 sleep 在 try 体内、except 无退避，异常路径零间隔重入会跑满单核并灌满日志。
 _DISPLAY_INTERVAL_SECONDS = 5.0
 _DISPLAY_BACKOFF_MAX_SECONDS = 300.0
 
 
 def _sleep(seconds: float) -> None:
-    # time.sleep 的模块内间接层（与 src/scheduler._sleep 同型）：供用例注入计数/停循环。
+    # time.sleep 的模块内间接层（与 src/scheduler._sleep 同型），供用例注入计数/停循环；
     # 不得改为 monkeypatch recorder_status.time——那是 stdlib 模块本体，会波及同进程所有线程。
     time.sleep(seconds)
 
 
 def _display_delay(consecutive_failures: int) -> float:
-    # 连续失败次数 → 下次休眠秒数：0 次为常规节拍，其后 5s×2^n（首次失败即 ≥2 倍常规节拍）
-    # 并封顶 _DISPLAY_BACKOFF_MAX_SECONDS。
-    # 指数上界钳到 16：本线程可能连续失败数天，没必要为此算 2^几千。
-    # 底数刻意写成 2.0：typeshed 里 int ** int 的返回类型是 Any（会经 warn_return_any 报
-    # no-any-return），float ** int 才是确定的 float。
+    # 连续失败次数 → 下次休眠秒数：0 次为常规节拍，其后 5s×2^n（首次失败即 ≥2 倍）并封顶。
+    # 指数上界钳到 16：线程可能连续失败数天，不必为此算 2^几千。
+    # 底数写 2.0：typeshed 中 int ** int 返回 Any（触发 warn_return_any），float ** int 才是 float。
     if consecutive_failures <= 0:
         return _DISPLAY_INTERVAL_SECONDS
     return min(_DISPLAY_INTERVAL_SECONDS * (2.0 ** min(consecutive_failures, 16)), _DISPLAY_BACKOFF_MAX_SECONDS)
 
 
-# 守护线程主体：每 5 秒清屏并打印监控数/并发数/画质/格式/累计错误数及各房间已录时长；无入参，死循环不返回
+# 守护线程主体：每 5 秒清屏并打印监控数/并发数/画质/格式/累计错误数及各房间已录时长；死循环不返回。
 def display_info() -> None:
     _sleep(_DISPLAY_INTERVAL_SECONDS)
     consecutive_failures = 0
     while True:
-        # 无控制台环境下 sys.stdout 就是 None（pythonw.exe / 冻结 console=False exe，见 AGENTS
-        # 「无控制台环境」条目），而 main.py 无条件启动本线程。必须在进入 try 之前判空：
-        # 否则每轮 AttributeError → logger.error → 紧循环，既占满一个核又把 streamget.log 灌满。
+        # 无控制台环境（pythonw.exe / 冻结 console=False exe）下 sys.stdout 为 None，
+        # 而 main.py 无条件启动本线程：必须在进 try 之前判空，否则每轮 AttributeError →
+        # logger.error 紧循环，跑满一核并灌满 streamget.log。
         if sys.stdout is None:
             _sleep(_DISPLAY_INTERVAL_SECONDS)
             continue
@@ -240,7 +231,7 @@ def display_info() -> None:
                     get_error_line=_get_error_line(e),
                 )
             )
-        # 节拍控制放 try 之外（finally 亦可，根因见 MID-31）：flush 自身抛错（Web 后台模式下
-        # logs/web_console.log 被归档改名、句柄已关时抛 ValueError: I/O operation on closed
-        # file）或更早语句抛错都会跳过 try 内的 sleep → 零间隔重入，故按连续失败次数退避。
+        # 节拍控制放 try 之外：flush 自身抛错（Web 后台模式下 logs/web_console.log 被归档、
+        # 句柄已关时抛 ValueError: I/O operation on closed file）或更早语句抛错都会跳过
+        # try 内的 sleep → 零间隔重入，故按连续失败次数退避。
         _sleep(_display_delay(consecutive_failures))

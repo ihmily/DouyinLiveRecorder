@@ -1,18 +1,18 @@
 # scripts/agent_hook_guard.py 的回归用例（Hook/Command 项目级资产的行为锁）。
 #
-# 被测面按「行为优先」组织，绝不用正则钉生产代码字面量（AGENTS.md M-26：文本锁会在契约反转后
+# 被测面按「行为优先」组织，不用正则钉生产代码字面量（AGENTS.md M-26：文本锁会在契约反转后
 # 静默空洞成立，给出与事实相反的绿）：
 #   1) PreToolUse 三条拦截规则（批量重装 venv / 清理越界 / 工作区级通配删除）与放行面
-#      （AGENTS.md 自己给出的两条收尾清理命令、二级 pip 处置、常规开发命令）；
+#      （AGENTS.md 给出的两条收尾清理命令、二级 pip 处置、常规开发命令）；
 #   2) PostToolUse 三条「对门禁三面隐形」的即时反馈（MUTATION 残留 / 行尾形态混存 / .mjs 未登记）；
-#   3) 触发条件与 AGENTS.md 约束的**一致性锁**——受保护目录集合必须与 AGENTS.md 声明的
-#      「运行期产物目录」枚举逐项相等，改一侧不改另一侧即红；
-#   4) CLI 契约（stdin JSON → 出口按事件能力双轨）：Pre 命中 = exit 2 + stderr 阻断；
-#      Post 非阻断（provider 文档：exit 2 的 stderr 注入仅对 blockable 事件生效），命中 =
-#      exit 0 + stdout JSON `hookSpecificOutput.feedback` 即时回传；证明注册形态与脚本入口对得上。
+#   3) 触发条件与 AGENTS.md 的**一致性锁**：受保护目录集合须与文档「运行期产物目录」枚举逐项相等，
+#      改一侧不改另一侧即红；
+#   4) CLI 契约（stdin JSON → 出口按事件能力双轨）：Pre 命中 = exit 2 + stderr 阻断；Post 非阻断
+#      （provider 文档：exit 2 的 stderr 注入仅对 blockable 事件生效）= exit 0 + stdout JSON
+#      `hookSpecificOutput.feedback` 即时回传，证明注册形态与脚本入口对得上；
 #   5) 资产接线锁：.qoder/settings.json 的 hooks 指向本脚本、command 资产不复制门禁清单。
-#      这两处位于 .gitignore 忽略的 .qoder/ 内（AGENTS.md「dockerignore / gitignore 同源约定」），
-#      全新克隆没有该目录 → 用例 skip，不把本地资产状态冒充成仓库门禁。
+#      两处都在 .gitignore 忽略的 .qoder/ 内（AGENTS.md「dockerignore / gitignore 同源约定」），
+#      全新克隆缺该目录 → 用例 skip，不把本地资产状态冒充成仓库门禁。
 #
 # 全部离线：不联网、不跑任何仓库门禁；子进程一律驱动本脚本自身。
 
@@ -66,7 +66,7 @@ def _agents_md_runtime_dirs() -> set[str]:
 
 
 def test_protected_dirs_match_agents_md_enumeration() -> None:
-    # 触发条件与 AGENTS.md 约束一致（本次修复的验收口径）：受保护目录集合 == 文档枚举集合
+    # 受保护目录集合 == AGENTS.md 文档枚举集合；改一侧不改另一侧即红
     assert set(guard.PROTECTED_RUNTIME_DIRS) == _agents_md_runtime_dirs()
 
 
@@ -120,9 +120,9 @@ def test_cleanup_reaching_protected_dirs_is_blocked(target: str) -> None:
 @pytest.mark.parametrize(
     ("command", "expected_rule"),
     [
-        # 2026-10-19 审查 S-01 实测放行的变形语料：守卫按文本形态匹配，引号、尾随空格、
-        # 参数分写、find -delete 与 PowerShell 别名/清空动词都能让旧判据整条跳过。
-        # 这些不是刻意构造的攻击串，而是日常书写形态，因此必须逐条钉住。
+        # 2026-10-19 审查 S-01 实测放行的变形语料：守卫按文本形态匹配，引号、尾随空格、参数
+        # 分写、find -delete 与 PowerShell 别名/清空动词都曾让旧判据整条跳过。这些是日常书写
+        # 形态而非刻意构造的攻击串，必须逐条钉住。
         ("rm -rf logs ", "R-CLEAN-SCOPE"),
         ('rm -rf "logs"', "R-CLEAN-SCOPE"),
         ("rm -rf 'logs'", "R-CLEAN-SCOPE"),
@@ -240,12 +240,11 @@ def _run_hook(event: Mapping[str, Any]) -> subprocess.CompletedProcess[bytes]:
 
 
 def test_cli_contract_blocks_with_exit_code_2() -> None:
-    # PreToolUse 是唯一可阻断站：exit 2 + stderr 回给 agent，阻断声明与实际能力一致
-    # MT-03（2026-10-18 审查）：原断言查的是 `--no-cache-dir`，而这条命令里根本没有该子串，
-    # 于是「拒绝消息不得回显命令原文」这条锁恒真、从未判过任何东西（M-26 同族的空洞文本锁）。
-    # 现取命令中**确实存在**的实参位作判据，再另加一条只出现在命令里的哨兵：
-    # 「把命令原文拼进拒绝理由」的任意实现都会同时打红这两条，而理由文案自身的正常改动不会
-    # （实参位与哨兵都不属于文案，改文案不动这两条）。
+    # PreToolUse 是唯一可阻断站：exit 2 + stderr 回给 agent，阻断声明与实际能力一致。
+    # MT-03（2026-10-18 审查）：原断言查的 `--no-cache-dir` 在这条命令里根本不存在，于是
+    # 「拒绝消息不得回显命令原文」这条锁恒真、从未判过任何东西（M-26 同族的空洞文本锁）。
+    # 现取命令中**确实存在**的实参位作判据，另加一条只出现在命令里的哨兵：把命令原文拼进拒绝
+    # 理由的任意实现都会同时打红这两条，而理由文案自身的正常改动不会（两者都不属于文案）。
     sentinel = "--sentinel-never-echo-4f9a"
     event = {
         "hook_event_name": "PreToolUse",

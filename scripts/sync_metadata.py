@@ -7,22 +7,20 @@
 #   python scripts/sync_metadata.py            # 重新生成 uv.lock 与 egg-info
 #   python scripts/sync_metadata.py --check    # 仅校验二者是否与 pyproject.toml 一致，不改文件
 #
-# 机制：uv.lock 经 `uv lock` 整文件重算（顺带补齐漏写的依赖，如 socksio/h2/urllib3）；
-# egg-info 经 setuptools egg_info 命令重建。二者都是「从 pyproject.toml 派生」的产物，没有
-# 任何写死的版本号，所以改 pyproject.toml 之后跑一次本脚本即可让它们重新对齐。
-# 校验口径与 tests/test_regression_2026_09_22_gates.py 的两条元数据回归锁一致，但本脚本不依赖
-# pytest，可单独在发版前手动跑；CI 侧由那条 pytest 回归锁兜底（纯读、无需 uv/pip）。
+# 机制：uv.lock 经 `uv lock` 整文件重算（顺带补齐漏写的依赖，如 socksio/h2/urllib3）；egg-info
+# 经 setuptools egg_info 命令重建。二者都是从 pyproject.toml 派生的产物、无写死版本号，所以
+# 改完 pyproject.toml 跑一次本脚本即可让它们重新对齐。校验口径与 tests/test_regression_2026_09_22_gates.py
+# 的两条元数据回归锁一致，但本脚本不依赖 pytest（可单独手动跑），CI 侧由那两条锁兜底。
 #
-# 退出码契约（M-32① 修复时登记，2026-09-29）：
-#   --check         : 0 = 两个派生产物均与 pyproject.toml 一致；1 = 已漂移。纯读文件，
-#                     绝不调 subprocess / 不联网（CI static job 在未安装项目依赖的 job 里跑它）。
-#   无参数（重建）: 0/1 一律由**最终 check()** 决定，与中间步骤的 WARN 无关。
-#                     为什么 WARN 不参与退出码：本模式是「生成器」而非门禁，uv 缺失属可接受的
-#                     环境差异（AGENTS.md「关键约定」#1 允许只跑 egg_info 一侧）；产物到底对不对
-#                     只有 check() 能自证，把 WARN 也判失败会让「没装 uv 的本地机器」恒红且
-#                     无法区分「已补齐」与「真的漂移」。门禁语义一律走 --check。
-#   降级边界      : uv 段（探测/锁定）失败只让 uv.lock 这一段落 WARN，**必须**继续执行 egg-info
-#                     重建；两条降级路径都不得让脚本抛栈退出（旧形态会，见 _sync_uv_lock 注释）。
+# 退出码契约：
+#   --check         : 0 = 两个派生产物均与 pyproject.toml 一致；1 = 已漂移。纯读文件，绝不调
+#                     subprocess / 不联网（CI static job 在未装项目依赖的 job 里跑它）。
+#   无参数（重建）  : 0/1 一律由**最终 check()** 决定，与中间步骤的 WARN 无关。本模式是「生成器」
+#                     而非门禁：uv 缺失属可接受的环境差异（AGENTS.md「关键约定」#1 允许只跑
+#                     egg_info 一侧），而产物到底对不对只有 check() 能自证；把 WARN 也判失败会让
+#                     没装 uv 的机器恒红，且无法区分「已补齐」与「真的漂移」。门禁语义一律走 --check。
+#   降级边界        : uv 段（探测/锁定）失败只让 uv.lock 这一段落 WARN，**必须**继续执行 egg-info
+#                     重建；两条降级路径都不得让脚本抛栈退出。
 # 回归锁：tests/test_scripts_error_paths.py（uv 缺失/探测抛错时 WARN 可达且 egg-info 仍重建、
 #         --check 路径零子进程）。
 
@@ -99,16 +97,12 @@ def _run(cmd: list[str]) -> int:
     return subprocess.call(cmd, cwd=str(ROOT))
 
 
-# uv.lock 一段的独立执行单元（M-32①，2026-09-29）：返回 True = 已交给 uv 重算，False = 本段降级。
-# 为什么必须从 regenerate() 里抽出来单独成函数：旧形态把 `uv --version` 探测直接内联在
-# regenerate() 中段，PATH 无 uv 时 subprocess.run 抛的是 FileNotFoundError（不是非 0 返回码），
-# 于是 ① else 分支「未检测到 uv，跳过 uv.lock」的 WARN 永远不可达（写了却永远不会执行，
-# 属 AGENTS.md「门禁告警即失败」同族的「降级只发 warning 且退出码仍 0」的反面变体：
-# 降级路径根本不存在，只剩一条崩溃栈）；② 异常穿透整个 regenerate()，连**完全不依赖 uv**
-# 的 egg-info 重建都被带走 —— 没装 uv 的机器上这个脚本整体失效。
-# 现在：shutil.which 先探测（覆盖「PATH 里没有」这一主因）+ 两处子进程都捕 OSError
-# （覆盖「which 命中但不可 exec」：命中目录 / 无执行位 / Windows 下命中同名非 exe 文件）。
-# 任何一条降级都只影响本段返回值，绝不向调用方抛出。
+# uv.lock 一段的独立执行单元：返回 True = 已交给 uv 重算，False = 本段降级。
+# 必须从 regenerate() 抽出成独立函数：子进程异常（PATH 无 uv 时抛的是 FileNotFoundError
+# 而不是非 0 返回码）若不在此截住，会连带拖死**完全不依赖 uv** 的 egg-info 重建，让没装 uv
+# 的机器上整个脚本失效。shutil.which 覆盖「PATH 里没有」，两处捕 OSError 覆盖「which 命中
+# 但不可 exec」（命中目录 / 无执行位 / Windows 下命中同名非 exe 文件）。
+# 任何降级都只影响本段返回值，绝不向调用方抛出。
 def _sync_uv_lock() -> bool:
     uv_bin = shutil.which("uv")
     if uv_bin is None:
@@ -153,7 +147,7 @@ def regenerate() -> bool:
     print()
 
     # uv.lock：优先 uv lock（整文件重算，自动补齐漏写依赖）；无 uv 则提示手动处理。
-    # 返回值刻意不参与后续流程 —— uv 段无论成败都必须继续走 egg-info 段（M-32① 的修复要点）。
+    # 返回值刻意不参与后续流程 —— uv 段无论成败都必须继续走 egg-info 段。
     _sync_uv_lock()
     print()
 

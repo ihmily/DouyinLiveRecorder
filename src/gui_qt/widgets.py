@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
-# 与设计稿组件一一对应的通用控件：Card（圆角+投影）、NavButton、StatusDot（呼吸动画）、
-# StatTile（统计块）、Toast（底部浮层）、EmptyState（空状态引导）、TerminalText（终端只读框+着色）。
+# 与设计稿组件一一对应的通用控件：Card（圆角+投影）、StatusDot（呼吸动画）、StatTile
+# （统计块）、Toast（底部浮层）、EmptyState（空状态引导）、TerminalText（终端只读框+着色）。
 #
-# 为什么单独成一层而不是各页面自己写：设计稿的同一枚 Token 在五个页面里都要出现，
-# 集中在这里才能保证「改设计只改一处」；而且 QSS 是全局层叠的，控件常用的 objectName
-# （card / nav / primary / terminal）必须由唯一的工厂发放，散落各处必然有人写错名字。
+# 为什么单独成一层：同一枚设计 Token 在五个页面里都要出现，集中在此才能「改设计只改一处」；
+# 且 QSS 全局层叠，控件共用的 objectName（card / nav / primary / terminal）必须由唯一工厂
+# 发放，散落各处必然有人写错名字。
 #
-# 线程约定：本模块全部控件只能在**主线程**构造与调用（Qt 的硬约束，与 Tk 同，
-# 违反不报 cross-thread warning 而是直接 UB/崩溃），跨线程一律走 Signal。
+# 线程约定：本模块全部控件只能在**主线程**构造与调用（Qt 硬约束，跨线程违反是 UB/崩溃而非
+# 告警），跨线程一律走 Signal。
 from __future__ import annotations
 
 from typing import Callable, Final
@@ -41,10 +41,8 @@ from .theme import DUR_MED, EASE_SPRING, Palette
 
 class Card(QFrame):
     # 设计稿 .card（radius-l 18 + shadow-m）。Qt 的 QSS border-radius 只能画圆角轮廓，
-    # **投影必须挂 QGraphicsDropShadowEffect**——这就是选 PySide6 的核心理由之一。
-    #
-    # 为什么投影不做 • 默认全部卡片都挂：effect 会增加 GPU/CPU 合成成本；
-    # ``shadow=True`` 只给静态容器（卡尺=各页内容卡片）用，列表类不挂。
+    # **投影必须挂 QGraphicsDropShadowEffect**——这也是选 PySide6 的理由之一。
+    # 投影不做默认全挂：effect 会增加合成成本，``shadow=True`` 只给静态内容卡片，列表类不挂。
     def __init__(self, parent: QWidget | None = None, *, shadow: bool = True) -> None:
         super().__init__(parent)
         self.setObjectName("card")
@@ -83,12 +81,11 @@ def action_button(text: str, variant: str = "", parent: QWidget | None = None) -
 
 
 class ArrowComboBox(QComboBox):
-    # 带自绘箭头的下拉。为什么不用 QSS 的 ::down-arrow：
-    #   1. 只定义 ::drop-down 而不给 image 时，Qt 会连原生箭头一起丢掉，下拉变成纯文本框；
-    #   2. 用 border 三角（width/height=0 + 三边透明）在 QSS 里会被画成实心方块（2026-10-17 实测）；
-    #   3. image: url(...) 需要外置资源，打包后路径与主题色都难同步。
-    # 用 QLabel 叠一个 "▾"：字形渲染天然跟随 DPI，颜色走 QSS 的 objectName 选择器，
-    # 切换主题时无需重建控件。箭头设 WA_TransparentForMouseEvents，点击仍落到下拉本体。
+    # 带自绘箭头的下拉。不用 QSS 的 ::down-arrow 有三个硬伤：只定义 ::drop-down 而不给 image
+    # 时 Qt 会连原生箭头一起丢掉；border 三角会被画成实心方块（2026-10-17 实测）；
+    # image: url(...) 需外置资源，打包后路径与主题色难同步。
+    # 改用 QLabel 叠一个 "▾"：字形跟随 DPI，颜色走 QSS 的 objectName 选择器，切主题无需重建
+    # 控件。箭头设 WA_TransparentForMouseEvents，点击仍落到下拉本体。
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._arrow = QLabel("▾", self)
@@ -110,10 +107,9 @@ class ArrowComboBox(QComboBox):
 
 
 class StatusDot(QWidget):
-    # 设计稿 .dot-live：6px 圆点 + pulse 动画。这里用 QTimer + 手写 paintEvent 实现呼吸，
-    # 与旧 ttk 版的「Canvas + after 链」形似，但 Qt 的 timer 挂在控件自己身上——
-    # 控件销毁时它自动停，不需要像旧版那样手工保存并 cancel 五处 after id。
-    # 不用 QPropertyAnimation 改色是因为 QColor 不是可直接缓动的 Qt 属性，成本高于按需重绘。
+    # 设计稿 .dot-live：6px 圆点 + pulse 动画。用 QTimer + 手写 paintEvent 实现呼吸：
+    # timer 挂在控件自身，销毁即自动停，不必像 ttk 版那样手工保存并 cancel 五处 after id。
+    # 不用 QPropertyAnimation 改色——QColor 不是可直接缓动的 Qt 属性，成本高于按需重绘。
     _SIZES: tuple[int, ...] = (10, 12, 14, 16, 14, 12)
 
     def __init__(self, parent: QWidget | None = None, base: int = 14) -> None:
@@ -258,11 +254,10 @@ class EmptyState(QWidget):
         self.description.setObjectName("muted")
         self.description.setWordWrap(True)
         self.description.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        # [2026-10-17 截图回归] 这里必须是固定宽而不是最大宽：wordWrap 的 QLabel 只在
-        # **宽度确定**时才能算出多行高度（heightForWidth），只设 maximumWidth 时父布局
-        # 按「宽度未定」的单行 sizeHint 分配高度，描述文字被裁掉后两行（画质页实测
-        # geo 高 18px、hint 36px；弹幕页 18px / 54px）。420px 是设计稿文本列宽，
-        # 页面最小内容宽（900-272-48-32=548）留有余量，不会横向溢出。
+        # 必须是固定宽而不是最大宽（2026-10-17 截图回归）：wordWrap 的 QLabel 只在**宽度确定**
+        # 时才能算出多行高度（heightForWidth），只设 maximumWidth 时父布局按单行 sizeHint 分配
+        # 高度，描述会被裁掉两行（画质页实测 geo 18px / hint 36px，弹幕页 18px / 54px）。420px 是
+        # 设计稿文本列宽，页面最小内容宽 548 留有余量，不会横向溢出。
         self.description.setFixedWidth(420)
         self.description.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
         layout.addWidget(self.icon)
@@ -273,8 +268,7 @@ class EmptyState(QWidget):
 
 class _LogHighlighter(QSyntaxHighlighter):
     # 日志等级着色：只认 [ERROR] / [WARN] 两个行内标记，不做整行正则扫描。
-    # QSyntaxHighlighter 是按文本块（block）增重排的，ffmpeg 刷屏时每块都会触发一次；
-    # 用 find 而不是 re.search 能少一个数量级的开销。
+    # QSyntaxHighlighter 按文本块重排，ffmpeg 刷屏时每块都触发；find 比 re.search 少一个数量级开销。
     _LEVELS: tuple[tuple[str, str], ...] = (("[ERROR]", "error"), ("[WARN]", "warn"))
 
     def __init__(self, document: QTextDocument, palette: Palette) -> None:
@@ -293,9 +287,8 @@ class _LogHighlighter(QSyntaxHighlighter):
         self._formats = formats
 
     def set_palette(self, palette: Palette) -> None:
-        # 主题/缩放/字体切换后只换色表并重刷既有条目（M-16）：不新建实例——
-        # QSyntaxHighlighter 以 document 为父对象，新建的旧实例永不销毁、且仍参与高亮，
-        # 切 N 次就叠 N 个（旧行被旧配色反复重着色、全文档重复高亮 N 份开销）。
+        # 主题/缩放/字体切换后只换色表并重刷既有条目（M-16）：不新建实例——QSyntaxHighlighter
+        # 以 document 为父对象，旧实例永不销毁且仍参与高亮，切 N 次就叠 N 个。
         self._apply_tokens(palette)
         self.rehighlight()
 
@@ -309,15 +302,12 @@ class _LogHighlighter(QSyntaxHighlighter):
 
 # 等宽字体工厂：QFont 的族名位只接受**单个** family，把 CSS 式的
 # "Consolas, Menlo, Courier New, monospace" 整串塞进去等于请求一个不存在的族名。
-# [实测 2026-10-17] 装了 Consolas 的机器上 Qt 侥幸命中（QFontInfo 回读 'Consolas'）；
-# 没装的那台机器上，Qt 按 styleHint=Monospace（枚举值 7，与用户日志里的 styleHint=7 对上）
-# 落进它遗留别名表里的 "Terminal"，于是一轮构造打出两条告警：
-#   qt.qpa.fonts: DirectWrite: CreateFontFaceFromHDC() failed ... QFontDef(Family="Terminal", ...)
-#   QFont::setPointSize: Point size <= 0 (-1)
-# 唯一写法是按候选顺序取第一个本机真实存在的族名；候选全缺时不再猜名字，交回平台的
-# 系统固定宽度字体（QFontDatabase.FixedFont 保证本机可用）。
-# styleHint(Monospace) 只在候选命中后设置，作为族名匹配的最后一道校正。
-# point_size 留 None 的站点是刻意不设定值、继续继承 QSS 的 px 字号（缩放档位要吃它）。
+# [实测 2026-10-17] 候选全缺时 Qt 按 styleHint=Monospace（枚举值 7）落进遗留别名 "Terminal"，
+# 一轮构造打出两条告警：DirectWrite CreateFontFaceFromHDC() failed（Family="Terminal"）与
+# "QFont::setPointSize: Point size <= 0 (-1)"。
+# 唯一写法是按候选顺序取第一个本机真实存在的族名；全缺时交回平台的系统固定宽度字体
+# （QFontDatabase.FixedFont 保证本机可用）。styleHint(Monospace) 只在候选命中后设置。
+# point_size 留 None 的站点刻意不设定值、继续继承 QSS 的 px 字号（缩放档位要吃它）。
 _FIXED_FONT_CANDIDATES: Final[tuple[str, ...]] = (
     "Consolas",
     "Menlo",
@@ -343,9 +333,8 @@ def fixed_font(point_size: int | None = None) -> QFont:
 class TerminalText(QPlainTextEdit):
     # 终端只读框：等宽字 + 终端配色 + 行级着色 + 上限行自动截断。
     #
-    # 为什么坚持 QPlainTextEdit 而不是 QTextEdit：后者是富文本引擎，同样行数下内存与布局
-    # 成本高一个量级；日志页是「只 append、不各类富格式」的场景，
-    # QPlainTextEdit 带 maximumBlockCount（这里取代了旧版手算的总行数裁剪）。
+    # 用 QPlainTextEdit 而不是 QTextEdit：后者是富文本引擎，同量级行数下内存与布局成本高一个
+    # 量级；日志页只需 append，且 maximumBlockCount 直接取代旧版手算的总行数裁剪。
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("terminal")
@@ -359,10 +348,8 @@ class TerminalText(QPlainTextEdit):
         self._highlighter: _LogHighlighter | None = None
 
     def apply_highlighter(self, palette: Palette) -> None:
-        # [历史注] 旧实现每次调用都 _LogHighlighter(self.document(), palette) 新建——
-        # QSyntaxHighlighter 以 document 为父对象、旧实例从不销毁，切 N 次主题叠 N 个高亮器，
-        # 旧行被旧配色反复重着色（颜色错乱）且全文档重复高亮 N 份开销（CODE_REVIEW_2026-10-18 M-16）。
-        # 现只建一次，后续仅更新色表并 rehighlight() 让既有条目按新主题重刷。
+        # 只建一次，后续仅更新色表并 rehighlight()，让既有条目按新主题重刷。
+        # [历史注] 旧实现每次调用都新建高亮器，切 N 次主题叠 N 个（颜色错乱 + N 份重复高亮，M-16）。
         if self._highlighter is None:
             self._highlighter = _LogHighlighter(self.document(), palette)
         else:

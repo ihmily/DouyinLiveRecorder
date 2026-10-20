@@ -4,9 +4,9 @@
 # 文件名刻意叫 runlog 而不是 logs：pyproject 的 [tool.mypy].exclude 含裸名 `logs`（本意是排除
 # 运行期产物目录），裸名按子串匹配会把 .../pages/logs.py 从无参 mypy 的扫描面里静默剔除。
 #
-# 行上限由 widgets.TerminalText 的 maximumBlockCount(1000) 承担：Qt 在 append 时
-# 自动从文档头裁掉旧块，取代旧 tkinter 版「每次插入后读 index('end-1c') 算行数再 delete」
-# 的手写裁剪——后者每批都要一次全文行号换算，ffmpeg 刷屏时肉眼可见地拖慢。
+# 行上限由 widgets.TerminalText 的 maximumBlockCount(1000) 承担：Qt 在 append 时自动
+# 从文档头裁旧块；改由 Qt 托管是因为旧 tkinter 版「每次插入后算行号再 delete」每批都要
+# 一次全文行号换算，ffmpeg 刷屏时肉眼可见地拖慢。
 from __future__ import annotations
 
 from typing import Callable
@@ -22,8 +22,8 @@ from ..widgets import Card, TerminalText, action_button, card_layout, connect_cl
 
 class LogsPage(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
-        # 终端控件不带滚动策略覆盖：行上限之外的裁剪交给 maximumBlockCount，
-        # 这里只负责承载它，裁剪口径的唯一事实源在 widgets.TerminalText。
+        # 本页只负责承载终端控件，不覆盖滚动策略：行上限裁剪的唯一事实源在
+        # widgets.TerminalText（maximumBlockCount）。
         super().__init__(parent)
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 24, 24, 20)
@@ -61,8 +61,7 @@ class LogsPage(QWidget):
         self.terminal.clear()
 
     def apply_palette(self, palette: Palette) -> None:
-        # 终端色是固定的一套 token，主题切换后让既有的高亮器按新色重刷当前与后续的行。
-        # [历史注] 原写「重建 highlighter」——每次新建挂同一 document 而旧实例不销毁，
-        # 即 CODE_REVIEW_2026-10-18 M-16 的泄漏本体；现由 TerminalText.apply_highlighter
-        # 单实例复用、只更新色表 + rehighlight。
+        # 终端色是固定的一套 token，主题切换后让既有高亮器按新色重刷当前与后续的行。
+        # 高亮器由 TerminalText 单实例复用、只更新色表 + rehighlight：每次新建会挂同一
+        # document 而旧实例不销毁（CODE_REVIEW_2026-10-18 M-16 的泄漏本体）。
         self.terminal.apply_highlighter(palette)

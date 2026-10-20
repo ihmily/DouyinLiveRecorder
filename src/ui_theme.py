@@ -1,25 +1,22 @@
 # src/ui_theme.py
-# GUI 主题层（阶段3：UI 现代化）：语义 token + 多主题 + ttk 主题注册 + 偏好持久化 + WCAG 对比度自证。
+# GUI 主题层：语义 token + 多主题 + ttk 主题注册 + 偏好持久化 + WCAG 对比度自证。
 #
-# 设计约束（提案 PROPOSAL_2026-09-29_ui-modernization §5.2）：
-#   · 全部颜色经由语义槽位引用，任何主题不得绕过槽位直写控件颜色——多套主题由同一组
-#     槽位派生，避免「每套主题各写一遍颜色」的漂移；对比度因此可以机检（见 CONTRAST_REQUIREMENTS）。
-#   · 槽位清单 = 提案 §5.2 十二槽 + on_primary：深色/高对比主题下主按钮填充是亮蓝，按钮标签
-#     需要近黑前景，`surface`（面板底色）在深色主题里兼作按钮前景的语义不成立，故单列一槽。
+# 设计约束（「一切走语义槽位」铁律）：
+#   · 全部颜色经由语义槽位引用，任何主题不得绕过槽位直写控件颜色——多套主题由同一组槽位
+#     派生，避免「每套主题各写一遍颜色」的漂移；对比度因此可以机检（见 CONTRAST_REQUIREMENTS）。
+#   · 槽位清单 = 十二槽 + on_primary：深色/高对比主题下主按钮填充是亮色，按钮标签需要反色
+#     前景，`surface`（面板底色）在深色主题里兼作按钮前景的语义不成立，故单列一槽；
 #     浅色主题 on_primary == surface（#FFFFFF），该槽在浅色下是中性的。
-#   · [2026-10-17 视觉改版] 品牌色由蓝转暖赭橙（对齐 docs/gui-redesign 设计语言）：
-#     light primary #B5573A（白字 4.78:1）、dark primary #B85A3F（白字 4.59:1），
-#     深色 hover 取更暗的 #A8502F——深色主题下 hover 若调亮会跌破白字 4.5 契约。
-#     [历史注] 原品牌蓝 #4F6DF5 白字实测 4.34:1 低于正文 AA，曾加深为 #4358E8（5.53:1）。
+#   · 品牌色为暖赭橙（对齐 docs/gui-redesign 设计语言）：light primary #B5573A（白字 4.78:1）、
+#     dark primary #B85A3F（白字 4.59:1），深色 hover 取更暗的 #A8502F——深色主题下 hover 若
+#     调亮会跌破白字 4.5 契约。[历史注] 更早的品牌蓝 #4F6DF5 白字仅 4.34:1，曾加深为 #4358E8。
 #   · 本模块不创建窗口、不依赖显示器：import 期只定义数据与纯函数，Tk 相关工作全部发生在
 #     ThemeManager.apply(root) 调用期（无头 Linux CI 可安全 import，`import gui` 链路不受影响）。
-#   · 持久化走 config.ini [GUI] gui_theme（键名无 configparser 分隔符 `=` / `:`），
-#     写入经 src/web_config.update_or_append_config_line（缺节/缺键补建 + 行级注释保留 + 原子写），
-#     刻意不使用 config_io.read_config_value——它写回时持 main.file_update_lock，与录制进程耦合，
-#     GUI 进程不该把 [GUI] 键的补写混进录制引擎的锁体系。
-#   · [阶段6] 颜色之外的**尺寸**统一由 src/ui_scale.ScaleProfile 派生：ttk 的 padding、
-#     Treeview 的 rowheight 不再写死像素，而取 scale.px()/scale.padding()/scale.row_height()。
-#     颜色在本模块、尺寸在ui_scale，两边共同遵守「语义 token唯一事实源」这条铁律。
+#   · 持久化走 config.ini [GUI] gui_theme（键名无 configparser 分隔符 `=` / `:`），写入经
+#     src/web_config.update_or_append_config_line（缺节/缺键补建 + 行级注释保留 + 原子写），
+#     刻意不用 config_io.read_config_value：它写回时持 main.file_update_lock，与录制进程耦合。
+#   · 颜色之外的**尺寸**统一由 src/ui_scale.ScaleProfile 派生：ttk 的 padding、Treeview 的
+#     rowheight 不再写死像素，而取 scale.px()/scale.padding()/scale.row_height()。
 from __future__ import annotations
 
 import configparser
@@ -66,13 +63,11 @@ THEME_IDS: tuple[str, ...] = ("light", "dark", "high_contrast")
 # （Colors.TERMINAL_BG），dark 主题下与既有视觉的跳变最小。
 DEFAULT_THEME = "dark"
 
-# 三套主题的 token 取值。全部取值经 CONTRAST_REQUIREMENTS 机检达标
-# （2026-09-29 迭代定稿，迭代脚本已删；tests/test_ui_theme.py 持续回归）。
+# 三套主题的 token 取值。全部取值经 CONTRAST_REQUIREMENTS 机检达标（tests/test_ui_theme.py 持续回归）。
 THEMES: dict[str, dict[str, str]] = {
-    # [2026-10-17 视觉改版] 暖中性 + 赭橙主色（设计语言见 docs/gui-redesign）。
-    # border 不得取浅灰：CONTRAST_REQUIREMENTS 强制 border 对两种底 ≥3.0（非文本
-    # WCAG 1.4.11），故浅色主题边框落到暖灰 #7A766F 一档；成功/危险/警告语义色
-    # 沿用原值（对比度契约已锁定，改版只动品牌色与中性色）。
+    # 暖中性 + 赭橙主色（设计语言见 docs/gui-redesign）。border 不得取浅灰：
+    # CONTRAST_REQUIREMENTS 强制 border 对两种底 ≥3.0（非文本 WCAG 1.4.11），故浅色主题边框落到
+    # 暖灰 #7A766F 一档；成功/危险/警告语义色沿用原值（对比度契约已锁定，改版只动品牌色与中性色）。
     "light": {
         "surface": "#FFFFFF",
         "surface_alt": "#F7F7F5",
@@ -121,15 +116,14 @@ THEMES: dict[str, dict[str, str]] = {
 }
 
 # 对比度契约（机检判据）：(前景槽位, 背景槽位, 最低比值)。
-#   4.5 = WCAG 1.4.3 正文 AA（按钮标签、正文、次级文字均按正文计——13px 未达 WCAG「大字」门槛）；
+#   4.5 = WCAG 1.4.3 正文 AA（按钮标签、正文、次级文字均按正文计——13px 未达「大字」门槛）；
 #   3.0 = WCAG 1.4.11 非文本（边框、状态色块、焦点环）+ 禁用态自加压（WCAG 豁免禁用控件，
 #         这里仍取 3.0 自证，避免「禁用即随便灰」漂移）。
 # 新增槽位/组合时先在此登记，再取色——机检是取色的前置门，不是事后核对。
-# 阶段4 新增三对：primary/surface_alt（导航选中态 fg/bg）、on_primary/success、
-# on_primary/danger（Success/Danger.TButton 的标签）。三者一律按正文 4.5 登记：
-# 为此 light/dark 的 success 从 #16A34A 加深到 #15803D（白字 3.30→5.01，同阶段3 把
-# primary 加深的先例；high_contrast 的 success=#4ADE80 配黑字 12.05、danger 两态
-# 白字 4.83 / 黑字 7.57 均天然达标），gui.Colors.SUCCESS 同批同步取值。
+# 已含三对按钮标签组合：primary/surface_alt（导航选中态 fg/bg）、on_primary/success、
+# on_primary/danger，一律按正文 4.5 登记；为此 light/dark 的 success 加深到 #15803D
+# （白字 3.30→5.01），high_contrast 的 success=#4ADE80 配黑字 12.05、danger 两态白字 4.83 /
+# 黑字 7.57 均天然达标），gui.Colors.SUCCESS 同批同步取值。
 CONTRAST_REQUIREMENTS: tuple[tuple[str, str, float], ...] = (
     ("text", "surface", 4.5),
     ("text", "surface_alt", 4.5),
@@ -167,11 +161,9 @@ def is_valid_hex(color: str) -> bool:
 
 def detect_system_appearance() -> str:
     # 探测操作系统明暗偏好，返回主题 id（"light" 或 "dark"）。
-    # [阶段5] CTk 外观模式（set/get_appearance_mode）随 customtkinter 依赖一并退役，
-    # 「跟随系统」的探测依据由本函数承担：Windows 读注册表 AppsUseLightTheme（0=深色），
-    # macOS 走 `defaults read -g AppleInterfaceStyle`（键缺失/命令失败 = 浅色），
-    # 其余平台无统一口径按浅色兜底。任何探测失败一律回 "light"——探测只是
-    # 「跟随系统」的默认值来源，绝不能让 GUI 起不来（无头 CI 也不会走到：仅 GUI 运行期调用）。
+    # Windows 读注册表 AppsUseLightTheme（0=深色）；macOS 走 `defaults read -g AppleInterfaceStyle`
+    # （键缺失/命令失败 = 浅色）；其余平台无统一口径按浅色兜底。任何探测失败一律回 "light"——
+    # 探测只是「跟随系统」的默认值来源，绝不能让 GUI 起不来（仅 GUI 运行期调用）。
     if sys.platform == "win32":
         try:
             import winreg
@@ -236,8 +228,8 @@ def _shade(color: str, ratio: float) -> str:
 
 def load_theme_preference(config_file: str | Path) -> str:
     # 读取 [GUI] gui_theme。返回 "" 表示「未设置」（节/键缺失、值为空、值不在 THEME_IDS），
-    # 调用方应回退到外观跟随（CTk appearance mode）而非 DEFAULT_THEME——用户没选过主题时
-    # 保持升级前的跟随系统行为，只有显式选择过的偏好才覆盖它。
+    # 调用方应回退到 detect_system_appearance() 而非 DEFAULT_THEME——用户没选过主题时保持
+    # 跟随系统行为，只有显式选择过的偏好才覆盖它。
     parser = tolerant_config_parser()
     try:
         parser.read(config_file, encoding="utf-8-sig")
@@ -274,11 +266,10 @@ class ThemeManager:
     # select/apply 都幂等：select 对相同 id 短路（不重复写配置、不触发下游重绘），
     # apply 对已注册的 ttk 主题名跳过 theme_create（重复创建抛 TclError）。
     #
-    # [阶段6] 尺寸档位（ScaleProfile）与主题 id 同为 apply 的输入：ttk 主题名带上
-    # 档位段（"dlr-light@115"）。这一条是必需的而非可选——同一主题名下theme_create
-    # 只能成功一次，换档位后若沿用旧名就拿不到新的 padding/rowheight；而 Tk 又没有
-    # 「更新已注册主题」的API，只能换名重注册。旧主题名残留在 style.theme_names()
-    # 里是无害的（Tk 不回收，但一行 settings 的内存占用可忽略）。
+    # 尺寸档位（ScaleProfile）与主题 id 同为 apply 的输入，ttk 主题名带上档位段
+    # （"dlr-light@115"）。这一条是必需的：同一主题名下 theme_create 只能成功一次，换档位后
+    # 若沿用旧名就拿不到新的 padding/rowheight，而 Tk 没有「更新已注册主题」的 API，只能换名
+    # 重注册。旧主题名残留在 style.theme_names() 里是无害的（Tk 不回收，占用可忽略）。
     def __init__(self, scale: "ScaleProfile | None" = None) -> None:
         self._theme_id = DEFAULT_THEME
         self._scale = scale if scale is not None else ScaleProfile(100)
@@ -340,10 +331,9 @@ class ThemeManager:
 
     def _build_ttk_settings(self) -> dict[str, dict[str, dict[str, object]]]:
         # 由当前主题 token 派生 ttk 元素配色。三态统一走 map：hover/active/pressed、
-        # selected、disabled/readonly——CTk 没有的状态机制正是本次换 ttk 的机制性收益，
-        # 新增控件类型时在此登记，禁止在控件创建处散落配色。
-        # [阶段6] padding / rowheight / 表格字体同时经 self._scale 派生，故换档位
-        # 必须重注册主题（见类注释「主题名带档位段」）。
+        # selected、disabled/readonly——ttk 的状态机制正是换掉 CTk 的机制性收益，新增控件
+        # 类型时在此登记，禁止在控件创建处散落配色。padding / rowheight / 表格字体同时经
+        # self._scale 派生，故换档位必须重注册主题（见类注释「主题名带档位段」）。
         t = THEMES[self._theme_id]
         s = self._scale
         # 表格字体走样式级配置：Treeview 的行文字与表头是唯一需要在样式里定字体的
@@ -422,7 +412,7 @@ class ThemeManager:
                 },
             },
             # Success/Danger 变体按钮：开始/停止录制、退出确认。悬停色由 _shade 从基础槽位
-            # 派生（无 *_hover 槽位），白字对比度契约见 CONTRAST_REQUIREMENTS 的阶段4 注。
+            # 派生（无 *_hover 槽位），白字对比度契约见 CONTRAST_REQUIREMENTS 的登记项。
             "Success.TButton": {
                 "configure": {
                     "background": t["success"],
@@ -471,9 +461,8 @@ class ThemeManager:
                     ],
                 },
             },
-            # Ghost 变体：原「fg_color=transparent + border_width=1」的次级按钮
-            # （重新读取 / 打开下载目录 / 取消 / 清空日志等），悬停浮到 surface_alt。
-            # [阶段6] ghost 是次级动作，体量比主按钮小一档
+            # Ghost 变体：次级动作按钮（重新读取 / 打开下载目录 / 取消 / 清空日志等），
+            # 悬停浮到 surface_alt，体量比主按钮小一档。
             "Ghost.TButton": {
                 "configure": {
                     "background": t["surface"],
@@ -495,8 +484,8 @@ class ThemeManager:
                 },
             },
             # 侧边栏导航：未选中 muted 文字、悬停浮 surface_alt；选中态（NavActive）
-            # 用 surface_alt 底 + primary 文字（阶段4 起导航选中不再走 CTk 颜色回写）。
-            # anchor="w" 与 CTkButton(anchor=tk.W) 对齐：导航与侧栏动作按钮一律左对齐。
+            # 用 surface_alt 底 + primary 文字。
+            # anchor="w"：导航与侧栏动作按钮一律左对齐。
             "Nav.TButton": {
                 "configure": {
                     "background": t["surface"],
@@ -566,7 +555,7 @@ class ThemeManager:
                     "foreground": [("disabled", t["disabled_fg"])],
                 },
             },
-            # 输入类控件原先无 padding（文字贴边），阶段6 补 pad_row 与行内浮层同档
+            # 输入类控件原先无 padding（文字贴边），故补 pad_row 与行内浮层同档
             "TEntry": {
                 "configure": {
                     "fieldbackground": t["surface_alt"],
@@ -622,9 +611,8 @@ class ThemeManager:
                     "fieldbackground": t["surface_alt"],
                     "foreground": t["text"],
                     "bordercolor": t["border"],
-                    # 行高与旧 34px 行卡的信息密度对齐（默认 ~20px 过挤）；
-                    # [阶段6] 改由 scale 派生并带下限——行高不同步放大会让大字号
-                    # 文字上下缘贴边（85% 档尤其明显）
+                    # 行高与旧 34px 行卡的信息密度对齐（默认 ~20px 过挤）；改由 scale 派生并带下限
+                    # ——行高不同步放大会让大字号文字上下缘贴边（85% 档尤其明显）
                     "rowheight": s.row_height(),
                     "font": row_font,
                 },

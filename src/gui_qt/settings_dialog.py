@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 # 高级设置：config.ini 全文编辑器。
 #
-# 为什么仍然整文件编辑而不是逐项控件：config.ini 的键会随版本增删（缺键补写也是录制进程的
-# 行为之一），做成结构化表单就意味着每加一个键都要改 GUI，且「用户想改但表里没有」的情形
-# 无法降级。旧的 tkinter 版已经是这个形态，本次只是换了对等物。
+# 为什么仍整文件编辑而不是逐项控件：config.ini 的键会随版本增删（缺键补写也是录制进程的
+# 行为之一），做成结构化表单则每加一个键都要改 GUI，「用户想改但表里没有」也无法降级。
 #
-# MID-55 的两份基线（编辑器基线 + 磁盘快照）与保存前裁决逻辑全部保留：
-# 录制进程会在运行期写回凭据、禁用 SSL 校验的平台清单与缺键补写，
-# 跨进程没有锁可依赖，整文件写回只能靠显式检测 + 交用户裁决。
+# MID-55 的两份基线（编辑器基线 + 磁盘快照）与保存前裁决必须保留：录制进程会在运行期
+# 写回凭据、禁用 SSL 校验的平台清单与缺键，跨进程没有锁可依赖，整文件写回只能靠
+# 显式检测 + 交用户裁决。
 from __future__ import annotations
 
 import os
@@ -79,10 +78,9 @@ class AdvancedSettingsDialog(QDialog):
         btn_row.addWidget(self.save_btn)
         root.addLayout(btn_row)
 
-        # 磁盘监听用 QTimer（Qt 的 timer 挂在窗体自己身上，窗体销毁自动停，
-        # 不必像 Tk 那样保存 after id 并在 destroy 前手工 cancel）。
-        # 补（M-15，2026-10-18）：「窗体销毁自动停」这条路本窗口实际走不到——对话框带 parent，
-        # close/hide 不销毁 C++ 对象，所以启停还得自己按可见性管，见 hideEvent/showEvent。
+        # 磁盘监听用 QTimer。注意「窗体销毁自动停」在这里走不到：对话框带 parent，close/hide
+        # 不销毁 C++ 对象，启停必须按可见性自己管（见 hideEvent/showEvent），否则每开一次
+        # 窗口就留下一个每 5s 读盘的幽灵定时器（M-15）。
         self._watch_timer = QTimer(self)
         self._watch_timer.setInterval(_WATCH_INTERVAL_MS)
         self._watch_timer.timeout.connect(self._watch_config_file)
@@ -95,16 +93,10 @@ class AdvancedSettingsDialog(QDialog):
         return normalize_editor_text(self.editor.toPlainText())
 
     # 随窗口可见性启停轮询（M-15）。
-    # 为什么判 hide/show 而不是 accept/reject：accept()/reject() 只是 QDialog.done() →
-    # hide()，而标题栏 X、parent.close()、窗口最小化到托盘后再关都只走 hide 这条路，
-    # 挂在那两个方法上会漏掉一半关闭路径。
-    # 后果（修复前）：对话框由主窗口传入 parent，Python/C++ 两侧都不会随 close 释放，
-    # 于是 _watch_timer 在窗口已不可见后仍每 5s 读一遍 config.ini、并可能对不可见窗口
-    # 弹 QMessageBox；主窗口每次 open 都 new 一个新实例（见 main_window.open_advanced_settings），
-    # 开/关 N 轮就积累 N 个幽灵定时器。
-    # 为什么选「停表」而不是「复用同一实例」：新建实例正是 `_load_config()` 重读磁盘、
-    # 重建两份基线（编辑器基线 + 磁盘快照，MID-55）的时机，复用就得新增一条重开时的
-    # 重载路径并改动那两套基线的语义——侵入更大，且复用后仍要把本停表写成 hide 钩子。
+    # 为什么判 hide/show 而不是 accept/reject：accept()/reject() 只是 done() → hide()，而
+    # 标题栏 X、parent.close()、最小化到托盘后再关都只走 hide 这条路。
+    # 为什么停表而不是复用同一实例：新建实例正是 _load_config() 重读磁盘、重建两份基线
+    # （编辑器基线 + 磁盘快照，MID-55）的时机，复用就得新增重开时的重载路径并改动基线语义。
     def hideEvent(self, event: QHideEvent) -> None:  # noqa: N802 - Qt 的重写点必须这个名
         self._watch_timer.stop()
         super().hideEvent(event)
@@ -115,8 +107,7 @@ class AdvancedSettingsDialog(QDialog):
             self._watch_timer.start()
 
     def reload_from_disk(self) -> None:
-        # M-35（2026-10-19）：窗口被复用时（关闭后再次打开）必须重新读盘。复用实例而不重载
-        # 会把上次打开时那份快照继续显示出来——用户以为看到的是当前 config.ini，实际是旧内容，
+        # M-35：窗口被复用时（关闭后再次打开）必须重新读盘，否则显示的是上次的快照，
         # 保存时还会把中间的磁盘改动静默覆盖掉。
         self._load_config()
 

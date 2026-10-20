@@ -7,10 +7,9 @@
 # 2. 速率限制          -> src/stream_select.py 的 _douyin_rate_limit()（最小间隔 + 串行化）
 # 3. 凭证共享          -> src/cookie_cache.py 的 singleflight()（同 key 只拉一次、多模块复用）
 #
-# [2026-09-23 重写（SEV-2222 / SEV-2223，报告 §6.3 第 20 条）]
-# 本文件原形态是「在测试里重写一份锁 / 限流器 / 凭证缓存，再断言这份自实现」——
-# 把 src/ 的对应实现整个删掉仍然全绿，属典型假绿（AGENTS.md「测试不得自实现被测逻辑」）。
-# 现三处用例一律**直接驱动真实入口**，只允许打桩网络层与时间常量：
+# 口径（SEV-2222 / SEV-2223）：早期形态是「在测试里重写一份锁 / 限流器 / 凭证缓存，再断言这份
+# 自实现」，把 src/ 的对应实现整个删掉仍然全绿（典型假绿）。现在三处用例一律**直接驱动真实入口**，
+# 只允许打桩网络层与时间常量：
 #   - test_lock_prevents_duplicate_fetch   驱动 src.ttwid.get_ttwid（桩 _fetch_ttwid）
 #   - TestRateLimit                        驱动 src.stream_select._douyin_rate_limit
 #                                          （桩 stream_select 命名空间里的 time + main 的两个常量）
@@ -117,9 +116,8 @@ class TestThreadSafeCredential:
             t.start()
         for t in threads:
             t.join(timeout=20)
-        # LT-04（2026-10-18 审查）：join(timeout=20) **返回**不等于线程已退出——去重链挂死时 join
-        # 超时静默返回，本用例只能靠「结果条数」间接兜住，而线程卡在临界区、恰好把已收集的结果
-        # 凑齐的形态仍会落进通过侧。逐线程断言 is_alive 为 False 才真正钉住「10 线程全部跑完」。
+        # LT-04：join(timeout=20) **返回**不等于线程已退出——去重链挂死时 join 超时静默返回，
+        # 本用例只能靠「结果条数」间接兜住；逐线程断言 is_alive 为 False 才钉住「10 线程全部跑完」。
         for t in threads:
             assert not t.is_alive(), "join 超时后线程仍存活：跨线程去重链挂死，不得判绿"
 
@@ -167,12 +165,9 @@ class TestRateLimit:
 
     def test_rate_limit_serializes_concurrent_calls(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # 5 个房间线程**同时**进入限流器（Barrier 保证真并发，否则线程启动开销就把它们自然错开，
-        # 那时「没有锁」与「有锁」的观测结果相同 —— 首版即踩了这坑，变异验证不成立）。
-        # 真实 douyin_rate_lock 让「读间隔 → 补睡 → 记时刻」成为临界区：相邻请求必然相差
-        # 至少一个最小间隔。把 with main.douyin_rate_lock 去掉后，5 个线程同时读到同一个
-        # last_request_time、各自补睡同一个差值、写入几乎相同的时刻 → 相邻间隔塌到 ~0，本条变红。
-        # 这里刻意用**真实时钟**（不用假时钟）：假时钟的 sleep 自带互斥，会把无锁形态也
-        # 「救」成串行，见上面的失效推演。代价是每条用例真等 ~0.05s×N，可接受。
+        # 「没有锁」与「有锁」的观测结果相同）。真实 douyin_rate_lock 让「读间隔 → 补睡 → 记时刻」
+        # 成为临界区：相邻请求必然相差至少一个最小间隔。刻意用**真实时钟**：假时钟的 sleep 自带
+        # 互斥，会把无锁形态也「救」成串行；代价是每条用例真等 ~0.05s×N。
         monkeypatch.setattr(main, "douyin_min_interval", 0.05, raising=False)
         monkeypatch.setattr(main, "douyin_last_request_time", time.time(), raising=False)
 
@@ -191,8 +186,8 @@ class TestRateLimit:
             t.start()
         for t in threads:
             t.join(timeout=20)
-        # LT-04（2026-10-18 审查）：同上一条口径——join 超时返回时线程可能还卡在 douyin_rate_lock
-        # 里，`len(stamps) == 5` 只是间接证据；逐线程断言已退出才挡住「死锁但判绿」。
+        # LT-04：join 超时返回时线程可能还卡在 douyin_rate_lock 里，`len(stamps) == 5` 只是间接
+        # 证据；逐线程断言已退出才挡住「死锁但判绿」。
         for t in threads:
             assert not t.is_alive(), "join 超时后线程仍存活：限流临界区死锁，不得判绿"
 
@@ -240,9 +235,8 @@ class TestCredentialSharing:
             t.start()
         for t in threads:
             t.join(timeout=20)
-        # LT-04（2026-10-18 审查）：singleflight 的跨循环交付若挂住，等待者线程永不退出，
-        # 而 join(timeout=20) 只是超时返回、不报错——必须逐线程断言已退出，否则「死锁」会
-        # 以「值不齐」的间接形态出现，且被后面第一条断言的措辞误导成「缓存没生效」。
+        # LT-04：singleflight 的跨循环交付若挂住，等待者线程永不退出，而 join(timeout=20) 只是
+        # 超时返回、不报错——逐线程断言已退出，否则「死锁」会以「值不齐」的间接形态出现。
         for t in threads:
             assert not t.is_alive(), "join 超时后线程仍存活：singleflight 临界区死锁，不得判绿"
 

@@ -1,22 +1,19 @@
 # tests/test_regression_2026_09_22_postprocess.py - src/video_postprocess.py 的 MIN-2236 回归锁。
 #
 # 覆盖三条 2026-09-23 实测确认「仍未修复」的条目：
-#   ① MIN-2236① generate_subtitles 的写盘段无 try/except：
-#      该线程跑在**录制子进程**里（main.py 的 _subtitle_thread_target），而全仓
-#      threading.excepthook 只在 gui.py 装过 → 磁盘满 / 目录被改名 / 路径过长时线程静默死掉，
-#      traceback 落 stderr 后被 display_info 的 "\033[2J" 刷掉，房间仍显示「正在录制」。
-#      锁：异常不外抛 + 告警按时间窗聚合 + 失败后按间隔退避重开 + 恢复只报一次。
+#   ① MIN-2236① generate_subtitles 的写盘段无 try/except：线程跑在**录制子进程**里（main.py 的
+#      _subtitle_thread_target），而全仓 threading.excepthook 只在 gui.py 装过 → 磁盘满 / 目录被改名 /
+#      路径过长时线程静默死掉，traceback 落 stderr 后被 display_info 的 "\033[2J" 刷掉，房间仍显示
+#      「正在录制」。锁：异常不外抛 + 告警按时间窗聚合 + 失败后按间隔退避重开 + 恢复只报一次。
 #   ② MIN-2236⑤ converts_m4a / segment_video 未接 MIN-04 的半成品清理（只有 converts_mp4 有）
 #      → 失败/超时/取消后留下「大小可观但打不开」的产物被上层当有效文件。
 #      锁：三个入口的失败路径都清理，且**只删本次新增**（快照不可得时一律不删）。
 #   ③ MIN-2236⑥ segment_video 缺 `-n`：撞名时 ffmpeg 会问 Overwrite、无 stdin → EOF →
-#      走满 600s 超时才被 kill（2026-09-12 审查 6.1 在 converts_mp4 上修掉的同一形态）。
-#      锁：三条命令都带 `-n` 且紧跟输出参数。
+#      走满 600s 超时才被 kill。锁：三条命令都带 `-n` 且紧跟输出参数。
 #
-# 全部离线：ffmpeg 由 vp._run_ffmpeg_checked 的替身模拟，**不启动真实进程**（交付约定）；
-# time.sleep 经模块内 time 引用的 SimpleNamespace 浅拷贝替换（AGENTS：不改 stdlib 本体）。
-# 计时口径：generate_subtitles 的退避/聚合以循环自身的秒计数 index_time 为基准，
-# 故用例只需控制 sleep 次数即可确定性推进窗口，不依赖真实时钟。
+# 全部离线：ffmpeg 由 vp._run_ffmpeg_checked 的替身模拟，不启动真实进程；time.sleep 经模块内 time
+# 引用的 SimpleNamespace 浅拷贝替换。计时口径：generate_subtitles 的退避/聚合以循环自身的秒计数
+# index_time 为基准，故用例只需控制 sleep 次数即可确定性推进窗口，不依赖真实时钟。
 
 import ast
 import importlib.util
@@ -36,7 +33,7 @@ import src.video_postprocess as vp
 ROOT = Path(__file__).resolve().parents[1]
 _PLACEHOLDER_RE = re.compile(r"\{([^{}]+)\}")
 
-# 本模块新增（尚未并入四语目录）的 msgid —— 主会话据 _i18n_pending_postprocess.json 合并。
+# 本模块新增的 msgid（已并入四语目录；pending 袋子已随中央合并删除）。
 NEW_MSGIDS = [
     "[后处理]无法读取产物目录，本次跳过半成品清理: {out_path} - {type_name}: {e}",
     "[后处理]失败后无法读取产物目录，半成品未清理: {out_path} - {type_name}: {e}",
@@ -136,9 +133,8 @@ class TestM4aPartialCleanup:
         assert src.exists()
 
     def test_pre_existing_m4a_is_kept(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        # 调用前同名 .m4a 已存在 → 不删：那可能是上一次的成功产物（MIN-04 既有判据）。
-        # 桩里刻意让「本次 ffmpeg」又往同名路径写了一截（覆盖失败的情形），锁的是**文件不被删**，
-        # 而不是内容不变——判据是「快照里出现过」，删掉它等于毁掉用户可用产物。
+        # 调用前同名 .m4a 已存在 → 不删：那可能是上一次的成功产物（MIN-04 既有判据）。桩里刻意让
+        # 「本次 ffmpeg」又往同名路径写了一截，锁的是**文件不被删**而非内容不变（判据是「快照里出现过」）。
         src = _make_source(tmp_path, "live.ts")
         out = tmp_path / "live.m4a"
         out.write_bytes(b"previous-good-file")
@@ -291,9 +287,8 @@ class TestSubtitleWriteGuard:
     def test_warning_aggregated_per_window(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, warnings_sink: list[str]
     ) -> None:
-        # 70 轮（每轮 1 秒）→ 只在第 1、61 秒各一条，验证「按时间窗聚合」而非每帧一条。
-        # 数字核对：第 1 轮 open 失败即告警（本窗口 1 条）；随后每 10s 才重试一次，
-        # 到第 61 轮再次告警时，窗口内累计 60 条、总累计 61 条（含被退避跳过的帧）。
+        # 70 轮（每轮 1 秒）→ 只在第 1、61 秒各一条，验证「按时间窗聚合」而非每帧一条。第 1 轮 open
+        # 失败即告警；随后每 10s 才重试，到第 61 轮再次告警时窗口内累计 60 条、总累计 61 条。
         target = tmp_path / "gone_dir" / "sub"
         _run_subtitles_for(monkeypatch, "room-b", vp._SUB_WRITE_WARN_WINDOW + 10)
         vp.generate_subtitles("room-b", str(target))
@@ -372,8 +367,7 @@ def _tr_templates_in_module() -> set[str]:
 
 
 def _catalog_keys() -> set[str]:
-    # 直接复用 scripts/compile_po.py 的权威 .po 解析（多行 msgid / 转义还原均正确），
-    # 不自己写第二套解析口径
+    # 直接复用 scripts/compile_po.py 的权威 .po 解析（多行 msgid / 转义还原均正确），不写第二套口径
     spec = importlib.util.spec_from_file_location("_compile_po_probe", ROOT / "scripts" / "compile_po.py")
     assert spec is not None and spec.loader is not None
     cp = importlib.util.module_from_spec(spec)
@@ -382,9 +376,8 @@ def _catalog_keys() -> set[str]:
 
 
 def _four_catalogs() -> dict[str, dict[str, str]]:
-    # 中央合并完成后，_i18n_pending*.json 按 AGENTS 收尾约定删除（它只是并行修复防撞车的
-    # 一次性中转袋）。断言对象因此必须是四语目录本身——「袋子写过、目录没合并」同样要红。
-    # 复用 i18n 自己的三个加载器，不写第二套解析口径（本仓反复登记过两套解析不一致的假绿）。
+    # 断言对象是四语目录本身：pending 袋子已按收尾约定删除，「袋子写过、目录没合并」同样要红。
+    # 复用 i18n 自己的三个加载器，不写第二套解析口径。
     from pathlib import Path
 
     import i18n
@@ -397,17 +390,16 @@ def _four_catalogs() -> dict[str, dict[str, str]]:
     }
     loaded: dict[str, dict[str, str]] = {}
     for lang_key, value in cats.items():
-        # 逐语言断言而不是先算 broken 再 dict(v)：后者 mypy 仍视 value 为可空，
-        # 前者让「目录缺件」与「类型收窄」共用同一个事实。
+        # 逐语言断言而不是先算 broken 再 dict(v)：后者 mypy 仍视 value 为可空，前者让「目录缺件」
+        # 与「类型收窄」共用同一个事实。
         assert value is not None, f"{lang_key} 语言目录加载失败或缺失（目录缺件 ≠ 用例可跳过）"
         loaded[lang_key] = dict(value)
     return loaded
 
 
 def _assert_registered(msgids: set[str] | list[str], cats: dict[str, dict[str, str]] | None = None) -> None:
-    # 「已登记」= 四语目录都有该 msgid，且三条非默认语言的译文**非空**。
-    # 只查 zh_CN 会漏掉「键在但译文空」的静默不翻译；译文留空正是 MI-23 之后
-    # 「繁体用户看到的仍是简体」的成因形态。
+    # 「已登记」= 四语目录都有该 msgid，且三条非默认语言的译文**非空**。只查 zh_CN 会漏掉「键在但
+    # 译文空」的静默不翻译；译文留空正是 MI-23 之后「繁体用户看到的仍是简体」的成因形态。
     cats = cats or _four_catalogs()
     for msgid in msgids:
         missing = sorted(lang for lang, cat in cats.items() if msgid not in cat)

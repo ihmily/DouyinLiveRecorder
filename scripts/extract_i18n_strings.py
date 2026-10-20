@@ -4,25 +4,22 @@
 # 与四语目录（zh_CN.po / en_US.json / en_GB.json / zh_TW.yaml）比对并打印缺失清单。
 # 只读工具、仅供维护期使用：不进运行时链路，也不在 AGENTS.md 的门禁命令块里（缺失靠人工跟进）。
 #
-# 三个**扫不到的盲区**（AGENTS.md 第 14 条同源）——这三类新增用户可见文案时必须手工登记进
-# 四语目录并重编 .mo，否则本脚本会一直报「0 缺失」的假绿：
-#   ① color_obj.print_colored(...)（main.py 的彩色控制台输出；它不是 print 调用）；
-#   ② messagebox.show*（gui.py 的弹窗标题与正文）；
-#   ③ 推送正文（msg_push.py 的裸字面量 + str.replace 模板）。
+# 三个**扫不到的盲区**（AGENTS.md 第 14 条同源）——新增这类用户可见文案必须手工登记进四语
+# 目录并重编 .mo，否则本脚本会一直报「0 缺失」的假绿：
+#   ① color_obj.print_colored(...)（main.py 彩色控制台输出，不是 print 调用）；
+#   ② messagebox.show*（gui.py 弹窗标题与正文）；③ 推送正文（msg_push.py 裸字面量 + replace 模板）。
 # 另两个边界：web/app.js 自带四套内嵌目录（与后端目录互不相干，不在扫描面内，须手工五处同改）；
 # 「疑似冗余」段只是参考级——孤儿 msgid（目录比代码多）不会变红，改源码删功能时要人工回查。
 #
 # f-string 模板还原约定（与既有目录一致）：
-#   1. 格式说明符（如 :.0f）丢弃——{_backoff:.0f} → {_backoff}
-#   2. 转换符（如 !r）丢弃——{value!r} → {value}
-#   3. 表达式内双引号转单引号——{d.get("k", "v")} → {d.get('k', 'v')}
-#      （po msgid 内双引号需转义，目录统一用单引号形态）
+#   1. 丢弃格式说明符：{_backoff:.0f} → {_backoff}
+#   2. 丢弃转换符：{value!r} → {value}
+#   3. 表达式内双引号转单引号：{d.get("k", "v")} → {d.get('k', 'v')}（po msgid 内双引号需转义）
 #   4. 隐式拼接（相邻字符串/f-string 字面量）按语义合并为单条模板
-#   5. i18n.tr(模板, **kw) 的首参常量串即模板（占位符已是标识符形态，
-#      如 {masked_url}/{type_name}）——扫描时同样收录，否则 tr 化后的调用点
-#      会从提取结果中消失，缺失检测退化为假绿（f-string 与 tr 双形态并存期必须都扫）
-#   注意 4/5 只递归**首参/常量实参**：形参日志一律写 i18n.tr(常量模板, **kw)，
-#   实参位的 f-string（`_backoff=f"{v:.0f}"`）发生在查表之后、不影响 msgid，故不收录。
+#   5. i18n.tr(模板, **kw) 的首参常量串即模板（占位符已是标识符形态）——不收录会让 tr 化后的
+#      调用点从提取结果中消失，缺失检测退化为假绿（f-string 与 tr 双形态并存期必须都扫）
+#   4/5 只递归**首参/常量实参**：实参位的 f-string（`_backoff=f"{v:.0f}"`）发生在查表之后、
+#   不影响 msgid，故不收录。
 
 import ast
 import importlib.util
@@ -62,7 +59,7 @@ LOGGER_METHODS = {
 
 def _load_compile_po() -> object:
     # 按文件路径加载 scripts/compile_po.py 复用它的 parse_po()：.po 的多行 msgid 与转义还原
-    # 只有那一份实现是对的，本脚本再写一份解析就会与它漂移（键集合比对随之假红/假绿）
+    # 只有那一份实现是对的，本脚本再写一份就会与它漂移（键集合比对随之假红）
     spec = importlib.util.spec_from_file_location("compile_po_probe", ROOT / "scripts" / "compile_po.py")
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
@@ -156,8 +153,8 @@ def is_valuable(text: str) -> bool:
         return False
     # 剥掉 {expr} 占位符块后须残留自然语言（CJK 或字母词），否则属纯占位符
     # 模板（如 {color}{text}{Color.RESET} / {rec_info}/{filename}），无翻译价值。
-    # 注意不能先剥花括号再查字母：占位符表达式内的标识符（color/Color）也是字母，
-    # 会让纯模板被误判为有价值——必须以「花括号块之外」的残渣为准。
+    # 不能先剥花括号再查字母：占位符表达式内的标识符（color/Color）也是字母，会把纯模板
+    # 误判为有价值——必须以「花括号块之外」的残渣为准。
     residue = re.sub(r"\{[^{}]*\}", "", text)
     return any(ch.isalpha() or "\u4e00" <= ch <= "\u9fff" for ch in residue)
 

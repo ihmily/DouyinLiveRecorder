@@ -1,22 +1,21 @@
 # M-13 回归锁（2026-09-29 审查）：B站弹幕 host 轮换期间不得投「假关闭」事件。
 #
 # 被测生产实现：src/platforms/bilibili.py::BilibiliDanmaku 的 _report_close 闸门 + start() 的
-# host 轮换循环（挂在 WsClient 的 on_close 位上的是闸门，不是裸回调）。
+# host 轮换循环（挂在 WsClient.on_close 上的是闸门，不是裸回调）。
 #
 # 失效形态（修复前）：每个候选 host 各建一个 WsClient 且都把 on_close 直挂 self._on_close
-# （消费端 = src/collector.py::_on_close → hub.room_closed）。host[0] 耗尽 2 次重连时先落一条
-# 「房间关闭」，而 start() 随后继续试 host[1]；host[1] 连上又报 room_connected →
-# 监控页「假关闭→重连」闪烁 + 一条与事实不符的落盘；两候选都失败时同一房间关闭事件投两次。
+# （消费端 = src/collector.py::_on_close → hub.room_closed）。host[0] 耗尽 2 次重连即落一条
+# 「房间关闭」，而 start() 随后继续试 host[1]；host[1] 连上又报 room_connected → 监控页
+# 「假关闭→重连」闪烁 + 一条与事实不符的落盘；两候选都失败时同一关闭事件投两次。
 # WsClient 自带的 _close_reported 是**每实例**的，挡不住跨实例重复上报。
 #
-# 打桩边界：只把网络层 WsClient 换成替身（真实现要打 wss:// 且要等满重连退避）；
-# 白名单过滤、host 轮换循环、闸门判定、_on_ws_ready/_auth_ok 接线一律走生产代码——
-# 测试里没有第二套轮换逻辑，删掉 _report_close 的闸门会让 ①③ 直接变红（已实跑变异验证）。
+# 打桩边界：只把网络层 WsClient 换成替身（真实现要打 wss:// 且要等满重连退避）；白名单过滤、
+# 轮换循环、闸门判定、_on_ws_ready/_auth_ok 接线一律走生产代码——测试里没有第二套轮换逻辑，
+# 删掉 _report_close 的闸门会让「中间态不上报」「成功不假关闭」两条直接变红（已实跑变异验证）。
 #
-# 同时锁住两条 AGENTS 红线（本项不得触碰）：
-#   · 弹幕 WS 不跟随系统代理（proxy 一律 None）；
-#   · 单 host 的重连预算 max_reconnect=2 / reconnect_interval=3.0 / connect_timeout=8.0 与
-#     backup_url 主备通道保持原样（两套轮换机制并存是既有形态，本次只收口上报语义）。
+# 同时锁住两条 AGENTS 红线（本项不得触碰）：弹幕 WS 不跟随系统代理（proxy 一律 None）；
+# 单 host 重连预算 max_reconnect=2 / reconnect_interval=3.0 / connect_timeout=8.0 与 backup_url
+# 主备通道保持原样（两套轮换机制并存是既有形态，本次只收口上报语义）。
 
 from collections.abc import Callable
 from typing import Any
@@ -33,8 +32,8 @@ _HOST_C = "c.chat.bilibili.com"
 
 class _StubWs:
     # WsClient 替身：只替换「敲一个 host 的连、然后按脚本回报」这一步。
-    # script 取值：'ok' 触发 on_ready（会话建成）；'exhaust' 触发 on_close（重连耗尽）；
-    # 'auth_reject' 复刻 _reject_auth 的终态形态（先置 DanmakuBase._stopped，再上报关闭）。
+    # script：'ok' 触发 on_ready（会话建成）；'exhaust' 触发 on_close（重连耗尽）；
+    # 'auth_reject' 复刻 _reject_auth 终态（先置 DanmakuBase._stopped，再上报关闭）。
 
     def __init__(self, **kwargs: Any) -> None:
         self.kwargs: dict[str, Any] = kwargs
@@ -122,7 +121,7 @@ class TestHostRotationCloseGate:
     async def test_first_host_exhaustion_is_not_reported_while_candidates_remain(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # 断言①：host[0] 耗尽、仍有 host[1] 未尝试 → 监控枢纽侧的 on_close 一次都不该被调。
+        # host[0] 耗尽、仍有 host[1] 未尝试 → 监控枢纽侧的 on_close 一次都不该被调。
         factory, reported, _connected, client = _install(monkeypatch, ["exhaust", "ok"], [_HOST_A, _HOST_B])
         await client.start(dict(factory.client_args))
         assert reported == [], f"host[0] 轮换中间态被当成房间关闭上报了: {reported}"
@@ -130,7 +129,7 @@ class TestHostRotationCloseGate:
     async def test_last_host_success_reports_no_close_after_first_host_failed(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # 断言③：host[1] 成功时整条链路不得出现「假关闭→重连」——on_close 恒空、on_ready 恰好一次。
+        # host[1] 成功：on_close 恒空、on_ready 恰好一次，不得出现「假关闭→重连」。
         factory, reported, connected, client = _install(monkeypatch, ["exhaust", "ok"], [_HOST_A, _HOST_B])
         await client.start(dict(factory.client_args))
         assert [i.kwargs["url"] for i in factory.instances] == [
@@ -142,7 +141,7 @@ class TestHostRotationCloseGate:
         assert reported == [], f"修复前这里是 ['重连超过最大次数…']（假关闭），实为 {reported}"
 
     async def test_all_hosts_exhausted_reports_exactly_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # 断言②：三个候选全部耗尽 → 恰好一次 room_closed（跨 WsClient 实例的去重）。
+        # 三个候选全部耗尽 → 恰好一次 room_closed（跨 WsClient 实例去重）。
         factory, reported, connected, client = _install(
             monkeypatch, ["exhaust", "exhaust", "exhaust"], [_HOST_A, _HOST_B, _HOST_C]
         )

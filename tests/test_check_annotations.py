@@ -1,21 +1,19 @@
-# scripts/check_annotations.py 中「符号可达性检查」的回归用例。
+# scripts/check_annotations.py「符号可达性检查」与 --snapshot 防呆的回归用例。
 #
-# 背景（2026-09-22）：删除模块级函数/常量只删定义、留下调用点，会让 mypy / basedpyright /
-# pytest 三面同时转红；该形态已第二次复现（CODE_REVIEW_2026-09-21 补-N04），故固化成门禁动作。
-# 本文件锁住三件事：
+# 本文件锁三件事：
 #   1) 真能报：留下调用点但全仓无绑定的名字必须被点名（含文件与行号）；
-#   2) 不误报：导入 / def / 参数 / 内建 / dunder 这些有来源或由解释器注入的名字一律放行
-#      ——判据是「宁漏勿噪」，误报会让门禁天天红、反而被忽略；
-#   3) 当前仓库零悬空引用：将来谁删了符号留下调用点，本条立刻变红（端到端回路锁）。
+#   2) 不误报：导入 / def / 参数 / 内建 / dunder 一律放行——判据是「宁漏勿噪」，
+#      误报会让门禁天天红、反而被忽略；
+#   3) 当前仓库零悬空引用：谁删了模块级符号留下调用点，本条立刻变红（端到端回路锁）。
+#
+# 另覆盖 `_reject_dangerous_baseline`（M-23）：它防的是误把家目录 / 系统目录 / 仓库根本体
+# 当基线目录、被 shutil.rmtree 整棵删掉，故两个方向都必须成立——危险输入逐个拒绝，
+# 工作区子目录（如 `<仓库根>/.workbuddy/ast-baseline`）必须放行；旧判据
+# `home in resolved.parents` 在家目录检出下会把后者一起误拒，功能在常见布局下不可用。
+# 用例一律把 home/cwd 打桩成 tmp_path 下的受控目录（不改 stdlib pathlib 本体），
+# 判定与本机检出位置无关（Linux CI 与 Windows 同真）。
 #
 # 全部离线：只做 AST 扫描，不执行任何子进程。
-# [2026-10-18 扩展] 新增被测面（M-23）：--snapshot 的基线目录防呆 `_reject_dangerous_baseline`
-#   的判定表。它防的是「误把家目录/系统目录/仓库根本体当基线目录，被 shutil.rmtree 整棵删掉」，
-#   本文件既锁「危险输入仍逐个拒绝」，也锁「工作区子目录必须放行」——后者是 M-23 的成因：
-#   检出在家目录下（Windows `C:\Users\<you>\...`、Linux `~\...`，属常态）时旧判据连工具自己
-#   提示的 `.workbuddy/ast-baseline` 一起误拒，功能在常见布局下不可用。
-#   两组用例一律把 home/cwd 打桩成 tmp_path 下的受控目录（不改 stdlib pathlib 本体），
-#   因此不依赖本机究竟检出的哪里，Linux CI 与 Windows 本机判定一致。
 
 from __future__ import annotations
 
@@ -52,7 +50,7 @@ def _write(root: Path, rel: str, source: str) -> None:
 
 
 def test_dangling_call_site_is_reported(tmp_path: Path) -> None:
-    # 复现 main.py:1346 的形态：定义已被删除，调用点留在 `and` 右侧
+    # 复现「定义已删除、调用点留在 `and` 右侧」的形态：短路会在多数场景遮住它，肉眼易误判
     _write(
         tmp_path,
         "pkg/mod.py",
@@ -118,20 +116,18 @@ def test_repository_has_no_dangling_symbols() -> None:
 
 
 # ---------------------------------------------------------------------------
-# M-23：--snapshot 基线目录防呆的判定表
+# --snapshot 基线目录防呆的判定表（M-23）
 #
 # 三个方向都要锁，缺一个都会让功能退化成另一种故障：
-#   ① 「工作区子目录放行」——M-23 的原缺陷（误拒），不锁则功能在家目录检出下依旧不可用；
-#   ② 「危险输入仍拒绝」——防呆本体（rmtree 不可逆），削掉它比误拒更危险，逐格钉死；
+#   ① 工作区子目录放行——不锁则功能在家目录检出下依旧不可用；
+#   ② 危险输入仍拒绝——rmtree 不可逆，削掉它比误拒更危险；
 #   ③ 放行不得越界到「cwd 本体/祖先」与「cwd 就是家目录」两种入口形态。
-# 用例一律把 home/cwd 打桩成 tmp_path 下的受控目录，因此判定与本机检出位置无关（Linux CI 同真）。
 # ---------------------------------------------------------------------------
 
 
 def _fixed_layout_path(home: Path, cwd: Path) -> Any:
-    # 只替换被测模块命名空间里的 Path 名字（不改 stdlib pathlib.Path 本体——那会波及全进程，
-    # 见 AGENTS.md「替身禁止裸赋值共享模块属性；跨模块 stdlib 替身走被测模块命名空间的 shim」）。
-    # 基类取本机 flavour：Windows 上用 PosixPath 建目录名会把盘符当普通段处理，判定就失真了。
+    # 只替换被测模块命名空间里的 Path 名字（不改 stdlib 本体，否则波及全进程）。
+    # 基类取本机 flavour：Windows 上用 PosixPath 建目录名会把盘符当普通段处理，判定就失真。
     base_flavour: Any = type(Path())
 
     class _Fixed(base_flavour):  # type: ignore[misc]
@@ -155,8 +151,7 @@ def _reject_candidate(monkeypatch: pytest.MonkeyPatch, home: Path, cwd: Path, ca
 
 @pytest.mark.parametrize("layout", ["under_home", "outside_home"], ids=lambda v: f"检出在{v}")
 def test_snapshot_guard_accepts_workspace_subdir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, layout: str) -> None:
-    # ① 工具自己提示的形态：`<仓库根>/.workbuddy/ast-baseline` 必须放行。
-    # under_home 那一格就是 M-23 的实测缺陷面（旧判据 `home in resolved.parents` 会把它误拒）。
+    # ① 工具自己提示的形态必须放行；under_home 那一格就是 M-23 的缺陷面（旧判据会误拒）。
     base = tmp_path.resolve()
     home = base / "home-user"
     repo = (home / "repos" / "DouyinLiveRecorder") if layout == "under_home" else (base / "work" / "DouyinLiveRecorder")

@@ -1,16 +1,11 @@
 # -*- coding: utf-8 -*-
 # 系统托盘（QSystemTrayIcon）。
 #
-# 为什么不再是 pystray：旧版为了 macOS 主线程模型额外拉了 pystray + Pillow 两条依赖，
-# 而 Qt 自带 QSystemTrayIcon 且天然跑在主线程（没有 macOS 的 NSApp 线程限制问题）。
-# [历史注] 原注释称「pystray/Pillow 仍留在依赖清单里——Web 入口（src/web_tray.py）还用它、
-#   两个入口的托盘实现互不通约」，后又改为「保留原因是 tkinter 版 gui.py 的托盘仍在用」；
-#   2026-10-20 Web 侧迁到 QSystemTrayIcon、遗留 tkinter 托盘（gui.py::SystemTray）同批退役，
-#   两入口托盘自此同为 Qt 实现，pystray 与 Pillow 一并移出依赖清单。
+# 用 Qt 自带托盘而非 pystray：QSystemTrayIcon 天然跑在主线程，不受 macOS NSApp 线程模型
+# 限制，也不必额外引 pystray + Pillow 两条依赖（两入口托盘现已同为 Qt 实现）。
 #
-# 菜单四条动作项（显示 / 隐藏 / 设置 / 退出）覆盖旧 pystray 版的
-# 「显示主界面 / 最小化到托盘 / 退出程序」并补上托盘直达的「设置」；中间的
-# 状态项只作展示（禁用），点不动也不该点。
+# 菜单四条动作项（显示 / 隐藏 / 设置 / 退出）覆盖「显示主界面 / 最小化到托盘 / 退出程序」
+# 并补上托盘直达的「设置」；中间的状态项只作展示（禁用）。
 #
 # 图标随运行态变色：仓库不放二进制图标 asset，这里用 QPainter 画一个带录制符号的圆，
 # 与侧边栏圆点同色（保持「一个状态 = 一种颜色」的一致性）。
@@ -51,9 +46,8 @@ class TrayIcon:
         self._on_show_requested: Callable[[], None] | None = None
 
     # 四个回调顺序即菜单自上而下的动作项顺序（显示 / 隐藏 / 设置 / 退出）。
-    # 「设置」不需要先恢复主窗口：AdvancedSettingsDialog 是 QDialog（顶层窗口，
-    # 2026-10-20 offscreen 实测父窗 hide() 后 show() 仍 isVisible()==True），
-    # 故窗口收在托盘时也能独立弹出。
+    # 「设置」不必先恢复主窗口：AdvancedSettingsDialog 是顶层 QDialog，父窗 hide() 后仍能
+    # 独立 show()（2026-10-20 offscreen 实测）。
     def bind_actions(
         self,
         on_show: Callable[[], None],
@@ -80,9 +74,9 @@ class TrayIcon:
                 handler()
 
     def is_available(self) -> bool:
-        # Qt 在无 XDG Session（部分 Linux 容器/SSH X forwarding）下 QSystemTrayIcon
-        # 构造得出来但 isSystemTrayAvailable 为 False；不能「假装在托盘」，
-        # 那样用户最小化后窗口彻底消失且无法恢复。
+        # 部分 Linux 容器 / SSH X forwarding 下没有 XDG Session：控件构造得出来但
+        # isSystemTrayAvailable 为 False。不能「假装在托盘」，否则用户最小化后窗口
+        # 彻底消失且无法恢复。
         return bool(QSystemTrayIcon.isSystemTrayAvailable())
 
     def show(self) -> None:

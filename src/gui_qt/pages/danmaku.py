@@ -2,8 +2,8 @@
 # 弹幕监控页：房间统计表（连接状态 / 弹幕数 / 速率 / 礼物 / 人气）+ 实时弹幕流。
 #
 # 弹幕流为什么用 QTextEdit（富文本）而不是 QPlainTextEdit：三种消息类型（普通 / 礼物 / SC）
-# 需要不同颜色，insertHtml 是成本最低的实现；300 条缓冲上限由 monitor 的 deque 保证，
-# 控件侧不再单独再裁一次行（「展示上限」只留一个事实源）。
+# 需要不同颜色，insertHtml 是成本最低的实现；300 条缓冲上限由 monitor 的 deque
+# 保证（_MAX_MESSAGES），控件侧不再单独裁剪（「展示上限」只留一个事实源）。
 from __future__ import annotations
 
 import time
@@ -41,8 +41,8 @@ _DIM_COLOR = "#8a8a94"
 
 class DanmakuPage(QWidget):
     def __init__(self, monitor: DanmakuMonitor, parent: QWidget | None = None) -> None:
-        # 页面只持有 monitor 的引用，不持有线程：tail 线程与 dirty 标记都在 monitor 里，
-        # 页面是纯消费者，于是「刷新一次」永远只是读快照，不会与后台写入竞争。
+        # 页面只持有 monitor 引用、不持有线程：tail 线程与 dirty 标记都在 monitor 内，
+        # 页面是纯消费者，「刷新一次」只是读一份加锁快照，不碰后台写入中的共享状态。
         super().__init__(parent)
         self._monitor = monitor
         self._filter = ""
@@ -57,9 +57,9 @@ class DanmakuPage(QWidget):
         stats_card = Card(shadow=False)
         stats_row = QHBoxLayout(stats_card)
         stats_row.setContentsMargins(8, 8, 8, 8)
-        # 三块统计标题是构建期定型的静态标签：M-14（2026-10-18）此前只在建时 tr() 一次，
-        # 切语言后停在旧语言。改走 set_text + T() 登记（构造标签与登记键同一 msgid），
-        # retranslate_all() 回填时按当前语言重设；数值面（set_value）是运行态、不进登记。
+        # 三块统计标题是构建期定型的静态标签，必须走 set_text + T() 登记（构造标签与登记键
+        # 同一 msgid），retranslate_all() 才按当前语言回填；数值面（set_value）是运行态、不进登记。
+        # [历史注] 原只在建时 tr() 一次，切语言后停在旧语言（M-14，2026-10-18）。
         self.stat_rooms = StatTile(i18n.tr("监控房间"))
         set_text(self.stat_rooms.title, T("监控房间"))
         self.stat_connected = StatTile(i18n.tr("已连接"))
@@ -130,9 +130,8 @@ class DanmakuPage(QWidget):
         # NoWrap + 等宽：弹幕行长差异极大，软换行会让时间戳列参差不齐，没法扫读
         self.stream = QTextEdit()
         self.stream.setReadOnly(True)
-        # 旧写法在这里同时留了一份「构造完就被丢弃的 mono」和一句硬写死的
-        # setFontFamily("Consolas")——后者才是没装 Consolas 的机器上那两条字体告警的来源之一，
-        # 等宽候选与回退还是一次交回 fixed_font 工厂。
+        # 等宽候选与回退统一交回 fixed_font 工厂：硬写 setFontFamily("Consolas") 会在没装
+        # 该字体的机器上产生字体告警。
         self.stream.setFont(fixed_font(11))
         self.stream.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
         stream_body.addWidget(self.stream, 1)
@@ -146,12 +145,10 @@ class DanmakuPage(QWidget):
         connect_click(self.clear_btn, on_clear)
 
     def retranslate_runtime(self) -> None:
-        # 语言切换后的运行态重刷（M-14）：表头、「已连接/已断开」单元格与筛选下拉的
-        # 「全部房间」哨兵都在产生点 tr()，但 _refresh_stats 对行内容等值时短路返回，
-        # 数据不变时旧语言原地常驻。清掉上一轮缓存强制整表重画即可——
-        # _sync_filter_options 发现旧哨兵不在 wanted 集合里，会把它换成新语言形态；
-        # 选中具体房间名时原样保留（房间名是不译数据）。弹幕流行内标签（[礼物] 等）
-        # 也是产生点 tr() 的存量文本，一并重绘。
+        # 语言切换后的运行态重刷（M-14）：表头、「已连接/已断开」单元格与「全部房间」哨兵
+        # 都在产生点 tr()，但 _refresh_stats 对行内容等值时短路返回，数据不变时旧语言原地常驻。
+        # 清掉缓存强制整表重画：_sync_filter_options 会把旧语言哨兵换成新形态，选中的具体
+        # 房间名（不译数据）原样保留；弹幕流行内标签（[礼物] 等）同在产生点 tr()，一并重绘。
         self._last_stats = None
         self._refresh_stats()
         self._render_stream()
@@ -170,7 +167,7 @@ class DanmakuPage(QWidget):
             self._render_stream()
 
     def _refresh_stats(self) -> None:
-        # 整表重画前先与上次的行做等值比较：状态链每秒都调 refresh，
+        # 整表重画前先与上次的行做等值比较：状态链 3s/10s 一轮、每轮都调 refresh，
         # 数据没变就返回，避免每帧重建 QStandardItem 造成的无谓开销与选中态丢失。
         rooms = self._monitor.rooms_snapshot()
         rows: list[tuple[str, ...]] = []
@@ -300,7 +297,7 @@ class DanmakuPage(QWidget):
         self.stream.setTextCursor(cursor)
 
     def apply_palette(self, palette: Palette) -> None:
-        # 弹幕流颜色由内联 HTML 决定(setHtml 不走 QSS)，主题的控制台 token 变化时重绘一次。
+        # 弹幕流颜色由内联 HTML 决定（insertHtml 不读 QSS），主题 token 变化时重绘一次。
         _ = palette
         self._render_stream()
 

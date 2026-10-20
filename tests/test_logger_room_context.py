@@ -1,14 +1,14 @@
-# 房间日志关联字段（extra["room"]）的行为回归测试。
+# 房间日志关联字段（extra["room"]）的行为回归。
 #
-# 背景：多房间并发录制时所有房间线程共用同一条文件 sink，enqueue 队列按到达顺序交织
-# 落盘，此前只有 main.py 里手写的 [record_name] 前缀可辨房间，src/* 内部日志与解析
-# 失败/退出等早期日志完全无法归属。修复方式是线程级 ContextVar + 全局 patcher 写入
-# extra（见 src/logger.py::ROOM_FIELD），并把该字段加进两个录制文件 sink 的 format。
+# 背景：多房间并发时所有房间线程共用同一条文件 sink，enqueue 队列按到达顺序交织落盘，
+# 此前只有 main.py 手写的 [record_name] 前缀可辨房间，src/* 内部日志与解析失败/退出等
+# 早期日志无法归属。修复方式是线程级 ContextVar + 全局 patcher 写入 extra（见
+# src/logger.py::ROOM_FIELD），并把该字段加进两个录制文件 sink 的 format。
 #
 # 本文件锁定四件事：
 #   ① 两房间并发交织时，同一房间的行可按该字段可靠切出（不要求行连续）；
-#   ② 未绑定房间的日志仍能正常落盘且该列为空——缺 extra 默认值时 loguru 会为每条
-#      日志向 stderr 吐 "Logging error in Loguru Handler" 并丢弃该行，属静默丢日志；
+#   ② 未绑定房间的日志仍能正常落盘且该列为空——缺 extra 默认值时 loguru 会为每条日志向
+#      stderr 吐 "Logging error in Loguru Handler" 并丢弃该行，属静默丢日志；
 #   ③ 调用点显式 bind(room=...) 优先于线程级兜底（patcher 不得覆盖已存在的非空值）；
 #   ④ 加了字段之后 INFO / DEBUG 的分档落盘位置与改动前一致（filter 分档未被格式改动牵连）。
 
@@ -89,9 +89,9 @@ def test_two_rooms_can_be_split_by_room_field(recorder_logger: Path) -> None:
     for t in threads:
         t.start()
     for t in threads:
-        # 审查 7.11（2026-10-18）：裸 join() 会在一房线程卡在 barrier 时永久挂住整轮 pytest；
-        # 带上限后 join 会返回，随后这条 is_alive 判据才是「两线程确实跑完各自的 _PROBE_COUNT 行」
-        # 的真凭据——缺它时下面的行数断言可能拿半截日志误判（假绿）。
+        # 裸 join() 会在一房线程卡在 barrier 时永久挂住整轮 pytest；带上限后 join 会返回，
+        # 随后的 is_alive 判据才是「两线程确实跑完各自的 _PROBE_COUNT 行」的真凭据
+        # ——缺它时下面的行数断言可能拿半截日志误判（假绿）。
         t.join(timeout=10)
     alive = [t.name for t in threads if t.is_alive()]
     assert not alive, f"房间线程未在 10s 内退出（疑似 barrier 卡死）：{alive}"

@@ -1,19 +1,16 @@
-# 极简 Tars 编解码器（仅覆盖虎牙弹幕所需类型）。
+# 极简 Tars 编解码器：仅覆盖虎牙弹幕所需类型，编解码口径参照 tars 官方协议。
 #
-# 参照 tars 官方协议：
-# - 头字节：高4位 tag，低4位 type；tag==15 时下一字节为扩展 tag。
-# - type: 0=INT1 1=INT2 2=INT4 3=INT8 4=FLOAT 5=DOUBLE 6=STRING1 7=STRING4
-#  8=MAP 9=LIST 10=STRUCT_BEGIN 11=STRUCT_END 12=ZERO_TAG 13=SIMPLE_LIST
-#
-# 解码用 peek（不消费）判定字段，支持跳过低 tag 字段与未知 tag 字段（服务器会增减字段）。
-# 编码仅用于虎牙 join 命令。
+# 头字节：高 4 位 tag、低 4 位 type；tag==15 时由下一字节整体替换（非累加）。
+# type 编号见下方常量表。
+# 解码用 peek（不消费）判定字段，可跳过更小 tag 与未知 tag 的字段（服务端会增减字段）；
+# 编码只服务于虎牙 join 命令。
 
 from __future__ import annotations
 
 import struct
 from typing import Any, Callable, Optional, Tuple
 
-# Tars 字段类型编号（与模块头 type 枚举一一对应，供各 read/skip 分支判定用）
+# Tars 字段类型编号（官方协议 type 枚举）：read/skip 各分支按此判定
 INT1, INT2, INT4, INT8, FLOAT, DOUBLE, STRING1, STRING4 = 0, 1, 2, 3, 4, 5, 6, 7
 MAP, LIST, STRUCT_BEGIN, STRUCT_END, ZERO_TAG, SIMPLE_LIST = 8, 9, 10, 11, 12, 13
 
@@ -25,23 +22,20 @@ class TarsInputStream:
         self._pos = 0
 
     # ---- 基础 ----
-    # CR-03 修复：统一的边界校验入口。旧实现把协议里的长度字段直接当游标增量使用，且只判
-    # 「未越上界」不判负数——负长度使切片返回空、游标回退越过刚消费的头字节，而 _goto /
-    # finish_struct / _skip_to_struct_end 都是 while True 且隐含「每轮至少前进 1 字节」的假设，
-    # 于是回到同一字段头反复读到同一负值、反复回退，形成确定性死循环。更糟的是 _peek_field 只判
-    # _pos >= len(data)，负下标走 Python 负索引合法读到缓冲区尾部字节，不会抛 IndexError 自曝，
-    # 而是持续错解析——表现为弹幕线程 100% CPU 挂死且任何 try/except 都拦不住（它不是异常）。
-    # 所有长度消费点必须经此校验，把不可恢复的死循环降级为可捕获的 ValueError。
+    # 统一边界校验入口（CR-03）：协议读出的每个长度都必须经此消费。负长度/越界在此拒成
+    # ValueError——只判上界时，负长度会让 _goto / finish_struct / _skip_to_struct_end 的
+    # while True 循环退回同一字段头反复读同一负值，形成 100% CPU 死循环（不是异常，拦不住）；
+    # 而负下标在 Python 侧合法，_peek_field 也不会抛 IndexError 自曝。
     def _need(self, n: int) -> int:
         if n < 0 or self._pos + n > len(self._data):
             raise ValueError(f"bad tars length: pos={self._pos} len={n} total={len(self._data)}")
         return n
 
-    # 统一的游标推进入口（含边界校验）：任何从协议里读出的长度都必须经此消费
+    # 游标推进入口：一切协议长度都经此消费，保证边界校验不可绕过
     def _advance(self, n: int) -> None:
         self._pos += self._need(n)
 
-    # 断言本轮循环确实推进了游标，防止 skip 逻辑在某些类型上原地不动而无限循环
+    # 断言本轮确实推进了游标：某类型 skip 原地不动即为死循环，必须抛错止损
     def _assert_progress(self, before: int) -> None:
         if self._pos <= before:
             raise ValueError(f"tars parse stuck: pos={self._pos} (no progress from {before})")
@@ -56,9 +50,8 @@ class TarsInputStream:
         typ = b & 0x0F
         tag = (b & 0xF0) >> 4
         if tag == 15 and self._pos + 1 < len(self._data):
-            # 官方 Tars 语义：头字节高4位为 15 时，tag 由下一字节整体替换（非累加）。
-            # 2026-09-12 审查：原 tag += 写法在 tag≥15 字段上读出错误 tag，
-            # 后续字段全部错位（虎牙当前 tag≤6 未触发，前向兼容修正）。
+            # 官方语义：高 4 位为 15 时 tag 由下一字节整体替换。原 `tag +=` 写法在 tag≥15
+            # 上会读错 tag 并使后续字段全部错位（虎牙当前 tag≤6 未触发，属前向兼容修正）。
             tag = self._data[self._pos + 1]
         return typ, tag
 
@@ -69,7 +62,7 @@ class TarsInputStream:
         typ = b & 0x0F
         tag = (b & 0xF0) >> 4
         if tag == 15:
-            # 同 _peek_field：扩展 tag 为替换语义（非累加）
+            # 扩展 tag 同为替换语义（见 _peek_field）
             tag = self._data[self._pos]
             self._pos += 1
         return typ, tag
@@ -91,15 +84,15 @@ class TarsInputStream:
             n = struct.unpack_from(">i", self._data, self._pos)[0]
             self._advance(4 + n)
         elif typ == SIMPLE_LIST:
-            # 官方 Tars: 元素类型头(几乎总是 BYTE tag0) + 长度(自描述整数域, 非固定4字节)。
-            # 本文件所有协议内长度（SIMPLE_LIST / LIST 的 size / 字符串与字节串长度）同此语义。
+            # 官方 Tars：元素类型头(几乎总是 BYTE tag0) + 长度(自描述整数域，非固定 4 字节)；
+            # 本文件所有协议内长度（SIMPLE_LIST/LIST 的 size、字符串与字节串长度）同此语义。
             self._take_head()
             n = self.read_int(0)
             self._advance(n)
         elif typ == LIST:
             n = self.read_int(0)
-            # 每个元素至少占 1 字节，故元素数不可能超过剩余字节数——否则是损坏帧，
-            # 直接拒绝而不是照着伪造的 size 空转数十亿次（旧实现会被恶意/损坏帧拖死）
+            # 每个元素至少占 1 字节，故 size 不可能超过总长度；超出即损坏帧，直接拒绝而不是
+            # 照伪造的 size 空转数十亿次（恶意/损坏帧可拖死解析线程）
             if n > len(self._data):
                 raise ValueError(f"bad tars list size: {n}")
             for _ in range(n):
@@ -135,7 +128,7 @@ class TarsInputStream:
             _before = self._pos
             self._take_head()
             self._skip(typ)
-            # CR-03：本轮无任何推进即为解析卡死，抛错而非让调用方线程挂死
+            # 无推进即为解析卡死，抛错而非让调用方线程挂死
             self._assert_progress(_before)
 
     # ---- 字段读取 ----
@@ -154,7 +147,6 @@ class TarsInputStream:
             if cur_tag == tag:
                 return (typ, tag)
             self._skip(typ)
-            # CR-03：本轮无任何推进即为解析卡死，抛错而非让调用方线程挂死
             self._assert_progress(_before)
 
     # 读取 tag 位置的整数（兼容 INT1/2/4/8 与 ZERO_TAG）；字段缺失或类型不符返回 default。
@@ -202,7 +194,7 @@ class TarsInputStream:
                 self._need(4)
                 n = struct.unpack_from(">i", self._data, self._pos)[0]
                 self._advance(4)
-            # CR-03：负长度下旧实现切片得到空串且游标回退，把死循环交给上层 while True
+            # 负长度必须在此拒绝：切片得空串且游标回退，会把死循环留给上层 while True
             self._need(n)
             s = self._data[self._pos : self._pos + n]
             self._advance(n)
@@ -271,7 +263,6 @@ class TarsInputStream:
             _before = self._pos
             self._take_head()
             self._skip(typ)
-            # CR-03：同上，卡死即抛错而不是无限循环
             self._assert_progress(_before)
 
 
@@ -293,7 +284,7 @@ class TarsOutputStream:
             self._write_head(INT4, tag)
             self._buf.extend(struct.pack(">i", value))
         else:
-            # ayyuid/uid 等可能超 int32,超出时写 int64
+            # ayyuid/uid 等可能超出 int32，此时写 int64
             self._write_head(INT8, tag)
             self._buf.extend(struct.pack(">q", value))
 

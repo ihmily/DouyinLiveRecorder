@@ -1,23 +1,18 @@
-# tests/test_regression_2026_10_18_root_entries.py —— CODE_REVIEW_2026-10-18 两条根目录入口
-# 修复的回归锁（生产实现由别的包落地，本文件只锁行为，不改任何生产代码）。
+# tests/test_regression_2026_10_18_root_entries.py —— CODE_REVIEW_2026-10-18 两条根目录入口修复的
+# 回归锁（生产实现由别的包落地，本文件只锁行为）。
 #
 # 覆盖两条：
-#   L-01  web.py::_cap_web_console_log —— 后台模式启动侧把超限的 logs/web_console.log
-#         就地截断为末尾若干 KB（起点强制对齐整行首），失败只留痕不阻断后台化；
-#   L-02  gui.py 的 PID 复用防线 —— 退出链在 `taskkill /F /T` 之前先确认「这个号码现在还是
-#         我们启动的那个映像」，只在**确证不同**时收手，取不到判据一律退回原无条件形态。
+#   L-01  web.py::_cap_web_console_log —— 后台模式启动侧把超限的 logs/web_console.log 就地截断为
+#         末尾若干 KB（起点强制对齐整行首），失败只留痕不阻断后台化；
+#   L-02  gui.py 的 PID 复用防线 —— 退出链在 `taskkill /F /T` 之前先确认「这个号码现在还是我们启动
+#         的那个映像」，只在**确证不同**时收手，取不到判据一律退回原无条件形态。
 #
-# 全部离线：不起 Web 服务、不建真窗、不联网；产物一律 tmp_path。
-# 打桩边界（AGENTS「桩的是外部副作用，不是判定本身」）：
-#   · web 侧只替换两个体积阈值常量（等价于「时间常量」那类可注入阈值），截断/对齐/返回值全走真实实现；
-#   · gui 侧只替换 kernel32 的「打开进程 / 读映像全名 / 关句柄」三处系统入口与 subprocess.run，
-#     `_win_pid_image_name` / `_reused_pid_image_pair` / `_cleanup_zombie_ffmpeg` 的判定链全部真实执行。
+# 全部离线：不起 Web 服务、不建真窗、不联网；产物一律 tmp_path。打桩边界：web 侧只替换两个体积
+# 阈值常量，gui 侧只替换 kernel32 的三个系统入口与 subprocess.run，判定链全部真实执行。
 #
-# Windows 专属分支**没有**用 skipif：CI 全跑在 ubuntu，若 skip 则这两格回归锁会静默消失
-# （AGENTS「平台专属分支的测试不得靠 skipif 让 CI 跳过」）。gui.py 未把平台判定抽成模块级
-# 常量、而它不归本包改，故按仓内既有做法 monkeypatch `sys.platform`（test_test_hygiene 的 R1
-# 判据表刻意不含 sys：解释器状态标志、无替代手段，tests/test_i18n.py 已用同一形态），
-# 再把 `_get_gui_kernel32` 换成替身，于是 win32 分支在 Linux 上真实执行。
+# Windows 专属分支**没有**用 skipif：CI 全跑在 ubuntu，若 skip 则这两格回归锁会静默消失。gui.py 未把
+# 平台判定抽成模块级常量、且不归本包改，故按仓内既有做法 monkeypatch `sys.platform`（test_test_hygiene
+# 的 R1 判据表刻意不含 sys），再把 `_get_gui_kernel32` 换成替身，于是 win32 分支在 Linux 上真实执行。
 
 import ast
 import importlib
@@ -35,17 +30,15 @@ import pytest
 import web
 
 # web.py 的导入期副作用只有 _fix_encoding()（就地 reconfigure 宿主 stdio）：模块顶层导入即落在
-# pytest 收集期、早于 conftest 的函数级 stdio 快照，与 tests/test_web_background_gate_order.py
-# 同形态，且它不往进程环境写任何东西，因此不需要 gui 那套会话级隔离。
+# pytest 收集期、早于 conftest 的函数级 stdio 快照，与 tests/test_web_background_gate_order.py 同形态。
 _GUI_PARENT_ENV = "DLR_GUI_PARENT"
 
 
 @pytest.fixture(scope="session", autouse=True)
 def gui() -> Iterator[ModuleType]:
     # gui.py 的模块级副作用有两条：os.environ["DLR_GUI_PARENT"]="1" 与 _fix_encoding() 的 stdio
-    # 重配置。逐例（函数级夹具）导入会让后者被 conftest 的函数级 stdio 守卫判成「用例改动了宿主
-    # 进程编码策略」，收集期导入又把前者永久留给整个会话 —— 故两头都躲开：会话级导入 + 导入完
-    # 立刻把标记还原成进入会话前的形态（手法与理由同 tests/test_gui_language_retranslate.py 的 MT-05）。
+    # 重配置。逐例导入会让后者被 conftest 的函数级 stdio 守卫判成「用例改动了宿主编码策略」，收集期
+    # 导入又把前者永久留给整个会话——故会话级导入 + 导入完立刻还原标记（同 MT-05 手法）。
     with pytest.MonkeyPatch.context() as patcher:
         patcher.setenv(_GUI_PARENT_ENV, "")
         module = importlib.import_module("gui")
@@ -143,10 +136,9 @@ def test_cap_web_console_log_failure_is_reported_and_returns_zero(
 
 
 def test_console_log_cap_is_called_before_the_append_stream_opens() -> None:
-    # 调用点契约（见 web.py::_cap_web_console_log 的注释）：截断必须早于 `open(log_path, "a")`。
-    # 此刻 sys.stdout/stderr 还是真实控制台、loguru 控制台 sink 也尚未 rebind，没有任何句柄握着
-    # 这只文件；挪到重定向之后，Windows 下对未关句柄的文件做截断必抛 PermissionError，
-    # 而这条链路完全静默（面板照常起、日志照常无界增长），只有结构锁看得见。
+    # 调用点契约：截断必须早于 `open(log_path, "a")`。此刻 sys.stdout/stderr 还是真实控制台、loguru
+    # 控制台 sink 也尚未 rebind，没有任何句柄握着这只文件；挪到重定向之后，Windows 下对未关句柄的
+    # 文件做截断必抛 PermissionError，而这条链路完全静默，只有结构锁看得见。
     tree = ast.parse(Path(web.__file__).read_text(encoding="utf-8"), filename=str(web.__file__))
     fn = next(
         (
@@ -186,9 +178,8 @@ _DEAD_PID = 4_000_000_001
 
 
 class _FakeKernel32:
-    # kernel32 的三个入口替身：映像名由 pid→完整路径表给定；表里没有的 pid 返回 NULL(0)。
-    # 只替「问操作系统这个号码现在是谁」这一处外部副作用，早返回 / 空串即放行 / 基名比对
-    # 全部走 gui.py 真实代码。
+    # kernel32 的三个入口替身：映像名由 pid→完整路径表给定；表里没有的 pid 返回 NULL(0)。只替「问
+    # 操作系统这个号码现在是谁」这一处外部副作用，早返回 / 空串即放行 / 基名比对全部走真实代码。
     def __init__(self, image_paths: dict[int, str], *, query_ok: bool = True) -> None:
         self._image_paths = image_paths
         self._query_ok = query_ok
@@ -218,9 +209,8 @@ class _FakeCompleted:
 
 
 def _own_image_name() -> str:
-    # 「我们自己启动的映像」：Windows 上就是 python.exe，ubuntu CI 上是 python3.x。
-    # 判据只比基名，故取 sys.executable 的基名而不是硬写 "python.exe"——
-    # 硬写在 CI 上会让「①同名→放行」这格实际判成「不同名」，整格退化。
+    # 「我们自己启动的映像」：Windows 上是 python.exe，ubuntu CI 上是 python3.x。判据只比基名，
+    # 故取 sys.executable 的基名而不是硬写 "python.exe"——硬写在 CI 上会让「①同名→放行」退化。
     return os.path.basename(sys.executable).lower()
 
 

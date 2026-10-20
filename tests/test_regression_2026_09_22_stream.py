@@ -2,8 +2,8 @@
 # 2026-09-22 审查报告 / 组 A（src/stream.py + src/stream_select.py）修复的回归锁。
 #
 # 每条用例都对应报告里的一个编号，判据是「失效形态本身」而不是调用形状：
-#   SEV-2201  play_url_list 元素为裸 URL 串（list[str]）时不得抛 AttributeError，
-#             也不得被 @trace_error_decorator 兜成 {"is_live": False}（8+ 平台每轮漏录）；
+#   SEV-2201  play_url_list 元素为裸 URL 串时不得抛 AttributeError，也不得被装饰器兜成
+#             {"is_live": False}（8+ 平台每轮漏录）；
 #   MID-2227  抖音/TikTok 的 HLS 可用性探针必须带 UA（与 stream_select 同源）；
 #   MID-2228  虎牙无 exsphd 且请求 HD/SD/LD 时必须进档位裁决（旧实现两分支都进不去）；
 #   MID-2229  抖音真实画质键 FULL_HD1/HD1/SD1/SD2 必须能排序、能回采、能告警降级；
@@ -202,9 +202,8 @@ class TestHuyaTierGapWithoutExsphd:
 
     @pytest.mark.asyncio
     async def test_hd_without_exsphd_is_decided_by_bitrate(self) -> None:
-        # 缺口形态：无 exsphd、房间 bitRate=30000、请求 HD(1000)。
-        # 旧实现两个分支都进不去 → 不挂 ratio（=原画）而 actual_quality 仍是 HD
-        # → main.py 的 is_downgrade 恒 False → 面板显示「高清」、产物是原画、零告警。
+        # 缺口形态：无 exsphd、房间 bitRate=30000、请求 HD(1000)。旧实现两个分支都进不去 → 不挂
+        # ratio（=原画）而 actual_quality 仍是 HD → is_downgrade 恒 False → 面板显示「高清」、产物是原画。
         with patch("src.stream.logger.warning") as warn:
             result = await get_huya_stream_url(cast(dict[str, object], self._json(30000)), video_quality="HD")
         assert str(result["flv_url"]).endswith("&ratio=500")  # 1000 无档 → 就近降到 500
@@ -337,10 +336,8 @@ class _Resp:
         self.status_code = status_code
         self.text = text
         self.headers: dict[str, str] = {}
-        # L-11（2026-10-19，CODE_REVIEW_2026-10-18）：探针读取正文改走 _bounded_probe_get 的
-        # 流式形态，本桩因此要能当「流式响应」用（上下文协议 + iter_bytes + encoding）。
-        # 刻意整段一次交出、不在桩里重实现「读满上限即断」的上界行为（那条不变量由
-        # tests/test_stream_select.py 用真实 httpx + MockTransport 的两条用例钉）。
+        # L-11（2026-10-19）：探针读正文改走 _bounded_probe_get 的流式形态，故桩要能当流式响应用
+        # （上下文协议 + iter_bytes + encoding）。刻意整段一次交出、不在桩里重实现「读满上限即断」。
         self.encoding = "utf-8"
 
     def __enter__(self) -> _Resp:
@@ -465,9 +462,8 @@ class TestDerivedHopScope:
         assert [url for url, _ in client.calls] == [_PLAYLIST]
 
     def test_internal_segment_target_rejects_candidate(self) -> None:
-        # SR-01 行为锁（2026-10-02）：变体合法但媒体分片行携带内网地址——
-        # 分片派生跳的安全拒绝必须判候选失败（return False），
-        # 否则被劫持播放列表把 http://127.0.0.1:6379/ 形态目标经 -i 交给 ffmpeg。
+        # SR-01 行为锁（2026-10-02）：变体合法但媒体分片行携带内网地址——分片派生跳的安全拒绝
+        # 必须判候选失败，否则被劫持播放列表把 http://127.0.0.1:6379/ 形态目标经 -i 交给 ffmpeg。
         # 对照：修复前该形态维持可达，逐跳钩子拦不住（正文请求不走客户端钩子）。
         client = _RecordingClient({_PLAYLIST: "#EXTM3U\n#EXTINF:4.0,\nhttp://127.0.0.1:6379/seg.ts\n"})
         with patch("src.stream_select.logger.warning") as warn:

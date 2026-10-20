@@ -4,13 +4,10 @@
 # 覆盖:start() 立即创建 SRT 文件；弹幕时间戳相对录像起点计算；
 # start() 幂等；分段模式每片时间轴重置；未调 start() 时以首条为 T0(旧行为兜底)。
 #
-# 2026-09-24 迁移：产物目录由模块级 `tests/_out_e2e` 改走 tmp_path / TemporaryDirectory。
-# 原形态在 **import 期** os.makedirs(tests/_out_e2e)，而 tests/conftest.py 会在**任意**
-# pytest 会话退出时 rmtree 该目录——同一坑已由 tests/test_bili_e2e.py 记录并把自身迁走，
-# 本文件当时漏迁。后果是全量跑时这 4 条偶发 FileNotFoundError 假红（小集合单跑必绿，
-# 且把本文件换回旧版反而更容易红），属会话级共享目录的竞争，不是 SRT 逻辑回归。
-# 四个 case 的 base 文件名互不重叠，改成「每个 case 一个空目录」后，原先每段开头的
-# os.listdir + os.remove 预清扫不再需要（顺带不再消耗 harness 按轮次计的删除配额）。
+# 产物目录一律走 tmp_path / TemporaryDirectory，不用模块级 `tests/_out_e2e`：conftest.py
+# 会在 pytest 会话退出时 rmtree 该共享目录，若 import 期就 os.makedirs 则全量跑偶发
+# FileNotFoundError 假红（[历史注] 2026-09-24 迁移前即此坑）。每个 case 用独立空目录，
+# 无需每段开头预清扫。
 
 import asyncio
 import os
@@ -73,7 +70,6 @@ def _segment_reset(out_dir: str) -> None:
 # 守护旧行为兜底：未显式 start() 时以首条弹幕为 T0（时间戳 00:00:00,000），
 # 兼容直接写调用、无需预热起点。
 def _no_start_fallback(out_dir: str) -> None:
-    # 未调 start() 时以首条弹幕为 T0(兼容直接写调用的测试)。
     base = os.path.join(out_dir, "anchor_兜底")
     w = SrtWriter(base_filename=base, segment_seconds=None)
     w.write("A", "首条", now=1.05)
@@ -106,7 +102,6 @@ class _SilentDanmaku(DanmakuBase):
 # 经真实 DanmakuCollector 启动的集成回归：即使一条弹幕都没有，SRT 也须在 start() 同步
 # 存在——守护「文件在 start() 同步落盘、不依赖弹幕到达」的不变量（time.sleep 仅为等线程）。
 def _collector_creates_srt_at_start(out_dir: str) -> None:
-    # 经真实 DanmakuCollector 启动,即使一条弹幕都没有,SRT 也应立即存在。
     base = os.path.join(out_dir, "anchor_collector")
     collector = DanmakuCollector(
         danmaku_cls=_SilentDanmaku,

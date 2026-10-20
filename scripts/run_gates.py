@@ -3,29 +3,24 @@
 # 职责：把 AGENTS.md「格式化命令（门禁唯一基准）」章节列出的全部 --check 型门禁命令
 #       按原顺序在本机一次性跑完，任一失败以非 0 退出——把「CI 变红才知道红」提前到本地。
 #
-# 核心机制：命令清单**不在本脚本内复制**，而是运行时从 AGENTS.md 对应章节的 bash 代码块
-#           逐字解析。该章节被全项目指定为门禁命令的唯一事实源；若在本脚本里另写一份
-#           清单，就制造了并行事实源，章节更新后门禁会静默漂移（这正是本入口要治理的问题）。
-#           解析以 ` ```bash ` 围栏为硬边界：围栏外的行（如「isort 收尾清理」小节的
-#           PowerShell `Get-ChildItem ... | Remove-Item`）即使含管道也绝不参与，避免误执行。
+# 核心机制：命令清单**不在本脚本内复制**，而是运行时从 AGENTS.md 对应章节的 bash 代码块逐字
+#           解析。该章节是门禁命令的唯一事实源；另写一份清单就制造并行事实源，章节更新后门禁
+#           会静默漂移。解析以 ` ```bash ` 围栏为硬边界：围栏外的行（如「isort 收尾清理」小节的
+#           PowerShell `Get-ChildItem ... | Remove-Item`）即使含管道也绝不参与。
 #
 # 控制约定（对齐 AGENTS.md「格式化命令」章节）：
-#   - `black .` / `isort .`（不带 --check）是写操作，永远不进入本回路；解析时兜底拦截，
-#     这样即便章节代码块被误加入写型命令，本地门禁也不会改动手里的未提交文件。
-#   - `mypy` 不带路径参数，检查范围取 pyproject [tool.mypy].files（收窄仅用于排障）。
-#   - `mypy --platform linux` 属条件增跑（涉平台专属符号时），此处照单执行，不做智能判断。
+#   - `black .` / `isort .`（不带 --check）是写操作，永不进入本回路：解析时兜底拦截，即便章节
+#     代码块被误加入写型命令，本地门禁也不会改动手里的未提交文件。
+#   - `mypy` 不带路径参数，检查范围取 pyproject [tool.mypy].files（收窄仅用于排障）；
+#     `mypy --platform linux` 属条件增跑，此处照单执行，不做智能判断。
 #   - 门禁块行首的 `NAME=value ` 前缀按 bash 语义解析为**子进程环境变量**后从命令行剥掉
-#     （cmd.exe 不认这种前缀，直送会被当成参数；剥掉后 --list 输出的仍是裸命令）。
-#     PYTHONUTF8=1 另有一份硬默认，见 GATE_CHILD_ENV（MID-63：缺它 isort 会静默跳文件）。
-#   - 子进程 stderr 命中 FATAL_STDERR_PATTERNS 即判失败，即使 rc=0——isort 的
-#     「Unable to parse file」走 UserWarning 通道、rc 恒 0，只认退出码就是门禁假绿。
-#   - **本进程自己的** stdout/stderr 也必须是 UTF-8：子进程的两路输出最终都落在本进程的 stdout
-#     上，中文 Windows（cp936）下 black 成功行的 `✨` 会让那次写入抛 UnicodeEncodeError
-#     而炸掉门禁进程本身。见 ensure_utf8_streams()。
-#   - [2026-10-18 L-30] 执行形态：能按参数列表表达的命令走 shell=False（见 build_gate_argv），
-#     只有含 shell 结构符、或行首要执行 .bat/.cmd 时才退回原 shell=True 字符串形态。
-#     这条与上面「清单不进脚本复制」并不冲突：清单事实源仍是 AGENTS.md 那一章，改变的只是
-#     把解析出来的那一行**怎么交给操作系统**，参数与判定口径逐字不变。
+#     （cmd.exe 不认这种前缀，直送会被当成参数）。PYTHONUTF8=1 另有一份硬默认，见 GATE_CHILD_ENV。
+#   - 子进程 stderr 命中 FATAL_STDERR_PATTERNS 即判失败，即使 rc=0——isort 的「Unable to parse
+#     file」走 UserWarning 通道、rc 恒 0，只认退出码就是门禁假绿。
+#   - **本进程自己的** stdout/stderr 也必须是 UTF-8：两路输出最终都落在本进程 stdout 上，中文
+#     Windows（cp936）下 black 成功行的 `✨` 会让那次写入抛 UnicodeEncodeError 而炸掉门禁进程。
+#   - 执行形态：能按参数列表表达的命令走 shell=False（见 build_gate_argv），只有含 shell 结构符、
+#     或行首要执行 .bat/.cmd 时才退回 shell=True 字符串形态；清单事实源与判定口径均不变。
 #
 # 用法：
 #   python scripts/run_gates.py                          # 全量门禁（在仓库根目录执行）
@@ -34,8 +29,7 @@
 #   python scripts/run_gates.py --keep-going             # 失败后续跑剩余门禁，最后汇总
 #
 # 退出码：0 全部通过；1 至少一条门禁失败（门禁变红）；2 清单来源缺失/为空/含写型命令
-#         （属「没跑」而非「跑过」，与真失败区分，防止被误读成代码不合格）；
-#         3 门禁可执行文件缺失（属环境问题，与「代码不合格」区分开，便于 CI/本地排障）。
+#         （属「没跑」而非「跑过」，与真失败区分）；3 门禁可执行文件缺失（环境问题，便于排障）。
 
 from __future__ import annotations
 
@@ -104,19 +98,13 @@ _BATCH_SUFFIXES: tuple[str, ...] = (".bat", ".cmd")
 
 def ensure_utf8_streams() -> None:
     # 把**本进程**的 stdout/stderr 也换成 UTF-8：MID-63 那套语义的另一半，只钉子进程仍会失效。
+    # GATE_CHILD_ENV 只管得到子进程，而两路输出最终都落在**本进程 stdout** 上——run_command
+    # 逐行读子进程 stderr 再写 sys.stdout，black 成功行的 `All done! ✨ 🍰 ✨` 则走子进程 stdout
+    # 的直接继承写入。中文 Windows 的 cp936 编不出 U+2728 → UnicodeEncodeError 炸掉门禁自身，
+    # 表象是「rc=1 且只剩一段 Traceback」，而触发它的那条门禁其实是**通过**的。
     #
-    # 为什么必须单独做（2026-09-21 实测崩溃）：GATE_CHILD_ENV 只管得到子进程，而两路输出最终都
-    # 落在**本进程的 stdout**上——run_command 逐行读子进程 stderr 再写 sys.stdout，black 成功时
-    # 那行 `All done! ✨ 🍰 ✨` 则走子进程 stdout 的直接继承写入。子进程侧按 UTF-8 解码
-    # （encoding="utf-8"）无碍，而本进程 stdout 在中文 Windows 上是 cp936，U+2728 无法用 GBK
-    # 编码 → `UnicodeEncodeError: 'gbk' codec can't encode character '\u2728'` 炸掉门禁自身，
-    # 表象是「run_gates.py rc=1 且只剩一段 Traceback」。触发它的那条门禁其实是**通过**的，于是
-    # 「工具在本地环境不可用」被读成「代码不合格」，比不跑门禁更糟。
-    #   [历史注] 2026-09-23 前本段只把成因归到 stderr 一路，漏了 emoji 来自 stdout 继承写入。
-    #
-    # errors="replace"：即便将来某条门禁输出更冷门的码点，也只能丢一个字符的显示，
-    # 绝不允许再演变成「门禁进程崩溃 → 整回路没有结论」。
-    # 与 build_exe._ensure_utf8_streams 同一手法（那里已因同样原因踩过一次）。
+    # errors="replace"：将来某条门禁输出更冷门的码点，也只能丢一个字符的显示，绝不允许再演变成
+    # 「门禁进程崩溃 → 整回路没有结论」。与 build_exe._ensure_utf8_streams 同一手法。
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
         if not callable(reconfigure):
@@ -258,25 +246,20 @@ def is_write_command(cmd: str) -> bool:
 def run_command(cmd: str, extra_env: dict[str, str] | None = None) -> tuple[int, float, list[str]]:
     # 执行单条门禁命令，返回 (退出码, 耗时秒, stderr 命中的致命告警子串列表)。
     # 输出通道的**实际**分工：
-    #   stdout —— **不接管**（未传 stdout=，子进程直接继承本进程的 stdout 句柄），故这里既不读
-    #             也不扫。门禁工具的进度/结果行因此原样到达终端，代价是**本函数看不见 stdout**：
-    #             只走 stdout 的失效信号全在盲区。pytest 的 warnings summary 正是这种形态，所以
-    #             它不能靠本函数的 stderr 扫描覆盖，只能由 gate_pytest_warnings_summary() 显式
-    #             stdout=subprocess.PIPE 单独接管。可复核判据：
-    #             grep -n "stdout=" scripts/run_gates.py → run_command 内无、该函数内有。
-    #   stderr —— 逐行**边转发边扫描**（stdout=sys.stdout）：既不能吞掉（人要看），
-    #             也不能只看 rc——isort 跳过文件时 rc=0（MID-63，实测告警确实落在 stderr）。
-    # 退出码：rc != 0 一律判失败（由 main() 的 `if rc == 0 and not hits:` 收口），
-    #         --keep-going 只控制「是否继续跑后续命令」，不影响该判定。
-    # shell=True：清单是按人读格式维护的 bash 代码块，只含 `python -m ...` 这类简单命令行，
-    # 不存在需要二次解释的复杂结构。清单里的 `python` 统一换绑到当前解释器（见
-    # _rebind_interpreter）：Windows 上 python / py 启动器与 venv 可能混用，不换绑就会让门禁跑在
-    # 与 pytest 不同的解释器上——「本地绿、CI 红」的成因即此。
-    # [2026-10-18 L-30 修订] shell=True 不再是默认形态：能按参数列表表达的命令一律 shell=False，
-    # 只有 build_gate_argv 明确判「这条要靠 shell 解释」时才退回。原因见该函数注释——字符串形态
-    # 经由 cmd.exe /c 时，解释器路径含空格的 venv 能否跑起来取决于 cmd 的引号剥层实现，
-    # 属「换台机器才知道红不红」的隐性依赖；参数列表把引号这一层整个消掉。
-    # 两路的 stdout/stderr 分工与退出码语义逐字不变（stdout 继承、stderr 逐行转发+扫描、rc!=0 判失败）。
+    #   stdout —— **不接管**（未传 stdout=，子进程直接继承本进程 stdout 句柄），故既不读也不扫。
+    #             工具进度/结果行因此原样到达终端，代价是**本函数看不见 stdout**：只走 stdout 的
+    #             失效信号全在盲区。pytest warnings summary 正是这种形态，故由
+    #             gate_pytest_warnings_summary() 显式 PIPE 单独接管（可复核判据：
+    #             grep -n "stdout=" scripts/run_gates.py → run_command 内无、该函数内有）。
+    #   stderr —— 逐行**边转发边扫描**（stdout=sys.stdout）：既不能吞掉（人要看），也不能只看 rc
+    #             ——isort 跳过文件时 rc=0（MID-63，实测告警确实落在 stderr）。
+    # 退出码：rc != 0 一律判失败（由 main() 的 `if rc == 0 and not hits:` 收口），--keep-going
+    #         只控制「是否继续跑后续命令」，不影响该判定。
+    # 解释器换绑：清单里的 `python` 统一换到当前解释器（见 _rebind_interpreter）——Windows 上
+    # python / py 启动器与 venv 可能混用，不换绑就会让门禁跑在与 pytest 不同的解释器上，
+    # 即「本地绿、CI 红」的成因。shell=True 只在 build_gate_argv 判「必须靠 shell 解释」时使用：
+    # 字符串形态经 cmd.exe /c 时，解释器路径含空格的 venv 能否跑起来取决于 cmd 的引号剥层实现
+    # （换台机器才知道红不红），参数列表把引号这一层整个消掉。
     t0 = time.monotonic()
     # stdin=DEVNULL：门禁子进程不得继承调用方的 stdin。管道/IDE harness 下父进程的 stdin
     # 可能已关闭，子进程（含 site 初始化）碰它即抛 OSError WinError 6（本地实测：pytest 经
@@ -325,15 +308,12 @@ def _rebind_interpreter(cmd: str) -> str:
 
 
 def build_gate_argv(cmd: str) -> list[str] | None:
-    # L-30（2026-10-18 审查）：能按参数列表执行的命令拆成 argv 交 shell=False，拆不了的回 None
-    # 由调用方退回原 shell 形态。
-    # 为什么优先 argv 而不是「把整条命令再包一层引号」：shell=True 时 Python 实际执行的是
-    # [cmd.exe, "/c", 整串]，再经 list2cmdline 给整串加外层引号并把内层引号转义成 `\"`；
-    # 而 cmd.exe 对 /c 后面那段有「首尾引号成对就再剥一层」的既有规则——于是解释器路径含空格
-    # 的 venv 上门禁命令能不能跑，取决于引号层数与 cmd 的实现细节（同一份代码换一台机器、
-    # 换一个 venv 安装位置就可能变红，且失败信息是 cmd 的一句「命令语法不正确」）。
-    # argv 形态不产生任何引号层，空格由进程 API 按数组边界处理；Windows 与 POSIX 走同一条代码，
-    # 不再出现「本地一套引号语义、CI 另一套」的分叉。
+    # L-30：能按参数列表执行的命令拆成 argv 交 shell=False，拆不了的回 None 由调用方退回原 shell
+    # 形态。为何优先 argv：shell=True 时 Python 实际执行 [cmd.exe, "/c", 整串]，再经 list2cmdline
+    # 给整串加外层引号并把内层引号转义；而 cmd.exe 对 /c 后面那段有「首尾引号成对就再剥一层」的
+    # 既有规则——解释器路径含空格的 venv 能否跑取决于引号层数与 cmd 实现细节（失败信息只是一句
+    # 「命令语法不正确」）。argv 形态不产生引号层，空格由进程 API 按数组边界处理，Windows 与
+    # POSIX 走同一条代码，不再出现「本地一套引号语义、CI 另一套」的分叉。
     try:
         # posix=False：默认模式会把反斜杠当转义符吃掉，Windows 绝对路径 `C:\venv\Scripts\python.exe`
         # 会被切成 `C:venvScriptspython.exe`（argv[0] 根本不存在，整条门禁退化成「工具没跑」）。
@@ -404,10 +384,9 @@ def _module_unavailable(name: str) -> bool:
     return proc.returncode != 0
 
 
-# pytest 退出码 → 语义（SEV-2219：兜底门禁必须把 rc 说明白，否则「rc=4 用法错」与
-# 「rc=5 一条用例都没跑到」会被读成「跑过且无告警 = 通过」）。
-# 口径以 _pytest.exitcodes 为准：2 是**中断**、4 是**用法错**、5 是**未收集到用例**
-# （首轮实现把 2/4 写反了；此处按实测语义钉死，避免后来者再照抄错的映射）。
+# pytest 退出码 → 语义：兜底门禁必须把 rc 说明白，否则「rc=4 用法错」与「rc=5 一条用例都没
+# 跑到」会被读成「跑过且无告警 = 通过」。口径以 _pytest.exitcodes 为准（2 中断、4 用法错、
+# 5 未收集到用例），避免后来者照抄错的映射。
 PYTEST_RC_SEMANTICS: dict[int, str] = {
     0: "全部用例通过",
     1: "存在失败用例",
@@ -439,12 +418,11 @@ def gate_pytest_warnings_summary() -> tuple[bool, str]:
     # 而把 pytest 写进那一章会让「格式化命令唯一基准」变成隐式测试清单（另见 main() 末尾）。
     # 返回 (通过, 诊断信息)：通过=True 表示「pytest 正常跑完且 warnings summary 为空」。
     #
-    # SEV-2219（2026-09-23 定稿）三条 fail-closed 判据，缺一即门禁自我证明失效：
-    #   ① 取真实退出码。丢弃 rc（旧写法 `_ = proc.wait()`）时，pytest 以 rc=2/3/4/5 崩溃
-    #      （收集期 ImportError、参数写错、一条用例都没跑到）只要 stdout 里没有
-    #      `= warnings summary =` 就照样打印「为空 → PASS」，DoD 第 1 步的测试面从此不自证。
+    # 三条 fail-closed 判据，缺一即门禁自我证明失效：
+    #   ① 取真实退出码。丢弃 rc 时，pytest 以 rc=2/3/4/5 崩溃（收集期 ImportError、参数写错、
+    #      一条用例都没跑到）只要 stdout 里没有 `= warnings summary =` 就照样 PASS。
     #   ② 接管 stderr 并扫同一份 FATAL_STDERR_PATTERNS：插件加载失败与编码错误只走 stderr，
-    #      旧写法 stderr=DEVNULL 会直接吞掉。用 subprocess.run 一次性读两路（= communicate()），
+    #      stderr=DEVNULL 会直接吞掉。用 subprocess.run 一次性读两路（= communicate()），
     #      以免「stdout 读满前 stderr 塞满」的管道死锁——这也是不能退回 Popen+read() 的原因。
     #   ③ 见证「真的跑到了用例」：输出里必须有 `N passed` 且 N > 0。
     # 三条一律**不得**退回「没查到就当通过」：与 MID-63 / MIN-19 同口径，「没查到」一律非 0

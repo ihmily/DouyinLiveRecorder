@@ -1,19 +1,17 @@
 # B站移动端分享短链（b23.tv）接入回归用例
 #
 # 覆盖面：
-#   1. 四种输入形态（标准 / 尾斜杠 / 带 query / http）经分派后归一成
-#      https://live.bilibili.com/<房间号>，并确认走的是既有 _resolve_live_bilibili_com 链路；
-#   2. 短码形态（如 ZyQrgYf）经跳转解析出房间号，且结果进进程内缓存——第二轮监测
-#      不再发解析请求（不缓存等于每轮白发一次 302 跟随）；
-#   3. 解析失败（空返回 / 非 ValueError 的意外异常）→ 返回 None 交房间线程延迟重试，
-#      且未归一的原始地址绝不能流进B站解析链路；
-#   4. 纯解析函数的合法形态与非法形态（路径为空 / 多级目录 / 非法字符 / 全角数字），
-#      以及落地页房间号提取的域与形态边界（视频页 / 自指短链 / 连字符拼接域一律拒绝）。
+#   1. 四种输入形态（标准 / 尾斜杠 / 带 query / http）归一成 https://live.bilibili.com/<房间号>，
+#      且走既有 _resolve_live_bilibili_com 链路；
+#   2. 短码形态（如 ZyQrgYf）经跳转解析出房间号，结果进进程内缓存——第二轮监测不再发解析请求；
+#   3. 解析失败（空返回 / 非 ValueError 的意外异常）→ 返回 None 交房间线程延迟重试，未归一的原始
+#      地址不得流进B站解析链路；
+#   4. 纯解析函数的合法/非法形态（路径为空 / 多级目录 / 非法字符 / 全角数字），落地页房间号提取的
+#      域与形态边界（视频页 / 自指短链 / 连字符拼接域一律拒绝）。
 #
-# 所有 spider / stream 调用替换为记录型桩（不发真实网络请求）；跳转解析函数整体替换为
-# 异步桩并统计调用次数（用于锁定缓存行为契约）。变异验证记录：归一化断言
-# （spider 收到 live.bilibili.com 链接而非原始 b23.tv 地址）与落地页数字判定
-# （_bilibili_room_id_from_landing 放行字母段）已按轮次做改坏-还原验证。
+# spider / stream 调用替换为记录型桩（不发真实网络请求），跳转解析函数替换为异步桩并统计调用
+# 次数（锁定缓存契约）。变异验证：归一化断言（spider 收到 live.bilibili.com 链接而非原始
+# b23.tv 地址）与落地页数字判定（_bilibili_room_id_from_landing 放行字母段）已做改坏-还原验证。
 
 import sys
 import threading
@@ -63,14 +61,14 @@ def dispatch_env(main_mod: Any, monkeypatch: pytest.MonkeyPatch) -> tuple[Any, l
         monkeypatch.setattr(main_mod, "bili_cookie", "", raising=False)
     if not hasattr(main_mod, "semaphore"):
         monkeypatch.setattr(main_mod, "semaphore", threading.Semaphore(8), raising=False)
-    # 短码解析缓存按用例隔离：模块级 dict 会跨用例残留，换成空 dict 等价于「每例新进程」，
-    # 让「缓存命中后解析桩不再被调」的断言不依赖用例执行顺序。
+    # 短码解析缓存按用例隔离：模块级 dict 会跨用例残留，换空 dict 等价于「每例新进程」，
+    # 使「缓存命中后解析桩不再被调」的断言不依赖执行顺序。
     monkeypatch.setattr(main_mod, "_B23_TV_ROOM_CACHE", {}, raising=False)
     return main_mod, calls
 
 
 _B23_TV_FORMS = [
-    # 用户要求覆盖的四种输入形态：标准 / 尾斜杠 / 带 query / http
+    # 四种输入形态：标准 / 尾斜杠 / 带 query / http
     "https://b23.tv/22747736",
     "https://b23.tv/22747736/",
     "https://b23.tv/22747736?share_source=COPY&is_room_feed=1",

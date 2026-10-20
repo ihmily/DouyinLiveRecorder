@@ -1,23 +1,17 @@
 # tests/test_gui_monitor.py - 守护 gui.py 中不依赖 Tk 主循环的判定逻辑。
 #
-# 覆盖本轮修复的五个 GUI 缺陷：
-#   MID-51  _has_room_config 以裸 utf-8 读带 BOM 的 URL_config.ini，导致「全部房间已注释」
-#           被误判成「有配置」，CR-01 的 input() 挂死守卫失效；
-#   MID-53  语言下拉自行裁剪括注使 en_US / en_GB 同名，en_US 永远选不到；
-#   MID-54  画质监控的降级标志只置位不清零，一次瞬时降级永久钉住房间；
-#   MID-55  高级设置窗口用打开时的整文件快照无条件覆盖 config.ini，回滚录制进程的新写入；
-#   MID-56  _stopping 未在 finally 复位，收尾抛错后「开始录制」永久失效。
+# 覆盖五类 GUI 缺陷（ID 为审查编号，便于回溯）：MID-51 URL 配置有效性判据（带 BOM 的
+# 「全部注释」配置必须拦住启动，不能误判成有配置）；MID-53 语言下拉显示名唯一
+# （en_US/en_GB 不得同名）；MID-54 画质降级标志按时间序复位（不得一次瞬时降级永久钉住）；
+# MID-55 高级设置保存前必须先裁决外部改动（不得用打开时快照覆盖录制进程的新写入）；
+# MID-56 _stopping 必须在 finally 复位（否则「开始录制」永久失效）。
 #
-# 为什么不在本进程 `import gui`：gui.py 模块级就写 os.environ["DLR_GUI_PARENT"]="1"
-# （硬约定：必须先于任何 src 导入），在同一 pytest 进程里导入会让后续所有用例的
-# src.logger 都被判成 GUI 父进程、不再创建录制日志文件——跨文件污染源。
-# 故行为判据经**子进程**驱动真实实现（测试内不重新实现被测逻辑），
-# 结构性约束另行以 AST / 文本静态锁读取源码。
+# 不在本进程 `import gui`：gui.py 模块级写 os.environ["DLR_GUI_PARENT"]="1"（必须先于
+# 任何 src 导入），同进程导入会让后续用例的 src.logger 都被判成 GUI 父进程、不再建录制日志。
+# 故行为判据经**子进程**驱动真实实现，结构性约束以 AST/文本静态锁读取源码。
 #
-# 2026-09-29 审查 M-31①：该子进程原按 text=True/encoding="utf-8" 解码、却不给子进程注入
-# PYTHONUTF8/PYTHONIOENCODING —— 无该环境变量的中文 Windows（ACP=936）上可抛
-# UnicodeDecodeError（本机 shell 恰好带 UTF-8 所以从不触发）。现显式钉 UTF-8，并把判定
-# 改为按字节比较（AGENTS「探测子进程输出一律按字节比较」），解码只用于失败时的诊断文本。
+# 子进程输出显式钉 UTF-8（PYTHONUTF8/PYTHONIOENCODING）并按字节比较：无该环境变量的中文
+# Windows（ACP=936）下 stdout 走 GBK，父进程按 utf-8 解码即抛 UnicodeDecodeError。
 
 import ast
 import json
@@ -69,18 +63,15 @@ sys.stdout.write("\\n@@GUI@@ " + json.dumps(out, ensure_ascii=False))
 """
 
 _MARKER = "\n@@GUI@@ "
-# 纯逻辑调用无需子进程：把这些函数体复制进沙箱太脆，改为首次需要时一次性拉取常量，
+# 纯逻辑调用无需子进程：把函数体复制进沙箱太脆，改为首次需要时一次性拉取常量，
 # 其余走 _gui_call 的真实调用路径。
 _TTL_CACHE: dict[str, float] = {}
 
 
 def _subprocess_env() -> dict[str, str]:
-    # M-31①（2026-09-29 审查）：显式给子进程钉死 UTF-8，不再依赖宿主 shell 恰好带该环境。
-    # 缺这两项时，无 PYTHONUTF8 的中文 Windows（ACP=936）上子进程 sys.stdout 走 GBK，
-    # 而 _SCRIPT 里 json.dumps(..., ensure_ascii=False) 带中文房间名/主播名 —— 父进程按
-    # utf-8 解码即抛 UnicodeDecodeError（本机 shell 恰好有 UTF-8，所以此前从不触发）。
-    # 只读 os.environ 取基底、绝不写回本进程环境（AGENTS：环境变量一律用 monkeypatch，
-    # 且本进程根本没有改它的理由）。
+    # 显式钉死 UTF-8：无 PYTHONUTF8 的中文 Windows（ACP=936）下子进程 stdout 走 GBK，
+    # 而 JSON 带中文房间名/主播名 → 父进程按 utf-8 解码即抛 UnicodeDecodeError。
+    # 只读 os.environ 取基底，绝不写回本进程（环境变量一律用 monkeypatch）。
     env = dict(os.environ)
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
@@ -95,10 +86,9 @@ def _decode_loosely(raw: bytes) -> str:
 
 def _gui_call(call: str, **kwargs: Any) -> Any:
     payload = json.dumps({"call": call, **kwargs}, ensure_ascii=False)
-    # AGENTS「探测子进程输出一律按字节比较，且这类用例必须能单文件独立运行」：
-    # 不传 text=/encoding=/errors= —— 父进程拿到的是原始字节，marker 判定按字节做，
-    # 与宿主码页、子进程控制台语言完全解耦；只有判定通过之后才把 marker 之后的载荷
-    # 按 utf-8 解出（那份 JSON 的编码由上面注入的 PYTHONIOENCODING 保证）。
+    # 按字节比较：不传 text/encoding/errors，marker 判定与宿主码页、子进程控制台语言
+    # 完全解耦；判定通过后才把 marker 之后的载荷按 utf-8 解出（编码由注入的
+    # PYTHONIOENCODING 保证）。
     proc = subprocess.run(
         [sys.executable, "-c", _SCRIPT],
         input=payload.encode("utf-8"),
@@ -122,9 +112,8 @@ def _ttl_seconds() -> float:
 # ─── MID-51：URL 配置有效性判据 ─────────────────────────────
 class TestHasRoomConfig:
     def test_bom_and_all_commented_lines_block_start(self, tmp_path: Path) -> None:
-        # 全仓写入方一律 utf-8-sig，故文件必带 BOM；把每个房间都注释掉是「暂停录制」的
-        # 常规做法。此时守卫必须返回 False —— 旧实现（裸 utf-8 + startswith('#')）
-        # 在首行读成 '\ufeff#…' 时返回 True，守卫恰好对它要防的形态失效。
+        # 全仓写入方一律 utf-8-sig（文件必带 BOM），而「全部房间注释掉」是暂停录制的常规做法：
+        # 旧实现裸 utf-8 + startswith('#') 会把首行读成 '\ufeff#…' 而误判成有配置。
         target = tmp_path / "URL_config.ini"
         _ = target.write_text(
             "#https://live.douyin.com/123456\n#原画,https://live.douyin.com/654321,主播: 甲\n\n",
@@ -142,8 +131,8 @@ class TestHasRoomConfig:
         assert _gui_call("has_room", path=str(tmp_path / "nope.ini")) is False
 
     def test_no_bare_utf8_read_left_in_guard(self) -> None:
-        # 静态锁：守卫内不得再自带读取编码/行解析（漂移回旧形态即红），必须复用
-        # src/web_config.py::parse_url_config 的 enabled 判据
+        # 静态锁：守卫不得自带编码/行解析（漂移回旧形态即红），必须复用
+        # src/web_config.py::parse_url_config 的 enabled 判据。
         tree = ast.parse(GUI_SOURCE)
         fn = next(
             node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "_has_room_config"
@@ -163,7 +152,7 @@ class TestLanguageMenuNames:
     def test_gui_no_longer_strips_parenthetical(self) -> None:
         # 静态锁（走 AST，避免被解释性注释里引用的旧写法字符串误命中）：
         # _language_names 必须整体来自 i18n.unique_display_names()，不得再有本地裁剪——
-        # 正是那一次 split(" (") 让 en_US 与 en_GB 折成同名、en_US 永远选不到。
+        # 正是那一次 split(" (") 让 en_US 与 en_GB 折成同名。
         tree = ast.parse(GUI_SOURCE)
         # 赋值带类型注解（self._language_names: dict[str, str] = ...）→ AnnAssign 而非 Assign
         assigns = [
@@ -204,8 +193,8 @@ class TestQualityAlertExpiry:
         assert _gui_call("alert_expired", info={"downgraded": True, "alert_at": "n/a"}, now=1e9) is True
 
     def test_alert_at_is_excluded_from_display_compare(self) -> None:
-        # alert_at 是纯内部时序字段；若参与「数据未变则跳过重建」的整表比较，
-        # 会让画质页每轮 destroy+重建（闪烁 + 点击落空，见 2026-09-12 审查 6.2）
+        # alert_at 是纯内部时序字段；若参与「数据未变则跳过重建」的整表比较，会让画质页
+        # 每轮 destroy+重建（闪烁 + 点击落空）。
         tree = ast.parse(GUI_SOURCE)
         keys: set[str] = set()
         for node in tree.body:
@@ -258,7 +247,7 @@ class TestConfigSnapshotConflict:
     def test_unmodified_editor_is_not_reported_dirty(self) -> None:
         # Tk 的 get("1.0", END) 末尾恒多一个换行：编辑器文本与文件原文必须经
         # _normalize_editor_text 同一口径归一，否则「一行未改」也会走 conflict，
-        # 静默跟随外部改动的 reload 路径形同不存在（MID-55 的可用性关键）
+        # 静默跟随外部改动的 reload 路径形同不存在。
         disk = "[录制设置]\nlanguage = \n"
         editor_as_tk = _gui_call("normalize", text=disk + "\n")
         baseline = _gui_call("normalize", text=disk)
@@ -285,8 +274,8 @@ class TestConfigSnapshotConflict:
         assert _gui_call("snapshot", path=str(tmp_path / "absent.ini")) == [None, None]
 
     def test_save_config_checks_conflict_before_writing(self) -> None:
-        # 静态锁：save_config 必须先重读磁盘并走裁决，否则整文件写回会回滚
-        # 录制进程刚写入的 sooplive/flextv/popkontv 凭据与缺键补写（跨进程无锁可用）
+        # 静态锁：save_config 必须先重读磁盘并走裁决，否则整文件写回会回滚录制进程
+        # 刚写入的 sooplive/flextv/popkontv 凭据与缺键补写（跨进程无锁可用）。
         tree = ast.parse(GUI_SOURCE)
         cls = next(
             node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "AdvancedSettingsWindow"
@@ -305,7 +294,7 @@ class TestConfigSnapshotConflict:
 class TestStoppingFlagReset:
     def test_reset_sits_in_finally(self) -> None:
         # 收尾主体（含 _send_stop_signal_and_wait 里的 ctypes 调用）一旦抛异常逃出线程，
-        # 写在函数末尾的复位永不执行 → 「开始录制」此后只回一句 warn、永久失效。
+        # 写在函数末尾的复位永不执行 →「开始录制」此后只回一句 warn、永久失效。
         tree = ast.parse(GUI_SOURCE)
         stop = next(
             node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "stop_recording"

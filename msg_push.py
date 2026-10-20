@@ -16,20 +16,19 @@ from loguru import logger
 
 import i18n
 
-# 消息推送模块 - 支持多种消息推送渠道用于直播状态通知
-# 提供钉钉/微信(Server酱)/Telegram/Bark/ntfy/PushPlus 推送及 SMTP 邮件发送，
-# 各推送函数接收地址与内容，返回 {"success": [...], "error": [...]}。
+# 消息推送模块：钉钉 / 微信(Server酱、息知) / Telegram / Bark / ntfy / PushPlus 推送及 SMTP 邮件。
+# 各推送函数接收地址与内容，返回 {"success": [...], "error": [...]}；单地址失败只计入 error，
+# 不影响同批其它地址（旁路通知不阻断录制）。
 
 
-# 配置 HTTP 客户端（不使用代理，防止本地推送被代理干扰）
+# 不走系统代理：本地或自建推送不应被代理干扰
 no_proxy_handler: urllib.request.ProxyHandler = urllib.request.ProxyHandler({})
-# M-07（2026-10-19）：opener 改按**协议白名单手工组装**，不能再用 build_opener。
-# `build_opener(no_proxy_handler)` 得到的是「默认 handler 集合 + 指定 ProxyHandler」，
-# 默认集合里含 FileHandler / FTPHandler / DataHandler：推送地址来自 config.ini，而 Web 面板
-# 可写全部配置，于是把地址写成 `file:///C:/Users/x/.ssh/id_rsa` 就能让本模块读本地文件——
-# 读到的内容随后会经 ntfy 分支的 error 键原样进日志（logs/ 按轮转保留多份，求助时常整包上传）。
-# 白名单形态与 scripts/douyin_live_recorder_standalone.py 的 _build_opener 同源：只注册
-# http/https 所需的处理器，file/ftp/data 三类协议入口彻底不存在。
+# M-07（2026-10-19）：opener 按**协议白名单手工组装**，不能用 build_opener——后者是「默认 handler
+# 集合 + 指定 ProxyHandler」，默认集合含 FileHandler / FTPHandler / DataHandler；而推送地址来自
+# config.ini，Web 面板可写全部配置，写成 file:///C:/Users/x/.ssh/id_rsa 就能让本模块读本地文件，
+# 读到的内容随后经 ntfy 分支的 error 键原样进日志（logs/ 按轮转保留多份，求助时常整包上传）。
+# 白名单形态与 scripts/douyin_live_recorder_standalone.py 的 _build_opener 同源：只注册 http/https
+# 所需处理器，file/ftp/data 三类协议入口彻底不存在。
 _PUSH_HTTP_HANDLERS: tuple[type[urllib.request.BaseHandler], ...] = (
     urllib.request.UnknownHandler,
     urllib.request.HTTPHandler,
@@ -52,13 +51,12 @@ opener: urllib.request.OpenerDirector = _build_push_opener()
 headers: dict[str, str] = {"Content-Type": "application/json"}
 
 
-# 推送地址的准入校验（M-07，2026-10-19）：只放行 http/https，且拒绝「内部用途名字」。
-# 为什么不拒绝回环与 RFC1918：自建 ntfy / Bark 反代跑在局域网或本机是**合规配置**，
-# 拦掉会把真实用户的推送打哑；真正有攻击面的是「非 HTTP 协议」与「云元数据 / 内部 DNS 名」
-# 这两类——前者能读本地文件，后者能把推送变成内网探测。故走
-# web_config._host_internal_reason 的 allow_local_targets 形态（放行私网、仍拦 metadata/*.internal）。
-# 校验失败抛 ValueError，由各渠道既有的 `except Exception` 收敛成「本条推送失败」，
-# 不影响同批其它地址（旁路通知不阻断录制的既有语义）。
+# 推送地址准入校验（M-07）：只放行 http/https，并拒绝「内部用途名字」。
+# 不拒绝回环与 RFC1918：自建 ntfy / Bark 反代跑在局域网或本机是**合规配置**，拦掉会把真实用户的
+# 推送打哑。真正有攻击面的是「非 HTTP 协议」（能读本地文件）与「云元数据 / 内部 DNS 名」（把推送
+# 变成内网探测）两类，故走 web_config._host_internal_reason 的 allow_local_targets 形态（放行私网、
+# 仍拦 metadata/*.internal）。校验失败抛 ValueError，由各渠道既有的 `except Exception` 收敛成
+# 「本条推送失败」，不影响同批其它地址。
 def _checked_push_url(url: str) -> str:
     from urllib.parse import urlsplit
 
@@ -86,15 +84,14 @@ def _mask_secret(secret: str) -> str:
     return f"{secret[:2]}{'*' * (len(secret) - 4)}{secret[-2:]}"
 
 
-# 脱敏推送地址：隐藏 query 与疑似密钥路径段，仅供日志展示、不影响实际请求。
-# mask_last_segment=True：把「路径最后一段即凭据」的渠道（Bark / Server酱 / 息知 / ntfy）无条件
-# 遮蔽末段。MID-58：旧实现靠 hostname.endswith("day.app") 白名单命中 Bark 的 8 位短密钥，
-# 自建 / 反代 Bark（https://bark.example.com/<8字符key>）因此整串明文进 logs/streamget.log
-# （300KB 轮转、保留多份、求助时通常整包上传），拿到即可向用户手机无限推送——主机名从来不是
-# 判据，密钥的位置才是，故改由调用方按渠道声明。MIN-2251（2026-09-22）：ntfy 的
-# https://ntfy.sh/<topic> 同样「末段即频道口令」（拿到 topic 即可匿名订阅、也能抢先发假消息），
-# 三处失败日志曾漏传该参数、topic 明文进日志，已补齐；钉钉/TG/PushPlus 的凭据在 query 或
-# token 字段、末段非凭据，保持不传（`_mask_url` 本就会丢弃 query）。
+# 脱敏推送地址：丢弃 query 与疑似密钥路径段，仅供日志展示、不影响实际请求。
+# mask_last_segment=True：把「路径最后一段即凭据」的渠道（Bark / Server酱 / 息知 / ntfy）无条件遮蔽
+# 末段。MID-58：旧实现靠 hostname.endswith("day.app") 白名单命中 Bark 的 8 位短密钥，自建 / 反代
+# Bark（https://bark.example.com/<8字符key>）因此整串明文进 logs/streamget.log（300KB 轮转、保留
+# 多份、求助时通常整包上传），拿到即可向用户手机无限推送——主机名从来不是判据，密钥的位置才是，
+# 故改由调用方按渠道声明。MIN-2251（2026-09-22）：ntfy 的 https://ntfy.sh/<topic> 同样「末段即频道
+# 口令」（拿到 topic 即可匿名订阅、也能抢先发假消息），三处失败日志曾漏传该参数，已补齐；
+# 钉钉/TG/PushPlus 的凭据在 query 或 token 字段、末段非凭据，保持不传（本函数本就丢弃 query）。
 def _mask_url(url: str, *, mask_last_segment: bool = False) -> str:
     try:
         from urllib.parse import urlsplit, urlunsplit
@@ -160,8 +157,8 @@ def dingtalk(url: str, content: str, number: str | None = None, is_atall: bool =
         except Exception as e:
             error.append(api)
             # MID-2251：本仓硬约定「异常日志必带 type_name」——Windows 下 socket.timeout /
-            # TimeoutError 的 str() 是空串，且 urllib 包装后只剩 '<urlopen error >'，
-            # 只写 {e} 会让「DNS 失败 / TLS 校验失败 / 超时」三种故障打成同一行空白尾巴。
+            # TimeoutError 的 str() 是空串、urllib 包装后只剩 '<urlopen error >'，只写 {e} 会让
+            # 「DNS 失败 / TLS 校验失败 / 超时」三种故障打成同一行空白尾巴。
             logger.warning(
                 i18n.tr(
                     "钉钉推送失败, 推送地址：{masked_api}, 错误信息: {type_name}: {e}",
@@ -241,13 +238,13 @@ def send_email(
     receivers = to_email.replace("，", ",").split(",") if to_email.strip() else []
     smtp_obj: smtplib.SMTP | smtplib.SMTP_SSL | None = None
 
-    # SEV-2212 修复（2026-09-22）：两条 TLS 路径共用同一个**校验证书**的 context。
+    # SEV-2212（2026-09-22）：两条 TLS 路径共用同一个**校验证书**的 context。
     # 病史：原实现 `SMTP_SSL(host, port, timeout=10)` 与 `starttls()` 都不传 context，二者均回落
     # `ssl._create_stdlib_context()`——而它**就是** `_create_unverified_context`（本机 CPython 3.14
-    # 实测 verify_mode=0 / check_hostname=False）：链路中间人呈递任意自签证书即可解密整段会话、
-    # 拿到 login_email / email_pass（授权码等同口令）；`open_ssl=True` 是默认值，465 默认分支同样不设防。
+    # 实测 verify_mode=0 / check_hostname=False）：中间人呈递任意自签证书即可解密整段会话、拿到
+    # login_email / email_pass（授权码等同口令）；`open_ssl=True` 是默认值，465 默认分支同样不设防。
     # 两条路径必须传同一个 ctx（F-12：「只改一条即出现口径分叉」）。确需放行自签证书应走显式配置项
-    # 并 logger.warning，不得默默放宽——本轮不加该开关，避免引入未经决策的放宽入口。
+    # 并 logger.warning，本轮不加该开关，避免引入未经决策的放宽入口。
     # 复核判据：tests/test_regression_2026_09_22_utils.py::TestSmtpBothPathsVerifyCertificates
     # （断言 SSL 与 starttls 两分支各自收到 verify_mode == ssl.CERT_REQUIRED 的 context 且为同一对象）。
     ctx = ssl.create_default_context()
@@ -284,11 +281,10 @@ def send_email(
             except ValueError:
                 port = 25
             smtp_obj = smtplib.SMTP(email_host, port, timeout=10)
-            # MI-24 修复：非 SSL 分支原先直接 login，授权码在**明文链路**上传输。
-            # 邮箱授权码等同邮箱口令，可被同链路嗅探（公共 Wi-Fi / 透明代理）。
-            # 这里先尝试 STARTTLS 升级；服务器不支持时明确告警而非静默明文登录。
-            # SEV-2212 修复（2026-09-22）：starttls 必须显式传 context=ctx（见上），
-            # 否则回落不校验证书的 context，STARTTLS 升级成「已加密但未认证」的链路。
+            # MI-24：非 SSL 分支原先直接 login，授权码在**明文链路**上传输（等同邮箱口令，可被公共
+            # Wi-Fi / 透明代理嗅探）。这里先尝试 STARTTLS 升级，服务器不支持时明确告警而非静默明文登录。
+            # SEV-2212：starttls 必须显式传 context=ctx，否则回落不校验证书的 context，升级成
+            # 「已加密但未认证」的链路。
             try:
                 _ = smtp_obj.ehlo()
                 _ = smtp_obj.starttls(context=ctx)
@@ -330,12 +326,11 @@ def send_email(
         )
         return {"success": [], "error": receivers}
     # 无论成功失败都主动 quit() 关闭 SMTP 会话，避免连接悬挂；quit 失败忽略（连接本就要丢弃）。
-    # MID-2252 修复（2026-09-22）：原先只吞 smtplib.SMTPException，但 quit() 走 docmd("QUIT") 等
-    # 221 响应、socket 带 timeout=10，服务端不回 221 时抛 socket.timeout（= TimeoutError，
-    # 是 **OSError** 子类而**不是** SMTPException）。在 finally 里穿出会**替换掉** try 块已算好的
-    # 成功返回值：邮件其实已发出，上层 push_message 却拿到未捕获异常、重试逻辑据此重发
-    # （用户表现为重复收到同一封开播通知）。ECONNRESET / EBADF 等其它 OSError 形态同理只是
-    # 「会话没优雅关闭」，不得改变已得出的结论。
+    # MID-2252（2026-09-22）：原先只吞 smtplib.SMTPException，但 quit() 走 docmd("QUIT") 等 221
+    # 响应、socket 带 timeout=10，服务端不回 221 时抛 socket.timeout（= TimeoutError，是 **OSError**
+    # 子类而**不是** SMTPException）。在 finally 里穿出会**替换掉** try 块已算好的成功返回值：邮件其实
+    # 已发出，上层 push_message 却拿到未捕获异常、重试逻辑据此重发（用户表现为重复收到同一封开播通知）。
+    # ECONNRESET / EBADF 等其它 OSError 同理只是「会话没优雅关闭」，不得改变已得出的结论。
     # 复核判据：tests/test_regression_2026_09_22_utils.py::test_send_email_quit_timeout_does_not_replace_result
     finally:
         if smtp_obj:
@@ -614,10 +609,9 @@ if __name__ == "__main__":
     bark_url = "https://xxx.xxx.com/key/"
     # bark(bark_url, send_title, send_content)
 
-    # 2026-09-12 修复（CODE_REVIEW_FIX_1 F-24）：本调用原先未注释——本文件 `if __name__`
-    # 块是手工调试入口，其余渠道（钉钉/邮件/TG/Bark 等）全部已注释，仅 ntfy 一处漏网。
-    # 直接执行 `python msg_push.py` 会向公网 ntfy.sh 主题发出真实推送（主题名可被
-    # 任何人订阅），属误操作外泄。注释掉，与其余渠道保持一致。
+    # 2026-09-12 修复（CODE_REVIEW_FIX_1 F-24）：本调用原先未注释，而本文件 `if __name__` 块是手工
+    # 调试入口、其余渠道（钉钉/邮件/TG/Bark 等）全部已注释——直接 `python msg_push.py` 会向公网
+    # ntfy.sh 主题发出真实推送（主题名可被任何人订阅），属误操作外泄。注释掉，与其余渠道保持一致。
     # _ = ntfy(
     #     api="https://ntfy.sh/xxxxx",
     #     title="直播推送",

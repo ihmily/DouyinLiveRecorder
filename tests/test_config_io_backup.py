@@ -1,4 +1,4 @@
-# Tests for src/config_io.backup_file rotation behavior.
+# src/config_io.backup_file 的备份轮换与备份脱敏回归用例（写侧契约，读侧见 test_config_io_readonly.py）。
 
 import configparser
 import os
@@ -18,11 +18,10 @@ from src.config_io import backup_file  # noqa: E402
 
 
 def _os_shim(**overrides: Any) -> types.SimpleNamespace:
-    # M-27（CODE_REVIEW_2026-09-29_2）：不得 `monkeypatch.setattr(os, "remove", 替身)`——
-    # monkeypatch 解析到的是**全进程唯一**的 os 模块本体，替身窗口内 loguru 的轮转删除、
-    # 其他后台线程的重命名会一并被换成 no-op（本文件 L39 的替身正是「只记账不删除」）。
-    # 仓库约定（AGENTS「测试编写强制约定」+ tests/test_test_hygiene.py R1）：浅拷贝一份命名空间，
-    # 只替换需要的那 1~2 个属性，再把替身绑到**被测模块自己的 os 引用**上（其余属性仍是真实现）。
+    # M-27：不得 `monkeypatch.setattr(os, "remove", 替身)`——monkeypatch 解析到的是**全进程唯一**
+    # 的 os 模块本体，替身窗口内 loguru 的轮转删除、其他后台线程的重命名会一并被换成 no-op
+    # （本文件的删除替身正是「只记账不删除」）。仓内约定：浅拷贝一份命名空间，只替换需要的
+    # 1~2 个属性，再把替身绑到**被测模块自己的 os 引用**上（其余属性仍是真实现）。
     shim = types.SimpleNamespace(**vars(os))
     for name, value in overrides.items():
         setattr(shim, name, value)
@@ -115,10 +114,9 @@ def _raise() -> None:
     raise OSError("windows-sandbox-recycle-bin-unavailable")
 
 
-# ---- MID-N57 回归锁（2026-09-21，CODE_REVIEW_2026-09-21）----
-# 备份脱敏必须与面板侧 read_config_safe（web_config CR-10）同口径双判据：
-# 「键名/节命中 **或** 值本身形如凭据」。本组用例走 backup_file 端到端（真实
-# _redact_ini_secrets 路径，不打桩），仅用 tmp_path 隔离落盘位置。
+# ---- MID-N57 回归锁：备份脱敏必须与面板侧 read_config_safe（web_config CR-10）同口径双判据
+# 「键名/节命中 **或** 值本身形如凭据」。本组用例走 backup_file 端到端（真实 _redact_ini_secrets
+# 路径，不打桩），仅用 tmp_path 隔离落盘位置。
 
 
 def _make_backup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source_text: str) -> str:

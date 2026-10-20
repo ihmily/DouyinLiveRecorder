@@ -3,36 +3,29 @@
 # 职责：校验 build_exe.py 里那张「按平台分列的运行时二进制钉定表」的**完整性与形状**，
 #       并在发布路径上要求每一项都已填入官方值。
 #
-# 为什么需要单独一个检查：CR-11 加的校验框架把表留成了空的 `_PINNED_RUNTIME_SHA256 = {}`，
-#   未钉定只 warn 后继续（SEV-10）——「空表」在旧实现里是**静默通过**的。本脚本把
-#   「空表 / 缺平台 / 缺槽位」从可跳过状态升级为硬失败，因此它是 fail-closed 机器的
-#   前半段（后半段是 build_exe.py 的 --require-pinned）。
+# 为什么需要单独一个检查：旧实现把表留成了空的 `_PINNED_RUNTIME_SHA256 = {}`，未钉定只 warn
+#   后继续（SEV-10）——「空表」在旧实现里是**静默通过**的。本脚本把「空表 / 缺平台 / 缺槽位」
+#   从可跳过状态升级为硬失败，因此它是 fail-closed 机器的前半段（后半段是 --require-pinned）。
 #
 # 两种模式（退出码语义不同，务必区分）：
 #   默认（结构模式，进 AGENTS.md「格式化命令」门禁块）
 #       —— 只查表的结构：表非空、键覆盖 RELEASE_RUNTIME_KEYS、每键含该平台**实际存在**的全部槽位
 #          （通用槽位 + build_exe._EXTRA_EXECUTABLE_URLS 登记的独立归档件，且反向不许多留）、取值要么是
-#          64 位小写十六进制、要么明显是占位/可疑值。占位值只告警不判红：「官方哈希还没人工
-#          核实」是开发期的常态，不该弄红每个 PR。
+#          64 位小写十六进制、要么是明显的占位/可疑值。占位值只告警不判红：「官方哈希还没人工核实」
+#          是开发期常态，不该弄红每个 PR。
 #   --strict（发布模式，由 build-release.yml 的 prepare job 执行）
 #       —— 占位/可疑值一律判红：发布链路绝不构建未经校验的产物。
 #
 # 钉定值的唯一事实源是 build_exe.py 的 _PINNED_RUNTIME_SHA256：本脚本动态加载它来取表，
-# 「什么算填好了」也一律问 build_exe._slot_is_gated()（= 官方哈希已钉定 ∨ 证据齐备的第 4 类
-# 「源码可复现构建」），这里不复述判定——两处各判一次，迟早演化出两种「已钉定」。
-# [2026-09-26] 满足方式再加一档「官方签名档」（取值 = build_exe.OFFICIAL_SIGNATURE_PIN 标记，
-# 判据是上游公布的分离 GPG 签名 + 带外钉死的 40 位主钥指纹，登记在 _RUNTIME_GPG_SIGNATURES）。
-# 仍只有 _slot_is_gated() 一个口径；本脚本新增的义务只是**按档播报**（[NOTE] 行），
-# 让报告不会把「靠签名管住」说成「有 64 位十六进制哈希」。
+# 「什么算填好了」也一律问 build_exe._slot_is_gated()（= 官方哈希已钉定 ∨ 第 4 类「源码可复现
+# 构建」证据齐备 ∨ 官方签名档），这里不复述判定——两处各判一次，迟早演化出两种「已钉定」。
+# 签名档的判据是上游公布的分离 GPG 签名 + 带外钉死的 40 位主钥指纹（登记在 _RUNTIME_GPG_SIGNATURES）。
+# 本脚本新增的义务只是**按档播报**（[NOTE] 行），让报告不把「靠签名管住」说成「有 64 位十六进制哈希」。
 # 同理**不得**把哈希副本写进 workflow：CI 用 --emit-env 的输出注入 DLR_RUNTIME_SHA256，
 # 换版本只改 build_exe.py 一处。
 # --strict 的失败集合只覆盖**发布矩阵真正构建的运行时键**；表里为本地/未来构建方保留的额外键
-# （如 macos-x64）未钉定时只告警、且**必须把告警打出来**——没有 runner 产出它们，
-# 要求钉定既不拦下任何真实产物，又制造「每个键都被管住了」的错觉。矩阵覆盖检查（第 4 段）才
-# 是防漏的那半。
-#   [历史注 2026-10-02] 上一行原举例含 linux-arm64；本键经发布矩阵接入后已进入 --strict 失败集合，
-#   不再是「矩阵外只告警」的键，故从举例中移出（否则该注释会与「接入即受 --strict 管住」的结论相矛盾）。
-#   [历史注] 2026-09-22 W1 前判据是 build_exe._is_pinned()，只认官方哈希那一类满足方式。
+# （如 macos-x64）未钉定时只告警、且**必须把告警打出来**——没有 runner 产出它们，要求钉定既不拦下
+# 任何真实产物，又制造「每个键都被管住了」的错觉。矩阵覆盖检查（第 4 段）才是防漏的那半。
 #
 # 用法：
 #   python scripts/check_runtime_pins.py              # 结构检查（本地门禁 / ci.yml static）
@@ -71,10 +64,9 @@ _WORKFLOW = ROOT / ".github" / "workflows" / "build-release.yml"
 
 
 def _load_build_exe() -> Any:
-    # 以文件路径动态加载根目录 build_exe.py：scripts/ 不在包路径内，且 build_exe 在
-    # import 期只做常量定义（main() 受 __name__ 守卫保护），加载是安全的。
-    # 之所以「加载」而不是「AST 复制一份判定」：钉定表与其合法性判定的唯一事实源都在
-    # build_exe.py，复制判定逻辑就会造出第二份事实源（本仓明令禁止并行清单）。
+    # 以文件路径动态加载根目录 build_exe.py：scripts/ 不在包路径内，且 build_exe 在 import 期
+    # 只做常量定义（main() 受 __name__ 守卫保护），加载是安全的。之所以「加载」而不是「AST 复制
+    # 一份判定」：钉定表与其合法性判定的唯一事实源都在 build_exe.py，复制就会造出第二份事实源。
     path = ROOT / "build_exe.py"
     spec = importlib.util.spec_from_file_location("_runtime_pins_probe", path)
     if spec is None or spec.loader is None:
@@ -142,9 +134,9 @@ def _runtime_matrix_keys() -> list[str]:
 def check(strict: bool) -> int:
     # 返回 0 通过 / 1 发布级失败（--strict 下存在未钉定项）/ 2 结构缺陷。
     module = _load_build_exe()
-    # L-29：属性缺失（含被改名/删除）一律走 rc=2，不留 AttributeError 崩溃栈的 rc=1。
-    # 探测必须在这里做、而不是逐处 getattr 兜底：下面的判定口径全部取自 build_exe，缺一项
-    # 就等于「没查」，而「没查」与「查过且通过」在 CI 里必须分得开（同 MID-63 口径）。
+    # L-29：属性缺失（含被改名/删除）一律走 rc=2，不留 AttributeError 崩溃栈的 rc=1。探测必须在
+    # 这里一次做完、而不是逐处 getattr 兜底：下面的判定口径全部取自 build_exe，缺一项就等于「没查」，
+    # 而「没查」与「查过且通过」在 CI 里必须分得开（同 MID-63 口径）。
     _require_build_exe_attrs(module)
     table = cast("dict[str, dict[str, str]]", module._PINNED_RUNTIME_SHA256)
     slots = cast("tuple[str, ...]", module.RUNTIME_SLOTS)
@@ -219,8 +211,7 @@ def check(strict: bool) -> int:
             bucket = unpinned if key in matrix_keys else unpinned_offmatrix
             bucket.append(f"{key}/{slot} 未钉定：{reason}")
         # 反向：表里多出一个该平台并不存在的下载槽位同样要报——它意味着「有人在钉定表里给一个
-        # 没有下载点的组件留了通行证」，而 runtime_slots_for() 的事实源（_EXTRA_EXECUTABLE_URLS）
-        # 里并没有这一项，check 会永远查不到它。
+        # 没有下载点的组件留了通行证」，而 runtime_slots_for() 的事实源里并没有这一项。
         for slot in entry:
             if slot not in expected_slots:
                 problems.append(f"{key} 含槽位 {slot} 的钉定项，但该平台没有这个下载点（表与来源漂移）")
@@ -231,9 +222,8 @@ def check(strict: bool) -> int:
             problems.append(f"发布矩阵需要 {key}，但钉定表无该段")
 
     per_key_slots = sorted({len(runtime_slots_for(key)) for key in table})
-    # 空表在前面已判为结构缺陷（problems 非空即 rc=2），但打印发生在 rc 判定之前，
-    # 所以这里仍要能吃下「一个键都没有」——不然报告会以 IndexError 崩掉，把「表为空」这个
-    # 本来要说清楚的结论换成一句看不懂的栈回溯（SEV-10 最初的形态正是「空表没人说」）。
+    # 空表在前面已判为结构缺陷（problems 非空即 rc=2），但打印发生在 rc 判定之前，所以这里仍要
+    # 能吃下「一个键都没有」——否则报告会以 IndexError 崩掉，把「表为空」换成一句栈回溯。
     if not per_key_slots:
         span = "0"
     elif len(per_key_slots) == 1:
@@ -255,8 +245,8 @@ def check(strict: bool) -> int:
         print(f"[NOTE] {line}")
 
     if unpinned_offmatrix:
-        # 矩阵外的键：本地/未来构建方保留的段。只告警，但**必须打出来**——静默省略等于
-        # 让后来的人以为「表里所有键都被 --strict 管着」。
+        # 矩阵外的键：本地/未来构建方保留的段。只告警，但**必须打出来**——静默省略等于让后来
+        # 的人以为「表里所有键都被 --strict 管着」。
         print(
             f"\n[WARN] {len(unpinned_offmatrix)} 个槽位未钉定，但其运行时键不在发布矩阵内（无 runner 产出，不参与 --strict 判定）:"
         )

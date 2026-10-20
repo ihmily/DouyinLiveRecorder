@@ -1,11 +1,11 @@
-# 斗鱼弹幕独立测试。
+# 斗鱼弹幕手动验证脚本（无 test_ 函数，不被 pytest 收集）。
 #
-# 用法：
-#    cd /Users/x/Desktop/fix-recorder/DouyinLiveRecorder
-#    python tests/test_douyu_danmaku.py [room_id]
-#
+# 用法：在项目根目录执行 python tests/test_douyu_danmaku.py [room_id]
 # 不传 room_id 默认 3125893。连真实斗鱼直播间 60 秒，看到弹幕输出即通过。
 # 验证：WebSocket 握手、STT 编解码、loginreq/joingroup 登录、45s 心跳、chatmsg 解析。
+# 与 main.py 的弹幕链路一致：只传 room_id（斗鱼弹幕无签名/令牌环节）。
+# 需真实在播的直播间；start() 的 wait_for 只兜住连接阶段，之后的 60 秒是纯粹的弹幕观察窗口。
+# 与 tests/test_douyu_live_collector.py 的分工：本脚本验协议本身，那个脚本验 SRT 产出与清理。
 
 import asyncio
 import os
@@ -46,6 +46,7 @@ async def main() -> None:
         print("[error] 连接超时")
         return
     await asyncio.sleep(duration)
+    # stop() 主动关闭 WS；此后 on_message 不再触发，count 即整个观察窗口的累计值
     await d.stop()
     print(f"\n测试结束，共收到 {count} 条弹幕。")
 

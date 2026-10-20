@@ -15,15 +15,14 @@ from src import config_io  # noqa: E402
 
 def test_read_config_value_missing_key_readonly_ok(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     # 关键回归：缺键时 read_config_value 会尝试写回 config.ini；当 config.ini 不可写
-    # （只读 / 被占用）时，必须只记 warning 并返回默认值，而不是抛出 PermissionError
-    # 导致整个 app 在 import main 阶段崩溃。
+    # （只读 / 被占用）时必须只记 warning 并返回默认值，而不是抛 PermissionError
+    # 让整个 app 在 import main 阶段崩溃。
     #
-    # 2026-09-15 CI 修正：不要只靠 cfg.chmod(0o444) 制造「写回被拒」——read_config_value
-    # 走的是 _atomic_write_text（同目录临时文件 + os.replace），而 os.replace 只校验目标
-    # 「所在目录」的写权限，与目标文件自身的权限位无关；以 root 运行时（部分镜像）权限位
-    # 还会被整体绕过。Windows 恰好相反：目标文件只读属性会让 replace 直接失败——所以这条
-    # 用例「本地 Windows 过、Linux CI 挂」。改为直接让 os.replace 对目标配置抛
-    # PermissionError，跨平台稳定复现同一条降级路径。
+    # 不能只靠 cfg.chmod(0o444) 制造「写回被拒」：read_config_value 走 _atomic_write_text
+    # （同目录临时文件 + os.replace），而 os.replace 只校验目标**所在目录**的写权限，与目标
+    # 文件自身的权限位无关（root 下权限位还会被整体绕过）；Windows 恰好相反，目标文件只读属性
+    # 会让 replace 直接失败——那样这条用例「本地 Windows 过、Linux CI 挂」。改为直接让 os.replace
+    # 对目标配置抛 PermissionError，跨平台稳定复现同一条降级路径。
     cfg = tmp_path / "config.ini"
     cfg.write_text("[录制设置]\nlanguage=zh_cn\n", encoding="utf-8")
     # 设为只读，模拟「配置文件被占用 / 不可写」场景
@@ -55,7 +54,7 @@ def test_read_config_value_missing_key_readonly_ok(tmp_path: Path, monkeypatch: 
     assert result == "默认"
     # 原始配置文件内容未被写入该缺省键（写回失败被忽略）
     assert "_缺失的键_xyz" not in cfg.read_text(encoding="utf-8")
-    # 记了 warning 而非崩溃（2026-09-12 审查 H-6 后文案细化：「原子写失败」替代原「写回失败」，
+    # 记了 warning 而非崩溃（审查 H-6 后文案细化：「原子写失败」替代原「写回失败」，
     # 强调非原子性是根因）
     assert any("原子写失败" in c for c in captured)
 
@@ -79,7 +78,7 @@ def test_read_config_value_delimiter_key_no_crash(tmp_path: Path, monkeypatch: M
         logger.remove(handler_id)
 
     assert result == "0"
-    # 记了 warning（含异常类型）而非崩溃（2026-09-12 审查 H-6 后文案细化）：
+    # 记了 warning（含异常类型）而非崩溃（审查 H-6 后文案细化）：
     # ConfigParser.InvalidWriteError 走「配置项缺省值写回失败（已忽略）」分支，
     # OSError 走「原子写失败」分支——两条都需要断言捕获
     assert any(("原子写失败" in c or "缺省值写回失败" in c) and "InvalidWriteError" in c for c in captured)

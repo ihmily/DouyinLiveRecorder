@@ -6,26 +6,20 @@
 # Node 为项目运行时基线（node/ 自动下载、Dockerfile 安装 Node 24 LTS），但开发机可能未装：
 # 缺失时 skip 而非 fail，与沙箱环境限制类用例的既有口径一致。
 #
-# MID-64 修复（2026-09-20 实测挂死）：原写法 subprocess.run(capture_output=True, text=True,
-# timeout=300) 在本机构成两类故障，且 timeout 根本不是有效上界——
-#   ① 管道形态：node --test 会派生 worker 子进程，超时只杀直接子进程，随后 run() 内部
-#      补跑的 communicate() 仍会被「孙进程持有的写端」阻塞 → 全量 pytest 在 ~28% 处 15 分钟零输出。
-#      实测复刻：直接子进程秒退 + 孙进程睡 120s 时，run(timeout=2) 在 30s 墙钟内仍未返回。
-#      故改为重定向到**临时文件** + Popen/wait：没有管道就没有可被孙进程挂住的读端，
-#      wait(timeout=) 成为真上界。
-#   ② 编码形态：text=True 走 locale 编码（中文 Windows 为 GBK），node 报告里的 UTF-8 字符
-#      会让 reader 线程抛 UnicodeDecodeError（表现为 PytestUnhandledThreadExceptionWarning，
-#      违反本仓「0 警告」口径）。故一律以二进制捕获、显式按 UTF-8 解码。
+# 子进程形态的两条硬约束（MID-64，2026-09-20 实测挂死）：
+#   ① 输出重定向到临时文件 + Popen/wait，不用管道：node --test 会派生 worker 子进程，超时只杀
+#      直接子进程，run() 内补跑的 communicate() 仍被孙进程持有的写端阻塞，timeout 根本不是上界。
+#      没有管道就没有可被孙进程挂住的读端，wait(timeout=) 才是真上界。
+#   ② 一律二进制捕获后显式按 UTF-8 解码，不用 text=True：text 走 locale 编码（中文 Windows 为
+#      GBK），node 报告里的 UTF-8 字符会让 reader 线程抛 UnicodeDecodeError
+#      （PytestUnhandledThreadExceptionWarning，违反本仓「0 警告」口径）。
 # 超时后仍须回收整棵进程树（Windows 无 killpg → taskkill /F /T；POSIX 用进程组），否则孤儿
-# node worker 长期占着输出文件与连接。test_node_test_timeout_bounds_wait_and_reaps_tree 锁住
-# 这两条性质（去掉文件重定向或去掉树回收都会变红）。
+# node worker 长期占着输出文件与连接。这两条性质由
+# test_node_test_timeout_bounds_wait_and_reaps_tree 锁住。
 #
-# 2026-09-22 补：MID-64 ② 的「二进制捕获」当时只落在 _run_node 上，存活探针 _pid_alive 仍是
-# text=True，于是本文件**单独运行必红**（TypeError + 一条线程异常告警）、全量运行却恰好绿。
-# 现已统一为字节判定，并由文件末尾的三条回归锁覆盖全部进程检查调用点：
-# test_pid_alive_* （确定性 GBK 载荷 / 源码级禁 text=True / 真实进程存活往返）。
-# 本文件必须能在 `pytest tests/test_frontend_quality_ui.py` 独立运行下全绿，不得依赖
-# 同会话内其他用例先把控制台码页切成 UTF-8。
+# 本文件必须能在 `pytest tests/test_frontend_quality_ui.py` 独立运行下全绿，不得依赖同会话内
+# 其他用例先把控制台码页切成 UTF-8（main.py 的 SetConsoleOutputCP(65001) 曾让「全量绿、单跑红」）。
+# 全部进程检查调用点由文件末尾三条回归锁覆盖：GBK 载荷 / 源码级禁 text=True / 真实进程往返。
 import ast
 import os
 import re
@@ -134,16 +128,13 @@ def _pid_alive(pid: int) -> bool:
     # TerminateProcess(handle, 0)，即「杀掉它」而不是「探一下」。
     #
     # 为什么按**字节**判定而不是 text=True 解码（MID-64 ② 的补集，2026-09-22 实测）：
-    # 中文 Windows 上 tasklist 对「无匹配任务」输出的是 GBK 消息
-    # 「信息: 没有运行的任务匹配指定标准。」（实测首字节 b'\xd0\xc5\xcf\xa2'），
-    # 而门禁口径要求 PYTHONUTF8=1 → UTF-8 模式下 text=True 按 utf-8 解码该字节流，
-    # subprocess 的 reader 线程直接抛 UnicodeDecodeError，communicate() 遂返回 stdout=None，
-    # `str(pid) in None` 即 TypeError，并额外产生一条 PytestUnhandledThreadExceptionWarning
-    # （违反本仓「0 警告」）。
-    # 该缺陷此前只在**单独运行本文件**时显现：全量跑时更早的用例 import 了 main，
-    # main.py 的模块级 SetConsoleOutputCP(65001) 把整个进程的控制台输出码页切成 UTF-8，
-    # tasklist 便改吐 UTF-8 而侥幸可解。即「全量绿、单跑红」，本回归锁因此失去独立验证能力。
-    # 字节包含判定与码页彻底解耦：PID 出现在 tasklist 表格里 ⟺ 进程存活，与消息语言无关。
+    # 中文 Windows 上 tasklist 对「无匹配任务」输出 GBK 消息（首字节 b'\xd0\xc5\xcf\xa2'），
+    # 而门禁口径要求 PYTHONUTF8=1 → UTF-8 模式下 text=True 按 utf-8 解码该字节流，subprocess 的
+    # reader 线程直接抛 UnicodeDecodeError，communicate() 返回 stdout=None，`str(pid) in None` 即
+    # TypeError，并额外产生一条 PytestUnhandledThreadExceptionWarning（违反本仓「0 警告」）。
+    # 该缺陷只在单独跑本文件时显现：全量跑时 main.py 的模块级 SetConsoleOutputCP(65001) 已把码页
+    # 切成 UTF-8，tasklist 改吐 UTF-8 而侥幸可解（即「全量绿、单跑红」）。字节包含判定与码页
+    # 彻底解耦：PID 出现在 tasklist 表格里 ⟺ 进程存活，与消息语言无关。
     if sys.platform == "win32":  # 平台门控一律用 sys.platform 字面量（mypy 跨平台门禁要求）
         probe = subprocess.run(
             ["tasklist", "/FI", "PID eq %d" % pid, "/NH"],

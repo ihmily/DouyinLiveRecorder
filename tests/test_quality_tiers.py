@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
 # 虎牙/斗鱼清晰度档位专项测试：细粒度蓝光档位枚举、选档拉流、不可用降级与错误提示。
-#
 # 实测依据（2026-08-29）：
-# - 虎牙 huya.com/chuhe（bitRate=30000）：ratio 即码率上限 kbps——
-#   0=原画(2560x1440@60) / 30000=蓝光30M(1080p60) / 20000=蓝光20M(1080p60)
-#   / 8000=蓝光8M(1080p60) / 4000=蓝光4M(1080p30) / 2000=超清(720p30) / 500=流畅(450p24)。
-# - 斗鱼 douyu.com/3168536：rate 0=原画 / 8200=蓝光8M / 4000=蓝光4M(下发 rate=4)
-#   / 3=超清 / 2=高清 / 1=流畅；服务端对不存在档位自动就近钳制（8200→4）。
+# - 虎牙 huya.com/chuhe（bitRate=30000）：ratio 即码率上限 kbps——0=原画(2560x1440@60) /
+#   30000=蓝光30M / 20000=蓝光20M / 8000=蓝光8M(1080p60) / 4000=蓝光4M(1080p30) /
+#   2000=超清(720p30) / 500=流畅(450p24)。
+# - 斗鱼 douyu.com/3168536：rate 0=原画 / 8200=蓝光8M / 4000=蓝光4M(下发 rate=4) / 3=超清 /
+#   2=高清 / 1=流畅；服务端对不存在档位自动就近钳制（8200→4）。
 
 from typing import cast
 from unittest.mock import AsyncMock, patch
@@ -24,7 +23,6 @@ from src.stream_select import get_quality_code
 
 class TestGetQualityCodeSubTiers:
     # get_quality_code: 蓝光细粒度档位中文名 → 代码。
-
     @pytest.mark.parametrize(
         ("zh", "code"),
         [("蓝光4M", "BD4"), ("蓝光8M", "BD8"), ("蓝光20M", "BD20"), ("蓝光30M", "BD30")],
@@ -44,7 +42,6 @@ class TestGetQualityCodeSubTiers:
 
 class TestGetQualityIndexSubTiers:
     # get_quality_index: 蓝光子档位折叠到 BD 槽位（通用索引平台退化为「蓝光」）。
-
     @pytest.mark.parametrize("code", ["BD4", "BD8", "BD20", "BD30"])
     def test_sub_tiers_fold_to_bd(self, code: str) -> None:
         from src.stream import QUALITY_MAPPING
@@ -99,7 +96,6 @@ def _huya_json(
 
 class TestHuyaSubTiers:
     # get_huya_stream_url: 蓝光细粒度档位（ratio 即码率上限 kbps）。
-
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("code", "ratio"),
@@ -164,11 +160,10 @@ class TestHuyaSubTiers:
 
     @pytest.mark.asyncio
     async def test_legacy_uhd_via_exsphd_labels(self) -> None:
-        # 旧档位（UHD/HD/SD/LD）按 exsphd 的**数值语义**取档（与蓝光子档位分支同一张表）。
-        # 本用例原断言的是「&ratio=8000」——那来自位置式 zip(["UHD","HD","SD","LD"],
-        # reversed(findall))：把 exsphd 当有序序列，exsphd 换个顺序标签就整体反转，
-        # 请求超清实拉蓝光8M，且 actual_quality 回写成请求值使 is_downgrade 恒 False。
-        # MID-13 已修正为按 ratio 数值查表，故此处锁 2000（=超清，见上方 2026-08-29 实测表）。
+        # 旧档位（UHD/HD/SD/LD）按 exsphd 的**数值语义**取档（与蓝光子档位同一张表）。
+        # [历史注] 原实现用位置式 zip(findall) 把 exsphd 当有序序列，换个顺序标签就整体反转，
+        # 请求超清实拉蓝光8M 且 actual_quality 回写请求值（is_downgrade 恒 False）；MID-13 已改
+        # 按 ratio 数值查表，故此处锁 2000（=超清，见上方 2026-08-29 实测表）。
         result = await get_huya_stream_url(_huya_json(exsphd="264_0 264_500 264_2000 264_8000"), video_quality="UHD")
         assert str(result["flv_url"]).endswith("&ratio=2000")
         assert result["actual_quality"] == "UHD"

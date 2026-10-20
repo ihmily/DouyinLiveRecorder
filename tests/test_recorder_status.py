@@ -231,21 +231,15 @@ def test_display_info_backoff_resets_after_successful_cycle(
 
 # ==========================================================================
 # 追加段（2026-09-21 覆盖率专项）：get_status 快照与 display_info 的「正在录制」分支。
-# get_status 是 Web 面板唯一的轮询数据源，它的字段形状一旦被改动，前端按钮/列表
-# 会以「看不到在录房间」这种间接症状表现，因此每个字段的存在与口径都需要锁。
+# get_status 是 Web 面板唯一的轮询数据源，字段形状一变前端就表现为「看不到在录房间」这类间接
+# 症状，因此每个字段的存在与口径都要锁：
+#   [start, quality, actual_quality] / 旧两元 / 空条目三种形态都要能渲染（兼容层不能只测理想
+#   形态）；recent_errors 是 error_window 求和（瞬时口径）、error_count 是累计值，混用会让面板
+#   显示倒退；磁盘探测失败报 -1.0（可区分于「真的剩 0GB」）；engine_alive 在
+#   _recorder_thread is None（CLI 直跑）时规为存活。
+# display_info 的录制分支：set 收敛去重、缺时间条目回退到当前时刻、isatty 为真才发 ANSI 清屏
+# （重定向到日志文件时不得污染内容）。
 # ==========================================================================
-
-
-# 追加段的分支地图（get_status 与 display_info 的「正在录制」分支）：
-#   get_status 是 Web 面板唯一的轮询数据源，字段形状一变，前端就表现为
-#   「看不到在录房间」这类间接症状，所以每个字段的存在与口径都要锁：
-#     新格式 [start, quality, actual_quality] / 旧格式两元 / 空条目 三种形态
-#     都要能渲染（兼容层不能只测理想形态）；recent_errors 是 error_window 求和
-#     （瞬时口径），error_count 是累计值，两者混用会让面板显示倒退；
-#     磁盘探测失败报 -1.0（可区分于「真的剩 0GB」）；engine_alive 在
-#     _recorder_thread is None（CLI 直跑）时规为存活。
-#   display_info 的录制分支：set 收敛去重、缺时间条目回退到当前时刻、
-#     isatty 为真才发 ANSI 清屏（重定向到日志文件时不得污染内容）。
 
 
 class _NormalStdout:

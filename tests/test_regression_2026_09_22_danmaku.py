@@ -1,21 +1,16 @@
 # 2026-09-22 弹幕链路评审整改的回归锁（CODE_REVIEW_2026-09-22 的 SEV-2217 / MID-2245 / MID-2247）。
 #
-# 全部离线：websockets.connect 换成假上下文管理器，不触网；日志经临时 sink 捕获、
-# 监控枢纽的 JSONL 边车写在 tmp_path 下，绝不碰仓库真实的 logs/ 目录。
-#
-#   ① SEV-2217：on_close / on_reconnect 的文案会同时进 loguru 文件 sink
-#      （logs/ 按 300KB 轮转保留多份 = 长期落盘）与弹幕监控边车 JSONL（→ Web/GUI 面板）。
-#      websockets 的 InvalidProxy 文本自带代理原串（含 user:pass@host），所以断言的是
-#      「凭据值在两处都消失」，而不是「某处调用了掩码函数」。
-#      注意 on_reconnect 侧（src/base.py 的 DanmakuBase._on_reconnect）只记一条 debug、
-#      自己不过码——它只能由 ws_client 侧的脱敏保住，故本用例走真实接线而不是 collector。
-#   ② MID-2245：B站的 _reject_auth 原先复用 WsClient.close()，而 close 置 _stopped 后
-#      connect() 的两条 `if self._stopped: break` 出口都不回调 on_close → 与 room_connected
-#      配对的 hub.room_closed() 永不发出，Web 弹幕页把该房间永久停在「已连接 / 0 条」。
-#      本用例从**真实解码路径**（AUTH_REPLY code!=0 的整帧字节流）驱动它，不 stub _reject_auth。
-#   ③ MID-2247：i18n 门禁（tests/test_i18n_migration.py）的判据是
-#      `node.func.value.id == "logger"`，「别名 logger + f-string」对它完全隐形。
-#      这里补一条反向 AST 锁，把该形态永久钉死为非法（并配自检，防锁自己假绿）。
+# 全部离线：websockets.connect 换成假上下文管理器（不触网），日志经临时 sink 捕获，监控枢纽的
+# JSONL 边车写在 tmp_path 下，绝不碰仓库真实的 logs/ 目录。
+#   ① SEV-2217：on_close / on_reconnect 的文案会同时进 loguru 文件 sink（logs/ 按 300KB 轮转保留
+#      多份 = 长期落盘）与监控边车 JSONL（→ Web/GUI 面板）。InvalidProxy 文本自带代理原串（含
+#      user:pass@host），故断言「凭据值在两处都消失」而非「调用了掩码函数」。on_reconnect 侧只记
+#      一条 debug、自己不过码，只能由 ws_client 侧脱敏保住，故本用例走真实接线。
+#   ② MID-2245：B站 _reject_auth 原先复用 WsClient.close()，而 close 置 _stopped 后 connect() 的两条
+#      `if self._stopped: break` 出口都不回调 on_close → hub.room_closed() 永不发出，Web 弹幕页把
+#      房间永久停在「已连接 / 0 条」。本用例从**真实解码路径**驱动它，不 stub _reject_auth。
+#   ③ MID-2247：i18n 门禁（tests/test_i18n_migration.py）判据是 `node.func.value.id == "logger"`，
+#      「别名 logger + f-string」对它完全隐形；这里补一条反向 AST 锁把该形态钉死为非法。
 
 import ast
 import asyncio
@@ -280,10 +275,9 @@ def _scanned_python_files() -> list[Path]:
 
 
 def _is_logger_module(module: str) -> bool:
-    # 三种写法都要认：`from loguru import logger`、`from src.logger import logger`，
-    # 以及相对导入 `from .logger import logger`——AST 里后两者的 node.module 分别是
-    # "src.logger" 与 **"logger"**（level=1 不并进 module）。漏掉最后一种就等于
-    # 对 src/ws_client.py、src/async_http.py 等九个模块的 logger 完全失明（假绿）。
+    # 三种写法都要认：`from loguru import logger`、`from src.logger import logger`，以及相对导入
+    # `from .logger import logger`——AST 里后两者的 node.module 分别是 "src.logger" 与 **"logger"**
+    # （level=1 不并进 module）。漏掉最后一种就对 src/ws_client.py 等九个模块的 logger 完全失明。
     return module in {"loguru", "logger"} or module.endswith(".logger")
 
 
@@ -320,10 +314,9 @@ def _callee_name(func: ast.expr) -> str:
 
 def _message_is_interpolated(node: ast.AST) -> bool:
     # 判据与 MID-68 收紧后的不变量①一致：首参**子树**中存在含 FormattedValue 的 JoinedStr。
-    # 唯一收敛处仍是 tr() 的模板位——约定②（格式说明符由调用方预先求值后作实参传入）
-    # 本就允许 tr(...) 的实参位写 f-string，一并判违规会把本仓推荐写法打成回归。
-    # 形参取 ast.AST 而非 ast.expr：本函数按「子树」递归，ast.iter_child_nodes 产出的是任意
-    # AST 节点（含 ast.arguments/keyword 等非 expr 节点），收窄成 expr 会让递归自身不过类型检查。
+    # 唯一收敛处仍是 tr() 的模板位——约定②（格式说明符由调用方预先求值后作实参传入）本就允许
+    # tr(...) 实参位写 f-string，一并判违规会把本仓推荐写法打成回归。形参取 ast.AST 而非
+    # ast.expr：本函数按子树递归，iter_child_nodes 会产出 ast.arguments/keyword 等非 expr 节点。
     if isinstance(node, ast.JoinedStr):
         return any(isinstance(value, ast.FormattedValue) for value in node.values)
     if isinstance(node, ast.Call):

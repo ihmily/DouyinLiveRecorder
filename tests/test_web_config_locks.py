@@ -15,11 +15,10 @@
 # 用例一律走真实 PUT /api/config（TestClient），判定函数是生产侧的 is_sensitive_item，
 # 测试内不重新实现任何脱敏/判定逻辑。
 #
-# 已知残留（实测记录，**不在本文件处置范围**，也不写成断言以免被读成「期望语义」）：
-# 提交 value='***' 时后端返回 200 并把掩码原样写进 config.ini（真实凭据即被覆盖）。
-# 现约定的防线是「前端 saveConfig 跳过 *** 」（web/app.js，由
-# tests/frontend/test_quality_ui.mjs 锁定），后端无对称判定——属实现侧决策，
-# 已作为遗留点上报 web_api/web_config 负责人，不在此处替生产代码表态。
+# 掩码侧的对称防线（此前记为「已知残留」，已于同日 MID-37 残留修复关闭）：提交 value='***'
+# 现在也被后端拒成 400（src/web_api.py 的 `elif value.strip() == SENSITIVE_MASK`），由
+# tests/test_web_api.py::TestSensitiveValueBlankRejected::test_mask_sensitive_value_rejected 锁定；
+# 本文件只负责「空值覆盖」那半边，掩码那半边不在此重述以免形成第二份事实源。
 
 import sys
 import threading

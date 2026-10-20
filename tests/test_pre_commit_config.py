@@ -1,19 +1,16 @@
 # .pre-commit-config.yaml 与 AGENTS.md「格式化命令（门禁唯一基准）」的同源回归锁。
 #
-# 治理症状：本仓曾长期只在 CI 与 `python scripts/run_gates.py` 里执行 check_annotations /
-# compile_po --check / check_version / check_runtime_pins / check_skill_agents_consistency 五条
-# 仓库级门禁，pre-commit 侧完全漏配——本地提交绿不等于门禁全绿，缺陷要拖到 CI 才红。本用例把「AGENTS.md 章节列出的每条
-# 常驻门禁都必须在 pre-commit 找到对应 hook」钉成机检回归锁，新增门禁漏配 pre-commit 即刻拦下。
+# 治理症状：五条仓库级门禁（check_annotations / compile_po / check_version / check_runtime_pins /
+# check_skill_agents_consistency）曾只在 CI 与 `python scripts/run_gates.py` 执行，pre-commit 侧
+# 完全漏配——本地提交绿不等于门禁全绿。本用例把「AGENTS.md 章节列出的每条常驻门禁都必须在
+# pre-commit 找到对应 hook」钉成机检，新增门禁漏配即刻拦下。
 #
-# 断言口径（为什么不钉整行字面量）：AGENTS.md 与 pre-commit 对同一条命令的调用形态本就允许
-# 不同——`python -m black --check ...` 由 mirror hook `id: black` 覆盖，`python scripts/x.py`
-# 由 local hook `entry: python scripts/x.py` 覆盖，锁的是「这条门禁由 pre-commit 触发执行」
-# 这一不变量，而不是字面串。要收窄时只钉「谁被调用（脚本相对路径 / 工具名）」，
-# 不钉参数顺序，避免 M-26 类反转（钉旧实参名 → 契约反转后静默空洞成立）。
+# 断言口径：不钉整行字面量——`python -m black` 由 mirror hook `id: black` 覆盖，`python scripts/x.py`
+# 由 local hook `entry:` 覆盖；锁的是「该门禁由 pre-commit 触发」这一不变量，只钉「谁被调用」，
+# 不钉参数顺序（避免 M-26 类反转：钉旧实参名 → 契约反转后静默空洞成立）。
 #
-# 未纳入断言的 AGENTS.md 行：`mypy --platform linux` 章节明写「涉及平台专属符号时增跑」，
-# 属按需触发的**条件增跑**，不是每次提交必守的常驻门禁；pre-commit 侧不覆盖是刻意设计，
-# 加了会让每次提交都跑两遍 mypy（一次本机平台、一次 Linux 交叉），噪声大而无收益。
+# 未纳入断言：`mypy --platform linux` 属按需触发的条件增跑；pre-commit 不覆盖是刻意设计，
+# 否则每次提交要跑两遍 mypy（本机 + Linux 交叉），噪声大而无收益。
 
 from __future__ import annotations
 
@@ -25,9 +22,8 @@ import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# AGENTS.md「格式化命令」章节列出的五条仓库级门禁脚本（本次修复前 pre-commit 唯一漏配的部分）。
-# 匹配口径取「脚本相对路径子串」——pre-commit entry 可再加参数（如 `--check`），
-# 只要脚本本身被调用即视为覆盖；不钉参数顺序与字符串完全相等。
+# AGENTS.md「格式化命令」章节列出的五条仓库级门禁脚本（匹配口径取脚本相对路径子串：
+# entry 可再携带参数，只要脚本本身被调用即视为覆盖，不钉参数顺序与字符串完全相等）。
 REPO_LEVEL_GATE_SCRIPTS: tuple[str, ...] = (
     "scripts/check_annotations.py",
     "scripts/compile_po.py",
@@ -38,9 +34,8 @@ REPO_LEVEL_GATE_SCRIPTS: tuple[str, ...] = (
 
 
 def _load_run_gates() -> Any:
-    # 沿用 test_run_gates.py 惯例：scripts/ 不在包路径内，用 spec_from_file_location 显式加载，
-    # 避免 sys.path 注入被 isort 重排到 import 之前。复用它的 extract_gate_commands，
-    # 本文件绝不重抄一份解析器（两处各写一份迟早演化出两种「格式化命令章节」）。
+    # 沿用 test_run_gates.py 惯例：scripts/ 不在包路径内，用 spec_from_file_location 显式加载；
+    # 复用它的 extract_gate_commands，本文件绝不重抄解析器（两处各写一份迟早演化出两种章节口径）。
     spec = importlib.util.spec_from_file_location("_pre_commit_gate_probe", ROOT / "scripts" / "run_gates.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -91,9 +86,8 @@ def _local_entries(cfg: dict[str, Any]) -> list[str]:
 
 
 def test_agents_gate_section_includes_repo_level_gates() -> None:
-    # 前置守卫：AGENTS.md 章节必须**确实列出**这四条门禁脚本；若章节被误删，
-    # 下面的 pre-commit 覆盖用例就会因「AGENTS.md 里根本没这条」而空过，
-    # 反而给出「门禁同源」的假绿——SEV-2219 同口径的 fail-closed 判据。
+    # 前置守卫：章节必须**确实列出**这五条门禁脚本；若章节被误删，下面的覆盖用例会因
+    # 「AGENTS.md 里根本没这条」而空过，反而给出「门禁同源」的假绿（SEV-2219 同口径 fail-closed）。
     cmds = _load_agents_gate_commands()
     assert cmds, "未能从 AGENTS.md「格式化命令」章节解析到任何门禁，同源锁失去基准"
     for script in REPO_LEVEL_GATE_SCRIPTS:
@@ -101,8 +95,7 @@ def test_agents_gate_section_includes_repo_level_gates() -> None:
 
 
 def test_agents_gate_section_includes_formatter_tools() -> None:
-    # black/isort/mypy 三条常驻门禁同样不能从章节里消失——本用例把 pre-commit 侧与
-    # AGENTS.md 侧同时钉住，任何一侧被"精简"都会有一头变红。
+    # black/isort/mypy 同样不能从章节里消失——两侧同时钉住，任何一侧被「精简」都会有一头变红。
     cmds = _load_agents_gate_commands()
     assert any("black" in c and "--check" in c for c in cmds), "AGENTS.md 章节缺 black --check 门禁"
     assert any("isort" in c and "--check-only" in c for c in cmds), "AGENTS.md 章节缺 isort --check-only 门禁"
@@ -114,8 +107,8 @@ def test_agents_gate_section_includes_formatter_tools() -> None:
 
 
 def test_pre_commit_local_hooks_cover_repo_level_gates() -> None:
-    # 核心回归锁：五份仓库级门禁脚本必须在 local hook 的 entry 里出现（子串匹配，
-    # 允许 entry 携带额外参数）。缺失任一条 = 本次修复回归，CI 与本地门禁再次脱钩。
+    # 核心回归锁：五份仓库级门禁脚本必须在 local hook 的 entry 里出现（子串匹配，允许额外参数）。
+    # 缺失任一条 = 本次修复回归，CI 与本地门禁再次脱钩。
     entries = _local_entries(_load_pre_commit_config())
     missing = [s for s in REPO_LEVEL_GATE_SCRIPTS if not any(s in e for e in entries)]
     assert not missing, f"pre-commit 未覆盖 AGENTS.md 仓库级门禁脚本：{missing}"
@@ -130,9 +123,8 @@ def test_pre_commit_mirror_hooks_cover_formatter_tools() -> None:
 
 
 def test_pre_commit_local_hook_covers_mypy_without_path_args() -> None:
-    # mypy 必须是 local hook 且 entry 是**裸** `mypy`（不带路径），
-    # 显式传路径会覆盖 pyproject [tool.mypy].files（AGENTS.md 硬约束）；
-    # 曾经踩过「mypy src/」导致 gui.py / main.py 等根入口长期逃逸，本用例是那道墙。
+    # mypy 必须是 local hook 且 entry 是**裸** `mypy`：显式传路径会覆盖 [tool.mypy].files
+    # （AGENTS.md 硬约束）；「mypy src/」曾让 gui.py / main.py 等根入口长期逃逸，本用例是那道墙。
     cfg = _load_pre_commit_config()
     mypy_hooks = [h for h in _iter_hooks(cfg) if h.get("__repo__") == "local" and h.get("id") == "mypy"]
     assert mypy_hooks, "pre-commit 缺失 mypy local hook"
@@ -151,9 +143,9 @@ def test_pre_commit_local_hook_covers_mypy_without_path_args() -> None:
 
 def test_repo_level_gate_hooks_share_system_pass_filenames_false_always_run() -> None:
     # 结构不变量：五份仓库级门禁 hook 必须 language=system + pass_filenames=false + always_run=true。
-    # 语义解释见 .pre-commit-config.yaml 内注释——五个脚本按仓库根遍历做跨文件比对（i18n 双侧、
-    # 版本号三处、钉定表对账、Skill 目录表与 AGENTS.md），若允许 pass_filenames 会把 staged 文件当参数传入而破坏自身遍历；
-    # 若非 always_run 则改动 .po / build_exe.py / pyproject.toml 时不会触发，等于回到本次修复前的症状。
+    # 五个脚本按仓库根遍历做跨文件比对（i18n 双侧、版本号三处、钉定表对账、Skill 目录表与 AGENTS.md），
+    # 若允许 pass_filenames 会把 staged 文件当参数传入而破坏自身遍历；若非 always_run 则改 .po /
+    # build_exe.py / pyproject.toml 时不触发，等于回到本次修复前的症状（语义细则见配置文件内注释）。
     cfg = _load_pre_commit_config()
     matched = 0
     for hook in _iter_hooks(cfg):
@@ -180,12 +172,11 @@ def test_repo_level_gate_hooks_share_system_pass_filenames_false_always_run() ->
 
 
 def test_run_gates_is_invocable_as_single_hook_entry() -> None:
-    # AGENTS.md 明写 run_gates.py 是「本地一次性触发点」；本用例证明它同样能被
-    # `pre-commit` 风格的 `language: system, entry: python scripts/run_gates.py, pass_filenames: false`
-    # 调用（等价于把八条门禁压成单 hook 的可行路径）。这里**不**把 run_gates 加进当前配置，
-    # 是因为它会与现有 black / isort / mypy hook 重复执行——但作为 alternative 入口，
-    # 必须保证「--list 只解析、不执行」的分支可用，且退出码遵循文档定义。
-    # 判据形态：直接调 main() 而非 subprocess（避免 CI 无 venv 环境下 pre-commit 侧依赖）。
+    # AGENTS.md 明写 run_gates.py 是「本地一次性触发点」；本用例证明它也能被 pre-commit 风格的
+    # (language: system, entry: python scripts/run_gates.py, pass_filenames: false) 调用。没有把它
+    # 加进当前配置，是因为会与既有 black / isort / mypy hook 重复执行——但作为备选入口，
+    # 「--list 只解析、不执行」的分支必须可用且退出码遵循文档定义。判据形态：直接调 main()
+    # 而非 subprocess（避开 CI 无 venv 环境下 pre-commit 侧依赖）。
     import sys
     import types as _types
 
@@ -213,8 +204,7 @@ def test_run_gates_is_invocable_as_single_hook_entry() -> None:
     assert any(ln.strip().startswith("mypy") for ln in out_lines)
 
 
-# ───────────────────────── 变异验证回归锁：故意去掉一条会红 ─────────────────────────
-# 说明：本文件其余用例都是"配置文件 + AGENTS.md"两侧结构比对，不需要真跑子进程，
-# 变异验证已由开发期一次性完成（临时移除 check_annotations hook 条目 → test_pre_commit_local_hooks_cover_repo_level_gates
-# 变红）。此处不再在测试里就地改文件（AGENTS.md 硬约束：变异改动必须当轮还原并带 MUTATION 标记，
-# 见「已知坑」段）；留注释作为回归来源记录，后续若再重构本用例可直接照此复现验证。
+# ───────────────────── 变异验证回归锁：故意去掉一条会红 ─────────────────────
+# 其余用例都是「配置文件 + AGENTS.md」两侧结构比对，不需真跑子进程；变异验证已由开发期一次性
+# 完成（临时移除 check_annotations hook 条目 → test_pre_commit_local_hooks_cover_repo_level_gates 变红），
+# 此处不再就地改文件（AGENTS.md：变异改动必须当轮还原并带 MUTATION 标记）。

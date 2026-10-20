@@ -1,14 +1,12 @@
 # tests/test_gui_qt_label_parity.py
 # 结构锁：Qt 侧「构造标签」与「T() 登记键」必须是同一个 msgid。
 #
-# 故障形态（2026-10-17 实测，9 处按钮）：`action_button("📥  最小化到托盘")` 之后紧跟
-# `set_text(btn, T("最小化到托盘"))`——set_text 建时即回填并登记重译，于是构造期带 emoji 的标签
-# 在启动回填与每次 retranslate_all() 都被打回裸文本，emoji 永久消失。两处写法各写各的，
-# 单看任一行都「像是对的」，只有比对二者才能看见。
+# 故障形态：`action_button("📥  最小化到托盘")` 后紧跟 `set_text(btn, T("最小化到托盘"))`，
+# 启动回填与每次 retranslate_all() 都会把构造期文本覆盖成登记键的译文，emoji 前缀永久消失。
+# 两处写法各写各的，单看任一行都像对的，只有比对二者才能看见。
 #
-# 为什么不用真窗断言：Qt 控件文本要起 QApplication 才拿得到，而本机有显示器时真窗用例
-# 反而以 skip 出现（见 AGENTS.md「真窗用例在子进程里失败会以 skipped 面出现」）。
-# 这条不变量本身是源码形态的，AST 判定既稳又不依赖显示器。
+# 判定取 AST 而不起 QApplication：真窗用例在本机有显示器时反以 skip 出现，而这条不变量
+# 本身就是源码形态的，AST 判定不依赖显示器。
 
 import ast
 import pathlib
@@ -20,8 +18,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 QT_PKG = ROOT / "src" / "gui_qt"
 _EMOJI = re.compile(r"[^\x00-\x7f一-鿿（）、，。：；「」％°]")
 
-# 反向见证下限：至少 9 处「构造+登记」配对、其中至少 9 处标签带 emoji 前缀
-# （等于本轮 B 项修掉的站点数；只增不减——新增带 emoji 的按钮会让上限自然满足）。
+# 反向见证下限：至少 9 处「构造+登记」配对，其中至少 9 处带 emoji 前缀
+# （只增不减，防止图标被整体剥掉）。
 MIN_PAIRS = 9
 MIN_EMOJI_PAIRS = 9
 

@@ -1,4 +1,4 @@
-# Tests for src/utils.py - utility function tests for coverage improvement.
+# src/utils.py 工具函数的回归锁：Cookie 拼装、MD5/磁盘查询、配置读写、URL 与代理归一、去重与 emoji 清理、JSONP 解包、节点脚本执行与异常兜底。
 
 import ast
 import builtins
@@ -62,8 +62,6 @@ def log_capture() -> Generator[list[str]]:
 # 字典转 Cookie 头字符串：把爬虫拿到的 cookie 字典拼成请求头。
 # 守卫空/单/多键值三种形态的拼接正确性。
 class TestDictToCookieStr:
-    # Test dict_to_cookie_str.
-
     def test_empty_dict(self) -> None:
         assert dict_to_cookie_str({}) == ""
 
@@ -80,8 +78,6 @@ class TestDictToCookieStr:
 
 
 class TestCheckMd5:
-    # Test check_md5.
-
     def test_returns_md5(self, tmp_path: Path) -> None:
         test_file = tmp_path / "test.txt"
         test_file.write_text("hello world", encoding="utf-8")
@@ -98,8 +94,6 @@ class TestCheckMd5:
 
 
 class TestCheckDiskCapacity:
-    # Test check_disk_capacity.
-
     def test_returns_positive_float(self, tmp_path: Path) -> None:
         # 磁盘容量查询返回正浮点（字节数），负值/异常代表挂载失败（录制前需据此告警）
         result = check_disk_capacity(str(tmp_path))
@@ -116,8 +110,6 @@ class TestCheckDiskCapacity:
 
 
 class TestRemoveDuplicateLines:
-    # Test remove_duplicate_lines.
-
     # 连续/间隔重复行须去重且仅保留首次出现顺序，编码用 utf-8-sig 兼容 BOM
     def test_removes_duplicates(self, tmp_path: Path) -> None:
         test_file = tmp_path / "test.txt"
@@ -132,7 +124,7 @@ class TestRemoveDuplicateLines:
 
 
 class TestReadConfigValue:
-    # Test read_ini_value (F-16: 原 read_config_value，与 config_io 同名函数区分).
+    # F-16：原 read_config_value，与 config_io 同名函数区分。
 
     # 存在的 section/key 须返回原始字符串值
     def test_read_existing_key(self, tmp_path: Path) -> None:
@@ -171,8 +163,6 @@ class TestReadConfigValue:
 
 
 class TestUpdateConfig:
-    # Test update_config.
-
     def test_update_existing_key(self, tmp_path: Path, log_capture: list[str]) -> None:
         config_file = tmp_path / "config.ini"
         config_file.write_text("[section1]\nkey1 = old_value\n", encoding="utf-8-sig")
@@ -268,8 +258,6 @@ class TestDuplicateKeyWriteback:
 
 
 class TestGetFilePaths:
-    # Test get_file_paths.
-
     # 须递归列出目录下所有文件（含子目录），返回数量与路径匹配
     def test_returns_files(self, tmp_path: Path) -> None:
         (tmp_path / "a.txt").write_text("hello")
@@ -287,8 +275,6 @@ class TestGetFilePaths:
 
 
 class TestRemoveEmojis:
-    # Test remove_emojis.
-
     # 无 emoji 文本须原样返回，不引入多余空白
     def test_no_emojis(self) -> None:
         assert remove_emojis("hello world") == "hello world"
@@ -307,8 +293,6 @@ class TestRemoveEmojis:
 # handle_proxy_addr 规范化代理地址，补齐 http 前缀。
 # 守卫 None/空/有无前缀四种输入。
 class TestHandleProxyAddr:
-    # Test handle_proxy_addr.
-
     # None 代理须返回 None，避免把 None 当字符串传给 requests
     def test_none_returns_none(self) -> None:
         assert handle_proxy_addr(None) is None
@@ -325,8 +309,6 @@ class TestHandleProxyAddr:
 
 
 class TestJsonpToJson:
-    # Test jsonp_to_json.
-
     def test_valid_jsonp(self) -> None:
         # 标准 callback({...}) 包裹的 JSONP 须正确提取为 dict
         jsonp = 'callback({"key": "value"});'
@@ -346,8 +328,6 @@ class TestJsonpToJson:
 
 
 class TestReplaceUrl:
-    # Test replace_url.
-
     # 整行即 URL 时须整行替换为新地址
     def test_replace_exact_line(self, tmp_path: Path) -> None:
         f = tmp_path / "test.txt"
@@ -390,8 +370,6 @@ class TestReplaceUrl:
 # get_query_params 解析 URL query 参数，支持按 key 过滤。
 # 守卫全量/单 key/缺失三种查询。
 class TestGetQueryParams:
-    # Test get_query_params.
-
     def test_all_params(self) -> None:
         result = get_query_params("https://example.com?a=1&b=2", None)
         assert "a" in result
@@ -409,7 +387,7 @@ class TestGetQueryParams:
 
 
 class TestTraceErrorGuard:
-    # Test trace_error_decorator / trace_error_decorator_or_none（同步路径此前完全未覆盖）。
+    # trace_error_decorator / trace_error_decorator_or_none 的同步路径此前完全未覆盖，本类补齐。
 
     # 同步正常路径：无异常时原样返回，不得落入任何兜底分支
     def test_sync_success(self) -> None:
@@ -445,8 +423,6 @@ class TestTraceErrorGuard:
 
 
 class TestUnzipFile:
-    # Test unzip_file.
-
     # 正常解压：文件落位，且默认 delete=True 时源 zip 被清理（node/ffmpeg 安装缓存场景）
     def test_unzip_and_delete(self, tmp_path: Path) -> None:
         zip_file = tmp_path / "pkg.zip"
@@ -479,8 +455,6 @@ class TestUnzipFile:
 
 
 class TestReadConfigValueErrors:
-    # Test read_ini_value 异常兜底。
-
     # ini 内容非法（缺 section 头）时 config.read 抛解析异常 → 必须返回 None 并打印原因，
     # 而非让解析异常击穿调用方（注意：目录路径等 OSError 会被 configparser.read 吞掉，走不到这里）
     def test_invalid_ini_returns_none(self, tmp_path: Path, log_capture: list[str]) -> None:
@@ -491,8 +465,6 @@ class TestReadConfigValueErrors:
 
 
 class TestUpdateConfigErrors:
-    # Test update_config 异常兜底。
-
     # ini 内容非法时读取阶段失败 → 直接返回，目标文件内容保持原样
     def test_invalid_ini_returns_early(self, tmp_path: Path, log_capture: list[str]) -> None:
         cfg = tmp_path / "bad.ini"
@@ -519,8 +491,6 @@ class TestUpdateConfigErrors:
 
 
 class TestRemoveDuplicateLinesEncodingFallback:
-    # Test remove_duplicate_lines 的编码回退路径。
-
     # utf-8-sig 严格读取撞上 UnicodeDecodeError → 须回退重读且去重结果正确。
     # 回退轮的编码：MIN-2244③ 之前是「系统默认编码」（宿主 locale），现改为显式
     # utf-8-sig + errors="surrogateescape"，故真实非 UTF-8 字节的用例已跨平台稳定

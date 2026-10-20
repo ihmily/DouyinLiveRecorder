@@ -1,15 +1,13 @@
-// 组 G（2026-09-22）前端回归锁：SEV-2221 / SEV-2227 / SEV-2228 / MID-2237 / MID-2240 / MID-2253。
+// 组 G（2026-09-22）前端回归锁：SEV-2221 / SEV-2227 / SEV-2228 / MID-2237 / MID-2240 / MID-2253；
+// 后续 CODE_REVIEW_2026-09-29_2 的 M-21（轮询代次竞态）/ M-23（dropped 转义）/ M-26（认证复验
+// 假绿锁改写）也落在此处。M-22 的口令窗行为另在 tests/frontend/test_auth_reauth.mjs。
 //
-// 与 test_quality_ui.mjs 的分工：那边是「既有质量门禁」（四语目录、parseConfigBool 跨语言不变量、
-// 掩码写入、登出等）；本文件只放本轮修复对应的**失效形态**锁，每条都能在把对应修复改回原样时变红。
+// 与 test_quality_ui.mjs 的分工：那边是既有质量门禁（四语目录、parseConfigBool 跨语言不变量、
+// 掩码写入、登出等）；本文件只放本轮修复对应的**失效形态**锁，把对应修复改回原样即变红。
 //
-// [2026-09-29 组 G 续锁] CODE_REVIEW_2026-09-29_2 的 M-21（轮询代次竞态）/ M-23（dropped 转义）/
-// M-26（认证复验假绿锁改写）三条一并落在本文件：M-21/M-23 需要这里的「可控定时器队列 + 可停在
-// 半路的 fetch」（makeInflight），M-22 的口令窗行为另在 tests/frontend/test_auth_reauth.mjs。
-//
-// 沙箱策略与 test_quality_ui.mjs 同源（vm + 自制 DOM/fetch/定时器桩，无 npm 依赖），
-// 但本文件需要「可控定时器」：SEV-2227 的失效形态是「隐藏后 setTimeout 永不再排」，
-// 用 no-op 定时器根本观察不到，故改为可手动推进的假定时器队列。
+// 沙箱策略与 test_quality_ui.mjs 同源（vm + 自制 DOM/fetch 桩，无 npm 依赖），但这里需要
+// **可控定时器**：SEV-2227 的失效形态是「隐藏后 setTimeout 永不再排」，no-op 定时器观察不到，
+// 故改为可手动推进的假定时器队列；M-21 另需可停在半路的 fetch（makeInflight）。
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -19,11 +17,10 @@ const APP_JS = readFileSync(new URL('../../web/app.js', import.meta.url), 'utf8'
 const INDEX_HTML = readFileSync(new URL('../../web/index.html', import.meta.url), 'utf8');
 const ROOT_INDEX_HTML = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
 const WEB_API_PY = readFileSync(new URL('../../src/web_api.py', import.meta.url), 'utf8');
-// 阶段2（FastAPI → Starlette）后请求模型（含 ConfigUpdate.reauth_password）搬到 src/web_models.py，
-// 字段级断言改扫该文件；update_config 端点本体仍在 web_api.py。
+// 请求模型（含 ConfigUpdate.reauth_password）在 src/web_models.py，字段级断言扫该文件；
+// update_config 端点本体仍在 web_api.py。
 const WEB_MODELS_PY = readFileSync(new URL('../../src/web_models.py', import.meta.url), 'utf8');
-// SEV-2221 撤销锁要核对 main.py 里到底有没有轮次计数器（判据见该用例），
-// 读原文而不猜：本文件已有「读生产源码做源码级断言」的先例（WEB_API_PY / APP_JS）。
+// SEV-2221 撤销锁要核对 main.py 里有没有轮次计数器（判据见该用例），读原文而不猜。
 const MAIN_PY = readFileSync(new URL('../../main.py', import.meta.url), 'utf8');
 
 // —— DOM / 定时器 / fetch 桩 ————————————————————————————————
@@ -33,11 +30,10 @@ function makeClassList() {
     return {
         add(...cs) { cs.forEach(c => set.add(c)); },
         remove(...cs) { cs.forEach(c => set.delete(c)); },
-        // 必须支持 ElementToken.toggle(token, force) 的第二参：真实 DOM 里它是**绝对赋值**
-        // （force=true 一定加上、false 一定去掉），而桩原先只有一元翻转。
-        // app.js 的 renderRecordingControl 正是 `classList.toggle('hidden', !enabled)` 这种写法，
-        // 一元翻转在「同一元素渲染两次」时结论完全相反（第一次对、第二次就错了），
-        // SEV-2228 后半要断言三态标签（on/off/probe）的显隐，不修这条桩就测不出真实语义。
+        // 第二参 force 必须支持：真实 DOM 里它是**绝对赋值**（true 一定加、false 一定去），
+        // 一元翻转在「同一元素渲染两次」时结论相反。renderRecordingControl 正用
+        // `classList.toggle('hidden', !enabled)`，SEV-2228 后半要断言三态标签显隐，
+        // 不修这条桩就测不出真实语义。
         toggle(c, force) {
             const want = force === undefined ? !set.has(c) : Boolean(force);
             if (want) set.add(c); else set.delete(c);
@@ -56,12 +52,10 @@ function makeElement(id) {
         innerHTML: '',
         textContent: '',
         value: '',
-        // .options 是 HTMLSelectElement 独有的 HTMLOptionsCollection：app.js 的 renderDanmaku 在
-        // 推进增量游标（dmLastSeq）之前会遍历 sel.options 以保留当前筛选项
-        // （web/app.js `for (var k = 0; k < sel.options.length; k++)`）。桩若不建模 .options，
-        // 该处读 undefined.length 抛 TypeError，位于其后的游标推进逻辑被整体跳过，danmaku 游标用例
-        // 就会把「沙箱 DOM 不全」误报成「生产未推进游标」。补一个空 options 集合，让 renderDanmaku
-        // 走完整条链——注意这是修桩保真度，不是改生产：真实浏览器里 select.options 恒存在。
+        // options 是 HTMLSelectElement 独有的集合：renderDanmaku 推进增量游标（dmLastSeq）前会
+        // 遍历 sel.options 保留当前筛选项（`for (var k = 0; k < sel.options.length; k++)`）。桩若
+        // 不建模，该处读 undefined.length 抛 TypeError，其后的游标推进被整体跳过，用例会把
+        // 「沙箱 DOM 不全」误报成「生产未推进游标」。真实浏览器里 select.options 恒存在。
         options: [],
         className: '',
         disabled: false,
@@ -112,8 +106,8 @@ function makeResponse(status, data) {
 }
 
 // routes 键为 "METHOD path"，值为对象或 (callIndex) => 对象；path 含 query 时按前缀匹配失败，
-// 故调用方须写全（本文件用到的 path 都是固定的）。
-// spec.gate 存在时（M-21 用例，见 makeInflight）响应体要等 gate 落地才返回，用来把请求「停在半路」。
+// 故调用方须写全（本文件用到的 path 都是固定的）。spec.gate 存在时响应体要等 gate 落地才返回，
+// 用来把请求「停在半路」（M-21，见 makeInflight）。
 function makeFetch(routes, log) {
     return async (path, init) => {
         init = init || {};
@@ -140,10 +134,10 @@ function makeFetch(routes, log) {
 }
 
 // —— M-21 用例专用：可「停在半路」的 fetch 路由 ————————————————
-// 每次调用返回一个 text() 等外部 Promise 的响应，由测试用 releaseNext() 精确放行「第 k 次在途请求
-// 落地」这一刻。「停止 → 立即重启」的竞态只有在**旧请求晚于新链启动**才落地时才暴露，
-// 普通 fetch 桩（当轮即回）根本制造不出这个时刻，故必须把在途请求做成测试可控的对象。
-// jsonFor 传函数时按调用序号（本路径内从 1 计）取载荷，用于让「过期那一轮」带回可辨识的数据。
+// 每次调用返回 text() 等外部 Promise 的响应，由 releaseNext() 精确放行「第 k 次在途请求落地」。
+// 「停止 → 立即重启」的竞态只在**旧请求晚于新链启动**才落地时暴露，普通 fetch 桩（当轮即回）
+// 造不出这一刻，故必须把在途请求做成测试可控的对象。jsonFor 传函数时按调用序号取载荷，
+// 让「过期那一轮」带回可辨识的数据。
 function makeInflight(jsonFor) {
     const waiting = [];
     let calls = 0;
@@ -194,10 +188,9 @@ async function boot({ routes = {}, hidden = false, seedClasses = {} } = {}) {
         return el;
     });
     const docListeners = {};
-    // class 选择器桩：只建模 renderRecordingControl 真正用到的 .recording-state 三 span
-    // （on/off/probe）。getElementById 的桩是「按 id 惰性建一个元素」，class 选择器没有对应
-    // 物，故这里给每个 selector 也惰性建一个元素并在 ctx.selectors 里回读——
-    // SEV-2228 后半要断言「取证失败」标签的显隐，必须有可达的断言面。
+    // class 选择器桩：只建模 renderRecordingControl 用到的 .recording-state 三 span（on/off/probe）。
+    // getElementById 按 id 惰性建元素，class 选择器没有对应物，故同样惰性建并在 ctx.selectors
+    // 回读——SEV-2228 后半要断言「取证失败」标签的显隐，必须有可达的断言面。
     const selectors = new Map();
     const selectorById = sel => {
         if (!selectors.has(sel)) selectors.set(sel, makeElement('class:' + sel));
@@ -258,9 +251,9 @@ async function boot({ routes = {}, hidden = false, seedClasses = {} } = {}) {
     return { sandbox, elements, selectors, tabs, fetchLog, timers, document, fire, storage };
 }
 
-// 切到仪表盘：tab 点击 → showView('dashboard') → startSSE()/loadLogs()/startLogsPolling()
-// 注意只 flush 一轮：runNext 会把回调里新排的下一次轮询也执行掉，flush 到空等于空跑到稳定态，
-// 会把「一次 flush = 一次请求」的计数前提摧毁（本文件多处按请求数增量断言）。
+// 切到仪表盘：tab 点击 → showView('dashboard') → startSSE()/loadLogs()/startLogsPolling()。
+// 只推进一轮 tick：跑空会执行回调里新排的下一轮，摧毁「一次 tick = 一次请求」的计数前提
+// （本文件多处按请求数增量断言）。
 async function gotoDashboard(ctx) {
     const tab = ctx.tabs.find(t => t.getAttribute('data-view') === 'dashboard');
     tab._listeners.click[0].call(tab);
@@ -268,8 +261,7 @@ async function gotoDashboard(ctx) {
 }
 
 // 切到弹幕监控视图：tab 点击 → startDanmakuPolling() → 每轮 GET /api/danmaku?since=<游标>。
-// 与 gotoDashboard 同理只推进一轮（一次 tick = 一次请求），用例才能按「第 N 次轮询」精确
-// 安排路由返回值。
+// 与 gotoDashboard 同理只推进一轮，用例才能按「第 N 次轮询」精确安排路由返回值。
 async function gotoDanmaku(ctx) {
     const tab = ctx.tabs.find(t => t.getAttribute('data-view') === 'danmaku');
     tab._listeners.click[0].call(tab);
@@ -349,21 +341,18 @@ test('SEV-2228：stale=true 的陈旧快照也要显式告知用户数据可能�
 
 // —— SEV-2221 撤销 / SEV-2228 后半：main_loop_alive 是死路径，「取证失败」改由真信号承担 ——
 //
-// 本节原锁「main_loop_alive=false 的告警文案要区别于引擎已停止」。2026-09-23 实测证伪：
-// 该键读的是 main.main_loop_ticks，而这个名字在 main.py 里**从未定义、从未自增**
-// （下面第一条用例把这条取证做成了断言，防的就是「以后有人以为还有效」）。于是键永不下发、
-// 前端 `=== false` 分支永不成立——「有一个永不生效的存活信号」比「没有该信号」更危险，
-// 后端已按任务书把键从契约撤下（判据与取舍见 src/web_api.py::_read_engine_status），
-// 前端不再依赖它，「取证失败」改由两个真实存在的信号承担：error（采样抛错）与 stale（超时回退）。
+// 原锁「main_loop_alive=false 的告警文案」。2026-09-23 实测证伪：该键读 main.main_loop_ticks，
+// 而这个名字在 main.py 里**从未定义、从未自增**（下面第一条用例把它做成了断言，防「以后有人
+// 以为还有效」）。键永不下发、前端 `=== false` 分支永不成立——「永不生效的存活信号」比「没有
+// 该信号」更危险，后端已把键从契约撤下（见 src/web_api.py::_read_engine_status），前端改用两个
+// 真实信号：error（采样抛错）与 stale（超时回退）。
 
 test('SEV-2221 撤销：main_loop_alive 不得再出现在前端、后端或 main.py 任何一侧', () => {
-    // 三侧同断言，缺一条就退化成「一半代码还在等一个永不来的键」：
-    // ① app.js 不再读它（否则是一条永不成立的判定，还会在 main.py 接线那天静默失效）；
-    // ② web_api.py 不再有探针实现（否则 _read_engine_status 若忘了挂键，实现就是死码）；
-    // ③ main.py 仍无轮次计数器——这是「撤下」而不是「留着」的事实依据。
-    // 断言的是**代码引用**而不是「文件里出现过这个名字」——撤下这件事本身要在注释/契约速查里
-    // 写明缘由（app.js 的 API 契约注释就写了「契约里已无 main_loop_alive」），
-    // 按全文 includes 断言会把这段说明也打成违规。
+    // 三侧同断言，缺一条就退化成「一半代码还在等一个永不来的键」：① app.js 不再读它（否则
+    // 是一条永不成立的判定，还会在 main.py 接线那天静默失效）；② web_api.py 不再有探针实现
+    // （否则 _read_engine_status 忘挂键时它就是死码）；③ main.py 仍无轮次计数器——「撤下」的
+    // 事实依据。断言的是**代码引用**而非「文件里出现过这个名字」：撤下缘由要写在注释/契约速查里，
+    // 按全文 includes 断言会把说明本身打成违规。
     assert.doesNotMatch(APP_JS, /s\.main_loop_alive\b/, 'app.js 仍在读取 main_loop_alive（死路径未清干净）');
     assert.doesNotMatch(APP_JS, /dashboard\.engineStalled/, '该文案只服务于已撤下的分支，四语目录应一并撤下');
     assert.doesNotMatch(WEB_API_PY, /_read_main_loop_alive|_MAIN_LOOP_TICKS_ATTR/,
@@ -431,9 +420,9 @@ test('SEV-2221：字段缺失（未接线）一律视为健康，不得把健康
 });
 
 test('SEV-2221：app.js 对存活字段用 === 严格判定，不得退化为真假值判定', () => {
-    // 源码级锁：`if (!s.engine_alive)` 会让 undefined（未带该键的正常快照）判成故障。
-    // 旧版这条还要求 main_loop_alive 也用 === false 判定——那个键已撤下，
-    // 若继续断言就会逼着实现保留一条永不成立的分支，故改为断言它**不存在**。
+    // 源码级锁：`if (!s.engine_alive)` 会把 undefined（未带该键的正常快照）判成故障。
+    // 旧版还要求 main_loop_alive 用 === false 判定；该键已撤下，继续断言只会逼实现保留
+    // 一条永不成立的分支，故改为断言它**不存在**。
     const body = APP_JS.slice(APP_JS.indexOf('function updateStatusWarning'), APP_JS.indexOf('function renderRecordingControl'));
     assert.match(body, /s\.engine_alive\s*===\s*false/, 'updateStatusWarning 未用 === false 判定 engine_alive');
     assert.doesNotMatch(body, /!\s*s\.engine_alive\b/, '存在真假值判定（undefined 会被判成故障）');
@@ -468,12 +457,10 @@ test('SEV-2228 后半：/api/danmaku 回 error=danmaku_unavailable 时不得清�
 
 test('SEV-2228 后半：danmaku_unavailable 不得推进增量游标（否则跳过失败期间的消息）', async () => {
     // 游标 dmLastSeq 只能由**成功**响应的 last_seq 推进。错误形态里 last_seq 虽等于 since
-    // （后端刻意如此），但这条锁防的是「顺手把 data.last_seq 无条件写进游标」的实现漂移——
-    // 一旦后端某天在错误分支也带回一个更大的 last_seq，就会静默丢掉那段弹幕。
-    // 需三轮才锁得住：req2 的 path 由 req1（成功，last_seq:7）决定，验证「成功必须推进」；
-    // req3 的 path 才反映 req2（error，刻意带更大的 last_seq:99）有没有被误用来推进游标。
-    // （旧写法只断言到 req2 的 since=7，永远观察不到 error 响应里的 last_seq:99，
-    // 与本用例标题承诺的不变量错位——那是一条只锁住「成功推进」、锁不住「错误不得推进」的半失效锁。）
+    // （后端刻意如此），但这条锁防的是「无条件把 data.last_seq 写进游标」的实现漂移——一旦
+    // 后端在错误分支带回更大的值，就会静默丢掉那段弹幕。需三轮才锁得住：req2 的 path 由 req1
+    // （成功，last_seq:7）决定，验证成功必须推进；req3 的 path 才反映 req2（error，刻意带
+    // last_seq:99）有没有被误用。
     let n = 0;
     const ctx = await boot({
         routes: {
@@ -499,10 +486,10 @@ test('SEV-2228 后半：danmaku_unavailable 不得推进增量游标（否则跳
 // —— M-23（2026-09-29）：弹幕折叠计数也必须过 esc()，拼接路径不得留裸插值 ——————
 
 test('M-23：/api/danmaku 的 dropped 计数进 innerHTML 前必须转义（拼接路径一律 esc 的不变量）', async () => {
-    // 失效形态：dmLineHtml 里 user/room/text 全过 esc()，唯独 `(+' + m.dropped + '` 是裸插值。
-    // 后端当前把 dropped 写成 int（src/danmaku_monitor.py 的采样折叠计数），现网不可利用，
-    // 但契约一变（计数改成带标记的可读串、或改由服务端拼文案）这里就是弹幕流的存储型注入点。
-    // 本用例按「字符串形态的 dropped」喂，直接锁住转义这一层，不依赖后端今天写什么类型。
+    // 失效形态：dmLineHtml 里 user/room/text 全过 esc()，唯独 dropped 是裸插值。后端当前把
+    // dropped 写成 int（src/danmaku_monitor.py 的采样折叠计数），现网不可利用；但契约一变
+    // （改成带标记的可读串或服务端拼文案）这里就是弹幕流的存储型注入点。用例按字符串形态喂，
+    // 直接锁转义层，不依赖后端今天写什么类型。
     const hostile = '<img src=x onerror=alert(1)>';
     const ctx = await boot({
         routes: {
@@ -625,12 +612,11 @@ test('MID-2240：页面隐藏时日志轮询一并停止', async () => {
 
 // —— M-21（2026-09-29）：轮询链的「停止 → 立即重启」竞态 ——————————————————
 //
-// 失效形态（详见 web/app.js 的 10b makePollChain 头注释）：stop* 只能 clearTimeout 掉**已排期**的
+// 失效形态（机制见 web/app.js 的 makePollChain 头注释）：stop* 只能 clearTimeout 掉**已排期**的
 // 定时器，取消不了**在途**请求；旧请求落地后的续期回调只看一个布尔标志，而「停止 → 立即重启」
-// 已把标志重新置回「在跑」——于是旧链在自己的回调里再排一次 setTimeout，并把模块级 timer 变量
-// 顶掉，两条链只剩一条可被 stop* 回收，另一条持续发请求直到下一次完整 stop。
-// 三条链（/api/status、/api/logs、/api/danmaku）各锁一条：机制共用一份（makePollChain），
-// 但代次是每链各自的，只修一条时另外两条仍会红。
+// 已把标志置回「在跑」——旧链于是再排一次 setTimeout 并顶掉模块级 timer 变量，两条链只剩一条
+// 可被 stop* 回收，另一条持续发请求。三条链（/api/status、/api/logs、/api/danmaku）各锁一条：
+// 机制共用一份（makePollChain），代次是每链各自的，只修一条时另外两条仍会红。
 
 test('M-21：状态轮询在「隐藏 → 立即回前台」里落地的在途请求不得排出第二条轮询链', async () => {
     const status = makeInflight({ monitoring: 1, recording_count: 0, recording: [] });
@@ -668,11 +654,10 @@ test('M-21：日志轮询在「切离仪表盘 → 立即切回」里落地的�
     await tick(ctx);
     assert.equal(logs.inflight(), 1, '用例前提失效：日志链未留下一个在途请求');
 
-    // 切到配置视图（stopLogsPolling）再立刻切回仪表盘（startLogsPolling）：上面那个请求仍未落地。
-    // 这里刻意走 tab 切换而不是 visibilitychange——桩里的 document.querySelector('.view:not(.hidden)')
-    // 返回的是**数组**，而 app.js 按单个元素读 visibleView.id，故「回前台重启日志/弹幕链」这条分支
-    // 在本文件的沙箱里根本命中不了（既有 MID-2240「页面隐藏时日志轮询一并停止」只锁隐藏侧，
-    // 因此一直没人发现）。属既有的桩保真度缺口，见本次报告，不在这里顺手改桩。
+    // 切到配置视图（stopLogsPolling）再立刻切回（startLogsPolling）：上面那个请求仍未落地。
+    // 这里刻意走 tab 切换而非 visibilitychange——桩里的 querySelector('.view:not(.hidden)') 返回
+    // **数组**，app.js 按单个元素读 visibleView.id，故「回前台重启日志/弹幕链」分支在本沙箱里
+    // 命中不了。属既有桩保真度缺口（已记入报告），不在这里顺手改桩。
     clickTab(ctx, 'config');
     clickTab(ctx, 'dashboard');
     await logs.releaseNext();
@@ -720,12 +705,9 @@ test('M-21：弹幕轮询重进视图时在途请求落地不得排出第二条�
 // —— MID-2253：已翻译模板不得混入中文常量值 ————————————————
 
 test('MID-2253：i18n.tr 模板的字符串实参不得是中文常量（其它语言下会中英混杂）', () => {
-    // 失效形态（web.py:297）：
-    //   tr("[web] 认证: {web_auth_enable}", web_auth_enable="开启" if ... else "关闭")
-    // 模板被翻译成「Authentication: {web_auth_enable}」，而值仍是中文 → en_US 下输出
-    // 「Authentication: 开启」。这类错法在中文下完全看不出，只有跨语言才暴露。
-    // 锁做成**文件无关**的：任何 i18n.tr(...) 调用里出现「中文常量 + 无 tr 包装」即判红，
-    // 这样新增同类写法（不止 web.py）也会被拦下。
+    // 失效形态：tr("[web] 认证: {web_auth_enable}", web_auth_enable="开启" if ... else "关闭")——
+    // 模板被翻译成「Authentication: {web_auth_enable}」而值仍是中文 → en_US 下中英混杂，
+    // 中文下完全看不出。锁做成**文件无关**：任何 i18n.tr(...) 里出现「中文常量 + 无 tr 包装」即判红。
     const files = ['web.py', 'src/web_api.py'];
     const offenders = [];
     for (const rel of files) {
@@ -766,12 +748,10 @@ test('MID-2253：web.py 认证开关播报必须走 i18n.tr 或字面量目录�
 // —— MIN-2237：前端 isSensitiveField 判定顺序必须与后端 is_sensitive_item 逐字对齐 ————
 
 test('MIN-2237：敏感节命中必须优先于 NOT_SECRET_KEY_RE 例外（顺序与后端一致）', () => {
-    // 失效形态：原实现把例外表提到最前短路
-    //   if (NOT_SECRET_KEY_RE.test(key)) return false;
-    //   return !!SENSITIVE_SECTIONS[section] || SENSITIVE_KEY_RE.test(key);
-    // 而后端是 section in SENSITIVE_SECTIONS or is_sensitive_key(key)，例外只在 is_sensitive_key 内部
-    // → `[Cookie] 抖音cookie有效期` 这类键后端脱敏、前端判非敏感并渲染成明文 text，用户误读成「没被保护」。
-    // 断言顺序而非结果：节命中必须在例外之前返回 true。
+    // 失效形态：原实现把例外表提到最前短路（NOT_SECRET_KEY_RE 先 return false），而后端是
+    // section 命中在前、例外只在 is_sensitive_key 内部 → `[Cookie] 抖音cookie有效期` 这类键
+    // 后端脱敏、前端渲染成明文 text，用户误读成「没被保护」。断言顺序而非结果：节命中必须
+    // 在例外之前返回 true。
     const fn = APP_JS.match(/function isSensitiveField\(section, key\) \{[\s\S]*?\n    \}/);
     assert.ok(fn, '未找到 isSensitiveField');
     const body = fn[0];
@@ -883,20 +863,13 @@ test('MID-2241：saveConfig 对 Web 认证两键先 confirm 再要求复验口�
 });
 
 test('M-22/M-26：认证两键的复验口令经 password 弹窗采集、且只随认证键下发（正向锁）', () => {
-    // 契约事实源是生产代码：src/web_api.py::update_config 的 MID-2241 段**已实现强制复验**
-    //（认证当前开启时写 [Web] web_auth_enable / web_password 不带能过 verify_web_password 的
-    // reauth_password 即 403）。本条因此由「锁后端不许判定」翻转为「锁前端确实采集并下发」。
-    // [历史注 2026-09-29，M-26] 本条原形态是两条 doesNotMatch 文本锁，钉的是旧形状
-    // verify_web_password(_reauth, _stored) 与旧 403 文案「修改认证配置需复验当前口令」；生产实际
-    // 形状是 (_reauth, _stored_pwd) + 「修改 Web 认证配置必须复验…」，字面不一致 → 两条断言
-    // **空洞成立**（实测 32/32 全绿，而 Python 侧锁的恰是相反的新契约，两侧互相矛盾）。
-    // 这正是「钉源码字面量的安全文本锁在契约反转时静默失效」的实证，故：
-    //   ① 不再以 doesNotMatch(/后端源码字面量/) 的形态锁任何安全边界；
-    //   ② 后端行为**不在本文件复制**——已由 tests/test_regression_2026_09_22_web_g.py 的
-    //      TestAuthKeyReauth 与 tests/test_web_api.py::TestAuthDowngradeRejected 用真实端点 E2E 锁住，
-    //      在 mjs 里再实现一份判定就是两侧漂移的成因（AGENTS「测试不得自实现被测逻辑」）；
-    //   ③ 前端留下这条正向断言（去掉下发即红，见本次变异验证），端到端行为另见
-    //      tests/frontend/test_auth_reauth.mjs。
+    // 契约事实源是生产代码：src/web_api.py::update_config 的 MID-2241 段已实现强制复验（认证开启时
+    // 写认证两键不带可过 verify_web_password 的 reauth_password 即 403），本条因此锁定「前端确实
+    // 采集并下发」。M-26 教训：此前两条 doesNotMatch 文本锁因后端字面量改名而**空洞成立**（实测
+    // 32/32 全绿，而 Python 侧锁的恰是相反契约），故：① 不再以源码字面量锁安全边界；② 后端行为
+    // 不在本文件复制，已由 test_regression_2026_09_22_web_g.py::TestAuthKeyReauth 与
+    // test_web_api.py::TestAuthDowngradeRejected 用真实端点 E2E 锁住；③ 前端保留这条正向断言，
+    // 端到端行为另见 tests/frontend/test_auth_reauth.mjs。
     const fn = APP_JS.match(/async function saveConfig\(\) \{[\s\S]*?\n    \}/);
     assert.ok(fn, '未找到 saveConfig');
     const body = fn[0];
@@ -911,9 +884,8 @@ test('M-22/M-26：认证两键的复验口令经 password 弹窗采集、且只�
     assert.match(body, /body\.reauth_password\s*=\s*authReauth/, '复验口令未随请求下发');
     assert.match(body, /if \(isAuthKey && authReauth\)/,
         'reauth_password 的下发不再以「本行是认证键」为判据 → 会被其余配置键捎带');
-    // 采集形态：saveConfig 内不得再有 window.prompt（明文回显的口令采集，面板唯一一处）。
-    // 判据剥掉行注释后再看——本函数的沿革注释里就写着「采集形态由 window.prompt 换成 askReauthPassword」，
-    // 不剥注释会把注释里的旧形态名当成代码命中（同文件 downloadFile 那条用例的既有口径）。
+    // 采集形态：saveConfig 内不得再有 window.prompt（明文回显）。判据剥掉行注释后再看——本函数
+    // 的沿革注释里写着旧形态名，不剥会把注释当成代码命中（同 downloadFile 那条的既有口径）。
     const code = body.split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
     assert.ok(!code.includes('window.prompt'),
         'saveConfig 又用回 window.prompt 采集复验口令（M-22 回归：必须走 type="password" 弹窗）');
@@ -927,9 +899,8 @@ test('M-22/M-26：认证两键的复验口令经 password 弹窗采集、且只�
 test('MIN-2241：根 index.html 的每个跨源 <script> 都带 integrity 与 crossorigin', () => {
     // 失效形态：只写 src="https://cdn.jsdelivr.net/npm/hls.js@1.7.2/..."。钉版本 ≠ 钉内容——
     // jsdelivr 上同名同版本的文件仍可被替换，而本页不经 web_api 的 CSP/nosniff 中间件
-    // （create_app 只挂 web/index.html 与 /web），是唯一把用户输入流地址直喂 hls.js/flv.js 的页面。
-    // 断言按**每个 script 标签**逐个检查，而不是全文件 grep：否则「一个标签有、另一个没有」
-    // 会被整体命中蒙混过去（本条正是两处脚本各自失效的形态）。
+    //（create_app 只挂 web/index.html 与 /web），是唯一把用户输入流地址直喂 hls.js/flv.js 的页面。
+    // 按**每个 script 标签**逐个检查：全文件 grep 会被「一个标签有、另一个没有」蒙混过去。
     const scriptTags = ROOT_INDEX_HTML.match(/<script\b[^>]*\bsrc="https?:\/\/[^"]*"[^>]*>/g) || [];
     assert.ok(scriptTags.length > 0, '根 index.html 未找到任何跨源 script（选择器已漂移）');
     for (const tag of scriptTags) {
@@ -953,13 +924,10 @@ test('MIN-2241：integrity 哈希必须是 sha384 且长度为真哈希，不得
 });
 
 test('MIN-2241：根 index.html 仍未被 Web 面板链路服务（修复不得把它挂进路由）', () => {
-    // 反向边界：本条的处置是「保留独立工具页 + 补 SRI」，不是「把它接进面板」。
-    // / 必须仍指向 web/index.html——若有人顺手把它改成项目根 index.html，
-    // CSP/鉴权/同源判定全都会被绕开（这正是本条要防的另一半）。
-    // src/web_api.py 是纯 CRLF（本机实测 1510/0），而 node 的 readFileSync(...,'utf8') 不做换行归一，
-    // 故写死 `\n\n` 的「空行」锚点在 CRLF 源上恒不匹配（正是 AGENTS.md「注释检查工具的盲点 3」点名的
-    // 现例，也是本用例此前恒红的根因）。改成 `\r?\n\r?\n` 让空行判定与行尾形态无关，无论检出的是
-    // LF 还是 CRLF 都能定位到函数体结尾后的第一个空行。
+    // 反向边界：本条处置是「保留独立工具页 + 补 SRI」，不是接进面板。/ 必须仍指向 web/index.html，
+    // 否则 CSP/鉴权/同源判定全被绕开（这正是本条要防的另一半）。
+    // 锚点用 \r?\n\r?\n：src/web_api.py 是纯 CRLF，node 的 readFileSync(...,'utf8') 不做换行归一，
+    // 写死 \n\n 的「空行」在 CRLF 源上恒不匹配（AGENTS.md「注释检查工具」盲点 3 的现例）。
     const idx = WEB_API_PY.match(/async def index\(\)[\s\S]*?\r?\n\r?\n/);
     assert.ok(idx, '未找到 / 路由');
     assert.match(idx[0], /_WEB_DIR\s*\/\s*"index\.html"/, '/ 未指向 web/index.html');

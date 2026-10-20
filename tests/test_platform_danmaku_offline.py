@@ -1,8 +1,7 @@
 # tests/test_platform_danmaku_offline.py - 斗鱼 / B站 / Twitch 三个弹幕客户端的**离线**行为锁。
 #
-# 与同名的 live 探针脚本（tests/test_douyu_danmaku.py、tests/test_bilibili_danmaku.py）互补：
-# 那些脚本连真实直播间、无网即失效，因此三条平台的**帧编解码**长期没有回归防护。
-# 本文件用构造帧驱动 decode_message，锁住的都是历史上真出过问题的分支：
+# 与真机探针（tests/test_douyu_danmaku.py、tests/test_bilibili_danmaku.py）互补：探针无网即失效，
+# 本文件用构造帧驱动 decode_message，锁住历史上真出过问题的分支：
 #   - 斗鱼 C-2：粘包推进必须按「整帧 = full_len + 4」，错位 4 字节会让第二帧起全部丢失；
 #   - 斗鱼 C-3：only_fans 默认 False，普通观众弹幕不得被静默丢弃；
 #   - B站 H-4：AUTH_REPLY(code!=0) 与「8 秒无回应」两种软拒绝都必须主动断开并失效 buvid 缓存；
@@ -10,8 +9,8 @@
 #   - Twitch MI-21：WebSocket 帧边界是消息不是行，跨帧半行必须缓冲后拼回；
 #   - Twitch：color 标签可选（未设色观众不得被丢弃）、纯黑回退白。
 #
-# Mock 口径：只替换各平台模块内的 WsClient / spawn_danmaku_task 全局引用；
-# 事件循环保留真实 asyncio（用短超时，不 sleep 真实 8 秒）。
+# Mock 口径：只替换各平台模块内的 WsClient / spawn_danmaku_task 全局引用，事件循环保留真实
+# asyncio（用短超时，不 sleep 真实 8 秒）。
 
 import asyncio
 import json
@@ -28,37 +27,32 @@ import src.platforms.douyu as douyu
 import src.platforms.twitch as twitch
 from src.base import DanmakuMessageType
 
-# 三个平台的「收包 → 解帧 → 分发」三段式在同一抽象基类（DanmakuBase）下同构，
-# 所以本文件按「平台 × 阶段」而不是按缺陷编号组织。下表给出阶段划分与设计取舍：
+# 三个平台的「收包 → 解帧 → 分发」三段式同构于 DanmakuBase，故按「平台 × 阶段」而非缺陷编号组织。
 #
-# 阶段一「帧边界」：三种传输对帧边界的假定完全不同。
-#   斗鱼：二进制帧，长度域值 = 帧总长 - 4（协议如此定义，不是帧总字节数），
-#     因此粘包推进必须按 full_len + 4 计算——C-2 就是把这 4 字节漏后，
-#     第二帧起点错位、长度域读出垃圾值后触发截断 break，高热度直播间必然粘包。
+# 阶段一「帧边界」：三种传输的假定完全不同。
+#   斗鱼：二进制帧，长度域值 = 帧总长 - 4（协议定义如此），粘包推进必须按 full_len + 4；漏掉这
+#     4 字节会让第二帧起点错位、长度域读出垃圾值后截断 break（C-2，高热度直播间必然粘包）。
 #   B站：16 字节大头序帧头 [包长][头长][protover][op][seq]，包长含头自身。
-#   Twitch：IRC 文本，但 WebSocket 的边界是「消息」不是「行」，所以必须自己
-#     做跨帧行缓冲（MI-21）；本文件用「一条完整行切两半投递」直接验证这一点。
+#   Twitch：IRC 文本，但 WebSocket 边界是「消息」不是「行」，必须自做跨帧行缓冲（MI-21）；
+#     本文件用「一条完整行切两半投递」直接验证。
 #
 # 阶段二「载荷解码」：
-#   斗鱼 STT：@= 键值、// 分段、@A/@S 转义；转义必须先于分列，否则含斜杠的
-#     值会被误切成多个字段（本文件里那条「嵌套结构」断言记住的就是这个语义）。
-#   B站：protover 1/2/3 三条解压路径必须都走限长入口（MI-01）——zlib/brotli
-#     的高压缩比会把几百 KB 帧展开成 GB 级对象，而本进程同时还在跑录制。
+#   斗鱼 STT：@= 键值、// 分段、@A/@S 转义；转义必须先于分列，否则含斜杠的值会被误切成多字段。
+#   B站：protover 1/2/3 三条解压路径都走限长入口（MI-01）——高压缩比会把几百 KB 帧展开成
+#     GB 级对象，而本进程同时还在跑录制。
 #
-# 阶段三「业务分发」：平台版本变动后的异常帧不得外溢（只记一条带帧头 hex 的
-# debug），因为一条「毒消息」把整条连接带崩会退化成重连风暴。
+# 阶段三「业务分发」：异常帧不得外溢（只记一条带帧头 hex 的 debug），毒消息带崩连接会退化成
+# 重连风暴。
 #
-# 三个容易被改错的行为契约，单独记在这里：
-#   1) 斗鱼 only_fans 默认 False——上游 dart 无粉丝过滤，移植时写成 True 会让
-#      普通观众弹幕（通常占多数）静默丢弃，且调用链无开关可关（C-3）。
-#   2) B站进房包里的 uid 必须是观众自身 uid（匿名 0），不是主播 uid；真机对照
-#      探针证实传主播 uid 会被弹幕服务器在 AUTH 后硬断连（1006）。
-#   3) B站看门狗与 _auth_ok 是一对：每次新连接都要把 _auth_ok 清零，否则重连后
-#      看门狗误判「已认证」而永不兜底（H-4）。
+# 三个容易被改错的行为契约：
+#   1) 斗鱼 only_fans 默认 False——写成 True 会让普通观众弹幕静默丢弃，且无开关可关（C-3）。
+#   2) B站进房包的 uid 必须是观众自身 uid（匿名 0）；传主播 uid 会被 AUTH 后硬断连（1006）。
+#   3) B站看门狗与 _auth_ok 成对：每次新连接都要清零 _auth_ok，否则重连后看门狗误判「已认证」而永
+#      不兜底（H-4）。
 #
-# Mock 口径：各平台模块内的 WsClient 换为 FakeWs（只看连接参数与发出的帧），
-# spawn_danmaku_task 换为记录器或 _noop_spawn。后者必须 close() 传入的协程，
-# 否则未 await 的协程在 GC 时抛 RuntimeWarning，会打爆本仓的「0 警告」门禁。
+# Mock 口径：各平台模块内的 WsClient 换为 FakeWs（只看连接参数与发出的帧），spawn_danmaku_task
+# 换为记录器或 _noop_spawn；后者必须 close() 传入的协程，否则未 await 的协程在 GC 时抛
+# RuntimeWarning，打爆本仓「0 警告」门禁。
 
 
 class FakeWs:
@@ -127,8 +121,7 @@ def _collect(target: list[Any]) -> Any:
 
 
 def _douyu_frame(body: str) -> bytes:
-    # 与本模块 _serialize 同构地重新实现一遍帧头？不是——这里只负责「把字符串装进
-    # 一个合法帧」，而被测的 decode_message 读的是长度域。两者保持独立才能验证
+    # 只负责把字符串装进一个合法帧（与被测 _serialize 保持独立），这样验证的是
     # 「推进步长 = full_len + 4」这条约定本身，而不是自洽地跑循环。
     body_b = body.encode("utf-8")
     total = 4 + 4 + len(body_b) + 1

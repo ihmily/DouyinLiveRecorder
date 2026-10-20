@@ -3,32 +3,25 @@
 #
 # 读 pytest-cov 写下的 .coverage 数据，对 src/ 下**每一个**模块按各自阈值评一次覆盖率。
 # 阈值的事实源只有本文件下方的 MODULE_THRESHOLDS：AGENTS.md 与 pyproject.toml 都刻意不复制
-# 那张表（复制出的数值必然与这里漂移）。未登记阈值的模块一律按 GLOBAL_FLOOR 判定，
-# 它的取值来源与「为什么不得比全库总闸更宽」见其定义处。
+# 那张表（复制出的数值必然与这里漂移）。未登记阈值的模块一律按 GLOBAL_FLOOR 判定。
 #
 # 用法：
-#    # 先跑一次带覆盖率的测试
-#    pytest --cov=src --cov-report=term-missing
+#    pytest --cov=src --cov-report=term-missing    # 先跑一次带覆盖率的测试
 #    python scripts/check_coverage.py
-#    # 或指定自定义数据文件
 #    python scripts/check_coverage.py --data-file path/to/.coverage
 #
 # 退出码口径（与 scripts/run_gates.py 一致，必须区分「不达标」与「门禁没跑」）：
 #    0  全部模块达标
 #    1  有模块低于阈值 / 有模块在数据里查不到（= 覆盖率不达标或数据不含被测模块）
-#    2  无 coverage 数据可读（忘了跑 pytest --cov=src、数据文件缺失、JSON 生成失败、
-#       数据比源码陈旧、门禁登记表本身指向不存在的模块）
-#       —— 这一类**不是**「代码不合格」，但也**绝不是**通过：MIN-19 之前该路径只 WARN，
-#          留下「本地没跑 --cov 却以为过闸」的空间；同一口径下「模块查不到」也已由告警
-#          改为失败——数据缺失这一路径没有理由继续宽容。
+#    2  无 coverage 数据可读（忘了跑 pytest --cov=src、数据文件缺失、JSON 生成失败、数据比源码
+#       陈旧、门禁登记表本身指向不存在的模块）——这一类**不是**「代码不合格」，但也**绝不是**
+#       通过：数据缺失没有理由继续宽容。
 #
-# 判定面 = src/ 下全部模块（按文件系统枚举），而不是 MODULE_THRESHOLDS 的键集合：
-#   只遍历登记表会让**任何新增的 src/*.py 自动豁免**本门禁，与「新模块必须带测试」相反
-#   （表里只有个位数的键，模块数核对：`find src -name '*.py' -not -path '*__pycache__*' | wc -l`）。
-#   未登记阈值的模块按 GLOBAL_FLOOR 判定；确需豁免者必须显式写进 GATE_EXEMPT_MODULES
-#   并附理由——白名单外没有第三条路。[2026-09-23 MID-2259 前为「只遍历登记表 6 个键」]
-#   .coverage 比 src/、tests/ 的源码更旧同样属「没有可判定的数据」（拿旧读数判定 = 门禁
-#   自证失效）：新鲜度判据见 _data_is_stale，陈旧一律 rc=2 并给出重跑命令。[MIN-2261 补]
+# 判定面 = src/ 下全部模块（按文件系统枚举），而不是 MODULE_THRESHOLDS 的键集合：只遍历登记表
+#   会让**任何新增的 src/*.py 自动豁免**本门禁，与「新模块必须带测试」相反。未登记阈值的模块
+#   按 GLOBAL_FLOOR 判定；确需豁免者必须显式写进 GATE_EXEMPT_MODULES 并附理由——白名单外没有
+#   第三条路。.coverage 比 src/、tests/ 源码更旧同样属「没有可判定的数据」（拿旧读数判定 =
+#   门禁自证失效）：新鲜度判据见 _data_is_stale，陈旧一律 rc=2 并给出重跑命令。
 
 from __future__ import annotations
 
@@ -81,19 +74,17 @@ GATE_EXEMPT_MODULES: dict[str, str] = {
 }
 
 
-# -- 分层模型（MID-2259 的白名单逻辑，2026-09-23 定稿）-----------------------
+# -- 分层模型（白名单逻辑）----------------------------------------------------
 # 判定优先级：**登记阈值 > 债务基线 > 全局下限**；豁免名单不参与判定，另设硬校验。
 # 设计约束（每条都对应本仓历史上真出过的失效形态）：
-#   1. 表必须**默认空**。判定面里除显式豁免的生成物外全部模块都已达标，没有任何模块需要
-#      债务基线；DEBT_CEILING = 0 即「要加条目就得先改这里并写明理由」。
-#      不设上限的话，本表会和 `--ignore-vuln` 白名单一样，慢慢变成记账本。
-#   2. 债务基线**只能低于**全局下限（高于它就等于用白名单藏一个已经达标的模块，
-#      还给未来的退化留出空间）。
-#   3. 每条必须带 `tracker`（报告条目指针）与 `review_by`（ISO 到期日）。
-#      到期即 rc=1 —— 与 `AGENTS.md` 对 pip-audit `--ignore-vuln` 的「临时豁免必须写明到期日」同口径。
+#   1. 表必须**默认空**：DEBT_CEILING = 0 即「要加条目就得先改这里并写明理由」，否则本表
+#      会像 `--ignore-vuln` 白名单一样，慢慢变成记账本。
+#   2. 债务基线**只能低于**全局下限（高于它等于用白名单藏一个已达标模块，还给未来退化留空间）。
+#   3. 每条必须带 `tracker`（报告条目指针）与 `review_by`（ISO 到期日），到期即 rc=1——与
+#      AGENTS.md 对 pip-audit `--ignore-vuln` 的「临时豁免必须写明到期日」同口径。
 #   4. 实际值低于基线 → 失败（棘轮只升不降）；已达全局下限却仍在表内 → 失败（须移出表）。
-#   5. 豁免名单的「生成物」理由要**机检**：声明是生成物的文件必须真含生成器标记，
-#      否则就是拿一句注释把某个人写的低覆盖模块洗出门禁（rc=2，属门禁配置本身不可信）。
+#   5. 豁免名单的「生成物」理由要**机检**：声明是生成物的文件必须真含生成器标记，否则就是
+#      拿一句注释把低覆盖模块洗出门禁（rc=2，属门禁配置本身不可信）。
 class DebtEntry(NamedTuple):
     # 一条技术债基线。四个字段缺一即视为配置不可信（rc=2，见 _validate_debt_and_exempt）。
     floor: float
@@ -247,10 +238,8 @@ def _validate_debt_and_exempt(root: Path, today: str | None = None) -> tuple[lis
 def _get_coverage_json(data_file: str | None, root: Path = ROOT) -> CoverageData:
     # 生成并解析 coverage JSON 报告（判定所需的一切读数都来自这里）。
     #
-    # MIN-19（2026-09-21）：数据文件不存在时**立刻**以 rc=2 失败并给出下一步命令。
-    # 原实现在这里只打一条 WARN 再继续，随后读到的是「空报告」，最终表现成
-    # 「6 个模块查不到」——既把「忘了跑测试」误报成「覆盖率不达标」，也让
-    # 「跑过但没带 --cov」这种最常见的形态没有一个指向性的错误。
+    # MIN-19：数据文件不存在时**立刻**以 rc=2 失败并给出下一步命令。只打一条 WARN 再继续，
+    # 随后读到的是空报告，最终表现成「6 个模块查不到」——把「忘了跑测试」误报成「覆盖率不达标」。
     resolved = _resolve_data_file(data_file)
     if not resolved.exists():
         print(f"ERROR: 未找到 coverage 数据文件 {resolved.as_posix()}", file=sys.stderr)
@@ -258,11 +247,9 @@ def _get_coverage_json(data_file: str | None, root: Path = ROOT) -> CoverageData
         print(f"   {NO_DATA_HINT}", file=sys.stderr)
         sys.exit(2)
 
-    # MID-2261 补：数据存在但比源码陈旧 → 同样是「门禁没有可判定的数据」。
-    # 本树实测形态：.coverage 停在上一轮全量运行，之后 src/、tests/ 继续被改，
-    # 于是逐模块读数评的是**已经不存在的代码**，PASSED 却是真的——假绿里最难发现的一种，
-    # 因为连「数据文件存在」这项检查都确实通过了。（coverage json 自身在源码行号错位时
-    # 也可能直接报 "No source for code" 而产不出报告，那时会落到下面的 rc=2 分支。）
+    # MID-2261：数据存在但比源码陈旧 → 同样是「门禁没有可判定的数据」。本树实测形态：.coverage
+    # 停在上一轮全量运行，之后 src/、tests/ 继续被改，逐模块读数评的是**已经不存在的代码**，
+    # PASSED 却是真的——假绿里最难发现的一种，因为「数据文件存在」这项检查确实通过了。
     stale = _data_is_stale(resolved, root)
     if stale is not None:
         data_mtime, newer, newer_mtime = stale
@@ -339,11 +326,9 @@ def evaluate_report(coverage_data: CoverageData, root: Path = ROOT) -> int:
     # 判定核心：吃一份 coverage JSON 报告 dict，对 **src/ 下全部模块**（按文件系统枚举）
     # 逐个评阈值，返回 0 达标 / 1 不达标 / 2 门禁自身失效（含 sys.exit(2) 提前退出）。
     #
-    # 为什么单独拆成这个纯判定函数（MID-2261 的「零回归锁」根因之一）：
-    # 判定与「跑 coverage 子进程」耦在一个函数里时，单元测试只能靠真数据文件驱动，
-    # 于是本门禁长期无人可测——「谓词拿不到输入就返回通过」的形态（files 为空、
-    # 模块压根没登记）从来没有回归锁。拆开后，用例可以直接喂构造好的报告 dict 验证
-    # 「删掉某条 fail-closed 判据就变红」，而不必跑全量 pytest。
+    # 为什么单独拆成这个纯判定函数：判定与「跑 coverage 子进程」耦在一起时，单元测试只能靠
+    # 真数据文件驱动，于是「谓词拿不到输入就返回通过」的形态（files 为空、模块压根没登记）从来
+    # 没有回归锁。拆开后用例可直接喂构造好的报告 dict，验证「删掉某条 fail-closed 判据就变红」。
     files = cast(dict[str, CoverageData], coverage_data.get("files", {}))
     if not files:
         # 「有数据文件但里面一个被测文件都没有」＝ 上一轮 --cov 未生效 / 数据被截断，
@@ -439,8 +424,7 @@ def evaluate_report(coverage_data: CoverageData, root: Path = ROOT) -> int:
         for module in missing_modules:
             print(f"   {module}")
         # 模块在覆盖率数据里查不到，通常意味着 .coverage 未采集到它、或 --cov=src 未生效。
-        # 这是「门禁失效」而非「达标」，必须判失败——否则会输出
-        # 「PASSED: All 0 module(s) meet coverage threshold」的假绿。
+        # 这是「门禁失效」而非「达标」，必须判失败——否则会输出「全部 0 个模块达标」的假绿。
         print("       （查不到即视为门禁失效，按失败处理；确属不可测的生成物请写进 GATE_EXEMPT_MODULES 并附理由）")
 
     if COVERAGE_DEBT:
@@ -487,14 +471,10 @@ def _find_module_coverage(coverage_data: CoverageData, module_path: str) -> Cove
     if module_path in files:
         return files[module_path]
 
-    # 第二级（现规则）：**整段模块路径（含 src/）必须出现在报告键的尾部**，分隔符按 POSIX
-    # 归一后再比。为什么不能更宽，看这条被收紧两次的历史：
-    #   [2026-09-12 审查 6.7] 原实现按**纯文件名**命中（`Path(file).name == Path(module).name`），
-    #     于是 tests/utils.py、vendor 下的同名模块都能顶掉 src/utils.py 的读数——门禁拿别人的
-    #     覆盖率判通过 = 静默变绿；
-    #   [2026-09-23 MID-2261] 6.7 那版仍留一条「去 src/ 前缀 + endswith('/文件名')」的尾部规则，
-    #     于是 "tests/utils.py" 照样命中 "src/utils.py"（本仓两处同名模块真实存在）——同一形态
-    #     换了个入口而已。故现规则要求整段路径（含 src/）出现在键尾。
+    # 第二级（现规则）：**整段模块路径（含 src/）必须出现在报告键的尾部**，分隔符按 POSIX 归一
+    # 后再比。这条被收紧过两次，两次都是「同名模块顶掉读数」：① 按纯文件名命中，于是
+    # tests/utils.py 能顶掉 src/utils.py；② 去 src/ 前缀 + endswith('/文件名')，tests/utils.py
+    # 照样命中 src/utils.py（本仓两处同名模块真实存在）。故现规则要求整段路径出现在键尾。
     module_norm = Path(module_path).as_posix()
 
     def _posix(key: str) -> str:

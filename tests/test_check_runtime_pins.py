@@ -1,10 +1,10 @@
-# scripts/check_runtime_pins.py 的回归用例（2026-09-22 新增，随 W1「第 4 类口径」一起补）。
+# scripts/check_runtime_pins.py 的回归用例（随 W1「第 4 类口径」入库）。
 #
 # 被测面是**闸门的分流语义**，不是仓库当前的钉定数据（数据会变，锁数据会把用例变成倒计时）：
 #   ① 发布矩阵内的未钉定槽位 → --strict 必红；
 #   ② 矩阵外的键（无 runner 产出）→ 只告警，但**必须被打印出来**（静默省略等于谎称全覆盖）；
 #   ③ SOURCE-BUILD-PROVENANCE 标记：证据齐备才算满足，缺证据与「未钉定」同等处置
-#      （这条是防「换个更容易填的标记拿免检」的唯一防线）；
+#      （防「换个更容易填的标记拿免检」的唯一防线）；
 #   ④ 缺槽位 / 缺键等结构缺陷 → rc=2（门禁本身坏了 ≠ 代码不合格）。
 # 全部离线：_load_build_exe 被打桩成受控表，不触发网络也不读真实 build_exe 的数据。
 
@@ -55,10 +55,9 @@ def _fake_module(
 ) -> SimpleNamespace:
     # _slot_is_gated 复用 build_exe 的真实现：判定口径必须只有一份事实源，
     # 打桩打成「恒 True」会让本文件的用例全部失去意义。
-    # runtime_slots_for 默认桩成「只有通用两槽」：本文件测的是**分流语义**（矩阵内/外、标记是否算满足），
-    # 而「哪个平台该有几个槽」的数据事实源在 build_exe._EXTRA_EXECUTABLE_URLS，由
-    # tests/test_build_exe.py::test_ffprobe_is_a_separate_download_point_only_on_macos 锁；
-    # 真实的接线在 test_real_runtime_slots_for_is_wired_into_the_coverage_check 里单独驱动。
+    # runtime_slots_for 默认桩成「只有通用两槽」：本文件测的是**分流语义**（矩阵内/外、标记是否
+    # 算满足），而「哪个平台该有几个槽」的事实源在 build_exe._EXTRA_EXECUTABLE_URLS，由
+    # tests/test_build_exe.py::test_ffprobe_is_a_separate_download_point_only_on_macos 锁。
     return SimpleNamespace(
         _PINNED_RUNTIME_SHA256=table,
         RUNTIME_SLOTS=("ffmpeg", "node"),
@@ -81,11 +80,10 @@ def _matrix_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(checker, "_runtime_matrix_keys", lambda: list(_MATRIX_KEYS))
 
 
-# MID-2260（2026-09-23）：上面那条 autouse fixture 把 `_runtime_matrix_keys` **整体桩掉**，
-# 于是没有任何用例会驱动真解析器——把真实现改成 `return []`，所有未钉定槽位都会落进
-# 「矩阵外 → 只告警」的桶里，`--strict` 对全占位表返回 0，build-release.yml 直接放行、
-# full zip 把未经校验的 ffmpeg/node 打进对外分发包。下面的用例一律**先把真实现装回去**
-# （保留一份模块级引用，绕开 autouse 的替换），驱动真解析器 + 真分流语义。
+# MID-2260：上面那条 autouse fixture 把 `_runtime_matrix_keys` **整体桩掉**，于是没有任何
+# 用例会驱动真解析器——把真实现改成 `return []`，未钉定槽位都会落进「矩阵外 → 只告警」
+# 的桶，`--strict` 对全占位表返回 0，发布链直接放行未经校验的 ffmpeg/node。下面的用例一律
+# **先把真实现装回去**（保留模块级引用绕开 autouse），驱动真解析器 + 真分流语义。
 _REAL_RUNTIME_MATRIX_KEYS = checker._runtime_matrix_keys
 
 
@@ -118,11 +116,10 @@ def test_real_matrix_parser_reads_workflow_runner_tags(tmp_path: Path, monkeypat
 
 
 def test_real_matrix_parser_rejects_unregistered_runner_tag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # 新 runner 标签未登记进 RUNNER_TO_RUNTIME_KEY 时必须 rc=2（SystemExit(2)）：
-    # 「静默丢掉一个平台」正是「表里五键都管住了」错觉的来源。
-    # 样本标签刻意用 ubuntu-24.04-arm64：ubuntu-24.04-arm 已随 linux-arm64 接入发布矩阵被登记进映射，
-    # 不再属于「未登记」标签，拿它当反例会让本用例从「验证拒绝未知标签」退化成「验证接受已知标签」。
-    # 下一行先行断言样本确实不在映射里——若将来有人把该样本也登记了，本用例会以明确信息变红而非静默失去拦截面。
+    # 新 runner 标签未登记进 RUNNER_TO_RUNTIME_KEY 时必须 rc=2：「静默丢掉一个平台」正是
+    # 「表里五键都管住了」错觉的来源。样本标签刻意用 ubuntu-24.04-arm64（ubuntu-24.04-arm
+    # 已随 linux-arm64 接入矩阵被登记，拿它当反例会让用例退化成「验证接受已知标签」）。
+    # 先行断言样本确实不在映射里：将来有人登记了它，本用例以明确信息变红而非静默失去拦截面。
     _restore_real_matrix(monkeypatch)
     assert (
         "ubuntu-24.04-arm64" not in checker.RUNNER_TO_RUNTIME_KEY
@@ -312,10 +309,10 @@ def test_missing_slot_is_a_structural_failure_not_a_data_gap(monkeypatch: pytest
 def test_missing_build_exe_attribute_exits_two_instead_of_crashing(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # L-29（2026-10-18 审查）：本门禁取的是 build_exe 的**私有**符号，改名/删除在 build_exe 侧
-    # 没有任何提示。旧写法 `module._PINNED_RUNTIME_SHA256` 直取 → AttributeError 崩溃栈 → rc=1，
-    # 而 rc=1 在本脚本的契约里专指「--strict 查到未钉定项」，于是「门禁自己没跑成」会被
-    # 读成「发布链有未钉定的二进制」。缺失一律 rc=2（同「空表 / 取不到表」那一档）。
+    # L-29：本门禁取的是 build_exe 的**私有**符号，改名/删除在 build_exe 侧没有任何提示。
+    # 旧写法直取属性 → AttributeError 崩溃栈 → rc=1，而 rc=1 在本脚本契约里专指「--strict
+    # 查到未钉定项」，于是「门禁自己没跑成」会被读成「发布链有未钉定的二进制」。
+    # 缺失一律 rc=2（同「空表 / 取不到表」那一档）。
     fake = _fake_module(_pinned_table())
     del fake._PINNED_RUNTIME_SHA256
     monkeypatch.setattr(checker, "_load_build_exe", lambda: fake)

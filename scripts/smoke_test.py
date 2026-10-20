@@ -8,21 +8,13 @@
 #   - 基础 URL 前缀：config 里的 url 若不是完整 http(s) 地址，则拼接 base_url
 #   - 多种输出：控制台（带颜色）、JSON 报告、HTML 报告
 #   - 退出码：0 = 已执行的检查全通过；1 = 至少一条失败；2 = 配置读不出/格式非法/一条断言都没有
-#     （MIN-2260：**0 断言不等于通过**——旧实现在这里退 0，CI 查了个空气还报成功。
-#      消费方是 scripts/_ci_web_smoke.sh + scripts/smoke_web.json，它原样透传本退出码，
-#      所以「2（配置问题）」必须与「1（接口不符合预期）」分得开，否则会被读成接口故障。）
-#     （M-32② 补全 2026-09-29：2 的覆盖面从「顶层结构坏 / 0 断言」扩到**任意**形态畸形——
-#      checks 不是 array、checks 元素不是 object、headers/expect_json 不是 object、
-#      expect_contains/base_url 类型错，全部在 load_config 前置拒绝并退 2。
-#      原先这些形态会穿透 run_check 抛 AttributeError，rc=1 且满屏崩溃栈，被
-#      scripts/_ci_web_smoke.sh 的调用方（.github/actions/retry）当成「面板接口挂了」
-#      再重试一轮：配置写坏了重试多少次都不会变好，只是把排障方向带偏、把 job 时间翻倍。
-#      校验点唯一在 load_config，绝不允许「先打了几个请求才第 N 条炸」的半执行状态。
-#      回归锁：tests/test_scripts_error_paths.py::TestSmokeConfigMalformed。）
-#      [2026-10-18 L-31 补] 覆盖面再下一层：容器形态对、**元素**形态错同样属畸形——
-#      "expect_contains": ["ok", 200] 里 run_check 的 `token in content` 对数字抛 TypeError，
-#      穿透 main()（那里只接 OSError/ValueError）→ rc=1 + 崩溃栈。现由 _validate_check_item
-#      逐元素校验并抛 ValueError，与上面同一出口、同一码（仍是一条请求都不发）。
+#     **0 断言不等于通过**：消费方 scripts/_ci_web_smoke.sh 原样透传本退出码，而 .github/actions/retry
+#     对任何非 0 都按可重试失败处理，故「2（配置问题）」必须与「1（接口不符合预期）」分得开，
+#     否则配置写坏会被读成面板故障，白跑一轮起面板 + 重试退避。
+#     2 的覆盖面是**任意**形态畸形：checks 不是 array、checks 元素不是 object、headers/expect_json
+#     不是 object、expect_contains 元素不是 string、base_url 类型错，全部在 load_config 前置拒绝，
+#     绝不允许「先打了几个请求才第 N 条炸」的半执行状态（旧形态抛 AttributeError → rc=1 崩溃栈）。
+#     回归锁：tests/test_scripts_error_paths.py::TestSmokeConfigMalformed。
 #
 # 用法：
 #   python smoke_test.py --config smoke_targets.json
@@ -135,13 +127,9 @@ def _validate_check_item(item: object, index: int, path: str) -> CheckConfig:
             continue
         if not isinstance(value, allowed):
             raise ValueError(f"冒烟配置 {label} 的 {key!r} 是 {_json_type(value)}，期望 {expect_shape}: {path}")
-    # L-31（2026-10-18 审查）：容器类型对上**不等于**元素类型对上。run_check 对 expect_contains 是
-    # `for token in expect_contains: if token in content`（AND 语义），元素写成数字/对象时
-    # `in <string>` 直接抛 TypeError 并穿透 main()（那里只接 OSError/ValueError）：
-    # rc=1 + 满屏崩溃栈，被 scripts/_ci_web_smoke.sh 与 .github/actions/retry 读成「面板接口挂了」
-    # 再重试一轮——配置写坏了重试多少次都不会变好，只是把排障方向从「改配置」错判成「查面板」。
-    # 因此它属「配置/输入畸形」而非脚本自身缺陷（判定依据：同一份配置在形态合法时能正常出结论），
-    # 与上面三条同点、同码：在 load_config 前置拒绝 → main 退 2，且一条请求都不发。
+    # 容器类型对上**不等于**元素类型对上：run_check 对 expect_contains 是 `token in content`，
+    # 元素写成数字/对象会抛 TypeError 并穿透 main()（那里只接 OSError/ValueError）→ rc=1 崩溃栈，
+    # 被消费方读成「面板接口挂了」。故属「配置畸形」：与上面三条同点、同码，一条请求都不发。
     # headers 不必同检：run_check 侧对值统一 `str(v)`，数字/布尔值会被转成字符串头，不崩。
     contains = typed.get("expect_contains")
     if isinstance(contains, list):
@@ -155,19 +143,13 @@ def _validate_check_item(item: object, index: int, path: str) -> CheckConfig:
 
 
 def load_config(path: str) -> tuple[list[CheckConfig], str | None]:
-    # 2026-09-12 审查 6.7：编码由 utf-8 改 utf-8-sig。配置文件若带 BOM（Windows
-    # 记事本/部分编辑器保存产物），utf-8 读取会把 BOM 当成首字符，json.load 直接
-    # 抛 JSONDecodeError——排障时只看到"JSON 解析失败"，很难想到是 BOM。
-    # utf-8-sig 对无 BOM 的文件行为与 utf-8 完全一致，无副作用。
+    # 编码用 utf-8-sig：配置若带 BOM（记事本等保存产物），utf-8 读取会把 BOM 当首字符并让
+    # json.load 抛 JSONDecodeError，排障时很难想到是 BOM；utf-8-sig 对无 BOM 文件行为一致。
     #
-    # M-32②（2026-09-29）：本函数是配置形态的**唯一**校验点，所有畸形一律在这里抛
-    # ValueError，由 main() 的 `except (OSError, ValueError)` 转成退出码 2。
-    # 为什么必须在这里挡住、而不是留给 run_check 运行时炸：run_check 抛 AttributeError
-    # 会穿透 main() 变成崩溃栈（rc=1），而 scripts/_ci_web_smoke.sh + .github/actions/retry
-    # 对「任何非 0」都按可重试失败处理——配置写坏了重试多少次都不会变好，rc=1 只会让
-    # 排障方向从「改配置」错判成「查面板」，白跑一轮起面板 + 重试退避。
-    # 另一个必须在前置阶段挡掉的理由：校验晚于发请求会留下「前几条已打网络、第 N 条才崩」
-    # 的半执行状态，报告工件（-r 写出的 json）与结论都不自洽。
+    # 本函数是配置形态的**唯一**校验点：所有畸形一律在这里抛 ValueError，由 main() 的
+    # `except (OSError, ValueError)` 转成退出码 2。必须前置挡住而非留给 run_check 运行时炸：
+    # ① 崩栈是 rc=1，消费方会按可重试失败处理并误判成面板故障；② 校验晚于发请求会留下
+    # 「前几条已打网络、第 N 条才崩」的半执行状态，报告工件与结论都不自洽。
     with open(path, "r", encoding="utf-8-sig") as f:
         cfg = cast(object, json.load(f))
     if isinstance(cfg, list):
@@ -177,9 +159,8 @@ def load_config(path: str) -> tuple[list[CheckConfig], str | None]:
     if isinstance(cfg, dict):
         # 允许顶层写成 {"base_url": "...", "checks": [...]}
         # MIN-2260：原写法 typed.get("checks", []) 把「键名拼错」（check / targets / 少引号）
-        # 与「checks 被清空」都变成合法的 0 检查，配合 main() 的「0 失败即退 0」，CI 的
-        # 「Web panel smoke test」步骤会在**一条断言都没执行**的情况下报成功。
-        # 故此处要求键必须存在（缺键即 ValueError → main 退 2），空列表另在 main() 里退 2。
+        # 与「checks 被清空」都变成合法的 0 检查，配合 main() 的「0 失败即退 0」，CI 会在
+        # **一条断言都没执行**时报成功。故此处要求键必须存在（缺键即 ValueError → 退 2）。
         typed = cast(dict[str, object], cfg)
         if "checks" not in typed:
             raise ValueError(f'冒烟配置缺少 "checks" 键（拼错或漏写都会被当成 0 检查）: {path}')
@@ -227,13 +208,12 @@ def run_check(check: CheckConfig, base_url: str | None, default_timeout: float) 
     # 方法统一大写：配置里写 get/Get 都能匹配，urlopen 对方法大小写敏感。
     method = method_raw.upper()
     url = _resolve_url(check, base_url)
-    # 注意：timeout 原样透传给 urlopen，若 JSON 里写成字符串 "5" 会被当作非数值触发 TypeError；
-    # 配置应保证为数字，本函数不做强制转换（cast 仅为类型检查，不改运行时值）。
+    # 期望状态码非 3xx 时保持 urlopen 默认自动跟随；期望 3xx 才换不跟随的 opener。
+    # timeout 原样透传给 urlopen，配置应保证为数字（cast 仅为类型检查，不改运行时值）。
     timeout = cast(float, check.get("timeout", default_timeout))
-    # M-32② 配套：load_config 已保证 headers 存在时必为 object，且刻意放行显式 null（与
-    # 不写等价）。此处必须用 `or {}` 而不是只靠默认值 —— dict.get 的默认值只在**键缺失**时
-    # 生效，键在而值为 null 时返回 None，`None.items()` 又是 AttributeError（rc=1），
-    # 等于在校验放行后重新开一个同族崩口。`expect_contains` 下方早就是同一形态（`or []`）。
+    # M-32② 配套：load_config 已保证 headers 存在时必为 object，且刻意放行显式 null（与不写等价）。
+    # 此处必须用 `or {}` 而不是只靠默认值 —— dict.get 的默认值只在**键缺失**时生效，键在而值为
+    # null 时返回 None，`None.items()` 又是 AttributeError（rc=1），等于放行后再开一个同族崩口。
     headers_raw = cast(dict[str, object], check.get("headers") or {})
     headers: dict[str, str] = {k: str(v) for k, v in headers_raw.items()}
     body = check.get("body")
@@ -332,10 +312,8 @@ def run_check(check: CheckConfig, base_url: str | None, default_timeout: float) 
 
 # ---------- 报告 ----------
 def _safe_print(*values: object) -> None:
-    # 打印并在控制台编码不兼容时（如 Windows GBK 下的非 ASCII 字符）做容错替换。
-    # 2026-09-12 审查 6.7：原回退用 ascii+replace，会把整行中文/全角字符全变成 '?'，
-    # 排障时关键信息（哪个检查失败、响应片段）全部消失。改为按标准输出实际编码
-    # 做 replace（GBK 控制台 → 只替换真正无法编码的少数字符），信息损失最小。
+    # 打印并在控制台编码不兼容时（如 Windows GBK 下的非 ASCII 字符）做容错替换：按标准输出
+    # 实际编码 replace（而不是回退 ascii），只损少数字符，保留「哪个检查失败、响应片段」等关键信息。
     text = " ".join(str(v) for v in values)
     try:
         print(text)
@@ -495,12 +473,10 @@ def main() -> None:
             write_json_report(results, summary, report_path)
         print(f"\n报告已写出: {report_path}")
 
-    # CI 只看这里的退出码：任一检查失败 → 1，全部通过 → 0。
-    # 走到这一步时 checks 至少有一条断言：配置损坏与「0 条断言」都已在 load_config / 上方
-    # 以 rc=2 退出（2026-09-10 起格式非法走 ValueError，2026-09-23 MIN-2260 起空列表也退 2），
-    # 所以「一条都没跑」再也不可能被报告成通过。
-    # 不得把 2 并入 1：scripts/_ci_web_smoke.sh 原样透传退出码，混同就会让「配置写坏了」
-    # 看起来像「面板接口挂了」，排障方向整个错掉。
+    # CI 只看这里的退出码：任一检查失败 → 1，全部通过 → 0。走到这一步时 checks 至少有一条
+    # 断言：配置损坏与「0 条断言」都已在上方以 rc=2 退出，故「一条都没跑」不可能被报告成通过。
+    # 不得把 2 并入 1：scripts/_ci_web_smoke.sh 原样透传退出码，混同会让「配置写坏了」看起来像
+    # 「面板接口挂了」，排障方向整个错掉。
     failed = cast(int, summary["failed"])
     sys.exit(1 if failed else 0)
 

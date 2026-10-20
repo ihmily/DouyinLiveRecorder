@@ -2,30 +2,27 @@
 #
 # 立规背景：该轮审查一次性报出三条同形态缺陷——M-03（sync_http 的 400 分支全量 `e.read()`）、
 # M-04（async_http 主请求路径非流式全量读 + httpx 自动解压无上限，压缩炸弹可直接打爆内存）、
-# L-11（探针非流式读响应体，不遵守 Range 的节点可回任意大 body）。三条都是**读一层**的问题，
-# 单点修完并不会阻止第四个读取点被写出来：本仓出站代码分散在 async_http / sync_http /
-# stream_select / main 直下载 / 推送通道 五处，人眼 review 每轮都会漏掉新站点。
+# L-11（探针非流式读响应体，不遵守 Range 的节点可回任意大 body）。单点修完并不阻止第四个读取点
+# 被写出来：出站代码分散在 async_http / sync_http / stream_select / main 直下载 / 推送通道五处。
 #
 # 为什么只做 AST、不跑网络：判据是「谁在读响应体、读的时候有没有上限」，这是纯源码结构事实；
-# 运行时用例只能证明**某一条路径**被限制住，无法证明**没有第二条未限制的路径**被写出来。
-# 本文件不 import 任何被测模块，只读源码文本 + ast.parse，自身零副作用、秒级完成。
+# 运行时用例只能证明**某一条路径**被限制住，无法证明没有第二条未限制路径。本文件不 import 被测
+# 模块，只读源码文本 + ast.parse，自身零副作用、秒级完成。
 #
 # 三条判据（互不重叠，各挡一种回归）：
 #   ① httpx 流式/异步读取点集合（`aread` / `aiter_bytes` / `aiter_raw` / `iter_bytes` / `iter_raw` /
-#      `iter_lines`）必须与登记表**双向相等**——新读点即红，删读点不缩表也即红。
-#      为什么收这套方法名：`aread`/`aiter_*`/`iter_*` 是 httpx Response 独有，文件对象没有，
-#      因此这一档**零误报**；而 `.read()` / `.text` / `.json()` 在文件对象上同名，纳进来会把
-#      「读配置文件」也算成出站读取，白噪声淹掉判据（实测全仓 `.read` 位点 53 处，绝大多数是文件读）。
-#   ② 受管的两个上限函数（`async_http._bounded_response_read`、`stream_select._bounded_probe_get`）
-#      函数体内必须**真的引用**上限常量或限量实参——防止「函数名还在、上限被摘掉」这种只改体的回归。
-#   ③ 同步侧 `sync_http` 里所有 `.read(...)` 调用必须落在 `_read_capped` / `_gunzip_capped` 之内，
-#      且 HTTP 400 分支必须经 `_read_capped`（M-03 的本体）——同步侧读的是 http.client/HTTPError，
-#      方法名与文件读同形，所以只能按「模块内封闭」判定，不收全仓。
+#      `iter_lines`）必须与登记表**双向相等**——新读点即红，删读点不缩表也即红。收这套方法名是因为
+#      它们是 httpx Response 独有，**零误报**；而 `.read()` / `.text` / `.json()` 在文件对象上同名，
+#      纳进来会把「读配置文件」也算成出站读取（实测全仓 `.read` 位点 53 处，绝大多数是文件读）。
+#   ② 两个受管上限函数（async_http._bounded_response_read、stream_select._bounded_probe_get）
+#      体内必须**真的引用**上限常量或限量实参——防「函数名还在、上限被摘掉」这种只改体的回归。
+#   ③ 同步侧 sync_http 里所有 `.read(...)` 必须落在 `_read_capped` / `_gunzip_capped` 之内，且 HTTP
+#      400 分支必须经 `_read_capped`（M-03 本体）——同步侧读的是 http.client/HTTPError，方法名与
+#      文件读同形，只能按「模块内封闭」判定。
 #
-# 已知取舍：①③ 都不追数据流（不证明「这个 response 对象真的来自网络」），与 R3/`_has_literal_equality`
-# 同一档口径；构造出来的对抗样本仍可绕过，但真实新增一个未限量读取点跑不掉。
-# 上限取值本身的跨模块同值由 `tests/test_async_http.py::test_caps_match_the_sync_side_baseline` 钉，
-# 本文件**不**再维护第二份数值断言（避免同一事实两个事实源，见 AGENTS.md「唯一事实源」约定）。
+# 已知取舍：①③ 不追数据流（不证明 response 真的来自网络），构造样本仍可绕过，但真实新增一个未限量
+# 读取点跑不掉。上限取值本身的跨模块同值由
+# tests/test_async_http.py::test_caps_match_the_sync_side_baseline 钉，本文件不再维护第二份数值断言。
 import ast
 from pathlib import Path
 
@@ -177,8 +174,7 @@ def test_sync_http_reads_stay_inside_the_capped_helpers() -> None:
             if node.func.attr != "read" or node.args:
                 continue
             receiver = getattr(node.func.value, "id", "") or getattr(node.func.value, "attr", "")
-            # 只认响应/错误对象形态的接收者（resp/response/e/err/r），避免把 `open(...).read()` 之外
-            # 的其它同名方法也算进来。
+            # 只认响应/错误对象形态的接收者（resp/response/e/err/r），避免把其它同名方法也算进来。
             if receiver in {"resp", "response", "rs", "e", "err", "r", "http_response"}:
                 offenders.append((name, node.lineno, receiver))
     assert not offenders, f"{rel} 出现未经 _read_capped 的响应体全量读取（M-03 同形态回归）: {offenders}"

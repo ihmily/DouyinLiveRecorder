@@ -1,14 +1,12 @@
 # -*- coding: utf-8 -*-
-# M-02（2026-09-30）：GUI 两条配置保存路径共用的 _save_text_to_file 必须委托
-# src.utils.atomic_write_text（全仓唯一加固实现：flush+fsync + replace 前保留目标文件原 mode）。
-# 旧实现是本地弱化副本（有 tmp+replace、缺 fsync、不保留 mode），POSIX 下每次保存把
-# 0600 收紧还原成 umask 权限（SEV-2211 同族：含全部平台口令/Cookie 的配置变为同机任意
-# 本地用户可读）。
+# M-02：GUI 两条配置保存路径共用的 _save_text_to_file 必须委托 src.utils.atomic_write_text
+# （全仓唯一加固实现：flush+fsync + replace 前保留目标文件 mode）。
+# 旧实现是本地弱化副本（有 tmp+replace、缺 fsync、不保留 mode），POSIX 下每次保存把 0600
+# 还原成 umask 权限——含全部平台口令/Cookie 的配置变为同机任意本地用户可读。
 #
-# 为什么经子进程驱动真实实现：不在 pytest 进程 import gui——gui.py 模块级就写
-# os.environ["DLR_GUI_PARENT"]="1"（硬约定：必须先于任何 src 导入），同一 pytest 进程里
-# 导入会让后续所有用例的 src.logger 都被判成 GUI 父进程、不再创建录制日志文件。
-# 理由与骨架同 tests/test_gui_monitor.py 文件头；结果以带前缀的单行 JSON 回传。
+# 经子进程驱动真实实现：gui.py 模块级写 os.environ["DLR_GUI_PARENT"]="1"（必须先于任何
+# src 导入），同进程导入会把后续用例的 src.logger 判成 GUI 父进程、不再建录制日志。
+# 理由与骨架同 tests/test_gui_monitor.py；结果以带前缀的单行 JSON 回传。
 
 import json
 import os
@@ -75,8 +73,8 @@ _MARKER = "\n@@GUI@@ ".encode("utf-8")
 
 
 def _child_env() -> dict[str, str]:
-    # 与 tests/test_gui_monitor.py 同源：显式给子进程钉死 UTF-8（中文 Windows ACP=936 下
-    # 缺这两项时子进程 stdout 走 GBK，父进程按 utf-8 解码即抛）；只读基底、不写回本进程。
+    # 显式给子进程钉死 UTF-8（中文 Windows ACP=936 下否则 stdout 走 GBK）；
+    # 只读基底、不写回本进程。
     env = dict(os.environ)
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
@@ -84,9 +82,8 @@ def _child_env() -> dict[str, str]:
 
 
 def _run_child() -> dict[str, Any]:
-    # 按字节取 marker 之后载荷（AGENTS「探测子进程输出一律按字节比较」），解码只用于判定后的 JSON。
-    # rfind 取最后一次标记：万一 customtkinter/日志恰好打出同形文本，真实载荷仍在最后一条里。
-    # timeout 放宽到 180s：子进程要完整 import gui（customtkinter/PIL 首次导入较慢）。
+    # 按字节找 marker（探测子进程输出一律按字节比较），rfind 取最后一次：万一日志恰好
+    # 打出同形文本，真实载荷仍在最后一条里。180s 覆盖子进程完整 import gui。
     proc = subprocess.run(
         [sys.executable, "-c", _SCRIPT],
         input=b"{}",
@@ -103,9 +100,8 @@ def _run_child() -> dict[str, Any]:
 
 
 def test_save_text_to_file_delegates_to_hardened_atomic_write() -> None:
-    # 单用例四判据全部经同一子进程回传：delegation 发生（spy 记录 1 次调用）、补末尾换行、
-    # 失败上抛、无 .tmp 残留；POSIX 额外断言 0600 保持（Windows 上 chmod 只影响只读位，
-    # 断言无意义，故按平台条件执行——该断言在 CI 的 ubuntu 侧真正生效）。
+    # 单用例四判据全部经同一子进程回传：delegation 发生、补末尾换行、失败上抛、无 .tmp
+    # 残留；POSIX 额外断言 0600 保持（Windows 上 chmod 只影响只读位，该断言仅 ubuntu 生效）。
     out = _run_child()
     assert out["delegated"], f"未委托 atomic_write_text: {out}"
     assert out["content"] == "a=1\n", f"补末尾换行语义丢失: {out['content']!r}"

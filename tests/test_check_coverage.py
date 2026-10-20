@@ -1,32 +1,27 @@
-# scripts/check_coverage.py 的回归锁（MID-2261：该门禁此前**全库零回归锁**）。
+# scripts/check_coverage.py 的回归锁（该门禁此前全库零回归锁，MID-2261）。
 #
-# 起因（2026-09-23 实测）：`grep -rln check_coverage tests/` 0 命中——一个会输出
-# 「PASSED: All 0 module(s)」的门禁从来没被人证过它真的会红。本文件按「删掉某条
-# fail-closed 判据必须变红」组织用例，全部离线：只喂构造好的 coverage 报告 dict /
-# 临时目录树，不跑 pytest 自身、不调用真实 .coverage。
+# 口径：按「删掉某条 fail-closed 判据必须变红」组织用例，全部离线——只喂构造好的
+# coverage 报告 dict / 临时目录树，不跑 pytest 自身、不调用真实 .coverage。
 #
 # 锁住的行为：
 #   A) MIN-19：拿不到数据（文件缺失 / files 为空 / 报告不可解析 / src 枚举为空 /
 #      登记表腐烂）一律 rc=2 并打印**下一步命令**，绝不退回 WARN 或「全部通过」；
 #   B) MID-2259：判定面 = src/ 下**全部**模块，未登记阈值者按 GLOBAL_FLOOR 判定，
 #      新增 src/*.py 不再自动豁免；
-#   C) MID-2261 补：数据文件比 src/、tests/ 最新 .py 陈旧 → rc=2（旧数据评门禁＝假绿）；
-#   D) 审查 6.7 收紧：报告键匹配必须整段模块路径（含 src/）落在尾部，
-#      只含 tests/utils.py 的报告不得顶替 src/utils.py；
+#   C) 数据文件比 src/、tests/ 最新 .py 陈旧 → rc=2（旧数据评门禁＝假绿）；
+#   D) 报告键匹配必须整段模块路径（含 src/）落在尾部，只含 tests/utils.py 的报告
+#      不得顶替 src/utils.py；
 #   E) 白名单（GATE_EXEMPT_MODULES）每条必须写理由，且指向真实存在的模块；
-#   F) CLI 出口：main() 必须把 0/1/2 三种 rc 原样 sys.exit 出去（改成 `return` 就让
-#      门禁在 CI 里退化成一行装饰性输出）；
+#   F) CLI 出口必须把 0/1/2 三种 rc 原样 sys.exit（改成 `return` 就让门禁在 CI 里
+#      退化成一行装饰性输出）；
 #   G) MID-2259 分层：登记阈值 > 债务基线 > 全局下限；债务条目须有 tracker 出处与复核日期，
-#      豁免理由写「生成物」就必须能在文件里找到生成器标记，DEBT_CEILING 是条目数闸门。
+#      豁免理由写「生成物」必须能在文件里找到生成器标记（DEBT_CEILING 是条目数闸门）。
 #
 # **组织口径：一个用例只做一次门禁判定**（机检见 test_each_case_performs_a_single_gate_judgment）。
 # 原因：多次判定共用同一份被 monkeypatch 改过的模块状态，而 setattr 要到用例 teardown 才生效——
 # 第二次判定读到的还是第一次那份数据，于是「先写新数据、后还原旧数据」这类追加写法一进来就
-# 产出成串假失败（单跑全绿、换个顺序就红）。
-# 确需两次判定的那一条（rc=2 的归因）用 ExitStack 把还原**推到两次判定之间**
-# （见 test_stale_table_entry_exits_2_then_clean_table_passes）。
-#   [历史注] 2026-09-23 收敛前本文件有「下限以下/下限恰好」「反斜杠键/绝对路径键」
-#   「陈旧诊断/陈旧 rc」三处同用例两次判定，该口径由它们立起。
+# 产出成串假失败（单跑全绿、换个顺序就红）。确需两次判定的那一条用 ExitStack 把还原
+# **推到两次判定之间**（见 test_stale_table_entry_exits_2_then_clean_table_passes）。
 #
 # 加载方式与 tests/test_run_gates.py 相同：scripts/ 不在包路径内，用
 # spec_from_file_location 显式加载，避免 sys.path 注入被 isort 重排到 import 之前。
@@ -138,10 +133,10 @@ def test_global_floor_is_not_looser_than_project_fail_under() -> None:
 
 
 def test_each_case_performs_a_single_gate_judgment() -> None:
-    # 机检文件头的「组织口径」：每个 test_* 用例里，对 evaluate_report / check_coverage / main
-    # 的调用合计 ≤ 1；例外只放行「显式在两次判定之间完成还原」的写法（函数体里出现 ExitStack）。
-    # 判据按「test_ 前缀的函数体 + _JUDGMENTS 名单上的属性调用」数次数：把判定挪进非用例
-    # helper、或给用例改名都会让它不计入本条——名单与判据范围须与文件头同步维护。
+    # 机检文件头的「组织口径」：每个 test_* 里对 evaluate_report / check_coverage / main
+    # 的调用合计 ≤ 1；例外只放行「两次判定之间完成还原」的写法（函数体里出现 ExitStack）。
+    # 判据按「test_ 前缀函数体 + _JUDGMENTS 名单上的属性调用」数次数：把判定挪进 helper
+    # 或给用例改名都不计入——名单与判据范围须与文件头同步维护。
     offenders: dict[str, int] = {}
     for node in ast.walk(ast.parse(_read_this_file())):
         if not isinstance(node, ast.FunctionDef) or not node.name.startswith("test_"):
@@ -163,9 +158,8 @@ def test_each_case_performs_a_single_gate_judgment() -> None:
 
 def test_subprocess_probes_compare_bytes_not_decoded_text() -> None:
     # AGENTS.md「探测子进程输出一律按字节比较」+「这类用例必须能单文件独立运行」：
-    # 本仓门禁口径要求 PYTHONUTF8=1，而子进程（含被起的 python）在中文 Windows 上按码页发
-    # 本地化消息，text=True/encoding= 会让解码进入判定路径（reader 线程抛 UnicodeDecodeError →
-    # stdout=None → 判定语句 TypeError + 一条逸出的 unraisable 告警）。
+    # 本仓门禁口径要求 PYTHONUTF8=1，而子进程在中文 Windows 上按码页发本地化消息，
+    # text=True/encoding= 会让解码进入判定路径（reader 线程抛 UnicodeDecodeError → stdout=None）。
     offenders: list[int] = []
     for node in ast.walk(ast.parse(_read_this_file())):
         if not isinstance(node, ast.Call) or not (
@@ -270,8 +264,8 @@ def test_stale_table_entry_exits_2(
 
 def test_stale_table_entry_exits_2_then_clean_table_passes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     # 「rc=2 是因为那条坏键」而不是「这份报告本来就该 rc=2」——必须两次判定才能证明。
-    # 两次判定之间的**还原**用 ExitStack 当场完成：把还原留给用例 teardown（上一版的写法）
-    # 会让第二次判定仍读到被改坏的表，于是这条断言与上一条互相串味、失败原因指向错的地方。
+    # 还原用 ExitStack 当场完成：留给用例 teardown 会让第二次判定仍读到被改坏的表，
+    # 于是本断言与上一条互相串味、失败原因指向错的地方。
     root = _make_root(tmp_path)
     report = _full_pass_report()
     broken = dict(check_coverage.MODULE_THRESHOLDS)
@@ -357,8 +351,7 @@ def test_stale_data_file_exits_2(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     # 这条必须**同时**桩掉 coverage 子进程并让它成功产出报告：否则 rc=2 会被
-    # 「假 .coverage 生不出 JSON」那条分支顺带满足，把新鲜度判据整个删掉用例照样绿
-    # （2026-09-23 变异验证实测：`stale = _data_is_stale(...)` → `stale = None` 时本文件全绿）。
+    # 「假 .coverage 生不出 JSON」那条分支顺带满足，把新鲜度判据整个删掉用例照样绿。
     # 现在成功路径就在眼前（报告合法、模块全覆盖、本可 rc=0），唯一能给出 rc=2 的就是新鲜度。
     root = _make_root(tmp_path)
     old = 1_700_000_000.0
@@ -600,10 +593,8 @@ def test_debt_count_cannot_exceed_ceiling(tmp_path: Path) -> None:
 
 def test_exempt_claiming_generated_code_is_machine_checked() -> None:
     # 理由写「生成物」就得真在文件里找到生成器标记，否则就是拿一句注释把人写模块洗出门禁。
-    # 取真实仓库根 + 一个确定手写的模块（src/proxy.py）来构造「虚报」形态：
-    # 核对本身只对 ROOT 生效（tmp 桩树里是占位文件，核对它必然假阳性）。
-    # [2026-10-20] 原样本模块 src/ab_sign.py 已随「零生产 importer 的死模块」清理删除，
-    #   换成同为手写、且不含 GENERATED_MARKERS 任一标记的 src/proxy.py，判据形态不变。
+    # 取真实仓库根 + 一个确定手写、且不含 GENERATED_MARKERS 任一标记的模块（src/proxy.py）：
+    # 核对只对 ROOT 生效（tmp 桩树里是占位文件，核对它必然假阳性）。
     saved = check_coverage.GATE_EXEMPT_MODULES
     try:
         check_coverage.GATE_EXEMPT_MODULES = {"src/proxy.py": "protoc 生成物（DO NOT EDIT，不参与人工补测）"}
@@ -625,8 +616,7 @@ def test_shipped_exempt_stub_really_carries_the_marker() -> None:
 
 def test_debt_table_is_empty_by_design() -> None:
     # 2026-09-23 实测读数：`_src_modules(ROOT)` 得 43 个 src 模块 = 42 达标 + 1 个 protoc 桩豁免，
-    # **没有任何模块需要债务基线**（该读数随 src/ 增删漂移，复核跑同一函数即可）。
-    # 这条把「表为空」钉成事实：将来加条目时必须显式上调 DEBT_CEILING 并在此注明理由，
-    # 而不是顺手往表里塞一行让门禁变绿。
+    # 没有任何模块需要债务基线（读数随 src/ 增删漂移，复核跑同一函数即可）。
+    # 这条把「表为空」钉成事实：将来加条目时必须显式上调 DEBT_CEILING 并在此注明理由。
     assert check_coverage.COVERAGE_DEBT == {}, "债务基线表默认必须为空；新增条目须同步上调 DEBT_CEILING"
     assert check_coverage.DEBT_CEILING == 0

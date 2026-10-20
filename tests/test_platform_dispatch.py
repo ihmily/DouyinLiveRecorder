@@ -2,9 +2,9 @@
 #
 # F-01 把 _resolve_platform_stream 的 60+ 层 elif 链改成了「（匹配器, 处理函数）」分发表。
 # 本文件锁定三条契约，防止后续「加平台 / 调顺序」时静默改变平台判定优先级：
-#   1. 分发表非空、无重复处理函数、顺序即优先级（前若干项与主平台白名单一致）；
+#   1. 分发表非空、无重复处理函数、顺序即优先级（头部若干项与主平台白名单一致）；
 #   2. 每个代表 URL 经分派后得到预期平台名，且走的是预期解析入口（记录 spider/stream 调用）；
-#   3. 无法识别的地址返回 None；自定义流地址的扩展名判定大小写不敏感。
+#   3. 无法识别的地址返回 None；自定义流地址按**路径扩展名**判定，大小写不敏感。
 #
 # 所有 spider / stream 调用均替换为记录型异步桩，用例不发任何真实网络请求。
 
@@ -99,10 +99,10 @@ def test_resolver_table_is_wellformed(main_mod: Any) -> None:
 
 
 def test_resolver_table_priority_head(main_mod: Any) -> None:
-    # 前六项 = 迁移前 elif 链的前五个平台（抖音 / TikTok / 快手 / 虎牙 / 斗鱼）
-    # + 2026-10-03 新增的虎牙移动端短链 hy.fan（表项插在虎牙之后、斗鱼之前，白名单同批登记）。
-    # 顺序即优先级：抖音短链 v.douyin.com 等形态必须最先判定，不能被更宽松的片段抢走。
-    # 插入新表项会挪动其后所有下标——本锁因此显式列出顺序，改顺序必须同步改这里并说明理由。
+    # 前六项 = 迁移前 elif 链的前五平台（抖音 / TikTok / 快手 / 虎牙 / 斗鱼）+ 虎牙移动端短链
+    # hy.fan（2026-10-03 插入虎牙之后、斗鱼之前，白名单同批登记）。顺序即优先级：抖音短链
+    # v.douyin.com 等形态必须最先判定，不能被更宽松的片段抢走；插入新表项会挪动其后所有下标，
+    # 所以这里显式列出顺序，改顺序必须同步改本锁并说明理由。
     names = [handler.__name__ for _, handler in main_mod._PLATFORM_RESOLVERS[:6]]
     assert names == [
         "_resolve_douyin_com",
@@ -116,7 +116,7 @@ def test_resolver_table_priority_head(main_mod: Any) -> None:
     assert main_mod._PLATFORM_RESOLVERS[-1][1].__name__ == "_resolve_custom_stream"
 
 
-# （URL, 预期平台名, 预期命中的解析入口）。入口名用于确认「走的是哪条分支」——
+# （URL, 预期平台名, 预期命中的解析入口）：入口名用于确认「走的是哪条分支」，
 # 只断言平台名会漏掉「匹配到了但处理函数被换错」这类错误。
 _DISPATCH_CASES = [
     ("https://live.douyin.com/123", "抖音直播", "get_douyin_web_stream_data"),
@@ -175,10 +175,9 @@ def test_custom_stream_suffix_is_case_insensitive(dispatch_env: tuple, url: str,
     assert expected_key in port_info
 
 
-def test_new_platform_entry_can_be_registered(
-    main_mod: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:  # 「新平台接入成本」是 F-01 的核心诉求：追加一个处理函数 + 一条表项即可，
-    # 不需要进 600 行链里插分支。此处用一个临时表项验证该扩展点确实可用。
+def test_new_platform_entry_can_be_registered(main_mod: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    # 「新平台接入成本」是 F-01 的核心诉求：追加一个处理函数 + 一条表项即可，不必进 600 行链里
+    # 插分支。此处用一个临时表项验证该扩展点确实可用。
     seen: list[str] = []
 
     def _fake_handler(ctx: Any) -> None:
@@ -199,10 +198,9 @@ def test_new_platform_entry_can_be_registered(
 # --------------------------------------------------------------------------------------
 # MID-04（CODE_REVIEW_2026-09-20）：白名单 host 与分发表必须一一对应
 #
-# 准入按 `url_host in PLATFORM_HOST` **精确 host** 匹配，分派按**子串**匹配。
-# 白名单里有、表项里没有任何片段命中的 host 会让房间线程每轮走 _resolve_unrecognized：
-# 一条 error → sleep → 无限空转，永不录制、永不注释、也**不记 record_error**
-# （熔断/背压统计完全看不到它），白占监控位并持续污染日志。
+# 准入按 `url_host in PLATFORM_HOST` **精确 host**，分派按**子串**匹配。白名单里有、没有任何表项
+# 命中的 host 会让房间线程每轮走 _resolve_unrecognized：一条 error → sleep → 无限空转，永不录制、
+# 也**不记 record_error**（熔断/背压统计完全看不到），白占监控位并持续污染日志。
 # --------------------------------------------------------------------------------------
 def test_every_platform_host_has_a_resolver(main_mod: Any) -> None:
     matchers = [matcher for matcher, _handler in main_mod._PLATFORM_RESOLVERS]
@@ -225,10 +223,9 @@ def test_platform_host_entries_that_were_fixed_on_2026_09_20(main_mod: Any) -> N
 
 
 def test_douyu_mobile_host_is_admitted_and_dispatched(main_mod: Any) -> None:
-    # 斗鱼移动端 host 必须在准入白名单里：准入按 `url_host in PLATFORM_HOST` 精确匹配，
-    # 缺此项时 https://m.douyu.com/8751648 在读取 URL 配置阶段就被判「未知链接」注释掉，
-    # 根本走不到解析；而分派表缺 m.douyu.com/ 则会落入 _resolve_unrecognized 无限空转
-    # （与 SEV-2203 同一失败型：永不录制、不记 record_error）。两处必须同时存在。
+    # 斗鱼移动端 host 必须在准入白名单（精确匹配）且分派表命中：缺前者时
+    # https://m.douyu.com/8751648 在读取 URL 配置阶段就被判「未知链接」注释掉；缺后者则会落入
+    # _resolve_unrecognized 无限空转（SEV-2203 同型：永不录制、不记 record_error）。
     assert "m.douyu.com" in main_mod.PLATFORM_HOST
     matcher = main_mod._match_host("www.douyu.com/", "m.douyu.com/")
     assert matcher("https://m.douyu.com/8751648")
@@ -242,8 +239,8 @@ def test_douyu_mobile_host_is_admitted_and_dispatched(main_mod: Any) -> None:
 # MID-03（CODE_REVIEW_2026-09-20）：录制链里的「平台名字面量」必须等于 resolver 回写值
 #
 # 这些列表参与运行期判定（是否强制 http、是否强制直下 FLV、是否纯音频、源地址日志走哪个字段），
-# 而比对对象是 _resolve_* 回写的 `platform`。写成 host 片段（曾经的 "migu"）就是死项：
-# 不报错、只是永不生效。此处用 AST 把两侧交叉校验，防止再次漂移。
+# 比对对象是 _resolve_* 回写的 `platform`。写成 host 片段（曾经的 "migu"）就是死项：不报错、
+# 只是永不生效。此处用 AST 交叉校验两侧，防止再次漂移。
 # --------------------------------------------------------------------------------------
 # 需要与 resolver 回写平台名比对的主循环内列表/元组（变量名 → main.py）
 _PLATFORM_NAME_LITERALS = (
@@ -356,8 +353,7 @@ def test_migu_is_not_a_dead_http_record_entry(main_mod: Any) -> None:
 #
 # 旧实现 `".flv" in url.lower()` 让任意地址只要在 query 里塞 `?a=.flv` 就命中自定义流分支，
 # 于是面板写入的 http://127.0.0.1:8000/x?a=.flv 会被原样送进 ffmpeg 的 -i（CR-09 的 SSRF 旁路）。
-# 反向要求：path 以 .m3u8/.flv 结尾、后面带任意 query/fragment 的合法形态必须照常命中，
-# 且大小写不敏感。
+# 反向要求：path 以 .m3u8/.flv 结尾、带任意 query/fragment 的合法形态必须照常命中（大小写不敏感）。
 # --------------------------------------------------------------------------------------
 _LEGITIMATE_STREAM_URLS = [
     "https://cdn.example.com/live/1.m3u8",
@@ -422,13 +418,11 @@ def test_custom_stream_keys_follow_path_extension(dispatch_env: tuple) -> None:
 
 
 def test_forced_direct_download_platforms_carry_cookie(main_mod: Any) -> None:
-    # L-04（CODE_REVIEW_2026-10-02）不变量锁：两个「强制直下」平台必须在 platform_cookie 映射里
-    # 有条目，且条目绑定到配置项变量（*_cookie），而不是空串字面量。
-    # 成因：[Cookie] shopee_cookie / huajiao_cookie 在 main.py 已有读取点并透传给解析函数，
-    # 却不在映射里，于是同一份用户 Cookie 在「解析」与「探针 / ffmpeg 录制头 / 直下」两条路上
-    # 口径不一——直下路径按游客态取流，CDN 可 403 或钳到最低档。
-    # 判据：删掉任一键、或把键的值写成 "" 字面量，本用例变红；映射整体丢失时开头的
-    # 「entries 非空」反向见证变红（不靠假绿）。
+    # L-04（CODE_REVIEW_2026-10-02）不变量锁：两个「强制直下」平台必须在 platform_cookie 映射
+    # 里有条目且绑定到配置项变量（*_cookie），而不是空串字面量。成因：[Cookie] shopee_cookie /
+    # huajiao_cookie 已有读取点并透传给解析函数，却不在映射里，于是同一份 Cookie 在「解析」与
+    # 「探针 / ffmpeg 录制头 / 直下」两条路口径不一——直下路径按游客态取流，CDN 可 403 或钳到最低档。
+    # 判据：删掉任一键、或把值写成 "" 字面量即变红；映射整体丢失时开头的非空见证变红。
     tree = ast.parse((_REPO_ROOT / "main.py").read_text(encoding="utf-8"))
     entries = _platform_cookie_map_entries(tree)
     assert entries, "AST 未能取到 platform_cookie 字面量映射（扫描口径失效即假绿）"

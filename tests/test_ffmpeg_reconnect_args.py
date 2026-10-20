@@ -1,38 +1,23 @@
 # ffmpeg -reconnect* 输入选项「带值 + 位于 -i 之前」回归测试（2026-09-11 事故沉淀）。
 #
-# 背景：2026-09-10 代码审查修复把 -reconnect_delay_max / -reconnect_streamed /
-# -reconnect_at_eof 从 -i 之后整体移到 -i 之前，移动过程中后两个选项的布尔值 "1"
-# 丢失。ffmpeg 解析 -reconnect_streamed 时把下一个选项名 -reconnect_at_eof 当作
-# 其值 → 「Unable to parse "reconnect_streamed" option value "-reconnect_at_eof"
-# as boolean」→ Invalid argument，输入未打开即退出（-22）。该缺陷在 09-10 当晚
-# 首次真实录制（抖音 h264 HLS 拉流）即 100% 复现。
+# 不变量：
+#   1. 每个 -reconnect* 后必须紧跟一个非选项名的字面量取值；缺值时 ffmpeg 把下一个选项名
+#      当作值（「Unable to parse "reconnect_streamed" option value "-reconnect_at_eof" as boolean」），
+#      输入未打开即以 -22 退出；
+#   2. -reconnect* 必须全部位于 -i 之前（input 级选项归属输入侧）：置于 -i 之后 ffmpeg
+#      静默接受、退出码 0，重连完全失效且无可见症状；
+#   3. m3u8 输入必须移除 -reconnect_at_eof——hls demuxer 依赖播放列表读到 EOF 才拉媒体段，
+#      该选项令 http 层在 EOF 处无限重连（1/3/7/15/31/60s 指数退避），媒体段零字节、进程永不退出。
+#      故 m3u8 在命令构造处删除该参数对；FLV 保留（CDN 掐断长连接时在 EOF 处重连续写同一文件）。
 #
-# 旧写法（-i 之后）ffmpeg 会静默接受、退出码 0、无任何可见症状（2026-09-10 实测），
-# 缺值写法则直接打不开输入——两种失效模式都不易从运行日志直觉定位，故在此固化为
-# AST 断言，同时锁定两个不变量：
-#   1. 每个 -reconnect* 选项后必须紧跟一个非选项名的字面量取值；
-#   2. -reconnect* 必须全部位于 -i 之前（input 级选项归属输入侧，2026-09-10 已知坑）。
-#
-# 本文件与 tests/test_record_container.py 同构：字面量错位能通过格式检查、类型检查
-# 与 AST 等价性校验，只有这类语义断言能拦住。
-#
-# 不变量三（2026-09-11 事故沉淀）：-reconnect_at_eof 对 HLS(m3u8) 输入是致命项——
-# hls demuxer 依赖播放列表读到 EOF 才完成解析并开始拉取媒体段，该选项令 http 层在
-# 播放列表 EOF 处无限重连（ffmpeg -report 实测：「Will reconnect at <size> in
-# N second(s), error=End of file」，1/3/7/15/31/60s 指数退避永不放弃），媒体段一个
-# 都拉不到、视频数据零字节产出、进程永不退出（-loglevel error 下零输出零报错）。
-# 生产事故形态：斗鱼/抖音房间（HLS 优先选源）仅产出弹幕 SRT、无视频文件；虎牙房间
-# （HLS 排除、恒 FLV）不受影响。复现实验：同命令带 -t 10 限时，60 秒仍不退出且
-# 零字节产物；仅去掉该选项后 10 秒录制 9MB 正常退出。
-# 故 m3u8 输入必须在命令构造处移除该参数对；FLV 输入保留（CDN 掐断长连接时在
-# EOF 处重连续写同一文件）。
+# 字面量错位能通过格式检查、类型检查与 AST 等价性校验，只有这类语义断言能拦住。
 
 import ast
 from pathlib import Path
 
 _MAIN_PATH = Path(__file__).resolve().parent.parent / "main.py"
 # 同类回归的第二处定义点：scripts/douyin_live_recorder_standalone.py 的两处录制命令
-# 同样拼接 -reconnect*（与 main.py 保持一字不差是对它的既有要求，一并纳入防线）。
+# 同样拼接 -reconnect*，与 main.py 保持一字不差是对它的既有要求，一并纳入防线。
 _STANDALONE_PATH = Path(__file__).resolve().parent.parent / "scripts" / "douyin_live_recorder_standalone.py"
 
 
@@ -52,12 +37,12 @@ def _reconnect_entries(path: Path) -> list[tuple[ast.List, int]]:
 
 
 class TestReconnectOptionsHaveValues:
-    # 不变量一：每个 -reconnect* 后必须紧跟字面量取值——缺值时 ffmpeg 会把下一个
-    # 选项名当作值，boolean 解析直接失败（2026-09-11 事故的根因）
+    # 不变量一：每个 -reconnect* 后必须紧跟字面量取值——缺值时 ffmpeg 把下一个选项名
+    # 当作值，boolean 解析直接失败
 
     def test_scan_finds_all_definition_points(self) -> None:
-        # 扫描本身必须命中预期选项条目（每个 -reconnect* 一条：main.py 3 个选项、
-        # standalone 2 处命令 × 3 选项），否则下面的断言会退化成空跑的假绿
+        # 扫描必须命中预期条目（main.py 3 个选项、standalone 2 处命令 × 3 选项），
+        # 否则下面的断言会退化成空跑的假绿
         assert len(_reconnect_entries(_MAIN_PATH)) == 3, "main.py 的 -reconnect* 选项数量变化"
         assert len(_reconnect_entries(_STANDALONE_PATH)) == 6, "standalone 的 -reconnect* 选项数量变化"
 
@@ -78,8 +63,7 @@ class TestReconnectOptionsHaveValues:
 
 class TestReconnectBeforeInputFlag:
     # 不变量二：-reconnect* 属 input 级(HTTP 协议)选项，必须位于 -i 之前。
-    # 曾置于 -i 之后：ffmpeg 静默接受、退出码 0，输入侧从未应用，重连完全失效
-    # 且无可见症状（2026-09-10 已知坑，当时已计划本断言但未落地，本次一并补齐）。
+    # 置于 -i 之后：ffmpeg 静默接受、退出码 0，输入侧从未应用，重连完全失效且无可见症状。
 
     def test_reconnect_options_precede_i_flag(self) -> None:
         for path in (_MAIN_PATH, _STANDALONE_PATH):
@@ -120,25 +104,20 @@ def _option_positions(path: Path, opt: str) -> list[tuple[ast.List, int]]:
     return entries
 
 
-# 当前 ffmpeg 里「仅输出侧合法」的选项（2026-09-23 实测：本机 master 构建
-# N-126755-g52f05ac780-20260922 的 -h full 把 -thread_queue_size 列在
-# "Advanced per-file options (output-only)" 段）。放错侧不再是「静默不生效」
+# 当前 ffmpeg 中「仅输出侧合法」的选项（2026-09-23 实测：master 构建的 -h full 把
+# -thread_queue_size 列在 "Advanced per-file options (output-only)"）。放错侧不是静默不生效，
 # 而是直接 EINVAL(-22)：输入根本没打开，录制 100% 失败。
 _OUTPUT_ONLY_OPTIONS = ("-thread_queue_size",)
 
 
 class TestOutputOnlyOptionsFollowInputFlag:
-    # 不变量四（2026-09-23 事故沉淀）：ffmpeg master 把 -thread_queue_size 收窄成
-    # 输出专属选项（doc/ffmpeg.texi：6.1/7.1/8.0/9.0.2 标 (input/output)，master 标
-    # (output)），因此它在 `-i` 之前即非法——实测报
-    # 「Option thread_queue_size ... cannot be applied to input url ...
-    # Error opening input files: Invalid argument」，退出码 -22。
-    # 输出侧位置在 6.1 起全部版本合法（含 master），故它是本仓支持面内唯一可用位置。
+    # 不变量四（2026-09-23 事故沉淀）：ffmpeg master 把 -thread_queue_size 收窄成输出专属
+    # （doc/ffmpeg.texi：6.1/7.1/8.0/9.0.2 标 (input/output)，master 标 (output)），置于 `-i`
+    # 之前报「cannot be applied to input url」并以 -22 退出；输出侧位置自 6.1 起全部版本合法。
 
     def test_scan_finds_the_option_at_the_expected_sites(self) -> None:
         # 反向见证：断言扫描确实看到这些选项，否则下面的位置断言会空跑变假绿。
-        # main.py 只有一个命令定义点（_build_ffmpeg_input_args）；standalone 从不携带
-        # 该选项（其标志集本就与 main.py 不同，见 CODE_REVIEW_2026-09-21.md 第 496 行）。
+        # main.py 只有一个命令定义点（_build_ffmpeg_input_args）；standalone 从不携带该选项。
         for opt in _OUTPUT_ONLY_OPTIONS:
             assert len(_option_positions(_MAIN_PATH, opt)) == 1, f"main.py 中 {opt} 的定义点数量变化"
             assert not _option_positions(_STANDALONE_PATH, opt), f"standalone 不应出现 {opt}"
@@ -167,9 +146,8 @@ class TestOutputOnlyOptionsFollowInputFlag:
 
 
 class TestReconnectAtEofDroppedForHls:
-    # 不变量三：m3u8 输入必须移除 -reconnect_at_eof 参数对（守卫必须存在于每个
-    # 命令定义点）。main.py 1 处（录制主命令）；standalone 2 处（build_ffmpeg_cmd
-    # 与 run_ffmpeg 内联列表须同步，任一缺失即命令不一致）。
+    # 不变量三：m3u8 输入必须移除 -reconnect_at_eof 参数对，且每个命令定义点都要有守卫
+    # （main.py 1 处；standalone 的 build_ffmpeg_cmd 与 run_ffmpeg 两处须同步，任一缺失即命令不一致）。
 
     def test_main_py_drops_reconnect_at_eof_for_hls(self) -> None:
         guards = _hls_drop_guards(_MAIN_PATH)

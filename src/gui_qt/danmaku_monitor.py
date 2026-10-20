@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 # 弹幕监控：tail 录制子进程写的边车 JSONL（logs/danmaku_monitor.jsonl）。
 #
-# 为什么仍然是一条 tail 线程而不是「每成 file watcher」：JSONL 由录制进程追加写入，
-# QFileSystemWatcher 对「文件内容增长」只在 close/rename 时给 signal，
-# 而研发确认过的输出是**持续 open 状态**，因此只能是轮询 + 偏移。
+# 为什么是一条 tail 线程而不是 QFileSystemWatcher：JSONL 由录制进程持续 open 追加写入，
+# 而 watcher 只在 close/rename 时给 signal，内容增长收不到事件，因此只能轮询 + 偏移。
 #
-# 线程与锁篮 Chun：rooms / msgs 两个缓冲在写线程与主线程之间共享，一律在 _lock 下读写；
-# _stop_event 的生命周期与线程一一绑定（旧版 MID-2250 事故：共享 Event 被 clear() 后
-# 旧线程永不退出 → 计数随重启次数翻倍），故每次 start 都**新建** Event 并随闭包交给线程。
+# 并发约定：rooms / msgs 两个缓冲在 tail 线程与主线程间共享，一律在 _lock 下读写。
+# _stop_event 与线程一一绑定——共享 Event 被 clear() 会让旧线程永不退出、计数随重启翻倍
+# （MID-2250），故每次 start 都**新建** Event 并随参数交给该线程。
 from __future__ import annotations
 
 import json
@@ -146,9 +145,8 @@ class DanmakuMonitor:
                         continue
                     if not isinstance(event, dict):
                         continue
-                    # M-17：防护必须落在**每条事件**上。此前一条脏事件（如数值字段为 null）
-                    # 冒泡到最外层 except，而此时 offset 已推进过整个 chunk —— 同批后续完好
-                    # 事件全部丢失且零日志，用户视角就是「弹幕页凭空少了一段」。
+                    # 防护必须落在**每条事件**上：一条脏事件冒泡到最外层 except 时，offset 已推进
+                    # 过整个 chunk，同批后续完好事件会全部丢失且零日志（M-17）。
                     try:
                         self._dispatch(event)
                     except Exception as e:
@@ -165,9 +163,8 @@ class DanmakuMonitor:
                 # 日志被归档改名 / 句柄未就绪（MID-2250 已知良性路径）：等一轮再试，不刷屏。
                 time.sleep(1.0)
             except Exception as e:
-                # M-17：此前是完全静默的 sleep —— tail 线程每轮抛同一个错时界面表现为
-                # 「弹幕监控长期不更新」而日志里一条线索都没有。限频 30s 留痕后继续循环，
-                # 不 break（本线程的退出信号只有 stop_event）。
+                # 完全静默会让「弹幕监控长期不更新」查无线索；限频 30s 留痕后继续循环，
+                # 不 break（本线程的退出信号只有 stop_event，M-17）。
                 now = time.time()
                 if now - last_warn_at >= _WARN_INTERVAL_SECONDS:
                     last_warn_at = now

@@ -1,4 +1,4 @@
-# 验证 GUI 父进程与录制进程的日志文件归属隔离（多进程句柄互锁的根因修复）：
+# GUI 父进程与录制进程的日志文件归属隔离（多进程句柄互锁的根因修复）：
 # GUI 进程（gui.py）经 src.web_config → src/__init__ → src.logger 导入链也会初始化文件
 # sink，若与录制子进程双开同一 logs/streamget.log，任一方到达轮转阈值（rotation="300 KB"）
 # 都要 os.rename 改名，对方句柄未关即抛 PermissionError WinError 32——轮转永不成功、
@@ -29,10 +29,9 @@ def reload_logger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[P
     yield tmp_path
     logger.complete()
     logger.remove()
-    # LT-08（2026-10-18）：三个 sink id 都要复位。重载会往真·全局 loguru 注册文件 sink，
-    # 只清 _console_sink_id 时两个录制 sink 的 id 会带着 tmp_path 里已随会话清理的句柄留给
-    # 下一个用例——remove_file_sinks()/add_file_sinks() 后续对着死 id 走幂等分支，
-    # 而「归档后重建 sink」这类用例判的就是这两个 id，跨文件状态泄漏会让它假绿或假红。
+    # LT-08：三个 sink id 都要复位。重载会往全局 loguru 注册文件 sink，只清 _console_sink_id
+    # 时两个录制 sink 的 id 会带着已随用例清理的句柄留给下一个用例——remove_file_sinks() /
+    # add_file_sinks() 对着死 id 走幂等分支，而「归档后重建 sink」这类用例判的就是这两个 id。
     # 与同构 fixture tests/test_log_archive.py::TestLoggerFileSinkOps.reload_logger 保持一致。
     logger_mod._console_sink_id = None
     logger_mod._streamget_sink_id = None
@@ -74,12 +73,10 @@ def test_gui_parent_respects_log_file_disabled(reload_logger: Path, monkeypatch:
 
 
 def test_import_time_console_sink_colorize_follows_isatty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # L-16（CODE_REVIEW_2026-10-18）回归锁：导入期控制台 sink 的 colorize 必须按 isatty 判定，
-    # 并与 rebind_console_sink() 共用 src/logger.py::_console_colorize 这一份实现。
-    # 旧形态在导入期硬编码 colorize=True，于是 stderr 被重定向到文件/管道时（web.py 后台模式
-    # 接走 logs/web_console.log、或 `python main.py > x.log`）ANSI 转义序列照样写进日志内容，
-    # 而排障恰恰要看这个文件。两侧都钉：非 tty 不得有 ESC、真 tty 仍须有 ESC
-    # （后者防住「干脆恒 False」这种把彩色终端一起弄没的退化改法）。
+    # L-16 回归锁：导入期控制台 sink 的 colorize 必须按 isatty 判定，并与 rebind_console_sink()
+    # 共用 src/logger.py::_console_colorize。旧形态导入期硬编码 colorize=True，stderr 被重定向到
+    # 文件/管道时（web.py 后台模式、`python main.py > x.log`）ANSI 转义序列照样写进日志内容，
+    # 而排障恰恰要看这个文件。两侧都钉：非 tty 不得有 ESC、真 tty 仍须有 ESC（防「恒 False」退化）。
     # 关掉文件 sink（配置「否」），本用例只观察控制台这一路，也不往 tmp_path 外落文件。
     monkeypatch.delenv(logger_mod.GUI_PARENT_ENV, raising=False)
     monkeypatch.setattr(sys, "argv", [str(tmp_path / "main.py")])

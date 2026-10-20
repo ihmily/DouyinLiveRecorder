@@ -19,14 +19,11 @@ from loguru import logger
 
 # 通知模块的 run_script 通过 import main 读写运行时全局；
 # 测试需先把 main 引入，才能加载 src.notify
-# [LT-07 2026-10-18] 这条 sys.path 注入只为下面两行**导入期**服务，用完当场摘回：旧形态把仓库根永久
-# 留在 sys.path[0] 且从不还原（状态泄漏：仓库根被顶到搜索路径最前直到会话结束，同会话其它包的模块
-# 解析顺序被本文件单方面改写；多个用例文件各插一次时这条重复项还会一路累积在最前面）。
-# 不搬进 fixture 的理由：`import main` 就在模块级、pytest 收集期即执行，而 fixture 要等用例开跑才运行，
-# 搬进去等于打一个永不被读的桩（AGENTS「例外情形」同一判据）。
-# 摘回按值 remove 首个同名条目：tests/__init__.py 使仓库根成为 pytest（prepend 导入模式）的导入基准、
-# 那里本来就登记过一条时，被移除的是我们自己插的那条、既有那条原地保留，注入前后 sys.path 逐字相同；
-# main / src.notify 此后由 sys.modules 兜住，任何用例内的再次 import 都不依赖这条路径。
+# [LT-07 2026-10-18] 这条 sys.path 注入只为下面两行**导入期**服务，用完当场摘回：旧形态把仓库根
+# 永久留在 sys.path[0] 且从不还原（同会话其它包的模块解析顺序被单方面改写，多个用例各插一次还会累积）。
+# 不搬进 fixture：`import main` 就在模块级、收集期即执行，fixture 要等用例开跑才运行。
+# 摘回按值 remove 首个同名条目：tests/__init__.py 已登记一条时，移除的是我们插的那条；
+# main / src.notify 此后由 sys.modules 兜住，用例内的再次 import 不依赖这条路径。
 _REPO_ROOT = str(Path(__file__).resolve().parent.parent)
 _PATH_BASELINE = sys.path.count(_REPO_ROOT)  # 注入前的条目数（各调用形态下都实测为 0 或 1）
 sys.path.insert(0, _REPO_ROOT)
@@ -37,19 +34,15 @@ finally:
     if _REPO_ROOT in sys.path:
         sys.path.remove(_REPO_ROOT)
 # LT-07 泄漏判据：「注入 → 导入 → 摘回」三步必须把 sys.path 归还成注入前的条目数。按计数比而不按
-# 整表相等——别的库若在导入期正当注册自己的搜索路径，不该被本文件判红；生产代码不碰 sys.path
-# （grep 实测 main.py / src/*.py / i18n.py / msg_push.py 零处），故这条判据在任意调用形态下都确定。
+# 整表相等——别的库导入期正当注册的搜索路径不该被本文件判红；生产代码零处碰 sys.path，故判据确定。
 assert sys.path.count(_REPO_ROOT) == _PATH_BASELINE, "仓库根被永久留在 sys.path：注入未归还，状态泄漏"
 
-# M-30：命令一律用 sys.executable，不再写死字面量 `python`。
-# 生产 run_script 以 shell=False + shlex.split 在 PATH 里查找可执行文件，而 Linux/CI 镜像常
-# 只提供 python3（无 python 软链），旧写法在 CI 上「正常完成 / 超时」两条用例必失败，
-# 本机 Windows 有 python  launcher 却单跑必绿——典型的「本地绿、CI 红」。
-# 换绑口径与 tests/test_run_gates.py::test_run_command_rebinds_interpreter_to_current_python
-# 同族（把命令里的解释器换成当前跑 pytest 的那个），语义与断言均不变。
-# 必须 shlex.quote：路径可能含空格，且 run_script 走 shlex.split(posix=True)——
-# 实测单引号内的 Windows 反斜杠按字面保留（'C:\a\b.exe' → C:\a\b.exe），round-trip 无损。
-# 本文件其余两处「可执行文件字面量」刻意不改写：
+# M-30：命令一律用 sys.executable，不写死字面量 `python`——生产 run_script 以 shell=False +
+# shlex.split 在 PATH 里查找可执行文件，Linux/CI 镜像常只提供 python3（无 python 软链），旧写法在
+# CI 上「正常完成 / 超时」两条用例必失败，本机 Windows 单跑必绿——典型的「本地绿、CI 红」。换绑
+# 口径与 tests/test_run_gates.py::test_run_command_rebinds_interpreter_to_current_python 同族。
+# 必须 shlex.quote：路径可能含空格，且 run_script 走 shlex.split(posix=True)——单引号内的 Windows
+# 反斜杠按字面保留，round-trip 无损。本文件其余两处「可执行文件字面量」刻意不改写：
 #   __definitely_not_a_real_binary_42__ 要的正是「PATH 里查不到」⇒ OSError 分支；
 #   echo "unterminated 在 shlex.split 阶段就抛 ValueError，永远不会真的起进程。
 
@@ -90,18 +83,11 @@ def test_run_script_timeout_kills_process(
     started = time.monotonic()
     notify.run_script(f'{shlex.quote(sys.executable)} -c "import time; time.sleep(30)"')
     elapsed = time.monotonic() - started
-    # 超时 1 秒 + kill + 二次 communicate 回收管道；留出 4 秒余量
-    # [M-5 2026-09-29 补] 现在的回收顺序是「先杀整棵进程树（Windows: taskkill /T /F；
-    # POSIX: killpg）→ 第二次 communicate 带 _SCRIPT_REAP_TIMEOUT_SECONDS 有限超时」，
-    # 4 秒余量同时覆盖 taskkill 那一轮子进程调用；进程树与超时分支的逐条锁在
-    # tests/test_notify_script_guard.py，本文件只管「超时后确实不再占着调用线程」。
-    # [2026-10-02 补] 4.0 手拍余量已被实测证伪——taskkill.exe 在部分机器态下杀一个真实
-    # 进程稳定 2.5~3.1s（对照读数：taskkill /? 0.10s、Stop-Process 0.71s、proc.kill()
-    # 0.01s；正常终端与沙箱均复现，根因在 taskkill 自身实现链路而非进程终止动作），
-    # 1s 超时 + 3s taskkill ≈ 4.01s 恰好撞线。余量改为由生产常量推导：超时 +
-    # _TREE_KILL_TIMEOUT_SECONDS（杀树路径自身的设计预算）+ 2s 调度余量——taskkill
-    # 吃满自家预算也不误报；「永久阻塞 / 杀树超出预算 / 管道回收悬挂」仍会撞线转红，
-    # 「不再占着调用线程」的原判据意图不变。
+    # 超时 1 秒 + 杀树 + 二次 communicate 回收管道；余量由生产常量推导：超时 +
+    # _TREE_KILL_TIMEOUT_SECONDS（杀树路径自身的设计预算）+ 2s 调度余量，杀树吃满预算也不误报。
+    # 固定的 4.0s 手拍余量已被实测证伪：taskkill.exe 杀一个真实进程稳定 2.5~3.1s，1s + 3s ≈ 4.01s
+    # 恰好撞线。进程树与超时分支的逐条锁在 tests/test_notify_script_guard.py，本文件只管
+    # 「超时后确实不再占着调用线程」。
     kill_budget = notify._SCRIPT_TIMEOUT_SECONDS + notify._TREE_KILL_TIMEOUT_SECONDS + 2.0
     assert elapsed < kill_budget, f"超时未被强制回收: elapsed={elapsed:.2f}s"
     log_text = log_capture.getvalue()

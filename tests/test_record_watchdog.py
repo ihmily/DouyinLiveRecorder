@@ -1,18 +1,16 @@
 # 录制守护（看门狗）与录制状态收尾的回归测试（离线：不触网、不起真实 ffmpeg）。
 #
-# 覆盖 CODE_REVIEW_2026-09-20 的以下条目（判据一律是「删掉生产实现就该失败」：
-# 测试只打桩子进程 / 网络 / 时钟 / 弹幕，不重新实现任何判定逻辑）：
-#   SEV-08 停滞判据基准：必须按「最后一次观测到增长」计时，而不是进程起跑时刻。
-#           双用例：写入空档 45s 不得被杀 / 空档 11min 必须被杀。
-#   MID-07 单次录制时长上限：分段关闭时不生效；命中上限按「正常录完」收尾
-#           （记成功样本、不记 record_error、不判挂起）。
-#   MID-01 等待录制槽的放弃分支必须回收录制状态（否则留下永久幽灵「录制中」条目）。
-#   MID-12 Popen 之后抛错必须统一收敛子进程与录制状态（否则孤儿 ffmpeg + 同目录双路写盘）。
-#   MID-06 直下路径「HTTP 200 + 空/极小响应体」不得判成功。
+# 覆盖 CODE_REVIEW_2026-09-20 条目（判据一律「删掉生产实现就该失败」：只打桩子进程 / 网络 / 时钟 /
+# 弹幕，不重新实现任何判定逻辑）：
+#   SEV-08 停滞基准按「最后一次观测到增长」计时，而非进程起跑时刻（45s 空档不得被杀 / 11min 必须被杀）；
+#   MID-07 单次录制时长上限：分段关闭时不生效，命中上限按「正常录完」收尾（记成功、不判挂起）；
+#   MID-01 等待录制槽的放弃分支必须回收录制状态（否则留下永久幽灵「录制中」）；
+#   MID-12 Popen 之后抛错必须统一收敛子进程与录制状态（否则孤儿 ffmpeg + 同目录双路写盘）；
+#   MID-06 直下路径「HTTP 200 + 空/极小响应体」不得判成功；
 #   SEV-09 only_flv 分支缺 flv_url：recording 必须为空、且不得留下存活的时间字幕线程。
 #
-# 写法约定（AGENTS.md）：main 引用的 stdlib / 第三方模块（time / subprocess / httpx）一律用
-# 浅拷贝 shim 替换 main 命名空间里的全局名，绝不 setattr 到模块本体（会波及同进程守护线程）。
+# 写法约定（AGENTS.md）：main 引用的 stdlib / 第三方模块（time / subprocess / httpx）一律用浅拷贝
+# shim 替换 main 命名空间里的全局名，绝不 setattr 到模块本体（会波及同进程守护线程）。
 
 import subprocess
 import sys
@@ -58,15 +56,14 @@ class _Clock:
 
     def sleep(self, seconds: float) -> None:
         # 推进假时钟 = 「这一轮循环真的睡了这么久」，所以产物增长计划（on_advance）必须挂在
-        # 这里而不是 time() 里：增长只发生在两次 stat 之间，与真实形态（ffmpeg 持续写盘、
-        # 守护循环每秒 stat 一次）同构；挂在 time() 上会让读到的大小取决于「先 stat 还是先推进」，
-        # 同一份生产实现换个取数的先后顺序就能让用例在红绿之间摆动。
+        # 这里：增长只发生在两次 stat 之间，与真实形态（ffmpeg 持续写盘、守护循环每秒 stat）同构；
+        # 挂在 time() 上会让读到的大小取决于「先 stat 还是先推进」，换个取数顺序就能红绿摆动。
         self.now += seconds
         if self.on_advance is not None:
             self.on_advance(self.now)
 
     def shim(self) -> types.SimpleNamespace:
-        # 浅拷贝 stdlib time 的全部公开属性，只覆盖 time/sleep，其余保持真实实现
+        # 浅拷贝 stdlib time 的公开属性，只覆盖 time/sleep，其余保持真实实现
         fresh = types.SimpleNamespace(**{k: getattr(time, k) for k in dir(time) if not k.startswith("_")})
         fresh.time = self.time
         fresh.sleep = self.sleep
@@ -92,9 +89,8 @@ class _FakeProc:
         return None if self._alive() else self._returncode
 
     def wait(self, timeout: float = 0) -> int:
-        # 立即给出退出码：把「终止是否成功」这条链路固定在桩侧，使 MID-12 的用例只测
-        # 「异常出口有没有去终止/注销/清状态」，不去测真实 waitpid 超时语义
-        # （那是 _terminate_ffmpeg_process 自己的用例面）
+        # 立即给出退出码：把「终止是否成功」固定在桩侧，使 MID-12 的用例只测「异常出口有没有去
+        # 终止/注销/清状态」，不去测真实 waitpid 超时语义（那是 _terminate_ffmpeg_process 的用例面）
         return self._returncode
 
     def terminate(self) -> None:
@@ -110,10 +106,9 @@ class _FakeProc:
 
 
 def _prime(main: Any, monkeypatch: pytest.MonkeyPatch, clock: _Clock) -> dict[str, list]:
-    # 装配 check_subprocess 运行所需的最小环境，返回各类调用/样本的捕获容器
-    # acquire 恒真 = 「录制槽可得」，让被测的看门狗/收尾分支不被并发闸门干扰；
-    # 反向用法见 test_giving_up_slot_wait_clears_recording_state（acquire 恒假 + Popen 桩抛错，
-    # 才能证明「放弃分支发生在 Popen 之前」——AGENTS 硬约定：槽位必须先 acquire）
+    # 装配 check_subprocess 的最小环境，返回各类调用/样本的捕获容器。acquire 恒真 =「录制槽可得」，
+    # 让看门狗/收尾分支不被并发闸门干扰；反向用法见 test_giving_up_slot_wait_clears_recording_state
+    # （acquire 恒假 + Popen 桩抛错，才能证明「放弃分支发生在 Popen 之前」——槽位必须先 acquire）。
     samples: dict[str, list] = {"ok": [], "err": [], "term": [], "unregister": [], "marks": []}
     sem = types.SimpleNamespace(acquire=lambda timeout=None: True, release=lambda: None)
     monkeypatch.setattr(main, "recording_semaphore", sem)
@@ -142,11 +137,9 @@ def _prime(main: Any, monkeypatch: pytest.MonkeyPatch, clock: _Clock) -> dict[st
 def _install_ffmpeg(
     main: Any, monkeypatch: pytest.MonkeyPatch, clock: _Clock, alive_at: float, samples: dict[str, list]
 ) -> None:
-    # 装一个「假时钟走到 alive_at 即退出」的 ffmpeg；终止动作只记录调用、不改存活判定
-    # 存活判定刻意不受 terminate 影响：桩进程除非假时钟越过 alive_at 否则恒活。于是
-    # 「用例能否结束」只取决于生产代码是否真的走到「终止 + 收尾返回」分支，
-    # 等价于把『必须主动终止』写进断言——若实现改成 kill 后继续轮询等退出，
-    # alive_at=inf 的用例会无限循环而不是静默通过（挂死比假绿诚实得多）。
+    # 装一个「假时钟走到 alive_at 即退出」的 ffmpeg；终止动作只记录调用、不改存活判定。
+    # 存活判定刻意不受 terminate 影响：若实现改成 kill 后继续轮询等退出，alive_at=inf 的用例会
+    # 无限循环而不是静默通过（挂死比假绿诚实）。
     def _factory(*args: Any, **kwargs: Any) -> _FakeProc:
         return _FakeProc(lambda: clock.now < alive_at)
 
@@ -185,10 +178,9 @@ class TestStallWatchdogBaseline:
         out.write_bytes(b"\x00" * 4096)
         clock = _Clock()
         samples = _prime(main, monkeypatch, clock)
-        # 前 700s 正常增长，700~745s 空档，745s 起 ffmpeg 自然退出
-        # 节拍前提：守护循环每轮 sleep(1)，而停滞判定另有 30s 的最小采样间隔
-        # （_RECORD_STALL_PROBE_INTERVAL），故 45s 空档在生产视角只等于 1~2 次采样——
-        # 正是旧判据「非分段录制满 10 分钟后、相邻两次采样字节不变即定罪」会误杀的形态。
+        # 前 700s 正常增长，700~745s 空档，745s 起 ffmpeg 自然退出。节拍前提：守护循环每轮
+        # sleep(1)，停滞判定另有 30s 最小采样间隔（_RECORD_STALL_PROBE_INTERVAL），故 45s 空档在
+        # 生产视角只等于 1~2 次采样——正是旧判据「满 10 分钟后相邻两次采样字节不变即定罪」误杀的形态。
         clock.on_advance = _writer(out, until=700.0)
         _install_ffmpeg(main, monkeypatch, clock, alive_at=745.0, samples=samples)
 
@@ -208,12 +200,11 @@ class TestStallWatchdogBaseline:
     def test_11min_write_gap_is_killed_as_stall(
         self, main_mod: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        # 真正的停滞：10 分钟里一个字节都没有 → 必须终止并记失败样本（保留线路退避）
-        # 两条不可省的时序前提：① 产物文件必须**先存在**——getsize 抛 OSError 时生产代码
-        # 判定「无法观测」并 return ""，停滞分支永不参与，用例会以「从未触发」的形式假绿；
-        # ② 增长窗口（until=100）必须远早于「100 + 停滞窗口」，否则 _stall_since 会被持续
-        # 刷新、阈值永不越过。对照 45s 用例：本案另把 ffmpeg 寿命设为无限（alive_at=inf），
-        # 于是「停滞终止分支」就是唯一的退出路径——用例结束即证明是看门狗杀的，而非自然退出
+        # 真正的停滞：10 分钟里一个字节都没有 → 必须终止并记失败样本（保留线路退避）。
+        # 两条不可省的时序前提：① 产物文件必须**先存在**——getsize 抛 OSError 时生产代码判「无法
+        # 观测」并 return ""，用例会以「从未触发」的形式假绿；② 增长窗口（until=100）必须远早于
+        # 「100 + 停滞窗口」，否则 _stall_since 被持续刷新、阈值永不越过。ffmpeg 寿命设为无限，
+        # 于是「停滞终止分支」是唯一退出路径——用例结束即证明是看门狗杀的。
         main = main_mod
         out = tmp_path / "主播名_2026-09-20_10-00-00.ts"
         out.write_bytes(b"\x00" * 4096)
@@ -298,10 +289,9 @@ class TestRecordTimeLimit:
         assert samples["ok"] == [_HUYA_HOST]
 
     def test_stall_threshold_is_not_the_old_start_time_baseline(self, main_mod: Any) -> None:
-        # 常量口径锁：停滞窗口仍是 10 分钟、采样间隔 30s（若有人把判据改回起跑基准，
-        # 上面的 45s 用例会红；此处再锁住「窗口远大于采样间隔」这一前提）
-        # 该前提本身也是语义的一部分：窗口一旦 <= 2×采样间隔，「连续 10 分钟无增长」就退化成
-        # 「相邻两次采样字节不变」，45s 空档用例随之失去区分度，而常量比较仍全绿
+        # 常量口径锁：停滞窗口仍是 10 分钟、采样间隔 30s。该前提本身也是语义的一部分：窗口一旦
+        # <= 2×采样间隔，「连续 10 分钟无增长」就退化成「相邻两次采样字节不变」，45s 空档用例随之
+        # 失去区分度，而常量比较仍全绿。
         assert main_mod._RECORD_STALL_SECONDS > main_mod._RECORD_STALL_PROBE_INTERVAL * 2
         assert main_mod._MAX_RECORD_SECONDS == 6 * 60 * 60
 
@@ -523,10 +513,9 @@ def _prime_start_record(
         setattr(main, "exit_recording", True)
 
     monkeypatch.setattr(main, "clear_record_info", _spy_clear)
-    # 轮末等待用假时钟：sleep 只推进虚拟时间、绝不真睡（start_record 收尾会睡
-    # delay_default + 抖动，本 harness 把 delay_default 设为 0，用例靠 _spy_clear 置
-    # exit_recording 在下一轮顶部干净退出）；on_advance 置 no-op 是因为这里不建模产物增长，
-    # 只看 only_flv 分支的收尾时序。仍走 shim 结构：只覆盖 time/sleep 两个属性，不动 stdlib 本体
+    # 轮末等待用假时钟：sleep 只推进虚拟时间、绝不真睡（delay_default=0，靠 _spy_clear 置
+    # exit_recording 在下一轮顶部干净退出）；on_advance 置 no-op 因为这里不建模产物增长。
+    # 仍走 shim 结构：只覆盖 time/sleep 两个属性，不动 stdlib 本体。
     idle = _Clock()
     idle.on_advance = lambda _now: None
     monkeypatch.setattr(main, "time", idle.shim())
@@ -534,13 +523,12 @@ def _prime_start_record(
 
 
 class TestOnlyFlvWithoutFlvUrl:
-    # SEV-09：强制直下平台未拿到 flv_url 时，既不能留幽灵「录制中」，也不能起永不退出的字幕线程
-    # 时序约束而非仅「有没有起线程」：generate_subtitles 是 while True，唯一退出条件是
-    # record_name not in recording —— SEV-09 的原始缺陷正是「线程在 flv_url 校验之前启动」
-    # 叠加「未命中的 else 分支不清 recording」，于是名字永不回收、线程永不停止地写 .srt，
-    # 而房间线程每轮（默认 120s）又再起一条。因此这里既查 captured["subs"]（本用例内的
-    # 启动次数）也查 threading.enumerate()（跨用例残留的活线程）：只查前者会漏「起了但
-    # 没登记名字」，只查后者会漏「起得太早」这类顺序问题
+    # SEV-09：强制直下平台未拿到 flv_url 时，既不能留幽灵「录制中」，也不能起永不退出的字幕线程。
+    # 这里查的是时序而非仅「有没有起线程」：generate_subtitles 是 while True，唯一退出条件是
+    # record_name not in recording——原始缺陷正是「线程在 flv_url 校验之前启动」叠加「未命中的 else
+    # 分支不清 recording」，于是名字永不回收、线程永不停止地写 .srt，而房间线程每轮（默认 120s）
+    # 又再起一条。既查 captured["subs"]（本用例内启动次数）也查 threading.enumerate()（跨用例残留），
+    # 只查前者会漏「起了但没登记名字」，只查后者会漏「起得太早」这类顺序问题。
 
     def test_no_flv_url_leaves_no_recording_state_and_no_subtitle_thread(
         self, main_mod: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path

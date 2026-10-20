@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
 # gettext 翻译编译脚本：i18n/zh_CN/LC_MESSAGES/zh_CN.po -> 同目录 zh_CN.mo
 #
-# 背景：gettext 运行时只读取编译后的 .mo 文件，.po 仅是维护用的源文本。
-# 本仓库按 .gitignore 约定将 .mo 随源分发（Docker / 发布 zip / 源码运行均依赖），
-# 因此修改 .po 后必须重新编译并提交 .mo，否则翻译改动不会生效。
-# Windows 开发机通常没有 gettext 工具链（msgfmt），故此处内置纯 Python 实现，
-# 输出与 GNU msgfmt 兼容的最小 .mo（按 msgid 排序、无哈希表）。
+# 背景：gettext 运行时只读编译后的 .mo，.po 仅是维护用源文本；本仓按 .gitignore 约定将 .mo
+# 随源分发（Docker / 发布 zip / 源码运行均依赖），故改完 .po 必须重编译并提交 .mo。Windows
+# 开发机通常没有 gettext 工具链（msgfmt），故此处内置纯 Python 实现，输出与 GNU msgfmt 兼容
+# 的最小 .mo（按 msgid 排序、无哈希表）。
 #
 # 「.po 改了但 .mo 忘了重编译」由两处同源把守（都是字节级比对，不是抽样）：
 #   CI / 本地门禁块里的 `python scripts/compile_po.py --check`，以及
@@ -49,7 +48,7 @@ def _unescape(text: str) -> str:
 
 
 def parse_po(path: Path) -> dict[str, str]:
-    # 解析 .po 文件为 {msgid: msgstr} 映射；重复 msgid 以最后一次为准并告警。
+    # 解析 .po 为 {msgid: msgstr} 映射；重复 msgid 以最后一次为准并告警。
     # 返回的字典**含** gettext 的头部空 msgid ""（元信息条目），故 len() 等于 .mo 头部 N，
     # 比 JSON/YAML 目录的键数恰好多 1——往文档写条数时必须先说明用的是哪一种口径。
     entries: dict[str, str] = {}
@@ -128,7 +127,7 @@ def write_mo(entries: dict[str, str]) -> bytes:
 def main() -> int:
     # .po 的 msgid/msgstr 全是中文，把条目打到控制台时若沿用 cp936 输出码页就会
     # UnicodeEncodeError（i18n 三件套必须在 UTF-8 下跑，与 MID-63 同源）。
-    # 只在本进程内 reconfigure，不去改环境变量——那样会污染同一次调用里的其它子进程。
+    # 只在本进程内 reconfigure，不改环境变量——那会污染同一次调用里的其它子进程。
     if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
         try:
             # sys.stdout/stderr 标准解释器下为 TextIOWrapper（含 reconfigure）；
@@ -143,9 +142,9 @@ def main() -> int:
         return 2
     entries = parse_po(PO_PATH)
     # 下面打印的「条数」含头部空 msgid，即 .mo 头部的 N，比 en_US.json / zh_TW.yaml 的键数
-    # 恰大 1。往文档写目录条数时必须同时注明用的是哪种口径（两种不得互换，见 AGENTS.md）。
-    # 先纯内存产出编译结果；--check 分支绝不触碰磁盘上的 .mo，否则读回自己刚写的
-    # 文件必然相等，校验恒真、门禁形同虚设。
+    # 恰大 1；往文档写目录条数时必须注明用的是哪种口径（两种不得互换，见 AGENTS.md）。
+    # 先在纯内存里产出编译结果：--check 分支绝不触碰磁盘上的 .mo，否则读回自己刚写的文件
+    # 必然相等，校验恒真、门禁形同虚设。
     fresh = write_mo(entries)
 
     # 退出码：0 已同步；1 .mo 与 .po 不同步；2 门禁本身没数据可判（找不到 .po，

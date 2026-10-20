@@ -26,22 +26,18 @@ _GUI_PARENT_ENV = "DLR_GUI_PARENT"
 
 @pytest.fixture(scope="session", autouse=True)
 def gui() -> Iterator[ModuleType]:
-    # MT-05（2026-10-18 审查）：旧写法把 `import gui` 放在本文件模块顶层，于是 gui.py 的那条
-    # os.environ["DLR_GUI_PARENT"] = "1" 发生在 pytest **收集期**且永不还原——子集运行时，凡在本
-    # 文件之后才第一次导入 src.logger 的文件都会整会话进入 GUI 父进程模式（不再创建
-    # streamget.log / PlayURL.log），并随 env 泄入本会话拉起的每一个子进程。
-    # tests/test_gui_monitor.py 文件头把同一个污染源定性为「为什么不在本进程 import gui」。
-    # 现改为「导入挪进会话级夹具 + 导入完立刻还原标记」。src.logger 的归属判定只在导入期读一次
-    # （AGENTS「GUI 父进程绝不持有录制日志文件句柄」），conftest 的 autouse 夹具又早已导入过 src，
-    # 故本改动不触及任何 reload 形态的同构用例（tests/test_logger_gui_parent.py 自己逐例
-    # setenv/delenv），只切断本文件的泄漏面。
-    # 为什么是**会话级**而不是逐例：gui._fix_encoding() 会就地 reconfigure 宿主 stdio，落在函数级
-    # 夹具里会被 conftest 的 _guard_stdio_encoding_policy（函数级快照）当场判成「用例改动了宿主进程
-    # 的编码策略」——2026-10-18 实测该形态报 1 error（3 passed, 1 error）；会话级夹具跑在任何函数级
-    # 快照之前，这条副作用因此归位到它本来的位置「导入期」，逐例快照前后同值。
+    # MT-05（2026-10-18 审查）：模块顶层 `import gui` 会让 gui.py 的 os.environ["DLR_GUI_PARENT"]="1"
+    # 发生在 pytest **收集期**且永不还原——子集运行时，凡在本文件之后才首次导入 src.logger 的文件都会
+    # 整会话进入 GUI 父进程模式（不再创建 streamget.log / PlayURL.log），并随 env 泄入本会话拉起的
+    # 每一个子进程（同 tests/test_gui_monitor.py 文件头的定性）。故导入挪进夹具 + 导入完立刻还原标记；
+    # src.logger 的归属判定只在导入期读一次，conftest 的 autouse 夹具又早已导入过 src，故不触及
+    # reload 形态的用例（tests/test_logger_gui_parent.py 自己逐例 setenv/delenv）。
+    # 为什么是**会话级**：gui._fix_encoding() 会就地 reconfigure 宿主 stdio，落在函数级夹具里会被
+    # conftest 的 _guard_stdio_encoding_policy（函数级快照）判成「用例改动了宿主编码策略」
+    # （2026-10-18 实测 1 error）；会话级夹具跑在任何函数级快照之前，这条副作用因此归位到「导入期」。
     # 还原为什么走 context + setenv 占位而不是 delenv：monkeypatch.delenv 只登记「删除前已存在的值」
-    # 并在 undo 时原样写回——恰好是要清掉的 "1"；先 setenv 空串才会登记 NOTSET，让 context 退出时的
-    # undo 走 del 分支，键才真的从进程环境里消失（上游若已污染则按原值还原，不归本文件管）。
+    # 并在 undo 时原样写回——恰好是要清掉的 "1"；先 setenv 空串才会登记 NOTSET，让 undo 走 del 分支，
+    # 键才真的从进程环境里消失（上游若已污染则按原值还原，不归本文件管）。
     with pytest.MonkeyPatch.context() as patcher:
         patcher.setenv(_GUI_PARENT_ENV, "")
         module = importlib.import_module("gui")
@@ -101,12 +97,9 @@ def test_language_change_retranslates_and_resets_sentinels(
     assert cfg["录制设置"]["language"] == "en_US"
 
 
-# [2026-10-20] 原 test_language_change_triggers_tray_menu_rebuild 已随遗留 pystray 托盘
-# （gui.py::SystemTray，rebuild_menu 整体重建菜单）退役删除。该不变式没有丢，只是换了
-# 宿主：产品入口本就在 PySide6 侧，「语言切换后托盘菜单文本必须跟着换」现由
-# tests/test_gui_qt_units.py::test_static_labels_and_derived_title_follow_language_switch
-# 的托盘四条动作项断言接管（Qt 版走 TrayIcon.retranslate()，不再整体重建）。
-# 本文件剩下的用例仍钉在 tkinter 版 LiveRecorderGUI 上，与托盘无关。
+# [2026-10-20] 原 test_language_change_triggers_tray_menu_rebuild 已随遗留 pystray 托盘退役删除；
+# 「语言切换后托盘菜单文本必须跟着换」由 tests/test_gui_qt_units.py 的托盘四条动作项断言接管
+# （Qt 版走 TrayIcon.retranslate()，不整体重建）。本文件剩余用例仍钉在 tkinter 版 LiveRecorderGUI。
 
 
 def test_retranslate_failure_does_not_block_language_writeback(

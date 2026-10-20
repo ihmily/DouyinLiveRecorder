@@ -1,20 +1,19 @@
 # -*- coding: utf-8 -*-
 # 2026-09-23 追加：CODE_REVIEW_2026-09-22.md 第十章「孪生副本」语义漂移 + §5.1 副本侧条目的回归锁。
 #
-# 被测对象是 scripts/douyin_live_recorder_standalone.py —— 它按设计**不 import src/**，
-# 是 src/scheduler.py 并发实现与 src/spider.py 部分平台解析的独立副本，因此必须有一份
-# 自己的用例（AGENTS「改并发语义必须两处同改、两边注释互相点名」此前只靠注释约束、无机检）。
+# 被测对象是 scripts/douyin_live_recorder_standalone.py —— 它按设计**不 import src/**，是
+# src/scheduler.py 并发实现与 src/spider.py 部分平台解析的独立副本，因此必须有一份自己的用例。
 # 本文件不推断 src/ 侧「应该是什么」，只把副本自身应满足的不变量钉住：
-#   MID-2257  PlatformBreaker 的 half-open 回报须经 _probing/_probe_owner 门控——
-#             非探针线程 / 租约重授予后的陈旧探针只能入窗口、不得驱动状态迁移；
-#             样本窗口须为 deque(maxlen) + 挤出时增量扣减（副本旧实现用 list.pop(0)，持锁 O(n)）；
-#   MIN-2259  validate_stream_url 的 .m3u8 判定大小写不敏感（与同文件两处命令构造同口径），
-#             且「判走 HLS 分支」的证据是探针序列（HEAD 后紧跟 Range GET），不是返回值；
+#   MID-2257  PlatformBreaker 的 half-open 回报须经 _probing/_probe_owner 门控——非探针线程 /
+#             租约重授予后的陈旧探针只能入窗口、不得驱动状态迁移；样本窗口须为 deque(maxlen) +
+#             挤出时增量扣减（副本旧实现用 list.pop(0)，持锁 O(n)）；
+#   MIN-2259  validate_stream_url 的 .m3u8 判定大小写不敏感，且「判走 HLS 分支」的证据是探针
+#             序列（HEAD 后紧跟 Range GET），不是返回值；
 #   MIN-2201  副本的字母房间号反查须剥引号，非数字/尾斜杠形态不得把坏 roomid 发给接口。
 # 另有 --selftest 子进程锁：自检是副本唯一的离线自检入口，新增判据必须真在它里面变绿。
 #
-# 原则（AGENTS「测试不得自实现被测逻辑」）：只打桩网络层（_fetch_html/_fetch_json/http_probe）
-# 与探针限速，熔断状态机、正则、地址拼接一律走副本真实代码。
+# 原则：只打桩网络层（_fetch_html/_fetch_json/http_probe）与探针限速，熔断状态机、正则、
+# 地址拼接一律走副本真实代码。
 
 import ast
 import copy
@@ -69,8 +68,7 @@ def _report_from_other_thread(breaker: Any, success: bool) -> None:
     worker = threading.Thread(target=lambda: breaker.record(success))
     worker.start()
     # 审查 7.11（2026-10-18）：裸 join() 会在 record() 卡在锁上时永久挂死整轮 pytest；带上限后
-    # 这条 is_alive 断言才是「回报确实已落进窗口」的凭据——join 超时静默返回时样本可能尚未 append，
-    # 调用方 len(breaker._samples)==9 只会以随机形态复现，判据本身也不成立。
+    # 这条 is_alive 断言才是「回报确实已落进窗口」的凭据（join 超时时样本可能尚未 append）。
     worker.join(timeout=10)
     assert not worker.is_alive(), "回报线程未在 10s 内退出：breaker.record() 挂死，不得判绿"
 
@@ -83,9 +81,8 @@ class TestStandaloneBreakerProbeGate:
         assert breaker.state == "half-open", breaker.state
 
     def test_in_flight_report_from_other_thread_does_not_close(self) -> None:
-        # 失效形态（回灌前）：熔断转 half-open 后，一条在熔断前就已放行、此刻才收尾的普通
-        # 轮次 record_success 被当成探针结果 → clear() 窗口 + 置 closed →
-        # 坏 CDN 立刻重新拿到全部房间流量。
+        # 失效形态（回灌前）：熔断转 half-open 后，一条在熔断前就已放行、此刻才收尾的普通轮次
+        # record_success 被当成探针结果 → clear() 窗口 + 置 closed → 坏 CDN 立刻重新拿到全部流量。
         breaker = _open_breaker()
         assert breaker.allow() is True  # 本线程持有探针
         _report_from_other_thread(breaker, True)
@@ -102,9 +99,9 @@ class TestStandaloneBreakerProbeGate:
         regrant: dict[str, object] = {}
         new_holder = threading.Thread(target=lambda: regrant.__setitem__("granted", breaker.allow()))
         new_holder.start()
-        # 审查 7.11（2026-10-18，同上一条口径）：join(timeout=10) 返回不等于线程已退出。线程挂在
-        # allow() 里时 regrant 尚未写入，下一条断言只会以「键缺失」的形态报错，看不出是死锁；
-        # 这条 is_alive 判据把「第二线程确实跑完并重授予」这一前提直接钉住。
+        # 审查 7.11（同上一条口径）：join(timeout=10) 返回不等于线程已退出。线程挂在 allow() 里时
+        # regrant 尚未写入，下一条断言只会以「键缺失」报错，看不出是死锁；这条 is_alive 直接钉住
+        # 「第二线程确实跑完并重授予」这一前提。
         new_holder.join(timeout=10)
         assert not new_holder.is_alive(), "重授予线程未在 10s 内退出：breaker.allow() 挂死，不得判绿"
         assert regrant.get("granted") is True, regrant
@@ -192,17 +189,16 @@ class TestStandaloneM3u8CaseInsensitive:
         assert calls[1][1] == "bytes=0-0", calls
 
     def test_flv_suffix_does_not_fall_into_hls_branch(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # 反向防线：统一 lower() 不得把 FLV 也拖进 HLS 分支——HEAD=405 时 FLV 属
-        # 「非流媒体 content-type」，应直接定罪而不是补一次 Range GET。
+        # 反向防线：统一 lower() 不得把 FLV 也拖进 HLS 分支——HEAD=405 时 FLV 属「非流媒体
+        # content-type」，应直接定罪而不是补一次 Range GET。
         calls = self._probe_with(monkeypatch)
         ok = SA.validate_stream_url("https://cdn.example/live/a.flv", platform="斗鱼直播")
         assert ok is False, calls
         assert [m for m, _ in calls] == ["HEAD"], calls
 
     def test_every_function_that_tests_m3u8_also_lowercases(self) -> None:
-        # 同文件三处容器判定（校验 1 处 + 两处命令构造）必须同口径。判据按**函数**取：
-        # 只要求「该函数里出现过 .lower()」，既允许就地 lower()，也允许 validate 那种
-        # 「小写化一次、多个判定复用 url_lower」的写法（探针预算要求少算重复的 lower()）。
+        # 同文件三处容器判定（校验 1 处 + 两处命令构造）必须同口径。判据按**函数**取：只要求「该
+        # 函数里出现过 .lower()」，既允许就地 lower()，也允许 validate 那种「小写化一次、多处复用」。
         # 走 AST 而非扫文本：注释里也提到 .m3u8，文本比对会把它们数进来。
         tree = ast.parse(_STANDALONE_PATH.read_text(encoding="utf-8"))
         offenders: list[str] = []
@@ -293,8 +289,8 @@ class TestStandaloneSelftest:
         assert proc.returncode == 0, out.decode("utf-8", errors="replace")[-2000:]
 
     def test_selftest_covers_the_backfilled_invariants(self) -> None:
-        # 自检脚本不得退化成「只跑老用例」：本轮新增的三条判据必须出现在自检输出里，
-        # 否则说明有人把 --selftest 用例如期删掉而 pytest 这边察觉不到。
+        # 自检脚本不得退化成「只跑老用例」：本轮新增的三条判据必须出现在自检输出里，否则说明有人
+        # 把 --selftest 用例删掉而 pytest 这边察觉不到。
         out = _run_selftest().stdout or b""
         decoded = out.decode("utf-8", errors="replace")
         for needle in ("非探针线程回报不得关熔断", "陈旧探针回报不得关熔断", "大写 .M3U8"):
@@ -307,9 +303,9 @@ class TestStandaloneSelftest:
 
 
 class TestUntrustedStreamTargetGuard:
-    # S-01 ②：平台 API 候选属不可信输入面（恶意/被劫持代理、接口投毒、MITM 都可能改写
-    # 候选）——协议白名单 + 本机/内网/云元数据目标必须在探针与 ffmpeg 之前被拒。
-    # 判据是「守卫给得出拒绝理由」与「候选真的进不了探针」，不是「调用了守卫」。
+    # S-01 ②：平台 API 候选属不可信输入面（恶意/被劫持代理、接口投毒、MITM 都可能改写）——
+    # 协议白名单 + 本机/内网/云元数据目标必须在探针与 ffmpeg 之前被拒。判据是「守卫给得出拒绝
+    # 理由」与「候选真的进不了探针」，不是「调用了守卫」。
 
     @pytest.mark.parametrize(
         "url",
@@ -364,9 +360,9 @@ class TestUntrustedStreamTargetGuard:
 
 
 class TestWhitelistOpener:
-    # S-01 ①：build_opener 的默认 Handler 集合不受显式 ProxyHandler 影响——file/ftp/data
-    # 三类协议都会被本地读出 200。行为锁：白名单 opener 对 file:// 给出「白名单外协议」
-    # 的统一失败形态（http_request/http_probe 转成 RuntimeError），响应体一步都不读。
+    # S-01 ①：build_opener 的默认 Handler 集合不受显式 ProxyHandler 影响——file/ftp/data 三类
+    # 协议都会被本地读出 200。行为锁：白名单 opener 对 file:// 给出「白名单外协议」的统一失败形态
+    # （转成 RuntimeError），响应体一步都不读。
 
     def test_file_scheme_is_never_read_by_request_and_probe(self) -> None:
         with pytest.raises(RuntimeError):
@@ -376,11 +372,10 @@ class TestWhitelistOpener:
 
 
 class TestRedirectHopGuard:
-    # SR-02（2026-10-02）：探针 opener 不得自动跟随重定向且每跳不复检——公网候选 302 到
-    # 内网/云元数据时，旧裸 HTTPRedirectHandler 会把跳转请求真的发出去（逐跳判定缺失），
-    # 末位候选的告警放行再把该地址交给 ffmpeg。主线同层防线是探针客户端挂
-    # src/async_http.build_sync_hop_guard（response 事件钩子），副本在 urllib 的重定向单点
-    # redirect_request() 复刻同判据（复用 _untrusted_stream_target_reason，不另写名单）。
+    # SR-02（2026-10-02）：探针 opener 不得自动跟随重定向且每跳不复检——公网候选 302 到内网/
+    # 云元数据时，旧裸 HTTPRedirectHandler 会把跳转请求真的发出去，末位候选的告警放行再把地址
+    # 交给 ffmpeg。主线同层防线是探针客户端挂 src/async_http.build_sync_hop_guard；副本在
+    # urllib 的重定向单点 redirect_request() 复刻同判据（复用 _untrusted_stream_target_reason）。
 
     @pytest.mark.parametrize("code", [301, 302, 303, 307])
     def test_redirect_to_internal_target_is_refused(self, code: int) -> None:
@@ -412,8 +407,8 @@ class TestRedirectHopGuard:
 
 class TestHlsSegmentProbeLite:
     # M-17（2026-10-02）：HLS「播放列表 200」≠ 可录制——分片级探测回灌。判定原则与主线
-    # _probe_hls_segment 一致（保守优先）：分片明确 4xx/5xx 判假绿；解析不出分片/异常维持
-    # 列表可达；派生地址过不可信目标闸，不通过判不可达（SR-01 同判据）。
+    # _probe_hls_segment 一致（保守优先）：分片明确 4xx/5xx 判假绿；解析不出分片/异常维持列表
+    # 可达；派生地址过不可信目标闸（SR-01 同判据）。
 
     def test_segment_404_rejects_playlist(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # 斗鱼 hw 事故形态：列表恒 200（CDN 动态合成），分片 404 —— 必须判假绿回退
@@ -460,9 +455,8 @@ class TestFfmpegCommandHardening:
         assert wl < cmd.index("-i"), "白名单必须位于 -i 之前（输入级选项）"
 
     def test_both_command_definition_sites_are_in_sync(self) -> None:
-        # run_ffmpeg 的内联列表无法直接调用，按源码断言两处白名单字面量逐字同值——
-        # 与 tests/test_ffmpeg_reconnect_args.py 对同文件两处定义点的结构锁同口径
-        # （正向结构锁：副本两处必须同改，漂移即红）。
+        # run_ffmpeg 的内联列表无法直接调用，按源码断言两处白名单字面量逐字同值——与
+        # tests/test_ffmpeg_reconnect_args.py 对同文件两处定义点的结构锁同口径。
         source = _STANDALONE_PATH.read_text(encoding="utf-8")
         literal = '"rtmp,crypto,http,https,tcp,tls,udp,rtp,httpproxy"'
         assert source.count(literal) == 2, f"白名单字面量出现 {source.count(literal)} 处（应为 2 处定义点）"
@@ -527,11 +521,10 @@ class TestFfmpegCommandLogMasking:
 
 class TestStandaloneGracefulQuitChain:
     # M-20（2026-10-19 审查修复）：run_ffmpeg 的 Popen 原带 text=True，stdin 是 TextIOWrapper，
-    # 而 terminate_all_ffmpeg 按主线 src/ffmpeg_proc.py 口径写 b"q"——必抛 TypeError 被写 q 处
-    # 的 except 吞没，「写 q 优雅收尾补 moov」一级恒失效（Windows 下退化为 TerminateProcess
-    # 硬杀，可能产出缺 moov 的不可播放文件）。行为锁走真实链路：run_ffmpeg 建进程 → 登记表 →
-    # terminate_all_ffmpeg 写 q；替身只仿真「管道类型严格性」（text 形态拒 bytes、二进制拒 str），
-    # 终止链本身不在测试里重写（AGENTS「测试不得自实现被测逻辑」）。
+    # 而 terminate_all_ffmpeg 按主线 src/ffmpeg_proc.py 口径写 b"q"——必抛 TypeError 被写 q 处的
+    # except 吞没，「写 q 优雅收尾补 moov」一级恒失效（Windows 下退化为硬杀，可产出缺 moov 的坏文件）。
+    # 行为锁走真实链路：run_ffmpeg 建进程 → 登记表 → terminate_all_ffmpeg 写 q；替身只仿真「管道
+    # 类型严格性」，终止链本身不在测试里重写。
 
     def test_terminate_writes_b_q_into_run_ffmpeg_binary_stdin(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -572,9 +565,8 @@ class TestStandaloneGracefulQuitChain:
                 return self.returncode
 
             def wait(self, timeout: float | None = None) -> int:
-                # 无 timeout 的首次 wait 来自 run_ffmpeg 主循环：此刻进程已在登记表内，
-                # 借这个时机驱动真实的 terminate_all_ffmpeg；带 timeout 的 wait 是终止链
-                # 自己的宽限回收，直接返回避免递归。
+                # 无 timeout 的首次 wait 来自 run_ffmpeg 主循环：此刻进程已在登记表内，借这个时机
+                # 驱动真实的 terminate_all_ffmpeg；带 timeout 的 wait 是终止链自己的宽限回收。
                 if timeout is None and "killed" not in events:
                     events["killed"] = SA.terminate_all_ffmpeg()
                 return 0

@@ -31,13 +31,11 @@ import i18n
 # 工具函数模块 - 提供通用工具函数，包括配置文件读写、文件操作、字符串处理等
 
 
-# URL scheme 白名单校验（2026-09-12 审查 6.3 从 src/spider.py 上移至此）：
-# 仅放行 http(s) 与 ws(s)。防用户在 URL_config.ini 写入 file:// / gopher:// / ftp:// 造成
-# SSRF——本项目虽无「服务端直接 fetch 用户 URL」的经典攻击面，但 stream_select 的流地址校验
-# 与后续解析链路仍会按 URL 触发请求，收紧 scheme 边界是最低成本的防御。
-# 上移原因：原先定义在 spider.py，而真正的请求入口（async_http / sync_http）在依赖链更底层，
-# 无法反向 import spider（循环依赖）→ 函数零生产调用，退化成纸面防御。utils 无业务依赖，
-# 各层均可直接引用。
+# URL scheme 白名单校验（从 src/spider.py 上移至本模块）：仅放行 http(s) 与 ws(s)。
+# 防用户在 URL_config.ini 写入 file:// / gopher:// / ftp:// 造成 SSRF——本项目虽无「服务端直接
+# fetch 用户 URL」的经典攻击面，但 stream_select 的流地址校验与后续解析链路仍会按 URL 触发请求。
+# 上移原因：真正的请求入口（async_http / sync_http）在依赖链更底层，无法反向 import spider
+# （循环依赖）→ 定义在 spider 时函数零生产调用，退化成纸面防御；utils 无业务依赖，各层可直接引用。
 _SAFE_URL_SCHEMES = frozenset({"http", "https", "ws", "wss"})
 
 
@@ -48,15 +46,14 @@ def is_safe_http_url(url: str) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────
-# JS 执行（2026-09-12 审查 6.3）
+# JS 执行
 #
-# 多个平台（LiveMe / 嗨秀 / 抖音 X-Bogus / 咪咕）需调用 node 子进程执行签名脚本。原先各调用点
-# 直接在 async 协程里同步 `execjs.compile(...).call(...)` 或
-# `subprocess.run(["node", ...], timeout=30)`——execjs 内部就是起 node 子进程并阻塞等待 stdout，
-# 在「每房间独立线程 + 独立事件循环」模型下会**冻结该房间的整个事件循环**（咪咕最坏 30s，期间
-# 该房间的其它协程全部停摆）；且每次调用都重新读文件 + compile，重复开销。
-# 本组工具统一解决两点：① 按 (路径, mtime) 缓存编译产物；② run_js_async 把阻塞段整体丢进
-# asyncio.to_thread，协程侧只 await。
+# 多个平台（LiveMe / 嗨秀 / 抖音 X-Bogus / 咪咕）需调 node 子进程执行签名脚本。若在 async
+# 协程里直接 `execjs.compile(...).call(...)` 或 `subprocess.run(["node", ...])`，execjs 内部
+# 就是起 node 子进程并阻塞等 stdout，在「每房间独立线程 + 独立事件循环」模型下会**冻结该房间
+# 的整个事件循环**（咪咕最坏 30s）；且每次调用都重新读文件 + compile。
+# 本组工具统一解决两点：① 按 (路径, mtime) 缓存编译产物；② 把阻塞段丢进专用线程池，
+# 协程侧只 await。
 # ─────────────────────────────────────────────────────────────
 
 # path -> (源文件 mtime, 编译产物)。mtime 参与键判定：脚本更新后自动重编译，无需重启进程
@@ -64,53 +61,38 @@ def is_safe_http_url(url: str) -> bool:
 _js_compile_cache: dict[str, tuple[float, object]] = {}
 _js_compile_lock = threading.Lock()
 
-# ── 签名脚本完整性钉定（2026-09-12 修复 CODE_REVIEW_FIX_1 F-25）──
-# src/javascript/ 下的脚本是各平台签名算法的混淆产物，内含 eval，经 execjs 交给 node 执行。
-# 它们是**被执行的代码**，一旦被篡改（供应链投毒、误操作覆盖、下载到错误版本）就会静默产出
-# 错误签名，表现为「某平台突然全部解析失败」且极难归因。这里记录 2026-09-12 基线的 SHA256，
-# 供 get_compiled_js / run_node_script_async 比对。
-# 本表是 AGENTS「三类钉定/校验互不覆盖」里的**第③类（签名脚本层）**：它只钉得住胶水脚本，
-# 钉不住真正被执行的 wasm 模块，也不覆盖发布期（①）与运行期自动安装（②）的二进制。
+# ── 签名脚本完整性钉定（CODE_REVIEW_FIX_1 F-25）──
+# src/javascript/ 下的脚本是各平台签名算法的混淆产物（内含 eval），经 execjs 交给 node 执行。
+# 它们是**被执行的代码**，一旦被篡改（供应链投毒、误操作覆盖、下载到错误版本）就静默产出
+# 错误签名，表现为「某平台突然全部解析失败」且极难归因。本表记录基线的 SHA256，供
+# get_compiled_js / run_node_script_async 比对。
+# 它是 AGENTS「三类钉定/校验互不覆盖」里的**第③类（签名脚本层）**：只钉得住胶水脚本，钉不住
+# 真正被执行的 wasm 模块，也不覆盖发布期（①）与运行期自动安装（②）的二进制。
 #
 # 默认**只告警不阻断**：平台改版时用户/维护者必须能自行更新脚本，强制校验会把正当更新变成
-# 「程序不可用」。需要强约束的场景（CI、加固部署）可设 DLR_JS_STRICT_HASH=1，届时哈希不符
-# 将拒绝执行。更新脚本后请把新哈希同步到此处（并注明来源版本/日期）。
-# [历史注] 2026-09-20 审查补-03/补-04 移除 laixiu.js / taobao-sign.js 两条：两文件在全仓 *.py 内
-# 除本表外零调用点（来秀签名已在 spider.py 以纯 Python calculate_sign 重写、淘宝签名无入口），
-# 且 taobao-sign.js:76-77 的注释里留了一组结构完整的真实抓包入参（会话令牌 + 时间戳 + 账号标识），
-# 随源码分发即外发他人会话素材；.js 本体已于 2026-09-21 从 src/javascript/ 删除。
-# MIN-2266 ① 把「表与目录一一对应」从人工实测升级为常驻门禁：
-# tests/test_utils.py::test_every_executable_js_is_pinned 断言两侧集合**相等**（出现未登记的 .js、
-# 或表里留着已删的键，都会变红）。本表无「白名单外的例外」：vendored 的 crypto-js.min.js 也照样
-# 登记了哈希——若将来确有必须不钉定的脚本，须在此注明理由并同步放宽那条用例，
-# 不要靠 _check_js_hash 的静默分支。
+# 「程序不可用」。CI / 加固部署可设 DLR_JS_STRICT_HASH=1，届时哈希不符拒绝执行。更新脚本后
+# 必须把新哈希同步到此处（注明来源版本/日期）。[历史注] 2026-09-20 移除 laixiu / taobao-sign
+# 两条（全仓零调用点，且后者注释里留有真实抓包凭据）。
+# MIN-2266 ① 把「表与目录一一对应」升级为常驻门禁：tests/test_utils.py::
+# test_every_executable_js_is_pinned 断言两侧集合**相等**（未登记的 .js 与表里残留的已删键都判红）。
+# 本表无「白名单外的例外」：vendored 的 crypto-js.min.js 也照样登记——将来若确需不钉定的脚本，
+# 须在此注明理由并同步放宽那条用例，不要靠 _check_js_hash 的静默分支。
 _JS_SHA256_EXPECTED: dict[str, str] = {
-    # 2026-10-02 重算四条（crypto-js / x-bogus / haixiu / liveme）：pre-commit 的 end-of-file-fixer 给这四个
-    # 脚本尾部各追加一个换行，原始字节变化使旧值全部失配——内容零改动、仅尾字节（x-bogus 即抖音签名链，
-    # 默认告警、DLR_JS_STRICT_HASH=1 时拒绝执行）；migu.js 未被改写、旧值仍匹配。旧值作废：
-    # crypto-js 769a555d…、x-bogus 12077d60…、haixiu 8d46bb83…、liveme 62199fc7…。口径同下（原始字节）。
+    # 口径：对 .js 的**原始字节**求 SHA256（rb 读取，不受 CRLF/LF 转换影响）；脚本内容一变即须重算。
+    # 2026-10-02 pre-commit 的 end-of-file-fixer 给 crypto-js / x-bogus 尾部各补一个换行（内容零改动、
+    # 仅尾字节），2026-09-21 与 2026-10-18 两轮又因脱敏 / 去死代码重算了 haixiu / liveme / migu，
+    # 均为非行为改动，签名链路未动。
     "crypto-js.min.js": "9d13c4dba10bbf2b04d6c4e21c2246abf43be0fd356596c402d08eb4f9f0aecd",
-    # haixiu.js 2026-09-21 重算（MIN-N39）：尾部注释样例换成 <REDACTED> 占位 + 删除引用 jQuery $
-    # 的 bnu/bn 死代码（均为注释/死代码级改动，签名链路 bsq→pf→as→brm→cls→pt 未动），旧值作废。
-    # 口径同下。
-    # 2026-10-18 两值再次作废并重算（CODE_REVIEW_2026-10-18 L-24/L-25，均为非行为改动）：
-    # liveme.js 把注释里随源码分发的真实抓包素材（tongdun_black_box/lm_s_id/lm_s_str/vali/result）
-    # 换成 <REDACTED> 占位；haixiu.js 把构造器里 4 处 eval("<静态常量名>") 改为直接引用变量
-    # （逐个核实被 eval 的名字都是首行 var 声明的同作用域字符串字面量，非动态拼名、非运行期注入）。
-    # 两文件均经生产 execjs 入口对 HEAD 版与改后版实跑比对，返回键集合与签名值逐项相同。旧值作废：
-    # haixiu 20814a32…、liveme 48f75bfa…。口径与本表校验侧一致 = 对 .js 的**原始字节**求 SHA256。
     "haixiu.js": "e6ad6ce966868c56e08f3ae78056467ecdba38060692e47d536ad2210ac354c5",
     "liveme.js": "7fad3e96f646f118877c6f3e4ae5bd3c2571c02fb5580952c2edd67aba6dde38",
-    # migu.js 2026-09-21 重算：已按补-03/补-04 之后的 wasm 接口重写，旧值 01bf22bd… 不再匹配。
-    # 口径与本表校验侧一致 = 对 *.js 的**原始字节**求 SHA256（rb 读取，不受 CRLF/LF 转换影响）
     "migu.js": "65d9ebedad8a7ddd830175c989440c2d5b3770bc3913f965af6930d2a9e2c39a",
     "x-bogus.js": "41b3f4def2486df1008730e74590352fbe29a0f411509cbecc108b8eebf4a529",
 }
 
 
-# 「未登记」告警的每文件名一次去重（MIN-2266 ①）：run_node_script_async **每次调用**都算哈希
-# （migu 签名每房间每轮一次），不去重则同一条告警按房间数×轮数刷屏、把真线索淹掉——与
-# 「主播未开播等正常轮次刻意静默」同一口径。进程级集合，随进程生命周期结束。
+# 「未登记」告警的每文件名一次去重（MIN-2266 ①）：run_node_script_async 每次调用都算哈希
+# （migu 签名每房间每轮一次），不去重则同一条告警按房间数×轮数刷屏、把真线索淹掉。
+# 进程级集合，随进程生命周期结束。
 _js_unpinned_warned: set[str] = set()
 _js_unpinned_warned_lock = threading.Lock()
 
@@ -128,13 +110,11 @@ def _check_js_hash(js_path: str, raw: bytes) -> None:
     # 比对签名脚本哈希与钉定值；不符时按严格模式开关决定告警还是拒绝。
     name = os.path.basename(js_path)
     expected = _JS_SHA256_EXPECTED.get(name)
-    # MIN-2266 ①：原实现在「未登记」时**静默 return**，于是「src/javascript/ 里多出第 6 个 .js」
-    # （正当新增、或供应链投放）既不进钉定面、也不留任何痕迹——AGENTS 第③类「签名脚本层」的
-    # 覆盖面会在无人注意时缩小，而门禁仍全绿。现在未登记也走同一条告警路径。刻意**不**把它升级
-    # 成 strict 拒绝：动态生成/第三方的临时脚本不该被钉定表误伤，「拒绝执行」保留给「登记过但
-    # 内容变了」这一种确实可归因的情形。复用已登记的那条「与钉定值不符」文案（只把期望值写成
-    # 未登记）而不新造 msgid：两者处置建议逐字相同，而新 msgid 要求四份语言目录 + 重编译 .mo
-    # 同改，本仓语言目录当前由并行改动持有。
+    # MIN-2266 ①：未登记文件也走同一条告警路径（原实现是**静默 return**，于是「src/javascript/
+    # 里多出第 6 个 .js」既不进钉定面、也不留痕迹，门禁仍全绿）。刻意不把未登记升级成 strict
+    # 拒绝：动态生成/第三方的临时脚本不该被钉定表误伤，「拒绝执行」只保留给「登记过但内容变了」
+    # 这一种可归因情形。复用已登记那条「与钉定值不符」文案（只把期望值写成未登记），不新造 msgid
+    # ——两者处置建议相同，而新 msgid 要求四份语言目录 + 重编译 .mo 同改。
     unpinned = expected is None
     if unpinned and not _js_unpinned_first_seen(name):
         return
@@ -182,14 +162,13 @@ def get_compiled_js(js_path: str) -> object:
 
 def _js_runtime_accepts_timeout(call_fn: Callable[..., object]) -> bool:
     # SEV-2209 的兼容闸：timeout= 只有部分 JS 运行时接受。
-    #   · exejs（requirements 首选，utils 顶部优先 import 的就是它）：
-    #     call(key, *args, timeout=None) → 内部 subprocess.run(timeout=…)，超时 kill 子进程；
+    #   · exejs（requirements 首选）：call(key, *args, timeout=None) → 内部 subprocess.run(timeout=…)，
+    #     超时 kill 子进程；
     #   · 新版 PyExecJS：call(*args, **kwargs) 里 kwargs.get("timeout") → 同样有效；
-    #   · 已停止维护的 PyExecJS 1.5.1（即 `except ImportError` 回退分支可能拿到的那份）：
-    #     AbstractRuntimeContext.call(self, name, *args) 不接受任何关键字 → 多传即 TypeError，
-    #     会让该环境下全部 JS 签名平台（抖音 xbogus / LiveMe / 嗨秀）瞬间作废。
-    # 故只在签名确实接受时透传；不接受时超时语义完全由外层 asyncio.wait_for 保证
-    # （代价：那条路径上 node 子进程不会被主动 kill，仅 await 侧能脱身）。
+    #   · 已停止维护的 PyExecJS 1.5.1（回退分支可能拿到的那份）：call(self, name, *args) 不收关键字
+    #     → 多传即 TypeError，会让该环境下全部 JS 签名平台瞬间作废。
+    # 故只在签名确实接受时透传；不接受时超时语义完全由外层 asyncio.wait_for 保证（代价：那条路径上
+    # node 子进程不会被主动 kill，仅 await 侧能脱身）。
     try:
         parameters = inspect.signature(call_fn).parameters
     except TypeError, ValueError:  # pragma: no cover - C 实现等取不到签名的情形
@@ -206,16 +185,14 @@ async def run_js_async(js_path: str, func_name: str, *args: object, timeout: flo
     # SEV-2209：超时预算必须**双保险**，两层缺一即留洞——
     #   ① 运行时侧的 timeout= 是唯一能真正回收 node 子进程的一层（execjs 内部起子进程并在超时
     #      时 kill），但它只管子进程，管不到本协程；
-    #   ② asyncio.wait_for 管 await 侧：阻塞段跑在 asyncio.to_thread 的线程里，而**线程不可取消**，
-    #      ① 一旦不生效（回退分支的 PyExecJS 1.5.1 根本不收 timeout，见 _js_runtime_accepts_timeout；
-    #      或子进程已死而管道未关）await 就永久挂住。本仓房间线程模型是「每房间一个线程 + 各自
-    #      asyncio.run 逐轮驱动」，挂死即该轮永不返回、且**不归还网络信号量**（main.py 侧
-    #      `with semaphore: asyncio.run(...)`），单个房间就能把调度容量永久吃掉一格——
-    #      正是本仓最忌的静默挂死形态。
-    # 外层预算刻意与内层同值（不额外加宽限）：调用方拿到的最坏等待就是 timeout。
-    # 两类超时异常（asyncio.TimeoutError / ProgramError 族）一律**上抛**，交调用方的
-    # trace_error_decorator 兜底为「未开播」并计入按 host 的失败样本——在本函数里吞成返回值
-    # 会让熔断器看不到坏线路（见「录制结果反馈约定」的禁止无条件上报成功样本）。
+    #   ② asyncio.wait_for 管 await 侧：阻塞段跑在工作线程里，而**线程不可取消**，① 一旦不生效
+    #      （回退分支的 PyExecJS 1.5.1 不收 timeout；或子进程已死而管道未关）await 就永久挂住。
+    #      本仓房间线程模型是「每房间一个线程 + 各自 asyncio.run 逐轮驱动」，挂死即该轮永不返回、
+    #      且**不归还网络信号量**（main.py 侧 `with semaphore: asyncio.run(...)`），单个房间就能把
+    #      调度容量永久吃掉一格——正是本仓最忌的静默挂死形态。
+    # 外层预算刻意与内层同值：调用方拿到的最坏等待就是 timeout。两类超时异常一律**上抛**，交调用方
+    # 的 trace_error_decorator 兜底并计入按 host 的失败样本——在本函数里吞成返回值会让熔断器看不到
+    # 坏线路。
     def _sync_call() -> object:
         call_fn = cast("Callable[..., object]", getattr(get_compiled_js(js_path), "call"))
         kwargs: dict[str, float] = {"timeout": timeout} if _js_runtime_accepts_timeout(call_fn) else {}
@@ -226,17 +203,14 @@ async def run_js_async(js_path: str, func_name: str, *args: object, timeout: flo
     )
 
 
-# M-22（2026-10-19）：JS 阻塞段**不能**再丢进 `asyncio.to_thread` 的默认线程池。
-# 默认池由 asyncio 自己管：`asyncio.run()` 收尾时会 `shutdown_default_executor()`，
-# 而它给的是 **300 秒** join 超时——正好对上「内层超时语义失效 → 工作线程永久阻塞」这条
-# 已被文件注释列出的可达形态（PyExecJS 1.5.1 不收 timeout；execjs 在 kill 后又调一次不带
-# 超时的 communicate）。后果是房间线程整整停摆 5 分钟，且超时后线程被弃而未被 join。
-# 改自有池后 `asyncio.run` 不再等它，房间线程只受本函数的 `timeout` 约束。
-# 上限 4 个 worker：JS 签名调用是短任务，池只是「别冻结事件循环」的载体，堆大只会放大
-# 「一堆线程同时挂死」时的资源占用；线程在池内复用，不按次新建。
-# 残余风险（如实登记）：本池的 worker 仍是非守护线程，解释器退出时 threading._register_atexit
-# 的 _python_exit 仍会 join 它们——真正闭合要靠与 run_node_script_async 同构的自管 Popen
-# + communicate(timeout) + 进程树 kill，那是一套独立的签名执行链，不在本次修复范围。
+# M-22：JS 阻塞段**不能**丢进 `asyncio.to_thread` 的默认线程池——默认池由 asyncio 自己管，
+# `asyncio.run()` 收尾时 `shutdown_default_executor()` 给的是 **300 秒** join 超时，正好对上
+# 「内层超时语义失效 → 工作线程永久阻塞」这条可达形态（PyExecJS 1.5.1 不收 timeout；execjs 在
+# kill 后又调一次不带超时的 communicate）。后果是房间线程整整停摆 5 分钟，且超时后线程被弃而未 join。
+# 改自有池后 asyncio.run 不再等它，房间线程只受本函数的 timeout 约束。上限 4 个 worker：JS 签名
+# 调用是短任务，池只是「别冻结事件循环」的载体，堆大只会放大「一堆线程同时挂死」时的资源占用。
+# 残余风险（如实登记）：worker 仍是非守护线程，解释器退出时 _python_exit 仍会 join 它们；真正闭合
+# 要靠自管 Popen + communicate(timeout) + 进程树 kill，属独立的签名执行链，不在本次范围。
 _JS_EXECUTOR: object | None = None
 _JS_EXECUTOR_LOCK = threading.Lock()
 
@@ -249,24 +223,23 @@ def _js_executor() -> "ThreadPoolExecutor":
         return cast("ThreadPoolExecutor", _JS_EXECUTOR)
 
 
-# ── node 子进程超时后的进程树回收（L-19，2026-10-19）────────────────
+# ── node 子进程超时后的进程树回收（L-19）────────────────
 # 与 src/notify.py 的 _kill_process_tree 同一套口径（POSIX: start_new_session + killpg；
 # Windows: taskkill /T /F 一律 argv 列表、禁 shell=True；任一步失败退化到 kill 直接子进程）。
 # **刻意不 import notify 那份实现**：notify 顶层 `import main`（要用 main.os_type / 推送配置），
 # 而 utils 位于依赖链最底层，反向依赖会把整套录制引擎锁体系带进只读工具层。两份实现同构但各自
-# 独立（不是 AGENTS 意义上的「孪生副本」——那种副本指的是 scripts/douyin_live_recorder_standalone.py），
-# 因此改这里的回收判据时**须一并核对 src/notify.py 的对应分支**，两边注释互相点名。
-# 平台判定做成模块级常量而不是函数里就地读 os.name：用例可
-# monkeypatch.setattr(utils_module, "_NODE_TREE_KILL_VIA_TASKKILL", True) 让 Windows 分支
-# 在 Linux CI 上真实执行（AGENTS「平台专属分支的测试不得靠 skipif 让 CI 跳过」）。
+# 独立，因此改这里的回收判据时**须一并核对 src/notify.py 的对应分支**。
+# 平台判定做成模块级常量而不是函数里就地读 os.name：用例可 monkeypatch.setattr(utils_module,
+# "_NODE_TREE_KILL_VIA_TASKKILL", True) 让 Windows 分支在 Linux CI 上真实执行（AGENTS「平台
+# 专属分支的测试不得靠 skipif 让 CI 跳过」）。
 _NODE_TREE_KILL_VIA_TASKKILL = os.name == "nt"
 
 # taskkill 自身的时限（秒）：不得让「回收进程树」变成第二个挂起点（与 notify 同值）。
 _NODE_TREE_KILL_TIMEOUT_SECONDS = 5.0
 
 # 超时后收尸的时限（秒）。必须收尸：Popen.__del__ 见到 returncode 仍为 None 就发
-# ResourceWarning("subprocess ... is still running")，本仓测试门禁是「pytest 0 警告」，
-# 挂死一次就多一条无法归因的告警；但等待一律带上限——无界等待正是本次要消灭的形态。
+# ResourceWarning("subprocess ... is still running")，而本仓测试门禁是「pytest 0 警告」，
+# 挂死一次就多一条无法归因的告警；但等待一律带上限——无界等待正是要消灭的形态。
 _NODE_REAP_TIMEOUT_SECONDS = 5.0
 
 
@@ -274,9 +247,9 @@ _NODE_REAP_TIMEOUT_SECONDS = 5.0
 # killpg 一次收掉脚本 + 它起的全部孙进程（只 kill 直接子进程会留下握着管道写端的孙进程）。
 # os.killpg/os.getpgid 与 signal.SIGKILL 都是 POSIX-only 符号（typeshed 在 win32 下不导出它们），
 # 必须用 sys.platform **字面量**早返回门控，本机 mypy（win32）与 `mypy --platform linux` /
-# `mypy --platform win32` 才都能过；门控方向写反静态检查发现不了，由
+# `--platform win32` 才都能过；门控方向写反静态检查发现不了，由
 # tests/test_utils.py::TestRunNodeScriptTimeoutBudget::test_posix_gate_direction_is_locked_in_source
-# 断言「早返回行在 killpg 行之前且比较的是 == "win32"」锁住（与 notify 同型）。
+# 断言「早返回行在 killpg 行之前且比较的是 == "win32"」锁住。
 def _kill_posix_process_group(pid: int) -> None:
     if sys.platform == "win32":
         return
@@ -288,9 +261,9 @@ def _kill_posix_process_group(pid: int) -> None:
 def _kill_node_process_tree(process: subprocess.Popen[bytes], script_name: str) -> None:
     try:
         if _NODE_TREE_KILL_VIA_TASKKILL:
-            # Windows：taskkill /T（递归子树）/F（强制）。argv 列表调用、禁 shell=True；
-            # 输出不参与判定，capture_output 后按字节原样丢弃、**不做解码**（中文 Windows 上
-            # taskkill 按 GBK 码页回显本地化消息，AGENTS「探测子进程输出一律按字节比较」同源）。
+            # Windows：taskkill /T（递归子树）/F（强制），argv 列表调用、禁 shell=True；输出不参与
+            # 判定，capture_output 后按字节原样丢弃、**不做解码**（中文 Windows 上 taskkill 按 GBK
+            # 码页回显本地化消息，AGENTS「探测子进程输出一律按字节比较」同源）。
             subprocess.run(
                 ["taskkill", "/T", "/F", "/PID", str(process.pid)],
                 capture_output=True,
@@ -301,9 +274,9 @@ def _kill_node_process_tree(process: subprocess.Popen[bytes], script_name: str) 
             _kill_posix_process_group(process.pid)
     except Exception as e:
         # 典型落点：Linux CI 上被强制走 Windows 分支时压根没有 taskkill（FileNotFoundError）、
-        # taskkill 自身超时、孙进程已自行退出（ProcessLookupError）。留痕但不改写结果——
-        # 下面 finally 仍会 kill + wait 直接子进程。script_name 只传 basename，路径里可能带的
-        # 用户目录名不进日志（凭据红线同源的窄化做法，无需再过 mask_credentials）。
+        # taskkill 自身超时、孙进程已自行退出（ProcessLookupError）。留痕但不改写结果——下面
+        # finally 仍会 kill + wait 直接子进程。script_name 只传 basename：路径里的用户目录名不
+        # 进日志（凭据红线同源的窄化做法）。
         logger.warning(
             i18n.tr(
                 "回收 node 签名子进程树失败: {script} - {type_name}: {e}",
@@ -329,33 +302,29 @@ def _kill_node_process_tree(process: subprocess.Popen[bytes], script_name: str) 
 
 
 async def run_node_script_async(script_path: str, *args: str, timeout: float = 30.0) -> str:
-    # 异步执行 node 脚本（subprocess.run 阻塞段丢线程池，事件循环不被冻结）；咪咕签名等
-    # 「整段脚本 + 命令行参数」形态走此入口。
-    # [L-19 2026-10-19 更正] 本行原文说的 subprocess.run 已换成自管 Popen + communicate(timeout)：
-    # run 的 timeout 分支在 Windows 上 kill 直接子进程后还会调一次**不带超时**的 communicate()，
-    # 孙进程握着管道写端时那次读取永远等不到 EOF——即本函数自述要防的那类静默挂死。
+    # 异步执行 node 脚本（阻塞段丢线程池，事件循环不被冻结）；咪咕签名等「整段脚本 + 命令行
+    # 参数」形态走此入口。内部用自管 Popen + communicate(timeout)：subprocess.run 的 timeout
+    # 分支在 kill 后还会调一次**不带超时**的 communicate()，孙进程握着管道写端时那次读取永远
+    # 等不到 EOF（L-19）。
     #
-    # MI-25：本入口同样做脚本哈希校验。原先 _check_js_hash 只在 get_compiled_js（execjs 编译
-    # 路径）内被调用，而 migu.js 是唯一走本入口的脚本——即「整段脚本直接交给 node 执行」这
-    # 一最容易被动手脚的形态，恰好是唯一没有完整性校验的形态，_JS_SHA256_EXPECTED["migu.js"]
-    # 与 DLR_JS_STRICT_HASH 对它完全失效。
-    # MID-62：原实现「读文件算哈希 → 再把**路径**交给 node」是 check-then-use，两步之间文件可被
-    # 替换（具备写权限者即绕过钉定表）。现改为「读一次字节 → 校验 → 把**同一份字节**经 stdin
-    # 交给 node（`node - arg…`）」，node 不再二次读盘，TOCTOU 窗口消除。
-    # 取舍（务必知道再换方案）：经 stdin 执行的脚本里 __filename 为 "-"、__dirname 指向进程 CWD，
-    # 故脚本**不能**依赖自身所在目录解析相对路径（require('./x') / 读同目录的 wasm 等）。当前唯一
-    # 使用者 migu.js 只读 process.argv[2]（实测 `node - hello` 与 `node file.js hello` 的 argv
-    # 下标完全一致），不受影响。若将来接入依赖 __dirname 的脚本，请改为「校验通过后把内容复制
-    # 进 mkdtemp 私有目录再执行该副本」的变体（代价：需同步复制脚本的相对依赖、临时目录要清理），
-    # 不要直接退回传路径。
+    # MI-25：本入口同样做脚本哈希校验——migu.js 是唯一走本入口的脚本，即「整段脚本直接交给
+    # node 执行」这一最易被动手脚的形态，原先是唯一没有完整性校验的形态。
+    # MID-62：「读文件算哈希 → 再把**路径**交给 node」是 check-then-use，两步之间文件可被替换
+    # （具备写权限者即绕过钉定表）。现改为「读一次字节 → 校验 → 把**同一份字节**经 stdin 交给
+    # node（`node - arg…`）」，node 不再二次读盘，TOCTOU 窗口消除。
+    # 取舍（再换方案前务必知道）：经 stdin 执行的脚本里 __filename 为 "-"、__dirname 指向进程
+    # CWD，故脚本**不能**依赖自身所在目录解析相对路径（require('./x') / 读同目录 wasm 等）。当前
+    # 唯一使用者 migu.js 只读 process.argv[2]，不受影响。若将来接入依赖 __dirname 的脚本，请改为
+    # 「校验通过后把内容复制进 mkdtemp 私有目录再执行该副本」（代价：需同步复制相对依赖、清理
+    # 临时目录），不要直接退回传路径。
     def _sync_run() -> str:
         with open(script_path, "rb") as f:
             raw = f.read()
         _check_js_hash(script_path, raw)
         argv = ["node", "-", *args]
         if _NODE_TREE_KILL_VIA_TASKKILL:
-            # Windows：不传 start_new_session（CPython 的 Windows 侧那是
-            # unused_start_new_session，传了零收益还引入 POSIX 语义），进程树一律交 taskkill /T。
+            # Windows：不传 start_new_session（CPython 的 Windows 侧那是 unused_start_new_session，
+            # 传了零收益还引入 POSIX 语义），进程树一律交 taskkill /T。
             proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         else:
             # POSIX：让 node 自成会话/进程组 ⇒ _kill_posix_process_group 的 killpg 能一次收掉
@@ -383,16 +352,15 @@ async def run_node_script_async(script_path: str, *args: str, timeout: float = 3
         out: bytes = stdout or b""
         return out.decode("utf-8").strip()
 
-    # L-19：超时预算双保险，形态与本文件 run_js_async 逐字对齐（两层缺一即留洞）——
-    #   ① 内层 communicate(timeout=) 是唯一能真正回收 node 进程树的一层，但它只管子进程与
-    #      本线程，管不到本协程；
-    #   ② 外层 asyncio.wait_for 管 await 侧：阻塞段跑在 asyncio.to_thread 的线程里，而**线程
-    #      不可取消**，① 一旦不生效（管道被孙进程拖住、未来有人把执行方式改回不带超时的形态、
-    #      甚至 Popen 构造本身阻塞）await 就永久挂住。本仓房间线程模型是「每房间一个线程 +
-    #      各自 asyncio.run 逐轮驱动」，挂死即该轮永不返回、且**不归还网络信号量**（main.py 侧
-    #      `with semaphore: asyncio.run(...)`），单个房间就能把调度容量永久吃掉一格。
-    # 外层预算刻意与内层同值（不额外加宽限）：调用方拿到的最坏等待就是 timeout。
-    # 两类超时异常（asyncio.TimeoutError / 内层 TimeoutExpired）一律**上抛**，不在本函数里降级。
+    # L-19：超时预算双保险，形态与 run_js_async 一致（两层缺一即留洞）——
+    #   ① 内层 communicate(timeout=) 是唯一能真正回收 node 进程树的一层，但它只管子进程与本线程，
+    #      管不到本协程；
+    #   ② 外层 asyncio.wait_for 管 await 侧：阻塞段跑在线程池里，而**线程不可取消**，① 一旦不生效
+    #      （管道被孙进程拖住、有人把执行方式改回不带超时的形态、Popen 构造本身阻塞）await 就永久
+    #      挂住。本仓房间线程模型是「每房间一个线程 + 各自 asyncio.run 逐轮驱动」，挂死即该轮永不
+    #      返回、且**不归还网络信号量**（main.py 侧 `with semaphore: asyncio.run(...)`），单个房间就能
+    #      把调度容量永久吃掉一格。
+    # 外层预算刻意与内层同值：调用方拿到的最坏等待就是 timeout。两类超时异常一律**上抛**。
     return await asyncio.wait_for(asyncio.to_thread(_sync_run), timeout=timeout)
 
 
@@ -413,9 +381,8 @@ OptionalStr = str | None
 OptionalDict = dict[str, object] | None
 
 # 表情符号匹配模式（模块级编译一次）：原实现在 remove_emojis 内每次调用都拼接 10 段字符串构造
-# 约 400 字符的模式再 re.compile——既产生临时字符串分配，又要对长模式串做哈希查表。该函数经
-# clean_name 被每个房间每轮多次调用（80+ 房间场景下每秒可达数百次），提为常量后省去拼接与编译
-# 查表开销，匹配语义完全不变。
+# 约 400 字符的模式再 re.compile，而该函数经 clean_name 被每个房间每轮多次调用（80+ 房间每秒可达
+# 数百次）。提为常量后省去拼接与编译查表开销，匹配语义完全不变。
 _EMOJI_PATTERN = re.compile(
     "["
     + "\U0001f1e0-\U0001f1ff"  # flags (iOS)
@@ -460,11 +427,10 @@ def _make_trace_error_guard(func: Callable[P, R], fallback_factory: Callable[[],
     # 错误追踪装饰器的共用实现（同步/异步两支）：吞掉异常并返回 fallback，日志同时标注函数名
     # 与兜底值类型，便于定位「错误被伪装成正常结果」的现场。两支除 await 外逻辑一致。
     #
-    # M-24（2026-10-19）：fallback 由「一个值」改成「一个工厂」。原先装饰时只构造一次
-    # `{"is_live": False}`，76 处平台解析函数返回的是**同一个 dict 实例**——任何调用方对返回值
-    # 写入（补 anchor_name、缓存派生键、pop）都会污染全局兜底，污染持续到进程结束并跨房间、
-    # 跨轮次串数据。改成每次调用新建，这类「偶发脏数据」从结构上不再可能。
-    # 兜底值类型名仍在装饰时算一次（它只用于日志文案，不需要每次求值）。
+    # M-24：fallback 由「一个值」改成「一个工厂」。原先装饰时只构造一次 `{"is_live": False}`，
+    # 76 处平台解析函数返回的是**同一个 dict 实例**——任何调用方对返回值写入都会污染全局兜底，
+    # 污染持续到进程结束并跨房间、跨轮次串数据。改成每次调用新建，这类「偶发脏数据」从结构上
+    # 不再可能。兜底值类型名仍在装饰时算一次（只用于日志文案，不需每次求值）。
     fallback_type_name = type(fallback_factory()).__name__
     if inspect.iscoroutinefunction(func):
 
@@ -473,10 +439,9 @@ def _make_trace_error_guard(func: Callable[P, R], fallback_factory: Callable[[],
             try:
                 return cast(R, await func(*args, **kwargs))
             except ProgramError as e:
-                # M-23（2026-10-19）：原实现只打一句硬编码英文、不含函数名/异常类型/异常内容，
-                # 与紧邻的 generic 分支口径完全不一致。后果两层：① 环境级故障（Node 缺失 /
-                # 签名脚本执行失败）被静默降级成「未开播」，用户看不到签名链已坏；② 非中文语言下
-                # 混入英文且无归因线索。现补齐 type/func/masked message 并走 i18n。
+                # M-23：原实现只打一句硬编码英文、不含函数名/异常类型/异常内容，与紧邻的
+                # generic 分支口径不一致。后果两层：① 环境级故障（Node 缺失 / 签名脚本执行失败）
+                # 被静默降级成「未开播」；② 非中文语言下混入英文且无归因线索。
                 logger.warning(
                     i18n.tr(
                         "JS 执行环境异常（Node.js 缺失或签名脚本执行失败）: 类型: {type_name}, {masked} in function {func_name}",
@@ -489,10 +454,9 @@ def _make_trace_error_guard(func: Callable[P, R], fallback_factory: Callable[[],
             except Exception as e:
                 tb = traceback.extract_tb(e.__traceback__) if e.__traceback__ else None
                 error_line = tb[-1].lineno if tb else "unknown"
-                # L-32（2026-10-02）：str(e) 须过码——本装饰器是 76 处平台解析的中心异常漏斗，
+                # L-32：str(e) 须过码——本装饰器是 76 处平台解析的中央异常漏斗，
                 # InvalidURL/TooManyRedirects 等异常的 str 内嵌完整 URL（可能带 token 参数），
-                # 直落日志即凭据明文持久化。防御纵深：现网 raise 点已手工过码，此处兜住
-                # 未来新增路径。
+                # 直落日志即凭据明文持久化。防御纵深：现网 raise 点已手工过码，此处兜住未来新路径。
                 error_info = (
                     f"message: type: {type(e).__name__}, {mask_credentials(str(e))} in function {func.__name__}"
                     f" at line: {error_line}, fallback type: {fallback_type_name}"
@@ -533,10 +497,9 @@ def _make_trace_error_guard(func: Callable[P, R], fallback_factory: Callable[[],
 
 def trace_error_decorator(func: Callable[P, R]) -> Callable[P, R]:
     # 错误追踪装饰器：吞掉异常并返回 {"is_live": False}。绝大多数被装饰函数（各平台
-    # get_xxx_stream_data）返回含 is_live 键的 dict，调用方据其判定未开播。返回 str/tuple/None
-    # 的函数必须改用 trace_error_decorator_or_none，否则调用方会静默拿到一个 dict，把错误伪装成
-    # 正常结果（解包时抛 ValueError 又被这层兜底二次吞掉，根因彻底丢失）。
-    # M-24：传工厂而非共享实例（理由见 _make_trace_error_guard 的注释）。
+    # get_xxx_stream_data）返回含 is_live 键的 dict，调用方据其判定未开播。返回 str/tuple/None 的
+    # 函数必须改用 trace_error_decorator_or_none，否则调用方会静默拿到一个 dict，把错误伪装成正常
+    # 结果（解包时抛 ValueError 又被这层兜底二次吞掉，根因彻底丢失）。M-24：传工厂而非共享实例。
     return _make_trace_error_guard(func, lambda: cast(R, {"is_live": False}))
 
 
@@ -554,9 +517,9 @@ def check_md5(file_path: str | Path) -> str:
     return file_md5
 
 
-# 分块计算文件 SHA256：用于下载产物完整性校验。整读整个文件对几百 MB 二进制会瞬时占用大量
-# 内存，分块（1MB/块）保持内存恒定。2026-09-18 审查 CR-11：ffmpeg_install 与 node_install
-# 原先各写一份逐字重复的实现，收敛到此处作为唯一实现（同 unzip_file 的治理思路）。
+# 分块计算文件 SHA256：用于下载产物完整性校验。整读几百 MB 二进制会瞬时占用大量内存，分块
+# （1MB/块）保持内存恒定。ffmpeg_install 与 node_install 原先各写一份逐字重复的实现，收敛到
+# 此处作为唯一实现（同 unzip_file 的治理思路）。
 def sha256_of_file(path: str | Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -567,13 +530,11 @@ def sha256_of_file(path: str | Path) -> str:
 
 # 校验本地缓存的压缩包是否完整可用：os.path.exists 只能证明文件存在，无法区分「下载完整」与
 # 「下载被中断的残缺文件」。zipfile.is_zipfile 会读尾部 End Of Central Directory 记录，残缺包
-# （无 EOCD）返回 False——足以拦截最常见的中断残留形态，且开销极小（不解压全文）。
-# 2026-09-18 审查 CR-11：原为 ffmpeg_install 私有函数，node_install 只判 exists()，于是残缺 zip
-# 会被当成「已下载」并把错误哈希固化成基线、此后永久失败且不自愈。收敛到 utils 后两条安装路径
-# 共用同一判据。
+# （无 EOCD）返回 False——足以拦住最常见的中断残留形态，且开销极小（不解压全文）。
+# node_install 原先只判 exists()，于是残缺 zip 会被当成「已下载」并把错误哈希固化成基线、此后
+# 永久失败且不自愈；收敛到 utils 后两条安装路径共用同一判据。
 def is_valid_zip(path: str | Path) -> bool:
-    # L-48（2026-10-19）：删掉函数内重复的 `import zipfile`——模块顶已导入，函数内再导一次
-    # 除了制造「这里是不是有延迟导入理由」的疑问外没有任何作用（本函数不是导入期敏感的路径）。
+    # 模块顶已导入 zipfile，不在此重复 import（本函数不是导入期敏感的路径）
     try:
         return bool(zipfile.is_zipfile(path))
     except OSError, ValueError:
@@ -587,8 +548,8 @@ def unzip_file(zip_path: str | Path, extract_to: str | Path, delete: bool = True
         os.makedirs(extract_to)
 
     extract_root = os.path.realpath(extract_to)
-    # 解压炸弹防护（2026-09-12 审查 H-1）：恶意压缩包可声明极小尺寸但解压后膨胀到磁盘满 / OOM。
-    # 上限：单文件 4GB、累计 8GB、压缩比 100x（正常压缩比通常 <10x，FFmpeg 二进制 ~70MB）。
+    # 解压炸弹防护（审查 H-1）：恶意压缩包可声明极小尺寸但解压后膨胀到磁盘满 / OOM。
+    # 上限：单文件 4GB、累计 8GB、压缩比 100x（正常压缩比通常 <10x，FFmpeg 二进制 ~70MB）；
     # 宁可误拦合法大包（用户改 max_total_size 重试），不可放过炸弹。
     _MAX_ENTRY_SIZE = 4 * 1024 * 1024 * 1024
     _MAX_TOTAL_SIZE = 8 * 1024 * 1024 * 1024
@@ -628,24 +589,15 @@ def dict_to_cookie_str(cookies_dict: Mapping[str, object]) -> str:
     return cookie_str
 
 
-# ini 解析器的唯一构造入口：M-08（2026-10-19）起 read_ini_value 与 update_config 都改由它取。
-# 为什么必须是 src/config_read.py::tolerant_config_parser（strict=False + interpolation=None），
-# 而不是就地写 configparser.ConfigParser(interpolation=None)：后者 strict 默认 True，遇到
-# 「同一节内落出两行同名键」（2026-10-17 在本仓 config/config.ini 的 [录制设置] 实测到过）时在
-# read() 里就抛 DuplicateOptionError，于是——
-#   · read_ini_value 把它吞成一条 warning 后返回 None（调用方以为「键不存在」）；
-#   · update_config 更早退，**整份写回流程终止**。
-# 后果是 [Cookie]/[Authorization] 的 cookie/token 刷新在这种配置形态下**永远写不回**，用户只看到
-# 一条「Error occurred while reading the configuration file」。读取侧的容错层早已收敛到
-# config_read（AGENTS「配置键名、布尔口径与 SSL 验证」），这两处正是那份「尚未纳入」清单里的
-# src/utils.py×2，本次沿既有路线把它纳入。
-# preserve_case 取默认 False（而不是 GUI 侧的恒等 optionxform）：这两处历史上用的就是默认
-# optionxform（键名一律转小写），`read_ini_value(..., "GUI", "Gui_Font")` 这类大小写混排入参靠的
-# 正是「转小写后比较」；改成保留大小写会把键匹配口径从大小写不敏感变成敏感，属行为变更、不在本次范围。
+# ini 解析器的唯一构造入口：read_ini_value 与 update_config 都经它取。
+# 必须是 src/config_read.py::tolerant_config_parser（strict=False + interpolation=None），不得就地
+# 写 configparser.ConfigParser(interpolation=None)：后者 strict 默认 True，遇到「同节两行同名键」时
+# 在 read() 里就抛 DuplicateOptionError，于是 [Cookie]/[Authorization] 的 cookie/token 刷新在这种
+# 配置形态下**永远写不回**，用户只看到一条「Error occurred while reading the configuration file」。
+# preserve_case 取默认 False：这两处历史上用的就是默认 optionxform（键名一律转小写），
+# `read_ini_value(..., "GUI", "Gui_Font")` 这类大小写混排入参靠的正是「转小写后比较」。
 # **延迟导入是硬约束**：src/config_read → src/web_config → src/utils 是既有依赖链（web_config 顶层
-# `from src.utils import atomic_write_text`），把 config_read 提到本模块顶层 import 会构成导入环
-# （环里 utils 只执行到一半，atomic_write_text 尚未定义 → ImportError）。函数内 import 首次解析后
-# 即进 sys.modules 缓存，后续调用只是一次字典查找，成本可忽略。
+# `from src.utils import atomic_write_text`），提到顶层会形成导入环（utils 只执行到一半即 ImportError）。
 def _tolerant_ini_parser() -> configparser.ConfigParser:
     from src.config_read import tolerant_config_parser
 
@@ -654,14 +606,10 @@ def _tolerant_ini_parser() -> configparser.ConfigParser:
 
 def read_ini_value(file_path: str | Path, section: str, key: str) -> str | None:
     # 按**文件路径**读取 ini 配置项，每次调用重新解析文件、不写回、缺键返回 None。
-    # 关闭插值：值中的裸 %（如 cookie、时间格式）不应触发 InterpolationSyntaxError。
-    # M-08（2026-10-19）：解析器改为 _tolerant_ini_parser()，同节重复键不再让整份文件读不出。
-    #
-    # 2026-09-12 重命名（CODE_REVIEW_FIX_1 F-16）：原名 `read_config_value`，与
-    # `src/config_io.read_config_value(config_parser, section, option, default_value)`
-    # **同名但签名与语义都不同**——后者接收已解析的 parser、缺键会补写默认值回配置文件并返回
-    # str。两个同名函数在 main.py（约 70 处调用 config_io 版）与 spider.py 间混用，极易传错参数
-    # （kwargs 数量与首个参数类型都不同）。因 config_io 版调用点过多，改本侧（仅 spider.py 一处）。
+    # 关闭插值：值中的裸 %（如 cookie、时间格式）不应触发 InterpolationSyntaxError；解析器经
+    # _tolerant_ini_parser() 构造，同节重复键不再让整份文件读不出。
+    # 方法名刻意不叫 read_config_value：那与 src/config_io.read_config_value（接收已解析 parser、
+    # 缺键会补写默认值）同名不同义，混用极易传错参数（见 CODE_REVIEW_FIX_1 F-16）。
     config = _tolerant_ini_parser()
 
     try:
@@ -682,18 +630,16 @@ def read_ini_value(file_path: str | Path, section: str, key: str) -> str | None:
     return None
 
 
-# [L-48 2026-10-19] 此处原有 F-16 的兼容别名 `read_config_value = read_ini_value`（三参路径形态）。
-# 全仓核查后确认零调用点（main.py 的 100+ 处 `read_config_value(config, 节, 键, 默认)` 全部指向
-# src.config_io 的同名函数，签名不同），保留它只会让 F-16 想消除的「同名不同义」混淆继续存在。
-# 已删除；`utils.read_ini_value` 是唯一入口。
+# 原 F-16 的兼容别名 `read_config_value = read_ini_value`（三参路径形态）已删除：全仓零调用点
+# （main.py 的 100+ 处同名调用全部指向 src.config_io），保留只会让 F-16 想消除的「同名不同义」
+# 混淆继续存在。`utils.read_ini_value` 是唯一入口。
 
 
-# ── 原子写的可注入落盘原语（测试缝）─────────────────────────────
-# 为什么包一层薄封装：MID-57 要求「fsync 必须先于 os.replace」成为可断言的不变量，但用例不能去
-# patch stdlib `os` 模块本体（那是全进程生效，会波及 loguru enqueue 线程与 harness 守护线程——
-# 本仓测试约定明令禁止改 stdlib 模块对象）。经这两个模块级名字调用，测试只需
-# monkeypatch.setattr(utils, "_fsync_file"/"_replace", spy) 即可观察调用顺序；封装内部仍是运行时
-# 查 `os.` 属性，故其它用例 patch `os.replace`（如只读写回降级用例）依旧命中同一条路径。
+# ── 原子写的可注入落盘原语（测试缝）─────────────────────
+# MID-57 要求「fsync 必须先于 os.replace」成为可断言的不变量，但用例不能 patch stdlib `os` 模块本体
+# （全进程生效，会波及 loguru enqueue 线程与 harness 守护线程）。经这两个模块级名字调用后，测试
+# 只需 monkeypatch.setattr(utils, "_fsync_file"/"_replace", spy) 即可观察调用顺序；封装内部仍是
+# 运行时查 `os.` 属性，故其它用例 patch `os.replace` 依旧命中同一条路径。
 def _fsync_file(fd: int) -> None:
     os.fsync(fd)
 
@@ -722,27 +668,21 @@ def _fsync_dir(dir_path: str) -> None:
 
 def atomic_write_text(file_path: str | Path, text: str, encoding: str = "utf-8-sig", errors: str | None = None) -> bool:
     # 原子写文本：同目录临时文件写完后 os.replace 覆盖，读方只会看到旧/新完整内容；返回是否成功落盘。
-    # errors=None 即 codec 默认的 strict；目前唯一的非默认调用方是 remove_duplicate_lines 的回退轮
-    # （errors="surrogateescape"）——那一轮读进来的代理码点（U+DC80~U+DCFF）必须原样还原成原字节
-    # 才能落盘，写侧若仍按 strict 处理会直接抛 UnicodeEncodeError，让「非 UTF-8 文件不再被转码
-    # 损坏」的承诺在读侧成立、写侧破功。
-    # 2026-09-18 审查 WD-15：原子写原先分散在 config_io（仅覆盖 update_file / delete_line），
-    # 而 utils.update_config 与 config_io.update_anchor_name 仍用 open(..., "w")——后者会先把文件
-    # 截断为 0 字节，此时进程被杀/掉电/磁盘满，读方将读到空文件，导致全部配置（含凭据）或全部
-    # 房间配置丢失。此处收敛为唯一实现，两条路径统一调用。
+    # errors=None 即 codec 默认的 strict；唯一的非默认调用方是 remove_duplicate_lines 的回退轮
+    # （surrogateescape）——那一轮读进来的代理码点必须原样还原成原字节，写侧若仍按 strict 处理会抛
+    # UnicodeEncodeError，让「非 UTF-8 文件不再被转码损坏」在读侧成立、写侧破功。
+    # 收敛原因（WD-15）：原子写原先分散在 config_io，而 utils.update_config 与
+    # config_io.update_anchor_name 仍用 open(..., "w")——后者先把文件截断为 0 字节，此时进程被杀 /
+    # 掉电 / 磁盘满，读方将读到空文件（全部配置或全部房间配置丢失）。此处收敛为唯一实现。
     #
     # MID-57：close() 只把数据交给内核页缓存，随后 os.replace 改目录项，两者落盘顺序无保证
-    # （ext4 ordered-mode 只是常见情况，XFS/NTFS 不保证）→ 掉电可留下「新目录项 + 空数据页」的
-    # 0 字节配置，正是 WD-15 声称要消灭的形态。故 replace 前 flush+fsync 文件、replace 后 fsync
-    # 父目录。fsync 失败按 best-effort 吞掉（见下方注释）：在「内容已完整写入页缓存、只是无法
-    # 确认耐久」时拒绝发布配置，等于把一次防掉电加固变成一次功能性的「配置写不进去」，代价更糟。
-    # MIN-21（临时文件名）：原为 f"{path}.{pid}.tmp"——只含 pid，同进程两个线程写同一目标会共用
-    # 同一个 tmp 名（open("w") 互相截断），随后 os.replace 可能把半写内容替换进目标。改
-    # tempfile.mkstemp(dir=父目录)：O_EXCL 由内核保证命名唯一。
-    # MIN-21（权限）：os.replace 后目标继承的是临时文件的模式。mkstemp 固定 0600，于是任一非
-    # update_config 的整文件重写都会偏离原文件权限（CR-07 对 config.ini 的 0600 收紧可能被
-    # umask 0644 静默放宽，反之亦可能把公读文件收紧）。故写前记录原 mode、replace 前把 tmp chmod
-    # 回同值（Windows 上 chmod 仅影响只读位，失败忽略）。
+    # （ext4 ordered-mode 只是常见情况）→ 掉电可留下「新目录项 + 空数据页」的 0 字节配置。故
+    # replace 前 flush+fsync 文件、replace 后 fsync 父目录。fsync 失败按 best-effort 吞掉：在「内容
+    # 已完整写入页缓存、只是无法确认耐久」时拒绝发布，等于把一次防掉电加固变成「配置写不进去」。
+    # MIN-21（临时文件名）：原为 f"{path}.{pid}.tmp"，同进程两个线程写同一目标会共用 tmp 名
+    # （open("w") 互相截断）→ 改用 tempfile.mkstemp(dir=父目录)，O_EXCL 由内核保证命名唯一。
+    # MIN-21（权限）：os.replace 后目标继承临时文件的模式，mkstemp 固定 0600，会让整文件重写偏离
+    # 原文件权限。故写前记录原 mode、replace 前把 tmp chmod 回同值（Windows 上只影响只读位）。
     path_str = str(file_path)
     parent = os.path.dirname(os.path.abspath(path_str)) or os.getcwd()
     try:
@@ -769,10 +709,10 @@ def atomic_write_text(file_path: str | Path, text: str, encoding: str = "utf-8-s
                 pass
         _replace(tmp, path_str)
     except (OSError, UnicodeError) as e:
-        # L-47（2026-10-19）：补 UnicodeError。原只接 OSError，而 `f.write(text)` 在 text 含
-        # 目标编码无法表示的字符时抛的是 UnicodeEncodeError（ValueError 子类）——它会穿出本函数，
-        # 且 `*.tmp` 已由 mkstemp 建好却没人删，留下一个半写的临时文件在配置目录里
-        # （备份/打包/云同步都会带上它）。清理与告警走与 OSError 完全相同的路径。
+        # L-47：补 UnicodeError。原只接 OSError，而 f.write(text) 在 text 含目标编码无法表示的
+        # 字符时抛 UnicodeEncodeError（ValueError 子类）——它会穿出本函数，且 *.tmp 已由 mkstemp
+        # 建好却没人删，留下半写临时文件在配置目录里（备份/打包/云同步都会带上它）。
+        # 清理与告警走与 OSError 完全相同的路径。
         logger.warning(i18n.tr("写入配置文件失败（已保留原文件）: {err}", err=e))
         try:
             os.remove(tmp)
@@ -784,13 +724,12 @@ def atomic_write_text(file_path: str | Path, text: str, encoding: str = "utf-8-s
 
 
 # 取「URL 配置文件的写入锁」：与 config_io.update_file / delete_line / web_api 各端点共用
-# main.file_update_lock（RLock，故可在已持锁的调用栈里重入，不会自锁死）。
-# MID-29 修复：utils.replace_url / remove_duplicate_lines 是直接重写 URL_config.ini 的两条旁路
+# main.file_update_lock（RLock，可在已持锁的调用栈里重入）。
+# MID-29：utils.replace_url / remove_duplicate_lines 是直接重写 URL_config.ini 的两条旁路
 # （花椒地址失效自动注释走前者、主循环启动去重走后者），原先既不持锁也非原子，会与主循环热加载、
 # Web 面板的原子写互相截断/覆盖。锁必须惰性取：utils 位于依赖链最底层，顶层 `import main` 会构成
-# 循环导入（main → src.* → utils）。取不到时（独立脚本 / 单测直接 import utils 而未导入 main）
-# 退化为本地锁：仍保证 utils 内部两条写路径互斥，且 atomic_write_text 本身原子，不会留半写文件。
-# 用 RLock 与 main.file_update_lock 保持同型（调用栈可能已持锁，需可重入）。
+# 循环导入（main → src.* → utils）。取不到时（独立脚本 / 单测直接 import utils）退化为本地锁：
+# 仍保证 utils 内部两条写路径互斥，且 atomic_write_text 本身原子，不会留半写文件。
 _utils_local_write_lock = threading.RLock()
 
 
@@ -805,28 +744,24 @@ def _url_config_write_lock() -> threading.RLock:
 
 
 def update_config(file_path: str | Path, section: str, key: str, new_value: str) -> None:
-    # 更新 ini 中单个配置项：整文件重解析后由 atomic_write_text 原子写回。
-    # 关闭插值以避免 cookie 等含 % 的值被 BasicInterpolation 转义/反解析。
+    # 更新 ini 中单个配置项：整文件重解析后由 atomic_write_text 原子写回（关闭插值，避免 cookie
+    # 等含 % 的值被 BasicInterpolation 转义 / 反解析）。
     #
-    # M-11（2026-10-02）：读改写全程持 main.file_update_lock（复用 _url_config_write_lock 的
-    # 惰性取法，取不到退本地锁）——本函数被多个房间线程并发调用（cookie/token 刷新回写），
-    # 「整文件读 → 改单键 → 原子写回」不持锁时两个线程各自基于同一份旧快照，后写者覆盖
-    # 前写者的单键改动（os.replace 保证文件不损坏，但更新静默丢失），与 MID-29 已修的
-    # URL_config.ini 侧丢写同族。锁必须盖住 config.read 与 config.write 全程。
+    # M-11：读改写全程持 main.file_update_lock（复用 _url_config_write_lock 的惰性取法）——本函数
+    # 被多个房间线程并发调用（cookie/token 刷新回写），「整文件读 → 改单键 → 原子写回」不持锁时
+    # 两个线程各自基于同一份旧快照，后写者覆盖前写者的单键改动。锁必须盖住 config.read 与
+    # config.write 全程。
     #
-    # 写法语义（勿与「直写 open(path,"w")」的旧实现混淆）：WD-15 起本函数经 atomic_write_text
-    # （同目录 tmp + os.replace），不再先把文件截断为 0 字节。连带后果——os.replace 只校验目标
-    # **所在目录**的写权限，与目标文件自身的权限位无关，故「把文件 chmod 成只读」在这里**不保证**
-    # 写失败（Windows 反之，只读属性会让 replace 直接失败，两侧行为不对称）。tests/test_utils.py
-    # 的只读用例因此只断言「不抛异常 + 原内容不丢」，不得按「必然失败」写。
-    #   [历史注] AGENTS 里「utils.update_config 仍是 open(path,"w") 直写、其只读用例可沿用
-    #   chmod 断言失败」的表述针对 WD-15 之前的实现，现已不成立，不得据此互推 config_io。
+    # 写法语义（勿与「直写 open(path,"w")」的旧实现混淆）：WD-15 起经 atomic_write_text（同目录
+    # tmp + os.replace），不再先把文件截断为 0 字节。连带后果——os.replace 只校验目标**所在目录**的
+    # 写权限，与目标文件自身的权限位无关，故「把文件 chmod 成只读」在这里**不保证**写失败（Windows
+    # 反之，只读属性会让 replace 直接失败）。tests/test_utils.py 的只读用例因此只断言「不抛异常 +
+    # 原内容不丢」，不得按「必然失败」写。
     with _url_config_write_lock():
-        # M-08（2026-10-19）：解析器换成 _tolerant_ini_parser()。原先的 strict=True 形态下，
-        # 同节重复键让 read() 直接抛 DuplicateOptionError → 被下面的 except 吞成 warning 并
-        # return，**cookie/token 的刷新永远写不回**；容错读取后重复键按「最后一次取值」折叠进
-        # 内存态，写回产物因此每键只剩一行，仍能被 strict 解析器整份读出（回归锁见
-        # tests/test_utils.py::TestDuplicateKeyWriteback）。
+        # M-08：解析器换成 _tolerant_ini_parser()。原先的 strict=True 形态下，同节重复键让 read()
+        # 直接抛 DuplicateOptionError → 被下面的 except 吞成 warning 并 return，**cookie/token 的刷新
+        # 永远写不回**；容错读取后重复键按「最后一次取值」折叠进内存态，写回产物每键只剩一行，仍能被
+        # strict 解析器整份读出（回归锁：tests/test_utils.py::TestDuplicateKeyWriteback）。
         config = _tolerant_ini_parser()
 
         try:
@@ -878,27 +813,20 @@ def remove_emojis(text: str, replace_text: str = "") -> str:
 def remove_duplicate_lines(file_path: str | Path) -> None:
     # 移除文件中的重复行（URL_config.ini 启动期去重）。
     # MID-29：整文件重写必须持 main.file_update_lock + 原子写（与 config_io 的 update_file/
-    # delete_line 同一把锁），否则与主循环热加载 / Web 面板写入并发时会读到半写文件、或在
-    # Windows 上让对端的 os.replace 直接失败。
-    # MIN-11：编码回退分支必须先 clear() 首轮结果——首轮按 utf-8-sig 读出的行可能已带 U+FFFD
-    # 替换字符（解码到一半才抛 UnicodeDecodeError 的前缀部分是合法的），不清空就会把两轮混合的
-    # 键写回文件。
+    # delete_line 同一把锁），否则与主循环热加载 / Web 面板写入并发时会读到半写文件、或在 Windows
+    # 上让对端的 os.replace 直接失败。MIN-11：编码回退分支必须先 clear() 首轮结果——首轮按 utf-8-sig
+    # 读出的行可能已带 U+FFFD 替换字符，不清空就会把两轮混合的键写回文件。
     #
     # MIN-2244①（行尾）：两处读一律 newline=""。默认 universal newlines 会把 \r\n 读成 \n，而写侧
-    # atomic_write_text 走 newline="" 不做翻译，于是本函数每次执行都会把整份 URL_config.ini 的
-    # CRLF 永久改写成 LF。本函数由 main() 启动期**无条件**调用一次（「启动时清理 URL_config.ini
-    # 重复行」），而 Windows 用户的该文件实际就是 CRLF，故每次开机重写一遍——正好抵消 config_io
-    # 里 MI-11 的修复（本函数即它的第二条旁路）。
-    # MIN-2244②（去重键）：键只剥行尾（rstrip("\r\n")），不再 strip()。旧写法有两个后果：回写的
-    # 是被 strip 过的行、行首缩进丢失；且 `url` 与 `url ` 被判成同一行，其中一条房间地址被**静默
-    # 删掉**（用户视角是「URL 自己少了一条」）。现在键只用于判重，回写的是该键首次出现时的**原始
-    # 行**（含原行尾），缩进与行内空白都保住；仅行尾形态不同（\r\n / \n）仍算同一行，与
+    # atomic_write_text 走 newline="" 不做翻译，于是本函数每次执行都会把整份 URL_config.ini 的 CRLF
+    # 永久改成 LF；而它在 main() 启动期被**无条件**调用一次，等于每次开机重写一遍。
+    # MIN-2244②（去重键）：键只剥行尾（rstrip("\r\n")），不再 strip()。旧写法回写的是 strip 过的行
+    # （行首缩进丢失），且 `url` 与 `url ` 被判成同一行、其中一条房间地址被**静默删掉**。现在键只用于
+    # 判重，回写的是该键首次出现时的**原始行**（含原行尾）；仅行尾形态不同仍算同一行，与
     # config_io.delete_line 的 SEV-05 比较口径一致。
-    # MIN-2244③（编码）：回退分支不再用 encoding=None（宿主 locale）——旧写法在 GBK 机器上按
-    # GBK 读、再按 utf-8-sig 写回 = 一次静默转码，非 UTF-8 文件（GBK/UTF-16）就此损坏。现两轮都
-    # 显式 utf-8-sig，回退轮另加 errors="surrogateescape"：无法解码的字节映射为代理码点、写回时
-    # （atomic_write_text 同一 errors）还原成原字节。BOM 语义保持原样的「读时剥一枚、写时补一枚」
-    # 往返，既不丢也不重复加。
+    # MIN-2244③（编码）：两轮都显式 utf-8-sig，回退轮另加 errors="surrogateescape"——无法解码的
+    # 字节映射为代理码点、写回时（同一 errors）还原成原字节，不再静默转码损坏 GBK/UTF-16 文件；
+    # BOM 语义保持「读时剥一枚、写时补一枚」往返，既不丢也不重复加。
     # 键 -> 首次出现的原始行（含原行尾）；OrderedDict 的插入序即回写顺序
     unique_lines: OrderedDict[str, str] = OrderedDict()
     text_encoding = "utf-8-sig"
@@ -929,9 +857,9 @@ def check_disk_capacity(file_path: str | Path, show: bool = False) -> float:
     disk_root = Path(directory).anchor
     free_space_gb = disk_usage.free / (1024**3)
     if show:
-        # MID-68：三段 f-string 相加的首参是 ast.BinOp，i18n 门禁看不见、翻译在查目录前
-        # 就已插值。GB 数值按约定在调用方预求值（:.2f 不进模板），故实参名沿用目录里
-        # 既有 msgid 的 disk_usage / disk_usage_2（同模板内重名加 _2 后缀）
+        # MID-68：三段 f-string 相加的首参是 ast.BinOp，i18n 门禁看不见、翻译在查目录前就已插值。
+        # GB 数值按约定在调用方预求值（:.2f 不进模板），实参名沿用目录里既有 msgid 的
+        # disk_usage / disk_usage_2（同模板内重名加 _2 后缀）。
         print(
             i18n.tr(
                 "{disk_root} Total: {disk_usage} GB Used: {disk_usage_2} GB Free: {free_space_gb} GB\n",
@@ -976,13 +904,11 @@ def jsonp_to_json(jsonp_str: str) -> OptionalDict:
         raise Exception("No JSON data found in JSONP response.")
 
 
-# 段级精确替换（2026-09-12 审查 6.1 引入；2026-09-30 M-18 由 config_io._rewrite_line_by_match
-# 下沉为此处唯一实现——utils.replace_url 与 config_io.update_file 必须同一匹配口径，而
-# config_io 依赖 utils、反向导入会成环，故实现只能住在 utils 侧，config_io 保留同名薄封装）。
+# 段级精确替换（M-18 由 config_io._rewrite_line_by_match 下沉为此处唯一实现——utils.replace_url 与
+# config_io.update_file 必须同一匹配口径，而 config_io 依赖 utils、反向导入会成环）。
 # old_str 仅在「等于整行（去行尾换行与首尾空白后）」或「等于行内某个半角/全角逗号分隔段（strip 后）」
 # 时才替换为 new_str；返回重写后的整行文本（保留原行尾与多逗号），未命中返回 None。
-# 原实现是整行 str.replace，URL 前缀重叠时（.../room1 与 .../room12）会把别的配置行静默改坏，
-# 使用者只在下次「未生效」时才发现。
+# 整行 str.replace 的旧写法在 URL 前缀重叠时（.../room1 与 .../room12）会把别的配置行静默改坏。
 def rewrite_line_by_segment(text_line: str, old_str: str, new_str: str) -> str | None:
     raw = text_line.rstrip("\r\n")
     eol = text_line[len(raw) :]
@@ -1008,18 +934,15 @@ def rewrite_line_by_segment(text_line: str, old_str: str, new_str: str) -> str |
 
 
 def replace_url(file_path: str | Path, old: str, new: str) -> None:
-    # 替换文件中的 URL：逐行匹配整行内容，避免子串替换误伤包含相同 URL 片段的其他行。
+    # 替换文件中的 URL：逐行段级精确匹配，避免子串替换误伤包含相同 URL 片段的其他行。
     # MID-29：本函数是花椒「地址失效自动注释」的唯一写盘路径（spider.py 直接调用），原先既不持
-    # main.file_update_lock 也非原子写 → 与主循环热加载 / Web 面板原子写并发时 ① truncate 窗口内
-    # 被读到空/半写文件（房间被误判为已删除）、② Windows 上目标被 open("w") 持句柄会让对端
-    # os.replace 抛 PermissionError（那次注释就此丢失）、③ 两写方交错时后写者整体回退先写者的
-    # 改动。现与 config_io 同型：持锁 + 原子写。
-    # newline=""：读不翻译行尾、写回原样，避免一次替换把整份 URL_config.ini 的 CRLF 永久改成 LF
-    # （与 config_io.update_file / delete_line 的 MI-11 口径一致）。
-    # M-18（2026-09-30）：匹配口径从「整行相等才换、否则子串 replace」改为段级精确匹配
-    # （rewrite_line_by_segment，与 config_io.update_file 同一份实现）。原先口径的 elif
-    # `old in line` 是无边界子串替换——数字 ID 前缀重叠的两行（…/l/123456 与 …/l/1234567）
-    # 在「地址失效自动注释」时会把兄弟房间整行 replace 成「#短URL+长号尾巴」静默禁用。
+    # main.file_update_lock 也非原子写 → 与主循环热加载 / Web 面板原子写并发时 ① truncate 窗口内被
+    # 读到空/半写文件（房间被误判已删除）、② Windows 上目标被 open("w") 持句柄会让对端 os.replace
+    # 抛 PermissionError（那次注释就此丢失）、③ 两写方交错时后写者整体回退先写者的改动。
+    # newline=""：读不翻译行尾、写回原样，避免一次替换把整份 URL_config.ini 的 CRLF 改成 LF。
+    # M-18：匹配口径从「整行相等才换、否则子串 replace」改为段级精确匹配（rewrite_line_by_segment）。
+    # 旧口径的 elif `old in line` 是无边界子串替换——数字 ID 前缀重叠的两行（…/l/123456 与
+    # …/l/1234567）在自动注释时会把兄弟房间整行换成「#短URL+长号尾巴」静默禁用。
     with _url_config_write_lock():
         try:
             with open(file_path, "r", encoding="utf-8-sig", newline="") as f:
@@ -1109,11 +1032,10 @@ _SECRET_KEYS: tuple[str, ...] = (
     "ttwid",
     "verifyfingerprint",
     "verify_fingerprint",
-    # SEV-2210（2026-09-22）：平台把复合键写成 camelCase（accessToken / wsAuth / msToken /
-    # verifyFp / idToken / refreshToken / tk）。裸名 token/auth 的右半截**前一位是字母**
-    # （accessToken 的 token 前是 s），而下方左顾与驼峰分支之间存在盲区：黑名单若不含整段
-    # camelCase 键名，只靠边界分支也匹配不到（tk 更极端——既非任何长名的后缀，也不含被单独
-    # 列举的字母段）。故整段 camelCase 键名按小写形式入表。复核判据是「值确实消失」，见
+    # SEV-2210：平台把复合键写成 camelCase（accessToken / wsAuth / msToken / verifyFp / idToken /
+    # refreshToken / tk）。裸名 token/auth 的右半截前一位是字母（accessToken 的 token 前是 s），
+    # 与下方驼峰分支之间存在盲区：黑名单若不含整段 camelCase 键名，只靠边界分支也匹配不到。
+    # 故整段 camelCase 键名按小写形式入表。复核判据是「值确实消失」，见
     # tests/test_regression_2026_09_22_utils.py::test_camelcase_compound_keys_value_disappears。
     "accesstoken",
     "refreshtoken",
@@ -1127,49 +1049,44 @@ _SECRET_KEYS: tuple[str, ...] = (
     "csrftoken",
     "xsrf",
     "xsrftoken",
-    # M-01（2026-10-02）：B 站主会话凭据与 CSRF 键、抖音 Cookie 会话键——四个键此前整体逃逸
-    # （query 形态实测原样返回）。`sessionid`/`sid` 已在表内但覆盖不到带后缀的变体
-    # （sessionid_ss 的 ss 前是 _、sid_tt 同理，交替式要求整段命中），须按整段小写补录。
-    # 复核判据是「值确实消失」，见 tests/test_utils.py::TestMaskCredentialsCoverage。
+    # M-01：B 站主会话凭据与 CSRF 键、抖音 Cookie 会话键——四个键此前整体逃逸（query 形态实测
+    # 原样返回）。`sessionid`/`sid` 已在表内但覆盖不到带后缀的变体（sessionid_ss 的 ss 前是 _、
+    # sid_tt 同理，交替式要求整段命中），须按整段小写补录。复核判据是「值确实消失」，见
+    # tests/test_utils.py::TestMaskCredentialsCoverage。
     "sessdata",
     "bili_jct",
     "sessionid_ss",
     "sid_tt",
 )
 # 长名排在前面：交替式虽会回溯，但「先试长名」明显减少无谓回溯（sid/sid_guard、token/access_token）。
-# SEV-2210 复核：短名（tk/key/nonce）不得把长名切碎——交替式在匹配点从最左分支依次尝试，
-# 长名优先 + 右侧紧随的 `=`/`:`/`"` 字面量共同保证「先配长名」，故排序口径必须保留。
+# 短名（tk/key/nonce）不得把长名切碎——长名优先 + 右侧紧随的 `=`/`:`/`"` 字面量共同保证「先配长名」，
+# 故排序口径必须保留。
 _SECRET_KEY_ALT = "|".join(sorted(_SECRET_KEYS, key=lambda _k: (-len(_k), _k)))
 
-# SEV-2210（2026-09-22）：camelCase 边界分支。
-# 病史：原实现三条形态的键名前只有左顾 (?<![A-Za-z0-9])，于是「字母紧跟」的 camelCase 复合键被
-# **整体**排除——accessToken 的 token 前是 s、wsAuth 的 auth 前是 s。斗鱼 getH5PlayV1 下发的流
-# 地址恒挂 `wsAuth`，每个房间每轮选源都把可用的完整拉流直链写进 logs/streamget.log（300KB 轮转
-# 保留多份）；嗨秀侧外泄的是用户经 `[Cookie] haixiu_access_token` 配置的私有轮换凭据。
-# 修法两层、缺一即漏：① 已知驼峰键名的**整段小写形式**加入 _SECRET_KEYS（见上表）；
-# ② 补这条「词内驼峰转折」边界分支，使尚未登记的新驼峰键也能被裸名 token/auth 等命中。
-# 为什么边界分支必须与 (?i) 分离：键名交替式需要大小写不敏感（ACCESS_TOKEN/access_token 同认），
-# 但「小写字母紧跟大写字母」这一判据在 (?i) 下会失效——(?i) 把 [A-Z] 折成 a-z，`design` 的 `s|i`
-# 也会被当成驼峰转折，从而把公开参数 design=2 抹成 design=***。故此处**不**在整条 pattern 上加
-# (?i)，而是给键名交替式套局部 (?i:...)：边界断言保持大小写敏感、键名大小写不敏感。于是
-# design/presigned（s 后是 i/g 或 n 后是 _，均非「小写→大写」）天然不命中，而 accessToken（s→T）、
-# wsAuth（s→A）、msToken（s→T）、verifyFp（y→F）、newCamelKey（w→C）全部命中。
-# 复核判据：tests/test_regression_2026_09_22_utils.py::test_camelcase_compound_keys_value_disappears。
+# SEV-2210：camelCase 边界分支。原实现三条形态的键名前只有左顾 (?<![A-Za-z0-9])，于是
+# 「字母紧跟」的 camelCase 复合键被**整体**排除——accessToken 的 token 前是 s、wsAuth 的 auth
+# 前是 s。斗鱼 getH5PlayV1 下发的流地址恒挂 `wsAuth`，每个房间每轮选源都会把可用的完整拉流
+# 直链写进 logs/streamget.log（300KB 轮转保留多份）。修法两层、缺一即漏：① 已知驼峰键名的
+# **整段小写形式**加入 _SECRET_KEYS；② 补这条「词内驼峰转折」边界分支，使尚未登记的新驼峰键
+# 也能被裸名 token/auth 等命中。
+# 为什么边界分支必须与 (?i) 分离：键名交替式需要大小写不敏感，但「小写字母紧跟大写字母」这一
+# 判据在 (?i) 下会失效——(?i) 把 [A-Z] 折成 a-z，`design` 的 `s|i` 也会被当成驼峰转折，从而把
+# 公开参数 design=2 抹成 design=***。故**不**在整条 pattern 上加 (?i)，而是给键名交替式套局部
+# (?i:...)：边界断言保持大小写敏感、键名大小写不敏感。于是 design/presigned 天然不命中，而
+# accessToken（s→T）、wsAuth（s→A）、msToken（s→T）、verifyFp（y→F）全部命中。
 _SECRET_CAMEL_BOUNDARY = r"(?<=[a-z])(?=[A-Z])"
 # 独立参数形态（键名前不是字母/数字）：my_token= / x-signature= / access_token= 由此命中
 _SECRET_PLAIN_BOUNDARY = r"(?<![A-Za-z0-9])"
 # 全小写「不透明前缀 + 凭据词」的第三个边界分支：mytoken= / apitoken= / 前缀 + key= 这类「词内但
-# 无驼峰转折」的复合键。黑名单只登记了驼峰形式（accesstoken 等），此形态既不满足左顾（token 前是
-# y，字母）也不满足驼峰分支（无大写转折）→ 是第三条漏抹路径。判据：键名前缀以 `token`/`key`
-# 结尾且**紧邻其前是字母**（区别于左顾的「非字母/数字」）。与驼峰分支一样**不设 (?i)**：全大写写法
-# （MYTOKEN=）无小写前缀、不属于本形态，由整段键名（mytoken 已入表）经左顾分支覆盖；若误加 (?i)，
-# design 的 `sign` 会被 `(?<=[a-z])` 命中而误伤（见上方 SEV-2210 病史）。
+# 无驼峰转折」的复合键。黑名单只登记了驼峰形式，此形态既不满足左顾（token 前是字母）也不满足驼峰
+# 分支（无大写转折）→ 第三条漏抹路径。与驼峰分支一样**不设 (?i)**：全大写写法（MYTOKEN=）无小写
+# 前缀、不属于本形态，由整段键名经左顾分支覆盖；若误加 (?i)，design 的 `sign` 会被误伤。
 _SECRET_LOWER_COMPOUND_BOUNDARY = r"(?<=[a-z])(?=(?i:(?:token|key)))"
 
-# 形态一：查询串 key=value。键名前缀 = 独立参数形态 或 驼峰形态；`(?:...)` 必须把两个边界整体
-# 包住再拼键名，否则 `|` 作用域落到最外层会让键名成为可选、只剩 `=` 参与匹配（实测会把 https://
-# 整段抹成 ***）。值只取到 & / 空白 / 引号 为止、**键名不动**——误抹只损失一个参数值，不破坏 URL
-# 结构。(?i:...) 只包键名：边界断言不折大小写（理由见上方 SEV-2210）。
+# 形态一：查询串 key=value。键名前缀 = 三种边界之一；`(?:...)` 必须把两个边界整体包住再拼键名，
+# 否则 `|` 作用域落到最外层会让键名成为可选、只剩 `=` 参与匹配（实测会把 https:// 整段抹成 ***）。
+# 值只取到 & / 空白 / 引号 为止、**键名不动**——误抹只损失一个参数值，不破坏 URL 结构。
+# (?i:...) 只包键名：边界断言不折大小写（理由见上方 SEV-2210）。
 _SECRET_QUERY_RE = re.compile(
     r"((?:(?:"
     + _SECRET_PLAIN_BOUNDARY
@@ -1182,17 +1099,12 @@ _SECRET_QUERY_RE = re.compile(
     + r"))=))[^&\s\"']+"
 )
 # 形态二：请求头 Name: value（Authorization: Bearer xxx 这类值含空格，故整段抹到分隔符）。
-# 键名前缀与形态一同构（同一组边界常量、同一 (?i) 包法）；冒号前字符集与形态一的 `=` 前对称。
-# 值取到 , ; 引号 或行尾为止——分隔符集合与 http/JSON 的常见写法对齐。
-# M-17（2026-09-30）：原实现在驼峰分支上追加了一道 `(?<![A-Za-z0-9"'])` guard——驼峰分支自身
-# 要求「前字符是小写字母」（(?<=[a-z])），guard 却要求「前字符不是字母数字」，同一位置互斥
-# → 驼峰分支恒不匹配（死代码），请求头形态的驼峰复合键（myToken: xxx / sessionKey: xxx）
-# 整值明文落日志。修复 = 从驼峰分支摘掉这道 guard，三分支与查询串形态**逐字同构**。
-# 两条配套边界（2026-09-30 复核）：① 独立参数分支**不得**追加 quote 排除——shell 命令串里的
-# 带引号 header（`--header "Authorization: Bearer X"`）键名前恰是引号，排除它会让 Bearer 值
-# 重新漏抹（tests/test_notify_script_guard.py 全组是这条的回归锁）；② 「guard 防 https: 被
-# 裸名分支误抹」的旧表述在当前键名表下不成立（无键名可匹配 `https:`，_PUBLIC_UNTOUCHED
-# 反向棘轮恒绿），该历史结论按「被证伪」不再保留 guard。
+# 键名前缀与形态一同构（同一组边界常量、同一 (?i) 包法）；值取到 , ; 引号 或行尾为止。
+# 两条配套边界：① 独立参数分支**不得**追加 quote 排除——shell 命令串里的带引号 header
+# （`--header "Authorization: Bearer X"`）键名前恰是引号，排除它会让 Bearer 值重新漏抹
+# （tests/test_notify_script_guard.py 全组是这条的回归锁）；② 驼峰分支**不得**再叠
+# `(?<![A-Za-z0-9"'])` guard——它与驼峰分支自身的 (?<=[a-z]) 在同一位置互斥，会让驼峰分支恒不
+# 匹配（死代码），驼峰复合键（myToken: xxx）整值明文落日志。三分支与查询串形态**逐字同构**。
 _SECRET_HEADER_RE = re.compile(
     r"((?:(?:"
     + _SECRET_PLAIN_BOUNDARY
@@ -1219,10 +1131,9 @@ def mask_credentials(text: str) -> str:
     # 顺序无关（五类模式的匹配域互不重叠），但先做代理再做键值，可保证
     # "http://u:p@host/?token=x" 一条文本里两处凭据都被覆盖。
     #
-    # 遗留（不在本轮处理，单列待办）：逐个调用点「记得过码」本身就是缺口——main.py 的直下失败
-    # 日志与 PlayURL.log 源地址仍是裸流地址。治本做法是在 src/logger.py 注册 loguru patcher，对
-    # 每条 record 文本统一过一遍 mask_credentials，把「记得加」变成结构性保证；但那会改动 sink
-    # 行格式与若干按整行断言的用例，故另案处理。
+    # 遗留（单列待办）：逐个调用点「记得过码」本身就是缺口——main.py 的直下失败日志与
+    # PlayURL.log 源地址仍是裸流地址。治本是在 src/logger.py 注册 loguru patcher，对每条 record
+    # 统一过一遍 mask_credentials；但那会改动 sink 行格式与若干按整行断言的用例，故另案处理。
     masked = _PROXY_CREDENTIAL_RE.sub(r"\1***@", text)
     masked = _BARE_PROXY_CREDENTIAL_RE.sub("***@", masked)
     masked = _SECRET_JSON_RE.sub(r"\1***\3", masked)

@@ -1,15 +1,12 @@
 # -*- coding: utf-8 -*-
-# GUI 窗口层（PySide6）复使用的框架无关工具：外部数据数值容错、子进程状态行匹配、
+# GUI 窗口层（PySide6）里可复用的框架无关工具：外部数据数值容错、子进程状态行匹配、
 # Windows 控制台信号、进程清理提示解码、配置文件原子写与变更裁决。
 #
-# 【为什么这里是复制而不是从 gui.py import】
-# 旧 tkinter 版 gui.py 的同类函数被 tests/test_regression_2026_09_22_gui.py 的若干静态锁
-# 以 AST 方式钉在 gui.py 源码里（锁的是「函数定义存在于 gui.py」这一事实），
-# 且 tests/test_gui_status_pattern_i18n.py 等走子进程驱动 gui 模块本体。
-# 迁移期把实现直接搬走会同时打断这些锁；因此本模块是**过渡期的第二副本**，
-# 旧 GUI 退役（见 docs/worklog/PROPOSAL_2026-10-17_gui-pyside6-redesign.md §5）后
-# 把 gui.py 删除、把静态锁的读取源切到本模块，届时只剩一份实现。
-# 逐行 body 与 gui.py 保持一致，差异只在它要调用的日志入口（这里不持有 GUI 对象）。
+# 为什么与 gui.py 各存一份：若干用例仍以 AST 静态锁把同名实现钉在 gui.py 源码里
+# （锁的是「函数定义存在于 gui.py」这一事实），且 tests/test_gui_status_pattern_i18n.py
+# 等走子进程驱动 gui 模块本体，直接搬走会同时打断这些锁。故本模块是**过渡期的第二副本**：
+# 旧 GUI 退役（见 docs/worklog/PROPOSAL_2026-10-17_gui-pyside6-redesign.md §5）后删 gui.py、
+# 把静态锁的读取源切到这里，届时只剩一份实现。差异只在日志入口（这里不持有 GUI 对象）。
 from __future__ import annotations
 
 import ctypes
@@ -233,9 +230,9 @@ _STATUS_PATTERNS_STABLE_ATTEMPTS: Final[int] = 3
 
 def status_patterns() -> StatusPatterns:
     # 并发下最坏是同一语言被组装两遍（纯函数 + 原子赋值），不会读到半成品，故不加锁。
-    # 「原子赋值」挡不住**组装过程中**换语言（_build_status_patterns 要连读 6 次 i18n.tr，
-    # 而本函数由录制输出线程调用、set_language 由 UI 线程调用），语言在这之间被切走时组出来的
-    # 是混语 patterns。改法：组装后复验语言码未变才落缓存。
+    # 但「原子赋值」挡不住**组装过程中**换语言：_build_status_patterns 要连读 6 次 i18n.tr，
+    # 而本函数由录制输出线程调用、set_language 由 UI 线程调用，中途切走会组出混语 patterns。
+    # 故组装后复验语言码未变才落缓存。
     for _attempt in range(_STATUS_PATTERNS_STABLE_ATTEMPTS):
         lang = i18n_module.get_language()
         cached = _STATUS_PATTERNS_BY_LANG.get(lang)
@@ -410,9 +407,9 @@ def config_change_verdict(
 
 
 def save_text_to_file(content: str, file_path: str) -> None:
-    # 原子写（tmp + os.replace）：直接 "w" 覆盖写在写入窗口内处于半写状态，录制引擎并发读到
-    # 截断内容会被当成有效配置。委托 src.utils.atomic_write_text（全仓唯一加固实现：flush+fsync
-    # + 保留目标文件原 mode），避免另起一把宽度为为自己的实现重蹈 SEV-2211 的权限收紧缺口。
+    # 原子写（tmp + os.replace）：直接 "w" 覆盖在写入窗口内是半写状态，录制引擎并发读到截断
+    # 内容会被当成有效配置。委托 src.utils.atomic_write_text（全仓唯一加固实现：flush + fsync +
+    # 保留目标文件原 mode），避免另起一份实现重蹈 SEV-2211 的权限收紧缺口。
     content = content.rstrip("\n")
     if content and not content.endswith("\n"):
         content += "\n"

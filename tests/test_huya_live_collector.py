@@ -17,20 +17,19 @@ from src import spider
 from src.collector import DanmakuCollector
 from src.platforms.huya import HuyaDanmaku
 
-# 虎牙弹幕走私有二进制/JSON 混合协议,需先经 get_huya_app_stream_url 取流地址,
-# 再解析出 yyid/频道/子频道三元组才能进房;纯 web 页无法直连弹幕,故本脚本走 app 路径。
+# 虎牙弹幕走私有二进制/JSON 混合协议：须先经 get_huya_app_stream_url 取
+# yyid/频道/子频道三元组才能进房，纯 web 页无法直连，故本脚本走 app 路径。
 URL = sys.argv[1] if len(sys.argv) > 1 else "https://www.huya.com/660000"
-# 双模式参数守卫（与其余真机脚本同构）：pytest 传进来的 sys.argv[2] 可能是 `-q` 之类的选项，
-# 只判非选项还不够——一次点多个文件时它是下一个测试文件的路径，int(路径) 会当场 ValueError
-# 让本模块收集 ERROR（R7③，2026-09-30 实测）。故再补 isdigit 数值性回落；真机用法不变。
+# 双模式参数守卫（R7③）：pytest 里 sys.argv[2] 可能是选项或下一个测试文件的路径，
+# 只判非选项不够，必须再判 isdigit，否则收集期 int(路径) 直接 ValueError。
 _SECONDS_RAW = sys.argv[2] if len(sys.argv) > 2 and not sys.argv[2].startswith("-") else ""
 SECONDS = int(_SECONDS_RAW) if _SECONDS_RAW.isdigit() else 20
 
 
 def main() -> None:
     info = asyncio.run(spider.get_huya_app_stream_url(url=URL, proxy_addr=None))
-    # is_live 为 False(未开播)或 info 非 dict(接口风控/解析失败)都直接退出,
-    # 二者均不同于「已进房但无弹幕」,失败语义必须区分,避免误判为连接故障。
+    # is_live 为 False(未开播)或 info 非 dict(风控/解析失败)都直接退出：
+    # 二者均不同于「已进房但无弹幕」,失败语义必须区分。
     if not isinstance(info, dict) or not info.get("is_live"):
         print(f"[FAIL] 房间未开播或信息获取失败: {info!r}")
         print(
@@ -48,9 +47,8 @@ def main() -> None:
 
     base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_out_live")
     os.makedirs(base_dir, exist_ok=True)
-    # R7④（2026-09-30）：清理收窄到本脚本自己的产物前缀，并先判是文件再删。
-    # 无差别删掉目录里每一项会把并行运行的其它平台验证产物一起删（真机验证常多平台同开），
-    # 且目录里混进子目录时 os.remove 直接抛 IsADirectoryError/PermissionError、本轮卡在清理阶段。
+    # R7④：只清本脚本前缀的产物且先判 isfile——无差别删除会连带并行平台产物，
+    # 子目录还会抛 IsADirectoryError/PermissionError。
     for f in os.listdir(base_dir):
         if f.startswith("虎牙弹幕验证"):
             stale = os.path.join(base_dir, f)
@@ -67,8 +65,8 @@ def main() -> None:
     )
     collector.start()
     print(f"[OK] collector 已启动,监听 {SECONDS}s...")
-    # SECONDS=20 覆盖虎牙 app 弹幕握手(注册 + 进房 + 心跳保活);其握手含设备指纹
-    # 校验,比纯 WS 略重,时长不足会卡在进房阶段导致收不到弹幕。stop() 在计数后触发落盘。
+    # 20s 覆盖虎牙 app 握手(注册+进房+心跳)：设备指纹校验比纯 WS 重，
+    # 时长不足会卡在进房。stop() 在计数后触发落盘。
     time.sleep(SECONDS)
     count = collector.message_count
     collector.stop()
@@ -80,7 +78,7 @@ def main() -> None:
             content = fh.read()
         print("=== SRT 内容(前 20 行) ===")
         print("\n".join(content.splitlines()[:20]))
-        # SRT 已生成而 count==0 视为连接正常但冷场;未生成才判 [FAIL] 退出,
+        # SRT 已生成但 count==0 是冷场;未生成才判 [FAIL] 退出,
         # 不可把「无弹幕」与「连接失败」混为一谈。
         if count > 0:
             print("[PASS] 端到端:虎牙真实弹幕已写入 SRT")

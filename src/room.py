@@ -25,8 +25,8 @@ class UnsupportedUrlError(Exception):
 
 
 HEADERS = {
-    # 移动端 UA（2026-08 统一升级为 Android 14 + Chrome 141，与 stream_select.MOBILE_UA
-    # 一致；X-Bogus 签名以请求头中的同一 UA 计算，UA 与签名自洽，更新字符串安全）
+    # 移动端 UA（Android 14 + Chrome 141，与 stream_select.MOBILE_UA 一致；X-Bogus 签名以
+    # 请求头中的同一 UA 计算，UA 与签名必须自洽，更新字符串安全）
     "User-Agent": "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) "
     + "Chrome/141.0.0.0 Mobile Safari/537.36",
     "Accept-Language": "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2",
@@ -59,11 +59,11 @@ async def get_xbogus(url: str, headers: dict[str, str] | None = None) -> str:
     if not headers or "user-agent" not in (k.lower() for k in headers):
         headers = HEADERS
     query = urllib.parse.urlparse(url).query
-    # UA 必须与签名计算所用的一致（headers 键大小写不敏感）；此前默认值误写成字面量 "user-agent"
+    # UA 必须与签名计算所用的一致（headers 键大小写不敏感）
     user_agent = next((v for k, v in headers.items() if k.lower() == "user-agent"), HEADERS["User-Agent"])
-    # 2026-09-12 审查 6.3：原为同步读文件 + execjs.compile().call()（起 node 子进程阻塞等
-    # stdout），本 async 函数被抖音解析链路高频调用 → 同步阻塞会冻结调用方整个事件循环且每次
-    # 重复 compile。改 utils.run_js_async：阻塞段丢线程池，编译产物按 (路径, mtime) 缓存。
+    # 原为同步读文件 + execjs.compile().call()（起 node 子进程阻塞等 stdout），而本函数被抖音
+    # 解析链路高频调用 → 冻结事件循环且每次重复编译。改 utils.run_js_async：阻塞段丢线程池，
+    # 编译产物按 (路径, mtime) 缓存。
     xbogus = cast(str, await utils.run_js_async(f"{JS_SCRIPT_PATH}/x-bogus.js", "sign", query, user_agent))
     return xbogus
 
@@ -77,16 +77,14 @@ async def get_sec_user_id(
 
     try:
         proxy_addr = utils.handle_proxy_addr(proxy_addr)
-        # 2026-09-12 审查 6.3：补 verify=http_config.ssl_verify（控制面开关）。原先三处
-        # AsyncClient 均未传该参数、httpx 默认恒校验——用户在 config.ini 关闭证书校验后，
-        # 抖音解析链路（sec_user_id / unique_id / web_rid）仍会因证书问题失败，开关形同不一致
+        # 必须传 verify=http_config.ssl_verify：原先未传、httpx 默认恒校验，用户在 config.ini
+        # 关闭证书校验后，抖音解析链路（sec_user_id / unique_id / web_rid）仍会因证书问题失败
         async with httpx.AsyncClient(proxy=proxy_addr, timeout=15, verify=http_config.ssl_verify) as client:
             response = await client.get(url, headers=headers, follow_redirects=True)
             redirect_url = response.url
             if "reflow/" in str(redirect_url):
-                # L-11（2026-10-02）：参数值后改为前瞻断言 (?=&|#|$)——原要求紧随 `&`，
-                # sec_user_id 位于 query 末尾（无后继参数）时匹配失败，该房每轮永久失败；
-                # 与同文件 rid=/mcid= 的既有写法一致。
+                # 参数值后用前瞻断言 (?=&|#|$)：若要求其后必须紧跟 `&`，sec_user_id 位于
+                # query 末尾（无后继参数）时匹配失败，该房间每轮永久失败。
                 match = re.search(r"sec_user_id=([\w_\-]+)(?=&|#|$)", str(redirect_url))
                 if match:
                     sec_user_id = match.group(1)
@@ -99,26 +97,24 @@ async def get_sec_user_id(
     except UnsupportedUrlError as e:
         raise e
     except Exception as e:
-        # L-07（2026-10-02）：e 的 str 内嵌完整 URL（InvalidURL/TooManyRedirects 等可能带
-        # token 参数），包装前过码——异常文本会进入上层日志（logs 轮转保留多份）
+        # e 的 str 内嵌完整 URL（InvalidURL/TooManyRedirects 等可能带 token 参数），
+        # 包装前过码——异常文本会进入 logs（多份轮转保留）。
         raise RuntimeError(f"An error occurred: {utils.mask_credentials(str(e))}") from e
 
 
 def is_user_homepage_url(url: str) -> bool:
-    # 判断 URL 是否为「网页端主播主页」形态（www.douyin.com/user/<sec_uid>）。
-    # 这类链接的 sec_user_id 直接写在路径里，且不会重定向到 reflow 直播间页，
-    # 因此可跳过跟随重定向的探测请求。
-    # 注意：v.douyin.com 短链无法从形态判断指向主页还是直播间，不属于此类。
+    # 判断 URL 是否为「网页端主播主页」（www.douyin.com/user/<sec_uid>）。这类链接的
+    # sec_user_id 直接写在路径里，且不会重定向到 reflow 直播间页，可跳过跟随重定向的探测请求；
+    # v.douyin.com 短链无法从形态判断指向主页还是直播间，不属于此类。
     return bool(re.search(r"douyin\.com/user/[\w\-]+", url))
 
 
 def extract_sec_user_id(redirect_url: str) -> str:
-    # 从主页链接中提取 sec_user_id（形如 MS4wLjABAAAA...）。
-    # 兼容三种形态：
+    # 从主页链接中提取 sec_user_id（形如 MS4wLjABAAAA...）。兼容三种形态：
     #   1. https://www.douyin.com/user/MS4w...            （网页端主页）
     #   2. https://www.iesdouyin.com/share/user/MS4w...?  （v.douyin.com 短链重定向后）
     #   3. 任意形态但带 sec_uid=MS4w... 查询参数
-    # 原实现用 rsplit("/") 取最后一段，遇到尾斜杠会取到空串，故改为显式匹配。
+    # 不用 rsplit("/") 取最后一段：遇到尾斜杠会取到空串。
     query_match = re.search(r"[?&]sec_uid=([\w\-]+)", redirect_url)
     if query_match:
         return query_match.group(1)
@@ -131,11 +127,11 @@ def extract_sec_user_id(redirect_url: str) -> str:
     return segments[-1] if segments else ""
 
 
-# 进程级 sec_user_id -> 抖音号 缓存
-# 抖音号（unique_id/short_id）几乎不会变化，但 get_unique_id 在每个 room 的轮询循环里都会被调用
-# （默认每 120s 一次）。若不缓存，每次轮询都要请求 iesdouyin 接口并拉取 ttwid。
-# 与 ttwid.py 同理：per-loop 的 asyncio.Lock 无法跨房间/跨 asyncio 循环协调，故用 threading.Lock。
-# 设 30 分钟过期：在「消除重复请求」与「账号信息变更后自愈」之间取得平衡（录制进程可能连续运行数天）。
+# 进程级 sec_user_id -> 抖音号缓存
+# 抖音号（unique_id/short_id）几乎不变，而 get_unique_id 在每个 room 的轮询循环里都会被调用
+# （默认每 120s 一次）。不缓存则每次轮询都要请求 iesdouyin 接口并拉取 ttwid。
+# per-loop 的 asyncio.Lock 无法跨房间/跨 asyncio 循环协调，故用 threading.Lock。
+# 30 分钟过期：在「消除重复请求」与「账号信息变更后自愈」之间取平衡（进程可能连续运行数天）。
 _SEC_UID_UNIQUE_CACHE: dict[str, tuple[str, float]] = {}
 _SEC_UID_CACHE_LOCK = threading.Lock()
 _SEC_UID_CACHE_TTL = 30 * 60
@@ -158,9 +154,8 @@ def _set_cached_unique_id(sec_user_id: str, unique_id: str) -> None:
 async def get_unique_id(url: str, proxy_addr: str | None = None, headers: dict[str, str] | None = None) -> str | None:
     # 将「主播主页链接」解析为抖音号（unique_id），供上层拼接 live.douyin.com/<抖音号> 录制。
     #
-    # 实现说明：原方案抓取 https://www.iesdouyin.com/share/user/<sec_uid> 的 HTML 再正则提取
-    # unique_id，但该页面已改为 JS 混淆的反爬壳页（响应体内不再包含任何 unique_id 字段），
-    # 导致所有主页类链接解析必然失败。现改为优先调用 JSON 接口，HTML 正则降级为兜底。
+    # iesdouyin 的 share/user 页已改为 JS 混淆的反爬壳页（响应体内不再含 unique_id），
+    # 故优先调用 JSON 接口，HTML 正则仅作兜底。
     if not headers or all(k.lower() not in ["user-agent", "cookie"] for k in headers):
         headers = HEADERS
     # 复制一份：下方会写入 Cookie，直接改会污染模块级共享的 HEADERS（多线程下互相干扰）
@@ -181,7 +176,7 @@ async def get_unique_id(url: str, proxy_addr: str | None = None, headers: dict[s
                 sec_user_id = extract_sec_user_id(redirect_url)
                 if not sec_user_id:
                     raise RuntimeError(f"Could not extract sec_user_id from {redirect_url}")
-            # 命中 _SEC_UID_UNIQUE_CACHE 即省一次 iesdouyin 请求（表头注释说明为何可缓存）
+            # 命中缓存即省一次 iesdouyin 请求
             cached_unique_id = _get_cached_unique_id(sec_user_id)
             if cached_unique_id is not None:
                 return cached_unique_id
@@ -190,9 +185,8 @@ async def get_unique_id(url: str, proxy_addr: str | None = None, headers: dict[s
             if ttwid_cookie:
                 headers["Cookie"] = ttwid_cookie
 
-            # 主路径：JSON 接口直接返回 unique_id
-            # 注意：该接口对 User-Agent 敏感——沿用模块级 HEADERS 的旧版移动端 UA 时，
-            # 抖音风控会返回 HTTP 200 但响应体为空（len=0），必须使用桌面端 Chrome UA。
+            # 主路径：JSON 接口直接返回 unique_id。该接口对 User-Agent 敏感——用模块级
+            # HEADERS 的移动端 UA 会被风控返回 HTTP 200 + 空 body（len=0），必须用桌面端 Chrome UA。
             api_headers = {**headers, "User-Agent": DESKTOP_UA, "Referer": "https://www.douyin.com/"}
             api = f"https://www.iesdouyin.com/web/api/v2/user/info/?sec_uid={sec_user_id}"
             try:
@@ -208,11 +202,9 @@ async def get_unique_id(url: str, proxy_addr: str | None = None, headers: dict[s
                     _set_cached_unique_id(sec_user_id, short_id_value)
                     return short_id_value
             except Exception as e:
-                # MID-2246（2026-09-23）：原为 `except Exception: pass` 零日志。主路径（iesdouyin
-                # JSON 接口）失败后走 HTML 兜底（AGENTS 记载「已是 JS 反爬壳页、正则通常失效」），
-                # 用户只看到上层「网址内容获取失败」而根因（证书 / 代理 / DNS / 风控 200+空 body /
-                # JSON 改版）没落盘，违反 AGENTS「异常日志须带类型与上下文、禁止静默吞异常」。用
-                # debug 而非 warning：这是每轮都走的有兜底降级路径，warning 会淹掉真线索（同 spider.py）。
+                # 用 debug 而非 warning：这是每轮都会走的兜底降级路径，warning 会淹掉真线索
+                # （同 spider.py）。记录类型与脱敏 URL，避免根因（证书 / 代理 / DNS / 风控
+                # 200+空 body / JSON 改版）完全没落盘。
                 logger.debug(
                     i18n.tr(
                         "抖音 unique_id 接口失败（转 HTML 兜底）: {type_name}: {e} - {masked_url}",
@@ -240,9 +232,8 @@ async def get_unique_id(url: str, proxy_addr: str | None = None, headers: dict[s
         raise RuntimeError(f"An error occurred: {utils.mask_credentials(str(e))}") from e
 
 
-# L-13（2026-10-02）：get_live_room_id 已删除——全仓无生产调用点（web_rid 由
-# spider.get_douyin_stream_url 的 webcast/room/web/enter 接口直接返回），且其键缺失
-# 分支 cast(str, owner.get("web_rid")) 实际返回 None、与 -> str 注解矛盾。
+# get_live_room_id 已删除：全仓无生产调用点（web_rid 由 spider.get_douyin_stream_url 的
+# webcast/room/web/enter 接口直接返回），且键缺失分支与 -> str 注解矛盾。
 
 if __name__ == "__main__":
     import asyncio

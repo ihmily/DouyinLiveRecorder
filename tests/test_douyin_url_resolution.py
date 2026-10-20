@@ -1,6 +1,6 @@
-# Tests for Douyin URL resolution across the 5 supported URL formats.
+# 抖音链接解析回归：覆盖 5 种受支持 URL 形态。
 #
-# Formats under test (see user request):
+# 形态清单（见需求原文）：
 # 1. https://live.douyin.com/745964462470            (网页端主播直播间)
 # 2. https://v.douyin.com/iQFeBnt/                  (app端主播直播间)
 # 3. https://live.douyin.com/yall1102               (抖音号拼接, 支持 VR)

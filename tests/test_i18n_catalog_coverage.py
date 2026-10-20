@@ -3,23 +3,19 @@
 #
 # 为什么单独成文件：scripts/extract_i18n_strings.py 与 tests/test_i18n_migration.py 的不变量③
 # 都只看 tr()/T() 的**字面量首参**；`i18n.tr(msgid)`（msgid 来自元组表）、`tr(THEME_LABELS[k])`、
-# `T(title)`（title 是循环变量）这类「按名传入」对两者完全隐形——目录缺词条也不会变红。
-# 2026-10-17 实测事故正是这一类：Qt 侧栏把导航 msgid 放在元组里按名传入，源码形态是
-# 「两空格」的 📊  控制台，而四目录只有 Tk 遗留实现的「三空格」📊   控制台，
-# 切到 en_US/en_GB/zh_TW 后侧栏与派生页标题静默回落简中原文，提取器仍报「0 缺失」（假绿）。
+# `T(title)`（title 是循环变量）这类按名传入对两者完全隐形。2026-10-17 的实测事故即此类：
+# Qt 侧栏导航 msgid 以「两空格」的 📊  控制台 存放在元组里，四目录只有 Tk 遗留的「三空格」形态，
+# 切到 en_US/en_GB/zh_TW 后静默回落简中原文，而提取器仍报「0 缺失」（假绿）。
 #
-# 本文件三条锁：
-#   ⑤-A 每个按名调用点解析出的 msgid 候选，必须在**四份目录**里都存在（不止 zh_CN.po）；
-#   ⑤-B 解析不出候选的按名调用点用**白名单集合相等**判定（比计数上限更强：新增即红、
-#        已知点被消解后不收回白名单也红）——新增一处「机检看不见」的按名调用必须先说明
-#        「由哪条锁覆盖」，否则该 msgid 无人核对；
+# 三条锁：
+#   ⑤-A 按名调用点解析出的 msgid 候选，必须在**四份目录**里都存在（不止 zh_CN.po）；
+#   ⑤-B 解析不出候选的按名调用点用**白名单集合相等**判定（新增即红、已消解却不收回也红）；
 #   ⑤-C 四份目录键集合逐项相等（单侧漏登记/多登记会让某语言静默回落原文）。
 #
-# 变异验证锚点（删掉任一判据必须让某条用例变红）：
-#   · 把 ⑤-A 的 key_sets 换成只查 zh_CN.po → test_by_name_msgids_covered_by_catalogs 红
-#     （导航 msgid 四目录齐全，须同时从某份 JSON/YAML 里删一条才会红，故两侧同改）；
-#   · 从 ALLOWED_UNRESOLVED_BY_NAME_CALLS 删掉 ui_i18n.py:34 → test_unresolved_by_name_calls… 红；
-#   · 把 ⑤-C 的比较退化成「只比 po 与 en_US」→ test_catalog_key_sets_are_identical 红。
+# 变异验证锚点（删掉任一判据必须让某条用例变红）：把 ⑤-A 的 key_sets 收窄到只查 zh_CN.po →
+# ::test_by_name_msgids_covered_by_catalogs 红；从白名单删掉 ui_i18n.py:34 →
+# ::test_unresolved_by_name_calls_match_allowlist 红；把 ⑤-C 退化成「只比 po 与 en_US」→
+# ::test_catalog_key_sets_are_identical 红。
 
 import ast
 import functools
@@ -31,20 +27,20 @@ from typing import Any
 ROOT = Path(__file__).resolve().parent.parent
 
 # 按名调用点里「按设计无法静态解析」的白名单（集合相等判定，多一处少一处都红）：
-# src/ui_i18n.py:34 是 Translatable.render() 的 `tr(self.msgid)`——它的候选就是全仓 T(...)
-# 的字面量首参，那批串由 tests/test_i18n_migration.py 的不变量③逐条核对，本锁不重复收。
+# src/ui_i18n.py:34 是 Translatable.render() 的 `tr(self.msgid)`——候选即全仓 T(...) 的字面量
+# 首参，那批串由 tests/test_i18n_migration.py 的不变量③逐条核对，本锁不重复收。
 # 新增不可解析点必须先进本白名单并写明「由哪条锁覆盖」，否则该 msgid 无人核对。
 ALLOWED_UNRESOLVED_BY_NAME_CALLS = {"src/ui_i18n.py:34"}
 
-# 参数位实参链式解析的收敛轮数：`模块常量 → 调用方实参 → 形参 → 再传入下一层函数 → tr(形参)`
-# 这条链在 gui.py / src/gui_qt/shared.py 的实际深度是 2 层（_pattern_from_template → _sentinel_text），
+# 参数位实参链式解析的收敛轮数：`模块常量 → 调用方实参 → 形参 → 再传入下一层 → tr(形参)`
+# 在 gui.py / src/gui_qt/shared.py 的实际深度是 2 层（_pattern_from_template → _sentinel_text），
 # 留一轮余量；轮数本身不是判据，白名单才是。
 _INDEX_PASSES = 3
 
 
 def _load_probe(module_name: str, filename: str) -> Any:
     # 按文件路径加载 scripts/ 下的独立脚本（不在包内），与 tests/test_i18n_migration.py 同先例：
-    # 复用 compile_po 的权威 .po 解析与提取器的价值判定/模板还原口径，避免两套解析漂移
+    # 复用 compile_po 的 .po 解析与提取器的价值判定/模板还原口径，避免两套解析漂移
     spec = importlib.util.spec_from_file_location(module_name, ROOT / "scripts" / filename)
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
@@ -141,8 +137,8 @@ def _binding_index(
     for name, value in _assign_pairs(tree):
         put(name, _literals_of(value, src, via))
 
-    # 调用点整体收一次：本函数在 _INDEX_PASSES 轮里被反复重建，
-    # 逐函数 ast.walk(tree) 会让复杂度变成 O(函数数 × 节点数)（实测 35s → 优化后应 <10s）
+    # 调用点整体收一次：本函数在 _INDEX_PASSES 轮里被反复重建，逐函数 ast.walk(tree)
+    # 会让复杂度变成 O(函数数 × 节点数)（实测 35s → 优化后 <10s）
     all_calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)]
     for node in ast.walk(tree):
         # for page_id, msgid in (("dashboard", "📊  控制台"), ...): → 按**位置**对齐取元素，
@@ -210,7 +206,7 @@ def collect_by_name_calls() -> tuple[dict[str, set[str]], list[str]]:
             upper.setdefault(name, set()).update(values)
 
     # 迭代 _INDEX_PASSES 轮：上一轮解出的名字绑定喂给下一轮，让「模块常量 → 实参 → 形参 →
-    # 再作实参 → 再进形参」这种跨层链收敛（gui/shared 的 _pattern_from_template→_sentinel_text 即两层）
+    # 再作实参 → 再进形参」这类跨层链收敛（gui/shared 的 _pattern_from_template→_sentinel_text 两层）
     locals_by_path = {path: _binding_index(tree, src, scope="local") for path, (tree, src) in parsed.items()}
     for _ in range(_INDEX_PASSES):
         grew = False
@@ -259,8 +255,8 @@ def _catalog_key_sets() -> dict[str, set[str]]:
 
 
 # 三条用例共用同一份解析结果与同一份目录键集合：整仓 AST 扫描按文件数线性、
-# 且 _INDEX_PASSES 轮内还嵌套遍历（实测单次 ~6s），不缓存会让同一批解析在同一会话里跑三遍。
-# 缓存返回的是同一批可变对象，用例只读不改（改判据时请改为返回深拷贝，别在用例里就地修改）。
+# _INDEX_PASSES 轮内还嵌套遍历（实测单次 ~6s），不缓存会让同批解析在同一会话里跑三遍。
+# 返回的是同一批可变对象，用例只读不改（改判据时请改为返回深拷贝，别在用例里就地修改）。
 @functools.lru_cache(maxsize=1)
 def _cached_catalog_key_sets() -> dict[str, set[str]]:
     return _catalog_key_sets()

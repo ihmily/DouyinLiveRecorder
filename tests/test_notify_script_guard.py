@@ -1,25 +1,22 @@
 # -*- coding: utf-8 -*-
-# src/notify.py 录后自定义脚本钩子（run_script）的安全不变量回归锁（WP-C / M-5，2026-09-29）。
+# src/notify.py 录后自定义脚本钩子（run_script）的安全不变量回归锁（WP-C / M-5）。
 #
 # 四条必须锁住的行为（任意一条被改回旧形态即应变红）：
-#   ① 凭据不落盘：command 与异常文本一律过 utils.mask_credentials 才进 logger。logs/ 按 rotation
-#      保留多份 ⇒ 原文入日志＝凭据长期落盘。断言口径是「密钥字符串确实从日志文本里消失」，
-#      不是「调用过 mask_credentials」——后者即使删掉生产实现里的那次调用照样全绿
-#      （AGENTS 关键约定 #11 同源要求）。
+#   ① 凭据不落盘：command 与异常文本一律过 utils.mask_credentials 才进 logger（logs/ 按 rotation
+#      保留多份 ⇒ 原文入日志＝凭据长期落盘）。断言口径是「密钥确实从日志文本里消失」，而不是
+#      「调用过 mask_credentials」——后者即使删掉生产实现里的那次调用也照样全绿。
 #   ② 超时后第二次 communicate() 必须带**有限**超时：无超时的读取会被「握着管道写端的孙进程」
-#      永久挂住（本机 Windows 实测：脚本起的孙进程 sleep 60 时，只 kill 直接子进程后
-#      communicate 仍取不到输出）。
-#   ③ 进程树回收：Windows 走 `taskkill /T /F /PID`（argv 列表、禁 shell=True、输出按字节丢弃
-#      不解码），POSIX 走 start_new_session + os.killpg；两条分支失败时一律退化到既有的
-#      process.kill()，回收路径的异常绝不许改变 run_script 对外的成败语义。
-#   ④ 平台分支由模块级常量 _KILL_TREE_VIA_TASKKILL 选择，用例强制把它置 True，让 taskkill 路径
-#      在 Linux CI 上真实执行（AGENTS「平台专属分支的测试不得靠 skipif 让 CI 跳过」；CI 全在
-#      ubuntu，若按 os.name 就地判断再 skip，这条 Windows 回收链的锁会在 CI 上静默消失）。
+#      永久挂住（实测：孙进程 sleep 60 时只 kill 直接子进程，communicate 仍取不到输出）。
+#   ③ 进程树回收：Windows 走 `taskkill /T /F /PID`（argv 列表、禁 shell=True、输出按字节丢弃），
+#      POSIX 走 start_new_session + os.killpg；两分支失败时一律退化到 process.kill()，回收路径的
+#      异常绝不许改变 run_script 对外的成败语义。
+#   ④ 平台分支由模块级常量 _KILL_TREE_VIA_TASKKILL 选择，用例强制置 True，让 taskkill 路径在
+#      Linux CI 上真实执行（平台专属分支不得靠 skipif 让 CI 跳过；CI 全在 ubuntu）。
 #
-# 打桩面只有 subprocess（浅拷贝 shim 后替换 src.notify 命名空间里的引用，不改 stdlib 模块本体，
+# 打桩面只有 subprocess（浅拷贝 shim 后替换 src.notify 命名空间里的引用，不改 stdlib 本体，
 # tests/test_test_hygiene.py R1）与超时常量；脱敏 / 分支选择 / 退化路径全部走真实代码。
 # 唯一真起进程的是最后那条端到端用例，判定只看耗时与日志文本，从不解码子进程输出
-# （AGENTS「探测子进程输出一律按字节比较」——taskkill/python 在中文 Windows 上按 GBK 码页回显）。
+# （taskkill/python 在中文 Windows 上按 GBK 码页回显）。
 
 import io
 import os
@@ -36,10 +33,9 @@ from typing import Any, cast
 import pytest
 from loguru import logger
 
-# src.notify 通过 `import main` 读写运行时全局；必须先引入 main 才能加载 src.notify
-# [LT-07 2026-10-18] 注入只为下面两行的**导入期**服务，用完当场摘回（完整理由与摘回口径见
-# tests/test_notify.py 的同名注释：旧形态把仓库根永久留在 sys.path[0]、从不还原，而 fixture 又晚于
-# 模块级 import、搬不进去）。本文件不直接用 main 的成员，main/src.notify 之后由 sys.modules 兜住。
+# src.notify 通过 `import main` 读写运行时全局；必须先引入 main 才能加载 src.notify。
+# [LT-07] 注入只为下面两行的**导入期**服务，用完当场摘回（完整理由见 tests/test_notify.py 的同名
+# 注释：旧形态把仓库根永久留在 sys.path[0]、从不还原，而 fixture 又晚于模块级 import、搬不进去）。
 _REPO_ROOT = str(Path(__file__).resolve().parent.parent)
 _PATH_BASELINE = sys.path.count(_REPO_ROOT)  # 注入前的条目数（各调用形态下都实测为 0 或 1）
 sys.path.insert(0, _REPO_ROOT)
@@ -49,8 +45,8 @@ try:
 finally:
     if _REPO_ROOT in sys.path:
         sys.path.remove(_REPO_ROOT)
-# LT-07 泄漏判据：「注入 → 导入 → 摘回」三步必须把 sys.path 归还成注入前的条目数（按计数比，不按整表
-# 相等——别的库正当注册自己的搜索路径不该被本文件判红）。与 tests/test_notify.py 末尾同一条守卫。
+# LT-07 泄漏判据：「注入 → 导入 → 摘回」三步必须把 sys.path 归还成注入前的条目数（按计数比，不按
+# 整表相等）。与 tests/test_notify.py 末尾同一条守卫。
 assert sys.path.count(_REPO_ROOT) == _PATH_BASELINE, "仓库根被永久留在 sys.path：注入未归还，状态泄漏"
 
 # 四类真实凭据形态，全部落在 utils.mask_credentials 的五条模式覆盖范围内（写用例前逐条实测）：
@@ -202,9 +198,8 @@ def _timeout_after_run() -> subprocess.TimeoutExpired:
 def test_spawn_branch_kwargs(monkeypatch: pytest.MonkeyPatch, via_taskkill: bool) -> None:
     # 进程树回收的前提锁（两个分支都在同一台机器上跑）：
     #   POSIX 分支 ⇒ 必须 start_new_session=True，killpg 才有目标进程组；
-    #   Windows 分支 ⇒ 不得把 POSIX-only 的会话 detach 参数塞进进程创建参数（本机实测过一次
-    #   偶发 OSError [WinError 50]，且 CPython 的 Windows 侧本就直接忽略该参数）。
-    # 两分支都不得回退到 shell=True。
+    #   Windows 分支 ⇒ 不得把 POSIX-only 的会话 detach 参数塞进进程创建参数（CPython 的 Windows
+    #   侧本就忽略它，本机实测还撞过一次偶发 OSError [WinError 50]）。两分支都不得回退到 shell=True。
     proc = _FakeProc([_timeout_after_run(), (b"", b"")])
     popen = _PopenFactory(proc)
     run = _RunRecorder()

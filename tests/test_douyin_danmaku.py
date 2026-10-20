@@ -1,19 +1,19 @@
 # -*- coding: utf-8 -*-
-# src/platforms/douyin.py 测试：抖音弹幕链路的「凭据被平台拒绝 → 作废进程级缓存」接线
+# src/platforms/douyin.py 测试：抖音弹幕链路「凭据被平台拒绝 → 作废进程级缓存」的接线
 # （MID-33 的弹幕侧半边）。
 #
 # 契约（三条，缺一不可）：
-#   ① WS 握手被服务端以 **HTTP 200** 拒绝（抖音对失效 ttwid 的实测形态：不返回 4xx，
-#      而是 200 + 不升级协议）时，必须触发 src.ttwid.invalidate_ttwid()，使下一轮重新获取，
-#      而不是等 cookie_cache 的 30 分钟 TTL 自然过期；
-#   ② 网络类失败（超时 / 连接被拒 / DNS）与 4xx/5xx **不得**触发作废——重复拉 ttwid 本身
-#      就是风控触发源（见 src/room.py 的并发去重锁注释），误判会把断网放大成打主页接口；
+#   ① WS 握手被服务端以 HTTP 200 拒绝（抖音对失效 ttwid 的实测形态：不返回 4xx，而是 200 +
+#      不升级协议）时必须触发 src.ttwid.invalidate_ttwid()，使下一轮重新获取，而不是等
+#      cookie_cache 的 30 分钟 TTL 自然过期；
+#   ② 网络类失败（超时 / 连接被拒 / DNS）与 4xx/5xx 不得触发作废——重复拉 ttwid 本身就是风控
+#      触发源（见 src/room.py 的并发去重锁注释），误判会把断网放大成打主页接口；
 #   ③ 只有「本轮 cookie 来自 get_ttwid() 动态获取」才判定；用户自填的录制 cookie 不走该缓存，
 #      作废它既无效又多余。
 #
-# 打桩边界：只替换网络层（WsClient）与凭据取用（get_ttwid），判定正则、标志位、回调链
-# 全部走真实代码 —— 删掉 _note_ttwid_refusal 或其调用点即红（TestTtwidRefusalWiring 的
-# test_refusal_clears_real_ttwid_cache 更是不打桩 invalidate，直接断言真实缓存被清）。
+# 打桩边界：只替换网络层（WsClient）与凭据取用（get_ttwid），判定正则、标志位、回调链全部走
+# 真实代码——删掉 _note_ttwid_refusal 或其调用点即红（test_refusal_clears_real_ttwid_cache
+# 更是不打桩 invalidate，直接断言真实缓存被清）。
 
 from typing import Any, Callable
 
@@ -104,8 +104,8 @@ class TestTtwidRefusalWiring:
         assert reported == [script_text]
 
     async def test_repeated_refusal_invalidates_only_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # 一轮会话内最多 5 次重连都带同一拒绝文案：缓存只需清一次（幂等，
-        # 且避免重复去动下层 singleflight / cookie 缓存）。
+        # 一轮会话内最多 5 次重连都带同一拒绝文案：缓存只需清一次（幂等，且避免反复去动下层
+        # singleflight / cookie 缓存）。
         _StubWsClient.install(monkeypatch)
         revoked = _revoke_recorder(monkeypatch)
         client = douyin_module.DouyinDanmaku()

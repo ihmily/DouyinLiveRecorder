@@ -1,27 +1,19 @@
-# tests/test_gui_status_pattern_i18n.py — 画质监控状态行的跨语言回归锁（2026-09-29 审查 M-14）。
+# tests/test_gui_status_pattern_i18n.py — 画质监控状态行的跨语言回归锁（M-14）。
 #
-# 故障形态：gui.py 的画质监控页用**硬编码简中**正则/子串解析录制子进程 stdout 的三类行
-#   录制中行、画质降级告警、空态行；
-# 而这些行的生产侧全部经 i18n.tr 翻译（src/recorder_status.py::display_info、main.py 的
-# 录制启动处）。用户从 GUI 语言菜单选英文并重启录制后，三类匹配全部静默失败——画质监控页
-# 从此不再刷新，且没有任何日志。AGENTS「关键约定 #13」禁止拿自然语言子串当跨模块契约，
-# 比较对象必须取 i18n.tr(...) 后形态。
+# 故障形态：gui.py 曾用硬编码简中正则/子串解析录制子进程 stdout 的三类行（录制中、
+# 画质降级、空态），而这些行生产侧全部经 i18n.tr 翻译（src/recorder_status.py::display_info、
+# main.py 的录制启动处）。用户切英文并重启录制后三类匹配全静默失败，画质页不再刷新且无日志。
+# AGENTS「关键约定 #13」禁止拿自然语言子串当跨模块契约，比较对象必须取 i18n.tr(...) 后形态。
 #
-# 本文件锁四件事：
-#   1) 四种受支持语言下三类行都能被解析（行为锁，非文本锁）；
-#   2) 语言**热切换**后匹配器必须重算（旧实现是模块级一次编译）；
-#   3) 2026-09-12 审查 F-06 的解析语义（贪婪 name 段 + [^\]]+ 画质段）不回退；
-#   4) gui.py 里不得再出现「裸简中匹配字面量」（AST 静态锁）。
+# 锁：① 四种受支持语言下三类行都能解析（行为锁）；② 语言热切换后匹配器重算；
+# ③ 2026-09-12 审查 F-06 的解析语义（贪婪 name 段 + [^\]]+ 画质段）不回退；
+# ④ gui.py 不得再出现裸简中匹配字面量（AST 静态锁）。
+# 修复形态是「消费侧由同 msgid 的 tr() 结果派生匹配串」；#DLRQ| 结构化键值协议属
+# 「待批准长期方案」，要同时改 src/recorder_status.py 与 main.py，不在本包授权范围。
 #
-# 红线：本轮**不实现** #DLRQ| 结构化键值协议——AGENTS 把它列为「待批准长期方案」，
-# 实施要同时改 src/recorder_status.py 与 main.py 两个生产侧文件，不在本工作包授权范围。
-# 故修复形态是「消费侧由同 msgid 的 tr() 结果派生匹配串」，而不是改协议。
-#
-# 为什么走子进程而不在 pytest 进程 import gui：同 tests/test_gui_monitor.py（M-31②）——
-# gui.py 模块级就写 os.environ["DLR_GUI_PARENT"]="1"，在 pytest 进程导入会跨文件污染源；
-# 且 tests/conftest.py 的 _pin_identity_translation 把 i18n._tr 钉成恒等映射，本进程根本
-# 拿不到真实译文，跨语言判据必须在干净子进程里跑。
-# 探测子进程一律按字节比较、并显式注入 UTF-8（AGENTS「探测子进程输出」条 + M-31①）。
+# 走子进程而不在 pytest 进程 import gui：gui 的 DLR_GUI_PARENT 会跨文件污染；且 conftest 的
+# _pin_identity_translation 把 i18n._tr 钉成恒等映射，跨语言判据必须在干净子进程里跑。
+# 探测子进程一律按字节比较并显式注入 UTF-8。
 
 import ast
 import json
@@ -40,9 +32,8 @@ _MARKER = "\n@@WP_E_I18N@@ "
 # 支持的语言全集（四语目录都齐，见 _SUPPORTED 断言）；用例逐语言跑同三条判据。
 _LANGUAGES = ["zh_CN", "en_US", "en_GB", "zh_TW"]
 
-# 子进程内驱动 gui 的真实解析实现。三条 msgid 在这里**独立重写一份**（而不是引用
-# gui._STATUS_TPL_*）：生产侧与消费侧必须同键，本文件才能抓到「gui 常量与生产侧漂移」
-# 这种形态——若两侧共用一个常量，漂移会同时消失、用例假绿。
+# 子进程内驱动 gui 的真实解析实现。三条 msgid 在这里**独立重写一份**（不引用
+# gui._STATUS_TPL_*）：生产侧与消费侧必须同键，共用一个常量的话漂移会同时消失、用例假绿。
 _SCRIPT = r"""
 import json
 import sys
@@ -184,10 +175,9 @@ def _run_child(
     detail = proc.stderr.decode("utf-8", errors="replace")
     assert proc.returncode == 0, "gui i18n subprocess failed: " + detail[-3000:]
     assert marker in proc.stdout, "no result marker in: " + proc.stdout.decode("utf-8", errors="replace")[-800:]
-    # json.loads 的返回类型是 Any，直接返回会让父侧所有 `result["data"]["主播甲"][...]` 的下标
-    # 检查整体失效（mypy warn_return_any 下本函数还会报 no-any-return）。这里只做**声明收窄**、
-    # 不改运行时行为：真正的结构校验发生在各用例的断言里，载荷形态错了照样红。
-    # 不用行内 type: ignore 注释——AGENTS 明令该写法在 Linux 必要 / Windows 多余，会触发
+    # json.loads 返回 Any，直接 return 会让父侧所有下标检查整体失效（mypy 还会报
+    # no-any-return）。这里只做声明收窄、不改运行时：结构校验仍在各用例的断言里。
+    # 不用行内 type: ignore——AGENTS 明令该写法 Linux 必要 / Windows 多余，会触发
     # basedpyright 的 reportUnnecessaryTypeIgnoreComment。
     return cast(dict[str, Any], json.loads(proc.stdout.split(marker, 1)[1].decode("utf-8")))
 
@@ -254,8 +244,8 @@ def _empty_case(language: str, *, raw: bool) -> dict[str, Any]:
 
 def _case_result(payload: dict[str, Any], index: int) -> dict[str, Any]:
     # 载荷收窄的唯一出口：payload["cases"] 来自 json.loads、类型是 Any，逐处下标取值会把
-    # Any 一路扩散到断言里（mypy warn_return_any 在定义处即报 no-any-return）。
-    # 在此处一次 cast 收窄后，调用方拿到的是 dict[str, Any]，键写错仍由运行期 KeyError 兜住。
+    # Any 一路扩散到断言里（mypy 在定义处即报 no-any-return）。此处一次 cast 后，调用方拿到
+    # dict[str, Any]；键写错仍由运行期 KeyError 兜住。
     return cast(dict[str, Any], payload["cases"][index])
 
 
@@ -301,8 +291,8 @@ def test_idle_line_clears_recording_flag_in_every_language(language: str) -> Non
 def test_untranslated_empty_line_still_clears_in_every_language(language: str) -> None:
     # M-14② 的不对称：src/recorder_status.py 的 print("\r没有正在监测和录制的直播")
     # 生产侧**没有** tr() 调用，能否被翻译取决于 main.py 的 builtins.print 补丁（冻结环境
-    # 尚待实测，见 CODE_REVIEW_2026-09-29_2 M-20）。所以消费侧必须连原文形态也认得——
-    # 把它改成「只匹配 tr() 结果」时，本用例即在 en_US/en_GB/zh_TW 下变红。
+    # 尚待实测）。所以消费侧必须连原文形态也认得——改成「只匹配 tr() 结果」即在
+    # en_US/en_GB/zh_TW 下变红。
     result = _case_result(_run_child([_empty_case(language, raw=True)]), 0)
     info = result["data"].get("主播甲")
     assert info is not None, f"{language}: 录制中行未被解析，data={result['data']}"
@@ -330,8 +320,7 @@ def test_bracketed_anchor_name_keeps_f06_semantics() -> None:
 
 def test_language_hot_switch_recomputes_patterns() -> None:
     # M-14 要求的失效时机：GUI 语言菜单经 i18n.set_language 热切换，匹配器必须跟着重算。
-    # 一个子进程里连跑 zh_CN → en_US → zh_CN：若实现退回「模块级一次编译」，
-    # 中间那条英文行必然匹配不上。
+    # 一个子进程里连跑 zh_CN → en_US → zh_CN：退回「模块级一次编译」时中间英文行必然失配。
     zh = _recording_case("zh_CN")
     en = _recording_case("en_US")
     payload = _run_child([zh, en, dict(zh)])
@@ -350,10 +339,10 @@ def test_reordered_translation_still_parsed() -> None:
 
 
 def test_mid_build_language_switch_is_not_cached() -> None:
-    # _status_patterns 的组装期竞态（M-14 引入的按语言缓存自带的问题）：组装要连读 6 次
-    # i18n.tr()，语言若在中间被 UI 线程切走，得到的是**混语** patterns。判据不是「不抛异常」，
-    # 而是**缓存键集合**——混语那一遍的结果不允许落进以任何语言码为键的缓存（落了就长期失配，
-    # 正是 M-14 要消灭的那一类故障）。注入方式就是语言码读取序列本身，不 patch 被测函数。
+    # _status_patterns 的组装期竞态（按语言缓存自带的问题）：组装要连读 6 次 i18n.tr()，
+    # 语言若在中间被 UI 线程切走，得到的是**混语** patterns。判据不是「不抛异常」，而是
+    # **缓存键集合**——混语结果不允许落进任何语言码为键的缓存（落了就长期失配）。
+    # 注入方式就是语言码读取序列本身，不 patch 被测函数。
     payload = _run_child([], cache_race_check=True)
     case = payload["cache_race"]
     assert case["keys"] == ["en_US"], f"混语组装被固化进缓存：{case}"

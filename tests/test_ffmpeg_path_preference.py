@@ -2,25 +2,20 @@
 #
 # 被测对象：src/ffmpeg_install.should_prepend_bundled_ffmpeg_dir()（判据唯一事实源）
 #   + main.py 模块级 PATH 注入段（唯一接线点）。
-# 为什么要锁：full 包内置的 macOS ffmpeg 是 evermeet 的 **x86_64** 静态构建（上游不发布
-#   arm64 构建），而 main.py 原先无条件把包内目录前置 —— Apple Silicon 用户即使已经
-#   `brew install ffmpeg` 装了原生 arm64 那份也会被遮蔽，重编码路径白付 Rosetta 转译开销。
-#   但 PATH 优先级是**全局副作用**：误判会让全部录制子进程改用用户机器上的另一份 ffmpeg，
-#   故判据被刻意收成「五条同时成立才让位」，本文件逐条钉死这条保守边界：
+# 为什么要锁：full 包内置的 macOS ffmpeg 是 evermeet 的 x86_64 静态构建（上游不发布 arm64），
+#   原先无条件前置会遮蔽 Apple Silicon 用户已装的 brew 原生 arm64，重编码白付 Rosetta 开销。
+#   PATH 优先级是全局副作用，故判据收成「五条同时成立才让位」，本文件逐条钉死这条保守边界：
 #     ① 非 darwin（Windows / Linux）恒前置 —— 行为逐字不变；
-#     ② darwin 但 machine != arm64（Intel Mac；解释器自身跑在 Rosetta 下时也落这里，
-#        属刻意的漏判方向）恒前置；
-#     ③ 包内目录不存在恒前置（无「遮蔽」可言）；
-#     ④ 注入前的 PATH 上没有 ffmpeg 时恒前置；
-#     ⑤ 探到的那份其实就是包内那一份时恒前置（否则日志承诺「原生 arm64」而实际仍是
-#        转译构建 —— 自我遮蔽形态的假绿）；
+#     ② darwin 但 machine != arm64（解释器自身跑在 Rosetta 下时也落这里，属刻意的漏判方向）恒前置；
+#     ③ 包内目录不存在恒前置；④ 注入前 PATH 上没有 ffmpeg 时恒前置；
+#     ⑤ 探到的那份就是包内那份时恒前置（否则日志承诺「原生 arm64」而实际仍是转译构建）；
 #     ⑥ 五条全过才返回 False（让位），并留下一条 debug 日志写明哪一份生效。
 #
 # Mock 口径（AGENTS.md「测试编写强制约定」）：只打桩环境探针 —— sys.platform /
-#   platform.machine / shutil.which 一律经 types.SimpleNamespace(**vars(<module>)) 浅拷贝
-#   后 setattr 到 **ffmpeg_install 的模块全局名**，绝不改 stdlib 模块本体（改 stdlib 会
-#   波及同进程的 harness 守护线程）；判据逻辑本身走真实代码，不在测试里重算一遍。
-#   环境变量不使用 patch.dict(os.environ)（harness 注入的超长变量会让其整体写回抛 ValueError）。
+#   platform.machine / shutil.which 一律经 types.SimpleNamespace(**vars(<module>)) 浅拷贝后
+#   setattr 到 **ffmpeg_install 的模块全局名**，绝不改 stdlib 模块本体（会波及同进程的 harness
+#   守护线程）；判据逻辑走真实代码，不在测试里重算一遍。环境变量不使用 patch.dict(os.environ)
+#   （harness 注入的超长变量会让其整体写回抛 ValueError）。
 
 import ast
 import importlib.util
@@ -260,9 +255,9 @@ class TestSelfShadowGuard:
             link.symlink_to(bundle / "ffmpeg")
         except OSError:
             pytest.skip("symlink not permitted on this host")
-        # Windows（无开发者模式 / 无特权）上 symlink_to 不抛错却也造不出真链接：
-        # is_symlink() 仍为 False、os.readlink() 报 WinError 4390，于是下面走的是
-        # 「普通文件」路径——realpath 归一判据根本没被覆盖，断言恒假。按既有约定显式跳过。
+        # Windows（无开发者模式 / 无特权）上 symlink_to 不抛错却也造不出真链接：is_symlink() 仍为
+        # False、os.readlink() 报 WinError 4390，于是下面走的是「普通文件」路径——realpath 归一判据
+        # 根本没被覆盖，断言恒假。按既有约定显式跳过。
         if not link.is_symlink():
             pytest.skip("symlink silently unsupported: symlink_to() created no real link on this host")
         calls: list[tuple[str, str]] = []

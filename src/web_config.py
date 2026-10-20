@@ -74,14 +74,10 @@ WEB_DEFAULTS: dict[str, str | int | bool] = {
     "web_minimize_to_tray": True,
     # 可信代理列表（逗号分隔）：仅当直连对端在列表中才信任 X-Forwarded-For
     "web_trusted_proxy": "",
-    # MID-36：除回环/监听地址外，还允许哪些 Host/Origin 访问面板（逗号分隔）。
-    # 未列出的**多级域名** Host 会被拒绝，以阻断 DNS 重绑定（attacker.tld → 127.0.0.1）。
-    # [历史注] M-10（2026-10-02）更正：原注释称「仅在以域名（而非 IP）访问时才需要配置」
-    # ——不成立。绑定 0.0.0.0/:: 的远程部署中，浏览器对同源 POST 也带 Origin
-    # （http://<LAN_IP>:<port>），_is_same_origin 对非回环 IP 的判定恒否，面板会
-    # 「读得到、写不了」；此时必须把访问用 IP/域名登记进本键（手工编辑 config.ini——
-    # 该写入本身也被 403，无法经面板完成）。行为侧（如信任 Sec-Fetch-Site: same-origin）
-    # 是否放宽属维护者裁决，见 CODE_REVIEW_2026-10-02.md M-10。
+    # MID-36：除回环/监听地址外，还允许哪些 Host/Origin 访问面板（逗号分隔）。未列出的
+    # **多级域名** Host 会被拒绝，以阻断 DNS 重绑定（attacker.tld → 127.0.0.1）。
+    # 绑定 0.0.0.0/:: 的远程部署必须把访问用 IP/域名登记进本键（手工编辑 config.ini——面板
+    # 自己对这种请求也回 403，无法经面板完成），否则会「读得到、写不了」。
     "web_allowed_hosts": "",
 }
 
@@ -139,12 +135,10 @@ def parse_url_config(file_path: str | Path) -> list[dict[str, str | bool]]:
                     url = parts[1].strip()
             elif _is_url(parts[0]):
                 # MID-2235：3 段以上且首段就是网址 → **未写画质**，第二段起全是主播名。与 main.py
-                # 主循环行解析的同名分支逐字同规则（该处 `elif contains_url(split_line[0])` →
-                # `url = split_line[0]; name = "，".join(split_line[1:])`）。修复前这里无条件按
-                # 「画质,URL,名称」定序，于是中文主播名里带 `,`/`，`（「张三，李四」这类并列写法极
-                # 常见）的一行会被拆成 quality=网址、url=「主播: 张三」，经 normalize_url 补成
-                # `https://主播: 张三` —— 面板渲染出一条**根本不存在的假房间**，而 DELETE / PUT
-                # quality 都按规范化 URL 精确匹配真实那一行，于是真房间既改不了也删不掉。
+                # 主循环行解析逐字同规则。修复前这里无条件按「画质,URL,名称」定序，于是中文主播名
+                # 带逗号（「张三，李四」）的行会被拆成 quality=网址、url=「主播: 张三」，经
+                # normalize_url 补成 `https://主播: 张三` —— 面板渲染出一条**不存在的假房间**，
+                # 而 DELETE / PUT quality 按规范化 URL 精确匹配真实行，真房间既改不了也删不掉。
                 url = parts[0].strip()
                 name = "，".join(p.strip() for p in parts[1:])
             else:
@@ -189,22 +183,15 @@ def _reject_newline(kind: str, value: str) -> None:
 
 
 def _reject_list_separator(kind: str, value: str) -> None:
-    # MID-2235 写侧配套：主播名不得含 `,` / `，`。
-    # 行格式「[画质,]URL[,主播: 名称]」以逗号（含全角）为**字段分隔符**，名字里带逗号会让
-    # 这一行在读取侧多出一段：main.py 与本模块都只能靠「首段是不是网址」猜定序（见
-    # parse_url_config 的 3+ 段分支），猜出来的名字还会与写入时的原文不同（并列名被拆成
-    # 多段后以「，」重连）。与其让两端各猜一次，不如在唯一写入口直接拒绝，
+    # MID-2235 写侧配套：主播名与 URL 段都不得含 `,` / `，`。
+    # 行格式「[画质,]URL[,主播: 名称]」以逗号（含全角）为**字段分隔符**，两端读取侧都是
+    # `re.split("[,，]", line)` 先切段再判形：名字带逗号会让这一行被拆成多段（并列名被拆开后
+    # 以「，」重连，与写入原文不同）；地址带逗号则只取到首个逗号前（https://x/a?b=1,2 只录到
+    # `?b=1`，面板显示一条与实际拉流地址不一致的房间，DELETE / PUT quality 又按规范化 URL
+    # 精确匹配行，用户既看不出也改不动）。与其让两端各猜一次，不如在唯一写入口直接拒绝，
     # 把「同一行在两处解析成不同房间」这条缝隙从源头堵掉。
-    # L-22（2026-10-18）：URL 段一并拒绝逗号。旧结论「放宽 URL 段」已被两个读取侧同时证伪——
-    # 本模块 parse_url_config 与 main.py 的房间行解析都是 `re.split("[,，]", line)` **先切段再判形**，
-    # 于是 https://live.example.com/a?b=1,2 在两侧都只取到 `?b=1`（尾段被当成主播名/画质段丢弃），
-    # 「地址里带逗号」从来没能按录入值生效过；写侧继续放行只会让面板显示一条与实际拉流地址
-    # 不一致的房间，而 DELETE / PUT quality 按规范化 URL 精确匹配行，用户既看不出也改不动。
-    # 现改为入口即拒（422 + 可行动文案），比「静默截断后录错地址」更可归因。
-    # 画质段是 BUILTIN_QUALITIES 白名单值、本就无逗号，不在此列；读取侧对**历史已存在**的含逗号行
-    # 维持原解析行为不改（老配置只会按旧的截断语义继续跑，不会因本条写侧收紧而读不出/崩）。
-    # [历史注] 本条原文为「只挡主播名：URL 段的逗号由 normalize_url/查询串承载（?a=1,2 是合法地址
-    # 形态），画质段是白名单值、本就无逗号，放宽它们等于无谓地砍掉可用房间。」（2026-10-18 证伪并改正）。
+    # 画质段是 BUILTIN_QUALITIES 白名单值、本就无逗号；读取侧对**历史已存在**的含逗号行维持
+    # 原解析行为不改（老配置只会按旧的截断语义继续跑，不会因写侧收紧而读不出或崩）。
     if value and ("," in value or "，" in value):
         raise ValueError(f"{kind} 含逗号（半角或全角），逗号是配置行的字段分隔符，请改用其他写法")
 
@@ -216,10 +203,9 @@ def format_url_line(url: str, quality: str | None = None, name: str | None = Non
     # - 全部：返回 "画质,url,主播: 名称"
     # quality 为空或默认"原画"时省略画质段（与 main.py 风格一致）。
     #
-    # SEV-02 修复：校验**下沉**到本函数（URL_config.ini 的唯一写入口）。
-    # 旧结构是「各端点各自先调 validate_room_target 再调本函数」，于是漏调一次即留一条
-    # 无校验的写入口（PUT /api/rooms 即如此，SSRF/任意 scheme 防线被同组接口绕过）。
-    # 现在新增/改写两条路径必然经过同一裁决，接口层再显式调用只是冗余的第二道。
+    # SEV-02：校验**下沉**到本函数（URL_config.ini 的唯一写入口）。旧结构是「各端点各自先调
+    # validate_room_target 再调本函数」，漏调一次即留一条无校验的写入口（PUT /api/rooms 即如此，
+    # SSRF/任意 scheme 防线被同组接口绕过）。接口层再显式调用只是冗余的第二道。
     validate_room_target(url, quality, name)
     _reject_newline("URL", url)
     _reject_newline("画质", quality or "")
@@ -244,24 +230,20 @@ def format_url_line(url: str, quality: str | None = None, name: str | None = Non
 def validate_config_target(section: str, key: str, value: str) -> None:
     # 校验 /api/config 写入目标：值含换行即拒绝（同换行注入防护，避免伪造配置行）
     _reject_newline(f"配置项 [{section}] {key} 的值", value)
-    # MID-N45：再叠一层「出站目标」收口（仅对下表白名单内的 URL 类键生效）。
-    # 落点在 validate_config_target 而不是各端点里：它是 config.ini 写侧唯一的校验入口
-    # （PUT /api/config 与画质选项 PUT 都过这里），房间侧的教训（SEV-02「漏调一次即留一条
-    # 无校验写入口」）在这里同样成立，故把裁决绑进入口而非调用方。
+    # MID-N45：再叠一层「出站目标」收口（仅对下表白名单内的 URL 类键生效）。落点选在这里而不是
+    # 各端点：它是 config.ini 写侧唯一的校验入口，房间侧的教训（漏调一次即留一条无校验写入口）
+    # 在这里同样成立，故把裁决绑进入口而非调用方。
     _validate_outbound_target_value(key, value)
 
 
-# CR-09 修复：直播间地址的 scheme / 目标校验。
-# 旧实现只挡换行，而 main.py 分发表的末项 `_match_stream_suffix(".m3u8", ".flv")` 用
-# **子串包含**判定，形如 http://127.0.0.1:8080/manager/x?a=.flv 、
-# http://169.254.169.254/latest/meta-data/?x=.m3u8 都会被判成「自定义录制直播」，
-# 原始 URL 原样进入 ffmpeg 的 -i —— 即服务端可被驱动去请求攻击者指定的内网地址（盲 SSRF），
-# 成败还能通过回读 streamget.log 区分（可回显侧信道）。此处收紧入口。
-#
-# SEV-03 重写：旧实现是「字符串前缀黑名单」（host.startswith("127.") / "10." / "192.168."…），
-# 实测 7 条载荷中 5 条穿透——十进制 2130706433、八进制 0177.0.0.1、带端口的 IPv6
-# [fe80::1]:8080（`":" in host and not parsed.port` 使整个分支被跳过）、CGNAT 100.64.0.1、
-# 阿里云元数据 100.100.100.200 全部放行。现改为 ipaddress 语义 + DNS 解析双道判定。
+# CR-09：直播间地址的 scheme / 目标校验。旧实现只挡换行，而 main.py 分发表的末项
+# `_match_stream_suffix(".m3u8", ".flv")` 用**子串包含**判定，形如
+# http://127.0.0.1:8080/manager/x?a=.flv 会被判成「自定义录制直播」，原始 URL 原样进入 ffmpeg 的
+# -i —— 即服务端可被驱动去请求攻击者指定的内网地址（盲 SSRF），成败还能通过回读 streamget.log
+# 区分（可回显侧信道）。
+# SEV-03：旧实现是「字符串前缀黑名单」，实测 7 条载荷中 5 条穿透（十进制 2130706433、八进制
+# 0177.0.0.1、带端口的 IPv6 [fe80::1]:8080、CGNAT 100.64.0.1、阿里云元数据 100.100.100.200）。
+# 现改为 ipaddress 语义 + DNS 解析双道判定。
 _ALLOWED_ROOM_SCHEMES = frozenset(("http", "https"))
 
 # Python 3.14 的 ipaddress 按 IANA 特别用途注册表判定 is_private，**100.64.0.0/10
@@ -405,12 +387,11 @@ def _internal_ip_reason(
 ) -> str | None:
     # 返回 None 表示该地址可放行；否则给出拒绝理由（写进 422 文案，只含地址不含本地信息）
     #
-    # MID-N45 新增 allow_local_targets：代理地址 / SMTP 服务器两类配置项的「本机与私网」目标
-    # 是主流合法形态（src/sync_http.py 的 MID-27 注释记录：用户普遍把代理写成 127.0.0.1:7890），
-    # 按房间地址那套内网收口判会把它们全部误杀。置 True 时只放行 **回环 + RFC1918 私网** 两类，
-    # 链路本地 / 云元数据 / 未指定 / 组播 / 保留 / CGNAT 仍一律拒绝——那些不是任何人的代理，
-    # 且正是 SSRF 的 payoff 目标。回环族的**域名**形态（localhost / *.localhost）同步放行，
-    # 见 _host_internal_reason 的同名参数。
+    # MID-N45 的 allow_local_targets：代理地址 / SMTP 服务器两类配置项的「本机与私网」目标
+    # 是主流合法形态（用户普遍把代理写成 127.0.0.1:7890），按房间地址那套内网收口判会全部误杀。
+    # 置 True 时只放行 **回环 + RFC1918 私网** 两类，链路本地 / 云元数据 / 未指定 / 组播 / 保留 /
+    # CGNAT 仍一律拒绝——那些不是任何人的代理，且正是 SSRF 的 payoff 目标。回环族的**域名**形态
+    # （localhost / *.localhost）同步放行，见 _host_internal_reason 的同名参数。
     mapped = getattr(addr, "ipv4_mapped", None)
     if mapped is not None:
         # ::ffff:127.0.0.1 这类 IPv4 映射地址必须按其承载的 v4 判定，否则 v6 侧一律「公网」
@@ -478,16 +459,14 @@ def _host_internal_reason(host: str, *, allow_local_targets: bool = False) -> st
     # 判定主机名是否指向本机/内网/保留目标，返回拒绝理由或 None（可放行）。
     #
     # 顺序：IP 字面量（含缩写形态）→ 内部用途域名后缀（离线即可定罪）→ DNS 解析结果。
-    # **DNS 重绑定无法由本层挡住**：这里解析的是「写入配置那一刻」的 A/AAAA 记录，
-    # 而真正发起连接的是稍后独立解析的 ffmpeg。攻击者把 TTL=0 的域名先解析到公网 IP
-    # 通过校验、录制时再解析到 127.0.0.1，即可绕过本函数——那需要在出站网络层
-    # （防火墙/egress 代理）按目标地址收口，或在拉流前二次校验，不能在本层假装闭合。
+    # **DNS 重绑定无法由本层挡住**：这里解析的是「写入配置那一刻」的 A/AAAA 记录，而真正发起
+    # 连接的是稍后独立解析的 ffmpeg。攻击者把 TTL=0 的域名先解析到公网 IP 通过校验、录制时再
+    # 解析到 127.0.0.1 即可绕过——那需要在出站网络层按目标地址收口，或在拉流前二次校验。
     # 同理，sslip.io / nip.io 这类「把 IP 编码进域名」的服务只能靠解析结果识别。
     #
-    # MID-N45 的 allow_local_targets：代理 / SMTP 类配置项放行回环与 RFC1918（含 localhost 的
-    # 域名形态），但 metadata / metadata.tencentyun.com / *.internal / *.local 这类
-    # 「内部用途名字」**不**跟着放行——它们从来不是代理或邮件服务器的合法写法，
-    # 而 *.local / *.internal 正是集群内元数据服务的常用名字。
+    # allow_local_targets：代理 / SMTP 类配置项放行回环与 RFC1918（含 localhost 的域名形态），
+    # 但 metadata / *.internal / *.local 这类「内部用途名字」**不**跟着放行——它们从来不是代理
+    # 或邮件服务器的合法写法，而 *.local / *.internal 正是集群内元数据服务的常用名字。
     literal = _parse_ip_literal(host)
     if literal is not None:
         return _internal_ip_reason(literal, allow_local_targets=allow_local_targets)
@@ -525,16 +504,14 @@ def _check_url_target(
     allow_local_targets: bool,
     hint: str = "",
 ) -> None:
-    # MID-N45 抽出的共用内核：房间地址（_validate_room_url_target）与推送/SMTP/代理类配置键
-    # （validate_config_target → _validate_outbound_target_value）此前各写一份「scheme + 目标网段」
-    # 判定就是两条写入口分叉的成因（SEV-02 在房间侧修过同一形态）。现在两处共用本函数，
-    # 差异只以参数表达，任何一侧收紧都会同时作用于另一侧：
+    # MID-N45 抽出的共用内核：房间地址与推送/SMTP/代理类配置键此前各写一份「scheme + 目标网段」
+    # 判定，正是两条写入口分叉的成因（SEV-02 在房间侧修过同一形态）。现在两处共用本函数，差异只
+    # 以参数表达，任何一侧收紧都会同时作用于另一侧：
     #   kind                文案前缀（"直播间地址" / f"配置项「{key}」"）
     #   allowed_schemes     允许的协议集合
-    #   default_scheme      省略协议时按哪个协议判定；None = 必须显式写出协议
-    #                       （房间地址允许省略并补 https、代理地址允许裸 ip:port 并补 http，
-    #                        二者都有既有实现兜底；推送地址会被原样交给 urllib.request.Request，
-    #                        缺协议时它本来就抛 ValueError，故此处不再替用户猜协议）
+    #   default_scheme      省略协议时按哪个协议判定；None = 必须显式写出协议（房间地址补 https、
+    #                       代理允许裸 ip:port 补 http；推送地址会被原样交给 urllib 的 Request，
+    #                       缺协议时它本来就抛 ValueError，故不替用户猜）
     #   allow_local_targets 是否放行回环/私网目标（见 _host_internal_reason 同名参数）
     #   hint                追加到拒绝文案尾部的「怎么办」
     from urllib.parse import urlparse
@@ -577,14 +554,12 @@ def validate_room_target(url: str, quality: str | None = None, name: str | None 
     _reject_newline("URL", url)
     _reject_newline("画质", quality or "")
     _reject_newline("主播名", name or "")
-    # MID-2235 写侧第二道。此前 format_url_line 里的同名调用带着一条注释声称「与 validate_room_target
-    # 同一判据」，而本函数并没有该调用——注释描述的是设计意图而非事实，于是「先 validate 再自行拼行」
-    # 的调用方（不经过 format_url_line）仍能写出含逗号的主播名。判据必须落在**公共入口**上才成立：
+    # MID-2235 写侧第二道。判据必须落在**公共入口**上才成立：只写在 format_url_line 里时，
+    # 「先 validate 再自行拼行」的调用方（不经过 format_url_line）仍能写出含逗号的主播名。
     # 这里补上后两处调用点各自都挡得住（幂等，不会重复报错）。
     _reject_list_separator("主播名", name or "")
-    # L-22（2026-10-18）：URL 段并入同一判据。读取侧（本模块 parse_url_config 与 main.py 行解析）
-    # 都以逗号切段，含逗号的地址一律在首个逗号处被截断后才进 ffmpeg——写侧不挡就等于「录入一条、
-    # 生效另一条」。判据落在公共入口而不是各端点，与上面主播名那条同理（见 _reject_list_separator）。
+    # L-22：URL 段并入同一判据。读取侧都以逗号切段，含逗号的地址一律在首个逗号处被截断后才进
+    # ffmpeg——写侧不挡就等于「录入一条、生效另一条」。判据落在公共入口而非各端点，同上。
     _reject_list_separator("URL", url)
     # CR-09：追加 scheme 与目标网段校验（见 _validate_room_url_target 说明）
     _validate_room_url_target(url)
@@ -596,14 +571,12 @@ def validate_room_target(url: str, quality: str | None = None, name: str | None 
         raise ValueError(f"未知画质档位: {q}")
 
 
-# ─── MID-N45：推送 / SMTP / 代理地址类配置键的出站目标收口（2026-09-21） ───────
-# 这些键的值不走录制链路，而是被**本进程自己**发出去：
-#   钉钉/微信/bark/ntfy 的接口地址 → msg_push.py 逐段 opener.open(Request(url))，
-#   且 dingtalk/xizhi/bark/ntfy 四个函数都会先 api.replace("，", ",").split(",")
-#   （多目标批量推送）；smtp邮件服务器 → smtplib 连接；代理地址 → 全部出站请求的落地主机。
-# 于是它们与「房间地址」是**同一条信任边界上的第二条出口**：房间侧的 SEV-03 收口
-# 对这里完全无效。而且这些全局量在 main.py 的热重载循环里每轮重读（见 main.py 的
-# 推送配置 / 代理地址读取段），改一次即持续生效、无需重启——写入口的严重性由此放大。
+# ─── MID-N45：推送 / SMTP / 代理地址类配置键的出站目标收口 ───────
+# 这些键的值不走录制链路，而是被**本进程自己**发出去：推送接口地址 → msg_push.py 逐段
+# opener.open(Request(url))（dingtalk/xizhi/bark/ntfy 还会先按逗号拆成多目标）；smtp邮件服务器
+# → smtplib 连接；代理地址 → 全部出站请求的落地主机。它们是「房间地址」之外的同一条信任边界
+# 上的第二条出口，房间侧的 SEV-03 收口对这里完全无效。而且这些全局量在 main.py 的热重载循环里
+# 每轮重读，改一次即持续生效、无需重启——写入口的严重性由此放大。
 
 # 推送类：值必须是公网可达的 http(s) 接口地址（多目标逗号分隔，逐段判定）
 _PUSH_URL_KEYS = frozenset({"钉钉推送接口链接", "微信推送接口链接", "bark推送接口链接", "ntfy推送地址"})
@@ -622,19 +595,16 @@ _INTERNAL_TARGET_HINT = (
 
 
 def _allow_internal_outbound_target() -> bool:
-    # MID-N45 的破例通道。刻意**不复用** DOUYIN_WEB_ALLOW_INSECURE：后者语义是
-    # 「明知风险仍要把无认证面板暴露到局域网」，web.py 启动检查与鉴权中间件都在读它。
-    # 若把本守卫挂在同一枚开关上，所有「只是想看局域网面板」的用户会在没有任何额外动作的
-    # 情况下连带失去「推送地址不得指向内网」这条防线——那是静默放宽，与 AGENTS.md
-    # 「不得用兜底/掩码把症状压进静默」的口径相反。单列一枚需显式设置、且每次判定时
-    # 现读（不缓存、不在导入期固化）的开关，把「开放面板」与「允许指向内网的目标」两件事解耦。
+    # MID-N45 的破例通道。刻意**不复用** DOUYIN_WEB_ALLOW_INSECURE：后者语义是「明知风险仍要把
+    # 无认证面板暴露到局域网」，web.py 启动检查与鉴权中间件都在读它。挂同一枚开关上，所有「只是
+    # 想看局域网面板」的用户会连带失去「推送地址不得指向内网」这条防线——那是静默放宽。
+    # 单列一枚需显式设置、且每次判定时现读（不缓存、不在导入期固化）的开关，把两件事解耦。
     return os.environ.get("DOUYIN_WEB_ALLOW_INTERNAL_TARGET", "").strip().lower() in ("1", "true", "yes")
 
 
 def _key_matches(key: str, table: frozenset[str]) -> bool:
-    # 键名判定必须大小写不敏感：configparser 的 option 本就 casefold（见 AGENTS.md
-    # 「配置键审计须先归一化大小写」），而写入侧的行匹配带 IGNORECASE，
-    # 只按规范写法精确比较等于给 BARK推送接口链接 / SMTP邮件服务器 留一条绕过路径。
+    # 键名判定必须大小写不敏感：configparser 的 option 本就 casefold，而写入侧的行匹配带
+    # re.IGNORECASE，只按规范写法精确比较等于给 BARK推送接口链接 / SMTP邮件服务器 留绕过路径。
     folded = key.strip().casefold()
     return any(folded == candidate.casefold() for candidate in table)
 
@@ -723,7 +693,7 @@ def read_quality_options(config_file: str | Path) -> list[str]:
 # 写回画质选项（行级更新，保留注释与节顺序）；返回实际落盘的规范化列表，写失败返回 None
 def write_quality_options(config_file: str | Path, options: Iterable[str]) -> list[str] | None:
     # 换行注入防护必须在 normalize 之前做：normalize 会把含换行的项静默丢掉，
-    # 那时再校验就感知不到了（C3 与 format_url_line 同款）
+    # 那时再校验就感知不到了（与 format_url_line 同款）。
     raw_list = list(options)
     for item in raw_list:
         _reject_newline("画质选项", str(item))
@@ -732,9 +702,9 @@ def write_quality_options(config_file: str | Path, options: Iterable[str]) -> li
     _reject_newline("画质选项", value)
     # 键缺失（历史 config.ini 无此项）时补建到目标节内，不改其余内容；
     # 替换/补建两步经 update_or_append_config_line 持锁原子化，防并发补建重复行
-    # M-30（2026-10-19）：写失败必须回报。返回值从「规范化列表」改为「规范化列表 或 None
-    # （写失败）」——原实现丢弃 update_or_append_config_line 的布尔值，于是 config.ini 缺失 /
-    # 节缺失 / 原子写失败时 PUT /api/rooms/qualities 仍返回 {"ok": true}，而磁盘上什么都没变。
+    # M-30：写失败必须回报。返回值从「规范化列表」改为「规范化列表 或 None（写失败）」——
+    # 原实现丢弃 update_or_append_config_line 的布尔值，于是 config.ini 缺失 / 节缺失 / 原子写
+    # 失败时 PUT /api/rooms/qualities 仍返回 {"ok": true}，而磁盘上什么都没变。
     ok = update_or_append_config_line(config_file, QUALITY_OPTIONS_SECTION, QUALITY_OPTIONS_KEY, value)
     return normalized if ok else None
 
@@ -815,12 +785,10 @@ def update_room_quality(url_config_file: str | Path, url: str, quality: str | No
     path = Path(url_config_file)
     if not path.exists():
         return False
-    # newline=""：读/写均不做换行符翻译，保留文件原有的 \n / \r\n 行尾风格
-    # L-25（2026-10-02）：读必须与写同在 _config_write_lock 内——原注释声称锁能「防
-    # read-modify-write 交错丢变更」，但读取在锁外时两个线程的 read-modify-write 仍可
-    # 交错（后写者基于旧快照覆盖前写者）。注意本锁是**进程内**锁：GUI 与 Web 分属两个
-    # 进程时仍靠 config_io 侧的 main.file_update_lock（跨进程写同一文件的顺序性）兜底，
-    # 本锁只保证本进程内读写不交错。
+    # newline=""：读/写均不做换行符翻译，保留文件原有的 \n / \r\n 行尾风格。
+    # L-25：读必须与写同在 _config_write_lock 内——读取在锁外时两个线程的 read-modify-write
+    # 仍可交错（后写者基于旧快照覆盖前写者）。本锁是**进程内**锁：GUI 与 Web 分属两个进程时
+    # 仍靠 config_io 侧的 main.file_update_lock 兜底。
     with _config_write_lock:
         with path.open("r", encoding=TEXT_ENCODING, newline="") as f:
             lines = f.readlines()
@@ -838,30 +806,24 @@ def update_room_quality(url_config_file: str | Path, url: str, quality: str | No
             return False
 
         joined = "".join(out_lines)
-        # M-30（2026-10-19）：原为丢弃返回值的裸调用 + `return True`。`_atomic_write_text` 在
-        # 临时文件创建 / os.replace 失败时明确返回 False，丢弃它等于把「磁盘里什么都没变」
-        # 报成「已改成新画质」——PUT /api/rooms/quality 会返回 changed: true 而磁盘未变，
-        # 与 update_room / toggle_room 已采用的「负信号 + 重新解析裁决」口径相反。
+        # M-30：不得丢弃返回值。_atomic_write_text 在临时文件创建 / os.replace 失败时明确返回
+        # False，丢弃它等于把「磁盘里什么都没变」报成「已改成新画质」——PUT /api/rooms/quality
+        # 会返回 changed: true 而磁盘未变，与 update_room / toggle_room 的「负信号 + 重新解析」
+        # 口径相反。
         return _atomic_write_text(path, joined)
 
 
-# 原子写文本：同目录临时文件写完后 os.replace 覆盖，读方只会看到旧/新完整内容。
+# 委托 src.utils.atomic_write_text（唯一实现）。
 #
-# SEV-2211（2026-09-22）：本函数原为**第二份独立实现**（`{name}.{pid}.tmp` + open("w") +
-# os.replace），相对 src.utils.atomic_write_text 缺四项加固、三者中只有它是「弱化副本」：
-#   ① 不保留原文件 mode —— os.replace 后目标继承临时文件模式（open("w") 按 umask 0644），于是每次
-#      PUT /api/config 都把 utils.update_config 对 config.ini 的 os.chmod(0o600) 收紧静默还原一次，
-#      含全部平台口令/cookie 的配置变为同机任意本地用户可读；Windows 上 chmod 仅影响只读位，故
-#      本地主平台看不出差异（本地绿、容器里漏）。
-#   ② 无 fsync —— close() 只把数据交给页缓存，掉电可留「新目录项 + 空数据页」的 0 字节配置。
-#   ③ 临时名只含 pid —— 同进程两线程写同一目标共用同一 tmp，open("w") 互相截断。
-#   ④ f.write 抛 OSError（磁盘满）时异常穿出 with、跳过 unlink，永久残留 `.tmp`。
-# 修法（与报告一致）：删除本地副本、改调 src.utils.atomic_write_text（唯一实现）。依赖方向实测无环：
-# web_config 原先只依赖 stdlib + src.config_bool，而 src.utils → src.logger → src.config_bool 不
-# 反向依赖 web_config，故 `from src.utils import atomic_write_text` 不构成导入环。返回值为 bool：
-# 上层只关心是否落盘（旧实现靠异常传播，调用点均未接返回值）。
+# SEV-2211：本函数原为**第二份独立实现**（`{name}.{pid}.tmp` + open("w") + os.replace），相对
+# utils 版缺四项加固：① 不保留原文件 mode（每次 PUT /api/config 都把 config.ini 的 0o600 收紧
+# 静默还原成 umask 0644，含口令/cookie 的配置变为同机任意用户可读，且 Windows 上 chmod 只影响
+# 只读位、本地看不出差异）；② 无 fsync（掉电可留 0 字节配置）；③ 临时名只含 pid（同进程两线程
+# 共用 tmp，open("w") 互相截断）；④ f.write 抛 OSError 时跳过 unlink，永久残留 .tmp。
+# 依赖方向实测无环：src.utils → src.logger → src.config_bool 不反向依赖 web_config。
+# 返回值为 bool：上层只关心是否落盘（旧实现靠异常传播，调用点均未接返回值）。
 # 回归锁：tests/test_regression_2026_09_22_utils.py::TestWebConfigDelegatesToUtilsAtomicWrite
-# ::test_web_config_write_is_the_same_implementation（AST 判据：本模块的可执行调用点不得再出现
+# ::test_web_config_write_is_the_same_implementation（AST 判据：本模块可执行调用点不得再出现
 # mkstemp / os.replace，文档性注释里的同名字样不算）。
 def _atomic_write_text(path: Path, text: str) -> bool:
     return atomic_write_text(str(path), text, encoding=TEXT_ENCODING)
@@ -909,20 +871,17 @@ def read_web_config(config_file: str | Path) -> dict[str, str | int | bool]:
 
 
 SENSITIVE_SECTIONS = {"Cookie", "账号密码", "Authorization"}
-# L-21（2026-10-18）：节名的 casefold 视图。configparser 的 **section 大小写敏感**（原样保留），
-# 而键名判定走的 _SENSITIVE_KEY_PATTERN 带 re.IGNORECASE，两套强度不一致：用户把节写成
-# [cookie] / [COOKIE]（手改 config.ini、或从别处复制粘贴时很常见）即整节跳出白名单，
-# 而节内键名（如 douyin_cookie=、bilibili=）不含「令牌|密码|token|password…」任一关键词，
-# 值形态兜底 _looks_like_secret_value 又只对 URL 形态生效（无 scheme 的 cookie 串判不出来），
-# 于是凭据以明文回显给面板、并以明文进备份副本（build_exe / config_io 复用同一入口，一并覆盖）。
-# 白名单集合本身不得改动（新增节名一律改 SENSITIVE_SECTIONS，本视图由它派生），比对统一走 casefold。
+# L-21：节名的 casefold 视图。configparser 的 **section 大小写敏感**（原样保留），而键名判定
+# 走的 _SENSITIVE_KEY_PATTERN 带 re.IGNORECASE，两套强度不一致：用户把节写成 [cookie] /
+# [COOKIE] 即整节跳出白名单，而节内键名不一定含凭据关键词、值形态兜底又只对 URL 形态生效，
+# 于是凭据以明文回显给面板并以明文进备份副本（build_exe / config_io 复用同一入口，一并覆盖）。
+# 白名单集合本身不得改动（新增节名改 SENSITIVE_SECTIONS，本视图由它派生），比对统一走 casefold。
 _SENSITIVE_SECTIONS_FOLDED = frozenset(name.casefold() for name in SENSITIVE_SECTIONS)
 SENSITIVE_MASK = "***"
 
 # ─── MID-36：Host / Origin 允许名单（防 DNS 重绑定穿透 SOP + CSRF） ───────────
-# 旧实现把 Origin 与**请求自带的** Host 头比较：攻击者把自身域名的 A 记录 TTL=0 指到
-# 127.0.0.1，用户浏览器访问 http://attacker.tld:8000/ 时二者相同 → 判定通过，
-# 于是同源校验与 CSRF 校验同时失效（SEV-02/03 的投递通道就此打开）。
+# 旧实现把 Origin 与**请求自带的** Host 头比较：攻击者把自身域名的 A 记录 TTL=0 指到 127.0.0.1，
+# 用户浏览器访问 http://attacker.tld:8000/ 时二者相同 → 判定通过，同源校验与 CSRF 校验同时失效。
 # 现改为与**服务端配置**推导出的允许名单比较，Host 头本身不再参与「是否可信」的判定。
 _WILDCARD_BIND_HOSTS = frozenset(("0.0.0.0", "::", "*", ""))
 
@@ -975,16 +934,13 @@ def is_host_allowed(value: str, cfg: Mapping[str, str | int | bool]) -> bool:
     return False
 
 
-# ─── MID-N42 ｜ Origin 同源判定：与 Host 头**刻意不同**的一套口径（2026-09-21） ──
+# ─── MID-N42 ｜ Origin 同源判定：与 Host 头**刻意不同**的一套口径 ──
 # is_host_allowed 为 Host 头设计的三条宽松规则（放行任何 IP 字面量、放行任何无点单标签名、
-# 且 _strip_host_port 把端口丢掉）在 Host 语境下都成立：DNS 重绑定需要一个注册域名，
-# 而「以 IP 直接访问面板」是 0.0.0.0 部署的常态。
-# 把同一套规则拿去判 Origin 就把 CSRF 的最后一道防线打开了：Origin 表达的是
-# 「发起这次写请求的那个页面」，于是局域网里任意设备的网页（http://192.168.1.47/）、
-# 本机任意 dev server（http://localhost:3000/）都因「是 IP / 是无点名」且端口被丢掉而判为同源。
-# 认证关闭（出厂默认）时这条判定是写接口唯一的防线，故 Origin 单独判定：
-# **host 与端口都必须命中服务端推导的期望集合**，不复用上面两条宽松规则。
-# Host 那条保持原状（两套装不下一个函数，硬合并会让 MID-36 的重绑定防线退化）。
+# 且 _strip_host_port 把端口丢掉）在 Host 语境下都成立。但 Origin 表达的是「发起这次写请求的
+# 那个页面」：拿去复用就会让局域网里任意设备的网页（http://192.168.1.47/）、本机任意 dev server
+# （http://localhost:3000/）都因「是 IP / 是无点名」且端口被丢掉而判为同源。认证关闭（出厂默认）
+# 时这条判定是写接口唯一的防线，故 Origin **host 与端口都必须命中服务端推导的期望集合**，
+# 不复用上面两条宽松规则；Host 那条保持原状（硬合并会让 MID-36 的重绑定防线退化）。
 _ORIGIN_TEST_SENTINEL_HOSTS = frozenset(("testserver",))
 _ORIGIN_SCHEME_PORTS: dict[str, int] = {"http": 80, "https": 443}
 
@@ -1078,11 +1034,9 @@ def is_origin_allowed(
         return False
     host, port, explicit_port = parsed
     # 测试桩豁免，边界写在这里：Starlette TestClient 的默认 base_url 是 http://testserver
-    # （无端口），那是 httpx 侧写死的一个哨兵字符串，不是任何浏览器能交付的本站地址形态。
-    # 豁免严格限定为「名字恰好等于该哨兵 **且** Origin 里没有显式端口」这一种组合，因此
-    # ① 不放开「任意无点单标签名」（is_host_allowed 的第③条在这里依然不生效）；
-    # ② 不放开任意 IP 字面量；③ Origin 一旦带端口（含 testserver:8000）立即回到
-    # host+端口双判。真机部署里真有一个叫 testserver 的主机时，其端口仍须等于绑定端口。
+    # （无端口），那是 httpx 写死的一个哨兵字符串，不是任何浏览器能交付的本站地址形态。
+    # 豁免严格限定为「名字恰好等于该哨兵 **且** Origin 里没有显式端口」：不放开任意无点单标签
+    # 名、不放开任意 IP，且 Origin 一旦带端口（含 testserver:8000）立即回到 host+端口双判。
     if not explicit_port and host in _ORIGIN_TEST_SENTINEL_HOSTS:
         return True
     expected_port = bind_port or _as_port(cfg.get("web_port"))
@@ -1163,13 +1117,11 @@ def read_config_safe(config_file: str | Path) -> dict[str, dict[str, str]]:
     # 读取 config.ini 全部节键值，敏感节非空值脱敏为 '***'，用于 API 返回前端展示。
     # Web 节单独对 web_password 脱敏（其他 Web 键需可编辑，故不整节脱敏）。
     #
-    # 写入口是谁（判「写入口」一律 grep 调用点，别信注释）：PUT /api/config
-    # （src/web_api.py::update_config）走的是**本模块**的 update_config_line（行级替换，保留注释/节序/
-    # 行内注释）+ _atomic_write_text（委托 src.utils.atomic_write_text）；utils.update_config 只在
-    # 录制引擎侧的热加载写回里出现。
-    # [历史注] 此处旧陈述「写入仍用 utils.update_config」于 2026-09-23 被实测证伪并就地改正：SEV-2211
-    # 排查「原子写四项加固是否齐备」时就是按它去核 utils.update_config，因而漏看 web_config 自己的
-    # 写入面（mode 回灌缺失、临时名只含 pid），把一个 P0 级缺陷留在暗处。
+    # 写入口是谁（判「写入口」一律 grep 调用点，别信注释）：PUT /api/config 走的是**本模块**的
+    # update_config_line（行级替换，保留注释/节序/行内注释）+ _atomic_write_text；
+    # utils.update_config 只在录制引擎侧的热加载写回里出现。
+    # [历史注] 旧陈述「写入仍用 utils.update_config」已证伪：SEV-2211 排查时按它去核
+    # utils.update_config，漏看了 web_config 自己的写入面（mode 回灌缺失、临时名只含 pid）。
     parser = configparser.ConfigParser(interpolation=None)
     _ = parser.read(config_file, encoding=TEXT_ENCODING)
     result: dict[str, dict[str, str]] = {}
@@ -1200,13 +1152,10 @@ _config_write_lock = threading.RLock()
 
 
 def update_config_line(config_file: str | Path, section: str, key: str, value: str) -> bool:
-    # 注释保留的行级配置更新。
-    # 逐行扫描：进入目标 section 后，匹配 `^\\s*key\\s*[=：:]\\s*` 的行并替换其值；
-    # 未找到 section 或 key 时返回 False（不写入）。
-    # 保留所有注释、空行、节顺序与原分隔符风格。
-    # key 匹配大小写不敏感：configparser 读取侧经 optionxform 统一小写，
-    # 代码内常量（如「禁用SSL证书验证的平台」）与配置文件实际行（小写 ssl）
-    # 大小写不一致时仍应可定位（与 configparser 语义对齐）。
+    # 注释保留的行级配置更新。逐行扫描：进入目标 section 后，匹配 `^\\s*key\\s*[=：:]\\s*` 的行
+    # 并替换其值；未找到 section 或 key 时返回 False（不写入）。注释、空行、节顺序与原分隔符
+    # 风格全部保留。key 匹配大小写不敏感：configparser 读取侧经 optionxform 统一小写，代码内
+    # 常量（如「禁用SSL证书验证的平台」）与配置文件实际行（小写 ssl）不致时应仍可定位。
     path = Path(config_file)
     if not path.exists():
         return False
@@ -1231,17 +1180,12 @@ def update_config_line(config_file: str | Path, section: str, key: str, value: s
                 if m:
                     prefix = m.group(1)  # "key = " 部分
                     old_tail = m.group(2)  # 原值（可能含行内注释）
-                    # 检测行内注释：仅「引号定界」一种可信形态。2026-09-12 修复（CODE_REVIEW_FIX_1
-                    # F-23）：原实现一律按首个 " #" / " ;" 切分——值本身含该串时会被当成注释，
-                    # 写回后变成「新值 + 半个原值」，配置被静默截断；典型受害者是颜色值、含井号的
-                    # 密码/token、URL 锚点。引号包裹的值其注释必在**闭合引号之后**，按此切分可精确定界。
-                    # M-07（2026-09-30）：无引号值的 " #" / " ;" 启发式回落分支整体移除——读侧
-                    # configparser 从未开启 inline_comment_prefixes，旧值里的 " #" 本就是**值的
-                    # 一部分**（「configparser 读到的完整旧值」恒等于全尾串，与「剥离注释后的
-                    # 前半段」永远对不上），把该尾串拼回新值等于二次写入静默污染（读回值 ≠ 新值，
-                    # 平台 Cookie/含井号 token 等凭据莫名失效且无从排查）。同理，闭合引号**之前**
-                    # 的 " #" 一律属值本身：带引号且值含 " #"、无尾注的行（`key = "a #b"`）不再
-                    # 落进回落启发式二次污染。
+                    # 行内注释只认「引号定界」一种可信形态：引号包裹的值其注释必在**闭合引号之后**。
+                    # 旧实现一律按首个 " #" / " ;" 切分，值本身含该串时会被当成注释，写回后变成
+                    # 「新值 + 半个原值」（颜色值、含井号的密码/token、URL 锚点都中招）。
+                    # 无引号值的 " #" / " ;" 启发式回落分支已整体移除：读侧 configparser 从未开启
+                    # inline_comment_prefixes，旧值里的 " #" 本就是**值的一部分**，把它拼回新值等于
+                    # 二次写入静默污染（读回值 ≠ 新值，含井号 token 莫名失效且无从排查）。
                     inline_comment = ""
                     _stripped_tail = old_tail.lstrip()
                     if _stripped_tail[:1] in ('"', "'"):
@@ -1259,12 +1203,11 @@ def update_config_line(config_file: str | Path, section: str, key: str, value: s
             new_lines.append(line)
         if not replaced:
             return False
-        # 2026-09-12 审查 H-6：write_text 为 truncate+write 非原子，与引擎热加载的持锁读
-        # 竞态时可读到空/半写文件；改同目录临时文件 + os.replace 原子写（读方只见旧/新完整内容）
-        # M-29（2026-10-19）：必须**返回**原子写的结果。原实现丢弃 `_atomic_write_text` 的布尔值
-        # 并 `return True`，而它在 mkstemp/os.replace 抛 OSError 时明确返回 False——于是磁盘满 /
-        # 临时文件创建失败时 PUT /api/config 仍走成功分支返回 {"ok": true}，set_language 的回滚
-        # 也不触发（出现「进程已切语言、config.ini 仍是旧码」）。受影响面含 web_auth_enable /
+        # 原子写（H-6）：write_text 是 truncate+write 非原子，与引擎热加载的持锁读竞态时可读到
+        # 空/半写文件；改同目录临时文件 + os.replace（读方只见旧/新完整内容）。
+        # M-29：必须**返回**原子写的结果。原实现丢弃布尔值并 return True，而它在 mkstemp/os.replace
+        # 抛 OSError 时明确返回 False——磁盘满时 PUT /api/config 仍回 {"ok": true}，set_language
+        # 的回滚也不触发（「进程已切语言、config.ini 仍是旧码」）。受影响面含 web_auth_enable /
         # web_password 这类安全键，假成功的代价是用户以为密码已改。
         return _atomic_write_text(path, "".join(new_lines))
     return True
@@ -1322,11 +1265,10 @@ def update_or_append_config_line(config_file: str | Path, section: str, key: str
 # 落地配置只保存哈希，不保存明文；历史明文配置在首次登录时自动升级。
 _PBKDF2_ALGO = "pbkdf2_sha256"
 _PBKDF2_ITERATIONS = 200_000
-# MID-35：迭代次数取自存储串（用户可直接编辑的 config.ini），旧实现按原值直接喂给
-# hashlib.pbkdf2_hmac → 把 200k 改成 2e7 就能让**每次登录**烧掉十几秒 CPU，
-# 而登录端点在事件循环线程里跑 → 面板级 CPU DoS。此处给出硬上下界：
-# 上界 1e6（约 0.7s）足够容纳未来一次有意的强度升级，下界取本模块自身的默认值，
-# 低于默认值的历史哈希一律判失败（宁可让人重设密码，也不给降级攻击留门）。
+# MID-35：迭代次数取自存储串（用户可直接编辑的 config.ini），旧实现按原值喂给 pbkdf2_hmac
+# → 把 200k 改成 2e7 就能让**每次登录**烧掉十几秒 CPU，而登录端点在事件循环线程里跑 →
+# 面板级 CPU DoS。此处给出硬上下界：上界 1e6（约 0.7s）容纳未来一次有意的强度升级，下界取
+# 本模块默认值，低于默认值的历史哈希一律判失败（宁可让人重设密码，也不给降级攻击留门）。
 _PBKDF2_MAX_ITERATIONS = 1_000_000
 
 

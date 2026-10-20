@@ -1,42 +1,24 @@
-# tests/test_ffmpeg_install.py - 守护 ffmpeg 自动安装器的两条硬行为：
-#   1) SHA256 旁路基准**按构建标识命名**（MID-59）：gyan.dev 的
-#      ffmpeg-release-essentials.zip 是滚动 URL，上游出新构建后旧命名会让校验永久不等，
-#      官方源拒绝 → 用户被永久卡在「请手动安装 ffmpeg」。同一构建标识下内容变化仍必须硬拒绝。
-#   2) Linux 的 yum → apt 回退链路真正成立（MIN-24④）：「yum 在位但安装失败」
-#      （RHEL 系未启用 EPEL 的常态）必须继续尝试 apt，而不是直接放弃。
+# tests/test_ffmpeg_install.py - 守护 ffmpeg 自动安装器的硬行为（MID-59 / MIN-24④ / P-1 / SEV-2218 / SEV-2220）：
+#   1) SHA256 旁路基准按构建标识命名：gyan.dev 的 ffmpeg-release-essentials.zip 是滚动 URL，
+#      上游出新构建后固定文件名会让校验永久不等、官方源被永久拒绝；同一标识下内容变化仍必须硬拒绝。
+#   2) Linux 的 yum → apt 回退链路真正成立：RHEL 系未启用 EPEL 时「yum 在位但安装失败」是常态，
+#      必须继续尝试 apt，而不是直接放弃。
+#   3) 完整性模型＝官方公布哈希优先、TOFU 仅作显式降级兜底：
+#      ① 「有官方期望值且不符」绝不降级为未校验安装；② 官方校验通过时旁路基准不得否决它；
+#      ③ 降级必须留下可读 warning；④ 下载产物必须先是真压缩包才允许进哈希记账（非压缩包先记账
+#      等于把镜像站的人机验证页哈希写成可信基准）；⑤ Windows 只有 gyan.dev 一条默认自动路径，
+#      第二条源（BtbN master）必须由 FFMPEG_MASTER_ALLOWED 显式门控、默认关闭，开启与跳过都落 warning；
+#      ⑥ 全仓下载常量必须落进 DOWNLOAD_SOURCES 白名单（src/ 全量 http(s) 字面量反查）。
 #
-# [2026-09-22 P-1/P-1b] 完整性模型从「纯 TOFU」升级为「官方公布哈希优先、TOFU 仅作显式降级兜底」。
-# 锁住的不变量：
-#   ① 「有官方期望值且不符」绝不降级为未校验安装；② 官方校验通过时旁路基准不得否决它
-#   （否则 MID-59 的永久死路在文档可达时仍复现）；③ 降级必须留下可读的 warning。
+# Mock 设计：只打桩网络响应头、文件系统与 subprocess（用 types.SimpleNamespace(**vars(...))
+# 浅拷贝替换模块全局引用，绝不改 stdlib 本体）。测试内一律不发真实网络请求：autouse 的
+# _no_real_egress 把所有下载模块出站层预置成「一调用即 AssertionError」的哨兵，需要响应的用例
+# 再自行覆盖成按 URL 派发的替身——install_ffmpeg_windows 会经 src.ffmpeg_master_download 自己的
+# requests 真的去探测下载，仅靠文件头的口头约定拦不住。
 #
-# [2026-09-22 同日追加] 两条同源、更晚补上的锁：
-#   ④ 下载产物必须是**真压缩包**才允许进入哈希记账（详见 TestDownloadedPayloadMustBeArchive 类头）——
-#      一句话：非压缩包先记账 = 把镜像站的人机验证页哈希当成可信基准写进旁路文件。
-#   ⑤ Windows 只有 gyan.dev 一条**默认**自动路径（TestWindowsInstallSingleSource）——蓝奏云兜底
-#      连同 FFMPEG_LANZOU_* 三个环境变量已整体删除，锁的目的是防止「顺手加回第二条源」。
-#      [历史注] 原 P-1b 的开关用例（TestLanzouSwitch / TestLanzouLink / TestLanzouInstall /
-#      TestWindowsFallbackOrder / TestWindowsFallbackSwitch）随被删实现一并移除，
-#      其「默认拒绝、拒绝日志必须可操作」的语义由 ⑤ 的第二条用例接续。
-#
-# [2026-09-23 SEV-2218 决策落地] 第二条 Windows 源（BtbN master，见
-# src/ffmpeg_master_download.py）改为由环境变量 FFMPEG_MASTER_ALLOWED 显式门控、**默认关闭**；
-# 「开启」与「因未开启而跳过」两种情形都必须落 warning。TestMasterSourceGate 锁住这四条，
-# 并把 ⑤ 的「不要再长出第二条源」从「单文件 AST 扫 URL」升级为「src/ 全量下载常量白名单
-# 反查」（DOWNLOAD_SOURCES，逐源登记完整性方式 ∈ {官方哈希, 官方签名, 第4类, TOFU}）。
-#
-# Mock 设计：只打桩网络响应头、文件系统与 subprocess（按仓内约定用
-# types.SimpleNamespace(**vars(subprocess)) 浅拷贝替换模块全局引用，绝不改 stdlib 本体）。
-# 测试内一律不发真实网络请求：自 2026-09-23 起该约定由 **autouse 的 _no_real_egress** 机检
-# （SEV-2220）——所有下载模块的出站层被预置成「一调用即 AssertionError」的哨兵，用例需要
-# 网络响应时再自行覆盖成按 URL 派发的替身；过去它只是文件头的一句口头约定，而
-# install_ffmpeg_windows 会经 src.ffmpeg_master_download **自己**的 requests 真的去探测下载。
-#
-# [2026-09-21 覆盖率专项扩容] 把本模块从 36% 提到 95%+：补齐 download_ffmpeg_official 全部分支、
-# macOS brew 路径、install_ffmpeg 的平台分发，以及 check_ffmpeg_installed 的四类异常形态
-# （FileNotFoundError / TimeoutExpired / OSError / 其它）——后者决定「PATH 里残留损坏 ffmpeg」时
-# 启动流程会不会被挂死，是真实用户故障的第一现场。追加段沿用同一 Mock 口径，分支地图见
-# TestOfficialDownload 上方的「追加段的分支 → 用例」清单。
+# 覆盖率专项追加段（2026-09-21）补齐 download_ffmpeg_official 全部分支、macOS brew 路径、
+# install_ffmpeg 的平台分发与 check_ffmpeg_installed 的四类异常形态——PATH 里残留损坏 ffmpeg
+# 会挂死启动流程，是真实用户故障的第一现场。分支地图见 TestOfficialDownload 上方的清单。
 
 import ast
 import hashlib
@@ -242,10 +224,9 @@ class TestBuildIdentityKeying:
         assert ffmpeg_install._check_or_record_zip_sha256(_write_zip(tmp_path, ZIP_B), build_id) is False
 
     def test_corrupt_sidecar_read_failure_refuses_install(self, tmp_path: Path) -> None:
-        # [历史注] 旧名 test_corrupt_sidecar_read_failure_degrades_to_pass，锁定旧 fail-open
-        # 行为（读取失败 → 跳过校验放行）。L-44（2026-10-02）对齐 ffmpeg_master_download 的
-        # SEV-2222 口径：官方文档不可达时 TOFU 就是最后一道完整性检查，基准存在却读不出来
-        # = 可信基准处于不可信状态，必须拒装（fail-closed）并删包。
+        # [历史注] 旧名 test_corrupt_sidecar_read_failure_degrades_to_pass 锁定旧 fail-open 行为
+        # （读取失败 → 跳过校验放行）。L-44（2026-10-02）对齐 SEV-2222 口径：TOFU 是官方文档不可达时
+        # 最后一道完整性检查，基准存在却读不出来 = 可信基准不可信，必须拒装（fail-closed）并删包。
         zip_path = _write_zip(tmp_path, ZIP_A)
         sidecar = tmp_path / ffmpeg_install._hash_file_name("x" * 12)
         # 目录当文件读 → OSError（PermissionError）
@@ -254,9 +235,9 @@ class TestBuildIdentityKeying:
         assert not zip_path.exists()
 
     def test_sidecar_path_occupied_by_directory_refuses_install(self, tmp_path: Path) -> None:
-        # [历史注] 旧名 test_unwritable_sidecar_does_not_fail_install，注释称走 write_text
-        # 分支——实测（含旧实现）读侧先触发：sidecar 是目录时 hash_file.exists() 为 True、
-        # read_text 抛 PermissionError，与上一条同走「基准读取失败」路径。L-44 收紧后同样拒装。
+        # [历史注] 旧名 test_unwritable_sidecar_does_not_fail_install 称走 write_text 分支；实测
+        # （含旧实现）读侧先触发：sidecar 是目录时 hash_file.exists() 为 True、read_text 抛
+        # PermissionError，与上一条同走「基准读取失败」路径；L-44 收紧后同样拒装。
         zip_path = _write_zip(tmp_path, ZIP_A)
         (tmp_path / ffmpeg_install._hash_file_name("y" * 12)).mkdir()
         assert ffmpeg_install._check_or_record_zip_sha256(zip_path, "y" * 12) is False
@@ -280,12 +261,9 @@ class TestOfficialFailureHint:
         lowered = joined.lower()
         # 断言按「这条提示必须点名的四件事」写：两个基准前缀（官方源 _ffmpeg_official* /
         # master 源 _ffmpeg_master*）、SHA256 这个词、以及基准所在目录 execute_dir。
-        # [2026-09-23 SEV-2220] 旧断言里的 ".sha256" 是**顺带**从别处来的：当时
-        # install_ffmpeg_windows 会真的调 download_ffmpeg_master 走外网，日志里混进了带
-        # .zip.sha256 字样的行；本文件加了 _no_real_egress 哨兵 + master 源默认关闭之后，
-        # 那句话不再出现。提示语本身现在就写 "_ffmpeg_official*" / "_ffmpeg_master*"，
-        # 故这里改为直接点名提示应含的内容（顺带把 master 源的基准前缀也纳入 —— 它的
-        # 拒装自救路径与 SEV-2222 同源，不该只剩官方源那半句指引）。
+        # [2026-09-23 SEV-2220] 旧断言里的 ".sha256" 是顺带命中的：当时 install_ffmpeg_windows 会真调
+        # download_ffmpeg_master 走外网，日志混进了带 .zip.sha256 的行；加哨兵 + master 源默认关闭后
+        # 那行不再出现，故改为直接点名提示应含的内容（含 master 源基准前缀——它与 SEV-2222 同源）。
         assert "_ffmpeg_official" in lowered, "提示必须点名官方源的旁路基准前缀"
         assert "_ffmpeg_master" in lowered, "提示必须点名 master 源的 TOFU 基准前缀"
         assert "sha256" in lowered

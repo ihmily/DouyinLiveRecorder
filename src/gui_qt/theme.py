@@ -6,13 +6,13 @@
 # 搬成 Python 侧唯一事实源，QSS 由它渲染——主题切换只需要换一份 token 重生成 QSS，
 # 不需要在任何控件上逐个 setStyleSheet（那必然出现「改了这边忘了那边」的中间态）。
 #
-# 选型说明（本轮的框架决策依据，勿删）：
+# 选型说明（框架决策依据，勿删）：
 #   - ttk 无法原生实现 18/24px 大圆角卡片与柔和投影：只能退成「方角卡片」或用 Canvas
 #     自绘补形状，而自绘控件不参与布局系统的尺寸协商（2026-10-17 实测确认），与
-#     「缩放档位要能吃 Alongside 各种语言标签宽度」的需求直接冲突；
-#   - PySide6 的 QSS + QGraphicsDropShadowEffect 能 1:1 还原上面这四种效果，且
+#     「缩放档位要吃得下各种语言标签宽度」的需求直接冲突；
+#   - PySide6 的 QSS + QGraphicsDropShadowEffect 能 1:1 还原上述效果，且
 #     QTableView / QTextEdit 自带虚拟化与块上限，高吞吐场景（日志、弹幕）不需要
-#     自建 rendering 节流；
+#     自建渲染节流；
 #   - 代价是打包体积（Qt6 运行时）与 LGPL 动态链接分发约束，已在 docs/worklog/
 #     PROPOSAL_2026-10-17_gui-pyside6-redesign.md 记录并获批准。
 from __future__ import annotations
@@ -20,8 +20,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
-# 主题 ID 与前 ttk 主题层（src/ui_theme.py）保持一致：config.ini [GUI] gui_theme
-# 里已持久化的取值必须被两套实现都能识别，否则用户在旧版选过的主题换了窗口层就失效。
+# 主题 ID 与 src/ui_theme.py（ttk 主题层）保持一致：config.ini [GUI] gui_theme 里已持久化的
+# 取值必须被两套实现都识别，否则用户在旧版选过的主题换了窗口层就失效。
 THEME_LIGHT: Final[str] = "light"
 THEME_DARK: Final[str] = "dark"
 THEME_HIGH_CONTRAST: Final[str] = "high_contrast"
@@ -30,8 +30,8 @@ THEME_IDS: Final[tuple[str, ...]] = (THEME_LIGHT, THEME_DARK, THEME_HIGH_CONTRAS
 # 只在下拉的 currentData 里流转，故此值必须不可能与真实主题 ID 撞上。
 FOLLOW_SYSTEM_ID: Final[str] = "_follow_system_"
 
-# 显示名在窗口层自持而不是复用 ui_theme 的 _THEME_LABELS：
-# 那份是私有的、且服务于 ttk 的 ThemeManager，窗口层反向依赖它会把两套实现焊死。
+# 显示名在窗口层自持而不复用 ui_theme 的 _THEME_LABELS：那份是私有的、且服务于 ttk 的
+# ThemeManager，窗口层反向依赖它会把两套实现焊死。
 THEME_LABELS: Final[dict[str, str]] = {
     THEME_LIGHT: "浅色",
     THEME_DARK: "深色",
@@ -49,10 +49,10 @@ TOPBAR_HEIGHT: Final[int] = 52
 
 # 动效时长（毫秒）：设计稿 --dur-med .28s
 DUR_MED: Final[int] = 280
-# 缓动曲线：设计稿 spring cubic-bezier(.34,1.4,.44,1)。之所以做成字符串而不是直接引
-# QEasingCurve：本模块刻意不 import PySide6，「纯数据 token 层」可被测试直接导入，
-# 不必先起一个 QApplication。QEasingCurve 不能直接吃 CSS 贝塞尔，取 Qt 提供的
-# OutBack（≈ 回弹感）作为近似曲线。
+# 缓动曲线：设计稿 spring cubic-bezier(.34,1.4,.44,1)。做成字符串而不直接引 QEasingCurve，
+# 是因为本模块刻意不 import PySide6——「纯数据 token 层」可被测试直接导入，不必先起一个
+# QApplication 实例。QEasingCurve 不能直接吃 CSS 贝塞尔，故取 Qt 提供的 OutBack
+# （≈ 回弹感）作为近似曲线。
 EASE_SPRING: Final[str] = "OutBack"
 
 # 令牌完整键集：新增令牌必须三份主题同时补齐，缺键会被
@@ -86,9 +86,9 @@ TOKEN_KEYS: Final[tuple[str, ...]] = (
 )
 
 # 浅色令牌：逐值来自设计稿 :root[data-theme="light"]。
-# terminal_* 五个键设计稿没有对应物——录制动线与日志页要用终端配色，而终端色必须
-# **与主题无关**（原 ttk 版 Colors.TERMINAL_* 同为常量），否则深色主题下日志可读性
-# 反而下降；这里仍按主题给一份是为了让切换主题时整体观感不撕裂。
+# terminal_* 五个键设计稿没有对应物——弹幕流与日志页要用终端配色，而终端色必须
+# **与主题无关**（原 ttk 版 Colors.TERMINAL_* 同为常量），否则深色主题下日志可读性反而
+# 下降；这里仍按主题给一份，是为了让切换主题时整体观感不撕裂。
 _LIGHT: Final[dict[str, str]] = {
     "bg_app": "#f7f7f5",
     "bg_sidebar": "#f0efec",
@@ -147,7 +147,7 @@ _DARK: Final[dict[str, str]] = {
 }
 
 # 高对比度：保留旧 ttk 层的第三个主题 ID（用户可能已持久化），取值以「文本对比度优先」
-# 为原则——纯黑纯白 + 高饱和 accent，供弱视用户使用。它不在设计稿里，故不与设计稿逐值对齐。
+# 为原则——纯黑纯白 + 高饱和 accent，供弱视用户使用。它不在设计稿里，故不与之逐值对齐。
 _HIGH_CONTRAST: Final[dict[str, str]] = {
     "bg_app": "#ffffff",
     "bg_sidebar": "#f2f2f2",
@@ -186,17 +186,17 @@ _PALETTES: Final[dict[str, dict[str, str]]] = {
 
 @dataclass(frozen=True)
 class Palette:
-    # 一次 parsed 出来的主题上下文：ID + token 表 + 派生尺寸。
-    # 不可变是刻意的：Qt 的样式是**全局**的，把 token 带来带去必须防止半途被改，
+    # 一次解析出来的主题上下文：ID + token 表 + 派生尺寸。
+    # 不可变是刻意的：Qt 的样式是**全局**的，token 被带来带去必须防止半途被改，
     # 否则「主题切换后部分控件仍是旧色」这类最难查的中间态就会出现。
     theme_id: str
     tokens: dict[str, str]
     scale: float
 
     def px(self, base: int | float) -> int:
-        # max(1, ...)：0 半径/0 宽度的边框在 Qt 下会被解读成「无边框」而不是 1 像素，
-        # 缩放档位很低时若算出 0，视觉上等于样式丢失。
-        # 按缩放系数走一遍的量：设计的基准 pixel 值 × 用户缩放档。
+        # 设计基准像素值 × 用户缩放档。max(1, ...) 不可省：0 半径/0 宽度的边框在 Qt 下会被
+        # 解读成「无边框」而不是 1 像素——缩放档位很低时算出 0，视觉上就等于样式丢失，且
+        # 没有任何报错可查。
         return max(1, round(base * self.scale))
 
     def token(self, key: str) -> str:
@@ -237,11 +237,11 @@ def build_stylesheet(pal: Palette) -> str:
     # Frame，包括 `QTableView` 的内嵌 frame）。Qt 的 QSS 不认 CSS 的 `#id` 与 `.class`
     # 双重用法，objectName 选择器是唯一的内置手段。
     #
-    # [2026-10-17 截图回归] 底色不能再挂在 `QWidget` 通配选择器上：Qt 会把这条声明应用到
-    # **所有** QWidget 子类，于是 QLabel / StatTile / EmptyState 这些本该透明的子控件
-    # 各自被刷成 bg_app，在 bg_elevated 的白色卡片上留下一块块灰条灰块（红框截图的
-    # 直接成因）。底色只由窗口级容器声明，其余子控件靠父级透出；文本/字体/选中色仍留在
-    # QWidget 上，保证下沉到任意深度的控件都能继承一套排版基线。
+    # [2026-10-17 截图回归] 底色不能挂在 `QWidget` 通配选择器上：Qt 会把该声明应用到
+    # **所有** QWidget 子类，QLabel / StatTile / EmptyState 这些本该透明的子控件会被
+    # 各刷成 bg_app，在 bg_elevated 的白色卡片上留下灰条灰块。底色只由窗口级容器声明，
+    # 其余子控件靠父级透出；文本/字体/选中色仍留在 QWidget 上，保证任意深度的控件都继承
+    # 同一套排版基线。
     return f"""
 QMainWindow, QDialog {{
     background: {t['bg_app']};

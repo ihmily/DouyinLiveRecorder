@@ -1,19 +1,18 @@
-# src/utils.py 两个兜底装饰器「返回契约 -> 装饰器配对」与「装饰器贴 def」的全仓 AST 回归锁。
+# src/utils.py 两个兜底装饰器「返回契约 → 装饰器配对」与「装饰器贴 def」的全仓 AST 回归锁。
 #
-# 背景（SEV-07 / CR-12 建议④ / MID-68、MID-69 上下文）：
-#   - trace_error_decorator 失败兜底值是 {"is_live": False}，只适用于**返回 dict** 的平台函数；
-#     返回 str/tuple/OptionalStr 的函数误挂它时，故障值是个恒真的 dict——
-#     元组解包抛 ValueError 被调用方装饰器二次吞没（login_popkontv 形态），
-#     或 dict 被当成 Cookie 字符串写进请求头（login_twitcasting 形态），
-#     用户可动作的错误提示彻底丢失、表现为静默「未开播」。
-#   - Python 允许 @decorator 与 def 之间夹注释行，装饰器仍绑到**紧随其后的那个 def**——
-#     一旦把说明性注释插在两者之间，装饰器会绑到下一个函数上（haixiu 事故形态，CR-12）。
-# 两条不变量都只有静态扫全仓才能在「新增平台函数」的当下拦住，故收敛为本文件：
-#   ① 凡挂这两个装饰器的函数，返回注解含 dict → 必须 trace_error_decorator；
-#      注解为 str/tuple/其他 → 必须 trace_error_decorator_or_none（无注解不判）；
+# 背景（SEV-07 / CR-12 建议④ / MID-68、MID-69）：
+#   - trace_error_decorator 的失败兜底值是 {"is_live": False}，只适用于**返回 dict** 的平台函数；
+#     返回 str/tuple/OptionalStr 的函数误挂它时，故障值是个恒真的 dict——元组解包抛 ValueError
+#     被调用方装饰器二次吞没（login_popkontv 形态），或 dict 被当成 Cookie 写进请求头
+#     （login_twitcasting 形态），用户可动作的错误提示彻底丢失、表现为静默「未开播」。
+#   - Python 允许 @decorator 与 def 之间夹注释行，装饰器仍绑到**紧随其后的那个 def**——一旦把
+#     说明性注释插在两者之间，装饰器就绑到下一个函数上（haixiu 事故形态，CR-12）。
+# 两条不变量只有静态扫全仓才能在「新增平台函数」的当下拦住，故收敛为本文件：
+#   ① 返回注解含 dict → 必须 trace_error_decorator；注解为 str/tuple/其他 → 必须
+#      trace_error_decorator_or_none（无注解不判）；
 #   ② @decorator 必须紧贴 def（中间只允许另一个装饰器行），注释一律写在装饰器上方。
 #
-# 「含 dict」按模块级类型别名递归展开（OptionalDict/OptionalStreamDict 等），
+# 「含 dict」按模块级类型别名递归展开（OptionalDict/OptionalStreamDict 等）：
 # dict[str, object] | None 也算 dict 返回（内部分支回 None 是该装饰器的既定适用场景，
 # 如 get_bilibili_stream_data）。
 
@@ -99,13 +98,11 @@ def _is_dict_annotation(node: Union[ast.expr, None], aliases: dict[str, ast.expr
 
 def test_trace_error_decorator_contract_across_repo() -> None:
     violations: list[str] = []
-    # MID-2262（2026-09-23）：本用例原本是「扫到了多少」零见证的纯遍历——
-    #   ① 两个 `except …: continue`（读不到 / 解不开）让出问题的文件静默出局；
-    #   ② 只断言 violations 为空，于是把 src/utils.py 的两个装饰器改名（含全部 50+ 调用点）
-    #      会让扫描命中数归零、violations 恒空、门禁全绿，而 CR-12 的两条防线同时消失。
-    # 现固定三件见证：扫描文件数、命中装饰器的函数数、未能读取/解析的文件数。
-    # 阈值取「现实测值的一半」级别的保守下界（实测 2026-09-23：文件 >150、装饰函数 86），
-    # 放宽时不会误红，收紧到「扫不到东西」时才红。
+    # MID-2262（2026-09-23）：本用例原本是「扫到了多少」零见证的纯遍历——两个 `except …: continue`
+    # 让出问题的文件静默出局，且只断言 violations 为空，于是给两个装饰器改名（含全部调用点）会让
+    # 扫描命中数归零、violations 恒空、门禁全绿而 CR-12 的两条防线同时消失。现固定三件见证：
+    # 扫描文件数、命中装饰器的函数数、未能读取/解析的文件数。阈值取现实测值的保守下界
+    # （2026-09-23 实测：文件 >150、装饰函数 86），放宽不误红，收紧到「扫不到东西」时才红。
     unscanned: list[str] = []
     scanned_files = 0
     decorated_functions = 0
@@ -163,7 +160,7 @@ def test_trace_error_decorator_contract_across_repo() -> None:
                 )
     assert scanned_files == len(files), "存在静默出局的文件: " + "; ".join(unscanned)
     # 命中数见证：装饰器被改名 / 判定名写错时，violations 会「因为什么都扫不到」而为空。
-    # 40 是本仓装饰函数数的下界守卫（2026-09-23 实测 86：spider.py 70 + stream.py 10 + 测试桩若干），
+    # 40 是本仓装饰函数数的下界守卫（2026-09-23 实测 86：spider.py 70 + stream.py 10 + 测试桩），
     # 装饰器改名或 _DEC_NAMES 被清空都会立刻让它变红。
     assert decorated_functions >= 40, (
         f"只扫到 {decorated_functions} 个挂了兜底装饰器的函数（下界 40）："
@@ -173,10 +170,10 @@ def test_trace_error_decorator_contract_across_repo() -> None:
 
 
 def test_decorator_names_are_still_defined_and_used() -> None:
-    # 与上一条互补的**指向性**锁：装饰器被改名（MID-2262 设想的失效形态）时，若有人
-    # 连本文件的 _DEC_NAMES 一起改掉，命中数守卫就可能救不回来（两个名字都换新、新名字
-    # 同样挂满全仓 → 命中数不降）。这条额外钉住「判定名确实定义在 src/utils.py、且仓库里
-    # 仍有 `@该名` 的挂点」，让「改名 + 同步改测试」不能一次性骗过两面。
+    # 与上一条互补的**指向性**锁：若有人把装饰器改名后连本文件的 _DEC_NAMES 一起改掉，命中数
+    # 守卫就可能救不回来（两个名字都换新、新名字同样挂满全仓 → 命中数不降）。这条额外钉住
+    # 「判定名确实定义在 src/utils.py、且仓库里仍有 @该名 的挂点」，让「改名 + 同步改测试」
+    # 不能一次性骗过两面。
     utils_src = (ROOT / "src" / "utils.py").read_text(encoding="utf-8-sig")
     corpus = chr(10).join(path.read_text(encoding="utf-8-sig", errors="replace") for path in _iter_py_files())
     for name in sorted(_DEC_NAMES):

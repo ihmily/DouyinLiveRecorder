@@ -25,8 +25,8 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def _normalize_dist_name(name: str) -> str:
-    # PyPI 规范化名（PEP 503）：小写 + 连续 [-_.] 折叠成单个 '-'。
-    # 只用它比较**包名**，不碰版本说明符——所以必须在剥离 '[...]'/版本之前就结束解析。
+    # PyPI 规范化名（PEP 503）：小写 + 连续 [-_.] 折叠成单个 '-'。只比较**包名**、不管版本
+    # 说明符，所以必须在剥离 '[...]'/版本之前就结束解析。
     return re.sub(r"[-_.]+", "-", name.strip()).lower()
 
 
@@ -63,9 +63,8 @@ def _names_from_pyproject_dependencies(text: str) -> set[str]:
 
 
 def test_requirements_and_pyproject_dependency_name_sets_match() -> None:
-    # SEV-2216 的主锁：requirements.txt 与 pyproject [project.dependencies] 的包名集合必须相等。
-    # 二者是「单源双写」（Docker/CI 消费前者，pip 安装消费后者），任何单侧新增/删除都会漂移；
-    # 本用例不关心版本说明符是否一致（那是另一条口径），只锁「有没有这一项」。
+    # SEV-2216 主锁：requirements.txt 与 pyproject [project.dependencies] 的包名集合必须相等。
+    # 二者是「单源双写」（Docker/CI 消费前者，pip 安装消费后者），单侧增删即漂移。
     req_names = _names_from_requirements((ROOT / "requirements.txt").read_text(encoding="utf-8"))
     proj_names = _names_from_pyproject_dependencies((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
@@ -115,12 +114,9 @@ def test_uv_lock_root_package_matches_pyproject_metadata() -> None:
 
 
 def test_httpx_extra_runtime_requirements_are_declared() -> None:
-    # SEV-2216 的**主锁**：httpx 的 extra 只有在运行期走到那条分支才 import，
-    # 因此「清单里有没有声明」必须单独钉住，不能靠 httpx 的元数据自动带入。
-    # 判据分两层：
-    #   ① 静态：h2 / socksio 在两侧都在（上一条用例另保证了「两侧一致」）；
-    #   ② 动态：**向 httpx 自身追问**它在这条配置下要不要这俩包——把「我记错了依赖名」
-    #      这种文档性错误也一并抓住（httpx 换 extra 名/换依赖时这里会红，而不是静默失守）。
+    # SEV-2216 的主锁：httpx 的 extra 只有运行期走到那条分支才 import，因此「清单里有没有声明」
+    # 必须单独钉住。判据分两层：① 静态：h2 / socksio 在两侧都在；② 动态：向 httpx 自身追问它
+    # 在这条配置下要不要这俩包——把「我记错了依赖名」这类文档性错误也一并抓住。
     httpx_reqs = _httpx_extra_requirements()
 
     req_names = _names_from_requirements((ROOT / "requirements.txt").read_text(encoding="utf-8"))
@@ -129,19 +125,17 @@ def test_httpx_extra_runtime_requirements_are_declared() -> None:
         assert pkg in req_names, f"{pkg} 未在 requirements.txt 声明（httpx 运行期会 import 它）"
         assert pkg in proj_names, f"{pkg} 未在 pyproject [project.dependencies] 声明"
 
-    # httpx 声明 h2 带 `extra == 'http2'`、socksio 带 `extra == 'socks'`；
-    # 本仓用 httpx[http2] 拿前者，后者靠显式声明。若 httpx 将来把二者并进默认依赖，
-    # 下面的 extra 名单会变，届时该断言即失效——这正是要人复核的信号，不是误报。
+    # 本仓用 httpx[http2] 拿前者、显式声明后者；若 httpx 将来把二者并进默认依赖，下面的 extra
+    # 名单会变，届时该断言即失效——这正是要人复核的信号，不是误报。
     extras_seen = {r.split("extra ==")[1].strip().strip("'\"") for r in httpx_reqs if "extra ==" in r}
     assert "http2" in extras_seen, f"httpx 元数据里已找不到 http2 extra（依赖形态可能已变）: {sorted(extras_seen)}"
     assert "socks" in extras_seen, f"httpx 元数据里已找不到 socks extra（依赖形态可能已变）: {sorted(extras_seen)}"
 
 
 def test_httpx_runtime_import_sites_match_the_declared_extras() -> None:
-    # SEV-2216 的**机理锁**：不去猜「哪些包要声明」，而是回源到 httpx 源码，
-    # 断言「本仓 declare 的 extra 名」与「httpx 真正 import 的依赖名」对齐。
-    # 这条锁的价值在于：httpx 换实现（比如把 `import h2` 改成 `import hyperframe` 或
-    # 把 socks 依赖改名）时，本用例会红，而纯静态的清单比对不会。
+    # SEV-2216 的**机理锁**：不猜「哪些包要声明」，而是回源到 httpx 源码，断言「本仓 declare 的
+    # extra 名」与「httpx 真正 import 的依赖名」对齐。httpx 换实现（改名/换包）时这里会红，
+    # 而纯静态的清单比对不会。
     import httpx
 
     httpx_pkg = Path(httpx.__file__).resolve().parent
@@ -181,8 +175,8 @@ def test_repo_has_enabled_http2_at_runtime() -> None:
 
 
 def test_repo_supports_socks5_proxy_scheme() -> None:
-    # 同理锁 socksio 的声明理由：本仓必须仍把 socks5/socks5h 当作合法代理协议
-    # （校验白名单在 src/web_config.py）。若这条不成立，socksio 的注释即被证伪。
+    # 同理锁 socksio 的声明理由：本仓必须仍把 socks5/socks5h 当合法代理协议（白名单在
+    # src/web_config.py）。若这条不成立，socksio 的注释即被证伪。
     source = (ROOT / "src" / "web_config.py").read_text(encoding="utf-8")
     assert re.search(
         r"_PROXY_SCHEMES\s*=\s*frozenset\(\([^)]*\"socks5\"", source, re.S
@@ -197,17 +191,15 @@ def _httpx_extra_requirements() -> list[str]:
 
 
 # ────────────────────────────── SEV-2222 ──────────────────────────────
-# 形态：tests/test_concurrency.py 用**自己重写的一份** rate_limit 闭包做断言，
-# 从不调用 src 侧真正的 _douyin_rate_limit —— 于是「斗鱼/抖音限流被删掉」这类回归
-# 完全不会被该用例发现（grep 全文只命中一条注释）。本锁直接驱动 src 实现。
+# 形态：tests/test_concurrency.py 用自己重写的一份 rate_limit 闭包做断言，从不调用 src 侧真正的
+# _douyin_rate_limit —— 「限流被删掉」这类回归完全不会被发现。本锁直接驱动 src 实现。
 
 
 def test_douyin_rate_limit_actually_sleeps_and_advances_timestamp(monkeypatch: pytest.MonkeyPatch) -> None:
     # 直接驱动 src/stream_select._douyin_rate_limit：断言它真的 (a) 读 main.douyin_min_interval
-    # (b) 在间隔不足时 sleep 该差值 (c) 把 main.douyin_last_request_time 推进到当前时刻。
-    # 换掉的是**stream_select 模块自己的 time 引用**（浅拷贝 shim），不是 stdlib time 模块本体：
-    # 改本体是全进程生效，会波及 loguru enqueue 线程 / harness 守护线程 / coverage
-    # （AGENTS.md「测试编写强制约定」明列，tests/test_test_hygiene.py R1 会红）。
+    # (b) 间隔不足时 sleep 该差值 (c) 把 douyin_last_request_time 推进到当前时刻。
+    # 换掉的是 **stream_select 模块自己的 time 引用**（浅拷贝 shim），不是 stdlib time 本体：
+    # 改本体会全进程生效，波及 loguru enqueue 线程 / harness 守护线程 / coverage（R1 会红）。
     import types
 
     import main
@@ -224,9 +216,8 @@ def test_douyin_rate_limit_actually_sleeps_and_advances_timestamp(monkeypatch: p
     time_shim.sleep = fake_sleep
     time_shim.time = lambda: fake_now[0]
     monkeypatch.setattr(stream_select, "time", time_shim)
-    # 上一条请求发生在 1.0s 前，而最小间隔是 3.0s → 期望补睡 2.0s；
-    # 实现是「sleep 后用 time.time() 重新取值」，故时间戳应推进到 1000.0 + 2.0 = 1002.0
-    # （fake_sleep 已让 fake_now 随 sleep 前进，正是模拟真实时钟在等待期间流逝）。
+    # 上一条请求发生在 1.0s 前、最小间隔 3.0s → 应补睡 2.0s；实现是「sleep 后重新 time.time()」，
+    # 故时间戳推进到 1002.0（fake_sleep 已让 fake_now 随 sleep 前进，模拟真实时钟在等待期间流逝）。
     monkeypatch.setattr(main, "douyin_min_interval", 3.0, raising=False)
     monkeypatch.setattr(main, "douyin_last_request_time", 999.0, raising=False)
 
@@ -260,12 +251,11 @@ def test_douyin_rate_limit_does_not_sleep_when_interval_already_elapsed(monkeypa
 
 
 def test_concurrency_rate_limit_case_drives_src_not_a_local_copy() -> None:
-    # 把 SEV-2222/SEV-2223 的**根因形态**固化成硬断言（违例即红）：
-    # tests/test_concurrency.py 里三个曾自建实现的类不得只靠自己重写的锁/限流/缓存闭包来
-    # 「验证限流」——判据是类体内必须出现对 src 真实入口（下表符号任一）的引用，
-    # 只允许打桩网络层与时间常量。
+    # 把 SEV-2222/SEV-2223 的**根因形态**固化成硬断言：tests/test_concurrency.py 里三个曾自建
+    # 实现的类不得只靠自己重写的锁/限流/缓存闭包来「验证限流」——类体内必须出现对 src 真实入口
+    # （下表符号任一）的引用，只允许打桩网络层与时间常量。
     #   [历史注] 2026-09-23 前本条写成 `if not drives_src: pytest.xfail(...)`：违例只软登记，
-    #   修好后无人回来摘标记，此后谁改回自实现也会被悄悄放过。判据当时也只覆盖单个类。
+    #   修好后无人回来摘标记，此后改回自实现也会被悄悄放过；且判据只覆盖单个类。
     source = (ROOT / "tests" / "test_concurrency.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
 
@@ -319,13 +309,10 @@ def test_run_gates_keep_going_does_not_affect_exit_code_semantics() -> None:
 
 
 def test_run_gates_comment_about_stdout_matches_implementation() -> None:
-    # SEV-2220 定点锁：run_command 的注释曾声称「stdout 原样继承 / 逐行转发」，
-    # 而实现是**不接管 stdout**（未传 stdout= ⇒ 子进程直接继承句柄，本函数读不到）。
-    # 二者结论不同：前者暗示本函数看得见 stdout，后者意味着「只走 stdout 的失效信号是盲区」。
-    # 判据（可复核）：run_command 的 Popen 调用里不得出现 stdout= 关键字
-    # （一旦接管，注释里「不接管 stdout」那句就必须同步改写，否则又是自述与实现相反）。
-    # 刻意走 AST 而非源码子串：注释里也会出现 stdout=subprocess.PIPE 这样的字样，
-    # 纯子串匹配会把自己的说明当实现（本用例首版即此坑）。
+    # SEV-2220 定点锁：run_command 的注释曾声称「stdout 原样继承 / 逐行转发」，而实现是不接管
+    # stdout（未传 stdout= ⇒ 子进程直接继承句柄），二者结论不同：只走 stdout 的失效信号是盲区。
+    # 判据（可复核）：Popen 调用里不得出现 stdout= 关键字；刻意走 AST 而非子串——注释里也会出现
+    # stdout=subprocess.PIPE 字样，纯子串匹配会把自己的说明当实现（首版即此坑）。
     src = (ROOT / "scripts" / "run_gates.py").read_text(encoding="utf-8")
     run_cmd_popen_kwargs = _popen_keywords(src, "run_command")
     assert "stdout" not in run_cmd_popen_kwargs, (
@@ -340,10 +327,9 @@ def test_run_gates_comment_about_stdout_matches_implementation() -> None:
 
 
 def _popen_keywords(source: str, function_name: str) -> set[str]:
-    # 取 function_name 函数体内**所有 subprocess 子进程调用**（Popen 与 run 两种形态）的
-    # 关键字参数名集合。只认 Popen 会让「必须接管 stdout」那条反向见证凭空变红：pytest 兜底
-    # 那步为避免「stdout 读满前 stderr 塞满」的管道死锁用的是 subprocess.run（内部即
-    # communicate()）。run_command 仍只用 Popen，故「不接管 stdout」一侧的断言不受此扩展影响。
+    # 取 function_name 体内**所有子进程调用**（Popen 与 run 两种形态）的关键字参数名集合。只认
+    # Popen 会让「必须接管 stdout」的反向见证凭空变红：pytest 兜底那步为避免管道死锁用的是
+    # subprocess.run；run_command 仍只用 Popen，故「不接管 stdout」一侧的断言不受影响。
     #   [历史注] 2026-09-23 SEV-2219 之前只扫 Popen(...) 一种形态。
     tree = ast.parse(source)
     for node in tree.body:
@@ -365,10 +351,9 @@ def _popen_keywords(source: str, function_name: str) -> set[str]:
 
 
 def test_run_gates_fatal_patterns_reach_stderr_channel() -> None:
-    # MID-2267 定点锁：FATAL_STDERR_PATTERNS 的**有效性**依赖「告警确实落在 stderr」。
-    # 这里用一条真实的 isort 解析失败复现（非 UTF-8 字节混入源文件）：
-    # 断言其 rc==0（所以只认退出码就是假绿）**且**告警文本出现在 stderr（所以扫描回路有效）。
-    # 若 isort 将来把该告警改到 stdout，本用例会红——提示要么改扫描通道、要么改清单。
+    # MID-2267 定点锁：FATAL_STDERR_PATTERNS 的**有效性**依赖「告警确实落在 stderr」。用一条真实的
+    # isort 解析失败复现（非 UTF-8 字节混入源文件）：断言其 rc==0（只认退出码即假绿）**且**告警
+    # 文本出现在 stderr（扫描回路有效）。若 isort 将来把告警改到 stdout，本用例会红。
     import tempfile
 
     run_gates = _load_script_module("run_gates")
@@ -376,9 +361,8 @@ def test_run_gates_fatal_patterns_reach_stderr_channel() -> None:
 
     with tempfile.TemporaryDirectory() as tmp:
         target = Path(tmp) / "bad_probe.py"
-        # 合法的 py 头 + 两个非法 UTF-8 字节：要触发的必须是 isort 的**编码型**解析失败
-        # （只发 UserWarning、rc 仍为 0），不是语法错误——后者 rc 非 0，就证不出
-        # 「只认退出码即假绿」这一前提，本用例的扫描回路也就失去意义。
+        # 合法的 py 头 + 两个非法 UTF-8 字节：要触发的必须是 isort 的**编码型**解析失败（只发
+        # UserWarning、rc 仍为 0），不是语法错误——后者 rc 非 0，就证不出「只认退出码即假绿」。
         target.write_bytes(b"# coding: utf-8\n# " + bytes([0xFF, 0xFE]) + b" bad\nx = 1\n")
         proc = subprocess.run(
             [sys.executable, "-m", "isort", "--check-only", "--profile", "black", tmp],
@@ -469,10 +453,9 @@ def _secret_bearing_pairs(text: str) -> list[tuple[str, str, str]]:
 
 
 def test_config_sanitizer_removes_every_sensitive_value() -> None:
-    # SEV-2213 主锁（「不产生」一侧）：把**真实仓库 config.ini** 喂给脱敏器，
-    # 断言所有「非空 + 敏感」的键在产物里都变成空值，且节结构完整保留。
-    # 用真实配置而非构造样本：本次缺陷就是「真实凭据被整目录复制」，
-    # 只有真实样本才能证明脱敏对实际键名/节名成立。
+    # SEV-2213 主锁（「不产生」一侧）：把**真实仓库 config.ini** 喂给脱敏器，断言所有「非空 +
+    # 敏感」的键在产物里都变成空值，且节结构完整保留。用真实配置而非构造样本：缺陷本身就是
+    # 「真实凭据被整目录复制」，只有真实样本才能证明脱敏对实际键名/节名成立。
     build_exe = _load_build_exe()
     src_ini = ROOT / "config" / "config.ini"
     if not src_ini.is_file():
@@ -556,18 +539,15 @@ def test_make_zip_aborts_when_release_dir_contains_real_credentials(
 
 
 def test_make_zip_calls_credential_assertion_before_archiving() -> None:
-    # 结构锁：校验与封印的**先后关系**必须写在 make_zip 内（而非靠调用方自觉）。
-    # 只断言「校验函数存在」会漏掉「make_zip 没调它」这一形态，故锁定调用位置，
-    # 并断言校验出现在压缩动作之前。
-    # 函数体经 _function_body_source 用 AST 取源码段，不用字符串 index("\ndef ") 找边界：
-    # 体内的嵌套 def 会把边界切错，实测踩过。
+    # 结构锁：校验与封印的**先后关系**必须写在 make_zip 内（而非靠调用方自觉）——只断言「校验
+    # 函数存在」会漏掉「make_zip 没调它」。函数体经 _function_body_source 用 AST 取源码段，
+    # 不用字符串 index 找边界（体内嵌套 def 会把边界切错，实测踩过）。
     src = (ROOT / "build_exe.py").read_text(encoding="utf-8")
     body = _function_body_source(src, "make_zip")
-    # 定位一律带括号（调用形态）：get_source_segment 是原文切片、**含函数体内的注释行**，
-    # 只匹配裸函数名会先命中 build_exe.py 里的那句说明注释而不是可执行调用。
-    # [2026-09-24 修订] 压缩动作由 shutil.make_archive( 改为自建的 _zip_release_dir(
-    # （为指定 compresslevel=9），本锁的「封印动作」锚点同步改为新接缝；锁的语义
-    # ——「凭据校验必须早于压缩」——完全不变。
+    # 定位一律带括号（调用形态）：get_source_segment 是原文切片、**含函数体内的注释行**，只匹配
+    # 裸函数名会先命中 build_exe.py 里的说明注释。
+    # [历史注 2026-09-24] 压缩动作由 shutil.make_archive( 改为自建的 _zip_release_dir(（为指定
+    # compresslevel=9），锚点同步改新接缝；锁的语义（凭据校验必须早于压缩）完全不变。
     assert "assert_no_credentials_in_release()" in body, "make_zip 未调用凭据校验"
     assert body.index("assert_no_credentials_in_release()") < body.index(
         "_zip_release_dir("
@@ -575,10 +555,9 @@ def test_make_zip_calls_credential_assertion_before_archiving() -> None:
 
 
 def _function_body_source(source: str, name: str) -> str:
-    # 返回名为 name 的顶层函数完整源码段（def 行到函数结束）。
-    # 关键性质：ast.get_source_segment 做的是**原文切片**，函数体内部的 `#` 注释一并返回，
-    # 所以基于本结果的断言必须匹配可执行形态（调用带括号、参数带实参），否则注释文本就能
-    # 喂饱断言，实现里删掉调用点也不会变红。
+    # 返回名为 name 的顶层函数完整源码段（def 行到函数结束）。关键性质：ast.get_source_segment 做
+    # 的是**原文切片**，体内 `#` 注释一并返回，故断言必须匹配可执行形态（调用带括号、参数带实参），
+    # 否则注释文本就能喂饱断言，删掉调用点也不会变红。
     tree = ast.parse(source)
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
@@ -610,9 +589,8 @@ def test_no_credentials_in_release_passes_on_sanitized_tree(tmp_path: Path, monk
 
 
 def test_prepare_url_config_reentrant_with_sanitizer_output() -> None:
-    # 兼容性锁：_prepare_url_config() 与 _prepare_config_dir() 必须**同源且可重入**。
-    # 二者都会写 config/URL_config.ini；若样例串不一致，后跑的那个会覆盖前者的产物
-    # （冒烟路径与打包路径各调一次），表现为「某一侧样例生效、另一侧被悄悄改掉」。
+    # 兼容性锁：_prepare_url_config() 与 _prepare_config_dir() 必须**同源且可重入**——二者都会写
+    # config/URL_config.ini，样例串不一致时后跑的那个会覆盖前者（冒烟路径与打包路径各调一次）。
     build_exe = _load_build_exe()
     assert (
         build_exe._sanitized_url_config_text() == "#https://live.douyin.com/000000000000\n"
@@ -620,8 +598,8 @@ def test_prepare_url_config_reentrant_with_sanitizer_output() -> None:
 
 
 def test_three_exe_names_share_one_source() -> None:
-    # MID-2200 定点锁：三个 exe（CLI / GUI / Web）的名字必须同源于 APP_NAME——
-    # 分别在模板里写死会导致改名时漏改一个（产物半新半旧，且不易察觉）。
+    # MID-2200 定点锁：三个 exe（CLI / GUI / Web）的名字必须同源于 APP_NAME——分别写死会在改名时
+    # 漏改一个（产物半新半旧且不易察觉）。
     build_exe = _load_build_exe()
     template = build_exe.SPEC_TEMPLATE
     suffixes = re.findall(r"name='\{app\}([^']*)'", template)

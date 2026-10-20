@@ -14,27 +14,23 @@ from src import utils
 
 # 视频后处理（独立模块）：FFmpeg 分段 / 转封装 / 转码 / 时间字幕生成
 #
-# 说明：
 # - 大部分函数仅依赖文件级参数与 ffmpeg 命令，不触碰 main 全局状态；
-# - 仅 converts_mp4 / generate_subtitles 需要读取 main 的少量配置全局变量
-#   （converts_to_h264 / color_obj / text_encoding / recording / record_state_lock），
-#   通过 `import main` 在运行时惰性读取，避免循环导入与 __main__ 二次执行问题。
+# - 仅 converts_mp4 / generate_subtitles 需要读 main 的少量配置全局变量（converts_to_h264 /
+#   color_obj / text_encoding / recording / record_state_lock），经 `import main` 在运行时
+#   惰性读取，避开循环导入与 __main__ 二次执行问题。
 #
-# MIN-2236①（2026-09-23）线程归属：本模块的函数**不跑在调用它的主线程里**——generate_subtitles 由
-# main.py 的 _subtitle_thread_target / _subtitle_thread_target_direct 起 daemon 线程（录制子进程内），
-# converts_* 与 segment_video 由 _submit_postprocess 投进后处理线程池。而全仓 threading.excepthook
-# 只在 gui.py 安装过（且只覆盖 GUI 父进程），录制子进程里线程内的未捕获异常默认没有任何 hook：
-# traceback 只落到 stderr，随即被 display_info 的 "\033[2J" 清屏刷掉，房间状态照旧显示「正在录制」
-# ——即静默死亡。故本模块的循环体/写盘路径必须就地捕获，不能指望全局兜底。
-# 取舍：本次只在 generate_subtitles 的写盘段补局部守卫，**不**在本模块装全局 threading.excepthook——
-# 那是跨进程的归属决策（GUI 父进程 vs 录制子进程谁负责、与 gui.py 既有 hook 如何共存），
-# 留给主会话统一裁定；此处再补一个 hook 只会造成第二份 hook。
+# 线程归属（MIN-2236①）：本模块的函数不跑在调用它的主线程里——generate_subtitles 由 main.py 的
+# _subtitle_thread_target / _subtitle_thread_target_direct 起 daemon 线程，converts_* 与
+# segment_video 由 _submit_postprocess 投进后处理线程池。而全仓 threading.excepthook 只在 gui.py
+# 装过（且只覆盖 GUI 父进程），录制子进程里线程内的未捕获异常默认没有 hook：traceback 只落
+# stderr，随即被 display_info 的 "\033[2J" 清屏刷掉，房间状态照旧显示「正在录制」——即静默死亡。
+# 故本模块的循环体/写盘路径必须就地捕获，不能指望全局兜底；也不在本模块另装 hook（跨进程归属
+# 决策留给主会话，再补一个只会形成第二份 hook）。
 
-# MIN-04：转码超时按源文件体积线性放大（秒/MB）。
-# 原先固定 600s 对「1800s 分段 + libx264 veryfast 重编码」在中低端机上根本不够：
-# 一段 1800s/4Mbps 的 1080p 分段约 900 MB，veryfast 在 40~80 fps 的机器上要 675~1350s。
-# 取 1.5 s/MB（≈0.67 MB/s，对应偏慢的那一档）作为放大系数。超时后被 kill 的重编码产物
-# 没有 -movflags +faststart、moov 尚未落盘 → 完全不可播，却与仍在的源文件一起留下。
+# MIN-04：转码超时按源文件体积线性放大（秒/MB）。固定 600s 对「1800s 分段 + libx264 veryfast
+# 重编码」在中低端机上根本不够：一段 1800s/4Mbps 的 1080p 分段约 900 MB，40~80 fps 的机器要
+# 675~1350s。取 1.5 s/MB（≈0.67 MB/s，对应偏慢的那一档）作放大系数。超时被 kill 的重编码产物
+# 没有 -movflags +faststart、moov 尚未落盘 → 完全不可播，却会与仍在的源文件一起留下。
 _REENCODE_SECONDS_PER_MB = 1.5
 # 转封装（-c copy）只受 IO 限制，按 25 MB/s 估
 _REMUX_SECONDS_PER_MB = 0.04
@@ -85,16 +81,14 @@ def _discard_partial_output(out_path: str, pre_existed: bool, source_path: str) 
     return True
 
 
-# MIN-2236⑤：把「失败即清理」从 converts_mp4 独享扩到三个 ffmpeg 后处理入口的共用出口。
-# 原实现只有 converts_mp4 在三个 except 分支里各调一次 _discard_partial_output，converts_m4a /
-# segment_video 完全没接：超时/失败后留下一份「大小可观但打不开」的 .m4a 或残缺分段，与仍在的源文件
-# 一起躺在产物目录里，用户无从判断哪个可用（同一 MIN-04 事故的第二、第三处形态）。
-# 清理下沉到 _run_postprocess_command 的两个附带收益：
-#   ① 三条入口共享一份判据（「本次新建」的快照口径不再各写一遍）；
-#   ② 覆盖面从 except Exception 扩到 BaseException——取消、KeyboardInterrupt、MemoryError 这类
-#      不走 except Exception 的退出路径同样不会再留半成品。
-# 段模板（.../主播_时间_%03d.ts）的产物名在调用前不可知，故清理以「模板展开后能匹配到的文件名」
-# 为准做集合差，只删本次新增的那些（快照里已存在的一律不动）。
+# MIN-2236⑤：「失败即清理」由三个 ffmpeg 后处理入口共用（原先只有 converts_mp4 在三个
+# except 分支各调一次 _discard_partial_output，converts_m4a / segment_video 完全没接，
+# 超时/失败后会留下「大小可观但打不开」的 .m4a 或残缺分段，与源文件并排躺在产物目录）。
+# 清理下沉到 _run_postprocess_command 的两个好处：① 三条入口共享一份「本次新建」快照判据；
+# ② 覆盖面从 except Exception 扩到 BaseException——取消、KeyboardInterrupt、MemoryError 这类
+# 不走 except Exception 的退出路径同样不再留半成品。
+# 段模板（.../主播_时间_%03d.ts）的产物名在调用前不可知，故清理以「模板展开后能匹配到的
+# 文件名」为准做集合差，只删本次新增的那些（快照里已存在的一律不动）。
 _SEGMENT_TEMPLATE_RE = re.compile(r"%0(\d+)d")
 
 
@@ -182,11 +176,11 @@ def _run_postprocess_command(command: list[str], out_spec: str, source_path: str
 
 
 # Windows 下 subprocess.STARTUPINFO 仅存在于 Windows typeshed，Linux/macOS 上 mypy 无法解析该名字。
-# 返回值类型用 object 而非具体 STARTUPINFO：该符号在非 Windows typeshed 中不存在，无法作为跨平台类型引用；
-# 调用方仅将其透传给 subprocess 的 startupinfo 参数（typeshed 中本就是宽松类型），object | None 不损失实际类型安全。
+# 返回值用 object 而非具体 STARTUPINFO：该符号在非 Windows typeshed 中不存在，无法作为跨平台
+# 类型引用；调用方仅透传给 subprocess 的 startupinfo 参数，object | None 不损失实际类型安全。
 def get_startup_info(system_type: str) -> object | None:
-    # 按 system_type（os.name 取值）返回子进程启动参数：运行时只在 Windows（os.name == "nt"）构造并返回隐藏
-    # 窗口的 STARTUPINFO，其他平台恒返回 None；mypy 依据 sys.platform 字面量分支跳过非当前平台代码，通过类型检查。
+    # 按 system_type（os.name 取值）返回子进程启动参数：只在 Windows（"nt"）构造隐藏窗口的
+    # STARTUPINFO，其余平台恒返 None；mypy 依 sys.platform 字面量分支跳过非当前平台代码。
     if system_type != "nt":
         return None
     if sys.platform == "win32":
@@ -251,17 +245,13 @@ def segment_video(
                 "1",
                 "-movflags",
                 "+frag_keyframe+empty_moov",
-                # MIN-2236⑥：补 `-n`（输出已存在时立即退出、不询问），与 converts_m4a /
-                # converts_mp4 的既有写法对齐——原缺该项，是 2026-09-12 审查 6.1 在 converts_mp4
-                # 上修过的同一形态：目标名与磁盘已有文件撞车时 ffmpeg 打印 "Overwrite? [y/N]"，
-                # 而本命令由 _run_ffmpeg_checked 以管道方式启动、子进程没有可用 stdin → read 直接
-                # EOF（等同选 N），于是走满 600s 超时才把进程 kill 掉——一次切片白挂后处理线程
-                # 10 分钟，池内后续任务全部排队。
-                # 生效范围：ffmpeg 的覆盖询问发生在解析**输出文件参数**时，故
-                # ① segment_save_file_path 是字面名（无 %0Nd 占位符）时这一条必需；
-                # ② 是模板时字面模板名必然不存在、不会触发询问，`-n` 属无害的对称写法。
-                # 与 `-y` 相反：这里刻意不覆盖——撞名说明同名产物已在（上一次的成功分段），
-                # 立即失败 + MIN-2236⑤ 的「只删本次新增」才是安全语义。
+                # MIN-2236⑥：补 `-n`（输出已存在时立即退出、不询问），与 converts_m4a / converts_mp4
+                # 的既有写法对齐——原缺该项：目标名与磁盘已有文件撞车时 ffmpeg 会打印
+                # "Overwrite? [y/N]"，而本命令由 _run_ffmpeg_checked 以管道启动、子进程没有可用
+                # stdin → read 直接 EOF（等同选 N），于是走满 600s 超时才把进程 kill 掉。
+                # 生效范围：覆盖询问发生在解析输出文件参数时，故字面文件名时必需；模板名必然不存在，
+                # `-n` 属无害的对称写法。与 `-y` 相反：撞名说明已有上一次的成功分段，立即失败 + 只删
+                # 本次新增才是安全语义。
                 "-n",
                 segment_save_file_path,
             ]
@@ -284,10 +274,9 @@ def segment_video(
 # is_original_delete=True 时删除源文件；timeout 为总等待秒数，None 表示按源文件体积自动放大
 # （MIN-04）。失败/超时会清理本次生成的半成品 .mp4 并保留源文件，无返回值
 def converts_mp4(converts_file_path: str, is_original_delete: bool = True, timeout: int | None = None) -> None:
-    # out_path 在 try 外预置：except 分支与基于它的清理出口都要能判定「本次是否已生成过输出」，
+    # out_path 在 try 外预置：except 分支与基于它的清理出口要能判定「本次是否已生成过输出」，
     # 否则 basedpyright 判 possibly unbound、且早期异常（如体积读取）会误删无关文件。
-    # out_pre_existed 不再在这里取：快照口径已收敛到 _run_postprocess_command（MIN-2236⑤），
-    # 三个入口共用同一份「调用前已存在的产物集合」判据，避免各写一遍而漂移。
+    # 「调用前已存在的产物集合」快照已收敛到 _run_postprocess_command（MIN-2236⑤），三入口共用。
     out_path = ""
     try:
         if os.path.exists(converts_file_path) and os.path.getsize(converts_file_path) > 0:
@@ -295,10 +284,8 @@ def converts_mp4(converts_file_path: str, is_original_delete: bool = True, timeo
             re_encoding = bool(main.converts_to_h264)
             if re_encoding:
                 main.color_obj.print_colored("正在转码为MP4格式并重新编码为h264\n", main.color_obj.YELLOW)
-                # 2026-09-12 审查 6.1：补 `-n`（覆盖同名 .mp4 不询问；无 stdin → read EOF 等同选 N，
-                # 会走满 600s 超时才被回收）。开弹幕 + 分段 + 转码的组合下**每个分段**都触发一次
-                # 600s 挂死、严重占满转码线程。机制与生效范围同 segment_video 的 `-n` 注释；
-                # `converts_m4a` 早已正确加 `-n`，本函数与之对齐。
+                # 补 `-n`（覆盖同名 .mp4 时不询问；无 stdin → read EOF 等同选 N，会走满 600s 超时
+                # 才被回收）。开弹幕 + 分段 + 转码的组合下**每个分段**都触发一次 600s 挂死。
                 ffmpeg_command = [
                     "ffmpeg",
                     "-i",
@@ -344,15 +331,12 @@ def converts_mp4(converts_file_path: str, is_original_delete: bool = True, timeo
                 if os.path.exists(converts_file_path):
                     os.remove(converts_file_path)
     except subprocess.TimeoutExpired as e:
-        # 与下两类错误区分：ffmpeg 卡死须告警（与「格式不对」语义不同），
-        # 否则被 except Exception 兜底为 unknown error 丢失语义。
+        # 与下两类错误区分：ffmpeg 卡死须告警（与「格式不对」语义不同），否则被 except Exception
+        # 兜底为 unknown error 丢失语义。半成品清理已在 _run_postprocess_command 统一执行（MIN-04）。
         logger.error(i18n.tr("ffmpeg 转 MP4 超时（{type_name}）: {e}", type_name=type(e).__name__, e=e))
-        #   [历史注] MIN-04（2026-09-23 起清理由 _run_postprocess_command 统一执行，见该处）：
-        #   超时分支原先 kill 完就 raise 出去，留下一份**写到一半**的 .mp4——重编码路径没有
-        #   -movflags +faststart，被杀时 moov 尚未落盘 → 完全不可播，而 is_original_delete 分支
-        #   没走到、源 ts 仍在 → 产物目录同时留下「能录不能播的 ts」+「大小可观、打不开的 mp4」，
-        #   用户无从判断哪个可用。非零退出（下一分支）与未知异常（末分支）同理，三条路径的清理
-        #   都在出口做，这里只保留各自分类的日志。
+        # [历史注] 清理已上移到 _run_postprocess_command 的出口统做：超时分支原先 kill 完就 raise，
+        # 会留下写到一半的 .mp4（无 -movflags +faststart，moov 未落盘 → 完全不可播），而源 ts 仍在。
+        # 非零退出与未知异常同理，三条路径共用同一清理点，这里只保留各自分类的日志。
     except subprocess.CalledProcessError as e:
         logger.error(i18n.tr("Error occurred during conversion: {e}", e=e))
     except Exception as e:
@@ -380,9 +364,8 @@ def converts_m4a(converts_file_path: str, is_original_delete: bool = True) -> No
                 "320k",
                 out_path,
             ]
-            # MIN-2236⑤：此前本函数没接半成品清理——超时/CalledProcessError 后留下的
-            # 半截 .m4a（AAC 帧头已写、尾部截断，播放器只认得到开头几秒）与仍在的源文件
-            # 并列躺在产物目录里，与 converts_mp4 修掉的 MIN-04 是同一事故形态。
+            # MIN-2236⑤：本函数的调用已接入统一清理——超时/CalledProcessError 后不会再留下
+            # 半截 .m4a（AAC 帧头已写、尾部截断，播放器只认得到开头几秒）。
             _run_postprocess_command(m4a_command, out_path, converts_file_path)
             if is_original_delete:
                 time.sleep(1)
@@ -453,14 +436,13 @@ def generate_subtitles(record_name: str, ass_filename: str, sub_format: str = "s
             sub_total_failures += 1
         else:
             try:
-                # MIN-2236①：本写盘段此前是**裸 open() + 整个函数零 try/except**。该线程跑在录制
-                # 子进程里，而 threading.excepthook 全仓只有 gui.py 装过（见文件头）——磁盘满(ENOSPC)
-                # / 目录被 rename_anchor_directory 改名(ENOENT) / 路径过长(ENAMETOOLONG) / 权限(EACCES)
-                # 任一发生，线程就静默死掉：traceback 只落 stderr、被 display_info 的 "\033[2J" 清屏
-                # 刷掉，房间仍显示「正在录制」，字幕文件从此不再增长且无任何日志线索。
-                # 只捕 OSError 而不写 except Exception：上面四类都是 OSError 子类，其余异常（如
-                # main.text_encoding 被配成非法编码名的 LookupError）属真 bug，不该在这里被吞掉——
-                # 吞了会让「字幕永远不生成」再次变成无解释的现象。
+                # MIN-2236①：本写盘段原为裸 open()、函数内零 try/except。该线程跑在录制子进程里，
+                # 而 threading.excepthook 全仓只有 gui.py 装过（见文件头）——磁盘满(ENOSPC) / 目录被
+                # rename_anchor_directory 改名(ENOENT) / 路径过长(ENAMETOOLONG) / 权限(EACCES) 任一
+                # 发生，线程就静默死掉，字幕从此不再增长且无线索。
+                # 只捕 OSError 而不是 except Exception：上述四类都是 OSError 子类，其余异常（如
+                # main.text_encoding 配成非法编码名的 LookupError）属真 bug，吞了会让「字幕永远
+                # 不生成」再次变成无解释的现象。
                 with open(sub_out_path, "a", encoding=main.text_encoding) as f:
                     _ = f.write(txt)
             except OSError as e:

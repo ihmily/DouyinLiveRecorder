@@ -9,16 +9,14 @@
 # - 托盘图标菜单提供「显示控制台 / 隐藏控制台 / 打开 Web 界面 / 退出程序」；单击或双击
 #   托盘图标恢复控制台窗口；「退出程序」触发 uvicorn 优雅关闭（由调用方传入的 server 控制）。
 #
-# 【为什么不再用 pystray】pystray 的图标要额外依赖 Pillow 才画得出来，且它必须跑在独立
-# 线程（macOS 的 NSApp 限制在本仓 Windows-only 的场景里用不上），菜单回调因此落在托盘
-# 线程上，操作控制台窗口要跨线程调 Win32。Qt 自带 QSystemTrayIcon，图标可用 QPainter
-# 现画（不再依赖 Pillow），回调也全部落在跑事件循环的那一个线程里。
+# 【为什么用 Qt 而非 pystray】pystray 的图标要额外依赖 Pillow 才画得出来，且它必须跑在
+# 独立线程，菜单回调因此落在托盘线程上，操作控制台窗口要跨线程调 Win32。Qt 自带
+# QSystemTrayIcon，图标可用 QPainter 现画（不再依赖 Pillow），回调也全部落在跑事件循环的
+# 那一个线程里。
 #
-# 【线程模型（与 pystray 版最大的差别，改回旧形态前务必读）】
-# pystray 版：主线程跑 uvicorn（asyncio.run 阻塞），托盘图标跑在守护线程。
-# Qt 版：**QApplication 只能建在主线程**——2026-10-20 本机实测在子线程执行
-# QApplication(sys.argv) 直接段错误退出（进程 exit code 139，Python 层捕获不到），
-# 与 Qt 文档「GUI 线程即主线程」一致。故 start() 返回 True 时调用方**必须**把主线程交给
+# 【线程模型（改回旧形态前务必读）】QApplication 只能建在主线程——本机实测在子线程执行
+# QApplication(sys.argv) 直接段错误退出（进程 exit code 139，Python 层捕获不到），与 Qt
+# 文档「GUI 线程即主线程」一致。故 start() 返回 True 时调用方**必须**把主线程交给
 # run_event_loop()，uvicorn 改由调用方起的守护线程驱动（uvicorn 的 capture_signals()
 # 对非主线程直接跳过，信号改由调用方自己接管，见 web.py::_install_sigint_shutdown）。
 # 收益：菜单回调全部在主线程执行，ShowWindow 不再依赖「可从托盘线程调用」的时序假设。
@@ -229,8 +227,8 @@ class WebConsoleTray:
             # QApplication 只能在主线程构造（见文件头实测的段错误），本方法由 web.py 在主线程调用
             app = QApplication(sys.argv)
             self._owns_app = True
-        # 本进程没有任何 QWidget：默认的「最后一个窗口关闭即退出」会让事件循环在图标
-        # 还没退出前就被带下去（表现为托盘点了没反应）。托盘进程必须显式关掉这条。
+        # 本进程没有任何 QWidget：默认的「最后一个窗口关闭即退出」会在图标还没退出前就
+        # 把事件循环带下去（表现为托盘点了没反应），托盘进程必须显式关掉这条。
         app.setQuitOnLastWindowClosed(False)
         self.app = app
 
@@ -262,7 +260,7 @@ class WebConsoleTray:
         self.open_action.triggered.connect(lambda _checked=False: self._on_open_browser())
         self.exit_action.triggered.connect(lambda _checked=False: self._on_exit())
         icon.setContextMenu(menu)
-        # 左键单击 / 双击 = 显示控制台（对齐 pystray 版 MenuItem(default=True) 的双击语义）
+        # 左键单击 / 双击 = 显示控制台（双击语义与旧托盘实现保持一致）
         icon.activated.connect(self._on_activated)
         icon.show()
         self.icon = icon
@@ -365,8 +363,8 @@ class WebConsoleTray:
         return self._create_icon()
 
     def _load_icon_from_disk(self) -> "QIcon | None":
-        # 探测可选的外部图标；读不到或 Qt 解不出（损坏 / 不支持的格式）都返回 None 回落到自绘，
-        # 不让一个坏文件把托盘变成空白。
+        # 探测可选的外部图标；读不到或 Qt 解不出（损坏 / 不支持的格式）都返回 None 回落到
+        # 自绘，不让一个坏文件把托盘变成空白。
         from PySide6.QtGui import QIcon
 
         for root in _resource_roots():
@@ -381,17 +379,17 @@ class WebConsoleTray:
 
     @staticmethod
     def _create_icon() -> "QIcon":
-        # 生成与 GUI 托盘同风格的图标（蓝底 + 白环 + 红点录制指示）。
-        # 现画而非读文件的理由：仓库不放二进制 asset，QPainter 产出的 QIcon 直接可用，
-        # 打包后不必处理 _MEIPASS / exe 相对路径（见文件头）。
+        # 生成与 GUI 托盘同风格的图标（蓝底 + 白环 + 红点录制指示）。现画而非读文件的理由：
+        # 仓库不放二进制 asset，QPainter 产出的 QIcon 直接可用，打包后不必处理 _MEIPASS /
+        # exe 相对路径（见文件头）。
         from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 
         pixmap = QPixmap(_ICON_SIZE, _ICON_SIZE)
         pixmap.fill(QColor(0, 0, 0, 0))
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        # 每次改画笔画刷都显式指定：QPainter 会沿用上一次的状态，
-        # 漏设会让圆环与圆点互相染色（无异常，只有肉眼看得出）。
+        # 每次改画笔画刷都显式指定：QPainter 会沿用上一次的状态，漏设会让圆环与圆点互相
+        # 染色（无异常，只有肉眼看得出）。
         painter.setPen(QPen(QColor(0, 0, 0, 0), 0))
         painter.setBrush(QColor(79, 109, 245, 255))
         painter.drawRoundedRect(2, 2, _ICON_SIZE - 4, _ICON_SIZE - 4, 16, 16)
@@ -405,7 +403,7 @@ class WebConsoleTray:
         painter.end()
         return QIcon(pixmap)
 
-    # ─── 菜单回调（Qt 版全部跑在事件循环所在线程，不再跨线程） ────
+    # ─── 菜单回调（Qt 版全部跑在事件循环所在线程，不再跳线程） ────
 
     def _on_activated(self, reason: "QSystemTrayIcon.ActivationReason") -> None:
         # 单击（Trigger）/ 双击（DoubleClick）都恢复控制台；右键（Context）交给上下文菜单，
@@ -425,8 +423,8 @@ class WebConsoleTray:
         self._apply_window(SW_HIDE)
 
     def _apply_window(self, cmd: int) -> None:
-        # 显示 / 隐藏控制台窗口。与 pystray 版的差别：这里跑在事件循环线程（通常是主线程），
-        # 不再有「托盘线程调 ShowWindow」的跨线程假设。
+        # 显示 / 隐藏控制台窗口。跑在事件循环线程（通常是主线程），不存在「托盘线程调
+        # ShowWindow」的跨线程时序假设。
         hwnd = self._hwnd
         if not hwnd:
             return
@@ -452,8 +450,8 @@ class WebConsoleTray:
 
     def _on_exit(self) -> None:
         # 退出程序：有 server 时交回 uvicorn 优雅关闭（ffmpeg / 连接池清理在 web.py 的
-        # finally 段）；无 server 时（复用本类却没传服务对象）才走强制退出——pystray 版就有
-        # 这条兜底，少了它进程会卡在「谁都不退出」的状态上。
+        # finally 段）；无 server 时（复用本类却没传服务对象）才走强制退出，否则进程会卡在
+        # 「谁都不退出」的状态上。
         if self.server is not None:
             self.server.should_exit = True
         else:

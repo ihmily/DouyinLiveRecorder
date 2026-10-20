@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 # URL 配置页：整文件编辑器 + 重新读取 / 保存。
 #
-# 为什么仍是「整文件编辑」而不是结构化表格：URL_config.ini 的行格式是「URL + 空格 + 画质段
-# + 空格 + 主播名」，画质段可能为空，主播名含空格，GUI 侧再做一遍 parser 就会与
-# config_io / web_config 的解析口径分叉（历史上分叉过两次）。编辑原文本是唯一不漂移的形态。
+# 为什么是「整文件编辑」而不是结构化表格：URL_config.ini 的行格式是「URL + 空格 + 画质段
+# + 空格 + 主播名」，画质段可空、主播名含空格；GUI 侧再做一遍 parser 就会与
+# config_io / web_config 的解析口径分叉，编辑原文本是唯一不漂移的形态。
 from __future__ import annotations
 
 from typing import Callable
@@ -78,9 +78,8 @@ class ConfigPage(QWidget):
 
     def saved_buttons(self) -> tuple[QPushButton, QPushButton]:
         # 供测试取用本页两个控制按钮（顺序 = 重新读取、保存）。非业务路径。
-        # [2026-10-20 更正] 原注释称「供测试断言按钮可用性（停止流程会禁用控制按钮）」——该前提
-        #   不成立：Qt 窗口层的停止流程只禁用 dashboard 的 start/stop 两键（main_window 里
-        #   `self.dashboard.start_btn.setEnabled(False)` 一段），从不触碰本页按钮，故那样断言
-        #   写出来必然失败。真要「停止时禁用本页按钮」得先在 main_window 停止分支接线，
-        #   再把断言补进 tests/test_gui_qt_units.py::test_config_page_saved_buttons_exposes_both_control_buttons。
+        # 窗口停止流程只禁用 dashboard 的 start/stop 两键，从不触碰本页按钮，故「停止时禁用
+        # 本页按钮」的断言必然失败；要那样做得先在 main_window 停止分支接线，断言补进
+        # tests/test_gui_qt_units.py::test_config_page_saved_buttons_exposes_both_control_buttons。
+        # [2026-10-20 更正] 原注释称「供测试断言按钮可用性（停止流程会禁用控制按钮）」，前提不成立。
         return self.reload_btn, self.save_btn

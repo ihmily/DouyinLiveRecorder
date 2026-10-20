@@ -128,7 +128,7 @@ def test_default_timeout_scales_with_source_size(tmp_path: Path, monkeypatch: py
     scaled = vp._convert_timeout(str(big), re_encoding=True, explicit=None)
     assert 600 < scaled < vp._MAX_CONVERT_TIMEOUT
     assert abs(scaled - int(1000 * vp._REENCODE_SECONDS_PER_MB)) <= 1
-    # 小文件仍走 600s 下限（与修复前一致，放大只会变长不会变短）
+    # 小文件仍走 600s 下限（放大只会变长不会变短）
     small = _make_source(tmp_path)
     assert vp._convert_timeout(str(small), re_encoding=True, explicit=None) == 600
     # 转封装（-c copy）口径远小于重编码：1000MB × 0.04s = 40s → 仍取下限

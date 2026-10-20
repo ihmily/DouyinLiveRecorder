@@ -1,18 +1,18 @@
-# tests/test_config_read.py — src/config_read.py 的回归锁：重复键容错读取与「点名一次」告警。
+# src/config_read.py 回归锁：重复键容错读取与「点名一次」告警（2026-10-17 现场：config.ini
+# 的 [录制设置] 内落出两行同名键）。
 #
-# 锁什么（2026-10-17 现场：config.ini 的 [录制设置] 内落出两行同名键）：
-#   · 反向见证——strict=True 的默认解析器在同一份文件上确实**整份读不出**（证明本文件真的
-#     在测那条故障形态，而不是测一个造不出来的场景）；
-#   · tolerant_config_parser 读出全部其余键、重复键按「最后一次取值」；
-#   · find_duplicate_options 点名到 节/键/行号，且「注释行」「跨节同名键」两种形态不误报；
-#     [L-17 2026-10-19 补] 再加一类不误报形态：**多行值的续行**（configparser 把它并入上一条
-#     键的值，它不是键）；并以「真重复混在续行之间仍被报出」作反向见证，防止一删了之。
-#   · warn_duplicate_options 同一文件形态只落一条 warning（状态链每 10s 读一次配置，
-#     不去重会把同一条刷满日志），文件一改写就重新点名；缓存封顶后仍能继续点名；
-#   · preserve_case 的键名形态与被它替换掉的 GUI 侧 optionxform 闭包一致；
-#   · main.py 的模块级 config 必须是容错解析器（那条裸读是「录制核心 import 即崩」的第一现场）。
+# 锁什么：
+#   · 反向见证——strict=True 的默认解析器在同一份文件上确实整份读不出，证明这里测的是真实
+#     故障形态而非造不出来的场景；
+#   · tolerant_config_parser 读出全部其余键、重复键取最后一次；
+#   · find_duplicate_options 点名到 节/键/行号，且「注释行」「跨节同名键」「多行值续行」
+#     三类形态不误报（L-17），同时「真重复混在续行之间」仍必须报出；
+#   · warn_duplicate_options 同一文件形态只落一条 warning（状态链每 10s 读一次配置，不去重
+#     会刷满日志），文件一改写就重新点名，缓存封顶后仍能点名；
+#   · preserve_case 复刻被替换掉的 GUI 侧 optionxform 闭包；main.py 的模块级 config 必须是
+#     容错解析器（那条裸读是「录制核心 import 即崩」的第一现场）。
 #
-# 全部写入 tmp_path，绝不碰仓库里的 config/config.ini（那是已跟踪的脱敏基线模板）。
+# 全部写入 tmp_path，绝不碰仓库里已跟踪的脱敏基线模板 config/config.ini。
 
 import os
 import time
@@ -53,8 +53,8 @@ def dup_ini(tmp_path: Path) -> Path:
 
 @pytest.fixture(autouse=True)
 def _isolate_warn_cache(monkeypatch: MonkeyPatch) -> None:
-    # 点名记忆集是模块级全局：不隔离的话用例之间会互相吃掉告警（第 2 条用例先看同一份形态
-    # 就把第 1 条的告警判成「已报过」）。
+    # 点名记忆集是模块级全局：不隔离会让用例互相吃掉告警（后来的用例看同一形态，
+    # 会把前一条的告警判成「已报过」）。
     monkeypatch.setattr(config_read, "_DUP_WARNED", set())
 
 
@@ -66,8 +66,8 @@ def _capture_warnings() -> tuple[list[str], int]:
 
 
 def test_default_strict_parser_cannot_read_any_key(dup_ini: Path) -> None:
-    # 反向见证：旧形态（configparser 默认 strict=True）在重复键上抛 DuplicateOptionError，
-    # 且**一个键都读不出来**——这正是录制核心 import 即崩的成因。删掉容错读取即本条转红。
+    # 反向见证：默认 strict=True 解析器在重复键上抛 DuplicateOptionError，且一个键都读不出——
+    # 这正是录制核心 import 即崩的成因。删掉容错读取即本条转红。
     import configparser
 
     strict = configparser.ConfigParser(interpolation=None)
@@ -96,15 +96,15 @@ def test_find_duplicate_options_names_section_option_and_lines(dup_ini: Path) ->
 
 
 def test_find_duplicate_options_accepts_colon_delimiter_and_ignores_case() -> None:
-    # configparser 的默认 delimiters 是 ('=', ':')，默认 optionxform 会转小写——
-    # 扫描器的判据必须与「解析器实际看到的键集合」一致，否则会漏报真重复、误报假重复。
+    # configparser 的默认 delimiters 是 ('=', ':')、默认 optionxform 转小写——扫描器判据必须
+    # 与「解析器实际看到的键集合」一致，否则会漏报真重复、误报假重复。
     assert find_duplicate_options("[s]\nLanguage = zh\nlanguage: en\n") == [("s", "Language", (2, 3))]
 
 
 def test_find_duplicate_options_ignores_multiline_value_continuation_lines() -> None:
-    # L-17（2026-10-19）：缩进的续行会被 configparser 并入**上一条键的值**，它根本不是键。
-    # 旧实现先 strip 掉缩进再把整行当独立键统计，于是每份带多行值的配置都被点名成
-    # 「重复配置项」（两条续行文本相同即命中），虚假告警把真重复淹没在同一条文案里。
+    # L-17（2026-10-19）：缩进的续行会被 configparser 并入上一条键的值，它根本不是键。
+    # 旧实现先 strip 缩进再把整行当独立键统计，于是每份带多行值的配置都被点名成「重复配置项」
+    # （两条续行文本相同即命中），虚假告警把真重复淹没。
     text = "[s]\nkey = 第一段\n    第二段 相同文本\nother = 1\n    第二段 相同文本\n"
     assert find_duplicate_options(text) == []
     # 反向见证：这几行在解析器里确实是**值**而不是键（值里带着拼接后的续行）
@@ -200,8 +200,7 @@ def test_tolerant_parser_disables_interpolation(tmp_path: Path) -> None:
 
 
 def test_main_module_level_parser_is_duplicate_tolerant() -> None:
-    # 接线锁：main.py 的模块级 config 必须是容错解析器。configparser 把 strict 实参只存成
-    # 私有字段 _strict（默认解析器为 True、strict=False 构造出来的为 False），没有公开读回入口；
-    # 该字段若随 CPython 改名，本条以 AttributeError 当场失败，不会静默放行。
-    # 判据走 getattr 三参形态：_strict 是 CPython 私有字段，mypy 在公开类型上看不见
+    # 接线锁：main.py 的模块级 config 必须是容错解析器。configparser 只把 strict 存成私有字段
+    # _strict（默认解析器为 True、strict=False 构造的为 False），没有公开读回入口；该字段若随
+    # CPython 改名，本条以 AttributeError 当场失败而不会静默放行（三参 getattr 绕过 mypy）。
     assert getattr(main.config, "_strict", None) is False, "main.py 的模块级 config 必须是容错解析器"

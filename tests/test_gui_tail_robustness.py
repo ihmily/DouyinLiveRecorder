@@ -1,34 +1,23 @@
 # tests/test_gui_tail_robustness.py — tail 线程逐事件防护与 after 链无条件续期（M-15 / M-17）。
 #
-# 两条同族故障（2026-09-29 审查）：
-#   M-17：gui.py 的 tail 线程里，`json.loads` 有防护而 `_danmaku_dispatch` 的数值转换没有。
-#         一条脏事件（如 ts 为 null）从 for 循环冒到最外层 `except Exception: time.sleep(1.0)`
-#         时 offset 已经推进过整个 chunk —— 同批后续完好事件全部丢失、且零日志。
-#   M-15：弹幕刷新 / 状态刷新 / 日志 flush 三条 after 自续期链把「下一次 after」写在回调
-#         **尾部**：回调一旦抛未捕获异常，下一轮就不再注册，整页永久停止刷新（文件头
-#         2026-09-12 审查 6.2 记过的 float(None) 正是这条触发源，且 tail 首读会回放旧
-#         JSONL 末尾 64KB 的历史脏记录，触发概率真实存在）。
+# 两条同族故障：M-17 tail 线程里 json.loads 有防护而 _danmaku_dispatch 的数值转换没有，
+# 一条脏事件（如 ts 为 null）冒到最外层时 offset 已推进过整个 chunk，同批后续完好事件
+# 全部丢失且零日志；M-15 弹幕刷新/状态刷新/日志 flush/UI 事件泵四条 after 自续期链把
+# 「下一次 after」写在回调尾部，回调一抛未捕获异常就整页永久停止刷新（tail 首读还会回放
+# 旧 JSONL 末尾 64KB 的历史脏记录，触发概率真实存在）。
 #
-# 判据全部经**子进程**驱动 gui.py 的真实实现（同 test_gui_monitor.py / test_gui_wrap_hints.py
-# 的口径：pytest 进程 import gui 会把 DLR_GUI_PARENT 注进整个会话）。无头桩只补状态字段与
-# 假控件，不重新实现任何判定逻辑——「删掉生产实现用例必红」由变异验证另证。
-# 探测子进程按字节比较并显式注入 UTF-8（AGENTS + M-31①）。
+# 两者必须同批断言：修 M-17 的逐事件 try 会把 M-15 的 float(None) 崩溃降级成静默丢一条；
+# 加了 _as_float/_as_int 容错后逐事件防护的缺失又难以触发——单独看都能掩盖对方。
 #
-# 为什么 M-15 与 M-17 合在一个文件里锁：两条故障共用同一支「外部可控 JSONL」触发源
-# （_danmaku_dispatch 的数值转换）。修 M-17 的逐事件 try 会把 M-15 的 float(None) 崩溃
-# 降级成「静默丢掉一条事件」，反之加了 _as_float/_as_int 容错后，逐事件防护的缺失也变得
-# 难以触发——两者单独看都能掩盖对方，因此必须同批断言、同一子进程内互相见证。
+# 判据经**子进程**驱动真实实现（同 test_gui_monitor.py：pytest 进程 import gui 会注入
+# DLR_GUI_PARENT）。桩只补状态字段与假控件，不重新实现判定逻辑。
 #
-# 桩的边界（决定「删掉生产实现会不会红」的强度）：
-#   * FakeRoot.after 只记账、不起 Tk：链的「有没有续期」是判据，「续期后真跑到」属真窗范畴，
-#     无头环境做不到，故本文件不声称覆盖后者。
-#   * FakeText 的 boom 按**方法名**触发而不是「一律抛」：一律抛会连 _drain_log_queue 里
-#     与渲染无关的路径一起打穿，把「渲染失败」和「取队列失败」两种形态混成一个结论。
-#   * _danmaku_dispatch 的投毒只废「room==BAD」那一条，其余事件仍进真实实现——若在桩里
-#     自己实现去重/状态写入，就成了 AGENTS 禁止的「测试里重新实现被测逻辑再自我断言」。
-#   * 桩实例走 object.__new__(gui.LiveRecorderGUI)（跳过 __init__ 的 Tk/CTk 构造）：被测方法
-#     触碰到的每个字段都必须在 base_stub() 里显式补齐，缺一个即以 AttributeError 暴露，
-#     不会退化成「静默通过」。新增被测方法时若读到新字段，桩必须同步补，否则单文件立刻红。
+# 桩的边界：
+#   * FakeRoot.after 只记账、不起 Tk：锁「有没有续期」，「续期后真跑到」属真窗范畴；
+#   * FakeText 的 boom 按方法名触发（一律抛会把渲染失败与取队列失败混成一个结论）；
+#   * _danmaku_dispatch 的投毒只废 room==BAD 那一条，其余事件仍进真实实现；
+#   * 桩实例走 object.__new__ 跳过 Tk 构造：被测方法读到的字段必须在 base_stub() 补齐，
+#     缺一个即 AttributeError，不会静默通过。
 
 import ast
 import json
@@ -42,15 +31,14 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 GUI_SOURCE = (ROOT / "gui.py").read_text(encoding="utf-8")
-# 结果载荷与杂散 stdout 的分隔锚点：customtkinter/Tk 在初始化期会往 stdout 写非受控行
-# （缩放回调、可选后端告警），整段 parse 必然 JSONDecodeError。约定「marker 之后才是载荷」，
-# 父侧只按字节 find 这个锚点，其余输出一律忽略——判据因此不受第三方库的打印习惯影响。
+# 结果载荷与杂散 stdout 的分隔锚点：Tk 初始化期会往 stdout 写非受控行，整段 parse 必
+# JSONDecodeError。约定「marker 之后才是载荷」，父侧只按字节 find 锚点，其余输出一律忽略。
 _MARKER = "\n@@WP_E_TAIL@@ "
 
-# 子进程脚本整体是**一个字符串字面量**（不是本模块的作用域）：里面的名字全部取自真实的 gui
-# 与 stdlib，改脚本时不要在父侧再写一份，否则会形成「桩与真实实现两套代码」的假绿风险。
-# 各场景在同一个子进程里顺序跑完，彼此之间的隔离靠：① 每个场景重建 base_stub()；
-# ② 对 gui 模块级对象的临时替换一律包在 try/finally 里还原；③ out[...] 键名互不重复。
+# 子进程脚本整体是**一个字符串字面量**（不是本模块的作用域）：里面的名字全部取自真实 gui
+# 与 stdlib，改脚本时不要在父侧再写一份。各场景在同一子进程里顺序跑完，隔离靠：
+# ① 每个场景重建 base_stub()；② 对 gui 模块级对象的临时替换包在 try/finally 里还原；
+# ③ out[...] 键名互不重复。
 _SCRIPT = r"""
 import json
 import os
@@ -357,12 +345,9 @@ sys.stdout.write("\n@@WP_E_TAIL@@ " + json.dumps(out, ensure_ascii=False))
 
 
 def _child_env() -> dict[str, str]:
-    # M-31① 同口径：显式钉 UTF-8，不依赖宿主 shell 恰好带该环境变量。
-    # 缺这两项时，无 PYTHONUTF8 的中文 Windows（ACP=936）上子进程 stdout 走 GBK，而脚本里
-    # json.dumps(..., ensure_ascii=False) 带中文房间名 —— 父侧按 utf-8 解码即抛
-    # UnicodeDecodeError，且只在「本机 shell 没带 UTF-8」的机器上复现（CI 是 Linux 更不会）。
-    # 只读 os.environ 取基底、绝不写回本进程：本用例没有改宿主环境的理由，也避开
-    # patch.dict(os.environ) 的 32767 上限坑（AGENTS「环境变量一律用 monkeypatch」条）。
+    # 显式钉死 UTF-8：无 PYTHONUTF8 的中文 Windows（ACP=936）下子进程 stdout 走 GBK，
+    # 而 JSON 带中文房间名 → 父进程按 utf-8 解码即 UnicodeDecodeError。
+    # 只读 os.environ 取基底，不写回本进程（环境变量一律用 monkeypatch）。
     env = dict(os.environ)
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
@@ -371,20 +356,18 @@ def _child_env() -> dict[str, str]:
 
 @pytest.fixture(scope="module")
 def results() -> dict[str, Any]:
-    # module 作用域是刻意的：一次子进程要跑完全部场景（gui+customtkinter 导入约数秒，
-    # 且两个 tail 场景各自要等线程 deadline/join）。按用例各起一支会把本文件墙钟时间
-    # 放大到分钟级，还会让「场景间互不污染」变成隐式依赖。
-    # 代价：任何场景抛错都会让本文件全部用例一起失败（returncode 断言带末 4000 字符
-    # stderr）——这是**期望行为**，子进程内的场景本就是同一批证据。
+    # module 作用域：一次子进程跑完全部场景（import gui 约数秒，两个 tail 场景还要等
+    # deadline/join）。按用例各起一支会把墙钟时间放大到分钟级。任何场景抛错都会让本文件
+    # 全部用例一起失败——这是**期望行为**，子进程内的场景本就是同一批证据。
     proc = subprocess.run(
         [sys.executable, "-c", _SCRIPT],
         # 脚本不读 stdin，但仍显式给一支空管道：不传则子进程继承父控制台句柄，
         # 在 GUI/无头宿主下继承到的可能是不可用句柄，表现为随机尽早退出。
         input=b"{}",
         capture_output=True,
-        # 300s：两个 tail 场景内含 5s/3s 的 deadline 轮询与 3s join 预算，正常远用不到；
-        # 留足余量但不能无限——若 gui 的 tail 循环不再响应 stop_event，必须让本文件以
-        # TimeoutExpired 失败，而不是把整个 pytest 会话挂死（守护线程会跟着子进程一起没）。
+        # 300s：两个 tail 场景内含 5s/3s deadline 轮询与 3s join 预算，正常远用不到；
+        # 但不能无限——tail 循环不再响应 stop_event 时必须以 TimeoutExpired 失败，
+        # 而不是挂死整个 pytest 会话（守护线程会跟着子进程一起没）。
         timeout=300,
         cwd=str(ROOT),
         env=_child_env(),
@@ -393,23 +376,20 @@ def results() -> dict[str, Any]:
     assert proc.returncode == 0, (
         "tail robustness subprocess failed: " + proc.stderr.decode("utf-8", errors="replace")[-4000:]
     )
-    # 判定一律按字节（AGENTS「探测子进程输出一律按字节比较」）：不传 text=/encoding=，
-    # 码页与子进程控制台语言都与结论解耦；只有判定通过之后才把载荷按 utf-8 解出，
-    # 那份编码由上面注入的 PYTHONIOENCODING 保证。
+    # 判定一律按字节（不传 text/encoding）：码页与子进程控制台语言都与结论解耦；
+    # 判定通过后才把载荷按 utf-8 解出（编码由注入的 PYTHONIOENCODING 保证）。
     assert marker in proc.stdout, "no result marker in: " + proc.stdout.decode("utf-8", errors="replace")[-1000:]
-    # 收窄口径同 test_gui_status_pattern_i18n._case_result：json.loads 返回 Any，原样 return 会让
-    # 全部 results["..."] 取值脱离类型检查（mypy 在定义处报 no-any-return）。这里只加声明、
-    # 不改运行时；载荷结构是否真的是 dict 由各用例断言与上面的 marker 判定共同兜住。
-    # 不用行内 type: ignore 注释（Linux 必要 / Windows 多余 → basedpyright reportUnnecessaryTypeIgnoreComment）。
+    # 收窄口径同 test_gui_status_pattern_i18n._case_result：json.loads 返回 Any，原样 return
+    # 会让 results[...] 取值脱离类型检查（mypy 在定义处报 no-any-return）。只加声明、不改
+    # 运行时；不用行内 type: ignore（Linux 必要 / Windows 多余 → basedpyright 报错）。
     return cast(dict[str, Any], json.loads(proc.stdout.split(marker, 1)[1].decode("utf-8")))
 
 
 def test_as_float_and_as_int_tolerate_dirty_values(results: dict[str, Any]) -> None:
-    # 单一容错口径（M-15/M-17 共用同一 helper，不得出现第二份）：
-    # None/垃圾串回落默认值，合法数值原样取，Infinity 不得把 int() 炸穿。
-    # 两个列表按「位置即语义」写：as_float 依次是 None/垃圾串/合法小数/合法整数（须被转成
-    # float 而非原样返回，下游格式化才不会因为 int 少了小数位）；as_int 的最后两项是
-    # -1 哨兵入参——它证明 default 真的被透传，而不是恒回 0（恒 0 的实现能把前四项全蒙对）。
+    # 单一容错口径（M-15/M-17 共用同一 helper，不得出现第二份）：None/垃圾串回落默认值，
+    # 合法数值原样取，Infinity 不得把 int() 炸穿。两个列表按「位置即语义」写：as_float 依次
+    # 是 None/垃圾串/合法小数/合法整数（须转成 float，下游格式化才不会少小数位）；as_int
+    # 最后两项用 -1 哨兵证明 default 真的被透传（恒回 0 的实现能把前四项全蒙对）。
     # True→1 也在列：JSON 的 true 落进数值字段是边车脏数据的真实形态之一。
     assert results["as_float"] == [0.0, 0.0, 12.5, 3.0]
     assert results["as_int"] == [0, 0, 7, 2, -1, 1]
@@ -417,9 +397,8 @@ def test_as_float_and_as_int_tolerate_dirty_values(results: dict[str, Any]) -> N
 
 def test_dispatch_survives_null_and_typed_fields(results: dict[str, Any]) -> None:
     # ts=null、msg_total=null、online 给了数组：一条都不许抛，取不到的回落默认值。
-    # 断言取的是**桩里那份真实 _danmaku_rooms**（dispatch 只写锁内数据、不碰 Tk），
-    # 所以这条同时见证「conn/stats 事件仍然正常入库」——只断言不抛异常的话，
-    # 把 dispatch 整体 try/except 吞掉也能过，那正是 AGENTS 禁止的假绿形态。
+    # 断言取的是**桩里那份真实 _danmaku_rooms**，所以同时见证 conn/stats 事件正常入库——
+    # 只断言不抛异常的话，把 dispatch 整体 try/except 吞掉也能过（假绿）。
     # msg_rate 取到 12 而 msg_total 取到 0：证明「带外类型只废单个字段，不废整条事件」。
     info = results["dispatch_null_safe"]
     assert info["started_at"] == 0.0
@@ -438,8 +417,8 @@ def test_danmaku_render_of_null_ts_still_rearms(results: dict[str, Any]) -> None
     # 延迟值 1000 是被锁死的：本链的节拍就是「弹幕页 1s 一刷」。改成 lambda/偏函数包装
     # 会让回调名变成 <lambda>，这里即以字符串不等而红——防止「续期还在、但续的是别的 callable」。
     assert case["jobs"] == [[1000, "_schedule_danmaku_refresh"]]
-    # 反向半边：正常轮次不得留痕。限频器若被写成「无条件 warn」，日志页会被每秒一条刷满，
-    # 真实线索被淹掉（这正是 M-15 折中限频的动机），所以「不该响的时候不许响」必须同锁。
+    # 反向半边：正常轮次不得留痕。限频器若写成「无条件 warn」，日志页会被每秒一条刷满、
+    # 真实线索被淹掉，所以「不该响的时候不许响」必须同锁。
     assert case["warns"] == [], f"无异常却留痕 = 判据漂移：{case['warns']}"
 
 
@@ -454,9 +433,9 @@ def test_danmaku_chain_rearms_and_warns_when_render_raises(results: dict[str, An
 
 
 def test_status_chain_rearms_when_render_raises(results: dict[str, Any]) -> None:
-    # 三条链各自单独锁：本链的抛错源是 _update_quality_display（把 _update_quality_display
-    # 换成会抛的替身），而不是渲染弹幕那条路径。三链共用 finally 形态，但接线点各自独立，
-    # 只锁一条时另外两条被改回「尾部续期」不会被发现。
+    # 三条链各自单独锁：本链的抛错源是 _update_quality_display（换成会抛的替身），而非
+    # 渲染弹幕那条路径。三链共用 finally 形态但接线点独立，只锁一条时另外两条被改回
+    # 「尾部续期」不会被发现。
     case = results["status_chain_rearm"]
     assert [job[1] for job in case["jobs"]] == ["_schedule_status_refresh"]
     assert case["warns"], "状态刷新链异常未留痕"
@@ -475,11 +454,10 @@ def test_log_flush_chain_rearms_when_render_raises(results: dict[str, Any]) -> N
 
 
 def test_ui_pump_rearms_when_activation_raises(results: dict[str, Any]) -> None:
-    # M-15 的第四支链（_pump_ui_events 本体）。旧形态把续期写在函数最后一句，前面的
-    # 「激活日志刷新链」一抛（窗口销毁竞态里的 TclError 就是这一形）就跳过续期 → UI 事件泵
+    # M-15 第四支链（_pump_ui_events 本体）。旧形态把续期写在函数最后一句，前面的
+    # 「激活日志刷新链」一抛（窗口销毁竞态里的 TclError 即此形）就跳过续期 → UI 事件泵
     # 永久停摆，post_ui 排队的 _on_recording_stopped / _finalize_quit 不再执行（关不掉窗口）。
-    # jobs 只应有一项：泵自己的重排。刷新链激活那一项**不该**出现（它在抛错行之前就被打断），
-    # 出现了反而说明注入点没生效、本用例在测另一件事。
+    # jobs 只应有一项：泵自己的重排；刷新链激活那一项在抛错行之前就被打断了。
     case = results["pump_rearm_when_body_raises"]
     assert [job[1] for job in case["jobs"]] == ["_pump_ui_events"], case["jobs"]
     assert case["jobs"][0][0] == 100, f"泵的重排节拍被改动：{case['jobs']}"
@@ -495,10 +473,9 @@ def test_ui_pump_rearms_when_activation_raises(results: dict[str, Any]) -> None:
 
 def test_tail_batch_keeps_good_events_after_a_bad_one(results: dict[str, Any]) -> None:
     # M-17 本体：坏条只废自己，同 chunk 后续完好事件必须照常入库，并留一条汇总 warn。
-    # 顺序是判据的一半：坏条排在两条好条**之前**、且四条写在同一个 chunk 里一次读入，
-    # 「整批丢失」的旧形态只可能表现为 msgs 少掉后两条。把好条挪到坏条之前会立即失去覆盖。
-    # thread_dead 必须显式锁：否则「异常穿透把 tail 线程打死」与「防护有效」都能留下
-    # 相同的两帧缓冲（首轮已入库），而线程残留到进程结束这件事本身没有任何人会看见。
+    # 顺序是判据的一半：坏条排在两条好条之前、四条同一 chunk 一次读入——「整批丢失」
+    # 只可能表现为 msgs 少掉后两条。thread_dead 必须显式锁：否则「异常穿透打死 tail 线程」
+    # 与「防护有效」能留下相同的两帧缓冲（首轮已入库）。
     case = results["tail_batch_survives"]
     assert case["thread_dead"] is True
     # rooms 只允许有房间Z：BAD 那条废在自己的 dispatch 上，不得留下半个房间条目
@@ -513,8 +490,7 @@ def test_tail_batch_keeps_good_events_after_a_bad_one(results: dict[str, Any]) -
 def test_tail_outer_failure_is_logged_not_silent(results: dict[str, Any]) -> None:
     # M-17：最外层 except 从「静默 sleep(1.0)」变成「限频 warning 留痕」。
     # 注入点是 os.path.getsize（非 OSError 的 RuntimeError），刻意避开 OSError 分支——
-    # 那条是 MID-2250 认定的良性路径（日志归档改名），它**应当**继续静默重试，
-    # 若把它也计入留痕，本文件另一处「正常轮次不误报」的判据就会被自相矛盾地打破。
+    # 那条是 MID-2250 认定的良性路径（日志归档改名），应当继续静默重试。
     case = results["tail_outer_warn"]
     assert case["thread_dead"] is True
     assert any("弹幕 tail 线程本轮异常" in line[0] for line in case["lines"]), case["lines"]
@@ -522,11 +498,11 @@ def test_tail_outer_failure_is_logged_not_silent(results: dict[str, Any]) -> Non
 
 # ─── 结构锁：续期注册必须在 finally，且不得留在函数尾部 ────────
 
-# 键=链名、值=该链**必须使用**的重排 helper（不是列表：四链现在都走 _after_retry，
+# 键=链名、值=该链**必须使用**的重排 helper（不是列表：四链都走 _after_retry，
 # 一旦某条改回裸 self.root.after(...)，绕过的是 _after_retry 内部的 TclError 容错，
-# 结构锁会立刻点名是哪一条链跑偏）。四链共用形态但接线点彼此独立，必须逐条点名。
-# [2026-09-29 补] _pump_ui_events 是审查时漏计的第 4 支：它续自己的泵，同时负责按需激活
-# 日志刷新链，断了等于整窗收尾回调停摆，与另外三支同族同判据。
+# 结构锁会立刻点名是哪一条链跑偏）。
+# _pump_ui_events 是审查时漏计的第 4 支：它续自己的泵，同时负责按需激活日志刷新链，
+# 断了等于整窗收尾回调停摆，与另外三支同族同判据。
 _CHAINS = {
     "_schedule_danmaku_refresh": "_after_retry",
     "_schedule_status_refresh": "_after_retry",
@@ -536,11 +512,10 @@ _CHAINS = {
 
 
 def test_rearm_lives_in_finally_for_every_chain() -> None:
-    # 行为锁之上的第二道防线：把「重排落在 finally 里」钉成结构约束，
-    # 否则一次「顺手把 finally 拆回顺序语句」的重构就会让三页重新有停摆风险。
-    # 为什么行为锁不够：上面的三个 chain_rearm 用例只各喂**一种**抛错注入点，
-    # 拆掉 finally 后若那条路径恰好不再抛（例如渲染改用了不会炸的写入方式），
-    # 行为锁会一起变绿；AST 锁与「本轮是否真的出错」完全解耦，专治这种漂移。
+    # 行为锁之上的第二道防线：把「重排落在 finally 里」钉成结构约束，否则一次「顺手把
+    # finally 拆回顺序语句」的重构就会让三页重新有停摆风险。
+    # 为什么行为锁不够：上面的 chain_rearm 用例各喂**一种**抛错注入点，拆掉 finally 后
+    # 若那条路径恰好不再抛，行为锁会一起变绿；AST 锁与「本轮是否真的出错」完全解耦。
     tree = ast.parse(GUI_SOURCE)
     for name, helper in _CHAINS.items():
         fn = next((n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == name), None)
@@ -580,11 +555,10 @@ def test_tail_loop_guards_every_event() -> None:
     guarded = False
     for loop in (node for node in ast.walk(fn) if isinstance(node, ast.For)):
         for try_node in (n for n in ast.walk(loop) if isinstance(n, ast.Try)):
-            # 必须是被 try 体**直接包住**的 dispatch 调用，而不是外层 try 里那一圈
-            # 两个条件缺一不可：前半句排除「try 体内根本没有 dispatch」的无关 Try
-            # （如 json.loads 那一圈）；后半句要求 try 体的**每一条**语句都含 dispatch，
-            # 即 dispatch 是这一圈防护的主体。只写前半句会把「包整条 for 的外层大 try」
-            # 也算成有效防护——那正是 M-17 要消灭的形态，结构锁自身就成了假绿。
+            # 必须是被 try 体**直接包住**的 dispatch 调用：前半句排除「try 体内根本没有
+            # dispatch」的无关 Try（如 json.loads 那一圈）；后半句要求 try 体的每一条语句
+            # 都含 dispatch。只写前半句会把「包整条 for 的外层大 try」也算成有效防护——
+            # 那正是 M-17 要消灭的形态。
             if _dispatch_calls(try_node) and all(_dispatch_calls(stmt) for stmt in try_node.body):
                 guarded = True
     assert guarded, "_danmaku_dispatch 的逐事件防护缺失（M-17 回归形态）"

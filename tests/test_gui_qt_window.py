@@ -1,15 +1,11 @@
 # tests/test_gui_qt_window.py — PySide6 窗口层的离屏行为锁。
 #
-# 为什么全部走 offscreen：CI 的 ubuntu 与本机都可能没有显示环境，
-# QT_QPA_PLATFORM=offscreen 是 Qt 官方的无头后端（不需要 xvfb），
-# 窗口能真实构建 → 断言的是真实控件树，而不是假对象。
+# 全部走 offscreen：CI 与本机都可能没有显示环境，QT_QPA_PLATFORM=offscreen 是 Qt 官方
+# 无头后端（无需 xvfb），窗口能真实构建 → 断言真实控件树而非假对象。
 #
-# 锁什么（都是「旧 tkinter 版踩过、迁移期最容易丢」的行为）：
-#   · 五个页面都在栈里、切页只改 current 而不重建（重建会丢日志内容）；
-#   · 主题切换后 QSS 真的换了、状态点颜色跟上；
-#   · 日志批次经定时器刷进终端控件（跨线程投递链路）；
-#   · 画质行解析出降级（i18n 派生正则在新窗口层仍生效）；
-#   · 退出序列不阻塞：shutdown 走后台线程，Signal 回到主线程才销毁。
+# 锁：五个页面只在栈里构建一次、切页不重建（重建丢日志）；主题切换后 QSS 与状态点颜色
+# 跟上；日志批次经定时器刷进终端控件（跨线程投递）；画质降级行解析（i18n 派生正则）；
+# 退出序列不阻塞（shutdown 走后台线程，Signal 回主线程才销毁）。
 
 import os
 from pathlib import Path
@@ -17,12 +13,9 @@ from typing import Iterator
 
 import pytest
 
-# 为什么探测子模块而不是顶层包 + 为什么放宽 exc_type（2026-10-18 CI 实测事故）：
-# pytest 9.1 起 importorskip 的 exc_type 缺省为 ModuleNotFoundError，而 PySide6 缺 Qt 系统库
-# （ubuntu runner 无 libEGL.so.1）时失败发生在 **QtWidgets 子模块的 dlopen**，顶层
-# `import PySide6` 仍然成功 → 只探测顶层包时这一行恒成立，紧随其后的 import 抛 ImportError，
-# 以 collection error 形态中断整轮 pytest（test_gui_qt_units.py 头部注释里有完整读数）。
-# 判据：环境没有 Qt 只该 skip 本模块，不该把另外 4337 条用例一起带走。
+# 探测子模块而非顶层包，并放宽 exc_type：PySide6 缺 Qt 系统库（ubuntu runner 无 libEGL.so.1）
+# 时 `import PySide6` 仍成功，失败发生在 QtWidgets 的 dlopen，随后 import 抛 ImportError 会以
+# collection error 中断整轮 pytest。环境没有 Qt 只该 skip 本模块（完整读数见 test_gui_qt_units.py 头部）。
 pytest.importorskip(
     "PySide6.QtWidgets", exc_type=ImportError, reason="PySide6 / Qt 系统库不可用时跳过 Qt 窗口层用例（环境限制口径）"
 )
@@ -46,10 +39,9 @@ def app() -> QApplication:
 
 @pytest.fixture()
 def window(app: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[MainWindow]:
-    # 登记表是模块级全局，本文件每建一个 MainWindow 就会经 ui_i18n.set_text 登记 25 条静态标签。
-    # Qt 与 Tk 在这里不同：顶层窗口在 QApplication 存活期间不会被释放（app.topLevelWidgets()
-    # 仍持有），弱引用因此**不会**失效，条目会一路残留到后续测试文件 ——
-    # tests/test_ui_i18n.py 是按「全局条数」断言的，残留条目会把它顶翻。故用完原样还原。
+    # 登记表是模块级全局：Qt 顶层窗口在 QApplication 存活期不释放（app.topLevelWidgets()
+    # 仍持有），弱引用不会失效，条目会残留到后续测试文件——tests/test_ui_i18n.py 按
+    # 「全局条数」断言，残留条目会把它顶翻。故用完原样还原。
     from src import ui_i18n
 
     registry_snapshot = list(ui_i18n._ENTRIES)  # noqa: SLF001 - 测试还原全局登记表，与生产同模块
@@ -105,9 +97,8 @@ def test_log_flush_writes_into_terminal(window: MainWindow) -> None:
 
 
 def test_quality_downgrade_parse(window: MainWindow) -> None:
-    # 状态行正则是**按当前语言**从 tr() 结果派生的（M-14）：窗口初始化会按系统语言
-    # 落到 en_US，故这里必须先把语言钉成 zh_CN 再喂简中行，否则测的是「跨语言匹配不上」，
-    # 而那正是设计上的正确行为。
+    # 状态行正则按当前语言从 tr() 结果派生（M-14）：窗口初始化会按系统语言落到 en_US，
+    # 故先把语言钉成 zh_CN 再喂简中行，否则测的是「跨语言匹配不上」——那本是设计上的正确行为。
     previous = i18n.get_language()
     i18n.set_language("zh_CN")
     try:
@@ -162,13 +153,12 @@ def test_language_switch_retranslates(window: MainWindow) -> None:
     assert i18n.get_language() == target
 
 
-# ── 2026-10-17 截图回归锁 ──
-# 这四条锁的都是「界面看起来只是丑一点、实际是布局契约被破坏」的形态：
+# ── 截图回归锁：以下四条锁「界面看似只是丑一点、实际是布局契约被破坏」的形态：
 # 首帧双可见、空态文字被裁、侧栏被压扁、全局背景污染子控件。
 
 
 def test_table_and_empty_state_are_mutually_exclusive_on_first_frame(window: MainWindow) -> None:
-    # 首轮 refresh 之前两个控件都是默认可见 → 表头与空态文字叠在一起（截图 3/4）。
+    # 首轮 refresh 之前两个控件都是默认可见 → 表头与空态文字叠在一起。
     # 断言 isHidden 而不是 isVisible：用例不 show 窗口，isVisible 恒为 False 测不出东西。
     assert window.quality_page.empty.isHidden() is False
     assert window.quality_page.table.isHidden() is True
@@ -192,8 +182,8 @@ def test_empty_state_description_keeps_wrapped_height(app: QApplication, window:
 
 
 def test_sidebar_minimum_height_leaves_room_for_scrolling(window: MainWindow) -> None:
-    # 修复前侧栏 minimumSizeHint 高 719px，窗口最小高度却允许 620px，
-    # QVBoxLayout 把品牌区与「导入字体…」按钮压扁。滚动区接手后 min 必须显著低于 620。
+    # 侧栏 minimumSizeHint 曾高 719px 而窗口最小高度允许 620px，QVBoxLayout 把品牌区与
+    # 「导入字体…」按钮压扁。滚动区接手后 min 必须显著低于 620。
     assert window.sidebar.minimumSizeHint().height() < 620
     # 底部动作按钮在滚动区之外：任何高度下都保持 sizeHint，不被压缩。
     assert window.minimize_btn.height() >= window.minimize_btn.sizeHint().height()
@@ -202,7 +192,7 @@ def test_sidebar_minimum_height_leaves_room_for_scrolling(window: MainWindow) ->
 
 def test_global_stylesheet_does_not_paint_bare_widget_background(app: QApplication, window: MainWindow) -> None:
     # `QWidget { background: ... }` 会命中 QLabel/StatTile/EmptyState，在白色卡片上
-    # 留下灰条灰块（截图里几乎每个红框都有）。底色只允许由窗口级容器声明。
+    # 留下灰条灰块。底色只允许由窗口级容器声明。
     sheet = app.styleSheet()
     widget_block = sheet.split("QWidget {", 1)[1].split("}", 1)[0]
     # 只禁纯 background 声明：selection-background-color 属于选中态，不在污染范围内
@@ -211,7 +201,7 @@ def test_global_stylesheet_does_not_paint_bare_widget_background(app: QApplicati
 
 
 def test_follow_system_theme_writes_empty_preference(window: MainWindow) -> None:
-    # 截图日志里的 `[WARN] 界面主题已切换，但配置写回失败: 未知主题 id: ''`：
+    # 日志里的 `[WARN] 界面主题已切换，但配置写回失败: 未知主题 id: ''`：
     # 「跟随系统」落的是空串哨兵，save 侧必须接受它并落空值，而不是当成非法主题。
     window.theme_combo.setCurrentIndex(window.theme_combo.findData(THEME_DARK))
     window._pending_log_lines.clear()

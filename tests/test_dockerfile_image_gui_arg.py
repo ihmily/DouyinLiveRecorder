@@ -1,25 +1,22 @@
 # -*- coding: utf-8 -*-
 # 镜像侧 GUI 依赖开关（Dockerfile 的 INSTALL_GUI + compose 各服务的 build 配置）的结构锁。
 #
-# 背景：GUI 窗口层迁到 PySide6 后它进入运行时清单，镜像的 `pip install -r requirements.txt` 于是
-# 把它一并装入——本机实测解压后 647.56MB。而镜像按设计只跑 recorder（main.py）与 web（web.py）两个
-# 服务，实测两者在屏蔽 PySide6 后导入链完整；slim-bookworm 的运行阶段又没有 QtWidgets 的链接依赖
+# 背景：GUI 窗口层迁到 PySide6 后它进入运行时清单，镜像的 `pip install -r requirements.txt` 于是把
+# 它一并装入（本机实测解压后 647.56MB），而镜像按设计只跑 recorder（main.py）与 web（web.py），
+# 实测两者在屏蔽 PySide6 后导入链完整；slim-bookworm 运行阶段又缺 QtWidgets 的链接依赖
 # （libEGL/libGL/glib/fontconfig/xkbcommon…），默认装入只会翻倍体积却仍起不动窗口。因此引入
-# INSTALL_GUI（默认 false＝镜像侧过滤 GUI 依赖），compose 的 gui 服务显式开 true 并另用 tag。
+# INSTALL_GUI（默认 false = 镜像侧过滤 GUI 依赖），compose 的 gui 服务显式开 true 并另用 tag。
 #
 # 四条不变量（全部静态、零 Docker 依赖，本机与 Linux CI 同一结论）：
-#   ① 每个引用 $INSTALL_GUI 的阶段都必须**先声明后使用**（ARG 不跨阶段；与 MIN-14 的
-#     「ARG 必须声明在使用它的指令之前」同族判据）；
+#   ① 每个引用 $INSTALL_GUI 的阶段都必须先声明后使用（ARG 不跨阶段，与 MIN-14 同族判据）；
 #   ② 默认值必须是 false，且过滤只发生在镜像侧——requirements.txt 与 pyproject 里 PySide6 必须仍在
-#     （清单 ↔ pyproject 的集合相等锁由 tests/test_regression_2026_09_22_gates.py 把守；把过滤挪进
-#      清单会同时弄红两条锁，镜像侧过滤与运行时清单是两件事）；
-#   ③ compose 的 gui 服务必须开 INSTALL_GUI=true 且与 recorder/web **用不同 tag**——build 配置不同的
-#     服务若共用同一个 image 名，后构建的一方会覆盖另一方正在使用的 tag；
+#     （清单 ↔ pyproject 的集合相等锁由 tests/test_regression_2026_09_22_gates.py 把守）；
+#   ③ compose 的 gui 服务必须开 INSTALL_GUI=true 且与 recorder/web 用不同 tag（build 配置不同的
+#     服务共用 image 名时，后构建的一方会覆盖另一方正在使用的 tag）；
 #   ④ 镜像发布工作流不得传 INSTALL_GUI=true：对外发布的镜像必须是 slim 默认形态。
 #
-# 变异验证锚点（逐条对应，实测结论见本轮工作日志）：删掉 gui 的 INSTALL_GUI 或把它的 tag 改回与
-# recorder 同名 → ③ 红；把阶段2 的 ARG 声明挪到使用点之后 → ① 红；把默认值改成 true → ② 红；
-# 给 docker-publish.yml 加 INSTALL_GUI=true → ④ 红。
+# 变异验证锚点：删掉 gui 的 INSTALL_GUI 或把 tag 改回与 recorder 同名 → ③ 红；把阶段2 的 ARG
+# 声明挪到使用点之后 → ① 红；把默认值改成 true → ② 红；给 docker-publish.yml 加开关 → ④ 红。
 
 import re
 import tomllib
@@ -50,9 +47,8 @@ def _text(path: Path) -> str:
 
 def _stages(dockerfile_text: str) -> list[list[str]]:
     # 按 FROM 切分构建阶段：Docker 的 ARG 作用域按阶段隔离，判「声明早于使用」必须同粒度。
-    # 首个 FROM 之前的内容（本文件里只有注释头）单独成桶并被丢弃——若把它算成「阶段1」，
-    # 诊断信息里的阶段号就比 Dockerfile 自己的「阶段1/阶段2」注释错一位（实测报成「阶段3」），
-    # 而误导性的行号提示比没有提示更糟
+    # 首个 FROM 之前的内容单独成桶并被丢弃——若把它算成「阶段1」，诊断信息里的阶段号就比
+    # Dockerfile 自己的「阶段1/阶段2」注释错一位（实测报成「阶段3」），误导性提示比没有提示更糟。
     buckets: list[list[str]] = [[]]
     for line in dockerfile_text.splitlines():
         if line.startswith("FROM "):

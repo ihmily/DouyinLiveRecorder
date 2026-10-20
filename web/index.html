@@ -2,8 +2,8 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <!-- viewport-fit=cover：让 env(safe-area-inset-*) 生效（缺省时恒为 0），
-         顶栏/toast 据此让开灵动岛、圆角与 Home Indicator；页面内容不被默认挖孔，由 CSS 主动避让。 -->
+    <!-- viewport-fit=cover：让 env(safe-area-inset-*) 生效（缺省时恒为 0），顶栏/toast 据此让开灵动岛、
+         圆角与 Home Indicator；页面内容不被默认挖孔，由 CSS 主动避让。 -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title data-i18n="title">DouyinLiveRecorder 管理面板</title>
     <link rel="stylesheet" href="/web/style.css">
@@ -12,8 +12,8 @@
     <!-- 轻量粒子背景层：web/motion.js 优先复用此节点（缺失时自建）。固定铺满视口、落在内容之下、
          pointer-events:none，aria-hidden 排除无障碍树；prefers-reduced-motion 命中时 motion.js 不绘制。 -->
     <canvas id="bg-canvas" aria-hidden="true"></canvas>
-    <!-- 顶栏：品牌 + 标签页导航(.tab[data-view]) + 语言选择/主题切换/退出。
-         这些控件在 app.js 的 DOMContentLoaded 中统一绑定；data-view 决定 showView 切换到哪个面板。 -->
+    <!-- 顶栏：品牌 + 标签页导航(.tab[data-view]) + 语言/主题/退出。控件在 app.js 的 DOMContentLoaded
+         中统一绑定；data-view 决定 showView 切到哪个面板。 -->
     <header class="topbar">
         <div class="brand" data-i18n="brand">直播录制管理面板</div>
         <nav class="tabs">
@@ -30,8 +30,7 @@
         </div>
     </header>
 
-    <!-- 登录页：#login-password 输入、#login-submit 触发 doLogin()、#login-error 显示后端报错文案。
-         初始靠 .hidden 隐藏；启动引导拉 /api/status，任何失败（401 或网络/超时）都走 showLogin()，
+    <!-- 登录页：初始靠 .hidden 隐藏；启动引导拉 /api/status，任何失败（401 或网络/超时）都走 showLogin()，
          成功才直接进仪表盘——判据是「取不到状态」而不是「只认 401」。 -->
     <main id="login-view" class="view hidden">
         <div class="login-card">
@@ -42,14 +41,12 @@
         </div>
     </main>
 
-    <!-- 仪表盘：进入即 startSSE() 每 2s 轮询 /api/status 并 loadLogs()（日志另按 5s 轮询刷新）。
-         #engine-warning 引擎死亡横幅由 renderStatus 按 engine_alive===false 显隐；
-         #status-warning 是更宽泛的状态告警（SEV-2221/SEV-2228）：后端不可达、快照陈旧
-         （stale / status_unavailable）都在这里提示，
-         文案由 renderStatus → updateStatusWarning 用 textContent 写入，故此处不留 data-i18n；
-         .recording-state 三 span（on/off/probe）由 renderRecordingControl 切换：probe 仅在
-         取证失败（error/stale）时显示，此时两个录制按钮一并禁用（SEV-2228 后半）；
-         #stat-* 四个卡片、#recording-tbody 录制中列表均被 renderStatus 覆盖刷新。 -->
+    <!-- 仪表盘：进入即 startSSE()（/api/status 每 2s）与 loadLogs()（日志另按 5s 轮询）。
+         #engine-warning 由 renderStatus 按 engine_alive===false 显隐；#status-warning 是更宽泛的状态告警
+         （SEV-2221/SEV-2228）：后端不可达、快照陈旧（stale / status_unavailable）都在这里提示，文案由
+         renderStatus → updateStatusWarning 经 textContent 写入，故此处不留 data-i18n。
+         .recording-state 三 span（on/off/probe）由 renderRecordingControl 切换：probe 仅在取证失败
+         （error/stale）时显示，此时两个录制按钮一并禁用（SEV-2228 后半）。 -->
     <main id="dashboard-view" class="view">
         <div id="engine-warning" class="engine-warning hidden" data-i18n="dashboard.engineWarning">⚠️ 录制引擎已停止运行，请检查日志或重启服务</div>
         <div id="status-warning" class="engine-warning hidden" role="status" aria-live="polite"></div>
@@ -81,9 +78,8 @@
         </section>
     </main>
 
-    <!-- 弹幕监控：进入即 startDanmakuPolling() 每 2s 轮询 /api/danmaku?since=。
-         #danmaku-rooms-tbody 房间表、#danmaku-room-filter 房间筛选下拉、#danmaku-stream 弹幕流、
-         #danmaku-hint 无数据提示均由 renderDanmaku/dmRenderStream 维护；#danmaku-clear-btn 清空本地缓冲。 -->
+    <!-- 弹幕监控：进入即 startDanmakuPolling()（/api/danmaku?since= 每 2s 增量轮询）。房间表、房间筛选
+         下拉、弹幕流与无数据提示由 renderDanmaku/dmRenderStream 维护；#danmaku-clear-btn 清空本地缓冲。 -->
     <main id="danmaku-view" class="view hidden">
         <section class="panel">
             <h3 data-i18n="danmaku.rooms">弹幕房间</h3>
@@ -103,9 +99,9 @@
         </section>
     </main>
 
-    <!-- 直播间管理：#room-add-form 提交走 addRoom()；#rooms-tbody 由 loadRooms() 渲染，
-         行内开关(data-action=toggle)/删除(data-action=delete)/画质下拉(data-action=quality) 经 #rooms-tbody
-         上的事件委托转发 toggleRoom/deleteRoom/changeRoomQuality（故这三类控件不需要各自绑监听器）。
+    <!-- 直播间管理：#room-add-form 提交走 addRoom()；#rooms-tbody 由 loadRooms() 渲染，行内开关
+         (data-action=toggle)/删除(delete)/画质下拉(quality) 经该 tbody 上的事件委托转发
+         toggleRoom/deleteRoom/changeRoomQuality（故这三类控件不需要各自绑监听器）。
          该表列宽与防错位规则见 style.css 末尾的 #rooms-view 段（新增列须同步补 th 定宽）。 -->
     <main id="rooms-view" class="view hidden">
         <section class="panel">
@@ -118,8 +114,8 @@
                 <input type="text" id="room-name" data-i18n-placeholder="rooms.namePlaceholder" placeholder="主播名称（可选）">
                 <button type="submit" data-i18n="rooms.addBtn">添加</button>
             </form>
-            <!-- 画质选项管理：#room-quality 的下拉项不再硬编码，改由 loadQualityOptions() 从
-                 config.ini 读取用户自选列表动态填充；此处提供增删入口，改动即时 PUT 回写。 -->
+            <!-- 画质选项管理：#room-quality 的下拉项不硬编码，由 loadQualityOptions() 从 config.ini 读取
+                 用户自选列表动态填充；此处提供增删入口，改动即时 PUT 回写。 -->
             <div class="quality-options">
                 <button type="button" id="quality-manage-btn" class="small" data-i18n="rooms.manageQuality">画质选项</button>
                 <div id="quality-manage-panel" class="quality-panel hidden">
@@ -142,20 +138,18 @@
     </main>
 
     <!-- 配置：#config-container 由 loadConfig() 按 /api/config 动态生成输入行（含 data-section/data-key）；
-         #config-save-btn 触发 saveConfig() 仅 PUT 有变更的键。HTTPS 开关输入会实时联动 #ssl-platform-hint。
+         #config-save-btn 触发 saveConfig()，只 PUT 有变更的键；HTTPS 开关输入实时联动 #ssl-platform-hint。
          #config-save-status（MIN-2239）在保存中途失败时常驻显示「已应用 n 项 / 第 m 项失败 / 其余未提交」，
-         失败行另加 .row-failed 标红——不能只靠 toast：toast 会被下一条覆盖且自动消失，
-         用户看到输入框仍是自己填的样子就会误以为已保存。
+         失败行另加 .row-failed 标红——不能只靠 toast：toast 会被下一条覆盖且自动消失，用户看到输入框仍是
+         自己填的样子就会误以为已保存。
          M-17（CODE_REVIEW_2026-10-18）：本容器**不得**带 data-i18n* 属性。applyTranslations() 是「扫
          [data-i18n] → 覆写 textContent」的通用形态，覆写 textContent 会连带清掉全部子节点；而 loadConfig()
          只重建子节点、属性仍留在容器上，于是任意一次语言切换都会把整张已渲染的表单（含用户未保存的修改）
-         压成一行「加载中...」占位文本。静态首屏文案交给 loadConfig()/loadRooms()/loadFiles() 各自的
-         t() 分支产出，容器自身不参与静态翻译。
-         （删掉该属性不会留下「英文界面看到中文加载中」的可见残留：#config-view 初始带 .hidden，
-         而让它可见的 showView('config') 同一步就调用 loadConfig()，初始文本在用户能看到它之前
-         就已被服务端数据整段替换。）
-         （#rooms-tbody / #files-tbody / #recording-tbody / #danmaku-room-filter 内的 data-i18n="loading"
-         一类键都挂在**会被 innerHTML 整体替换掉的子节点**上，重建即随之消失，故无同病。） -->
+         压成一行「加载中...」占位文本。静态首屏文案交给 loadConfig()/loadRooms()/loadFiles() 各自的 t()
+         分支产出，容器自身不参与静态翻译。
+         （删掉该属性不会留下「英文界面看到中文加载中」的可见残留：#config-view 初始带 .hidden，而让它
+         可见的 showView('config') 同一步就调用 loadConfig()。子节点上的 loading 一类键挂在会被 innerHTML
+         整体替换掉的节点上，重建即随之消失，故无同病。） -->
     <main id="config-view" class="view hidden">
         <section class="panel">
             <h3 data-i18n="config.title">录制与推送配置</h3>
@@ -165,8 +159,8 @@
         </section>
     </main>
 
-    <!-- 文件浏览：#file-breadcrumb 面包屑（点击下钻）、#files-tbody 由 loadFiles() 渲染；
-         dir 行「进入」/file 行「下载」按钮经事件委托转发 loadFiles/downloadFile。 -->
+    <!-- 文件浏览：#file-breadcrumb 面包屑（点击下钻）、#files-tbody 由 loadFiles() 渲染；dir/file 行的
+         「进入」/「下载」按钮经事件委托转发 loadFiles/downloadFile。 -->
     <main id="files-view" class="view hidden">
         <section class="panel">
             <div class="file-header">
@@ -184,16 +178,13 @@
          单例 toastTimer 保证连续提示互不打架（新提示清除旧定时器）。 -->
     <div id="toast" class="toast hidden"></div>
     <!-- 认证复验口令窗（M-22，2026-09-29）：修改 [Web] web_auth_enable / web_password 时由
-         app.js::askReauthPassword() 摘掉 .hidden 弹出，替代原 window.prompt（明文回显、
-         是面板唯一非 type="password" 的口令采集形态）。四个出口（确认/取消/Enter/Esc/点遮罩）
-         一律经 _settleReauth() 收敛：立刻清空 #reauth-password 并重新挂上 .hidden，
-         口令不在隐藏节点里过夜。
-         与后端契约同源（src/web_api.py::update_config 的 MID-2241 段）：认证当前开启时写这两个键
-         必须带能过 verify_web_password 的 reauth_password，否则 403；因此留空/取消在前端就地放弃
-         （计入「已跳过 N 项认证相关改动」），不把空 reauth 发出去撞 403。
-         反向半边：认证当前**关闭**时后端不要求复验，app.js 也就不弹本窗——否则第一次启用认证的
-         人没有旧口令可填，会被这个窗口死锁在面板之外。
-         autocomplete="off" + type="password"：口令不进浏览器自动填充候选。 -->
+         askReauthPassword() 摘掉 .hidden 弹出，替代原 window.prompt（明文回显，是面板唯一非
+         type="password" 的口令采集形态）。四个出口（确认/取消/Enter/Esc/点遮罩）一律经 _settleReauth()
+         收敛：立刻清空 #reauth-password 并重新挂上 .hidden，口令不在隐藏节点里过夜。
+         与后端契约同源（src/web_api.py::update_config 的 MID-2241 段）：认证当前开启时写这两个键必须带能过
+         verify_web_password 的 reauth_password，否则 403；因此留空/取消在前端就地放弃，不把空 reauth 发出去。
+         认证当前**关闭**时后端不要求复验，前端也就不弹本窗——否则第一次启用认证的人没有旧口令可填，
+         会被这个窗口死锁在面板之外。autocomplete="off" + type="password"：口令不进自动填充候选。 -->
     <div id="reauth-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="reauth-modal-label">
         <div class="modal-card">
             <label id="reauth-modal-label" for="reauth-password" data-i18n="config.authChangeReauth">请复验当前 Web 口令（修改认证配置需要；留空或取消即放弃本次改动）:</label>

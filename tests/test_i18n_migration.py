@@ -1,19 +1,17 @@
 # -*- coding: utf-8 -*-
 # i18n.tr() 形参迁移的静态防回归。
 #
-# 背景：logger/print 的 f-string 会在查目录之前先完成插值，于是目录里带占位符的
-# msgid 永远匹配不上，翻译静默退化为原文（200+ 条形参日志因此长期「有翻译但用不上」）。
-# 迁移把这些调用点改写为 i18n.tr(模板, **kw)——「先查表、后插值」。
+# 背景：logger/print 的 f-string 会在查目录之前先完成插值，目录里带占位符的 msgid 永远匹配不上，
+# 翻译静默退化为原文；迁移把这些调用点改写为 i18n.tr(模板, **kw)——「先查表、后插值」。
 #
-# 本文件锁定四条不变量（全部静态成立，零运行时依赖）：
-#   ① 不再出现「有价值的」logger/print f-string（防止有人改回旧写法）；判据是「首参**子树**
-#      含带 FormattedValue 的 JoinedStr」而非「首参直接是 JoinedStr」——后者会漏掉
-#      `f"A" + (f"B" if x else "") + f"C"` 这类 ast.BinOp 形态（MID-68，详见该用例内注释）；
+# 四条不变量（全部静态成立，零运行时依赖）：
+#   ① logger/print 不再出现「有价值的」插值 f-string；判据是「首参**子树**含带 FormattedValue
+#      的 JoinedStr」而非「首参直接是 JoinedStr」——后者会漏掉 `f"A" + (f"B" if x else "") + f"C"`
+#      这类 ast.BinOp 形态（MID-68，详见该用例内注释）；
 #   ② 每个 tr() 调用的模板占位符集合 == 关键字实参集合（防止改模板漏改实参）；
-#   ③ 运行时模板集合 ⊆ zh_CN.po 键集合（目录覆盖完整，等价于提取器「缺失 0」）。
-#   ④ print_colored / messagebox 实参位不再出现插值 f-string（2026-09-30 补录）：
-#      这两处是提取器盲区①②，主提取器与不变量①都看不见；盲区文案须 tr 预格式化后
-#      整体传入，改回 f-string 直传会让目录词条静默失效且无任何门禁变红。
+#   ③ 运行时模板集合 ⊆ zh_CN.po 键集合（等价于提取器「缺失 0」）；
+#   ④ print_colored / messagebox 实参位不再出现插值 f-string：这两处是提取器盲区①②，
+#      主提取器与不变量①都看不见；盲区文案须 tr 预格式化后整体传入，否则目录词条静默失效。
 
 import ast
 import importlib.util
@@ -40,9 +38,8 @@ LOGGER_METHODS = {
 
 
 def _load_extractor() -> object:
-    # 提取器是 scripts/ 下的独立脚本（不在包内），用 importlib 按文件路径加载，
-    # 复用其 SCAN_FILES / scan_file / is_valuable——避免在本文件里复制一份扫描
-    # 口径，否则两边一旦漂移，回归测试会与真实提取器给出不同结论（假绿/假红）
+    # 提取器是 scripts/ 下的独立脚本（不在包内），按文件路径加载并复用其 SCAN_FILES /
+    # scan_file / is_valuable：复制一份扫描口径一旦漂移，回归结论就会与真实提取器不同（假绿/假红）
     spec = importlib.util.spec_from_file_location("_extract_i18n_probe", ROOT / "scripts" / "extract_i18n_strings.py")
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
@@ -66,7 +63,7 @@ T_CALLER_IDS: set[str] = getattr(_EX, "T_CALLER_IDS")
 
 def _iter_files() -> list[Path]:
     # gui_legacy.py 已删除，SCAN_FILES 里可能仍留历史条目 → 统一用 exists() 过滤，
-    # 避免因某个待扫描文件不存在而让整个回归测试误报
+    # 避免某个待扫描文件不存在就让整轮回归误报
     return [p for p in SCAN_FILES if p.exists()]
 
 
@@ -88,13 +85,13 @@ def _is_tr_call(node: ast.AST) -> TypeGuard[ast.Call]:
 
 
 def _interpolated_fstrings(node: ast.AST) -> list[ast.JoinedStr]:
-    # MID-68（2026-09-21）：门禁谓词由「首参**直接是** JoinedStr」收紧为「首参**子树里**有
-    # 带 FormattedValue 的 JoinedStr」。旧判据看不见 `logger.warning(f"A" + (f"B" if x else "") + f"C")`
-    # 这类形态——它的首参是 ast.BinOp，于是「先插值、后查目录」的违规整类逃逸
-    # （2026-09-20 实测有 6 处真实违规从此漏过：斗鱼降级链、画质降级告警、磁盘空间提示等）。
-    # 唯一收敛处是 tr() 调用：按约定②「格式说明符/转换符由调用方预先求值后作实参传入」
-    # （`_backoff=f"{v:.0f}"`、`value=repr(value)`），那些 f-string 发生在查表**之后**、
-    # 不影响 msgid 匹配，一并判违规会把本仓推荐写法打成回归；故只递归其模板位（首参）。
+    # MID-68（2026-09-21）：判据由「首参**直接是** JoinedStr」收紧为「首参**子树里**有带
+    # FormattedValue 的 JoinedStr」。旧判据看不见 `f"A" + (f"B" if x else "") + f"C"` 这类
+    # ast.BinOp 形态，「先插值、后查目录」的违规整类逃逸（实测 6 处真实违规从此漏过：
+    # 斗鱼降级链、画质降级告警、磁盘空间提示等）。
+    # 唯一收敛处是 tr() 调用：约定②「格式说明符/转换符由调用方预求值后作实参传入」的
+    # f-string（`_backoff=f"{v:.0f}"`）发生在查表**之后**、不影响 msgid 匹配，一并判违规
+    # 会把本仓推荐写法打成回归；故只递归其模板位（首参）。
     if isinstance(node, ast.JoinedStr):
         return [node] if any(isinstance(v, ast.FormattedValue) for v in node.values) else []
     if _is_tr_call(node):
@@ -106,9 +103,9 @@ def _interpolated_fstrings(node: ast.AST) -> list[ast.JoinedStr]:
 
 
 def _message_text(node: ast.AST, src: str) -> str:
-    # 还原「将要送给 logger/print 的整条消息模板」用于价值判定（与提取器 is_valuable 同口径）：
-    # 字符串常量原样取、f-string 占位符还原为 {expr}、`+` 拼接与三元/布尔分支两侧都并入
-    # （拼接后的文本正是翻译看到的 msgid 形态）；其余节点（函数调用等）视为无自然语言
+    # 还原「将要送给 logger/print 的整条消息模板」供价值判定（与提取器 is_valuable 同口径）：
+    # 常量原样取、f-string 占位符还原为 {expr}、`+` 拼接与三元/布尔分支两侧都并入；
+    # 其余节点（函数调用等）视为无自然语言
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
     if isinstance(node, ast.JoinedStr):

@@ -13,7 +13,7 @@ from .async_http import get_response_status
 from .spider import get_bilibili_stream_data, get_douyu_stream_data
 from .utils import trace_error_decorator
 
-# 直播流地址获取模块 - 从各平台解析获取直播流地址，支持多种画质选择
+# 直播流地址获取模块：从各平台解析结果中取流地址、选画质，支持多档位与就近降级。
 #
 # 职责：把各平台 spider 解析出的 json_data 归一化为统一结构
 #   {is_live, anchor_name, title, quality, actual_quality, available_qualities,
@@ -21,13 +21,13 @@ from .utils import trace_error_decorator
 #    流地址校验（src.stream_select.select_source_url）消费。
 # 核心机制：
 #   - 画质档位映射（QUALITY_MAPPING / QUALITY_MAPPING_BIT / QUALITY_LEVEL）与平台专属
-#     档位表（HUYA_FIXED_TIERS / DOUYU_RATE_BY_CODE）把"中文画质名"转为各平台请求参数；
-#   - 各平台按统一画质索引选档，并对不可用档位做就近降级（is_downgrade 判定告警）；
+#     档位表（HUYA_FIXED_TIERS / DOUYU_RATE_BY_CODE）把中文画质名转为各平台请求参数；
+#   - 各平台按统一画质索引选档，不可用档位就近降级（is_downgrade 判定告警）；
 #   - 虎牙/斗鱼细粒度蓝光档位走各自专属表，不污染通用 0-5 数字索引语义。
-# 与其它模块关系：本模块只"取地址 + 选画质降级"，不做可达性校验与 ffmpeg 拉流；
-#   地址可用性由 stream_select.py 的 select_source_url 逐候选校验、首条可达即选用。
-# 设计取舍：所有 get_*_stream_url 缺字段即按"未开播"返回 is_live=False；
-#   保持上游 json_data 透传，避免对离线房间伪造 is_live=True 误导调度器。
+# 与其它模块的关系：本模块只「取地址 + 选画质降级」，不做可达性校验与 ffmpeg 拉流；
+#   地址可用性由 stream_select.select_source_url 逐候选校验、首条可达即选用。
+# 设计取舍：所有 get_*_stream_url 缺字段即按「未开播」返回 is_live=False，保持上游
+#   json_data 透传，避免对离线房间伪造 is_live=True 误导调度器。
 
 # Author: Hmily
 # GitHub: https://github.com/ihmily
@@ -221,12 +221,10 @@ class TiktokSdkParams(TypedDict, total=False):
     resolution: str
 
 
-# 画质 -> 排序后列表中的位置（索引），全仓选档的唯一权威序（OD=0, BD=1, UHD=2, HD=3, SD=4,
-# LD=5）。get_douyin_stream_url 的 _sort_quality_items 里 order 由本表 + DOUYIN_KEY_TO_CODE 推导
-# （MID-2229，依据见该表注释），按名称选画质靠它定位，改本表顺序即整体错位。
-# 蓝光子档位（BD30/BD20/BD8/BD4）**不得**塞进本表：那会撑开「数字输入 0-5」的语义、让通用
-# 选档错位；它们由 get_quality_index 折叠到 BD 槽位，虎牙/斗鱼走各自专属档位表
-# （HUYA_FIXED_TIERS / DOUYU_RATE_BY_CODE）。
+# 画质 → 排序后列表中的位置（索引），全仓选档的唯一权威序（OD=0, BD=1, UHD=2, HD=3,
+# SD=4, LD=5）。按名称选画质靠它定位，改本表顺序即整体错位。
+# 蓝光子档位（BD30/BD20/BD8/BD4）不得塞进本表：那会撑开「数字输入 0-5」的语义、让通用
+# 选档错位；它们由 get_quality_index 折叠到 BD 槽位，虎牙/斗鱼走各自专属档位表。
 QUALITY_MAPPING = {"OD": 0, "BD": 1, "UHD": 2, "HD": 3, "SD": 4, "LD": 5}
 QUALITY_MAPPING_BIT = {
     "OD": 99999,
@@ -266,12 +264,10 @@ BD_SUB_TIERS = frozenset({"BD30", "BD20", "BD8", "BD4"})
 # 网易CC 画质名 → 统一代码
 NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard": "SD"}
 
-# 抖音接口下发的画质键 → 统一画质代码（MID-2229，2026-09-22）。flv_pull_url / hls_pull_url_map
-# 实测键为 ORIGIN/FULL_HD1/HD1/SD1/SD2（app 端另有 ORIGIN 一路，见 src/spider.py 同名合并），
-# **不是** OD/BD/UHD/... 这套内部代码。
-# [历史注] 折叠前只认 ORIGIN：其余键进不了 _sort_quality_items 的 order 表（全落默认 99），回采
-# actual_quality 后又因 QUALITY_LEVEL 查不到使 is_downgrade 恒 False —— main.py「设置 X 实际 Y」
-# 告警从不触发，画质降级对用户完全不可见。
+# 抖音接口下发的画质键 → 统一画质代码。flv_pull_url / hls_pull_url_map 实测键为
+# ORIGIN/FULL_HD1/HD1/SD1/SD2（app 端另有 ORIGIN 一路，见 src/spider.py 同名合并），
+# 不是 OD/BD/UHD/... 这套内部代码。不折叠时其余键进不了 order 表（全落默认 99），
+# 回采的 actual_quality 又查不到 QUALITY_LEVEL → is_downgrade 恒 False，降级完全静默。
 DOUYIN_KEY_TO_CODE: dict[str, str] = {
     "ORIGIN": "OD",
     "FULL_HD1": "BD",
@@ -280,28 +276,22 @@ DOUYIN_KEY_TO_CODE: dict[str, str] = {
     "SD2": "LD",
 }
 
-# get_stream_url 未指定 extra_key 时的取值探测顺序（MID-20）。play_url_list 元素有**两种**契约：
-# 「画质 → 地址」字典（键名各平台不统一）与「按画质排序的裸 URL 串」（spider.py 9 处同型写入），
-# 两种契约的处置见 get_stream_url 内 get_url。原实现缺 key 时把整份字典当地址返回、下游按 str 判型
-# 静默丢弃；此处按「通用名 → 容器专属名」探测、全落空返回 ""，让「无地址」显式成立而非塞 dict 进录制链路。
+# get_stream_url 未指定 extra_key 时的取值探测顺序。play_url_list 元素有两种契约：
+# 「画质 → 地址」字典（键名各平台不统一）与「按画质排序的裸 URL 串」（spider.py 9 处同型写入）。
+# 缺 key 时若把整份字典当地址返回，下游按 str 判型会静默丢弃；这里按「通用名 → 容器专属名」
+# 探测、全落空返回 ""，让「无地址」显式成立而非塞 dict 进录制链路。
 _PLAY_URL_KEY_ORDER: tuple[str, ...] = ("url", "play_url", "m3u8_url", "flv_url")
 
 # ── 虎牙画质档位 ─────────────────────────────────────────────
-# 虎牙细粒度档位：ratio 参数即该档位的码率上限(kbps)。
-# 2026-08-29 在 huya.com/chuhe（bitRate=30000）实测 ffmpeg 3 秒采样验证：
-#   ratio=0    原画  2560x1440 @60fps（不加 ratio 即原画）
-#   ratio=30000 蓝光30M 1920x1080 @60fps
-#   ratio=20000 蓝光20M 1920x1080 @60fps
-#   ratio=8000  蓝光8M  1920x1080 @60fps
-#   ratio=4000  蓝光4M  1920x1080 @30fps
-#   ratio=2000  超清   1280x720  @30fps
-#   ratio=500   流畅   800x450   @24fps
-# （各 CDN 线路共享同一防盗链参数，ratio 直接拼在 FLV/HLS URL 的 query 上，流地址路径不变。）
+# 虎牙细粒度档位：ratio 参数即该档位的码率上限（kbps）。2026-08-29 在 huya.com/chuhe
+# （bitRate=30000）实测 ffmpeg 3 秒采样：ratio=0 原画 2560x1440@60；30000 蓝光30M
+# 1080p60；20000 蓝光20M；8000 蓝光8M；4000 蓝光4M 1080p30；2000 超清 720p30；
+# 500 流畅 800x450@24。各 CDN 线路共享同一防盗链参数，ratio 直接拼在 FLV/HLS URL 的
+# query 上，流地址路径不变。
 HUYA_FIXED_TIERS: tuple[tuple[str, int], ...] = (("BD30", 30000), ("BD20", 20000), ("BD8", 8000), ("BD4", 4000))
 # ratio(字符串) → 画质代码：选中/降级后回采实际档位用。
-# MID-14（2026-09-20）补 1000/250：exsphd 除实测七档外还可能出现 264_1000 / 264_250 等表外值，
-# 旧实现只登记 6 档、未命中即把 actual_quality 回写成**请求档**，把「URL 挂着更低 ratio、面板
-# 显示按请求录」的降级彻底伪装掉。
+# 必须登记表外可能值（1000/250）：未命中会把 actual_quality 回写成请求档，
+# 把「URL 挂着更低 ratio、面板显示按请求录」的降级彻底伪装掉。
 HUYA_RATIO_TO_CODE = {
     "30000": "BD30",
     "20000": "BD20",
@@ -312,10 +302,10 @@ HUYA_RATIO_TO_CODE = {
     "500": "LD",
     "250": "LD",
 }
-# 画质代码 → 虎牙 ratio(码率上限 kbps)：HUYA_RATIO_TO_CODE 的正向表，
-# 两个档位分支（蓝光子档位 / 旧档位）都以「数值」为唯一语义，不再依赖 exsphd 的出现顺序。
-# SD 无独立实测档（B站/虎牙均无「标清」ratio），取 HD(1000) 与 LD(500) 之间的 800
-# （对齐 QUALITY_MAPPING_BIT 的 SD 码率），由就近取值逻辑落到房间实际存在的档。
+# 画质代码 → 虎牙 ratio（码率上限 kbps）：HUYA_RATIO_TO_CODE 的正向表，两个档位分支
+# （蓝光子档位 / 旧档位）都以数值为唯一语义，不依赖 exsphd 的出现顺序。
+# SD 无独立实测档，取 HD(1000) 与 LD(500) 之间的 800（对齐 QUALITY_MAPPING_BIT），
+# 由就近取值逻辑落到房间实际存在的档。
 HUYA_RATIO_BY_CODE: dict[str, int] = {
     "BD30": 30000,
     "BD20": 20000,
@@ -332,10 +322,10 @@ HUYA_CODE_ORDER: tuple[str, ...] = ("BD30", "BD20", "BD8", "BD4", "UHD", "HD", "
 
 
 def huya_code_for_ratio(ratio: int) -> str:
-    # 按**数值**给虎牙 ratio 贴档位标签（MID-13 的根因修复点）：
-    # 精确命中表内值直接返回；表外值（12000/6000 等 exsphd 可能携带的档）取绝对距离最近的档；
-    # 距离相同时**偏向更低画质**（QUALITY_LEVEL 更大的一侧）——宁可多打一条降级告警，
-    # 也不把更低的实际档位伪装成高档。返回 "" 表示完全无法命名（调用方按请求档兜底）。
+    # 按数值给虎牙 ratio 贴档位标签：精确命中表内值直接返回；表外值（12000/6000 等
+    # exsphd 可能携带的档）取绝对距离最近的档；距离相同时偏向更低画质（QUALITY_LEVEL 更大
+    # 的一侧）——宁可多打一条降级告警，也不把更低的实际档位伪装成高档。
+    # 返回 "" 表示完全无法命名（调用方按请求档兜底）。
     exact = HUYA_RATIO_TO_CODE.get(str(ratio))
     if exact:
         return exact
@@ -350,14 +340,10 @@ def huya_code_for_ratio(ratio: int) -> str:
 
 
 # ── 斗鱼画质档位 ─────────────────────────────────────────────
-# 斗鱼 rate 语义（2026-08-29 在 3168536 房间实测）：
-#   请求 rate=0    → 下发 rate=0，rtmp_live 无后缀（原画 1080p60）
-#   请求 rate=8200 → 蓝光8M；房间无此档时服务端自动钳制到下发 rate=4（蓝光4M _4000.flv）
-#   请求 rate=4000 → 下发 rate=4，_4000.flv（1080p30）
-#   请求 rate=3    → 下发 rate=3，_2000.flv（超清 720p30）
-#   请求 rate=2    → 下发 rate=2，_900.flv（高清 540p25）
-#   请求 rate=1    → 流畅；该房间钳制到 rate=2
-# 服务端自带「就近钳制」：请求不存在的档位不会报错，而是下发更低档，rate 字段回采真实档位。
+# 斗鱼 rate 语义（2026-08-29 在 3168536 房间实测）：0=原画 1080p60；8200=蓝光8M（房间
+# 无此档时服务端钳制到 4/蓝光4M）；4000=蓝光4M 1080p30；3=超清 720p30；2=高清 540p25；
+# 1=流畅（无档位时钳制到 2）。服务端自带「就近钳制」：请求不存在的档位不报错，而是
+# 下发更低档，rate 字段回采真实档位。
 DOUYU_RATE_BY_CODE = {
     "OD": "0",
     "BD": "0",
@@ -387,12 +373,11 @@ DOUYU_RATE_DESC = ("8200", "4000", "3", "2", "1")
 
 
 def bitrate_to_quality(bitrate: int) -> str:
-    # 根据码率反查画质代码。返回码率上限 >= 给定值的最高档；0/未知回退 OD。
-    # 按 LD→OD 升序查找：首个"容量 >= 实码率"的档即能容纳该码率的最低档，
-    # 升序保证返回"够用的最低档"，避免把低码率源误标成高画质。
+    # 根据码率反查画质代码：返回码率上限 >= 给定值的最高档；0/未知回退 OD。
+    # 按 LD→OD 升序查找，首个「容量 >= 实码率」的档即能容纳该码率的最低档，
+    # 避免把低码率源误标成高画质。
     if not bitrate or bitrate <= 0:
         return "OD"
-    # 从低到高找第一个能容纳该码率的档位（LD<SD<HD<UHD<BD<OD）
     for code in ("LD", "SD", "HD", "UHD", "BD", "OD"):
         if bitrate <= QUALITY_MAPPING_BIT[code]:
             return code
@@ -419,11 +404,10 @@ def is_downgrade(requested: str | None, actual: str | None) -> bool:
 
 
 def _pad_list(url_list: list[_PadT], min_length: int = 6) -> list[_PadT] | list[None]:
-    # 填充到指定最小长度。MI-02：空列表返回**新**列表（无法以末元素填充，填 None 防调用方越界），
+    # 填充到指定最小长度。空列表返回新列表（无法以末元素填充，填 None 防调用方越界），
     # 非空则原地补齐后返回自身；调用方一律以返回值赋回原变量，不依赖「原地修改」副作用。
-    # [历史注] 2026-09-12 审查 6.5：默认 min_length 5→6——LD 在 QUALITY_MAPPING 索引为 5（见
-    # get_quality_index），5 档时平台恰返回 5 档、url_list[5] 越界，被下游 min 钳制退回「未开播」，
-    # 用户选「流畅」时部分平台永远录不上；6 档下 min(quality_index, len-1) 仍生效，仅 len>=6 才用 LD。
+    # 默认 6 而非 5：LD 在 QUALITY_MAPPING 索引为 5，恰返回 5 档时 url_list[5] 会越界，
+    # 用户选「流畅」时部分平台永远录不上；6 档下 min(quality_index, len-1) 仍生效。
     if not url_list:
         return [None] * min_length
     while len(url_list) < min_length:
@@ -453,14 +437,12 @@ def get_quality_index(quality: str | int | None) -> tuple[str, int]:
 
 
 def _probe_headers(platform: str) -> dict[str, str]:
-    # 本模块两处 HLS 探针（抖音 / TikTok）的请求头（MID-2227，2026-09-22）。原调用点全程 headers=None
-    # 让出网 UA 落到 httpx 默认 `python-httpx/0.28.1`，而同步校验器 stream_select._validate_stream_url
-    # 与 ffmpeg 录制都显式补 UA（get_record_user_agent(platform) or MOBILE_UA）——同一条流三种指纹，
-    # 探针被 CDN 风控误判的概率显著高于录制侧（表现为「解析判不可达 → 相邻档降级」而 ffmpeg 其实录得上）。
+    # 本模块两处 HLS 探针（抖音 / TikTok）的请求头：headers=None 会让出网 UA 落到 httpx 默认值，
+    # 而 stream_select._validate_stream_url 与 ffmpeg 录制都显式补 UA——同一条流三种指纹，探针被
+    # CDN 风控误判的概率显著高于录制侧（表现为「判不可达 → 相邻档降级」而 ffmpeg 其实录得上）。
     # UA 唯一事实源在 stream_select，此处只转发。
-    # 就地延迟导入而非模块级：src.stream_select 顶层 `import main`、main 又 `from src import ... stream`，
-    # 模块级导入会在 `python main.py`（__main__ 之外二次执行 main）下形成环，实测抛
-    # ImportError: cannot import name 'select_source_url' from partially initialized module 'src.stream_select'。
+    # 就地延迟导入而非模块级：src.stream_select 顶层 import main、main 又 import 本模块，模块级
+    # 导入会在 python main.py（__main__ 之外二次执行 main）下形成环，实测抛 ImportError。
     from .stream_select import MOBILE_UA, get_record_user_agent
 
     return {"User-Agent": get_record_user_agent(platform) or MOBILE_UA}
@@ -486,9 +468,8 @@ async def get_douyin_stream_url(
 
         # 保留画质标签：将 dict items 按画质等级降序（OD>BD>UHD>HD>SD>LD）排序
         def _sort_quality_items(dd: dict[str, str]) -> list[tuple[str, str]]:
-            # MID-2229：order 由统一代码表推导，不写字面量字典。字面量版只认 ORIGIN/OD/BD/UHD/
-            # HD/SD/LD，抖音真实键（FULL_HD1/HD1/SD1/SD2）一个都命中不了、全落默认 99；sorted 稳定
-            # ⇒ 排序结果 = 接口返回顺序，选中的未必是请求档。
+            # order 由统一代码表推导，不写字面量字典：字面量版认不出抖音真实键
+            # （FULL_HD1/HD1/SD1/SD2），全落默认 99，sorted 稳定 ⇒ 排序结果 = 接口返回顺序。
             order = {name: QUALITY_MAPPING.get(code, 99) for name, code in DOUYIN_KEY_TO_CODE.items()}
             order.update(QUALITY_MAPPING)
             return sorted(dd.items(), key=lambda kv: order.get(kv[0].upper(), 99))
@@ -503,9 +484,8 @@ async def get_douyin_stream_url(
             if code:
                 return code
             # 未知键：既不进 order 表也进不了 QUALITY_LEVEL（is_downgrade 会静默返回 False）。
-            # 本接口不下发码率/分辨率，无法按码率反查档位（对比 TikTok 分支有 sdk_params）；
-            # 回退口径为「原样上抛 + 排在最末」（order 默认 99 = 按最低档对待），
-            # 宁可少选也不把未知档当高档，同时留痕以便补进 DOUYIN_KEY_TO_CODE。
+            # 本接口不下发码率/分辨率，无法按码率反查档位；回退口径为「原样上抛 + 排在最末」
+            # （order 默认 99 = 按最低档对待），宁可少选也不把未知档当高档，并留痕以便补表。
             if key and key not in QUALITY_LEVEL:
                 logger.warning(
                     i18n.tr(
@@ -534,24 +514,21 @@ async def get_douyin_stream_url(
         flv_url_list: list[str] = []
         use_hevc_flv = quality_index == 0 and bool(hevc_flv_url) and not m3u8_is_hevc
         if use_hevc_flv and hevc_flv_url:
-            # 被替换的 h264 原画地址必须存入 flv_url_list：选源层会把一切 codec=h265 候选剔除
-            # （stream_select 的 h265 过滤），不保留则「HLS 采集关闭 / m3u8 缺席」的原画 hevc 房
-            # 过滤后零可用候选，每轮「本轮无可用源」永不录制（2026-10-01 两间抖音原画房实测）。
-            # select_source_url 会把 flv_url_list 追加在主候选之后：HLS 开启时仍 m3u8 优先，
-            # HLS 关闭/不可达时落到这条 h264 FLV。flv_pull_url 条目若自带 codec=h265 标记
-            # （钉定约定该参数只应出现在 hevc_flv_url 上）同样会被选源层剔除，不收进备选徒增告警。
-            # 函数内 import：stream_select 顶层 import main 会循环导入（python main.py 下实测炸），
-            # 惯例见本文件 _probe_headers 的同款延迟导入。
+            # 被替换的 h264 原画地址必须存入 flv_url_list：选源层会剔除一切 codec=h265 候选，
+            # 不保留则「HLS 采集关闭 / m3u8 缺席」的原画 hevc 房过滤后零可用候选，每轮
+            # 「本轮无可用源」永不录制。select_source_url 会把 flv_url_list 追加在主候选之后：
+            # HLS 开启时仍 m3u8 优先，HLS 关闭/不可达时落到这条 h264 FLV。
+            # flv_pull_url 条目若自带 codec=h265 标记同样会被选源层剔除，不收进备选徒增告警。
+            # 函数内 import：stream_select 顶层 import main 会循环导入，惯例同 _probe_headers。
             from .stream_select import _is_h265
 
             if flv_url and flv_url != hevc_flv_url and not _is_h265(flv_url):
                 flv_url_list.append(flv_url)
             flv_url = hevc_flv_url
         if m3u8_url:
-            # MID-26：探针必须与 stream_select / ffmpeg 用同一份拉流侧 SSL 口径
-            # （get_effective_ssl_verify(platform)），否则「禁用SSL证书验证的平台」/
-            # 「是否启用https录制」开启时探针必然证书报错 → 判不可达 → 明明可录的档位被静默
-            # 降级，而 ffmpeg 实际能录上原画。platform 取 main.py 分派处的同名平台标识。
+            # 探针必须与 stream_select / ffmpeg 用同一份拉流侧 SSL 口径
+            # （get_effective_ssl_verify(platform)），否则用户关闭证书校验后探针必然报错 →
+            # 判不可达 → 明明可录的档位被静默降级。platform 取 main.py 分派处的同名平台标识。
             ok = await get_response_status(
                 url=m3u8_url, proxy=proxy_addr, platform="抖音直播", headers=_probe_headers("抖音直播")
             )
@@ -559,12 +536,9 @@ async def get_douyin_stream_url(
             # 仅有 FLV 源：跳过对空 URL 的可用性校验，避免误判失败并错误降级画质
             ok = True
         if not ok:
-            # m3u8 不可达时向"相邻档"降级：还有更高档就升一档，否则降到前一档；
-            # 仅做单步回退，避免跨档跳过可用画质。
-            # 2026-09-12 审查 6.5：原写法直接用 flv_idx 衍生 index 索引 m3u8_pairs，
-            # 当 flv_pairs 比 m3u8_pairs 长时 m3u8_pairs[index] 越界（抖音部分档位仅
-            # 在 flv 侧存在）。各自钳制到对应列表长度，避免 IndexError 被上游吞成
-            # 「未开播」而漏录
+            # m3u8 不可达时向相邻档降级：还有更高档就升一档，否则降到前一档；仅做单步回退，
+            # 避免跨档跳过可用画质。flv_pairs 可能比 m3u8_pairs 长（部分档位仅在 flv 侧存在），
+            # 两侧各自钳制到自己的长度，避免 IndexError 被上游吞成「未开播」而漏录。
             if flv_pairs:
                 index = flv_idx + 1 if flv_idx < len(flv_pairs) - 1 else max(flv_idx - 1, 0)
             else:
@@ -600,9 +574,9 @@ async def get_tiktok_stream_url(
         # 从流列表中按画质索引选择 URL
         play_list: list[StreamQuality] = []
         for key in stream:
-            # L-14（2026-10-02）：单条脏数据不得穿透整个候选构建——sdk_params 的
-            # json.loads / resolution 的 split("x") 都会抛（上游 JSON 被截断或字段改版），
-            # 原先无保护，一条坏条目会让装饰器把整个 TikTok 房间吞成未开播。
+            # 单条脏数据不得穿透整个候选构建：sdk_params 的 json.loads / resolution 的
+            # split("x") 都会抛（上游 JSON 被截断或字段改版），一条坏条目会让装饰器把整个
+            # TikTok 房间吞成未开播。
             try:
                 url_info = cast(dict[str, object], stream[key])
                 main_info = cast(dict[str, object], url_info.get("main") or {})
@@ -665,32 +639,22 @@ async def get_tiktok_stream_url(
         if not flv_url_list and not m3u8_url_list:
             return result
 
-        # 先 _pad_list（默认 min_length=6，空列表填 6 个 None）防御下面 [quality_index] 越界；
-        # pad 不改档位语义，实际档位由随后的 min 截断决定。
-        # MI-02：必须显式接收返回值——_pad_list 对空列表返回**新列表**、非空才原地追加，原写法只在
-        # 非空时生效、空列表填充被丢弃，全靠下游判空兜底才没错（语义依赖内部实现，重构易回归成 IndexError）。
+        # 先 _pad_list（默认 6，空列表填 6 个 None）防御下面 [quality_index] 越界；pad 不改
+        # 档位语义，实际档位由随后的 min 截断决定。必须显式接收返回值：空列表分支返回新列表，
+        # 丢弃返回值会让填充失效。
         flv_url_list = cast(list[StreamQuality], _pad_list(flv_url_list))
         m3u8_url_list = cast(list[StreamQuality], _pad_list(m3u8_url_list))
-        # MID-16：pad 出的 [None] * 6 让「列表非空」恒真，下方 `if flv_url_list else {"url": ""}` 兜底
-        # 永远进不去，flv_dict 取到 None 后 .get("url") 直接 AttributeError、被 trace_error_decorator
-        # 伪装成「未开播」（同函数 available_qualities 一行就写了判空）。现索引前同时剔除「None 占位项」
-        # 与「无 url 的项」——后者才是线上真实形态：get_video_quality_url 对每个 stream 条目都按
-        # vbitrate/resolution 追加、与 q_key 是否存在无关，只下发 hls 路时 flv 侧是一串 {"url": "", ...}，
-        # 不过滤就会带空地址进候选池、把 bitrate 0 误标成 OD。
+        # pad 出的 [None] * 6 让「列表非空」恒真，`.get("url")` 会因 None 直接 AttributeError
+        # 并被装饰器伪装成「未开播」。索引前同时剔除 None 占位项与无 url 的项——后者是线上
+        # 真实形态：只下发 hls 路时 flv 侧是一串 {"url": "", ...}，不过滤会带空地址进候选池。
         flv_url_list = [x for x in flv_url_list if x and x.get("url")]
         m3u8_url_list = [x for x in m3u8_url_list if x and x.get("url")]
         video_quality, quality_index = get_quality_index(video_quality)
-        # M-11 修复（2026-09-29 审查）：quality_index 一律保留「用户请求档」原始值、不被 FLV 列表覆写，
-        # FLV 与 HLS 各自基于原始索引独立钳制——与本文件上方抖音分支（flv_idx / m3u8_idx 两行）同口径。
-        # [历史注] 原写法 `quality_index = min(quality_index, len(flv_url_list) - 1) if flv_url_list else 0`
-        # 之后再把**被钳过**的值喂给 m3u8_quality_index，两重失效面：
-        #   ① HLS-only 房间（上方过滤后 flv_url_list 恒空）quality_index 被无条件归零 → 用户选任何档位
-        #      都拉码率最高的首档，且 actual_quality 回采到高档后 main.py 的 `_is_downgrade` 恒假
-        #      （高档不算降级）→「选流畅实拉原画」完全静默，白烧带宽；
-        #   ② 两侧过滤后长度不等（_pad_list 补到 6 再滤掉空地址项，可短于 6）时 HLS 被 FLV 的长度二次
-        #      截断，请求低档实拉高档。
-        # 现改为引入 flv_quality_index / m3u8_quality_index 两个局部钳制值，索引不再被写回 quality_index，
-        # 下方「探针失败后的回退分支」同样以原始请求索引为基准（fallback_base），避免同一污染在回退路径复现。
+        # quality_index 保留用户请求档原始值，FLV 与 HLS 各自基于原始索引独立钳制（与抖音
+        # 分支的 flv_idx / m3u8_idx 同口径）。若把 FLV 钳制后的值再喂给 HLS：① HLS-only 房间
+        # 索引被无条件归零，选任何档都拉最高码率，回采到高档后降级判定恒假，白烧带宽；
+        # ② 两侧长度不等时 HLS 被 FLV 长度二次截断，请求低档实拉高档。
+        # 回退分支同样以原始索引为基准（fallback_base），避免同一污染在回退路径复现。
         flv_quality_index = min(quality_index, len(flv_url_list) - 1) if flv_url_list else 0
         m3u8_quality_index = min(quality_index, len(m3u8_url_list) - 1) if m3u8_url_list else 0
         flv_dict: StreamQuality | dict[str, str] = flv_url_list[flv_quality_index] if flv_url_list else {"url": ""}
@@ -700,7 +664,7 @@ async def get_tiktok_stream_url(
         if not check_url:
             ok = False
         else:
-            # MID-26：SSL 口径与 platform 取值依据同抖音分支（本模块两处探针必须一致）
+            # SSL 口径与 platform 取值依据同抖音分支（本模块两处探针必须一致）
             ok = await get_response_status(
                 url=check_url,
                 proxy=proxy_addr,
@@ -710,8 +674,8 @@ async def get_tiktok_stream_url(
             )
 
         if not ok:
-            # M-11 配套：回退基准取自原始请求档（fallback_base），两侧各自按自己的长度钳制，
-            # 不得再把 FLV 钳过的下标当作 HLS 的基准（与主选档同一污染形态）。
+            # 回退基准取自原始请求档（fallback_base），两侧各自按自己的长度钳制，
+            # 不得再把 FLV 钳过的下标当作 HLS 的基准。
             fallback_base = quality_index + 1 if quality_index < 4 else max(quality_index - 1, 0)
             if flv_url_list:
                 flv_dict = flv_url_list[min(fallback_base, len(flv_url_list) - 1)]
@@ -720,8 +684,8 @@ async def get_tiktok_stream_url(
 
         flv_url = cast(str, flv_dict.get("url", ""))
         m3u8_url = cast(str, m3u8_dict.get("url", ""))
-        # 实际选中项的 vbitrate → 画质代码。MID-15/16：只有 FLV 时才用 FLV 的码率，
-        # FLV 缺失（仅 HLS 源）时以选中的 HLS 项为准——否则 bitrate 恒 0 会把它标成 OD。
+        # 实际选中项的 vbitrate → 画质代码：只有 FLV 时才用 FLV 的码率，FLV 缺失（仅 HLS
+        # 源）时以选中的 HLS 项为准——否则 bitrate 恒 0 会把它标成 OD。
         _selected = flv_dict if flv_url else m3u8_dict
         actual_quality = bitrate_to_quality(int(cast(int, _selected.get("vbitrate", 0)) or 0))
         available_qualities = (
@@ -734,12 +698,10 @@ async def get_tiktok_stream_url(
             "actual_quality": actual_quality,
             "available_qualities": available_qualities,
             "m3u8_url": m3u8_url,
-            # MID-15：flv_url 字段只放 FLV —— 原写法 `"flv_url": m3u8_url or flv_url` 让同一个 m3u8 同时
-            # 出现在 hls_candidates 与 flv_candidates（去重只在组内），于是 ① 同轮被连续校验两次（多烧
-            # 一次列表 GET + 一次分片 Range-GET）；② 第二次以 is_hls=False 身份进序列，打假「HLS 校验
-            # 失败，回退 FLV」并把 HLS 源记成 FLV 源；③ 最关键的：命中「HLS采集排除平台」/关闭 HLS 采集
-            # 时 HLS 组整组剔除，该 m3u8 仍留在 FLV 组被探测选用，与该配置 2026-09-05 定稿的「HLS 探针
-            # 一次都不发」硬语义直接冲突。「无 FLV 时以 HLS 顶上」由 record_url 通道承担，不在字段语义上撒谎。
+            # flv_url 字段只放 FLV：若写成 m3u8_url or flv_url，同一个 m3u8 会同时出现在两路
+            # 候选，被连续校验两次、以 is_hls=False 身份打假「HLS 失败回退 FLV」；更关键的是
+            # 命中「HLS 采集排除平台」/关闭 HLS 采集时，该 m3u8 仍留在 FLV 组被探测选用，与
+            # 「HLS 探针一次都不发」的硬语义冲突。「无 FLV 时以 HLS 顶上」由 record_url 承担。
             "flv_url": flv_url,
             "record_url": m3u8_url or flv_url,
         }
@@ -750,8 +712,6 @@ async def get_tiktok_stream_url(
 async def get_kuaishou_stream_url(json_data: dict[str, object], video_quality: str | None = None) -> dict[str, object]:
     # 快手：type==1 且 is_live 为假时原样回传、交由上层判离线；FLV 带 bitrate 字段时按码率表选档
     k = cast(KuaishouStreamUrl, cast(object, json_data))
-    # 快手 type 语义：1=未开播（仅返回房间信息，无流地址），2=开播。type==1 且 is_live 为假时
-    # 原样回传 json_data，交由上层判离线，不可在此构造空 is_live=True 误导调度器。
     if k.get("type") == 1 and not k.get("is_live"):
         return json_data
     live_status = k.get("is_live", False)
@@ -775,12 +735,10 @@ async def get_kuaishou_stream_url(json_data: dict[str, object], video_quality: s
                 flv_sorted = sorted(flv_list, key=lambda x: x.get("bitrate", 0), reverse=True)
                 quality_str = video_quality.upper() if video_quality else "OD"
                 if quality_str.isdigit():
-                    # MIN-06：数字画质必须先按**通用**索引语义（OD=0,BD=1,UHD=2,HD=3,SD=4,LD=5）解成
-                    # 档位代码，再查码率表。QUALITY_MAPPING_BIT 为蓝光子档位插了位（位置序
-                    # OD,BD,BD30,BD20,BD8,BD4,UHD,...），直接按位置索引会让同一数字在两表指向不同档——
-                    # "2" 通用表是 UHD(2000)、码率表却是 BD30(30000)，「请求 UHD」实拉最高码率档。当前录制链
-                    # 先经 get_quality_code（只认中文名）故属潜伏缺陷，但 get_quality_index 数字分支、
-                    # tests/test_stream.py 与 standalone 脚本都以数字画质为入参。
+                    # 数字画质必须先按通用索引语义（OD=0,BD=1,UHD=2,HD=3,SD=4,LD=5）解成档位
+                    # 代码，再查码率表。QUALITY_MAPPING_BIT 为蓝光子档位插了位，直接按位置索引
+                    # 会让同一数字在两表指向不同档（"2" 通用表是 UHD、码率表是 BD30），
+                    # 「请求 UHD」实拉最高码率档。
                     code, _ = get_quality_index(quality_str)
                     video_quality = code
                     quality_index_bitrate_value = QUALITY_MAPPING_BIT.get(code, 99999)
@@ -827,10 +785,9 @@ async def get_huya_stream_url(json_data: dict[str, object], video_quality: str |
         return result
 
     # 画质 ratio 解析：ratio 即码率上限(kbps)，拼在 FLV/HLS URL 的 query 上选档。
-    # 可用档位来源（按优先级）：
-    #   1. sFlvAntiCode 中的 exsphd 档位表（房间实际可拉取的 ratio 集合）
-    #   2. gameLiveInfo.bitRate（房间最高码率，chuhe 实测 30000 → 蓝光30M 可用）
-    # 两者都缺失时不附加 ratio（保持原始防盗链参数原样，即按原画拉流）。
+    # 可用档位来源（按优先级）：① sFlvAntiCode 中的 exsphd 档位表（房间实际可拉取的
+    # ratio 集合）；② gameLiveInfo.bitRate（房间最高码率）。两者都缺失时不附加 ratio
+    # （保持原始防盗链参数原样，即按原画拉流）。
     first_anti = stream_info_list[0].get("sFlvAntiCode") or ""
     quality_list = first_anti.split("&exsphd=")
     bit_rate = game_live_info.get("bitRate") or 0
@@ -872,8 +829,8 @@ async def get_huya_stream_url(json_data: dict[str, object], video_quality: str |
             # 就近向下降级：取可用集合中 < target 的最大 ratio
             chosen = max(r for r in available_ratios if r < target_ratio)
             ratio_val = str(chosen)
-            # MID-14：档位命名与「能否精确回采」解耦——本分支只要 chosen != target 就告警，
-            # 表外 ratio 也按数值就近命名，不再回落到请求档（那会把降级伪装成按请求录）。
+            # 档位命名与「能否精确回采」解耦：chosen != target 就告警，表外 ratio 也按
+            # 数值就近命名，不回落请求档（那会把降级伪装成按请求录）。
             actual_quality = huya_code_for_ratio(chosen) or video_quality
             logger.warning(
                 i18n.tr(
@@ -901,17 +858,14 @@ async def get_huya_stream_url(json_data: dict[str, object], video_quality: str |
             ["OD"] + [c for c, r in HUYA_FIXED_TIERS if max_ratio > 0 and r <= max_ratio] + ["UHD", "LD"]
         )
     elif video_quality and video_quality not in ["OD", "BD"]:
-        # ---- 旧档位（超清/高清/标清/流畅）：exsphd 是**集合**，不是有序序列（MID-13）----
-        # 原实现把 labels=["UHD","HD","SD","LD"] 与 reversed(findall(264_\d+)) 做位置式 zip、完全不看
-        # 数值语义，而同文件蓝光子档位分支把同一串 exsphd 当集合按 HUYA_RATIO_TO_CODE 查表（8000=蓝光8M、
-        # 2000=超清、500=流畅）。同一字符串两种互斥解释：exsphd 为降序（或含 264_0 之外的额外档）时方向
-        # 整体反转，请求「超清」实拉「蓝光8M」；且 actual_quality 回写成请求值 → is_downgrade 恒 False，
-        # 日志与面板同时失去告警。现按数值定位目标档、不可用时就近降级，与 BD 分支同一口径、同一份表。
-        # MID-2228（2026-09-22）：原条件还挂着 `len(quality_list) > 1`（即 sFlvAntiCode 必带 &exsphd=），
-        # 房间不带 exsphd 时它恒假、而上一分支只认蓝光子档位，于是请求 HD/SD/LD 时**两个分支都进不去**：
-        # ratio_val 保持 ""（按原画拉流）、actual_quality 仍是请求档 ⇒ is_downgrade 恒 False ⇒ 零告警、
-        # 面板显示「高清」而产物是原画。现与蓝光分支共用同一条裁决链（exsphd 优先 → bitRate 推导 →
-        # 两者皆缺才不附加 ratio 且显式写 OD + 告警）。
+        # ---- 旧档位（超清/高清/标清/流畅）：exsphd 是集合，不是有序序列 ----
+        # 原实现把 labels 与 reversed(findall(264_\d+)) 做位置式 zip、不看数值语义，而蓝光
+        # 分支把同一串 exsphd 当集合查表。同一字符串两种互斥解释：exsphd 降序或含额外档时方向
+        # 整体反转，请求「超清」实拉「蓝光8M」，且 actual_quality 回写成请求值 → 告警静默。
+        # 现按数值定位目标档、不可用时就近降级，与 BD 分支同一口径、同一份表。
+        # 原条件还挂着 len(quality_list) > 1，房间不带 exsphd 时它恒假、而上一分支只认蓝光子
+        # 档位，于是请求 HD/SD/LD 时两个分支都进不去：ratio 为空、actual 仍是请求档、零告警。
+        # 现与蓝光分支共用同一条裁决链（exsphd 优先 → bitRate 推导 → 皆缺才不附加 ratio 并告警）。
         if exsphd_ratios:
             available_ratios = exsphd_ratios
         elif max_ratio > 0:
@@ -937,8 +891,7 @@ async def get_huya_stream_url(json_data: dict[str, object], video_quality: str |
             actual_quality = video_quality
         else:
             lower = [r for r in available_ratios if r < target_ratio]
-            # 无更低档时取集合中最低的一档（最接近请求值）。原实现在这里取「列表最后一个」，
-            # 同样依赖出现顺序，现改为按数值取 min。
+            # 无更低档时取集合中最低的一档（最接近请求值），按数值取 min，不依赖出现顺序。
             chosen = max(lower) if lower else min(available_ratios)
             ratio_val = str(chosen)
             actual_quality = huya_code_for_ratio(chosen) or video_quality
@@ -954,9 +907,9 @@ async def get_huya_stream_url(json_data: dict[str, object], video_quality: str |
             )
 
     # CDN 候选排序：实测 HLS 可靠承载线路为 HS（AL/TX 常因该房间未启用该线路返回 403，
-    # 且三条线路共享完全相同的防盗链参数——AL/TX 的 403 非请求问题、而是线路未承载推流，
-    # 随时可能切换）。故枚举全部 CDN 候选交给 select_source_url 逐条按可达性校验，
-    # 首位优先 HS 以最大化「首试即中」。线路可用性动态变化，必须每轮现拉现校验、不得长期缓存。
+    # 三条线路共享完全相同的防盗链参数——403 是线路未承载推流，随时可能切换）。故枚举全部
+    # CDN 候选交给 select_source_url 逐条按可达性校验，首位优先 HS 以最大化「首试即中」；
+    # 线路可用性动态变化，必须每轮现拉现校验、不得长期缓存。
     cdn_priority = ["HS", "HW", "TX", "AL"]
 
     def _rank(cdn: object) -> int:
@@ -977,9 +930,9 @@ async def get_huya_stream_url(json_data: dict[str, object], video_quality: str |
         s_hls_anti = cdn.get("sHlsAntiCode") or ""
         if not s_stream_name or not s_flv_anti:
             continue
-        # 直接使用房间页内嵌防盗链参数（与端到端校验报告一致：HS 经 GET 校验 200 正常拉流），
-        # 不重建 anti_code（避免引入未被验证的签名算法）。统一降为 http：实测 https 返回 403、
-        # 仅 http 可用（含 HLS/FLV），与校验探针共用此 scheme 防止「校验 http 可用、录制 https 被拒」。
+        # 直接使用房间页内嵌防盗链参数，不重建 anti_code（避免引入未被验证的签名算法）。
+        # 统一降为 http：实测 https 返回 403、仅 http 可用（含 HLS/FLV），与校验探针共用
+        # 此 scheme，防止「校验 http 可用、录制 https 被拒」。
         flv_url = f"{str(s_flv_url).replace('https://', 'http://')}/{s_stream_name}.{s_flv_suffix}?{s_flv_anti}"
         if ratio_val:
             flv_url = flv_url + "&ratio=" + str(ratio_val)
@@ -1059,9 +1012,9 @@ async def get_douyu_stream_url(
                 )
             break
         err_msg = flv_data.get("msg", "")
-        # MID-68：原写法 `f"..." + (f", msg={err_msg}" if err_msg else "") + f"..."` 首参是 ast.BinOp 而非
-        # JoinedStr，i18n 门禁看不见、翻译在查目录前就已完成插值。可选的 msg 片段按约定在调用方预求值为
-        # err_detail 实参（无 msg 时为空串，输出与旧实现逐字节一致），模板本身保持常量串以便登记四语目录。
+        # 可选的 msg 片段按约定在调用方预求值为 err_detail 实参（无 msg 时为空串，输出与旧
+        # 实现逐字节一致），模板本身保持常量串：首参若是 ast.BinOp，i18n 门禁看不见、翻译会在
+        # 查目录前完成插值。
         err_detail = f", msg={err_msg}" if err_msg else ""
         if idx + 1 < len(attempt_rates):
             logger.warning(
@@ -1103,11 +1056,9 @@ async def get_douyu_stream_url(
     if rtmp_live:
         flv_url = f"{rtmp_url}/{rtmp_live}"
         result |= {"flv_url": flv_url, "record_url": flv_url}
-        # 斗鱼 wsAuth token 对 FLV/HLS 通用：路径 .flv 换 .m3u8 即同 token 的 HLS 播放列表
-        # （实测 hw CDN 200 + application/vnd.apple.mpegurl，且 token 存活远超 75 秒）。
-        # 游客态 FLV 长连接常被 CDN 约 70 秒掐断（反复分段），HLS 逐段拉取不维持长连接、
-        # 天然免疫；select_source_url 会在启用 HLS 采集时优先校验并选用 m3u8，不可达时
-        # 自动回退 FLV，故此处无条件附带该候选。
+        # 斗鱼 wsAuth token 对 FLV/HLS 通用：路径 .flv 换 .m3u8 即同 token 的 HLS 播放列表。
+        # 游客态 FLV 长连接常被 CDN 约 70 秒掐断（反复分段），HLS 逐段拉取天然免疫；
+        # select_source_url 启用 HLS 采集时优先校验并选用 m3u8，不可达时回退 FLV。
         path, _, query = flv_url.partition("?")
         if path.endswith(".flv"):
             result["m3u8_url"] = f"{path[:-4]}.m3u8" + (f"?{query}" if query else "")
@@ -1152,11 +1103,10 @@ async def get_bilibili_stream_url(
     room_url = b.get("room_url", "")
     video_quality_options = {"OD": "10000", "BD": "400", "UHD": "250", "HD": "150", "SD": "80", "LD": "80"}
 
-    # MID-2230（2026-09-22）：record_quality 可取蓝光子档位（BD30/BD20/BD8/BD4），这四档
-    # **不在** video_quality_options 里，原 `.get((video_quality or "OD").upper(), "10000")`
-    # 一律落到默认「原画 10000」—— 比用户选的档更高（B站无蓝光子档，请求即被服务端钳制），
-    # 而 is_downgrade("BD4","OD") 为 False ⇒ 既不按请求录、也不告警。选档前先经
-    # get_quality_index 折叠子档位（该函数是全仓唯一的折叠入口，见其注释）。
+    # record_quality 可取蓝光子档位（BD30/BD20/BD8/BD4），这四档不在
+    # video_quality_options 里，直接 .get 会落到默认「原画 10000」——比用户选的档更高，
+    # 且 is_downgrade("BD4","OD") 为 False，既不按请求录也不告警。选档前先经
+    # get_quality_index 折叠子档位（全仓唯一的折叠入口）。
     requested_code = (video_quality or "OD").upper()
     select_code, _ = get_quality_index(requested_code)
     if requested_code not in QUALITY_LEVEL and not requested_code.isdigit():
@@ -1175,11 +1125,9 @@ async def get_bilibili_stream_url(
     if not play_url_data:
         return {"anchor_name": anchor_name, "is_live": False}
     pd = cast(BilibiliPlayData, cast(object, play_url_data))
-    # qn → 画质代码 反向映射：必须**显式**构造（MIN-05）。video_quality_options 里 SD 与 LD
-    # 同为 "80"（B站无独立标清档，请求标清即退到流畅），推导式 {v: k ...} 后写覆盖前写，
-    # 于是实发 qn=80 恒被回采成 LD —— 用户请求「标清」时会打出一条根本不存在的降级告警
-    # （QUALITY_LEVEL: SD=7 优于 LD=8，is_downgrade("SD","LD") 为真）。
-    # 一对多时取**更高档**（SD 优先于 LD），宁可少报一次降级也不虚构降级。
+    # qn → 画质代码反向映射必须显式构造：video_quality_options 里 SD 与 LD 同为 "80"，
+    # 推导式 {v: k ...} 后写覆盖前写，实发 qn=80 恒被回采成 LD，用户请求「标清」时会打出
+    # 一条不存在的降级告警。一对多时取更高档（SD 优先于 LD），宁可少报也不虚构降级。
     qn_to_code: dict[str, str] = {}
     for code, qn_value in video_quality_options.items():
         known = qn_to_code.get(qn_value)
@@ -1187,9 +1135,8 @@ async def get_bilibili_stream_url(
             qn_to_code[qn_value] = code
     actual_quality = qn_to_code.get(str(pd.get("current_qn", "")), video_quality)
     accept_qn = pd.get("accept_qn") or []
-    # accept_qn 常含本表未登记的值（20000/30000/0 等 4K/帧率档）：这些裸数字不是画质代码，
-    # 经 code_to_zh 也只会原样透出，会把「available_qualities」的白名单口径
-    # （与画质下拉的 BUILTIN_QUALITIES 同源）打穿，故只保留能映射到档位代码的项。
+    # accept_qn 常含本表未登记的值（20000/30000/0 等 4K/帧率档），裸数字经 code_to_zh 只会
+    # 原样透出，会打穿 available_qualities 的白名单口径，故只保留能映射到档位代码的项。
     available_qualities = [qn_to_code[str(q)] for q in accept_qn if str(q) in qn_to_code] or None
     return {
         "anchor_name": anchor_name,
@@ -1229,8 +1176,8 @@ async def get_netease_stream_url(json_data: dict[str, object], video_quality: st
         available_qualities = [NETEASE_QUALITY_MAP.get(k, k.upper()) for k in sorted_keys]
         flv_url_list = stream_list[selected_quality].get("cdn") or {}
         # 网易 CDN 取首个 key，未做连通性校验/多 CDN 回退；首路失败会直接影响该画质录制可用性。
-        # L-15（2026-10-02）：cdn 映射为空 dict 时 list(keys())[0] 抛 IndexError → 装饰器把
-        # 可录房间吞成未开播；此时跳过 flv 选择，回退 m3u8（record_url 跟随）。
+        # cdn 映射为空 dict 时 list(keys())[0] 会抛 IndexError、被装饰器吞成未开播；
+        # 改为 next(iter(...), None)，空映射时跳过 flv 选择、回退 m3u8（record_url 跟随）。
         selected_cdn = next(iter(flv_url_list), None)
         flv_url = flv_url_list[selected_cdn] if selected_cdn is not None else ""
 
@@ -1256,11 +1203,9 @@ async def get_stream_url(
     hls_extra_key: str | int | None = None,
     flv_extra_key: str | int | None = None,
 ) -> dict[str, object]:
-    # 通用平台入口：play_url_list 按 QUALITY_MAPPING 索引取档，元素两种契约的处置见下方 get_url
-    # MID-20：本函数原先是**本层唯一没有兜底装饰器**的平台入口——play_url[key] 的 KeyError
-    # 会穿透到 main.py 的通用 except 并 record_error(host) 计入按 host 的熔断样本，
-    # 与其它 50+ 平台「异常只安静重试一轮」不等价（AGENTS 2026-09-19 条目）。
-    # 返回 dict，契约与 trace_error_decorator 的 {"is_live": False} 兜底一致。
+    # 通用平台入口：play_url_list 按 QUALITY_MAPPING 索引取档，元素两种契约的处置见 get_url。
+    # 与其它平台入口一样由 trace_error_decorator 兜底；不得移除该装饰器——否则 KeyError 会
+    # 穿透到 main.py 的通用 except 并计入按 host 的熔断样本，与其它 50+ 平台语义不等价。
     g = cast(GenericStreamUrl, cast(object, json_data))
     if not g.get("is_live"):
         return json_data
@@ -1275,16 +1220,11 @@ async def get_stream_url(
     data: dict[str, object] = {"anchor_name": g.get("anchor_name", ""), "is_live": True}
 
     def get_url(key: str | int | None) -> str:
-        # 从直播流响应中提取流地址；play_url_list 元素有「裸 URL 串」与「画质→地址字典」两种契约。
-        # MID-20：key 缺失时原写法 `return play_url` 把**整份 dict** 当流地址返回，而 stream_select 的
-        # _as_str_list / isinstance(str) 会静默丢弃 → 表现为「解析成功却无任何流地址」（main.py 的
-        # spec=True 调用恰不传 extra_key）。现按 _PLAY_URL_KEY_ORDER 顺序探测、取不到返回 ""；显式传 key
-        # 时用 .get(key, "")——平台字典缺该键是常态，不该抛 KeyError。
-        # SEV-2201（2026-09-22）：上面这段只适用于**字典项**。spider.py 另有 9 处同型写入产出 list[str]
-        # （按画质排序后的裸地址），原实现无条件 `.get()` ⇒ AttributeError: 'str' object has no attribute
-        # 'get' ⇒ 被 @trace_error_decorator 兜成 {"is_live": False}，SOOP/PandaTV/WinkTV/TTingLive/
-        # TwitCasting/Twitch/百度直播/ShowRoom 每轮「解析成功却判未开播」。裸串本身就是地址（无子键可选），
-        # 原样返回即可；空串照旧返回空串，不改下游「无地址」的既有语义。
+        # 从 play_url_list 提取流地址；元素有「裸 URL 串」与「画质→地址字典」两种契约。
+        # 字典项：缺 key 时不能把整份 dict 当地址返回（下游按 str 判型会静默丢弃，表现为
+        # 「解析成功却无任何流地址」）；按 _PLAY_URL_KEY_ORDER 顺序探测、取不到返回 ""，
+        # 显式传 key 时用 .get(key, "")——平台字典缺该键是常态，不该抛 KeyError。
+        # 裸串：本身就是地址（无子键可选），原样返回；空串照旧，不改下游「无地址」的语义。
         play_url = play_url_list[selected_quality]
         if isinstance(play_url, str):
             return play_url
@@ -1297,8 +1237,8 @@ async def get_stream_url(
         return ""
 
     if url_type == "all":
-        # spec=True 时优先返回平台原始 m3u8_url/flv_url（未经验证），仅保留上游已给出的可用地址，
-        # 避免 get_url 解析覆盖掉已知可用地址；非 spec 则用 play_url_list 解析出的地址。
+        # spec=True 时优先返回平台原始 m3u8_url/flv_url（未经验证），避免 get_url 解析覆盖掉
+        # 已知可用地址；非 spec 则用 play_url_list 解析出的地址。
         m3u8_url = get_url(hls_extra_key)
         flv_url = get_url(flv_extra_key)
         data |= {

@@ -1,11 +1,10 @@
 # 布尔配置解析统一口径的回归测试（src/config_bool.py + src/config_io.read_config_bool）。
 #
-# 背景（2026-09-17）：旧实现把「取值」与「解析」混在 main.py 的
-# `options = {"是": True, "否": False}` 字典查表里，非「是/否」写法会**静默**回落到
-# options.get 的兜底实参；同时 logger.py(`!= "否"`)、web_config.py(`in ("true","1","yes","是")`)、
-# web/app.js 与 gui.py(`== "是"`) 各有一套口径。把 config.ini 的值批量改写成 true/false 后，
-# 8 项配置的生效值全部漂移（最严重：「是否跳过代理检测 = true」被判为 False →
-# global_proxy=False → 9 个海外平台解析分支走 else，100% 无法录制）。
+# 背景（2026-09-17）：旧实现把「取值」与「解析」混在 main.py 的 `options = {"是": True, "否": False}`
+# 字典查表里，非「是/否」写法会**静默**回落到 options.get 的兜底实参；logger.py / web_config.py /
+# web/app.js / gui.py 又各有一套口径。把 config.ini 批量改写成 true/false 后 8 项配置的生效值
+# 全部漂移（最严重：「是否跳过代理检测 = true」被判 False → global_proxy=False → 9 个海外平台
+# 解析分支走 else，100% 无法录制）。
 #
 # 本文件锁定三件事：① 两种编码等价；② 缺键补写仍是规范写法「是」/「否」；
 # ③ main.py 不得再出现字典查表写法（源码级防回归，避免口径重新分叉）。
@@ -169,8 +168,7 @@ def test_https_config_legacy_key_true_encoding_migrates(tmp_path: Path, monkeypa
 
 def test_main_has_no_legacy_options_dict_lookup() -> None:
     # 字典查表 + 静默兜底是本次事故的根因：main.py 不得再出现该写法。
-    # 用 AST 而非原文子串判定——源码注释里会引用被删除的实现（本次改动就留有说明注释），
-    # 子串匹配会把注释一并算作命中。
+    # 用 AST 而非原文子串判定——源码注释里会引用被删除的实现，子串匹配会把注释也算作命中。
     tree = ast.parse(_MAIN_PY.read_text(encoding="utf-8"), filename="main.py")
 
     # ① 不得存在 options.<attr>() 形式的调用

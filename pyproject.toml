@@ -40,10 +40,9 @@ classifiers = [
 dependencies = [
     "requests>=2.34.2",
     # urllib3：requests 的传递依赖，但本仓运行期的同步出站下载（ffmpeg / node 拉取与哈希核对，
-    # 经 requests）都穿过它，故显式声明下限（补-05：CVE-2026-44431 受影响区间 1.23 – < 2.7.0；
-    # 不设上限，与全库口径一致）
-    # 下限 2.8.0（2026-10-01 deps-audit「下限复核」抓出）：CVE-2026-97687/97688/97689 均影响
-    #   2.7.0、修复于 2.8.0，旧下限自身落在受影响段；现装即 2.8.0，抬下限不改解析集合。
+    # 经 requests）都穿过它，故显式声明下限（补-05：CVE-2026-44431 受影响 1.23 – < 2.7.0）。
+    # 下限 2.8.0（2026-10-01 deps-audit「下限复核」）：CVE-2026-97687/97688/97689 均影响 2.7.0、
+    #   修复于 2.8.0，旧下限自身落在受影响段；现装即 2.8.0，抬下限不改解析集合。
     "urllib3>=2.8.0",
     "loguru>=0.7.3",
     "pycryptodome>=3.23.0",
@@ -51,49 +50,44 @@ dependencies = [
     "tqdm>=4.69.0",
     "httpx[http2]>=0.28.1",
     # httpx 的**可选**能力包（extra），本仓运行时真的会执行其代码，故必须显式声明——
-    # requirements.txt 与本节是「单源双写」，两侧包名集合必须逐项一致（有回归锁：
+    # requirements.txt 与本节是「单源双写」，两侧包名集合必须逐项一致（回归锁：
     # tests/test_regression_2026_09_22_gates.py 断言集合相等，防单侧遗漏）。
-    # 为什么不靠 httpx[http2] 的 extra 传递：extra 只在 pip 解析 `.[extra]` 那一刻展开，
-    #   而 Docker/CI 消费的是 requirements.txt（`pip install -r`），把 httpx 写成裸名或
-    #   换索引重装即静默丢失。2026-09-23 本机实测 `import h2` → ModuleNotFoundError。
-    # 触发点已回源到 httpx 源码：h2 来自 httpx._client.Client.__init__ 的 `if http2: import h2`
-    #   （本仓 http2 默认为 True）；socksio 来自 httpx._transports.default 的
-    #   `socks5/socks5h` 分支 `import socksio`（本仓支持 socks5:// 代理写法）。
-    # h2 下限 >=4.4.1（2026-09-26 deps-audit「下限复核」抓出）：PYSEC-2026-3628 /
-    #   GHSA-6hr6-w5qg-qmwg（重复 Host 头 → 请求走私）OSV 区间 introduced=0 / fixed=4.4.1，
-    #   旧下限 4.3.0 自身即在受影响段内（它只修了同源的 PYSEC-2026-1435）。
-    #   现装与 uv.lock 均已是 4.4.1，抬下限不改变解析集合。
+    # extra 只在 pip 解析 `.[extra]` 那一刻展开，而 Docker/CI 消费的是 requirements.txt
+    #   （`pip install -r`），把 httpx 写成裸名或换索引重装即静默丢失（2026-09-23 本机实测
+    #   `import h2` → ModuleNotFoundError）。触发点已回源到 httpx 源码：h2 来自
+    #   httpx._client.Client.__init__ 的 `if http2: import h2`（本仓 http2 默认为 True）；socksio 来自
+    #   httpx._transports.default 的 `socks5/socks5h` 分支 `import socksio`（本仓支持 socks5:// 写法）。
+    # h2 下限 >=4.4.1（2026-09-26 deps-audit「下限复核」）：PYSEC-2026-3628 / GHSA-6hr6-w5qg-qmwg
+    #   （重复 Host 头 → 请求走私）fixed=4.4.1，旧下限 4.3.0 自身即在受影响段（它只修了同源的
+    #   PYSEC-2026-1435）；现装与 uv.lock 均已是 4.4.1。
     "h2>=4.4.1",
     "socksio>=1.0.0",
     "exejs>=1.0.1",
     "PyExecJS>=1.5.1",
     # [2026-10-03 阶段5] customtkinter 已随 UI 现代化阶段4（tkinter.ttk 自研控件层）摘除
-    # [2026-10-17 GUI 重设计] GUI 主窗口迁移 PySide6（QSS token 可 1:1 还原设计稿圆角/投影/弹簧动效，
-    #   ttk 无法原生实现）；下界 6.12 是本机实测支持 Python 3.14.8 的最小版。
-    #   [2026-10-20] pystray/Pillow 已同批摘除：Web 入口托盘（src/web_tray.py）改走
-    #   QSystemTrayIcon、遗留 tkinter 托盘（gui.py::SystemTray）同批退役，两个入口的托盘
-    #   实现统一为 Qt、图标由 QPainter 现画，PIL 全仓再无调用点。
-    #   [历史注] 上一条注释曾称「保留的原因改为 tkinter 版 gui.py 的托盘仍在用」——该前提
-    #   已随遗留托盘退役失效，故两包一并移出 [project.dependencies] 与 .gui 可选组。
+    # GUI 主窗口迁 PySide6：QSS token 可 1:1 还原设计稿的圆角/投影/弹簧动效（ttk 无法原生实现），
+    #   下界 6.12 是本机实测支持 Python 3.14.8 的最小版。2026-10-20 起 Web 入口托盘
+    #   （src/web_tray.py）改走 QSystemTrayIcon，本包同时是 GUI 与 Web 两入口的运行时依赖。
+    #   [历史注] pystray / Pillow 已同批摘除：遗留 tkinter 托盘（gui.py::SystemTray）退役，
+    #   两入口托盘统一为 Qt + QPainter 现画图标，PIL 全仓再无调用点——旧注释「保留的原因改为
+    #   tkinter 版 gui.py 的托盘仍在用」的前提已失效，故两包一并移出 [project.dependencies] 与 .gui。
     "PySide6>=6.12.0",
     # starlette 下限 >=1.3.1：兼顾 CVE-2026-48710（受影响 <=1.0.0）与 PYSEC-2026-2280/2281
     # （修复于 1.1.0）、PYSEC-2026-248/249（修复于 1.3.0/1.3.1）——旧下限 0.49.1、乃至补-05 抬的
-    # 1.0.1 都仍放行受影响段。现装 1.6.0，抬下限不改现集合；审计口径见 ci.yml deps-audit「下限复核」。
+    # 1.0.1 都仍放行受影响段。现装 1.8.0；审计口径见 ci.yml deps-audit「下限复核」。
     "starlette>=1.3.1",
     "uvicorn[standard]>=0.51.0",
     # [2026-10-20] python-multipart>=0.0.32 摘除（与 requirements.txt 同批，两侧包名集合必须相等）：
-    #   原理由写「表单 / 文件上传解析（Web 接口接收配置上传）」，但该上传接口不存在——全仓无
+    #   原理由写「表单 / 文件上传解析（Web 接口接收配置上传）」，但该上传接口并不存在——全仓无
     #   `.form()` / `UploadFile` 调用点，web/ 前端亦无 FormData / <input type=file> / enctype。
     #   Starlette 仅在 Request.form() 内部 import 它，无该调用点即不构成运行期依赖。
     # 弹幕 WS 客户端：additional_headers/proxy 为 websockets 14.0+ API，下界须钉 14.0
     # （12/13.x 时 connect() 直接 TypeError 且被重连循环吞掉，弹幕永远连不上）
     "websockets>=14.0",
-    # 弹幕（src/collector.py 工厂 + src/platforms/ 各平台采集器 + src/proto/ 协议解码）运行时依赖：
-    # protobuf 解析抖音弹幕协议、brotli 解压 B站弹幕；下界与 requirements.txt 严格一致（运行时必需，
-    # 缺失会导致弹幕采集分支失效）。上限 <8（F-14）：douyin_pb2.py 由 protoc 25.x 生成（gencode 4.25.3），
-    # 跨大版本升级 runtime 有 gencode 兼容窗口外失效风险，升级前须同代 protoc 重新生成。
-    # 下界 6.33.5：PYSEC-2026-1805 影响 6.31.1（旧下界本身在受影响段），修复于 5.29.6 / 6.33.5；
-    # 现装 7.36.1，抬下界不改现集合、上界 <8 不动（F-14）。
+    # 弹幕链（src/collector.py 工厂 + src/platforms/ 各平台采集器 + src/proto/ 协议解码）运行时依赖：
+    # protobuf 解析抖音弹幕协议（下限 6.33.5：PYSEC-2026-1805 影响 6.31.1，修复于 5.29.6 / 6.33.5；
+    # 现装 7.36.2），brotli 解压 B站弹幕。上限 <8（F-14）：douyin_pb2.py 由 protoc 25.x 生成
+    # （gencode 4.25.3），跨大版本升级 runtime 有 gencode 兼容窗口外失效风险，升级前须同代 protoc 重新生成。
     "protobuf>=6.33.5,<8",
     "brotli>=1.2.0",
     # i18n YAML 翻译目录支持（i18n/zh_TW.yaml；缺失时仅损失该格式，JSON/gettext 不受影响）
@@ -136,13 +130,12 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-# 子包必须显式列出：显式 packages 不会递归发现，漏列会让 `pip install .` 产出的
-# 发行包缺失 src/platforms（各平台弹幕采集器）与 src/proto（抖音弹幕 protobuf），
-# 运行时以 ModuleNotFoundError 形式炸在导入链上（egg-info/SOURCES.txt 可核对）
-# [2026-10-17 GUI 重设计] 补 src.gui_qt / src.gui_qt.pages：gui.py:main() 已委托到
-#   src.gui_qt.app.main()，而 main_window.py 又相对导入 .pages.{config,danmaku,dashboard,
-#   quality,runlog}。漏列时任一子包都不进 wheel，`pip install .` 装出的
-#   douyin-recorder-gui 入口在导入链第一段就 ModuleNotFoundError。
+# 子包必须显式列出：显式 packages 不递归发现，漏列会让 `pip install .` 产出的发行包缺失
+# src/platforms（各平台弹幕采集器）与 src/proto（抖音弹幕 protobuf），运行时以
+# ModuleNotFoundError 炸在导入链上（egg-info/SOURCES.txt 可核对）。src.gui_qt / src.gui_qt.pages
+# 同理：gui.py:main() 委托到 src.gui_qt.app.main()，main_window.py 又相对导入
+# .pages.{config,danmaku,dashboard,quality,runlog}——漏列任一子包，装出的 douyin-recorder-gui
+# 入口在第一段导入就 ModuleNotFoundError。
 packages = ["src", "src.gui_qt", "src.gui_qt.pages", "src.platforms", "src.proto"]
 # 顶层单文件模块：保证 [project.scripts] 三个入口（main/gui/web）安装后可用
 py-modules = ["main", "web", "gui", "i18n", "msg_push"]
@@ -233,11 +226,11 @@ warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
 ignore_missing_imports = true
-# 检查范围（单一事实源）：CI 与本地均直接跑 `mypy`（不带路径参数）消费此列表，
-# 避免「CI 查 A、本地查 B」的覆盖面漂移。显式传参（如 mypy src/）仍优先生效。
-# 只收产品代码与本仓测试：src/ 包 + 根目录入口 + 打包脚本 + 维护脚本 + tests/。
-# tests/ 纳入的理由：AGENTS.md 早已把 `mypy tests/` 列为门禁，但只靠自觉执行会漂移
-# （2026-09-13 新增的黄金快照用例即带着 12 处缺注解混入，门禁实际已红未察）。
+# 检查范围（单一事实源）：CI 与本地都直接跑 `mypy`（不带路径参数）消费此列表，避免
+# 「CI 查 A、本地查 B」的覆盖面漂移；显式传参（如 mypy src/）仍优先生效。
+# 只收产品代码与本仓测试：src/ 包 + 根入口 + 打包脚本 + 维护脚本 + tests/。tests/ 纳入的
+# 理由：门禁早已要求 `mypy tests/`，但只靠自觉会漂移（2026-09-13 新增的黄金快照用例即带着
+# 12 处缺注解混入，门禁实际已红未察）。
 files = [
     "src",
     "main.py",
@@ -290,17 +283,17 @@ python_functions = ["test_*"]
 asyncio_mode = "auto"
 filterwarnings = [
     # 第三方弃用提示：starlette 本体在 `starlette/testclient.py` 导入期发出（类别
-    # StarletteDeprecationWarning，是 UserWarning 子类），与本项目代码无关。
-    # 该条承重、不得删：2026-09-30 实测带 `-W default::UserWarning` 跑 tests/test_web_api.py
-    # 时 warnings summary 恰落 1 条（源于该文件 `from starlette.testclient import TestClient`）。
+    # StarletteDeprecationWarning，是 UserWarning 子类），与本项目代码无关。承重、不得删：
+    # 2026-09-30 实测带 `-W default::UserWarning` 跑 tests/test_web_api.py 时 warnings summary
+    # 恰落 1 条（源于该文件的 `from starlette.testclient import TestClient`）。
     # [历史注] 原注释把触发方记作「fastapi testclient 内部 import」——2026-09-29 阶段2 移除
     # fastapi/pydantic 后该归因已被证伪，告警一直由 starlette 自己发出。
     "ignore:Using `httpx` with `starlette.testclient` is deprecated",
     # 第三方弃用提示（anyio 4.x 的 `abc.BlockingPortal` 别名迁移到 `from_thread`）。
-    # 现装组合下已不触发：starlette 1.7.0 的 testclient 三处引用一律走 `anyio.from_thread.BlockingPortal`
+    # 现装组合下已不触发：starlette 1.8.0 的 testclient 三处引用一律走 `anyio.from_thread.BlockingPortal`
     # （非别名路径），且带 `-W always::DeprecationWarning`（命令行 -W 覆盖本节 ini 过滤）跑
     # tests/test_web_api.py + test_web_api_routes.py 后 warnings summary 为空。
-    # 保留理由是对声明下限 starlette>=1.3.1 整段的防御——本 venv 只有 1.7.0，未验证 1.3.x 的
+    # 保留理由是对声明下限 starlette>=1.3.1 整段的防御——本 venv 只有 1.8.0，未验证 1.3.x 的
     # testclient 是否仍走别名路径，故不在此删；确认整段都不触发时可移除本条。
     "ignore:The anyio\\.abc\\.BlockingPortal alias is deprecated",
 ]
@@ -353,12 +346,10 @@ exclude_also = [
 # 逐模块覆盖率阈值只在 scripts/check_coverage.py 的 MODULE_THRESHOLDS 维护；此处不复制数值，避免双写漂移。
 
 [tool.basedpyright]
-# basedpyright 类型检查配置（本地增强，CI 仍以 mypy 为准）。
-# venvPath 使用工作区相对路径指向 .venv。注意：basedpyright 的 venvPath 不支持
-# ${env:...} / ~ 展开，且本项目依赖装在 workbuddy managed venv（位于工作区之外），
-# 故采用「工作区 .venv」约定（标准且可移植），不在配置里写死机器专属绝对路径。
-# 首次使用需创建并安装依赖：python -m venv .venv && .venv/Scripts/pip install -r requirements.txt
-# .venv 已被 .gitignore 忽略，不会误提交；其他开发者各自创建即可。
+# basedpyright 类型检查配置（本地补充门禁，CI 裁决仍以 mypy 为准）。
+# venvPath 用工作区相对路径指向 .venv：basedpyright 不支持 ${env:...} / ~ 展开，配置里也不
+# 写死机器专属绝对路径。.venv 已被 .gitignore 忽略，各开发者自行创建：
+#   python -m venv .venv && .venv/Scripts/pip install -r requirements.txt
 pythonVersion = "3.14"
 typeCheckingMode = "standard"
 venvPath = "."
