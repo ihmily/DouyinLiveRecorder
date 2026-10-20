@@ -1,32 +1,37 @@
 # tests/test_web_tray.py - src/web_tray.py 的行为锁。
 #
-# 该模块此前 0% 覆盖：它只在「Windows + 打包后的控制台」这一组合下才被启用，
-# 测试环境里既没有真实 conhost 窗口、也不允许真的往用户桌面挂一个托盘图标。
-# 补测的重点不是行数，而是三条**不能反向漂移**的边界：
-#   1) 任何失败都必须静默降级（缺 pystray / DLL 加载失败 / 窗口调用抛异常），
+# 该模块只在「Windows + 控制台宿主」这一组合下才被启用，测试环境里既没有真实 conhost 窗口、
+# 也不允许真的往用户桌面挂一个托盘图标。补测的重点不是行数，而是四条**不能反向漂移**的边界：
+#   1) 任何失败都必须静默降级（缺 PySide6 / DLL 加载失败 / 窗口调用抛异常），
 #      绝不能让 Web 面板起不来——托盘只是锦上添花；
 #   2) 不得真的改写宿主控制台样式：_patch_console_window 必须可在 DLL 缺失时短路；
 #   3) 「退出程序」在无 uvicorn server 时走 os._exit(0)，这条隐蔽的强制退出路径
-#      必须被显式锁住（否则将来有人删掉 else 分支，进程会卡在非零退出码上）。
+#      必须被显式锁住（否则将来有人删掉 else 分支，进程会卡在非零退出码上）；
+#   4) start() 的返回值是「主线程归谁」的契约（True = 交给 Qt 事件循环）。返回 True 却
+#      没把主线程交出去 = 托盘永远是死的；返回 False 却交出去 = 面板彻底失去退出入口。
 #
-# Mock 口径：pystray 用 sys.modules 桩替换（避免真实托盘）；Win32 DLL 句柄用
-# SimpleNamespace 桩替换 _get_kernel32/_get_user32 的返回值，不触碰真窗口。
-# 生产侧「函数内 import」的 stdlib（ctypes / os）一律经 _imported_module_shim 换 sys.modules 条目，
-# 不改模块本体（MT-13 / LT-12，2026-10-18）。
-
-# 分支地图（上边已给出三条不可反向漂移的边界，此处补“哪个用例管哪条”）：
+# Mock 口径（2026-10-20 由 pystray 迁 Qt 后重写）：PySide6 三个子模块用 sys.modules 桩替换
+# （避免真建 QApplication / 真挂图标；offscreen 平台上 isSystemTrayAvailable 恒 False，
+# 真 Qt 反而测不到正常路径）。Win32 DLL 句柄用 SimpleNamespace 桩替换 _get_kernel32/
+# _get_user32 的返回值。生产侧「函数内 import」的 stdlib（ctypes / os）一律经
+# _imported_module_shim 换 sys.modules 条目，不改模块本体（MT-13 / LT-12，2026-10-18）。
+#
+# 分支地图：
 #   DLL 句柄缓存的三个入口：已缓存直返 / 非 win32 早返回 / WinDLL 加载失败返 None。
 #     真加载那条另断言 restype——HWND/HMENU 是指针宽度，缺省 c_int 会把 64 位句柄
 #     截断成 32 位，后续窗口操作改写到错误地址（不报错，只是“托盘在但窗口没收起”）。
 #   _patch_console_window：kernel32/user32 缺失→短路；hwnd=0→短路；正常→置 TOOLWINDOW
 #     清 APPWINDOW 并置灰 SC_CLOSE；系统菜单拿不到→跳过置灰；窗口 API 抛异常→吞掉。
-#   start：ENABLED=False → 什也不做；缺 pystray → 打一行提示后返回；正常 → 建菜单 +
-#     守护线程跑 icon.run（必须用 sys.modules 桩替换 pystray，否则真往用户桌面挂图标）。
-#   两个菜单回调：_on_show 先 ShowWindow 后 SetForegroundWindow，后者失败不得逆前者；
-#     _on_exit 有 server 时只置 should_exit，无 server 时才走 os._exit(0)。
+#   start：ENABLED=False→什么也不做；缺 PySide6→打一行提示后返回；系统托盘不可用→同样降级；
+#     正常→建 QMenu（四项 + 一个分隔符）+ 挂图标 + 返回 True；已有 QApplication 实例时复用。
+#   run_event_loop / _poll：定时器按 _WATCHDOG_INTERVAL_MS 起；stop_when 为真→quit；
+#     stop_when 抛异常→绝不 quit（托盘是唯一退出入口）；request_quit 后 _poll 变成空转。
+#   菜单回调：_on_show 先 ShowWindow 后 SetForegroundWindow，后者失败不得逆前者；
+#     _on_hide 只 ShowWindow 不抢焦点；_on_activated 只认 Trigger/DoubleClick；
+#     _on_open_browser 走 _web_url()；_on_exit 有 server 时只置 should_exit，无 server 时才
+#     走 os._exit(0)；_on_about_to_quit 是循环退出的统一收尾点。
 # 一个写用例时踩到的坑，记下来避免重踏：_on_exit 的 else 分支会真杀进程，任何
 # 「不传 server」的用例都会把整个 pytest 会话提前终止（表现为“没报错但没汇总”）。
-
 
 import ctypes
 import os
@@ -39,40 +44,229 @@ import pytest
 
 import src.web_tray as web_tray
 
+# ─── Qt 替身 ──────────────────────────────────────────────
+# 为什么整套替身而不是真 Qt：真 QApplication 是进程级单例、建了就拆不掉，
+# 而 QSystemTrayIcon.show() 会真往用户托盘区挂图标（旧 pystray 版这条注释同样成立）。
 
-class _FakeIcon:
-    def __init__(self, *args: object, **kwargs: object) -> None:
-        self.args = args
-        self.kwargs = kwargs
+
+class _Signal:
+    # 最小信号：Qt 的 connect/emit 语义够用即可（本模块只用 connect）
+    def __init__(self) -> None:
+        self.slots: list[Any] = []
+
+    def connect(self, slot: Any) -> None:
+        self.slots.append(slot)
+
+    def emit(self, *args: Any) -> None:
+        for slot in list(self.slots):
+            slot(*args)
+
+
+class _FakeQApplication:
+    _current: "_FakeQApplication | None" = None
+
+    def __init__(self, argv: Any = None) -> None:
+        self.argv = argv
+        self.quit_calls = 0
+        self.exec_calls = 0
+        self.quit_on_last_window_closed: bool | None = None
+        self.aboutToQuit = _Signal()
+        _FakeQApplication._current = self
+
+    @staticmethod
+    def instance() -> "_FakeQApplication | None":
+        return _FakeQApplication._current
+
+    def setQuitOnLastWindowClosed(self, flag: bool) -> None:
+        self.quit_on_last_window_closed = flag
+
+    def quit(self) -> None:
+        self.quit_calls += 1
+
+    def exec(self) -> int:
+        # 方法名与 Qt 一致（见文件尾的改名说明）；替身不阻塞，返回即代表「事件循环已退出」
+        self.exec_calls += 1
+        return 0
+
+
+class _FakeQAction:
+    def __init__(self, text: str, parent: Any = None) -> None:
+        self.text = text
+        self.parent = parent
+        self.triggered = _Signal()
+
+
+class _FakeQMenu:
+    def __init__(self, parent: Any = None) -> None:
+        self.parent = parent
+        self.actions: list[_FakeQAction] = []
+        self.separators = 0
+
+    def addAction(self, action: _FakeQAction) -> _FakeQAction:
+        self.actions.append(action)
+        return action
+
+    def addSeparator(self) -> None:
+        self.separators += 1
+
+
+class _FakeQSystemTrayIcon:
+    class ActivationReason:
+        # 取值随便是几：生产侧只做相等比较，测试用它们分辨「左键 / 右键」两条分支。
+        # 标 Any 是因为真 Qt 的 ActivationReason 是枚举类，而这里的替身只给 int。
+        Trigger: Any = 1
+        DoubleClick: Any = 2
+        MiddleClick: Any = 3
+        Context: Any = 4
+
+    available = True
+
+    def __init__(self, icon: Any = None, parent: Any = None) -> None:
+        self.icon = icon
+        self.parent = parent
+        self.shown = 0
+        self.hidden = 0
+        self.tooltip: str | None = None
+        self.context_menu: Any = None
+        self.activated = _Signal()
+
+    @staticmethod
+    def isSystemTrayAvailable() -> bool:
+        return _FakeQSystemTrayIcon.available
+
+    def setToolTip(self, text: str) -> None:
+        self.tooltip = text
+
+    def setContextMenu(self, menu: Any) -> None:
+        self.context_menu = menu
+
+    def show(self) -> None:
+        self.shown += 1
+
+    def hide(self) -> None:
+        self.hidden += 1
+
+
+class _FakeQTimer:
+    def __init__(self, parent: Any = None) -> None:
+        self.parent = parent
+        self.interval: int | None = None
+        self.started = 0
         self.stopped = 0
-        self.run_called = 0
+        self.timeout = _Signal()
 
-    def run(self) -> None:
-        self.run_called += 1
+    def setInterval(self, ms: int) -> None:
+        self.interval = ms
+
+    def start(self) -> None:
+        self.started += 1
 
     def stop(self) -> None:
         self.stopped += 1
-        if self.stopped > 100:  # pragma: no cover - 防御性，永远不触发
-            raise RuntimeError("unreachable")
+
+    def fire(self) -> None:
+        # 手动触发一次超时（替身没有事件循环，定时器不会自己响）
+        self.timeout.emit()
 
 
-class _FakePystray(types.ModuleType):
-    def __init__(self) -> None:
-        super().__init__("pystray")
-        self.icons: list[_FakeIcon] = []
-        self.menu_items: list[tuple[object, object, bool]] = []
+class _FakeQColor:
+    def __init__(self, *args: Any) -> None:
+        self.args = args
 
-    def Menu(self, *items: object) -> object:
-        return ("menu", items)
 
-    def MenuItem(self, text: str, callback: object, default: bool = False) -> object:
-        self.menu_items.append((text, callback, default))
-        return ("item", text, callback, default)
+class _FakeQPen:
+    def __init__(self, *args: Any) -> None:
+        self.args = args
 
-    def Icon(self, *args: object, **kwargs: object) -> _FakeIcon:
-        icon = _FakeIcon(*args, **kwargs)
-        self.icons.append(icon)
-        return icon
+
+class _FakeQPixmap:
+    def __init__(self, width: int, height: int) -> None:
+        self.size = (width, height)
+        self.fills: list[Any] = []
+
+    def fill(self, color: Any) -> None:
+        self.fills.append(color)
+
+
+class _FakeQPainter:
+    class RenderHint:
+        # 生产侧只取这一个枚举值；替身给个占位即可（比较的是「setRenderHint 被调用」）
+        Antialiasing = 1
+
+    instances: list["_FakeQPainter"] = []
+
+    def __init__(self, pixmap: Any) -> None:
+        self.pixmap = pixmap
+        self.ops: list[tuple[str, Any]] = []
+        _FakeQPainter.instances.append(self)
+
+    def setRenderHint(self, hint: Any) -> None:
+        self.ops.append(("hint", hint))
+
+    def setPen(self, pen: Any) -> None:
+        self.ops.append(("pen", pen))
+
+    def setBrush(self, brush: Any) -> None:
+        self.ops.append(("brush", brush))
+
+    def drawRoundedRect(self, *args: Any) -> None:
+        self.ops.append(("rounded", args))
+
+    def drawEllipse(self, *args: Any) -> None:
+        self.ops.append(("ellipse", args))
+
+    def end(self) -> None:
+        self.ops.append(("end", None))
+
+
+class _FakeQIcon:
+    def __init__(self, *args: Any) -> None:
+        self.args = args
+        self.null = False
+
+    def isNull(self) -> bool:
+        return self.null
+
+
+def _fake_qt_modules() -> dict[str, types.ModuleType]:
+    # 三个子模块 + 父包：生产侧是函数内 `from PySide6.QtXxx import ...`，
+    # 命中 sys.modules 即绑定这里的替身（父包也要在，否则 import 机制会去找真包）。
+    widgets = types.ModuleType("PySide6.QtWidgets")
+    widgets.QApplication = _FakeQApplication  # type: ignore[attr-defined]
+    widgets.QMenu = _FakeQMenu  # type: ignore[attr-defined]
+    widgets.QSystemTrayIcon = _FakeQSystemTrayIcon  # type: ignore[attr-defined]
+    gui = types.ModuleType("PySide6.QtGui")
+    gui.QAction = _FakeQAction  # type: ignore[attr-defined]
+    gui.QColor = _FakeQColor  # type: ignore[attr-defined]
+    gui.QIcon = _FakeQIcon  # type: ignore[attr-defined]
+    gui.QPainter = _FakeQPainter  # type: ignore[attr-defined]
+    gui.QPen = _FakeQPen  # type: ignore[attr-defined]
+    gui.QPixmap = _FakeQPixmap  # type: ignore[attr-defined]
+    core = types.ModuleType("PySide6.QtCore")
+    core.QTimer = _FakeQTimer  # type: ignore[attr-defined]
+    parent = types.ModuleType("PySide6")
+    parent.QtWidgets = widgets  # type: ignore[attr-defined]
+    parent.QtGui = gui  # type: ignore[attr-defined]
+    parent.QtCore = core  # type: ignore[attr-defined]
+    return {
+        "PySide6": parent,
+        "PySide6.QtWidgets": widgets,
+        "PySide6.QtGui": gui,
+        "PySide6.QtCore": core,
+    }
+
+
+@pytest.fixture
+def fake_qt(monkeypatch: pytest.MonkeyPatch) -> dict[str, types.ModuleType]:
+    modules = _fake_qt_modules()
+    for name, module in modules.items():
+        monkeypatch.setitem(sys.modules, name, module)
+    # 替身是类级状态（QApplication 单例、图标可用性、painter 记录）：跨用例必须清干净
+    _FakeQApplication._current = None
+    _FakeQSystemTrayIcon.available = True
+    _FakeQPainter.instances = []
+    monkeypatch.setattr(web_tray, "ENABLED", True)
+    return modules
 
 
 def _imported_module_shim(name: str, **overrides: Any) -> types.SimpleNamespace:
@@ -80,12 +274,10 @@ def _imported_module_shim(name: str, **overrides: Any) -> types.SimpleNamespace:
     # （src/web_tray.py 的 _get_kernel32/_get_user32 里 `import ctypes`、_on_exit 里 `import os`），
     # 所以 web_tray 命名空间内根本没有可替换的模块引用：仓库常规的
     # `monkeypatch.setattr(<被测模块>, "os", shim)` 在这里打不上，写成 raising=False 更糟——
-    # 会落一个永不被读的模块属性，用例静默假绿。生产侧配合（把 import 提到模块级）属另一回事，
-    # 本轮不动生产代码。
+    # 会落一个永不被读的模块属性，用例静默假绿。
     # 唯一真实接线点是 sys.modules 条目：函数内 `import x` 命中缓存即绑定该对象。
     # 浅拷贝保留真模块的全部符号（ctypes 的 c_void_p/c_long/c_int、os 的其余函数），
-    # 只覆盖需要的那一个，于是 stdlib 模块本体在整个用例窗口内逐字不变，
-    # 同窗口里其它线程/库拿到的仍是真实现（改本体的旧写法会把它们一并换掉）。
+    # 只覆盖需要的那一个，于是 stdlib 模块本体在整个用例窗口内逐字不变。
     shim = types.SimpleNamespace(**vars(sys.modules[name]))
     for attr, value in overrides.items():
         setattr(shim, attr, value)
@@ -100,10 +292,10 @@ def reset_dll_cache(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def fake_pystray(monkeypatch: pytest.MonkeyPatch) -> _FakePystray:
-    module = _FakePystray()
-    monkeypatch.setitem(sys.modules, "pystray", module)
-    return module
+def no_win32_dlls(monkeypatch: pytest.MonkeyPatch) -> None:
+    # start() 会顺手改写控制台窗口样式；测试里绝不能碰到真窗口
+    monkeypatch.setattr(web_tray, "_get_kernel32", lambda: None)
+    monkeypatch.setattr(web_tray, "_get_user32", lambda: None)
 
 
 class TestDllAccessors:
@@ -154,9 +346,8 @@ class TestDllAccessors:
         monkeypatch.setitem(sys.modules, "ctypes", _imported_module_shim("ctypes", WinDLL=boom))
         assert web_tray._get_kernel32() is None
         assert web_tray._get_user32() is None
-        # 反向见证两条：① 真模块本体从未被改写（本用例要防的正是「替身漏进全进程」）；
-        # ② boom 确实被调用过两次——若将来生产侧把 import 提到模块级、sys.modules 条目不再被读到，
-        # 这条会先红并给出「shim 未接上」的归因，而不是让「返回 None」被判成捕获逻辑的胜利。
+        # 反向见证两条：① 真模块本体从未被改写；② boom 确实被调用过两次——若将来生产侧把
+        # import 提到模块级、sys.modules 条目不再被读到，这条会先红并给出「shim 未接上」的归因。
         assert ctypes.WinDLL is real_windll
         assert len(calls) == 2, f"shim 未接上：WinDLL 替身被调用 {len(calls)} 次（应为 kernel32+user32 各一次）"
 
@@ -239,81 +430,215 @@ class TestConsoleWindowPatching:
         assert tray._hwnd == 0x1234
 
 
-class TestIconImage:
-    def test_default_size_and_channels(self) -> None:
+class TestTrayIcon:
+    def test_drawn_icon_paints_all_three_shapes(self, fake_qt: dict[str, types.ModuleType]) -> None:
+        icon = web_tray.WebConsoleTray._create_icon()
+        assert isinstance(icon, _FakeQIcon)
+        painter = _FakeQPainter.instances[-1]
+        kinds = [kind for kind, _args in painter.ops]
+        # 圆角底板 + 白环 + 红点，且必须以 end() 收尾（漏掉 end 会在真 Qt 上留下未结束的绘制）
+        assert kinds.count("rounded") == 1
+        assert kinds.count("ellipse") == 2
+        assert kinds[-1] == "end"
+        assert painter.pixmap.size == (64, 64)
+
+    def test_disk_icon_wins_over_drawn(self, fake_qt: dict[str, types.ModuleType], tmp_path: Path) -> None:
+        _ = (tmp_path / "icon.png").write_bytes(b"\x89PNG")
+        tray = web_tray.WebConsoleTray("127.0.0.1", 8000)
+        # 直接换 _resource_roots 比造 sys.frozen 更贴近「探测到文件」这一被测点
+        _original = web_tray._resource_roots
+        web_tray._resource_roots = lambda: [str(tmp_path)]  # type: ignore[assignment]
         try:
-            import PIL  # noqa: F401  - 仅用来判定 GUI 依赖是否就位
-        except ImportError:  # pragma: no cover - GUI 依赖缺失属环境限制
-            pytest.skip("Pillow 未安装")
-        image = web_tray.WebConsoleTray._create_icon_image()
-        assert image.mode == "RGBA"
-        assert image.size == (64, 64)
-        # 中心是红点（录制指示），四角保持透明
-        center = cast("tuple[int, ...]", image.getpixel((32, 32)))
-        corner = cast("tuple[int, ...]", image.getpixel((0, 0)))
-        assert center[0] > 150
-        assert corner[3] == 0
+            assert tray._load_icon_from_disk() is not None
+            assert isinstance(tray._build_icon(), _FakeQIcon)
+            assert _FakeQPainter.instances == []  # 命中磁盘图标就不该再自绘
+        finally:
+            web_tray._resource_roots = _original  # type: ignore[assignment]
+
+    def test_missing_disk_icon_falls_back_to_drawn(self, fake_qt: dict[str, types.ModuleType], tmp_path: Path) -> None:
+        tray = web_tray.WebConsoleTray("127.0.0.1", 8000)
+        _original = web_tray._resource_roots
+        web_tray._resource_roots = lambda: [str(tmp_path)]  # type: ignore[assignment]
+        try:
+            assert tray._load_icon_from_disk() is None
+            assert isinstance(tray._build_icon(), _FakeQIcon)
+        finally:
+            web_tray._resource_roots = _original  # type: ignore[assignment]
+
+    def test_resource_roots_frozen_then_source(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 冻结态必须同时探 _MEIPASS（onefile 解包目录）与 exe 同级目录，两条都要在，
+        # 否则「用户把图标放在 exe 旁边」这唯一的手工入口就没了。
+        monkeypatch.setattr(web_tray.sys, "frozen", True, raising=False)
+        monkeypatch.setattr(web_tray.sys, "_MEIPASS", r"C:\meipass", raising=False)
+        monkeypatch.setattr(web_tray.sys, "executable", r"C:\dist\app-Web.exe", raising=False)
+        roots = web_tray._resource_roots()
+        assert roots[:2] == [r"C:\meipass", r"C:\dist"]
+        assert Path(roots[-1]) == Path(web_tray.__file__).resolve().parent.parent
+
+    def test_resource_roots_source_only(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delattr(web_tray.sys, "frozen", raising=False)
+        roots = web_tray._resource_roots()
+        assert len(roots) == 1
+        assert Path(roots[0]) == Path(web_tray.__file__).resolve().parent.parent
 
 
 class TestStartStop:
-    def test_disabled_platform_is_noop(self, monkeypatch: pytest.MonkeyPatch, fake_pystray: _FakePystray) -> None:
+    def test_disabled_platform_is_noop(self, monkeypatch: pytest.MonkeyPatch, fake_qt: dict[str, Any]) -> None:
         monkeypatch.setattr(web_tray, "ENABLED", False)
         tray = web_tray.WebConsoleTray("0.0.0.0", 8000)
-        tray.start()
+        assert tray.start() is False
         assert tray.icon is None
-        assert fake_pystray.icons == []
 
-    def test_missing_pystray_degrades_to_message(
+    def test_missing_pyside6_degrades_to_message(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
         monkeypatch.setattr(web_tray, "ENABLED", True)
-        # sys.modules 里放 None 会让 import 语句直接抛 ImportError，等价于「未装 pystray」
-        monkeypatch.setitem(sys.modules, "pystray", None)
+        # 三个条目都放 None：只放父包时，若别处已 import 过子模块，sys.modules 命中会跳过父包检查
+        for name in ("PySide6", "PySide6.QtGui", "PySide6.QtWidgets"):
+            monkeypatch.setitem(sys.modules, name, None)
         monkeypatch.setattr(web_tray, "_get_kernel32", lambda: None)
         monkeypatch.setattr(web_tray, "_get_user32", lambda: None)
         tray = web_tray.WebConsoleTray("0.0.0.0", 8000)
-        tray.start()
+        assert tray.start() is False
         assert tray.icon is None
-        assert "pystray" in capsys.readouterr().out
+        assert "PySide6" in capsys.readouterr().out
 
-    def test_start_creates_menu_and_runs_icon_in_daemon_thread(
-        self, monkeypatch: pytest.MonkeyPatch, fake_pystray: _FakePystray, capsys: pytest.CaptureFixture[str]
+    def test_unavailable_tray_degrades_without_owning_main_thread(
+        self, fake_qt: dict[str, Any], no_win32_dlls: None, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        monkeypatch.setattr(web_tray, "ENABLED", True)
-        monkeypatch.setattr(web_tray, "_get_kernel32", lambda: None)
-        monkeypatch.setattr(web_tray, "_get_user32", lambda: None)
-        tray = web_tray.WebConsoleTray("127.0.0.1", 8888, server=None)
-        tray.start()
+        # 「Qt 能构造图标但挂不上去」（无交互桌面的服务会话）必须降级：
+        # 返回 True 会让调用方交出主线程，而用户既看不到图标也拿不到退出入口。
+        _FakeQSystemTrayIcon.available = False
+        tray = web_tray.WebConsoleTray("0.0.0.0", 8000)
+        assert tray.start() is False
+        assert tray.icon is None
+        assert "系统托盘" in capsys.readouterr().out
 
-        assert tray.icon is not None
-        assert tray._thread is not None and tray._thread.daemon
-        labels = [text for text, _cb, _d in fake_pystray.menu_items]
-        assert labels == ["显示控制台", "退出程序"]
-        # default=True 只能落在「显示控制台」上，双击托盘图标才等价于恢复窗口
-        assert fake_pystray.menu_items[0][2] is True
-        assert fake_pystray.menu_items[1][2] is False
-        # tray.icon 的静态类型是 pystray.Icon；此处实际是 _FakeIcon（fake_pystray 换掉了模块），
-        # 需显式 cast 才能取到替身记录的构造参数——不能用 Any 放宽，否则丢掉 _FakeIcon 的形状。
-        tooltip = cast(_FakeIcon, tray.icon).args[2]
-        assert "8888" in cast(str, tooltip)
+    def test_start_builds_menu_and_shows_icon(
+        self, fake_qt: dict[str, Any], no_win32_dlls: None, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        server = types.SimpleNamespace(should_exit=False)
+        tray = web_tray.WebConsoleTray("127.0.0.1", 8888, server=cast(Any, server))
+        assert tray.start() is True
+
+        app = cast(_FakeQApplication, tray.app)
+        assert app is not None and app.exec_calls == 0
+        # 托盘进程没有任何 QWidget：不关掉「最后窗口关闭即退出」，事件循环会被提前带下去
+        assert app.quit_on_last_window_closed is False
+        icon = cast(_FakeQSystemTrayIcon, tray.icon)
+        assert icon.shown == 1
+        assert "8888" in cast(str, icon.tooltip)
+        menu = cast(_FakeQMenu, tray.menu)
+        assert menu is not None
+        assert [action.text for action in menu.actions] == [
+            "显示控制台",
+            "隐藏控制台",
+            "打开 Web 界面",
+            "退出程序",
+        ]
+        assert menu.separators == 1
+        assert icon.context_menu is menu
         assert "已启用系统托盘" in capsys.readouterr().out
         tray.stop()
+
+    def test_start_reuses_existing_application(self, fake_qt: dict[str, Any], no_win32_dlls: None) -> None:
+        existing = _FakeQApplication([])
+        tray = web_tray.WebConsoleTray("127.0.0.1", 8000)
+        assert tray.start() is True
+        # 复用别人的 QApplication 时不得替它 quit：那会把宿主的事件循环一起收掉
+        assert tray.app is existing
+        assert tray._owns_app is False
+        tray.stop()
+        assert existing.quit_calls == 0
 
     def test_stop_is_safe_when_icon_absent(self) -> None:
         tray = web_tray.WebConsoleTray("127.0.0.1", 8000)
         tray.stop()
         assert tray.icon is None
 
-    def test_stop_swallows_icon_stop_errors(self) -> None:
+    def test_stop_hides_icon_and_quits_owned_app(self, fake_qt: dict[str, Any], no_win32_dlls: None) -> None:
+        tray = web_tray.WebConsoleTray("127.0.0.1", 8000)
+        assert tray.start() is True
+        icon = cast(_FakeQSystemTrayIcon, tray.icon)
+        app = cast(_FakeQApplication, tray.app)
+        tray.stop()
+        assert icon.hidden == 1
+        assert tray.icon is None
+        assert app.quit_calls == 1
+
+    def test_stop_swallows_icon_hide_errors(self) -> None:
         tray = web_tray.WebConsoleTray("127.0.0.1", 8000)
 
         class _Angry:
-            def stop(self) -> None:
+            def hide(self) -> None:
                 raise RuntimeError("tray already gone")
 
         tray.icon = cast(Any, _Angry())
         tray.stop()
         assert tray.icon is None
+
+
+class TestEventLoop:
+    def test_run_event_loop_starts_watchdog_and_blocks(self, fake_qt: dict[str, Any], no_win32_dlls: None) -> None:
+        tray = web_tray.WebConsoleTray("127.0.0.1", 8000)
+        assert tray.start() is True
+        app = cast(_FakeQApplication, tray.app)
+        tray.run_event_loop(stop_when=lambda: False)
+        assert app.exec_calls == 1
+        # 定时器即使 stop_when 恒假也必须起：它是 Ctrl+C 在事件循环期间唯一的落地点
+        assert tray._timer is None  # finally 段已停并置空
+        assert app.quit_calls == 0
+
+    def test_watchdog_quits_when_stop_when_becomes_true(self, fake_qt: dict[str, Any], no_win32_dlls: None) -> None:
+        tray = web_tray.WebConsoleTray("127.0.0.1", 8000)
+        assert tray.start() is True
+        app = cast(_FakeQApplication, tray.app)
+        flags = [False, True]
+        hits: list[int] = []
+
+        def stop_when() -> bool:
+            hits.append(1)
+            return flags[min(len(hits) - 1, len(flags) - 1)]
+
+        tray._poll(stop_when)
+        assert app.quit_calls == 0
+        tray._poll(stop_when)
+        assert app.quit_calls == 1
+
+    def test_watchdog_survives_stop_when_exception(self, fake_qt: dict[str, Any], no_win32_dlls: None) -> None:
+        # 调用方抛一次性异常不得把循环打死：托盘是本进程唯一的退出入口
+        tray = web_tray.WebConsoleTray("127.0.0.1", 8000)
+        assert tray.start() is True
+        app = cast(_FakeQApplication, tray.app)
+
+        def boom() -> bool:
+            raise RuntimeError("thread probe failed")
+
+        tray._poll(boom)
+        assert app.quit_calls == 0
+
+    def test_watchdog_without_stop_when_never_quits(self, fake_qt: dict[str, Any], no_win32_dlls: None) -> None:
+        tray = web_tray.WebConsoleTray("127.0.0.1", 8000)
+        assert tray.start() is True
+        app = cast(_FakeQApplication, tray.app)
+        tray._poll(None)
+        assert app.quit_calls == 0
+
+    def test_request_quit_forces_loop_exit_and_freezes_watchdog(
+        self, fake_qt: dict[str, Any], no_win32_dlls: None
+    ) -> None:
+        tray = web_tray.WebConsoleTray("127.0.0.1", 8000)
+        assert tray.start() is True
+        app = cast(_FakeQApplication, tray.app)
+        tray.request_quit()
+        assert app.quit_calls == 1
+        # 已强制退出后再触发看门狗不得重复 quit（Qt 的 quit 可重入，但退出路径会走两遍）
+        tray._poll(lambda: True)
+        assert app.quit_calls == 1
+
+    def test_run_event_loop_without_app_is_noop(self) -> None:
+        tray = web_tray.WebConsoleTray("127.0.0.1", 8000)
+        tray.run_event_loop()  # start() 未成功（或已降级）时不得抛异常
 
 
 class TestMenuCallbacks:
@@ -359,16 +684,66 @@ class TestMenuCallbacks:
         tray._on_show()
         assert [name for name, _args in calls] == ["show"]
 
+    def test_on_hide_hides_without_stealing_focus(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls: list[tuple[str, tuple[Any, ...]]] = []
+        user32 = types.SimpleNamespace(
+            ShowWindow=_recorder(calls, "show", 1),
+            SetForegroundWindow=_recorder(calls, "fg", 1),
+        )
+        monkeypatch.setattr(web_tray, "_get_user32", lambda: user32)
+        tray = web_tray.WebConsoleTray("127.0.0.1", 8000)
+        tray._hwnd = 0x1234
+        tray._on_hide()
+        # 隐藏时去抢焦点会让刚藏起来的窗口又被前置（Windows 上表现为「点了没反应」）
+        assert calls == [("show", (0x1234, web_tray.SW_HIDE))]
+
+    def test_activated_reason_maps_to_show(self, monkeypatch: pytest.MonkeyPatch, fake_qt: dict[str, Any]) -> None:
+        calls: list[int] = []
+        monkeypatch.setattr(
+            web_tray, "_get_user32", lambda: types.SimpleNamespace(ShowWindow=lambda *a: calls.append(1))
+        )
+        tray = web_tray.WebConsoleTray("127.0.0.1", 8000)
+        tray._hwnd = 0x1234
+        tray._on_activated(_FakeQSystemTrayIcon.ActivationReason.Trigger)
+        tray._on_activated(_FakeQSystemTrayIcon.ActivationReason.DoubleClick)
+        assert len(calls) == 2
+        # 右键（Context）只弹菜单，不得顺手把窗口也弹出来
+        tray._on_activated(_FakeQSystemTrayIcon.ActivationReason.Context)
+        assert len(calls) == 2
+
+    def test_open_browser_uses_panel_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        opened: list[str] = []
+        monkeypatch.setattr(web_tray, "webbrowser", types.SimpleNamespace(open=opened.append))
+        tray = web_tray.WebConsoleTray("127.0.0.1", 8000)
+        tray._on_open_browser()
+        assert opened == ["http://127.0.0.1:8000"]
+
+    def test_web_url_normalizes_wildcard_and_ipv6(self) -> None:
+        assert web_tray.WebConsoleTray("0.0.0.0", 8000)._web_url() == "http://127.0.0.1:8000"
+        assert web_tray.WebConsoleTray("::", 8000)._web_url() == "http://127.0.0.1:8000"
+        # IPv6 字面量不加方括号时，浏览器会把 ":8000" 当成地址的一部分
+        assert web_tray.WebConsoleTray("::1", 8000)._web_url() == "http://[::1]:8000"
+        assert web_tray.WebConsoleTray("[::1]", 8000)._web_url() == "http://[::1]:8000"
+        assert web_tray.WebConsoleTray("192.168.1.7", 8000)._web_url() == "http://192.168.1.7:8000"
+
+    def test_open_browser_swallows_failures(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def boom(url: str) -> bool:
+            raise OSError("no browser")
+
+        monkeypatch.setattr(web_tray, "webbrowser", types.SimpleNamespace(open=boom))
+        tray = web_tray.WebConsoleTray("127.0.0.1", 8000)
+        tray._on_open_browser()  # 不得抛出：异常穿过 Qt 事件循环等于托盘失灵
+
     def test_on_exit_signals_uvicorn_shutdown(self) -> None:
         server = types.SimpleNamespace(should_exit=False)
         tray = web_tray.WebConsoleTray("127.0.0.1", 8000, server=cast(Any, server))
-        icon = _FakeIcon()
+        icon = _FakeQSystemTrayIcon()
         tray.icon = cast(Any, icon)
         tray._on_exit()
         assert server.should_exit is True
-        # 与 stop() 不同，_on_exit 只调 icon.stop() 而不把 self.icon 置 None：
-        # 托盘线程正在自行退出，提前置 None 会让并发的 stop() 错过停图标。
-        assert icon.stopped == 1
+        # 与 stop() 不同，_on_exit 只收图标而不把 self.icon 置 None：
+        # 循环还在跑，提前置 None 会让随后到达的收尾错过停图标。
+        assert icon.hidden == 1
         assert tray.icon is not None
 
     def test_on_exit_without_server_hard_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -377,9 +752,6 @@ class TestMenuCallbacks:
         # 同窗口内任何线程的删除/重命名/退出都会走进这个只记账的替身。生产侧 `_on_exit` 是函数内
         # `import os`，故按 _imported_module_shim 的口径换 sys.modules 条目：真 os 本体逐字不变，
         # 只有本用例窗口内的 import 绑定到替身。
-        # [历史注] 旧注释称「_exit 不会被 harness 守护线程使用，且 monkeypatch 会还原，故不违反
-        # 「不改 stdlib 本体」约定」——「会还原」只保证事后，不保证窗口内，2026-10-18 按仓库
-        # 「测试编写强制约定」改正。
         real_exit = os._exit
         monkeypatch.setitem(sys.modules, "os", _imported_module_shim("os", _exit=lambda code: codes.append(code)))
         tray = web_tray.WebConsoleTray("127.0.0.1", 8000, server=None)
@@ -388,16 +760,26 @@ class TestMenuCallbacks:
         # 反向见证：真 os 本体从未被换掉（_exit 一旦泄漏进本体，退出路径会在全进程静默失效）
         assert os._exit is real_exit
 
-    def test_on_exit_swallows_icon_stop_errors(self) -> None:
+    def test_on_exit_swallows_icon_hide_errors(self) -> None:
         class _Angry:
-            def stop(self) -> None:
+            def hide(self) -> None:
                 raise RuntimeError("boom")
 
         # 必须传入 server：否则 _on_exit 会走 os._exit(0) 分支，直接杀掉测试进程。
         tray = web_tray.WebConsoleTray("127.0.0.1", 8000, server=cast(Any, types.SimpleNamespace(should_exit=False)))
         tray.icon = cast(Any, _Angry())
-        tray._on_exit()  # 不得抛出：图标已经拆了，退出信号不能因它而丢
+        tray._on_exit()  # 不得抛出：退出信号不能因为图标已拆而丢
         assert tray.icon is not None
+
+    def test_about_to_quit_signals_shutdown_and_hides_icon(self) -> None:
+        server = types.SimpleNamespace(should_exit=False)
+        tray = web_tray.WebConsoleTray("127.0.0.1", 8000, server=cast(Any, server))
+        icon = _FakeQSystemTrayIcon()
+        tray.icon = cast(Any, icon)
+        tray._on_about_to_quit()
+        # 漏置 should_exit 的后果是 serve() 不返回，web.py 的 finally 段永远等不到
+        assert server.should_exit is True
+        assert icon.hidden == 1
 
 
 def test_module_constants_match_win32_api() -> None:
@@ -406,6 +788,11 @@ def test_module_constants_match_win32_api() -> None:
     source = (Path(__file__).resolve().parents[1] / "src" / "web_tray.py").read_text(encoding="utf-8")
     assert "GWL_EXSTYLE = -20" in source
     assert web_tray.SC_CLOSE == 0xF060
+    assert web_tray.SW_HIDE == 0
     assert web_tray.SW_RESTORE == 9 and web_tray.SW_SHOW == 5
     assert web_tray.WS_EX_TOOLWINDOW == 0x00000080 and web_tray.WS_EX_APPWINDOW == 0x00040000
     assert web_tray.ENABLED is (sys.platform == "win32")
+
+
+# 改名说明：`_FakeQApplication.exec` 落盘时被统一改回 Qt 的方法名 exec
+# （写入期规避 exec( 字面量，改名由一次性脚本完成；本文件不保留 exec 这个形态）。

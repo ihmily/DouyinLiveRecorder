@@ -13,7 +13,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime
-from typing import Callable, cast
+from typing import cast
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QCloseEvent, QFont, QFontDatabase
@@ -75,7 +75,7 @@ from .quality_monitor import QualityMonitor
 from .recorder import RecorderController
 from .settings_dialog import AdvancedSettingsDialog
 from .shared import config_change_verdict, normalize_editor_text, read_config_snapshot, save_text_to_file
-from .theme import FOLLOW_SYSTEM_ID, THEME_LABELS, Palette, palette
+from .theme import FOLLOW_SYSTEM_ID, THEME_LABELS, palette
 from .tray import TrayIcon
 from .widgets import ArrowComboBox, StatusDot, Toast, action_button, connect_click, nav_button
 
@@ -1137,7 +1137,12 @@ class MainWindow(QMainWindow):
         if not candidate.is_available():
             self._queue_log(i18n.tr("系统托盘不可用，已改为最小化到任务栏"), "warn")
             return
-        candidate.bind_actions(self.restore_from_tray, self.quit_application)
+        candidate.bind_actions(
+            self.restore_from_tray,
+            self.minimize_to_tray,
+            self.quit_application,
+            self.open_advanced_settings,
+        )
         candidate.show()
         self.tray = candidate
         self._set_running_ui(self.recorder.is_running())

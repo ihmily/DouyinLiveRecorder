@@ -600,11 +600,13 @@ def test_debt_count_cannot_exceed_ceiling(tmp_path: Path) -> None:
 
 def test_exempt_claiming_generated_code_is_machine_checked() -> None:
     # 理由写「生成物」就得真在文件里找到生成器标记，否则就是拿一句注释把人写模块洗出门禁。
-    # 取真实仓库根 + 一个确定手写的模块（src/ab_sign.py）来构造「虚报」形态：
+    # 取真实仓库根 + 一个确定手写的模块（src/proxy.py）来构造「虚报」形态：
     # 核对本身只对 ROOT 生效（tmp 桩树里是占位文件，核对它必然假阳性）。
+    # [2026-10-20] 原样本模块 src/ab_sign.py 已随「零生产 importer 的死模块」清理删除，
+    #   换成同为手写、且不含 GENERATED_MARKERS 任一标记的 src/proxy.py，判据形态不变。
     saved = check_coverage.GATE_EXEMPT_MODULES
     try:
-        check_coverage.GATE_EXEMPT_MODULES = {"src/ab_sign.py": "protoc 生成物（DO NOT EDIT，不参与人工补测）"}
+        check_coverage.GATE_EXEMPT_MODULES = {"src/proxy.py": "protoc 生成物（DO NOT EDIT，不参与人工补测）"}
         errors, _v = check_coverage._validate_debt_and_exempt(ROOT)
     finally:
         check_coverage.GATE_EXEMPT_MODULES = saved

@@ -63,7 +63,6 @@ MODULE_THRESHOLDS: dict[str, float] = {
     "src/stream.py": 70,
     "src/utils.py": 80,
     "src/ttwid.py": 85,
-    "src/ab_sign.py": 95,
     "src/proxy.py": 50,
 }
 

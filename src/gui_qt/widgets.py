@@ -27,7 +27,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
     QGraphicsDropShadowEffect,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPlainTextEdit,
@@ -37,7 +36,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .theme import RADIUS_XL, Palette
+from .theme import Palette
 
 
 class Card(QFrame):
@@ -139,9 +138,6 @@ class StatusDot(QWidget):
             self._timer.stop()
             self._index = 0
         self.update()
-
-    def is_animating(self) -> bool:
-        return self._animating
 
     def stop(self) -> None:
         # 退出收尾必须显式停组：Qt 的 timer 绑定父对象、父销毁时会停，
@@ -381,15 +377,6 @@ class TerminalText(QPlainTextEdit):
 
     def sizeHint(self) -> QSize:
         return QSize(600, 320)
-
-
-def build_grid(parent: QWidget, columns: int = 2) -> QGridLayout:
-    grid = QGridLayout(parent)
-    grid.setContentsMargins(0, 0, 0, 0)
-    grid.setSpacing(12)
-    for col in range(columns):
-        grid.setColumnStretch(col, 1)
-    return grid
 
 
 def connect_click(button: QPushButton, handler: Callable[[], None]) -> None:

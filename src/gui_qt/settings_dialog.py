@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import os
-from typing import Callable
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QHideEvent, QShowEvent
@@ -23,7 +22,6 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
-    QWidget,
 )
 
 import i18n

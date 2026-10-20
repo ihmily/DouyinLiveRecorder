@@ -101,24 +101,12 @@ def test_language_change_retranslates_and_resets_sentinels(
     assert cfg["录制设置"]["language"] == "en_US"
 
 
-def test_language_change_triggers_tray_menu_rebuild(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, gui: ModuleType
-) -> None:
-    calls: list[str] = []
-    app = _make_stub(tmp_path, calls, gui)
-
-    class _Tray:
-        def rebuild_menu(self) -> None:
-            calls.append("tray_rebuild")
-
-    setattr(app, "system_tray", _Tray())
-    monkeypatch.setattr(gui, "retranslate_all", lambda: 0)
-    saved = i18n.get_language()
-    try:
-        gui.LiveRecorderGUI._on_language_change(app, "English (US)")
-    finally:
-        i18n.set_language(saved)
-    assert "tray_rebuild" in calls, "托盘菜单文本构建期定型，语言切换后必须整体重建"
+# [2026-10-20] 原 test_language_change_triggers_tray_menu_rebuild 已随遗留 pystray 托盘
+# （gui.py::SystemTray，rebuild_menu 整体重建菜单）退役删除。该不变式没有丢，只是换了
+# 宿主：产品入口本就在 PySide6 侧，「语言切换后托盘菜单文本必须跟着换」现由
+# tests/test_gui_qt_units.py::test_static_labels_and_derived_title_follow_language_switch
+# 的托盘四条动作项断言接管（Qt 版走 TrayIcon.retranslate()，不再整体重建）。
+# 本文件剩下的用例仍钉在 tkinter 版 LiveRecorderGUI 上，与托盘无关。
 
 
 def test_retranslate_failure_does_not_block_language_writeback(

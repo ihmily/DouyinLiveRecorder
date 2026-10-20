@@ -1422,8 +1422,20 @@ msgstr "[web] ❌ 拒绝启动: 未启用 Web 认证时不允许监听非回环�
 msgid "[web] 录制引擎已在守护线程启动 (tid={ident})"
 msgstr "[web] 录制引擎已在守护线程启动 (tid={ident})"
 
-msgid "[web] 托盘不可用（缺少 pystray/Pillow）：{e}"
-msgstr "[web] 托盘不可用（缺少 pystray/Pillow）：{e}"
+msgid "[web] 托盘不可用（缺少 PySide6）：{e}"
+msgstr "[web] 托盘不可用（缺少 PySide6）：{e}"
+
+msgid "显示控制台"
+msgstr "显示控制台"
+
+msgid "隐藏控制台"
+msgstr "隐藏控制台"
+
+msgid "打开 Web 界面"
+msgstr "打开 Web 界面"
+
+msgid "[web] 打开浏览器失败，请手动访问上面给出的面板地址"
+msgstr "[web] 打开浏览器失败，请手动访问上面给出的面板地址"
 
 msgid "[web] 日志文件: {log_path}"
 msgstr "[web] 日志文件: {log_path}"
@@ -3843,3 +3855,9 @@ msgstr "读取录制状态失败，房间列表中的录制态标记为未知: {
 
 msgid "配置备份未能脱敏（解析失败：{e}），本次副本可能包含明文凭据，请勿外传"
 msgstr "配置备份未能脱敏（解析失败：{e}），本次副本可能包含明文凭据，请勿外传"
+
+msgid "隐藏主窗口"
+msgstr "隐藏主窗口"
+
+msgid "设置"
+msgstr "设置"

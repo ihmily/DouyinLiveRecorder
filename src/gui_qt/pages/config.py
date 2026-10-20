@@ -77,5 +77,10 @@ class ConfigPage(QWidget):
         _ = palette
 
     def saved_buttons(self) -> tuple[QPushButton, QPushButton]:
-        # 供测试断言按钮可用性（停止流程会禁用控制按钮），非业务路径
+        # 供测试取用本页两个控制按钮（顺序 = 重新读取、保存）。非业务路径。
+        # [2026-10-20 更正] 原注释称「供测试断言按钮可用性（停止流程会禁用控制按钮）」——该前提
+        #   不成立：Qt 窗口层的停止流程只禁用 dashboard 的 start/stop 两键（main_window 里
+        #   `self.dashboard.start_btn.setEnabled(False)` 一段），从不触碰本页按钮，故那样断言
+        #   写出来必然失败。真要「停止时禁用本页按钮」得先在 main_window 停止分支接线，
+        #   再把断言补进 tests/test_gui_qt_units.py::test_config_page_saved_buttons_exposes_both_control_buttons。
         return self.reload_btn, self.save_btn

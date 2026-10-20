@@ -1,23 +1,49 @@
 # -*- encoding: utf-8 -*-
-# Web 管理面板的控制台系统托盘支持。
+# Web 管理面板的控制台系统托盘支持（Qt / QSystemTrayIcon）。
 #
 # Windows 下将 web.py 的控制台窗口改为「最小化到系统托盘」，而非最小化到任务栏：
 #
 # - 把控制台窗口样式改为工具窗口（WS_EX_TOOLWINDOW 并去掉 WS_EX_APPWINDOW），
 #   从而不生成任务栏按钮；最小化后仅在托盘可见，可直接从任务栏移除。
 # - 禁用标题栏关闭按钮（通过系统菜单置灰 SC_CLOSE），避免误点关闭导致进程被终止。
-# - 托盘图标提供「显示控制台」与「退出程序」：双击托盘图标恢复控制台窗口；
-#   「退出程序」触发 uvicorn 优雅关闭（由调用方传入的 server 对象控制）。
+# - 托盘图标菜单提供「显示控制台 / 隐藏控制台 / 打开 Web 界面 / 退出程序」；单击或双击
+#   托盘图标恢复控制台窗口；「退出程序」触发 uvicorn 优雅关闭（由调用方传入的 server 控制）。
+#
+# 【为什么不再用 pystray】pystray 的图标要额外依赖 Pillow 才画得出来，且它必须跑在独立
+# 线程（macOS 的 NSApp 限制在本仓 Windows-only 的场景里用不上），菜单回调因此落在托盘
+# 线程上，操作控制台窗口要跨线程调 Win32。Qt 自带 QSystemTrayIcon，图标可用 QPainter
+# 现画（不再依赖 Pillow），回调也全部落在跑事件循环的那一个线程里。
+#
+# 【线程模型（与 pystray 版最大的差别，改回旧形态前务必读）】
+# pystray 版：主线程跑 uvicorn（asyncio.run 阻塞），托盘图标跑在守护线程。
+# Qt 版：**QApplication 只能建在主线程**——2026-10-20 本机实测在子线程执行
+# QApplication(sys.argv) 直接段错误退出（进程 exit code 139，Python 层捕获不到），
+# 与 Qt 文档「GUI 线程即主线程」一致。故 start() 返回 True 时调用方**必须**把主线程交给
+# run_event_loop()，uvicorn 改由调用方起的守护线程驱动（uvicorn 的 capture_signals()
+# 对非主线程直接跳过，信号改由调用方自己接管，见 web.py::_install_sigint_shutdown）。
+# 收益：菜单回调全部在主线程执行，ShowWindow 不再依赖「可从托盘线程调用」的时序假设。
 #
 # 注意：控制台窗口实际由 conhost.exe（独立进程）拥有，无法跨进程子类化其
 # WndProc，因此**不能**拦截 WM_SYSCOMMAND 来改写最小化行为。本模块改用窗口
 # 样式切换实现「不在任务栏显示」，配合常驻托盘图标达到「最小化到托盘」的效果。
 #
+# 【图标资源与打包后的路径处理】仓库不放二进制图标，托盘图标默认由 QPainter 现画
+# （见 _create_icon），因此 PyInstaller 冻结后既不必读 sys._MEIPASS、也不必拼 exe 同级
+# 目录——「图标文件没被收进包里」这个故障面根本不存在。若用户想换成自绘以外的图标，
+# 把 favicon.ico / icon.ico / icon.png 放到冻结态的 exe 同级目录（或源码运行时的仓库根）
+# 即可，由 _load_icon_from_disk 按 _resource_roots() 的顺序探测。
+# 真要把图标做成随包分发的资源时，三处必须同改，否则现象是「开发环境有图标、打包后没有」：
+#   ① build_exe.py 的 datas 登记（把文件收进 _internal）；
+#   ② _ICON_FILE_NAMES（探测文件名）；
+#   ③ _resource_roots()（冻结态的 _MEIPASS 与 exe 同级目录这两条根）。
+#
 from __future__ import annotations
 
+import os
+import pathlib
 import sys
-import threading
-from typing import TYPE_CHECKING, cast
+import webbrowser
+from typing import TYPE_CHECKING, Callable, cast
 
 import i18n
 
@@ -25,8 +51,9 @@ if TYPE_CHECKING:
     import ctypes
 
     import uvicorn
-    from PIL import Image
-    from pystray import Icon
+    from PySide6.QtCore import QTimer
+    from PySide6.QtGui import QAction, QIcon
+    from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 # 仅 Windows 下启用托盘（其他平台缺少 conhost 窗口与托盘 API）
 ENABLED = sys.platform == "win32"
@@ -39,13 +66,28 @@ WS_EX_TOOLWINDOW = 0x00000080
 SC_CLOSE = 0xF060
 MF_BYCOMMAND = 0x0000
 MF_GRAYED = 0x0001
+SW_HIDE = 0
 SW_RESTORE = 9
+# SW_SHOW 当前无调用点（显示走 SW_RESTORE），但它是本组 Win32 魔数的一员，由
+# tests/test_web_tray.py::test_module_constants_match_win32_api 按「整组常量取值必须与
+# Win32 API 一致」钉住——抄错的症状是无异常抛出的视觉 bug，故不按「未使用」摘除。
 SW_SHOW = 5
 # SetWindowPos 标志：只触发样式重评估，不动位置/尺寸/Z 序
 SWP_NOMOVE = 0x0002
 SWP_NOSIZE = 0x0001
 SWP_NOZORDER = 0x0004
 SWP_FRAMECHANGED = 0x0020
+
+# 看门狗定时器周期（毫秒）：既决定「uvicorn 服务线程已结束」多快被看见，也保证
+# exec() 阻塞期间主线程每隔这么久回到一次 Python 字节码——Qt 的 exec() 阻塞在 C 层，
+# 期间 Python 的信号处理器不会被调用（Ctrl+C 只置位、无人接管），定时器回调是它唯一的落地点。
+_WATCHDOG_INTERVAL_MS = 200
+
+# 自绘托盘图标的边长（Qt 会按系统 DPI 再缩放，给足 64 以免高分屏发虚）
+_ICON_SIZE = 64
+
+# 外部图标文件的探测文件名（命中即用，见文件头「图标资源与打包后的路径处理」）
+_ICON_FILE_NAMES = ("favicon.ico", "icon.ico", "icon.png")
 
 # kernel32/user32 DLL 句柄缓存为模块级单例（与 web.py 的 WinDLL 惯例一致）：
 # 不用 ctypes.windll——其函数指针缺省 restype=c_int，会把 64 位指针宽度的句柄
@@ -112,60 +154,166 @@ def _get_user32() -> "ctypes.CDLL | None":
         return None
 
 
+def _resource_roots() -> list[str]:
+    # 外部图标的探测根目录，顺序即优先级：
+    #   ① PyInstaller onefile 的解包目录 sys._MEIPASS（仅 sys.frozen 为真时存在）；
+    #   ② 冻结态 exe 所在目录（onedir 模式下 _internal 与 exe 同级，手工放图标就在这层）；
+    #   ③ 源码运行时的仓库根（本文件的上级目录）。
+    # 不缓存、不写死绝对路径：_MEIPASS 每次构建都变，写死会让「换台机器打包」即失效。
+    roots: list[str] = []
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if isinstance(meipass, str) and meipass:
+            roots.append(meipass)
+        roots.append(os.path.dirname(sys.executable))
+    roots.append(str(pathlib.Path(__file__).resolve().parent.parent))
+    return roots
+
+
 class WebConsoleTray:
-    # 托盘生命周期管理：start() 改写控制台窗口样式并起守护线程挂图标，stop() 拆图标
+    # 托盘生命周期管理：start() 改写控制台窗口样式并挂上 Qt 托盘图标，
+    # run_event_loop() 占用主线程跑事件循环，stop() 收起图标。
     host: str
     port: int
     server: "uvicorn.Server | None"
-    icon: "Icon | None"
-    _thread: "threading.Thread | None"
+    app: "QApplication | None"
+    icon: "QSystemTrayIcon | None"
+    menu: "QMenu | None"
+    show_action: "QAction | None"
+    hide_action: "QAction | None"
+    open_action: "QAction | None"
+    exit_action: "QAction | None"
+    _timer: "QTimer | None"
     _hwnd: "int | None"
+    _owns_app: bool
+    _forced_quit: bool
 
     def __init__(self, host: str, port: int, server: "uvicorn.Server | None" = None) -> None:
-        # host/port 用于托盘提示文本；server 用于在「退出程序」时优雅关闭 uvicorn
+        # host/port 用于托盘提示文本与「打开 Web 界面」；server 用于「退出程序」时优雅关闭 uvicorn
         self.host = host
         self.port = port
         self.server = server
+        self.app = None
         self.icon = None
-        self._thread = None
+        self.menu = None
+        self.show_action = None
+        self.hide_action = None
+        self.open_action = None
+        self.exit_action = None
+        self._timer = None
         self._hwnd = None
+        self._owns_app = False
+        self._forced_quit = False
 
-    def start(self) -> None:
-        # 启动系统托盘（非阻塞，图标跑在守护线程）；非 Windows 时 ENABLED 为 False，直接返回
+    # ─── 生命周期 ──────────────────────────────────────────
+
+    def start(self) -> bool:
+        # 挂上托盘图标。返回值是给调用方的**契约**：
+        #   True  = 本模块已占用主线程，调用方必须随后调用 run_event_loop()，
+        #          且不得再在主线程跑阻塞循环（uvicorn 要挪到自己的线程）；
+        #   False = 已静默降级（非 Windows / 缺 PySide6 / 无系统托盘），调用方照旧在主线程跑 uvicorn。
         if not ENABLED:
-            return
+            return False
         try:
-            import pystray as _pystray  # 延迟导入：避免非 Windows / headless 环境顶层导入失败
+            from PySide6.QtGui import QAction  # 延迟导入：避免 headless / 未装 Qt 时顶层导入失败
+            from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
         except Exception as e:  # pragma: no cover - 依赖缺失时优雅降级
-            print(i18n.tr("[web] 托盘不可用（缺少 pystray/Pillow）：{e}", e=e), flush=True)
-            return
+            print(i18n.tr("[web] 托盘不可用（缺少 PySide6）：{e}", e=e), flush=True)
+            return False
+
+        # QApplication.instance() 在 PySide6 存根里返回 QCoreApplication：
+        # 收仄成 QApplication 才能拿到 setQuitOnLastWindowClosed（且 self.app 的声明类型是
+        # QApplication，不 cast 会让下面的赋值被 mypy 判为不兼容）。
+        app = cast("QApplication | None", QApplication.instance())
+        if app is None:
+            # QApplication 只能在主线程构造（见文件头实测的段错误），本方法由 web.py 在主线程调用
+            app = QApplication(sys.argv)
+            self._owns_app = True
+        # 本进程没有任何 QWidget：默认的「最后一个窗口关闭即退出」会让事件循环在图标
+        # 还没退出前就被带下去（表现为托盘点了没反应）。托盘进程必须显式关掉这条。
+        app.setQuitOnLastWindowClosed(False)
+        self.app = app
+
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            # 无交互桌面的服务会话里 Qt 构造得出图标却挂不上去；此时必须降级——
+            # 否则调用方交出了主线程，而用户既看不到图标也拿不到退出入口。
+            print(i18n.tr("系统托盘不可用，已改为最小化到任务栏"), flush=True)
+            return False
 
         # 改写控制台窗口样式：去任务栏按钮 + 禁用关闭按钮
         self._patch_console_window()
 
-        menu = _pystray.Menu(
-            _pystray.MenuItem("显示控制台", self._on_show, default=True),
-            _pystray.MenuItem("退出程序", self._on_exit),
-        )
-        icon = _pystray.Icon(
-            "DouyinLiveRecorderWeb",
-            self._create_icon_image(),
-            f"Web 管理面板 - http://{self.host}:{self.port}\n点击显示控制台，最小化将收起到托盘",
-            menu,
-        )
+        icon = QSystemTrayIcon(self._build_icon(), app)
+        icon.setToolTip(f"Web 管理面板 - http://{self.host}:{self.port}\n点击显示控制台，最小化将收起到托盘")
+        menu = QMenu()
+        self.show_action = QAction(i18n.tr("显示控制台"), menu)
+        self.hide_action = QAction(i18n.tr("隐藏控制台"), menu)
+        self.open_action = QAction(i18n.tr("打开 Web 界面"), menu)
+        self.exit_action = QAction(i18n.tr("退出程序"), menu)
+        menu.addAction(self.show_action)
+        menu.addAction(self.hide_action)
+        menu.addAction(self.open_action)
+        menu.addSeparator()
+        menu.addAction(self.exit_action)
+        # triggered 默认带 checked 形参，统一收仄成无参回调（与 src/gui_qt/tray.py 同口径），
+        # 免得每个 handler 为兼容它加 *args 而让注解失真。
+        self.show_action.triggered.connect(lambda _checked=False: self._on_show())
+        self.hide_action.triggered.connect(lambda _checked=False: self._on_hide())
+        self.open_action.triggered.connect(lambda _checked=False: self._on_open_browser())
+        self.exit_action.triggered.connect(lambda _checked=False: self._on_exit())
+        icon.setContextMenu(menu)
+        # 左键单击 / 双击 = 显示控制台（对齐 pystray 版 MenuItem(default=True) 的双击语义）
+        icon.activated.connect(self._on_activated)
+        icon.show()
         self.icon = icon
-        self._thread = threading.Thread(target=icon.run, daemon=True)
-        self._thread.start()
+        self.menu = menu
+        # 事件循环退出（菜单「退出程序」/ Qt 自己接到的 Ctrl+C / 系统关机）统一在这里补收尾
+        app.aboutToQuit.connect(self._on_about_to_quit)
         print("[web] 已启用系统托盘：控制台窗口不在任务栏显示，最小化后收起到托盘", flush=True)
+        return True
+
+    def run_event_loop(self, stop_when: "Callable[[], bool] | None" = None) -> None:
+        # 阻塞运行 Qt 事件循环（占用调用线程，通常是主线程）；返回即表示应当收尾。
+        # stop_when 为 True 时退出循环（web.py 传「uvicorn 服务线程已结束」）。
+        # 未传 stop_when 时定时器照起：它是 Ctrl+C 在 exec() 期间唯一的落地点。
+        if self.app is None:
+            return
+        from PySide6.QtCore import QTimer
+
+        timer = QTimer(self.app)
+        timer.setInterval(_WATCHDOG_INTERVAL_MS)
+        timer.timeout.connect(lambda: self._poll(stop_when))
+        timer.start()
+        self._timer = timer
+        try:
+            self.app.exec()
+        finally:
+            timer.stop()
+            self._timer = None
+
+    def request_quit(self) -> None:
+        # 强制放开事件循环（第二次 Ctrl+C 这类不再等服务线程的路径）。
+        # 与菜单「退出程序」刻意不同：后者只置 server.should_exit，等看门狗看到服务线程
+        # 结束再 quit，避免 HTTP 服务还在处理请求时循环先退出、web.py 直接进入 ffmpeg 清理。
+        self._forced_quit = True
+        if self.app is not None:
+            self.app.quit()
 
     def stop(self) -> None:
-        # 停止托盘图标（主线程在 uvicorn 关闭后调用）
+        # 收起托盘图标（web.py 在清理段调用；可重复调用）。
+        # 先隐藏再置 None：不留「图标还在、进程已走」的僵尸图标（冻结产物尤其明显）。
         if self.icon is not None:
             try:
-                self.icon.stop()
+                self.icon.hide()
             except Exception:
                 pass
             self.icon = None
+        self.menu = None
+        if self.app is not None and self._owns_app:
+            try:
+                self.app.quit()
+            except Exception:
+                pass
 
     # ─── 控制台窗口样式改写（Windows） ──────────────────────
 
@@ -207,59 +355,153 @@ class WebConsoleTray:
 
     # ─── 托盘图标 ──────────────────────────────────────────
 
+    def _build_icon(self) -> "QIcon":
+        # 外部图标文件优先，未命中回落到自绘（见文件头「图标资源与打包后的路径处理」）。
+        # 两条路径都必须给出非空 QIcon：空图标在 Windows 托盘区是一块空白，
+        # 用户既认不出这是本程序，也没法靠它唤出菜单。
+        from_disk = self._load_icon_from_disk()
+        if from_disk is not None:
+            return from_disk
+        return self._create_icon()
+
+    def _load_icon_from_disk(self) -> "QIcon | None":
+        # 探测可选的外部图标；读不到或 Qt 解不出（损坏 / 不支持的格式）都返回 None 回落到自绘，
+        # 不让一个坏文件把托盘变成空白。
+        from PySide6.QtGui import QIcon
+
+        for root in _resource_roots():
+            for name in _ICON_FILE_NAMES:
+                candidate = pathlib.Path(root) / name
+                if not candidate.is_file():
+                    continue
+                icon = QIcon(str(candidate))
+                if not icon.isNull():
+                    return icon
+        return None
+
     @staticmethod
-    def _create_icon_image() -> "Image.Image":
-        # 生成与 GUI 风格一致的托盘图标（蓝底白环红点）
-        from PIL import Image, ImageDraw
+    def _create_icon() -> "QIcon":
+        # 生成与 GUI 托盘同风格的图标（蓝底 + 白环 + 红点录制指示）。
+        # 现画而非读文件的理由：仓库不放二进制 asset，QPainter 产出的 QIcon 直接可用，
+        # 打包后不必处理 _MEIPASS / exe 相对路径（见文件头）。
+        from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 
-        size = 64
-        image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-        dc = ImageDraw.Draw(image)
-        margin = 2
-        dc.rounded_rectangle(
-            (margin, margin, size - margin, size - margin),
-            radius=16,
-            fill=(79, 109, 245, 255),
-        )
-        ring_margin = 10
-        dc.ellipse(
-            (ring_margin, ring_margin, size - ring_margin, size - ring_margin),
-            outline=(255, 255, 255, 230),
-            width=3,
-        )
-        dot = 9
-        cx = size // 2
-        cy = size // 2
-        dc.ellipse((cx - dot, cy - dot, cx + dot, cy + dot), fill=(220, 38, 38, 255))
-        return image
+        pixmap = QPixmap(_ICON_SIZE, _ICON_SIZE)
+        pixmap.fill(QColor(0, 0, 0, 0))
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        # 每次改画笔画刷都显式指定：QPainter 会沿用上一次的状态，
+        # 漏设会让圆环与圆点互相染色（无异常，只有肉眼看得出）。
+        painter.setPen(QPen(QColor(0, 0, 0, 0), 0))
+        painter.setBrush(QColor(79, 109, 245, 255))
+        painter.drawRoundedRect(2, 2, _ICON_SIZE - 4, _ICON_SIZE - 4, 16, 16)
+        painter.setPen(QPen(QColor(255, 255, 255, 230), 3))
+        painter.setBrush(QColor(0, 0, 0, 0))
+        painter.drawEllipse(10, 10, _ICON_SIZE - 20, _ICON_SIZE - 20)
+        painter.setPen(QPen(QColor(0, 0, 0, 0), 0))
+        painter.setBrush(QColor(220, 38, 38, 255))
+        dot = 18
+        painter.drawEllipse((_ICON_SIZE - dot) // 2, (_ICON_SIZE - dot) // 2, dot, dot)
+        painter.end()
+        return QIcon(pixmap)
 
-    # ─── 托盘菜单回调（运行在托盘线程，操作窗口需谨慎） ──────
+    # ─── 菜单回调（Qt 版全部跑在事件循环所在线程，不再跨线程） ────
 
-    def _on_show(self, _icon: "object | None" = None, _item: "object | None" = None) -> None:
-        # 恢复控制台窗口（允许从托盘线程调用 ShowWindow 恢复顶层窗口）
+    def _on_activated(self, reason: "QSystemTrayIcon.ActivationReason") -> None:
+        # 单击（Trigger）/ 双击（DoubleClick）都恢复控制台；右键（Context）交给上下文菜单，
+        # 在这里一并处理会让右键也弹一次窗口。
+        from PySide6.QtWidgets import QSystemTrayIcon
+
+        if reason in (
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+        ):
+            self._on_show()
+
+    def _on_show(self) -> None:
+        self._apply_window(SW_RESTORE)
+
+    def _on_hide(self) -> None:
+        self._apply_window(SW_HIDE)
+
+    def _apply_window(self, cmd: int) -> None:
+        # 显示 / 隐藏控制台窗口。与 pystray 版的差别：这里跑在事件循环线程（通常是主线程），
+        # 不再有「托盘线程调 ShowWindow」的跨线程假设。
         hwnd = self._hwnd
         if not hwnd:
             return
         user32 = _get_user32()
         if user32 is None:
             return
-        user32.ShowWindow(hwnd, SW_RESTORE)
+        user32.ShowWindow(hwnd, cmd)
+        # 隐藏不需要抢焦点；恢复才需要，且抢焦点失败不得逆掉上面的 ShowWindow
+        if cmd == SW_HIDE:
+            return
         try:
             user32.SetForegroundWindow(hwnd)
         except Exception:
             pass
 
-    def _on_exit(self, _icon: "object | None" = None, _item: "object | None" = None) -> None:
-        # 退出程序：触发 uvicorn 优雅关闭；无 server 时直接退出进程。
+    def _on_open_browser(self) -> None:
+        # 打开 Web 面板：给「控制台已隐藏、又不想先恢复窗口」的场景一条直达路径。
+        # 失败只提示不抛：托盘回调里冒泡出去的异常会一路穿到 Qt 事件循环。
+        try:
+            webbrowser.open(self._web_url())
+        except Exception:
+            print("[web] 打开浏览器失败，请手动访问上面给出的面板地址", flush=True)
+
+    def _on_exit(self) -> None:
+        # 退出程序：有 server 时交回 uvicorn 优雅关闭（ffmpeg / 连接池清理在 web.py 的
+        # finally 段）；无 server 时（复用本类却没传服务对象）才走强制退出——pystray 版就有
+        # 这条兜底，少了它进程会卡在「谁都不退出」的状态上。
         if self.server is not None:
             self.server.should_exit = True
         else:
+            # 函数内 import os：与 tests/test_web_tray.py 的 sys.modules 替身口径一致（MT-13/LT-12）
             import os
 
             os._exit(0)
-        # 停止托盘图标（在本回调中调用是 pystray 的常规用法）
+        # 先收图标给即时反馈；事件循环由 run_event_loop 的看门狗在服务线程结束后退出，
+        # 不能在这里 quit——服务还在跑就摘掉循环，会把 web.py 的清理段提前引到 HTTP 请求中间。
         if self.icon is not None:
             try:
-                self.icon.stop()
+                self.icon.hide()
             except Exception:
                 pass
+
+    def _on_about_to_quit(self) -> None:
+        # 循环退出的统一收尾点：补置 uvicorn 的 should_exit。漏置的后果是 serve() 不返回，
+        # web.py 的 finally 段（后处理线程池 / ffmpeg / 连接池）永远等不到。
+        if self.server is not None:
+            self.server.should_exit = True
+        if self.icon is not None:
+            try:
+                self.icon.hide()
+            except Exception:
+                pass
+
+    # ─── 内部 ──────────────────────────────────────────────
+
+    def _poll(self, stop_when: "Callable[[], bool] | None") -> None:
+        # 看门狗回调。stop_when 抛异常时绝不退出循环：托盘是本进程唯一的退出入口，
+        # 因调用方一次性异常把它打死，用户就只剩任务管理器。
+        if self._forced_quit or self.app is None:
+            return
+        if stop_when is None:
+            return
+        try:
+            due = stop_when()
+        except Exception:
+            return
+        if due:
+            self.request_quit()
+
+    def _web_url(self) -> str:
+        # 面板地址。0.0.0.0 / :: 这类「监听全部网卡」的写法不能直接丢给浏览器，换成回环地址；
+        # IPv6 字面量必须加方括号，否则端口会被当成地址的一部分。
+        host = self.host
+        if host in ("", "0.0.0.0", "::", "[::]"):
+            host = "127.0.0.1"
+        elif ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        return f"http://{host}:{self.port}"

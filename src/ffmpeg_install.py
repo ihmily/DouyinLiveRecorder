@@ -8,7 +8,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import zipfile
 from collections.abc import Mapping
 from pathlib import Path
 

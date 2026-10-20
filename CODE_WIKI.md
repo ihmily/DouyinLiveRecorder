@@ -144,7 +144,7 @@
 | FFmpeg | 视频录制与转码 |
 | Node.js + exejs/PyExecJS | 运行 JavaScript 签名算法（exejs 优先，PyExecJS 回退） |
 | Loguru | 结构化日志 |
-| PySide6 (Qt6) + pystray + Pillow | GUI 图形界面与系统托盘（2026-10-17 起窗口层为 `src/gui_qt/`；tkinter.ttk 实现迁移期保留） |
+| PySide6 (Qt6) + pystray + Pillow | GUI 图形界面与系统托盘（2026-10-17 起窗口层为 `src/gui_qt/`；2026-10-20 起 Web 入口托盘 `src/web_tray.py` 同走 QSystemTrayIcon；tkinter.ttk 实现迁移期保留，其托盘仍用 pystray + Pillow） |
 | Starlette + uvicorn | Web 管理面板后端 |
 | HTML + CSS + JavaScript | Web 管理面板前端 |
 | Docker | 容器化部署 |
@@ -228,7 +228,6 @@ DouyinLiveRecorder/
 │   ├── utils.py                        # 工具函数库
 │   ├── logger.py                       # Loguru 日志配置
 │   ├── proxy.py                        # 代理检测
-│   ├── ab_sign.py                      # 抖音签名算法 (A-Bogus)
 │   ├── node_install.py                # Node.js 自动安装/初始化
 │   ├── ffmpeg_master_download.py       # FFmpeg master 构建下载器（按平台/架构拉取 + 校验，含挑战页识别与 TOFU）
 │   ├── ffmpeg_linux_download.py        # Linux 运行期 ffmpeg 直下（月末不可变标签 + 双趟拷贝，缺件时 dest 零改动）
@@ -323,7 +322,6 @@ DouyinLiveRecorder/
 │   ├── test_utils.py                   # utils.py 工具函数测试
 │   ├── test_douyin_url_resolution.py   # 抖音 URL 分发逻辑测试
 │   ├── test_ttwid.py                   # 抖音 ttwid 共享缓存测试
-│   ├── test_ab_sign.py                 # A-Bogus 签名算法测试
 │   ├── test_proxy.py                   # 代理检测测试
 │   ├── test_concurrency.py             # 线程安全并发测试
 │   ├── test_i18n.py                    # i18n 翻译加载/环境变量独立性/po-mo 同步回归测试
@@ -896,14 +894,6 @@ NETEASE_QUALITY_MAP = {"blueray": "OD", "ultra": "UHD", "high": "HD", "standard"
 
 ## 关键类与函数
 
-### 签名算法 (`src/ab_sign.py`)
-
-抖音平台的 A-Bogus 签名算法，包含：
-
-- SM3 哈希
-- RC4 加密
-- 复杂的参数混淆
-
 ### 配置文件管理 (`src/utils.py`)
 
 ```python
@@ -977,8 +967,8 @@ def host_of(url: str) -> str: ...
 | tqdm | >=4.69.0 | 下载进度条 |
 | exejs | >=1.0.1 | JavaScript 执行引擎（PyExecJS 的活跃维护继任者，优先使用） |
 | PyExecJS | >=1.5.1 | JS 执行引擎回退兼容（exejs 未安装时使用） |
-| PySide6 | >=6.12.0 | GUI 窗口层（`src/gui_qt/`，QSS token 主题 + Qt 控件；下界 6.12 为本机实测支持 Python 3.14.8 的最小版） |
-| pystray | >=0.19.5 | 系统托盘（GUI / Web 托盘模式） |
+| PySide6 | >=6.12.0 | GUI 窗口层（`src/gui_qt/`，QSS token 主题 + Qt 控件）+ Web 入口系统托盘（`src/web_tray.py`，2026-10-20 起由 pystray 迁来；下界 6.12 为本机实测支持 Python 3.14.8 的最小版） |
+| pystray | >=0.19.5 | 系统托盘（GUI 入口 `gui.py`；Web 托盘 2026-10-20 起改用 QSystemTrayIcon） |
 | Pillow | >=12.3.0 | 图像处理（托盘图标生成） |
 | starlette | >=1.3.1 | ASGI 框架（`src/web_api.py` 阶段2 由 FastAPI 迁移为直接依赖 Starlette 驱动；下限 0.49.1→1.0.1→1.3.1 见 CVE/PYSEC 说明） |
 | uvicorn[standard] | >=0.51.0 | ASGI 服务器 |
@@ -1009,7 +999,6 @@ def host_of(url: str) -> str: ...
 main.py
 ├── src/spider.py
 │   ├── src/room.py
-│   ├── src/ab_sign.py
 │   ├── src/async_http.py
 │   │   └── src/http_config.py
 │   ├── src/http_config.py
@@ -1301,7 +1290,7 @@ python build_exe.py --dual       # 同时生成 lite（无运行时）与 full�
 - `datas`：`src/javascript`（JS 签名脚本）、`i18n`（翻译）、`web`（前端静态资源），均经 `__file__` 定位，PyInstaller 自动收进 `_internal/`。
 - `config/` 不进 `_internal`，由 `copy_external_binaries()` 复制到 exe 同级（见目录规范）。
 - `hiddenimports`：`i18n`、`src.async_http`（main.py 经 `__import__` 动态导入）、`h2`（httpx[http2] 懒加载）；`a_web` 额外 `collect_submodules('uvicorn')`（协议模块按字符串导入）。
-- `excludes`：CLI 排除 GUI/Web 库（tkinter/customtkinter/pystray/PIL/fastapi/uvicorn/starlette）；GUI 排除 Web 库；Web 排除 GUI 库；三个入口均额外排除 `brotlicffi`（修复打包后 brotlicffi 模块缺失 `error` 属性的报错，httpx 无 brotli 时自动回退）。
+- `excludes`：CLI 排除 GUI/Web 库（tkinter/customtkinter/pystray/PIL/fastapi/uvicorn/starlette）；GUI 排除 Web 库；Web 排除 GUI 库（tkinter/customtkinter/pystray；**2026-10-20 起不再排除 `PySide6`**——Web 托盘已迁 QSystemTrayIcon）；三个入口均额外排除 `brotlicffi`（修复打包后 brotlicffi 模块缺失 `error` 属性的报错，httpx 无 brotli 时自动回退）。
 
 **版本号**：从 `pyproject.toml` 的 `version` 字段解析（单一事实源），用于 zip 命名，解析失败回退 `0.0.0`。`main.py` 运行时同样从 `pyproject.toml` 动态读取版本号（优先 `importlib.metadata`，回退直接解析文件）。
 
@@ -1593,7 +1582,6 @@ async with websockets.connect(
 | `stream.py` | ≥70% | 70% |
 | `utils.py` | ≥80% | 82% |
 | `ttwid.py` | ≥85% | 85% |
-| `ab_sign.py` | ≥95% | 99% |
 | `proxy.py` | ≥50% | 51% |
 
 - 并发专项测试（`test_concurrency.py` / `test_concurrency_rate_limit.py`）使用专用配置 `.coveragerc-concurrency`（不设全局阈值），验证 `threading.Lock` 去重与抖音速率限制在多线程环境下的正确性
@@ -1717,6 +1705,44 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 > 脚本直跑时额外输出 `VERIFICATION_RESULT: {"platform":..., "status":..., ...}` 结构化一行供机器解析。
 > 脚本：`tests/test_{bili,douyin,douyu,huya,twitch}_live_collector.py`（`python file.py <URL> [秒数]`，
 > 需活房间 + 外网，默认人工通道）。
+
+### v4.6.0-dev (2026-10-20) — 全仓依赖与死代码清点：摘除 python-multipart、删除死模块 src/ab_sign.py、18 个未使用 import 清零
+
+- **用户指令**：核对依赖清单中每个包是否被真实引用并列出未使用项；找出已退役死代码（未被调用的函数/类/方法/变量/导出项、无引用入口的模块、被注释掉的大段旧代码、不可达分支）；特别留意动态导入、反射调用、字符串拼接路径、配置文件引用、别名与构建脚本中的引用，避免误删；删除前先出「文件位置 + 类型 + 判定依据」清单经确认再执行；完成后验证构建与测试。
+- **清点口径（本机实测）**：生产 `.py` 91 个（根 6 + `scripts/` 15 + `src/` 70）、测试 `.py` 162 个、非 py 消费面 18 个（js/mjs/html/yml/spec/toml/vbs/css/ini）。符号可达性按「原始文本标识符计数」判定，计数面**包含注释与字符串字面量**——故 `getattr(x, "name")`、注册表字面量、i18n msgid、配置键这类间接引用一律计入「有引用」，判定刻意偏保守（宁可漏报，不误删）。**零发现的两类**：`return`/`raise`/`break`/`continue` 之后的不可达语句 0 处；`if False` / `while False` 常量假守卫 0 处。
+- **未使用依赖（1 条摘除，19 → 18）**：`python-multipart>=0.0.32` 移出 `[project.dependencies]` 与 `requirements.txt`，`scripts/sync_metadata.py` 重生成 `uv.lock` 与 egg-info，两侧包名集合相等锁全绿。判据：声明理由「Web 接口接收配置上传」对应的接口并不存在——全仓无 `.form()` / `UploadFile` 调用点，`web/` 前端无 `FormData` / `<input type=file>` / `enctype`；Starlette 只在 `Request.form()` 内部 import 它，因此与 `h2` / `socksio` 那类「运行期真会执行其代码」的可选件不同，不适用同一保留理由。**刻意不判为未使用**的：`h2`、`socksio`、`urllib3`（传递层运行期依赖 + CVE 下限）与 `PyExecJS`（`exejs` 的兜底）。
+- **死模块（1 个删除）**：`src/ab_sign.py`（抖音 A-Bogus 签名，约 550 行）连同 `tests/test_ab_sign.py`（348 行）。判据：`git log --all -S "from .ab_sign import"` **全历史零命中**——它从未被接进 `src/__init__.py`；而 `tests/test_ab_sign.py` 头部「`src/__init__.py` 里 `from .ab_sign import ab_sign` 把包属性重绑成同名函数」的注释**陈旧且为假**（据它写的 `import_module("src.ab_sign")` 绕行因此也没有必要）。同批清掉三处随之失效的登记：`scripts/check_coverage.py` 的 `MODULE_THRESHOLDS["src/ab_sign.py"]=95`（留着会让逐模块门禁按「模块查不到」rc=1）、`ci.yml` 逐模块门禁注释、`tests/test_check_coverage.py` 里拿它当「确定手写的模块」构造虚报豁免的夹具（改用 `src/proxy.py`，判据形态不变）。
+- **死函数（2 个删除）**：`ConcurrencyScheduler.breaker_state()` / `breaker_states()`（零调用方、零测试；`from typing import Any` 随之成孤儿，同批摘除）。
+- **未使用 import（18 个名字 / 9 个文件）**：`main.py` 整行 `from msg_push import bark, dingtalk, ntfy, pushplus, send_email, tg_bot, xizhi`（推送实际走同文件另一处导入的 `push_message`，且无任何用例 monkeypatch `main.<通道名>`）与 `backup_file`；`gui.py` 的 `find_room_url_by_anchor_name`（函数本体在 `src/web_config.py` 仍存活且有用例，死的只是 gui.py 这条 import）；`src/ffmpeg_install.py::zipfile`、`src/ffmpeg_proc.py::types`、`src/node_install.py::hashlib`、`src/stream_select.py::cast`、`src/gui_qt/main_window.py::{Callable,Palette}`、`src/gui_qt/settings_dialog.py::{Callable,QWidget}`、`src/gui_qt/widgets.py::RADIUS_XL`。判据一律为「该名字在本文件原始文本中出现次数 == 1（即 import 行本身）」，字符串注解形态也在计数面内。另 49 处 `from __future__ import annotations` 属扫描器**假阳性**（编译指令、非可绑定名字），不计入。
+- **死符号（5 删 + 1 改为接线）**：删 `scripts/smoke_test.py::_YELLOW`、`src/gui_qt/widgets.py::build_grid()`（连带孤儿的 `QGridLayout` import）与 `StatusDot.is_animating()`、`src/gui_qt/shared.py::QUALITY_NON_DISPLAY_FIELDS`（tkinter→Qt 迁移留下的重复副本：在用的是 `gui.py::_QUALITY_NON_DISPLAY_FIELDS`，而 `src/gui_qt/pages/quality.py` 根本没有「未变化则跳过重建」这条比较）、`src/ui_fonts.py::DEFAULT_FAMILY_FALLBACK`。**`src/ui_motion.py::ROW_HIGHLIGHT_FRAMES` 不删而是接线**：`gui.py` 行高亮调用点写的是字面量 `frames=5`，却从同一模块导入了配对的 `ROW_HIGHLIGHT_MS`——删常量等于把魔数钉死、且与「衰减步数与总时长」这条注释自相矛盾，故改为导入并使用该常量（取值同为 5，行为零变化）。
+- **注释掉的旧代码（4 行删除）**：`main.py` 两行代理地址调试 `print`、`src/recorder_status.py` 一行运行时长 `print`、`src/spider.py` 一行被取代的微博接口地址。**刻意保留**约 53 行三类：`msg_push.py` 的 `__main__` 手动调试台（F-24：注释掉正是因为直接运行会发出真实公网推送）、`src/javascript/liveme.js` 与 `haixiu.js` 的凭据脱敏存档（L-24 / MIN-N39）、`src/collector.py` 标注「已按要求注释」的弹幕 DEBUG 噪音。
+- **清点后判定「不可删」的四类（含三处对清单自身前提的更正）**：① `spider.get_huajiao_sn`——函数体内有 MID-2223（2026-09-23）明写的「不选处置①（删除函数）」理由，登记在 `tests/test_spider_hardening.py::OVERSEAS_MIGRATED_FUNCTIONS`（双向锁），且是 spider.py 唯一会写回 `URL_config.ini` 的分支；② `spider.get_kuaishou_stream_data2`——自述「备用接口」，2026-10-19（前一天）刚为它加过 L-09 回归锁，删除等于抹掉一天前的锁；③ `room.get_xbogus` + `src/javascript/x-bogus.js`——删函数会让该 vendored 脚本失去唯一执行点，而「`.js` 目录集合 == `utils._JS_SHA256_EXPECTED` 键集」是双向相等锁；④ `src/sync_http.py`（AGENTS.md 明写保留）与 `gui.py` 遗留 tkinter 栈（约 5210/5278 行，`main()` 只是 5 行 Qt 委托，但 10 个 `tests/test_gui_*.py` 以 AST 文本锁 + 子进程 `import gui` 钉住；`_legacy_main()` 自身零调用方，连测试都不按名调用它）。
+- **孤儿文件（4 处删除）**：`typings/pystray/__init__.pyi`（随 pystray 摘除；AGENTS.md 本就写明 `typings/` 只应剩 `execjs/`）、`docs/qgraphflow/`（2 文件约 786 KB 的生成态会话产物，仅被同级 `index.html` 自取，无任何文档链接）、`docs/agent-reference/better-harness-evidence-collection.md`（AGENTS.md 只链接同目录另外 4 份）、`.zcodeignore`（全仓零引用、内容是 `.gitignore` 的逐字副本；`docs/worklog/CODE_REVIEW_2026-10-04.md` 早已登记它在两份 ignore 清单里都无对应规则）。**判定为不是孤儿**：根 `index.html`（README 中英双份记为独立 M3U8 播放器工具页，虽不进 exe 的 `datas`）、`coverage.json`（已跟踪的生成物，是文档覆盖率读数的取数源；`.gitignore` 那条对已跟踪文件本就不生效，与 `config/config.ini` 同形态）、`DouyinLiveRecorder.spec`（gitignore + 每次构建重生成）。
+- **本轮自身的一处误删已回滚**：`src/web_tray.py::SW_SHOW` 曾按「未使用」摘除，实际被 `tests/test_web_tray.py::test_module_constants_match_win32_api` 按「整组 Win32 魔数取值必须与 API 一致」钉住（该锁的存在理由正是「抄错的症状是无异常抛出的视觉 bug」）。已还原并补注释说明为什么不按未使用摘除；全量 `pytest` 由 1 failed / 4589 passed 回到全绿。
+- **`saved_buttons()` 的注释按 AGENTS.md 关键约定 #12 改成如实描述**：原注释称「供测试断言按钮可用性（停止流程会禁用控制按钮）」，但 Qt 窗口层的停止流程只禁用 dashboard 的 start/stop 两键、从不触碰本页按钮——照原注释写断言必然失败，于是该访问器长期零调用方。现补 `tests/test_gui_qt_units.py::test_config_page_saved_buttons_exposes_both_control_buttons` 锁**真实存在**的契约（按 (reload, save) 顺序交出页面自持的两个按钮对象 + 构建期均为可用态）；变异验证（对调返回顺序）当场转红并按字节还原。
+- **文档同源**：AGENTS.md 依赖管理段（21 → 18 条、`.[gui]` 三条 → 一条、「GUI 三包」→ 单包、安全下限句去掉 python-multipart）、typings 存根段补 pystray 删除的历史注、macOS 双重主线程条目标为「成因存档」并指向现行 Qt 结论；README 中英双份目录树去掉 `ab_sign.py` 与 `typings/pystray/`；CODE_WIKI 中英双份去掉 `ab_sign.py` 的四处结构引用（目录树 / 测试树 / `### 签名算法` 整节 / 依赖树）与覆盖率表行。README 的 v4.5.0 历史条目里「pystray / Pillow 保留」一句**刻意不改**——那是当时为真的历史记录，由同日新条目取代。
+
+### v4.6.0-dev (2026-10-20) — GUI 托盘菜单补齐「隐藏主窗口 / 设置」+ 遗留 pystray 托盘退役，pystray/Pillow 移出依赖清单
+
+- **用户指令**：把 GUI 系统托盘迁到 PySide6（`QSystemTrayIcon` / `QMenu` / `QAction`），保留图标 / tooltip / 菜单项与左键单击双击行为，同步信号槽写法，并列出改动文件与关键变更点。
+- **前提更正（实测，非推断）**：本仓**从未引入 PyQt**——全仓 `*.py` 搜 `pyqtSignal|PyQt5|PyQt6|from PyQt|import PyQt` 及 PyQt 侧的事件循环旧写法（`exec_` 下划线形态）为 **0 命中**，故「把 `pyqtSignal` 改成 `Signal`、把 `exec_` 改成 `exec`」这一项无可迁对象。产品路径上的托盘**早已是 PySide6**：`gui.py::main()` 转发到 `src.gui_qt.app.main()`，`MainWindow._setup_tray()` 挂 `src/gui_qt/tray.py::TrayIcon`；Web 入口托盘（`src/web_tray.py`）同日已迁 `QSystemTrayIcon`。
+- **真正的缺口在菜单项**：Qt 托盘菜单原只有「显示主窗口 / 状态（禁用）/ 彻底退出」，比旧 pystray 版的「显示主界面 / 最小化到托盘 / 退出程序」少了「隐藏」，且无托盘直达的「设置」。本轮补 `hide_action`（接 `MainWindow.minimize_to_tray`）与 `settings_action`（接 `open_advanced_settings`）；`bind_actions` 由 2 回调扩为 4 回调（顺序即菜单自上而下的动作项顺序），`retranslate()` 同步四项文案。
+- **「设置」不必先恢复主窗口（offscreen 实测）**：`AdvancedSettingsDialog` 是 `QDialog`——父窗 `hide()` 后 `show()` 仍 `isVisible()==True` 且 `isWindow()==True`，故窗口收在托盘时也能独立弹出，无需把主窗口一并唤起。
+- **遗留 pystray 托盘是退役而非迁移**：`gui.py::SystemTray`（pystray + Pillow 自绘图标，含 macOS `run_detached()` 主线程绕行）整类删除（10363 字节）。**为什么不改成 PySide6**：该路径下 Tk `mainloop` 占据主线程，而 Qt 的 GUI 线程同样必须是主线程——`src/web_tray.py` 文件头已记录在子线程建 `QApplication` 实测**段错误**（exit code 139，Python 层无异常可捕获）；macOS 上 Tcl/Tk 与 AppKit 都要主线程，正是 legacy 用 `run_detached()` 绕开的约束。在 Tk 进程里塞进第二个工具包会把「macOS 能跑」变成「macOS 崩溃」。遗留 tkinter 路径自此不自带托盘：`minimize_to_tray` 恒走任务栏最小化并保留告警日志，状态栏托盘位恒为「未启动」，`_legacy_main` 的 `sys.platform` 分叉（其唯一理由就是托盘线程模型）合并为一条 `mainloop()`。
+- **依赖摘除**：`pystray` 与 `Pillow` 移出 `[project.dependencies]`、`[project.optional-dependencies].gui` 与 `requirements.txt`（21 → 19 条）；`uv lock` 重解后一并移除 `pillow`、`pystray` 及其平台专属传递依赖 `pyobjc-core` / `pyobjc-framework-cocoa` / `pyobjc-framework-quartz`（macOS）与 `python-xlib`（Linux）；egg-info 程序化重建（`requires.txt` 19 条）。四向包名集合相等锁（`requirements.txt` ↔ `pyproject [project.dependencies]` ↔ egg-info ↔ `uv.lock`）全绿。`build_exe.py` 的 `PIL.*` / `pystray` 排除项按**防御口径保留**（构建 venv 里两个包仍装着，且 `test_bloat_excludes_still_cover_the_measured_bloat` 把 `PIL._avif` / `PIL._imagingft` 钉为体积基线），只改正已证伪的注释。
+- **i18n**：新增 2 条 msgid（隐藏主窗口 / 设置）同步登记四目录（`zh_CN.po` / `en_US.json` / `en_GB.json` / `zh_TW.yaml`），`scripts/compile_po.py` 重编 `.mo`（`--check` 校验同步，1152 条）。
+- **验证**：新增 `tests/test_gui_qt_units.py::test_tray_menu_action_items_are_wired_and_fire_in_menu_order`——直接构造 `TrayIcon` 而非走 `_setup_tray()`（后者在 `isSystemTrayAvailable()` 为假时置 `None`，会让用例退化成空跑），逐项 `trigger()` 断言回调与顺序，并断言单击/双击归「显示」而右键（`Context`）不重复触发；变异验证（断开 `settings_action` 接线）当场转红并按字节还原。旧锁 `test_language_change_triggers_tray_menu_rebuild` 随遗留托盘删除，其不变式（语言切换后托盘菜单文案必须跟着换）由 `test_static_labels_and_derived_title_follow_language_switch` 的托盘四项断言接管。
+
+### v4.6.0-dev (2026-10-20) — Web 系统托盘由 pystray 迁到 PySide6（QSystemTrayIcon + QMenu），主线程改由 Qt 事件循环占用
+
+- **用户指令**：把 Web 入口（`src/web_tray.py`）基于 pystray 的托盘迁到 PySide6，保持图标显示 / 菜单 / 退出清理等功能一致，处理好线程整合，并说明图标资源与打包后的路径处理方式。
+- **线程模型必须反过来（本机实测，非推断）**：pystray 版是「主线程跑 uvicorn + 托盘图标跑守护线程」；Qt 版 `QApplication` **只能建在主线程**——2026-10-20 在子线程执行 `QApplication(sys.argv)` 实测**段错误退出**（进程 exit code 139，Python 层无异常可捕获），与 Qt 文档「GUI 线程即主线程」一致。故改为：主线程交给 `run_event_loop()`，uvicorn 由 `web.py::_serve_forever` 在守护线程驱动（uvicorn 0.54 的 `capture_signals()` 对非主线程直接跳过，不抛 `ValueError`）。
+- **`start()` 的返回值是契约**：`True` = 托盘已占用主线程（调用方必须把 uvicorn 挪走并随后跑事件循环）；`False` = 已降级（非 Windows / 缺 PySide6 / `isSystemTrayAvailable()` 为假），调用方照旧在主线程 `asyncio.run(server.serve())`。
+- **退出链三处不可省**：① `setQuitOnLastWindowClosed(False)`（本进程无 QWidget，否则事件循环被提前带下去）；② 看门狗 `QTimer`（200 ms）感知「服务线程已结束」才 quit，同时它是 Ctrl+C 在事件循环阻塞期间唯一的落地点——信号改由 `web.py::_install_sigint_shutdown` 接管，第二次 Ctrl+C 才 `request_quit()`；③ `aboutToQuit` 里补置 `server.should_exit`，否则 `serve()` 不返回、web.py 的 finally 清理段（后处理线程池 / ffmpeg / 连接池）永远等不到。
+- **菜单**：显示控制台 / 隐藏控制台 / 打开 Web 界面 / 退出程序；`_web_url()` 把 `0.0.0.0` 与 IPv6 字面量归一成浏览器可直接打开的地址；左键单击与双击恢复控制台，右键走上下文菜单。
+- **图标资源与打包路径**：默认由 `QPainter` 现画（不再依赖 Pillow），因此冻结后既不读 `sys._MEIPASS` 也不拼 exe 相对路径——「图标文件没被收进包」这个故障面不存在；可选外部图标按 `_resource_roots()` 探 `sys._MEIPASS` → exe 同级 → 仓库根。打包侧 `build_exe.py` 把 `PySide6` 从 `a_web` 的 `excludes` 移除（此前 Web exe 同时排除了 pystray 与 PySide6，冻结产物的托盘实际是死的）。
+- **i18n**：改名 1 条（`[web] 托盘不可用（缺少 pystray/Pillow）：{e}` → 缺少 PySide6）+ 新增 4 条（显示控制台 / 隐藏控制台 / 打开 Web 界面 / 浏览器打开失败提示），四目录键集合一致并重编 `.mo`。
+- **验证**：`tests/test_web_tray.py` 由 pystray 桩整体改写为 Qt 替身（43 passed），新增 `tests/test_web_qt_tray_wiring.py`（3 条 web.py 接线锁）；`mypy`（含 `--platform linux` / `--platform win32`）、`black` / `isort`、`check_annotations.py` 全绿；真机冒烟两条：① 真起 `web.py`——托盘启用 + `Uvicorn running on http://127.0.0.1:8000`；② 进程内真 Qt + 真 uvicorn——`HTTP GET / → 200`，托盘「退出程序」触发后 `serve()` 优雅返回、事件循环 1.82 s 内退出、`stop()` 收起图标。
 
 ### v4.6.0-dev (2026-10-19) — 2026-10-19 审查报告批：5 项严重问题全修 + M/L 级中低危收敛
 

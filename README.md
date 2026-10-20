@@ -168,7 +168,6 @@ DouyinLiveRecorder/
 │   ├── utils.py               # 工具函数库
 │   ├── logger.py              # Loguru 日志配置
 │   ├── proxy.py               # 代理检测
-│   ├── ab_sign.py             # 抖音 A-Bogus 签名
 │   ├── ttwid.py               # 抖音访客 ttwid 获取/缓存
 │   ├── node_install.py        # Node.js 自动安装/初始化
 │   ├── ffmpeg_install.py      # FFmpeg 安装脚本
@@ -221,8 +220,7 @@ DouyinLiveRecorder/
 │   ├── app.js                  # 前端逻辑（API、SSE、渲染）
 │   └── style.css               # 样式表（主题、响应式）
 ├── typings/                    # 第三方库类型存根（静态检查用）
-│   ├── execjs/                 # PyExecJS 存根
-│   └── pystray/                # pystray 存根
+│   └── execjs/                 # PyExecJS 存根
 ├── scripts/                    # 工程辅助脚本
 │   ├── smoke_test.py           # 通用 Web/接口冒烟测试（零依赖，配置驱动）
 │   ├── smoke_web.json          # 冒烟测试示例用例（探活 Web 面板）

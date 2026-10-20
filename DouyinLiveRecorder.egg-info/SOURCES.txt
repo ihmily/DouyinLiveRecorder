@@ -13,7 +13,6 @@ DouyinLiveRecorder.egg-info/entry_points.txt
 DouyinLiveRecorder.egg-info/requires.txt
 DouyinLiveRecorder.egg-info/top_level.txt
 src/__init__.py
-src/ab_sign.py
 src/async_http.py
 src/base.py
 src/collector.py
@@ -89,7 +88,6 @@ src/proto/__init__.py
 src/proto/douyin.proto
 src/proto/douyin_pb2.py
 src/proto/douyin_pb2.pyi
-tests/test_ab_sign.py
 tests/test_agent_hook_guard.py
 tests/test_anchor_rename.py
 tests/test_async_http.py
@@ -132,6 +130,7 @@ tests/test_douyu_danmaku.py
 tests/test_douyu_live_collector.py
 tests/test_douyu_stream_url.py
 tests/test_douyu_url_resolution.py
+tests/test_exception_log_masking.py
 tests/test_ffmpeg_install.py
 tests/test_ffmpeg_linux_download.py
 tests/test_ffmpeg_master_download.py
@@ -143,6 +142,7 @@ tests/test_frontend_regression_gates.py
 tests/test_gui_language_retranslate.py
 tests/test_gui_monitor.py
 tests/test_gui_qt_label_parity.py
+tests/test_gui_qt_settings_dialog.py
 tests/test_gui_qt_theme.py
 tests/test_gui_qt_units.py
 tests/test_gui_qt_window.py
@@ -173,6 +173,8 @@ tests/test_node_install.py
 tests/test_notify.py
 tests/test_notify_script_guard.py
 tests/test_only_fans_defaults.py
+tests/test_outbound_read_caps.py
+tests/test_pep758_except_form.py
 tests/test_platform_danmaku_offline.py
 tests/test_platform_dispatch.py
 tests/test_pre_commit_config.py
@@ -197,6 +199,8 @@ tests/test_regression_2026_09_22_stream.py
 tests/test_regression_2026_09_22_utils.py
 tests/test_regression_2026_09_22_web_g.py
 tests/test_regression_2026_09_29_wp_b_netguard.py
+tests/test_regression_2026_10_18_gui_output_chain.py
+tests/test_regression_2026_10_18_root_entries.py
 tests/test_room.py
 tests/test_run_gates.py
 tests/test_scheduler.py
@@ -237,6 +241,7 @@ tests/test_web_background_gate_order.py
 tests/test_web_config.py
 tests/test_web_config_locks.py
 tests/test_web_config_secret_mask.py
+tests/test_web_qt_tray_wiring.py
 tests/test_web_tray.py
 tests/test_ws_client.py
 tests/test_xhs_live_links.py

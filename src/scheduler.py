@@ -2,7 +2,6 @@
 import time
 from collections import deque
 from threading import Condition, Lock, Thread, current_thread
-from typing import Any
 
 import i18n
 
@@ -437,15 +436,6 @@ class ConcurrencyScheduler:
 
     def backoff_seconds(self, key: str) -> float:
         return self._breaker(key).backoff_seconds()
-
-    def breaker_state(self, key: str) -> str:
-        return self._breaker(key).state
-
-    def breaker_states(self) -> dict[str, dict[str, Any]]:
-        # 快照（监控/调试用）：各 key 的熔断状态与错误率。
-        with self._breakers_lock:
-            keys = list(self._breakers.keys())
-        return {k: {"state": self._breaker(k).state, "error_rate": round(self._breaker(k).error_rate, 3)} for k in keys}
 
     # —— 错误/成功计数（驱动熔断与全局背压）——
     def record_success(self, key: str | None = None) -> None:

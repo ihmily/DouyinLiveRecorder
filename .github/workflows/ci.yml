@@ -640,7 +640,7 @@ jobs:
           fi
           echo "Qt GUI 模块已收集用例，无模块级 skip"
 
-      # 逐模块门禁（spider/stream/utils/ttwid/ab_sign/proxy）只需跑一次，
+      # 逐模块门禁（spider/stream/utils/ttwid/proxy）只需跑一次，
       # 固定在最低支持版本上执行，避免矩阵内重复且结论歧义。
       - name: Per-module coverage gate
         if: matrix.python-version == needs.setup.outputs.python_min

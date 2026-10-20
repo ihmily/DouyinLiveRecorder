@@ -53,7 +53,6 @@
 │   ├── utils.py         # 工具函数
 │   ├── proxy.py         # 代理支持
 │   ├── ttwid.py         # 抖音 ttwid 获取
-│   ├── ab_sign.py       # AB 签名
 │   ├── web_api.py       # Starlette Web API
 │   ├── web_models.py    # Web 请求体校验层（dataclass + parse）
 │   ├── web_config.py    # Web 配置
@@ -100,10 +99,8 @@
 ├── logs/                # 运行日志（streamget.log / PlayURL.log / danmaku_monitor.jsonl / web_console.log）
 ├── downloads/           # 录制产物（视频 .ts/.mp4/.flv 与弹幕 .srt）
 ├── backup_config/       # 配置自动备份（*.ini_<时间戳>）
-├── typings/             # 第三方库类型存根
-│   ├── customtkinter/   # customtkinter 类型存根（__init__.pyi）
-│   ├── execjs/          # PyExecJS 类型存根（多个 .pyi）
-│   └── pystray/         # pystray 类型存根（__init__.pyi）
+├── typings/             # 第三方库类型存根（2026-10-20 起只剩 execjs/ 一个目录）
+│   └── execjs/          # PyExecJS 类型存根（多个 .pyi）
 │
 ├── .agents/             # 项目级 Skill 资产（**已入库**：.gitignore 以 .agents/* + !.agents/skills/ 反选，其余内容物仍忽略）
 │   └── skills/          # 5 个 Skill 目录：dlr-dev-playbook / ffmpeg-command-construction / platform-source-selection / runtime-pin-verification / browser-skill（外部工具技能）

@@ -15,7 +15,6 @@ import signal
 import subprocess
 import threading
 import time
-import types
 
 from loguru import logger
 

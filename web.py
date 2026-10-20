@@ -6,17 +6,25 @@
 # 浏览器访问: http://localhost:8000
 #
 # 与 main.py 共用同一录制引擎（通过 import main 触发初始化），
-# 在守护线程运行 main.main()，主线程运行 uvicorn。
+# 在守护线程运行 main.main()；默认主线程运行 uvicorn，启用 Qt 系统托盘时反之
+# ——主线程要让给 Qt 事件循环（QApplication 建在子线程会段错误，见 src/web_tray.py 文件头），
+# uvicorn 改跑在守护线程。
 import asyncio
 import ctypes
 import os
+import signal
 import sys
 import threading
 from datetime import datetime
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import i18n
 from src.logger import logger
+
+if TYPE_CHECKING:
+    import uvicorn
+
+    from src.web_tray import WebConsoleTray
 
 # 确保项目根在 sys.path
 _script_dir = os.path.dirname(os.path.realpath(__file__))
@@ -132,6 +140,11 @@ _fix_encoding()
 _WEB_CONSOLE_MAX_BYTES = 2 * 1024 * 1024
 _WEB_CONSOLE_KEEP_BYTES = 512 * 1024
 
+# Qt 托盘模式下 uvicorn 跑在守护线程：事件循环退出后给它这么长的收尾窗口。
+# 超时即放弃等待、清理段照常执行（守护线程不会挡住进程退出），
+# 但不给这段窗口的话，清理段（ffmpeg / 连接池）会落在 HTTP 请求处理中间。
+_SERVER_JOIN_TIMEOUT = 10.0
+
 
 # 超限则把 web_console.log 就地截断为末尾若干 KB，返回丢弃的字节数（0 = 无需处理）。
 # 只在 `open(log_path, "a")` **之前**调用：此刻 sys.stdout/stderr 还是真实控制台、
@@ -240,6 +253,31 @@ def _is_loopback_host(host: str) -> bool:
     from src.web_config import is_loopback_bind_host
 
     return is_loopback_bind_host(host)
+
+
+# uvicorn 服务线程体（仅 Qt 托盘占用主线程时使用）。
+def _serve_forever(server: "uvicorn.Server") -> None:
+    # 与主线程 asyncio.run(server.serve()) 同语义：serve() 内的 capture_signals() 检测到
+    # 非主线程会直接跳过信号注册（uvicorn 0.54 起有该守卫），不会抛 ValueError。
+    # 异常不吞：未捕获异常由 threading.excepthook 打到 stderr（已重定向进 web_console.log），
+    # 比吞掉好定位；线程结束本身由托盘的看门狗感知并放开 Qt 事件循环。
+    asyncio.run(server.serve())
+
+
+# Ctrl+C 收尾（仅 Qt 托盘模式需要）：把信号从 uvicorn 手里接过来。
+def _install_sigint_shutdown(server: "uvicorn.Server", tray: "WebConsoleTray") -> None:
+    # 主线程跑 Qt 事件循环时 Ctrl+C 不再由 uvicorn 接管（见 _serve_forever 注释），
+    # 需自己装 handler：置 should_exit 让 serve() 优雅返回，循环退出交给 run_event_loop
+    # 的看门狗（服务线程结束即 quit）；第二次 Ctrl+C 才强制放开循环，不再等服务线程。
+    state = {"count": 0}
+
+    def _handler(_signum: int, _frame: object) -> None:
+        state["count"] += 1
+        server.should_exit = True
+        if state["count"] > 1:
+            tray.request_quit()
+
+    signal.signal(signal.SIGINT, _handler)
 
 
 # Web 管理面板入口：启动录制引擎守护线程与 uvicorn HTTP 服务。
@@ -374,12 +412,15 @@ def main() -> None:
     server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="info", proxy_headers=False))
 
     # 系统托盘：Windows 下将控制台窗口改为「最小化到托盘」而非任务栏。
+    # start() 的返回值是契约（见 src/web_tray.py::start）：True = Qt 事件循环已占用主线程，
+    # uvicorn 必须挪到守护线程；False = 已静默降级，主线程照旧跑 uvicorn。
     tray = None
+    qt_owns_main_thread = False
     if web_cfg.get("web_minimize_to_tray", True):
         from src.web_tray import WebConsoleTray
 
         tray = WebConsoleTray(host=host, port=port, server=server)
-        tray.start()
+        qt_owns_main_thread = tray.start()
 
     print(i18n.tr("[web] Web 管理面板启动中: http://{host}:{port}", host=host, port=port))
     # MID-2253（2026-09-22）：tr() 的**值参**不得是中文常量——模板 "[web] 认证: {web_auth_enable}"
@@ -396,9 +437,24 @@ def main() -> None:
     # 阻塞运行；托盘「退出程序」或 Ctrl+C 会将 should_exit 置真，serve() 优雅返回。
     # server.serve() 为 async 协程，必须用 asyncio.run 驱动事件循环真正运行，
     # 否则仅生成一个被丢弃的协程对象，Web 服务不会启动。
+    # Qt 托盘模式下主线程要让给 Qt 事件循环（QApplication 建在子线程会段错误，
+    # 实测见 src/web_tray.py 文件头），故 uvicorn 改跑在守护线程。
+    server_thread: threading.Thread | None = None
+    if qt_owns_main_thread:
+        server_thread = threading.Thread(target=_serve_forever, args=(server,), name="uvicorn-server", daemon=True)
+        server_thread.start()
+
     try:
-        asyncio.run(server.serve())
+        if qt_owns_main_thread and tray is not None:
+            _install_sigint_shutdown(server, tray)
+            tray.run_event_loop(stop_when=lambda: server_thread is not None and not server_thread.is_alive())
+        else:
+            asyncio.run(server.serve())
     finally:
+        # 事件循环已退出（托盘「退出程序」/ Ctrl+C / Qt 自行退出）：先给服务线程一个收尾窗口，
+        # 否则下面的 ffmpeg / 连接池清理会落在 HTTP 请求处理中间。
+        if server_thread is not None:
+            server_thread.join(_SERVER_JOIN_TIMEOUT)
         # 优雅关闭：serve() 正常返回或抛异常（如端口被占用）都执行清理，
         # 主动终止 ffmpeg 子进程并释放 HTTP 连接池，杜绝退出后残留孤儿进程。
         # M-01（2026-10-18 审查）：录后转码线程池的显式收尾必须排在 ffmpeg / 连接池清理**之前**，

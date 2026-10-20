@@ -19,7 +19,6 @@ import re
 import threading
 import time
 from collections.abc import Mapping
-from typing import cast
 from urllib.parse import urljoin, urlsplit
 
 import httpx

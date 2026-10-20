@@ -69,10 +69,6 @@ PRESET_FAMILY_GROUPS: Final[tuple[tuple[str, ...], ...]] = (
     ("Segoe UI", "Helvetica", "Arial"),
 )
 
-# 默认族（空偏好的取值），与 src/ui_scale.FONT_FAMILY 同源；独立副本是为了让本模块
-# 不反向依赖 ui_scale（ui_scale 已被 gui/ui_theme/ui_kit 三方引用）。
-DEFAULT_FAMILY_FALLBACK: Final[str] = "Microsoft YaHei UI"
-
 # 探测用的人造族名：用于观察「Tk 遇到不认识的族名时到底回退到哪一款」，
 # 从而与真实请求的族名做对照（见 family_resolves）。刻意用不会有人注册的字符形态。
 _MISSING_FAMILY_PROBE: Final[str] = "__dlr_missing_family_probe__"

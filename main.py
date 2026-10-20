@@ -104,12 +104,10 @@ from urllib.parse import urlsplit
 import httpx
 from loguru import logger
 
-from msg_push import bark, dingtalk, ntfy, pushplus, send_email, tg_bot, xizhi
 from src import get_danmaku_collector, spider, stream, utils
 from src.config_io import (
     _safe_float,
     _safe_int,
-    backup_file,
     backup_file_start,
     delete_line,
     read_config_bool,
@@ -4179,8 +4177,6 @@ def start_record(
                         if pt and pt.strip() in record_url:
                             proxy_address = proxy_addr_bak or None
 
-            # print(f'\r代理地址:{proxy_address}')
-            # print(f'\r全局代理:{global_proxy}')
             while True:
                 # 弹幕参数每个监测轮先归零再分派（AGENTS.md 约定）：绝不沿用上一轮录制遗留的旧参数，
                 # 防御未来把解析短路/复用旧值的改动重新引入陈旧 danmaku_args 到 check_subprocess

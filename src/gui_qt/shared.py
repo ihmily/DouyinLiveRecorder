@@ -25,12 +25,6 @@ import i18n as i18n_module
 from src.logger import logger
 from src.utils import atomic_write_text, mask_credentials
 
-# 画质监控「数据未变则跳过重建」比较时需剔除的字段（2026-09-12 审查 6.2）：
-# last_seen 每次心跳刷新（时变），recording 只用于筛选不进渲染。二者参与整表
-# 比较会让「未变化」条件恒不成立，录制期间每轮重建整表 → 闪烁 + 点击落空。
-# alert_at（MID-54 引入的告警时刻，纯内部时序字段）同属此类。
-QUALITY_NON_DISPLAY_FIELDS: Final[frozenset[str]] = frozenset({"last_seen", "recording", "alert_at"})
-
 # 降级告警的「失效等待窗口」（秒，MID-54）：一次画质降级告警之后，若连续这么久
 # 仍在输出录制状态行且没有新的降级告警，就认为该房间已按设置档位正常录制，清除降级标记。
 # 取值依据：main.py 的房间主循环周期默认 delay_default=120s（含 ±5s 抖动），而画质降级告警

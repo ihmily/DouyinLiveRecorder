@@ -54,7 +54,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QSyntaxHighlighter  # noqa: E402
-from PySide6.QtWidgets import QApplication, QLabel, QMessageBox  # noqa: E402
+from PySide6.QtWidgets import QApplication, QLabel, QMessageBox, QSystemTrayIcon  # noqa: E402
 
 import i18n  # noqa: E402
 from src import ui_i18n  # noqa: E402
@@ -67,6 +67,7 @@ from src.gui_qt.danmaku_monitor import DanmakuMonitor  # noqa: E402
 from src.gui_qt.main_window import MainWindow  # noqa: E402
 from src.gui_qt.recorder import RecorderController  # noqa: E402
 from src.gui_qt.settings_dialog import AdvancedSettingsDialog  # noqa: E402
+from src.gui_qt.tray import TrayIcon  # noqa: E402
 from src.gui_qt.widgets import TerminalText, fixed_font  # noqa: E402
 
 
@@ -809,8 +810,52 @@ def test_static_labels_and_derived_title_follow_language_switch(qt_app: QApplica
         i18n.tr("界面字体"),
     }, "侧栏偏好说明标签必须随重译登记表换语言（M-14）"
     if win.tray is not None:
-        assert win.tray.show_action.text() == i18n.tr("显示主窗口")
-        assert win.tray.quit_action.text() == i18n.tr("彻底退出")
+        # 托盘菜单四条动作项随语言切换重取（旧 pystray 版靠 rebuild_menu 整体重建菜单，
+        # Qt 版走 TrayIcon.retranslate）；2026-10-20 补齐的「隐藏主窗口」「设置」同在此列。
+        # 右侧写死 msgid 字面量：只比 i18n.tr() 会在「目录未生效」时同侧等值而失去区分力。
+        assert win.tray.show_action.text() == i18n.tr("显示主窗口") != "显示主窗口"
+        assert win.tray.hide_action.text() == i18n.tr("隐藏主窗口") != "隐藏主窗口"
+        assert win.tray.settings_action.text() == i18n.tr("设置") != "设置"
+        assert win.tray.quit_action.text() == i18n.tr("彻底退出") != "彻底退出"
+
+
+def test_tray_menu_action_items_are_wired_and_fire_in_menu_order(qt_app: QApplication) -> None:
+    # 「隐藏主窗口」「设置」是 2026-10-20 相对旧 pystray 托盘补齐的两项（旧版菜单只有
+    # 显示主界面 / 最小化到托盘 / 退出程序）。只断言 QAction 存在属伪绿——建了却不 connect
+    # 的形态就是「点了没反应」，必须逐项 trigger() 看回调真被调到、且与菜单顺序一致。
+    #
+    # 直接构造 TrayIcon 而不是走 MainWindow._setup_tray()：后者在 isSystemTrayAvailable()
+    # 为假（离屏 / 无 XDG Session）时把 tray 置成 None，那样本用例会退化成空跑，
+    # 正是本仓反对的假绿面。
+    tokens = theme_module.palette("light").tokens
+    tray = TrayIcon(qt_app, tokens)
+    fired: list[str] = []
+    tray.bind_actions(
+        lambda: fired.append("show"),
+        lambda: fired.append("hide"),
+        lambda: fired.append("quit"),
+        lambda: fired.append("settings"),
+    )
+    # 菜单自上而下的**动作项**（状态项是纯展示、分隔符不是动作，两者都不进）
+    assert [a.text() for a in tray.menu.actions() if a.isEnabled() and not a.isSeparator()] == [
+        i18n.tr("显示主窗口"),
+        i18n.tr("隐藏主窗口"),
+        i18n.tr("设置"),
+        i18n.tr("彻底退出"),
+    ]
+    # 状态项必须保持禁用：可点却无动作的菜单项是旧版没有的退化形态
+    assert tray.status_action.isEnabled() is False
+    for action in (tray.show_action, tray.hide_action, tray.settings_action, tray.quit_action):
+        action.trigger()
+    assert fired == ["show", "hide", "settings", "quit"]
+
+    # 左键单击 / 双击同归「显示主窗口」；右键（Context）交给上下文菜单，在这里一并处理
+    # 会让右键也弹一次窗口（旧版 pystray 的 MenuItem(default=True) 即同一语义）。
+    fired.clear()
+    tray._on_activated(QSystemTrayIcon.ActivationReason.Trigger)  # noqa: SLF001 - 单元锁直驱私有回调
+    tray._on_activated(QSystemTrayIcon.ActivationReason.DoubleClick)  # noqa: SLF001
+    tray._on_activated(QSystemTrayIcon.ActivationReason.Context)  # noqa: SLF001
+    assert fired == ["show", "show"]
 
 
 def test_monitor_table_headers_and_filter_sentinel_follow_language_switch(
@@ -827,3 +872,30 @@ def test_monitor_table_headers_and_filter_sentinel_follow_language_switch(
     assert dm_header0 == i18n.tr("房间") != "房间"
     qm_header0 = str(win.quality_page._model.headerData(0, Qt.Orientation.Horizontal))  # noqa: SLF001
     assert qm_header0 == i18n.tr("直播间") != "直播间"
+
+
+def test_config_page_saved_buttons_exposes_both_control_buttons(qt_app: QApplication) -> None:
+    # saved_buttons() 原注释声称「供测试断言按钮可用性（停止流程会禁用控制按钮）」，但 Qt 窗口层
+    # 的停止流程只禁用 dashboard 的 start/stop 两键（src/gui_qt/main_window.py 的
+    # `self.dashboard.start_btn.setEnabled(False)` 一段），从不触碰本页的 reload/save —— 按原注释
+    # 写断言必然失败，于是该访问器长期零调用方（2026-10-20 死代码清点实测）。注释已按 AGENTS.md
+    # 关键约定 #12 改成如实描述，本用例锁**真实存在**的契约：按 (reload, save) 顺序原样交出页面
+    # 自己持有的那两个按钮对象——顺序反转、或换成另建的等价控件，都会让身份断言变红。
+    from src.gui_qt.pages.config import ConfigPage
+
+    # 建过 Qt 控件的测试文件必须还原 ui_i18n 登记表：ConfigPage 经 set_text 登记 4 条静态标签，
+    # 存活条目会留给后面按「全局条数」断言的 tests/test_ui_i18n.py（与本文件 lang_window 夹具同法）。
+    registry_snapshot = list(ui_i18n._ENTRIES)  # noqa: SLF001 - 测试还原全局登记表，与生产同模块
+    try:
+        page = ConfigPage()
+        try:
+            reload_btn, save_btn = page.saved_buttons()
+            assert reload_btn is page.reload_btn, "首位必须是「重新读取」按钮本体"
+            assert save_btn is page.save_btn, "次位必须是「保存 URL 配置」按钮本体"
+            # 构建期两键均为可用态：这是当前真实行为（无任何流程禁用它们），不是「停止后仍可用」的断言。
+            assert (reload_btn.isEnabled(), save_btn.isEnabled()) == (True, True)
+        finally:
+            page.deleteLater()
+            qt_app.processEvents()
+    finally:
+        ui_i18n._ENTRIES[:] = registry_snapshot  # noqa: SLF001 - 同上

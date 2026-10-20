@@ -227,7 +227,6 @@ def display_info() -> None:
                         )
                     )
 
-                # print('\n本软件已运行：'+str(now_time - start_display_time).split('.')[0])
                 print("x" * 60)
                 main.start_display_time = now_time
             consecutive_failures = 0

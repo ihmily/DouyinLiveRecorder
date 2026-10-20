@@ -72,11 +72,12 @@ BLOAT_EXCLUDES: tuple[str, ...] = (
     # .pyd）被拖进产物——这是基线里唯一一处「开发工具链泄漏」。pydantic/v1/__init__.py 自身
     # 不 import mypy，故只排除该插件模块即可，pydantic.v1 其余部分不受影响。
     "pydantic.v1.mypy",
-    # Pillow 插件：本仓对 PIL 的全部用法就是 Image.new + ImageDraw 画托盘图标
-    # （gui.py / src/web_tray.py），编解码与字体后端均不可达。容错依据（不是推测）：
-    # PIL/ImageFont.py 里 `from . import _imagingft as core` 包在 try/except ImportError →
-    # DeferredError，PIL/Image.py 的 init() 对每个插件同样是 try/except ImportError，
-    # 故缺失插件只在**真的调用**时才报错，不会在导入期炸。
+    # Pillow 插件：PIL 已不在依赖树里（2026-10-20 随遗留 pystray 托盘摘除，托盘图标改由
+    # QPainter 现画），本组条目自此转为**纯防御**——构建 venv 里 Pillow 仍装着，一旦有
+    # 依赖把它重新拉进依赖图，这几个插件就是最大的一块死重量，故刻意不随依赖摘除一并删。
+    # 容错依据（不是推测）：PIL/ImageFont.py 里 `from . import _imagingft as core` 包在
+    # try/except ImportError → DeferredError，PIL/Image.py 的 init() 对每个插件同样是
+    # try/except ImportError，故缺失插件只在**真的调用**时才报错，不会在导入期炸。
     "PIL._avif",  # 7.52MB：Pillow 12 自带 libavif，是产物内最大的单个非解释器文件
     "PIL._imagingft",  # 2.07MB：FreeType；全仓无 ImageFont / truetype 调用点
     "PIL._webp",  # 0.40MB
@@ -189,6 +190,11 @@ datas = [
 # 导入的 Qt 模块」逐个收，而 collect_all('PySide6') 会把整个 647MB 的轮子（含 194MB 的
 # Qt6WebEngineCore）拖进产物。同理，'PySide6' 只加在 CLI/Web 两个 Analysis 的 excludes 上
 # ——GUI 必须收它，加了反而会让 GUI exe 起不来。
+# [2026-10-20] Web 入口的托盘（src/web_tray.py）由 pystray 迁到 QSystemTrayIcon，
+# 故 'PySide6' 从 a_web 的 excludes 里移除（收则由同一个 hook-PySide6.py 完成，仍不加
+# collect 调用）。同日遗留 tkinter 托盘（gui.py::SystemTray）退役，pystray 与 Pillow
+# 一并移出依赖清单；下面三个 Analysis 里的 'pystray' / 'PIL' 排除项按**防御口径**保留——
+# 构建 venv 里这两个包仍装着，排除可确保任何残留引用都不会把它们拖回 _internal。
 
 hidden_common = [
     'i18n',                          # main.py 内部延迟导入
@@ -209,8 +215,8 @@ a_cli = Analysis(['main.py'], pathex=[], datas=datas, hiddenimports=hidden_commo
 a_gui = Analysis(['gui.py'], pathex=[], datas=[], hiddenimports=hidden_common,
                  excludes=excludes_bloat + ['fastapi', 'uvicorn', 'starlette', 'brotlicffi'], noarchive=False)
 a_web = Analysis(['web.py'], pathex=[], datas=[], hiddenimports=hidden_web,
-                 excludes=excludes_bloat + ['tkinter', 'customtkinter', 'pystray', 'brotlicffi',
-                           'PySide6'], noarchive=False)
+                 excludes=excludes_bloat + ['tkinter', 'customtkinter', 'pystray', 'brotlicffi'],
+                 noarchive=False)
 
 pyz_cli = PYZ(a_cli.pure)
 pyz_gui = PYZ(a_gui.pure)
@@ -1974,9 +1980,10 @@ def _finish(
     expect_alive: bool,
     ignore_patterns: "tuple[str, ...]" = (),
 ) -> None:
-    # ignore_patterns：headless CI 等环境下某些库会打印无害堆栈（如 pystray 在无系统托盘时记录
-    # "Failed to dock icon" 并附带 Traceback）而应用实际仍正常运行，这类已知良性输出应从致命判定
-    # 中排除；真正的崩溃（进程退出或真实堆栈）仍会被捕获。
+    # ignore_patterns：headless CI 等环境下某些库会打印无害堆栈而应用实际仍正常运行，
+    # 这类已知良性输出应从致命判定中排除；真正的崩溃（进程退出或真实堆栈）仍会被捕获。
+    # [历史注 2026-10-20] 原举例是 pystray 在无系统托盘时记录的 "Failed to dock icon"；
+    #   pystray 已随遗留 tkinter 托盘退役移出依赖树，该豁免项自此转为纯防御保留。
     still_running = proc.poll() is None
     if still_running:
         _kill_tree(proc)
@@ -2061,7 +2068,8 @@ def smoke_gui(timeout: int = 8) -> None:
     while time.time() - start < timeout and proc.poll() is None:
         time.sleep(0.5)
     # GUI 为 windowed 模式，stdout 通常为空；崩溃时进程会提前非零退出。
-    # 豁免 pystray 在 headless（无系统托盘）环境的良性 "Failed to dock icon" 堆栈（机理见 _finish）。
+    # 豁免 headless（无系统托盘）环境下托盘库打印的良性 "Failed to dock icon" 堆栈（机理见 _finish）。
+    # [2026-10-20] 该形态原出自 pystray，现随其退役移出依赖树，此处转为纯防御口径。
     _finish(proc, "gui", expect_alive=True, ignore_patterns=("Failed to dock icon",))
 
 

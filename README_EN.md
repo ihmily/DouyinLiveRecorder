@@ -179,7 +179,6 @@ DouyinLiveRecorder/
 │   ├── utils.py               # utility function library
 │   ├── logger.py              # Loguru logging config
 │   ├── proxy.py               # proxy detection
-│   ├── ab_sign.py             # Douyin A-Bogus signature
 │   ├── ttwid.py               # Douyin visitor ttwid fetch/cache
 │   ├── node_install.py        # Node.js auto-install/init
 │   ├── ffmpeg_install.py      # FFmpeg install script
@@ -232,8 +231,7 @@ DouyinLiveRecorder/
 │   ├── app.js                  # frontend logic (API, SSE, rendering)
 │   └── style.css               # stylesheet (theme, responsive)
 ├── typings/                    # third-party lib type stubs (for static checks)
-│   ├── execjs/                 # PyExecJS stub
-│   └── pystray/                # pystray stub
+│   └── execjs/                 # PyExecJS stub
 ├── scripts/                    # engineering helper scripts
 │   ├── smoke_test.py           # generic Web/API smoke test (zero-dep, config-driven)
 │   ├── smoke_web.json          # smoke test sample cases (probe Web panel)

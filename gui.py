@@ -1,11 +1,14 @@
 # -*- encoding: utf-8 -*-
 # 直播录制器 GUI 界面（基于 CustomTkinter 的现代化重构）
-# 本模块为图形界面主入口：构建系统托盘（pystray，含 macOS 主线程模型）、
-# 主窗口及五个页面（控制台 / 画质监控 / 弹幕监控 / URL 配置 / 运行日志），管理子进程
-# 录制生命周期、跨线程日志队列与 UI 事件泵、画质降级监控、弹幕监控（tail 边车
-# JSONL 文件）以及优雅退出清理。
-# 对外主要类：LiveRecorderGUI（主界面）、SystemTray（托盘管理器）、
-# AdvancedSettingsWindow（config.ini 编辑器）、Colors / Fonts（主题与字体）。
+# 本模块为图形界面主入口：构建主窗口及五个页面（控制台 / 画质监控 / 弹幕监控 / URL 配置 /
+# 运行日志），管理子进程录制生命周期、跨线程日志队列与 UI 事件泵、画质降级监控、弹幕监控
+# （tail 边车 JSONL 文件）以及优雅退出清理。
+# [历史注 2026-10-20] 原「构建系统托盘（pystray，含 macOS 主线程模型）」与对外主要类里的
+#   「SystemTray（托盘管理器）」两条已删：遗留 pystray+Pillow 托盘随依赖摘除退役，托盘由
+#   PySide6 侧 src/gui_qt/tray.py 承担（产品入口 main() 本就转发到 src.gui_qt.app.main，
+#   遗留 tkinter 路径只作回退与回归锁宿主，不再自带托盘）。
+# 对外主要类：LiveRecorderGUI（主界面）、AdvancedSettingsWindow（config.ini 编辑器）、
+# Colors / Fonts（主题与字体）。
 from __future__ import annotations
 
 # 窗口化运行（pythonw / PyInstaller console=False 冻结 exe）下 sys.stderr 为
@@ -109,7 +112,7 @@ def _install_crash_sink() -> None:
         # 包导入」的静态断言，也会在 src 缺失时二次抛错）。
         if _gui_main_window_ready:
             return
-        # 启动期尽力弹窗（customtkinter/PIL 缺失时，标准库 tkinter 通常仍可用）
+        # 启动期尽力弹窗（三方 UI 库缺失时，标准库 tkinter 通常仍可用）
         try:
             import tkinter as _tk
             import tkinter.messagebox as _messagebox
@@ -143,7 +146,7 @@ def _install_crash_sink() -> None:
 
 
 # 仅作为入口脚本（pythonw gui.py / GUI 冻结 exe）时才劫持进程级钩子。安排在此处
-# （重活导入之前）是为了把 customtkinter / PIL 缺失这类导入期崩溃也纳入兜底。
+# （重活导入之前）是为了把 tkinter/ttk、src 包及 PySide6 缺失这类导入期崩溃也纳入兜底。
 # 被当作**模块**导入时不安装：那时 sys.excepthook / threading.excepthook 属于宿主进程，
 # 而 pytest 收集 tests/test_gui_monitor.py 会 import gui——2026-09-23 事故即由此而生：
 # pytest 会话收尾抛出的未捕获异常被本钩子接管，既以「GUI 启动失败」的标题弹出误导性弹窗，
@@ -175,9 +178,7 @@ from pathlib import Path
 from tkinter import filedialog
 from tkinter import font as tkfont
 from tkinter import messagebox, ttk
-from typing import TYPE_CHECKING, Any, Literal, TypeAlias, cast, final
-
-from PIL import Image, ImageDraw
+from typing import Any, Literal, cast, final
 
 # GUI 父进程标记：必须先于任何 src 导入设置——src.logger 在导入期读取该标记决定
 # 文件 sink 归属（GUI 进程只写 logs/gui.log，不持有 streamget/PlayURL 句柄，
@@ -225,6 +226,7 @@ from src.ui_motion import (
     FOLLOW_SYSTEM_MOTION_ID,
     MOTION_IDS,
     PAGE_SLIDE_PX,
+    ROW_HIGHLIGHT_FRAMES,
     ROW_HIGHLIGHT_MS,
     MotionController,
     detect_system_animations,
@@ -257,7 +259,6 @@ from src.ui_theme import (
 )
 from src.utils import atomic_write_text, mask_credentials
 from src.web_config import (
-    find_room_url_by_anchor_name,
     parse_url_config,
     read_quality_options,
     update_config_line,
@@ -482,19 +483,6 @@ def _fix_encoding() -> None:
 
 
 _fix_encoding()
-# pystray 延迟导入至 SystemTray.run() 内部，避免 headless 环境顶层导入失败
-
-if TYPE_CHECKING:
-    import pystray
-
-    # pystray 无类型存根，Icon 推断为 Any。用 TypeAlias 别名避免在类型表达式里直接写
-    # 模块属性 `pystray.Icon`（会触发 reportInvalidTypeForm），同时让 mypy 将其识别为类型别名
-    # 而非变量（否则 `PystrayIcon | None` 会报 “not valid as a type” 并级联到所有属性访问）。
-    PystrayIcon: TypeAlias = pystray.Icon
-else:
-    # 运行期占位：仅用于注解，不作为值使用。
-    PystrayIcon: TypeAlias = object
-
 
 # ─── 现代化色彩系统（浅色 / 深色双主题） ──────────────────
 
@@ -814,203 +802,6 @@ def _bind_adaptive_wraplength(label: ttk.Label, margin: int = 8, debounce_ms: in
     label.bind("<Configure>", _adapt, add="+")
     if label.winfo_width() > 1:
         _run()
-
-
-# 系统托盘管理器：构建菜单图标、处理托盘交互与跨平台运行模型。
-@final
-class SystemTray:
-    # 系统托盘管理器
-
-    # 初始化系统托盘管理器（持有 GUI 引用、运行状态与 macOS detached 标志）。
-    def __init__(self, gui_app: "LiveRecorderGUI"):
-        self.gui = gui_app
-        self.icon: "PystrayIcon | None" = None
-        self.running = False
-        # 是否以 macOS run_detached()（非阻塞、仅注册状态栏图标）模式运行；
-        # 该模式下 stop() 前需先主动隐藏图标（详见 stop() 注释）。
-        self.detached = False
-
-    # 绘制并返回托盘图标位图（圆角矩形 + 白色圆环 + 录制红点）。
-    def create_icon_image(self) -> Image.Image:
-        size = 64
-        image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-        dc = ImageDraw.Draw(image)
-
-        # 圆角矩形背景
-        margin = 2
-        dc.rounded_rectangle((margin, margin, size - margin, size - margin), radius=16, fill=(79, 109, 245, 255))
-
-        # 白色圆环
-        ring_margin = 10
-        dc.ellipse(
-            (ring_margin, ring_margin, size - ring_margin, size - ring_margin), outline=(255, 255, 255, 230), width=3
-        )
-
-        # 中心录制圆点
-        dot_size = 9
-        cx = size // 2
-        cy = size // 2
-        dc.ellipse((cx - dot_size, cy - dot_size, cx + dot_size, cy + dot_size), fill=(220, 38, 38, 255))
-
-        # 提前加载像素数据，避免 ImageDraw 惰性图像在 pystray 保存时触发重入加载崩溃
-        image.load()
-
-        # 强制在当前线程（主线程）完成 PIL 插件/编码器的初始化，并预热 pystray 的
-        # darwin 后端实际会走的「缩放 + LANCZOS + PNG 序列化」代码路径。
-        # 背景：pystray 的 darwin 后端在 icon.run() 内部 spawn 的后台线程里对图标
-        # 做 resize(状态栏尺寸) + PNG 序列化（_assert_image -> Image.save('png') ->
-        # PIL/_encode_tile）。PIL 的惰性插件/编码器初始化在 PyInstaller 冻结环境下
-        # 并非线程安全，从非主线程首次触发会触发原生崩溃（见 CI faulthandler 堆栈），
-        # 且该原生崩溃无法被 Python try/except 捕获，直接导致 GUI 进程退出、冒烟失败。
-        # 这里把 pystray 实际会走的缩放+PNG 路径提前在主线程跑一遍，确保后台线程复用
-        # 已加载的编码器，不再触发首次初始化的竞态。
-        try:
-            Image.preinit()
-            Image.init()
-            # 模拟 pystray._assert_image 的 resize(状态栏约 22x22) + PNG 保存。
-            # 用 thumbnail（内部同样走 resize + LANCZOS）代替 resize：Pillow 存根的
-            # resize.size 形参为 tuple|list|NumpyArray，未装 numpy 时 NumpyArray 无法
-            # 解析为 Unknown 会触发 reportUnknownMemberType，thumbnail 签名则完全可解析。
-            thumb = image.copy()
-            thumb.thumbnail((22, 22), Image.Resampling.LANCZOS)
-            _buf = io.BytesIO()
-            thumb.save(_buf, "PNG")
-        except Exception:
-            pass
-        return image
-
-    # 托盘菜单「显示主界面」回调：路由到 UI 线程恢复窗口。
-    def on_show(self, _icon: "PystrayIcon | None" = None) -> None:
-        # 托盘菜单：显示主窗口（pystray 回调运行在托盘线程，Tk 操作必须路由回 UI 线程）
-        self.gui.post_ui(self._do_show)
-
-    # 在 UI 线程中恢复并显示主窗口（deiconify + lift）。
-    def _do_show(self) -> None:
-        self.gui.root.deiconify()
-        self.gui.root.lift()
-
-    # 托盘菜单「退出程序」回调：路由到 UI 线程执行退出。
-    def on_exit(self, _icon: "PystrayIcon | None" = None) -> None:
-        # 托盘菜单：退出程序（路由回 UI 线程，避免跨线程弹窗/操作 Tk）
-        self.gui.post_ui(self.gui.quit_application)
-
-    # 托盘菜单「最小化到托盘」回调：路由到 UI 线程隐藏窗口。
-    def on_minimize(self, _icon: "PystrayIcon | None" = None) -> None:
-        self.gui.post_ui(self.gui.root.withdraw)
-
-    # 构造 pystray 图标与菜单（延迟导入 pystray 以兼容 headless）。
-    def _build_icon(self) -> "PystrayIcon":
-        import pystray  # 延迟导入：避免 headless 环境在模块顶层即失败
-
-        menu = self._build_menu(pystray)
-        return pystray.Icon("LiveRecorder", self.create_icon_image(), "LiveRecorder - click to show", menu)
-
-    # 托盘菜单构建单点：_build_icon 与语言切换后的 rebuild_menu 共用，
-    # 菜单项文本在构建期定型，故换语言只能整体重建（retranslate 不适用于 pystray）。
-    # pystray 是延迟导入的动态模块对象（无类型存根），形参/返回用 Any 承接。
-    def _build_menu(self, pystray: Any) -> Any:
-        return pystray.Menu(
-            pystray.MenuItem(i18n_module.tr("显示主界面"), self.on_show, default=True),
-            pystray.MenuItem(i18n_module.tr("最小化到托盘"), self.on_minimize),
-            pystray.MenuItem(i18n_module.tr("退出程序"), self.on_exit),
-        )
-
-    # 语言切换钩子调用：图标在跑则换上新语言菜单；托盘降级（icon 为 None）静默跳过。
-    def rebuild_menu(self) -> None:
-        if self.icon is None:
-            return
-        try:
-            import pystray  # 与 _build_icon 同一延迟导入口径
-
-            # pystray 无类型存根，Icon 的 menu/update_menu 在静态视角下不可见；
-            # 经 Any 局部变量承接动态属性访问（运行期由 pystray 真实对象承担）
-            icon: Any = self.icon
-            icon.menu = self._build_menu(pystray)
-            icon.update_menu()
-        except Exception:
-            pass
-
-    # 托盘不可用时优雅降级，避免 GUI 进程因崩溃堆栈退出。
-    def _degrade(self, exc: BaseException) -> None:
-        # 无系统托盘（headless / 无显示 / 库缺失）时优雅降级，
-        # 避免崩溃堆栈导致整个 GUI 进程退出（冒烟测试会据此判定失败）。
-        self.running = False
-        self.icon = None
-        try:
-            print(i18n_module.tr("[tray] 系统托盘启动失败，已忽略：{exc}", exc=exc), file=sys.stderr)
-        except Exception:
-            pass
-
-    # 在后台线程启动托盘图标（Windows / Linux 阻塞运行，macOS 禁用）。
-    def run(self) -> None:
-        # 注意：macOS 禁止走本方法 —— pystray darwin 后端的 icon.run() 会以
-        # NSApplication.run() 接管「主线程」事件循环，与 Tk mainloop 互斥
-        # （Tcl/Tk 在 macOS 只能运行于主线程，否则抛
-        #  "RuntimeError: Calling Tcl from different apartment"）。
-        # macOS 请使用 run_detached()。
-        try:
-            icon = self._build_icon()
-            self.icon = icon
-            self.running = True
-            icon.run()
-        except Exception as exc:
-            self._degrade(exc)
-
-    # macOS 主线程非阻塞启动托盘（仅注册状态栏图标，不接管事件循环）。
-    def run_detached(self) -> None:
-        # macOS 专用：在「主线程」调用（进入 Tk mainloop 之前），非阻塞。
-        # pystray darwin 后端的 run_detached() 只做 _mark_ready()（注册状态栏图标），
-        # 不启动 NSApplication.run()；状态栏点击/菜单事件由 Tk 的 Cocoa 事件循环
-        # 代为分发（两者共享 NSApplication.sharedApplication()）。这样主线程留给
-        # Tk mainloop，同时满足 macOS 上 Tcl/Tk 与 AppKit 都必须在主线程的双重约束。
-        try:
-            icon = self._build_icon()
-            # 在主线程预先渲染并缓存 NSImage（pystray 内部 _icon_image）：
-            # run_detached() 触发的 setup 线程会调用 _show() -> _assert_image()
-            # 对图标做 resize + PNG 序列化（PIL/_encode_tile）。该原生编码在
-            # PyInstaller 冻结环境从非主线程首次触发会原生崩溃，且无法被 Python
-            # 异常捕获。此处先在主线程执行一次 _assert_image 把图像缓存下来，
-            # setup 线程命中缓存直接返回，从根本上消除后台线程崩溃。
-            # 若环境无系统托盘（headless），_assert_image 抛 ObjC 异常，
-            # 则跳过 run_detached()，托盘优雅降级、GUI 进程继续存活。
-            icon._assert_image()
-            # 标记图标已有效：阻止 setup 线程里 visible=True 触发 _update_icon()
-            # 把刚缓存的 _icon_image 清空后在后台线程重新 PNG 编码（否则上面的
-            # 主线程预热就会被绕过，冻结环境的原生崩溃风险回归）。
-            icon._icon_valid = True
-            self.icon = icon
-            self.detached = True
-            self.running = True
-            icon.run_detached()
-        except Exception as exc:
-            self._degrade(exc)
-
-    # 停止系统托盘并移除状态栏图标（全平台容错，detached 先隐藏）。
-    def stop(self) -> None:
-        # 停止系统托盘（stop() 可能由 UI 线程调用，全程容错）。
-        # macOS detached 模式下 pystray _run() 的 finally（移除状态栏项）不会执行，
-        # 需先主动隐藏图标再 stop。
-        if self.icon and self.running:
-            if self.detached:
-                try:
-                    self.icon.visible = False
-                except Exception:
-                    pass
-            try:
-                self.icon.stop()
-            except Exception:
-                pass
-            self.running = False
-
-    # 发送系统通知（仅在托盘图标可用时）。
-    def notify(self, message: str, title: str | None = None) -> None:
-        # 标题默认值在调用时查表（def 期定型会让通知永远停在构建语言）
-        title = i18n_module.tr("直播录制器") if title is None else title
-        if self.icon:
-            try:
-                self.icon.notify(message, title)
-            except Exception:
-                pass
 
 
 # 高级设置窗口：以文本形式编辑并保存 config/config.ini。
@@ -1900,9 +1691,6 @@ class LiveRecorderGUI:
 
         self.output_thread: threading.Thread | None = None
 
-        self.system_tray: SystemTray | None = None
-        self.tray_thread: threading.Thread | None = None
-
         self._last_url_config_mtime = 0.0
         # M-05（2026-10-19）：外部改动确认框的「已弹出」标志。Tk 的 messagebox 是**嵌套事件循环**，
         # 把它放进 after 链里的后果是：用户还没点按钮，下一轮定时器照常触发，于是每 3 秒再叠一个
@@ -2773,8 +2561,6 @@ class LiveRecorderGUI:
             self._update_status_bar()
             self._update_quality_display()
             self._update_danmaku_display()
-            if self.system_tray:
-                self.system_tray.rebuild_menu()
             # 字体下拉的首项是「系统默认」这条**译文**，不走 ui_i18n 登记表
             # （Menu 的 values 是 Combobox 自身的取值），语言切换后必须重建取值与回显，
             # 否则下拉里混着上一语言的首项、点它却命中不了任何分支。
@@ -3548,7 +3334,7 @@ class LiveRecorderGUI:
             f"rows:{id(table)}",
             lambda progress: _apply(changed, blend(highlight_color, base_color, progress)),
             duration_ms=ROW_HIGHLIGHT_MS,
-            frames=5,
+            frames=ROW_HIGHLIGHT_FRAMES,
             # 末帧必须显式摘掉 flash tag：末帧颜色已等于常态底色，但 tag 仍在，
             # 下一轮 sync 改tags 时会因「多了一个 tag」被判成变化而误触高亮，
             # 形成「每轮都闪一下」的自激循环。
@@ -3766,7 +3552,10 @@ class LiveRecorderGUI:
         # **展示值**（唯一消费点 _update_status_bar 的 info_tray.configure(text=…)），
         # 裸中文在非简中语言下不译。「启用」/「未启动」两个键四目录早已备齐译文，
         # 此处只补查表、不新增 msgid。
-        return i18n_module.tr("启用") if self.system_tray and self.system_tray.running else i18n_module.tr("未启动")
+        # [历史注 2026-10-20] 原按 `self.system_tray and self.system_tray.running` 判「启用」：
+        #   遗留 pystray 托盘已随依赖摘除退役，本 tkinter 路径不再持有托盘，故恒为「未启动」。
+        #   保留查表而非直接写字面量——否则等于把 L-04 修掉的裸中文又退回去。
+        return i18n_module.tr("未启动")
 
     # ─── 子进程管理 ────────────────────────────────────────
 
@@ -5099,21 +4888,17 @@ class LiveRecorderGUI:
         except Exception:
             pass
 
-    # ─── 托盘与退出 ────────────────────────────────────────
+    # ─── 退出 ──────────────────────────────────────────────
 
-    # 最小化到系统托盘（无托盘时降级为任务栏最小化）。
+    # 最小化到任务栏（遗留 tkinter 路径已不持有系统托盘）。
     def minimize_to_tray(self) -> None:
-        # 最小化到托盘；托盘不可用（如 Linux 无 X11）时降级为普通最小化，避免窗口无法恢复
-        if self.system_tray and self.system_tray.running:
-            self.root.withdraw()
-            # L-04（2026-10-18 审查）：pystray 的 notify() 正文属 i18n 提取器盲区（AGENTS
-            # 「i18n 扫描盲区清单」），裸中文在非简中语言下原样弹出。键「程序已最小化到系统托盘，
-            # 双击托盘图标可恢复窗口」四目录早已备齐译文（与 _tray_status_str 的托盘状态串同属
-            # 「译文已备、查表没调」），此处只补查表、不新增 msgid。
-            self.system_tray.notify(i18n_module.tr("程序已最小化到系统托盘，双击托盘图标可恢复窗口"))
-        else:
-            self.root.iconify()
-            self._log(i18n_module.tr("系统托盘不可用，已改为最小化到任务栏"), "warn")
+        # [历史注 2026-10-20] 原「托盘在跑则 withdraw + notify」分支已随遗留 pystray 托盘退役删除：
+        #   本路径不再持有托盘，恒走任务栏最小化。托盘语义由 PySide6 侧
+        #   src/gui_qt/main_window.py::minimize_to_tray 承担（产品入口 main() 即转发到那一侧）。
+        #   刻意保留这条告警日志——关闭选项与调用点仍叫「最小化到托盘」，不给提示会让用户
+        #   以为窗口凭空消失了。
+        self.root.iconify()
+        self._log(i18n_module.tr("系统托盘不可用，已改为最小化到任务栏"), "warn")
 
     # 退出程序：确认后后台停止录制与清理，再销毁窗口（防重入）。
     def quit_application(self) -> None:
@@ -5209,9 +4994,6 @@ class LiveRecorderGUI:
         self._stop_danmaku_tail()
 
         self._stop_status_animation()
-
-        if self.system_tray:
-            self.system_tray.stop()
 
         self.root.quit()
         self.root.destroy()
@@ -5474,30 +5256,18 @@ def main() -> None:
 def _legacy_main(root: "tk.Tk") -> None:
     app = LiveRecorderGUI(root)
 
-    tray = SystemTray(app)
-    app.system_tray = tray
-
     root.protocol("WM_DELETE_WINDOW", app.on_closing)
 
-    # 主窗口与托盘均已构建完成 → crash sink 切运行期模式（异常只落盘不弹窗，
+    # 主窗口构建完成 → crash sink 切运行期模式（异常只落盘不弹窗，
     # 见 _install_crash_sink 的 _gui_main_window_ready 说明）
     _mark_gui_ready()
 
-    if sys.platform == "darwin":
-        # macOS 双重主线程约束：
-        #  1) Tcl/Tk 只能在主线程运行，否则抛
-        #     "RuntimeError: Calling Tcl from different apartment"；
-        #  2) pystray 的 NSStatusItem 受 AppKit 主线程限制，且 icon.run() 会以
-        #     NSApplication.run() 接管主线程事件循环，与 Tk mainloop 互斥。
-        # 解法：托盘用 run_detached()（仅在主线程注册状态栏图标，不启动独立
-        # 事件循环，事件由 Tk 的 Cocoa 循环分发），随后主线程进入 Tk mainloop。
-        app.tray_thread = None
-        tray.run_detached()  # 非阻塞；headless 时内部优雅降级
-        root.mainloop()
-    else:
-        app.tray_thread = threading.Thread(target=tray.run, daemon=True)
-        app.tray_thread.start()
-        root.mainloop()
+    # [历史注 2026-10-20] 原按 sys.platform 分叉：macOS 走 tray.run_detached()（仅注册
+    #   状态栏图标）、其余平台起守护线程跑 tray.run()。分叉的**唯一**理由是 pystray 的
+    #   NSStatusItem 受 AppKit 主线程限制、且 icon.run() 会以 NSApplication.run() 接管
+    #   主线程事件循环，与「Tcl/Tk 只能在主线程」直接冲突。遗留 pystray 托盘退役后两条
+    #   分支完全等价（都不再有托盘），合并为一条 mainloop()。
+    root.mainloop()
 
 
 if __name__ == "__main__":

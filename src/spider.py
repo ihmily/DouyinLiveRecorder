@@ -4879,7 +4879,6 @@ async def get_weibo_stream_data(
     result: dict[str, object] = {"anchor_name": "", "is_live": False}
     if room_id:
         app_api = f"https://weibo.com/l/pc/anchor/live?live_id={room_id}"
-        # app_api = f'https://weibo.com/l/!/2/wblive/room/show_pc_live.json?live_id={room_id}'
         json_str = await async_req(url=app_api, proxy_addr=proxy_addr, headers=headers)
         json_str = _get_str_response(json_str)
         json_data = _loads_dict(json_str)
