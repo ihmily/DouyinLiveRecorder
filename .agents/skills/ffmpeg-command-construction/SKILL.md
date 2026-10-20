@@ -88,7 +88,13 @@ description: >
 - 录制成功须撤销该地址探针退避（`clear_ffmpeg_reject`）：
   - 只清实际拉流成功的 FLV，HLS 退避不顺带清。
 
-## 验证清单
+## 验证
+
+### 项目级门禁（由 `python scripts/run_gates.py` 统一兜底，Skill 不重复）
+
+- `black --check`、`isort --check-only`、`mypy`（含 `--platform linux` / `--platform win32`）、`check_annotations.py`
+
+### 本领域专项检查
 
 1. `pytest tests/test_ffmpeg_reconnect_args.py` — 全绿
 2. `pytest tests/test_record_container.py` — 全绿

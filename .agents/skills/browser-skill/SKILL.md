@@ -174,3 +174,13 @@ bsk download @e3 --out ./report.pdf --session <id>
 | [references/interact.md](references/interact.md) | Command table, hover/scroll details, borrowing, browser settings, human help and recovery |
 | [references/screenshots.md](references/screenshots.md) | Screenshot modes, full-page capture, Canvas elements, coordinate clicking |
 | [references/files-tools.md](references/files-tools.md) | Upload/download, console/network, emulation, evaluation, recording |
+
+## 验证
+
+本 Skill 是外部工具技能（`bsk` CLI + 浏览器扩展），不修改项目源码，无对应的项目级门禁。
+
+完成判据：
+
+1. 任务成功：`bsk session stop` 正常返回、借用的标签页已归还。
+2. 任务失败：已按「Human steps and recovery」表格处理，未遗留未关闭的会话。
+3. 安全：未提取或暴露 Cookie / token 等凭据。

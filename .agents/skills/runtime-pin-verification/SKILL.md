@@ -98,7 +98,13 @@ description: >
 - TOFU 退化为取不到时的显式降级并记 warning，不得反过来。
 - Windows 运行期只有 gyan.dev 一条自动路径，蓝奏云兜底源已整体删除。
 
-## 验证清单
+## 验证
+
+### 项目级门禁（由 `python scripts/run_gates.py` 统一兜底，Skill 不重复）
+
+- `python scripts/check_runtime_pins.py`（已在门禁清单内）
+
+### 本领域专项检查
 
 1. `python scripts/check_runtime_pins.py --strict` — rc=0
 2. `pytest tests/test_build_exe.py` — 全绿（钉定/签名/主机白名单/不可变标签）

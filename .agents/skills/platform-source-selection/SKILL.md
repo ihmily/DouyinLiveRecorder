@@ -33,7 +33,13 @@ description: >
 | 画质档位映射 | [`references/quality-mapping.md`](references/quality-mapping.md) | 通用画质映射、蓝光子档位、虎牙选档、斗鱼本地重试链 |
 | 平台解析函数返回契约 | [`references/parser-contract.md`](references/parser-contract.md) | 装饰器选择、JSON 解析兜底、`_loads_dict` 行为 |
 
-## 验证清单
+## 验证
+
+### 项目级门禁（由 `python scripts/run_gates.py` 统一兜底，Skill 不重复）
+
+- `black --check`、`isort --check-only`、`mypy`（含 `--platform linux` / `--platform win32`）、`check_annotations.py`
+
+### 本领域专项检查
 
 1. `pytest tests/test_stream_select.py` — 全绿
 2. `pytest tests/test_stream.py` — 全绿（画质映射）

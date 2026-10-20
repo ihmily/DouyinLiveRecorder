@@ -69,7 +69,9 @@ agent_created: true
 
 **不属于本手册范围**：真正的崩溃栈回溯（走 systematic-debugging）、纯日志格式美化、一键式 trivial 改动。
 
-## 统一验证门禁（引用，不复制）
+## 验证
+
+### 项目级门禁（统一入口，不复制命令清单）
 
 全量门禁的唯一入口是 `python scripts/run_gates.py`（在仓库根目录执行）：按原顺序跑完全部 `--check` 型门禁，任一失败非 0 退出。**完整命令清单、收窄排障（`--only`/`--keep-going`/`--list`）与平台增跑（`mypy --platform linux`）的口径以 `AGENTS.md`「格式化命令（门禁唯一基准）」为唯一事实源，本手册只引用不复制**——需要逐条命令时用 `run_gates.py --list` 现场解析，或直接查该章节。
 
