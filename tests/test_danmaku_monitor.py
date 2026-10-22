@@ -14,7 +14,7 @@ import threading
 import time
 from collections import deque
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -577,3 +577,92 @@ def test_gui_tail_reads_jsonl_and_handles_rotation(tmp_path: Any) -> None:
     stop.set()
     t.join(timeout=3.0)
     assert not t.is_alive(), "tail 线程未响应传入的 stop_event 退出（守护线程会残留到进程结束）"
+
+
+# ─── M-37 / M-43（CODE_REVIEW_2026-10-21）：stats 线程复活窗口 与 裸文件名边车路径 ───
+
+
+class _GapGate:
+    # 一次性闸门：把「即将退出的 stats 线程」停在 finally 取锁的那一步，从而**确定性地**复现
+    # break → finally 之间的窗口（M-37 是竞态，没有外部可观测时序，只能在此注入停顿）。
+    # 必须只停在**第二次**取锁：第一次是 while 体内的 `with self._lock`（它判完空表才 break），
+    # 停在第一次的话房间登记会落进循环体、线程根本不退出（等于测了另一条路径）。
+    # 只做「停 + 放行」，不重写任何被测逻辑（AGENTS「测试不得自实现被测逻辑」）。
+    def __init__(self) -> None:
+        self.acquisitions = 0
+        self.reached = threading.Event()
+        self.proceed = threading.Event()
+
+    def __enter__(self) -> "_GapGate":
+        self.acquisitions += 1
+        if self.acquisitions >= 2:
+            self.reached.set()
+            assert self.proceed.wait(timeout=10.0), "测试未在 10s 内放行收尾线程"
+        return self
+
+    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
+        return None
+
+
+def test_stats_thread_restarts_for_room_registered_in_teardown_gap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # M-37：房间在 break（当时房间表为空）与 finally 注销引用之间登记时，_ensure_stats_thread
+    # 看到的是**仍 is_alive()** 的那支将死线程 → 不新建；随后它将 self._stats_thread 置 None 并退出，
+    # 该房间从此**永久**拿不到周期 stats（GUI 的 msg_rate/online 冻结，直到下一条弹幕或下次开房才有机会）。
+    monkeypatch.setattr(dm, "_STATS_INTERVAL", 0.02)
+    hub = DanmakuMonitorHub(log_path=str(tmp_path / "dm.jsonl"))
+    gate = _GapGate()
+    real_lock = hub._lock
+    # 先把锁换成闸门：stats 线程 break 后就会停在 finally 的 `with self._lock` 处
+    hub._lock = cast(Any, gate)
+    dying = threading.Thread(target=hub._stats_loop, name="stats-dying", daemon=True)
+    hub._stats_thread = dying
+    dying.start()
+    assert gate.reached.wait(3.0), "stats 线程未到达 finally：窗口未复现"
+
+    # 窗口内登记房间（换回真锁才能调用公开接口；将死线程此刻仍停在闸门外）
+    hub._lock = real_lock
+    hub.room_started("房间A", "抖音直播")
+    assert hub._stats_thread is dying, "登记时旧线程已注销：本用例没有命中要复现的窗口"
+
+    gate.proceed.set()
+    dying.join(timeout=3.0)
+    assert not dying.is_alive(), "将死线程未在 3s 内退出：不得判绿"
+
+    replacement = hub._stats_thread
+    assert replacement is not None and replacement is not dying, "注销后未复检房间表：新房间永远没有周期统计"
+
+    deadline = time.monotonic() + 5.0
+    stats_events: list[dict[str, Any]] = []
+    while time.monotonic() < deadline and not stats_events:
+        hub.flush()
+        if (tmp_path / "dm.jsonl").exists():
+            stats_events = [
+                ev
+                for ev in (json.loads(ln) for ln in (tmp_path / "dm.jsonl").read_text(encoding="utf-8").splitlines())
+                if ev.get("ev") == "stats" and ev.get("room") == "房间A"
+            ]
+        time.sleep(0.05)
+    assert stats_events, "替代线程没有为该房间写出周期统计"
+
+    # 收尾：先摘房间（否则按修复语义线程会一直复活），再置停止位并 join 替代线程
+    hub.room_stopped("房间A")
+    hub._stats_stop.set()
+    replacement.join(timeout=3.0)
+    assert not replacement.is_alive(), "替代线程未在 3s 内退出：守护线程会残留到进程结束"
+
+
+def test_prepare_log_path_keeps_file_output_for_bare_filename(tmp_path: Path) -> None:
+    # M-43：os.makedirs(os.path.dirname(log_path)) 在裸文件名（无目录段）下 dirname 返回空串，
+    # makedirs("") 抛 FileNotFoundError 被下面的 except 吞掉 → 边车输出**静默禁用**，
+    # GUI/Web 的 tail 链路整体失效（用户只看到「监控页永远空白」）。
+    assert DanmakuMonitorHub._prepare_log_path("danmaku_monitor.jsonl") == "danmaku_monitor.jsonl"
+    # 反向保证：父目录确实会被创建（不得把 guard 写成「一律不建目录」）
+    nested = tmp_path / "sub" / "dm.jsonl"
+    assert DanmakuMonitorHub._prepare_log_path(str(nested)) == str(nested)
+    assert (tmp_path / "sub").is_dir()
+    # 第三向：真正不可创建的父目录仍走「禁用文件输出」出口——guard 不得把 except 路径一并废掉
+    blocker = tmp_path / "afile"
+    blocker.write_text("x", encoding="utf-8")
+    assert DanmakuMonitorHub._prepare_log_path(str(blocker / "sub" / "dm.jsonl")) is None

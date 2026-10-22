@@ -551,6 +551,43 @@ class TestMaskCredentialsCoverage:
         assert "***" in masked
 
     @pytest.mark.parametrize(
+        ("raw", "secret"),
+        [
+            # S-07（CODE_REVIEW_2026-10-21）①：ini 行形态「键 空格 = 空格 值」，值到行尾（可含空格）
+            ("Authorization = Bearer abcdef123456", "abcdef123456"),
+            ("token = abcdef123456", "abcdef123456"),
+            # 带中文前缀的 Cookie 键（[Cookie] 节的真实写法）
+            ("[Cookie]\n抖音cookie = abc123", "abc123"),
+            # S-07②：短键名 sig / jwt（原键名表只有 signature/sign）
+            ("sig=abcdef", "abcdef"),
+            ("jwt=abcdef", "abcdef"),
+            # S-07②：小写复合键（原候选集只有 token|key）
+            ("mysecret=abcdef", "abcdef"),
+            ("mypassword=abcdef", "abcdef"),
+            # S-07③：JSON 数值/布尔/null 值（原只认字符串值）
+            ('{"ms_token": 12345}', "12345"),
+            ('{"token": 123}', "123"),
+            ('{"sign": 1}', ": 1"),
+            # S-07④：中文凭据键
+            ("密码=abcdef", "abcdef"),
+        ],
+    )
+    def test_s07_ini_short_key_and_json_numeric_forms_are_masked(self, raw: str, secret: str) -> None:
+        # 报告的实测语料：改动前这些形态全部原样返回（明文落盘）。逐条断言「值确实消失」，
+        # 而不是只断言出现了 ***——后者对「抹错了位置」是假绿。
+        masked = mask_credentials(raw)
+        assert secret not in masked, f"凭据未消失: {raw!r} -> {masked!r}"
+        assert "***" in masked, f"未产生掩码: {raw!r} -> {masked!r}"
+
+    def test_s07_ini_line_rule_does_not_swallow_following_lines(self) -> None:
+        # 形态四按「行」抹到行尾，必须只影响命中行：跨行吞掉会把整份配置/日志的可读性打掉。
+        raw = "web_port = 8000\nAuthorization = Bearer LEAKME\nlanguage = zh_CN"
+        masked = mask_credentials(raw)
+        assert "LEAKME" not in masked
+        assert "web_port = 8000" in masked
+        assert "language = zh_CN" in masked
+
+    @pytest.mark.parametrize(
         "raw",
         [
             "https://live.douyin.com/746171898479",
@@ -682,6 +719,50 @@ class TestAtomicWriteTextDurability:
         assert atomic_write_text(target, "newer") is True
         assert stat.S_IMODE(os.stat(target).st_mode) == 0o600
         assert target.read_text(encoding="utf-8-sig") == "newer"
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="Windows 的 os.chmod 仅影响只读位，无法断言权限位")
+    def test_new_target_is_hardened_to_owner_only(self, tmp_path: Path) -> None:
+        # M-57 的 POSIX 侧实测判据：目标此前不存在时产物必须**确定**是 0600。
+        # 原实现只靠 mkstemp 的默认模式，而 os.replace 后目标继承临时文件的模式——
+        # 多用户主机上 config.ini（含明文 Cookie / 账号密码）首次创建走的就是这条路，
+        # 一旦默认模式被环境改掉（或将来有人把临时文件换成 open(...,"w")），凭据文件就同机可读。
+        target = tmp_path / "fresh.ini"
+        assert atomic_write_text(target, "secret = 1") is True
+        assert stat.S_IMODE(os.stat(target).st_mode) == 0o600
+
+    @pytest.mark.parametrize("existed_mode", [0o644, 0o600, 0o640])
+    def test_chmod_argument_is_original_mode_for_existing_and_0600_for_new(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, existed_mode: int
+    ) -> None:
+        # 跨平台的行为锁（本机 Windows 上 os.chmod 改不了权限位，POSIX 那两条用例只能 skip）：
+        # 直接记「传给 chmod 的第二个实参」，把 M-57 的取值规则钉死而不是钉本机可见效果。
+        # 判据两侧都要有：① 新目标 → 显式 0600（删掉这条加固即变红，变异 M-57-A）；
+        # ② 既有目标 → 原 mode 原样回填（有人「顺手全量收紧」会把别人正在共享的文件打死，
+        #    变异 M-57-B）。os 替身按 shim 口径只落进被测模块命名空间。
+        real_chmod = os.chmod
+        calls: list[tuple[str, int]] = []
+
+        def _spy_chmod(path: object, mode: int, *args: object, **kwargs: object) -> None:
+            calls.append((os.path.basename(str(path)), int(mode)))
+            real_chmod(path, mode, *args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(utils_module, "os", SimpleNamespace(**{**vars(os), "chmod": _spy_chmod}))
+        assert os.chmod is real_chmod  # 反向见证：替身没有污染进程全局
+
+        target = tmp_path / "cfg.ini"
+        _ = target.write_text("old", encoding="utf-8")
+        real_chmod(str(target), existed_mode)
+        # 期望值取「文件此刻真实的 mode」而不是形参：Windows 上 chmod 只影响只读位、
+        # st_mode 报 0o666/0o444， POSIX 上二者逐字相等（下方参数化在 POSIX 侧仍在钉三个不同值）。
+        expected_mode = stat.S_IMODE(os.stat(str(target)).st_mode)
+        calls.clear()
+        assert atomic_write_text(target, "new") is True
+        assert [mode for _name, mode in calls] == [expected_mode], calls
+
+        fresh = tmp_path / "fresh.ini"
+        calls.clear()
+        assert atomic_write_text(fresh, "new") is True
+        assert [mode for _name, mode in calls] == [0o600], calls
 
     def test_replace_failure_leaves_original_and_returns_false(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1146,3 +1227,94 @@ class TestJsPinTable:
         utils_module._check_js_hash(str(tmp_path / name), b"a")
         utils_module._check_js_hash(str(tmp_path / name), b"b")
         assert sum(1 for line in log_capture if name in line) == 1, log_capture
+
+
+# ── M-55 / L-48 的回归锁（src/utils.py 两处 decode 站点注释引用的正是本类）──
+# 立规背景：两处 `decode("utf-8")` 原本不带 errors，非 UTF-8 字节直接抛 UnicodeDecodeError——
+#   ① get_compiled_js：签名脚本被用户手工编辑存成 GBK / 编辑器插入坏字节 → 异常穿出本函数，
+#      被 76 处平台解析的 trace_error_decorator 归成「JS 执行环境异常」，把一个文件编码问题
+#      误报成整条签名链故障；
+#   ② run_node_script_async：node 在 GBK locale 下回显本地化消息 → UnicodeDecodeError
+#      **取代**真正的 CalledProcessError，故障归因整体丢失。
+# 两条判据：坏字节必须被替换成 U+FFFD 而不是抛出；②处还必须保住 CalledProcessError 的契约。
+class TestDecodeErrorsNeverEscape:
+    def test_compiled_js_with_non_utf8_bytes_does_not_raise(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 判据①：非 UTF-8 字节的签名脚本仍能被编译出来（源码里带 U+FFFD），不向外抛 UnicodeDecodeError
+        script = tmp_path / "decoded_sign.js"
+        _ = script.write_bytes(b"var token = '\xff\xfe';\n")
+        seen: list[str] = []
+
+        def _fake_compile(source: str) -> str:
+            seen.append(source)
+            return "compiled-marker"
+
+        # execjs 是共享模块本体，不得就地改属性（AGENTS 测试约定）→ 浅拷贝 shim 只落进被测模块命名空间
+        shim = SimpleNamespace(**{**vars(utils_module.execjs), "compile": _fake_compile})
+        monkeypatch.setattr(utils_module, "execjs", shim)
+        try:
+            result = utils_module.get_compiled_js(str(script))
+        except UnicodeDecodeError as e:  # pragma: no cover - 期望走不到
+            pytest.fail(f"get_compiled_js 让 UnicodeDecodeError 穿透: {e}")
+        assert result == "compiled-marker"
+        assert len(seen) == 1, "execjs.compile 应只被调用一次（缓存未被打穿）"
+        assert "\ufffd" in seen[0], "坏字节没有被 errors='replace' 兜住（或压根没把源码交给 execjs）"
+        assert "var token" in seen[0], "解码结果被整段丢掉：execjs 拿到的不该是空串"
+
+    @pytest.mark.asyncio
+    async def test_node_stdout_with_non_utf8_bytes_does_not_raise(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 判据②（成功分支）：node 回显里混入非 UTF-8 字节时按替换解码返回，不抛 UnicodeDecodeError
+        script = tmp_path / "decoded_node.js"
+        _ = script.write_bytes(b"console.log(1)\n")
+
+        class _FakePopen:
+            def __init__(self, argv: list[str], **kwargs: object) -> None:
+                self.returncode: int | None = 0
+
+            def communicate(self, *_args: object, **kwargs: object) -> tuple[bytes, bytes]:
+                return b"signed\xff tail\n", b""
+
+            def kill(self) -> None:
+                raise AssertionError("正常路径不该走到进程树回收")
+
+            def wait(self, timeout: object = None) -> int:
+                raise AssertionError("正常路径不该走到收尸")
+
+        shim = SimpleNamespace(**{**vars(subprocess), "Popen": _FakePopen})
+        monkeypatch.setattr(utils_module, "subprocess", shim)
+        try:
+            out = await run_node_script_async(str(script), "https://example/x", timeout=5)
+        except UnicodeDecodeError as e:  # pragma: no cover - 期望走不到
+            pytest.fail(f"run_node_script_async 让 UnicodeDecodeError 穿透: {e}")
+        assert out == "signed\ufffd tail"
+
+    @pytest.mark.asyncio
+    async def test_nonzero_exit_still_raises_called_process_error_with_dirty_bytes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 判据②（失败分支）：非零退出必须仍抛 CalledProcessError（旧契约，不得静默返回空串）。
+        # 本用例同时把「解码异常顶掉真异常」这条钉住：stdout 带着坏字节。
+        script = tmp_path / "decoded_node_fail.js"
+        _ = script.write_bytes(b"console.log(1)\n")
+
+        class _FakePopen:
+            def __init__(self, argv: list[str], **kwargs: object) -> None:
+                self.returncode: int | None = 3
+
+            def communicate(self, *_args: object, **kwargs: object) -> tuple[bytes, bytes]:
+                return b"\xff\xfe boom", b"\xff locale message"
+
+            def kill(self) -> None:
+                raise AssertionError("非零退出路径不该走到进程树回收")
+
+            def wait(self, timeout: object = None) -> int:
+                raise AssertionError("非零退出路径不该走到收尸")
+
+        shim = SimpleNamespace(**{**vars(subprocess), "Popen": _FakePopen})
+        monkeypatch.setattr(utils_module, "subprocess", shim)
+        with pytest.raises(subprocess.CalledProcessError) as excinfo:
+            await run_node_script_async(str(script), "https://example/x", timeout=5)
+        assert excinfo.value.returncode == 3

@@ -6,6 +6,10 @@
          圆角与 Home Indicator；页面内容不被默认挖孔，由 CSS 主动避让。 -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title data-i18n="title">DouyinLiveRecorder 管理面板</title>
+    <!-- 标签图标：默认指向 /favicon.ico（后端按「导入图标 > 内置 assets/app.ico」解析）。
+         href 由 app.js 在导入成功后追加时间戳参数重写——浏览器对 favicon 的缓存极顽固，
+         不带破缓存参数的换图标在多数浏览器上要等下一次清缓存才可见。 -->
+    <link id="favicon-link" rel="icon" type="image/x-icon" href="/favicon.ico">
     <link rel="stylesheet" href="/web/style.css">
 </head>
 <body data-theme="light">
@@ -24,6 +28,11 @@
             <button class="tab" data-view="files" data-i18n="tab.files">文件</button>
         </nav>
         <div class="topbar-right">
+            <!-- 导入图标：点击后由 app.js 触发 #icon-file-input（隐藏的 file input，只收 .ico），
+                 文件经 FileReader 读成 base64 后 POST /api/icon。刻意不放进配置页的表单区——
+                 那张表由 loadConfig() 整体重建，塞进去会被下一次刷新冲掉。 -->
+            <input type="file" id="icon-file-input" accept=".ico,image/x-icon" hidden>
+            <button id="icon-import-btn" data-i18n-title="icon.import" title="导入图标">🖼</button>
             <select id="language-select" data-i18n-title="language.select" title="语言"></select>
             <button id="theme-toggle" data-i18n-title="theme.toggle" title="切换主题">🌙</button>
             <button id="logout-btn" class="hidden" data-i18n="logout">退出</button>

@@ -96,6 +96,24 @@ def test_log_flush_writes_into_terminal(window: MainWindow) -> None:
     assert "[WARN]" in window.logs_page.terminal.toPlainText()
 
 
+def test_log_timer_is_on_demand_and_stops_when_buffer_drains(window: MainWindow) -> None:
+    # M-80：日志刷新链的契约是「按需激活」——_start_timers 刻意不 start 它，唤醒口只有
+    # logQueued→_ensure_log_timer_running。旧实现 _flush_pending_lines 遇空缓冲直接 return、
+    # 从不 stop：表一旦被启过就 5Hz 空转到进程退出，GUI 空闲也在耗事件循环轮次，还会把
+    # 「logQueued 唤醒链断了」这类真故障掩盖成「反正定时器一直在跑」。
+    # 构建期自身入队的启动日志（offscreen 后端下托盘可用性告警等）会经 logQueued 把表
+    # 唤醒过——先把缓冲排干，让链回到可观测的休眠态，再验「入队启表 / 排空停表」全循环。
+    window._flush_pending_lines()  # noqa: SLF001
+    window._flush_pending_lines()  # noqa: SLF001 - 第二轮缓冲已空 → 停表（这本身就是 M-80 判据）
+    assert window._log_timer.isActive() is False  # noqa: SLF001 - 休眠态契约
+    window._queue_log("wake-once")  # noqa: SLF001 - 同线程 emit → 直连槽，启表发生在主线程
+    assert window._log_timer.isActive() is True
+    window._flush_pending_lines()  # noqa: SLF001 - 缓冲非空：刷完继续跑（下一批还要用）
+    assert window._log_timer.isActive() is True
+    window._flush_pending_lines()  # noqa: SLF001 - 缓冲已空：停表，回到休眠态
+    assert window._log_timer.isActive() is False, "空缓冲早退未停表（M-80：5Hz 空转到进程退出）"
+
+
 def test_quality_downgrade_parse(window: MainWindow) -> None:
     # 状态行正则按当前语言从 tr() 结果派生（M-14）：窗口初始化会按系统语言落到 en_US，
     # 故先把语言钉成 zh_CN 再喂简中行，否则测的是「跨语言匹配不上」——那本是设计上的正确行为。

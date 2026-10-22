@@ -255,12 +255,14 @@ class TestDouyuSubTiers:
 
     @pytest.mark.asyncio
     async def test_all_rates_failed_returns_no_urls(self) -> None:
-        # 全部档位失败：保持 is_live=True 但无流地址的既有契约（交由上层告警重试）
+        # M-26（CODE_REVIEW_2026-10-21）：全档位失败必须返回 is_live=False。
+        # 旧契约是「is_live=True 但无任何流地址」，上层据此把「开播但无地址」当待录房间空跑 ffmpeg；
+        # 本函数此时已确认所有档位都拉不到流，继续声称开播是错误状态（表现为在播却不录、日志无异常）。
         json_data = {"anchor_name": "dy", "is_live": True, "room_id": 100}
         error_resp: dict[str, object] = {"error": 500, "msg": "server error", "data": {}}
         with patch("src.stream.get_douyu_stream_data", new_callable=AsyncMock, return_value=error_resp):
             result = await get_douyu_stream_url(cast(dict[str, object], json_data), video_quality="BD4")
-        assert result["is_live"] is True
+        assert result["is_live"] is False
         assert "flv_url" not in result and "m3u8_url" not in result
 
     @pytest.mark.asyncio

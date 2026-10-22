@@ -7,19 +7,31 @@
 #         仍活着的登记、不得让迟到的拉取者抢走接管者的登记位；
 #   L-07  条目寿命由写入方按自己的 ttl 折成失效时刻，两个读取方（get_cached / fetch_cookies
 #         与 singleflight）一律按记录的失效时刻判定。
+#
+# 2026-10-21 CODE_REVIEW_2026-10-21 追加两组同族不变量（改回旧形态即应转红）：
+#   M-36b  src/room.py 的 sec_user_id → 抖音号缓存：过期条目必须**见到即删**且有容量上限
+#          （旧实现只「不返回」不删除，key 属外部可控且通常只出现一次 → 无界增长）；
+#   M-43   src/room.py 的默认头按**键**合并（UA/Cookie 任一存在不再让另一项也不补），
+#          自动取到的 ttwid 只替换 Cookie 串里的同名键、不得整串覆盖登录态。
+#          同批补两条**接线点**锁：helper 单测只能证明函数本身对，证明不了调用点用到了它——
+#          把 `headers[k] = _merge_cookie_pair(...)` 改回 `headers[k] = ttwid_cookie` 时，
+#          上面那组 helper 用例仍然全绿（假绿形态），故新增按 AST 判调用点的用例。
 
+import ast
 import asyncio
 import io
 import threading
 import time
 import types
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
 from loguru import logger
 
 import src.cookie_cache as cc
+import src.room as room_module
 from src.cookie_cache import (
     DEFAULT_TTL,
     _make_key,
@@ -28,6 +40,13 @@ from src.cookie_cache import (
     get_cached,
     get_cookie_str,
     invalidate,
+)
+from src.room import (
+    HEADERS,
+    _get_cached_unique_id,
+    _merge_cookie_pair,
+    _merge_default_headers,
+    _set_cached_unique_id,
 )
 
 # 真实形态的失败异常文本：查询串挂 token、代理地址挂 user:pass，两类都落在 utils.mask_credentials
@@ -708,3 +727,178 @@ class TestInflightOrphanReclaim:
         with cc._cache_lock:
             assert cc._inflight.get(mine_key) is takeover, "迟到的拉取者摘走了接管者的登记位"
         cc._inflight.pop(mine_key, None)
+
+
+# ────────────────────────────────────────────────────────────
+# M-36b（CODE_REVIEW_2026-10-21）：src/room.py 的 sec_user_id → 抖音号进程级缓存
+# 与上面 cookie 缓存同族（同为「进程级、TTL、外部可控 key」的映射），故用例并档在此。
+# ────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def _clean_sec_uid_cache() -> Iterator[None]:
+    # 该缓存是模块级 dict，按文件/用例共享；不清会把上一条用例的条目留给下一条（R9 同族污染）。
+    room_module._SEC_UID_UNIQUE_CACHE.clear()
+    yield
+    room_module._SEC_UID_UNIQUE_CACHE.clear()
+
+
+@pytest.mark.usefixtures("_clean_sec_uid_cache")
+class TestSecUidUniqueCacheBound:
+    def test_expired_entry_is_popped_on_sight(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # M-36b：旧实现读取时只「不返回」过期条目、从不删除；sec_user_id 属外部可控且**只出现一次**
+        # 的 key（换主播就不再回来），于是过期条目永远无人回收 → 24×7 长跑下 dict 只增不减。
+        holder = [1000.0]
+        shim = types.SimpleNamespace(**vars(time))
+        shim.monotonic = lambda: holder[0]
+        # 进程级 stdlib 替身走被测模块命名空间的 shim（AGENTS：os/time 本体一字节不动）
+        monkeypatch.setattr(room_module, "time", shim)
+
+        _set_cached_unique_id("secA", "uidA")
+        assert _get_cached_unique_id("secA") == "uidA"
+
+        holder[0] += room_module._SEC_UID_CACHE_TTL + 1.0
+        assert _get_cached_unique_id("secA") is None
+        assert "secA" not in room_module._SEC_UID_UNIQUE_CACHE, "过期条目没被删除：无界增长的成因"
+
+    def test_fresh_entry_survives_the_pop_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 反向保证：不得把「过期即删」写成「一律删」（那会让缓存彻底失效、每轮都打 iesdouyin 接口）。
+        assert _get_cached_unique_id("secB") is None
+        _set_cached_unique_id("secB", "uidB")
+        assert _get_cached_unique_id("secB") == "uidB"
+        assert "secB" in room_module._SEC_UID_UNIQUE_CACHE
+
+    def test_cache_size_is_bounded(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(room_module, "_SEC_UID_CACHE_MAX_ENTRIES", 8)
+        for i in range(30):
+            _set_cached_unique_id(f"sec{i}", f"uid{i}")
+        assert len(room_module._SEC_UID_UNIQUE_CACHE) == 8
+        assert "sec0" not in room_module._SEC_UID_UNIQUE_CACHE
+        assert _get_cached_unique_id("sec29") == "uid29"
+
+
+# ────────────────────────────────────────────────────────────
+# M-43（CODE_REVIEW_2026-10-21）：src/room.py 的默认头合并与 Cookie 键级合并
+# ────────────────────────────────────────────────────────────
+
+
+class TestRoomHeaderMerge:
+    def test_cookie_only_caller_still_gets_default_user_agent(self) -> None:
+        # 旧判据「UA/Cookie 任一存在就完全不补默认头」：只填 Cookie 的调用方拿不到移动端 UA，
+        # 而抖音接口对 UA 敏感（见 DESKTOP_UA 注释与「已知坑」抖音风控条目）→ 200 + 空 body。
+        merged = _merge_default_headers({"Cookie": "sessionid=ABC"})
+        assert merged["Cookie"] == "sessionid=ABC"
+        assert merged["User-Agent"] == HEADERS["User-Agent"]
+
+    def test_user_agent_only_caller_is_not_given_an_empty_cookie(self) -> None:
+        # 空值默认刻意不注入：HEADERS["Cookie"] = "" 是「让服务器重新下发」的占位，
+        # 主动发出空 Cookie 头会改变请求指纹，与旧行为「不带该头」不等价。
+        merged = _merge_default_headers({"User-Agent": "MyUA"})
+        assert merged["User-Agent"] == "MyUA"
+        assert "Cookie" not in merged
+
+    def test_lowercase_caller_key_does_not_duplicate_the_header(self) -> None:
+        # HTTP 头名大小写不敏感：合并后同时挂 user-agent 与 User-Agent 会让 httpx 发两个值。
+        merged = _merge_default_headers({"user-agent": "MyUA"})
+        assert [k for k in merged if k.lower() == "user-agent"] == ["user-agent"]
+
+    def test_merge_does_not_mutate_shared_headers(self) -> None:
+        # 多线程共享 HEADERS（模块级），合并必须产出新 dict（旧代码靠调用点 dict() 复制防污染）。
+        before = dict(HEADERS)
+        merged = _merge_default_headers({"Cookie": "x=1"})
+        merged["Cookie"] = "changed"
+        assert HEADERS == before
+
+
+class TestRoomCookiePairMerge:
+    def test_ttwid_replaces_only_its_own_pair(self) -> None:
+        # M-43 本体：旧写法 `headers["Cookie"] = ttwid_cookie` 整串覆盖，把用户填的登录态一起抹掉。
+        merged = _merge_cookie_pair("sessionid=ABC; ttwid=OLD; sid_guard=G", "ttwid=NEW")
+        assert merged == "sessionid=ABC; ttwid=NEW; sid_guard=G"
+        assert "OLD" not in merged
+
+    def test_pair_is_appended_when_absent(self) -> None:
+        assert _merge_cookie_pair("sessionid=ABC", "ttwid=NEW") == "sessionid=ABC; ttwid=NEW"
+        assert _merge_cookie_pair("", "ttwid=NEW") == "ttwid=NEW"
+
+    def test_existing_pair_name_is_matched_case_insensitively(self) -> None:
+        assert _merge_cookie_pair("TTWID=OLD; a=1", "ttwid=NEW") == "ttwid=NEW; a=1"
+
+    def test_duplicate_pairs_collapse_to_one(self) -> None:
+        assert _merge_cookie_pair("ttwid=ONE; ttwid=TWO", "ttwid=NEW") == "ttwid=NEW"
+
+
+# ────────────────────────────────────────────────────────────
+# M-43 接线点锁（CODE_REVIEW_2026-10-21）：调用点必须真的走这两个 helper
+#
+# 上面两组是 helper 的单元测试——把 get_unique_id 里那行改回 `headers[cookie_key] = ttwid_cookie`
+# （整串覆盖），或在 get_sec_user_id / get_unique_id 里删掉 `_merge_default_headers(...)` 那行
+# （回到「UA/Cookie 任一存在就完全不补默认头」），helper 用例**一条都不会红**：函数还在、
+# 函数也对，只是没人调。这正是 AGENTS「安全边界不得再用文本锁 / 测试不得自实现被测逻辑」
+# 点名的假绿形态，故这里按 AST 判「调用点是否存在、写的值是不是 helper 的返回值」。
+# 判据取「谁被调用、赋的是什么」这类不变量，不取某个变量名或某句文案。
+# ────────────────────────────────────────────────────────────
+
+
+def _room_tree() -> Any:
+    source = (Path(__file__).resolve().parent.parent / "src" / "room.py").read_text(encoding="utf-8")
+    return ast.parse(source)
+
+
+def _room_func(name: str) -> Any:
+    for node in _room_tree().body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+            return node
+    raise AssertionError(f"src/room.py 不再定义 {name}()：M-43 的接线点判据已失效，需同步改本锁")
+
+
+def _called_names(node: Any) -> set[str]:
+    found: set[str] = set()
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Call):
+            if isinstance(sub.func, ast.Name):
+                found.add(sub.func.id)
+            elif isinstance(sub.func, ast.Attribute):
+                found.add(sub.func.attr)
+    return found
+
+
+def _headers_subscript_assigns(fn: Any) -> list[Any]:
+    out: list[Any] = []
+    for sub in ast.walk(fn):
+        if isinstance(sub, ast.Assign) and any(
+            isinstance(t, ast.Subscript) and isinstance(t.value, ast.Name) and t.value.id == "headers"
+            for t in sub.targets
+        ):
+            out.append(sub)
+    return out
+
+
+def test_ttwid_write_back_goes_through_the_pair_merger() -> None:
+    assigns = _headers_subscript_assigns(_room_func("get_unique_id"))
+    assert len(assigns) == 1, f"get_unique_id 内对 headers[..] 的写入应为 1 处（Cookie 位），实测 {len(assigns)} 处"
+    value = assigns[0].value
+    assert isinstance(value, ast.Call), (
+        f"Cookie 位被赋成非 helper 调用的形态（第 {getattr(value, 'lineno', 0)} 行）："
+        f"整串覆盖会抹掉用户填的登录态 Cookie（M-43）"
+    )
+    assert (
+        isinstance(value.func, ast.Name) and value.func.id == "_merge_cookie_pair"
+    ), "Cookie 位必须经 _merge_cookie_pair 只替换 ttwid 这一对（M-43 接线点）"
+    assert len(value.args) == 2, "_merge_cookie_pair 需要「原 Cookie 串 + 新键值对」两个实参"
+
+
+def test_default_header_merge_is_applied_at_both_readers() -> None:
+    for name in ("get_sec_user_id", "get_unique_id"):
+        assert "_merge_default_headers" in _called_names(
+            _room_func(name)
+        ), f"{name}() 不再调用 _merge_default_headers：M-43 退回到「任一默认头存在就不补另一个」"
+
+
+def test_unique_id_headers_are_copied_before_writing_cookie() -> None:
+    # HEADERS 是模块级共享字典（多线程），写入 Cookie 前必须 dict() 复制一份，
+    # 否则一次自动取 ttwid 会把凭据永久写进全局默认头。
+    fn = _room_func("get_unique_id")
+    assert "_merge_default_headers" in _called_names(fn) and "dict" in _called_names(
+        fn
+    ), "get_unique_id() 缺少对合并结果的 dict() 复制：会污染模块级 HEADERS（M-43 附带防线）"

@@ -19,7 +19,7 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Callable
+from typing import Callable, Final
 
 from PySide6.QtCore import QObject, Signal
 
@@ -31,7 +31,13 @@ from .shared import ANSI_ESCAPE_PATTERN, STOP_REUSE_JOIN_SECONDS, cleanup_proces
 # 读线程的批次大小：10 行一批入队再做一次跨线程投递。ffmpeg 报错时单行突发很密（实测一串
 # 能连绵 200+ 行警告），逐行 emit 会让主线程事件队列积压；批量后 UI 侧每 200ms 只做一次
 # 光标定位而不是 200 次。
-_READ_BATCH_SIZE: int = 10
+_READ_BATCH_SIZE: Final[int] = 10
+# 读线程「空行 + 进程仍活」形态的短轮询间隔与累计上限（M-79，2026-10-21）：readline()
+# 返回空串只意味着管道当前无数据（写端还被孙进程握着等），不代表进程已退出；旧实现按
+# 0.05s 无限忙轮询，没有任何退出条件。定稿 = 累计空等超过上限后退化为**阻塞** proc.wait()
+# （唤醒点是进程真实终止），既终结空转，也不引入新的定时器。
+_READ_POLL_INTERVAL_SECONDS: Final[float] = 0.05
+_READ_IDLE_LIMIT_SECONDS: Final[float] = 5.0
 
 
 class RecorderController(QObject):
@@ -52,6 +58,13 @@ class RecorderController(QObject):
 
         self._process: subprocess.Popen[str] | None = None
         self._process_pid: int | None = None
+        # M-79（2026-10-21）：最近一次录制子进程的 PID，**专供退出收尾的进程树清理**。
+        # 与 _process/_process_pid 不同，它不随 _clear_process 归零——停止路径抢先把句柄
+        # 清掉后，shutdown 侧再读 proc.pid 只会拿到 None，cleanup_process_tree(None) 直接
+        # 早退，「子进程没死利索、ffmpeg 树还挂着」的现场就被静默跳过了（孤儿录制器）。
+        # 生命周期只允许 start() 覆写、停止收尾**确认进程已终止**时清零，两处之外的写法
+        # 都会把这个兜底重新挖空。
+        self._cleanup_target_pid: int | None = None
         self._running = False
         self._stopping = False
         self._stopping_requested = False
@@ -189,6 +202,9 @@ class RecorderController(QObject):
         with self._process_lock:
             self._process = proc
             self._process_pid = proc.pid
+            # M-79：清理目标在**启动时刻**就钉住，之后句柄怎么被清都不影响退出收尾找得到
+            # 那棵进程树（见 __init__ 中 _cleanup_target_pid 的注释）。
+            self._cleanup_target_pid = proc.pid
             self._running = True
             self._session_id += 1
             session = self._session_id
@@ -318,15 +334,27 @@ class RecorderController(QObject):
 
     def _stop_worker_body(self) -> None:
         proc = self._process
+        session = self._session_id
         if proc is None:
             self._stopping = False
+            # M-79（2026-10-21）：这是「UI 已按下停止、两个按钮按约定由 _on_recorder_ended
+            # 统一恢复，而句柄被自然 EOF 的 reclaim 抢先清掉」的竞态窗口——旧实现在这里
+            # 只复位 _stopping 就 return，不 emit ended，按钮永久禁用直到重启。与 M-33 对
+            # 异常路径的要求同形：出口必须走统一恢复点。会话号取当前值，迟到的结束事件
+            # 由 main_window._on_recorder_ended 按 _finish_handled_session 去重，不会打双遍
+            # 结束日志。
+            self.ended.emit(session)
             return
-        session = self._session_id
         try:
             self._stop_child_once(proc)
             # _stopping 复位必须在会话校验**之前**（MI-08）：它表示「停止流程进行中」，
             # 而 start() 以它为闸门拒绝启动；若放到校验之后，未来的异常分支会把 UI 永久挡住。
             self._stopping = False
+            if proc.poll() is not None:
+                # M-79：进程确认已终止，停止链已把整树收干净——清掉启动期钉住的清理目标，
+                # 免得之后的退出收尾再对一个已回收的号码补一发 taskkill（Windows 的 PID
+                # 进程退出即进复用池，命中新主人比多打一行日志严重得多）。
+                self._cleanup_target_pid = None
             if session != self._session_id:
                 self._log("检测到新录制会话，跳过旧会话的停止收尾")
                 return
@@ -344,12 +372,16 @@ class RecorderController(QObject):
 
     def _shutdown_worker_body(self) -> None:
         proc = self._process
-        child_pid = proc.pid if proc is not None else None
+        # M-79（2026-10-21）：把 _cleanup_target_pid 的消费关系补上——旧实现只在末尾写它、
+        # 全程无人读，而 child_pid 只取 self._process：停止路径（或自然 EOF 的 reclaim）已
+        # 把句柄清空时 child_pid 恒为 None，cleanup_process_tree(None) 记一行就直接返回，
+        # 「子进程没死利索、ffmpeg 还在录」的退出现场被静默跳过整树清理。定稿取数次序 =
+        # 本次 shutdown 的 proc.pid 优先，回落启动期钉住的 PID，两者都空才是真的没得清。
+        child_pid = proc.pid if proc is not None else self._cleanup_target_pid
         try:
             if proc is not None:
                 self._stop_child_once(proc)
                 self._clear_process()
-            self._cleanup_target_pid = child_pid
             cleanup_process_tree(child_pid, lambda msg, level="info": self._log(msg, level))
         except Exception as e:
             self._log(f"退出清理流程异常: {e}", "warn")
@@ -381,6 +413,7 @@ class RecorderController(QObject):
             self._push((session_id,))
             return
 
+        idle_wait = 0.0
         while True:
             try:
                 line = proc.stdout.readline()
@@ -390,9 +423,21 @@ class RecorderController(QObject):
                         self._mark_session_stopped(session_id)
                         self._push((session_id,))
                         break
-                    # EOF 但进程仍在（管道瞬时无数据）：短暂等待避免忙等空转
-                    time.sleep(0.05)
+                    # M-79：空行 + 进程仍在 = 管道瞬时无数据（典型：孙进程握着写端），旧实现
+                    # 只有 0.05s 忙轮询、没有任何退出条件——写端一直不关这条线程就永远每秒
+                    # 空转 20 次。定稿给累计上限：空等超过 _READ_IDLE_LIMIT_SECONDS 后退化为
+                    # 阻塞 proc.wait()（唤醒点是进程真实终止），随后走与 EOF+已退出同一条
+                    # 收尾出口，结束哨兵照投，UI 不会失去唯一的结束信号。
+                    idle_wait += _READ_POLL_INTERVAL_SECONDS
+                    if idle_wait >= _READ_IDLE_LIMIT_SECONDS:
+                        proc.wait()
+                        flush_batch()
+                        self._mark_session_stopped(session_id)
+                        self._push((session_id,))
+                        break
+                    time.sleep(_READ_POLL_INTERVAL_SECONDS)
                     continue
+                idle_wait = 0.0
                 clean_line = ANSI_ESCAPE_PATTERN.sub("", line.rstrip())
                 batch.append((clean_line, "info"))
                 if len(batch) >= _READ_BATCH_SIZE:

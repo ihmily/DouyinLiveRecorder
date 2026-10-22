@@ -483,6 +483,10 @@ web_trusted_proxy =
 # 0.0.0.0/:: and the panel is reached via a domain name; any unlisted multi-label domain Host is
 # rejected to block DNS rebinding (attacker.tld → 127.0.0.1)
 web_allowed_hosts =
+# Panel icon path: written after uploading via "Import Icon" in the panel's top bar (the copy
+# lives under config/icons/). Also serves the browser tab icon (GET /favicon.ico) and the Windows
+# tray icon. Leave empty to use the built-in assets/app.ico
+web_tray_icon =
 ```
 
 > `web_host` is `127.0.0.1` in the repo's default config (localhost access only). For Docker or LAN/public access, change it to `0.0.0.0`, and be sure to also enable `web_auth_enable` and set `web_password`.
@@ -501,12 +505,22 @@ gui_motion = follow_system
 gui_font =
 # Custom font file path: written by "Import Font…"; the copy lives under config/fonts/
 gui_font_file =
+# Custom tray / window icon path: written by "Import Icon…"; the copy lives under config/icons/
+# Leave empty to use the built-in icon assets/app.ico (16/24/32/48/64/128/256)
+gui_tray_icon =
 ```
 
 > Font notes: the preset families in the dropdown are filtered by whether they are **installed on this machine**,
 > so no entry can silently fall back. "Import Font…" accepts `.ttf` / `.otf` / `.ttc` (SFNT containers);
 > `.woff2` / `.woff` are web delivery formats that Tk cannot load through GDI on Windows — convert them
 > to ttf/otf first. The log terminal and URL editor stay on the monospace font regardless of this setting.
+>
+> Icon notes: "Import Icon…" in the sidebar accepts `.ico` only — Windows picks the frame per scenario from
+> that container (16px for the tray, 256px for large icons in Explorer); a single-size PNG either gets
+> upscaled into a blur or is not recognised at all. The file must contain 16×16 (missing it makes the system
+> squeeze a large frame down, smearing the ring) and should contain 256×256 (missing it only warns). The copy
+> lands in `config/icons/` and the config stores that copy's path, so deleting the original does not lose the
+> icon; any load failure falls back silently to the built-in icon (then to the drawn one) and never blocks startup.
 
 Douyin supports the following 5 live-room / profile URL formats (formats for other platforms are shown in the per-platform examples below):
 

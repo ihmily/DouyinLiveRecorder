@@ -42,9 +42,21 @@ def _log_task_exception(task: "asyncio.Task[None]") -> None:
         return
     exc = task.exception()
     if exc is not None:
+        from src import utils
         from src.logger import logger
 
-        logger.warning(i18n.tr("[弹幕]后台协程异常: {type_name}: {exc}", type_name=type(exc).__name__, exc=exc))
+        # 2026-10-21 M-41：原写法把异常**对象**直接塞进 {exc}，由 loguru 就地 str() ——
+        # 后台弹幕协程抛出的多是 httpx/websockets 的异常，其 str() 内嵌完整请求 URL
+        # （带 token/签名/代理 userinfo），而 logs/ 按大小轮转保留多份 = 凭据长期落盘。
+        # 与 async_http / collector 同口径：先 str() 再过 mask_credentials。
+        # msgid 保持不变（四语目录 + web/app.js 五处同源，本文件不动目录）。
+        logger.warning(
+            i18n.tr(
+                "[弹幕]后台协程异常: {type_name}: {exc}",
+                type_name=type(exc).__name__,
+                exc=utils.mask_credentials(str(exc)),
+            )
+        )
 
 
 def spawn_danmaku_task(coro: Awaitable[None]) -> "asyncio.Task[None]":

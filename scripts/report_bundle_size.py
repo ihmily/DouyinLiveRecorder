@@ -30,6 +30,12 @@
 #     python scripts/report_bundle_size.py --json size.json    # 落 JSON 供下次 --compare 比对
 #     python scripts/report_bundle_size.py --compare size.json # 与上次报告逐项比对
 #
+# 退出码（2026-10-21 M-92 起在本文件显式登记）：
+#   0  报告已产出，且（--strict 时）没有工具链泄漏
+#   1  --strict 命中开发/测试工具链泄漏（产物不合格）
+#   2  度量面缺输入：发布目录不存在，或 --compare 指定的基线不存在/读不出/不是合法报告
+#      ——后者过去只往报告里追加一行 [warn] 就退 0，是「比对没跑」冒充「比对没问题」
+#
 import argparse
 import json
 import os
@@ -204,20 +210,37 @@ def main() -> int:
 
     report = collect(release)
     text = render(report, int(args.top))
+    # 比对通道自己没能判定 → rc=2（M-92，2026-10-21）。旧形态只往报告里追加一行 [warn]
+    # 就以 0 结束：CI 把「--compare 指定的基线根本不存在 / 读不出 / 不是合法报告」读成
+    # 「与上次比没查出问题」，而真相是这一项从没比过。与「发布目录不存在 → 2」同一档：
+    # 本脚本的度量面缺输入时不判代码不合格（1，那是 --strict 命中泄漏那一档），也不判通过（0）。
+    compare_unusable: str | None = None
     if str(args.baseline_path):
         baseline_path = Path(str(args.baseline_path))
-        if baseline_path.is_file():
-            # 读回的是上一轮 --json 落盘的同一结构（JSON 只有 dict/list，与 TypedDict 同形）
-            baseline: BundleReport = json.loads(baseline_path.read_text(encoding="utf-8"))
-            text += compare(report, baseline)
-        else:
+        if not baseline_path.is_file():
+            compare_unusable = f"基线报告不存在：{baseline_path}"
             text += f"\n\n[warn] 基线报告不存在，跳过比对：{baseline_path}"
+        else:
+            try:
+                # 读回的是上一轮 --json 落盘的同一结构（JSON 只有 dict/list，与 TypedDict 同形）
+                baseline: BundleReport = json.loads(baseline_path.read_text(encoding="utf-8"))
+                text += compare(report, baseline)
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                compare_unusable = f"基线报告不可用（{type(exc).__name__}: {exc}）：{baseline_path}"
+                text += f"\n\n[warn] 基线报告不可用，跳过比对：{compare_unusable}"
     print(text)
 
     if str(args.json_path):
         out = Path(str(args.json_path))
         _ = out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"\n[size] 已写入 JSON 报告：{out}")
+
+    if compare_unusable is not None:
+        # 「没跑成的判定」优先于「跑成了且不合格」：把 --strict 的泄漏失败与基线缺失折成同一个 1，
+        # 就是拿 rc=1 去怪代码，而比对这一面根本没参与判定。
+        print(f"[size][FATAL] --compare 未做判定：{compare_unusable}", file=sys.stderr)
+        print("            这是「门禁没跑」，按 rc=2 结束；产物本身是否达标请另跑 --strict。", file=sys.stderr)
+        return 2
 
     if bool(args.strict) and report["leaks"]:
         print("\n[size][FATAL] 发布产物含开发/测试工具链文件（--strict）", file=sys.stderr)

@@ -13,6 +13,7 @@ import os
 import re
 import secrets
 import socket
+import sys
 import threading
 from collections.abc import Mapping
 from pathlib import Path
@@ -870,7 +871,11 @@ def read_web_config(config_file: str | Path) -> dict[str, str | int | bool]:
     return result
 
 
-SENSITIVE_SECTIONS = {"Cookie", "账号密码", "Authorization"}
+SENSITIVE_SECTIONS = {"Cookie", "账号密码", "Authorization", "推送配置"}
+# M-61（2026-10-21）：增列 推送配置——该节内除键名正则已覆盖的 tgapi令牌/发件人密码/推送token 外，
+# 还有键名不含凭据关键词的独立凭据（邮箱登录账号、钉钉@手机号、tg 聊天 id、ntfy 邮箱），
+# 仅靠键名正则整节漏网、明文回显面板并进备份副本。节白名单 + 键名正则的**双重口径不变**，
+# 此条只是给「整节皆凭据」的节补第一道；代价是该节非敏感开关值同样按 '***' 回显，属已接受的取舍
 # L-21：节名的 casefold 视图。configparser 的 **section 大小写敏感**（原样保留），而键名判定
 # 走的 _SENSITIVE_KEY_PATTERN 带 re.IGNORECASE，两套强度不一致：用户把节写成 [cookie] /
 # [COOKIE] 即整节跳出白名单，而节内键名不一定含凭据关键词、值形态兜底又只对 URL 形态生效，
@@ -943,6 +948,14 @@ def is_host_allowed(value: str, cfg: Mapping[str, str | int | bool]) -> bool:
 # 不复用上面两条宽松规则；Host 那条保持原状（硬合并会让 MID-36 的重绑定防线退化）。
 _ORIGIN_TEST_SENTINEL_HOSTS = frozenset(("testserver",))
 _ORIGIN_SCHEME_PORTS: dict[str, int] = {"http": 80, "https": 443}
+
+
+def _running_under_pytest() -> bool:
+    # M-66（2026-10-21）：testserver 豁免的环境门。哨兵豁免本是 Starlette TestClient 的
+    # base_url 桩，旧实现直接编进生产判定——生产进程若收到 Origin: http://testserver（本机
+    # hosts 可把它指到任意处）即免端口放行，等于测试后门进生产。「pytest 在 sys.modules」
+    # 由 tests/conftest.py 必然 import pytest 触发，是测试进程的低成本指纹，非测试环境恒 False
+    return "pytest" in sys.modules
 
 
 def _as_port(value: object) -> int:
@@ -1037,7 +1050,9 @@ def is_origin_allowed(
     # （无端口），那是 httpx 写死的一个哨兵字符串，不是任何浏览器能交付的本站地址形态。
     # 豁免严格限定为「名字恰好等于该哨兵 **且** Origin 里没有显式端口」：不放开任意无点单标签
     # 名、不放开任意 IP，且 Origin 一旦带端口（含 testserver:8000）立即回到 host+端口双判。
-    if not explicit_port and host in _ORIGIN_TEST_SENTINEL_HOSTS:
+    # M-66（2026-10-21）：再加一道环境门 _running_under_pytest()——原豁免在纯函数判定内无条件
+    # 生效，属「测试后门进生产」；生产进程收到 Origin: http://testserver 不再免端口放行
+    if not explicit_port and host in _ORIGIN_TEST_SENTINEL_HOSTS and _running_under_pytest():
         return True
     expected_port = bind_port or _as_port(cfg.get("web_port"))
     registered = get_origin_allowed_hosts(cfg)
@@ -1075,19 +1090,23 @@ _SENSITIVE_KEY_PATTERN = re.compile(
 # 典型：企业微信/钉钉 webhook（?key= / access_token=）、bark 设备 key、
 # 带账密的代理地址（http://user:pass@host:port）。
 # 黑名单式键名匹配天然滞后于平台命名，值形态检测是第三道兜底。
+# [历史注] 原配套的 _URL_VALUE_RE（scheme 门）已随 M-61（2026-10-21）摘除 scheme 限制而删除，
+# 全仓 grep 实测零 importer（tests/ 亦不引用），判据见 _looks_like_secret_value 内注释
 _SECRET_VALUE_QUERY_RE = re.compile(r"(access[_-]?token|token|key|secret|pwd|passwd|password|auth)=", re.IGNORECASE)
-_URL_VALUE_RE = re.compile(r"^[a-z][a-z0-9+.-]*://", re.IGNORECASE)
 
 
 def _looks_like_secret_value(value: str) -> bool:
     # 判断配置「值」本身是否携带凭据（与键名无关），供 read_config_safe 兜底脱敏。
-    # 仅对 URL 形态生效：普通文本不做启发式判定，避免误伤正常配置。
+    # M-61（2026-10-21）：摘掉「必须以 scheme 开头」门——代理地址的裸写形态
+    # user:pass@host:port 不含 ://，旧门下整条逃逸值形态兜底（键名恰又不含凭据关键词时明文回显）。
+    # 判定收敛为两条不依赖 scheme 的形态：authority 段含 @（userinfo）、或值里带凭据型查询参数；
+    # 纯文本值两样都不命中，不会把「普通配置」扩成误伤面
     v = value.strip()
-    if not _URL_VALUE_RE.match(v):
+    if not v:
         return False
-    parts = v.split("/", 3)
-    if len(parts) > 2 and "@" in parts[2]:
-        return True  # userinfo（http://user:pass@host）
+    authority = v.split("://", 1)[-1].split("/", 1)[0]
+    if "@" in authority:
+        return True  # userinfo（http://user:pass@host 或裸 user:pass@host）
     return bool(_SECRET_VALUE_QUERY_RE.search(v))
 
 
@@ -1167,6 +1186,21 @@ def update_config_line(config_file: str | Path, section: str, key: str, value: s
         in_target = False
         replaced = False
         key_pattern = _key_line_pattern(key)
+        # M-68（2026-10-21）：手工编辑产生重复键时拒绝写入——此前只替换目标节内**首个**匹配行，
+        # 写侧返回 True 而 configparser 生效值来自另一行（「面板提示已保存、行为未变」）。
+        # 判据复用既有失败出口（return False，由 web_api 转 404、write_quality_options 报写失败），
+        # 不新增第三种返回形态；重复行留给读侧容错层（src/config_read）点名，写侧不再静默覆盖一半
+        _match_count = 0
+        _scan_section: str | None = None
+        for line in lines:
+            _scan_stripped = line.strip()
+            if _scan_stripped.startswith("[") and _scan_stripped.endswith("]"):
+                _scan_section = _scan_stripped[1:-1].strip()
+                continue
+            if _scan_section == section and key_pattern.match(line.rstrip("\n").rstrip("\r")):
+                _match_count += 1
+        if _match_count > 1:
+            return False
         new_lines: list[str] = []
         for line in lines:
             stripped = line.strip()
@@ -1209,8 +1243,9 @@ def update_config_line(config_file: str | Path, section: str, key: str, value: s
         # 抛 OSError 时明确返回 False——磁盘满时 PUT /api/config 仍回 {"ok": true}，set_language
         # 的回滚也不触发（「进程已切语言、config.ini 仍是旧码」）。受影响面含 web_auth_enable /
         # web_password 这类安全键，假成功的代价是用户以为密码已改。
+        # M-68（2026-10-21）：原尾部 `return True` 位于 with 之后、全部路径已在 with 内 return，
+        # 永不可达，已删（死代码会把「补一个恒真出口」的错觉留给后来的改动者）
         return _atomic_write_text(path, "".join(new_lines))
-    return True
 
 
 def append_config_line(config_file: str | Path, section: str, key: str, value: str) -> bool:
@@ -1246,8 +1281,10 @@ def append_config_line(config_file: str | Path, section: str, key: str, value: s
         else:
             lines.append(f"[{section}]\n{entry}")
         # 原子写（同 update_config_line，审查 H-6）：truncate+write 窗口内读方会看到半写文件
-        _atomic_write_text(path, "".join(lines))
-    return True
+        # M-62（2026-10-21）：必须回报原子写的布尔结果——补建分支（config.ini 缺 language 键、
+        # 画质选项首次落盘）此前无条件 return True，磁盘写失败仍报成功，set_language 的回滚
+        # 与 update_or_append_config_line 的失败判定全部失明
+        return _atomic_write_text(path, "".join(lines))
 
 
 # 行级「替换优先、缺键补建」的组合写入（2026-09-12 审查 H-6）：两步全程持同一把

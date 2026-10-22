@@ -6,7 +6,8 @@
 // DOMContentLoaded，经真实事件委托链路驱动（tab → showView → 渲染 → 事件 → PUT → toast/回拉），
 // 既不改生产代码，也覆盖真实接线而非孤立函数。
 //
-// 【桩的最小集合】app.js 加载期零副作用，初始化只触及 document / window / localStorage / fetch /
+// 【桩的最小集合】app.js 加载期零副作用，初始化只触及 document / window / localStorage / sessionStorage
+// （M-84：token 走 sessionStorage 主路径、两者都不可用时退内存；fetch /
 // setTimeout / clearTimeout / confirm / EventSource（SSE 路径，本测试不进入）。setTimeout 桩为
 // 「排队但不自跑」：toast 自动隐藏与轮询递归都不执行，用例完全确定；需要驱动弹幕轮询的用例显式
 // 调 runTimers。Promise 微任务不受影响。
@@ -227,6 +228,15 @@ async function bootApp({ lang, routes, confirm = () => true, injectToken = true,
         setItem: (k, v) => storage.set(k, String(v)),
         removeItem: k => storage.delete(k),
     };
+    // M-84：生产 _tokenStore() 的**首选**载体是 sessionStorage（关标签页即失效），沙箱必须提供它，
+    // 用例才走得到主路径；两个载体各用一个 Map，「令牌绝不落 localStorage」才可能被观察到
+    // （内存回退那一支由 tests/frontend/test_regression_2026_09_22_gates.mjs 的 M-84 用例专门驱动）。
+    const sessionData = new Map();
+    const sessionStorage = {
+        getItem: k => (sessionData.has(k) ? sessionData.get(k) : null),
+        setItem: (k, v) => sessionData.set(k, String(v)),
+        removeItem: k => sessionData.delete(k),
+    };
     // 定时器桩：排队但不自跑——没人调 runTimers 就一条回调也不执行（与纯 no-op 等价），
     // 但 M-19 需要它驱动弹幕轮询：renderDanmaku 只经 dmChain 的 poll + setTimeout 进入，
     // no-op 形态下那条链永不落地。id 用队列下标 +1（0 是 falsy，兼容 app.js 的 `if (toastTimer)`
@@ -235,6 +245,7 @@ async function bootApp({ lang, routes, confirm = () => true, injectToken = true,
     const sandbox = {
         document,
         localStorage,
+        sessionStorage,
         fetch: makeFetch({
             // 启动引导固定 401 → 登录态（静止应用）；语言由用例指定
             'GET /api/language': { json: { language: lang_ } },
@@ -252,8 +263,10 @@ async function bootApp({ lang, routes, confirm = () => true, injectToken = true,
 
     docListeners['DOMContentLoaded'][0]();
     await flush();
-    // 401 引导已清空 token（api() 的 401 分支 setToken('')），注入测试 token 供鉴权头断言
-    if (injectToken) localStorage.setItem('dlr_token', 'tok-test');
+    // 401 引导已清空 token（api() 的 401 分支 setToken('')），注入测试 token 供鉴权头断言。
+    // M-84：注入到**首选载体** sessionStorage——生产 _tokenStore() 只在它不可用时才退内存，
+    // 注进 localStorage 已不再是生产会读的那一份。
+    if (injectToken) sessionStorage.setItem('dlr_token', 'tok-test');
     // 手动执行当前已排期的定时器回调（一轮只跑「进队时已在队列里」的那些，跑完再排新的一轮），
     // 使轮询节拍由用例掌握而不是由真实时钟掌握。
     async function runTimers() {
@@ -263,7 +276,7 @@ async function bootApp({ lang, routes, confirm = () => true, injectToken = true,
         }
         await flush();
     }
-    return { sandbox, elements, tabs, fetchLog, localStorage, confirmCalls, configInputs, runTimers, timerQueue };
+    return { sandbox, elements, tabs, fetchLog, localStorage, sessionStorage, confirmCalls, configInputs, runTimers, timerQueue };
 }
 
 // 派发「直播间」tab 点击：showView('rooms') → 拉画质选项 → 渲染房间列表
@@ -725,7 +738,10 @@ test('登录成功后登出入口可见，点击调用 POST /api/logout 并清�
     const logout = ctx.fetchLog.find(f => f.method === 'POST' && f.path === '/api/logout');
     assert.ok(logout, '未调用 POST /api/logout');
     assert.equal(logout.headers.Authorization, 'Bearer tok-abc', '登出请求必须带当前 bearer');
-    assert.equal(ctx.localStorage.getItem('dlr_token'), null, '登出后本地 token 必须清空');
+    // M-84：令牌的主载体是 sessionStorage，登出必须清它；顺带钉「localStorage 一侧从头到尾没有
+    // 过令牌」——回退分支若被改回 localStorage，这里会先看到 setItem 后的值而不是 null。
+    assert.equal(ctx.sessionStorage.getItem('dlr_token'), null, '登出后 sessionStorage 里的 token 必须清空');
+    assert.equal(ctx.localStorage.getItem('dlr_token'), null, '令牌不得写进 localStorage（M-84 的落盘形态）');
     assert.ok(btn.classList.contains('hidden'), '登出后入口应收起');
     assert.ok(!ctx.elements.get('login-view').classList.contains('hidden'), '登出后应回到登录页');
 });
@@ -745,7 +761,7 @@ test('登出请求失败也必须清本地并回登录页（不得把用户卡�
     const btn = ctx.elements.get('logout-btn');
     btn._listeners.click[0]();
     await flush();
-    assert.equal(ctx.localStorage.getItem('dlr_token'), null);
+    assert.equal(ctx.sessionStorage.getItem('dlr_token'), null, '登出失败也必须清掉 sessionStorage 里的 token（M-84 载体）');
     assert.ok(ctx.elements.get('login-view').classList.contains('hidden') === false, '注销失败也应回到登录页');
     assert.ok(btn.classList.contains('hidden'), '回到登录页后入口应收起');
 });

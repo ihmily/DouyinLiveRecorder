@@ -30,6 +30,9 @@
 #
 # 退出码：0 全部通过；1 至少一条门禁失败（门禁变红）；2 清单来源缺失/为空/含写型命令
 #         （属「没跑」而非「跑过」，与真失败区分）；3 门禁可执行文件缺失（环境问题，便于排障）。
+#  2026-10-21 M-94 追加两档归属（都是「门禁自己没跑成」，不得伪造成 0 或 1）：
+#   - 某条门禁子进程超过 GATE_CHILD_TIMEOUT_SECONDS 未结束 → 被终止并按 2 汇总（失败明细仍打印）；
+#   - check_executables 的 import 探测超时 → 按「工具不可用」处理，走既有的 3。
 
 from __future__ import annotations
 
@@ -40,6 +43,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -83,6 +87,20 @@ FATAL_STDERR_PATTERNS: tuple[str, ...] = (
 
 # bash 风格的行首环境变量前缀：`NAME=value` 后必须跟空白，且值不含空格（门禁命令均为如此）
 _ENV_PREFIX_PATTERN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(\S*)\s+")
+
+# —— 有界执行（M-94，2026-10-21）———————————————————————————————
+# 旧形态里三条子进程回路都没有 timeout：门禁工具挂住（mypy 卡在某个文件、black 撞上缓存锁、
+# 探测子进程起不来）时 run_gates 会一路阻塞到 CI job 超时，那份红里**没有任何一条门禁的结论**。
+# 现在三条都上界，且超时统一按本文件头已有的 rc=2 档收口（「没跑」而非「跑过」）：
+# 既不得退 0（假绿），也不得退 1（那会把「工具挂住」报成「代码不合格」，指错排障方向）。
+GATE_CHILD_TIMEOUT_SECONDS = 900.0  # 单条门禁：全仓 mypy/black 的慢机器量级 × 余量，仍远小于 job 超时
+GATE_KILL_GRACE_SECONDS = 30.0  # 超时后 kill 的收尾宽限；仍不退出就放弃等待并按「没跑成」出结论
+GATE_READER_JOIN_SECONDS = 30.0  # stderr 读线程的收束宽限；它也必须**有界**，否则读端成了新的无界阻塞点
+PROBE_TIMEOUT_SECONDS = 60.0  # check_executables 的 `python -c importlib.util.find_spec` 探测
+# 超时的哨兵退出码：与 GNU timeout(1) 的 124 同值，便于人眼与 CI 日志对齐。
+# 已知边界：某条门禁工具自己以 124 退出时会被归到「没跑成」这一档（退 2 而不是 1）——
+# 宁可把「工具内部超时」保守地当成「门禁没给出结论」，也不反过来把挂住判成通过。
+GATE_TIMEOUT_RC = 124
 
 # 只有「这条命令确实要靠 shell 解释」时才退回 shell=True 的字符串形态（L-30 的兜底面）。
 # 判据取 shell 结构符而不是「整条命令是否简单」：出现任一结构符就无法按参数列表等价表达，
@@ -255,6 +273,10 @@ def run_command(cmd: str, extra_env: dict[str, str] | None = None) -> tuple[int,
     #             ——isort 跳过文件时 rc=0（MID-63，实测告警确实落在 stderr）。
     # 退出码：rc != 0 一律判失败（由 main() 的 `if rc == 0 and not hits:` 收口），--keep-going
     #         只控制「是否继续跑后续命令」，不影响该判定。
+    #         [2026-10-21 M-94 增补] 新增一个**保留值** GATE_TIMEOUT_RC(124)：它不表示「工具查出了
+    #         问题」，只表示「这条门禁到点没结束、没给出任何结论」，由 main() 单独记账并让整回路
+    #         以 rc=2 收口（本文件头：2＝没跑而非跑过）。同时 stderr 的逐行转发挪进工作线程——
+    #         纯阻塞式迭代在主线程里等同于「读端无界」，加在 wait 上的 timeout 也救不回来。
     # 解释器换绑：清单里的 `python` 统一换到当前解释器（见 _rebind_interpreter）——Windows 上
     # python / py 启动器与 venv 可能混用，不换绑就会让门禁跑在与 pytest 不同的解释器上，
     # 即「本地绿、CI 红」的成因。shell=True 只在 build_gate_argv 判「必须靠 shell 解释」时使用：
@@ -281,14 +303,50 @@ def run_command(cmd: str, extra_env: dict[str, str] | None = None) -> tuple[int,
         env=child_env,
     )
     hits: list[str] = []
-    if proc.stderr is not None:
+
+    def _drain_stderr() -> None:
+        # 逐行转发并扫描（语义与旧实现逐字一致），只是挪进线程：挪动的唯一理由是
+        # 「读端阻塞时主线程要能按时给出超时结论」，判定口径一分不改。
+        if proc.stderr is None:
+            return
         for raw in proc.stderr:
             sys.stdout.write(raw)
             sys.stdout.flush()
             for pattern in FATAL_STDERR_PATTERNS:
                 if pattern in raw and pattern not in hits:
                     hits.append(pattern)
-    _ = proc.wait()
+
+    if proc.stderr is None:
+        # 未接管 stderr 的形态（用例替身/异常环境）：没有读端可阻塞，直接按超时预算等退出
+        reader: threading.Thread | None = None
+    else:
+        reader = threading.Thread(target=_drain_stderr, name="run-gates-stderr-drain", daemon=True)
+        reader.start()
+
+    timed_out = False
+    try:
+        # 读端已经挪到线程里，主线程只需给**进程本身**设界：挂住不退出 → 到点 TimeoutExpired；
+        # 无限刷 stderr → 管道写满后子进程自己阻塞在 write 上、同样不会退出 → 还是到点超时。
+        # 两条无界路径因此收敛成同一个有界判据，且预算从 run_command 的入口(t0)起算。
+        proc.wait(timeout=max(0.0, t0 + GATE_CHILD_TIMEOUT_SECONDS - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        timed_out = True
+    if not timed_out and reader is not None:
+        # 进程已结束 → 管道必然关闭，读线程只剩把缓冲里的尾巴读完，所以这里给短宽限就够。
+        # 宽限期仍未退出＝stderr 的告警扫描面不完整（MID-63「跳过文件即门禁失效」同族），
+        # 保守按「没跑成」处理，不得拿着半截扫描结果宣布 PASS。
+        reader.join(timeout=GATE_READER_JOIN_SECONDS)
+        if reader.is_alive():
+            print("    -> [WARN] stderr 读线程未在宽限期内退出，本次告警扫描面不完整", flush=True)
+            timed_out = True
+    if timed_out:
+        # 「门禁没跑成」的收口：先 kill 再等一小段，等不到也放行——继续等就还是无界阻塞。
+        proc.kill()
+        try:
+            proc.wait(timeout=GATE_KILL_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            pass
+        return GATE_TIMEOUT_RC, time.monotonic() - t0, hits
     rc = proc.returncode if proc.returncode is not None else 1
     return rc, time.monotonic() - t0, hits
 
@@ -372,15 +430,31 @@ def check_executables(cmds: list[str]) -> list[str]:
 
 def _module_unavailable(name: str) -> bool:
     # 当前解释器能否以 -m 方式加载该模块（不能→才算真缺失）；同 run_command，不继承 stdin
-    proc = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            f"import importlib.util, sys as s; s.exit(0 if importlib.util.find_spec({name!r}) else 1)",
-        ],
-        stdin=subprocess.DEVNULL,
-        check=False,
-    )
+    # M-94（2026-10-21）两条配套改动，缺一即本函数不可用：
+    #   ① capture_output —— 旧形态不接管两路输出，探测子进程的一句 traceback / 告警会直接混进
+    #      门禁自己的 stdout，把「工具在不在」这一句结论写在一段陌生输出中间（判定面被污染）。
+    #      这里不需要转发（结果只是 rc），所以两路都收进缓冲区、不打印。
+    #   ② timeout —— 探测本身也可能挂（解释器启动被杀软拦、site 初始化卡网络盘）。返回 True
+    #      即「不可用」，走 main() 的 rc=3「工具没装（环境问题）」档：既不把挂住读成「装好了」，
+    #      也不退成 rc=1 让人以为代码不合格。
+    try:
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                f"import importlib.util, sys as s; s.exit(0 if importlib.util.find_spec({name!r}) else 1)",
+            ],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=PROBE_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        print(
+            f"WARN: 探测 {name!r} 是否可 import 的子进程超过 {PROBE_TIMEOUT_SECONDS:.0f}s 未结束，按不可用处理",
+            file=sys.stderr,
+        )
+        return True
     return proc.returncode != 0
 
 
@@ -428,17 +502,37 @@ def gate_pytest_warnings_summary() -> tuple[bool, str]:
     # 三条一律**不得**退回「没查到就当通过」：与 MID-63 / MIN-19 同口径，「没查到」一律非 0
     # 退出并给出下一步命令。
     t0 = time.monotonic()
-    proc = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        cwd=ROOT,
-        stdin=subprocess.DEVNULL,
-        check=False,
-    )
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "pytest", "-q"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=ROOT,
+            stdin=subprocess.DEVNULL,
+            check=False,
+            # M-94 残留（2026-10-21）：主回路的 Popen 与 _module_unavailable 的 run 都已有上界，
+            # 唯独本条没有。pytest 卡在一条永不返回的用例上时会把整个 run_gates 拖到 job 超时，
+            # 而那份红里没有任何一条门禁的结论。超时按「门禁没跑成」返回 False（调用方以 rc=1
+            # 收口），绝不伪装成 PASS。
+            timeout=GATE_CHILD_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        dur = time.monotonic() - t0
+        raw_partial = exc.stdout
+        if raw_partial is None:
+            partial_out = ""
+        elif isinstance(raw_partial, bytes):
+            partial_out = raw_partial.decode("utf-8", errors="replace")
+        else:
+            partial_out = str(raw_partial)
+        return False, (
+            f"pytest 超过 {GATE_CHILD_TIMEOUT_SECONDS:.0f}s 未结束，已终止（{dur:.1f}s）："
+            f"warnings summary 无从判定。末段输出: "
+            f"{' | '.join(line.strip() for line in partial_out.strip().splitlines()[-5:] if line.strip())}"
+        )
     dur = time.monotonic() - t0
     out = str(proc.stdout or "")
     err = str(proc.stderr or "")
@@ -521,6 +615,7 @@ def main(argv: list[str] | None = None) -> int:
         return 3
 
     failed: list[str] = []
+    stalled: list[str] = []  # 到点没结束、因此**没有结论**的门禁（M-94）
     total_t0 = time.monotonic()
     gate_env = extract_gate_env(ROOT / "AGENTS.md")
     if gate_env:
@@ -528,6 +623,14 @@ def main(argv: list[str] | None = None) -> int:
     for i, cmd in enumerate(cmds, 1):
         print(f"\n[{i}/{len(cmds)}] $ {cmd}", flush=True)
         rc, dur, hits = run_command(cmd, gate_env)
+        if rc == GATE_TIMEOUT_RC:
+            # 单列一档：这条门禁子进程被到点终止，既没检查任何文件、也没打印任何判定。
+            # 并进 failed 退 1 就是拿「工具挂住」冒充「代码不合格」；退 0 更是假绿。
+            print(f"    -> [NO-VERDICT] 超过 {GATE_CHILD_TIMEOUT_SECONDS:.0f}s 未结束，已终止（{dur:.1f}s）")
+            stalled.append(cmd)
+            if not args.keep_going:
+                break
+            continue
         if rc == 0 and not hits:
             print(f"    -> [PASS] ({dur:.1f}s)")
             continue
@@ -542,6 +645,20 @@ def main(argv: list[str] | None = None) -> int:
 
     total = time.monotonic() - total_t0
     print("\n" + "=" * 72)
+    if stalled:
+        # 本文件头的分级：2 = 「没跑」而非「跑过」。挂住/被到点终止的门禁没给出任何结论，
+        # 把它并进 failed 退 1 就是把「工具没跑成」报成「代码不合格」；而失败项的明细仍然打出来，
+        # 只是由汇总码统一收在「门禁没跑」这一档（详见 AGENTS.md「格式化命令」的口径）。
+        print(f"门禁未能判定：{len(stalled)} 条超时无结论（共 {len(cmds)} 条，耗时 {total:.1f}s）")
+        for c in stalled:
+            print(f"  [NO-VERDICT] {c}")
+        if failed:
+            print(f"另有 {len(failed)} 条明确失败（明细如下），但汇总码仍按「门禁没跑」= 2：")
+            for c in failed:
+                print(f"  [FAIL] {c}")
+        print("按 AGENTS.md「完成定义」，此时不得宣布完成。")
+        print("=" * 72)
+        return 2
     if failed:
         print(f"门禁未通过：{len(failed)} 条失败（共 {len(cmds)} 条，耗时 {total:.1f}s）")
         for c in failed:

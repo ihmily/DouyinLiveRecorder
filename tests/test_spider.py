@@ -418,6 +418,48 @@ class TestGetPlayUrlList:
             assert len(result) == 2
             assert "high" in result[0]
 
+    @pytest.mark.asyncio
+    async def test_mixed_absolute_and_relative_keeps_all_qualities(self) -> None:
+        # S-16 续修回归锁：混合清单里只要出现 ≥1 条绝对行，此前会把相对 .m3u8 行整条丢弃，
+        # 上层回退单地址（用户侧「画质下拉只有一项」）。修复后绝对行与相对行同权、全部收齐，
+        # 且相对行一律 urljoin 绝对化（不得留无 host 的裸相对路径给 ffmpeg）。
+        m3u8_content = (
+            "#EXTM3U\n"
+            "#EXT-X-STREAM-INF:BANDWIDTH=1000000\n"
+            "https://cdn.example.com/abs.m3u8\n"
+            "#EXT-X-STREAM-INF:BANDWIDTH=3000000\n"
+            "relative/hd.m3u8\n"
+            "#EXT-X-STREAM-INF:BANDWIDTH=5000000\n"
+            "/abs-path/uhd.m3u8\n"
+            "#EXT-X-ENDLIST"
+        )
+        with patch("src.spider.async_req", new_callable=AsyncMock, return_value=m3u8_content):
+            result = await get_play_url_list("https://origin.example.com/live/master.m3u8")
+        assert len(result) == 3
+        assert "https://cdn.example.com/abs.m3u8" in result
+        assert "https://origin.example.com/live/relative/hd.m3u8" in result
+        assert "https://origin.example.com/abs-path/uhd.m3u8" in result
+
+    @pytest.mark.asyncio
+    async def test_relative_m3u8_with_query_token_survives_mixed(self) -> None:
+        # S-16 续修回归锁：混合清单中的带查询串相对行（x.m3u8?token=）必须既不被丢弃、又保留 query。
+        # 判据用 urlparse().path.endswith(".m3u8")（token 落 query，不影响 path 命中），
+        # urljoin 后 token 仍在——若退回旧的 endswith("m3u8") 字面判据该整行会被丢。
+        m3u8_content = "#EXTM3U\nhttps://cdn.example.com/abs.m3u8\nseg/x.m3u8?token=abc123\n"
+        with patch("src.spider.async_req", new_callable=AsyncMock, return_value=m3u8_content):
+            result = await get_play_url_list("https://origin.example.com/live/master.m3u8")
+        assert len(result) == 2
+        assert "https://origin.example.com/live/seg/x.m3u8?token=abc123" in result
+
+    @pytest.mark.asyncio
+    async def test_media_playlist_ts_segments_not_mistaken_for_qualities(self) -> None:
+        # 反向见证：主循环新增的相对分支只收 .m3u8 行，必须把分段媒体清单里的裸 .ts 行挡在门外，
+        # 否则一个分片会被当成「一档画质」——这条若变红说明相对分支被放宽成「收任意非 # 行」。
+        m3u8_content = "#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXTINF:10,\nseg0.ts\n#EXT-X-ENDLIST\n"
+        with patch("src.spider.async_req", new_callable=AsyncMock, return_value=m3u8_content):
+            result = await get_play_url_list("https://origin.example.com/live/media.m3u8")
+        assert result == []
+
 
 class TestKuaishouStreamData:
     # get_kuaishou_stream_data：快手直播数据解析。
@@ -683,6 +725,11 @@ class _LogSpy:
     def error(self, message: object, *args: object, **kwargs: object) -> None:
         self._record("error", message)
 
+    def exception(self, message: object, *args: object, **kwargs: object) -> None:
+        # S-10（CODE_REVIEW_2026-10-21）：抖音最外层兜底改走 logger.exception 留栈，
+        # 替身必须同形实现——只加方法、不重做级别分档（语义仍是被测方决定的）。
+        self._record("exception", message)
+
     def critical(self, message: object, *args: object, **kwargs: object) -> None:
         self._record("critical", message)
 
@@ -837,6 +884,58 @@ class TestM4PopkontvLoginErrorMasking:
         assert "***@" in joined, joined
         # AGENTS「异常日志必须带异常类型与上下文」：Windows 下超时类异常的 str(e) 可能是空串
         assert "ConnectError" in joined, joined
+
+
+class TestM12ProxyCredentialMaskedInPlatformErrorLogs:
+    # M-12（2026-10-20 续修）：get_flextv_stream_data / login_twitcasting 的 except 分支把 str(e)
+    # 直接拼进 logger.error，而 httpx/urllib 的连接·代理异常原文内嵌含 user:pass@ 的代理 URL，
+    # logger.error 直落轮转日志（logs/ 多份＝凭据长期落盘）。判据是「口令值确实消失」，
+    # **不是**「调用了 mask_credentials」（同 TestM4PopkontvLoginErrorMasking 口径）。
+    # 两处刻意保留原字符串拼接形态与原 msgid 文本，故脱敏后仍能在日志里看到整句话。
+
+    _PROXY_BOOM_MSG = "Cannot connect to proxy http://proxyuser:SECRETPW@proxy.internal:3128"
+
+    @pytest.mark.asyncio
+    async def test_flextv_stream_error_masks_proxy_password(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        logger = _LogSpy()
+        monkeypatch.setattr(sp, "async_req", AsyncMock(side_effect=httpx.ConnectError(self._PROXY_BOOM_MSG)))
+        monkeypatch.setattr(sp, "logger", logger)
+
+        # 内部 except 捕获后返回 result（is_live=False）、不外抛 → 走真实（已装饰）调用路径即可。
+        result = await sp.get_flextv_stream_data("https://www.ttinglive.com/somechannel/live")
+        assert result["is_live"] is False, result
+
+        joined = "".join(logger.texts())
+        assert "Failed to retrieve data from FlexTV live room" in joined, joined
+        assert "SECRETPW" not in joined, f"代理口令原文进了日志: {joined}"
+        assert "proxyuser" not in joined, f"代理用户名原文进了日志: {joined}"
+        assert "***@proxy.internal:3128" in joined, joined
+
+    @pytest.mark.asyncio
+    async def test_twitcasting_login_error_masks_proxy_password(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        logger = _LogSpy()
+        calls: list[int] = []
+
+        async def fake_req(*args: object, **kwargs: object) -> object:
+            calls.append(1)
+            if len(calls) == 1:
+                # 首页返回含 cs_session_id 的表单，令登录链路走到第二次（真正会抛）请求。
+                return '<input type="hidden" name="cs_session_id" value="SID">'
+            raise httpx.ConnectError(self._PROXY_BOOM_MSG)
+
+        monkeypatch.setattr(sp, "async_req", fake_req)
+        monkeypatch.setattr(sp, "logger", logger)
+
+        # 第二次请求的异常被内部 except 捕获、脱敏后落日志、返回 None（_or_none 装饰器不触发）。
+        result = await sp.login_twitcasting("twitter", "user", "pass")
+        assert result is None, result
+        assert len(calls) == 2, calls
+
+        joined = "".join(logger.texts())
+        assert "TwitCasting login error" in joined, joined
+        assert "SECRETPW" not in joined, f"代理口令原文进了日志: {joined}"
+        assert "proxyuser" not in joined, f"代理用户名原文进了日志: {joined}"
+        assert "***@proxy.internal:3128" in joined, joined
 
 
 class TestM8ProxyScopedCredentialCaches:

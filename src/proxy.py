@@ -74,14 +74,17 @@ class ProxyInfo:
         prefix = f"{self.scheme}://" if self.scheme else "http://"
         return f"{prefix}{auth}{host}:{self.port}" if self.port else f"{prefix}{auth}{host}"
 
-    # ── 残留登记：本组字段（user / password / scheme / proxy_url）在本仓**没有生产消费点** ──
+    # ── 残留登记：本组字段（user / password / scheme / proxy_url）在本仓**没有任何生产消费点** ──
     #   ① main.py 的代理检测块只读 ip/port 两字段用于打印 System Proxy；
     #   ② 真正下发给 spider/stream 的 proxy_addr 取自 config.ini「录制设置/代理地址」
     #      （main.py 的 proxy_addr_bak），与系统代理检测是两条互不相通的链路；
     #   ③ src/ 下其余模块不 import 本模块。
     # 故「认证代理无法还原完整地址」只在**解析层**已修，**生效层**未闭合：系统代理带凭据/带
-    # socks 协议时，录制链路依然收不到它。接上它需要改 main.py（不在本次改动所有权内），
-    # 因此只在此显式登记，不留「已修好」的错误陈述。
+    # socks 协议时，录制链路依然收不到它。接上它需要改 main.py，因此只在此显式登记，不留
+    # 「已修好」的错误陈述（L-10：注释声强于实现比没有注释更危险）。
+    # [历史注 2026-10-21] 本条登记语为 `没有任何生产消费点` 的逐字形态被
+    # tests/test_regression_2026_09_22_net.py::TestMid2233ResidualRegistered 锁定；修订措辞时
+    # 必须同批改该锁，否则会出现「登记还在、锁变红」的假失败。
 
     def __post_init__(self) -> None:
         # 校验 ip/port 组合的合法性；非法形态一律抛 ValueError（调用方 main.py 会吞成一行打印，

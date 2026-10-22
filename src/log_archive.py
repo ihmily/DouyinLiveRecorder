@@ -2,12 +2,14 @@
 # -*- coding: utf-8 -*-
 import io
 import os
+import re
 import sys
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TextIO
 
 import i18n
+from src.config_bool import parse_config_bool  # M-50 唯一布尔入口；config_bool 零依赖，不会与本模块的依赖链成环
 from src.danmaku_monitor import close_monitor_file, resume_monitor_writes, suspend_monitor_writes
 from src.logger import (
     GUI_PARENT_ENV,
@@ -35,6 +37,9 @@ from src.logger import (
 # （suspend_monitor_writes / resume_monitor_writes），否则延迟事件会把句柄抢回来、改名必抛
 # PermissionError；web_console 改名后重开失败时回退 os.devnull 并置 pending 标记；web_console
 # 改名前先由 _ConsoleBridge 接管 sys.stdout/sys.stderr，关旧句柄与改名全程标准流都指向可写对象。
+#
+# 归档之后还有一步裁剪（M-46，2026-10-21）：见 _prune_archives 的保留策略与三条硬约束——
+# 每个基名只留最新若干份、且删除文件名时间戳已超龄的份，排序取文件名里的 %Y%m%d_%H%M%S 而非 mtime。
 
 
 # 参与归档的运行日志文件名（logs 目录下固定 ASCII 名，不含空格与非法字符）
@@ -272,6 +277,86 @@ def _rename_one(path: str, ts: str, archived: list[str]) -> None:
         )
 
 
+# 归档保留策略（M-46，2026-10-21）。
+# 为什么必须清理：本模块此前**只改名、从不删除**，而「停止录制」在 7×24 循环监测下每天会发生
+# 数十次（面板停止、GUI 停止、atexit 退出各触发一轮），logs/ 里每个基名下的 _YYYYMMDD_HHMMSS
+# 归档只增不减——全仓 grep 无任何 retention/prune 代码，磁盘占用完全由「启停次数」决定。
+# 两条判据取并集删除：数量上限（每个基名各算各的）与时间上限。
+_ARCHIVE_MAX_KEEP = 50
+_ARCHIVE_MAX_AGE_DAYS = 14
+# 归档名中段形态：YYYYMMDD_HHMMSS（可带 _N 冲突序号，见 _archive_target）。
+# 排序一律用**文件名里的时间戳**而不是 mtime：mtime 会被「拷贝日志取证」「杀软扫描」
+# 「同步工具保留时间戳」改写成与生成顺序相反的形态，按 mtime 保留最新 N 份会删掉真正最新的归档。
+# 时间戳定宽 %Y%m%d_%H%M%S，故字典序即时间序，比较无需逐文件 strptime。
+_ARCHIVE_TS_RE = re.compile(r"^(?P<ts>\d{8}_\d{6})(?:_(?P<seq>\d+))?$")
+
+
+# 由「本轮归档时刻」算出保留窗口下界的时间戳字符串（定宽，可直接与归档名里的 ts 比大小）。
+def _archive_cutoff_ts(now: datetime) -> str:
+    return (now - timedelta(days=_ARCHIVE_MAX_AGE_DAYS)).strftime("%Y%m%d_%H%M%S")
+
+
+# 裁剪 logs_dir 内每个基名的历史归档：删除「排在最新 _ARCHIVE_MAX_KEEP 份之外」或
+# 「文件名时间戳早于 cutoff_ts」的份。硬约束三条：
+# ① 只认 _ARCHIVE_TS_RE 能解析的名字，故活动日志本体（无时间戳的 streamget.log 等）与用户
+#    自己放进 logs/ 的同名前缀文件一律不碰；
+# ② 必须在**所有关句柄步骤之后**调用（见 archive_runtime_logs 内的接线注释）——Windows 下
+#    仍被持有的文件 os.remove 直接抛 PermissionError(WinError 32)，那只会把「无界增长」换成
+#    「一半删不掉 + 一堆告警」；
+# ③ 任何失败（单个删除、整个目录列举、意外的解析问题）一律留痕后继续，绝不向调用方抛异常。
+# 两处刻意不做：
+# · 不打「本轮删了 N 份」的成功日志——本轮约束是不新增 i18n msgid，现有四目录里没有语义正确的
+#   清理文案；待办：新增「运行日志归档已清理超量历史文件: {count} 份」并同步四目录 + 重编 .mo 后
+#   再补这条。删除失败仍可经下方 warning 归因。
+# · 不给 web_console.log 加**写入侧**轮转——该文件被 web.py 与本模块当作一只普通文件流消费
+#   （_streams_bound_to() 按 sys.stdout/sys.stderr 的 .name 认句柄，换流对象即认不出；loguru 的
+#   rotation= 又不支持流对象 sink，换成路径型 sink 会让 print 与 loguru 各持一只句柄、改名必抛），
+#   详见 web.py 的 L-01 注释；它的单轮体量由 web.py 的启动侧上限 _WEB_CONSOLE_MAX_BYTES 兜住，
+#   本函数只负责它归档之后的历史份数。
+def _prune_archives(logs_dir: str, cutoff_ts: str) -> None:
+    try:
+        try:
+            names = os.listdir(logs_dir)
+        except OSError as e:
+            # 目录本身读不出（权限/被删）：本轮不清理即可，归档改名结果不受影响
+            logger.debug(i18n.tr("运行日志归档失败(忽略): {type_name}: {e}", type_name=type(e).__name__, e=e))
+            return
+        for base_name in ARCHIVE_LOG_NAMES:
+            stem, ext = os.path.splitext(base_name)
+            prefix = f"{stem}_"
+            archives: list[tuple[str, int, str]] = []
+            for file_name in names:
+                if not file_name.startswith(prefix) or not file_name.endswith(ext):
+                    continue
+                middle = file_name[len(prefix) : len(file_name) - len(ext)]
+                matched = _ARCHIVE_TS_RE.match(middle)
+                if matched is None:
+                    continue
+                archives.append(
+                    (matched.group("ts"), int(matched.group("seq") or 0), os.path.join(logs_dir, file_name))
+                )
+            # 新→旧：同刻的 _N 冲突序号越大越新（_archive_target 的追加顺序）
+            archives.sort(key=lambda item: (item[0], item[1]), reverse=True)
+            for rank, (ts, _seq, path) in enumerate(archives):
+                if rank < _ARCHIVE_MAX_KEEP and ts >= cutoff_ts:
+                    continue
+                try:
+                    os.remove(path)
+                except OSError as e:
+                    # 复用既有「归档失败(跳过)」文案：删除失败同样属于「这一步没做成、流程继续」
+                    logger.warning(
+                        i18n.tr(
+                            "日志归档失败(跳过): {name} - {type_name}: {e}",
+                            name=os.path.basename(path),
+                            type_name=type(e).__name__,
+                            e=e,
+                        )
+                    )
+    except Exception as e:
+        # 清理是旁路收尾，任何意外（含替身/桩造成的属性缺失）都不得影响归档本身
+        logger.debug(i18n.tr("运行日志归档失败(忽略): {type_name}: {e}", type_name=type(e).__name__, e=e))
+
+
 # 停止录制流程的日志归档入口：flush/关闭四个运行日志的句柄后，按停止操作发生时刻的
 # 本机时间戳逐个改名。reopen_streams=True（Web 面板停止等进程继续运行场景）时在改名后
 # 重建 loguru 文件 sink，日志写入立即恢复到全新同名文件；False（atexit 等进程退出场景，
@@ -282,9 +367,14 @@ def archive_runtime_logs(*, reopen_streams: bool = True) -> list[str]:
         with _archive_lock:
             # 测试进程禁用（见 _DISABLE_ENV 注释）；GUI 父进程不持有录制日志句柄，
             # 也绝不能改名录制子进程正在写的日志文件
-            if os.environ.get(_DISABLE_ENV, "").strip().lower() in ("1", "true", "yes"):
+            # M-50（2026-10-21）：两处手写布尔判定改走 parse_config_bool（口径同 src/logger.py）。
+            # 原形态 `in ("1","true","yes")` 认不出 on/y/t/是，`== "1"` 只认字符 1：
+            # 开发者用 DOUYIN_DISABLE_LOG_ARCHIVE=on 关闭归档时，pytest 退出仍会改名工作副本里
+            # 的真实日志；DLR_GUI_PARENT=TRUE 时 GUI 进程照样参与归档。缺省（env 未设）仍为
+            # False —— 两条守卫的默认行为逐字不变。
+            if parse_config_bool(os.environ.get(_DISABLE_ENV), False):
                 return []
-            if os.environ.get(GUI_PARENT_ENV) == "1":
+            if parse_config_bool(os.environ.get(GUI_PARENT_ENV), False):
                 return []
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             logs_dir = os.path.join(script_path, "logs")
@@ -310,6 +400,12 @@ def archive_runtime_logs(*, reopen_streams: bool = True) -> list[str]:
                 # 改名成功或失败都要退出窗口：抑制只是为了争取一个「无人持有句柄」的改名窗口，
                 # 留在抑制态会让 GUI 监控页与 Web 弹幕面板永久停更。
                 resume_monitor_writes()
+
+            # M-46：超量历史归档的裁剪。接线位置是硬约束——必须在上面**全部**关句柄步骤
+            # （remove_file_sinks / 边车 close_monitor_file / web_console 的 flush+close）之后、
+            # 且早于 add_file_sinks() 重新开句柄之前：此刻 logs/ 内本进程一个句柄都不持有，
+            # os.remove 才不会因为 WinError 32 失败。清理失败只留痕，不影响本轮归档结果。
+            _prune_archives(logs_dir, _archive_cutoff_ts(datetime.now()))
 
             if reopen_streams:
                 # 进程继续运行：重新注册文件 sink，loguru add() 即创建全新同名文件

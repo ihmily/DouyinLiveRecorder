@@ -30,7 +30,13 @@ def get_status() -> dict[str, object]:
     recording_times: dict[str, dict[str, str]] = {}
     monitoring_val: int = main.monitoring
     running_val: list[str] = []
-    error_val: int = main.error_count
+    # 2026-10-21 M-39：累计错误数此前在本行**无锁**读一次（旧形态 `error_val: int =
+    # main.error_count`），写侧 src/notify.py::record_error 却持 max_request_lock 做
+    # `error_count += 1`（非原子：读-改-写三步），于是本函数可能拿到「加了一半」的旧值，
+    # 还与下面 :59 的持锁读、:67 的窗口读构成三次分时采样——面板同时显示「累计 0 / 窗口 3」
+    # 这种互相矛盾的状态。现只留初值占位，真值一律在下面**同一次 max_request_lock 持锁**内
+    # 与 error_window 一起快照。
+    error_val: int = 0
     try:
         with main.record_state_lock:
             recording_snapshot = list(main.recording)
@@ -56,7 +62,10 @@ def get_status() -> dict[str, object]:
                     }
             monitoring_val = main.monitoring
             running_val = list(main.running_list)
-            error_val = main.error_count
+            # 2026-10-21 M-39：此处原本还读了一次 main.error_count，但 error_count/error_window
+            # 的写侧（src/notify.py::record_error）用的是 max_request_lock，record_state_lock 对
+            # 它**不构成互斥**——「持了某把锁」不等于「持了对的锁」，留着这里只会让人以为已受保护。
+            # 累计值改到下面与窗口值同锁同批快照，本块只管录制集合。
     # 绑定异常对象时必须保留括号（`except A, B as e:` 非法）
     except (RuntimeError, IndexError) as e:
         # 理论上不可达（写入点均已持锁）；一旦出现说明有新增路径漏锁，必须留痕
@@ -64,7 +73,12 @@ def get_status() -> dict[str, object]:
             i18n.tr("获取录制状态失败（疑似新增无锁写入路径），返回空快照: {type_name}", type_name=type(e).__name__)
         )
     # 窗口口径错误数：error_window 由 max_request_lock 保护，持锁采样避免迭代期并发修改
+    # 2026-10-21 M-39：累计口径必须与窗口口径在**同一次持锁**内一起读。二者分两次采样时，
+    # 中间任何一次 record_error 都会让 error_count 与 recent_errors 来自不同时刻——面板
+    # （src/web_api.py 读 get_status）拿到的是一对不自洽的数，且「零值快照」的 except 分支
+    # 里 error_val 还会退回早先无锁读到的旧值。写侧只有这一把锁，故这里单点持锁读全。
     with main.max_request_lock:
+        error_val = main.error_count
         recent_errors_val = sum(main.error_window)
     try:
         disk_free_gb = utils.check_disk_capacity(main.default_path)
@@ -178,7 +192,14 @@ def display_info() -> None:
                 end=" | ",
             )
             print(i18n.tr("录制视频格式为: {video_save_type}", video_save_type=main.video_save_type), end=" | ")
-            print(i18n.tr("累计错误数为: {error_count}", error_count=main.error_count), end=" | ")
+            # 2026-10-21 M-39：与 get_status 同一处竞争（写侧 src/notify.py::record_error 持
+            # max_request_lock 做 `error_count += 1`，本行此前无锁读）。单看一个 int 读数似乎
+            # 由 GIL 兜住，但 `+=` 是读-改-写三步、且本线程与 get_status 的快照口径必须可比，
+            # 否则控制台「累计错误数」与面板读数长期错拍。持锁只取值、不做打印，
+            # 锁窗口内不得有 IO（慢控制台/管道阻塞会把 record_error 一起挂住）。
+            with main.max_request_lock:
+                _error_count_snapshot = main.error_count
+            print(i18n.tr("累计错误数为: {error_count}", error_count=_error_count_snapshot), end=" | ")
             now = time.strftime("%H:%M:%S", time.localtime())
             print(i18n.tr("当前时间: {now}", now=now))
 

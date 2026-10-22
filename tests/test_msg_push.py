@@ -11,6 +11,7 @@ from collections.abc import Callable
 from typing import cast
 from unittest.mock import patch
 
+import pytest
 from loguru import logger
 
 from msg_push import _mask_secret, _mask_url, bark, dingtalk
@@ -173,3 +174,57 @@ class TestDingtalk:
         payload = json.loads(cast(bytes, captured["data"]).decode("utf-8"))
         assert payload["at"]["atMobiles"] == ["13800000000"]
         assert payload["at"]["isAtAll"] is False
+
+
+# ------------------------------------------------------------------------------------
+# S-02（CODE_REVIEW_2026-10-21）：重置向必须逐跳复核，不能只校验首跳。
+# 攻击模型：推送地址设为攻击者服务器 → 它 302 到 http://169.254.169.254/latest/meta-data/ →
+# 首跳校验通过、落地地址是内网，响应体再经 errmsg/msg 字段写进日志（带回显 SSRF）。
+# 两条互补判据：① 处理器本身拒绝内网落地；② opener 上挂的确实是该守卫子类（裸 handler 不得回归）。
+# ------------------------------------------------------------------------------------
+class TestPushRedirectHopGuard:
+    @staticmethod
+    def _handler() -> object:
+        import msg_push
+
+        return msg_push._PushHopGuardRedirectHandler()
+
+    def test_internal_landing_is_rejected(self) -> None:
+        # 判据口径与首跳**完全相同**（_checked_push_url，allow_local_targets=True）：
+        # 云元数据/内部 DNS 名必须拒绝；回环与私网按 M-07 的既有裁决放行（自建 ntfy/Bark 反代
+        # 跑在本机或局域网是合规配置，拦掉会把真实用户的推送打哑）。
+        import urllib.error
+        import urllib.request
+        from http.client import HTTPMessage
+        from io import BytesIO
+
+        handler = self._handler()
+        req = urllib.request.Request("https://attacker.example/notify")
+        with pytest.raises(urllib.error.URLError):
+            handler.redirect_request(  # type: ignore[attr-defined]
+                req, BytesIO(b""), 302, "Found", HTTPMessage(), "http://169.254.169.254/latest/meta-data/"
+            )
+
+    def test_non_http_landing_is_rejected(self) -> None:
+        import urllib.error
+        import urllib.request
+        from http.client import HTTPMessage
+        from io import BytesIO
+
+        handler = self._handler()
+        req = urllib.request.Request("https://attacker.example/notify")
+        with pytest.raises(urllib.error.URLError):
+            handler.redirect_request(req, BytesIO(b""), 302, "Found", HTTPMessage(), "file:///etc/passwd")  # type: ignore[attr-defined]
+
+    def test_opener_registers_the_guard_not_the_bare_handler(self) -> None:
+        # 结构锁：白名单里替换成裸 HTTPRedirectHandler 会让上面的两条行为锁整体失效，
+        # 而行为锁本身看不到「处理器被换掉」。故按类型钉一次。
+        import urllib.request
+
+        import msg_push
+
+        handlers = cast("list[object]", getattr(msg_push.opener, "handlers"))
+        assert not any(
+            type(h) is urllib.request.HTTPRedirectHandler for h in handlers
+        ), "opener 上仍挂着裸 HTTPRedirectHandler（逐跳闸门被摘掉）"
+        assert any(type(h).__name__ == "_PushHopGuardRedirectHandler" for h in handlers)

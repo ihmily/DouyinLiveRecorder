@@ -20,19 +20,56 @@
 
     var TOKEN_KEY = 'dlr_token';
     var THEME_KEY = 'dlr_theme';
-    var SENSITIVE_SECTIONS = { 'Cookie': true, '账号密码': true, 'Authorization': true };
+    // PARITY（M-61 前端同批）：节白名单必须与后端 src/web_config.py::SENSITIVE_SECTIONS 同源，
+    // 2026-10-21 后端增列「推送配置」，此处随之增列——两侧任一侧漏，该节内「键名正则看不见」的
+    // 凭据（如 bark_key 一类）就会在面板里渲染成明文 text 框。
+    var SENSITIVE_SECTIONS = { 'Cookie': true, '账号密码': true, 'Authorization': true, '推送配置': true };
 
     // MI-27：token 存取统一走此入口，sessionStorage 优先、不可用时回退 localStorage。
     // 回退是必要的：Safari 无痕模式与「禁用站点数据」会把 storage 访问变成抛异常，直接写
     // sessionStorage 会让登录流程整体失败（前端测试环境同样只注入了 localStorage）。
+    // [M-84 更正] 上面「回退 localStorage」这句已不成立：回退载体改为**仅存内存**。
+    // bearer token 默认 24h 有效，落 localStorage 等于明文写盘、跨标签页与浏览器重启存活，
+    // 与 Token helpers 处「关标签页即失效」的设计目标相反，且 XSS、恶意扩展、本机任意进程均可读取。
+    // 回退本身仍保留（隐私模式下 storage 访问抛异常，不能让整个登录流程失败），只是换了载体；
+    // 代价是偏好项（主题/语言）在该场景下随之只对本次会话生效——比「凭据落盘」轻一个量级。
+    // [M-84 更正·续] 上文括注「前端测试环境同样只注入了 localStorage」一并失效：
+    // tests/frontend 的三个沙箱已补 sessionStorage 替身（走主路径），内存回退分支单独用例外，
+    // 那条用例断言的正是「令牌绝不落进 localStorage」。
+    var _memoryTokenStore = null;
+    var _memoryTokenStoreWarned = false;
+
+    // 与 storage 同形的内存载体（getItem/setItem/removeItem），只作为 _tokenStore 的回退分支存在：
+    // 刻意不挂到 window，页面脚本与扩展拿不到它，随本标签页一起消失。
+    function _makeMemoryTokenStore() {
+        var data = {};
+        return {
+            getItem: function (key) {
+                return Object.prototype.hasOwnProperty.call(data, key) ? data[key] : null;
+            },
+            setItem: function (key, value) { data[key] = String(value); },
+            removeItem: function (key) { delete data[key]; },
+        };
+    }
+
     function _tokenStore() {
         try {
             if (typeof sessionStorage !== 'undefined' && sessionStorage) return sessionStorage;
-        } catch (e) { /* 访问被拒（隐私模式）：走回退 */ }
+        } catch (e) { /* 访问被拒（隐私模式）：走内存回退 */ }
         try {
-            if (typeof localStorage !== 'undefined' && localStorage) return localStorage;
-        } catch (e) { /* both unavailable */ }
-        return null;
+            if (!_memoryTokenStore) _memoryTokenStore = _makeMemoryTokenStore();
+        } catch (e) {
+            return null; // 连内存载体都建不出来：保持「无存储可用」原语义，由调用方判空
+        }
+        // 一次性提示：隐私模式下用户看不到「为什么关掉页面就要重新登录」，这里留一条可报障线索；
+        // 只提醒一次，避免每轮轮询重复刷屏。
+        if (!_memoryTokenStoreWarned) {
+            _memoryTokenStoreWarned = true;
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('[token] 会话存储不可用，登录令牌与界面偏好改为仅存内存（关闭页面即失效，不再落盘）');
+            }
+        }
+        return _memoryTokenStore;
     }
 
     // MID-2238：initTheme() 是 DOMContentLoaded 回调的第一条语句，裸 storage 访问一旦抛异常，
@@ -150,6 +187,8 @@
     // 1. Token helpers —— MI-27：一律经 _tokenStore() 存取。token 由 localStorage 移到 sessionStorage，
     // 正常浏览器下关闭标签页即失效，配合 /api/logout 吊销服务端 bearer 收窄泄露窗口；仅 sessionStorage
     // 不可用时才回退 localStorage（隐私模式的让步，此时「关标签页即失效」并不成立）。
+    // [M-84] 最后一句已改正：回退载体是**内存**对象而非 localStorage，隐私模式下同样不落盘、
+    // 关闭页面即失效；getToken/setToken 的存取形状不变（仍按 _tokenStore() 判空）。
     function getToken() {
         var st = _tokenStore();
         return st ? (st.getItem(TOKEN_KEY) || '') : '';
@@ -362,7 +401,22 @@
             'toast.addFailed': '添加失败: ', 'toast.urlRequired': '请输入直播间地址',
             'toast.downloadFailed': '下载失败: ', 'toast.loginExpired': '登录已过期，请重新登录',
             'toast.saveFailed': '保存失败: ', 'toast.langSwitched': '语言已切换',
-            'toast.langSwitchFailed': '语言切换失败: '
+            'toast.langSwitchFailed': '语言切换失败: ',
+            // 图标导入（2026-10-22）：err.* 的键名**就是** POST /api/icon 回传的机器码 detail，
+            // 与 src/ui_icons.py::validate_icon_bytes 的 code 一一对应——前端只做码→文案映射，
+            // 不在后端拼中文（少一处四目录漂移面）。四套目录同键同步，键集相等由前端用例机检。
+            'icon.import': '导入图标',
+            'icon.badFormat': '仅支持 .ico 图标文件（需含 16×16，建议含 256×256）',
+            'icon.readFailed': '读取文件失败',
+            'icon.err.not_ico': '不是有效的 ICO 文件',
+            'icon.err.no_tray_size': '图标缺少 16×16 分辨率，系统托盘会显示模糊',
+            'icon.err.too_large': '图标文件过大（上限 512KB）',
+            'icon.err.empty': '文件内容为空',
+            'icon.err.bad_base64': '图标数据不是合法的 base64',
+            'icon.err.write_failed': '图标落盘失败，请检查 config/icons 目录可写',
+            'icon.no_app_size': '图标缺少 256×256 分辨率，应用图标会放大发虚',
+            'icon.ok': '图标已导入，页面标签已刷新；Web 托盘图标下次启动时生效',
+            'icon.fail': '导入图标失败: '
         },
         en_US: {
             'title': 'DouyinLiveRecorder Panel', 'brand': 'Live Recording Panel',
@@ -428,7 +482,21 @@
             'toast.addFailed': 'Add failed: ', 'toast.urlRequired': 'Please enter a live room URL',
             'toast.downloadFailed': 'Download failed: ', 'toast.loginExpired': 'Login expired, please log in again',
             'toast.saveFailed': 'Save failed: ', 'toast.langSwitched': 'Language switched',
-            'toast.langSwitchFailed': 'Language switch failed: '
+            'toast.langSwitchFailed': 'Language switch failed: ',
+            // Icon import (2026-10-22): err.* keys ARE the machine codes returned by POST /api/icon
+            // (mirroring src/ui_icons.py::validate_icon_bytes). Front end only maps code -> text.
+            'icon.import': 'Import Icon',
+            'icon.badFormat': 'Only .ico files are supported (must contain 16x16, 256x256 recommended)',
+            'icon.readFailed': 'Failed to read the file',
+            'icon.err.not_ico': 'Not a valid ICO file',
+            'icon.err.no_tray_size': 'Missing the 16x16 frame - the tray icon will look blurry',
+            'icon.err.too_large': 'Icon file too large (512KB max)',
+            'icon.err.empty': 'The file is empty',
+            'icon.err.bad_base64': 'Icon data is not valid base64',
+            'icon.err.write_failed': 'Could not save the icon - check that config/icons is writable',
+            'icon.no_app_size': 'Missing the 256x256 frame - the app icon will be upscaled',
+            'icon.ok': 'Icon imported; tab icon refreshed. The Web tray icon applies on next start',
+            'icon.fail': 'Icon import failed: '
         },
         en_GB: {
             'title': 'DouyinLiveRecorder Panel', 'brand': 'Live Recording Panel',
@@ -494,7 +562,21 @@
             'toast.addFailed': 'Add failed: ', 'toast.urlRequired': 'Please enter a live room URL',
             'toast.downloadFailed': 'Download failed: ', 'toast.loginExpired': 'Log in expired, please log in again',
             'toast.saveFailed': 'Save failed: ', 'toast.langSwitched': 'Language switched',
-            'toast.langSwitchFailed': 'Language switch failed: '
+            'toast.langSwitchFailed': 'Language switch failed: ',
+            // Icon import (2026-10-22): err.* keys ARE the machine codes returned by POST /api/icon
+            // (mirroring src/ui_icons.py::validate_icon_bytes). Front end only maps code -> text.
+            'icon.import': 'Import Icon',
+            'icon.badFormat': 'Only .ico files are supported (must contain 16x16, 256x256 recommended)',
+            'icon.readFailed': 'Failed to read the file',
+            'icon.err.not_ico': 'Not a valid ICO file',
+            'icon.err.no_tray_size': 'Missing the 16x16 frame - the tray icon will look blurry',
+            'icon.err.too_large': 'Icon file too large (512KB max)',
+            'icon.err.empty': 'The file is empty',
+            'icon.err.bad_base64': 'Icon data is not valid base64',
+            'icon.err.write_failed': 'Could not save the icon - check that config/icons is writable',
+            'icon.no_app_size': 'Missing the 256x256 frame - the app icon will be upscaled',
+            'icon.ok': 'Icon imported; tab icon refreshed. The Web tray icon applies on next start',
+            'icon.fail': 'Icon import failed: '
         },
         zh_TW: {
             'title': 'DouyinLiveRecorder 管理面板', 'brand': '直播錄製管理面板',
@@ -560,7 +642,20 @@
             'toast.addFailed': '新增失敗: ', 'toast.urlRequired': '請輸入直播間位址',
             'toast.downloadFailed': '下載失敗: ', 'toast.loginExpired': '登入已過期，請重新登入',
             'toast.saveFailed': '儲存失敗: ', 'toast.langSwitched': '語言已切換',
-            'toast.langSwitchFailed': '語言切換失敗: '
+            'toast.langSwitchFailed': '語言切換失敗: ',
+            // 圖示匯入（2026-10-22）：err.* 的鍵名即 POST /api/icon 回傳的機器碼 detail
+            'icon.import': '匯入圖示',
+            'icon.badFormat': '僅支援 .ico 圖示檔案（需含 16×16，建議含 256×256）',
+            'icon.readFailed': '讀取檔案失敗',
+            'icon.err.not_ico': '不是有效的 ICO 檔案',
+            'icon.err.no_tray_size': '圖示缺少 16×16 尺寸，系統托盤會顯示模糊',
+            'icon.err.too_large': '圖示檔案過大（上限 512KB）',
+            'icon.err.empty': '檔案內容為空',
+            'icon.err.bad_base64': '圖示資料不是合法的 base64',
+            'icon.err.write_failed': '圖示寫入失敗，請檢查 config/icons 目錄可寫',
+            'icon.no_app_size': '圖示缺少 256×256 尺寸，應用程式圖示會被放大',
+            'icon.ok': '圖示已匯入，分頁圖示已更新；Web 托盤圖示將於下次啟動生效',
+            'icon.fail': '匯入圖示失敗: '
         }
     };
 
@@ -792,6 +887,9 @@
                     // M-21：过期轮次不得渲染、也不得把退避计数复位（它属于已被取代的那条链）
                     if (!sseChain.isCurrent(myGen)) return;
                     sseFailCount = 0;
+                    // M-88③：后端重新应答即视为「已恢复」，当场把断开标签还原，
+                    // 不等下一轮弹幕/状态渲染顺带覆盖（只在真出现过断开态时生效）。
+                    markBackendUnreachable(false);
                     renderStatus(data);
                 })
                 .catch(function () {
@@ -849,11 +947,21 @@
 
     // WD-10：把「已断开」显式呈现给用户，而不是让面板停在陈旧数据上。此处写的 #danmaku-stream 只
     // 存在于弹幕视图内，仪表盘侧由 showStatusWarning 独立承担（MID-2237）。
+    // M-88③：原先只有 if (flag) 一支，形参的 false 语义根本不存在——后端恢复后「已断开」只能等
+    // 下一轮渲染顺带覆盖。补恢复分支（用既有键 danmaku.connected，与断开态成对，不新增 msgid），
+    // 并用 _backendMarkedDown 做状态闸门：只有真出现过断开态才还原标签，健康轮次零噪音、
+    // 也不会把弹幕流区域反复改写。
+    var _backendMarkedDown = false;
+
     function markBackendUnreachable(flag) {
         var el = $('danmaku-stream');
         if (!el) return;
         if (flag) {
+            _backendMarkedDown = true;
             el.textContent = t('danmaku.disconnected');
+        } else if (_backendMarkedDown) {
+            _backendMarkedDown = false;
+            el.textContent = t('danmaku.connected');
         }
     }
 
@@ -1370,12 +1478,15 @@
     }
 
     // 15. window.toggleRoom
+    // M-88②：本文件所有 toast 拼接一律走 (e.message || '') 兜底形态——e 不是 Error（被 reject 的
+    // 字符串/对象、或刻意 throw 的非标准值）时 e.message 为 undefined，直拼会把「undefined」显示给用户。
+    // 原先 5 处漏了兜底（toggleRoom/deleteRoom/changeRoomQuality/addRoom/downloadFile），现与其余各处分批同形。
     window.toggleRoom = async function (url, enable) {
         try {
             await api('/api/rooms/toggle', { method: 'POST', body: { url: url, enable: enable } });
             toast(enable ? t('toast.enabled') : t('toast.disabled'), 'success');
         } catch (e) {
-            toast(t('toast.opFailed') + e.message, 'error');
+            toast(t('toast.opFailed') + (e.message || ''), 'error');
             loadRooms();
         }
     };
@@ -1388,7 +1499,7 @@
             toast(t('toast.deleted'), 'success');
             loadRooms();
         } catch (e) {
-            toast(t('toast.deleteFailed') + e.message, 'error');
+            toast(t('toast.deleteFailed') + (e.message || ''), 'error');
         }
     };
 
@@ -1400,7 +1511,7 @@
             toast(quality ? t('toast.qualityChanged').replace('{q}', quality) : t('toast.qualityReset'), 'success');
             loadRooms();
         } catch (e) {
-            toast(t('toast.qualityChangeFailed') + e.message, 'error');
+            toast(t('toast.qualityChangeFailed') + (e.message || ''), 'error');
             loadRooms();
         }
     }
@@ -1784,12 +1895,24 @@
     // res.text()，会破坏二进制）。MIN-2238：失败分支曾用 res.statusText，而现代浏览器（HTTP/2 下连
     // reason phrase 都不再收到）对 statusText 恒给空串，toast 只能渲染成「下载失败: 」。改用 apiError 解析
     // 错误体的 detail（成功分支仍是 blob）。
+    // M-88①：原先裸 fetch，后端挂起（或大文件迟迟不响应）时请求无限 pending，同文件 api() 却已有
+    // API_TIMEOUT_MS + AbortController 的超时形态。这里复用同一形状：定时器只覆盖「响应头未到」阶段，
+    // 拿到 res 立即 clearTimeout，随后的 blob 读取不受这层超时掐断（大文件仍然能下完）。
     window.downloadFile = function (path) {
         var headers = {};
         var token = getToken();
         if (token) headers['Authorization'] = 'Bearer ' + token;
-        fetch('/api/files/download?path=' + encodeURIComponent(path), { headers: headers })
+        var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, API_TIMEOUT_MS) : null;
+        fetch('/api/files/download?path=' + encodeURIComponent(path), {
+            headers: headers,
+            signal: ctrl ? ctrl.signal : undefined,
+        })
             .then(function (res) {
+                if (timer) {
+                    clearTimeout(timer);
+                    timer = null;
+                }
                 if (res.status === 401) {
                     setToken('');
                     showLogin();
@@ -1812,7 +1935,14 @@
                 document.body.removeChild(a);
                 URL.revokeObjectURL(url);
             })
-            .catch(function (e) { toast(t('toast.downloadFailed') + e.message, 'error'); });
+            .catch(function (e) {
+                // 响应头阶段之后出的错（blob 读取、DOM 触发下载）都已不该再有定时器，兜底判空
+                if (timer) clearTimeout(timer);
+                // 超时中止的 Error 名是 AbortError、message 由浏览器给出，对用户没有信息量，
+                // 统一成与 api() 同口径的 'timeout' 信号（M-88②：message 为空时不得显示 undefined）。
+                var detail = e && e.name === 'AbortError' ? 'timeout' : (e && e.message || '');
+                toast(t('toast.downloadFailed') + detail, 'error');
+            });
     };
 
     // 20. addRoom（room-add-form submit 处理）
@@ -1839,11 +1969,51 @@
             $('room-name').value = '';
             loadRooms();
         } catch (e) {
-            toast(t('toast.addFailed') + e.message, 'error');
+            toast(t('toast.addFailed') + (e.message || ''), 'error');
         }
     }
 
-    // 21. initTheme
+    // 21. uploadIcon —— 选择本地 .ico → FileReader 读成 base64 → POST /api/icon。
+    // [为什么是 base64 JSON 而不是 FormData] python-multipart 已不在依赖清单里（Starlette 只在
+    // Request.form() 内部 import 它），后端没有 multipart 解析面，走 FormData 会得到一个 500 而
+    // 不是「不支持」；base64 方案零新依赖，且「体积上限」能在前端先粗筛一次（超过上限就不必上传）。
+    async function uploadIcon(file) {
+        var link = $('favicon-link');
+        if (file.size > 512 * 1024) {
+            toast(t('icon.err.too_large'), 'error');
+            return;
+        }
+        var dataUrl;
+        try {
+            dataUrl = await new Promise(function (resolve, reject) {
+                var reader = new FileReader();
+                reader.onload = function () { resolve(String(reader.result || '')); };
+                reader.onerror = function () { reject(new Error('read')); };
+                reader.readAsDataURL(file);
+            });
+        } catch (e) {
+            toast(t('icon.readFailed'), 'error');
+            return;
+        }
+        // 剥掉 `data:image/x-icon;base64,` 前缀：留着它后端 b64decode(validate=True) 会拒，
+        // 但报错只能到「不是合法 base64」这一层，看不出是前缀没剥。
+        var comma = dataUrl.indexOf(',');
+        var payload = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
+        try {
+            var res = await api('/api/icon', { method: 'POST', body: { name: file.name, data: payload } });
+            if (res && res.code === 'no_app_size') toast(t('icon.no_app_size'), 'info');
+            // 破缓存：favicon 的缓存极顽固，不带时间戳的换图标在多数浏览器上要等清缓存才可见
+            if (link) link.href = '/favicon.ico?t=' + Date.now();
+            toast(t('icon.ok'), 'success');
+        } catch (e) {
+            var msg = e && e.message ? String(e.message) : '';
+            // 后端 detail 就是机器码：命中已知码就翻成本地文案，否则原样兜底（如 401 的 unauthorized）
+            var known = Object.prototype.hasOwnProperty.call(I18N.zh_CN, 'icon.err.' + msg);
+            toast(known ? t('icon.err.' + msg) : t('icon.fail') + msg, 'error');
+        }
+    }
+
+    // 22. initTheme
     function initTheme() {
         // MID-2238：它是 DOMContentLoaded 的第一条语句，任何异常都会让后续所有监听器注册被跳过（面板变静态页）。
         try {
@@ -1912,6 +2082,19 @@
             }
         });
         $('config-save-btn').addEventListener('click', saveConfig);
+        // 图标导入：按钮只负责唤起隐藏的 file input（accept 已限定 .ico，但用户仍可在系统对话框
+        // 里改成「所有文件」，故后端仍独立校验——前端 accept 只是体验，不是防线）。
+        var iconBtn = $('icon-import-btn');
+        var iconInput = $('icon-file-input');
+        if (iconBtn && iconInput) {
+            iconBtn.addEventListener('click', function () { iconInput.click(); });
+            iconInput.addEventListener('change', function () {
+                var picked = iconInput.files && iconInput.files[0];
+                // 先取文件再清空 value：不清的话连着选同一个文件不会再触发 change（无反馈的假死）
+                iconInput.value = '';
+                if (picked) uploadIcon(picked);
+            });
+        }
         // M-22：口令窗的四个出口全部经 _settleReauth（清空输入节点 + 隐藏弹窗 + 放行 saveConfig），
         // 少绑一个就会把已输入的口令留在隐藏的 #reauth-password 里（轻微项 41 的那类残留）。
         $('reauth-confirm').addEventListener('click', function () {

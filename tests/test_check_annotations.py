@@ -199,6 +199,29 @@ def test_snapshot_guard_still_rejects_system_dirs(monkeypatch: pytest.MonkeyPatc
     assert verdict is not None and "系统目录" in verdict, f"系统目录下的基线被放行：{verdict!r}"
 
 
+@pytest.mark.parametrize(
+    "outside",
+    ["sibling_repo", "other_drive", "srv_data"],
+    ids=["cwd外同级目录", "cwd外盘符", "cwd外绝对路径"],
+)
+def test_snapshot_guard_rejects_any_target_outside_cwd(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, outside: str
+) -> None:
+    # S-13（2026-10-21）：旧实现是排除式黑名单——不在任何一条拒绝规则里的路径落到函数末尾
+    # 的 `return None` 被放行，于是 `--snapshot D:\OtherRepo` / `/srv/data` 会 rmtree 整棵无关
+    # 目录树。本用例钉的是**白名单正向判定**：cwd 之外的任何绝对路径都必须被拒绝。
+    base = tmp_path.resolve()
+    home = base / "home-user"
+    repo = base / "work" / "repo"
+    candidate = {
+        "sibling_repo": base / "work" / "OtherRepo",
+        "other_drive": Path(str(base.anchor) or "/") / "backup",
+        "srv_data": Path("/srv/data") if os.name != "nt" else Path("D:/srv/data"),
+    }[outside]
+    verdict = _reject_candidate(monkeypatch, home, repo, candidate)
+    assert verdict is not None, f"cwd 之外的路径被放行 -> rmtree 会整棵删除 {candidate}"
+
+
 def test_snapshot_guard_carve_out_does_not_apply_when_cwd_is_home(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

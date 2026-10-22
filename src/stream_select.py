@@ -10,6 +10,7 @@
 # hls_collection_exclude_platforms / douyin_* 限流变量），通过 `import main` 在运行时惰性读取，
 # 避免循环导入与 __main__ 二次执行。
 
+import ipaddress
 import random
 import re
 import threading
@@ -58,9 +59,13 @@ def clean_name(input_text: str) -> str:
         cleaned_name = utils.remove_emojis(cleaned_name, "_").strip("_")
     # Windows 特殊字符清理：& 在 cmd 中会触发命令分隔，统一替换为下划线
     cleaned_name = cleaned_name.replace("&", "_")
-    # 保留设备名加后缀（CON → CON_），否则 Windows 上无法创建同名目录
-    if cleaned_name and cleaned_name.split(".")[0].upper() in _WINDOWS_RESERVED_NAMES:
-        cleaned_name = cleaned_name + "_"
+    # 保留设备名改名（CON → CON_），否则 Windows 上无法创建同名目录。
+    # M-25（2026-10-21）：Windows 拒绝的是「基础名 + 任意扩展名」的整个形态（CON.txt 同样建不出来），
+    # 原实现只在整串末尾加下划线（CON.txt → CON.txt_），基础名仍是保留名、目录创建依旧失败。
+    # 故按第一个点切分出基础名，改名后**接回原扩展名**（CON.txt → CON_.txt）。
+    reserved_head, dot, reserved_tail = cleaned_name.partition(".")
+    if reserved_head.upper() in _WINDOWS_RESERVED_NAMES:
+        cleaned_name = reserved_head + "_" + dot + reserved_tail
     # 超长截断按字符数（非字节），中文名不会被腰斩成半个字符；
     # 截断后可能留下结尾下划线，再 strip 一次。
     if len(cleaned_name) > _MAX_NAME_CHARS:
@@ -278,9 +283,12 @@ clear_ffmpeg_reject = _clear_probe_reject
 
 # 判定流地址是否为 h265 编码：候选过滤、record_url 兜底与 stream.py 的 h264 备选收集
 # 三处共用的单一实现，避免口径漂移。是否可直拷取决于输出容器，见 _h265_copy_format_supported。
+# M-23（2026-10-21）：原实现只认 `codec[0] == "h265"`，而抖音侧（stream.py）用的是大小写不敏感的
+# 「h265 / hevc 都算」——同一条流两处口径不同：平台下发 `HEVC` / `H265` 时本侧不剔除，保存 FLV/纯音频
+# 仍把 HEVC 候选交付 ffmpeg 直拷，录制失败或产物异常。现收敛为同一判据：小写比较、同时识别 hevc。
 def _is_h265(url: str) -> bool:
     codec = utils.get_query_params(url, "codec")
-    return isinstance(codec, list) and bool(codec) and codec[0] == "h265"
+    return isinstance(codec, list) and bool(codec) and codec[0].strip().lower() in ("h265", "hevc")
 
 
 # 判定当前「视频保存格式」的容器能否直拷（-c copy）HEVC 流：TS/MKV/MP4 三个 muxer 均
@@ -402,13 +410,92 @@ def _bounded_probe_get(
 # 请求」不做任何处理——一个被劫持的 m3u8 即可让本机带着登录态向任意 host 发 GET。
 # 故派生地址先过形态白名单与非内网判定，再按「是否与列表同域」决定是否带 Cookie。
 
-# 内网 / 本机 / 链路本地目标（IPv4 私网段 + IPv6 环回与本地地址）的字面量前缀。只按字面量判定、
-# 不做 DNS 解析：探针每轮对多候选执行，解析既多一个可被远端操纵的攻击面，也多一段不可控延迟。
-_PRIVATE_HOST_PATTERN = re.compile(
-    r"^(?:localhost|127\.|0\.|10\.|169\.254\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|::1|fe80|f[cd][0-9a-f]{2}:)",
-    re.IGNORECASE,
-)
+# 内网 / 本机 / 链路本地目标的判定。只判字面量、不做 DNS 解析：探针每轮对多候选执行，解析既多
+# 一个可被远端操纵的攻击面，也多一段不可控延迟。
+#
+# S-04（2026-10-21）：原实现是「字面量前缀」正则，实测四类写法全部漏网——`2130706433`（整数字面量）、
+# `0177.0.0.1`（八进制）、`::ffff:127.0.0.1`（IPv4-mapped IPv6）、`100.64.0.1`（CGNAT）：它们最终都被
+# 解析成 127.0.0.1 / CGNAT 目标，却没有一个以 `127.` 这类前缀开头。现按结构化判定，就地升级、不新建
+# 模块（判据族仍只有一份事实源）。只保留「本机名」这条名字判定，且改为全等而非前缀——原正则的
+# `localhost` 前缀（LOCALHOST 后接任意串命中）与 `0.` 前缀（0.evil.com 命中）都是假阳性。
+_PRIVATE_HOST_EXACT = frozenset({"localhost"})
+# CGNAT 100.64.0.0/10：3.14 的 is_private 不再覆盖它，但它是运营商级 NAT 地址、云上常见元数据代理落点，
+# 同样不该由播放列表正文把探针引过去。
+_CGNAT_NETWORK = ipaddress.IPv4Network("100.64.0.0/10")
 _IPV4_HOST_PATTERN = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}")
+
+
+def _aton_part(part: str) -> int | None:
+    # inet_aton 的单段解析（十进制 / 0x 十六进制 / 0 前缀八进制）；空段、非法字符、越界一律 None。
+    if not part:
+        return None
+    low = part.lower()
+    if low.startswith("0x"):
+        body, base = low[2:], 16
+    elif part[0] == "0" and len(part) > 1:
+        body, base = part[1:], 8
+    else:
+        body, base = part, 10
+    try:
+        return int(body, base)
+    except ValueError:
+        return None
+
+
+def _ipv4_from_aton(host: str) -> ipaddress.IPv4Address | None:
+    # `2130706433` / `0177.0.0.1` / `127.1` / `0x7f.0.0.1` 这些写法 glibc 与 Windows 都会还原成
+    # 127.0.0.1，而 ipaddress 只认点分十进制——不在此归一，它们就只是「一个看起来不像 IP 的主机名」。
+    parts = host.split(".")
+    if not 1 <= len(parts) <= 4:
+        return None
+    total = 0
+    last = len(parts) - 1
+    for i, part in enumerate(parts):
+        value = _aton_part(part)
+        if value is None:
+            return None
+        if i < last:
+            # 非末段各占一个字节（大端），末段独占剩余 1~4 个字节
+            if value > 0xFF:
+                return None
+            total |= value << (8 * (3 - i))
+        elif value >= 1 << (8 * (5 - len(parts))):
+            return None
+        else:
+            total |= value
+    return ipaddress.IPv4Address(total)
+
+
+def _literal_address(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    # 主机名是 IP 字面量（含缩写形态）时返回地址对象；urlsplit().hostname 已去掉 IPv6 方括号，
+    # 此处只需再剥掉 %zone（fe80::1%eth0 与 fe80::1 是同一目标）。解析不出返回 None。
+    name = host.split("%", 1)[0]
+    try:
+        return ipaddress.ip_address(name)
+    except ValueError:
+        return _ipv4_from_aton(name)
+
+
+def _is_internal_host(host: str) -> bool:
+    # 与 async_http 入口那道内网闸（web_config._host_internal_reason）的口径对齐：回环 / 私网 / 链路
+    # 本地（含 169.254 云元数据）/ 未指定 / 组播 / 保留 / CGNAT 一律拒。IPv4-mapped IPv6 按其承载的 v4
+    # 判定，否则 ::ffff:127.0.0.1 在 v6 侧会被当成公网。**未经结构化的主机名一律放行**：本层只做
+    # 「离线即可定罪」的字面量判定（承上方「不做 DNS 解析」的既有取舍），泛域名由逐跳复检钩子兜。
+    name = host.strip().rstrip(".").lower()
+    if not name:
+        return False
+    if name in _PRIVATE_HOST_EXACT:
+        return True
+    addr = _literal_address(name)
+    if addr is None:
+        return False
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
+    if addr.is_loopback or addr.is_private or addr.is_link_local or addr.is_unspecified or addr.is_multicast:
+        return True
+    if addr.is_reserved:
+        return True
+    return isinstance(addr, ipaddress.IPv4Address) and addr in _CGNAT_NETWORK
 
 
 # 派生地址是否允许发出：形态合规（_is_recordable_url）且不是内网/本机目标。
@@ -416,7 +503,7 @@ def _is_derived_hop_allowed(url: str) -> bool:
     if not _is_recordable_url(url):
         return False
     host = urlsplit(url).hostname or ""
-    return not _PRIVATE_HOST_PATTERN.match(host)
+    return not _is_internal_host(host)
 
 
 # 播放列表正文派生的地址命中安全闸时抛出的内部控制流异常。
@@ -434,7 +521,46 @@ class _DerivedHopRejected(Exception):
         self.reason = reason
 
 
-# 取主机名的近似注册域（末两段：a.b.example.com → example.com）。
+# 公共后缀表（S-05，2026-10-21）：原实现把「末两段」当注册域，`.co.kr` / `.com.cn` / `.co.uk` /
+# `.com.br` 这类**公共后缀本身含两段**的域上，`a.example.co.kr` 与 `evil.co.kr` 的「注册域」都是
+# `co.kr`，于是被判同域、沿用原请求头→本机带平台 Cookie 向同公共后缀的任意主机发 GET。本仓覆盖的
+# PandaTV / FlexTV 正是 `.co.kr` 域，该分支极易命中。
+# 取向是**保守**：只内置「两段及以上的公共后缀」——漏登记一条的后果只是多剥一次 Cookie（少一次带凭据
+# 探测），错登记的后果才是凭据外泄，故宁可多列。单段后缀（com/cn/kr/io…）「末两段」本身就是注册域，
+# 不需要登记。
+_TWO_LEVEL_PUBLIC_SUFFIXES = frozenset(
+    "ac.cn com.cn edu.cn gov.cn net.cn org.cn "
+    "co.kr ne.kr or.kr re.kr pe.kr go.kr "
+    "co.uk org.uk ac.uk gov.uk me.uk ltd.uk plc.uk net.uk sch.uk "
+    "com.br net.br org.br gov.br edu.br "
+    "com.tw net.tw org.tw idv.tw "
+    "com.hk net.hk org.hk edu.hk gov.hk "
+    "co.jp ne.jp or.jp ac.jp go.jp "
+    "com.sg net.sg org.sg edu.sg "
+    "com.my net.my org.my "
+    "co.th in.th or.th ac.th "
+    "com.vn net.vn org.vn "
+    "co.id or.id ac.id web.id "
+    "com.ph net.ph org.ph "
+    "com.au net.au org.au edu.au gov.au "
+    "co.nz net.nz org.nz "
+    "co.in net.in org.in firm.in "
+    "com.tr net.tr org.tr "
+    "com.ar com.mx com.co com.pe com.ve com.ec com.uy com.py com.bo "
+    "co.za org.za web.za "
+    "com.ua com.ru com.pl com.de "
+    "com.es com.pt com.it com.fr "
+    "com.sa com.ae com.eg "
+    "co.il com.pk com.bd com.np com.lk "
+    "com.ng co.ke co.tz "
+    "com.kw com.qa com.om com.bh com.jo com.lb "
+    "com.cy com.gr com.hr com.ro com.cz com.sk com.hu com.bg com.rs "
+    "com.mt com.is com.lu com.be com.nl com.at com.ch "
+    "com.se com.no com.dk com.fi com.ie".split()
+)
+
+
+# 取主机名的近似注册域（末两段，公共后缀含两段时再多取一段：a.b.example.co.kr → example.co.kr）。
 # 单段/双段主机名与 IPv4 字面量返回 ""：双段时「同域与否」已由 host 全等比较覆盖，
 # 此时返回有效值只会让 example.com 与 evil.com 这类不同域被误判为同域。
 def _registrable_domain(host: str) -> str:
@@ -443,6 +569,12 @@ def _registrable_domain(host: str) -> str:
     labels = host.split(".")
     if len(labels) < 3:
         return ""
+    if ".".join(labels[-2:]) in _TWO_LEVEL_PUBLIC_SUFFIXES:
+        # 末两段是公共后缀：注册域要退到前三段。三段时（example.co.kr）退位后只剩两段，与「末两段
+        # 比较」等价——此时同域判据不可能比 host 全等更紧，返回 "" 让调用方走剥 Cookie 的保守分支。
+        if len(labels) < 4:
+            return ""
+        return ".".join(labels[-3:])
     return ".".join(labels[-2:])
 
 
@@ -989,6 +1121,12 @@ def _validate_stream_url(
                 reason=f"重定向逐跳复检命中: {e.reason}（初始地址 {utils.mask_credentials(url)}）",
             )
         )
+        # S-03（2026-10-21）：与上面两条安全出口一样登记进 security_rejected。只 return False 而不登记
+        # 时，本地址在 probed 里只是「结论 False」，select_source_url 的 record_url 同址复用分支会把
+        # 「CDN 拒绝」的语义套上去、照常交付给 ffmpeg -i——而抖音/TikTok/网易CC 的 record_url 恒等于
+        # m3u8_url 或 flv_url，该分支极易命中，等于内网地址带着平台 Cookie 直接连出去。
+        if security_rejected is not None:
+            security_rejected.add(url)
         return False
     except Exception as e:
         # Windows 下 socket.timeout 的 str() 为空，必须带上异常类型与 URL
@@ -1163,7 +1301,10 @@ def select_source_url(
     # 构造失败收敛为 probe_client=None（本轮无可用探针客户端），而不是判成「所有候选不可达」：
     # client=None 会走 _validate_stream_url 既有的自建路径，自建再失败时由该函数记 WARNING 并
     # 按末位语义放行，故本轮恒有地址返回给 ffmpeg；且一个探针都没发出，不写探针退避表。
-    probe_client: httpx.Client | None
+    # M-20（2026-10-21）：显式赋 None 而不是只留类型标注。原先构造抛出捕获面之外的异常（ssl.SSLError /
+    # OSError 等，见下方 except 的注释）时，probe_client 从未绑定，finally 里的 `if probe_client is not
+    # None` 先抛 UnboundLocalError，把原始异常整个吞掉并穿透房间线程——最需要诊断信息的路径反而最没信息。
+    probe_client: httpx.Client | None = None
     try:
         # 构造走 _probe_client 单点工厂，逐跳复检钩子随客户端覆盖本轮全部候选；归一仍在
         # 上方那一处，复用作用域仍是单次选源、finally 关闭。

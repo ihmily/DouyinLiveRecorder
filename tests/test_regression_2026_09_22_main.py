@@ -534,7 +534,13 @@ class TestDiskLimitedRecoverable:
 
     @classmethod
     def _drive(cls, **state: Any) -> tuple[bool, bool] | None:
-        src = "def _branch(disk_free_gb, disk_space_limit, disk_limited, exit_recording, recording, non_interactive):\n"
+        # M-05（CODE_REVIEW_2026-10-21）：判定块新增 `_disk_measure_failed`（本轮测量是否失败），
+        # 它是 main() 循环体内的局部量、不在被抽取的 if/elif 块内赋值，故必须作为形参注入；
+        # 取值由调用方显式给出，不在此补默认（「本轮没测到」与「测到且充足」是相反结论）。
+        src = (
+            "def _branch(disk_free_gb, disk_space_limit, disk_limited, exit_recording,"
+            " recording, non_interactive, _disk_measure_failed):\n"
+        )
         src += textwrap.indent(cls._disk_block_src(), "    ") + "\n"
         src += "    return disk_limited, exit_recording\n"
         ns: dict[str, Any] = {
@@ -558,6 +564,7 @@ class TestDiskLimitedRecoverable:
             exit_recording=False,
             recording={"主播名"},
             non_interactive=False,
+            _disk_measure_failed=False,
             _shutdown=[],
         )
         assert limited == (True, True), f"进入限制时未同时置位两标志: {limited}"
@@ -569,6 +576,7 @@ class TestDiskLimitedRecoverable:
             exit_recording=True,
             recording=set(),
             non_interactive=False,
+            _disk_measure_failed=False,
             _shutdown=[],
         )
         assert recovered == (False, False), f"空间恢复后未复位，房间线程不会被重新拉起: {recovered}"
@@ -584,6 +592,7 @@ class TestDiskLimitedRecoverable:
             exit_recording=False,
             recording=set(),
             non_interactive=False,
+            _disk_measure_failed=False,
             _shutdown=[],
         )
         assert same == (False, False), f"进入条件被删成无条件进入 → 启动即自行退出: {same}"
@@ -599,6 +608,7 @@ class TestDiskLimitedRecoverable:
             exit_recording=False,
             recording=set(),
             non_interactive=True,
+            _disk_measure_failed=False,
             _shutdown=shutdown,
         )
         assert web is None, f"Web 模式应提前 return（不得 sys.exit 掉宿主线程）: {web}"
@@ -611,6 +621,7 @@ class TestDiskLimitedRecoverable:
                 exit_recording=False,
                 recording=set(),
                 non_interactive=False,
+                _disk_measure_failed=False,
                 _shutdown=[],
             )
         assert excinfo.value.code == -1, f"CLI/GUI 模式仍须 sys.exit(-1): {excinfo.value.code}"

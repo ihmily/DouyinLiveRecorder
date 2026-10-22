@@ -20,6 +20,7 @@ import hashlib
 import importlib.util
 import inspect
 import io
+import json
 import os
 import re
 import stat
@@ -1522,6 +1523,8 @@ def test_every_analysis_applies_the_bloat_excludes() -> None:
         app=build_exe.APP_NAME,
         bloat_excludes=list(build_exe.BLOAT_EXCLUDES),
         i18n_datas=build_exe.i18n_datas_entries(),
+        icon_datas=build_exe.icon_datas_entries(),
+        icon=build_exe.icon_spec_value(),
     )
     assert rendered.count("excludes=excludes_bloat +") == 3, "三个 Analysis 必须都挂上排除清单"
 
@@ -1873,3 +1876,218 @@ def test_github_pin_asset_name_matches_the_download_url_basename() -> None:
             assert entry["asset"] == expected, f"{key}/{slot} 的资产名与下载 URL 脱钩：{entry['asset']} != {expected}"
             checked += 1
     assert checked, "没有任何 github 档条目被核对——该档若被整体删掉，本用例会变成空转"
+
+
+# ---------------------------------------------------------------------------
+# M-99（2026-10-21 审查）三处，全部离线：urlopen / gpg 走本文件既有的桩，文件一律落 tmp_path，
+# 且**绝不调用** build_exe.main()（那会真打包、真下载、真起 exe）。
+#   ① 脱敏与断言只认 CREDENTIAL_FILE_NAMES 两个硬编码名字 + `not item.is_file()` 静默跳过子目录
+#      → 改为「递归复制 + 全树判定」；
+#   ② ffmpeg/node 的临时归档与 _node_extract/ 建在 RELEASE_DIR 内、只在成功路径清理
+#      → 清理落 finally（except 只捕 Exception，SystemExit 那一路必须也覆盖）+ 压缩前实物残留断言；
+#   ③ _verify_gpg_artifact 只捕 OSError，条目漏配 sig_url 时 urlopen("") 抛 ValueError 穿透，
+#      以未处理异常终止整个构建（绕过 _skip_or_fail 的发布/本地分级处置）。
+# ---------------------------------------------------------------------------
+
+_M99_DESC = "ffmpeg (evermeet.ca release)"
+
+
+@pytest.mark.parametrize("release", [True, False], ids=["release", "local"])
+def test_gpg_empty_sig_url_never_reaches_urlopen_and_never_crashes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, release: bool, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # 空 URL 必须走「取不到签名」那条分级处置，而不是交给 urlopen("") 变成一句 ValueError 堆栈。
+    # 桩选 explode：同时锁「零网络请求、零 gpg 进程」——漏配 sig_url 时连试都不该试。
+    def explode(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("空 sig_url 不得发起网络请求或调用 gpg")
+
+    monkeypatch.setattr(build_exe, "urllib", types.SimpleNamespace(request=types.SimpleNamespace(urlopen=explode)))
+    monkeypatch.setattr(build_exe, "_run_gpg", explode)
+    _macos_release_env(monkeypatch, release=release)
+    artifact = tmp_path / "ffmpeg.zip"
+    artifact.write_bytes(b"payload")
+    if release:
+        with pytest.raises(SystemExit) as caught:
+            build_exe._verify_gpg_artifact(artifact, tmp_path / "a.sig", "", _PRIMARY_FPR, _M99_DESC)
+        assert "缺 sig_url" in str(caught.value)
+    else:
+        # 本地路径：留痕 + 返回 False（「验不过」不是「没抛异常」，返回值才是判据）
+        assert build_exe._verify_gpg_artifact(artifact, tmp_path / "a.sig", "", _PRIMARY_FPR, _M99_DESC) is False
+        assert "缺 sig_url" in capsys.readouterr().out
+
+
+def test_gpg_malformed_sig_url_is_treated_as_unavailable_not_as_a_build_crash(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # 异常面：urlopen 对畸形 URL 抛的是 ValueError（不是 OSError 子类），旧 except 元组接不住 →
+    # 穿透成整条构建的未处理异常。处置必须与「网络取不到」一致。
+    def raise_value_error(url: str, *args: Any, **kwargs: Any) -> Any:
+        raise ValueError("unknown url type: 'not-a-url'")
+
+    monkeypatch.setattr(
+        build_exe, "urllib", types.SimpleNamespace(request=types.SimpleNamespace(urlopen=raise_value_error))
+    )
+    monkeypatch.setattr(build_exe, "_run_gpg", lambda *args, **kwargs: None)
+    artifact = tmp_path / "ffmpeg.zip"
+    artifact.write_bytes(b"payload")
+    _macos_release_env(monkeypatch, release=False)
+    assert build_exe._verify_gpg_artifact(artifact, tmp_path / "a.sig", "not-a-url", _PRIMARY_FPR, _M99_DESC) is False
+    assert "ValueError" in capsys.readouterr().out, "本地路径必须留一条带异常类型的跳过日志，不能静默"
+    _macos_release_env(monkeypatch, release=True)
+    with pytest.raises(SystemExit):
+        build_exe._verify_gpg_artifact(artifact, tmp_path / "a.sig", "not-a-url", _PRIMARY_FPR, _M99_DESC)
+
+
+def test_adopt_layer_entry_missing_sig_url_does_not_abort_the_build(
+    monkeypatch: pytest.MonkeyPatch, _clean_pin_layer: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # M-99③ 的真实崩溃面在**在线来源层**：signed 条目漏配 sig_url 时 _fetch_online_pin 传 ""，
+    # 旧实现里 ValueError 穿出 _verify_gpg_artifact、又不被 _fetch_online_pin 的 except 覆盖，
+    # 于是 _pinned_slots()（构建开头就要调）直接崩掉整条构建——即使内置钉定表本来是完整的。
+    # 判据：不抛、并且**不采用**在线值（沿用内置表）。
+    _pin_layer_env(
+        monkeypatch,
+        mode=build_exe.PIN_SOURCE_ADOPT,
+        table={
+            "windows-x64": {
+                "ffmpeg": {
+                    "url": _MANIFEST_URL,
+                    "trust": build_exe.PIN_TRUST_SIGNED,
+                    "kind": build_exe._PIN_KIND_RAW,
+                    "fingerprint": _PRIMARY_FPR,
+                }
+            }
+        },
+    )
+    _install_fake_urlopen(monkeypatch, f"{_ONLINE_HEX}  ffmpeg.zip".encode("ascii"))
+    _install_fake_gpg(monkeypatch, keyring=_keyring_record(_PRIMARY_FPR), verify_status=_good_gpg_status())
+    assert build_exe._pinned_slots()["ffmpeg"] == _BUILTIN_HEX
+    assert "缺 sig_url" in capsys.readouterr().out
+
+
+def test_prepare_config_dir_copies_subdirectories_and_templates_nested_credential_files(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # M-99① 第一半：旧循环 `if item.name in known or not item.is_file(): continue` 把所有子目录
+    # 静默跳过（既不进包、也不进判定面），而日志上「没进包」与「判定过所以安全」长得一模一样。
+    repo = tmp_path / "repo"
+    src = repo / "config"
+    (src / "fonts").mkdir(parents=True)
+    (src / "profiles").mkdir(parents=True)
+    secret = "http://proxyuser:proxypass@10.0.0.1:8080"
+    (src / "config.ini").write_text(f"[录制设置]\n代理地址 = {secret}\n", encoding="utf-8")
+    (src / "fonts" / "LICENSE.txt").write_text("font licence note\n", encoding="utf-8")
+    (src / "profiles" / "config.ini").write_text(f"[录制设置]\n代理地址 = {secret}\n", encoding="utf-8")
+    release = tmp_path / build_exe.APP_NAME
+    monkeypatch.setattr(build_exe, "PROJECT_ROOT", repo)
+    monkeypatch.setattr(build_exe, "RELEASE_DIR", release)
+
+    build_exe._prepare_config_dir()
+
+    dst = release / "config"
+    assert (dst / "fonts" / "LICENSE.txt").is_file(), "子目录仍被静默跳过（M-99① 回归）"
+    nested = cast(str, (dst / "profiles" / "config.ini").read_text(encoding="utf-8"))
+    assert secret not in nested, "子目录里的同名凭据文件被原样复制进发布目录"
+    assert (dst / "config.ini").is_file() and (dst / "URL_config.ini").is_file()
+
+
+def test_credential_assertion_scans_copied_files_whose_name_is_not_whitelisted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # M-99① 第二半：第三个文件名（不在 CREDENTIAL_FILE_NAMES 里的 cookies.json）此前从不进扫描面，
+    # 带着真实凭据进对外 zip 也不会有任何红灯。「复制即判定」要求按**内容**判、不看名字。
+    release = tmp_path / build_exe.APP_NAME
+    cfg = release / "config"
+    (cfg / "profiles").mkdir(parents=True)
+    (cfg / "config.ini").write_text("[录制设置]\n代理地址 = \n", encoding="utf-8")
+    (cfg / "URL_config.ini").write_text("#https://live.douyin.com/000000000000\n", encoding="utf-8")
+    (cfg / "profiles" / "cookies.json").write_text(
+        json.dumps({"accessToken": "ghp_" + "x" * 24, "count": 3}), encoding="utf-8"
+    )
+    monkeypatch.setattr(build_exe, "RELEASE_DIR", release)
+    monkeypatch.setattr(build_exe, "PROJECT_ROOT", tmp_path / "nonexistent_root")
+
+    with pytest.raises(SystemExit):
+        build_exe.assert_no_credentials_in_release()
+
+
+def test_credential_assertion_accepts_benign_copied_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # 反向对照（放行面）：③ 不得写成「config/ 里有第三个文件就红」——那是把递归复制这条通路整体堵死，
+    # 使用者会退回去掉扫描而不是去掉凭据。普通文本/无凭据形态的附属文件必须照常通过。
+    release = tmp_path / build_exe.APP_NAME
+    cfg = release / "config"
+    (cfg / "fonts").mkdir(parents=True)
+    (cfg / "config.ini").write_text("[录制设置]\n代理地址 = \n", encoding="utf-8")
+    (cfg / "URL_config.ini").write_text("#https://live.douyin.com/000000000000\n", encoding="utf-8")
+    (cfg / "fonts" / "LICENSE.txt").write_text("Copyright (c) 2026 Some Foundry\n", encoding="utf-8")
+    (cfg / "fonts" / "note.json").write_text('{"family": "Dlr Sans", "weight": 400}\n', encoding="utf-8")
+    monkeypatch.setattr(build_exe, "RELEASE_DIR", release)
+    monkeypatch.setattr(build_exe, "PROJECT_ROOT", tmp_path / "nonexistent_root")
+
+    build_exe.assert_no_credentials_in_release()  # 不抛异常即通过
+
+
+def test_ffmpeg_failure_path_purges_temp_archive_from_release_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # M-99②：darwin 分支里「归档解得出但缺 ffmpeg 成员」走 SystemExit（BaseException，穿得过
+    # `except Exception`），旧实现的两处 unlink 都在成功路径上，于是那支临时归档就留在
+    # RELEASE_DIR 里被下一次 make_zip 整包打进对外 zip。
+    _macos_release_env(monkeypatch, release=True)
+    monkeypatch.setattr(build_exe, "IS_WIN", False)
+    sys_shim = types.SimpleNamespace(**vars(sys))
+    sys_shim.platform = "darwin"
+    monkeypatch.setattr(build_exe, "sys", sys_shim)
+    ffmpeg_zip = tmp_path / "src_ffmpeg.zip"
+    _make_zip(ffmpeg_zip, {"README": (b"docs only", 0o644)})
+    ffmpeg_url = _artifact_url_for_slot("macos-arm64", "ffmpeg")
+    _install_routed_urlopen(monkeypatch, {f"{ffmpeg_url}.sig": b"sig-ffmpeg", ffmpeg_url: ffmpeg_zip.read_bytes()})
+    _install_fake_gpg(monkeypatch, keyring=_keyring_record(_PRIMARY_FPR), verify_status=_GOOD_VERIFY_STATUS)
+
+    with pytest.raises(SystemExit):
+        build_exe._download_ffmpeg(tmp_path)
+    assert not list(tmp_path.glob("_*temp.zip")), "失败路径把临时归档留在了发布目录里（M-99② 回归）"
+    assert not list(tmp_path.glob("_*temp.*")), f"残留：{sorted(p.name for p in tmp_path.iterdir())}"
+
+
+def test_nodejs_failure_path_purges_archive_and_extract_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # node 侧同族：归档已落盘、解压才失败（坏包 / 成员缺失）。_node_extract/ 是**目录**，
+    # 留在发布目录里同样会被 _zip_release_dir 的 rglob 收进 zip。
+    index = json.dumps([{"version": "v24.22.0", "lts": "Krypton"}]).encode("utf-8")
+    _install_fake_urlopen(monkeypatch, index)
+
+    def fake_download(url: str, dest: Path, desc: str, *, slot: str) -> None:
+        dest.write_bytes(b"PK\x03\x04 this is not a real archive")
+
+    monkeypatch.setattr(build_exe, "_download_file", fake_download)
+
+    assert build_exe._download_nodejs(tmp_path) is False
+    assert not list(tmp_path.glob("node-*")), "node 归档残留在发布目录里（M-99② 回归）"
+    assert not (tmp_path / "_node_extract").exists(), "_node_extract/ 残留在发布目录里"
+
+
+def test_make_zip_refuses_release_dir_with_temp_archive_leftover(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # 残留断言独立成立：清理是 best-effort（Windows 上 rmtree/unlink 会被句柄占用/杀软挡住），
+    # 而分发出去的是 zip，所以必须**在压缩前**按实物再查一次。桩掉 _zip_release_dir 后，
+    # 「上游没删干净」这一格仍然要红——否则这条断言就只是 finally 的复读。
+    _stub_make_zip_inputs(monkeypatch, tmp_path, [f"{build_exe.APP_NAME}/_internal/a.py"])
+    (cast(Path, build_exe.RELEASE_DIR) / "_ffmpeg_temp.zip").write_bytes(b"half downloaded")
+    with pytest.raises(SystemExit) as caught:
+        build_exe.make_zip("9.9.9")
+    assert "_ffmpeg_temp.zip" in str(caught.value)
+
+
+def test_release_temp_residue_patterns_cover_both_download_chains() -> None:
+    # 表与落盘名的同构锁：改临时件的落盘名却忘了改这里，残留断言会静默失效（判的是文件名模式）。
+    source = (ROOT / "build_exe.py").read_text(encoding="utf-8")
+    for name in build_exe.RELEASE_TEMP_ARCHIVE_GLOBS:
+        if name.startswith("node-"):
+            continue  # node 归档名由 f-string 拼出，见下方单独核对
+        literal = name.replace("*", "")
+        assert literal in source, f"残留判据里的 {name} 与任何落盘名都对不上（表漂移）"
+    assert "target_dir / filename" in source and "_NODE_ARCH_MAP" in source
+    assert "_node_extract" in build_exe.RELEASE_TEMP_DIR_NAMES
+    for dir_name in build_exe.RELEASE_TEMP_DIR_NAMES:
+        assert dir_name in source, f"{dir_name} 已不再是任何下载链的落盘目录"

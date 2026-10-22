@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # 阶段2（Web 后端 FastAPI → Starlette）路由契约动态断言：取代 web_api_routes_baseline.json 的静态
 # 逐字节比对。静态基线既撞 SENSITIVE_APPROVAL 门禁、又会因手工维护而漂移；本测试直接遍历 app.routes，
-# 断言 Starlette 应用注册的 24 条路由（method/path 精确集合）+ /web 静态挂载点不变，
+# 断言 Starlette 应用注册的 26 条路由（method/path 精确集合）+ /web 静态挂载点不变，
 # 任何增删或改 method 的回归都会让集合断言转红（drift-proof，不依赖运行期快照）。
 #
 # 仅构建 app、遍历路由表，不发起任何 HTTP 请求；故不需要 fake main 的运行时替身
@@ -109,6 +109,9 @@ EXPECTED_ROUTES = {
     ("GET", "/api/files/download"),
     ("GET", "/api/logs"),
     ("GET", "/api/danmaku"),
+    # 2026-10-22 图标：面板上传（走鉴权）+ 标签图标（免鉴权，见中间件白名单）
+    ("POST", "/api/icon"),
+    ("GET", "/favicon.ico"),
     ("GET", "/"),
 }
 
@@ -138,7 +141,7 @@ def test_route_table_matches_contract(app: Starlette) -> None:
     assert "/web" in seen_mounts, f"缺失 /web 静态挂载点，实际挂载={seen_mounts}"
 
 
-def test_route_count_is_24(app: Starlette) -> None:
-    # 健全性：路由条数必须等于 24（与 EXPECTED_ROUTES 集合规模一致，防集合去重掩盖重复注册）。
+def test_route_count_is_26(app: Starlette) -> None:
+    # 健全性：路由条数必须等于 26（与 EXPECTED_ROUTES 集合规模一致，防集合去重掩盖重复注册）。
     seen = {(m, r.path) for r in app.routes if isinstance(r, Route) for m in (r.methods or set()) if m != "HEAD"}
-    assert len(seen) == 24, f"路由条数应为 24，实际={len(seen)}"
+    assert len(seen) == 26, f"路由条数应为 26，实际={len(seen)}"

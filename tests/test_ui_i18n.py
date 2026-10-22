@@ -87,6 +87,22 @@ def test_same_widget_and_mode_reregister_replaces() -> None:
     assert widget.configured == [{"text": "新文案"}]
 
 
+def test_register_dedupe_holds_under_extra_weakrefs() -> None:
+    # M-82 行为锁：同槽位去重必须建立在 weakref 的**文档保证**（`==` 比较 referent）之上，
+    # 而不是 CPython「同一 referent 的无回调 ref() 恒返回同一规范化对象」这一实现细节
+    # （`is` 形态）。本用例把「去重被摘掉」的形态炸红——这才是 register 真正要守的契约：
+    # 重复登记同一 (控件, 模式) 只占一格、旧文案不参与回填。带回调哨兵弱引用刻意留在
+    # 现场：2026-10-21 实测（CPython 3.14）其存在与否都不改变 is/== 的判定结果，
+    # 「is 在新对象上恒假」的审查断言在本解释器上被证伪，见 src/ui_i18n.py 的更正注释。
+    widget = _FakeWidget()
+    sentinel = weakref.ref(widget, lambda _r: None)  # 外部带回调弱引用：多引用共存的取证面
+    ui_i18n.register(widget, "text", ui_i18n.T("旧文案"))
+    ui_i18n.register(widget, "text", ui_i18n.T("新文案"))
+    assert sentinel() is widget
+    assert ui_i18n.retranslate_all() == 1, "同槽位去重失效：登记表随重复登记增长（M-82）"
+    assert widget.configured == [{"text": "新文案"}], "旧文案不得再参与回填"
+
+
 def test_title_and_heading_modes_dispatch() -> None:
     # 模式分派：title（Tk 窗口标题是方法不是 configure 选项）与 heading:<col>
     # （Treeview 表头）走各自动作面，不得落到 configure。末行断言 title 模式

@@ -32,13 +32,19 @@
 #   python scripts/check_runtime_pins.py --strict     # 发布检查（build-release.yml prepare）
 #   python scripts/check_runtime_pins.py --emit-env   # 打印 DLR_RUNTIME_SHA256 的 JSON 值（CI 注入用）
 #
+# --emit-env 与 --strict 可叠加（M-92，2026-10-21）：导出通道**先跑与默认模式同一套结构校验**，
+#   校验不过就拒绝导出并按 check() 的分级返回（2 结构缺陷 / 1 --strict 下的未钉定项）。
+#   stdout 只允许出现 JSON 一行（build-release.yml 用 pins=$(... --emit-env) 取用），报告走 stderr。
+#
 # 退出码：0 通过；1 --strict 下存在未钉定项（发布被拦）；2 结构缺陷 / 取不到表
 #         （属「门禁本身失效」，与「代码不合格」区分，同 run_gates.py 口径）。
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib.util
+import io
 import json
 import re
 import sys
@@ -73,7 +79,19 @@ def _load_build_exe() -> Any:
         print(f"ERROR: 无法加载 {path}", file=sys.stderr)
         sys.exit(2)
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    except (OSError, ValueError, TypeError, ImportError, SyntaxError, AttributeError) as exc:
+        # M-93（2026-10-21）：build_exe.py 是**门禁自己的输入**，它读不出来 / 语法坏 / 顶层
+        # import 失败时，旧形态是一条 Traceback + rc=1。而本文件头把 rc=1 明确留给
+        # 「--strict 查到未钉定项」（= 发布链真的有问题），rc=2 才是「门禁本身失效」。
+        # 取不到表就没有任何判定发生，必须走 rc=2，否则排障方向整体错掉。
+        print(
+            f"ERROR: 门禁自身失效：加载 {path} 失败 - {type(exc).__name__}: {exc}\n"
+            "       钉定表取不到 = 「门禁没跑」，按 rc=2 处理；不要把它读成「发布链有未钉定项」。",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     return module
 
 
@@ -115,7 +133,17 @@ def _runtime_matrix_keys() -> list[str]:
     if not _WORKFLOW.exists():
         print(f"ERROR: 找不到 {_WORKFLOW}，无法校验发布矩阵与钉定表的覆盖关系", file=sys.stderr)
         sys.exit(2)
-    text = _WORKFLOW.read_text(encoding="utf-8")
+    try:
+        text = _WORKFLOW.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        # M-93 同族：workflow 读不出来时旧形态是 rc=1 + Traceback，而「读不到矩阵」等于
+        # 覆盖面无从核对 —— 与文件头「取不到表 → rc=2」同档。
+        print(
+            f"ERROR: 门禁自身失效：读取 {_WORKFLOW} 失败 - {type(exc).__name__}: {exc}\n"
+            "       矩阵读不到就没有做过覆盖关系核对，按 rc=2 处理。",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     oses = re.findall(r"^\s*-\s*os:\s*([A-Za-z0-9._-]+)\s*$", text, re.MULTILINE)
     if not oses:
         print("ERROR: 未能从 build-release.yml 解析出 matrix 的 os 列表（结构可能已变更）", file=sys.stderr)
@@ -274,10 +302,31 @@ def check(strict: bool) -> int:
     return 0
 
 
-def emit_env() -> int:
+def emit_env(strict: bool = False) -> int:
     # 打印 DLR_RUNTIME_SHA256 应取的 JSON（按运行时键分列），供 CI 注入 build job。
     # 占位值原样导出：build_exe 侧仍按形状判定为未钉定，因此这条通道不会把
     # 「没填」伪装成「已填」。
+    #
+    # M-92（2026-10-21）：导出通道**必须先跑与 check() 完全相同的结构校验**再打印。
+    # 旧形态只探测属性存在就打印并 return 0 —— 于是一张「空表 / 缺键 / 缺槽位 / 键形状不符」的
+    # 钉定表照样能被导出进 CI（build_exe 侧的 fail-closed 只是纵深第二层，不是这条通道的自证）。
+    # 校验复用 check() 本体而不是另写一份判据：两处各判一次迟早演化出两种「结构合法」。
+    # 返回值沿用 check() 的分级：2 = 结构缺陷（门禁没判成），1 = --strict 下的未钉定项，
+    # 0 才允许导出。stdout 必须**只有 JSON**（build-release.yml 以 pins=$(... --emit-env) 取它），
+    # 故校验期间把 stdout 重定向到缓冲区：失败时把人类可读报告转写 stderr，成功时整段丢弃。
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        rc = check(strict=strict)
+    if rc != 0:
+        report = buffer.getvalue()
+        if report:
+            sys.stderr.write(report)
+        print(
+            "ERROR: --emit-env 拒绝导出：钉定表未通过结构检查（判定见上），"
+            f"把破损的表透传给 build job 等于用「导出成功」冒充「表可用」。rc={rc}",
+            file=sys.stderr,
+        )
+        return rc
     module = _load_build_exe()
     # 同 check()：--emit-env 是 CI 注入钉定值的通道，属性缺失时也必须 rc=2（门禁自己没跑成），
     # 而不是 rc=1 崩溃栈——build job 会把「拿不到表」读成「表里有未钉定项」。
@@ -293,7 +342,7 @@ def main(argv: list[str] | None = None) -> int:
     _ = parser.add_argument("--emit-env", action="store_true", help="输出 DLR_RUNTIME_SHA256 的 JSON 值")
     args = parser.parse_args(argv)
     if cast(bool, args.emit_env):
-        return emit_env()
+        return emit_env(strict=cast(bool, args.strict))
     return check(strict=cast(bool, args.strict))
 
 

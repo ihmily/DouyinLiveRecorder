@@ -25,7 +25,7 @@ import threading
 import types
 from collections.abc import Generator
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from httpx import Response
@@ -464,12 +464,37 @@ class TestLoginRateLimit:
             trusted_proxy="1.1.1.1,1.1.1.2,1.1.1.3",  # 三个「可信代理」→ 三个独立键
         )
         # 直接把全局预算灌满（等价于大量分布式失败，且每个键都没到 5 次）
+        # M-59（2026-10-21）同步：条目形态为 (时刻, 来源)，这里灌的是**别的来源**的条目，
+        # 与 login 侧 test_successful_login_reclaims_only_own_global_entries 构成正反配对
         now = __import__("time").time()
         with wa._FAILED_LOGINS_LOCK:
             for _ in range(wa._LOGIN_GLOBAL_MAX_FAILURES):
-                wa._GLOBAL_LOGIN_FAILURES.append(now)
+                wa._GLOBAL_LOGIN_FAILURES.append((now, "1.1.1.9"))
         resp = app_env.client.post("/api/login", json={"password": "wrong"}, headers={"X-Forwarded-For": "1.1.1.1"})
         assert resp.status_code == 429
+
+    def test_successful_login_reclaims_only_own_global_entries(self, app_env: types.SimpleNamespace) -> None:
+        # M-59（2026-10-21）：全局预算按 (时刻, 来源) 记账后，成功登录只回收**本来源**挣出的条目。
+        # 两条断言各封一个退化方向：全清 → 攻击者可借自己成功登录重置整站预算（旧注释担心的形态）；
+        # 全不回收 → 本用例前半段（testclient 自己贡献的份额持续累计，最终把所有合法用户 429 在
+        # 门外直到窗口滑完，即本条要修的锁死面）。
+        import time as _time
+
+        from src import web_api as wa
+
+        now = _time.time()
+        with wa._FAILED_LOGINS_LOCK:
+            for _ in range(30):
+                wa._GLOBAL_LOGIN_FAILURES.append((now, "testclient"))
+            for _ in range(5):
+                wa._GLOBAL_LOGIN_FAILURES.append((now, "203.0.113.7"))
+        resp = app_env.client.post("/api/login", json={"password": "secret123"})
+        assert resp.status_code == 200, resp.text
+        with wa._FAILED_LOGINS_LOCK:
+            assert [e for e in wa._GLOBAL_LOGIN_FAILURES if e[1] == "testclient"] == [], "本来源份额未回收"
+            assert (
+                len([e for e in wa._GLOBAL_LOGIN_FAILURES if e[1] == "203.0.113.7"]) == 5
+            ), "他人份额被连带清空（全清退化）"
 
 
 class TestRoomWriteParity:
@@ -680,6 +705,42 @@ class TestRoomEndpoints:
         assert resp.status_code == 200
         resp = app_env.client.post("/api/rooms", json={"url": "https://live.douyin.com/3"}, headers=headers)
         assert resp.status_code == 409
+
+    def test_add_room_prepends_newline_when_tail_probe_blocked(
+        self, app_env: types.SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # M-63（2026-10-21）：末字节探测 open(...,"rb") 被 Windows sharing violation 挡住是常态
+        # （录制进程正持有 URL_config.ini），旧 `except OSError: pass` 让 _needs_newline 停在
+        # False → 直接追加，恰好重开 MIN-2242 的「新房间粘上无尾换行的末行、两个房间同时坏掉」。
+        # 现保守补一个 \n。打桩按「对象+模式」收窄：只对本用例 url_cfg 的二进制读制造失败，
+        # 其余调用透传真实 open（AGENTS 替身收窄口径；同文件 test_logs_endpoint_hides_os_error
+        # 为同一先例形态）。变异可见性：改回 pass → 追加粘连成 oldhttps://…，逐字节断言转红
+        token = _login(app_env.client)
+        app_env.url_cfg.write_text("https://live.douyin.com/old", encoding="utf-8-sig")  # 无尾换行
+        target = str(app_env.url_cfg)
+        real_open = open
+
+        def fake_open(file: object, mode: Any = "r", **kw: object) -> object:
+            if str(file) == target and "b" in mode:
+                raise OSError(32, "Sharing violation", str(file))
+            # 逐个具名传参（**kw 的展开形态 mypy 无法匹配 open() 的重载），与本文件
+            # test_logs_endpoint_hides_os_error 的桩同型：其余路径仍走真实 open
+            return real_open(
+                str(file),
+                mode,
+                encoding=cast(str | None, kw.get("encoding")),
+                errors=cast(str | None, kw.get("errors")),
+            )
+
+        monkeypatch.setattr("builtins.open", fake_open)
+        resp = app_env.client.post(
+            "/api/rooms", json={"url": "https://live.douyin.com/new"}, headers={"Authorization": f"Bearer {token}"}
+        )
+        assert resp.status_code == 200, resp.text
+        text = app_env.url_cfg.read_text(encoding="utf-8-sig")
+        assert (
+            text == "https://live.douyin.com/old\nhttps://live.douyin.com/new\n"
+        ), f"探测失败时未按保守形态补换行: {text!r}"
 
     def test_add_room_concurrent_no_duplicates(self, app_env: types.SimpleNamespace) -> None:
         # TOCTOU 回归（C10）：并发 POST 同一 URL，仅一条成功，其余 409
@@ -1167,13 +1228,16 @@ class TestSecurityConfigCacheInvalidation:
         )
         return TestClient(app, base_url=_BASE_URL)
 
-    def test_allowed_hosts_change_takes_effect_without_mtime_change(
+    def test_web_host_change_takes_effect_without_mtime_change(
         self, tmp_path: Path, fake_main: types.ModuleType, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # 端到端锁：Host 允许名单（MID-36 的 DNS 重绑定防线）只从这份带缓存的 cfg 里取，
         # 所以「把名单改宽/改窄」是否即时生效，直接 observable 在带 Host 头的请求上。
         # 三段顺序本身就是判据：改宽前 400（证明用例不恒真）→ 改宽后 200 → 改窄后重新 400
         # （证明失效是双向的，而不是「第一次读了盘之后就一直对」）。
+        # [历史注] 本条原用 web_allowed_hosts 驱动；M-64（2026-10-21）起该键进危险黑名单、
+        # 面板不可写（见 TestDangerousKeys 的 M-64 参数化用例），L-23 的同款失效场景改由
+        # **仍可写**的安全键 web_host 承担——get_allowed_hosts 同样吃它，判定面逐字等价
         from src import web_api as wa
 
         client = self._frozen_client(tmp_path, monkeypatch, wa)
@@ -1184,7 +1248,7 @@ class TestSecurityConfigCacheInvalidation:
             assert client.get("/api/rooms", headers=panel_host).status_code == 400, "名单未含该域名却已放行：判据恒真"
             resp = client.put(
                 "/api/config",
-                json={"section": "Web", "key": "web_allowed_hosts", "value": "panel.example.com"},
+                json={"section": "Web", "key": "web_host", "value": "panel.example.com"},
                 headers=headers,
             )
             assert resp.status_code == 200, resp.text
@@ -1192,7 +1256,7 @@ class TestSecurityConfigCacheInvalidation:
             assert got.status_code == 200, f"改宽名单后缓存仍按旧值判 Host: {got.status_code} {got.text}"
             resp = client.put(
                 "/api/config",
-                json={"section": "Web", "key": "web_allowed_hosts", "value": "other.example.com"},
+                json={"section": "Web", "key": "web_host", "value": "127.0.0.1"},
                 headers=headers,
             )
             assert resp.status_code == 200, resp.text
@@ -1200,32 +1264,25 @@ class TestSecurityConfigCacheInvalidation:
         finally:
             client.close()
 
-    def test_trusted_proxy_change_takes_effect_without_mtime_change(
+    def test_proxy_and_hosts_keys_are_no_longer_panel_writable(
         self, tmp_path: Path, fake_main: types.ModuleType, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # 第二条安全键（web_trusted_proxy → X-Forwarded-For 是否可信 → 登录限流按哪个地址分桶）。
-        # 判据完全走行为：无可信代理时 5 次不同伪造 XFF 全记在直连对端（testclient）同一个窗口里，
-        # 第 6 次 429；把该直连对端登记为可信代理后，同一个第 6 次请求应换成按 XFF 分桶的新窗口 → 401。
-        # 缓存未按清单失效时，中间件与 login 仍持旧的空名单 → 依旧 429（用例转红）。
-        # 顺序契约：成功登录必须在**填桶之前**——login 成功会清零该桶的失败计数（见
-        # test_successful_login_resets_failures），把拿 token 挪到 5 次失败之后会让第 6 次
-        # 无条件 401，用例退化成恒真。
+        # [历史注] 本条原锁「web_trusted_proxy 经面板变更后的缓存失效 + XFF 分桶换窗」。
+        # M-64（2026-10-21）把 web_trusted_proxy / web_allowed_hosts 列入危险键黑名单后，
+        # 「面板改这两个键」这条路整体不复存在（携带合法 bearer 也 403），原判据失去可达的
+        # 驱动路径；XFF 分桶行为本身仍由 TestLoginRateLimit 三条用例在 create_app 起点锁住。
+        # 这里改为锁 M-64 的**认证开启侧**：两键在登录态下必须 403 且文件逐字不变
         from src import web_api as wa
 
         client = self._frozen_client(tmp_path, monkeypatch, wa)
         try:
             token = client.post("/api/login", json={"password": "secret123"}).json()["token"]
-            for i in range(5):
-                resp = client.post("/api/login", json={"password": "wrong"}, headers={"X-Forwarded-For": f"1.2.3.{i}"})
-                assert resp.status_code == 401, resp.text
-            resp = client.put(
-                "/api/config",
-                json={"section": "Web", "key": "web_trusted_proxy", "value": "testclient"},
-                headers={"Authorization": f"Bearer {token}"},
-            )
-            assert resp.status_code == 200, resp.text
-            after = client.post("/api/login", json={"password": "wrong"}, headers={"X-Forwarded-For": "9.9.9.9"})
-            assert after.status_code == 401, f"可信代理名单变更后仍按旧桶限流: {after.status_code} {after.text}"
+            headers = {"Authorization": f"Bearer {token}"}
+            before = (tmp_path / "config.ini").read_bytes()
+            for key, value in (("web_trusted_proxy", "9.9.9.9"), ("web_allowed_hosts", "evil.example.com")):
+                resp = client.put("/api/config", json={"section": "Web", "key": key, "value": value}, headers=headers)
+                assert resp.status_code == 403, f"{key} 仍可经面板改写（危险键黑名单失效）: {resp.text}"
+            assert (tmp_path / "config.ini").read_bytes() == before, "被拒的安全键写入仍改了 config.ini"
         finally:
             client.close()
 
@@ -2380,6 +2437,48 @@ class TestDangerousKeys:
         finally:
             client.close()
 
+    @pytest.mark.parametrize(
+        "section,key,value",
+        [
+            ("录制设置", "是否录制完成后执行自定义脚本", "true"),
+            ("Web", "web_trusted_proxy", "9.9.9.9"),
+            ("Web", "web_allowed_hosts", "evil.example.com"),
+            ("Web", "WEB_ALLOWED_HOSTS", "evil.example.com"),
+        ],
+    )
+    def test_m64_script_flag_and_safety_keys_blocked_when_auth_disabled(
+        self, tmp_path: Path, fake_main: types.ModuleType, section: str, key: str, value: str
+    ) -> None:
+        # M-64（2026-10-21）：翻转「是否录制完成后执行自定义脚本」即启用用户既有脚本命令，
+        # 等于把「自定义脚本执行命令」黑名单旁路一半；web_trusted_proxy 决定 XFF 是否可信
+        # （M-59 的换键面）、web_allowed_hosts 决定 Host/Origin 名单（MID-36），两键被面板
+        # 写入等于把防线交给写接口。与既有危险键同口径：认证关闭也 403。第 4 参用大小写
+        # 变体锁 C-1 折叠面（行匹配 IGNORECASE，黑名单必须同等强度）。
+        # 预置键存在（web_trusted_proxy 由 _write_web_section 写好，其余按缺失补建）——
+        # 变异可见性：从黑名单摘掉键后落进 update_config_line 得 200 而非 404/403，本条转红
+        from src import web_api as wa
+        from src.web_config import append_config_line
+
+        cfg = tmp_path / "config.ini"
+        _write_web_section(cfg, auth="false", password="")
+        if key.casefold() not in cfg.read_text(encoding="utf-8-sig").casefold():
+            assert append_config_line(str(cfg), section, key, "seed") is True
+        app = wa.create_app(
+            config_file=str(cfg),
+            url_config_file=str(tmp_path / "u.ini"),
+            downloads_root=str(tmp_path),
+            logs_dir=str(tmp_path),
+        )
+        _reset_web_api_state(wa)
+        client = TestClient(app, base_url=_BASE_URL)
+        try:
+            before = cfg.read_bytes()
+            resp = client.put("/api/config", json={"section": section, "key": key, "value": value})
+            assert resp.status_code == 403, f"{section}/{key} 仍可经面板改写: {resp.text}"
+            assert cfg.read_bytes() == before, "被拒的危险键写入仍改了 config.ini"
+        finally:
+            client.close()
+
 
 class TestListFiles:
     # 守护文件列举：损坏符号链接与指向 downloads 之外的符号链接（目录遍历）均须被跳过不列出；
@@ -2432,6 +2531,91 @@ class TestListFiles:
         assert resp.status_code == 200
         names = [i["name"] for i in resp.json()]
         assert "a.ts" in names
+
+
+# CODE_REVIEW_2026-10-21（M-60/M-67）：免鉴权预算键集合、Content-Disposition 净化、
+# 日志尾读字节预算、chunked 请求体上限——四条都是「资源放大面」的有界性锁。
+class TestResourceCaps2026_10_21:
+    def test_public_budget_key_set_is_capped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # M-67①：窗口回收只清「全部条目已出窗」的键，持有 IPv6 前缀的攻击者在窗内轮换源
+        # 地址即可让 dict 无界增长。现在新键入库前先查键数上限（_DENIED_HOSTS_SEEN_MAX 同形态）。
+        # 变异可见性：摘掉 to-limit clear → 64 个在窗键 + 新键 = 65 > 上限，断言转红
+        import time as _time
+        from collections import deque
+
+        from src import web_api as wa
+
+        now = _time.monotonic()
+        seeded = {f"2001:db8:{i}::1": deque([now]) for i in range(wa._PUBLIC_BUDGET_MAX_KEYS)}
+        monkeypatch.setattr(wa, "_PUBLIC_BUDGET", seeded)
+        assert wa._public_endpoint_over_budget("2001:db8:ffff::1") is False
+        assert (
+            len(wa._PUBLIC_BUDGET) <= wa._PUBLIC_BUDGET_MAX_KEYS
+        ), f"键集合无上限（M-67 回收失效）: {len(wa._PUBLIC_BUDGET)}"
+
+    def test_download_content_disposition_filename_is_sanitized(
+        self, app_env: types.SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # M-67②：磁盘文件名原样进 Content-Disposition——Windows 命名规则恰好挡得住
+        # CR/LF/引号，Linux 部署（本仓支持 docker）里这些字符全是合法文件名。
+        # 变异可见性：还原成 FileResponse(..., filename=os.path.basename(target)) 后，
+        # Starlette 会把带控制字符的名字转 percent-form（filename*=utf-8''…），
+        # 本条的 quoted-string 精确断言随之落空
+        from src import web_api as wa
+
+        (app_env.downloads / "good.ts").write_text("x", encoding="utf-8")
+        token = _login(app_env.client)
+        os_shim = types.SimpleNamespace(**vars(wa.os))
+        path_shim = types.SimpleNamespace(**vars(wa.os.path))
+        path_shim.basename = lambda _p: 'evil\t"name\x0b\x0c'
+        os_shim.path = path_shim
+        monkeypatch.setattr(wa, "os", os_shim)
+        resp = app_env.client.get("/api/files/download?path=good.ts", headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 200, resp.text
+        cd = resp.headers["content-disposition"]
+        assert cd == 'attachment; filename="evilname"', f"净化未生效，头部仍是 {cd!r}"
+        assert "\r" not in cd and "\n" not in cd
+
+    def test_get_logs_is_byte_bounded_on_large_log(
+        self, app_env: types.SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # M-60②：旧实现 `deque(f, maxlen=lines)` 的 maxlen 只限保留条数，整文件仍被逐行读完；
+        # 本端点是同步 def，占 anyio 线程池（默认 40 槽）一格，几条并发即可拖死整个面板。
+        # 判据两段：正常预算下「尾部 5 行内容逐字对」；预算收紧到 20 字节后 lines=5 只可能
+        # 拿到窗口内的 <5 行——旧整文件读法在这里恒回 5 行（变异可见）
+        from src import web_api as wa
+
+        logs_dir = app_env.downloads.parent / "logs"
+        (logs_dir / "streamget.log").write_text("".join(f"L{i}\n" for i in range(20000)), encoding="utf-8")
+        token = _login(app_env.client)
+        headers = {"Authorization": f"Bearer {token}"}
+        resp = app_env.client.get("/api/logs?lines=5", headers=headers)
+        assert resp.status_code == 200
+        assert resp.json()["lines"] == [f"L{i}" for i in range(19995, 20000)]
+        monkeypatch.setattr(wa, "_LOG_TAIL_MAX_BYTES", 20)
+        out = app_env.client.get("/api/logs?lines=5", headers=headers).json()["lines"]
+        assert out and out[-1] == "L19999" and len(out) < 5, f"字节预算未生效: {out}"
+
+    def test_chunked_json_body_without_content_length_is_capped(self, app_env: types.SimpleNamespace) -> None:
+        # M-60①：L-30 的旧口径「Content-Length 缺失时不拦」已被证伪——request.json() 会把
+        # 无上限的 chunked 流整体物化。httpx 对 sync iterable content 不发 Content-Length，
+        # 正好复现该形态；反向半边：同一路径下 20KB 的小 chunked 体必须照常解析（200），
+        # 否则「上限」会被改成「一律拒绝」也测不出来
+        from src import web_api as wa
+
+        assert wa._JSON_BODY_MAX_BYTES == 1024 * 1024
+        big_chunk = b'{"password": "' + b"x" * 1024
+
+        def big_body() -> Generator[bytes, None, None]:
+            for _ in range(wa._JSON_BODY_MAX_BYTES // 1024 + 64):
+                yield big_chunk
+
+        resp = app_env.client.post("/api/login", content=big_body())
+        assert resp.status_code == 413, resp.text
+
+        small_body = [b'{"password": ', b'"secret123"}']
+        resp2 = app_env.client.post("/api/login", content=iter(small_body))
+        assert resp2.status_code == 200, resp2.text
 
 
 # GET/PUT /api/language：语言查询与即时切换（写回 config + 热切换进程内翻译）。
@@ -2691,6 +2875,24 @@ class TestQualityOptionsEndpoints:
         )
         assert resp.status_code == 422
 
+    def test_put_write_failure_detail_is_fixed_code_without_path(
+        self, app_env: types.SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # M-61（2026-10-21）：写失败的 500 detail 曾直接拼 app.state.config_file 的绝对路径
+        # （本文件唯一一处 MID-39「对外不回显内部路径」违例，认证关闭时对局域网可见）。
+        # 现对外固定 code、路径只进日志。变异可见性：还原旧 tr("...: {err}", err=config_file)
+        # 写法 → detail 不再是固定 code 且含 tmp 路径，两条断言同时转红
+        from src import web_api as wa
+
+        monkeypatch.setattr(wa, "write_quality_options", lambda *a, **k: None)
+        token = _login(app_env.client)
+        resp = app_env.client.put(
+            "/api/rooms/qualities", json={"options": ["超清"]}, headers={"Authorization": f"Bearer {token}"}
+        )
+        assert resp.status_code == 500
+        assert resp.json()["detail"] == "quality_write_failed", resp.text
+        assert str(app_env.cfg.parent) not in resp.text, "500 detail 泄露配置文件绝对路径（MID-39 违例回归）"
+
 
 class TestErrorDetailI18n:
     # 2026-10-04：面板错误 detail 是用户可见文案（前端 apiError 原样弹 toast），
@@ -2735,3 +2937,102 @@ class TestErrorDetailI18n:
         )
         assert resp.status_code == 404
         assert resp.json()["detail"] == "<<未找到直播间>>"
+
+
+class TestIconEndpoints:
+    # 面板图标（上传 + favicon）的回归锁。三条要害：
+    #   ① 上传必须**先校验后落盘**——坏文件不该在 config/icons/ 里留下一份垃圾副本；
+    #   ② 拒绝原因回机器码（前端按码取文案），不回中文（否则四目录要再同步一份后端文案）；
+    #   ③ favicon 免鉴权（标签页请求不带 Bearer），但没有可用图标时要 404 而不是空 200
+    #      （空 200 会被浏览器缓存成一个坏图标，之后即使导入了也刷不掉）。
+
+    def _ico_bytes(self) -> bytes:
+        repo_icon = Path(__file__).resolve().parent.parent / "assets" / "app.ico"
+        assert repo_icon.is_file(), "assets/app.ico 缺失"
+        return repo_icon.read_bytes()
+
+    def test_upload_requires_auth(self, app_env: types.SimpleNamespace) -> None:
+        resp = app_env.client.post("/api/icon", json={"name": "a.ico", "data": "AA=="})
+        assert resp.status_code == 401
+
+    def test_upload_persists_icon_and_config(self, app_env: types.SimpleNamespace) -> None:
+        import base64
+
+        token = _login(app_env.client)
+        payload = base64.b64encode(self._ico_bytes()).decode("ascii")
+        resp = app_env.client.post(
+            "/api/icon", json={"name": "app.ico", "data": payload}, headers={"Authorization": f"Bearer {token}"}
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["ok"] is True and body["persisted"] is True
+        stored = Path(body["path"])
+        assert stored.is_file() and stored.parent.name == "icons"
+        # 写回 config.ini 后下次启动才能重新加载（与字体导入同一口径）
+        from src import ui_icons
+
+        assert ui_icons.load_icon_preference(
+            Path(app_env.cfg), ui_icons.WEB_SECTION, ui_icons.WEB_ICON_KEY
+        ), "图标路径未写回 config.ini"
+
+    def test_upload_rejects_bad_base64(self, app_env: types.SimpleNamespace) -> None:
+        token = _login(app_env.client)
+        resp = app_env.client.post(
+            "/api/icon", json={"name": "a.ico", "data": "not base64 !!"}, headers={"Authorization": f"Bearer {token}"}
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"] == "bad_base64"
+
+    def test_upload_rejects_non_ico_payload(self, app_env: types.SimpleNamespace) -> None:
+        import base64
+
+        token = _login(app_env.client)
+        payload = base64.b64encode(b"\x89PNG" + b"x" * 64).decode("ascii")
+        resp = app_env.client.post(
+            "/api/icon", json={"name": "a.ico", "data": payload}, headers={"Authorization": f"Bearer {token}"}
+        )
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "not_ico"
+        # 坏文件不得落盘：留下一份垃圾副本会让下次启动去加载它
+        icon_dir = Path(app_env.cfg).parent / "icons"
+        assert not icon_dir.is_dir() or not list(icon_dir.glob("*.ico"))
+
+    def test_upload_rejects_icon_without_tray_size(self, app_env: types.SimpleNamespace) -> None:
+        import base64
+        import struct
+
+        token = _login(app_env.client)
+        # 只有 32/256 两档：托盘那一档缺失（判据同 GUI 侧「导入图标…」）
+        header = b"\x00\x00\x01\x00" + struct.pack("<H", 2)
+        entries = struct.pack("<BBBBHHII", 32, 32, 0, 0, 1, 32, 0, 0) + struct.pack(
+            "<BBBBHHII", 0, 0, 0, 0, 1, 32, 0, 0
+        )
+        resp = app_env.client.post(
+            "/api/icon",
+            json={"name": "a.ico", "data": base64.b64encode(header + entries).decode("ascii")},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "no_tray_size"
+
+    def test_favicon_is_public_and_follows_the_uploaded_icon(self, app_env: types.SimpleNamespace) -> None:
+        import base64
+        import struct
+
+        token = _login(app_env.client)
+        payload = base64.b64encode(self._ico_bytes()).decode("ascii")
+        _ = app_env.client.post(
+            "/api/icon", json={"name": "app.ico", "data": payload}, headers={"Authorization": f"Bearer {token}"}
+        )
+        # 免鉴权：标签页的 favicon 请求不带 Bearer
+        resp = app_env.client.get("/favicon.ico")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("image/")
+        assert resp.content[:4] == struct.pack("<HH", 0, 1)
+
+    def test_favicon_404_when_no_icon_available(
+        self, app_env: types.SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 打断「仓库内置图标」兜底，验证「真没有」时是 404 而不是空 200
+        monkeypatch.setattr(app_env.wa, "current_icon_path", lambda _root, _configured: None)
+        assert app_env.client.get("/favicon.ico").status_code == 404

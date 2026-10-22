@@ -156,12 +156,20 @@ def _terminate_ffmpeg_process(proc: subprocess.Popen[bytes], timeout: int = int(
             pass
 
         # 最后手段：关掉仍握着的 stdout 句柄
-        try:
-            if proc.stdout:
-                proc.stdout.close()
-        except Exception:
-            # 吞没即正确：句柄随进程/解释器回收，此处失败已无可恢复动作
-            pass
+        # M-58③（2026-10-21）：兜底必须覆盖三支管道，不能只关 stdout。走到这里意味着三级终止
+        # 全部没等到进程退出（ffmpeg 卡在不可中断IO / 孙进程握着管道写端），此时 stderr（ffmpeg 的
+        # 进度与错误输出，7×24 多房间下每条录制都开着一支）与 stdin 若不关，只能等解释器收尾回收；
+        # 反复启停会让清理线程一路攒 fd，且 Windows 上这些句柄还会让日志/媒体文件的归档改名撞
+        # WinError 32。逐支独立 best-effort：任一支 close 抛错不得阻止后面两支。
+        # 只做 close、**绝不 write**：写才会在缓冲满时永久阻塞（见上方 _QUIT_VIA_STDIN 注释里
+        # POSIX 路径「绝不碰 stdin」的由来），关闭写端本身不阻塞、POSIX 侧同样安全。
+        for pipe in (proc.stdout, proc.stderr, proc.stdin):
+            try:
+                if pipe:
+                    pipe.close()
+            except Exception:
+                # 吞没即正确：句柄随进程/解释器回收，此处失败已无可恢复动作
+                pass
 
         return proc.poll() is not None
     except Exception as e:

@@ -4,6 +4,13 @@
 # 全局并发容量随活跃任务数自适应缩放且带安全下限、按 key 错误预算隔离、录制并发软上限。
 # 2026-09-20 补 SEV-01（有持有者时重算不得放大可用许可）与 MIN-22（探针代数标记）回归锁：
 # 原有 16 用例全部在无持有者场景断言 .value（此时 value == capacity），结构上抓不到该缺陷。
+# 2026-10-21 CODE_REVIEW_2026-10-21 追加三组不变量（改回旧形态即应转红）：
+#   M-35  动态模式的目标容量必须在 max 之后才封顶，错配的 configured_limit 不得绕过 _max_capacity；
+#         固定模式那一支**不**封顶（AGENTS 把固定并发钉成配置值本身），不对称本身也要有锁；
+#   M-42  min_samples 必须钳到 1..window，且 open 判据要求真的失败过（fail_rate=0 时
+#         全成功窗口不得因 0 >= 0 熔断）；
+#   M-36a 熔断表按 host 无界增长（key 属外部可控输入）→ 必须有 LRU 上限，且逐出只碰 closed 键、
+#         命中即 touch（仍在每轮上报的 host 不得被逐掉、丢累计样本与探针状态）。
 
 import threading
 import time
@@ -12,6 +19,7 @@ from typing import Any
 
 import pytest
 
+import src.scheduler as scheduler_module
 from src.scheduler import (
     _PROBE_LEASE_SECONDS,
     ConcurrencyScheduler,
@@ -506,3 +514,118 @@ def test_platform_breaker_same_thread_regrant_still_closes() -> None:
     b.record(True)
     assert b.state == "closed"
     assert b.allow() is True
+
+
+# —— M-35 回归锁：动态模式的目标容量必须先取大再封顶 ——
+
+
+def test_scheduler_dynamic_capacity_clamps_configured_to_max_capacity() -> None:
+    # configured_limit 被填成大于 max_capacity 的值（错配 / 抄来的大数）时，旧写法
+    # max(configured, min(上限, scaled)) 整体取 configured —— 声明的安全上限被一个配置值绕过，
+    # 80 房间瞬间放开数百并发请求，正是这套调度器要防的形态。
+    s = ConcurrencyScheduler(configured_limit=500, min_capacity=1, max_capacity=128, scale_divisor=4)
+    s.set_active_count(8)
+    assert s.network_semaphore.capacity == 128
+    # 活跃数继续涨也不得越过上限（降容路径同样不得被 configured 顶回去）
+    s.set_active_count(2000)
+    assert s.network_semaphore.capacity == 128
+
+
+def test_scheduler_dynamic_capacity_keeps_configured_below_max() -> None:
+    # 反向保证：封顶改动**不得**把正常的「配置值作下限」压掉（configured < max 时取两者较大）。
+    s = ConcurrencyScheduler(configured_limit=50, min_capacity=1, max_capacity=128, scale_divisor=4)
+    s.set_active_count(8)
+    assert s.network_semaphore.capacity == 50
+
+
+def test_scheduler_fixed_mode_is_deliberately_not_clamped() -> None:
+    # 不对称本身也是契约：固定并发模式下容量恒为用户填写的「同一时间访问网络的线程数」，
+    # 不受 max_capacity 约束（AGENTS 钉死的语义）。顺手把这一支也夹取 = 用户填 200 只拿到 128
+    # 且零提示，属新的静默失准，故这里明确断言它**不被**封顶。
+    s = ConcurrencyScheduler(configured_limit=500, min_capacity=1, max_capacity=128, scale_divisor=4)
+    s.set_dynamic_mode(False)
+    assert s.network_semaphore.capacity == 500
+
+
+# —— M-42 回归锁：min_samples 钳到窗口内 + open 必须真的失败过 ——
+
+
+def test_platform_breaker_min_samples_clamped_to_window() -> None:
+    # min_samples(8) > window(3) 时旧写法让 len(_samples) 永远达不到阈值 → 熔断器整生不开，
+    # 坏 host 拿满全部房间流量且永不自愈。
+    b = PlatformBreaker("t", window=3, fail_rate=0.5, cooldown=60.0, min_samples=8)
+    assert b._min_samples == 3
+    for _ in range(3):
+        b.record(False)
+    assert b.state == "open", b.state
+    assert b.allow() is False  # 冷却未结束，拒绝探测（旧写法下这里永远是 True：熔断从未打开）
+
+
+def test_platform_breaker_zero_fail_rate_does_not_open_on_all_success() -> None:
+    # fail_rate=0 时旧判据 0 >= 0 恒真：一个**全成功**的窗口也会被判熔断，健康 host 白白退避。
+    b = PlatformBreaker("t", window=10, fail_rate=0.0, cooldown=0.0, min_samples=4)
+    for _ in range(10):
+        b.record(True)
+    assert b.state == "closed", b.state
+    assert b.allow() is True
+    # fail_rate=0 的合法语义是「有任何失败即熔断」：一次真失败就该开
+    b.record(False)
+    assert b.state == "open", b.state
+
+
+def test_platform_breaker_fail_count_stays_incremental() -> None:
+    # _fail_count 必须与窗口严格同步（增量维护）：deque 满员挤出最旧样本时要扣掉它的贡献。
+    # 本用例同时是「不得改回 sum(self._samples)」的行为见证——计数与窗口一旦脱钩这里就红。
+    b = PlatformBreaker("t", window=4, fail_rate=1.0, cooldown=0.0, min_samples=4)
+    b.record(False)
+    b.record(False)
+    assert b._fail_count == 2
+    assert b.error_rate == 1.0  # 窗口此刻只有这两条样本
+    b.record(True)
+    b.record(True)
+    assert b._fail_count == 2  # 满窗前只入样，不挤出
+    b.record(True)
+    b.record(True)  # 这两条把两条失败样本挤出 deque(maxlen=4)
+    assert b._fail_count == 0, b._fail_count
+    assert b.state == "closed"
+
+
+# —— M-36a 回归锁：熔断表有上限、逐出只碰 closed、命中即 touch ——
+
+
+def test_scheduler_breaker_table_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(scheduler_module, "_MAX_BREAKERS", 4)
+    s = ConcurrencyScheduler()
+    for i in range(30):
+        s.record_failure(f"host{i}.example")  # 每个 key 一条失败样本：仍处 closed，可被逐出
+    assert len(s._breakers) == 4, len(s._breakers)
+    # 保留的必须是最近使用的四个键（而不是最早创建的四个）
+    assert list(s._breakers) == [f"host{i}.example" for i in range(26, 30)], list(s._breakers)
+
+
+def test_scheduler_breaker_eviction_keeps_non_closed_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 「仍在使用」= open / half-open（冷却未结束、探针在飞）。摘掉它等于把一次进行中的熔断重置成
+    # 放行 —— 坏 CDN 会立刻回到全部房间流量，比多留一支对象严重得多。
+    monkeypatch.setattr(scheduler_module, "_MAX_BREAKERS", 2)
+    s = ConcurrencyScheduler()
+    for _ in range(10):
+        s.record_failure("bad.example")  # 连打失败样本 → 该键进入 open
+    assert s._breaker("bad.example").state == "open"
+    s.record_failure("a.example")
+    s.record_failure("b.example")
+    s.record_failure("c.example")
+    assert "bad.example" in s._breakers, "熔断中的键被逐出：探针/冷却状态被重置"
+    # 表内其余 closed 键照常被逐出，总量仍在量级内（open 键 + 至多 cap 个 closed 键）
+    assert len([k for k in s._breakers if k != "bad.example"]) <= 2
+
+
+def test_scheduler_breaker_touch_protects_active_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 命中即 touch：最早创建但仍在每轮上报的 host 不得因为「创建得早」被逐掉。
+    monkeypatch.setattr(scheduler_module, "_MAX_BREAKERS", 2)
+    s = ConcurrencyScheduler()
+    s.record_success("busy.example")  # 先创建，处于表首
+    s.record_success("x.example")
+    s.record_success("busy.example")  # touch → busy 移到表尾
+    s.record_success("y.example")  # 触发逐出，被逐的应是 x（最久未使用）
+    assert "busy.example" in s._breakers, list(s._breakers)
+    assert "x.example" not in s._breakers, list(s._breakers)

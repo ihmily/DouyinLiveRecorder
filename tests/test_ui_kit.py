@@ -174,6 +174,31 @@ class TestSyncIncremental:
         assert tree.order == [] and tree.rows == {}
         assert tree.calls and all(kind == "delete" for kind, _ in tree.calls)
 
+    def test_missing_values_key_does_not_abort_sync(self) -> None:
+        # M-83 行为锁①：keys 是展示集合、values/tags 是两个独立字典，三者脱节在热更新
+        # 竞态里是真实可发生的形态。旧实现 values[key] 直索引抛 KeyError——**整轮 sync
+        # 半途而废**：异常点之后的行不插入、删除与顺序收敛都不执行，表格静默停在旧数据
+        # 上且日志一条没有（比缺一格难看的数据严重得多）。定稿 values.get(key, ())：
+        # 缺值行落空元组照常存在，其余行完整同步。
+        table, tree = _make_table()
+        changed = table.sync(["A", "B"], {"A": _ROWS["A"]}, {})
+        assert tree.order == ["A", "B"], "缺值行不得带走整轮同步"
+        assert tree.rows["B"] == ((), ())
+        assert changed == ["A", "B"]
+        # 后续轮次仍能被同一 key 正常接管（空行不是终态）
+        table.sync(["A", "B"], _rows_of(), {"A": ("normal",), "B": ("normal",)})
+        assert tree.rows["B"][0] == _ROWS["B"]
+
+    def test_row_with_both_value_and_tag_change_counts_once(self) -> None:
+        # M-83 行为锁②：changed 的语义是「这一行变了」，不是「变了几个字段」。旧实现值
+        # 分支与标记分支各自 append(key)，两者同变的行在返回值里出现两遍——调用方的
+        # 「变化行高亮衰减」会对同一行叠两轮动画。行级增量语义不得回退（未变化行零触碰
+        # 由 test_unchanged_rows_are_never_touched 守着）。
+        table, tree = _make_table()
+        table.sync(["A"], _rows_of(A=_ROWS["A"]), {"A": ("normal",)})
+        changed = table.sync(["A"], _rows_of(A=_ROWS["B"]), {"A": ("downgraded",)})
+        assert changed == ["A"], "值与标记同时变化时 changed 必须去重"
+
 
 class TestSourceLocks:
     def test_sync_defined_once_with_no_destroy_rebuild(self) -> None:

@@ -8,16 +8,22 @@
 # 3. 弹幕监控边车：DanmakuMonitorHub.close_file() 关闭后下一条事件自动重开
 # 4. src.logger 文件 sink：remove_file_sinks/add_file_sinks 往返与幂等、GUI/配置关闭时不注册
 # 5. main.py atexit 注册顺序静态锁（atexit 为 LIFO，归档须先注册、后执行）
+# 6. M-46 归档裁剪：按文件名时间戳保留最新 N 份 + 删除超龄份、活动文件与非归档名不碰、
+#    裁剪必须落在全部关句柄步骤之后、单个删除失败只告警不中断归档
+# 7. M-50 两处环境变量的布尔判定走全仓唯一入口（on/是/TRUE 这类写法必须真的生效）
 
+import ast
 import importlib
+import inspect
 import os
 import re
 import sys
 import threading
 import time
 import types
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
 import pytest
 from loguru import logger
@@ -79,11 +85,10 @@ class TestArchiveRuntimeLogs:
         self, logs_dir: Path, fake_sink_ops: dict[str, list[str]], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # 固定时间戳并预置同名归档目标：新归档追加 _1/_2 序号，绝不覆盖已有文件
-        monkeypatch.setattr(
-            la,
-            "datetime",
-            types.SimpleNamespace(now=lambda: types.SimpleNamespace(strftime=lambda fmt: "20260830_120000")),
-        )
+        # [M-46 适配] 替身现在必须返回**真 datetime**：归档裁剪要算保留窗口下界
+        # （datetime.now() - timedelta(days=...)），只带 strftime 的匿名对象会让裁剪步骤抛错、
+        # 被外层 except 吞成「归档返回空列表」，把本用例打成假失败。
+        monkeypatch.setattr(la, "datetime", types.SimpleNamespace(now=lambda: datetime(2026, 8, 30, 12, 0, 0)))
         _touch(logs_dir, "streamget.log")
         _touch(logs_dir, "streamget_20260830_120000.log")
         _touch(logs_dir, "streamget_20260830_120000_1.log")
@@ -145,6 +150,45 @@ class TestArchiveRuntimeLogs:
         assert (logs_dir / "streamget.log").exists()
         assert not fake_sink_ops["remove"]
 
+    @pytest.mark.parametrize("marker", ["1", "true", "TRUE", "yes", "y", "on", "ON", "是", "t"])
+    def test_disable_env_guard_accepts_every_documented_true_token(
+        self, logs_dir: Path, fake_sink_ops: dict[str, list[str]], monkeypatch: pytest.MonkeyPatch, marker: str
+    ) -> None:
+        # M-50 回归锁：归档禁用开关必须走全仓唯一布尔入口（关键约定 #9 的 token 集合）。
+        # 旧形态 `os.environ.get(...).strip().lower() in ("1","true","yes")` 认不出 on / y / t / 是，
+        # 而开发者按配置口径写 DOUYIN_DISABLE_LOG_ARCHIVE=on 时归档照样执行——pytest 退出会把
+        # 开发者工作副本里正在看的真实日志改名归档（AGENTS「风险控制」的清理越界同族故障）。
+        monkeypatch.setenv(la._DISABLE_ENV, marker)
+        _touch(logs_dir, "streamget.log")
+        assert la.archive_runtime_logs() == []
+        assert (logs_dir / "streamget.log").exists()
+        assert not fake_sink_ops["remove"]
+
+    @pytest.mark.parametrize("marker", ["1", "TRUE", "on", "是", "yes"])
+    def test_gui_parent_guard_accepts_every_documented_true_token(
+        self, logs_dir: Path, fake_sink_ops: dict[str, list[str]], monkeypatch: pytest.MonkeyPatch, marker: str
+    ) -> None:
+        # M-50 同族的第二处：GUI 父进程标记原先只认字符 "1"。DLR_GUI_PARENT=TRUE 时 GUI 进程
+        # 照样进归档链路，与录制子进程抢同一批日志文件句柄（轮转 PermissionError + 文件日志全丢）
+        monkeypatch.setenv(la.GUI_PARENT_ENV, marker)
+        _touch(logs_dir, "streamget.log")
+        assert la.archive_runtime_logs() == []
+        assert (logs_dir / "streamget.log").exists()
+        assert not fake_sink_ops["remove"]
+
+    @pytest.mark.parametrize("marker", ["maybe", "", "  ", "2"])
+    def test_guards_fall_back_to_archiving_for_unrecognized_values(
+        self, logs_dir: Path, fake_sink_ops: dict[str, list[str]], monkeypatch: pytest.MonkeyPatch, marker: str
+    ) -> None:
+        # 默认值方向不得翻转：无法识别的取值按 default=False（未禁用 / 不是 GUI）处理，照旧归档。
+        # 「写错一个字母就从此不归档」会让日志无限堆在原地，比误报更难被发现
+        monkeypatch.setenv(la._DISABLE_ENV, marker)
+        monkeypatch.setenv(la.GUI_PARENT_ENV, marker)
+        _touch(logs_dir, "streamget.log")
+        archived = la.archive_runtime_logs(reopen_streams=False)
+        assert len(archived) == 1
+        assert os.path.basename(archived[0]).startswith("streamget_")
+
     def test_reopen_streams_flag_controls_sink_readd(self, logs_dir: Path, fake_sink_ops: dict[str, list[str]]) -> None:
         # False（进程退出场景，atexit 传参）：只关闭+改名，不重建 sink；True（面板停止）：重建
         _touch(logs_dir, "streamget.log")
@@ -153,6 +197,189 @@ class TestArchiveRuntimeLogs:
         _touch(logs_dir, "PlayURL.log")
         assert la.archive_runtime_logs(reopen_streams=True)
         assert fake_sink_ops["add"]
+
+
+# M-46（2026-10-21）：归档裁剪。归档只改名不删除时，7×24 循环监测下每天数十次启停会让 logs/
+# 无界增长；下列用例锁四件事——保留上限、保留窗口、排序一律取文件名时间戳（非 mtime）、
+# 以及「裁剪必须落在全部关句柄步骤之后」（Windows 下句柄未关 os.remove 直接抛 WinError 32）。
+class TestArchivePrune:
+    # 固定「本轮归档时刻」：档案名与保留窗口下界都由它推出，用例不依赖真实当天日期
+    _NOW = datetime(2026, 8, 30, 12, 0, 0)
+
+    @pytest.fixture()
+    def frozen_now(self, monkeypatch: pytest.MonkeyPatch) -> datetime:
+        monkeypatch.setattr(la, "datetime", types.SimpleNamespace(now=lambda: self._NOW))
+        return self._NOW
+
+    @staticmethod
+    def _names(logs_dir: Path, stem: str) -> list[str]:
+        return sorted(p.name for p in logs_dir.glob(f"{stem}_*.log"))
+
+    def test_prune_keeps_newest_by_name_and_drops_extra(
+        self, logs_dir: Path, fake_sink_ops: dict[str, list[str]], monkeypatch: pytest.MonkeyPatch, frozen_now: datetime
+    ) -> None:
+        # 数量上限：超出最新 N 份的旧归档被删除，留下的恰是文件名时间戳最大的 N 份
+        monkeypatch.setattr(la, "_ARCHIVE_MAX_KEEP", 3)
+        for ts in ("20260829_000001", "20260829_000002", "20260829_000003", "20260829_000004"):
+            _touch(logs_dir, f"streamget_{ts}.log")
+        archived = la.archive_runtime_logs(reopen_streams=False)
+        assert archived == []  # 本轮没有活动日志可归档，只清理历史
+        assert self._names(logs_dir, "streamget") == [
+            "streamget_20260829_000002.log",
+            "streamget_20260829_000003.log",
+            "streamget_20260829_000004.log",
+        ]
+
+    def test_prune_drops_archives_beyond_age_window(
+        self, logs_dir: Path, fake_sink_ops: dict[str, list[str]], monkeypatch: pytest.MonkeyPatch, frozen_now: datetime
+    ) -> None:
+        # 时间上限与数量上限取**并集**删除：份数没超但已超龄的也必须删（否则常年只启停两三次的
+        # 部署里 logs/ 仍会无限堆着几年前的归档）
+        monkeypatch.setattr(la, "_ARCHIVE_MAX_KEEP", 50)
+        monkeypatch.setattr(la, "_ARCHIVE_MAX_AGE_DAYS", 3)
+        old = (frozen_now - timedelta(days=10)).strftime("%Y%m%d_%H%M%S")
+        recent = (frozen_now - timedelta(days=1)).strftime("%Y%m%d_%H%M%S")
+        _touch(logs_dir, f"streamget_{old}.log")
+        _touch(logs_dir, f"streamget_{recent}.log")
+        la.archive_runtime_logs(reopen_streams=False)
+        assert self._names(logs_dir, "streamget") == [f"streamget_{recent}.log"]
+
+    def test_prune_orders_by_name_not_mtime(
+        self, logs_dir: Path, fake_sink_ops: dict[str, list[str]], monkeypatch: pytest.MonkeyPatch, frozen_now: datetime
+    ) -> None:
+        # 排序判据必须是文件名里的时间戳：取证时拷贝日志、杀软扫描、同步工具都会把 mtime 改成
+        # 与生成顺序相反的形态，按 mtime 保留「最新 N 份」会删掉真正最新的归档。
+        # 本用例把最旧的档案打上一个**未来的** mtime：按 mtime 它会活下来，按名字它必须被删。
+        monkeypatch.setattr(la, "_ARCHIVE_MAX_KEEP", 1)
+        _touch(logs_dir, "streamget_20260820_000000.log")
+        _touch(logs_dir, "streamget_20260829_000000.log")
+        future = frozen_now.timestamp() + 86400
+        os.utime(str(logs_dir / "streamget_20260820_000000.log"), (future, future))
+        la.archive_runtime_logs(reopen_streams=False)
+        assert self._names(logs_dir, "streamget") == ["streamget_20260829_000000.log"]
+
+    def test_prune_never_touches_live_logs_or_non_archive_names(
+        self, logs_dir: Path, monkeypatch: pytest.MonkeyPatch, frozen_now: datetime
+    ) -> None:
+        # 只认 <基名>_<YYYYMMDD_HHMMSS>[_N].<扩展名> 这一种名字：活动日志本体（下一轮还要继续写）、
+        # 同前缀但时间戳形态不合法的文件、扩展名不符的文件一律不碰。
+        # 这里**直接调用**裁剪函数：经 archive_runtime_logs 走一遍的话活动文件会先被改名归档，
+        # 「活动日志不被裁剪删除」这条判据就永远观察不到。
+        monkeypatch.setattr(la, "_ARCHIVE_MAX_KEEP", 0)
+        _touch(logs_dir, "streamget.log")
+        _touch(logs_dir, "streamget_notes.log")
+        _touch(logs_dir, "streamget_20260829_00000.txt")
+        _touch(logs_dir, "PlayURL_20260829_000000.log")
+        _touch(logs_dir, "PlayURL_20260829_000000_1.log")
+        cutoff = (frozen_now - timedelta(days=la._ARCHIVE_MAX_AGE_DAYS)).strftime("%Y%m%d_%H%M%S")
+        la._prune_archives(str(logs_dir), cutoff)
+        assert (logs_dir / "streamget.log").is_file()
+        assert (logs_dir / "streamget_notes.log").is_file()
+        assert (logs_dir / "streamget_20260829_00000.txt").is_file()
+        # 同一时刻的冲突序号（_1）各算一份归档、同样被识别；数量上限 0 → 两支都被清理
+        assert self._names(logs_dir, "PlayURL") == []
+
+    def test_prune_is_per_stem(
+        self, logs_dir: Path, fake_sink_ops: dict[str, list[str]], monkeypatch: pytest.MonkeyPatch, frozen_now: datetime
+    ) -> None:
+        # 每个基名各算各的额度：四个运行日志互不挤占（否则 streamget 的几十份归档会把
+        # danmaku_monitor 的历史清空）
+        monkeypatch.setattr(la, "_ARCHIVE_MAX_KEEP", 1)
+        monkeypatch.setattr(la, "_ARCHIVE_MAX_AGE_DAYS", 3650)
+        _touch(logs_dir, "streamget_20260829_000001.log")
+        _touch(logs_dir, "streamget_20260829_000002.log")
+        _touch(logs_dir, "danmaku_monitor_20260829_000001.jsonl")
+        la.archive_runtime_logs(reopen_streams=False)
+        assert self._names(logs_dir, "streamget") == ["streamget_20260829_000002.log"]
+        assert [p.name for p in logs_dir.glob("danmaku_monitor_*.jsonl")] == ["danmaku_monitor_20260829_000001.jsonl"]
+
+    def test_prune_remove_failure_warns_and_does_not_abort(
+        self,
+        logs_dir: Path,
+        fake_sink_ops: dict[str, list[str]],
+        monkeypatch: pytest.MonkeyPatch,
+        frozen_now: datetime,
+    ) -> None:
+        # 单个删除失败（第三方进程占用句柄/只读属性）只留一条 warning：其余照删、归档照做、
+        # 绝不向调用方（面板「停止录制」与 atexit）抛异常
+        monkeypatch.setattr(la, "_ARCHIVE_MAX_KEEP", 1)
+        _touch(logs_dir, "streamget.log")
+        _touch(logs_dir, "streamget_20260829_000001.log")
+        _touch(logs_dir, "streamget_20260829_000002.log")
+        _touch(logs_dir, "streamget_20260829_000003.log")
+        real_remove = os.remove
+        victim = logs_dir / "streamget_20260829_000002.log"
+
+        def _deny_remove(path: Any, *args: Any, **kwargs: Any) -> None:
+            if os.path.basename(str(path)) == victim.name:
+                raise PermissionError(32, "模拟句柄被占用", str(path))
+            real_remove(path, *args, **kwargs)
+
+        # M-27 口径：stdlib 替身只落进被测模块命名空间，不污染进程全局 os
+        monkeypatch.setattr(la, "os", types.SimpleNamespace(**{**vars(os), "remove": _deny_remove}))
+        assert os.remove is real_remove  # 反向见证：替身没有改掉全局
+        captured: list[str] = []
+        sink_id = logger.add(lambda msg: captured.append(str(msg)), level="WARNING")
+        try:
+            archived = la.archive_runtime_logs(reopen_streams=False)
+        finally:
+            logger.remove(sink_id)
+        assert len(archived) == 1 and os.path.basename(archived[0]).startswith("streamget_")
+        assert victim.is_file(), "删除失败被静默吞掉：本份归档应仍在原地"
+        assert not (logs_dir / "streamget_20260829_000001.log").exists(), "同批其余归档被一次删除失败连带中断"
+        assert any(victim.name in line for line in captured), captured
+
+    def test_prune_runs_after_every_handle_close_step(
+        self,
+        logs_dir: Path,
+        fake_sink_ops: dict[str, list[str]],
+        monkeypatch: pytest.MonkeyPatch,
+        frozen_now: datetime,
+    ) -> None:
+        # 接线顺序硬锁：裁剪必须看到「loguru sink 已 remove、边车已 close、web_console 已关」之后
+        # 的时刻，Windows 下才不会撞 WinError 32；同时必须早于 add_file_sinks() 重新开句柄。
+        # 判据取「真实调用顺序」而非源码行号：把 _prune_archives 换成记账替身，记录它被调用时
+        # 各关句柄替身已经跑过几次。
+        seen: dict[str, object] = {}
+        real_prune = la._prune_archives
+
+        def _spy_prune(logs: str, cutoff: str) -> None:
+            seen["after_remove"] = list(fake_sink_ops["remove"])
+            seen["after_close_monitor"] = list(fake_sink_ops["close_monitor"])
+            seen["after_add"] = list(fake_sink_ops["add"])
+            seen["cutoff"] = cutoff
+            real_prune(logs, cutoff)
+
+        monkeypatch.setattr(la, "_prune_archives", _spy_prune)
+        _touch(logs_dir, "streamget.log")
+        _touch(logs_dir, "PlayURL.log")
+        assert len(la.archive_runtime_logs(reopen_streams=True)) == 2
+        assert seen["after_remove"] == ["remove"], "裁剪跑在 remove_file_sinks() 之前（句柄未关即删）"
+        assert seen["after_close_monitor"] == ["close"], "裁剪跑在边车 close_monitor_file() 之前"
+        assert seen["after_add"] == [], "裁剪必须早于 add_file_sinks() 重新开句柄"
+        assert seen["cutoff"] == (frozen_now - timedelta(days=la._ARCHIVE_MAX_AGE_DAYS)).strftime("%Y%m%d_%H%M%S")
+
+    def test_archive_runtime_logs_source_orders_prune_last(self) -> None:
+        # 源码结构锁（与上一条互为见证，判据取 AST 调用节点而不是文本 index：本函数里的解释性
+        # 注释也会提到这些函数名，纯文本 index 会先命中注释）。
+        # 锁的是接线：_prune_archives 的调用点必须晚于三处关句柄动作、早于 add_file_sinks()。
+        tree = ast.parse(inspect.getsource(la.archive_runtime_logs))
+        lines: dict[str, int] = {}
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = getattr(func, "id", None) or getattr(func, "attr", None)
+            if name in {"remove_file_sinks", "close_monitor_file", "_archive_web_console", "add_file_sinks"}:
+                lines[name] = min(lines.get(name, node.lineno), node.lineno)
+        prune_node = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "_prune_archives"
+        )
+        for closer in ("remove_file_sinks", "close_monitor_file", "_archive_web_console"):
+            assert lines[closer] < prune_node.lineno, f"裁剪跑在 {closer}() 之前（Windows 下句柄未关即删）"
+        assert prune_node.lineno < lines["add_file_sinks"], "裁剪必须早于 add_file_sinks() 重新开句柄"
 
 
 class TestWebConsoleRotation:

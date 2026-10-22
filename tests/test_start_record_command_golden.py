@@ -277,7 +277,7 @@ def _setup_case(main: ModuleType, monkeypatch: pytest.MonkeyPatch, case: dict[st
         "split_time": "600",
         "proxy_addr": case.get("proxy", ""),
         "proxy_addr_bak": "",
-        "enable_proxy_platform_list": ["抖音直播"] if case.get("proxy") else [],
+        "enable_proxy_platform_list": ["douyin"] if case.get("proxy") else [],
         "extra_enable_proxy_platform_list": [],
         "OVERSEAS_PLATFORM_HOST": case.get("overseas", []),
         "color_obj": MagicMock(),

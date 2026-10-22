@@ -7,6 +7,8 @@
 #      （它由 atexit 与面板「停止录制」两处调用）；未确认的进程必须留在注册表，清理线程必须是守护线程；
 #   ② 三段终止等待按剩余预算分摊且永不为 0（timeout//3 == 0 等于跳过优雅退出，MP4 丢 moov）；
 #   ③ Windows 下 stdin 写完即关闭（写失败也要关）。
+#   ④ M-58③（2026-10-21）：三级终止全部失败时的兜底必须关闭 stdout/stderr/stdin 三支管道，
+#      且逐支独立 best-effort（一支关不上不得拖累其余两支）。
 #
 # ③ 是 Windows 专属形态（POSIX 侧发 SIGINT、根本不碰 stdin，原因见 src/ffmpeg_proc.py
 # 的 _QUIT_VIA_STDIN 注释），但 CI 跑在 ubuntu——若按平台 skip，这两条锁会在 CI 上静默
@@ -49,6 +51,14 @@ class _FakeStdout:
         self.is_closed = True
 
 
+class _FailingPipe:
+    # close() 必抛（模拟句柄已被对端销毁 / 杀软占用），用于证明「逐支独立 best-effort」
+    is_closed = False
+
+    def close(self) -> None:
+        raise OSError("模拟管道句柄不可关")
+
+
 class _FakeProc:
     # 只实现 _terminate_ffmpeg_process / cleanup 用到的那部分 Popen 接口。
     # exits_on: None=永不退出（wait 一律抛超时）；"terminate"/"kill"=该级之后退出。
@@ -56,6 +66,8 @@ class _FakeProc:
         self.pid = 4242
         self.stdin: Any = _FakeStdin(raise_on_stdin_write)
         self.stdout: Any = _FakeStdout()
+        # M-58③：兜底关闭覆盖三支管道，替身必须有 stderr（真实 Popen 在 PIPE 下三支都在）
+        self.stderr: Any = _FakeStdout()
         self.returncode: int | None = None
         self._exits_on = exits_on
         self.waits: list[float | None] = []
@@ -185,3 +197,35 @@ def test_single_process_cleanup_sets_event_even_on_error(monkeypatch: pytest.Mon
     finished = threading.Event()
     fp._cleanup_single_ffmpeg_process(cast(Any, boom), finished)
     assert finished.is_set()
+
+
+# ── M-58③（2026-10-21）：三级终止全部失败后的管道兜底必须覆盖三支 ──────────
+# 旧形态只关 proc.stdout。走不到「进程已退出」这一步时，stderr（ffmpeg 的进度与错误输出，
+# 7×24 多房间下每条录制都开着一支）与 stdin 一律留到解释器收尾才回收：清理线程反复启停
+# 就一路攒 fd，而 Windows 上残留句柄还会让 logs/ 与媒体文件的归档改名撞 WinError 32。
+# 两支用例都强制走 POSIX 分支（_QUIT_VIA_STDIN=False）：那条路径第一级发 SIGINT、**根本不碰
+# stdin**，只有兜底块关过才算数（Windows 分支的 stdin 早在第一步就关了，判据会被掩盖）。
+
+
+def test_last_resort_closes_all_three_pipes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(fp, "_QUIT_VIA_STDIN", False)
+    proc = _FakeProc(exits_on=None)
+    ok = fp._terminate_ffmpeg_process(cast(Any, proc), timeout=1)
+
+    assert ok is False, "永不退出的桩进程必须判为未终止"
+    assert proc.stdout.is_closed is True
+    assert proc.stderr.is_closed is True, "stderr 句柄未随兜底关闭（M-58③ 回归）"
+    assert proc.stdin.is_closed is True, "stdin 句柄未随兜底关闭（M-58③ 回归）"
+
+
+def test_last_resort_pipe_close_failure_does_not_skip_the_other_pipes(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 逐支独立 best-effort：任一支 close 抛错（句柄已被对端销毁/杀软占用）不得阻止后面两支，
+    # 否则「一支关不上」演变成「三支全泄漏」
+    monkeypatch.setattr(fp, "_QUIT_VIA_STDIN", False)
+    proc = _FakeProc(exits_on=None)
+    proc.stdout = _FailingPipe()
+    ok = fp._terminate_ffmpeg_process(cast(Any, proc), timeout=1)
+
+    assert ok is False
+    assert proc.stderr.is_closed is True
+    assert proc.stdin.is_closed is True

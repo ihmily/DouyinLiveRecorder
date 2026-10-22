@@ -469,6 +469,9 @@ web_trusted_proxy =
 # 允许的 Host / Origin 白名单（逗号分隔）。仅在把 web_host 绑到 0.0.0.0/:: 且通过域名访问时需要；
 # 未列出的多级域名 Host 会被拒绝，用于阻断 DNS 重绑定（attacker.tld → 127.0.0.1）
 web_allowed_hosts =
+# 面板图标路径：Web 面板右上角「导入图标」上传后写入（副本在 config/icons/ 下）；
+# 同时用于浏览器标签图标（GET /favicon.ico）与 Windows 托盘图标。留空 = 内置 assets/app.ico
+web_tray_icon =
 ```
 
 > `web_host` 在仓库默认配置中为 `127.0.0.1`（仅本机可访问）。Docker 或需局域网/公网访问时改为 `0.0.0.0`，并务必同时开启 `web_auth_enable` 与 `web_password`。
@@ -487,12 +490,21 @@ gui_motion = 跟随系统
 gui_font =
 # 自定义字体文件路径：由侧边栏「导入字体…」写入；字体副本存放在 config/fonts/ 下
 gui_font_file =
+# 自定义托盘 / 窗口图标路径：由侧边栏「导入图标…」写入；图标副本存放在 config/icons/ 下
+# 留空 = 内置图标 assets/app.ico（16/24/32/48/64/128/256 七档）
+gui_tray_icon =
 ```
 
 > 字体相关说明：下拉里的预设族按**本机是否已安装**过滤，避免出现「选了没反应」的项；
 > 「导入字体…」支持 `.ttf` / `.otf` / `.ttc`（SFNT 容器），`.woff2` / `.woff` 属网页传输格式、
 > Tk 在 Windows 下经 GDI 取字体认不了，需先转成 ttf/otf；日志终端与 URL 编辑器固定用等宽字体，
 > 不随此项变化（保持字符对齐）。
+>
+> 图标相关说明：侧边栏「导入图标…」只接受 `.ico`——Windows 的托盘、资源管理器、任务栏与窗口标题栏
+> 都从 ICO 容器里按场景取档（16px 托盘、256px 大图标），单一 PNG 在这几处要么发虚要么不被识别。
+> 导入时必须含 16×16（缺则托盘被系统硬缩、圆环糊成一团），建议同时含 256×256（缺只提示、不拦）。
+> 图标副本落 `config/icons/`，配置里记的是副本路径——删掉原文件不会让图标消失；加载失败一律静默回落
+> 到内置图标（再退到自绘），不影响启动。
 
 ### 直播间配置 (config/URL_config.ini)
 

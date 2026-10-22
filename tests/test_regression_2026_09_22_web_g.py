@@ -162,7 +162,7 @@ class TestWriteSideSensitiveParity:
     def test_blank_write_to_value_shaped_secret_rejected(self, app_env: types.SimpleNamespace, value: str) -> None:
         # 键名刻意取「不敏感」的（is_sensitive_item 判 False），把判定完全压到值形态上：
         # 这样用例失败只可能因为写侧没做值形态判定，而不是键名白名单顺带命中。
-        section, key = "推送配置", "自定义推送标题"
+        section, key = "录制设置", "自定义推送标题"
         assert is_sensitive_item(section, key) is False, "用例前提：该键名不得命中敏感键名模式"
         assert append_config_line(str(app_env.cfg), section, key, value) is True
 
@@ -185,7 +185,7 @@ class TestWriteSideSensitiveParity:
     def test_mask_write_to_value_shaped_secret_rejected(self, app_env: types.SimpleNamespace, value: str) -> None:
         # 掩码分支同理：面板把该项渲染成 '***'，用户原样提交（或脚本直接打接口）
         # 不得把真实凭据覆写成字面掩码 —— 备份副本已按 CR-07 脱敏，无从恢复。
-        section, key = "推送配置", "自定义推送标题"
+        section, key = "录制设置", "自定义推送标题"
         assert is_sensitive_item(section, key) is False, "用例前提：该键名不得命中敏感键名模式"
         assert append_config_line(str(app_env.cfg), section, key, value) is True
 
@@ -203,7 +203,7 @@ class TestWriteSideSensitiveParity:
         # 若读侧将来把值形态判定删掉，这条会先红，提示两端一起漂了。
         from src.web_config import read_config_safe
 
-        section, key = "推送配置", "自定义推送标题"
+        section, key = "录制设置", "自定义推送标题"
         assert append_config_line(
             str(app_env.cfg), section, key, "https://oapi.dingtalk.com/robot/send?access_token=REALSECRET123"
         )
@@ -213,7 +213,7 @@ class TestWriteSideSensitiveParity:
     def test_plain_non_secret_value_still_writable(self, app_env: types.SimpleNamespace) -> None:
         # 反向边界：值形态判定不得扩成「URL 都不能清空」或「含 key= 的都不能写」。
         # 无凭据的普通 URL 必须照常可写、可清空，否则这条防线变成功能回归。
-        section, key = "推送配置", "自定义推送标题"
+        section, key = "录制设置", "自定义推送标题"
         assert append_config_line(str(app_env.cfg), section, key, "https://ntfy.sh/mytopic") is True
 
         token = _login(app_env.client)

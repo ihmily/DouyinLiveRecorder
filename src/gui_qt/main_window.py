@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import cast
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QCloseEvent, QFont, QFontDatabase
+from PySide6.QtGui import QCloseEvent, QFont, QFontDatabase, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -43,6 +43,17 @@ from src.ui_fonts import (
     save_font_preference,
 )
 from src.ui_i18n import T, retranslate_all, set_text
+from src.ui_icons import (
+    GUI_ICON_KEY,
+    GUI_SECTION,
+    MAX_ICON_BYTES,
+    SUPPORTED_ICON_SUFFIXES,
+    current_icon_path,
+    install_icon_file,
+    load_icon_preference,
+    save_icon_preference,
+    validate_icon_bytes,
+)
 from src.ui_scale import (
     AUTO_SCALE_ID,
     SCALE_PRESETS,
@@ -117,9 +128,14 @@ class MainWindow(QMainWindow):
         self._palette = palette(theme_module.THEME_LIGHT, 1.0)
         self._theme_follow_system = True
         self._scale_follow_system = True
+        # M-80：_resolve_initial_theme_and_scale 产出的最终缩放百分数（供下拉启动回填），
+        # 100 只是「尚未解析」的占位。
+        self._initial_scale_percent = 100
         self._selected_font_family = ""
         self._font_file_pref = ""
         self._imported_font_families: list[str] = []
+        # 导入的托盘 / 窗口图标路径（空 = 用内置 assets/app.ico，仍缺失则回落到 Qt 默认）
+        self._icon_file_pref = ""
 
         self._quitting = False
         self._chain_warn_at: dict[str, float] = {}
@@ -146,9 +162,14 @@ class MainWindow(QMainWindow):
 
         self._resolve_initial_theme_and_scale()
         self._build_ui()
+        # M-80：偏好下拉的启动回填点（必须在 _build_ui 之后——下拉是它建的）。
+        self._sync_pref_combo_positions()
         self._wire_recorder()
         self._start_timers()
         self._setup_tray()
+        # 图标必须在托盘建好之后才应用：托盘图标由 TrayIcon 持有，窗口图标另走 QApplication，
+        # 两者同源于本调用（窗口图标在托盘不可用时同样要生效）。
+        self._apply_icon_preference()
 
         self.load_url_config()
         self._apply_language_preference()
@@ -335,6 +356,12 @@ class MainWindow(QMainWindow):
         connect_click(self.import_font_btn, self.on_import_font)
         grid.addWidget(self.import_font_btn)
         self._refresh_font_menu_values()
+        # 图标导入与字体导入同构（选文件 → 校验 → 落盘副本 → 写配置 → 即时生效），
+        # 故按钮紧跟在字体按钮之后，共用同一组样式与登记口径。
+        self.import_icon_btn = action_button(i18n.tr("导入图标…"))
+        set_text(self.import_icon_btn, T("导入图标…"))
+        connect_click(self.import_icon_btn, self.on_import_icon)
+        grid.addWidget(self.import_icon_btn)
         return grid
 
     def _build_topbar(self) -> QFrame:
@@ -417,9 +444,14 @@ class MainWindow(QMainWindow):
         saved_scale = load_scale_preference(self.main_config_file)
         self._scale_follow_system = saved_scale in ("", AUTO_SCALE_ID)
         percent = self._auto_percent() if self._scale_follow_system else int(saved_scale)
+        # M-80（2026-10-21）：把最终生效的档位留给启动回填用。这里只算不写回下拉——
+        # 本方法必须先于 _build_ui 跑（palette 的 scale 决定侧栏定宽与窗口最小尺寸），
+        # 下拉那时还不存在，旧实现在此之后再也没有第二处对齐点，见 _sync_pref_combo_positions。
+        self._initial_scale_percent = percent
         self._palette = palette(resolved, percent / 100.0)
         self._font_file_pref = load_font_file_preference(self.main_config_file)
         self._selected_font_family = load_font_preference(self.main_config_file)
+        self._icon_file_pref = load_icon_preference(self.main_config_file, GUI_SECTION, GUI_ICON_KEY)
 
     def _auto_percent(self) -> int:
         # 取 availableSize 而非 size：任务栏/停靠栏占掉的那一部分不算可用高度，
@@ -429,6 +461,26 @@ class MainWindow(QMainWindow):
             return 100
         size = screen.availableSize()
         return auto_scale_for_screen(size.width(), size.height())
+
+    def _sync_pref_combo_positions(self) -> None:
+        # M-80（2026-10-21）：_resolve_initial_theme_and_scale 读了配置、算出 palette，却从不
+        # 回填侧栏下拉——下拉初值恒是 index 0（「跟随系统」/「自动」）。显式选过 dark/115 的
+        # 用户重启后得到「窗口是深色、下拉却指着跟随系统」的自相矛盾现场：toggle_theme 按
+        # palette 翻转、下拉按 currentData 落盘，两处对「当前主题」的判断从此不一致，用户要
+        # 先拨一次下拉才能把自己的既有选择「同步」回来。定稿 = 与 _refresh_font_menu_values()
+        # 同一回填形态：findData 为唯一判据、blockSignals 防回填被当成用户选择写回 config；
+        # 跟随系统/自动形态下目标就是 index 0，统一走 findData 比较而不是特判「只在显式偏好
+        # 时回填」（少一层分支）。目录里没有的取值（未来档位增删的过渡态）保持原位不硬设。
+        targets: tuple[tuple[QComboBox, str], ...] = (
+            (self.theme_combo, FOLLOW_SYSTEM_ID if self._theme_follow_system else self._palette.theme_id),
+            (self.scale_combo, AUTO_SCALE_ID if self._scale_follow_system else str(self._initial_scale_percent)),
+        )
+        for combo, want in targets:
+            index = combo.findData(want)
+            if index >= 0 and index != combo.currentIndex():
+                combo.blockSignals(True)
+                combo.setCurrentIndex(index)
+                combo.blockSignals(False)
 
     def apply_palette(self) -> None:
         # 主题/缩放切换的唯一出口：QSS 由 palette 现算后整窗重设。
@@ -445,6 +497,11 @@ class MainWindow(QMainWindow):
             self.sidebar_dot.set_color(self._palette.token("success"), True)
         else:
             self.sidebar_dot.set_color(self._palette.token("danger"), False)
+        # M-81（2026-10-21）：托盘是运行态与主题的第五处投影，漏进本出口就会与侧栏分色
+        # （图标色是 TrayIcon 构造时拿的 palette.tokens 快照，旧实现此后从不刷新）。
+        # 托盘不可用时为 None，按存在性接线（离屏/无 Session 环境恒 None，不得硬调）。
+        if self.tray is not None:
+            self.tray.apply_palette(self._palette.tokens)
 
     def application(self) -> QApplication | None:
         # 取 QApplication 单例（instance() 的静态类型是 QCoreApplication，故显式 cast）。
@@ -526,8 +583,11 @@ class MainWindow(QMainWindow):
             self._queue_log(i18n.tr("语言已切换，但配置写回失败: {err}", err=e), "warn")
 
     def _apply_language_preference(self) -> None:
-        # 启动期只做这一次全量重译；运行期由 on_language_change 增量驱动 retranslate_all()。
-        # 两条路径都走同一个 retranslate_all，避免「启动后漏翻一批控件」。
+        # [历史注] 本方法原注释声称「启动期与运行期两条路径都走同一个 retranslate_all()」——
+        # 2026-10-21 M-78 复核证伪：旧实现从未在这里调用它，retranslate_all 全仓唯一调用点
+        # 在 on_language_change。set_text() 是「建时查表 + 登记重译」两段式，而 _build_ui()
+        # 跑在任何语言切换之前（建时查的还是导入默认语言的表），所以配置语言非 zh_CN 的用户
+        # 启动后静态标签一直是中文，直到手动切一次语言下拉才被「顺带」修好。
         raw = self._read_config_value("language")
         effective = i18n.set_language(i18n.resolve_language(raw))
         index = self.language_combo.findData(effective)
@@ -535,6 +595,16 @@ class MainWindow(QMainWindow):
             self.language_combo.blockSignals(True)
             self.language_combo.setCurrentIndex(index)
             self.language_combo.blockSignals(False)
+        # 回填已建控件必须排在 set_language 之后、_repopulate_static_texts() 之前：
+        # 后者派生顶栏页标题与运行态投影，读的必须是新语言回填完的导航按钮文本
+        # （与 on_language_change 的步序逐字一致）。重译单独一段 try、与后续刷新解耦——
+        # 回填半途炸掉也只损失回填，不该把哨兵下拉/托盘/状态面一并带走（同「重译与
+        # config 写回必须是两段独立 try」的钩子约定）。本路径不做配置写回，写回侧问题
+        # 不存在，无需再分第二段。
+        try:
+            retranslate_all()
+        except Exception as e:
+            self._queue_log(i18n.tr("界面重译失败（当前语言 {lang}）: {err}", lang=effective, err=e), "warn")
         self._repopulate_static_texts()
 
     def _repopulate_static_texts(self) -> None:
@@ -652,6 +722,96 @@ class MainWindow(QMainWindow):
             save_font_preference(self.main_config_file, families[0], str(installed))
         except Exception as e:
             self._queue_log(i18n.tr("界面字体已调整，但配置写回失败: {err}", err=e), "warn")
+
+    def on_import_icon(self) -> None:
+        # 导入托盘 / 窗口图标（ICO）：与字体导入同一条链路——选文件 → 格式与分辨率校验 →
+        # 复制进 config/icons/ → 写回 config.ini → 即时应用到托盘 + 窗口（标题栏 / 任务栏）。
+        # 校验前置（而不是复制后再判）的理由：坏文件不该在 config/icons/ 里留下一份垃圾副本。
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            i18n.tr("选择图标文件"),
+            "",
+            i18n.tr("图标文件") + " (*" + " *".join(SUPPORTED_ICON_SUFFIXES) + ")",
+        )
+        if not path:
+            return
+        if os.path.splitext(path)[1].lower() not in SUPPORTED_ICON_SUFFIXES:
+            QMessageBox.warning(
+                self,
+                i18n.tr("不支持的图标格式"),
+                i18n.tr(
+                    "仅支持 {formats} 图标文件；ICO 需包含 16×16 分辨率（系统托盘）"
+                    "，建议同时包含 256×256（应用图标与任务栏）。",
+                    formats="/".join(SUPPORTED_ICON_SUFFIXES),
+                ),
+            )
+            return
+        try:
+            with open(path, "rb") as f:
+                raw = f.read()
+        except Exception:
+            raw = b""
+        check = validate_icon_bytes(raw)
+        if not check.ok:
+            QMessageBox.warning(self, i18n.tr("导入图标失败"), self._icon_reject_reason(check.code))
+            return
+        if check.code == "no_app_size":
+            # 缺 256 档是「能用但发虚」（资源管理器大图标 / Alt+Tab 要放大），提示但不拦：
+            # 用户手头只有 48×48 的图标时，拒绝导入等于完全用不了自定义图标。
+            self._queue_log(i18n.tr("图标缺少 256×256 分辨率，应用图标会放大发虚"), "warn")
+        installed = install_icon_file(path, self.app_root)
+        if installed is None:
+            QMessageBox.warning(
+                self, i18n.tr("导入图标失败"), i18n.tr("无法读取或复制该图标文件，请确认文件未被占用且可读取。")
+            )
+            return
+        if not self._apply_icon_path(str(installed)):
+            QMessageBox.warning(
+                self, i18n.tr("导入图标失败"), i18n.tr("系统无法加载该图标，可能是文件已损坏或不是有效的 ICO 文件。")
+            )
+            return
+        self._icon_file_pref = str(installed)
+        try:
+            saved = save_icon_preference(self.main_config_file, GUI_SECTION, GUI_ICON_KEY, str(installed))
+        except Exception as e:
+            self._queue_log(i18n.tr("图标已应用，但配置写回失败: {err}", err=e), "warn")
+            return
+        if not saved:
+            self._queue_log(i18n.tr("图标已应用，但配置写回失败"), "warn")
+        self._queue_log(i18n.tr("已导入并应用图标: {name}", name=installed.name))
+
+    def _icon_reject_reason(self, code: str) -> str:
+        # 拒绝原因 → 用户能看懂的一句话。刻意不回显 code 原文（"not_ico" 对终端用户无意义）。
+        if code == "too_large":
+            return i18n.tr("图标文件过大（上限 {limit}KB）。", limit=MAX_ICON_BYTES // 1024)
+        if code == "no_tray_size":
+            return i18n.tr("图标缺少 {size} 分辨率，系统托盘会显示模糊；请用多分辨率 ICO。", size="16×16")
+        return i18n.tr("系统无法加载该图标，可能是文件已损坏或不是有效的 ICO 文件。")
+
+    def _apply_icon_preference(self) -> None:
+        # 启动期加载：config.ini 记的导入图标 → 内置 assets/app.ico → 都没有就不动
+        # （Qt 在 Windows 上默认取 exe 资源里的图标，打包产物因此仍显示应用图标）。
+        # 整条路径静默降级：图标是装饰，加载失败只应是「图标没换」，绝不能挡住启动。
+        resolved = current_icon_path(self.app_root, self._icon_file_pref)
+        if resolved is None:
+            return
+        if not self._apply_icon_path(str(resolved)):
+            self._queue_log(i18n.tr("自定义图标加载失败，回落到默认图标: {path}", path=str(resolved)), "warn")
+
+    def _apply_icon_path(self, path: str) -> bool:
+        # 应用到窗口（标题栏 / 任务栏）与托盘；返回是否真的换上了。
+        # 【为什么两处必须同源】只设窗口不设托盘会出现「任务栏是导入图标、托盘还是默认圆点」，
+        # 用户会当成导入没生效。托盘不可用时窗口图标照设（它决定任务栏观感）。
+        icon = QIcon(path)
+        if icon.isNull():
+            return False
+        app = self.application()
+        if app is not None:
+            app.setWindowIcon(icon)
+        self.setWindowIcon(icon)
+        if self.tray is not None:
+            self.tray.set_custom_icon(path)
+        return True
 
     # ─── 子进程接线 ───
 
@@ -775,6 +935,12 @@ class MainWindow(QMainWindow):
         # 肉眼可见的卡顿。回调内包 try/except + 限频留痕是周期链的统一口径（见 _warn_chain）：
         # 不接住异常就等于这一批已出队的行随异常消失、日志页从此不再更新却无一条线索。
         if not self._pending_log_lines:
+            # M-80（2026-10-21）：空缓冲时必须停表再返回。本链的契约是「按需激活」——
+            # _start_timers 刻意不 start 它，启动口在 _ensure_log_timer_running（logQueued
+            # 投递）。旧实现在这里直接 return，表一旦被启过就再没有停的时机：GUI 空闲时
+            # 5Hz 空转直到进程退出（白耗事件循环轮次，也掩盖「唤醒链断了」这类真故障——
+            # 反正定时器一直在跑，logQueued 丢没丢都看不出来）。
+            self._log_timer.stop()
             return
         batch = self._pending_log_lines
         self._pending_log_lines = []
@@ -1109,9 +1275,19 @@ class MainWindow(QMainWindow):
 
     def _setup_tray(self) -> None:
         # 托盘不可用时（部分 Linux 桌面环境、被组策略禁用）不抛错，退化为最小化到任务栏。
-        candidate = TrayIcon(self, self._palette.tokens)
+        # 图标在构造期就交给托盘：配置里记的路径可能已失效（用户删了文件），TrayIcon 内部
+        # 「解不出就回落自绘」，故这里不必先判存在性，判了反而多一处会漂移的事实源。
+        resolved = current_icon_path(self.app_root, self._icon_file_pref)
+        candidate = TrayIcon(self, self._palette.tokens, str(resolved) if resolved is not None else "")
         if not candidate.is_available():
             self._queue_log(i18n.tr("系统托盘不可用，已改为最小化到任务栏"), "warn")
+            # M-81（2026-10-21）：TrayIcon 在可用性判定**之前**就得先构造（is_available 是
+            # 实例方法），而它的 QSystemTrayIcon 以主窗口为 parent——判定失败后直接 return
+            # 会让 QSystemTrayIcon + QMenu + 5 个 QAction 永久挂在窗口对象树上（每次启动
+            # 固定泄一份，且 deleteLater 是唯一能摘掉 Qt 侧父子引用的出口，Python 侧丢
+            # candidate 引用并不析构 C++ 对象）。两条句柄都显式处置。
+            candidate.icon.deleteLater()
+            candidate.menu.deleteLater()
             return
         candidate.bind_actions(
             self.restore_from_tray,

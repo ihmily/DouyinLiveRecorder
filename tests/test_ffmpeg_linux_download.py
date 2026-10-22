@@ -3,6 +3,9 @@
 # 组织方式：按「删掉哪条判据就该变红」分组（分流 / URL 反解 / 真值表 / 失败不抛 / 两处副本一致性），
 #   另含评审 I-1/I-3/I-4 补齐的分组：载荷形态、归档形态闸门、TOFU 基准比对（含基准读不出）、
 #   归档取件布局与缺件、_download 重试与退避、安装后验证探针的三态（抛异常 / 零字节空壳）。
+# 2026-10-21 评审包追加：独占落盘（M-44）、PATH 去重前置（M-47）、解包前空间预检（M-48）、
+#   下载字节上限（M-49）——段末 TestExclusiveArchiveSink / TestPathInjectionAndSpacePrecheck /
+#   TestDownloadByteCap 三组，判据同样全部落在「现场还剩什么」。
 # 全部离线：requests / subprocess / 落盘目录三面被打桩或收敛到 tmp_path，
 #   绝不真下 ~110MB 产物，也不写程序目录（AGENTS.md「测试产物一律走 tmp_path」）。
 # 替身口径：stdlib 与第三方模块一律走**被测模块命名空间的 shim**
@@ -12,6 +15,7 @@
 
 import hashlib
 import io
+import os
 import platform
 import stat
 import subprocess
@@ -650,3 +654,118 @@ class TestDownloadRetryPolicy:
         assert len(calls) == fld._MAX_RETRIES
         assert len(sleeps) == fld._MAX_RETRIES - 1
         assert not archive.exists(), "写盘中途失败的半截归档必须当场删掉，不得留给下一轮续写"
+
+
+# ==========================================================================
+# 2026-10-21 评审包 M-44 / M-47 / M-48 / M-49（Linux 直下侧）。
+# 上面 TestDownloadRetryPolicy 已经锁住「重试 / 退避 / 半截归档 / 异常不穿出」这四格；本段补的是
+# 同一批下载动作里**落盘纪律**的那一半：名字不可预测、独占创建、目录锁、PATH 去重、解包前空间预检、
+# 以及此前完全缺失的字节上限。判据一律落在「现场还剩什么」而不是「日志写了什么」。
+# ==========================================================================
+
+
+class TestExclusiveArchiveSink:
+    # M-44：归档名从固定 `ffmpeg_linux_native_temp.tar.xz` 改为「可识别前缀 + 随机后缀」，
+    # 写入走 fld.open_exclusive（O_CREAT|O_EXCL|O_NOFOLLOW）。
+    def test_archive_name_is_unpredictable_yet_still_findable(self, tmp_path: Path) -> None:
+        first = fld.unique_path(tmp_path, fld._TEMP_ARCHIVE_PREFIX, fld._TEMP_ARCHIVE_SUFFIX)
+        second = fld.unique_path(tmp_path, fld._TEMP_ARCHIVE_PREFIX, fld._TEMP_ARCHIVE_SUFFIX)
+        assert first != second, "可预测名 = 可被预置占位，两实例也会互相覆盖"
+        # 前缀必须保住：TestIntegrityTruthTable 等多条既有断言靠 *ffmpeg_linux_native_temp* 找产物。
+        assert first.name.startswith(fld._TEMP_ARCHIVE_PREFIX)
+        assert first.name.endswith(fld._TEMP_ARCHIVE_SUFFIX)
+
+    def test_foreign_archive_at_the_pinned_legacy_name_is_never_touched(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 把命名钉回改动前的固定名，复现「本地主体/另一实例先占住那个路径」的形态：
+        # 本轮必须失败、且**不得**把对方的文件当成自己的半截归档删掉（M-44 登记的互删形态）。
+        victim = tmp_path / "ffmpeg_linux_native_temp.tar.xz"
+        victim.write_bytes(b"NOT-OURS-DO-NOT-DELETE")
+        monkeypatch.setattr(fld, "unique_path", lambda directory, prefix, suffix: Path(directory) / victim.name)
+        payload = _tar_xz({"pkg/bin/ffmpeg": b"#!/bin/sh\n", "pkg/bin/ffprobe": b"#!/bin/sh\n"})
+        _stub_egress(monkeypatch, str(tmp_path), digest=hashlib.sha256(payload).hexdigest(), payload=payload)
+        _stub_backoff(monkeypatch)
+        assert fld.install_ffmpeg_linux_native(str(tmp_path), "linuxarm64", master_allowed=True) is False
+        assert victim.read_bytes() == b"NOT-OURS-DO-NOT-DELETE"
+        assert not (tmp_path / "ffmpeg").exists()
+
+    def test_download_uses_an_unpredictable_sink_name(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # 本类另两条用例把 unique_path **钉成固定名**来复现「占位者」形态；那种改法对「调用点是否真的走
+        # unique_path」零敏感（钉进去的名字恰好等于实现用的名字）。故这里判**行为**：spy 记录真正交给
+        # open_exclusive 的路径，必须是「前缀 + 随机后缀」而不是改动前的 ffmpeg_linux_native_temp.tar.xz。
+        recorded: list[Path] = []
+        real_open_exclusive = fld.open_exclusive
+
+        def spy_open(path: Path) -> Any:
+            recorded.append(Path(str(path)))
+            return real_open_exclusive(path)
+
+        monkeypatch.setattr(fld, "open_exclusive", spy_open)
+        payload = _tar_xz({"pkg/bin/ffmpeg": b"#!/bin/sh\n", "pkg/bin/ffprobe": b"#!/bin/sh\n"})
+        _stub_egress(monkeypatch, str(tmp_path), digest=hashlib.sha256(payload).hexdigest(), payload=payload)
+        assert fld.install_ffmpeg_linux_native(str(tmp_path), "linuxarm64", master_allowed=False) is True
+        assert recorded, "下载段没有走独占创建，M-44 的判据已失效"
+        assert recorded[0].name != "ffmpeg_linux_native_temp.tar.xz", "调用点仍在用改动前的固定可预测名"
+        assert recorded[0].name.startswith(fld._TEMP_ARCHIVE_PREFIX), "可识别前缀不得丢"
+
+    def test_directory_lock_blocks_a_concurrent_installer(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # 锁文件由「别人」持着（mtime 新鲜）：本轮必须一次请求都不发就放弃，且不删别人的锁。
+        lock = tmp_path / fld._LOCK_FILE_NAME
+        lock.write_text("pid=999999", encoding="ascii")
+        monkeypatch.setattr(fld, "requests", _requests_shim(lambda *a, **kw: pytest.fail("持锁期间不得出站")))
+        proc = types.SimpleNamespace(**vars(subprocess))
+        proc.run = lambda *a, **kw: pytest.fail("持锁期间不得跑安装后探针")
+        monkeypatch.setattr(fld, "subprocess", proc)
+        assert fld.install_ffmpeg_linux_native(str(tmp_path), "linuxarm64", master_allowed=True) is False
+        assert lock.is_file(), "不得删除别人持有的锁"
+
+
+class TestPathInjectionAndSpacePrecheck:
+    def test_two_installs_leave_the_same_prefix_once_in_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # M-47：旧形态是 `str(ffmpeg_dir) + os.pathsep + os.environ.get("PATH")`，无去重——
+        # 每次自动安装都把同一个目录再叠一层，PATH 单调变长（main.py 侧同样有这条守卫）。
+        payload = _tar_xz({"pkg/bin/ffmpeg": b"#!/bin/sh\n", "pkg/bin/ffprobe": b"#!/bin/sh\n"})
+        _stub_egress(monkeypatch, str(tmp_path), digest=hashlib.sha256(payload).hexdigest(), payload=payload)
+        target = str(tmp_path / "ffmpeg")
+        for _round in range(2):
+            assert fld.install_ffmpeg_linux_native(str(tmp_path), "linuxarm64", master_allowed=False) is True
+        parts = os.environ["PATH"].split(os.pathsep)
+        assert parts[0] == target, "注入的必须是本次真正落成的目录"
+        assert parts.count(target) == 1, f"同一前缀被反复叠加：{parts[:5]}"
+
+    def test_space_precheck_refuses_before_unpacking(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # M-48：本模块的解包目录一直落在应用目录内（不是 %TEMP%），所以这条预检是新增的那一半——
+        # 预检必须在解包**之前**拦下：不留半截 ffmpeg 目录，也把自己创建的归档收干净。
+        payload = _tar_xz({"pkg/bin/ffmpeg": b"#!/bin/sh\n", "pkg/bin/ffprobe": b"#!/bin/sh\n"})
+        _stub_egress(monkeypatch, str(tmp_path), digest=hashlib.sha256(payload).hexdigest(), payload=payload)
+        monkeypatch.setattr(fld, "has_room_for_unpack", lambda *a, **kw: False)
+        assert fld.install_ffmpeg_linux_native(str(tmp_path), "linuxarm64", master_allowed=False) is False
+        assert not (tmp_path / "ffmpeg").exists()
+        assert list(tmp_path.glob("*ffmpeg_linux_native_temp*")) == []
+
+
+class TestDownloadByteCap:
+    def test_byte_cap_stops_the_stream_and_removes_the_partial(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # M-49 的量这一半：本模块此前有重试、无上限。上限判定必须排在 sink.write **之前**，
+        # 否则「先写进磁盘再判超限」只是把无上限流改成了「略多一点的」无上限流。
+        archive = tmp_path / "capped.tar.xz"
+        monkeypatch.setattr(fld, "_MAX_ARCHIVE_BYTES", 8)
+        calls: list[str] = []
+
+        def _get(url: str, **kw: Any) -> Any:
+            calls.append(url)
+            return _FakeDownload(b"X" * 4096)
+
+        monkeypatch.setattr(fld, "requests", _requests_shim(_get))
+        sleeps = _stub_backoff(monkeypatch)
+        assert fld._download(LINUXARM64_URL, archive) is False
+        assert len(calls) == 1, "超限不是「网络抖了一下」，不得进入重试循环"
+        assert sleeps == []
+        assert not archive.exists(), "超限的半截归档必须当场删掉"

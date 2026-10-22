@@ -14,7 +14,12 @@
 #   「Web panel smoke test」步骤变红——这正是「明确失败即让该 job 变红」的落点，因此
 #   workflow 不再需要单独的落锤步骤（失败工件由后续 `if: always()` 上传步骤保留）。
 # =============================================================================
-set -uo pipefail
+# M-96（2026-10-21）：补 -e。此前只有 `set -uo pipefail`，中间任何一步失败都被静默吞掉——
+# 典型是「面板日志转储失败」或「报告写出失败」这类本应立刻判失败的故障，脚本仍带着上一个
+# 命令的残留 rc 继续往下走，把启动类故障混淆成冒烟结论。加 -e 的同时必须把下面几处「失败即
+# 预期」的调用改成显式吞退出码（pkill/kill 无匹配返回非 0、`rc=$?` 与 `$(...)` 的赋值捕获），
+# 否则 -e 会在拿到结论前就中止脚本。
+set -euo pipefail
 
 PANEL_LOG=logs/web-panel-smoke.log
 REPORT=logs/web-smoke-report.json
@@ -29,17 +34,22 @@ PORT=8000
 panel_pid=""
 cleanup() {
   if [ -n "$panel_pid" ] && kill -0 "$panel_pid" 2>/dev/null; then
-    pkill -P "$panel_pid" 2>/dev/null
-    kill "$panel_pid" 2>/dev/null
+    # set -e 下这些「无匹配/已退出」的清理命令返回非 0 会直接中止 EXIT trap，故显式吞掉。
+    pkill -P "$panel_pid" 2>/dev/null || true
+    kill "$panel_pid" 2>/dev/null || true
     for _ in 1 2 3 4 5 6 7 8 9 10; do
       kill -0 "$panel_pid" 2>/dev/null || break
       sleep 1
     done
-    kill -9 "$panel_pid" 2>/dev/null
+    kill -9 "$panel_pid" 2>/dev/null || true
   fi
-  # 兜底：本轮面板是唯一合法监听 $PORT 的进程；仍在说明有漏网子进程（下一轮重试会因此
-  # 端口占用而起不来，务必清干净）。pkill 无匹配时返回非 0，故吞掉退出码。
-  pkill -f 'python web\.py' 2>/dev/null
+  # 兜底只清**本轮进程树**的漏网子进程（M-96，2026-10-21）。旧形态 `pkill -f 'python web\.py'`
+  # 按命令行子串匹配，共享 runner 上任何同名进程都会被无差别杀掉，与本脚本「只收拾自己起的
+  # 进程」的边界相悖；上面 `pkill -P "$panel_pid"` 已在父进程被杀前覆盖常规子进程，故这里
+  # 不再保留按名字的全量清理。pkill 无匹配时返回非 0，故吞掉退出码。
+  if [ -n "$panel_pid" ]; then
+    pkill -P "$panel_pid" 2>/dev/null || true
+  fi
   return 0
 }
 trap cleanup EXIT
@@ -62,7 +72,7 @@ ready=""
 for ((i = 0; i < READY_LIMIT; i++)); do
   if ! kill -0 "$panel_pid" 2>/dev/null; then
     echo "::error::面板进程在就绪等待期间退出，$PANEL_LOG 末尾："
-    tail -n 80 "$PANEL_LOG" 2>/dev/null
+    tail -n 80 "$PANEL_LOG" 2>/dev/null || true
     exit 1
   fi
   if curl -fsS --max-time 2 "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; then
@@ -74,20 +84,22 @@ for ((i = 0; i < READY_LIMIT; i++)); do
 done
 if [ -z "$ready" ]; then
   echo "::error::面板在 ${READY_LIMIT}s 内未对 /health 应答，$PANEL_LOG 末尾："
-  tail -n 80 "$PANEL_LOG" 2>/dev/null
+  tail -n 80 "$PANEL_LOG" 2>/dev/null || true
   exit 1
 fi
 
 # 断言：与本地用法完全一致（scripts/smoke_web.json），不在此处重复维护期望值。
 # 报告无条件写出（成功/失败都留一份机读结果），供 workflow 上传为工件。
-python scripts/smoke_test.py -c scripts/smoke_web.json -r "$REPORT" -f json
-rc=$?
+# set -e 下 `cmd; rc=$?` 拿不到非零码（命令失败即中止），必须写成 `rc=0; cmd || rc=$?`。
+rc=0
+python scripts/smoke_test.py -c scripts/smoke_web.json -r "$REPORT" -f json || rc=$?
 
 # MIN-2260：rc=0 只代表「已执行的检查全通过」，不代表「执行过检查」。smoke_test.py 现在
 # 对空 checks 退 2，但报告仍可能被上一轮残留 / 被截断 / 被换成别的文件——故以**实物报告**
 # 再断言一次 summary.total > 0。两道判据互不替代：脚本侧管配置损坏，这里管工件与结论的一致性。
 if [ "$rc" -eq 0 ]; then
-  total=$(python -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8"))["summary"]["total"])' "$REPORT" 2>/dev/null)
+  # 同上：命令替换失败会被 set -e 拦下，而「报告不可解析」本身要落到下面 rc=2 的分支里判。
+  total=$(python -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8"))["summary"]["total"])' "$REPORT" 2>/dev/null) || total=""
   case "$total" in
     ''|*[!0-9]*)
       echo "::error::冒烟报告 $REPORT 的 summary.total 不可解析（实际值：${total:-<空>}），判失败"

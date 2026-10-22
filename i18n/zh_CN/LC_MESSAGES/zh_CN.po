@@ -3861,3 +3861,150 @@ msgstr "隐藏主窗口"
 
 msgid "设置"
 msgstr "设置"
+
+msgid "TikTok stream_data 解析失败，本轮按未开播处理: {type_name}: {e}"
+msgstr "TikTok stream_data 解析失败，本轮按未开播处理: {type_name}: {e}"
+
+msgid "[{record_name}] ffmpeg 错误输出尾部: {tail}"
+msgstr "[{record_name}] ffmpeg 错误输出尾部: {tail}"
+
+msgid "sync_req 不接受同时传 data 与 json_data: {masked_url}"
+msgstr "sync_req 不接受同时传 data 与 json_data: {masked_url}"
+
+msgid "sync_req 不接受该形态的 json_data（仅 dict/list，应放 data= 或预先 JSON 序列化）: {masked_url}"
+msgstr "sync_req 不接受该形态的 json_data（仅 dict/list，应放 data= 或预先 JSON 序列化）: {masked_url}"
+
+msgid "响应体嵌套过深已忽略: 超过 {limit} 层"
+msgstr "响应体嵌套过深已忽略: 超过 {limit} 层"
+
+msgid "响应体过大已跳过解析: {size} 字符"
+msgstr "响应体过大已跳过解析: {size} 字符"
+
+msgid "抖音 APP ORIGIN 注入失败（保留已解析结果）: {type_name}: {e}"
+msgstr "抖音 APP ORIGIN 注入失败（保留已解析结果）: {type_name}: {e}"
+
+msgid "抖音 ORIGIN/HEVC 注入失败（保留已解析结果）: {type_name}: {e}"
+msgstr "抖音 ORIGIN/HEVC 注入失败（保留已解析结果）: {type_name}: {e}"
+
+msgid "知乎落地页不是可信主机，已按未开播处理: {url}"
+msgstr "知乎落地页不是可信主机，已按未开播处理: {url}"
+
+msgid "磁盘空间检测失败（本轮沿用上次读数 {disk_free_gb} GB，不解除已有暂停）: {type_name}: {e}"
+msgstr "磁盘空间检测失败（本轮沿用上次读数 {disk_free_gb} GB，不解除已有暂停）: {type_name}: {e}"
+
+msgid "Node.js 下载超过上限（{written} > {limit} 字节），已中断: {masked_url}"
+msgstr "Node.js 下载超过上限（{written} > {limit} 字节），已中断: {masked_url}"
+
+msgid "Node.js 官方 SHA256 文档超过 {limit} 字节上限，已拒绝读取: {masked_url}"
+msgstr "Node.js 官方 SHA256 文档超过 {limit} 字节上限，已拒绝读取: {masked_url}"
+
+msgid "未能取得 Node.js 官方公布的 SHA256，且无历史基准可比对，已拒绝安装（可设 {env}=1 显式放行）: {masked_url}"
+msgstr "未能取得 Node.js 官方公布的 SHA256，且无历史基准可比对，已拒绝安装（可设 {env}=1 显式放行）: {masked_url}"
+
+msgid "未能取得 Node.js 官方公布的 SHA256，已降级为旁路基准/首次信任（TOFU，校验强度下降）: {masked_url}"
+msgstr "未能取得 Node.js 官方公布的 SHA256，已降级为旁路基准/首次信任（TOFU，校验强度下降）: {masked_url}"
+
+msgid "清理未完成的 Node.js 下载失败（已忽略）: {e}"
+msgstr "清理未完成的 Node.js 下载失败（已忽略）: {e}"
+
+msgid "配置备份按节解析失败（{e}），已退回逐行值形态脱敏（节白名单不可用），请勿外传"
+msgstr "配置备份按节解析失败（{e}），已退回逐行值形态脱敏（节白名单不可用），请勿外传"
+
+msgid "配置备份脱敏通道全部失败，已落明文副本（文件名带 .UNMASKED 标记，请勿外传）: {path}"
+msgstr "配置备份脱敏通道全部失败，已落明文副本（文件名带 .UNMASKED 标记，请勿外传）: {path}"
+
+msgid "Another ffmpeg installer holds this directory; skipping the master download"
+msgstr "另一个 ffmpeg 安装器正占用该目录；跳过 master 下载"
+
+msgid "Another ffmpeg installer holds this directory; skipping the native download"
+msgstr "另一个 ffmpeg 安装器正占用该目录；跳过本地直下"
+
+msgid "Another ffmpeg installer holds this directory; skipping the official download"
+msgstr "另一个 ffmpeg 安装器正占用该目录；跳过官方下载"
+
+msgid "Insufficient free space beside the install target; ffmpeg unpacking aborted"
+msgstr "安装目标旁可用空间不足；已中止 ffmpeg 解包"
+
+msgid "Linux ffmpeg download exceeded the accepted size limit"
+msgstr "Linux ffmpeg 下载超出允许的大小上限"
+
+msgid "Official ffmpeg download exceeded the accepted size limit; aborting without install"
+msgstr "官方 ffmpeg 下载超出允许的大小上限；已中止且未安装"
+
+msgid "Staged ffmpeg directory is incomplete; previous install left untouched"
+msgstr "ffmpeg 暂存目录不完整；上一次安装保持原样"
+
+msgid "download_guard: ROLLBACK FAILED, the previous install is kept under a .previous- name"
+msgstr "download_guard：回滚失败，上一次安装已保留在 .previous- 前缀目录下"
+
+msgid "download_guard: another ffmpeg installer already holds the directory lock"
+msgstr "download_guard：另一个 ffmpeg 安装器已持有目录锁"
+
+msgid "download_guard: cannot create the install lock file in the target directory"
+msgstr "download_guard：无法在目标目录创建安装锁文件"
+
+msgid "download_guard: failed to remove the install lock file; it will expire by age"
+msgstr "download_guard：安装锁文件删除失败；该锁将按有效期自动过期"
+
+msgid "download_guard: not enough free space beside the install target to unpack the archive"
+msgstr "download_guard：安装目标旁可用空间不足，无法解包"
+
+msgid "download_guard: replaced the ffmpeg directory but could not delete the previous copy"
+msgstr "download_guard：已替换 ffmpeg 目录，但无法删除上一份副本"
+
+msgid "download_guard: swap rolled back, the previous ffmpeg directory is still in place"
+msgstr "download_guard：替换已回滚，上一个 ffmpeg 目录仍在原位"
+
+msgid "download_guard: the install lock path is a symbolic link, refusing to take the lock"
+msgstr "download_guard：安装锁路径是符号链接，拒绝获取该锁"
+
+msgid "导入图标…"
+msgstr "导入图标…"
+
+msgid "选择图标文件"
+msgstr "选择图标文件"
+
+msgid "图标文件"
+msgstr "图标文件"
+
+msgid "不支持的图标格式"
+msgstr "不支持的图标格式"
+
+msgid "仅支持 {formats} 图标文件；ICO 需包含 16×16 分辨率（系统托盘），建议同时包含 256×256（应用图标与任务栏）。"
+msgstr "仅支持 {formats} 图标文件；ICO 需包含 16×16 分辨率（系统托盘），建议同时包含 256×256（应用图标与任务栏）。"
+
+msgid "导入图标失败"
+msgstr "导入图标失败"
+
+msgid "无法读取或复制该图标文件，请确认文件未被占用且可读取。"
+msgstr "无法读取或复制该图标文件，请确认文件未被占用且可读取。"
+
+msgid "系统无法加载该图标，可能是文件已损坏或不是有效的 ICO 文件。"
+msgstr "系统无法加载该图标，可能是文件已损坏或不是有效的 ICO 文件。"
+
+msgid "图标缺少 {size} 分辨率，系统托盘会显示模糊；请用多分辨率 ICO。"
+msgstr "图标缺少 {size} 分辨率，系统托盘会显示模糊；请用多分辨率 ICO。"
+
+msgid "图标缺少 256×256 分辨率，应用图标会放大发虚"
+msgstr "图标缺少 256×256 分辨率，应用图标会放大发虚"
+
+msgid "图标文件过大（上限 {limit}KB）。"
+msgstr "图标文件过大（上限 {limit}KB）。"
+
+msgid "图标已应用，但配置写回失败"
+msgstr "图标已应用，但配置写回失败"
+
+msgid "图标已应用，但配置写回失败: {err}"
+msgstr "图标已应用，但配置写回失败: {err}"
+
+msgid "已导入并应用图标: {name}"
+msgstr "已导入并应用图标: {name}"
+
+msgid "自定义图标加载失败，回落到默认图标: {path}"
+msgstr "自定义图标加载失败，回落到默认图标: {path}"
+
+msgid "写入图标文件失败: {name} -> {target} - {type_name}: {err}"
+msgstr "写入图标文件失败: {name} -> {target} - {type_name}: {err}"
+
+msgid "读取图标文件失败: {name} - {type_name}: {err}"
+msgstr "读取图标文件失败: {name} - {type_name}: {err}"

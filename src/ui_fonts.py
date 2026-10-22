@@ -207,47 +207,58 @@ def sfnt_family_name(path: str | Path) -> str | None:
         data = Path(path).read_bytes()
     except Exception:
         return None
-    located = _iter_table_dirs(data)
-    if located is None:
+    # M-83（2026-10-21）：解析段必须整体在 try 内。旧实现只把 read_bytes 圈住，而
+    # _iter_table_dirs 的 ttc 分支会对攻击者可控的 offset 直接 struct.unpack_from
+    # （offset+4 越界即抛 struct.error），_find_table 与下方 name 记录遍历同理——
+    # 一个损坏/恶意的 .ttf/.ttc 会让 struct.error 一路穿透「导入字体…」回调
+    # （register_private_font 与 main_window 的对话框都不接这个异常），窗口层直接炸。
+    # 契约不变量：本函数的失败出口恒为 None，坏字节一律归入「坏文件由调用方提示」。
+    try:
+        located = _iter_table_dirs(data)
+        if located is None:
+            return None
+        dir_offset, _count = located
+        entry = _find_table(data, dir_offset, b"name")
+        if entry is None:
+            return None
+        table_offset, table_len = entry
+        # 表目录项的 offset 相对「表目录起点」（ttc 里是容器内偏移而非文件偏移），故必须加上
+        # 目录偏移——否则 ttc 分支读到的是目录自身而非 name 表内容。
+        table_offset += dir_offset
+        if table_offset + 6 > len(data) or table_len < 6:
+            return None
+        _fmt, name_count, string_offset = struct.unpack_from(">HHH", data, table_offset)
+        best: str | None = None
+        if name_count > 512:
+            return None
+        for i in range(name_count):
+            rec = table_offset + 6 + i * 12
+            if rec + 12 > len(data):
+                break
+            platform_id, _enc, _lang, name_id, length, offset = struct.unpack_from(">HHHHHH", data, rec)
+            if name_id != 1 or length == 0:
+                continue
+            start = table_offset + string_offset + offset
+            if start + length > len(data):
+                continue
+            raw = data[start : start + length]
+            try:
+                # platform 3 = Windows（UTF-16BE），platform 1 = Mac（Roman），0 = Unicode
+                value = raw.decode("utf-16-be") if platform_id in (0, 3) else raw.decode("latin-1")
+            except UnicodeDecodeError:
+                continue
+            candidate = value.strip("\x00").strip()
+            if not candidate:
+                continue
+            # Windows 平台记录优先（Tk/GDI 在 Windows 上报的就是它），其余作为兜底
+            if platform_id == 3:
+                return candidate
+            best = best or candidate
+        return best
+    except Exception:
+        # struct.error（未校验偏移越界的 unpack_from）与一切解析期异常都收敛成 None：
+        # 调用链上没有任何一处准备处理「字体文件解析炸出来」的异常形态。
         return None
-    dir_offset, _count = located
-    entry = _find_table(data, dir_offset, b"name")
-    if entry is None:
-        return None
-    table_offset, table_len = entry
-    # 表目录项的 offset 相对「表目录起点」（ttc 里是容器内偏移而非文件偏移），故必须加上
-    # 目录偏移——否则 ttc 分支读到的是目录自身而非 name 表内容。
-    table_offset += dir_offset
-    if table_offset + 6 > len(data) or table_len < 6:
-        return None
-    _fmt, name_count, string_offset = struct.unpack_from(">HHH", data, table_offset)
-    best: str | None = None
-    if name_count > 512:
-        return None
-    for i in range(name_count):
-        rec = table_offset + 6 + i * 12
-        if rec + 12 > len(data):
-            break
-        platform_id, _enc, _lang, name_id, length, offset = struct.unpack_from(">HHHHHH", data, rec)
-        if name_id != 1 or length == 0:
-            continue
-        start = table_offset + string_offset + offset
-        if start + length > len(data):
-            continue
-        raw = data[start : start + length]
-        try:
-            # platform 3 = Windows（UTF-16BE），platform 1 = Mac（Roman），0 = Unicode
-            value = raw.decode("utf-16-be") if platform_id in (0, 3) else raw.decode("latin-1")
-        except UnicodeDecodeError:
-            continue
-        candidate = value.strip("\x00").strip()
-        if not candidate:
-            continue
-        # Windows 平台记录优先（Tk/GDI 在 Windows 上报的就是它），其余作为兜底
-        if platform_id == 3:
-            return candidate
-        best = best or candidate
-    return best
 
 
 # ─── 私有字体装载（Windows） ───────────────────────────────────────────────
@@ -336,7 +347,10 @@ _WIN_RESERVED_NAMES: Final[frozenset[str]] = frozenset(
 )
 
 
-def _safe_filename(name: str) -> str:
+# 公开名（原为 _safe_filename）：图标导入（src/ui_icons.py）与字体导入共用同一套清洗口径——
+# 两处各写一份就会出现「字体挡得住的保留名、图标挡不住」，而这种失败只在特定文件名上发生、
+# 排查成本极高。旧私有名保留为别名：既有调用点与 tests/test_ui_fonts.py 直接按它取用。
+def safe_filename(name: str) -> str:
     cleaned = "".join(ch if ch.isalnum() or ch in "._- " else "_" for ch in name).strip(" .")
     cleaned = cleaned.replace(" ", "_")
     if not cleaned:
@@ -346,6 +360,9 @@ def _safe_filename(name: str) -> str:
     if cleaned.split(".", 1)[0].upper() in _WIN_RESERVED_NAMES:
         cleaned = f"_{cleaned}"
     return cleaned
+
+
+_safe_filename = safe_filename
 
 
 # 把字体文件注册为本进程私有字体，返回它对 Tk 开放的 family 名（失败返回 None）。

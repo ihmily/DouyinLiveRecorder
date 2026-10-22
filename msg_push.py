@@ -10,7 +10,8 @@ import urllib.request
 from email.header import Header
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import cast
+from http.client import HTTPMessage
+from typing import IO, cast
 
 from loguru import logger
 
@@ -23,6 +24,47 @@ import i18n
 
 # 不走系统代理：本地或自建推送不应被代理干扰
 no_proxy_handler: urllib.request.ProxyHandler = urllib.request.ProxyHandler({})
+# 重定向最大跳数（S-02）：urllib 默认最多 10 跳且不做安全复核，这里显式收紧并在每跳重跑准入校验。
+_PUSH_MAX_REDIRECTS = 5
+
+
+# S-02（CODE_REVIEW_2026-10-21）：逐跳复核的重定向处理器。
+# 原实现把裸 HTTPRedirectHandler 放进白名单：`_checked_push_url` 只在**发起请求前**跑一次，
+# 落地地址既不复核内网也不复核协议。推送地址来自 config.ini（Web 面板可写全部配置），攻击者把自己的
+# 服务器设为推送地址、再 302 到 http://169.254.169.254/latest/meta-data/，就绕过了「拒绝内部目标」，
+# 而 ntfy/钉钉/Bark 分支会把重定向后的响应体写进 logs/streamget.log（300KB 轮转、求助时常整包上传）
+# ——构成**带回显**的 SSRF，云元数据凭据可借此泄露。
+# 覆写 redirect_request 在**下一跳连接发出之前**重跑同一判据（_checked_push_url）。
+# 命中抛 _PushHopRejected（URLError 子类，对齐 src/sync_http.py 的同族处理）：不直接用 ValueError，
+# 是因为 urllib 的 HTTPErrorProcessor 会把 handler 抛出的异常原样上抛，而调用方对「网络类失败」
+# 的既有分类是按 urllib.error 家族做的——用同一家族可让它与「目标不可达」走同一条放弃路径，
+# 各渠道既有的 `except Exception` 收敛成「本条推送失败」，不影响其它渠道（旁路通知不阻断录制）。
+class _PushHopRejected(urllib.error.URLError):
+    def __init__(self, url: str, reason: str) -> None:
+        super().__init__(reason)
+        self.hop_url = url
+        self.reject_reason = reason
+
+
+class _PushHopGuardRedirectHandler(urllib.request.HTTPRedirectHandler):
+    max_redirections = _PUSH_MAX_REDIRECTS
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: HTTPMessage,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        try:
+            _checked_push_url(newurl)
+        except ValueError as e:
+            raise _PushHopRejected(newurl, str(e)) from e
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 # M-07（2026-10-19）：opener 按**协议白名单手工组装**，不能用 build_opener——后者是「默认 handler
 # 集合 + 指定 ProxyHandler」，默认集合含 FileHandler / FTPHandler / DataHandler；而推送地址来自
 # config.ini，Web 面板可写全部配置，写成 file:///C:/Users/x/.ssh/id_rsa 就能让本模块读本地文件，
@@ -33,7 +75,7 @@ _PUSH_HTTP_HANDLERS: tuple[type[urllib.request.BaseHandler], ...] = (
     urllib.request.UnknownHandler,
     urllib.request.HTTPHandler,
     urllib.request.HTTPDefaultErrorHandler,
-    urllib.request.HTTPRedirectHandler,
+    _PushHopGuardRedirectHandler,
     urllib.request.HTTPErrorProcessor,
 )
 
@@ -118,6 +160,22 @@ def _mask_url(url: str, *, mask_last_segment: bool = False) -> str:
         return _mask_secret(url)
 
 
+# S-02（CODE_REVIEW_2026-10-21）：响应体派生文本在写日志前必须截断 + 脱敏。
+# 重定向让推送请求落到内网（云元数据等）时，响应体原文会经 errmsg/msg/message/error 字段进
+# logs/streamget.log（300KB 轮转、求助时常整包上传）——这正是「带回显的 SSRF」。除逐跳拦截外，
+# 输出侧再兜一层：截断到固定长度（避免整份响应把日志刷爆）并按同一口径抹凭据。
+_PUSH_RESP_TEXT_LIMIT = 300
+
+
+def _sanitize_resp_text(value: object) -> str:
+    text = value if isinstance(value, str) else str(value)
+    if len(text) > _PUSH_RESP_TEXT_LIMIT:
+        text = text[:_PUSH_RESP_TEXT_LIMIT] + "…"
+    from src.utils import mask_credentials
+
+    return mask_credentials(text)
+
+
 # 钉钉群机器人推送文本消息，支持 @手机号/全体，返回成功与失败地址列表
 def dingtalk(url: str, content: str, number: str | None = None, is_atall: bool = False) -> dict[str, list[str | int]]:
     success: list[str | int] = []
@@ -151,7 +209,7 @@ def dingtalk(url: str, content: str, number: str | None = None, is_atall: bool =
                     i18n.tr(
                         "钉钉推送失败, 推送地址：{masked_api}, {errmsg}",
                         masked_api=_mask_url(api),
-                        errmsg=resp_data.get("errmsg", i18n.tr("未知错误")),
+                        errmsg=_sanitize_resp_text(resp_data.get("errmsg", i18n.tr("未知错误"))),
                     )
                 )
         except Exception as e:
@@ -195,7 +253,7 @@ def xizhi(url: str, title: str, content: str) -> dict[str, list[str | int]]:
                     i18n.tr(
                         "微信推送失败, 推送地址：{masked_api}, 失败信息：{msg}",
                         masked_api=_mask_url(api, mask_last_segment=True),
-                        msg=resp_data.get("msg", i18n.tr("未知错误")),
+                        msg=_sanitize_resp_text(resp_data.get("msg", i18n.tr("未知错误"))),
                     )
                 )
         except Exception as e:
@@ -345,6 +403,9 @@ def tg_bot(chat_id: str | int, token: str, content: str) -> dict[str, list[str |
     # url 在 try 外预绑定，避免构造 json_data 异常时 except 块引用未绑定变量触发 NameError
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
+        # S-02（CODE_REVIEW_2026-10-21）：即使本函数拼的是硬编码的官方地址，也必须过同一道首跳校验——
+        # 「所有出站 URL 统一过检」是不变量，留一处例外就给后来者留了「此处不必检查」的错误示例。
+        _ = _checked_push_url(url)
         json_data = {"chat_id": chat_id, "text": content}
         data = json.dumps(json_data).encode("utf-8")
         req = urllib.request.Request(url, data=data, headers=headers)
@@ -354,7 +415,9 @@ def tg_bot(chat_id: str | int, token: str, content: str) -> dict[str, list[str |
         # Telegram 即便 HTTP 2xx 也可能业务失败（ok=false + description），须以 ok 字段判定、不能只看状态码。
         if resp_data.get("ok") is True:
             return {"success": [str(chat_id)], "error": []}
-        error_detail = resp_data.get("description", i18n.tr("未知错误"))
+        # S-02 残留（2026-10-21）：description 由服务端响应体派生，经重定向落到内网（云元数据等）
+        # 时它就是回显内容，必须与其余分支一样过 _sanitize_resp_text（截断 + 脱敏）再入日志。
+        error_detail = _sanitize_resp_text(resp_data.get("description", i18n.tr("未知错误")))
         logger.warning(
             i18n.tr(
                 "tg推送失败, 聊天ID：{chat_id}, 推送地址：{masked_url}, 失败信息:{error_detail}",
@@ -423,7 +486,7 @@ def bark(
                     i18n.tr(
                         "Bark推送失败, 推送地址：{masked_api}, 失败信息：{message}",
                         masked_api=_mask_url(_api, mask_last_segment=True),
-                        message=resp_data.get("message", i18n.tr("未知错误")),
+                        message=_sanitize_resp_text(resp_data.get("message", i18n.tr("未知错误"))),
                     )
                 )
         except Exception as e:
@@ -503,7 +566,7 @@ def ntfy(
                     i18n.tr(
                         "ntfy推送失败, 推送地址：{masked_api}, 失败信息：{error}",
                         masked_api=_mask_url(_api, mask_last_segment=True),
-                        error=resp_data["error"],
+                        error=_sanitize_resp_text(resp_data["error"]),
                     )
                 )
         except urllib.error.HTTPError as e:
@@ -519,7 +582,9 @@ def ntfy(
                 i18n.tr(
                     "ntfy推送失败, 推送地址：{masked_api}, 错误信息:{error_detail}",
                     masked_api=_mask_url(_api, mask_last_segment=True),
-                    error_detail=error_detail,
+                    # S-02 残留（2026-10-21）：HTTPError 的响应体是攻击者可控的回显，与上面
+                    # resp_data["error"] 那条同口径，写日志前一律截断 + 脱敏。
+                    error_detail=_sanitize_resp_text(error_detail),
                 )
             )
         except Exception as e:
@@ -547,6 +612,8 @@ def pushplus(token: str, title: str, content: str) -> dict[str, list[str | int]]
 
         try:
             url = "https://www.pushplus.plus/send"
+            # S-02：同 tg_bot——硬编码地址也过首跳校验，维持「所有出站 URL 统一过检」的不变量。
+            _ = _checked_push_url(url)
             data = json.dumps(json_data).encode("utf-8")
             req = urllib.request.Request(url, data=data, headers=headers)
             with cast(http.client.HTTPResponse, opener.open(req, timeout=10)) as response:
@@ -562,7 +629,7 @@ def pushplus(token: str, title: str, content: str) -> dict[str, list[str | int]]
                     i18n.tr(
                         "PushPlus推送失败, Token：{masked_token}, 失败信息：{msg}",
                         masked_token=_mask_secret(_token),
-                        msg=resp_data.get("msg", i18n.tr("未知错误")),
+                        msg=_sanitize_resp_text(resp_data.get("msg", i18n.tr("未知错误"))),
                     )
                 )
         except Exception as e:

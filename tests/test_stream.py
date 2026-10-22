@@ -216,6 +216,14 @@ class TestGetQualityIndex:
         name, idx = get_quality_index("hd")
         assert name == "HD"
 
+    def test_multi_digit_quality_parsed_as_whole_number(self) -> None:
+        # L-04（2026-10-21）：原实现 int(quality_str[0]) 只取首字符，"10" 被当成 1（BD）；
+        # 纯数字串必须按整值解析，越界（>=6）仍按原口径归 0（OD）。
+        assert get_quality_index("10")[0] == "OD"
+        assert get_quality_index("10")[1] == QUALITY_MAPPING["OD"]
+        # 对照：单字符语义不变，防「顺手改成取末字符」这类反向回归
+        assert get_quality_index("4")[0] == "SD"
+
 
 # ────────────────────────────────────────────────────────────
 # 常量一致性校验
@@ -667,7 +675,9 @@ class TestGetDouyuStreamUrl:
         flv_data = {"data": {"rtmp_url": "", "rtmp_live": "", "rate": 0}}
         with patch("src.stream.get_douyu_stream_data", new_callable=AsyncMock, return_value=flv_data):
             result = await get_douyu_stream_url(json_data)
-        assert result["is_live"] is True
+        # M-26（2026-10-21）：全部档位失败且一格地址都没有时，不再谎报 is_live=True——
+        # 旧口径让上层把「开播但无地址」当待录房间、每轮空跑一路 ffmpeg。
+        assert result["is_live"] is False
         assert "flv_url" not in result and "m3u8_url" not in result
 
 
@@ -1077,6 +1087,152 @@ class TestGetNeteaseStreamUrl:
         assert result["m3u8_url"] == "https://cc.example.com/live.m3u8"
         assert result["actual_quality"] == "HD"
         assert result["available_qualities"] == ["UHD", "HD"]
+
+
+class TestStreamMalformedPayload:
+    # M-21 / M-22（2026-10-21）：平台下发结构畸形时不得被 @trace_error_decorator 吞成「未开播」。
+    # 这些用例一律断言「不抛异常、且不把在播房间谎报成离线」——旧实现在这些形态下抛
+    # AttributeError / IndexError / JSONDecodeError，最终都表现为「在播但每轮不录」。
+
+    @pytest.mark.asyncio
+    async def test_kuaishou_flv_list_with_non_dict_items_does_not_crash(self) -> None:
+        # M-22：flv_list 元素是裸串时，旧实现 flv_list[0] 取首字符、"bitrate" in 恒假，
+        # 随后 .get 抛 AttributeError 被吞成未开播。现按「只收 dict 元素」归一。
+        from src.stream import get_kuaishou_stream_url
+
+        json_data = {
+            "type": 0,
+            "is_live": True,
+            "anchor_name": "ks_bad",
+            "flv_url_list": ["https://ks.example.com/a.flv", "https://ks.example.com/b.flv"],
+        }
+        result = await get_kuaishou_stream_url(cast("dict[str, object]", json_data), video_quality="HD")
+        assert result["is_live"] is True
+        assert "flv_url" not in result  # 形态全部不合规 → 无候选，但不谎报离线
+
+    @pytest.mark.asyncio
+    async def test_yy_cdn_info_not_dict_does_not_crash(self) -> None:
+        # M-22：cdn_info 下发成字符串时，旧实现 .get 抛 AttributeError 被吞成未开播。
+        from src.stream import get_yy_stream_url
+
+        json_data = {
+            "anchor_name": "yy_bad",
+            "title": "YY Live",
+            "avp_info_res": {"stream_line_addr": {"line1": {"cdn_info": "https://yy.example.com/live.flv"}}},
+        }
+        result = await get_yy_stream_url(cast("dict[str, object]", json_data))
+        assert result["is_live"] is True
+        assert result["flv_url"] == ""
+
+    @pytest.mark.asyncio
+    async def test_yy_stream_line_addr_not_dict_does_not_crash(self) -> None:
+        # M-22：stream_line_addr 下发成 list 时，旧实现 .get 抛 AttributeError 被吞成未开播。
+        from src.stream import get_yy_stream_url
+
+        json_data = {"anchor_name": "yy_bad2", "avp_info_res": {"stream_line_addr": ["x"]}}
+        result = await get_yy_stream_url(cast("dict[str, object]", json_data))
+        assert result["is_live"] is False
+
+    @pytest.mark.asyncio
+    async def test_netease_resolution_entry_not_dict_does_not_crash(self) -> None:
+        # M-22：档位条目下发成字符串时，旧实现 stream_list[q].get("cdn") 抛 AttributeError，
+        # 整个房间被判未开播（实际在播）。
+        from src.stream import get_netease_stream_url
+
+        json_data = {
+            "is_live": True,
+            "anchor_name": "cc_bad",
+            "m3u8_url": "https://cc.example.com/live.m3u8",
+            "stream_list": {"resolution": {"ultra": "not-a-dict"}},
+        }
+        result = await get_netease_stream_url(cast("dict[str, object]", json_data))
+        assert result["is_live"] is True
+        assert result["flv_url"] == ""
+        assert result["record_url"] == "https://cc.example.com/live.m3u8"
+
+    @pytest.mark.asyncio
+    async def test_tiktok_truncated_stream_data_returns_not_live_without_raising(self) -> None:
+        # M-21：stream_data 是截断的 JSON 时，旧实现 json.loads 裸在任何 try 之外，
+        # 异常被装饰器吞成未开播且零日志。现显式收敛：不抛异常、按未开播返回。
+        from src.stream import get_tiktok_stream_url
+
+        json_data = {
+            "LiveRoom": {
+                "liveRoomUserInfo": {"user": {"status": 2, "nickname": "Test", "uniqueId": "test_id"}},
+                "liveRoom": {"streamData": {"pull_data": {"stream_data": '{"data": {"origin": '}}},
+            }
+        }
+        result = await get_tiktok_stream_url(cast("dict[str, object]", json_data))
+        assert result["is_live"] is False
+
+    @pytest.mark.asyncio
+    async def test_douyin_stream_url_not_dict_does_not_crash(self) -> None:
+        # M-22：stream_url 下发成字符串时，旧实现 .get 抛 AttributeError 被吞成未开播。
+        from src.stream import get_douyin_stream_url
+
+        json_data = {"anchor_name": "dy_bad", "status": 2, "stream_url": "not-a-dict"}
+        result = await get_douyin_stream_url(cast("dict[str, object]", json_data))
+        assert result["is_live"] is True
+        assert result["m3u8_url"] == ""
+        assert result["flv_url"] == ""
+
+
+class TestHuyaAvailableQualities:
+    # M-24（2026-10-21）：蓝光分支的 available_qualities 原实现无条件追加 UHD/LD，
+    # max_ratio<=0 时对外声称 ["OD","UHD","LD"]，与房间实际档位不符。
+
+    @pytest.mark.asyncio
+    async def test_available_qualities_do_not_fabricate_uhd_ld_when_room_has_none(self) -> None:
+        from src.stream import get_huya_stream_url
+
+        # exsphd 只有 264_0（房间仅原画）+ 无 bitRate：可用档位只剩 OD
+        json_data = {
+            "data": [
+                {
+                    "gameLiveInfo": {"nick": "anchor", "introduction": "t"},
+                    "gameStreamInfoList": [
+                        {
+                            "sCdnType": "HS",
+                            "sStreamName": "room1",
+                            "sFlvUrl": "https://hs.flv.huya.com/src",
+                            "sFlvUrlSuffix": "flv",
+                            "sFlvAntiCode": "wsSecret=abc&exsphd=264_0",
+                        }
+                    ],
+                }
+            ]
+        }
+        result = await get_huya_stream_url(cast("dict[str, object]", json_data), video_quality="BD8")
+        assert result["is_live"] is True
+        assert result["available_qualities"] == ["OD"]
+
+    @pytest.mark.asyncio
+    async def test_available_qualities_follow_exsphd_when_room_reports_tiers(self) -> None:
+        # 对照：exsphd 报告了 264_4000（蓝光4M）与 264_2000（超清）时，档位按统一序枚举且无伪造档
+        from src.stream import get_huya_stream_url
+
+        json_data = {
+            "data": [
+                {
+                    "gameLiveInfo": {"nick": "anchor", "introduction": "t"},
+                    "gameStreamInfoList": [
+                        {
+                            "sCdnType": "HS",
+                            "sStreamName": "room2",
+                            "sFlvUrl": "https://hs.flv.huya.com/src",
+                            "sFlvUrlSuffix": "flv",
+                            "sFlvAntiCode": "wsSecret=abc&exsphd=264_0_264_2000_264_4000",
+                        }
+                    ],
+                }
+            ]
+        }
+        result = await get_huya_stream_url(cast("dict[str, object]", json_data), video_quality="UHD")
+        assert result["is_live"] is True
+        # 旧档位分支（请求非 BD_SUB_TIERS）的既有契约：固定前缀 ["OD", "BD"] + 按 HUYA_CODE_ORDER
+        # 枚举 room_codes 命中的具体档。exsphd 264_0_264_2000_264_4000 → {0,2000,4000} → BD4/UHD，
+        # 故期望是四档而非三档（"BD" 是通用蓝光标签；M-24 只改蓝光分支，本分支行为未变）。
+        assert result["available_qualities"] == ["OD", "BD", "BD4", "UHD"]
 
 
 class TestGetStreamUrl:

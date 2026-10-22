@@ -639,6 +639,9 @@ def _build_hop_guard(proxy_addr: OptionalStr) -> Callable[[httpx.Response], Awai
     # 读取自此也带上限——服务器无视 Range 整文件回传 >8MB 时探针按既有口径判不可达。同步侧
     # build_sync_hop_guard **不**跟进该职责：同步钩子无法 await 分块读，且同步探针的读取上限属另一
     # 工作包（L-11）的范围，勿在此顺手扩面。
+    # [历史注 2026-09-30] 本节早期版本断言「同步探针的钩子留待后续工作包、本次不接线」——该断言已失效：
+    # build_sync_hop_guard 现挂同一判定，同步探针与异步侧同源。口径已改正为「已接线 + 残余缺口逐条登记」，
+    # 保留本注只为让后来者不再按旧结论去别处找第二份实现（判据族只允许一份）。
     async def _guard(response: httpx.Response) -> None:
         hop_url = str(response.url)
         reason = _redirect_hop_rejection_reason(hop_url, proxy_addr)
@@ -737,7 +740,11 @@ async def get_response_status(
         # Range-GET 轻量探测，避免误判不可达而降级画质。只覆盖 400/401/403/405 会漏掉 404（部分 CDN 对
         # HEAD 一律回 404），因此 HEAD 非 2xx 的 m3u8 源一律进入探测；扩展名按小写判定（大写 .M3U8 的源
         # 会漏掉该探测，被 HEAD 的 4xx 直接判成不可达）。
-        if ".m3u8" in url.lower() and response.status_code != 200:
+        # M-32（2026-10-21）：405/501（方法不允许 / 未实现）同样纳入 Range-GET 复核。旧判据只认
+        # `.m3u8` 扩展名，于是 flv/直链遇「CDN 拒绝 HEAD 但 GET 可拉流」直接被判不可达并降档——
+        # 注释里自陈的这条理由对 flv 一样成立。此处**不放宽** 404/403：真死链必须继续判不可达，
+        # 故只补「方法不允许类」这一个语义明确的状态码集合，避免把「明确不可达」一并放行。
+        if response.status_code != 200 and (".m3u8" in url.lower() or response.status_code in (405, 501)):
             probe = await client.get(
                 url, headers={**(headers or {}), "Range": "bytes=0-0"}, follow_redirects=True, timeout=timeout
             )

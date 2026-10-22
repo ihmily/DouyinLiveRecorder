@@ -455,6 +455,51 @@ class TestTrayIcon:
         finally:
             web_tray._resource_roots = _original  # type: ignore[assignment]
 
+    def test_configured_icon_file_wins_over_directory_probe(
+        self, fake_qt: dict[str, types.ModuleType], tmp_path: Path
+    ) -> None:
+        # 用户显式导入的图标必须压过约定文件名（favicon.ico/icon.ico/icon.png）：
+        # 顺序反过来就是「面板上传成功、托盘还是旧图标」——本次要消掉的正是这种一半生效。
+        _ = (tmp_path / "icon.ico").write_bytes(b"\x00\x00\x01\x00\x01\x00" + bytes(16))
+        custom = tmp_path / "custom.ico"
+        custom.write_bytes(b"\x00\x00\x01\x00\x01\x00" + bytes(16))
+        tray = web_tray.WebConsoleTray("127.0.0.1", 8000, icon_file=str(custom))
+        _original = web_tray._resource_roots
+        web_tray._resource_roots = lambda: [str(tmp_path)]  # type: ignore[assignment]
+        try:
+            icon = tray._load_icon_from_disk()
+            assert icon is not None
+            assert cast(_FakeQIcon, icon).args == (str(custom),)
+        finally:
+            web_tray._resource_roots = _original  # type: ignore[assignment]
+
+    def test_stale_icon_file_falls_back_to_directory_probe(
+        self, fake_qt: dict[str, types.ModuleType], tmp_path: Path
+    ) -> None:
+        # 配置里记的图标被用户删了：不得留下「托盘空白」，要继续往下探
+        probe = tmp_path / "icon.png"
+        probe.write_bytes(b"\x89PNG")
+        tray = web_tray.WebConsoleTray("127.0.0.1", 8000, icon_file=str(tmp_path / "gone.ico"))
+        _original = web_tray._resource_roots
+        web_tray._resource_roots = lambda: [str(tmp_path)]  # type: ignore[assignment]
+        try:
+            icon = tray._load_icon_from_disk()
+            assert icon is not None
+            assert cast(_FakeQIcon, icon).args == (str(probe),)
+        finally:
+            web_tray._resource_roots = _original  # type: ignore[assignment]
+
+    def test_malformed_icon_path_is_swallowed(self, fake_qt: dict[str, types.ModuleType], tmp_path: Path) -> None:
+        # 路径含 NUL 时 pathlib 是抛 ValueError 而不是返回 False：图标是本进程唯一的退出入口，
+        # 一个坏路径绝不能把 start() 带崩（表现为「Web 面板起不来」）。
+        tray = web_tray.WebConsoleTray("127.0.0.1", 8000, icon_file="bad\x00path.ico")
+        _original = web_tray._resource_roots
+        web_tray._resource_roots = lambda: [str(tmp_path)]  # type: ignore[assignment]
+        try:
+            assert tray._load_icon_from_disk() is None
+        finally:
+            web_tray._resource_roots = _original  # type: ignore[assignment]
+
     def test_missing_disk_icon_falls_back_to_drawn(self, fake_qt: dict[str, types.ModuleType], tmp_path: Path) -> None:
         tray = web_tray.WebConsoleTray("127.0.0.1", 8000)
         _original = web_tray._resource_roots

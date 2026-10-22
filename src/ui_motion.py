@@ -178,10 +178,18 @@ class MotionController:
     #
     # 为什么自己管句柄：Tk 的 after 回调在窗口销毁后仍会触发一次，而动效回调里要写
     # Canvas 坐标/place 位置，对象已死就是 TclError。故每条链的句柄登记在册，
-    # disable()/cancel_all() 统一撤销，且回调内先查自己的 job 是否仍然有效。
+    # cancel()/cancel_all() 统一撤销（含对 Tcl 的 after_cancel），
+    # 且回调入口先按链令牌核对自己的 job 是否仍然有效。
+    # [历史注] 本段原文引用了一个从未存在的 disable() 方法（2026-10-21 M-82 复核证伪，
+    # 真实撤销出口只有 cancel/cancel_all 两处）；且旧实现的 cancel 只清 Python 侧字典、
+    # 从不 after_cancel，被「撤销」的链仍会被 Tcl 事件队列唤醒写完剩余帧。
     def __init__(self, motion_id: str = "subtle") -> None:
         self._motion_id: str = motion_id if is_valid_motion(motion_id) else "subtle"
-        self._jobs: dict[str, str] = {}
+        # 登记项 = (排帧用的 root, 最新 after 句柄, 链令牌)。root 与令牌都是 M-82 补的：
+        # after_cancel 要 root 才打得出去；令牌让 _step 入口能分辨「这条链还是不是我」。
+        # root 为 None 表示「裸句柄登记」（诊断/测试形态），cancel 时只清册不调 after_cancel。
+        self._jobs: dict[str, tuple[tk.Misc | None, str, int]] = {}
+        self._next_token: int = 0
 
     @property
     def motion_id(self) -> str:
@@ -206,17 +214,34 @@ class MotionController:
 
     def cancel(self, job_key: str) -> None:
         # 撤销一条链（按 key，不是按句柄——调用方不该关心句柄值）。
-        self._jobs.pop(job_key, None)
+        # M-82：旧实现只 pop 字典——已排进 Tcl 事件队列的下一帧回调仍会被唤醒并继续写
+        # place/几何，正是「关掉动效后控件还在抖、页面切完旧控件被拽回中途位置」的形态。
+        # 定稿 = 先摘册再对该句柄 after_cancel；已经在执行当帧的迟到回调由 _step 入口的
+        # 令牌守卫兜住（摘册即失效）。after_cancel 传空串/已触发句柄是 no-op，不额外判。
+        entry = self._jobs.pop(job_key, None)
+        if entry is None:
+            return
+        root, after_id, _token = entry
+        if root is not None and after_id:
+            try:
+                root.after_cancel(after_id)
+            except tk.TclError:
+                # 窗口已销毁：Tcl 层没有待取消项可撤，属正常收尾，不得把退出路径上的
+                # 清理动作连带打断。
+                pass
 
     def cancel_all(self) -> None:
-        # 撤销全部在途链。句柄是 Tk 的 after id 字符串，after_cancel 传错的 id 不抛
-        # 异常只是静默无效，故用 clear 而非逐个 del（幂等）。
-        self._jobs.clear()
+        # 撤销全部在途链。逐条走 cancel：句柄既要从册上摘掉，也要真的 after_cancel
+        # （M-82 前只 clear 字典，被「撤销」的链照跑不误）。
+        for job_key in list(self._jobs):
+            self.cancel(job_key)
 
-    def track(self, job_key: str, after_id: str) -> None:
-        # 登记一条链的句柄。key 重复时旧的已失效，不再单独 cancel（callback 内部
-        # 会在发现 key 不匹配时自行收尾，见 call_with_tracking 的守卫）。
-        self._jobs[job_key] = after_id
+    def track(self, job_key: str, after_id: str, root: tk.Misc | None = None, token: int = -1) -> None:
+        # 登记一条链的句柄。key 重复时旧的已失效，不再单独 cancel（_step 入口的令牌
+        # 守卫会认出「登记已被本 key 的新链替换」并让旧链静默终止；[历史注] 原注释引用
+        # 的 call_with_tracking 并不存在，守卫实现在 run_frames 的闭包里，2026-10-21 M-82
+        # 按真实形态改正）。
+        self._jobs[job_key] = (root, after_id, token)
 
     def run_frames(
         self,
@@ -240,18 +265,30 @@ class MotionController:
             finish()
             return
         per_frame = max(MIN_FRAME_MS, duration_ms // (len(plan) + 1))
+        # 链令牌：本条 run_frames 调用的唯一标识。cancel/cancel_all 摘册、同 key 换新链
+        # 都会让它对不上号，_step 据此在入口终止已失效的链（M-82）。
+        self._next_token += 1
+        token = self._next_token
 
         def _step() -> None:
-            # 守卫：窗口已销毁时 Tk 仍会调回调，写坐标即 TclError。这里统一兜住并直接
+            # 守卫①（M-82）：链是否仍然有效——登记缺失（被 cancel/cancel_all 撤销，含
+            # 切 off 的收尾）或令牌更替（同 key 已被新链接管）时，本次唤醒属于「已撤销
+            # 排程的迟到回调」：既不写几何，也不代落终态（终态由撤销方负责，落它反而
+            # 把用户/调用方新设的状态打回旧链的半途）。
+            entry = self._jobs.get(job_key)
+            if entry is None or entry[2] != token:
+                return
+            # 守卫②：窗口已销毁时 Tk 仍会调回调一次，写坐标即 TclError。这里统一兜住并直接
             # 收尾，不把异常抛进 mainloop。
             try:
                 progress = plan.pop(0)
                 apply(progress)
             except tk.TclError:
+                self.cancel(job_key)
                 finish()
                 return
             if plan:
-                self.track(job_key, cast_after(root.after(per_frame, _step)))
+                self.track(job_key, cast_after(root.after(per_frame, _step)), root, token)
             else:
                 self.cancel(job_key)
                 finish()
@@ -259,7 +296,7 @@ class MotionController:
         apply(plan[0])
         plan.pop(0)
         if plan:
-            self.track(job_key, cast_after(root.after(per_frame, _step)))
+            self.track(job_key, cast_after(root.after(per_frame, _step)), root, token)
         else:
             finish()
 

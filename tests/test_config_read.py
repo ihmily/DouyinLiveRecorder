@@ -7,6 +7,8 @@
 #   · tolerant_config_parser 读出全部其余键、重复键取最后一次；
 #   · find_duplicate_options 点名到 节/键/行号，且「注释行」「跨节同名键」「多行值续行」
 #     三类形态不误报（L-17），同时「真重复混在续行之间」仍必须报出；
+#     M-54（2026-10-21）把「带 = / : 的缩进续行」也归入不误报的一类——这类形态在 cookie/长值
+#     折行里最常见，误报会吃掉「同一形态只报一次」的额度、把真重复淹没；
 #   · warn_duplicate_options 同一文件形态只落一条 warning（状态链每 10s 读一次配置，不去重
 #     会刷满日志），文件一改写就重新点名，缓存封顶后仍能点名；
 #   · preserve_case 复刻被替换掉的 GUI 侧 optionxform 闭包；main.py 的模块级 config 必须是
@@ -113,6 +115,30 @@ def test_find_duplicate_options_ignores_multiline_value_continuation_lines() -> 
     assert parser.get("s", "key") == "第一段\n第二段 相同文本"
     assert parser.get("s", "other") == "1\n第二段 相同文本"
     assert set(parser["s"]) == {"key", "other"}
+
+
+def test_find_duplicate_options_ignores_indented_continuations_that_contain_delimiters() -> None:
+    # M-54 回归锁（2026-10-21）：上一条判据只放过了「整行不含 = / :」的续行，所以**带分隔符的
+    # 缩进续行**仍被当成独立键。config.ini 里最常见的正是这一形态——cookie / 多行脚本值折行后
+    # 逐行形如 `   token=abc`，两行折行文本同名即被误报成「存在重复配置项」。
+    # 误报的代价不是噪声而已：warn_duplicate_options 的「同一形态只点名一次」额度只有
+    # _DUP_WARN_CACHE_MAX(32) 项，被假告警吃满后真重复反而永不点名（本函数存在的意义被抵消）。
+    text = "[s]\ncookie = v1\n   token=abc\n   token=def\n"
+    assert find_duplicate_options(text) == []
+    # 反向见证：缩进行在解析器里是**值的一部分**，不是键——因此「跳过缩进行」不可能放过真重复键
+    parser = tolerant_config_parser()
+    parser.read_string(text)
+    assert parser.get("s", "cookie") == "v1\ntoken=abc\ntoken=def"
+    assert set(parser["s"]) == {"cookie"}
+    # 冒号形态同判据（configparser 的默认 delimiters 是 ('=', ':')）
+    assert find_duplicate_options("[s]\nreferer = http://a\n   Host: x.example\n   Host: y.example\n") == []
+
+
+def test_find_duplicate_options_reports_real_duplicates_on_unindented_lines() -> None:
+    # 同一条跳过判据不得把真重复也放过：顶格写的重复键必须仍被报出，且行号按出现顺序给全
+    # （变异验证短 id M54：把缩进守卫放宽成「strip 后再判」会让本条转红）。
+    text = "[s]\nk = v1\n    续行 k = 伪键\nk = v3\n"
+    assert find_duplicate_options(text) == [("s", "k", (2, 4))]
 
 
 def test_find_duplicate_options_still_reports_real_duplicates_beside_continuations() -> None:

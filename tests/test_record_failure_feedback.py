@@ -7,12 +7,18 @@
 # 直下路径（direct_download_stream，shopee/花椒直播专用）无 ffmpeg 退出码：非 200 / 网络异常在函数
 # 内部消化成 False，调用方按「未被注释且无退出标志」判为真-失败并记 record_error，否则坏线路绕开
 # 熔断统计被无限重撞。控制台并发容量显示调度器实时自适应值（旧实现显示配置值，实测 12 显示 3）。
+#
+# 2026-10-21 追加 M-39（CODE_REVIEW_2026-10-21）：状态读取侧对 error_count / error_window 的
+# 采样必须与写侧 src/notify.py::record_error 用**同一把锁、同一次持锁**——见文件末尾两条锁。
 
+import ast
+import datetime
 import subprocess
 import sys
 import tempfile
 import time
 import types
+from collections import deque
 from collections.abc import Generator
 from pathlib import Path
 from types import ModuleType
@@ -334,3 +340,130 @@ def test_direct_download_stream_writes_chunks_on_success(
         is True
     )
     assert save_path.read_bytes() == b"".join(payload)
+
+
+# ── M-39（CODE_REVIEW_2026-10-21）：状态读取侧的错误字段采样必须与写侧同锁同批 ──
+#
+# 写侧 src/notify.py::record_error 在 main.max_request_lock 内做 `error_count += 1`（读-改-写三步、
+# 非原子）并追加 error_window 样本；读侧 src/recorder_status.py 此前有 3 处不受这把锁保护的读取
+# （模块级初值无锁读、record_state_lock 内的错锁读、display_info 的无锁读），窗口值另起一次持锁。
+# 后果：同一份快照里「累计 0 / 窗口 3」这种互相矛盾的数可以合法出现，且面板与控制台长期错拍。
+
+_IN_LOCK_ERROR_COUNT = 99
+_IN_LOCK_WINDOW = (1, 1)
+_OUTSIDE_ERROR_COUNT = 7
+
+
+class _PoisonedErrorLock:
+    # max_request_lock 替身：持锁期间把 error_count / error_window 改成「只有锁内才读得到」的哨兵值，
+    # 退出立刻还原成锁外值。于是任何跑到锁外的读取都会拿到另一组数，断言当场落空——这是「读的是不是
+    # 写侧那把锁」的行为证据；AST 结构锁只能证明读取写在哪块代码里，证明不了它与哨兵值的对应关系。
+    # target 取 Any 而不是 ModuleType：main 是运行时动态模块，mypy 看不见 error_count/error_window
+    # 这类模块级声明（写 ModuleType 会退化成 attr-defined 报错，只能靠 Any 把属性面放开）。
+    def __init__(self, target: Any, outside_count: int, outside_window: tuple[int, ...]) -> None:
+        self._target = target
+        self._outside_count = outside_count
+        self._outside_window = tuple(outside_window)
+        self.acquisitions = 0
+
+    def __enter__(self) -> "_PoisonedErrorLock":
+        self.acquisitions += 1
+        self._target.error_count = _IN_LOCK_ERROR_COUNT
+        self._target.error_window = deque(_IN_LOCK_WINDOW, maxlen=len(_IN_LOCK_WINDOW))
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        self._target.error_count = self._outside_count
+        self._target.error_window = deque(self._outside_window, maxlen=len(self._outside_window))
+
+
+def _main_attr_read(node: Any, attr: str) -> bool:
+    # 判据取「整条属性链」而不是正则源码：main.error_count 与 main.max_request_lock 都是
+    # Name('main') 上的 Attribute，赋值位（Store）不计入——本模块只读不写，但把 Store 也算成
+    # 读取会让「把 error_count 改名写回 main」这类改动躲过检查。
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == attr
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "main"
+        and isinstance(node.ctx, ast.Load)
+    )
+
+
+def _reads_of_main_in(node: Any) -> set[str]:
+    found: set[str] = set()
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Attribute) and isinstance(sub.value, ast.Name) and sub.value.id == "main":
+            if isinstance(sub.ctx, ast.Load):
+                found.add(sub.attr)
+    return found
+
+
+def _unlocked_error_count_lines(node: Any, inside_lock: bool, out: list[int]) -> None:
+    for child in ast.iter_child_nodes(node):
+        wrapped = isinstance(child, ast.With) and any(
+            _main_attr_read(item.context_expr, "max_request_lock") for item in child.items
+        )
+        child_inside = inside_lock or wrapped
+        if _main_attr_read(child, "error_count") and not child_inside:
+            out.append(int(getattr(child, "lineno", 0)))
+        _unlocked_error_count_lines(child, child_inside, out)
+
+
+def _recorder_status_tree() -> Any:
+    source = (Path(__file__).resolve().parent.parent / "src" / "recorder_status.py").read_text(encoding="utf-8")
+    return ast.parse(source)
+
+
+def test_get_status_snapshots_error_fields_under_the_writer_lock(
+    main_mod: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    main = main_mod
+    monkeypatch.setattr(main, "monitoring", 3)
+    monkeypatch.setattr(main, "recording", set())
+    monkeypatch.setattr(main, "running_list", [])
+    monkeypatch.setattr(main, "recording_time_list", {})
+    monkeypatch.setattr(main, "error_count", _OUTSIDE_ERROR_COUNT)
+    monkeypatch.setattr(main, "error_window", deque([0, 0, 0], maxlen=10))
+    lock = _PoisonedErrorLock(main, _OUTSIDE_ERROR_COUNT, (0, 0, 0))
+    monkeypatch.setattr(main, "max_request_lock", lock)
+
+    import src.recorder_status as recorder_status
+
+    status = recorder_status.get_status()
+
+    assert status["error_count"] == _IN_LOCK_ERROR_COUNT, (
+        f"累计错误数取自锁外旧值（{status['error_count']}）：与写侧 record_error 不构成互斥，"
+        f"可能读到 += 中途的旧值（M-39）"
+    )
+    assert status["recent_errors"] == sum(
+        _IN_LOCK_WINDOW
+    ), f"窗口错误数取自锁外旧值（{status['recent_errors']}）：两个口径来自不同时刻（M-39）"
+    # 单次持锁：两次持锁即使各自正确，也不保证两个值来自同一时刻（中间一次 record_error 即可造出
+    # 「累计已更新、窗口仍是旧三格」的不自洽快照）。
+    assert lock.acquisitions == 1, f"错误字段被分次持锁采样（{lock.acquisitions} 次），快照不自洽（M-39）"
+
+
+def test_error_count_is_never_read_outside_the_writer_lock() -> None:
+    # 结构锁补行为锁的盲区：display_info 是 while True 守护循环，行为级驱动它需要造控制台替身，
+    # 而它同样有裸读 main.error_count 的一处（旧形态）。这里按模块整体扫「锁外读取位」，
+    # get_status 与 display_info 一并纳入，新增第四处读取点也会当场变红。
+    loose: list[int] = []
+    _unlocked_error_count_lines(_recorder_status_tree(), False, loose)
+    assert loose == [], f"src/recorder_status.py 在 max_request_lock 之外读 main.error_count，行号 {loose}（M-39）"
+
+
+def test_both_error_fields_share_one_lock_section() -> None:
+    # 「单次持锁」必须由结构证明：with main.max_request_lock 的同一块体内同时出现两个字段读取。
+    # 只锁 error_window、error_count 另找地方读，是本条修复前真实存在的形态。
+    tree = _recorder_status_tree()
+    get_status = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "get_status")
+    sections = [
+        _reads_of_main_in(item)
+        for item in ast.walk(get_status)
+        if isinstance(item, ast.With) and any(_main_attr_read(i.context_expr, "max_request_lock") for i in item.items)
+    ]
+    assert any({"error_count", "error_window"} <= s for s in sections), (
+        f"get_status 内没有任何一处 max_request_lock 持锁段同时读 error_count 与 error_window，"
+        f"实际各段读取到的 main 属性: {sections}（M-39）"
+    )

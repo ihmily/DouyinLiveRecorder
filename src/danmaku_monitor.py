@@ -639,11 +639,15 @@ class DanmakuMonitorHub:
     # 无房间时退出，待下次 room_started / room_message 再拉起。
     def _stats_loop(self) -> None:
         thread = threading.current_thread()
+        # 只有「房间表为空 → break」这条正常出口允许在注销后立即复活；异常/stop 出口一律
+        # 维持「等下一次事件再拉起」，否则一崩就重建会自旋（见 finally 内的说明）。
+        revive_on_deregister = False
         try:
             while not self._stats_stop.wait(_STATS_INTERVAL):
                 try:
                     with self._lock:
                         if not self._rooms:
+                            revive_on_deregister = True
                             break
                         now = time.time()
                         for room, state in self._rooms.items():
@@ -693,6 +697,17 @@ class DanmakuMonitorHub:
                 with self._lock:
                     if self._stats_thread is thread:
                         self._stats_thread = None
+                        # 2026-10-21 M-37：break（房间表当时为空）与这里之间存在窗口——期间新登记的
+                        # 房间调 _ensure_stats_thread() 时本线程**仍 is_alive()**，于是判定为
+                        # 「已有线程在跑」而不新建；本线程随后把引用清成 None 并退出，结果该房间
+                        # 永久拿不到周期 stats（GUI 的 msg_rate/online 冻结，直到下一条弹幕或
+                        # 下一次 room_started 才有机会重启）。注销后必须在**仍持锁**时复检房间表：
+                        # 非空即原子拉起替代线程（同锁内完成，故不会与并发登记交错出第二支线程）。
+                        # 复活只对 break 路径成立：异常退出时立即重建会变成「崩溃→重建→再崩」的
+                        # 自旋（实测 1s 内可打满几十条 warning），且与本函数上方「异常退出待下一条
+                        # 弹幕事件再拉起」的既有契约冲突，故由 revive_on_deregister 区分两种出口。
+                        if revive_on_deregister and self._rooms:
+                            self._ensure_stats_thread()
             except Exception as e:
                 # 吞没即正确：自注销失败最坏退回到修复前的行为，绝不让收尾再抛一次
                 logger.debug(
@@ -712,7 +727,13 @@ class DanmakuMonitorHub:
         if not log_path:
             return None
         try:
-            os.makedirs(os.path.dirname(log_path), exist_ok=True)
+            # 2026-10-21 M-43：裸文件名（如 "danmaku_monitor.jsonl"，无目录段）时
+            # os.path.dirname() 返回空串，os.makedirs("") 抛 FileNotFoundError 落进下面的
+            # except 被当成「目录不可写」→ 边车输出**静默禁用**，GUI/Web 的 tail 链路整体失效。
+            # 空父目录本就等价于「当前目录」，无需创建，直接放行。
+            parent = os.path.dirname(log_path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
             return log_path
         except Exception as e:
             logger.debug(i18n.tr("[弹幕监控]日志目录创建失败，禁用文件输出: {e}", e=e))

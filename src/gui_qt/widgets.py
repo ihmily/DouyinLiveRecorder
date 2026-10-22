@@ -358,9 +358,15 @@ class TerminalText(QPlainTextEdit):
     def append_line(self, text: str) -> None:
         # 走光标在末尾插入而不是 appendPlainText：后者会强制新建段落并额外补一个换行，
         # 而调用方传入的行已经带 \n —— 用它会在日志里多出双倍空行。
+        # M-81（2026-10-21）：textCursor() 返回的是**副本**，在副本上 move/insertText 只改
+        # 文档、不改控件自己的光标——旧实现写完后控件仍停在插入前的位置，日志面板不跟随
+        # 最新行（表现为「在录，日志页却定格不动」）。insertText 必须保留（appendPlainText
+        # 的双换行老坑不回归），补的只是 setTextCursor 这一步，与弹幕页 _render_stream
+        # 的同形态写法（cursor 定位末尾后 setTextCursor）对齐。
         cursor = self.textCursor()
         cursor.movePosition(cursor.MoveOperation.End)
         cursor.insertText(text if text.endswith("\n") else text + "\n")
+        self.setTextCursor(cursor)
 
     def sizeHint(self) -> QSize:
         return QSize(600, 320)

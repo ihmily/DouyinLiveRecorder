@@ -22,6 +22,7 @@
 #   python smoke_test.py --config smoke_targets.json --report report.html --format html
 #   python smoke_test.py --config smoke_targets.json --report result.json --format json
 import argparse
+import html
 import http.client
 import json
 import sys
@@ -360,8 +361,13 @@ def write_json_report(results: list[CheckResult], summary: CheckResult, path: st
         json.dump({"summary": summary, "results": results}, f, ensure_ascii=False, indent=2)
 
 
-# 生成自包含 HTML 报告：逐行拼接表格行（含命中文本与错误），通过/失败行用 ok/bad 样式区分；
-# 内容直接拼入 HTML，依赖配置可信（测试目标由使用者提供，非外部不可信输入）。
+# 生成自包含 HTML 报告：逐行拼接表格行（含命中文本与错误），通过/失败行用 ok/bad 样式区分。
+# M-97（2026-10-21 审查）：动态片段**一律** html.escape 后再拼。旧注释「依赖配置可信」只对
+# name/url 成立（测试目标由使用者提供），对 errors/detail 不成立：errors 装的是异常文本与
+# **HTTP 响应派生内容**（未命中的 expect_contains token 原文、`响应不是合法 JSON: {e}`、
+# JSON 字段的实际值 actual!r），全部来自被探测服务的返回；而本产物是 CI 附件、由浏览器打开，
+# 于是远端响应可以直接在报告页里注入 <script>（存储型 XSS 的本地版：攻击面是打开报告的人）。
+# 局部变量名从 html 改为 document——模块名 html 被同名局部量遮蔽会让 escape() 在运行期抛错。
 def write_html_report(results: list[CheckResult], summary: CheckResult, path: str) -> None:
     rows: list[str] = []
     for r in results:
@@ -369,21 +375,22 @@ def write_html_report(results: list[CheckResult], summary: CheckResult, path: st
         detail = ""
         matched_html = cast(list[str], r["matched_contains"])
         if matched_html:
-            detail += "<div class='match'>命中: " + ", ".join(matched_html) + "</div>"
+            detail += "<div class='match'>命中: " + ", ".join(html.escape(token) for token in matched_html) + "</div>"
         for err in cast(list[str], r["errors"]):
-            detail += f"<div class='err'>✗ {err}</div>"
+            detail += f"<div class='err'>✗ {html.escape(err)}</div>"
+        # detail 的每个分量都已单独 escape，剩下的只有本函数自己写的标签，故原样拼入。
         row = (
             f"<tr class='{status_cls}'>"
             + f"<td>{'✅' if cast(bool, r['passed']) else '❌'}</td>"
-            + f"<td>{r['name']}</td>"
-            + f"<td>{r['method']}</td>"
-            + f"<td>{r['status']}</td>"
-            + f"<td>{r['time_ms']}ms</td>"
+            + f"<td>{html.escape(str(r['name']))}</td>"
+            + f"<td>{html.escape(str(r['method']))}</td>"
+            + f"<td>{html.escape(str(r['status']))}</td>"
+            + f"<td>{html.escape(str(r['time_ms']))}ms</td>"
             + f"<td>{detail}</td>"
             + f"</tr>"
         )
         rows.append(row)
-    html = (
+    document = (
         f"<!DOCTYPE html>\n"
         f'<html lang="zh-CN"><head><meta charset="utf-8">\n'
         f"<title>冒烟测试报告</title>\n"
@@ -403,7 +410,8 @@ def write_html_report(results: list[CheckResult], summary: CheckResult, path: st
         f".badge.bad{{background:#e74c3c;color:#fff;}}\n"
         f"</style></head><body>\n"
         f"<h1>冒烟测试报告</h1>\n"
-        f'<div class="meta">生成时间: {summary["timestamp"]} ｜ 耗时 {cast(float, summary["elapsed_ms"])}ms</div>\n'
+        f'<div class="meta">生成时间: {html.escape(str(summary["timestamp"]))} ｜ 耗时'
+        f' {cast(float, summary["elapsed_ms"])}ms</div>\n'
         f'<div style="margin-bottom:12px;">\n'
         f'<span class="badge ok">通过 {cast(int, summary["passed"])}</span>\n'
         f'<span class="badge bad">失败 {cast(int, summary["failed"])}</span>\n'
@@ -416,7 +424,7 @@ def write_html_report(results: list[CheckResult], summary: CheckResult, path: st
         f"</body></html>"
     )
     with open(path, "w", encoding="utf-8") as f:
-        _ = f.write(html)
+        _ = f.write(document)
 
 
 # ---------- 入口 ----------

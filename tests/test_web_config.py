@@ -336,6 +336,18 @@ class TestOriginAllowedPolicy:
         assert not is_origin_allowed("http://nas", self._LOCAL, bind_host="127.0.0.1", bind_port=8000)
         assert not is_origin_allowed("http://192.168.1.47", self._LOCAL, bind_host="127.0.0.1", bind_port=8000)
 
+    def test_testserver_exemption_requires_pytest_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # M-66（2026-10-21）：哨兵豁免此前在**生产判定**里无条件生效（测试后门进生产——生产
+        # 进程收到 Origin: http://testserver 即免端口放行）。现加 _running_under_pytest() 环境门：
+        # 本用例把门桩成 False 模拟生产进程，豁免必须整体失效；而真实回环 + 正确端口的常规
+        # 判定不受该门影响（防止把环境门做成「一切都不放行」）
+        from src import web_config as wc
+
+        assert is_origin_allowed("http://testserver", self._LOCAL, bind_host="127.0.0.1", bind_port=8000)
+        monkeypatch.setattr(wc, "_running_under_pytest", lambda: False)
+        assert not is_origin_allowed("http://testserver", self._LOCAL, bind_host="127.0.0.1", bind_port=8000)
+        assert is_origin_allowed("http://127.0.0.1:8000", self._LOCAL, bind_host="127.0.0.1", bind_port=8000)
+
     @pytest.mark.parametrize(
         "origin",
         [
@@ -508,6 +520,31 @@ class TestUpdateConfigLine:
     def test_missing_file_returns_false(self, tmp_path: Path) -> None:
         assert update_config_line(tmp_path / "nope.ini", "Web", "web_host", "x") is False
 
+    def test_duplicate_key_in_section_refuses_write(self, tmp_path: Path) -> None:
+        # M-68（2026-10-21）：手工编辑产生的重复键，旧实现只替换节内**首个**匹配行并返回 True，
+        # 生效值却来自另一行（「面板提示已保存、行为未变」）。现匹配数 >1 → 拒绝写入：
+        # 返回 False 且文件逐字不变——复用既有失败出口（web_api 转 404、write_quality_options
+        # 报写失败），不新增第三种返回形态。反向半边：同名键在**其他节**出现不得算重复
+        cfg = tmp_path / "config.ini"
+        cfg.write_text("[Web]\nweb_port = 8000\nweb_port = 9000\n", encoding="utf-8-sig")
+        before = cfg.read_bytes()
+        assert update_config_line(cfg, "Web", "web_port", "8100") is False
+        assert cfg.read_bytes() == before, "重复键被拒后文件仍被改写"
+        cfg2 = tmp_path / "config2.ini"
+        cfg2.write_text("[Web]\nweb_port = 8000\n[Other]\nweb_port = 9000\n", encoding="utf-8-sig")
+        assert update_config_line(cfg2, "Web", "web_port", "8100") is True
+        text2 = cfg2.read_text(encoding="utf-8-sig")
+        assert "web_port = 8100" in text2 and "web_port = 9000" in text2
+
+    def test_commented_duplicate_is_not_counted(self, tmp_path: Path) -> None:
+        # M-68 计数口径的边界：注释行（`#key = ...`）在真实替换判定里从不命中（行首 # 不匹配
+        # 键模式），计数同样不得把它算进「重复」——否则「一实一注释」这份完全合法的存量配置
+        # 会被整体拒绝写入
+        cfg = tmp_path / "config.ini"
+        cfg.write_text("[Web]\n# web_port = 8000\nweb_port = 9000\n", encoding="utf-8-sig")
+        assert update_config_line(cfg, "Web", "web_port", "8100") is True
+        assert "web_port = 8100" in cfg.read_text(encoding="utf-8-sig")
+
     def test_hash_in_value_reads_back_as_new_value(self, tmp_path: Path) -> None:
         # M-07（2026-09-30）：读侧 configparser 未开启 inline_comment_prefixes，旧值里的
         # " #" 本就是值的一部分——二次更新后读回值必须**等于新值**，不得被旧尾注污染
@@ -531,6 +568,27 @@ class TestUpdateConfigLine:
         assert update_config_line(cfg3, "Sec", "key", "new") is True
         text = cfg3.read_text(encoding="utf-8-sig")
         assert "key = new # 备注" in text
+
+
+class TestAppendConfigLineReturn:
+    # M-62（2026-10-21）：append_config_line 此前丢弃 _atomic_write_text 的布尔值、无条件
+    # return True，而 update_config_line 已按 M-29 修正——补建分支（config.ini 缺 language 键、
+    # 画质选项首次落盘）磁盘写失败仍报成功，set_language 的回滚与 write_quality_options 的
+    # 失败回报全部失明。判据走「替换失败→补建」这条真实组合路径，不重新实现任何写入逻辑。
+
+    def test_propagates_atomic_write_failure(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        from src import web_config as wc
+        from src.web_config import append_config_line, update_or_append_config_line
+
+        cfg = tmp_path / "config.ini"
+        cfg.write_text("[Web]\nweb_host = 127.0.0.1\n", encoding="utf-8-sig")
+        # 正向半边先跑：未打桩时同一输入必须 True（防止把修复做成「恒 False」的假绿对照）
+        assert append_config_line(str(cfg), "Web", "language", "en_US") is True
+        assert "language = en_US" in cfg.read_text(encoding="utf-8-sig")
+        monkeypatch.setattr(wc, "_atomic_write_text", lambda _path, _text: False)
+        assert append_config_line(str(cfg), "Web", "language2", "x") is False, "补建分支仍吞掉写失败"
+        # update_or_append：缺键 → 替换失败 → 落补建分支 → 写失败必须传导为 False
+        assert update_or_append_config_line(str(cfg), "Web", "language3", "y") is False
 
 
 class TestVerifyWebPassword:

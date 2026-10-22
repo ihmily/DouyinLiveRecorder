@@ -40,7 +40,13 @@ __all__ = [
 GUI_PARENT_ENV = "DLR_GUI_PARENT"
 
 # 当前进程是否为 GUI 父进程：本模块在导入期求值，故 GUI 入口必须先设标记再导入 src
-_gui_parent = os.environ.get(GUI_PARENT_ENV) == "1"
+# M-50（2026-10-21）：判定改走全仓唯一布尔入口 parse_config_bool，不再手写 `== "1"`。
+# 为什么必须换入口：本仓布尔口径（关键约定 #9）认 是/true/t/yes/y/on/1，而原形态只认字符 "1"，
+# 于是 DLR_GUI_PARENT=TRUE / on / 是 一律被判成「不是 GUI 父进程」——GUI 进程照样注册
+# streamget.log 与 PlayURL.log 两个文件 sink，回到本模块头部记录的故障面：与录制子进程双开同一
+# 文件，任一方到轮转阈值即抛 PermissionError(WinError 32)，轮转永不成功、该进程文件日志全量静默
+# 丢失。env 未设置时 parse_config_bool(None, False) 仍返回 False，非 GUI 进程语义逐字不变。
+_gui_parent = parse_config_bool(os.environ.get(GUI_PARENT_ENV), False)
 
 
 def _app_root() -> str:

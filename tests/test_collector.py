@@ -13,16 +13,27 @@
 #      跳过末尾的 self._srt.close()（SRT 句柄泄漏，Windows 上该 .srt 在 GC 前无法改名，会打挂改名逻辑）。
 #
 # 另附 MID-24 的写线程侧：get() 带超时 + _srt_stop 自检，队列空时能自行退出。
+#
+# 2026-10-21 CODE_REVIEW_2026-10-21 追加两条不变量（改回旧形态即应转红）：
+#   ⑤ M-38  采集线程 join 超时后必须复查 is_alive() 并留 warning——join(timeout) 超时是静默返回，
+#           旧写法不复查，卡死的线程（连同事件循环与监控房间条目）在日志里完全隐形；
+#           同时钉住「新增判定不得改变 srt.close() 的调用顺序」（MID-24 的槽位泄漏契约）。
+#   ⑥ M-40  平台类**构造期**与回调注入阶段的异常不得逃出守护线程：必须落一条脱敏 warning
+#           并把房间上报为已关闭，否则面板停在「采集中」、监控条目永不上报关闭。
 
 import asyncio
+import io
+import json
 import queue
 import threading
 import time
 import types
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from loguru import logger
 
 import src.collector as collector_module
 from src.collector import DanmakuCollector
@@ -397,3 +408,106 @@ def test_stop_joins_only_started_threads(tmp_path: Path) -> None:
 
     assert fp.closed is True, "join 抛错跳过了 srt.close()"
     assert collector._stop_called is True
+
+
+@pytest.fixture
+def log_capture() -> Iterator[io.StringIO]:
+    # 内存 sink 直接接管 loguru：本仓不把 loguru 桥接到 stdlib logging，caplog 抓不到
+    # （与 tests/test_cookie_cache.py 的 log_capture 同一手法）。
+    buf = io.StringIO()
+    sink_id = logger.add(buf, format="{level} {message}", level="DEBUG")
+    try:
+        yield buf
+    finally:
+        try:
+            logger.remove(sink_id)
+        except ValueError:
+            pass
+
+
+class _AliveForeverThread:
+    # 「join 到期仍存活」的线程替身：ident 必须给出非 None（_join_thread 以 ident is None
+    # 判「可 join」），is_alive 恒真模拟卡在平台 SDK 里的采集线程。
+    ident = 1
+
+    def join(self, timeout: float | None = None) -> None:
+        return None
+
+    def is_alive(self) -> bool:
+        return True
+
+
+def test_stop_warns_when_capture_thread_outlives_join(tmp_path: Path, log_capture: io.StringIO) -> None:
+    # M-38：join(timeout) 超时是**静默返回**，旧写法不复查存活就继续收尾，卡死的采集线程
+    # （事件循环 + WS 连接 + 监控房间条目全部滞留）在日志里一条线索都不留。
+    collector = _srt_collector(tmp_path)
+    srt = collector._srt
+    assert srt is not None
+    srt.start()
+    fp = srt._fp
+    assert fp is not None
+
+    collector._started = True
+    collector._stop_called = False
+    collector._thread = cast(Any, _AliveForeverThread())
+
+    collector.stop(timeout=1.0)
+
+    text = log_capture.getvalue()
+    assert "停止流程收尾异常" in text, text
+    assert "still alive after join(timeout=1.0s)" in text, text
+    # MID-24 契约的另一半：新增的存活判定**不得**改变 srt.close() 的到达（录制并发槽泄漏防线）
+    assert fp.closed is True, "采集线程未退出时跳过了 srt.close()：录制并发槽会永久泄漏"
+
+
+class _RaisingConstructDanmaku:
+    # 平台 SDK 在构造期即抛（缺依赖 / 参数校验失败 / 风控页解析异常都是这种形态）。
+    # 异常文本内嵌带 token 的地址——既是 M-40 的「异常不得逃出守护线程」触发器，
+    # 也是 M-41 的脱敏判据样本（断言口径是「密钥字符串确实从日志里消失」）。
+    def __init__(self, **kwargs: Any) -> None:
+        raise RuntimeError("connect failed https://ws.example/live?token=SECRETTOKEN40")
+
+    async def start(self, args: Any) -> None:
+        return None
+
+    async def stop(self) -> None:
+        return None
+
+    async def heartbeat(self) -> None:
+        return None
+
+    def decode_message(self, data: Any) -> None:
+        return None
+
+
+def test_run_reports_closed_and_masks_when_construction_raises(tmp_path: Path, log_capture: io.StringIO) -> None:
+    # M-40：构造期异常此前裸奔在 _run 的 finally 之外——线程带 traceback 消失（无控制台进程里
+    # 连 traceback 都没有），而监控枢纽条目仍停在 started，面板显示「采集中」直到录制结束。
+    hub = DanmakuMonitorHub(log_path=str(tmp_path / "dm.jsonl"))
+    collector = DanmakuCollector(
+        danmaku_cls=cast(Any, _RaisingConstructDanmaku),
+        danmaku_args={},
+        base_filename=str(tmp_path / "video"),
+        segment_seconds=None,
+        room_name="房间A",
+        platform_name="抖音直播",
+        write_srt=False,
+        monitor=hub,
+    )
+    collector.start()
+    thread = collector._thread
+    assert thread is not None
+    thread.join(timeout=5)
+    assert not thread.is_alive(), "构造期异常后采集线程未在 5s 内退出：不得判绿"
+    assert collector._loop is None, "_run 的收尾 finally 未执行（事件循环引用未清）"
+
+    hub.flush()
+    events = [json.loads(line) for line in (tmp_path / "dm.jsonl").read_text(encoding="utf-8").splitlines()]
+    closed = [
+        ev for ev in events if ev.get("ev") == "conn" and ev.get("state") == "closed" and ev.get("room") == "房间A"
+    ]
+    assert closed, f"构造失败未把房间上报为已关闭：{events}"
+
+    text = log_capture.getvalue()
+    assert "SECRETTOKEN40" not in text, "异常文本未过 mask_credentials：凭据随轮转日志长期落盘"
+    assert "RuntimeError" in text, text

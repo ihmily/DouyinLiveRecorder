@@ -8,10 +8,15 @@
 // 沙箱策略与 test_quality_ui.mjs 同源（vm + 自制 DOM/fetch 桩，无 npm 依赖），但这里需要
 // **可控定时器**：SEV-2227 的失效形态是「隐藏后 setTimeout 永不再排」，no-op 定时器观察不到，
 // 故改为可手动推进的假定时器队列；M-21 另需可停在半路的 fetch（makeInflight）。
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
+// M-85：行为锁需要把真文件里的 VBScript 函数原文交给 cscript 求值（非 Windows 无 cscript → skip）。
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const APP_JS = readFileSync(new URL('../../web/app.js', import.meta.url), 'utf8');
 const INDEX_HTML = readFileSync(new URL('../../web/index.html', import.meta.url), 'utf8');
@@ -108,14 +113,31 @@ function makeResponse(status, data) {
 // routes 键为 "METHOD path"，值为对象或 (callIndex) => 对象；path 含 query 时按前缀匹配失败，
 // 故调用方须写全（本文件用到的 path 都是固定的）。spec.gate 存在时响应体要等 gate 落地才返回，
 // 用来把请求「停在半路」（M-21，见 makeInflight）。
+// spec.hang（M-88①）：响应永不落地，只在 init.signal 被中止时以 AbortError 拒绝——
+// 用来造「后端挂起」，同时把 signal 交给用例观察是否真的被中止。
+// log 条目附带 init（M-84 / M-88①）：断言请求头（Bearer）与中止信号都要靠它，
+// 既有断言只读 path/method/body，多一个键不影响它们。
 function makeFetch(routes, log) {
     return async (path, init) => {
         init = init || {};
         const method = init.method || 'GET';
-        log.push({ path, method });
+        log.push({ path, method, init });
         const route = routes[method + ' ' + path] || routes[method + ' ' + path.split('?')[0]];
         if (!route) return makeResponse(404, { detail: 'no test route for ' + method + ' ' + path });
         const spec = typeof route === 'function' ? route(log.length) : route;
+        if (spec.hang) {
+            return new Promise((_resolve, reject) => {
+                const signal = init.signal;
+                if (!signal) return;
+                const abort = () => {
+                    const err = new Error('The user aborted a request.');
+                    err.name = 'AbortError';
+                    reject(err);
+                };
+                if (signal.aborted) abort();
+                else signal.addEventListener('abort', abort, { once: true });
+            });
+        }
         if (spec.gate) {
             const status = spec.status || 200;
             const body = JSON.stringify(spec.json || {});
@@ -237,6 +259,10 @@ async function boot({ routes = {}, hidden = false, seedClasses = {} } = {}) {
         }, fetchLog),
         setTimeout: (fn, ms) => timers.setTimeout(fn, ms),
         clearTimeout: id => timers.clearTimeout(id),
+        // M-88①：vm 上下文自带 ECMAScript 内置对象，但**不含** AbortController 这类宿主 API。
+        // 不注入则生产代码的 `typeof AbortController !== 'undefined'` 恒假，超时支路整体不可达，
+        // 「downloadFile 有没有真的中止请求」这条锁会永远测不到（同 api() 的超时也是同理）。
+        AbortController,
         confirm: () => true,
         EventSource: class { constructor() {} close() {} addEventListener() {} },
     };
@@ -931,4 +957,316 @@ test('MIN-2241：根 index.html 仍未被 Web 面板链路服务（修复不得�
     const idx = WEB_API_PY.match(/async def index\(\)[\s\S]*?\r?\n\r?\n/);
     assert.ok(idx, '未找到 / 路由');
     assert.match(idx[0], /_WEB_DIR\s*\/\s*"index\.html"/, '/ 未指向 web/index.html');
+});
+
+// —— M-84：令牌存储的回退载体必须是内存，绝不再是 localStorage ————————————
+
+test('M-84：sessionStorage 不可用时令牌只进内存，绝不写 localStorage', async () => {
+    // 失效形态（M-84）：_tokenStore 的回退分支返回 localStorage —— bearer token（默认 24h 有效）
+    // 明文落盘、跨标签页与浏览器重启存活，与「关标签页即失效」的设计目标相反，且 XSS、恶意扩展、
+    // 本机任意进程都能读走。本用例刻意**不注入 sessionStorage**（Safari 无痕/禁用站点数据的等价形态），
+    // 断言两件事：① 令牌不进 localStorage（落盘面）；② getToken 照常供 api() 使用（功能面不退化）。
+    const ctx = await boot({
+        routes: {
+            'POST /api/login': { json: { token: 'tok-memory' } },
+            ...STATUS_ROUTE,
+            ...LOGS_ROUTE,
+        },
+    });
+    ctx.elements.get('login-password').value = 'pw';
+    ctx.elements.get('login-submit')._listeners.click[0]();
+    await flushMicrotasks();
+    assert.ok(ctx.fetchLog.some(f => f.method === 'POST' && f.path === '/api/login'), '登录请求未发出');
+    assert.equal(ctx.storage.has('dlr_token'), false, '令牌被写进 localStorage（M-84 的明文落盘形态）');
+    assert.equal(ctx.storage.size, 0, '回退分支仍把任何键写进 localStorage（应为纯内存载体）');
+
+    await tick(ctx);
+    const statusCall = ctx.fetchLog.filter(f => f.path.startsWith('/api/status')).pop();
+    assert.ok(statusCall, '登录后没有发起 /api/status 轮询');
+    assert.equal(
+        statusCall.init.headers.Authorization,
+        'Bearer tok-memory',
+        '内存回退后 getToken 必须照常把令牌交给 api()（否则本项修好了落盘却打断了登录态）'
+    );
+});
+
+// —— M-88①：downloadFile 的超时中止（与 api() 同形状）————————————————
+
+test('M-88①：downloadFile 必须带超时中止，后端挂起时请求不得无限 pending', async () => {
+    // 失效形态：downloadFile 裸 fetch（无 AbortController/超时），同文件 api() 却已有 API_TIMEOUT_MS
+    // 的封装——后端挂起（或大文件迟迟不给响应头）时这条请求无限 pending，没有任何出口。
+    const ctx = await boot({
+        routes: { 'GET /api/files/download': { hang: true }, ...STATUS_ROUTE, ...LOGS_ROUTE },
+    });
+    ctx.sandbox.window.downloadFile('downloads/a.flv');
+    await flushMicrotasks();
+    const call = ctx.fetchLog.find(f => f.path.startsWith('/api/files/download'));
+    assert.ok(call, '未发起 /api/files/download 请求');
+    assert.ok(call.init && call.init.signal, 'downloadFile 没把 AbortSignal 交给 fetch（不具备中止能力）');
+    assert.equal(call.init.signal.aborted, false, '刚发出就已被中止（超时逻辑写反）');
+
+    await tick(ctx); // 推进假定时器：排在那里的 abort 必须真的执行
+    await flushMicrotasks();
+    assert.equal(call.init.signal.aborted, true, '超时后请求仍未中止（M-88① 的无限 pending 原状）');
+    const toastText = ctx.elements.get('toast').textContent;
+    assert.match(toastText, /timeout/, `超时中止要给用户可读的失败原因，实际: ${toastText}`);
+});
+
+// —— M-88②：e.message 的兜底形态统一 ————————————————————————————
+
+test('M-88②：toast 拼接 e.message 一律带空值兜底（不得把 undefined 显示给用户）', async () => {
+    // 失效形态：5 处写成 t('...') + e.message，而 reject 出非 Error 值（字符串/无 message 的对象）
+    // 时 toast 显示「删除失败: undefined」；同文件另有若干处已写 (e.message || '')，两套口径并存。
+    // 判据取**代码形态的不变量**而非具体文案：剥注释后全文件不允许出现裸的 `+ e.message` 拼接。
+    // 这是「同一文件内已统一成一种写法」的一致性锁，不钉任何变量名或错误文案。
+    const code = APP_JS.split('\n')
+        .filter(l => !l.trim().startsWith('//'))
+        .join('\n');
+    const bare = code.match(/\+\s*e\.message\s*(?!\|\|)/g) || [];
+    assert.deepEqual(bare, [], `仍存在未兜底的 e.message 拼接: ${JSON.stringify(bare)}`);
+    assert.ok(code.includes('(e.message || \'\')'), '兜底形态本身不得整体消失（否则上一条恒真）');
+});
+
+// —— M-88③：markBackendUnreachable 的恢复分支 ————————————————————
+
+test('M-88③：后端恢复后必须当场还原断开标签，且只在真出现过断开态时改写', async () => {
+    // 失效形态：markBackendUnreachable 只有 if (flag) 一支，形参的 false 语义不存在，
+    // 「已断开」只能等下一轮渲染顺带覆盖。现补恢复分支（复用既有键 danmaku.connected）。
+    // 同时用 _backendMarkedDown 闸门避免健康轮次把弹幕流区域反复改写——两个方向都要锁。
+    let mode = 'down';
+    const ctx = await boot({
+        routes: {
+            'GET /api/status': () =>
+                mode === 'down' ? { status: 500, json: { detail: 'boom' } } : { json: { monitoring: 1, recording: [] } },
+            ...LOGS_ROUTE,
+        },
+    });
+    await gotoDashboard(ctx);
+    const stream = ctx.elements.get('danmaku-stream');
+    assert.equal(stream.textContent, '已断开', '后端不可达时未写断开标签（MID-2237 既有锁的同一形态）');
+
+    mode = 'up';
+    await tick(ctx);
+    assert.equal(stream.textContent, '已连接', '后端恢复后未当场还原标签（M-88③ 原状：只能等下一轮覆盖）');
+
+    await tick(ctx);
+    assert.equal(stream.textContent, '已连接', '恢复分支必须幂等：健康轮次不得反复改写同一区域');
+
+    mode = 'down';
+    await tick(ctx);
+    assert.equal(stream.textContent, '已断开', '再次断开要重新提示（闸门不得把状态卡死在「已连接」）');
+});
+
+// —— 前端/后端敏感节同源（M-61 增列「推送配置」的前端半边）——————————
+
+test('后端 SENSITIVE_SECTIONS 的每一节，前端都必须渲染成 password 框', async () => {
+    // 失效形态：前端另有一份节白名单（web/app.js::SENSITIVE_SECTIONS），后端增列而前端漏改时，
+    // 该节内「键名正则看不见」的凭据（如 bark_key）在面板里是明文 text 框——用户一眼看到完整凭据。
+    // 判据以**后端那份集合**为输入逐节驱动渲染（不是把两边字面量各写一遍再比字符串），
+    // 后端再加节而前端没跟，本条立刻变红；前端多加节则不受本条约束（由后端脱敏口径负责）。
+    const py = readFileSync(new URL('../../src/web_config.py', import.meta.url), 'utf8');
+    const decl = py.match(/SENSITIVE_SECTIONS\s*=\s*\{([^}]*)\}/);
+    assert.ok(decl, '未在 src/web_config.py 找到 SENSITIVE_SECTIONS 定义（判据已漂移）');
+    const sections = [...decl[1].matchAll(/["']([^"']+)["']/g)].map(m => m[1]);
+    assert.ok(sections.length >= 3, `后端敏感节集合异常（读到 ${sections.length} 个）: ${sections}`);
+
+    // 每节放一个「键名正则与例外表都不命中、值也不是凭据形态」的探针键：
+    // 该行渲染成 password 只可能是因为**节白名单**命中，从而与后端集合逐节同真同假。
+    const cfg = { 录制设置: { zz_parity_probe: 'plain-value' } };
+    for (const section of sections) cfg[section] = { zz_parity_probe: 'plain-value' };
+    const ctx = await boot({
+        routes: { 'GET /api/config': { json: cfg }, ...STATUS_ROUTE, ...LOGS_ROUTE },
+    });
+    const tab = ctx.tabs.find(t => t.getAttribute('data-view') === 'config');
+    tab._listeners.click[0].call(tab);
+    await flushMicrotasks();
+    const html = ctx.elements.get('config-container').innerHTML;
+    assert.ok(html.includes('zz_parity_probe'), '配置视图未渲染探针行（沙箱或渲染路径已漂移）');
+    for (const section of sections) {
+        assert.ok(
+            html.includes(`type="password" data-section="${section}" data-key="zz_parity_probe"`),
+            `后端把「${section}」列为敏感节，前端却渲染成明文输入框（两侧白名单分叉）`
+        );
+    }
+    // 反向边界：白名单外的节不得被顺手打码（否则本条会退化成「全是 password」的无信息断言）。
+    assert.ok(
+        html.includes(`type="text" data-section="录制设置" data-key="zz_parity_probe"`),
+        '非敏感节被误判成 password（判定面被整体放宽）'
+    );
+});
+
+// —— M-85：StopRecording.vbs 的目录锚点与硬杀前身份复核 ————————————————
+//
+// 【为什么在这一份 .mjs 里跑 VBScript】本项要锁的是**误杀防护**：唯一算行为锁的写法是把真文件里
+// 的函数原文交给 cscript 求值——在测试里用 JS 重写一份匹配逻辑正是「测试自实现被测逻辑」的假绿形态。
+// 这类用例的自然归属是 tests/test_stop_recording_vbs.py（它已有同款「抽函数 + cscript」工装），
+// 本轮由 web/ 与 .vbs 的负责人代持，后续迁移整段搬过去即可。
+// 【安全前提】脚本只跑抽出来的纯函数与「假 shell / 假进程」替身，绝不执行整份 StopRecording.vbs
+// （那会真的 taskkill 进程）；临时脚本写在仓库之外（os.tmpdir），跑完即删。
+const VBS_PATH = fileURLToPath(new URL('../../StopRecording.vbs', import.meta.url));
+const HAS_CSCRIPT = process.platform === 'win32';
+const CSCRIPT_SKIP = HAS_CSCRIPT ? false : 'cscript 仅存在于 Windows（环境限制，非失败）';
+
+// 读真文件的编码契约并解码（与 tests/test_stop_recording_vbs.py 同一口径：FF FE BOM 恰好一支 + 全量 CRLF）。
+function vbsSourceText() {
+    const buf = readFileSync(VBS_PATH);
+    assert.ok(buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe, 'StopRecording.vbs 必须带 FF FE BOM');
+    const text = buf.toString('utf16le');
+    assert.equal(text[0], '\ufeff', 'BOM 解码后应为 U+FEFF 首字符');
+    assert.notEqual(text[1], '\ufeff', 'StopRecording.vbs 不得出现双重 BOM');
+    const body = text.slice(1);
+    assert.equal(
+        body.split('\n').length,
+        body.split('\r\n').length,
+        'StopRecording.vbs 必须全量 CRLF，不得出现孤立 LF'
+    );
+    return body;
+}
+
+// 按名字抽「Function/Sub … End Function/Sub」原文块（连同它依赖的辅助函数一起搬进临时脚本）。
+function vbsBlock(text, name) {
+    const m = text.match(new RegExp('(Function|Sub) ' + name + '\\([\\s\\S]*?\\r\\nEnd \\1'));
+    assert.ok(m, `StopRecording.vbs 未找到 ${name}（判据漂移）`);
+    return m[0];
+}
+
+function vbsQuote(value) {
+    return '"' + String(value).replace(/"/g, '""') + '"';
+}
+
+// 用与主文件相同的编码写出（cscript 直接识别 UTF-16 LE + BOM，不受系统 ANSI 代码页影响）。
+function runVbs(lines) {
+    const dir = mkdtempSync(join(tmpdir(), 'dlr-vbs-'));
+    const file = join(dir, '_tmp_m85_selftest.vbs');
+    try {
+        writeFileSync(file, Buffer.from('\ufeff' + lines.join('\r\n') + '\r\n', 'utf16le'));
+        return execFileSync('cscript', ['//nologo', file], { encoding: 'utf8', timeout: 120000 });
+    } finally {
+        rmSync(dir, { recursive: true, force: true });
+    }
+}
+
+const M85_ANCHOR_CASES = [
+    // 【必须仍然命中】真·本程序目录下的 ffmpeg（含带引号、大小写混杂、深层子目录三种形态）
+    [String.raw`D:\dlr\ffmpeg.exe -i D:\dlr\downloads\a.flv`, true],
+    [String.raw`"D:\dlr\ffmpeg.exe" -i "D:\dlr\in.flv"`, true],
+    [String.raw`D:\DLR\record\ffmpeg.exe`, true],
+    [String.raw`D:\dlr`, true],
+    // 【必须不再命中】M-85 的误杀形态：同名前缀目录（裸子串 + Len(appDir)>3 兜底全部放行）
+    [String.raw`D:\dlr-backup\ffmpeg.exe`, false],
+    [String.raw`C:\tools\ffmpeg.exe -i D:\dlr-backup\in.flv`, false],
+    [String.raw`D:\dlrx\ffmpeg.exe`, false],
+    [String.raw`D:\dlr2\x\ffmpeg.exe`, false],
+];
+
+test('M-85：短程序目录的锚点必须落在目录边界上（同名前缀目录的 ffmpeg 不得判成本程序）', { skip: CSCRIPT_SKIP }, () => {
+    const text = vbsSourceText();
+    const lines = [
+        'Option Explicit',
+        'Dim appDir',
+        'Const APP_DIR_KEY = "douyinliverecorder"',
+        'appDir = ' + vbsQuote('D:\\dlr'),
+        vbsBlock(text, 'IsPathAnchored'),
+        vbsBlock(text, 'ContainsAtWordBoundary'),
+        vbsBlock(text, 'ContainsAtDirBoundary'),
+    ];
+    M85_ANCHOR_CASES.forEach(([cmd], i) => {
+        lines.push(`WScript.Echo "case${i}=" & CStr(IsPathAnchored(${vbsQuote(cmd)}))`);
+    });
+    const out = runVbs(lines);
+    M85_ANCHOR_CASES.forEach(([, expected], i) => {
+        const m = out.match(new RegExp('case' + i + '=(\\w+)'));
+        assert.ok(m, `cscript 没有回出 case${i}，输出: ${out}`);
+        assert.equal(
+            m[1],
+            expected ? 'True' : 'False',
+            `IsPathAnchored(${M85_ANCHOR_CASES[i][0]}) → ${m[1]}，期望 ${expected}`
+        );
+    });
+});
+
+test('M-85：WMI 失败后不得对「身份无法复核」的 PID 直接 taskkill /f', { skip: CSCRIPT_SKIP }, () => {
+    // 失效形态：阶段 2 在 TerminateByWmi 失败（其注释自述「进程已不存在」是常态）后直接
+    // objShell.Run "taskkill /f /pid "；而阶段 1 的 taskkill /f /t 已连带结束子进程树、其后又
+    // Sleep WAIT_SECONDS，这个 PID 完全可能已被系统重新分配给无关进程 → 硬杀即误杀。
+    // 现要求硬杀前按 PID 复核身份。本用例喂给它一个**真实存在、但映像名不是 ffmpeg.exe** 的 PID
+    // （正是「PID 已易主」的等价形态），断言假 shell 一条 taskkill 都没收到。
+    const text = vbsSourceText();
+    const lines = [
+        'Option Explicit',
+        'Dim objWMIService, objShell, appDir, killLog',
+        'Const APP_DIR_KEY = "douyinliverecorder"',
+        'Const PROCESS_FFMPEG = "ffmpeg.exe"',
+        'appDir = ' + vbsQuote('D:\\dlr'),
+        vbsBlock(text, 'IsPathAnchored'),
+        vbsBlock(text, 'ContainsAtWordBoundary'),
+        vbsBlock(text, 'ContainsAtDirBoundary'),
+        vbsBlock(text, 'ProcessIdentityStillMatches'),
+        vbsBlock(text, 'TerminateByWmi'),
+        vbsBlock(text, 'TerminateProcesses'),
+        'Class GoneProc',
+        '    Public Function Terminate()',
+        '        Terminate = 1',
+        '    End Function',
+        'End Class',
+        'Class SpyShell',
+        '    Public Function Run(cmd, windowStyle, waitOnReturn)',
+        '        killLog = killLog & "|" & cmd',
+        '        Run = 0',
+        '    End Function',
+        'End Class',
+        'Dim svc, col, p, probePid, procs, gp',
+        'probePid = 0',
+        'Set objWMIService = Nothing',
+        'On Error Resume Next',
+        // 单点与生产 InitializeWMIService 逐字一致（winmgmts:\\.\root\cimv2）：
+        // 写成 winmgmts:root\cimv2 在本机取不到服务对象，probe 恒 0、用例前提不成立。
+        'Set svc = GetObject("winmgmts:\\\\.\\root\\cimv2")',
+        'On Error GoTo 0',
+        'If IsObject(svc) Then',
+        // 刻意取 svchost.exe 而不是「任意 Name <> ffmpeg.exe」的第一条：WMI 枚举的第一项是
+        // System Idle Process（ProcessID = 0），拿 0 当 PID 会让「不杀」的断言失去意义。
+        '    Set col = svc.ExecQuery("Select ProcessID From Win32_Process Where Name = \'svchost.exe\'")',
+        '    For Each p In col',
+        '        probePid = CLng(p.ProcessID)',
+        '        Exit For',
+        '    Next',
+        '    Set objWMIService = svc',
+        'End If',
+        'WScript.Echo "probe=" & CStr(probePid)',
+        'killLog = ""',
+        'Set objShell = New SpyShell',
+        'Set procs = CreateObject("Scripting.Dictionary")',
+        'Set gp = New GoneProc',
+        'procs.Add CLng(probePid), gp',
+        'Call TerminateProcesses(procs, False)',
+        'WScript.Echo "killlog=" & killLog',
+    ];
+    const out = runVbs(lines);
+    const probe = out.match(/probe=(\d+)/);
+    assert.ok(probe, `cscript 未回出 probe 行，输出: ${out}`);
+    assert.notEqual(probe[1], '0', '环境上取不到「真实存在且非 ffmpeg」的 PID（本用例前提不成立）');
+    const log = out.match(/killlog=([\s\S]*)/)[1].trim();
+    assert.equal(log, '', `身份复核未拦住硬杀（对 PID ${probe[1]} 下了 taskkill）: ${log}`);
+});
+
+test('M-85 结构不变量：ffmpeg 支路唯一的裸 taskkill 必须在身份复核之内', () => {
+    // 上面两条 cscript 行为锁在非 Windows 上会 skip（CI 的 linux runner 也 skip），故这里补一道
+    // **不变量**形态的结构锁（不是钉某个变量名或某句文案）：killTree=False 支路里，
+    // `objShell.Run "taskkill /f /pid "` 这条语句必须出现在 ProcessIdentityStillMatches 的守卫之内。
+    // 判据只看语句行：VBScript 注释行（' 开头）里出现同样的命令名是正常的沿革说明，
+    // 不剥掉就会把注释当成语句、把「复核写在注释里」误判成「复核写在 taskkill 之后」。
+    // killTree=True（录制主进程支路，另有 rc<>128 守卫）不在本项范围内，故从第一个 Else 起切片。
+    const lines = vbsBlock(vbsSourceText(), 'TerminateProcesses')
+        .split('\r\n')
+        .filter(l => !l.trim().startsWith("'"));
+    const elseIdx = lines.findIndex(l => l.trim() === 'Else');
+    assert.ok(elseIdx >= 0, 'TerminateProcesses 缺少 killTree=False 支路');
+    const branch = lines.slice(elseIdx + 1).join('\r\n');
+    const runIdx = branch.indexOf('objShell.Run "taskkill /f /pid');
+    assert.ok(runIdx >= 0, 'killTree=False 支路未找到 taskkill /f /pid 回退（结构已漂移）');
+    const guardIdx = branch.indexOf('If ProcessIdentityStillMatches(');
+    assert.ok(guardIdx >= 0, 'M-85 回归：身份复核未接进 killTree=False 支路');
+    assert.ok(guardIdx < runIdx, 'M-85 回归：身份复核写在 taskkill 之后（先杀后查＝没有查）');
+    assert.match(branch.slice(guardIdx, runIdx), /Then/, 'M-85 回归：复核结果没有作为 taskkill 的条件（只查不判）');
 });

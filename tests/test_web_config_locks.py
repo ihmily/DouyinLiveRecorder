@@ -82,6 +82,11 @@ def client(tmp_path: Path, fake_main: types.ModuleType) -> Generator[TestClient,
                 "钉钉推送接口链接 = https://oapi.dingtalk.com/robot/send?access_token=REAL_DING",
                 "推送开关 = 是",
                 "",
+                # M-61（2026-10-21）把「推送配置」整节纳入敏感节后，反向用例需要一个
+                # 真正不敏感的节来证明守卫没有扩大到普通键。
+                "[录制设置]",
+                "是否跳过代理检测(是/否) = 是",
+                "",
             ]
         ),
         encoding="utf-8-sig",
@@ -124,9 +129,9 @@ def test_guarded_keys_are_sensitive_in_production(section: str, key: str) -> Non
 
 
 def test_non_sensitive_key_blank_value_is_allowed(client: TestClient) -> None:
-    # 反向用例：守卫不得扩大到普通键——否则用户没法清空「推送开关」这类常规项。
+    # 反向用例：守卫不得扩大到普通键——否则用户没法清空这类常规开关项。
     # 键必须真实存在于 config.ini，否则命中处理函数的 404「未找到对应的配置项」分支。
-    resp = client.put("/api/config", json={"section": "推送配置", "key": "推送开关", "value": ""})
+    resp = client.put("/api/config", json={"section": "录制设置", "key": "是否跳过代理检测(是/否)", "value": ""})
     assert resp.status_code == 200, resp.text
 
 

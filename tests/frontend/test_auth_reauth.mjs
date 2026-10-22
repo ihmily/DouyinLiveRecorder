@@ -163,9 +163,19 @@ async function bootConfigView(cfg, { routes = {}, confirm = () => true, seedClas
         setItem: (k, v) => storage.set(k, String(v)),
         removeItem: k => storage.delete(k),
     };
+    // M-84：生产 _tokenStore() 的**首选**载体是 sessionStorage（关标签页即失效），沙箱必须提供它，
+    // 用例才走得到主路径；与 localStorage 各用一个 Map，「令牌不进 localStorage」才是可观察的事实
+    // （内存回退那一支由 tests/frontend/test_regression_2026_09_22_gates.mjs 的 M-84 用例专门驱动）。
+    const sessionData = new Map();
+    const sessionStorage = {
+        getItem: k => (sessionData.has(k) ? sessionData.get(k) : null),
+        setItem: (k, v) => sessionData.set(k, String(v)),
+        removeItem: k => sessionData.delete(k),
+    };
     const sandbox = {
         document,
         localStorage,
+        sessionStorage,
         fetch: makeFetch({
             'GET /api/language': { json: { language: 'zh_CN' } },
             // 引导固定 401 → 停在登录态的静止应用；随后注入 token，测试直接驱动配置视图
@@ -184,8 +194,9 @@ async function bootConfigView(cfg, { routes = {}, confirm = () => true, seedClas
     vm.runInContext(APP_JS, sandbox, { filename: 'web/app.js' });
     docListeners['DOMContentLoaded'][0]();
     await flush();
-    localStorage.setItem('dlr_token', 'tok-test');
-    const ctx = { sandbox, elements, tabs, fetchLog, localStorage, confirmCalls, configInputs, docListeners };
+    // 401 引导已清空 token，注入测试 token 供鉴权头断言（M-84：注入生产会读的那一份）
+    sessionStorage.setItem('dlr_token', 'tok-test');
+    const ctx = { sandbox, elements, tabs, fetchLog, localStorage, sessionStorage, confirmCalls, configInputs, docListeners };
     await gotoConfig(ctx);
     return ctx;
 }

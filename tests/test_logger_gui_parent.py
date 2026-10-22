@@ -72,6 +72,39 @@ def test_gui_parent_respects_log_file_disabled(reload_logger: Path, monkeypatch:
     assert not (reload_logger / "logs" / "gui.log").exists()
 
 
+@pytest.mark.parametrize("marker", ["1", "true", "TRUE", "yes", "y", "on", "ON", "是", "t"])
+def test_gui_parent_marker_accepts_every_documented_true_token(
+    reload_logger: Path, monkeypatch: pytest.MonkeyPatch, marker: str
+) -> None:
+    # M-50 回归锁：GUI 父进程标记的布尔判定必须走全仓唯一入口 parse_config_bool（关键约定 #9）。
+    # 旧形态 `os.environ.get(GUI_PARENT_ENV) == "1"` 只认字符 1，于是 DLR_GUI_PARENT=TRUE / on / 是
+    # 全被判成「不是 GUI 进程」→ 本模块照旧注册 streamget.log 与 PlayURL.log 两个文件 sink，
+    # 回到本文件头部记录的故障面：与录制子进程双开同一文件、任一方到轮转阈值即抛
+    # PermissionError(WinError 32)，该进程文件日志自此全量静默丢失。
+    monkeypatch.setenv(logger_mod.GUI_PARENT_ENV, marker)
+    _write_config(reload_logger, "是")
+    importlib.reload(logger_mod)
+    assert logger_mod._gui_parent is True, f"{marker} 未被识别为 GUI 父进程标记"
+    assert (reload_logger / "logs" / "gui.log").is_file()
+    assert not (reload_logger / "logs" / "streamget.log").exists()
+    assert not (reload_logger / "logs" / "PlayURL.log").exists()
+
+
+@pytest.mark.parametrize("marker", ["0", "否", "off", "no", "false", "maybe", ""])
+def test_gui_parent_marker_keeps_recorder_role_for_unrecognized_and_false_values(
+    reload_logger: Path, monkeypatch: pytest.MonkeyPatch, marker: str
+) -> None:
+    # 默认值方向锁：env 未设（缺键）时 parse_config_bool(None, False) 仍为 False，
+    # 且「无法识别的取值」也按 False（录制进程）处理——反过来会把录制日志静默丢掉
+    monkeypatch.setenv(logger_mod.GUI_PARENT_ENV, marker)
+    _write_config(reload_logger, "是")
+    importlib.reload(logger_mod)
+    assert logger_mod._gui_parent is False
+    assert (reload_logger / "logs" / "streamget.log").is_file()
+    assert (reload_logger / "logs" / "PlayURL.log").is_file()
+    assert not (reload_logger / "logs" / "gui.log").exists()
+
+
 def test_import_time_console_sink_colorize_follows_isatty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # L-16 回归锁：导入期控制台 sink 的 colorize 必须按 isatty 判定，并与 rebind_console_sink()
     # 共用 src/logger.py::_console_colorize。旧形态导入期硬编码 colorize=True，stderr 被重定向到

@@ -1568,3 +1568,238 @@ def _r10_offenders_from_tree(tree: ast.Module, label: str) -> list[str]:
         ):
             out.append(f"{label}::{func.name}")
     return out
+
+
+# ─── R11（2026-10-21 新增，来自 CODE_REVIEW_2026-10-21 S-14）：弱断言棘轮 ────────────────
+# 立规背景：审查实测「14 个测试函数体内无任何判据、17 处只锁调用次数」。这类用例的共同征兆是
+# 「用例名承诺了契约、实现退化后照样绿」——生产代码静默做了错事但不上抛时，它们不会变红，
+# 于是后续所有修复都失去验证能力（报告 §8.1 第 4 条把它列为门禁缺口的根因）。
+# 本轮不做「一次性全清」：判据面刻意保守（见下三条），一次性全清会逼着把大量 helper 委托型
+# 用例判成违例而误伤。故取**双向棘轮**（与 R9 例外表同构）：
+#   ① 现有存量按「文件 → 条数」登记为债务表，条数只许降不许升；
+#   ② 已修好的文件必须登记为 0，否则「修完又退化」不会被发现；
+#   ③ 债务表里的文件名必须真实存在，删/改名后条目必须同批删除（防表变成僵尸账）。
+#   ④ [2026-10-21 S-14 整改二轮补] 上述 ①②③ 首版只由 `实测 > 表行` **单向**实现，与本注释宣称的
+#      「双向棘轮」不符（同轮审计实测确认）：一个文件修掉两处违例却不改表时，膨胀的表行原地留着，
+#      等于给它发了一张「可悄悄退化回旧上限」的免费额度，债务表与现实脱钩且无人被告知。
+#      现比较口径改为**逐文件实测条数 == 表行**的双向相等（与 R9 例外表的 `unregistered`/`stale`
+#      两个方向同构，只是把「有无」换成「条数」）：grew=实测高于表（新增债务）、
+#      shrunk=实测低于表（债务已修但行没降，实测归零时整条删除）。文件集合也因此天然双向相等
+#      ——表外的新违例文件按 0 计入 grew，表内但实测已归零的行计入 shrunk，不需要额外的集合比较。
+# 判据（函数级，剔除 docstring 后看函数体）：
+#   · 「无判据」= 函数体内无 assert / pytest.raises|warns|fail / 任何 assert_* 方法调用 / 自研
+#     helper 调用（helper 名以 check_/expect_/assert_ 开头视为判据载体——本仓既有形态）。
+#   · 「只锁次数」= 无参 assert_called*()。它并非**总是**弱：`response.close.assert_called_once()`
+#     的契约就是「关且只关一次」，参数不承载语义。故只对「带请求语义的 mock 名」判违例：
+#     get/post/head/put/delete/open/request/write/read/run/call 这一类。
+_R11_NO_ASSERT_DEBT: dict[str, int] = {
+    # S-14 存量（2026-10-21 首次登记，实测值）。条数只许降不许升；修好一个就把该文件计数下调，
+    # 全部清零时删条目（test_r11_debt_table_files_exist 会拦住「删了用例忘记删条目」的僵尸账）。
+    "test_xhs_live_links.py": 6,
+    "test_stop_recording_vbs.py": 5,
+    "test_platform_danmaku_offline.py": 4,
+    "test_spider_hardening.py": 4,
+    "test_srt_timeline_anchor.py": 4,
+    "test_regression_2026_09_22_main.py": 4,
+    "test_web_tray.py": 3,
+    "test_regression_2026_09_22_postprocess.py": 2,
+    "test_sync_http.py": 2,
+    "test_web_config.py": 2,
+    "test_async_http.py": 1,
+    "test_bili_e2e.py": 1,
+    "test_build_exe.py": 1,
+    "test_config_io_update_file.py": 1,
+    "test_cookie_cache.py": 1,
+    "test_recorder_status.py": 1,
+    "test_run_gates.py": 1,
+    "test_ttwid.py": 1,
+    "test_ui_motion.py": 1,
+    "test_web_config_secret_mask.py": 1,
+}
+
+_R11_BARE_CALLED_DEBT: dict[str, int] = {
+    # 同上：无参 assert_called* 且 mock 方法名承载请求语义的存量。
+    "test_async_http.py": 6,
+    "test_sync_http.py": 3,
+    "test_regression_2026_09_29_wp_b_netguard.py": 1,
+}
+
+# 无参 assert_called* 只对「参数承载语义」的 mock 方法名判违例；close/remove 这类零参契约不算。
+_R11_ARG_BEARING_CALLEES = frozenset(
+    {"get", "post", "head", "put", "patch", "delete", "open", "request", "write", "read", "run", "call", "send"}
+)
+_R11_HELPER_PREFIXES = ("check_", "expect_", "assert_")
+
+
+def _r11_function_body(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ast.stmt]:
+    # 剔除 docstring：否则「只写了说明、没有任何判据」的用例会因为字符串常量被当成有内容。
+    body = list(node.body)
+    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
+        body = body[1:]
+    return body
+
+
+def _r11_calls(stmts: list[ast.stmt]) -> list[ast.Call]:
+    out: list[ast.Call] = []
+    for stmt in stmts:
+        out.extend(n for n in ast.walk(stmt) if isinstance(n, ast.Call))
+    return out
+
+
+def _r11_has_judgement(stmts: list[ast.stmt]) -> bool:
+    for stmt in stmts:
+        for node in ast.walk(stmt):
+            if isinstance(node, ast.Assert):
+                return True
+            if isinstance(node, ast.Attribute) and node.attr.startswith("assert_"):
+                return True
+        for call in _r11_calls([stmt]):
+            func = call.func
+            name = func.attr if isinstance(func, ast.Attribute) else (func.id if isinstance(func, ast.Name) else "")
+            if name in ("raises", "warns", "fail", "approx"):
+                return True
+            if name.startswith(_R11_HELPER_PREFIXES):
+                return True
+    return False
+
+
+def _r11_no_assert_offenders(source: str) -> list[str]:
+    tree = ast.parse(source)
+    out: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or not node.name.startswith("test_"):
+            continue
+        body = _r11_function_body(node)
+        if not body:
+            continue
+        if not _r11_has_judgement(body):
+            out.append(node.name)
+    return out
+
+
+def _r11_bare_called_offenders(source: str) -> list[str]:
+    tree = ast.parse(source)
+    out: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if not node.func.attr.startswith("assert_called"):
+            continue
+        if node.args or node.keywords:
+            continue
+        target = node.func.value
+        # mock 名形如 <obj>.<method>.assert_called_once()：取 method 名判是否承载参数语义
+        if isinstance(target, ast.Attribute) and target.attr in _R11_ARG_BEARING_CALLEES:
+            out.append(f"{node.lineno}:{target.attr}")
+    return out
+
+
+def _r11_counts() -> tuple[dict[str, int], dict[str, int]]:
+    no_assert: dict[str, int] = {}
+    bare: dict[str, int] = {}
+    for path in _test_files():
+        source = path.read_text(encoding="utf-8", errors="replace")
+        try:
+            first = len(_r11_no_assert_offenders(source))
+            second = len(_r11_bare_called_offenders(source))
+        except SyntaxError as exc:
+            raise AssertionError(f"{path.name} 解析失败，R11 无法自证覆盖: {exc.msg}@{exc.lineno}") from exc
+        if first:
+            no_assert[path.name] = first
+        if second:
+            bare[path.name] = second
+    return no_assert, bare
+
+
+def _r11_debt_drift(
+    actual: dict[str, int], table: dict[str, int]
+) -> tuple[dict[str, tuple[int, int]], dict[str, tuple[int, int]]]:
+    # 双向相等（④）：返回 (grew, shrunk)，两项都是「文件 → (表行, 实测)」。
+    # 键集合取两侧并集、缺失侧按 0 计，于是「表外的新违例文件」落 grew、「实测已归零的僵尸表行」落
+    # shrunk——与 R9 用 set 差集同时抓 unregistered/stale 是同一件事，只是判据从「有无」换成「条数」。
+    grew: dict[str, tuple[int, int]] = {}
+    shrunk: dict[str, tuple[int, int]] = {}
+    for name in sorted(set(actual) | set(table)):
+        allowed, measured = table.get(name, 0), actual.get(name, 0)
+        if measured > allowed:
+            grew[name] = (allowed, measured)
+        elif measured < allowed:
+            shrunk[name] = (allowed, measured)
+    return grew, shrunk
+
+
+def _r11_drift_lines(drift: dict[str, tuple[int, int]]) -> str:
+    return "\n".join(
+        f"  {name}: 表行 {allowed} → 实测 {measured}" for name, (allowed, measured) in sorted(drift.items())
+    )
+
+
+def test_r11_no_assert_debt_matches_the_table() -> None:
+    actual, _ = _r11_counts()
+    grew, shrunk = _r11_debt_drift(actual, _R11_NO_ASSERT_DEBT)
+    # 两条方向的文案各先拼成局部变量：写在 assert 实参位上会被 black 拆成「括号包 not grew」的形态，
+    # 消息本身反而读不出结构（同文件里 R8 的 detail 列表是同一取舍）。
+    grew_detail = (
+        "「函数体内无任何判据」的测试函数比债务表还多（S-14 同族弱断言）。方向: 实测 > 表行。"
+        "处置: 给对应用例补真实判据；确属合规的委托形态才把表行改大并写明理由:\n" + _r11_drift_lines(grew)
+    )
+    shrunk_detail = (
+        "债务表高于实测。方向: 实测 < 表行——债务已修但表行停在旧上限，留着就等于给该文件一张"
+        "「可悄悄退化回旧上限」的免费额度，且债务表从此与现实脱钩。"
+        "处置: 把表行改成实测值，实测为 0 时整条删除:\n" + _r11_drift_lines(shrunk)
+    )
+    assert not grew, grew_detail
+    assert not shrunk, shrunk_detail
+    assert len(_test_files()) > 50, "R11 扫描面异常（用例文件数过少），判据可能空转"
+
+
+def test_r11_bare_called_debt_matches_the_table() -> None:
+    _, actual = _r11_counts()
+    grew, shrunk = _r11_debt_drift(actual, _R11_BARE_CALLED_DEBT)
+    assert not grew, (
+        "不带参数的 assert_called*（请求参数承载契约，只数次数锁不住）比债务表还多。"
+        "方向: 实测 > 表行，处置: 补 assert_called_once_with(...) 一类的参数断言，"
+        "确属零参契约才把表行改大并写明理由:\n" + _r11_drift_lines(grew)
+    )
+    assert not shrunk, (
+        "债务表高于实测。方向: 实测 < 表行——修掉的裸 assert_called* 没同步下调表行，"
+        "该文件因此握有「退化回旧上限」的免费额度。处置: 表行改成实测值，归零则整条删除:\n" + _r11_drift_lines(shrunk)
+    )
+
+
+def test_r11_debt_table_files_exist() -> None:
+    names = {p.name for p in _test_files()}
+    for table in (_R11_NO_ASSERT_DEBT, _R11_BARE_CALLED_DEBT):
+        missing = sorted(set(table) - names)
+        assert not missing, f"R11 债务表登记了不存在的文件（用例已删/改名，须同批删条目）: {missing}"
+
+
+def test_r11_guard_red_in_both_table_drift_directions() -> None:
+    # 双向比较的自证（少它就是本轮要消灭的形态）：同一组实测值分别与「表偏高 1」「表偏低 1」比对，
+    # 两个方向都必须被点名；再补两侧的文件集合漂移（表外新文件 / 实测归零的僵尸行）与逐文件相等时
+    # 必须零漂移。若有人把比较退回 `实测 > 表` 单向，这一条会当场变红，而不是等到债务表烂掉才发现。
+    actual = {"test_a.py": 2}
+    grew, shrunk = _r11_debt_drift(actual, {"test_a.py": 1})
+    assert grew == {"test_a.py": (1, 2)} and not shrunk, "R11 失效：实测高于表行未被判为新增债务"
+    grew, shrunk = _r11_debt_drift(actual, {"test_a.py": 3})
+    assert shrunk == {"test_a.py": (3, 2)} and not grew, "R11 失效：修掉债务却留着膨胀表行未被判红（单向棘轮回归）"
+    grew, shrunk = _r11_debt_drift(actual, {})
+    assert grew == {"test_a.py": (0, 2)} and not shrunk, "R11 失效：表外的新违例文件未被判红（文件集合须双向相等）"
+    grew, shrunk = _r11_debt_drift({}, {"test_a.py": 2})
+    assert shrunk == {"test_a.py": (2, 0)} and not grew, "R11 失效：实测归零的僵尸表行未被判红（须整条删除）"
+    assert _r11_debt_drift(actual, {"test_a.py": 2}) == ({}, {}), "R11 误报：表行与实测逐文件相等时仍被判为漂移"
+    assert _r11_debt_drift({}, {}) == ({}, {}), "R11 误报：两侧皆空时仍被判为漂移"
+
+
+def test_r11_guard_actually_catches_the_weak_forms() -> None:
+    # 反向见证：判据必须认出两种弱形态，且不得把「有 assert」「helper 委托」「零参契约」判成违例。
+    no_assert = "def test_x():\n    do_something()\n"
+    assert _r11_no_assert_offenders(no_assert) == ["test_x"], "R11 失效：无判据用例未被发现"
+    has_assert = "def test_y():\n    do_something()\n    assert 1 == 1\n"
+    assert _r11_no_assert_offenders(has_assert) == [], "R11 误报：含 assert 的用例被判违例"
+    helper = "def test_z():\n    check_contract(1)\n"
+    assert _r11_no_assert_offenders(helper) == [], "R11 误报：helper 委托型用例被判违例"
+    bare = "def test_w(mock_client):\n    mock_client.get.assert_called_once()\n"
+    assert _r11_bare_called_offenders(bare) == ["2:get"], "R11 失效：参数承载语义的裸 assert_called_once 未被发现"
+    zero_arg = "def test_v(response):\n    response.close.assert_called_once()\n"
+    assert _r11_bare_called_offenders(zero_arg) == [], "R11 误报：零参契约（close）被判违例"

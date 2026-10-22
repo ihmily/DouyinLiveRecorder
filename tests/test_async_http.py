@@ -774,7 +774,14 @@ class TestGetResponseStatus:
             result = await get_response_status("https://cdn.example.com/live.m3u8")
 
         assert result is True
+        # S-14（CODE_REVIEW_2026-10-21）：裸 assert_called_once() 锁不住本用例真正要保的契约——
+        # 降级探针必须带 `Range: bytes=0-0`。删掉该头会让探针退化成整文件下载（对 CDN 是流量事故），
+        # 而旧断言照样绿。故显式断言请求参数，而不只数调用次数。
         mock_client.get.assert_called_once()
+        probe_kwargs = mock_client.get.call_args.kwargs
+        assert (
+            probe_kwargs.get("headers", {}).get("Range") == "bytes=0-0"
+        ), f"降级探针必须带 Range: bytes=0-0，实际 headers={probe_kwargs.get('headers')!r}"
 
     @pytest.mark.asyncio
     async def test_m3u8_head_403_get_also_fails(self) -> None:

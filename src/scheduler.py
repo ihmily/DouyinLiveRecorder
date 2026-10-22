@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from threading import Condition, Lock, Thread, current_thread
 
 import i18n
@@ -31,6 +31,13 @@ from .logger import logger
 # 禁录、房间线程退出等不上报样本的路径）时，allow() 重新授予探针——否则
 # _probing 标志永不复位，该 key 将永久熔断直到进程重启。
 _PROBE_LEASE_SECONDS = 60.0
+
+
+# 熔断表容量上限（M-36a）：key 是 host_of(record_url) 的结果，属**外部可控**输入（用户自填的
+# 自定义流地址可带任意端口/主机、短链落地页会改写 host），旧实现只在建表时写、永不回收，
+# 24×7 长跑 + 房间持续增删下每个历史 host 都留一支 PlatformBreaker（含 40 长度样本窗口），
+# 内存无界增长。达到上限时从「最久未被任何房间使用」的一端逐出，判据见 _evict_breakers_locked。
+_MAX_BREAKERS = 1024
 
 
 class ResizableSemaphore:
@@ -131,7 +138,11 @@ class PlatformBreaker:
         self._window_size = max(1, int(window))
         self._fail_rate = min(1.0, max(0.0, float(fail_rate)))
         self._cooldown = max(0.0, float(cooldown))
-        self._min_samples = max(1, int(min_samples))
+        # 2026-10-21 M-42：min_samples 必须同时受窗口上界约束。旧写法只有下界 max(1, ...)，
+        # 于是 min_samples > window（如 window=5 / min_samples=8）时 len(_samples) 恒达不到阈值、
+        # 熔断器整生不开——坏 host 拿满全部房间流量且永不自愈。现钳在 1..window 之间：
+        # 窗口本身就是「能收集到多少个样本」的硬上界，阈值不得超过它。
+        self._min_samples = max(1, min(int(min_samples), self._window_size))
         self._lock = Lock()
         self._samples: deque[int] = deque(maxlen=self._window_size)
         # 窗口内失败样本的增量计数（与 _samples 严格同步）：每次 record 对整窗 sum() 是
@@ -177,8 +188,15 @@ class PlatformBreaker:
         with self._lock:
             self._push_sample(0 if success else 1)
             if self._state == "closed":
-                if len(self._samples) >= self._min_samples and (
-                    self._fail_count / len(self._samples) >= self._fail_rate
+                # 2026-10-21 M-42：_fail_count > 0 是必要条件。旧判据 len >= min_samples and
+                # fail_count/len >= fail_rate 在 fail_rate=0（配置 0 / 误填）时恒真——一个全成功
+                # 窗口也会因 0 >= 0 被判熔断，健康 host 白白退避 45s。
+                # 计数一律读增量维护的 _fail_count，不得改回 sum(self._samples)
+                # （AGENTS「熔断计数必须增量」：整窗求和在 _lock 内是 O(window)，80+ 任务并发上报放大锁持有时间）。
+                if (
+                    self._fail_count > 0
+                    and len(self._samples) >= self._min_samples
+                    and self._fail_count / len(self._samples) >= self._fail_rate
                 ):
                     self._state = "open"
                     self._open_until = _now() + self._cooldown
@@ -296,7 +314,9 @@ class ConcurrencyScheduler:
         self._recording_semaphore = ResizableSemaphore(self._RECORDING_UNLIMITED)
         self._recording_limit = 0  # 0 = 不限制
 
-        self._breakers: dict[str, PlatformBreaker] = {}
+        # OrderedDict 而非普通 dict：_breaker 命中即 move_to_end，容量到顶时按「最久未使用」逐出
+        # （普通 dict 没有 move_to_end，只能按插入序，一个仍在每轮上报的老 host 会被反复逐掉）。
+        self._breakers: OrderedDict[str, PlatformBreaker] = OrderedDict()
         self._breakers_lock = Lock()
 
     # —— 容量计算 ——
@@ -314,12 +334,19 @@ class ConcurrencyScheduler:
                 rate = 0.0
         # 固定模式：忽略动态调速器与错误背压，容量恒为 configured_limit
         # （即「同一时间访问网络的线程数」，set_configured_limit 已保证最小 1 个槽位）。
+        # 2026-10-21 M-35 刻意不对称：这一支**不**按 _max_capacity 封顶。AGENTS 把固定并发钉成
+        # 「用户显式填写的并发值即上限」（配置项「同一时间访问网络的线程数」在固定模式下就是
+        # 网络并发本身），在此顺手夹取会让用户填 200 只拿到 128 且毫无提示，属新的静默失准。
         if not dynamic:
             return configured
-        # 动态模式：目标容量 = max(配置值, min(上限, ceil(活跃数/缩放因子)))；错误率极高时温和降容但永不低于下限。
-        target = max(
-            configured,
-            min(self._max_capacity, (active + self._scale_divisor - 1) // self._scale_divisor),
+        # 动态模式：目标容量 = min(上限, max(配置值, ceil(活跃数/缩放因子)))；错误率极高时温和降容但永不低于下限。
+        # 2026-10-21 M-35：封顶必须发生在 max **之后**。旧写法 max(configured, min(上限, scaled))
+        # 里 min 只包住 scaled 一支，configured 一旦被填成大于 _max_capacity 的值（错配 / 复制粘贴
+        # 来的大数）就整体取 configured，声明的安全上限被一个配置值整个绕过——80 房间瞬间放开
+        # 数百并发请求，正好是这套调度器要防的形态。
+        target = min(
+            self._max_capacity,
+            max(configured, (active + self._scale_divisor - 1) // self._scale_divisor),
         )
         if rate >= self._error_rate_floor:
             target = max(self._min_capacity, int(target * 0.6))
@@ -408,12 +435,32 @@ class ConcurrencyScheduler:
             )
 
     # —— 熔断器 ——
+    def _evict_breakers_locked(self) -> None:
+        # 调用方必须已持 _breakers_lock（本方法只在 _breaker 的锁内被调用）。
+        # 逐出判据刻意排除「非 closed」的键：open / half-open 正是**仍在使用**的形态（冷却未结束、
+        # 探针在飞），摘掉它等于把一次进行中的熔断重置成放行——那会把坏 CDN 立刻放回全部房间流量，
+        # 比多留一支对象严重得多。因此只在 closed 键里挑最久未用的。
+        # 锁序：本方法在 _breakers_lock 内读 br.state（再取 PlatformBreaker._lock）；PlatformBreaker
+        # 从不反向引用调度器，不存在锁序环。
+        # 全部键都在熔断态时本轮不逐出（宁可暂时超出上限，也不清除仍在生效的防线）：该形态要出现
+        # 需要同时有 >_MAX_BREAKERS 个 host 处于 open/half-open，本身就是需要人工介入的信号。
+        while len(self._breakers) > _MAX_BREAKERS:
+            victim = next((key for key, br in self._breakers.items() if br.state == "closed"), None)
+            if victim is None:
+                return
+            self._breakers.pop(victim, None)
+
     def _breaker(self, key: str) -> PlatformBreaker:
         with self._breakers_lock:
             b = self._breakers.get(key)
             if b is None:
                 b = PlatformBreaker(key)
                 self._breakers[key] = b
+                self._evict_breakers_locked()
+                return b
+            # 命中即 touch：把键移到表尾，使「被逐出」等价于「没有任何房间再用过它」。
+            # 不 touch 的话，一个仍在每轮 record 的 host 会因为创建得早而被逐掉、丢掉累计样本。
+            self._breakers.move_to_end(key)
             return b
 
     def allow(self, key: str) -> bool:

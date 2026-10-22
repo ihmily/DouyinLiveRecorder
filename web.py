@@ -391,9 +391,17 @@ def main() -> None:
     tray = None
     qt_owns_main_thread = False
     if web_cfg.get("web_minimize_to_tray", True):
+        from src.ui_icons import WEB_ICON_KEY, WEB_SECTION, current_icon_path, load_icon_preference
         from src.web_tray import WebConsoleTray
 
-        tray = WebConsoleTray(host=host, port=port, server=server)
+        # 图标在入口层解析好再传给托盘：app_root 由 config.ini 反推两级（与 GUI 侧同一目录约定），
+        # 托盘类只收「已解析好的文件路径」，它自己不读配置——否则两处各有一份判定基准会漂移。
+        # 解析失败（配置里是陈旧路径 / 内置图标缺失）一律得到 None，托盘回落到自绘，不影响启动。
+        app_root = os.path.dirname(os.path.dirname(config_file))
+        resolved_icon = current_icon_path(app_root, load_icon_preference(config_file, WEB_SECTION, WEB_ICON_KEY))
+        tray = WebConsoleTray(
+            host=host, port=port, server=server, icon_file=str(resolved_icon) if resolved_icon is not None else ""
+        )
         qt_owns_main_thread = tray.start()
 
     print(i18n.tr("[web] Web 管理面板启动中: http://{host}:{port}", host=host, port=port))

@@ -39,6 +39,13 @@ fi
 # 版本留空 → 从官方 releases 目录列表自动挑最新**正式release**（排除 git/snapshot 命名）。
 FFMPEG_VERSION="${FFMPEG_VERSION:-}"
 RELEASE_INDEX="${RELEASE_INDEX:-https://ffmpeg.org/releases/}"
+# M-96（2026-10-21）：索引、摘要、tarball 三者此前全部由 RELEASE_INDEX 推导——同一站点被替换时
+# 三样一起换，「摘要比对」退化成自己验自己。现拆成三个可独立覆盖的变量，使摘要可指向独立镜像
+# 或人工登记值；默认值仍相同（ffmpeg.org 没有第二个官方摘要端点），故脚本在两者同源时**显式
+# 打一条告警**，禁止把同源比对当成来源认证的证据。
+FFMPEG_INDEX_URL="${FFMPEG_INDEX_URL:-$RELEASE_INDEX}"
+FFMPEG_TARBALL_BASE="${FFMPEG_TARBALL_BASE:-$RELEASE_INDEX}"
+FFMPEG_DIGEST_BASE="${FFMPEG_DIGEST_BASE:-$FFMPEG_TARBALL_BASE}"
 # 依赖只装「项目真用到的编码器」：libx264（src/video_postprocess.py 的转码路径）与
 # libmp3lame（main.py 的 mp3 音频路径）。刻意不引 x265/libvpx/openssl@3——每多一个第三方库，
 # 静态链失败或漏进 dylib 的概率就多一分；TLS 走 macOS 自带的 SecureTransport，不需要 openssl。
@@ -140,7 +147,8 @@ first_field_hex() {
 
 fetch_official_sha256() {
     local ver="$1" url base_url suffix raw digest
-    base_url="${RELEASE_INDEX%/}/ffmpeg-${ver}.tar.xz"
+    # M-96：摘要端点走 FFMPEG_DIGEST_BASE（可与 tarball 源不同），不再硬绑 RELEASE_INDEX。
+    base_url="${FFMPEG_DIGEST_BASE%/}/ffmpeg-${ver}.tar.xz"
     # 候选端点按「能直接喂给第 4 类 source_sha256 字段」的强度排序：先 .sha256，再 .sha512
     # （SHA512 只算**事实登记**，不拿来当 SHA256 用，见下面的 fail_pre）。
     # 刻意不静默降级成「自己算一个」：第 4 类的口径就是不得把构建机自算值当基线，拿不到官方
@@ -180,8 +188,8 @@ fetch_official_sha256() {
 if [ "$PRINT_ONLY" -eq 1 ]; then
     log "PRINT-ONLY 计划（不会执行任何外部程序）"
     printf '    目标平台 = darwin/arm64，JOBS=%s，OUT_DIR=%s\n' "$JOBS" "$OUT_DIR"
-    printf '    1) curl -fsSL %s | 挑最新正式 release（当前 FFMPEG_VERSION=%s）\n' "$RELEASE_INDEX" "${FFMPEG_VERSION:-<自动>}"
-    printf '    2) 取官方摘要：ffmpeg-<ver>.tar.xz{.sha256,.sha512}（拿不到即 rc=2 退出，不自算基线）\n'
+    printf '    1) curl -fsSL %s | 挑最新正式 release（当前 FFMPEG_VERSION=%s）\n' "$FFMPEG_INDEX_URL" "${FFMPEG_VERSION:-<自动>}"
+    printf '    2) 取官方摘要：%s/ffmpeg-<ver>.tar.xz{.sha256,.sha512}（拿不到即 rc=2 退出，不自算基线）\n' "${FFMPEG_DIGEST_BASE%/}"
     printf '    3) 下载 tarball 并 shasum -a 256 与之逐字比对\n'
     printf '    4) brew install %s（SKIP_DEPS=1 可跳过）\n' "${BREW_DEPS[*]}"
     printf '    5) ./configure %s\n' "${CONFIGURE_ARGS[*]}"
@@ -192,11 +200,15 @@ if [ "$PRINT_ONLY" -eq 1 ]; then
     exit 0
 fi
 
-log "读取 releases 目录：$RELEASE_INDEX"
-INDEX_HTML="$(curl -fsSL --max-time 60 "$RELEASE_INDEX")"
+log "读取 releases 目录：$FFMPEG_INDEX_URL"
+# M-96：同源摘要只证明「下载没被截断/串版本」，不证明来源可信（站点被换则索引/摘要/产物一起换）。
+if [ "${FFMPEG_DIGEST_BASE%/}" = "${FFMPEG_TARBALL_BASE%/}" ]; then
+    log "WARN: 摘要与 tarball 同源（$FFMPEG_TARBALL_BASE）——该比对仅作形态校验，发布前须用独立来源复核"
+fi
+INDEX_HTML="$(curl -fsSL --max-time 60 "$FFMPEG_INDEX_URL")"
 if [ -z "$FFMPEG_VERSION" ]; then
     FFMPEG_VERSION="$(pick_version "$INDEX_HTML")"
-    [ -n "$FFMPEG_VERSION" ] || fail_pre "无法从 $RELEASE_INDEX 解析出正式 release 版本号（目录形态可能已变，请人工确认后用 FFMPEG_VERSION=x.y.z 重跑）"
+    [ -n "$FFMPEG_VERSION" ] || fail_pre "无法从 $FFMPEG_INDEX_URL 解析出正式 release 版本号（目录形态可能已变，请人工确认后用 FFMPEG_VERSION=x.y.z 重跑）"
 fi
 TARBALL_NAME="ffmpeg-${FFMPEG_VERSION}.tar.xz"
 log "目标版本 = ffmpeg $FFMPEG_VERSION"
@@ -209,13 +221,24 @@ log "官方摘要端点 $SHA_SOURCE_KIND → $SOURCE_SHA256"
 
 # ------------------------------ 2. 下载 + 校验 + 解压 ------------------------------
 cd "$OUT_DIR"
-run curl -fsSL --max-time 600 -o "$TARBALL_NAME" "${RELEASE_INDEX%/}/${TARBALL_NAME}"
+# M-96：tarball 走 FFMPEG_TARBALL_BASE（与摘要端点解耦，见文件头同源告警）。
+run curl -fsSL --max-time 600 -o "$TARBALL_NAME" "${FFMPEG_TARBALL_BASE%/}/${TARBALL_NAME}"
 ACTUAL_SHA="$(shasum -a 256 "$TARBALL_NAME" | cut -d' ' -f1)"
 if [ "$ACTUAL_SHA" != "$SOURCE_SHA256" ]; then
     fail_check "tarball SHA256 与官方公布值不符：期望 $SOURCE_SHA256 实得 $ACTUAL_SHA（下载链路被替换或版本轮转，spike 停在这里）"
 fi
 log "tarball 校验通过（$ACTUAL_SHA）"
-run tar -xf "$TARBALL_NAME"
+# M-96：解压前先看成员表——拒绝绝对路径与 `..` 穿越，并要求恰好一个顶层目录。
+# 旧形态裸 `tar -xf`，归档里的绝对路径/穿越成员会写到 OUT_DIR 之外。
+TAR_LIST="$(tar -tf "$TARBALL_NAME")"
+if printf '%s\n' "$TAR_LIST" | grep -qE '(^/|(^|/)\.\.(/|$))'; then
+    fail_check "tarball 含绝对路径或 .. 成员，拒绝解压"
+fi
+TAR_TOP_DIRS="$(printf '%s\n' "$TAR_LIST" | awk -F/ 'NF > 1 { print $1 }' | sort -u)"
+if [ -z "$TAR_TOP_DIRS" ] || [ "$(printf '%s\n' "$TAR_TOP_DIRS" | wc -l | tr -d ' ')" != "1" ]; then
+    fail_check "tarball 顶层目录不唯一（实得：${TAR_TOP_DIRS:-<无>}），拒绝解压"
+fi
+run tar --no-same-owner -xf "$TARBALL_NAME"
 
 # ------------------------------ 3. 依赖 + 构建 ------------------------------
 if [ "$SKIP_DEPS" != "1" ]; then

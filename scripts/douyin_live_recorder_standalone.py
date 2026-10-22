@@ -75,7 +75,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections import deque
+from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -700,8 +700,14 @@ class PlatformBreaker:
     def __init__(self, name: str, window: int = 40, fail_rate: float = 0.5, cooldown: float = 45.0) -> None:
         self.name = name
         self._window = max(1, window)
-        self._fail_rate = fail_rate
-        self._cooldown = cooldown
+        # 2026-10-21 M-42 回灌(与 src/scheduler.py::PlatformBreaker 同批改)：fail_rate 钳到 [0,1]。
+        # 副本此前原样保存配置值，0.0 会让「0 >= 0」恒真、1.5 会让熔断永不触发，两种错配在
+        # 主线已被 clamp 消化，副本不 clamp 就是同一份配置的两种行为。
+        self._fail_rate = min(1.0, max(0.0, float(fail_rate)))
+        self._cooldown = max(0.0, float(cooldown))
+        # 2026-10-21 M-42 回灌：阈值必须同时受窗口上界约束——MIN_SAMPLES(8) > window 时
+        # len(_samples) 永远达不到阈值、熔断器整生不开，坏 host 拿满全部流量且永不自愈。
+        self._min_samples = max(1, min(self.MIN_SAMPLES, self._window))
         self._lock = threading.Lock()
         # deque(maxlen) + 增量计数：满员时 append 自行挤出最旧样本，扣掉它的贡献即 O(1)，
         # 与 src::_push_sample 逐行同实现。禁止退回 sum(samples) 全量重算，也禁止退回
@@ -743,7 +749,14 @@ class PlatformBreaker:
         with self._lock:
             self._push(0 if success else 1)
             if self._state == "closed":
-                if len(self._samples) >= self.MIN_SAMPLES and self._fail_count / len(self._samples) >= self._fail_rate:
+                # 2026-10-21 M-42 回灌：_fail_count > 0 是必要条件(fail_rate=0 时全成功窗口
+                # 会因 0 >= 0 被直接熔断)，阈值改读按窗口钳制过的 _min_samples(见 __init__)。
+                # 计数仍走增量 _fail_count，禁止退回 sum(self._samples)(AGENTS「熔断计数必须增量」)。
+                if (
+                    self._fail_count > 0
+                    and len(self._samples) >= self._min_samples
+                    and self._fail_count / len(self._samples) >= self._fail_rate
+                ):
                     self._state = "open"
                     self._open_until = time.monotonic() + self._cooldown
                     self._end_probe()
@@ -794,17 +807,34 @@ class PlatformBreaker:
 
 class Scheduler:
     # 并发调度中枢：网络并发容量 + 录制并发上限 + 按 host 熔断。
+    # 熔断表容量上限：2026-10-21 M-36a 回灌(与 src/scheduler.py::_MAX_BREAKERS 同值同判据)——
+    # key 来自 host_of(record_url)，属外部可控输入，旧写法只增不减，24×7 长跑下每个历史 host
+    # 留一支 PlatformBreaker(含 window 长度样本窗口)。逐出只看「最久未使用 + closed」，
+    # open/half-open 的键**不逐**（摘掉等于把一次进行中的熔断重置成放行，坏 CDN 会立刻回到全部房间）。
+    MAX_BREAKERS = 1024
+
     def __init__(self, network_limit: int = 8, record_limit: int = 0) -> None:
         self.network_semaphore = ResizableSemaphore(max(1, network_limit))
         # 录制并发：0 表示不限制(用一个大容量代替，避免每处判空)
         self.record_limit = max(0, record_limit)
         self.recording_semaphore = ResizableSemaphore(self.record_limit or 4096)
         self._lock = threading.Lock()
-        self._breakers: dict[str, PlatformBreaker] = {}
+        # OrderedDict：_breaker 命中即 move_to_end，容量到顶时按「最久未被任何房间使用」逐出
+        self._breakers: OrderedDict[str, PlatformBreaker] = OrderedDict()
 
     def set_record_limit(self, n: int) -> None:
         self.record_limit = max(0, int(n))
         self.recording_semaphore.set_value(self.record_limit or 4096)
+
+    def _evict_breakers_locked(self) -> None:
+        # 调用方须已持 self._lock；锁序与主线一致：本方法在 _lock 内读 br.state(再取
+        # PlatformBreaker._lock)，PlatformBreaker 从不反向引用调度器，不存在锁序环。
+        # 全部键都在熔断态时本轮不逐出(宁可暂时超限，也不清除仍在生效的防线)。
+        while len(self._breakers) > self.MAX_BREAKERS:
+            victim = next((key for key, br in self._breakers.items() if br.state == "closed"), None)
+            if victim is None:
+                return
+            self._breakers.pop(victim, None)
 
     def _breaker(self, key: str) -> PlatformBreaker:
         with self._lock:
@@ -812,6 +842,10 @@ class Scheduler:
             if b is None:
                 b = PlatformBreaker(key)
                 self._breakers[key] = b
+                self._evict_breakers_locked()
+                return b
+            # 命中即 touch：仍在每轮上报的 host 因此不会因「创建得早」被逐掉、丢累计样本
+            self._breakers.move_to_end(key)
             return b
 
     def allow(self, key: str) -> bool:
@@ -1434,6 +1468,13 @@ def _pick_master_variant_lite(text: str, base_url: str) -> str | None:
     return next(u for bw, u in variants if bw == best_bw)
 
 
+# 自检模式标记（M-90，2026-10-21）：selftest() 的承诺是「纯离线，绝不发真实请求」，而它的
+# 保守放行分支（请求异常 → 维持「列表可达」）正好把这个承诺**吃进肚子里**——真发一次请求、
+# 真失败、然后打印 PASS，自检于是对「有没有换绑假实现」完全失明。自检期间置 True，
+# 让这类「保守兜底」在自检里变成显式 FAIL；生产路径恒为 False，保守语义逐字不变。
+_SELFTEST_ACTIVE = False
+
+
 def _probe_hls_segment_lite(url: str, headers: dict[str, str], proxy: str | None) -> bool:
     # M-17（2026-10-02 回灌主线分片级探测）：「播放列表 200」≠ 可录制——CDN 动态合成的
     # 列表恒 200 但分片可能 404（2026-09-13 斗鱼 hw 事故形态：ffmpeg 逐分片失败、零字节
@@ -1448,6 +1489,12 @@ def _probe_hls_segment_lite(url: str, headers: dict[str, str], proxy: str | None
     try:
         resp = http_request(url, headers=dict(headers), timeout=_PROBE_TIMEOUT, proxy=proxy)
     except Exception:
+        if _SELFTEST_ACTIVE:
+            # 2026-10-21 M-90：自检期间这里的异常**只有一种解释**——selftest 没有把 http_request
+            # 换绑成假实现，于是这条用例真的对 cdn.example 发了网络请求（违反文件头的离线契约），
+            # 旧写法把它当「列表 GET 失败、保守维持可达」返回 True，离线环境下自检照样打印 PASS，
+            # 是典型的假绿。自检模式下显式判失败，让「没换绑」当场变红；生产路径不受影响。
+            return False
         return True  # 列表 GET 失败（HEAD/Range-GET 已通过）——不据此推翻，交由 ffmpeg
     if resp.status != 200:
         return True
@@ -1861,8 +1908,23 @@ def _mask_ffmpeg_cmd_for_log(cmd: list[str]) -> str:
 # 继续拉流占用 CDN 连接预算与磁盘
 _ACTIVE_FFMPEG: set[subprocess.Popen] = set()
 _ACTIVE_FFMPEG_LOCK = threading.Lock()
-# 终止宽限期（秒）：terminate() 后留给 ffmpeg 自行收尾的时间。
-_TERMINATE_GRACE_SECONDS = 3.0
+# 单进程三级终止的总预算（秒）：「写 q 后等优雅退出 → terminate 后等 → kill 后等」三段按剩余时间分摊，
+# 见 _stage_budget。取值 10s 而非主线的 30s：主线 _terminate_ffmpeg_process 由后台清理线程**一次一个**
+# 地处理进程，本副本却在 Ctrl+C / 停止流程里**串行**处理全部在录进程，30s × N 会把退出挂死。
+# [历史注] 旧形态只有一个 _TERMINATE_GRACE_SECONDS = 3.0，且只挂在 terminate() 之后、q 之后不留等待
+# 窗口（M-89：Windows 下 terminate() 即 TerminateProcess 硬杀，那 3 秒对「读 q 并收尾」毫无作用，
+# 优雅退出那一级因此从未生效，停止录制后的 mp4/mov 一律缺 moov）。
+_TERMINATE_BUDGET_SECONDS = 10.0
+# 单段等待的最小秒数：proc.wait(0) 会立即抛 TimeoutExpired，等于整段跳过优雅退出——正在写的
+# mp4/mov 因此丢 moov。与 src/ffmpeg_proc.py::_MIN_STAGE_WAIT_SECONDS 同值（物理孪生，改一侧须同步）。
+_MIN_STAGE_WAIT_SECONDS = 1.0
+
+
+def _stage_budget(deadline: float, stages_left: int) -> float:
+    # 按剩余预算给下一段等待分配秒数（与 src/ffmpeg_proc.py::_stage_budget 同形的**物理孪生**：
+    # 本副本按设计不 import src/，故只能各存一份，判据改动必须两处同改）。
+    remaining = deadline - time.monotonic()
+    return max(_MIN_STAGE_WAIT_SECONDS, remaining / max(stages_left, 1))
 
 
 def terminate_all_ffmpeg() -> int:
@@ -1899,14 +1961,28 @@ def terminate_all_ffmpeg() -> int:
                             pass
             except Exception:
                 pass
+            # 2026-10-21 M-89：写完 q 必须先给优雅退出留一段**有界等待**，再进入 terminate/kill。
+            # 旧实现紧跟着无条件 terminate()：Windows 下那是 TerminateProcess 硬杀，ffmpeg 还没
+            # 读到 q 就被带走，上面那一整级（含其注释承诺的「补写 moov」）实际从未生效，
+            # 停止录制后的 mp4/mov 缺 moov、不可播放。三段预算与主线 _terminate_ffmpeg_process 同形。
+            stage_deadline = time.monotonic() + _TERMINATE_BUDGET_SECONDS
+            try:
+                proc.wait(timeout=_stage_budget(stage_deadline, 3))
+            except subprocess.TimeoutExpired:
+                pass  # 该级没等到 = 进入下一级，不是错误（与主线同口径，重抛会放弃仍可杀的进程）
+            except Exception as e:
+                debug(f"ffmpeg 优雅退出等待异常(继续下一级): {type(e).__name__}: {e}")
+            if proc.poll() is not None:
+                killed += 1
+                continue  # 优雅级已退出：moov 已由 ffmpeg 自己补写，无需硬杀
             try:
                 proc.terminate()
-                proc.wait(timeout=_TERMINATE_GRACE_SECONDS)
+                proc.wait(timeout=_stage_budget(stage_deadline, 2))
             except subprocess.TimeoutExpired:
                 # 宽限期未退出（卡在写盘/网络读）：强制 kill 并再回收一次，避免僵尸
                 proc.kill()
                 try:
-                    proc.wait(timeout=2)
+                    proc.wait(timeout=_stage_budget(stage_deadline, 1))
                 except subprocess.TimeoutExpired:
                     debug(f"ffmpeg kill 后仍未退出: pid={proc.pid}")
             killed += 1
@@ -2494,8 +2570,15 @@ def selftest() -> int:
     # HLS 分支。HEAD 用 405 —— 非 401/403，避免污染退避表(_mark_probe_reject 只认那两个码)。
     saved_probe = http_probe
     saved_throttle = _throttle_probe
+    # 2026-10-21 M-90：HLS 分支最终调用的是 http_request（_probe_hls_segment_lite 取播放列表正文），
+    # 只换绑 http_probe / _throttle_probe 时那一步会**真的**向 cdn.example 发一次请求——
+    # 违反本函数的离线契约，且异常被 except 吞掉后仍打印 PASS（假绿）。现一并换绑，并把
+    # 「假实现收到过调用」作为「确实走了 HLS 分支且没走真实网络」的凭据。
+    saved_request = http_request
+    hls_requests: list[str] = []
     try:
         _probe_reject_until.clear()
+        globals()["_SELFTEST_ACTIVE"] = True
 
         def _fake_probe(
             url: str,
@@ -2512,11 +2595,26 @@ def selftest() -> int:
         def _no_throttle(url: str) -> None:
             return None
 
+        def _fake_request(
+            url: str,
+            *,
+            headers: dict[str, str] | None = None,
+            data: bytes | None = None,
+            timeout: float = 15.0,
+            proxy: str | None = None,
+        ) -> HttpResponse:
+            # 返回一份**带分片行**的媒体播放列表：让 _probe_hls_segment_lite 走到「末行分片
+            # Range-GET」那一步（分片探测由 _fake_probe 应答 206），而不是在「空列表」处保守早退
+            # ——后者即使 http_request 完全没被换绑也给出同样的 True，等于断言自我掩盖。
+            hls_requests.append(url)
+            return HttpResponse(200, {"content-type": "application/vnd.apple.mpegurl"}, "#EXTINF:-1\n0001.ts\n")
+
         # 经 globals() 换绑而非 global 声明：selftest() 前半段已按普通名读取过这两个名字，
         # 同作用域内「先用后声明 global」是语法错误。validate_stream_url 在调用点查全局名，
         # 故换绑即刻生效。
         globals()["http_probe"] = _fake_probe
         globals()["_throttle_probe"] = _no_throttle
+        globals()["http_request"] = _fake_request
         check(
             "小写 .m3u8 走 HLS 分支(Range-GET 救回)",
             validate_stream_url("https://cdn.example/live/a/b.m3u8", platform="斗鱼直播") is True,
@@ -2525,9 +2623,17 @@ def selftest() -> int:
             "大写 .M3U8 同走 HLS 分支(大小写不敏感)",
             validate_stream_url("https://cdn.example/live/a/b.M3U8", platform="斗鱼直播") is True,
         )
+        # 离线契约的凭据：两次 HLS 校验都由假实现应答（URL 逐条对上），真实网络一次都没走到。
+        check(
+            "HLS 自检全程走假 http_request(离线契约)",
+            hls_requests == ["https://cdn.example/live/a/b.m3u8", "https://cdn.example/live/a/b.M3U8"],
+            str(hls_requests),
+        )
     finally:
         globals()["http_probe"] = saved_probe
         globals()["_throttle_probe"] = saved_throttle
+        globals()["http_request"] = saved_request
+        globals()["_SELFTEST_ACTIVE"] = False
         _probe_reject_until.clear()
 
     # --- ffmpeg 命令构造：自检只驱动 build_ffmpeg_cmd 这一处规范列表 ---

@@ -22,6 +22,20 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
+# M-93 残留（2026-10-21）：本脚本 6 处 read_text 此前没有任何兜底——文件缺失/权限/编码异常会以
+# rc=1 + Traceback 结束。而本文件头的退出码契约是「2＝连基准都取不到（门禁没有可判定的数据）」，
+# 1＝代码不合格。门禁自己没读成文件被读成「代码不合格」，排障方向整体错掉，故统一退 2。
+def _read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, ValueError, UnicodeDecodeError) as exc:
+        print(
+            f"ERROR: 门禁自身失效，无法读取 {path.name}（{type(exc).__name__}: {exc}）——不是版本不一致",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+
 def strip_v(version: str) -> str:
     # 去除版本号前缀 v。
     # 必须用 removeprefix 而非 lstrip：lstrip("v") 是按字符集剥离，
@@ -31,7 +45,7 @@ def strip_v(version: str) -> str:
 
 def extract_pyproject_version() -> str:
     # 从 pyproject.toml 提取 version 字段（单一事实源）。
-    text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    text = _read_text(ROOT / "pyproject.toml")
     m = re.search(r'^version\s*=\s*["\'](.+?)["\']', text, re.MULTILINE)
     if not m:
         print("ERROR: 无法从 pyproject.toml 提取 version 字段", file=sys.stderr)
@@ -44,7 +58,7 @@ def extract_main_version() -> str | None:
     # 动态化之后它取的是 _read_version_from_pyproject() 的返回值，正则不再匹配，
     # 故本函数不可能、也不需要报出具体版本号——比对由 pyproject.toml 单点承担。
     # 返回 "HARDCODED" 表示有人把版本又写回了源码；返回 None 表示已是动态读取、无需比对。
-    text = (ROOT / "main.py").read_text(encoding="utf-8")
+    text = _read_text(ROOT / "main.py")
     if re.search(r'^version:\s*str\s*=\s*["\']v?\d', text, re.MULTILINE):
         return "HARDCODED"  # 标记为仍有硬编码
     return None
@@ -57,7 +71,7 @@ def extract_dockerfile_version() -> str | None:
     #   "DYNAMIC"  -> 已是动态注入（正确）
     #   字面版本号  -> 仍写死版本（应改为动态）
     #   None       -> 未找到 version 标签（MIN-2262：调用方按**失败**处理，不得当通过）
-    text = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    text = _read_text(ROOT / "Dockerfile")
     if re.search(r'version="\$\{APP_VERSION\}"', text):
         return "DYNAMIC"
     m = re.search(r'version="(.+?)"', text)
@@ -74,7 +88,7 @@ def check_dockerfile_arg_order() -> str | None:
     # 顺序颠倒时它照样判 DYNAMIC，即门禁对这一整类失效**永久失明**。
     # 多行续写（行尾 `\`）要回溯到指令起始行：ARG 写在 LABEL 的续写行之间同样是错的，
     # 因为该指令在第一行就已经开始求值。
-    lines = (ROOT / "Dockerfile").read_text(encoding="utf-8").splitlines()
+    lines = _read_text(ROOT / "Dockerfile").splitlines()
     decl_line: int | None = None
     use_line: int | None = None
     for idx, line in enumerate(lines, 1):
@@ -120,7 +134,7 @@ def extract_webapi_version() -> str | None:
     #   "DYNAMIC"  -> 经 importlib.metadata 动态读取（正确）
     #   字面版本号  -> 模块级版本常量写死了字面量（应改为动态）
     #   None       -> 未找到动态读取形态（MIN-2262：调用方按**失败**处理）
-    text = (ROOT / "src" / "web_api.py").read_text(encoding="utf-8")
+    text = _read_text(ROOT / "src" / "web_api.py")
     if not re.search(r"importlib\.metadata", text):
         return None
     # 动态读取形态在位；再防「保留 import 但把模块级常量回填成字面量」的半吊子写法
@@ -141,7 +155,7 @@ def extract_po_version() -> str | None:
         # 文件缺席也返回 None，但**不**是「查不到就算通过」：同一条缺失会被门禁块里的
         # scripts/compile_po.py 以 rc=2 拦下（它找不到 PO_PATH），不必在这里重复报一份。
         return None
-    text = po_path.read_text(encoding="utf-8")
+    text = _read_text(po_path)
     m = re.search(r"Project-Id-Version:.*?(\d+\.\d+\.\d+(?:\.\d+)?)", text)
     if not m:
         m = re.search(r"#\s*版本:\s*(\d+\.\d+\.\d+(?:\.\d+)?)", text)

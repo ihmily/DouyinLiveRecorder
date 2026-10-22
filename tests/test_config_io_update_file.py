@@ -329,15 +329,33 @@ class TestBackupSecretHandling:
         copies = list(backup_dir.iterdir())
         assert copies[0].read_text(encoding="utf-8-sig") == "[Cookie]\ndouyin_cookie = top-secret\n"
 
-    def test_unreadable_source_falls_back_to_copy(self, tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
-        # 宁可留下明文备份，也不能没有备份——CR-07 的降级方向是刻意选择的。
+    def test_unreadable_source_falls_back_to_redacted_copy(self, tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+        # S-08②（CODE_REVIEW_2026-10-21）：这里的降级方向被收紧了。原契约是「按节脱敏抛错 → 直接
+        # copy2 明文落盘」，而 backup_config/ 恰是用户打包/云同步/求助外发的目录，明文副本等于凭据
+        # 外泄。新契约：先退到「按字节逐行 mask_credentials」的脱敏副本；只有连这条也失败才落明文，
+        # 且文件名带 .UNMASKED 自证。本用例钉的是第一级——脱敏失败不得把明文写出去。
         src = tmp_path / "config.ini"
         src.write_bytes(b"[Cookie]\ndouyin_cookie = raw\n")
         monkeypatch.delenv("DLR_BACKUP_KEEP_SECRETS", raising=False)
         monkeypatch.setattr(config_io, "_redact_ini_secrets", lambda text: (_ for _ in ()).throw(OSError("boom")))
         backup_dir = tmp_path / "backup"
         config_io.backup_file(str(src), str(backup_dir))
-        assert list(backup_dir.iterdir())[0].read_bytes() == b"[Cookie]\ndouyin_cookie = raw\n"
+        written = list(backup_dir.iterdir())[0]
+        assert b"raw" not in written.read_bytes(), "降级路径仍在落明文凭据"
+        assert b"***" in written.read_bytes(), "降级路径未做任何脱敏"
+
+    def test_last_resort_plaintext_copy_is_marked_unmasked(self, tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+        # S-08②：所有脱敏通道都失败时保留「备份不能缺失」，但明文副本必须在**文件名**上自证，
+        # 否则用户会把它当脱敏备份外发。
+        src = tmp_path / "config.ini"
+        src.write_bytes(b"[Cookie]\ndouyin_cookie = raw\n")
+        monkeypatch.delenv("DLR_BACKUP_KEEP_SECRETS", raising=False)
+        monkeypatch.setattr(config_io, "_redact_ini_secrets", lambda text: (_ for _ in ()).throw(OSError("boom")))
+        monkeypatch.setattr(config_io, "_fallback_redacted_copy", lambda a, b: False)
+        backup_dir = tmp_path / "backup"
+        config_io.backup_file(str(src), str(backup_dir))
+        names = [p.name for p in backup_dir.iterdir()]
+        assert names and all(n.endswith(".UNMASKED") for n in names), f"明文兜底副本未被标记: {names}"
 
     def test_total_failure_is_swallowed(
         self, tmp_path: Path, monkeypatch: MonkeyPatch, capsys: pytest.CaptureFixture[str]

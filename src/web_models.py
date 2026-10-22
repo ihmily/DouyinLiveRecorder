@@ -166,6 +166,21 @@ class RecordingToggle:
 
 
 @dataclass
+class IconUpload:
+    # POST /api/icon（面板上传 ICO 图标）。data 是**剥离 data: URL 前缀后**的 base64 文本——
+    # 前端 FileReader 读出来带 `data:image/x-icon;base64,`，提交前已切掉；带上前缀也能被
+    # b64decode(validate=True) 拒掉，但报错只能到「不是合法 base64」这一层，看不出是前缀没剥。
+    # name 只用作落盘文件名（经 ui_icons 的路径清洗），不构成任何路径信任链。
+    name: str
+    data: str
+
+    @classmethod
+    def parse(cls, data: Any) -> IconUpload:
+        body = _require_dict(data)
+        return cls(name=_as_str(body.get("name"), "name"), data=_as_str(body.get("data"), "data"))
+
+
+@dataclass
 class ConfigUpdate:
     # PUT /api/config。reauth_password 仅在改 Web 认证键（web_auth_enable / web_password）时必填：
     # bearer 只证明「登录过」，敏感开关的翻转必须复验当前口令（缺失即 403）。

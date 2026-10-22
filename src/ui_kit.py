@@ -24,6 +24,7 @@ from tkinter import ttk
 from typing import Any, Final, Literal, cast, final
 
 from src import ui_i18n
+from src.ui_theme import is_valid_hex
 
 # ─── 变体样式名（由 src/ui_theme.ThemeManager._build_ttk_settings 按当前主题 token 注册） ──
 
@@ -307,9 +308,25 @@ def blend(color_a: str, color_b: str, ratio: float) -> str:
     # 两个 #RRGGBB 按 ratio 线性混色（ratio=0 取 a，=1 取 b，恰好返回 b）。
     # 与 gui._mix 同公式，单独保留是因为 ui_kit 不 import gui（反向依赖会成环），
     # 且这里的调用方在离屏测试里只需要纯函数。
+    # M-83（2026-10-21）：入参必须先验形状再混色。旧实现两样都不校验——ratio 越界时
+    # round(负权重通道) 拼出 "-1BEEF0" 一类畸形串，非法颜色喂给 tag_configure 是
+    # **静默失败**（高亮衰减整段不可见且不留日志）；#RGB、命名色、带 alpha 的 8 位形态
+    # 则让 int(x, 16) 当场抛 ValueError 打断调用方的每帧回调。颜色形状判定复用
+    # src/ui_theme.is_valid_hex（本仓唯一的 #RRGGBB 口径，不在这里另立第二份正则），
+    # ratio 一律钳回 [0,1]（终点语义不变，越界只可能是调用方算术错误，钳位是最小惊扰）。
+    if not (is_valid_hex(color_a) and is_valid_hex(color_b)):
+        # 任一侧非法就没有「正确混色结果」可言：回合法的那侧；两例都不合法时回中性黑，
+        # 保证出口恒为 tag_configure 可用的 7 位串，坏输入不再沿调用链扩散。
+        if is_valid_hex(color_a):
+            return color_a
+        if is_valid_hex(color_b):
+            return color_b
+        return "#000000"
+    clamped = max(0.0, min(1.0, ratio))
+
     def _channel(offset: int) -> int:
         return round(
-            int(color_a[offset : offset + 2], 16) * (1 - ratio) + int(color_b[offset : offset + 2], 16) * ratio
+            int(color_a[offset : offset + 2], 16) * (1 - clamped) + int(color_b[offset : offset + 2], 16) * clamped
         )
 
     return f"#{_channel(1):02X}{_channel(3):02X}{_channel(5):02X}"
@@ -567,14 +584,24 @@ class DataTable:
             tree.delete(iid)
         changed: list[str] = []
         for key in keys:
-            row_values = values[key]
+            # M-83（2026-10-21）：keys 是调用方给定的展示集合，values/tags 是两个独立字典，
+            # 二者脱节时旧实现的 values[key] 直索引抛 KeyError——**整轮 sync 半途而废**：
+            # 异常点之后的行不插入、顺序不收敛，表格停在旧数据上且没有任何日志。缺值行
+            # 回退空元组照常落地（视觉上是一格空行），比整表失联可诊断得多。
+            row_values = values.get(key, ())
             row_tags = tags.get(key, ())
             if key in existing:
+                # changed 只记「这一行变了」这一次：旧实现值与标记两个分支各自 append(key)，
+                # 两者同时变化的行会在返回值里出现两遍，调用方的变化行高亮对同一行叠两轮
+                # 衰减动画（M-83）。行级增量语义不变——未变化行仍然零触碰。
+                dirty = False
                 if tuple(tree.item(key, "values")) != row_values:
                     tree.item(key, values=row_values)
-                    changed.append(key)
+                    dirty = True
                 if tuple(tree.item(key, "tags") or ()) != row_tags:
                     tree.item(key, tags=row_tags)
+                    dirty = True
+                if dirty:
                     changed.append(key)
             else:
                 tree.insert("", tk.END, iid=key, values=row_values, tags=row_tags)

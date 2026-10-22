@@ -340,6 +340,11 @@ async def _ensure_twitch_client_id(proxy_addr: OptionalStr = None) -> str:
         with _twitch_client_id_lock:
             _cached_twitch_client_id = ""
             _cached_twitch_client_id_ts = 0.0
+    # M-14：慢路出口同样补出口一致性判定（快路已在上面判过）。慢路重取失败时原样返回全局缓存，
+    # 而缓存可能是**别的代理**取的 Client-Id：代理 B 取不到时把它递给代理 B 的请求，等于把代理 A
+    # 出口上的标识带到另一出口（与 _ensure_kuaishou_did 的 proxy 比对口径不一致）。
+    if _cached_twitch_client_id and _cached_twitch_client_id_proxy != (proxy_addr or ""):
+        return ""
     return _cached_twitch_client_id
 
 
@@ -370,15 +375,42 @@ def _loads_dict(text: object) -> dict[str, object]:
     return _safe_loads(s) or {}
 
 
+# M-17：平台响应体的解析闸门。8M 字符对真实接口响应留了足量余量（抖音 web/enter 实测约
+# 数十 KB），而远超它的响应只可能来自风控壳页或恶意 CDN；64 层深度同理——真实嵌套最深约
+# 10 层，再深只会出现在构造出的畸形响应里。
+_SAFE_LOADS_MAX_CHARS = 8 * 1024 * 1024
+_SAFE_LOADS_MAX_DEPTH = 64
+
+
 def _safe_loads(text: str) -> Optional[dict[str, object]]:
     # 异常安全的 json.loads：捕获 JSONDecodeError、记 warning 后回 None，平台返回 HTML
     # 错误页或截断 JSON 时不至于把整条解析链路拉崩。解析成功但非 dict 仍由调用方判空。
+    # M-17：响应体来自平台/恶意 CDN，`json.loads` 本身上限只受内存约束（超大响应体一次性
+    # 吃满内存并长时间占用事件循环）。解析前按长度短路，解析后按层数复核——两层都只在超限
+    # 时走「回 None + warning」，与既有「解析失败」同形，不改变任何下游判据。
+    if len(text) > _SAFE_LOADS_MAX_CHARS:
+        logger.warning(i18n.tr("响应体过大已跳过解析: {size} 字符", size=len(text)))
+        return None
     try:
         parsed = cast(object, json.loads(text))
     except json.JSONDecodeError as e:
         logger.warning(i18n.tr("JSON 解析失败(已忽略): {type_name}: {e}", type_name=type(e).__name__, e=e))
         return None
-    return parsed if isinstance(parsed, dict) else None
+    if not isinstance(parsed, dict):
+        return None
+    # 深度复核放在解析之后：这里挡的是「解析成功但结构异常」的下游递归遍历爆栈。迭代式量深，
+    # 自身不进递归；一旦超限立刻返回，不留部分结果。
+    stack: list[tuple[object, int]] = [(parsed, 1)]
+    while stack:
+        node, level = stack.pop()
+        if level > _SAFE_LOADS_MAX_DEPTH:
+            logger.warning(i18n.tr("响应体嵌套过深已忽略: 超过 {limit} 层", limit=_SAFE_LOADS_MAX_DEPTH))
+            return None
+        if isinstance(node, dict):
+            stack.extend((value, level + 1) for value in node.values())
+        elif isinstance(node, list):
+            stack.extend((value, level + 1) for value in node)
+    return parsed
 
 
 def _dig(data: object, *keys: str | int) -> object:
@@ -505,6 +537,7 @@ async def get_play_url_list(
     # 据此回退单地址；仅当带宽标记数量与 URL 数量一致才按带宽降序，否则保留原始顺序。
     # 返回值可能混合绝对与相对地址（绝对行原样收，//host 按清单协议补全，其余 .m3u8 相对收）；
     # 调用方不得假定全是相对路径而做前缀拼接，统一绝对化请用 urllib.parse.urljoin。
+    # S-16：兜底分支现已对该相对行统一 urljoin 绝对化，故本函数返回的地址恒为绝对地址。
     resp = await async_req(url=m3u8, proxy_addr=proxy, headers=header, abroad=abroad)
     if not isinstance(resp, str):
         return []
@@ -519,10 +552,24 @@ async def get_play_url_list(
             play_url_list.append(line)
         elif line.startswith("//"):
             play_url_list.append(f"{_m3u8_scheme}:{line}")
+        # S-16（2026-10-20 续修）：主循环此前只收绝对行，混合清单里一旦有 ≥1 条绝对行，相对 .m3u8
+        # 行就整条被丢 → 上层回退单地址（用户侧「画质下拉只有一项」，正是本函数头注释描述的兜底动机）。
+        # 补相对行一律 urljoin 绝对化，与绝对行同权；沿用下方兜底分支同款 .m3u8 路径判据（urlparse().path
+        # 命中，含 `x.m3u8?token=` 这类带查询串的行），并显式跳过 # 指令行，避免分段清单里的 .ts 行被误当画质。
+        elif line and not line.startswith("#") and urllib.parse.urlparse(line).path.endswith(".m3u8"):
+            play_url_list.append(urllib.parse.urljoin(m3u8, line))
     if not play_url_list:
+        # S-16：兜底分支两处修正。① 判据改为按 URL 的 path 判 .m3u8——原 endswith("m3u8")
+        # 会把带查询串的相对行（`x.m3u8?token=...`）整条丢弃，多清晰度候选变空、上层回退单地址
+        # （用户表现为「在播却只有一档画质」）。② 相对行一律 urljoin 绝对化：原样返回无 host 的
+        # `1080p/index.m3u8` 交给 ffmpeg 必失败，5 个调用点（PandaTV/WinkTV/TTingLive/Twitch/
+        # YouTube）都不再做前缀拼接。绝对行与 //host 行不受影响（urljoin 对其为恒等）。
         for i in resp.split("\n"):
-            if i.strip().endswith("m3u8"):
-                play_url_list.append(i.strip())
+            line = i.strip()
+            if not line:
+                continue
+            if urllib.parse.urlparse(line).path.endswith(".m3u8"):
+                play_url_list.append(urllib.parse.urljoin(m3u8, line))
     bandwidth_pattern = _BANDWIDTH_PATTERN
     bandwidth_list = cast(list[str], bandwidth_pattern.findall(resp))
     if bandwidth_list and len(bandwidth_list) == len(play_url_list):
@@ -666,6 +713,7 @@ async def get_douyin_web_stream_data(
         # 仅 ttwid 也能拉到流，但风控率显著高于带登录 cookie，故调用方应优先传真实 cookie。
         headers["cookie"] = await _ensure_ttwid(proxy_addr)
 
+    # S-10：外层先用「很窄的 try」只包住取数与解析本身。
     try:
         # web_rid 取 URL 末段即可，无需额外解析请求：web/enter 同时接受数字房间号
         # （745964462470）与抖音号（yall1102），且传入抖音号不会发生重定向
@@ -749,89 +797,119 @@ async def get_douyin_web_stream_data(
                     raise Exception(f"Douyin web data fetch error (API: {api_error}) (HTML fallback: {e2}).")
         if room_data is None:
             raise Exception(f"Douyin web data fetch error: {api_error}")
-
-        # status==2 才是真正开播；其它值（如 4）视为未开播，跳过取流、返回无 stream 的 room_data。
-        if room_data.get("status") == 2:
-            if "stream_url" not in room_data:
-                raise RuntimeError(
-                    "The live streaming type or gameplay is not supported on the computer side yet, please use the "
-                    "app to share the link for recording."
-                )
-            stream_url = cast(dict[str, object], room_data["stream_url"])
-            # web/enter 的响应里不含 HEVC 的 flv 地址，只能再从直播间 HTML 内联数据里抠。
-            # 复用上面兜底抓到的同一份快照，仅在其为空时才另抓一次。
-            if not html_str:
-                html_str = _get_str_response(await async_req(url=url, proxy_addr=proxy_addr, headers=headers))
-            hevc_flv_url = extract_douyin_hevc_flv_url(html_str)
-            live_core_sdk_data = cast(dict[str, object], stream_url.get("live_core_sdk_data") or {})
-            pull_datas = cast(dict[str, object], stream_url.get("pull_datas") or {})
-            if live_core_sdk_data:
-                json_str = ""
-                if pull_datas:
-                    # 遍历 pull_datas 各线路，优先挑出 HEVC(h265) 候选；拿不到再退回第一条有效候选。
-                    # 用 "origin" 是否在解析后的 data 中存在作为该线路有效的判据；单条解析失败（PEP 758 多异常）
-                    # 仅跳过该条、不中断整体遍历。
-                    hevc_candidate = ""
-                    first_candidate = ""
-                    for value in pull_datas.values():
-                        value_dict = cast(dict[str, object], value) if isinstance(value, dict) else {}
-                        candidate_raw = value_dict.get("stream_data") or ""
-                        candidate = candidate_raw if isinstance(candidate_raw, str) else ""
-                        if not candidate:
-                            continue
-                        try:
-                            cand_data = cast(dict[str, object], _loads_dict(candidate).get("data") or {})
-                        except json.JSONDecodeError, TypeError:
-                            continue
-                        if "origin" not in cand_data:
-                            continue
-                        if not first_candidate:
-                            first_candidate = candidate
-                        try:
-                            cand_main = cast(dict[str, object], cast(dict[str, object], cand_data["origin"])["main"])
-                            cand_sdk_raw = cand_main.get("sdk_params", "{}")
-                            codec_val = _loads_dict(cand_sdk_raw if isinstance(cand_sdk_raw, str) else "{}").get(
-                                "VCodec", ""
-                            )
-                            codec = codec_val if isinstance(codec_val, str) else ""
-                        except json.JSONDecodeError, KeyError, TypeError:
-                            codec = ""
-                        if "h265" in codec.lower() or "hevc" in codec.lower():
-                            hevc_candidate = candidate
-                            break
-                    json_str = hevc_candidate or first_candidate
-                elif "pull_data" in live_core_sdk_data:
-                    pull_data = live_core_sdk_data["pull_data"]
-                    if isinstance(pull_data, dict):
-                        sd = cast(dict[str, object], pull_data).get("stream_data", "")
-                        json_str = sd if isinstance(sd, str) else ""
-                    else:
-                        json_str = ""
-                if json_str:
-                    parsed_data = cast(dict[str, object], _loads_dict(json_str).get("data") or {})
-                    if "origin" in parsed_data:
-                        # 不能双层裸下标：origin 已出现 full/sdk 等变体，「有 origin 但无 main」
-                        # 是真实形态，KeyError 会被最外层 except 吞成 {"anchor_name": ""}，
-                        # 把**已经解析好的 room_data（含主播名与全部流地址）**整体作废 → 该房间
-                        # 此后每轮固定「网址内容获取失败」、永久不录。
-                        # 与同文件姊妹实现 get_douyin_app_stream_data 同写法（.get("main") or {}），
-                        # 并在取不到时**整体跳过** ORIGIN 注入：不能只把 origin_url_list 置空，
-                        # 否则下面的 {**origin_m3u8, **hls_pull_url_map} 会注入
-                        # `ORIGIN: "&codec="` 这类坏条目，让选源逻辑多试一次必失败的候选。
-                        origin_url_list = cast(
-                            dict[str, object], cast(dict[str, object], parsed_data["origin"]).get("main") or {}
-                        )
-                        if origin_url_list:
-                            _inject_origin_urls(stream_url, origin_url_list)
-                    if hevc_flv_url:
-                        stream_url["hevc_flv_url"] = hevc_flv_url
-    # 任何解析异常都吞掉并回 {"anchor_name": ""}：不让单房间解析崩溃主循环，
+        # S-10：注入段在 try 内调用，但它自己吞掉一切异常（见 _inject_origin_and_hevc），
+        # 故注入失败不会让本函数抛错、已解析好的 room_data 照常返回。
+        await _inject_origin_and_hevc(room_data, html_str, url, proxy_addr, headers)
+        return room_data
+    # 任何取数/解析异常都吞掉并回 {"anchor_name": ""}：不让单房间解析崩溃主循环，
     # 代价是「解析失败」与「未开播」在上游同形，可能空转。
+    # S-10：本 handler 只覆盖取数与解析；ORIGIN/HEVC 注入已由 _inject_origin_and_hevc 单独兜住，
+    # 注入失败时本函数带着**已解析好的 room_data** 正常返回；同时补 logger.exception 留栈，
+    # 否则日志只有一行通用告警、归因方向完全反向。
     except Exception as e:
         tb_lineno = e.__traceback__.tb_lineno if e.__traceback__ else 0
-        logger.error(i18n.tr("Error message: {e} Error line: {tb_lineno}", e=e, tb_lineno=tb_lineno))
-        room_data = cast(dict[str, object], {"anchor_name": ""})
-    return room_data
+        logger.exception(i18n.tr("Error message: {e} Error line: {tb_lineno}", e=e, tb_lineno=tb_lineno))
+        return cast(dict[str, object], {"anchor_name": ""})
+
+
+async def _inject_origin_and_hevc(
+    room_data: dict[str, object],
+    html_str: str,
+    url: str,
+    proxy_addr: OptionalStr,
+    headers: dict[str, str],
+) -> None:
+    # S-10：ORIGIN/HEVC 注入单独成段，失败只丢注入结果、不丢已解析好的 room_data。
+    # 原写法把它和取数解析放在同一个最外层 try 里：注入一旦抛错，主播名与全部流地址被
+    # 整体作废（回 {"anchor_name": ""}），房间此后每轮固定「网址内容获取失败」、永久不录。
+    # html_str 由调用方传入（上面兜底抓到的同一份快照），本函数不另建第二份副本。
+    # status==2 才是真正开播；其它值（如 4）视为未开播，跳过取流、不注入任何 ORIGIN。
+    try:
+        if room_data.get("status") != 2:
+            return
+        if "stream_url" not in room_data:
+            raise RuntimeError(
+                "The live streaming type or gameplay is not supported on the computer side yet, please use the "
+                "app to share the link for recording."
+            )
+        stream_url = cast(dict[str, object], room_data["stream_url"])
+        # web/enter 的响应里不含 HEVC 的 flv 地址，只能再从直播间 HTML 内联数据里抠。
+        # 复用上面兜底抓到的同一份快照，仅在其为空时才另抓一次。
+        if not html_str:
+            html_str = _get_str_response(await async_req(url=url, proxy_addr=proxy_addr, headers=headers))
+        hevc_flv_url = extract_douyin_hevc_flv_url(html_str)
+        live_core_sdk_data = cast(dict[str, object], stream_url.get("live_core_sdk_data") or {})
+        pull_datas = cast(dict[str, object], stream_url.get("pull_datas") or {})
+        if live_core_sdk_data:
+            json_str = ""
+            if pull_datas:
+                # 遍历 pull_datas 各线路，优先挑出 HEVC(h265) 候选；拿不到再退回第一条有效候选。
+                # 用 "origin" 是否在解析后的 data 中存在作为该线路有效的判据；单条解析失败（PEP 758 多异常）
+                # 仅跳过该条、不中断整体遍历。
+                hevc_candidate = ""
+                first_candidate = ""
+                for value in pull_datas.values():
+                    value_dict = cast(dict[str, object], value) if isinstance(value, dict) else {}
+                    candidate_raw = value_dict.get("stream_data") or ""
+                    candidate = candidate_raw if isinstance(candidate_raw, str) else ""
+                    if not candidate:
+                        continue
+                    try:
+                        cand_data = cast(dict[str, object], _loads_dict(candidate).get("data") or {})
+                    except json.JSONDecodeError, TypeError:
+                        continue
+                    if "origin" not in cand_data:
+                        continue
+                    if not first_candidate:
+                        first_candidate = candidate
+                    try:
+                        cand_main = cast(dict[str, object], cast(dict[str, object], cand_data["origin"])["main"])
+                        cand_sdk_raw = cand_main.get("sdk_params", "{}")
+                        codec_val = _loads_dict(cand_sdk_raw if isinstance(cand_sdk_raw, str) else "{}").get(
+                            "VCodec", ""
+                        )
+                        codec = codec_val if isinstance(codec_val, str) else ""
+                    except json.JSONDecodeError, KeyError, TypeError:
+                        codec = ""
+                    if "h265" in codec.lower() or "hevc" in codec.lower():
+                        hevc_candidate = candidate
+                        break
+                json_str = hevc_candidate or first_candidate
+            elif "pull_data" in live_core_sdk_data:
+                pull_data = live_core_sdk_data["pull_data"]
+                if isinstance(pull_data, dict):
+                    sd = cast(dict[str, object], pull_data).get("stream_data", "")
+                    json_str = sd if isinstance(sd, str) else ""
+                else:
+                    json_str = ""
+            if json_str:
+                parsed_data = cast(dict[str, object], _loads_dict(json_str).get("data") or {})
+                if "origin" in parsed_data:
+                    # 不能双层裸下标：origin 已出现 full/sdk 等变体，「有 origin 但无 main」
+                    # 是真实形态，KeyError 会被最外层 except 吞成 {"anchor_name": ""}，
+                    # 把**已经解析好的 room_data（含主播名与全部流地址）**整体作废 → 该房间
+                    # 此后每轮固定「网址内容获取失败」、永久不录。
+                    # 与同文件姊妹实现 get_douyin_app_stream_data 同写法（.get("main") or {}），
+                    # 并在取不到时**整体跳过** ORIGIN 注入：不能只把 origin_url_list 置空，
+                    # 否则下面的 {**origin_m3u8, **hls_pull_url_map} 会注入
+                    # `ORIGIN: "&codec="` 这类坏条目，让选源逻辑多试一次必失败的候选。
+                    origin_url_list = cast(
+                        dict[str, object], cast(dict[str, object], parsed_data["origin"]).get("main") or {}
+                    )
+                    if origin_url_list:
+                        _inject_origin_urls(stream_url, origin_url_list)
+                if hevc_flv_url:
+                    stream_url["hevc_flv_url"] = hevc_flv_url
+    # S-10：注入段的异常在此收敛。这里抛错与「未开播」在上游同形，故必须 debug 留痕；
+    # 本函数含出站请求（html_str 为空时另抓一次），异常原文可能带签名 URL，故过 mask_credentials。
+    except Exception as e:
+        logger.debug(
+            i18n.tr(
+                "抖音 ORIGIN/HEVC 注入失败（保留已解析结果）: {type_name}: {e}",
+                type_name=type(e).__name__,
+                e=utils.mask_credentials(str(e)),
+            )
+        )
 
 
 @trace_error_decorator
@@ -917,45 +995,65 @@ async def get_douyin_app_stream_data(
             except UnsupportedUrlError:
                 return await resolve_from_homepage()
 
-        if room_data.get("status") == 2:
-            if "stream_url" not in room_data:
-                raise RuntimeError(
-                    "The live streaming type or gameplay is not supported on the computer side yet, please use the "
-                    + "app to share the link for recording."
-                )
-            stream_url = cast(dict[str, object], room_data["stream_url"])
-            live_core_sdk_data = cast(dict[str, object], stream_url.get("live_core_sdk_data") or {})
-            pull_datas = cast(dict[str, object], stream_url.get("pull_datas") or {})
-            if live_core_sdk_data:
-                if pull_datas:
-                    key = list(pull_datas.keys())[0]
-                    first_pull = cast(dict[str, object], pull_datas[key])
-                    sd0 = first_pull.get("stream_data", "")
-                    json_str = sd0 if isinstance(sd0, str) else ""
-                else:
-                    pull_data = live_core_sdk_data.get("pull_data", {})
-                    if isinstance(pull_data, dict):
-                        sd0 = cast(dict[str, object], pull_data).get("stream_data", "")
-                        json_str = sd0 if isinstance(sd0, str) else ""
-                    else:
-                        json_str = ""
-                if json_str:
-                    parsed_data = cast(dict[str, object], _loads_dict(json_str).get("data") or {})
-                    if "origin" in parsed_data:
-                        # ORIGIN 候选必须取自刚解析出的 json_str，不能另取第二次解析的
-                        # pull_data：现代 app 响应只有 pull_datas，另取会得到空 stream_data、整段
-                        # 注入被跳过；两者都在时还会把 VCodec 标到别的地址上（_is_h265 判错）。
-                        origin_url_list = cast(
-                            dict[str, object], cast(dict[str, object], parsed_data["origin"]).get("main") or {}
-                        )
-                        _inject_origin_urls(stream_url, origin_url_list)
-    # 任何解析异常都吞掉并回 {"anchor_name": ""}：不让单房间解析崩溃主循环，
+        await _inject_origin_urls_app(room_data)
+        return room_data
+    # 任何取数/解析异常都吞掉并回 {"anchor_name": ""}：不让单房间解析崩溃主循环，
     # 代价是「解析失败」与「未开播」在上游同形，可能空转。
+    # S-10：本 handler 只覆盖取数与解析；ORIGIN 注入已由 _inject_origin_urls_app 单独兜住，
+    # 注入失败时本函数带着**已解析好的 room_data**（含主播名与流地址）正常返回；同时补
+    # logger.exception 留栈——原写法只记一行通用告警、无异常栈，排障归因完全反向。
     except Exception as e:
         tb_lineno = e.__traceback__.tb_lineno if e.__traceback__ else 0
-        logger.error(i18n.tr("Error message: {e} Error line: {tb_lineno}", e=e, tb_lineno=tb_lineno))
-        room_data = cast(dict[str, object], {"anchor_name": ""})
-    return room_data
+        logger.exception(i18n.tr("Error message: {e} Error line: {tb_lineno}", e=e, tb_lineno=tb_lineno))
+        return cast(dict[str, object], {"anchor_name": ""})
+
+
+async def _inject_origin_urls_app(room_data: dict[str, object]) -> None:
+    # S-10：APP 入口的 ORIGIN 注入段，独立于取数解析的最外层 try。注入抛错只丢注入结果，
+    # 不把已解析好的 room_data 整体作废（同 _inject_origin_and_hevc 的理由）。
+    try:
+        if room_data.get("status") != 2:
+            return
+        if "stream_url" not in room_data:
+            raise RuntimeError(
+                "The live streaming type or gameplay is not supported on the computer side yet, please use the "
+                + "app to share the link for recording."
+            )
+        stream_url = cast(dict[str, object], room_data["stream_url"])
+        live_core_sdk_data = cast(dict[str, object], stream_url.get("live_core_sdk_data") or {})
+        pull_datas = cast(dict[str, object], stream_url.get("pull_datas") or {})
+        if live_core_sdk_data:
+            if pull_datas:
+                key = list(pull_datas.keys())[0]
+                first_pull = cast(dict[str, object], pull_datas[key])
+                sd0 = first_pull.get("stream_data", "")
+                json_str = sd0 if isinstance(sd0, str) else ""
+            else:
+                pull_data = live_core_sdk_data.get("pull_data", {})
+                if isinstance(pull_data, dict):
+                    sd0 = cast(dict[str, object], pull_data).get("stream_data", "")
+                    json_str = sd0 if isinstance(sd0, str) else ""
+                else:
+                    json_str = ""
+            if json_str:
+                parsed_data = cast(dict[str, object], _loads_dict(json_str).get("data") or {})
+                if "origin" in parsed_data:
+                    # ORIGIN 候选必须取自刚解析出的 json_str，不能另取第二次解析的
+                    # pull_data：现代 app 响应只有 pull_datas，另取会得到空 stream_data、整段
+                    # 注入被跳过；两者都在时还会把 VCodec 标到别的地址上（_is_h265 判错）。
+                    origin_url_list = cast(
+                        dict[str, object], cast(dict[str, object], parsed_data["origin"]).get("main") or {}
+                    )
+                    _inject_origin_urls(stream_url, origin_url_list)
+    # 与「未开播」在上游同形，故必须 debug 留痕；关键是**不**回抛给最外层。
+    except Exception as e:
+        logger.debug(
+            i18n.tr(
+                "抖音 APP ORIGIN 注入失败（保留已解析结果）: {type_name}: {e}",
+                type_name=type(e).__name__,
+                e=e,
+            )
+        )
 
 
 # 内置 TikTok 游客 cookie（供「是否用了内置缺省」判定与失败告警复用）。第三段 epoch
@@ -2838,7 +2936,9 @@ async def login_sooplive(username: str, password: str, proxy_addr: OptionalStr =
         cookie_str = "; ".join([f"{k}={v}" for k, v in cookie_dict.items()])
         return cookie_str
     except Exception as e:
-        logger.error(i18n.tr("An error occurred during login: {e}", e=e))
+        # M-12：同 login_popkontv 口径——连接/代理异常原文会内嵌含 user:pass@ 的代理 URL，而
+        # logger.error 直接落轮转日志，故必须先过 mask_credentials（脱敏在日志侧，抛出语义不变）。
+        logger.error(i18n.tr("An error occurred during login: {e}", e=utils.mask_credentials(str(e))))
         raise Exception(
             "sooplive login failed, please check if the account password in the configuration file is correct."
         )
@@ -3233,7 +3333,11 @@ async def get_netease_stream_data(
     if cookies:
         headers["Cookie"] = cookies
     # 规整 URL 结尾斜杠，保证后续正则/接口参数拼接稳定
-    url = url + "/" if url[-1] != "/" else url
+    # M-18（2026-10-20）：原 `url[-1]` 在空 URL 上抛 IndexError，被 @trace_error_decorator 吞成
+    # 「未开播」且不留任何日志线索（用户只见「没源」，归因丢失）。改为空串短路——url 为空时保持原样，
+    # 交由下游 async_req/正则路径按既有兜底处理；非空且缺尾斜杠才补，语义与原式对非空 url 完全等价。
+    if url and not url.endswith("/"):
+        url = url + "/"
 
     html_str = await async_req(url=url, proxy_addr=proxy_addr, headers=headers)
     html_str = _get_str_response(html_str)
@@ -3391,7 +3495,10 @@ async def get_pandatv_stream_data(
                     f"correctly fill in the login cookie in the configuration file."
                 )
             else:
-                raise RuntimeError(cast(object, error_code), _dig(json_data, "message"))
+                # M-16：原写法传两个位置参数，str(e) 得到 ('needXxx', 'msg') 的元组字面量——
+                # 告警文案不可读。显式格式化为「code: message」（_dig 可能回 None，一并收敛成 str）。
+                _err_msg = _dig(json_data, "message")
+                raise RuntimeError(f"{error_code}: {_err_msg if _err_msg is not None else ''}")
         play_url = _dig_str(json_data, "PlayList", "hls", 0, "url")
         if not play_url:
             # 已判在播却取不到 HLS（改版 / 风控降级）：与「未开播」区分，按无源返回
@@ -3550,7 +3657,9 @@ async def get_winktv_stream_data(
                     f"the cookie is correctly filled in the configuration file after logging in."
                 )
             else:
-                raise RuntimeError(cast(object, error_code), _dig(json_data, "message"))
+                # M-16：同 PandaTV live/play（见该处注释）——两位置参数会让 str(e) 变成元组字面量。
+                _err_msg = _dig(json_data, "message")
+                raise RuntimeError(f"{error_code}: {_err_msg if _err_msg is not None else ''}")
         m3u8_url = _dig_str(json_data, "PlayList", "hls", 0, "url")
         if not m3u8_url:
             # 已判在播却取不到 HLS（改版/风控降级）：按无源返回并留线索，避免丢掉主播名。
@@ -3607,7 +3716,8 @@ async def login_flextv(username: str, password: str, proxy_addr: OptionalStr = N
             return None
 
     except Exception as e:
-        logger.error(i18n.tr("FlexTV login request exception: {e}", e=e))
+        # M-12：同 login_popkontv 口径——代理/请求异常原文可能含 user:pass@，落盘前必须脱敏。
+        logger.error(i18n.tr("FlexTV login request exception: {e}", e=utils.mask_credentials(str(e))))
         raise Exception(
             "FlexTV login failed, please check if the account and password in the configuration file are correct."
         )
@@ -3771,7 +3881,10 @@ async def get_flextv_stream_data(
                 result["anchor_name"] = anchor_name
     except Exception as e:
         # 多参数用字符串拼接而非 f-string：f-string 会被 i18n 扫描器判为「应改用 i18n.tr」。
-        logger.error("Failed to retrieve data from FlexTV live room " + str(e))
+        # M-12（2026-10-20）：连接/代理异常的 str(e) 会内嵌含 user:pass@ 的代理 URL，而 logger.error
+        # 直落轮转日志（logs/ 按大小轮转保留多份＝凭据长期落盘），故拼接位改为 utils.mask_credentials(str(e))。
+        # 保留原拼接形态与原文本（不新建 i18n.tr 模板，免四目录登记）；脱敏仅在日志侧，抛出/返回语义不变。
+        logger.error("Failed to retrieve data from FlexTV live room " + utils.mask_credentials(str(e)))
     result["new_cookies"] = new_cookies
     return result
 
@@ -4280,7 +4393,9 @@ async def login_twitcasting(
             return cookie
     except Exception as e:
         # F-11：print → logger（多参数用字符串拼接，避免 f-string 触发 i18n 门禁）
-        logger.error("TwitCasting login error, " + str(e))
+        # M-12（2026-10-20）：登录/代理异常原文含 user:pass@ 的代理 URL，落轮转日志前必须脱敏；
+        # 保留拼接形态与原 msgid 文本，不新建 i18n.tr 模板免四目录登记。脱敏仅在日志侧，返回 None 语义不变。
+        logger.error("TwitCasting login error, " + utils.mask_credentials(str(e)))
     return None
 
 
@@ -5612,6 +5727,34 @@ async def get_yinbo_stream_url(
     return result
 
 
+# S-11：知乎落地页（API 响应里的 theater_url）只允许落在知乎自家域族内。下方请求会带上用户
+# Cookie，故 host 判据必须与「凭据可发往哪里」同口径；后缀判定用「精确等于或 . 后缀」，防
+# evil-zhihu.com 这类后缀伪装。
+_ZHIHU_ALLOWED_HOST_SUFFIXES = ("zhihu.com", "zhimg.com")
+
+
+def _zhihu_is_allowed_host(url: str) -> bool:
+    # 双重判据：① host 落在知乎域族白名单；② 不得解析到内网/回环/云元数据（复用
+    # web_config._host_internal_reason，与 XHS/Shopee 两道闸保持一致）。userinfo（`u:p@host`）
+    # 形态一律拒绝——那会让「看起来是知乎域」的地址实际连到别的主机。
+    parsed = urllib.parse.urlparse(url)
+    if parsed.username or parsed.password:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return False
+    if not any(host == suffix or host.endswith("." + suffix) for suffix in _ZHIHU_ALLOWED_HOST_SUFFIXES):
+        return False
+    try:
+        # DNS 判定；web_config._host_internal_reason 解析失败（NXDOMAIN）也返回拒绝理由。
+        return web_config._host_internal_reason(host) is None
+    except Exception:
+        # 判定本身失败时按「不可信」处理：宁可少录一场，也不把 Cookie 递出去。
+        return False
+
+
 @trace_error_decorator
 async def get_zhihu_stream_url(
     url: str, proxy_addr: OptionalStr = None, cookies: OptionalStr = None
@@ -5636,6 +5779,9 @@ async def get_zhihu_stream_url(
         if not user_id:
             # 取不到 id 时显式抛错，不能拿空串去拼 /people//profile。
             raise ValueError("Failed to find zhihu user id")
+        # S-11：id 直接拼进 URL 路径，`../` 可改写请求路径、`#`/`?` 可截断查询串。percent 编码后
+        # 路径语义与「id 字面量」一致，正常 id（纯字母数字）编码前后同形。
+        user_id = urllib.parse.quote(user_id, safe="")
         api = f"https://api.zhihu.com/people/{user_id}/profile?profile_new_version="
         json_str = await async_req(api, proxy_addr=proxy_addr, headers=headers)
         json_str = _get_str_response(json_str)
@@ -5653,6 +5799,15 @@ async def get_zhihu_stream_url(
         live_page_url = theater_url
     else:
         live_page_url = url
+
+    # S-11：theater_url 直接取自知乎 API 响应体，而下方请求复用了已注入用户 Cookie 的 headers。
+    # 不校验就等于「响应可控时一条链接即可把登录 Cookie 递送到任意 http(s) host（含回环与云
+    # 元数据地址）」。与同仓 XHS（_xhs_is_allowed_host）/ Shopee（_shopee_is_allowed_host）同构。
+    if not _zhihu_is_allowed_host(live_page_url):
+        logger.warning(
+            i18n.tr("知乎落地页不是可信主机，已按未开播处理: {url}", url=utils.mask_credentials(live_page_url))
+        )
+        return {"anchor_name": "", "is_live": False}
 
     web_id = live_page_url.split("?")[0].rsplit("/", maxsplit=1)[-1]
     html_str = await async_req(live_page_url, proxy_addr=proxy_addr, headers=headers)

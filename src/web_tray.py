@@ -35,6 +35,13 @@
 #   ② _ICON_FILE_NAMES（探测文件名）；
 #   ③ _resource_roots()（冻结态的 _MEIPASS 与 exe 同级目录这两条根）。
 #
+# [2026-10-22] 内置默认图标已落 assets/app.ico（16/24/32/48/64/128/256 七档），并同时挂到
+# build_exe.py 三个 EXE 的 icon= 与 datas 上——「打包后没图标」这个故障面因此由构建期覆盖，
+# 上面三处同改的对象就是它。运行期优先级见 _icon_candidates：config.ini [Web] web_tray_icon
+# （面板「导入图标」上传的那份）> 目录探测 > 自绘；解析逻辑统一在 src/ui_icons.py，
+# 三个入口（GUI 托盘 / 本托盘 / GET /favicon.ico）都调它，不各写一套（各写一套的表现必然是
+# 「一处换了、另一处没换」）。
+#
 from __future__ import annotations
 
 import os
@@ -186,11 +193,14 @@ class WebConsoleTray:
     _owns_app: bool
     _forced_quit: bool
 
-    def __init__(self, host: str, port: int, server: "uvicorn.Server | None" = None) -> None:
-        # host/port 用于托盘提示文本与「打开 Web 界面」；server 用于「退出程序」时优雅关闭 uvicorn
+    def __init__(self, host: str, port: int, server: "uvicorn.Server | None" = None, icon_file: str = "") -> None:
+        # host/port 用于托盘提示文本与「打开 Web 界面」；server 用于「退出程序」时优雅关闭 uvicorn。
+        # icon_file 由 web.py 按 config.ini [Web] web_tray_icon 解析后传入（空 = 走内置 / 目录探测）：
+        # 路径判定留在调用方，本类只认「已解析好的文件」，避免托盘层再读一次配置。
         self.host = host
         self.port = port
         self.server = server
+        self._icon_file = icon_file
         self.app = None
         self.icon = None
         self.menu = None
@@ -362,19 +372,34 @@ class WebConsoleTray:
             return from_disk
         return self._create_icon()
 
+    def _icon_candidates(self) -> list[str]:
+        # 图标探测顺序：① 配置里记的导入图标（web.py 解析后传入）→ ② 目录探测（favicon.ico /
+        # icon.ico / icon.png，兼容「手工往 exe 同级丢一个图标」的老用法）→ ③ 自绘（_create_icon）。
+        # 导入图标排在第一位：用户显式选过的图标必须压过任何约定文件名，否则「导入了却看不到」。
+        candidates: list[str] = []
+        if self._icon_file:
+            candidates.append(self._icon_file)
+        for root in _resource_roots():
+            for name in _ICON_FILE_NAMES:
+                candidates.append(str(pathlib.Path(root) / name))
+        return candidates
+
     def _load_icon_from_disk(self) -> "QIcon | None":
         # 探测可选的外部图标；读不到或 Qt 解不出（损坏 / 不支持的格式）都返回 None 回落到
         # 自绘，不让一个坏文件把托盘变成空白。
         from PySide6.QtGui import QIcon
 
-        for root in _resource_roots():
-            for name in _ICON_FILE_NAMES:
-                candidate = pathlib.Path(root) / name
-                if not candidate.is_file():
+        try:
+            for candidate in self._icon_candidates():
+                if not pathlib.Path(candidate).is_file():
                     continue
-                icon = QIcon(str(candidate))
+                icon = QIcon(candidate)
                 if not icon.isNull():
                     return icon
+        except Exception:
+            # 路径形态异常（含 NUL / 超长）时 is_file() 会抛而不是返回 False：
+            # 托盘图标是本进程唯一的退出入口，绝不许它因一个坏路径把 start() 带崩。
+            return None
         return None
 
     @staticmethod

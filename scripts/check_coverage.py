@@ -16,6 +16,9 @@
 #    2  无 coverage 数据可读（忘了跑 pytest --cov=src、数据文件缺失、JSON 生成失败、数据比源码
 #       陈旧、门禁登记表本身指向不存在的模块）——这一类**不是**「代码不合格」，但也**绝不是**
 #       通过：数据缺失没有理由继续宽容。
+#       [2026-10-21 M-91/M-93 增补] 同属本类的还有三条「门禁自己判不了」：新鲜度比较所需的
+#       stat 读不出来、src/ 或 tests/ 遍历半途失败、报告里的 percent_covered 连 float() 都
+#       吃不下。三者旧形态都是 rc=1 + Traceback（被读成「代码不合格」），现一律收口到本档。
 #
 # 判定面 = src/ 下全部模块（按文件系统枚举），而不是 MODULE_THRESHOLDS 的键集合：只遍历登记表
 #   会让**任何新增的 src/*.py 自动豁免**本门禁，与「新模块必须带测试」相反。未登记阈值的模块
@@ -33,7 +36,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path, PurePosixPath
-from typing import NamedTuple, cast
+from typing import NamedTuple, NoReturn, cast
 
 # 项目根目录（scripts/ 的上一级）：模块枚举与新鲜度比较都以它为基准
 ROOT = Path(__file__).resolve().parent.parent
@@ -120,6 +123,15 @@ def _resolve_data_file(data_file: str | None) -> Path:
     return Path(DEFAULT_DATA_FILE)
 
 
+def _traversal_failed(where: str, exc: BaseException) -> NoReturn:
+    # M-93（2026-10-21）：遍历面本身读不出来（权限 / 目录在遍历中被换走 / 符号环）时，
+    # 拿到的模块清单是**残缺**的，而残缺清单照样会打印「PASSED: All N module(s)」——
+    # 这与「一个模块都不达标」是两类问题，必须走 rc=2 而不是将错就错地判 0/1。
+    print(f"ERROR: 门禁自身失效：{where} 遍历失败 - {type(exc).__name__}: {exc}", file=sys.stderr)
+    print(f"       判定面残缺不等于全部达标，也不等于「查不到模块」。{NO_DATA_HINT}", file=sys.stderr)
+    sys.exit(2)
+
+
 def _source_files(root: Path) -> list[Path]:
     # 参与「新鲜度」比较的源码：src/ 与 tests/ 下全部 .py。
     # 为什么含 tests/：本门禁判的是「用例是否覆盖到实现」，而只改用例同样会让
@@ -130,7 +142,11 @@ def _source_files(root: Path) -> list[Path]:
         base = root / sub
         if not base.is_dir():
             continue
-        out.extend(p for p in base.rglob("*.py") if not (_SRC_SCAN_SKIP_DIRS & set(p.parts)))
+        try:
+            found = list(base.rglob("*.py"))
+        except (OSError, RuntimeError) as exc:
+            _traversal_failed(f"{sub}/", exc)
+        out.extend(p for p in found if not (_SRC_SCAN_SKIP_DIRS & set(p.parts)))
     return out
 
 
@@ -141,21 +157,35 @@ def _data_is_stale(data_file: Path, root: Path = ROOT) -> tuple[float, Path, flo
     # 相等（同一秒内写完）按「不陈旧」处理，避免把「刚跑完就判定」的正常流程打死。
     try:
         data_mtime = data_file.stat().st_mtime
-    except OSError:
-        # 调用方已在 _get_coverage_json 里判过存在性；这里真读不到就交给上层同样按 rc=2 处理
-        return None
+    except OSError as exc:
+        # [历史注 2026-10-21 M-91] 原注释「这里真读不到就交给上层同样按 rc=2 处理」是错误结论：
+        # 返回 None 在本函数里的语义是「数据不陈旧」，上层据此**继续判定**，rc=2 从未发生。
+        # stat 失败即无法证明新鲜度，与「没有可判定的数据」同类 → 按文件头 MIN-19 一律 rc=2。
+        _stale_unreadable(f"无法读取 coverage 数据文件的修改时间: {data_file}", exc)
     newest: Path | None = None
     newest_mtime = 0.0
     for path in _source_files(root):
         try:
             mtime = path.stat().st_mtime
-        except OSError:
-            continue
+        except OSError as exc:
+            # M-91 同族：continue 只会让比较覆盖「读得到的那部分源码」。读不到的那个文件若正好
+            # 比数据新，陈旧形态就被漏掉，门禁照样打印 PASSED——是「评已不存在的代码」的另一半。
+            _stale_unreadable(f"无法读取源码文件的修改时间: {_rel(root, path)}", exc)
         if mtime > data_mtime and (newest is None or mtime > newest_mtime):
             newest, newest_mtime = path, mtime
     if newest is None:
         return None
     return data_mtime, newest, newest_mtime
+
+
+def _stale_unreadable(why: str, exc: BaseException) -> NoReturn:
+    # 新鲜度判据的输入读不出来 → 门禁自身失效（rc=2 + 重跑命令），与 MIN-19 其余分支同一出口。
+    # 单独成函数而不是就地 print/exit：两条 stat 路径必须给出**逐字一致**的结论与下一步命令，
+    # 复制两遍迟早只有一边带重跑提示。
+    print(f"ERROR: {why} - {type(exc).__name__}: {exc}", file=sys.stderr)
+    print("       新鲜度无从判定 = 门禁没有可判定的数据，不是「数据新鲜」。", file=sys.stderr)
+    print(f"   {NO_DATA_HINT}", file=sys.stderr)
+    sys.exit(2)
 
 
 def _src_modules(root: Path = ROOT) -> list[str]:
@@ -165,8 +195,13 @@ def _src_modules(root: Path = ROOT) -> list[str]:
     base = root / "src"
     if not base.is_dir():
         return []
+    try:
+        found = sorted(base.rglob("*.py"))
+    except (OSError, RuntimeError) as exc:
+        # M-93：判定面遍历半途失败时返回「已读到的那一截」= 悄悄缩小判定面，必须按门禁失效退出
+        _traversal_failed("src/", exc)
     modules: list[str] = []
-    for path in sorted(base.rglob("*.py")):
+    for path in found:
         if _SRC_SCAN_SKIP_DIRS & set(path.parts):
             continue
         modules.append(path.relative_to(root).as_posix())
@@ -501,9 +536,22 @@ def _find_module_coverage(coverage_data: CoverageData, module_path: str) -> Cove
 
 def _percent(file_data: CoverageData) -> float:
     # 取单文件覆盖率；缺 summary / 类型异常一律按 0 处理（保守侧：拿不到读数不得当成满分）
+    # [2026-10-21 M-93] 「按 0 处理」只对**键缺失**成立：percent_covered 若是 float() 拒绝的形态
+    # （list/dict/None），旧写法在这里抛 ValueError/TypeError，进程以 rc=1 + Traceback 结束。
+    # 而 rc=1 在本门禁契约里专指「有模块低于阈值」——真相是门禁拿到一份读不了的报告，
+    # 排障方向整体错掉（文件头的分级：判不了 → rc=2）。
     summary = cast(CoverageData, file_data.get("summary", {}))
     raw = cast(object, summary.get("percent_covered", 0.0))
-    return float(cast(float, raw))
+    try:
+        return float(cast(float, raw))
+    except (ValueError, TypeError) as exc:
+        print(
+            f"ERROR: 门禁自身失效：coverage 报告里的 percent_covered 不是可读数值 - "
+            f"{type(exc).__name__}: {exc}（{raw!r}）",
+            file=sys.stderr,
+        )
+        print(f"       读数读不出来不等于 0%，也绝不等于达标。{NO_DATA_HINT}", file=sys.stderr)
+        sys.exit(2)
 
 
 def check_coverage(data_file: str | None = None, root: Path = ROOT) -> int:

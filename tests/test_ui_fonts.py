@@ -88,6 +88,21 @@ class TestSfntFamilyName:
         path.write_bytes(data)
         assert ui_fonts.sfnt_family_name(path) == "First Face"
 
+    def test_attacker_controlled_offsets_return_none_not_struct_error(self, tmp_path: Path) -> None:
+        # M-83 行为锁：ttcf 头里的「第一个字体目录偏移」是文件自带数据、完全可被伪造。
+        # 旧实现只把 read_bytes 圈进 try，_iter_table_dirs 的 unpack_from(offset + 4)
+        # 在越界偏移上直接抛 struct.error，一路穿透 register_private_font 与「导入字体…」
+        # 回调（两处都不接异常）——用户选一个坏文件能把窗口层炸穿。定稿把整段解析包进
+        # try：一切 struct.error/ValueError 收敛为 None，走上层「坏文件」的可读提示。
+        evil = tmp_path / "evil.ttc"
+        evil.write_bytes(b"ttcf" + struct.pack(">HHI", 1, 0, 1) + struct.pack(">I", 0xFFFFFFF0) + b"\x00" * 8)
+        assert ui_fonts.sfnt_family_name(evil) is None
+        # 第二格：声称有字体却只有 12 字节的截断 ttcf——len>=12 的守卫放行后，
+        # 读「第一个目录偏移」的 unpack_from(data, 12) 正落在界外，同样只能收敛成 None。
+        truncated = tmp_path / "truncated.ttc"
+        truncated.write_bytes(b"ttcf" + struct.pack(">II", 1, 1))
+        assert ui_fonts.sfnt_family_name(truncated) is None
+
     def test_missing_name_table_returns_none(self, tmp_path: Path) -> None:
         # 脱壳/子集化字体常砍掉 name 表：拿不到名字就返回 None 由上层提示，而不是拿文件名
         # 当族名——文件名与 GDI 认可的族名毫无关系，那正是「选了没反应」的一半来源。

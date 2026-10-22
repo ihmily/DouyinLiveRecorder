@@ -53,7 +53,16 @@ def register(widget: object, mode: str, trans: Translatable) -> None:
     # 同一 (控件, 模式) 重复登记（工厂与调用方都可能登记）以最后一次为准。
     ref = weakref.ref(widget)
     with _LOCK:
-        _ENTRIES[:] = [entry for entry in _ENTRIES if not (entry[0] is ref and entry[1] == mode)]
+        # M-82（2026-10-21）：去重判定 `entry[0] is ref` 改为 `==`。先更正审查断言：
+        # 「新 weakref 对象使 is 恒假」在 CPython 上**不成立**——3.14 实测对同一 referent 的
+        # 无回调 ref() 恒返回同一个规范化对象（即便中途存在带回调的其他弱引用，见
+        # tests/test_ui_i18n.py 的哨兵用例），所以旧写法在本解释器上碰巧能去重。
+        # 但那是 CPython 的实现细节，weakref 文档只承诺「referent 皆存活时 == 相等、
+        # 已死则互不相等」：换独立实现（PyPy 等）、ref 类型被子类化、或未来解释器取消
+        # 规范化复用，`is` 形态的去重就会**静默失效**——登记表随重复登记无界增长、
+        # retranslate_all 对同一控件重复回填。`==` 把契约钉回文档保证的形态，
+        # 「同一 (控件, 模式) 以最后一次为准」的原语义不变。
+        _ENTRIES[:] = [entry for entry in _ENTRIES if not (entry[0] == ref and entry[1] == mode)]
         _ENTRIES.append((ref, mode, trans))
 
 

@@ -364,6 +364,11 @@ def _win_pid_image_name(pid: int) -> str:
 # 否则返回 None（按原有无条件强杀形态继续）。期望映像名缺席时不判定：本判据只为收窄
 # 「子进程已退出 → PID 进入复用池 → taskkill /T 打到接手者」这段窗口，从未启动过录制
 # 核心（或测试桩实例不跑 __init__）本就没有该窗口。
+# [2026-10-21 M-72 补充] 本函数的返回值契约不变（读不到映像名仍回 None），因为「取不到判据」
+# 的后果已由调用点的下一格 _reused_pid_same_image 承担：映像名与创建时间同源于同一次
+# OpenProcess，两者都读不出来时那一格现在判「已复用」→ 不收 taskkill；映像名读不出而创建时间
+# 读得出时，创建时间是更强的同一性证据，比对结论照常生效。源码态下 _child_image_name 恒为
+# python.exe，映像名比对对任何别的 python 进程都判不出复用，因此这一格的收窄真正落在创建时间上。
 def _reused_pid_image_pair(recorded_image: str, pid: int) -> tuple[str, str] | None:
     expected = recorded_image.strip().lower()
     if not expected:
@@ -376,6 +381,8 @@ def _reused_pid_image_pair(recorded_image: str, pid: int) -> tuple[str, str] | N
 
 # 读出指定 PID 的创建时间（FILETIME 的 100ns 计数，不透明比较值）。取不到返回 None，
 # 与 _win_pid_image_name 的「无法判定即放行」同口径：本判据只用于收窄误杀窗口。
+# [2026-10-21 M-72 改判] 上面这句的「放行」只对映像名判据成立；本函数的 None 现在由
+# _reused_pid_same_image 当作「无法证明还是那个进程」→ 不收 taskkill（宁可漏清不可误杀）。
 def _win_pid_creation_stamp(pid: int) -> int | None:
     if sys.platform != "win32":
         return None
@@ -413,11 +420,20 @@ def _win_pid_creation_stamp(pid: int) -> int | None:
 
 # 判定「已捕获的 PID 是否已被同名进程接手」：映像名相同但创建时间与登记值不同 → 确证复用。
 # 期望值为空/读不到（非 Windows、桩实例、权限不足）时一律不判定，理由同上。
+# [2026-10-21 M-72 改判] 「登记值在、当前值读不到」这一支已从放行翻成收手：
+# 源码运行态下 _child_image_name 恒为 python.exe（record_cmd[0] 就是解释器本体），
+# 映像名判据在该形态上结构性失效，创建时间是唯一能把「还是那个进程」与「号码已被另一个
+# 同名进程接管」分开的证据；证据读不出来时继续 taskkill /F /T，打的就是别人那一棵子树。
+# 本兜底的政策取向是宁可漏清不可误杀——漏清最多留一只孤儿 ffmpeg，误杀拿走的是无关进程。
+# 「期望值本身缺席」（recorded_stamp is None）仍不判定：那代表从未登记过基线（非 Windows /
+# 桩实例不跑 __init__ / 启动那次读取也失败），PID 复用窗口本不存在，收窄它只会凭空失去清理能力。
 def _reused_pid_same_image(recorded_stamp: int | None, pid: int) -> bool:
     if recorded_stamp is None:
         return False
     current = _win_pid_creation_stamp(pid)
-    return current is not None and current != recorded_stamp
+    if current is None:
+        return True
+    return current != recorded_stamp
 
 
 # 强制标准流以 UTF-8 输出（窗口化 exe 的 stdout/stderr 可能为 None，已做保护）。
@@ -785,6 +801,14 @@ def _config_change_verdict(
     return "reload" if editor_text == editor_baseline else "conflict"
 
 
+# M-76②（2026-10-21，CODE_REVIEW_2026-10-21）：编辑器内容读不出来（控件已被销毁）时的哨兵值。
+# 旧形态回退到 _baseline_content，语义等于「按无改动处理」——于是磁盘侧的外部改动会把用户的
+# 未保存编辑静默覆盖（reload 分支）或直接被基线写回。含 NUL 的定长标记不可能出现在配置文件
+# 文本里，因此 _config_change_verdict 拿它比对必然判成 conflict，走既有的「先询问再覆盖」分支。
+# 消费方必须显式识别该哨兵（见 AdvancedSettingsWindow.save_config），绝不能把它当正文落盘。
+_EDITOR_CONTENT_UNREADABLE = "\x00__dlr_editor_content_unreadable__"
+
+
 @final
 class AdvancedSettingsWindow:
 
@@ -929,8 +953,10 @@ class AdvancedSettingsWindow:
         try:
             return _normalize_editor_text(str(self.config_text.get("1.0", tk.END)))
         except Exception:
-            # 控件已销毁：按「无改动」处理，避免把不确定的内容判成脏数据
-            return self._baseline_content
+            # 控件已销毁：返回 _EDITOR_CONTENT_UNREADABLE 哨兵（M-76②，2026-10-21）。
+            # [历史注] 原先回退 self._baseline_content，把「读不到」伪装成「没有未保存改动」，
+            # 于是外部改动可被静默 reload 覆盖、或按基线写回，用户的编辑无任何提示地消失。
+            return _EDITOR_CONTENT_UNREADABLE
 
     # 设置外部改动提示行。
     def _set_hint(self, text: str) -> None:
@@ -1003,6 +1029,16 @@ class AdvancedSettingsWindow:
     def save_config(self) -> None:
         try:
             editor_text = self._editor_content()
+            # M-76②：读不到正文时必须在这里收手。上面的 conflict 判据靠「哨兵 ≠ 基线」生效，
+            # 但磁盘与基线逐字一致时判据回 "unchanged" 并照常落盘——那会把哨兵字符串本身
+            # 写进 config.ini（含 NUL 的一行），把配置文件写成解析器读不回的东西。
+            if editor_text == _EDITOR_CONTENT_UNREADABLE:
+                # 文案复用既有 msgid（本包不改 i18n/ 目录）：结论一致——本次没有写盘、
+                # 外部改动也没被覆盖，重新打开窗口即可拿到最新内容。
+                self._set_hint(i18n_module.tr("已取消保存：外部改动未被覆盖，可重新打开高级设置加载最新内容"))
+                if self.log_callback:
+                    self.log_callback(i18n_module.tr("已取消保存：外部改动未被覆盖，可重新打开高级设置加载最新内容"))
+                return
             disk_now, _ = _read_config_snapshot(self.config_file)
             # 整文件写回前必须重读磁盘并与打开窗口时的基线比对：GUI 与录制进程是两个
             # 进程，main.file_update_lock / web_config._config_write_lock 只在各自进程内
@@ -1408,6 +1444,12 @@ class LiveRecorderGUI:
     # 删除）；界面提示的「超过 1000 行自动截断」与本组常量同源，改值必须同改提示文案。
     _LOG_TRIM_TO = 800
     _LOG_FLUSH_INTERVAL = 200
+    # M-71（2026-10-21，CODE_REVIEW_2026-10-21）：输出线程批次的**时间兜底**（秒）。
+    # 稳定录制的房间约 120s 才输出一条状态行，只按「攒满 batch_size 行」刷新的话日志页要
+    # 空白约 20 分钟——用户视角就是「界面冻住了」，且这是正常运行路径必然出现的失效。
+    # 取 0.8s 而非更小：突发日志仍按 10 行成批（Tk 插入次数不变），稀疏日志最多滞留一个
+    # 读取节拍即入队；UI 侧 _LOG_FLUSH_INTERVAL(200ms) 决定实际可见延迟，两者相加仍 <1.5s。
+    _LOG_BATCH_FLUSH_SECONDS = 0.8
     _STATUS_REFRESH_INTERVAL = 10000  # 未录制时的刷新间隔（毫秒）
     _STATUS_REFRESH_INTERVAL_ACTIVE = 3000  # 有录制直播间时的刷新间隔（毫秒）
     # 周期链异常留痕的限频窗口（秒，见 _warn_chain）：故障是持续性的，不限频会把日志页
@@ -1636,6 +1678,12 @@ class LiveRecorderGUI:
         self._status_animating = False
         self._status_anim_index = 0
         self._status_anim_timer: str | None = None
+        # M-77②（2026-10-21）：一次性 after 的 job id 必须记账。root/控件的 after 注册在
+        # 解释器上、不随窗口销毁而撤销；窗口化构建（pythonw / PyInstaller console=False）
+        # 下 sys.stderr 为 None，销毁后回调抛的 TclError 连一行堆栈都留不下，故障表现为
+        # 「切了主题圆点没变色」「对话框没 modal 也没日志」且无从归因。
+        self._canvas_bg_job_id: str | None = None
+        self._close_dialog_grab_job_id: str | None = None
 
         self._nav_buttons: dict[str, Button] = {}
         self._pages: dict[str, Frame] = {}
@@ -1847,15 +1895,39 @@ class LiveRecorderGUI:
 
     # 读数要迭代到稳定：Treeview 的列宽在 <Configure> 回调里按树宽重算，列宽变了
     # 需求宽跟着变，单次 update() 拿到的是上一轮的中介值（实测能差 300+px）。
+    # M-77①（2026-10-21，CODE_REVIEW_2026-10-21）：收敛一律走 update_idletasks()，不再走
+    # self.root.update()——后者重入**整个**事件循环，会把排队中的鼠标/键盘事件与尚未接完线
+    # 的回调打在半成品控件上（本方法由 _setup_ui 末尾调用，那时 __init__ 的后半段与
+    # _load_config 都还没跑；换字体/换档位路径同样可能在动效中间态进来）。
+    # 「迭代到稳定」这个判据原样保留：它要的只是让列宽重算落地，而重算挂在 <Configure> 绑定
+    # 上、不会由 idle 自己触发，故每轮 idle 之后对两张监控表**定向补发一次** <Configure>
+    # （event_generate 只走绑定链，不消费任何排队事件）。窗口尚未 realized 时它抛 TclError，
+    # 那正是「列宽还没有可算的树宽」，接住后按 idle 读数继续收敛即可。
     def _settled_reqwidth(self, passes: int = 4) -> int:
         measured = self.root.winfo_reqwidth()
         for _ in range(passes):
-            self.root.update()
+            self.root.update_idletasks()
+            self._nudge_table_configure()
+            self.root.update_idletasks()
             current = self.root.winfo_reqwidth()
             if current == measured:
                 break
             measured = current
         return measured
+
+    # 定向补发 <Configure>：只为触发 src/ui_kit.DataTable 挂在事件上的列宽重算，等价于
+    # 旧实现里 root.update() 顺带做掉的那一步，但不重入事件循环（M-77①）。
+    # 用 getattr 而非直接读 self._quality_table / self._dm_table：_settled_reqwidth 也会被
+    # 不跑 __init__ 的桩实例驱动，直接访问会抛 AttributeError 把整轮读数带崩。
+    def _nudge_table_configure(self) -> None:
+        for table in (getattr(self, "_quality_table", None), getattr(self, "_dm_table", None)):
+            if table is None:
+                continue
+            try:
+                table.tree.event_generate("<Configure>")
+            except tk.TclError:
+                # 控件未 realize / 已销毁：没有树宽可算，交由下一轮 idle 结算继续收敛。
+                continue
 
     # 构建左侧导航栏（品牌、状态胶囊、导航按钮、主题/缩放/动效/语言设置与退出）。
     # 控件层用 src.ui_kit 的 ttk 工厂，配色全部走 ui_theme 变体样式。
@@ -2353,7 +2425,10 @@ class LiveRecorderGUI:
         # 根窗口底色随主题 token；ttk 控件由全局样式重绘，tk 自绘件见 _sync_theme_extras。
         self._apply_root_chrome()
         self._sync_theme_extras()
-        self.root.after(50, self._sync_canvas_bg)
+        # M-77②：id 记账 + 连点主题时先取消上一支（否则同一轮排两支、后一支仍会在窗口销毁后
+        # 触发，抛的 TclError 在窗口化构建下完全静默）。
+        self._cancel_after_job(getattr(self, "_canvas_bg_job_id", None))
+        self._canvas_bg_job_id = self.root.after(50, self._sync_canvas_bg)
 
     # 语言菜单选择回调：即时热切换翻译目录并持久化到 config.ini。
     def _on_language_change(self, choice: str) -> None:
@@ -2432,6 +2507,8 @@ class LiveRecorderGUI:
 
     # 主题切换后延迟重取 Canvas 圆点底色（after(50) 的入口）。
     def _sync_canvas_bg(self) -> None:
+        # 回调既已触发，id 就作废：留着会让下一次取消打到一支早已跑完的 job 上。
+        self._canvas_bg_job_id = None
         self._sync_dot_bg()
         self._sync_big_dot_bg()
 
@@ -3219,6 +3296,11 @@ class LiveRecorderGUI:
             # 两侧统一去掉尾部换行再比较，否则文件末尾换行会导致比较永远失败
             if content.rstrip("\n") == current_content:
                 self._last_url_config_mtime = os.path.getmtime(self.url_config_file)
+                # M-76③（2026-10-21）：早退分支同样要刷新「已保存」基线。这里的内容与磁盘
+                # 逐字相等，跳过本行会让 _config_baseline_content 停在更早的一版（例如外部
+                # 改动已被上面的编辑器回填、但基线从没更新过），退出确认与 URL 页保存前都按
+                # 「当前内容 != 基线」判脏，于是同一句「有未保存更改」被反复弹给用户。
+                self._mark_config_saved()
                 return
 
             self.config_text.delete("1.0", tk.END)
@@ -3348,7 +3430,9 @@ class LiveRecorderGUI:
                 _ = _spawn_detached(["open", downloads_path])
             else:
                 _ = _spawn_detached(["xdg-open", downloads_path])
-            self._log(i18n_module.tr("已打开下载目录: {path}", path=downloads_path))
+            # M-75（2026-10-21）：绝对路径进日志前一律过 mask_credentials（同文件对字体路径
+            # 已是这条红线）；logs/ 按大小轮转保留多份，未脱敏的路径等于长期落盘。
+            self._log(i18n_module.tr("已打开下载目录: {path}", path=mask_credentials(downloads_path)))
         except Exception as e:
             self._log(i18n_module.tr("打开目录失败: {err}", err=e), "error")
 
@@ -3520,8 +3604,10 @@ class LiveRecorderGUI:
 
             self._log("━" * 40)
             self._log(i18n_module.tr("录制进程已启动 (PID: {pid})", pid=proc.pid))
-            self._log(i18n_module.tr("执行程序: {path}", path=record_cmd[0]))
-            self._log(i18n_module.tr("工作目录: {path}", path=self.script_dir))
+            # M-75（2026-10-21）：执行程序路径（record_cmd[0]，源码态含用户名 Home 段、
+            # 可能是被代理/凭据包装的脚本路径）与工作目录同理，落日志前过脱敏。
+            self._log(i18n_module.tr("执行程序: {path}", path=mask_credentials(record_cmd[0])))
+            self._log(i18n_module.tr("工作目录: {path}", path=mask_credentials(self.script_dir)))
             self._log("━" * 40)
 
         except Exception as e:
@@ -3740,16 +3826,23 @@ class LiveRecorderGUI:
         # 同一管道）。session_id 为启动时刻捕获的会话代号，供 EOF 收尾时校验会话是否更替。
         batch: list[tuple[str, str]] = []
         batch_size = 10
+        # M-71：上次把批次入队的时刻（单调钟，不受系统改时间影响）。readline() 是阻塞的，
+        # 因此时间兜底的检查点只能落在「取到一行之后」与「管道瞬时无数据」两处——稀疏日志
+        # 的每一行到手时距上次入队必然已超时，于是等价于即时刷新。
+        last_flush = time.monotonic()
 
         # 将缓冲的日志批次入队并标记有待刷新。
         def flush_batch() -> None:
             # 批量刷新日志队列到文本控件（只写队列，调度由 UI 线程泵负责）
-            nonlocal batch
+            nonlocal batch, last_flush
             if batch:
                 self._log_queue.put(batch)
                 with self._log_queue_lock:
                     self._log_queue_has_data = True
                 batch = []
+            # 基准必须在「批次是否非空」之外统一推进：否则空批次滞留会把 last_flush 冻在
+            # 过去，之后每一行都单独入队（成批收益被摘掉）。
+            last_flush = time.monotonic()
 
         if proc.stdout is None:
             self._log_queue.put((session_id,))
@@ -3771,6 +3864,10 @@ class LiveRecorderGUI:
                             self._log_queue_has_data = True
                         break
                     # EOF 但进程仍在（管道瞬时无数据）：短暂等待避免忙等空转
+                    # M-71：这条分支同样是一个检查点——批次里已有内容而管道一直无数据时，
+                    # 靠「行数阈值」永远刷不出来（此时不 break，收尾那次 flush 也等不到）。
+                    if batch and time.monotonic() - last_flush >= self._LOG_BATCH_FLUSH_SECONDS:
+                        flush_batch()
                     time.sleep(0.05)
                     continue
 
@@ -3778,7 +3875,9 @@ class LiveRecorderGUI:
                 self._parse_quality_log(clean_line)
                 batch.append((clean_line, "info"))
 
-                if len(batch) >= batch_size:
+                # M-71：行数阈值之外补时间兜底，稀疏日志（稳定期约 120s 一行）不得凑满 10 行
+                # 才落进队列——那会让日志页空白约 20 分钟、看起来像界面冻住。
+                if len(batch) >= batch_size or time.monotonic() - last_flush >= self._LOG_BATCH_FLUSH_SECONDS:
                     flush_batch()
 
             except (ValueError, OSError) as e:
@@ -3806,6 +3905,18 @@ class LiveRecorderGUI:
     # 注册，定时链永久断裂且无自动恢复（用户视角：整页停摆、无日志）。三处周期链一律在
     # finally 里经本方法无条件重排；重排自身失败（窗口已销毁 → TclError）时返回 None，
     # 让链自然停住。
+    # 取消「排了但还没触发」的一次性 after job（M-77②，2026-10-21）。after id 在整个解释器
+    # 上唯一，用 self.root 取消即可，不必记「是哪只控件排的」——对话框销毁后 dialog 句柄
+    # 本身已不可用，届时再想取消反而要接住 TclError。after_cancel 对「已触发 / 已取消 /
+    # 窗口已销毁」的 id 都会抛，一律容错：本方法的职责只是「别再让它触发」。
+    def _cancel_after_job(self, job_id: str | None) -> None:
+        if not job_id:
+            return
+        try:
+            self.root.after_cancel(job_id)
+        except Exception:
+            pass
+
     def _after_retry(self, delay_ms: int, callback: Callable[[], None]) -> str | None:
         try:
             return cast(str, self.root.after(delay_ms, callback))
@@ -3894,34 +4005,41 @@ class LiveRecorderGUI:
         with self._log_queue_lock:
             self._log_queue_has_data = False
 
-        if messages:
-            self.log_text.config(state=tk.NORMAL)
+        # M-73（2026-10-21，CODE_REVIEW_2026-10-21）：哨兵处理必须落 finally。此前渲染段与
+        # 哨兵处理是顺序两段、无 try/finally 隔离——渲染一抛（log_text 已销毁、index 解析
+        # 失败等），异常被 _schedule_log_flush 的 except 吞掉，而 process_ended 随栈一起丢：
+        # 子进程其实已经结束，开始/停止按钮与状态灯却永久停在「录制中」（没有别的路径会再
+        # 送一次哨兵）。哨兵已在取队列时转存进局部变量，finally 里用的是那份副本，与
+        # messages 是否渲染成功无关。
+        try:
+            if messages:
+                self.log_text.config(state=tk.NORMAL)
 
-            for message, level in messages:
-                timestamp = self._get_timestamp()
+                for message, level in messages:
+                    timestamp = self._get_timestamp()
 
-                if level == "error":
-                    display_text = f"[{timestamp}] [ERROR] {message}\n"
-                    tag = "error"
-                elif level == "warn":
-                    display_text = f"[{timestamp}] [WARN] {message}\n"
-                    tag = "warn"
-                else:
-                    display_text = f"[{timestamp}] {message}\n"
-                    tag = TAG_NORMAL
+                    if level == "error":
+                        display_text = f"[{timestamp}] [ERROR] {message}\n"
+                        tag = "error"
+                    elif level == "warn":
+                        display_text = f"[{timestamp}] [WARN] {message}\n"
+                        tag = "warn"
+                    else:
+                        display_text = f"[{timestamp}] {message}\n"
+                        tag = TAG_NORMAL
 
-                self.log_text.insert(tk.END, display_text, tag)
+                    self.log_text.insert(tk.END, display_text, tag)
 
-            total_lines = int(self.log_text.index("end-1c").split(".")[0])
-            if total_lines > self._MAX_LOG_LINES:
-                trim_count = total_lines - self._LOG_TRIM_TO
-                self.log_text.delete("1.0", f"{trim_count + 1}.0")
+                total_lines = int(self.log_text.index("end-1c").split(".")[0])
+                if total_lines > self._MAX_LOG_LINES:
+                    trim_count = total_lines - self._LOG_TRIM_TO
+                    self.log_text.delete("1.0", f"{trim_count + 1}.0")
 
-            self.log_text.see(tk.END)
-            self.log_text.config(state=tk.DISABLED)
-
-        if process_ended:
-            self._process_ended(ended_session_id)
+                self.log_text.see(tk.END)
+                self.log_text.config(state=tk.DISABLED)
+        finally:
+            if process_ended:
+                self._process_ended(ended_session_id)
 
     # 子进程自然结束后的 UI 收尾（重置状态与按钮）。
     def _process_ended(self, session_id: int | None = None) -> None:
@@ -4074,7 +4192,11 @@ class LiveRecorderGUI:
         with self._quality_lock:
             # 清除超过 30 秒未更新的录制标记（直播已停止但未输出"没有正在录制"）
             for info in self._quality_data.values():
-                if info.get("recording") and now - cast(float, info.get("last_seen", 0)) > 30:
+                # M-76①（2026-10-21）：last_seen 走本文件自定的容错口径 _as_float——原先的
+                # cast(float, info.get("last_seen", 0)) 不做任何转换，脏值（None/空串/非数值）
+                # 一进减法就抛 TypeError，整轮画质刷新被外层 _warn_chain 吞成一句告警、
+                # 表停在旧值；cast 只是给类型检查器看的，运行期恒等于什么都不做。
+                if info.get("recording") and now - _as_float(info.get("last_seen"), 0.0) > 30:
                     info["recording"] = False
 
             data = {name: dict(info) for name, info in self._quality_data.items() if info.get("recording")}
@@ -4655,6 +4777,15 @@ class LiveRecorderGUI:
                 pass
             self._danmaku_refresh_job_id = None
 
+        # M-77②（2026-10-21）：两支一次性 after 也要在这里取消——上面那四条是**自续期链**，
+        # 销毁后链上的下一跳会抛 TclError 并被各自的 except 兜住；这两支只排一次、点在
+        # root/dialog 之外（主题延迟重取色 / 关闭选项对话框的延迟 grab），若 root.destroy()
+        # 之后才触发，抛错在窗口化构建（sys.stderr 为 None）下连一行日志都没有。
+        self._cancel_after_job(getattr(self, "_canvas_bg_job_id", None))
+        self._canvas_bg_job_id = None
+        self._cancel_after_job(getattr(self, "_close_dialog_grab_job_id", None))
+        self._close_dialog_grab_job_id = None
+
         self._stop_danmaku_tail()
 
         self._stop_status_animation()
@@ -4700,6 +4831,11 @@ class LiveRecorderGUI:
                 elif _reused_pid_same_image(getattr(self, "_child_creation_stamp", None), target_pid):
                     # 映像名相同但创建时间对不上 = 号码已被**同名**进程接管（源码态下录制
                     # 核心就叫 python.exe，映像名判据在这一形态上完全失效）。
+                    # [2026-10-21 M-72] 本分支现在同时覆盖「创建时间读不到」：判据无法证明那个
+                    # 号码还是我们启动的进程，一律按「已复用」收手。文案沿用上面那条 msgid
+                    # （措辞偏保守，结论方向一致）；要精确点名「读不到」需新增 msgid
+                    # 「PID {pid} 的进程创建时间读不到（权限不足或号码已被复用），已跳过整树强杀」，
+                    # 本包不改 i18n/ 目录，已按 AGENTS 交回。
                     self._log(
                         i18n_module.tr(
                             "PID {pid} 的进程创建时间与录制核心不符（同映像名但已被复用），已跳过整树强杀",
@@ -4808,15 +4944,23 @@ class LiveRecorderGUI:
         btn_frame = Frame(dialog)
         btn_frame.pack(padx=16, pady=(0, 16))
 
+        # M-77②（2026-10-21）：三条销毁路径统一经本函数收口，先取消尚未触发的延迟 grab 再销毁。
+        # after 注册在解释器上、不随 dialog 销毁而撤销；窗口化构建（pythonw / console=False）下
+        # sys.stderr 为 None，销毁后回调抛的 TclError 完全静默，故障只剩「对话框没变成模态」。
+        def close_dialog() -> None:
+            self._cancel_after_job(getattr(self, "_close_dialog_grab_job_id", None))
+            self._close_dialog_grab_job_id = None
+            dialog.destroy()
+
         # 最小化到托盘并关闭关闭选项对话框。
         def minimize_to_tray_and_close() -> None:
             self.minimize_to_tray()
-            dialog.destroy()
+            close_dialog()
 
         # 退出应用并关闭关闭选项对话框。
         def quit_and_close() -> None:
             self.quit_application()
-            dialog.destroy()
+            close_dialog()
 
         Button(
             btn_frame,
@@ -4838,7 +4982,7 @@ class LiveRecorderGUI:
         # 键盘快捷键
         # Escape 键关闭关闭选项对话框。
         def _on_escape(_event: object = None) -> None:
-            dialog.destroy()
+            close_dialog()
 
         dialog.bind("<Escape>", _on_escape)
 
@@ -4846,7 +4990,9 @@ class LiveRecorderGUI:
         scale_in_window(dialog, self.motion, start_scale=DIALOG_START_SCALE, duration_ms=170, job_key="close_dialog")
 
         # 延迟 grab，等待窗口可见
-        dialog.after(100, lambda: self._safe_dialog_grab(dialog))
+        # M-77②：id 记账（取消见 close_dialog，兜底取消见 _finalize_quit）。
+        self._cancel_after_job(getattr(self, "_close_dialog_grab_job_id", None))
+        self._close_dialog_grab_job_id = dialog.after(100, lambda: self._safe_dialog_grab(dialog))
 
     # 安全地为对话框设置模态（容错 grab_set）。
     @staticmethod

@@ -30,6 +30,7 @@
 #     dist/DouyinLiveRecorder-v{ver}-{os}-{arch}{suffix}.zip  压缩包（普通构建 suffix 为空，--dual 为 -lite/-full）
 #
 import argparse
+import contextlib
 import hashlib
 import http.client
 import json
@@ -45,7 +46,7 @@ import time
 import urllib.request
 import zipfile
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Iterator, cast
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 APP_NAME = "DouyinLiveRecorder"
@@ -56,6 +57,13 @@ SPEC_PATH = PROJECT_ROOT / "DouyinLiveRecorder.spec"
 CONTENTS_DIR = "_internal"
 IS_WIN = sys.platform == "win32"
 EXE_SUFFIX = ".exe" if IS_WIN else ""
+
+# 应用图标（多分辨率 ICO：16/24/32/48/64/128/256）。
+# [为什么必须多分辨率] Windows 按场景从 ICO 里挑最接近的一档：托盘与标题栏取 16，资源管理器
+# 「大图标」/ Alt+Tab 取 256。只带单分辨率时缺失的一档被缩放——16 缺则糊、256 缺则发虚，
+# 且这类问题只在肉眼看得出，构建期无任何报错。
+APP_ICON_RELPATH: str = os.path.join("assets", "app.ico")
+APP_ICON_PATH: Path = PROJECT_ROOT / "assets" / "app.ico"
 
 # 体积优化：运行期不可达模块的排除清单（每项体积为 2026-09-24 本机 Windows lite 构建实测值，
 # 基线发布目录 82.77MB）。进表判据只有一条：能指出它在产物里、且运行期不可达——靠「看着像没用」
@@ -138,6 +146,32 @@ QT_BLOAT_FILES: tuple[str, ...] = (
 # i18n 资源清单（替代整目录拷贝）：运行时只消费 .mo / .json / .yaml（见 i18n.py 的加载优先级），
 # *.po 是翻译源、冻结产物里属死重量（0.12MB）。按文件逐个列出而非写 ('i18n','i18n')，因为目录形态
 # 会把 .po 一起带进分发包；新增语言只要把文件放进 i18n/ 就会被本函数自动纳入，不必改 spec 模板。
+def icon_spec_value() -> str:
+    # EXE(icon=...) 的实参（spec 是 Python 源码，故这里产出的是**源码文本**）。
+    # 两种情形都回 "None"：① 图标文件缺失；② 非 Windows。
+    # ① 的理由：PyInstaller 对不存在的图标文件会在 Analysis 阶段报错并中断整轮打包，而「图标没换」
+    #   不该让构建红掉——图标是装饰性资源，产物照常可用（资源管理器显示系统默认图标）。
+    # ② 的理由：macOS 的 --icon 只接受 .icns（传 .ico 会被拒），Linux 的 ELF 根本没有图标资源；
+    #   逐平台生成 .icns 属另一件事，这里不给半成品。
+    if not IS_WIN:
+        return "None"
+    if not APP_ICON_PATH.is_file():
+        print(f"[build] 未找到 {APP_ICON_RELPATH}，本次构建不带应用图标（资源管理器将显示系统默认图标）")
+        return "None"
+    return repr(str(APP_ICON_PATH))
+
+
+def icon_datas_entries() -> list[tuple[str, str]]:
+    # 把图标收进 _internal/assets/：冻结后 src 模块位于 _internal/src/，ui_icons.default_icon_path()
+    # 的兜底根（__file__ 上两级）正好落在 _internal，于是「exe 同级 assets/ 被误删」时仍有这份兜底。
+    # 与 EXE(icon=) 是两条独立通道：前者决定**exe 文件本身**的资源（资源管理器/任务栏），
+    # 后者供**运行期**读取（Qt 窗口图标、托盘、/favicon.ico）——只配前者会出现「任务栏有图标、
+    # 面板标签没图标」。
+    if not APP_ICON_PATH.is_file():
+        return []
+    return [(APP_ICON_RELPATH, "assets")]
+
+
 def i18n_datas_entries() -> list[tuple[str, str]]:
     root = PROJECT_ROOT / "i18n"
     if not root.is_dir():
@@ -167,6 +201,7 @@ datas = [
     ('src/javascript', 'src/javascript'),   # JS 签名脚本（src/__init__.py 经 __file__ 定位 → _internal/src/javascript）
     *{i18n_datas},   # 翻译目录（剔除 *.po 源文件；由 build_exe.i18n_datas_entries() 生成）
     ('web', 'web'),                         # Web 面板静态资源（src/web_api.py 经 __file__ 定位 → _internal/web）
+    *{icon_datas},   # 应用图标（assets/app.ico；由 build_exe.icon_datas_entries() 生成，缺失即空表）
 ]
 # 注意：config/ 不在此处（不进 _internal），由 copy_external_binaries 复制到 exe 同级，
 # 以便程序在运行时直接读写配置。ffmpeg/ node/ 同理。
@@ -204,12 +239,14 @@ pyz_cli = PYZ(a_cli.pure)
 pyz_gui = PYZ(a_gui.pure)
 pyz_web = PYZ(a_web.pure)
 
+# icon={icon}：三个 exe 共用同一份 ICO（资源管理器 / 任务栏 / 标题栏三处显示一致——
+# 它们读的是同一个 exe 资源，故只需挂一次；窗口内图标另由 ui_icons 在运行期按配置覆盖）。
 exe_cli = EXE(pyz_cli, a_cli.scripts, [], exclude_binaries=True,
-              name='{app}', console=True, contents_directory='_internal')
+              name='{app}', console=True, icon={icon}, contents_directory='_internal')
 exe_gui = EXE(pyz_gui, a_gui.scripts, [], exclude_binaries=True,
-              name='{app}-GUI', console=False, contents_directory='_internal')
+              name='{app}-GUI', console=False, icon={icon}, contents_directory='_internal')
 exe_web = EXE(pyz_web, a_web.scripts, [], exclude_binaries=True,
-              name='{app}-Web', console=True, contents_directory='_internal')
+              name='{app}-Web', console=True, icon={icon}, contents_directory='_internal')
 
 coll = COLLECT(
     exe_cli, a_cli.binaries, a_cli.datas,
@@ -257,7 +294,13 @@ def preflight_syntax_check() -> None:
 def run_pyinstaller() -> None:
     preflight_syntax_check()
     _ = SPEC_PATH.write_text(
-        SPEC_TEMPLATE.format(app=APP_NAME, bloat_excludes=list(BLOAT_EXCLUDES), i18n_datas=i18n_datas_entries()),
+        SPEC_TEMPLATE.format(
+            app=APP_NAME,
+            bloat_excludes=list(BLOAT_EXCLUDES),
+            i18n_datas=i18n_datas_entries(),
+            icon_datas=icon_datas_entries(),
+            icon=icon_spec_value(),
+        ),
         encoding="utf-8",
     )
     print(f"[build] 已生成 spec：{SPEC_PATH}")
@@ -318,6 +361,24 @@ def copy_external_binaries(include_runtime: bool = True) -> None:
     # 处置：按「模板化」逐个写入（结构保留、凭据置空），并由 make_zip 内的凭据断言兜第二道：
     # 这里是「不产生」，那里是「产生了就拦住」，同源判据但互不替代。
     _prepare_config_dir()
+    _copy_app_icon()
+
+
+def _copy_app_icon() -> None:
+    # 图标复制到发布根（exe 同级 assets/）：运行期 app_root 就是 exe 同级目录，
+    # ui_icons.default_icon_path() 的第一条探测根正是它；_internal 里那份（datas 收集）是兜底。
+    # 两条根有意冗余：onedir 布局下任一条失效（用户清理、换打包布局）都不至于让图标整体消失。
+    if not APP_ICON_PATH.is_file():
+        return
+    dst_dir = RELEASE_DIR / "assets"
+    try:
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        dst = dst_dir / APP_ICON_PATH.name
+        _ = shutil.copy2(APP_ICON_PATH, dst)
+        print(f"[build] 已复制 {APP_ICON_RELPATH} -> {dst}")
+    except Exception as e:
+        # 图标是装饰性资源：复制失败只提示，不中断构建（同 icon_spec_value 的取舍口径）
+        print(f"[build] 复制应用图标失败（产物仍可用，仅缺图标）: {type(e).__name__}: {e}")
 
 
 # 发布目录内**绝不允许**存在的凭据文件（SEV-2213）。与 .dockerignore 的 `config/config.ini` /
@@ -373,10 +434,24 @@ def _sanitized_url_config_text() -> str:
     return "#https://live.douyin.com/000000000000\n"
 
 
+def _credential_template_for(path: Path) -> str:
+    # 凭据文件的脱敏模板按**文件名**分派、不按所在层级：子目录里的同名文件同样是凭据面（M-99①）。
+    # config.ini 走 _sanitized_config_text（解析失败落空模板，绝不退回「原样复制」那条老路），
+    # URL_config.ini 走单行注释样例；两者与顶层写入点逐字同源，不得各自演化。
+    if path.name == "URL_config.ini":
+        return _sanitized_url_config_text()
+    return _sanitized_config_text(path.read_text(encoding="utf-8-sig", errors="replace"))
+
+
 def _prepare_config_dir() -> None:
     # 把发布目录的 config/ 写成**脱敏模板**（SEV-2213 的「不产生」一侧）。
-    # 只对 CREDENTIAL_FILE_NAMES 里的两个文件脱敏；其余文件**原样复制、不过滤**——它们不属已知凭据面，
-    # 新增任何可能带凭据的配置文件名必须先登记进该元组，否则会直接进对外 zip。
+    # [历史注] 本条原写「只对 CREDENTIAL_FILE_NAMES 里的两个文件脱敏；其余文件原样复制、不过滤」，
+    # 并把风险处置推给「新增任何可能带凭据的配置文件名必须先登记进该元组」——M-99①（2026-10-21）
+    # 证伪了这套名称白名单：白名单漏一个名字，就等于那个文件带着真实凭据进对外 zip 且不触发任何检查；
+    # 而旧循环的 `not item.is_file()` 还会**静默跳过所有子目录**（「没进包」与「判定过所以安全」
+    # 在构建日志里长得一模一样）。现行形态 = 「复制即判定」：顶层两份无条件落模板，其余条目
+    # **递归**复制并保持结构，安全性不再看文件名，而由 assert_no_credentials_in_release 的
+    # ③（全树凭据扫描）判定；子目录里出现的同名凭据文件按模板重写（见 _credential_template_for）。
     cfg_dst = RELEASE_DIR / "config"
     cfg_dst.mkdir(parents=True, exist_ok=True)
     cfg_src = PROJECT_ROOT / "config"
@@ -393,19 +468,32 @@ def _prepare_config_dir() -> None:
     _ = (cfg_dst / "URL_config.ini").write_text(_sanitized_url_config_text(), encoding="utf-8")
     print(f"[build] 已生成脱敏配置模板 config/config.ini + config/URL_config.ini -> {cfg_dst}")
 
-    # 2) 其余非凭据文件照常复制（保留「模板之外的附属文件也能带过去」行为）
+    # 2) 其余条目递归复制（M-99①）：目录照样建以保持结构；子目录里出现的同名凭据文件一律按模板
+    #    重写、绝不原样带过去；其它文件照样复制，但复制不再自带安全假设——③ 的全树扫描才是判据。
     if cfg_src.is_dir():
-        for item in sorted(cfg_src.iterdir()):
-            if item.name in known or not item.is_file():
+        for item in sorted(cfg_src.rglob("*")):
+            rel = item.relative_to(cfg_src)
+            if item.is_dir():
+                (cfg_dst / rel).mkdir(parents=True, exist_ok=True)
                 continue
-            _ = shutil.copy2(item, cfg_dst / item.name)
-            print(f"[build] 已复制 config/{item.name} -> {cfg_dst / item.name}")
+            target = cfg_dst / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if item.name in known:
+                # 顶层那两份已在上面无条件落模板（缺源也要落模板），这里只会命中嵌套形态
+                _ = target.write_text(_credential_template_for(item), encoding="utf-8")
+                print(f"[build] 嵌套凭据文件按脱敏模板写入 config/{rel.as_posix()} -> {target}")
+                continue
+            _ = shutil.copy2(item, target)
+            print(f"[build] 已复制 config/{rel.as_posix()} -> {target}")
 
 
 def assert_no_credentials_in_release() -> None:
     # SEV-2213 的「产生了就拦住」一侧：make_zip **之前**校验发布目录那两份文件确实不含敏感键的真实值，
     # 命中即非零退出——与 .dockerignore 同源口径。zip 一旦生成就可能已被 copy/上传，事后再删已无意义；
     # 判据也不是「文件是否存在」（文件**必须**存在，用户要能在 exe 同级编辑），而是逐键比对源值。
+    # [M-99① 2026-10-21 增] 覆盖面不再限于「那两份文件」：③ 对 config/ **全树**（任意文件名 + 子目录）
+    # 做凭据扫描，与 ①② 共用同一份敏感判据；① ② 管「模板有没有落对」，③ 管「复制过去的东西里
+    # 有没有凭据」，三段互不替代。
     from src import web_config
 
     assert RELEASE_DIR.is_dir(), f"{RELEASE_DIR} 不存在，无从校验"
@@ -426,10 +514,10 @@ def assert_no_credentials_in_release() -> None:
     #    但值确实是凭据」的漏网情形。
     src_ini = PROJECT_ROOT / "config" / "config.ini"
     dst_ini = cfg_dst / "config.ini"
+    src_pairs = _read_ini_pairs(src_ini) if src_ini.is_file() else []
     if src_ini.is_file() and dst_ini.is_file():
         dst_text = dst_ini.read_text(encoding="utf-8-sig", errors="replace")
-        src_parser = _read_ini_pairs(src_ini)
-        for section, key, value in src_parser:
+        for section, key, value in src_pairs:
             v = value.strip()
             # 只拦「有实质内容且确实敏感」的值；空值/纯布尔运维参数不算凭据。
             if len(v) < 4:
@@ -438,6 +526,65 @@ def assert_no_credentials_in_release() -> None:
                 continue
             if v in dst_text:
                 problems.append(f"config/config.ini 的 [{section}] {key} 真实值未被脱敏（长度 {len(v)}）")
+
+    # ③ M-99①（2026-10-21）「复制即判定」的第二半：config/ 下**任何**被复制进来的文件（含子目录、
+    #    不看文件名白名单）都要过凭据判据。① ② 只覆盖 CREDENTIAL_FILE_NAMES 那两份，第三个名字
+    #    （cookies.json / proxy.ini / profiles/alice.ini 之类）此前会带着真实凭据进对外 zip 而
+    #    不触发任何检查——「先登记再脱敏」的约定一旦漏登记就无人发现。两条互补判据：
+    #      (a) 字节级：仓库源 config.ini 里「确实敏感且有实质内容」的那些值，原样出现在被复制的文件里
+    #          即为泄漏。对二进制（字体等没法逐行的东西）同样有效，且零误报。
+    #      (b) 文本级：逐行按 `键 = 值` / `键: 值`（ini 与 json 两种形态一并覆盖）过 web_config 的
+    #          同一份判据（键名命中 **或** 值本身形如凭据）。刻意复用 ①② 的判定入口而不是另写
+    #          一套正则——两份「什么算敏感」迟早漂移，漂移的那半等于没有防线。
+    #    代价是可能误拦「键名像凭据、其实是普通文本」的附属文件；这里按「宁可停下来问」处理
+    #    （对外分发的 zip 不可撤回），命中时只打文件 + 行号 + 键名，**不打值本身**（凭据红线见
+    #    AGENTS.md「风险控制（前置）」）。
+    guarded_values: list[str] = []
+    for section, key, value in src_pairs:
+        v = value.strip()
+        if len(v) < 4:
+            continue
+        if web_config.is_sensitive_item(section, key) or web_config._looks_like_secret_value(v):
+            guarded_values.append(v)
+
+    known_names = set(CREDENTIAL_FILE_NAMES)
+    if cfg_dst.is_dir():
+        for path in sorted(cfg_dst.rglob("*")):
+            if not path.is_file() or path.name in known_names:
+                continue
+            rel_name = f"config/{path.relative_to(cfg_dst).as_posix()}"
+            try:
+                raw = path.read_bytes()
+            except OSError as e:
+                # 读不动的文件不能当成「没内容」：留一条命中交人工看，与 ①② 同档 fail-closed。
+                problems.append(f"{rel_name} 无法读取（{type(e).__name__}: {e}），无法证明其不含凭据")
+                continue
+            for value in guarded_values:
+                if value.encode("utf-8", errors="replace") in raw:
+                    problems.append(f"{rel_name} 含仓库配置里的凭据真实值（长度 {len(value)}）")
+                    break
+            if b"\x00" in raw[:8192]:
+                continue  # 二进制：(a) 已经跑过，(b) 的逐行判据对它无意义
+            for n, line in enumerate(raw.decode("utf-8", errors="replace").splitlines(), 1):
+                stripped = line.strip()
+                if not stripped or stripped in ("{", "}", "[", "]", "},", "],"):
+                    continue
+                if stripped[:1] in ("#", ";"):
+                    continue  # 注释行不参与键值判定（与录制链「已被注释检查在前」同一保守口径）
+                if stripped.startswith("[") and stripped.endswith("]"):
+                    continue  # ini 的节头（`[录制设置]`）与 json 的数组行都不含键值对
+                key_part, sep, value_part = stripped.partition("=")
+                if not sep:
+                    key_part, sep, value_part = stripped.partition(":")
+                if not sep:
+                    continue
+                key = key_part.strip().strip("{}").strip("\"'")
+                value = value_part.strip().rstrip(",").strip("\"'")
+                if len(value) < 4:
+                    continue
+                if web_config.is_sensitive_key(key) or web_config._looks_like_secret_value(value):
+                    problems.append(f"{rel_name}:{n} 的 {key!r} 值形如凭据（M-99①：请脱敏后再随包分发）")
+                    break
 
     if problems:
         print("[build][FATAL] 发布目录内检出凭据（SEV-2213：外发 zip 不得包含配置凭据）：", file=sys.stderr)
@@ -850,10 +997,22 @@ def _verify_gpg_artifact(
             return False
         raise SystemExit(f"[build][FATAL] {desc} {msg}")
 
+    # M-99③（2026-10-21）：空 sig_url 必须在这里显式分流。旧写法把它交给 urlopen("")，抛的是
+    # **ValueError**（unknown url type）而不是 OSError，于是穿透下面的 except、以未处理异常终止
+    # 整个构建——既绕过 `_skip_or_fail` 的分级处置（发布路径终止 / 本地路径留痕跳过），也让在线
+    # 清单那一层（strict=False，「验不过就不采用这份清单」）变成「整条构建炸掉」。
+    # 条目漏配 sig_url 属配置形态问题，判据与「取不到签名文件」同档，故走同一条 _skip_or_fail。
+    if not str(sig_url).strip():
+        return _skip_or_fail(
+            "签名配置条目缺 sig_url（签名文件 URL 为空，无从取签名）", "（发布路径 fail-closed，已终止构建）"
+        )
+    # 异常面扩到 ValueError/TypeError：malformed URL（含 scheme 缺失）与「条目里塞了非字符串」
+    # 都属「这份签名配置本身不可用」，处置与网络失败一致，不得升级成构建崩溃。
+    # 本处需要 as 绑定来打异常类型，故按 AGENTS.md 的例外写回带括号形态（PEP 758 无括号形式不支持 as）。
     try:
         with urllib.request.urlopen(sig_url, timeout=60) as resp:
             sig_path.write_bytes(resp.read())
-    except OSError as e:
+    except (OSError, ValueError, TypeError) as e:
         return _skip_or_fail(
             f"取不到 {sig_url} 的签名文件：{type(e).__name__}: {e}", "（发布路径 fail-closed，已终止构建）"
         )
@@ -1282,10 +1441,66 @@ def _download_file(url: str, dest: Path, desc: str, *, slot: str) -> None:
         print(f"[build][warn] {desc} 未钉定 SHA256，请核对官方值后填入 _PINNED_RUNTIME_SHA256：{actual}")
 
 
+# M-99②（2026-10-21）：下载链的临时件都落在 target_dir（= RELEASE_DIR）里，而 make_zip 压的是
+# **整棵发布目录树**。旧写法只在**成功路径**收尾清理，于是「下到一半失败」的那次构建会把 100+MB 的
+# 归档与 `_node_extract/` 留在 dist/<APP_NAME>/ 下；下一次 make_zip（或 --dual 的第二趟）把它们
+# 整包打进对外 zip。清理因此必须落 finally：两处下载入口的 except 只捕 Exception，而钉定哈希
+# 不匹配与「解包缺件」走的是 SystemExit（BaseException，穿得过 except），finally 是唯一同时覆盖
+# 「正常返回 / 被 except 兜住 / SystemExit 穿透」三条路径的位置。
+# 名字口径与 _download_ffmpeg / _download_nodejs 的落盘名同源，改落盘名必须同批改这里。
+RELEASE_TEMP_ARCHIVE_GLOBS: tuple[str, ...] = (
+    "_*temp.zip",
+    "_*temp.tar.xz",
+    "node-*.zip",
+    "node-*.tar.gz",
+)
+RELEASE_TEMP_DIR_NAMES: tuple[str, ...] = ("_node_extract",)
+
+
+def _purge_release_temp_files(paths: list[Path]) -> list[str]:
+    # 删除发布目录内的临时归档/解压目录，返回被删条目的文件名。与 _clean_runtime_artifacts_from_release
+    # 同口径：删了什么都要打出来，不留静默删除；清理本身失败只 warning，**不得**把「清理没成」升级成
+    # 「构建失败」——残留由 _assert_no_release_temp_residue 在压缩前按实物拦下（判实物不判返回值）。
+    removed: list[str] = []
+    for path in paths:
+        try:
+            if path.is_dir():
+                shutil.rmtree(path)
+            elif path.is_file():
+                path.unlink()
+            else:
+                continue
+        except OSError as e:
+            print(f"[build][warn] 清理临时件 {path.name} 失败：{type(e).__name__}: {e}（压缩前的残留断言会拦下）")
+            continue
+        removed.append(path.name)
+    if removed:
+        print(f"[build] 已清理发布目录内的临时件：{', '.join(sorted(set(removed)))}")
+    return removed
+
+
+def _assert_no_release_temp_residue() -> None:
+    # 压缩前的残留断言（M-99② 的第二道）：finally 已经清过，但 Windows 上 rmtree/unlink 会被杀软或
+    # 句柄占用挡住而只留一行 warning——那种残留正是「半截构建产物进了对外 zip」的形态，
+    # 所以在**实物**上再查一次、命中即终止（与 _assert_zip_has_no_runtime_artifacts 同为「以实物为准」）。
+    if not RELEASE_DIR.is_dir():
+        return
+    leftovers = sorted({path.name for pattern in RELEASE_TEMP_ARCHIVE_GLOBS for path in RELEASE_DIR.glob(pattern)})
+    leftovers += sorted(name for name in RELEASE_TEMP_DIR_NAMES if (RELEASE_DIR / name).is_dir())
+    if leftovers:
+        raise SystemExit(
+            f"[build][FATAL] 发布目录残留临时件，已终止压缩（这些内容会被打进对外 zip）：{', '.join(leftovers)}"
+        )
+
+
 # 下载并解压匹配当前平台的 Node.js LTS 到 target_dir/node/，返回是否成功
 def _download_nodejs(target_dir: Path) -> bool:
     # 用官方 dist 源（https://nodejs.org/dist/）自动选取「最新 LTS」× 当前平台/架构的包并解压到
     # target_dir/node/；LTS 随上游漂移正是钉定表的人工闸口（见 _PINNED_RUNTIME_SHA256 注释）。
+    # M-99②：两个临时件在 try **之前**声明，finally 才能在「版本清单已取到、归档还没建起来」这类
+    # 早失败上也照样执行（未创建的条目由 _purge_release_temp_files 的存在性判定自然跳过）。
+    archive: Path | None = None
+    extract_tmp: Path | None = None
     try:
         with urllib.request.urlopen("https://nodejs.org/dist/index.json", timeout=30) as resp:
             versions = json.loads(resp.read())
@@ -1332,13 +1547,17 @@ def _download_nodejs(target_dir: Path) -> bool:
             shutil.rmtree(node_dir)
         shutil.move(str(extracted), str(node_dir))
 
-        archive.unlink(missing_ok=True)
-        shutil.rmtree(extract_tmp, ignore_errors=True)
+        # M-99②：这里不再各自 unlink/rmtree——清理点收敛到下面的 finally 一处（单一出口）。
+        # 留在原地会形成「成功路径两份清理代码 + 失败路径没有」的形态，失败面正是本条要找的洞。
         print(f"[build] Node.js {version} 已安装到 {node_dir}")
         return True
     except Exception as e:
         print(f"[build] Node.js 下载失败：{type(e).__name__}: {e}")
         return False
+    finally:
+        # 见 _purge_release_temp_files 上方注释：SystemExit（钉定哈希不匹配）穿得过上面的 except，
+        # 只有 finally 能把那一路的残留也一并收掉。
+        _ = _purge_release_temp_files([path for path in (archive, extract_tmp) if path is not None])
 
 
 # full zip 的 ffmpeg 来源表：**按运行时键（<os>-<arch>）一条**，与 _PINNED_RUNTIME_SHA256 的分列口径同构
@@ -1523,9 +1742,14 @@ def _download_ffmpeg(target_dir: Path) -> bool:
     ffmpeg_dir.mkdir(parents=True)
     url = _ffmpeg_source_url()
 
+    # M-99②：本函数在 target_dir（= RELEASE_DIR）里落的临时归档由 finally 统一清理，
+    # 清理点必须在 finally——下面的 except 只捕 Exception，而「归档内缺件」与「钉定哈希不匹配」
+    # 都走 SystemExit，成功路径之外的两条路都留在发布目录里就会被 make_zip 整包打进对外 zip。
+    temp_paths: list[Path] = []
     try:
         if IS_WIN:
             archive = target_dir / "_ffmpeg_temp.zip"
+            temp_paths.append(archive)
             _download_file(url, archive, "ffmpeg (gyan.dev release-essentials)", slot="ffmpeg")
             _install_executables_from_zip(
                 archive,
@@ -1541,6 +1765,7 @@ def _download_ffmpeg(target_dir: Path) -> bool:
             # Apple Silicon 经 Rosetta 2 执行。**不得**再按 machine 拼 arm64 专用 URL——恒 404 且会被
             # 下面的 except 吞成一行 warning，让 full zip 静默缺 ffmpeg。
             archive = target_dir / "_ffmpeg_temp.zip"
+            temp_paths.append(archive)
             _download_file(url, archive, "ffmpeg (evermeet.ca release)", slot="ffmpeg")
             # 归档成员名是 ffmpeg（evermeet 平铺、无扩展名），执行位要显式补回来
             _install_executables_from_zip(
@@ -1556,6 +1781,7 @@ def _download_ffmpeg(target_dir: Path) -> bool:
             # 是好的，缺件要到出包前自检才暴露。列表为空即该平台无需另下。
             for slot, extra_url in sorted(_extra_executable_urls().items()):
                 extra_archive = target_dir / f"_{slot}_temp.zip"
+                temp_paths.append(extra_archive)
                 _download_file(extra_url, extra_archive, f"{slot} (evermeet.ca release)", slot=slot)
                 _install_executables_from_zip(
                     extra_archive,
@@ -1565,19 +1791,20 @@ def _download_ffmpeg(target_dir: Path) -> bool:
                     set_exec_bit=True,
                     required=(slot,),
                 )
-                extra_archive.unlink(missing_ok=True)
 
         else:  # Linux
             archive = target_dir / "_ffmpeg_temp.tar.xz"
+            temp_paths.append(archive)
             _download_file(url, archive, "ffmpeg (BtbN FFmpeg-Builds n9.0)", slot="ffmpeg")
             _extract_linux_ffmpeg_binaries(archive, ffmpeg_dir)
 
-        archive.unlink(missing_ok=True)
         print(f"[build] ffmpeg 已安装到 {ffmpeg_dir}")
         return True
     except Exception as e:
         print(f"[build] ffmpeg 下载失败：{type(e).__name__}: {e}")
         return False
+    finally:
+        _ = _purge_release_temp_files(temp_paths)
 
 
 def _find_runtime_binary(root: Path, names: tuple[str, ...]) -> Path | None:
@@ -1754,6 +1981,9 @@ def make_zip(version: str, suffix: str = "") -> Path:
     if removed:
         print(f"[build] 压缩前已剔除发布目录内的运行期产物：{', '.join(removed)}")
     assert_no_credentials_in_release()
+    # M-99②（2026-10-21）：压缩前再按**实物**查一次临时件残留（下载链的 finally 是第一道）。
+    # 顺序必须在 _zip_release_dir 之前——zip 一旦生成，残留就已经在对外分发的产物里了。
+    _assert_no_release_temp_residue()
     os_tag = {"win32": "windows", "darwin": "macos"}.get(sys.platform, "linux")
     arch = platform.machine().lower()
     # `.zip` 必须与其余段拼进同一个 f-string，**不得**改用 Path.with_suffix(".zip")：版本号本身带点
@@ -1926,6 +2156,65 @@ def smoke_cli(timeout: int = 25) -> None:
 
 
 # 冒烟：启动 Web 后 HTTP 探活首页（IPv4+localhost），能返回即视为面板可用
+@contextlib.contextmanager
+def _loopback_web_host() -> "Iterator[None]":
+    # M-98：把发布目录 config/config.ini 的 [Web] web_host 临时改写为 127.0.0.1，退出时按**原始字节**
+    # 还原。用上下文的理由：冒烟任一步抛错（探活失败 / 进程起不来）时也必须还原，否则发布目录里
+    # 留下被改过的配置，后续 make_zip 会把冒烟用配置打进对外 zip。
+    # 只改 web_host 一行，其余内容（含注释与行尾形态）逐字节保留：本项目 config.ini 是 CRLF 的
+    # 脱敏模板，整份 read_text/write_text 重写会静默转行尾。
+    cfg = RELEASE_DIR / "config" / "config.ini"
+    try:
+        original = cfg.read_bytes()
+    except OSError:
+        # 配置不存在时退回「不做任何覆盖」：此时 Web 冒烟会因护栏拒绝启动而失败，属 fail-closed，
+        # 但不会把风险变成「给面板开无认证 + 0.0.0.0」。
+        print(f"[smoke:web] 未找到 {cfg}，跳过 web_host 覆盖（护栏保持生效）")
+        yield
+        return
+    patched = _force_loopback_web_host(original)
+    if patched is None:
+        print(f"[smoke:web] {cfg} 无 [Web] 节，跳过 web_host 覆盖（护栏保持生效）")
+        yield
+        return
+    try:
+        cfg.write_bytes(patched)
+        yield
+    finally:
+        cfg.write_bytes(original)
+
+
+def _force_loopback_web_host(raw: bytes) -> "bytes | None":
+    # 在 [Web] 节内把 web_host 的值改为 127.0.0.1（有则替换、无则追加到该节末尾）；无 [Web] 节返回 None。
+    # 按行操作而非 configparser 往返：往返会丢注释、把键名小写化、可能改行尾，而这份文件要原样还原。
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    newline = "\r\n" if "\r\n" in text else "\n"
+    lines = text.splitlines(keepends=True)
+    in_web = False
+    insert_at: "int | None" = None
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            if in_web:
+                insert_at = index  # [Web] 节的下一个节头：追加点
+                break
+            in_web = stripped[1:-1].strip().casefold() == "web"
+            if in_web:
+                insert_at = index + 1
+            continue
+        if in_web and "=" in stripped and stripped.split("=", 1)[0].strip().casefold() == "web_host":
+            indent = line[: len(line) - len(line.lstrip())]
+            lines[index] = f"{indent}web_host = 127.0.0.1{newline}"
+            return "".join(lines).encode("utf-8")
+    if not in_web or insert_at is None:
+        return None
+    lines.insert(insert_at, f"web_host = 127.0.0.1{newline}")
+    return "".join(lines).encode("utf-8")
+
+
 def smoke_web(timeout: int = 90, port: int = 8000) -> None:
     # 探测地址同时覆盖 IPv4(127.0.0.1) 与主机名(localhost)：config 默认 web_host=0.0.0.0 时两者均可达；
     # 若 web_host 改为 localhost，macOS 会优先解析为 IPv6(::1)，仅探 IPv4 会误判失败。
@@ -1933,13 +2222,19 @@ def smoke_web(timeout: int = 90, port: int = 8000) -> None:
     # 非应用缺陷）。
     # 用 ProxyHandler({}) 构造「无代理」opener：macOS 上 urllib 默认读系统代理配置（SystemConfiguration），
     # CI runner 的 localhost 请求可能被路由到不存在的代理而挂起，即便服务已正常监听。
-    # 安全护栏（web.py C1）：未启用 Web 认证时拒绝监听非回环地址（config 默认 web_host=0.0.0.0）。冒烟只做
-    # 本地 HTTP 探活、从不真正暴露到局域网，故注入 DOUYIN_WEB_ALLOW_INSECURE=1 放行——这正是该环境变量的
-    # 设计用途；同时保留「真实绑定 0.0.0.0」的验证路径，比把 web_host 改成 127.0.0.1 更能暴露回归。
+    # 安全护栏（web.py C1）：未启用 Web 认证时拒绝监听非回环地址（config 默认 web_host=0.0.0.0）。
+    # M-98（2026-10-21）：原实现注入 DOUYIN_WEB_ALLOW_INSECURE=1 放行，并在注释里声称「从不真正暴露到
+    # 局域网」——该陈述被实测证伪：绑定 0.0.0.0 即对所有网卡可达，自建/长期存活的 CI runner 上，
+    # 这最长 90 秒的窗口内任何人都能以**无认证**身份读写全部配置、遍历 downloads、启停录制。
+    # 改为把本次冒烟的配置**显式覆盖为回环地址**（而不是关掉护栏）：护栏保持生效，探活仍走 127.0.0.1，
+    # 且能验证真实启动路径。做法是临时改写发布目录 config/config.ini 的 [Web] web_host，冒烟后按
+    # 字节还原（不改变发布物内容）；写失败时退回「不注入任何变量」——此时 GUI/CLI 冒烟不受影响，
+    # Web 冒烟会因护栏拒绝启动而失败，属可接受的 fail-closed。
     exe = RELEASE_DIR / f"{APP_NAME}-Web{EXE_SUFFIX}"
     hosts = ("127.0.0.1", "localhost")
     print(f"[smoke:web] 启动 {exe}，探活 http://127.0.0.1:{port}/（最长 {timeout}s）...")
-    proc = _launch(exe, extra_env={"DOUYIN_WEB_ALLOW_INSECURE": "1"})
+    with _loopback_web_host():
+        proc = _launch(exe)
     ok = False
     start = time.time()
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))

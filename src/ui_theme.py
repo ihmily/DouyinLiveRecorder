@@ -26,7 +26,7 @@ import sys
 import tkinter as tk
 from pathlib import Path
 from tkinter import ttk
-from typing import Any, cast, final
+from typing import Any, Final, cast, final
 
 from src.config_read import tolerant_config_parser
 from src.ui_scale import (
@@ -215,6 +215,11 @@ def contrast_ratio(fg: str, bg: str) -> float:
     lighter = max(lum_fg, lum_bg)
     darker = min(lum_fg, lum_bg)
     return (lighter + 0.05) / (darker + 0.05)
+
+
+# 变体按钮悬停/按下的压暗比例（唯一取值点）。裸写 0.18 六处的读者无法判断它是不是
+# 同一份口径；提为具名常量后「悬停色偏深一点」只剩一个落点（L-02 / L-05）。
+_HOVER_SHADE_RATIO: Final[float] = 0.18
 
 
 def _shade(color: str, ratio: float) -> str:

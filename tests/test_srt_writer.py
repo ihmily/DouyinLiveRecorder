@@ -6,9 +6,17 @@
 #   ① MIN-24①：句柄缺失后的「节流重试开片」必须在生成字幕条目**之前**完成——
 #      _open_segment() 会重置 _index/_last_end，旧顺序（先拼行后重试）会让同一个 .srt
 #      里出现重复/非单调块号，而 SRT 规范要求块序号递增；
-#   ② 注入清洗（换行 / "-->"）与片内时间轴钳制两项既有保证不得被上述改动破坏。
+#   ② 注入清洗（换行 / "-->"）与片内时间轴钳制两项既有保证不得被上述改动破坏；
+#   ③ M-58①：被丢弃（句柄缺失）的条目不得占用块号——本文件既有的注释承诺
+#      「序号也不会被凭空跳大」，实现必须与之相符（审查 L-10：注释声明强于实现）；
+#   ④ M-58②：时间轴基准缺失的守卫必须是显式判空 + warning + 丢弃，不能是 assert
+#      （`python -O` 下 assert 整条被剥掉，生产路径等于没有守卫）。
 
+import time
 from pathlib import Path
+
+import pytest
+from loguru import logger
 
 from src.srt_writer import SrtWriter
 
@@ -21,6 +29,19 @@ def _block_numbers(content: str) -> list[int]:
         if stripped.isdigit():
             numbers.append(int(stripped))
     return numbers
+
+
+def _warn_capture() -> tuple[list[str], int]:
+    # 返回 (消息列表, handler id)；调用方负责在 finally 里 logger.remove(handler_id)
+    captured: list[str] = []
+    handler_id = logger.add(lambda msg: captured.append(str(msg)), level="WARNING", format="{message}")
+    return captured, handler_id
+
+
+def _ensure_started_noop(_now: float) -> None:
+    # M-58② 用例的故障注入：把「兜底锚定 T0」换成 no-op，好让 _t0 为空这一内部状态故障形态
+    # 真的走到守卫那一步。签名与 SrtWriter._ensure_started(self, now) 的绑定形态一致（只需收 now）。
+    return None
 
 
 def test_retry_open_happens_before_line_generation(tmp_path: Path) -> None:
@@ -103,3 +124,57 @@ def test_injection_sanitizing_and_in_segment_clamp_unchanged(tmp_path: Path) -> 
     assert _block_numbers(content) == [1]
     # end 钳制到片边界（start=0.5，display_duration=5 → 仍不超过 2.0）
     assert "00:00:00,500 --> 00:00:02,000" in content
+
+
+def test_dropped_entry_does_not_burn_a_block_number(tmp_path: Path) -> None:
+    # M-58① 回归锁：旧形态在拼行之前无条件 self._index += 1，句柄缺失被丢弃的条目照样占用块号，
+    # 与本文件既有注释「重试仍失败则本条按原逻辑丢弃……序号也不会被凭空跳大」的承诺相反。
+    # 后果是「注释声明强于实现」（审查 L-10 同条），且丢弃与重新开片之间不经过 _open_segment
+    # （节流窗口内的连续丢弃）时，恢复后的首块号会从跳大后的值继续、片内块号出现空洞。
+    # 判据同时取两处：① 内部计数器 _index 在丢弃后不得增长；② 恢复写入后文件里块号从 1 连续。
+    gone = tmp_path / "gone"
+    writer = SrtWriter(base_filename=str(gone / "live"), segment_seconds=None)
+    writer.start(now=0.0)
+    assert writer._fp is None
+
+    # 第一次写入会真去重试开片（失败），后续两条落在节流窗口内、只丢弃
+    writer.write("用户", "弹幕1", now=1.0)
+    writer._last_open_attempt = time.monotonic()
+    writer.write("用户", "弹幕2", now=2.0)
+    writer.write("用户", "弹幕3", now=3.0)
+    assert writer._index == 0, "被丢弃的条目占用了块号（M-58① 回归）"
+
+    gone.mkdir()
+    writer._last_open_attempt = 0.0
+    writer.write("用户", "弹幕4", now=4.0)
+    writer.write("用户", "弹幕5", now=5.0)
+    writer.close()
+
+    numbers = _block_numbers((gone / "live.srt").read_text(encoding="utf-8"))
+    assert numbers == [1, 2], f"恢复后块号不从 1 连续: {numbers}"
+
+
+def test_missing_timeline_anchor_warns_and_returns_without_raising(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # M-58② 回归锁：生产路径不得用 assert 守判据。`assert self._t0 is not None` 在
+    # python -O / PYTHONOPTIMIZE 下整条被剥掉，紧随其后的 now - self._t0 对 None 做减法抛
+    # TypeError，而调用方是采集线程的 SRT 写循环 —— 抛出会把写线程带崩（句柄与待写队列双泄漏）。
+    # 现在要求：显式判空 + 一条 warning + 正常返回（不外抛、不写盘、不占用块号）。
+    # 旧形态下本用例以 AssertionError 失败（pytest 不带 -O 跑，断言仍在）；改回 assert 即转红。
+    writer = SrtWriter(base_filename=str(tmp_path / "live"), segment_seconds=None)
+    writer.start(now=0.0)
+    assert writer._fp is not None
+    # 造出「_ensure_started 之后 _t0 仍为空」的内部状态故障形态：只把**这个实例**的兜底初始化
+    # 换成 no-op（实例属性遮蔽绑定方法），不 patch 类，避免波及同会话其它写入器。
+    monkeypatch.setattr(writer, "_ensure_started", _ensure_started_noop)
+    writer._t0 = None
+
+    captured, handler_id = _warn_capture()
+    try:
+        writer.write("用户", "弹幕", now=1.0)
+    finally:
+        logger.remove(handler_id)
+    assert writer._index == 0, "T0 缺失时仍走完了写路径"
+    assert len(captured) == 1, f"应恰好留一条 warning: {captured}"
+    assert "SRT" in captured[0], captured[0]

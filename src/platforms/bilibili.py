@@ -39,7 +39,9 @@ def _bili_danmaku_host_allowed(host: str) -> bool:
     # 判定弹幕服务器 host 是否落在 B站官方域名族内。用「精确等于或 . 后缀」而非裸 endswith，
     # 防 evil-bilibili.com / notbilibili.com 这类后缀伪装被放行。空/带端口/带 path 一律拒绝。
     name = (host or "").strip().lower()
-    if not name or "/" in name or ":" in name:
+    # S-06：`?`/`#` 也必须排除。`evil.com?.bilibili.com` 能通过下方后缀判定，而 urlsplit 会把 `?`
+    # 之后整段当 query、真实连接目标是 evil.com（`#` 形态同理）——判据必须与解析器同口径。
+    if not name or "/" in name or ":" in name or "?" in name or "#" in name or "@" in name or "\\" in name:
         return False
     return any(name == suffix or name.endswith("." + suffix) for suffix in _BILI_DANMAKU_ALLOWED_HOST_SUFFIXES)
 

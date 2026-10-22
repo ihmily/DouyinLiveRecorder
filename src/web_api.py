@@ -47,6 +47,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import configparser
 import inspect
 import json
@@ -72,8 +73,18 @@ from starlette.staticfiles import StaticFiles
 # 稳定机器码 detail（如 "unauthorized" / "rate_limited" / "host_not_allowed"）是前端契约，刻意不经 tr。
 import i18n as i18n_module
 from src.logger import logger
+from src.ui_icons import (
+    WEB_ICON_KEY,
+    WEB_SECTION,
+    current_icon_path,
+    install_icon_bytes,
+    load_icon_preference,
+    save_icon_preference,
+    validate_icon_bytes,
+)
 from src.web_models import (
     ConfigUpdate,
+    IconUpload,
     LanguageUpdate,
     LoginRequest,
     QualityOptionsUpdate,
@@ -100,6 +111,7 @@ _BODY_MODELS = {
     RecordingToggle,
     ConfigUpdate,
     LanguageUpdate,
+    IconUpload,
 }
 
 # 查询参数的默认值与上下界，复刻 FastAPI Query(default, ge=, le=) 的契约。
@@ -122,13 +134,26 @@ _JSON_BODY_MAX_BYTES = 1 * 1024 * 1024
 async def _read_json_body(request: Request) -> object:
     # 解析 JSON 请求体；非法/空体统一转 422（对齐旧 pydantic 的 422 契约）。
     # 仅当端点有模型参数时适配器才会调用，GET/无 body 端点不会走到这里。
-    # L-30：Content-Length 缺失（chunked 传输）时不拦——保守启发式，只挡「声明了超大体积」
-    # 的低成本放大面；逐字节读入后的上限由 Starlette 的流式读取与调用方超时兜底。
+    # L-30：Content-Length 预检保留（快速失败）。M-60（2026-10-21）：原句「Content-Length 缺失
+    # （chunked）时不拦、上限由 Starlette 流式读取兜底」已被证伪——request.json() 会把无上限的
+    # chunked 流整体物化进内存，没有任何一层替本函数限量。现改为 request.stream() 逐块计量，
+    # 上限在无 Content-Length 时同样成立；超限沿用预检同一 413 出口与「请求体过大」msgid，
+    # 不新增目录键
     content_length = request.headers.get("content-length", "")
     if content_length.isdigit() and int(content_length) > _JSON_BODY_MAX_BYTES:
         raise HTTPException(status_code=413, detail=i18n_module.tr("请求体过大"))
     try:
-        return await request.json()
+        chunks: list[bytes] = []
+        total = 0
+        async for chunk in request.stream():
+            total += len(chunk)
+            if total > _JSON_BODY_MAX_BYTES:
+                raise HTTPException(status_code=413, detail=i18n_module.tr("请求体过大"))
+            chunks.append(chunk)
+        return json.loads(b"".join(chunks))
+    except HTTPException:
+        # 超限的 413 不得被下面的 except Exception 退成 422——两条出口的语义不同
+        raise
     except Exception:
         raise HTTPException(status_code=422, detail=i18n_module.tr("请求体不是合法 JSON"))
 
@@ -245,7 +270,11 @@ _LOGIN_FAILURE_WINDOW = 300.0
 # （本机反代下 XFF 可伪造时尤其明显）；Docker 端口映射把所有真实用户的 client.host 收敛成网关地址，
 # 5 次失败即把所有人锁在登录页外。全局预算只封顶「整站每秒能承受多少次口令校验」、与键粒度无关，
 # 故既压住爆破吞吐，又不会因单键聚合而误伤合法用户到 5 次。
-_GLOBAL_LOGIN_FAILURES: deque[float] = deque(maxlen=512)
+# M-59（2026-10-21）：条目带来源 (失败时刻, client_ip)——纯时间戳形态下「成功登录回收自身份额」
+# 无从谈起，持续打错密码会让全局预算把**所有**合法用户 429 在门外直到窗口滑完（旧口径见 login
+# 成功分支注释的 [历史注]）。判定与预算语义不变：仍是跨来源合计 40 次/300 秒，只多了按来源回收
+# 自己那部分的能力；窗口滑出回收逻辑逐字不变
+_GLOBAL_LOGIN_FAILURES: deque[tuple[float, str]] = deque(maxlen=512)
 _LOGIN_GLOBAL_MAX_FAILURES = 40
 
 # ─── MIN-2245：免鉴权端点的 per-IP 预算 ─────────────────────────
@@ -256,6 +285,10 @@ _LOGIN_GLOBAL_MAX_FAILURES = 40
 # 封顶只为挡单点放大；Docker 端口映射下所有真实用户收敛到同一网关地址，全局预算会集体误伤。
 _PUBLIC_BUDGET_WINDOW = 60.0
 _PUBLIC_BUDGET_MAX = 240
+# M-67（2026-10-21）：键集合上限，同 _DENIED_HOSTS_SEEN_MAX 的形态——上面的窗口回收只清
+# 「最后一条已出窗」的键，持有 IPv6 /32 前缀的攻击者以窗内频率轮换源地址即可让 dict 无界增长；
+# 到限整表清空（预算重置）换取有界内存，本预算只为压单点放大，接受这一宽松化
+_PUBLIC_BUDGET_MAX_KEYS = 64
 _PUBLIC_BUDGET_PATHS = frozenset(("/api/auth/status", "/health"))
 _PUBLIC_BUDGET: dict[str, deque[float]] = {}
 _PUBLIC_BUDGET_LOCK = threading.Lock()
@@ -271,6 +304,9 @@ def _public_endpoint_over_budget(client_ip: str) -> bool:
             _PUBLIC_BUDGET.pop(stale_ip, None)
         hits = _PUBLIC_BUDGET.get(client_ip)
         if hits is None:
+            # M-67：新键入库前先查键数上限（回收后的残余仍无界增长的那条路在这里封死）
+            if len(_PUBLIC_BUDGET) >= _PUBLIC_BUDGET_MAX_KEYS:
+                _PUBLIC_BUDGET.clear()
             hits = deque(maxlen=_PUBLIC_BUDGET_MAX + 8)
             _PUBLIC_BUDGET[client_ip] = hits
         while hits and now - hits[0] > _PUBLIC_BUDGET_WINDOW:
@@ -282,9 +318,19 @@ def _public_endpoint_over_budget(client_ip: str) -> bool:
 
 
 # 危险配置键黑名单：允许通过 Web 修改等价于远程命令执行，任何认证状态下都禁止写入
-_DANGEROUS_CONFIG_KEYS = {"自定义脚本执行命令"}
+# M-64（2026-10-21）：增列三项——①「是否录制完成后执行自定义脚本」是黑名单命令的启用位，
+# 不列入则翻转它即把已存在的脚本命令激活，黑名单被旁路一半（录后脚本经 notify.py 直接进 shell）；
+# ② web_trusted_proxy 决定 XFF 是否可信（登录限流按此分桶，写入即换限流键，M-59 的绕过面）；
+# ③ web_allowed_hosts 决定哪些 Host/Origin 能驱动写接口（MID-36 的重绑定名单）。
+# 刻意仍维持黑名单口径：改白名单会打死 [录制设置] 全节的正常面板编辑，属另一项待批准改造
+_DANGEROUS_CONFIG_KEYS = {
+    "自定义脚本执行命令",
+    "是否录制完成后执行自定义脚本",
+    "web_trusted_proxy",
+    "web_allowed_hosts",
+}
 # casefold 后的黑名单（C-1 加固）：行匹配大小写不敏感（re.IGNORECASE），黑名单判定须同等强度，
-# 防止 ASCII 危险键的大小写变体绕过（当前集合为中文键，casefold 幂等）
+# 防止 ASCII 危险键的大小写变体绕过（当前集合含 ASCII 键 web_*，本折叠集自 M-64 起不再是幂等摆设）
 _DANGEROUS_CONFIG_KEYS_FOLDED = {k.casefold() for k in _DANGEROUS_CONFIG_KEYS}
 
 # 房间列表写入互斥锁：序列化「查重 + 追加」的 TOCTOU 窗口，
@@ -300,6 +346,10 @@ _LOGS_ERROR_CODE = "logs_unavailable"
 _DANMAKU_ERROR_CODE = "danmaku_unavailable"
 _ROOM_DELETE_ERROR_CODE = "room_delete_failed"
 _ROOM_UPDATE_ERROR_CODE = "room_update_failed"
+# M-61（2026-10-21）：PUT /api/rooms/qualities 写失败此前把 app.state.config_file 的绝对路径
+# 拼进 500 detail（全文唯一一处 MID-39 违例，认证关闭时对局域网泄露安装路径）。改为固定 code
+# 对外，路径只经 _log_internal_error 进内部日志
+_QUALITY_WRITE_ERROR_CODE = "quality_write_failed"
 _HOST_DENIED_DETAIL = "host_not_allowed"
 
 # ─── MID-2234：web_token_expiry 的目标态夹取 ─────────────────────────────────
@@ -475,6 +525,41 @@ def _read_app_version() -> str:
 
 
 _APP_VERSION = _read_app_version()
+
+
+# M-60（2026-10-21）：日志尾读的字节预算。旧实现 `deque(f, maxlen=lines)` 的 maxlen 只限制
+# **保留条数**——数百 MB 的 streamget.log 仍被逐行读完；本端点是同步 def、占 anyio 线程池
+# （默认 40 槽）一格，几条并发轮询即可耗尽线程池、拖死整个面板。改为从 EOF 反向按块读，
+# 成本 O(max_bytes) 而非 O(文件大小)
+_LOG_TAIL_MAX_BYTES = 1024 * 1024
+_LOG_TAIL_CHUNK_BYTES = 64 * 1024
+
+
+def _read_log_tail(log_file: str, lines: int, max_bytes: int) -> list[str]:
+    # seek 到 EOF 后按块回退，攒够 lines+1 个换行（多一个的余量给被截断的首行）或读完字节预算即停。
+    # 窗口起点若落在行中间（pos>0 且前一字节不是 \n/\r），首行是不完整碎片，整行丢弃——宁可少给
+    # 一行，也不把半截 UTF-8 序列渲染成乱码（errors="ignore" 已兜住残字节）
+    data = b""
+    newlines = 0
+    with open(log_file, "rb") as f:
+        pos = f.seek(0, os.SEEK_END)
+        read_bytes = 0
+        while pos > 0 and read_bytes < max_bytes and newlines < lines + 1:
+            step = min(_LOG_TAIL_CHUNK_BYTES, pos, max_bytes - read_bytes)
+            pos -= step
+            f.seek(pos)
+            block = f.read(step)
+            data = block + data
+            read_bytes += len(block)
+            newlines += block.count(b"\n")
+        head_complete = True
+        if pos > 0:
+            f.seek(pos - 1)
+            head_complete = f.read(1) in (b"\n", b"\r")
+    out = data.decode("utf-8", errors="ignore").splitlines()
+    if not head_complete and out:
+        out = out[1:]
+    return out[-lines:] if lines > 0 else []
 
 
 def create_app(
@@ -676,7 +761,8 @@ def create_app(
         now = time.time()
         with _FAILED_LOGINS_LOCK:
             # MID-35：先过与来源地址无关的全局失败预算（键可被换、预算换不掉）
-            while _GLOBAL_LOGIN_FAILURES and now - _GLOBAL_LOGIN_FAILURES[0] > _LOGIN_FAILURE_WINDOW:
+            # M-59：条目为 (时刻, 来源)，滑窗回收按 [0] 取时刻
+            while _GLOBAL_LOGIN_FAILURES and now - _GLOBAL_LOGIN_FAILURES[0][0] > _LOGIN_FAILURE_WINDOW:
                 _ = _GLOBAL_LOGIN_FAILURES.popleft()
             if len(_GLOBAL_LOGIN_FAILURES) >= _LOGIN_GLOBAL_MAX_FAILURES:
                 raise HTTPException(429, i18n_module.tr("登录失败次数过多，请稍后再试"))
@@ -715,12 +801,20 @@ def create_app(
         if not verify_web_password(req.password.strip(), cast(str, cfg["web_password"])):
             with _FAILED_LOGINS_LOCK:
                 _FAILED_LOGINS.setdefault(client_ip, []).append(time.time())
-                _GLOBAL_LOGIN_FAILURES.append(time.time())
+                _GLOBAL_LOGIN_FAILURES.append((time.time(), client_ip))
             raise HTTPException(401, i18n_module.tr("密码错误"))
-        # 登录成功：清零该 IP 的失败计数（全局预算不回收——它是「整站口令校验吞吐」的
-        # 上限，按成功回收就又给了「拿真实账号登录一次即重置预算」的绕法）
+        # 登录成功：清零该 IP 的失败计数，并回收该来源在全局预算中的份额。
+        # [历史注] 旧口径「全局预算不回收（回收即给了拿真实账号登录一次重置预算的绕法）」已被
+        # M-59（2026-10-21）证伪：它把「持续打错密码 → 所有合法用户 429 到窗口滑完」当成可接受
+        # 代价。现只回收 **client_ip 自己** 贡献的条目，其它来源的失败照记——攻击者无法借自己的
+        # 成功登录清空别人挣出的预算，跨来源合计上限仍然成立；来源键伪造面由 _get_client_ip 的
+        # trusted-proxy 收口兜住（M-59 明确本轮不动该派生）。预算已打满时成功登录同样先吃 429
+        # （判定在验密之前），恢复窗口即 300 秒滑出，属已接受的下界
         with _FAILED_LOGINS_LOCK:
             _FAILED_LOGINS.pop(client_ip, None)
+            _kept = [entry for entry in _GLOBAL_LOGIN_FAILURES if entry[1] != client_ip]
+            _GLOBAL_LOGIN_FAILURES.clear()
+            _GLOBAL_LOGIN_FAILURES.extend(_kept)
         token = secrets.token_urlsafe(32)
         # MID-2234：生效值走夹取（见 _clamp_token_expiry 注释）。expires_in 回**生效值**而非原始配置值，
         # 否则前端按配置值算的到期倒计时与实际令牌寿命不一致。
@@ -899,8 +993,11 @@ def create_app(
             except FileNotFoundError:
                 _is_fresh_file = True  # 尚不存在：由本次追加建文件，须带文件头 BOM
             except OSError:
-                # 被锁/权限异常：交给下面的写入本身报错，此处不改变语义、也不猜 BOM
-                pass
+                # 被锁/权限异常：交给下面的写入本身报错，也不猜 BOM（_is_fresh_file 保持 False）。
+                # M-63（2026-10-21）：但 _needs_newline 必须保守置 True——Windows 上录制进程正持有
+                # URL_config.ini 时 sharing violation 属常态，旧分支判不出末字节仍按「有换行」追加，
+                # 恰好重开 MIN-2242 的「新房间粘上末行、两个房间同时坏掉」；补一个多余 \n 无害
+                _needs_newline = True
             # MIN-2242：BOM 只在「文件为空/尚不存在」时写一次，追加改用不带 sig 的 utf-8。
             # TextIOWrapper 在 "a" 模式下只有写位为 0 时才真落下 BOM，但该行为依赖 CPython 的
             # seek-to-end 细节（未文档化）；本仓 .ini 约定是「文件头一个 BOM、行内零 BOM」，
@@ -1064,10 +1161,10 @@ def create_app(
         # M-30：写失败不能再返回 {"ok": true}。write_quality_options 在 config.ini 缺失 / 节缺失 /
         # 原子写失败时返回 None——旧实现丢弃写结果，前端显示「已保存」而磁盘未变。
         if options is None:
-            raise HTTPException(
-                500,
-                i18n_module.tr("写入配置文件失败（已保留原文件）: {err}", err=cast(str, app.state.config_file)),
-            )
+            # M-61（2026-10-21）：detail 用固定 code，绝对路径只经 _log_internal_error 进日志
+            # （旧写法把 config_file 拼进 tr 模板，是本文件唯一一处 MID-39「对外不回显内部路径」违例）
+            _log_internal_error(f"{_QUALITY_WRITE_ERROR_CODE} config_file={cast(str, app.state.config_file)}")
+            raise HTTPException(500, _QUALITY_WRITE_ERROR_CODE)
         return {"ok": True, "options": options}
 
     @_route(app, ["GET"], "/api/config")
@@ -1375,7 +1472,10 @@ def create_app(
         target = os.path.realpath(os.path.join(root, path))
         if not _is_within(target, root) or not os.path.isfile(target):
             raise HTTPException(400, i18n_module.tr("非法路径或文件不存在"))
-        return FileResponse(target, filename=os.path.basename(target))
+        # M-67（2026-10-21）：磁盘文件名过去原样交给 FileResponse(filename=...) 拼进
+        # Content-Disposition——Linux 文件名可含 CR/LF/引号，足以注入额外响应头或撕裂
+        # quoted-string（Windows 命名规则恰好挡得住，属「靠平台侥幸」而非防护）
+        return FileResponse(target, filename=_safe_download_filename(os.path.basename(target)))
 
     @_route(app, ["GET"], "/api/logs")
     def get_logs(lines: int = 200) -> dict[str, list[str]]:
@@ -1383,9 +1483,8 @@ def create_app(
         if not os.path.isfile(log_file):
             return {"lines": cast(list[str], [])}
         try:
-            with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
-                tail = deque(f, maxlen=lines)
-            return {"lines": list(tail)}
+            # M-60：反向按块读尾（见 _read_log_tail），不再整文件逐行物化
+            return {"lines": _read_log_tail(log_file, lines, _LOG_TAIL_MAX_BYTES)}
         except Exception as e:
             # MID-39：日志文件被占用/权限异常时 str(e) 带安装绝对路径，旧实现把它塞进 detail 并被
             # 前端弹成 toast——对局域网泄露路径。对外只给固定 code，细节进日志（面板仍能看到失败）。
@@ -1406,6 +1505,50 @@ def create_app(
             # MID-39：error 字段同 /api/status 口径，只给 code 不回显内部异常原文
             _log_internal_error(_DANMAKU_ERROR_CODE, e, level="warning")
             return {"rooms": [], "messages": [], "last_seq": since, "truncated": False, "error": _DANMAKU_ERROR_CODE}
+
+    # ===== 图标（面板标签 / Web 托盘）=====
+    # 两个出口共用 ui_icons.current_icon_path 这一个解析点：分开各写一遍就会出现「标签换了、
+    # 托盘没换」这种一半生效的现象。
+    @_route(app, ["POST"], "/api/icon")
+    def upload_icon(body: IconUpload) -> dict[str, object]:
+        # 面板上传 ICO 图标。
+        # [为什么走 base64 JSON 而不是 multipart] python-multipart 已于 2026-10-20 摘除
+        # （Starlette 只在 Request.form() 内部 import 它，全仓无 .form() 调用点），为一条上传接口
+        # 把整条依赖拖回运行时清单不划算。JSON 体的额外好处是「体积上限」校验能落在**解码之后、
+        # 落盘之前**这一处，与 GUI 侧「导入图标…」共用 ui_icons 的同一份判据（不会两处各判一套）。
+        # 同步 def：base64 解码 + 落盘 + 配置写回全是阻塞 IO，走线程池（MID-34 同口径）。
+        config_file = cast(str, app.state.config_file)
+        try:
+            raw = base64.b64decode(body.data, validate=True)
+        except Exception:
+            raise HTTPException(status_code=422, detail="bad_base64")
+        check = validate_icon_bytes(raw)
+        if not check.ok:
+            # 400 而非 422：语法层没问题，是内容不合格。detail 回**机器码**（前端按码取文案），
+            # 与 unauthorized / rate_limited 同一条「稳定机器码即前端契约」的口径。
+            raise HTTPException(status_code=400, detail=check.code or "not_ico")
+        # app_root = config.ini 的上两级，与 GUI 侧 app_root 同义：两个入口的 config/icons/ 是
+        # 同一个目录，面板上传的图标桌面端下次启动也能直接用。
+        target = install_icon_bytes(raw, Path(config_file).parent.parent, body.name)
+        if target is None:
+            raise HTTPException(status_code=500, detail="write_failed")
+        persisted = save_icon_preference(config_file, WEB_SECTION, WEB_ICON_KEY, str(target))
+        return {"ok": True, "path": str(target), "code": check.code, "persisted": persisted}
+
+    @_route(app, ["GET"], "/favicon.ico")
+    def favicon() -> Response:
+        # 浏览器标签图标。免鉴权（中间件白名单已放行）：标签页的 favicon 请求不带 Bearer，
+        # 不放行就变成「开了认证就没有图标」，而它只是个装饰资源。
+        # 没有可用图标时回 404 而不是空 200：浏览器对 404 的处理是「用默认图标」，与未配置等价；
+        # 空 200 反而会被缓存成一个坏图标，之后即使导入了也刷不掉。
+        config_file = cast(str, app.state.config_file)
+        configured = load_icon_preference(config_file, WEB_SECTION, WEB_ICON_KEY)
+        resolved = current_icon_path(Path(config_file).parent.parent, configured)
+        if resolved is None:
+            raise HTTPException(status_code=404, detail="not_found")
+        # no-cache：图标可被用户随时替换，让浏览器每次回源（前端另加时间戳参数破缓存，
+        # 这里是给「直接访问 /favicon.ico」的场景兜底）。
+        return FileResponse(str(resolved), media_type="image/x-icon", headers={"Cache-Control": "no-cache"})
 
     # ===== 静态资源 =====
     if _WEB_DIR.exists():
@@ -1479,6 +1622,11 @@ async def _get_status_snapshot() -> tuple[dict[str, object], bool]:
     # 注：3.11 起 asyncio.TimeoutError 即内建 TimeoutError，故只捕一个（本仓下限 3.14）。
     global _status_inflight, _status_inflight_since
     now = time.monotonic()
+    # M-66（2026-10-21）：租约令牌就在下面的临界区里赋给 _status_inflight_since，其值即 now；
+    # 传出时**直接复用 now**，不再「释锁后另起一段持锁从全局读回」。旧写法在两步之间若正好
+    # 跨过租约到期，第二个采样会把 _status_inflight_since 覆盖成自己的 now，第一个采样读回的
+    # fetch_since 就变成第二位的令牌 → 两个在飞采样共享同一令牌、任一回程即开门（单飞退化）
+    fetch_since = now
     with _status_lock:
         cached, cached_at = _status_cache, _status_cache_at
         if cached is not None and (now - cached_at) < _STATUS_TTL_SECONDS:
@@ -1492,8 +1640,6 @@ async def _get_status_snapshot() -> tuple[dict[str, object], bool]:
     fallback: dict[str, object] = cached if cached is not None else {"error": _STATUS_ERROR_CODE}
     if inflight:
         return fallback, True
-    with _status_lock:
-        fetch_since = _status_inflight_since
     try:
         snapshot = await asyncio.wait_for(asyncio.to_thread(_status_worker, fetch_since), _STATUS_WAIT_SECONDS)
         return snapshot, False
@@ -1586,3 +1732,17 @@ def _is_within(child: str, parent: str) -> bool:
         return os.path.commonpath([child, parent]) == parent
     except ValueError:
         return False
+
+
+# M-67（2026-10-21）：Content-Disposition 文件名净化。CR/LF 会撕裂响应头（跨平台部署时
+# Starlette 不再替我们把住 Windows 命名规则的关），引号会闭合 quoted-string、控制字符不可打印。
+# 反斜杠一并剥除以免与转义混淆。全 ASCII 之外的字节交给 FileResponse 自己按 RFC 5987 出 filename*
+# 形态——本层不猜、不做二次编码，只保证进入 quoted-string 的裸名不携带分隔/控制字符
+_UNSAFE_FILENAME_RE = re.compile(r'[\r\n"\'\\\x00-\x1f\x7f]')
+
+
+def _safe_download_filename(name: str) -> str:
+    # 剥除 CR/LF/引号/反斜杠/控制字符；净化后为空则回落占位名，避免 filename="" 让
+    # Content-Disposition 退化成无文件名的下载（浏览器落到目录名，用户拿不到可辨文件）
+    cleaned = _UNSAFE_FILENAME_RE.sub("", name).strip()
+    return cleaned or "download"

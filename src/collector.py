@@ -142,7 +142,14 @@ class DanmakuCollector:
             try:
                 self._srt.start()
             except Exception as e:
-                logger.warning(i18n.tr("[弹幕采集]SRT 初始化失败(继续尝试写弹幕): {e}", e=e))
+                # 2026-10-21 M-41（同族补漏，报告未逐条列举）：SRT 初始化失败的异常文本同样
+                # 内嵌 base_filename 路径（可含主播名）与 OSError 的 strerror，进轮转日志前一律过码。
+                logger.warning(
+                    i18n.tr(
+                        "[弹幕采集]SRT 初始化失败(继续尝试写弹幕): {e}",
+                        e=utils.mask_credentials(str(e)),
+                    )
+                )
             # 启动 SRT 写盘守护线程：把 (user, msg, now) 从队列取出再写盘，保证 _on_message
             # 在事件循环里只做 O(1) 入队、不阻塞 ws 接收。线程**先建后 start、start 成功才留引用**：
             # 旧写法赋值紧跟 .start()，一旦 start 抛（实测可达形态 RuntimeError: can't start new
@@ -283,6 +290,22 @@ class DanmakuCollector:
                     )
         if self._thread is not None:
             self._join_thread(self._thread, timeout)
+            # 2026-10-21 M-38：join 带 timeout 时**超时是静默返回**，旧代码不复查存活就继续收尾，
+            # 卡死的采集线程（连同它的事件循环、平台 WS 连接与监控枢纽里的房间条目）从此无人知晓——
+            # 用户侧表现只有「弹幕不再更新」，日志里一条线索都没有。与下面 SRT 写线程侧的
+            # is_alive 判据同构（那条早就有，唯独这支漏了）。
+            # 判定必须放在 _join_thread 之后、srt.close() 之前：本方法**不**改写 _srt.close() 的
+            # 调用顺序（MID-24 契约：sentinel 失败也必须走到 close，否则录制并发槽永久泄漏，
+            # 由 tests/test_collector.py::test_monitor_hub_and_writer_thread_survive_full_queue 钉住）。
+            if self._thread.is_alive():
+                detail = f"{self._cls_name} capture thread still alive after join(timeout={timeout}s)"
+                logger.warning(
+                    i18n.tr(
+                        "停止流程收尾异常: {type_name}: {err}",
+                        type_name="ThreadStillAlive",
+                        err=utils.mask_credentials(detail),
+                    )
+                )
         # SRT 写线程收尾：sentinel 通知消费者排空队列后退出，join 超时降级为「未排空也关文件」，
         # 避免 srt.close() 之前还有未刷盘的弹幕丢失（保留 flush-on-close 的兜底）。
         if self._srt_writer is not None and self._srt is not None:
@@ -335,7 +358,9 @@ class DanmakuCollector:
                             "[弹幕采集]{where} 异常(忽略): {type_name}: {e}",
                             where="danmaku.stop",
                             type_name=type(e).__name__,
-                            e=e,
+                            # M-41 残留（2026-10-21）：平台 WS 关闭异常的文本同样带连接 URL 与鉴权参数，
+                            # 与同函数另一处 danmaku.start 分支及 base.py 的 _log_task_exception 同口径。
+                            e=utils.mask_credentials(str(e)),
                         )
                     )
             # MIN-23 修复：旧实现直接 loop.stop()，danmaku.start() 的任务此刻多半仍 pending——
@@ -423,21 +448,43 @@ class DanmakuCollector:
                 if self._start_task is not None and self._start_task.cancelled():
                     pass
                 else:
+                    # 2026-10-21 M-41：{e} 位一律传脱敏后的字符串（异常对象由 loguru 就地 str()，
+                    # 平台 SDK 的异常文本常内嵌带 token 的 ws/流地址）。msgid 不变。
                     logger.warning(
                         i18n.tr(
                             "[弹幕采集]{cls_name} 运行异常,不影响录制: {e}",
                             cls_name=self._cls_name,
-                            e=e,
+                            e=utils.mask_credentials(str(e)),
                         )
                     )
             except Exception as e:
+                # 2026-10-21 M-41：同上一条，msgid 保持不变。
                 logger.warning(
                     i18n.tr(
                         "[弹幕采集]{cls_name} 运行异常,不影响录制: {e}",
                         cls_name=self._cls_name,
-                        e=e,
+                        e=utils.mask_credentials(str(e)),
                     )
                 )
+        except Exception as e:
+            # 2026-10-21 M-40：平台类**构造期**与回调注入（下方 only_fans 透传）此前裸奔在
+            # finally 之外——只有 danmaku.start() 那一段受保护，构造一抛就逃出守护线程：
+            # 线程带 traceback 消失（无控制台进程里连 traceback 都没有），而监控枢纽条目仍停在
+            # started、面板显示「采集中」直到录制结束。这里补外层 except：记脱敏异常 + 主动把
+            # 房间上报为已关闭，收尾仍交给原有 finally（loop.close() 与 _loop 置空的位置不动）。
+            # _stop_called 守卫：stop() 入口已经调过 hub.room_closed()，此时再报一次会在边车里
+            # 留两条重复 closed 事件（面板计数虚增），故只在「线程自己出错」这条路径上补报。
+            logger.warning(
+                i18n.tr(
+                    "[弹幕采集]{cls_name} 运行异常,不影响录制: {e}",
+                    cls_name=self._cls_name,
+                    e=utils.mask_credentials(f"{type(e).__name__}: {e}"),
+                )
+            )
+            if not self._stop_called:
+                hub = self._monitor_hub()
+                if hub is not None:
+                    hub.room_closed(self._room_name, i18n.tr("采集停止"))
         finally:
             logger.debug(
                 i18n.tr(

@@ -68,7 +68,6 @@ _SANCTIONED_UNMASKED: dict[tuple[str, str], tuple[int, str]] = {
     ("src/node_install.py", "_fetch_official_sha256"): (1, "下载源型"),
     ("src/node_install.py", "install_nodejs_windows"): (2, "下载源型"),
     ("src/platforms/douyin.py", "start"): (1, "凭据型：弹幕握手链路，异常文本可含带签名参数的 ws/流地址"),
-    ("src/room.py", "get_unique_id"): (1, "凭据型：抖音 webcast 入口，URL 带用户标识参数"),
     ("src/spider.py", "_fetch_buvid"): (3, "凭据型：B 站 buvid 获取链"),
     ("src/spider.py", "get_bilibili_danmaku_info"): (6, "凭据型：B 站直播信息，Cookie 参与请求"),
     ("src/spider.py", "get_bilibili_room_info"): (1, "凭据型：同上"),
@@ -78,8 +77,6 @@ _SANCTIONED_UNMASKED: dict[tuple[str, str], tuple[int, str]] = {
     ("src/spider.py", "get_kuaishou_stream_data"): (1, "凭据型：did/凭据参与查询串"),
     ("src/spider.py", "get_kuaishou_stream_data2"): (1, "凭据型：同上"),
     ("src/spider.py", "get_token_js"): (1, "凭据型：斗鱼 token 签名链"),
-    ("src/spider.py", "login_flextv"): (1, "凭据型：登录接口"),
-    ("src/spider.py", "login_sooplive"): (1, "凭据型：登录接口"),
     ("src/ws_client.py", "connect"): (1, "凭据型：WS 握手 URL 带鉴权参数"),
 }
 

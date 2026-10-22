@@ -41,8 +41,12 @@ _SAFE_URL_SCHEMES = frozenset({"http", "https", "ws", "wss"})
 
 def is_safe_http_url(url: str) -> bool:
     # 校验 URL 的 scheme 是否在白名单内；空串/缺 scheme 的相对路径一律拒绝。
+    # M-04：scheme 之外还必须校 netloc——只看 scheme 时裸 "http://"（或 http:///path）同样过闸，
+    # 而 scheme 白名单本就是「即将按此 URL 出站」的唯一前置判据，host 缺失的地址在异步侧
+    # _internal_stream_target_reason 里才被判「流地址缺少主机名」，同步侧取的是 urllib 自带的
+    # 报错口径——两处缺失点不同源。这里前移成单点拒绝，不改变任何带主机名的地址的结论。
     parsed = urlparse(url)
-    return parsed.scheme in _SAFE_URL_SCHEMES
+    return parsed.scheme in _SAFE_URL_SCHEMES and bool(parsed.netloc)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -154,7 +158,11 @@ def get_compiled_js(js_path: str) -> object:
         with open(js_path, "rb") as f:
             raw = f.read()
         _check_js_hash(js_path, raw)
-        source = raw.decode("utf-8")
+        # L-48：解码必须带 errors="replace"。脚本属外部可改写的输入（用户手工更新签名脚本、
+        # 编辑器存成 GBK），UnicodeDecodeError 会穿出本函数并被 76 处平台解析的 trace_error_decorator
+        # 归成「JS 执行环境异常」，从而把「一个脚本文件的编码问题」误报成整条签名链故障；
+        # 替换成 U+FFFD 后 execjs 侧给的是语法错误，故障仍可见但归因落在真正的文件上。
+        source = raw.decode("utf-8", errors="replace")
         compiled = execjs.compile(source)
         _js_compile_cache[js_path] = (mtime, compiled)
         return compiled
@@ -350,7 +358,13 @@ async def run_node_script_async(script_path: str, *args: str, timeout: float = 3
             raise subprocess.CalledProcessError(proc.returncode, argv)
         # input=bytes 与 text=True 互斥，故这里按字节捕获再显式解码 UTF-8（与旧实现同口径）
         out: bytes = stdout or b""
-        return out.decode("utf-8").strip()
+        # L-48：这里只能给 errors="replace"，不能只给 encoding——只传 encoding 会把错误处理器重置回
+        # strict，于是「node 在 GBK locale 下回显本地化消息」时 UnicodeDecodeError 取代真正的
+        # CalledProcessError，故障归因整体丢失。另：先对**字节**过 mask_credentials 再解码是做不到的
+        # 口径——脱敏规则是 str 形态的正则（_SECRET_*_RE），字节层没有对应实现，强行拼一套等于造出
+        # 第二份脱敏判据。故脱敏仍落在调用方（各解析函数对 str 结果过 mask_credentials）。
+        # 回归锁：tests/test_utils.py::TestDecodeErrorsNeverEscape。
+        return out.decode("utf-8", errors="replace").strip()
 
     # L-19：超时预算双保险，形态与 run_js_async 一致（两层缺一即留洞）——
     #   ① 内层 communicate(timeout=) 是唯一能真正回收 node 进程树的一层，但它只管子进程与本线程，
@@ -423,6 +437,38 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
+def _log_guarded_exception(e: Exception, func: Callable[..., object], fallback_type_name: str) -> None:
+    # 异常落日志的唯一实现（同步/异步两支原先各抄一份、共 4 段逐字重复的判定+文案：
+    # 一处改文案必漏另一处的「改一处漏 N 处」形态）。行为与原两支逐字等价，只按异常类型分流：
+    #   · ProgramError（JS 运行时环境级故障）→ warning + i18n 模板；
+    #   · 其它 → error + 带行号与兜底值类型的归因串。
+    # M-23：原 ProgramError 分支只打一句硬编码英文、不含函数名/异常类型/异常内容，与 generic
+    # 分支口径不一致。后果两层：① 环境级故障（Node 缺失 / 签名脚本执行失败）被静默降级成
+    # 「未开播」；② 非中文语言下混入英文且无归因线索。
+    if isinstance(e, ProgramError):
+        logger.warning(
+            i18n.tr(
+                "JS 执行环境异常（Node.js 缺失或签名脚本执行失败）: 类型: {type_name}, {masked} in function {func_name}",
+                type_name=type(e).__name__,
+                masked=mask_credentials(str(e)),
+                func_name=func.__name__,
+            )
+        )
+        return
+    tb = traceback.extract_tb(e.__traceback__) if e.__traceback__ else None
+    error_line = tb[-1].lineno if tb else "unknown"
+    # L-32：str(e) 须过码——本装饰器是 76 处平台解析的中央异常漏斗，
+    # InvalidURL/TooManyRedirects 等异常的 str 内嵌完整 URL（可能带 token 参数），
+    # 直落日志即凭据明文持久化。防御纵深：现网 raise 点已手工过码，此处兜住未来新路径。
+    # 先拼到变量再传 logger：直接把 f-string 传进 logger 会触发「翻译在查表前完成」的
+    # 形态锁（tests/test_regression_2026_09_22_danmaku.py），原实现亦是此两步形态。
+    error_info = (
+        f"message: type: {type(e).__name__}, {mask_credentials(str(e))} in function {func.__name__}"
+        f" at line: {error_line}, fallback type: {fallback_type_name}"
+    )
+    logger.error(error_info)
+
+
 def _make_trace_error_guard(func: Callable[P, R], fallback_factory: Callable[[], R]) -> Callable[P, R]:
     # 错误追踪装饰器的共用实现（同步/异步两支）：吞掉异常并返回 fallback，日志同时标注函数名
     # 与兜底值类型，便于定位「错误被伪装成正常结果」的现场。两支除 await 外逻辑一致。
@@ -438,30 +484,8 @@ def _make_trace_error_guard(func: Callable[P, R], fallback_factory: Callable[[],
         async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
             try:
                 return cast(R, await func(*args, **kwargs))
-            except ProgramError as e:
-                # M-23：原实现只打一句硬编码英文、不含函数名/异常类型/异常内容，与紧邻的
-                # generic 分支口径不一致。后果两层：① 环境级故障（Node 缺失 / 签名脚本执行失败）
-                # 被静默降级成「未开播」；② 非中文语言下混入英文且无归因线索。
-                logger.warning(
-                    i18n.tr(
-                        "JS 执行环境异常（Node.js 缺失或签名脚本执行失败）: 类型: {type_name}, {masked} in function {func_name}",
-                        type_name=type(e).__name__,
-                        masked=mask_credentials(str(e)),
-                        func_name=func.__name__,
-                    )
-                )
-                return fallback_factory()
             except Exception as e:
-                tb = traceback.extract_tb(e.__traceback__) if e.__traceback__ else None
-                error_line = tb[-1].lineno if tb else "unknown"
-                # L-32：str(e) 须过码——本装饰器是 76 处平台解析的中央异常漏斗，
-                # InvalidURL/TooManyRedirects 等异常的 str 内嵌完整 URL（可能带 token 参数），
-                # 直落日志即凭据明文持久化。防御纵深：现网 raise 点已手工过码，此处兜住未来新路径。
-                error_info = (
-                    f"message: type: {type(e).__name__}, {mask_credentials(str(e))} in function {func.__name__}"
-                    f" at line: {error_line}, fallback type: {fallback_type_name}"
-                )
-                logger.error(error_info)
+                _log_guarded_exception(e, func, fallback_type_name)
                 return fallback_factory()
 
         return cast(Callable[P, R], async_wrapper)
@@ -470,26 +494,8 @@ def _make_trace_error_guard(func: Callable[P, R], fallback_factory: Callable[[],
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
         try:
             return func(*args, **kwargs)
-        except ProgramError as e:
-            # M-23：与 async_wrapper 同口径（补齐归因 + i18n）
-            logger.warning(
-                i18n.tr(
-                    "JS 执行环境异常（Node.js 缺失或签名脚本执行失败）: 类型: {type_name}, {masked} in function {func_name}",
-                    type_name=type(e).__name__,
-                    masked=mask_credentials(str(e)),
-                    func_name=func.__name__,
-                )
-            )
-            return fallback_factory()
         except Exception as e:
-            tb = traceback.extract_tb(e.__traceback__) if e.__traceback__ else None
-            error_line = tb[-1].lineno if tb else "unknown"
-            # L-32：同 async_wrapper——异常文本过码后再落日志
-            error_info = (
-                f"message: type: {type(e).__name__}, {mask_credentials(str(e))} in function {func.__name__}"
-                f" at line: {error_line}, fallback type: {fallback_type_name}"
-            )
-            logger.error(error_info)
+            _log_guarded_exception(e, func, fallback_type_name)
             return fallback_factory()
 
     return wrapper
@@ -544,8 +550,9 @@ def is_valid_zip(path: str | Path) -> bool:
 def unzip_file(zip_path: str | Path, extract_to: str | Path, delete: bool = True) -> None:
     # 解压 ZIP 到指定目录（含 Zip Slip 目录穿越校验 + 解压炸弹防护）。node_install /
     # ffmpeg_install 共用同一份实现——原先两处逐字重复，任一处打安全补丁都会漏掉另一处。
-    if not os.path.exists(extract_to):
-        os.makedirs(extract_to)
+    # M-31：exist_ok=True。原先「先 exists 再 makedirs」是两步 TOCTOU——node/ffmpeg 两条安装路径
+    # 可能并发进来，后到者会吃到 FileExistsError 并被上层归成「安装失败」。
+    os.makedirs(extract_to, exist_ok=True)
 
     extract_root = os.path.realpath(extract_to)
     # 解压炸弹防护（审查 H-1）：恶意压缩包可声明极小尺寸但解压后膨胀到磁盘满 / OOM。
@@ -557,6 +564,14 @@ def unzip_file(zip_path: str | Path, extract_to: str | Path, delete: bool = True
 
     total_uncompressed = 0
     with zipfile.ZipFile(zip_path, "r") as zip_ref:
+        # M-31：符号链接成员必须在 extractall 之前拒绝。目录穿越校验只看**成员路径字面量**，而含
+        # 「link -> /etc」再写「link/xxx」的包可以让后续写入跟着链接走出 extract_root——ffmpeg/node
+        # 的安装包来自外部下载源，属真实攻击面（zipfile 自 3.13 起虽也会对链接做一次落地复核，但那
+        # 是同库实现细节、且只覆盖部分形态，不能替代本层的显式拒绝）。判据取 Unix 权限位高 16 位：
+        # zip 不带「这是链接」的独立标志位，S_IFLNK 是唯一可判之处。
+        for info in zip_ref.infolist():
+            if stat.S_ISLNK(info.external_attr >> 16):
+                raise ValueError(f"Symlink entry in zip file: {info.filename}")
         # 防止 Zip Slip 目录穿越攻击：校验每个成员解压后的真实路径
         for member in zip_ref.namelist():
             member_path = os.path.realpath(os.path.join(extract_root, member))
@@ -702,11 +717,18 @@ def atomic_write_text(file_path: str | Path, text: str, encoding: str = "utf-8-s
                 _fsync_file(f.fileno())
             except OSError:
                 pass  # 见上方 MID-57 注释：仅无法确认耐久时不阻断发布
-        if orig_mode is not None:
-            try:
-                os.chmod(tmp, orig_mode)
-            except OSError:
-                pass
+        # M-57（2026-10-21）：目标此前不存在时**显式**落 0600，而不是只靠 mkstemp 的默认权限。
+        # 为什么要显式写一次：os.replace 后目标继承临时文件的模式，而 mkstemp 的 0600 是「与
+        # umask 相与」的结果——本仓的凭据文件（config.ini 含明文 Cookie/账号密码）此前只有
+        # utils.update_config 一条路径在写完 chmod 0600，首次创建与缺键补写都只经本函数，
+        # 多用户 POSIX 主机上等于「凭据文件权限由 umask 决定」。既有文件一律**保留原 mode**
+        # （下方 orig_mode 分支不变）：收紧别人正在共享的文件会造成新故障，加固只做在
+        # 「还没有原权限可继承」的那一刻。os.chmod 在 Windows 上只影响只读位，故本条只帮到 POSIX。
+        apply_mode = orig_mode if orig_mode is not None else 0o600
+        try:
+            os.chmod(tmp, apply_mode)
+        except OSError:
+            pass
         _replace(tmp, path_str)
     except (OSError, UnicodeError) as e:
         # L-47：补 UnicodeError。原只接 OSError，而 f.write(text) 在 text 含目标编码无法表示的
@@ -1057,6 +1079,23 @@ _SECRET_KEYS: tuple[str, ...] = (
     "bili_jct",
     "sessionid_ss",
     "sid_tt",
+    # S-07（CODE_REVIEW_2026-10-21）：报告实测逃逸的短键名与变体。
+    # `sig`/`jwt` 是平台签名与令牌的最短常见写法（原表只有 signature/sign，sig 整体不命中）；
+    # `sig_` 前缀变体（sig_time / sig_nonce）由 `sig` 命不中（下划线不在边界分支的允许集内），
+    # 故按整段补录。复核语料见 tests/test_utils.py::TestMaskCredentialsCoverage::test_s07_*。
+    "sig",
+    "jwt",
+    "sig_time",
+    "sig_nonce",
+    # S-07④：中文凭据键。config.ini 的 [账号密码]/[Authorization] 节与 Web 面板都可能出现中文键名，
+    # 原表全为 ASCII 键，这些行整体逃逸。口径与 src/web_config.py 的敏感键判定对齐。
+    "密码",
+    "口令",
+    "令牌",
+    "授权码",
+    "密钥",
+    "秘钥",
+    "会话",
 )
 # 长名排在前面：交替式虽会回溯，但「先试长名」明显减少无谓回溯（sid/sid_guard、token/access_token）。
 # 短名（tk/key/nonce）不得把长名切碎——长名优先 + 右侧紧随的 `=`/`:`/`"` 字面量共同保证「先配长名」，
@@ -1081,7 +1120,13 @@ _SECRET_PLAIN_BOUNDARY = r"(?<![A-Za-z0-9])"
 # 无驼峰转折」的复合键。黑名单只登记了驼峰形式，此形态既不满足左顾（token 前是字母）也不满足驼峰
 # 分支（无大写转折）→ 第三条漏抹路径。与驼峰分支一样**不设 (?i)**：全大写写法（MYTOKEN=）无小写
 # 前缀、不属于本形态，由整段键名经左顾分支覆盖；若误加 (?i)，design 的 `sign` 会被误伤。
-_SECRET_LOWER_COMPOUND_BOUNDARY = r"(?<=[a-z])(?=(?i:(?:token|key)))"
+# S-07（CODE_REVIEW_2026-10-21）：候选集从 `token|key` 扩为加入 secret/signature/password/passwd/auth，
+# 使 mysecret= / mysignature= / mypassword= / myauth= 这类复合键被覆盖。
+# **刻意不加 `sign`**：`design=2` 与 `presigned=1` 是公开参数（tests/test_regression_2026_09_22_utils.py
+# 与 tests/test_utils.py 的反向棘轮都钉了「不得误抹」），而 "design" 的 "sign" 恰好落在本分支的
+# 匹配位置上——加进去就会把它们抹成 de***/pre***。`sign=` 形态本身由 _SECRET_KEYS 里的整段键名
+# 经左顾分支覆盖，所以不加进本分支并不构成缺口。
+_SECRET_LOWER_COMPOUND_BOUNDARY = r"(?<=[a-z])(?=(?i:(?:token|key|secret|signature|password|passwd|auth)))"
 
 # 形态一：查询串 key=value。键名前缀 = 三种边界之一；`(?:...)` 必须把两个边界整体包住再拼键名，
 # 否则 `|` 作用域落到最外层会让键名成为可选、只剩 `=` 参与匹配（实测会把 https:// 整段抹成 ***）。
@@ -1116,10 +1161,20 @@ _SECRET_HEADER_RE = re.compile(
     + _SECRET_KEY_ALT
     + r"))\s*:\s*))[^,;\r\n\"']+"
 )
-# 形态三：JSON 体 "key": "value"（凭据以字符串值出现，边界由闭合引号给出，最保守）。键名整体被
+# 形态三：JSON 体 "key": value（边界由闭合引号/字面量边界给出，最保守）。键名整体被
 # 引号包裹，无需驼峰分支——(?i) 下 "accessToken" 与 "accesstoken" 同形，两侧引号使折大小写不产生
 # design 那类误判。
-_SECRET_JSON_RE = re.compile('(?i)("(?:' + _SECRET_KEY_ALT + r')"\s*:\s*")([^"]*)(")')
+# S-07③（CODE_REVIEW_2026-10-21）：值段原只认 `"字符串"`，平台以**数值**下发凭据（`{"ms_token": 12345}`、
+# `{"token": 123}`、`{"sign": 1}`）时整条逃逸——报告实测三条语料全部原样返回。现值段扩为
+# 字符串 / 数字（含负数与小数）/ true / false / null，与 JSON 标量全集对齐。
+_SECRET_JSON_RE = re.compile(r'(?i)("(?:' + _SECRET_KEY_ALT + r')"\s*:\s*)("[^"]*"|-?\d+(?:\.\d+)?|true|false|null)')
+# 形态四：ini 行 `键 = 值`（config.ini 的 [Cookie]/[Authorization]/[账号密码] 正是「键 空格 = 空格 值」）。
+# S-07①（CODE_REVIEW_2026-10-21）：前三种形态都要求值紧跟在 `=`/`:` 之后或值被引号包住，而 ini 行的
+# 值常含空格（`Authorization = Bearer xxx`）且后面直接到行尾 → 原实现整体逃逸。此处**只按行**抹到行尾：
+#   · 锚定行首 `^` 且前缀限定为「不含 = 与 : 的短串」（≤40 字符），避免跨语句把日志后半段整段吞掉；
+#   · 值后无分隔符约束（`.+` 到行尾），因为 ini 值允许空格。
+# 该形态必须排在查询串之后：查询串已把 URL 里的 key=value 抹成 *** 时，本形态再抹一次是幂等的。
+_SECRET_INI_LINE_RE = re.compile(r"(?im)^([ \t]*[^\r\n=:]{0,40}?(?i:(?:" + _SECRET_KEY_ALT + r"))\s*=\s*)[^\r\n]*")
 # 代理凭据：scheme://user:pass@host 与无 scheme 的 user:pass@host:port（配置项「代理地址」允许两种
 # 写法，后者要过 handle_proxy_addr 才补前缀，故日志里常是裸串）
 _PROXY_CREDENTIAL_RE = re.compile(r"(?i)(://)[^/@\s]+@")
@@ -1136,6 +1191,10 @@ def mask_credentials(text: str) -> str:
     # 统一过一遍 mask_credentials；但那会改动 sink 行格式与若干按整行断言的用例，故另案处理。
     masked = _PROXY_CREDENTIAL_RE.sub(r"\1***@", text)
     masked = _BARE_PROXY_CREDENTIAL_RE.sub("***@", masked)
-    masked = _SECRET_JSON_RE.sub(r"\1***\3", masked)
+    # JSON 形态已改为「两段捕获」（值段不再单独捕获闭合引号），替换串随之从 \1***\3 变为 \1***。
+    masked = _SECRET_JSON_RE.sub(r"\1***", masked)
     masked = _SECRET_HEADER_RE.sub(r"\1***", masked)
-    return _SECRET_QUERY_RE.sub(r"\1***", masked)
+    masked = _SECRET_QUERY_RE.sub(r"\1***", masked)
+    # S-07①：ini 行兜底放最后——它按「行」整段抹到行尾，必须在前三形态把行内 key=value 处理完之后
+    # 再兜一次（幂等），否则会先把 `x=1&token=y` 这种行整段吞掉、丢掉可读的定位信息。
+    return _SECRET_INI_LINE_RE.sub(r"\1***", masked)

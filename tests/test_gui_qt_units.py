@@ -354,6 +354,113 @@ def test_recorder_shutdown_without_process_still_calls_finish(qt_app: QApplicati
     assert finished.wait(timeout=10.0), "退出路径必须回调主线程收尾，否则窗口永不销毁"
 
 
+def test_stop_worker_body_with_vanished_process_still_emits_ended(qt_app: QApplication, tmp_path: Path) -> None:
+    # M-79：「stop_async 已发起、按钮已按约定等 _on_recorder_ended 统一恢复，而句柄被
+    # 自然 EOF 的 reclaim_after_natural_end 抢先清空」是两条通道并存的必然竞态。旧实现在
+    # proc is None 分支只复位 _stopping 就 return、不 emit ended——两个按钮从此永久禁用，
+    # 只能重启 GUI。白盒直调本方法模拟该窗口（真竞态无法稳定编排，锁的是「该出口必须
+    # emit」这条契约本身，与 M-33 对异常路径的要求同形）。
+    controller = _controller(tmp_path)
+    controller._session_id = 7  # noqa: SLF001 - 白盒：模拟已有一轮会话
+    seen: list[int] = []
+    controller.ended.connect(lambda session: seen.append(int(session)))  # type: ignore[arg-type]
+    controller._stop_worker_body()  # noqa: SLF001 - _process 恒为 None，正落在被修复的分支
+    assert controller.is_stopping() is False
+    assert seen == [7], "proc 已消失的早退分支同样必须 emit ended（停止按钮的统一恢复点）"
+
+
+def test_shutdown_cleanup_consumes_pid_captured_at_start(
+    qt_app: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # M-79：_cleanup_target_pid 旧实现只写不读——停止链/自然 EOF 把 _process 清空后，
+    # 退出收尾从 proc 拿到的 child_pid 恒为 None，cleanup_process_tree(None) 记一行就
+    # 返回，「子进程没死利索、ffmpeg 还在录」的退出现场被静默跳过整树清理。
+    controller = _controller(tmp_path)
+    controller.build_record_command = lambda: [sys.executable, "-c", "import time; time.sleep(30)"]  # type: ignore[method-assign]
+    killed: list[int | None] = []
+    monkeypatch.setattr(recorder_module, "cleanup_process_tree", lambda pid, _log: killed.append(pid))
+    ok, pid, _reason = controller.start()
+    assert ok and pid is not None
+    proc = controller._process  # noqa: SLF001 - 留真实句柄做收尾，避免残留 30s 睡眠进程
+    controller._clear_process()  # noqa: SLF001 - 模拟停止链已把句柄清掉
+    finished = threading.Event()
+    controller.shutdown_async(on_finished=finished.set)
+    assert finished.wait(timeout=10.0)
+    assert killed == [pid], "退出清理必须打向启动期钉住的 PID，句柄被清不能成为跳过整树清理的理由"
+    assert controller._cleanup_target_pid == pid  # noqa: SLF001 - 未被确认终止前不得清零
+    assert proc is not None
+    proc.kill()
+    proc.wait(timeout=5)
+
+
+def test_stop_worker_body_clears_cleanup_target_only_when_process_dead(
+    qt_app: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # M-79 的对称半句：停止链**确认进程已终止**时才清零清理目标——Windows 的 PID 进程
+    # 退出即进复用池，留一个已回收的号码给下一次退出收尾补 taskkill，等于允许它命中新主人；
+    # 而「没确认死透」就必须保留号码（那正是兜底要救的场景）。
+    controller = _controller(tmp_path)
+    monkeypatch.setattr(recorder_module, "cleanup_process_tree", lambda pid, _log: None)
+
+    class _DeadProc:
+        pid = 4242
+
+        def poll(self) -> int | None:
+            return 0
+
+    # _stop_child_once 走「复核 poll 非 None 即返回」的最短真实分支（不触碰信号面）。
+    # 替身只复刻被读到的 pid/poll 两个面，故类型收窄走行尾 ignore（与 M-33 用例的
+    # method-assign ignore 同口径，mypy 对 ignore 注释后的散文会判 invalid）。
+    controller._process = _DeadProc()  # type: ignore[assignment]
+    controller._cleanup_target_pid = 4242  # noqa: SLF001
+    controller._stopping = True  # noqa: SLF001
+    controller._stop_worker_body()  # noqa: SLF001
+    assert controller._cleanup_target_pid is None, "确认终止后必须交回号码，不得让退出收尾补发 taskkill"
+
+
+def test_read_output_degrades_from_bounded_poll_to_blocking_wait(
+    qt_app: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # M-79：空 readline + 进程仍活 = 管道瞬时无数据（写端被孙进程握着），旧实现 0.05s
+    # 忙轮询没有任何退出条件——空转每秒 20 次直到进程消失。定稿给累计上限，超限后退化为
+    # 阻塞 proc.wait()（唤醒点是进程真实终止），结束哨兵照投。
+    controller = _controller(tmp_path)
+    sleeps: list[float] = []
+    time_shim = types.SimpleNamespace(**vars(recorder_module.time))
+    time_shim.sleep = lambda s: sleeps.append(s)
+    monkeypatch.setattr(recorder_module, "time", time_shim)
+
+    class _EofStdout:
+        def __init__(self) -> None:
+            self.reads = 0
+
+        def readline(self) -> str:
+            self.reads += 1
+            return ""
+
+    class _StalledProc:
+        def __init__(self) -> None:
+            self.stdout: _EofStdout | None = _EofStdout()
+            self.waits = 0
+
+        def poll(self) -> int | None:
+            # 4000 次空读后给出真实终止兜底：新旧实现都会终止，用例不靠「旧代码挂死」取证，
+            # 只锁「必须远早于 4000 次就退化为 wait()」。
+            return None if self.stdout is not None and self.stdout.reads < 4000 else 0
+
+        def wait(self) -> int:
+            self.waits += 1
+            return 0
+
+    proc = _StalledProc()
+    controller._read_output(proc, 3)  # type: ignore[arg-type]  # noqa: SLF001 - 读线程本体在主线程直跑（替身无真管道）
+    assert proc.waits == 1, "空等累计到上限后必须退化为一发阻塞 wait"
+    limit = recorder_module._READ_IDLE_LIMIT_SECONDS / recorder_module._READ_POLL_INTERVAL_SECONDS  # noqa: SLF001
+    assert 0 < len(sleeps) <= limit, f"忙轮询必须有累计上限（上限 {limit} 次，实测 {len(sleeps)}）"
+    _messages, ended, session = controller.drain()
+    assert ended and session == 3, "退化路径仍要投出结束哨兵，UI 的恢复点只有这一个信号"
+
+
 def test_send_stop_signal_and_wait_graceful_path(
     qt_app: QApplication, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -507,6 +614,11 @@ def _run_main_with_stubs(monkeypatch: pytest.MonkeyPatch) -> tuple[dict[str, obj
     monkeypatch.setattr("PySide6.QtWidgets.QApplication", app_factory)
     monkeypatch.setattr("src.gui_qt.main_window.MainWindow", _window_factory)
     monkeypatch.setattr(sys, "excepthook", sys.__excepthook__)
+    # M-80：main() 现在还会装 threading.excepthook 并挂模块全局崩溃代理——两处进程级状态
+    # 显式登记「还原为当前值」，否则替身用例会把崩溃钩子漏给后续所有文件（线程里再抛
+    # 异常就会往 %TEMP%\dlr_gui_crash.log 里追加，污染其他用例的取证面）。
+    monkeypatch.setattr(threading, "excepthook", threading.excepthook)
+    monkeypatch.setattr(app_module, "_crash_proxy", None)
 
     app_module.main()
 
@@ -570,6 +682,194 @@ def test_crash_sink_writes_file_and_does_not_raise(monkeypatch: pytest.MonkeyPat
     assert os.path.isfile(log_path)
     with open(log_path, "r", encoding="utf-8") as f:
         assert "boom-for-crash-sink" in f.read()
+
+
+def test_main_installs_threading_excepthook_and_crash_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    # M-80：sys.excepthook 管不到线程——recorder-output / gui-stop / gui-quit / danmaku tail
+    # 四个守护线程的未捕获异常走 threading.excepthook，默认形态只打 stderr，而 pythonw /
+    # 冻结 console=False 下 stderr 为 None，异常被静默吞掉，正是本模块头声称要防的
+    # 「无窗口、无报错」。旧实现只装了主线程那一半。
+    _app_state, _window_state = _run_main_with_stubs(monkeypatch)
+    assert threading.excepthook is app_module._threading_crash_sink
+    # 弹窗代理必须在装配期挂上（QMessageBox 的线程亲和性封送全靠它，见 _CrashDialogProxy）
+    assert app_module._crash_proxy is not None
+
+
+def test_crash_sink_marshals_dialog_through_proxy_not_current_thread(
+    qt_app: QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # M-80 的行为半句：_crash_sink 不得再在「出事线程」上直接构造 QMessageBox——
+    # 取证面是代理收到请求时的执行线程。主线程调用（sys.excepthook 的常规形态）就地直显；
+    # 弹窗动作经由代理转发，_show_crash 是唯一的构造点（旧实现内联在 _crash_sink 里，
+    # 变异验证「把弹窗构造搬回 _crash_sink」时，本用例的展示记录点数不变但生产源码结构
+    # 由上一条装配用例与本条的行为出口共同收紧——这里锁的是 request 必须被调到）。
+    shown: list[str] = []
+
+    class _ProxyStub:
+        def __init__(self) -> None:
+            self.requests: list[str] = []
+
+        def request(self, text: str) -> None:
+            self.requests.append(text)
+            shown.append(text)
+
+    proxy = _ProxyStub()
+    monkeypatch.setattr(app_module, "_crash_proxy", proxy)
+    try:
+        raise RuntimeError("boom-for-marshalling")
+    except RuntimeError as exc:
+        app_module._crash_sink(type(exc), exc, exc.__traceback__)
+    assert proxy.requests and "boom-for-marshalling" in shown[0][-2000:]
+
+
+def _standalone_window(tmp_path: Path, main_config_body: str) -> tuple[MainWindow, Callable[[], None]]:
+    # 与 test_gui_qt_units 的 lang_window / test_gui_qt_window 的 window 夹具同构的
+    # 「一次性构造 + 手工还原」形态：登记表快照还原、语言还原都在调用方用例内闭环。
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(exist_ok=True)
+    url_file = config_dir / "URL_config.ini"
+    url_file.write_text("https://live.douyin.com/1234 原画 主播A\n", encoding="utf-8-sig")
+    main_file = config_dir / "config.ini"
+    main_file.write_text(main_config_body, encoding="utf-8-sig")
+    win = MainWindow(
+        app_root=str(tmp_path),
+        script_dir=str(tmp_path),
+        url_config_file=str(url_file),
+        main_config_file=str(main_file),
+        downloads_dir=str(tmp_path / "downloads"),
+    )
+    win.apply_palette()
+
+    def _dispose(win_ref: MainWindow = win) -> None:
+        win_ref._finalize_quit()  # noqa: SLF001 - 走生产退出序列，停三条链
+        win_ref.deleteLater()
+
+    return win, _dispose
+
+
+def test_startup_language_preference_retranslates_static_labels(qt_app: QApplication, tmp_path: Path) -> None:
+    # M-78 行为锁：启动路径（_apply_language_preference）必须在 set_language 之后立刻
+    # retranslate_all() 全量回填。旧实现里 retranslate_all 的唯一调用点在 on_language_change
+    # （下拉菜单事件），而 set_text() 建时查表发生在 _build_ui()（先于语言切换）——
+    # 配置语言显式写 en_US 的用户重启后静态标签一直停在中文，直到手动切一次语言下拉才被
+    # 「顺带」修好。建时查表跑在 conftest 的恒等映射下、set_language 换回真实目录，
+    # 因此断言右侧取 set_language 之后的 i18n.tr()，并先锁「英文目录确有该键译文」防伪绿。
+    registry_snapshot = list(ui_i18n._ENTRIES)  # noqa: SLF001 - 还原全局登记表（Qt 条目随 QApplication 存活）
+    saved_language = i18n.get_language()
+    win, dispose = _standalone_window(tmp_path, "[录制设置]\nlanguage = en_US\n循环时间(秒) = 60\n")
+    try:
+        assert i18n.get_language() == "en_US"
+        english = i18n.tr("📥   最小化到托盘")
+        assert english != "📥   最小化到托盘", "en_US 目录对本键无译文，用例失去区分力"
+        assert win.minimize_btn.text() == english, "启动期偏好语言未触发全量重译（M-78）"
+        assert win.brand_sub.text() == i18n.tr("直播录制 · 控制台") != "直播录制 · 控制台"
+        assert win.quit_btn.text() == i18n.tr("❌   彻底退出")
+    finally:
+        dispose()
+        qt_app.processEvents()
+        i18n.set_language(saved_language)
+        ui_i18n._ENTRIES[:] = registry_snapshot  # noqa: SLF001
+
+
+def test_pref_combos_backfilled_from_saved_theme_and_scale(qt_app: QApplication, tmp_path: Path) -> None:
+    # M-80 行为锁：显式偏好 dark/115 重启后，侧栏两个下拉的 currentData 必须与已生效的
+    # palette 同值。旧实现 _resolve_initial_theme_and_scale 只算 palette 不回填下拉，
+    # 下拉初值恒为 index 0（跟随系统/自动）——「窗口是深色、下拉指着跟随系统」的自相矛盾，
+    # 且 toggle_theme（按 palette 翻）与 on_theme_change（按 currentData 落盘）从此不一致。
+    registry_snapshot = list(ui_i18n._ENTRIES)  # noqa: SLF001
+    saved_language = i18n.get_language()
+    win, dispose = _standalone_window(tmp_path, "[GUI]\ngui_theme = dark\ngui_scale = 115\n")
+    try:
+        assert win._palette.theme_id == "dark"  # noqa: SLF001 - 前提：palette 侧本来就是对的
+        assert win.theme_combo.currentData() == "dark", "主题下拉未回填显式偏好（M-80）"
+        assert win.scale_combo.currentData() == "115", "缩放下拉未回填显式档位（M-80）"
+        assert win._theme_follow_system is False  # noqa: SLF001
+    finally:
+        dispose()
+        qt_app.processEvents()
+        i18n.set_language(saved_language)
+        ui_i18n._ENTRIES[:] = registry_snapshot  # noqa: SLF001
+
+
+def test_terminal_append_line_follows_newest_line(qt_app: QApplication) -> None:
+    # M-81：textCursor() 返回副本——只在副本上 movePosition/insertText 而不调 setTextCursor，
+    # 控件的**视口**从不跟随最新行。2026-10-21 offscreen 实测：纯副本写法下文档字符数一路涨、
+    # 内部光标位置因「插入点恰在光标处」的位移记账甚至仍报 atEnd True，但 verticalScrollBar
+    # 停在 0（maximum 已到几十）——正是「在录，日志页却定格在开头」的确切形态；补上
+    # setTextCursor 后滚动条与 maximum 齐平（与弹幕页 _render_stream 的同场景写法对齐）。
+    term = TerminalText()
+    term.setFixedHeight(60)
+    term.show()
+    qt_app.processEvents()
+    try:
+        for i in range(60):
+            term.append_line("line-%03d\n" % i)
+        qt_app.processEvents()
+        vsb = term.verticalScrollBar()
+        assert vsb.maximum() > 1, "视口未产生可滚动余量，用例失去取证面"
+        # 2026-10-21 offscreen 实测：正确形态下 value 落在 maximum-1（末块为空段落，
+        # ensureCursorVisible 保证「可见」而非「齐底」）；未修形态 value 恒为 0。
+        # 判据取「跟随到近底」而不是逐像素相等，跨 Qt 小版本不脆断。
+        assert vsb.value() >= vsb.maximum() - 1, "append_line 后视口未跟随最新行（M-81：副本光标从未写回）"
+        assert term.toPlainText().startswith("line-000\nline-001\n"), "行内容/换行语义不得被 setTextCursor 改变"
+    finally:
+        term.close()
+        term.deleteLater()
+        qt_app.processEvents()
+
+
+def test_tray_apply_palette_repaints_icon_with_new_tokens(qt_app: QApplication) -> None:
+    # M-81：托盘图标色是 TrayIcon 构造时的 palette 快照，旧实现此后从不刷新——主题切换后
+    # 托盘圆点与侧栏状态点分色（「一个状态 = 一种颜色」的一致性被打断）。定稿 = apply_palette
+    # 存新色表并按当前运行态立即重绘；重绘结果必须与「用新色表现画」逐像素一致。
+    light = theme_module.palette(theme_module.THEME_LIGHT, 1.0).tokens
+    dark = theme_module.palette(theme_module.THEME_DARK, 1.0).tokens
+    tray = TrayIcon(qt_app, light)
+    for running in (False, True):
+        tray.set_running(running)
+        tray.apply_palette(dark)
+        key = "success" if running else "danger"
+        expected = tray._render_icon(dark[key]).pixmap(64, 64).toImage()  # noqa: SLF001
+        got = tray.icon.icon().pixmap(64, 64).toImage()
+        assert got == expected, f"running={running} 时托盘图标未随新 palette 重绘（M-81）"
+
+
+def test_tray_custom_icon_survives_state_and_palette_changes(qt_app: QApplication, tmp_path: Path) -> None:
+    # 导入图标与自绘图标的语义冲突点：自绘圆点承担「状态 = 颜色」，而导入图标是用户的品牌标识。
+    # 定稿是导入图标恒压过自绘——被状态色覆盖等于「导入了却看不到」。判据用 availableSizes：
+    # 真 ICO 里带着多档尺寸，而自绘那张只有 64×64，两者可机检区分。
+    repo_icon = Path(__file__).resolve().parent.parent / "assets" / "app.ico"
+    assert repo_icon.is_file(), "assets/app.ico 缺失（打包与运行时默认图标同源）"
+    target = tmp_path / "app.ico"
+    target.write_bytes(repo_icon.read_bytes())
+
+    light = theme_module.palette(theme_module.THEME_LIGHT, 1.0).tokens
+    dark = theme_module.palette(theme_module.THEME_DARK, 1.0).tokens
+    tray = TrayIcon(qt_app, light)
+    drawn_sizes = tray.icon.icon().availableSizes()
+    assert drawn_sizes and drawn_sizes[0].width() == 64, "自绘图标基准尺寸变了，下面的区分判据需同步"
+
+    assert tray.set_custom_icon(str(target)) is True
+    tray.set_running(True)
+    tray.apply_palette(dark)
+    applied = tray.icon.icon().availableSizes()
+    assert (16, 16) in [(s.width(), s.height()) for s in applied], "运行态/主题切换把导入图标覆盖成了自绘"
+
+    # 清空导入即回到自绘：路径传空串是「恢复默认」的唯一出口
+    assert tray.set_custom_icon("") is True
+    assert tray.icon.icon().availableSizes() == drawn_sizes
+
+
+def test_tray_custom_icon_rejects_unreadable_file(qt_app: QApplication, tmp_path: Path) -> None:
+    # 坏文件必须保持现有图标而不是换成空 QIcon：空图标在 Windows 托盘区是一块看不见也点不到的空白
+    light = theme_module.palette(theme_module.THEME_LIGHT, 1.0).tokens
+    tray = TrayIcon(qt_app, light)
+    before = tray.icon.icon()
+    junk = tmp_path / "junk.ico"
+    junk.write_bytes(b"not an icon at all")
+    assert tray.set_custom_icon(str(junk)) is False
+    assert not tray.icon.icon().isNull()
+    assert tray.icon.icon().cacheKey() == before.cacheKey()
 
 
 # ─── widgets.fixed_font：等宽族名 ─────────────────────────────────────────

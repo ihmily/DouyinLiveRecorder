@@ -346,7 +346,19 @@ def check_conventions(root: Path, min_density: float) -> int:
 
     for path in iter_source_files(root):
         rel = path.relative_to(root).as_posix()
-        src = path.read_text(encoding="utf-8", errors="replace")
+        # M-93 残留（2026-10-21）：读不动源文件（权限/被占用/设备错误）此前以 rc=1 + Traceback
+        # 结束，而 rc=1 在 CI 语义里是「代码不符合注释规范」。真相是「这条文件没查」，与
+        # check_runtime_pins / check_coverage 的 rc=2 分级契约冲突，故显式退 2 并给出重跑命令。
+        try:
+            src = path.read_text(encoding="utf-8", errors="replace")
+        except (OSError, ValueError) as exc:
+            print(
+                f"ERROR: 门禁自身失效，无法读取 {rel}（{type(exc).__name__}: {exc}）——不是注释规范问题",
+                file=sys.stderr,
+            )
+            print("       请确认文件可访问后重跑：python scripts/check_annotations.py", file=sys.stderr)
+            # 不能 return 2：本函数的返回值是「违规条数」，会被调用方折算成 rc=1（代码不合格）。
+            sys.exit(2)
 
         for item in find_docstrings(src):
             problems.append(f"[docstring] {rel}: 存在{item}（AGENTS.md 要求注释统一用 #）")
@@ -419,12 +431,20 @@ def _reject_dangerous_baseline(baseline: Path) -> str | None:
     # 不放行（否则等于把整棵家目录树声明成「工作区」，把上面两条防线一次让掉）。
     # 位置必须在这里而不是并入 home 那条：Windows 侧的 system_roots 含 `C:\Users`，检出在
     # `C:\Users\<you>\repo` 时其下的快照目录会先被那条 `sr in resolved.parents` 误拒。
+    # S-13（2026-10-21）：这一段原先是「命中即 return None」的放行分支，未命中则继续往下走，
+    # 末尾还有一条 `return None` —— 于是 cwd 之外的任意绝对路径（`--snapshot D:\OtherRepo`、
+    # `/srv/data`、`E:\backup`）落到函数末尾被放行，rmtree 整树删除无关目录。排除式黑名单无法
+    # 穷举危险形态（任何用户目录、挂载点、其它仓库都可能被误传），故改为**白名单正向判定**：
+    # 只有「严格位于 cwd 之下」这一种形态放行，其余一律拒绝。cwd 本身是家目录时也不放行
+    # （否则等于把整棵家目录树声明成「工作区」，把上面两条防线一次让掉）。
     if cwd is not None and (home is None or cwd != home) and cwd in resolved.parents:
         return None
-    # 系统目录（Windows / POSIX 常见）。刻意不含 Path(os.sep)——在 Windows 上
-    # Path("\\").resolve() 会得到「当前盘符根」（如 D:\），任何绝对路径都在其下，
-    # 会把 .workbuddy/ast-baseline 这类合法的工作区子目录一并误拒（首次实现踩过）。
-    # 盘符根/文件系统根已由上方 `resolved == resolved.parent` 覆盖。
+    # S-13：白名单之外一律拒绝。系统目录清单保留，只为给出**更准确的理由**——它原本是
+    # 独立一条拒绝分支，现在与「不在 cwd 之下」结论相同，但点名「系统目录」对排障更有用
+    # （tests/test_check_annotations.py::test_snapshot_guard_still_rejects_system_dirs 钉这条文案）。
+    # 该清单刻意不含 Path(os.sep)：Windows 上 Path("\\").resolve() 是「当前盘符根」，任何绝对
+    # 路径都在其下，会把合法工作区子目录一并误拒。盘符根/文件系统根由上方 `resolved ==
+    # resolved.parent` 覆盖，二者现在都是白名单的子集。
     if os.name == "nt":
         system_roots: list[Path] = [
             Path("C:\\Windows"),
@@ -452,7 +472,7 @@ def _reject_dangerous_baseline(baseline: Path) -> str | None:
     # 相对路径必须至少有一层父目录（拒绝 "." / ".."）
     if not resolved.parts or len(resolved.parts) < 2:
         return f"拒绝：基线目录层级过浅 -> {resolved}"
-    return None
+    return f"拒绝：基线目录必须是当前工作目录的子目录 -> {resolved}（如需外部目录请手工建快照）"
 
 
 def take_snapshot(root: Path, baseline: Path) -> int:
@@ -486,11 +506,22 @@ def check_equivalence(root: Path, baseline: Path) -> int:
     changed: list[tuple[str, str]] = []
     missing: list[str] = []
 
-    for base_file in sorted(p for p in baseline.rglob("*") if p.is_file()):
-        rel = base_file.relative_to(baseline)
+    # M-92 残留（2026-10-21）：比对范围必须是「基线 ∪ 当前」的**并集**。旧写法只遍历 baseline，
+    # 于是快照之后新增的源文件完全不参与比对——本工具的结论恰恰是「只改了注释」，而新增文件是
+    # 最容易夹带逻辑改动的形态，旧实现却对它永久失明。新增文件按 changed 计（门禁变红），
+    # 由使用者显式重建基线，不得默认放行。
+    rel_set = {p.relative_to(baseline).as_posix() for p in baseline.rglob("*") if p.is_file()}
+    rel_set |= {p.relative_to(root).as_posix() for p in iter_source_files(root)}
+
+    for rel_posix in sorted(rel_set):
+        rel = Path(rel_posix)
+        base_file = baseline / rel
         current = root / rel
+        if not base_file.is_file():
+            changed.append((rel_posix, "快照后新增的文件未参与基线比对（请重建基线后重跑）"))
+            continue
         if not current.exists():
-            missing.append(rel.as_posix())
+            missing.append(rel_posix)
             continue
         old_src = base_file.read_text(encoding="utf-8", errors="replace")
         new_src = current.read_text(encoding="utf-8", errors="replace")

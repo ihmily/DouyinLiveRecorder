@@ -64,6 +64,21 @@ def find_duplicate_options(text: str) -> list[tuple[str, str, tuple[int, ...]]]:
         line = raw_line.strip()
         if not line or line[0] in "#;":
             continue
+        # M-54（2026-10-21）：以空白起始的行**一律先跳过**。上一条分隔符判据只放过了「整行不含
+        # = 也不含 :」的续行，于是 `cookie = v1` 之后跟着两行缩进续值 `   token=abc` / `   token=def`
+        # 时，这两行会被 strip 后当成两个同名键 → 误报「存在重复配置项」。后果不止于噪声：
+        # warn_duplicate_options 的「同一文件形态只点名一次」额度只有 _DUP_WARN_CACHE_MAX(32) 项，
+        # 被假告警吃掉后**真重复反而不再被点名**，正是本函数要防的形态。
+        # 依据：configparser 3.14 的 _handle_continuation_line 把「当前行缩进 > 上一条键的缩进」的
+        # 行折进上一条键的值（本仓配置键一律顶格写，故任何缩进行的缩进都大于 0），因此缩进行不是键。
+        # 已知边界（两处可接受的漏报/窄化方向，实测口径来自 3.14 configparser 本体）：
+        # ① 整节每行同缩进且同名重复（`[s]\n   k = v1\n   k = v2`）——configparser 确实把它当两个键，
+        #    本函数会跳过；② 节头本身被缩进且该节前已有键时，configparser 会把它折进上一条键的值，
+        #    本函数跳过后节名归属沿用上一节。两者都不是本仓任何写入方（configparser.write 顶格输出）
+        #    能产出的形态，且与本次要消灭的误报相比是次要面；若要彻底收口，正解是改用
+        #    parser.read_string 统计而不是继续手抄判据。
+        if raw_line[:1] in (" ", "\t"):
+            continue
         if line.startswith("[") and line.endswith("]"):
             section = line[1:-1].strip()
             continue

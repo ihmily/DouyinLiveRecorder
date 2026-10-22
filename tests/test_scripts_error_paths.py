@@ -68,13 +68,20 @@ class _FakeEnv:
         lock_rc: int = 0,
         probe_exc: OSError | None = None,
         lock_exc: OSError | None = None,
+        lock_timeout: bool = False,
+        egg_timeout: bool = False,
     ) -> None:
         self.uv_path = uv_path
         self.probe_rc = probe_rc
         self.lock_rc = lock_rc
         self.probe_exc = probe_exc
         self.lock_exc = lock_exc
+        # M-94（2026-10-21）新增两个超时形态开关：TimeoutExpired 不是 OSError 子类，
+        # 不能复用 *_exc 通道（那条锁的是「无法启动 → 本段 WARN 降级」，语义完全不同）。
+        self.lock_timeout = lock_timeout
+        self.egg_timeout = egg_timeout
         self.calls: list[tuple[str, list[str]]] = []
+        self.call_kwargs: list[dict[str, Any]] = []
 
     def which(self, name: str) -> str | None:
         return self.uv_path if name == "uv" else None
@@ -95,9 +102,14 @@ class _FakeEnv:
         argv = list(cmd)
         self._exec_lookup(argv)
         self.calls.append(("call", argv))
+        self.call_kwargs.append(dict(kwargs))
         is_uv_lock = len(argv) > 1 and argv[1] == "lock"
+        if is_uv_lock and self.lock_timeout:
+            raise subprocess.TimeoutExpired(cmd=argv, timeout=0)
         if is_uv_lock and self.lock_exc is not None:
             raise self.lock_exc
+        if not is_uv_lock and self.egg_timeout:
+            raise subprocess.TimeoutExpired(cmd=argv, timeout=0)
         return self.lock_rc if is_uv_lock else 0
 
     # ---- 断言辅助：三个形态各自只看自己关心的那一段调用序列 ----
@@ -121,7 +133,13 @@ def _install(monkeypatch: pytest.MonkeyPatch, fake: _FakeEnv) -> _FakeEnv:
     # 看不到真实失效面（FileNotFoundError 崩栈 + egg-info 段被带走）。改成强制装上后，
     # 旧形态仍会走 subprocess.run(["uv", ...]) → 命中本替身的 FileNotFoundError → 红在行为上。
     monkeypatch.setattr(sync_metadata, "shutil", types.SimpleNamespace(which=fake.which), raising=False)
-    monkeypatch.setattr(sync_metadata, "subprocess", types.SimpleNamespace(run=fake.run, call=fake.call))
+    # 替身必须从**真 subprocess 命名空间**浅拷贝再覆盖两个入口（AGENTS.md 的 shim 口径）：
+    # 只挑 run/call 会让替身缺 TimeoutExpired 等同模块常量，被测代码新增 except 分支时
+    # 替身先 AttributeError，报错还被读成生产缺陷（M-94 加超时上界时实测踩到）。
+    subprocess_shim = types.SimpleNamespace(**vars(subprocess))
+    subprocess_shim.run = fake.run
+    subprocess_shim.call = fake.call
+    monkeypatch.setattr(sync_metadata, "subprocess", cast(Any, subprocess_shim))
     # regenerate() 末尾会 check() 真实仓库产物：钉成幂等，使「降级路径」用例与
     # 「别人正在改 pyproject/uv.lock」解耦（那是环境耦合，不是行为回归）。
     monkeypatch.setattr(sync_metadata, "check", lambda: True)
