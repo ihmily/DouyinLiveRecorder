@@ -12,7 +12,7 @@ body:
     attributes:
       label: ⚠️ Confirm if similar issues exist
       description: >
-        🔍 [Click here to search historical issues](https://github.com/ihmily/DouyinLiveRecorder/issues?q=is%3Aissue)  
+        🔍 [Click here to search historical issues](https://github.com/ihmily/DouyinLiveRecorder/issues?q=is%3Aissue)
         Please make sure your issue hasn't been reported before.
       options:
         - label: I have searched the issues and found no similar problems
@@ -30,12 +30,9 @@ body:
   - type: dropdown
     attributes:
       label: 🐍 If running with source code, please select your Python environment version
-      description: Please select the Python version you used to run the program.
+      description: Please select the Python version you used to run the program; current source releases require Python 3.14+.
       options:
-        - Python 3.10
-        - Python 3.11
-        - Python 3.12
-        - Python 3.13
+        - Python 3.14
         - Other (please specify in the issue)
     validations:
       required: false

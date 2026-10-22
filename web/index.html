@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <!-- viewport-fit=cover：让 env(safe-area-inset-*) 生效（缺省时恒为 0），顶栏/toast 据此让开灵动岛、
+         圆角与 Home Indicator；页面内容不被默认挖孔，由 CSS 主动避让。 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title data-i18n="title">DouyinLiveRecorder 管理面板</title>
+    <!-- 标签图标：默认指向 /favicon.ico（后端按「导入图标 > 内置 assets/app.ico」解析）。
+         href 由 app.js 在导入成功后追加时间戳参数重写——浏览器对 favicon 的缓存极顽固，
+         不带破缓存参数的换图标在多数浏览器上要等下一次清缓存才可见。 -->
+    <link id="favicon-link" rel="icon" type="image/x-icon" href="/favicon.ico">
+    <link rel="stylesheet" href="/web/style.css">
+</head>
+<body data-theme="light">
+    <!-- 轻量粒子背景层：web/motion.js 优先复用此节点（缺失时自建）。固定铺满视口、落在内容之下、
+         pointer-events:none，aria-hidden 排除无障碍树；prefers-reduced-motion 命中时 motion.js 不绘制。 -->
+    <canvas id="bg-canvas" aria-hidden="true"></canvas>
+    <!-- 顶栏：品牌 + 标签页导航(.tab[data-view]) + 语言/主题/退出。控件在 app.js 的 DOMContentLoaded
+         中统一绑定；data-view 决定 showView 切到哪个面板。 -->
+    <header class="topbar">
+        <div class="brand" data-i18n="brand">直播录制管理面板</div>
+        <nav class="tabs">
+            <button class="tab active" data-view="dashboard" data-i18n="tab.dashboard">仪表盘</button>
+            <button class="tab" data-view="danmaku" data-i18n="tab.danmaku">弹幕监控</button>
+            <button class="tab" data-view="rooms" data-i18n="tab.rooms">直播间</button>
+            <button class="tab" data-view="config" data-i18n="tab.config">配置</button>
+            <button class="tab" data-view="files" data-i18n="tab.files">文件</button>
+        </nav>
+        <div class="topbar-right">
+            <!-- 导入图标：点击后由 app.js 触发 #icon-file-input（隐藏的 file input，只收 .ico），
+                 文件经 FileReader 读成 base64 后 POST /api/icon。刻意不放进配置页的表单区——
+                 那张表由 loadConfig() 整体重建，塞进去会被下一次刷新冲掉。 -->
+            <input type="file" id="icon-file-input" accept=".ico,image/x-icon" hidden>
+            <button id="icon-import-btn" data-i18n-title="icon.import" title="导入图标">🖼</button>
+            <select id="language-select" data-i18n-title="language.select" title="语言"></select>
+            <button id="theme-toggle" data-i18n-title="theme.toggle" title="切换主题">🌙</button>
+            <button id="logout-btn" class="hidden" data-i18n="logout">退出</button>
+        </div>
+    </header>
+
+    <!-- 登录页：初始靠 .hidden 隐藏；启动引导拉 /api/status，任何失败（401 或网络/超时）都走 showLogin()，
+         成功才直接进仪表盘——判据是「取不到状态」而不是「只认 401」。 -->
+    <main id="login-view" class="view hidden">
+        <div class="login-card">
+            <h2 data-i18n="login.title">登录</h2>
+            <input type="password" id="login-password" data-i18n-placeholder="login.password" placeholder="访问密码">
+            <button id="login-submit" data-i18n="login.submit">登录</button>
+            <div id="login-error" class="error-msg"></div>
+        </div>
+    </main>
+
+    <!-- 仪表盘：进入即 startSSE()（/api/status 每 2s）与 loadLogs()（日志另按 5s 轮询）。
+         #engine-warning 由 renderStatus 按 engine_alive===false 显隐；#status-warning 是更宽泛的状态告警
+         （SEV-2221/SEV-2228）：后端不可达、快照陈旧（stale / status_unavailable）都在这里提示，文案由
+         renderStatus → updateStatusWarning 经 textContent 写入，故此处不留 data-i18n。
+         .recording-state 三 span（on/off/probe）由 renderRecordingControl 切换：probe 仅在取证失败
+         （error/stale）时显示，此时两个录制按钮一并禁用（SEV-2228 后半）。 -->
+    <main id="dashboard-view" class="view">
+        <div id="engine-warning" class="engine-warning hidden" data-i18n="dashboard.engineWarning">⚠️ 录制引擎已停止运行，请检查日志或重启服务</div>
+        <div id="status-warning" class="engine-warning hidden" role="status" aria-live="polite"></div>
+        <div class="recording-control">
+            <span class="recording-state">
+                <span class="state-on hidden" data-i18n="recording.state.on">录制运行中</span>
+                <span class="state-off" data-i18n="recording.state.off">录制已停止</span>
+                <span class="state-probe hidden" data-i18n="recording.state.probeFailed">状态取证失败</span>
+            </span>
+            <button id="recording-start-btn" data-i18n="recording.start">开始录制</button>
+            <button id="recording-stop-btn" data-i18n="recording.stop">停止录制</button>
+        </div>
+        <div class="stat-cards">
+            <div class="stat-card"><div class="stat-label" data-i18n="dashboard.monitoring">监测中</div><div class="stat-value" id="stat-monitoring">-</div></div>
+            <div class="stat-card"><div class="stat-label" data-i18n="dashboard.recording">录制中</div><div class="stat-value" id="stat-recording">-</div></div>
+            <div class="stat-card"><div class="stat-label" data-i18n="dashboard.errors">错误数(累计/近期)</div><div class="stat-value" id="stat-errors">-</div></div>
+            <div class="stat-card"><div class="stat-label" data-i18n="dashboard.disk">磁盘剩余(GB)</div><div class="stat-value" id="stat-disk">-</div></div>
+        </div>
+        <section class="panel">
+            <h3 data-i18n="dashboard.recordingNow">正在录制</h3>
+            <table class="data-table">
+                <thead><tr><th data-i18n="col.name">名称</th><th data-i18n="col.qualitySet">设置画质</th><th data-i18n="col.qualityActual">实际画质</th><th data-i18n="col.startTime">开始时间</th><th data-i18n="col.duration">已录时长</th></tr></thead>
+                <tbody id="recording-tbody"><tr><td colspan="5" class="empty" data-i18n="empty.noRecording">暂无录制</td></tr></tbody>
+            </table>
+        </section>
+        <section class="panel">
+            <h3 data-i18n="dashboard.logs">实时日志</h3>
+            <div id="log-stream" class="terminal"></div>
+        </section>
+    </main>
+
+    <!-- 弹幕监控：进入即 startDanmakuPolling()（/api/danmaku?since= 每 2s 增量轮询）。房间表、房间筛选
+         下拉、弹幕流与无数据提示由 renderDanmaku/dmRenderStream 维护；#danmaku-clear-btn 清空本地缓冲。 -->
+    <main id="danmaku-view" class="view hidden">
+        <section class="panel">
+            <h3 data-i18n="danmaku.rooms">弹幕房间</h3>
+            <table class="data-table">
+                <thead><tr><th data-i18n="col.name">名称</th><th data-i18n="col.platform">平台</th><th data-i18n="col.status">状态</th><th data-i18n="danmaku.col.total">累计弹幕</th><th data-i18n="danmaku.col.rate">速率(条/分)</th><th data-i18n="danmaku.col.gifts">礼物</th><th data-i18n="danmaku.col.online">在线</th><th data-i18n="col.startTime">开始时间</th></tr></thead>
+                <tbody id="danmaku-rooms-tbody"><tr><td colspan="8" class="empty" data-i18n="danmaku.emptyRooms">暂无监控数据</td></tr></tbody>
+            </table>
+        </section>
+        <section class="panel">
+            <div class="danmaku-toolbar">
+                <h3 data-i18n="danmaku.live">实时弹幕</h3>
+                <select id="danmaku-room-filter"><option value="" data-i18n="danmaku.allRooms">全部房间</option></select>
+                <button id="danmaku-clear-btn" class="small" data-i18n="danmaku.clear">清空</button>
+            </div>
+            <div id="danmaku-stream" class="terminal danmaku-terminal"></div>
+            <div id="danmaku-hint" class="danmaku-hint hidden" data-i18n="danmaku.hint">未看到数据？请在「配置 → 录制设置」开启「是否弹幕监控(是/否)」，且直播间平台需支持弹幕（斗鱼/B站/虎牙/抖音/Twitch）</div>
+        </section>
+    </main>
+
+    <!-- 直播间管理：#room-add-form 提交走 addRoom()；#rooms-tbody 由 loadRooms() 渲染，行内开关
+         (data-action=toggle)/删除(delete)/画质下拉(quality) 经该 tbody 上的事件委托转发
+         toggleRoom/deleteRoom/changeRoomQuality（故这三类控件不需要各自绑监听器）。
+         该表列宽与防错位规则见 style.css 末尾的 #rooms-view 段（新增列须同步补 th 定宽）。 -->
+    <main id="rooms-view" class="view hidden">
+        <section class="panel">
+            <h3 data-i18n="rooms.add">添加直播间</h3>
+            <form id="room-add-form" class="inline-form">
+                <input type="text" id="room-url" data-i18n-placeholder="rooms.urlPlaceholder" placeholder="直播间地址" required>
+                <select id="room-quality">
+                    <option value="" data-i18n="rooms.defaultQuality">默认画质</option>
+                </select>
+                <input type="text" id="room-name" data-i18n-placeholder="rooms.namePlaceholder" placeholder="主播名称（可选）">
+                <button type="submit" data-i18n="rooms.addBtn">添加</button>
+            </form>
+            <!-- 画质选项管理：#room-quality 的下拉项不硬编码，由 loadQualityOptions() 从 config.ini 读取
+                 用户自选列表动态填充；此处提供增删入口，改动即时 PUT 回写。 -->
+            <div class="quality-options">
+                <button type="button" id="quality-manage-btn" class="small" data-i18n="rooms.manageQuality">画质选项</button>
+                <div id="quality-manage-panel" class="quality-panel hidden">
+                    <div id="quality-chips" class="quality-chips"></div>
+                    <div class="inline-form quality-add-row">
+                        <select id="quality-candidate"></select>
+                        <button type="button" id="quality-add-btn" class="small" data-i18n="rooms.addQuality">添加画质</button>
+                    </div>
+                    <div class="quality-hint" data-i18n="rooms.qualityHint">画质选项存于 config.ini，WEB 与桌面端画质切换菜单共用；仅内置档位可选（自定义名称不会被录制引擎识别）</div>
+                </div>
+            </div>
+        </section>
+        <section class="panel">
+            <h3 data-i18n="rooms.list">直播间列表</h3>
+            <table class="data-table">
+                <thead><tr><th data-i18n="col.url">地址</th><th data-i18n="col.qualitySet">设置画质</th><th data-i18n="col.name">名称</th><th data-i18n="col.enabled">启用</th><th data-i18n="col.recording">录制中</th><th data-i18n="col.actions">操作</th></tr></thead>
+                <tbody id="rooms-tbody"><tr><td colspan="6" class="empty" data-i18n="loading">加载中...</td></tr></tbody>
+            </table>
+        </section>
+    </main>
+
+    <!-- 配置：#config-container 由 loadConfig() 按 /api/config 动态生成输入行（含 data-section/data-key）；
+         #config-save-btn 触发 saveConfig()，只 PUT 有变更的键；HTTPS 开关输入实时联动 #ssl-platform-hint。
+         #config-save-status（MIN-2239）在保存中途失败时常驻显示「已应用 n 项 / 第 m 项失败 / 其余未提交」，
+         失败行另加 .row-failed 标红——不能只靠 toast：toast 会被下一条覆盖且自动消失，用户看到输入框仍是
+         自己填的样子就会误以为已保存。
+         M-17（CODE_REVIEW_2026-10-18）：本容器**不得**带 data-i18n* 属性。applyTranslations() 是「扫
+         [data-i18n] → 覆写 textContent」的通用形态，覆写 textContent 会连带清掉全部子节点；而 loadConfig()
+         只重建子节点、属性仍留在容器上，于是任意一次语言切换都会把整张已渲染的表单（含用户未保存的修改）
+         压成一行「加载中...」占位文本。静态首屏文案交给 loadConfig()/loadRooms()/loadFiles() 各自的 t()
+         分支产出，容器自身不参与静态翻译。
+         （删掉该属性不会留下「英文界面看到中文加载中」的可见残留：#config-view 初始带 .hidden，而让它
+         可见的 showView('config') 同一步就调用 loadConfig()。子节点上的 loading 一类键挂在会被 innerHTML
+         整体替换掉的节点上，重建即随之消失，故无同病。） -->
+    <main id="config-view" class="view hidden">
+        <section class="panel">
+            <h3 data-i18n="config.title">录制与推送配置</h3>
+            <div id="config-container">加载中...</div>
+            <div id="config-save-status" class="save-status hidden" role="status" aria-live="polite"></div>
+            <button id="config-save-btn" class="primary" data-i18n="config.save">保存配置</button>
+        </section>
+    </main>
+
+    <!-- 文件浏览：#file-breadcrumb 面包屑（点击下钻）、#files-tbody 由 loadFiles() 渲染；dir/file 行的
+         「进入」/「下载」按钮经事件委托转发 loadFiles/downloadFile。 -->
+    <main id="files-view" class="view hidden">
+        <section class="panel">
+            <div class="file-header">
+                <h3 data-i18n="files.title">录制文件</h3>
+                <div id="file-breadcrumb" class="breadcrumb"></div>
+            </div>
+            <table class="data-table">
+                <thead><tr><th data-i18n="col.name">名称</th><th data-i18n="col.type">类型</th><th data-i18n="col.size">大小</th><th data-i18n="col.mtime">修改时间</th><th data-i18n="col.actions">操作</th></tr></thead>
+                <tbody id="files-tbody"><tr><td colspan="5" class="empty" data-i18n="loading">加载中...</td></tr></tbody>
+            </table>
+        </section>
+    </main>
+
+    <!-- 全局轻提示：toast() 写 #toast 文本并按类型加 success/error/info 类，2.5s 后隐藏；
+         单例 toastTimer 保证连续提示互不打架（新提示清除旧定时器）。 -->
+    <div id="toast" class="toast hidden"></div>
+    <!-- 认证复验口令窗（M-22，2026-09-29）：修改 [Web] web_auth_enable / web_password 时由
+         askReauthPassword() 摘掉 .hidden 弹出，替代原 window.prompt（明文回显，是面板唯一非
+         type="password" 的口令采集形态）。四个出口（确认/取消/Enter/Esc/点遮罩）一律经 _settleReauth()
+         收敛：立刻清空 #reauth-password 并重新挂上 .hidden，口令不在隐藏节点里过夜。
+         与后端契约同源（src/web_api.py::update_config 的 MID-2241 段）：认证当前开启时写这两个键必须带能过
+         verify_web_password 的 reauth_password，否则 403；因此留空/取消在前端就地放弃，不把空 reauth 发出去。
+         认证当前**关闭**时后端不要求复验，前端也就不弹本窗——否则第一次启用认证的人没有旧口令可填，
+         会被这个窗口死锁在面板之外。autocomplete="off" + type="password"：口令不进自动填充候选。 -->
+    <div id="reauth-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="reauth-modal-label">
+        <div class="modal-card">
+            <label id="reauth-modal-label" for="reauth-password" data-i18n="config.authChangeReauth">请复验当前 Web 口令（修改认证配置需要；留空或取消即放弃本次改动）:</label>
+            <input type="password" id="reauth-password" autocomplete="off" data-i18n-placeholder="login.password" placeholder="访问密码">
+            <div class="modal-actions">
+                <button type="button" id="reauth-cancel" data-i18n="common.cancel">取消</button>
+                <button type="button" id="reauth-confirm" class="primary" data-i18n="config.save">保存配置</button>
+            </div>
+        </div>
+    </div>
+    <script src="/web/app.js"></script>
+    <!-- 动效层：零依赖、自启动（DOM 就绪即 init），不依赖 app.js、不改其渲染结构，降低回归风险。 -->
+    <script src="/web/motion.js"></script>
+</body>
+</html>

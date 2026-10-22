@@ -28,7 +28,7 @@ body:
       description: 如果可能，请提供功能相关的示例、截图或相关网址。
       placeholder: |
         直播间示例地址：
-        `https://www.example.com/live/xxxx` 
+        `https://www.example.com/live/xxxx`
 
   - type: textarea
     attributes:

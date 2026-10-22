@@ -1,0 +1,596 @@
+/* 全局布局与主题说明
+   - 主题走 CSS 变量方案：:root/[data-theme="light"] 与 [data-theme="dark"] 各定义一套
+     --primary/--bg/--card/--terminal-* 等变量；切主题只改 <body data-theme>，不重写规则。
+   - body 用 flex 纵向布局 + min-height:100vh，顶栏固定高度、主内容(.view)自适应撑开。
+   - 所有交互色集中在变量里，配色改动只动 :root/暗色块，组件样式引用 var() 即可。 */
+/* 浅色主题（默认） */
+:root, [data-theme="light"] {
+    --primary: #4F6DF5;
+    --primary-hover: #3D5BE0;
+    --primary-soft: #E8EDFE;
+    --success: #16A34A;
+    --danger: #DC2626;
+    --warning: #D97706;
+    --bg: #F4F6FB;
+    --card: #FFFFFF;
+    --border: #E5E8F0;
+    --text: #1E293B;
+    --muted: #64748B;
+    --terminal-bg: #0D1117;
+    --terminal-fg: #7DA7FF;
+    --terminal-err: #F85149;
+    --terminal-warn: #D29922;
+}
+
+[data-theme="dark"] {
+    --primary: #4F6DF5;
+    --primary-hover: #5B7AF7;
+    --primary-soft: #232B45;
+    --success: #16A34A;
+    --danger: #DC2626;
+    --warning: #D97706;
+    --bg: #0F1117;
+    --card: #171A23;
+    --border: #262B3A;
+    --text: #E2E8F0;
+    --muted: #8B93A7;
+    --terminal-bg: #0D1117;
+    --terminal-fg: #7DA7FF;
+    --terminal-err: #F85149;
+    --terminal-warn: #D29922;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+    font-family: "Microsoft YaHei UI", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    /* 移动端防 Safari 横竖屏切换时自动放大字号导致布局漂移 */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    /* 100dvh：移动浏览器地址栏收展时 100vh 会大于/小于可视高度（底部被工具栏遮挡或跳动），
+       dvh 跟随动态视口；旧浏览器不认识 dvh 时回退到上一行 100vh。 */
+    min-height: 100vh;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+}
+
+.topbar {
+    display: flex;
+    align-items: center;
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+    /* 安全区：viewport-fit=cover 下顶栏延伸进状态栏/刘海区域，内容用 env(safe-area-inset-*)
+       推回可交互区（灵动岛机型顶部、横屏左右侧）；env() 不被支持时按 0 处理，等于原 padding。 */
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: max(20px, env(safe-area-inset-left));
+    padding-right: max(20px, env(safe-area-inset-right));
+    min-height: 56px;
+    gap: 24px;
+}
+
+.brand { font-weight: 700; font-size: 16px; color: var(--primary); white-space: nowrap; }
+
+/* min-width:0 允许 tabs 在 flex 行内收缩出横向滚动条，而不是把整条 topbar 撑出视口 */
+.tabs { display: flex; gap: 4px; flex: 1; min-width: 0; }
+.tab {
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    padding: 8px 16px;
+    cursor: pointer;
+    border-radius: 6px;
+    font-size: 14px;
+    transition: all 0.15s;
+}
+.tab:hover { background: var(--primary-soft); color: var(--primary); }
+.tab.active { background: var(--primary); color: #fff; }
+
+.topbar-right { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+.topbar-right button {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+}
+/* 语言选择器：与主题切换按钮同风格 */
+.topbar-right select {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 8px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+}
+.topbar-right select:focus { outline: 1px solid var(--primary); }
+
+/* 安全区：主内容区左右留出刘海/圆角横屏 inset；env() 为 0 时等价于原 20px */
+.view {
+    flex: 1;
+    padding: 20px;
+    padding-left: max(20px, env(safe-area-inset-left));
+    padding-right: max(20px, env(safe-area-inset-right));
+    max-width: 1200px;
+    width: 100%;
+    margin: 0 auto;
+}
+/* .hidden 用 !important 确保它在任何视图/元素上都能强制隐藏，压过组件自身的 display 规则；
+   轮询与视图切换全靠增删 .hidden 控制显隐，故必须不可被其他规则意外覆盖。 */
+.hidden { display: none !important; }
+
+.login-card {
+    background: var(--card);
+    padding: 32px;
+    border-radius: 10px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    max-width: 360px;
+    margin: 60px auto;
+}
+.login-card h2 { margin-bottom: 16px; color: var(--primary); }
+.login-card input {
+    width: 100%;
+    padding: 10px;
+    margin-bottom: 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+}
+.login-card button {
+    width: 100%;
+    padding: 10px;
+    background: var(--primary);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+}
+.error-msg { color: var(--danger); font-size: 13px; margin-top: 8px; min-height: 18px; }
+
+.stat-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 20px; }
+.stat-card {
+    background: var(--card);
+    padding: 16px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+}
+.stat-label { color: var(--muted); font-size: 13px; margin-bottom: 8px; }
+.stat-value { font-size: 28px; font-weight: 700; color: var(--primary); }
+
+.panel {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 16px;
+}
+.panel h3 { margin-bottom: 12px; font-size: 15px; }
+
+.data-table { width: 100%; border-collapse: collapse; }
+.data-table th, .data-table td {
+    padding: 10px 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+}
+.data-table th { color: var(--muted); font-weight: 600; }
+.data-table .empty { text-align: center; color: var(--muted); padding: 24px; }
+.data-table td.quality-down { color: var(--danger); font-weight: 600; }
+
+.inline-form { display: flex; gap: 8px; flex-wrap: wrap; }
+.inline-form input, .inline-form select {
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+}
+/* 直播间列表行内画质下拉（.inline-form select 的紧凑版） */
+.data-table select {
+    padding: 4px 6px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 12px;
+    max-width: 110px;
+}
+.inline-form input[type="text"] { flex: 1; min-width: 200px; }
+.inline-form button, .primary {
+    padding: 8px 16px;
+    background: var(--primary);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+}
+.inline-form button:hover, .primary:hover { background: var(--primary-hover); }
+
+button.danger { background: var(--danger); color: #fff; border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+button.small { background: var(--primary-soft); color: var(--primary); border: none; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }
+
+/* 开关(switch)：原生 checkbox 视觉隐藏(opacity:0 占 0 尺寸)但保留可聚焦/可点，
+   真实交互落到 .slider 伪元素；:checked 时滑块右移并变绿，纯 CSS 实现启停态切换，无需 JS 改样式。 */
+.switch { position: relative; display: inline-block; width: 40px; height: 22px; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider { position: absolute; cursor: pointer; inset: 0; background: var(--border); border-radius: 22px; transition: 0.2s; }
+.slider:before { content: ""; position: absolute; height: 16px; width: 16px; left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: 0.2s; }
+.switch input:checked + .slider { background: var(--success); }
+.switch input:checked + .slider:before { transform: translateX(18px); }
+
+.terminal {
+    background: var(--terminal-bg);
+    color: var(--terminal-fg);
+    font-family: "Cascadia Code", "Consolas", monospace;
+    font-size: 12px;
+    padding: 12px;
+    border-radius: 6px;
+    height: 240px;
+    overflow-y: auto;
+    /* 等宽字体贴近日志/弹幕观感；pre-wrap + word-break 让超长 URL/弹幕整行折行不横向溢出，
+       overflow-y 配合固定高度独立滚动，避免日志把整个页面撑长。 */
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+.config-group { margin-bottom: 16px; }
+.config-group h4 { color: var(--primary); margin-bottom: 8px; font-size: 14px; }
+.config-row { display: grid; grid-template-columns: 240px 1fr; gap: 12px; align-items: center; margin-bottom: 8px; }
+.config-row label { color: var(--muted); font-size: 13px; }
+.config-row input { padding: 6px 10px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--text); font-size: 13px; }
+
+/* SSL/HTTPS 整合说明：「是否启用https录制」统一控制协议与证书校验，旧键废弃置灰 */
+.config-hint { grid-column: 2; font-size: 12px; line-height: 1.5; color: var(--muted); }
+.config-hint.hint-on { color: var(--success); }
+.config-hint.hint-off { color: var(--warning); }
+/* MID-37：掩码凭据行的说明提示。它与「废弃项」的 hint-off 同用 --warning 橙色——
+   区别只在语义，故文案必须自己讲清楚：该行值只是被 *** 遮蔽，提交空值会波及真实凭据，
+   需要在保存前被看见（真正的区分靠 input 的 data-masked 标记与提示文字，不靠颜色）。 */
+.config-hint.hint-masked { color: var(--warning); }
+.config-row.row-deprecated label, .config-row.row-deprecated input { opacity: 0.5; text-decoration: line-through; }
+.config-row.row-deprecated .config-hint { text-decoration: none; }
+/* MIN-2239：保存中途失败的行标红（输入框描边 + 左侧色条）。
+   与「废弃项」的灰置灰、「掩码项」的警示黄都不同色，避免三种状态被看混。 */
+.config-row.row-failed input { border-color: var(--danger); box-shadow: inset 3px 0 0 var(--danger); }
+/* MIN-2239：保存未全部成功时的常驻明细（比 toast 更持久；toast 会消失且被覆盖）。
+   传空串即隐藏，正常保存全程不出现。 */
+.save-status {
+    margin-top: 10px;
+    padding: 8px 12px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
+    border-left: 3px solid var(--danger);
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.file-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.breadcrumb { color: var(--muted); font-size: 13px; }
+.breadcrumb a { color: var(--primary); cursor: pointer; text-decoration: none; }
+
+.toast {
+    position: fixed;
+    /* 安全区：iPhone Home Indicator / 圆角底部会把贴边 24px 的 toast 压住，max() 保证至少 24px 且让出 inset */
+    bottom: max(24px, env(safe-area-inset-bottom));
+    right: max(24px, env(safe-area-inset-right));
+    padding: 12px 20px;
+    border-radius: 6px;
+    color: #fff;
+    font-size: 14px;
+    /* fixed 脱离文档流、贴右下角常驻，z-index:1000 压过所有面板（含 terminal、弹幕流），
+       保证操作反馈在所有视图层级之上可见；单例避免多条提示堆叠。 */
+    z-index: 1000;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+.toast.success { background: var(--success); }
+.toast.error { background: var(--danger); }
+.toast.info { background: var(--primary); }
+
+.engine-warning {
+    background: var(--danger);
+    color: #fff;
+    padding: 10px 16px;
+    border-radius: 6px;
+    margin-bottom: 16px;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+/* ===== 录制控制条（开始/停止录制按钮 + 状态标签） ===== */
+.recording-control {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;  /* 窄屏（iPhone 16 Pro Max 440px / Pixel 10 412px）下状态文本与两按钮放不下一行，换行而非互相挤压 */
+    gap: 12px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin-bottom: 20px;
+}
+.recording-state { flex: 1; font-size: 14px; }
+.recording-state .state-on { color: var(--success); font-weight: 600; }
+.recording-state .state-off { color: var(--muted); font-weight: 600; }
+.recording-control button {
+    padding: 8px 20px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    transition: all 0.15s;
+}
+#recording-start-btn { background: var(--primary); color: #fff; }
+#recording-start-btn:hover:not(:disabled) { background: var(--primary-hover); }
+#recording-stop-btn { background: var(--danger); color: #fff; }
+#recording-stop-btn:hover:not(:disabled) { opacity: 0.9; }
+.recording-control button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* 响应式断点：窄屏(≤768px)下把仪表盘卡片从 4 列降到 2 列、配置行从两栏变单栏，
+   配置提示改占第 1 列；标签页允许横向滚动以免溢出被裁切。无更大断点，移动端即按此布局。
+   移动端实测（iPhone 16 Pro Max 视口 440×956 CSS px / DPR 3，Pixel 10 视口 412×915 / DPR 2.6）：
+   顶栏单行放不下「品牌 + 5 个标签 + 语言下拉 + 主题按钮」，fixed 56px 高度被竖排折字撑破、
+   右侧按钮裁出屏幕——故拆成两行：第一行品牌+右侧控件，第二行标签页整行横向滚动。 */
+@media (max-width: 768px) {
+    .topbar {
+        flex-wrap: wrap;
+        row-gap: 2px;
+        padding-top: calc(6px + env(safe-area-inset-top));
+        padding-bottom: 6px;
+    }
+    /* 标签页换到第二行独占整宽，横向滚动消费溢出，不再挤压品牌与右侧控件 */
+    .tabs {
+        order: 3;
+        flex: 1 1 100%;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+    }
+    .tabs::-webkit-scrollbar { display: none; }
+    .tab { padding: 8px 12px; flex-shrink: 0; }
+    .topbar-right { margin-left: auto; }
+
+    .stat-cards { grid-template-columns: repeat(2, 1fr); }
+    .config-row { grid-template-columns: 1fr; }
+    .config-hint { grid-column: 1; }
+
+    /* 数据表（仪表盘「正在录制」5 列、弹幕房间 8 列、文件 5 列）在窄屏按 min-content
+       撑破 .panel 宽度：给表格保底宽度、面板内横向滚动，列头不再被压成竖排字。
+       注意：这是「面板内滚动」兜底，不要与 #rooms-view 的 table-layout:fixed 定宽方案混淆
+       （两者叠加无害，rooms 视口下方有自己的 min-width:640px 规则优先生效）。 */
+    .panel { overflow-x: auto; }
+    #dashboard-view .data-table,
+    #danmaku-view .data-table,
+    #files-view .data-table { min-width: 540px; }
+
+    .danmaku-toolbar { flex-wrap: wrap; }
+    .danmaku-toolbar select { max-width: 100%; }
+    .file-header { flex-wrap: wrap; }
+    /* 行内表单的地址输入框 200px 最小宽在 412px 视口会挤出按钮，放宽为可收缩 */
+    .inline-form input[type="text"] { flex: 1 1 160px; min-width: 0; }
+}
+
+/* ===== 弹幕监控 ===== */
+.danmaku-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+.danmaku-toolbar h3 { margin-bottom: 0; flex: 1; }
+.danmaku-toolbar select {
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+    max-width: 220px;
+}
+.danmaku-terminal { height: 340px; line-height: 1.7; }
+.danmaku-terminal .dm-line { display: block; }
+.danmaku-terminal .dm-room { color: #56D364; }
+.danmaku-terminal .dm-user { color: var(--terminal-fg); font-weight: 600; }
+.danmaku-terminal .dm-gift .dm-user { color: var(--terminal-warn); }
+.danmaku-terminal .dm-sc .dm-user { color: #DB61A2; }
+.danmaku-terminal .dm-dropped { color: var(--muted); opacity: 0.7; font-style: italic; }
+.danmaku-hint {
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 8px;
+}
+.dm-status-on { color: var(--success); font-weight: 600; }
+.dm-status-off { color: var(--danger); font-weight: 600; }
+
+/* 画质选项管理：面板位于「添加直播间」表单下方，chips 展示当前选项并可逐个删除，
+   候选下拉 + 添加按钮用于补充选项（可选项固定为录制引擎支持的 10 个内置档位）。 */
+.quality-options { margin-top: 12px; }
+.quality-panel {
+    margin-top: 10px;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+}
+.quality-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.quality-chips:empty { margin-bottom: 0; }
+.quality-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 6px 4px 10px;
+    background: var(--primary-soft);
+    color: var(--primary);
+    border-radius: 14px;
+    font-size: 12px;
+}
+.quality-chip button {
+    width: 18px;
+    height: 18px;
+    line-height: 1;
+    padding: 0;
+    background: transparent;
+    color: var(--primary);
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 14px;
+}
+.quality-chip button:hover { background: var(--primary); color: #fff; }
+.quality-add-row select {
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+}
+.quality-add-row button { padding: 6px 12px; }
+.quality-hint { color: var(--muted); font-size: 12px; margin-top: 10px; line-height: 1.6; }
+
+/* ===== 直播间列表防错位（table-layout:fixed + 地址列省略号 + 窄屏面板内横向滚动）
+   窄视口（窗口缩窄 / Windows 高 DPI 缩放，有效宽度 ≈500px）下 6 列 auto 布局的最小内容宽
+   （画质下拉 110px + 40px 开关 + 删除按钮 + 各列内边距）会超出 .panel 容器：width:100% 失效，
+   表格按 min-content 溢出渲染——表头「启用/录制中」被压成一字宽竖排字、「删除」按钮溢出卡片右缘、
+   长 URL（discover?modal_id= 等）与长名称折成多行导致行高参差（2026-09-11 截图实锤）。
+   下面按表头定列宽、地址列吃剩余宽并单行省略，全 URL 靠悬浮 title 可见（loadRooms 渲染的地址 td
+   自带 title）。三条不可回退的约束：
+   ① 改回 auto 布局或删掉省略号即让上述错位回归：Chrome 会在 URL 的 / ? & = 处断行，
+      而 Safari 里单元格的 text-overflow:ellipsis 必须配 table-layout:fixed 才生效；
+   ② 新增列必须同步补一条对应的 th:nth-child(n) 定宽——fixed 布局下未定宽的新列会平分剩余空间、
+      反过来挤压地址列；
+   ③ 本段作用域必须保持 #rooms-view，勿"顺手统一"到仪表盘/弹幕/文件三张表：它们列数与内容形态
+      不同，fixed 定宽会破坏其布局。 */
+#rooms-view .data-table { table-layout: fixed; }
+#rooms-view .data-table th:nth-child(2) { width: 128px; }  /* 画质：容纳 max-width:110px 下拉 + 左右内边距 */
+#rooms-view .data-table th:nth-child(3) { width: 150px; }  /* 名称 */
+#rooms-view .data-table th:nth-child(4) { width: 72px; }   /* 启用：容纳 40px 开关 */
+#rooms-view .data-table th:nth-child(5) { width: 72px; }   /* 录制中 */
+#rooms-view .data-table th:nth-child(6) { width: 76px; }   /* 操作：容纳删除按钮 */
+#rooms-view .data-table td {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: middle;  /* 显式声明，避免各浏览器 UA 默认差异导致控件垂直错位 */
+}
+#rooms-view .data-table td:first-child,
+#rooms-view .data-table td:nth-child(3) { white-space: nowrap; }  /* 长 URL/长名单行省略，不折行 */
+/* 窄屏兜底：列定宽总和之下不再挤压右侧控件列，改为面板内横向滚动 */
+@media (max-width: 768px) {
+    #rooms-view .data-table { min-width: 640px; }
+    #rooms-view .panel { overflow-x: auto; }
+}
+
+/* F-09 / WD-07：无认证风险横幅（前端仅在 web_auth_enable=false 时插入）。
+   与 .engine-warning 同色系但用警示黄以示区别：引擎死亡是故障，未认证是配置风险。 */
+.auth-warning {
+    background: #f5a623;
+    color: #1a1a1a;
+    padding: 10px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.5;
+}
+
+/* ===== 认证复验口令窗（M-22，2026-09-29） =====
+   面板原先用 window.prompt 采集复验口令（明文回显，是全站唯一非 type="password" 的口令输入形态），
+   现改成本文件既有形态：静态节点 + .hidden 切换（与 .login-card / .engine-warning 同族，
+   不引框架、不在运行时 createElement —— 后者会让 tests/frontend/*.mjs 的 node:vm 沙箱无法驱动）。
+   层级：.modal-overlay 的 z-index 必须**高于** .toast 的 1000，保存失败/403 的 toast 才不会被
+   口令窗盖住而看不见（反之若口令窗压在 toast 之下，用户会在提示下面看不清正在发生什么）。
+   配色一律取既有变量（--card/--border/--text/--muted/--bg/--primary），不新增颜色字面量；
+   遮罩底色与 .toast 的投影同为 rgba 中性黑，与明暗两套主题都不冲突。
+   取消按钮走 #reauth-cancel 单独配色，**不要**写 .modal-actions button 的 background：
+   .modal-actions button(0,1,1) 的特异性高于 .primary(0,1,0)，会把主按钮刷成灰底。 */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* 安全区：横屏刘海机型会把居中卡片往左侧挤，padding 让出 env(safe-area-inset-*) */
+    padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+        max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+    background: rgba(15, 17, 23, 0.55);
+    z-index: 1100;
+}
+.modal-card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 100%;
+    max-width: 420px;
+    padding: 18px 20px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+}
+.modal-card label { color: var(--text); font-size: 13px; line-height: 1.6; }
+.modal-card input {
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+}
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.modal-actions button {
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-size: 14px;
+    cursor: pointer;
+}
+#reauth-cancel { border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+#reauth-cancel:hover { border-color: var(--primary); color: var(--primary); }
+
+/* ===== 动效层（web/motion.js 配套，零依赖） =====
+   - 滚动入场：.reveal 初始隐藏，进入视口加 .is-revealed 过渡显现；无 JS 时元素默认可见
+     （opacity:0 只在 .reveal 被 JS 加上后才生效，脚本失败/禁用也不丢内容）。
+   - 轻量粒子背景：#bg-canvas 固定层，z-index:-1 落在 body 背景之上、主内容之下；卡片不透明盖住
+     粒子，仅在缝隙与留白处透出，保证「克制」而非喧宾夺主。
+   - 统一交互反馈只动 background-color/color/border-color/box-shadow/transform/opacity，绝不触发布局属性
+     （避免 layout thrash）；:focus-visible 兜底键盘可达的焦点环。
+   - 可访问性闸门：prefers-reduced-motion 命中时入场过渡与时长归零、悬浮位移关闭（canvas 由 motion.js 跳过创建）。 */
+#bg-canvas {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: -1;
+    pointer-events: none;
+}
+.reveal { opacity: 0; transform: translateY(12px); }
+.is-revealed {
+    opacity: 1;
+    transform: none;
+    transition: opacity 0.5s ease, transform 0.5s ease;
+}
+.tab, .topbar-right button, .topbar-right select,
+.inline-form button, .primary, button.small, button.danger,
+.recording-control button, .quality-chip button, .login-card button,
+.stat-card, .panel {
+    transition: background-color 0.18s ease, color 0.18s ease, border-color 0.18s ease,
+        box-shadow 0.18s ease, transform 0.18s ease;
+}
+.stat-card:hover, .panel:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+}
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+    .reveal { opacity: 1; transform: none; }
+    .is-revealed { transition: none; }
+    .stat-card:hover, .panel:hover { transform: none; box-shadow: none; }
+    * { scroll-behavior: auto !important; }
+}

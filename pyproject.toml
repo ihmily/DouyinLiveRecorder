@@ -1,23 +1,388 @@
 [project]
 name = "DouyinLiveRecorder"
-version = "4.0.7"
-description = "可循环值守和多人录制的直播录制软件, 支持抖音、TikTok、Youtube、快手、虎牙、斗鱼、B站、小红书、pandatv、sooplive、flextv、popkontv、twitcasting、winktv、百度、微博、酷狗、17Live、Twitch、Acfun、CHZZK、shopee等40+平台直播录制"
+version = "4.6.0"
+description = "支持抖音、TikTok、YouTube、快手等60+平台的直播录制工具，支持循环录制、多人录制、消息推送"
 readme = "README.md"
-authors = [{name = "Hmily"}]
+requires-python = ">=3.14"
 license = { text = "MIT" }
-requires-python = ">=3.10"
-dependencies = [
-    "requests>=2.31.0",
-    "loguru>=0.7.3",
-    "pycryptodome>=3.20.0",
-    "distro>=1.9.0",
-    "tqdm>=4.67.1",
-    "httpx[http2]>=0.28.1",
-    "PyExecJS>=1.5.1"
+authors = [
+    { name = "y123ao6", email = "zmzx0690@agent.qq.com" }
+]
+keywords = [
+    "live-streaming",
+    "recorder",
+    "douyin",
+    "tiktok",
+    "bilibili",
+    "twitch",
+    "youtube",
+    "直播录制",
+    "抖音",
+    "虎牙",
+    "斗鱼"
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Environment :: GUI",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Operating System :: MacOS X",
+    "Operating System :: Microsoft :: Windows :: Win32",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Multimedia :: Video :: Capture",
+    "Topic :: Communications :: Chat",
 ]
 
+dependencies = [
+    "requests>=2.34.2",
+    # urllib3：requests 的传递依赖，但本仓运行期的同步出站下载（ffmpeg / node 拉取与哈希核对，
+    # 经 requests）都穿过它，故显式声明下限（补-05：CVE-2026-44431 受影响 1.23 – < 2.7.0）。
+    # 下限 2.8.0（2026-10-01 deps-audit「下限复核」）：CVE-2026-97687/97688/97689 均影响 2.7.0、
+    #   修复于 2.8.0，旧下限自身落在受影响段；现装即 2.8.0，抬下限不改解析集合。
+    "urllib3>=2.8.0",
+    "loguru>=0.7.3",
+    "pycryptodome>=3.23.0",
+    "distro>=1.9.0",
+    "tqdm>=4.69.0",
+    "httpx[http2]>=0.28.1",
+    # httpx 的**可选**能力包（extra），本仓运行时真的会执行其代码，故必须显式声明——
+    # requirements.txt 与本节是「单源双写」，两侧包名集合必须逐项一致（回归锁：
+    # tests/test_regression_2026_09_22_gates.py 断言集合相等，防单侧遗漏）。
+    # extra 只在 pip 解析 `.[extra]` 那一刻展开，而 Docker/CI 消费的是 requirements.txt
+    #   （`pip install -r`），把 httpx 写成裸名或换索引重装即静默丢失（2026-09-23 本机实测
+    #   `import h2` → ModuleNotFoundError）。触发点已回源到 httpx 源码：h2 来自
+    #   httpx._client.Client.__init__ 的 `if http2: import h2`（本仓 http2 默认为 True）；socksio 来自
+    #   httpx._transports.default 的 `socks5/socks5h` 分支 `import socksio`（本仓支持 socks5:// 写法）。
+    # h2 下限 >=4.4.1（2026-09-26 deps-audit「下限复核」）：PYSEC-2026-3628 / GHSA-6hr6-w5qg-qmwg
+    #   （重复 Host 头 → 请求走私）fixed=4.4.1，旧下限 4.3.0 自身即在受影响段（它只修了同源的
+    #   PYSEC-2026-1435）；现装与 uv.lock 均已是 4.4.1。
+    "h2>=4.4.1",
+    "socksio>=1.0.0",
+    "exejs>=1.0.1",
+    "PyExecJS>=1.5.1",
+    # [2026-10-03 阶段5] customtkinter 已随 UI 现代化阶段4（tkinter.ttk 自研控件层）摘除
+    # GUI 主窗口迁 PySide6：QSS token 可 1:1 还原设计稿的圆角/投影/弹簧动效（ttk 无法原生实现），
+    #   下界 6.12 是本机实测支持 Python 3.14.8 的最小版。2026-10-20 起 Web 入口托盘
+    #   （src/web_tray.py）改走 QSystemTrayIcon，本包同时是 GUI 与 Web 两入口的运行时依赖。
+    #   [历史注] pystray / Pillow 已同批摘除：遗留 tkinter 托盘（gui.py::SystemTray）退役，
+    #   两入口托盘统一为 Qt + QPainter 现画图标，PIL 全仓再无调用点——旧注释「保留的原因改为
+    #   tkinter 版 gui.py 的托盘仍在用」的前提已失效，故两包一并移出 [project.dependencies] 与 .gui。
+    "PySide6>=6.12.0",
+    # starlette 下限 >=1.3.1：兼顾 CVE-2026-48710（受影响 <=1.0.0）与 PYSEC-2026-2280/2281
+    # （修复于 1.1.0）、PYSEC-2026-248/249（修复于 1.3.0/1.3.1）——旧下限 0.49.1、乃至补-05 抬的
+    # 1.0.1 都仍放行受影响段。现装 1.8.0；审计口径见 ci.yml deps-audit「下限复核」。
+    "starlette>=1.3.1",
+    "uvicorn[standard]>=0.51.0",
+    # [2026-10-20] python-multipart>=0.0.32 摘除（与 requirements.txt 同批，两侧包名集合必须相等）：
+    #   原理由写「表单 / 文件上传解析（Web 接口接收配置上传）」，但该上传接口并不存在——全仓无
+    #   `.form()` / `UploadFile` 调用点，web/ 前端亦无 FormData / <input type=file> / enctype。
+    #   Starlette 仅在 Request.form() 内部 import 它，无该调用点即不构成运行期依赖。
+    # 弹幕 WS 客户端：additional_headers/proxy 为 websockets 14.0+ API，下界须钉 14.0
+    # （12/13.x 时 connect() 直接 TypeError 且被重连循环吞掉，弹幕永远连不上）
+    "websockets>=14.0",
+    # 弹幕链（src/collector.py 工厂 + src/platforms/ 各平台采集器 + src/proto/ 协议解码）运行时依赖：
+    # protobuf 解析抖音弹幕协议（下限 6.33.5：PYSEC-2026-1805 影响 6.31.1，修复于 5.29.6 / 6.33.5；
+    # 现装 7.36.2），brotli 解压 B站弹幕。上限 <8（F-14）：douyin_pb2.py 由 protoc 25.x 生成
+    # （gencode 4.25.3），跨大版本升级 runtime 有 gencode 兼容窗口外失效风险，升级前须同代 protoc 重新生成。
+    "protobuf>=6.33.5,<8",
+    "brotli>=1.2.0",
+    # i18n YAML 翻译目录支持（i18n/zh_TW.yaml；缺失时仅损失该格式，JSON/gettext 不受影响）
+    "PyYAML>=6.0.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "mypy>=1.5.0",
+    "pre-commit>=3.6.0",
+]
+gui = [
+    "PySide6>=6.12.0",
+]
+# 可执行文件打包（build_exe.py / CI 使用，非运行时依赖）
+build = [
+    "pyinstaller>=6.10.0",
+]
+
+[project.scripts]
+douyin-recorder = "main:main"
+douyin-recorder-gui = "gui:main"
+douyin-recorder-web = "web:main"
+
 [project.urls]
-"Homepage" = "https://github.com/ihmily/DouyinLiveRecorder"
-"Documentation" = "https://github.com/ihmily/DouyinLiveRecorder"
-"Repository" = "https://github.com/ihmily/DouyinLiveRecorder"
-"Issues" = "https://github.com/ihmily/DouyinLiveRecorder/issues"
+Homepage = "https://github.com/y123ao6/DouyinLiveRecorder"
+Documentation = "https://github.com/y123ao6/DouyinLiveRecorder"
+Repository = "https://github.com/y123ao6/DouyinLiveRecorder"
+Issues = "https://github.com/y123ao6/DouyinLiveRecorder/issues"
+Changelog = "https://github.com/y123ao6/DouyinLiveRecorder/releases"
+Sponsor = "https://github.com/sponsors/y123ao6"
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# 子包必须显式列出：显式 packages 不递归发现，漏列会让 `pip install .` 产出的发行包缺失
+# src/platforms（各平台弹幕采集器）与 src/proto（抖音弹幕 protobuf），运行时以
+# ModuleNotFoundError 炸在导入链上（egg-info/SOURCES.txt 可核对）。src.gui_qt / src.gui_qt.pages
+# 同理：gui.py:main() 委托到 src.gui_qt.app.main()，main_window.py 又相对导入
+# .pages.{config,danmaku,dashboard,quality,runlog}——漏列任一子包，装出的 douyin-recorder-gui
+# 入口在第一段导入就 ModuleNotFoundError。
+packages = ["src", "src.gui_qt", "src.gui_qt.pages", "src.platforms", "src.proto"]
+# 顶层单文件模块：保证 [project.scripts] 三个入口（main/gui/web）安装后可用
+py-modules = ["main", "web", "gui", "i18n", "msg_push"]
+
+[tool.setuptools.package-data]
+src = ["javascript/*.js"]
+# douyin.proto 是 douyin_pb2.py 的生成源：跨大版本升级 protobuf runtime 前须用同代 protoc
+# 重新生成（见上方 F-14 注释），故必须随发行包分发；漏列会让 sdist 里只剩生成物没有源定义
+"src.proto" = ["*.proto"]
+# 注：i18n/ 翻译目录不是 Python 包（无 __init__.py），无法通过 package-data 分发；
+# .mo 文件随 git 仓库、发布 zip（build_exe.py）与 Docker 镜像分发。
+
+[tool.black]
+line-length = 120
+target-version = ['py314']
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+    | \.venv
+    | build
+    | dist
+    | __pycache__
+    | \.pyc
+    | node
+    | ffmpeg
+    # 运行期产物目录（录制文件 / 日志 / 配置备份；均已在 .gitignore、.dockerignore 同源忽略）
+    | downloads
+    | recordings
+    | logs
+    | backup_config
+    # 第三方/工具生成目录（非项目代码，不纳入格式化；与 .gitignore/.dockerignore 同源维护）
+    | \.agents
+    | \.qoder
+    | \.qoder-credits
+    | \.workbuddy
+    | \.codebuddy
+    | \.trae
+    | \.plugin-src
+    | \.dsh-validation
+    | \.ego-browser-test
+    | \.npm-cache
+    | \.pnpm-store
+    | \.mimosa
+    | \.tmp-dps-extract
+    | \.v2c
+    | \.superpowers
+    | typings
+    | pytest-cache-files-[^/]*
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 120
+known_first_party = ["src", "i18n"]
+# 第三方/工具生成目录（非项目代码，不纳入导入排序；与 .gitignore/.dockerignore 同源维护）
+extend_skip = [
+    "node",
+    "ffmpeg",
+    # 运行期产物目录（与 .gitignore/.dockerignore 同源维护）
+    "downloads",
+    "recordings",
+    "logs",
+    "backup_config",
+    ".agents",
+    ".qoder",
+    ".qoder-credits",
+    ".workbuddy",
+    ".codebuddy",
+    ".trae",
+    ".plugin-src",
+    ".dsh-validation",
+    ".ego-browser-test",
+    ".npm-cache",
+    ".pnpm-store",
+    ".mimosa",
+    ".tmp-dps-extract",
+    ".v2c",
+    # SDD/治理式流程技能在仓库内留下的工作区目录（与 .gitignore/.dockerignore 同源维护）
+    ".superpowers",
+]
+extend_skip_glob = ["*.pyc", "pytest-cache-files-*"]
+
+[tool.mypy]
+python_version = "3.14"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+# 检查范围（单一事实源）：CI 与本地都直接跑 `mypy`（不带路径参数）消费此列表，避免
+# 「CI 查 A、本地查 B」的覆盖面漂移；显式传参（如 mypy src/）仍优先生效。
+# 只收产品代码与本仓测试：src/ 包 + 根入口 + 打包脚本 + 维护脚本 + tests/。tests/ 纳入的
+# 理由：门禁早已要求 `mypy tests/`，但只靠自觉会漂移（2026-09-13 新增的黄金快照用例即带着
+# 12 处缺注解混入，门禁实际已红未察）。
+files = [
+    "src",
+    "main.py",
+    "gui.py",
+    "web.py",
+    "i18n.py",
+    "msg_push.py",
+    "build_exe.py",
+    "scripts",
+    "tests",
+]
+# 排除目录（正则 re.search 按「相对路径 + 正斜杠归一 + 目录补尾 /」的子串匹配；本地工具生成目录
+# 与 .gitignore/.dockerignore 同源维护）。运行时二进制目录必须锚定成目录段形态 (^|/)<名>/：
+# 裸名字会按子串命中任何含该名字的模块路径——裸 "ffmpeg" 曾把 src/ffmpeg_*.py 与
+# tests/test_ffmpeg_*.py 共 10 个文件整个排除在无参 mypy 门禁外（2026-10-03 锚定修复），裸 "node"
+# 同理误伤 node_install 两文件。其余条目现无 .py 路径碰撞，维持裸名；新增排除项时一律写锚定形态。
+exclude = [
+    "(^|/)node/",
+    "(^|/)ffmpeg/",
+    # 运行期产物目录（与 .gitignore/.dockerignore 同源维护）
+    "downloads",
+    "recordings",
+    "logs",
+    "backup_config",
+    "typings",
+    "__pycache__",
+    "\\.mimosa",
+    "\\.qoder",
+    "\\.qoder-credits",
+    "\\.agents",
+    "\\.workbuddy",
+    "\\.codebuddy",
+    "\\.trae",
+    "\\.pnpm-store",
+    "\\.npm-cache",
+    "\\.dsh-validation",
+    "\\.ego-browser-test",
+    "\\.plugin-src",
+    "\\.tmp-dps-extract",
+    "\\.v2c",
+    "\\.superpowers",
+    "pytest-cache-files-",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+filterwarnings = [
+    # 第三方弃用提示：starlette 本体在 `starlette/testclient.py` 导入期发出（类别
+    # StarletteDeprecationWarning，是 UserWarning 子类），与本项目代码无关。承重、不得删：
+    # 2026-09-30 实测带 `-W default::UserWarning` 跑 tests/test_web_api.py 时 warnings summary
+    # 恰落 1 条（源于该文件的 `from starlette.testclient import TestClient`）。
+    # [历史注] 原注释把触发方记作「fastapi testclient 内部 import」——2026-09-29 阶段2 移除
+    # fastapi/pydantic 后该归因已被证伪，告警一直由 starlette 自己发出。
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated",
+    # 第三方弃用提示（anyio 4.x 的 `abc.BlockingPortal` 别名迁移到 `from_thread`）。
+    # 现装组合下已不触发：starlette 1.8.0 的 testclient 三处引用一律走 `anyio.from_thread.BlockingPortal`
+    # （非别名路径），且带 `-W always::DeprecationWarning`（命令行 -W 覆盖本节 ini 过滤）跑
+    # tests/test_web_api.py + test_web_api_routes.py 后 warnings summary 为空。
+    # 保留理由是对声明下限 starlette>=1.3.1 整段的防御——本 venv 只有 1.8.0，未验证 1.3.x 的
+    # testclient 是否仍走别名路径，故不在此删；确认整段都不触发时可移除本条。
+    "ignore:The anyio\\.abc\\.BlockingPortal alias is deprecated",
+]
+
+[tool.coverage.run]
+source = ["src"]
+# 本地工具生成目录与 .gitignore/.dockerignore 同源维护（.coveragerc-concurrency 的 omit 保持一致）
+omit = [
+    "*/tests/*",
+    "*/__pycache__/*",
+    "*/node/*",
+    "*/ffmpeg/*",
+    # 运行期产物目录（与 .gitignore/.dockerignore 同源维护）
+    "*/downloads/*",
+    "*/recordings/*",
+    "*/logs/*",
+    "*/backup_config/*",
+    "*/.mimosa/*",
+    "*/.qoder/*",
+    "*/.qoder-credits/*",
+    "*/.agents/*",
+    "*/.workbuddy/*",
+    "*/.codebuddy/*",
+    "*/.trae/*",
+    "*/.pnpm-store/*",
+    "*/.npm-cache/*",
+    "*/.dsh-validation/*",
+    "*/.ego-browser-test/*",
+    "*/.plugin-src/*",
+    "*/.tmp-dps-extract/*",
+    "*/.v2c/*",
+    "*/.superpowers/*",
+    "*/pytest-cache-files-*/*",
+]
+
+[tool.coverage.report]
+fail_under = 50
+# 用 exclude_also（追加）而非 exclude_lines（替换）：后者会整体丢掉 coverage 的三条默认排除
+# 规则（pragma 大小写变体 / `...` 省略号函数体 / `if TYPE_CHECKING:`），使覆盖率被系统性低估。
+# 四条须与 .coveragerc-concurrency（并发 job）逐条一致：pragma: no cover / def __repr__ /
+# raise NotImplementedError / if __name__ == .__main__.:。
+# 「if TYPE_CHECKING:」不单列——coverage 默认规则已含该写法，单列既不改结果又让两 job 条数对不齐。
+exclude_also = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
+
+# 逐模块覆盖率阈值只在 scripts/check_coverage.py 的 MODULE_THRESHOLDS 维护；此处不复制数值，避免双写漂移。
+
+[tool.basedpyright]
+# basedpyright 类型检查配置（本地补充门禁，CI 裁决仍以 mypy 为准）。
+# venvPath 用工作区相对路径指向 .venv：basedpyright 不支持 ${env:...} / ~ 展开，配置里也不
+# 写死机器专属绝对路径。.venv 已被 .gitignore 忽略，各开发者自行创建：
+#   python -m venv .venv && .venv/Scripts/pip install -r requirements.txt
+pythonVersion = "3.14"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+exclude = [
+    "**/typings",
+    "**/node",
+    "**/ffmpeg",
+    # 运行期产物目录（与 .gitignore/.dockerignore 同源维护）
+    "**/downloads",
+    "**/recordings",
+    "**/logs",
+    "**/backup_config",
+    "**/build",
+    "**/dist",
+    "**/__pycache__",
+    # 本地工具生成目录（与 .gitignore/.dockerignore 同源维护，防误扫描）
+    ".qoder",
+    ".qoder-credits",
+    ".workbuddy",
+    ".codebuddy",
+    ".trae",
+    ".agents",
+    ".pnpm-store",
+    ".npm-cache",
+    ".dsh-validation",
+    ".ego-browser-test",
+    ".plugin-src",
+    ".tmp-dps-extract",
+    ".v2c",
+    ".superpowers",
+    "**/.mimosa",
+    "**/pytest-cache-files-*",
+]
+# 第三方库无源码属正常，不报；类型存根质量非本项目职责
+reportMissingModuleSource = "none"

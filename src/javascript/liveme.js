@@ -360,10 +360,13 @@ function sign(videoid, cryptoJSPath, platform='web'){
         h5: 1
     };
     /* data_e example value
+    // L-24（2026-10-19，CODE_REVIEW_2026-10-18）：本块与下方「finnal request params」块原填的是同一次
+    // 真机抓包的会话素材，随源码对外分发，实值已全部替换为占位符；字段形态写在各行括注里，
+    // 调试时请自填自建测试值，勿回填任何真实会话凭据（同 haixiu.js 尾部 MIN-N39 的处置口径）。
     const data_e = {
         lm_s_id: Am,
         lm_s_ts: "17284909009151",
-        lm_s_str: "88f9777231dc2d6ac462a1d7ebf5f54e",
+        lm_s_str: "<REDACTED>",  // 形态：32 位十六进制 MD5（由 lm_s_ts 等参与算出，每次会话不同）
         lm_s_ver: 1,
         h5: 1
     };
@@ -379,29 +382,33 @@ function sign(videoid, cryptoJSPath, platform='web'){
         vali: vali
       }
     console.log("data_i:",data_i);
-    
+
     // fake lm_s_sign param value
     let lm_s_sign = pC(data_i);
     console.log(`fake lm_s_sign: ${lm_s_sign}`);
 
     //finnal request params
-    /* 
+    /*
+    // L-24（2026-10-19）续：本块与上方 data_e example 块是同一次真机抓包的产物，
+    // tongdun_black_box（同盾黑盒串）、lm_s_id、lm_s_str、vali、result（签名输出）五处实值已全部换成占位符，
+    // 形态说明保留——调试时按形态自填自建测试值，勿回填真实会话素材（本文件随源码对外分发）。
+    // lm_s_ts/_time/videoid 未替换：前两者是时间戳、后者是房间号，均非会话凭据且留着才能说明入参形态。
     signParams = {
     "alias": "liveme",
-    "tongdun_black_box": "iWPU21728483558afruvSVo6x0",
+    "tongdun_black_box": "<REDACTED>",  // 形态：同盾风控黑盒串（本项目实际发空串，见下方真实构造处）
     "os": "android",
-    "lm_s_id": "LM6000101139961122666757",
+    "lm_s_id": "<REDACTED>",  // 形态：LM 前缀 + 数字的安装标识（运行期常量见本文件顶部 Am）
     "lm_s_ts": "17284909009151",
-    "lm_s_str": "88f9777231dc2d6ac462a1d7ebf5f54e",
+    "lm_s_str": "<REDACTED>",  // 形态：32 位十六进制 MD5
     "lm_s_ver": 1,
     "h5": 1,
     "_time": 1728490664651,
     "thirdchannel": 6,
     "videoid": "17284844223282059697",
     "area": "zh",
-    "vali": "zH8SlBwnCm4AZWp"
-    }# 
-    //result: 4eaf71a1ec19b49b7267e4d16e007105
+    "vali": "<REDACTED>"  // 形态：createSignature() 每次运行现算的校验串
+    }#
+    //result: <REDACTED>  // 形态：32 位十六进制 MD5，即上面这组入参经 requestSign() 得到的 lm_s_sign
     */
     signParams = {
         "alias": "liveme",

@@ -1,16 +1,159 @@
-version: '3.8'
+# =============================================================================
+# DouyinLiveRecorder Docker Compose 配置
+# 三种模式：recorder（默认，命令行录制）/ web（--profile web，管理面板）/ gui（--profile gui，需 X11）
+#
+# 同目录 .env 可覆盖默认变量（compose 自动加载；仓库不含、已被 .gitignore 忽略，首次使用需自建）：
+#   TZ=America/New_York 改时区；APP_VERSION=4.6.0 固定镜像 LABEL 版本（须与 pyproject.toml
+#   的 [project].version 一致；不设则 LABEL version 为空，镜像内版本仍由 main.py /
+#   src/web_api.py 经 importlib.metadata 在运行时读取）。
+# 四个宿主机目录 config / downloads / logs / backup_config 首次 `docker compose up` 由 Docker
+#   自动创建。downloads / logs / backup_config 已被 .gitignore 与 .dockerignore 忽略；config/ 下
+#   唯一入库的文件是脱敏后的 config.ini 基线模板，本机填入的 Cookie / 代理 / Web 密码不得提交，
+#   且 config/*.ini 已被 .dockerignore 排除、不进镜像。容器侧同名目录由 Dockerfile 的
+#   `mkdir -p logs downloads backup_config` 预建并归属 recorder。
+# =============================================================================
 
 services:
-  app:
-    image: ihmily/douyin-live-recorder:latest
+  # ---------------------------------------------------------------
+  # 主录制服务 - 持续监测并录制直播（main.py，纯命令行，不监听端口）
+  # YAML 锚点 &recorder 被 web / gui 复用，两者只做按需覆盖。
+  # ---------------------------------------------------------------
+  recorder: &recorder
+    # 镜像名与 Dockerfile LABEL url、pyproject [project.urls] 同源（y123ao6）；pull_policy: build
+    # 下它只作本地 tag 与 compose push 命名，MIN-18 语义不变
+    image: y123ao6/douyin-live-recorder:latest
+    container_name: douyin-live-recorder
+
+    # MIN-18（2026-09-21）：镜像只从本地 build 取，绝不回退去拉远端 :latest——只写 build: 时，
+    # 未构建就 `docker compose up` 会让 Compose 按 image 名去 registry 拉 :latest，版本漂移且可能
+    # 是他人上传的同名镜像。pull_policy: build 把「未构建就 up」变成「就地构建」，显式重建照旧
+    # `docker compose build` / `up --build`。
+    pull_policy: build
+
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # APP_VERSION 取自同目录 .env（口径见文件头），不设置则镜像 LABEL 的 version 为空
+      args:
+        APP_VERSION: "${APP_VERSION}"
+
+    # 注入容器运行时行为；除 TZ 外均与 Dockerfile 的 ENV 同源，TZ 与 ARG TZ 默认一致、可在 .env 覆盖
     environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONIOENCODING=utf-8
+      - TZ=Asia/Shanghai
       - TERM=xterm-256color
+
+    # 从同目录 .env 加载额外变量；文件不存在也不报错
+    env_file:
+      - path: .env
+        required: false
+
+    # 交互式终端支持（可在容器内使用 Ctrl+C 停止录制；main.py 已同时接管 SIGINT/SIGTERM）
     tty: true
     stdin_open: true
-    #build: .
+
+    # 优雅停止：docker stop 发送 SIGTERM，main.py 的 safe_exit 会分级终止 ffmpeg
+    # 子进程并在退出前 flush 弹幕 SRT，给足 30s 避免录制文件 / 弹幕被截断
+    stop_grace_period: 30s
+
+    # 安全加固：禁止容器进程获取新权限（防御提权）
+    security_opt:
+      - no-new-privileges:true
+
+    # 卷挂载（宿主机:容器:rw）；四个目录均不进镜像，由这里接进容器
     volumes:
-      - ./config:/app/config
-      - ./logs:/app/logs
-      - ./backup_config:/app/backup_config
-      - ./downloads:/app/downloads
-    restart: always
+      # config：config.ini / URL_config.ini（含凭据，改一次即生效）；downloads：视频 / 音频 / 弹幕 SRT 落盘处
+      # logs：streamget.log 等运行日志；backup_config：运行时修改 config 的自动备份
+      - ./config:/app/config:rw
+      - ./downloads:/app/downloads:rw
+      - ./logs:/app/logs:rw
+      - ./backup_config:/app/backup_config:rw
+
+    # 重启策略：除非手动停止，否则自动重启（网络抖动 / 直播掉线后恢复）
+    restart: unless-stopped
+
+    # 健康检查：同时兼容 main.py 与 web.py 两种模式（gui 模式在下方单独覆盖）
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'python (main|web).py' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+    # 资源限制（防止异常占用拖垮宿主机）
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+    # 日志限制（防止容器日志无限膨胀占满磁盘）
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------
+  # Web 管理面板模式（web.py = 录制引擎守护线程 + Starlette/uvicorn）
+  # 启动：docker compose --profile web up -d
+  # 重要：web.py 默认监听 127.0.0.1:8000，容器内必须在 config/config.ini 的 [Web] 节设置
+  #   web_host = 0.0.0.0，宿主机才能经 http://localhost:8000 访问面板；一旦监听 0.0.0.0，
+  #   强烈建议同时设 web_auth_enable = true 并配置密码。
+  # ---------------------------------------------------------------
+  web:
+    <<: *recorder
+    container_name: douyin-live-recorder-web
+    profiles:
+      - web
+    entrypoint: ["python", "web.py"]
+    # 端口映射仅 Web 模式需要（宿主机:容器），与 Dockerfile EXPOSE 8000 对应。
+    # 默认只绑本机回环："8000:8000" 等价于 "0.0.0.0:8000:8000"，会把面板暴露到宿主机**所有**
+    # 网卡，而 web_auth_enable 默认 false，组合后果是「无认证面板直接上网」（与 web.py 那条
+    # 「检测到不安全绑定」启动告警同源）。需要局域网/公网访问时显式改成 "0.0.0.0:8000:8000"
+    # 并同步开启 web_auth_enable——有意暴露必须是显式动作。
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  # ---------------------------------------------------------------
+  # GUI 模式服务（需要 X11 或 Wayland 显示环境）
+  # 启动：docker compose --profile gui up -d
+  # 前置条件：
+  #   1. 宿主机运行：xhost +local:
+  #   2. 取消下方 DISPLAY 和 X11 socket 的注释，将显示环境透传进容器
+  # ---------------------------------------------------------------
+  gui:
+    <<: *recorder
+    # 镜像默认不装 GUI 依赖（Dockerfile 阶段1 的 INSTALL_GUI=false：PySide6 解压后本机实测
+    # 647.56MB，而 recorder / web 屏蔽它后导入链完整）。本服务需要真窗口，故：
+    #   ① 用独立 tag——build 配置不同的服务共用同一个 image 名时，后构建的一方会覆盖另一方
+    #      正在用的 tag（`up` 过 recorder 再 `--profile gui up --build` 即一次覆盖）；
+    #   ② 显式传 INSTALL_GUI=true，让阶段1 装全 requirements.txt、阶段2 补装 Qt 运行库。
+    image: y123ao6/douyin-live-recorder:latest-gui
+    container_name: douyin-live-recorder-gui
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_VERSION: "${APP_VERSION}"
+        INSTALL_GUI: "true"
+    profiles:
+      - gui
+    entrypoint: ["python", "gui.py"]
+    # 继承自 recorder 的 'python (main|web).py' 判定对 gui.py 永远失败，必须按实际入口覆盖
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'python gui.py' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    # 显示环境透传（取消注释并先在宿主机执行 xhost +local: 后启用）
+    # environment:
+    #   - DISPLAY=${DISPLAY}
+    # volumes:
+    #   - /tmp/.X11-unix:/tmp/.X11-unix:rw

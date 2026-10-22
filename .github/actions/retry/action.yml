@@ -1,0 +1,125 @@
+# =============================================================================
+# 复合动作：网络安装类命令的统一重试包装
+# -----------------------------------------------------------------------------
+# 用途：pip / apt 等网络安装步骤偶发失败（PyPI 抖动、源镜像瞬断）时按线性
+#       退避重试，避免整条流水线因瞬时网络问题变红。
+# 收敛动机：ci.yml 原先 8 处、build-release.yml 4 处几乎相同的内联重试脚本，
+#       重试策略（次数 / 退避基数）改动需要逐处手改、极易漂移；抽到此处后
+#       改一处即全部生效（默认值在 inputs.default 声明）。
+#
+# 用法示例（调用方传 with，command 中可直接内联 ${{ needs.xxx.outputs.yyy }}，
+# 表达式在调用处先展开为字面量，再进入本动作执行）：
+#   - name: Install dependencies
+#     uses: ./.github/actions/retry
+#     with:
+#       label: pip 安装依赖
+#       command: >-
+#         python -m pip install --upgrade pip
+#         && pip install -r requirements.txt
+#
+# 语义约定：
+#   · command 以 bash 语义经 `bash -c` 执行，支持 && 链接，失败即整体重试；
+#   · 第 n 次失败后等待 n × backoff 秒再重试（线性退避）；
+#   · 连续 attempts 次失败才判错退出（exit 1），单次失败仅 ::warning 不阻断。
+#   · fail_fast_codes（默认空串=不启用）：命中列表的退出码视为「重试无意义的配置类错误」，
+#     立即以**原退出码**退出并打 ::error::，不进入退避。动机：scripts/_ci_web_smoke.sh
+#     忠实透传 scripts/smoke_test.py 的退出码（0 通过 / 1 面板故障可重试 / 2 配置形态畸形
+#     重试无意义），而本动作原先对**任何**非 0 一视同仁重试、且无论原退出码是什么都以 1
+#     收尾——rc=2 因此只能在步日志「冒烟退出码：2」一行看到，job 结论层面 1 与 2 不可分。
+#     不传该 input 时列表恒空、判定永不命中，循环对非 0 的处理（退避算法 / ::warning:: /
+#     最终 ::error:: / exit 1）与旧版逐字一致，既有调用点零行为变化。
+#     fail-fast 命中**不得**改成退 0 或降级成 warning（那是假绿），也不得借它关掉任何
+#     既有红（如 upload-artifact 的 fail_on_unmatched_files）。
+# =============================================================================
+name: retry
+description: Retry a shell command with linear backoff (for network installs)
+
+inputs:
+  command:
+    description: 要执行的命令（bash 语义，支持 &&；失败时整体重试）
+    required: true
+  label:
+    description: 失败日志中的操作名称（用于 ::warning / ::error 归因）
+    required: false
+    default: "command"
+  attempts:
+    description: 最大尝试次数
+    required: false
+    default: "3"
+  backoff:
+    description: 线性退避基数秒数（第 n 次失败后等待 n × backoff 秒）
+    required: false
+    default: "10"
+  fail_fast_codes:
+    description: >-
+      立即失败不重试的退出码列表（空格或逗号分隔，非数字条目忽略并打 ::warning::）；
+      空串=不启用（默认，与旧版行为逐字一致）。命中时以原退出码退出并打 ::error::。
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    # 复合动作的 run 步骤必须显式声明 shell；输入经 env 传入，
+    # 避免 command 内容被 shell 展开两次（表达式已在调用处求值为字面量）。
+    - name: Run "${{ inputs.label }}" with retry
+      shell: bash
+      env:
+        RETRY_COMMAND: ${{ inputs.command }}
+        RETRY_ATTEMPTS: ${{ inputs.attempts }}
+        RETRY_BACKOFF: ${{ inputs.backoff }}
+        RETRY_LABEL: ${{ inputs.label }}
+        # 未声明该 input 的调用点展开为空串 → 列表恒空 → fail-fast 永不命中（默认零行为变化）。
+        RETRY_FAIL_FAST_CODES: ${{ inputs.fail_fast_codes }}
+      run: |
+        set -euo pipefail
+        # 退出码列表解析：空格/逗号分隔均可，非数字条目忽略并 ::warning::，空串=不启用。
+        # 刻意只用 POSIX 的 IFS 切分 + for + case（复合动作虽声明 shell: bash，仍不用
+        # bash-only 关联数组），Linux/macOS/Windows runner 与本地 Git Bash 同语义。
+        # set -f 关掉 glob 展开：fail_fast_codes 由调用方字符串直入，含 '*' 时若不关 glob
+        # 会被就地展开成工作区文件名，非数字条目虽仍被忽略，但会把无关名字刷进日志。
+        # 存储形态：前后各留一个空格的「 2 12 」串，命中判定用被空格包围的 case 模式，
+        # 于是「 2 」不会误命中「 12 」（退出码是十进制无符号，唯一分隔口径即此）。
+        fail_fast_set=" "
+        old_ifs="$IFS"
+        IFS=", "
+        set -f
+        for _tok in ${RETRY_FAIL_FAST_CODES:-}; do
+          case "$_tok" in
+            ''|*[!0-9]*)
+              echo "::warning::fail_fast_codes 含非法条目「${_tok}」，已忽略（只接受非负整数退出码）"
+              ;;
+            *)
+              fail_fast_set="${fail_fast_set}${_tok} "
+              ;;
+          esac
+        done
+        set +f
+        IFS="$old_ifs"
+        attempt=1
+        while [ "$attempt" -le "$RETRY_ATTEMPTS" ]; do
+          # 用 `|| rc=$?` 取回退出码（set -e 下该形态不会终止脚本）——原先的
+          # `if bash -c ...; then` 形态拿不到具体码，fail-fast 判定无从下手；成功/失败
+          # 的分支语义与旧版一致（0 走成功出口，非 0 继续往下）。
+          rc=0
+          bash -c "$RETRY_COMMAND" || rc=$?
+          if [ "$rc" -eq 0 ]; then
+            echo "${RETRY_LABEL} 成功（第 ${attempt} 次尝试）"
+            exit 0
+          fi
+          # fail-fast 分支必须位于退避 sleep **之前**：命中即带**原退出码**退出、一次都不重试。
+          # 顺序写反（挪到 sleep 之后）等于「白等一轮退避再失败」，退避对配置类错误毫无意义。
+          case "$fail_fast_set" in
+            *" $rc "*)
+              echo "::error::${RETRY_LABEL} 退出码 ${rc} 属配置类错误（fail_fast_codes=${RETRY_FAIL_FAST_CODES:-}），重试无意义，立即失败不重试"
+              exit "$rc"
+              ;;
+          esac
+          wait_seconds=$(( attempt * RETRY_BACKOFF ))
+          echo "::warning::${RETRY_LABEL} 失败（第 ${attempt}/${RETRY_ATTEMPTS} 次），${wait_seconds}s 后重试"
+          sleep "$wait_seconds"
+          attempt=$(( attempt + 1 ))
+        done
+        # 兜底路径不得改：未命中列表的非 0 仍按旧版重试到上限，并以 1 收尾（既有 16 个调用点靠它）。
+        echo "::error::${RETRY_LABEL} 连续 ${RETRY_ATTEMPTS} 次失败（网络异常或源不可用）"
+        exit 1

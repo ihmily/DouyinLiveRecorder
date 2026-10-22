@@ -1,0 +1,5 @@
+# start-server.sh / stop-server.sh 由 SKILL.md 指示在 Git Bash 下直接 bash 执行。
+# 仓库 core.autocrlf=true 会在 Windows 检出时把 LF 翻成 CRLF，shebang 行随之带上 \r，
+# /usr/bin/env 便去找名为 `bash\r` 的解释器并失败。本文件只作用于 .agents/skills/ 子树，
+# 把 .sh 钉成 eol=lf，不动仓库其余 .sh 的既有形态。
+*.sh text eol=lf

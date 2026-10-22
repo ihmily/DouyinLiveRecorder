@@ -1,0 +1,108 @@
+# pre-commit hooks — 自动化 AGENTS.md 核心门禁（black / isort / mypy）
+# [2026-10-02 扩展] 同日追加仓库级门禁 hook：check_annotations / compile_po --check /
+# check_version / check_runtime_pins / check_skill_agents_consistency（与 AGENTS.md
+# 「格式化命令（门禁唯一基准）」后 5 行同源），
+# 同一目录下的 black / isort / mypy 行不再重复。回归锁：tests/test_pre_commit_config.py
+# 将 AGENTS.md 章节清单与本文件的 hook entry 两侧同时钉住，任一边新增而另一边缺失即红。
+# 安装: pip install pre-commit && pre-commit install
+# 手动全量跑: pre-commit run --all-files
+# 一次性本地门禁入口：python scripts/run_gates.py（与本章 hook 互斥使用，避免 black/isort/mypy 跑两遍）
+# 工具配置（line-length / target-version / exclude 等）统一读 pyproject.toml，此处不重复。
+
+default_language_version:
+  python: python3
+
+repos:
+  # ── 通用卫生检查（行尾空白 / 末尾换行 / YAML 语法等）──
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        # 排除生成物 / 运行期目录，与 pyproject [tool.black].exclude 同源
+        exclude: ^(node/|ffmpeg/|downloads/|logs/|\.venv/|__pycache__/|.*\.egg-info/)
+      - id: end-of-file-fixer
+        exclude: ^(node/|ffmpeg/|downloads/|logs/|\.venv/|__pycache__/|.*\.egg-info/)
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: ['--maxkb=1024']
+
+  # ── Black（代码格式化）──
+  - repo: https://github.com/psf/black-pre-commit-mirror
+    # rev 必须与 ci.yml consts 的 black_version 同值（现 26.10.1）：
+    # hook 自带独立环境，rev 不同 = 本地提交用另一版 black 重排、CI 用又一版判定，
+    # 会出现「pre-commit 改完 CI 仍红」的互擦（2026-10-17 三面收敛，原 rev 25.9.0）。
+    rev: 26.10.1
+    hooks:
+      - id: black
+        # pyproject [tool.black] 提供 line-length / target-version；
+        # pre-commit 显式传路径时 pyproject 的 exclude 可能不生效（Windows 反斜杠），
+        # 故在此重复 typings / standalone 排除（与 pyproject 同源）。
+        exclude: ^(typings/|scripts/douyin_live_recorder_standalone\.py$)
+
+  # ── isort（导入排序）──
+  - repo: https://github.com/PyCQA/isort
+    # 同 black：rev 与 ci.yml 的 isort_version（9.0.2）同值，原 6.1.0 是第三套版本。
+    rev: 9.0.2
+    hooks:
+      - id: isort
+        # pyproject [tool.isort] 提供 profile / line_length / known_first_party / extend_skip
+
+  # ── mypy（静态类型检查）──
+  # 使用 system Python 以消费项目 venv 已安装的第三方包；
+  # pyproject [tool.mypy] 提供 files / python_version / exclude，
+  # 不带路径参数（AGENTS.md 硬约束：显式传参会覆盖 [tool.mypy].files）。
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: mypy
+        language: system
+        types: [python]
+        require_serial: true
+        pass_filenames: false
+
+  # ── 仓库级门禁（AGENTS.md「格式化命令（门禁唯一基准）」bash 块的后 5 条）──
+  # 与 mypy 同构：language: system + pass_filenames: false，脚本自己按仓库根遍历；
+  # always_run: true 保证「改了非 Python 文件也照样触发」——这五个脚本跨文件比对
+  # （i18n .po/.mo、pyproject/main.py/Dockerfile 版本号、build_exe.py 钉定表、
+  # .agents/skills/ 目录与 AGENTS.md「项目级 Skill」表），
+  # 只看 staged 类型会漏查；require_serial: true 与 mypy 保持同口径。
+  # 事实源仍是 AGENTS.md 那一节：新增/删除门禁须同步本块与 tests/test_pre_commit_config.py 的回归锁。
+  - repo: local
+    hooks:
+      - id: check-annotations
+        name: check_annotations.py (注释规范 + 悬空符号可达性)
+        entry: python scripts/check_annotations.py
+        language: system
+        always_run: true
+        require_serial: true
+        pass_filenames: false
+      - id: compile-po-check
+        name: compile_po.py --check (.po/.mo 同步校验)
+        entry: python scripts/compile_po.py --check
+        language: system
+        always_run: true
+        require_serial: true
+        pass_filenames: false
+      - id: check-version
+        name: check_version.py (版本号单一事实源动态化)
+        entry: python scripts/check_version.py
+        language: system
+        always_run: true
+        require_serial: true
+        pass_filenames: false
+      - id: check-runtime-pins
+        name: check_runtime_pins.py (运行时二进制钉定表结构)
+        entry: python scripts/check_runtime_pins.py
+        language: system
+        always_run: true
+        require_serial: true
+        pass_filenames: false
+      - id: check-skill-agents
+        name: check_skill_agents_consistency.py (Skill 目录与 AGENTS.md 表格一致性)
+        entry: python scripts/check_skill_agents_consistency.py
+        language: system
+        always_run: true
+        require_serial: true
+        pass_filenames: false

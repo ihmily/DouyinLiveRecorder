@@ -1,7 +1,103 @@
-requests>=2.31.0
-loguru>=0.7.3
-pycryptodome>=3.20.0
-distro>=1.9.0
-tqdm>=4.67.1
-httpx[http2]>=0.28.1
-PyExecJS>=1.5.1
+# =============================================================================
+# DouyinLiveRecorder Python 运行时依赖清单
+# -----------------------------------------------------------------------------
+# 与 pyproject.toml [project.dependencies] 严格同步（「单源双写」），两侧包名集合的一致性由
+#   tests/test_regression_2026_09_22_gates.py 锁死（单侧遗漏直接判红）。本文件是 Docker builder
+#   阶段、CI 各 job（typecheck / test / concurrency-test / integration-verify / build-verify 等）
+#   与本地 `pip install -r` 的实际输入；static job 只装固定版本 lint 工具，不经本文件。
+# 构建期 / 开发期依赖不入本清单：PyInstaller 见 [project.optional-dependencies].build（>=6.10.0），
+#   pytest / black / isort / mypy / pre-commit 见 .dev（`pip install .[build]` / `.[dev]`），
+#   GUI 依赖在 .gui（本清单已含同名包）。前端用例（tests/frontend/*.mjs）用 Node 内置 node:test，
+#   零 npm 依赖，无需新增 Python 包。
+# 下限口径：全清单只设下限、不设上限（唯一例外 protobuf，理由见该行上方注释）。
+# =============================================================================
+
+# ---------- HTTP 请求 ----------
+requests>=2.34.2          # 同步 HTTP 请求：现仅 ffmpeg / node 下载安装脚本使用（src/ffmpeg_install.py、
+                          #   src/node_install.py、src/ffmpeg_master_download.py）；各平台解析走 httpx 异步面，不经本包
+# urllib3 是 requests 的传递依赖，但运行期的同步出站下载（拉取与哈希核对）都穿过它，故显式钉下限
+# 而非放任解析回退（补-05）：CVE-2026-44431（跨域重定向时敏感头被转发）受影响 1.23 – < 2.7.0。
+# 下限 2.8.0 由 2026-10-01 deps-audit「下限复核」抬升：CVE-2026-97687 / 97688 / 97689 均影响 2.7.0、
+#   修复于 2.8.0，旧下限自身落在受影响段（CI 步骤实测 rc=1）；现装与解析集合均为 2.8.0。
+# [历史注] 旧表述「全部同步出站 = src/sync_http.py 约 125 调用点 → src/spider.py 各平台解析」已被
+#   推翻：spider 走 httpx 异步面（src/async_http.py），sync_http.py 现无生产 importer。
+urllib3>=2.8.0            # 传输层（requests 之下；显式声明以防重装/解析回退落入 CVE-2026-44431 / 97687-97689 区间）
+httpx[http2]>=0.28.1      # 异步 HTTP 客户端（含 HTTP/2，src/async_http.py 并发抓取流地址）
+# ── h2 / socksio：httpx 的**可选**能力包（extra），但本仓运行期真的会执行其代码，必须显式声明 ──
+# extra 只在 pip 解析 `.[extra]` 那一刻展开，而 Docker/CI 消费的是 `pip install -r`：把 httpx 写成
+#   裸名或换索引重装即静默丢失（2026-09-23 本机实测 `import h2` → ModuleNotFoundError，该包目录
+#   当时是 pip uninstall 残留的空壳）。触发点已回源到 httpx 源码，非推测：
+#   · h2      —— httpx._client.Client.__init__ 的 `if http2: import h2`；本仓 http2 默认 True
+#                （src/async_http.py 的 async_req 形参默认值），httpx.AsyncClient 未显式传时同样 True。
+#   · socksio —— httpx._transports.default 的 `socks5/socks5h` 分支 `import socksio`；本仓明确支持并
+#                校验 socks5:// 写法，用户配 SOCKS 代理即命中。
+# 二者都是**运行期** ImportError，而清单里查不到 —— 正是「pip install 完仍缺包」的成因。
+# h2 下限 4.4.1（2026-09-26 deps-audit「下限复核」）：PYSEC-2026-3628 / GHSA-6hr6-w5qg-qmwg（重复
+#   Host 头致请求走私）OSV 区间 fixed=4.4.1，旧下限 4.3.0 自身落在受影响段（它只修了同源的
+#   PYSEC-2026-1435）；现装与 uv.lock 均已是 4.4.1。
+h2>=4.4.1                 # httpx http2=True 的运行期依赖（httpx Client.__init__ 内 `import h2`）
+socksio>=1.0.0            # httpx SOCKS 代理（socks5/socks5h）的运行期依赖（httpx 传输层内 `import socksio`）
+
+# ---------- 日志 ----------
+loguru>=0.7.3             # 结构化日志（src/logger.py 统一封装，DEBUG/ERROR 落盘 logs/streamget.log）
+
+# ---------- 加密 / 签名 ----------
+pycryptodome>=3.23.0      # 加密算法（SM3 / RC4 / AES，部分平台签名与响应解密）
+
+# ---------- 系统检测 ----------
+distro>=1.9.0             # Linux 发行版识别（自动选择下载源 / 给出安装提示）
+
+# ---------- CLI 进度条 ----------
+tqdm>=4.69.0              # 下载进度条显示（命令行录制模式）
+
+# ---------- JavaScript 执行引擎（运行各平台 JS 签名脚本，需 Node.js 运行时）----------
+exejs>=1.0.1              # PyExecJS 的活跃维护继任者，优先使用（src/spider.py、src/utils.py 导入）
+PyExecJS>=1.5.1           # 回退兼容：exejs 未安装时启用（已停止维护，仅作兜底）
+
+# ---------- GUI 图形界面（headless / Web 模式下非必需，但 pip 安装仍会拉取）----------
+# [2026-10-03 阶段5] customtkinter 已随 UI 现代化阶段4（tkinter.ttk 自研控件层）摘除
+PySide6>=6.12.0          # GUI 窗口层（src/gui_qt/），取代 ttk 主窗口：QSS token 能 1:1 还原
+                         #   docs/gui-redesign/index.html 的圆角/投影/弹簧动效。下界 6.12 为本机实测
+                         #   支持 Python 3.14.8 的最小版（Qt 6.12 wheel 提供 cp314 ABI）。2026-10-20 起
+                         #   Web 入口托盘（src/web_tray.py）改走 QSystemTrayIcon，故它同时是两个入口的
+                         #   运行时依赖（Web Analysis 不再 exclude 它）。
+                         #   [历史注] pystray>=0.19.5 与 Pillow>=12.3.0 原列于本包之后（供遗留 tkinter 托盘
+                         #   gui.py::SystemTray 使用），随该托盘退役一并摘除：两入口托盘统一由
+                         #   QSystemTrayIcon 承担、图标 QPainter 现画，PIL 全仓再无调用点。
+
+# 注：不列入 pip 上的 weverse 包——它会拉入已废弃的 pycrypto==2.6.1，在 Python 3.10+ 上因缺失
+# longintrepr.h 无法编译（原 src/weverse_auth.py 已于 2026-09-23 整体删除，此处仅保留「勿加」的理由）。
+
+# ---------- Web 管理面板（Starlette + uvicorn；阶段2 已移除 fastapi / pydantic）----------
+# starlette 下限 1.3.1 是两轮抬升后的结果（补-05 抬到 1.0.1，2026-09-21 二次抬到当前值）：
+#   · CVE-2026-48710（BadHost：Host 头未校验 → 认证/缓存投毒类）受影响 **<= 1.0.0**；
+#   · PYSEC-2026-2280 / PYSEC-2026-2281 修复于 1.1.0；PYSEC-2026-248 / PYSEC-2026-249 修复于 1.3.0 / 1.3.1。
+#   旧下限把整段受影响版本留在合法安装区间内，换索引/重装即可能回退到有漏洞的版本；现装 1.8.0，
+#   抬下限不改变安装集合。
+# 教训：`pip-audit -r requirements.txt`（解析模式）只会解析到**区间内最新版本**，对「下限自身落在
+#   受影响段」完全失明——同一条清单解析模式 rc=0、下限模式 rc=1；故 ci.yml 的 deps-audit job 另有
+#   「下限复核」步骤（--no-deps 审计逐项下限）。
+starlette>=1.3.1          # ASGI 工具集（src/web_api.py 直接依赖驱动 Web 面板，阶段2 起非传递依赖）
+uvicorn[standard]>=0.51.0  # ASGI 服务器（web.py 启动面板，[standard] 含 uvloop/ws 等可选件）
+# [历史注 2026-10-20] python-multipart>=0.0.32 已摘除：原写「表单 / 文件上传解析（Web 接口接收
+#   配置上传）」，但该接口并不存在——`grep -rnE "\.form\(\)|multipart|UploadFile"` 与 web/ 侧
+#   `grep -rn "FormData|type=\"file\"|enctype"` 均零命中。Starlette 只在 Request.form() 内部
+#   import 它，无该调用点即不构成运行期依赖（与 h2/socksio 那类「运行期真的会执行其代码」的可选件
+#   不同，不适用同一保留理由）。
+
+# ---------- 弹幕（直播弹幕采集）运行时依赖 ----------
+# 三个包均为「运行时必需」（src/collector.py 工厂 + src/platforms/ 各平台采集器 + src/proto/ 协议
+# 解码），非构建期依赖。缺失时 venv 安装后 web.py 启动即报 ModuleNotFoundError（douyin_pb2 导入链），
+# 弹幕采集分支因无法导入而整体失效（2026-08 工作日志已确认需补装）。
+websockets>=14.0          # additional_headers / proxy 为 14.0+ API：装到 12.x/13.x 时 connect() 直接
+                          # TypeError 且被重连循环吞掉，表现为弹幕永远连不上
+# protobuf 下限 6.33.5（2026-09-21 pip-audit 实测）：PYSEC-2026-1805 影响 6.31.1 本身，官方修复版本
+#   5.29.6 / 6.33.5——旧下限正好落在受影响段内。现装 7.36.2，tests/test_proto_runtime_compat.py 动态
+#   读取本区间、随之通过。上限 <8 保持不动（F-14）：src/proto/douyin_pb2.py 由 protoc 25.x
+#   （gencode 4.25.3）产出，跨大版本升级 runtime 有 gencode 兼容窗口外突然失效的风险；升级前须先用
+#   同代 protoc 重新生成并回归弹幕用例。
+protobuf>=6.33.5,<8       # 抖音弹幕协议解码（src/proto/douyin_pb2.py，protoc 生成模块）
+brotli>=1.2.0             # B站弹幕解压（src/ws_client.py 的限长解压助手，protover=3）
+
+# ---------- 国际化（i18n）----------
+PyYAML>=6.0.3             # YAML 翻译目录支持（i18n.py 加载 i18n/zh_TW.yaml；缺失仅损失 YAML 格式）

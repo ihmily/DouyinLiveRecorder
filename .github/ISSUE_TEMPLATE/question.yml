@@ -29,12 +29,9 @@ body:
   - type: dropdown
     attributes:
       label: 🐍 如果是使用源代码运行，请选择你的Python环境版本
-      description: 请选择你运行程序的Python版本。
+      description: 请选择你运行程序的Python版本；当前源码仅支持 Python 3.14+。
       options:
-        - Python 3.10
-        - Python 3.11
-        - Python 3.12
-        - Python 3.13
+        - Python 3.14
         - Other (请在问题中说明)
     validations:
       required: false
