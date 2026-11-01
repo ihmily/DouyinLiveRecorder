@@ -1508,6 +1508,8 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 >
 > **v4.6.0 summary (2026-10-18 ~ 2026-10-31)**: (1) GUI stack consolidated on PySide6; the legacy tkinter/pystray implementations plus `src/ui_kit.py` / `src/ui_motion.py` were removed; (2) unified ICO icon support across the GUI tray, Web tray/page and packaged artifacts; (3) Web tray migrated to Qt and the run log wraps to the viewport; (4) five repo-wide review rounds (per-hop SSRF re-checks, dangerous config keys, outbound read caps, credential masking); (5) EOL pinning, regression-test de-dating, metadata parity, CI tool bumps and repo-wide comment slimming.
 
+### v4.7.0 (2026-11-01) — ffmpeg dynamic criteria on three slots: windows/linux now take the build-day official manifest values (advisory explicitly acknowledged via ADVISORY_ADOPT_ACK), linux resolves the download URL alongside the newest month-end tag, static table demoted to the fallback baseline
+
 ### v4.7.0 (2026-11-01) — Release-path dynamic pinning: the node slot now takes the GPG-verified official SHASUMS as its criterion (--pin-source adopt), upstream LTS promotions no longer break the release
 
 ### v4.7.0 (2026-11-01) — Runtime pins re-pinned to upstream node v26.13.0: Node 26 LTS promotion moved the first-lts pointer, node SHA256 mismatched on all four platforms

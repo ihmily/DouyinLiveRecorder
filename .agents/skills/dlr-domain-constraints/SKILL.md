@@ -108,7 +108,7 @@ agent_created: true
 1. **钉定哈希**：`build_exe.py::_PINNED_RUNTIME_SHA256`（按 `<os>-<arch>` × ffmpeg/node 分列）。「已钉定」唯一判据是 `_is_pinned()` 形状 **64 位小写十六进制**，占位/空串/截断一律未钉定。**不得为让 CI 绿回填本地自算哈希**（那是固化「构建机已中毒」）。
 2. **强制校验门**：`--require-pinned`（CI 因 `GITHUB_ACTIONS=true` 自动开），缺钉定即在下载前 `SystemExit`（继承 `BaseException` 吞不掉）；`slot` 是必填关键字参数，漏传会静默降级为无校验下载。
 3. **静态校验脚本**：`scripts/check_runtime_pins.py`（`--strict` 由 build-release.yml prepare job 执行），表为空/缺平台/缺槽位一律 rc=2。「算满足」两档的唯一口径是 `build_exe._slot_is_gated()`：64 位十六进制官方哈希 ∨ 官方签名档（取值 `OFFICIAL_SIGNATURE_PIN` 且该槽在 `_RUNTIME_GPG_SIGNATURES` 确有登记、指纹 40 位十六进制）。**标记本身绝不构成放行**。
-4. **在线来源层**（`--pin-source` / `DLR_RUNTIME_PIN_SOURCE`，build_exe 默认 `off`）：`verify` 拉官方清单只与内置表比对、永不写入；`adopt` 仅对 `trust=signed` 且**清单验签通过**（钉定 40 位主钥指纹）的槽位把在线值升格为本次判据——**发布路径（build-release.yml）以 `--pin-source adopt` 运行，node 判据 = GPG 验签通过的官方 SHASUMS**，上游发新 LTS 不再打断发布，静态表退为 off 档回退基线。`trust=advisory`（gyan .sha256 / GitHub digest，清单与产物同源）**永不可 adopt**——同源取哈希比对等于安全剧场。在线拉取或验签失败一律回退静态表，由下载比对兜底 fail-closed。
+4. **在线来源层**（`--pin-source` / `DLR_RUNTIME_PIN_SOURCE`，build_exe 默认 `off`）：`verify` 拉官方清单只与内置表比对、永不写入；`adopt` 把在线值升格为本次判据，准入两条路（`_pin_source_is_adoptable`）：`trust=signed` 须**清单验签通过**（钉定 40 位主钥指纹，node）；`trust=advisory` 须该槽**逐条登记** `ADVISORY_ADOPT_ACK` 放行标记（[2026-11-01 用户批准] windows/linux ffmpeg——上游不发布签名，判据 = 当日官方清单值，linux 随最新月末 autobuild 标签同源解析下载直链）。**发布路径（build-release.yml）以 `--pin-source adopt` 运行**，静态表退为 off 档回退基线（windows 回退后滚动产物对旧哈希失配即 fail-closed；linux 回退 = 旧月末标签整对，版本滞后但带外可验）。未登记标记的 advisory 槽位维持「永不 adopt」——同源取哈希比对等于安全剧场，新增 advisory 槽位必须先经人工评估再登记标记，不得全局开关。在线拉取或验签失败一律回退静态表。
 
 三类钉定互不覆盖（发布期运行时 / 运行期自动安装 TOFU / 签名脚本层 `_JS_SHA256_EXPECTED`），任何新增「远程获取并执行的代码」必须落入其中之一。
 

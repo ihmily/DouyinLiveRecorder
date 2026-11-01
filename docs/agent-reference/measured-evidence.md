@@ -136,6 +136,16 @@ Node 运行时以 24.19.0 实测为准（全部 JS 签名脚本 + migu.js 通过
 | adopt 真链路预演（指纹登记后、修 clearsigned 前） | `DLR_RUNTIME_PIN_SOURCE=adopt` + 解析版本后跑 `_pinned_slots()`：ffmpeg advisory 槽「在线清单与内置钉定一致」正常；node 槽 gpg 报 `NODATA 1` / `FAILURE gpg-exit 33554433` → 回退静态值——在线层按「两文件 detached」形态验签，而 node 的 .asc 是内嵌明文的 cleartext 签名，两文件式对 cleartext 输入必 NODATA → adopt 对真实上游从不成功（桩测试假 gpg 验不出形态），同批修为 `sig_kind` 形态字段 + `inline_document` 单文件验签 + 判据值取自验签文档本体 |
 | adopt 真链路预演（修复后复跑） | 同配置复跑：`[build] 在线清单 node GPG 签名核验通过（c82fa3ae…）` + `槽位 windows-x64/node 在线清单与内置钉定一致（dcc60d59a074…）`，判据值 = 静态表值（当前 LTS 恰为 v26.13.0，两源一致属预期） |
 
+**2026-11-01 复测（第二阶段：ffmpeg 三槽判据动态化，取数命令与读数）**：
+
+| 探针 | 读数 |
+| --- | --- |
+| `curl -sS https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip.sha256`（滚动别名） | **303 See Other**，Location = `packages/ffmpeg-9.0.2-essentials_build.zip.sha256` → 滚动别名与版本化包两个端点同源同值配对；取值 `60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba`，与 windows-x64 内置钉定一致（9.0.2，未漂移）。urllib 默认跟随重定向，在线层取到的是版本化包的最终值 |
+| `urllib.request` GET `https://api.github.com/repos/BtbN/FFmpeg-Builds/releases?per_page=100`（UA `dlr-pin-probe`） | 一次请求返回 **38 条** release（全库），月末标签长期保留：page1 从新到旧含 `autobuild-2026-10-31-12-59` / `09-30-13-08` / `08-31-13-27` / `07-31-14-10` / `06-30-13-34` / `05-31-13-22`；`latest` 滚动别名排在列表首位（其资产名形如 `ffmpeg-n9.0-latest-*`），被月末标签形状关排除 |
+| `releases/tags/autobuild-2026-10-31-12-59` | 49 个资产；9.0 系非 shared linux 资产每架构**恰好一个**：`ffmpeg-n9.0.2-39-g7adfbe40dc-linux64-gpl-9.0.tar.xz`（digest `sha256:73e29a56974ae5a651133a04584c7483b21afe941e17dc91d79814a758b608d3`）、`ffmpeg-n9.0.2-39-g7adfbe40dc-linuxarm64-gpl-9.0.tar.xz`（digest `sha256:6cad88ae5bcec356cfc5d7979a036cc4007128201928a0cf243df3db483276cc`）；shared 变体后缀为 `-gpl-shared-9.0.tar.xz`（glob 形态匹配天然排除） |
+| 资产 digest 字段形态 | `assets[].digest` = `sha256:<64hex>` 带前缀；`browser_download_url` 为同标签直链——标签、资产名、digest、直链四者**同一次响应成套产出**，月末解析档据此把判据与下载对象绑在同一次解析 |
+| 资产体积基线（相对 2026-09-27 的月末标签读数） | 未复测体积（本轮只取 digest/直链元数据）；上一月末标签（08-31，n9.0.1）体积读数维持 2026-09-27 记录：linux64 126,600,656 B / linuxarm64 108,761,296 B |
+
 ## 虎牙 FLV-first 冷启动采样
 
 

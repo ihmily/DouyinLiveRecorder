@@ -21,6 +21,10 @@
 2. 该键的钉定取值或签名档标记。
 3. `tests/test_build_exe.py::_ALLOWED_HOSTS` 主机白名单。
    - 退役的主机要**移出**清单。
+4. [2026-11-01] 在线来源层 `build_exe._PIN_SOURCE_TABLE` 为**第四处**：新增/更换下载源须同批登记或
+   退役清单条目——清单 URL（过 `_pin_source_url_allowed` 的 https+主机白名单运行时门）、`trust` 档、
+   advisory 槽的 `ADVISORY_ADOPT_ACK` 放行标记（逐槽显式登记，不得全局开关）、月末解析档的
+   `asset_glob`（回退直链 basename 必须落在 glob 内，见 pin-linux-endpoints）。
 - 归档内部层级一律经 `_extract_linux_ffmpeg_binaries()` 递归按名取件，**不得**写死 `bin/` 或平铺。
 - 缺件必须 `SystemExit` 而非 `return False`。
 

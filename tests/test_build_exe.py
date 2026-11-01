@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import ast
+import fnmatch
 import hashlib
 import importlib.util
 import inspect
@@ -1596,11 +1597,12 @@ _MANIFEST_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zi
 def _clean_pin_layer(monkeypatch: pytest.MonkeyPatch) -> None:
     # 在线层带两个模块级状态（进程内缓存、命令行覆盖）与两个 node 解析结果，不清会串到相邻用例。
     # 缓存尤其危险：上一条用例拉到的值会被下一条当成「刚拉的」，于是「换桩后仍不生效」的假象
-    # 会把真正的回归藏起来。
+    # 会把真正的回归藏起来。_MONTHLY_RESOLVED 同理：月末解析直链暂存跨用例不清会假命中。
     monkeypatch.setattr(build_exe, "_PIN_ONLINE_CACHE", {})
     monkeypatch.setattr(build_exe, "_PIN_SOURCE_OVERRIDE", None)
     monkeypatch.setattr(build_exe, "_NODE_RESOLVED_VERSION", "")
     monkeypatch.setattr(build_exe, "_NODE_RESOLVED_FILENAME", "")
+    monkeypatch.setattr(build_exe, "_MONTHLY_RESOLVED", {})
 
 
 def _pin_layer_env(
@@ -1618,16 +1620,15 @@ def _pin_layer_env(
     monkeypatch.setattr(build_exe, "_PINNED_RUNTIME_SHA256", {key: {"ffmpeg": _BUILTIN_HEX, "node": _BUILTIN_HEX}})
 
 
-def _advisory_table() -> dict[str, dict[str, dict[str, str]]]:
-    return {
-        "windows-x64": {
-            "ffmpeg": {
-                "url": _MANIFEST_URL,
-                "trust": build_exe.PIN_TRUST_ADVISORY,
-                "kind": build_exe._PIN_KIND_RAW,
-            }
-        }
+def _advisory_table(*, ack: str | None = None) -> dict[str, dict[str, dict[str, str]]]:
+    entry: dict[str, str] = {
+        "url": _MANIFEST_URL,
+        "trust": build_exe.PIN_TRUST_ADVISORY,
+        "kind": build_exe._PIN_KIND_RAW,
     }
+    if ack is not None:
+        entry["adopt_ack"] = ack
+    return {"windows-x64": {"ffmpeg": entry}}
 
 
 def _good_gpg_status() -> bytes:
@@ -1685,10 +1686,56 @@ def test_advisory_source_is_never_adopted(
 ) -> None:
     # advisory 档的清单与产物同源同服务器：把它当判据，「拉清单 → 当期望值 → 比对产物」三步
     # 恒等通过，钉定等于被降级成 TOFU。故 adopt 必须拒绝并沿用内置值。
+    # [2026-11-01] 例外：逐槽登记 ADVISORY_ADOPT_ACK 后允许 adopt（见
+    # test_advisory_source_with_explicit_ack_is_adopted）；本用例的表**不带**标记，锁的正是
+    # 「未登记即拒绝」这条默认。advisory 不再是绝对禁区，但准入门收紧到逐槽显式放行。
     _pin_layer_env(monkeypatch, mode=build_exe.PIN_SOURCE_ADOPT, table=_advisory_table())
     _install_fake_urlopen(monkeypatch, f"{_ONLINE_HEX}  ffmpeg.zip".encode("ascii"))
     assert build_exe._pinned_slots()["ffmpeg"] == _BUILTIN_HEX
     assert build_exe.PIN_TRUST_ADVISORY in capsys.readouterr().out
+
+
+def test_advisory_source_with_explicit_ack_is_adopted(
+    monkeypatch: pytest.MonkeyPatch, _clean_pin_layer: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # [2026-11-01 用户批准] windows/linux ffmpeg 上游不发布任何签名，「动态取当日官方值」只剩
+    # 同源清单一条路；ADVISORY_ADOPT_ACK 逐槽登记后 adopt 放行，静态表退为回退基线（在线拉取
+    # 失败时按内置值比对）。放行的理由与登记槽位锁在
+    # test_release_ffmpeg_slots_carry_the_user_approved_adopt_ack。
+    _pin_layer_env(
+        monkeypatch, mode=build_exe.PIN_SOURCE_ADOPT, table=_advisory_table(ack=build_exe.ADVISORY_ADOPT_ACK)
+    )
+    _install_fake_urlopen(monkeypatch, f"{_ONLINE_HEX}  ffmpeg.zip".encode("ascii"))
+    assert build_exe._pinned_slots()["ffmpeg"] == _ONLINE_HEX
+    assert "ADVISORY-ADOPT-ACKNOWLEDGED" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "bad_ack",
+    ["", "ADVISORY-ADOPT-ACKNOWLEDGE", "advisory-adopt-acknowledged", "ADVISORY-ADOPT-ACKNOWLEDGED-X"],
+    ids=["empty", "truncated", "lowercase", "extra-suffix"],
+)
+def test_advisory_ack_marker_is_never_satisfied_by_lookalikes(
+    monkeypatch: pytest.MonkeyPatch, _clean_pin_layer: None, bad_ack: str
+) -> None:
+    # 放行标记与指纹同理，只认逐字登记：小写/截断/多字符的一律不算放行——否则「长得像」就能开门。
+    _pin_layer_env(monkeypatch, mode=build_exe.PIN_SOURCE_ADOPT, table=_advisory_table(ack=bad_ack))
+    _install_fake_urlopen(monkeypatch, f"{_ONLINE_HEX}  ffmpeg.zip".encode("ascii"))
+    assert build_exe._pinned_slots()["ffmpeg"] == _BUILTIN_HEX
+
+
+@pytest.mark.parametrize(
+    ("key", "slot"),
+    [("windows-x64", "ffmpeg"), ("linux-x64", "ffmpeg"), ("linux-arm64", "ffmpeg")],
+)
+def test_release_ffmpeg_slots_carry_the_user_approved_adopt_ack(key: str, slot: str) -> None:
+    # 2026-11-01 用户批准的供应链取舍必须**可机检**：三个 ffmpeg 槽在来源表里逐条登记放行标记，
+    # 静态表相应哈希退为回退基线。谁删掉标记 = 悄悄回退「上游漂移打断发布」的旧行为或反向悄悄
+    # 扩大放行面——两种都得显式过一道人工评审（改这条用例并在 AGENTS/skill 同步口径）。
+    entry = build_exe._PIN_SOURCE_TABLE[key][slot]
+    assert entry.get("trust") == build_exe.PIN_TRUST_ADVISORY
+    assert entry.get("adopt_ack") == build_exe.ADVISORY_ADOPT_ACK
+    assert build_exe._pin_source_is_adoptable(entry)
 
 
 def test_signed_source_without_pinned_fingerprint_is_never_adopted(
@@ -1880,6 +1927,58 @@ def test_online_fetch_failure_never_changes_the_verdict(
     assert "在线清单拉取失败" in capsys.readouterr().out
 
 
+def test_pin_source_runtime_allowlist_matches_the_static_lock() -> None:
+    # build_exe._PIN_SOURCE_ALLOWED_HOSTS（运行时门）与本文件的 _ALLOWED_HOSTS（静态锁）必须同源：
+    # 两处漂移 = 一边放行一边拦截，或静态锁没拦住运行时门放过的主机。新增主机两处同改。
+    assert build_exe._PIN_SOURCE_ALLOWED_HOSTS == _ALLOWED_HOSTS
+
+
+def test_pin_source_url_gate_rejects_every_untrustworthy_shape() -> None:
+    # 主机门只认 https + 白名单主机；urlsplit 剥掉 userinfo/端口后判 hostname，
+    # 防 user@evil.com 类形态混进白名单主机名。
+    for bad in (
+        "http://api.github.com/repos/x",  # 明文
+        "https://mirror.evil.example/manifest.sha256",  # 白名单外
+        "https://api.github.com@evil.example/manifest",  # userinfo 伪装
+        "ftp://api.github.com/manifest",  # 非 https 协议
+        "not-a-url",  # 畸形
+    ):
+        assert not build_exe._pin_source_url_allowed(bad), f"{bad} 不应通过主机门"
+    for good in (
+        "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases?per_page=100",
+        "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip.sha256",
+        "https://nodejs.org/dist/v26.13.0/SHASUMS256.txt",
+        "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/x.tar.xz",
+    ):
+        assert build_exe._pin_source_url_allowed(good), f"{good} 应通过主机门"
+
+
+def test_online_manifest_host_gate_sits_before_the_fetch(
+    monkeypatch: pytest.MonkeyPatch, _clean_pin_layer: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # 主机门必须在 urlopen **之前**：表被注入内网/仿冒地址时零请求、零判据变更、显式告警。
+    def explode(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("未过 https/主机白名单的清单 URL 不得发起请求")
+
+    _pin_layer_env(
+        monkeypatch,
+        mode=build_exe.PIN_SOURCE_ADOPT,
+        table={
+            "windows-x64": {
+                "ffmpeg": {
+                    "url": "https://169.254.169.254/latest/meta-data",
+                    "trust": build_exe.PIN_TRUST_ADVISORY,
+                    "kind": build_exe._PIN_KIND_RAW,
+                    "adopt_ack": build_exe.ADVISORY_ADOPT_ACK,
+                }
+            }
+        },
+    )
+    monkeypatch.setattr(build_exe, "urllib", types.SimpleNamespace(request=types.SimpleNamespace(urlopen=explode)))
+    assert build_exe._pinned_slots()["ffmpeg"] == _BUILTIN_HEX
+    assert "未过 https/主机白名单" in capsys.readouterr().out
+
+
 def test_online_pin_table_only_declares_slots_that_have_a_download_point() -> None:
     # 给一个没有下载点的槽位登记在线来源，等于凭空造一个永远不会被真实构建路径走到的假闸口。
     for key, slots in build_exe._PIN_SOURCE_TABLE.items():
@@ -1908,16 +2007,271 @@ def test_every_online_pin_source_url_is_https_on_an_allowlisted_host() -> None:
 def test_github_pin_asset_name_matches_the_download_url_basename() -> None:
     # GitHub 档按 assets[].name 匹配：名字若与 _FFMPEG_DOWNLOAD_URLS 里真正下载的那一份脱钩，
     # 会拉到同一 release 下**另一个资产**的 digest，恒失配（且失配看起来像「钉定填错了」）。
+    # [2026-11-01] 月末解析档（github-monthly）的资产名在构建期才产生，静态锁法换成「回退直链的
+    # basename 必须落在 asset_glob 形态内」：在线判据与回退整对（直链+内置哈希）必须描述同一种资产，
+    # 否则解析失败回退时会出现「内置哈希配不上内置直链」的第二种恒失配。
     checked = 0
     for key, slots in build_exe._PIN_SOURCE_TABLE.items():
         for slot, entry in slots.items():
-            if entry.get("kind") != build_exe._PIN_KIND_GITHUB:
-                continue
-            assert key in build_exe._FFMPEG_DOWNLOAD_URLS, f"{key} 无 ffmpeg 下载点"
-            expected = build_exe._FFMPEG_DOWNLOAD_URLS[key].rsplit("/", 1)[-1]
-            assert entry["asset"] == expected, f"{key}/{slot} 的资产名与下载 URL 脱钩：{entry['asset']} != {expected}"
-            checked += 1
+            kind = entry.get("kind")
+            if kind == build_exe._PIN_KIND_GITHUB:
+                assert key in build_exe._FFMPEG_DOWNLOAD_URLS, f"{key} 无 ffmpeg 下载点"
+                expected = build_exe._FFMPEG_DOWNLOAD_URLS[key].rsplit("/", 1)[-1]
+                assert (
+                    entry["asset"] == expected
+                ), f"{key}/{slot} 的资产名与下载 URL 脱钩：{entry['asset']} != {expected}"
+                checked += 1
+            elif kind == build_exe._PIN_KIND_GITHUB_MONTHLY:
+                assert key in build_exe._FFMPEG_DOWNLOAD_URLS, f"{key} 无 ffmpeg 下载点"
+                basename = build_exe._FFMPEG_DOWNLOAD_URLS[key].rsplit("/", 1)[-1]
+                assert fnmatch.fnmatchcase(
+                    basename, entry["asset_glob"]
+                ), f"{key}/{slot} 的回退直链 basename {basename} 不落在 asset_glob {entry['asset_glob']} 内"
+                checked += 1
     assert checked, "没有任何 github 档条目被核对——该档若被整体删掉，本用例会变成空转"
+
+
+# ── 月末解析档（_PIN_KIND_GITHUB_MONTHLY）────────────────────────────────────────
+# 桩体键名与 GitHub API 实测一致（2026-11-01）：tag_name / assets[].name / assets[].digest
+# （"sha256:<64hex>"） / assets[].browser_download_url。
+
+
+def _monthly_releases_payload(tags_with_assets: dict[str, list[dict[str, str]]]) -> bytes:
+    return json.dumps([{"tag_name": tag, "assets": assets} for tag, assets in tags_with_assets.items()]).encode("utf-8")
+
+
+def _monthly_entry(glob: str = "ffmpeg-n*-linux64-gpl-9.0.tar.xz") -> dict[str, dict[str, dict[str, str]]]:
+    return {
+        "linux-x64": {
+            "ffmpeg": {
+                "url": "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases?per_page=100",
+                "trust": build_exe.PIN_TRUST_ADVISORY,
+                "kind": build_exe._PIN_KIND_GITHUB_MONTHLY,
+                "asset_glob": glob,
+                "adopt_ack": build_exe.ADVISORY_ADOPT_ACK,
+            }
+        }
+    }
+
+
+_LINUX_STATIC_URL = (
+    "https://github.com/BtbN/FFmpeg-Builds/releases/download/"
+    "autobuild-2026-08-31-13-27/ffmpeg-n9.0.1-11-ge47273f4d9-linux64-gpl-9.0.tar.xz"
+)
+
+
+def test_monthly_release_parser_picks_the_newest_month_end_tag_and_its_sole_asset() -> None:
+    # 判据（digest）与下载直链取自**同一次**响应：选最新月末标签（10-31），排除其前的滚动别名
+    # latest（其资产同样能匹配 glob，但标签不在月末形状内）与日更标签。
+    digest = "c" * 64
+    asset = "ffmpeg-n9.0.2-39-g7adfbe40dc-linux64-gpl-9.0.tar.xz"
+    resolved_url = f"https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/{asset}"
+    payload = _monthly_releases_payload(
+        {
+            "latest": [
+                {
+                    "name": "ffmpeg-n9.0-latest-linux64-gpl-9.0.tar.xz",
+                    "digest": f"sha256:{digest}",
+                    "browser_download_url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/x.tar.xz",
+                }
+            ],
+            "autobuild-2026-10-31-12-59": [
+                {
+                    "name": asset,
+                    "digest": f"sha256:{digest}",
+                    "browser_download_url": resolved_url,
+                },
+                {
+                    "name": "ffmpeg-n9.0.2-39-g7adfbe40dc-linux64-gpl-shared-9.0.tar.xz",
+                    "digest": f"sha256:{digest}",
+                    "browser_download_url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/shared.tar.xz",
+                },
+            ],
+            "autobuild-2026-10-30-13-01": [
+                {
+                    "name": "ffmpeg-n9.0.2-38-gdeadbeef12-linux64-gpl-9.0.tar.xz",
+                    "digest": f"sha256:{digest}",
+                    "browser_download_url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-30-13-01/x.tar.xz",
+                }
+            ],
+            "autobuild-2026-09-30-13-08": [
+                {
+                    "name": "ffmpeg-n9.0.1-20-gabcabcabc0-linux64-gpl-9.0.tar.xz",
+                    "digest": f"sha256:{digest}",
+                    "browser_download_url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-09-30-13-08/x.tar.xz",
+                }
+            ],
+        }
+    )
+    resolved = build_exe._parse_monthly_releases(payload.decode("utf-8"), "ffmpeg-n*-linux64-gpl-9.0.tar.xz", "ffmpeg")
+    assert resolved == {
+        "tag": "autobuild-2026-10-31-12-59",
+        "asset": asset,
+        "digest": digest,
+        "url": resolved_url,
+    }
+
+
+@pytest.mark.parametrize(
+    ("tag", "is_month_end"),
+    [
+        ("autobuild-2026-10-31-12-59", True),
+        ("autobuild-2026-09-30-13-08", True),
+        ("autobuild-2026-04-30-08-00", True),
+        ("autobuild-2024-02-29-23-59", True),  # 闰年 2 月 29 是真实月末
+        ("autobuild-2026-04-31-08-00", False),  # 四月只有 30 天
+        ("autobuild-2023-02-29-08-00", False),  # 平年没有 2 月 29
+        ("autobuild-2026-10-30-13-01", False),  # 日更标签
+        ("latest", False),  # 滚动别名
+    ],
+)
+def test_monthly_tag_shape_only_accepts_real_month_end_dates(tag: str, is_month_end: bool) -> None:
+    # 月末判定只认「标签日期 == 月份实际末日」：31 号出现在 30 天月份、平年出现 2 月 29 都是误报。
+    digest = "d" * 64
+    asset = "ffmpeg-n9.0.2-39-g7adfbe40dc-linux64-gpl-9.0.tar.xz"
+    payload = _monthly_releases_payload(
+        {
+            tag: [
+                {
+                    "name": asset,
+                    "digest": f"sha256:{digest}",
+                    "browser_download_url": f"https://github.com/BtbN/FFmpeg-Builds/releases/download/{tag}/{asset}",
+                }
+            ]
+        }
+    )
+    resolved = build_exe._parse_monthly_releases(payload.decode("utf-8"), "ffmpeg-n*-linux64-gpl-9.0.tar.xz", "ffmpeg")
+    assert (resolved is not None) == is_month_end
+
+
+def test_monthly_release_parser_refuses_ambiguous_asset_match() -> None:
+    # glob 放得太宽（同标签下 2 个资产命中）→ 宁可回退也不猜：猜错一次就把「判据」钉到别的资产上。
+    digest = "e" * 64
+    payload = _monthly_releases_payload(
+        {
+            "autobuild-2026-10-31-12-59": [
+                {
+                    "name": "ffmpeg-n9.0.2-39-g7adfbe40dc-linux64-gpl-9.0.tar.xz",
+                    "digest": f"sha256:{digest}",
+                    "browser_download_url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/t/a.tar.xz",
+                },
+                {
+                    "name": "ffmpeg-n9.0.2-40-g8be0fab12c-linux64-gpl-9.0.tar.xz",
+                    "digest": f"sha256:{digest}",
+                    "browser_download_url": "https://github.com/BtbN/FFmpeg-Builds/releases/download/t/b.tar.xz",
+                },
+            ]
+        }
+    )
+    assert (
+        build_exe._parse_monthly_releases(payload.decode("utf-8"), "ffmpeg-n*-linux64-gpl-9.0.tar.xz", "ffmpeg") is None
+    )
+
+
+@pytest.mark.parametrize(
+    "digest_value",
+    ["deadbeef", "", "0x" + "f" * 62],
+    ids=["short", "missing", "non-hex-prefix"],
+)
+def test_monthly_release_parser_rejects_bad_digest_field(digest_value: str) -> None:
+    # digest 形状关与「已钉定」同口径（_SHA256_PATTERN）：GitHub 的 digest 带不带 "sha256:" 前缀
+    # 都要能归一，归一后仍非 64 位十六进制的一律拒绝。
+    asset = "ffmpeg-n9.0.2-39-g7adfbe40dc-linux64-gpl-9.0.tar.xz"
+    payload = _monthly_releases_payload(
+        {
+            "autobuild-2026-10-31-12-59": [
+                {
+                    "name": asset,
+                    "digest": digest_value,
+                    "browser_download_url": f"https://github.com/BtbN/FFmpeg-Builds/releases/download/t/{asset}",
+                }
+            ]
+        }
+    )
+    assert (
+        build_exe._parse_monthly_releases(payload.decode("utf-8"), "ffmpeg-n*-linux64-gpl-9.0.tar.xz", "ffmpeg") is None
+    )
+
+
+def test_monthly_release_parser_rejects_off_allowlist_download_host() -> None:
+    # 直链与清单同源（advisory），但主机面仍不得漂出允许清单——拦「清单 JSON 被调包成指向
+    # 第三方镜像的直链」的形态。
+    payload = _monthly_releases_payload(
+        {
+            "autobuild-2026-10-31-12-59": [
+                {
+                    "name": "ffmpeg-n9.0.2-39-g7adfbe40dc-linux64-gpl-9.0.tar.xz",
+                    "digest": f"sha256:{'f' * 64}",
+                    "browser_download_url": "https://mirror.evil.example/ffmpeg.tar.xz",
+                }
+            ]
+        }
+    )
+    assert (
+        build_exe._parse_monthly_releases(payload.decode("utf-8"), "ffmpeg-n*-linux64-gpl-9.0.tar.xz", "ffmpeg") is None
+    )
+
+
+def test_monthly_release_parser_rejects_non_json_body() -> None:
+    # 上游偶发返回错误页（HTML）时按「没拉到」处理，绝不把页面文本当清单。
+    assert (
+        build_exe._parse_monthly_releases(
+            "<html><body>404 Not Found</body></html>", "ffmpeg-n*-linux64-gpl-9.0.tar.xz", "ffmpeg"
+        )
+        is None
+    )
+
+
+def test_adopt_mode_switches_the_download_url_to_the_resolved_month_end_asset(
+    monkeypatch: pytest.MonkeyPatch, _clean_pin_layer: None
+) -> None:
+    # adopt 档下 linux 下载直链必须与判据 digest 同源（同一次解析）：判据换成 10-31 的 digest、
+    # 下载却走内置 08-31 直链 = 恒失配的假红。
+    _pin_layer_env(monkeypatch, mode=build_exe.PIN_SOURCE_ADOPT, key="linux-x64", table=_monthly_entry())
+    monkeypatch.setattr(build_exe, "_FFMPEG_DOWNLOAD_URLS", {"linux-x64": _LINUX_STATIC_URL})
+    digest = "9" * 64
+    asset = "ffmpeg-n9.0.2-39-g7adfbe40dc-linux64-gpl-9.0.tar.xz"
+    resolved_url = f"https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/{asset}"
+    _install_fake_urlopen(
+        monkeypatch,
+        _monthly_releases_payload(
+            {
+                "autobuild-2026-10-31-12-59": [
+                    {
+                        "name": asset,
+                        "digest": f"sha256:{digest}",
+                        "browser_download_url": resolved_url,
+                    }
+                ]
+            }
+        ),
+    )
+    assert build_exe._ffmpeg_source_url() == resolved_url
+
+
+def test_off_mode_keeps_the_builtin_download_url_and_never_resolves(
+    monkeypatch: pytest.MonkeyPatch, _clean_pin_layer: None
+) -> None:
+    # off 档一次网络请求都不发（在线层默认姿态的 ffmpeg 侧镜像），直链保持内置不可变标签。
+    _pin_layer_env(monkeypatch, mode=build_exe.PIN_SOURCE_OFF, key="linux-x64", table=_monthly_entry())
+    monkeypatch.setattr(build_exe, "_FFMPEG_DOWNLOAD_URLS", {"linux-x64": _LINUX_STATIC_URL})
+
+    def explode(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("off 档不得为 ffmpeg 直链发起任何在线解析")
+
+    monkeypatch.setattr(build_exe, "urllib", types.SimpleNamespace(request=types.SimpleNamespace(urlopen=explode)))
+    assert build_exe._ffmpeg_source_url() == _LINUX_STATIC_URL
+
+
+def test_adopt_mode_falls_back_to_the_builtin_url_when_resolution_fails(
+    monkeypatch: pytest.MonkeyPatch, _clean_pin_layer: None, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # 解析不可用（此处：列表里无月末标签）→ 回退内置直链 + 显式告警，不静默、不中断。
+    _pin_layer_env(monkeypatch, mode=build_exe.PIN_SOURCE_ADOPT, key="linux-x64", table=_monthly_entry())
+    monkeypatch.setattr(build_exe, "_FFMPEG_DOWNLOAD_URLS", {"linux-x64": _LINUX_STATIC_URL})
+    _install_fake_urlopen(monkeypatch, _monthly_releases_payload({}))
+    assert build_exe._ffmpeg_source_url() == _LINUX_STATIC_URL
+    assert "回退内置钉定直链" in capsys.readouterr().out
 
 
 # M-99 三处，全部离线：urlopen / gpg 走本文件既有的桩，文件一律落 tmp_path，

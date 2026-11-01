@@ -28,7 +28,9 @@
 #     dist/DouyinLiveRecorder-v{ver}-{os}-{arch}{suffix}.zip  压缩包（普通构建 suffix 为空，--dual 为 -lite/-full）
 #
 import argparse
+import calendar
 import contextlib
+import fnmatch
 import hashlib
 import http.client
 import json
@@ -45,6 +47,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 from typing import Any, Iterator, cast
+from urllib.parse import urlsplit
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 APP_NAME = "DouyinLiveRecorder"
@@ -673,6 +676,12 @@ OFFICIAL_SIGNATURE_PIN = "PINNED-OFFICIAL-GPG-SIGNATURE"
 # [2026-11-01] 发布路径已改走在线来源层 adopt 档（build-release.yml 显式 --pin-source adopt）：node 的
 # 判据来自「GPG 验签通过的官方 SHASUMS」（发布钥匙指纹钉在 _PIN_SOURCE_TABLE，三通道同值登记），上游
 # 发新 LTS 不再打断发布；本表退为 off 档回退基线（在线验签失败时仍按本表比对，漂移照旧 fail-closed）。
+# [2026-11-01 第二次改定，用户批准] ffmpeg 三槽（windows-x64 / linux-x64 / linux-arm64）同样改走 adopt：
+#   判据 = 构建期拉取的当日官方清单值（windows=gyan 滚动别名 .sha256；linux=月末标签解析，见
+#   _parse_monthly_releases 注释——留意 _PIN_KIND_GITHUB_MONTHLY）。上游不发布签名，清单与产物同源
+#   （advisory），这是经批准的显式供应链取舍（ADVISORY_ADOPT_ACK 逐槽登记）；本表三槽哈希退为回退
+#   基线：在线拉取失败时按内置值比对——windows 回退后滚动产物对旧哈希失配即 fail-closed；linux 回退
+#   后连直链一起回退到内置的月末不可变标签（URL+哈希整对一致），发布继续但版本滞后并显式告警。
 #   · windows-x64/ffmpeg：gyan.dev 官方 .sha256（滚动别名与 packages/ffmpeg-9.0.2-essentials_build.zip
 #     的 .sha256 两端点互证），对应 ffmpeg 9.0.2；上游发新版本即失配，需重新核对后回填。
 #   · macos 两架构 ffmpeg/ffprobe：OFFICIAL_SIGNATURE_PIN——evermeet 不公布 sha256，只给与产物同名追加
@@ -1095,8 +1104,10 @@ def _verify_gpg_artifact(
 #   off    完全只用内置表，一次网络请求都不发（引入本层前后的构建行为逐字相同）。
 #   verify 拉取官方清单后**只与内置表比对**：一致 = 印证内置表仍有效；不一致 = 上游已发新值，发布路径
 #          终止并提示「请把新值回填内置表」，本地路径告警且继续用内置表。永不把拉到的值写进期望值。
-#   adopt  在线值升格为本次构建的判据，仅对 trust=signed 且**清单验签通过**的槽位生效
-#          （见 _pin_source_is_adoptable）；其余档位一律拒绝采用并回退内置表。
+#   adopt  在线值升格为本次构建的判据。准入两条路（_pin_source_is_adoptable）：signed 档须清单验签
+#          通过（钉定 40 位主钥指纹，如 node）；advisory 档须该槽**逐条登记** ADVISORY_ADOPT_ACK
+#          放行标记（2026-11-01 用户批准，如 windows/linux ffmpeg——上游不发布签名，「动态取当日
+#          官方值」只剩同源清单一条路）。未过门的槽位一律拒绝采用并回退内置表。
 PIN_SOURCE_OFF = "off"
 PIN_SOURCE_VERIFY = "verify"
 PIN_SOURCE_ADOPT = "adopt"
@@ -1104,21 +1115,37 @@ _PIN_SOURCE_MODES: tuple[str, ...] = (PIN_SOURCE_OFF, PIN_SOURCE_VERIFY, PIN_SOU
 
 # 信任档：决定「拉到的这个哈希能不能当判据」。这条是整层的命门，判错了整层就退化成安全剧场。
 #   signed —— 该清单**另有独立认证**：配套发布的分离 GPG 签名 + 本条目 fingerprint 里钉住的完整 40 位
-#             主钥指纹。只有这一档允许 adopt：判据是「这份清单由那把钥匙签出」，与「清单自己说什么」
+#             主钥指纹。这一档天然可 adopt：判据是「这份清单由那把钥匙签出」，与「清单自己说什么」
 #             无关——通道被劫持时，没有私钥的人签不出能过验签的清单。
 #   advisory —— 清单与产物**同源同服务器**（gyan.dev 的 .sha256 就是它自己发的；api.github.com 的
 #             digest 与产物同在 github.com）。中间人换掉 zip 的同时就把 .sha256 一起换了，于是
-#             「拉清单 → 当期望值 → 比对产物」三步恒等通过，故只用于 verify 比对与提示，**绝不作 expected**。
+#             「拉清单 → 当期望值 → 比对产物」三步恒等通过。因此本档**默认只用于 verify 比对与提示**；
+#             [2026-11-01 用户批准的例外] 仅当槽位在来源表里逐条登记下方 ADVISORY_ADOPT_ACK 放行
+#             标记时才允许 adopt——那是一次有意识的供应链取舍（判据新鲜度 ⇄ 放弃带外认证），不许
+#             全局开关，新槽位必须先经人工评估再登记。
 PIN_TRUST_SIGNED = "signed"
 PIN_TRUST_ADVISORY = "advisory"
+
+# advisory 档 adopt 的显式放行标记（取值形态参考 OFFICIAL_SIGNATURE_PIN：一眼可辨、不可误填）。
+# 未登记本标记的 advisory 槽位维持旧行为：verify 只比对、adopt 一律拒绝（_pin_source_is_adoptable）。
+# 现登记槽位及理由：windows-x64 / linux-x64 / linux-arm64 的 ffmpeg——上游（gyan.dev / BtbN）不发布
+# 任何 GPG 签名，「动态取当日官方值」只剩同源清单一条路；用户批准接受该降级，换取上游漂移不再打断
+# 发布。静态表（_PINNED_RUNTIME_SHA256）退为回退基线：在线拉取失败时按内置值比对，该内置值仍是
+# 带外基线，不随在线值漂移。
+ADVISORY_ADOPT_ACK = "ADVISORY-ADOPT-ACKNOWLEDGED"
 
 # 清单的解析形态（各上游公布的文档格式不同，但形状关只有 _SHA256_PATTERN 一个）：
 #   raw      响应体就是哈希本身，形如 "<64hex>" 或 "<64hex>  <文件名>"（gyan.dev 的 .sha256）。
 #   shasums  多行 "<64hex>  <文件名>"，按文件名取对应那一行（nodejs.org 的 SHASUMS256.txt）。
 #   github   GitHub Release JSON，按 assets[].name 精确匹配后取该资产的 digest（"sha256:<64hex>"）。
+#   github-monthly  GitHub releases **列表** JSON：解析「最新月末 autobuild 标签」，取该标签下匹配
+#             asset_glob 的唯一资产的 digest 与直链。与固定标签档（github）的差别在于 URL/资产名/
+#             摘要不再静态互证，而是**在同一次 API 响应里成套产出**、由解析时刻决定新鲜度
+#             （判据与下载直链必须取自同一次解析，见 _parse_monthly_releases）。
 _PIN_KIND_RAW = "raw"
 _PIN_KIND_SHASUMS = "shasums"
 _PIN_KIND_GITHUB = "github"
+_PIN_KIND_GITHUB_MONTHLY = "github-monthly"
 
 # 签名档的两种物理形态（决定验签命令形态与「判据值从哪份字节里取」，不得靠猜）：
 #   clearsigned —— 签名文档**内嵌明文**（nodejs.org 的 SHASUMS256.txt.asc 即此形态）：单文件
@@ -1166,25 +1193,38 @@ _PIN_SOURCE_TABLE: dict[str, dict[str, dict[str, str]]] = {
     },
     "windows-x64": {
         "ffmpeg": {
+            # gyan.dev 的滚动别名 .sha256（实测 303 重定向到 packages/ 下的版本化同名 .sha256，
+            # 两端点同源同值）；下载侧的 ffmpeg-release-essentials.zip 滚动别名与它一起滚动，判据与
+            # 产物始终指向同一版本。清单与产物同源（advisory），2026-11-01 用户批准显式放行 adopt。
             "url": "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip.sha256",
             "trust": PIN_TRUST_ADVISORY,
             "kind": _PIN_KIND_RAW,
+            "adopt_ack": ADVISORY_ADOPT_ACK,
         },
     },
     "linux-x64": {
         "ffmpeg": {
-            "url": "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/tags/autobuild-2026-08-31-13-27",
+            # releases **列表**接口（一次请求给出全部标签与资产；实测月末标签长期保留、最新一页必含）。
+            # 刻意不用 releases/latest：那是滚动别名，同名资产被上游重传即换字节——月末解析档要的
+            # 正是「标签不可变 + 判据新鲜」的组合，见 _parse_monthly_releases。
+            "url": "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases?per_page=100",
             "trust": PIN_TRUST_ADVISORY,
-            "kind": _PIN_KIND_GITHUB,
-            "asset": "ffmpeg-n9.0.1-11-ge47273f4d9-linux64-gpl-9.0.tar.xz",
+            "kind": _PIN_KIND_GITHUB_MONTHLY,
+            # 月末标签下的资产名内嵌版本与 commit hash（如 ffmpeg-n9.0.2-39-g7adfbe40dc-…），
+            # 逐字写死会随标签漂移，故按形态匹配：非 shared 的 9.0 系 linux64 tar.xz 恰好一个
+            # （实测 2026-11-01：-gpl-9.0 与 -gpl-shared-9.0 两种后缀并存，glob 后缀天然排除 shared）。
+            "asset_glob": "ffmpeg-n*-linux64-gpl-9.0.tar.xz",
+            "adopt_ack": ADVISORY_ADOPT_ACK,
         },
     },
     "linux-arm64": {
         "ffmpeg": {
-            "url": "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/tags/autobuild-2026-08-31-13-27",
+            # 与 linux-x64 同一列表端点；glob 按 arm64 资产后缀区分（实测资产名 linuxarm64）。
+            "url": "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases?per_page=100",
             "trust": PIN_TRUST_ADVISORY,
-            "kind": _PIN_KIND_GITHUB,
-            "asset": "ffmpeg-n9.0.1-11-ge47273f4d9-linuxarm64-gpl-9.0.tar.xz",
+            "kind": _PIN_KIND_GITHUB_MONTHLY,
+            "asset_glob": "ffmpeg-n*-linuxarm64-gpl-9.0.tar.xz",
+            "adopt_ack": ADVISORY_ADOPT_ACK,
         },
     },
 }
@@ -1296,12 +1336,109 @@ def _parse_online_sha256(payload: str, kind: str, asset: str) -> str:
 
 
 def _pin_source_is_adoptable(entry: dict[str, str]) -> bool:
-    # adopt 的准入门：trust 必须是 signed **且**指纹已钉（40 位十六进制），缺一即不可采用。
-    # 尤其 fingerprint 留空时：没钉住钥匙就说「走签名档」，等于把验签这一步省掉，adopt 会
-    # 退化成「同源清单说什么就是什么」——正是 PIN_TRUST_ADVISORY 注释里点名的失效形态。
-    if entry.get("trust", "") != PIN_TRUST_SIGNED:
+    # adopt 的准入门，两条互斥路径：
+    #   signed   —— 指纹必须已钉（40 位十六进制）。尤其 fingerprint 留空时：没钉住钥匙就说「走签名档」，
+    #               等于把验签这一步省掉，adopt 会退化成「同源清单做什么就是什么」——正是
+    #               PIN_TRUST_ADVISORY 注释里点名的失效形态。
+    #   advisory —— 仅当该槽**逐条登记**了 ADVISORY_ADOPT_ACK 放行标记（2026-11-01 用户批准的
+    #               供应链取舍，理由与登记槽位见该常量注释）。未登记即维持旧行为：永不采纳。
+    trust = entry.get("trust", "")
+    if trust == PIN_TRUST_SIGNED:
+        return bool(_FINGERPRINT_PATTERN.fullmatch(entry.get("fingerprint", "").strip().lower()))
+    if trust == PIN_TRUST_ADVISORY:
+        return entry.get("adopt_ack", "").strip() == ADVISORY_ADOPT_ACK
+    return False
+
+
+# 在线钉定清单的运行时主机门（纵深防御）：来源表是硬编码常量、不经任何用户输入，这道门拦的是
+# 「表被改坏/被注入内网或云元数据地址后构建机照拉不误」的形态（2026-11-01 Mimosa SSRF 提示采纳）。
+# 只认 https + 白名单主机；tests/test_build_exe.py::_ALLOWED_HOSTS 是同源静态锁，新增主机两处同改。
+_PIN_SOURCE_ALLOWED_HOSTS = frozenset({"www.gyan.dev", "evermeet.ca", "github.com", "api.github.com", "nodejs.org"})
+
+
+def _pin_source_url_allowed(url: str) -> bool:
+    # urlsplit 而非字符串切分：hostname 已剥掉端口与 userinfo（防 user@evil.com 类形态），
+    # 解析失败（非 https / 畸形）一律 False。from-import 而非经 build_exe.urllib 属性访问：
+    # 测试会把 build_exe.urllib 整体换成桩，主机门作为纯函数必须照常工作。
+    try:
+        parts = urlsplit(url)
+    except ValueError:
         return False
-    return bool(_FINGERPRINT_PATTERN.fullmatch(entry.get("fingerprint", "").strip().lower()))
+    if parts.scheme != "https" or not parts.hostname:
+        return False
+    return parts.hostname.lower() in _PIN_SOURCE_ALLOWED_HOSTS
+
+
+# 月末解析产物暂存：<（运行时键, 槽位）> → {"tag","asset","digest","url"}。判据 digest 进 _PIN_ONLINE_CACHE，
+# 下载直链进本表；两者来自**同一次** API 响应（见 _fetch_online_pin 的 monthly 分支），_ffmpeg_source_url
+# 据此把下载直链换成本次解析出的那份资产——判据是 A 标签的 digest、下载却走内置直链 = 恒失配的假红。
+_MONTHLY_RESOLVED: dict[tuple[str, str], dict[str, str]] = {}
+
+# 月末 autobuild 标签的形状关：autobuild-YYYY-MM-DD-HH-MM，日期与月份实际末日相等才入选（闰年由
+# calendar.monthrange 处理）；「latest」「日更标签」在 fullmatch 处被整体排除——滚动别名重传即换字节，
+# 会让同一构建的判据与产物脱钩，月末标签实测 URL 与 digest 双双不可变（可回溯到 2024-10-31）。
+_MONTHLY_TAG_PATTERN = re.compile(r"^autobuild-(\d{4})-(\d{2})-(\d{2})-\d{2}-\d{2}$")
+
+
+def _parse_monthly_releases(raw_text: str, glob: str, slot: str) -> dict[str, str] | None:
+    # 月末解析（**纯解析、无网络**）：从 releases 列表 JSON 里选最新月末标签 → 匹配唯一资产 →
+    # 取 digest/直链。任何一步不成即 None，由调用方按「本次不参与判定」处置并回退内置表——
+    # 解析失败属于「回退档接管」，与「产物完整性存疑必须终止」是两类事。
+    if not glob:
+        print(f"[build][warn] 槽位 {slot} 的月末解析条目缺 asset_glob 配置，本次不参与判定")
+        return None
+    try:
+        releases = json.loads(raw_text)
+    except json.JSONDecodeError as e:
+        print(f"[build][warn] 槽位 {slot} 月末标签列表不是合法 JSON（{e}），本次不参与判定")
+        return None
+    if not isinstance(releases, list):
+        print(f"[build][warn] 槽位 {slot} 月末标签列表响应不是 JSON 数组，本次不参与判定")
+        return None
+    # 只信任标签自身的日期形状并按 (年, 月, 日) 排序，不依赖 API 的排序约定。
+    monthend: list[tuple[int, int, int, str, dict[str, Any]]] = []
+    for rel in releases:
+        if not isinstance(rel, dict):
+            continue
+        matched = _MONTHLY_TAG_PATTERN.fullmatch(str(rel.get("tag_name", "")))
+        if not matched:
+            continue
+        year, month, day = int(matched.group(1)), int(matched.group(2)), int(matched.group(3))
+        if day == calendar.monthrange(year, month)[1]:
+            monthend.append((year, month, day, str(rel.get("tag_name", "")), rel))
+    if not monthend:
+        print(f"[build][warn] 槽位 {slot} 在标签列表里未找到月末 autobuild 标签，本次不参与判定")
+        return None
+    monthend.sort(key=lambda item: item[:3], reverse=True)
+    tag, release = monthend[0][3], monthend[0][4]
+    # 资产按形态匹配且**必须恰好一个**：0 个说明标签内容变了，多于 1 个说明 glob 放得太宽——
+    # 两种都宁可回退也不猜（猜错一次就把「判据」钉到别的资产上）。
+    candidates = [
+        asset
+        for asset in release.get("assets", [])
+        if isinstance(asset, dict) and fnmatch.fnmatchcase(str(asset.get("name", "")), glob)
+    ]
+    if len(candidates) != 1:
+        print(
+            f"[build][warn] 槽位 {slot} 在 {tag} 下按 {glob} 匹配到 {len(candidates)} 个资产（期望恰 1 个），"
+            "本次不参与判定"
+        )
+        return None
+    name = str(candidates[0].get("name", ""))
+    download_url = str(candidates[0].get("browser_download_url", ""))
+    digest = str(candidates[0].get("digest", ""))
+    if digest.startswith("sha256:"):  # GitHub 资产 digest 的前缀形态，与 _parse_online_sha256 同口径
+        digest = digest[len("sha256:") :]
+    if not (_SHA256_PATTERN.fullmatch(digest) and name and download_url.startswith("https://")):
+        print(f"[build][warn] 槽位 {slot} 的月末资产字段不齐（digest/名称/直链任一非法），本次不参与判定")
+        return None
+    if not _pin_source_url_allowed(download_url):
+        # 下载直链的主机也过同一道门：直链与清单虽同源（advisory），主机面仍不得漂出允许清单。
+        print(f"[build][warn] 槽位 {slot} 的月末直链主机不在允许清单内（{download_url}），本次不参与判定")
+        return None
+    resolved = {"tag": tag, "asset": name, "digest": digest, "url": download_url}
+    print(f"[build] 槽位 {slot} 月末解析：{tag} / {name}（digest {digest[:12]}…）")
+    return resolved
 
 
 def _fetch_online_pin(entry: dict[str, str], slot: str) -> str:
@@ -1313,6 +1450,11 @@ def _fetch_online_pin(entry: dict[str, str], slot: str) -> str:
     asset = _format_pin_url(asset_tpl, slot)
     if not url or (asset_tpl and not asset):
         return ""
+    if not _pin_source_url_allowed(url):
+        # 在线层唯一的取数咽喉：清单 URL 未过 https/主机白名单 = 表被改坏/被注入，按「本次不参与
+        # 判定」处置并回退内置表（与拉取失败同档，不终止构建——配置错误不是完整性告警）。
+        print(f"[build][warn] 槽位 {slot} 的在线清单 URL 未过 https/主机白名单（{url}），本次不参与判定")
+        return ""
     try:
         with urllib.request.urlopen(url, timeout=_pin_fetch_timeout()) as resp:
             raw = resp.read()
@@ -1321,6 +1463,16 @@ def _fetch_online_pin(entry: dict[str, str], slot: str) -> str:
         # 超时 / DNS / TLS / 4xx-5xx 都归到「本次拉不到」：URLError 与 HTTPError 都是 OSError
         # 子类，故这一条足以覆盖全部网络侧失败，不需要再列 http.client 的异常类型。
         print(f"[build][warn] 槽位 {slot} 在线清单拉取失败（{type(e).__name__}: {e}），本次不参与判定")
+        return ""
+    if entry.get("kind", "") == _PIN_KIND_GITHUB_MONTHLY:
+        # 月末解析档：digest 与下载直链在同一次响应里成套产出。判据 digest 走本函数返回值，
+        # 直链暂存 _MONTHLY_RESOLVED 供 _ffmpeg_source_url 取用——两边必须同源（同一次响应），
+        # 判据是 A 标签的 digest、下载却走内置直链 = 恒失配的假红。advisory 档无签名可验，能否
+        # adopt 由 _apply_online_pin_source 的 _pin_source_is_adoptable 标记门决定，本层只负责取值。
+        resolved = _parse_monthly_releases(raw.decode("utf-8", errors="replace"), entry.get("asset_glob", ""), slot)
+        if resolved is not None:
+            _MONTHLY_RESOLVED[(runtime_slot_key(), slot)] = resolved
+            return resolved["digest"]
         return ""
     value = _parse_online_sha256(raw.decode("utf-8", errors="replace"), entry.get("kind", ""), asset)
     if not value:
@@ -1429,14 +1581,20 @@ def _apply_online_pin_source(merged: dict[str, str]) -> None:
             print(f"[build][warn] {msg}——本地构建继续用内置值，但**该产物不得用于发布**")
             continue
         if not _pin_source_is_adoptable(entry):
-            # advisory 档：清单与产物同源同服务器，把它当判据等于把钉定降级成 TOFU。
+            # advisory 档：清单与产物同源同服务器，把它当判据等于把钉定降级成 TOFU——除非该槽
+            # 已逐条登记 ADVISORY_ADOPT_ACK 放行标记（那是一次经用户批准的有意识取舍）。
             print(
                 f"[build][warn] 槽位 {key}/{slot} 的在线清单属 {PIN_TRUST_ADVISORY} 档"
-                f"（清单与产物同源同服务器，无独立认证），adopt 已跳过、沿用内置值；"
-                f"在线值 {online} 仅供人工核对"
+                f"（清单与产物同源同服务器，无独立认证），且未登记 {ADVISORY_ADOPT_ACK} 放行标记，"
+                f"adopt 已跳过、沿用内置值；在线值 {online} 仅供人工核对"
             )
             continue
-        print(f"[build] 槽位 {key}/{slot} 采用在线清单值（{online[:12]}…）：清单已过钉定指纹验签")
+        reason = (
+            "清单已过钉定指纹验签"
+            if entry.get("trust", "") == PIN_TRUST_SIGNED
+            else f"该槽已登记 {ADVISORY_ADOPT_ACK}（同源清单的显式放行，2026-11-01 用户批准）"
+        )
+        print(f"[build] 槽位 {key}/{slot} 采用在线清单值（{online[:12]}…）：{reason}")
         merged[slot] = online
 
 
@@ -1652,6 +1810,10 @@ def _download_nodejs(target_dir: Path) -> bool:
 #             （现为 n9.0.1-11-ge47273f4d9，latest 已到 n9.0.2），升级须人工换标签 + 换钉定值；资产体积
 #             实测 2026-09-27：linux64 126,600,656 B、linuxarm64 108,761,296 B，体积门禁须按
 #             report_bundle_size.py 实跑复核，不估算。
+#   [2026-11-01 第二次改定，用户批准] linux 两槽直链升级为「构建期解析最新月末标签」（adopt 档，
+#   见 _PIN_SOURCE_TABLE 与 _parse_monthly_releases），本表静态直链退为**回退基线**：在线解析失败时
+#   整对回退（URL+内置哈希同批一致、不可变、带外可验），版本滞后但显式告警；windows 槽滚动别名保持
+#   静态，其判据（.sha256）与产物同版本滚动，回退后旧哈希对滚动产物失配即 fail-closed。
 #   [历史注] linux 两槽曾用 johnvansickle static 构建，换走的唯一原因是它只发 *.md5、无 SHA256，导致
 #   --strict 长期拦下发布（体积读数见钉定表上方历史注）。两条运行期源（src/ffmpeg_install.py /
 #   src/ffmpeg_master_download.py，类别 ②）与本表**互不覆盖**：那里仍按「gyan.dev 为默认唯一自动路径、
@@ -1674,9 +1836,21 @@ _FFMPEG_DOWNLOAD_URLS: dict[str, str] = {
 
 def _ffmpeg_source_url() -> str:
     # 未登记的架构组合回落到同族 x64 构建（Windows ARM64 走 x64 仿真；macOS 本就只有 x86_64），
-    # 但**绝不静默回落**：连同族项都没有时抛 KeyError，由调用方按「组件下载失败」报告——
+    # **但绝不静默回落**：连同族项都没有时抛 KeyError，由调用方按「组件下载失败」报告——
     # 「拼出一条不存在的 URL 再被 except 吞掉」正是来源表 macos 条要防的失效形态。
     key = runtime_slot_key()
+    # adopt 档的月末解析：linux 槽的下载直链与判据 digest 必须同源（同一次 API 响应），URL 随判据
+    # 一起换成本次解析出的资产——判据是 10-31 标签的 digest、下载却走内置 08-31 直链 = 恒失配的假红。
+    # 先触发 _online_pin（带缓存）把 _MONTHLY_RESOLVED 填上，再取直链。解析不可用时回退内置直链：
+    # 那是最后一次人工核对过的不可变标签，与内置哈希整对一致，只是版本滞后（显式告警，不静默）。
+    entry = _online_pin_entry("ffmpeg")
+    if pin_source_mode() == PIN_SOURCE_ADOPT and entry.get("kind", "") == _PIN_KIND_GITHUB_MONTHLY:
+        _ = _online_pin("ffmpeg")  # 触发解析（带缓存）；digest 由 _download_file 的钉定比对消费
+        resolved = _MONTHLY_RESOLVED.get((key, "ffmpeg"))
+        if resolved:
+            print(f"[build] ffmpeg 下载采用在线解析直链（{resolved['tag']}，最新月末构建）")
+            return resolved["url"]
+        print("[build][warn] ffmpeg 月末解析不可用，回退内置钉定直链（版本可能滞后于上游 latest）")
     if key in _FFMPEG_DOWNLOAD_URLS:
         return _FFMPEG_DOWNLOAD_URLS[key]
     os_tag = key.partition("-")[0]
@@ -2401,7 +2575,8 @@ def main() -> None:
         help=(
             "运行时钉定的在线来源策略：off（默认，只用内置表、不联网）/ "
             "verify（拉取官方清单后只与内置表比对，不一致即告警或终止）/ "
-            "adopt（仅『清单有独立认证』的槽位可采用在线值作判据）"
+            "adopt（signed 槽位验签通过即采纳；advisory 槽位须逐槽登记 "
+            "ADVISORY-ADOPT-ACKNOWLEDGED 放行标记才采纳）"
         ),
     )
     args = parser.parse_args()

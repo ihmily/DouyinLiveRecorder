@@ -1,7 +1,7 @@
 # CODE_WIKI 更新日志归档（简体中文卷）
 
 > 本卷由 `CODE_WIKI.md` 的「更新日志」于 2026-09-28 整卷迁出，条目正文逐字保留；根文档保留当前发布周期的标题索引与版本概要 + 本卷指针。
-> 收录 193 条历史条目（2026-05-17 ~ 2026-10-01：2026-09-28 整卷迁出的 164 条 + 2026-10-18 滚动迁入的 29 条）；2026-10-31 增补当前发布周期 63 条（v4.6.0 / v4.5.0-dev，见「迁入：当前发布周期」），另新增 2 条（AGENTS.md 对账、四份根文档同步与滚动归档），本卷合计 264 条（2026-11-01 增补 brotli 下限抬升 1 条 + CI Linux 平台敏感用例修复 1 条 + 发布目录凭据校验误报修复 1 条 + setuptools 构建下限抬升 1 条 + node v26.13.0 重钉 1 条 + 发布路径钉定动态化 1 条）。
+> 收录 193 条历史条目（2026-05-17 ~ 2026-10-01：2026-09-28 整卷迁出的 164 条 + 2026-10-18 滚动迁入的 29 条）；2026-10-31 增补当前发布周期 63 条（v4.6.0 / v4.5.0-dev，见「迁入：当前发布周期」），另新增 2 条（AGENTS.md 对账、四份根文档同步与滚动归档），本卷合计 265 条（2026-11-01 增补 brotli 下限抬升 1 条 + CI Linux 平台敏感用例修复 1 条 + 发布目录凭据校验误报修复 1 条 + setuptools 构建下限抬升 1 条 + node v26.13.0 重钉 1 条 + 发布路径钉定动态化 1 条 + ffmpeg 判据动态化 1 条）。
 > 回补口径：上一轮文档粗剪脚本把部分句子截成行尾 `…` 的半句，本卷按 `.workbuddy/docold`（2026-09-25 基线）对残句做**逐行前缀匹配**回补，共回补 659 行（唯一匹配失败 136 行、有歧义 0 行保持原样）。
 > 刻意**不做**的事：不复活历史上被有意删除的条目，不回填已外迁到 `docs/agent-reference/changelog-file-inventories.md` 的文件清单块——整块回填会撤销那些有意的整理，故只补残句。
 > 归档卷不参与镜像构建产物，运行时不读取；根文档入口：[CODE_WIKI.md](../../CODE_WIKI.md)。
@@ -10,6 +10,7 @@
 
 | 版本条目 | 日期 |
 | --- | --- |
+| v4.7.0 (2026-11-01) — ffmpeg 三槽判据动态化：windows/linux 改取构建期当日官方清单值（advisory 显式放行 ADVISORY_ADOPT_ACK），linux 随最新月末标签解析直链，静态表退为回退基线 | 2026-11-01 |
 | v4.7.0 (2026-11-01) — 发布路径钉定动态化：node 槽位以 GPG 验签通过的官方 SHASUMS 为判据（--pin-source adopt），上游发新 LTS 不再打断发布 | 2026-11-01 |
 | v4.7.0 (2026-11-01) — 运行时钉定随上游 node v26.13.0 重钉：Node 26 转 LTS 令首条 lts 漂移，四平台 node SHA256 同时失配 | 2026-11-01 |
 | v4.7.0 (2026-11-01) — setuptools 构建下限 68.0 → 84.1.0 + uv.lock 锁面 84.0.0 → 84.2.1：外部路径逃逸公告（GHSA-xmj3-9gf7-h52w）只读排查后的加固 | 2026-11-01 |
@@ -186,6 +187,16 @@
 | v4.0.8-dev (2026-05-17) | 2026-05-17 |
 
 ## 归档条目
+
+### v4.7.0 (2026-11-01) — ffmpeg 三槽判据动态化：windows/linux 改取构建期当日官方清单值（advisory 显式放行 ADVISORY_ADOPT_ACK），linux 随最新月末标签解析直链，静态表退为回退基线
+
+- **触发**：同日「发布路径钉定动态化（node adopt）」条目的续篇——用户要求 ffmpeg 与 node 的钉定整体不再硬编码、发布构建时动态获取当前日期最新值比对。经三问确认组合：① windows/linux ffmpeg 按 advisory 采纳（显式改「advisory 永不可 adopt」约束）；② linux BtbN 的「最新」按**动态解析最新月末标签**取（不取滚动 latest）；③ node 静态回退表保留。
+- **安全档决策（用户拍板）**：node（signed 验签）与 macOS ffmpeg（evermeet 签名档）已是动态判据无需动；真正硬编码的是 windows ffmpeg（gyan 静态哈希）与 linux ffmpeg（BtbN 静态标签+哈希），其上游不发布任何签名，「动态取当日官方值」只能走同源清单（advisory）——这是一次经批准的显式供应链取舍（判据新鲜度 ⇄ 放弃带外认证）。机制上以逐槽登记 `ADVISORY_ADOPT_ACK` 放行标记表达，**不做全局开关**（未登记标记的 advisory 槽位维持「永不 adopt」；新增 advisory 槽位必须先人工评估再登记）。
+- **改动**：① `_pin_source_is_adoptable` 增加 advisory+标记放行路径（signed 路径不变）；② `_PIN_SOURCE_TABLE` windows ffmpeg 登记 gyan 滚动 `.sha256` 放行（实测滚动别名 303 重定向到 packages/ 版本化包同名 `.sha256`，与滚动下载别名同版本配对）；linux 两槽换 `_PIN_KIND_GITHUB_MONTHLY` 月末解析档——releases 列表接口一次请求给出标签/资产/digest/直链，解析器选「最新月末 autobuild 标签」（实测月末标签长期保留，`latest` 滚动别名与日更标签被形状关 `autobuild-YYYY-MM-DD 且日期==月末` 排除），资产按 `asset_glob` 匹配且必须恰好一个（0/多个一律回退不猜），digest 与下载直链**同一次响应成套产出**；③ `_ffmpeg_source_url` 在 adopt 档把 linux 下载直链换成本次解析资产（判据是 10-31 的 digest、下载走内置 08-31 直链 = 恒失配假红），`_FFMPEG_DOWNLOAD_URLS` 静态直链退为回退基线（解析失败整对回退：URL+内置哈希同批一致、不可变、带外可验，版本滞后但显式告警）；④ `_fetch_online_pin` 取数咽喉点新增 https+主机白名单运行时门（`_PIN_SOURCE_ALLOWED_HOSTS` 与 tests `_ALLOWED_HOSTS` 同源锁；Mimosa SSRF 提示采纳的纵深防御，拦表被注入内网/仿冒地址后照拉不误的形态）；⑤ 新增 `_MONTHLY_RESOLVED` 暂存与 `_parse_monthly_releases` 纯解析函数（无网络，便于离线回归）；⑥ build-release.yml 头注/prepare 步/构建步注释与 job summary 同步口径（summary 新增「运行时钉定判据」行）。
+- **语义边界（回退分级，与 node 回退档同构）**：windows 回退后滚动产物对旧哈希失配 → fail-closed（不变）；linux 回退 = 旧月末标签整对 → 发布继续但版本滞后并告警；off/verify 档语义逐字不变（off 零联网有回归锁）。
+- **回归锁（新增/扩面 14 组）**：ack 放行 / 形似标记拒绝（空、截断、小写、多字符）/ 三槽姿态锁 `test_release_ffmpeg_slots_carry_the_user_approved_adopt_ack`（删标记即红）/ 运行时白名单与静态锁同源 / 主机门形状（userinfo、明文、畸形）/ 主机门先拦后取（零请求）/ 月末解析器（最新标签选择含 latest 滚动别名排除、闰年与末日形状 8 例、歧义资产、坏 digest 3 形态、白名单外直链、非 JSON）/ adopt 档直链切换 / off 档零联网 / 解析失败回退告警；`test_github_pin_asset_name_matches_the_download_url_basename` 扩 monthly 分支（回退直链 basename 必须落在 asset_glob 内）。
+- **验证**：`scripts/check_runtime_pins.py --strict` rc=0（回退基线表结构检查不受影响）；`pytest tests/test_build_exe.py` **169 passed**；gyan 303 配对与 BtbN 列表端点实测读数记 `docs/agent-reference/measured-evidence.md`（2026-11-01 第二节）。DoD#2：CI 四平台发布构建是本改动的真机回路，交回用户（随 v4.7.0 发布验证）。
+- **约束文档同源**：dlr-domain-constraints SKILL.md 段三 #4 改版（advisory 两条准入门）、`pin-categories.md` 来源增删扩为四处同改、`pin-linux-endpoints.md` 整体改版（月末解析口径），`AGENTS.md` 触发词无需变化。
 
 ### v4.7.0 (2026-11-01) — 发布路径钉定动态化：node 槽位以 GPG 验签通过的官方 SHASUMS 为判据（--pin-source adopt），上游发新 LTS 不再打断发布
 

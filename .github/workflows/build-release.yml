@@ -36,6 +36,12 @@
 #                              PINNED-OFFICIAL-GPG-SIGNATURE 标记（该槽上游不公布哈希，改由
 #                              官方 GPG 签名 + 带外钉死的主钥指纹把关，判据见 build_exe.py）。
 #                              两种都不满足（仍是占位串 / 有标记但签名表未登记）时 prepare 即失败，发布链不产出产物（SEV-10）。
+#                              [2026-11-01] 发布路径的实际判据由 build_exe 的在线来源层
+#                              （--pin-source adopt）在构建期动态提供：node = GPG 验签通过的官方
+#                              SHASUMS；windows/linux ffmpeg = 当日官方清单值（用户批准的 advisory
+#                              显式放行，标记 ADVISORY-ADOPT-ACKNOWLEDGED 逐槽登记）；linux ffmpeg
+#                              的下载直链随判据一起由「最新月末 autobuild 标签」解析产生。本表退为
+#                              在线拉取失败时的回退基线（此时仍按表值比对，漂移照旧 fail-closed）。
 #   如需代码签名（Windows Authenticode / macOS codesign & notarize），
 #   再新增 secrets.WINDOWS_CERT_PFX_BASE64 / APPLE_ID / APPLE_APP_PASSWORD 等，
 #   并在对应平台的构建步骤后追加签名步骤。当前发布**未签名**。
@@ -148,6 +154,9 @@ jobs:
       # 2026-09-26 起「算满足」有两档：64 位十六进制官方哈希，或官方签名档（无公布哈希的上游，
       # 判据 = 官方分离 GPG 签名 + 带外钉死的 40 位主钥指纹，见 build_exe._is_signature_satisfied）。
       # 官方值核实后请改 build_exe.py 的 _PINNED_RUNTIME_SHA256，不要在本文件里硬编码副本。
+      # [2026-11-01] 本步校验的表已退为**回退基线**：构建阶段的实际判据由 build_exe 的在线来源层
+      # （--pin-source adopt）动态获取当日官方值（node=验签 SHASUMS；windows/linux ffmpeg=当日
+      # 官方清单，advisory 显式放行）；在线层失效时仍按本表比对，fail-closed 语义不变。
       - name: Verify runtime binary SHA256 pins (fail-closed)
         id: runtime-pins
         shell: bash
@@ -170,6 +179,7 @@ jobs:
             echo "| 触发方式 | \`${{ github.event_name }}\` |"
             echo "| 创建 Release | \`${{ steps.version.outputs.is_release }}\` |"
             echo "| 打包 Python | \`${{ steps.consts.outputs.python_build }}\` |"
+            echo "| 运行时钉定判据 | 在线 adopt（node=GPG 验签 SHASUMS；ffmpeg=当日官方清单值，linux 随最新月末标签解析直链；在线失效回退静态表） |"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ── 0.5 预创建 Release（消除 build job 并发创建竞态）──────────────────
@@ -368,10 +378,12 @@ jobs:
       # --require-pinned：显式表达「发布路径缺钉定即终止」（build_exe.py 在 CI 下本来也
       # 会因 GITHUB_ACTIONS=true 默认开启，这里写出来是为了让发布命令自解释）。
       # DLR_RUNTIME_SHA256 由 prepare 的校验步骤透传，与 build_exe.py 的钉定表同一份值。
-      # --pin-source adopt：node 槽位以「GPG 验签通过的官方 SHASUMS256.txt」为本次判据（发布钥匙
-      # 指纹钉在 build_exe.py::_PIN_SOURCE_TABLE），上游发新 LTS 不再因静态表漂移打断发布；gyan/BtbN
-      # 的清单属 advisory（清单与产物同源同服务器、无独立认证）永不被采纳，ffmpeg 仍按静态钉定值比对。
-      # 在线清单拉取或验签失败时回退静态表——若上游 LTS 恰已漂移则由下载比对 fail-closed 终止。
+      # --pin-source adopt：在线来源层动态提供本次判据——node 以「GPG 验签通过的官方
+      # SHASUMS256.txt」为判据（发布钥匙指纹钉在 build_exe.py::_PIN_SOURCE_TABLE）；ffmpeg 以
+      # 「当日官方清单值」为判据（windows=gyan 滚动 .sha256；linux=最新月末 autobuild 标签解析，
+      # 下载直链随判据同源解析）。ffmpeg 上游不发布签名，清单属 advisory（与产物同源），其采纳
+      # 经用户 2026-11-01 批准并以 ADVISORY-ADOPT-ACKNOWLEDGED 逐槽登记（见 _PIN_SOURCE_TABLE），
+      # 静态表退为在线层失效时的回退基线——回退后按内置值比对，漂移照旧 fail-closed 终止。
       # 家族判定（同上方 Install 步骤）：arm64 job 若不落进本 xvfb 分支，GUI 冒烟在无头 aarch64 上必红；
       # 若又落进下方通用分支，它拿到的是 tee build_exe.log 而没有 xvfb-run——两条都不接受。
       - name: Build executables + smoke test (Linux, xvfb)
