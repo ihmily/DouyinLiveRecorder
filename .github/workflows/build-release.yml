@@ -308,17 +308,30 @@ jobs:
 
       # 两个 Linux 分支按**家族**判定而不是精确等于：linux-arm64 与 linux-x64 需要同一条
       # xvfb + 包管理器安装链，差别只在 runner 架构（build_exe.py 自己按 runtime_slot_key() 取对应产物）。
-      - name: Install ffmpeg + xvfb (Linux)
+      # Qt 运行库与 ci.yml build-verify job 同一组（那边注释有档案：缺 libEGL.so.1 等库时 GUI
+      # 进程一起来就崩）。smoke:gui 的死法是静默的：Linux windowed 产物的子进程 stdout/stderr
+      # 不回流冒烟采集端（2026-11-01 两平台实测「末尾 20 行」均为空），gui_qt 的崩溃兜底又只落
+      # $TMPDIR/dlr_gui_crash.log（runner 上瞬逝），日志里只剩「零输出 + 退出码 1」——所以这组库
+      # 必须在环境侧补齐，不能指望失败信息可读。
+      # libxcb-xkb1 / libxcb-util1 是 2026-11-01 两台 Linux runner 实测比 ci.yml 清单多出的缺口
+      # （PyInstaller 分析期 could-not-resolve 警告点名 libxcb-xkb.so.1 / libxcb-util.so.1）：
+      # 各 runner 镜像预装面不同，按超集安装，已装的包 apt 即无操作。
+      - name: Install ffmpeg + xvfb + Qt runtime libs (Linux)
         if: startsWith(matrix.platform, 'linux')
         uses: ./.github/actions/retry
         with:
-          label: apt 安装 ffmpeg/xvfb
+          label: apt 安装 ffmpeg/xvfb/Qt 运行库
           backoff: "15"
           command: >-
             sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq -o Acquire::Retries=3
             && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq
             -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold
             --no-install-recommends ffmpeg xvfb
+            libegl1 libgl1 libglx-mesa0 libgl1-mesa-dri
+            libxkbcommon-x11-0 libdbus-1-3 libglib2.0-0 libfontconfig1
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0
+            libxcb-render-util0 libxcb-shape0 libxcb-xinerama0
+            libxcb-xkb1 libxcb-util1
 
       # GitHub 的 macOS runner 预置了未受信的 aws/tap，Homebrew 新的 tap 信任机制
       # 会因此报错。先显式信任该 tap（幂等、失败不阻断，无需重试），安装步骤内的

@@ -1590,6 +1590,8 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 >
 > **v4.6.0 概要（2026-10-18 ~ 2026-10-31）**：① GUI 技术栈全面收敛到 PySide6，tkinter/pystray 遗留实现与 `src/ui_kit.py` / `src/ui_motion.py` 移除；② 统一 ICO 图标支持（GUI 托盘 / Web 托盘与页面 / 打包产物）；③ Web 托盘迁 Qt，运行日志自动折行；④ 五轮全仓审查整改（SSRF 逐跳复检、危险配置键、出站读取上限、凭据脱敏）；⑤ 行尾钉定、回归锁去日期化、元数据对账、CI 工具抬版与全仓注释精简。
 
+### v4.7.0 (2026-11-01) — 发布构建 Linux GUI 冒烟缺装 Qt 运行库：smoke:gui 两平台同挂「零输出 + 退出码 1」，Linux 安装步镜像 ci.yml 清单并补两缺口
+
 ### v4.7.0 (2026-11-01) — ffmpeg 三槽判据动态化：windows/linux 改取构建期当日官方清单值（advisory 显式放行 ADVISORY_ADOPT_ACK），linux 随最新月末标签解析直链，静态表退为回退基线
 
 ### v4.7.0 (2026-11-01) — 发布路径钉定动态化：node 槽位以 GPG 验签通过的官方 SHASUMS 为判据（--pin-source adopt），上游发新 LTS 不再打断发布

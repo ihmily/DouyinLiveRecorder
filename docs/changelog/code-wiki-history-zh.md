@@ -1,7 +1,7 @@
 # CODE_WIKI 更新日志归档（简体中文卷）
 
 > 本卷由 `CODE_WIKI.md` 的「更新日志」于 2026-09-28 整卷迁出，条目正文逐字保留；根文档保留当前发布周期的标题索引与版本概要 + 本卷指针。
-> 收录 193 条历史条目（2026-05-17 ~ 2026-10-01：2026-09-28 整卷迁出的 164 条 + 2026-10-18 滚动迁入的 29 条）；2026-10-31 增补当前发布周期 63 条（v4.6.0 / v4.5.0-dev，见「迁入：当前发布周期」），另新增 2 条（AGENTS.md 对账、四份根文档同步与滚动归档），本卷合计 265 条（2026-11-01 增补 brotli 下限抬升 1 条 + CI Linux 平台敏感用例修复 1 条 + 发布目录凭据校验误报修复 1 条 + setuptools 构建下限抬升 1 条 + node v26.13.0 重钉 1 条 + 发布路径钉定动态化 1 条 + ffmpeg 判据动态化 1 条）。
+> 收录 193 条历史条目（2026-05-17 ~ 2026-10-01：2026-09-28 整卷迁出的 164 条 + 2026-10-18 滚动迁入的 29 条）；2026-10-31 增补当前发布周期 63 条（v4.6.0 / v4.5.0-dev，见「迁入：当前发布周期」），另新增 2 条（AGENTS.md 对账、四份根文档同步与滚动归档），本卷合计 266 条（2026-11-01 增补 brotli 下限抬升 1 条 + CI Linux 平台敏感用例修复 1 条 + 发布目录凭据校验误报修复 1 条 + setuptools 构建下限抬升 1 条 + node v26.13.0 重钉 1 条 + 发布路径钉定动态化 1 条 + ffmpeg 判据动态化 1 条 + 发布构建 Linux GUI 冒烟补装 Qt 运行库 1 条）。
 > 回补口径：上一轮文档粗剪脚本把部分句子截成行尾 `…` 的半句，本卷按 `.workbuddy/docold`（2026-09-25 基线）对残句做**逐行前缀匹配**回补，共回补 659 行（唯一匹配失败 136 行、有歧义 0 行保持原样）。
 > 刻意**不做**的事：不复活历史上被有意删除的条目，不回填已外迁到 `docs/agent-reference/changelog-file-inventories.md` 的文件清单块——整块回填会撤销那些有意的整理，故只补残句。
 > 归档卷不参与镜像构建产物，运行时不读取；根文档入口：[CODE_WIKI.md](../../CODE_WIKI.md)。
@@ -10,6 +10,7 @@
 
 | 版本条目 | 日期 |
 | --- | --- |
+| v4.7.0 (2026-11-01) — 发布构建 Linux GUI 冒烟缺装 Qt 运行库：smoke:gui 两平台同挂「零输出 + 退出码 1」，Linux 安装步镜像 ci.yml 清单并补两缺口 | 2026-11-01 |
 | v4.7.0 (2026-11-01) — ffmpeg 三槽判据动态化：windows/linux 改取构建期当日官方清单值（advisory 显式放行 ADVISORY_ADOPT_ACK），linux 随最新月末标签解析直链，静态表退为回退基线 | 2026-11-01 |
 | v4.7.0 (2026-11-01) — 发布路径钉定动态化：node 槽位以 GPG 验签通过的官方 SHASUMS 为判据（--pin-source adopt），上游发新 LTS 不再打断发布 | 2026-11-01 |
 | v4.7.0 (2026-11-01) — 运行时钉定随上游 node v26.13.0 重钉：Node 26 转 LTS 令首条 lts 漂移，四平台 node SHA256 同时失配 | 2026-11-01 |
@@ -187,6 +188,14 @@
 | v4.0.8-dev (2026-05-17) | 2026-05-17 |
 
 ## 归档条目
+
+### v4.7.0 (2026-11-01) — 发布构建 Linux GUI 冒烟缺装 Qt 运行库：smoke:gui 两平台同挂「零输出 + 退出码 1」，Linux 安装步镜像 ci.yml 清单并补两缺口
+
+- **触发**：用户贴入 v4.7.0 发布构建 linux-aarch64 / linux-x86_64 两份日志：PyInstaller、ffmpeg 月末解析（autobuild-2026-10-31-12-59 直链 + digest）、node GPG 验签（指纹 c82fa3ae…）、node 哈希与内置钉定一致、full 包产物自检全绿，smoke:cli / smoke:web 均 ✅，唯 smoke:gui 在 8s 窗口内以退出码 1 提前退出且「进程输出（末尾 20 行）」为空，两平台报文同构。
+- **根因**：build-release.yml 的 Linux 安装步只装 `ffmpeg xvfb`，未装 PySide6 xcb 平台插件所需的系统客户端库；Qt 平台初始化失败 → gui.py 兜底只落 `$TMPDIR/dlr_gui_crash.log`（runner 上瞬逝）+ 尽力弹框，而 Linux windowed 产物子进程 stdout/stderr 不回流采集端（实测两平台均为空行），日志只剩退出码。旁证：两份日志 PyInstaller 分析期成批 `could not resolve 'libxcb-*' / 'libxkbcommon-x11.so.0'` 警告；ci.yml build-verify job 的 Qt 运行库清单与「缺 libEGL.so.1 时进程一起来就崩」注释是同源故障档案（该清单经其自身 GUI 冒烟验证过）。
+- **改动（只 build-release.yml 一处）**：Linux 安装步镜像 ci.yml 的 16 个 Qt 运行库包（libegl1 / libgl1 / libglx-mesa0 / libgl1-mesa-dri / libxkbcommon-x11-0 / libdbus-1-3 / libglib2.0-0 / libfontconfig1 / libxcb-cursor0 / libxcb-icccm4 / libxcb-image0 / libxcb-keysyms1 / libxcb-randr0 / libxcb-render-util0 / libxcb-shape0 / libxcb-xinerama0），另补 2026-11-01 两台 runner 实测多出的 `libxcb-xkb1` / `libxcb-util1`（PyInstaller 警告点名 libxcb-xkb.so.1 / libxcb-util.so.1 缺失；各 runner 镜像预装面不同，按超集装、已装即无操作）；步名与 label 同步为 ffmpeg/xvfb/Qt 运行库。ci.yml 未动（外科手术边界）。
+- **观察（判「正常」未动）**：① node 槽在线清单在 ffmpeg 下载段之前先报两条 `{version}/{filename}` 未解析跳过在线拉取的 `[build][warn]`，node 段随后仍完成 GPG 验签并与内置钉定哈希一致——动态判据最终生效，属时序性提示噪音，非行为缺陷；② 冻结产物冒烟输出「版本号: v0.0.0」（importlib.metadata 在冻结态读不到发行元数据），CLI/Web 冒烟不受影响，遗留既有。
+- **验证**：`yaml.safe_load` 解析通过且 folded command 含全部补装包；`pytest tests/test_ci_retry_action.py tests/test_check_runtime_pins.py` 35 passed（retry 调用点形态/数量下限与矩阵一致性钉形不受影响）；grep 证实无测试钉该安装步包清单。DoD#2：不涉录制链路/选源/ffmpeg 参数/平台解析，真机回路 = 下一次 build-release 四平台运行，交回用户。
 
 ### v4.7.0 (2026-11-01) — ffmpeg 三槽判据动态化：windows/linux 改取构建期当日官方清单值（advisory 显式放行 ADVISORY_ADOPT_ACK），linux 随最新月末标签解析直链，静态表退为回退基线
 
