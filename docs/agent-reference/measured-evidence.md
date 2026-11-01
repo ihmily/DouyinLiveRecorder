@@ -125,7 +125,19 @@ Node 运行时以 24.19.0 实测为准（全部 JS 签名脚本 + migu.js 通过
 | 源站限速（同一时间窗内的副作用实测） | 连发请求对 `e.deolaha.ca:4242` 得到 **429** / `text/plain` / 30 B body；26 MB 全量拉取本机只跑到约 45 KB/s 且中途被断。**结论：`_download_file` 无重试，「整包下载 + 真跑 gpg 验签」这一步本机未复现，仍只能由 macOS runner 首跑验证** |
 | 429 错误体污染归档的后果核对 | 429 的 30 B 响应体被 `-o` 原样落盘（等价于 `_download_file` 的行为），此时签名档分支会拿这份非 zip 数据去 `gpg --verify` → `_hard_fail`/非 zip 异常 → 发布路径终止，**不会**静默出包。防线成立的前提是「签名档以验签为判据」，故不得为绕过 429 而改成「下载失败即跳过验签」 |
 
+**2026-11-01 复测**（起因：发布链四平台又同时报 `node-v26.13.0-*` SHA256 不匹配，期望值仍是 v24.22.0 旧钉定）：
+
+| 探针 | 读数 |
+| --- | --- |
+| `curl -sS https://nodejs.org/dist/index.json` | 首个 `lts` 项变为 **`v26.13.0`**（Lithium，2026-10-28）→ node × 5 槽钉定漂移；其后依次 `v24.22.2`/`v24.22.1`/`v24.22.0`（Krypton，10-27/10-20/10-14）。`_download_nodejs` 取「首条 lts」，故实际下载名从 `v24.22.0` 换成 `v26.13.0`（Node 26 线转 LTS 后的首轮漂移） |
+| `curl -sS https://nodejs.org/dist/v26.13.0/SHASUMS256.txt` 与同版本 `SHASUMS256.txt.asc` 的明文本体 | 两处对应五行逐条**完全相同**（仅取值一致性复核，**未验签**，与 2026-10-18 同口径）：`node-v26.13.0-win-x64.zip` `dcc60d59a0746999f99064a01c020445d54d84228c691cdbf25b49ac3b59150a` / `linux-x64.tar.gz` `5848553868b402d3fabb5b09270649977780a390f832155721025a08b5104455` / `linux-arm64.tar.gz` `439e9c438acdf6a6ffe47418da709153d66c4bed812e30a473faacb107dd2791` / `darwin-x64.tar.gz` `525c9b29bb0263d687de60a4cec0e2a6db876a8eb032369e5795eca71e7c358e` / `darwin-arm64.tar.gz` `d38bd5e5a2ddce6bbb5ce45e46e208337da4d51fffe611e567fd32073d6439f6`（签名档 `Hash: SHA256`，`-----BEGIN PGP SIGNED MESSAGE-----`） |
+| CI 四平台日志报出的「实际」哈希 | 与官方 SHASUMS256 对应四行**逐位相同**（windows-x64 `dcc60d59…`、linux-x64 `58485538…`、linux-arm64 `439e9c43…`、darwin-arm64 `d38bd5e5…`）→ 失配纯属版本漂移，非完整性告警；本轮未做本地自算下载（同上轮口径，钉定值只取官方公布页），darwin-x64 一行 CI 未跑到、以官方清单为准 |
+| Node 发布钥匙指纹登记（adopt 档前置，同日第二项） | 三通道同值 `C82FA3AE1CBEDC6BE46B9360C43CEC45C17AB93C`（Richard Lau）：① `gpg --status-fd 1 --verify SHASUMS256.txt.asc` 的 `ERRSIG … 9 C82FA3AE…` 完整签发者指纹；② `gpg --keyserver hkps://keys.openpgp.org --recv-keys C43CEC45C17AB93C` 后 `--list-keys --with-colons` 的 `fpr:` 行——构建期 `_verify_gpg_artifact` 的同一取钥通道，本机实测可通；③ `api.github.com/repos/nodejs/node/contents/README.md`「Release keys」段明文同值。钥匙入环后整份清单验出 `GOODSIG`+`VALIDSIG`（签名时间 2026-10-28，即 v26.13.0 发布日）；与 2026-10-18 记录的 v24.22.0 签名者同钥（跨 LTS 线稳定） |
+| adopt 真链路预演（指纹登记后、修 clearsigned 前） | `DLR_RUNTIME_PIN_SOURCE=adopt` + 解析版本后跑 `_pinned_slots()`：ffmpeg advisory 槽「在线清单与内置钉定一致」正常；node 槽 gpg 报 `NODATA 1` / `FAILURE gpg-exit 33554433` → 回退静态值——在线层按「两文件 detached」形态验签，而 node 的 .asc 是内嵌明文的 cleartext 签名，两文件式对 cleartext 输入必 NODATA → adopt 对真实上游从不成功（桩测试假 gpg 验不出形态），同批修为 `sig_kind` 形态字段 + `inline_document` 单文件验签 + 判据值取自验签文档本体 |
+| adopt 真链路预演（修复后复跑） | 同配置复跑：`[build] 在线清单 node GPG 签名核验通过（c82fa3ae…）` + `槽位 windows-x64/node 在线清单与内置钉定一致（dcc60d59a074…）`，判据值 = 静态表值（当前 LTS 恰为 v26.13.0，两源一致属预期） |
+
 ## 虎牙 FLV-first 冷启动采样
+
 
 依据：2026-08-28/29 三轮真机两房间复现——虎牙 HLS 三条 CDN 线路（hs/tx/al）冷启动探针假绿（探针 200/206、ffmpeg 打开即 403，返回码 3436169992），TX/AL 次轮探针也稳定 403；FLV 每轮稳定可用（最长连录 6 分钟）。
 

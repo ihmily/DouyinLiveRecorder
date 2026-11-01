@@ -666,11 +666,13 @@ OFFICIAL_SIGNATURE_PIN = "PINNED-OFFICIAL-GPG-SIGNATURE"
 # 表内仍是占位值时，`python scripts/check_runtime_pins.py --strict` 与 CI 发布链一律失败——这是刻意
 # 设计，不得为了「让 CI 变绿」而回填自算哈希或放宽判定。
 #
-# 当前取值（2026-10-18 起）：node × 5 段全部取自 nodejs.org/dist/v24.22.0/SHASUMS256.txt，并与同版本
-# SHASUMS256.txt.asc 的明文本体逐条复核一致（仅取值一致性复核，**未验签**；该槽在 _PIN_SOURCE_TABLE
-# 里的 fingerprint 仍为空，故在线层不 adopt）。node 版本由 _download_nodejs 按 dist/index.json 的第一条
-# lts 项决定，上游一发新 LTS 本表即失配并由 --strict 拦下发布——这是刻意保留的人工闸口，不得改成
-# 「自动取本次实际哈希」。
+# 当前取值（2026-11-01 起）：node × 5 段全部取自 nodejs.org/dist/v26.13.0/SHASUMS256.txt，并与同版本
+# SHASUMS256.txt.asc 的明文本体逐条复核一致（仅取值一致性复核，**未验签**）。node 版本由 _download_nodejs
+# 按 dist/index.json 的第一条 lts 项决定，上游一发新 LTS 本表即失配并由 --strict 拦下发布——这是刻意
+# 保留的人工闸口，不得改成「自动取本次实际哈希」。
+# [2026-11-01] 发布路径已改走在线来源层 adopt 档（build-release.yml 显式 --pin-source adopt）：node 的
+# 判据来自「GPG 验签通过的官方 SHASUMS」（发布钥匙指纹钉在 _PIN_SOURCE_TABLE，三通道同值登记），上游
+# 发新 LTS 不再打断发布；本表退为 off 档回退基线（在线验签失败时仍按本表比对，漂移照旧 fail-closed）。
 #   · windows-x64/ffmpeg：gyan.dev 官方 .sha256（滚动别名与 packages/ffmpeg-9.0.2-essentials_build.zip
 #     的 .sha256 两端点互证），对应 ffmpeg 9.0.2；上游发新版本即失配，需重新核对后回填。
 #   · macos 两架构 ffmpeg/ffprobe：OFFICIAL_SIGNATURE_PIN——evermeet 不公布 sha256，只给与产物同名追加
@@ -684,41 +686,43 @@ OFFICIAL_SIGNATURE_PIN = "PINNED-OFFICIAL-GPG-SIGNATURE"
 #   分发包而改为上方 fail-closed。Linux 两槽曾用 johnvansickle（只发 *.md5、无 SHA256，导致 --strict
 #   长期红），2026-09-26 换源到 BtbN，代价是体积（linux64 150,998,508 B vs amd64-static 41,888,096 B；
 #   linuxarm64 108,761,296 B）。上游 node 曾以 v24.22.0 替换 v24.21.0 触发四平台 SHA256 同时失配，
-#   按上述官方通道重取后回填。
+#   按上述官方通道重取后回填。2026-11-01 同型再现：v26.13.0（Lithium，2026-10-28 转 LTS）令首条
+#   lts 从 Krypton 系漂走，四平台 node SHA256 又同时失配（CI 报的实际值与官方 SHASUMS256 逐位
+#   一致，纯版本漂移而非完整性告警），再次按官方通道重取回填。
 _PINNED_RUNTIME_SHA256: dict[str, dict[str, str]] = {
-    # node 各段取值均来自 https://nodejs.org/dist/v24.22.0/SHASUMS256.txt（来源与复核方式见上方注释）
+    # node 各段取值均来自 https://nodejs.org/dist/v26.13.0/SHASUMS256.txt（来源与复核方式见上方注释）
     "windows-x64": {
         # gyan.dev ffmpeg-release-essentials.zip.sha256（= ffmpeg 9.0.2 essentials_build，2026-09-22）
         "ffmpeg": "60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba",
-        # node-v24.22.0-win-x64.zip（_download_nodejs 在 Windows 下取 .zip）
-        "node": "f9683a19877e12a9b167305c8db71040d812876359de21f0d2e97c3f321f80c3",
+        # node-v26.13.0-win-x64.zip（_download_nodejs 在 Windows 下取 .zip）
+        "node": "dcc60d59a0746999f99064a01c020445d54d84228c691cdbf25b49ac3b59150a",
     },
     "linux-x64": {
         # BtbN autobuild-2026-08-31-13-27 的 ffmpeg-n9.0.1-11-ge47273f4d9-linux64-gpl-9.0.tar.xz
         # （api.github.com releases/tags/<标签> → assets[].digest，2026-09-27）
         "ffmpeg": "182c1b509720e939bb47bfb47dc29cc0c298640401128e3dce8627d10707eb5a",
-        # node-v24.22.0-linux-x64.tar.gz（非 .tar.xz：_download_nodejs 统一取 tar.gz）
-        "node": "28ea0a438de9a13bd7891fd758eee6c7819ee8af5442dfd8d45bd65e56d4228c",
+        # node-v26.13.0-linux-x64.tar.gz（非 .tar.xz：_download_nodejs 统一取 tar.gz）
+        "node": "5848553868b402d3fabb5b09270649977780a390f832155721025a08b5104455",
     },
     "linux-arm64": {
         # 同一标签的 linuxarm64 资产；与上一条同一次取数（2026-09-27）
         "ffmpeg": "e2dd447c8a47849c5812d87e54a47b20ae0f3603d38989440f4a5fe1af8755b1",
-        "node": "b7e7991d5407815adfa74a2a9cd4db683552c8ce32ff4a295c22e972849c3f5d",
+        "node": "439e9c438acdf6a6ffe47418da709153d66c4bed812e30a473faacb107dd2791",
     },
     "macos-x64": {
         # evermeet 版本化直链 ffmpeg-9.0.2.zip：官方只给同名 .sig 的 GPG 签名，无 SHA256 → 走官方签名档
         "ffmpeg": OFFICIAL_SIGNATURE_PIN,
         "ffprobe": OFFICIAL_SIGNATURE_PIN,
-        # node-v24.22.0-darwin-x64.tar.gz
-        "node": "495e3f273c645f3c4677d438304cdfc701729ea5dec5728f5c8e76a2dece4b91",
+        # node-v26.13.0-darwin-x64.tar.gz
+        "node": "525c9b29bb0263d687de60a4cec0e2a6db876a8eb032369e5795eca71e7c358e",
     },
     "macos-arm64": {
         # 与 macos-x64 同一份 evermeet 构建（上游不发布 arm64，见 _FFMPEG_DOWNLOAD_URLS 注释）：
         # 同一来源 → 同一档；两槽的取值必须保持相等（tests/test_build_exe.py 锁此项）
         "ffmpeg": OFFICIAL_SIGNATURE_PIN,
         "ffprobe": OFFICIAL_SIGNATURE_PIN,
-        # node-v24.22.0-darwin-arm64.tar.gz
-        "node": "6a9724d9b50a5f22b4816cded441b5a8d9ddae546191a5e5b7efa5a5e2ee26d5",
+        # node-v26.13.0-darwin-arm64.tar.gz
+        "node": "d38bd5e5a2ddce6bbb5ce45e46e208337da4d51fffe611e567fd32073d6439f6",
     },
 }
 
@@ -984,7 +988,14 @@ def _verify_official_signature(dest: Path, slot: str, desc: str) -> bool:
 
 
 def _verify_gpg_artifact(
-    dest: Path, sig_path: Path, sig_url: str, fingerprint: str, desc: str, *, strict: bool = True
+    dest: Path,
+    sig_path: Path,
+    sig_url: str,
+    fingerprint: str,
+    desc: str,
+    *,
+    strict: bool = True,
+    inline_document: bool = False,
 ) -> bool:
     # 判据一律来自 --status-fd 的机器行，而不是 gpg 的退出码：退出码 0 只说明「签名能被钥匙环里
     # 某把钥匙验通」，不核对签名者身份时，任意一把可导入的钥匙签过的产物都能蒙过去。
@@ -1047,7 +1058,11 @@ def _verify_gpg_artifact(
     if listed is None or fingerprint.lower().encode("ascii") not in key_fprs:
         return _hard_fail(f"无法在钥匙环中确认指纹 {fingerprint}，签名核验终止（不降级放行）")
 
-    checked = _run_gpg(["--batch", "--quiet", "--status-fd", "1", "--verify", str(sig_path), str(dest)])
+    # inline_document=True（clearsigned 清单，见 _PIN_SIG_CLEARTEXT）：签名与明文同在一份文件里，
+    # 单文件验签——两文件式 `gpg --verify sig doc` 对 cleartext 输入会 NODATA（真链路预演实测），
+    # 此形态下 dest 不参与命令，签名文档本体就是被验对象。
+    verify_args = ["--verify", str(sig_path)] if inline_document else ["--verify", str(sig_path), str(dest)]
+    checked = _run_gpg(["--batch", "--quiet", "--status-fd", "1", *verify_args])
     if checked is None:
         return _hard_fail("gpg --verify 无法执行，签名核验终止")
     status = checked.stdout or b""
@@ -1105,6 +1120,17 @@ _PIN_KIND_RAW = "raw"
 _PIN_KIND_SHASUMS = "shasums"
 _PIN_KIND_GITHUB = "github"
 
+# 签名档的两种物理形态（决定验签命令形态与「判据值从哪份字节里取」，不得靠猜）：
+#   clearsigned —— 签名文档**内嵌明文**（nodejs.org 的 SHASUMS256.txt.asc 即此形态）：单文件
+#                  `gpg --verify <asc>` 验签，判据值必须从验签通过的那份文档本体里解析——明文清单
+#                  与签名档分两次拉取、各自可被调包，从明文取值会让「签名覆盖 A、采纳 B」的缝隙
+#                  常开；且两文件式 `gpg --verify sig doc` 对 cleartext 输入直接 NODATA（签名档里
+#                  没有独立签名包可拆，2026-11-01 真链路预演实测）。
+#   detached    —— 分离签名（evermeet 的 <artifact>.sig 即此形态）：两文件 `gpg --verify sig doc`，
+#                  签名绑定到明文清单那份字节，值取自该明文（被签名覆盖的那份）。
+_PIN_SIG_CLEARTEXT = "clearsigned"
+_PIN_SIG_DETACHED = "detached"
+
 # {运行时键: {槽位: {字段: 值}}}。**未登记的槽位一律跳过、不拉取**（evermeet 根本不公布哈希，macOS
 # 两槽因此维持「官方签名档」这一档，不会被本层打扰）。
 # url / sig_url 里的 {version} 由 _download_nodejs 解析出的**本次实际版本**代入：node 的下载点是从
@@ -1120,11 +1146,20 @@ _PIN_SOURCE_TABLE: dict[str, dict[str, dict[str, str]]] = {
         "node": {
             "url": "https://nodejs.org/dist/{version}/SHASUMS256.txt",
             "sig_url": "https://nodejs.org/dist/{version}/SHASUMS256.txt.asc",
+            # node 的 .asc 是内嵌明文的 cleartext 签名（非 detached）：验签形态与取值来源见
+            # _PIN_SIG_CLEARTEXT 注释——本字段缺省按 detached 处理，两文件式对 node 必 NODATA。
+            "sig_kind": _PIN_SIG_CLEARTEXT,
             "trust": PIN_TRUST_SIGNED,
             "kind": _PIN_KIND_SHASUMS,
-            # 待维护者补：Node.js 发布钥匙的**完整 40 位主钥指纹**。留空 = 该槽不可 adopt，
-            # 在线值在 adopt 模式下会被明确拒绝并回退内置表（fail-closed，不降级）。
-            "fingerprint": "",
+            # Node.js 发布钥匙的**完整 40 位主钥指纹**（2026-11-01 三通道同值登记，缺一不登记）：
+            # ① v26.13.0 SHASUMS256.txt.asc 的 ERRSIG/VALIDSIG 签发者指纹（Richard Lau）；
+            # ② keys.openpgp.org 按 keyid C43CEC45C17AB93C recv 后 --list-keys 的 fpr 行——即构建期
+            #    _verify_gpg_artifact 的取钥通道，本机实测可通；
+            # ③ nodejs/node 官方 README「Release keys」段明文列有同一指纹。
+            # 与 2026-10-18 evidence 记录的 v24.22.0 签名者同钥（跨 LTS 线稳定）。上游换签发钥匙时
+            # 验签不过 → adopt 回退本表 → 若 LTS 已漂移则由下载比对终止：换钥须人工重核后换指纹，
+            # 不得为过验签放宽判定。取数读数记 docs/agent-reference/measured-evidence.md。
+            "fingerprint": "C82FA3AE1CBEDC6BE46B9360C43CEC45C17AB93C",
             # asset 模板由 _format_pin_url 代入本次解析出的下载文件名（文件名含版本与平台，硬写会漂移）。
             "asset": "{filename}",
         },
@@ -1304,18 +1339,35 @@ def _fetch_online_pin(entry: dict[str, str], slot: str) -> str:
         with tempfile.TemporaryDirectory(prefix="dlr-pinman-") as tmp:
             document = Path(tmp) / "manifest"
             document.write_bytes(raw)
+            sig_path = Path(tmp) / "manifest.sig"
+            desc = f"在线清单 {slot}"
             # 判据与产物侧**同一份**（_verify_gpg_artifact），本层不自造第二套验签口径；
             # strict=False 的语义见该函数：这里是「不采用」，不是「终止构建」。
+            # clearsigned 档：签名与明文在同一份文件 → 单文件验签，且**判据值必须重新从签名文档
+            # 本体里解析**——上面的 value 来自明文清单那份字节，而明文与签名档是两次独立拉取、
+            # 各自可被调包；只有从验签通过的那份字节里取值，「签名覆盖什么就采纳什么」才成立。
+            inline = entry.get("sig_kind", _PIN_SIG_DETACHED) == _PIN_SIG_CLEARTEXT
             ok = _verify_gpg_artifact(
                 document,
-                Path(tmp) / "manifest.sig",
+                sig_path,
                 _format_pin_url(entry.get("sig_url", ""), slot),
                 entry.get("fingerprint", "").strip().lower(),
-                f"在线清单 {slot}",
+                desc,
                 strict=False,
+                inline_document=inline,
             )
-        if not ok:
-            return ""
+            if not ok:
+                return ""
+            if inline:
+                value = _parse_online_sha256(
+                    sig_path.read_text(encoding="utf-8", errors="replace"), entry.get("kind", ""), asset
+                )
+                if not value:
+                    print(
+                        f"[build][warn] 槽位 {slot} 验签通过的签名文档里未解析出 64 位十六进制值"
+                        f"（asset {asset}），本次不参与判定"
+                    )
+                    return ""
     return value
 
 

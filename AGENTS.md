@@ -93,7 +93,7 @@
 - **开发 / 构建 / GUI 依赖**: `pip install .[dev]`（pytest / pytest-asyncio / pytest-cov / black / isort / mypy / pre-commit）/`.[build]`（PyInstaller>=6.10.0）/`.[gui]`（PySide6 一条）；三者均不进运行时清单。
 - **i18n 依赖**: PyYAML（zh_TW.yaml 加载；缺失时仅损失 YAML 格式）。
 - **GUI 包版本下限**: `PySide6>=6.12.0`（`requirements.txt`、`pyproject.toml` 运行时依赖与 `[gui]` 三处同值）。
-- **安全下限**: `starlette>=1.3.1`、`urllib3>=2.8.0`、`h2>=4.4.1`、`brotli>=1.2.1`。优先抬下限而非 `--ignore-vuln` 白名单。
+- **安全下限**: `starlette>=1.3.1`、`urllib3>=2.8.0`、`h2>=4.4.1`、`brotli>=1.2.1`。优先抬下限而非 `--ignore-vuln` 白名单。构建侧下限：`[build-system]` `setuptools>=84.1.0`（GHSA-xmj3-9gf7-h52w 修复版；deps-audit 只派生自 requirements.txt，不覆盖该下限）。
 - **依赖缺失排查**: venv 缺包表现为测试收集期 `ModuleNotFoundError`，先核对 `pip list` 与 `requirements.txt` 差异再怀疑代码。
 
 ## 测试

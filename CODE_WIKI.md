@@ -1590,6 +1590,12 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 >
 > **v4.6.0 概要（2026-10-18 ~ 2026-10-31）**：① GUI 技术栈全面收敛到 PySide6，tkinter/pystray 遗留实现与 `src/ui_kit.py` / `src/ui_motion.py` 移除；② 统一 ICO 图标支持（GUI 托盘 / Web 托盘与页面 / 打包产物）；③ Web 托盘迁 Qt，运行日志自动折行；④ 五轮全仓审查整改（SSRF 逐跳复检、危险配置键、出站读取上限、凭据脱敏）；⑤ 行尾钉定、回归锁去日期化、元数据对账、CI 工具抬版与全仓注释精简。
 
+### v4.7.0 (2026-11-01) — 发布路径钉定动态化：node 槽位以 GPG 验签通过的官方 SHASUMS 为判据（--pin-source adopt），上游发新 LTS 不再打断发布
+
+### v4.7.0 (2026-11-01) — 运行时钉定随上游 node v26.13.0 重钉：Node 26 转 LTS 令首条 lts 漂移，四平台 node SHA256 同时失配
+
+### v4.7.0 (2026-11-01) — setuptools 构建下限 68.0 → 84.1.0 + uv.lock 锁面 84.0.0 → 84.2.1：外部路径逃逸公告（GHSA-xmj3-9gf7-h52w）只读排查后的加固
+
 ### v4.7.0 (2026-11-01) — 发布目录凭据校验（SEV-2213）误报修复：逐键比对收窄到「同键位」，根治 v4.6.0 四平台发布构建同红
 
 ### v4.7.0 (2026-11-01) — CI Linux 三处平台敏感用例转平台无关 + POSIX 优雅停止标记缺失纠正（recorder.py）

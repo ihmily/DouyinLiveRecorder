@@ -139,7 +139,7 @@ Windows 版会在启动时自动从官方源 gyan.dev 下载 ffmpeg——**这�
 
 **海外站点（14 个）**：TikTok | SOOP(原AfreecaTV) | PandaTV | WinkTV | TTingLive(原Flextv) | PopkonTV | TwitchTV | LiveMe | ShowRoom | CHZZK | Shopee | YouTube | Faceit | Picarto
 
-> 合计 **51 个**平台（对外标称 60+，含持续添加中的平台）。各平台数据获取函数位于 `src/spider.py`，流地址解析位于 `src/stream.py`。
+> 合计 **51 个**平台（持续添加平台中）。各平台数据获取函数位于 `src/spider.py`，流地址解析位于 `src/stream.py`。
 
 **弹幕录制支持（5 个平台）**：抖音直播 | 斗鱼直播 | 虎牙直播 | B站直播 | TwitchTV
 

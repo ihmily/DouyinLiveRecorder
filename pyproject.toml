@@ -128,7 +128,9 @@ Changelog = "https://github.com/y123ao6/DouyinLiveRecorder/releases"
 Sponsor = "https://github.com/sponsors/y123ao6"
 
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+# 下限 84.1.0 = GHSA-xmj3-9gf7-h52w 修复版（Wheel.install_as_egg 命名空间路径逃逸，Windows 下可在目标目录外写 __init__.py）；
+# 本仓 pip/uv 安装链路不走该旧式 egg 路径，抬下限属解析面加固——防隔离构建环境解析到受影响版本。
+requires = ["setuptools>=84.1.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]

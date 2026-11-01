@@ -1508,6 +1508,12 @@ python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f h
 >
 > **v4.6.0 summary (2026-10-18 ~ 2026-10-31)**: (1) GUI stack consolidated on PySide6; the legacy tkinter/pystray implementations plus `src/ui_kit.py` / `src/ui_motion.py` were removed; (2) unified ICO icon support across the GUI tray, Web tray/page and packaged artifacts; (3) Web tray migrated to Qt and the run log wraps to the viewport; (4) five repo-wide review rounds (per-hop SSRF re-checks, dangerous config keys, outbound read caps, credential masking); (5) EOL pinning, regression-test de-dating, metadata parity, CI tool bumps and repo-wide comment slimming.
 
+### v4.7.0 (2026-11-01) — Release-path dynamic pinning: the node slot now takes the GPG-verified official SHASUMS as its criterion (--pin-source adopt), upstream LTS promotions no longer break the release
+
+### v4.7.0 (2026-11-01) — Runtime pins re-pinned to upstream node v26.13.0: Node 26 LTS promotion moved the first-lts pointer, node SHA256 mismatched on all four platforms
+
+### v4.7.0 (2026-11-01) — setuptools build floor 68.0 → 84.1.0 + uv.lock pin 84.0.0 → 84.2.1: hardening after read-only triage of the external path-escape advisory (GHSA-xmj3-9gf7-h52w)
+
 ### v4.7.0 (2026-11-01) — Release credential-check (SEV-2213) false positive fixed: per-key comparison narrowed to "same key position", removing the root cause of the v4.6.0 four-platform release build failure
 
 ### v4.7.0 (2026-11-01) — Three platform-sensitive tests made platform-agnostic for CI Linux + the missing POSIX graceful-stop flag fixed in recorder.py

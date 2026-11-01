@@ -1775,6 +1775,69 @@ def test_manifest_needing_version_is_skipped_instead_of_building_a_broken_url(
     assert "尚未解析 node 版本" in capsys.readouterr().out
 
 
+def test_node_online_source_is_adoptable_with_registered_fingerprint() -> None:
+    # 发布路径（build-release.yml）以 --pin-source adopt 运行，node 槽的判据来自「GPG 验签通过的
+    # 官方 SHASUMS」。本锁钉住真实表的三件事：① trust 仍是 signed——被改成 advisory 等于把
+    # 「同源清单说什么就是什么」合法化；② sig_url 在——signed 档缺签名地址就无从验签；
+    # ③ 指纹已登记且形状合法——清空/改坏会让 adopt 静默退回静态表，上游发新 LTS 时发布链重新
+    # 变红且报错指向「回填内置表」这个发布路径已不再依赖的动作。指纹字面值刻意不锁进测试：
+    # 上游换签发钥匙时只改 _PIN_SOURCE_TABLE 一处（换钥 = 人工重核后换指纹，验签自然拦住旧钥）。
+    entry = build_exe._online_pin_entry("node")
+    assert entry.get("trust") == build_exe.PIN_TRUST_SIGNED
+    assert entry.get("sig_url"), "signed 档缺 sig_url = 无从验签"
+    assert (
+        entry.get("sig_kind") == build_exe._PIN_SIG_CLEARTEXT
+    ), "node 的 .asc 是 cleartext 签名；sig_kind 缺省按 detached 两文件式验签必 NODATA"
+    assert build_exe._pin_source_is_adoptable(entry), "node 指纹未登记或形状非法，adopt 档将静默退回静态表"
+
+
+def test_clearsigned_manifest_value_comes_from_the_signed_document(
+    monkeypatch: pytest.MonkeyPatch, _clean_pin_layer: None
+) -> None:
+    # node 的 SHASUMS256.txt.asc 是内嵌明文的 cleartext 签名：明文清单与签名档分两次拉取、各自可被
+    # 调包，判据值必须取自「验签通过的那份签名文档」。本锁模拟明文通道被换成恶意哈希、签名通道干净的
+    # 中间人形态——采纳的必须是签名文档里的值（旧实现从明文取值，缝隙常开）；两文件式验签对
+    # cleartext 输入会 NODATA（2026-11-01 真链路预演实测），单文件形态由本锁一并钉住。
+    table = {
+        "windows-x64": {
+            "ffmpeg": {
+                "url": "https://nodejs.org/dist/{version}/SHASUMS256.txt",
+                "sig_url": "https://nodejs.org/dist/{version}/SHASUMS256.txt.asc",
+                "trust": build_exe.PIN_TRUST_SIGNED,
+                "kind": build_exe._PIN_KIND_SHASUMS,
+                "fingerprint": _PRIMARY_FPR,
+                "asset": "ffmpeg.zip",
+                "sig_kind": build_exe._PIN_SIG_CLEARTEXT,
+            }
+        }
+    }
+    _pin_layer_env(monkeypatch, mode=build_exe.PIN_SOURCE_ADOPT, table=table)
+    monkeypatch.setattr(build_exe, "_NODE_RESOLVED_VERSION", "v24.21.0")
+    _install_routed_urlopen(
+        monkeypatch,
+        {
+            # 明文清单通道被中间人换成恶意哈希；签名档通道干净
+            "https://nodejs.org/dist/v24.21.0/SHASUMS256.txt": (b"e" * 64) + b"  ffmpeg.zip",
+            "https://nodejs.org/dist/v24.21.0/SHASUMS256.txt.asc": (
+                f"-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA256\n{_ONLINE_HEX}  ffmpeg.zip\n"
+                "-----BEGIN PGP SIGNATURE-----\n-----END PGP SIGNATURE-----\n"
+            ).encode("ascii"),
+        },
+    )
+    _install_fake_gpg(
+        monkeypatch, keyring=_keyring_record(_PRIMARY_FPR, _SIGNING_SUBKEY_FPR), verify_status=_good_gpg_status()
+    )
+    assert build_exe._pinned_slots()["ffmpeg"] == _ONLINE_HEX
+
+    monkeypatch.setattr(build_exe, "_PIN_ONLINE_CACHE", {})
+    _install_fake_gpg(
+        monkeypatch,
+        keyring=_keyring_record(_PRIMARY_FPR, _SIGNING_SUBKEY_FPR),
+        verify_status=b"[GNUPG:] BADSIG 1234567890ABCDEF someone@example.org\n",
+    )
+    assert build_exe._pinned_slots()["ffmpeg"] == _BUILTIN_HEX
+
+
 @pytest.mark.parametrize(
     "payload",
     [

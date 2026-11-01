@@ -368,13 +368,17 @@ jobs:
       # --require-pinned：显式表达「发布路径缺钉定即终止」（build_exe.py 在 CI 下本来也
       # 会因 GITHUB_ACTIONS=true 默认开启，这里写出来是为了让发布命令自解释）。
       # DLR_RUNTIME_SHA256 由 prepare 的校验步骤透传，与 build_exe.py 的钉定表同一份值。
+      # --pin-source adopt：node 槽位以「GPG 验签通过的官方 SHASUMS256.txt」为本次判据（发布钥匙
+      # 指纹钉在 build_exe.py::_PIN_SOURCE_TABLE），上游发新 LTS 不再因静态表漂移打断发布；gyan/BtbN
+      # 的清单属 advisory（清单与产物同源同服务器、无独立认证）永不被采纳，ffmpeg 仍按静态钉定值比对。
+      # 在线清单拉取或验签失败时回退静态表——若上游 LTS 恰已漂移则由下载比对 fail-closed 终止。
       # 家族判定（同上方 Install 步骤）：arm64 job 若不落进本 xvfb 分支，GUI 冒烟在无头 aarch64 上必红；
       # 若又落进下方通用分支，它拿到的是 tee build_exe.log 而没有 xvfb-run——两条都不接受。
       - name: Build executables + smoke test (Linux, xvfb)
         if: startsWith(matrix.platform, 'linux')
         env:
           DLR_RUNTIME_SHA256: ${{ needs.prepare.outputs.runtime_pins }}
-        run: xvfb-run -a python build_exe.py --smoke --dual --require-pinned
+        run: xvfb-run -a python build_exe.py --smoke --dual --require-pinned --pin-source adopt
 
       - name: Build executables + smoke test
         if: "!startsWith(matrix.platform, 'linux')"
@@ -383,7 +387,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python build_exe.py --smoke --dual --require-pinned 2>&1 | tee build_exe.log
+          python build_exe.py --smoke --dual --require-pinned --pin-source adopt 2>&1 | tee build_exe.log
           echo "Dist after build:"
           ls -la dist || true
 

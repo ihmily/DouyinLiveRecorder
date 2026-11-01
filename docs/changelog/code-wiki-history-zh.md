@@ -1,7 +1,7 @@
 # CODE_WIKI 更新日志归档（简体中文卷）
 
 > 本卷由 `CODE_WIKI.md` 的「更新日志」于 2026-09-28 整卷迁出，条目正文逐字保留；根文档保留当前发布周期的标题索引与版本概要 + 本卷指针。
-> 收录 193 条历史条目（2026-05-17 ~ 2026-10-01：2026-09-28 整卷迁出的 164 条 + 2026-10-18 滚动迁入的 29 条）；2026-10-31 增补当前发布周期 63 条（v4.6.0 / v4.5.0-dev，见「迁入：当前发布周期」），另新增 2 条（AGENTS.md 对账、四份根文档同步与滚动归档），本卷合计 261 条（2026-11-01 增补 brotli 下限抬升 1 条 + CI Linux 平台敏感用例修复 1 条 + 发布目录凭据校验误报修复 1 条）。
+> 收录 193 条历史条目（2026-05-17 ~ 2026-10-01：2026-09-28 整卷迁出的 164 条 + 2026-10-18 滚动迁入的 29 条）；2026-10-31 增补当前发布周期 63 条（v4.6.0 / v4.5.0-dev，见「迁入：当前发布周期」），另新增 2 条（AGENTS.md 对账、四份根文档同步与滚动归档），本卷合计 264 条（2026-11-01 增补 brotli 下限抬升 1 条 + CI Linux 平台敏感用例修复 1 条 + 发布目录凭据校验误报修复 1 条 + setuptools 构建下限抬升 1 条 + node v26.13.0 重钉 1 条 + 发布路径钉定动态化 1 条）。
 > 回补口径：上一轮文档粗剪脚本把部分句子截成行尾 `…` 的半句，本卷按 `.workbuddy/docold`（2026-09-25 基线）对残句做**逐行前缀匹配**回补，共回补 659 行（唯一匹配失败 136 行、有歧义 0 行保持原样）。
 > 刻意**不做**的事：不复活历史上被有意删除的条目，不回填已外迁到 `docs/agent-reference/changelog-file-inventories.md` 的文件清单块——整块回填会撤销那些有意的整理，故只补残句。
 > 归档卷不参与镜像构建产物，运行时不读取；根文档入口：[CODE_WIKI.md](../../CODE_WIKI.md)。
@@ -10,6 +10,9 @@
 
 | 版本条目 | 日期 |
 | --- | --- |
+| v4.7.0 (2026-11-01) — 发布路径钉定动态化：node 槽位以 GPG 验签通过的官方 SHASUMS 为判据（--pin-source adopt），上游发新 LTS 不再打断发布 | 2026-11-01 |
+| v4.7.0 (2026-11-01) — 运行时钉定随上游 node v26.13.0 重钉：Node 26 转 LTS 令首条 lts 漂移，四平台 node SHA256 同时失配 | 2026-11-01 |
+| v4.7.0 (2026-11-01) — setuptools 构建下限 68.0 → 84.1.0 + uv.lock 锁面 84.0.0 → 84.2.1：外部路径逃逸公告（GHSA-xmj3-9gf7-h52w）只读排查后的加固 | 2026-11-01 |
 | v4.7.0 (2026-11-01) — 发布目录凭据校验（SEV-2213）误报修复：逐键比对收窄到「同键位」，根治 v4.6.0 四平台发布构建同红 | 2026-11-01 |
 | v4.7.0 (2026-11-01) — CI Linux 三处平台敏感用例转平台无关 + POSIX 优雅停止标记缺失纠正（recorder.py） | 2026-11-01 |
 | v4.7.0 (2026-11-01) — brotli 声明下限 1.2.0 → 1.2.1：deps-audit「下限复核」抓出旧下限自身落在 PYSEC-2026-4322 受影响段 | 2026-11-01 |
@@ -183,6 +186,33 @@
 | v4.0.8-dev (2026-05-17) | 2026-05-17 |
 
 ## 归档条目
+
+### v4.7.0 (2026-11-01) — 发布路径钉定动态化：node 槽位以 GPG 验签通过的官方 SHASUMS 为判据（--pin-source adopt），上游发新 LTS 不再打断发布
+
+- **触发**：同日「node v26.13.0 重钉」条目的后续——静态钉定 ×「自动选最新 LTS」的组合使发布链每逢上游转新 LTS 必红（2026-10-18、2026-11-01 两次实证），人工闸口的排查成本转嫁到每次发布；用户要求钉定不再硬编码固定、改为动态获取比对。
+- **设计（启用既有休眠的在线来源层 adopt 档，不新造机制）**：信任分级是命门——node 的 SHASUMS256.txt 属 `signed` 档（另配 GPG 分离签名，发布钥匙完整 40 位指纹带外钉定），通道被劫持时无私钥签不出能过验签的清单；gyan 的 .sha256 与 GitHub digest 属 `advisory` 档（清单与产物同源同服务器），**永不被采纳**——「动态获取比对」若不分级就退化为同源自证，正是 `_PIN_SOURCE_TABLE` 注释点名的失效形态。
+- **改动**：① `_PIN_SOURCE_TABLE` node 槽登记发布钥匙指纹 `C82FA3AE1CBEDC6BE46B9360C43CEC45C17AB93C`（三通道同值：v26.13.0 .asc 的 ERRSIG/VALIDSIG 签发者、keys.openpgp.org 按 keyid recv 后的 fpr 行——构建期验签同一取钥通道本机实测可通、nodejs/node 官方 README「Release keys」段；与 v24.22.0 时代同钥，跨 LTS 线稳定）；② build-release.yml 两个构建步（linux xvfb 分支 + windows/macos 通用分支）加 `--pin-source adopt` 并同批注释——**默认档仍 off，本地构建行为零变化**；③ 钉定表头「fingerprint 仍为空，故在线层不 adopt」句按已被证伪修正，补 [2026-11-01] 段说明本表退为 off 档回退基线；④ 新增回归锁 `test_node_online_source_is_adoptable_with_registered_fingerprint`：指纹被清空/改坏或 trust 被改 advisory 时翻红（防 adopt 静默退回静态表）；指纹**字面值刻意不锁进测试**，上游换签发钥匙只改表一处；⑤ **真链路预演揪出休眠层的潜伏缺陷并同批修复**——node 的 SHASUMS256.txt.asc 是内嵌明文的 cleartext 签名，而在线层按「两文件 detached」形态验签（`gpg --verify sig 清单`），对 cleartext 输入必然 NODATA，即 adopt 对真实上游**从来不会成功**（桩测试的假 gpg 验不出形态）；且「值取自明文清单、签名档另拉」在两次独立拉取下存在「签名覆盖 A、采纳 B」缝隙。修复：新增 `_PIN_SIG_CLEARTEXT/_PIN_SIG_DETACHED` 形态字段（node 登记为 clearsigned，缺省 detached 保持既有语义），`_verify_gpg_artifact` 支持 `inline_document` 单文件验签，clearsigned 档判据值改从**验签通过的那份签名文档本体**解析；新增取值绑定回归锁 `test_clearsigned_manifest_value_comes_from_the_signed_document`（明文通道被调包成恶意哈希时必须采纳签名文档里的值）。
+- **语义边界（fail-closed 不降级）**：在线清单拉取失败或验签不过 → 回退静态表 → 若上游 LTS 恰已漂移则由下载比对终止；advisory 槽 ffmpeg 仍按静态钉定值比对（gyan 滚动别名的上游 bump 仍会红一次，属既有行为，本期未动——换版本化直链的建议已交回用户裁定）；`verify` 档与 `--pin-source off` 语义不变。
+- **验证**：`scripts/check_runtime_pins.py --strict` rc=0；`pytest tests/test_build_exe.py` **140 passed**（含两条新锁与既有 adopt 链路锁：验签通过采用 / BADSIG 回退 / advisory 拒绝 / 形状丢弃 / 单次拉取 / clearsigned 取值绑定）；本机 adopt 真链路预演两轮（修复前 NODATA 暴露缺陷、修复后 `GOODSIG`+`VALIDSIG` 完整指纹吻合且判据与静态表一致，读数记 `docs/agent-reference/measured-evidence.md`）。DoD#2：CI 发布构建是本改动的真机回路，四平台重跑交回用户（与同日重钉批次同一动作）。
+- **并行会话**：与 setuptools 会话、同日重钉批次共享 CODE_WIKI/归档卷，编辑前重 Read、锚点最小化。
+
+### v4.7.0 (2026-11-01) — 运行时钉定随上游 node v26.13.0 重钉：Node 26 转 LTS 令首条 lts 漂移，四平台 node SHA256 同时失配
+
+- **触发**：用户贴入 build-release.yml 四平台发布构建日志（macos-arm64 / linux-aarch64 / linux-x86_64 / windows-amd64），PyInstaller 与 ffmpeg 钉定校验全部通过后同处挂红——`[build][FATAL] node-v26.13.0-<plat> … SHA256 不匹配（期望 …，实际 …），已终止构建`，四平台 exit 1、报文同构。
+- **根因**：`_download_nodejs` 按 `dist/index.json` 首条 lts 自动选版本；2026-10-28 Node 26 线转 LTS（Lithium），首条 lts 从 Krypton 系（v24.22.2）漂到 v26.13.0，而 `_PINNED_RUNTIME_SHA256` node 五段仍钉 2026-10-18 取的 v24.22.0 官方值——表注释明示「上游一发新 LTS 本表即失配并由 --strict 拦下发布」为刻意保留的人工闸口，[历史注] 已载 2026-10-18 同型一次（v24.21.0 → v24.22.0），本次为第二次。
+- **完整性核验（先于回填）**：四平台 CI 报的实际哈希与官方 `nodejs.org/dist/v26.13.0/SHASUMS256.txt` 对应四行**逐位一致**，且与同版本 `SHASUMS256.txt.asc` 明文本体一致（仅取值一致性复核，未验签）→ 纯版本漂移，非投毒/截断/上游重发布；ffmpeg 四平台钉定全部通过未漂移。取数命令与读数记入 `docs/agent-reference/measured-evidence.md`（2026-11-01 复测节）。
+- **改动**：node × 5 段重钉 v26.13.0 官方值（win-x64 `dcc60d59…` / linux-x64 `58485538…` / linux-arm64 `439e9c43…` / darwin-x64 `525c9b29…` / darwin-arm64 `d38bd5e5…`）；表头「当前取值」行换版期 + [历史注] 追加同型再现（只增不改）。测试与校验脚本零改动（无用例硬编码 node 哈希/版本，`test_build_exe` 的 index.json 桩与钉定表无耦合）。
+- **验证**：`scripts/check_runtime_pins.py --strict` rc=0；`pytest tests/test_build_exe.py` 138 passed；`run_gates.py` 10/10 全绿；全量 pytest **4766 passed / 16 skipped / warnings summary 为空**（最后一次代码编辑之后干净复跑两次均绿）；挂点争议区段 `tests/test_utils.py -k "RunNodeScript or JsPinTable"` 隔离跑 17 passed。DoD#2：不涉录制链路/选源/ffmpeg 参数/平台解析；CI 发布构建是本修复真机回路，四平台重跑交回用户（重触发 build-release 或随 v4.7.0 发布）。
+- **并行会话**：同树另有 setuptools 构建下限会话在途（pyproject/uv.lock/AGENTS/README，与本任务文件零交集）；期间两次全量 pytest 异常（run_gates 兜底一次 rc=1、一次 88% 处长时间停滞被中途终止），其后干净复跑均绿且挂点区段隔离跑绿，未归因到本改动；共享文档编辑前重 Read、锚点最小化。
+
+### v4.7.0 (2026-11-01) — setuptools 构建下限 68.0 → 84.1.0 + uv.lock 锁面 84.0.0 → 84.2.1：外部路径逃逸公告（GHSA-xmj3-9gf7-h52w）只读排查后的加固
+
+- **触发**：用户贴入 setuptools 安全公告——Windows 下恶意 wheel 的 `.dist-info/namespace_packages.txt` 经 `Wheel.install_as_egg` → `_fix_namespace_packages` 可在目标 egg 目录外创建固定内容 `__init__.py`（受影响 `>=38.2.2, <84.1.0`，84.1.0 修复；同版还修 `archive_util` 的 `..\` 提取逃逸 GHSA-grgh-hr87-3jpw）。官方 changelog 注明该路径在 PEP 517 之外仅经弃用的 `setup_requires` 机制触达。
+- **排查（只读）**：本机 venv 实装 setuptools 84.2.1（已达标）；`uv.lock` 经 pyinstaller 6.22.1 传递钉 84.0.0（唯一版本面命中点）；`pyproject.toml [build-system]` 下限 `>=68.0` 区间过宽；Docker 镜像（slim-bookworm + pip 装 requirements.txt）与 CI deps-audit 均不含 setuptools。全仓无 `install_as_egg` / `easy_install` / `setup.py install` / `bdist_egg` 引用——pip/uv 装 wheel 走自带安装器，利用路径在本仓不可达，属版本面收口而非止血。
+- **修复**：`pyproject.toml [build-system]` `setuptools>=68.0` → `>=84.1.0`（紧邻注释记 GHSA 依据）；`uv lock --upgrade-package setuptools` 重算锁面 84.0.0 → 84.2.1（与 venv 实装同值；裸 `uv lock` / `sync_metadata.py` 不动已钉版本，单包升级须带 `--upgrade-package`）；`AGENTS.md`「安全下限」条目补构建侧下限并注明 deps-audit 只派生自 requirements.txt、不覆盖该下限。
+- **影响面**：运行时依赖清单（requirements.txt / [project.dependencies]）零改动（仍 18 条，CI 下限条数断言不受影响）；venv 零操作（84.2.1 本就在修复版之上，未触碰「批量重装 venv 依赖」红线）；全仓无测试/脚本钉 build-system 下限（test_regression_gates / check_runtime_pins / check_version 均 grep 无 setuptools）。
+- **验证**：`check_runtime_pins.py` rc=0、`check_version.py` PASS；`test_regression_gates.py` 29 passed；锁面 grep 确认 84.2.1；`run_gates.py` 10/10 全绿（内置全量 pytest **4766 passed / warnings summary 为空**，479.7s）；`basedpyright` 0 errors / 0 warnings / 0 notes；`check_coverage.py` PASSED 67 模块全达标。
+- **过程注记**：首跑 rc=1 与一次独立复跑 24% 处无栈中断均为并行活动期环境假象（同树并行会话在途：node 钉定刷新批次，文件集与本次不相交；且前台 pytest 与后台全量并发互踩），以无并发重跑的 run_gates 内置全量 pytest 为权威证据。
 
 ### v4.7.0 (2026-11-01) — 发布目录凭据校验（SEV-2213）误报修复：逐键比对收窄到「同键位」，根治 v4.6.0 四平台发布构建同红
 

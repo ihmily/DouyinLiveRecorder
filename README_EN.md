@@ -156,7 +156,7 @@ independent trust root and does not replace the official digest document.)
 
 **Huya link formats (mobile share domain and desktop link share one recording pipeline)**: `https://www.huya.com/30764624` | `https://hy.fan/30764624` (mobile share domain, a purely numeric path segment is the room id; trailing slashes, query strings and the `http://` scheme are all accepted). Alphanumeric short codes (e.g. `https://hy.fan/JbmwoV`) are resolved to the real room id by following the 301 redirect (results are cached in-process, no repeated requests) and normalised to the desktop link before pulling the stream; a landing page that is not a Huya live room, or a link with no room id / an invalid one, produces an explicit error message (links are masked before they reach the logs).
 
-> Total of **51** platforms (marketed as 60+, including platforms being added). Platform data-fetching functions are in `src/spider.py`, and stream-URL parsing is in `src/stream.py`.
+> Total of **51** platforms (Continuously adding platforms). Platform data-fetching functions are in `src/spider.py`, and stream-URL parsing is in `src/stream.py`.
 
 **Danmaku recording support (5 platforms)**: Douyin Live | Douyu Live | Huya Live | Bilibili Live | TwitchTV
 
