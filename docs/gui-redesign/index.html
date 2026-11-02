@@ -1,0 +1,682 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>DouyinLiveRecorder · 智能助手</title>
+<style>
+/* ============ 设计令牌 ============ */
+:root{
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-mono: "SF Mono", "Cascadia Code", Consolas, "JetBrains Mono", monospace;
+  --radius-s: 8px; --radius-m: 12px; --radius-l: 18px; --radius-xl: 24px;
+  --sidebar-w: 272px;
+  --ease-spring: cubic-bezier(.34,1.4,.44,1);
+  --ease-out: cubic-bezier(.22,.8,.36,1);
+  --dur-fast: .16s; --dur-med: .28s;
+}
+[data-theme="light"]{
+  --bg-app:#f7f7f5; --bg-sidebar:#f0efec; --bg-chat:#f7f7f5;
+  --bg-elevated:#ffffff; --bg-hover:rgba(0,0,0,.045); --bg-active:rgba(0,0,0,.07);
+  --bg-user-msg:#e8e4de; --bg-code:#1e1e24; --bg-code-inline:rgba(0,0,0,.06);
+  --text-1:#1a1a1a; --text-2:#5c5c5c; --text-3:#9a9a9a;
+  --border:rgba(0,0,0,.08); --border-strong:rgba(0,0,0,.14);
+  --accent:#c96442; --accent-hover:#b5573a; --accent-soft:rgba(201,100,66,.1);
+  --code-text:#e8e6e3; --code-keyword:#ff8f6b; --code-string:#a8d9a0; --code-comment:#7a7a85; --code-func:#7cc7ff; --code-num:#d8b4fe;
+  --shadow-s:0 1px 2px rgba(0,0,0,.05); --shadow-m:0 4px 16px rgba(0,0,0,.08); --shadow-l:0 12px 40px rgba(0,0,0,.12);
+  --scrollbar:rgba(0,0,0,.18);
+}
+[data-theme="dark"]{
+  --bg-app:#1b1b19; --bg-sidebar:#171716; --bg-chat:#1b1b19;
+  --bg-elevated:#262624; --bg-hover:rgba(255,255,255,.05); --bg-active:rgba(255,255,255,.09);
+  --bg-user-msg:#33322f; --bg-code:#121216; --bg-code-inline:rgba(255,255,255,.09);
+  --text-1:#ececea; --text-2:#a3a3a0; --text-3:#6b6b68;
+  --border:rgba(255,255,255,.08); --border-strong:rgba(255,255,255,.16);
+  --accent:#d97757; --accent-hover:#e08a6c; --accent-soft:rgba(217,119,87,.14);
+  --code-text:#e8e6e3; --code-keyword:#ff9d7a; --code-string:#a9dc76; --code-comment:#6f6f78; --code-func:#78dce8; --code-num:#c5a3ff;
+  --shadow-s:0 1px 2px rgba(0,0,0,.3); --shadow-m:0 4px 16px rgba(0,0,0,.35); --shadow-l:0 12px 40px rgba(0,0,0,.5);
+  --scrollbar:rgba(255,255,255,.18);
+}
+/* ============ 基础 ============ */
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{
+  font-family:var(--font-sans); background:var(--bg-app); color:var(--text-1);
+  font-size:15px; line-height:1.65; overflow:hidden;
+  -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+  transition:background var(--dur-med) var(--ease-out), color var(--dur-med) var(--ease-out);
+}
+::selection{background:var(--accent-soft)}
+*::-webkit-scrollbar{width:6px;height:6px}
+*::-webkit-scrollbar-thumb{background:var(--scrollbar);border-radius:3px}
+*::-webkit-scrollbar-track{background:transparent}
+button{font-family:inherit;border:none;background:none;cursor:pointer;color:inherit}
+button:focus-visible,textarea:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+svg{display:block;flex-shrink:0}
+
+/* ============ 布局骨架 ============ */
+.app{display:flex;height:100dvh}
+
+/* ---- 侧边栏 ---- */
+.sidebar{
+  width:var(--sidebar-w); flex-shrink:0; background:var(--bg-sidebar);
+  border-right:1px solid var(--border); display:flex; flex-direction:column;
+  transition:transform var(--dur-med) var(--ease-out), margin-left var(--dur-med) var(--ease-out);
+}
+.sidebar.collapsed{margin-left:calc(-1 * var(--sidebar-w))}
+.sidebar-head{padding:14px 12px 8px;display:flex;align-items:center;gap:8px}
+.brand{display:flex;align-items:center;gap:10px;padding:6px 8px;flex:1;min-width:0}
+.brand-logo{
+  width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,var(--accent),#e8937a);
+  display:grid;place-items:center;color:#fff;box-shadow:var(--shadow-s);
+}
+.brand-name{font-weight:600;font-size:14px;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.brand-sub{font-size:11px;color:var(--text-3);margin-top:-3px}
+.new-chat{
+  margin:6px 12px 10px; padding:9px 14px; border-radius:var(--radius-m);
+  border:1px solid var(--border-strong); background:var(--bg-elevated);
+  display:flex;align-items:center;gap:9px;font-size:13.5px;font-weight:500;color:var(--text-1);
+  transition:all var(--dur-fast) var(--ease-out); box-shadow:var(--shadow-s);
+}
+.new-chat:hover{border-color:var(--accent);color:var(--accent);transform:translateY(-1px);box-shadow:var(--shadow-m)}
+.new-chat:active{transform:translateY(0)}
+.new-chat kbd{margin-left:auto;font-family:var(--font-mono);font-size:10.5px;color:var(--text-3);border:1px solid var(--border);border-radius:5px;padding:1px 5px}
+.section-label{padding:10px 20px 4px;font-size:11px;font-weight:600;color:var(--text-3);letter-spacing:.8px;text-transform:uppercase}
+.history{flex:1;overflow-y:auto;padding:0 8px 8px}
+.history-item{
+  position:relative;width:100%;text-align:left;padding:9px 12px;border-radius:var(--radius-s);
+  font-size:13.5px;color:var(--text-2);display:flex;align-items:center;gap:8px;
+  transition:background var(--dur-fast);margin-bottom:1px;
+}
+.history-item:hover{background:var(--bg-hover);color:var(--text-1)}
+.history-item.active{background:var(--bg-active);color:var(--text-1);font-weight:500}
+.history-item .title{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.history-item .del{opacity:0;padding:3px;border-radius:5px;color:var(--text-3);transition:all var(--dur-fast)}
+.history-item:hover .del{opacity:1}
+.history-item .del:hover{background:var(--bg-active);color:#e05d5d}
+.sidebar-foot{padding:10px 12px;border-top:1px solid var(--border);display:flex;align-items:center;gap:6px}
+.foot-btn{padding:7px 9px;border-radius:var(--radius-s);color:var(--text-2);display:flex;align-items:center;gap:7px;font-size:13px;transition:all var(--dur-fast)}
+.foot-btn:hover{background:var(--bg-hover);color:var(--text-1)}
+.foot-btn span{font-weight:500}
+
+/* ---- 遮罩（移动端） ---- */
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.4);opacity:0;pointer-events:none;transition:opacity var(--dur-med);z-index:40}
+.scrim.show{opacity:1;pointer-events:auto}
+
+/* ---- 主区域 ---- */
+.main{flex:1;display:flex;flex-direction:column;min-width:0;position:relative;background:var(--bg-chat)}
+.topbar{
+  height:52px;flex-shrink:0;display:flex;align-items:center;gap:6px;padding:0 14px;
+  border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--bg-chat) 82%,transparent);
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);z-index:10;
+}
+.icon-btn{
+  width:34px;height:34px;border-radius:var(--radius-s);display:grid;place-items:center;
+  color:var(--text-2);transition:all var(--dur-fast);
+}
+.icon-btn:hover{background:var(--bg-hover);color:var(--text-1)}
+.topbar-title{flex:1;text-align:center;font-size:13.5px;font-weight:500;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.model-chip{
+  display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:99px;
+  background:var(--accent-soft);color:var(--accent);font-size:12px;font-weight:600;
+}
+.dot-live{width:6px;height:6px;border-radius:50%;background:currentColor;animation:pulse 1.6s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+/* ---- 消息流 ---- */
+.chat-scroll{flex:1;overflow-y:auto;scroll-behavior:smooth}
+.chat-col{max-width:760px;margin:0 auto;padding:28px 20px 24px}
+.msg{display:flex;gap:14px;padding:6px 0 26px;animation:msg-in .38s var(--ease-out) both}
+@keyframes msg-in{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+.msg.user{flex-direction:row-reverse}
+.avatar{
+  width:30px;height:30px;border-radius:9px;flex-shrink:0;display:grid;place-items:center;
+  font-size:13px;font-weight:700;box-shadow:var(--shadow-s);margin-top:2px;
+}
+.avatar.ai{background:linear-gradient(135deg,var(--accent),#e8937a);color:#fff}
+.avatar.user{background:var(--bg-elevated);border:1px solid var(--border-strong);color:var(--text-2)}
+.msg-body{max-width:calc(100% - 48px);min-width:0}
+.msg.user .msg-body{display:flex;flex-direction:column;align-items:flex-end}
+.bubble{padding:10px 16px;border-radius:var(--radius-l);width:fit-content}
+.msg.user .bubble{background:var(--bg-user-msg);border-bottom-right-radius:6px}
+.msg.ai .bubble{padding:2px 0;background:transparent}
+.msg-meta{font-size:11px;color:var(--text-3);margin-top:5px;padding:0 4px;display:flex;gap:8px;align-items:center}
+.msg-actions{display:flex;gap:2px;opacity:0;transition:opacity var(--dur-fast)}
+.msg:hover .msg-actions{opacity:1}
+.msg-actions button{width:26px;height:26px;border-radius:6px;display:grid;place-items:center;color:var(--text-3);transition:all var(--dur-fast)}
+.msg-actions button:hover{background:var(--bg-hover);color:var(--text-1)}
+
+/* ---- Markdown 排版 ---- */
+.md{overflow-wrap:anywhere}
+.md p{margin:.5em 0}
+.md p:first-child{margin-top:0}.md p:last-child{margin-bottom:0}
+.md h1,.md h2,.md h3{margin:1em 0 .45em;line-height:1.35;font-weight:650}
+.md h1{font-size:1.35em}.md h2{font-size:1.2em}.md h3{font-size:1.05em}
+.md ul,.md ol{margin:.5em 0;padding-left:1.4em}
+.md li{margin:.25em 0}
+.md strong{font-weight:650}
+.md a{color:var(--accent);text-decoration:none;border-bottom:1px solid transparent;transition:border-color var(--dur-fast)}
+.md a:hover{border-bottom-color:var(--accent)}
+.md blockquote{margin:.6em 0;padding:.3em 1em;border-left:3px solid var(--accent);background:var(--accent-soft);border-radius:0 var(--radius-s) var(--radius-s) 0;color:var(--text-2)}
+.md code:not(pre code){font-family:var(--font-mono);font-size:.86em;background:var(--bg-code-inline);padding:.14em .4em;border-radius:5px}
+.md hr{border:none;border-top:1px solid var(--border);margin:1em 0}
+.md table{border-collapse:collapse;margin:.6em 0;font-size:.92em;width:100%}
+.md th,.md td{border:1px solid var(--border-strong);padding:6px 12px;text-align:left}
+.md th{background:var(--bg-hover);font-weight:600}
+.codeblock{margin:.7em 0;border-radius:var(--radius-m);overflow:hidden;background:var(--bg-code);box-shadow:var(--shadow-s)}
+.codeblock-head{display:flex;align-items:center;padding:7px 12px 7px 14px;background:rgba(255,255,255,.045)}
+.codeblock-lang{font-family:var(--font-mono);font-size:11px;color:#9a9a95;letter-spacing:.5px;text-transform:uppercase}
+.copy-btn{
+  margin-left:auto;display:flex;align-items:center;gap:5px;padding:3px 9px;border-radius:6px;
+  font-size:11.5px;color:#9a9a95;transition:all var(--dur-fast);
+}
+.copy-btn:hover{background:rgba(255,255,255,.09);color:#e8e6e3}
+.copy-btn.done{color:#a9dc76}
+.codeblock pre{padding:14px 16px;overflow-x:auto;font-family:var(--font-mono);font-size:13px;line-height:1.6;color:var(--code-text)}
+.codeblock .tk-k{color:var(--code-keyword)}
+.codeblock .tk-s{color:var(--code-string)}
+.codeblock .tk-c{color:var(--code-comment);font-style:italic}
+.codeblock .tk-f{color:var(--code-func)}
+.codeblock .tk-n{color:var(--code-num)}
+
+/* ---- 打字指示 & 光标 ---- */
+.typing{display:inline-flex;gap:5px;padding:10px 2px}
+.typing i{width:7px;height:7px;border-radius:50%;background:var(--text-3);animation:bob 1.1s infinite}
+.typing i:nth-child(2){animation-delay:.15s}.typing i:nth-child(3){animation-delay:.3s}
+@keyframes bob{0%,60%,100%{transform:none;opacity:.4}30%{transform:translateY(-5px);opacity:1}}
+.stream-caret{display:inline-block;width:8px;height:1.05em;background:var(--accent);border-radius:2px;vertical-align:text-bottom;margin-left:2px;animation:caret .8s steps(1) infinite}
+@keyframes caret{50%{opacity:0}}
+
+/* ---- 空状态 ---- */
+.empty{max-width:760px;margin:0 auto;padding:8vh 20px 0;display:flex;flex-direction:column;align-items:center;text-align:center;animation:msg-in .5s var(--ease-out) both}
+.empty-logo{width:64px;height:64px;border-radius:20px;background:linear-gradient(135deg,var(--accent),#e8937a);display:grid;place-items:center;color:#fff;box-shadow:var(--shadow-l);margin-bottom:22px}
+.empty h1{font-size:26px;font-weight:650;letter-spacing:-.3px;margin-bottom:8px}
+.empty p{color:var(--text-2);max-width:420px;margin-bottom:30px}
+.suggest-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;width:100%;max-width:620px}
+.suggest{
+  text-align:left;padding:14px 16px;border:1px solid var(--border);border-radius:var(--radius-m);
+  background:var(--bg-elevated);transition:all var(--dur-fast) var(--ease-out);
+}
+.suggest:hover{border-color:var(--accent);transform:translateY(-2px);box-shadow:var(--shadow-m)}
+.suggest b{display:block;font-size:13.5px;font-weight:600;margin-bottom:2px}
+.suggest span{font-size:12.5px;color:var(--text-3)}
+
+/* ---- 输入区 ---- */
+.composer-wrap{flex-shrink:0;padding:10px 16px 14px;background:linear-gradient(to top,var(--bg-chat) 70%,transparent)}
+.composer{max-width:760px;margin:0 auto}
+.composer-box{
+  display:flex;align-items:flex-end;gap:6px;padding:10px 10px 10px 16px;
+  background:var(--bg-elevated);border:1px solid var(--border-strong);border-radius:var(--radius-xl);
+  box-shadow:var(--shadow-m);transition:border-color var(--dur-fast), box-shadow var(--dur-fast);
+}
+.composer-box:focus-within{border-color:var(--accent);box-shadow:var(--shadow-m),0 0 0 3px var(--accent-soft)}
+.composer-box textarea{
+  flex:1;border:none;background:none;resize:none;font:inherit;color:var(--text-1);
+  max-height:200px;line-height:1.55;padding:6px 0;
+}
+.composer-box textarea::placeholder{color:var(--text-3)}
+.composer-box textarea:focus{outline:none}
+.tool-btn{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;color:var(--text-2);transition:all var(--dur-fast)}
+.tool-btn:hover{background:var(--bg-hover);color:var(--text-1)}
+.send-btn{
+  width:36px;height:36px;border-radius:50%;background:var(--accent);color:#fff;
+  display:grid;place-items:center;transition:all var(--dur-fast) var(--ease-spring);flex-shrink:0;
+}
+.send-btn:hover:not(:disabled){background:var(--accent-hover);transform:scale(1.08)}
+.send-btn:active:not(:disabled){transform:scale(.94)}
+.send-btn:disabled{opacity:.35;cursor:not-allowed}
+.send-btn.streaming{background:var(--text-3)}
+.hint{text-align:center;font-size:11.5px;color:var(--text-3);margin-top:9px}
+
+/* ---- Toast ---- */
+.toast{
+  position:fixed;bottom:90px;left:50%;transform:translate(-50%,12px);z-index:60;
+  background:var(--text-1);color:var(--bg-app);padding:8px 16px;border-radius:99px;
+  font-size:13px;font-weight:500;opacity:0;pointer-events:none;
+  transition:all var(--dur-med) var(--ease-spring);box-shadow:var(--shadow-l);
+}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+
+/* ---- 响应式 ---- */
+@media (max-width:860px){
+  .sidebar{position:fixed;inset:0 auto 0 0;z-index:50;transform:translateX(0);box-shadow:var(--shadow-l)}
+  .sidebar.collapsed{transform:translateX(-105%);margin-left:0}
+  .suggest-grid{grid-template-columns:1fr}
+  .chat-col{padding:20px 14px}
+  .msg-body{max-width:calc(100% - 44px)}
+}
+@media (min-width:861px){.scrim{display:none}}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}
+}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <!-- ================= 侧边栏 ================= -->
+  <aside class="sidebar" id="sidebar" aria-label="会话列表">
+    <div class="sidebar-head">
+      <div class="brand">
+        <div class="brand-logo">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>
+        </div>
+        <div>
+          <div class="brand-name">LiveRecorder</div>
+          <div class="brand-sub">直播录制 · 智能助手</div>
+        </div>
+      </div>
+      <button class="icon-btn" id="collapseIn" title="收起侧边栏" aria-label="收起侧边栏">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/></svg>
+      </button>
+    </div>
+
+    <button class="new-chat" id="newChatBtn">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      新建对话
+      <kbd>⌘K</kbd>
+    </button>
+
+    <div class="section-label">历史会话</div>
+    <nav class="history" id="historyList"></nav>
+
+    <div class="sidebar-foot">
+      <button class="foot-btn" id="themeBtn" title="切换主题">
+        <svg id="themeIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+        <span>深色模式</span>
+      </button>
+      <div style="flex:1"></div>
+      <button class="icon-btn" title="设置" aria-label="设置">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+    </div>
+  </aside>
+  <div class="scrim" id="scrim"></div>
+
+  <!-- ================= 主区域 ================= -->
+  <main class="main">
+    <header class="topbar">
+      <button class="icon-btn" id="menuBtn" title="打开侧边栏" aria-label="打开侧边栏">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+      <div class="topbar-title" id="topbarTitle">新对话</div>
+      <span class="model-chip"><span class="dot-live"></span>60+ 平台在线</span>
+      <button class="icon-btn" title="分享" aria-label="分享">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v13M7 8l5-5 5 5M5 15v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/></svg>
+      </button>
+    </header>
+
+    <div class="chat-scroll" id="chatScroll">
+      <!-- 空状态 -->
+      <div class="empty" id="emptyState">
+        <div class="empty-logo">
+          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.2" fill="currentColor" stroke="none"/></svg>
+        </div>
+        <h1>有什么可以帮你？</h1>
+        <p>粘贴直播间链接即可开始录制，也可以问我任何关于平台、画质与配置的问题。</p>
+        <div class="suggest-grid">
+          <button class="suggest" data-q="如何录制抖音直播间？"><b>录制抖音直播</b><span>粘贴链接，一步开始录制</span></button>
+          <button class="suggest" data-q="支持哪些画质？如何切换原画？"><b>画质选择</b><span>原画 / 超清 / 高清怎么选</span></button>
+          <button class="suggest" data-q="海外平台录制失败，如何配置代理？"><b>代理配置</b><span>TikTok、Twitch 网络设置</span></button>
+          <button class="suggest" data-q="如何设置分段保存和自动转码为 MP4？"><b>分段与转码</b><span>ts 分段、自动封装 MP4</span></button>
+        </div>
+      </div>
+      <!-- 消息列 -->
+      <div class="chat-col" id="chatCol" hidden></div>
+    </div>
+
+    <!-- 输入区 -->
+    <div class="composer-wrap">
+      <div class="composer">
+        <div class="composer-box">
+          <button class="tool-btn" title="附件" aria-label="附件">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.4 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.2-9.19a4 4 0 1 1 5.65 5.66l-9.2 9.19a2 2 0 0 1-2.82-2.83l8.49-8.48"/></svg>
+          </button>
+          <textarea id="input" rows="1" placeholder="发消息，或粘贴直播间链接…" aria-label="消息输入框"></textarea>
+          <button class="tool-btn" title="语音输入" aria-label="语音输入">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1M12 19v3"/></svg>
+          </button>
+          <button class="send-btn" id="sendBtn" disabled title="发送 (Enter)" aria-label="发送">
+            <svg id="sendIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+          </button>
+        </div>
+        <div class="hint">Enter 发送 · Shift+Enter 换行 · ⌘K 新建对话 — 内容由演示助手生成，仅供界面预览</div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+/* ==================================================================
+ * DouyinLiveRecorder GUI 重设计原型
+ * 单文件零依赖：内置 Markdown 渲染、代码高亮、流式输出模拟
+ * ================================================================== */
+
+const $ = s => document.querySelector(s);
+const root = document.documentElement;
+const sidebar = $("#sidebar"), scrim = $("#scrim");
+const chatScroll = $("#chatScroll"), chatCol = $("#chatCol"), emptyState = $("#emptyState");
+const input = $("#input"), sendBtn = $("#sendBtn");
+const historyList = $("#historyList"), topbarTitle = $("#topbarTitle");
+const isMobile = () => matchMedia("(max-width:860px)").matches;
+
+/* ---------- 主题 ---------- */
+const ICON_SUN = '<path d="M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10zM12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>';
+const ICON_MOON = '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>';
+function setTheme(t){
+  root.dataset.theme = t;
+  localStorage.setItem("dlr-theme", t);
+  $("#themeIcon").innerHTML = t === "dark" ? ICON_SUN : ICON_MOON;
+  $("#themeBtn").querySelector("span").textContent = t === "dark" ? "浅色模式" : "深色模式";
+}
+setTheme(localStorage.getItem("dlr-theme") ||
+  (matchMedia("(prefers-color-scheme:dark)").matches ? "dark" : "light"));
+$("#themeBtn").onclick = () => setTheme(root.dataset.theme === "dark" ? "light" : "dark");
+
+/* ---------- 侧边栏 ---------- */
+function openSidebar(o){
+  sidebar.classList.toggle("collapsed", !o);
+  if (isMobile()) scrim.classList.toggle("show", o);
+}
+$("#menuBtn").onclick = () => openSidebar(true);
+$("#collapseIn").onclick = () => openSidebar(false);
+scrim.onclick = () => openSidebar(false);
+if (isMobile()) openSidebar(false);
+
+/* ---------- 会话数据 ---------- */
+let sessions = JSON.parse(localStorage.getItem("dlr-sessions") || "null") || [];
+let activeId = null;
+let streaming = false, stopStream = false;
+
+function saveSessions(){ localStorage.setItem("dlr-sessions", JSON.stringify(sessions)); }
+
+function renderHistory(){
+  historyList.innerHTML = "";
+  sessions.forEach(s => {
+    const b = document.createElement("button");
+    b.className = "history-item" + (s.id === activeId ? " active" : "");
+    b.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      <span class="title"></span>
+      <span class="del" title="删除"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg></span>`;
+    b.querySelector(".title").textContent = s.title;
+    b.onclick = () => { if (!streaming){ loadSession(s.id); if (isMobile()) openSidebar(false);} };
+    b.querySelector(".del").onclick = e => {
+      e.stopPropagation();
+      sessions = sessions.filter(x => x.id !== s.id);
+      if (activeId === s.id) newSession();
+      saveSessions(); renderHistory();
+      toast("会话已删除");
+    };
+    historyList.appendChild(b);
+  });
+}
+
+function newSession(){
+  activeId = null;
+  chatCol.innerHTML = ""; chatCol.hidden = true; emptyState.hidden = false;
+  topbarTitle.textContent = "新对话";
+  renderHistory(); input.focus();
+}
+$("#newChatBtn").onclick = () => { if (!streaming){ newSession(); if (isMobile()) openSidebar(false);} };
+
+function loadSession(id){
+  const s = sessions.find(x => x.id === id); if (!s) return;
+  activeId = id; topbarTitle.textContent = s.title;
+  chatCol.innerHTML = ""; emptyState.hidden = true; chatCol.hidden = false;
+  s.messages.forEach(m => chatCol.appendChild(buildMsg(m.role, m.html)));
+  renderHistory(); scrollBottom(false);
+}
+
+/* ---------- Markdown 渲染（内置轻量实现） ---------- */
+function esc(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+const HL_RULES = [
+  {re:/(\/\/[^\n]*|#[^\n]*|\/\*[\s\S]*?\*\/)/g, cls:"tk-c"},          // 注释
+  {re:/(&quot;[^&]*?&quot;|&#x27;[^&]*?&#x27;|"[^"\n]*"|'[^'\n]*'|`[^`\n]*`)/g, cls:"tk-s"}, // 字符串
+  {re:/\b(import|from|def|class|return|if|elif|else|for|while|try|except|finally|with|as|await|async|lambda|pass|break|continue|raise|in|is|not|and|or|None|True|False|const|let|var|function|new|typeof|export|extends|yield)\b/g, cls:"tk-k"},
+  {re:/\b(\d+\.?\d*)\b/g, cls:"tk-n"},
+  {re:/\b([a-zA-Z_]\w*)(?=\()/g, cls:"tk-f"},
+];
+function highlight(code){
+  let out = esc(code);
+  // 用占位符防交叉污染：注释与字符串先提取
+  const stash = [];
+  out = out.replace(HL_RULES[0].re, m => `\x00${stash.push(`<span class="tk-c">${m}</span>`)-1}\x00`);
+  out = out.replace(HL_RULES[1].re, m => `\x00${stash.push(`<span class="tk-s">${m}</span>`)-1}\x00`);
+  out = out.replace(HL_RULES[2].re, '<span class="tk-k">$1</span>');
+  out = out.replace(HL_RULES[3].re, '<span class="tk-n">$1</span>');
+  out = out.replace(HL_RULES[4].re, '<span class="tk-f">$1</span>');
+  return out.replace(/\x00(\d+)\x00/g, (_, i) => stash[+i]);
+}
+
+function md(src){
+  const blocks = [];
+  // 1) 代码块先行提取
+  src = src.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+    const html = `<div class="codeblock"><div class="codeblock-head"><span class="codeblock-lang">${esc(lang)||"text"}</span>
+      <button class="copy-btn" onclick="copyCode(this)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>复制</button></div>
+      <pre><code>${highlight(code.replace(/\n$/,""))}</code></pre></div>`;
+    return `\n\x01${blocks.push(html)-1}\x01\n`;
+  });
+  let h = esc(src);
+  // 2) 行内元素
+  h = h.replace(/`([^`\n]+)`/g, "<code>$1</code>")
+       .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+       .replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, "<em>$1</em>")
+       .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  // 3) 块级元素：按行组装
+  const lines = h.split("\n"), out = [];
+  let list = null, quote = null, table = null;
+  const closeAll = () => {
+    if (list){ out.push(`<${list}>${buf.join("")}</${list}>`); list = null; buf = []; }
+    if (quote){ out.push(`<blockquote>${quote}</blockquote>`); quote = null; }
+    if (table){ out.push(`<table>${table}</table>`); table = null; }
+  };
+  let buf = [];
+  for (let line of lines){
+    const ph = line.match(/^\x01(\d+)\x01$/);
+    if (ph){ closeAll(); out.push(blocks[+ph[1]]); continue; }
+    if (/^\s*$/.test(line)){ closeAll(); continue; }
+    let m;
+    if ((m = line.match(/^(#{1,3})\s+(.*)/))){ closeAll(); out.push(`<h${m[1].length}>${m[2]}</h${m[1].length}>`); continue; }
+    if (/^---+$/.test(line.trim())){ closeAll(); out.push("<hr>"); continue; }
+    if ((m = line.match(/^&gt;\s?(.*)/))){ if (list) closeAll(); quote = (quote||"") + `<p>${m[1]}</p>`; continue; }
+    if ((m = line.match(/^[-*]\s+(.*)/))){ if (list !== "ul"){ closeAll(); list = "ul"; buf = []; } buf.push(`<li>${m[1]}</li>`); continue; }
+    if ((m = line.match(/^\d+\.\s+(.*)/))){ if (list !== "ol"){ closeAll(); list = "ol"; buf = []; } buf.push(`<li>${m[1]}</li>`); continue; }
+    if (line.includes("|") && /^\|?.*\|.*\|?$/.test(line)){
+      const cells = line.replace(/^\|/,"").replace(/\|$/,"").split("|").map(c => c.trim());
+      if (cells.every(c => /^:?-{2,}:?$/.test(c))) continue; // 分隔行
+      if (!table){ closeAll(); table = `<tr>${cells.map(c=>`<th>${c}</th>`).join("")}</tr>`; }
+      else table += `<tr>${cells.map(c=>`<td>${c}</td>`).join("")}</tr>`;
+      continue;
+    }
+    if (list || quote || table){ closeAll(); }
+    out.push(`<p>${line}</p>`);
+  }
+  closeAll();
+  return out.join("\n");
+}
+
+window.copyCode = btn => {
+  const code = btn.closest(".codeblock").querySelector("code").innerText;
+  navigator.clipboard.writeText(code).then(() => {
+    btn.classList.add("done");
+    const old = btn.innerHTML;
+    btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M20 6L9 17l-5-5"/></svg>已复制';
+    setTimeout(() => { btn.classList.remove("done"); btn.innerHTML = old; }, 1600);
+  });
+};
+
+/* ---------- 消息构建 ---------- */
+function buildMsg(role, contentHtml){
+  const wrap = document.createElement("div");
+  wrap.className = `msg ${role}`;
+  const t = new Date().toLocaleTimeString("zh-CN", {hour:"2-digit", minute:"2-digit"});
+  wrap.innerHTML = `
+    <div class="avatar ${role}">${role === "ai"
+      ? '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/></svg>'
+      : "我"}</div>
+    <div class="msg-body">
+      <div class="bubble"><div class="md">${contentHtml}</div></div>
+      <div class="msg-meta">
+        <span>${role === "ai" ? "LiveRecorder 助手" : "我"} · ${t}</span>
+        ${role === "ai" ? `<span class="msg-actions">
+          <button title="复制" onclick="navigator.clipboard.writeText(this.closest('.msg').innerText);toast('已复制到剪贴板')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+          <button title="赞同" onclick="toast('感谢反馈')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg></button>
+          <button title="反对" onclick="toast('已记录反馈')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transform:scaleY(-1)"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg></button>
+        </span>` : ""}
+      </div>
+    </div>`;
+  return wrap;
+}
+
+function scrollBottom(smooth = true){
+  chatScroll.scrollTo({top: chatScroll.scrollHeight, behavior: smooth ? "smooth" : "auto"});
+}
+
+/* ---------- 演示回复 ---------- */
+function demoReply(q){
+  if (/抖音/.test(q)) return `录制抖音直播间只需三步：
+
+1. **复制链接** — 在抖音 App 内点「分享 → 复制链接」，得到形如 \`https://live.douyin.com/xxxx\` 的地址
+2. **粘贴到地址栏** — 每行一个直播间，支持批量
+3. **开始录制** — 默认使用原画画质，FLV 优先
+
+> 提示：开播检测默认 60 秒轮询一次，可在配置里调低。
+
+\`\`\`ini
+[录制设置]
+视频保存格式 = ts
+原画 = 是
+分段录制 = 1800
+\`\`\`
+
+分段保存为 ts 可以避免异常断电导致整个文件损坏，录制结束后可自动封装为 **MP4**。`;
+  if (/画质|原画/.test(q)) return `支持的画质档位如下：
+
+| 档位 | 说明 | 适用场景 |
+| --- | --- | --- |
+| 原画 | 主播推流原始码率 | 收藏、剪辑素材 |
+| 超清 | 平台转码 1080p | 日常观看存档 |
+| 高清 | 720p | 节省磁盘空间 |
+
+切换方式：在配置文件的 \`[录制设置]\` 节修改 \`画质 = 原画\`，或在 Web 面板实时调整。**FLV 优先策略**下原画最稳定；若原画拉流失败会自动降级到超清并记录日志。`;
+  if (/代理|海外|TikTok|Twitch/i.test(q)) return `海外平台（TikTok、Twitch、YouTube 等）需要配置代理才能拉流：
+
+- 在 \`config.ini\` 中设置 \`是否使用代理 = 是\`
+- 填写 \`代理地址 = http://127.0.0.1:7890\`（按你的实际端口）
+- **注意**：代理开关一旦误关，9 个海外平台会全部探测失败
+
+\`\`\`python
+# 配置读取统一入口，勿直接读 ini
+from src.config_bool import parse_config_bool
+use_proxy = parse_config_bool(raw, default=False)
+\`\`\`
+
+配置好后建议先用一个已知开播的直播间做端到端验证。`;
+  return `已收到：**${q}**
+
+我可以帮你处理这些任务：
+
+- 直播间地址解析与批量录制（支持 60+ 平台）
+- 画质、分段、转码、推送通知等配置讲解
+- 录制失败、网络异常的排查思路
+
+试着点击上方的快捷问题，或直接粘贴一个直播间链接。`;
+}
+
+/* ---------- 流式输出 ---------- */
+async function streamReply(text, mdEl){
+  // 先按 token 切块，再增量渲染：每步重渲染已完成部分 + 光标
+  const tokens = text.match(/(\S+\s*|\s+)/g) || [text];
+  let acc = "";
+  for (const tk of tokens){
+    if (stopStream) break;
+    acc += tk;
+    mdEl.innerHTML = md(acc) + '<span class="stream-caret"></span>';
+    // 代码块渲染时防止半截 <pre> 抖动：交给 md() 的占位机制自然处理
+    scrollBottom(false);
+    await new Promise(r => setTimeout(r, 24 + Math.random() * 46));
+  }
+  mdEl.innerHTML = md(acc);
+  return acc;
+}
+
+/* ---------- 发送流程 ---------- */
+function ensureSession(title){
+  if (activeId) return sessions.find(s => s.id === activeId);
+  const s = {id: Date.now().toString(36), title, messages: []};
+  sessions.unshift(s); activeId = s.id;
+  topbarTitle.textContent = title;
+  return s;
+}
+
+async function send(text){
+  text = text.trim();
+  if (!text || streaming) return;
+  const s = ensureSession(text.slice(0, 24) + (text.length > 24 ? "…" : ""));
+  emptyState.hidden = true; chatCol.hidden = false;
+
+  const userHtml = md(text);
+  chatCol.appendChild(buildMsg("user", userHtml));
+  s.messages.push({role: "user", html: userHtml});
+  input.value = ""; autoGrow(); sendBtn.disabled = true;
+  scrollBottom(); renderHistory();
+
+  // 打字指示
+  streaming = true; stopStream = false;
+  sendBtn.classList.add("streaming");
+  sendBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2.5"/></svg>';
+  const aiMsg = buildMsg("ai", '<div class="typing"><i></i><i></i><i></i></div>');
+  chatCol.appendChild(aiMsg); scrollBottom();
+
+  await new Promise(r => setTimeout(r, 520 + Math.random() * 500));
+  const mdEl = aiMsg.querySelector(".md");
+  const finalText = await streamReply(demoReply(text), mdEl);
+  s.messages.push({role: "ai", html: md(finalText)});
+  saveSessions();
+
+  streaming = false;
+  sendBtn.classList.remove("streaming");
+  sendBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>';
+  sendBtn.disabled = !input.value.trim();
+}
+
+sendBtn.onclick = () => {
+  if (streaming){ stopStream = true; return; }
+  send(input.value);
+};
+input.addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing){ e.preventDefault(); send(input.value); }
+});
+document.addEventListener("keydown", e => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k"){ e.preventDefault(); if (!streaming) newSession(); }
+});
+
+/* ---------- 输入框自适应 ---------- */
+function autoGrow(){
+  input.style.height = "auto";
+  input.style.height = Math.min(input.scrollHeight, 200) + "px";
+}
+input.addEventListener("input", () => { autoGrow(); sendBtn.disabled = !input.value.trim() && !streaming; });
+
+/* ---------- 快捷问题 ---------- */
+document.querySelectorAll(".suggest").forEach(b => b.onclick = () => send(b.dataset.q));
+
+/* ---------- Toast ---------- */
+let toastTimer;
+function toast(msg){
+  const t = $("#toast");
+  t.textContent = msg; t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 2000);
+}
+
+renderHistory();
+input.focus();
+</script>
+</body>
+</html>

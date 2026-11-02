@@ -1,0 +1,210 @@
+# =============================================================================
+# Docker Publish —— GHCR 多架构镜像发布（linux/amd64 + linux/arm64）
+# -----------------------------------------------------------------------------
+# 触发：仅 push tag `v*`。latest 只允许由**不可变的 tag 推**出来，
+#   不留 workflow_dispatch 覆盖 latest 的口子（那等于把发布物变成可反复改写的别名）。
+#   依据：docs/worklog/PROPOSAL_2026-10-02_linux-arm64-ffmpeg.md §二.5 与 §五.1。
+# 凭据：自动注入的 GITHUB_TOKEN + job 级 packages: write，不引入任何**手工配置**的 secret；
+#   锁的形态是「secrets.* 引用集合恰等于 {secrets.GITHUB_TOKEN}」，不是「不含 secrets.」
+#   ——后者会把 login 唯一能用的那把也禁掉。
+# 构建：两个原生 runner 各出一层，再由 merge job 用 imagetools 按 digest 合成清单。
+#   不走 QEMU 的原因：本镜像构建期要 apt 装 ffmpeg/nodejs、再装全量 Python 依赖，
+#   在模拟 aarch64 下这些是**整层重活**（trivy.yml 已注明完整 docker build 是全仓最重的一次外网动作）。
+# 安装链位置：本文件没有任何直装步骤，依赖一律在 Dockerfile 的镜像层里落，故
+#   AGENTS.md「网络安装重试统一走 .github/actions/retry」在本工作流没有适用点；
+#   「安装链只在 Dockerfile」这件事由结构锁钉住，防止有人把安装链挪进 job（那会同时绕过重试口径、
+#   并让「镜像里有什么」与「job 里装了什么」分家）。
+# 第三方动作 ref：一律浮动大版本标签。判据是 MIN-17 的区分线——本工作流的触发源是维护者推的
+#   `v*` tag（可信输入），与 build-release.yml 用 softprops/action-gh-release@v3 同一条线；
+#   trivy-action 的 SHA 钉定先例属「cron 无人值守 + 外部可读输入」那一侧，不得外推到 tag 触发的发布链。
+#   取值核实（2026-10-03 本机只读请求；命令与 HTTP 读数见 unit-6-report.md）：
+#     docker/login-action@v3、docker/setup-buildx-action@v3、docker/build-push-action@v6
+#     三个大版本标签**均存在**（raw.githubusercontent.com/<repo>/<tag>/action.yml → HTTP 200）；
+#     同一天 releases/latest 的重定向读数分别是 v4.6.0 / v4.4.1 / v7.4.0，即这里用的三个大版本
+#     都已被更新的一代取代。沿用 v3/v3/v6 是规格 §5.1 的明文取值，抬到 v4/v4/v7 属维护者决策，
+#     不在本次改动权限内（改动只需 ref 可解析，浮动标签本身会跟随该代的最新补丁位）。
+#   入参名以各版本 action.yml 为准，两处易错点已实测核对：build-push-action 的多平台入参是
+#     **platforms**（写成 platform 会被当作未知入参忽略、退化成单架构构建），
+#     其 manifest digest 经模块级 outputs 的 **digest** 暴露（写成别的名字 merge job 取到空串）。
+# 结构锁：tests/test_docker_publish_workflow.py（触发面 / runner↔platform 对应 / merge needs /
+#   凭据集合 / 最小权限 / APP_VERSION 注入 / 镜像名派生 / 无 job 内安装链 / cancel-in-progress）。
+# =============================================================================
+
+name: Docker Publish
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# 顶层只给读权限；packages: write 只在真要推镜像的三个 job 上按需授予（最小权限）。
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  # 发布类不允许半途取消：与 build-release.yml 同一条理由（推一半被杀会留下残缺的 tag/清单组合）。
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  prepare:
+    name: Prepare (image name & tags)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      image: ${{ steps.names.outputs.image }}
+      version: ${{ steps.names.outputs.version }}
+    steps:
+      # 不 checkout：这一步只从 GitHub 自带的环境变量派生镜像名与版本，无源码消费点。
+      - name: Extract image name and version
+        id: names
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 镜像名用 GITHUB_REPOSITORY_OWNER，绝不用仓库名或上游命名空间：fork 推自己的命名空间，
+          # 不会撞上游；GHCR 强制小写，故显式 tr 一遍（owner 带大写时推送会直接 4xx）。
+          IMAGE="${REGISTRY}/$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')/douyin-live-recorder"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            echo "::error::本工作流只应由 tag 触发（GITHUB_REF_TYPE=${GITHUB_REF_TYPE}）"
+            exit 1
+          fi
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+  docker-build-amd64:
+    name: Image (linux/amd64)
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    # digest 必须显式提升成 **job 级 output**：漏声明时 needs.*.outputs.digest 拿到空串，
+    # imagetools create 会报无效引用（而 build 本身全绿，最难归因的一种红）。
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push (amd64)
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          # provenance 必须是 false —— 这是**承重取值**，不是「顺手加的保险」：
+          # 为什么：默认口径分两层取证（2026-10-03 只读请求，命令与读数见 unit-6-report.md）——
+          #   ① BuildKit 层默认 mode=min：docs.docker.com/build/attestations/ 原文「Provenance
+          #   attestations with the mode=min level are added to images by default」；② 动作注入层
+          #   另有一档：build-push-action（v6/v7）的 action.yml 里 provenance **没有 default 键**，
+          #   入参缺失时其 src/context.ts 代拼 --attest，公开仓库拼 **mode=max**、私有才 mode=min。
+          # 不设会怎样：本步 push 的产物不再是单架构 image manifest，而是「镜像 + attestation」
+          #   两支的 **index**，于是 steps.build.outputs.digest 退化成 index digest、并随 job 级
+          #   output 一路喂给 merge job —— imagetools create 按该 digest 合成的对外
+          #   :latest / :vX.Y.Z 清单里多出一支 attestation manifest（它的 mediaType 本身合法，准确
+          #   说法是「作为 index 的一支、platform 记 unknown/unknown 且带 artifactType」，旧客户端 /
+          #   GHCR UI / cosign 一类不认 attestation-manifest 注解的消费方在平台解析上出分歧），
+          #   而整条流水线三步全绿：只有用户 docker pull 时才暴露（正是本文件警告过的形态）。
+          # 谁改这个取值会发生什么：改成 true 或删掉这一行 = 亲手改了 merge 合成清单的内容构成，
+          #   运行期零报警，只有结构锁 tests/test_docker_publish_workflow.py 会红。真想要 SLSA
+          #   签名是另一个决策：需 id-token: write + attest: write 并改走 buildx 的 attest 路径，
+          #   本工作流刻意两者都不具备，别在这里补个 true 就当已经签好了。
+          # [历史注] 2026-10-03 复核证伪两处旧写法（unknown mediaType、mode=min 即动作默认），已按上文两层口径改正，arm64 侧同改。
+          provenance: false
+          # 只推分架构的临时 tag；真正的对外 tag 由 merge job 在两个 digest 都齐了之后合成。
+          tags: ${{ needs.prepare.outputs.image }}:v${{ needs.prepare.outputs.version }}-amd64
+          # 镜像内版本仍经 build-arg 注入：Dockerfile 的 ARG 行序约束（MIN-14）与
+          # scripts/check_version.py 的断言都不动，本文件只负责把值传进去。
+          build-args: |
+            APP_VERSION=${{ needs.prepare.outputs.version }}
+
+  docker-build-arm64:
+    name: Image (linux/arm64)
+    needs: prepare
+    # 必须是原生 arm64 runner：与 ubuntu-24.04-arm 的接入方式同 build-release.yml 的发布矩阵
+    # （该标签已在 check_runtime_pins.RUNNER_TO_RUNTIME_KEY 登记为 linux-arm64）。
+    # 改成 ubuntu-latest 不会报错，只会在 QEMU 下模拟 aarch64 把整层重活重演一遍。
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push (arm64)
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          push: true
+          # 与 amd64 侧同一条承重的 false，两条取值必须一起改（docker-build-amd64 的注释里写了
+          # 完整因果，这里只留本架构特有的那份结论）：
+          # 为什么：默认口径分两层（逐条取证见 docker-build-amd64 侧注释）——BuildKit 层默认 mode=min；
+          #   而 build-push-action 的 provenance 入参**无 default 键**，缺失时由它自己的 src/context.ts
+          #   代拼 --attest：公开仓库拼 mode=max（本链推公开镜像，即此类）。结论一致——不显式写 false 必带 attestation。
+          # 不设会怎样：arm64 这一层 push 出来的是「镜像 + attestation」的 index，
+          #   steps.build.outputs.digest 变成 index digest，merge 按它合成的对外清单混入非镜像条目，
+          #   而 CI 三步全绿 —— 只在用户 docker pull arm64 时暴露。
+          # 谁改这个取值会发生什么：改 true / 删行 = 改了 merge 合成清单的内容构成且运行期无报警，
+          #   只有 tests/test_docker_publish_workflow.py 的结构锁会红；要 SLSA 签名是另一套权限
+          #   （id-token: write + attest: write）的独立决策，不在本文件里顺手加。
+          provenance: false
+          tags: ${{ needs.prepare.outputs.image }}:v${{ needs.prepare.outputs.version }}-arm64
+          build-args: |
+            APP_VERSION=${{ needs.prepare.outputs.version }}
+
+  docker-manifest:
+    name: Merge manifest (amd64 + arm64)
+    # needs 三者缺一不可：prepare 供镜像名/版本，两个构建 job 供各自架构的 digest。
+    needs: [prepare, docker-build-amd64, docker-build-arm64]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create and push multi-arch manifest
+        # 用 buildx 的原生命令而不是第三个第三方动作：语义完全等价（imagetools create 就是
+        # docker/buildx-action 内部跑的那条），少一个依赖也就少一处 ref 需要人工核实。
+        # 引用两个构建 job 的 manifest **digest** 而不是分架构临时 tag 名：digest 不可变，
+        # 临时 tag 之后被清理也不会让这份清单失去意义。
+        # 版本 tag 与 latest 在同一条命令里落：latest 只随不可变的 vX.Y.Z 一起产出，
+        # 因而「推 latest」这件事本身仍只由 tag 触发决定。
+        # 实参一律是 GH 表达式展开（与本文件其它 step 同形态）；值来自维护者推的 tag 名与
+        # 仓库 owner，属可信输入，不存在 prompt 注入面。
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create \
+            -t "${{ needs.prepare.outputs.image }}:v${{ needs.prepare.outputs.version }}" \
+            -t "${{ needs.prepare.outputs.image }}:latest" \
+            "${{ needs.prepare.outputs.image }}@${{ needs.docker-build-amd64.outputs.digest }}" \
+            "${{ needs.prepare.outputs.image }}@${{ needs.docker-build-arm64.outputs.digest }}"

@@ -1,15 +1,42 @@
-name: Issue Translator
+# issue 正文自动翻译（外部贡献者写的中日韩文 → 英文）。
+#
+# QUARANTINED（2026-09-21，MIN-17）：**已从自动触发降级为仅手动触发**，原因两条叠加：
+#   1. 输入不可信——触发源是任意外部贡献者的 issue / issue 评论正文，属于攻击者完全可控内容，
+#      而它被交给一个第三方非认证动作处理；
+#   2. ref 是浮动的 semver 标签（`usthe/issues-translate-action@v2.7`）——同 major 下
+#      上游可随时把新代码推到这个标签上，一旦被接管即等于「不可信输入 + 可被替换的代码」
+#      在带 issue 写权限的 job 里执行。
+#   原先还**没有任何 permissions: 块**，于是继承组织/仓库的默认（常为写权限偏宽）。
+#
+# 为什么不是「钉 SHA」：本项要求把 ref 换成**核实过的 commit SHA**，而本轮工作区处于离线
+# 处置环境、无法安全解析该标签对应的提交（宁可显式降级，也不能凭记忆或猜测填一个 SHA——
+# 填错的钉定值比不钉更危险，会让人以为已经收敛）。
+#
+# 重新启用自动翻译的前置条件（缺一律不开）：
+#   ① 把下面的 uses 换成从上游仓库页面**当场核对**的 40 位 commit SHA；
+#   ② 保留本文件的 `permissions:` 收敛（contents: read + issues: write，不得再放宽）；
+#   ③ 恢复 `issues: [opened]` / `issue_comment: [created]` 触发器时，同步在本段说明里
+#      记录 ① 的核对时间与来源。
+name: 'issue-translator'
 on:
-  issue_comment:
-    types: [created]
-  issues:
-    types: [opened]
+  # 仅手动触发：自动化流水线不再把不可信的 issue 正文直接喂给浮动第三方动作。
+  workflow_dispatch:
+
+# 最小权限：翻译动作只需要读代码 + 写 issue（改标题/加翻译说明），
+# 绝不需要 pull-requests / actions / packages / deployments 等默认写权限。
+permissions:
+  contents: read
+  issues: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      # 仍为浮动标签：见文件头「重新启用前置条件」①，自动触发恢复前必须先钉 SHA。
       - uses: usthe/issues-translate-action@v2.7
         with:
           IS_MODIFY_TITLE: false
-          CUSTOM_BOT_NOTE: Bot detected the issue body's language is not English, translate it automatically.
+          # 非必须，决定是否需要修改issue标题内容
+          # 若是true，则机器人账户@Issues-translate-bot必须拥有修改此仓库issue权限。可以通过邀请@Issues-translate-bot加入仓库协作者实现。
+          CUSTOM_BOT_NOTE: Bot detected the issue body's language is not English, translate it automatically. 👯👭🏻🧑🤝🧑👫🧑🏿🤝🧑🏻👩🏾🤝👨🏿👬🏿
+          # 非必须，自定义机器人翻译的前缀开始内容。

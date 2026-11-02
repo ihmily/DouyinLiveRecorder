@@ -1,0 +1,21 @@
+# 行尾唯一事实源：仓库侧统一 LF 存储、检出侧钉为 LF（eol=lf 覆盖各机 core.autocrlf 差异，
+# Windows 上「LF will be replaced by CRLF」告警即源于 autocrlf=true 与无属性检出的组合）。
+# 例外面（改前先读）：
+# - *.bat/*.cmd 必须 CRLF：cmd.exe 对 LF 批处理的标签/跳转解析有历史坑；
+# - src/javascript/*.js 签名脚本字节冻结：src/utils.py::_JS_SHA256_EXPECTED 对原始字节（rb）求
+#   SHA256，tests/test_utils.py::TestJsPinTable 锁「目录 *.js 与表键集合相等」，任何 eol 归一都会
+#   改字节打破钉定面，故 -text 双向禁转换（跨平台检出字节恒等、哈希恒等）；
+# - 二进制显式标注，不依赖 NUL 探测与 text=auto 兜底。
+* text=auto eol=lf
+
+*.bat text eol=crlf
+*.cmd text eol=crlf
+# 与 .agents/skills/.gitattributes 同口径：shebang 行不得带 \r（env 找 `bash\r` 解释器即失败）
+*.sh text eol=lf
+
+src/javascript/*.js -text
+
+*.png binary
+*.ico binary
+*.mo binary
+*.vbs binary

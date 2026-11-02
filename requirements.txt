@@ -1,7 +1,41 @@
-requests>=2.31.0
-loguru>=0.7.3
-pycryptodome>=3.20.0
-distro>=1.9.0
-tqdm>=4.67.1
-httpx[http2]>=0.28.1
-PyExecJS>=1.5.1
+# =============================================================================
+# DouyinLiveRecorder Python 运行时依赖清单
+# -----------------------------------------------------------------------------
+
+# ---------- HTTP 请求 ----------
+requests>=2.34.2          # 同步 HTTP 请求：现仅 ffmpeg / node 下载安装脚本使用（src/ffmpeg_install.py、src/node_install.py、src/ffmpeg_master_download.py）；各平台解析走 httpx 异步面，不经本包urllib3 是 requests 的传递依赖，但运行期的同步出站下载（拉取与哈希核对）都穿过它，故显式钉下限
+urllib3>=2.8.0            # 传输层（requests 之下；显式声明以防重装/解析回退落入 CVE-2026-44431 / 97687-97689 区间）
+httpx[http2]>=0.28.1      # 异步 HTTP 客户端（含 HTTP/2，src/async_http.py 并发抓取流地址）
+h2>=4.4.1                 # httpx http2=True 的运行期依赖（httpx Client.__init__ 内 `import h2`）
+socksio>=1.0.0            # httpx SOCKS 代理（socks5/socks5h）的运行期依赖（httpx 传输层内 `import socksio`）
+
+# ---------- 日志 ----------
+loguru>=0.7.3             # 结构化日志（src/logger.py 统一封装，DEBUG/ERROR 落盘 logs/streamget.log）
+
+# ---------- 加密 / 签名 ----------
+pycryptodome>=3.23.0      # 加密算法（SM3 / RC4 / AES，部分平台签名与响应解密）
+
+# ---------- 系统检测 ----------
+distro>=1.9.0             # Linux 发行版识别（自动选择下载源 / 给出安装提示）
+
+# ---------- CLI 进度条 ----------
+tqdm>=4.69.0              # 下载进度条显示（命令行录制模式）
+
+# ---------- JavaScript 执行引擎（运行各平台 JS 签名脚本，需 Node.js 运行时）----------
+exejs>=1.0.1              # PyExecJS 的活跃维护继任者，优先使用（src/spider.py、src/utils.py 导入）
+PyExecJS>=1.5.1           # 回退兼容：exejs 未安装时启用（已停止维护，仅作兜底）
+
+# ---------- GUI 图形界面（headless / Web 模式下非必需，但 pip 安装仍会拉取）----------
+PySide6>=6.12.0          # GUI 窗口层（src/gui_qt/），取代 ttk 主窗口：QSS token 能 1:1 还原docs/gui-redesign/index.html 的圆角/投影/弹簧动效。下界 6.12 为本机实测支持 Python 3.14.8 的最小版（Qt 6.12 wheel 提供 cp314 ABI）。2026-10-20 起Web 入口托盘（src/web_tray.py）改走 QSystemTrayIcon，故它同时是两个入口的运行时依赖（Web Analysis 不再 exclude 它）。
+
+# ---------- Web 管理面板（Starlette + uvicorn；阶段2 已移除 fastapi / pydantic）----------
+starlette>=1.3.1          # ASGI 工具集（src/web_api.py 直接依赖驱动 Web 面板，阶段2 起非传递依赖）
+uvicorn[standard]>=0.51.0  # ASGI 服务器（web.py 启动面板，[standard] 含 uvloop/ws 等可选件）
+
+# ---------- 弹幕（直播弹幕采集）运行时依赖 ----------
+websockets>=14.0          # additional_headers / proxy 为 14.0+ API：装到 12.x/13.x 时 connect() 直接TypeError 且被重连循环吞掉，表现为弹幕永远连不上
+protobuf>=6.33.5,<8       # 抖音弹幕协议解码（src/proto/douyin_pb2.py，protoc 生成模块）
+brotli>=1.2.1             # B站弹幕解压（src/ws_client.py 的限长解压助手，protover=3）；下限 1.2.1：PYSEC-2026-4322 影响 1.2.0、修复于 1.2.1，旧下限自身落在受影响段（2026-11-01 CI deps-audit 下限复核）
+
+# ---------- 国际化（i18n）----------
+PyYAML>=6.0.3             # YAML 翻译目录支持（i18n.py 加载 i18n/zh_TW.yaml；缺失仅损失 YAML 格式）

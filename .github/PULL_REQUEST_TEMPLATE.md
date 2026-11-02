@@ -1,16 +1,16 @@
 ### 📜 标题（Title）
 
-**请提供这个Pull Request中提议的更改的简洁描述：**  
+**请提供这个Pull Request中提议的更改的简洁描述：**
 <!-- Please provide a succinct description of the changes proposed in this pull request:. -->
 
-- 
+-
 
 ### 🔍 描述（Description）
 
 **请描述这个PR做了什么/为什么这些更改是必要的：**
 <!-- Please describe what this PR does / why these changes are necessary: -->
 
-- 
+-
 
 ### 📝 类型（Type of Change）
 
@@ -29,12 +29,12 @@
 **请描述您已经进行的测试：**
 <!-- Please describe the tests you've done: -->
 
-- 
+-
 
 **如果适用，请提供测试更改的说明：**
 <!-- If applicable, provide instructions for testing your changes -->
 
-- 
+-
 
 ### 📋 检查清单（Checklist）
 

@@ -12,7 +12,7 @@ body:
     attributes:
       label: ⚠️ 搜索是否存在类似问题
       description: >
-        🔍 [点击这里搜索历史issue](https://github.com/ihmily/DouyinLiveRecorder/issues?q=is%3Aissue) 使用关键词搜索，看看是否已经有人问过类似的问题。
+        🔍 [点击这里搜索历史issue](https://github.com/y123ao6/DouyinLiveRecorder/issues?q=is%3Aissue) 使用关键词搜索，看看是否已经有人问过类似的问题。
       options:
         - label: 我已经搜索过issues，没有找到相似的问题
           required: true
@@ -29,12 +29,9 @@ body:
   - type: dropdown
     attributes:
       label: 🐍 如果是使用源代码运行，请选择你的Python环境版本
-      description: 请选择你运行程序的Python版本。
+      description: 请选择你运行程序的Python版本；当前源码仅支持 Python 3.14+。
       options:
-        - Python 3.10
-        - Python 3.11
-        - Python 3.12
-        - Python 3.13
+        - Python 3.14
         - Other (请在问题中说明)
     validations:
       required: false

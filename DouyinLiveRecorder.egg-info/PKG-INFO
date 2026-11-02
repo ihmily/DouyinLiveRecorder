@@ -1,0 +1,1072 @@
+Metadata-Version: 2.4
+Name: DouyinLiveRecorder
+Version: 4.7.0
+Summary: 支持抖音、TikTok、YouTube、快手等60+平台的直播录制工具，支持循环录制、多人录制、消息推送
+Author-email: y123ao6 <zmzx0690@agent.qq.com>
+License: MIT
+Project-URL: Homepage, https://github.com/y123ao6/DouyinLiveRecorder
+Project-URL: Documentation, https://github.com/y123ao6/DouyinLiveRecorder
+Project-URL: Repository, https://github.com/y123ao6/DouyinLiveRecorder
+Project-URL: Issues, https://github.com/y123ao6/DouyinLiveRecorder/issues
+Project-URL: Changelog, https://github.com/y123ao6/DouyinLiveRecorder/releases
+Project-URL: Sponsor, https://github.com/sponsors/y123ao6
+Keywords: live-streaming,recorder,douyin,tiktok,bilibili,twitch,youtube,直播录制,抖音,虎牙,斗鱼
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Environment :: Console
+Classifier: Environment :: GUI
+Classifier: Intended Audience :: End Users/Desktop
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Classifier: Operating System :: MacOS X
+Classifier: Operating System :: Microsoft :: Windows :: Win32
+Classifier: Operating System :: POSIX :: Linux
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.14
+Classifier: Topic :: Multimedia :: Video :: Capture
+Classifier: Topic :: Communications :: Chat
+Requires-Python: >=3.14
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: requests>=2.34.2
+Requires-Dist: urllib3>=2.8.0
+Requires-Dist: loguru>=0.7.3
+Requires-Dist: pycryptodome>=3.23.0
+Requires-Dist: distro>=1.9.0
+Requires-Dist: tqdm>=4.69.0
+Requires-Dist: httpx[http2]>=0.28.1
+Requires-Dist: h2>=4.4.1
+Requires-Dist: socksio>=1.0.0
+Requires-Dist: exejs>=1.0.1
+Requires-Dist: PyExecJS>=1.5.1
+Requires-Dist: PySide6>=6.12.0
+Requires-Dist: starlette>=1.3.1
+Requires-Dist: uvicorn[standard]>=0.51.0
+Requires-Dist: websockets>=14.0
+Requires-Dist: protobuf<8,>=6.33.5
+Requires-Dist: brotli>=1.2.1
+Requires-Dist: PyYAML>=6.0.3
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.21.0; extra == "dev"
+Requires-Dist: pytest-cov>=4.0.0; extra == "dev"
+Requires-Dist: black>=23.0.0; extra == "dev"
+Requires-Dist: isort>=5.12.0; extra == "dev"
+Requires-Dist: mypy>=1.5.0; extra == "dev"
+Requires-Dist: pre-commit>=3.6.0; extra == "dev"
+Provides-Extra: gui
+Requires-Dist: PySide6>=6.12.0; extra == "gui"
+Provides-Extra: build
+Requires-Dist: pyinstaller>=6.10.0; extra == "build"
+Dynamic: license-file
+
+![video_spider](https://socialify.git.ci/y123ao6/DouyinLiveRecorder/image?font=Inter&forks=1&language=1&owner=1&pattern=Circuit%20Board&stargazers=1&theme=Light)
+
+简体中文&nbsp;&nbsp;|&nbsp;&nbsp;[**English**](README_EN.md)
+
+## 💡 简介
+
+[![Python Version](https://img.shields.io/badge/python-v3.14%2B-blue?logo=python)](https://www.python.org/downloads/)
+[![Node.js Version](https://img.shields.io/badge/node.js-LTS_v24%2B-blue?logo=node.js)](https://nodejs.org/en/download)
+[![FFmpeg Version](https://img.shields.io/badge/ffmpeg-v9.0%2B-blue?logo=ffmpeg)](https://www.ffmpeg.org/download.html)
+[![Supported Platforms](https://img.shields.io/badge/platforms-Windows%7CLinux%7CmacOS-blue)](https://github.com/y123ao6/DouyinLiveRecorder)
+[![GitHub issues](https://img.shields.io/github/issues/y123ao6/DouyinLiveRecorder)](https://github.com/y123ao6/DouyinLiveRecorder/issues)
+[![Latest Release](https://img.shields.io/github/v/release/y123ao6/DouyinLiveRecorder)](https://github.com/y123ao6/DouyinLiveRecorder/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/y123ao6/DouyinLiveRecorder/total)](https://github.com/y123ao6/DouyinLiveRecorder/releases/latest)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/y123ao6/DouyinLiveRecorder)](https://github.com/y123ao6/DouyinLiveRecorder/stargazers)
+
+一款**简易**的可循环值守的直播录制工具，基于 FFmpeg 实现多平台直播源录制，支持自定义配置录制以及直播状态推送。
+
+上游项目：[ihmily/DouyinLiveRecorder](https://github.com/ihmily/DouyinLiveRecorder)
+
+## ✨ 功能特性
+
+| 功能 | 说明 |
+| --- | --- |
+| 🎯 **多平台支持** | 支持抖音、TikTok、YouTube、快手、虎牙、斗鱼、B站等 **51 个平台**（持续添加中） |
+| 🔄 **循环值守** | 自动检测直播状态，开播自动录制，断播自动停止 |
+| 🎬 **多种格式** | 支持 TS、MKV、FLV、MP4、MP3、M4A 等格式输出 |
+| 🖥️ **三模式运行** | 命令行模式、GUI 图形界面模式、Web 管理面板模式 |
+| 📊 **画质监控** | 实时检测各直播间实际画质，画质降级时自动告警 |
+| 💬 **弹幕录制** | 抖音 / 斗鱼 / 虎牙 / B站 / TwitchTV 弹幕采集，按分片输出 SRT 字幕，与视频同起同停 |
+| 👀 **弹幕监控** | 独立的弹幕实时查看模式（不落盘），GUI 与 Web 面板均可查看 |
+| 🏷️ **主播名自动更新** | 主播改名后自动同步 `URL_config.ini` 并重命名录制目录与文件 |
+| 📱 **消息推送** | 支持钉钉、微信、邮箱、TG、Bark、NTFY、PushPlus 等推送 |
+| 🐳 **Docker 支持** | 支持 Docker 容器化部署，开箱即用 |
+| 🌐 **国际化** | 内置简体中文 / English (US) / English (UK) / 繁體中文 四语，GUI 与 Web 面板**免重启热切换** |
+| ⚙️ **灵活配置** | 支持按直播间自定义画质、格式、分段录制等，配置改动热加载 |
+| 🔐 **Web 安全** | Token 认证、登录爆破限流、路径穿越防护、敏感配置脱敏、未认证写保护 |
+
+## 🚀 快速开始
+
+### 方式一：下载运行包（推荐新手）
+
+1. 进入 [Releases](https://github.com/y123ao6/DouyinLiveRecorder/releases) 下载最新发布的 zip 压缩包。
+   每个平台各出 **lite**（不含内置 ffmpeg/node，首启时程序尝试自动获取）与 **full**（内置运行时）两包。
+   附件名的**平台段**由 `build_exe.make_zip()` 取 `sys.platform` 经 `{"win32": "windows", "darwin": "macos"}`
+   归一（其余一律归 `linux`），**架构段**才是 `platform.machine().lower()` 的实际取值：
+
+   | 运行平台 | 附件名 |
+   | --- | --- |
+   | Windows x64 | `DouyinLiveRecorder-v<版本>-windows-amd64-lite.zip` / `-full.zip` |
+   | Linux x86_64 | `DouyinLiveRecorder-v<版本>-linux-x86_64-lite.zip` / `-full.zip` |
+   | **Linux arm64** | `DouyinLiveRecorder-v<版本>-linux-aarch64-lite.zip` / `-full.zip` |
+   | macOS（Apple Silicon） | `DouyinLiveRecorder-v<版本>-macos-arm64-lite.zip` / `-full.zip` |
+
+   > Linux arm64 的架构段写作 **`aarch64`**——那是 `platform.machine().lower()` 在该架构上的实际取值，
+   > **不是** `arm64`；该包由四平台发布矩阵（`windows` / `linux` / `linux-arm64` / `macos`）产出。
+   > Linux 上 lite 包的自动获取顺序是 `yum` → `apt` → 官方月末构建直下（后者按 GitHub 公布的
+   > asset digest 校验，需 `api.github.com` 可达；全链路都失败时才会提示手动安装）。
+2. 解压后，在 `config` 文件夹内的 `URL_config.ini` 中添加直播间地址
+3. 运行 `DouyinLiveRecorder.exe` 开始录制
+
+### 方式二：源码运行（推荐开发者）
+
+```bash
+# 克隆项目
+git clone https://github.com/y123ao6/DouyinLiveRecorder.git
+cd DouyinLiveRecorder
+
+# 安装依赖（推荐使用 uv）
+uv sync
+
+# 或者使用 pip
+pip install -r requirements.txt
+
+# 运行程序
+python main.py        # 命令行模式
+python gui.py         # GUI 图形界面模式
+python web.py         # Web 管理面板模式
+```
+
+### 方式三：Docker 运行
+
+```bash
+# 命令行录制模式（默认，不占用端口）
+docker compose up -d
+
+# Web 管理面板模式（浏览器访问 http://localhost:8000）
+# 注意：需先在 config/config.ini 的 [Web] 节设置 web_host = 0.0.0.0，
+#       并建议开启 web_auth_enable = true 配置访问密码
+docker compose --profile web up -d
+
+# 或本地构建并启动（APP_VERSION 取自 pyproject.toml；缺省则镜像 LABEL version 固化为空串）
+docker build --build-arg APP_VERSION="$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")" -t douyin-live-recorder .
+docker run -d -v ./config:/app/config -v ./downloads:/app/downloads -v ./logs:/app/logs -v ./backup_config:/app/backup_config douyin-live-recorder
+```
+
+> 容器内 FFmpeg 与 Node.js 由镜像自带（apt 安装），无需挂载本地 `ffmpeg/`、`node/` 目录；
+> `config/`、`downloads/`、`logs/`、`backup_config/` 通过卷挂载持久化。
+> 不想本地构建时，可直接拉取 GHCR 上的预构建多架构镜像（`linux/amd64` + `linux/arm64`），
+> 命令见下方「🐋 Docker 部署」的「拉取预构建的多架构镜像（GHCR）」小节。
+
+### 手动安装 ffmpeg（Windows 用户指南）
+
+Windows 版会在启动时自动从官方源 gyan.dev 下载 ffmpeg——**这是 Windows 上唯一的自动下载路径**（不设镜像兜底，
+因为镜像产物没有可核对的官方摘要）。自动安装失败时（多为 gyan.dev 不可达、代理/防火墙拦截，
+或 SHA256 基线校验被拒），照下面三步手动安装即可。
+
+1. **下载官方 zip**：<https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip>
+   需要自行核对来源时，比对该 zip 的官方摘要文档
+   <https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip.sha256>（程序自动安装时校验用的就是这份）。
+2. **把解压出来的 `bin` 文件夹放进程序目录并改名为 `ffmpeg`**：
+
+| 你的运行方式 | 放置结果（务必是这一层） |
+| --- | --- |
+| 下载的运行包（exe） | `DouyinLiveRecorder\ffmpeg\ffmpeg.exe` |
+| 源码运行 / 单文件版脚本 | `<项目根>\ffmpeg\ffmpeg.exe` |
+
+   - **不要**保留成 `ffmpeg\bin\ffmpeg.exe`——程序只把 `ffmpeg\` 这一层目录加入查找路径，不会进子目录寻找。
+   - 请把同目录下的 `ffprobe.exe` 一并放入（发布包出包自检要求 ffmpeg 与 ffprobe 都在且可执行）。
+3. **验证**：在 `ffmpeg\` 目录里执行 `ffmpeg -version`，能打印版本号即成功。随后重启程序，
+   日志（`logs\streamget.log`）中不再出现「未安装 ffmpeg。」即为生效。
+
+也可以改用系统级安装（`winget install Gyan.FFmpeg`、Chocolatey，或任何你信任的构建）把它装进
+系统 `PATH`——程序同样按 `PATH` 查找，两种放法等效。
+
+**报错是 SHA256 基线校验被拒时**（日志会写出「请删除 …`_ffmpeg_official*.zip.sha256`… 后重试」）：
+删除**程序目录**下匹配 `_ffmpeg_official*.zip.sha256` 的旁路文件，再重启程序。该文件记录的是首次
+下载时核对到的摘要，而 gyan.dev 的下载链接是滚动地址——上游发布新构建后旧基线必然失配，删掉它等于
+让程序按新构建重新记账。（其校验强度等同于该目录的写权限，不是独立的信任根，故不能替代官方摘要文档。）
+
+> 适用范围：**full 版**发布包已内置 ffmpeg，一般无需任何安装；**lite 版**与单文件版不含，需自动安装
+> 或按上文手动安装。macOS 走 Homebrew；Linux 依次为 `yum` → `apt` → 官方月末构建直下（按 `api.github.com`
+> 公布的 asset digest 校验，需该域名可达）；三条都失败时按各自发行版方式手动安装。
+> Apple Silicon 上「包内那份」与「系统原生那份」的取舍见下方常见问题。
+
+## 🎈 已支持平台
+
+**国内站点（37 个）**：抖音 | 快手 | 虎牙 | 斗鱼 | YY | B站 | 小红书 | bigo | blued | 网易CC | 千度热播 | 猫耳FM | Look直播 | TwitCasting | 百度 | 微博 | 酷狗 | 花椒 | 流星 | Acfun | 畅聊 | 映客 | 音播 | 知乎 | 嗨秀 | VV星球 | 17Live | 浪Live | 飘飘 | 六间房 | 乐嗨 | 花猫 | 淘宝 | 京东 | 咪咕 | 连接 | 来秀
+
+**海外站点（14 个）**：TikTok | SOOP(原AfreecaTV) | PandaTV | WinkTV | TTingLive(原Flextv) | PopkonTV | TwitchTV | LiveMe | ShowRoom | CHZZK | Shopee | YouTube | Faceit | Picarto
+
+> 合计 **51 个**平台（对外标称 60+，含持续添加中的平台）。各平台数据获取函数位于 `src/spider.py`，流地址解析位于 `src/stream.py`。
+
+**弹幕录制支持（5 个平台）**：抖音直播 | 斗鱼直播 | 虎牙直播 | B站直播 | TwitchTV
+
+**实际画质回采与降级告警（7 个平台）**：抖音 | TikTok | 快手 | 虎牙 | 斗鱼 | B站 | 网易CC
+
+**斗鱼支持的链接形态（两种域名走同一套录制流程）**：`https://www.douyu.com/8751648` | `https://m.douyu.com/8751648`（移动端）。尾斜杠（`.../8751648/`）、查询参数（`...?rid=8751648`、`...?dyshid=...`）、`http://` 协议与附加路径均可识别；字母号与分享链接会先还原为数字房间号再取流。链接缺少房间号或房间号非法时给出明确错误提示（链接入日志前一律脱敏）。
+
+**B站支持的链接形态（两种域名走同一套录制流程）**：`https://live.bilibili.com/22747736` | `https://b23.tv/22747736`（移动端分享短域，纯数字房间号；尾斜杠、查询参数与 `http://` 协议均可识别）。字母短码（如 `https://b23.tv/ZyQrgYf`）会先跟随 302 跳转解析出真实房间号（结果进程内缓存，不重复请求）再取流；跳转落地不是B站直播间、或链接缺少房间号 / 房间号非法时给出明确错误提示（链接入日志前一律脱敏）。
+
+**虎牙支持的链接形态（移动端分享短链与桌面链接走同一套录制流程）**：`https://www.huya.com/30764624` | `https://hy.fan/30764624`（移动端分享域，纯数字路径段即房间号；尾斜杠、查询参数与 `http://` 协议均可识别）。字母短码（如 `https://hy.fan/JbmwoV`）会先跟随 301 跳转解析出真实房间段（结果进程内缓存，不重复请求）再归一为桌面链接取流；跳转落地不是虎牙直播间、或链接缺少房间号 / 房间号非法时给出明确错误提示（链接入日志前一律脱敏）。
+
+## 📁 项目结构
+
+```
+DouyinLiveRecorder/
+├── config/                     # config.ini（主配置）+ URL_config.ini（直播间列表）
+├── assets/app.ico              # 应用图标（GUI 托盘 / Web favicon / 打包产物）
+├── src/
+│   ├── 入口与调度：__init__ · spider · stream · stream_select · scheduler · room
+│   ├── 基础设施：utils · logger · proxy · ttwid · http_config · async_http · sync_http
+│   ├── 配置与安装：config_io · config_bool · config_read · node_install · ffmpeg_*
+│   ├── 录制后处理：ffmpeg_proc · video_postprocess · notify · recorder_status
+│   ├── Web：web_api · web_models · web_config · web_tray
+│   ├── GUI：gui_qt/（app · main_window · theme · widgets · tray · settings_dialog · pages 五页）+ ui_*
+│   ├── 弹幕：base · collector · danmaku_monitor · srt_writer · ws_client · platforms/ · proto/
+│   └── javascript/             # 5 个签名脚本
+├── web/                        # index.html · app.js · motion.js · style.css
+├── i18n/                       # zh_CN po/mo（1206 键 + 头部 = 1207 条）· en_US.json · en_GB.json · zh_TW.yaml
+├── typings/                    # 第三方类型存根
+├── downloads/ · logs/ · backup_config/  # 运行时产物（git 忽略）
+├── scripts/                    # run_gates · check_* · compile_po · sync_metadata · smoke_test · sync_version
+├── tests/                      # pytest 用例 + frontend/*.mjs
+├── docs/                       # agent-reference · changelog · worklog
+├── main.py / gui.py / web.py   # CLI / GUI / Web 三个入口
+├── i18n.py · msg_push.py · build_exe.py
+├── requirements.txt · pyproject.toml · uv.lock
+├── Dockerfile · docker-compose.yaml · .dockerignore · .gitignore · .gitattributes
+├── index.html · StopRecording.vbs
+└── README.md · README_EN.md · CODE_WIKI.md · CODE_WIKI_EN.md · AGENTS.md
+```
+
+> 完整逐文件目录树见 [`CODE_WIKI.md`](CODE_WIKI.md) 的「目录结构」。
+
+## ⚙️ 配置说明
+
+### 基础配置 (config/config.ini)
+
+> 同一节内出现重复键不再让整份配置失效：按最后一次取值读取，并落一条点名「节 / 键 / 行号」的告警（经 `src/config_read.py` 容错读取层，2026-10-17 起生效）。
+
+```ini
+[录制设置]
+# 界面语言：zh_CN | en_US | en_GB | zh_TW（留空跟随系统语言；值支持 zh_cn/zh-CN/en/en-GB/zh-Hant 等写法，自动归一；对应语言文件缺失时回退 en_US）
+language =
+# 是否跳过代理检测(是/否)
+是否跳过代理检测(是/否) = 是
+# 是否启用日志文件(是/否)
+是否启用日志文件(是/否) = 是
+# 启动时清理陈旧字节码缓存：仅当版本号或源码内容变化时清一次（源码没变则零动作）；
+# 范围只有程序目录与 src/ 下的 __pycache__，不含 tests/ scripts/ downloads/ 等目录
+是否启动时清理陈旧字节码缓存(是/否) = 是
+# 直播保存路径(不填则默认 downloads/)
+直播保存路径(不填则默认) =
+# 主播改名时自动更新 URL_config.ini 并同步重命名录制目录/文件（默认 是）
+是否自动更新主播名(是/否) = 是
+# 保存文件夹是否以作者区分
+保存文件夹是否以作者区分 = 是
+# 保存文件夹是否以时间区分
+保存文件夹是否以时间区分 = 否
+# 保存文件夹是否以标题区分
+保存文件夹是否以标题区分 = 否
+# 保存文件名是否包含标题
+保存文件名是否包含标题 = 否
+# 是否去除名称中的表情符号
+是否去除名称中的表情符号 = 是
+# 视频保存格式 ts|mkv|flv|mp4|mp3音频|m4a音频
+视频保存格式ts|mkv|flv|mp4|mp3音频|m4a音频 = ts
+# 录制画质 原画|超清|高清|标清|流畅
+原画|超清|高清|标清|流畅 = 原画
+# 自定义画质选项(逗号分隔) - 用户自选画质子集，留空或全部非法时回退引擎内置全集（默认 空）；
+# WEB 端增删画质 / GUI 端「切换画质」写回本项，选非默认画质按「画质,直播间地址」写回 config/URL_config.ini
+自定义画质选项(逗号分隔) =
+# 是否使用代理ip(是/否)
+是否使用代理ip(是/否) = 否
+# 代理地址
+代理地址 =
+# 同一时间访问网络的线程数
+同一时间访问网络的线程数 = 3
+# 最大同时录制数 - 全局并发录制上限，0 为不限制（默认 0）；改值后下一轮检测循环生效
+最大同时录制数(0为不限制) = 0
+# 循环时间(秒) - 直播状态检测间隔（默认 60）
+循环时间(秒) = 60
+# 排队读取网址时间(秒)
+排队读取网址时间(秒) = 0
+# 是否显示循环秒数
+是否显示循环秒数 = 否
+# 是否显示直播源地址
+是否显示直播源地址 = 否
+# 分段录制是否开启
+分段录制是否开启 = 是
+# 是否启用HLS采集(是/否) - 关闭则只走 FLV 等非 HLS 候选
+是否启用HLS采集(是/否) = 是
+# HLS采集排除平台(逗号分隔) - 命中平台无视「是否启用HLS采集」配置、恒按 FLV 采集
+# （平台名须与日志/配置中显示的完全一致，如：斗鱼直播,虎牙直播；留空不排除任何平台）
+HLS采集排除平台(逗号分隔) = 虎牙直播
+# 是否启用https录制 - 已整合原「是否强制启用https录制」与「是否禁用SSL证书验证(是/否)」：
+# 开启 = 流地址以 https 拉流并跳过 SSL 证书校验；关闭 = 流地址以 http 拉流并恢复默认证书校验
+# （旧键「是否强制启用https录制」的值会自动迁移继承；TikTok/YouTube 等 https-only 海外平台在关闭时保持原样）
+是否启用https录制 = 是
+# 禁用SSL证书验证的平台(逗号分隔) - 仅在「是否启用https录制 = 否」（http 模式、需证书校验）时生效。
+# FFmpeg 9.0 起 TLS 证书验证默认开启，证书异常平台需在此豁免；启动时会自动追加必需平台
+# （虎牙直播 / B站直播），只追加不移除用户手填项
+禁用SSL证书验证的平台(逗号分隔) = 虎牙直播,B站直播
+# 录制空间剩余阈值(gb)
+录制空间剩余阈值(gb) = 1.0
+# 视频分段时间(秒)（默认 1800）
+视频分段时间(秒) = 1800
+# 录制完成后自动转为mp4格式
+录制完成后自动转为mp4格式 = 否
+# mp4格式重新编码为h264
+mp4格式重新编码为h264 = 否
+# 追加格式后删除原文件
+追加格式后删除原文件 = 是
+# 生成时间字幕文件
+生成时间字幕文件 = 否
+# 是否录制完成后执行自定义脚本
+是否录制完成后执行自定义脚本 = 否
+# 自定义脚本执行命令
+自定义脚本执行命令 =
+# 使用代理录制的平台(逗号分隔)
+使用代理录制的平台(逗号分隔) = tiktok, sooplive, pandalive, winktv, flextv, popkontv, twitch, liveme, showroom, chzzk, shopee, shp, youtu, faceit
+# 额外使用代理录制的平台(逗号分隔)
+额外使用代理录制的平台(逗号分隔) =
+# 是否录制弹幕(是/否) - 开启后弹幕落为 SRT 字幕文件，与视频录制同起同停
+是否录制弹幕(是/否) = 是
+# 是否弹幕监控(是/否) - 仅实时查看弹幕、不写 SRT（与弹幕录制解耦，可单独开启）
+是否弹幕监控(是/否) = 是
+# 弹幕分片时长(秒) - SRT 分片粒度，建议与「视频分段时间(秒)」一致
+弹幕分片时长(秒) = 1800
+# 弹幕录制平台(逗号分隔) - 目前支持的 5 个平台
+弹幕录制平台(逗号分隔) = 斗鱼直播,B站直播,虎牙直播,抖音直播,TwitchTV
+# 单次录制时长上限（秒）；0 表示不限制
+单次录制时长上限(秒,0为不限制) = 0
+```
+
+### 推送配置 (config/config.ini)
+
+```ini
+[推送配置]
+# 可选微信|钉钉|tg|邮箱|bark|ntfy|pushplus 可填多个
+直播状态推送渠道 =
+钉钉推送接口链接 =
+微信推送接口链接 =
+bark推送接口链接 =
+bark推送中断级别 = active
+bark推送铃声 = bell
+钉钉通知@对象(填手机号) =
+钉钉通知@全体(是/否) = 否
+tgapi令牌 =
+tg聊天id(个人或者群组id) =
+smtp邮件服务器 =
+是否使用smtp服务ssl加密(是/否) = 是
+smtp邮件服务器端口 =
+邮箱登录账号 =
+发件人密码(授权码) =
+发件人邮箱 =
+发件人显示昵称 =
+收件人邮箱 =
+ntfy推送地址 =
+ntfy推送标签 = tada
+ntfy推送邮箱 =
+pushplus推送token =
+自定义推送标题 = 直播间状态更新通知
+自定义开播推送内容 =
+自定义关播推送内容 =
+只推送通知不录制(是/否) = 否
+直播推送检测频率(秒) = 1800
+开播推送开启(是/否) = 是
+关播推送开启(是/否) = 否
+```
+
+### Cookie 配置 (config/config.ini)
+
+```ini
+[Cookie]
+# 录制抖音必填：请填入从浏览器 live.douyin.com 复制的有效 cookie（至少包含 ttwid）
+# 留空将自动尝试获取访客 ttwid（可能触发风控，建议填写）
+抖音cookie =
+# 单独指定抖音 ttwid（留空则由 src/ttwid.py 自动获取并进程级缓存）
+ttwid =
+快手cookie =
+tiktok_cookie =
+tiktok_guest_cookie =
+虎牙cookie =
+斗鱼cookie =
+yy_cookie =
+b站cookie =
+小红书cookie =
+# 小红书 app 端接口的会话 sid（xy-common-params 头），留空则用内置缺省（可能已过期）
+# 优先级：环境变量 XHS_SESSION_SID > 本键 > 内置缺省
+xhs_session_sid =
+bigo_cookie =
+# ... 共 51 个平台 cookie 键，其余详见 config.ini
+```
+
+> 访客类 cookie（抖音 ttwid、快手 did 等）由 `src/cookie_cache.py` 以「归一化网址 + 代理」为 key 做进程级共享缓存（默认 30 分钟 TTL），多直播间并发时不会重复拉取触发风控。
+
+### 授权配置 (config/config.ini)
+
+```ini
+[Authorization]
+# PopkonTV 登录后取得的 token（由账号密码自动登录后写回）
+popkontv_token =
+```
+
+### 账号密码配置 (config/config.ini)
+
+```ini
+[账号密码]
+sooplive账号 =
+sooplive密码 =
+flextv账号 =
+flextv密码 =
+popkontv账号 =
+partner_code = P-00001
+popkontv密码 =
+twitcasting账号类型 = normal
+twitcasting账号 =
+twitcasting密码 =
+```
+
+### Web 管理面板配置 (config/config.ini)
+
+```ini
+[Web]
+# Web 管理面板监听地址（默认仅本机；Docker/LAN 部署再显式改为 0.0.0.0）
+web_host = 127.0.0.1
+# Web 管理面板端口
+web_port = 8000
+# 是否启用密码登录（true/false）
+web_auth_enable = false
+# 访问密码（启用认证时必填）
+web_password =
+# token 有效期（秒）
+web_token_expiry = 86400
+# 是否显示控制台窗口（false 时后台运行，日志写入 logs/web_console.log）
+web_show_console = true
+# 控制台最小化到系统托盘（而非任务栏），仅 Windows 生效；
+# 关闭按钮会被禁用，退出请使用托盘图标的「退出程序」
+web_minimize_to_tray = true
+# 受信任的反向代理来源（逗号分隔）。留空时不解析 X-Forwarded-For；
+# 置于 Nginx/Caddy 之后时填入代理 IP，登录限流才能取到真实客户端 IP
+web_trusted_proxy =
+# 允许的 Host / Origin 白名单（逗号分隔）。仅在把 web_host 绑到 0.0.0.0/:: 且通过域名访问时需要；
+# 未列出的多级域名 Host 会被拒绝，用于阻断 DNS 重绑定（attacker.tld → 127.0.0.1）
+web_allowed_hosts =
+# 面板图标路径：Web 面板右上角「导入图标」上传后写入（副本在 config/icons/ 下）；
+# 同时用于浏览器标签图标（GET /favicon.ico）与 Windows 托盘图标。留空 = 内置 assets/app.ico
+web_tray_icon =
+```
+
+> `web_host` 在仓库默认配置中为 `127.0.0.1`（仅本机可访问）。Docker 或需局域网/公网访问时改为 `0.0.0.0`，并务必同时开启 `web_auth_enable` 与 `web_password`。
+
+### GUI 界面配置 (config/config.ini)
+
+```ini
+[GUI]
+# 界面主题：light | dark | high_contrast（留空跟随系统外观明暗；GUI 侧边栏「界面主题」菜单选择后自动写回）
+gui_theme =
+# 界面缩放：85 | 100 | 115 | 130 | 150（留空 = 按屏幕可用区自动选档；菜单选择后即时生效并写回）
+gui_scale =
+# 界面字体：留空 = 系统默认（Microsoft YaHei UI）；填字体族名即用之
+gui_font =
+# 自定义字体文件路径：由侧边栏「导入字体…」写入；字体副本存放在 config/fonts/ 下
+gui_font_file =
+# 自定义托盘 / 窗口图标路径：由侧边栏「导入图标…」写入；图标副本存放在 config/icons/ 下
+# 留空 = 内置图标 assets/app.ico（16/24/32/48/64/128/256 七档）
+gui_tray_icon =
+```
+
+> 字体相关说明：下拉里的预设族按**本机是否已安装**过滤，避免出现「选了没反应」的项；
+> 「导入字体…」支持 `.ttf` / `.otf` / `.ttc`（SFNT 容器），`.woff2` / `.woff` 属网页传输格式、
+> Qt 在 Windows 下无法直接加载网页字体格式，需先转成 ttf/otf；日志终端与 URL 编辑器固定用等宽字体，
+> 不随此项变化（保持字符对齐）。
+>
+> 图标相关说明：侧边栏「导入图标…」只接受 `.ico`——Windows 的托盘、资源管理器、任务栏与窗口标题栏
+> 都从 ICO 容器里按场景取档（16px 托盘、256px 大图标），单一 PNG 在这几处要么发虚要么不被识别。
+> 导入时必须含 16×16（缺则托盘被系统硬缩、圆环糊成一团），建议同时含 256×256（缺只提示、不拦）。
+> 图标副本落 `config/icons/`，配置里记的是副本路径——删掉原文件不会让图标消失；加载失败一律静默回落
+> 到内置图标（再退到自绘），不影响启动。
+
+### 直播间配置 (config/URL_config.ini)
+
+抖音支持以下 5 种直播间/主页地址格式（其余平台格式见下方各平台示例）：
+
+```
+# 1) 网页端主播直播间（数字房间号）
+https://live.douyin.com/745964462470
+
+# 2) app端主播直播间（分享短链）
+https://v.douyin.com/iQFeBnt/
+
+# 3) 抖音号拼接（https://live.douyin.com/ + 抖音号，支持 VR 直播录制）
+https://live.douyin.com/yall1102
+
+# 4) app端主播主页（分享短链）
+https://v.douyin.com/CeiU5cbX
+
+# 5) 网页端主播主页（用户页地址）
+https://www.douyin.com/user/MS4wLjABAAAA3kr2yA4aRD-sjf9cx8xkOH8Di3RjktpKcAvqIetpsF0
+```
+
+> 说明：
+> - 格式 1/3/5 走网页端接口（支持 VR 直播）；格式 2/4 走 app 端接口
+> - 格式 5（网页端主播主页 `www.douyin.com/user/<sec_uid>`）会直接从地址提取 `sec_user_id` 并解析出抖音号，按直播间地址走网页端接口录制，无需经过 app 端探测
+> - 格式 4（app 端主页）等短链形态会先探测直播间地址，失败则自动回退到抖音号解析、再走网页端接口录制
+
+```ini
+# 指定画质（画质,直播间地址）
+超清，https://live.douyin.com/745964462470
+
+# 指定画质和主播名（画质,直播间地址,主播:名称）
+高清，https://live.bilibili.com/123456，主播: B站主播
+
+# 注释直播间（在地址前加 #）
+# https://live.douyin.com/123456789
+```
+
+### 环境变量配置
+
+| 变量名 | 说明 | 示例 |
+| --- | --- | --- |
+| `PYTHONUNBUFFERED` | 实时输出日志 | `1` |
+| `PYTHONDONTWRITEBYTECODE` | 不生成 .pyc 文件 | `1` |
+| `PYTHONIOENCODING` | Python 输出编码 | `utf-8` |
+| `TZ` | 时区设置 | `Asia/Shanghai` |
+| `TERM` | 终端类型 | `xterm-256color` |
+
+## 🎬 使用说明
+
+### 命令行模式
+
+```bash
+python main.py
+```
+
+### GUI 图形界面模式
+
+```bash
+python gui.py
+```
+
+GUI 功能（侧边导航 5 页）：
+- 📊 控制台 - 录制状态总览、启停控制
+- 🎯 画质监控 - 实时检测各直播间实际画质是否与设置一致
+- 💬 弹幕监控 - 实时查看各房间弹幕流，支持按房间/类型过滤
+- 📝 URL 配置 - 直播间地址管理
+- 📋 运行日志 - 子进程日志查看
+
+侧边栏另提供**外观**（浅色/深色/跟随系统）与**语言 Language**（简体中文 / English (US) / English (UK) / 繁體中文）选择器，切换语言即时生效并写回 `config.ini`，无需重启。
+
+系统托盘图标支持最小化到托盘后台运行。
+
+### Web 管理面板模式
+
+```bash
+python web.py
+```
+
+启动后浏览器访问 `http://localhost:8000`。
+
+功能：
+- **仪表盘**：实时查看监测/录制数、错误数、磁盘剩余、录制中列表、日志流（SSE 推送）
+- **直播间管理**：在线增删改查直播间地址、启用/禁用（自动热加载到录制主循环）
+- **配置编辑**：在线编辑 config.ini 各项（录制设置/推送/Cookie 等），敏感配置项脱敏
+- **文件浏览**：浏览 downloads 目录并下载录制文件
+- **实际画质展示**：录制表格显示"设置画质/实际画质"，降级时标红高亮
+- **弹幕查看**：读取弹幕监控枢纽快照，实时展示各房间弹幕事件
+- **语言切换**：顶栏语言选择器，四语即时切换（写回配置并热切换进程内翻译，无需重启）
+
+主要 API 路由（均需 Token，认证关闭时除外）：
+
+| 路由 | 方法 | 功能 |
+| --- | --- | --- |
+| `/api/login` | POST | 密码登录，返回 Token |
+| `/api/status` | GET | 录制状态（含实际画质） |
+| `/api/status/stream` | GET | 录制状态 SSE 流 |
+| `/api/rooms` | GET/POST/PUT/DELETE | 直播间增删改查 |
+| `/api/rooms/toggle` | POST | 启用 / 禁用直播间 |
+| `/api/config` | GET/PUT | 读取 / 修改配置 |
+| `/api/language` | GET/PUT | 查询 / 切换界面语言 |
+| `/api/files`、`/api/files/download` | GET | 录制文件浏览与下载 |
+| `/api/logs`、`/api/logs/stream` | GET | 日志查询 / SSE 实时推送 |
+| `/api/danmaku` | GET | 弹幕监控快照 |
+
+Web 模式与命令行模式共用同一录制引擎与配置文件，直播间地址的增删改会自动被录制主循环热加载。
+
+后台运行模式：将 `web_show_console` 设为 `false`，Windows 下会隐藏控制台窗口，日志写入 `logs/web_console.log`，程序完全后台运行。
+
+Windows 下控制台默认「最小化到系统托盘」（`web_minimize_to_tray = true`）：点击最小化后窗口不在任务栏显示，而是收起到系统托盘，双击托盘图标即可恢复；标题栏关闭按钮已禁用，需从托盘图标菜单的「退出程序」退出。
+
+> ⚠️ **安全提示**：默认仅监听 `127.0.0.1` 且未启用认证；若为 Docker / 局域网 / 公网访问改绑 `0.0.0.0`，必须同时开启 `web_auth_enable` 并设置强密码。
+
+### 录制格式推荐
+
+- **长时间录制**：推荐使用 `ts` 格式，实时写入，断电不易损坏
+- **短时间录制**：推荐使用 `mp4` 或 `mkv` 格式，录制完成后直接可用
+- **仅音频录制**：推荐使用 `mp3` 或 `m4a` 格式
+
+### 画质说明
+
+| 画质代码 | 中文名 | 说明 |
+| --- | --- | --- |
+| OD | 原画 | Original Definition，最高画质 |
+| BD | 蓝光 | Blu-ray，超高清 |
+| UHD | 超清 | Ultra HD |
+| HD | 高清 | High Definition |
+| SD | 标清 | Standard Definition |
+| LD | 流畅 | Low Definition，最低画质 |
+
+支持平台：抖音、TikTok、快手、虎牙、斗鱼、B站、网易CC。当平台实际下发画质低于设置画质时，会自动告警并标记。
+
+### 采集方式选择（HLS/FLV）
+
+录制拉流源在 HLS（m3u8，逐段拉取）与 FLV（单条长连接）之间自动选择：默认优先 HLS、校验不可达时按序回退 FLV，最后兜底 `record_url`。由两个配置项共同控制：
+
+| 配置项 | 作用 |
+| --- | --- |
+| `是否启用HLS采集(是/否)` | 全局开关：开启（默认）时优先使用 HLS 源，不可达或源不存在时回退 FLV；关闭则所有平台只走 FLV 等非 HLS 候选 |
+| `HLS采集排除平台(逗号分隔)` | 平台级排除列表：命中平台**无视全局开关、恒按 FLV 采集**（等效于仅对该平台关闭 HLS 采集，HLS 源不参与候选与回退） |
+
+- **适用场景**：整体偏好 HLS 录制（HLS 逐段拉取免疫单条长连接被 CDN 掐断），但个别平台的 HLS 源不稳定或被风控，希望仅该平台强制走 FLV 时，将其加入排除列表即可——无需为此关闭全局 HLS 开关
+- **填写格式**：平台名须与日志/配置文件中显示的**完全一致**（如 `斗鱼直播`，不能简写为 `斗鱼`）；多个平台逗号分隔（中英文逗号均可），如 `斗鱼直播,虎牙直播`；留空（默认）不排除任何平台，行为与旧版本完全一致
+- **优先级语义**：排除列表优先于全局开关——即使「是否启用HLS采集(是/否) = 是」，命中平台也只走 FLV；列表外平台不受任何影响，仍按全局配置 HLS 优先
+- **边界行为**：排除平台若解析结果仅有 HLS 源且无 FLV/record_url 可回退，本轮放弃录制并输出告警（日志会提示「可将该平台移出排除列表恢复 HLS 采集」）；h265 编码的 FLV 源不再触发切换 HLS（h265 FLV 录制自动改存 TS 格式的逻辑不受影响）
+- **热更新**：主循环每轮重读配置，修改保存后无需重启程序，下一轮监测即生效
+
+### 弹幕录制与弹幕监控
+
+弹幕功能由两个**相互解耦**的开关控制，可单独或同时开启：
+
+| 配置项 | 作用 |
+| --- | --- |
+| `是否录制弹幕(是/否)` | 弹幕落盘为 SRT 字幕文件，与视频录制同起同停 |
+| `是否弹幕监控(是/否)` | 仅实时查看弹幕，不写 SRT（GUI「弹幕监控」页 / Web `/api/danmaku`） |
+| `弹幕分片时长(秒)` | SRT 分片粒度，建议与「视频分段时间(秒)」一致 |
+| `弹幕录制平台(逗号分隔)` | 启用弹幕的平台白名单 |
+
+- **支持平台（5 个）**：抖音直播、斗鱼直播、虎牙直播、B站直播、TwitchTV
+- **输出文件**：SRT 与视频分片一一对应，命名为 `{基础名}_{分片序号:03d}.srt`（如 `_000.srt` 对应 `_000.ts`）；未分段时为 `{基础名}.srt`。时间轴以单调时钟为基准，与 ffmpeg `segment -reset_timestamps` 的 PTS 对齐，可直接被播放器加载
+- **弹幕连接直连**：弹幕 WebSocket 显式不跟随系统代理，避免 SOCKS 代理环境下连接即断
+- **监控边车日志**：弹幕监控事件同时写入 `logs/danmaku_monitor.jsonl`（5MB 轮转）
+- 抖音弹幕在 Cookie 为空时会自动获取访客 ttwid；B站弹幕会自动获取真实 buvid（登录 cookie → spi 接口 → 首页 Set-Cookie → 随机兜底）
+
+### 主播名自动更新
+
+开启 `是否自动更新主播名(是/否)`（默认「是」）后，程序在每轮解析到最新主播名时，若与 `URL_config.ini` 中记录的名称不同，会自动完成两件事：
+
+1. **重命名文件系统**：`{保存路径}/{平台}/{旧主播名}` → 新主播名目录；递归重命名目录树内所有以 `{旧名}_` 开头的录制产物（TS / FLV / SRT / 字幕）及以 `_{旧名}` 结尾的标题目录；若新名目录已存在则逐项合并移入（兼容主播改回曾用名）
+2. **回写配置文件**：按 URL 段级精确匹配只替换该行的主播名字段，完整保留画质段、`#` 注释前缀与行尾换行风格；操作幂等
+
+安全约束：
+
+- 检测点位于「解析直播数据之后、录制启动之前」，此时该线程必然不在录制中，天然避开 ffmpeg 文件占用窗口
+- **先文件系统、后配置文件，两者全部成功才切换本轮使用名**；任一失败则保持旧名并在下轮轮询自动重试
+- 个别文件被后台转码/播放器占用时仅告警跳过，不阻塞整体
+- 自动跳过自定义流地址（其主播名含每轮随机 UUID）与清洗后为空白的昵称
+- 关闭该开关即保持手动名称不变
+
+### 多语言与界面切换
+
+内置四套翻译目录，加载时按 `gettext .mo → <lang>.json → <lang>.yaml` 依次探测：
+
+| 语言码 | 显示名 | 目录文件 |
+| --- | --- | --- |
+| `zh_CN` | 简体中文 | `i18n/zh_CN/LC_MESSAGES/zh_CN.mo` |
+| `en_US` | English (US) | `i18n/en_US.json` |
+| `en_GB` | English (UK) | `i18n/en_GB.json` |
+| `zh_TW` | 繁體中文 | `i18n/zh_TW.yaml` |
+
+- 配置键 `language`：留空跟随系统语言；取值支持 `zh_cn` / `zh-CN` / `en` / `en-US` / `en-GB` / `zh-Hant` / `zh_CN.UTF-8` 等写法，自动归一化到规范语言码；键值不可识别或对应语言文件缺失时回退 `en_US`
+- **热切换**：GUI 侧边栏语言选择器、Web 面板顶栏语言选择器、直接编辑 `config.ini` 三种途径均可切换；命令行主循环每轮检测配置变化并即时重载翻译，**无需重启进程**（录制中的 ffmpeg 子进程不受影响）
+- 翻译不再依赖 `LANG` / `LANGUAGE` 环境变量（Windows 普遍未设置）
+- `zh_TW.yaml` 需要 `PyYAML`；缺失时仅损失该语言，其余格式不受影响
+
+### 停止录制
+
+- **Windows**：执行 `StopRecording.vbs` 或在命令行按 `Ctrl+C`
+- **Linux/macOS**：在命令行按 `Ctrl+C`
+- **Docker**：执行 `docker-compose stop`
+
+### 注意事项
+
+1. 如需录制 TikTok、SOOP(原AfreecaTV) 等海外平台，请在配置中开启代理
+2. 长时间挂机建议将循环时间设置长一些（如 60 秒），避免请求频繁被封 IP
+3. 直播结束后会自动保存文件，无需手动停止
+4. 如遇录制的视频文件损坏，建议使用 `ts` 格式录制
+5. 录制抖音需要填写有效的 cookie（至少包含 ttwid），否则可能触发风控
+6. 部分平台需要 Node.js 环境运行 JavaScript 签名脚本，Windows 下会自动安装
+
+## 🐋 Docker 部署
+
+### 前置要求
+
+- 已安装 [Docker](https://docs.docker.com/get-docker/)
+- 已安装 [Docker Compose](https://docs.docker.com/compose/install/)
+
+### 快速启动
+
+```bash
+# 1. 克隆项目
+git clone https://github.com/y123ao6/DouyinLiveRecorder.git
+cd DouyinLiveRecorder
+
+# 2. 编辑配置文件
+# 在 config/URL_config.ini 中添加直播间地址
+
+# 3. 启动容器（默认命令行录制模式）
+docker compose up -d
+
+# 4. 查看日志
+docker compose logs -f
+```
+
+### 拉取预构建的多架构镜像（GHCR）
+
+发布工作流 `.github/workflows/docker-publish.yml` 在每次推 `v*` tag 时，由原生 amd64 与 arm64 两个 runner
+各构建并推送一层，再按 manifest digest 合成多架构清单——**同一条 `docker pull` 在 x86_64 与 arm64 主机上
+都会拿到本机架构那一层**：
+
+```bash
+# <owner> 换成实际持有该镜像的 GitHub 账号名（GHCR 命名空间一律小写）
+docker pull ghcr.io/<owner>/douyin-live-recorder:latest
+docker run -d -v ./config:/app/config -v ./downloads:/app/downloads \
+  -v ./logs:/app/logs -v ./backup_config:/app/backup_config \
+  ghcr.io/<owner>/douyin-live-recorder:latest
+```
+
+- 标签形态：`latest` 与 `vX.Y.Z`；`latest` 只随 `v*` tag 产出，不开放手动触发覆盖。
+  两个分架构 tag（`:vX.Y.Z-amd64` / `-arm64`）属合成前的中间产物，当前不会自动清理。
+- 匿名拉取要求该 GHCR 包的可见性为 **public**——那是仓库设置层面的一次性人工动作。
+- 与 `docker-compose.yaml` 里的 `image: y123ao6/douyin-live-recorder:latest` **刻意不同源**（`gui` 服务另用 `:latest-gui`，见下方「切换运行模式」）：compose 走
+  `pull_policy: build` 就地构建（不拉 registry 上的同名镜像），上面「快速启动」的说明保持不变；
+  要用 GHCR 预构建镜像请按上面的 `docker run`，arm64 主机走 compose 就地构建同样可行。
+
+### 切换运行模式
+
+`docker-compose.yaml` 已内置三个服务（recorder / web / gui），通过 profile 切换，无需修改文件：
+
+```bash
+# 命令行录制模式（默认，不占用端口）
+docker compose up -d
+
+# Web 管理面板模式（映射 8000 端口，浏览器访问 http://localhost:8000）
+docker compose --profile web up -d
+
+# GUI 模式（需 X11 显示环境，先在宿主机执行 xhost +local:）
+docker compose --profile gui up -d
+```
+
+> ℹ️ 镜像分两种依赖形态：`recorder` / `web` 用的默认镜像**不装** GUI 窗口层依赖（PySide6 解压后
+> 本机实测 647.56MB，而这两个服务在屏蔽它后导入链完整，装进来也用不上）；`--profile gui` 会按
+> `--build-arg INSTALL_GUI=true` **单独构建另一枚 tag**（`...:latest-gui`）并同时补装 Qt 运行库，
+> 因此首次启用 GUI 模式会多一次构建，也不会覆盖 recorder / web 正在使用的镜像。
+
+> ⚠️ Web 模式注意：`web.py` 默认监听 `127.0.0.1`，容器内必须在 `config/config.ini`
+> 的 `[Web]` 节设置 `web_host = 0.0.0.0` 才能从宿主机访问；同时建议开启
+> `web_auth_enable = true` 并配置 `web_password`。
+
+### 数据挂载
+
+```yaml
+volumes:
+  - ./config:/app/config:rw          # 配置文件目录（必需）
+  - ./downloads:/app/downloads:rw    # 录制文件下载目录（必需）
+  - ./logs:/app/logs:rw              # 运行日志目录
+  - ./backup_config:/app/backup_config:rw  # 配置备份目录
+```
+
+### 端口映射
+
+仅 `web` 服务（Web 管理面板模式）映射端口，`recorder` / `gui` 服务不监听任何端口：
+
+```yaml
+ports:
+  - "127.0.0.1:8000:8000"   # Web 管理面板端口（仅 --profile web 时生效，默认只暴露给宿主机本地）
+```
+
+### 环境变量
+
+> 与上文「环境变量配置」同一张表（`TZ` / `PYTHONUNBUFFERED` / `PYTHONDONTWRITEBYTECODE` / `PYTHONIOENCODING` / `TERM`），compose 已按该表注入，此处不重复列举。
+
+### Docker 镜像特性
+
+- **多阶段构建**：builder 阶段安装依赖到虚拟环境，runtime 阶段精简镜像
+- **非 root 用户**：使用 `recorder` 用户运行，提升安全性
+- **健康检查**：自动检测 `main.py` 或 `web.py` 进程是否存活
+- **资源限制**：默认限制 2 CPU / 2G 内存（可在 docker-compose.yaml 调整）
+- **日志轮转**：单文件 50MB，最多保留 3 份
+- **内置 Node.js 24 LTS**：用于运行 JavaScript 签名脚本
+
+## 🛠️ 开发指南
+
+### 环境要求
+
+- Python >= 3.14
+- FFmpeg (Windows 版启动时自动从官方源下载；Linux 依次为 `yum` → `apt` → 官方月末构建直下、macOS 走 Homebrew，
+  包管理器路线需 root/管理员，三条都失败时手动安装)
+- Node.js (Windows 下自动下载并解压到程序目录；Linux 按发行版走 `yum`（RHEL 系，需 EPEL）或 `apt`、macOS 走 Homebrew，
+  包管理器路线需 root/管理员，失败时手动安装)
+
+### 安装开发依赖
+
+```bash
+# 使用 uv（推荐）
+uv sync --dev
+
+# 或使用 pip
+pip install -r requirements.txt
+pip install .[dev]
+```
+
+### 代码规范
+
+```bash
+# 格式化代码（line-length = 120）
+black .
+
+# 排序导入
+isort .
+
+# 类型检查（CI 以 mypy 为准；不带路径，范围由 pyproject.toml [tool.mypy].files 定义）
+mypy
+
+# 类型检查（本地增强，可选）：basedpyright
+# 已在 pyproject.toml 配置 [tool.basedpyright]，venvPath 指向工作区 .venv（相对路径，可移植）
+# 首次需创建并安装依赖：python -m venv .venv && .venv/Scripts/pip install -r requirements.txt
+basedpyright
+
+# 运行测试
+pytest
+```
+
+> **注释规范**：模块/函数说明统一使用 `#` 行注释，不使用三引号 `"""` 文档字符串；功能性多行字符串字面量（模板/SQL）改用单引号 + 换行拼接而非 `"""`。
+
+> **五工具质量门禁**：本项目以 `mypy`（src + tests）/ `basedpyright`（本地补充）/ `pytest`（0 warnings）/ `black --check` / `isort --check-only` 联合作为质量门禁，CI 全绿为合入前提。通过数与覆盖率以最近一次门禁输出为准。
+
+> **测试说明**：`tests/test_web_api.py` 的符号链接相关用例（`TestListFiles::test_broken_symlink_skipped` / `test_symlink_outside_skipped`）在无法创建真实符号链接的环境（未开启开发者模式的 Windows、部分沙箱）会自动 `pytest.skip`，属正常现象，不代表代码缺陷。
+
+### 项目文档
+
+- [CODE_WIKI.md](CODE_WIKI.md) - 项目架构文档（详细的模块说明、依赖关系、设计模式）
+
+### Web/接口冒烟测试
+
+项目内置通用、零依赖的 Web/接口冒烟测试工具 `scripts/smoke_test.py`（纯标准库，无需安装第三方包），可对 Web 管理面板等**运行中 HTTP 接口**做轻量探活。
+
+```bash
+# 检查本机 Web 管理面板（默认 127.0.0.1:8000，示例配置见 scripts/smoke_web.json）
+python scripts/smoke_test.py -c scripts/smoke_web.json
+
+# 生成 HTML 报告
+python scripts/smoke_test.py -c scripts/smoke_web.json -r smoke_report.html -f html
+```
+
+- 配置驱动（JSON）：`url` / `method` / `expected_status` / `timeout` / 请求头 / 请求体 / 响应应包含文本 / 期望 JSON 字段
+- 支持 `base_url` 前缀拼接；控制台 / JSON / HTML 三种报告；失败时退出码非 0（可接入 CI）
+- 与 `build_exe.py --smoke`（打包产物冒烟）不同，本工具针对**运行中的 HTTP 接口**做探活，两者互补
+- 默认用例 `scripts/smoke_web.json` 探活 Web 面板 `/`（首页 200）与 `/health`（`{"status": "ok"}`，由 `src/web_api.py` 提供的公开探活端点，不受 `web_auth_enable` 支配）
+- **已接入 CI**：`.github/workflows/ci.yml` 的 `test` job 在 pytest 之后受控启动 `python web.py`，就绪后跑 `scripts/smoke_web.json` 冒烟（经 `.github/actions/retry` 处理网络抖动、失败保留 `logs/web-smoke-*` 工件并使 job 变红），补齐「面板进程能否真正监听并应答」这条 TestClient 覆盖不到的链路
+
+### 添加新平台支持
+
+**视频录制平台：**
+
+1. 在 `src/spider.py` 中添加平台流地址解析函数（参考现有平台实现）
+2. 在 `src/stream.py` 中添加流地址解析函数，返回值包含 `actual_quality` 和 `available_qualities` 字段
+3. 在 `main.py` 中添加平台识别逻辑（`PLATFORM_HOST` 列表和录制分支）
+4. 更新 `README.md` 和 `CODE_WIKI.md`
+
+**弹幕录制平台（如需支持弹幕）：**
+
+1. 在 `src/platforms/` 下新建 `<平台>.py`，继承 `src/base.py` 的 `DanmakuBase`，实现连接/鉴权/消息解析
+2. 在 `src/__init__.py` 的弹幕平台注册表中登记（平台名与 `main.py` 的 platform 标识一致），由 `get_danmaku_class` / `get_danmaku_collector` 工厂解耦创建
+3. 在 `main.py` 的弹幕录制接线处补充平台分支（构造 `record_danmaku_args` 并传入 `check_subprocess`）
+4. 更新 `README.md` 和 `CODE_WIKI.md`
+
+> 注：弹幕子系统与 `src/spider.py`（视频流地址解析）是平行解耦的两套抽象，`spider.py` 不 import `src/platforms`。
+
+## ❓ 常见问题
+
+**Q: 录制时提示 "缺少 ffmpeg 无法进行录制"**
+
+```bash
+# Ubuntu/Debian
+sudo apt install ffmpeg
+
+# macOS
+brew install ffmpeg
+
+# Windows：full 版运行包已自带 ffmpeg，无需安装；
+# lite 版 / 单文件版若自动安装失败，按「快速开始 → 手动安装 ffmpeg（Windows 用户指南）」放置
+# 为 <程序目录>\ffmpeg\ffmpeg.exe（+ ffprobe.exe）即可，不要留在 ffmpeg\bin\ 子目录下。
+```
+
+**Q: Apple Silicon（M 系列芯片）Mac 上实际用的是哪一份 ffmpeg？**
+
+发布包（full 版）内置的 macOS ffmpeg 是上游的 **x86_64 静态构建**（ffmpeg.org 官方只发布
+「Static builds for macOS 64-bit」，**不提供 arm64 构建**），在 Apple Silicon 上经 **Rosetta 2**
+转译执行。为避免它遮蔽用户自己安装的原生构建：当「macOS + arm64 + 系统 PATH 上已有另一份
+ffmpeg」三条同时成立时，程序**优先使用系统那份**（例如 `brew install ffmpeg` 装上的原生
+arm64 构建），不再把包内 `ffmpeg/` 目录前置到 `PATH`；其余情况（Intel Mac、Windows、Linux、
+系统里没有 ffmpeg、或 PATH 上探到的其实就是包内那一份）维持原样，仍使用包内那份。
+单文件版脚本 `douyin_live_recorder_standalone.py` 采用同一判据，只是表现为「`find_ffmpeg()` 直接
+返回系统那份的路径」而不是调整 `PATH`。
+
+确认当前生效的是哪一份：
+
+```bash
+ffmpeg -version          # Homebrew 安装的会带 --prefix=/opt/homebrew/...（Apple Silicon 原生）
+                          # 包内的 evermeet 静态构建没有该前缀
+which ffmpeg              # 指向包内 ffmpeg/ 目录 = 用的是包内那份
+```
+
+或查看 debug 日志（`config.ini` 中 `是否启用日志文件 = 是` 时写入 `logs/streamget.log`）里的
+「FFmpeg PATH 优先级」一行，它会明确写出「让位于系统原生 ffmpeg <路径>」还是「仍前置包内目录 <路径>」。
+
+> Docker 镜像不受此策略影响：镜像内的 ffmpeg 由 apt 安装，Apple Silicon 上按本机架构构建/运行
+> Linux arm64 容器，本来就是原生执行。
+
+**Q: 提示 "缺少 Node.js" 或 "execjs" 相关错误**
+
+```bash
+# Ubuntu/Debian
+curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
+sudo apt-get install -y nodejs
+
+# macOS
+brew install node
+
+# Windows
+# 程序会自动下载安装到 node/ 目录
+```
+
+**Q: 提示 "IP 被禁止，请更换设备或网络"**
+
+- 检查是否开启了代理
+- 降低循环监测频率
+- 等待一段时间后再尝试
+
+**Q: 抖音风控无法获取数据**
+
+- 在 `config.ini` 的 `[Cookie]` 节填入从浏览器 `live.douyin.com` 复制的有效 cookie（至少包含 `ttwid`）
+- 降低循环监测频率（默认循环时间 60 秒，已较保守，可酌情调大）
+- 更换 IP 或使用代理
+- 排查要点（实测结论）：
+  - 抖音风控的典型信号是 **HTTP 200 + 空响应体**，而非 4xx 错误码；日志里看到 `web/enter` 返回 `status_code=10002 / unknown error` 后自动回退 HTML 抓取是**正常的容错链路**，不代表录制失败
+  - 请求抖音接口必须使用**桌面端 User-Agent**，旧版移动端 UA 会被静默限流（返回空 body）
+  - 主页类链接（格式 4/5）请直接填写完整地址；`iesdouyin.com/share/user/` 旧路径已变为反爬壳页，请勿使用
+
+**Q: HLS 校验失败日志空白，总是回退到 FLV**
+
+- 现象：日志出现 `get_response_status 校验失败（判定为不可达）: `（消息空白）后紧跟 `HLS URL validation failed, falling back to FLV`，且反复出现
+- 原因（已修复于 2026-08-05）：
+  - Windows 下 `socket.timeout` / `TimeoutError` 的 `str()` 为空，导致异常日志显示为空白，无法判断是超时、连接被拒还是证书问题
+  - 流地址校验函数原先静默吞掉所有异常（`except Exception: return False`），回退 FLV 时无任何原因可查
+  - m3u8 源 HEAD 探测原先未覆盖 404（抖音等 CDN 常对 HEAD 返回 404 而 GET 可正常拉流），且从 HLS 源选择到校验调用**未透传代理**，导致 TikTok 等需代理平台直连校验超时误判不可达
+- 修复后表现：异常日志会带 URL 与异常类型；所有失败路径记录详细警告（含状态码 / content-type）；m3u8 HEAD 非 2xx（**含 404**）一律补 `Range: bytes=0-0` GET 探测；HLS 源选择正确透传代理。重新运行后若仍回退，日志会直接给出真实原因（如 `ConnectTimeout`、`HEAD=404, Range-GET=403`），此时多为 CDN 域名被墙或主播流地址失效等环境问题，而非代码误判
+
+**Q: 录制的视频文件损坏**
+
+- 推荐使用 `ts` 格式录制
+- 检查磁盘空间是否充足
+- 检查网络是否稳定
+
+**Q: 如何只推送开播通知不录制？**
+
+在 `config.ini` 的 `[推送配置]` 节设置 `只推送通知不录制(是/否) = 是`
+
+**Q: Web 面板忘记密码怎么办？**
+
+直接编辑 `config/config.ini` 中的 `web_password` 项，修改后重启 `web.py` 即可。密码变更后所有现有 Token 会自动失效，需重新登录。
+
+## ❤️ 贡献者
+
+<a href="https://github.com/y123ao6/DouyinLiveRecorder/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=y123ao6/DouyinLiveRecorder" />
+</a>
+
+## 📄 许可证
+
+本项目基于 [MIT License](LICENSE) 开源，欢迎 Star 和 Fork！
+
+## ⏳ 更新日志
+
+### v4.6.0 (2026-10-18 ~ 2026-10-31) — 彻底移除 tkinter 技术栈（PySide6 成为唯一窗口实现）/ 统一 ICO 图标支持（GUI 托盘 / Web 托盘与页面 / 打包产物）/ Web 系统托盘迁 PySide6 与 GUI 日志自适应折行 / 五轮全仓代码审查整改（SSRF 逐跳复检、危险配置键、出站读取上限）/ 行尾钉定与回归锁测试去日期化 / 元数据对账与 CI 工具抬版 / 全仓注释级精简
+
+> 本版本（v4.6.0，2026-10-18 ~ 10-31）是一次「技术栈收敛 + 安全与质量收口」周期：① **GUI 技术栈彻底收敛到 PySide6**——`gui.py` 由 5022 行 legacy 窗口实现改为 54 行薄入口，tkinter 栈、遗留 pystray 托盘与 `src/ui_kit.py` / `src/ui_motion.py` 全部移除；② **统一 ICO 图标支持**，GUI 托盘 / Web 托盘与页面 / 打包产物三处同源；③ **Web 系统托盘由 pystray 迁到 PySide6**，主线程改由 Qt 事件循环占用；④ **五轮全仓代码审查与整改**（10-18 / 10-19 / 10-21 / 10-29 / 10-30）覆盖 SSRF 逐跳复检、凭据脱敏、危险配置键、出站读取上限与覆盖率机检；⑤ **仓库形态收口**——`.gitattributes` 行尾钉定、回归锁测试去日期化、元数据与文档同源对账。**存在破坏性变更（GUI 技术栈与依赖面）**，见下方专节。详细根因与验证见 [CODE_WIKI.md](CODE_WIKI.md)。
+
+**✨ 新增功能 / 改进**
+- **统一 ICO 图标支持（GUI 托盘 / Web 托盘与页面 / 打包产物三处同源）**：新增 `assets/app.ico`（16/24/32/48/64/128/256 七档，≤64 写 BMP 帧、≥128 写 PNG 帧）与 `src/ui_icons.py`；生效图标唯一出口 `ui_icons.current_icon_path()`（导入副本 > 内置图标 > `None`），托盘 / 面板 / favicon 三个入口共用同一份校验判据与机器码。GUI 侧栏新增「导入图标…」（扩展名初筛 → 校验 → 落 `config/icons/` → 写回配置 → 立即应用），启动期按 `[GUI] gui_tray_icon` 自动加载。
+- **Web 面板图标导入与标签图标**：`POST /api/icon` 走 base64 JSON 而非 multipart（先解码、后校验、再落盘），坏文件不在 `config/icons/` 留垃圾副本；`GET /favicon.ico` 免鉴权（标签页请求不带 Bearer），无可用图标回 404 而非空 200（空 200 会被浏览器缓存成坏图标）；前端 `uploadIcon()` 先按 512KB 粗筛、成功后追加时间戳破缓存。配置新增 `[Web] web_tray_icon`。
+- **打包产物应用图标**：`build_exe.py` 新增 `icon_spec_value()` / `icon_datas_entries()` / `_copy_app_icon()`——`EXE(icon=)` 决定 exe 文件自身资源（资源管理器 / 任务栏），`datas` 供运行期读取（Qt 窗口图标 / 托盘 / favicon），两条根有意冗余。
+- **Web 系统托盘由 pystray 迁到 PySide6（QSystemTrayIcon + QMenu）**：主线程交给 `run_event_loop()`、uvicorn 改在守护线程驱动；`start()` 的返回值成为降级契约（`False` 时调用方照旧在主线程 `asyncio.run(server.serve())`）；退出链补齐 `setQuitOnLastWindowClosed(False)`、200 ms 看门狗 `QTimer` 与 `aboutToQuit` 置 `should_exit`；菜单四项（显示控制台 / 隐藏控制台 / 打开 Web 界面 / 退出程序）；图标改由 `QPainter` 现画，冻结后不再依赖图标文件是否被收进包。
+- **GUI 托盘菜单补齐「隐藏主窗口 / 设置」**：`bind_actions` 由 2 回调扩为 4 回调（顺序即菜单自上而下的动作项顺序），`retranslate()` 同步四项文案；「设置」对话框在主窗口收进托盘时仍可独立弹出。
+- **GUI 运行日志自动换行随窗口宽度自适应**：`src/gui_qt/widgets.py::TerminalText` 折行模式 `NoWrap` → `WidgetWidth`，Qt 在控件 resize 时对既有块自动重排折行（离屏实测 240px 视口长行折 24 行、拉宽 1500px 重排为 5 行）。
+- **i18n 四语目录持续同步**：Web 托盘悬浮提示的裸 f-string 改走 `i18n.tr` 并入目录（四目录各 +1，键集 1205 → 1206，`zh_CN.mo` 重编为 1207 条）；本轮各批新增词条（审查整改 13 / 17 / 15 条、图标 17 条、终止词条与 2 条新词条）均四目录同批登记、`.mo` 同批重编。
+
+**🐛 修复的问题**
+- **新版 Qt GUI 录制输出完全断路（唯一严重项）**：`recorder.py` 的 `linesReceived` 全仓从未 `emit`、`drain()` 生产调用方为零，GUI 上录制输出整条链不显示。改为「保留队列 + 唤醒信号」：死信号换 `outputReady`，主线程 `_pump_recorder_queue` 一次取空后按批次交付，并按会话号对「手动停止 ended」与「自然 EOF 哨兵」双通道去重；新增 `reclaim_after_natural_end` 让自然结束只由主线程清 `_process`，同时修掉 `_read_queue` 无界增长。
+- **安全面（多轮审查整改）**：主机匹配改标签边界（`evilweibo.com` 不再被 `weibo.com` 子串放行）；消息推送与 `sync_req` 补**逐跳**重定向内网复检与落地闸门；内网判定改 `ipaddress` 结构化（整数 / 八进制 / IPv4-mapped / CGNAT 补齐）；B 站弹幕 host 拒绝 `?` / `#` / `@` / `\`；`--snapshot` 改白名单正向判定；node 安装器 SHA256 基准读取与官方文档不可达均改 fail-closed。
+- **凭据脱敏**：`mask_credentials` 补 ini 行形态、短键名 `sig` / `jwt`、JSON 数值、中文凭据键与「百分号编码查询串」形态；消息推送剥离 netloc 中的 basic-auth userinfo，8 处异常文本改走 `_mask_exc_text`；B 站 buvid3 改「前缀 + 长度」指纹；代理 URL 的 user / password 走 `quote(safe="")`；配置备份补「无 ini 节」与「原子写失败回退」两条明文通道的脱敏。
+- **Web 面板与配置写回**：`web/index.html` 删除文件头残留的孤立 `</body></html>`（面板不再落 quirks 模式）；`read_web_config` / `read_quality_options` / `read_config_safe` 统一走容错解析器（同节重复键不再让认证中间件每请求 500）；`PUT /api/rooms/quality` 与 `toggle_room` 改「写后重解析」语义裁决（缩进注释行不再假成功）；`web_tray_icon` 纳入 `_DANGEROUS_CONFIG_KEYS`，favicon 读取侧复验体积与 ICO 魔数（免鉴权任意文件读链的写侧关断）。
+- **录制链**：录制 Popen 的 `stdin` 由 `DEVNULL` 改回 `PIPE`（否则 `proc.stdin is None`，「写 q」优雅退出整条不可达）；`start()` 失败回滚补 `_room_seq_in_use.pop`（序号不再永久烧号、登记表不再无界累积）；AcFun 排序键收口（缺 bitrate 按 0 排尾，不再整轮吞成未开播）；B 站 `url_info` 的 host / extra 改 `_dig_str`（显式 null 不再 TypeError 被吞）；`ffmpeg -version` / `taskkill` 补超时，录制失败 stderr 临时文件就地清理。
+- **配置与数据完整性**：`URL_config.ini` 新建改 `atomic_write_text`（0600，与 config.ini 同口径）；配置脱敏备份改按行重写（「保留注释与节结构」承诺首次成立）；`update_file` 未命中不落盘、`backup_file` 失败不推进 MD5 基线；`sync_metadata` 三处纯读与 `check_workflow_constants` / `check_annotations` 补不可读兜底（rc=2），不再以 rc=1 + 裸栈冒充「代码不合格」。
+- **打包与发布链**：macOS ffmpeg 取数端点（evermeet Download API）被上游整体 410 下架，改钉**版本化直链** `ffmpeg-9.0.2.zip` / `ffprobe-9.0.2.zip` 与同名 `.sig` 签名档（URL 与签名对象双双不可变）；官方哈希文档链补 2 MiB 限长读取；`smoke_web` 的 loopback 覆盖窗口扩到整个探活循环；egg-info `SOURCES.txt` 清掉 13 条已删除文件残留。
+- **签名脚本钉定**：`liveme.js` 按历史 blob 字节级还原（失配成因是冲突提交把清理提交整体回退，而 `.gitattributes` 对 `src/javascript/*.js` 钉 `-text`），5 份签名脚本 sha256 随即全部匹配；新增 `TestJsPinTable::test_pinned_bytes_match_the_table` 逐文件字节对账锁。
+- **DNS 解析失败归因**：新增 `DNS_UNRESOLVABLE_REASON_PREFIX`，瞬时解析失败不再被归因成「疑似被篡改的流地址」（仍 fail-closed 拒绝）。
+
+**⚠️ 破坏性变更 / 行为变化**
+- **tkinter GUI 技术栈彻底移除，PySide6 成为唯一窗口实现**：`gui.py` 删除 `LiveRecorderGUI` / `AdvancedSettingsWindow` / `_legacy_main()` 与 tkinter 崩溃弹窗；`src/ui_kit.py`、`src/ui_motion.py` 删除，`src/ui_theme.py` / `src/ui_fonts.py` / `src/ui_i18n.py` / `src/ui_scale.py` 只保留 Qt 仍在用的能力。**不再有 tkinter 回退路径**，11 个纯 tkinter 用例文件同批删除。
+- **`config.ini` 删除 `[GUI] gui_motion` 键**（仅服务 legacy 动效层）；旧配置保留该键不再被读取。
+- **运行时依赖 21 → 18 条**：`pystray` / `Pillow` / `python-multipart` 移出 `[project.dependencies]`、`.[gui]` 与 `requirements.txt`；两入口托盘统一为 Qt + `QPainter` 现画图标，`.[gui]` 只剩 `PySide6>=6.12.0`。升级后这三个包不再随项目安装。
+- **Web 入口主线程归属反转**：pystray 版是「主线程跑 uvicorn + 托盘跑守护线程」，Qt 版必须「主线程跑 Qt 事件循环 + uvicorn 在守护线程」；`start()` 返回 `False`（非 Windows / 缺 PySide6 / 托盘不可用）时回落到原主线程形态。
+- **`.gitattributes` 行尾钉定生效**：`* text=auto eol=lf`（仓库 LF 存储 + 检出钉 LF）、`*.bat` / `*.cmd` 钉 CRLF、`*.sh` 钉 LF、`src/javascript/*.js` `-text` 字节冻结；119 个已跟踪文本文件已归一为 LF，旧克隆在重检出前仍可能保持原形态。
+- **macOS 发布链 ffmpeg 不再跟随上游滚动别名**：改为版本化不可变直链后，上游发新版不会自动跟进，抬版需人工同步两支归档版本号并重核签名。
+- **面板写侧安全收紧**：`web_tray_icon` 不再可经 Web 配置写入（`/api/icon` 上传路径直写 config 不受影响）；`GET /favicon.ico` 对非 ICO 内容一律 404；敏感判定补「接口链接」键与「推送配置」节。
+
+**📦 依赖变更**
+- **运行时依赖 21 → 19（10-20）→ 18（同日）**：pystray / Pillow 随遗留 tkinter 托盘退役摘除，python-multipart 因全仓无 `.form()` / `UploadFile` 调用点摘除；`uv lock` 重解后一并移除 `pyobjc-core` / `pyobjc-framework-cocoa` / `pyobjc-framework-quartz` 与 `python-xlib` 等平台专属传递依赖，egg-info 程序化重建。
+- **extras 面收敛**：`.[gui]` 由三条收敛为 `PySide6>=6.12.0` 一条；dev 7 条 / build 1 条不变。
+- **CI 工具版本抬到 PyPI 最新**：`ci.yml` 的 `mypy_version` 2.4.0 → 2.4.1、`pytest_version` 9.1.1 → 9.2.0（black 26.10.1 / isort 9.0.2 经核对已是最新，`.pre-commit-config.yaml` 两个 mirror rev 无需跟改）；抬值后四值与本地 `.venv` 实装逐一同值。**CI 实跑未执行**——要等下一次 push 在 GitHub Actions 上真正安装新版本后才算 CI 口径验证。
+- **元数据同源**：`requirements.txt` ↔ `pyproject.toml` 包名集合 18 ↔ 18；CODE_WIKI 双语依赖表删除 pystray / Pillow / python-multipart 三行（21 → 18 行）；`uv.lock` 已是 4.6.0 / 18 条，刻意跳过 `uv lock` 以免无关重算。
+
+**🛠️ 仓库维护与文档**
+- **五轮全仓代码审查与逐项整改**：10-18 报告 85 项中 83 项落地（`L-27` / `L-28` 交回）、10-19 报告 5 项严重全修 + M 级 30/48 + L 级 25/81、10-21 两批（15 项严重全修 + 1 项部分、中等项 28 + 约 55）、10-29 报告严重 7 / 中等 35 / 轻微 14、10-30 报告按 P0 5 + P1 8 + P2 3 + L 组可定位项整改；报告落 `docs/worklog/CODE_REVIEW_*.md`。
+- **行尾钉定落地**：新增 21 行 `.gitattributes`，119 个已跟踪文本文件 blob 由 CRLF 归一为 LF（AST 级内容零改动）；`src/javascript/*.js` 字节冻结的判据写入属性文件，避免跨平台检出翻表。
+- **回归锁测试文件名去日期化**：17 个文件 `git mv` 改名、72 个文件引用同步（生产注释、CI、AGENTS / README / CODE_WIKI 双语与 docs），全仓 `grep regression_2026` 零残留（改名映射记录条目自身为唯一例外）。
+- **门禁与机检新增**：R9（`test_*.py` 收集 0 条）/ R10（join 后必须断言线程退出，零容忍）、`test_outbound_read_caps.py`（httpx 读取上限台账）、`test_exception_log_masking.py`（异常文本脱敏棘轮）、`test_pep758_except_form.py`（PEP 758 形态锁）、`test_ci_pytest_env_parity.py`（跑 pytest 的 job 必须装 `requirements.txt`）；覆盖率阈值 `spider` / `proxy` 50 → 60 并新增「登记阈值 < 全局地板且未走债务表」机检。
+- **死代码与失实注释清理**：删除死模块 `src/ab_sign.py`、`main.py` 51 处 `platform = "未知平台"` 死赋值、18 个未使用 import、38 处未读局部变量与两处零引用函数；修正 11 处注释 / 契约失实（skip 理由、segment_video、motion.js 降级方向等）。
+- **全仓注释级精简（零行为变化）**：133 个代码文件净删 263 行注释（+798 / −1061）；等价性证明覆盖 Python AST、JS / CSS / HTML 剥注释行序（288 文件比对 286 OK）、BOM / 编码 / 行尾零漂移、实测读数零丢失、注释密度 ≥13% 地板与 13 主题存活。
+- **文档同源**：`AGENTS.md`、`docs/agent-reference/project-structure.md`、`measured-evidence.md` 与双语 CODE_WIKI / README 随改动同步；`check_skill_agents_consistency.py` 的「目录→表」检查由 WARN / rc=0 升为 FAIL / rc=1。
+
+**🧪 测试与验证**
+- 各批次终态实测（均在整批最后一次编辑之后）：10-18 全量 `pytest` 4568 passed / 14 skipped / 0 warnings、覆盖率 83.80%（69 模块）、`run_gates.py` 10/10；10-22 4977 passed / 16 skipped、覆盖率 83.84%；10-31 各批 5049 / 5053 / 5054 passed（覆盖率 84.47% / 69 模块），tkinter 移除后 4786 passed / 16 skipped、覆盖率 84.65%（67 模块），元数据对账批次 10/10 门禁 + 4764 passed。
+- `basedpyright` 各批 0 error / 0 warning；`mypy` 本机 + linux + win32 三跑 0 error；`black` / `isort` / `check_annotations.py` / `compile_po.py --check` / `check_version.py` / `check_runtime_pins.py` 全绿。
+- ICO 真机构建：`python build_exe.py --smoke --no-runtime --no-zip` 成功（2m35s），CLI / Web / GUI 三冒烟全通过，三个 exe 内均检出全部 7 帧（10.68MB / 11.00MB / 11.10MB），`assets/app.ico` 同时落在发布根与 `_internal/assets/`。
+- tkinter 移除：全仓产品代码已无 `import tkinter` / `from tkinter`；`import gui` 在 `PySide6` 不可用（`sys.modules['PySide6']=None`）时仍成功；离屏构造 `MainWindow` 成功（5 页），`python gui.py` 离屏运行 6s 无崩溃。
+- 真机 / 端到端交回项：`liveme.js` 修复按 `SKIP(未联网 / 无活 LiveMe 房间)` 记录；`CODE_REVIEW_2026-10-30` 整改的平台解析真实 URL、打包链真机与面板端到端未执行，按 DoD 第 2 步交回用户；macOS 新端点的全量下载 + `gpg --verify` 需 macOS runner 首跑确认。
+
+### v4.5.0 (2026-10-02 ~ 2026-10-17) — GUI 窗口层迁移 PySide6（Qt6）与界面现代化阶段4~6 收尾 / 移动端与短链平台接入（b23.tv / m.douyu.com / hy.fan / 小红书四类归一）/ Linux arm64 ffmpeg 与 GHCR 多架构镜像 / 启动期字节码缓存清理与发布链在线来源层 / config.ini 重复键容错读取层与 i18n 三批机检 / 全工作区代码审查与两轮元数据对账
+
+> 完整条目见 [归档卷](docs/changelog/release-notes-history-zh.md)（迁入：v4.5.0 / v4.4.0 / v4.3.0）。
+
+### v4.4.0 (2026-09-29 ~ 2026-10-01) — Web 面板 FastAPI → Starlette 迁移（移除 fastapi/pydantic，24 条路由契约逐字保留）/ Web 前端动效层与移动端适配 / GUI 主题层（阶段3）与长文案自适应折行根除 DPI 卡死 / 抖音原画 HEVC 房「无可用源」死锁根治与 h265 候选按保存格式放行 / 两轮全量代码审查与 P0 修复（standalone SSRF 三道防线、ffmpeg 命令日志脱敏等）/ i18n 盲区补录 / 依赖与文档多轮对账
+
+> 完整条目见 [归档卷](docs/changelog/release-notes-history-zh.md)（迁入：v4.5.0 / v4.4.0 / v4.3.0）。
+
+### v4.3.0 (2026-09-16 ~ 2026-09-27) — P0 修复 ffmpeg master 构建下录制 100% 失败（`-thread_queue_size` 被上游收窄为输出专属选项）/ 布尔配置解析口径统一（`true/false` 致 8 项配置静默失效、9 个海外平台无法录制）/ 两轮全量代码审查（62 + 106 项分级修复）/ 供应链加固（官方哈希优先 + GPG 验签 + 删除蓝奏云兜底）/ 发布链四处故障修复（**对外分发的 lite 包一度从未真正存在**）/ Apple Silicon 的 ffmpeg PATH 让位策略 / 日志房间关联字段与 `/health` 探活端点 / 构建产物体积 −21.6% / 覆盖率 73.28% → 82.03%（专项）与 83.91%（09-27 终态）
+
+> 完整条目见 [归档卷](docs/changelog/release-notes-history-zh.md)（迁入：v4.5.0 / v4.4.0 / v4.3.0）。
+
+### 更早的更新日志（已归档）
+
+历史发布说明已逐字迁出至 [release-notes-history-zh.md](docs/changelog/release-notes-history-zh.md)：v4.0.0 ~ v4.0.9.4（17 条）于 2026-09-28 迁出，v4.2.0 / v4.1.0（2 条）于 2026-10-18 续迁，v4.5.0 / v4.4.0 / v4.3.0（3 条）于 2026-10-31 续迁；该卷按 `.workbuddy/docold` 基线回补了上一轮粗剪留下的行尾 `…` / 句中截断（口径见其卷首）。
+根文档只保留当前版本 v4.6.0 的概要 + 本指针；完整历史见归档卷。
+
+## 💬 有问题或者需求可以向我提 Issue，欢迎 Star 与 Fork
+
+[![Star History Chart](https://api.star-history.com/svg?repos=y123ao6/DouyinLiveRecorder&type=Timeline)](https://star-history.com/#y123ao6/DouyinLiveRecorder&Timeline)

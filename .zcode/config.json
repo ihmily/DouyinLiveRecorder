@@ -1,0 +1,10 @@
+{
+  "plugins": {
+    "enabledPlugins": {
+      "spreadsheets@zcode-plugins-official": false,
+      "pdf@zcode-plugins-official": false,
+      "documents@zcode-plugins-official": false,
+      "presentations@zcode-plugins-official": false
+    }
+  }
+}

@@ -1,0 +1,90 @@
+# This workflow uses actions that are not certified by GitHub.
+# They are provided by a third-party and are governed by
+# separate terms of service, privacy policy, and support
+# documentation.
+
+# =============================================================================
+# trivy —— 镜像层漏洞扫描：advisory only（**不是门禁**，勿当门禁读）
+# -----------------------------------------------------------------------------
+# 定位与本仓另一条漏洞审计的分工，二者覆盖面互不重叠：
+#   · ci.yml 的 `deps-audit` job：`pip-audit -r requirements.txt`，按 OSV 审计
+#     **镜像与 CI 实际消费的那份依赖清单**，是 required check 的一部分
+#     （在 ci-summary 的 needs 里）。出现新公告时按 AGENTS.md「安全下限」条目抬高下限。
+#   · 本 workflow：把 Dockerfile 真构建一遍，再扫**镜像里全部层**（含 apt 装进镜像的
+#     ffmpeg / nodejs / 基础镜像 libssl 等 Python 清单之外的东西）。覆盖面更广但更粗，
+#     且结论依赖 trivy 自身的漏洞库时效。
+# 为什么它**恒绿**（MIN-2264）：下面 trivy-action 未设 `exit-code`，默认 0 ⇒ 命中的
+#   CRITICAL/HIGH 只写进 SARIF、进 GitHub Security 标签页，job 永远 success。
+#   这是**刻意保留的现状**，不是漏配：它不在 ci-summary.needs 里，所以也**不会**变成
+#   阻断合并的门禁。
+#   [2026-10-17 更正] 原「cron 无人值守会长期变红」的理由随 cron 移除已失效，但 exit-code
+#   仍**刻意保持默认 0**：阈值与忽略口径未定，且扫描结论依赖 trivy 自身漏洞库时效。是否
+#   升级为阻断门禁属维护者决策，不在代理权限内——本次只改触发方式，**扫描行为未改**。
+# 因此读结论的正确方式：看 GitHub Security → Code scanning alerts，而不是看本 job 的红绿。
+# 双防线分工与升级判据见 AGENTS.md「漏洞审查双防线策略」条目。
+# =============================================================================
+
+name: trivy
+
+on:
+  # [2026-10-17 修订] 改为**仅手动触发**：push / pull_request / schedule 三类自动触发全部
+  # 移除（含每周一 06:29 UTC 的 cron）。现在只有人主动点 Run workflow 才会构建镜像并扫描。
+  # 本 workflow 是 advisory-only（不阻断合并，不在 ci-summary.needs 里），自动跑与手动跑的
+  # 门禁价值相同，但 cron 会在无人值守时空烧一次完整 docker build（分钟级 runner 时长）。
+  # [历史注] 原口径为「push/PR 收敛 main + 每周一 cron」，随本次改动作废（2026-10-17）。
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    permissions:
+      contents: read # for actions/checkout to fetch code
+      security-events: write # for github/codeql-action/upload-sarif to upload SARIF results
+      actions: read # only required for a private repository by github/codeql-action/upload-sarif to get the Action run status
+    name: Build
+    runs-on: ubuntu-latest
+    # 本 job 做的是全仓最重的一次外网动作（完整 docker build：apt 装 ffmpeg/nodejs +
+    # pip 装 21 条依赖 + 拉基础镜像，再扫全部层）。缺 timeout-minutes 时卡死会白烧
+    # 默认 6 小时额度（与 ci.yml「每个 job 显式 timeout-minutes」的统一策略同一动机）。
+    timeout-minutes: 30
+    steps:
+      # actions 大版本基线 v7（AGENTS.md「CI / workflow 约定」）：原 v4 是本文件落的漂移，
+      # ci.yml / build-release.yml 的 checkout 均为 v7。
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      # 镜像名取仓库名而非模板占位 docker.io/my-organization/my-app：本步只构建本地镜像、
+      # 从不 push，占位名会让人误以为存在一个对外发布的镜像仓库地址。
+      # tag 用 commit SHA，保证一次运行内引用唯一（与 build-release.yml 的产物命名同源思路）。
+      # 未套 .github/actions/retry：AGENTS「网络安装重试统一走复合动作」的适用范围是 ci.yml
+      # 与 build-release.yml 的 pip/apt/choco/brew **安装步骤**；这里的 docker build 重试要重跑
+      # 整条构建（分钟级、且本 job 已按 advisory-only 定位、红了也不阻断），收益不抵成本。
+      # 若日后确认失败确由瞬时网络抖动主导，再把该步命令交给复合动作，不要在 job 内内联 for 循环。
+      - name: Build an image from Dockerfile
+        run: |
+          docker build \
+            --build-arg APP_VERSION="$(python3 -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version'])")" \
+            -t douyinliverecorder:trivy-${{ github.sha }} .
+
+      # aquasecurity/trivy-action 保持 commit SHA 钉定（第三方非认证动作，浮动标签可被推送新代码）
+      # 刻意**不设** exit-code（默认 0）→ 命中漏洞也只出 SARIF、job 恒绿；语义见文件头
+      # 「advisory only」段。改成 1 之前需维护者先定阈值与忽略口径，不要顺手加。
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@7b7aa264d83dc58691451798b4d117d53d21edfe
+        with:
+          image-ref: 'douyinliverecorder:trivy-${{ github.sha }}'
+          format: 'template'
+          template: '@/contrib/sarif.tpl'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      # [2026-10-17 修订] 原 if 为「非 PR 事件 || 同仓库 PR」，用于规避 fork PR 下 GitHub
+      # 不注入 write 权限 token 导致 SARIF 上传 403 假红。改为仅手动触发后 pull_request 事件
+      # 不存在，该条件恒真、`github.event.pull_request.*` 恒为空，故整条删除（保留会引用
+      # 永远取不到值的上下文，误导后来人以为这里还在防 fork PR）。
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'

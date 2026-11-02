@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: MIT. Provided "as is", no warranty; use at your own risk. See LICENSE.
+# Traefik v3 dynamic config (file provider). A high-priority router catches every multipart body
+# that is not from an allow-listed client IP and sends it to a dead service (returns 502/503, request
+# never reaches PHP). Pattern used by hosters on 2026-10-21 to stay online while unpatched.
+# Replace the CIDRs with your office/VPN/customer ranges, and the entryPoint name with yours.
+http:
+  routers:
+    php2shell-block-multipart:
+      rule: "HeaderRegexp(`Content-Type`, `(?i)multipart/`) && !ClientIP(`203.0.113.0/24`, `198.51.100.7`)"
+      priority: 10000
+      entryPoints: [websecure]
+      tls: {}
+      service: php2shell-deny
+  services:
+    php2shell-deny:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:9"   # discard port, nothing listens
